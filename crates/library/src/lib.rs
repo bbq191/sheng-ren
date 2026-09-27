@@ -32,6 +32,27 @@ pub struct Meta {
     pub master: String,
     /// 入库时间（Unix 秒）。
     pub added: u64,
+    /// 母版文件的 SHA-256（判断产物是否过期用）；早期条目没有，第一次用到时补算并写回。
+    #[serde(default)]
+    pub master_sha256: String,
+}
+
+/// 一本书在某设备下的产物状态（`list` 用）。
+pub struct OutputStatus {
+    pub device: String,
+    pub path: PathBuf,
+    /// `Some(true)` 最新；`Some(false)` 过期（母版或处理规则变了）；`None` 判断不了（设备 profile 已删、文件丢了）。
+    pub fresh: Option<bool>,
+}
+
+/// 生成计划：走哪条路、产物格式、指纹。
+struct Plan {
+    master_path: PathBuf,
+    pdf_kind: Option<bookconv::pdf_ingest::PdfKind>,
+    format: Format,
+    area: profile::Screen,
+    ext: &'static str,
+    fingerprint: String,
 }
 
 pub struct Library {
@@ -157,6 +178,7 @@ impl Library {
         };
         let (title, authors) = if master_name == "master.epub" { epub_title_authors(&master) } else { (String::new(), Vec::new()) };
         let meta = Meta {
+            master_sha256: sha256_hex(&master),
             id,
             title: if title.is_empty() { fallback_title } else { title },
             authors,
@@ -176,7 +198,7 @@ impl Library {
             return Ok(Added::Existing(m));
         }
         let (epub, title) = bookconv::article::build_article_epub(url)?;
-        let meta = Meta { id, title, authors: Vec::new(), source: url.to_string(), source_format: "url".into(), master: "master.epub".into(), added: now() };
+        let meta = Meta { master_sha256: sha256_hex(&epub), id, title, authors: Vec::new(), source: url.to_string(), source_format: "url".into(), master: "master.epub".into(), added: now() };
         self.store(&meta, &epub, "source.url", url.as_bytes())?;
         Ok(Added::New(meta))
     }
@@ -236,17 +258,22 @@ impl Library {
         Ok(meta)
     }
 
-    /// 为设备生成一本书的产物（没变化就跳过，`force` 强制重建）。产物放在 `out_root/<设备 id>/`。
-    pub fn build(&self, meta: &Meta, device: &Profile, out_root: &Path, force: bool) -> Result<Built, String> {
-        let dir = out_root.join(&device.id);
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        self.remember_output_root(out_root)?;
-        let master_path = self.master_dir(&meta.id).join(&meta.master);
-        let master = std::fs::read(&master_path).map_err(|e| format!("读母版: {e}"))?;
-        let reflow = device.reflow_format().ok_or_else(|| format!("设备 {} 没有流式格式", device.id))?;
-        let mut state = State::load(&dir);
+    /// 母版哈希：meta 里有就用，没有就算出来并写回 meta.json。
+    fn master_sha(&self, meta: &Meta) -> Result<String, String> {
+        if !meta.master_sha256.is_empty() {
+            return Ok(meta.master_sha256.clone());
+        }
+        let bytes = std::fs::read(self.master_dir(&meta.id).join(&meta.master)).map_err(|e| format!("读母版: {e}"))?;
+        let sha = sha256_hex(&bytes);
+        let mut m = meta.clone();
+        m.master_sha256 = sha.clone();
+        let _ = std::fs::write(self.master_dir(&meta.id).join("meta.json"), serde_json::to_string_pretty(&m).unwrap());
+        Ok(sha)
+    }
 
-        // 决定走哪条路、产物格式
+    fn plan(&self, meta: &Meta, device: &Profile) -> Result<Plan, String> {
+        let master_path = self.master_dir(&meta.id).join(&meta.master);
+        let reflow = device.reflow_format().ok_or_else(|| format!("设备 {} 没有流式格式", device.id))?;
         let pdf_kind = (meta.master == "master.pdf").then(|| bookconv::pdf_ingest::classify_pdf(&master_path));
         let format = match pdf_kind {
             Some(bookconv::pdf_ingest::PdfKind::TextLayer) | None => reflow,
@@ -261,13 +288,43 @@ impl Library {
         };
         let fingerprint = format!(
             "{}|{}|{}|{}x{}|{ext}|{}",
-            sha256_hex(&master),
+            self.master_sha(meta)?,
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
             area.width,
             area.height,
             env!("CARGO_PKG_VERSION")
         );
+        Ok(Plan { master_path, pdf_kind, format, area, ext, fingerprint })
+    }
+
+    /// 这本书在所有用过的产物目录、所有设备下的产物，以及是否最新。
+    pub fn outputs(&self, meta: &Meta) -> Vec<OutputStatus> {
+        let mut out = Vec::new();
+        for root in self.output_roots() {
+            for dev in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+                let Some(dev_id) = dev.file_name().to_str().map(str::to_string) else { continue };
+                let Some(entry) = State::load(&dev.path()).books.get(&meta.id).cloned() else { continue };
+                let path = dev.path().join(&entry.file);
+                let fresh = if !path.exists() {
+                    None
+                } else {
+                    profile::get(&dev_id).and_then(|p| self.plan(meta, p).ok()).map(|plan| plan.fingerprint == entry.fingerprint)
+                };
+                out.push(OutputStatus { device: dev_id, path, fresh });
+            }
+        }
+        out.sort_by(|a, b| a.device.cmp(&b.device).then(a.path.cmp(&b.path)));
+        out
+    }
+
+    /// 为设备生成一本书的产物（没变化就跳过，`force` 强制重建）。产物放在 `out_root/<设备 id>/`。
+    pub fn build(&self, meta: &Meta, device: &Profile, out_root: &Path, force: bool) -> Result<Built, String> {
+        let dir = out_root.join(&device.id);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        self.remember_output_root(out_root)?;
+        let Plan { master_path, pdf_kind, format, area, ext, fingerprint } = self.plan(meta, device)?;
+        let mut state = State::load(&dir);
         let file = state.file_name_for(meta, ext);
         let out = dir.join(&file);
         if !force && out.exists() && state.books.get(&meta.id).is_some_and(|e| e.fingerprint == fingerprint && e.file == file) {
