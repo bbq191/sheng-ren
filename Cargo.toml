@@ -1,0 +1,16 @@
+# host 端电子书入库与按设备优化工具（见 README.md 与 docs/）。
+# 依赖单向无环：bookconv → profile / pdf-extract；drm、azw3 独立。
+[workspace]
+resolver = "2"
+members = [
+    "crates/bookconv",
+    "crates/pdf-extract",
+    "crates/profile",
+    "crates/drm",
+    "crates/azw3",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
