@@ -3,6 +3,7 @@
 //! 目录结构（`root` 缺省 `~/.local/share/booklib`）：
 //! ```text
 //! masters/<id>/meta.json                   一本书的索引：原件路径、SHA-256、大小与修改时间、书名、作者
+//! masters/<id>/cover.jpg                   可选：联网找来的封面（booklib cover），书里没封面时生成产物用
 //! masters/<id>/master.epub                 只有网址入库的书有（没有原件，抓下来的正文存这里）；早期版本入库的条目也可能有
 //! output/<设备 id>/<书名>.<epub|azw3|pdf>  产物；output/<设备 id>/.state.json 记每本书的生成指纹，没变就跳过
 //! deliveries.json                          build --out 拷出去的各份（没变不重拷，remove 时一起删）
@@ -16,6 +17,7 @@
 //! 原件不在了或者内容变了（大小、修改时间变了就重算哈希核对），生成会停下来提示先 `sync` 或重新入库，
 //! 不会拿改过的内容冒充原来那本书。带 DRM 的书现在拒收（解 DRM 还没做）。
 
+mod cover;
 mod deliver;
 mod fsutil;
 mod generate;
@@ -25,6 +27,7 @@ use fsutil::{sha256_file, sha256_hex, write_atomic};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub use cover::{CoverInfo, CoverResult};
 pub use deliver::{Delivered, DeliveryStatus};
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus};
@@ -62,6 +65,9 @@ pub struct Meta {
     /// PDF 有没有文字层（有 → 转 EPUB；没有 → 图片型）。入库时判定一次存下来。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_text_layer: Option<bool>,
+    /// 联网找来的封面（`booklib cover`）；书里没有封面时，生成产物时放进去。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<CoverInfo>,
 }
 
 impl Meta {
@@ -213,15 +219,15 @@ impl Library {
         fsutil::lock(&self.root)
     }
 
-    fn entry_dir(&self, id: &str) -> PathBuf {
+    pub(crate) fn entry_dir(&self, id: &str) -> PathBuf {
         self.root.join("masters").join(id)
     }
 
-    fn read_meta(&self, id: &str) -> Option<Meta> {
+    pub(crate) fn read_meta(&self, id: &str) -> Option<Meta> {
         serde_json::from_slice(&std::fs::read(self.entry_dir(id).join("meta.json")).ok()?).ok()
     }
 
-    fn save_meta(&self, meta: &Meta) -> Result<(), String> {
+    pub(crate) fn save_meta(&self, meta: &Meta) -> Result<(), String> {
         write_atomic(&self.entry_dir(&meta.id).join("meta.json"), serde_json::to_string_pretty(meta).unwrap().as_bytes())
     }
 
@@ -319,6 +325,7 @@ impl Library {
             master: String::new(),
             master_sha256: String::new(),
             pdf_text_layer,
+            cover: None,
         };
         self.store(&meta, &[])?;
         Ok(Added::New(meta))
@@ -345,6 +352,7 @@ impl Library {
             master: "master.epub".into(),
             master_sha256: sha256_hex(&epub),
             pdf_text_layer: None,
+            cover: None,
         };
         self.store(&meta, &[("master.epub", &epub), ("source.url", url.as_bytes())])?;
         Ok(Added::New(meta))
