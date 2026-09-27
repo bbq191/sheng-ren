@@ -2,7 +2,7 @@
 name = "bookconv"
 version.workspace = true
 edition = "2021"
-description = "通用电子书内容层：多格式→EPUB/PDF 转换、EPUB 优化器、e-ink 图片处理、EPUB 组装（从 weread-device 抽出，weread 线与书架共用）"
+description = "电子书内容层：多格式→EPUB 转换、按设备优化 EPUB（清洗、排版、分页、漫画图片）、PDF 入库、质量门"
 license = "MIT"
 
 [dependencies]
@@ -27,8 +27,7 @@ readability-rust = "0.1.0"
 scraper = "0.18"
 ego-tree = "0.6"
 # 入库 PDF「优化」（有文字层→转 EPUB，无文字层/漫画→仅裁边，2026-09-19）：三者均纯 Rust、
-# 无 C 依赖，aarch64-unknown-linux-musl 全静态交叉编译已验证过（含传递依赖 hayro-*/vello_cpu/
-# skrifa/rayon 等，`file` 核对 book-serve 产物仍是 statically linked）。
+# 无 C 依赖（上游曾在 aarch64-unknown-linux-musl 全静态交叉编译验证过，含传递依赖 hayro-*/vello_cpu/skrifa/rayon 等）。
 # lopdf：通用 PDF 对象/xref/content stream 解析+构造，读第三方 PDF 结构（页树/字体资源/
 # 图片 XObject/书签目录），现有 `convert/pdfwrite.rs` 的手搓读写器只认自己产出的简单结构，
 # 读不了第三方复杂 PDF。
@@ -48,13 +47,12 @@ hayro = "0.7.1"
 [dev-dependencies]
 tempfile = "3"
 
-# host/设备通用 CLI：对一本 EPUB 跑同一 optimize_epub（wash_epub.sh 末步用）。随内容层从 weread-device 迁入。
+# 按设备优化一本 EPUB（书库生成用的同一套优化器）。
 [[bin]]
 name = "epub-optimize"
 path = "src/bin/epub_optimize.rs"
 
-# host CLI：漫画 CBZ→PDF（`shelf push` 判断体积够小时顺带出一份投原生用的 PDF；2026-09-08 复活，
-# `convert::cbz::cbz_to_pdf` 本体 2026-09-05 §03t 就没删过，只是删了 shelf 侧的调用方，见白皮书）。
+# 给已有 EPUB 无损补封面声明（只改 OPF，其余条目原样拷）。
 [[bin]]
 name = "cover-fix"
 path = "src/bin/cover_fix.rs"

@@ -179,9 +179,7 @@ pub(crate) fn convert_to_epub(format: &str, name: &str, data: &[u8], title: &str
         "cbz" => bookconv::convert::cbz::cbz_to_epub(data, title),
         "mobi" | "azw" | "azw3" | "prc" | "fb2" => {
             bookconv::convert::precheck(name, data)?;
-            // 这几种格式转出来的 EPUB 与设备无关（屏幕参数只有 CBZ→PDF 才用），随便给一个。
-            let screen = profile::Screen { width: 1, height: 1 };
-            Ok(bookconv::convert::convert_file(name, data, Default::default(), screen).ok_or("不支持的格式")??.data)
+            Ok(bookconv::convert::convert_file(name, data).ok_or("不支持的格式")??.data)
         }
         _ => Err(format!("不支持的格式 .{format}（支持 {}，或网址）", SUPPORTED_EXTS.join(" / "))),
     }

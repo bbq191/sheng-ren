@@ -106,8 +106,7 @@ pub(super) fn svg_cover_to_img(html: &str) -> String {
 /// 第一遍 html 处理：归一同文件 href（part0004.html#x 写在 part0004.html 里→改裸锚 #x，否则下面
 /// referenced/搬注释/拆环全把同章脚注误当跨文件）→ 剥字体锁 → 扫这章引用了哪些脚注 frag。
 pub(super) fn first_pass_html(text: &str, name: &str) -> (String, Vec<String>) {
-    let own = std::path::Path::new(name).file_name().and_then(|s| s.to_str()).unwrap_or("");
-    let text = crate::htmlproc::normalize_self_hrefs(text, own);
+    let text = crate::htmlproc::normalize_self_hrefs(text, name);
     let stripped = crate::htmlproc::strip_font_locks(&text);
     let referenced = crate::htmlproc::referenced_note_frags(&stripped);
     (stripped, referenced)

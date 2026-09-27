@@ -435,7 +435,7 @@ fn optimize_pdf_trim_only_comic_shaped_fixture_roundtrips() {
     let src = dir.path().join("comic.pdf");
     std::fs::write(&src, &comic_pdf).unwrap();
     let dst = dir.path().join("out.pdf");
-    let report = optimize_pdf_trim_only(&src, &dst, crate::imgopt::test_screen(), |_, _| {}).unwrap();
+    let report = optimize_pdf_trim_only(&src, &dst, crate::imgopt::test_screen(), false, |_, _| {}).unwrap();
     assert_eq!(report.pages, 3);
     // 要有目录：源 PDF 没有书签 → 按页分段兜底，不是空的。
     let titles = pdfwrite::PdfFileReader::open(&dst).unwrap().outline_titles().unwrap();
@@ -461,7 +461,7 @@ fn trim_only_preserves_original_bookmarks() {
     let dir = tempfile::tempdir().unwrap();
     let (src, dst) = (dir.path().join("a.pdf"), dir.path().join("o.pdf"));
     std::fs::write(&src, &pdf).unwrap();
-    optimize_pdf_trim_only(&src, &dst, crate::imgopt::test_screen(), |_, _| {}).unwrap();
+    optimize_pdf_trim_only(&src, &dst, crate::imgopt::test_screen(), false, |_, _| {}).unwrap();
     assert_eq!(pdfwrite::PdfFileReader::open(&dst).unwrap().outline_titles().unwrap(), titles);
 }
 
@@ -471,7 +471,7 @@ fn trim_only_refuses_pdf_with_text_layer_and_leaves_it_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let (src, dst) = (dir.path().join("t.pdf"), dir.path().join("o.pdf"));
     std::fs::write(&src, SAMPLE_PDF).unwrap();
-    let err = optimize_pdf_trim_only(&src, &dst, crate::imgopt::test_screen(), |_, _| {}).unwrap_err();
+    let err = optimize_pdf_trim_only(&src, &dst, crate::imgopt::test_screen(), false, |_, _| {}).unwrap_err();
     assert!(err.contains("文字"), "应说明是因为文字层: {err}");
     assert!(!dst.exists());
 }

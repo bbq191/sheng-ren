@@ -30,7 +30,10 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 /// - v20（2026-09-27）：`mimetype` 一律重写为首个 STORED 条目（源书缺它也补上）；已压缩的图片（JPEG/PNG/GIF）改 STORED；
 ///   抓到的远程图补进 OPF manifest（AZW3 写出器只认 manifest 里的图），抓不到的 `<img>` 原样保留、不再删除；
 ///   带透明通道的漫画页合成到白底（此前透明区域变黑）。
-pub const OPTIMIZE_VERSION: &str = "20";
+/// - v21（2026-09-27 审计）：清洗层改用容错的 `crate::html` 工具（单引号属性、`data-id` 误匹配、注释里的标签、
+///   CSS 字符串里的分号都不再出错）；全书 id 去重挪到清洗层、跨文件链接一起改；章尾空元素按样式表判断保不保留；
+///   分页不再把 `<html>`/`<head>` 之间的杂散文字复制进拆出的文件；同名不同目录的文件不再被当成"本文件"。
+pub const OPTIMIZE_VERSION: &str = "21";
 
 /// 脚注呈现方式。xochitl 没有弹窗脚注，统一用 `Anchor`（章末可见 + 同章锚点跳转 + 阅读器原生「返回」）。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，

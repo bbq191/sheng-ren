@@ -30,7 +30,7 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
 /// （`imgopt::prepare_comic_page_for_pdf`：解码一次 → 裁白边 → 按 PDF 里的整数绘制尺寸缩放一次 → 编码一次），
 /// 什么都不用做的页原字节直接嵌；逐页读、逐页写，不把全书图片攒在内存里。
 /// 扩展名是图片但内容认不出的条目跳过并警告（不让一页坏图拖垮整本）。
-pub fn cbz_to_pdf(data: &[u8], screen: crate::imgopt::Screen) -> Result<Vec<u8>, String> {
+pub fn cbz_to_pdf(data: &[u8], screen: crate::imgopt::Screen, grayscale: bool) -> Result<Vec<u8>, String> {
     let mut zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
     let names = page_names(&mut zip);
     // 先认出真正的图片页（只读开头几个字节看魔数），页数定了才能开写。
@@ -50,7 +50,7 @@ pub fn cbz_to_pdf(data: &[u8], screen: crate::imgopt::Screen) -> Result<Vec<u8>,
     let mut writer = PdfPieceWriter::begin(pages.len(), false, screen);
     for name in &pages {
         let raw = read_entry(&mut zip, name)?;
-        let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height).unwrap_or(raw);
+        let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height, grayscale).unwrap_or(raw);
         writer.write_page(&image_from_bytes(&sized).map_err(|e| format!("{name}: {e}"))?)?;
     }
     writer.finish(&[])
@@ -184,7 +184,7 @@ mod tests {
     fn oversized_page_downscaled_in_pdf() {
         // 3392×1908（2× 屏）的漫画页 → 单趟处理后宽不超过 PDF 里的绘制宽（页宽 954 的 98% 取偶 = 934）
         let buf = zip_of(&[("page_1.jpg", &jpeg(3392, 1908))]);
-        let pdf = cbz_to_pdf(&buf, crate::imgopt::test_screen()).unwrap();
+        let pdf = cbz_to_pdf(&buf, crate::imgopt::test_screen(), false).unwrap();
         let s = String::from_utf8_lossy(&pdf);
         let at = s.find("/Subtype /Image /Width ").unwrap() + "/Subtype /Image /Width ".len();
         let w: u32 = s[at..].split(' ').next().unwrap().parse().unwrap();
@@ -203,7 +203,7 @@ mod tests {
             ("vol/p1.jpg", &page),
             ("vol/p2.jpg", &page),
         ]);
-        let pdf = cbz_to_pdf(&buf, crate::imgopt::test_screen()).unwrap();
+        let pdf = cbz_to_pdf(&buf, crate::imgopt::test_screen(), false).unwrap();
         assert!(String::from_utf8_lossy(&pdf).contains("/Count 2"), "只剩两页真图");
         let epub = cbz_to_epub(&buf, "测试").unwrap();
         let names: Vec<String> = crate::epubzip::read_entries(&epub).unwrap().into_iter().map(|e| e.name).collect();
@@ -218,7 +218,7 @@ mod tests {
             let z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             z.finish().unwrap();
         }
-        assert!(cbz_to_pdf(&buf, crate::imgopt::test_screen()).is_err());
+        assert!(cbz_to_pdf(&buf, crate::imgopt::test_screen(), false).is_err());
         assert!(cbz_to_epub(&buf, "空").is_err());
     }
 }

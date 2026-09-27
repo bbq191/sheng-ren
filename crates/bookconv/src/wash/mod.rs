@@ -1,5 +1,5 @@
-//! 清洗层（对标 host `wash_epub.sh` 的 Calibre 规则，2026-09-03 移植；白皮书 §03i）。作用于**解包后的条目表**，
-//! 由 `optimize::optimize_epub_with` 在优化器各遍之前调用，host CLI `epub-optimize` 与设备 book-serve 走同一份。
+//! 清洗层（规则最初对照上游 Calibre 清洗脚本移植）。作用于**解包后的条目表**，由优化器在各遍处理之前调用
+//! （`OptimizeOpts::wash`），书库生成与命令行 `epub-optimize` 走同一份。
 //!
 //! 规则（与 Calibre 参数一一对应）：
 //! 1. 伪 DRM 剥离（= `strip_pseudo_drm.py`）：`META-INF/encryption.xml` 只列样式/字体/脚本 → 丢弃这些文件 +

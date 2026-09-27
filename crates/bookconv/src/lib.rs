@@ -9,7 +9,6 @@
 pub mod article;
 pub mod check;
 pub mod comic_detect;
-pub mod comic_pdf;
 pub mod ncx;
 pub mod convert;
 pub mod direction;

@@ -53,9 +53,8 @@ use crate::util::xml_escape as xesc;
 
 /// `assemble` 写出的 OPF 在 zip 里的路径（`container.xml` 指向它；PDF 来源识别等也按这个路径读）。
 pub(crate) const OPF_PATH: &str = "OEBPS/content.opf";
-/// OPF `dc:identifier` 的前缀：`weread:{book_id}`。`pdf_ingest::looks_like_pdf_derived_epub` 靠
-/// 它加 `book_id` 的 `pdf:` 前缀识别"PDF 转出的 EPUB"，两边必须同源。
-pub(crate) const ID_SCHEME: &str = "weread:";
+/// 转换器组装的 EPUB 在 OPF `dc:identifier` 里写的前缀：`urn:bookconv:{book_id}`。
+pub(crate) const ID_SCHEME: &str = "urn:bookconv:";
 
 pub(crate) fn chapter_filename(i: usize) -> String {
     format!("chap_{:04}.xhtml", i + 1)
