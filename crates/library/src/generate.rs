@@ -64,7 +64,7 @@ impl Library {
         Ok(Plan { format, area, fingerprint })
     }
 
-    /// 用过的产物目录（缺省的 `output/` 加上 `build` 时指定过的其它目录），记在 `outputs.json`。
+    /// 产物目录：`output/`，加上早期版本 `build --out` 直接生成过的目录（记在 `outputs.json`，只读，清理用）。
     fn output_roots(&self) -> Vec<PathBuf> {
         let mut v: Vec<PathBuf> = std::fs::read(self.root.join("outputs.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         let default = self.root.join("output");
@@ -72,16 +72,6 @@ impl Library {
             v.insert(0, default);
         }
         v
-    }
-
-    fn remember_output_root(&self, out_root: &Path) -> Result<(), String> {
-        let mut v = self.output_roots();
-        let p = std::fs::canonicalize(out_root).unwrap_or_else(|_| out_root.to_path_buf());
-        if v.contains(&p) {
-            return Ok(());
-        }
-        v.push(p);
-        write_atomic(&self.root.join("outputs.json"), serde_json::to_string_pretty(&v).unwrap().as_bytes())
     }
 
     /// 删掉一本书在所有产物目录、所有设备下的产物。
@@ -116,12 +106,20 @@ impl Library {
         out
     }
 
-    /// 为设备生成一本书的产物（没变化就跳过，`force` 强制重建）。产物放在 `out_root/<设备 id>/`。
-    pub fn build(&self, meta: &Meta, device: &Profile, out_root: &Path, force: bool) -> Result<Built, String> {
+    /// 这本书在该设备下已生成的产物和它的指纹（没生成过、文件不在时 `None`）。
+    pub(crate) fn built_output(&self, meta: &Meta, device: &Profile) -> Option<(PathBuf, String)> {
+        let dir = self.root.join("output").join(&device.id);
+        let e = State::load(&dir).books.get(&meta.id).cloned()?;
+        let p = dir.join(&e.file);
+        p.exists().then_some((p, e.fingerprint))
+    }
+
+    /// 为设备生成一本书的产物（没变化就跳过，`force` 强制重建）。产物放在书库的 `output/<设备 id>/`；
+    /// 要放到别处（U 盘、阅读器）用 [`Library::deliver`] 拷过去。
+    pub fn build(&self, meta: &Meta, device: &Profile, force: bool) -> Result<Built, String> {
         let Plan { format, area, fingerprint } = self.plan(meta, device)?;
-        let dir = out_root.join(&device.id);
+        let dir = self.root.join("output").join(&device.id);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        self.remember_output_root(out_root)?;
         let mut state = State::load(&dir);
         let file = state.file_name_for(meta, format.ext(), &dir);
         let out = dir.join(&file);
