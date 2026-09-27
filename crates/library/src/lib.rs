@@ -295,7 +295,7 @@ impl Library {
                 master_path.clone()
             };
             let optimized = tmp.join("optimized.epub");
-            let opts = bookconv::optimize::OptimizeOpts { wash: Some(Default::default()), ..bookconv::optimize::OptimizeOpts::new(area) };
+            let opts = bookconv::optimize::OptimizeOpts { wash: Some(Default::default()), grayscale: !device.color, ..bookconv::optimize::OptimizeOpts::new(area) };
             bookconv::optimize::optimize_epub_file_streaming(&epub_master, &optimized, &opts, |_, _| {})?;
             let rep = bookconv::check::check_epub_file(&optimized)?;
             if !rep.ok {

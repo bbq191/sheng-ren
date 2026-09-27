@@ -21,12 +21,12 @@
 use bookconv::optimize::{self, FootnoteMode, OptimizeOpts};
 use bookconv::wash::{AutoToc, WashOpts};
 
-/// `--device=<profile id>`（必填）→ 该设备流式排版产物的真实可阅读范围（没有实测值时是标称屏幕）；
+/// `--device=<profile id>`（必填）→ (该设备流式排版产物的真实可阅读范围（没有实测值时是标称屏幕）, 是否黑白屏)；
 /// 缺失或未知 id 时打印可用 id 并以用法错退出。
-fn device_screen(args: &[String]) -> bookconv::imgopt::Screen {
+fn device_screen(args: &[String]) -> (bookconv::imgopt::Screen, bool) {
     let id = args.iter().find_map(|a| a.strip_prefix("--device="));
     match id.and_then(profile::get) {
-        Some(p) => p.readable(p.reflow_format().unwrap_or(profile::Format::Epub)),
+        Some(p) => (p.readable(p.reflow_format().unwrap_or(profile::Format::Epub)), !p.color),
         None => {
             let ids: Vec<_> = profile::Registry::builtin().iter().map(|p| p.id.as_str()).collect();
             eprintln!("需要 --device=<设备>，可选: {}", ids.join(" / "));
@@ -43,7 +43,7 @@ fn main() {
         eprintln!("用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--footnote-anchor] [--check] [--require-toc] 输入.epub 输出.epub");
         std::process::exit(1);
     }
-    let screen = device_screen(&args);
+    let (screen, grayscale) = device_screen(&args);
     let wash = if flags.contains(&"--no-wash") {
         None
     } else {
@@ -65,7 +65,7 @@ fn main() {
     } else {
         std::path::PathBuf::from(files[1])
     };
-    let rep = match optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), &out_target, &OptimizeOpts { screen, wash, footnote, page_direction: None }, |_, _| {}) {
+    let rep = match optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), &out_target, &OptimizeOpts { screen, grayscale, wash, footnote, page_direction: None }, |_, _| {}) {
         Ok(r) => r,
         Err(e) => {
             let _ = std::fs::remove_file(&out_target);

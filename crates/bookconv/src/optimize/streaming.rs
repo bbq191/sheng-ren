@@ -87,7 +87,7 @@ impl<'a> StreamingOptimize<'a> {
         // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）；之后同内存版（`prepare_entries`）。
         let raw = crate::epubzip::read_skeleton(&mut archive)?.entries;
         let Prepared { entries, aside_index, is_comic_book, opf_name, mut rep } = prepare_entries(raw, opts, bytes_before, title)?;
-        let screen = opts.screen;
+        let (screen, grayscale) = (opts.screen, opts.grayscale);
 
         // 阶段二：流式写出。非图片条目用阶段一已处理好的字节；图片条目现在才从源文件按需读回真实
         // 字节，处理完立刻写文件、立刻丢——峰值只有"当前这一张"，不会随全书图片数量线性涨。
@@ -120,7 +120,7 @@ impl<'a> StreamingOptimize<'a> {
                     // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
                     let px = std::panic::catch_unwind(|| crate::imgopt::pixel_count(&job.bytes)).unwrap_or(1_000_000);
                     let _permit = budget.acquire(px);
-                    let out = transform_image_bytes(&job.bytes, is_comic_book, screen).unwrap_or(job.bytes);
+                    let out = transform_image_bytes(&job.bytes, is_comic_book, screen, grayscale).unwrap_or(job.bytes);
                     let _ = job.reply.send(out);
                 });
             }

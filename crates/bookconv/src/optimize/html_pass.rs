@@ -123,11 +123,11 @@ pub(super) fn transform_html_chapter(
 ///
 /// 解码器遇到畸形图片偶发 panic（第三方书的坏 JPEG/PNG 是外部输入）：这里兜住、按"失败原样保留"处理——此前 panic 会从
 /// 图片 worker 线程一路把整本书的优化搞砸（`thread::scope` 把子线程 panic 重新抛给调用方），只为一张坏图不值得。
-pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen) -> Option<Vec<u8>> {
+pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, grayscale: bool) -> Option<Vec<u8>> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if is_comic_book {
             // 单趟（解码/编码各一次、灰度保持、缩放走 SIMD）——此前三道串联的问题见 `prepare_comic_page_for_epub`。
-            crate::imgopt::prepare_comic_page_for_epub(bytes, screen)
+            crate::imgopt::prepare_comic_page_for_epub(bytes, screen, grayscale)
         } else {
             crate::imgopt::downscale_for_epub(bytes, screen)
         }

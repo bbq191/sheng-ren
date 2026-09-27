@@ -56,7 +56,8 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 /// 阅读器页边距改了就改 profile 的 `readable`，不再在优化器里分模式。
 /// v17（2026-09-27）：清洗层加章节分页（`wash::paginate`）：章标题独立一页、节与节/节与章之间分页，章节文件按标题拆开，
 /// 全书链接与目录改指到拆出来的文件，同文件注释随所在的节搬移。
-pub const OPTIMIZE_VERSION: &str = "17";
+/// v18（2026-09-27）：黑白屏设备（`OptimizeOpts::grayscale`）的漫画页转成单分量 8 位灰度（256 级，不抖动）。
+pub const OPTIMIZE_VERSION: &str = "18";
 
 /// 脚注呈现方式。xochitl 无弹窗脚注（穷尽真机实测判死）；weread/pkm 线与第三方书历史行为、
 /// EPUB 线设备侧优化（母版库「优化」）2026-09-17 起统一用 `Anchor`（章末可见 + 同章锚点跳转 +
@@ -79,6 +80,8 @@ pub enum FootnoteMode {
 pub struct OptimizeOpts {
     /// 目标设备的真实可阅读范围（`profile::Profile::readable`），图片缩放与漫画补白都按它算。
     pub screen: crate::imgopt::Screen,
+    /// 黑白屏设备（profile `color = false`）：漫画页转成单分量 8 位灰度（256 级，不抖动）。
+    pub grayscale: bool,
     pub wash: Option<crate::wash::WashOpts>,
     /// 脚注呈现方式（缺省 `Anchor` 保持历史行为；母版库「优化」目前也传 `Anchor`，见 book-serve `staging/optimizing.rs`）。
     pub footnote: FootnoteMode,
@@ -88,9 +91,9 @@ pub struct OptimizeOpts {
 }
 
 impl OptimizeOpts {
-    /// 只指定屏幕、其余取历史缺省（不清洗、`Anchor` 注释、保留原书翻页方向）。
+    /// 只指定屏幕、其余取历史缺省（彩色、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, wash: None, footnote: FootnoteMode::default(), page_direction: None }
+        OptimizeOpts { screen, grayscale: false, wash: None, footnote: FootnoteMode::default(), page_direction: None }
     }
 }
 
@@ -298,7 +301,7 @@ pub fn optimize_epub_with(epub: &[u8], opts: &OptimizeOpts) -> Result<(Vec<u8>, 
                 // ① 按 Move 屏竖向框（宽≤954）降采样超大图——EPUB 图可能行内，宽超 954 会溢出竖屏（缩不动/失败则原样）。
                 // 漫画书（EPUB 线原则④"不允许压画质，只能裁边/适配屏幕"）：先裁四边纯色留白，
                 // 超限时改用更高 JPEG 质量重编码。
-                None if crate::imgopt::is_downscalable(name) => transform_image_bytes(data, is_comic_book, opts.screen).map_or(std::borrow::Cow::Borrowed(data.as_slice()), std::borrow::Cow::Owned),
+                None if crate::imgopt::is_downscalable(name) => transform_image_bytes(data, is_comic_book, opts.screen, opts.grayscale).map_or(std::borrow::Cow::Borrowed(data.as_slice()), std::borrow::Cow::Owned),
                 None => std::borrow::Cow::Borrowed(data.as_slice()),
             };
             crate::epubzip::put_entry(&mut zw, name, if name == "mimetype" { stored } else { deflated }, &final_data)?;
