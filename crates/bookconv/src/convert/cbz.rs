@@ -48,6 +48,45 @@ pub fn cbz_to_pdf(data: &[u8], tone: EinkTone, screen: crate::imgopt::Screen) ->
     images_to_pdf(&images)
 }
 
+/// CBZ 字节 → **与设备无关的母版 EPUB**：图片按文件名自然序每页一张，原图字节原样放进去（不缩放、不重编码），
+/// 第一张当封面。按设备的缩放/补白在之后的优化步骤里做（整本会被判成漫画）。
+pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
+    use crate::epub::{Book, BookMeta, Chapter, Resource};
+    let mut zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
+    let mut names: Vec<String> = (0..zip.len())
+        .filter_map(|i| zip.by_index(i).ok().filter(|f| !f.is_dir() && is_image_name(f.name())).map(|f| f.name().to_string()))
+        .collect();
+    if names.is_empty() {
+        return Err("CBZ 内无图片（jpg/jpeg/png）".into());
+    }
+    names.sort_by(|a, b| natural_cmp(a, b));
+    let mut resources = Vec::with_capacity(names.len());
+    let mut chapters = Vec::with_capacity(names.len());
+    let mut cover = None;
+    for (i, name) in names.iter().enumerate() {
+        let mut bytes = Vec::new();
+        zip.by_name(name).map_err(|e| e.to_string())?.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+        let (ext, mime) = super::common::image_ext_mime(&bytes).ok_or_else(|| format!("{name}: 不是可识别的图片"))?;
+        let path = format!("images/p{:04}.{ext}", i + 1);
+        if i == 0 {
+            cover = Some((bytes.clone(), ext, mime));
+        }
+        chapters.push(Chapter { title: format!("第 {} 页", i + 1), html_body: format!(r#"<div><img src="{path}" alt=""/></div>"#), level: 1 });
+        resources.push(Resource { path, media_type: mime.to_string(), bytes });
+    }
+    let (cover_bytes, cover_ext, cover_mime) = match cover {
+        Some((b, e, m)) => (Some(b), e.to_string(), m.to_string()),
+        None => (None, "jpg".into(), "image/jpeg".into()),
+    };
+    let mut book = Book {
+        meta: BookMeta { book_id: format!("cbz:{}", super::common::sanitize_id(title)), title: title.to_string(), author: String::new(), language: "zh".into(), publisher: String::new(), cover: cover_bytes, cover_ext, cover_media_type: cover_mime },
+        chapters,
+        resources,
+        nav: Vec::new(),
+    };
+    super::common::assemble_master(&mut book)
+}
+
 fn is_image_name(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     l.ends_with(".jpg") || l.ends_with(".jpeg") || l.ends_with(".png")
