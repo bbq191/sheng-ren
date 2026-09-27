@@ -239,7 +239,7 @@ pub fn collect_footnote_notes(
 /// → `<a href="#frag"><sup>N</sup></a>`。duokan 的注释块**已在同文件** `<p id="frag">`（前向锚有效），
 /// 故只需把"实体转义 + 远程 CDN 图 = 离线不可点"的死图标记换成干净可点上标数字、保留 href；注释块不动。
 /// 非 duokan 脚注 img（`duokan-footnote` 类既不在 img 也不在外层 `<a>` 上）或跨文件锚点原样放行。
-/// **Calibre 洗后形态**（2026-09-02，`wash_epub.sh` 产物）：img 是真标签+本地图、`<a>` 带 `id="c_X_Y"`、
+/// **Calibre 洗后形态**（2026-09-02，上游 Calibre 清洗脚本的产物）：img 是真标签+本地图、`<a>` 带 `id="c_X_Y"`、
 /// 注释块是合法 `<li id="a_X_Y"><p>…<a href="#c_X_Y">`（真 2-环）——真 img 也换上标、**id 保留**，
 /// 环交给前置的 `break_footnote_cycles` 拆（回链去链、id 留作落点）；合法嵌套的 li 不动。
 pub fn fix_duokan_markers(html: &str) -> String {

@@ -19,8 +19,8 @@ pub struct PdfTrimReport {
 /// （实测根本没裁边）、`finish(&[])` 还把原 PDF 的书签全部丢掉。
 ///
 /// **目录**：保留原 PDF 书签（页码映射到输出页，层级压平）；原文件没有书签则按页分段兜底
-/// （[`crate::comic_pdf::page_chunk_titles`]），保证输出一定有目录。
-pub fn optimize_pdf_trim_only(src: &Path, dst_tmp: &Path, screen: crate::imgopt::Screen, mut on_progress: impl FnMut(usize, usize)) -> Result<PdfTrimReport, String> {
+/// （[`crate::ncx::page_chunk_titles`]），保证输出一定有目录。
+pub fn optimize_pdf_trim_only(src: &Path, dst_tmp: &Path, screen: crate::imgopt::Screen, grayscale: bool, mut on_progress: impl FnMut(usize, usize)) -> Result<PdfTrimReport, String> {
     let doc = load_pdf(src)?;
     let pages = doc.get_pages();
     let page_count = pages.len();
@@ -43,14 +43,14 @@ pub fn optimize_pdf_trim_only(src: &Path, dst_tmp: &Path, screen: crate::imgopt:
         .map(|t| t.toc.iter().map(|e| (e.page.saturating_sub(1).min(page_count - 1), e.title.clone())).collect())
         .unwrap_or_default();
     if titles.is_empty() {
-        titles = crate::comic_pdf::page_chunk_titles(page_count);
+        titles = crate::ncx::page_chunk_titles(page_count);
     }
     let mut writer = PdfPieceWriter::begin(page_count, true, screen);
     for (i, (_, page_id)) in pages.iter().enumerate() {
         on_progress(i, page_count);
         let images = doc.get_page_images(*page_id).map_err(|e| format!("读第 {} 页图片失败: {e}", i + 1))?;
         let raw = decode_pdf_image_to_bytes(&doc, &images[0])?;
-        let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height).unwrap_or(raw);
+        let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height, grayscale).unwrap_or(raw);
         writer.write_page(&pdfwrite::image_from_bytes(&sized)?)?;
     }
     on_progress(page_count, page_count);

@@ -268,8 +268,9 @@ fn flatten_alpha_on_white(img: image::DynamicImage) -> image::DynamicImage {
 /// 用户对照后判定**后者明显更清晰**（xochitl 的 PDF 放大滤镜偏糊）。代价是体积：q95 会 21MB→113MB，
 /// 放大后内容本就平滑，改用 [`JPEG_QUALITY_UPSCALED`]=85 压到约 71MB。边界：放大倍数超过
 /// [`MAX_PDF_UPSCALE`]（缩略图/装饰小图，放大只是白涨体积）不放大；PNG 不放大（无损放大体积暴涨）。
-pub fn prepare_comic_page_for_pdf(bytes: &[u8], page_w: u32, page_h: u32) -> Option<Vec<u8>> {
-    let (img, fmt, trimmed) = decode_trim_comic(bytes, false)?;
+/// `grayscale`（黑白屏设备）时彩色页转成 256 级灰度（不抖动），和 EPUB 漫画一样。
+pub fn prepare_comic_page_for_pdf(bytes: &[u8], page_w: u32, page_h: u32, grayscale: bool) -> Option<Vec<u8>> {
+    let (img, fmt, trimmed) = decode_trim_comic(bytes, grayscale)?;
     let (cw, ch) = (img.width(), img.height());
     let (dw, dh, _, _) = crate::convert::pdfwrite::place_image(cw, ch, page_w, page_h);
     // 高度撑满分支的绘制宽可能是奇数——取偶保证左右边距整数（页宽偶数时）。
@@ -416,62 +417,6 @@ fn encode_keep_gray(fmt: ImageFormat, img: &image::DynamicImage, jpeg_quality: u
     Some(out)
 }
 
-/// 「漫画省刷新」色彩保留阈值：页面平均色度（RGB 通道极差 /255 的均值）低于此值视作**黑白/偏色扫描**、
-/// 转 1-bit；高于此值视作**真彩页**（漫画彩封/彩插）→ 保留彩色不动。真机实测火影正文=0（灰度 JPEG）、
-/// 彩封≈0.5(HSL 饱和度)，0.06 能干净分开：清洗偏色扫描、保住真彩。
-const COLOR_KEEP_CHROMA: f32 = 0.06;
-
-/// 采样估计页面平均色度（避免逐像素遍历大图）：每隔若干像素取样，取 RGB 极差均值 /255。
-/// 灰度图（r=g=b）色度恒 0，直接返回——此前不分类型一律 `to_rgb8()`，灰度漫画页（最常见）白白复制出一份
-/// 3 倍大的 RGB 副本（900 万像素上限的图就是 27MB）只为算出 0；RGB 图直接读原像素，也不再先克隆一份（2026-09-25 审计）。
-fn mean_chroma(img: &image::DynamicImage) -> f32 {
-    use image::DynamicImage;
-    match img {
-        DynamicImage::ImageLuma8(_) | DynamicImage::ImageLumaA8(_) | DynamicImage::ImageLuma16(_) | DynamicImage::ImageLumaA16(_) => 0.0,
-        DynamicImage::ImageRgb8(c) => mean_chroma_of(c.width(), c.height(), c.pixels().map(|p| p.0)),
-        other => {
-            let rgb = other.to_rgb8();
-            mean_chroma_of(rgb.width(), rgb.height(), rgb.pixels().map(|p| p.0))
-        }
-    }
-}
-
-fn mean_chroma_of(w: u32, h: u32, pixels: impl Iterator<Item = [u8; 3]>) -> f32 {
-    let total = (w as u64) * (h as u64);
-    if total == 0 {
-        return 0.0;
-    }
-    let step = ((total / 40_000).max(1)) as usize; // 约取 ~4 万样本封顶
-    let (mut sum, mut n) = (0f32, 0u32);
-    for [r, g, b] in pixels.step_by(step) {
-        let spread = r.max(g).max(b) - r.min(g).min(b);
-        sum += spread as f32;
-        n += 1;
-    }
-    if n == 0 {
-        0.0
-    } else {
-        (sum / n as f32) / 255.0
-    }
-}
-
-/// 「漫画省刷新」核心：解码一页图 → 若为真彩页返回 `None`（调用方保留彩色）；否则转灰度 + Floyd–Steinberg
-/// 抖动成双色（0/255）返回 `GrayImage`。抖动保住网点/灰面观感，双色触发面板更轻的 mono 波形（真机坐实：
-/// 1-bit 翻页显著更快更轻），且比 8-bit 灰度 FlateDecode 体积小得多。只碰 JPEG/PNG，其余/解码失败=`None`。
-pub fn dither_bilevel(bytes: &[u8]) -> Option<image::GrayImage> {
-    let (fmt, (w, h)) = header_dims(bytes)?;
-    if !within_decode_budget(w, h) {
-        return None; // 极端高分辨率原图：不整个解出来，原样保留（见 MAX_DECODE_PIXELS 文档）
-    }
-    let img = image::load_from_memory_with_format(bytes, fmt).ok()?;
-    if mean_chroma(&img) >= COLOR_KEEP_CHROMA {
-        return None; // 真彩页：保留彩色（Move 是彩屏，别无脑丢色）
-    }
-    let mut luma = img.into_luma8(); // 本来就是 8 位灰度时不再复制
-    image::imageops::colorops::dither(&mut luma, &image::imageops::colorops::BiLevel);
-    Some(luma)
-}
-
 /// 条目是否是可降采样图片（按扩展名快筛，真正的格式判定在 `downscale_for_device` 里用魔数）。
 pub fn is_downscalable(name: &str) -> bool {
     let l = name.to_lowercase();
@@ -609,15 +554,15 @@ mod tests {
         let img = DynamicImage::ImageRgb8(RgbImage::from_fn(700, 1000, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])));
         let mut png = Vec::new();
         img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
-        assert!(prepare_comic_page_for_pdf(&png, 954, 1696).is_none());
+        assert!(prepare_comic_page_for_pdf(&png, 954, 1696, false).is_none());
         // 放大倍数超上限（缩略图）的 JPEG 同样不放大。
-        assert!(prepare_comic_page_for_pdf(&jpeg_of(200, 300), 954, 1696).is_none());
+        assert!(prepare_comic_page_for_pdf(&jpeg_of(200, 300), 954, 1696, false).is_none());
     }
 
     #[test]
     fn prepare_pdf_page_upscales_low_res_jpeg_to_exact_draw_width() {
         // 镖人同款：566×800 → 按 934 宽摆放；预放大到整数绘制宽，阅读器 1:1。
-        let out = prepare_comic_page_for_pdf(&jpeg_of(566, 800), 954, 1696).expect("低分辨率 JPEG 必须预放大");
+        let out = prepare_comic_page_for_pdf(&jpeg_of(566, 800), 954, 1696, false).expect("低分辨率 JPEG 必须预放大");
         let img = image::load_from_memory(&out).unwrap();
         assert_eq!(img.width(), 934);
         let (dw, dh, x, _) = crate::convert::pdfwrite::place_image(img.width(), img.height(), 954, 1696);
@@ -629,7 +574,7 @@ mod tests {
     fn prepare_pdf_page_shrinks_once_to_exact_integer_draw_size() {
         // 1091×1592 灰度页（乱马同款尺寸）：一次缩到 934 宽，与 place_image 的绘制尺寸精确吻合 → 阅读器 1:1。
         let src = gray_jpeg_of(1091, 1592, 0);
-        let out = prepare_comic_page_for_pdf(&src, 954, 1696).expect("超过绘制宽必须缩");
+        let out = prepare_comic_page_for_pdf(&src, 954, 1696, false).expect("超过绘制宽必须缩");
         let img = image::load_from_memory(&out).unwrap();
         assert_eq!(img.width(), 934, "缩后宽必须等于 place_image 的整数绘制宽");
         let (dw, dh, x, y) = crate::convert::pdfwrite::place_image(img.width(), img.height(), 954, 1696);
@@ -661,7 +606,7 @@ mod tests {
     fn prepare_pdf_page_keeps_grayscale_grayscale() {
         let src = gray_jpeg_of(1091, 1592, 0);
         assert_eq!(image::load_from_memory(&src).unwrap().color(), image::ColorType::L8, "夹具本身必须是真灰度");
-        let out = prepare_comic_page_for_pdf(&src, 954, 1696).unwrap();
+        let out = prepare_comic_page_for_pdf(&src, 954, 1696, false).unwrap();
         assert_eq!(image::load_from_memory(&out).unwrap().color(), image::ColorType::L8, "灰度页不该被转成 RGB");
     }
 
@@ -669,7 +614,7 @@ mod tests {
     fn prepare_pdf_page_trims_border_then_upscales_once() {
         // 700×1000 带 40px 白边：先裁成 ~620×920，再一次放大到 934 宽（不是先裁编一代、再放大编一代）。
         let src = gray_jpeg_of(700, 1000, 40);
-        let out = prepare_comic_page_for_pdf(&src, 954, 1696).expect("有白边必须裁");
+        let out = prepare_comic_page_for_pdf(&src, 954, 1696, false).expect("有白边必须裁");
         let img = image::load_from_memory(&out).unwrap();
         assert_eq!(img.width(), 934);
         assert_eq!(img.color(), image::ColorType::L8);
@@ -678,7 +623,7 @@ mod tests {
     #[test]
     fn prepare_pdf_page_trim_and_shrink_in_one_pass() {
         let src = gray_jpeg_of(1400, 2000, 60);
-        let out = prepare_comic_page_for_pdf(&src, 954, 1696).unwrap();
+        let out = prepare_comic_page_for_pdf(&src, 954, 1696, false).unwrap();
         let (w, h) = image::load_from_memory(&out).unwrap().dimensions();
         assert_eq!(w, 934, "裁边后仍 >934 宽 → 缩到绘制宽: {w}x{h}");
     }
@@ -856,28 +801,6 @@ mod tests {
         assert!(downscale_for_device(&huge, test_screen()).is_none(), "超限图应跳过降采样");
         assert!(downscale_for_epub(&huge, test_screen()).is_none(), "超限图应跳过降采样");
         assert!(decode_trim_comic(&huge, false).is_none(), "超限图应跳过裁边");
-        assert!(dither_bilevel(&huge).is_none(), "超限图应跳过省刷新转换");
-    }
-
-    /// 省内存改写前后色度数值一致：灰度恒 0、RGB 直接读、其它类型（RGBA）照旧转 RGB 算。
-    #[test]
-    fn mean_chroma_matches_rgb_conversion_for_every_color_type() {
-        let reference = |img: &DynamicImage| {
-            let rgb = img.to_rgb8();
-            mean_chroma_of(rgb.width(), rgb.height(), rgb.pixels().map(|p| p.0))
-        };
-        let rgb = RgbImage::from_fn(300, 200, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8]));
-        let cases = [
-            DynamicImage::ImageRgb8(rgb.clone()),
-            DynamicImage::ImageRgba8(DynamicImage::ImageRgb8(rgb.clone()).to_rgba8()),
-            DynamicImage::ImageLuma8(DynamicImage::ImageRgb8(rgb.clone()).to_luma8()),
-            DynamicImage::ImageLumaA8(DynamicImage::ImageRgb8(rgb).to_luma_alpha8()),
-        ];
-        for img in &cases {
-            assert_eq!(mean_chroma(img), reference(img), "{:?}", img.color());
-        }
-        assert!(mean_chroma(&cases[0]) > COLOR_KEEP_CHROMA, "彩图样本要真有色度");
-        assert_eq!(mean_chroma(&cases[2]), 0.0);
     }
 
     /// 文字书插图缩放改走 SIMD 后：尺寸与 `DynamicImage::resize` 完全相同、像素差很小；灰度 JPEG 仍是单分量。

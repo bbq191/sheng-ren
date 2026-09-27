@@ -261,7 +261,7 @@ pub(super) fn fallback_spine_toc(entries: &[Entry], spine: &[String], nav_doc: O
 /// 按 spine 页分段的兜底目录：每 `FALLBACK_TOC_PAGES` 页一条，标题"第 N–M 页"，指向该段第一页。
 pub(super) fn page_chunk_toc(spine: &[String], nav_doc: Option<&String>) -> Vec<TocItem> {
     let pages: Vec<&String> = spine.iter().filter(|p| Some(*p) != nav_doc).collect();
-    crate::comic_pdf::page_chunk_titles(pages.len()).into_iter().map(|(start, title)| TocItem::new(1, title, pages[start].clone(), "")).collect()
+    crate::ncx::page_chunk_titles(pages.len()).into_iter().map(|(start, title)| TocItem::new(1, title, pages[start].clone(), "")).collect()
 }
 
 /// 分部标题前缀："第X部/卷/篇/辑"（X 为阿拉伯数字或中文数字），后面可能紧跟同一条目剩下的文本
@@ -337,7 +337,7 @@ pub(super) fn auto_toc(entries: &mut Vec<Entry>, mode: AutoToc, heading: &str, r
     let headings = if headings.is_empty() { fallback_spine_toc(entries, &opf.spine, opf.nav_doc.as_ref()) } else { split_numbered_titles(headings) };
     // 纯图片书（漫画/画册）：没有标题也没有可提取文字，`fallback_spine_toc` 故意不生成"正文 N"。但用户要求
     // **所有书都要有目录**（2026-09-20，乱马源书 NCX 是空的，转出来没目录），所以按页分段生成"第 N–M 页"
-    // ——如实标注不是章节，只为能按段跳转（同 `comic_pdf::page_chunk_titles`，PDF 路径也是这套）。
+    // ——如实标注不是章节，只为能按段跳转（同 `ncx::page_chunk_titles`，PDF 路径也是这套）。
     let headings = if headings.is_empty() { page_chunk_toc(&opf.spine, opf.nav_doc.as_ref()) } else { headings };
     if headings.is_empty() {
         return;

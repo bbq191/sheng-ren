@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// 生成流程本身（本 crate 的步骤、参数，以及生成时当场做的格式转换）的版本：改了会影响产物的地方要加一，
 /// 旧产物随之判为过期。优化器、AZW3 写出器各有自己的版本号，也都进指纹。
-const PIPELINE_VERSION: &str = "3";
+const PIPELINE_VERSION: &str = "4";
 
 #[derive(Debug)]
 pub enum Built {
@@ -141,7 +141,7 @@ impl Library {
             let mut warnings = Vec::new();
             let done = tmp.join("out");
             if format == Format::Pdf {
-                bookconv::pdf_ingest::optimize_pdf_trim_only(&input, &done, area, |_, _| {})?;
+                bookconv::pdf_ingest::optimize_pdf_trim_only(&input, &done, area, !device.color, |_, _| {})?;
             } else {
                 let mut epub = self.epub_input(meta, &input, &tmp)?;
                 // 书里没封面、书库里有找来的封面：放进去
