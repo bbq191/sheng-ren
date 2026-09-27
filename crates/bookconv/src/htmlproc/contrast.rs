@@ -2,34 +2,34 @@
 use super::*;
 
 // ===== 字体解锁 =====
-pub(super) fn style_attr_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?i)\s*style="([^"]*)""#).unwrap())
-}
-pub(super) fn font_decl_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    // font-family / font-size / font 简写声明（连同其后分号一并吃掉）。
-    // 值里可能含 HTML 实体如 &#39;（内含分号），故值用 `实体 | 非分号字符` 序列匹配，
-    // 避免在实体的分号处提前截断。
-    R.get_or_init(|| Regex::new(r#"(?i)font(?:-family|-size)?\s*:(?:&#?\w+;|[^;"])*;?"#).unwrap())
-}
 
 /// 剥掉内联 style 里的 font-family/font-size(及 font 简写)声明——第三方 EPUB 常内联硬写死
 /// 字体/字号，覆盖掉 xochitl 的阅读设置致"改不动字体"。删这些声明后 xochitl 设置即生效。
 /// style 因此清空则连整个 style 属性一并删掉；其他声明(颜色/对齐/缩进等)原样保留。
+/// 只认名字正好是 `style` 的属性（2026-09-27 审计：旧正则 `\s*style="` 没有左边界，`data-style=""`、
+/// SVG 的 `font-style=""` 也被当成 style 改写，产出非法 XML）；值按声明切（引号/括号/字符引用里的 `;` 不算）。
 pub fn strip_font_locks(html: &str) -> String {
-    style_attr_re()
-        .replace_all(html, |c: &regex::Captures| {
-            let inner = c.get(1).unwrap().as_str();
-            let cleaned = font_decl_re().replace_all(inner, "");
-            let cleaned = cleaned.trim();
-            if cleaned.is_empty() {
-                String::new() // 整个 style 属性删掉(连前导空格)
-            } else {
-                format!(" style=\"{cleaned}\"")
-            }
-        })
-        .into_owned()
+    html::edit_attrs(html, &["style"], |_, a| {
+        let decls = html::css_decls(a.value);
+        let font = |d: &html::CssDecl| ["font", "font-family", "font-size"].iter().any(|p| d.prop.eq_ignore_ascii_case(p));
+        if !decls.iter().any(font) {
+            return Edit::Keep;
+        }
+        let mut kept = String::with_capacity(a.value.len());
+        let mut last = 0;
+        for d in decls.iter().filter(|d| font(d)) {
+            kept.push_str(&a.value[last..d.start]);
+            last = d.start + d.raw.len();
+        }
+        kept.push_str(&a.value[last..]);
+        let kept = kept.trim();
+        if kept.is_empty() {
+            Edit::Remove // 整个 style 属性删掉(连前导空格)
+        } else {
+            Edit::Set(kept.to_string())
+        }
+    })
+    .into_owned()
 }
 
 // ── ② 按 e-ink 特性提正文对比（设备优化）───────────────────────────────────────────────
@@ -103,7 +103,6 @@ pub(super) fn is_thin_weight(value: &str) -> bool {
 /// 对一段 CSS 声明文本：灰色 `color` → `#000000`、细 `font-weight` → `400`。只认属性名本身
 /// （`color` 前必须是 起始/空白/`;`/`{`/引号，从而排除 background-color/border-color 等 `-color`）。
 pub(super) fn darken_css_decls(css: &str) -> String {
-    use std::sync::OnceLock;
     static COLOR_RE: OnceLock<Regex> = OnceLock::new();
     static WEIGHT_RE: OnceLock<Regex> = OnceLock::new();
     let color_re = COLOR_RE
@@ -131,15 +130,11 @@ pub(super) fn darken_css_decls(css: &str) -> String {
 
 /// 对 (x)html：把 `style="..."` 属性与 `<style>…</style>` 块里的灰字/细字重按 e-ink 提对比。
 pub fn boost_text_contrast(html: &str) -> String {
-    use std::sync::OnceLock;
-    static ATTR_RE: OnceLock<Regex> = OnceLock::new();
-    static BLOCK_RE: OnceLock<Regex> = OnceLock::new();
-    let attr_re = ATTR_RE.get_or_init(|| Regex::new(r#"(?i)style="([^"]*)""#).unwrap());
-    let block_re = BLOCK_RE.get_or_init(|| Regex::new(r#"(?is)(<style\b[^>]*>)(.*?)(</style>)"#).unwrap());
-    let s = attr_re.replace_all(html, |c: &regex::Captures| {
-        format!(r#"style="{}""#, darken_css_decls(&c[1]))
+    let s = html::edit_attrs(html, &["style"], |_, a| {
+        let v = darken_css_decls(a.value);
+        if v == a.value { Edit::Keep } else { Edit::Set(v) }
     });
-    block_re
+    html::style_block_re()
         .replace_all(&s, |c: &regex::Captures| format!("{}{}{}", &c[1], darken_css_decls(&c[2]), &c[3]))
         .into_owned()
 }

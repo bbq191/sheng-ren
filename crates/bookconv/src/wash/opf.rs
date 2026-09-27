@@ -5,10 +5,8 @@ pub(super) fn find_opf(entries: &[Entry]) -> Option<usize> {
     // container.xml 指向优先，否则第一个 .opf
     if let Some(c) = entries.iter().find(|e| e.name == "META-INF/container.xml") {
         let t = String::from_utf8_lossy(&c.data);
-        static RE: OnceLock<Regex> = OnceLock::new();
-        let re = RE.get_or_init(|| Regex::new(r#"full-path="([^"]+)""#).unwrap());
-        if let Some(m) = re.captures(&t) {
-            let p = posix_norm(&m[1]);
+        let full = html::tags(&t).filter(|g| g.is_start() && g.is("rootfile")).find_map(|g| tag_attr(&t[g.start..g.end], "full-path").map(posix_norm));
+        if let Some(p) = full {
             if let Some(i) = entries.iter().position(|e| e.name == p) {
                 return Some(i);
             }
@@ -32,24 +30,22 @@ pub struct Opf {
     pub ncx: Option<String>,
 }
 
-/// 标签里的 `name="value"` 属性对（只认双引号，属性名原样返回、由调用方决定大小写比较）。
-/// OPF manifest 项、`<meta name="cover">`、container.xml 的 `<rootfile>` 等共用这一条正则（此前 `parse_opf`、
-/// `ensure_cover_declared` 各编一份，`placeholder` 更是每取一个属性现编一个正则）。
-pub fn tag_attrs(tag: &str) -> impl Iterator<Item = (&str, &str)> {
-    static ATTR: OnceLock<Regex> = OnceLock::new();
-    let attr = ATTR.get_or_init(|| Regex::new(r#"([a-zA-Z:-]+)\s*=\s*"([^"]*)""#).unwrap());
-    attr.captures_iter(tag).map(|a| (a.get(1).map_or("", |m| m.as_str()), a.get(2).map_or("", |m| m.as_str())))
-}
-
-/// 标签里第一个名为 `name`（不分大小写）的属性值。
-pub fn tag_attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
-    tag_attrs(tag).find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v)
+/// 第一个名为 `name`（不分大小写、完整属性名）的属性值（原文；双引号、单引号、无引号都认）。`text` 可以是一个标签、
+/// 只有属性的片段，也可以是整份文档（取第一个带这个属性的开标签，如 container.xml 的 `full-path`）。
+/// OPF manifest 项、`<meta name="cover">`、container.xml 的 `<rootfile>` 等共用。
+pub fn tag_attr<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    if !text.trim_start().starts_with('<') {
+        return html::attr_value(text, name);
+    }
+    html::tags(text).filter(|t| t.is_start()).find_map(|t| html::attr_value(&text[t.start..t.end], name))
 }
 
 /// OPF manifest 的一项（`href` 未解码、未解析成 zip 路径；属性重复时后者为准，与此前 HashMap 收集的行为一致）。
 pub struct ManifestItem<'a> {
     /// 整个 `<item …>` 标签原文（改写 OPF 时按原文定位）。
     pub tag: &'a str,
+    /// `tag` 在 OPF 文本里的起点（就地改写用）。
+    pub pos: usize,
     pub id: &'a str,
     pub href: &'a str,
     pub media_type: &'a str,
@@ -58,22 +54,21 @@ pub struct ManifestItem<'a> {
 
 /// OPF 文本里全部带 `id` 与 `href` 的 manifest 项（文档序）。`parse_opf`、`ensure_cover_declared`、占位封面探测共用。
 pub fn manifest_items(opf_text: &str) -> Vec<ManifestItem<'_>> {
-    static ITEM: OnceLock<Regex> = OnceLock::new();
-    let item = ITEM.get_or_init(|| Regex::new(r#"(?s)<item\b[^>]*?/?>"#).unwrap());
-    item.find_iter(opf_text)
-        .filter_map(|m| {
-            let tag = m.as_str();
+    html::tags(opf_text)
+        .filter(|t| t.is_start() && t.is("item"))
+        .filter_map(|t| {
+            let tag = &opf_text[t.start..t.end];
             let (mut id, mut href, mut media_type, mut properties) = (None, None, "", "");
-            for (k, v) in tag_attrs(tag) {
-                match k.to_ascii_lowercase().as_str() {
-                    "id" => id = Some(v),
-                    "href" => href = Some(v),
-                    "media-type" => media_type = v,
-                    "properties" => properties = v,
+            for a in html::attrs(tag) {
+                match a.name.to_ascii_lowercase().as_str() {
+                    "id" => id = Some(a.value),
+                    "href" => href = Some(a.value),
+                    "media-type" => media_type = a.value,
+                    "properties" => properties = a.value,
                     _ => {}
                 }
             }
-            Some(ManifestItem { tag, id: id?, href: href?, media_type, properties })
+            Some(ManifestItem { tag, pos: t.start, id: id?, href: href?, media_type, properties })
         })
         .collect()
 }
@@ -88,8 +83,6 @@ pub fn parse_opf(entries: &[Entry]) -> Option<Opf> {
     let index = find_opf(entries)?;
     let dir = dir_of(&entries[index].name).to_string();
     let text = String::from_utf8_lossy(&entries[index].data);
-    static REF: OnceLock<Regex> = OnceLock::new();
-    let iref = REF.get_or_init(|| Regex::new(r#"<itemref\b[^>]*\bidref="([^"]+)""#).unwrap());
     let mut items = HashMap::new();
     let mut nav_doc = None;
     let mut ncx = None;
@@ -103,7 +96,10 @@ pub fn parse_opf(entries: &[Entry]) -> Option<Opf> {
         }
         items.insert(it.id.to_string(), path);
     }
-    let spine: Vec<String> = iref.captures_iter(&text).filter_map(|c| items.get(&c[1]).cloned()).collect();
+    let spine: Vec<String> = html::tags(&text)
+        .filter(|t| t.is_start() && t.is("itemref"))
+        .filter_map(|t| tag_attr(&text[t.start..t.end], "idref").and_then(|id| items.get(id)).cloned())
+        .collect();
     Some(Opf { index, dir, items, spine, nav_doc, ncx })
 }
 
@@ -116,12 +112,10 @@ pub fn parse_opf(entries: &[Entry]) -> Option<Opf> {
 pub(super) fn opf_unique_identifier(entries: &[Entry]) -> Option<String> {
     let i = find_opf(entries)?;
     let text = String::from_utf8_lossy(&entries[i].data);
-    static PKG: OnceLock<Regex> = OnceLock::new();
-    let pkg_re = PKG.get_or_init(|| Regex::new(r#"<package\b[^>]*\bunique-identifier="([^"]+)""#).unwrap());
-    let uid_attr = &pkg_re.captures(&text)?[1];
-    static ID: OnceLock<Regex> = OnceLock::new();
-    let id_re = ID.get_or_init(|| Regex::new(r#"(?s)<dc:identifier\b[^>]*\bid="([^"]+)"[^>]*>([^<]*)</dc:identifier>"#).unwrap());
-    id_re.captures_iter(&text).find(|c| &c[1] == uid_attr).map(|c| c[2].trim().to_string())
+    let uid_attr = html::tags(&text).find(|t| t.is_start() && t.is("package")).and_then(|t| tag_attr(&text[t.start..t.end], "unique-identifier"))?;
+    let t = html::tags(&text).find(|t| t.kind == html::TagKind::Open && t.is("dc:identifier") && tag_attr(&text[t.start..t.end], "id") == Some(uid_attr))?;
+    let close = html::find_close(&text, t.end, "dc:identifier")?;
+    Some(crate::util::xml_unescape(text[t.end..close.start].trim()).into_owned())
 }
 
 /// OPF 里的 Dublin Core 元数据（纯文本：标签去掉、字符引用还原）。多值的只有作者；其余取第一个非空值。
