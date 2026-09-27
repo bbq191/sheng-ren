@@ -192,6 +192,9 @@ mod tests {
         assert_eq!(m.readable(Format::Pdf), m.screen, "没有实测值的格式退回标称屏幕");
         let k = get("kindle-pw12-sig").unwrap();
         assert_eq!(k.readable(Format::Azw3), k.screen);
+        let i = get("ireader-ocean5-pro").unwrap();
+        assert!(i.has_measured_readable(Format::Epub), "掌阅 EPUB 已实测（整页图铺满整屏）");
+        assert_eq!(i.readable(Format::Epub), i.screen);
         assert!(m.color);
         assert_eq!(get("kindle-pw12-sig").unwrap().formats, [Format::Azw3]);
         assert!(get("nope").is_none());
