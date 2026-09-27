@@ -14,6 +14,9 @@ mod text;
 
 use std::collections::HashMap;
 
+/// 写出器版本：改了产物字节的修改要加一，书库据此判断旧的 AZW3 产物过期。
+pub const WRITER_VERSION: &str = "1";
+
 /// Kindle 书库里的归类。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CdeType {
@@ -26,7 +29,7 @@ pub enum CdeType {
 #[derive(Clone, Debug)]
 pub struct Opts {
     pub cdetype: CdeType,
-    /// 固定唯一 ID 与时间戳（测试要可重复）；`None` 按当前时间生成。
+    /// 固定唯一 ID 与时间戳（测试要可重复；书库用书的 id 和入库时间，重建后 Kindle 仍认作同一本书）；`None` 按当前时间生成。
     pub fixed_id: Option<(u32, u32)>,
 }
 
@@ -39,29 +42,36 @@ impl Default for Opts {
 /// 缩略图高度（像素）。
 const THUMB_H: u32 = 330;
 
+/// 封面缩略图：高度缩到 [`THUMB_H`]，本来就不高于它的不放大。
 fn thumbnail(cover: &[u8]) -> Option<Vec<u8>> {
     let img = image::load_from_memory(cover).ok()?;
-    let img = img.resize(u32::MAX, THUMB_H, image::imageops::FilterType::Lanczos3).to_rgb8();
+    let img = if img.height() > THUMB_H { img.resize(u32::MAX, THUMB_H, image::imageops::FilterType::Lanczos3) } else { img };
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&img).ok()?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&img.to_rgb8()).ok()?;
     Some(out)
 }
 
 /// EPUB 字节 → AZW3 字节。
 pub fn epub_to_azw3(epub: &[u8], opts: &Opts) -> Result<Vec<u8>, String> {
-    let book = book::load(epub)?;
+    epub_to_azw3_with_warnings(epub, opts).map(|(b, _)| b)
+}
+
+/// 同 [`epub_to_azw3`]，另外返回转换中丢掉或降级的内容（不支持的图片格式、找不到目标的链接），给调用方提示用户。
+pub fn epub_to_azw3_with_warnings(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), String> {
+    let mut warnings = Vec::new();
+    let mut book = book::load(epub, &mut warnings)?;
     let mut res_map: HashMap<String, (u32, &'static str)> = HashMap::new();
-    let mut records = Vec::new();
-    for img in &book.images {
-        records.push(img.bytes.clone());
-        res_map.insert(img.path.clone(), (records.len() as u32, img.mime));
+    let mut records = Vec::with_capacity(book.images.len() + 1);
+    for img in std::mem::take(&mut book.images) {
+        records.push(img.bytes);
+        res_map.insert(img.path, (records.len() as u32, img.mime));
     }
     let cover = book.cover.as_ref().and_then(|c| res_map.get(c)).map(|(n, _)| n - 1);
     let thumb = cover.and_then(|c| thumbnail(&records[c as usize])).map(|t| {
         records.push(t);
         records.len() as u32 - 1
     });
-    let layout = text::layout(&book, &res_map)?;
+    let layout = text::layout(&book, &res_map, &mut warnings)?;
     let (uid, timestamp) = opts.fixed_id.unwrap_or_else(|| {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
         ((now.as_nanos() as u32) ^ 0x5A5A_1234, now.as_secs() as u32)
@@ -83,5 +93,6 @@ pub fn epub_to_azw3(epub: &[u8], opts: &Opts) -> Result<Vec<u8>, String> {
         uid,
         timestamp,
     };
-    container::assemble(&meta, &layout, container::Resources { records, cover, thumb })
+    let out = container::assemble(&meta, layout, container::Resources { records, cover, thumb })?;
+    Ok((out, warnings))
 }

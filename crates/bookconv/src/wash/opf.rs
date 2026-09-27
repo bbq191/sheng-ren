@@ -79,7 +79,7 @@ pub fn manifest_items(opf_text: &str) -> Vec<ManifestItem<'_>> {
 }
 
 /// `<meta name="cover" …>` 标签（`ensure_cover_declared` 与占位封面探测共用）。
-pub(crate) fn cover_meta_re() -> &'static Regex {
+pub fn cover_meta_re() -> &'static Regex {
     static META: OnceLock<Regex> = OnceLock::new();
     META.get_or_init(|| Regex::new(r#"(?s)<meta\b[^>]*\bname\s*=\s*"cover"[^>]*?/?>"#).unwrap())
 }
@@ -124,9 +124,48 @@ pub(super) fn opf_unique_identifier(entries: &[Entry]) -> Option<String> {
     id_re.captures_iter(&text).find(|c| &c[1] == uid_attr).map(|c| c[2].trim().to_string())
 }
 
+/// OPF 里的 Dublin Core 元数据（纯文本：标签去掉、字符引用还原）。多值的只有作者；其余取第一个非空值。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpfDc {
+    pub title: String,
+    pub creators: Vec<String>,
+    pub publisher: String,
+    pub language: String,
+    pub date: String,
+    pub description: String,
+}
+
+/// 从 OPF 文本读 [`OpfDc`]。书库入库、AZW3 写出、自动目录标题共用。
+pub fn opf_dc(opf: &str) -> OpfDc {
+    static DC: OnceLock<Regex> = OnceLock::new();
+    let re = DC.get_or_init(|| {
+        Regex::new(r#"(?s)<dc:(title|creator|publisher|language|date|description)\b[^>]*>(.*?)</dc:(?:title|creator|publisher|language|date|description)\s*>"#).unwrap()
+    });
+    let mut dc = OpfDc::default();
+    for c in re.captures_iter(opf) {
+        let v = plain_text(&c[2]);
+        if v.is_empty() {
+            continue;
+        }
+        let slot = match &c[1] {
+            "creator" => {
+                dc.creators.push(v);
+                continue;
+            }
+            "title" => &mut dc.title,
+            "publisher" => &mut dc.publisher,
+            "language" => &mut dc.language,
+            "date" => &mut dc.date,
+            _ => &mut dc.description,
+        };
+        if slot.is_empty() {
+            *slot = v;
+        }
+    }
+    dc
+}
+
 /// OPF `<dc:title>` 的纯文本内容，取不到时兜底"目录"。
 pub(super) fn opf_book_title(entries: &[Entry], opf_index: usize) -> String {
-    let t = String::from_utf8_lossy(&entries[opf_index].data);
-    static T: OnceLock<Regex> = OnceLock::new();
-    T.get_or_init(|| Regex::new(r#"(?s)<dc:title[^>]*>(.*?)</dc:title>"#).unwrap()).captures(&t).map(|c| plain_text(&c[1])).unwrap_or_else(|| "目录".into())
+    Some(opf_dc(&String::from_utf8_lossy(&entries[opf_index].data)).title).filter(|t| !t.is_empty()).unwrap_or_else(|| "目录".into())
 }

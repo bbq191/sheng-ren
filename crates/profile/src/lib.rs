@@ -28,6 +28,15 @@ impl Format {
     pub fn is_reflowable(self) -> bool {
         matches!(self, Format::Epub | Format::Azw3)
     }
+
+    /// 文件扩展名（也是 TOML 里的写法）。
+    pub fn ext(self) -> &'static str {
+        match self {
+            Format::Epub => "epub",
+            Format::Pdf => "pdf",
+            Format::Azw3 => "azw3",
+        }
+    }
 }
 
 /// 竖屏像素尺寸（`width <= height`）。
