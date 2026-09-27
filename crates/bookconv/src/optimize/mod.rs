@@ -57,7 +57,9 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 /// v17（2026-09-27）：清洗层加章节分页（`wash::paginate`）：章标题独立一页、节与节/节与章之间分页，章节文件按标题拆开，
 /// 全书链接与目录改指到拆出来的文件，同文件注释随所在的节搬移。
 /// v18（2026-09-27）：黑白屏设备（`OptimizeOpts::grayscale`）的漫画页转成单分量 8 位灰度（256 级，不抖动）。
-pub const OPTIMIZE_VERSION: &str = "18";
+/// v19（2026-09-27）：排版细化——补 `<html>` 语言属性；中英文正文两端对齐（英文加断字、孤行寡行）；居中/居右换成类；
+/// 剥 `line-height` 与 `vh` 高度；章尾空白页（删文件末尾空元素、结尾容器去下边距与之后分页）。
+pub const OPTIMIZE_VERSION: &str = "19";
 
 /// 脚注呈现方式。xochitl 无弹窗脚注（穷尽真机实测判死）；weread/pkm 线与第三方书历史行为、
 /// EPUB 线设备侧优化（母版库「优化」）2026-09-17 起统一用 `Anchor`（章末可见 + 同章锚点跳转 +

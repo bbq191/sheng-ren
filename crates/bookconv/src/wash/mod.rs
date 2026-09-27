@@ -35,6 +35,7 @@ mod css;
 mod dead_refs;
 mod drm;
 mod empty_pages;
+mod layout;
 mod ncx_fix;
 mod opf;
 mod paginate;
@@ -46,6 +47,7 @@ pub use self::css::*;
 use self::dead_refs::*;
 pub use self::drm::*;
 use self::empty_pages::*;
+use self::layout::*;
 use self::ncx_fix::*;
 use self::paginate::*;
 pub use self::opf::*;
@@ -106,7 +108,8 @@ const WASH_CSS_NAME: &str = "eink-wash.css";
 // 只解锁字号；这三项此前只是照抄 Calibre `--filter-css` 通用参数，没有真机验证过是必须剥的。放开后如果书里有
 // "深底浅字"高亮块，Paper Pro Move 彩色 e-ink 屏在低对比场景下可能比剥离前更难读——`boost_text_contrast()`
 // 目前只处理文字颜色/字重，不处理背景色对比度，真机验证时要专门挑一本带彩色底纹的书测。
-pub const DEFAULT_FILTER_PROPS: &[&str] = &["font-family", "font-size", "font", "background-image", "background"];
+// line-height（2026-09-27 用户定）：与字号字体同理，书写死行高会让设备的"行距"设置不起作用。
+pub const DEFAULT_FILTER_PROPS: &[&str] = &["font-family", "font-size", "font", "line-height", "background-image", "background"];
 const WASH_MARK: &str = "eink-wash";
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -134,6 +137,10 @@ pub struct WashReport {
     pub paginate_notes_moved: usize,
     /// 书自带目录漏掉、分页时补进目录的节数。
     pub toc_sections_added: usize,
+    /// 文件末尾删掉的空元素/换行数（章尾空白页）。
+    pub trailing_blanks_removed: usize,
+    /// 去掉了下边距/之后分页的样式表数（包住章节结尾的容器）。
+    pub tail_spacing_rules_fixed: usize,
 }
 
 
@@ -177,6 +184,14 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
         opts.clone()
     };
     let opts = &opts;
+    // 书的语言标签：OPF `dc:language` 优先，没有就按探测到的主语言。补给缺 lang 的 <html>。
+    let lang_tag = find_opf(entries)
+        .and_then(|i| {
+            static DC_LANG: OnceLock<Regex> = OnceLock::new();
+            let t = String::from_utf8_lossy(&entries[i].data);
+            DC_LANG.get_or_init(|| Regex::new(r#"(?s)<dc:language\b[^>]*>\s*([A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*)\s*</dc:language>"#).unwrap()).captures(&t).map(|c| c[1].to_string())
+        })
+        .unwrap_or_else(|| if opts.lang == LangMode::Latin { "en".into() } else { "zh".into() });
     // 外链 wash css 的 zip 路径（放 OPF 同目录；无 OPF 兜底放根）。排版规则写这里、逐 html 加 <link>——
     // xochitl 只认外链 css（内联 <style> 无视），见 WASH_CSS_NAME 注。
     let css_path = match find_opf(entries) {
@@ -198,6 +213,7 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
                 let (out, dups) = wash_html(t, opts);
                 let href = relative_to(dir_of(&e.name), &css_path);
                 let out = inject_css_link(&out, &href);
+                let out = ensure_html_lang(&align_classes(&out), &lang_tag);
                 rep.dup_id_tags_collapsed += dups;
                 e.data = out.into_bytes();
                 rep.html_files += 1;
@@ -212,6 +228,8 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
     if opts.paginate {
         paginate_sections(entries, &mut rep);
     }
+    // 章尾空白页放在分页之后：拆出来的每一份文件末尾也要清。
+    remove_chapter_end_blanks(entries, &mut rep);
     fix_ncx_uid(entries, &mut rep);
     strip_ncx_doctype(entries, &mut rep);
     Ok(rep)
