@@ -49,13 +49,46 @@ fn classify_doc(doc: &lopdf::Document) -> PdfKind {
     if comic_pages as f64 / total as f64 >= COMIC_PAGE_RATIO {
         return PdfKind::Comic;
     }
-    let Ok(text_pages) = extract_positioned_text_doc(doc) else { return PdfKind::NoTextLayer };
-    let total_chars: usize = text_pages.iter().map(|p| p.chars.iter().filter(|c| !c.ch.is_whitespace()).count()).sum();
-    let avg = total_chars as f64 / total as f64;
-    if avg >= MIN_CHARS_PER_PAGE {
+    // 数够"平均每页 MIN_CHARS_PER_PAGE 个非空白字符"就停，不用把整本书的文字都抽一遍（大书分类慢在这里）。
+    let mut counter = CharCounter { count: 0, need: (MIN_CHARS_PER_PAGE * total as f64).ceil() as usize, reached: false };
+    let _ = pdf_extract::output_doc(doc, &mut counter); // 出错（含数够后主动中止）时看已数到的
+    if counter.reached {
         PdfKind::TextLayer
     } else {
         PdfKind::NoTextLayer
+    }
+}
+
+/// 只数非空白字符的 `OutputDev`；数够 `need` 个就返回一个错误让 pdf-extract 提前停下。
+struct CharCounter {
+    count: usize,
+    need: usize,
+    reached: bool,
+}
+
+impl pdf_extract::OutputDev for CharCounter {
+    fn begin_page(&mut self, _: u32, _: &pdf_extract::MediaBox, _: Option<(f64, f64, f64, f64)>) -> Result<(), pdf_extract::OutputError> {
+        Ok(())
+    }
+    fn end_page(&mut self) -> Result<(), pdf_extract::OutputError> {
+        Ok(())
+    }
+    fn output_character(&mut self, _: &pdf_extract::Transform, _: f64, _: f64, _: f64, ch: &str, _: Option<[u8; 3]>) -> Result<(), pdf_extract::OutputError> {
+        self.count += ch.chars().filter(|c| !c.is_whitespace()).count();
+        if self.count >= self.need {
+            self.reached = true;
+            return Err(pdf_extract::OutputError::FormatError(std::fmt::Error)); // 够了，中止
+        }
+        Ok(())
+    }
+    fn begin_word(&mut self) -> Result<(), pdf_extract::OutputError> {
+        Ok(())
+    }
+    fn end_word(&mut self) -> Result<(), pdf_extract::OutputError> {
+        Ok(())
+    }
+    fn end_line(&mut self) -> Result<(), pdf_extract::OutputError> {
+        Ok(())
     }
 }
 
@@ -92,14 +125,22 @@ pub(super) fn media_box_size(doc: &lopdf::Document, page_dict: &lopdf::Dictionar
     Some((w as f64, h as f64))
 }
 
+/// 沿 `/Parent` 链向上找 `MediaBox`（页面可以从页树继承）。最多往上找 [`MAX_PAGE_TREE_DEPTH`] 层：
+/// 损坏/恶意 PDF 的 `/Parent` 可能成环，无限递归会栈溢出。
 pub(super) fn get_inherited_media_box(doc: &lopdf::Document, page_dict: &lopdf::Dictionary) -> Option<Vec<lopdf::Object>> {
-    if let Ok(arr) = page_dict.get(b"MediaBox").and_then(|o| o.as_array()) {
-        return Some(arr.clone());
+    let mut dict = page_dict;
+    for _ in 0..MAX_PAGE_TREE_DEPTH {
+        if let Ok(arr) = dict.get(b"MediaBox").and_then(|o| o.as_array()) {
+            return Some(arr.clone());
+        }
+        let parent_ref = dict.get(b"Parent").ok()?.as_reference().ok()?;
+        dict = doc.get_dictionary(parent_ref).ok()?;
     }
-    let parent_ref = page_dict.get(b"Parent").ok()?.as_reference().ok()?;
-    let parent = doc.get_dictionary(parent_ref).ok()?;
-    get_inherited_media_box(doc, parent)
+    None
 }
+
+/// 页树继承查找的层数上限（正常 PDF 的页树只有几层）。
+const MAX_PAGE_TREE_DEPTH: usize = 64;
 
 // ============================================================================
 // 逐字符位置提取（pdf-extract OutputDev 驱动）

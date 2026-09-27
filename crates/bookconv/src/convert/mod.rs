@@ -1,17 +1,9 @@
-//! 多格式 → xochitl 可读格式转换（块3 阅读 · 补内容源）。
+//! 各种源格式 → **与设备无关的母版**（入库用）。`booklib`（`crates/library`）入库时调这里：
+//! MOBI6（.mobi/.prc/.azw）、AZW3（KF8，clean-room 自研，见 `kf8`）、FB2 → EPUB，CBZ → 每页一张原图的 EPUB
+//! （`cbz::cbz_to_epub`）。按设备的优化是入库之后的独立步骤，这里不做。
 //!
-//! **现状（2026-09-25）**：书架只收 EPUB/PDF，格式转换器本身已不被调用；book-serve 仍复用 `direct_content_type`
-//! （落库/投递的 MIME 门控）和 `pdfwrite`（PDF 页数、占位 PDF、漫画 PDF）。下面是模块最初的设计说明。
-//!
-//! xochitl 原生只开 EPUB/PDF：**文本类 → EPUB、漫画类 → PDF**，再走已验证的 `/upload`
-//! 免重启注入书库（见 device-core inject）。设计要点 = 各转换器互不耦合、统一收敛到
-//! `Converted` 结果类型，摄入层（ingest）对 CBZ/FB2/… 一视同仁，不认具体格式。
-//!
-//! 支持格式（全设备端纯 Rust）：CBZ→PDF、FB2→EPUB、MOBI6→EPUB（.mobi/.prc/.azw）、
-//! **AZW3(KF8)→EPUB（.azw3，clean-room 自研，见 kf8）**。
-//! **降级（少见/受限，走 host，不进设备二进制）**：
-//! - HUFF/CDIC 压缩的 AZW3（少见）：kf8 明确拒绝 → host `calibre ebook-convert x.azw3 x.epub` 丢 inbox。
-//! - CBR：`unrar` 依赖 unrar_sys 编 C++ + RARLAB 受限许可（撞零 C 依赖 + 许可证铁律）→ host `unar`/`7z x` 解成 .cbz 丢 inbox（CBZ→PDF 接手）。
+//! 另有 `cbz::cbz_to_pdf`（`cbz2pdf` 命令用，按设备出 PDF）和 `pdfwrite`（手写 PDF，漫画 PDF / 入库 PDF 裁边共用）。
+//! 不支持：HUFF/CDIC 压缩的 AZW3、带 DRM 的文件（`precheck` 直接拒）；CBR（RAR 解包要 C++ 依赖和受限许可，先用外部工具解成 CBZ）。
 
 pub mod cbz;
 pub mod common;
@@ -21,46 +13,28 @@ pub mod mobi;
 pub mod palm;
 pub mod pdfwrite;
 
-/// xochitl `/upload` 接受的落地类型。
+/// 不用转换、原样作母版的格式。
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ContentType {
     Epub,
     Pdf,
 }
-impl ContentType {
-    pub fn mime(self) -> &'static str {
-        match self {
-            ContentType::Epub => "application/epub+zip",
-            ContentType::Pdf => "application/pdf",
-        }
-    }
-    pub fn ext(self) -> &'static str {
-        match self {
-            ContentType::Epub => "epub",
-            ContentType::Pdf => "pdf",
-        }
-    }
-}
 
-/// 转换产物：新书字节 + 落地类型 + 建议书名（不含扩展名，供 /upload 落文件名）。
+/// 转换产物：母版 EPUB 字节 + 建议书名（不含扩展名）。
 pub struct Converted {
     pub data: Vec<u8>,
-    pub content_type: ContentType,
     pub title: String,
 }
 
-/// 墨水屏色调处理档（仅作用于漫画 CBZ→PDF；其余格式忽略）。reading 线由「系统增强→漫画省刷新」开关控制；shelf 不再用。
-/// `Off`=原样（默认）；`Mono`=黑白页转 1-bit Floyd–Steinberg 抖动（触发面板更轻的 mono 波形、缩体积；
-/// 真彩页按饱和度阈值保留彩色）。真机坐实内容层能换更轻波形=减闪，见白皮书。
+/// 旧的"墨水屏色调档"参数，已无作用（CBZ→PDF 的色调现在由设备 profile 的 `color` 决定，见 `cbz::cbz_to_pdf`）。
+/// 只为 [`convert_file`] 的调用方签名不变而保留，调用方改掉后删除。
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub enum EinkTone {
     #[default]
     Off,
-    Mono,
 }
 
-/// 该文件扩展名是否为「可转换的源格式」（用于摄入层筛选、跳过 epub/pdf/其他）。
-/// .mobi/.prc = 旧 MOBI6；.azw3/.azw = KF8（设备端纯 Rust 解析，见 kf8）。
+/// 该文件扩展名是否为「可转换的源格式」。.mobi/.prc/.azw = 旧 MOBI6；.azw3 = KF8（见 kf8）。
 pub fn is_convertible(filename: &str) -> bool {
     let l = filename.to_ascii_lowercase();
     l.ends_with(".cbz")
@@ -71,7 +45,7 @@ pub fn is_convertible(filename: &str) -> bool {
         || l.ends_with(".azw")
 }
 
-/// 已是 xochitl 可直读格式（EPUB/PDF）→ 不转换、直接 `/upload`。返回其落地类型。
+/// EPUB/PDF 不转换，原样作母版。返回其类型。
 pub fn direct_content_type(filename: &str) -> Option<ContentType> {
     let l = filename.to_ascii_lowercase();
     if l.ends_with(".epub") {
@@ -83,18 +57,13 @@ pub fn direct_content_type(filename: &str) -> Option<ContentType> {
     }
 }
 
-/// 摄入层是否接收该文件：可转换源 OR 可直传的 epub/pdf。
-pub fn is_ingestible(filename: &str) -> bool {
-    is_convertible(filename) || direct_content_type(filename).is_some()
-}
-
-/// **廉价预检**（不做完整转换/解压）：判断该文件设备端能否处理，能则 `Ok`，否则给可读原因。
-/// 用于上传时**先验后转**——不支持的（DRM / HUFF-CDIC / CBR / 未知）立即回执，不白跑重活、不阻塞批量。
+/// **廉价预检**（不做完整转换/解压）：判断该文件能否转换，能则 `Ok`，否则给可读原因。
+/// 入库时**先验后转**——不支持的（DRM / HUFF-CDIC / 未知）立即报错，不白跑重活。
 /// MOBI/AZW3 只解 PalmDB+record0 头（含 DRM/压缩类型），秒级；epub/pdf/cbz/fb2 结构无法廉价预判则放行。
 pub fn precheck(filename: &str, data: &[u8]) -> Result<(), String> {
     let l = filename.to_ascii_lowercase();
     if direct_content_type(&l).is_some() {
-        return Ok(()); // epub/pdf 直传
+        return Ok(()); // epub/pdf 原样作母版
     }
     if l.ends_with(".mobi") || l.ends_with(".prc") || l.ends_with(".azw") || l.ends_with(".azw3") {
         // 只解容器头即可判 DRM / HUFF-CDIC（parse_header 早失败，不触发解压）
@@ -106,46 +75,33 @@ pub fn precheck(filename: &str, data: &[u8]) -> Result<(), String> {
     } else if is_convertible(&l) {
         Ok(()) // cbz/fb2 无法廉价预判，交由转换阶段
     } else {
-        Err("不支持的格式（支持 EPUB/PDF 直传，AZW3/MOBI/FB2/CBZ 转换）".into())
+        Err("不支持的格式（支持 EPUB/PDF 原样入库，AZW3/MOBI/FB2/CBZ 转换）".into())
     }
 }
 
-/// 按扩展名分派转换。返回 `None` = 非可转换源（摄入层跳过）；`Some(Err)` = 是源但转换失败。
-/// `tone`、`screen` 仅影响漫画 CBZ→PDF（省刷新档、按屏降采样），文本类格式忽略、产出与设备无关的母版。
-pub fn convert_file(filename: &str, data: &[u8], tone: EinkTone, screen: crate::imgopt::Screen) -> Option<Result<Converted, String>> {
+/// 按扩展名分派转换，产出与设备无关的母版 EPUB。返回 `None` = 非可转换源；`Some(Err)` = 是源但转换失败。
+/// `_tone`、`_screen` 已无作用（母版不按设备处理），保留只为调用方签名不变。
+pub fn convert_file(filename: &str, data: &[u8], _tone: EinkTone, _screen: crate::imgopt::Screen) -> Option<Result<Converted, String>> {
     let l = filename.to_ascii_lowercase();
     let title = std::path::Path::new(filename)
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("book")
         .to_string();
+    // 书自带的书名（FB2 `<book-title>`、MOBI/AZW3 EXTH）比文件名准；取不到时退回文件名。
+    let with_title = |r: Result<(Vec<u8>, String), String>| {
+        r.map(|(data, book_title)| Converted { data, title: if book_title.trim().is_empty() { title.clone() } else { book_title } })
+    };
     if l.ends_with(".cbz") {
-        Some(cbz::cbz_to_pdf(data, tone, screen).map(|data| Converted {
-            data,
-            content_type: ContentType::Pdf,
-            title,
-        }))
+        Some(cbz::cbz_to_epub(data, &title).map(|data| Converted { data, title: title.clone() }))
     } else if l.ends_with(".fb2") {
-        // FB2 自带 <book-title>，用它当书名（比源文件名准）；解析失败则回退到文件名。
-        Some(fb2::fb2_to_epub(data).map(|(data, book_title)| Converted {
-            data,
-            content_type: ContentType::Epub,
-            title: if book_title.trim().is_empty() { title } else { book_title },
-        }))
+        Some(with_title(fb2::fb2_to_epub(data)))
     } else if l.ends_with(".mobi") || l.ends_with(".prc") || l.ends_with(".azw") {
         // .azw（初代 Kindle）≈ 旧 MOBI6；.mobi/.prc 同。
-        Some(mobi::mobi_to_epub(data).map(|(data, book_title)| Converted {
-            data,
-            content_type: ContentType::Epub,
-            title: if book_title.trim().is_empty() { title } else { book_title },
-        }))
+        Some(with_title(mobi::mobi_to_epub(data)))
     } else if l.ends_with(".azw3") {
         // AZW3 = KF8（现代 Kindle）。
-        Some(kf8::azw3_to_epub(data).map(|(data, book_title)| Converted {
-            data,
-            content_type: ContentType::Epub,
-            title: if book_title.trim().is_empty() { title } else { book_title },
-        }))
+        Some(with_title(kf8::azw3_to_epub(data)))
     } else {
         None
     }
@@ -156,18 +112,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_and_ingestible_classification() {
+    fn direct_and_convertible_classification() {
         assert_eq!(direct_content_type("a.epub"), Some(ContentType::Epub));
         assert_eq!(direct_content_type("A.PDF"), Some(ContentType::Pdf));
         assert_eq!(direct_content_type("a.azw3"), None);
-        assert!(is_ingestible("x.epub") && is_ingestible("x.pdf"));
-        assert!(is_ingestible("x.azw3") && is_ingestible("x.cbz"));
-        assert!(!is_ingestible("x.txt") && !is_ingestible("x.docx"));
+        assert!(is_convertible("x.azw3") && is_convertible("x.cbz") && is_convertible("x.FB2"));
+        assert!(!is_convertible("x.txt") && !is_convertible("x.epub"));
     }
 
     #[test]
     fn precheck_rejects_unknown_and_accepts_direct() {
-        assert!(precheck("x.epub", b"anything").is_ok()); // 直传不预判内容
+        assert!(precheck("x.epub", b"anything").is_ok()); // 原样入库，不预判内容
         assert!(precheck("x.pdf", b"%PDF").is_ok());
         assert!(precheck("x.txt", b"...").is_err()); // 未知格式
         assert!(precheck("x.mobi", b"tooshort").is_err()); // 坏 PalmDB 早失败
