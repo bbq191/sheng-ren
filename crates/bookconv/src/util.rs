@@ -119,8 +119,7 @@ pub fn image_media_type_of_ext(ext: &str) -> &'static str {
     }
 }
 
-/// "先产出到临时文件、成功才改名覆盖目标、失败清掉半成品"的统一外壳（母版库优化的三处原先各写一遍
-/// `产出→出错删 tmp→rename→map_err`）。`produce(tmp)` 负责把产物写到 `tmp` 并返回任意结果（如统计报告）；
+/// "先产出到临时文件、成功才改名覆盖目标、失败清掉半成品"的统一外壳（`epub-optimize` 用）。`produce(tmp)` 负责把产物写到 `tmp` 并返回任意结果（如统计报告）；
 /// 它出错或最后 `rename` 失败，`tmp` 都会被删掉，不在目录里留半成品。`tmp` 应与 `target` 同分区（rename 才原子）。
 pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, produce: impl FnOnce(&std::path::Path) -> Result<T, String>) -> Result<T, String> {
     let value = match produce(tmp) {
@@ -132,7 +131,7 @@ pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, 
     };
     if let Err(e) = std::fs::rename(tmp, target) {
         let _ = std::fs::remove_file(tmp);
-        return Err(format!("回写母版库失败: {e}"));
+        return Err(format!("改名覆盖 {} 失败: {e}", target.display()));
     }
     Ok(value)
 }
@@ -184,11 +183,11 @@ mod tests {
         assert_eq!(err, "boom");
         assert_eq!(std::fs::read(&target).unwrap(), b"new", "失败不动原文件");
         assert!(!tmp.exists(), "失败清掉半成品");
-        // rename 失败（目标是个非空目录）：报回写失败并清 tmp
+        // rename 失败（目标是个非空目录）：报改名失败并清 tmp
         let dir_target = d.path().join("dir");
         std::fs::create_dir_all(dir_target.join("x")).unwrap();
         let err = produce_then_replace(&tmp, &dir_target, |t| std::fs::write(t, b"z").map_err(|e| e.to_string())).unwrap_err();
-        assert!(err.contains("回写母版库失败"), "{err}");
+        assert!(err.contains("改名覆盖"), "{err}");
         assert!(!tmp.exists());
     }
 

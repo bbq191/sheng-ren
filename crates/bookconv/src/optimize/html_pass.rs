@@ -1,13 +1,10 @@
 //! 章节 html / 图片的逐条变换（第一遍规整、第二遍脚注重排+提对比+远程图内联、图片降采样）。
 use super::*;
 
-/// HTML 里的远程图（http(s)/协议相对 `//`）→ 抓取降采样内联进 EPUB：抓到→存进 zip（与本章同目录，
-/// src 改本地文件名，免相对路径计算）；抓不到→**删掉该 `<img>`**（避免 reMarkable 破图占位=大放大镜）。
-/// weread 下载书常含 `res.weread.qq.com` 远程图（logo/图片脚注）。`chap_dir`=本章 zip 内目录；
-/// `counter` 跨章递增保资源名唯一。`fetch(src)->Some((字节,ext))|None`（依赖注入便于测试，生产传抓图闭包）。
-/// 返回（改写后 html, 新增资源 [(zip路径, 字节)]）。**离线时全部抓不到 → 全删**（放大镜必消，图丢但离线本
-/// 就是放大镜，删胜于留）。不加 manifest：reMarkable 按 src 直渲图、不查 manifest（连不在 manifest 的远程
-/// URL 都尝试渲染=才有放大镜），故本地图同样直渲（真机验证）。
+/// HTML 里的远程图（http(s)/协议相对 `//`）→ 抓取降采样内联进 EPUB：抓到→存进 zip（与本章同目录，src 改本地文件名，
+/// 免相对路径计算），调用方再把它补进 OPF manifest（[`add_manifest_items`]）；抓不到→`<img>` **原样保留**（不改书的内容，
+/// 联网的阅读器仍可能显示它）。`chap_dir`=本章 zip 内目录；`counter` 跨章递增保资源名唯一。
+/// `fetch(src)->Some((字节,ext))|None`（依赖注入便于测试，生产传抓图闭包）。返回（改写后 html, 新增资源 [(zip路径, 字节)]）。
 pub(super) fn inline_remote_images<F>(
     html: &str,
     chap_dir: &str,
@@ -40,10 +37,34 @@ where
                 resources.push((path, bytes));
                 re_src.replace(tag, regex::NoExpand(&format!(r#" src="{fname}""#))).into_owned()
             }
-            None => String::new(), // 抓不到 → 删掉 img（无放大镜）
+            None => tag.to_string(), // 抓不到 → 原样保留
         }
     });
     (out.into_owned(), resources)
+}
+
+/// 章节里有没有远程图（与 [`inline_remote_images`] 同一判据的快速预扫，只决定要不要推迟写 OPF）。
+pub(super) fn has_remote_img(html: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"(?is)<img\b[^>]*?\ssrc="(?:https?:)?//"#).unwrap()).is_match(html)
+}
+
+/// 把抓到的远程图补进 OPF manifest（插在第一个 `</manifest>` 前，允许命名空间前缀）。`opf_path`/`imgs` 都是 zip 内路径，
+/// href 按 OPF 所在目录算相对路径；id 用 `eink-remote-img-N`。没有 `</manifest>` 时原样返回。
+pub(super) fn add_manifest_items(opf: &str, opf_path: &str, imgs: &[(String, Vec<u8>)]) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let Some(m) = RE.get_or_init(|| Regex::new(r#"</(?:[A-Za-z_][\w.-]*:)?manifest\s*>"#).unwrap()).find(opf) else { return opf.to_string() };
+    let dir = crate::epubzip::dir_of(opf_path);
+    let items: String = imgs
+        .iter()
+        .enumerate()
+        .map(|(i, (path, _))| {
+            let ext = crate::util::image_ext_of(path);
+            let href = crate::util::xml_escape(&crate::epubzip::relative_to(dir, path));
+            format!(r#"<item id="eink-remote-img-{i}" href="{href}" media-type="{}"/>"#, crate::util::image_media_type_of_ext(&ext))
+        })
+        .collect();
+    format!("{}{items}{}", &opf[..m.start()], &opf[m.start()..])
 }
 
 /// 生产抓图闭包：`//`→https、Referer=图自身 origin（满足多数 CDN 同源防盗链）、抓取+降采样。
@@ -84,7 +105,6 @@ pub(super) fn svg_cover_to_img(html: &str) -> String {
 
 /// 第一遍 html 处理：归一同文件 href（part0004.html#x 写在 part0004.html 里→改裸锚 #x，否则下面
 /// referenced/搬注释/拆环全把同章脚注误当跨文件）→ 剥字体锁 → 扫这章引用了哪些脚注 frag。
-/// `optimize_epub_with`/`optimize_epub_file_streaming` 共用，避免两条路径的第一遍处理逻辑分叉走样。
 pub(super) fn first_pass_html(text: &str, name: &str) -> (String, Vec<String>) {
     let own = std::path::Path::new(name).file_name().and_then(|s| s.to_str()).unwrap_or("");
     let text = crate::htmlproc::normalize_self_hrefs(text, own);
@@ -93,40 +113,15 @@ pub(super) fn first_pass_html(text: &str, name: &str) -> (String, Vec<String>) {
     (stripped, referenced)
 }
 
-/// 章节 html 最终变换链：解双向脚注互指环 → duokan 图片脚注标记换上标 → 封面拉伸/SVG 修复 →
-/// 脚注就地关联重排 → e-ink 提对比 → 远程图内联 → 全书 id 去重。第一遍（`first_pass_html`）跟这遍
-/// 分开是因为这遍要用到第一遍扫全书才拿得到的 `aside_index`（跨章注释索引），顺序不能换。返回
-/// (最终字节, 这章新增的远程图资源 [(zip 路径, 字节)])。同上，两条优化路径共用。
-pub(super) fn transform_html_chapter(
-    text: &str,
-    name: &str,
-    aside_index: &std::collections::HashMap<String, String>,
-    footnote: FootnoteMode,
-    remote_counter: &mut usize,
-    img_agent: &ureq::Agent,
-    screen: crate::imgopt::Screen,
-    seen_ids: &mut HashSet<String>,
-) -> (Vec<u8>, Vec<(String, Vec<u8>)>) {
-    let t = crate::htmlproc::break_footnote_cycles(text);
-    let t = crate::htmlproc::fix_duokan_markers(&t);
-    let t = fix_cover_aspect(&t);
-    let t = svg_cover_to_img(&t);
-    let t = crate::htmlproc::preserve_relink_footnotes(&t, aside_index, footnote);
-    let t = crate::htmlproc::boost_text_contrast(&t);
-    let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
-    let (t, imgs) = inline_remote_images(&t, chap_dir, remote_counter, remote_img_fetcher(img_agent, screen));
-    (crate::htmlproc::dedup_ids_in_chapter(&t, seen_ids).into_bytes(), imgs)
-}
-
-/// 图片最终变换：按漫画/文字书分流（EPUB 线原则④：漫画只裁边/适配屏幕，不许压画质）。
+/// 图片最终变换：按漫画/文字书分流（漫画只裁边/适配阅读范围，画质优先）。
 /// 返回 `None` = 无需改动、沿用原字节（调用方自己决定借用还是移走，不为"没变"整张图克隆一份）。
 ///
-/// 解码器遇到畸形图片偶发 panic（第三方书的坏 JPEG/PNG 是外部输入）：这里兜住、按"失败原样保留"处理——此前 panic 会从
+/// 解码器遇到畸形图片偶发 panic（第三方书的坏 JPEG/PNG 是外部输入）：这里兜住、按"失败原样保留"处理——否则 panic 会从
 /// 图片 worker 线程一路把整本书的优化搞砸（`thread::scope` 把子线程 panic 重新抛给调用方），只为一张坏图不值得。
 pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, grayscale: bool) -> Option<Vec<u8>> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if is_comic_book {
-            // 单趟（解码/编码各一次、灰度保持、缩放走 SIMD）——此前三道串联的问题见 `prepare_comic_page_for_epub`。
+            // 单趟（解码/编码各一次、灰度保持、缩放走 SIMD），见 `prepare_comic_page_for_epub`。
             crate::imgopt::prepare_comic_page_for_epub(bytes, screen, grayscale)
         } else {
             crate::imgopt::downscale_for_epub(bytes, screen)

@@ -1,5 +1,4 @@
-//! EPUB 质量门（对标 host `check_output.py` 的 EPUB 检查项，2026-09-03 移植；白皮书 §03i）。
-//! 只读、不改书。硬失败（`ok=false`）应拦下落库/推送：
+//! EPUB 质量门。只读、不改书。硬失败（`ok=false`）表示产物有结构性问题（书库目前只警告、不拦下）：
 //! 1. 真 DRM：`META-INF/encryption.xml` 加密了非字体项（仅字体混淆是合法的，告警不拦）。
 //! 2. 目录 href 文件命中率 < 80%（目录指向不存在的文件 = xochitl TOC 面板点不动）。
 //! 3. 单标签双 `id=` 属性（非法 XHTML，xochitl 严格 XML 解析整章白屏，《消失的爱人》7 页事故）。
@@ -8,9 +7,10 @@
 //!    xochitl 渲染出来一张图都没有，且此前没有任何检查能发现，只能真机肉眼看出来）。
 //!
 //! 5. OPF 不是合法 XML（非法控制字符/结构错误；xochitl 严格解析，整本读不出来）。正文章节不合法只告警。
+//! 6. `mimetype` 缺失、不是第一个条目、被压缩或内容不对（EPUB 规范 OCF 的硬性要求，只在按 zip 检查的
+//!    [`check_epub`]/[`check_epub_file`] 里查，[`check_entries`] 看不到压缩方式）。
 //!
 //! 告警（不拦）：无 nav/ncx 或零条目（`require_toc` 时升为失败）；目录锚点丢失（xochitl 退化到文件级跳转）。
-//! PDF 门（pymupdf）不移植：PDF 定稿只在 host 产出，门留 host。
 use crate::epubzip::{dir_of, is_html_entry, percent_decode, resolve, Entry};
 use crate::wash::{count_dup_id_tags, href_re, is_toc_file};
 use regex::Regex;
@@ -50,23 +50,46 @@ impl CheckReport {
     }
 }
 
-// `read_entries` 已迁到 `epubzip`（与 Entry/路径工具同处）；re-export 保住 `check::read_entries` 旧路径。
 pub use crate::epubzip::read_entries;
 
 pub fn check_epub(epub: &[u8], require_toc: bool) -> Result<CheckReport, String> {
-    Ok(check_entries(&read_entries(epub)?, require_toc))
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
+    let mut rep = check_entries(&read_entries(epub)?, require_toc);
+    add_mimetype_problem(&mut rep, &mut zip);
+    Ok(rep)
 }
 
 /// [`check_epub`] 的按路径、省内存变体：用 [`crate::epubzip::read_skeleton`]（图片条目留空占位，
-/// 只有非图片的真实字节整份读入）而不是 [`read_entries`] 整本读进内存——book-serve 优化产物落盘
-/// 后要跑一遍质量门，大漫画整本读回内存会重蹈流式优化本来要避开的 OOM 老路（见 book-serve
-/// `Staging::optimize` 头注引用的真机 552MB 全集实测）。质量门这几条规则（双 id/href 命中率/正文
-/// 资源引用）都只看 html/toc 文本内容，不看图片字节，省下来的这份内存对检查结果没有任何影响。
+/// 只有非图片的真实字节整份读入）而不是 [`read_entries`] 整本读进内存——大漫画优化产物整本读回内存
+/// 就白费了流式优化省下的内存。质量门这几条规则（双 id/href 命中率/正文资源引用）都只看 html/toc
+/// 文本内容，不看图片字节，检查结果不受影响。
 pub fn check_epub_file(path: &std::path::Path) -> Result<CheckReport, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("打开待校验文件失败: {e}"))?;
     let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
     let sk = crate::epubzip::read_skeleton(&mut zip)?;
-    Ok(check_entries(&sk.entries, false))
+    let mut rep = check_entries(&sk.entries, false);
+    add_mimetype_problem(&mut rep, &mut zip);
+    Ok(rep)
+}
+
+/// 第 6 条：`mimetype` 必须是 zip 的第一个条目、STORED、内容正好是 `application/epub+zip`。有问题记一条硬失败。
+fn add_mimetype_problem<R: std::io::Read + std::io::Seek>(rep: &mut CheckReport, zip: &mut zip::ZipArchive<R>) {
+    let problem = match zip.by_index(0) {
+        Err(_) => Some("是空压缩包".to_string()),
+        Ok(f) if f.name() != "mimetype" => Some(format!("第一个条目是 {} 而不是 mimetype", f.name())),
+        Ok(f) if f.compression() != zip::CompressionMethod::Stored => Some("mimetype 被压缩了（必须 STORED）".to_string()),
+        Ok(mut f) => {
+            let mut v = Vec::new();
+            match std::io::Read::read_to_end(&mut f, &mut v) {
+                Ok(_) if v == b"application/epub+zip" => None,
+                _ => Some(format!("mimetype 内容不对（{:?}）", String::from_utf8_lossy(&v))),
+            }
+        }
+    };
+    if let Some(p) = problem {
+        rep.errors.push(format!("EPUB 容器不合规：{p}，阅读器可能认不出这是 EPUB"));
+        rep.ok = false;
+    }
 }
 
 pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
@@ -251,6 +274,32 @@ mod tests {
     #[test]
     fn reads_zip() {
         assert!(check_epub(b"notazip", false).is_err());
+    }
+
+    #[test]
+    fn mimetype_must_be_first_stored_and_exact() {
+        let mk = |first: Option<(&str, zip::CompressionMethod, &[u8])>| {
+            let mut buf = Vec::new();
+            {
+                let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+                if let Some((name, method, data)) = first {
+                    z.start_file::<_, ()>(name, zip::write::SimpleFileOptions::default().compression_method(method)).unwrap();
+                    std::io::Write::write_all(&mut z, data).unwrap();
+                }
+                z.start_file::<_, ()>("OEBPS/toc.ncx", zip::write::SimpleFileOptions::default()).unwrap();
+                std::io::Write::write_all(&mut z, br#"<ncx><content src="c.xhtml"/></ncx>"#).unwrap();
+                z.start_file::<_, ()>("OEBPS/c.xhtml", zip::write::SimpleFileOptions::default()).unwrap();
+                std::io::Write::write_all(&mut z, b"<html><body/></html>").unwrap();
+                z.finish().unwrap();
+            }
+            check_epub(&buf, false).unwrap()
+        };
+        use zip::CompressionMethod::{Deflated, Stored};
+        assert!(mk(Some(("mimetype", Stored, b"application/epub+zip"))).ok);
+        let bad = |r: CheckReport, what: &str| assert!(!r.ok && r.errors.iter().any(|e| e.contains("容器不合规") && e.contains(what)), "{what}: {:?}", r.errors);
+        bad(mk(None), "而不是 mimetype");
+        bad(mk(Some(("mimetype", Deflated, b"application/epub+zip"))), "被压缩");
+        bad(mk(Some(("mimetype", Stored, b"application/epub+zip\n"))), "内容不对");
     }
 
     /// `check_epub_file` 走 `read_skeleton`（图片留空）而不是整本读入——这条测试确认图片留空不影响
