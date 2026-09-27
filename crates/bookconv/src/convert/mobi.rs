@@ -319,6 +319,53 @@ mod tests {
         RawText::decode(s.as_bytes().to_vec(), 65001)
     }
 
+    /// 最小 MOBI6：record0（PalmDOC 头 + MOBI 头，不压缩）+ 一条文本记录。
+    fn tiny_mobi(text: &[u8], encoding: u32) -> Vec<u8> {
+        let mut r0 = vec![0u8; 16 + 0xE8];
+        r0[0..2].copy_from_slice(&1u16.to_be_bytes()); // 不压缩
+        r0[8..10].copy_from_slice(&1u16.to_be_bytes()); // 1 条文本记录
+        r0[16..20].copy_from_slice(b"MOBI");
+        r0[20..24].copy_from_slice(&0xE8u32.to_be_bytes());
+        r0[28..32].copy_from_slice(&encoding.to_be_bytes());
+        let records = [r0, text.to_vec()];
+        let mut d = vec![0u8; 78];
+        d[..4].copy_from_slice(b"tiny");
+        d[76..78].copy_from_slice(&(records.len() as u16).to_be_bytes());
+        let mut off = 78 + records.len() * 8;
+        for r in &records {
+            d.extend_from_slice(&(off as u32).to_be_bytes());
+            d.extend_from_slice(&[0; 4]);
+            off += r.len();
+        }
+        for r in &records {
+            d.extend_from_slice(r);
+        }
+        d
+    }
+
+    #[test]
+    fn cp1252_text_decoded_and_filepos_still_lands_on_target() {
+        // é、’ 在 cp1252 里各 1 字节，解成 UTF-8 后变长；filepos 按原始字节算，必须换算后才落在目标 <p> 上。
+        let head: &[u8] = b"<html><body><p>caf\xE9 l\x92ami <a filepos=";
+        let tail_before_target: &[u8] = b">voir</a></p><mbp:pagebreak/><p>d\xE9j\xE0</p>";
+        let target = head.len() + 10 + tail_before_target.len();
+        let mut text = head.to_vec();
+        text.extend_from_slice(format!("{target:010}").as_bytes());
+        text.extend_from_slice(tail_before_target);
+        text.extend_from_slice(b"<p>cible \xAB ici \xBB</p></body></html>");
+        let (epub, _) = mobi_to_epub(&tiny_mobi(&text, 1252)).unwrap();
+        let html: String = crate::epubzip::read_entries(&epub)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.name.contains("chap_"))
+            .map(|e| String::from_utf8(e.data).unwrap())
+            .collect();
+        assert!(html.contains("café l’ami") && html.contains("déjà"), "cp1252 要正确解码: {html}");
+        assert!(!html.contains('\u{FFFD}'), "{html}");
+        assert!(html.contains(&format!(r#"<p id="fp{target}">cible « ici »</p>"#)), "锚点要落在目标段上: {html}");
+        assert!(html.contains(&format!(r#"#fp{target}""#)), "链接改写成 chap#fpN: {html}");
+    }
+
     #[test]
     fn inject_adds_id_after_tag_name() {
         // 两个目标，降序注入，属性插在标签名后、保留原属性

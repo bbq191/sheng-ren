@@ -169,21 +169,28 @@ pub(crate) struct BBox {
 }
 
 /// 字符"公式味"判定：**只能靠 Unicode 码位**（pdf-extract 的 `OutputDev` 不暴露字体名，
-/// 见模块文档），数学运算符/字母数字符号/希腊字母/常见数学箭头这几个区块命中即算。拿真实
+/// 见模块文档），按 Unicode 区块分强弱两档（下面两个函数）。拿真实
 /// pdflatex+amsmath 样本（`tests/fixtures/sample.pdf`）验证过：`∫ ∑ √ ∞ π α β γ ±` 这类
 /// 符号确实能提取出正确的 Unicode（Computer Modern 数学字体在这份样本里 ToUnicode 映射
 /// 正常），矩阵/分数里的普通字母数字（`a b c d x y`）本身不会被单独命中——这些字符靠下面
-/// [`merge_formula_lines`] 的"行合并"机制跟着相邻的强信号符号一起被圈进公式块，不需要
-/// 每个字符单独判定。
-pub(crate) fn is_formula_char(ch: char) -> bool {
-    let cp = ch as u32;
-    matches!(cp,
+/// [`detect_formula_regions`] 的"行合并"机制跟着相邻的强信号符号一起被圈进公式块，不需要
+/// 每个字符单独判定。一行算不算公式行见 [`line_is_formula`]。
+///
+/// 强信号：只在数学里出现的区块（运算符、数学字母数字、杂项数学符号）。
+fn is_strong_math(ch: char) -> bool {
+    matches!(ch as u32,
         0x2200..=0x22FF   // Mathematical Operators
         | 0x2A00..=0x2AFF // Supplemental Mathematical Operators
         | 0x27C0..=0x27EF // Miscellaneous Mathematical Symbols-A
         | 0x2980..=0x29FF // Miscellaneous Mathematical Symbols-B
-        | 0x2190..=0x21FF // Arrows（数学里常见的 → ⇒ 等）
         | 0x1D400..=0x1D7FF // Mathematical Alphanumeric Symbols
+    )
+}
+
+/// 弱信号：公式里常见、正文里也常见（希腊字母本身就是希腊文的字母；箭头、撇号在正文里也用）。
+fn is_weak_math(ch: char) -> bool {
+    matches!(ch as u32,
+        0x2190..=0x21FF   // Arrows（数学里常见的 → ⇒ 等）
         | 0x0370..=0x03FF // Greek and Coptic（公式里的希腊字母变量）
         | 0x2032..=0x2037 // 撇号类（导数记号 ′ ″）
     )
@@ -201,9 +208,27 @@ pub(super) fn group_by_line(chars: &[PositionedChar]) -> std::collections::BTree
     m
 }
 
-/// 一行是否判定为"公式行"：至少一个字符命中 [`is_formula_char`]。
+/// 一行是否判定为"公式行"——**保守判定**：公式行会在段末另外补一张渲染图（文字流不删字），误判一行正文就等于
+/// 把这行内容重复一遍。规则：
+/// 1. 至少有一个**强信号**字符（[`is_strong_math`]：数学运算符、数学字母数字等只在数学里出现的区块）。
+///    只有希腊字母/箭头/撇号的行不算：希腊文正文、"α 粒子"、"A → B" 这类正文都会命中弱信号。
+/// 2. 并且强信号 ≥ 2 个，或者数学字符（强 + 弱 + `=+<>^|`）占本行非空白字符的 1/5 以上——
+///    正文里夹一个 `∈`、`≤` 的长句不算，`∫ f(x) dx = 1`、`x ≤ π` 这类短公式行算。
 pub(super) fn line_is_formula(chars: &[&PositionedChar]) -> bool {
-    chars.iter().any(|c| is_formula_char(c.ch))
+    let (mut strong, mut math, mut nonspace) = (0usize, 0usize, 0usize);
+    for c in chars {
+        if c.ch.is_whitespace() || c.ch == '\0' {
+            continue;
+        }
+        nonspace += 1;
+        if is_strong_math(c.ch) {
+            strong += 1;
+            math += 1;
+        } else if is_weak_math(c.ch) || matches!(c.ch, '=' | '+' | '<' | '>' | '^' | '|') {
+            math += 1;
+        }
+    }
+    strong >= 1 && (strong >= 2 || math * 5 >= nonspace)
 }
 
 pub(super) fn bbox_of(chars: &[&PositionedChar]) -> Option<BBox> {
@@ -246,8 +271,8 @@ pub(crate) fn detect_formula_regions(chars: &[PositionedChar]) -> Vec<BBox> {
     if formula_lines.is_empty() {
         return Vec::new();
     }
-    // 按行号顺序合并相邻公式行（行号本身就是文档顺序，不需要再按 y 排序）。
-    let mut blocks: Vec<BBox> = Vec::new();
+    // 按行号顺序合并相邻公式行（行号本身就是文档顺序，不需要再按 y 排序）。每块记住自己的最大字号，留白按它算。
+    let mut blocks: Vec<(BBox, f64)> = Vec::new();
     let mut cur = formula_lines[0].1;
     let mut cur_font = formula_lines[0].2;
     let mut prev_line = formula_lines[0].0;
@@ -261,26 +286,26 @@ pub(crate) fn detect_formula_regions(chars: &[PositionedChar]) -> Vec<BBox> {
             cur.y1 = cur.y1.max(bbox.y1);
             cur_font = cur_font.max(font);
         } else {
-            blocks.push(cur);
+            blocks.push((cur, cur_font));
             cur = bbox;
             cur_font = font;
         }
         prev_line = line_no;
     }
-    blocks.push(cur);
+    blocks.push((cur, cur_font));
     // 每个块留一点边距，避免刚好裁掉括号/上下限的边缘。
-    for b in blocks.iter_mut() {
+    for (b, font) in blocks.iter_mut() {
         // 留白系数刻意调小（不是 0——分数/矩阵的括号/上下限边缘还是需要一点余量）：真实样本
         // 核对时发现行内公式紧贴正文（如"identity $e^{i\pi}$ is"）时，留白太大会啃掉公式
         // 两侧紧邻的正文字符（2026-09-19 用 sample.pdf 跑出来才发现，不是理论推演）——公式块
         // 边界目前只按整行字符包围盒算，天然比较粗，留白只能保守给一点，不能靠它兜底精确边界。
-        let pad = cur_font.max(4.0) * 0.08;
+        let pad = font.max(4.0) * 0.08;
         b.x0 -= pad;
         b.y0 -= pad;
         b.x1 += pad;
         b.y1 += pad;
     }
-    blocks
+    blocks.into_iter().map(|(b, _)| b).collect()
 }
 
 // ============================================================================

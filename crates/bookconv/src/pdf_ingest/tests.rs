@@ -13,11 +13,21 @@ fn char_at(ch: char, x: f64, y: f64, font_size: f64, line: usize) -> PositionedC
 fn formula_detection_single_inline_run() {
     let chars = vec![
         char_at('x', 0.0, 100.0, 10.0, 0),
-        char_at('=', 10.0, 100.0, 10.0, 0),
-        char_at('π', 20.0, 100.0, 10.0, 0), // 命中数学符号区块
+        char_at('≤', 10.0, 100.0, 10.0, 0), // 强信号：数学运算符区块
+        char_at('π', 20.0, 100.0, 10.0, 0),
     ];
     let blocks = detect_formula_regions(&chars);
     assert_eq!(blocks.len(), 1, "单行内联公式应该产出一个公式块");
+}
+
+#[test]
+fn formula_detection_ignores_prose_with_stray_greek_or_arrow() {
+    // 正文里夹一个希腊字母/箭头/单个运算符不算公式行（否则整行渲成图片再补一遍，内容重复）
+    let line = |s: &str, line: usize| -> Vec<PositionedChar> { s.chars().enumerate().map(|(i, c)| char_at(c, i as f64 * 5.0, 700.0 - line as f64 * 50.0, 10.0, line)).collect() };
+    for prose in ["the α-particle hits the target plate", "A → B is the usual notation here", "Ελληνικά κείμενα γράφονται έτσι", "every element x ∈ S of the set is counted once"] {
+        assert!(detect_formula_regions(&line(prose, 0)).is_empty(), "{prose}");
+    }
+    assert_eq!(detect_formula_regions(&line("∫ f(x) dx = 1", 0)).len(), 1);
 }
 
 #[test]
@@ -53,8 +63,8 @@ fn formula_detection_empty_input() {
 #[test]
 fn formula_detection_far_lines_not_merged() {
     let chars = vec![
-        char_at('π', 0.0, 500.0, 10.0, 0),
-        char_at('α', 0.0, 100.0, 10.0, 10), // 行号差很远，不该合并
+        char_at('∑', 0.0, 500.0, 10.0, 0),
+        char_at('∞', 0.0, 100.0, 10.0, 10), // 行号差很远，不该合并
     ];
     let blocks = detect_formula_regions(&chars);
     assert_eq!(blocks.len(), 2, "相隔很远的两处公式不该被误合并成一个块");
@@ -127,7 +137,7 @@ fn formula_regions_reference(chars: &[PositionedChar]) -> Vec<BBox> {
     if formula_lines.is_empty() {
         return Vec::new();
     }
-    let mut blocks: Vec<BBox> = Vec::new();
+    let mut blocks: Vec<(BBox, f64)> = Vec::new();
     let (mut cur, mut cur_font, mut prev_line) = (formula_lines[0].1, formula_lines[0].2, formula_lines[0].0);
     for (line_no, bbox, font) in formula_lines.into_iter().skip(1) {
         let x_overlap = bbox.x0 <= cur.x1 + cur_font * 4.0 && bbox.x1 >= cur.x0 - cur_font * 4.0;
@@ -135,18 +145,20 @@ fn formula_regions_reference(chars: &[PositionedChar]) -> Vec<BBox> {
             cur = BBox { x0: cur.x0.min(bbox.x0), y0: cur.y0.min(bbox.y0), x1: cur.x1.max(bbox.x1), y1: cur.y1.max(bbox.y1) };
             cur_font = cur_font.max(font);
         } else {
-            blocks.push(cur);
+            blocks.push((cur, cur_font));
             cur = bbox;
             cur_font = font;
         }
         prev_line = line_no;
     }
-    blocks.push(cur);
-    for b in blocks.iter_mut() {
-        let pad = cur_font.max(4.0) * 0.08;
-        *b = BBox { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad };
-    }
+    blocks.push((cur, cur_font));
     blocks
+        .into_iter()
+        .map(|(b, font)| {
+            let pad = font.max(4.0) * 0.08;
+            BBox { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad }
+        })
+        .collect()
 }
 
 /// 改动前的标题识别（逐行号 `filter`），只作差分参照。

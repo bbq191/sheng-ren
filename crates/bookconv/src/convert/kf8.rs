@@ -361,6 +361,15 @@ mod tests {
     }
 
     #[test]
+    fn build_chapters_falls_back_when_all_ncx_positions_past_end() {
+        let rawml = r#"<html><body><p>a</p></body></html>"#;
+        let ncx = vec![palm::NcxEntry { pos: rawml.len() + 100, label: "坏".into(), level: 0 }];
+        let chs = build_chapters(rawml, &HashMap::new(), &ncx, "书名", None);
+        assert_eq!(chs.len(), 1);
+        assert!(chs[0].html_body.contains("<p>a</p>"));
+    }
+
+    #[test]
     fn build_chapters_no_ncx_dedups_booktitle() {
         // 无 NCX → 按 <html> 块切，块 <title>=书名的清空、非书名保留
         let ep = HashMap::new();
