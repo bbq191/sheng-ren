@@ -1,107 +1,107 @@
-//! 母版库：书先原样入库成**与设备无关的母版**，再按设备 profile 生成产物（可随时重建）。
+//! 书库：**只存索引**（每本书一个 `meta.json`：原件在哪、内容哈希、书名作者），按设备 profile 从原件生成产物。
 //!
 //! 目录结构（`root` 缺省 `~/.local/share/booklib`）：
 //! ```text
-//! masters/<id>/master.epub | master.pdf   母版，入库后不再改动
-//! masters/<id>/source.<原扩展名>           要转换的格式（MOBI、CBZ…）的原文件；网址入库时是 source.url
-//! masters/<id>/meta.json                   书名、作者、来源、母版哈希、存储方式
+//! masters/<id>/meta.json                   一本书的索引：原件路径、SHA-256、大小与修改时间、书名、作者
+//! masters/<id>/master.epub                 只有网址入库的书有（没有原件，抓下来的正文存这里）；早期版本入库的条目也可能有
 //! output/<设备 id>/<书名>.<epub|azw3|pdf>  产物；output/<设备 id>/.state.json 记每本书的生成指纹，没变就跳过
 //! outputs.json                             build 用过的其它产物目录（remove 时一起清理）
 //! sources.json                             跟踪的原件目录（track），以及其中每个文件上次看到时的大小、修改时间、id
 //! profiles/*.toml                          可选：自定义设备 profile，同 id 覆盖内置
 //! .lock                                    进程锁
 //! ```
-//! `<id>` 是原始内容 SHA-256 的前 12 位十六进制：同一本书重复入库会认出来。
+//! `<id>` 是原件内容 SHA-256 的前 12 位十六进制：同一本书重复入库会认出来，改名移动了也认得出。
 //!
-//! 母版：EPUB 原样；MOBI/AZW/AZW3/PRC/FB2 与网页转成 EPUB；CBZ 转成每页一张图的 EPUB；PDF 保留原件，生成时再处理
-//! （有文字层 → 转 EPUB；图片型 → 只给支持 PDF 的设备裁白边）。带 DRM 的书现在拒收（解 DRM 还没做）。
-//!
-//! 存储不重复：原文件内容进书库时先试写时复制克隆（reflink），不行才复制（见 [`Storage`]）。
+//! 生成时读原件：EPUB、PDF 直接用；MOBI/AZW/AZW3/PRC/FB2、CBZ 当场转成 EPUB（与设备无关的转换，结果不落书库）。
+//! 原件不在了或者内容变了（大小、修改时间变了就重算哈希核对），生成会停下来提示先 `sync` 或重新入库，
+//! 不会拿改过的内容冒充原来那本书。带 DRM 的书现在拒收（解 DRM 还没做）。
 
 mod fsutil;
+mod generate;
+mod sources;
 
 use fsutil::{sha256_file, sha256_hex, write_atomic};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 pub use fsutil::Lock;
+pub use generate::{Built, OutputStatus};
 pub use profile::{Format, Profile, Registry};
-
-/// 生成流程本身（本 crate 的步骤、参数）的版本：改了会影响产物的地方要加一，旧产物随之判为过期。
-/// 优化器、AZW3 写出器各有自己的版本号，也都进指纹。
-const PIPELINE_VERSION: &str = "2";
+pub use sources::{book_files, SyncEvent, SyncReport, SUPPORTED_EXTS};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Meta {
     pub id: String,
     pub title: String,
     pub authors: Vec<String>,
-    /// 原始文件名（网址入库时是网址）。
+    /// 原件文件名（网址入库时是网址）。
     pub source: String,
-    /// 原始格式（小写扩展名，网址是 "url"）。
+    /// 原件格式（小写扩展名，网址是 "url"）。
     pub source_format: String,
-    /// 母版文件名：`master.epub` 或 `master.pdf`。
-    pub master: String,
     /// 入库时间（Unix 秒）。
     pub added: u64,
-    /// 母版文件的 SHA-256（判断产物是否过期用）；早期条目没有，读条目时补算并写回。
-    #[serde(default)]
-    pub master_sha256: String,
-    /// 入库时原文件的绝对路径（网址入库为空）。只作记录，书库不依赖它。
+    /// 原件的绝对路径（网址入库为空）。原件移动后 `sync` 或重新 `add` 会更新它。
     #[serde(default)]
     pub source_path: String,
-    /// 原文件内容在书库里怎么存的（EPUB/PDF 是 master 本身，要转换的格式是 source.*）。
+    /// 原件内容的 SHA-256（`id` 是它的前 12 位）。早期条目没有，迁移（`dedupe`）时补上。
     #[serde(default)]
-    pub storage: Storage,
-    /// PDF 母版有没有文字层（有 → 转 EPUB；没有 → 图片型）。母版不变，入库时判定一次存下来。
+    pub source_sha256: String,
+    /// 原件上次核对时的大小和修改时间：都没变就不重算哈希。
+    #[serde(default)]
+    pub source_size: u64,
+    #[serde(default)]
+    pub source_mtime_ns: u64,
+    /// 书库里存着的母版文件名：网址入库的 `master.epub`，或早期版本入库、还没迁移的条目。空 = 只存索引。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub master: String,
+    /// 存着的母版文件的 SHA-256。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub master_sha256: String,
+    /// PDF 有没有文字层（有 → 转 EPUB；没有 → 图片型）。入库时判定一次存下来。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_text_layer: Option<bool>,
 }
 
-/// 书库里保存原文件内容的方式。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Storage {
-    /// 独立一份（跨文件系统或不支持克隆时）。
-    #[default]
-    Copy,
-    /// 写时复制克隆（btrfs/xfs 等）：和原文件共用磁盘数据，但两边互不影响。
-    Reflink,
-    /// 硬链接：只有早期版本会产生。和原文件是同一个文件，原文件被就地改写时母版也会变，
-    /// 所以生成前会重新核对哈希；`dedupe` 会把它换成克隆。
-    Hardlink,
+impl Meta {
+    /// 生成时读哪里：存着的母版，还是原件。
+    pub fn source(&self) -> Source {
+        if self.master.is_empty() { Source::Original } else { Source::Stored }
+    }
+
+    /// 判断产物是否过期用的内容哈希。
+    fn content_sha(&self) -> &str {
+        if self.master.is_empty() { &self.source_sha256 } else { &self.master_sha256 }
+    }
 }
 
-/// `dedupe` 的结果。
+/// 一本书的内容从哪来。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// 原件（只存索引）。
+    Original,
+    /// 书库里存着的 `master.*`（网址入库、早期条目）。
+    Stored,
+}
+
+/// 原件现在的状态（`list` 用，只看文件在不在，不读内容）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OriginalState {
+    Present,
+    Missing,
+    /// 大小或修改时间变了（内容可能改过，生成前会核对哈希）。
+    Touched,
+    /// 书库里存着内容，不依赖原件。
+    NotNeeded,
+}
+
+/// `dedupe`（迁移早期条目）的结果。
 #[derive(Default, Debug)]
 pub struct DedupeReport {
-    /// 改成与外部原件共享存储的文件数与大小。
-    pub shared_files: usize,
-    pub shared_bytes: u64,
-    /// 删掉的多余 source 副本（和 master 内容相同）数与大小。
-    pub removed_sources: usize,
-    pub removed_bytes: u64,
-    /// 早期的硬链接母版换成克隆的个数。
-    pub unlinked: usize,
-}
-
-/// 一本书在某设备下的产物状态（`list` 用）。
-pub struct OutputStatus {
-    pub device: String,
-    pub path: PathBuf,
-    /// `Some(true)` 最新；`Some(false)` 过期（母版或处理规则变了）；`None` 判断不了（设备 profile 已删、文件丢了）。
-    pub fresh: Option<bool>,
-}
-
-/// 生成计划：产物格式、阅读范围、指纹。
-struct Plan {
-    master_path: PathBuf,
-    /// PDF 母版有文字层（先转 EPUB）。
-    from_pdf_text: bool,
-    format: Format,
-    area: profile::Screen,
-    fingerprint: String,
+    /// 找到原件、删掉书库里副本的条目数与释放的字节数。
+    pub migrated: usize,
+    pub freed_bytes: u64,
+    /// 找不到原件、副本保留的条目。
+    pub kept: Vec<Meta>,
 }
 
 pub struct Library {
@@ -114,86 +114,15 @@ pub enum Added {
     Existing(Meta),
 }
 
-pub enum Built {
-    Written { path: PathBuf, warnings: Vec<String> },
-    UpToDate(PathBuf),
+fn now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// 能入库的文件扩展名（小写）。
-pub const SUPPORTED_EXTS: &[&str] = &["epub", "pdf", "cbz", "mobi", "azw", "azw3", "prc", "fb2"];
-
-fn is_supported(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| SUPPORTED_EXTS.contains(&e.to_ascii_lowercase().as_str()))
-}
-
-/// 目录下（递归，不跟符号链接，跳过隐藏文件和目录）所有能入库的文件，按路径排序。
-pub fn book_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
-        for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let Ok(ft) = e.file_type() else { continue };
-            if ft.is_dir() {
-                stack.push(e.path());
-            } else if ft.is_file() && is_supported(&e.path()) {
-                out.push(e.path());
-            }
-        }
-    }
-    out.sort();
-    out
-}
-
-/// 跟踪的原件目录，以及其中每个文件上次看到时的样子（`sources.json`）。
-#[derive(Default, Serialize, Deserialize)]
-struct Sources {
-    dirs: Vec<PathBuf>,
-    #[serde(default)]
-    files: BTreeMap<PathBuf, Seen>,
-}
-
-/// 大小和修改时间都没变就认为内容没变，不重读、不重算哈希（大漫画一本上百 MB）。
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct Seen {
-    size: u64,
-    mtime_ns: u64,
-    /// 空 = 上次入库失败（DRM、损坏等）：文件没变就不再重试、不再重复报错。
-    id: String,
-}
-
-fn seen_stat(path: &Path) -> Option<(u64, u64)> {
+/// 文件的大小和修改时间（纳秒）。
+pub(crate) fn file_stat(path: &Path) -> Option<(u64, u64)> {
     let md = std::fs::metadata(path).ok()?;
     let mtime = md.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos() as u64;
     Some((md.len(), mtime))
-}
-
-/// `sync` 过程中每个文件的结果（给命令行逐条打印）。
-pub enum SyncEvent<'a> {
-    Added(&'a Path, &'a Meta),
-    /// 原件内容变了：旧版本的条目已换成新的。参数是旧书名。
-    Updated(&'a Path, &'a Meta, &'a str),
-    /// 原件不在了（`prune` 时已删掉对应条目）。
-    Missing(&'a Path, &'a str, bool),
-    Failed(&'a Path, &'a str),
-}
-
-/// `sync` 的汇总。
-#[derive(Default, Debug)]
-pub struct SyncReport {
-    pub added: usize,
-    pub updated: usize,
-    pub unchanged: usize,
-    pub missing: usize,
-    pub pruned: usize,
-    pub failed: usize,
-}
-
-fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// 入库时要从 EPUB 里看的东西：书名、作者、有没有真 DRM。只读非图片条目（大漫画不整本解压）。
@@ -208,7 +137,7 @@ impl EpubInfo {
     fn read(epub: &[u8]) -> Result<EpubInfo, String> {
         let mut info = EpubInfo { title: String::new(), authors: Vec::new(), drm: None };
         let bad = |e: String| format!("不是有效的 EPUB（{e}）");
-        let mut zip = zip_archive(epub).map_err(bad)?;
+        let mut zip = bookconv::zip::ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| bad(e.to_string()))?;
         let sk = bookconv::epubzip::read_skeleton(&mut zip).map_err(bad)?;
         let entries = &sk.entries;
         if entries.iter().any(|e| e.name == "META-INF/rights.xml") {
@@ -231,12 +160,22 @@ impl EpubInfo {
     }
 }
 
-fn zip_archive(bytes: &[u8]) -> Result<bookconv::zip::ZipArchive<std::io::Cursor<&[u8]>>, String> {
-    bookconv::zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())
-}
-
 fn is_pdf_text_layer(path: &Path) -> bool {
     bookconv::pdf_ingest::classify_pdf(path) == bookconv::pdf_ingest::PdfKind::TextLayer
+}
+
+/// 要转换才能用的原件格式 → EPUB 字节（与设备无关）。EPUB、PDF 不走这里。
+pub(crate) fn convert_to_epub(format: &str, name: &str, data: &[u8], title: &str) -> Result<Vec<u8>, String> {
+    match format {
+        "cbz" => bookconv::convert::cbz::cbz_to_epub(data, title),
+        "mobi" | "azw" | "azw3" | "prc" | "fb2" => {
+            bookconv::convert::precheck(name, data)?;
+            // 这几种格式转出来的 EPUB 与设备无关（屏幕参数只有 CBZ→PDF 才用），随便给一个。
+            let screen = profile::Screen { width: 1, height: 1 };
+            Ok(bookconv::convert::convert_file(name, data, Default::default(), screen).ok_or("不支持的格式")??.data)
+        }
+        _ => Err(format!("不支持的格式 .{format}（支持 {}，或网址）", SUPPORTED_EXTS.join(" / "))),
+    }
 }
 
 impl Library {
@@ -267,37 +206,41 @@ impl Library {
         &self.registry
     }
 
-    /// 加进程锁。会改动书库的操作（add/build/remove/dedupe）之前调用，持有到操作结束。
+    /// 加进程锁。会改动书库的操作（add/build/remove/sync/dedupe）之前调用，持有到操作结束。
     pub fn lock(&self) -> Result<Lock, String> {
         fsutil::lock(&self.root)
     }
 
-    fn master_dir(&self, id: &str) -> PathBuf {
+    fn entry_dir(&self, id: &str) -> PathBuf {
         self.root.join("masters").join(id)
     }
 
     fn read_meta(&self, id: &str) -> Option<Meta> {
-        serde_json::from_slice(&std::fs::read(self.master_dir(id).join("meta.json")).ok()?).ok()
+        serde_json::from_slice(&std::fs::read(self.entry_dir(id).join("meta.json")).ok()?).ok()
     }
 
     fn save_meta(&self, meta: &Meta) -> Result<(), String> {
-        write_atomic(&self.master_dir(&meta.id).join("meta.json"), serde_json::to_string_pretty(meta).unwrap().as_bytes())
+        write_atomic(&self.entry_dir(&meta.id).join("meta.json"), serde_json::to_string_pretty(meta).unwrap().as_bytes())
     }
 
     /// 读一个条目；早期条目缺的字段（母版哈希、PDF 类型）补算并写回，之后不用再算。
     fn load(&self, id: &str) -> Option<Meta> {
         let mut m = self.read_meta(id)?;
-        let master = self.master_dir(id).join(&m.master);
         let mut changed = false;
-        if m.master_sha256.is_empty() {
-            if let Ok(sha) = sha256_file(&master) {
+        let stored = self.entry_dir(id).join(&m.master);
+        if !m.master.is_empty() && m.master_sha256.is_empty() {
+            if let Ok(sha) = sha256_file(&stored) {
                 m.master_sha256 = sha;
                 changed = true;
             }
         }
-        if m.master == "master.pdf" && m.pdf_text_layer.is_none() {
-            m.pdf_text_layer = Some(is_pdf_text_layer(&master));
-            changed = true;
+        let is_pdf = if m.master.is_empty() { m.source_format == "pdf" } else { m.master.ends_with(".pdf") };
+        if is_pdf && m.pdf_text_layer.is_none() {
+            let p = if m.master.is_empty() { PathBuf::from(&m.source_path) } else { stored };
+            if p.exists() {
+                m.pdf_text_layer = Some(is_pdf_text_layer(&p));
+                changed = true;
+            }
         }
         if changed {
             let _ = self.save_meta(&m); // 写不回也不影响这次使用，下次再补
@@ -305,30 +248,17 @@ impl Library {
         Some(m)
     }
 
-    /// 写母版：先写进临时目录再改名，半路失败不留残缺条目。
-    /// `master = None` 表示母版就是原文件本身（EPUB/PDF），从 `source` 共享过来，不另存 source 副本；
-    /// 否则母版写字节，原文件（有的话）以 `source.<扩展名>` 共享过来。`extra` 是额外的小文件（网址的 source.url）。
-    fn store(&self, meta: &mut Meta, master: Option<&[u8]>, source: Option<(&Path, &str)>, extra: &[(&str, &[u8])]) -> Result<(), String> {
-        let dir = self.master_dir(&meta.id);
+    /// 新建条目：`masters/.tmp-<id>/` 里准备好再改名，半路失败不留残缺条目。`files` 是要存的母版（只有网址入库有）。
+    fn store(&self, meta: &Meta, files: &[(&str, &[u8])]) -> Result<(), String> {
+        let dir = self.entry_dir(&meta.id);
         let tmp = self.root.join("masters").join(format!(".tmp-{}", meta.id));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
         let result = (|| {
-            let w = |name: &str, data: &[u8]| std::fs::write(tmp.join(name), data).map_err(|e| format!("写 {name}: {e}"));
-            match (master, source) {
-                (Some(bytes), src) => {
-                    w(&meta.master, bytes)?;
-                    if let Some((path, name)) = src {
-                        meta.storage = fsutil::share_or_copy(path, &tmp.join(name))?;
-                    }
-                }
-                (None, Some((path, _))) => meta.storage = fsutil::share_or_copy(path, &tmp.join(&meta.master))?,
-                (None, None) => return Err("没有母版内容".into()),
+            for (name, data) in files {
+                std::fs::write(tmp.join(name), data).map_err(|e| format!("写 {name}: {e}"))?;
             }
-            for (name, data) in extra {
-                w(name, data)?;
-            }
-            w("meta.json", serde_json::to_string_pretty(meta).unwrap().as_bytes())?;
+            std::fs::write(tmp.join("meta.json"), serde_json::to_string_pretty(meta).unwrap()).map_err(|e| format!("写 meta.json: {e}"))?;
             // 同 id 的目录还在但 meta 读不出来（写坏了）：内容由 id 决定，用这次的新条目替换
             if dir.exists() {
                 std::fs::remove_dir_all(&dir).map_err(|e| format!("替换损坏条目 {}: {e}", dir.display()))?;
@@ -341,81 +271,80 @@ impl Library {
         result
     }
 
-    /// 入库一个文件。
+    /// 入库一个文件：只记索引，不复制原件。已在库里时，如果记着的原件位置已经不在了，改成这个位置（移动过）。
     pub fn add_file(&self, path: &Path) -> Result<Added, String> {
-        let data = std::fs::read(path).map_err(|e| format!("读 {}: {e}", path.display()))?;
+        let path = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let data = std::fs::read(&path).map_err(|e| format!("读 {}: {e}", path.display()))?;
+        let (size, mtime_ns) = file_stat(&path).unwrap_or((data.len() as u64, 0));
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "book".into());
         let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "book".into());
         let sha = sha256_hex(&data);
         let id = sha[..12].to_string();
-        if let Some(m) = self.load(&id) {
+        if let Some(mut m) = self.load(&id) {
+            if m.master.is_empty() && m.source_path != path.display().to_string() && !Path::new(&m.source_path).exists() {
+                m.source_path = path.display().to_string();
+                m.source = name;
+                (m.source_size, m.source_mtime_ns) = (size, mtime_ns);
+                self.save_meta(&m)?;
+            }
             return Ok(Added::Existing(m));
         }
         let fallback_title = bookconv::naming::canonical_book_name(&stem);
-        // `None` = 母版就是原文件（不转换）
-        let (master, master_name): (Option<Vec<u8>>, &str) = match ext.as_str() {
-            "epub" => (None, "master.epub"),
-            "pdf" => (None, "master.pdf"),
-            "cbz" => (Some(bookconv::convert::cbz::cbz_to_epub(&data, &fallback_title)?), "master.epub"),
-            "mobi" | "azw" | "azw3" | "prc" | "fb2" => {
-                bookconv::convert::precheck(&name, &data)?;
-                // 这几种格式转出来的 EPUB 与设备无关（屏幕参数只有 CBZ→PDF 才用），随便给一个。
-                let screen = profile::Screen { width: 1, height: 1 };
-                let c = bookconv::convert::convert_file(&name, &data, Default::default(), screen).ok_or("不支持的格式")??;
-                (Some(c.data), "master.epub")
+        // 检查能不能用、取书名作者：要转换的格式先转一遍（结果不存，生成时再转）
+        let (title, authors, pdf_text_layer) = match ext.as_str() {
+            "pdf" => (String::new(), Vec::new(), Some(is_pdf_text_layer(&path))),
+            _ => {
+                let converted = if ext == "epub" { None } else { Some(convert_to_epub(&ext, &name, &data, &fallback_title)?) };
+                let info = EpubInfo::read(converted.as_deref().unwrap_or(&data))?;
+                if let Some(d) = info.drm {
+                    return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
+                }
+                (info.title, info.authors, None)
             }
-            _ => return Err(format!("不支持的格式 .{ext}（支持 epub / pdf / cbz / mobi / azw / azw3 / prc / fb2，或网址）")),
         };
-        let master_bytes: &[u8] = master.as_deref().unwrap_or(&data);
-        let (title, authors) = if master_name == "master.epub" {
-            let info = EpubInfo::read(master_bytes)?;
-            if let Some(d) = info.drm {
-                return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
-            }
-            (info.title, info.authors)
-        } else {
-            (String::new(), Vec::new())
-        };
-        let mut meta = Meta {
-            master_sha256: if master.is_some() { sha256_hex(master_bytes) } else { sha },
-            source_path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).display().to_string(),
-            storage: Storage::Copy,
-            pdf_text_layer: (master_name == "master.pdf").then(|| is_pdf_text_layer(path)),
+        let meta = Meta {
             id,
             title: if title.is_empty() { fallback_title } else { title },
             authors,
             source: name,
-            source_format: ext.clone(),
-            master: master_name.to_string(),
+            source_format: ext,
             added: now(),
+            source_path: path.display().to_string(),
+            source_sha256: sha,
+            source_size: size,
+            source_mtime_ns: mtime_ns,
+            master: String::new(),
+            master_sha256: String::new(),
+            pdf_text_layer,
         };
-        let source_name = format!("source.{ext}");
-        self.store(&mut meta, master.as_deref(), Some((path, &source_name)), &[])?;
+        self.store(&meta, &[])?;
         Ok(Added::New(meta))
     }
 
-    /// 入库一个网址：抓正文组成 EPUB（图片保留原图）。
+    /// 入库一个网址：抓正文组成 EPUB（图片保留原图）。没有原件，这份 EPUB 存在书库里。
     pub fn add_url(&self, url: &str) -> Result<Added, String> {
         let id = sha256_hex(url.as_bytes())[..12].to_string();
         if let Some(m) = self.load(&id) {
             return Ok(Added::Existing(m));
         }
         let (epub, title) = bookconv::article::build_article_epub(url)?;
-        let mut meta = Meta {
-            master_sha256: sha256_hex(&epub),
-            source_path: String::new(),
-            storage: Storage::Copy,
-            pdf_text_layer: None,
+        let meta = Meta {
             id,
             title,
             authors: Vec::new(),
             source: url.to_string(),
             source_format: "url".into(),
-            master: "master.epub".into(),
             added: now(),
+            source_path: String::new(),
+            source_sha256: String::new(),
+            source_size: 0,
+            source_mtime_ns: 0,
+            master: "master.epub".into(),
+            master_sha256: sha256_hex(&epub),
+            pdf_text_layer: None,
         };
-        self.store(&mut meta, Some(&epub), None, &[("source.url", url.as_bytes())])?;
+        self.store(&meta, &[("master.epub", &epub), ("source.url", url.as_bytes())])?;
         Ok(Added::New(meta))
     }
 
@@ -430,7 +359,7 @@ impl Library {
             .collect()
     }
 
-    /// 全部母版，按入库时间排序。
+    /// 全部书，按入库时间排序。
     pub fn list(&self) -> Vec<Meta> {
         let mut v: Vec<Meta> = self.entry_ids().iter().filter_map(|id| self.load(id)).collect();
         v.sort_by(|a, b| a.added.cmp(&b.added).then(a.title.cmp(&b.title)));
@@ -451,427 +380,100 @@ impl Library {
         all.into_iter().filter(|m| selectors.iter().any(|s| m.id.starts_with(s.as_str()) || m.title.contains(s.as_str()))).collect()
     }
 
-    /// 用过的产物目录（缺省的 `output/` 加上 `build` 时指定过的其它目录），记在 `outputs.json`。
-    fn output_roots(&self) -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = std::fs::read(self.root.join("outputs.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        let default = self.root.join("output");
-        if !v.contains(&default) {
-            v.insert(0, default);
+    /// 原件现在的状态（只看文件属性，不读内容）。
+    pub fn original_state(&self, m: &Meta) -> OriginalState {
+        if m.source() == Source::Stored {
+            return OriginalState::NotNeeded;
         }
-        v
-    }
-
-    fn remember_output_root(&self, out_root: &Path) -> Result<(), String> {
-        let mut v = self.output_roots();
-        let p = std::fs::canonicalize(out_root).unwrap_or_else(|_| out_root.to_path_buf());
-        if v.contains(&p) {
-            return Ok(());
-        }
-        v.push(p);
-        write_atomic(&self.root.join("outputs.json"), serde_json::to_string_pretty(&v).unwrap().as_bytes())
-    }
-
-    /// 书库里保存"原文件内容"的那个文件：EPUB/PDF 是 master，要转换的格式是 `source.*`。
-    fn original_file(&self, m: &Meta) -> PathBuf {
-        let dir = self.master_dir(&m.id);
-        if format!("master.{}", m.source_format) == m.master {
-            dir.join(&m.master)
-        } else {
-            dir.join(format!("source.{}", m.source_format))
+        match file_stat(Path::new(&m.source_path)) {
+            None => OriginalState::Missing,
+            Some(st) if st == (m.source_size, m.source_mtime_ns) => OriginalState::Present,
+            Some(_) => OriginalState::Touched,
         }
     }
 
-    /// 去重：
-    /// ① 删掉和 master 内容相同的多余 `source.*` 副本（早期入库 EPUB/PDF 时多存的）；
-    /// ② 早期的硬链接母版换成克隆（断开和原文件的联系，原文件再改也不影响母版）；
-    /// ③ 在 `dirs` 里（递归，不跟符号链接）找和书库里原文件内容相同的文件，把书库那份换成与它共享存储的克隆。
-    ///    文件系统不支持克隆时保持原样（不省空间也不白复制）。先比大小再比哈希。
+    /// 核对原件还是入库时那本书，返回它的路径。大小和修改时间没变就不读；变了重算哈希，内容一样就更新记录。
+    pub(crate) fn verified_original(&self, m: &Meta) -> Result<PathBuf, String> {
+        let path = PathBuf::from(&m.source_path);
+        let st = file_stat(&path).ok_or_else(|| format!("原件不在了：{}（移动过的话 booklib sync 或重新 add 新位置；不要了就 remove）", path.display()))?;
+        if st == (m.source_size, m.source_mtime_ns) {
+            return Ok(path);
+        }
+        if sha256_file(&path)? != m.source_sha256 {
+            return Err(format!("原件改过了：{}（内容和入库时不同。booklib sync 或重新 add 入库新版本）", path.display()));
+        }
+        let mut m = m.clone();
+        (m.source_size, m.source_mtime_ns) = st;
+        let _ = self.save_meta(&m);
+        Ok(path)
+    }
+
+    /// 迁移早期版本入库的条目（书库里存着母版副本、`source.*`）：找到原件就改成只存索引，删掉副本。
+    ///
+    /// 原件先看 `meta.json` 记着的路径，再在 `dirs` 里（递归）找内容相同的文件（SHA-256 前 12 位等于 id）。
+    /// 找不到原件的保留副本（不然这本书就没了）。网址入库的书没有原件，不动。
     pub fn dedupe(&self, dirs: &[PathBuf]) -> Result<DedupeReport, String> {
         let mut rep = DedupeReport::default();
-        let mut metas = self.list();
-        for m in &mut metas {
-            let dir = self.master_dir(&m.id);
-            // ①
-            let src = dir.join(format!("source.{}", m.source_format));
-            let master = dir.join(&m.master);
-            if format!("master.{}", m.source_format) == m.master {
-                if let (Ok(a), Ok(b)) = (std::fs::metadata(&src), std::fs::metadata(&master)) {
-                    if a.len() == b.len() && sha256_file(&src)? == sha256_file(&master)? {
-                        std::fs::remove_file(&src).map_err(|e| e.to_string())?;
-                        rep.removed_sources += 1;
-                        rep.removed_bytes += a.len();
-                    }
-                }
-            }
-            // ②
-            if m.storage == Storage::Hardlink {
-                let file = self.original_file(m);
-                let tmp = file.with_extension("dedupe-tmp");
-                let storage = fsutil::share_or_copy(&file, &tmp)?;
-                std::fs::rename(&tmp, &file).map_err(|e| e.to_string())?;
-                m.storage = storage;
-                self.save_meta(m)?;
-                rep.unlinked += 1;
-            }
+        let legacy: Vec<Meta> = self.list().into_iter().filter(|m| !m.master.is_empty() && m.source_format != "url").collect();
+        if legacy.is_empty() {
+            return Ok(rep);
         }
-        // ③ 候选 = 还是独立一份的原文件内容
-        let mut by_size: HashMap<u64, Vec<(PathBuf, usize)>> = HashMap::new();
-        for (i, m) in metas.iter().enumerate() {
-            if m.storage != Storage::Copy || m.source_format == "url" {
+        // 候选文件按扩展名分组，只在需要时算哈希
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        for d in dirs {
+            candidates.extend(book_files(d));
+        }
+        let mut hashed: std::collections::HashMap<PathBuf, String> = std::collections::HashMap::new();
+        let mut hash_of = |p: &Path| -> Option<String> {
+            if let Some(h) = hashed.get(p) {
+                return Some(h.clone());
+            }
+            let h = sha256_file(p).ok()?;
+            hashed.insert(p.to_path_buf(), h.clone());
+            Some(h)
+        };
+        for mut m in legacy {
+            let dir = self.entry_dir(&m.id);
+            let mut tries: Vec<PathBuf> = Vec::new();
+            if !m.source_path.is_empty() {
+                tries.push(PathBuf::from(&m.source_path));
+            }
+            tries.extend(candidates.iter().filter(|p| p.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(&m.source_format))).cloned());
+            let found = tries.into_iter().filter(|p| p.is_file()).find_map(|p| hash_of(&p).filter(|h| h.starts_with(&m.id)).map(|h| (p, h)));
+            let Some((path, sha)) = found else {
+                rep.kept.push(m);
                 continue;
-            }
-            let file = self.original_file(m);
-            if let Ok(md) = std::fs::metadata(&file) {
-                by_size.entry(md.len()).or_default().push((file, i));
-            }
-        }
-        let root = std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
-        let mut lib_sha: HashMap<PathBuf, String> = HashMap::new();
-        let mut stack: Vec<PathBuf> = dirs.iter().map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.clone())).collect();
-        while let Some(d) = stack.pop() {
-            if d.starts_with(&root) {
-                continue; // 书库自己不算（否则母版会和自己"去重"）
-            }
-            let Ok(rd) = std::fs::read_dir(&d) else { continue };
-            for e in rd.flatten() {
-                let Ok(ft) = e.file_type() else { continue };
-                let path = e.path();
-                if ft.is_dir() {
-                    stack.push(path);
-                    continue;
+            };
+            let path = std::fs::canonicalize(&path).unwrap_or(path);
+            let (size, mtime_ns) = file_stat(&path).unwrap_or_default();
+            m.source_path = path.display().to_string();
+            m.source_sha256 = sha;
+            (m.source_size, m.source_mtime_ns) = (size, mtime_ns);
+            m.master.clear();
+            m.master_sha256.clear();
+            self.save_meta(&m)?;
+            // meta 已改成读原件，再删副本（顺序反过来的话，中途失败会丢书）
+            for e in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+                let n = e.file_name().to_string_lossy().into_owned();
+                if n.starts_with("master.") || n.starts_with("source.") {
+                    rep.freed_bytes += e.metadata().map(|md| md.len()).unwrap_or(0);
+                    std::fs::remove_file(e.path()).map_err(|e| e.to_string())?;
                 }
-                if !ft.is_file() {
-                    continue;
-                }
-                let Ok(md) = e.metadata() else { continue };
-                let Some(cands) = by_size.get_mut(&md.len()) else { continue };
-                let Ok(sha) = sha256_file(&path) else { continue };
-                let Some(pos) = cands.iter().position(|(lib_file, mi)| {
-                    let m = &metas[*mi];
-                    let h = lib_sha.entry(lib_file.clone()).or_insert_with(|| {
-                        if lib_file.ends_with(&m.master) && !m.master_sha256.is_empty() {
-                            m.master_sha256.clone()
-                        } else {
-                            sha256_file(lib_file).unwrap_or_default()
-                        }
-                    });
-                    *h == sha
-                }) else {
-                    continue;
-                };
-                let (lib_file, mi) = cands.remove(pos);
-                let tmp = lib_file.with_extension("dedupe-tmp");
-                let Some(storage) = fsutil::try_reflink(&path, &tmp) else { continue };
-                std::fs::rename(&tmp, &lib_file).map_err(|e| e.to_string())?;
-                let m = &mut metas[mi];
-                m.storage = storage;
-                m.source_path = path.display().to_string();
-                self.save_meta(m)?;
-                rep.shared_files += 1;
-                rep.shared_bytes += md.len();
             }
+            rep.migrated += 1;
         }
         Ok(rep)
     }
 
-    fn load_sources(&self) -> Sources {
-        std::fs::read(self.root.join("sources.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-    }
-
-    fn save_sources(&self, s: &Sources) -> Result<(), String> {
-        write_atomic(&self.root.join("sources.json"), serde_json::to_string_pretty(s).unwrap().as_bytes())
-    }
-
-    /// 跟踪的原件目录。
-    pub fn tracked(&self) -> Vec<PathBuf> {
-        self.load_sources().dirs
-    }
-
-    /// 开始跟踪一个目录（之后 `sync` 会把它镜像进书库）。已跟踪返回 `false`。
-    pub fn track(&self, dir: &Path) -> Result<bool, String> {
-        let dir = std::fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        if !dir.is_dir() {
-            return Err(format!("{} 不是目录", dir.display()));
-        }
-        let root = std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
-        if dir.starts_with(&root) || root.starts_with(&dir) {
-            return Err("不能跟踪书库自己所在的目录".into());
-        }
-        let mut s = self.load_sources();
-        if s.dirs.contains(&dir) {
-            return Ok(false);
-        }
-        s.dirs.push(dir);
-        self.save_sources(&s).map(|_| true)
-    }
-
-    /// 不再跟踪一个目录。已经入库的书保留。没在跟踪返回 `false`。
-    pub fn untrack(&self, dir: &Path) -> Result<bool, String> {
-        let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-        let mut s = self.load_sources();
-        let before = s.dirs.len();
-        s.dirs.retain(|d| d != &dir);
-        if s.dirs.len() == before {
-            return Ok(false);
-        }
-        s.files.retain(|p, _| !p.starts_with(&dir));
-        self.save_sources(&s).map(|_| true)
-    }
-
-    /// 把跟踪的目录镜像进书库：
-    /// - 新文件入库；大小和修改时间没变的文件跳过（不重读）；
-    /// - 内容变了的文件入库新版本，旧版本的条目（只有这个原件用它时）连同产物删掉；
-    /// - 移动、改名的文件按内容认出来，不重复入库；
-    /// - 原件不在了的只报告；`prune` 时删掉对应条目（别的原件还用着同一内容的不删）。
-    pub fn sync(&self, prune: bool, mut on: impl FnMut(SyncEvent)) -> Result<SyncReport, String> {
-        let mut src = self.load_sources();
-        let mut rep = SyncReport::default();
-        let mut present: BTreeMap<PathBuf, Seen> = BTreeMap::new();
-        let mut replaced: Vec<(PathBuf, String)> = Vec::new(); // (原件, 旧 id)
-        for dir in src.dirs.clone() {
-            if !dir.is_dir() {
-                // 目录整个不见了（U 盘没插等）：里面的文件既不算新增也不算删除，原样保留记录
-                present.extend(src.files.iter().filter(|(p, _)| p.starts_with(&dir)).map(|(p, s)| (p.clone(), s.clone())));
-                continue;
-            }
-            for path in book_files(&dir) {
-                let Some((size, mtime_ns)) = seen_stat(&path) else { continue };
-                let old = src.files.get(&path);
-                if let Some(o) = old.filter(|o| o.size == size && o.mtime_ns == mtime_ns && (o.id.is_empty() || self.master_dir(&o.id).is_dir())) {
-                    present.insert(path, o.clone());
-                    rep.unchanged += 1;
-                    continue;
-                }
-                let old = old.filter(|o| !o.id.is_empty());
-                match self.add_file(&path) {
-                    Ok(added) => {
-                        let (m, is_new) = match added {
-                            Added::New(m) => (m, true),
-                            Added::Existing(m) => (m, false),
-                        };
-                        match old.filter(|o| o.id != m.id) {
-                            Some(o) => {
-                                replaced.push((path.clone(), o.id.clone()));
-                                let old_title = self.read_meta(&o.id).map(|x| x.title).unwrap_or_default();
-                                on(SyncEvent::Updated(&path, &m, &old_title));
-                                rep.updated += 1;
-                            }
-                            None if is_new => {
-                                on(SyncEvent::Added(&path, &m));
-                                rep.added += 1;
-                            }
-                            None => rep.unchanged += 1, // 已在库里（改名、移动，或之前手动 add 过）
-                        }
-                        present.insert(path, Seen { size, mtime_ns, id: m.id });
-                    }
-                    Err(e) => {
-                        on(SyncEvent::Failed(&path, &e));
-                        rep.failed += 1;
-                        present.insert(path, Seen { size, mtime_ns, id: String::new() });
-                    }
-                }
-            }
-        }
-        let live_ids: std::collections::HashSet<&str> = present.values().map(|s| s.id.as_str()).filter(|id| !id.is_empty()).collect();
-        // 内容变了的：旧版本没有别的原件在用就删掉
-        for (_, old_id) in &replaced {
-            if !live_ids.contains(old_id.as_str()) {
-                let _ = self.remove(old_id);
-            }
-        }
-        // 原件不在了的
-        let mut kept_missing = BTreeMap::new();
-        for (path, seen) in &src.files {
-            if seen.id.is_empty() || present.contains_key(path) || replaced.iter().any(|(p, _)| p == path) {
-                continue;
-            }
-            if live_ids.contains(seen.id.as_str()) {
-                continue; // 移动或改名了，内容还在
-            }
-            let title = self.read_meta(&seen.id).map(|m| m.title).unwrap_or_default();
-            let removed = prune && self.remove(&seen.id).is_ok();
-            on(SyncEvent::Missing(path, &title, removed));
-            rep.missing += 1;
-            if removed {
-                rep.pruned += 1;
-            } else if self.master_dir(&seen.id).is_dir() {
-                kept_missing.insert(path.clone(), seen.clone()); // 继续记着，下次还报告
-            }
-        }
-        present.extend(kept_missing);
-        src.files = present;
-        self.save_sources(&src)?;
-        Ok(rep)
-    }
-
-    /// 删掉母版和它在各设备下的产物（所有用过的产物目录）。`meta.json` 损坏的条目也能删。返回书名。
+    /// 删掉一本书的索引和它在各设备下的产物（所有用过的产物目录）。原件不动。`meta.json` 损坏的条目也能删。返回书名。
     pub fn remove(&self, id: &str) -> Result<String, String> {
-        let dir = self.master_dir(id);
+        let dir = self.entry_dir(id);
         if id.is_empty() || id.starts_with('.') || id.contains(['/', '\\']) || !dir.is_dir() {
             return Err(format!("没有 id 为 {id} 的书"));
         }
         let title = self.read_meta(id).map(|m| m.title).unwrap_or_else(|| "（条目已损坏）".into());
-        for dev in self.output_roots().iter().filter_map(|r| std::fs::read_dir(r).ok()).flatten().flatten() {
-            let mut state = State::load(&dev.path());
-            if let Some(entry) = state.books.remove(id) {
-                let _ = std::fs::remove_file(dev.path().join(entry.file));
-                state.save(&dev.path())?;
-            }
-        }
+        self.remove_outputs(id)?;
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
         Ok(title)
-    }
-
-    fn plan(&self, meta: &Meta, device: &Profile) -> Result<Plan, String> {
-        let master_path = self.master_dir(&meta.id).join(&meta.master);
-        if meta.master_sha256.is_empty() {
-            return Err("读不到母版".into());
-        }
-        if meta.storage == Storage::Hardlink && sha256_file(&master_path)? != meta.master_sha256 {
-            return Err("母版和入库时不一样了（早期版本用硬链接存母版，原文件被改过）。先 remove 再重新入库".into());
-        }
-        let is_pdf = meta.master == "master.pdf";
-        let from_pdf_text = is_pdf && meta.pdf_text_layer == Some(true);
-        let format = if is_pdf && !from_pdf_text {
-            if !device.formats.contains(&Format::Pdf) {
-                return Err(format!("图片型 PDF（扫描件/漫画）暂时只能生成给支持 PDF 的设备，{} 不支持", device.name));
-            }
-            Format::Pdf
-        } else {
-            device.reflow_format().ok_or_else(|| format!("设备 {} 没有流式格式（EPUB/AZW3）", device.id))?
-        };
-        let area = device.readable(format);
-        let writer = if format == Format::Azw3 { azw3::WRITER_VERSION } else { "-" };
-        let fingerprint = format!(
-            "{}|{PIPELINE_VERSION}|{}|{writer}|{}|{}x{}|{}|{}",
-            meta.master_sha256,
-            bookconv::optimize::OPTIMIZE_VERSION,
-            device.id,
-            area.width,
-            area.height,
-            if device.color { "color" } else { "gray" },
-            format.ext(),
-        );
-        Ok(Plan { master_path, from_pdf_text, format, area, fingerprint })
-    }
-
-    /// 这本书在所有用过的产物目录、所有设备下的产物，以及是否最新。
-    pub fn outputs(&self, meta: &Meta) -> Vec<OutputStatus> {
-        let mut out = Vec::new();
-        for root in self.output_roots() {
-            for dev in std::fs::read_dir(&root).into_iter().flatten().flatten() {
-                let Some(dev_id) = dev.file_name().to_str().map(str::to_string) else { continue };
-                let Some(entry) = State::load(&dev.path()).books.get(&meta.id).cloned() else { continue };
-                let path = dev.path().join(&entry.file);
-                let fresh = if !path.exists() {
-                    None
-                } else {
-                    self.registry.get(&dev_id).and_then(|p| self.plan(meta, p).ok()).map(|plan| plan.fingerprint == entry.fingerprint)
-                };
-                out.push(OutputStatus { device: dev_id, path, fresh });
-            }
-        }
-        out.sort_by(|a, b| a.device.cmp(&b.device).then(a.path.cmp(&b.path)));
-        out
-    }
-
-    /// 为设备生成一本书的产物（没变化就跳过，`force` 强制重建）。产物放在 `out_root/<设备 id>/`。
-    pub fn build(&self, meta: &Meta, device: &Profile, out_root: &Path, force: bool) -> Result<Built, String> {
-        let Plan { master_path, from_pdf_text, format, area, fingerprint } = self.plan(meta, device)?;
-        let dir = out_root.join(&device.id);
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        self.remember_output_root(out_root)?;
-        let mut state = State::load(&dir);
-        let file = state.file_name_for(meta, format.ext(), &dir);
-        let out = dir.join(&file);
-        if !force && out.exists() && state.books.get(&meta.id).is_some_and(|e| e.fingerprint == fingerprint && e.file == file) {
-            return Ok(Built::UpToDate(out));
-        }
-
-        // 所有中间文件都在产物目录下的临时目录里，成品最后一步改名到位（中途失败不会留下半个产物）
-        let tmp = dir.join(format!(".tmp-{}", meta.id));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-        let result = (|| -> Result<Vec<String>, String> {
-            let mut warnings = Vec::new();
-            let done = tmp.join("out");
-            if format == Format::Pdf {
-                bookconv::pdf_ingest::optimize_pdf_trim_only(&master_path, &done, area, |_, _| {})?;
-            } else {
-                // EPUB 母版（PDF 有文字层的先转 EPUB）
-                let epub_master = if from_pdf_text {
-                    let (mut book, _, css) = bookconv::pdf_ingest::optimize_pdf_to_epub(&master_path, |_, _| {})?;
-                    let p = tmp.join("from-pdf.epub");
-                    std::fs::write(&p, bookconv::epub::assemble_pdf_derived(&mut book, &css)?).map_err(|e| e.to_string())?;
-                    p
-                } else {
-                    master_path.clone()
-                };
-                let optimized = tmp.join("optimized.epub");
-                let opts = bookconv::optimize::OptimizeOpts { wash: Some(Default::default()), grayscale: !device.color, ..bookconv::optimize::OptimizeOpts::new(area) };
-                bookconv::optimize::optimize_epub_file_streaming(&epub_master, &optimized, &opts, |_, _| {})?;
-                let rep = bookconv::check::check_epub_file(&optimized)?;
-                if !rep.ok {
-                    warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
-                }
-                if format == Format::Azw3 {
-                    let epub = std::fs::read(&optimized).map_err(|e| e.to_string())?;
-                    // 唯一 ID 取自书的 id、时间取入库时间：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
-                    let uid = u32::from_str_radix(&meta.id[..8], 16).unwrap_or(0);
-                    let opts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
-                    let (azw3, w) = azw3::epub_to_azw3_with_warnings(&epub, &opts)?;
-                    warnings.extend(w);
-                    std::fs::write(&done, azw3).map_err(|e| e.to_string())?;
-                } else {
-                    std::fs::rename(&optimized, &done).map_err(|e| e.to_string())?;
-                }
-            }
-            std::fs::rename(&done, &out).map_err(|e| format!("写 {}: {e}", out.display()))?;
-            Ok(warnings)
-        })();
-        let _ = std::fs::remove_dir_all(&tmp);
-        let warnings = result?;
-        // 书名变了（改了母版）时，旧文件名的产物删掉
-        if let Some(old) = state.books.get(&meta.id) {
-            if old.file != file {
-                let _ = std::fs::remove_file(dir.join(&old.file));
-            }
-        }
-        state.books.insert(meta.id.clone(), StateEntry { file, fingerprint });
-        state.save(&dir)?;
-        Ok(Built::Written { path: out, warnings })
-    }
-}
-
-/// 某设备产物目录的生成记录：id → (文件名, 指纹)。
-#[derive(Default, Serialize, Deserialize)]
-struct State {
-    books: BTreeMap<String, StateEntry>,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct StateEntry {
-    file: String,
-    fingerprint: String,
-}
-
-impl State {
-    fn load(dir: &Path) -> State {
-        std::fs::read(dir.join(".state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-    }
-
-    fn save(&self, dir: &Path) -> Result<(), String> {
-        write_atomic(&dir.join(".state.json"), serde_json::to_string_pretty(self).unwrap().as_bytes())
-    }
-
-    /// 产物文件名：`书名.ext`。和别的书撞名（不分大小写：U 盘、Kindle 的文件系统不分），或者目录里已有
-    /// 一个不是本书产物的同名文件时，加 id 后缀，不覆盖别人的文件。
-    fn file_name_for(&self, meta: &Meta, ext: &str, dir: &Path) -> String {
-        let base = bookconv::util::sanitize_filename(&meta.title, &meta.id);
-        let plain = format!("{base}.{ext}");
-        let folded = plain.to_lowercase();
-        let ours = self.books.get(&meta.id).is_some_and(|e| e.file == plain);
-        let taken = self.books.iter().any(|(id, e)| id != &meta.id && e.file.to_lowercase() == folded) || (!ours && dir.join(&plain).exists());
-        if taken { format!("{base} [{}].{ext}", &meta.id[..6]) } else { plain }
     }
 }

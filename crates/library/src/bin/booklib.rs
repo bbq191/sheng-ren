@@ -3,7 +3,7 @@
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib；产物缺省放在书库的 output/<设备>/ 下。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
-use library::{Added, Built, Library, Profile, SyncEvent};
+use library::{Added, Built, Library, OriginalState, Profile, SyncEvent};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -17,8 +17,8 @@ const USAGE: &str = "用法:
   booklib [--library=目录] sync [--prune] [--device=<设备>…] [--out=目录] [--watch[=秒]]
       新增的入库、改过的换成新版本、移动改名的认得出；原件删了的只报告，--prune 才从书库删掉
       --device 给了就接着生成（只重建有变化的）；--watch 一直运行，每隔几秒（缺省 60）检查一次
-  booklib [--library=目录] remove <id>...               id 用 list 里显示的完整 id
-  booklib [--library=目录] dedupe <目录>...             书库里与这些目录（递归）内容相同的原文件改为共享存储
+  booklib [--library=目录] remove <id>...               从书库删掉（连同产物；原件不动）。id 用 list 里显示的完整 id
+  booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
   booklib [--library=目录] devices                      列出设备（书库 profiles/ 目录里的自定义设备也算）";
 
 fn usage_error(msg: &str) -> ! {
@@ -186,6 +186,11 @@ fn main() {
         "list" => {
             for m in lib.select(&args.texts()) {
                 println!("{}  {:<6} {}{}", m.id, m.source_format, m.title, if m.authors.is_empty() { String::new() } else { format!(" — {}", m.authors.join("、")) });
+                match lib.original_state(&m) {
+                    OriginalState::Missing => println!("      ✗ 原件不在了：{}（移动过就 sync 或重新 add；不要了就 remove）", m.source_path),
+                    OriginalState::Touched => println!("      ⚠ 原件可能改过：{}（生成前会核对）", m.source_path),
+                    OriginalState::Present | OriginalState::NotNeeded => {}
+                }
                 for o in lib.outputs(&m) {
                     let state = match o.fresh {
                         Some(true) => "✓ 最新",
@@ -214,20 +219,13 @@ fn main() {
             build_all(&lib, &devices, &books, &out_root, force, false, &mut report);
         }
         "dedupe" => {
-            if rest.is_empty() {
-                usage_error("dedupe 要给目录");
-            }
             let dirs: Vec<PathBuf> = rest.iter().map(PathBuf::from).collect();
             let mb = |b: u64| b as f64 / 1048576.0;
             report(lib.dedupe(&dirs).map(|r| {
-                let mut lines = vec![
-                    format!("✓ {} 个文件改为与原文件共享存储（{:.1} MB）", r.shared_files, mb(r.shared_bytes)),
-                    format!("✓ 删掉 {} 个多余的 source 副本（{:.1} MB）", r.removed_sources, mb(r.removed_bytes)),
-                ];
-                if r.unlinked > 0 {
-                    lines.push(format!("✓ {} 个早期的硬链接母版换成独立克隆（原文件再改也不影响母版）", r.unlinked));
+                let mut lines = vec![format!("✓ {} 本书改成只存索引，删掉书库里的副本 {:.1} MB", r.migrated, mb(r.freed_bytes))];
+                for m in &r.kept {
+                    lines.push(format!("  ? 没找到原件，副本保留：{}  {}（原来在 {}）", m.id, m.title, if m.source_path.is_empty() { &m.source } else { &m.source_path }));
                 }
-                lines.push("  注：克隆（reflink）的文件在 du 里仍按全尺寸显示，实际不占额外空间；btrfs 上可用 `btrfs filesystem du` 查看共享情况".into());
                 lines.join("\n")
             }));
         }
