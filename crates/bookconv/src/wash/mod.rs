@@ -37,6 +37,7 @@ mod drm;
 mod empty_pages;
 mod ncx_fix;
 mod opf;
+mod paginate;
 mod toc;
 mod typeset;
 
@@ -46,6 +47,7 @@ use self::dead_refs::*;
 pub use self::drm::*;
 use self::empty_pages::*;
 use self::ncx_fix::*;
+use self::paginate::*;
 pub(crate) use self::opf::*;
 pub use self::toc::*;
 pub use self::typeset::*;
@@ -80,11 +82,13 @@ pub struct WashOpts {
     pub filter_props: Vec<String>,
     /// 正文排版语言（`Auto`=自动探测）。
     pub lang: LangMode,
+    /// 章节分页：章标题独立一页、节与节/节与章之间分页（见 `paginate.rs`）。文字书缺省开，漫画自动跳过。
+    pub paginate: bool,
 }
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, paginate: true }
     }
 }
 
@@ -124,6 +128,10 @@ pub struct WashReport {
     pub ncx_manifest_id_fixed: usize,
     /// 指向书内不存在文件的 `<img>` / 字体全缺的 `@font-face` 被去掉的个数。见 `drop_dead_refs`。
     pub dead_refs_removed: usize,
+    /// 章节分页新拆出来的文件数（0＝没有需要拆的章节）。见 `paginate.rs`。
+    pub sections_paginated: usize,
+    /// 分页时搬到引用处那一份的注释块数。
+    pub paginate_notes_moved: usize,
 }
 
 
@@ -198,6 +206,10 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
     fix_ncx_manifest_id(entries, &mut rep);
     restructure_existing_toc_parts(entries, opts.auto_toc, &mut rep);
     auto_toc(entries, opts.auto_toc, &mut rep);
+    // 分页放在自动目录之后：自动目录给标题补的 id 已经在，分页改写目录链接时能对上。
+    if opts.paginate {
+        paginate_sections(entries, &mut rep);
+    }
     fix_ncx_uid(entries, &mut rep);
     strip_ncx_doctype(entries, &mut rep);
     Ok(rep)
