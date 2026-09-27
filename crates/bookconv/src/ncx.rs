@@ -16,7 +16,7 @@ fn navpoint_event_re() -> &'static Regex {
 /// "扁平+depth"写法一致，如 `wash.rs::dense_ranks`）。NCX 规范保证 `<navLabel>` 和 `<content>`
 /// 总是先于自己的子 `<navPoint>` 出现，扫描时按"刚看到 content 就用当前 depth/title 落地一条"
 /// 处理即可，不用等子节点扫完。
-pub(crate) fn parse_ncx_flat(ncx_text: &str) -> Vec<(usize, String, String)> {
+pub fn parse_ncx_flat(ncx_text: &str) -> Vec<(usize, String, String)> {
     let mut depth = 0usize;
     let mut cur_title = String::new();
     let mut out = Vec::new();

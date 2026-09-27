@@ -578,10 +578,58 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, rep: &mut WashReport) 
             }
         }
     }
-    let all: Vec<&Heading> = files.iter().flat_map(|f| f.heads.iter()).collect();
-    let roles = classify(&all);
+    let roles = {
+        let all: Vec<&Heading> = files.iter().flat_map(|f| f.heads.iter()).collect();
+        classify(&all)
+    };
     if !roles.contains(&Role::Title) {
         return;
+    }
+    // 节标题要进目录：没有 id 的补一个（插入后该文件重新解析，偏移变了）。记下 (原文件, id, 标题文字)。
+    // 只收**跟所属章标题在同一个原文件里**的节：单独成文件、前面没有章标题的"节"多半是附页（内容简介、版权声明），
+    // 作者目录没列它就不补（《疯探》）。
+    let mut sections: Vec<(String, String, String)> = Vec::new();
+    let mut touched: HashSet<usize> = HashSet::new();
+    let mut sec_no = 0usize;
+    for (fi, f) in files.iter_mut().enumerate() {
+        let mut inserts: Vec<(usize, String)> = Vec::new();
+        let first_title = f.heads.iter().position(|h| roles[h.level as usize] == Role::Title);
+        for (hi, h) in f.heads.iter().enumerate().filter(|(_, h)| roles[h.level as usize] == Role::Section) {
+            if first_title.is_none_or(|t| t > hi) {
+                continue;
+            }
+            let sp = &f.spans[h.span];
+            let open = &f.html[sp.open_start..sp.open_end];
+            let id = match tag_attr(open, "id") {
+                Some(id) => id.to_string(),
+                None => loop {
+                    sec_no += 1;
+                    let id = format!("eink-sec-{sec_no}");
+                    if !f.html.contains(&format!("id=\"{id}\"")) {
+                        inserts.push((sp.open_start + 1 + sp.name.len(), format!(" id=\"{id}\"")));
+                        break id;
+                    }
+                },
+            };
+            sections.push((f.path.clone(), id, h.text.clone()));
+        }
+        if inserts.is_empty() {
+            continue;
+        }
+        for (pos, attr) in inserts.into_iter().rev() {
+            f.html.insert_str(pos, &attr);
+        }
+        let (lo, hi) = body_bounds(&f.html).expect("插入 id 不影响 body 边界");
+        f.lo = lo;
+        f.hi = hi;
+        f.spans = parse_spans(&f.html, lo, hi);
+        let cands: Vec<(usize, u8)> = {
+            // 重新按原来的方式认标题：先 h 标签；原来是目录退路认出来的就按原级别对回同一批元素。
+            let hc = h_candidates(&f.spans);
+            if !hc.is_empty() { hc } else { f.heads.iter().map(|h| (h.span, h.level)).collect() }
+        };
+        f.heads = collect_headings(&f.html, &f.spans, &cands);
+        touched.insert(fi);
     }
     // 2. 逐文件切分。
     let mut taken: HashSet<String> = entries.iter().map(|e| e.name.clone()).collect();
@@ -619,7 +667,24 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, rep: &mut WashReport) 
         let suffix = f.html[f.hi..].to_string();
         outputs.push((f.idx, pieces, prefix, suffix));
     }
+    // 没拆但补了 id 的文件写回。
+    let split_paths: HashSet<&String> = splits.keys().collect();
+    for fi in &touched {
+        let f = &files[*fi];
+        if !split_paths.contains(&f.path) {
+            entries[f.idx].data = f.html.clone().into_bytes();
+        }
+    }
+    // 节所在的份（拆过的文件按 id 找份）。
+    let sections: Vec<(String, String, String)> = sections
+        .into_iter()
+        .map(|(path, id, label)| {
+            let path = splits.get(&path).and_then(|s| s.ids.get(&id).map(|&(k, _)| s.pieces[k].clone())).unwrap_or(path);
+            (path, id, label)
+        })
+        .collect();
     if splits.is_empty() {
+        rep.toc_sections_added += merge_sections_into_toc(entries, &sections);
         return;
     }
     // 3. 改写全书链接（拆出来的各份按"原文件"解析裸 #frag）。
@@ -672,4 +737,5 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, rep: &mut WashReport) 
             entries.insert(idx + 1 + off, e);
         }
     }
+    rep.toc_sections_added += merge_sections_into_toc(entries, &sections);
 }
