@@ -40,7 +40,7 @@ mod trim;
 
 pub use self::classify::*;
 pub use self::headings::*;
-pub use self::source::*;
+use self::source::*;
 pub(crate) use self::text::*;
 pub use self::to_epub::*;
 pub use self::trim::*;

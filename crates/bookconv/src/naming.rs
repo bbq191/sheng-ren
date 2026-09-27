@@ -1,4 +1,4 @@
-//! EPUB 书名规范化：`书名 - 卷/部/上/下`（用户 2026-09-20 拍板，文字书和漫画一律如此）。
+//! 书名规范化（`booklib` 入库时给没有书名元数据的文件取名）：`书名 - 卷/部/上/下`（用户 2026-09-20 拍板，文字书和漫画一律如此）。
 //!
 //! 下载站文件名常带一长串元数据（Anna's Archive：`书名 -- 作者 -- 丛书, 年份 -- 出版社 -- <hash> --
 //! Anna's Archive`），母版库里既难读、手机上还折成好几行。规则：
@@ -77,22 +77,6 @@ pub fn canonical_book_name(stem: &str) -> String {
     first.to_string()
 }
 
-/// 这个名字（不含扩展名）里是否有可识别的卷标记。优化时只在有卷标记的书上把 EPUB 自己的 `dc:title` 改成
-/// 规范名（避免把 `abc123.epub` 这种无意义文件名覆盖掉书里本来正确的书名）。
-pub fn has_volume_marker(stem: &str) -> bool {
-    let first = stem.trim().split(" -- ").next().unwrap_or("").trim();
-    let first = tail_tag_re().replace(first, "");
-    marker_re().is_match(first.trim())
-}
-
-/// 带扩展名的文件名版本：`x -- y.epub` → `x.epub`。扩展名原样保留。
-pub fn canonical_file_name(name: &str) -> String {
-    match name.rsplit_once('.') {
-        Some((stem, ext)) if !ext.is_empty() && ext.len() <= 5 => format!("{}.{ext}", canonical_book_name(stem)),
-        _ => canonical_book_name(name),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,23 +131,6 @@ mod tests {
             assert_eq!(canonical_book_name(&canonical_book_name(s)), canonical_book_name(s));
             assert_eq!(canonical_book_name(s), s);
         }
-    }
-
-    #[test]
-    fn file_name_keeps_extension_and_handles_dots() {
-        assert_eq!(canonical_file_name("鏢人 - 卷02 -- 許先哲 -- Anna’s Archive.epub"), "鏢人 - 02卷.epub");
-        assert_eq!(canonical_file_name("plain.epub"), "plain.epub");
-        assert_eq!(canonical_file_name("no_ext"), "no_ext");
-        // 书名里带点（英文缩写）不是扩展名分隔时也不崩：末段超过 5 字符视为书名的一部分。
-        assert_eq!(canonical_file_name("Dr. Who Long Title"), "Dr. Who Long Title");
-    }
-
-    #[test]
-    fn has_volume_marker_only_for_real_markers() {
-        assert!(has_volume_marker("鏢人 - 卷02 -- 許先哲"));
-        assert!(has_volume_marker("雪人 - 上册"));
-        assert!(!has_volume_marker("abc123"));
-        assert!(!has_volume_marker("疯探-空城"));
     }
 
     #[test]

@@ -196,8 +196,8 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "ego-tree",
+ "encoding_rs",
  "fast_image_resize",
- "fb2",
  "hayro",
  "image",
  "lopdf",
@@ -659,18 +659,6 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
-
-[[package]]
-name = "fb2"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2d27bbfaf8178bef57815d3b6169100928316099922e419668ee50f61e87e7a"
-dependencies = [
- "chrono",
- "language-tags",
- "quick-xml",
- "serde",
-]
 
 [[package]]
 name = "fdeflate"
@@ -1182,15 +1170,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "language-tags"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4345964bb142484797b161f473a503a434de77149dd8c7427788c6e13379388"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1686,7 +1665,6 @@ checksum = "eff6510e86862b57b210fd8cbe8ed3f0d7d600b9c2863cd4549a2e033c66e956"
 dependencies = [
  "encoding_rs",
  "memchr",
- "serde",
 ]
 
 [[package]]
