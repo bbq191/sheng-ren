@@ -1,5 +1,5 @@
-//! 最小合规 EPUB3 组装 —— 移植自 protocol/epub.py。mimetype 首个 STORED。
-//! 本设备版所有条目走 STORED（不压缩，免 C 依赖；设备空间充足）。
+//! 最小合规 EPUB3 组装（格式转换器产出母版用）。mimetype 首个 STORED。
+//! 所有条目都走 STORED（不压缩）：母版只是中间产物，按设备优化时会重新打包压缩。
 
 use crate::htmlproc::fix_internal_links;
 
@@ -61,10 +61,19 @@ pub(crate) fn chapter_filename(i: usize) -> String {
     format!("chap_{:04}.xhtml", i + 1)
 }
 
+/// `<html>` 上的语言属性：书的语言（`BookMeta::language`）同时写 `lang` 与 `xml:lang`；语言未知或不是合法的语言标签
+/// （只允许字母、数字、`-`，`und` 视同未知）时不写，交给清洗层按正文判断后补。
+fn lang_attrs(lang: &str) -> String {
+    let lang = lang.trim();
+    let valid = !lang.is_empty() && !lang.eq_ignore_ascii_case("und") && lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if valid { format!(" lang=\"{lang}\" xml:lang=\"{lang}\"") } else { String::new() }
+}
+
 /// `head_extra` 原样插在 `</head>` 前（外链样式表 `<link>` 等），普通章节传 `""`。
-fn chapter_doc(ch: &Chapter, head_extra: &str) -> String {
+fn chapter_doc(ch: &Chapter, lang: &str, head_extra: &str) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"zh\">\n<head><title>{}</title>{head_extra}</head>\n<body>{}</body>\n</html>\n",
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"{}>\n<head><title>{}</title>{head_extra}</head>\n<body>{}</body>\n</html>\n",
+        lang_attrs(lang),
         xesc(&ch.title),
         ch.html_body
     )
@@ -79,7 +88,8 @@ fn cover_xhtml(m: &BookMeta) -> String {
     // 宽高比偏方/偏宽的封面宽度撑满后高度不足就贴页顶 → 书库缩略图「偏上」。table/table-cell +
     // vertical-align:middle 是老渲染器（xochitl epub 引擎）也吃的垂直居中法；max-height:100vh 防超高。
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"zh\">\n<head><title>封面</title>\n<style>html,body{{margin:0;padding:0;height:100%;}} .cv{{display:table;width:100%;height:100vh;}} .cv-c{{display:table-cell;vertical-align:middle;text-align:center;}} .cv-c img{{max-width:100%;max-height:100vh;}}</style></head>\n<body>\n  <div class=\"cv\"><div class=\"cv-c\"><img src=\"cover.{}\" alt=\"{}\"/></div></div>\n</body>\n</html>\n",
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"{}>\n<head><title>封面</title>\n<style>html,body{{margin:0;padding:0;height:100%;}} .cv{{display:table;width:100%;height:100vh;}} .cv-c{{display:table-cell;vertical-align:middle;text-align:center;}} .cv-c img{{max-width:100%;max-height:100vh;}}</style></head>\n<body>\n  <div class=\"cv\"><div class=\"cv-c\"><img src=\"cover.{}\" alt=\"{}\"/></div></div>\n</body>\n</html>\n",
+        lang_attrs(&m.language),
         m.cover_ext,
         xesc(&m.title)
     )
@@ -145,8 +155,8 @@ fn content_opf(book: &Book) -> String {
     )
 }
 
-/// 生成嵌套 nav：level<=1 为顶层 <li>，level>=2 收进上一个顶层项的子 <ol>。
-/// 只收非空标题章（整章一页后每章都带标题）。仅两层——微信读书目录最多部/章两级。
+/// 生成嵌套 nav，层级不限：`level<=1` 为顶层，更深的收进前一条的子 `<ol>`。层级不能跳级——比前一条深不止一级时
+/// 按"前一条的下一级"算（章下面直接是 3 级标题也只缩进一层）；书首就是子级的条目按顶层算。只收非空标题。
 fn nav_body(book: &Book) -> String {
     let visible: Vec<NavEntry> = if book.nav.is_empty() {
         book.chapters
@@ -158,38 +168,42 @@ fn nav_body(book: &Book) -> String {
     } else {
         book.nav.iter().filter(|n| !n.title.is_empty()).cloned().collect()
     };
-    let mut out = String::new();
-    let mut sub_open = false; // 是否有未闭合的子 <ol>
-    for (idx, ch) in visible.iter().enumerate() {
-        let link = format!("<a href=\"{}\">{}</a>", xesc(&ch.href), xesc(&ch.title));
-        if ch.level <= 1 {
-            if sub_open {
-                out.push_str("        </ol>\n      </li>\n");
-                sub_open = false;
-            }
-            let has_child = visible.get(idx + 1).is_some_and(|n| n.level >= 2);
-            if has_child {
-                out.push_str(&format!("      <li>{link}\n        <ol>\n"));
-                sub_open = true;
-            } else {
-                out.push_str(&format!("      <li>{link}</li>\n"));
-            }
-        } else if sub_open {
-            out.push_str(&format!("          <li>{link}</li>\n"));
-        } else {
-            // 容错：level>=2 却无顶层父（书首即子节），平铺为顶层
-            out.push_str(&format!("      <li>{link}</li>\n"));
-        }
+    // 每条的实际深度（1 起）。
+    let mut depths: Vec<usize> = Vec::with_capacity(visible.len());
+    for n in &visible {
+        let prev = depths.last().copied().unwrap_or(0);
+        depths.push((n.level.max(1) as usize).min(prev + 1));
     }
-    if sub_open {
-        out.push_str("        </ol>\n      </li>\n");
+    // 深度 d 的 `<li>` 缩进 6+4(d-1) 格，它的子 `<ol>` 再缩进 2 格。
+    let li_indent = |d: usize| " ".repeat(6 + 4 * (d - 1));
+    let ol_indent = |d: usize| " ".repeat(8 + 4 * (d - 1));
+    let mut out = String::new();
+    let mut open: Vec<usize> = Vec::new(); // 子 `<ol>` 还没闭合的父条目深度
+    for (i, (n, &d)) in visible.iter().zip(&depths).enumerate() {
+        let link = format!("<a href=\"{}\">{}</a>", xesc(&n.href), xesc(&n.title));
+        let next = depths.get(i + 1).copied().unwrap_or(0);
+        if next > d {
+            out.push_str(&format!("{}<li>{link}\n{}<ol>\n", li_indent(d), ol_indent(d)));
+            open.push(d);
+            continue;
+        }
+        out.push_str(&format!("{}<li>{link}</li>\n", li_indent(d)));
+        // 下一条比这些父条目浅（或没有下一条）：闭合它们的子 `<ol>` 和 `<li>`。
+        while let Some(&p) = open.last() {
+            if p < next {
+                break;
+            }
+            out.push_str(&format!("{}</ol>\n{}</li>\n", ol_indent(p), li_indent(p)));
+            open.pop();
+        }
     }
     out
 }
 
 fn nav_xhtml(book: &Book) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\" xml:lang=\"zh\">\n<head><title>目录</title></head>\n<body>\n  <nav epub:type=\"toc\" id=\"toc\">\n    <ol>\n{}    </ol>\n  </nav>\n</body>\n</html>\n",
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"{}>\n<head><title>目录</title></head>\n<body>\n  <nav epub:type=\"toc\" id=\"toc\">\n    <ol>\n{}    </ol>\n  </nav>\n</body>\n</html>\n",
+        lang_attrs(&book.meta.language),
         nav_body(book)
     )
 }
@@ -244,7 +258,7 @@ pub fn assemble(book: &mut Book) -> Result<Vec<u8>, String> {
 /// 串——全书没解析出任何非黑颜色时就是空）。拼进同一份共享样式表而不是另起一个文件：颜色规则
 /// 也得挂在"含 `<img` 或颜色 span 才 `<link>`"这同一条判定里，两份文件反而要维护两条判定逻辑。
 /// **组装后 `book.resources` 被清空**（写一张释放一张）：PDF 转出的书图片可达上百 MB，不让"资源表 + zip 缓冲"
-/// 同时各占一整份（2026-09-24 审计；调用方 book-serve 组装后不再用 `book`）。
+/// 同时各占一整份（2026-09-24 审计；调用方组装后不再用 `book`）。
 pub fn assemble_pdf_derived(book: &mut Book, extra_css: &str) -> Result<Vec<u8>, String> {
     let css = format!("{PDF_IMG_CSS}{extra_css}");
     assemble_with(book, AssembleOpts { shared_css: Some(SharedCss { file: "pdf-img.css", id: "pdf-img-css", css: &css }), consume_resources: true, rtl: false })
@@ -292,7 +306,7 @@ pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u
                 Some(c) if has_img_tag(&ch.html_body) || has_color_span(&ch.html_body) => format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>", c.file),
                 _ => String::new(),
             };
-            put(&mut z, &format!("OEBPS/{}", chapter_filename(i)), stored, chapter_doc(ch, &link).as_bytes())?;
+            put(&mut z, &format!("OEBPS/{}", chapter_filename(i)), stored, chapter_doc(ch, &book.meta.language, &link).as_bytes())?;
         }
         if opts.consume_resources {
             for r in std::mem::take(&mut book.resources) {
@@ -360,6 +374,66 @@ mod nav_tests {
     }
 
     #[test]
+    fn nests_arbitrary_depth_and_never_skips_levels() {
+        let book = Book {
+            meta: BookMeta {
+                book_id: "b".into(), title: "t".into(), author: "".into(), language: "en".into(),
+                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(),
+            },
+            chapters: vec![ch("部", 1), ch("章", 2), ch("节", 3), ch("小节", 4), ch("章二", 2), ch("跳级", 4), ch("部二", 1)],
+            resources: vec![],
+            nav: Vec::new(),
+        };
+        let nav = nav_body(&book);
+        assert_eq!(nav.matches("<ol>").count(), nav.matches("</ol>").count(), "ol 要配对: {nav}");
+        assert_eq!(nav.matches("<li>").count(), nav.matches("</li>").count(), "li 要配对: {nav}");
+        // 整份包进 <ol> 后必须是合法 XML，且层级正确：小节在第 4 层，跳级的 4 只比章二深一级。
+        let xml = format!("<ol>{nav}</ol>");
+        let mut r = quick_xml::Reader::from_str(&xml);
+        let (mut depth, mut max_depth) = (0usize, 0usize);
+        let mut depth_of: std::collections::HashMap<String, usize> = Default::default();
+        loop {
+            match r.read_event().unwrap() {
+                quick_xml::events::Event::Start(e) if e.name().as_ref() == b"li" => {
+                    depth += 1;
+                    max_depth = max_depth.max(depth);
+                }
+                quick_xml::events::Event::End(e) if e.name().as_ref() == b"li" => depth -= 1,
+                quick_xml::events::Event::Text(t) => {
+                    let t = t.unescape().unwrap().trim().to_string();
+                    if !t.is_empty() {
+                        depth_of.insert(t, depth);
+                    }
+                }
+                quick_xml::events::Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(max_depth, 4, "{nav}");
+        assert_eq!((depth_of["部"], depth_of["章"], depth_of["节"], depth_of["小节"]), (1, 2, 3, 4), "{nav}");
+        assert_eq!((depth_of["章二"], depth_of["跳级"], depth_of["部二"]), (2, 3, 1), "{nav}");
+        assert!(nav_xhtml(&book).contains(r#" lang="en" xml:lang="en">"#), "nav 用书的语言");
+    }
+
+    #[test]
+    fn lang_attrs_follow_book_language_or_are_omitted() {
+        assert_eq!(lang_attrs("zh-CN"), r#" lang="zh-CN" xml:lang="zh-CN""#);
+        assert_eq!(lang_attrs(""), "");
+        assert_eq!(lang_attrs("und"), "");
+        assert_eq!(lang_attrs("zh\" onload=\"x"), "", "不合法的语言标签不写");
+        let mut b = two_chapter_book(false);
+        b.meta.language = String::new();
+        let entries = zip_names_and_text(assemble(&mut b).unwrap());
+        let chap = String::from_utf8(entries.iter().find(|(k, _)| k == "OEBPS/chap_0001.xhtml").unwrap().1.clone()).unwrap();
+        assert!(chap.contains("<html xmlns=\"http://www.w3.org/1999/xhtml\">"), "语言未知不写: {chap}");
+        let mut b = two_chapter_book(false);
+        b.meta.language = "ja".into();
+        let entries = zip_names_and_text(assemble(&mut b).unwrap());
+        let chap = String::from_utf8(entries.iter().find(|(k, _)| k == "OEBPS/chap_0001.xhtml").unwrap().1.clone()).unwrap();
+        assert!(chap.contains(r#"<html xmlns="http://www.w3.org/1999/xhtml" lang="ja" xml:lang="ja">"#), "{chap}");
+    }
+
+    #[test]
     fn flat_when_all_level1() {
         let book = Book {
             meta: BookMeta {
@@ -416,7 +490,7 @@ mod nav_tests {
         assert!(get("OEBPS/content.opf").contains("<spine page-progression-direction=\"rtl\">"), "rtl 选项写进 spine");
     }
 
-    /// `assemble_pdf_derived` 是 book-serve PDF→EPUB 路径实际调用的入口（2026-09-23 真机投一本真实 PDF
+    /// `assemble_pdf_derived` 是 PDF→EPUB 路径实际调用的入口（2026-09-23 真机投一本真实 PDF
     /// 手册发现：没有这条 CSS 时图片在 xochitl 原生阅读器里完全不出现，见函数头注）。这里只确认它正确
     /// 接上了 `pdf-img.css`/`max-width`，不重复 `shared_css_goes_last...` 已经测过的通用机制。
     #[test]

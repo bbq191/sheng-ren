@@ -19,24 +19,15 @@ pub(crate) fn test_screen() -> Screen {
     profile::get("rmpp-move").expect("内置 rmpp-move profile").screen
 }
 
-/// 单张图片允许解码的像素数上限（w×h，跟格式/用途无关）——防极端高分辨率原图解码成未压缩位图
-/// 把内存顶爆。2026-09-19 真机坐实：用户真实投递一套漫画（《乱马1/2》8 卷）触发超限按卷拆分
-/// 落库，book-serve `VmHWM` 冲到 271MB——定位到 `downscale_into`/`decode_trim_comic`/`dither_bilevel`
-/// 三处解码前只用 `header_dims` 读了宽高判断"要不要处理"，没有对"这张图本身大到不该整个解出来"
-/// 设硬上限。
+/// 单张图片允许解码的像素数上限（w×h，跟格式/用途无关）——防极端高分辨率原图解码成未压缩位图把内存顶爆。
 ///
-/// **阈值取值不是"3 字节/像素 RGB8"这种理论估算**——第一版按这个估算给了 2500 万像素（估算峰值
-/// ~75MB），结果真机又撞上一次《火影忍者》多卷投递，`VmHWM` 又冲到 262MB，跟没修之前几乎一个
-/// 量级。本地测量当时的真实调用链（裁边 → 缩放两道串联，现已被 `prepare_comic_page_for_epub` 单趟取代，忠实
-/// 复刻 `optimize.rs` 的真实用法）在不同像素数下的实测 `VmHWM`（`/proc/<pid>/status`，release
-/// 编译）：400万像素→62MB、870万像素（A4 300dpi）→97-109MB、1600万像素→164MB、2500万像素→
-/// 230-236MB——**理论估算的单缓冲区大小完全没抓住真实开销**（`image` 库内部解码+`to_rgb8()`+
-/// resize 中间缓冲多份同时存活，实测开销约 9-16MB/百万像素，远高于 3 字节/像素≈3MB/百万像素的
-/// naive 估算）。改用实测数据定阈值：900 万像素（约 3000×3000，覆盖 A4 300dpi 及绝大多数真实
-/// 漫画/书籍扫描页）在真机上峰值约 100-110MB——比 262MB 危机低一个数量级，设备实测可用内存
-/// 通常有几百 MB 余量，这个量级的单张图瞬时峰值不构成风险。超限的图直接放弃处理、原样保留原图
-/// 字节——调用方对这三个函数返回 `None` 本来就是"原样保留"语义，天然兜底，不是新错误路径。
-const MAX_DECODE_PIXELS: u64 = 9_000_000;
+/// **阈值按实测定，不按"3 字节/像素 RGB8"估算**：release 构建下量整页处理（解码 → 裁边 → 缩放 → 编码）的
+/// 峰值常驻内存（`/proc/<pid>/status` 的 `VmHWM`）：400 万像素→62MB、870 万像素（A4 300dpi）→97–109MB、
+/// 1600 万像素→164MB、2500 万像素→230–236MB，约 9–16MB/百万像素，远高于理论的 3MB/百万像素
+/// （`image` 库解码、类型转换、缩放的中间缓冲同时存活）。900 万像素（约 3000×3000，覆盖 A4 300dpi 与绝大多数
+/// 真实漫画/书籍扫描页）单张峰值约 100–110MB。超限的图直接放弃处理、原样保留原图字节——调用方对返回 `None`
+/// 本来就是"原样保留"语义。并行时的总量另由 [`crate::imgpool::PIXEL_BUDGET`] 约束。
+pub(crate) const MAX_DECODE_PIXELS: u64 = 9_000_000;
 
 fn within_decode_budget(w: u32, h: u32) -> bool {
     (w as u64) * (h as u64) <= MAX_DECODE_PIXELS
@@ -208,12 +199,14 @@ fn trim_bounds(img: &image::DynamicImage) -> Option<(u32, u32, u32, u32)> {
     }
 }
 
-/// 解码并归一到 `Luma8`/`Rgb8`（灰度保持灰度），并做四边留白裁边。返回 `(图, 格式, 是否裁过)`。
-/// [`prepare_comic_page_for_pdf`] / [`prepare_comic_page_for_epub`] 共用的前半段（此前 PDF 版整段抄了一份）。
+/// 解码并归一到 `Luma8`/`Rgb8`（灰度保持灰度），并做四边留白裁边。
+/// [`prepare_comic_page_for_pdf`] / [`prepare_comic_page_for_epub`] 共用的前半段。
 /// 用 `into_luma8`/`into_rgb8`：解码结果本来就是 8 位对应类型（几乎所有漫画页）时**不再拷贝整图**，
-/// 且不再让"原始解码图 + 归一副本"同时占内存。
-/// 解码 + 裁白边。`grayscale`（黑白屏设备）时彩色图顺手转成单通道 8 位灰度（256 级，不抖动）。
-/// 返回 (图, 原格式, 是否改动过像素——裁了边或转了灰度)。
+/// 且不再让"原始解码图 + 归一副本"同时占内存。带透明通道的图（RGBA/LA 的 PNG）先合成到白底再归一
+/// （[`flatten_alpha_on_white`]）——直接丢掉 alpha 会把透明区域变成它底下存的颜色，通常是纯黑。
+/// `grayscale`（黑白屏设备）时彩色图顺手转成单通道 8 位灰度（256 级，不抖动）。
+/// 返回 (图, 原格式, 是否改动过像素——裁了边或转了灰度)。只合成了白底、别的都不用做时不算改动：原图照旧原样保留，
+/// 透明区域交给阅读器按页面底色显示。
 fn decode_trim_comic(bytes: &[u8], grayscale: bool) -> Option<(image::DynamicImage, ImageFormat, bool)> {
     use image::DynamicImage;
     let (fmt, (w, h)) = header_dims(bytes)?;
@@ -223,11 +216,37 @@ fn decode_trim_comic(bytes: &[u8], grayscale: bool) -> Option<(image::DynamicIma
     let decoded = image::load_from_memory_with_format(bytes, fmt).ok()?;
     let gray = matches!(decoded.color(), image::ColorType::L8 | image::ColorType::L16 | image::ColorType::La8 | image::ColorType::La16);
     let to_gray = grayscale && !gray;
+    let decoded = if decoded.color().has_alpha() { flatten_alpha_on_white(decoded) } else { decoded };
     let img = if gray || to_gray { DynamicImage::ImageLuma8(decoded.into_luma8()) } else { DynamicImage::ImageRgb8(decoded.into_rgb8()) };
     Some(match trim_bounds(&img) {
         Some((l, t, cw, ch)) => (img.crop_imm(l, t, cw, ch), fmt, true),
         None => (img, fmt, to_gray),
     })
+}
+
+/// 带透明通道的图合成到白底：灰度+alpha → `Luma8`，其余 → `Rgb8`（按 8 位合成，16 位先降到 8 位）。
+/// 每个分量 `c·a/255 + 255·(1 − a/255)`，四舍五入。
+fn flatten_alpha_on_white(img: image::DynamicImage) -> image::DynamicImage {
+    use image::DynamicImage;
+    let blend = |c: u8, a: u8| -> u8 { ((c as u32 * a as u32 + 255 * (255 - a as u32) + 127) / 255) as u8 };
+    match img.color() {
+        image::ColorType::La8 | image::ColorType::La16 => {
+            let la = img.into_luma_alpha8();
+            let (w, h) = la.dimensions();
+            DynamicImage::ImageLuma8(image::GrayImage::from_fn(w, h, |x, y| {
+                let p = la.get_pixel(x, y).0;
+                image::Luma([blend(p[0], p[1])])
+            }))
+        }
+        _ => {
+            let rgba = img.into_rgba8();
+            let (w, h) = rgba.dimensions();
+            DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, y| {
+                let p = rgba.get_pixel(x, y).0;
+                image::Rgb([blend(p[0], p[3]), blend(p[1], p[3]), blend(p[2], p[3])])
+            }))
+        }
+    }
 }
 
 /// **EPUB 漫画 → PDF 专用的单趟页面处理**：解码一次 → 裁边 → 按 PDF 里实际绘制的整数像素尺寸
@@ -294,8 +313,13 @@ fn paste_on_white(img: &image::DynamicImage, cw: u32, ch: u32, off_x: u32, off_y
 /// [`prepare_comic_page_for_pdf`] 的 A/B 结论：让 xochitl 自己放大偏糊，我们预放大更清晰）→ 白底补到
 /// `area` 的比例（`width:100%` 渲染正好填满阅读器的图片框，见 [`PAD_ASPECT_TOLERANCE`]）→ 编码一次，
 /// 灰度保持单分量；`grayscale`（黑白屏设备）时彩色页也转成单分量 8 位灰度（256 级，不抖动，2026-09-27 用户定）。
-/// 小于设备短边 1/3 的装饰小图只裁边，不缩放/补白（同 `pad_to_device_aspect`）。
+/// 小于设备短边 1/3 的装饰小图只裁边，不缩放/补白。
 /// 什么都不需要做时返回 `None`（原字节零损失）。
+///
+/// **注意"只缩不放"的例外——预放大**：JPEG 页明显小于阅读范围（放大倍数 ≤ [`MAX_PDF_UPSCALE`]）时，这里会先用
+/// Lanczos3 放大到阅读范围、以 [`JPEG_QUALITY_UPSCALED`]（85）编码，而不是留给阅读器放大。这是沿用上游在 xochitl 上
+/// 做的 A/B 结论（阅读器自己放大偏糊），Kindle、掌阅上没有单独比较过；要改成"只缩不放"就在这里去掉 `upscale` 分支。
+/// PNG 不预放大（无损放大体积暴涨）。
 pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, grayscale: bool) -> Option<Vec<u8>> {
     let (img, fmt, trimmed) = decode_trim_comic(bytes, grayscale)?;
     let (cw, ch) = (img.width(), img.height());
@@ -783,17 +807,49 @@ mod tests {
         assert!(downscale_for_device(b"not an image at all", test_screen()).is_none());
     }
 
+    /// 透明 PNG 漫画页：透明区域要合成成白色，不能因为丢掉 alpha 变成黑色（彩色、黑白两条路径都查）。
+    #[test]
+    fn transparent_comic_page_flattens_onto_white_not_black() {
+        use image::{GrayAlphaImage, RgbaImage};
+        // 左半不透明黑色画线区，右半完全透明（底下存的颜色是 0 = 黑）；中间一列半透明灰。
+        let (w, h) = (600u32, 1000u32);
+        let rgba = RgbaImage::from_fn(w, h, |x, y| {
+            if x < w / 2 {
+                image::Rgba([(x % 7 * 30) as u8, (y % 5 * 40) as u8, 20, 255])
+            } else if x == w / 2 {
+                image::Rgba([0, 0, 0, 128])
+            } else {
+                image::Rgba([0, 0, 0, 0])
+            }
+        });
+        let mut png = Vec::new();
+        DynamicImage::ImageRgba8(rgba).write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+        let la = GrayAlphaImage::from_fn(w, h, |x, y| if x < w / 2 { image::LumaA([(y % 9 * 20) as u8, 255]) } else { image::LumaA([0, 0]) });
+        let mut la_png = Vec::new();
+        DynamicImage::ImageLumaA8(la).write_to(&mut Cursor::new(&mut la_png), ImageFormat::Png).unwrap();
+        for (src, grayscale) in [(&png, false), (&png, true), (&la_png, false), (&la_png, true)] {
+            let (img, _, _) = decode_trim_comic(src, grayscale).expect("能解码");
+            let rgb = img.to_rgb8();
+            // 裁边会把右侧的纯白透明区当留白裁掉一部分，取裁后最右一列检查：必须是白，不能是黑。
+            let right = rgb.get_pixel(rgb.width() - 1, rgb.height() / 2).0;
+            assert_eq!(right, [255, 255, 255], "透明区应合成成白色 (grayscale={grayscale})");
+            let out = prepare_comic_page_for_epub(src, test_area(), grayscale).expect("要补白");
+            let back = image::load_from_memory(&out).unwrap().to_rgb8();
+            let p = back.get_pixel(back.width() - 1, back.height() / 2).0;
+            assert!(p.iter().all(|&c| c >= 250), "产物右侧不该发黑: {p:?} (grayscale={grayscale})");
+        }
+        let half = flatten_alpha_on_white(DynamicImage::ImageRgba8(RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 128])))).to_rgb8();
+        assert_eq!(half.get_pixel(0, 0).0, [127, 127, 127], "半透明黑合成白底 = 中灰");
+    }
+
     #[test]
     fn within_decode_budget_boundary() {
         assert!(within_decode_budget(3000, 3000), "900 万像素，等于上限，应允许");
         assert!(!within_decode_budget(3001, 3000), "超一点点也该拒绝");
     }
 
-    /// 2026-09-19 真机事故回归测试：用户真实投递一套漫画，某张扫描页解码成未压缩位图把
-    /// book-serve `VmHWM` 顶到 271MB（第一版阈值按理论估算定的 2500 万像素，真机又撞了一次
-    /// 262MB，说明理论估算不可靠，改用实测数据重新定阈值，见 `MAX_DECODE_PIXELS` 文档）。三个
-    /// 解码入口都该对超限图直接放弃处理、原样保留，不再整张解出来。5001×5000（远超新阈值
-    /// 900 万像素）足够验证真实调用链路，不需要造更大的图。
+    /// 超限图（见 `MAX_DECODE_PIXELS` 文档：阈值按实测峰值内存定）：各解码入口都该直接放弃处理、原样保留，
+    /// 不整张解出来。5001×5000 远超 900 万像素，足够验证调用链路。
     #[test]
     fn oversized_image_skipped_by_all_decode_entries() {
         let huge = jpeg_of(5001, 5000);

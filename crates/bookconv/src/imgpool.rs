@@ -1,21 +1,23 @@
 //! 图片并行处理的内存预算与线程数。
 //!
-//! 设备是双核 A55，单线程处理一本 350 页漫画约 285 秒（2026-09-20 真机实测）。图片逐张独立，可以并行；
-//! 但**绝不能 OOM**：同时在处理的图片总像素受 [`PIXEL_BUDGET`] 限制——每张图开工前按头部声明的像素数
-//! 申请额度，额度不够就等；单张图超过总预算时独占全部额度（此时不与别的图并行）。这样最坏情况的峰值
-//! 不会比原来单线程处理一张 900 万像素图（[`crate::imgopt`] 的 `MAX_DECODE_PIXELS`）更高，
-//! 典型 170 万像素的漫画页两张并行只多占几十 MB。
-//! 并行不改变任何一张图的处理结果（每张仍是同一个纯函数），输出按原条目顺序写，逐字节可复现。
+//! 图片逐张独立，可以并行（漫画一卷几百页，缩放和编码是大头）。但同时在处理的图片总像素受 [`PIXEL_BUDGET`]
+//! 限制——每张图开工前按头部声明的像素数申请额度，额度不够就等；单张图超过总预算时独占全部额度（此时不与别的图
+//! 并行）。并行不改变任何一张图的处理结果（每张仍是同一个纯函数），输出按原条目顺序写，逐字节可复现。
 
 use std::sync::{Condvar, Mutex};
 
-/// 同时在处理的图片总像素上限。实测单张按 ~12 字节/像素（解码+裁边副本+缩放+画布+编码缓冲）估，
-/// 600 万像素 ≈ 70MB 上限；两张典型漫画页（各 ~170 万像素）合计 ~340 万，远低于它，可以并行。
-pub const PIXEL_BUDGET: u64 = 6_000_000;
+/// 同时在处理的图片总像素上限：4 张单图解码上限（[`crate::imgopt::MAX_DECODE_PIXELS`]，900 万像素）＝ 3600 万像素。
+/// 实测整页处理约 9–16MB/百万像素（见 `MAX_DECODE_PIXELS` 文档），最坏情况（几张接近上限的超大图同时处理）峰值约
+/// 350–580MB，对电脑端足够安全；典型漫画页 100–200 万像素，[`worker_count`] 个线程可以全部同时开工（8 × 200 万 ＝
+/// 1600 万，远低于上限）。
+pub const PIXEL_BUDGET: u64 = 4 * crate::imgopt::MAX_DECODE_PIXELS;
 
-/// 并行工作线程数：取 CPU 核数，封顶 2（设备只有 2 核；再多只会加内存不加速）。
+/// 并行工作线程数上限。再往上加，写 zip（单线程、按顺序）和读原图会成为瓶颈，只多占内存不再明显加速。
+const MAX_WORKERS: usize = 8;
+
+/// 并行工作线程数：取 CPU 核数，封顶 [`MAX_WORKERS`]。
 pub fn worker_count() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 2)
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, MAX_WORKERS)
 }
 
 pub struct PixelBudget {
@@ -91,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_count_is_between_1_and_2() {
-        assert!((1..=2).contains(&worker_count()));
+    fn worker_count_is_between_1_and_max() {
+        assert!((1..=MAX_WORKERS).contains(&worker_count()));
     }
 }

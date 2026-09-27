@@ -20,11 +20,9 @@ pub mod imgopt;
 pub mod netimg;
 pub mod imgpool;
 pub mod naming;
-pub mod placeholder;
 pub mod probe;
 pub mod optimize;
 pub mod pdf_ingest;
-pub mod stats;
 pub mod util;
 pub mod wash;
 
