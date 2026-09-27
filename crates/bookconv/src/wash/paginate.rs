@@ -73,7 +73,7 @@ fn parse_spans(html: &str, lo: usize, hi: usize) -> Vec<Span> {
 }
 
 /// 片段里有没有读者看得见的内容：非空白文字，或图片/表格/分隔线等媒体。
-fn has_visible(fragment: &str) -> bool {
+pub(super) fn has_visible(fragment: &str) -> bool {
     static MEDIA: OnceLock<Regex> = OnceLock::new();
     static TAG: OnceLock<Regex> = OnceLock::new();
     if MEDIA.get_or_init(|| Regex::new(r#"(?i)<(img|svg|image|hr|table|video|audio|math|object)\b"#).unwrap()).is_match(fragment) {
@@ -93,7 +93,7 @@ fn text_len(fragment: &str) -> usize {
 const TITLE_TAIL_MIN_CHARS: usize = 30;
 
 /// 片段里最后一处可见内容结束的偏移（没有可见内容时 `None`）。
-fn last_visible_end(fragment: &str) -> Option<usize> {
+pub(super) fn last_visible_end(fragment: &str) -> Option<usize> {
     let mut last = None;
     let mut pos = 0;
     for m in tag_re().find_iter(fragment) {
@@ -109,6 +109,11 @@ fn last_visible_end(fragment: &str) -> Option<usize> {
         last = Some(fragment.len());
     }
     last
+}
+
+/// 片段里有闭合标签的元素：(开标签起点, 开标签终点, 闭标签起点)。
+pub(super) fn parse_spans_pub(html: &str) -> Vec<(usize, usize, usize)> {
+    parse_spans(html, 0, html.len()).into_iter().filter(|s| !s.void && s.close_end > s.close_start).map(|s| (s.open_start, s.open_end, s.close_start)).collect()
 }
 
 fn body_bounds(html: &str) -> Option<(usize, usize)> {

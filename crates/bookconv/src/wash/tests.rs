@@ -16,7 +16,8 @@
         assert_eq!(filter_decls("margin:1em 2em;padding-top:3px;padding-left:4px", &f, Spacing::Vertical), "margin:0 2em;padding-left:4px;");
         assert_eq!(filter_decls("margin:1em 2em 3em 4em", &f, Spacing::Vertical), "margin:0 2em 0 4em;");
         assert_eq!(filter_decls("margin:5pt", &f, Spacing::Vertical), "margin:0 5pt;");
-        assert_eq!(filter_decls("margin:5pt;padding:2px;line-height:1.5", &f, Spacing::All), "line-height:1.5;");
+        assert_eq!(filter_decls("margin:5pt;padding:2px;text-align:left", &f, Spacing::All), "text-align:left;");
+        assert_eq!(filter_decls("line-height:1.5;height:100vh;min-height:90vh;height:2em", &f, Spacing::Keep), "height:2em;", "行高与 vh 高度剥掉");
         assert_eq!(filter_decls("font-family: &#39;A&#39;; text-indent:2em", &f, Spacing::Keep), "text-indent:2em;", "实体分号不截断");
         assert_eq!(selector_spacing("p.calibre1"), Spacing::Vertical);
         assert_eq!(selector_spacing("div > p"), Spacing::Vertical);
@@ -428,7 +429,7 @@
         assert!(lat.contains("text-indent:1.2em") && !lat.contains("!important"));
         // keep_para_spacing 时不归零段距
         let keep = wash_css(&WashOpts { keep_para_spacing: true, ..Default::default() });
-        assert!(!keep.contains("margin-top:0") && keep.contains("p{text-indent:2em;}"), "keep-spacing 也要尾分号: {keep}");
+        assert!(!keep.contains("margin-top:0") && keep.contains("p{text-indent:2em;text-align:justify;}"), "keep-spacing 也要尾分号: {keep}");
     }
 
     #[test]

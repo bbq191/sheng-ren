@@ -44,6 +44,10 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
         if filter.contains(&prop) {
             continue;
         }
+        // 占满一屏的高度（书名页/封面页常用）加上页眉页脚会溢出成空白页（章尾空白页，2026-09-27）。
+        if (prop == "height" || prop == "min-height") && val.to_ascii_lowercase().contains("vh") {
+            continue;
+        }
         if prop == "text-indent" {
             if let Some(ind) = indent {
                 if is_positive_indent(val) {
