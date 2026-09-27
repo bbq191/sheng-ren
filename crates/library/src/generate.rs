@@ -51,8 +51,9 @@ impl Library {
         };
         let area = device.readable(format);
         let writer = if format == Format::Azw3 { azw3::WRITER_VERSION } else { "-" };
+        let cover = meta.cover.as_ref().map_or("-", |c| &c.sha256[..12]);
         let fingerprint = format!(
-            "{}|{PIPELINE_VERSION}|{}|{writer}|{}|{}x{}|{}|{}",
+            "{}|{cover}|{PIPELINE_VERSION}|{}|{writer}|{}|{}x{}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
@@ -142,7 +143,16 @@ impl Library {
             if format == Format::Pdf {
                 bookconv::pdf_ingest::optimize_pdf_trim_only(&input, &done, area, |_, _| {})?;
             } else {
-                let epub = self.epub_input(meta, &input, &tmp)?;
+                let mut epub = self.epub_input(meta, &input, &tmp)?;
+                // 书里没封面、书库里有找来的封面：放进去
+                if let Some(c) = &meta.cover {
+                    if !crate::cover::epub_has_cover(&epub) {
+                        let img = std::fs::read(self.entry_dir(&meta.id).join(&c.file)).map_err(|e| format!("读封面: {e}"))?;
+                        let with = tmp.join("with-cover.epub");
+                        crate::cover::inject_cover(&epub, &with, &img, c.file.rsplit('.').next().unwrap_or("jpg"))?;
+                        epub = with;
+                    }
+                }
                 let optimized = tmp.join("optimized.epub");
                 let opts = bookconv::optimize::OptimizeOpts { wash: Some(Default::default()), grayscale: !device.color, ..bookconv::optimize::OptimizeOpts::new(area) };
                 bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
@@ -179,7 +189,7 @@ impl Library {
     }
 
     /// 要优化的 EPUB：EPUB 直接用；有文字层的 PDF、MOBI/FB2/CBZ 等当场转换，写进 `tmp`。
-    fn epub_input(&self, meta: &Meta, input: &Path, tmp: &Path) -> Result<PathBuf, String> {
+    pub(crate) fn epub_input(&self, meta: &Meta, input: &Path, tmp: &Path) -> Result<PathBuf, String> {
         let is_epub = match meta.source() {
             Source::Stored => meta.master.ends_with(".epub"),
             Source::Original => meta.source_format == "epub",

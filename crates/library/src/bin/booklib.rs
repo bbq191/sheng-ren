@@ -3,7 +3,7 @@
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib；产物缺省放在书库的 output/<设备>/ 下。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
-use library::{Added, Built, Delivered, Library, OriginalState, Profile, SyncEvent};
+use library::{Added, Built, CoverResult, Delivered, Library, OriginalState, Profile, SyncEvent};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -19,6 +19,9 @@ const USAGE: &str = "用法:
   booklib [--library=目录] sync [--prune] [--device=<设备>…] [--out=目录] [--watch[=秒]]
       新增的入库、改过的换成新版本、移动改名的认得出；原件删了的只报告，--prune 才从书库删掉
       --device 给了就接着生成（只重建有变化的）；--watch 一直运行，每隔几秒（缺省 60）检查一次
+  booklib [--library=目录] cover [--force] [--clear] [书名片段或 id...]
+      给没有封面的书联网找原作封面（Wikidata + Open Library），生成产物时放进书里；原件不动
+      --force 重找已找过的；--clear 去掉找来的封面（找错了时）
   booklib [--library=目录] remove <id>...               从书库删掉（连同产物；原件不动）。id 用 list 里显示的完整 id
   booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
   booklib [--library=目录] devices                      列出设备（书库 profiles/ 目录里的自定义设备也算）";
@@ -171,6 +174,7 @@ fn main() {
         "add" | "remove" | "dedupe" | "list" | "devices" | "track" | "untrack" => args.check(&cmd, &[], &[]),
         "build" => args.check(&cmd, &["device", "out"], &["force"]),
         "sync" => args.check(&cmd, &["device", "out", "watch"], &["prune", "watch"]),
+        "cover" => args.check(&cmd, &[], &["force", "clear"]),
         _ => usage_error(&format!("不认识的命令 {cmd}")),
     }
     let root = args.opt("library").map(PathBuf::from).unwrap_or_else(Library::default_root);
@@ -334,6 +338,29 @@ fn main() {
                 }
                 let Some(secs) = watch else { break };
                 std::thread::sleep(std::time::Duration::from_secs(secs));
+            }
+        }
+        "cover" => {
+            let books = lib.select(&args.texts());
+            if books.is_empty() {
+                fail("没有匹配的书（booklib list 查看书库）");
+            }
+            let (force, clear) = (args.flags.iter().any(|f| f == "force"), args.flags.iter().any(|f| f == "clear"));
+            for m in &books {
+                if clear {
+                    report(lib.clear_cover(m).map(|had| if had { format!("✓ 去掉封面  {}", m.title) } else { format!("= 本来就没有找来的封面  {}", m.title) }));
+                    continue;
+                }
+                report(match lib.fetch_cover(m, force) {
+                    Ok(CoverResult::Found(c)) => Ok(format!("✓ {}  ← {}（{}）", m.title, c.work, c.source_url)),
+                    Ok(CoverResult::Existing(c)) => Ok(format!("= {}  已有找来的封面 ← {}", m.title, c.work)),
+                    Ok(CoverResult::HasCover) => Ok(format!("= {}  书里有封面", m.title)),
+                    Ok(CoverResult::NotFound(why)) => Ok(format!("? {}  没找到：{why}", m.title)),
+                    Err(e) => Err(format!("✗ {}: {e}", m.title)),
+                });
+            }
+            if !clear {
+                println!("  封面在生成产物时放进书里：booklib build --device=… 会把这些书判为过期并重建");
             }
         }
         "remove" => {
