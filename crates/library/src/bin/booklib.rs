@@ -20,7 +20,8 @@ const USAGE: &str = "用法:
       新增的入库、改过的换成新版本、移动改名的认得出；原件删了的只报告，--prune 才从书库删掉
       --device 给了就接着生成（只重建有变化的）；--watch 一直运行，每隔几秒（缺省 60）检查一次
   booklib [--library=目录] cover [--force] [--clear] [书名片段或 id...]
-      给没有封面的书联网找原作封面（Wikidata + Open Library），生成产物时放进书里；原件不动
+      给没有封面的书联网找原作封面（Wikidata + Open Library），找不到就生成（书名 + 作者头像）；
+      生成产物时放进书里，原件不动
       --force 重找已找过的；--clear 去掉找来的封面（找错了时）
   booklib [--library=目录] remove <id>...               从书库删掉（连同产物；原件不动）。id 用 list 里显示的完整 id
   booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
@@ -302,7 +303,7 @@ fn main() {
         }
         "sync" => {
             if lib.tracked().is_empty() {
-                fail("还没有跟踪任何目录：先 booklib track <目录>");
+                fail("还没有跟踪任何目录。先登记要跟踪的书目录（只需一次），例如：\n  booklib track ~/Documents/ereader/books\n之后 booklib sync 就会把它镜像进书库");
             }
             let devices = parse_devices(&args, &lib);
             let out = args.opt("out").map(PathBuf::from);
@@ -355,7 +356,7 @@ fn main() {
                     Ok(CoverResult::Found(c)) => Ok(format!("✓ {}  ← {}（{}）", m.title, c.work, c.source_url)),
                     Ok(CoverResult::Existing(c)) => Ok(format!("= {}  已有找来的封面 ← {}", m.title, c.work)),
                     Ok(CoverResult::HasCover) => Ok(format!("= {}  书里有封面", m.title)),
-                    Ok(CoverResult::NotFound(why)) => Ok(format!("? {}  没找到：{why}", m.title)),
+                    Ok(CoverResult::Generated(c, why)) => Ok(format!("◇ {}  {why}，{}", m.title, c.work)),
                     Err(e) => Err(format!("✗ {}: {e}", m.title)),
                 });
             }
