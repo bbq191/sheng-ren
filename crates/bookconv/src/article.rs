@@ -174,12 +174,15 @@ fn fill_image_marks(out: &str, tags: &[String]) -> String {
     res
 }
 
+/// 下载到的一张图：(字节, 扩展名, MIME)。
+type Fetched = (Vec<u8>, &'static str, &'static str);
+
 /// 并发下载前 [`MAX_IMAGES`] 张图（[`IMAGE_FETCH_THREADS`] 路），结果与 `imgs` 一一对应；超出上限的为 `None`。
-fn fetch_images(imgs: &[ImgRef], referer: &str) -> Vec<Option<(Vec<u8>, &'static str, &'static str)>> {
+fn fetch_images(imgs: &[ImgRef], referer: &str) -> Vec<Option<Fetched>> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
     let n = imgs.len().min(MAX_IMAGES);
-    let results: Mutex<Vec<Option<(Vec<u8>, &'static str, &'static str)>>> = Mutex::new((0..imgs.len()).map(|_| None).collect());
+    let results: Mutex<Vec<Option<Fetched>>> = Mutex::new((0..imgs.len()).map(|_| None).collect());
     if n == 0 {
         return results.into_inner().unwrap();
     }
