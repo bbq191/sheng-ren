@@ -1,20 +1,23 @@
-//! HTML 规整：body_inner / split_blocks / fix_internal_links —— 移植自 download.py + epub.py。
-//! regex crate 不支持 lookahead，`&(?!#?\w+;)` 的转义手写实现。
+//! XHTML 规则：同章内链规整、单标签重复 id 折叠与全书 id 去重、脚注（识别/收集/就地重排、互指环拆解）、
+//! e-ink 提对比与字体锁剥离。标签与属性的解析统一走 `crate::html`。
 //!
-//! 子模块：`basic`（正文提取/块切分/内链规整/id 去重）· `footnote_cycles`（脚注互指环拆解）· `footnote`（脚注识别/收集/
-//! 就地重排/内联）· `contrast`（e-ink 提对比、字体锁剥离）。
+//! 子模块：`basic`（内链规整/id 去重）· `footnote_cycles`（脚注互指环拆解）· `footnote`（脚注识别/收集/就地重排）·
+//! `contrast`（e-ink 提对比、字体锁剥离）。
 
+use crate::html::{self, Edit};
+use crate::util::xml_escape;
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-// 按职责拆成子模块（原 `htmlproc.rs` 一个文件 1400 行、6 个测试模块与代码交错）；`pub` 项在这里 glob re-export，
-// `crate::htmlproc::xxx` 旧路径不变；兄弟模块之间互相调用也走这层（各子模块 `use super::*`）。
 mod basic;
 mod contrast;
 mod footnote;
 mod footnote_cycles;
 
-pub use self::basic::*;
-pub use self::contrast::*;
-pub use self::footnote::*;
-pub use self::footnote_cycles::*;
+// 对外（优化器、EPUB 组装、MOBI 转换、PDF 入库）用到的项。
+pub use self::basic::{collapse_dup_id_attrs, dedup_ids_in_chapter, fix_internal_links};
+pub(crate) use self::basic::plan_id_renames;
+pub use self::contrast::{achromatic_dark, boost_contrast_css, boost_text_contrast, strip_font_locks};
+pub use self::footnote::{collect_footnote_notes, fix_duokan_markers, normalize_self_hrefs, preserve_relink_footnotes, referenced_note_frags};
+pub use self::footnote_cycles::break_footnote_cycles;

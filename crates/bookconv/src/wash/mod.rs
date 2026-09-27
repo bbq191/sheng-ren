@@ -18,23 +18,27 @@
 //! 6. 自动目录（= `--use-auto-toc --level1-toc //h:h1 --level2-toc //h:h2`）：缺省**仅在书无目录时**从 h1/h2 生成
 //!    `toc.ncx` + `nav.xhtml`（xochitl 两者都认）；`AutoToc::Always` 强制重建（原目录坏掉的书）。
 //! 7. 单标签重复 `id=` 折叠（`collapse_dup_id_attrs`）：非法 XHTML 会让 xochitl 整章白屏，这里先修、质量门再拦。
+//! 8. 全书 id 去重（`ids.rs`）：跨文件重复的 id 改名，全书指向它的链接一起改。
 //!
+//! 标签、属性、纯文本、可见性一律走 `crate::html`（完整属性名、两种引号、注释不当标签）。
 //! 全部规则幂等：注入块带 `class="eink-wash"` 标记，重复过不再叠加。
+use crate::html::{self, Edit};
 use crate::htmlproc::collapse_dup_id_attrs;
 // zip 条目与 zip 内 posix 路径工具已迁到 `epubzip`；这里 re-export，保住 `crate::wash::Entry`/`wash::resolve` 等旧路径。
 pub use crate::epubzip::{dir_of, is_html, is_html_entry, percent_decode, posix_norm, relative_to, resolve, Entry};
 use crate::util::{is_image_ext, xml_escape};
 use regex::Regex;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-// 按职责拆成子模块（原 `wash.rs` 一个文件 2000+ 行）；子模块内的 `pub` 项在这里 glob re-export，`crate::wash::xxx` 旧路径不变，
-// 兄弟模块之间的互相调用也走这层（各子模块 `use super::*`）。
+// 按职责拆成子模块（原 `wash.rs` 一个文件 2000+ 行）；兄弟模块之间的互相调用走这层（各子模块 `use super::*`）。
 mod cover;
 mod css;
 mod dead_refs;
 mod drm;
 mod empty_pages;
+mod ids;
 mod layout;
 mod ncx_fix;
 mod opf;
@@ -42,17 +46,27 @@ mod paginate;
 mod toc;
 mod typeset;
 
-pub use self::cover::*;
-pub use self::css::*;
+// 对外（优化器、质量门、书库、AZW3 写出器、统计）用到的项；其余只在清洗层内部用。
+pub use self::cover::ensure_cover_declared;
+pub use self::css::{filter_css, wash_html};
+pub use self::drm::{encrypted_targets, real_drm_items, PSEUDO_DRM_SAFE_EXTS};
+pub(crate) use self::drm::cipher_reference_re;
+pub use self::opf::{cover_meta_re, manifest_items, opf_dc, parse_opf, tag_attr, ManifestItem, Opf, OpfDc};
+pub use self::toc::{href_re, is_toc_file, toc_entry_count};
+pub use self::typeset::{count_dup_id_tags, wash_css};
+pub use crate::html::plain_text;
+
+use self::css::*;
 use self::dead_refs::*;
-pub use self::drm::*;
+use self::drm::strip_pseudo_drm;
 use self::empty_pages::*;
+use self::ids::dedup_ids_across_book;
 use self::layout::*;
 use self::ncx_fix::*;
-use self::paginate::*;
-pub use self::opf::*;
-pub use self::toc::*;
-pub use self::typeset::*;
+use self::opf::{find_opf, opf_book_title, opf_unique_identifier};
+use self::paginate::paginate_sections;
+use self::toc::*;
+use self::typeset::*;
 
 #[cfg(test)]
 mod tests;
@@ -137,6 +151,8 @@ pub struct WashReport {
     pub paginate_notes_moved: usize,
     /// 书自带目录漏掉、分页时补进目录的节数。
     pub toc_sections_added: usize,
+    /// 跨文件重复、被改名的 id 数（全书指向它们的链接一起改）。见 `ids.rs`。
+    pub dup_ids_renamed: usize,
     /// 文件末尾删掉的空元素/换行数（章尾空白页）。
     pub trailing_blanks_removed: usize,
     /// 去掉了下边距/之后分页的样式表数（包住章节结尾的容器）。
@@ -185,16 +201,19 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
     };
     let opts = &opts;
     // 书的语言标签：OPF `dc:language` 优先，没有就按探测到的主语言。补给缺 lang 的 <html>。
-    let lang_tag = find_opf(entries)
+    let opf_idx = find_opf(entries);
+    let lang_tag = opf_idx
         .and_then(|i| {
             static DC_LANG: OnceLock<Regex> = OnceLock::new();
             let t = String::from_utf8_lossy(&entries[i].data);
             DC_LANG.get_or_init(|| Regex::new(r#"(?s)<dc:language\b[^>]*>\s*([A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*)\s*</dc:language>"#).unwrap()).captures(&t).map(|c| c[1].to_string())
         })
         .unwrap_or_else(|| if opts.lang == LangMode::Latin { "en".into() } else { "zh".into() });
+    // 新建目录时的标题按书的语言（中文"目录"、其它"Contents"）。
+    let heading = toc_title(opts.lang);
     // 外链 wash css 的 zip 路径（放 OPF 同目录；无 OPF 兜底放根）。排版规则写这里、逐 html 加 <link>——
     // xochitl 只认外链 css（内联 <style> 无视），见 WASH_CSS_NAME 注。
-    let css_path = match find_opf(entries) {
+    let css_path = match opf_idx {
         Some(i) => {
             let d = dir_of(&entries[i].name);
             if d.is_empty() { WASH_CSS_NAME.to_string() } else { format!("{d}/{WASH_CSS_NAME}") }
@@ -220,14 +239,16 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
             }
         }
     }
-    add_wash_css_entry(entries, &css_path, &wash_css(opts));
+    add_wash_css_entry(entries, opf_idx, &css_path, &wash_css(opts));
     fix_ncx_manifest_id(entries, &mut rep);
-    restructure_existing_toc_parts(entries, opts.auto_toc, &mut rep);
-    auto_toc(entries, opts.auto_toc, &mut rep);
+    restructure_existing_toc_parts(entries, opts.auto_toc, heading, &mut rep);
+    auto_toc(entries, opts.auto_toc, heading, &mut rep);
     // 分页放在自动目录之后：自动目录给标题补的 id 已经在，分页改写目录链接时能对上。
     if opts.paginate {
-        paginate_sections(entries, &mut rep);
+        paginate_sections(entries, heading, &mut rep);
     }
+    // 全书 id 去重放在分页之后（拆出来的份不会新增重复 id，但链接要按拆好后的文件改）。
+    dedup_ids_across_book(entries, &mut rep);
     // 章尾空白页放在分页之后：拆出来的每一份文件末尾也要清。
     remove_chapter_end_blanks(entries, &mut rep);
     fix_ncx_uid(entries, &mut rep);
@@ -236,13 +257,13 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
 }
 
 /// 新增（或重优化时更新）外链 wash css 文件，并往 OPF manifest 补一条 `<item>`（幂等）。
-fn add_wash_css_entry(entries: &mut Vec<Entry>, css_path: &str, content: &str) {
+fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path: &str, content: &str) {
     if let Some(e) = entries.iter_mut().find(|e| e.name == css_path) {
         e.data = content.as_bytes().to_vec();
     } else {
         entries.push(Entry { name: css_path.to_string(), data: content.as_bytes().to_vec() });
     }
-    if let Some(oi) = find_opf(entries) {
+    if let Some(oi) = opf_idx {
         let opf_dir = dir_of(&entries[oi].name).to_string();
         let href = relative_to(&opf_dir, css_path);
         let mut text = String::from_utf8_lossy(&entries[oi].data).into_owned();

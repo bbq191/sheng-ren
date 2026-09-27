@@ -1,10 +1,6 @@
-//! 脚注：识别 noteref/aside/duokan/QQ 阅读各形态，收集被引用的注释块，就地关联重排（`preserve_relink_footnotes`）或内联（`inline_footnotes`）。
+//! 脚注：识别 noteref/aside/duokan 各形态，收集被引用的注释块，就地关联重排（`preserve_relink_footnotes`）。
 use super::*;
 
-pub(super) fn aside_footnote_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?si)<aside\b[^>]*\btype="footnote"[^>]*>(.*?)</aside>"#).unwrap())
-}
 pub(super) fn noteref_a_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r#"(?si)<a\b([^>]*\btype="noteref"[^>]*)>(.*?)</a>"#).unwrap())
@@ -15,10 +11,6 @@ pub(super) fn sup_noteref_re() -> &'static Regex {
     R.get_or_init(|| {
         Regex::new(r#"(?si)<sup[^>]*>\s*<a\b([^>]*\btype="noteref"[^>]*)>(.*?)</a>\s*</sup>"#).unwrap()
     })
-}
-pub(super) fn qqfootnote_img_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?si)<img\b([^>]*\bclass="qqreader-footnote"[^>]*?)/?>"#).unwrap())
 }
 /// 微读 **duokan 图片脚注**标记：`<sup..><a href="#frag">&lt;img ... class="duokan-footnote.." ../&gt;</a></sup>`。
 /// 与 qqreader 版不同：注释块**已在同文件** `<p id="frag">`（前向锚有效），且标记里的 `<img>` 被
@@ -44,23 +36,27 @@ pub(super) fn duokan_footnote_img_re() -> &'static Regex {
 /// `ebook-convert` 的固定写法）归一成裸 `#frag`。reMarkable 只跟同文件裸锚；且优化器各 pass
 /// （`break_footnote_cycles` 只认裸锚、`referenced_note_frags` 把带路径的一律当跨文件尾注搬走）
 /// 都以"裸锚=同文件"为前提，不归一会把同章脚注误当跨文件处理（标记丢 id、注释块被搬成无效嵌套）。
-/// 按路径末段（basename）比对；非本文件的跨文件 href、无 fragment 的 href 不动。
-pub fn normalize_self_hrefs(html: &str, own_basename: &str) -> String {
-    static R: OnceLock<Regex> = OnceLock::new();
-    if own_basename.is_empty() {
+/// `own` 传本文件在 zip 里的完整路径时按路径解析比对（2026-09-27 审计：只比文件名会把 `a/x.html` 里指向
+/// `../b/x.html#f` 的链接误当本文件）；只传文件名（不含 `/`）时退回按路径末段比对。非本文件、无 fragment 的 href 不动。
+pub fn normalize_self_hrefs(html: &str, own: &str) -> String {
+    if own.is_empty() {
         return html.to_string();
     }
-    R.get_or_init(|| Regex::new(r##"(?i)href="([^"#]+)#([^"]*)""##).unwrap())
-        .replace_all(html, |c: &regex::Captures| {
-            let path = c.get(1).unwrap().as_str();
-            let base = path.rsplit('/').next().unwrap_or(path);
-            if base == own_basename {
-                format!("href=\"#{}\"", c.get(2).unwrap().as_str())
-            } else {
-                c.get(0).unwrap().as_str().to_string()
-            }
-        })
-        .into_owned()
+    let own_dir = own.contains('/').then(|| crate::epubzip::dir_of(own));
+    html::edit_attrs(html, &["href"], |_, a| {
+        let (path, frag) = html::split_href(a.value);
+        let Some(frag) = frag else { return Edit::Keep };
+        if path.is_empty() || html::is_external(path) {
+            return Edit::Keep;
+        }
+        let path = crate::epubzip::percent_decode(path);
+        let same = match own_dir {
+            Some(d) => crate::epubzip::resolve(d, &path) == own,
+            None => path.rsplit('/').next() == Some(own),
+        };
+        if same { Edit::Set(format!("#{frag}")) } else { Edit::Keep }
+    })
+    .into_owned()
 }
 /// 从（转义的）img 内层抽注释序号：`alt="注释12"` → `12`。取不到返回 None（调用方用章内计数兜底）。
 pub(super) fn duokan_note_num(img_inner: &str) -> Option<String> {
@@ -87,28 +83,18 @@ pub(super) fn duokan_note_block_re() -> &'static Regex {
         Regex::new(r##"(?si)<p\b[^>]*\bid="(a_\d+_\d+)"[^>]*>\s*<p\b([^>]*)>(.*?)</p>\s*</p>"##).unwrap()
     })
 }
+/// 属性串里 `href` 的锚点（`href="x.html#f"` / `href='#f'` → `f`）。
 pub(super) fn href_fragment(attrs: &str) -> Option<String> {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?i)href="[^"]*#([^"]+)""#).unwrap())
-        .captures(attrs)
-        .map(|c| c.get(1).unwrap().as_str().to_string())
-}
-pub(super) fn alt_text(attrs: &str) -> Option<String> {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?i)alt="([^"]*)""#).unwrap())
-        .captures(attrs)
-        .map(|c| c.get(1).unwrap().as_str().to_string())
-}
-pub(super) fn esc_text(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    html::attr_value(attrs, "href").and_then(|v| html::split_href(v).1).filter(|f| !f.is_empty()).map(str::to_string)
 }
 /// aside 注释内层的回链 `href="partXXXX.html#frag"` 去跨文件前缀成同章 `href="#frag"`
 /// （内联后 marker 与注释同章，回链落点也在该章 → 同章可返回）。无 fragment 的 href 不动。
 pub(super) fn deprefix_footnote_hrefs(s: &str) -> String {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?i)href="[^"]*(#[^"]*)""#).unwrap())
-        .replace_all(s, r#"href="$1""#)
-        .into_owned()
+    html::edit_attrs(s, &["href"], |_, a| match html::split_href(a.value) {
+        (p, Some(f)) if !p.is_empty() => Edit::Set(format!("#{f}")),
+        _ => Edit::Keep,
+    })
+    .into_owned()
 }
 
 /// 注释正文外层包一层带 `id` 落点的标签：用 `<div>` 不用 `<p>`。`collect_footnote_notes` 只搬
@@ -117,24 +103,6 @@ pub(super) fn deprefix_footnote_hrefs(s: &str) -> String {
 /// 真机渲染表现；`<div>` 天然兼容块级/内联两种子内容，同样能挂 `id` 当锚点落点，零风险替换。
 fn footnote_block(frag: &str, inner: &str) -> String {
     format!("<div id=\"{frag}\">{inner}</div>")
-}
-
-/// 提取一章里所有 `<aside ... id="X" type="footnote">…</aside>`，从正文移除，
-/// 返回 (清理后正文, [(id, 注释内层html)])。内层含回链 `<a>` + 注释文本，原样保留。
-pub fn collect_footnote_asides(html: &str) -> (String, Vec<(String, String)>) {
-    let mut index: Vec<(String, String)> = Vec::new();
-    let cleaned = aside_footnote_re()
-        .replace_all(html, |c: &regex::Captures| {
-            let whole = c.get(0).unwrap().as_str();
-            let inner = c.get(1).unwrap().as_str();
-            let open_tag = &whole[..whole.find('>').unwrap_or(whole.len())];
-            if let Some(idc) = id_re().captures(open_tag) {
-                index.push((idc.get(1).unwrap().as_str().to_string(), inner.to_string()));
-            }
-            String::new()
-        })
-        .into_owned();
-    (cleaned, index)
 }
 
 // ===== 优化器：跨文件普通尾注收集 + 全书 id 去重 =====
@@ -152,10 +120,8 @@ pub(super) fn note_semantic(open_tag: &str) -> bool {
 }
 /// href 里的**跨文件** fragment：`href="非空路径#frag"` → Some(frag)；同文件 `href="#frag"` → None。
 pub(super) fn href_crossfile_fragment(attrs: &str) -> Option<String> {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r##"(?i)href="([^"#]+)#([^"]+)""##).unwrap())
-        .captures(attrs)
-        .map(|c| c.get(2).unwrap().as_str().to_string())
+    let (path, frag) = html::split_href(html::attr_value(attrs, "href")?);
+    frag.filter(|f| !path.is_empty() && !f.is_empty()).map(str::to_string)
 }
 pub(super) fn aside_any_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -188,8 +154,8 @@ pub fn referenced_note_frags(html: &str) -> Vec<String> {
             out.push(f);
         }
     }
-    for m in a_open_re().find_iter(html) {
-        if let Some(f) = href_crossfile_fragment(m.as_str()) {
+    for t in html::tags(html).filter(|t| t.kind == html::TagKind::Open && t.is("a")) {
+        if let Some(f) = href_crossfile_fragment(&html[t.start..t.end]) {
             out.push(f);
         }
     }
@@ -204,8 +170,8 @@ pub fn referenced_note_frags(html: &str) -> Vec<String> {
 /// 防把普通跨文件交叉引用误当尾注搬走；下载管线传 **false**——微读注释块 class 是混淆名（如
 /// `class_s1r`）无语义，但 marker（noteref/纯跨文件`<a>`）就是脚注引用，故"**id 被 marker 引用**"
 /// 本身即注释的充分证据（referenced 已只含脚注 marker 的 frag），不再要 class 语义（13·67 的 `<p>` 注释即此）。
-/// `html` 里有没有某处 `id="X"`（不分大小写、不看词边界，逐个出现位置都查）的 X 在 `referenced` 里。
-/// 是 `id_re` 在任意子串（开标签）上可能匹配到的值的超集，所以返回 `false` 时可以断定没有块会被搬走。
+/// `html` 里有没有某处 `id="X"`/`id='X'`（不分大小写、不看词边界，逐个出现位置都查）的 X 在 `referenced` 里。
+/// 是开标签上 `id` 属性可能取到的值的超集，所以返回 `false` 时可以断定没有块会被搬走。
 fn mentions_referenced_id(html: &str, referenced: &std::collections::HashSet<String>) -> bool {
     if referenced.is_empty() {
         return false;
@@ -213,9 +179,9 @@ fn mentions_referenced_id(html: &str, referenced: &std::collections::HashSet<Str
     let b = html.as_bytes();
     let mut i = 0;
     while i + 4 <= b.len() {
-        if b[i..i + 4].eq_ignore_ascii_case(b"id=\"") {
-            let start = i + 4;
-            if let Some(len) = b[start..].iter().position(|&c| c == b'"') {
+        if b[i..i + 3].eq_ignore_ascii_case(b"id=") && matches!(b[i + 3], b'"' | b'\'') {
+            let (q, start) = (b[i + 3], i + 4);
+            if let Some(len) = b[start..].iter().position(|&c| c == q) {
                 // start/start+len 都落在 ASCII 字节（`"` 之后、`"` 处）上，必是字符边界。
                 if len > 0 && referenced.contains(&html[start..start + len]) {
                     return true;
@@ -252,8 +218,8 @@ pub fn collect_footnote_notes(
                 if is_div && inner.contains("<div") {
                     return whole.to_string(); // 嵌套 div：欠匹配风险，原样保留不搬
                 }
-                let id = match id_re().captures(open).map(|m| m.get(1).unwrap().as_str().to_string()) {
-                    Some(i) => i,
+                let id = match html::attr_value(open, "id").filter(|v| !v.is_empty()) {
+                    Some(i) => i.to_string(),
                     None => return whole.to_string(),
                 };
                 if referenced.contains(&id) && (!require_semantic || note_semantic(open)) {
@@ -268,83 +234,7 @@ pub fn collect_footnote_notes(
     (cleaned, index)
 }
 
-/// 内联本章脚注。`index`=全书 footnote-id→注释内层html（导入版跨章注释）。
-/// 处理本章 marker（导入版 noteref <a> + 数字版 qqreader-footnote <img>），收集对应注释到
-/// 章末**可见** `<div class="footnotes">` 区，每条 `<p id="frag">`；marker 换成朴素同章
-/// 锚点 `<a href="#frag">`。**不用 EPUB3 epub:type/aside**——实测 xochitl 会把 footnote 语义
-/// 的 aside 隐藏且不渲染 noteref 为可点链接（点不了、无黑块）。朴素同章锚点是真机验证过唯一会跳的形态。
-/// `qfn_counter` 跨章累积，保证数字版自造 id **全书唯一**（reMarkable 锚点是全书空间，
-/// 每章从 1 重编 id 会撞车跳错章）。pipeline 逐章调用时传同一个计数器。
-pub fn inline_footnotes(
-    html: &str,
-    index: &std::collections::HashMap<String, String>,
-    qfn_counter: &mut usize,
-) -> String {
-    let mut notes: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // 1) 导入版：<a type="noteref" href="...#frag">N</a> → <a href="#frag">N</a>（保留原角标文本）
-    let s1 = noteref_a_re()
-        .replace_all(html, |c: &regex::Captures| {
-            let attrs = c.get(1).unwrap().as_str();
-            let marker = c.get(2).unwrap().as_str().trim();
-            match href_fragment(attrs).and_then(|f| index.get(&f).map(|t| (f, t))) {
-                Some((frag, text)) => {
-                    if seen.insert(frag.clone()) {
-                        let inner = deprefix_footnote_hrefs(text);
-                        notes.push(footnote_block(&frag, &inner));
-                    }
-                    format!("<a href=\"#{frag}\">{}</a>", esc_text(marker))
-                }
-                None => c.get(0).unwrap().as_str().to_string(), // 注释没抓到 → 保留原样
-            }
-        })
-        .into_owned();
-
-    // 1b) 纯跨文件 marker：<a href="其他文件#frag">N</a>（无 noteref，微读部分脚注是这形态）。
-    // noteref pass 已把 noteref 改成同文件 #frag（不再匹配 href_crossfile_fragment）；此处只认仍是
-    // 跨文件、且 frag 命中 index（注释块已被 collect_footnote_asides 收走）的纯 <a> → 改同章
-    // <a href="#frag"> + 注释内联本章。不修则该注释既断链、又因被收走而**丢失**（13·67「大帮3」即此形态）。
-    let s1b = a_generic_re()
-        .replace_all(&s1, |c: &regex::Captures| {
-            let attrs = c.get(1).unwrap().as_str();
-            let content = c.get(2).unwrap().as_str().trim();
-            match href_crossfile_fragment(attrs).and_then(|f| index.get(&f).map(|t| (f, t))) {
-                Some((frag, text)) => {
-                    if seen.insert(frag.clone()) {
-                        notes.push(footnote_block(&frag, &deprefix_footnote_hrefs(text)));
-                    }
-                    format!("<a href=\"#{frag}\">{}</a>", esc_text(content))
-                }
-                None => c.get(0).unwrap().as_str().to_string(),
-            }
-        })
-        .into_owned();
-
-    // 2) 数字版：<img class="qqreader-footnote" alt="注释全文"> → <a href="#qfnG"><sup>L</sup></a>
-    // id 用全局递增 G（全书唯一，防跨章撞车），<sup> 显示章内序号 L（用户看着自然从 1 起）。
-    let mut local = 0usize;
-    let s2 = qqfootnote_img_re()
-        .replace_all(&s1b, |c: &regex::Captures| {
-            let alt = alt_text(c.get(1).unwrap().as_str()).unwrap_or_default();
-            local += 1;
-            *qfn_counter += 1;
-            let id = format!("qfn{}", *qfn_counter);
-            notes.push(format!("<p id=\"{id}\">{local}. {}</p>", esc_text(&alt)));
-            format!("<a href=\"#{id}\"><sup>{local}</sup></a>")
-        })
-        .into_owned();
-
-    // 3) duokan 版：注释块已同文件（前向锚有效），只把死图标记换成可点上标（共用于导入优化器路径）。
-    let s3 = fix_duokan_markers(&s2);
-
-    if notes.is_empty() {
-        return s3;
-    }
-    format!("{s3}\n<hr/>\n<div class=\"footnotes\">\n{}\n</div>", notes.join("\n"))
-}
-
-/// 修微读 **duokan 图片脚注标记**（下载路径 `inline_footnotes` 与导入优化器 `optimize_epub` **共用**）：
+/// 修微读 **duokan 图片脚注标记**（导入优化器 `optimize_epub` 用）：
 /// `<sup><a href="#frag">&lt;img class="duokan-footnote.." alt="注释N"/&gt;</a></sup>`
 /// → `<a href="#frag"><sup>N</sup></a>`。duokan 的注释块**已在同文件** `<p id="frag">`（前向锚有效），
 /// 故只需把"实体转义 + 远程 CDN 图 = 离线不可点"的死图标记换成干净可点上标数字、保留 href；注释块不动。
@@ -366,11 +256,8 @@ pub fn fix_duokan_markers(html: &str) -> String {
             (true, Some(frag)) => {
                 local += 1;
                 let num = duokan_note_num(img_inner).unwrap_or_else(|| local.to_string());
-                let id_attr = id_re()
-                    .captures(a_attrs)
-                    .map(|c| format!(" id=\"{}\"", c.get(1).unwrap().as_str()))
-                    .unwrap_or_default();
-                format!("<a href=\"#{frag}\"{id_attr}><sup>{}</sup></a>", esc_text(&num))
+                let id_attr = html::attr_value(a_attrs, "id").map(|v| format!(" id=\"{v}\"")).unwrap_or_default();
+                format!("<a href=\"#{frag}\"{id_attr}><sup>{}</sup></a>", xml_escape(&num))
             }
             _ => whole.to_string(),
         }
@@ -398,19 +285,15 @@ pub fn fix_duokan_markers(html: &str) -> String {
 }
 
 /// 注释正文去标签成纯内联文本（供 `FootnoteMode::Inline` 塞进 `<span>`，杜绝块级标签造成非法嵌套
-/// →xochitl 严格 XML 整章白屏）。折叠空白、还原常见空格实体。
+/// →xochitl 严格 XML 整章白屏）。折叠空白；结果要写回 XHTML，所以再转义一次。
 pub(super) fn inline_note_text(html: &str) -> String {
-    static TAG: OnceLock<Regex> = OnceLock::new();
-    let tag = TAG.get_or_init(|| Regex::new(r"(?s)<[^>]*>").unwrap());
-    let t = tag.replace_all(html, "");
-    t.replace("&nbsp;", " ").replace("&#160;", " ").split_whitespace().collect::<Vec<_>>().join(" ")
+    xml_escape(&html::plain_text(html))
 }
 
 /// 优化器专用脚注处理：**尽量保留 marker 原始内容/样式**(sup/上标不动；图标例外，见下方 `make` 里
 /// 2026-09-23 的改动——无宽高约束的 `<img>` 图标真机会撑巨大，丢弃)，只把 `<a>`
 /// 上 xochitl 不认的 `epub:type` 去掉、href 规整成同章 `#frag`(xochitl 唯一会跳的形态)；
 /// 注释块(index 提供，跨文件也行)收集、移到本章末尾可见 `<div class="footnotes">`。
-/// 与 inline_footnotes 的区别：那个为微信读书**重造** marker，这个为第三方书**尽量保留脚标原样**。
 pub fn preserve_relink_footnotes(html: &str, index: &std::collections::HashMap<String, String>, mode: crate::optimize::FootnoteMode) -> String {
     use crate::optimize::FootnoteMode;
     let mut appended: Vec<String> = Vec::new();
@@ -504,58 +387,21 @@ pub fn preserve_relink_footnotes(html: &str, index: &std::collections::HashMap<S
 #[cfg(test)]
 mod footnote_inline_tests {
     use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn imported_crossfile_footnote_inlined() {
-        // 《13 67》真实形态：注释章的 aside（回链跨文件）+ 正文章的 noteref marker。
-        let note_chapter = r#"<p>正文正文</p><aside id="a4ZX" type="footnote" class="class_svk"><a href="part0005.html#a507">1</a>. 警司注释文本</aside>"#;
-        let (cleaned, idx) = collect_footnote_asides(note_chapter);
-        assert!(!cleaned.contains("<aside"), "aside 未从注释章正文移除: {cleaned}");
-        assert_eq!(idx.len(), 1);
-        assert_eq!(idx[0].0, "a4ZX");
-
-        let mut map: HashMap<String, String> = HashMap::new();
-        for (k, v) in idx {
-            map.insert(k, v);
-        }
-        let text_chapter = r#"<p>那位<a href="part0011.html#a4ZX" type="noteref" class="class_s4yp"> 1 </a>警司</p>"#;
-        let out = inline_footnotes(text_chapter, &map, &mut 0);
-        assert!(out.contains(r##"<a href="#a4ZX">1</a>"##), "marker 未变朴素同章锚点: {out}");
-        assert!(!out.contains("epub:type"), "不应残留 epub:type: {out}");
-        assert!(out.contains(r##"<div id="a4ZX">"##), "章末缺可见注释 <div id>: {out}");
-        assert!(out.contains(r##"<div class="footnotes">"##), "缺章末注释区: {out}");
-        assert!(out.contains("警司注释文本"), "注释文本丢失: {out}");
-        assert!(out.contains(r##"href="#a507""##), "回链未去跨文件前缀: {out}");
-        assert!(!out.contains("part0005.html"), "回链仍带 part 前缀: {out}");
-    }
-
-    #[test]
-    fn digital_alt_footnote_inlined() {
-        // 《赎罪》真实形态：脚注就是带 alt 的图标 img。
-        let ch = r#"<p>海神喷泉<img class="qqreader-footnote" alt="贝尼尼的杰作，位于罗马。" src="https://res.weread.qq.com/wrepub/epub_22781957_2" data-w="50px" />后续</p>"#;
-        let out = inline_footnotes(ch, &HashMap::new(), &mut 0);
-        assert!(!out.contains("<img"), "脚注图标 img 未被替换: {out}");
-        assert!(out.contains(r##"<a href="#qfn1"><sup>1</sup></a>"##), "img 未变同章锚点: {out}");
-        assert!(out.contains(r##"<p id="qfn1">1. "##), "缺章末注释 <p id>: {out}");
-        assert!(out.contains("贝尼尼的杰作"), "alt 注释文本丢失: {out}");
-    }
-
-    #[test]
-    fn no_footnote_untouched() {
-        let ch = "<p>普通正文，无脚注</p>";
-        assert_eq!(inline_footnotes(ch, &HashMap::new(), &mut 0), ch);
-    }
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn normalize_self_hrefs_only_own_file() {
         let html = r##"<a href="part0004.html#a_1">本文件</a><a href="text/part0004.html#b">带目录本文件</a><a href="part0005.html#c">别的文件</a><a href="part0004.html">无锚</a><a href="#d">已裸</a>"##;
         let out = normalize_self_hrefs(html, "part0004.html");
         assert!(out.contains(r##"href="#a_1""##), "本文件应归一: {out}");
-        assert!(out.contains(r##"href="#b""##), "带目录的本文件应归一: {out}");
+        assert!(out.contains(r##"href="#b""##), "只给文件名时按末段比对: {out}");
         assert!(out.contains(r##"href="part0005.html#c""##), "跨文件不动: {out}");
         assert!(out.contains(r##"href="part0004.html">"##), "无 fragment 不动: {out}");
         assert_eq!(normalize_self_hrefs(html, ""), html, "空 basename 原样");
+        // 给完整路径时按路径解析：同名不同目录的文件不是本文件
+        let h = r##"<a href="../b/x.html#f">别处同名</a><a href='x.html#g'>本文件</a><a href="../a/x.html#h">绕一圈回来</a>"##;
+        let out = normalize_self_hrefs(h, "OEBPS/a/x.html");
+        assert_eq!(out, r##"<a href="../b/x.html#f">别处同名</a><a href='#g'>本文件</a><a href="#h">绕一圈回来</a>"##);
     }
 
     #[test]
@@ -571,7 +417,7 @@ mod footnote_inline_tests {
 
     #[test]
     fn fix_duokan_markers_shared_fn() {
-        // 共用函数（下载 inline_footnotes + 导入优化器都调）：多标记按 alt 号、非 duokan 的转义 img 不碰。
+        // 多标记按 alt 号、非 duokan 的转义 img 不碰。
         let html = r##"<sup><a href="#a_1_1">&lt;img alt="注释1" class="duokan-footnote1" src="https://res.weread.qq.com/a.png"/&gt;</a></sup>正文<sup><a href="#a_1_2">&lt;img alt="注释2" class="duokan-footnote1" src="https://res.weread.qq.com/b.png"/&gt;</a></sup>
 <sup><a href="#x">&lt;img alt="别的" class="other-icon"/&gt;</a></sup>"##;
         let out = fix_duokan_markers(html);
@@ -589,67 +435,28 @@ mod footnote_inline_tests {
         // 真实结构：注释块是无效嵌套 <p>、内含悬空回链 <a href="#c_8_1">。
         let ch = r##"<p>喝了太多冰镇台克利<sup class="calibre4"><a href="#a_8_1">&lt;img alt="注释1" class="duokan-footnote1" src="https://res.weread.qq.com/x_00003.png" data-w="48px" data-ratio="1.000"/&gt;</a></sup>。</p>
 <p id="a_8_1"><p class="pfootnotetext"><a class="calibre6" href="#c_8_1">一种由朗姆酒、柠檬汁和糖混合的加冰鸡尾酒。</a></p></p>"##;
-        let out = inline_footnotes(ch, &HashMap::new(), &mut 0);
+        let out = fix_duokan_markers(ch);
         assert!(out.contains(r##"<a href="#a_8_1"><sup>1</sup></a>"##), "标记未换成可点上标: {out}");
         assert!(!out.contains("&lt;img"), "转义死图标记未清除: {out}");
-        assert!(!out.contains("duokan-footnote"), "duokan img 未替换: {out}");
         assert!(!out.contains("res.weread.qq.com"), "远程 CDN 图未去掉: {out}");
         assert!(out.contains("加冰鸡尾酒"), "注释文本不该丢: {out}");
         // 悬空回链去链（否则 reMarkable 判互指对整对丢弃、正向点不动）。
         assert!(!out.contains(r##"href="#c_8_1""##), "注释回链未去链: {out}");
-        assert!(!out.contains("<a class=\"calibre6\""), "回链 <a> 未去掉: {out}");
         // 嵌套 <p> 拍平成合法单段（成簇相邻时无效嵌套会被 reMarkable 吞一条=缺一条）。
         assert!(out.contains(r##"<p id="a_8_1" class="pfootnotetext">"##), "嵌套 p 未拍平: {out}");
-        assert!(!out.contains("<p id=\"a_8_1\">\n"), "外层空 p 仍在(未拍平): {out}");
-    }
-
-    #[test]
-    fn plain_crossfile_marker_inlined() {
-        // 《13·67》第441页「大帮3」真实形态：marker 是**纯 <a>（无 noteref）**、跨文件、指向被
-        // collect_footnote_asides 收走的 aside。旧 inline_footnotes 只认 noteref → 漏掉 → 注释既断链
-        // 又丢失。pass 1b 应据 index 命中把它内联。
-        let note_chapter = r#"<aside id="a51T" type="footnote"><a href="part0038.html#a541">3</a>. 高级督察俗称大帮</aside>"#;
-        let (cleaned, idx) = collect_footnote_asides(note_chapter);
-        assert!(!cleaned.contains("<aside"));
-        let mut map: HashMap<String, String> = HashMap::new();
-        for (k, v) in idx { map.insert(k, v); }
-        let text_chapter = r#"<p>被叫做"大帮"<span id="a541"/><a href="part0040.html#a51T" class="class_s4yp"> 3 </a>，在分区任职</p>"#;
-        let out = inline_footnotes(text_chapter, &map, &mut 0);
-        assert!(out.contains(r##"<a href="#a51T">3</a>"##), "纯跨文件 marker 未改同章锚点: {out}");
-        assert!(!out.contains("part0040.html"), "跨文件 href 前缀未去掉: {out}");
-        assert!(out.contains(r##"<div id="a51T">"##), "注释未内联本章章末: {out}");
-        assert!(out.contains("高级督察俗称大帮"), "注释文本丢失: {out}");
-        assert!(!out.contains("part0038.html"), "注释内回链未去跨文件前缀: {out}");
     }
 
     #[test]
     fn weread_p_note_collected_without_semantic() {
         // 13·67 真实形态：注释章里 <aside> 与 <p class="class_s1r">（**无 note 语义**）交替。
-        // 下载管线 collect_footnote_notes(require_semantic=false) 须靠 id∈referenced 收 <p> 注释，
-        // 再由 inline_footnotes pass 1b 内联跨文件纯 marker。
-        use std::collections::HashSet;
+        // collect_footnote_notes(require_semantic=false) 须靠 id∈referenced 收 <p> 注释。
         let text = r#"<p>被叫做"大帮"<span id="a541"/><a href="part0040.html#a51T" class="class_s4yp"> 3 </a>后续</p>"#;
-        let notes = r#"<aside id="a51U" type="footnote" class="class_svk"><a href="x#y">4</a>. CID</aside><p id="a51T" class="class_s1r"><a href="part0037.html#a541">3</a>. 帮办、大帮：一词八十年代已式微</p>"#;
-        // 全书 referenced
-        let mut referenced: HashSet<String> = HashSet::new();
-        for f in referenced_note_frags(text) { referenced.insert(f); }
-        // 收注释（不要求语义）→ class_s1r 的 <p> 也应被收
+        let notes = r#"<aside id="a51U" type="footnote" class="class_svk"><a href="x#y">4</a>. CID</aside><p id='a51T' class="class_s1r"><a href="part0037.html#a541">3</a>. 帮办、大帮：一词八十年代已式微</p>"#;
+        let referenced: HashSet<String> = referenced_note_frags(text).into_iter().collect();
         let (notes_cleaned, collected) = collect_footnote_notes(notes, &referenced, false);
-        let mut map: HashMap<String, String> = HashMap::new();
-        for (k, v) in collected { map.insert(k, v); }
-        assert!(map.contains_key("a51T"), "class_s1r 的 <p> 注释未被收: keys={:?}", map.keys().collect::<Vec<_>>());
-        assert!(!notes_cleaned.contains(r##"id="a51T""##), "a51T 注释未从原位移除");
-        // 内联
-        let out = inline_footnotes(text, &map, &mut 0);
-        assert!(out.contains(r##"<a href="#a51T">3</a>"##), "纯跨文件 marker 未内联: {out}");
-        assert!(out.contains("帮办、大帮"), "注释文本未内联: {out}");
-    }
-
-    #[test]
-    fn plain_crossfile_missing_note_kept() {
-        // 纯跨文件 marker 但 frag 不在 index（注释真缺）→ 原样保留，不乱改。
-        let text = r#"<p>见<a href="chap03.xhtml#sec2">第三章</a></p>"#;
-        assert_eq!(inline_footnotes(text, &HashMap::new(), &mut 0), text);
+        let map: HashMap<String, String> = collected.into_iter().collect();
+        assert!(map.contains_key("a51T"), "单引号 id 的 <p> 注释也要收: keys={:?}", map.keys().collect::<Vec<_>>());
+        assert!(!notes_cleaned.contains("a51T"), "a51T 注释未从原位移除");
     }
 }
 

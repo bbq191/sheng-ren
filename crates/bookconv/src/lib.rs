@@ -15,6 +15,7 @@ pub mod convert;
 pub mod direction;
 pub mod epub;
 pub mod epubzip;
+pub mod html;
 pub mod htmlproc;
 pub mod imgopt;
 pub mod netimg;
