@@ -78,7 +78,7 @@ pub fn fb2_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
     }
     resolve_links(&mut chapters);
 
-    let author = ti.map(|t| authors_to_string(t)).unwrap_or_default();
+    let author = ti.map(authors_to_string).unwrap_or_default();
     let lang = ti.and_then(|t| t.child("lang")).map(|l| l.text().trim().to_string()).unwrap_or_default();
     let mut book = Book {
         meta: BookMeta {

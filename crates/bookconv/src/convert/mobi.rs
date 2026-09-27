@@ -9,12 +9,10 @@
 //!   2. **为每个被引用的 filepos 目标注入 `id="fpN"` 锚点**（属性注入进目标元素，保留原属性）。
 //!   3. **就地把 `filepos=N` 改写成 `href="chap_X.xhtml#fpN"`**（脚注/目录跳转可用）。
 //!
-//! 副产品：目录页链接改写后指向大量 chap 文件，读起来是一份正常可点的书内目录页，跟原生 EPUB
-//! 自带的 HTML 目录页同构（2026-09-19 前 `optimize::remove_toc_from_spine` 会把这种"指向一堆
-//! chap 文件"的页面从 spine 剥掉——当时的假设是"reMarkable 有自己的原生 TOC，书内目录页冗余"，
-//! 但真机反馈（《疯探》真书）证明这个假设站不住：这类页面就是书籍**正文**，不是能安全丢的冗余物，
-//! 违背 EPUB 线原则①"保留目录页"，已整个删掉这个剥离机制——MOBI 转换产物现在跟原生 EPUB 一样，
-//! 目录页原样留在 spine 里）。
+//! 副产品：目录页链接改写后指向各个 chap 文件，读起来是一份正常可点的书内目录页，跟原生 EPUB 自带的 HTML
+//! 目录页同构，原样留在 spine 里（它是书的正文，不是可丢的冗余）。
+//!
+//! 正文编码按 MOBI 头的编码字段解（cp1252 / UTF-8），`filepos` 是原始字节偏移，经 `palm::RawText` 换算。
 
 use super::palm::{self, RawText};
 use crate::epub::{Chapter, Resource};
