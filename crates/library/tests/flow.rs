@@ -90,3 +90,45 @@ fn cbz_becomes_comic_epub_master_and_drm_epub_is_refused() {
     let err = match lib.add_file(&drm) { Err(e) => e, Ok(_) => panic!("DRM 书应拒收") };
     assert!(err.contains("DRM"), "{err}");
 }
+
+#[test]
+fn epub_master_shares_storage_and_dedupe_fixes_old_copies() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    let lib = Library::open(dir.path().join("lib")).unwrap();
+    let books = dir.path().join("books");
+    std::fs::create_dir_all(&books).unwrap();
+    let src = books.join("风起.epub");
+    std::fs::write(&src, sample_epub("风起")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
+    let mdir = dir.path().join(format!("lib/masters/{}", m.id));
+    assert!(!mdir.join("source.epub").exists(), "EPUB 母版就是原文件，不再多存 source 副本");
+    assert_ne!(m.storage, library::Storage::Copy, "同一文件系统上应共享存储（克隆或硬链接）");
+    assert_eq!(std::fs::read(mdir.join("master.epub")).unwrap(), sample_epub("风起"));
+
+    // 模拟老版本入库：master 是独立副本、还多存了一份 source.epub
+    let old_src = books.join("雨落.epub");
+    std::fs::write(&old_src, sample_epub("雨落")).unwrap();
+    let Added::New(old) = lib.add_file(&old_src).unwrap() else { panic!() };
+    let odir = dir.path().join(format!("lib/masters/{}", old.id));
+    std::fs::remove_file(odir.join("master.epub")).unwrap();
+    std::fs::write(odir.join("master.epub"), sample_epub("雨落")).unwrap();
+    std::fs::write(odir.join("source.epub"), sample_epub("雨落")).unwrap();
+    let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(odir.join("meta.json")).unwrap()).unwrap();
+    meta["storage"] = "copy".into();
+    std::fs::write(odir.join("meta.json"), meta.to_string()).unwrap();
+
+    let rep = lib.dedupe(&[books.clone()]).unwrap();
+    assert_eq!(rep.removed_sources, 1, "多余的 source 副本删掉");
+    assert_eq!(rep.shared_files, 1, "只有老条目需要改；新条目已经共享");
+    assert!(!odir.join("source.epub").exists());
+    let a = std::fs::metadata(odir.join("master.epub")).unwrap();
+    let b = std::fs::metadata(&old_src).unwrap();
+    let reflinked = std::fs::read(odir.join("master.epub")).unwrap() == sample_epub("雨落");
+    assert!(reflinked && (a.ino() == b.ino() || lib.list().iter().find(|x| x.id == old.id).unwrap().storage == library::Storage::Reflink));
+    // 原文件删掉后母版仍在
+    std::fs::remove_file(&old_src).unwrap();
+    assert_eq!(std::fs::read(odir.join("master.epub")).unwrap(), sample_epub("雨落"), "原文件删了，母版还在");
+    let rep2 = lib.dedupe(&[books]).unwrap();
+    assert_eq!((rep2.shared_files, rep2.removed_sources), (0, 0), "幂等");
+}

@@ -6,6 +6,7 @@
 //!   booklib [--library=目录] build --device=<设备>[,<设备>…] [--device=…] [--force] [--out=目录] [书名片段或 id...]
 //!     --device 可写多次或用逗号分隔；--device=all 表示全部设备
 //!   booklib [--library=目录] remove <id>...
+//!   booklib [--library=目录] dedupe <目录>...   书库里与这些目录（递归）内容相同的原文件改为共享存储，删多余副本
 //!   booklib devices
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib；产物缺省放在书库的 output/<设备>/ 下。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败。
@@ -19,6 +20,7 @@ const USAGE: &str = "用法:
   booklib [--library=目录] build --device=<设备>[,<设备>…] [--force] [--out=目录] [书名片段或 id...]
       --device 可写多次或用逗号分隔，--device=all 表示全部设备
   booklib [--library=目录] remove <id>...
+  booklib [--library=目录] dedupe <目录>...
   booklib devices";
 
 fn usage() -> ! {
@@ -117,6 +119,24 @@ fn main() {
                         failed += 1;
                         eprintln!("✗ [{}] {}: {e}", device.id, m.title);
                     }
+                }
+            }
+        }
+        "dedupe" => {
+            if rest.is_empty() {
+                usage();
+            }
+            let dirs: Vec<PathBuf> = rest.iter().map(PathBuf::from).collect();
+            match lib.dedupe(&dirs) {
+                Ok(r) => {
+                    let mb = |b: u64| b as f64 / 1048576.0;
+                    println!("✓ {} 个文件改为与原文件共享存储（{:.1} MB）", r.shared_files, mb(r.shared_bytes));
+                    println!("✓ 删掉 {} 个多余的 source 副本（{:.1} MB）", r.removed_sources, mb(r.removed_bytes));
+                    println!("  注：克隆（reflink）的文件在 du 里仍按全尺寸显示，实际不占额外空间；btrfs 上可用 `btrfs filesystem du` 查看共享情况");
+                }
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("✗ {e}");
                 }
             }
         }
