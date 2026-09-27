@@ -227,15 +227,11 @@ impl Ctx<'_> {
 /// 书内链接先写成这个占位 scheme，全书渲染完、知道每个 id 落在哪章之后由 [`resolve_links`] 改写。
 const LINK_MARK: &str = "fb2link:";
 
+/// 文字与属性值都用它转义（含双引号，并丢掉 XML 不允许的控制字符）。
 use crate::util::xml_escape as xesc;
 
-/// 属性值转义（`xml_escape` 之外再转双引号）。
-fn attr_esc(s: &str) -> String {
-    xesc(s).replace('"', "&quot;")
-}
-
 fn id_attr(el: &El) -> String {
-    el.attr("id").map(|id| format!(" id=\"{}\"", attr_esc(id))).unwrap_or_default()
+    el.attr("id").map(|id| format!(" id=\"{}\"", xesc(id))).unwrap_or_default()
 }
 
 /// 主 body：大标题/题图/题词成首章，各 section 递归成章。
@@ -410,7 +406,7 @@ fn render_block(el: &El, depth: i64, ctx: &Ctx, out: &mut String) {
         "image" => {
             if let Some(src) = ctx.image(el) {
                 let alt = el.attr("alt").unwrap_or("");
-                out.push_str(&format!("<p{}><img src=\"{}\" alt=\"{}\"/></p>\n", id_attr(el), attr_esc(src), attr_esc(alt)));
+                out.push_str(&format!("<p{}><img src=\"{}\" alt=\"{}\"/></p>\n", id_attr(el), xesc(src), xesc(alt)));
             }
         }
         "title" => render_heading(el, (depth + 1).max(4), &id_attr(el), ctx, out),
@@ -424,7 +420,7 @@ fn render_block(el: &El, depth: i64, ctx: &Ctx, out: &mut String) {
                 for cell in tr.elements().filter(|c| c.name == "th" || c.name == "td") {
                     let span: String = ["colspan", "rowspan"]
                         .iter()
-                        .filter_map(|a| cell.attr(a).map(|v| format!(" {a}=\"{}\"", attr_esc(v))))
+                        .filter_map(|a| cell.attr(a).map(|v| format!(" {a}=\"{}\"", xesc(v))))
                         .collect();
                     out.push_str(&format!("<{}{span}>", cell.name));
                     render_inline_kids(cell, ctx, out);
@@ -462,7 +458,7 @@ fn render_inline(el: &El, ctx: &Ctx, out: &mut String) {
         "image" => {
             if let Some(src) = ctx.image(el) {
                 let alt = el.attr("alt").unwrap_or("");
-                out.push_str(&format!("<img src=\"{}\" alt=\"{}\"/>", attr_esc(src), attr_esc(alt)));
+                out.push_str(&format!("<img src=\"{}\" alt=\"{}\"/>", xesc(src), xesc(alt)));
             }
             return;
         }
@@ -475,7 +471,7 @@ fn render_inline(el: &El, ctx: &Ctx, out: &mut String) {
             if href.is_empty() {
                 render_inline_kids(el, ctx, out);
             } else {
-                out.push_str(&format!("<a href=\"{}\">", attr_esc(&href)));
+                out.push_str(&format!("<a href=\"{}\">", xesc(&href)));
                 render_inline_kids(el, ctx, out);
                 out.push_str("</a>");
             }
