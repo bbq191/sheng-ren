@@ -1,38 +1,12 @@
-//! 空页清理：删掉纯空白页并把目录/spine 引用改指向邻页。
+//! 空页清理：删掉纯空白页并把指向它的链接（目录、正文里的目录页、OPF `<guide>`）改指向邻页。
 use super::*;
 
 // ───────────────────────── 5. 空页清理 ─────────────────────────
 
-/// 页面 body 里既无媒体标签、去掉标签后也只剩空白（含 `&nbsp;`/`&#160;`/U+00A0）。
-/// 2026-09-24 审计：此前正文复制 → 小写复制 → 正则去标签 → 三次 replace 各出一份整章副本，是清洗层最大的一块耗时；
-/// 现在只在去标签时拼一份，其余按字节扫描，判定结果不变（`is_empty_page_matches_old_regex_impl` 对拍）。
+/// 页面 body 里没有读者看得见的内容（口径见 `html::has_visible`：非空白文字，或图片/分隔线/表格等媒体）。
+/// 2026-09-27：与章节分页共用同一套判定（此前这里只认 img/svg/image/video/audio，只有 `<hr/>`/表格的页会被当空页删掉）。
 pub(super) fn is_empty_page(html: &str) -> bool {
-    let inner = crate::htmlproc::first_body_inner(html).unwrap_or("");
-    let has = |pat: &[u8]| inner.as_bytes().windows(pat.len()).any(|w| w.eq_ignore_ascii_case(pat));
-    if has(b"<img") || has(b"<svg") || has(b"<image") || has(b"<video") || has(b"<audio") {
-        return false;
-    }
-    // 去标签（同正则 `<[^>]*>`：`<` 到其后第一个 `>`；没有 `>` 的 `<` 留作普通字符）。
-    let mut text = String::with_capacity(inner.len());
-    let mut rest = inner;
-    while let Some(lt) = rest.find('<') {
-        let Some(gt) = rest[lt..].find('>') else { break };
-        text.push_str(&rest[..lt]);
-        rest = &rest[lt + gt + 1..];
-    }
-    text.push_str(rest);
-    // 其余只能是空白或不换行空格实体（去标签后才认实体：`&nb<i>sp;` 拼出来的也算，与原先先去标签再替换一致）。
-    let mut s = text.as_str();
-    while let Some(c) = s.chars().next() {
-        if let Some(r) = s.strip_prefix("&nbsp;").or_else(|| s.strip_prefix("&#160;")) {
-            s = r;
-        } else if c.is_whitespace() {
-            s = &s[c.len_utf8()..];
-        } else {
-            return false;
-        }
-    }
-    true
+    !html::has_visible(html::first_body_inner(html).unwrap_or(""))
 }
 
 /// 一遍扫描删掉 OPF 里 `id`/`idref` 属于 `ids` 的 `<item>`/`<itemref>`（连同紧随的空白与空闭合标签）。
@@ -92,20 +66,24 @@ pub(super) fn remove_empty_pages(entries: &mut Vec<Entry>, rep: &mut WashReport)
     let ids: HashSet<&str> = opf.items.iter().filter(|(_, v)| removed_set.contains(v)).map(|(k, _)| k.as_str()).collect();
     let text = drop_opf_refs(&String::from_utf8_lossy(&entries[opf.index].data), &ids);
     entries[opf.index].data = text.into_bytes();
-    // 目录（ncx/nav）里指向被删页的引用 → 改指替换页
-    let toc_files: Vec<String> = entries.iter().filter(|e| is_toc_file(&e.name)).map(|e| e.name.clone()).collect();
-    for tf in toc_files {
-        let tdir = dir_of(&tf).to_string();
-        let Some(e) = entries.iter_mut().find(|e| e.name == tf) else { continue };
-        let text = String::from_utf8_lossy(&e.data).into_owned();
-        let new = href_re().replace_all(&text, |c: &regex::Captures| {
-            let target = resolve(&tdir, &percent_decode(&c[2]));
-            match repl.get(&target) {
-                Some(r) => format!("{}=\"{}\"", &c[1], relative_to(&tdir, r)),
-                None => c[0].to_string(),
+    // 全书指向被删页的链接 → 改指替换页（空页没有内容，锚点一并去掉）：目录（ncx/nav）、正文里的目录页、OPF `<guide>`。
+    for e in entries.iter_mut() {
+        let l = e.name.to_ascii_lowercase();
+        if removed_set.contains(&e.name) || !(is_html_entry(&e.name, &e.data) || l.ends_with(".ncx") || l.ends_with(".opf")) {
+            continue;
+        }
+        let dir = dir_of(&e.name).to_string();
+        let text = String::from_utf8_lossy(&e.data);
+        let new = html::rewrite_links(&text, |v| {
+            let (p, _) = html::split_href(v);
+            if p.is_empty() || html::is_external(p) {
+                return None;
             }
-        }).into_owned();
-        e.data = new.into_bytes();
+            repl.get(&resolve(&dir, &percent_decode(p))).map(|r| relative_to(&dir, r))
+        });
+        if let Cow::Owned(new) = new {
+            e.data = new.into_bytes();
+        }
     }
     entries.retain(|e| !removed_set.contains(&e.name));
     rep.empty_pages_removed = removed;
