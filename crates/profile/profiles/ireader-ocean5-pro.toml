@@ -1,0 +1,9 @@
+# 掌阅 iReader Ocean 5 Pro。7" Carta 1300，2026-09-27 核实。
+name = "掌阅 iReader Ocean 5 Pro"
+ppi = 300
+color = false
+formats = ["epub"]
+
+[screen]
+width = 1264
+height = 1680

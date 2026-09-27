@@ -1,0 +1,10 @@
+# Kindle Paperwhite 12 代签名版（2024）。7" Carta 1300，2026-09-27 核实。
+# USB 传书只认 AZW3，不认 EPUB（用户 2026-09-27 真机实测）。
+name = "Kindle Paperwhite 12 代签名版"
+ppi = 300
+color = false
+formats = ["azw3"]
+
+[screen]
+width = 1264
+height = 1680
