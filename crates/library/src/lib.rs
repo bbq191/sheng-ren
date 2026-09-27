@@ -5,7 +5,7 @@
 //! masters/<id>/meta.json                   一本书的索引：原件路径、SHA-256、大小与修改时间、书名、作者
 //! masters/<id>/master.epub                 只有网址入库的书有（没有原件，抓下来的正文存这里）；早期版本入库的条目也可能有
 //! output/<设备 id>/<书名>.<epub|azw3|pdf>  产物；output/<设备 id>/.state.json 记每本书的生成指纹，没变就跳过
-//! outputs.json                             build 用过的其它产物目录（remove 时一起清理）
+//! deliveries.json                          build --out 拷出去的各份（没变不重拷，remove 时一起删）
 //! sources.json                             跟踪的原件目录（track），以及其中每个文件上次看到时的大小、修改时间、id
 //! profiles/*.toml                          可选：自定义设备 profile，同 id 覆盖内置
 //! .lock                                    进程锁
@@ -16,6 +16,7 @@
 //! 原件不在了或者内容变了（大小、修改时间变了就重算哈希核对），生成会停下来提示先 `sync` 或重新入库，
 //! 不会拿改过的内容冒充原来那本书。带 DRM 的书现在拒收（解 DRM 还没做）。
 
+mod deliver;
 mod fsutil;
 mod generate;
 mod sources;
@@ -24,6 +25,7 @@ use fsutil::{sha256_file, sha256_hex, write_atomic};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+pub use deliver::{Delivered, DeliveryStatus};
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus};
 pub use profile::{Format, Profile, Registry};
@@ -465,7 +467,7 @@ impl Library {
         Ok(rep)
     }
 
-    /// 删掉一本书的索引和它在各设备下的产物（所有用过的产物目录）。原件不动。`meta.json` 损坏的条目也能删。返回书名。
+    /// 删掉一本书的索引、它在各设备下的产物和拷出去的各份。原件不动。`meta.json` 损坏的条目也能删。返回书名。
     pub fn remove(&self, id: &str) -> Result<String, String> {
         let dir = self.entry_dir(id);
         if id.is_empty() || id.starts_with('.') || id.contains(['/', '\\']) || !dir.is_dir() {
@@ -473,6 +475,7 @@ impl Library {
         }
         let title = self.read_meta(id).map(|m| m.title).unwrap_or_else(|| "（条目已损坏）".into());
         self.remove_outputs(id)?;
+        self.remove_deliveries(id)?;
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
         Ok(title)
     }

@@ -3,7 +3,7 @@
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib；产物缺省放在书库的 output/<设备>/ 下。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
-use library::{Added, Built, Library, OriginalState, Profile, SyncEvent};
+use library::{Added, Built, Delivered, Library, OriginalState, Profile, SyncEvent};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -12,6 +12,8 @@ const USAGE: &str = "用法:
   booklib [--library=目录] list [书名片段或 id...]      列出书，以及给哪些设备生成过、是否最新
   booklib [--library=目录] build --device=<设备>[,<设备>…] [--force] [--out=目录] [书名片段或 id...]
       --device 可写多次或用逗号分隔，--device=all 表示全部设备；不写书名 = 全部书
+      产物生成在书库 output/<设备>/；--out 再拷过去（一台设备直接放进目录，多台放进 目录/<设备>/；
+      支持 MTP 挂载的阅读器；没变的不重拷）。路径有空格要加引号
   booklib [--library=目录] track <目录>...               跟踪目录：之后 sync 把它镜像进书库
   booklib [--library=目录] untrack <目录>...             不再跟踪（已入库的书保留）
   booklib [--library=目录] sync [--prune] [--device=<设备>…] [--out=目录] [--watch[=秒]]
@@ -108,23 +110,61 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
 }
 
 /// 按设备 × 书逐本生成（没变化的跳过），每本一行结果。
-/// `quiet` 时不打印"已是最新"（sync 用：只报有变化的）。
-fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out_root: &std::path::Path, force: bool, quiet: bool, report: &mut impl FnMut(Result<String, String>)) {
+/// 按设备 × 书逐本生成（没变化的跳过），每本一行结果。给了 `out` 就接着拷过去：只有一台设备时直接放进 `out`，
+/// 多台时放进 `out/<设备 id>/`。`quiet` 时不打印没变化的（sync 用：只报有变化的）。
+fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: Option<&std::path::Path>, force: bool, quiet: bool, report: &mut impl FnMut(Result<String, String>)) {
     for device in devices {
+        let dest = out.map(|o| if devices.len() == 1 { o.to_path_buf() } else { o.join(&device.id) });
         for m in books {
-            report(match lib.build(m, device, out_root, force) {
+            let built = match lib.build(m, device, force) {
                 Ok(Built::Written { path, warnings }) => {
-                    Ok(std::iter::once(format!("✓ [{}] {} → {}", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
+                    Some(std::iter::once(format!("✓ [{}] {} → {}", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
                 }
-                Ok(Built::UpToDate(_)) if quiet => continue,
-                Ok(Built::UpToDate(path)) => Ok(format!("= [{}] {} 已是最新（{}）", device.id, m.title, path.display())),
-                Err(e) => Err(format!("✗ [{}] {}: {e}", device.id, m.title)),
-            });
+                Ok(Built::UpToDate(path)) => (!quiet).then(|| format!("= [{}] {} 已是最新（{}）", device.id, m.title, path.display())),
+                Err(e) => {
+                    report(Err(format!("✗ [{}] {}: {e}", device.id, m.title)));
+                    continue;
+                }
+            };
+            if let Some(line) = built {
+                report(Ok(line));
+            }
+            let Some(dest) = &dest else { continue };
+            match lib.deliver(m, device, dest, force) {
+                Ok(Delivered::Copied(p)) => report(Ok(format!("  → 拷到 {}", p.display()))),
+                Ok(Delivered::Unchanged(p)) if !quiet => report(Ok(format!("  = 目标已是最新（{}）", p.display()))),
+                Ok(Delivered::Unchanged(_)) => {}
+                Err(e) => report(Err(format!("  ✗ [{}] {} 拷贝失败: {e}", device.id, m.title))),
+            }
         }
     }
 }
 
+/// 选书的参数里有像路径的（通常是路径里有空格没加引号，被拆开了），提示一下。
+fn path_hint(selectors: &[String]) -> String {
+    match selectors.iter().find(|s| s.contains('/')) {
+        Some(s) => format!("\n（\"{s}\" 看起来像路径的一部分：路径里有空格时要整个加引号，如 --out=\"/run/…/Internal Storage/documents\"）"),
+        None => String::new(),
+    }
+}
+
+/// 输出接到 `head` 这类提前关闭的管道时，像别的命令行工具一样安静退出（Rust 缺省忽略 SIGPIPE，println! 会 panic）。
+#[cfg(unix)]
+fn restore_sigpipe() {
+    extern "C" {
+        fn signal(sig: i32, handler: usize) -> usize;
+    }
+    const SIGPIPE: i32 = 13;
+    const SIG_DFL: usize = 0;
+    // SAFETY: 进程启动时、还没有其它线程时恢复 SIGPIPE 的缺省处理。
+    unsafe {
+        signal(SIGPIPE, SIG_DFL);
+    }
+}
+
 fn main() {
+    #[cfg(unix)]
+    restore_sigpipe();
     let args = Args::parse();
     let Some(cmd) = args.pos.first().and_then(|c| c.to_str()).map(str::to_string) else { usage_error("") };
     match cmd.as_str() {
@@ -200,6 +240,14 @@ fn main() {
                     let shown = o.path.strip_prefix(lib.root()).map(|p| p.to_path_buf()).unwrap_or(o.path.clone());
                     println!("      {:<20} {state}  {}", o.device, shown.display());
                 }
+                for d in lib.deliveries(&m) {
+                    let state = match d.fresh {
+                        Some(true) => "✓ 已拷",
+                        Some(false) => "⚠ 旧版",
+                        None => "? 不在",
+                    };
+                    println!("      {:<20} {state}  {}", d.device, d.path.display());
+                }
             }
             for id in lib.broken() {
                 eprintln!("⚠ 条目 {id} 的 meta.json 读不出来（写坏了）：booklib remove {id} 删掉，或重新 add 原文件覆盖");
@@ -210,13 +258,13 @@ fn main() {
             if devices.is_empty() {
                 usage_error("build 要用 --device= 指定设备");
             }
-            let out_root = args.opt("out").map(PathBuf::from).unwrap_or_else(|| lib.root().join("output"));
+            let out = args.opt("out").map(PathBuf::from);
             let books = lib.select(&args.texts());
             if books.is_empty() {
-                fail("没有匹配的书（booklib list 查看书库）");
+                fail(&format!("没有匹配的书（booklib list 查看书库）{}", path_hint(&args.texts())));
             }
             let force = args.flags.iter().any(|f| f == "force");
-            build_all(&lib, &devices, &books, &out_root, force, false, &mut report);
+            build_all(&lib, &devices, &books, out.as_deref(), force, false, &mut report);
         }
         "dedupe" => {
             let dirs: Vec<PathBuf> = rest.iter().map(PathBuf::from).collect();
@@ -253,7 +301,10 @@ fn main() {
                 fail("还没有跟踪任何目录：先 booklib track <目录>");
             }
             let devices = parse_devices(&args, &lib);
-            let out_root = args.opt("out").map(PathBuf::from).unwrap_or_else(|| lib.root().join("output"));
+            let out = args.opt("out").map(PathBuf::from);
+            if !args.texts().is_empty() {
+                usage_error(&format!("sync 不接受书名参数{}", path_hint(&args.texts())));
+            }
             let prune = args.flags.iter().any(|f| f == "prune");
             let watch: Option<u64> = match (args.opt("watch"), args.flags.iter().any(|f| f == "watch")) {
                 (Some(v), _) => Some(v.parse().ok().filter(|&n| n > 0).unwrap_or_else(|| usage_error("--watch= 要写正整数秒数"))),
@@ -276,7 +327,7 @@ fn main() {
                             r => report(r.map(|r| format!("同步完成：新增 {}，更新 {}，没变 {}，原件不在 {}（删了 {}），失败 {}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed))),
                         }
                         if !devices.is_empty() {
-                            build_all(&lib, &devices, &lib.list(), &out_root, false, true, &mut report);
+                            build_all(&lib, &devices, &lib.list(), out.as_deref(), false, true, &mut report);
                         }
                     }
                     Err(e) => eprintln!("{e}"),
