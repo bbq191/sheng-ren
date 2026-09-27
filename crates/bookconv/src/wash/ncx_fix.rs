@@ -5,22 +5,18 @@ use super::*;
 /// 幂等、只在真的不一致时改；OPF 没有可解析的标识符（极少见）时不动。
 pub(super) fn fix_ncx_uid(entries: &mut [Entry], rep: &mut WashReport) {
     let Some(uid) = opf_unique_identifier(entries) else { return };
-    static META: OnceLock<Regex> = OnceLock::new();
-    let re = META.get_or_init(|| Regex::new(r#"(<meta\s+name="dtb:uid"\s+content=")[^"]*("\s*/?>)"#).unwrap());
-    for e in entries.iter_mut() {
-        if e.name.to_ascii_lowercase().ends_with(".ncx") {
-            if let Ok(text) = std::str::from_utf8(&e.data) {
-                if let Some(c) = re.captures(text) {
-                    if c.get(0).map(|m| m.as_str()) != Some(&format!("{}{}{}", &c[1], xml_escape(&uid), &c[2])) {
-                        let new = re.replace(text, |c: &regex::Captures| format!("{}{}{}", &c[1], xml_escape(&uid), &c[2])).into_owned();
-                        if new != text {
-                            e.data = new.into_bytes();
-                            rep.ncx_uid_fixed += 1;
-                        }
-                    }
-                }
-            }
+    let want = xml_escape(&uid);
+    for e in entries.iter_mut().filter(|e| e.name.to_ascii_lowercase().ends_with(".ncx")) {
+        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let meta = html::tags(text).find(|t| t.is_start() && t.is("meta") && tag_attr(&text[t.start..t.end], "name") == Some("dtb:uid"));
+        let Some(t) = meta else { continue };
+        let tag = &text[t.start..t.end];
+        if tag_attr(tag, "content").is_none_or(|c| c == want) {
+            continue;
         }
+        let new_tag = html::set_attr(tag, "content", &want);
+        e.data = format!("{}{}{}", &text[..t.start], new_tag, &text[t.end..]).into_bytes();
+        rep.ncx_uid_fixed += 1;
     }
 }
 
@@ -41,29 +37,19 @@ pub(super) fn fix_ncx_manifest_id(entries: &mut [Entry], rep: &mut WashReport) {
         return; // 已经叫 ncx，或者已有另一条目占了这个 id——两种情况都不该动
     }
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
-    static ITEM: OnceLock<Regex> = OnceLock::new();
-    let item_re = ITEM.get_or_init(|| Regex::new(r#"(?s)<item\b[^>]*\bmedia-type="application/x-dtbncx\+xml"[^>]*/?>"#).unwrap());
-    let Some(m) = item_re.find(&text) else { return };
-    static IDATTR: OnceLock<Regex> = OnceLock::new();
-    let id_re = IDATTR.get_or_init(|| Regex::new(r#"\bid="([^"]+)""#).unwrap());
-    let Some(idc) = id_re.captures(m.as_str()) else { return };
-    let old_id = idc[1].to_string();
+    let Some(item) = manifest_items(&text).into_iter().find(|it| it.media_type.trim() == "application/x-dtbncx+xml") else { return };
+    let old_id = item.id.to_string();
     if old_id == "ncx" {
         return;
     }
-    let new_tag = m.as_str().replacen(&format!(r#"id="{old_id}""#), r#"id="ncx""#, 1);
-    let mut new_text = text.clone();
-    new_text.replace_range(m.range(), &new_tag);
+    let pos = item.pos;
+    let mut new_text = format!("{}{}{}", &text[..pos], html::set_attr(item.tag, "id", "ncx"), &text[pos + item.tag.len()..]);
     // <spine toc="OLD_ID"> 同步改，不然这个属性从此指向一个不存在的 id（没有这个属性的书——极少
     // 见——说明它压根没靠 spine 的 toc 属性定位目录，不用管）。
-    static SPINE_TOC: OnceLock<Regex> = OnceLock::new();
-    let spine_re = SPINE_TOC.get_or_init(|| Regex::new(r#"(<spine\b[^>]*\btoc=")([^"]+)(")"#).unwrap());
-    if let Some(c) = spine_re.captures(&new_text) {
-        if c[2] == old_id {
-            let whole = c.get(0).unwrap();
-            let replaced = format!("{}ncx{}", &c[1], &c[3]);
-            let range = whole.range();
-            new_text.replace_range(range, &replaced);
+    if let Some(t) = html::tags(&new_text).find(|t| t.is_start() && t.is("spine")) {
+        let tag = &new_text[t.start..t.end];
+        if tag_attr(tag, "toc") == Some(old_id.as_str()) {
+            new_text = format!("{}{}{}", &new_text[..t.start], html::set_attr(tag, "toc", "ncx"), &new_text[t.end..]);
         }
     }
     entries[opf.index].data = new_text.into_bytes();

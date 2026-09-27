@@ -19,28 +19,24 @@ pub(super) fn ref_exists(exact: &HashSet<String>, lower: &HashSet<String>, base_
 /// 去掉 `<img>` 里 src 指向书内不存在文件的标签。alt 有实际内容（非空且不是我们自己封面转换写的 "cover"）的留着，
 /// 这类图坏了阅读器还可能显示替代文字，不冒丢内容的风险。返回 (新文本, 去掉个数)。
 pub(super) fn drop_dead_imgs(html: &str, base_dir: &str, exact: &HashSet<String>, lower: &HashSet<String>) -> (String, usize) {
-    static IMG: OnceLock<Regex> = OnceLock::new();
-    static SRC: OnceLock<Regex> = OnceLock::new();
-    static ALT: OnceLock<Regex> = OnceLock::new();
-    let img = IMG.get_or_init(|| Regex::new(r#"(?is)<img\b[^>]*>"#).unwrap());
-    let src = SRC.get_or_init(|| Regex::new(r#"(?is)\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap());
-    let alt = ALT.get_or_init(|| Regex::new(r#"(?is)\balt\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap());
-    let mut n = 0;
-    let out = img.replace_all(html, |c: &regex::Captures| {
-        let tag = &c[0];
-        let Some(sc) = src.captures(tag) else { return tag.to_string() };
-        let r = sc.get(1).or_else(|| sc.get(2)).map(|m| m.as_str()).unwrap_or("");
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for t in html::tags(html).filter(|t| t.is_start() && t.is("img")) {
+        let tag = &html[t.start..t.end];
+        let Some(r) = html::attr_value(tag, "src") else { continue };
         if is_external_ref(r) || ref_exists(exact, lower, base_dir, r) {
-            return tag.to_string();
+            continue;
         }
-        let alt_text = alt.captures(tag).and_then(|a| a.get(1).or_else(|| a.get(2))).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+        let alt_text = html::attr_value(tag, "alt").map(str::trim).unwrap_or_default();
         if !alt_text.is_empty() && alt_text != "cover" {
-            return tag.to_string();
+            continue;
         }
-        n += 1;
-        String::new()
-    });
-    (out.into_owned(), n)
+        edits.push((t.start, t.end, String::new()));
+    }
+    let n = edits.len();
+    if n == 0 {
+        return (html.to_string(), 0);
+    }
+    (html::apply_edits(html, edits), n)
 }
 
 /// 清理 `@font-face` 里必然读不到的字体来源：`url()` 指向书内不存在的文件，或设备路径（DuoKan 的
@@ -113,7 +109,7 @@ pub(super) fn drop_dead_refs(entries: &mut [Entry], rep: &mut WashReport) {
         } else {
             let (t, a) = drop_dead_imgs(text, &base, &exact, &lower);
             let mut b = 0;
-            let t = style_block_re().replace_all(&t, |c: &regex::Captures| {
+            let t = html::style_block_re().replace_all(&t, |c: &regex::Captures| {
                 let (css, k) = drop_dead_font_faces(&c[2], &base, &exact, &lower);
                 b += k;
                 format!("{}{}{}", &c[1], css, &c[3])

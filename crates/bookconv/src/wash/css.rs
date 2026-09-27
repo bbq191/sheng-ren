@@ -3,10 +3,11 @@ use super::*;
 
 // ───────────────────────── 2–4. CSS 声明处理 ─────────────────────────
 
-pub(super) fn decl_re() -> &'static Regex {
+/// CSS 规则 `选择器{声明}`（只匹配最内层：`@media{}` 里的规则由"从内向外"匹配到）。`filter_css` 与章尾容器
+/// 去下边距（`layout::strip_tail_spacing`）共用。
+pub(super) fn css_rule_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // 属性名 : 值（值里的 HTML 实体 `&#39;` 含分号，按实体整体吃）
-    RE.get_or_init(|| Regex::new(r#"(?i)([-a-zA-Z]+)\s*:\s*((?:&#?\w+;|[^;])*);?"#).unwrap())
+    RE.get_or_init(|| Regex::new(r#"(?s)([^{}]+)\{([^{}]*)\}"#).unwrap())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -38,9 +39,10 @@ pub(super) fn is_positive_indent(val: &str) -> bool {
 /// （2026-09-06 Phase E 英文书对照发现）。`text-indent:0`（诗歌/引文/列表明示不缩进）与负值保留。
 pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing, indent: Option<&str>) -> String {
     let mut out: Vec<String> = Vec::new();
-    for c in decl_re().captures_iter(decls) {
-        let prop = c[1].to_ascii_lowercase();
-        let val = c[2].trim();
+    // 声明按分号切，引号/括号（`url(data:…;base64,…)`）/字符引用里的分号不算（`html::css_decls`）。
+    for d in html::css_decls(decls) {
+        let prop = d.prop.to_ascii_lowercase();
+        let val = d.value;
         if filter.contains(&prop) {
             continue;
         }
@@ -124,9 +126,7 @@ pub(super) const FOOTNOTE_FONT_SIZE: &str = "0.9em";
 /// "跳转注释后字体不对"，追下去发现其实是加粗不是字体），用户拍板"只剥注释容器类的字重，不碰正文；
 /// 注释字号固定比正文小一档"。
 pub fn filter_css(css: &str, opts: &WashOpts) -> String {
-    static RULE: OnceLock<Regex> = OnceLock::new();
-    let rule = RULE.get_or_init(|| Regex::new(r#"(?s)([^{}]+)\{([^{}]*)\}"#).unwrap());
-    rule.replace_all(css, |c: &regex::Captures| {
+    css_rule_re().replace_all(css, |c: &regex::Captures| {
         let sel = &c[1];
         let trimmed = sel.trim_start();
         if trimmed.starts_with("@font-face") || trimmed.starts_with("@import") {
@@ -154,30 +154,28 @@ pub(super) fn indent_for(opts: &WashOpts) -> &'static str {
     if opts.lang == LangMode::Latin { "1.2em" } else { "2em" }
 }
 
-pub(super) fn style_attr_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"(?is)<([a-z][a-z0-9]*)\b([^>]*?)\sstyle="([^"]*)"([^>]*)>"#).unwrap())
-}
-
 /// (x)html：`style=""`（按标签名定边距策略）+ `<style>` 块剥锁；注入清洗样式块；折叠重复 id。
 pub fn wash_html(html: &str, opts: &WashOpts) -> (String, usize) {
     let before_dup = count_dup_id_tags(html);
     let s = collapse_dup_id_attrs(html);
-    let s = style_attr_re().replace_all(&s, |c: &regex::Captures| {
-        let tag = c[1].to_ascii_lowercase();
-        let spacing = match tag.as_str() {
+    // 只认名字正好是 `style` 的属性（`data-style`、SVG `font-style` 不算），就地改值、保留原引号。
+    let s = html::edit_attrs(&s, &["style"], |t, a| {
+        let spacing = match t.name.to_ascii_lowercase().as_str() {
             "body" | "html" => Spacing::All,
             "p" | "div" if !opts.keep_para_spacing => Spacing::Vertical,
             _ => Spacing::Keep,
         };
-        let cleaned = filter_decls_with(&c[3], &opts.filter_props, spacing, Some(indent_for(opts)));
+        let cleaned = filter_decls_with(a.value, &opts.filter_props, spacing, Some(indent_for(opts)));
         if cleaned.is_empty() {
-            format!("<{}{}{}>", &c[1], &c[2], &c[4])
+            Edit::Remove
+        } else if cleaned == a.value {
+            Edit::Keep
         } else {
-            format!("<{}{} style=\"{}\"{}>", &c[1], &c[2], cleaned, &c[4])
+            Edit::Set(cleaned)
         }
-    }).into_owned();
-    let s = style_block_re().replace_all(&s, |c: &regex::Captures| {
+    })
+    .into_owned();
+    let s = html::style_block_re().replace_all(&s, |c: &regex::Captures| {
         if c[1].contains(WASH_MARK) {
             // 旧版（v9 及以前）注入的内联 <style class="eink-wash"> 块：xochitl 本就无视它，重洗时清掉（已改外链 css）。
             String::new()
