@@ -4,7 +4,6 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::Storage;
 
 pub fn sha256_hex(b: &[u8]) -> String {
     hex(&Sha256::digest(b))
@@ -43,23 +42,6 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
         format!("写 {}: {e}", path.display())
     })
-}
-
-/// 把 `src` 克隆（reflink）到 `dst`：共用磁盘数据、两边互不影响。文件系统不支持时返回 `None`，不做复制。
-pub fn try_reflink(src: &Path, dst: &Path) -> Option<Storage> {
-    let _ = std::fs::remove_file(dst);
-    reflink_copy::reflink(src, dst).ok().map(|_| Storage::Reflink)
-}
-
-/// 把 `src` 放到 `dst`：能克隆就克隆，不行就复制。
-///
-/// 不用硬链接：硬链接和原文件是同一个文件，用户就地改了原文件，母版也跟着变，违反"母版不可变"。
-pub fn share_or_copy(src: &Path, dst: &Path) -> Result<Storage, String> {
-    if let Some(s) = try_reflink(src, dst) {
-        return Ok(s);
-    }
-    std::fs::copy(src, dst).map_err(|e| format!("复制 {}: {e}", src.display()))?;
-    Ok(Storage::Copy)
 }
 
 /// 书库的进程锁：同一时间只允许一个会改动书库的 `booklib` 进程（两个进程会互删临时目录、互相覆盖生成记录）。
