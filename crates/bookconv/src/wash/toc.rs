@@ -38,7 +38,7 @@ pub(super) fn dense_ranks(items: &[(u8, String, String, String)]) -> Vec<u8> {
     items.iter().map(|i| (levels.iter().position(|&l| l == i.0).unwrap_or(0) as u8) + 1).collect()
 }
 
-pub(crate) fn plain_text(html: &str) -> String {
+pub fn plain_text(html: &str) -> String {
     static TAG: OnceLock<Regex> = OnceLock::new();
     let tag = TAG.get_or_init(|| Regex::new(r#"(?s)<[^>]*>"#).unwrap());
     let t = tag.replace_all(html, "");
