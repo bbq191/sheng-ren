@@ -137,8 +137,9 @@ pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, 
     Ok(value)
 }
 
-/// 书名 → 安全文件名：控制字符与路径字符（`/\:*?"<>|`）换下划线、去首尾空白、截断 80 字符；
-/// 空则用 `default`。ingest（转换落名）、autoopt（优化落名）、readlater（文章落名）共用。
+/// 书名 → 安全文件名：控制字符与路径字符（`/\:*?"<>|`）换下划线、去首尾空白、开头的 `.` 换下划线（免得成了隐藏文件）；
+/// 截断到 80 个字符且不超过 [`MAX_NAME_BYTES`] 字节（ext4 等文件名上限是 255 **字节**，中文一个字 3 字节，
+/// 还要给调用方留出 ` [id].azw3` 这类后缀）。空则用 `default`。
 pub fn sanitize_filename(title: &str, default: &str) -> String {
     let t: String = title
         .chars()
@@ -146,11 +147,20 @@ pub fn sanitize_filename(title: &str, default: &str) -> String {
         .collect();
     let t = t.trim();
     if t.is_empty() {
-        default.to_string()
-    } else {
-        t.chars().take(80).collect()
+        return default.to_string();
     }
+    let mut out = String::new();
+    for c in t.chars().take(80) {
+        if out.len() + c.len_utf8() > MAX_NAME_BYTES {
+            break;
+        }
+        out.push(if out.is_empty() && c == '.' { '_' } else { c });
+    }
+    out.trim_end().to_string()
 }
+
+/// [`sanitize_filename`] 结果的字节上限。
+pub const MAX_NAME_BYTES: usize = 200;
 
 #[cfg(test)]
 mod tests {

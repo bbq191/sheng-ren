@@ -88,18 +88,31 @@ fn ncx_index(layout: &Layout, text_len: u32) -> Option<Vec<Vec<u8>>> {
         return None;
     }
     let items = &layout.ncx;
-    // 文档顺序里的父条目
-    let mut parent: Vec<Option<usize>> = Vec::with_capacity(items.len());
+    // 文档顺序里的父条目与子条目（层级已保证不跳级，见 book::clamp_levels），一趟栈扫描
+    let mut parent: Vec<Option<usize>> = vec![None; items.len()];
+    let mut kids: Vec<Vec<usize>> = vec![Vec::new(); items.len()];
+    let mut stack: Vec<usize> = Vec::new();
     for (i, it) in items.iter().enumerate() {
-        parent.push((0..i).rev().find(|&k| items[k].level < it.level));
+        while stack.last().is_some_and(|&k| items[k].level >= it.level) {
+            stack.pop();
+        }
+        if let Some(&p) = stack.last() {
+            parent[i] = Some(p);
+            kids[p].push(i);
+        }
+        stack.push(i);
     }
-    // 长度：到文档顺序里下一条同级或更高级条目为止
-    let length: Vec<u32> = (0..items.len())
-        .map(|i| {
-            let end = (i + 1..items.len()).find(|&k| items[k].level <= items[i].level).map_or(text_len, |k| items[k].pos);
-            end.saturating_sub(items[i].pos)
-        })
-        .collect();
+    // 长度：到文档顺序里下一条同级或更高级条目为止（倒着扫，用栈找"下一条不更深的"）
+    let mut length = vec![0u32; items.len()];
+    let mut next: Vec<usize> = Vec::new();
+    for i in (0..items.len()).rev() {
+        while next.last().is_some_and(|&k| items[k].level > items[i].level) {
+            next.pop();
+        }
+        let end = next.last().map_or(text_len, |&k| items[k].pos);
+        length[i] = end.saturating_sub(items[i].pos);
+        next.push(i);
+    }
     let mut order: Vec<usize> = (0..items.len()).collect();
     order.sort_by_key(|&i| (items[i].level, i));
     let mut slot = vec![0usize; items.len()];
@@ -117,10 +130,10 @@ fn ncx_index(layout: &Layout, text_len: u32) -> Option<Vec<Vec<u8>>> {
             if let Some(p) = parent[i] {
                 tags.push((21, vec![slot[p] as u32]));
             }
-            let kids: Vec<usize> = (0..items.len()).filter(|&k| parent[k] == Some(i)).map(|k| slot[k]).collect();
-            if let (Some(first), Some(last)) = (kids.iter().min(), kids.iter().max()) {
-                tags.push((22, vec![*first as u32]));
-                tags.push((23, vec![*last as u32]));
+            let kid_slots = kids[i].iter().map(|&k| slot[k]);
+            if let (Some(first), Some(last)) = (kid_slots.clone().min(), kid_slots.max()) {
+                tags.push((22, vec![first as u32]));
+                tags.push((23, vec![last as u32]));
             }
             tags.push((6, vec![it.fid, it.off]));
             Entry { key: format!("{s:0width$X}").into_bytes(), tags }
@@ -165,7 +178,7 @@ fn fcis(text_len: u32) -> Vec<u8> {
     r
 }
 
-fn exth(meta: &Meta, res: &Resources) -> Vec<u8> {
+fn exth(meta: &Meta, (resource_count, cover, thumb): (u32, Option<u32>, Option<u32>)) -> Vec<u8> {
     let mut recs: Vec<(u32, Vec<u8>)> = Vec::new();
     let s = |v: &str| v.as_bytes().to_vec();
     for a in meta.authors {
@@ -190,14 +203,14 @@ fn exth(meta: &Meta, res: &Resources) -> Vec<u8> {
     if meta.rtl {
         recs.push((527, s("rtl")));
     }
-    recs.push((125, (res.records.len() as u32).to_be_bytes().to_vec()));
+    recs.push((125, resource_count.to_be_bytes().to_vec()));
     recs.push((131, 0u32.to_be_bytes().to_vec()));
-    if let Some(c) = res.cover {
+    if let Some(c) = cover {
         recs.push((201, c.to_be_bytes().to_vec()));
         recs.push((203, 0u32.to_be_bytes().to_vec()));
         recs.push((129, s(&format!("kindle:embed:{}", base32(c + 1, 4)))));
     }
-    if let Some(t) = res.thumb {
+    if let Some(t) = thumb {
         recs.push((202, t.to_be_bytes().to_vec()));
     }
     // 生成工具标识，与样本相同（阅读器可能按它决定排版特性）。
@@ -215,7 +228,7 @@ fn exth(meta: &Meta, res: &Resources) -> Vec<u8> {
     out.extend(((body.len() + 12) as u32).to_be_bytes());
     out.extend((recs.len() as u32).to_be_bytes());
     out.extend(body);
-    while out.len() % 4 != 0 {
+    while !out.len().is_multiple_of(4) {
         out.push(0);
     }
     out
@@ -244,7 +257,7 @@ struct Indices {
     fcis: u32,
 }
 
-fn record0(meta: &Meta, text_len: u32, text_records: u32, flows: u32, res: &Resources, idx: &Indices) -> Vec<u8> {
+fn record0(meta: &Meta, text_len: u32, text_records: u32, flows: u32, res: (u32, Option<u32>, Option<u32>), idx: &Indices) -> Vec<u8> {
     let mut r = vec![0u8; 16 + 0x108];
     let mut put = |off: usize, v: u32| r[off..off + 4].copy_from_slice(&v.to_be_bytes());
     // PalmDOC 头
@@ -294,7 +307,7 @@ fn record0(meta: &Meta, text_len: u32, text_records: u32, flows: u32, res: &Reso
     r.extend(ex);
     r.extend(name);
     r.extend(std::iter::repeat_n(0u8, R0_PADDING));
-    while r.len() % 4 != 0 {
+    while !r.len().is_multiple_of(4) {
         r.push(0);
     }
     r
@@ -311,8 +324,9 @@ fn pdb_name(title: &str, uid: u32) -> Vec<u8> {
     b
 }
 
-pub fn assemble(meta: &Meta, layout: &Layout, res: Resources) -> Result<Vec<u8>, String> {
-    let mut text = layout.flow0.clone();
+pub fn assemble(meta: &Meta, mut layout: Layout, res: Resources) -> Result<Vec<u8>, String> {
+    let mut text = std::mem::take(&mut layout.flow0);
+    let layout = &layout;
     let mut bounds = vec![(0u32, text.len() as u32)];
     for f in &layout.css_flows {
         let s = text.len() as u32;
@@ -324,8 +338,10 @@ pub fn assemble(meta: &Meta, layout: &Layout, res: Resources) -> Result<Vec<u8>,
     if trecs.len() > u16::MAX as usize {
         return Err("正文记录数超过 65535".into());
     }
+    let text_record_count = trecs.len() as u32;
+    drop(text);
     let mut records: Vec<Vec<u8>> = vec![Vec::new()]; // 0 号稍后填
-    records.extend(trecs.iter().cloned());
+    records.extend(trecs);
     records.push(vec![0]);
     let first_non_book = records.len() as u32;
     let frag = records.len() as u32;
@@ -341,7 +357,9 @@ pub fn assemble(meta: &Meta, layout: &Layout, res: Resources) -> Result<Vec<u8>,
         None => 0xFFFF_FFFF,
     };
     let first_image = records.len() as u32;
-    records.extend(res.records.iter().cloned());
+    let resource_count = res.records.len() as u32;
+    let (cover, thumb) = (res.cover, res.thumb);
+    records.extend(res.records);
     let fdst_i = records.len() as u32;
     records.push(fdst(&bounds));
     let flis_i = records.len() as u32;
@@ -350,7 +368,7 @@ pub fn assemble(meta: &Meta, layout: &Layout, res: Resources) -> Result<Vec<u8>,
     records.push(fcis(text_len));
     records.push(vec![0xE9, 0x8E, 0x0D, 0x0A]);
     let idx = Indices { first_non_book, frag, skel, ncx, first_image, fdst: fdst_i, flis: flis_i, fcis: fcis_i };
-    records[0] = record0(meta, text_len, trecs.len() as u32, bounds.len() as u32, &res, &idx);
+    records[0] = record0(meta, text_len, text_record_count, bounds.len() as u32, (resource_count, cover, thumb), &idx);
 
     let n = records.len();
     if n > u16::MAX as usize {
@@ -365,6 +383,11 @@ pub fn assemble(meta: &Meta, layout: &Layout, res: Resources) -> Result<Vec<u8>,
     out.extend(((2 * n - 1) as u32).to_be_bytes());
     out.extend([0u8; 4]);
     out.extend((n as u16).to_be_bytes());
+    let total: usize = 78 + 8 * n + 2 + records.iter().map(Vec::len).sum::<usize>();
+    if total > u32::MAX as usize {
+        return Err("文件超过 4GB".into());
+    }
+    out.reserve(total - out.len());
     let mut off = 78 + 8 * n + 2;
     for (i, r) in records.iter().enumerate() {
         out.extend((off as u32).to_be_bytes());
