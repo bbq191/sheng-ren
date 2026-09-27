@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 600" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>按设备优化一本书的流程（booklib build 内部）</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <style>
+      .b{fill:#fff;stroke:#999;stroke-width:1.1}
+      .t{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.2}
+      .c{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.2}
+      .g{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.2}
+      .h{font-weight:bold;font-size:14px}
+      .s{font-size:12px;fill:#444}
+      .l{stroke:#555;stroke-width:1.3;fill:none}
+    </style>
+  </defs>
+  <rect width="940" height="600" fill="#fafafa"/>
+
+  <rect class="b" x="350" y="16" width="240" height="44" rx="8"/>
+  <text x="470" y="36" text-anchor="middle" class="h">母版 EPUB</text>
+  <text x="470" y="52" text-anchor="middle" class="s">PDF 有文字层的先转 EPUB</text>
+  <path class="l" d="M470 60 L470 80" marker-end="url(#a)"/>
+
+  <rect class="b" x="300" y="82" width="340" height="44" rx="8"/>
+  <text x="470" y="101" text-anchor="middle">判断是不是漫画</text>
+  <text x="470" y="118" text-anchor="middle" class="s">图 ≥ 20 张且平均每张图配的文字 &lt; 40 字</text>
+  <path class="l" d="M400 126 C400 150 240 140 240 162" marker-end="url(#a)"/>
+  <path class="l" d="M540 126 C540 150 700 140 700 162" marker-end="url(#a)"/>
+  <text x="300" y="150" class="s">文字书</text>
+  <text x="620" y="150" class="s">漫画</text>
+
+  <!-- 文字书 -->
+  <rect class="t" x="20" y="164" width="440" height="330" rx="10"/>
+  <text x="240" y="186" text-anchor="middle" class="h">清洗层 wash（按顺序）</text>
+  <g class="s">
+    <text x="36" y="212">① 剥"伪 DRM"（只加密字体）· 删空白页 · 删失效引用</text>
+    <text x="36" y="234">② 判断主语言（dc:language + 正文字符分布）</text>
+    <text x="36" y="256">③ CSS：去掉 font-size / font-family / font / line-height / vh 高度</text>
+    <text x="36" y="278">④ 正文：中文分段、标题后首段顶格、重复 id 折叠</text>
+    <text x="52" y="298">居中/居右换成 eink-center / eink-right 类，补 &lt;html lang&gt;</text>
+    <text x="36" y="320">⑤ 注入 eink-wash.css：首行缩进（中 2em / 西 1.2em）、两端对齐、</text>
+    <text x="52" y="340">英文断字、注释 0.9em（比正文小一号）</text>
+    <text x="36" y="362">⑥ 目录：修 NCX、整理已有目录、没有就按标题生成</text>
+    <text x="36" y="384">⑦ 章节分页：章标题独立一页，节与节、节与章之间分页，</text>
+    <text x="52" y="404">目录缺的节补进去（缩进一级）</text>
+    <text x="36" y="426">⑧ 删章尾空白页 · 修 NCX uid</text>
+  </g>
+  <line x1="36" y1="440" x2="444" y2="440" stroke="#b9c9ee"/>
+  <text x="36" y="462" class="s">然后：注释搬到本章末尾并可跳转/返回 · 提对比度（浅灰字 → 黑）</text>
+  <text x="36" y="482" class="s">插图按阅读范围缩小（超大才缩，不放大）</text>
+
+  <!-- 漫画 -->
+  <rect class="c" x="480" y="164" width="440" height="330" rx="10"/>
+  <text x="700" y="186" text-anchor="middle" class="h">漫画页：每张图单趟处理，只编码一次</text>
+  <g>
+    <rect class="b" x="500" y="204" width="80" height="54" rx="6"/><text x="540" y="228" text-anchor="middle">解码</text><text x="540" y="246" text-anchor="middle" class="s">一次</text>
+    <rect class="b" x="598" y="204" width="80" height="54" rx="6"/><text x="638" y="228" text-anchor="middle">裁白边</text><text x="638" y="246" text-anchor="middle" class="s">扫描白框</text>
+    <rect class="b" x="696" y="204" width="80" height="54" rx="6"/><text x="736" y="228" text-anchor="middle">缩放</text><text x="736" y="246" text-anchor="middle" class="s">到阅读范围</text>
+    <rect class="b" x="794" y="204" width="110" height="54" rx="6"/><text x="849" y="228" text-anchor="middle">补白 + 编码</text><text x="849" y="246" text-anchor="middle" class="s">JPEG 一次</text>
+    <path class="l" d="M580 231 L596 231" marker-end="url(#a)"/>
+    <path class="l" d="M678 231 L694 231" marker-end="url(#a)"/>
+    <path class="l" d="M776 231 L792 231" marker-end="url(#a)"/>
+  </g>
+  <g class="s">
+    <text x="500" y="290">· 补白到阅读范围的宽高比（容差 0.3%），图片正好填满阅读器图片框</text>
+    <text x="500" y="312">· 黑白屏（Kindle、掌阅）：转 256 级灰度，<tspan font-weight="bold">不抖动</tspan></text>
+    <text x="500" y="334">· 彩色屏（Move）：保留彩色</text>
+    <text x="500" y="356">· 已经合适的图不重新编码；透明背景先铺白</text>
+    <text x="500" y="378">· 缩小用 JPEG 质量 95；比阅读范围小很多的页先放大（质量 85）</text>
+    <text x="500" y="400">· 漫画里夹的文字页照常保留</text>
+    <text x="500" y="422">· 多张图并行处理，结果与逐张处理逐字节相同</text>
+  </g>
+
+  <path class="l" d="M240 494 C240 520 440 510 450 526" marker-end="url(#a)"/>
+  <path class="l" d="M700 494 C700 520 500 510 490 526" marker-end="url(#a)"/>
+
+  <rect class="g" x="330" y="528" width="280" height="56" rx="8"/>
+  <text x="470" y="550" text-anchor="middle" class="h">质量门 → 产物</text>
+  <text x="470" y="570" text-anchor="middle" class="s">XHTML 合法、引用齐全（没过只警告）；Kindle 再转 AZW3</text>
+</svg>
