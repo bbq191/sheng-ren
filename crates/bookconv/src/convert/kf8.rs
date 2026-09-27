@@ -40,12 +40,20 @@ pub fn azw3_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
     }
 
     // 内链重映射上下文：fragment 起始表 + aid 位置表，把 kindle:pos 链接转真锚点（脚注/目录跳转可用）。
-    let frag_starts: Vec<usize> = palm::parse_fragment_starts(&records, &h).into_iter().map(|p| raw.pos(p).unwrap_or(usize::MAX)).collect();
+    // 索引里的位置是片段插回骨架后的坐标，先经 Kf8Map 换成 rawML 存储坐标（索引不全时退回不换算），再换成解码后位置。
+    let map = palm::Kf8Map::parse(&records, &h);
+    let stored = |a: usize| map.as_ref().map_or(a, |m| m.to_stored(a));
+    let frag_starts: Vec<usize> = map
+        .as_ref()
+        .map_or_else(|| palm::parse_fragment_starts(&records, &h), |m| m.stored_starts())
+        .into_iter()
+        .map(|p| raw.pos(p).unwrap_or(usize::MAX))
+        .collect();
     let link_ctx = if frag_starts.is_empty() { None } else { Some(LinkCtx::build(rawml, frag_starts)) };
     // 切章：有 NCX 真目录则**按 NCX 位置切**（一章一 spine + 一 nav，含层级）；否则按 <html> 块切。
     let ncx: Vec<palm::NcxEntry> = palm::parse_ncx(&records, &h)
         .into_iter()
-        .filter_map(|e| Some(palm::NcxEntry { pos: raw.pos(e.pos)?, ..e }))
+        .filter_map(|e| Some(palm::NcxEntry { pos: raw.pos(stored(e.pos))?, ..e }))
         .collect();
     let chapters = build_chapters(rawml, &embed_path, &ncx, &exth.title, link_ctx.as_ref());
     if chapters.is_empty() || chapters.iter().all(|c| c.html_body.trim().is_empty()) {
@@ -145,32 +153,49 @@ impl Cleaner {
 }
 
 /// 内链重映射上下文：fragment 起始偏移表 + rawML 中 aid 位置表（排序），把 `kindle:pos:fid:off` 解析成
-/// 目标章文件 + `#aid<X>` 锚点。fid、off 都是 base32（数字 0-9A-V，见 `palm::base32`）。
+/// 目标章文件 + `#aid<X>` 锚点。fid、off 都是 base32（数字 0-9A-V，见 `palm::base32`）；`frag_starts` 是各片段
+/// 在（解码后）rawML 里的存储起点，off 按字节加上去（KF8 正文是 UTF-8，解码前后字节一致）。
 struct LinkCtx {
     frag_starts: Vec<usize>,
-    aid_pos: Vec<(usize, String)>, // (rawML 字节位置, aid)，按位置升序
+    /// (标签在 rawML 的起点, 清洗后它的 id)，按位置升序。带 aid 的标签 → `aid<X>`（清洗时 aid 转成 id、原有 id 删掉）；
+    /// 不带 aid 但有 id 的标签（calibre 等工具做的 AZW3 常只有 `id="filepos…"`）→ 原 id。
+    anchors: Vec<(usize, String)>,
 }
 impl LinkCtx {
     fn build(rawml: &str, frag_starts: Vec<usize>) -> Self {
-        let re = Regex::new(r#"(?i)\baid="([^"]+)""#).unwrap();
-        let mut aid_pos: Vec<(usize, String)> =
-            re.captures_iter(rawml).map(|c| (c.get(0).unwrap().start(), c[1].to_string())).collect();
-        aid_pos.sort_by_key(|x| x.0);
-        LinkCtx { frag_starts, aid_pos }
+        // 记标签起点（不是属性的位置）：链接偏移指向目标标签的 `<`，"≤ 目标的最近一个"才是它自己。
+        static RE_TAG: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        static RE_AID: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        static RE_ID: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let re_tag = RE_TAG.get_or_init(|| Regex::new(r#"<[a-zA-Z][^>]*>"#).unwrap());
+        let re_aid = RE_AID.get_or_init(|| Regex::new(r#"(?i)\baid="([^"]+)""#).unwrap());
+        let re_id = RE_ID.get_or_init(|| Regex::new(r#"(?i)\bid="([^"]+)""#).unwrap());
+        let anchors = re_tag
+            .find_iter(rawml)
+            .filter_map(|m| {
+                let tag = m.as_str();
+                let id = match re_aid.captures(tag) {
+                    Some(c) => format!("aid{}", &c[1]),
+                    None => re_id.captures(tag)?[1].to_string(),
+                };
+                Some((m.start(), id))
+            })
+            .collect();
+        LinkCtx { frag_starts, anchors }
     }
-    /// (fid, off) → (目标 rawML 偏移, 目标 aid)。找 ≤ 目标偏移的最近 aid（= 含该位置的元素）。
+    /// (fid, off) → (目标 rawML 偏移, 目标锚点 id)。找 ≤ 目标偏移的最近锚点（= 目标元素或包含它的元素）。
     fn resolve(&self, fid: usize, off: usize) -> Option<(usize, String)> {
         let base = *self.frag_starts.get(fid)?;
         let t = base.checked_add(off)?;
-        let idx = self.aid_pos.partition_point(|(p, _)| *p <= t);
+        let idx = self.anchors.partition_point(|(p, _)| *p <= t);
         if idx == 0 {
             return None;
         }
-        Some((t, self.aid_pos[idx - 1].1.clone()))
+        Some((t, self.anchors[idx - 1].1.clone()))
     }
 }
 
-/// 两遍第二遍：把各章 HTML 里保留的 `href="kindle:pos:fid:F:off:O"` 重写成 `chap_N.xhtml#aid<X>`。
+/// 两遍第二遍：把各章 HTML 里保留的 `href="kindle:pos:fid:F:off:O"` 重写成 `chap_N.xhtml#锚点`。
 /// 只换 href 属性值（保留 `<a>` 其余属性——尤其自身 id，是脚注回跳的目标）。解析不出 → `href="#"`（惰性）。
 /// `ch_ranges`=各最终章 rawML [start,end) 定位目标章；`live_ids`=清洗后实际存活的 id 集合——目标 aid
 /// 在 shell 元素上（body/html，已被剥）时锚点不存在，退回只跳章文件（对指向 fragment 首的 TOC 链正确）。
@@ -188,10 +213,9 @@ fn remap_links(
     let s = re.replace_all(html, |cap: &regex::Captures| {
         let resolved = palm::base32_decode(&cap[1]).zip(palm::base32_decode(&cap[2])).and_then(|(fid, off)| ctx.resolve(fid, off));
         match resolved {
-            Some((t, aid)) => {
+            Some((t, id)) => {
                 let ci = ch_ranges.partition_point(|(a, _)| *a <= t).saturating_sub(1);
                 let file = crate::epub::chapter_filename(ci);
-                let id = format!("aid{aid}");
                 if live_ids.contains(&id) {
                     format!(r#"href="{file}#{id}""#)
                 } else {
@@ -292,8 +316,8 @@ fn build_chapters(
         let ch_ranges: Vec<(usize, usize)> = (0..n)
             .map(|i| (built[i].1, if i + 1 < n { built[i + 1].1 } else { rawml.len() }))
             .collect();
-        // 收集清洗后实际存活的 id="aid..."（shell 上的 aid 已被剥，不在此集）→ 决定锚点 vs 跳章首。
-        let re_id = Regex::new(r#"(?i)\bid="(aid[^"]+)""#).unwrap();
+        // 收集清洗后实际存活的 id（shell 上的 aid、带 aid 标签原有的 id 已被剥，不在此集）→ 决定锚点 vs 跳章首。
+        let re_id = Regex::new(r#"(?i)\bid="([^"]+)""#).unwrap();
         let mut live_ids: HashSet<String> = HashSet::new();
         for (ch, _) in &built {
             for c in re_id.captures_iter(&ch.html_body) {
@@ -417,11 +441,21 @@ mod tests {
     }
 
     #[test]
+    fn link_anchors_use_tag_start_and_fall_back_to_plain_id() {
+        let raw = r#"<p id="filepos9">甲</p><p class="c" aid="Q" id="old">乙</p><span>丙</span>"#;
+        let ctx = LinkCtx::build(raw, vec![0]);
+        let q = raw.find("<p class").unwrap();
+        assert_eq!(ctx.anchors, vec![(0, "filepos9".to_string()), (q, "aidQ".to_string())]);
+        // 偏移正好落在第二个 <p> 的 `<` 上 → 就是它，不是前一个元素
+        assert_eq!(ctx.resolve(0, q).unwrap().1, "aidQ");
+    }
+
+    #[test]
     fn remap_links_resolves_kindle_pos_to_anchor() {
         // fragment 2 起于 rawML 100；aid "A2" 在位置 100 → kindle:pos:fid:2:off:0 → chap#? #aidA2
         let ctx = LinkCtx {
             frag_starts: vec![0, 50, 100],
-            aid_pos: vec![(0, "A0".into()), (50, "A1".into()), (100, "A2".into())],
+            anchors: vec![(0, "aidA0".into()), (50, "aidA1".into()), (100, "aidA2".into())],
         };
         // 两章：[0,80) 与 [80,200)。目标 rawoff=100 落第二章(idx1)。
         let ranges = vec![(0usize, 80usize), (80usize, 200usize)];

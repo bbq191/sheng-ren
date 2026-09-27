@@ -547,34 +547,75 @@ fn indx_split_entry(entry: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((&entry[1..1 + id_len], &entry[1 + id_len..]))
 }
 
-/// 解析 KF8 **NCX 目录** → `(rawML 偏移, 真章名, 层级)` 列表。KF8 章名不在正文 `<title>`（那常=书名），
+/// 一族 INDX 解析后的条目：(id 文本, [(tag, 该 tag 的全部值)])。
+type IndxEntry<'a> = (&'a [u8], Vec<(u8, Vec<usize>)>);
+
+/// 解析一族 INDX（头记录的 `TAGX` 标签表 + 各数据块条目）。返回 (头记录号, 数据块数, 条目)。
+/// 条目 = id 文本 + 控制字节（个数见 TAGX `+8`）+ 按 TAGX 顺序的 tag 值（前向变长整数）。某 tag 在控制字节里
+/// 对应掩码位上的数 = 出现次数，每次 `nvals` 个值；掩码多位全置 1 的"次数另写"形式没见过样本，遇到时该条目
+/// 后面的 tag 不再解析。
+fn indx_read<'a>(records: &[&'a [u8]], mobi: &[u8], field_off: usize) -> Option<(usize, usize, Vec<IndxEntry<'a>>)> {
+    let (idx, hdr, ndata) = indx_locate(records, mobi, field_off)?;
+    // TAGX 标签定义表（每项 4 字节：tag / nvals / mask / eof）
+    let tagx_at = crate::util::memfind(hdr, b"TAGX")?;
+    if tagx_at + 12 > hdr.len() {
+        return None;
+    }
+    let tagx_len = be_u32(hdr, tagx_at + 4)? as usize;
+    let ctrl_count = (be_u32(hdr, tagx_at + 8)? as usize).max(1);
+    let tagx_end = (tagx_at + tagx_len).min(hdr.len());
+    let tagtable: Vec<(u8, u8, u8, u8)> = hdr[(tagx_at + 12).min(tagx_end)..tagx_end].chunks_exact(4).map(|t| (t[0], t[1], t[2], t[3])).collect();
+    let mut out = Vec::new();
+    for blk in 0..ndata {
+        for entry in indx_entries(records[idx + 1 + blk]) {
+            let Some((id, tagbytes)) = indx_split_entry(entry) else { continue };
+            if tagbytes.len() < ctrl_count {
+                continue;
+            }
+            let mut p = ctrl_count;
+            let mut ci = 0usize;
+            let mut tags = Vec::new();
+            for &(tag, nvals, mask, eof) in &tagtable {
+                if eof != 0 {
+                    ci += 1; // 下一个控制字节
+                    continue;
+                }
+                let Some(&ctrl) = tagbytes.get(ci) else { break };
+                if ctrl & mask == 0 {
+                    continue;
+                }
+                if mask.count_ones() > 1 && ctrl & mask == mask {
+                    break;
+                }
+                let occ = ((ctrl & mask) >> mask.trailing_zeros()) as usize;
+                let mut vals = Vec::with_capacity(occ * nvals as usize);
+                for _ in 0..occ * nvals as usize {
+                    if p >= tagbytes.len() {
+                        break;
+                    }
+                    vals.push(read_varint_fwd(tagbytes, &mut p));
+                }
+                tags.push((tag, vals));
+            }
+            out.push((id, tags));
+        }
+    }
+    Some((idx, ndata, out))
+}
+
+/// 条目里某个 tag 的第 `i` 个值。
+fn tag_val(tags: &[(u8, Vec<usize>)], tag: u8, i: usize) -> Option<usize> {
+    tags.iter().find(|(t, _)| *t == tag).and_then(|(_, v)| v.get(i).copied())
+}
+
+/// 解析 KF8 **NCX 目录** → `(组装后文本偏移, 真章名, 层级)` 列表。KF8 章名不在正文 `<title>`（那常=书名），
 /// 而在独立索引：NCX 记录号存 MOBI 头 `+0xE4`；结构 = 头 INDX（含 `TAGX` 标签定义 + `+0x18` 数据块数）
 /// 加 N 个数据 INDX（每条目 = id 文本 + 按 TAGX 编码的 tag 值）+ CNCX（`ncx+1+ndata`，标签字串池）。
-/// tag 1 = pos（**直接 rawML 偏移**）、tag 3 = CNCX 标签偏移、tag 4 = 层级。
+/// tag 1 = pos（**片段插回骨架之后**的文本偏移，要经 [`Kf8Map::to_stored`] 换成 rawML 存储偏移）、
+/// tag 3 = CNCX 标签偏移、tag 4 = 层级。
 /// 5 本真机样本（俄/日/中，4–30 条，含层级）验证。解析失败/非预期结构 → 返回空（调用方退化，不崩不回归）。
 pub fn parse_ncx(records: &[&[u8]], h: &Header) -> Vec<NcxEntry> {
-    let (ncx, hdr, ndata) = match indx_locate(records, h.mobi, 0xE4) {
-        Some(x) => x,
-        None => return vec![],
-    };
-    // TAGX 标签定义表（每项 4 字节：tag / nvals / mask / eof）
-    let tagx_at = match crate::util::memfind(hdr, b"TAGX") {
-        Some(x) => x,
-        None => return vec![],
-    };
-    if tagx_at + 12 > hdr.len() {
-        return vec![];
-    }
-    let tagx_len =
-        u32::from_be_bytes([hdr[tagx_at + 4], hdr[tagx_at + 5], hdr[tagx_at + 6], hdr[tagx_at + 7]])
-            as usize;
-    let tagx_end = (tagx_at + tagx_len).min(hdr.len());
-    let mut tagtable: Vec<(u8, u8, u8, u8)> = Vec::new();
-    let mut q = tagx_at + 12;
-    while q + 4 <= tagx_end {
-        tagtable.push((hdr[q], hdr[q + 1], hdr[q + 2], hdr[q + 3]));
-        q += 4;
-    }
+    let Some((ncx, ndata, entries)) = indx_read(records, h.mobi, 0xE4) else { return vec![] };
     // CNCX 紧跟数据块；截断的文件可能没有这条记录。
     let cncx = match records.get(ncx + 1 + ndata) {
         Some(r) => *r,
@@ -599,71 +640,71 @@ pub fn parse_ncx(records: &[&[u8]], h: &Header) -> Vec<NcxEntry> {
         }
         String::from_utf8_lossy(&cncx[p..p + l]).into_owned()
     };
-
-    let mut out = Vec::new();
-    for blk in 0..ndata {
-        for entry in indx_entries(records[ncx + 1 + blk]) {
-            // 条目 = id 文本(忽略) + 控制字节 + 按 TAGX 编码的 tag 值（皆相对该条目切片）。
-            let (_id, tagbytes) = match indx_split_entry(entry) {
-                Some(x) => x,
-                None => continue,
-            };
-            if tagbytes.is_empty() {
-                continue;
-            }
-            let ctrl = tagbytes[0];
-            let mut p = 1usize;
-            let (mut pos, mut label_off, mut level) = (None, None, 0u8);
-            for &(tag, nvals, mask, eof) in &tagtable {
-                if eof != 0 || ctrl & mask == 0 {
-                    continue;
-                }
-                let mut first = None;
-                for i in 0..nvals {
-                    if p >= tagbytes.len() {
-                        break;
-                    }
-                    let v = read_varint_fwd(tagbytes, &mut p);
-                    if i == 0 {
-                        first = Some(v);
-                    }
-                }
-                match tag {
-                    1 => pos = first,
-                    3 => label_off = first,
-                    4 => level = first.unwrap_or(0) as u8,
-                    _ => {}
-                }
-            }
-            if let (Some(pos), Some(lo)) = (pos, label_off) {
-                let label = label_at(lo);
-                if !label.trim().is_empty() {
-                    out.push(NcxEntry { pos, label, level });
-                }
-            }
-        }
-    }
-    out
+    entries
+        .iter()
+        .filter_map(|(_, tags)| {
+            let (pos, lo) = (tag_val(tags, 1, 0)?, tag_val(tags, 3, 0)?);
+            let label = label_at(lo);
+            (!label.trim().is_empty()).then(|| NcxEntry { pos, label, level: tag_val(tags, 4, 0).unwrap_or(0) as u8 })
+        })
+        .collect()
 }
 
-/// 解析 KF8 **fragment 索引** → 每个 fragment 在 rawML 的起始字节偏移（下标=fragment id）。
-/// fragment 索引记录号存 MOBI 头 `+0xE8`；数据 INDX 每条目的 id 文本就是偏移十进制串（如 "0000000400"）。
-/// 供内链 `kindle:pos:fid:F:off:O` 定位：目标 rawML 偏移 = `frag_starts[F] + O`（与 NCX pos_fid 同源，验证过）。
+/// 解析 KF8 **fragment 索引** → 每个 fragment 的插入位置（下标=fragment id）。
+/// fragment 索引记录号存 MOBI 头 `+0xE8`；数据 INDX 每条目的 id 文本就是插入位置的十进制串（如 "0000000400"）。
+/// 插入位置是**片段插回骨架之后**的文本坐标，要换成 rawML 存储坐标见 [`Kf8Map`]。
 pub fn parse_fragment_starts(records: &[&[u8]], h: &Header) -> Vec<usize> {
-    let (fidx, _hdr, ndata) = match indx_locate(records, h.mobi, 0xE8) {
-        Some(x) => x,
-        None => return vec![],
-    };
-    let mut out = Vec::new();
-    for blk in 0..ndata {
-        for entry in indx_entries(records[fidx + 1 + blk]) {
-            // fragment 条目的 id 文本就是 rawML 起始偏移的十进制串（如 "0000000400"）。
-            if let Some((id, _)) = indx_split_entry(entry) {
-                out.push(std::str::from_utf8(id).unwrap_or("").trim().parse::<usize>().unwrap_or(0));
+    let Some((_, _, entries)) = indx_read(records, h.mobi, 0xE8) else { return vec![] };
+    entries.iter().map(|(id, _)| parse_dec(id)).collect()
+}
+
+fn parse_dec(id: &[u8]) -> usize {
+    std::str::from_utf8(id).unwrap_or("").trim().parse::<usize>().unwrap_or(0)
+}
+
+/// KF8 两套坐标的换算。rawML 里按"骨架、它的各片段、下一个骨架……"**存储**；阅读器把片段插回骨架的 `</body>`
+/// 之前**组装**成文档。NCX 的 pos、fragment 索引的插入位置都是组装后的坐标，而我们切章用的是存储顺序的 rawML，
+/// 两者在片段内差一个"骨架尾巴"（`</body></html>` 那段）的长度——不换算，切点会提前十几个字节，切进前一个标签
+/// 中间（真书《福尔摩斯探案全集》7 张插图因此丢失）。
+/// 骨架索引（MOBI 头 `+0xEC`）：tag 1 = 片段数，tag 6 = (存储起点, 长度)；fragment 索引 tag 6 = (_, 片段长度)。
+pub struct Kf8Map {
+    /// 按片段号：(组装后插入位置, 长度, rawML 存储起点)
+    frags: Vec<(usize, usize, usize)>,
+}
+
+impl Kf8Map {
+    /// 两个索引都在且对得上才返回；否则 `None`（调用方退回"两套坐标当一样"的旧近似）。
+    pub fn parse(records: &[&[u8]], h: &Header) -> Option<Self> {
+        let (_, _, fentries) = indx_read(records, h.mobi, 0xE8)?;
+        let (_, _, sentries) = indx_read(records, h.mobi, 0xEC)?;
+        let mut frags: Vec<(usize, usize, usize)> = fentries.iter().map(|(id, tags)| Some((parse_dec(id), tag_val(tags, 6, 1)?, 0))).collect::<Option<_>>()?;
+        let mut fi = 0usize;
+        for (_, tags) in &sentries {
+            let (count, start, len) = (tag_val(tags, 1, 0)?, tag_val(tags, 6, 0)?, tag_val(tags, 6, 1)?);
+            let mut pos = start + len;
+            for f in frags.get_mut(fi..fi + count)? {
+                f.2 = pos;
+                pos += f.1;
             }
+            fi += count;
+        }
+        let sorted = frags.windows(2).all(|w| w[0].0 <= w[1].0);
+        (fi == frags.len() && sorted && !frags.is_empty()).then_some(Kf8Map { frags })
+    }
+
+    /// 各片段在 rawML 里的存储起点（下标 = 片段号）。
+    pub fn stored_starts(&self) -> Vec<usize> {
+        self.frags.iter().map(|f| f.2).collect()
+    }
+
+    /// 组装后偏移 → rawML 存储偏移。落在某片段里的按片段换算；落在骨架里（片段之外）的两套坐标相同。
+    pub fn to_stored(&self, a: usize) -> usize {
+        let i = self.frags.partition_point(|f| f.0 <= a);
+        match i.checked_sub(1).map(|k| self.frags[k]) {
+            Some((ins, len, stored)) if a < ins + len => stored + (a - ins),
+            _ => a,
         }
     }
-    out
 }
 
 #[cfg(test)]
