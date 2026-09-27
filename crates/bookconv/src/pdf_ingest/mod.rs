@@ -11,7 +11,7 @@
 //!   直接复用本模块已经解析好的 `lopdf::Document`（`extract_positioned_text_doc`）。此前 fork 锁 lopdf 0.42、
 //!   两边类型不能互传，每本 PDF 要整份解析两遍、二进制里也编进两份 lopdf。**已知局限**：
 //!   `OutputDev::output_character` 不带字体名（只有字号），公式区域探测这次只能靠 Unicode 码位判断，
-//!   不能按数学字体族名判断（见 `is_formula_char` 文档注释，含真实 pdflatex 样本验证过 Unicode 映射基本正确）。
+//!   不能按数学字体族名判断（见 `text::line_is_formula` 一带的文档注释，含真实 pdflatex 样本验证过 Unicode 映射基本正确）。
 //! - `hayro`：整页光栅化，只给公式区域裁剪用（自己独立解析一遍 PDF 字节，`Pdf::new(bytes)`）。
 //!
 //! 一份 PDF 因此在 `optimize_pdf_to_epub` 里最多被解析两遍（lopdf 一遍，供结构读取与逐字提取共用；

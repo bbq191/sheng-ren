@@ -777,6 +777,32 @@ mod tests {
     }
 
     #[test]
+    fn truncated_ncx_without_cncx_record_yields_empty_not_panic() {
+        // NCX 头 INDX（1 个数据块，带 TAGX）+ 数据块，但文件在 CNCX 记录前截断。
+        let mut r0 = vec![0u8; 16 + 0xE8];
+        r0[16..20].copy_from_slice(b"MOBI");
+        r0[20..24].copy_from_slice(&0xE8u32.to_be_bytes());
+        r0[16 + 0xE4..16 + 0xE8].copy_from_slice(&1u32.to_be_bytes());
+        let mut hdr = vec![0u8; 0x20];
+        hdr[..4].copy_from_slice(b"INDX");
+        hdr[0x18..0x1C].copy_from_slice(&1u32.to_be_bytes());
+        hdr.extend_from_slice(b"TAGX\0\0\0\x10\0\0\0\x01\x01\x01\x01\0");
+        let data = b"INDX".to_vec();
+        let records: Vec<&[u8]> = vec![&r0, &hdr, &data];
+        let h = parse_header(&r0).unwrap();
+        assert!(parse_ncx(&records, &h).is_empty());
+    }
+
+    #[test]
+    fn truncated_file_reports_incomplete_download() {
+        let mut d = vec![0u8; 78 + 8];
+        d[76..78].copy_from_slice(&1u16.to_be_bytes());
+        d[78..82].copy_from_slice(&1_000_000u32.to_be_bytes());
+        let err = parse_palmdb(&d).unwrap_err();
+        assert!(err.contains("文件不完整"), "{err}");
+    }
+
+    #[test]
     fn palmdb_name_null_terminated() {
         let mut d = vec![0u8; 78];
         d[0..5].copy_from_slice(b"Book\0");
