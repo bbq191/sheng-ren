@@ -1,73 +1,40 @@
-//! 通用 EPUB 优化器：吃**任意结构**的 EPUB，只就地改每个 (x)html（字体解锁 + 清洗），
-//! 其余文件(css/图片/opf/ncx/mimetype)原样保留、结构不动，重打包。用于把用户导入的
-//! 第三方书也拉进优化(尤其"字体改不动"——第三方常内联硬写死 font)。
-//! 不重组目录/spine，最大限度兼容各家 EPUB。
+//! 通用 EPUB 优化器：吃**任意结构**的 EPUB，按目标设备的阅读范围处理——清洗层（`wash`，可选）→ 每个 (x)html
+//! 的字体解锁与注释重排 → 图片缩放（漫画单趟裁边/缩放/补白/灰度）。其余文件（css/opf/ncx）原样或只做小改，
+//! 不重组目录/spine，最大限度兼容各家 EPUB。入口是流式的 [`optimize_epub_file_streaming`]（路径进路径出），
+//! 调用方是书库 `booklib`（`crates/library`）和命令行 `epub-optimize`。
 
 use regex::Regex;
 use std::collections::HashSet;
-use std::io::{Cursor, Read, Write};
+use std::io::Write;
 use std::sync::OnceLock;
 use zip::{ZipArchive, ZipWriter};
 
-/// 幂等标记：优化器把这个文件埋进产物 EPUB，内容=优化器版本号。
-/// 判"是否优化过"以它为权威——**跟书走**(云同步不丢、换设备仍在、对第三方书和墨香书一视同仁)，
-/// 比记设备本地 uuid(会被云同步 churn)或书名后缀(用户改名即失效)都鲁棒。放 META-INF/ 下
-/// (EPUB 规范允许该目录放额外文件，阅读器忽略)，STORED 存。
+/// 幂等标记：优化器把这个文件埋进产物 EPUB，内容=优化器版本号（见 [`marker_value`]）。放 META-INF/ 下
+/// （EPUB 规范允许该目录放额外文件，阅读器忽略）。重优化时旧标记剔除、结尾重写一条。
 pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
-/// 优化逻辑版本。升级 strip_font_locks / preserve_relink_footnotes 等行为时 bump，
-/// 据此可把旧版本产物挑出来重优化。v2：加 duokan 图片脚注标记修复（fix_duokan_markers）。
-/// v3：按 Move 屏规格设备优化——① 图片降采样到 1696px 长边（imgopt）+ ② e-ink 提对比（灰字→纯黑、
-/// 细字重→400，作用于 html style / <style> / .css）。v4：远程图内联（微信读书等下载书内嵌
-/// `src="https://res.weread.qq.com/..."` 远程图，设备离线加载不到 → reMarkable 破图占位=大放大镜；
-/// 优化时抓下来降采样内联进 EPUB，抓不到就删掉该 img 免放大镜）。**新导入书自动应用**；存量书 autoopt 不
-/// 会自动重优化（跳过任何已带标记的书），需要时 `POST /optimize {uuid, force:true}` 强制重优化以应用。
-/// v5：Calibre 洗书形态——同文件带文件名 href 归一裸锚（normalize_self_hrefs）+ 真 img 版 duokan 标记
-/// 换上标且保留 id（`wash_epub.sh` 产物经 host CLI `epub-optimize` 走同一函数）；图片降采样加短边 ≤954
-/// 约束（真机探针：块级图缩到正文列宽，方图只卡长边白留 1.8× 像素）。
-/// v6：清洗层（`wash`）可选前置——伪 DRM 剥离、CSS 文件级锁剥离、边距/段距归零+2em 缩进、空页清理、
-/// 自动目录、单标签双 id 折叠（对标 host `wash_epub.sh`，`OptimizeOpts::wash`；weread 线缺省不开）。
-/// v7：做精做强——① 中英文各按阅读习惯注排版（`wash::LangMode` 自动探测：中文首行 2em / 拉丁 1.2em+标题后首段不缩进）；
-/// ② 自动目录从 h1/h2 扩到 **h1–h6** 并多级嵌套（只用 h3 当章标题的书不再漏目录）。
-/// v8：真机《飘》两修——① 内联脚注丢弃图标 marker（xochitl 按固有尺寸渲染图标=巨大且每条重复）；
-/// ② EPUB 内嵌图改竖向框（宽≤954）防行内横幅溢出竖屏；③ 清洗层剥 CSS `background`/`background-image`
-/// （xochitl 无视 no-repeat 把背景图平铺满页盖正文，真机《飘》分卷页坐实）——章头 `<img>` 装饰不受影响。
-/// v10：真机《缩进诊断6》/《飘》坐实——xochitl **只认外链 `.css` 文件里的规则，完全无视内联 `<style>` 块和元素
-/// `style=` 属性**（此前 v6–v9 注入的内联 eink-wash 排版规则在 xochitl 从未生效！）。改：排版规则（首行缩进/边距）
-/// 写成**外链 `eink-wash.css`** + 每章 `<link>` + OPF manifest 补 item（xochitl/KOReader 都认）。⚠ xochitl css
-/// 解析器脆，外链 css **只用裸 `p{}` 元素选择器**（一条类/复杂选择器就让整表失效，《缩进诊断5》坐实）。撤回 v9 的
-/// nbsp 段首缩进（nbsp 宽随字体变、且被折叠，做不到精确 2 字；外链 text-indent 精确且字体无关）。
-/// v11：真机《疯探》坐实——删掉 `remove_toc_from_spine`（指向 ≥10 个不同 html 文件的页面曾被当
-/// "跟原生 TOC 冗余"的目录页从 spine 剥掉）。假设站不住：这类页面是书籍正文本身，不是能丢的冗余物，
-/// 违背 EPUB 线原则①"保留目录页"；已优化过的旧书需 `force:true` 重优化才能拿回被剥掉的目录页。
-/// v12：真机《疯探》vs《雪人》对照坐实——`toc.ncx` 的 `dtb:uid` 跟 OPF `dc:identifier` 不一致时
-/// （第三方生成器常见 bug，如"番茄小说 EPUB Generator"）reMarkable 原生目录面板**直接不显示目录
-/// 入口**（不是空列表），navMap 结构再完整都没用；`dtb:uid` 匹配的书目录入口就在。新增
-/// `wash::fix_ncx_uid` 把 `dtb:uid` 同步成 OPF 实际标识符（含我们自己 `build_ncx` 生成的也一并
-/// 从硬编码 `eink-wash` 改用真实标识符）；旧书需 `force:true` 重优化。
-/// v13：dtb:uid 修一致后《疯探》原生目录入口真机复测仍不出现——跟《雪人》剩下唯一的结构性差异是
-/// `toc.ncx` 带外部 DTD 引用（`http://www.daisy.org/...dtd`），《雪人》没有。新增
-/// `wash::strip_ncx_doctype` 无条件剥掉这个声明（不改变 NCX 语义，纯粹去掉外部依赖，真机 USB/WiFi
-/// 隧道环境很可能因为解析器联网取 DTD 卡住/失败而让整份 NCX 被判不可用）；旧书需 `force:true`。
-/// v15：EPUB 漫画页补白目标从屏幕比例 954:1696 改成 xochitl 图片框比例 303:462.1（`imgopt::EPUB_FRAME_ASPECT`，画布 954×1458，
-/// 补白容差收紧到 0.3%），配合阅读器页边距 1（由 book-serve + `shelf-comic-margins.qmd` 代理设置，实验室开关 `comicMinMargin`）：真机同图 A/B 图片宽 260→303pt、
-/// 左右留白 20.0/22.9pt → 约 0.3/0.7pt；旧漫画需重新优化才生效（从原始文件重跑，别对已优化产物二次优化——多一代 JPEG 有损）。
-/// v16（2026-09-27，本仓库）：去掉 v15 的"页边距 1 + 设备端代理"模式（`EPUB_FRAME_ASPECT`/`comic_pad` 删除）。缩放与漫画补白一律按
-/// profile 的**真实可阅读范围**（`OptimizeOpts::screen`，Move EPUB = 默认页边距 56 下的图片框 842×1455），补白容差统一 0.3%。
-/// 阅读器页边距改了就改 profile 的 `readable`，不再在优化器里分模式。
-/// v17（2026-09-27）：清洗层加章节分页（`wash::paginate`）：章标题独立一页、节与节/节与章之间分页，章节文件按标题拆开，
-/// 全书链接与目录改指到拆出来的文件，同文件注释随所在的节搬移。
-/// v18（2026-09-27）：黑白屏设备（`OptimizeOpts::grayscale`）的漫画页转成单分量 8 位灰度（256 级，不抖动）。
-/// v19（2026-09-27）：排版细化——补 `<html>` 语言属性；中英文正文两端对齐（英文加断字、孤行寡行）；居中/居右换成类；
-/// 剥 `line-height` 与 `vh` 高度；章尾空白页（删文件末尾空元素、结尾容器去下边距与之后分页）。
-pub const OPTIMIZE_VERSION: &str = "19";
+/// 优化逻辑版本。改了会影响产物的行为就 bump——书库按它（连同设备、阅读范围等）判断产物是否过期、需要重新生成。
+///
+/// 历史（只记还有参考价值的结论）：
+/// - v2–v5：duokan 图片脚注标记修复；图片按屏幕降采样、e-ink 提对比（灰字→纯黑、细字重→400）；远程图内联；
+///   同文件带文件名的 href 归一成裸锚；EPUB 内嵌图用竖向框（宽不超屏幕短边，防行内横幅溢出竖屏）。
+/// - v6–v8：清洗层（伪 DRM 剥离、CSS 锁剥离、边距段距归零+首行缩进、空页清理、自动目录、单标签双 id 折叠）；
+///   中英文分别排版；自动目录扩到 h1–h6 多级；内联脚注丢弃图标 marker；剥 CSS `background`（xochitl 会把背景图平铺满页）。
+/// - v10：xochitl **只认外链 `.css` 文件里的规则**，无视内联 `<style>` 和 `style=`——排版规则改写成外链 `eink-wash.css`
+///   + 每章 `<link>` + manifest 补项；外链 css 只用裸元素选择器（xochitl 的 css 解析器遇到复杂选择器整表失效）。
+/// - v11：不再把"指向很多章节文件的页面"当冗余目录页从 spine 删掉（那是书的正文）。
+/// - v12–v13：`toc.ncx` 的 `dtb:uid` 与 OPF 标识符不一致、或带外部 DTD 引用时，xochitl 不显示目录入口——
+///   同步 `dtb:uid`（`wash::fix_ncx_uid`）、剥掉 DTD 声明（`wash::strip_ncx_doctype`）。
+/// - v16：缩放与漫画补白一律按 profile 的**真实可阅读范围**（`OptimizeOpts::screen`），补白容差 0.3%。
+/// - v17：章节分页（`wash::paginate`）。v18：黑白屏设备的漫画页转 8 位灰度（256 级，不抖动）。
+/// - v19：排版细化——补 `<html>` 语言属性；两端对齐；居中/居右换成类；剥 `line-height` 与 `vh` 高度；章尾空白页。
+/// - v20（2026-09-27）：`mimetype` 一律重写为首个 STORED 条目（源书缺它也补上）；已压缩的图片（JPEG/PNG/GIF）改 STORED；
+///   抓到的远程图补进 OPF manifest（AZW3 写出器只认 manifest 里的图），抓不到的 `<img>` 原样保留、不再删除；
+///   带透明通道的漫画页合成到白底（此前透明区域变黑）。
+pub const OPTIMIZE_VERSION: &str = "20";
 
-/// 脚注呈现方式。xochitl 无弹窗脚注（穷尽真机实测判死）；weread/pkm 线与第三方书历史行为、
-/// EPUB 线设备侧优化（母版库「优化」）2026-09-17 起统一用 `Anchor`（章末可见 + 同章锚点跳转 +
-/// 原生「返回」浮标）。⚠ 同日曾短暂加过 `ParagraphEnd`（注释移到引用它的段落末尾），真机验证后
-/// 撤回并整个删除——用户真实期望是"翻到哪页注释固定在那页最下面"，EPUB 流式重排做不到真正的
-/// 页底部定位（"页"是阅读器翻页时才算出来的，做书时不知道内容最终落在第几页），`ParagraphEnd`
-/// 那种"跟着段落走"的近似方案不符合预期；真正的页底部定位是固定版式（PDF 线）的能力，不是
-/// EPUB 能原生支持的，见书架白皮书 §03av 补记。
+/// 脚注呈现方式。xochitl 没有弹窗脚注，统一用 `Anchor`（章末可见 + 同章锚点跳转 + 阅读器原生「返回」）。
+/// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
+/// EPUB 流式重排做不到（"页"是阅读器翻页时才算出来的），"跟着段落走"的近似不符合预期。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FootnoteMode {
     /// 注释移章末 `<div class="footnotes">` + marker 改同章锚点，点跳、原生浮标返回。
@@ -85,15 +52,15 @@ pub struct OptimizeOpts {
     /// 黑白屏设备（profile `color = false`）：漫画页转成单分量 8 位灰度（256 级，不抖动）。
     pub grayscale: bool,
     pub wash: Option<crate::wash::WashOpts>,
-    /// 脚注呈现方式（缺省 `Anchor` 保持历史行为；母版库「优化」目前也传 `Anchor`，见 book-serve `staging/optimizing.rs`）。
+    /// 脚注呈现方式（缺省 `Anchor`，书库与 `epub-optimize` 都用它）。
     pub footnote: FootnoteMode,
-    /// 翻页方向（2026-09-25，母版库按书手动指定）：`Some` 时把 OPF `<spine page-progression-direction>` 写成这个值，
-    /// `None`（缺省）＝保留原书，产物与加这个字段之前逐字节相同。见 [`crate::direction`]。
+    /// 翻页方向（按书手动指定）：`Some` 时把 OPF `<spine page-progression-direction>` 写成这个值，
+    /// `None`（缺省）＝保留原书。见 [`crate::direction`]。
     pub page_direction: Option<crate::direction::PageDirection>,
 }
 
 impl OptimizeOpts {
-    /// 只指定屏幕、其余取历史缺省（彩色、不清洗、`Anchor` 注释、保留原书翻页方向）。
+    /// 只指定屏幕、其余取缺省（彩色、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
         OptimizeOpts { screen, grayscale: false, wash: None, footnote: FootnoteMode::default(), page_direction: None }
     }
@@ -111,8 +78,8 @@ pub struct Report {
 
 use crate::epubzip::is_html_entry;
 
-// 按职责拆成子模块（原 `optimize.rs` 一个文件 1100+ 行）：`html_pass`（逐条变换）· `streaming`（流式路径 + 构建器）· `marker`（幂等标记）；
-// `pub` 项在这里 glob re-export，`crate::optimize::xxx` 旧路径不变。
+// 按职责拆成子模块：`html_pass`（逐条变换）· `streaming`（流式写出）· `marker`（幂等标记）；
+// `pub` 项在这里 glob re-export。
 mod html_pass;
 mod marker;
 mod streaming;
@@ -124,50 +91,49 @@ pub use self::streaming::*;
 #[cfg(test)]
 mod tests;
 
-
-/// 阶段一的产物（内存版与流式版共用，2026-09-20 审计：这段 ~110 行原先两处逐行复制）。
+/// 阶段一的产物。
 struct Prepared {
-    /// (条目名, 字节, 是否 html)，已过封面声明/清洗/第一遍 html 处理/注释块搬出；`mimetype` 在最前。
+    /// (条目名, 字节, 是否 html)，已过封面声明/清洗/第一遍 html 处理/注释块搬出；首个条目是重写过的 `mimetype`。
     entries: Vec<(String, Vec<u8>, bool)>,
     /// 全书"被引用的注释块"索引（id → 块 html），第二遍 `preserve_relink_footnotes` 搬进引用它的那一章。
     aside_index: std::collections::HashMap<String, String>,
     is_comic_book: bool,
-    /// 要改 OPF 时（`title=Some` 或指定了翻页方向）的 OPF 条目名，第二遍据此改 `dc:title` / spine 方向。
+    /// 要改 OPF 时（指定了翻页方向，或书里有远程图、抓到的图要补进 manifest）的 OPF 条目名。
     opf_name: Option<String>,
+    /// 有章节引用远程图：OPF 推迟到最后写，好把抓到的图补进 manifest（见 `streaming`）。
+    has_remote_imgs: bool,
     rep: Report,
 }
 
+/// EPUB 规范：`mimetype` 必须是 zip 的第一个条目、STORED、内容就是这串（不带换行）。
+const MIMETYPE: &[u8] = b"application/epub+zip";
+
 /// 阶段一：`raw` → 封面声明 → 清洗 → 排序（mimetype 置首、旧标记剔除）→ 漫画识别 → 第一遍 html → 注释块搬出。
-/// 图片条目可以是空占位（流式路径）——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
-fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize, title: Option<&str>) -> Result<Prepared, String> {
-    // 保证 OPF 声明了有效封面（设备日志核查发现 7/9 本已投的书没有封面，见 `wash::ensure_cover_declared`）。
+/// 图片条目是空占位——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
+fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize) -> Result<Prepared, String> {
+    // 保证 OPF 声明了有效封面（见 `wash::ensure_cover_declared`）。
     // 必须在清洗之前：清洗会把只含 SVG 封面的 titlepage 当空页删掉。
     crate::wash::ensure_cover_declared(&mut raw);
     let wash_rep = match &opts.wash {
         Some(w) => Some(crate::wash::wash_entries(&mut raw, w)?),
         None => None,
     };
-    // mimetype 必须首个且 STORED（EPUB 规范），其余原序；旧标记剔除(结尾统一重写当前版本，避免重优化时残留两条)。
-    let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len());
-    if let Some(i) = raw.iter().position(|e| e.name == "mimetype") {
-        ordered.push(raw[i].clone());
-    }
-    for e in raw.into_iter() {
-        if e.name != "mimetype" && e.name != OPTIMIZE_MARKER {
-            ordered.push(e);
-        }
-    }
+    let has_remote_imgs = raw.iter().any(|e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img));
+    // 只在真要改 OPF 时才找它（`parse_opf` 返回下标，所以在改排序之前找）。
+    let opf_name: Option<String> = if opts.page_direction.is_some() || has_remote_imgs { crate::wash::parse_opf(&raw).map(|o| raw[o.index].name.clone()) } else { None };
+    // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
+    let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len() + 1);
+    ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: MIMETYPE.to_vec() });
+    ordered.extend(raw.into_iter().filter(|e| e.name != "mimetype" && e.name != OPTIMIZE_MARKER));
 
-    // 漫画识别（EPUB 线原则④）：图 ≥20 张且平均每张图配的文字 <40 字判漫画，决定下面图片降采样时
-    // 是否保原画（不跳过必要的屏幕适配缩放，但避免不必要的有损重编码）。用 wash 之后的 `ordered` 判——
-    // wash 层已把空页清理、目录归一，判定更准，漫画书也不该被这些文字书专属步骤打扰。
+    // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。用清洗之后的条目判——
+    // 清洗层已把空页清理、目录归一，判定更准。
     let is_comic_book = crate::comic_detect::is_comic(&ordered);
-    let opf_name: Option<String> = (title.is_some() || opts.page_direction.is_some()).then(|| crate::wash::parse_opf(&ordered).map(|o| ordered[o.index].name.clone())).flatten();
 
     let mut rep = Report { wash: wash_rep, total_files: 0, html_files: 0, bytes_before, bytes_after: 0 };
 
-    // 第一遍：读所有条目。xhtml → strip_font_locks；同时扫全书 marker 得**被引用**的尾注 frag 集
-    // （referenced），供下一步"只搬被引用的注释块"用。dir 条目跳过。
+    // 第一遍：xhtml → strip_font_locks；同时扫全书 marker 得**被引用**的尾注 frag 集（referenced），供下一步
+    // "只搬被引用的注释块"用。
     let mut entries: Vec<(String, Vec<u8>, bool)> = Vec::with_capacity(ordered.len());
     let mut referenced: HashSet<String> = HashSet::new(); // 被 marker 引用的注释 id（noteref + 跨文件普通<a>）
     for crate::epubzip::Entry { name, data } in ordered {
@@ -204,28 +170,52 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
             *data = cleaned.into_bytes();
         }
     }
-    Ok(Prepared { entries, aside_index, is_comic_book, opf_name, rep })
+    Ok(Prepared { entries, aside_index, is_comic_book, opf_name, has_remote_imgs, rep })
 }
 
-/// 第二遍的"文本类条目"变换器：html 章节 / 独立 css / （改书名时）OPF。跨条目状态（远程图计数、全书 id 去重表、
-/// 抓到的远程图）都在这里，内存版与流式版共用同一份逻辑。图片条目不归它管（内存版直接调
-/// `transform_image_bytes`，流式版走 `imgpool` 并行）。
+/// 第二遍的"文本类条目"变换器：html 章节 / 独立 css / （改翻页方向时）OPF。跨条目状态（远程图计数、全书 id 去重表、
+/// 抓到的远程图）都在这里。图片条目不归它管（走 `imgpool` 并行）。
 struct EntryXform<'a> {
     aside_index: &'a std::collections::HashMap<String, String>,
     footnote: FootnoteMode,
-    title: Option<&'a str>,
     page_direction: Option<crate::direction::PageDirection>,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
-    img_agent: ureq::Agent,    // 远程图抓取（仅当章内有远程 img 才发请求；离线→抓不到→删 img）
+    img_agent: ureq::Agent, // 远程图抓取（仅当章内有远程 img 才发请求；抓不到 → 原样保留）
     remote_counter: usize,
+    /// 抓到的远程图 (zip 路径, 字节)，结尾写进 zip 并补进 manifest。
     fetched_imgs: Vec<(String, Vec<u8>)>,
 }
 
 impl<'a> EntryXform<'a> {
-    fn new(prep_aside: &'a std::collections::HashMap<String, String>, footnote: FootnoteMode, title: Option<&'a str>, page_direction: Option<crate::direction::PageDirection>, opf_name: Option<&'a str>, screen: crate::imgopt::Screen) -> EntryXform<'a> {
-        EntryXform { aside_index: prep_aside, footnote, title, page_direction, opf_name, screen, seen_ids: HashSet::new(), img_agent: crate::netimg::http_agent(15), remote_counter: 0, fetched_imgs: Vec::new() }
+    fn new(aside_index: &'a std::collections::HashMap<String, String>, opf_name: Option<&'a str>, opts: &OptimizeOpts) -> EntryXform<'a> {
+        EntryXform {
+            aside_index,
+            footnote: opts.footnote,
+            page_direction: opts.page_direction,
+            opf_name,
+            screen: opts.screen,
+            seen_ids: HashSet::new(),
+            img_agent: crate::netimg::http_agent(15),
+            remote_counter: 0,
+            fetched_imgs: Vec::new(),
+        }
+    }
+
+    /// 章节 html 最终变换链：解双向脚注互指环 → duokan 图片脚注标记换上标 → 封面拉伸/SVG 修复 → 脚注就地关联重排 →
+    /// e-ink 提对比 → 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
+    fn transform_html_chapter(&mut self, text: &str, name: &str) -> Vec<u8> {
+        let t = crate::htmlproc::break_footnote_cycles(text);
+        let t = crate::htmlproc::fix_duokan_markers(&t);
+        let t = fix_cover_aspect(&t);
+        let t = svg_cover_to_img(&t);
+        let t = crate::htmlproc::preserve_relink_footnotes(&t, self.aside_index, self.footnote);
+        let t = crate::htmlproc::boost_text_contrast(&t);
+        let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
+        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, remote_img_fetcher(&self.img_agent, self.screen));
+        self.fetched_imgs.extend(imgs);
+        crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes()
     }
 
     /// 文本类条目 → `Some(最终字节)`（无法按 UTF-8 解读的原样借回）；不是文本类（图片/其它）→ `None`，调用方自己处理。
@@ -233,84 +223,23 @@ impl<'a> EntryXform<'a> {
         use std::borrow::Cow;
         if is_html {
             return Some(match std::str::from_utf8(data) {
-                Ok(text) => {
-                    let (bytes, imgs) = transform_html_chapter(text, name, self.aside_index, self.footnote, &mut self.remote_counter, &self.img_agent, self.screen, &mut self.seen_ids);
-                    self.fetched_imgs.extend(imgs);
-                    Cow::Owned(bytes)
-                }
+                Ok(text) => Cow::Owned(self.transform_html_chapter(text, name)),
                 Err(_) => Cow::Borrowed(data),
             });
         }
         if name.to_lowercase().ends_with(".css") {
-            // ② e-ink 提对比：独立 .css 文件里的灰字→纯黑、细字重→400。
+            // e-ink 提对比：独立 .css 文件里的灰字→纯黑、细字重→400。
             return Some(match std::str::from_utf8(data) {
                 Ok(text) => Cow::Owned(crate::htmlproc::boost_contrast_css(text).into_bytes()),
                 Err(_) => Cow::Borrowed(data),
             });
         }
-        if self.opf_name == Some(name) && (self.title.is_some() || self.page_direction.is_some()) {
+        if let (true, Some(dir)) = (self.opf_name == Some(name), self.page_direction) {
             return Some(match std::str::from_utf8(data) {
-                Ok(text) => {
-                    let text = match self.title {
-                        Some(title) => crate::placeholder::set_opf_title(text, title),
-                        None => text.to_string(),
-                    };
-                    let text = match self.page_direction {
-                        Some(dir) => crate::direction::set_spine_direction(&text, dir),
-                        None => text,
-                    };
-                    Cow::Owned(text.into_bytes())
-                }
+                Ok(text) => Cow::Owned(crate::direction::set_spine_direction(text, dir).into_bytes()),
                 Err(_) => Cow::Borrowed(data),
             });
         }
         None
     }
-}
-
-/// 两条路径共同的收尾：写入抓取到的远程图资源（与引用它的章同目录、src 已改本地名），再在结尾埋幂等标记
-/// （内容=优化器版本号，供 optimized_version/is_optimized 判据）。
-fn write_tail<W: Write + std::io::Seek>(zw: &mut ZipWriter<W>, fetched_imgs: &[(String, Vec<u8>)], full: bool) -> Result<(), String> {
-    let deflated = crate::epubzip::deflated();
-    for (path, bytes) in fetched_imgs {
-        crate::epubzip::put_entry(zw, path, deflated, bytes)?;
-    }
-    crate::epubzip::put_entry(zw, OPTIMIZE_MARKER, deflated, marker_value(full).as_bytes())
-}
-
-/// 解包 → 每个 (x)html 走 strip_font_locks → 原样保留其余 → 重打包。返回 (新epub, 统计)。
-pub fn optimize_epub(epub: &[u8], screen: crate::imgopt::Screen) -> Result<(Vec<u8>, Report), String> {
-    optimize_epub_with(epub, &OptimizeOpts::new(screen))
-}
-
-/// 带选项：`opts.wash` 有值则先过清洗层（真 DRM 在此报错、原样不动）。
-pub fn optimize_epub_with(epub: &[u8], opts: &OptimizeOpts) -> Result<(Vec<u8>, Report), String> {
-    // 读失败必须整体报错——绝不能静默跳过条目产出残缺 EPUB（会破坏原书）。
-    let raw = crate::check::read_entries(epub)?;
-    let Prepared { entries, aside_index, is_comic_book, opf_name, mut rep } = prepare_entries(raw, opts, epub.len(), None)?;
-
-    // 第二遍：xhtml → preserve_relink_footnotes(marker 保留原样、去 epub:type、注释移章末) →
-    //   dedup_ids_in_chapter(全书 id 去重，防跨章 id 撞车)。打包。
-    let mut out_buf: Vec<u8> = Vec::new();
-    let mut xf = EntryXform::new(&aside_index, opts.footnote, None, opts.page_direction, opf_name.as_deref(), opts.screen);
-    {
-        let mut zw = ZipWriter::new(Cursor::new(&mut out_buf));
-        // mimetype 必须首个且 STORED（EPUB 规范）；其余用 Deflated 压缩，否则文本不压缩体积翻倍。
-        let (stored, deflated) = (crate::epubzip::stored(), crate::epubzip::deflated());
-        for (name, data, ish) in &entries {
-            let final_data: std::borrow::Cow<[u8]> = match xf.transform_text(name, data, *ish) {
-                Some(t) => t,
-                // ① 按 Move 屏竖向框（宽≤954）降采样超大图——EPUB 图可能行内，宽超 954 会溢出竖屏（缩不动/失败则原样）。
-                // 漫画书（EPUB 线原则④"不允许压画质，只能裁边/适配屏幕"）：先裁四边纯色留白，
-                // 超限时改用更高 JPEG 质量重编码。
-                None if crate::imgopt::is_downscalable(name) => transform_image_bytes(data, is_comic_book, opts.screen, opts.grayscale).map_or(std::borrow::Cow::Borrowed(data.as_slice()), std::borrow::Cow::Owned),
-                None => std::borrow::Cow::Borrowed(data.as_slice()),
-            };
-            crate::epubzip::put_entry(&mut zw, name, if name == "mimetype" { stored } else { deflated }, &final_data)?;
-        }
-        write_tail(&mut zw, &xf.fetched_imgs, opts.wash.is_some())?;
-        zw.finish().map_err(|e| e.to_string())?;
-    }
-    rep.bytes_after = out_buf.len();
-    Ok((out_buf, rep))
 }

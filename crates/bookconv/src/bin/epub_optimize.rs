@@ -1,19 +1,16 @@
-//! host/设备通用 CLI：对一本 EPUB 跑 `optimize::optimize_epub_with`（与设备端 book-serve Optimize 步**同一函数**）。
-//! 缺省 = 清洗层（伪 DRM 剥离 / CSS 锁剥离 / 边距段距归零+2em / 空页清理 / 缺目录时自动目录 / 双 id 折叠）+ 优化器
-//! （脚注拆环 / duokan 标记 / 远程图内联 / 双 id 去重 / 图片降采样 / e-ink 提对比），产物自带
-//! `META-INF/eink-optimized` 标记，设备 autoopt 不会再优化一遍。`wash_epub.sh` 末步用它。
+//! 命令行：按设备优化一本 EPUB（`optimize::optimize_epub_file_streaming`，与书库 `booklib build` 同一函数）。
+//! 缺省 = 清洗层（伪 DRM 剥离 / CSS 锁剥离 / 边距段距归零+首行缩进 / 空页清理 / 缺目录时自动目录 / 双 id 折叠 / 章节分页）
+//! 加优化器（脚注拆环 / duokan 标记 / 远程图内联 / 双 id 去重 / 图片按阅读范围缩放 / e-ink 提对比），产物自带
+//! `META-INF/eink-optimized` 标记。
 //!
-//! 用法: epub-optimize --device=<设备> [选项] 输入.epub 输出.epub    （流式路径进路径出，2026-09-19 起不再整本读进
-//!   内存——真机 552MB 漫画全集坐实内存版会把设备逼近系统级 OOM，见 book-serve staging.rs 同一天
-//!   的改动记录；输入输出同路径=就地覆盖时内部先写临时文件再改名，安全）
+//! 用法: epub-optimize --device=<设备> [选项] 输入.epub 输出.epub
+//!   （流式处理，大漫画也不整本读进内存；产物先写到 `输出.epub.optimizing.tmp`，成功后改名，失败不留半成品）
 //!   --device=<id>    目标设备 profile（必填，见 profile crate 的 profiles/*.toml）
-//!   --no-wash        只跑优化器不清洗（= v5 行为）
+//!   --no-wash        只跑优化器不清洗
 //!   --keep-spacing   清洗但保留原书段间距（诗集/剧本）
 //!   --auto-toc       强制从 h1–h6 重建目录（缺省仅在无目录时生成）
 //!   --no-paginate    不做章节分页（缺省：章标题独立一页、节与节之间分页）
-//!   --footnote-anchor 脚注用章末锚点跳转（缺省即 Anchor，此参数保留兼容；2026-09-17 曾短暂改缺省
-//!                      为段末块，真机验证用户实际期望是"翻到哪页注释跟哪页"而不是"跟着引用它的段落"，
-//!                      EPUB 是流式重排做不到真正的页底部定位，撤回改回 Anchor，段末块整个下线）
+//!   --footnote-anchor 脚注用章末锚点跳转（缺省即 Anchor，此参数只为兼容旧脚本）
 //!   --check          产物过质量门，打印 JSON 报告；不过则退出码 3（产物仍写出）
 //!   --require-toc    质量门把"无目录"升为失败
 //! 退出码: 0 成功；1 用法错；2 优化失败（输入原样不动）；3 质量门未过。
@@ -56,29 +53,18 @@ fn main() {
     };
     // --footnote-anchor 现在是 no-op（缺省已经是 Anchor），继续留在允许的 flag 列表里只是不破坏已有脚本调用。
     let footnote = FootnoteMode::Anchor;
-    // 输入输出同路径（就地覆盖）时不能边读边写同一个文件——先写临时文件，成功后再改名覆盖。
-    let same_path = files[0] == files[1];
-    let out_target: std::path::PathBuf = if same_path {
-        let mut t = std::path::PathBuf::from(files[1]).into_os_string();
-        t.push(".optimizing.tmp");
-        std::path::PathBuf::from(t)
-    } else {
-        std::path::PathBuf::from(files[1])
-    };
-    let rep = match optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), &out_target, &OptimizeOpts { screen, grayscale, wash, footnote, page_direction: None }, |_, _| {}) {
+    // 先写临时文件，成功后再改名：输入输出同路径（就地覆盖）时不会边读边写同一个文件，失败也不留半成品。
+    let target = std::path::PathBuf::from(files[1]);
+    let mut tmp = target.clone().into_os_string();
+    tmp.push(".optimizing.tmp");
+    let opts = OptimizeOpts { screen, grayscale, wash, footnote, page_direction: None };
+    let rep = match bookconv::util::produce_then_replace(std::path::Path::new(&tmp), &target, |t| optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), t, &opts, |_, _| {})) {
         Ok(r) => r,
         Err(e) => {
-            let _ = std::fs::remove_file(&out_target);
             eprintln!("优化失败: {e}");
             std::process::exit(2);
         }
     };
-    if same_path {
-        if let Err(e) = std::fs::rename(&out_target, files[1]) {
-            eprintln!("改名覆盖 {}: {e}", files[1]);
-            std::process::exit(2);
-        }
-    }
     println!("epub-optimize v{}: {} 文件/{} 章, {} → {} 字节", optimize::OPTIMIZE_VERSION, rep.total_files, rep.html_files, rep.bytes_before, rep.bytes_after);
     if let Some(w) = &rep.wash {
         println!(

@@ -1,9 +1,8 @@
-//! 远程图抓取（优化器内联远程 `<img>` 与稍后读共用）。原在 weread-device readlater.rs，
-//! 2026-09-03 随内容层抽入 bookconv：优化器不再反向依赖稍后读。
+//! 远程图抓取（优化器内联远程 `<img>` 与网页抽取 `article` 共用）。
 use crate::convert::common;
 use crate::imgopt;
 
-/// 抓图 UA（稍后读与优化器共用同一标识）。
+/// 抓图 UA（网页抽取与优化器共用同一标识）。
 pub const UA: &str = "Mozilla/5.0 (compatible; readlater/1.0)";
 
 /// 抓远程图；给了 `screen` 就按该设备降采样，`None` = 保留原图（入库母版用）。`src` 支持协议相对 `//host/path`；非 http(s) 返回 None。
@@ -32,8 +31,7 @@ pub fn fetch_image(ag: &ureq::Agent, src: &str, referer: &str, screen: Option<im
     Some((bytes, ext, mime))
 }
 
-/// 统一超时的 HTTP agent（`timeout_secs`=0 表示不限）。bookconv 不引用旧 crate，
-/// 此构造与 device-core::http_agent 语义一致、独立实现。
+/// 统一超时的 HTTP agent（`timeout_secs`=0 表示不限）。
 pub fn http_agent(timeout_secs: u64) -> ureq::Agent {
     let mut b = ureq::AgentBuilder::new();
     if timeout_secs > 0 {

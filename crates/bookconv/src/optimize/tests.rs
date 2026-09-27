@@ -1,11 +1,40 @@
-//! 优化器单测（原 `optimize.rs` 内联的 `mod tests`）。
+//! 优化器单测。全部走生产路径 [`optimize_epub_file_streaming`]（经临时文件），不另设内存版实现。
     use super::*;
+    use std::io::{Cursor, Read};
     use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
 
+    /// 测试便利封装：字节进字节出，内部写临时文件走流式路径。
+    fn optimize_epub_with(epub: &[u8], opts: &OptimizeOpts) -> Result<(Vec<u8>, Report), String> {
+        let t = tempfile::tempdir().unwrap();
+        let (input, output) = (t.path().join("in.epub"), t.path().join("out.epub"));
+        std::fs::write(&input, epub).unwrap();
+        let rep = optimize_epub_file_streaming(&input, &output, opts, |_, _| {})?;
+        Ok((std::fs::read(&output).unwrap(), rep))
+    }
+
+    fn optimize_epub(epub: &[u8], screen: crate::imgopt::Screen) -> Result<(Vec<u8>, Report), String> {
+        optimize_epub_with(epub, &OptimizeOpts::new(screen))
+    }
+
+    /// 产物里的幂等标记内容；没有标记 / 不是 zip → `None`。
+    fn optimized_version(epub: &[u8]) -> Option<String> {
+        let mut ar = ZipArchive::new(Cursor::new(epub)).ok()?;
+        let mut f = ar.by_name(OPTIMIZE_MARKER).ok()?;
+        let mut s = String::new();
+        f.read_to_string(&mut s).ok()?;
+        Some(s.trim().to_string())
+    }
+
+    fn entry_bytes(epub: &[u8], name: &str) -> Vec<u8> {
+        let mut v = Vec::new();
+        ZipArchive::new(Cursor::new(epub)).unwrap().by_name(name).unwrap().read_to_end(&mut v).unwrap();
+        v
+    }
+
     #[test]
-    fn inline_remote_images_fetches_removes_and_keeps_local() {
-        // 本地图不动；远程抓到→内联改本地名+进资源；远程抓不到→删 img(免放大镜)
+    fn inline_remote_images_fetches_and_keeps_local_and_failed() {
+        // 本地图不动；远程抓到→内联改本地名+进资源；远程抓不到→<img> 原样保留（不改书的内容）
         let html = r#"<p><img src="local.png"/><img class="c" src="https://x.com/a.png"/><img src="//y.com/b.png"/></p>"#;
         let mut n = 0usize;
         let (out, res) = inline_remote_images(html, "OEBPS", &mut n, |src| {
@@ -14,8 +43,8 @@
         assert!(out.contains(r#"src="local.png""#), "本地图应原样: {out}");
         assert!(out.contains(r#"src="remote_img_0.png""#), "远程抓到应改本地名: {out}");
         assert!(out.contains(r#"class="c""#), "改 src 应保留其它属性: {out}");
-        assert!(!out.contains("x.com") && !out.contains("y.com"), "远程 URL 应消失: {out}");
-        assert!(!out.contains("b.png"), "抓不到的远程 img 应被删: {out}");
+        assert!(!out.contains("x.com"), "抓到的远程 URL 应换成本地名: {out}");
+        assert!(out.contains(r#"<img src="//y.com/b.png"/>"#), "抓不到的远程 img 应原样保留: {out}");
         assert_eq!(res.len(), 1, "只有 1 张抓到");
         assert_eq!(res[0].0, "OEBPS/remote_img_0.png", "资源落本章目录");
         assert_eq!(res[0].1, vec![1, 2, 3]);
@@ -142,44 +171,25 @@
     }
 
     #[test]
-    fn streaming_matches_in_memory_output_for_footnote_book() {
-        // 内存版跟流式版共用 first_pass_html/transform_html_chapter，这条测试证明两条路径对同一本
-        // 带跨文件脚注的书产出一致的正文——不是"抽了函数就当一样"，是真跑两条路径对拍。
+    fn streaming_reports_progress_per_entry() {
         let epub = make_crossfile_endnote_epub();
-        let (mem_out, mem_rep) = optimize_epub(&epub, crate::imgopt::test_screen()).unwrap();
-
         let t = tempfile::tempdir().unwrap();
         let input_path = t.path().join("in.epub");
         let output_path = t.path().join("out.epub");
         std::fs::write(&input_path, &epub).unwrap();
         let mut progresses = Vec::new();
-        let stream_rep = optimize_epub_file_streaming(&input_path, &output_path, &OptimizeOpts::new(crate::imgopt::test_screen()), |done, total| progresses.push((done, total))).unwrap();
-        let stream_out = std::fs::read(&output_path).unwrap();
-
-        assert_eq!(mem_rep.total_files, stream_rep.total_files);
-        assert_eq!(mem_rep.html_files, stream_rep.html_files);
+        let rep = optimize_epub_file_streaming(&input_path, &output_path, &OptimizeOpts::new(crate::imgopt::test_screen()), |done, total| progresses.push((done, total))).unwrap();
+        assert_eq!((rep.total_files, rep.html_files), (4, 3), "mimetype + 3 章");
         assert!(!progresses.is_empty(), "阶段二应该至少回调一次进度");
         assert!(progresses.iter().all(|(_, total)| *total == progresses[0].1), "total 全程不变");
         assert_eq!(progresses.last().unwrap().0, progresses[0].1, "最后一次回调 done 应该等于 total（全部写完）");
         assert!(progresses.windows(2).all(|w| w[0].0 < w[1].0), "done 应该严格递增，不重复不倒退");
-
-        let read = |bytes: &[u8], n: &str| {
-            let mut ar = ZipArchive::new(Cursor::new(bytes)).unwrap();
-            let mut s = String::new();
-            ar.by_name(n).unwrap().read_to_string(&mut s).unwrap();
-            s
-        };
-        for name in ["ch1.xhtml", "ch2.xhtml"] {
-            let mem_ch = read(&mem_out, name);
-            let stream_ch = read(&stream_out, name);
-            assert_eq!(mem_ch, stream_ch, "{name} 内存版跟流式版应产出完全一致的正文");
-        }
+        assert_eq!(rep.bytes_after as u64, std::fs::metadata(&output_path).unwrap().len());
     }
 
     #[test]
-    fn streaming_downscales_comic_images_same_as_in_memory() {
-        // 内存版跟流式版共用 transform_image_bytes，图片处理结果应该逐字节一致——流式版的差别只在
-        // "什么时候、从哪读图片字节"，不该影响处理结果本身。
+    fn streaming_comic_image_equals_direct_transform() {
+        // 流式版的差别只在"什么时候、从哪读图片字节"、在哪个线程处理，结果应与直接调 transform_image_bytes 逐字节一致。
         use image::{codecs::jpeg::JpegEncoder, DynamicImage, GenericImageView, RgbImage};
         let big = DynamicImage::ImageRgb8(RgbImage::from_fn(2000, 3000, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 150])));
         let mut jpg = Vec::new();
@@ -204,26 +214,19 @@
             zw.finish().unwrap();
         }
 
-        let (mem_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
-        let t = tempfile::tempdir().unwrap();
-        let input_path = t.path().join("comic.epub");
-        let output_path = t.path().join("comic_out.epub");
-        std::fs::write(&input_path, &comic_buf).unwrap();
-        optimize_epub_file_streaming(&input_path, &output_path, &OptimizeOpts::new(crate::imgopt::test_screen()), |_, _| {}).unwrap();
-        let stream_out = std::fs::read(&output_path).unwrap();
-
-        let mut mem_img = Vec::new();
-        ZipArchive::new(Cursor::new(&mem_out)).unwrap().by_name("p1.jpg").unwrap().read_to_end(&mut mem_img).unwrap();
-        let mut stream_img = Vec::new();
-        ZipArchive::new(Cursor::new(&stream_out)).unwrap().by_name("p1.jpg").unwrap().read_to_end(&mut stream_img).unwrap();
-        assert_eq!(mem_img, stream_img, "同一张图内存版跟流式版处理结果应逐字节一致");
+        let (stream_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
+        let stream_img = entry_bytes(&stream_out, "p1.jpg");
+        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), false).unwrap();
+        assert_eq!(stream_img, direct, "流式并行处理结果应与直接处理逐字节一致");
+        let mut ar = ZipArchive::new(Cursor::new(&stream_out)).unwrap();
+        assert_eq!(ar.by_name("p1.jpg").unwrap().compression(), CompressionMethod::Stored, "已压缩的图片 STORED");
         assert!(image::load_from_memory(&stream_img).unwrap().dimensions().0 <= 954, "流式版也该按漫画框约束缩放");
     }
 
     #[test]
-    fn streaming_parallel_many_images_match_sequential_in_memory_and_keep_order() {
+    fn streaming_parallel_many_images_match_sequential_and_keep_order() {
         // 并行（worker + 提前量）不许乱序、不许改任何一张图的处理结果：20 张互不相同的图（尺寸/内容都不同，
-        // 顺序错位或串图必然被发现），流式并行版逐张、逐字节对照内存顺序版；条目顺序也必须一致。
+        // 顺序错位或串图必然被发现），流式并行版逐张、逐字节对照顺序直接处理的结果；条目顺序也必须与原书一致。
         use image::{DynamicImage, RgbImage};
         let n = 20usize; // ≥20 张才判漫画，走漫画单趟管线
         let mut comic_buf = Vec::new();
@@ -249,49 +252,22 @@
             }
             zw.finish().unwrap();
         }
-        let (mem_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
-        let t = tempfile::tempdir().unwrap();
-        let (input_path, output_path) = (t.path().join("c.epub"), t.path().join("o.epub"));
-        std::fs::write(&input_path, &comic_buf).unwrap();
-        optimize_epub_file_streaming(&input_path, &output_path, &OptimizeOpts::new(crate::imgopt::test_screen()), |_, _| {}).unwrap();
-        let stream_out = std::fs::read(&output_path).unwrap();
-        let (mut a, mut b) = (ZipArchive::new(Cursor::new(&mem_out)).unwrap(), ZipArchive::new(Cursor::new(&stream_out)).unwrap());
+        let (stream_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
+        let (mut a, mut b) = (ZipArchive::new(Cursor::new(&comic_buf)).unwrap(), ZipArchive::new(Cursor::new(&stream_out)).unwrap());
         for i in 1..=n {
             let name = format!("p{i}.png");
             let (mut x, mut y) = (Vec::new(), Vec::new());
             a.by_name(&name).unwrap().read_to_end(&mut x).unwrap();
             b.by_name(&name).unwrap().read_to_end(&mut y).unwrap();
-            assert_eq!(x, y, "第 {i} 张图并行结果与顺序结果不一致（乱序或串图）");
+            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), false).unwrap_or(x);
+            assert_eq!(want, y, "第 {i} 张图并行结果与顺序结果不一致（乱序或串图）");
         }
         let mut y1 = Vec::new();
         b.by_name("p1.png").unwrap().read_to_end(&mut y1).unwrap();
         let (w1, h1) = image::ImageReader::new(Cursor::new(&y1)).with_guessed_format().unwrap().into_dimensions().unwrap();
         assert!(h1 > 491 && w1 == 327, "应真的补白到设备长宽比（管线确实跑过）: {w1}x{h1}");
         let order = |z: &mut ZipArchive<Cursor<&Vec<u8>>>| -> Vec<String> { (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).filter(|n| n != OPTIMIZE_MARKER).collect() };
-        assert_eq!(order(&mut a), order(&mut b), "条目顺序必须一致");
-    }
-
-    #[test]
-    fn streaming_cancel_stops_early_with_cancelled_error() {
-        // 取消回调返回 true：应立刻以 CANCELLED_MSG 失败，不产出完整文件；worker 线程要能干净退出（不死锁）。
-        let t = tempfile::tempdir().unwrap();
-        let mut buf = Vec::new();
-        {
-            let mut zw = ZipWriter::new(Cursor::new(&mut buf));
-            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-            zw.start_file("mimetype", stored).unwrap();
-            zw.write_all(b"application/epub+zip").unwrap();
-            zw.start_file("content.opf", stored).unwrap();
-            zw.write_all(br#"<package version="3.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
-            zw.start_file("c1.xhtml", stored).unwrap();
-            zw.write_all(b"<html><body><p>hi</p></body></html>").unwrap();
-            zw.finish().unwrap();
-        }
-        let (input, output) = (t.path().join("a.epub"), t.path().join("o.epub"));
-        std::fs::write(&input, &buf).unwrap();
-        let calls = std::cell::Cell::new(0);
-        let err = optimize_epub_file_streaming_ctl(&input, &output, &OptimizeOpts::new(crate::imgopt::test_screen()), None, &|| { calls.set(calls.get() + 1); calls.get() >= 2 }, |_, _| {}).unwrap_err();
-        assert_eq!(err, CANCELLED_MSG);
+        assert_eq!(order(&mut a), order(&mut b), "条目顺序必须与原书一致");
     }
 
     #[test]
@@ -301,22 +277,6 @@
         let err = optimize_epub_file_streaming(&t.path().join("does-not-exist.epub"), &output_path, &OptimizeOpts::new(crate::imgopt::test_screen()), |_, _| {}).unwrap_err();
         assert!(err.contains("打开输入失败"), "{err}");
         assert!(!output_path.exists(), "输入都打不开，不该产生任何输出文件");
-    }
-
-    #[test]
-    fn streaming_builder_equals_legacy_wrappers_and_honors_cancel() {
-        let t = tempfile::tempdir().unwrap();
-        let input = t.path().join("in.epub");
-        std::fs::write(&input, make_epub()).unwrap();
-        let opts = OptimizeOpts::new(crate::imgopt::test_screen());
-        let (a, b) = (t.path().join("a.epub"), t.path().join("b.epub"));
-        optimize_epub_file_streaming(&input, &a, &opts, |_, _| {}).unwrap();
-        StreamingOptimize::new(&input, &b, &opts).run(|_, _| {}).unwrap();
-        assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap(), "builder 与旧封装产出逐字节相同");
-        // 取消：第一个条目处理完就停
-        let c = t.path().join("c.epub");
-        let err = StreamingOptimize::new(&input, &c, &opts).cancel(&|| true).run(|_, _| {}).unwrap_err();
-        assert_eq!(err, CANCELLED_MSG);
     }
 
     /// 造一个最小 EPUB(mimetype + 一章带锁字体的 xhtml)，过优化器后字体锁应被剥掉、结构保留。
@@ -382,7 +342,7 @@
         assert!(x.contains("<p>正文</p>"), "正文结构被破坏: {x}");
     }
 
-    /// Calibre `wash_epub.sh` 洗过的 duokan 脚注（《人骨拼图》AZW3→EPUB 真实形态）：同文件 href 带文件名、
+    /// Calibre 转出的 duokan 脚注（《人骨拼图》AZW3→EPUB 真实形态）：同文件 href 带文件名、
     /// 标记是真 `<img>` + `<a id="c_2_1">`、注释块 `<li id="a_2_1">` 内回链 `href="part0004.html#c_2_1"`
     /// 构成真 2-环。优化后：href 归一裸锚、标记换上标且 id 保留、回链去链、注释留在原 li 里不被搬成
     /// 无效嵌套（v4 前两条红线全踩：id 丢=回链悬空、`<p id><p>` 嵌套）。
@@ -470,7 +430,7 @@
     }
 
     /// 母版库按书指定翻页方向（2026-09-25）：`page_direction=Some` 只改 OPF 的 spine 属性，其余条目与不指定时逐字节相同；
-    /// 不指定＝保留原书（原书没写就还是没写）。内存版与流式版一致。
+    /// 不指定＝保留原书（原书没写就还是没写）。
     #[test]
     fn page_direction_touches_only_opf_spine() {
         use crate::direction::{spine_direction, PageDirection};
@@ -503,14 +463,7 @@
                 assert_eq!(da, db, "{na} 不该受方向设置影响");
             }
         }
-        // 流式版产出同样的 OPF
-        let t = tempfile::tempdir().unwrap();
-        let (input, output) = (t.path().join("in.epub"), t.path().join("out.epub"));
-        std::fs::write(&input, &epub).unwrap();
-        StreamingOptimize::new(&input, &output, &rtl).run(|_, _| {}).unwrap();
-        assert_eq!(crate::direction::spine_direction_file(&output), None, "测试书没有 container.xml，按文件读不到 OPF");
         let opf_of = |v: &[(String, Vec<u8>)]| v.iter().find(|(n, _)| n.ends_with(".opf")).map(|(_, d)| d.clone()).unwrap();
-        assert_eq!(opf_of(&entries(&std::fs::read(&output).unwrap())), opf_of(&b), "流式与内存版 OPF 一致");
         // 从左往右：原书的 rtl 被改掉
         let ltr = OptimizeOpts { page_direction: Some(PageDirection::Ltr), ..base.clone() };
         let (back, _) = optimize_epub_with(&flipped, &ltr).unwrap();
@@ -589,11 +542,11 @@
     #[test]
     fn marks_and_detects_optimized() {
         let raw = make_epub();
-        assert!(!is_optimized(&raw), "原始 EPUB 不该带标记");
+        assert!(optimized_version(&raw).is_none(), "原始 EPUB 不该带标记");
         // 默认 optimize_epub 无清洗层 → 只算"核心遍"标记，不能冒充完整优化
         let (out, _) = optimize_epub(&raw, crate::imgopt::test_screen()).unwrap();
         assert_eq!(optimized_version(&out).as_deref(), Some(format!("{OPTIMIZE_VERSION}-core").as_str()), "无 wash 应标 -core");
-        assert!(is_optimized(&out) && optimized_version(&out).as_deref() != Some(OPTIMIZE_VERSION), "有标记但不算当前完整优化");
+        assert!(optimized_version(&out).as_deref() != Some(OPTIMIZE_VERSION), "有标记但不算当前完整优化");
         // 带清洗层 → 完整标记
         let (full, _) = optimize_epub_with(&raw, &OptimizeOpts { wash: Some(crate::wash::WashOpts::default()), footnote: FootnoteMode::Anchor, ..OptimizeOpts::new(crate::imgopt::test_screen()) }).unwrap();
         assert_eq!(optimized_version(&full).as_deref(), Some(OPTIMIZE_VERSION), "含 wash 应标完整版本");
@@ -605,4 +558,108 @@
             .filter(|&i| ar.by_index(i).unwrap().name() == OPTIMIZE_MARKER)
             .count();
         assert_eq!(marker_count, 1, "重优化不应残留重复标记条目");
+    }
+
+    /// 源书没有 `mimetype`（或内容不规范）：产物必须补上规范的 `mimetype`，排第一且 STORED，过质量门。
+    #[test]
+    fn missing_mimetype_is_written_first_and_stored() {
+        let mut buf = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+            let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            zw.start_file("OEBPS/toc.ncx", deflated).unwrap();
+            zw.write_all(br#"<ncx><navMap><navPoint><navLabel><text>one</text></navLabel><content src="c1.xhtml"/></navPoint></navMap></ncx>"#).unwrap();
+            zw.start_file("OEBPS/c1.xhtml", deflated).unwrap();
+            zw.write_all("<html><body><p>正文</p></body></html>".as_bytes()).unwrap();
+            zw.finish().unwrap();
+        }
+        let (out, _) = optimize_epub(&buf, crate::imgopt::test_screen()).unwrap();
+        {
+            let mut ar = ZipArchive::new(Cursor::new(&out)).unwrap();
+            let first = ar.by_index(0).unwrap();
+            assert_eq!((first.name(), first.compression()), ("mimetype", CompressionMethod::Stored));
+        }
+        assert_eq!(entry_bytes(&out, "mimetype"), b"application/epub+zip");
+        let rep = crate::check::check_epub(&out, false).unwrap();
+        assert!(rep.ok, "{:?}", rep.errors);
+        // 源书 mimetype 内容带换行、还被压缩：改写成规范内容、STORED
+        let mut buf2 = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut buf2));
+            zw.start_file("mimetype", SimpleFileOptions::default()).unwrap();
+            zw.write_all(b"application/epub+zip\n").unwrap();
+            zw.start_file("c1.xhtml", SimpleFileOptions::default()).unwrap();
+            zw.write_all(b"<html><body><p>x</p></body></html>").unwrap();
+            zw.finish().unwrap();
+        }
+        let (out2, _) = optimize_epub(&buf2, crate::imgopt::test_screen()).unwrap();
+        assert_eq!(entry_bytes(&out2, "mimetype"), b"application/epub+zip");
+        assert_eq!(ZipArchive::new(Cursor::new(&out2)).unwrap().by_index(0).unwrap().compression(), CompressionMethod::Stored);
+    }
+
+    /// 起一个只回一张 PNG 的本地 HTTP 服务（一次连接一次响应，服务 `n` 次后退出），返回端口。
+    fn serve_png(png: Vec<u8>, n: usize) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(n) {
+                let mut s = stream.unwrap();
+                let mut req = [0u8; 4096];
+                let _ = s.read(&mut req);
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", png.len());
+                let _ = s.write_all(head.as_bytes());
+                let _ = s.write_all(&png);
+            }
+        });
+        port
+    }
+
+    /// 远程图端到端：抓到的图写进 zip、src 改本地名、**补进 OPF manifest**（AZW3 写出器只认 manifest）；抓不到的
+    /// `<img>` 原样保留。OPF 推迟到最后写，其它条目顺序不变。
+    #[test]
+    fn remote_images_are_added_to_manifest_and_failed_ones_kept() {
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(20, 10, image::Rgb([200, 10, 10]))).write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let port = serve_png(png.clone(), 1);
+        // 拿一个肯定没人监听的端口：绑定后立刻释放。
+        let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let chapter = format!(r#"<html><body><p>正文<img src="http://127.0.0.1:{port}/a.png"/></p><p><img alt="x" src="http://127.0.0.1:{dead}/b.png"/></p></body></html>"#);
+        let mut buf = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zw.start_file("mimetype", stored).unwrap();
+            zw.write_all(b"application/epub+zip").unwrap();
+            zw.start_file("META-INF/container.xml", stored).unwrap();
+            zw.write_all(br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#).unwrap();
+            zw.start_file("OEBPS/content.opf", stored).unwrap();
+            zw.write_all(br#"<package version="3.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="text/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+            zw.start_file("OEBPS/text/c1.xhtml", stored).unwrap();
+            zw.write_all(chapter.as_bytes()).unwrap();
+            zw.finish().unwrap();
+        }
+        let (out, _) = optimize_epub(&buf, crate::imgopt::test_screen()).unwrap();
+        let ch = String::from_utf8(entry_bytes(&out, "OEBPS/text/c1.xhtml")).unwrap();
+        assert!(ch.contains(r#"src="remote_img_0.png""#), "抓到的图改本地名: {ch}");
+        assert!(ch.contains(&format!(r#"<img alt="x" src="http://127.0.0.1:{dead}/b.png"/>"#)), "抓不到的原样保留: {ch}");
+        assert_eq!(entry_bytes(&out, "OEBPS/text/remote_img_0.png"), png, "小图不缩放，原样写入");
+        let opf = String::from_utf8(entry_bytes(&out, "OEBPS/content.opf")).unwrap();
+        assert!(opf.contains(r#"<item id="eink-remote-img-0" href="text/remote_img_0.png" media-type="image/png"/></manifest>"#), "{opf}");
+        let names: Vec<String> = {
+            let mut ar = ZipArchive::new(Cursor::new(&out)).unwrap();
+            (0..ar.len()).map(|i| ar.by_index(i).unwrap().name().to_string()).collect()
+        };
+        assert_eq!(names, ["mimetype", "META-INF/container.xml", "OEBPS/text/c1.xhtml", "OEBPS/text/remote_img_0.png", "OEBPS/content.opf", OPTIMIZE_MARKER]);
+        let rep = crate::check::check_epub(&out, false).unwrap();
+        assert!(rep.ok, "{:?}", rep.errors);
+    }
+
+    #[test]
+    fn add_manifest_items_handles_prefix_and_relative_paths() {
+        let imgs = vec![("OEBPS/text/remote_img_0.jpg".to_string(), vec![]), ("remote_img_1.gif".to_string(), vec![])];
+        let out = add_manifest_items(r#"<opf:package><opf:manifest><opf:item id="a"/></opf:manifest></opf:package>"#, "OEBPS/content.opf", &imgs);
+        assert_eq!(out, r#"<opf:package><opf:manifest><opf:item id="a"/><item id="eink-remote-img-0" href="text/remote_img_0.jpg" media-type="image/jpeg"/><item id="eink-remote-img-1" href="../remote_img_1.gif" media-type="image/gif"/></opf:manifest></opf:package>"#);
+        assert_eq!(add_manifest_items("<package/>", "a.opf", &imgs), "<package/>", "没有 manifest 原样");
+        assert!(has_remote_img(r#"<IMG class="x" src="//cdn/a.png">"#) && has_remote_img(r#"<img src="https://a/b.jpg"/>"#));
+        assert!(!has_remote_img(r#"<img data-src="https://a/b.jpg" src="b.jpg"/>"#));
     }
