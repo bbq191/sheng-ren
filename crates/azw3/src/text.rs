@@ -11,23 +11,8 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-const B32: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUV";
-
-pub fn base32(mut v: u32, width: usize) -> String {
-    let mut s = Vec::new();
-    loop {
-        s.push(B32[(v % 32) as usize]);
-        v /= 32;
-        if v == 0 {
-            break;
-        }
-    }
-    while s.len() < width {
-        s.push(b'0');
-    }
-    s.reverse();
-    String::from_utf8(s).unwrap()
-}
+/// base32 编码（数字 0-9A-V）与读取侧共用一份。
+pub use bookconv::convert::palm::base32;
 
 const POS_PLACEHOLDER: &str = "kindle:pos:fid:####:off:##########";
 
@@ -279,15 +264,6 @@ pub fn layout(book: &Loaded, res: &HashMap<String, (u32, &'static str)>, warning
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base32_matches_kindle_digits() {
-        assert_eq!(base32(9, 4), "0009");
-        assert_eq!(base32(31, 4), "000V");
-        assert_eq!(base32(32, 4), "0010");
-        assert_eq!(base32(0, 10), "0000000000");
-        assert_eq!(POS_PLACEHOLDER.len(), "kindle:pos:fid:0000:off:0000000000".len());
-    }
 
     fn doc(path: &str, html: &str) -> crate::book::Doc {
         crate::book::Doc { path: path.into(), html: html.into() }

@@ -402,30 +402,6 @@ fn promote_heading_upgrades_existing_paragraph_without_adding_text() {
     assert_eq!(promote_heading("Missing", "<p>body</p>".into()), "<p>body</p>");
 }
 
-#[test]
-fn looks_like_pdf_derived_epub_detects_marker() {
-    let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("sample.pdf");
-    std::fs::write(&src, SAMPLE_PDF).unwrap();
-    let (mut book, _, _) = optimize_pdf_to_epub(&src, |_, _| {}).unwrap();
-    let bytes = crate::epub::assemble(&mut book).unwrap();
-    let out = dir.path().join("out.epub");
-    std::fs::write(&out, &bytes).unwrap();
-    assert!(looks_like_pdf_derived_epub(&out));
-}
-
-#[test]
-fn looks_like_pdf_derived_epub_false_for_unrelated_zip() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = dir.path().join("not_epub.zip");
-    let file = std::fs::File::create(&p).unwrap();
-    let mut zip = zip::ZipWriter::new(file);
-    zip.start_file::<_, ()>("hello.txt", Default::default()).unwrap();
-    std::io::Write::write_all(&mut zip, b"hi").unwrap();
-    zip.finish().unwrap();
-    assert!(!looks_like_pdf_derived_epub(&p));
-}
-
 // ---- 裁边路径 ----
 
 #[test]
@@ -449,7 +425,6 @@ fn optimize_pdf_trim_only_comic_shaped_fixture_roundtrips() {
     let dst = dir.path().join("out.pdf");
     let report = optimize_pdf_trim_only(&src, &dst, crate::imgopt::test_screen(), |_, _| {}).unwrap();
     assert_eq!(report.pages, 3);
-    assert!(pdfwrite::looks_like_own_bookconv_pdf(&dst), "裁边输出应该能被识别成自产 PDF");
     // 要有目录：源 PDF 没有书签 → 按页分段兜底，不是空的。
     let titles = pdfwrite::PdfFileReader::open(&dst).unwrap().outline_titles().unwrap();
     assert_eq!(titles, vec![(0, "第 1–3 页".to_string())]);

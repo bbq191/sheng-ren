@@ -3,15 +3,16 @@
 //!
 //! 关键简化（真样本验证）：KF8 的 rawML（PalmDOC 解压全部文本记录后拼接）本身**已是重组好的
 //! XHTML 文档序列**（skeleton 与其 fragment 交错、按存储序≈阅读序）。故**跳过最复杂的
-//! INDX/CNCX skeleton+fragment 重组**——按 `<html>` 边界切章 + 清洗结构标签 + 重写 kindle:embed
-//! 图片 + 去 kindle 内链即可，得到可读 EPUB。HUFF/CDIC 压缩与 DRM 明确拒绝。
+//! INDX/CNCX skeleton+fragment 重组**——按 NCX 位置（没有 NCX 时按 `<html>` 边界）切章 + 清洗结构标签 +
+//! 重写 kindle:embed 图片 + 把 kindle:pos 内链解析成书内锚点，得到可读 EPUB。HUFF/CDIC 压缩与 DRM 明确拒绝。
+//! 引用里的数字（资源序号、片段号、片段内偏移）都是 base32（`palm::base32_decode`）。
 
-use super::{common, palm};
-use crate::epub::{Book, BookMeta, Chapter, Resource};
+use super::palm;
+use crate::epub::{Chapter, Resource};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 
-/// AZW3 字节 → (优化后的 EPUB 字节, 书名)。
+/// AZW3 字节 → (母版 EPUB 字节, 书名)。
 pub fn azw3_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
     let records = palm::parse_palmdb(data)?;
     if records.len() < 2 {
@@ -20,44 +21,39 @@ pub fn azw3_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
     let h = palm::parse_header(records[0])?;
     let exth = palm::parse_exth(h.mobi, h.mobi_hlen);
 
-    // 解压文本记录 1..=trecs（剥 trailing bytes）→ rawML
-    let raw = palm::decompress_text(&records, &h);
-    let rawml = String::from_utf8_lossy(&raw).into_owned();
+    // 解压文本记录 1..=trecs（剥 trailing bytes）→ rawML。NCX 位置、片段起点都是原始字节偏移，经 `raw.pos` 换算。
+    let raw = palm::RawText::decode(palm::decompress_text(&records, &h), h.encoding);
+    let rawml = raw.text.as_str();
 
-    // 图片资源：按记录序收集所有图片（JPEG/PNG/GIF）——kindle:embed:NNNN 是 1-based 索引。
+    // 图片资源：`kindle:embed:XXXX` 是 1 起的资源序号（base32）。扫 rawML 用到的序号，为其建资源 + 序号→路径映射。
     let images = palm::collect_images(&records);
-    // 扫 rawML 用到的 embed 号，为其建资源 + 号→路径映射。
-    let re_embed_scan = Regex::new(r#"(?i)kindle:embed:0*(\d+)"#).unwrap();
-    let mut used: HashSet<usize> = HashSet::new();
-    for cap in re_embed_scan.captures_iter(&rawml) {
-        if let Ok(n) = cap[1].parse::<usize>() {
-            used.insert(n);
-        }
-    }
+    let mut used: Vec<usize> = embed_re().captures_iter(rawml).filter_map(|c| palm::base32_decode(&c[1])).collect();
+    used.sort_unstable();
+    used.dedup();
     let mut resources: Vec<Resource> = Vec::new();
     let mut embed_path: HashMap<usize, String> = HashMap::new();
-    for &n in &used {
-        if n == 0 || n > images.len() {
-            continue;
-        }
-        let img = &images[n - 1];
+    for n in used {
+        let Some(img) = palm::resource_image(&records, &h, &images, n) else { continue };
         let path = format!("images/embed{n}.{}", img.ext);
         embed_path.insert(n, path.clone());
-        resources.push(Resource { path, media_type: img.mime.into(), bytes: img.bytes.clone() });
+        resources.push(Resource { path, media_type: img.mime.into(), bytes: img.bytes.to_vec() });
     }
 
     // 内链重映射上下文：fragment 起始表 + aid 位置表，把 kindle:pos 链接转真锚点（脚注/目录跳转可用）。
-    let frag_starts = palm::parse_fragment_starts(&records, &h);
-    let link_ctx = if frag_starts.is_empty() { None } else { Some(LinkCtx::build(&rawml, frag_starts)) };
+    let frag_starts: Vec<usize> = palm::parse_fragment_starts(&records, &h).into_iter().map(|p| raw.pos(p).unwrap_or(usize::MAX)).collect();
+    let link_ctx = if frag_starts.is_empty() { None } else { Some(LinkCtx::build(rawml, frag_starts)) };
     // 切章：有 NCX 真目录则**按 NCX 位置切**（一章一 spine + 一 nav，含层级）；否则按 <html> 块切。
-    let ncx = palm::parse_ncx(&records, &h);
-    let chapters = build_chapters(&rawml, &embed_path, &ncx, &exth.title, link_ctx.as_ref());
+    let ncx: Vec<palm::NcxEntry> = palm::parse_ncx(&records, &h)
+        .into_iter()
+        .filter_map(|e| Some(palm::NcxEntry { pos: raw.pos(e.pos)?, ..e }))
+        .collect();
+    let chapters = build_chapters(rawml, &embed_path, &ncx, &exth.title, link_ctx.as_ref());
     if chapters.is_empty() || chapters.iter().all(|c| c.html_body.trim().is_empty()) {
         return Err("AZW3 无可读正文（可能是 KF8 变体/加密）".into());
     }
 
     let title = if exth.title.trim().is_empty() {
-        first_title(&rawml)
+        first_title(rawml)
             .filter(|s| !s.is_empty())
             .or_else(|| Some(palm::palmdb_name(data)))
             .filter(|s| !s.is_empty())
@@ -65,32 +61,15 @@ pub fn azw3_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
     } else {
         exth.title.clone()
     };
-    // 封面：EXTH 201/202 → images 下标；缺省不硬塞（不误挑正文插图当封面）。
-    let (cover, cover_ext, cover_media_type) = match palm::pick_cover_index(&images, &exth) {
-        Some(i) => (
-            Some(images[i].bytes.clone()),
-            images[i].ext.to_string(),
-            images[i].mime.to_string(),
-        ),
-        None => (None, "jpg".into(), "image/jpeg".into()),
-    };
-    let mut book = Book {
-        meta: BookMeta {
-            book_id: format!("azw3:{}", common::sanitize_id(&title)),
-            title: title.clone(),
-            author: exth.author,
-            language: palm::lang_or_default(&exth.language),
-            publisher: exth.publisher,
-            cover,
-            cover_ext,
-            cover_media_type,
-        },
-        chapters,
-        resources,
-        nav: Vec::new(),
-    };
-    let optimized = common::assemble_master(&mut book)?;
-    Ok((optimized, title))
+    // 封面：EXTH 201/202 → 资源；缺省不硬塞（不误挑正文插图当封面）。
+    let cover = palm::pick_cover(&records, &h, &images, &exth);
+    palm::assemble_book("azw3", title, exth, cover, chapters, resources)
+}
+
+/// `kindle:embed:XXXX` 里的资源序号（base32 数字 0-9A-V）。
+fn embed_re() -> &'static Regex {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"(?i)kindle:embed:([0-9A-V]+)"#).unwrap())
 }
 
 fn first_title(rawml: &str) -> Option<String> {
@@ -122,7 +101,7 @@ impl Cleaner {
             re_head: Regex::new(r#"(?is)<head\b.*?</head>"#).unwrap(),
             re_htmlopen: Regex::new(r#"(?is)<html\b[^>]*>"#).unwrap(),
             re_shell: Regex::new(r#"(?is)</?body\b[^>]*>|</html>"#).unwrap(),
-            re_img: Regex::new(r#"(?is)<img\b[^>]*\bsrc="kindle:embed:0*(\d+)[^"]*"[^>]*>"#).unwrap(),
+            re_img: Regex::new(r#"(?is)<img\b[^>]*\bsrc="kindle:embed:([0-9A-V]+)[^"]*"[^>]*>"#).unwrap(),
             re_flow: Regex::new(r#"(?is)<link\b[^>]*kindle:flow[^>]*>"#).unwrap(),
             // KF8 元素普遍带 aid（唯一）→ 转成 id="aid<X>" 当锚点（内链目标 + 脚注回跳目标）。
             re_aid: Regex::new(r#"(?i)\baid="([^"]+)""#).unwrap(),
@@ -149,7 +128,7 @@ impl Cleaner {
         let s = self.re_htmlopen.replace_all(&s, "");
         let s = self.re_shell.replace_all(&s, "");
         let s = self.re_img.replace_all(&s, |cap: &regex::Captures| {
-            let n: usize = cap[1].parse().unwrap_or(0);
+            let n = palm::base32_decode(&cap[1]).unwrap_or(0);
             match embed_path.get(&n) {
                 Some(p) => format!("<img src=\"{p}\"/>"),
                 None => String::new(),
@@ -166,8 +145,7 @@ impl Cleaner {
 }
 
 /// 内链重映射上下文：fragment 起始偏移表 + rawML 中 aid 位置表（排序），把 `kindle:pos:fid:off` 解析成
-/// 目标章文件 + `#aid<X>` 锚点。fid=十六进制、off=十进制（多为 0=fragment 首，非零少见；错基顶多落同
-/// fragment 内相邻 aid，章级由 fid 精确定位不受影响）。
+/// 目标章文件 + `#aid<X>` 锚点。fid、off 都是 base32（数字 0-9A-V，见 `palm::base32`）。
 struct LinkCtx {
     frag_starts: Vec<usize>,
     aid_pos: Vec<(usize, String)>, // (rawML 字节位置, aid)，按位置升序
@@ -183,7 +161,7 @@ impl LinkCtx {
     /// (fid, off) → (目标 rawML 偏移, 目标 aid)。找 ≤ 目标偏移的最近 aid（= 含该位置的元素）。
     fn resolve(&self, fid: usize, off: usize) -> Option<(usize, String)> {
         let base = *self.frag_starts.get(fid)?;
-        let t = base + off;
+        let t = base.checked_add(off)?;
         let idx = self.aid_pos.partition_point(|(p, _)| *p <= t);
         if idx == 0 {
             return None;
@@ -205,12 +183,11 @@ fn remap_links(
     // 每章调用一次：正则只编译一次（此前每章各编译两个，几百章的书白白多几百次编译）。
     static RE_POS: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
     static RE_OTHER: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = RE_POS.get_or_init(|| Regex::new(r#"(?i)href="kindle:pos:fid:([0-9A-Fa-f]+):off:([0-9]+)""#).unwrap());
+    let re = RE_POS.get_or_init(|| Regex::new(r#"(?i)href="kindle:pos:fid:([0-9A-V]+):off:([0-9A-V]+)""#).unwrap());
     let re_other = RE_OTHER.get_or_init(|| Regex::new(r#"(?i)href="kindle:[^"]*""#).unwrap());
     let s = re.replace_all(html, |cap: &regex::Captures| {
-        let fid = usize::from_str_radix(&cap[1], 16).unwrap_or(usize::MAX);
-        let off = cap[2].parse::<usize>().unwrap_or(0);
-        match ctx.resolve(fid, off) {
+        let resolved = palm::base32_decode(&cap[1]).zip(palm::base32_decode(&cap[2])).and_then(|(fid, off)| ctx.resolve(fid, off));
+        match resolved {
             Some((t, aid)) => {
                 let ci = ch_ranges.partition_point(|(a, _)| *a <= t).saturating_sub(1);
                 let file = crate::epub::chapter_filename(ci);
@@ -253,11 +230,15 @@ fn build_chapters(
             .filter(|e| e.pos <= rawml.len())
             .map(|e| {
                 // NCX 偏移是字节位置，可能落在多字节字符中间 → 下取到字符边界（最多回退 3 字节）
-                (char_floor(rawml, e.pos), e.label.chars().take(80).collect::<String>(), (e.level as i64 + 1).clamp(1, 6))
+                (palm::char_floor(rawml, e.pos), e.label.chars().take(80).collect::<String>(), (e.level as i64 + 1).clamp(1, 6))
             })
             .collect();
         cuts.sort_by_key(|c| c.0);
         cuts.dedup_by_key(|c| c.0); // 仅去完全相同位置
+        if cuts.is_empty() {
+            // NCX 位置全都越过正文末尾（索引坏了）：不按它切，退回按 <html> 块切。
+            return build_chapters(rawml, embed_path, &[], book_title, link_ctx);
+        }
 
         // 首条 NCX 前的前置内容（封面/版权页）→ 无标题段（进 spine 不进 nav），rawML 起点 0
         let first_cut = cuts[0].0;
@@ -324,17 +305,6 @@ fn build_chapters(
         }
     }
     built.into_iter().map(|(c, _)| c).collect()
-}
-
-/// 把字节位置下取到 `<` 最近的字符边界（`str::floor_char_boundary` 未稳定，手写）。
-fn char_floor(s: &str, mut pos: usize) -> usize {
-    if pos >= s.len() {
-        return s.len();
-    }
-    while pos > 0 && !s.is_char_boundary(pos) {
-        pos -= 1;
-    }
-    pos
 }
 
 /// 若段首落在标签中间（首字符非 `<`，且第一个 `>` 出现在第一个 `<` 之前），裁掉这段残缺标签片段
