@@ -18,6 +18,7 @@
 //! 不会拿改过的内容冒充原来那本书。带 DRM 的书现在拒收（解 DRM 还没做）。
 
 mod cover;
+mod covergen;
 mod deliver;
 mod fsutil;
 mod generate;

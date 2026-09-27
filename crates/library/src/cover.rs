@@ -8,6 +8,9 @@
 //! 2. **Open Library**：作品有 Open Library ID 就取它的封面；没有就按英文书名、原文书名搜；再没有用 Wikimedia Commons
 //!    上的作品图片（多是初版封面）。
 //!
+//! 3. 都找不到：**生成**一张——书名在上、作者头像（Wikidata 人物照片）居中、作者名在下，样式按书的 id 挑
+//!    （见 `covergen`）。没有作者照片时中间画作者名的第一个字。
+//!
 //! 找到的封面存在 `masters/<id>/cover.<ext>`，来源记进 `meta.json`（哪个作品、哪个网址），错了可以 `--clear` 去掉。
 //! 生成时书里没有封面才放进去（只在 OPF 里声明封面图，不加封面页，正文不变）。原件不动。
 
@@ -39,8 +42,8 @@ pub enum CoverResult {
     HasCover,
     /// 已经找过、存着了（`force` 才重找）。
     Existing(CoverInfo),
-    /// 没找到（原因给人看）。
-    NotFound(String),
+    /// 没找到原作封面，生成了一张（第二项是没找到的原因）。
+    Generated(CoverInfo, String),
 }
 
 const UA: &str = "booklib/0.1 (personal e-book library tool)";
@@ -260,6 +263,61 @@ fn find_work(net: &Net, title: &str, authors: &[String]) -> Result<Option<Work>,
     Ok(None)
 }
 
+/// 拿去找作品的书名：书里的书名，加上原件文件名里的（`作者《书名》` 取书名号里的；其它按常见命名规整）。
+/// 用户改过文件名（比如改成更通行的译名）时，文件名里的书名往往更准。规整后相同的只留一个。
+fn title_candidates(meta: &Meta) -> Vec<String> {
+    let stem = meta.source.rsplit_once('.').map_or(meta.source.as_str(), |(s, _)| s);
+    let from_file = match (stem.find('《'), stem.rfind('》')) {
+        (Some(a), Some(b)) if b > a => stem[a + '《'.len_utf8()..b].to_string(),
+        _ => bookconv::naming::canonical_book_name(stem),
+    };
+    let mut out: Vec<String> = Vec::new();
+    for t in [meta.title.clone(), from_file] {
+        if !norm(&t).is_empty() && !out.iter().any(|o| norm(o) == norm(&t)) {
+            out.push(t);
+        }
+    }
+    out
+}
+
+/// 作者照片（Wikidata 人物的 P18 图片）：按作者名找人物，名字最像（字重合度 ≥ 0.6）且有照片的那个。
+/// 返回（"Q号 名字", 缩到 800 宽的图片网址）。
+fn author_portrait(net: &Net, authors: &[String]) -> Option<(String, String)> {
+    for a in authors.iter().filter(|a| !norm(a).is_empty()) {
+        let mut ids: Vec<String> = Vec::new();
+        for v in [a.clone(), a.replace(['．', '‧', '・', '•', '.'], "·")] {
+            for id in wikidata_search(net, &v).ok()? {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        if ids.is_empty() {
+            continue;
+        }
+        let values: String = ids.iter().take(8).map(|i| format!("wd:{i} ")).collect();
+        let q = format!(
+            r#"SELECT ?a ?img ?l WHERE {{ VALUES ?a {{ {values}}} ?a wdt:P31 wd:Q5 ; wdt:P18 ?img .
+  {{ ?a rdfs:label ?l }} UNION {{ ?a skos:altLabel ?l }} FILTER(STRSTARTS(LANG(?l),"zh")) }}"#
+        );
+        let v = net.json(&format!("https://query.wikidata.org/sparql?format=json&query={}", enc(&q))).ok()?;
+        let best = v["results"]["bindings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|r| {
+                let g = |k: &str| r[k]["value"].as_str().unwrap_or("").to_string();
+                let score = similarity(&norm(a), &norm(&g("l")));
+                (score >= 0.6).then(|| (score, g("a").rsplit('/').next().unwrap_or("").to_string(), g("l"), g("img")))
+            })
+            .max_by(|x, y| x.0.total_cmp(&y.0));
+        if let Some((_, qid, name, img)) = best {
+            return Some((format!("{qid} {name}"), format!("{}?width=800", img.replace("http://", "https://"))));
+        }
+    }
+    None
+}
+
 /// 作品的封面图网址，按可靠程度排好（前面的下载失败或不像封面，就试下一个）：
 /// Open Library 作品本身的封面 → 按英文名 + 作者搜 → 按原文名、日文名搜 → Wikimedia Commons 上的作品图片。
 fn cover_urls(net: &Net, w: &Work) -> Vec<String> {
@@ -365,26 +423,51 @@ impl Library {
             return Ok(CoverResult::HasCover);
         }
         let net = Net::new();
-        let Some(work) = find_work(&net, &meta.title, &meta.authors)? else {
-            return Ok(CoverResult::NotFound("Wikidata 里找不到书名、作者都对得上的作品".into()));
-        };
-        let name = [&work.en, &work.original, &work.ja].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_default();
-        let label = format!("{} {name}", work.qid);
-        for url in cover_urls(&net, &work) {
-            let Ok(bytes) = net.fetch(&url) else { continue };
-            let Some(ext) = plausible_cover(&bytes) else { continue };
-            let info = CoverInfo { file: format!("cover.{ext}"), sha256: sha256_hex(&bytes), source_url: url, work: label };
-            let dir = self.entry_dir(&meta.id);
-            crate::fsutil::write_atomic(&dir.join(&info.file), &bytes)?;
-            let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
-            if let Some(old) = m.cover.as_ref().filter(|o| o.file != info.file) {
-                let _ = std::fs::remove_file(dir.join(&old.file));
+        let mut found = None;
+        for t in title_candidates(meta) {
+            if let Some(w) = find_work(&net, &t, &meta.authors)? {
+                found = Some(w);
+                break;
             }
-            m.cover = Some(info.clone());
-            self.save_meta(&m)?;
-            return Ok(CoverResult::Found(info));
         }
-        Ok(CoverResult::NotFound(format!("找到了作品 {label}，但没有可用的封面图")))
+        let why = match found {
+            None => "Wikidata 里找不到书名、作者都对得上的作品".to_string(),
+            Some(work) => {
+                let name = [&work.en, &work.original, &work.ja].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_default();
+                let label = format!("{} {name}", work.qid);
+                for url in cover_urls(&net, &work) {
+                    let Ok(bytes) = net.fetch(&url) else { continue };
+                    let Some(ext) = plausible_cover(&bytes) else { continue };
+                    return self.store_cover(meta, &bytes, ext, url, label).map(CoverResult::Found);
+                }
+                format!("找到了作品 {label}，但没有可用的封面图")
+            }
+        };
+        // 找不到原作封面：生成一张（书名 + 作者头像）
+        let author = meta.authors.first().map(|a| a.trim().to_string()).unwrap_or_default();
+        let portrait = author_portrait(&net, &meta.authors);
+        let photo = portrait.as_ref().and_then(|(_, url)| net.fetch(url).ok()).filter(|b| image::load_from_memory(b).is_ok());
+        let font = crate::covergen::load_font()?;
+        let seed = u64::from_str_radix(&meta.id[..12.min(meta.id.len())], 16).unwrap_or(0);
+        let bytes = crate::covergen::render(&font, &meta.title, &author, photo.as_deref(), seed)?;
+        let (url, work) = match (&portrait, &photo) {
+            (Some((who, url)), Some(_)) => (url.clone(), format!("生成（书名 + 作者头像 {who}）")),
+            _ => (String::new(), "生成（书名 + 作者名字标，没找到作者头像）".to_string()),
+        };
+        self.store_cover(meta, &bytes, "jpg", url, work).map(|c| CoverResult::Generated(c, why))
+    }
+
+    fn store_cover(&self, meta: &Meta, bytes: &[u8], ext: &str, source_url: String, work: String) -> Result<CoverInfo, String> {
+        let info = CoverInfo { file: format!("cover.{ext}"), sha256: sha256_hex(bytes), source_url, work };
+        let dir = self.entry_dir(&meta.id);
+        crate::fsutil::write_atomic(&dir.join(&info.file), bytes)?;
+        let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
+        if let Some(old) = m.cover.as_ref().filter(|o| o.file != info.file) {
+            let _ = std::fs::remove_file(dir.join(&old.file));
+        }
+        m.cover = Some(info.clone());
+        self.save_meta(&m)?;
+        Ok(info)
     }
 
     /// 去掉找来的封面（找错了的时候）。
