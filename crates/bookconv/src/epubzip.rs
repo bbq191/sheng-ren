@@ -1,12 +1,10 @@
 //! EPUB 的 zip 层与 zip 内 posix 路径工具（清洗/优化/质量门/占位共用的最底层）。
 //!
 //! - [`Entry`]：zip 条目（目录项已剔除）。
-//! - [`read_entries`]：整本读入；[`read_skeleton`]：只读"骨架"——图片条目留空占位、其余整份读，图片真实体积从 zip
-//!   目录查表（流式优化/漫画转 PDF/漫画识别的阶段一，此前各抄一份循环）。
+//! - [`read_entries`]：整本读入；[`read_skeleton`]：只读"骨架"——图片条目留空占位、其余整份读（流式优化、
+//!   质量门的阶段一）。
+//! - [`cover_image_of`]：只读 container.xml、OPF 与少数几个条目取出封面图。
 //! - `posix_norm/dir_of/resolve/relative_to/percent_decode/is_html`：EPUB 内路径与文件名判断。
-//!
-//! 原先散在 `wash.rs`（Entry+路径工具）与 `check.rs`（read_entries），`wash`/`check` 仍 re-export，旧路径不变。
-use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -50,7 +48,7 @@ pub fn is_html_entry(name: &str, data: &[u8]) -> bool {
 const PREALLOC_CAP: u64 = 32 * 1024 * 1024;
 
 /// 读完一个 zip 条目的全部字节（`declared` = 目录里声明的解压大小，只用来预分配，封顶 [`PREALLOC_CAP`]）。
-/// 本模块各读取入口与 `stats` 共用。
+/// 本模块各读取入口共用。
 pub(crate) fn read_all(mut r: impl Read, declared: u64) -> Result<Vec<u8>, String> {
     let mut v = Vec::with_capacity(declared.min(PREALLOC_CAP) as usize);
     r.read_to_end(&mut v).map_err(|e| e.to_string())?;
@@ -78,8 +76,6 @@ pub(crate) fn put_entry<W: Write + Seek>(zw: &mut ZipWriter<W>, name: &str, opts
 pub struct Skeleton {
     /// 条目表：图片条目（`imgopt::is_downscalable`）的 `data` 为空占位，其余是真实字节。
     pub entries: Vec<Entry>,
-    /// 条目名 → zip 目录里的真实解压大小（含图片；查表不解压）。
-    pub sizes: HashMap<String, u64>,
 }
 
 /// 读"骨架"：非图片条目整份读，图片条目只记名字和大小、`data` 留空（真实字节留到阶段二按需读回）。
@@ -87,14 +83,12 @@ pub struct Skeleton {
 /// （绝不能静默跳过条目产出残缺 EPUB）。
 pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton, String> {
     let mut entries = Vec::with_capacity(zip.len());
-    let mut sizes = HashMap::with_capacity(zip.len());
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
         if f.is_dir() {
             continue;
         }
         let name = f.name().to_string();
-        sizes.insert(name.clone(), f.size());
         let data = if crate::imgopt::is_downscalable(&name) {
             Vec::new()
         } else {
@@ -103,12 +97,11 @@ pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton
         };
         entries.push(Entry { name, data });
     }
-    Ok(Skeleton { entries, sizes })
+    Ok(Skeleton { entries })
 }
 
 /// 按名字读一个 zip 条目的全部字节；条目不存在 → `Ok(None)`，其它（损坏/IO）错误 → `Err`。
-/// 流式路径"图片按需从源 zip 读回"的统一入口（此前 `by_name` + `with_capacity(size)` + `read_to_end` 在
-/// streaming/comic_pdf/placeholder 各抄一份）。
+/// 流式路径"图片按需从源 zip 读回"的统一入口。
 pub fn read_by_name_opt<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Option<Vec<u8>>, String> {
     let mut f = match zip.by_name(name) {
         Ok(f) => f,
@@ -138,6 +131,57 @@ pub fn read_entries(epub: &[u8]) -> Result<Vec<Entry>, String> {
         out.push(Entry { name, data: read_all(&mut f, size)? });
     }
     Ok(out)
+}
+
+// ───────────────────────── 按路径读 OPF 与封面 ─────────────────────────
+
+type FileZip = ZipArchive<std::io::BufReader<std::fs::File>>;
+
+/// 条目按文本读（非 UTF-8 字节按 lossy 替换）；不存在或读失败都是 `None`。
+fn read_text_opt(zip: &mut FileZip, name: &str) -> Option<String> {
+    read_by_name_opt(zip, name).ok().flatten().map(|b| String::from_utf8(b).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
+}
+
+/// 打开 EPUB 并读出 OPF：`(zip, OPF 在 zip 里的路径, OPF 文本)`。只读 container.xml 和 OPF 两个条目，不解压整本。
+fn open_opf(epub: &std::path::Path) -> Result<(FileZip, String, String), String> {
+    let file = std::fs::File::open(epub).map_err(|e| format!("打开 {} 失败: {e}", epub.display()))?;
+    let mut zip = ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB 失败: {e}"))?;
+    let container = read_text_opt(&mut zip, "META-INF/container.xml").ok_or("缺 META-INF/container.xml")?;
+    let opf_path = crate::wash::tag_attr(&container, "full-path").ok_or("container.xml 里没有 full-path")?.to_string();
+    let opf = read_text_opt(&mut zip, &opf_path).ok_or("读不到 OPF")?;
+    Ok((zip, opf_path, opf))
+}
+
+/// 读出一本 EPUB 的封面图（扩展名, 字节）：OPF `<meta name="cover">` → manifest；`properties="cover-image"`；都没有
+/// 就取第一个 spine 页里的第一张 `<img>`。只读需要的几个条目，不解压整本；找不到返回 `None`。
+pub fn cover_image_of(epub: &std::path::Path) -> Option<(String, Vec<u8>)> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    let (mut zip, opf_path, opf) = open_opf(epub).ok()?;
+    let dir = dir_of(&opf_path);
+    let items = crate::wash::manifest_items(&opf);
+    let mut candidate: Option<&str> = None;
+    if let Some(id) = crate::wash::cover_meta_re().find(&opf).and_then(|m| crate::wash::tag_attr(m.as_str(), "content")) {
+        candidate = items.iter().find(|i| i.id == id).map(|i| i.href);
+    }
+    if candidate.is_none() {
+        candidate = items.iter().find(|i| i.properties.contains("cover-image") || i.media_type.contains("cover-image")).map(|i| i.href);
+    }
+    // 声明必须真指向图片：Calibre 产物常见 `<meta name="cover" content="cover.txt"/>` 指向 txt。
+    if let Some(href) = candidate.filter(|h| crate::util::is_image_ext(h)) {
+        let path = resolve(dir, &percent_decode(href));
+        return Some((crate::util::image_ext_of(&path), read_by_name_opt(&mut zip, &path).ok()??));
+    }
+    // 第一个 spine 页里的第一张图。
+    static SPINE: OnceLock<Regex> = OnceLock::new();
+    static IMG: OnceLock<Regex> = OnceLock::new();
+    let first_ref = SPINE.get_or_init(|| Regex::new(r#"<itemref\b[^>]*\bidref="([^"]+)""#).unwrap()).captures(&opf)?;
+    let first = items.iter().find(|i| i.id == &first_ref[1])?;
+    let page = resolve(dir, &percent_decode(first.href));
+    let html = read_text_opt(&mut zip, &page)?;
+    let c = IMG.get_or_init(|| Regex::new(r#"(?is)<(?:img|image)\b[^>]*?(?:src|xlink:href|href)\s*=\s*"([^"]+)""#).unwrap()).captures(&html)?;
+    let path = resolve(dir_of(&page), &percent_decode(&c[1]));
+    Some((crate::util::image_ext_of(&path), read_by_name_opt(&mut zip, &path).ok()??))
 }
 
 // ───────────────────────── 路径工具（zip 内 posix 路径） ─────────────────────────
@@ -205,7 +249,41 @@ pub fn percent_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::io::Write;
+
+    /// 写一本最小 EPUB 到 `path`：OPF 在 `opf_path`，`files` 是其余条目。
+    fn write_epub(path: &std::path::Path, opf_path: &str, opf: &str, files: &[(&str, &[u8])]) {
+        let mut all: Vec<(&str, &[u8])> = vec![("mimetype", b"application/epub+zip")];
+        let container = format!(r#"<container><rootfiles><rootfile full-path="{opf_path}"/></rootfiles></container>"#);
+        all.push(("META-INF/container.xml", container.as_bytes()));
+        all.push((opf_path, opf.as_bytes()));
+        all.extend_from_slice(files);
+        std::fs::write(path, zip_of(&all)).unwrap();
+    }
+
+    #[test]
+    fn cover_image_from_meta_or_first_spine_page() {
+        let d = tempfile::tempdir().unwrap();
+        let files: &[(&str, &[u8])] = &[("OEBPS/Text/p1.xhtml", br#"<html><body><img src="../images/cv.jpg"/></body></html>"#), ("OEBPS/images/cv.jpg", b"\xFF\xD8COVERBYTES\xFF\xD9")];
+        for meta in [r#"<meta name="cover" content="cv"/>"#, ""] {
+            let p = d.path().join("real.epub");
+            let opf = format!(r#"<package><metadata><dc:title>t</dc:title>{meta}</metadata><manifest><item id="cv" href="images/cv.jpg" media-type="image/jpeg"/><item id="c1" href="Text/p1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#);
+            write_epub(&p, "OEBPS/content.opf", &opf, files);
+            assert_eq!(cover_image_of(&p), Some(("jpg".to_string(), b"\xFF\xD8COVERBYTES\xFF\xD9".to_vec())), "meta={meta:?}");
+        }
+        assert_eq!(cover_image_of(&d.path().join("missing.epub")), None);
+    }
+
+    /// Calibre 产物 `<meta name="cover">` 指向 txt：必须回退到第一页的真图片。
+    #[test]
+    fn cover_declared_as_non_image_falls_back_to_first_page_image() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("calibre.epub");
+        let opf = r#"<package><metadata><dc:title>t</dc:title><meta name="cover" content="cover.txt"/></metadata><manifest><item id="cover.txt" href="cover.txt" media-type="text/plain"/><item id="c1" href="p1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+        write_epub(&p, "content.opf", opf, &[("cover.txt", b"not an image"), ("p1.xhtml", br#"<html><body><img src="real.jpg"/></body></html>"#), ("real.jpg", b"\xFF\xD8REALCOVER\xFF\xD9")]);
+        assert_eq!(cover_image_of(&p).map(|(_, b)| b), Some(b"\xFF\xD8REALCOVER\xFF\xD9".to_vec()));
+    }
 
     fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -256,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn skeleton_leaves_images_empty_keeps_text_and_records_all_sizes() {
+    fn skeleton_leaves_images_empty_keeps_text() {
         let bytes = zip_of(&[("dir/", b""), ("a.xhtml", b"<p>hi</p>"), ("images/p1.JPG", &[7u8; 300]), ("images/p2.gif", &[9u8; 10])]);
         let mut z = ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
         let sk = read_skeleton(&mut z).unwrap();
@@ -265,7 +343,6 @@ mod tests {
         assert_eq!(by["a.xhtml"].data, b"<p>hi</p>");
         assert!(by["images/p1.JPG"].data.is_empty(), "可降采样图片留空占位");
         assert_eq!(by["images/p2.gif"].data.len(), 10, "gif 不在降采样范围，照常整份读");
-        assert_eq!(sk.sizes["images/p1.JPG"], 300, "占位条目的真实体积从 zip 目录取");
     }
 
     /// 条目在 zip 目录里谎报解压大小（损坏/恶意文件）：不能照单预分配几 GB（设备上分配失败＝进程 abort）。
