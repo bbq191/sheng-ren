@@ -1,4 +1,4 @@
-//! 给一本已有的 EPUB **无损补封面**（2026-09-20 设备日志核查：已投的书里有的没有有效封面声明，xochitl 取不到封面缩略图）。
+//! 给一本已有的 EPUB **无损补封面**：有的书没有有效的封面声明，阅读器（如 xochitl）就取不到封面缩略图。
 //!
 //! 用法: cover-fix 输入.epub 输出.epub [封面缩略图.png]
 //!   - 只改 OPF（`wash::ensure_cover_declared`：保证 `<meta name="cover">` 指向真图片），**其余条目原样拷贝（zip raw copy，
@@ -44,7 +44,7 @@ fn run(input: &str, output: &str, png: Option<&str>) -> Result<(), String> {
     zout.finish().map_err(|e| e.to_string())?;
     println!("封面声明: {}", if changed { "已修复（OPF 已改）" } else { "本来就有效，无需改" });
     if let Some(png_path) = png {
-        let (_, bytes) = bookconv::placeholder::cover_image_of(std::path::Path::new(output)).ok_or("找不到封面图")?;
+        let (_, bytes) = bookconv::epubzip::cover_image_of(std::path::Path::new(output)).ok_or("找不到封面图")?;
         let img = image::load_from_memory(&bytes).map_err(|e| format!("解码封面失败: {e}"))?.to_rgb8();
         let (tw, th) = (552u32, 981u32);
         let s = (tw as f32 / img.width() as f32).min(th as f32 / img.height() as f32);
