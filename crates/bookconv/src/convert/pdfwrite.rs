@@ -1,7 +1,7 @@
 //! 最小 PDF 写入器：一串图片（每图一页）→ PDF。贴合 epub.rs「手搓、零 C 依赖」风格。
 //! JPEG 直接作 /DCTDecode 嵌入（不解码、不重编码——漫画页几乎都是 JPEG）；
 //! PNG 用现成 `png` crate 解码成原始像素、miniz_oxide zlib 压成 /FlateDecode。
-//! 用户：`cbz2pdf`（CBZ → 按设备 PDF）、`comic_pdf`（漫画 EPUB → PDF）、`pdf_ingest`（图片型 PDF 裁边）。
+//! 用户：`cbz2pdf`（CBZ → 按设备 PDF）、`pdf_ingest`（图片型 PDF 裁边）。
 //! 页面统一成设备 PDF 阅读范围的尺寸，写出走 [`PdfPieceWriter`]（逐页写，不攒全书图片）。
 
 #[derive(Clone, Copy, PartialEq, Debug)]

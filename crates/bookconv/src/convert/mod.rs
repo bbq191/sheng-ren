@@ -26,14 +26,6 @@ pub struct Converted {
     pub title: String,
 }
 
-/// 旧的"墨水屏色调档"参数，已无作用（CBZ→PDF 的色调现在由设备 profile 的 `color` 决定，见 `cbz::cbz_to_pdf`）。
-/// 只为 [`convert_file`] 的调用方签名不变而保留，调用方改掉后删除。
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub enum EinkTone {
-    #[default]
-    Off,
-}
-
 /// 该文件扩展名是否为「可转换的源格式」。.mobi/.prc/.azw = 旧 MOBI6；.azw3 = KF8（见 kf8）。
 pub fn is_convertible(filename: &str) -> bool {
     let l = filename.to_ascii_lowercase();
@@ -80,8 +72,7 @@ pub fn precheck(filename: &str, data: &[u8]) -> Result<(), String> {
 }
 
 /// 按扩展名分派转换，产出与设备无关的母版 EPUB。返回 `None` = 非可转换源；`Some(Err)` = 是源但转换失败。
-/// `_tone`、`_screen` 已无作用（母版不按设备处理），保留只为调用方签名不变。
-pub fn convert_file(filename: &str, data: &[u8], _tone: EinkTone, _screen: crate::imgopt::Screen) -> Option<Result<Converted, String>> {
+pub fn convert_file(filename: &str, data: &[u8]) -> Option<Result<Converted, String>> {
     let l = filename.to_ascii_lowercase();
     let title = std::path::Path::new(filename)
         .file_stem()
