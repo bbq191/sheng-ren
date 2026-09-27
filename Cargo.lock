@@ -46,6 +46,17 @@ dependencies = [
 
 [[package]]
 name = "ahash"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "891477e0c6a8957309ee5c45a6368af3ae14bb510732d2684ffa19af310920f9"
+dependencies = [
+ "getrandom 0.2.17",
+ "once_cell",
+ "version_check",
+]
+
+[[package]]
+name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
@@ -175,6 +186,15 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bitflags"
@@ -659,6 +679,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fast2s"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1316063b5422f1f7bf4cc784c959eaf04b843de7c9ecbd4190c60614aa23b27e"
+dependencies = [
+ "bincode",
+ "hashbrown 0.12.3",
+ "lazy_static",
+]
+
+[[package]]
 name = "fast_image_resize"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -839,7 +870,7 @@ checksum = "d99fc21d493812643aae86d53b7bbd02f376434a90317e8a790bc209fdd6605e"
 dependencies = [
  "bytemuck",
  "foldhash",
- "hashbrown",
+ "hashbrown 0.17.1",
  "log",
  "peniko",
  "png 0.18.1",
@@ -855,6 +886,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b17e70c989c36bad147b27a58d148c0741c51448aa5653436547323e524d0ab"
 dependencies = [
  "euclid 0.22.14",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+dependencies = [
+ "ahash 0.7.8",
 ]
 
 [[package]]
@@ -1137,7 +1177,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
- "hashbrown",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -1186,6 +1226,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lazy_static"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1198,6 +1244,7 @@ dependencies = [
  "ab_glyph",
  "azw3",
  "bookconv",
+ "fast2s",
  "image",
  "profile",
  "regex",
@@ -1938,7 +1985,7 @@ version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "585480e3719b311b78a573db1c9d9c4c1f8010c2dee4cc59c2efe58ea4dbc3e1"
 dependencies = [
- "ahash",
+ "ahash 0.8.12",
  "cssparser",
  "ego-tree",
  "getopts",
@@ -2423,7 +2470,7 @@ dependencies = [
  "bytemuck",
  "fearless_simd",
  "guillotiere",
- "hashbrown",
+ "hashbrown 0.17.1",
  "log",
  "peniko",
  "png 0.18.1",
@@ -2440,7 +2487,7 @@ dependencies = [
  "bytemuck",
  "fearless_simd",
  "guillotiere",
- "hashbrown",
+ "hashbrown 0.17.1",
  "log",
  "peniko",
  "png 0.18.1",
@@ -2456,7 +2503,7 @@ checksum = "6d8ded630e8316bb94a55881256506d1f3b9947b5f66db8a7d32ca7ba02decd0"
 dependencies = [
  "bytemuck",
  "glifo",
- "hashbrown",
+ "hashbrown 0.17.1",
  "png 0.18.1",
  "vello_common 0.0.8",
 ]

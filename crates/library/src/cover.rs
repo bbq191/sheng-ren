@@ -1,6 +1,10 @@
 //! 给没有封面的书联网找封面：`booklib cover`。
 //!
-//! 译本（比如好读的繁体版）在书目网站上几乎查不到，所以找的是**原作**的封面（用户 2026-09-27：原版封面也可以）：
+//! 来源（参照 Koodo Reader 用的几个书目源：豆瓣、Open Library 等，只借鉴"用哪些源"，代码是自己写的——它是 AGPL-3.0）：
+//! 0. **豆瓣**：中文版封面，最贴近用户手上的书。搜索建议接口按书名找，书名简体化后比对（好读是繁体、豆瓣多是简体），
+//!    作者去掉国籍前缀后按字重合度核对；取大图，挑分辨率最高的。没有公开 API，请求很少且节流。
+//!
+//! 豆瓣没有时找**原作**的封面（用户 2026-09-27：原版封面也可以）：
 //! 1. **Wikidata**：先按书名找（名著如《一九八四》《動物農莊》一找就中），书名完全对得上的作品里挑作者名最像的；
 //!    找不到（"雪人""告白"这种书名撞车太多，或译名不同）再找作者，在他的作品里按书名找。中文书名比对所有中文标签
 //!    和别名（繁简都有）；比较前统一全角半角、去掉括号里的消歧义说明和标点；译名用字不同（歐威爾/奧威爾、階梯/台階）
@@ -60,6 +64,11 @@ impl Net {
     }
 
     fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
+        self.fetch_ref(url, None)
+    }
+
+    /// `referer`：豆瓣图片服务器不带来源页会拒绝（HTTP 418）。
+    fn fetch_ref(&self, url: &str, referer: Option<&str>) -> Result<Vec<u8>, String> {
         let mut last_err = String::new();
         for _ in 0..4 {
             if let Some(t) = self.last.get() {
@@ -69,7 +78,11 @@ impl Net {
                 }
             }
             self.last.set(Some(Instant::now()));
-            match self.agent.get(url).call() {
+            let mut req = self.agent.get(url);
+            if let Some(r) = referer {
+                req = req.set("Referer", r);
+            }
+            match req.call() {
                 Ok(r) => {
                     let mut buf = Vec::new();
                     r.into_reader().take(20 << 20).read_to_end(&mut buf).map_err(|e| e.to_string())?;
@@ -280,6 +293,73 @@ fn title_candidates(meta: &Meta) -> Vec<String> {
     out
 }
 
+/// 简体化后再规整（豆瓣多是简体，好读的书是繁体）。
+fn norm_s(s: &str) -> String {
+    norm(&fast2s::convert(s))
+}
+
+/// 作者名去掉国籍前缀（"[美] 欧·亨利"、"(法) 阿尔贝·加缪"）再规整。
+fn norm_author(s: &str) -> String {
+    let s = s.trim();
+    let s = match s.chars().next() {
+        Some('[' | '［' | '(' | '（' | '【') => s.find([']', '］', ')', '）', '】']).map_or(s, |i| &s[i + s[i..].chars().next().unwrap().len_utf8()..]),
+        _ => s,
+    };
+    norm_s(s)
+}
+
+/// 豆瓣（中文版封面，最贴近用户手上的书）：用搜索建议接口按书名找，书名（简体化后）相同、或只差卷次后缀（≤2 字）
+/// 且作者对得上的条目，取大图（`/l/`），挑分辨率最高、像封面的那张。豆瓣没有公开 API，这是网页用的接口，
+/// 请求要少（全程节流）；图片服务器要带来源页。
+fn douban_cover(net: &Net, titles: &[String], authors: &[String]) -> Option<(Vec<u8>, &'static str, String, String)> {
+    let want_authors: Vec<String> = authors.iter().map(|a| norm_author(a)).filter(|a| !a.is_empty()).collect();
+    for t in titles {
+        let nt = norm_s(t);
+        if nt.is_empty() {
+            continue;
+        }
+        let url = format!("https://book.douban.com/j/subject_suggest?q={}", enc(t));
+        let Ok(v) = net.json(&url) else { continue };
+        let mut cands: Vec<(String, String)> = Vec::new(); // (图片网址, 说明)
+        for x in v.as_array().into_iter().flatten() {
+            let (title, author, pic) = (x["title"].as_str().unwrap_or(""), x["author_name"].as_str().unwrap_or(""), x["pic"].as_str().unwrap_or(""));
+            if pic.is_empty() || x["type"].as_str().is_some_and(|ty| ty != "b") {
+                continue;
+            }
+            let dt = norm_s(title);
+            let title_ok = dt == nt || ((nt.starts_with(&dt) || dt.starts_with(&nt)) && nt.chars().count().abs_diff(dt.chars().count()) <= 2);
+            let author_ok = if want_authors.is_empty() {
+                dt == nt
+            } else {
+                author.split(['/', '、', ',', '，']).any(|a| want_authors.iter().any(|w| similarity(w, &norm_author(a)) >= 0.6))
+            };
+            if title_ok && author_ok {
+                let large = pic.replace("/view/subject/s/", "/view/subject/l/").replace("/view/subject/m/", "/view/subject/l/");
+                let year = x["year"].as_str().unwrap_or("");
+                cands.push((large, format!("豆瓣 {title} {author} {year}").trim().to_string()));
+            }
+        }
+        // 前几个候选里挑分辨率最高、像封面的（老条目只有 200 多像素宽的小图）
+        let mut best: Option<(u64, Vec<u8>, &'static str, String, String)> = None;
+        for (u, label) in cands.into_iter().take(4) {
+            let Ok(bytes) = net.fetch_ref(&u, Some("https://book.douban.com/")) else { continue };
+            let Some(ext) = plausible_cover(&bytes) else { continue };
+            let area = image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok().and_then(|r| r.into_dimensions().ok()).map_or(0, |(w, h)| w as u64 * h as u64);
+            let big_enough = area >= 600 * 900;
+            if best.as_ref().is_none_or(|b| area > b.0) {
+                best = Some((area, bytes, ext, u, label));
+            }
+            if big_enough {
+                break;
+            }
+        }
+        if let Some((_, b, e, u, l)) = best {
+            return Some((b, e, u, l));
+        }
+    }
+    None
+}
+
 /// 作者照片（Wikidata 人物的 P18 图片）：按作者名找人物，名字最像（字重合度 ≥ 0.6）且有照片的那个。
 /// 返回（"Q号 名字", 缩到 800 宽的图片网址）。
 fn author_portrait(net: &Net, authors: &[String]) -> Option<(String, String)> {
@@ -423,8 +503,14 @@ impl Library {
             return Ok(CoverResult::HasCover);
         }
         let net = Net::new();
+        let titles = title_candidates(meta);
+        // ① 豆瓣：中文版封面
+        if let Some((bytes, ext, url, label)) = douban_cover(&net, &titles, &meta.authors) {
+            return self.store_cover(meta, &bytes, ext, url, label).map(CoverResult::Found);
+        }
+        // ② Wikidata + Open Library：原作封面
         let mut found = None;
-        for t in title_candidates(meta) {
+        for t in titles {
             if let Some(w) = find_work(&net, &t, &meta.authors)? {
                 found = Some(w);
                 break;
