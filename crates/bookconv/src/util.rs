@@ -161,6 +161,14 @@ pub fn sanitize_filename(title: &str, default: &str) -> String {
 /// [`sanitize_filename`] 结果的字节上限。
 pub const MAX_NAME_BYTES: usize = 200;
 
+/// 字节串里第一次出现 `needle` 的位置；`needle` 为空时返回 `None`。
+pub fn memfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return None;
+    }
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

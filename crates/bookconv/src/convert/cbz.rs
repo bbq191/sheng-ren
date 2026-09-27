@@ -1,95 +1,93 @@
-//! CBZ（漫画 zip 归档）→ PDF：解包 → 图片按自然序排 → 手搓 PDF（见 pdfwrite）。
-//! 只负责「解包 + 排序」，图片编码与 PDF 组装全交给 pdfwrite，互不耦合。
+//! CBZ（漫画 zip 归档）：解包 → 图片按文件名自然序排 → 母版 EPUB（入库用）或按设备的 PDF（`cbz2pdf` 用）。
+//! macOS 打包带进来的 `__MACOSX/` 目录和 `._*` 资源分叉文件不是页面，跳过。
 
-use super::pdfwrite::{bilevel_image, image_from_bytes, images_to_pdf};
-use super::EinkTone;
+use super::pdfwrite::{image_from_bytes, PdfPieceWriter};
 use std::io::Read;
 use zip::ZipArchive;
 
-/// CBZ 字节 → PDF 字节。内含 jpg/jpeg/png 图片，按文件名自然序（page_2 < page_10）成页。
-/// `tone`=墨水屏色调档：`Off` 原样直嵌；`Mono` 黑白页转 1-bit 抖动（省刷新），真彩页仍保留彩色。
-pub fn cbz_to_pdf(data: &[u8], tone: EinkTone, screen: crate::imgopt::Screen) -> Result<Vec<u8>, String> {
+/// 归档里的页面图片条目名（jpg/jpeg/png，按文件名自然序：page_2 < page_10）。跳过目录、macOS 垃圾条目和非图片条目。
+fn page_names<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>) -> Vec<String> {
+    let mut names: Vec<String> = (0..zip.len())
+        .filter_map(|i| zip.by_index(i).ok().filter(|f| !f.is_dir()).map(|f| f.name().to_string()))
+        .filter(|n| !is_macos_junk(n) && crate::imgopt::is_downscalable(n))
+        .collect();
+    names.sort_by(|a, b| natural_cmp(a, b));
+    names
+}
+
+/// macOS 压缩时附带的元数据：`__MACOSX/` 下的一切，以及文件名以 `._` 开头的 AppleDouble 资源分叉。
+fn is_macos_junk(name: &str) -> bool {
+    name.split('/').any(|seg| seg == "__MACOSX") || name.rsplit('/').next().is_some_and(|base| base.starts_with("._"))
+}
+
+fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    zip.by_name(name).map_err(|e| e.to_string())?.read_to_end(&mut bytes).map_err(|e| format!("{name}: {e}"))?;
+    Ok(bytes)
+}
+
+/// CBZ 字节 → 按设备的 PDF，一图一页。`screen` = 设备 PDF 的阅读范围。每页走和 EPUB 漫画 → PDF 同一条单趟处理
+/// （`imgopt::prepare_comic_page_for_pdf`：解码一次 → 裁白边 → 按 PDF 里的整数绘制尺寸缩放一次 → 编码一次），
+/// 什么都不用做的页原字节直接嵌；逐页读、逐页写，不把全书图片攒在内存里。
+/// 扩展名是图片但内容认不出的条目跳过并警告（不让一页坏图拖垮整本）。
+pub fn cbz_to_pdf(data: &[u8], screen: crate::imgopt::Screen) -> Result<Vec<u8>, String> {
     let mut zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
-    let mut names: Vec<String> = Vec::new();
-    for i in 0..zip.len() {
-        let f = zip.by_index(i).map_err(|e| e.to_string())?;
-        if f.is_dir() {
-            continue;
-        }
-        if is_image_name(f.name()) {
-            names.push(f.name().to_string());
+    let names = page_names(&mut zip);
+    // 先认出真正的图片页（只读开头几个字节看魔数），页数定了才能开写。
+    let mut pages = Vec::with_capacity(names.len());
+    for name in names {
+        let mut magic = Vec::with_capacity(8);
+        zip.by_name(&name).map_err(|e| e.to_string())?.take(8).read_to_end(&mut magic).map_err(|e| format!("{name}: {e}"))?;
+        if super::common::image_ext_mime(&magic).is_some() {
+            pages.push(name);
+        } else {
+            eprintln!("警告：{name} 不是可识别的图片，跳过");
         }
     }
-    if names.is_empty() {
+    if pages.is_empty() {
         return Err("CBZ 内无图片（jpg/jpeg/png）".into());
     }
-    names.sort_by(|a, b| natural_cmp(a, b));
-    let mut images = Vec::with_capacity(names.len());
-    for name in &names {
-        let mut f = zip.by_name(name).map_err(|e| e.to_string())?;
-        let mut bytes = Vec::new();
-        f.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        // 设备优化（Tier 1）：漫画页常远超设备屏，组 PDF 前按屏降采样——超出屏幕框
-        // 才 Lanczos3 缩、达标即跳过（仍原样直嵌、零重编码损失）。超屏像素对这块屏纯浪费（更慢/更占）。
-        if let Some(smaller) = crate::imgopt::downscale_for_device(&bytes, screen) {
-            bytes = smaller;
-        }
-        // 省刷新（Mono）：黑白/偏色页转 1-bit 抖动（触发更轻波形+缩体积）；真彩页 dither_bilevel 返回
-        // None → 落回原样直嵌路径保留彩色。Off 档直接走原样路径。
-        let img = match tone {
-            EinkTone::Mono => match crate::imgopt::dither_bilevel(&bytes) {
-                Some(gray) => bilevel_image(&gray),
-                None => image_from_bytes(&bytes).map_err(|e| format!("{name}: {e}"))?,
-            },
-            EinkTone::Off => image_from_bytes(&bytes).map_err(|e| format!("{name}: {e}"))?,
-        };
-        images.push(img);
+    let mut writer = PdfPieceWriter::begin(pages.len(), false, screen);
+    for name in &pages {
+        let raw = read_entry(&mut zip, name)?;
+        let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height).unwrap_or(raw);
+        writer.write_page(&image_from_bytes(&sized).map_err(|e| format!("{name}: {e}"))?)?;
     }
-    images_to_pdf(&images)
+    writer.finish(&[])
 }
 
 /// CBZ 字节 → **与设备无关的母版 EPUB**：图片按文件名自然序每页一张，原图字节原样放进去（不缩放、不重编码），
 /// 第一张当封面。按设备的缩放/补白在之后的优化步骤里做（整本会被判成漫画）。
+/// 扩展名是图片但内容认不出的条目跳过并警告。
 pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
     use crate::epub::{Book, BookMeta, Chapter, Resource};
     let mut zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
-    let mut names: Vec<String> = (0..zip.len())
-        .filter_map(|i| zip.by_index(i).ok().filter(|f| !f.is_dir() && is_image_name(f.name())).map(|f| f.name().to_string()))
-        .collect();
-    if names.is_empty() {
-        return Err("CBZ 内无图片（jpg/jpeg/png）".into());
-    }
-    names.sort_by(|a, b| natural_cmp(a, b));
-    let mut resources = Vec::with_capacity(names.len());
+    let names = page_names(&mut zip);
+    let mut resources: Vec<Resource> = Vec::with_capacity(names.len());
     let mut chapters = Vec::with_capacity(names.len());
-    let mut cover = None;
-    for (i, name) in names.iter().enumerate() {
-        let mut bytes = Vec::new();
-        zip.by_name(name).map_err(|e| e.to_string())?.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-        let (ext, mime) = super::common::image_ext_mime(&bytes).ok_or_else(|| format!("{name}: 不是可识别的图片"))?;
-        let path = format!("images/p{:04}.{ext}", i + 1);
-        if i == 0 {
-            cover = Some((bytes.clone(), ext, mime));
-        }
-        chapters.push(Chapter { title: format!("第 {} 页", i + 1), html_body: format!(r#"<div><img src="{path}" alt=""/></div>"#), level: 1 });
+    for name in &names {
+        let bytes = read_entry(&mut zip, name)?;
+        let Some((ext, mime)) = super::common::image_ext_mime(&bytes) else {
+            eprintln!("警告：{name} 不是可识别的图片，跳过");
+            continue;
+        };
+        let n = resources.len() + 1;
+        let path = format!("images/p{n:04}.{ext}");
+        chapters.push(Chapter { title: format!("第 {n} 页"), html_body: format!(r#"<div><img src="{path}" alt=""/></div>"#), level: 1 });
         resources.push(Resource { path, media_type: mime.to_string(), bytes });
     }
-    let (cover_bytes, cover_ext, cover_mime) = match cover {
-        Some((b, e, m)) => (Some(b), e.to_string(), m.to_string()),
-        None => (None, "jpg".into(), "image/jpeg".into()),
+    let Some(first) = resources.first() else {
+        return Err("CBZ 内无图片（jpg/jpeg/png）".into());
     };
+    let cover_ext = first.path.rsplit('.').next().unwrap_or("jpg").to_string();
+    let (cover, cover_media_type) = (Some(first.bytes.clone()), first.media_type.clone());
     let mut book = Book {
-        meta: BookMeta { book_id: format!("cbz:{}", super::common::sanitize_id(title)), title: title.to_string(), author: String::new(), language: "zh".into(), publisher: String::new(), cover: cover_bytes, cover_ext, cover_media_type: cover_mime },
+        meta: BookMeta { book_id: format!("cbz:{}", super::common::sanitize_id(title)), title: title.to_string(), author: String::new(), language: "zh".into(), publisher: String::new(), cover, cover_ext, cover_media_type },
         chapters,
         resources,
         nav: Vec::new(),
     };
     super::common::assemble_master(&mut book)
-}
-
-fn is_image_name(name: &str) -> bool {
-    let l = name.to_ascii_lowercase();
-    l.ends_with(".jpg") || l.ends_with(".jpeg") || l.ends_with(".png")
 }
 
 /// 自然排序：连续数字段按数值比较（去前导零后先比位数再逐位），其余按字节。
@@ -160,71 +158,56 @@ mod tests {
         assert_eq!(v, ["p1", "p09", "p010"]);
     }
 
+    fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            for (name, data) in entries {
+                z.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+                z.write_all(data).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    fn jpeg(w: u32, h: u32) -> Vec<u8> {
+        use image::{codecs::jpeg::JpegEncoder, DynamicImage, RgbImage};
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, _| image::Rgb([(x % 256) as u8, 90, 160])));
+        let mut out = Vec::new();
+        JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
+        out
+    }
+
     #[test]
     fn oversized_page_downscaled_in_pdf() {
-        use image::{codecs::jpeg::JpegEncoder, DynamicImage, RgbImage};
-        // 3392×1908（2× 屏）的漫画页
-        let big = DynamicImage::ImageRgb8(RgbImage::from_fn(3392, 1908, |x, _| image::Rgb([(x % 256) as u8, 90, 160])));
-        let mut jpg = Vec::new();
-        JpegEncoder::new_with_quality(&mut jpg, 90).encode_image(&big).unwrap();
-        let mut buf = Vec::new();
-        {
-            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            z.start_file("page_1.jpg", zip::write::SimpleFileOptions::default()).unwrap();
-            use std::io::Write;
-            z.write_all(&jpg).unwrap();
-            z.finish().unwrap();
-        }
-        let pdf = cbz_to_pdf(&buf, EinkTone::Off, crate::imgopt::test_screen()).unwrap();
+        // 3392×1908（2× 屏）的漫画页 → 单趟处理后宽不超过 PDF 里的绘制宽（页宽 954 的 98% 取偶 = 934）
+        let buf = zip_of(&[("page_1.jpg", &jpeg(3392, 1908))]);
+        let pdf = cbz_to_pdf(&buf, crate::imgopt::test_screen()).unwrap();
         let s = String::from_utf8_lossy(&pdf);
-        assert!(s.contains("/Width 1696"), "超大页应降采样到长边 1696，PDF 里应是 /Width 1696");
-        assert!(!s.contains("/Width 3392"), "不该保留原 3392 宽");
+        let at = s.find("/Subtype /Image /Width ").unwrap() + "/Subtype /Image /Width ".len();
+        let w: u32 = s[at..].split(' ').next().unwrap().parse().unwrap();
+        assert!(w <= 934, "超大页应缩到绘制宽以内: {w}");
+        assert!(s.contains("/MediaBox [0 0 954 1696]"), "页面是设备尺寸");
     }
 
     #[test]
-    fn mono_tone_makes_grayscale_page_1bit() {
-        use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder};
-        // 一张灰度页（渐变，无彩色）→ Mono 档应转 1-bit
-        let w = 200u32;
-        let h = 120u32;
-        let gray: Vec<u8> = (0..w * h).map(|i| ((i % w) * 255 / w) as u8).collect();
-        let mut png = Vec::new();
-        PngEncoder::new(&mut png).write_image(&gray, w, h, ExtendedColorType::L8).unwrap();
-        let mut buf = Vec::new();
-        {
-            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            z.start_file("p001.png", zip::write::SimpleFileOptions::default()).unwrap();
-            use std::io::Write;
-            z.write_all(&png).unwrap();
-            z.finish().unwrap();
-        }
-        let pdf = cbz_to_pdf(&buf, EinkTone::Mono, crate::imgopt::test_screen()).unwrap();
-        let s = String::from_utf8_lossy(&pdf);
-        assert!(s.contains("/BitsPerComponent 1"), "黑白页 Mono 档应为 1-bit");
-        assert!(s.contains("/ColorSpace /DeviceGray"), "应为灰度色彩空间");
-    }
-
-    #[test]
-    fn mono_tone_keeps_truecolor_page() {
-        use image::{codecs::jpeg::JpegEncoder, DynamicImage, RgbImage};
-        // 高饱和彩页（红蓝相间）→ Mono 档应保留彩色（不转 1-bit）
-        let color = DynamicImage::ImageRgb8(RgbImage::from_fn(160, 100, |x, _| {
-            if x % 2 == 0 { image::Rgb([220, 20, 20]) } else { image::Rgb([20, 20, 220]) }
-        }));
-        let mut jpg = Vec::new();
-        JpegEncoder::new_with_quality(&mut jpg, 90).encode_image(&color).unwrap();
-        let mut buf = Vec::new();
-        {
-            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-            z.start_file("cover.jpg", zip::write::SimpleFileOptions::default()).unwrap();
-            use std::io::Write;
-            z.write_all(&jpg).unwrap();
-            z.finish().unwrap();
-        }
-        let pdf = cbz_to_pdf(&buf, EinkTone::Mono, crate::imgopt::test_screen()).unwrap();
-        let s = String::from_utf8_lossy(&pdf);
-        assert!(s.contains("/BitsPerComponent 8"), "真彩页应保留 8-bit 彩色");
-        assert!(s.contains("/DeviceRGB"), "真彩页应保 RGB");
+    fn macos_junk_and_non_images_are_skipped() {
+        let page = jpeg(100, 150);
+        let buf = zip_of(&[
+            ("__MACOSX/vol/._p1.jpg", b"\0\x05\x16\x07AppleDouble"),
+            ("vol/._p2.jpg", b"\0\x05\x16\x07AppleDouble"),
+            ("vol/ComicInfo.xml", b"<ComicInfo/>"),
+            ("vol/bad.jpg", b"not an image"),
+            ("vol/p1.jpg", &page),
+            ("vol/p2.jpg", &page),
+        ]);
+        let pdf = cbz_to_pdf(&buf, crate::imgopt::test_screen()).unwrap();
+        assert!(String::from_utf8_lossy(&pdf).contains("/Count 2"), "只剩两页真图");
+        let epub = cbz_to_epub(&buf, "测试").unwrap();
+        let names: Vec<String> = crate::epubzip::read_entries(&epub).unwrap().into_iter().map(|e| e.name).collect();
+        assert!(names.iter().any(|n| n.ends_with("images/p0002.jpg")) && !names.iter().any(|n| n.ends_with("images/p0003.jpg")), "{names:?}");
     }
 
     #[test]
@@ -235,6 +218,7 @@ mod tests {
             let z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             z.finish().unwrap();
         }
-        assert!(cbz_to_pdf(&buf, EinkTone::Off, crate::imgopt::test_screen()).is_err());
+        assert!(cbz_to_pdf(&buf, crate::imgopt::test_screen()).is_err());
+        assert!(cbz_to_epub(&buf, "空").is_err());
     }
 }
