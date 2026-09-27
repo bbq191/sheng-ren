@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 470" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>书库只存索引：目录结构与原件的关系</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f7bd6"/></marker>
+    <style>
+      .m{font-family:'JetBrains Mono','Noto Sans Mono CJK SC',monospace;font-size:12.5px}
+      .s{font-size:12px;fill:#555}
+      .h{font-weight:bold;font-size:14px}
+      .l{stroke:#3f7bd6;stroke-width:1.3;fill:none;stroke-dasharray:6 4}
+    </style>
+  </defs>
+  <rect width="940" height="470" fill="#fafafa"/>
+
+  <text x="24" y="30" class="h">~/.local/share/booklib/（书库，几百 KB）</text>
+  <rect x="20" y="40" width="470" height="410" rx="8" fill="#fff" stroke="#ccc"/>
+  <g class="m">
+    <text x="36" y="66">masters/</text>
+    <text x="52" y="88">3fa9c1e07b2d/</text><text x="200" y="88" class="s">← id = 原件 SHA-256 前 12 位</text>
+    <text x="68" y="110" fill="#1d4fa8">meta.json</text><text x="200" y="110" class="s">原件路径、哈希、大小、修改时间、书名</text>
+    <text x="52" y="136">8c01d4a9e2f3/</text>
+    <text x="68" y="158" fill="#1d4fa8">meta.json</text><text x="200" y="158" class="s">MOBI 也只存索引，生成时当场转换</text>
+    <text x="52" y="184">5e77a0c3b1d9/</text><text x="200" y="184" class="s">← 网址入库（没有原件）</text>
+    <text x="68" y="206">meta.json</text>
+    <text x="68" y="228">master.epub</text><text x="200" y="228" class="s">抓下来的正文，只有这种存内容</text>
+    <text x="36" y="258">output/</text><text x="200" y="258" class="s">产物，可随时删掉重建</text>
+    <text x="52" y="280">kindle-pw12-sig/</text>
+    <text x="68" y="302">书名.azw3</text>
+    <text x="68" y="324">.state.json</text><text x="200" y="324" class="s">每本书的生成指纹</text>
+    <text x="52" y="346">ireader-ocean5-pro/  …</text>
+    <text x="36" y="372">outputs.json</text><text x="200" y="372" class="s">用过的其它 --out 目录</text>
+    <text x="36" y="392">sources.json</text><text x="200" y="392" class="s">track 的目录与其中文件的大小、时间</text>
+    <text x="36" y="412">profiles/</text><text x="200" y="412" class="s">可选：自定义设备 *.toml</text>
+    <text x="36" y="432">.lock</text><text x="200" y="432" class="s">同时只允许一个 booklib 改书库</text>
+  </g>
+
+  <text x="560" y="30" class="h">~/Documents/ereader/books/（你的原件）</text>
+  <rect x="556" y="40" width="364" height="110" rx="8" fill="#fff" stroke="#ccc"/>
+  <text x="572" y="72" class="m" fill="#1d4fa8">三体.epub</text>
+  <text x="572" y="100" class="m" fill="#1d4fa8">现代汉语词典.mobi</text>
+  <text x="572" y="132" class="s">书的内容只在这里有一份</text>
+
+  <path class="l" d="M492 110 C520 110 530 68 566 68" marker-end="url(#a)"/>
+  <path class="l" d="M492 158 C530 158 530 97 566 97" marker-end="url(#a)"/>
+  <line x1="440" y1="110" x2="490" y2="110" stroke="#3f7bd6" stroke-dasharray="2 3"/>
+  <line x1="420" y1="158" x2="490" y2="158" stroke="#3f7bd6" stroke-dasharray="2 3"/>
+
+  <rect x="556" y="170" width="364" height="140" rx="8" fill="#eef4ff" stroke="#5b7fd6"/>
+  <text x="572" y="194" class="h">蓝色虚线 = 索引指向原件</text>
+  <text x="572" y="218" class="s">生成前先核对原件：大小和修改时间没变直接用；</text>
+  <text x="572" y="238" class="s">变了就重算哈希，内容一样照常生成，</text>
+  <text x="572" y="258" class="s">内容不一样就停下，提示先 sync（换成新版本）。</text>
+  <text x="572" y="282" class="s">原件移动了：sync 或重新 add 按内容认出来、更新路径。</text>
+  <text x="572" y="300" class="s">原件删了：这本书没法再生成，sync 会报告。</text>
+
+  <rect x="556" y="326" width="364" height="124" rx="8" fill="#eaf7ee" stroke="#3f9a5b"/>
+  <text x="572" y="350" class="h">指纹：什么变了就重新生成</text>
+  <text x="572" y="374" class="s">原件哈希 · 流程版本 · 优化器版本 · AZW3 写出器版本</text>
+  <text x="572" y="394" class="s">设备 id · 阅读范围 · 黑白/彩色 · 产物格式</text>
+  <text x="572" y="418" class="s">都没变 → build 直接跳过；list 显示 ✓ 最新 / ⚠ 过期</text>
+</svg>
