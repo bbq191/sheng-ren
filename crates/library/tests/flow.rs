@@ -194,3 +194,59 @@ fn broken_meta_is_reported_removable_and_readdable() {
     assert!(lib.remove(&m.id).is_ok(), "坏条目也能删");
     assert!(lib.remove("../lib").is_err());
 }
+
+#[test]
+fn track_and_sync_mirror_a_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = Library::open(dir.path().join("lib")).unwrap();
+    let books = dir.path().join("books");
+    std::fs::create_dir_all(books.join("子目录")).unwrap();
+    std::fs::write(books.join("甲.epub"), sample_epub("甲")).unwrap();
+    std::fs::write(books.join("子目录/乙.epub"), sample_epub("乙")).unwrap();
+    std::fs::write(books.join("说明.txt"), b"not a book").unwrap();
+    std::fs::write(books.join(".隐藏.epub"), sample_epub("隐藏")).unwrap();
+    assert_eq!(library::book_files(&books).len(), 2, "递归、只要能入库的、跳过隐藏文件");
+
+    assert!(lib.track(&books).unwrap());
+    assert!(!lib.track(&books).unwrap(), "重复跟踪");
+    assert!(lib.track(&dir.path().join("lib")).is_err(), "不能跟踪书库自己");
+    let r = lib.sync(false, |_| {}).unwrap();
+    assert_eq!((r.added, r.updated, r.missing), (2, 0, 0));
+    assert_eq!(lib.list().len(), 2);
+
+    // 没变：不重读
+    let r = lib.sync(false, |_| {}).unwrap();
+    assert_eq!((r.added, r.unchanged), (0, 2));
+
+    // 改名移动：认得出，不重复入库，也不算"原件不在"
+    std::fs::rename(books.join("子目录/乙.epub"), books.join("乙（改名）.epub")).unwrap();
+    let r = lib.sync(false, |_| {}).unwrap();
+    assert_eq!((r.added, r.missing), (0, 0));
+    assert_eq!(lib.list().len(), 2);
+
+    // 内容变了：换成新版本，旧版本删掉
+    std::fs::write(books.join("甲.epub"), sample_epub("甲（修订版）")).unwrap();
+    let r = lib.sync(false, |_| {}).unwrap();
+    assert_eq!(r.updated, 1);
+    let titles: Vec<String> = lib.list().into_iter().map(|m| m.title).collect();
+    assert!(titles.contains(&"甲（修订版）".to_string()) && !titles.contains(&"甲".to_string()), "{titles:?}");
+
+    // 入库失败的记住，不反复重试
+    std::fs::write(books.join("坏.epub"), b"not a zip").unwrap();
+    assert_eq!(lib.sync(false, |_| {}).unwrap().failed, 1);
+    assert_eq!(lib.sync(false, |_| {}).unwrap().failed, 0, "文件没变就不再重试");
+
+    // 原件删了：缺省只报告；--prune 才删
+    std::fs::remove_file(books.join("乙（改名）.epub")).unwrap();
+    let r = lib.sync(false, |_| {}).unwrap();
+    assert_eq!((r.missing, r.pruned), (1, 0));
+    assert_eq!(lib.list().len(), 2);
+    let r = lib.sync(true, |_| {}).unwrap();
+    assert_eq!((r.missing, r.pruned), (1, 1));
+    assert_eq!(lib.list().len(), 1);
+    assert_eq!(lib.sync(false, |_| {}).unwrap().missing, 0, "删过就不再报告");
+
+    assert!(lib.untrack(&books).unwrap());
+    assert!(lib.tracked().is_empty());
+    assert_eq!(lib.list().len(), 1, "不跟踪了，已入库的书保留");
+}
