@@ -61,3 +61,12 @@ path = "src/bin/cover_fix.rs"
 [[bin]]
 name = "cbz2pdf"
 path = "src/bin/cbz2pdf.rs"
+
+# 测量书：生成（readable-probe）与截图分析（readable-measure），量设备真实可阅读范围，见 `probe.rs`。
+[[bin]]
+name = "readable-probe"
+path = "src/bin/readable_probe.rs"
+
+[[bin]]
+name = "readable-measure"
+path = "src/bin/readable_measure.rs"
