@@ -10,6 +10,7 @@
 //!   --no-wash        只跑优化器不清洗（= v5 行为）
 //!   --keep-spacing   清洗但保留原书段间距（诗集/剧本）
 //!   --auto-toc       强制从 h1–h6 重建目录（缺省仅在无目录时生成）
+//!   --no-paginate    不做章节分页（缺省：章标题独立一页、节与节之间分页）
 //!   --footnote-anchor 脚注用章末锚点跳转（缺省即 Anchor，此参数保留兼容；2026-09-17 曾短暂改缺省
 //!                      为段末块，真机验证用户实际期望是"翻到哪页注释跟哪页"而不是"跟着引用它的段落"，
 //!                      EPUB 是流式重排做不到真正的页底部定位，撤回改回 Anchor，段末块整个下线）
@@ -38,8 +39,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flags: Vec<&str> = args.iter().filter(|a| a.starts_with("--") && !a.starts_with("--device=")).map(|s| s.as_str()).collect();
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--footnote-anchor", "--check", "--require-toc"].contains(f)) {
-        eprintln!("用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--footnote-anchor] [--check] [--require-toc] 输入.epub 输出.epub");
+    if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--no-paginate", "--footnote-anchor", "--check", "--require-toc"].contains(f)) {
+        eprintln!("用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--footnote-anchor] [--check] [--require-toc] 输入.epub 输出.epub");
         std::process::exit(1);
     }
     let screen = device_screen(&args);
@@ -49,6 +50,7 @@ fn main() {
         Some(WashOpts {
             keep_para_spacing: flags.contains(&"--keep-spacing"),
             auto_toc: if flags.contains(&"--auto-toc") { AutoToc::Always } else { AutoToc::IfMissing },
+            paginate: !flags.contains(&"--no-paginate"),
             ..Default::default()
         })
     };
@@ -80,8 +82,8 @@ fn main() {
     println!("epub-optimize v{}: {} 文件/{} 章, {} → {} 字节", optimize::OPTIMIZE_VERSION, rep.total_files, rep.html_files, rep.bytes_before, rep.bytes_after);
     if let Some(w) = &rep.wash {
         println!(
-            "清洗: css {} / html {} / 伪DRM剥离 {:?} / 空页 {:?} / 自动目录 {} 条 / 双id折叠 {} / 分部重建 {} 条 / ncx uid 修复 {} / ncx doctype 剥离 {} / ncx manifest id 修复 {}",
-            w.css_files, w.html_files, w.pseudo_drm_stripped, w.empty_pages_removed, w.toc_generated, w.dup_id_tags_collapsed, w.toc_parts_restructured, w.ncx_uid_fixed, w.ncx_doctype_stripped, w.ncx_manifest_id_fixed
+            "清洗: css {} / html {} / 伪DRM剥离 {:?} / 空页 {:?} / 自动目录 {} 条 / 双id折叠 {} / 分部重建 {} 条 / ncx uid 修复 {} / ncx doctype 剥离 {} / ncx manifest id 修复 {} / 分页新增 {} 份 / 注释随节搬移 {}",
+            w.css_files, w.html_files, w.pseudo_drm_stripped, w.empty_pages_removed, w.toc_generated, w.dup_id_tags_collapsed, w.toc_parts_restructured, w.ncx_uid_fixed, w.ncx_doctype_stripped, w.ncx_manifest_id_fixed, w.sections_paginated, w.paginate_notes_moved
         );
     }
     if flags.contains(&"--check") {

@@ -54,7 +54,9 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 /// v16（2026-09-27，本仓库）：去掉 v15 的"页边距 1 + 设备端代理"模式（`EPUB_FRAME_ASPECT`/`comic_pad` 删除）。缩放与漫画补白一律按
 /// profile 的**真实可阅读范围**（`OptimizeOpts::screen`，Move EPUB = 默认页边距 56 下的图片框 842×1455），补白容差统一 0.3%。
 /// 阅读器页边距改了就改 profile 的 `readable`，不再在优化器里分模式。
-pub const OPTIMIZE_VERSION: &str = "16";
+/// v17（2026-09-27）：清洗层加章节分页（`wash::paginate`）：章标题独立一页、节与节/节与章之间分页，章节文件按标题拆开，
+/// 全书链接与目录改指到拆出来的文件，同文件注释随所在的节搬移。
+pub const OPTIMIZE_VERSION: &str = "17";
 
 /// 脚注呈现方式。xochitl 无弹窗脚注（穷尽真机实测判死）；weread/pkm 线与第三方书历史行为、
 /// EPUB 线设备侧优化（母版库「优化」）2026-09-17 起统一用 `Anchor`（章末可见 + 同章锚点跳转 +
