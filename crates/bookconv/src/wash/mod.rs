@@ -48,7 +48,7 @@ pub use self::drm::*;
 use self::empty_pages::*;
 use self::ncx_fix::*;
 use self::paginate::*;
-pub(crate) use self::opf::*;
+pub use self::opf::*;
 pub use self::toc::*;
 pub use self::typeset::*;
 
@@ -132,6 +132,8 @@ pub struct WashReport {
     pub sections_paginated: usize,
     /// 分页时搬到引用处那一份的注释块数。
     pub paginate_notes_moved: usize,
+    /// 书自带目录漏掉、分页时补进目录的节数。
+    pub toc_sections_added: usize,
 }
 
 

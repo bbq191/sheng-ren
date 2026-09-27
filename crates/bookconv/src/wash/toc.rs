@@ -339,3 +339,66 @@ pub(super) fn auto_toc(entries: &mut Vec<Entry>, mode: AutoToc, rep: &mut WashRe
     }
     rep.toc_generated = headings.len();
 }
+
+/// 章节分页后把书自带目录里**漏掉的节**补进去（用户 2026-09-27：节要缩进出现在目录里）。`sections` =
+/// (节所在文件, 标题 id, 标题文字)，按阅读顺序。书自带的条目原样保留、顺序不动；缺的节插在阅读顺序上它之前的最后一条后面，
+/// 层级 = 往前找到的第一条"章"（非节条目）的下一级，前一条本身就是节时同级。没有 NCX 的书不动（自动目录已含全部标题）。
+/// 返回补了几条。
+pub(super) fn merge_sections_into_toc(entries: &mut Vec<Entry>, sections: &[(String, String, String)]) -> usize {
+    let Some(opf) = parse_opf(entries) else { return 0 };
+    let Some(ncx_path) = opf.ncx.clone() else { return 0 };
+    let Some(ncx) = entries.iter().find(|e| e.name == ncx_path) else { return 0 };
+    let flat = crate::ncx::parse_ncx_flat(&String::from_utf8_lossy(&ncx.data));
+    if flat.is_empty() {
+        return 0;
+    }
+    let spine_pos = |p: &str| opf.spine.iter().position(|s| s == p).unwrap_or(usize::MAX);
+    let offset_of = |p: &str, frag: &str| -> usize {
+        if frag.is_empty() {
+            return 0;
+        }
+        entries.iter().find(|e| e.name == p).and_then(|e| String::from_utf8_lossy(&e.data).find(&format!("id=\"{frag}\""))).unwrap_or(0)
+    };
+    // (层级, 标题, 路径, frag, 是否节)
+    let mut items: Vec<(u8, String, String, String, bool)> = flat
+        .into_iter()
+        .map(|(depth, label, target)| {
+            let (p, f) = target.split_once('#').unwrap_or((target.as_str(), ""));
+            let path = posix_norm(&resolve(dir_of(&ncx_path), &percent_decode(p)));
+            let is_sec = sections.iter().any(|(sp, id, _)| *sp == path && (f.is_empty() || f == id));
+            (depth.max(1) as u8, label, path, f.to_string(), is_sec)
+        })
+        .collect();
+    let mut added = 0;
+    for (path, id, label) in sections {
+        if items.iter().any(|it| it.4 && it.2 == *path && (it.3.is_empty() || it.3 == *id)) {
+            continue;
+        }
+        let key = (spine_pos(path), offset_of(path, id));
+        let at = items.iter().rposition(|it| (spine_pos(&it.2), offset_of(&it.2, &it.3)) <= key).map_or(0, |i| i + 1);
+        let depth = match items[..at].last() {
+            Some(prev) if prev.4 => prev.0,
+            Some(prev) => prev.0 + 1,
+            None => 1,
+        };
+        items.insert(at, (depth, label.clone(), path.clone(), id.clone(), true));
+        added += 1;
+    }
+    if added == 0 {
+        return 0;
+    }
+    let toc: Vec<(u8, String, String, String)> = items.into_iter().map(|(d, l, p, f, _)| (d, l, p, f)).collect();
+    let title = opf_book_title(entries, opf.index);
+    let uid = opf_unique_identifier(entries).unwrap_or_else(|| WASH_MARK.to_string());
+    let ncx_bytes = build_ncx(&toc, dir_of(&ncx_path), &title, &uid).into_bytes();
+    if let Some(e) = entries.iter_mut().find(|e| e.name == ncx_path) {
+        e.data = ncx_bytes;
+    }
+    if let Some(nav_path) = opf.nav_doc.clone() {
+        let nav = build_nav(&toc, dir_of(&nav_path)).into_bytes();
+        if let Some(e) = entries.iter_mut().find(|e| e.name == nav_path) {
+            e.data = nav;
+        }
+    }
+    added
+}

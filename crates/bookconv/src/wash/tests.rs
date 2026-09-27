@@ -881,3 +881,29 @@
         assert_eq!(rep.sections_paginated, 2);
         assert!(!body_of(&v, "OEBPS/Text/c2.xhtml").contains("正文二"));
     }
+
+    #[test]
+    fn sections_missing_from_own_toc_are_added_one_level_below_chapter() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = paged_book(&[
+            ("c1.xhtml", &format!(r#"<h1 id="c1">第一章</h1><p>{long}</p><h2>第一节</h2><p>一节。</p><h2 id="s2">第二节</h2><p>二节。</p>"#)),
+            ("c2.xhtml", &format!(r#"<h1 id="c2">第二章</h1><p>{long}</p>"#)),
+        ]);
+        v.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><navLabel><text>第一章</text></navLabel><content src="Text/c1.xhtml#c1"/></navPoint><navPoint><navLabel><text>第二章</text></navLabel><content src="Text/c2.xhtml#c2"/></navPoint></navMap></ncx>"#));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.toc_sections_added, 2);
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let got: Vec<(usize, &str, &str)> = flat.iter().map(|(d, l, t)| (*d, l.as_str(), t.as_str())).collect();
+        assert_eq!(
+            got,
+            [(1, "第一章", "Text/c1.xhtml#c1"), (2, "第一节", "Text/c1-p3.xhtml#eink-sec-1"), (2, "第二节", "Text/c1-p4.xhtml#s2"), (1, "第二章", "Text/c2.xhtml#c2")],
+            "节挂在章下面一级，指向节所在的那一份"
+        );
+        assert!(s(&v, "OEBPS/Text/c1-p3.xhtml").contains(r#"<h2 id="eink-sec-1">第一节</h2>"#));
+        // 幂等：再跑一遍不重复补
+        let rep2 = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep2.toc_sections_added, 0);
+        assert_eq!(crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx")).len(), 4);
+    }
