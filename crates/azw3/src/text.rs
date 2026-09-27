@@ -198,7 +198,7 @@ fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> 
     let mut tail = out[close..].to_string();
     // 只有片段（body 内）里的链接要回填；body 外的（不合法，但可能有）改成 "#"，从后往前改免得偏移错位。
     let mut body_links = Vec::new();
-    links.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    links.sort_unstable_by_key(|l| std::cmp::Reverse(l.0));
     for (at, doc, f) in links {
         if at >= close {
             tail.replace_range(at - close..at - close + POS_PLACEHOLDER.len(), "#");

@@ -50,8 +50,9 @@ fn add_build_skip_remove() {
     assert_eq!(lib.outputs(&meta).into_iter().find(|o| o.device == "kindle-pw12-sig").unwrap().fresh, Some(false));
     let azw3 = std::fs::read(out.join("kindle-pw12-sig/风起.azw3")).unwrap();
     assert_eq!(&azw3[60..68], b"BOOKMOBI");
-    // 母版原样保存
-    assert_eq!(std::fs::read(dir.path().join(format!("lib/masters/{}/master.epub", meta.id))).unwrap(), sample_epub("风起"));
+    // 书库只存索引，不复制原件
+    let files: Vec<String> = std::fs::read_dir(dir.path().join(format!("lib/masters/{}", meta.id))).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(files, ["meta.json"]);
 
     lib.remove(&meta.id).unwrap();
     assert!(lib.list().is_empty());
@@ -73,10 +74,11 @@ fn cbz_becomes_comic_epub_master_and_drm_epub_is_refused() {
     }
     let Added::New(m) = lib.add_file(&cbz).unwrap() else { panic!() };
     assert_eq!(m.title, "漫画 - 01卷");
-    let master = std::fs::read(dir.path().join(format!("lib/masters/{}/master.epub", m.id))).unwrap();
-    let names: Vec<String> = bookconv::epubzip::read_entries(&master).unwrap().into_iter().map(|e| e.name).collect();
-    assert!(names.iter().any(|n| n.ends_with("images/p0003.jpg")), "三页按自然序进母版: {names:?}");
-    assert!(dir.path().join(format!("lib/masters/{}/source.cbz", m.id)).exists(), "原始文件留底");
+    assert!(!dir.path().join(format!("lib/masters/{}/master.epub", m.id)).exists(), "转换结果不落书库");
+    // 生成时当场转换：三页都在
+    let Built::Written { path, .. } = lib.build(&m, profile::get("rmpp-move").unwrap(), &dir.path().join("out"), false).unwrap() else { panic!() };
+    let names: Vec<String> = bookconv::epubzip::read_entries(&std::fs::read(path).unwrap()).unwrap().into_iter().map(|e| e.name).collect();
+    assert_eq!(names.iter().filter(|n| n.contains("images/p")).count(), 3, "{names:?}");
 
     let drm = dir.path().join("加密.epub");
     {
@@ -91,89 +93,79 @@ fn cbz_becomes_comic_epub_master_and_drm_epub_is_refused() {
     assert!(err.contains("DRM"), "{err}");
 }
 
-/// 目录所在文件系统支不支持写时复制克隆（tmpfs、ext4 不支持；btrfs、xfs 支持）。
-fn reflink_supported(dir: &std::path::Path) -> bool {
-    let (a, b) = (dir.join(".probe-a"), dir.join(".probe-b"));
-    std::fs::write(&a, b"x").unwrap();
-    let ok = reflink_copy::reflink(&a, &b).is_ok();
-    let _ = (std::fs::remove_file(&a), std::fs::remove_file(&b));
-    ok
-}
-
 #[test]
-fn epub_master_shares_storage_and_dedupe_fixes_old_copies() {
-    // 放在 target 目录下（通常和源码同一个文件系统），/tmp 常是不支持克隆的 tmpfs
-    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let can_share = reflink_supported(dir.path());
-    let expected = if can_share { library::Storage::Reflink } else { library::Storage::Copy };
-    let lib = Library::open(dir.path().join("lib")).unwrap();
-    let books = dir.path().join("books");
-    std::fs::create_dir_all(&books).unwrap();
-    let src = books.join("风起.epub");
-    std::fs::write(&src, sample_epub("风起")).unwrap();
-    let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
-    let mdir = dir.path().join(format!("lib/masters/{}", m.id));
-    assert!(!mdir.join("source.epub").exists(), "EPUB 母版就是原文件，不再多存 source 副本");
-    assert_eq!(m.storage, expected, "能克隆就克隆；不能就复制，绝不用硬链接");
-    assert_eq!(std::fs::read(mdir.join("master.epub")).unwrap(), sample_epub("风起"));
-    // 改原文件不影响母版（母版不可变）
-    std::fs::write(&src, b"changed").unwrap();
-    assert_eq!(std::fs::read(mdir.join("master.epub")).unwrap(), sample_epub("风起"));
-
-    // 模拟老版本入库：master 是独立副本、还多存了一份 source.epub
-    let old_src = books.join("雨落.epub");
-    std::fs::write(&old_src, sample_epub("雨落")).unwrap();
-    let Added::New(old) = lib.add_file(&old_src).unwrap() else { panic!() };
-    let odir = dir.path().join(format!("lib/masters/{}", old.id));
-    std::fs::remove_file(odir.join("master.epub")).unwrap();
-    std::fs::write(odir.join("master.epub"), sample_epub("雨落")).unwrap();
-    std::fs::write(odir.join("source.epub"), sample_epub("雨落")).unwrap();
-    let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(odir.join("meta.json")).unwrap()).unwrap();
-    meta["storage"] = "copy".into();
-    std::fs::write(odir.join("meta.json"), meta.to_string()).unwrap();
-
-    // 书库自己不算作外部目录：把书库也传进去不会让母版和自己"去重"
-    let rep = lib.dedupe(&[books.clone(), dir.path().join("lib")]).unwrap();
-    assert_eq!(rep.removed_sources, 1, "多余的 source 副本删掉");
-    assert_eq!(rep.shared_files, usize::from(can_share), "只有老条目需要改；新条目已经共享；不支持克隆时保持原样");
-    assert!(!odir.join("source.epub").exists());
-    assert_eq!(lib.list().iter().find(|x| x.id == old.id).unwrap().storage, expected);
-    // 原文件删掉后母版仍在
-    std::fs::remove_file(&old_src).unwrap();
-    assert_eq!(std::fs::read(odir.join("master.epub")).unwrap(), sample_epub("雨落"), "原文件删了，母版还在");
-    let rep2 = lib.dedupe(&[books]).unwrap();
-    assert_eq!((rep2.shared_files, rep2.removed_sources), (0, 0), "幂等");
-}
-
-#[test]
-fn legacy_hardlinked_master_is_checked_and_unlinked() {
-    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+fn original_is_checked_before_build_and_can_move() {
+    let dir = tempfile::tempdir().unwrap();
     let lib = Library::open(dir.path().join("lib")).unwrap();
     let src = dir.path().join("书.epub");
     std::fs::write(&src, sample_epub("书")).unwrap();
     let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
-    // 模拟早期版本：母版是原文件的硬链接
-    let mdir = dir.path().join(format!("lib/masters/{}", m.id));
-    std::fs::remove_file(mdir.join("master.epub")).unwrap();
-    std::fs::hard_link(&src, mdir.join("master.epub")).unwrap();
-    let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(mdir.join("meta.json")).unwrap()).unwrap();
-    meta["storage"] = "hardlink".into();
-    std::fs::write(mdir.join("meta.json"), meta.to_string()).unwrap();
-    let m = lib.list().remove(0);
     let kindle = lib.devices().get("kindle-pw12-sig").unwrap();
     let out = dir.path().join("out");
-    // 原文件被就地改写 → 母版跟着变了，生成时要查出来，不能当作没变
-    let mut changed = sample_epub("书");
-    changed.extend_from_slice(b"\0");
-    std::fs::write(&src, &changed).unwrap();
-    let err = match lib.build(&m, kindle, &out, false) { Err(e) => e, Ok(_) => panic!("母版被改写应报错") };
-    assert!(err.contains("不一样"), "{err}");
-    // dedupe 把硬链接换成独立文件
+
+    // 只动了修改时间、内容没变：照常生成，记录更新
+    let f = std::fs::File::options().write(true).open(&src).unwrap();
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5)).unwrap();
+    drop(f);
+    assert_eq!(lib.original_state(&m), library::OriginalState::Touched);
+    assert!(lib.build(&m, kindle, &out, false).is_ok());
+    let m = lib.list().remove(0);
+    assert_eq!(lib.original_state(&m), library::OriginalState::Present);
+
+    // 内容改了：不拿改过的内容冒充原书
+    std::fs::write(&src, sample_epub("书（改）")).unwrap();
+    let err = match lib.build(&m, kindle, &out, true) { Err(e) => e, Ok(_) => panic!("原件改过应报错") };
+    assert!(err.contains("改过"), "{err}");
+
+    // 挪走：报原件不在；在新位置重新 add 就接上
     std::fs::write(&src, sample_epub("书")).unwrap();
-    let rep = lib.dedupe(&[]).unwrap();
-    assert_eq!(rep.unlinked, 1);
-    std::fs::write(&src, b"changed again").unwrap();
-    assert_eq!(std::fs::read(mdir.join("master.epub")).unwrap(), sample_epub("书"), "断开后原文件再改不影响母版");
+    let moved = dir.path().join("新位置.epub");
+    std::fs::rename(&src, &moved).unwrap();
+    assert_eq!(lib.original_state(&m), library::OriginalState::Missing);
+    assert!(lib.build(&m, kindle, &out, true).unwrap_err().contains("不在"));
+    assert!(matches!(lib.add_file(&moved).unwrap(), Added::Existing(_)));
+    let m = lib.list().remove(0);
+    assert!(m.source_path.ends_with("新位置.epub"));
+    assert!(lib.build(&m, kindle, &out, true).is_ok());
+}
+
+#[test]
+fn dedupe_migrates_old_entries_to_index_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = Library::open(dir.path().join("lib")).unwrap();
+    let books = dir.path().join("books");
+    std::fs::create_dir_all(&books).unwrap();
+    // 模拟早期版本的条目：书库里存着 master.epub 和 source.epub，meta 没有原件哈希，记着的原件路径已失效
+    let src = books.join("旧书.epub");
+    std::fs::write(&src, sample_epub("旧书")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
+    let edir = dir.path().join(format!("lib/masters/{}", m.id));
+    std::fs::write(edir.join("master.epub"), sample_epub("旧书")).unwrap();
+    std::fs::write(edir.join("source.epub"), sample_epub("旧书")).unwrap();
+    let mut meta: serde_json::Value = serde_json::from_slice(&std::fs::read(edir.join("meta.json")).unwrap()).unwrap();
+    meta["master"] = "master.epub".into();
+    meta["storage"] = "copy".into();
+    meta["source_sha256"] = "".into();
+    meta["source_path"] = "/不存在/旧书.epub".into();
+    std::fs::write(edir.join("meta.json"), meta.to_string()).unwrap();
+    // 另一本早期条目，原件找不到
+    let gone = serde_json::json!({"id":"0123456789ab","title":"孤本","authors":[],"source":"孤本.epub","source_format":"epub","master":"master.epub","added":1});
+    std::fs::create_dir_all(dir.path().join("lib/masters/0123456789ab")).unwrap();
+    std::fs::write(dir.path().join("lib/masters/0123456789ab/meta.json"), gone.to_string()).unwrap();
+    std::fs::write(dir.path().join("lib/masters/0123456789ab/master.epub"), sample_epub("孤本")).unwrap();
+
+    let old = lib.list().into_iter().find(|x| x.id == m.id).unwrap();
+    assert_eq!(old.source(), library::Source::Stored, "迁移前还读书库里的副本");
+    let rep = lib.dedupe(&[books.clone()]).unwrap();
+    assert_eq!(rep.migrated, 1);
+    assert_eq!(rep.kept.len(), 1, "找不到原件的保留副本");
+    assert!(!edir.join("master.epub").exists() && !edir.join("source.epub").exists());
+    let now = lib.list().into_iter().find(|x| x.id == m.id).unwrap();
+    assert_eq!(now.source(), library::Source::Original);
+    assert!(now.source_path.ends_with("旧书.epub"));
+    assert!(lib.build(&now, lib.devices().get("ireader-ocean5-pro").unwrap(), &dir.path().join("out"), false).is_ok());
+    assert!(dir.path().join("lib/masters/0123456789ab/master.epub").exists());
+    assert_eq!(lib.dedupe(&[books]).unwrap().migrated, 0, "幂等");
 }
 
 #[test]
