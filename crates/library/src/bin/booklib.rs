@@ -2,8 +2,9 @@
 //!
 //! 用法:
 //!   booklib [--library=目录] add <文件或网址>...
-//!   booklib [--library=目录] list
-//!   booklib [--library=目录] build --device=<设备> [--force] [--out=目录] [书名片段或 id...]
+//!   booklib [--library=目录] list [书名片段或 id...]   列出书，以及给哪些设备生成过、是否最新
+//!   booklib [--library=目录] build --device=<设备>[,<设备>…] [--device=…] [--force] [--out=目录] [书名片段或 id...]
+//!     --device 可写多次或用逗号分隔；--device=all 表示全部设备
 //!   booklib [--library=目录] remove <id>...
 //!   booklib devices
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib；产物缺省放在书库的 output/<设备>/ 下。
@@ -14,8 +15,9 @@ use std::path::PathBuf;
 
 const USAGE: &str = "用法:
   booklib [--library=目录] add <文件或网址>...
-  booklib [--library=目录] list
-  booklib [--library=目录] build --device=<设备> [--force] [--out=目录] [书名片段或 id...]
+  booklib [--library=目录] list [书名片段或 id...]
+  booklib [--library=目录] build --device=<设备>[,<设备>…] [--force] [--out=目录] [书名片段或 id...]
+      --device 可写多次或用逗号分隔，--device=all 表示全部设备
   booklib [--library=目录] remove <id>...
   booklib devices";
 
@@ -62,33 +64,58 @@ fn main() {
             }
         }
         "list" => {
-            for m in lib.list() {
+            for m in lib.select(rest) {
                 println!("{}  {:<6} {}{}", m.id, m.source_format, m.title, if m.authors.is_empty() { String::new() } else { format!(" — {}", m.authors.join("、")) });
+                for o in lib.outputs(&m) {
+                    let state = match o.fresh {
+                        Some(true) => "✓ 最新",
+                        Some(false) => "⚠ 过期",
+                        None => "? 未知",
+                    };
+                    let shown = o.path.strip_prefix(lib.root()).map(|p| p.to_path_buf()).unwrap_or(o.path.clone());
+                    println!("      {:<20} {state}  {}", o.device, shown.display());
+                }
             }
         }
         "build" => {
-            let Some(dev_id) = opt("device") else { usage() };
-            let Some(device) = profile::get(&dev_id) else {
-                eprintln!("没有设备 {dev_id}，运行 booklib devices 查看");
-                std::process::exit(1);
-            };
+            // --device 可写多次、可逗号分隔；all = 全部设备
+            let ids: Vec<String> = args.iter().filter_map(|a| a.strip_prefix("--device=")).flat_map(|v| v.split(',')).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect();
+            if ids.is_empty() {
+                usage();
+            }
+            let mut devices: Vec<&profile::Profile> = Vec::new();
+            for id in &ids {
+                if id == "all" {
+                    devices.extend(profile::Registry::builtin().iter());
+                    continue;
+                }
+                match profile::get(id) {
+                    Some(p) => devices.push(p),
+                    None => {
+                        eprintln!("没有设备 {id}，运行 booklib devices 查看");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            devices.sort_by(|a, b| a.id.cmp(&b.id));
+            devices.dedup_by(|a, b| a.id == b.id);
             let out_root = opt("out").map(PathBuf::from).unwrap_or_else(|| lib.root().join("output"));
             let books = lib.select(rest);
             if books.is_empty() {
                 eprintln!("没有匹配的书");
             }
-            for m in &books {
+            for (device, m) in devices.iter().flat_map(|d| books.iter().map(move |m| (*d, m))) {
                 match lib.build(m, device, &out_root, flag("force")) {
                     Ok(Built::Written { path, warnings }) => {
-                        println!("✓ {} → {}", m.title, path.display());
+                        println!("✓ [{}] {} → {}", device.id, m.title, path.display());
                         for w in warnings {
                             println!("  ⚠ {w}");
                         }
                     }
-                    Ok(Built::UpToDate(path)) => println!("= {} 已是最新（{}）", m.title, path.display()),
+                    Ok(Built::UpToDate(path)) => println!("= [{}] {} 已是最新（{}）", device.id, m.title, path.display()),
                     Err(e) => {
                         failed += 1;
-                        eprintln!("✗ {}: {e}", m.title);
+                        eprintln!("✗ [{}] {}: {e}", device.id, m.title);
                     }
                 }
             }

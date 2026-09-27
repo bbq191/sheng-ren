@@ -41,6 +41,13 @@ fn add_build_skip_remove() {
         assert!(matches!(lib.build(&meta, p, &out, false).unwrap(), Built::UpToDate(_)), "{dev} 没变化应跳过");
         assert!(matches!(lib.build(&meta, p, &out, true).unwrap(), Built::Written { .. }), "--force 重建");
     }
+    let status: Vec<(String, Option<bool>)> = lib.outputs(&meta).into_iter().map(|o| (o.device, o.fresh)).collect();
+    assert_eq!(status, [("ireader-ocean5-pro".to_string(), Some(true)), ("kindle-pw12-sig".to_string(), Some(true)), ("rmpp-move".to_string(), Some(true))], "list 能看到三台设备的产物且都最新");
+    // 产物指纹被改（模拟母版或规则变化）→ 过期
+    let state_path = out.join("kindle-pw12-sig/.state.json");
+    let st = std::fs::read_to_string(&state_path).unwrap().replace(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION), "|0|");
+    std::fs::write(&state_path, st).unwrap();
+    assert_eq!(lib.outputs(&meta).into_iter().find(|o| o.device == "kindle-pw12-sig").unwrap().fresh, Some(false));
     let azw3 = std::fs::read(out.join("kindle-pw12-sig/风起.azw3")).unwrap();
     assert_eq!(&azw3[60..68], b"BOOKMOBI");
     // 母版原样保存
