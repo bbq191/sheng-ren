@@ -1145,6 +1145,77 @@
         assert_eq!(labels, [(1, "部　一"), (2, "一"), (2, "二"), (1, "部　二"), (2, "一"), (2, "二")]);
     }
 
+    /// 《雪人》：`<h3>第二部</h3>` 后面紧跟一段章名"03 洋紅"——部、章各占一页（此前章名太短，被当成书名页的作者行并进部标题页）。
+    #[test]
+    fn part_title_and_following_chapter_title_get_separate_pages() {
+        let t = HAODOO_TEXT;
+        let (c1, c2, c3) = (
+            format!("<div><h3>第一部</h3><p>01 雪人</p><p>{t}</p></div>"),
+            format!("<div><h3>02 卵石眼</h3><p>{t}</p></div>"),
+            format!("<div><h3>第二部</h3><p>03 洋紅</p><p>{t}</p></div>"),
+        );
+        let mut v = flat_ncx_book(&[("1.xhtml", &c1), ("2.xhtml", &c2), ("3.xhtml", &c3)], &[("第一部　01　雪人", "1.xhtml"), ("02　卵石眼", "2.xhtml"), ("第二部　03　洋紅", "3.xhtml")]);
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        let part = body_of(&v, "OEBPS/Text/3.xhtml");
+        assert!(part.contains("第二部") && !part.contains("洋紅"), "部标题单独一页：{part}");
+        let pieces: Vec<String> = v.iter().filter(|e| e.name.starts_with("OEBPS/Text/3-p")).map(|e| body_of(&v, &e.name)).collect();
+        assert!(pieces.iter().any(|b| b.contains("洋紅") && !b.contains("鐵路")), "章名单独一页：{pieces:?}");
+        assert!(pieces.iter().any(|b| b.contains("鐵路") && !b.contains("洋紅")), "正文另起一页：{pieces:?}");
+    }
+
+    /// MOBI 转来的书（《福尔摩斯探案全集》）：没有 `<hN>`，目录锚点是章名段落前面的空 `<span id>`——取紧跟着的段落当标题。
+    #[test]
+    fn toc_anchor_on_empty_span_before_title_paragraph() {
+        let t = HAODOO_TEXT;
+        let body = format!(
+            r#"<p>{t}</p><span id="a1"></span><p><b>第一章</b> <b>歇洛克</b></p><p>{t}</p><span id="a2"></span><p><b>第二章</b> <b>演绎法</b></p><p>{t}</p>"#
+        );
+        let mut v = paged_book(&[("p.xhtml", &body)]);
+        v.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><navLabel><text>第一章　歇洛克</text></navLabel><content src="Text/p.xhtml#a1"/></navPoint><navPoint><navLabel><text>第二章　演绎法</text></navLabel><content src="Text/p.xhtml#a2"/></navPoint></navMap></ncx>"#));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert!(rep.sections_paginated >= 3, "两章各自拆开：{}", rep.sections_paginated);
+        let with_ch2: Vec<&Entry> = v.iter().filter(|e| e.name.starts_with("OEBPS/Text/p") && body_of(&v, &e.name).contains("演绎法")).collect();
+        assert_eq!(with_ch2.len(), 1);
+        assert!(!body_of(&v, &with_ch2[0].name).contains("歇洛克"), "第二章不跟第一章同页");
+    }
+
+    /// 书自带目录指错位置：核实得上的改指（书里同名链接 / 全书唯一同名标题 / 锚点在文件末尾时下一个文件），核实不上、有歧义的不动。
+    #[test]
+    fn ncx_targets_repaired_only_when_verified() {
+        let t = HAODOO_TEXT;
+        let toc_page = r##"<p><a href="c1.xhtml#x1">第一章</a></p><p><a href="c2.xhtml#x2">第二章</a></p><p><a href="c3.xhtml">附录</a></p>"##;
+        let (c1, c2) = (format!(r#"<h3 id="x1">第一章</h3><p>{t}</p>"#), format!(r#"<h3 id="x2">第二章</h3><p>{t}</p><span id="end"></span>"#));
+        let c3 = format!(r#"<h3>附录</h3><p>{t}</p>"#);
+        let c4 = format!(r#"<h3>后记</h3><p>{t}</p>"#);
+        let mut v = paged_book(&[("toc.xhtml", toc_page), ("c1.xhtml", &c1), ("c2.xhtml", &c2), ("c3.xhtml", &c3), ("c4.xhtml", &c4)]);
+        // 第一章指到第二章、第二章指到登场人物（都错）；附录指在 c2 末尾；后记写成了"跋"（核实不了）
+        v.push(e(
+            "OEBPS/toc.ncx",
+            r#"<ncx><navMap><navPoint><navLabel><text>第一章</text></navLabel><content src="Text/c2.xhtml#x2"/></navPoint><navPoint><navLabel><text>第二章</text></navLabel><content src="Text/c1.xhtml"/></navPoint><navPoint><navLabel><text>附录</text></navLabel><content src="Text/c2.xhtml#end"/></navPoint><navPoint><navLabel><text>跋</text></navLabel><content src="Text/c3.xhtml"/></navPoint></navMap></ncx>"#,
+        ));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        let mut rep = WashReport::default();
+        super::toc::repair_ncx_targets(&mut v, &mut rep);
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let got: Vec<(&str, &str)> = flat.iter().map(|(_, l, t)| (l.as_str(), t.as_str())).collect();
+        assert_eq!(got, [("第一章", "Text/c1.xhtml#x1"), ("第二章", "Text/c2.xhtml#x2"), ("附录", "Text/c3.xhtml"), ("跋", "Text/c3.xhtml")]);
+        assert_eq!(rep.ncx_targets_repaired, 3);
+
+        // 同一标题核实得上的地方不止一处：拿不准，不改
+        let (d1, d2) = (format!(r#"<h3 id="y">第一章</h3><p>{t}</p>"#), format!(r#"<h3 id="z">第一章</h3><p>{t}</p>"#));
+        let links = r##"<p><a href="d1.xhtml#y">第一章</a></p><p><a href="d2.xhtml#z">第一章</a></p><p><a href="d1.xhtml">第一章</a></p>"##;
+        let mut w = paged_book(&[("toc.xhtml", links), ("d1.xhtml", &d1), ("d2.xhtml", &d2)]);
+        w.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><navLabel><text>第一章</text></navLabel><content src="Text/toc.xhtml"/></navPoint></navMap></ncx>"#));
+        let opf = s(&w, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        w[0].data = opf.into_bytes();
+        let mut rep = WashReport::default();
+        super::toc::repair_ncx_targets(&mut w, &mut rep);
+        assert_eq!(rep.ncx_targets_repaired, 0);
+    }
+
     #[test]
     fn section_number_values() {
         use super::paginate::section_number;
