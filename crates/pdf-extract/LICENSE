@@ -23,5 +23,4 @@ SOFTWARE.
 ---
 
 本目录是上游 pdf-extract 0.12.1（https://github.com/jrmuizel/pdf-extract，同 MIT 协议）的本地 fork，
-2026-09-23 引入为本地 fork 并修改。修改内容与理由见 src/lib.rs 头注释与 shelf/docs/EPUB优化规范
-白皮书.md §05；本文件保留上游原始 MIT 版权声明。
+2026-09-23 引入为本地 fork 并修改。修改内容见 src/lib.rs 头注释；本文件保留上游原始 MIT 版权声明。
