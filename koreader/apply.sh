@@ -140,7 +140,7 @@ if [[ $closed -eq 0 ]]; then
     crashlog) echo "✗ KOReader 看起来还在运行（crash.log 里最后一次启动之后没有退出记录）。先在设备上退出 KOReader 再写。" >&2; exit 1 ;;
     proc) echo "✗ KOReader 正在运行。先在设备上退出 KOReader 再写。" >&2; exit 1 ;;
   esac
-  read -r -p "确认已在设备上彻底关闭 KOReader（最近任务里划掉）？[y/N] " ans
+  read -r -p "确认已在设备上用 KOReader 菜单里的「退出」关掉了它（在最近任务里划掉不一定结束进程）？[y/N] " ans
   [[ $ans == y || $ans == Y ]] || { echo "没写。"; exit 1; }
 fi
 for font in "${missing_fonts[@]}"; do
