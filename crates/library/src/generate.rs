@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// 生成流程本身（本 crate 的步骤、参数，以及生成时当场做的格式转换）的版本：改了会影响产物的地方要加一，
-/// 旧产物随之判为过期。优化器、AZW3 写出器各有自己的版本号，也都进指纹。
+/// 旧产物随之判为过期。优化器、AZW3 写出器、格式转换各有自己的版本号，也都进指纹。
 const PIPELINE_VERSION: &str = "5";
 
 #[derive(Debug)]
@@ -48,8 +48,14 @@ impl Library {
         let writer = if format == Format::Azw3 { azw3::WRITER_VERSION } else { "-" };
         let cover = meta.cover.as_ref().map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
         let info = meta.info.as_ref().and_then(|i| i.injected_sig()).unwrap_or_else(|| "-".into());
+        // 要当场转换的来源（非 EPUB）再带上格式转换的版本；写在流程版本后面，EPUB 来源的指纹保持原样（不白重建）
+        let pipeline = if meta.content_format() == "epub" {
+            PIPELINE_VERSION.to_string()
+        } else {
+            format!("{PIPELINE_VERSION}c{}", bookconv::convert::CONVERT_VERSION)
+        };
         let fingerprint = format!(
-            "{}|{cover}|{info}|{PIPELINE_VERSION}|{}|{writer}|{}|{}x{}|{}|{}",
+            "{}|{cover}|{info}|{pipeline}|{}|{writer}|{}|{}x{}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
