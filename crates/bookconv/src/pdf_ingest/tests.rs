@@ -389,21 +389,84 @@ fn epub_text_flow_equals_pdf_text_layer_exactly() {
     assert_eq!(got.matches("1Introduction").count(), 1, "章节标题不该重复输出");
 }
 
-// ---- 图片文件名后缀必须跟嗅探出的 media-type 一致（2026-09-23 真机踩坑：sample.pdf 的嵌入图片凑巧
-//      走 FlateDecode/PNG，没覆盖过 DCTDecode/JPEG 这条分支，导致后缀写死 .png 的 bug 一直没被测出）----
+// ---- PDF 内嵌图片解码：色彩空间、位深、链式滤镜 ----
 
-#[test]
-fn image_ext_and_media_type_detects_jpeg_by_soi_marker() {
-    let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
-    assert_eq!(image_ext_and_media_type(&jpeg), ("jpg", "image/jpeg"));
+/// 把一个图片流放进空文档，按 `get_page_images` 的形状拼出 `PdfImage` 调 `decode_pdf_image_to_bytes`。
+fn decode_image_stream(dict: lopdf::Dictionary, content: Vec<u8>) -> Result<image::DynamicImage, String> {
+    let mut doc = lopdf::Document::with_version("1.5");
+    let id = doc.add_object(lopdf::Object::Stream(lopdf::Stream::new(dict, content)));
+    let stream = doc.get_object(id).unwrap().as_stream().unwrap();
+    let filters = stream.filters().ok().map(|f| f.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect());
+    let img = lopdf::xobject::PdfImage {
+        id,
+        width: stream.dict.get(b"Width").unwrap().as_i64().unwrap(),
+        height: stream.dict.get(b"Height").unwrap().as_i64().unwrap(),
+        color_space: None,
+        filters,
+        bits_per_component: None,
+        content: &stream.content,
+        origin_dict: &stream.dict,
+    };
+    let bytes = decode_pdf_image_to_bytes(&doc, &img)?;
+    Ok(image::load_from_memory(&bytes).unwrap())
 }
 
 #[test]
-fn image_ext_and_media_type_defaults_to_png_for_everything_else() {
-    let png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-    assert_eq!(image_ext_and_media_type(&png), ("png", "image/png"));
-    assert_eq!(image_ext_and_media_type(&[]), ("png", "image/png"), "空字节/太短判不出来时不该 panic，落回默认值");
-    assert_eq!(image_ext_and_media_type(&[0xFF]), ("png", "image/png"), "只有一个字节、够不成 SOI 魔数");
+fn pdf_image_one_bit_gray_and_image_mask_decode() {
+    use lopdf::dictionary;
+    // 3×2，1 位：第一行 1 0 1（白黑白），第二行 0 1 0；每行补齐到整字节
+    let rows = vec![0b1010_0000u8, 0b0100_0000];
+    let g = decode_image_stream(dictionary! { "Width" => 3, "Height" => 2, "ColorSpace" => "DeviceGray", "BitsPerComponent" => 1 }, rows.clone()).unwrap().to_luma8();
+    assert_eq!(g.as_raw(), &[255, 0, 255, 0, 255, 0]);
+    // 模板图 /Decode [1 0]：1 = 涂色（黑）
+    let m = decode_image_stream(dictionary! { "Width" => 3, "Height" => 2, "ImageMask" => true, "Decode" => vec![1.into(), 0.into()] }, rows).unwrap().to_luma8();
+    assert_eq!(m.as_raw(), &[0, 255, 0, 255, 0, 255]);
+}
+
+#[test]
+fn pdf_image_indexed_and_icc_gray_decode() {
+    use lopdf::{dictionary, Object, StringFormat};
+    // 调色板两项：红、蓝；4 位索引 0 1
+    let cs = Object::Array(vec!["Indexed".into(), "DeviceRGB".into(), 1.into(), Object::String(vec![255, 0, 0, 0, 0, 255], StringFormat::Hexadecimal)]);
+    let rgb = decode_image_stream(dictionary! { "Width" => 2, "Height" => 1, "ColorSpace" => cs, "BitsPerComponent" => 4 }, vec![0x01]).unwrap().to_rgb8();
+    assert_eq!(rgb.as_raw(), &[255, 0, 0, 0, 0, 255]);
+    // ICCBased /N 1 = 灰度（此前一律当 RGB，像素长度对不上整张丢掉）
+    let mut doc_icc = lopdf::Dictionary::new();
+    doc_icc.set("N", 1);
+    let icc = Object::Array(vec!["ICCBased".into(), Object::Stream(lopdf::Stream::new(doc_icc, vec![]))]);
+    let g = decode_image_stream(dictionary! { "Width" => 2, "Height" => 1, "ColorSpace" => icc, "BitsPerComponent" => 8 }, vec![10, 200]).unwrap().to_luma8();
+    assert_eq!(g.as_raw(), &[10, 200]);
+}
+
+#[test]
+fn pdf_image_flate_wrapped_jpeg_is_unwrapped_and_unsupported_is_reported() {
+    use lopdf::dictionary;
+    let jpeg = {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([200, 30, 30])));
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
+        out
+    };
+    let wrapped = miniz_oxide::deflate::compress_to_vec_zlib(&jpeg, 6);
+    let filters = lopdf::Object::Array(vec!["FlateDecode".into(), "DCTDecode".into()]);
+    let got = decode_image_stream(dictionary! { "Width" => 4, "Height" => 4, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8, "Filter" => filters }, wrapped).unwrap();
+    assert_eq!((got.width(), got.height()), (4, 4), "先解掉 Flate 外层才是 JPEG");
+    let lab = lopdf::Object::Array(vec!["Lab".into(), lopdf::Object::Dictionary(lopdf::Dictionary::new())]);
+    let err = decode_image_stream(dictionary! { "Width" => 1, "Height" => 1, "ColorSpace" => lab, "BitsPerComponent" => 8 }, vec![0, 0, 0]).unwrap_err();
+    assert!(err.contains("色彩空间"), "{err}");
+    let short = decode_image_stream(dictionary! { "Width" => 4, "Height" => 4, "ColorSpace" => "DeviceRGB", "BitsPerComponent" => 8 }, vec![0; 5]).unwrap_err();
+    assert!(short.contains("像素数据不够"), "{short}");
+}
+
+#[test]
+fn formula_render_scale_is_capped_for_huge_pages() {
+    let a4 = formula_render_settings((595.0, 842.0));
+    assert_eq!(a4.x_scale, 2.0, "正常页面照旧 2 倍");
+    let huge = formula_render_settings((14400.0, 14400.0));
+    let px = (14400.0 * huge.x_scale as f64).powi(2);
+    assert!(px <= MAX_RENDER_PIXELS * 1.001, "超大 MediaBox 按像素上限缩小: {px}");
+    let long = formula_render_settings((200.0, 60000.0));
+    assert!(60000.0 * long.y_scale <= u16::MAX as f32, "单边不超过视口 u16 上限");
 }
 
 #[test]
@@ -412,6 +475,9 @@ fn promote_heading_upgrades_existing_paragraph_without_adding_text() {
     assert_eq!(promote_heading("1 Intro", "<p>1 Intro Some text</p>".into()), "<h2>1 Intro</h2><p>Some text</p>");
     // 章内找不到标题段落：不往正文里塞原书没有的字。
     assert_eq!(promote_heading("Missing", "<p>body</p>".into()), "<p>body</p>");
+    assert_eq!(promote_heading("第一章", "<p id=\"pdf-p3\">第一章</p><p>正文</p>".into()), "<h2 id=\"pdf-p3\">第一章</h2><p>正文</p>", "页锚点 id 跟着走");
+    assert_eq!(promote_heading("A&B", "<p>see A&amp;B</p><p>A&amp;B</p>".into()), "<p>see A&amp;B</p><h2>A&amp;B</h2>", "只认段首；标题按转义后的原文匹配");
+    assert_eq!(promote_heading("T", "<p class=\"x\">T</p><p>Tx</p>".into()), "<p class=\"x\">T</p><p>Tx</p>", "别的属性、标题后紧跟文字都不算");
 }
 
 // ---- 裁边路径 ----
@@ -419,9 +485,8 @@ fn promote_heading_upgrades_existing_paragraph_without_adding_text() {
 #[test]
 fn optimize_pdf_trim_only_comic_shaped_fixture_roundtrips() {
     // sample.pdf 是文字样本，不代表"裁边"路径的真实输入形状（裁边只服务一页一图的扫描件/
-    // 漫画 PDF）——这里用既有的 `images_to_pdf`（漫画 EPUB→PDF 那条产线复用的写手，已经
-    // 有自己的测试覆盖）现造一份"每页一张图"的合成 PDF，形状上才贴近这条路径真正会遇到的
-    // 输入。
+    // 漫画 PDF）——这里用 `images_to_pdf`（`pdfwrite` 的测试样本工具，已经有自己的测试
+    // 覆盖）现造一份"每页一张图"的合成 PDF，形状上才贴近这条路径真正会遇到的输入。
     const RED_PNG: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
@@ -802,7 +867,11 @@ fn join_pages_continues_sentence_across_page_boundary_only_when_unfinished() {
     let p = |s: &str| s.to_string();
     assert_eq!(join_pages(&[p("<p>点击获取验</p>"), p("<p>证码后登陆。</p>")]), "<p>点击获取验证码后登陆。</p>");
     assert_eq!(join_pages(&[p("<p>句子结束了。</p>"), p("<p>新段落</p>")]), "<p>句子结束了。</p><p>新段落</p>");
-    assert_eq!(join_pages(&[p("<p>unfinished <span class=\"eink-c0\">red</span></p>"), p("<p>tail</p>")]), "<p>unfinished <span class=\"eink-c0\">red</span>tail</p>");
+    assert_eq!(join_pages(&[p("<p>unfinished <span class=\"eink-c0\">red</span></p>"), p("<p>tail</p>")]), "<p>unfinished <span class=\"eink-c0\">red</span> tail</p>", "西文跨页接段补一个空格");
+    assert_eq!(join_pages(&[p("<p>the quick</p>"), p("<p>brown fox</p>")]), "<p>the quick brown fox</p>");
+    assert_eq!(join_pages(&[p("<p>artificial-</p>"), p("<p>intelligence</p>")]), "<p>artificial-intelligence</p>", "行尾连字符不补");
+    assert_eq!(join_pages(&[p("<p>ends with space </p>"), p("<p>next</p>")]), "<p>ends with space next</p>", "已有空白不再补");
+    assert_eq!(join_pages(&[p("<p>中文接</p>"), p("<p><a href=\"#x\">英文</a></p>")]), "<p>中文接<a href=\"#x\">英文</a></p>", "中文接中文不补（跳过标签看文字）");
     assert_eq!(join_pages(&[p("<p>unfinished</p>"), p("<p id=\"pdf-p2\">tail</p>")]), "<p>unfinished</p><p id=\"pdf-p2\">tail</p>", "跳转目标段落不接，id 保住");
     assert_eq!(join_pages(&[p("<p>图前</p>"), p("<p><img src=\"a.png\"/></p>")]), "<p>图前</p><p><img src=\"a.png\"/></p>", "下一页以图片开头不接");
     assert_eq!(join_pages(&[p("<h2>标题</h2>"), p("<p>正文</p>")]), "<h2>标题</h2><p>正文</p>");

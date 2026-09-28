@@ -80,76 +80,63 @@ fn embed_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r#"(?i)kindle:embed:([0-9A-V]+)"#).unwrap())
 }
 
-fn first_title(rawml: &str) -> Option<String> {
-    let re = Regex::new(r#"(?is)<title[^>]*>(.*?)</title>"#).unwrap();
-    re.captures(rawml).map(|c| c[1].trim().to_string()).filter(|s| !s.is_empty())
+/// `<title>…</title>`（第 1 组是内容）。
+fn title_re() -> &'static Regex {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"(?is)<title[^>]*>(.*?)</title>"#).unwrap())
 }
 
-/// KF8 清洗正则集（去结构壳 / kindle:embed 图 / kindle:flow / aid→id 建锚），编译一次复用。
-/// **不再去链** `<a>`——内链保留给两遍重映射（`LinkCtx`）转成真 epub 锚点（脚注/目录跳转可用）。
-struct Cleaner {
-    re_title: Regex,
-    re_tag: Regex,
-    re_xml: Regex,
-    re_head: Regex,
-    re_htmlopen: Regex,
-    re_shell: Regex,
-    re_img: Regex,
-    re_flow: Regex,
-    re_aid: Regex,
-    re_tag_with_aid: Regex,
-    re_id_attr: Regex,
+fn first_title(rawml: &str) -> Option<String> {
+    title_re().captures(rawml).map(|c| c[1].trim().to_string()).filter(|s| !s.is_empty())
 }
-impl Cleaner {
-    fn new() -> Self {
-        Cleaner {
-            re_title: Regex::new(r#"(?is)<title[^>]*>(.*?)</title>"#).unwrap(),
-            re_tag: Regex::new(r#"(?s)<[^>]+>"#).unwrap(),
-            re_xml: Regex::new(r#"(?is)<\?xml[^>]*\?>"#).unwrap(),
-            re_head: Regex::new(r#"(?is)<head\b.*?</head>"#).unwrap(),
-            re_htmlopen: Regex::new(r#"(?is)<html\b[^>]*>"#).unwrap(),
-            re_shell: Regex::new(r#"(?is)</?body\b[^>]*>|</html>"#).unwrap(),
-            re_img: Regex::new(r#"(?is)<img\b[^>]*\bsrc="kindle:embed:([0-9A-V]+)[^"]*"[^>]*>"#).unwrap(),
-            re_flow: Regex::new(r#"(?is)<link\b[^>]*kindle:flow[^>]*>"#).unwrap(),
-            // KF8 元素普遍带 aid（唯一）→ 转成 id="aid<X>" 当锚点（内链目标 + 脚注回跳目标）。
-            re_aid: Regex::new(r#"(?i)\baid="([^"]+)""#).unwrap(),
-            // calibre 做的 AZW3 元素常**同时**带 aid 与既存 id="filepos.../calibre_pb_..."。aid→id 前须先
-            // 删该标签既存 id，否则转换后同标签出现两个 id= 属性 = 非法 XHTML → reMarkable 严格 XML 解析
-            // 遇重复属性整章失败 → 只渲染前几页（真机《消失的爱人》只 7 页根因，2026-09-01）。KF8 内链走
-            // kindle:pos→#aid<X>，既存 filepos id 无链接引用，删之安全。
-            re_tag_with_aid: Regex::new(r#"(?is)<[a-z][a-z0-9]*\b[^>]*\baid="[^"]*"[^>]*>"#).unwrap(),
-            re_id_attr: Regex::new(r#"(?i)\s+id="[^"]*""#).unwrap(),
+
+/// 段内 `<title>` 纯文本（KF8 常=书名，仅无 NCX 时作退化标题）。
+fn seg_title(seg: &str) -> String {
+    palm::first_match_text(title_re(), seg)
+}
+
+/// 去结构壳（可含多个 skeleton 壳）+ 映射 kindle:embed 图 + 去 flow + aid→id 建锚 → 正文 HTML。
+/// **不去链** `<a>`：内链（kindle:pos）原样保留，由 `remap_links` 两遍解析成真锚点（脚注/目录跳转可用）。
+fn clean(seg: &str, embed_path: &HashMap<usize, String>) -> String {
+    static RE_IMG: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static RE_FLOW: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re_img = RE_IMG.get_or_init(|| Regex::new(r#"(?is)<img\b[^>]*\bsrc=["']kindle:embed:([0-9A-V]+)[^"']*["'][^>]*>"#).unwrap());
+    let re_flow = RE_FLOW.get_or_init(|| Regex::new(r#"(?is)<link\b[^>]*kindle:flow[^>]*>"#).unwrap());
+    let s = palm::strip_shell(seg);
+    let s = re_img.replace_all(&s, |cap: &regex::Captures| {
+        let n = palm::base32_decode(&cap[1]).unwrap_or(0);
+        match embed_path.get(&n) {
+            Some(p) => format!("<img src=\"{p}\"/>"),
+            None => String::new(),
+        }
+    });
+    let s = re_flow.replace_all(&s, "");
+    aid_to_id(&s).trim().to_string()
+}
+
+/// KF8 元素普遍带 aid（唯一）→ 转成 `id="aid<X>"` 当锚点（内链目标 + 脚注回跳目标）。
+/// calibre 做的 AZW3 元素常**同时**带 aid 与既存 `id="filepos…"`/`calibre_pb_…`：同一标签上的既存 id 先删掉，
+/// 否则转换后同标签出现两个 id 属性 = 非法 XHTML → reMarkable 严格 XML 解析遇重复属性整章失败（真机《消失的爱人》
+/// 只 7 页根因，2026-09-01）。KF8 内链走 kindle:pos→#aid<X>，既存 filepos id 无链接引用，删之安全。
+/// 属性按 `crate::html` 解析：单双引号都认，`data-aid` 不算 aid、`data-id` 不算 id。
+fn aid_to_id(s: &str) -> std::borrow::Cow<'_, str> {
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for t in crate::html::tags(s).filter(|t| t.is_start()) {
+        let tag = &s[t.start..t.end];
+        let attrs = crate::html::attrs(tag);
+        let Some(first_aid) = attrs.iter().position(|a| a.is("aid")) else { continue };
+        for (k, a) in attrs.iter().enumerate() {
+            if k == first_aid {
+                edits.push((t.start + a.start, t.start + a.end, format!("id=\"aid{}\"", a.value.replace('"', "&quot;"))));
+            } else if a.is("id") || a.is("aid") {
+                edits.push((t.start + tag[..a.start].trim_end().len(), t.start + a.end, String::new()));
+            }
         }
     }
-    /// 段内 `<title>` 纯文本（KF8 常=书名，仅无 NCX 时作退化标题）。
-    fn seg_title(&self, seg: &str) -> String {
-        self.re_title
-            .captures(seg)
-            .map(|c| self.re_tag.replace_all(&c[1], "").trim().chars().take(80).collect())
-            .unwrap_or_default()
+    if edits.is_empty() {
+        return std::borrow::Cow::Borrowed(s);
     }
-    /// 去结构壳（可含多个 skeleton 壳）+ 映射 kindle:embed 图 + 去 flow + aid→id 建锚 → 正文 HTML。
-    /// **保留 `<a>` 内链原样**（kindle:pos），由 `remap_links` 两遍解析成真锚点。
-    fn clean(&self, seg: &str, embed_path: &HashMap<usize, String>) -> String {
-        let s = self.re_xml.replace_all(seg, "");
-        let s = self.re_head.replace_all(&s, "");
-        let s = self.re_htmlopen.replace_all(&s, "");
-        let s = self.re_shell.replace_all(&s, "");
-        let s = self.re_img.replace_all(&s, |cap: &regex::Captures| {
-            let n = palm::base32_decode(&cap[1]).unwrap_or(0);
-            match embed_path.get(&n) {
-                Some(p) => format!("<img src=\"{p}\"/>"),
-                None => String::new(),
-            }
-        });
-        let s = self.re_flow.replace_all(&s, "");
-        // 先在带 aid 的标签上删既存 id（防 aid→id 后重复 id 属性），再做 aid→id。
-        let s = self
-            .re_tag_with_aid
-            .replace_all(&s, |c: &regex::Captures| self.re_id_attr.replace_all(&c[0], "").into_owned());
-        let s = self.re_aid.replace_all(&s, r#"id="aid$1""#);
-        s.trim().to_string()
-    }
+    std::borrow::Cow::Owned(crate::html::apply_edits(s, edits))
 }
 
 /// 内链重映射上下文：fragment 起始偏移表 + rawML 中 aid 位置表（排序），把 `kindle:pos:fid:off` 解析成
@@ -164,21 +151,15 @@ struct LinkCtx {
 impl LinkCtx {
     fn build(rawml: &str, frag_starts: Vec<usize>) -> Self {
         // 记标签起点（不是属性的位置）：链接偏移指向目标标签的 `<`，"≤ 目标的最近一个"才是它自己。
-        static RE_TAG: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-        static RE_AID: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-        static RE_ID: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-        let re_tag = RE_TAG.get_or_init(|| Regex::new(r#"<[a-zA-Z][^>]*>"#).unwrap());
-        let re_aid = RE_AID.get_or_init(|| Regex::new(r#"(?i)\baid="([^"]+)""#).unwrap());
-        let re_id = RE_ID.get_or_init(|| Regex::new(r#"(?i)\bid="([^"]+)""#).unwrap());
-        let anchors = re_tag
-            .find_iter(rawml)
-            .filter_map(|m| {
-                let tag = m.as_str();
-                let id = match re_aid.captures(tag) {
-                    Some(c) => format!("aid{}", &c[1]),
-                    None => re_id.captures(tag)?[1].to_string(),
+        let anchors = crate::html::tags(rawml)
+            .filter(|t| t.is_start())
+            .filter_map(|t| {
+                let tag = &rawml[t.start..t.end];
+                let id = match crate::html::attr_value(tag, "aid").filter(|v| !v.is_empty()) {
+                    Some(aid) => format!("aid{aid}"),
+                    None => crate::html::attr_value(tag, "id").filter(|v| !v.is_empty())?.to_string(),
                 };
-                Some((m.start(), id))
+                Some((t.start, id))
             })
             .collect();
         LinkCtx { frag_starts, anchors }
@@ -205,28 +186,39 @@ fn remap_links(
     ch_ranges: &[(usize, usize)],
     live_ids: &HashSet<String>,
 ) -> String {
-    // 每章调用一次：正则只编译一次（此前每章各编译两个，几百章的书白白多几百次编译）。
-    static RE_POS: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    static RE_OTHER: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = RE_POS.get_or_init(|| Regex::new(r#"(?i)href="kindle:pos:fid:([0-9A-V]+):off:([0-9A-V]+)""#).unwrap());
-    let re_other = RE_OTHER.get_or_init(|| Regex::new(r#"(?i)href="kindle:[^"]*""#).unwrap());
-    let s = re.replace_all(html, |cap: &regex::Captures| {
-        let resolved = palm::base32_decode(&cap[1]).zip(palm::base32_decode(&cap[2])).and_then(|(fid, off)| ctx.resolve(fid, off));
-        match resolved {
+    // 属性按 `crate::html` 解析（单双引号都认）。`xlink:href` 也管：SVG 里残留的 kindle: 引用同样是死链。
+    crate::html::edit_attrs(html, &["href", "xlink:href"], |_, a| {
+        let v = a.value;
+        if !v.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("kindle:")) {
+            return crate::html::Edit::Keep;
+        }
+        let resolved = parse_kindle_pos(v).and_then(|(fid, off)| ctx.resolve(fid, off));
+        crate::html::Edit::Set(match resolved {
             Some((t, id)) => {
                 let ci = ch_ranges.partition_point(|(a, _)| *a <= t).saturating_sub(1);
                 let file = crate::epub::chapter_filename(ci);
                 if live_ids.contains(&id) {
-                    format!(r#"href="{file}#{id}""#)
+                    format!("{file}#{id}")
                 } else {
-                    format!(r#"href="{file}""#) // 锚在被剥的壳上 → 跳章首
+                    file // 锚在被剥的壳上 → 跳章首
                 }
             }
-            None => r##"href="#""##.to_string(),
-        }
-    });
-    // 其余 kindle: 内链（非 pos）→ 惰性 #，避免残留 kindle: 死链
-    re_other.replace_all(&s, r##"href="#""##).into_owned()
+            // 解析不出的 pos、其余 kindle: 内链 → 惰性 #，避免残留 kindle: 死链
+            None => "#".to_string(),
+        })
+    })
+    .into_owned()
+}
+
+/// `kindle:pos:fid:XXXX:off:YYYYYYYYYY`（大小写不敏感，数字是 base32）→ (fid, off)；不是这个形状返回 `None`。
+fn parse_kindle_pos(v: &str) -> Option<(usize, usize)> {
+    const PREFIX: &str = "kindle:pos:fid:";
+    if !v.get(..PREFIX.len())?.eq_ignore_ascii_case(PREFIX) {
+        return None;
+    }
+    let rest = &v[PREFIX.len()..];
+    let at = rest.to_ascii_lowercase().find(":off:")?;
+    Some((palm::base32_decode(&rest[..at])?, palm::base32_decode(&rest[at + 5..])?))
 }
 
 /// 把 rawML 切成章：
@@ -241,20 +233,19 @@ fn build_chapters(
     book_title: &str,
     link_ctx: Option<&LinkCtx>,
 ) -> Vec<Chapter> {
-    let cl = Cleaner::new();
     // 第一遍：切段 + 清洗（含 aid→id、保留 kindle:pos 链），记录每章的 rawML [start,end)。
     // 元组 = (Chapter, rawML 段起点)；段终点由下一章起点/rawml 末尾给出。
     let mut built: Vec<(Chapter, usize)> = Vec::new();
 
     if !ncx.is_empty() {
-        // 按 NCX **精确位置**切（各章位置互异，不吸附以免邻近章被去重合并丢章）。切点可能落在标签中间，
-        // 由 trim_partial_head 裁掉段首残缺标签片段。
+        // 按 NCX **精确位置**切（各章位置互异，不往前后吸附以免邻近章被去重合并丢章）。唯一的例外：切点落在
+        // 某个标签中间时吸附回该标签的 `<`（`snap_out_of_tag`），不把一个标签劈成两半。
         let mut cuts: Vec<(usize, String, i64)> = ncx
             .iter()
             .filter(|e| e.pos <= rawml.len())
             .map(|e| {
                 // NCX 偏移是字节位置，可能落在多字节字符中间 → 下取到字符边界（最多回退 3 字节）
-                (palm::char_floor(rawml, e.pos), e.label.chars().take(80).collect::<String>(), (e.level as i64 + 1).clamp(1, 6))
+                (snap_out_of_tag(rawml, palm::char_floor(rawml, e.pos)), e.label.chars().take(80).collect::<String>(), (e.level as i64 + 1).clamp(1, 6))
             })
             .collect();
         cuts.sort_by_key(|c| c.0);
@@ -267,7 +258,7 @@ fn build_chapters(
         // 首条 NCX 前的前置内容（封面/版权页）→ 无标题段（进 spine 不进 nav），rawML 起点 0
         let first_cut = cuts[0].0;
         if first_cut > 0 {
-            let html = cl.clean(&rawml[..first_cut], embed_path);
+            let html = clean(&rawml[..first_cut], embed_path);
             if !html.is_empty() {
                 built.push((Chapter { title: String::new(), html_body: html, level: 1 }, 0));
             }
@@ -275,8 +266,7 @@ fn build_chapters(
         for i in 0..cuts.len() {
             let start = cuts[i].0;
             let end = if i + 1 < cuts.len() { cuts[i + 1].0 } else { rawml.len() };
-            let seg = trim_partial_head(&rawml[start..end]);
-            let html = cl.clean(seg, embed_path);
+            let html = clean(&rawml[start..end], embed_path);
             if html.is_empty() {
                 continue;
             }
@@ -298,11 +288,11 @@ fn build_chapters(
         for i in 0..starts.len() {
             let end = if i + 1 < starts.len() { starts[i + 1] } else { rawml.len() };
             let seg = &rawml[starts[i]..end];
-            let mut title = cl.seg_title(seg);
+            let mut title = seg_title(seg);
             if title == book_title {
                 title.clear(); // 等于书名 → 清空，避免满屏重复
             }
-            let html = cl.clean(seg, embed_path);
+            let html = clean(seg, embed_path);
             if html.is_empty() {
                 continue;
             }
@@ -317,11 +307,12 @@ fn build_chapters(
             .map(|i| (built[i].1, if i + 1 < n { built[i + 1].1 } else { rawml.len() }))
             .collect();
         // 收集清洗后实际存活的 id（shell 上的 aid、带 aid 标签原有的 id 已被剥，不在此集）→ 决定锚点 vs 跳章首。
-        let re_id = Regex::new(r#"(?i)\bid="([^"]+)""#).unwrap();
         let mut live_ids: HashSet<String> = HashSet::new();
         for (ch, _) in &built {
-            for c in re_id.captures_iter(&ch.html_body) {
-                live_ids.insert(c[1].to_string());
+            for t in crate::html::tags(&ch.html_body).filter(|t| t.is_start()) {
+                if let Some(id) = crate::html::attr_value(&ch.html_body[t.start..t.end], "id").filter(|v| !v.is_empty()) {
+                    live_ids.insert(id.to_string());
+                }
             }
         }
         for (ch, _) in built.iter_mut() {
@@ -331,18 +322,14 @@ fn build_chapters(
     built.into_iter().map(|(c, _)| c).collect()
 }
 
-/// 若段首落在标签中间（首字符非 `<`，且第一个 `>` 出现在第一个 `<` 之前），裁掉这段残缺标签片段
-/// （到首个 `>` 之后），避免像 `2">正文` 的属性残片当正文渲染。段首本就是 `<` 则原样返回。
-fn trim_partial_head(seg: &str) -> &str {
-    if seg.as_bytes().first() == Some(&b'<') {
-        return seg;
-    }
-    let lt = seg.find('<');
-    let gt = seg.find('>');
-    match (lt, gt) {
-        (Some(l), Some(g)) if g < l => &seg[g + 1..],
-        (None, Some(g)) => &seg[g + 1..],
-        _ => seg,
+/// 切点 `pos` 落在某个标签里面（它前面最近的 `<` 起的那个标签到 `pos` 还没结束）时吸附回那个 `<`，否则原样。
+/// 此前在切出来的段里"裁到第一个 `>`"：前一章尾部留下半截标签、这一章丢掉那个标签（连同它的 aid 锚点），
+/// 切点落在含 `>` 的正文文字里时还会把这段文字当残片裁掉。标签边界按 `crate::html` 扫（属性值里的 `>` 不算结束）。
+fn snap_out_of_tag(rawml: &str, pos: usize) -> usize {
+    let Some(lt) = rawml[..pos].rfind('<') else { return pos };
+    match crate::html::tags_in(rawml, lt, rawml.len()).next() {
+        Some(t) if t.start == lt && t.end > pos => lt,
+        _ => pos,
     }
 }
 
@@ -355,9 +342,8 @@ mod tests {
         let mut ep = HashMap::new();
         ep.insert(2usize, "images/embed2.jpg".to_string());
         let seg = r#"<?xml version="1.0"?><html xmlns="x"><head><title>第一章</title><link href="kindle:flow:0001"/></head><body aid="0"><p>正文</p></body></html><img src="kindle:embed:0002?mime=image/jpeg"/>"#;
-        let cl = Cleaner::new();
-        assert_eq!(cl.seg_title(seg), "第一章");
-        let b = cl.clean(seg, &ep);
+        assert_eq!(seg_title(seg), "第一章");
+        let b = clean(seg, &ep);
         assert!(b.contains("<p>正文</p>"), "{b}");
         assert!(b.contains("<img src=\"images/embed2.jpg\"/>"), "{b}");
         assert!(!b.contains("kindle:") && !b.contains("<head") && !b.contains("<body") && !b.contains("<html"), "{b}");
@@ -405,18 +391,47 @@ mod tests {
     }
 
     #[test]
-    fn trim_partial_head_drops_attr_remnant() {
-        assert_eq!(trim_partial_head(r#"22">正文<p>x</p>"#), "正文<p>x</p>"); // 切进标签中间
-        assert_eq!(trim_partial_head("<p>正文</p>"), "<p>正文</p>"); // 段首本是标签
-        assert_eq!(trim_partial_head("纯文本无标签"), "纯文本无标签"); // 无 '>' 原样
+    fn snap_out_of_tag_moves_cut_back_to_tag_start_only_inside_tags() {
+        let raw = r#"<p>甲 &gt; 乙 > 丙</p><p class="x" title="a>b" aid="Q2">丁</p>"#;
+        let tag2 = raw.find("<p class").unwrap();
+        assert_eq!(snap_out_of_tag(raw, raw.find("class").unwrap()), tag2, "切进标签属性里 → 吸附回 <");
+        assert_eq!(snap_out_of_tag(raw, raw.find("b\"").unwrap()), tag2, "属性值里的 > 不算标签结束");
+        assert_eq!(snap_out_of_tag(raw, tag2), tag2, "正好在 < 上不动");
+        let in_text = raw.find(" 丙").unwrap();
+        assert_eq!(snap_out_of_tag(raw, in_text), in_text, "正文文字里（前面有 > 字符）不动");
+        assert_eq!(snap_out_of_tag("纯文本无标签", 3), 3);
+    }
+
+    #[test]
+    fn ncx_cut_inside_tag_keeps_whole_tag_and_text_with_gt() {
+        // NCX 位置落在第二个 <p> 的属性中间：此前第一章尾部留下半截 `<p class="x" `、第二章裁掉属性残片连同 aid 锚点
+        let raw = r#"<html><body><p>a > b</p><p class="x" aid="Q2">乙章</p></body></html>"#;
+        let ncx = vec![
+            palm::NcxEntry { pos: raw.find("<p>a").unwrap(), label: "甲".into(), level: 0 },
+            palm::NcxEntry { pos: raw.find("aid=").unwrap(), label: "乙".into(), level: 0 },
+        ];
+        let chs = build_chapters(raw, &HashMap::new(), &ncx, "书名", None);
+        let titled: Vec<_> = chs.iter().filter(|c| !c.title.is_empty()).collect();
+        assert_eq!(titled[0].html_body, "<p>a > b</p>", "正文里的 > 不丢、没有半截标签");
+        assert_eq!(titled[1].html_body, r#"<p class="x" id="aidQ2">乙章</p>"#);
+    }
+
+    #[test]
+    fn aid_and_ids_recognized_with_single_quotes() {
+        let seg = r#"<p aid='A1' id='old' data-aid="no">x</p><p data-id="k">y</p>"#;
+        assert_eq!(clean(seg, &HashMap::new()), r#"<p id="aidA1" data-aid="no">x</p><p data-id="k">y</p>"#);
+        let raw = r#"<p data-id="d">x</p><p id='s'>y</p>"#;
+        let ctx = LinkCtx::build(raw, vec![0]);
+        assert_eq!(ctx.anchors, vec![(raw.find("<p id").unwrap(), "s".to_string())], "data-id 不是锚点，单引号 id 是");
+        let out = remap_links(r#"<a href='kindle:pos:fid:0000:off:0000000014'>x</a><image xlink:href="kindle:embed:0001"/>"#, &ctx, &[(0, 100)], &HashSet::new());
+        assert_eq!(out, r##"<a href='chap_0001.xhtml'>x</a><image xlink:href="#"/>"##);
     }
 
     #[test]
     fn cleaner_converts_aid_to_id_and_keeps_links() {
         let ep = HashMap::new();
-        let cl = Cleaner::new();
         let seg = r#"<html><body><p aid="X1">注<a href="kindle:pos:fid:0002:off:0000000005" aid="X2">[1]</a></p></body></html>"#;
-        let b = cl.clean(seg, &ep);
+        let b = clean(seg, &ep);
         assert!(b.contains(r#"id="aidX1""#), "aid→id: {b}");
         assert!(b.contains(r#"id="aidX2""#), "链接自身 aid→id(回跳锚): {b}");
         assert!(b.contains("kindle:pos:fid:0002"), "clean 阶段保留内链待重映射: {b}");
@@ -426,9 +441,8 @@ mod tests {
     fn cleaner_no_dup_id_when_element_has_existing_id() {
         // calibre 做的 AZW3：元素同时带 aid 与既存 id="filepos..."（真机《消失的爱人》崩因）
         let ep = HashMap::new();
-        let cl = Cleaner::new();
         let seg = r#"<html><body><p aid="5N3C1" class="calibre6" id="filepos18251">正文</p><div id="calibre_pb_6" class="mbppagebreak" aid="5N3C4"></div></body></html>"#;
-        let b = cl.clean(seg, &ep);
+        let b = clean(seg, &ep);
         // 每个标签只能有一个 id 属性（否则非法 XHTML → reMarkable 整章渲染失败）
         for tag in b.split('>') {
             let cnt = tag.matches(" id=").count() + if tag.starts_with("id=") { 1 } else { 0 };
