@@ -13,7 +13,6 @@
 //! 告警（不拦）：无 nav/ncx 或零条目（`require_toc` 时升为失败）；目录锚点丢失（xochitl 退化到文件级跳转）。
 use crate::epubzip::{dir_of, is_html_entry, percent_decode, resolve, Entry};
 use crate::wash::{count_dup_id_tags, href_re, is_toc_file};
-use regex::Regex;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -53,8 +52,18 @@ impl CheckReport {
 pub use crate::epubzip::read_entries;
 
 pub fn check_epub(epub: &[u8], require_toc: bool) -> Result<CheckReport, String> {
+    // zip 目录只解析一遍：条目和 mimetype 检查都从这一个 archive 读。
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
-    let mut rep = check_entries(&read_entries(epub)?, require_toc);
+    let mut entries = Vec::with_capacity(zip.len());
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
+        if f.is_dir() {
+            continue;
+        }
+        let (name, size) = (f.name().to_string(), f.size());
+        entries.push(Entry { name, data: crate::epubzip::read_all(&mut f, size)? });
+    }
+    let mut rep = check_entries(&entries, require_toc);
     add_mimetype_problem(&mut rep, &mut zip);
     Ok(rep)
 }
@@ -63,11 +72,17 @@ pub fn check_epub(epub: &[u8], require_toc: bool) -> Result<CheckReport, String>
 /// 只有非图片的真实字节整份读入）而不是 [`read_entries`] 整本读进内存——大漫画优化产物整本读回内存
 /// 就白费了流式优化省下的内存。质量门这几条规则（双 id/href 命中率/正文资源引用）都只看 html/toc
 /// 文本内容，不看图片字节，检查结果不受影响。
+/// 目录缺失只告警（书库生成用）；要把"无目录"升为失败用 [`check_epub_file_with`]。
 pub fn check_epub_file(path: &std::path::Path) -> Result<CheckReport, String> {
+    check_epub_file_with(path, false)
+}
+
+/// [`check_epub_file`]，`require_toc` 为真时"无目录"算硬失败（`epub-optimize --check --require-toc`）。
+pub fn check_epub_file_with(path: &std::path::Path, require_toc: bool) -> Result<CheckReport, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("打开待校验文件失败: {e}"))?;
     let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
     let sk = crate::epubzip::read_skeleton(&mut zip)?;
-    let mut rep = check_entries(&sk.entries, false);
+    let mut rep = check_entries(&sk.entries, require_toc);
     add_mimetype_problem(&mut rep, &mut zip);
     Ok(rep)
 }
@@ -136,15 +151,13 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     if !targets.is_empty() && (rep.href_file_hit as f64) / (targets.len() as f64) < 0.8 {
         rep.errors.push(format!("目录 href 文件命中率过低 {}/{}", rep.href_file_hit, targets.len()));
     }
-    // 每个目标页只扫一遍收集全部 id/name 值，再按集合判命中（此前每个带锚点的目录项各编译一个正则、各扫一遍整页）。
-    static ANCHOR: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let anchor_re = ANCHOR.get_or_init(|| Regex::new(r#"(?:id|name)="([^"]*)""#).unwrap());
+    // 每个目标页只扫一遍收集全部锚点（任何元素的 `id`、`<a name>`；单双引号都认，`data-id` 不算），再按集合判命中。
     let mut cache: HashMap<&str, std::collections::HashSet<String>> = HashMap::new();
     for (t, frag) in targets.iter().filter(|(t, f)| !f.is_empty() && names.contains_key(t.as_str())) {
         rep.frag_total += 1;
         let anchors = cache.entry(t.as_str()).or_insert_with(|| {
             let html = String::from_utf8_lossy(&names[t.as_str()].data);
-            anchor_re.captures_iter(&html).map(|c| c[1].to_string()).collect()
+            crate::html::anchors(&html).into_iter().map(|(v, _)| v.to_string()).collect()
         });
         if anchors.contains(frag) {
             rep.frag_hit += 1;
@@ -269,6 +282,14 @@ mod tests {
         assert!(check_entries(&none, false).ok);
         let r = check_entries(&none, true);
         assert!(!r.ok && r.warnings.iter().any(|w| w.contains("字体混淆")));
+    }
+
+    #[test]
+    fn toc_anchor_hit_accepts_single_quotes_and_ignores_data_id() {
+        let toc = e("OEBPS/toc.ncx", r#"<ncx><content src="c.xhtml#a"/><content src="c.xhtml#b"/><content src="c.xhtml#n"/></ncx>"#);
+        let chap = e("OEBPS/c.xhtml", r#"<html><body><p id='a'>x</p><p data-id="b">y</p><a name="n"/></body></html>"#);
+        let r = check_entries(&[toc, chap], false);
+        assert_eq!((r.frag_hit, r.frag_total), (2, 3), "单引号 id、<a name> 算锚点，data-id 不算");
     }
 
     #[test]

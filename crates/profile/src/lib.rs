@@ -190,6 +190,15 @@ pub fn get(id: &str) -> Option<&'static Profile> {
     Registry::builtin().get(id)
 }
 
+/// 命令行参数里的 `--device=<id>`（必填）→ 内置 profile。缺失或未知 id 时 `Err` 带上可选 id 列表，供调用方报用法错。
+pub fn device_from_args<S: AsRef<str>>(args: &[S]) -> Result<&'static Profile, String> {
+    let id = args.iter().find_map(|a| a.as_ref().strip_prefix("--device="));
+    id.and_then(get).ok_or_else(|| {
+        let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
+        format!("需要 --device=<设备>，可选: {}", ids.join(" / "))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +222,14 @@ mod tests {
         assert!(m.color);
         assert_eq!(get("kindle-pw12-sig").unwrap().formats, [Format::Azw3]);
         assert!(get("nope").is_none());
+    }
+
+    #[test]
+    fn device_from_args_finds_id_or_lists_choices() {
+        assert_eq!(device_from_args(&["a.epub", "--device=rmpp-move"]).unwrap().id, "rmpp-move");
+        let err = device_from_args(&["--device=nope"]).unwrap_err();
+        assert!(err.contains("kindle-pw12-sig") && err.contains("--device="), "{err}");
+        assert!(device_from_args::<&str>(&[]).is_err());
     }
 
     #[test]

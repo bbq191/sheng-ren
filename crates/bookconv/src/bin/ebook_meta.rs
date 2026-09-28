@@ -4,6 +4,7 @@
 //! 写前缺省备份成 `<文件>.bak-<时间戳>`；写入先写临时文件再改名，中途失败原文件不动。
 
 use bookconv::opfmeta::{self, DcField, Edits};
+use bookconv::util::cli;
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "用法:
@@ -20,8 +21,7 @@ const USAGE: &str = "用法:
   --no-backup   不写 .bak 备份";
 
 fn fail(msg: &str) -> ! {
-    eprintln!("{msg}");
-    std::process::exit(1);
+    cli::die(cli::USAGE, msg)
 }
 
 fn show(path: &Path) {
@@ -54,7 +54,7 @@ fn backup_path(file: &Path) -> PathBuf {
 }
 
 fn main() {
-    bookconv::util::restore_sigpipe();
+    cli::restore_sigpipe();
     let mut args = std::env::args_os().skip(1);
     let mut file: Option<PathBuf> = None;
     let mut singles: Vec<(DcField, String)> = Vec::new();
@@ -103,7 +103,7 @@ fn main() {
     }
     if let Some(out) = get_cover {
         let (ext, bytes) = bookconv::epubzip::cover_image_of(&file).unwrap_or_else(|| fail("书里没有封面"));
-        std::fs::write(&out, bytes).unwrap_or_else(|e| fail(&format!("{}: {e}", out.display())));
+        bookconv::util::write_atomic(&out, &bytes).unwrap_or_else(|e| fail(&e));
         println!("已取出封面（{ext}）：{}", out.display());
         return;
     }
@@ -125,25 +125,17 @@ fn main() {
         return;
     }
 
-    let mut tmp_name = file.file_name().unwrap_or_default().to_os_string();
-    tmp_name.push(".ebook-meta.tmp");
-    let tmp = file.with_file_name(tmp_name);
-    let report = match opfmeta::edit_epub(&file, &tmp, &edits) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            fail(&format!("没改：{e}"));
+    // 先写临时文件；备份（在改名之前）和改名任何一步失败，临时文件都清掉、原文件不动。
+    let backup_then = || -> Result<(), String> {
+        if backup {
+            let b = backup_path(&file);
+            std::fs::copy(&file, &b).map_err(|e| format!("备份失败，没改：{e}"))?;
+            println!("已备份：{}", b.display());
         }
+        Ok(())
     };
-    if backup {
-        let b = backup_path(&file);
-        std::fs::copy(&file, &b).unwrap_or_else(|e| fail(&format!("备份失败，没改：{e}")));
-        println!("已备份：{}", b.display());
-    }
-    if let Err(e) = std::fs::rename(&tmp, &file) {
-        let _ = std::fs::remove_file(&tmp);
-        fail(&format!("写回失败，原文件没动：{e}"));
-    }
+    let edited = bookconv::util::produce_then_replace_with(&bookconv::util::tmp_beside(&file, "ebook-meta"), &file, |tmp| opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}")), backup_then);
+    let report = edited.unwrap_or_else(|e| fail(&e));
     let what: Vec<&str> = report.fields.iter().map(|f| f.label()).chain(report.cover_replaced.map(|r| if r { "封面（换掉原图）" } else { "封面（新加）" })).collect();
     println!("已写入：{}（{}）", file.display(), what.join("、"));
     show(&file);

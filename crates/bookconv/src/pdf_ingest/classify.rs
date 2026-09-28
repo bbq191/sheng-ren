@@ -141,7 +141,3 @@ pub(super) fn get_inherited_media_box(doc: &lopdf::Document, page_dict: &lopdf::
 
 /// 页树继承查找的层数上限（正常 PDF 的页树只有几层）。
 const MAX_PAGE_TREE_DEPTH: usize = 64;
-
-// ============================================================================
-// 逐字符位置提取（pdf-extract OutputDev 驱动）
-// ============================================================================

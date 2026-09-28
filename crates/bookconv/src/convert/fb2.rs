@@ -95,7 +95,7 @@ pub fn fb2_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
         resources,
         nav: Vec::new(),
     };
-    let epub = super::common::assemble_master(&mut book)?;
+    let epub = crate::epub::assemble_master(&mut book)?;
     Ok((epub, title))
 }
 
@@ -352,7 +352,7 @@ fn walk_section(sec: &El, depth: i64, ctx: &Ctx, out: &mut Vec<Chapter>) {
 fn render_heading(title: &El, depth: i64, id: &str, ctx: &Ctx, out: &mut String) {
     let n = depth.clamp(1, 6);
     out.push_str(&format!("<h{n}{id}>"));
-    for (i, line) in title_lines(title).enumerate() {
+    for (i, line) in title_lines(title).into_iter().enumerate() {
         if i > 0 {
             out.push_str("<br/>");
         }
@@ -361,19 +361,26 @@ fn render_heading(title: &El, depth: i64, id: &str, ctx: &Ctx, out: &mut String)
     out.push_str(&format!("</h{n}>\n"));
 }
 
-/// `<title>` 里的行（`<p>`；空行跳过）。
-fn title_lines(title: &El) -> impl Iterator<Item = &El> {
-    title.children("p")
+/// `<title>` 里的行：各个 `<p>`（`<empty-line/>` 跳过）。没有 `<p>`、文字直接写在 `<title>` 里（不合规但常见，
+/// `<title>第一章 文字</title>`）时整个 `<title>` 算一行，不然章标题渲成空的 `<hN>`、目录里也没有名字。
+fn title_lines(title: &El) -> Vec<&El> {
+    let lines: Vec<&El> = title.children("p").collect();
+    if lines.is_empty() && !title.text().trim().is_empty() {
+        return vec![title];
+    }
+    lines
 }
 
 /// 标题纯文本（进 `<title>`/目录，不要标签）：各行去首尾空白后用空格连接。
 fn title_plain(t: &El) -> String {
-    let lines: Vec<String> = title_lines(t).map(|p| p.text().trim().to_string()).filter(|s| !s.is_empty()).collect();
+    let lines: Vec<String> = title_lines(t).into_iter().map(|p| p.text().trim().to_string()).filter(|s| !s.is_empty()).collect();
     lines.join(" ")
 }
 
-fn wrap_block(tag: &str, el: &El, depth: i64, ctx: &Ctx, out: &mut String) {
-    out.push_str(&format!("<{tag}{}>\n", id_attr(el)));
+/// 块级容器：`<tag{attrs} id>…</tag>`。`attrs` 是写在开标签里的固定属性（带前导空格，如 ` class="poem"`），
+/// 不进闭合标签。
+fn wrap_block(tag: &str, attrs: &str, el: &El, depth: i64, ctx: &Ctx, out: &mut String) {
+    out.push_str(&format!("<{tag}{attrs}{}>\n", id_attr(el)));
     for k in el.elements() {
         render_block(k, depth, ctx, out);
     }
@@ -410,9 +417,9 @@ fn render_block(el: &El, depth: i64, ctx: &Ctx, out: &mut String) {
             }
         }
         "title" => render_heading(el, (depth + 1).max(4), &id_attr(el), ctx, out),
-        "poem" => wrap_block("div class=\"poem\"", el, depth, ctx, out),
-        "stanza" | "annotation" | "section" => wrap_block("div", el, depth, ctx, out),
-        "cite" | "epigraph" => wrap_block("blockquote", el, depth, ctx, out),
+        "poem" => wrap_block("div", " class=\"poem\"", el, depth, ctx, out),
+        "stanza" | "annotation" | "section" => wrap_block("div", "", el, depth, ctx, out),
+        "cite" | "epigraph" => wrap_block("blockquote", "", el, depth, ctx, out),
         "table" => {
             out.push_str(&format!("<table{}>\n", id_attr(el)));
             for tr in el.children("tr") {
@@ -431,7 +438,7 @@ fn render_block(el: &El, depth: i64, ctx: &Ctx, out: &mut String) {
             out.push_str("</table>\n");
         }
         // 认不出的块元素：有元素子节点就当容器，否则当段落（文字不丢）
-        _ if el.elements().next().is_some() => wrap_block("div", el, depth, ctx, out),
+        _ if el.elements().next().is_some() => wrap_block("div", "", el, depth, ctx, out),
         _ if !el.text().trim().is_empty() => para("p", out),
         _ => {}
     }
@@ -490,14 +497,15 @@ fn render_inline(el: &El, ctx: &Ctx, out: &mut String) {
 
 /// 书内链接占位 → `chap_N.xhtml#id`（id 所在的章）。目标 id 不存在的链接去掉 `<a>`、只留文字。
 fn resolve_links(chapters: &mut [Chapter]) {
-    static RE_ID: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    // 占位链接是本模块自己写的（固定双引号、无其它属性），这条正则只认它；id 用 `crate::html` 扫（`data-id` 不算）。
     static RE_A: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re_id = RE_ID.get_or_init(|| Regex::new(r#"\bid="([^"]*)""#).unwrap());
     let re_a = RE_A.get_or_init(|| Regex::new(&format!(r#"(?s)<a href="{LINK_MARK}([^"]*)">(.*?)</a>"#)).unwrap());
     let mut where_id: HashMap<String, usize> = HashMap::new();
     for (i, ch) in chapters.iter().enumerate() {
-        for c in re_id.captures_iter(&ch.html_body) {
-            where_id.entry(c[1].to_string()).or_insert(i);
+        for t in crate::html::tags(&ch.html_body).filter(|t| t.is_start()) {
+            if let Some(id) = crate::html::attr_value(&ch.html_body[t.start..t.end], "id") {
+                where_id.entry(id.to_string()).or_insert(i);
+            }
         }
     }
     for ch in chapters.iter_mut() {
@@ -626,6 +634,30 @@ mod tests {
         let (epub, _) = fb2_to_epub(fb2.as_bytes()).unwrap();
         let chap = &chapters_of(&epub)[0].1;
         assert!(chap.contains("images/bin1.png") && chap.contains("images/bin2.png"), "{chap}");
+    }
+
+    #[test]
+    fn poem_div_closes_with_bare_tag_name() {
+        let fb2 = r#"<?xml version="1.0" encoding="utf-8"?><FictionBook><description><title-info><book-title>诗</book-title></title-info></description><body><section><poem><stanza><v>床前明月光</v></stanza></poem></section></body></FictionBook>"#;
+        let (epub, _) = fb2_to_epub(fb2.as_bytes()).unwrap();
+        let chap = &chapters_of(&epub)[0].1;
+        assert!(chap.contains(r#"<div class="poem">"#), "{chap}");
+        assert!(!chap.contains("</div class"), "闭合标签不能带属性: {chap}");
+        assert_eq!(chap.matches("<div").count(), chap.matches("</div>").count(), "{chap}");
+        let rep = crate::check::check_entries(&crate::epubzip::read_entries(&epub).unwrap(), false);
+        assert!(rep.warnings.iter().all(|w| !w.contains("不是合法 XML")), "{:?}", rep.warnings);
+    }
+
+    #[test]
+    fn title_without_p_renders_its_inline_text() {
+        let fb2 = r##"<?xml version="1.0" encoding="utf-8"?><FictionBook><description><title-info><book-title>书</book-title></title-info></description><body><section><title>第一章 <emphasis>文字</emphasis></title><p>正文</p></section></body><body name="notes"><section id="n1"><title>1</title><p>注</p></section></body></FictionBook>"##;
+        let (epub, _) = fb2_to_epub(fb2.as_bytes()).unwrap();
+        let chs = chapters_of(&epub);
+        assert!(chs[0].1.contains("<h1>第一章 <em>文字</em></h1>"), "{}", chs[0].1);
+        assert!(chs[0].1.contains("<title>第一章 文字</title>"), "章名取标题纯文本: {}", chs[0].1);
+        assert!(chs[1].1.contains(r#"<p><strong>1</strong></p>"#), "脚注节标题: {}", chs[1].1);
+        let nav = String::from_utf8(crate::epubzip::read_entries(&epub).unwrap().into_iter().find(|e| e.name.ends_with("nav.xhtml")).unwrap().data).unwrap();
+        assert!(nav.contains(">第一章 文字</a>"), "{nav}");
     }
 
     #[test]
