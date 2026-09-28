@@ -21,7 +21,7 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 |---|---|---|
 | `library` | 书库：入库（索引）、跟踪同步、按设备生成、产物指纹 | `booklib` |
 | `azw3` | EPUB → AZW3（KF8）写出器，clean-room 实现，见 [AZW3 写出器](azw3.md) | `epub-to-azw3` |
-| `bookconv` | 内容层：格式转换、清洗、优化、图片处理、质量门。不落盘、不管书库，只按调用方传入的阅读范围和选项处理 | `epub-optimize`、`cbz2pdf`、`readable-probe`、`readable-measure`、`cover-fix` |
+| `bookconv` | 内容层：格式转换、清洗、优化、图片处理、质量门。不落盘、不管书库，只按调用方传入的阅读范围和选项处理 | `epub-optimize`、`cbz2pdf`、`readable-probe`、`readable-measure`、`cover-fix`、`ebook-meta` |
 | `profile` | 设备参数，TOML 构建时嵌入，见[设备与可阅读范围](devices.md) | |
 | `pdf-extract` | PDF 文字层提取，pdf-extract 0.12.1 的本地 MIT fork（修改处注释标 `fork：`） | |
 | `drm` | 空壳，解 DRM 暂停 | |
@@ -40,6 +40,7 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 | `html` | 容错的 XHTML 工具：标签扫描（跳过注释/CDATA）、属性读写（单双引号、无引号）、纯文本、可见内容判断、CSS 声明切分。清洗层和注释处理都用它 |
 | `htmlproc/` | XHTML 处理规则：注释、对比度、重复 id |
 | `imgopt` / `imgpool` | 图片处理（缩放、漫画单趟处理、灰度）与并发池 |
+| `opfmeta` | EPUB 元数据（Dublin Core、封面）的读取与改写：只动 OPF 和封面图，其余条目原样拷。`ebook-meta` 命令和书库生成时补简介/标签/封面共用 |
 | `comic_detect` | 判断一本书是不是漫画 |
 | `check` | EPUB 质量门 |
 | `epub` / `epubzip` | EPUB 组装（转换器用）与读取、zip 内路径工具 |

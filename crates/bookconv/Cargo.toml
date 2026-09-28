@@ -52,6 +52,10 @@ tempfile = "3"
 name = "epub-optimize"
 path = "src/bin/epub_optimize.rs"
 
+[[bin]]
+name = "ebook-meta"
+path = "src/bin/ebook_meta.rs"
+
 # 给已有 EPUB 无损补封面声明（只改 OPF，其余条目原样拷）。
 [[bin]]
 name = "cover-fix"
