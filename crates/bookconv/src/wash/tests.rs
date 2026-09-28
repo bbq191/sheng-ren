@@ -1013,3 +1013,75 @@
         let nav = s(&v, "OEBPS/nav.xhtml");
         assert!(nav.contains(r#"epub:type="landmarks""#) && nav.contains("第二节"), "{nav}");
     }
+
+    // ───────────────────────── 好读式结构：段落章名、数字节号 ─────────────────────────
+
+    /// 好读的书：第一个正文文件的 `<h3>` 是书名、"第一章"只是一段字（目录标签就是它），节号是独占一段的 `１`、`２`。
+    fn haodoo_book(c1_body: &str, c2_body: &str) -> Vec<Entry> {
+        let mut v = paged_book(&[("1.xhtml", c1_body), ("2.xhtml", c2_body)]);
+        v.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><navLabel><text>第一章</text></navLabel><content src="Text/1.xhtml"/></navPoint><navPoint><navLabel><text>第二章</text></navLabel><content src="Text/2.xhtml"/></navPoint></navMap></ncx>"#));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        v
+    }
+    const HAODOO_TEXT: &str = "出了近鐵布施站之後，沿著鐵路往西走。已經十月了，天氣仍然悶熱難當，地面卻是乾的。每當卡車疾馳而過，揚起的塵土極可能會飛進眼睛。";
+
+    #[test]
+    fn haodoo_paragraph_chapter_and_numbered_sections() {
+        let t = HAODOO_TEXT;
+        let mut v = haodoo_book(
+            &format!("<div><h3>《白夜行》東野圭吾</h3><p>《好讀書櫃》典藏版</p><p>第一章</p><p>　　１</p><p>{t}</p><p>　　２</p><p>{t}</p></div>"),
+            &format!("<div><h3>第二章</h3><p>１</p><p>{t}</p><p>２</p><p>{t}</p><p>３</p><p>{t}</p></div>"),
+        );
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.toc_sections_added, 5);
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let got: Vec<(usize, &str, &str)> = flat.iter().map(|(d, l, t)| (*d, l.as_str(), t.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                (1, "第一章", "Text/1-p2.xhtml#eink-ch-1"),
+                (2, "１", "Text/1-p3.xhtml#eink-sec-1"),
+                (2, "２", "Text/1-p4.xhtml#eink-sec-2"),
+                (1, "第二章", "Text/2.xhtml"),
+                (2, "１", "Text/2-p2.xhtml#eink-sec-3"),
+                (2, "２", "Text/2-p3.xhtml#eink-sec-4"),
+                (2, "３", "Text/2-p4.xhtml#eink-sec-5"),
+            ],
+            "第一章指到章名那一份（不是书名页），节挂在章下面"
+        );
+        let first = body_of(&v, "OEBPS/Text/1.xhtml");
+        assert!(first.contains("白夜行") && first.contains("典藏版") && !first.contains("第一章"), "书名页单独一页：{first}");
+        assert!(!body_of(&v, "OEBPS/Text/1-p2.xhtml").contains("鐵路"), "章名独立一页");
+        // 幂等
+        let rep2 = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!((rep2.sections_paginated, rep2.toc_sections_added), (0, 0));
+    }
+
+    #[test]
+    fn numbered_paragraphs_that_are_not_sections() {
+        let t = HAODOO_TEXT;
+        // 目录样的一串数字（中间没有正文）、不从 1 开始的楼层号、断号的、只有一个的，都不是节
+        for body in [
+            format!("<div><h3>第二章</h3><p>一</p><p>二</p><p>三</p><p>{t}</p></div>"),
+            format!("<div><h3>第二章</h3><p class=\"lc\">308</p><p>{t}</p><p class=\"lc\">309</p><p>{t}</p></div>"),
+            format!("<div><h3>第二章</h3><p>１</p><p>{t}</p><p>３</p><p>{t}</p></div>"),
+            format!("<div><h3>第二章</h3><p>１</p><p>{t}</p></div>"),
+        ] {
+            let mut v = haodoo_book(&format!("<div><h3>第一章</h3><p>{t}</p></div>"), &body);
+            let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+            assert_eq!(rep.toc_sections_added, 0, "{body}");
+            assert_eq!(crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx")).len(), 2, "{body}");
+        }
+    }
+
+    #[test]
+    fn section_number_values() {
+        use super::paginate::section_number;
+        for (t, n) in [("１", 1), ("　　12", 12), ("一", 1), ("十", 10), ("十二", 12), ("二十", 20), ("九十九", 99)] {
+            assert_eq!(section_number(t), Some(n), "{t}");
+        }
+        for t in ["", "一十", "十十", "1234", "第一", "１a", "百"] {
+            assert_eq!(section_number(t), None, "{t}");
+        }
+    }
