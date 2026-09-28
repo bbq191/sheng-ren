@@ -11,6 +11,7 @@
 #   settings.reader.lua  ← personal/ → schemes/text → schemes/comic → devices/<id>/ → 按当前状态栏生成两个预设（presets.lua）
 #   settings/gestures.lua ← personal/gestures
 #   settings/profiles.lua ← schemes/profiles
+#   patches/*.lua         ← patches/（KOReader 用户补丁，启动时执行；设备上没有或内容不同的才拷）
 # 字体：device.conf 的 FONTS 列出这台设备要有的字体文件（在 KOReader 的 fonts/ 下），缺的从 $KOREADER_FONTS
 #       （缺省 ~/Documents/ereader/koreader-fonts/）拷。
 # 需要 luajit；MTP 设备要 gio（gvfs），SSH 设备要 ssh/scp。KOReader 运行中不能写：它退出时会把内存里的设置写回文件。
@@ -57,6 +58,7 @@ case $TRANSPORT in
       if dev_has "$2"; then gio remove "$base/$2"; fi
       gio copy "$1" "$base/$2"
     }
+    dev_mkdir() { dev_has "$1" || gio mkdir "$base/$1"; }
     ;;
   ssh)
     ssh "${ssh_opts[@]}" "$SSH_HOST" true 2>/dev/null || { echo "✗ 连不上 $dev（ssh $SSH_HOST）：USB 连上、屏幕解锁后再试" >&2; exit 1; }
@@ -64,6 +66,7 @@ case $TRANSPORT in
     dev_get() { scp -q "${ssh_opts[@]}" "$SSH_HOST:$base/$1" "$2" 2>/dev/null; }
     dev_has() { ssh "${ssh_opts[@]}" "$SSH_HOST" "test -e '$base/$1'"; }
     dev_put() { scp -q "${ssh_opts[@]}" "$1" "$SSH_HOST:$base/$2.tmp" && ssh "${ssh_opts[@]}" "$SSH_HOST" "mv '$base/$2.tmp' '$base/$2'"; }
+    dev_mkdir() { ssh "${ssh_opts[@]}" "$SSH_HOST" "mkdir -p '$base/$1'"; }
     ;;
   *) echo "✗ device.conf 的 TRANSPORT 只能是 mtp 或 ssh" >&2; exit 2 ;;
 esac
@@ -131,7 +134,18 @@ for font in "${missing_fonts[@]}"; do
   else echo "✗ 字体 fonts/$font：设备上没有，本机 ${font_src/#$HOME/\~}/ 里也没有，请先放进去" >&2; exit 1; fi
 done
 
-if [[ ${#changed[@]} -eq 0 && ${#missing_fonts[@]} -eq 0 ]]; then echo "= $dev 已是最新，不用改"; exit 0; fi
+# ── 用户补丁（koreader/patches/*.lua → 设备的 patches/）：设备上没有或内容不同的才拷；不删设备上别的补丁 ──
+mkdir -p "$work/patches"
+patches=()
+for p in "$here"/patches/*.lua; do
+  [[ -f $p ]] || continue
+  name=$(basename "$p")
+  if dev_get "patches/$name" "$work/patches/$name" && cmp -s "$p" "$work/patches/$name"; then continue; fi
+  echo "── 补丁 patches/$name：$([[ -f $work/patches/$name ]] && echo 内容不同，会更新 || echo 设备上没有，会拷过去)"
+  patches+=("$name")
+done
+
+if [[ ${#changed[@]} -eq 0 && ${#missing_fonts[@]} -eq 0 && ${#patches[@]} -eq 0 ]]; then echo "= $dev 已是最新，不用改"; exit 0; fi
 if [[ $write -eq 0 ]]; then echo "（dry run：以上是会改的；确认后加 --write 写入）"; exit 0; fi
 
 # ── 写入 ──
@@ -147,6 +161,15 @@ for font in "${missing_fonts[@]}"; do
   dev_put "$font_src/$font" "fonts/$font"
   echo "✓ 字体 fonts/$font 已拷到设备"
 done
+if [[ ${#patches[@]} -gt 0 ]]; then
+  dev_mkdir patches
+  for name in "${patches[@]}"; do
+    dev_put "$here/patches/$name" "patches/$name"
+    rm -f "$work/back"
+    if dev_get "patches/$name" "$work/back" && cmp -s "$here/patches/$name" "$work/back"; then echo "✓ 补丁 patches/$name 已拷到设备，回读核对一致"
+    else echo "✗ 补丁 patches/$name 回读核对不一致" >&2; exit 4; fi
+  done
+fi
 [[ ${#changed[@]} -eq 0 ]] && exit 0
 backup=~/Documents/ereader/koreader-backup/$(date +%Y-%m-%d_%H%M%S)/$dev
 mkdir -p "$backup/settings"
