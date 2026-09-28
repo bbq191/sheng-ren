@@ -30,8 +30,9 @@ ego-tree = "0.6"
 # 无 C 依赖（上游曾在 aarch64-unknown-linux-musl 全静态交叉编译验证过，含传递依赖 hayro-*/vello_cpu/skrifa/rayon 等）。
 # lopdf：通用 PDF 对象/xref/content stream 解析+构造，读第三方 PDF 结构（页树/字体资源/
 # 图片 XObject/书签目录），现有 `convert/pdfwrite.rs` 的手搓读写器只认自己产出的简单结构，
-# 读不了第三方复杂 PDF。
-lopdf = "0.45.0"
+# 读不了第三方复杂 PDF。默认 features 只留 rayon（载入时并行解析对象，大 PDF 快）；chrono（PDF 日期类型）用不上，关掉。
+# png 仍是 0.17（image 用 0.18，编了两份）：0.18 的 Decoder 要求 BufRead + Seek，升级要改 convert/pdfwrite.rs。
+lopdf ={ version = "0.45.0", default-features = false, features = ["rayon"] }
 # pdf-extract：基于 lopdf，暴露 OutputDev::output_character(变换矩阵+字体名+字号) 钩子，
 # 给文字层探测/字号识别标题/公式区域探测三处用，不用自己写 content stream 算子解释器（字体/glyph
 # 解码本身不重写——那是真正难、易错的部分）。2026-09-23 起改用本地 fork `pdf-extract`（补全颜色

@@ -66,10 +66,7 @@ fn fragment_index(layout: &Layout) -> Vec<Vec<u8>> {
         })
         .collect();
     let tagx = [TagDef { tag: 2, values: 1, mask: 1 }, TagDef { tag: 3, values: 1, mask: 2 }, TagDef { tag: 4, values: 1, mask: 4 }, TagDef { tag: 6, values: 2, mask: 8 }];
-    let c = cncx.into_records();
-    let mut recs = indx::build(&tagx, &entries, c.len() as u32);
-    recs.extend(c);
-    recs
+    indx::build_with_cncx(&tagx, &entries, cncx)
 }
 
 fn skeleton_index(layout: &Layout) -> Vec<Vec<u8>> {
@@ -145,10 +142,7 @@ fn ncx_index(layout: &Layout, text_len: u32) -> Option<Vec<Vec<u8>>> {
         .map(|(k, &tag)| TagDef { tag, values: 1, mask: 1 << k })
         .chain(std::iter::once(TagDef { tag: 6, values: 2, mask: 128 }))
         .collect::<Vec<_>>();
-    let c = cncx.into_records();
-    let mut recs = indx::build(&tagx, &entries, c.len() as u32);
-    recs.extend(c);
-    Some(recs)
+    Some(indx::build_with_cncx(&tagx, &entries, cncx))
 }
 
 fn fdst(bounds: &[(u32, u32)]) -> Vec<u8> {
@@ -228,9 +222,7 @@ fn exth(meta: &Meta, (resource_count, cover, thumb): (u32, Option<u32>, Option<u
     out.extend(((body.len() + 12) as u32).to_be_bytes());
     out.extend((recs.len() as u32).to_be_bytes());
     out.extend(body);
-    while !out.len().is_multiple_of(4) {
-        out.push(0);
-    }
+    indx::pad4(&mut out);
     out
 }
 
@@ -259,7 +251,7 @@ struct Indices {
 
 fn record0(meta: &Meta, text_len: u32, text_records: u32, flows: u32, res: (u32, Option<u32>, Option<u32>), idx: &Indices) -> Vec<u8> {
     let mut r = vec![0u8; 16 + 0x108];
-    let mut put = |off: usize, v: u32| r[off..off + 4].copy_from_slice(&v.to_be_bytes());
+    let mut put = |off: usize, v: u32| indx::put_u32(&mut r, off, v);
     // PalmDOC 头
     put(4, text_len);
     let ex = exth(meta, res);
@@ -307,9 +299,7 @@ fn record0(meta: &Meta, text_len: u32, text_records: u32, flows: u32, res: (u32,
     r.extend(ex);
     r.extend(name);
     r.extend(std::iter::repeat_n(0u8, R0_PADDING));
-    while !r.len().is_multiple_of(4) {
-        r.push(0);
-    }
+    indx::pad4(&mut r);
     r
 }
 
@@ -343,6 +333,7 @@ pub fn assemble(meta: &Meta, mut layout: Layout, res: Resources) -> Result<Vec<u
     let mut records: Vec<Vec<u8>> = vec![Vec::new()]; // 0 号稍后填
     records.extend(trecs);
     records.push(vec![0]);
+    // 待核：MOBI 头 0x50「第一条非正文记录」这里指向片段索引（补位记录之后）；样本与公开文档是否一致还没核对，先不动。
     let first_non_book = records.len() as u32;
     let frag = records.len() as u32;
     records.extend(fragment_index(layout));
