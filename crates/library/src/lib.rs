@@ -288,7 +288,7 @@ impl Library {
         self.net.get_or_init(net::Net::new)
     }
 
-    /// 联网时发现连不上网（DNS、连接失败）：之后的请求都直接失败。`booklib meta` 看到它就中止整轮。
+    /// 联网时看起来整个断网了（接连两个网站连不上，见 `Net::offline`）。`booklib meta` 看到它就中止整轮。
     pub fn offline(&self) -> bool {
         self.net.get().is_some_and(net::Net::offline)
     }
