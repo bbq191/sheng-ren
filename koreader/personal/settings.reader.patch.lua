@@ -5,6 +5,28 @@
 -- 在设备上改了个人设置、想让另一台也跟上：改这里再对两台各跑一次 apply.sh。
 -- 语义见 merge.lua：标量覆盖、表递归、"__DELETE__" 删键。正文字体要设备上装了才生效（见 docs/koreader.md「字体」）。
 return {
+    -- 界面字体（菜单、按键、标题、提示、状态栏里的文字）：霞鹜文楷 Medium（用户 2026-09-28：三台统一）。
+    -- KOReader 菜单里没有这个设置，但启动时会读 settings.reader.lua 的 fontmap 覆盖 frontend/ui/font.lua 里写死的
+    -- Font.fontmap（reader.lua「User fonts override」，在界面管理器加载之前）。只写文件名，Font:getFace 先找 KOReader 的
+    -- fonts/，找不到再搜所有字体目录。等宽的几项（scfont 快捷键、hpkfont 按键帮助、infont 输入框、smallinfont 代码）不换：
+    -- 文楷不是等宽，换了对不齐。字体文件不在时 KOReader 会退回缺省字体。
+    ["fontmap"] = {
+        ["cfont"] = "LXGWWenKai-Medium.ttf",
+        ["tfont"] = "LXGWWenKai-Medium.ttf",
+        ["smalltfont"] = "LXGWWenKai-Medium.ttf",
+        ["x_smalltfont"] = "LXGWWenKai-Medium.ttf",
+        ["ffont"] = "LXGWWenKai-Medium.ttf",
+        ["smallffont"] = "LXGWWenKai-Medium.ttf",
+        ["largeffont"] = "LXGWWenKai-Medium.ttf",
+        ["rifont"] = "LXGWWenKai-Medium.ttf",
+        ["pgfont"] = "LXGWWenKai-Medium.ttf",
+        ["hfont"] = "LXGWWenKai-Medium.ttf",
+        ["infofont"] = "LXGWWenKai-Medium.ttf",
+        ["smallinfofont"] = "LXGWWenKai-Medium.ttf",
+        ["smallinfofontbold"] = "LXGWWenKai-Medium.ttf",
+        ["x_smallinfofont"] = "LXGWWenKai-Medium.ttf",
+        ["xx_smallinfofont"] = "LXGWWenKai-Medium.ttf",
+    },
     ["autowarmth_fl_off_during_day"] = true,
     ["back_in_filemanager"] = "default",
     ["back_in_reader"] = "previous_location",
