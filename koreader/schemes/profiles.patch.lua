@@ -13,6 +13,8 @@ return {
         ["status_line"] = 1,                  -- 关 crengine 顶部标题栏（1 = 关）
         ["smooth_scaling"] = true,            -- 图片缩放用「最佳」算法，网点、线稿不糊不锯齿
         ["view_mode"] = "page",               -- 翻页模式（不是滚动）
+        ["visible_pages"] = 1,                -- 不分栏：一屏一页（个人设置里全局是两栏 copt_visible_pages = 2，
+                                              -- 源码里两栏竖屏也生效；漫画一页就是一整幅画，用户 2026-09-28 定）
         ["settings"] = { ["name"] = "漫画·首次" },
     },
     ["漫画"] = {
