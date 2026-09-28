@@ -12,7 +12,6 @@ if [[ -n ${2:-} ]]; then
   for f in settings.reader.lua settings/gestures.lua settings/profiles.lua; do [[ -f $2/$f ]] && cp "$2/$f" "$work/$f"; done
 fi
 run() {
-  local n=0 rc
   for step in \
     "settings.reader.lua merge.lua personal/settings.reader.patch.lua" \
     "settings.reader.lua merge.lua schemes/text.settings.patch.lua" \
@@ -24,12 +23,20 @@ run() {
     read -r target script patch <<<"$step"
     rc=0
     luajit "$here/$script" "$work/$target" ${patch:+"$here/$patch"} >/dev/null || rc=$?
-    case $rc in 0) n=$((n + 1)) ;; 10) ;; *) echo "✗ $script $patch 出错" >&2; exit 3 ;; esac
+    case $rc in 0 | 10) ;; *) echo "✗ $script $patch 出错" >&2; exit 3 ;; esac
   done
-  echo "$n"
 }
-first=$(run)
-second=$(run)
+# 第二遍看净差异（分层覆盖：中间层改过又被后面改回来的不算），必须为零
+snap() { mkdir -p "$1/settings"; for f in settings.reader.lua settings/gestures.lua settings/profiles.lua; do [[ -f $work/$f ]] && cp "$work/$f" "$1/$f"; done; }
+run
+snap "$work.1"
+run
+second=0
+for f in settings.reader.lua settings/gestures.lua settings/profiles.lua; do
+  rc=0; luajit "$here/diff.lua" "$work.1/$f" "$work/$f" >/dev/null || rc=$?
+  [[ $rc -eq 0 ]] && second=$((second + 1))
+done
+rm -rf "$work.1"
 for f in settings.reader.lua settings/gestures.lua settings/profiles.lua; do
   luajit -e "assert(type(dofile('$work/$f')) == 'table')" || { echo "✗ $f 读不回来" >&2; exit 4; }
 done
@@ -44,5 +51,5 @@ local g = dofile('$work/settings/gestures.lua')
 assert(g.gesture_reader.hold_top_left_corner.exit == true)
 assert(g.gesture_reader.tap_top_right_corner == nil, '删掉的手势不能留下 __DELETE__')
 "
-if [[ $second -ne 0 ]]; then echo "✗ 第二遍还有 $second 步改动（不幂等）" >&2; exit 5; fi
-echo "✓ $dev：第一遍 $first 步有改动，第二遍零改动；结果都能读回"
+if [[ $second -ne 0 ]]; then echo "✗ 第二遍后还有 $second 个文件有净改动（不幂等）" >&2; exit 5; fi
+echo "✓ $dev：应用两遍，第二遍没有净改动；结果都能读回"
