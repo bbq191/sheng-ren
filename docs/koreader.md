@@ -110,6 +110,11 @@ koreader/check.sh kindle-pw12-sig              # 离线检查：对空目录应�
 | 霞鹜文楷 Medium `LXGWWenKai-Medium.ttf`（排版族名 LXGW WenKai） | 正文（`cre_font = "LXGW WenKai"`） | 都是这个文件；Regular 字重不放（放了 KOReader 很可能按族名选 Regular） |
 | 京華老宋体 v3.0 `京華老宋体v3.0.ttf`（族名 KingHwaOldSong） | 状态栏（按文件路径指定，见 `devices/<id>/`） | 都是这个文件 |
 
+**界面字体**（菜单、按键、标题、提示）也是文楷 Medium（用户 2026-09-28）。KOReader 菜单里没有这个设置，但启动时会读
+`settings.reader.lua` 的 `fontmap` 覆盖 `frontend/ui/font.lua` 里写死的界面字体表（`reader.lua`「User fonts override」，在界面管理器
+加载之前，对全部界面生效）；写在个人设置里。等宽的四项（快捷键、按键帮助、输入框、代码）不换，文楷不是等宽，换了对不齐。
+不用写用户补丁（`patches/`）：早期补丁（`1-`）在设备模块加载之前执行，引用界面字体模块会打乱初始化顺序。
+
 本机字体目录 `~/Documents/ereader/koreader-fonts/` 里放这两个文件，`apply.sh` 发现设备上缺哪个就拷哪个；不会删设备上的字体。
 
 ## 键名怎么核
