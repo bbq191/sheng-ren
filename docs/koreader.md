@@ -17,6 +17,7 @@
 | `devices/<设备 id>/settings.reader.patch.lua` | `settings.reader.lua` | 随设备不同的：状态栏字体的文件路径；Move 还有不分栏、彩色、刷新（见下） |
 | `devices/<设备 id>/device.conf` | — | 怎么连（MTP / SSH）、KOReader 目录在哪、怎么判断 KOReader 退没退出、要有哪些字体 |
 | `presets.lua` | `settings.reader.lua` | 按设备当前的状态栏生成两个状态栏预设 |
+| `patches/*.lua` | `patches/` | KOReader 用户补丁（启动时执行）：`2-ui-font-size.lua` 界面默认字号整体小 2 号 |
 | `merge.lua`、`luaser.lua` | — | 合并器：标量覆盖、表递归合并、值为 `"__DELETE__"` 的删键 |
 | `diff.lua` | — | 原文件与最终结果的净差异：补丁分层覆盖（个人 → 方案 → 设备），中间层改过、后面又改回来的键不算改动 |
 
@@ -110,6 +111,12 @@ koreader/check.sh kindle-pw12-sig              # 离线检查：对空目录应�
 |---|---|---|
 | 霞鹜文楷 Medium `LXGWWenKai-Medium.ttf`（排版族名 LXGW WenKai） | 正文（`cre_font = "LXGW WenKai"`） | 都是这个文件；Regular 字重不放（放了 KOReader 很可能按族名选 Regular） |
 | 京華老宋体 v3.0 `京華老宋体v3.0.ttf`（族名 KingHwaOldSong） | 状态栏（按文件路径指定，见 `devices/<id>/`） | 都是这个文件 |
+
+**界面字号**：所有设置项等界面文字小 2 号（用户 2026-09-28）。界面各处的缺省字号写死在 `font.lua` 的 `Font.sizemap`
+（设置菜单每一项 22、菜单底栏 20、标题 26、提示 24……），KOReader 没有覆盖它的设置，所以用用户补丁 `patches/2-ui-font-size.lua`
+把整张表每项减 2。`2-` 开头的补丁在界面管理器加载之后、文件管理器和阅读界面打开之前执行（`reader.lua`），对全部菜单生效。
+自己指定字号的列表不受影响：文件列表、目录、书签（各自菜单里的「字号」）、键盘。补丁只在 KOReader 启动时读，拷的时候它在不在运行都行；
+不要了删掉设备上的文件，或在 KOReader 菜单里停用用户补丁。Android 上 F-Droid 渠道的 KOReader 不执行用户补丁。
 
 **界面字体**（菜单、按键、标题、提示）也是文楷 Medium（用户 2026-09-28）。KOReader 菜单里没有这个设置，但启动时会读
 `settings.reader.lua` 的 `fontmap` 覆盖 `frontend/ui/font.lua` 里写死的界面字体表（`reader.lua`「User fonts override」，在界面管理器
