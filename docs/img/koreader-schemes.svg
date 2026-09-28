@@ -57,7 +57,7 @@
   <text x="780" y="64" class="s">只在第一次打开时</text>
   <text x="628" y="88" class="s">从右往左翻页（日漫）</text>
   <text x="628" y="108" class="s">四边页边距 0，画面铺满</text>
-  <text x="628" y="128" class="s">关顶部标题栏、图片用「最佳」缩放</text>
+  <text x="628" y="128" class="s">不分栏、关顶部标题栏、图片「最佳」缩放</text>
   <text x="628" y="152" class="s">写进这本书自己的设置，之后改了会记住</text>
 
   <rect x="612" y="186" width="308" height="70" rx="8" class="cmc"/>
