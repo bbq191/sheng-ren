@@ -11,6 +11,8 @@ cargo clippy --workspace --all-targets      # 要求没有警告
 python3 tools/kf8/dump.py 文件.azw3          # 看 KF8 结构
 python3 tools/kf8/indexes.py 文件.azw3       # 看片段/骨架/目录索引
 python3 tools/kf8/textcheck.py 文件.azw3 源.epub   # AZW3 与源 EPUB 文字逐字符核对
+
+koreader/check.sh kindle-pw12-sig            # KOReader 配置补丁离线检查（改了 koreader/ 下的文件后跑，两台设备各一次）
 ```
 
 ## 真书回归检查

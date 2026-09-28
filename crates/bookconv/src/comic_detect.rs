@@ -54,6 +54,26 @@ pub fn is_comic(entries: &[Entry]) -> bool {
     images >= MIN_IMAGES && (text as f64) < TEXT_PER_IMAGE * images as f64
 }
 
+/// 漫画在 OPF 里打的标签（`<dc:subject>`）。阅读器按它认出漫画、套漫画的阅读设置：KOReader 把 `dc:subject` 读成
+/// 书的 keywords，配置档按"元数据包含 漫画"自动执行（见 `koreader/`）——书放在设备上哪个目录都行。
+pub const COMIC_SUBJECT: &str = "漫画";
+
+/// 给漫画的 OPF 加上 [`COMIC_SUBJECT`] 标签：已经有同名 `dc:subject` 的不动；插在 `</metadata>` 前面（`dc` 前缀，
+/// EPUB 的 OPF 都声明了）。没有 `</metadata>` 的不动。返回 `None` 表示没改。
+pub fn tag_opf_as_comic(opf: &str) -> Option<String> {
+    static HAS: OnceLock<Regex> = OnceLock::new();
+    let has = HAS.get_or_init(|| Regex::new(&format!(r"<dc:subject\b[^>]*>\s*{}\s*</dc:subject>", regex::escape(COMIC_SUBJECT))).unwrap());
+    if has.is_match(opf) {
+        return None;
+    }
+    let at = opf.find("</metadata>").or_else(|| opf.find("</opf:metadata>"))?;
+    let mut out = String::with_capacity(opf.len() + 40);
+    out.push_str(&opf[..at]);
+    out.push_str(&format!("<dc:subject>{COMIC_SUBJECT}</dc:subject>"));
+    out.push_str(&opf[at..]);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +129,14 @@ mod tests {
         let (images, text) = epub_image_stats(&v);
         assert_eq!(images, 1);
         assert_eq!(text, 0, "script/style 内容不该计入可见文字: got {text}");
+    }
+
+    #[test]
+    fn tag_opf_as_comic_adds_subject_once() {
+        let opf = r#"<package><metadata xmlns:dc="x"><dc:title>乱马</dc:title></metadata><manifest/></package>"#;
+        let t = tag_opf_as_comic(opf).unwrap();
+        assert!(t.contains("<dc:subject>漫画</dc:subject></metadata>"), "{t}");
+        assert_eq!(tag_opf_as_comic(&t), None, "已有标签不重复加");
+        assert_eq!(tag_opf_as_comic("<package><manifest/></package>"), None, "没有 metadata 不动");
     }
 }

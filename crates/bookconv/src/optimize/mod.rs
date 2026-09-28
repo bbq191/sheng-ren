@@ -37,7 +37,8 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 ///   全书没有节一级标题时，独占一段、每章从 1 连续编号的节号（`１`、`一`）当节标题，进目录。
 /// - v23（2026-09-28）：和章标题同级、只写节号的标题（《13級階梯》`<h3>２</h3>` 单独成文件）至少两章都是这种编号时
 ///   降成节：不再单独占一页，跟正文同页；书自带的平目录里的节缩进到章下面，章标签末尾重复的第一节节号去掉。
-pub const OPTIMIZE_VERSION: &str = "23";
+/// - v24（2026-09-28）：漫画的 OPF 打上 `<dc:subject>漫画</dc:subject>`（KOReader 读成 keywords，配置档据此自动套漫画设置）。
+pub const OPTIMIZE_VERSION: &str = "24";
 
 /// 脚注呈现方式。xochitl 没有弹窗脚注，统一用 `Anchor`（章末可见 + 同章锚点跳转 + 阅读器原生「返回」）。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -126,8 +127,6 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         None => None,
     };
     let has_remote_imgs = raw.iter().any(|e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img));
-    // 只在真要改 OPF 时才找它（`parse_opf` 返回下标，所以在改排序之前找）。
-    let opf_name: Option<String> = if opts.page_direction.is_some() || has_remote_imgs { crate::wash::parse_opf(&raw).map(|o| raw[o.index].name.clone()) } else { None };
     // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
     let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len() + 1);
     ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: MIMETYPE.to_vec() });
@@ -136,6 +135,9 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。用清洗之后的条目判——
     // 清洗层已把空页清理、目录归一，判定更准。
     let is_comic_book = crate::comic_detect::is_comic(&ordered);
+    // 只在真要改 OPF 时才找它：改翻页方向、补远程图的 manifest 项、给漫画打标签。
+    let opf_name: Option<String> =
+        if opts.page_direction.is_some() || has_remote_imgs || is_comic_book { crate::wash::parse_opf(&ordered).map(|o| ordered[o.index].name.clone()) } else { None };
 
     let mut rep = Report { wash: wash_rep, total_files: 0, html_files: 0, bytes_before, bytes_after: 0 };
 
@@ -186,6 +188,8 @@ struct EntryXform<'a> {
     aside_index: &'a std::collections::HashMap<String, String>,
     footnote: FootnoteMode,
     page_direction: Option<crate::direction::PageDirection>,
+    /// 漫画：OPF 里打上漫画标签（`comic_detect::tag_opf_as_comic`）。
+    comic: bool,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
@@ -196,11 +200,12 @@ struct EntryXform<'a> {
 }
 
 impl<'a> EntryXform<'a> {
-    fn new(aside_index: &'a std::collections::HashMap<String, String>, opf_name: Option<&'a str>, opts: &OptimizeOpts) -> EntryXform<'a> {
+    fn new(aside_index: &'a std::collections::HashMap<String, String>, opf_name: Option<&'a str>, comic: bool, opts: &OptimizeOpts) -> EntryXform<'a> {
         EntryXform {
             aside_index,
             footnote: opts.footnote,
             page_direction: opts.page_direction,
+            comic,
             opf_name,
             screen: opts.screen,
             seen_ids: HashSet::new(),
@@ -241,10 +246,20 @@ impl<'a> EntryXform<'a> {
                 Err(_) => Cow::Borrowed(data),
             });
         }
-        if let (true, Some(dir)) = (self.opf_name == Some(name), self.page_direction) {
-            return Some(match std::str::from_utf8(data) {
-                Ok(text) => Cow::Owned(crate::direction::set_spine_direction(text, dir).into_bytes()),
-                Err(_) => Cow::Borrowed(data),
+        if self.opf_name == Some(name) && (self.page_direction.is_some() || self.comic) {
+            let Ok(text) = std::str::from_utf8(data) else { return Some(Cow::Borrowed(data)) };
+            let mut text = Cow::Borrowed(text);
+            if let Some(dir) = self.page_direction {
+                text = Cow::Owned(crate::direction::set_spine_direction(&text, dir));
+            }
+            if self.comic {
+                if let Some(t) = crate::comic_detect::tag_opf_as_comic(&text) {
+                    text = Cow::Owned(t);
+                }
+            }
+            return Some(match text {
+                Cow::Borrowed(_) => Cow::Borrowed(data),
+                Cow::Owned(t) => Cow::Owned(t.into_bytes()),
             });
         }
         None

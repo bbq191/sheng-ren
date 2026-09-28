@@ -33,7 +33,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     let out_file = std::fs::File::create(output_path).map_err(|e| format!("建输出文件失败: {e}"))?;
     let mut zw = ZipWriter::new(std::io::BufWriter::new(out_file));
     let (stored, deflated) = (crate::epubzip::stored(), crate::epubzip::deflated());
-    let mut xf = EntryXform::new(&prep.aside_index, prep.opf_name.as_deref(), opts);
+    let mut xf = EntryXform::new(&prep.aside_index, prep.opf_name.as_deref(), is_comic_book, opts);
     let total_entries = entries.len();
     // 图片并行处理（见 `imgpool`）：主线程按条目顺序读原图字节、提交给 worker、按原顺序取回结果写 zip；
     // 提前提交 `lookahead` 张（读原图字节几乎不花时间，处理才慢），处理与写盘/读盘重叠。结果与逐张顺序处理逐字节相同。
