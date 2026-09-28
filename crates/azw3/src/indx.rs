@@ -30,8 +30,12 @@ fn encode_entry(tagx: &[TagDef], e: &Entry) -> Vec<u8> {
     let mut vals = Vec::new();
     for d in tagx {
         let Some((_, v)) = e.tags.iter().find(|(t, _)| *t == d.tag) else { continue };
-        let count = (v.len() / d.values as usize) as u8;
-        ctrl |= (count << d.mask.trailing_zeros()) & d.mask;
+        let count = v.len() / d.values as usize;
+        let shifted = count << d.mask.trailing_zeros();
+        // 倍数必须放得进掩码位；多位掩码全置 1 表示"个数另写"（MobileRead TAGX 说明），这里不支持，也不能写出。
+        debug_assert!(v.len().is_multiple_of(d.values as usize), "标签 {} 的值个数 {} 不是 {} 的整数倍", d.tag, v.len(), d.values);
+        debug_assert!(shifted & !(d.mask as usize) == 0 && (shifted != d.mask as usize || d.mask.count_ones() == 1), "标签 {} 出现 {count} 次，控制字节掩码 {:#04x} 放不下", d.tag, d.mask);
+        ctrl |= shifted as u8 & d.mask;
         for x in v {
             vals.extend(fwd_varint(*x));
         }
@@ -43,15 +47,21 @@ fn encode_entry(tagx: &[TagDef], e: &Entry) -> Vec<u8> {
     out
 }
 
-fn pad4(b: &mut Vec<u8>) {
+/// 补零到 4 字节对齐。
+pub(crate) fn pad4(b: &mut Vec<u8>) {
     while !b.len().is_multiple_of(4) {
         b.push(0);
     }
 }
 
+/// 在 `buf[off..off + 4]` 写大端 u32。
+pub(crate) fn put_u32(buf: &mut [u8], off: usize, v: u32) {
+    buf[off..off + 4].copy_from_slice(&v.to_be_bytes());
+}
+
 fn indx_header(record_type: u32, idxt_off: usize, count: usize, total: u32, ncncx: u32, is_meta: bool) -> Vec<u8> {
     let mut h = vec![0u8; HEADER_LEN];
-    let mut put = |off: usize, v: u32| h[off..off + 4].copy_from_slice(&v.to_be_bytes());
+    let mut put = |off: usize, v: u32| put_u32(&mut h, off, v);
     put(0x04, HEADER_LEN as u32);
     put(0x0C, record_type);
     put(0x14, idxt_off as u32);
@@ -141,6 +151,14 @@ pub fn build(tagx: &[TagDef], entries: &[Entry], ncncx: u32) -> Vec<Vec<u8>> {
     let mut out = vec![meta];
     out.extend(data_records);
     out
+}
+
+/// 带 CNCX 的索引：[头记录, 数据记录…, CNCX 记录…]。
+pub fn build_with_cncx(tagx: &[TagDef], entries: &[Entry], cncx: Cncx) -> Vec<Vec<u8>> {
+    let c = cncx.into_records();
+    let mut recs = build(tagx, entries, c.len() as u32);
+    recs.extend(c);
+    recs
 }
 
 /// CNCX 字符串池。
