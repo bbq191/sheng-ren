@@ -106,10 +106,14 @@ impl Library {
     /// 生成封面（书名 + 作者头像）。
     pub(crate) fn generate_cover(&self, net: &Net, meta: &Meta) -> Result<CoverInfo, String> {
         let author = meta.authors.first().map(|a| a.trim().to_string()).unwrap_or_default();
-        let portrait = crate::wikidata::author_portrait(net, &meta.authors);
+        let portrait = crate::wikidata::author_portrait(net, &meta.authors)?;
         let photo = portrait.as_ref().and_then(|(_, url)| net.fetch(url).ok()).filter(|b| image::load_from_memory(b).is_ok());
+        // 作者照片是因为网络出错才没拿到的：不生成（存下来就不会再找了），下次再试
+        if let Some(e) = net.transient_error() {
+            return Err(incomplete(&e));
+        }
         let font = crate::covergen::load_font()?;
-        let seed = u64::from_str_radix(&meta.id[..12.min(meta.id.len())], 16).unwrap_or(0);
+        let seed = u64::from_str_radix(meta.id.get(..12).unwrap_or(&meta.id), 16).unwrap_or(0);
         let bytes = crate::covergen::render(&font, &meta.title, &author, photo.as_deref(), seed)?;
         let (url, work) = match (&portrait, &photo) {
             (Some((who, url)), Some(_)) => (url.clone(), format!("生成（书名 + 作者头像 {who}）")),
@@ -132,16 +136,14 @@ impl Library {
     }
 
     /// 书自己有没有封面（EPUB 看封面声明和第一页的图；要转换的格式转一遍再看；PDF 算有）。
+    /// CBZ 不用转：转出来的 EPUB 总是拿第一张图当封面（`cbz_to_epub`；没有图的 CBZ 入库时就拒收了）。
     pub(crate) fn book_has_own_cover(&self, meta: &Meta) -> Result<bool, String> {
-        if meta.source_format == "pdf" || meta.master.ends_with(".pdf") {
+        if matches!(meta.content_format(), "pdf" | "cbz") {
             return Ok(true);
         }
         let tmp = tempdir_in(&self.root)?;
         let result = (|| {
-            let input = match meta.source() {
-                crate::Source::Stored => self.entry_dir(&meta.id).join(&meta.master),
-                crate::Source::Original => self.verified_original(meta)?,
-            };
+            let input = self.content_path(meta)?;
             let epub = self.epub_input(meta, &input, &tmp)?;
             Ok(epub_has_cover(&epub))
         })();
@@ -150,9 +152,14 @@ impl Library {
     }
 }
 
+/// 因为网络出错没查完时的提示。
+pub(crate) fn incomplete(e: &str) -> String {
+    format!("网络出错，没查完（{e}）；没有生成封面，下次再试")
+}
+
 /// 书库里的临时目录（和产物在同一文件系统）。
 pub(crate) fn tempdir_in(root: &Path) -> Result<std::path::PathBuf, String> {
-    let d = root.join(format!(".tmp-cover-{}", std::process::id()));
+    let d = root.join(format!("{}cover-{}", crate::fsutil::TMP_PREFIX, std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
     Ok(d)

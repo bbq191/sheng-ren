@@ -21,6 +21,36 @@ pub(crate) struct Work {
     pub(crate) published: String,
 }
 
+/// SPARQL 查询。
+fn sparql(net: &Net, q: &str) -> Result<serde_json::Value, String> {
+    net.json(&format!("https://query.wikidata.org/sparql?format=json&query={}", enc(q)))
+}
+
+/// 人名的几种写法：原样、间隔号统一成 `·`（好读用 `．`，Wikidata 用 `·`/`‧`），`letters_only` 时再加上只留字母数字的。
+fn name_variants(a: &str, letters_only: bool) -> Vec<String> {
+    let mut v = vec![a.to_string(), a.replace(['．', '‧', '・', '•', '.'], "·")];
+    if letters_only {
+        v.push(a.chars().filter(|c| c.is_alphanumeric()).collect());
+    }
+    v
+}
+
+/// 按几种写法搜条目，合并去重。`first_hit`：某种写法搜到了就不再试后面的。
+fn search_variants(net: &Net, variants: &[String], first_hit: bool) -> Result<Vec<String>, String> {
+    let mut ids: Vec<String> = Vec::new();
+    for v in variants {
+        for id in wikidata_search(net, v)? {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        if first_hit && !ids.is_empty() {
+            break;
+        }
+    }
+    Ok(ids)
+}
+
 pub(crate) fn wikidata_search(net: &Net, q: &str) -> Result<Vec<String>, String> {
     let mut ids = Vec::new();
     for lang in ["zh", "zh-hant"] {
@@ -49,7 +79,7 @@ pub(crate) fn works(net: &Net, filter: &str) -> Result<Vec<Work>, String> {
   OPTIONAL {{ ?w wdt:P50 ?a . {{ ?a rdfs:label ?an }} UNION {{ ?a skos:altLabel ?an }} FILTER(STRSTARTS(LANG(?an),"zh")) }}
 }} LIMIT 2000"#
     );
-    let v = net.json(&format!("https://query.wikidata.org/sparql?format=json&query={}", enc(&q)))?;
+    let v = sparql(net, &q)?;
     let mut out: Vec<Work> = Vec::new();
     for r in v["results"]["bindings"].as_array().into_iter().flatten() {
         let g = |k: &str| r[k]["value"].as_str().unwrap_or("").to_string();
@@ -117,18 +147,7 @@ pub(crate) fn find_work(net: &Net, title: &str, authors: &[String]) -> Result<Op
     }
     // ② 书名没找到（书名撞车太多、或译名不同）：先找作者，再在他的作品里按书名找（允许译名用字不同）
     for a in authors.iter().filter(|a| !norm(a).is_empty()) {
-        let variants = [a.clone(), a.replace(['．', '‧', '・', '•', '.'], "·"), a.chars().filter(|c| c.is_alphanumeric()).collect()];
-        let mut ids: Vec<String> = Vec::new();
-        for v in variants {
-            for id in wikidata_search(net, &v)? {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-            if !ids.is_empty() {
-                break;
-            }
-        }
+        let ids = search_variants(net, &name_variants(a, true), true)?;
         if ids.is_empty() {
             continue;
         }
@@ -141,17 +160,10 @@ pub(crate) fn find_work(net: &Net, title: &str, authors: &[String]) -> Result<Op
 }
 
 /// 作者照片（Wikidata 人物的 P18 图片）：按作者名找人物，名字最像（字重合度 ≥ 0.6）且有照片的那个。
-/// 返回（"Q号 名字", 缩到 800 宽的图片网址）。
-pub(crate) fn author_portrait(net: &Net, authors: &[String]) -> Option<(String, String)> {
+/// 返回（"Q号 名字", 缩到 800 宽的图片网址）；没有返回 `None`，网络出错返回错误。
+pub(crate) fn author_portrait(net: &Net, authors: &[String]) -> Result<Option<(String, String)>, String> {
     for a in authors.iter().filter(|a| !norm(a).is_empty()) {
-        let mut ids: Vec<String> = Vec::new();
-        for v in [a.clone(), a.replace(['．', '‧', '・', '•', '.'], "·")] {
-            for id in wikidata_search(net, &v).ok()? {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-        }
+        let ids = search_variants(net, &name_variants(a, false), false)?;
         if ids.is_empty() {
             continue;
         }
@@ -160,7 +172,7 @@ pub(crate) fn author_portrait(net: &Net, authors: &[String]) -> Option<(String, 
             r#"SELECT ?a ?img ?l WHERE {{ VALUES ?a {{ {values}}} ?a wdt:P31 wd:Q5 ; wdt:P18 ?img .
   {{ ?a rdfs:label ?l }} UNION {{ ?a skos:altLabel ?l }} FILTER(STRSTARTS(LANG(?l),"zh")) }}"#
         );
-        let v = net.json(&format!("https://query.wikidata.org/sparql?format=json&query={}", enc(&q))).ok()?;
+        let v = sparql(net, &q)?;
         let best = v["results"]["bindings"]
             .as_array()
             .into_iter()
@@ -172,9 +184,9 @@ pub(crate) fn author_portrait(net: &Net, authors: &[String]) -> Option<(String, 
             })
             .max_by(|x, y| x.0.total_cmp(&y.0));
         if let Some((_, qid, name, img)) = best {
-            return Some((format!("{qid} {name}"), format!("{}?width=800", img.replace("http://", "https://"))));
+            return Ok(Some((format!("{qid} {name}"), format!("{}?width=800", img.replace("http://", "https://")))));
         }
     }
-    None
+    Ok(None)
 }
 
