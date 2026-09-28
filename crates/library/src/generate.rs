@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 /// 生成流程本身（本 crate 的步骤、参数，以及生成时当场做的格式转换）的版本：改了会影响产物的地方要加一，
 /// 旧产物随之判为过期。优化器、AZW3 写出器各有自己的版本号，也都进指纹。
-const PIPELINE_VERSION: &str = "4";
+const PIPELINE_VERSION: &str = "5";
 
 #[derive(Debug)]
 pub enum Built {
@@ -52,8 +52,9 @@ impl Library {
         let area = device.readable(format);
         let writer = if format == Format::Azw3 { azw3::WRITER_VERSION } else { "-" };
         let cover = meta.cover.as_ref().map_or("-", |c| &c.sha256[..12]);
+        let info = meta.info.as_ref().and_then(|i| i.injected_sig()).unwrap_or_else(|| "-".into());
         let fingerprint = format!(
-            "{}|{cover}|{PIPELINE_VERSION}|{}|{writer}|{}|{}x{}|{}|{}",
+            "{}|{cover}|{info}|{PIPELINE_VERSION}|{}|{writer}|{}|{}x{}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
@@ -143,16 +144,9 @@ impl Library {
             if format == Format::Pdf {
                 bookconv::pdf_ingest::optimize_pdf_trim_only(&input, &done, area, !device.color, |_, _| {})?;
             } else {
-                let mut epub = self.epub_input(meta, &input, &tmp)?;
-                // 书里没封面、书库里有找来的封面：放进去
-                if let Some(c) = &meta.cover {
-                    if !crate::cover::epub_has_cover(&epub) {
-                        let img = std::fs::read(self.entry_dir(&meta.id).join(&c.file)).map_err(|e| format!("读封面: {e}"))?;
-                        let with = tmp.join("with-cover.epub");
-                        crate::cover::inject_cover(&epub, &with, &img, c.file.rsplit('.').next().unwrap_or("jpg"))?;
-                        epub = with;
-                    }
-                }
+                let epub = self.epub_input(meta, &input, &tmp)?;
+                // 书里没有的封面、简介、标签，书库里有找来的：补进去
+                let epub = crate::metadata::with_additions(self, meta, &epub, &tmp)?;
                 let optimized = tmp.join("optimized.epub");
                 let opts = bookconv::optimize::OptimizeOpts { wash: Some(Default::default()), grayscale: !device.color, ..bookconv::optimize::OptimizeOpts::new(area) };
                 bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;

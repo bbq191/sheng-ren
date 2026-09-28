@@ -30,7 +30,7 @@
 cargo install --path crates/library          # 安装 booklib 命令
 
 booklib add ~/Downloads/三体.epub 漫画.cbz https://example.com/article
-booklib track ~/Documents/ereader/books       # 或者：跟踪整个书目录
+booklib track ~/Documents/ereader/books       # 整个书目录：登记跟踪（add 只收单个文件）
 booklib sync --device=kindle-pw12-sig,ireader-ocean5-pro   # 同步进书库并生成
 booklib list                                  # 看每本书给哪些设备生成过、是否最新
 ```
