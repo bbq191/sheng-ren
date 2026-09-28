@@ -109,6 +109,9 @@ impl Profile {
         if self.formats.is_empty() {
             return Err(format!("profile {}: formats 为空", self.id));
         }
+        if let Some((i, f)) = self.formats.iter().enumerate().find(|(i, f)| self.formats[..*i].contains(f)) {
+            return Err(format!("profile {}: formats 第 {} 项 {f:?} 重复", self.id, i + 1));
+        }
         for (fmt, r) in &self.readable {
             if !self.formats.contains(fmt) {
                 return Err(format!("profile {}: readable 里的 {fmt:?} 不在 formats 里", self.id));
@@ -222,6 +225,8 @@ mod tests {
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")).is_ok());
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")).is_err(), "阅读范围不能超过屏幕");
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.pdf]\nwidth = 90\nheight = 180\n")).is_err(), "formats 里没有的格式不能写阅读范围");
+        let dup = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"pdf\", \"epub\"]\n";
+        assert!(Profile::parse("x", &format!("{dup}{scr}")).is_err(), "formats 不能重复");
     }
 
     #[test]
