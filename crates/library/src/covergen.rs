@@ -165,7 +165,7 @@ fn balance(font: &FontVec, scale: PxScale, text: &str, max_w: f32, lines: Vec<St
 
 /// 显示用：全角字母数字换成半角（"１３級階梯" 的全角数字字距太开）。
 fn halfwidth(s: &str) -> String {
-    s.chars().map(|c| if c.is_alphanumeric() && ('\u{FF01}'..='\u{FF5E}').contains(&c) { char::from_u32(c as u32 - 0xFEE0).unwrap_or(c) } else { c }).collect()
+    s.chars().map(|c| if c.is_alphanumeric() { crate::matching::to_halfwidth(c) } else { c }).collect()
 }
 
 /// 头像：裁成正方形（偏上，脸通常在上半部），缩放，贴成带描边的圆。

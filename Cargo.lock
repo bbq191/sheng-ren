@@ -1245,7 +1245,6 @@ dependencies = [
  "fast2s",
  "image",
  "profile",
- "regex",
  "serde",
  "serde_json",
  "sha2",
