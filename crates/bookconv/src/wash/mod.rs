@@ -151,6 +151,8 @@ pub struct WashReport {
     pub paginate_notes_moved: usize,
     /// 书自带目录漏掉、分页时补进目录的节数。
     pub toc_sections_added: usize,
+    /// 书自带目录（NCX）指错位置、按书里的目录页或下一个文件核实后改指的条目数。见 `toc::repair_ncx_targets`。
+    pub ncx_targets_repaired: usize,
     /// 跨文件重复、被改名的 id 数（全书指向它们的链接一起改）。见 `ids.rs`。
     pub dup_ids_renamed: usize,
     /// 文件末尾删掉的空元素/换行数（章尾空白页）。
@@ -241,6 +243,8 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
     }
     add_wash_css_entry(entries, opf_idx, &css_path, &wash_css(opts));
     fix_ncx_manifest_id(entries, &mut rep);
+    // 目录指错位置的先修好：后面的分部重建、分页都按目录找标题
+    repair_ncx_targets(entries, &mut rep);
     restructure_existing_toc_parts(entries, opts.auto_toc, heading, &mut rep);
     auto_toc(entries, opts.auto_toc, heading, &mut rep);
     // 分页放在自动目录之后：自动目录给标题补的 id 已经在，分页改写目录链接时能对上。

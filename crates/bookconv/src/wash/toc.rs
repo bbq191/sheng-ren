@@ -504,3 +504,140 @@ fn section_starts_file(entries: &[Entry], path: &str, id: &str) -> bool {
     let Some((lo, _)) = html::body_range(&t) else { return false };
     html::anchors(&t).into_iter().find(|(a, _)| *a == id).is_some_and(|(_, p)| p >= lo && !html::has_visible(&t[lo..p]))
 }
+
+// ───────────────────────── 书自带目录指错位置的修复 ─────────────────────────
+
+/// 比较标题文字用：去掉空白（含全角空格）。
+fn squash_ws(t: &str) -> String {
+    t.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// `path` 文件里从锚点 `frag`（空 = 正文开头）往后的可见文字（去空白），最多取 `max` 个字。锚点不存在返回 `None`。
+fn text_at(entries: &[Entry], path: &str, frag: &str, max: usize) -> Option<String> {
+    let e = entries.iter().find(|e| e.name == path)?;
+    let t = std::str::from_utf8(&e.data).ok()?;
+    let (lo, hi) = html::body_range(t)?;
+    let pos = if frag.is_empty() { lo } else { html::anchors(t).into_iter().find(|(a, _)| *a == frag)?.1.max(lo) };
+    // 只看锚点后面一小段（大文件里整段转纯文本太慢）；按字符边界截
+    let mut end = (pos + 16 * 1024).min(hi);
+    while !t.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(squash_ws(&plain_text(&t[pos..end])).chars().take(max).collect())
+}
+
+/// 书自带目录（NCX）的条目指错了位置时改指到对的地方（2026-09-28：《占星术杀人魔法》NCX 整体错位，点"第一章"跳进登场人物表；
+/// 《福尔摩斯探案全集》几条指进别的章节正文、一条指在上一个文件末尾）。**只改能核实的**：
+/// - 条目的目标处文字**不是**以条目标题开头（去空白后比），才算指错；
+/// - 书里（通常是目录页）有**标题完全相同**的链接，它指的地方文字以这个标题开头、且这样的地方只有一处 → 改指过去；
+/// - 或者全书只有一个文字完全相同的 `<h1>`–`<h6>` 标题（有 id、或就在文件开头）→ 改指这个标题；
+/// - 或者条目的锚点在文件末尾（后面没有文字）、下一个 spine 文件的开头以这个标题开头 → 改指下一个文件。
+///
+/// 标题与正文写法不同（目录写"Chapter 1"、正文写"一"）核实不了的，一律不动。
+pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
+    let Some(opf) = parse_opf(entries) else { return };
+    let Some(ncx_path) = opf.ncx.clone() else { return };
+    let Some(ncx_text) = entries.iter().find(|e| e.name == ncx_path).and_then(|e| String::from_utf8(e.data.clone()).ok()) else { return };
+    let ncx_dir = dir_of(&ncx_path).to_string();
+    let resolve_href = |base: &str, href: &str| -> (String, String) {
+        let (p, frag) = html::split_href(href);
+        let path = if p.is_empty() { base.to_string() } else { posix_norm(&resolve(dir_of(base), &percent_decode(p))) };
+        (path, html::frag_id(frag.unwrap_or("")).into_owned())
+    };
+    // 书里所有链接：标题 → 目标（同一标题可能有好几个目标，比如每个故事都有"第一章"）
+    let mut links: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for path in &opf.spine {
+        let Some(e) = entries.iter().find(|e| &e.name == path) else { continue };
+        let Ok(t) = std::str::from_utf8(&e.data) else { continue };
+        for g in html::tags(t).filter(|g| g.kind == html::TagKind::Open && g.is("a")) {
+            let Some(href) = html::attr_value(&t[g.start..g.end], "href") else { continue };
+            if href.contains("://") {
+                continue;
+            }
+            let Some(close) = html::find_close(t, g.end, "a") else { continue };
+            let label = squash_ws(&plain_text(&t[g.end..close.start]));
+            if label.is_empty() || label.chars().count() > 60 {
+                continue;
+            }
+            let target = resolve_href(path, href);
+            let v = links.entry(label).or_default();
+            if !v.contains(&target) {
+                v.push(target);
+            }
+        }
+    }
+    // 书里的 `<h1>`–`<h6>` 标题：文字 → 能指到它的位置（有 id 指 id；没 id 但在文件开头指文件；都不行记 None）
+    let mut headings: HashMap<String, Vec<Option<(String, String)>>> = HashMap::new();
+    for path in &opf.spine {
+        let Some(e) = entries.iter().find(|e| &e.name == path) else { continue };
+        let Ok(t) = std::str::from_utf8(&e.data) else { continue };
+        let Some((lo, _)) = html::body_range(t) else { continue };
+        for g in html::tags(t).filter(|g| g.kind == html::TagKind::Open && g.start >= lo && g.heading_level().is_some()) {
+            let Some(close) = html::find_close(t, g.end, g.name) else { continue };
+            let label = squash_ws(&plain_text(&t[g.end..close.start]));
+            if label.is_empty() {
+                continue;
+            }
+            let target = match html::attr_value(&t[g.start..g.end], "id").filter(|id| !id.is_empty()) {
+                Some(id) => Some((path.clone(), id.to_string())),
+                None => (!html::has_visible(&t[lo..g.start])).then(|| (path.clone(), String::new())),
+            };
+            headings.entry(label).or_default().push(target);
+        }
+    }
+    let spine_next = |path: &str| opf.spine.iter().position(|p| p == path).and_then(|i| opf.spine.get(i + 1)).cloned();
+    let starts_with_label = |path: &str, frag: &str, label: &str| text_at(entries, path, frag, label.chars().count()).is_some_and(|t| t == label);
+
+    // 逐条看 NCX，就地改 `<content src>`
+    let mut out = String::with_capacity(ncx_text.len());
+    let (mut last, mut label, mut fixed) = (0usize, String::new(), 0usize);
+    let mut label_start: Option<usize> = None;
+    for g in html::tags(&ncx_text) {
+        if g.is("text") && g.kind == html::TagKind::Open {
+            label_start = Some(g.end);
+        } else if g.is("text") && g.kind == html::TagKind::Close {
+            if let Some(s) = label_start.take() {
+                label = squash_ws(&crate::util::xml_unescape(&ncx_text[s..g.start]));
+            }
+        } else if g.is("content") && g.is_start() && !label.is_empty() {
+            let tag = &ncx_text[g.start..g.end];
+            let Some(a) = html::attr(tag, "src") else { continue };
+            let (path, frag) = resolve_href(&format!("{ncx_dir}/_"), a.value);
+            if starts_with_label(&path, &frag, &label) {
+                continue;
+            }
+            // 标题完全相同、目标处文字以标题开头的链接；核实得上的目标只有一个才用（有好几个就拿不准）
+            let verified: Vec<&(String, String)> = links.get(&label).into_iter().flatten().filter(|(p, f)| starts_with_label(p, f, &label)).collect();
+            let fix = (verified.len() == 1)
+                .then(|| verified[0].clone())
+                .or_else(|| {
+                    // 全书唯一一个文字相同的标题
+                    match headings.get(&label).map(Vec::as_slice) {
+                        Some([Some(t)]) => Some(t.clone()),
+                        _ => None,
+                    }
+                })
+                .or_else(|| {
+                    // 锚点在文件末尾：下一个文件开头是这个标题
+                    let at_end = !frag.is_empty() && text_at(entries, &path, &frag, 1).is_some_and(|t| t.is_empty());
+                    let next = spine_next(&path)?;
+                    (at_end && starts_with_label(&next, "", &label)).then(|| (next, String::new()))
+                });
+            if let Some((p, f)) = fix {
+                let rel = super::paginate::encode_href_path(&crate::epubzip::relative_to(&ncx_dir, &p));
+                let at = g.start + a.value_start;
+                out.push_str(&ncx_text[last..at]);
+                out.push_str(&crate::util::xml_escape(&toc_href(&rel, &f)));
+                last = g.start + a.value_end;
+                fixed += 1;
+            }
+        }
+    }
+    if fixed > 0 {
+        out.push_str(&ncx_text[last..]);
+        if let Some(e) = entries.iter_mut().find(|e| e.name == ncx_path) {
+            e.data = out.into_bytes();
+        }
+        rep.ncx_targets_repaired += fixed;
+    }
+}

@@ -205,18 +205,25 @@ fn h_candidates(spans: &[Span]) -> Vec<(usize, u8)> {
 }
 
 /// 全书没有 `<hN>` 时的退路：目录（NCX）指向的短段落（`<p>`/`<div>`，≤60 字）当标题，目录层级当级别。
+/// 锚点可以在段落自己身上，也可以是段落前面紧挨着的空元素（`<span id="filepos…"></span>`）。
 /// 目录只指到文件、不带锚点（`frag` 为空）时取该文件第一个有文字的段落。
 /// Calibre 转出的中文书常把章名写成 `<p class="block_7">緣起首回…</p>`，只能靠目录认出来。
 fn toc_candidates(html: &str, spans: &[Span], targets: &[TocTarget]) -> Vec<(usize, u8)> {
     let mut out = Vec::new();
     for t in targets {
-        let hit = spans.iter().position(|sp| {
-            if t.frag.is_empty() {
-                leaf_block(html, sp) && has_visible(&html[sp.open_end..sp.close_start])
-            } else {
-                matches!(sp.name.as_str(), "p" | "div") && sp.closed() && html::attr_value(&html[sp.open_start..sp.open_end], "id") == Some(t.frag.as_str())
-            }
-        });
+        let has_id = |sp: &Span| html::attr_value(&html[sp.open_start..sp.open_end], "id") == Some(t.frag.as_str());
+        let hit = if t.frag.is_empty() {
+            spans.iter().position(|sp| leaf_block(html, sp) && has_visible(&html[sp.open_end..sp.close_start]))
+        } else {
+            spans.iter().position(|sp| matches!(sp.name.as_str(), "p" | "div") && sp.closed() && has_id(sp)).or_else(|| {
+                // 锚点是标题段落前面的空元素（MOBI 转来的书：`<span id="filepos…"></span><p><b>第一章</b></p>`）：
+                // 取紧跟着的、中间没有别的可见内容的段落。
+                let a = spans.iter().position(|sp| sp.closed() && has_id(sp) && !has_visible(&html[sp.open_end..sp.close_start]))?;
+                let end = spans[a].close_end;
+                let i = spans.iter().position(|sp| sp.open_start >= end && leaf_block(html, sp) && has_visible(&html[sp.open_end..sp.close_start]))?;
+                (!has_visible(&html[end..spans[i].open_start])).then_some(i)
+            })
+        };
         if let Some(i) = hit {
             let n = plain_text(&html[spans[i].open_end..spans[i].close_start]).chars().count();
             if (1..=60).contains(&n) {
@@ -476,6 +483,9 @@ fn cut_points(html: &str, lo: usize, hi: usize, spans: &[Span], hs: &[Heading], 
     let mut cuts: Vec<usize> = Vec::new();
     let mut title_ends: HashSet<usize> = HashSet::new();
     let mut section_starts: HashSet<usize> = HashSet::new();
+    // 部标题（第X部/卷/篇）的结尾、以及标题的开头：部标题后面紧挨着章标题时，部、章各占一页
+    let mut part_ends: HashSet<usize> = HashSet::new();
+    let mut title_starts: HashSet<usize> = HashSet::new();
     let mut i = 0;
     while i < hs.len() {
         match roles[hs[i].level as usize] {
@@ -490,6 +500,10 @@ fn cut_points(html: &str, lo: usize, hi: usize, spans: &[Span], hs: &[Heading], 
                 cuts.push(gs);
                 cuts.push(ge);
                 title_ends.insert(ge);
+                title_starts.insert(gs);
+                if part_like(&hs[i].text) {
+                    part_ends.insert(ge);
+                }
                 i = j;
             }
             Role::Section => {
@@ -516,8 +530,10 @@ fn cut_points(html: &str, lo: usize, hi: usize, spans: &[Span], hs: &[Heading], 
         let Some(k) = lens.iter().position(|&l| l == 0) else { break };
         remove_cut(&mut cuts, &mut lens, k.saturating_sub(1));
     }
-    // 标题页后面只跟着很短的文字（书名页的作者行）：不另起一页。后面紧接着是节标题时照常分页（节再短也是一节）。
-    while let Some(k) = (0..cuts.len()).find(|&k| title_ends.contains(&cuts[k]) && !section_starts.contains(&cuts[k]) && lens[k + 1] < TITLE_TAIL_MIN_CHARS) {
+    // 标题页后面只跟着很短的文字（书名页的作者行）：不另起一页。后面紧接着是节标题时照常分页（节再短也是一节）；
+    // 部标题后面紧接着章标题时也照常分页——章名再短也是一章（《雪人》`<h3>第二部</h3>` 后面紧跟"10 粉筆"，此前两个挤在一页）。
+    let keep = |c: usize| section_starts.contains(&c) || (part_ends.contains(&c) && title_starts.contains(&c));
+    while let Some(k) = (0..cuts.len()).find(|&k| title_ends.contains(&cuts[k]) && !keep(cuts[k]) && lens[k + 1] < TITLE_TAIL_MIN_CHARS) {
         remove_cut(&mut cuts, &mut lens, k);
     }
     cuts
@@ -659,7 +675,7 @@ fn piece_ids(pieces: &[Piece]) -> HashMap<String, (usize, bool)> {
     ids
 }
 
-fn encode_href_path(p: &str) -> String {
+pub(super) fn encode_href_path(p: &str) -> String {
     let mut out = String::with_capacity(p.len());
     for b in p.bytes() {
         if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
