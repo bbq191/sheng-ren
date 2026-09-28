@@ -24,6 +24,11 @@ height = 1546
 - `[readable.<格式>]` 只能写 `formats` 里有的格式，也不能超过屏幕尺寸。
 - **自定义设备**：放在书库的 `profiles/` 目录（缺省 `~/.local/share/booklib/profiles/<id>.toml`），同 id 覆盖内置设备。`booklib devices` 会列出来。
 
+**同一台设备、不同的阅读软件，可阅读范围不同，就分成两个 profile**：`rmpp-move`（Move 自带的 xochitl，实测 842×1455）和
+`rmpp-move-koreader`（Move 上的 KOReader：漫画方案四边页边距 0、隐藏状态栏，整页漫画铺满 954×1696，按设置推算、还没实测）。
+文字书在两个 profile 下的产物逐字节相同，只有漫画页的补白比例不同。掌阅、Kindle 上的 KOReader 用 `ireader-ocean5-pro` 的产物（两台屏幕都是 1264×1680，
+掌阅的阅读范围本来就是整屏）；`kindle-pw12-sig` 是给 Kindle 自带阅读器的 AZW3。
+
 ## 为什么要"真实可阅读范围"
 
 ![标称屏幕与真实可阅读范围](img/readable-area.svg)

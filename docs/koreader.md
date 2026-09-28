@@ -1,7 +1,7 @@
 # KOReader 配置
 
-两台设备（Kindle Paperwhite 12 签名版、掌阅 Ocean 5 Pro）上都装了 KOReader，用它读 EPUB。它的配置写成仓库里的文件（`koreader/`），
-用 `koreader/apply.sh` 应用到 USB 连着的设备上：可以对比差异、可以重复应用、两台设备保持一致。
+三台设备（Kindle Paperwhite 12 签名版、掌阅 Ocean 5 Pro、reMarkable Paper Pro Move）上都装了 KOReader，用它读 EPUB。它的配置写成仓库里的文件（`koreader/`），
+用 `koreader/apply.sh` 应用到设备上（掌阅、Kindle 经 USB 的 MTP，Move 经 SSH）：可以对比差异、可以重复应用、几台设备保持一致。
 
 ![KOReader 文字书 / 漫画两套方案怎么切换](img/koreader-schemes.svg)
 
@@ -14,12 +14,25 @@
 | `schemes/text.settings.patch.lua` | `settings.reader.lua` | 文字书方案的功能项（见下） |
 | `schemes/comic.settings.patch.lua` | `settings.reader.lua` | 漫画方案的自动切换规则 |
 | `schemes/profiles.patch.lua` | `settings/profiles.lua` | 三个配置档：「漫画·首次」「漫画」「文字」 |
-| `devices/<设备 id>/settings.reader.patch.lua` | `settings.reader.lua` | 随设备不同的：状态栏字体的文件路径 |
-| `devices/<设备 id>/device.conf` | — | 怎么在 MTP 挂载里找到这台设备、怎么判断 KOReader 退没退出 |
+| `devices/<设备 id>/settings.reader.patch.lua` | `settings.reader.lua` | 随设备不同的：状态栏字体的文件路径；Move 还有不分栏、彩色、刷新（见下） |
+| `devices/<设备 id>/device.conf` | — | 怎么连（MTP / SSH）、KOReader 目录在哪、怎么判断 KOReader 退没退出、要有哪些字体 |
 | `presets.lua` | `settings.reader.lua` | 按设备当前的状态栏生成两个状态栏预设 |
 | `merge.lua`、`luaser.lua` | — | 合并器：标量覆盖、表递归合并、值为 `"__DELETE__"` 的删键 |
+| `diff.lua` | — | 原文件与最终结果的净差异：补丁分层覆盖（个人 → 方案 → 设备），中间层改过、后面又改回来的键不算改动 |
 
-设备 id 与书库的设备 profile 相同（`kindle-pw12-sig`、`ireader-ocean5-pro`）。
+设备 id 与书库的设备 profile 相同（`kindle-pw12-sig`、`ireader-ocean5-pro`、`rmpp-move-koreader`）。
+
+**Move 与另两台不同的**（`devices/rmpp-move-koreader/`，用户 2026-09-28 定：个人设置也以掌阅为准，但 Move 屏幕特殊）：
+
+| 设置 | 掌阅 / Kindle | Move | 为什么 |
+|---|---|---|---|
+| `copt_visible_pages` | 2（两栏） | 1（不分栏） | 屏幕窄长（954×1696），两栏每栏太窄 |
+| `color_rendering` | 关 | 开 | 彩屏（Gallery 3），彩色封面、彩页要它 |
+| `full_refresh_count` | 16 | -1（只在章节交界全刷） | 彩屏全刷又慢又闪；这是 Move 上原有的设置 |
+
+Move 上原有的其它调优不动：刷新波形（`wf_level`）、菜单与键盘不闪、翻页点击区四周的握持死区（`defaults.custom.lua`）。
+原来按文件夹（`books/漫画/`、`books/小说/`）切换漫画方案的条件去掉了，统一按「漫画」标签；`settings/directory_defaults.lua` 里给
+`books/漫画/` 的单书设置还在（这里不碰它），放在那个文件夹里的漫画第一次打开时两套都会生效，设的是同样的东西。
 
 **不同步的**（留在各设备自己的配置里）：书目录、最近打开的文件、设备标识、休眠和自动关机（Kindle 专有）、Android 专用的设置
 （音量键、系统字体、`cover_image_*`——它所属的插件在 Kindle 上会被 KOReader 自动停用）、更新源。
@@ -65,21 +78,24 @@ KOReader 把 `dc:subject` 读成书的 keywords，配置档的自动执行按"�
 
 ## 怎么应用
 
-先连上设备（USB，解锁屏幕），**在设备上退出 KOReader**——它退出时会把内存里的设置写回文件，运行中改了会被盖掉。
+先连上设备（掌阅、Kindle：USB，解锁屏幕；Move：同一网络或 USB，地址在 `device.conf`，临时换用 `SSH_HOST=root@… koreader/apply.sh …`），
+**在设备上退出 KOReader**——它退出时会把内存里的设置写回文件，运行中改了会被盖掉。
 
 ```sh
 koreader/apply.sh kindle-pw12-sig              # 只列出会改哪些键（dry run）
 koreader/apply.sh kindle-pw12-sig --write      # 写入
 koreader/apply.sh ireader-ocean5-pro --write --closed   # 掌阅：声明已退出 KOReader（不给 --closed 就在终端里问）
-koreader/check.sh kindle-pw12-sig              # 离线检查：对空目录应用两遍，第二遍必须零改动
+koreader/apply.sh rmpp-move-koreader --write   # Move：经 SSH
+koreader/check.sh kindle-pw12-sig              # 离线检查：对空目录应用两遍，第二遍必须没有净改动
 ```
 
 `--write` 时：
 
 1. 判断 KOReader 退没退出。Kindle 看 `crash.log`：最后一次启动（`It's KOReader!`）之后有没有 `Tearing down UIManager`，没有就拒绝写。
-   Android 上从电脑看不出来，要你确认。
+   Move 看 `/proc` 里有没有进程在跑它的 `reader.lua`。Android 上从电脑看不出来，要你确认。
 2. 设备上的原配置备份到 `~/Documents/ereader/koreader-backup/<时间>/<设备 id>/`。
-3. 有改动的文件先删再拷（MTP 不支持覆盖写），再**经 gio 读回**核对，不一致就用备份还原。
+3. 设备上缺的字体（`device.conf` 的 `FONTS`）从本机 `~/Documents/ereader/koreader-fonts/` 拷过去（`KOREADER_FONTS` 可改目录）。
+4. 有净改动的文件写入（MTP 先删再拷，不支持覆盖写；SSH 先拷成临时文件再改名），再读回核对（MTP **经 gio 读**），不一致就用备份还原。
 
 **回读为什么要经 gio**：gvfs 的 FUSE 路径（`/run/user/<uid>/gvfs/…`）对读过的文件有缓存，用 gio 换掉文件后，经 FUSE 读到的还是旧内容
 （2026-09-28 Kindle 实测：写进去 19524 字节，经 FUSE 读回 11487 字节——旧文件的大小；经 gio 读回正确）。
@@ -87,12 +103,15 @@ koreader/check.sh kindle-pw12-sig              # 离线检查：对空目录应�
 
 ## 字体
 
-配置里只写字体名（正文）或字体文件路径（状态栏），字体文件要自己放进设备的 `koreader/fonts/`：
+配置里只写字体名（正文）或字体文件路径（状态栏）。每台设备要有的字体文件列在 `device.conf` 的 `FONTS`，缺的 `apply.sh` 从本机字体目录拷：
 
-| 字体 | 用在 | 掌阅 | Kindle |
-|---|---|---|---|
-| 霞鹜文楷 `LXGWWenKai-Regular.ttf`（族名 LXGW WenKai） | 正文 | 有 | 2026-09-28 从掌阅拷过去 |
-| 京華老宋体 | 状态栏 | v2.0 `京華老宋体.ttf`（族名 KingHwa_OldSong） | v3.0 `京華老宋体v3.0.ttf`（族名 KingHwaOldSong） |
+| 字体 | 用在 | 掌阅 | Kindle | Move |
+|---|---|---|---|---|
+| 霞鹜文楷（族名 LXGW WenKai） | 正文 | `LXGWWenKai-Regular.ttf` | `LXGWWenKai-Medium.ttf`（用户自己换成了 Medium 字重） | `LXGWWenKai-Regular.ttf` |
+| 京華老宋体 | 状态栏 | v2.0 `京華老宋体.ttf`（族名 KingHwa_OldSong） | v3.0 `京華老宋体v3.0.ttf`（族名 KingHwaOldSong） | v3.0 |
+
+Medium 字重的文楷有两套族名：老式族名（name ID 1）是「LXGW WenKai Medium」，排版族名（ID 16）是「LXGW WenKai」。KOReader 登记它用哪一个
+**还没核实**；如果用的是前者，正文设置的「LXGW WenKai」找不到它，会退回缺省字体——在 Kindle 上打开书看字体是不是文楷就知道。
 
 ## 键名怎么核
 
