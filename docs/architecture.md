@@ -55,7 +55,10 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 | `sources.rs` | 跟踪目录（`track`）与同步（`sync`） |
 | `generate.rs` | 生成计划与指纹、按设备生成、产物记录 |
 | `deliver.rs` | 拷到别处（`--out`，含 MTP 挂载） |
-| `cover.rs` / `covergen.rs` | 联网找封面、生成封面 |
+| `metadata.rs` | `booklib meta`：联网补元数据、调度找封面；生成时往书里补缺的封面、简介、标签 |
+| `douban.rs` / `wikidata.rs` | 书目源：豆瓣（搜索建议 + 条目页）、Wikidata（作品、作者照片） |
+| `net.rs` / `matching.rs` | 节流重试的 HTTP；书名人名比对（全半角、繁简、译名用字） |
+| `cover.rs` / `covergen.rs` | 找原作封面（Open Library / Commons）、生成封面 |
 | `fsutil.rs` | 原子写、流式哈希、进程锁 |
 
 ## 书库
@@ -74,9 +77,13 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 
 `sources.json` 记着跟踪的目录，以及其中每个文件上次看到时的大小、修改时间和对应的书 id。`sync` 遍历跟踪的目录：大小和修改时间都没变的跳过；变了或新出现的走一遍入库（按内容 id 判断是新书、已有的书，还是同一路径上的新版本）；上次有、这次没有的，按 id 判断是移动改名还是真删了。入库失败的也记下来（id 为空），文件没变就不再重试。
 
-### 找封面（`Library::fetch_cover`，`cover.rs`）
+### 元数据与封面（`Library::fetch_metadata`，`metadata.rs`）
 
-豆瓣搜索建议接口（繁简转换后比对书名、核对作者，取大图）→ Wikidata（书名 → 作品，核对作者；或作者 → 作品，核对书名）→ Open Library / Wikimedia Commons 取原作封面 → 都没有就生成（`covergen.rs`：书名 + 作者照片，字体 `fc-match` 找）→ 存成条目里的 `cover.jpg`，来源记进 `meta.json`。网络请求节流（间隔 1.2 秒）、429 按 `Retry-After` 重试。生成时书里没有封面才用（`cover::inject_cover`：OPF 加封面声明、图片条目，其余条目原样拷）；封面哈希进指纹。
+豆瓣搜索建议接口（繁简转换后比对书名、核对作者）→ 条目页取简介、标签、原作名和版本信息（`douban.rs`）；书里没封面的，前几个条目里挑分辨率最高的大图。
+豆瓣没有 → Wikidata（书名 → 作品，核对作者；或作者 → 作品，核对书名；`wikidata.rs`）取原作名、首次出版年，Open Library / Wikimedia Commons 取原作封面 → 封面都没有就生成（`covergen.rs`：书名 + 作者照片，字体 `fc-match` 找）。
+结果存进 `meta.json` 的 `info`、`cover`（封面图是条目里的 `cover.jpg`）。网络请求节流（间隔 1.2 秒）、429 按 `Retry-After` 重试。
+
+生成时 `metadata::with_additions` 把书里**没有的**封面、`dc:description`、`dc:subject` 补进 OPF（其余条目原样拷）；版本信息（出版社、ISBN、译者）不写进书。封面哈希和补进去的简介标签的哈希都进指纹。
 
 ### 生成（`Library::build`）
 

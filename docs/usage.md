@@ -23,12 +23,12 @@ cargo install --path crates/library     # 装到 ~/.cargo/bin/booklib
 
 | 命令 | 作用 |
 |---|---|
-| `booklib add <文件、目录或网址>...` | 入库（目录会递归找出能入库的书） |
-| `booklib track <目录>...` / `untrack` | 跟踪原件目录 / 不再跟踪 |
+| `booklib add <文件或网址>...` | 一次性入库单个文件或网址 |
+| `booklib track <目录>...` / `untrack` | 跟踪书目录（递归）/ 不再跟踪 |
 | `booklib sync [--prune] [--device=…] [--watch]` | 把跟踪的目录镜像进书库，可顺带生成 |
 | `booklib list [书名片段或 id...]` | 列出书，以及给各设备生成的产物是否最新 |
 | `booklib build --device=<设备> [--force] [--out=目录] [书名片段或 id...]` | 按设备生成 |
-| `booklib cover [--force] [--clear] [书名片段或 id...]` | 给没有封面的书联网找原作封面 |
+| `booklib meta [--force] [--clear] [书名片段或 id...]` | 联网补元数据（简介、标签、原作名），没封面的顺带找封面 |
 | `booklib remove <id>...` | 从书库删掉一本书（索引和它的所有产物；原件不动） |
 | `booklib dedupe [目录...]` | 早期版本入库的书改成只存索引 |
 | `booklib devices` | 列出可用设备 |
@@ -39,10 +39,11 @@ cargo install --path crates/library     # 装到 ~/.cargo/bin/booklib
 
 ```sh
 booklib add 三体.epub 某词典.mobi 乱马01.cbz 论文.pdf https://example.com/post
-booklib add ~/Documents/ereader/books/haodoo      # 目录：递归找出能入库的书
 ```
 
-目录里只挑扩展名是 epub / pdf / cbz / mobi / azw / azw3 / prc / fb2 的文件，跳过隐藏文件和其它文件。
+**`add` 和 `track` 的分工**：`add` 是一次性的，只收单个文件或网址，入库后原件再怎么变书库都不管（原件改了生成时会停下提示）；
+整个书目录用 `track` 登记、`sync` 镜像，之后目录里增、删、改、挪都能同步。给 `add` 一个目录会提示改用 `track`。
+两者可以混用：`add` 过的书后来落进了跟踪的目录，`sync` 按内容认得出，不会重复入库。
 
 书库**只存索引**：每本书一个 `meta.json`，记着原件在哪、内容哈希、大小和修改时间、书名作者，不复制原件。生成时读原件：
 
@@ -124,16 +125,29 @@ booklib build --device=kindle-pw12-sig --out="/run/user/1000/gvfs/mtp:host=Amazo
 - `? 未知`：产物文件被删了，或者设备配置已经不在了。
 - 书名下面出现 `✗ 原件不在了` / `⚠ 原件可能改过`：见上文"原件的核对"。
 
-### cover：给没有封面的书找封面
+### meta：联网补元数据和封面
 
 ```sh
-booklib cover                 # 所有没有封面的书
-booklib cover 雪人             # 只找某本
-booklib cover --clear 雪人     # 找错了：去掉
-booklib cover --force 雪人     # 重找
+booklib meta                  # 所有书（找过的跳过）
+booklib meta 白夜行            # 只找某本
+booklib meta --clear 雪人      # 找错了：去掉找来的元数据和封面
+booklib meta --force 雪人      # 重找
 ```
 
-来源按顺序试（参照 Koodo Reader 用的书目源；它是 AGPL-3.0，只借鉴"用哪些源"，代码没有照搬）：
+```text
+✓ 白夜行
+      元数据 ← 豆瓣 https://book.douban.com/subject/10554308/；原作名 白夜行；简介 500 字；标签 悬疑推理、日系推理、…；参考版本 南海出版公司 2013-1-1 刘姿君 译
+      封面 ← 豆瓣 白夜行 [日] 东野圭吾 2013（https://img3.doubanio.com/…）
+```
+
+**元数据**先找豆瓣条目（书名、作者的比对规则同下面的封面），取内容简介、标签、原作名，以及那个条目的出版社、出版年、ISBN、译者；
+豆瓣没有就用 Wikidata 上的原作：原作名、首次出版年。
+
+**写进书里的只有简介（`dc:description`）和标签（`dc:subject`），而且只在书里没有时才补**；书名、作者一律用书自己的，正文不动。
+出版社、ISBN、译者是豆瓣**那个版本**的，不一定是你手上这本（好读的书多是台湾译本，豆瓣条目多是大陆版），所以只记在 `meta.json` 里（`info.edition`）给你参考，不写进书。
+简介来自豆瓣，是简体字；Kindle 在书的"关于本书"里显示它（AZW3 的 EXTH 103）。
+
+**封面**只给书里没有封面的书找。来源按顺序试（参照 Koodo Reader 用的书目源；它是 AGPL-3.0，只借鉴"用哪些源"，代码没有照搬）：
 
 1. **豆瓣**：中文版封面，最贴近你手上的书。按书名搜，书名繁简转换后比对（好读是繁体、豆瓣多是简体），允许只差卷次后缀；作者去掉国籍前缀（"[美]"）后核对。取大图，几个候选里挑分辨率最高的（老条目只有两百多像素宽的小图，太小的不要）。豆瓣没有公开 API，用的是网页的搜索接口，请求很少且节流。
 2. **原作封面**（Wikidata + Open Library）：在 Wikidata 按书名找作品，书名对得上的里面挑作者名最像的；找不到再先找作者、在他的作品里按书名找。好读用 `．` 分隔人名，Wikidata 用 `·` 或 `‧`，比较前都去掉；译名用字不同（歐威爾/奧威爾）按字重合度判断。然后按作品的 Open Library ID、英文名 + 作者、原文名、日文名找封面图，再不行用 Wikimedia Commons 上的作品图片。
@@ -145,8 +159,8 @@ booklib cover --force 雪人     # 重找
 
 生成封面要系统里有中文字体（缺省用思源宋体繁体 Noto Serif CJK TC，`fc-match` 找）；换字体用环境变量 `BOOKLIB_COVER_FONT=字体文件[:序号]`。
 
-- 找到的封面存在书库条目里（`masters/<id>/cover.jpg`），`meta.json` 记着匹配到哪个作品、从哪下载的，输出里也会列出来，方便核对。
-- **原件不动**。生成产物时，书里没有封面才把它放进去（只在 OPF 里声明封面图，不加封面页，正文不变）。封面变了，产物判为过期，下次 `build` 重建。
+- 找到的封面存在书库条目里（`masters/<id>/cover.jpg`），`meta.json` 记着匹配到哪个条目或作品、从哪下载的，输出里也会列出来，方便核对。
+- **原件不动**。生成产物时，书里没有封面才把它放进去（只在 OPF 里声明封面图，不加封面页，正文不变）。封面、简介、标签变了，产物判为过期，下次 `build` 重建。
 - 所有请求间隔 1.2 秒（Wikidata 限速严，被限速时按它给的时间等），只需要每本书跑一次。
 - 找不到原作封面的常见原因：书名是这个译本独有的；出版社自编的选集（《歐亨利短篇小說選》）没有对应的原作；原作在 Open Library 上也没有封面图。这些会生成封面。
 
