@@ -1,7 +1,7 @@
 # pdf-extract 0.12.1 (MIT, Jeff Muizelaar <jmuizelaar@mozilla.com>) 的本地 fork——见 src/lib.rs 头注释
 # 为什么 fork：上游 OutputDev::output_character 不传颜色、Do 算子对图片 XObject 错误地当 Form 递归、
 # 颜色算子 g/G/rg/RG/k/K 六个完全不处理（只 dlog）——字体/glyph 解码（真正难、易错的部分）原样保留，
-# 只在 Processor::process_stream 里扩展这几处。详见 shelf/docs/EPUB优化规范白皮书.md §05。
+# 只在 Processor::process_stream 里扩展这几处。修改内容见 src/lib.rs 头注释。
 [package]
 name = "pdf-extract"
 version = "0.12.1"
