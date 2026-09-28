@@ -64,7 +64,7 @@ pub fn build_article_epub(url: &str) -> Result<(Vec<u8>, String), String> {
         resources,
         nav: Vec::new(),
     };
-    let epub = common::assemble_master(&mut book)?;
+    let epub = crate::epub::assemble_master(&mut book)?;
     Ok((epub, title))
 }
 

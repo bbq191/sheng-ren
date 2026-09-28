@@ -37,19 +37,30 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
     Ok(bytes)
 }
 
-/// CBZ 字节 → 按设备的 PDF，一图一页。`screen` = 设备 PDF 的阅读范围。每页走和 EPUB 漫画 → PDF 同一条单趟处理
-/// （`imgopt::prepare_comic_page_for_pdf`：解码一次 → 裁白边 → 按 PDF 里的整数绘制尺寸缩放一次 → 编码一次），
-/// 什么都不用做的页原字节直接嵌；逐页读、逐页写，不把全书图片攒在内存里。
-/// 扩展名是图片但内容认不出的条目跳过并警告（不让一页坏图拖垮整本）。
+/// CBZ 字节 → 按设备的 PDF，一图一页（整份 PDF 在内存里；`cbz2pdf` 用 [`cbz_file_to_pdf`] 边读边写）。
 pub fn cbz_to_pdf(data: &[u8], screen: crate::imgopt::Screen, grayscale: bool) -> Result<Vec<u8>, String> {
-    let mut zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
+    let zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
+    zip_to_pdf(zip, Vec::new(), screen, grayscale)
+}
+
+/// CBZ 文件 → PDF 写进 `out`（从磁盘逐页读、逐页写，内存里只有当前这一页）。
+pub fn cbz_file_to_pdf<W: std::io::Write>(cbz: &std::path::Path, out: W, screen: crate::imgopt::Screen, grayscale: bool) -> Result<W, String> {
+    let file = std::fs::File::open(cbz).map_err(|e| format!("读 {}: {e}", cbz.display()))?;
+    let zip = ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("CBZ 打开: {e}"))?;
+    zip_to_pdf(zip, out, screen, grayscale)
+}
+
+/// `screen` = 设备 PDF 的阅读范围。每页单趟处理（`imgopt::prepare_comic_page_for_pdf`：解码一次 → 裁白边 →
+/// 按 PDF 里的整数绘制尺寸缩放一次 → 编码一次），什么都不用做的页原字节直接嵌；逐页读、逐页写，不把全书图片攒在内存里。
+/// 扩展名是图片但内容不是 JPEG/PNG 的条目跳过并警告（不让一页坏图拖垮整本）。
+fn zip_to_pdf<R: Read + std::io::Seek, W: std::io::Write>(mut zip: ZipArchive<R>, out: W, screen: crate::imgopt::Screen, grayscale: bool) -> Result<W, String> {
     let names = page_names(&mut zip);
-    // 先认出真正的图片页（只读开头几个字节看魔数），页数定了才能开写。
+    // 先认出真正的图片页（只读开头几个字节看魔数），页数定了才能开写。PDF 里只能嵌 JPEG/PNG。
     let mut pages = Vec::with_capacity(names.len());
     for name in names {
         let mut magic = Vec::with_capacity(8);
         zip.by_name(&name).map_err(|e| e.to_string())?.take(8).read_to_end(&mut magic).map_err(|e| format!("{name}: {e}"))?;
-        if super::common::image_ext_mime(&magic).is_some() {
+        if matches!(super::common::image_ext_mime(&magic), Some(("jpg" | "png", _))) {
             pages.push(name);
         } else {
             eprintln!("警告：{name} 不是可识别的图片，跳过");
@@ -58,7 +69,7 @@ pub fn cbz_to_pdf(data: &[u8], screen: crate::imgopt::Screen, grayscale: bool) -
     if pages.is_empty() {
         return Err("CBZ 内无图片（jpg/jpeg/png）".into());
     }
-    let mut writer = PdfPieceWriter::begin(pages.len(), false, screen);
+    let mut writer = PdfPieceWriter::begin_to(out, pages.len(), false, screen)?;
     for name in &pages {
         let raw = read_entry(&mut zip, name)?;
         let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height, grayscale).unwrap_or(raw);
@@ -98,7 +109,7 @@ pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
         resources,
         nav: Vec::new(),
     };
-    super::common::assemble_master(&mut book)
+    crate::epub::assemble_master(&mut book)
 }
 
 /// 自然排序：连续数字段按数值比较（去前导零后先比位数再逐位），其余按字节。

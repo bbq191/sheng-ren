@@ -99,7 +99,7 @@ pub fn is_image_ext(name: &str) -> bool {
 }
 
 /// 图片路径的扩展名（小写、不带点）：取**文件名**最后一个 `.` 之后；文件名没有扩展名时当 `jpg`（EPUB 里绝大多数图是
-/// JPEG）。占位封面与漫画分卷重新落名图片共用——此前两处直接 `rsplit('.')`，无扩展名的路径会把整段路径连同 `/`
+/// JPEG）。读封面、占位封面、优化器给图片重新落名共用——此前各处直接 `rsplit('.')`，无扩展名的路径会把整段路径连同 `/`
 /// 当扩展名，写出 `cover.images/x`、`images/0001.oebps/images/x` 这种条目名。
 pub(crate) fn image_ext_of(path: &str) -> String {
     let base = path.rsplit('/').next().unwrap_or(path);
