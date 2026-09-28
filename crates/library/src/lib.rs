@@ -10,6 +10,7 @@
 //! sources.json                             跟踪的原件目录（track），以及其中每个文件上次看到时的大小、修改时间、id
 //! profiles/*.toml                          可选：自定义设备 profile，同 id 覆盖内置
 //! .lock                                    进程锁
+//! .tmp-*（各处）                           临时文件、临时目录；进程被杀时留下的，下次拿到锁时清掉
 //! ```
 //! `<id>` 是原件内容 SHA-256 的前 12 位十六进制：同一本书重复入库会认出来，改名移动了也认得出。
 //!
@@ -29,8 +30,10 @@ mod net;
 mod sources;
 mod wikidata;
 
-use fsutil::{sha256_file, sha256_hex, write_atomic};
+use fsutil::{sha256_file, sha256_hex, JsonCache};
 use serde::{Deserialize, Serialize};
+use std::cell::{Cell, OnceCell, RefCell};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use cover::{CoverInfo, CoverResult};
@@ -39,9 +42,9 @@ pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
-pub use sources::{book_files, SyncEvent, SyncReport, SUPPORTED_EXTS};
+pub use sources::{book_files, SyncEvent, SyncMemo, SyncReport, SUPPORTED_EXTS};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Meta {
     pub id: String,
     pub title: String,
@@ -86,6 +89,11 @@ impl Meta {
         if self.master.is_empty() { Source::Original } else { Source::Stored }
     }
 
+    /// 内容的格式（小写扩展名）：存着的母版看母版文件名，否则是原件格式。
+    pub fn content_format(&self) -> &str {
+        if self.master.is_empty() { &self.source_format } else { self.master.rsplit_once('.').map_or("", |(_, e)| e) }
+    }
+
     /// 判断产物是否过期用的内容哈希。
     fn content_sha(&self) -> &str {
         if self.master.is_empty() { &self.source_sha256 } else { &self.master_sha256 }
@@ -102,7 +110,7 @@ pub enum Source {
 }
 
 /// 原件现在的状态（`list` 用，只看文件在不在，不读内容）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OriginalState {
     Present,
     Missing,
@@ -125,12 +133,31 @@ pub struct DedupeReport {
 pub struct Library {
     root: PathBuf,
     registry: Registry,
+    /// 本进程现在持有书库的锁（[`Library::lock`]）。不持锁时（`list`）不往书库写补算的字段。
+    locked: Cell<bool>,
+    /// 残留临时文件清理过了（每个进程第一次拿到锁时清一次）。
+    cleaned: Cell<bool>,
+    /// 各设备产物目录的 `.state.json`、`deliveries.json`：一次 build/list 里每本书都要查，读一次缓存起来。
+    states: JsonCache<generate::State>,
+    deliveries_json: JsonCache<deliver::Deliveries>,
+    /// 本进程里核对过哈希的原件：id → (路径, 大小与修改时间)。多台设备生成同一本书时不重算哈希。
+    verified: RefCell<HashMap<String, Verified>>,
+    /// 联网查书目用的 HTTP（节流、离线状态跨书共用）。
+    net: OnceCell<net::Net>,
 }
+
+/// 核对过的原件：路径，和核对时的大小、修改时间。
+type Verified = (String, (u64, u64));
 
 pub enum Added {
     New(Meta),
     Existing(Meta),
 }
+
+/// 路径不是 UTF-8 时的提示：书库的索引是 JSON，存不下这种路径。
+pub(crate) const NOT_UTF8: &str = "文件名不是 UTF-8，请改名";
+/// 入库时文件还在被写（读的前后大小或修改时间变了）。`sync` 认这个前缀：不记下来，下一轮再试。
+pub(crate) const BUSY: &str = "文件正在写入";
 
 fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -152,10 +179,10 @@ struct EpubInfo {
 }
 
 impl EpubInfo {
-    fn read(epub: &[u8]) -> Result<EpubInfo, String> {
+    fn read<R: std::io::Read + std::io::Seek>(epub: R) -> Result<EpubInfo, String> {
         let mut info = EpubInfo { title: String::new(), authors: Vec::new(), drm: None };
         let bad = |e: String| format!("不是有效的 EPUB（{e}）");
-        let mut zip = bookconv::zip::ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| bad(e.to_string()))?;
+        let mut zip = bookconv::zip::ZipArchive::new(epub).map_err(|e| bad(e.to_string()))?;
         let sk = bookconv::epubzip::read_skeleton(&mut zip).map_err(bad)?;
         let entries = &sk.entries;
         if entries.iter().any(|e| e.name == "META-INF/rights.xml") {
@@ -210,7 +237,16 @@ impl Library {
         std::fs::create_dir_all(root.join("masters")).map_err(|e| format!("{}: {e}", root.display()))?;
         let custom = root.join("profiles");
         let registry = if custom.is_dir() { Registry::with_dir(&custom)? } else { Registry::builtin().clone() };
-        Ok(Library { root, registry })
+        Ok(Library {
+            root,
+            registry,
+            locked: Cell::new(false),
+            cleaned: Cell::new(false),
+            states: JsonCache::new(),
+            deliveries_json: JsonCache::new(),
+            verified: RefCell::new(HashMap::new()),
+            net: OnceCell::new(),
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -222,9 +258,39 @@ impl Library {
         &self.registry
     }
 
-    /// 加进程锁。会改动书库的操作（add/build/remove/sync/dedupe）之前调用，持有到操作结束。
-    pub fn lock(&self) -> Result<Lock, String> {
-        fsutil::lock(&self.root)
+    /// 加进程锁。会改动书库的操作（add/build/remove/sync/dedupe/meta）之前调用，持有到操作结束。
+    /// 本进程第一次拿到锁时，顺带清理进程被杀时留下的临时文件和目录（`.tmp-*`）。
+    pub fn lock(&self) -> Result<Lock<'_>, String> {
+        let l = fsutil::lock(&self.root, &self.locked)?;
+        if !self.cleaned.replace(true) {
+            self.clean_leftovers();
+        }
+        Ok(l)
+    }
+
+    /// 书库里会放临时文件、临时目录的地方：书库根、`masters/` 和各条目、`output/<设备>/`。
+    fn clean_leftovers(&self) {
+        fsutil::clean_tmp(&self.root);
+        let masters = self.root.join("masters");
+        fsutil::clean_tmp(&masters);
+        for id in self.entry_ids() {
+            fsutil::clean_tmp(&masters.join(id));
+        }
+        for dev in std::fs::read_dir(self.root.join("output")).into_iter().flatten().flatten() {
+            if dev.file_type().is_ok_and(|t| t.is_dir()) {
+                fsutil::clean_tmp(&dev.path());
+            }
+        }
+    }
+
+    /// 联网用的 HTTP 客户端（第一次用时建，之后各本书共用：节流间隔、离线状态都延续）。
+    pub(crate) fn net(&self) -> &net::Net {
+        self.net.get_or_init(net::Net::new)
+    }
+
+    /// 联网时看起来整个断网了（接连两个网站连不上，见 `Net::offline`）。`booklib meta` 看到它就中止整轮。
+    pub fn offline(&self) -> bool {
+        self.net.get().is_some_and(net::Net::offline)
     }
 
     pub(crate) fn entry_dir(&self, id: &str) -> PathBuf {
@@ -232,14 +298,15 @@ impl Library {
     }
 
     pub(crate) fn read_meta(&self, id: &str) -> Option<Meta> {
-        serde_json::from_slice(&std::fs::read(self.entry_dir(id).join("meta.json")).ok()?).ok()
+        fsutil::read_json(&self.entry_dir(id).join("meta.json"))
     }
 
     pub(crate) fn save_meta(&self, meta: &Meta) -> Result<(), String> {
-        write_atomic(&self.entry_dir(&meta.id).join("meta.json"), serde_json::to_string_pretty(meta).unwrap().as_bytes())
+        fsutil::write_json(&self.entry_dir(&meta.id).join("meta.json"), meta)
     }
 
-    /// 读一个条目；早期条目缺的字段（母版哈希、PDF 类型）补算并写回，之后不用再算。
+    /// 读一个条目；早期条目缺的字段（母版哈希、PDF 类型）补算，持锁时写回（之后不用再算）。
+    /// 不持锁（`list`）时只在内存里补，不写书库。
     fn load(&self, id: &str) -> Option<Meta> {
         let mut m = self.read_meta(id)?;
         let mut changed = false;
@@ -250,15 +317,14 @@ impl Library {
                 changed = true;
             }
         }
-        let is_pdf = if m.master.is_empty() { m.source_format == "pdf" } else { m.master.ends_with(".pdf") };
-        if is_pdf && m.pdf_text_layer.is_none() {
+        if m.content_format() == "pdf" && m.pdf_text_layer.is_none() {
             let p = if m.master.is_empty() { PathBuf::from(&m.source_path) } else { stored };
             if p.exists() {
                 m.pdf_text_layer = Some(is_pdf_text_layer(&p));
                 changed = true;
             }
         }
-        if changed {
+        if changed && self.locked.get() {
             let _ = self.save_meta(&m); // 写不回也不影响这次使用，下次再补
         }
         Some(m)
@@ -267,14 +333,15 @@ impl Library {
     /// 新建条目：`masters/.tmp-<id>/` 里准备好再改名，半路失败不留残缺条目。`files` 是要存的母版（只有网址入库有）。
     fn store(&self, meta: &Meta, files: &[(&str, &[u8])]) -> Result<(), String> {
         let dir = self.entry_dir(&meta.id);
-        let tmp = self.root.join("masters").join(format!(".tmp-{}", meta.id));
+        let tmp = self.root.join("masters").join(format!("{}{}", fsutil::TMP_PREFIX, meta.id));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
         let result = (|| {
             for (name, data) in files {
                 std::fs::write(tmp.join(name), data).map_err(|e| format!("写 {name}: {e}"))?;
             }
-            std::fs::write(tmp.join("meta.json"), serde_json::to_string_pretty(meta).unwrap()).map_err(|e| format!("写 meta.json: {e}"))?;
+            let json = serde_json::to_string_pretty(meta).map_err(|e| format!("写 meta.json: {e}"))?;
+            std::fs::write(tmp.join("meta.json"), json).map_err(|e| format!("写 meta.json: {e}"))?;
             // 同 id 的目录还在但 meta 读不出来（写坏了）：内容由 id 决定，用这次的新条目替换
             if dir.exists() {
                 std::fs::remove_dir_all(&dir).map_err(|e| format!("替换损坏条目 {}: {e}", dir.display()))?;
@@ -287,22 +354,38 @@ impl Library {
         result
     }
 
-    /// 入库一个文件：只记索引，不复制原件。已在库里时，如果记着的原件位置已经不在了，改成这个位置（移动过）。
+    /// 入库一个文件：只记索引，不复制原件。已在库里时：记着的原件位置已经不在了，改成这个位置（移动过）；
+    /// 就是这个位置的，刷新记着的大小和修改时间。
+    ///
+    /// 边读边算哈希（不整本读进内存）。读之前和读完各看一次大小和修改时间，变了说明文件正在写入，报错不入库。
     pub fn add_file(&self, path: &Path) -> Result<Added, String> {
         let path = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let data = std::fs::read(&path).map_err(|e| format!("读 {}: {e}", path.display()))?;
-        let (size, mtime_ns) = file_stat(&path).unwrap_or((data.len() as u64, 0));
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "book".into());
-        let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "book".into());
-        let sha = sha256_hex(&data);
+        let Some(path_str) = path.to_str().map(str::to_string) else { return Err(NOT_UTF8.into()) };
+        let stat = || file_stat(&path).ok_or_else(|| format!("读 {path_str}: 文件不见了"));
+        let before = stat()?;
+        let unchanged = || -> Result<(), String> {
+            if stat()? == before { Ok(()) } else { Err(format!("{BUSY}（读的过程中大小或修改时间变了），等写完再试")) }
+        };
+        let sha = sha256_file(&path)?;
+        unchanged()?;
+        let (size, mtime_ns) = before;
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("book").to_string();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("book").to_string();
         let id = sha[..12].to_string();
         if let Some(mut m) = self.load(&id) {
-            if m.master.is_empty() && m.source_path != path.display().to_string() && !Path::new(&m.source_path).exists() {
-                m.source_path = path.display().to_string();
-                m.source = name;
-                (m.source_size, m.source_mtime_ns) = (size, mtime_ns);
-                self.save_meta(&m)?;
+            if m.master.is_empty() {
+                if m.source_path == path_str {
+                    if m.source_sha256 == sha && (m.source_size, m.source_mtime_ns) != before {
+                        (m.source_size, m.source_mtime_ns) = before;
+                        self.save_meta(&m)?;
+                    }
+                } else if !Path::new(&m.source_path).exists() {
+                    m.source_path = path_str;
+                    m.source = name;
+                    (m.source_size, m.source_mtime_ns) = before;
+                    self.save_meta(&m)?;
+                }
             }
             return Ok(Added::Existing(m));
         }
@@ -311,14 +394,19 @@ impl Library {
         let (title, authors, pdf_text_layer) = match ext.as_str() {
             "pdf" => (String::new(), Vec::new(), Some(is_pdf_text_layer(&path))),
             _ => {
-                let converted = if ext == "epub" { None } else { Some(convert_to_epub(&ext, &name, &data, &fallback_title)?) };
-                let info = EpubInfo::read(converted.as_deref().unwrap_or(&data))?;
+                let info = if ext == "epub" {
+                    EpubInfo::read(std::fs::File::open(&path).map_err(|e| format!("读 {path_str}: {e}"))?)?
+                } else {
+                    let data = std::fs::read(&path).map_err(|e| format!("读 {path_str}: {e}"))?;
+                    EpubInfo::read(std::io::Cursor::new(convert_to_epub(&ext, &name, &data, &fallback_title)?))?
+                };
                 if let Some(d) = info.drm {
                     return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
                 }
                 (info.title, info.authors, None)
             }
         };
+        unchanged()?;
         let meta = Meta {
             id,
             title: if title.is_empty() { fallback_title } else { title },
@@ -326,15 +414,12 @@ impl Library {
             source: name,
             source_format: ext,
             added: now(),
-            source_path: path.display().to_string(),
+            source_path: path_str,
             source_sha256: sha,
             source_size: size,
             source_mtime_ns: mtime_ns,
-            master: String::new(),
-            master_sha256: String::new(),
             pdf_text_layer,
-            cover: None,
-            info: None,
+            ..Default::default()
         };
         self.store(&meta, &[])?;
         Ok(Added::New(meta))
@@ -350,19 +435,12 @@ impl Library {
         let meta = Meta {
             id,
             title,
-            authors: Vec::new(),
             source: url.to_string(),
             source_format: "url".into(),
             added: now(),
-            source_path: String::new(),
-            source_sha256: String::new(),
-            source_size: 0,
-            source_mtime_ns: 0,
             master: "master.epub".into(),
             master_sha256: sha256_hex(&epub),
-            pdf_text_layer: None,
-            cover: None,
-            info: None,
+            ..Default::default()
         };
         self.store(&meta, &[("master.epub", &epub), ("source.url", url.as_bytes())])?;
         Ok(Added::New(meta))
@@ -412,26 +490,39 @@ impl Library {
         }
     }
 
-    /// 核对原件还是入库时那本书，返回它的路径。大小和修改时间没变就不读；变了重算哈希，内容一样就更新记录。
+    /// 核对原件还是入库时那本书，返回它的路径。大小和修改时间没变就不读；变了重算哈希，内容一样就更新记录
+    /// （本进程里也记住，同一本书给下一台设备生成时不再重算）。
     pub(crate) fn verified_original(&self, m: &Meta) -> Result<PathBuf, String> {
         let path = PathBuf::from(&m.source_path);
         let st = file_stat(&path).ok_or_else(|| format!("原件不在了：{}（移动过的话 booklib sync 或重新 add 新位置；不要了就 remove）", path.display()))?;
-        if st == (m.source_size, m.source_mtime_ns) {
+        if st == (m.source_size, m.source_mtime_ns) || self.verified.borrow().get(&m.id).is_some_and(|(p, s)| *p == m.source_path && *s == st) {
             return Ok(path);
         }
         if sha256_file(&path)? != m.source_sha256 {
             return Err(format!("原件改过了：{}（内容和入库时不同。booklib sync 或重新 add 入库新版本）", path.display()));
         }
-        let mut m = m.clone();
-        (m.source_size, m.source_mtime_ns) = st;
-        let _ = self.save_meta(&m);
+        self.verified.borrow_mut().insert(m.id.clone(), (m.source_path.clone(), st));
+        // 从书库重读再改：调用方手里的 `m` 可能是旧的（比如之后 meta 找来了封面）
+        let mut cur = self.read_meta(&m.id).unwrap_or_else(|| m.clone());
+        if cur.source_path == m.source_path {
+            (cur.source_size, cur.source_mtime_ns) = st;
+            let _ = self.save_meta(&cur);
+        }
         Ok(path)
+    }
+
+    /// 生成时读的内容：书库里存着的母版，或核对过的原件。
+    pub(crate) fn content_path(&self, m: &Meta) -> Result<PathBuf, String> {
+        match m.source() {
+            Source::Stored => Ok(self.entry_dir(&m.id).join(&m.master)),
+            Source::Original => self.verified_original(m),
+        }
     }
 
     /// 迁移早期版本入库的条目（书库里存着母版副本、`source.*`）：找到原件就改成只存索引，删掉副本。
     ///
     /// 原件先看 `meta.json` 记着的路径，再在 `dirs` 里（递归）找内容相同的文件（SHA-256 前 12 位等于 id）。
-    /// 找不到原件的保留副本（不然这本书就没了）。网址入库的书没有原件，不动。
+    /// 找不到原件的保留副本（不然这本书就没了）。网址入库的书没有原件，不动。路径不是 UTF-8 的文件不算。
     pub fn dedupe(&self, dirs: &[PathBuf]) -> Result<DedupeReport, String> {
         let mut rep = DedupeReport::default();
         let legacy: Vec<Meta> = self.list().into_iter().filter(|m| !m.master.is_empty() && m.source_format != "url").collect();
@@ -443,7 +534,7 @@ impl Library {
         for d in dirs {
             candidates.extend(book_files(d));
         }
-        let mut hashed: std::collections::HashMap<PathBuf, String> = std::collections::HashMap::new();
+        let mut hashed: HashMap<PathBuf, String> = HashMap::new();
         let mut hash_of = |p: &Path| -> Option<String> {
             if let Some(h) = hashed.get(p) {
                 return Some(h.clone());
@@ -459,14 +550,17 @@ impl Library {
                 tries.push(PathBuf::from(&m.source_path));
             }
             tries.extend(candidates.iter().filter(|p| p.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(&m.source_format))).cloned());
-            let found = tries.into_iter().filter(|p| p.is_file()).find_map(|p| hash_of(&p).filter(|h| h.starts_with(&m.id)).map(|h| (p, h)));
-            let Some((path, sha)) = found else {
+            let found = tries.into_iter().filter(|p| p.is_file()).find_map(|p| {
+                let p = std::fs::canonicalize(&p).unwrap_or(p);
+                let s = p.to_str()?.to_string();
+                hash_of(&p).filter(|h| h.starts_with(&m.id)).map(|h| (p, s, h))
+            });
+            let Some((path, path_str, sha)) = found else {
                 rep.kept.push(m);
                 continue;
             };
-            let path = std::fs::canonicalize(&path).unwrap_or(path);
             let (size, mtime_ns) = file_stat(&path).unwrap_or_default();
-            m.source_path = path.display().to_string();
+            m.source_path = path_str;
             m.source_sha256 = sha;
             (m.source_size, m.source_mtime_ns) = (size, mtime_ns);
             m.master.clear();
@@ -495,6 +589,7 @@ impl Library {
         self.remove_outputs(id)?;
         self.remove_deliveries(id)?;
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+        self.verified.borrow_mut().remove(id);
         Ok(title)
     }
 }
