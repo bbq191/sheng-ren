@@ -141,6 +141,10 @@
 
         let (comic_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
         let (text_out, _) = optimize_epub(&text_buf, crate::imgopt::test_screen()).unwrap();
+        // 漫画的 OPF 打上漫画标签（阅读器按它套漫画设置），文字书不打
+        let comic_opf = String::from_utf8(entry_bytes(&comic_out, "content.opf")).unwrap();
+        assert!(comic_opf.contains("<dc:subject>漫画</dc:subject>"), "{comic_opf}");
+        assert!(!String::from_utf8(entry_bytes(&text_out, "content.opf")).unwrap().contains("<dc:subject>"));
         let mut comic_img = Vec::new();
         ZipArchive::new(Cursor::new(&comic_out)).unwrap().by_name("p1.jpg").unwrap().read_to_end(&mut comic_img).unwrap();
         let mut text_img = Vec::new();

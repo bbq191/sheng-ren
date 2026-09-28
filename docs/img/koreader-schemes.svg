@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 520" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>KOReader 文字书 / 漫画两套方案怎么切换</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f7bd6"/></marker>
+    <style>
+      .m{font-family:'JetBrains Mono','Noto Sans Mono CJK SC',monospace;font-size:12px}
+      .s{font-size:12px;fill:#555}
+      .h{font-weight:bold;font-size:14px}
+      .l{stroke:#3f7bd6;stroke-width:1.4;fill:none}
+      .box{fill:#fff;stroke:#bbb}
+      .txt{fill:#eef4ff;stroke:#3f7bd6}
+      .cmc{fill:#fff4e8;stroke:#d9822b}
+    </style>
+  </defs>
+  <rect width="940" height="520" fill="#fafafa"/>
+
+  <!-- 电脑端 -->
+  <text x="24" y="30" class="h">电脑上</text>
+  <rect x="20" y="40" width="250" height="110" rx="8" class="box"/>
+  <text x="36" y="64">优化器（bookconv）识别出漫画</text>
+  <text x="36" y="86" class="s">OPF 里加一行：</text>
+  <text x="36" y="106" class="m">&lt;dc:subject&gt;漫画&lt;/dc:subject&gt;</text>
+  <text x="36" y="132" class="s">文字书不加</text>
+
+  <rect x="20" y="170" width="250" height="150" rx="8" class="box"/>
+  <text x="36" y="194">koreader/apply.sh &lt;设备&gt;</text>
+  <text x="36" y="216" class="s">按顺序合并进设备上的配置：</text>
+  <text x="44" y="238" class="m">personal/   个人设置（掌阅为准）</text>
+  <text x="44" y="258" class="m">schemes/    文字、漫画方案</text>
+  <text x="44" y="278" class="m">devices/id/ 路径、字体</text>
+  <text x="44" y="298" class="m">presets.lua 两个状态栏预设</text>
+
+  <!-- 设备端 -->
+  <text x="310" y="30" class="h">设备上的 KOReader：打开一本书</text>
+  <rect x="310" y="40" width="250" height="60" rx="8" class="box"/>
+  <text x="326" y="64">书的 keywords（= dc:subject）</text>
+  <text x="326" y="86">里有"漫画"吗？</text>
+  <path d="M270 95 L310 75" class="l" marker-end="url(#a)" stroke-dasharray="5 4"/>
+  <path d="M270 245 C 290 245, 290 110, 310 90" class="l" marker-end="url(#a)" stroke-dasharray="5 4"/>
+
+  <!-- 文字书 -->
+  <path d="M400 100 L400 150" class="l" marker-end="url(#a)"/>
+  <text x="408" y="130" class="s">没有</text>
+  <rect x="310" y="152" width="250" height="150" rx="8" class="txt"/>
+  <text x="326" y="176" class="h">文字书 = 全局设置</text>
+  <text x="326" y="198" class="s">个人排版（字体、字号、行距、页边距）</text>
+  <text x="326" y="218" class="s">脚注弹窗、放大链接点击区</text>
+  <text x="326" y="238" class="s">书没标语言时按中文断行</text>
+  <text x="326" y="258" class="s">文字页每 16 页全刷</text>
+  <text x="326" y="278" class="s">状态栏：页码进度、剩余页数、剩余时间</text>
+
+  <!-- 漫画 -->
+  <path d="M560 70 L610 70" class="l" marker-end="url(#a)"/>
+  <text x="566" y="62" class="s">有</text>
+  <rect x="612" y="40" width="308" height="130" rx="8" class="cmc"/>
+  <text x="628" y="64" class="h">配置档「漫画·首次」</text>
+  <text x="780" y="64" class="s">只在第一次打开时</text>
+  <text x="628" y="88" class="s">从右往左翻页（日漫）</text>
+  <text x="628" y="108" class="s">四边页边距 0，画面铺满</text>
+  <text x="628" y="128" class="s">关顶部标题栏、图片用「最佳」缩放</text>
+  <text x="628" y="152" class="s">写进这本书自己的设置，之后改了会记住</text>
+
+  <rect x="612" y="186" width="308" height="70" rx="8" class="cmc"/>
+  <text x="628" y="210" class="h">配置档「漫画」</text>
+  <text x="780" y="210" class="s">每次打开</text>
+  <text x="628" y="234" class="s">载入状态栏预设「漫画」：隐藏状态栏</text>
+  <path d="M766 170 L766 184" class="l" marker-end="url(#a)"/>
+
+  <rect x="612" y="290" width="308" height="70" rx="8" class="txt"/>
+  <text x="628" y="314" class="h">配置档「文字」</text>
+  <text x="780" y="314" class="s">关闭漫画时</text>
+  <text x="628" y="338" class="s">载入状态栏预设「文字」：恢复状态栏</text>
+  <path d="M766 256 L766 288" class="l" marker-end="url(#a)"/>
+  <text x="774" y="278" class="s">读完关书</text>
+
+  <!-- 说明 -->
+  <rect x="20" y="390" width="900" height="112" rx="8" class="box"/>
+  <text x="36" y="414" class="h">要点</text>
+  <text x="36" y="438" class="s">· 按元数据认漫画，书放在设备上哪个目录都行；没经过优化器的漫画没有标签，不会触发。</text>
+  <text x="36" y="460" class="s">· 已经打开过的书各自存了单书设置，「漫画·首次」不再执行：在书的菜单里「重置设置」后重开。</text>
+  <text x="36" y="482" class="s">· 状态栏预设由 apply.sh 按设备当前的状态栏生成（字体路径随设备）；改了状态栏再跑一次 apply.sh。</text>
+</svg>
