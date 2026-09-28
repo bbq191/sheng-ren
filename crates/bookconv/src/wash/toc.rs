@@ -384,6 +384,8 @@ pub(super) struct SectionRef {
 /// 章节分页后把书自带目录里**漏掉的节**补进去（用户 2026-09-27：节要缩进出现在目录里）。`sections` 按阅读顺序。
 /// 书自带的条目原样保留、顺序不动；缺的节插在阅读顺序上它之前的最后一条后面，
 /// 层级 = 往前找到的第一条"章"（非节条目）的下一级，前一条本身就是节时同级。没有 NCX 的书不动（自动目录已含全部标题）。
+/// 书自带目录里**已有**的节条目（和章平排的，如《13級階梯》`第一章　出獄　　１`、`　　２`、`　　３`）缩进到所属章下面、
+/// 标签去掉首尾空白；章条目标签末尾跟着第一节的节号（`第一章　出獄　　１`）时去掉节号——节号另成一条。
 /// 返回补了几条。每条目录/节的阅读位置（spine 序号, 文件内偏移）只算一次（此前每插一节都把全部条目重算一遍，
 /// 章节多的书是平方级）。
 pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[SectionRef], heading: &str) -> usize {
@@ -414,11 +416,14 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
         (sp, map.get(frag).copied().unwrap_or(0))
     };
     let sec_ids: HashSet<(&str, &str)> = sections.iter().map(|s| (s.path.as_str(), s.id.as_str())).collect();
-    let sec_paths: HashSet<&str> = sections.iter().map(|s| s.path.as_str()).collect();
+    // 只指到文件的条目算节，要求节标题就在那个文件开头（文件开头是章标题、节在后面时，这条目录是章）
+    let sec_paths: HashSet<&str> = sections.iter().filter(|s| section_starts_file(entries, &s.path, &s.id)).map(|s| s.path.as_str()).collect();
     struct Item {
         toc: TocItem,
         is_sec: bool,
         key: (usize, usize),
+        /// 这次补进去的（不是书自带目录里的）。
+        inserted: bool,
     }
     let mut items: Vec<Item> = flat
         .into_iter()
@@ -429,7 +434,7 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
             let id = html::frag_id(f).into_owned();
             let is_sec = if id.is_empty() { sec_paths.contains(path.as_str()) } else { sec_ids.contains(&(path.as_str(), id.as_str())) };
             let key = key_of(&path, &id);
-            Item { toc: TocItem::new(depth.max(1) as u8, label, path, f), is_sec, key }
+            Item { toc: TocItem::new(depth.max(1) as u8, label, path, f), is_sec, key, inserted: false }
         })
         .collect();
     // 已在目录里的节：(路径, id) 或"指向该份文件本身"。
@@ -446,14 +451,56 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
             Some(prev) => prev.toc.level + 1,
             None => 1,
         };
-        items.insert(at, Item { toc: TocItem::new(depth, s.label.clone(), s.path.clone(), s.id.clone()), is_sec: true, key });
+        items.insert(at, Item { toc: TocItem::new(depth, s.label.clone(), s.path.clone(), s.id.clone()), is_sec: true, key, inserted: true });
         present.insert((s.path.clone(), s.id.clone()));
         added += 1;
     }
-    if added == 0 {
+    // 书自带的节条目缩进到所属章下面、标签去掉首尾空白；章标签末尾重复第一节的节号的去掉。
+    let mut changed = added > 0;
+    let mut chapter: Option<usize> = None;
+    for i in 0..items.len() {
+        if !items[i].is_sec {
+            chapter = Some(i);
+            continue;
+        }
+        let Some(c) = chapter else { continue };
+        let want = items[c].toc.level + 1;
+        if items[i].toc.level < want {
+            items[i].toc.level = want.min(6);
+            changed = true;
+        }
+        let trimmed = items[i].toc.title.trim().to_string();
+        if trimmed != items[i].toc.title {
+            items[i].toc.title = trimmed;
+            changed = true;
+        }
+        // 只在书自带目录本来就列着后面的节（紧接着是书自带的第 n+1 节）时去掉：章标签末尾的数字才确定是第一节的节号，
+        // 不是章自己的编号（《鼠疫》"部　一"后面的节都是补的，"一"是部的编号，不动）。
+        let n = super::paginate::section_number(&items[i].toc.title);
+        let next_listed = n.is_some_and(|n| {
+            items.get(i + 1).is_some_and(|x| x.is_sec && !x.inserted && super::paginate::section_number(&x.toc.title) == Some(n + 1))
+        });
+        if i == c + 1 && items[i].inserted && next_listed {
+            let label = items[i].toc.title.clone();
+            let t = items[c].toc.title.trim_end();
+            if let Some(head) = t.strip_suffix(label.as_str()).filter(|h| h.ends_with(char::is_whitespace) && !h.trim().is_empty()) {
+                items[c].toc.title = head.trim_end().to_string();
+                changed = true;
+            }
+        }
+    }
+    if !changed {
         return 0;
     }
     let toc: Vec<TocItem> = items.into_iter().map(|it| it.toc).collect();
     rewrite_toc_files(entries, &opf, &ncx_path, &toc, heading);
     added
+}
+
+/// 节标题（`id`）是不是在文件 `path` 的正文最前面（前面没有可见内容）。
+fn section_starts_file(entries: &[Entry], path: &str, id: &str) -> bool {
+    let Some(e) = entries.iter().find(|e| e.name == path) else { return false };
+    let t = String::from_utf8_lossy(&e.data);
+    let Some((lo, _)) = html::body_range(&t) else { return false };
+    html::anchors(&t).into_iter().find(|(a, _)| *a == id).is_some_and(|(_, p)| p >= lo && !html::has_visible(&t[lo..p]))
 }

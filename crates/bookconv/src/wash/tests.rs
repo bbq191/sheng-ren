@@ -1075,6 +1075,76 @@
         }
     }
 
+    /// 书自带的 NCX（平的）：[(标签, 文件)]。
+    fn flat_ncx_book(files: &[(&str, &str)], toc: &[(&str, &str)]) -> Vec<Entry> {
+        let mut v = paged_book(files);
+        let points: String = toc.iter().map(|(l, f)| format!("<navPoint><navLabel><text>{l}</text></navLabel><content src=\"Text/{f}\"/></navPoint>")).collect();
+        v.push(e("OEBPS/toc.ncx", &format!("<ncx><navMap>{points}</navMap></ncx>")));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        v
+    }
+
+    /// 《13級階梯》：节标题 `<h3>２</h3>` 跟章标题同级、单独成文件，第 1 节是章标题后面单独一段 `１`，
+    /// 书自带目录是平的（`第一章　出獄　　１`、`　　２`）。降成节：挂到章下面、跟正文同页，章标签去掉末尾的节号。
+    #[test]
+    fn numbered_headings_at_chapter_level_become_sections() {
+        let t = HAODOO_TEXT;
+        let (c1, c1b, c1c) = (format!("<div><h3>第一章　出獄</h3><p>１</p><p>{t}</p></div>"), format!("<div><h3>２</h3><p>{t}</p></div>"), format!("<div><h3>３</h3><p>{t}</p></div>"));
+        let (c2, c2b) = (format!("<div><h3>第二章　事件</h3><p>１</p><p>{t}</p></div>"), format!("<div><h3>２</h3><p>{t}</p></div>"));
+        let mut v = flat_ncx_book(
+            &[("c1.xhtml", &c1), ("c1b.xhtml", &c1b), ("c1c.xhtml", &c1c), ("c2.xhtml", &c2), ("c2b.xhtml", &c2b)],
+            &[("第一章　出獄　　１", "c1.xhtml"), ("　　２", "c1b.xhtml"), ("　　３", "c1c.xhtml"), ("第二章　事件　　１", "c2.xhtml"), ("　　２", "c2b.xhtml")],
+        );
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.toc_sections_added, 2, "只补两章的第 1 节，其余书自带");
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let got: Vec<(usize, &str, &str)> = flat.iter().map(|(d, l, t)| (*d, l.as_str(), t.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                (1, "第一章　出獄", "Text/c1.xhtml"),
+                (2, "１", "Text/c1-p2.xhtml#eink-sec-1"),
+                (2, "２", "Text/c1b.xhtml"),
+                (2, "３", "Text/c1c.xhtml"),
+                (1, "第二章　事件", "Text/c2.xhtml"),
+                (2, "１", "Text/c2-p2.xhtml#eink-sec-4"),
+                (2, "２", "Text/c2b.xhtml"),
+            ]
+        );
+        assert!(!body_of(&v, "OEBPS/Text/c1.xhtml").contains("鐵路"), "章标题独立一页");
+        let sec2 = body_of(&v, "OEBPS/Text/c1b.xhtml");
+        assert!(sec2.contains("２") && sec2.contains("鐵路"), "节标题跟正文同页，不单独占一页：{sec2}");
+        assert!(!v.iter().any(|x| x.name == "OEBPS/Text/c1b-p2.xhtml"));
+        let rep2 = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!((rep2.sections_paginated, rep2.toc_sections_added), (0, 0), "幂等");
+    }
+
+    /// 反例：全书只有一串同级数字标题（《月亮和六便士》`<h3>二</h3>`… 是章），不降成节。
+    #[test]
+    fn single_run_of_numbered_headings_stays_chapters() {
+        let t = HAODOO_TEXT;
+        let (c1, c2, c3) = (format!("<div><h3>《月亮和六便士》毛姆</h3><p>一</p><p>{t}</p></div>"), format!("<div><h3>二</h3><p>{t}</p></div>"), format!("<div><h3>三</h3><p>{t}</p></div>"));
+        let mut v = flat_ncx_book(&[("1.xhtml", &c1), ("2.xhtml", &c2), ("3.xhtml", &c3)], &[("一", "1.xhtml"), ("二", "2.xhtml"), ("三", "3.xhtml")]);
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        assert!(flat.iter().all(|(d, _, _)| *d == 1), "{flat:?}");
+        assert!(!body_of(&v, "OEBPS/Text/2.xhtml").contains("鐵路"), "二 仍是章：标题独立一页");
+    }
+
+    /// 章标签末尾的数字是章自己的编号（《鼠疫》"部　一"，节都是新补的）：不去掉。
+    #[test]
+    fn part_number_in_label_is_kept() {
+        let t = HAODOO_TEXT;
+        let (c1, c2) = (format!("<div><h3>部　一</h3><p>一</p><p>{t}</p><p>二</p><p>{t}</p></div>"), format!("<div><h3>部　二</h3><p>一</p><p>{t}</p><p>二</p><p>{t}</p></div>"));
+        let mut v = flat_ncx_book(&[("1.xhtml", &c1), ("2.xhtml", &c2)], &[("部　一", "1.xhtml"), ("部　二", "2.xhtml")]);
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.toc_sections_added, 4);
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
+        assert_eq!(labels, [(1, "部　一"), (2, "一"), (2, "二"), (1, "部　二"), (2, "一"), (2, "二")]);
+    }
+
     #[test]
     fn section_number_values() {
         use super::paginate::section_number;

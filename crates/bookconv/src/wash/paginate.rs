@@ -339,6 +339,72 @@ fn numbered_sections(f: &FileInfo) -> Vec<usize> {
     if enough { seq } else { Vec::new() }
 }
 
+/// 全书里的一个元素：(文件下标, 元素下标)。
+type ElemRef = (usize, usize);
+
+/// `pos` 之后第一个有文字的段落（元素下标），中间不能有别的可见内容。
+fn first_block_after(f: &FileInfo, pos: usize) -> Option<usize> {
+    let i = f.spans.iter().position(|sp| sp.open_start >= pos && leaf_block(&f.html, sp) && has_visible(&f.html[sp.open_end..sp.close_start]))?;
+    (!has_visible(&f.html[pos..f.spans[i].open_start])).then_some(i)
+}
+
+/// 和章标题同级、只写节号的标题（《13級階梯》：`<h3>第一章 出獄</h3>` 的文件里第 1 节是单独一段 `１`，后面的文件是
+/// `<h3>２</h3>`、`<h3>３</h3>`）：紧跟在一个非数字标题后面、同级、从 1 严格连续编号的标题（或者从 2 开始、而章标题后面
+/// 第一段就是 `１`），每节都有正文，一章至少 2 节；**全书至少两章**这样才认——全书只有一串的
+/// （《月亮和六便士》`<h3>二</h3>`…`<h3>五十八</h3>` 是章）不算。返回 (要降成节的标题, 补认成节标题的 `１` 段落)，
+/// 都是 (文件下标, 元素下标)。
+fn numbered_heading_runs(files: &[FileInfo]) -> (Vec<ElemRef>, Vec<ElemRef>) {
+    let seq: Vec<(usize, usize)> = files.iter().enumerate().flat_map(|(fi, f)| (0..f.heads.len()).map(move |hi| (fi, hi))).collect();
+    let head = |(fi, hi): (usize, usize)| &files[fi].heads[hi];
+    // 标题到本文件下一个标题（或正文末尾）之间的字数
+    let body_after = |(fi, hi): (usize, usize), from: usize| {
+        let f = &files[fi];
+        let end = f.heads.get(hi + 1).map_or(f.hi, |n| n.start);
+        text_len(&f.html[from.min(end)..end])
+    };
+    let (mut heads, mut paras) = (Vec::new(), Vec::new());
+    let mut runs = 0;
+    let mut i = 0;
+    while i < seq.len() {
+        let ch = head(seq[i]);
+        if section_number(&ch.text).is_some() {
+            i += 1;
+            continue;
+        }
+        // 第 1 节的 `１`：章标题后面第一段；章标题所在文件后面已经没有内容（分页过的书，`１` 已切到下一份开头）时，
+        // 看紧接着的下一个没有标题的文件的开头。
+        let (cfi, _) = seq[i];
+        let at = if has_visible(&files[cfi].html[ch.end..files[cfi].hi]) {
+            Some((cfi, ch.end))
+        } else {
+            files.get(cfi + 1).filter(|n| n.heads.is_empty()).map(|n| (cfi + 1, n.lo))
+        };
+        let para1 = at.and_then(|(pfi, pos)| {
+            let f = &files[pfi];
+            let e = first_block_after(f, pos)?;
+            let after = if pfi == cfi { body_after(seq[i], f.spans[e].close_end) } else { text_len(&f.html[f.spans[e].close_end..f.hi]) };
+            (section_number(&plain_text(&f.html[f.spans[e].open_end..f.spans[e].close_start])) == Some(1) && after >= NUMBERED_SECTION_MIN_CHARS).then_some((pfi, e))
+        });
+        let mut expect = if para1.is_some() { 2 } else { 1 };
+        let mut j = i + 1;
+        while j < seq.len() {
+            let h = head(seq[j]);
+            if h.level != ch.level || section_number(&h.text) != Some(expect) || body_after(seq[j], h.end) < NUMBERED_SECTION_MIN_CHARS {
+                break;
+            }
+            expect += 1;
+            j += 1;
+        }
+        if expect > 2 {
+            runs += 1;
+            paras.extend(para1);
+            heads.extend(seq[i + 1..j].iter().map(|&(fi, hi)| (fi, files[fi].heads[hi].span)));
+        }
+        i = j;
+    }
+    if runs >= 2 { (heads, paras) } else { (Vec::new(), Vec::new()) }
+}
+
 fn collect_headings(html: &str, spans: &[Span], candidates: &[(usize, u8)]) -> Vec<Heading> {
     let mut out: Vec<Heading> = Vec::new();
     for &(i, level) in candidates {
@@ -746,10 +812,35 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
             }
         }
     }
+    // 和章同级、只写节号的标题（《13級階梯》）降成节：级别取没用过的更深一级，章标题后面单独一段的 `１` 也算节标题。
+    let mut demoted: HashSet<ElemRef> = HashSet::new();
+    let mut demoted_level = None;
+    let deepest = files.iter().flat_map(|f| f.heads.iter()).map(|h| h.level).max().unwrap_or(0);
+    if deepest < 6 {
+        let (heads, paras) = numbered_heading_runs(&files);
+        if !heads.is_empty() {
+            let level = deepest + 1;
+            for (fi, f) in files.iter_mut().enumerate() {
+                for h in f.heads.iter_mut().filter(|h| heads.contains(&(fi, h.span))) {
+                    h.level = level;
+                }
+                let extra: Vec<(usize, u8)> = paras.iter().filter(|p| p.0 == fi).map(|p| (p.1, level)).collect();
+                if !extra.is_empty() {
+                    f.add_headings(&extra);
+                }
+            }
+            demoted.extend(heads);
+            demoted.extend(paras);
+            demoted_level = Some(level);
+        }
+    }
     let mut roles = {
         let all: Vec<&Heading> = files.iter().flat_map(|f| f.heads.iter()).collect();
         classify(&all)
     };
+    if let Some(l) = demoted_level {
+        roles[l as usize] = Role::Section;
+    }
     if !roles.contains(&Role::Title) {
         return;
     }
@@ -805,7 +896,8 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
             .heads
             .iter()
             .enumerate()
-            .filter(|&(hi, h)| roles[h.level as usize] == Role::Section && first_title.is_some_and(|t| t < hi))
+            // 降成节的数字标题单独成文件，前面没有章标题，但书自带目录列着它们（跟在章后面）
+            .filter(|&(hi, h)| roles[h.level as usize] == Role::Section && (first_title.is_some_and(|t| t < hi) || demoted.contains(&(fi, h.span))))
             .map(|(hi, _)| hi)
             .collect();
         if secs.is_empty() {
