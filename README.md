@@ -45,6 +45,7 @@ booklib list                                  # 看每本书给哪些设备生�
 | [排版与优化规则](docs/typesetting.md) | 文字书、漫画各做了什么，为什么这样做 |
 | [设备与可阅读范围](docs/devices.md) | 设备配置、怎么在真机上量可阅读范围、加新设备 |
 | [架构](docs/architecture.md) | 各 crate 的职责、数据怎么流动、书库怎么存 |
+| [KOReader 配置](docs/koreader.md) | 两台设备上 KOReader 的个人设置、文字书与漫画两套方案、怎么应用 |
 | [AZW3 写出器](docs/azw3.md) | Kindle 格式是怎么写出来的 |
 | [开发](docs/development.md) | 测试、真书回归检查、工程约束 |
 

@@ -206,6 +206,10 @@ rmpp-move            reMarkable Paper Pro Move  屏幕 954×1696  epub/pdf
 
 Kindle 重建后的 AZW3 仍被认作同一本书（唯一 ID 取自书的 id），覆盖旧文件即可。
 
+**用 KOReader 读**（两台设备上都装了）：拷 `output/ireader-ocean5-pro/*.epub`——两台屏幕都是 1264×1680，KOReader 读的是 EPUB。
+Kindle 上的书目录是 `koreader/resources/books/`，掌阅是 `koreader/books/`。漫画会被 KOReader 自动套上漫画设置（从右往左、铺满整屏），
+设备上的 KOReader 配置见 [KOReader 配置](koreader.md)。
+
 ## 空间占用
 
 - **书库几乎不占空间**：只有每本书一个 `meta.json`（几 KB），网址入库的书另存一份 EPUB。书的内容只在你的原件目录里有一份。
