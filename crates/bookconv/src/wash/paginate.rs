@@ -65,6 +65,103 @@ fn section_like(t: &str) -> bool {
 }
 
 /// 一个标题（位置已扩到只包着它的元素）。
+/// 一个待分页的 spine 文件。
+struct FileInfo {
+    idx: usize,
+    path: String,
+    html: String,
+    /// `<body>` 内容的范围。
+    lo: usize,
+    hi: usize,
+    spans: Vec<Span>,
+    heads: Vec<Heading>,
+}
+
+impl FileInfo {
+    /// 在现有标题之外再认几个元素为标题（按文档序重排后重算）。
+    fn add_headings(&mut self, extra: &[(usize, u8)]) {
+        let mut c: Vec<(usize, u8)> = self.heads.iter().map(|h| (h.span, h.level)).chain(extra.iter().copied()).collect();
+        sort_candidates(&mut c, &self.spans);
+        self.heads = collect_headings(&self.html, &self.spans, &c);
+    }
+
+    /// 给这些元素（下标）取 id：已有的用原来的，没有的补 `{prefix}-N`（N 从 `counter` 往上数、文件里没出现过）。
+    /// `id=""` 的给 `None`（不补也不改，拿不准）。补了就重新解析；插入属性不改变元素结构，元素下标和标题都按原样对回。
+    fn ensure_ids(&mut self, elems: &[usize], prefix: &str, counter: &mut usize) -> Vec<Option<String>> {
+        let mut inserts: Vec<(usize, String)> = Vec::new();
+        let ids = elems
+            .iter()
+            .map(|&i| {
+                let sp = &self.spans[i];
+                match html::attr(&self.html[sp.open_start..sp.open_end], "id") {
+                    Some(a) if a.value.is_empty() => None,
+                    Some(a) => Some(a.value.to_string()),
+                    None => Some(loop {
+                        *counter += 1;
+                        let id = format!("{prefix}-{counter}");
+                        if !self.html.contains(id.as_str()) {
+                            inserts.push((sp.open_start + 1 + sp.name.len(), format!(" id=\"{id}\"")));
+                            break id;
+                        }
+                    }),
+                }
+            })
+            .collect();
+        if !inserts.is_empty() {
+            inserts.sort_unstable_by_key(|x| x.0);
+            for (pos, attr) in inserts.into_iter().rev() {
+                self.html.insert_str(pos, &attr);
+            }
+            let (lo, hi) = html::body_range(&self.html).expect("插入 id 不影响 body 边界");
+            self.lo = lo;
+            self.hi = hi;
+            self.spans = parse_spans(&self.html, lo, hi);
+            let cands: Vec<(usize, u8)> = self.heads.iter().map(|h| (h.span, h.level)).collect();
+            self.heads = collect_headings(&self.html, &self.spans, &cands);
+        }
+        ids
+    }
+}
+
+/// NCX 里只指到文件（没有锚点）、标签是给定文字的条目，改指到 `文件#id`。`targets` = [(文件 zip 路径, 标签, id)]。
+fn retarget_ncx_to_ids(entries: &mut [Entry], opf: &Opf, targets: &[(String, String, String)]) {
+    let Some(ncx) = opf.ncx.clone() else { return };
+    let Some(e) = entries.iter_mut().find(|e| e.name == ncx) else { return };
+    let text = String::from_utf8_lossy(&e.data).into_owned();
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut last = 0;
+    let mut label = String::new();
+    let mut label_start: Option<usize> = None;
+    for t in html::tags(&text) {
+        if t.is("text") && t.kind == html::TagKind::Open {
+            label_start = Some(t.end);
+        } else if t.is("text") && t.kind == html::TagKind::Close {
+            if let Some(s) = label_start.take() {
+                label = squash(&crate::util::xml_unescape(&text[s..t.start]));
+            }
+        } else if t.is("content") && t.is_start() {
+            let tag = &text[t.start..t.end];
+            let Some(a) = html::attr(tag, "src") else { continue };
+            let (p, frag) = html::split_href(a.value);
+            if frag.is_some() {
+                continue;
+            }
+            let path = posix_norm(&resolve(dir_of(&ncx), &percent_decode(p)));
+            if let Some((_, _, id)) = targets.iter().find(|(f, l, _)| *f == path && squash(l) == label) {
+                let at = t.start + a.value_end;
+                out.push_str(&text[last..at]);
+                out.push('#');
+                out.push_str(&crate::util::xml_escape(id));
+                last = at;
+            }
+        }
+    }
+    if last > 0 {
+        out.push_str(&text[last..]);
+        e.data = out.into_bytes();
+    }
+}
+
 struct Heading {
     level: u8,
     text: String,
@@ -110,41 +207,136 @@ fn h_candidates(spans: &[Span]) -> Vec<(usize, u8)> {
 /// 全书没有 `<hN>` 时的退路：目录（NCX）指向的短段落（`<p>`/`<div>`，≤60 字）当标题，目录层级当级别。
 /// 目录只指到文件、不带锚点（`frag` 为空）时取该文件第一个有文字的段落。
 /// Calibre 转出的中文书常把章名写成 `<p class="block_7">緣起首回…</p>`，只能靠目录认出来。
-fn toc_candidates(html: &str, spans: &[Span], frags: &[(String, u8)]) -> Vec<(usize, u8)> {
+fn toc_candidates(html: &str, spans: &[Span], targets: &[TocTarget]) -> Vec<(usize, u8)> {
     let mut out = Vec::new();
-    for (frag, depth) in frags {
+    for t in targets {
         let hit = spans.iter().position(|sp| {
-            let block = matches!(sp.name.as_str(), "p" | "div") && sp.closed();
-            if frag.is_empty() {
-                block && !html[sp.open_end..sp.close_start].contains("<p") && !html[sp.open_end..sp.close_start].contains("<div") && has_visible(&html[sp.open_end..sp.close_start])
+            if t.frag.is_empty() {
+                leaf_block(html, sp) && has_visible(&html[sp.open_end..sp.close_start])
             } else {
-                block && html::attr_value(&html[sp.open_start..sp.open_end], "id") == Some(frag.as_str())
+                matches!(sp.name.as_str(), "p" | "div") && sp.closed() && html::attr_value(&html[sp.open_start..sp.open_end], "id") == Some(t.frag.as_str())
             }
         });
         if let Some(i) = hit {
             let n = plain_text(&html[spans[i].open_end..spans[i].close_start]).chars().count();
             if (1..=60).contains(&n) {
-                out.push((i, (*depth).clamp(1, 6)));
+                out.push((i, t.depth.clamp(1, 6)));
             }
         }
     }
-    out.sort_by_key(|&(i, _)| spans[i].open_start);
-    out.dedup_by_key(|x| x.0);
+    sort_candidates(&mut out, spans);
     out
 }
 
-/// NCX 目录：zip 路径 → [(锚点（已解码）, 深度)]。
-fn toc_targets(entries: &[Entry], opf: &Opf) -> HashMap<String, Vec<(String, u8)>> {
-    let mut map: HashMap<String, Vec<(String, u8)>> = HashMap::new();
+fn sort_candidates(c: &mut Vec<(usize, u8)>, spans: &[Span]) {
+    c.sort_by_key(|&(i, _)| spans[i].open_start);
+    c.dedup_by_key(|x| x.0);
+}
+
+/// 不含嵌套块的 `<p>`/`<div>`（一个"段落"）。
+fn leaf_block(html: &str, sp: &Span) -> bool {
+    matches!(sp.name.as_str(), "p" | "div") && sp.closed() && {
+        let inner = &html[sp.open_end..sp.close_start];
+        !inner.contains("<p") && !inner.contains("<div")
+    }
+}
+
+/// NCX 里指向某个文件的一条目录。
+struct TocTarget {
+    /// 锚点（已解码；只指到文件时为空）。
+    frag: String,
+    depth: u8,
+    label: String,
+}
+
+/// NCX 目录：zip 路径 → 指向它的目录条目。
+fn toc_targets(entries: &[Entry], opf: &Opf) -> HashMap<String, Vec<TocTarget>> {
+    let mut map: HashMap<String, Vec<TocTarget>> = HashMap::new();
     let Some(ncx) = opf.ncx.as_ref() else { return map };
     let Some(e) = entries.iter().find(|e| &e.name == ncx) else { return map };
     let text = String::from_utf8_lossy(&e.data);
-    for (depth, _, target) in crate::ncx::parse_ncx_flat(&text) {
+    for (depth, label, target) in crate::ncx::parse_ncx_flat(&text) {
         let (p, frag) = html::split_href(&target);
         let path = posix_norm(&resolve(dir_of(ncx), &percent_decode(p)));
-        map.entry(path).or_default().push((html::frag_id(frag.unwrap_or("")).into_owned(), depth.min(6) as u8));
+        map.entry(path).or_default().push(TocTarget { frag: html::frag_id(frag.unwrap_or("")).into_owned(), depth: depth.min(6) as u8, label });
     }
     map
+}
+
+/// 比较标题文字用：去掉所有空白（含全角空格）。
+fn squash(t: &str) -> String {
+    t.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 章名写成普通段落的书（好读：第一个正文文件的 `<h3>` 是书名，"第一章"只是一行字）：目录只指到文件、标签跟文件里某个
+/// 短段落的文字一样、而该文件的 `<hN>` 里没有这个文字时，把这个段落当作跟"目录认得出的其它章标题"同一级的标题候选。
+/// 级别取目录标签对得上的 `<hN>` 里最常见的那一级；一个都对不上就不补（拿不准）。返回 (文件下标, 候选)。
+fn toc_label_paragraphs(files: &[FileInfo], targets: &HashMap<String, Vec<TocTarget>>) -> Vec<(usize, (usize, u8))> {
+    let labels: HashSet<String> = targets.values().flatten().map(|t| squash(&t.label)).filter(|l| !l.is_empty()).collect();
+    let mut count = [0usize; 7];
+    for h in files.iter().flat_map(|f| f.heads.iter()).filter(|h| labels.contains(&squash(&h.text))) {
+        count[h.level as usize] += 1;
+    }
+    let Some(level) = (1..=6u8).filter(|&l| count[l as usize] > 0).max_by_key(|&l| (count[l as usize], std::cmp::Reverse(l))) else { return Vec::new() };
+    let mut out = Vec::new();
+    for (fi, f) in files.iter().enumerate() {
+        for t in targets.get(&f.path).into_iter().flatten().filter(|t| t.frag.is_empty()) {
+            let label = squash(&t.label);
+            if label.is_empty() || label.chars().count() > 60 || f.heads.iter().any(|h| squash(&h.text) == label) {
+                continue;
+            }
+            let hit = f.spans.iter().position(|sp| sp.open_start >= f.lo && leaf_block(&f.html, sp) && squash(&plain_text(&f.html[sp.open_end..sp.close_start])) == label);
+            if let Some(i) = hit {
+                out.push((fi, (i, level)));
+            }
+        }
+    }
+    out
+}
+
+/// 独占一段的节号的值：1–3 位阿拉伯/全角数字，或一…九十九的中文数字。
+pub(super) fn section_number(t: &str) -> Option<u32> {
+    let t = squash(t);
+    let cs: Vec<char> = t.chars().collect();
+    if cs.is_empty() || cs.len() > 3 {
+        return None;
+    }
+    let arabic = |c: char| c.to_digit(10).or_else(|| ('０'..='９').contains(&c).then(|| c as u32 - '０' as u32));
+    if cs.iter().all(|&c| arabic(c).is_some()) {
+        return cs.iter().try_fold(0u32, |acc, &c| Some(acc * 10 + arabic(c)?));
+    }
+    let digit = |c: char| "一二三四五六七八九".chars().position(|x| x == c).map(|i| i as u32 + 1);
+    match cs[..] {
+        ['十'] => Some(10),
+        [a] => digit(a),
+        ['十', b] => Some(10 + digit(b)?),
+        [a, '十'] => Some(digit(a)? * 10).filter(|&v| v >= 20),
+        [a, '十', b] => Some(digit(a)? * 10 + digit(b)?).filter(|&v| v >= 20),
+        _ => None,
+    }
+}
+
+/// 节号段落之间（以及最后一个之后）至少要有这么多字，才像"一节正文"（排除目录样的一串数字）。
+const NUMBERED_SECTION_MIN_CHARS: usize = 50;
+
+/// 节标题只是独占一段的数字（好读：`　　１`、`　　一`）：文件里第一个标题之后、从 1 开始严格连续、至少 2 个、每节都有正文
+/// 的这种段落（元素下标）。楼层号（不从 1 开始）、目录样的数字列表（中间没有正文）、中途断号的都不算。
+fn numbered_sections(f: &FileInfo) -> Vec<usize> {
+    let Some(after) = f.heads.first().map(|h| h.end) else { return Vec::new() };
+    let mut seq: Vec<usize> = Vec::new();
+    for (i, sp) in f.spans.iter().enumerate().filter(|(_, sp)| sp.open_start >= after && leaf_block(&f.html, sp)) {
+        let Some(v) = section_number(&plain_text(&f.html[sp.open_end..sp.close_start])) else { continue };
+        if v as usize != seq.len() + 1 {
+            return Vec::new();
+        }
+        seq.push(i);
+    }
+    if seq.len() < 2 {
+        return Vec::new();
+    }
+    let ends = seq.iter().skip(1).map(|&i| f.spans[i].open_start).chain(std::iter::once(f.hi));
+    let enough = seq.iter().zip(ends).all(|(&i, e)| text_len(&f.html[f.spans[i].close_end..e]) >= NUMBERED_SECTION_MIN_CHARS);
+    if enough { seq } else { Vec::new() }
 }
 
 fn collect_headings(html: &str, spans: &[Span], candidates: &[(usize, u8)]) -> Vec<Heading> {
@@ -521,15 +713,6 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
     }
     let Some(opf) = parse_opf(entries) else { return };
     // 1. 收集 spine 各文件的标题（目录页、导航文件不算）。
-    struct FileInfo {
-        idx: usize,
-        path: String,
-        html: String,
-        lo: usize,
-        hi: usize,
-        spans: Vec<Span>,
-        heads: Vec<Heading>,
-    }
     let mut files: Vec<FileInfo> = Vec::new();
     for path in &opf.spine {
         if Some(path) == opf.nav_doc.as_ref() || is_toc_file(path) {
@@ -546,66 +729,95 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
         files.push(FileInfo { idx, path: path.clone(), html: html.to_string(), lo, hi, spans, heads });
     }
     // 只信书自带的目录：本次清洗自动生成的目录（`toc_generated > 0`）是按文件/页数凑的，不代表章节结构。
-    if rep.toc_generated == 0 && files.iter().all(|f| f.heads.is_empty()) {
+    let mut label_paragraphs: HashSet<(usize, usize)> = HashSet::new(); // (文件下标, 元素下标)
+    if rep.toc_generated == 0 {
         let targets = toc_targets(entries, &opf);
-        for f in files.iter_mut() {
-            if let Some(frags) = targets.get(&f.path) {
-                f.heads = collect_headings(&f.html, &f.spans, &toc_candidates(&f.html, &f.spans, frags));
+        if files.iter().all(|f| f.heads.is_empty()) {
+            for f in files.iter_mut() {
+                if let Some(t) = targets.get(&f.path) {
+                    f.heads = collect_headings(&f.html, &f.spans, &toc_candidates(&f.html, &f.spans, t));
+                }
+            }
+        } else {
+            // 章名是普通段落、但目录里有它（好读的"第一章"）
+            for (fi, c) in toc_label_paragraphs(&files, &targets) {
+                files[fi].add_headings(&[c]);
+                label_paragraphs.insert((fi, c.0));
             }
         }
     }
-    let roles = {
+    let mut roles = {
         let all: Vec<&Heading> = files.iter().flat_map(|f| f.heads.iter()).collect();
         classify(&all)
     };
     if !roles.contains(&Role::Title) {
         return;
     }
+    // 全书没有节一级的标题时，认独占一段的节号（好读：`１`、`２`…）当节标题，级别取没用过的更深一级。
+    let deepest = files.iter().flat_map(|f| f.heads.iter()).map(|h| h.level).max().unwrap_or(0);
+    if !roles.contains(&Role::Section) && deepest < 6 {
+        let level = deepest + 1;
+        let mut found = false;
+        for f in files.iter_mut() {
+            let secs: Vec<(usize, u8)> = numbered_sections(f).into_iter().map(|i| (i, level)).collect();
+            if !secs.is_empty() {
+                f.add_headings(&secs);
+                found = true;
+            }
+        }
+        if found {
+            roles[level as usize] = Role::Section;
+        }
+    }
     // 节标题要进目录：没有 id 的补一个（插入后该文件重新解析，偏移变了）。记下 (原文件, id, 标题文字)。
     // 只收**跟所属章标题在同一个原文件里**的节：单独成文件、前面没有章标题的"节"多半是附页（内容简介、版权声明），
     // 作者目录没列它就不补（《疯探》）。
     let mut sections: Vec<SectionRef> = Vec::new();
     let mut touched: HashSet<usize> = HashSet::new();
-    let mut sec_no = 0usize;
+    let (mut ch_no, mut sec_no) = (0usize, 0usize);
+    // 目录认出的段落章名前面还有别的内容（好读第一个正文文件：书名页在前）时，目录原来只指到文件、会落在书名页上：
+    // 给段落补 id、目录改指这个 id（切分后链接改写会把它指到章名所在的那一份）。
+    let mut retarget: Vec<(String, String, String)> = Vec::new(); // (文件, 目录标签, id)
     for (fi, f) in files.iter_mut().enumerate() {
-        let mut inserts: Vec<(usize, String)> = Vec::new();
-        let first_title = f.heads.iter().position(|h| roles[h.level as usize] == Role::Title);
-        for (hi, h) in f.heads.iter().enumerate().filter(|(_, h)| roles[h.level as usize] == Role::Section) {
-            if first_title.is_none_or(|t| t > hi) {
-                continue;
-            }
-            let sp = &f.spans[h.span];
-            let open = &f.html[sp.open_start..sp.open_end];
-            let id = match html::attr(open, "id") {
-                Some(a) if a.value.is_empty() => continue, // `id=""`：不补也不改，拿不准
-                Some(a) => a.value.to_string(),
-                None => loop {
-                    sec_no += 1;
-                    let id = format!("eink-sec-{sec_no}");
-                    if !f.html.contains(id.as_str()) {
-                        inserts.push((sp.open_start + 1 + sp.name.len(), format!(" id=\"{id}\"")));
-                        break id;
-                    }
-                },
-            };
-            sections.push(SectionRef { path: f.path.clone(), id, label: h.text.clone() });
-        }
-        if inserts.is_empty() {
+        let late: Vec<(usize, String)> = f
+            .heads
+            .iter()
+            .filter(|h| label_paragraphs.contains(&(fi, h.span)) && has_visible(&f.html[f.lo..h.start]))
+            .map(|h| (h.span, h.text.clone()))
+            .collect();
+        if late.is_empty() {
             continue;
         }
-        for (pos, attr) in inserts.into_iter().rev() {
-            f.html.insert_str(pos, &attr);
+        let ids = f.ensure_ids(&late.iter().map(|x| x.0).collect::<Vec<_>>(), "eink-ch", &mut ch_no);
+        for ((_, label), id) in late.into_iter().zip(ids) {
+            if let Some(id) = id {
+                retarget.push((f.path.clone(), label, id));
+            }
         }
-        let (lo, hi) = html::body_range(&f.html).expect("插入 id 不影响 body 边界");
-        f.lo = lo;
-        f.hi = hi;
-        f.spans = parse_spans(&f.html, lo, hi);
-        let cands: Vec<(usize, u8)> = {
-            // 重新按原来的方式认标题：先 h 标签；原来是目录退路认出来的就按原级别对回同一批元素。
-            let hc = h_candidates(&f.spans);
-            if !hc.is_empty() { hc } else { f.heads.iter().map(|h| (h.span, h.level)).collect() }
-        };
-        f.heads = collect_headings(&f.html, &f.spans, &cands);
+        touched.insert(fi);
+    }
+    if !retarget.is_empty() {
+        retarget_ncx_to_ids(entries, &opf, &retarget);
+    }
+    for (fi, f) in files.iter_mut().enumerate() {
+        let first_title = f.heads.iter().position(|h| roles[h.level as usize] == Role::Title);
+        let secs: Vec<usize> = f
+            .heads
+            .iter()
+            .enumerate()
+            .filter(|&(hi, h)| roles[h.level as usize] == Role::Section && first_title.is_some_and(|t| t < hi))
+            .map(|(hi, _)| hi)
+            .collect();
+        if secs.is_empty() {
+            continue;
+        }
+        let ids = f.ensure_ids(&secs.iter().map(|&hi| f.heads[hi].span).collect::<Vec<_>>(), "eink-sec", &mut sec_no);
+        let labels: Vec<String> = secs.iter().map(|&hi| f.heads[hi].text.clone()).collect();
+        for (label, id) in labels.into_iter().zip(ids) {
+            if let Some(id) = id {
+                sections.push(SectionRef { path: f.path.clone(), id, label });
+            }
+        }
         touched.insert(fi);
     }
     // 2. 逐文件切分。
