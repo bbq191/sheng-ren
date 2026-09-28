@@ -20,9 +20,20 @@ fn is_macos_junk(name: &str) -> bool {
     name.split('/').any(|seg| seg == "__MACOSX") || name.rsplit('/').next().is_some_and(|base| base.starts_with("._"))
 }
 
+/// 单页图片解压后的上限。真实漫画页（含 600dpi 扫描的 PNG）远小于它；几 KB 的压缩条目能解出几 GB（zip 炸弹），
+/// 目录里声明的大小也可以造假，所以既查声明、读的时候也按上限截。
+const MAX_PAGE_BYTES: u64 = 256 * 1024 * 1024;
+
 fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-    zip.by_name(name).map_err(|e| e.to_string())?.read_to_end(&mut bytes).map_err(|e| format!("{name}: {e}"))?;
+    let f = zip.by_name(name).map_err(|e| e.to_string())?;
+    if f.size() > MAX_PAGE_BYTES {
+        return Err(format!("{name}: 解压后 {} MB，超过单页上限 {} MB（损坏或恶意的压缩包？）", f.size() >> 20, MAX_PAGE_BYTES >> 20));
+    }
+    let mut bytes = Vec::with_capacity(f.size() as usize);
+    f.take(MAX_PAGE_BYTES + 1).read_to_end(&mut bytes).map_err(|e| format!("{name}: {e}"))?;
+    if bytes.len() as u64 > MAX_PAGE_BYTES {
+        return Err(format!("{name}: 解压后超过单页上限 {} MB（损坏或恶意的压缩包？）", MAX_PAGE_BYTES >> 20));
+    }
     Ok(bytes)
 }
 

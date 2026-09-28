@@ -88,8 +88,8 @@ fn jpeg_to_image(data: &[u8]) -> Result<PdfImage, String> {
         let is_sof =
             (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC;
         if is_sof {
-            // 段内容：precision(1) height(2) width(2) components(1)
-            if i + 8 > data.len() {
+            // 段 = 长度(2) precision(1) height(2) width(2) components(1)，最后一个字节在 data[i + 8]。
+            if seg_len < 8 || i + 9 > data.len() {
                 return Err("JPEG SOF 段截断".into());
             }
             let h = ((data[i + 4] as u32) << 8) | data[i + 5] as u32;
@@ -785,6 +785,16 @@ mod tests {
         assert_eq!(img.color, ColorSpace::Rgb);
         assert_eq!(img.filter, Filter::Dct);
         assert_eq!(img.data, jpeg); // 原字节直嵌
+    }
+
+    #[test]
+    fn jpeg_truncated_inside_sof_errors_instead_of_panicking() {
+        // SOF0 段在宽度字节之后、分量数之前截断（此前 `i + 8 > len` 放行，读 data[i + 8] 越界 panic）
+        let cut: &[u8] = &[0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x03, 0x00, 0x02];
+        assert!(jpeg_to_image(cut).err().unwrap().contains("截断"));
+        // 段长度声明小于 SOF 固定部分
+        let short: &[u8] = &[0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x05, 0x08, 0x00, 0x03, 0x00, 0x02, 0x03, 0xFF, 0xD9];
+        assert!(jpeg_to_image(short).err().unwrap().contains("截断"));
     }
 
     /// 改成"逐对象直接写 out"之前的旧实现（先建 `objects: Vec<Vec<u8>>` 再拼接）原样保留作参照。

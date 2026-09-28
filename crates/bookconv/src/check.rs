@@ -13,7 +13,6 @@
 //! 告警（不拦）：无 nav/ncx 或零条目（`require_toc` 时升为失败）；目录锚点丢失（xochitl 退化到文件级跳转）。
 use crate::epubzip::{dir_of, is_html_entry, percent_decode, resolve, Entry};
 use crate::wash::{count_dup_id_tags, href_re, is_toc_file};
-use regex::Regex;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -136,15 +135,13 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     if !targets.is_empty() && (rep.href_file_hit as f64) / (targets.len() as f64) < 0.8 {
         rep.errors.push(format!("目录 href 文件命中率过低 {}/{}", rep.href_file_hit, targets.len()));
     }
-    // 每个目标页只扫一遍收集全部 id/name 值，再按集合判命中（此前每个带锚点的目录项各编译一个正则、各扫一遍整页）。
-    static ANCHOR: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let anchor_re = ANCHOR.get_or_init(|| Regex::new(r#"(?:id|name)="([^"]*)""#).unwrap());
+    // 每个目标页只扫一遍收集全部锚点（任何元素的 `id`、`<a name>`；单双引号都认，`data-id` 不算），再按集合判命中。
     let mut cache: HashMap<&str, std::collections::HashSet<String>> = HashMap::new();
     for (t, frag) in targets.iter().filter(|(t, f)| !f.is_empty() && names.contains_key(t.as_str())) {
         rep.frag_total += 1;
         let anchors = cache.entry(t.as_str()).or_insert_with(|| {
             let html = String::from_utf8_lossy(&names[t.as_str()].data);
-            anchor_re.captures_iter(&html).map(|c| c[1].to_string()).collect()
+            crate::html::anchors(&html).into_iter().map(|(v, _)| v.to_string()).collect()
         });
         if anchors.contains(frag) {
             rep.frag_hit += 1;
@@ -269,6 +266,14 @@ mod tests {
         assert!(check_entries(&none, false).ok);
         let r = check_entries(&none, true);
         assert!(!r.ok && r.warnings.iter().any(|w| w.contains("字体混淆")));
+    }
+
+    #[test]
+    fn toc_anchor_hit_accepts_single_quotes_and_ignores_data_id() {
+        let toc = e("OEBPS/toc.ncx", r#"<ncx><content src="c.xhtml#a"/><content src="c.xhtml#b"/><content src="c.xhtml#n"/></ncx>"#);
+        let chap = e("OEBPS/c.xhtml", r#"<html><body><p id='a'>x</p><p data-id="b">y</p><a name="n"/></body></html>"#);
+        let r = check_entries(&[toc, chap], false);
+        assert_eq!((r.frag_hit, r.frag_total), (2, 3), "单引号 id、<a name> 算锚点，data-id 不算");
     }
 
     #[test]
