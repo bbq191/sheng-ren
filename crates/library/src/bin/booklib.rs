@@ -175,23 +175,8 @@ fn path_hint(selectors: &[String]) -> String {
     }
 }
 
-/// 输出接到 `head` 这类提前关闭的管道时，像别的命令行工具一样安静退出（Rust 缺省忽略 SIGPIPE，println! 会 panic）。
-#[cfg(unix)]
-fn restore_sigpipe() {
-    extern "C" {
-        fn signal(sig: i32, handler: usize) -> usize;
-    }
-    const SIGPIPE: i32 = 13;
-    const SIG_DFL: usize = 0;
-    // SAFETY: 进程启动时、还没有其它线程时恢复 SIGPIPE 的缺省处理。
-    unsafe {
-        signal(SIGPIPE, SIG_DFL);
-    }
-}
-
 fn main() {
-    #[cfg(unix)]
-    restore_sigpipe();
+    bookconv::util::restore_sigpipe();
     let args = Args::parse();
     let Some(cmd) = args.pos.first().and_then(|c| c.to_str()).map(str::to_string) else { usage_error("") };
     match cmd.as_str() {

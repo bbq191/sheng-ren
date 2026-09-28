@@ -230,6 +230,31 @@ cargo run --release -p bookconv --bin readable-measure -- 竖长.png 横宽.png
 
 `epub-optimize`、`cbz2pdf` 要求 `--device=<设备 id>`，不写或写错会列出可用的 id；它们按该设备对应格式的阅读范围处理。
 
+### ebook-meta：查看、改写 EPUB 的元数据
+
+改的是 EPUB 文件本身（OPF 里的 Dublin Core 和封面），不是阅读器的旁路缓存——KOReader 里"书籍信息 → 自定义"只写进 `.sdr`，
+换设备、换软件看到的还是原值。
+
+```sh
+cargo install --path crates/bookconv --bin ebook-meta     # 装到 ~/.local/share/cargo/bin
+ebook-meta 书.epub                                         # 查看：标题、作者、语言、出版社、简介、标签、标识符、日期、封面
+ebook-meta 书.epub --title 书名 --author 作者甲 --author 作者乙
+ebook-meta 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
+ebook-meta 书.epub --tag 小说 --tag 科幻                    # 标签整体替换
+ebook-meta 书.epub --publisher ""                          # 值给空字符串 = 删掉这个字段
+ebook-meta 书.epub --cover 封面.jpg                         # 换封面
+ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
+```
+
+- 给了哪个字段就只改哪个，其余不动；`--author`、`--tag`、`--identifier` 可重复，给出即**整体替换**（给几个就是最终的几个）。
+- **正文一个字节不变**：只重写 OPF（改书名时连 NCX 里的书名）和封面图，其余条目原样拷贝，不解压不重压。
+- 写前缺省备份成 `书.epub.bak-<时间戳>`（`--no-backup` 不备份）；先写临时文件再改名，中途失败原文件不动。
+- 换封面：书里声明了封面图就**原地换掉它的内容**（格式不同时转成原图的格式，封面页里引用它的地方跟着变），没有就新加一个并声明。
+- 删掉旧值时，EPUB3 用 `refines` 挂在它们身上的子属性（作者角色、排序名等）一起删；EPUB2 的作者写成 `opf:role="aut"`。
+- `--identifier` 不动 OPF 的唯一标识（`unique-identifier` 指向的那个）：删了 OPF 就不合法，NCX 的 `dtb:uid` 也会对不上（reMarkable 会不显示目录）。
+- 书库生成产物时补简介、标签、封面（`booklib meta` 找来的）用的是同一份实现（`bookconv::opfmeta`）。
+- 改了跟踪目录里的原件，`booklib sync` 会把它当成新版本重新入库（内容哈希变了）。
+
 ## 常见问题
 
 **为什么一台设备的产物全变成"过期"了？**

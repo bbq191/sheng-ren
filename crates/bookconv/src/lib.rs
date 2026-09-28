@@ -21,6 +21,7 @@ pub mod netimg;
 pub mod imgpool;
 pub mod naming;
 pub mod probe;
+pub mod opfmeta;
 pub mod optimize;
 pub mod pdf_ingest;
 pub mod util;

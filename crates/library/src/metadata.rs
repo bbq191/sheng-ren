@@ -13,7 +13,6 @@ use crate::matching::title_candidates;
 use crate::net::Net;
 use crate::{douban, wikidata, Library, Meta};
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Seek, Write};
 use std::path::Path;
 
 /// 联网找来的元数据（`Meta::info`）。
@@ -198,76 +197,27 @@ pub(crate) struct Additions<'a> {
     pub info: Option<&'a BookInfo>,
 }
 
-/// 复制 `src` 到 `dst`，补上书里没有的：封面（图片放进 OPF 所在目录，manifest 加 `properties="cover-image"` 一项，
-/// 加 `<meta name="cover">`）、`dc:description`、`dc:subject`。书里已有的不动；其余条目原样拷（不解压不重压）。
+/// 复制 `src` 到 `dst`，补上书里没有的：封面、`dc:description`、`dc:subject`。书里已有的不动。
+/// 改写用 `bookconv::opfmeta`（与 `ebook-meta` 命令同一份实现）：只动 OPF 和新加的封面图，其余条目原样拷。
 /// 什么都不用补时不写 `dst`，返回 `false`。
 pub(crate) fn inject(src: &Path, dst: &Path, add: &Additions) -> Result<bool, String> {
-    let f = std::fs::File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
-    let mut zin = bookconv::zip::ZipArchive::new(f).map_err(|e| e.to_string())?;
-    let container = read_text(&mut zin, "META-INF/container.xml")?;
-    let opf_path = bookconv::wash::tag_attr(&container, "full-path").ok_or("container.xml 里没有 full-path")?.to_string();
-    let opf = read_text(&mut zin, &opf_path)?;
-    let dc = bookconv::wash::opf_dc(&opf);
-    let esc = bookconv::util::xml_escape;
-
-    let mut meta_add = String::new();
-    let mut manifest_add = String::new();
-    let mut image: Option<(String, &[u8])> = None;
-    if let Some((bytes, ext)) = &add.cover {
-        let dir = bookconv::epubzip::dir_of(&opf_path);
-        let img_name = format!("eink-cover.{ext}");
-        let img_path = if dir.is_empty() { img_name.clone() } else { format!("{dir}/{img_name}") };
-        let mime = if *ext == "png" { "image/png" } else { "image/jpeg" };
-        manifest_add.push_str(&format!(r#"<item id="eink-cover" href="{img_name}" media-type="{mime}" properties="cover-image"/>"#));
-        meta_add.push_str(r#"<meta name="cover" content="eink-cover"/>"#);
-        image = Some((img_path, bytes.as_slice()));
-    }
+    use bookconv::opfmeta::{self, DcField, Edits};
+    let current = opfmeta::read_epub(src)?;
+    let has = |f: DcField| current.iter().any(|(x, v)| *x == f && !v.is_empty());
+    let mut edits = Edits { cover: add.cover.as_ref().map(|(b, _)| b.clone()), ..Default::default() };
     if let Some(info) = add.info {
-        if dc.description.is_empty() && !info.description.is_empty() {
-            meta_add.push_str(&format!("<dc:description>{}</dc:description>", esc(&info.description)));
+        if !has(DcField::Description) && !info.description.is_empty() {
+            edits.set.push((DcField::Description, vec![info.description.clone()]));
         }
-        if !opf.contains("<dc:subject") {
-            for s in &info.subjects {
-                meta_add.push_str(&format!("<dc:subject>{}</dc:subject>", esc(s)));
-            }
+        if !has(DcField::Subject) && !info.subjects.is_empty() {
+            edits.set.push((DcField::Subject, info.subjects.clone()));
         }
     }
-    if meta_add.is_empty() && manifest_add.is_empty() {
+    if edits.is_empty() {
         return Ok(false);
     }
-    let mut new_opf = opf.clone();
-    if !manifest_add.is_empty() {
-        let m = new_opf.find("</manifest>").ok_or("OPF 没有 </manifest>")?;
-        new_opf.insert_str(m, &manifest_add);
-    }
-    let md = new_opf.find("</metadata>").or_else(|| new_opf.find("</opf:metadata>")).ok_or("OPF 没有 </metadata>")?;
-    new_opf.insert_str(md, &meta_add);
-
-    let out = std::fs::File::create(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
-    let mut zw = bookconv::zip::ZipWriter::new(out);
-    for i in 0..zin.len() {
-        let e = zin.by_index_raw(i).map_err(|e| e.to_string())?;
-        if e.name() == opf_path {
-            drop(e);
-            let opts = bookconv::zip::write::SimpleFileOptions::default().compression_method(bookconv::zip::CompressionMethod::Deflated);
-            zw.start_file(opf_path.as_str(), opts).map_err(|e| e.to_string())?;
-            zw.write_all(new_opf.as_bytes()).map_err(|e| e.to_string())?;
-        } else {
-            zw.raw_copy_file(e).map_err(|e| e.to_string())?;
-        }
-    }
-    if let Some((path, bytes)) = image {
-        let opts = bookconv::zip::write::SimpleFileOptions::default().compression_method(bookconv::zip::CompressionMethod::Stored);
-        zw.start_file(path.as_str(), opts).map_err(|e| e.to_string())?;
-        zw.write_all(bytes).map_err(|e| e.to_string())?;
-    }
-    zw.finish().map_err(|e| e.to_string())?;
+    opfmeta::edit_epub(src, dst, &edits)?;
     Ok(true)
-}
-
-fn read_text<R: Read + Seek>(z: &mut bookconv::zip::ZipArchive<R>, name: &str) -> Result<String, String> {
-    let b = bookconv::epubzip::read_by_name(z, name)?;
-    Ok(String::from_utf8_lossy(&b).into_owned())
 }
 
 /// 生成产物前：书里缺的封面、简介、标签补进去。补了返回新文件，没补返回原文件。
@@ -290,6 +240,7 @@ pub(crate) fn with_additions(lib: &Library, meta: &Meta, epub: &Path, tmp: &Path
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     fn sample(dir: &Path, description: &str) -> std::path::PathBuf {
         use bookconv::epub::{assemble, Book, BookMeta, Chapter};
