@@ -52,8 +52,18 @@ impl CheckReport {
 pub use crate::epubzip::read_entries;
 
 pub fn check_epub(epub: &[u8], require_toc: bool) -> Result<CheckReport, String> {
+    // zip 目录只解析一遍：条目和 mimetype 检查都从这一个 archive 读。
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
-    let mut rep = check_entries(&read_entries(epub)?, require_toc);
+    let mut entries = Vec::with_capacity(zip.len());
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
+        if f.is_dir() {
+            continue;
+        }
+        let (name, size) = (f.name().to_string(), f.size());
+        entries.push(Entry { name, data: crate::epubzip::read_all(&mut f, size)? });
+    }
+    let mut rep = check_entries(&entries, require_toc);
     add_mimetype_problem(&mut rep, &mut zip);
     Ok(rep)
 }
@@ -62,11 +72,17 @@ pub fn check_epub(epub: &[u8], require_toc: bool) -> Result<CheckReport, String>
 /// 只有非图片的真实字节整份读入）而不是 [`read_entries`] 整本读进内存——大漫画优化产物整本读回内存
 /// 就白费了流式优化省下的内存。质量门这几条规则（双 id/href 命中率/正文资源引用）都只看 html/toc
 /// 文本内容，不看图片字节，检查结果不受影响。
+/// 目录缺失只告警（书库生成用）；要把"无目录"升为失败用 [`check_epub_file_with`]。
 pub fn check_epub_file(path: &std::path::Path) -> Result<CheckReport, String> {
+    check_epub_file_with(path, false)
+}
+
+/// [`check_epub_file`]，`require_toc` 为真时"无目录"算硬失败（`epub-optimize --check --require-toc`）。
+pub fn check_epub_file_with(path: &std::path::Path, require_toc: bool) -> Result<CheckReport, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("打开待校验文件失败: {e}"))?;
     let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
     let sk = crate::epubzip::read_skeleton(&mut zip)?;
-    let mut rep = check_entries(&sk.entries, false);
+    let mut rep = check_entries(&sk.entries, require_toc);
     add_mimetype_problem(&mut rep, &mut zip);
     Ok(rep)
 }
