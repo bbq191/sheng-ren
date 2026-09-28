@@ -431,7 +431,7 @@ pub fn assemble_book(
         resources,
         nav: Vec::new(),
     };
-    Ok((common::assemble_master(&mut book)?, title))
+    Ok((crate::epub::assemble_master(&mut book)?, title))
 }
 
 /// 一条 NCX 目录项：`pos`=章在 rawML 的字节偏移，`label`=真章名，`level`=层级（0=顶层）。

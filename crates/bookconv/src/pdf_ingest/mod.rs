@@ -16,30 +16,23 @@
 //! 一份 PDF 因此在 `optimize_pdf_to_epub` 里最多被解析两遍（lopdf 一遍，供结构读取与逐字提取共用；
 //! hayro 只在有公式时才额外解析+渲染）。
 //!
-//! **已知局限（真实样本核对时发现，未修——按整行字符包围盒算公式区域，天然是粗粒度的）**：
-//! 行内公式紧贴正文（如 "the identity $e^{i\\pi}+1=0$ is"）时，公式两侧紧邻的一两个正文
-//! 单词可能被误判进公式块的包围盒、从正文里消失（`tests/fixtures/sample.pdf` 里
-//! "identity" 被吞成 "i e" 就是这个问题）——根因是 pdf-extract 在字体切换处（正文字体切数学
-//! 斜体/符号字体）就会分出新的 `line`，公式区域按"这一整行字符的包围盒"算，跟真正的公式视觉
-//! 边界不完全重合。要根治需要按字符级别（不是行级别）精确圈公式区域，这次没做，记在这里避免
-//! 以后误以为是新 bug。
+//! 公式区域按整行字符包围盒算，天然是粗粒度的：紧贴公式的正文单词可能落进公式截图的范围里。但文字流里
+//! **一个字符都不删**（公式截图只是补充，见 `optimize_pdf_to_epub` 里"不允许变动书籍内容"那段），所以正文不会少字。
 
 use crate::convert::pdfwrite::{self, PdfPieceWriter};
 use crate::epub::{Book, BookMeta, Chapter, NavEntry, Resource};
 use std::path::Path;
 
-// 按职责拆成子模块（原 `pdf_ingest.rs` 一个文件 1100 行）：`classify` · `text` · `headings` · `trim` · `to_epub` · `source`；
+// 按职责拆成子模块（原 `pdf_ingest.rs` 一个文件 1100 行）：`classify` · `text` · `headings` · `trim` · `to_epub`；
 // `pub`/`pub(crate)` 项在这里 glob re-export，`crate::pdf_ingest::xxx` 旧路径不变。
 mod classify;
 mod headings;
-mod source;
 mod text;
 mod to_epub;
 mod trim;
 
 pub use self::classify::*;
 pub use self::headings::*;
-use self::source::*;
 pub(crate) use self::text::*;
 pub use self::to_epub::*;
 pub use self::trim::*;
@@ -63,7 +56,6 @@ pub(super) fn load_pdf(src: &Path) -> Result<lopdf::Document, String> {
     parse_pdf(&bytes)
 }
 
-
-// ============================================================================
-// 分类
-// ============================================================================
+/// PDF 转出的 EPUB 的 `BookMeta.book_id` 前缀（来源标记）。塞进 `publisher` 会污染真实元数据、往正文塞不可见
+/// 占位不优雅，所以约定 `book_id` 前缀。
+pub(super) const PDF_BOOK_ID_PREFIX: &str = "pdf:";

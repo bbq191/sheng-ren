@@ -244,10 +244,6 @@ pub(super) fn encode_raw_pixels_png(pixels: &[u8], w: u32, h: u32, gray: bool) -
     Ok(out)
 }
 
-// ============================================================================
-// PDF → EPUB（有文字层）
-// ============================================================================
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PdfToEpubReport {
     pub pages: usize,
@@ -1080,14 +1076,28 @@ pub(super) fn promote_heading(title: &str, body: String) -> String {
     if t.is_empty() {
         return body;
     }
-    // 段落可能带页锚点 id（`<p id="pdf-pN">`，书内跳转目标），升级成 `<h2>` 时 id 跟着走。
-    let re = regex::Regex::new(&format!(r#"<p( id="[^"]*")?>{}(</p>| )"#, regex::escape(&t))).unwrap();
-    if let Some(c) = re.captures(&body) {
-        let id = c.get(1).map(|m| m.as_str()).unwrap_or("");
-        let rep = if &c[2] == "</p>" { format!("<h2{id}>{t}</h2>") } else { format!("<h2{id}>{t}</h2><p>") };
-        let r = c.get(0).unwrap().range();
-        let mut out = body.clone();
-        out.replace_range(r, &rep);
+    // 找第一处 `<p>标题</p>`、`<p>标题 `（段落可能带页锚点 id `<p id="pdf-pN">`，书内跳转目标，升级成 `<h2>` 时
+    // id 跟着走）。每章调一次，标题各不相同，不为它现编正则。
+    let mut from = 0;
+    while let Some(rel) = body[from..].find(&t) {
+        let at = from + rel;
+        from = at + t.chars().next().map_or(1, char::len_utf8);
+        let after = &body[at + t.len()..];
+        let whole = after.starts_with("</p>");
+        if !whole && !after.starts_with(' ') {
+            continue;
+        }
+        let before = &body[..at];
+        let (open, id) = if before.ends_with("<p>") {
+            (at - 3, "")
+        } else if let Some(p) = before.strip_suffix("\">").and_then(|b| b.rfind("<p id=\"")).filter(|&p| !before[p + 7..before.len() - 2].contains('"')) {
+            (p, &before[p + 2..before.len() - 1])
+        } else {
+            continue;
+        };
+        let (end, rep) = if whole { (at + t.len() + 4, format!("<h2{id}>{t}</h2>")) } else { (at + t.len() + 1, format!("<h2{id}>{t}</h2><p>")) };
+        let mut out = body;
+        out.replace_range(open..end, &rep);
         return out;
     }
     body

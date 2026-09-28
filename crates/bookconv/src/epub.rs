@@ -32,7 +32,7 @@ pub struct Resource {
 pub struct Book {
     pub meta: BookMeta,
     pub chapters: Vec<Chapter>,
-    /// 章节引用的嵌入资源；默认空（墨香下书路径不用）。FB2/MOBI 转换填插图。
+    /// 章节引用的嵌入资源（插图、漫画页等），可以为空。
     pub resources: Vec<Resource>,
     /// 显式目录。空＝沿用"每个有标题的章节文件一条目录"；非空＝按这里生成 nav，条目可以指向
     /// 文件内锚点、也可以多条指向同一个文件（PDF→EPUB 单文件模式/分组标题，见
@@ -48,7 +48,7 @@ pub struct NavEntry {
     pub href: String,
 }
 
-/// 对齐 xml.sax.saxutils.escape：只转 & < >（不动引号）。
+/// 文字与属性值共用的 XML 转义（`& < > "`，见 `util::xml_escape`）。
 use crate::util::xml_escape as xesc;
 
 /// `assemble` 写出的 OPF 在 zip 里的路径（`container.xml` 指向它；PDF 来源识别等也按这个路径读）。
@@ -245,6 +245,13 @@ fn has_color_span(html: &str) -> bool {
 /// 再 break_footnote_cycles（拆双向脚注互指对——reMarkable 索引器遇互指对会整对丢弃致点不动）。
 pub fn assemble(book: &mut Book) -> Result<Vec<u8>, String> {
     assemble_with(book, AssembleOpts::default())
+}
+
+/// 转换器（FB2/MOBI/AZW3/CBZ/网页文章）组装**与设备无关的母版 EPUB** 的统一收尾：同 [`assemble`]，但写完一份资源
+/// 就释放（组装后 `book.resources` 为空），不让"资源表 + zip 缓冲"同时各占一整份体积。产物字节与 [`assemble`] 相同。
+/// 按设备的优化（图片缩放、字体解锁等）在入库之后按 profile 另做，不在转换时写死某台设备。
+pub fn assemble_master(book: &mut Book) -> Result<Vec<u8>, String> {
+    assemble_with(book, AssembleOpts { consume_resources: true, ..Default::default() })
 }
 
 /// PDF→EPUB 转出的书专用：`<img>` 没有 `width`/`height`（源自 PDF 页内嵌图，原始像素尺寸），也没有任何
