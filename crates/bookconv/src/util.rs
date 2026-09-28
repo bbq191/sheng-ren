@@ -158,6 +158,23 @@ pub fn sanitize_filename(title: &str, default: &str) -> String {
     out.trim_end().to_string()
 }
 
+/// 命令行工具的输出接到 `head` 这类提前关闭的管道时，像别的命令一样安静退出（Rust 缺省忽略 SIGPIPE，`println!` 会 panic）。
+/// 在 `main` 一开头、还没有其它线程时调用。`booklib`、`ebook-meta` 共用。
+pub fn restore_sigpipe() {
+    #[cfg(unix)]
+    {
+        extern "C" {
+            fn signal(sig: i32, handler: usize) -> usize;
+        }
+        const SIGPIPE: i32 = 13;
+        const SIG_DFL: usize = 0;
+        // SAFETY: 进程启动时、还没有其它线程时恢复 SIGPIPE 的缺省处理。
+        unsafe {
+            signal(SIGPIPE, SIG_DFL);
+        }
+    }
+}
+
 /// [`sanitize_filename`] 结果的字节上限。
 pub const MAX_NAME_BYTES: usize = 200;
 
