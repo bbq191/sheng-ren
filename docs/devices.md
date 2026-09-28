@@ -21,13 +21,14 @@ height = 1546
 ```
 
 - 写了不认识的字段会报错，防止拼错字段名后被悄悄忽略。
-- `[readable.<格式>]` 只能写 `formats` 里有的格式，也不能超过屏幕尺寸。
+- `[readable.<格式>]` 只能写 `formats` 里有的格式，也不能超过屏幕尺寸；`formats` 不能有重复项。
+- 阅读范围以**截图的像素**为准。Kindle 的截图是 1272×1696，和标称的 `[screen]` 1264×1680 不是同一个坐标系，量出来的数照截图写。
 - **自定义设备**：放在书库的 `profiles/` 目录（缺省 `~/.local/share/booklib/profiles/<id>.toml`），同 id 覆盖内置设备。`booklib devices` 会列出来。
 
 **同一台设备、不同的阅读软件，可阅读范围不同，就分成两个 profile**：`rmpp-move`（Move 自带的 xochitl，实测 842×1455）和
 `rmpp-move-koreader`（Move 上的 KOReader：漫画方案四边页边距 0、隐藏状态栏，整页漫画铺满 954×1696，按设置推算、还没实测）。
 文字书在两个 profile 下的产物逐字节相同，只有漫画页的补白比例不同。掌阅、Kindle 上的 KOReader 用 `ireader-ocean5-pro` 的产物（两台屏幕都是 1264×1680，
-掌阅的阅读范围本来就是整屏）；`kindle-pw12-sig` 是给 Kindle 自带阅读器的 AZW3。
+掌阅的阅读范围本来就是整屏）；`kindle-pw12-sig` 是给 Kindle 自带阅读器的 AZW3。拷哪个产物、拷到哪，见[使用指南 · 传书到设备](usage.md#传书到设备)。
 
 ## 为什么要"真实可阅读范围"
 
@@ -41,10 +42,11 @@ height = 1546
 
 | 设备 | 格式 | 阅读范围 | 依据 |
 |---|---|---|---|
-| reMarkable Move | EPUB | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（上游白皮书实测） |
+| reMarkable Move（xochitl） | EPUB | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（早期在 xochitl 上实测） |
 | reMarkable Move | PDF | 954×1696 | 页面尺寸等于屏幕时左右留白为 0 |
 | Kindle PW12 | AZW3 | 1104×1546 | 2026-09-27 测量书截屏：左右页边距各 84，上下页眉页脚各 75。截图分辨率是 1272×1696，不是标称的 1264×1680 |
 | 掌阅 Ocean 5 Pro | EPUB | 1264×1680 | 2026-09-27 测量书截屏：整页大图铺满整屏，连页眉页脚也盖住。图文混排时不适用 |
+| reMarkable Move（KOReader） | EPUB | 954×1696 | 按 KOReader 漫画方案的设置推算（四边页边距 0、隐藏状态栏），还没用测量书实测 |
 
 ## 在真机上测量
 
