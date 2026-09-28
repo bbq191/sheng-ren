@@ -3,28 +3,18 @@
 //! 用法: readable-measure [--format=epub|azw3|pdf] 竖长图截图.png 横宽图截图.png
 //! 退出码: 0 成功（有可疑之处时仍输出，但会列出警告）；1 用法错；2 读图/测量失败。
 
+use bookconv::util::cli::{self, die};
+
 fn main() {
+    cli::restore_sigpipe();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let format = args.iter().find_map(|a| a.strip_prefix("--format=")).unwrap_or("epub");
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if files.len() != 2 || !["epub", "azw3", "pdf"].contains(&format) {
-        eprintln!("用法: readable-measure [--format=epub|azw3|pdf] 竖长图截图.png 横宽图截图.png");
-        std::process::exit(1);
+        die(cli::USAGE, "用法: readable-measure [--format=epub|azw3|pdf] 竖长图截图.png 横宽图截图.png");
     }
-    let load = |p: &str| match image::open(p) {
-        Ok(i) => i.to_luma8(),
-        Err(e) => {
-            eprintln!("读 {p}: {e}");
-            std::process::exit(2);
-        }
-    };
-    let m = match bookconv::probe::measure(&load(files[0]), &load(files[1])) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("测量失败: {e}");
-            std::process::exit(2);
-        }
-    };
+    let load = |p: &str| image::open(p).unwrap_or_else(|e| die(cli::FAILED, format!("读 {p}: {e}"))).to_luma8();
+    let m = bookconv::probe::measure(&load(files[0]), &load(files[1])).unwrap_or_else(|e| die(cli::FAILED, format!("测量失败: {e}")));
     let (sw, sh) = m.screen;
     let (rw, rh) = m.readable;
     let tb = m.tall_box;

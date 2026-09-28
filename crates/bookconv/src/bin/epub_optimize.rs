@@ -16,31 +16,20 @@
 //! 退出码: 0 成功；1 用法错；2 优化失败（输入原样不动）；3 质量门未过。
 
 use bookconv::optimize::{self, FootnoteMode, OptimizeOpts};
+use bookconv::util::cli::{self, die};
 use bookconv::wash::{AutoToc, WashOpts};
 
-/// `--device=<profile id>`（必填）→ (该设备流式排版产物的真实可阅读范围（没有实测值时是标称屏幕）, 是否黑白屏)；
-/// 缺失或未知 id 时打印可用 id 并以用法错退出。
-fn device_screen(args: &[String]) -> (bookconv::imgopt::Screen, bool) {
-    let id = args.iter().find_map(|a| a.strip_prefix("--device="));
-    match id.and_then(profile::get) {
-        Some(p) => (p.readable(p.reflow_format().unwrap_or(profile::Format::Epub)), !p.color),
-        None => {
-            let ids: Vec<_> = profile::Registry::builtin().iter().map(|p| p.id.as_str()).collect();
-            eprintln!("需要 --device=<设备>，可选: {}", ids.join(" / "));
-            std::process::exit(1);
-        }
-    }
-}
-
 fn main() {
+    cli::restore_sigpipe();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flags: Vec<&str> = args.iter().filter(|a| a.starts_with("--") && !a.starts_with("--device=")).map(|s| s.as_str()).collect();
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--no-paginate", "--footnote-anchor", "--check", "--require-toc"].contains(f)) {
-        eprintln!("用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--footnote-anchor] [--check] [--require-toc] 输入.epub 输出.epub");
-        std::process::exit(1);
+        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--footnote-anchor] [--check] [--require-toc] 输入.epub 输出.epub");
     }
-    let (screen, grayscale) = device_screen(&args);
+    // 该设备流式排版产物的真实可阅读范围（没有实测值时是标称屏幕）与是否黑白屏
+    let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
+    let (screen, grayscale) = (device.readable(device.reflow_format().unwrap_or(profile::Format::Epub)), !device.color);
     let wash = if flags.contains(&"--no-wash") {
         None
     } else {
@@ -54,17 +43,10 @@ fn main() {
     // --footnote-anchor 现在是 no-op（缺省已经是 Anchor），继续留在允许的 flag 列表里只是不破坏已有脚本调用。
     let footnote = FootnoteMode::Anchor;
     // 先写临时文件，成功后再改名：输入输出同路径（就地覆盖）时不会边读边写同一个文件，失败也不留半成品。
-    let target = std::path::PathBuf::from(files[1]);
-    let mut tmp = target.clone().into_os_string();
-    tmp.push(".optimizing.tmp");
+    let target = std::path::Path::new(files[1]);
     let opts = OptimizeOpts { screen, grayscale, wash, footnote, page_direction: None };
-    let rep = match bookconv::util::produce_then_replace(std::path::Path::new(&tmp), &target, |t| optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), t, &opts, |_, _| {})) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("优化失败: {e}");
-            std::process::exit(2);
-        }
-    };
+    let rep = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(target, "optimizing"), target, |t| optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), t, &opts, |_, _| {}))
+        .unwrap_or_else(|e| die(cli::FAILED, format!("优化失败: {e}")));
     println!("epub-optimize v{}: {} 文件/{} 章, {} → {} 字节", optimize::OPTIMIZE_VERSION, rep.total_files, rep.html_files, rep.bytes_before, rep.bytes_after);
     if let Some(w) = &rep.wash {
         println!(
@@ -73,25 +55,11 @@ fn main() {
         );
     }
     if flags.contains(&"--check") {
-        // 质量门要整本读回内存核对结构——只有 --check 时才付这个代价，不影响默认路径的流式内存省。
-        let out = match std::fs::read(files[1]) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("质量门读产物失败: {e}");
-                std::process::exit(3);
-            }
-        };
-        match bookconv::check::check_epub(&out, flags.contains(&"--require-toc")) {
-            Ok(r) => {
-                println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
-                if !r.ok {
-                    std::process::exit(3);
-                }
-            }
-            Err(e) => {
-                eprintln!("质量门读产物失败: {e}");
-                std::process::exit(3);
-            }
+        // 按路径查（图片条目不读进内存），跟书库生成时的质量门同一个实现。
+        let r = bookconv::check::check_epub_file_with(target, flags.contains(&"--require-toc")).unwrap_or_else(|e| die(3, format!("质量门读产物失败: {e}")));
+        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+        if !r.ok {
+            std::process::exit(3);
         }
     }
 }
