@@ -194,7 +194,10 @@ mod tests {
     #[test]
     fn builtin_profiles_parse() {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["ireader-ocean5-pro", "kindle-pw12-sig", "rmpp-move"]);
+        assert_eq!(ids, ["ireader-ocean5-pro", "kindle-pw12-sig", "rmpp-move", "rmpp-move-koreader"]);
+        let mk = get("rmpp-move-koreader").unwrap();
+        assert_eq!((mk.screen, mk.readable(Format::Epub)), (Screen { width: 954, height: 1696 }, Screen { width: 954, height: 1696 }), "KOReader 漫画方案铺满整屏");
+        assert!(mk.color);
         let m = get("rmpp-move").unwrap();
         assert_eq!(m.screen, Screen { width: 954, height: 1696 });
         assert_eq!(m.readable(Format::Epub), Screen { width: 842, height: 1455 }, "EPUB 用实测阅读范围");
@@ -233,6 +236,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(r.get("rmpp-move").unwrap().screen.width, 1072);
         assert_eq!(r.get("new-dev").unwrap().screen.width, 1000);
-        assert_eq!(r.iter().count(), 4);
+        assert_eq!(r.iter().count(), Registry::builtin().iter().count() + 1, "覆盖同 id、新增一台");
     }
 }

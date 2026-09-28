@@ -1,0 +1,18 @@
+# reMarkable Paper Pro Move 上的 KOReader（不是 xochitl）。屏幕同 rmpp-move，可阅读范围不同（用户 2026-09-28 要求单独一个 profile）。
+# 书放进 Move 上 KOReader 的 books/（~/xovi/exthome/appload/koreader/books/）。
+name = "reMarkable Paper Pro Move（KOReader）"
+ppi = 264
+color = true
+formats = ["epub"]
+
+[screen]
+width = 954
+height = 1696
+
+# 可阅读范围 = 整屏：KOReader 的漫画方案（koreader/schemes/）把漫画的四边页边距设为 0、隐藏状态栏和顶部标题栏，
+# 整页漫画铺满 954×1696；所以漫画页补白到整屏比例（rmpp-move 是按 xochitl 的 842×1455 补的，放进 KOReader 上下会留白边）。
+# 文字书不受这个数影响（正文图片只按它缩小，不补白）。
+# 按 KOReader 的设置推算，**还没用测量书在 Move 的 KOReader 上实测**（readable-measure）；实测后改这里。
+[readable.epub]
+width = 954
+height = 1696
