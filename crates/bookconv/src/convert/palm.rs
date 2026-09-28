@@ -9,6 +9,30 @@
 
 use super::common;
 use crate::epub::{Book, BookMeta, Chapter, Resource};
+use regex::Regex;
+use std::sync::OnceLock;
+
+/// 剥掉切出来的一段 HTML 的结构壳：XML 声明、`<head>…</head>`、`<html …>`/`</html>`、`<body …>`/`</body>`。
+/// MOBI6 的段与 KF8 的段共用（两边正文都是整份 HTML 文档切开的）。
+pub(super) fn strip_shell(seg: &str) -> String {
+    static RX: OnceLock<Regex> = OnceLock::new();
+    static RH: OnceLock<Regex> = OnceLock::new();
+    static RS: OnceLock<Regex> = OnceLock::new();
+    let re_xml = RX.get_or_init(|| Regex::new(r#"(?is)<\?xml[^>]*\?>"#).unwrap());
+    let re_head = RH.get_or_init(|| Regex::new(r#"(?is)<head\b.*?</head>"#).unwrap());
+    let re_shell = RS.get_or_init(|| Regex::new(r#"(?is)<html\b[^>]*>|</html>|</?body\b[^>]*>"#).unwrap());
+    let s = re_xml.replace_all(seg, "");
+    let s = re_head.replace_all(&s, "");
+    re_shell.replace_all(&s, "").into_owned()
+}
+
+/// `re` 在 `seg` 里第一个匹配的第 1 组：去掉标签、首尾空白，取前 80 个字符（段内 `<title>`/`<hN>` 当章名用）。
+/// 没有匹配时为空串。
+pub(super) fn first_match_text(re: &Regex, seg: &str) -> String {
+    static RT: OnceLock<Regex> = OnceLock::new();
+    let re_tag = RT.get_or_init(|| Regex::new(r#"(?s)<[^>]+>"#).unwrap());
+    re.captures(seg).map(|c| re_tag.replace_all(&c[1], "").trim().chars().take(80).collect()).unwrap_or_default()
+}
 
 /// PalmDB 记录切片表：每条记录一个 `&[u8]`（借 data，零拷贝）。
 pub fn parse_palmdb(d: &[u8]) -> Result<Vec<&[u8]>, String> {
@@ -309,7 +333,7 @@ pub fn resource_image<'a>(records: &[&'a [u8]], h: &Header, images: &[ImgRec<'a>
     if n == 0 {
         return None;
     }
-    let by_record = h.first_resource.and_then(|f| records.get(f + n - 1)).and_then(|r| ImgRec::of(r));
+    let by_record = h.first_resource.and_then(|f| f.checked_add(n - 1)).and_then(|i| records.get(i)).and_then(|r| ImgRec::of(r));
     by_record.or_else(|| images.get(n - 1).copied())
 }
 
@@ -519,7 +543,8 @@ fn indx_entries(data: &[u8]) -> Vec<&[u8]> {
         Some(x) => x,
         None => return vec![],
     };
-    let mut offs: Vec<usize> = Vec::with_capacity(nent);
+    // 条目数来自文件：按 IDXT 之后实际还剩的字节（每项 2 字节）封顶，免得坏文件声明几十亿条时先分配几 GB。
+    let mut offs: Vec<usize> = Vec::with_capacity(nent.min(data.len().saturating_sub(idxt + 4) / 2));
     for k in 0..nent {
         let p = idxt + 4 + k * 2;
         if p + 2 > data.len() {
@@ -681,12 +706,14 @@ impl Kf8Map {
         let mut fi = 0usize;
         for (_, tags) in &sentries {
             let (count, start, len) = (tag_val(tags, 1, 0)?, tag_val(tags, 6, 0)?, tag_val(tags, 6, 1)?);
-            let mut pos = start + len;
-            for f in frags.get_mut(fi..fi + count)? {
+            // 这些数都来自文件：相加一律 checked，溢出就当索引不可信（`None`，调用方退回旧近似）。
+            let mut pos = start.checked_add(len)?;
+            let end = fi.checked_add(count)?;
+            for f in frags.get_mut(fi..end)? {
                 f.2 = pos;
-                pos += f.1;
+                pos = pos.checked_add(f.1)?;
             }
-            fi += count;
+            fi = end;
         }
         let sorted = frags.windows(2).all(|w| w[0].0 <= w[1].0);
         (fi == frags.len() && sorted && !frags.is_empty()).then_some(Kf8Map { frags })
@@ -701,7 +728,7 @@ impl Kf8Map {
     pub fn to_stored(&self, a: usize) -> usize {
         let i = self.frags.partition_point(|f| f.0 <= a);
         match i.checked_sub(1).map(|k| self.frags[k]) {
-            Some((ins, len, stored)) if a < ins + len => stored + (a - ins),
+            Some((ins, len, stored)) if a < ins.saturating_add(len) => stored.saturating_add(a - ins),
             _ => a,
         }
     }

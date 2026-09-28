@@ -267,16 +267,8 @@ fn inject_anchors(seg: &str, local_desc: &[(usize, usize)]) -> String {
 /// 清洗一段 HTML → 正文：剥壳（xml 声明/head/html/body）+ img recindex→资源路径 + 去残留 mbp 标签。
 /// **保留** `<a ... filepos=...>`（待 remap）与注入的 `id="fpN"`。
 fn clean_seg(seg: &str, used_img: &HashMap<usize, String>) -> String {
-    static RX: OnceLock<Regex> = OnceLock::new();
-    static RH: OnceLock<Regex> = OnceLock::new();
-    static RS: OnceLock<Regex> = OnceLock::new();
     static RJ: OnceLock<Regex> = OnceLock::new();
-    let re_xml = re(&RX, r#"(?is)<\?xml[^>]*\?>"#);
-    let re_head = re(&RH, r#"(?is)<head\b.*?</head>"#);
-    let re_shell = re(&RS, r#"(?is)<html\b[^>]*>|</html>|</?body\b[^>]*>"#);
-    let s = re_xml.replace_all(seg, "");
-    let s = re_head.replace_all(&s, "");
-    let s = re_shell.replace_all(&s, "");
+    let s = palm::strip_shell(seg);
     // <img recindex="N" ...> → <img src="path"/>（未映射到资源的丢弃）
     let s = img_re().replace_all(&s, |cap: &regex::Captures| {
         let n: usize = cap[1].parse().unwrap_or(0);
@@ -303,10 +295,7 @@ fn remap_links(html: &str, chapter_of: &impl Fn(usize) -> usize) -> String {
 /// 段内首个 `<h1>…<h6>` 的纯文本（pagebreak 退化路的标题来源）；无则空。
 fn heading_title(seg: &str) -> String {
     static RH: OnceLock<Regex> = OnceLock::new();
-    if let Some(cap) = re(&RH, r#"(?is)<h[1-6][^>]*>(.*?)</h[1-6]>"#).captures(seg) {
-        return tag_re().replace_all(&cap[1], "").trim().chars().take(80).collect();
-    }
-    String::new()
+    palm::first_match_text(re(&RH, r#"(?is)<h[1-6][^>]*>(.*?)</h[1-6]>"#), seg)
 }
 
 #[cfg(test)]

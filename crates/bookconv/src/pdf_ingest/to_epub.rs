@@ -1,46 +1,235 @@
 //! 有文字层 PDF → EPUB（正文、标题、图片、公式区域截图）。
 use super::*;
 
+/// 单张 PDF 图片流解压后的字节上限：lopdf 的 `decompressed_content` 不设限，几 KB 的 Flate 流能解出几 GB。
+const MAX_IMAGE_STREAM_BYTES: usize = 256 * 1024 * 1024;
+/// 单张图片的像素上限（1 位图展开成 8 位灰度要放大 8 倍，只限字节不够）。
+const MAX_IMAGE_PIXELS: u64 = 100_000_000;
+
 /// 把 lopdf 的 `PdfImage`（第三方 PDF 里的原始图片流）解成可以喂给 `imgopt` 裁边缩放/
-/// `pdfwrite::image_from_bytes` 的通用 JPEG/PNG 字节。**这次只稳妥处理两种最常见的情况**：
-/// `/DCTDecode`（JPEG，原样透传，不解码不重编码）和 `/FlateDecode` 的 8-bit 灰度/RGB 原始像素
-/// （解压后重新编码成 PNG）。CCITTFax/JBIG2/JPX/索引色/非 8-bit 这些少见情况直接报错跳过这页
-/// （不是这次范围内要支持的全部 PDF 图片编码，`hayro-ccitt`/`hayro-jbig2` 这两个传递依赖理论上
-/// 能补上，留作已知的后续扩展点，不在这次实现）。
+/// `pdfwrite::image_from_bytes` 的通用 JPEG/PNG 字节：
+/// - `/DCTDecode`（JPEG）：原样透传，不解码不重编码；链式滤镜（如 `[/FlateDecode /DCTDecode]`）先解掉 DCT 之前那几层。
+/// - 其余 lopdf 能解的滤镜（Flate/LZW/ASCII85/RunLength…，含预测器）或不压缩：解出原始像素，按色彩空间与位深
+///   （见 [`raw_pixels_to_png`]）重新编码成 8 位灰度/RGB PNG。
+/// - CCITTFax/JBIG2/JPX、Lab/Separation/DeviceN 等处理不了的：返回说明原因的 `Err`（调用方记进报告、打印警告）。
+///
 /// **不能自己手撸 zlib inflate**——真机踩过：pdflatex/pdftex 产出的 `/FlateDecode` 图片流
 /// 常见带 `/DecodeParms << /Predictor 10 ... >>`（PNG 逐行预测器），裸 inflate 出来的字节
 /// 每行多一个过滤类型前缀字节（真实样本：200×100×3=60000 应有字节，裸 inflate 出 60100，
-/// 多出来的 100 字节精确等于行数）——`lopdf::Stream::decompressed_content()` 已经正确处理
+/// 多出来的 100 字节精确等于行数）——`lopdf::Stream::decompressed_content_with_limit()` 已经正确处理
 /// 了这个预测器（含 PNG 10-15 与 TIFF 2 两种），必须重新按 `img.id` 取回原始 `Stream` 对象
 /// 调它，不能图省事直接对 `img.content`（未解预测器的裸字节）手动 inflate。
 pub(super) fn decode_pdf_image_to_bytes(doc: &lopdf::Document, img: &lopdf::xobject::PdfImage) -> Result<Vec<u8>, String> {
     let filters = img.filters.clone().unwrap_or_default();
-    if filters.iter().any(|f| f == "DCTDecode") {
-        return Ok(img.content.to_vec());
+    let stream = doc.get_object(img.id).and_then(|o| o.as_stream()).map_err(|e| format!("重取图片对象失败: {e}"))?;
+    if let Some(k) = filters.iter().position(|f| f == "DCTDecode") {
+        if k == 0 {
+            return Ok(img.content.to_vec());
+        }
+        // 先只按 DCT 之前那几层滤镜解一遍（lopdf 解到 DCT 会报"未实现"），得到 JPEG 字节。
+        let mut dict = lopdf::Dictionary::new();
+        dict.set("Filter", lopdf::Object::Array(filters[..k].iter().map(|f| lopdf::Object::Name(f.as_bytes().to_vec())).collect()));
+        match stream.dict.get(b"DecodeParms").map(|o| deref(doc, o)) {
+            Ok(lopdf::Object::Array(a)) => {
+                if let Some(p) = a.first().map(|o| deref(doc, o)).filter(|o| o.as_dict().is_ok()) {
+                    dict.set("DecodeParms", p.clone());
+                }
+            }
+            Ok(p @ lopdf::Object::Dictionary(_)) => dict.set("DecodeParms", p.clone()),
+            _ => {}
+        }
+        let jpeg = lopdf::Stream::new(dict, stream.content.clone()).decompressed_content_with_limit(MAX_IMAGE_STREAM_BYTES).map_err(|e| format!("解 JPEG 外层滤镜 {:?} 失败: {e}", &filters[..k]))?;
+        return Ok(jpeg);
     }
-    if filters.is_empty() || filters.iter().any(|f| f == "FlateDecode") {
-        let obj = doc.get_object(img.id).map_err(|e| format!("重取图片对象失败: {e}"))?;
-        let stream = obj.as_stream().map_err(|e| format!("图片对象不是 stream: {e}"))?;
-        let raw = if filters.is_empty() { img.content.to_vec() } else { stream.decompressed_content().map_err(|e| format!("PDF 图片解压失败: {e}"))? };
-        let is_gray = img.color_space.as_deref() == Some("DeviceGray");
-        return encode_raw_pixels_png(&raw, img.width as u32, img.height as u32, is_gray);
+    if let Some(f) = filters.iter().find(|f| matches!(f.as_str(), "JPXDecode" | "CCITTFaxDecode" | "JBIG2Decode")) {
+        return Err(format!("暂不支持的 PDF 图片编码 {f}"));
     }
-    Err(format!("暂不支持的 PDF 图片编码: {filters:?}"))
+    let raw = stream.decompressed_content_with_limit(MAX_IMAGE_STREAM_BYTES).map_err(|e| format!("PDF 图片解压失败（滤镜 {filters:?}）: {e}"))?;
+    raw_pixels_to_png(doc, &stream.dict, img.width, img.height, &raw)
 }
 
-/// 按字节内容嗅探出该用 `.jpg` 还是 `.png`：`decode_pdf_image_to_bytes` 的 `DCTDecode` 分支原样
-/// 透传 JPEG 字节（SOI 魔数 `FF D8`），`FlateDecode` 分支永远重编码成 PNG——文件名后缀必须跟这个
-/// 判断结果一致，此前后缀写死 `.png`、只有 `media_type` 按内容嗅探，两者对不上时 OPF 里 media-type
-/// 虽然标对了，但真机渲染器很可能按文件后缀走快速路径去解码/探测尺寸，一个 `.png` 后缀的真 JPEG
-/// 字节流会解码失败或读不出尺寸，导致图片整个不显示（2026-09-23 真机投一本真实 PDF 手册发现"手册里
-/// 无图形"，排查到这里——之前只测过 pdflatex 合成样本，那份图片凑巧走 FlateDecode/PNG，没暴露过
-/// DCTDecode/JPEG 这条分支）。
-pub(super) fn image_ext_and_media_type(raw: &[u8]) -> (&'static str, &'static str) {
-    if raw.len() >= 2 && raw[0] == 0xFF && raw[1] == 0xD8 {
-        ("jpg", "image/jpeg")
-    } else {
-        ("png", "image/png")
+/// 图片的色彩空间（像素怎么变成 8 位灰度/RGB）。
+enum PixelSpace {
+    Gray,
+    Rgb,
+    Cmyk,
+    /// 调色板：`base` 每项的分量数、调色板字节（`(hival+1) × base` 个，每个 8 位）。
+    Indexed { base: PixelBase, palette: Vec<u8> },
+}
+
+/// 调色板的基础色彩空间。
+#[derive(Clone, Copy)]
+enum PixelBase {
+    Gray,
+    Rgb,
+    Cmyk,
+}
+
+impl PixelBase {
+    fn comps(self) -> usize {
+        match self {
+            PixelBase::Gray => 1,
+            PixelBase::Rgb => 3,
+            PixelBase::Cmyk => 4,
+        }
     }
+}
+
+/// 基础色彩空间（设备色、Cal 色、ICCBased 按 `/N`）；认不出的返回 `None`。
+fn pixel_base(doc: &lopdf::Document, cs: &lopdf::Object) -> Option<PixelBase> {
+    let by_comps = |n: i64| match n {
+        1 => Some(PixelBase::Gray),
+        3 => Some(PixelBase::Rgb),
+        4 => Some(PixelBase::Cmyk),
+        _ => None,
+    };
+    match deref(doc, cs) {
+        lopdf::Object::Name(n) => match n.as_slice() {
+            b"DeviceGray" | b"G" | b"CalGray" => Some(PixelBase::Gray),
+            b"DeviceRGB" | b"RGB" | b"CalRGB" => Some(PixelBase::Rgb),
+            b"DeviceCMYK" | b"CMYK" => Some(PixelBase::Cmyk),
+            _ => None,
+        },
+        lopdf::Object::Array(a) => match a.first()?.as_name().ok()? {
+            b"CalGray" => Some(PixelBase::Gray),
+            b"CalRGB" => Some(PixelBase::Rgb),
+            b"ICCBased" => {
+                let icc = deref(doc, a.get(1)?).as_stream().ok()?;
+                by_comps(icc.dict.get(b"N").ok()?.as_i64().ok()?)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// 图片字典的 `/ColorSpace` → [`PixelSpace`]；处理不了的给出原因。
+fn pixel_space(doc: &lopdf::Document, cs: &lopdf::Object) -> Result<PixelSpace, String> {
+    if let Some(b) = pixel_base(doc, cs) {
+        return Ok(match b {
+            PixelBase::Gray => PixelSpace::Gray,
+            PixelBase::Rgb => PixelSpace::Rgb,
+            PixelBase::Cmyk => PixelSpace::Cmyk,
+        });
+    }
+    let cs = deref(doc, cs);
+    if let lopdf::Object::Array(a) = cs {
+        if matches!(a.first().and_then(|o| o.as_name().ok()), Some(b"Indexed" | b"I")) && a.len() >= 4 {
+            let base = pixel_base(doc, &a[1]).ok_or("调色板的基础色彩空间不认识")?;
+            let hival = deref(doc, &a[2]).as_i64().map_err(|_| "调色板 hival 不是整数")?.clamp(0, 255) as usize;
+            let mut palette = match deref(doc, &a[3]) {
+                lopdf::Object::String(s, _) => s.clone(),
+                lopdf::Object::Stream(st) => st.decompressed_content_with_limit(4096).map_err(|e| format!("调色板解压失败: {e}"))?,
+                _ => return Err("调色板查找表不是字符串或流".into()),
+            };
+            palette.resize((hival + 1) * base.comps(), 0); // 短了补 0（PDF 规范要求够长；缺的按黑）
+            return Ok(PixelSpace::Indexed { base, palette });
+        }
+    }
+    let name = match cs {
+        lopdf::Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
+        lopdf::Object::Array(a) => a.first().and_then(|o| o.as_name().ok()).map(|n| String::from_utf8_lossy(n).into_owned()).unwrap_or_default(),
+        _ => String::new(),
+    };
+    Err(format!("暂不支持的色彩空间 {name}"))
+}
+
+/// 一个 CMYK 像素 → RGB（不带色彩管理的朴素换算，只求能看）。
+fn cmyk_to_rgb(c: u8, m: u8, y: u8, k: u8) -> [u8; 3] {
+    let f = |v: u8| ((255 - v as u32) * (255 - k as u32) / 255) as u8;
+    [f(c), f(m), f(y)]
+}
+
+/// 解压后的原始像素 → 8 位灰度/RGB PNG。按 `/BitsPerComponent`（1/2/4/8/16）拆样本、按 `/Decode` 映射、
+/// 按色彩空间（灰度/RGB/CMYK/调色板/`/ImageMask` 模板）换成 8 位；8 位灰度/RGB 且 `/Decode` 缺省时原样编码。
+pub(super) fn raw_pixels_to_png(doc: &lopdf::Document, dict: &lopdf::Dictionary, width: i64, height: i64, raw: &[u8]) -> Result<Vec<u8>, String> {
+    if width <= 0 || height <= 0 || width > u32::MAX as i64 || height > u32::MAX as i64 {
+        return Err(format!("图片尺寸不合法 {width}×{height}"));
+    }
+    let (w, h) = (width as usize, height as usize);
+    if (w as u64) * (h as u64) > MAX_IMAGE_PIXELS {
+        return Err(format!("图片 {w}×{h} 超过 {} 万像素上限", MAX_IMAGE_PIXELS / 10_000));
+    }
+    let is_mask = dict.get(b"ImageMask").ok().and_then(|o| o.as_bool().ok()).unwrap_or(false);
+    let space = if is_mask {
+        PixelSpace::Gray
+    } else {
+        pixel_space(doc, dict.get(b"ColorSpace").map_err(|_| "图片没有 /ColorSpace".to_string())?)?
+    };
+    let bpc = if is_mask { 1 } else { dict.get(b"BitsPerComponent").ok().and_then(|o| deref(doc, o).as_i64().ok()).unwrap_or(8) };
+    if !matches!(bpc, 1 | 2 | 4 | 8 | 16) {
+        return Err(format!("暂不支持 {bpc} 位的像素"));
+    }
+    let bpc = bpc as usize;
+    let comps = match &space {
+        PixelSpace::Gray | PixelSpace::Indexed { .. } => 1,
+        PixelSpace::Rgb => 3,
+        PixelSpace::Cmyk => 4,
+    };
+    let row_bytes = (w * comps * bpc).div_ceil(8);
+    if raw.len() < row_bytes * h {
+        return Err(format!("像素数据不够（{w}×{h}、{comps} 分量 {bpc} 位要 {} 字节，只有 {}）", row_bytes * h, raw.len()));
+    }
+    let maxv = ((1u32 << bpc) - 1) as f64;
+    // `/Decode`：每个分量 [Dmin Dmax]，样本 s 映射到 Dmin + s/maxv × (Dmax − Dmin)。模板图缺省 [0 1] 表示 0 = 涂色（黑）。
+    let decode: Vec<f64> = dict
+        .get(b"Decode")
+        .ok()
+        .and_then(|o| deref(doc, o).as_array().ok())
+        .map(|a| a.iter().filter_map(|x| num(deref(doc, x))).collect::<Vec<f64>>())
+        .filter(|d| d.len() == comps * 2)
+        .unwrap_or_else(|| match &space {
+            PixelSpace::Indexed { .. } => vec![0.0, maxv],
+            _ => [0.0, 1.0].repeat(comps),
+        });
+    let default_decode = match &space {
+        PixelSpace::Indexed { .. } => decode == [0.0, maxv],
+        _ => decode.chunks(2).all(|d| d == [0.0, 1.0]),
+    };
+    let gray_out = matches!(space, PixelSpace::Gray) || matches!(space, PixelSpace::Indexed { base: PixelBase::Gray, .. });
+    if bpc == 8 && default_decode && matches!(space, PixelSpace::Gray | PixelSpace::Rgb) {
+        return encode_raw_pixels_png(&raw[..row_bytes * h], w as u32, h as u32, gray_out);
+    }
+    let sample = |row: &[u8], i: usize| -> u32 {
+        match bpc {
+            16 => u16::from_be_bytes([row[i * 2], row[i * 2 + 1]]) as u32,
+            8 => row[i] as u32,
+            _ => {
+                let bit = i * bpc;
+                ((row[bit / 8] >> (8 - bpc - bit % 8)) as u32) & ((1 << bpc) - 1)
+            }
+        }
+    };
+    let to8 = |s: u32, c: usize| -> u8 {
+        let (d0, d1) = (decode[c * 2], decode[c * 2 + 1]);
+        ((d0 + s as f64 / maxv * (d1 - d0)).clamp(0.0, 1.0) * 255.0).round() as u8
+    };
+    let mut out = Vec::with_capacity(w * h * if gray_out { 1 } else { 3 });
+    for y in 0..h {
+        let row = &raw[y * row_bytes..(y + 1) * row_bytes];
+        for x in 0..w {
+            let base = x * comps;
+            match &space {
+                PixelSpace::Gray => out.push(to8(sample(row, base), 0)),
+                PixelSpace::Rgb => (0..3).for_each(|c| out.push(to8(sample(row, base + c), c))),
+                PixelSpace::Cmyk => {
+                    let v: Vec<u8> = (0..4).map(|c| to8(sample(row, base + c), c)).collect();
+                    out.extend_from_slice(&cmyk_to_rgb(v[0], v[1], v[2], v[3]));
+                }
+                PixelSpace::Indexed { base: pb, palette } => {
+                    let (d0, d1) = (decode[0], decode[1]);
+                    let idx = (d0 + sample(row, base) as f64 / maxv * (d1 - d0)).round().clamp(0.0, 255.0) as usize;
+                    let n = pb.comps();
+                    let e = &palette[(idx * n).min(palette.len() - n)..][..n];
+                    match pb {
+                        PixelBase::Gray | PixelBase::Rgb => out.extend_from_slice(e),
+                        PixelBase::Cmyk => out.extend_from_slice(&cmyk_to_rgb(e[0], e[1], e[2], e[3])),
+                    }
+                }
+            }
+        }
+    }
+    encode_raw_pixels_png(&out, w as u32, h as u32, gray_out)
 }
 
 pub(super) fn encode_raw_pixels_png(pixels: &[u8], w: u32, h: u32, gray: bool) -> Result<Vec<u8>, String> {
@@ -64,6 +253,8 @@ pub struct PdfToEpubReport {
     pub pages: usize,
     pub chapters: usize,
     pub images: usize,
+    /// 没能转出来的图片（解码失败、编码不支持、页面资源里查不到）：每张都打印过警告，这里计数。
+    pub images_failed: usize,
     pub formula_blocks: usize,
 }
 
@@ -287,11 +478,10 @@ pub(super) fn page_line_stats(chars: &[PositionedChar]) -> (Option<f64>, Option<
 
 /// 把连续几页的 HTML 接起来；上一页最后一段没以句末标点结尾、下一页以正文段落开头时，两段接成
 /// 一段——PDF 的页边界不是段落边界，一句话跨页此前会被切成两段（2026-09-23 真机《移动互联软件安装
-/// 使用手册》"点击获取验 / 证码"）。下一页首段带书内跳转锚点 id 的不接（接了 id 会丢）。
+/// 使用手册》"点击获取验 / 证码"）。只接下一页以普通 `<p>` 开头的：首段带书内跳转锚点 id 的不接（接了
+/// id 会丢），以图片开头的不接。接缝处按页内折行同一条规则补空白（见 [`wrap_joins_without_space`]）：
+/// 此前一律直接拼，英文 "quick" + "brown" 成了 "quickbrown"。
 pub(super) fn join_pages(pages: &[String]) -> String {
-    static ANCHOR: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    // 只接下一页以普通 `<p>` 开头的；带锚点 id 的段落（书内跳转目标）不接，否则 id 会丢。
-    let anchor_re = ANCHOR.get_or_init(|| regex::Regex::new(r#"^()?<p>"#).unwrap());
     let mut out = String::new();
     for page in pages {
         let open_ends = out.ends_with("</p>") && {
@@ -299,18 +489,46 @@ pub(super) fn join_pages(pages: &[String]) -> String {
             let last = crate::util::strip_tags_tail_char(before);
             last.map(|c| !matches!(c, '。' | '！' | '？' | '!' | '?' | '.' | '…' | '：' | ':' | '；' | ';' | '”' | '"' | '」' | '』')).unwrap_or(false)
         };
-        match anchor_re.captures(page) {
-            Some(m) if open_ends && !page[m.get(0).unwrap().end()..].starts_with("<img") => {
+        match page.strip_prefix("<p>") {
+            Some(rest) if open_ends && !rest.starts_with("<img") => {
                 out.truncate(out.len() - 4);
-                if let Some(a) = m.get(1) {
-                    out.push_str(a.as_str());
+                let needs_space = match (text_edge_char(&out, true), text_edge_char(rest, false)) {
+                    (Some(l), Some(r)) => !l.is_whitespace() && !r.is_whitespace() && !wrap_joins_without_space(l, r),
+                    _ => false,
+                };
+                if needs_space {
+                    out.push(' ');
                 }
-                out.push_str(&page[m.get(0).unwrap().end()..]);
+                out.push_str(rest);
             }
             _ => out.push_str(page),
         }
     }
     out
+}
+
+/// 段内折行（同一段落在下一行接着写）接缝处不补空格的情形：两边都是中日韩字符；或行尾是连字符/斜杠——
+/// 原书的复合词 `artificial-intelligence`、网址 `…/the-world-this-week` 在行尾断开，补了空格就变成
+/// "artificial- intelligence"、网址被截断（2026-09-23《T.E.双语》）。其余补一个空格。页内折行与跨页接段共用。
+pub(super) fn wrap_joins_without_space(last: char, next: char) -> bool {
+    (is_cjk(last) && is_cjk(next)) || matches!(last, '-' | '/' | '\u{2010}')
+}
+
+/// HTML 片段开头（`from_end` 为假）或末尾第一个不在标签里的字符（空白也算）。
+fn text_edge_char(html: &str, from_end: bool) -> Option<char> {
+    let mut in_tag = false;
+    let (open, close) = if from_end { ('>', '<') } else { ('<', '>') };
+    let mut it: Box<dyn Iterator<Item = char>> = if from_end { Box::new(html.chars().rev()) } else { Box::new(html.chars()) };
+    it.find(|&c| {
+        if c == open {
+            in_tag = true;
+        } else if c == close {
+            in_tag = false;
+        } else if !in_tag {
+            return true;
+        }
+        false
+    })
 }
 
 /// 目录条目的起始页（0 起，按条目顺序）→ 每章的页范围：**每页只进一章、一页不丢**。
@@ -415,7 +633,7 @@ pub(super) fn width_class(img_width_pt: f64, column: Option<f64>) -> Option<u32>
 /// 图片顺序跟原书一致，颜色跟随原书，不是"图片统一放段末"的近似）→ 公式块用 hayro 整页渲染后
 /// 裁剪成图片→ 章节/TOC 构建（书签优先，没有书签按字号识别标题，标题也识别不出来就按固定页数
 /// 分块）→ `epub::assemble_pdf_derived`（颜色与图片宽度的 CSS 规则通过返回值第三项交给调用方拼进外链样式表——
-/// xochitl 不认内联 `style=`，见 `EPUB优化规范白皮书.md` §03）。
+/// xochitl 不认内联 `style=`，只认外链样式表里的 class）。
 pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize)) -> Result<(Book, PdfToEpubReport, String), String> {
     // 原始字节解析完即释放（见 `load_pdf`）；只有带公式的书才需要把字节交给 hayro 再解析，那时再从磁盘读一次
     // （host 实测 139MB 扫描 PDF 转换峰值 557→431MB，连同组装时逐张释放资源）。
@@ -441,6 +659,7 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
     let mut resources: Vec<Resource> = Vec::new();
     let mut chapters: Vec<Chapter> = Vec::new();
     let mut total_images = 0usize;
+    let mut images_failed = 0usize;
     // 全书颜色去重表：同一个 RGB 只生成一条 CSS 规则，不管出现在哪页——`resolve_fill_rgb` 头注释
     // 解释过为什么纯黑（`[0,0,0]`）不算"有颜色"：默认字色已经是黑，包 span 只会让 markup 膨胀。
     let mut used_colors: std::collections::HashMap<[u8; 3], usize> = std::collections::HashMap::new();
@@ -498,9 +717,6 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
         anchor_pages.extend(ranges.iter().map(|r| r.start).filter(|&s| s < page_count));
     }
 
-    // 公式渲染缓存：同页多个公式块只渲染一次整页。
-    let render_settings = hayro::RenderSettings { x_scale: 2.0, y_scale: 2.0, ..Default::default() };
-
     // 只有真有公式块才需要 hayro 再解析一遍（原始字节上面已释放，这里重读；读失败就当渲染不了公式——公式图片只是
     // 文字之外的补充，缺了不丢内容）。
     let hayro_pdf = if total_formula_blocks > 0 { std::fs::read(src).ok().and_then(|b| hayro::hayro_syntax::Pdf::new(std::sync::Arc::new(b)).ok()) } else { None };
@@ -516,7 +732,7 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
             if let Some(pdf) = &hayro_pdf {
                 if let Some(hpage) = pdf.pages().get(idx) {
                     let cache = hayro::RenderCache::new();
-                    let pixmap = hayro::render(hpage, &cache, &hayro::hayro_interpret::InterpreterSettings::default(), &render_settings);
+                    let pixmap = hayro::render(hpage, &cache, &hayro::hayro_interpret::InterpreterSettings::default(), &formula_render_settings(hpage.render_dimensions()));
                     for (bi, region) in regions.iter().enumerate() {
                         if let Some(png) = crop_pixmap_to_png(&pixmap, region, hpage) {
                             let path = format!("images/pdf_p{}_f{}.png", idx + 1, bi + 1);
@@ -624,13 +840,25 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
                 }
             }
         };
-        // 解码并登记一张内容图片，返回 `<img>` 标签；反查失败（页面没有该资源名/解码失败）返回
-        // `None`——缺一张图比整本转换失败更可接受。
-        let mut emit_image = |im: &ImageEvent, width_pt: f64, resources: &mut Vec<Resource>, total_images: &mut usize, used_widths: &mut std::collections::BTreeSet<u32>| -> Option<String> {
-            let id = id_by_name.get(&im.xobject_name)?;
-            let pimg = images_by_id.get(id)?;
-            let raw = decode_pdf_image_to_bytes(&doc, pimg).ok()?;
-            let (ext, media_type) = image_ext_and_media_type(&raw);
+        // 解码并登记一张内容图片，返回 `<img>` 标签；反查失败（页面没有该资源名）或解码失败返回 `None`、
+        // 打印警告并计数——缺一张图比整本转换失败更可接受，但不能悄悄丢。
+        let mut emit_image = |im: &ImageEvent, width_pt: f64, resources: &mut Vec<Resource>, total_images: &mut usize, images_failed: &mut usize, used_widths: &mut std::collections::BTreeSet<u32>| -> Option<String> {
+            let decoded = id_by_name
+                .get(&im.xobject_name)
+                .and_then(|id| images_by_id.get(id))
+                .ok_or_else(|| "页面资源里查不到这张图".to_string())
+                .and_then(|pimg| decode_pdf_image_to_bytes(&doc, pimg));
+            let raw = match decoded {
+                Ok(raw) => raw,
+                Err(e) => {
+                    eprintln!("警告：第 {} 页的图片 {} 没能转出来，跳过：{e}", idx + 1, String::from_utf8_lossy(&im.xobject_name));
+                    *images_failed += 1;
+                    return None;
+                }
+            };
+            // 文件后缀必须跟内容一致（DCT 分支原样透传 JPEG，其余重编码成 PNG）：真机渲染器按后缀走快速路径解码、
+            // 探测尺寸，`.png` 后缀的真 JPEG 会整个不显示（2026-09-23 真机投一本真实 PDF 手册发现"手册里无图形"）。
+            let (ext, media_type) = crate::convert::common::image_ext_mime(&raw).unwrap_or(("png", "image/png"));
             img_counter += 1;
             // 不带 `../`，理由同上面公式块图片那处注释：章节文件跟 images/ 同级在 OEBPS/ 下。
             let path = format!("images/pdf_p{}_img{}.{ext}", idx + 1, img_counter);
@@ -651,7 +879,7 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
             let mut batch: Vec<(f64, String)> = Vec::new();
             while img_iter.peek().map(|p| p.0 <= c.seq).unwrap_or(false) {
                 let (_, top, _, im, w) = img_iter.next().unwrap();
-                if let Some(tag) = emit_image(im, w, &mut resources, &mut total_images, &mut used_widths) {
+                if let Some(tag) = emit_image(im, w, &mut resources, &mut total_images, &mut images_failed, &mut used_widths) {
                     batch.push((top, tag));
                 }
             }
@@ -691,11 +919,9 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
                         html.push_str("<p>");
                         in_para = false;
                     } else if in_para && wrapped {
-                        // 折行接续：中文接中文不补；行尾是连字符/斜杠不补——原书的复合词
-                        // `artificial-intelligence`、网址 `…/the-world-this-week` 在行尾断开，
-                        // 补了空格就变成 "artificial- intelligence"、网址被截断（2026-09-23《T.E.双语》）。
+                        // 折行接续：规则见 `wrap_joins_without_space`（中文接中文、行尾连字符/斜杠不补空格）。
                         let joined = match last_ch {
-                            Some(l) => (is_cjk(l) && is_cjk(c.ch)) || matches!(l, '-' | '/' | '\u{2010}'),
+                            Some(l) => wrap_joins_without_space(l, c.ch),
                             None => true,
                         };
                         if !joined {
@@ -715,7 +941,7 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
             // 链接/颜色只在真的变化时关/开，不是每个字符包一层。颜色：纯黑（含解析不出的 `None`）当
             // 默认色处理，不包 span——见上面 `used_colors` 注释。无彩色的灰字也当黑字（墨水屏提对比，
             // 与 EPUB 优化线的 `boost_text_contrast` 同一判据 `achromatic_dark`；彩色字照样保留）——
-            // 2026-09-23 用户拍板两条线统一（规范白皮书第 8 章 T2）。
+            // 2026-09-23 用户拍板两条线统一。
             // 空白字符不单独触发开合、沿用当前状态：链接矩形常把行尾空白也框进去，否则会冒出
             // 只包着空格的 `<a>`。
             let (want_link, want_color) = if c.ch.is_whitespace() {
@@ -763,7 +989,7 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
             }
         }
         // 视觉位置在本页最后一行文字之后的图片。
-        let tail: Vec<(f64, String)> = img_iter.filter_map(|(_, top, _, im, w)| emit_image(im, w, &mut resources, &mut total_images, &mut used_widths).map(|t| (top, t))).collect();
+        let tail: Vec<(f64, String)> = img_iter.filter_map(|(_, top, _, im, w)| emit_image(im, w, &mut resources, &mut total_images, &mut images_failed, &mut used_widths).map(|t| (top, t))).collect();
         html.push_str(&image_rows(&tail));
         // 书内跳转目标页：锚点 id 挂在本页第一个有内容的段落上（文字段或图片段；`end_para` 已保证
         // 不留空 `<p>`）。不能用空的 `<a id></a>`：xochitl 只给有内容的元素登记跳转目标，空元素上的
@@ -827,7 +1053,10 @@ pub fn optimize_pdf_to_epub(src: &Path, mut on_progress: impl FnMut(usize, usize
         resources,
         nav,
     };
-    let report = PdfToEpubReport { pages: page_count, chapters: nav_entries, images: total_images, formula_blocks: total_formula_blocks };
+    if images_failed > 0 {
+        eprintln!("警告：共 {images_failed} 张图片没能转出来（见上面逐张的原因）");
+    }
+    let report = PdfToEpubReport { pages: page_count, chapters: nav_entries, images: total_images, images_failed, formula_blocks: total_formula_blocks };
     // 颜色 CSS：`used_colors` 插入顺序＝class 编号顺序（`HashMap::entry` 首次插入即分配的 `idx`），
     // 排个序只是让产物字节稳定可测，顺序本身不影响渲染。
     let mut colors_sorted: Vec<([u8; 3], usize)> = used_colors.into_iter().collect();
@@ -862,6 +1091,17 @@ pub(super) fn promote_heading(title: &str, body: String) -> String {
         return out;
     }
     body
+}
+
+/// 公式区域整页渲染的像素上限（RGBA 每像素 4 字节 → 约 256MB）。
+pub(super) const MAX_RENDER_PIXELS: f64 = 64_000_000.0;
+
+/// 公式裁剪用的整页渲染设置：缺省 2 倍；页面（MediaBox/CropBox 可以写得极大）按 2 倍渲染会超过
+/// [`MAX_RENDER_PIXELS`]，或某一边超过 hayro 视口的 u16 上限时，缩小倍数（裁剪按渲染出来的实际像素换算，不受影响）。
+pub(super) fn formula_render_settings((pw, ph): (f32, f32)) -> hayro::RenderSettings {
+    let (pw, ph) = (pw.max(1.0) as f64, ph.max(1.0) as f64);
+    let scale = 2.0f64.min((MAX_RENDER_PIXELS / (pw * ph)).sqrt()).min(u16::MAX as f64 / pw.max(ph));
+    hayro::RenderSettings { x_scale: scale as f32, y_scale: scale as f32, ..Default::default() }
 }
 
 pub(super) fn point_in_bbox(x: f64, y: f64, b: &BBox) -> bool {
