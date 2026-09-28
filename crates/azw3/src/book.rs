@@ -47,13 +47,14 @@ pub struct Loaded {
     pub toc: Vec<TocItem>,
 }
 
-/// EPUB3 nav 文档里的目录：`<ol>` 嵌套深度即层级。
+/// EPUB3 nav 文档里的目录（`epub:type` 含 `toc` 的那个 `<nav>`，landmarks、page-list 不算）：`<ol>` 嵌套深度即层级。
 fn nav_toc(html: &str, nav_path: &str) -> Vec<TocItem> {
     static TOK: OnceLock<Regex> = OnceLock::new();
     static NAV: OnceLock<Regex> = OnceLock::new();
-    let nav = NAV.get_or_init(|| Regex::new(r#"(?is)<nav\b[^>]*toc[^>]*>(.*?)</nav>"#).unwrap());
-    let Some(body) = nav.captures(html).map(|c| c.get(1).unwrap().as_str()) else { return Vec::new() };
-    let tok = TOK.get_or_init(|| Regex::new(r#"(?is)<ol\b[^>]*>|</ol>|<a\b[^>]*\bhref="([^"]*)"[^>]*>(.*?)</a>"#).unwrap());
+    let nav = NAV.get_or_init(|| Regex::new(r#"(?is)(<nav\b[^>]*>)(.*?)</nav>"#).unwrap());
+    let is_toc = |tag: &str| bookconv::html::attr_value(tag, "epub:type").is_some_and(|t| t.split_whitespace().any(|w| w == "toc"));
+    let Some(body) = nav.captures_iter(html).find(|c| is_toc(&c[1])).map(|c| c.get(2).unwrap().as_str()) else { return Vec::new() };
+    let tok = TOK.get_or_init(|| Regex::new(r#"(?is)<ol\b[^>]*>|</ol>|(<a\b[^>]*>)(.*?)</a>"#).unwrap());
     let mut depth = 0u32;
     let mut out = Vec::new();
     for c in tok.captures_iter(body) {
@@ -62,9 +63,10 @@ fn nav_toc(html: &str, nav_path: &str) -> Vec<TocItem> {
             depth += 1;
         } else if t.eq_ignore_ascii_case("</ol>") {
             depth = depth.saturating_sub(1);
-        } else if let (Some(h), Some(label)) = (c.get(1), c.get(2)) {
+        } else if let (Some(h), Some(label)) = (c.get(1).and_then(|a| bookconv::html::attr_value(a.as_str(), "href")), c.get(2)) {
             let label = bookconv::wash::plain_text(label.as_str());
-            let (p, f) = h.as_str().split_once('#').unwrap_or((h.as_str(), ""));
+            let h = bookconv::util::xml_unescape(h);
+            let (p, f) = h.split_once('#').unwrap_or((&h, ""));
             out.push(TocItem { label, level: depth.saturating_sub(1), path: posix_norm(&resolve(dir_of(nav_path), &percent_decode(p))), frag: percent_decode(f) });
         }
     }
@@ -161,6 +163,15 @@ fn clamp_levels(toc: &mut [TocItem]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nav_toc_picks_toc_nav_and_reads_any_quote() {
+        let html = r#"<body><nav epub:type="landmarks"><ol><li><a href="toc.xhtml">Table of Contents</a></li></ol></nav>
+<nav epub:type='toc' id="toc"><ol><li><a class='x' href='Text/c1.xhtml#s%201'>第一章</a><ol><li><a href="Text/c2.xhtml?a=1&amp;b=2">第二节</a></li></ol></li></ol></nav></body>"#;
+        let toc = nav_toc(html, "OEBPS/nav.xhtml");
+        let got: Vec<_> = toc.iter().map(|t| (t.label.as_str(), t.level, t.path.as_str(), t.frag.as_str())).collect();
+        assert_eq!(got, [("第一章", 0, "OEBPS/Text/c1.xhtml", "s 1"), ("第二节", 1, "OEBPS/Text/c2.xhtml?a=1&b=2", "")]);
+    }
 
     #[test]
     fn toc_levels_never_skip() {
