@@ -7,7 +7,7 @@ pub struct PdfTrimReport {
 }
 
 /// 无文字层/漫画 PDF：逐页取主图片字节→ `imgopt::prepare_comic_page_for_pdf`（裁边+按需缩放，单趟）
-/// →喂给 `PdfPieceWriter` 写出新 PDF（复用漫画 EPUB→PDF 那条产线的写手）。
+/// →喂给 `PdfPieceWriter` 边写边落盘到 `dst_tmp`（与 `cbz2pdf` 同一个写手；中途失败时删掉写了一半的 `dst_tmp`）。
 ///
 /// **不允许变动书籍内容**（用户 2026-09-20 明确要求），所以这条路径**只处理"零文字、每页恰好一张
 /// 整页图"的 PDF**——重写页面等于丢掉图片以外的一切，其它形状一律拒绝并保持原文件不动：
@@ -45,16 +45,22 @@ pub fn optimize_pdf_trim_only(src: &Path, dst_tmp: &Path, screen: crate::imgopt:
     if titles.is_empty() {
         titles = crate::ncx::page_chunk_titles(page_count);
     }
-    let mut writer = PdfPieceWriter::begin(page_count, true, screen);
-    for (i, (_, page_id)) in pages.iter().enumerate() {
-        on_progress(i, page_count);
-        let images = doc.get_page_images(*page_id).map_err(|e| format!("读第 {} 页图片失败: {e}", i + 1))?;
-        let raw = decode_pdf_image_to_bytes(&doc, &images[0])?;
-        let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height, grayscale).unwrap_or(raw);
-        writer.write_page(&pdfwrite::image_from_bytes(&sized)?)?;
+    let mut write = || -> Result<(), String> {
+        let file = std::fs::File::create(dst_tmp).map_err(|e| format!("写出临时文件失败: {e}"))?;
+        let mut writer = PdfPieceWriter::begin_to(std::io::BufWriter::new(file), page_count, true, screen)?;
+        for (i, (_, page_id)) in pages.iter().enumerate() {
+            on_progress(i, page_count);
+            let images = doc.get_page_images(*page_id).map_err(|e| format!("读第 {} 页图片失败: {e}", i + 1))?;
+            let raw = decode_pdf_image_to_bytes(&doc, &images[0])?;
+            let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height, grayscale).unwrap_or(raw);
+            writer.write_page(&pdfwrite::image_from_bytes(&sized)?)?;
+        }
+        on_progress(page_count, page_count);
+        writer.finish(&titles).map(|_| ())
+    };
+    if let Err(e) = write() {
+        let _ = std::fs::remove_file(dst_tmp);
+        return Err(e);
     }
-    on_progress(page_count, page_count);
-    let out = writer.finish(&titles)?;
-    std::fs::write(dst_tmp, &out).map_err(|e| format!("写出临时文件失败: {e}"))?;
     Ok(PdfTrimReport { pages: page_count })
 }

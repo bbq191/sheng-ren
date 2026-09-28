@@ -475,6 +475,9 @@ fn promote_heading_upgrades_existing_paragraph_without_adding_text() {
     assert_eq!(promote_heading("1 Intro", "<p>1 Intro Some text</p>".into()), "<h2>1 Intro</h2><p>Some text</p>");
     // 章内找不到标题段落：不往正文里塞原书没有的字。
     assert_eq!(promote_heading("Missing", "<p>body</p>".into()), "<p>body</p>");
+    assert_eq!(promote_heading("第一章", "<p id=\"pdf-p3\">第一章</p><p>正文</p>".into()), "<h2 id=\"pdf-p3\">第一章</h2><p>正文</p>", "页锚点 id 跟着走");
+    assert_eq!(promote_heading("A&B", "<p>see A&amp;B</p><p>A&amp;B</p>".into()), "<p>see A&amp;B</p><h2>A&amp;B</h2>", "只认段首；标题按转义后的原文匹配");
+    assert_eq!(promote_heading("T", "<p class=\"x\">T</p><p>Tx</p>".into()), "<p class=\"x\">T</p><p>Tx</p>", "别的属性、标题后紧跟文字都不算");
 }
 
 // ---- 裁边路径 ----
@@ -482,9 +485,8 @@ fn promote_heading_upgrades_existing_paragraph_without_adding_text() {
 #[test]
 fn optimize_pdf_trim_only_comic_shaped_fixture_roundtrips() {
     // sample.pdf 是文字样本，不代表"裁边"路径的真实输入形状（裁边只服务一页一图的扫描件/
-    // 漫画 PDF）——这里用既有的 `images_to_pdf`（漫画 EPUB→PDF 那条产线复用的写手，已经
-    // 有自己的测试覆盖）现造一份"每页一张图"的合成 PDF，形状上才贴近这条路径真正会遇到的
-    // 输入。
+    // 漫画 PDF）——这里用 `images_to_pdf`（`pdfwrite` 的测试样本工具，已经有自己的测试
+    // 覆盖）现造一份"每页一张图"的合成 PDF，形状上才贴近这条路径真正会遇到的输入。
     const RED_PNG: &[u8] = &[
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
         0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,

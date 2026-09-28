@@ -95,7 +95,7 @@ pub fn fb2_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
         resources,
         nav: Vec::new(),
     };
-    let epub = super::common::assemble_master(&mut book)?;
+    let epub = crate::epub::assemble_master(&mut book)?;
     Ok((epub, title))
 }
 

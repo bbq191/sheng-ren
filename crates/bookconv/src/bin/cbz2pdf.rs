@@ -16,8 +16,13 @@ fn main() {
     // 设备 PDF 的真实可阅读范围（没有实测值时是标称屏幕）和是不是黑白屏
     let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
     let (screen, grayscale) = (device.readable(profile::Format::Pdf), !device.color);
-    let data = cli::read_or_die(files[0]);
-    let pdf = bookconv::convert::cbz::cbz_to_pdf(&data, screen, grayscale).unwrap_or_else(|e| die(cli::FAILED, format!("转换失败: {e}")));
-    cli::write_or_die(files[1], &pdf);
-    println!("cbz2pdf: {} → {} 字节", files[0], pdf.len());
+    // 从磁盘逐页读、边写边落盘到同目录临时文件，成功才改名到位。
+    let target = std::path::Path::new(files[1]);
+    let written = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(target, "cbz2pdf"), target, |tmp| {
+        let file = std::fs::File::create(tmp).map_err(|e| format!("写 {}: {e}", tmp.display()))?;
+        bookconv::convert::cbz::cbz_file_to_pdf(std::path::Path::new(files[0]), std::io::BufWriter::new(file), screen, grayscale)?;
+        std::fs::metadata(tmp).map(|m| m.len()).map_err(|e| e.to_string())
+    })
+    .unwrap_or_else(|e| die(cli::FAILED, format!("转换失败: {e}")));
+    println!("cbz2pdf: {} → {written} 字节", files[0]);
 }
