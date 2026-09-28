@@ -105,13 +105,12 @@ koreader/check.sh kindle-pw12-sig              # 离线检查：对空目录应�
 
 配置里只写字体名（正文）或字体文件路径（状态栏）。每台设备要有的字体文件列在 `device.conf` 的 `FONTS`，缺的 `apply.sh` 从本机字体目录拷：
 
-| 字体 | 用在 | 掌阅 | Kindle | Move |
-|---|---|---|---|---|
-| 霞鹜文楷（族名 LXGW WenKai） | 正文 | `LXGWWenKai-Regular.ttf` | `LXGWWenKai-Medium.ttf`（用户自己换成了 Medium 字重） | `LXGWWenKai-Regular.ttf` |
-| 京華老宋体 | 状态栏 | v2.0 `京華老宋体.ttf`（族名 KingHwa_OldSong） | v3.0 `京華老宋体v3.0.ttf`（族名 KingHwaOldSong） | v3.0 |
+| 字体 | 用在 | 三台设备（用户 2026-09-28 统一） |
+|---|---|---|
+| 霞鹜文楷 Medium `LXGWWenKai-Medium.ttf`（排版族名 LXGW WenKai） | 正文（`cre_font = "LXGW WenKai"`） | 都是这个文件；Regular 字重不放（放了 KOReader 很可能按族名选 Regular） |
+| 京華老宋体 v3.0 `京華老宋体v3.0.ttf`（族名 KingHwaOldSong） | 状态栏（按文件路径指定，见 `devices/<id>/`） | 都是这个文件 |
 
-Medium 字重的文楷有两套族名：老式族名（name ID 1）是「LXGW WenKai Medium」，排版族名（ID 16）是「LXGW WenKai」。KOReader 登记它用哪一个
-**还没核实**；如果用的是前者，正文设置的「LXGW WenKai」找不到它，会退回缺省字体——在 Kindle 上打开书看字体是不是文楷就知道。
+本机字体目录 `~/Documents/ereader/koreader-fonts/` 里放这两个文件，`apply.sh` 发现设备上缺哪个就拷哪个；不会删设备上的字体。
 
 ## 键名怎么核
 
