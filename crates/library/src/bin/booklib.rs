@@ -3,26 +3,26 @@
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib；产物缺省放在书库的 output/<设备>/ 下。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
-use library::{Added, Built, CoverResult, Delivered, Library, OriginalState, Profile, SyncEvent};
+use library::{Added, Built, CoverResult, Delivered, InfoResult, Library, OriginalState, Profile, SyncEvent};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 const USAGE: &str = "用法:
-  booklib [--library=目录] add <文件、目录或网址>...        目录会递归找出能入库的书
+  booklib [--library=目录] add <文件或网址>...           一次性入库单个文件（目录用 track）
   booklib [--library=目录] list [书名片段或 id...]      列出书，以及给哪些设备生成过、是否最新
   booklib [--library=目录] build --device=<设备>[,<设备>…] [--force] [--out=目录] [书名片段或 id...]
       --device 可写多次或用逗号分隔，--device=all 表示全部设备；不写书名 = 全部书
       产物生成在书库 output/<设备>/；--out 再拷过去（一台设备直接放进目录，多台放进 目录/<设备>/；
       支持 MTP 挂载的阅读器；没变的不重拷）。路径有空格要加引号
-  booklib [--library=目录] track <目录>...               跟踪目录：之后 sync 把它镜像进书库
+  booklib [--library=目录] track <目录>...               跟踪目录（递归）：之后 sync 把它镜像进书库
   booklib [--library=目录] untrack <目录>...             不再跟踪（已入库的书保留）
   booklib [--library=目录] sync [--prune] [--device=<设备>…] [--out=目录] [--watch[=秒]]
       新增的入库、改过的换成新版本、移动改名的认得出；原件删了的只报告，--prune 才从书库删掉
       --device 给了就接着生成（只重建有变化的）；--watch 一直运行，每隔几秒（缺省 60）检查一次
-  booklib [--library=目录] cover [--force] [--clear] [书名片段或 id...]
-      给没有封面的书联网找原作封面（Wikidata + Open Library），找不到就生成（书名 + 作者头像）；
-      生成产物时放进书里，原件不动
-      --force 重找已找过的；--clear 去掉找来的封面（找错了时）
+  booklib [--library=目录] meta [--force] [--clear] [书名片段或 id...]
+      联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；
+      生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动
+      --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
   booklib [--library=目录] remove <id>...               从书库删掉（连同产物；原件不动）。id 用 list 里显示的完整 id
   booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
   booklib [--library=目录] devices                      列出设备（书库 profiles/ 目录里的自定义设备也算）";
@@ -145,6 +145,29 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: 
 }
 
 /// 选书的参数里有像路径的（通常是路径里有空格没加引号，被拆开了），提示一下。
+/// 元数据一行摘要：来源、简介字数、标签、参考版本。
+fn info_summary(i: &library::BookInfo) -> String {
+    let mut parts = vec![i.source.clone()];
+    if !i.original_title.is_empty() {
+        parts.push(format!("原作名 {}", i.original_title));
+    }
+    if !i.first_published.is_empty() {
+        parts.push(format!("{} 年首次出版", i.first_published));
+    }
+    if !i.description.is_empty() {
+        parts.push(format!("简介 {} 字", i.description.chars().count()));
+    }
+    if !i.subjects.is_empty() {
+        parts.push(format!("标签 {}", i.subjects.join("、")));
+    }
+    if let Some(e) = &i.edition {
+        let v: Vec<&str> = [e.publisher.as_str(), e.pubdate.as_str()].into_iter().filter(|x| !x.is_empty()).collect();
+        let tr = if e.translators.is_empty() { String::new() } else { format!(" {} 译", e.translators.join("、")) };
+        parts.push(format!("参考版本 {}{tr}", v.join(" ")));
+    }
+    parts.join("；")
+}
+
 fn path_hint(selectors: &[String]) -> String {
     match selectors.iter().find(|s| s.contains('/')) {
         Some(s) => format!("\n（\"{s}\" 看起来像路径的一部分：路径里有空格时要整个加引号，如 --out=\"/run/…/Internal Storage/documents\"）"),
@@ -175,7 +198,7 @@ fn main() {
         "add" | "remove" | "dedupe" | "list" | "devices" | "track" | "untrack" => args.check(&cmd, &[], &[]),
         "build" => args.check(&cmd, &["device", "out"], &["force"]),
         "sync" => args.check(&cmd, &["device", "out", "watch"], &["prune", "watch"]),
-        "cover" => args.check(&cmd, &[], &["force", "clear"]),
+        "meta" => args.check(&cmd, &[], &["force", "clear"]),
         _ => usage_error(&format!("不认识的命令 {cmd}")),
     }
     let root = args.opt("library").map(PathBuf::from).unwrap_or_else(Library::default_root);
@@ -203,7 +226,7 @@ fn main() {
         }
         "add" => {
             if rest.is_empty() {
-                usage_error("add 要给文件或网址");
+                usage_error("add 要给文件或网址（目录用 track + sync）");
             }
             for item in rest {
                 let text = item.to_string_lossy().into_owned();
@@ -215,11 +238,8 @@ fn main() {
                     });
                     continue;
                 } else if path.is_dir() {
-                    let v = library::book_files(path);
-                    if v.is_empty() {
-                        report(Err(format!("✗ {text}: 目录里没有能入库的书（{}）", library::SUPPORTED_EXTS.join(" / "))));
-                    }
-                    v
+                    report(Err(format!("✗ {text} 是目录：目录用 booklib track {text} 登记跟踪，再 booklib sync 入库（之后增删改都会同步）")));
+                    continue;
                 } else {
                     vec![path.to_path_buf()]
                 };
@@ -341,7 +361,7 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_secs(secs));
             }
         }
-        "cover" => {
+        "meta" => {
             let books = lib.select(&args.texts());
             if books.is_empty() {
                 fail("没有匹配的书（booklib list 查看书库）");
@@ -349,19 +369,26 @@ fn main() {
             let (force, clear) = (args.flags.iter().any(|f| f == "force"), args.flags.iter().any(|f| f == "clear"));
             for m in &books {
                 if clear {
-                    report(lib.clear_cover(m).map(|had| if had { format!("✓ 去掉封面  {}", m.title) } else { format!("= 本来就没有找来的封面  {}", m.title) }));
+                    report(lib.clear_metadata(m).map(|had| if had { format!("✓ 去掉找来的元数据和封面  {}", m.title) } else { format!("= 本来就没有找来的元数据  {}", m.title) }));
                     continue;
                 }
-                report(match lib.fetch_cover(m, force) {
-                    Ok(CoverResult::Found(c)) => Ok(format!("✓ {}  ← {}（{}）", m.title, c.work, c.source_url)),
-                    Ok(CoverResult::Existing(c)) => Ok(format!("= {}  已有找来的封面 ← {}", m.title, c.work)),
-                    Ok(CoverResult::HasCover) => Ok(format!("= {}  书里有封面", m.title)),
-                    Ok(CoverResult::Generated(c, why)) => Ok(format!("◇ {}  {why}，{}", m.title, c.work)),
-                    Err(e) => Err(format!("✗ {}: {e}", m.title)),
-                });
+                report(lib.fetch_metadata(m, force).map(|(info, cover)| {
+                    let info = match info {
+                        InfoResult::Found(i) => format!("元数据 ← {}", info_summary(&i)),
+                        InfoResult::Existing(i) => format!("元数据 = 已有 ← {}", info_summary(&i)),
+                        InfoResult::NotFound(why) => format!("元数据 ? {why}"),
+                    };
+                    let cover = match cover {
+                        CoverResult::Found(c) => format!("封面 ← {}（{}）", c.work, c.source_url),
+                        CoverResult::Existing(c) => format!("封面 = 已有 ← {}", c.work),
+                        CoverResult::HasCover => "封面 = 书里有".to_string(),
+                        CoverResult::Generated(c, why) => format!("封面 ◇ {why}，{}", c.work),
+                    };
+                    format!("✓ {}\n      {info}\n      {cover}", m.title)
+                }).map_err(|e| format!("✗ {}: {e}", m.title)));
             }
             if !clear {
-                println!("  封面在生成产物时放进书里：booklib build --device=… 会把这些书判为过期并重建");
+                println!("  简介、标签、封面在生成产物时补进书里（书里已有的不动）：booklib build --device=… 会把这些书判为过期并重建");
             }
         }
         "remove" => {

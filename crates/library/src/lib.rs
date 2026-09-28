@@ -3,7 +3,7 @@
 //! 目录结构（`root` 缺省 `~/.local/share/booklib`）：
 //! ```text
 //! masters/<id>/meta.json                   一本书的索引：原件路径、SHA-256、大小与修改时间、书名、作者
-//! masters/<id>/cover.jpg                   可选：联网找来的封面（booklib cover），书里没封面时生成产物用
+//! masters/<id>/cover.jpg                   可选：联网找来的封面（booklib meta），书里没封面时生成产物用
 //! masters/<id>/master.epub                 只有网址入库的书有（没有原件，抓下来的正文存这里）；早期版本入库的条目也可能有
 //! output/<设备 id>/<书名>.<epub|azw3|pdf>  产物；output/<设备 id>/.state.json 记每本书的生成指纹，没变就跳过
 //! deliveries.json                          build --out 拷出去的各份（没变不重拷，remove 时一起删）
@@ -20,9 +20,14 @@
 mod cover;
 mod covergen;
 mod deliver;
+mod douban;
 mod fsutil;
 mod generate;
+mod matching;
+mod metadata;
+mod net;
 mod sources;
+mod wikidata;
 
 use fsutil::{sha256_file, sha256_hex, write_atomic};
 use serde::{Deserialize, Serialize};
@@ -32,6 +37,7 @@ pub use cover::{CoverInfo, CoverResult};
 pub use deliver::{Delivered, DeliveryStatus};
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus};
+pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
 pub use sources::{book_files, SyncEvent, SyncReport, SUPPORTED_EXTS};
 
@@ -66,9 +72,12 @@ pub struct Meta {
     /// PDF 有没有文字层（有 → 转 EPUB；没有 → 图片型）。入库时判定一次存下来。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pdf_text_layer: Option<bool>,
-    /// 联网找来的封面（`booklib cover`）；书里没有封面时，生成产物时放进去。
+    /// 联网找来的封面（`booklib meta`）；书里没有封面时，生成产物时放进去。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<CoverInfo>,
+    /// 联网找来的元数据（`booklib meta`）；简介、标签书里没有的，生成产物时补进去。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<BookInfo>,
 }
 
 impl Meta {
@@ -325,6 +334,7 @@ impl Library {
             master_sha256: String::new(),
             pdf_text_layer,
             cover: None,
+            info: None,
         };
         self.store(&meta, &[])?;
         Ok(Added::New(meta))
@@ -352,6 +362,7 @@ impl Library {
             master_sha256: sha256_hex(&epub),
             pdf_text_layer: None,
             cover: None,
+            info: None,
         };
         self.store(&meta, &[("master.epub", &epub), ("source.url", url.as_bytes())])?;
         Ok(Added::New(meta))
