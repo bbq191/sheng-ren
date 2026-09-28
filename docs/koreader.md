@@ -92,7 +92,8 @@ koreader/check.sh kindle-pw12-sig              # 离线检查：对空目录应�
 `--write` 时：
 
 1. 判断 KOReader 退没退出。Kindle 看 `crash.log`：最后一次启动（`It's KOReader!`）之后有没有 `Tearing down UIManager`，没有就拒绝写。
-   Move 看 `/proc` 里有没有进程在跑它的 `reader.lua`。Android 上从电脑看不出来，要你确认。
+   Move 看 `/proc` 里有没有进程在跑它的 `reader.lua`。Android 上从电脑看不出来，要你确认——**用 KOReader 菜单里的「退出」关**，
+   在最近任务里划掉不一定结束进程（2026-09-28 掌阅实测：划掉后写入的 `fontmap`，被仍在运行的 KOReader 存设置时整份覆盖掉了）。
 2. 设备上的原配置备份到 `~/Documents/ereader/koreader-backup/<时间>/<设备 id>/`。
 3. 设备上缺的字体（`device.conf` 的 `FONTS`）从本机 `~/Documents/ereader/koreader-fonts/` 拷过去（`KOREADER_FONTS` 可改目录）。
 4. 有净改动的文件写入（MTP 先删再拷，不支持覆盖写；SSH 先拷成临时文件再改名），再读回核对（MTP **经 gio 读**），不一致就用备份还原。
