@@ -2,10 +2,7 @@
 
 ## 总体
 
-```
-入库（add / sync）                书库                        按设备生成（build）                           投递
-EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ 核对原件 → 转 EPUB → 优化 → 质量门 ─→ EPUB / AZW3 / PDF
-```
+![总体流程](img/overview.svg)
 
 三条设计原则：
 
@@ -21,9 +18,9 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 |---|---|---|
 | `library` | 书库：入库（索引）、跟踪同步、按设备生成、产物指纹 | `booklib` |
 | `azw3` | EPUB → AZW3（KF8）写出器，clean-room 实现，见 [AZW3 写出器](azw3.md) | `epub-to-azw3` |
-| `bookconv` | 内容层：格式转换、清洗、优化、图片处理、质量门。不落盘、不管书库，只按调用方传入的阅读范围和选项处理 | `epub-optimize`、`cbz2pdf`、`readable-probe`、`readable-measure`、`cover-fix`、`ebook-meta` |
+| `bookconv` | 内容层：格式转换、清洗、优化、图片处理、质量门。不管书库，只按调用方传入的阅读范围和选项处理 | `epub-optimize`、`cbz2pdf`、`readable-probe`、`readable-measure`、`cover-fix`、`ebook-meta` |
 | `profile` | 设备参数，TOML 构建时嵌入，见[设备与可阅读范围](devices.md) | |
-| `pdf-extract` | PDF 文字层提取，pdf-extract 0.12.1 的本地 MIT fork（修改处注释标 `fork：`） | |
+| `pdf-extract` | PDF 文字层提取，pdf-extract 0.12.1 的本地 MIT fork（修改处注释标 `fork：`，汇总在 `src/lib.rs` 头注释）。`bookconv::pdf_ingest` 调它时用 `catch_unwind` 包住，损坏 PDF 触发的 panic 报"PDF 解析失败"，不会带崩整个进程 | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
 依赖单向无环：`library` → `azw3` → `bookconv` → `profile`、`pdf-extract`。
@@ -60,7 +57,7 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 | `douban.rs` / `wikidata.rs` | 书目源：豆瓣（搜索建议 + 条目页）、Wikidata（作品、作者照片） |
 | `net.rs` / `matching.rs` | 节流重试的 HTTP；书名人名比对（全半角、繁简、译名用字） |
 | `cover.rs` / `covergen.rs` | 找原作封面（Open Library / Commons）、生成封面 |
-| `fsutil.rs` | 原子写、流式哈希、进程锁 |
+| `fsutil.rs` | 原子写（临时文件 + fsync + 改名）、JSON 读写与读缓存、流式哈希、进程锁、残留临时文件清理 |
 
 ## 书库
 
@@ -68,8 +65,9 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 
 ### 入库（`Library::add_file` / `add_url`）
 
-1. 读原件，算 SHA-256，前 12 位作 id。已有这个 id 就返回"已在库里"（记着的原件位置已经不在时，改记成这个新位置）。
-2. 完整检查一遍能不能用：EPUB 只读非图片条目，取书名作者、检查 DRM；MOBI/FB2/CBZ 先转一遍 EPUB（结果不存）；PDF 判定有没有文字层。不能用的当场拒收。
+1. 边读原件边算 SHA-256（不整本读进内存），前 12 位作 id；读之前、读完各看一次大小和修改时间，变了就报"文件正在写入"。文件名不是 UTF-8 的拒收。
+   已有这个 id 就返回"已在库里"：记着的原件位置已经不在时，改记成这个新位置；就是这个位置的，刷新记着的大小和修改时间。
+2. 完整检查一遍能不能用：EPUB 直接从文件读 zip，只读非图片条目，取书名作者、检查 DRM；MOBI/FB2/CBZ 先转一遍 EPUB（结果不存）；PDF 判定有没有文字层。不能用的当场拒收。
 3. 在 `masters/.tmp-<id>/` 里写好 `meta.json`（原件绝对路径、SHA-256、大小、修改时间、书名作者），最后一步改名成 `masters/<id>/`。
 
 网址没有原件：抓下来的 EPUB 存成 `masters/<id>/master.epub`。早期版本入库的条目也存着副本，`dedupe` 找到原件后改成只存索引。
@@ -78,11 +76,24 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 
 `sources.json` 记着跟踪的目录，以及其中每个文件上次看到时的大小、修改时间和对应的书 id。`sync` 遍历跟踪的目录：大小和修改时间都没变的跳过；变了或新出现的走一遍入库（按内容 id 判断是新书、已有的书，还是同一路径上的新版本）；上次有、这次没有的，按 id 判断是移动改名还是真删了。入库失败的也记下来（id 为空），文件没变就不再重试。
 
+- 新版本入库失败时，旧版本继续跟踪；旧版本删不掉的记在 `sources.json` 的 `stale` 里，下次再删。
+- 同一内容在跟踪目录里还有一份时，索引改记成还在的那份，不算原件不在。
+- 跟踪的目录不能互相包含；同一个文件一轮只处理一次。
+- 没有任何变化时不写 `sources.json`。
+- `--watch` 跨轮记住已经报过的问题和失败的生成（`SyncMemo`）：只在第一轮、本轮有增改删、书库或产物目录的修改时间变了、`--out` 目录出现或消失时才生成；
+  生成失败的书按（书、设备、指纹、原件状态）记住，都没变就不重试；原件不在只报一次。长期运行时每轮只有一次目录遍历和 stat。
+
 ### 元数据与封面（`Library::fetch_metadata`，`metadata.rs`）
 
 豆瓣搜索建议接口（繁简转换后比对书名、核对作者）→ 条目页取简介、标签、原作名和版本信息（`douban.rs`）；书里没封面的，前几个条目里挑分辨率最高的大图。
 豆瓣没有 → Wikidata（书名 → 作品，核对作者；或作者 → 作品，核对书名；`wikidata.rs`）取原作名、首次出版年，Open Library / Wikimedia Commons 取原作封面 → 封面都没有就生成（`covergen.rs`：书名 + 作者照片，字体 `fc-match` 找）。
-结果存进 `meta.json` 的 `info`、`cover`（封面图是条目里的 `cover.jpg`）。网络请求节流（间隔 1.2 秒）、429 按 `Retry-After` 重试。
+结果存进 `meta.json` 的 `info`、`cover`（封面图是条目里的 `cover.jpg`）。
+
+HTTP（`net.rs`）在一次运行里各本书共用：请求间隔 1.2 秒；429 按 `Retry-After` 重试，5xx、超时重试几次，4xx 不重试；
+连不上的网站记下来，之后发给它的请求立即失败；接连两个不同网站连不上、其间没有请求成功，算断网，`meta` 中止整轮。
+网络出错（区别于"查了，没有"）的书报错、不生成封面、不存不完整的结果，下次再查。
+
+![元数据和封面](img/metadata.svg)
 
 生成时 `metadata::with_additions` 把书里**没有的**封面、`dc:description`、`dc:subject` 补进 OPF（其余条目原样拷）；版本信息（出版社、ISBN、译者）不写进书。封面哈希和补进去的简介标签的哈希都进指纹。
 
@@ -90,26 +101,26 @@ EPUB / MOBI / FB2 / CBZ / PDF / 网址 ─→ 索引（指向原件） ─→ �
 
 1. **计划**：确定产物格式（设备首选的流式格式；图片型 PDF 只能给支持 PDF 的设备）、阅读范围，算指纹。
 2. **指纹没变且产物还在** → 跳过。
-3. **核对原件**：大小和修改时间没变直接用；变了重算哈希，内容一样就更新记录，不一样就报错停下；原件不在也报错。
+3. **核对原件**：大小和修改时间没变直接用；变了重算哈希，内容一样就更新记录，不一样就报错停下；原件不在也报错。同一次运行里核对过的原件不再核对（多台设备生成同一本书）。
 4. 在 `output/<设备>/.tmp-<id>/` 里：（MOBI/FB2/CBZ、有文字层的 PDF 当场转 EPUB）→ `bookconv::optimize` 流式优化 → 质量门 →（Kindle）`azw3::epub_to_azw3`。
 5. 成品改名到位，更新 `.state.json`。
-6. 给了 `--out` 时拷过去（`Library::deliver`）：普通文件系统先写临时文件再改名；MTP 挂载（gvfs）不支持普通写，改用 `gio copy`。拷过的记在 `deliveries.json`（目标路径 → 书、设备、指纹、大小），没变的不重拷。
+6. 给了 `--out` 时拷过去（`Library::deliver`）：普通文件系统先写临时文件再改名；MTP 挂载（错误码 EOPNOTSUPP 或路径在 gvfs 下）不支持普通写，改用 `gio copy`；其它错误直接报错，不删目标位置的旧文件。拷过的记在 `deliveries.json`（目标路径 → 书、设备、指纹、大小），没变的不重拷。
 
 指纹由这些拼成，任何一项变了产物就算过期：
 
 ```
-原件 SHA-256 | 找来的封面 | 生成流程版本（含当场转换） | 优化器版本 | AZW3 写出器版本 | 设备 id | 阅读范围 | 黑白/彩色 | 格式
+原件 SHA-256 | 找来的封面 | 补进去的简介标签 | 生成流程版本（非 EPUB 来源再加格式转换版本） | 优化器版本 | AZW3 写出器版本 | 设备 id | 阅读范围 | 黑白/彩色 | 格式
 ```
 
-改了会影响产物的代码时，要把对应的版本号加一：`library` 的 `PIPELINE_VERSION`、`bookconv::optimize::OPTIMIZE_VERSION`、`azw3::WRITER_VERSION`。
+改了会影响产物的代码时，要把对应的版本号加一，见[开发 · 版本号](development.md#版本号)。
 
 ### 可靠性
 
 | 风险 | 做法 |
 |---|---|
-| 写到一半断电 | `meta.json`、`.state.json`、`outputs.json` 和产物都先写临时文件再改名 |
+| 写到一半断电 | `meta.json`、`sources.json`、`deliveries.json`、`.state.json` 和产物都先写临时文件（`.tmp-<进程号>-<计数>-<名>`）、落盘（fsync），再改名、落盘目录；进程被杀留下的 `.tmp-*` 下次拿到锁时清掉 |
 | `meta.json` 还是坏了 | `list` 报出来；`remove` 能删；重新 `add` 同一原件会替换它 |
-| 两个 booklib 同时运行 | `.lock` 文件锁，会改动书库的命令拿不到锁就退出 |
+| 两个 booklib 同时运行 | `.lock` 文件锁，会改动书库的命令拿不到锁就退出；`list` 不持锁，也不写书库（早期条目缺的字段只在持锁时补写） |
 | 原件被改 | 生成前核对：大小、修改时间变了就重算哈希，内容不同就停下，提示 `sync` 换成新版本 |
 | 原件移动、删除 | 按内容 id 认出移动（`sync`、重新 `add` 更新路径）；删除的 `list`、`sync` 报出来 |
 | 产物重名 | 不区分大小写地判断撞名，撞了加 id 后缀；不覆盖不是本工具生成的同名文件 |
