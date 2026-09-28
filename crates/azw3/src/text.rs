@@ -7,7 +7,9 @@
 
 use crate::book::Loaded;
 use bookconv::epubzip::{dir_of, percent_decode, posix_norm, resolve};
+use bookconv::util::xml_unescape;
 use regex::Regex;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -92,7 +94,8 @@ struct DocCtx<'a> {
 
 /// 改写一个开标签里的引用。返回新标签，和其中链接占位串的 (标签内偏移, 目标文档, id)。标签整个去掉时返回空串。
 fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize, String)>) {
-    let attr = |a: &regex::Captures| a.get(4).or(a.get(5)).map_or("", |m| m.as_str()).to_string();
+    // 属性原文先还原字符引用（`&amp;` 等），再按路径/锚点分别百分号解码（与 id_offsets 对 id 的处理一致）。
+    let attr = |a: &regex::Captures| xml_unescape(a.get(4).or(a.get(5)).map_or("", |m| m.as_str())).into_owned();
     let is_css_link = name == "link" && tag.to_ascii_lowercase().contains("stylesheet");
     // 非样式表的 <link>（Adobe 的 page-template.xpgt 等）和指向书里不存在的样式表的 <link>，Kindle 用不上，去掉。
     if name == "link" {
@@ -143,14 +146,12 @@ fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize
 fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> {
     static SCRIPT: OnceLock<Regex> = OnceLock::new();
     static TAG: OnceLock<Regex> = OnceLock::new();
-    static AID: OnceLock<Regex> = OnceLock::new();
     static STYLE: OnceLock<Regex> = OnceLock::new();
     let path = cx.path;
     let html = SCRIPT.get_or_init(|| Regex::new(r#"(?is)<script\b.*?</script>"#).unwrap()).replace_all(html, "");
     let html = STYLE
         .get_or_init(|| Regex::new(r#"(?is)(<style\b[^>]*>)(.*?)(</style>)"#).unwrap())
         .replace_all(&html, |c: &regex::Captures| format!("{}{}{}", &c[1], rewrite_css(&c[2], path, cx.res), &c[3]));
-    let aid_re = AID.get_or_init(|| Regex::new(r#"(?i)\s+aid\s*=\s*"[^"]*""#).unwrap());
     // 注释原样跳过（里面的标签不改写）；只认开标签
     let tag_re = TAG.get_or_init(|| Regex::new(r#"(?s)<!--.*?-->|<([A-Za-z][A-Za-z0-9:]*)\b[^>]*>"#).unwrap());
     let mut out = String::with_capacity(html.len() + html.len() / 8);
@@ -163,7 +164,8 @@ fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> 
         out.push_str(&html[last..m.start()]);
         last = m.end();
         let name = name.as_str().to_ascii_lowercase();
-        let tag = aid_re.replace_all(m.as_str(), "");
+        // 书里原有的 aid（单双引号、无引号都认）去掉，免得和骨架的 aid 冲突
+        let tag = if has_ci(m.as_str().as_bytes(), b"aid") { Cow::Owned(bookconv::html::remove_attr(m.as_str(), "aid")) } else { Cow::Borrowed(m.as_str()) };
         let (mut new, tag_links) = rewrite_tag(&tag, &name, cx);
         if name == "body" && body_open.is_none() {
             // body 开标签带上 aid（片段插回的位置由它标识）
@@ -177,7 +179,7 @@ fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> 
     }
     out.push_str(&html[last..]);
     let (_, b_end) = body_open.ok_or_else(|| format!("{path} 没有 <body>"))?;
-    let close = out.to_ascii_lowercase().rfind("</body>").filter(|&c| c >= b_end).ok_or_else(|| format!("{path} 没有 </body>"))?;
+    let close = rfind_ci(out.as_bytes(), b"</body>").filter(|&c| c >= b_end).ok_or_else(|| format!("{path} 没有 </body>"))?;
     let mut head = out[..b_end].to_string();
     let frag = out[b_end..close].to_string();
     let mut tail = out[close..].to_string();
@@ -196,6 +198,16 @@ fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> 
     Ok(Rewritten { head, frag, tail, links: body_links })
 }
 
+/// `hay` 里是否含 `needle`（ASCII 不分大小写）。
+fn has_ci(hay: &[u8], needle: &[u8]) -> bool {
+    hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+/// `needle` 在 `hay` 里最后一次出现的位置（ASCII 不分大小写，不复制 `hay`）。
+fn rfind_ci(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).rposition(|w| w.eq_ignore_ascii_case(needle))
+}
+
 /// 片段里各 id 的字节偏移（单双引号都认；同名只记第一个）。
 fn id_offsets(frag: &str) -> HashMap<String, usize> {
     static ID: OnceLock<Regex> = OnceLock::new();
@@ -203,7 +215,7 @@ fn id_offsets(frag: &str) -> HashMap<String, usize> {
     let mut m = HashMap::new();
     for c in re.captures_iter(frag) {
         let id = c.get(1).or(c.get(2)).unwrap().as_str();
-        m.entry(bookconv::util::xml_unescape(id).into_owned()).or_insert(c.get(0).unwrap().start());
+        m.entry(xml_unescape(id).into_owned()).or_insert(c.get(0).unwrap().start());
     }
     m
 }
@@ -293,6 +305,20 @@ mod tests {
         let off = fb.find("<p id='café'>").unwrap() as u32;
         assert!(fa.contains(&format!("href=\"kindle:pos:fid:0001:off:{}\"", base32(off, 10))), "单引号 + 百分号编码的锚点要找到: {fa}");
         assert_eq!(w.len(), 1, "找不到的 #nope 要报出来: {w:?}");
+    }
+
+    #[test]
+    fn stray_aid_removed_in_any_quote_and_href_entities_decoded() {
+        let a = r#"<html><BODY aid='x'><p aid="y" data-aid='keep'>甲</p><a href="b%20c.xhtml#r&amp;d">1</a></Body></html>"#;
+        let b = r#"<html><body><p>前</p><p id="r&amp;d">目标</p></body></html>"#;
+        let (l, w) = lay(vec![doc("a.xhtml", a), doc("b c.xhtml", b)]);
+        let head = String::from_utf8(l.flow0[..l.skeletons[0].1 as usize].to_vec()).unwrap();
+        assert!(head.contains("<BODY aid=\"0\">") && !head.contains("'x'"), "body 上原有的单引号 aid 去掉、换成骨架的: {head}");
+        let fa = frag_text(&l, 0);
+        assert!(fa.starts_with("<p data-aid='keep'>甲</p>"), "data-aid 不误删: {fa}");
+        let off = frag_text(&l, 1).find("<p id=").unwrap() as u32;
+        assert!(fa.contains(&format!("kindle:pos:fid:0001:off:{}", base32(off, 10))), "href 里的 &amp; 先还原再对 id: {fa}");
+        assert!(w.is_empty(), "{w:?}");
     }
 }
 

@@ -51,7 +51,7 @@ fn classify_doc(doc: &lopdf::Document) -> PdfKind {
     }
     // 数够"平均每页 MIN_CHARS_PER_PAGE 个非空白字符"就停，不用把整本书的文字都抽一遍（大书分类慢在这里）。
     let mut counter = CharCounter { count: 0, need: (MIN_CHARS_PER_PAGE * total as f64).ceil() as usize, reached: false };
-    let _ = pdf_extract::output_doc(doc, &mut counter); // 出错（含数够后主动中止）时看已数到的
+    let _ = super::run_output_doc(doc, &mut counter); // 出错（含数够后主动中止、panic）时看已数到的
     if counter.reached {
         PdfKind::TextLayer
     } else {

@@ -12,13 +12,14 @@
 //! ④ CID 字体 `/W` 数组的区间写法 `c_first c_last w` 解析全错（见 `PdfCIDFont` 构造处注释），
 //!   中文字宽全为 0。
 //! ⑤ Form XObject 递归原本不设深度上限、不防环：自引用的 Form 会把栈打爆（SIGSEGV，`catch_unwind`
-//!   接不住，整个 book-serve 进程一起崩）。现在限深 [`MAX_FORM_DEPTH`] 并跳过正在展开中的同一对象
+//!   接不住，整个调用方（booklib）进程一起崩）。现在限深 [`MAX_FORM_DEPTH`] 并跳过正在展开中的同一对象
 //!   （2026-09-24 审查补）。
 //! ⑥ 2026-09-24 第三轮审计：lopdf 0.42 → 0.45（与 bookconv 同版本，调用方可直接传入已解析的 `Document`，
 //!   不必整份再解析一遍）；页内容改走带上限的解压（[`MAX_PAGE_CONTENT_BYTES`]，防解压炸弹）；损坏 PDF
 //!   常见的几处 panic（悬空引用、数组元素类型/个数不对、缺页对象、缺 MediaBox）改成返回 None/错误。
-//! 起因与设计见 `shelf/docs/EPUB优化规范白皮书.md` §05（PDF→EPUB 线"不改颜色/不挪图片位置"从
-//! "本来就没做"升级成"精确还原"，2026-09-23 用户拍板自研解释器）。
+//! 起因：PDF→EPUB 线"不改颜色/不挪图片位置"从"本来就没做"升级成"精确还原"（2026-09-23 用户拍板自研解释器）。
+//! ⑦ 2026-09-28：①里补的 `g`/`G`/`rg`/`RG`/`k`/`K` 原先用会 panic 的 `as_num` 并直接取 `operands[0]`，
+//!   操作数缺失或不是数字时越界/panic；改成取不到就跳过这条算子（`try_num`）。
 //! 许可证：上游 MIT，见本 crate 目录 `LICENSE`。
 //! 下面这条 `allow`：上游代码本身在当前 Rust 版本下有一批 dead_code/unused_variables/
 //! non_upper_case_globals/lifetime 风格告警，不是本次改动引入的——vendored 进来的第三方代码，
@@ -1270,6 +1271,20 @@ fn as_num(o: &Object) -> f64 {
     }
 }
 
+/// fork：不 panic 的 [`as_num`]——不是数字返回 `None`。fork 新增的颜色算子用它，操作数缺失或类型不对时整条算子跳过。
+fn try_num(o: &Object) -> Option<f64> {
+    match *o {
+        Object::Integer(i) => Some(i as f64),
+        Object::Real(f) => Some(f.into()),
+        _ => None,
+    }
+}
+
+/// fork：全部操作数都是数字才返回（空也算，由 `resolve_fill_rgb` 按分量数判断能不能用）。
+fn try_nums(operands: &[Object]) -> Option<Vec<f64>> {
+    operands.iter().map(try_num).collect()
+}
+
 #[derive(Clone)]
 struct TextState<'a>
 {
@@ -1728,29 +1743,42 @@ impl<'a> Processor<'a> {
                 // 不补上 fill_color 从头到尾都是空的，颜色特性无从谈起（2026-09-23 补，本地 fork）。
                 // 按 PDF 32000-1 §8.6.5.2：这几个算子在设置颜色分量的同时，隐式把当前颜色空间也设成
                 // 对应的 Device 空间（不需要先发 cs/CS）。
+                // 损坏 PDF 里操作数缺失或不是数字时整条算子跳过（颜色状态不变），不 panic。
                 "g" => {
-                    gs.fill_colorspace = ColorSpace::DeviceGray;
-                    gs.fill_color = vec![as_num(&operation.operands[0])];
+                    if let Some(v) = operation.operands.first().and_then(try_num) {
+                        gs.fill_colorspace = ColorSpace::DeviceGray;
+                        gs.fill_color = vec![v];
+                    }
                 }
                 "G" => {
-                    gs.stroke_colorspace = ColorSpace::DeviceGray;
-                    gs.stroke_color = vec![as_num(&operation.operands[0])];
+                    if let Some(v) = operation.operands.first().and_then(try_num) {
+                        gs.stroke_colorspace = ColorSpace::DeviceGray;
+                        gs.stroke_color = vec![v];
+                    }
                 }
                 "rg" => {
-                    gs.fill_colorspace = ColorSpace::DeviceRGB;
-                    gs.fill_color = operation.operands.iter().map(|x| as_num(x)).collect();
+                    if let Some(v) = try_nums(&operation.operands) {
+                        gs.fill_colorspace = ColorSpace::DeviceRGB;
+                        gs.fill_color = v;
+                    }
                 }
                 "RG" => {
-                    gs.stroke_colorspace = ColorSpace::DeviceRGB;
-                    gs.stroke_color = operation.operands.iter().map(|x| as_num(x)).collect();
+                    if let Some(v) = try_nums(&operation.operands) {
+                        gs.stroke_colorspace = ColorSpace::DeviceRGB;
+                        gs.stroke_color = v;
+                    }
                 }
                 "k" => {
-                    gs.fill_colorspace = ColorSpace::DeviceCMYK;
-                    gs.fill_color = operation.operands.iter().map(|x| as_num(x)).collect();
+                    if let Some(v) = try_nums(&operation.operands) {
+                        gs.fill_colorspace = ColorSpace::DeviceCMYK;
+                        gs.fill_color = v;
+                    }
                 }
                 "K" => {
-                    gs.stroke_colorspace = ColorSpace::DeviceCMYK;
-                    gs.stroke_color = operation.operands.iter().map(|x| as_num(x)).collect();
+                    if let Some(v) = try_nums(&operation.operands) {
+                        gs.stroke_colorspace = ColorSpace::DeviceCMYK;
+                        gs.stroke_color = v;
+                    }
                 }
                 "TJ" => {
                     match operation.operands[0] {

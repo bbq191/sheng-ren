@@ -63,6 +63,16 @@ pub(super) fn load_pdf(src: &Path) -> Result<lopdf::Document, String> {
     parse_pdf(&bytes)
 }
 
+/// 驱动 `pdf_extract::output_doc`，并把它的 panic 接住转成错误"PDF 解析失败"：pdf-extract 沿用上游的解释器，
+/// 损坏 PDF 在上游代码里仍有 `unwrap`/下标越界之类的 panic，不能让一本坏书把整个进程带崩。
+/// 栈溢出（SIGSEGV）接不住，那一类在 pdf-extract 里另外限深。
+pub(super) fn run_output_doc(doc: &lopdf::Document, output: &mut dyn pdf_extract::OutputDev) -> Result<(), String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pdf_extract::output_doc(doc, output))) {
+        Ok(r) => r.map_err(|e| format!("PDF 文字提取失败: {e}")),
+        Err(_) => Err("PDF 解析失败".into()),
+    }
+}
+
 
 // ============================================================================
 // 分类
