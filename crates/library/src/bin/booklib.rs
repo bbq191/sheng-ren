@@ -126,8 +126,27 @@ type FailMemo = HashMap<(String, String), (String, OriginalState)>;
 /// 按模式 × 书逐本生成（没变化的跳过），每本一行结果。`quiet` 时不打印没变化的（sync 用：只报有变化的）。
 /// 给了 `fails`（`sync --watch`）：上次失败以后指纹和原件状态都没变的书跳过。
 /// 不再支持的格式（早期版本收的 MOBI/PDF 等）跳过，每本只提示一次（`skipped` 记着提示过的）。
+/// `build_all` 的结果计数（结尾打一行汇总：用户 2026-09-29 反馈"看不出是否更新过"）。
+#[derive(Default)]
+struct BuildCounts {
+    written: usize,
+    moved: usize,
+    up_to_date: usize,
+    failed: usize,
+}
+
+impl BuildCounts {
+    fn summary(&self) -> String {
+        format!("生成：重新生成 {} 本，挪位置 {} 本，已是最新 {} 本，失败 {} 本", self.written, self.moved, self.up_to_date, self.failed)
+    }
+    fn any(&self) -> bool {
+        self.written + self.moved + self.failed > 0
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force: bool, quiet: bool, mut fails: Option<&mut FailMemo>, skipped: &mut HashSet<String>, report: &mut impl FnMut(Result<String, String>)) {
+fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force: bool, quiet: bool, mut fails: Option<&mut FailMemo>, skipped: &mut HashSet<String>, report: &mut impl FnMut(Result<String, String>)) -> BuildCounts {
+    let mut counts = BuildCounts::default();
     for m in books.iter().filter(|m| !m.supported()) {
         if skipped.insert(m.id.clone()) {
             report(Ok(format!("- 跳过 {}  {}：.{} 不再支持（只支持 EPUB 和 CBZ）", m.id, m.title, m.content_format())));
@@ -148,11 +167,19 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
             }
             let built = match lib.build(m, device, force) {
                 Ok(Built::Written { path, warnings }) => {
-                    Some(std::iter::once(format!("✓ [{}] {} → {}", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
+                    counts.written += 1;
+                    Some(std::iter::once(format!("✓ 生成 [{}] {} → {}", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
                 }
-                Ok(Built::UpToDate(path)) => (!quiet).then(|| format!("= [{}] {} 已是最新（{}）", device.id, m.title, path.display())),
-                Ok(Built::Moved { from, to }) => Some(format!("↪ [{}] {} 挪到 {}（原来在 {}）", device.id, m.title, to.display(), from.display())),
+                Ok(Built::UpToDate(path)) => {
+                    counts.up_to_date += 1;
+                    (!quiet).then(|| format!("= [{}] {} 已是最新（{}）", device.id, m.title, path.display()))
+                }
+                Ok(Built::Moved { from, to }) => {
+                    counts.moved += 1;
+                    Some(format!("↪ 挪位置 [{}] {} → {}（原来在 {}）", device.id, m.title, to.display(), from.display()))
+                }
                 Err(e) => {
+                    counts.failed += 1;
                     report(Err(format!("✗ [{}] {}: {e}", device.id, m.title)));
                     if let Some(f) = fails.as_deref_mut() {
                         f.insert(key, now());
@@ -165,6 +192,7 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
             }
         }
     }
+    counts
 }
 
 /// 元数据一行摘要：来源、简介字数、标签、参考版本。
@@ -285,7 +313,8 @@ fn main() {
                 fail(&format!("没有匹配的书（booklib list 查看书库）{}", path_hint(&args.texts())));
             }
             let force = args.flags.iter().any(|f| f == "force");
-            build_all(&lib, &devices, &books, force, false, None, &mut skipped, &mut report);
+            let counts = build_all(&lib, &devices, &books, force, false, None, &mut skipped, &mut report);
+            report(Ok(counts.summary()));
         }
         "dedupe" => {
             let dirs: Vec<PathBuf> = rest.iter().map(PathBuf::from).collect();
@@ -357,14 +386,18 @@ fn main() {
                         match r {
                             // --watch 时没变化就不出声
                             Ok(r) if watch.is_some() && r.added + r.updated + r.missing + r.failed == 0 => {}
-                            Ok(r) => println!("同步完成：新增 {}，更新 {}，没变 {}，原件不在 {}（删了 {}），失败 {}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed),
+                            Ok(r) => println!("原件：新增 {}，改过 {}，没变 {}，不在了 {}（从书库删了 {}），出错 {}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed),
                             Err(e) => report(Err(e)),
                         }
                         if !devices.is_empty() {
                             let stamp = || change_stamp(&lib);
                             if changed || last_stamp != Some(stamp()) {
                                 let fails = watch.is_some().then_some(&mut fails);
-                                build_all(&lib, &devices, &lib.list(), false, true, fails, &mut skipped, &mut report);
+                                let counts = build_all(&lib, &devices, &lib.list(), false, true, fails, &mut skipped, &mut report);
+                                // --watch 时没有生成、挪动、失败就不出声
+                                if watch.is_none() || counts.any() {
+                                    report(Ok(counts.summary()));
+                                }
                                 last_stamp = Some(stamp());
                             }
                         }
