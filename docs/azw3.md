@@ -14,11 +14,11 @@ Kindle PW12 用 USB 传书只认 AZW3（KF8），不认 EPUB。`crates/azw3` 把
 
 | 步骤 | 模块 | 做法 |
 |---|---|---|
-| 读 EPUB | `book.rs` | 元数据（OPF Dublin Core）、spine 里的 XHTML、CSS、图片（JPEG/PNG/GIF）、封面、目录（NCX，没有就用 EPUB3 nav） |
+| 读 EPUB | `book.rs` | 元数据（OPF Dublin Core）、spine 里的 XHTML、CSS、图片（JPEG/PNG/GIF）、封面、目录（NCX，没有就用 EPUB3 nav 里 `epub:type` 含 `toc` 的那个） |
 | 排版 | `text.rs` | 每个 XHTML 拆成**骨架**（`<html><head>…<body aid="N"></body></html>`）和**片段**（body 里的内容），依次排成"骨架、片段、骨架、片段…"。CSS 各自一条流 |
-| 改写引用 | `text.rs` | 图片 → `kindle:embed:资源序号`；样式表 → `kindle:flow:流序号`；书内链接 → `kindle:pos:fid:片段号:off:片段内偏移`（base32） |
+| 改写引用 | `text.rs` | 图片 → `kindle:embed:资源序号`；样式表 → `kindle:flow:流序号`；书内链接 → `kindle:pos:fid:片段号:off:片段内偏移`（base32）。链接的路径和锚点先还原字符引用再百分号解码；书里原有的 `aid` 属性（任何引号写法）去掉 |
 | 索引 | `indx.rs`、`container.rs` | 片段索引、骨架索引、目录索引（INDX + TAGX + CNCX） |
-| 压缩 | `palmdoc.rs` | 每 4096 字节一条记录，PalmDOC 压缩，多字节字符跨记录时加尾随字节 |
+| 压缩 | `palmdoc.rs` | 每 4096 字节一条记录，PalmDOC 压缩（哈希链找回指，每个 3 字节前缀最多看最近 64 处），多字节字符跨记录时加尾随字节 |
 | 组装 | `container.rs` | 记录 0（PalmDOC 头 + MOBI 头 + EXTH）、文字记录、索引、图片、FDST、FLIS、FCIS、EOF |
 
 **链接回填**：链接指向的偏移要等全部文档排完才知道，所以先写一个等长的占位串，并**记下占位串的位置**；排完后按位置回填。回填不改变任何偏移，也不会误改正文里恰好相同的文字。
@@ -37,7 +37,8 @@ Kindle PW12 用 USB 传书只认 AZW3（KF8），不认 EPUB。`crates/azw3` 把
 ## 验证
 
 - `tests/roundtrip.rs`：用 bookconv 的 KF8 读取器读回来，核对索引、链接偏移、目录层级。
-- `tools/kf8/textcheck.py 文件.azw3 源.epub`：29 本真书文字逐字符一致。
+- `tools/kf8/textcheck.py 文件.azw3 源.epub`：EPUB 按 spine 顺序、AZW3 按片段顺序取正文的可见文字（去掉标签、注释、script/style，还原字符引用，不计空白），
+  整本书的字符序列逐字比对，不一致时报第一处差异、退出码 1。2026-09-28 起比的是字符序列（以前只比各字符的个数，顺序错乱查不出来），当天 10 本真书一致。
 - **Kindle PW12 真机**（2026-09-27）：测量书；《疯探》（封面、章标题独立一页、字号字体可调、目录跳转）；《桥头楼上》（节缩进挂在章下、跳转正确）；《ABC谋杀案》（注释标号跳转与返回）；135MB 漫画能打开、翻页正常。
 
-改了会影响产物字节的地方，要把 `azw3::WRITER_VERSION` 加一，书库据此把旧产物判为过期。
+改了会影响产物字节的地方，要把 `azw3::WRITER_VERSION` 加一（见[开发 · 版本号](development.md#版本号)）；怎么确认一次改动没改变产物，见[开发 · 真书回归检查](development.md#真书回归检查)。
