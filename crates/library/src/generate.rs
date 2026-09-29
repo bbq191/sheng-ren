@@ -68,15 +68,17 @@ impl Library {
             profile::Notes::Popup => "popup",
             profile::Notes::Jump => "jump",
         };
-        // 阅读范围后面带上漫画白边（`+1`，profile 的 comic_margin，2026-09-29 起），改了白边的书都要重新生成
+        // 阅读范围后面带上漫画白边（`+1`，profile 的 comic_margin，2026-09-29 起），改了白边的书都要重新生成；
+        // 纯图页铺满（profile 的 comic_fullpage）开着时再带个 `f`
         let fingerprint = format!(
-            "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}|{}|{}",
+            "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
             area.width,
             area.height,
             device.comic_margin,
+            if device.comic_fullpage { "f" } else { "" },
             if device.color { "color" } else { "gray" },
             format.ext(),
         );
