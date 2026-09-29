@@ -152,7 +152,7 @@ pub(crate) fn extract_positioned_text(bytes: &[u8]) -> Result<Vec<PageContent>, 
 /// lopdf（0.45），类型相同可以直接传；此前两边版本不同，每本 PDF 要整份解析两遍、二进制里也编进两份 lopdf。
 pub(crate) fn extract_positioned_text_doc(doc: &lopdf::Document) -> Result<Vec<PageContent>, String> {
     let mut collector = TextCollector { pages: Vec::new(), line: 0, first_char: false, last_end: f64::MAX / 2.0, last_y: 0.0, seq: 0, last_cjk: false };
-    pdf_extract::output_doc(doc, &mut collector).map_err(|e| format!("PDF 文字提取失败: {e}"))?;
+    super::run_output_doc(doc, &mut collector)?;
     Ok(collector.pages)
 }
 
@@ -307,7 +307,3 @@ pub(crate) fn detect_formula_regions(chars: &[PositionedChar]) -> Vec<BBox> {
     }
     blocks.into_iter().map(|(b, _)| b).collect()
 }
-
-// ============================================================================
-// 字号识别标题（没有 /Outlines 书签目录时的 TOC 兜底）
-// ============================================================================

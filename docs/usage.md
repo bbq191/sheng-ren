@@ -1,13 +1,21 @@
 # 使用指南
 
-## 安装
+## 安装与卸载
+
+需要 Rust 工具链（`cargo`）。在仓库目录里：
 
 ```sh
-cd 本仓库
-cargo install --path crates/library     # 装到 ~/.cargo/bin/booklib
+./install.sh            # 装 booklib（书库）和 ebook-meta（改 EPUB 元数据）
+./install.sh --tools    # 另装开发、排查问题用的 epub-optimize、epub-to-azw3、cbz2pdf、readable-probe、readable-measure
+./uninstall.sh          # 卸载这些命令
 ```
 
-不想安装也可以直接跑：`cargo run --release -p library --bin booklib -- <命令>`。更新代码后重新执行一次 `cargo install` 即可。
+- 装到 cargo 的 bin 目录（`$CARGO_HOME/bin`，缺省 `~/.cargo/bin`；本机设了 `CARGO_HOME=~/.local/share/cargo`）。不在 `PATH` 里时安装脚本会提示怎么加。
+- 更新代码后重新运行一次 `./install.sh` 就是升级。编译复用仓库的 `target/`，改动少时很快。
+- **卸载只删命令**：书库、KOReader 配置备份、设备上的东西都不动，脚本会告诉你它们在哪。书库不要了自己删那个目录；
+  设备上 KOReader 的方案设置用 `koreader/apply.sh <设备> --uninstall --write` 撤掉（见 [KOReader 配置](koreader.md#怎么应用)）。
+- Calibre 也有一个叫 `ebook-meta` 的命令。两个都装了的话，执行哪个取决于 `PATH` 的先后，安装时会提醒。
+- 不想安装也可以直接跑：`cargo run --release -p library --bin booklib -- <命令>`。
 
 ## 书库在哪
 
@@ -25,7 +33,7 @@ cargo install --path crates/library     # 装到 ~/.cargo/bin/booklib
 |---|---|
 | `booklib add <文件或网址>...` | 一次性入库单个文件或网址 |
 | `booklib track <目录>...` / `untrack` | 跟踪书目录（递归）/ 不再跟踪 |
-| `booklib sync [--prune] [--device=…] [--watch]` | 把跟踪的目录镜像进书库，可顺带生成 |
+| `booklib sync [--prune] [--device=…] [--out=目录] [--watch]` | 把跟踪的目录镜像进书库，可顺带生成、拷到设备 |
 | `booklib list [书名片段或 id...]` | 列出书，以及给各设备生成的产物是否最新 |
 | `booklib build --device=<设备> [--force] [--out=目录] [书名片段或 id...]` | 按设备生成 |
 | `booklib meta [--force] [--clear] [书名片段或 id...]` | 联网补元数据（简介、标签、原作名），没封面的顺带找封面 |
@@ -34,6 +42,7 @@ cargo install --path crates/library     # 装到 ~/.cargo/bin/booklib
 | `booklib devices` | 列出可用设备 |
 
 退出码：`0` 全部成功；`1` 命令写错了；`2` 有书处理失败（或书库打不开、没有匹配的书）。
+`sync` 里有文件入库失败、旧版本删不掉、拿不到书库的锁，也算失败；`--watch` 时只计数，不退出。
 
 ### add：入库
 
@@ -72,19 +81,28 @@ booklib sync --device=kindle-pw12-sig,ireader-ocean5-pro   # 同步后接着生�
 booklib sync --device=all --watch                # 一直运行，每 60 秒检查一次（--watch=300 改间隔）
 ```
 
+和已跟踪的目录互相包含（它的父目录或子目录）的不能再 `track`，要换就先 `untrack`。
+
 `sync` 对每个文件：
 
 | 情况 | 处理 |
 |---|---|
 | 新文件 | 入库 |
 | 大小和修改时间没变 | 跳过，不重读（所以反复 sync 很快） |
-| 内容变了 | 入库新版本，旧版本的条目连同产物删掉 |
+| 内容变了 | 入库新版本，旧版本的条目连同产物删掉（旧版本删不掉就记下来，下次再删） |
 | 改名、移动（仍在跟踪的目录里） | 按内容认出来，不重复入库 |
-| 原件删了 | 只报告（这本书没法再生成了）；加 `--prune` 才从书库删掉 |
-| 入库失败（DRM、文件损坏） | 报一次错；文件没变就不再重试 |
+| 原件删了 | 只报告（这本书没法再生成了）；加 `--prune` 才从书库删掉。这本书是 `add` 进来的、原件在跟踪目录以外而且还在的，不删 |
+| 同一本书有两份、删了其中一份 | 索引改记成还在的那份，不算原件不在 |
+| 入库失败（DRM、文件损坏） | 报一次错；文件没变就不再重试。原来有旧版本的，旧版本继续保留、继续跟踪 |
+| 文件正在写入（读的时候大小变了） | 这次跳过，下次再看 |
+| 文件名不是 UTF-8 | 报错、不入库（改名后下次同步入库） |
 | 整个目录不在（比如 U 盘没插） | 什么都不动 |
 
-`untrack` 不再跟踪一个目录，已入库的书保留。`--watch` 适合放在后台一直跑；也可以不用它，改用 systemd 定时器或 cron 定期执行 `booklib sync --device=all`。
+`untrack` 不再跟踪一个目录，已入库的书保留。
+
+`--watch` 适合放在后台一直跑，没变化时几乎不耗电：每轮只看文件的大小和修改时间（不读内容、不算哈希），什么都没变就不写任何文件；
+只有这一轮有新增、更新、删除，或者书库、产物、`--out` 目录（阅读器插上、拔下）有变化时才去生成。生成失败的书在原件和处理规则都没变之前不再重试，
+原件不在的只在第一次发现时报告。也可以不用 `--watch`，改用 systemd 定时器或 cron 定期执行 `booklib sync --device=all`。
 
 ### build：按设备生成
 
@@ -99,9 +117,10 @@ booklib build --device=kindle-pw12-sig --out="/run/user/1000/gvfs/mtp:host=Amazo
 - 书的选择：书名片段或 id 前缀（`list` 第一列），不写就是全部书。
 - 每本书记一个**指纹**（原件内容、设备、阅读范围、处理程序版本等）。都没变就显示 `= 已是最新` 并跳过，所以可以放心反复运行。`--force` 强制重建。
 - 产物总是生成在 `书库/output/<设备 id>/书名.epub|azw3|pdf`。两本书同名时，后一本加上 `[id 前 6 位]`，不会互相覆盖；目录里已有的同名文件如果不是本工具生成的，也不会被覆盖。
-- `--out=目录`：生成后再**拷**过去。只有一台设备时直接放进这个目录，多台时放进 `目录/<设备 id>/`。拷过的会记下来：没变的不重拷，书名变了删掉旧文件，`remove` 时一起删；`list` 里显示为 `✓ 已拷` / `⚠ 旧版` / `? 不在`（设备没连上）。
+- `--out=目录`：生成后再**拷**过去。只有一台设备时直接放进这个目录，多台时放进 `目录/<设备 id>/`。相对路径按当前目录换成绝对路径记下。拷过的会记下来：没变的不重拷，书名变了删掉旧文件，`remove` 时一起删；`list` 里显示为 `✓ 已拷` / `⚠ 旧版` / `? 不在`（设备没连上）。
 - **路径里有空格要整个加引号**（比如 Kindle 的 `Internal Storage`）。没加引号时，后半截会被当成书名，结果"没有匹配的书"，这时会提示你。
 - 用 USB 连着的 Kindle 在 Linux 上是 MTP 挂载（`/run/user/1000/gvfs/mtp:host=…`），不支持普通写文件，程序会自动改用 `gio copy`。
+  其它写失败（没权限、磁盘满）直接报错，目标目录里的旧文件不动。
 - 输出里的 `⚠ 质量门未过` 只是提示，产物照样生成。出现时说明原书结构有问题（比如 XHTML 不合法），可以在设备上看看效果。
 
 ### 原件的核对
@@ -124,6 +143,7 @@ booklib build --device=kindle-pw12-sig --out="/run/user/1000/gvfs/mtp:host=Amazo
 - `⚠ 过期`：处理规则或设备参数变了，`build` 会重建它。
 - `? 未知`：产物文件被删了，或者设备配置已经不在了。
 - 书名下面出现 `✗ 原件不在了` / `⚠ 原件可能改过`：见上文"原件的核对"。
+- `list` 只读，不写书库，别的命令运行时也能用。
 
 ### meta：联网补元数据和封面
 
@@ -139,6 +159,8 @@ booklib meta --force 雪人      # 重找
       元数据 ← 豆瓣 https://book.douban.com/subject/10554308/；原作名 白夜行；简介 500 字；标签 悬疑推理、日系推理、…；参考版本 南海出版公司 2013-1-1 刘姿君 译
       封面 ← 豆瓣 白夜行 [日] 东野圭吾 2013（https://img3.doubanio.com/…）
 ```
+
+![元数据和封面从哪来、写到哪里](img/metadata.svg)
 
 **元数据**先找豆瓣条目（书名、作者的比对规则同下面的封面），取内容简介、标签、原作名，以及那个条目的出版社、出版年、ISBN、译者；
 豆瓣没有就用 Wikidata 上的原作：原作名、首次出版年。
@@ -162,6 +184,9 @@ booklib meta --force 雪人      # 重找
 - 找到的封面存在书库条目里（`masters/<id>/cover.jpg`），`meta.json` 记着匹配到哪个条目或作品、从哪下载的，输出里也会列出来，方便核对。
 - **原件不动**。生成产物时，书里没有封面才把它放进去（只在 OPF 里声明封面图，不加封面页，正文不变）。封面、简介、标签变了，产物判为过期，下次 `build` 重建。
 - 所有请求间隔 1.2 秒（Wikidata 限速严，被限速时按它给的时间等），只需要每本书跑一次。
+- **网络出错不当"没找到"**：某本书查到一半网络出错（连不上某个网站、重试几次还是失败），这本书报错，不生成封面、不拿不完整的结果存下来，下次运行再查。
+  连不上的网站只跳过它（有些网络里 Wikidata、Open Library 单独连不上）；接连两个网站都连不上就当作断网，整轮中止，没查的书下次再查。
+  HTTP 4xx（除了限速的 429）表示"没有"，不重试。
 - 找不到原作封面的常见原因：书名是这个译本独有的；出版社自编的选集（《歐亨利短篇小說選》）没有对应的原作；原作在 Open Library 上也没有封面图。这些会生成封面。
 
 2026-09-27 实测好读的 18 本没封面的书：11 本用豆瓣的中文版封面（《一九八四》《動物農莊》《白夜行》《雪人》《斜屋犯罪》等），2 本用原作封面（《ABC謀殺案》《鼠疫》），5 本生成（台湾自编的选集、《13級階梯》）。全程约 12 分钟（Wikidata 限速）。
@@ -192,6 +217,7 @@ booklib dedupe ~/Documents/ereader
 ireader-ocean5-pro   掌阅 iReader Ocean 5 Pro  屏幕 1264×1680  epub
 kindle-pw12-sig      Kindle Paperwhite 12 代签名版  屏幕 1264×1680  azw3
 rmpp-move            reMarkable Paper Pro Move  屏幕 954×1696  epub/pdf
+rmpp-move-koreader   reMarkable Paper Pro Move（KOReader）  屏幕 954×1696  epub
 ```
 
 书库的 `profiles/` 目录里放 `<id>.toml` 可以加自定义设备，或覆盖内置设备的参数（比如你在阅读器里改了页边距）。写法见[设备与可阅读范围](devices.md)。
@@ -218,17 +244,20 @@ Kindle 上的书目录是 `koreader/resources/books/`，掌阅是 `koreader/book
 
 ## 单独的命令行工具
 
-书库之外，底层的每一步也能单独用。开发和排查问题时有用：
+书库之外，底层的每一步也能单独用。开发和排查问题时有用（`./install.sh --tools` 装上，或 `cargo run --release -p <crate> --bin <命令> --`）：
 
 ```sh
-cargo run --release -p bookconv --bin epub-optimize -- --device=kindle-pw12-sig 输入.epub 输出.epub
-cargo run --release -p azw3 --bin epub-to-azw3 -- 已优化.epub 输出.azw3     # --ebok 归到"书籍"
-cargo run --release -p bookconv --bin cbz2pdf -- --device=rmpp-move 漫画.cbz 输出.pdf
-cargo run --release -p bookconv --bin readable-probe -- 测量书.epub          # 见"设备与可阅读范围"
-cargo run --release -p bookconv --bin readable-measure -- 竖长.png 横宽.png
+epub-optimize --device=kindle-pw12-sig 输入.epub 输出.epub
+epub-to-azw3 已优化.epub 输出.azw3          # --ebok 归到"书籍"
+cbz2pdf --device=rmpp-move 漫画.cbz 输出.pdf
+readable-probe 测量书.epub                   # 见"设备与可阅读范围"
+readable-measure 竖长.png 横宽.png
+cover-fix 输入.epub 输出.epub [缩略图.png]   # 只补封面声明（xochitl 缩略图用），不装，cargo run -p bookconv --bin cover-fix
 ```
 
-`epub-optimize`、`cbz2pdf` 要求 `--device=<设备 id>`，不写或写错会列出可用的 id；它们按该设备对应格式的阅读范围处理。
+- `epub-optimize`、`cbz2pdf` 要求 `--device=<设备 id>`，不写或写错会列出可用的 id；它们按该设备对应格式的阅读范围处理。
+- 写文件的工具都先写同目录的临时文件，成功才改名覆盖，中途失败不留半成品；输入和输出可以是同一个文件。**测试用的真书别这样就地改**。
+- 退出码统一：`0` 成功，`1` 用法错，`2` 读写或处理失败。
 
 ### ebook-meta：查看、改写 EPUB 的元数据
 
@@ -236,7 +265,6 @@ cargo run --release -p bookconv --bin readable-measure -- 竖长.png 横宽.png
 换设备、换软件看到的还是原值。
 
 ```sh
-cargo install --path crates/bookconv --bin ebook-meta     # 装到 ~/.local/share/cargo/bin
 ebook-meta 书.epub                                         # 查看：标题、作者、语言、出版社、简介、标签、标识符、日期、封面
 ebook-meta 书.epub --title 书名 --author 作者甲 --author 作者乙
 ebook-meta 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
@@ -259,6 +287,7 @@ ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
 
 **为什么一台设备的产物全变成"过期"了？**
 处理规则升级了（优化器、AZW3 写出器或生成流程的版本号变了），或者设备配置改了。运行一次 `build` 即可。
+只改了格式转换（MOBI/AZW3/FB2/CBZ/PDF → EPUB）时，只有这些格式来源的书过期，原本就是 EPUB 的书不受影响。
 
 **我在阅读器里改了页边距，要做什么？**
 可阅读范围跟着变了。漫画要按新范围重新量一次、写进 `书库/profiles/<设备 id>.toml`，再 `build`。文字书不受影响。
@@ -266,11 +295,15 @@ ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
 **图片型 PDF（扫描件、漫画 PDF）为什么只能给 Move？**
 它没有文字层，转不成可重排的 EPUB，只能给支持 PDF 的设备（Move）裁白边后原样投递。给 Kindle、掌阅生成会报错。
 
+有文字层的 PDF 转 EPUB 时，书里的插图能处理 JPEG（包括外面再套一层压缩的）、1/2/4/8/16 位的灰度、RGB、CMYK、ICC、调色板图；
+Lab、专色、JPEG 2000、CCITT、JBIG2 编码的图处理不了，会跳过并逐张打印原因，不会悄悄丢掉。
+
 **提示"另一个 booklib 正在使用书库"？**
-同一时间只允许一个会改动书库的命令运行（`list`、`devices` 不受限）。等前一个结束再试。如果确定没有别的 booklib 在跑，这个提示不会出现：锁在进程退出时自动释放。
+同一时间只允许一个会改动书库的命令运行（`list`、`devices` 只读，不受限；`sync --watch` 每一轮自己加锁，两轮之间不占着）。等前一个结束再试。如果确定没有别的 booklib 在跑，这个提示不会出现：锁在进程退出时自动释放。
 
 **原件放在 U 盘或移动硬盘上可以吗？**
 可以。没插上时生成会提示原件不在，插上后照常生成；`sync` 遇到整个目录不在也什么都不动。
 
 **`list` 提示某个条目的 meta.json 读不出来？**
-通常是写入时断电。`booklib remove <id>` 删掉它，或者重新 `add` 同一个原件覆盖它。
+书库的文件都是先写临时文件、落盘后再改名，断电一般不会写坏；真出现了，`booklib remove <id>` 删掉它，或者重新 `add` 同一个原件覆盖它。
+进程被杀留下的临时文件（`.tmp-*`）下次运行会自动清掉。
