@@ -19,7 +19,7 @@
 | `library` | 书库：入库（索引）、跟踪同步、按设备生成、产物指纹 | `booklib` |
 | `azw3` | EPUB → AZW3（KF8）写出器，clean-room 实现，见 [AZW3 写出器](azw3.md) | `epub-to-azw3` |
 | `bookconv` | 内容层：格式转换、清洗、优化、图片处理、质量门。不管书库，只按调用方传入的阅读范围和选项处理 | `epub-optimize`、`cbz2pdf`、`readable-probe`、`readable-measure`、`cover-fix`、`ebook-meta` |
-| `profile` | 设备参数，TOML 构建时嵌入，见[设备与可阅读范围](devices.md) | |
+| `profile` | 设备参数，TOML 构建时嵌入，见[设备与可阅读范围](devices.md)；命令行的 `--device=` 用 `device_from_args` 解析 | |
 | `pdf-extract` | PDF 文字层提取，pdf-extract 0.12.1 的本地 MIT fork（修改处注释标 `fork：`，汇总在 `src/lib.rs` 头注释）。`bookconv::pdf_ingest` 调它时用 `catch_unwind` 包住，损坏 PDF 触发的 panic 报"PDF 解析失败"，不会带崩整个进程 | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
@@ -29,21 +29,22 @@
 
 | 模块 | 职责 |
 |---|---|
-| `convert/` | MOBI/AZW/AZW3/PRC（`palm` 容器与 KF8 编码工具、`mobi` 旧格式、`kf8` 新格式）、FB2、CBZ → EPUB；`common` 放各转换器共用的小工具 |
+| `convert/` | MOBI/AZW/AZW3/PRC（`palm` 容器与 KF8 编码工具、`mobi` 旧格式、`kf8` 新格式）、FB2、CBZ → EPUB；`common` 放各转换器共用的小工具（图片格式识别等）；`pdfwrite::PdfPieceWriter` 逐页写 PDF，可直接写到文件（边写边落盘）。转换结果的版本号是 `CONVERT_VERSION` |
 | `article` | 网页 → EPUB（正文抽取 + 图片保留原图；按 HTTP 头 / `<meta charset>` 识别编码） |
 | `pdf_ingest/` | PDF 分类（有文字层 / 扫描件 / 漫画）、有文字层的转 EPUB、图片型的裁白边 |
 | `optimize/` | 按设备优化 EPUB 的主流程：流式读写（大漫画不整本进内存）、逐文件变换、图片并行处理 |
-| `wash/` | 清洗层：字体字号解锁、按语言排版、章节分页、目录修复与生成、全书 id 去重、章尾空白页 |
+| `wash/` | 清洗层：字体字号解锁、按语言排版、章节分页、目录修复与生成、全书 id 去重、章尾空白页。全书改链接统一走 `rewrite_book_links`（不改 OPF 的 `<item href>`） |
+| `wash/opf` | OPF 的读与改：往 manifest、metadata 里插入，删 item（连同 spine 引用），找封面；跟随原文件的命名空间前缀。清洗层、优化器、漫画标签、`ebook-meta` 共用这一份 |
 | `html` | 容错的 XHTML 工具：标签扫描（跳过注释/CDATA）、属性读写（单双引号、无引号）、纯文本、可见内容判断、CSS 声明切分。清洗层和注释处理都用它 |
 | `htmlproc/` | XHTML 处理规则：注释、对比度、重复 id |
 | `imgopt` / `imgpool` | 图片处理（缩放、漫画单趟处理、灰度）与并发池 |
 | `opfmeta` | EPUB 元数据（Dublin Core、封面）的读取与改写：只动 OPF 和封面图，其余条目原样拷。`ebook-meta` 命令和书库生成时补简介/标签/封面共用 |
 | `comic_detect` | 判断一本书是不是漫画 |
-| `check` | EPUB 质量门 |
-| `epub` / `epubzip` | EPUB 组装（转换器用）与读取、zip 内路径工具 |
-| `ncx` | NCX 目录解析、页码分段兜底书签 |
+| `check` | EPUB 质量门；按路径检查（`check_epub_file`）时图片不读进内存 |
+| `epub` / `epubzip` | EPUB 组装（转换器用，写一份资源释放一份）与读取；zip 内路径工具：`resolve_href`（链接 → zip 路径与锚点）、`href_to`（生成相对 href，百分号编码） |
+| `ncx` | NCX 目录解析、页码分段兜底书签；`rewrite_content_srcs` 逐条改目标，`replace_nav_map` 只换 navMap、其余原样 |
 | `netimg` / `direction` / `probe` | 远程图抓取；翻页方向；测量可阅读范围用的"测量书" |
-| `util` / `naming` | 转义、文件名、书名规整等小工具 |
+| `util` / `naming` | 转义、文件名、书名规整；原子写（`produce_then_replace`、`write_atomic`：先写临时文件再改名）；`util::cli` 是各命令共用的出错退出、读写文件、SIGPIPE 处理 |
 
 ### library 模块
 
@@ -130,7 +131,7 @@ HTTP（`net.rs`）在一次运行里各本书共用：请求间隔 1.2 秒；429
 
 `optimize::optimize_epub_file_streaming` 分两个阶段：
 
-1. **阶段一**：非图片条目整份读进来，图片只记名字和大小。清洗、HTML 变换、注释搬移都在这里完成。
+1. **阶段一**：非图片条目整份读进来，图片只记名字和大小（GIF、WebP 不做图片处理，这时就整份读进来原样写出）。清洗、HTML 变换、注释搬移都在这里完成；注释收集后先核对每条都有章节接收，再搬。
 2. **阶段二**：按条目顺序写出。图片这时才从源文件逐张读回，交给 `imgpool` 并行处理，按原顺序取回写进 zip，处理完立刻丢掉。
 
 所以峰值内存约为"全书文字 + 同时在处理的几张图"，不随漫画页数增长。并行处理的结果和逐张顺序处理逐字节相同。
