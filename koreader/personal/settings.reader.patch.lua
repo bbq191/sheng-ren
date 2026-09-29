@@ -150,7 +150,7 @@ return {
     },
     ["ges_tap_interval_ms"] = 500,
     ["ges_tap_interval_on_keyboard_ms"] = 0,
-    ["inertial_scroll"] = true,
+    ["inertial_scroll"] = false, -- 惯性滚动关（用户 2026-09-29：照 Kindle 上的，两台都关）
     ["keyboard_key_font_size"] = 22,
     ["lock_rotation"] = true,
     ["low_pan_rate"] = true,
