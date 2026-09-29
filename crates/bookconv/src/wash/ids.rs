@@ -43,34 +43,20 @@ pub(super) fn dedup_ids_across_book(entries: &mut [Entry], rep: &mut WashReport)
         return;
     }
     rep.dup_ids_renamed = renames.values().map(HashMap::len).sum();
+    // 先改 id 属性本身，再改全书指向它们的链接。
     for e in entries.iter_mut() {
-        let l = e.name.to_ascii_lowercase();
-        let is_html = is_html_entry(&e.name, &e.data);
-        if !(is_html || l.ends_with(".ncx") || l.ends_with(".opf")) {
-            continue;
-        }
+        let Some(own) = renames.get(&e.name) else { continue };
         let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let own = if is_html { renames.get(&e.name) } else { None };
-        let dir = dir_of(&e.name);
-        let new = html::edit_attrs(text, &["id", "href", "src", "xlink:href"], |_, a| {
-            if a.is("id") {
-                return own.and_then(|r| r.get(a.value)).map_or(Edit::Keep, |n| Edit::Set(n.clone()));
-            }
-            let (p, frag) = html::split_href(a.value);
-            let Some(frag) = frag.filter(|f| !f.is_empty()) else { return Edit::Keep };
-            if html::is_external(p) || (p.is_empty() && !is_html) {
-                return Edit::Keep;
-            }
-            let target = if p.is_empty() { e.name.clone() } else { posix_norm(&resolve(dir, &percent_decode(p))) };
-            match renames.get(&target).and_then(|r| r.get(html::frag_id(frag).as_ref())) {
-                Some(n) => Edit::Set(format!("{p}#{n}")),
-                None => Edit::Keep,
-            }
-        });
+        let new = html::edit_attrs(text, &["id"], |_, a| own.get(a.value).map_or(Edit::Keep, |n| Edit::Set(n.clone())));
         if let Cow::Owned(new) = new {
             e.data = new.into_bytes();
         }
     }
+    rewrite_book_links(entries, |_| false, |l| {
+        let frag = l.frag.filter(|f| !f.is_empty())?;
+        let n = renames.get(&l.target)?.get(html::frag_id(frag).as_ref())?;
+        Some(format!("{}#{n}", html::split_href(l.value).0))
+    });
 }
 
 #[cfg(test)]

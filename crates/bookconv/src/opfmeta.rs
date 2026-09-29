@@ -170,16 +170,12 @@ fn set_ncx_title(ncx: &str, title: &str) -> String {
     format!("{}{}{}", &ncx[..s], xml_escape(title), &ncx[close.start..])
 }
 
-/// 书里声明的封面图：(manifest id, zip 路径, 扩展名)。`<meta name="cover">` 优先，其次 `properties="cover-image"`；必须指向图片。
-fn declared_cover(opf: &str, opf_dir: &str) -> Option<(String, String, String)> {
-    let items = crate::wash::manifest_items(opf);
-    let by_meta = crate::wash::cover_meta_re().find(opf).and_then(|m| crate::wash::tag_attr(m.as_str(), "content")).and_then(|id| items.iter().find(|i| i.id == id));
-    let item = by_meta.or_else(|| items.iter().find(|i| i.properties.split_whitespace().any(|p| p == "cover-image")))?;
-    if !crate::util::is_image_ext(item.href) {
-        return None;
-    }
+/// 书里声明的封面图：(zip 路径, 扩展名)。判定见 `wash::opf::declared_cover`（与优化器、`cover_image_of` 同一套）。
+fn declared_cover(opf: &str, opf_dir: &str) -> Option<(String, String)> {
+    let item = crate::wash::opf::declared_cover(opf)?;
     let path = crate::epubzip::resolve(opf_dir, &crate::epubzip::percent_decode(item.href));
-    Some((item.id.to_string(), path.clone(), crate::util::image_ext_of(&path)))
+    let ext = crate::util::image_ext_of(&path);
+    Some((path, ext))
 }
 
 /// 把图片转成 `ext`（jpg/png）格式；已经是就原样返回。
@@ -212,21 +208,15 @@ fn read_text<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str) -> Result<S
 
 /// 读一本 EPUB 的元数据：(OPF 路径, 各字段)。
 pub fn read_epub(path: &Path) -> Result<Vec<(DcField, Vec<String>)>, String> {
-    let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut z = zip::ZipArchive::new(f).map_err(|e| format!("{}: 不是 EPUB（{e}）", path.display()))?;
-    let container = read_text(&mut z, "META-INF/container.xml")?;
-    let opf_path = crate::wash::tag_attr(&container, "full-path").ok_or("container.xml 里没有 full-path")?.to_string();
-    Ok(read(&read_text(&mut z, &opf_path)?))
+    let (_, _, opf) = crate::epubzip::open_opf(path)?;
+    Ok(read(&opf))
 }
 
 /// 把 `src` 改好写到 `dst`（`dst` 不能是 `src`；原地改由调用方先写临时文件再改名）。
 pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, String> {
-    let f = std::fs::File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
-    let mut zin = zip::ZipArchive::new(f).map_err(|e| format!("{}: 不是 EPUB（{e}）", src.display()))?;
-    let container = read_text(&mut zin, "META-INF/container.xml")?;
-    let opf_path = crate::wash::tag_attr(&container, "full-path").ok_or("container.xml 里没有 full-path")?.to_string();
+    let (mut zin, opf_path, opf_text) = crate::epubzip::open_opf(src)?;
     let opf_dir = crate::epubzip::dir_of(&opf_path).to_string();
-    let mut opf = apply_fields(&read_text(&mut zin, &opf_path)?, &edits.set)?;
+    let mut opf = apply_fields(&opf_text, &edits.set)?;
     let mut report = EditReport { fields: edits.set.iter().map(|(f, _)| *f).collect(), cover_replaced: None };
 
     // 换了书名：NCX 的 docTitle 一起换
@@ -248,22 +238,19 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
     let mut added: Vec<(String, Vec<u8>)> = Vec::new();
     if let Some(image) = &edits.cover {
         match declared_cover(&opf, &opf_dir) {
-            Some((_, path, ext)) => {
+            Some((path, ext)) => {
                 replaced.push((path, to_format(image, &ext)?));
                 report.cover_replaced = Some(true);
             }
             None => {
+                use crate::wash::opf as o;
                 let (ext, mime) = crate::convert::common::image_ext_mime(image).ok_or("封面图不是 JPEG/PNG")?;
                 let name = format!("eink-cover.{ext}");
-                let item = format!(r#"<item id="eink-cover" href="{name}" media-type="{mime}" properties="cover-image"/>"#);
-                let m = opf.find("</manifest>").ok_or("OPF 没有 </manifest>")?;
-                opf.insert_str(m, &item);
-                // 没有指向图片的封面声明：旧的（常见指向 txt 的坏声明）去掉，换成新的
-                if let Some(old) = crate::wash::cover_meta_re().find(&opf).map(|m| m.range()) {
-                    opf.replace_range(old, "");
-                }
-                let md = html::tags(&opf).find(|t| t.kind == TagKind::Close && (t.is("metadata") || t.is("opf:metadata"))).ok_or("OPF 里没有 </metadata>")?.start;
-                opf.insert_str(md, r#"<meta name="cover" content="eink-cover"/>"#);
+                opf = o::insert_manifest_items(&opf, &[o::NewItem { id: "eink-cover", href: &name, media_type: mime, properties: "cover-image" }]).ok_or("OPF 没有 </manifest>")?;
+                // 没有指向图片的封面声明：旧的（常见指向 txt 的坏声明）全去掉，换成新的
+                let old: Vec<(usize, usize, String)> = o::cover_meta_tags(&opf).into_iter().map(|(s, e, _)| (s, e, String::new())).collect();
+                opf = html::apply_edits(&opf, old);
+                opf = o::insert_metadata(&opf, r#"<meta name="cover" content="eink-cover"/>"#).ok_or("OPF 里没有 </metadata>")?;
                 added.push((if opf_dir.is_empty() { name } else { format!("{opf_dir}/{name}") }, image.clone()));
                 report.cover_replaced = Some(false);
             }

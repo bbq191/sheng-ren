@@ -33,7 +33,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     let out_file = std::fs::File::create(output_path).map_err(|e| format!("建输出文件失败: {e}"))?;
     let mut zw = ZipWriter::new(std::io::BufWriter::new(out_file));
     let (stored, deflated) = (crate::epubzip::stored(), crate::epubzip::deflated());
-    let mut xf = EntryXform::new(&prep.aside_index, prep.opf_name.as_deref(), is_comic_book, opts);
+    let mut xf = EntryXform::new(&prep, opts);
     let total_entries = entries.len();
     // 图片并行处理（见 `imgpool`）：主线程按条目顺序读原图字节、提交给 worker、按原顺序取回结果写 zip；
     // 提前提交 `lookahead` 张（读原图字节几乎不花时间，处理才慢），处理与写盘/读盘重叠。结果与逐张顺序处理逐字节相同。
@@ -121,7 +121,5 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
 /// 条目的压缩方式：`mimetype`（EPUB 规范）与本身已压缩的图片（JPEG/PNG/GIF/WebP，再 deflate 几乎没收益、白花 CPU）用
 /// STORED，其余 deflate。
 fn entry_options(name: &str, stored: zip::write::SimpleFileOptions, deflated: zip::write::SimpleFileOptions) -> zip::write::SimpleFileOptions {
-    let l = name.to_ascii_lowercase();
-    let precompressed = [".jpg", ".jpeg", ".png", ".gif", ".webp"].iter().any(|e| l.ends_with(e));
-    if name == "mimetype" || precompressed { stored } else { deflated }
+    if name == "mimetype" || crate::util::is_image_ext(name) { stored } else { deflated }
 }

@@ -70,15 +70,15 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
             }
             Spacing::Vertical if is_box => {
                 // 简写：保留左右
-                let parts: Vec<&str> = val.split_whitespace().filter(|p| !p.starts_with('!')).collect();
-                let important = if val.contains("!important") { " !important" } else { "" };
-                let (r, l) = match parts.len() {
-                    1 => (parts[0], parts[0]),
-                    2 | 3 => (parts[1], parts[1]),
-                    4 => (parts[1], parts[3]),
-                    _ => continue,
-                };
-                out.push(if r == l { format!("{prop}:0 {r}{important}") } else { format!("{prop}:0 {r} 0 {l}{important}") });
+                match box_sides(val) {
+                    BoxSides::Sides([_, r, _, l], important) => {
+                        out.push(if r == l { format!("{prop}:0 {r}{important}") } else { format!("{prop}:0 {r} 0 {l}{important}") });
+                    }
+                    // `margin:inherit` 之类：上下交给我们的 `p{}`，左右照原值写成分项（此前写成非法的 `margin:0 inherit`）
+                    BoxSides::Keyword(k, important) => out.push(format!("{prop}-right:{k}{important};{prop}-left:{k}{important}")),
+                    // 拆不清（calc() 里带空格之类）：拿不准就原样留着
+                    BoxSides::Unknown => out.push(format!("{prop}:{val}")),
+                }
                 continue;
             }
             _ => {}
@@ -91,6 +91,60 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
         joined.push(';');
     }
     joined
+}
+
+/// `margin`/`padding` 简写拆成的四边。
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BoxSides<'a> {
+    /// 上、右、下、左，和 `" !important"`（没有就是空串）。
+    Sides([&'a str; 4], &'static str),
+    /// 整体一个全局关键字（`inherit`/`initial`/`unset`/`revert`），不能跟别的边混写在一个简写里。
+    Keyword(&'a str, &'static str),
+    /// 拆不清（超过 4 个值、括号不配对）。
+    Unknown,
+}
+
+/// 拆 `margin`/`padding` 简写的值（`css.rs` 段距归零与 `layout.rs` 章尾去下边距共用）：1–4 个值按 CSS 规则展开成四边；
+/// 括号里的空格不算分隔（`calc(1em + 2px)`）。
+pub(super) fn box_sides(val: &str) -> BoxSides<'_> {
+    let v = val.trim();
+    let lower = v.to_ascii_lowercase();
+    let (v, important) = match lower.rfind('!') {
+        Some(i) if lower[i + 1..].trim() == "important" => (v[..i].trim_end(), " !important"),
+        _ => (v, ""),
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    let (mut depth, mut start) = (0i32, None::<usize>);
+    for (i, ch) in v.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(s) = start.take() {
+                    parts.push(&v[s..i]);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        start.get_or_insert(i);
+    }
+    if let Some(s) = start {
+        parts.push(&v[s..]);
+    }
+    if depth != 0 {
+        return BoxSides::Unknown;
+    }
+    let keyword = |p: &str| matches!(p.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer");
+    match parts[..] {
+        [k] if keyword(k) => BoxSides::Keyword(k, important),
+        _ if parts.iter().any(|p| keyword(p)) => BoxSides::Unknown,
+        [a] => BoxSides::Sides([a, a, a, a], important),
+        [a, b] => BoxSides::Sides([a, b, a, b], important),
+        [a, b, c] => BoxSides::Sides([a, b, c, b], important),
+        [a, b, c, d] => BoxSides::Sides([a, b, c, d], important),
+        _ => BoxSides::Unknown,
+    }
 }
 
 pub(super) fn selector_spacing(selector: &str) -> Spacing {
@@ -127,7 +181,9 @@ pub(super) const FOOTNOTE_FONT_SIZE: &str = "0.9em";
 /// 注释字号固定比正文小一档"。
 pub fn filter_css(css: &str, opts: &WashOpts) -> String {
     css_rule_re().replace_all(css, |c: &regex::Captures| {
-        let sel = &c[1];
+        // 规则前面的语句式 at-rule（`@import url(a.css);`、`@charset "utf-8";`）会被正则算进选择器里：拆出来原样保留，
+        // 后面的才是真正的选择器（2026-09-28 审计：样式表开头的 `@import` 让紧跟的第一条规则整条跳过，字体锁没剥）。
+        let (lead, sel) = split_leading_statements(&c[1]);
         let trimmed = sel.trim_start();
         if trimmed.starts_with("@font-face") || trimmed.starts_with("@import") {
             return c[0].to_string();
@@ -143,10 +199,43 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
             }
             let mut decls = filter_decls_with(&c[2], &filter, spacing, Some(indent_for(opts)));
             decls.push_str(&format!("font-size:{FOOTNOTE_FONT_SIZE};"));
-            return format!("{sel}{{{decls}}}");
+            return format!("{lead}{sel}{{{decls}}}");
         }
-        format!("{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, Some(indent_for(opts))))
+        format!("{lead}{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, Some(indent_for(opts))))
     }).into_owned()
+}
+
+/// 选择器文本开头的语句式 at-rule（以 `@` 开头、到括号和引号之外的 `;` 为止，可以有好几条）拆成 (这些语句, 其余)。
+/// 没有就是 `("", 原文)`。
+pub(super) fn split_leading_statements(sel: &str) -> (&str, &str) {
+    let mut cut = 0;
+    loop {
+        let rest = &sel[cut..];
+        if !rest.trim_start().starts_with('@') {
+            break;
+        }
+        let (mut depth, mut quote) = (0usize, None::<char>);
+        let mut end = None;
+        for (i, ch) in rest.char_indices() {
+            match (quote, ch) {
+                (Some(q), c) if c == q => quote = None,
+                (Some(_), _) => {}
+                (None, '"' | '\'') => quote = Some(ch),
+                (None, '(') => depth += 1,
+                (None, ')') => depth = depth.saturating_sub(1),
+                (None, ';') if depth == 0 => {
+                    end = Some(i + 1);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        match end {
+            Some(e) => cut += e,
+            None => break,
+        }
+    }
+    (&sel[..cut], &sel[cut..])
 }
 
 /// 本书的首行缩进值（拉丁 1.2em / 中文 2em；Auto 兜底中文）。`wash_css` 与书 css 统一改写共用。
@@ -156,6 +245,12 @@ pub(super) fn indent_for(opts: &WashOpts) -> &'static str {
 
 /// (x)html：`style=""`（按标签名定边距策略）+ `<style>` 块剥锁；注入清洗样式块；折叠重复 id。
 pub fn wash_html(html: &str, opts: &WashOpts) -> (String, usize) {
+    wash_html_with(html, opts, &HashSet::new())
+}
+
+/// 同 [`wash_html`]；`indent_classes` = 书的外链样式表里写了 `text-indent` 的类（`typeset::indent_classes_of`，英文首段顶格用；
+/// 本文件 `<style>` 里的另外算上）。
+pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashSet<String>) -> (String, usize) {
     let before_dup = count_dup_id_tags(html);
     let s = collapse_dup_id_attrs(html);
     // 只认名字正好是 `style` 的属性（`data-style`、SVG `font-style` 不算），就地改值、保留原引号。
@@ -185,7 +280,13 @@ pub fn wash_html(html: &str, opts: &WashOpts) -> (String, usize) {
     }).into_owned();
     // 不再注入内联 <style>（xochitl 无视内联）；排版规则由 wash_entries 写成外链 css + 逐 html 加 <link>。
     let s = match opts.lang {
-        LangMode::Latin => flush_first_para_after_heading(&s),
+        LangMode::Latin => {
+            let mut classes = indent_classes.clone();
+            for c in html::style_block_re().captures_iter(&s) {
+                classes.extend(indent_classes_of(&c[2]));
+            }
+            flush_first_para_after_heading(&s, &classes)
+        }
         _ => cjk_paragraphize(&s),
     };
     (s, before_dup)

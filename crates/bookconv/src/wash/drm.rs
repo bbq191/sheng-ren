@@ -33,18 +33,9 @@ pub(super) fn strip_pseudo_drm(entries: &mut Vec<Entry>, rep: &mut WashReport) -
     if let Some(oi) = find_opf(entries) {
         let opf_dir = dir_of(&entries[oi].name).to_string();
         let text = String::from_utf8_lossy(&entries[oi].data).into_owned();
-        // manifest 里指向被剥文件的 `<item>`（连同后面的空白）一趟删掉（此前每个文件现编一条正则）。
-        let edits: Vec<(usize, usize, String)> = manifest_items(&text)
-            .into_iter()
-            .filter(|it| drop.contains(&resolve(&opf_dir, &percent_decode(it.href))))
-            .map(|it| {
-                let s = it.pos;
-                let e = s + it.tag.len();
-                (s, e + (text[e..].len() - text[e..].trim_start().len()), String::new())
-            })
-            .collect();
-        if !edits.is_empty() {
-            entries[oi].data = html::apply_edits(&text, edits).into_bytes();
+        // manifest 里指向被剥文件的 `<item>`（连同后面的空白）一趟删掉。
+        if let Some(t) = opf::remove_items(&text, |it| drop.contains(&resolve(&opf_dir, &percent_decode(it.href)))) {
+            entries[oi].data = t.into_bytes();
         }
     }
     entries.retain(|e| !drop.contains(&e.name));

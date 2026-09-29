@@ -18,9 +18,10 @@ pub(crate) fn strip_noise_tags(html: &str) -> String {
     RE.get_or_init(|| Regex::new(r#"(?is)<script\b.*?</script>|<style\b.*?</style>|<head\b.*?</head>"#).unwrap()).replace_all(html, "").into_owned()
 }
 
+/// `<img>`/`<image>`（含 `svg:image`）个数；注释里的不算。
 fn count_images(html: &str) -> usize {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"(?i)<(?:img|image)\b"#).unwrap()).find_iter(html).count()
+    use crate::wash::opf::is_local;
+    crate::html::tags(html).filter(|t| t.is_start() && (is_local(t.name, "img") || is_local(t.name, "image"))).count()
 }
 
 /// (spine 页里 `<img>`/`<image>` 总数, 可见文字总字数)。沿 OPF spine 遍历。
@@ -34,8 +35,7 @@ pub fn epub_image_stats(entries: &[Entry]) -> (usize, usize) {
     let mut images = 0usize;
     let mut text = 0usize;
     for p in &opf.spine {
-        let low = p.to_ascii_lowercase();
-        if low.ends_with(".jpg") || low.ends_with(".jpeg") || low.ends_with(".png") || low.ends_with(".gif") || low.ends_with(".webp") {
+        if crate::util::is_image_ext(p) {
             images += 1; // 少数畸形 EPUB 把图片文件直接列进 spine
             continue;
         }
@@ -61,17 +61,14 @@ pub const COMIC_SUBJECT: &str = "漫画";
 /// 给漫画的 OPF 加上 [`COMIC_SUBJECT`] 标签：已经有同名 `dc:subject` 的不动；插在 `</metadata>` 前面（`dc` 前缀，
 /// EPUB 的 OPF 都声明了）。没有 `</metadata>` 的不动。返回 `None` 表示没改。
 pub fn tag_opf_as_comic(opf: &str) -> Option<String> {
-    static HAS: OnceLock<Regex> = OnceLock::new();
-    let has = HAS.get_or_init(|| Regex::new(&format!(r"<dc:subject\b[^>]*>\s*{}\s*</dc:subject>", regex::escape(COMIC_SUBJECT))).unwrap());
-    if has.is_match(opf) {
+    use crate::html::{self, TagKind};
+    let has = html::tags(opf).filter(|t| t.kind == TagKind::Open && t.name.eq_ignore_ascii_case("dc:subject")).any(|t| {
+        html::find_close(opf, t.end, t.name).is_some_and(|c| crate::util::xml_unescape(opf[t.end..c.start].trim()) == COMIC_SUBJECT)
+    });
+    if has {
         return None;
     }
-    let at = opf.find("</metadata>").or_else(|| opf.find("</opf:metadata>"))?;
-    let mut out = String::with_capacity(opf.len() + 40);
-    out.push_str(&opf[..at]);
-    out.push_str(&format!("<dc:subject>{COMIC_SUBJECT}</dc:subject>"));
-    out.push_str(&opf[at..]);
-    Some(out)
+    crate::wash::opf::insert_metadata(opf, &format!("<dc:subject>{COMIC_SUBJECT}</dc:subject>"))
 }
 
 #[cfg(test)]
