@@ -187,6 +187,24 @@ koreader/check.sh kindle-pw12-sig 目录   # 拿一份从设备拷回的 KOReade
 离线检查，不碰设备：对空目录（或给定的副本）应用两遍，第二遍必须没有净改动；结果能被 Lua 读回；分页、弹窗注释要撤的样式调整确实撤掉了，进度同步的设置对；撤销后方案和预设都没了、个人设置还在，
 而且有原始配置时能还原到"原始配置 + 个人设置"；补丁能编译、`device.conf` 语法正确；序列化和合并的边界情况（inf/nan、大整数、布尔键、数组替换）。
 
+## Kindle 开机直接进 KOReader
+
+`koreader/kindle-boot/`（2026-09-29，**还没在真机上试过**）：开机后自动打开 KOReader，并停掉亚马逊自带界面（书城、广告、自带阅读器都不跑，省电省内存）；
+退出 KOReader 时 KOReader 的启动脚本（`koreader.sh --framework_stop`）会把自带界面拉回来。要求 Kindle 已越狱、装了 KUAL 和 KOReader。
+
+```sh
+koreader/kindle-boot/deploy.sh            # 列出要拷的文件（dry run）
+koreader/kindle-boot/deploy.sh --write    # 把 KUAL 扩展拷进 Kindle 的 extensions/koreader-boot/
+# 拔掉 USB，在 Kindle 上：KUAL →「KOReader 开机启动」→「装上」，重启 Kindle
+```
+
+- 开机任务要写进根分区的 `/etc/upstart/`，电脑经 MTP 写不到，所以做成 KUAL 扩展，由 Kindle 上以 root 执行一次（`mntroot rw` 写完再 `mntroot ro`）。
+- **每次开机只启动一次**：KOReader 退出时自带界面重新启动，会再触发一次开机任务；用 `/tmp`（内存盘）里的标记挡掉，不然永远退不出 KOReader。
+- **逃生口**：自启的 KOReader 没正常退出就关机（卡死后长按电源键重启、没电）→ 下次开机跳过自启、停在自带界面，只跳一次。
+- **关掉**：从电脑删 U 盘根目录的 `koreader-boot.enabled`（`deploy.sh --disable --write`）；彻底卸：KUAL 里「卸掉」，再 `deploy.sh --remove --write`。
+- 停掉自带界面后要在真机上确认：KOReader 能自己开关 Wi-Fi（进度同步要用）、插 USB 还能拷书和跑 `apply.sh`。有人报告停界面的做法在某些机型上启动失败，出问题就先关掉自启。
+- **系统自动更新没有屏蔽**（用户定：自己控制联网）。自动更新可能让越狱和 KOReader 失效，联网时留意。
+
 ## 字体
 
 配置里只写字体名（正文）或字体文件路径（状态栏）。每台设备要有的字体文件列在 `device.conf` 的 `FONTS`，缺的 `apply.sh` 从本机字体目录拷：
