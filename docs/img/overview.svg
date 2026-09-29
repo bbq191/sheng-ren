@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>总体流程：入库 → 母版 → 按设备生成 → 设备</title>
+  <title>总体流程：入库 → 书库（索引）→ 按设备生成 → 设备</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0L10 5L0 10z" fill="#555"/>
@@ -18,7 +18,7 @@
   <rect width="960" height="440" fill="#fafafa"/>
 
   <!-- 列标题 -->
-  <text x="100" y="30" text-anchor="middle" class="h">① 入库 add</text>
+  <text x="100" y="30" text-anchor="middle" class="h">① 入库 add / sync</text>
   <text x="370" y="30" text-anchor="middle" class="h">② 书库（索引）</text>
   <text x="630" y="30" text-anchor="middle" class="h">③ 按设备生成 build</text>
   <text x="870" y="30" text-anchor="middle" class="h">④ 设备</text>
@@ -47,8 +47,8 @@
   <text x="370" y="262" text-anchor="middle" class="s">生成前核对原件没被改过</text>
   <text x="370" y="284" text-anchor="middle" class="s">track + sync 跟着原件目录走</text>
   <line x1="270" y1="300" x2="470" y2="300" stroke="#e3c68c"/>
-  <text x="370" y="324" text-anchor="middle" class="s">~/.local/share/booklib/masters/</text>
-  <text x="370" y="344" text-anchor="middle" class="s">几百 KB；list 查看 / remove 删除</text>
+  <text x="370" y="324" text-anchor="middle">meta：联网补简介、标签、封面</text>
+  <text x="370" y="344" text-anchor="middle" class="s">豆瓣 → Wikidata → 生成封面</text>
 
   <!-- 箭头：来源 → 母版 -->
   <path class="l" d="M180 70 C215 70 215 150 248 150" marker-end="url(#a)"/>
@@ -78,15 +78,16 @@
   <path class="l" d="M490 208 L538 208" marker-end="url(#a)"/>
 
   <!-- 设备 -->
-  <rect class="box dev" x="780" y="70" width="170" height="70" rx="8"/>
-  <text x="865" y="96" text-anchor="middle">reMarkable</text><text x="865" y="114" text-anchor="middle">Paper Pro Move</text><text x="865" y="132" text-anchor="middle" class="s">EPUB · 彩色</text>
-  <rect class="box dev" x="780" y="170" width="170" height="70" rx="8"/>
-  <text x="865" y="196" text-anchor="middle">Kindle</text><text x="865" y="214" text-anchor="middle">Paperwhite 12 签名版</text><text x="865" y="232" text-anchor="middle" class="s">AZW3 · 黑白</text>
-  <rect class="box dev" x="780" y="270" width="170" height="70" rx="8"/>
-  <text x="865" y="296" text-anchor="middle">掌阅 iReader</text><text x="865" y="314" text-anchor="middle">Ocean 5 Pro</text><text x="865" y="332" text-anchor="middle" class="s">EPUB · 黑白</text>
-  <path class="l" d="M720 180 C750 180 750 105 778 105" marker-end="url(#a)"/>
-  <path class="l" d="M720 205 L778 205" marker-end="url(#a)"/>
-  <path class="l" d="M720 230 C750 230 750 305 778 305" marker-end="url(#a)"/>
+  <rect class="box dev" x="776" y="70" width="178" height="86" rx="8"/>
+  <text x="865" y="96" text-anchor="middle">reMarkable</text><text x="865" y="114" text-anchor="middle">Paper Pro Move</text><text x="865" y="132" text-anchor="middle" class="s">EPUB · 彩色</text><text x="865" y="148" text-anchor="middle" class="s">xochitl 或 KOReader</text>
+  <rect class="box dev" x="776" y="170" width="178" height="86" rx="8"/>
+  <text x="865" y="196" text-anchor="middle">Kindle</text><text x="865" y="214" text-anchor="middle">Paperwhite 12 签名版</text><text x="865" y="232" text-anchor="middle" class="s">原生读 AZW3 · 黑白</text><text x="865" y="248" text-anchor="middle" class="s">KOReader 读 EPUB</text>
+  <rect class="box dev" x="776" y="270" width="178" height="86" rx="8"/>
+  <text x="865" y="296" text-anchor="middle">掌阅 iReader</text><text x="865" y="314" text-anchor="middle">Ocean 5 Pro</text><text x="865" y="332" text-anchor="middle" class="s">EPUB · 黑白</text><text x="865" y="348" text-anchor="middle" class="s">原生或 KOReader</text>
+  <path class="l" d="M720 180 C750 180 750 110 774 110" marker-end="url(#a)"/>
+  <path class="l" d="M720 210 L774 210" marker-end="url(#a)"/>
+  <path class="l" d="M720 230 C750 240 750 312 774 312" marker-end="url(#a)"/>
 
-  <text x="480" y="410" text-anchor="middle" class="s">一个命令生成多台设备：booklib build --device=kindle-pw12-sig,ireader-ocean5-pro（或 --device=all）；产物用 USB 拷到设备</text>
+  <text x="480" y="400" text-anchor="middle" class="s">一个命令生成多台设备：booklib build --device=kindle-pw12-sig,ireader-ocean5-pro（或 --device=all）；--out 直接拷到设备</text>
+  <text x="480" y="422" text-anchor="middle" class="s">设备上的 KOReader 配置另用 koreader/apply.sh 下发（见 KOReader 配置）</text>
 </svg>

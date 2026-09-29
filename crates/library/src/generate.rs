@@ -1,14 +1,13 @@
 //! 按设备生成产物：生成计划与指纹、跳过没变的、产物目录里的生成记录。
 
-use crate::fsutil::write_atomic;
-use crate::{Library, Meta, Source};
+use crate::{Library, Meta};
 use profile::{Format, Profile};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// 生成流程本身（本 crate 的步骤、参数，以及生成时当场做的格式转换）的版本：改了会影响产物的地方要加一，
-/// 旧产物随之判为过期。优化器、AZW3 写出器各有自己的版本号，也都进指纹。
+/// 旧产物随之判为过期。优化器、AZW3 写出器、格式转换各有自己的版本号，也都进指纹。
 const PIPELINE_VERSION: &str = "5";
 
 #[derive(Debug)]
@@ -37,11 +36,7 @@ impl Library {
         if meta.content_sha().is_empty() {
             return Err("条目缺内容哈希（早期版本入库），先运行 booklib dedupe 迁移".into());
         }
-        let is_pdf = match meta.source() {
-            Source::Original => meta.source_format == "pdf",
-            Source::Stored => meta.master.ends_with(".pdf"),
-        };
-        let format = if is_pdf && meta.pdf_text_layer != Some(true) {
+        let format = if meta.content_format() == "pdf" && meta.pdf_text_layer != Some(true) {
             if !device.formats.contains(&Format::Pdf) {
                 return Err(format!("图片型 PDF（扫描件/漫画）暂时只能生成给支持 PDF 的设备，{} 不支持", device.name));
             }
@@ -51,10 +46,16 @@ impl Library {
         };
         let area = device.readable(format);
         let writer = if format == Format::Azw3 { azw3::WRITER_VERSION } else { "-" };
-        let cover = meta.cover.as_ref().map_or("-", |c| &c.sha256[..12]);
+        let cover = meta.cover.as_ref().map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
         let info = meta.info.as_ref().and_then(|i| i.injected_sig()).unwrap_or_else(|| "-".into());
+        // 要当场转换的来源（非 EPUB）再带上格式转换的版本；写在流程版本后面，EPUB 来源的指纹保持原样（不白重建）
+        let pipeline = if meta.content_format() == "epub" {
+            PIPELINE_VERSION.to_string()
+        } else {
+            format!("{PIPELINE_VERSION}c{}", bookconv::convert::CONVERT_VERSION)
+        };
         let fingerprint = format!(
-            "{}|{cover}|{info}|{PIPELINE_VERSION}|{}|{writer}|{}|{}x{}|{}|{}",
+            "{}|{cover}|{info}|{pipeline}|{}|{writer}|{}|{}x{}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
@@ -66,9 +67,18 @@ impl Library {
         Ok(Plan { format, area, fingerprint })
     }
 
+    /// 这本书给该设备生成的话，产物的指纹（`sync --watch` 用它判断上次失败以后有没有变化）。
+    pub fn fingerprint(&self, meta: &Meta, device: &Profile) -> Result<String, String> {
+        self.plan(meta, device).map(|p| p.fingerprint)
+    }
+
+    fn state_path(dir: &Path) -> PathBuf {
+        dir.join(".state.json")
+    }
+
     /// 产物目录：`output/`，加上早期版本 `build --out` 直接生成过的目录（记在 `outputs.json`，只读，清理用）。
     fn output_roots(&self) -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = std::fs::read(self.root.join("outputs.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let mut v: Vec<PathBuf> = crate::fsutil::read_json(&self.root.join("outputs.json")).unwrap_or_default();
         let default = self.root.join("output");
         if !v.contains(&default) {
             v.insert(0, default);
@@ -79,10 +89,13 @@ impl Library {
     /// 删掉一本书在所有产物目录、所有设备下的产物。
     pub(crate) fn remove_outputs(&self, id: &str) -> Result<(), String> {
         for dev in self.output_roots().iter().filter_map(|r| std::fs::read_dir(r).ok()).flatten().flatten() {
-            let mut state = State::load(&dev.path());
-            if let Some(entry) = state.books.remove(id) {
-                let _ = std::fs::remove_file(dev.path().join(entry.file));
-                state.save(&dev.path())?;
+            let sp = Self::state_path(&dev.path());
+            let state = self.states.get(&sp);
+            if let Some(entry) = state.books.get(id) {
+                let _ = std::fs::remove_file(dev.path().join(&entry.file));
+                let mut state = (*state).clone();
+                state.books.remove(id);
+                self.states.put(&sp, state)?;
             }
         }
         Ok(())
@@ -94,7 +107,7 @@ impl Library {
         for root in self.output_roots() {
             for dev in std::fs::read_dir(&root).into_iter().flatten().flatten() {
                 let Some(dev_id) = dev.file_name().to_str().map(str::to_string) else { continue };
-                let Some(entry) = State::load(&dev.path()).books.get(&meta.id).cloned() else { continue };
+                let Some(entry) = self.states.get(&Self::state_path(&dev.path())).books.get(&meta.id).cloned() else { continue };
                 let path = dev.path().join(&entry.file);
                 let fresh = if !path.exists() {
                     None
@@ -111,7 +124,7 @@ impl Library {
     /// 这本书在该设备下已生成的产物和它的指纹（没生成过、文件不在时 `None`）。
     pub(crate) fn built_output(&self, meta: &Meta, device: &Profile) -> Option<(PathBuf, String)> {
         let dir = self.root.join("output").join(&device.id);
-        let e = State::load(&dir).books.get(&meta.id).cloned()?;
+        let e = self.states.get(&Self::state_path(&dir)).books.get(&meta.id).cloned()?;
         let p = dir.join(&e.file);
         p.exists().then_some((p, e.fingerprint))
     }
@@ -122,20 +135,19 @@ impl Library {
         let Plan { format, area, fingerprint } = self.plan(meta, device)?;
         let dir = self.root.join("output").join(&device.id);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let mut state = State::load(&dir);
+        let sp = Self::state_path(&dir);
+        let state = self.states.get(&sp);
         let file = state.file_name_for(meta, format.ext(), &dir);
         let out = dir.join(&file);
         if !force && out.exists() && state.books.get(&meta.id).is_some_and(|e| e.fingerprint == fingerprint && e.file == file) {
             return Ok(Built::UpToDate(out));
         }
+        drop(state);
         // 内容从哪读：书库里存着的，或核对过的原件
-        let input = match meta.source() {
-            Source::Stored => self.entry_dir(&meta.id).join(&meta.master),
-            Source::Original => self.verified_original(meta)?,
-        };
+        let input = self.content_path(meta)?;
 
         // 所有中间文件都在产物目录下的临时目录里，成品最后一步改名到位（中途失败不会留下半个产物）
-        let tmp = dir.join(format!(".tmp-{}", meta.id));
+        let tmp = dir.join(format!("{}{}", crate::fsutil::TMP_PREFIX, meta.id));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
         let result = (|| -> Result<Vec<String>, String> {
@@ -157,7 +169,7 @@ impl Library {
                 if format == Format::Azw3 {
                     let epub = std::fs::read(&optimized).map_err(|e| e.to_string())?;
                     // 唯一 ID 取自书的 id、时间取入库时间：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
-                    let uid = u32::from_str_radix(&meta.id[..8], 16).unwrap_or(0);
+                    let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
                     let opts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
                     let (azw3, w) = azw3::epub_to_azw3_with_warnings(&epub, &opts)?;
                     warnings.extend(w);
@@ -172,23 +184,20 @@ impl Library {
         let _ = std::fs::remove_dir_all(&tmp);
         let warnings = result?;
         // 书名变了时，旧文件名的产物删掉
+        let mut state = (*self.states.get(&sp)).clone();
         if let Some(old) = state.books.get(&meta.id) {
             if old.file != file {
                 let _ = std::fs::remove_file(dir.join(&old.file));
             }
         }
         state.books.insert(meta.id.clone(), StateEntry { file, fingerprint });
-        state.save(&dir)?;
+        self.states.put(&sp, state)?;
         Ok(Built::Written { path: out, warnings })
     }
 
     /// 要优化的 EPUB：EPUB 直接用；有文字层的 PDF、MOBI/FB2/CBZ 等当场转换，写进 `tmp`。
     pub(crate) fn epub_input(&self, meta: &Meta, input: &Path, tmp: &Path) -> Result<PathBuf, String> {
-        let is_epub = match meta.source() {
-            Source::Stored => meta.master.ends_with(".epub"),
-            Source::Original => meta.source_format == "epub",
-        };
-        if is_epub {
+        if meta.content_format() == "epub" {
             return Ok(input.to_path_buf());
         }
         let bytes = if meta.pdf_text_layer == Some(true) {
@@ -205,8 +214,8 @@ impl Library {
 }
 
 /// 某设备产物目录的生成记录：id → (文件名, 指纹)。
-#[derive(Default, Serialize, Deserialize)]
-struct State {
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub(crate) struct State {
     books: BTreeMap<String, StateEntry>,
 }
 
@@ -217,14 +226,6 @@ struct StateEntry {
 }
 
 impl State {
-    fn load(dir: &Path) -> State {
-        std::fs::read(dir.join(".state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-    }
-
-    fn save(&self, dir: &Path) -> Result<(), String> {
-        write_atomic(&dir.join(".state.json"), serde_json::to_string_pretty(self).unwrap().as_bytes())
-    }
-
     /// 产物文件名：`书名.ext`。和别的书撞名（不分大小写：U 盘、Kindle 的文件系统不分），或者目录里已有
     /// 一个不是本书产物的同名文件时，加 id 后缀，不覆盖别人的文件。
     fn file_name_for(&self, meta: &Meta, ext: &str, dir: &Path) -> String {
@@ -233,6 +234,6 @@ impl State {
         let folded = plain.to_lowercase();
         let ours = self.books.get(&meta.id).is_some_and(|e| e.file == plain);
         let taken = self.books.iter().any(|(id, e)| id != &meta.id && e.file.to_lowercase() == folded) || (!ours && dir.join(&plain).exists());
-        if taken { format!("{base} [{}].{ext}", &meta.id[..6]) } else { plain }
+        if taken { format!("{base} [{}].{ext}", meta.id.get(..6).unwrap_or(&meta.id)) } else { plain }
     }
 }

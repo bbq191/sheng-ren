@@ -51,7 +51,7 @@ fn classify_doc(doc: &lopdf::Document) -> PdfKind {
     }
     // 数够"平均每页 MIN_CHARS_PER_PAGE 个非空白字符"就停，不用把整本书的文字都抽一遍（大书分类慢在这里）。
     let mut counter = CharCounter { count: 0, need: (MIN_CHARS_PER_PAGE * total as f64).ceil() as usize, reached: false };
-    let _ = pdf_extract::output_doc(doc, &mut counter); // 出错（含数够后主动中止）时看已数到的
+    let _ = super::run_output_doc(doc, &mut counter); // 出错（含数够后主动中止、panic）时看已数到的
     if counter.reached {
         PdfKind::TextLayer
     } else {
@@ -141,7 +141,3 @@ pub(super) fn get_inherited_media_box(doc: &lopdf::Document, page_dict: &lopdf::
 
 /// 页树继承查找的层数上限（正常 PDF 的页树只有几层）。
 const MAX_PAGE_TREE_DEPTH: usize = 64;
-
-// ============================================================================
-// 逐字符位置提取（pdf-extract OutputDev 驱动）
-// ============================================================================

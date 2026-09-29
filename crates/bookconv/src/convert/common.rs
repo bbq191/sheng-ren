@@ -1,7 +1,5 @@
 //! convert 各转换器共用的小工具——集中一处，避免 fb2/mobi/kf8/cbz 各写一遍漂移。
 
-use crate::epub::{self, Book};
-
 /// 图片魔数 → (扩展名, MIME)。非已知图片返回 None。
 pub fn image_ext_mime(b: &[u8]) -> Option<(&'static str, &'static str)> {
     if b.len() >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF {
@@ -20,12 +18,6 @@ pub fn sanitize_id(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
         .collect()
-}
-
-/// 组装成**与设备无关的母版 EPUB**——转换器统一收尾路。按设备的优化（图片缩放、字体解锁等）在入库之后
-/// 按 profile 另做，不在转换时写死某台设备。
-pub fn assemble_master(book: &mut Book) -> Result<Vec<u8>, String> {
-    epub::assemble(book)
 }
 
 #[cfg(test)]

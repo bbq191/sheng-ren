@@ -21,7 +21,7 @@ if s.footer and mode ~= 0 then
     reader_footer_custom_text_repetitions = s.reader_footer_custom_text_repetitions or "1",
   }
 end
-if presets["文字"] then
+if type(presets["文字"]) == "table" and type(presets["文字"].footer) == "table" then
   local comic = L.copy(presets["文字"])
   comic.footer.disable_progress_bar = true
   comic.reader_footer_mode = 0
