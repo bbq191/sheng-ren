@@ -50,11 +50,14 @@ const JPEG_QUALITY_COMIC: u8 = 95;
 /// 预放大的倍数上限：超过就不放大，按图自己的比例尺补白（见 [`comic_layout`]）。
 const MAX_UPSCALE: f64 = 3.0;
 
-/// 按 `fmt` 编码回同一格式：JPEG 用 `quality`，PNG 无损；其余格式 `None`。各处理函数共用（此前每处各抄一份 match）。
+/// 按 `fmt` 编码回同一格式：JPEG 用 `quality`（哈夫曼表按图重做，无损，见 `jpegopt`），PNG 无损；其余格式 `None`。各处理函数共用（此前每处各抄一份 match）。
 fn encode_as(fmt: ImageFormat, img: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     match fmt {
-        ImageFormat::Jpeg => JpegEncoder::new_with_quality(&mut out, quality).encode_image(img).ok()?,
+        ImageFormat::Jpeg => {
+            JpegEncoder::new_with_quality(&mut out, quality).encode_image(img).ok()?;
+            return Some(crate::jpegopt::optimize_verified(out));
+        }
         ImageFormat::Png => img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?,
         _ => return None,
     }
@@ -487,6 +490,8 @@ fn encode_keep_gray(fmt: ImageFormat, img: &image::DynamicImage, jpeg_quality: u
                 DynamicImage::ImageRgb8(c) => enc.write_image(c.as_raw(), c.width(), c.height(), ExtendedColorType::Rgb8).ok()?,
                 _ => return None,
             }
+            // 哈夫曼表按这张图重做（无损：解码逐像素相同，见 `jpegopt`），同样画质小 13%–16%
+            return Some(crate::jpegopt::optimize_verified(out));
         }
         ImageFormat::Png => img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?,
         _ => return None,

@@ -18,6 +18,7 @@ pub mod epubzip;
 pub mod html;
 pub mod htmlproc;
 pub mod imgopt;
+pub mod jpegopt;
 pub mod netimg;
 pub mod imgpool;
 pub mod naming;
