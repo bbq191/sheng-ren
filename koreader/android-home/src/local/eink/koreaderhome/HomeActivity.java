@@ -2,6 +2,7 @@ package local.eink.koreaderhome;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Bundle;
@@ -11,15 +12,17 @@ import android.widget.Toast;
 import java.util.List;
 
 /**
- * 桌面（HOME）入口：系统要"回桌面"时（开机、按主页键）打开 KOReader，自己不显示任何界面。
- * 两秒内连按两次主页键 → 打开别的桌面（掌阅原来的），用来进系统设置、把默认桌面改回去。
- * 找不到 KOReader 时也打开别的桌面，不会卡死在这里。
+ * 桌面（HOME）入口：每次开机后第一次"回桌面"（也就是开机）打开 KOReader；之后再回桌面（在 KOReader 里退出等）打开别的桌面
+ * （掌阅原来的）。掌阅没有主页键（2026-09-29），不能靠按键逃生，所以做成"每次开机只自动打开一次"，和 Kindle 上一样。
+ * 这次开机打开过没有，存在自己的设置里（按"开机时刻"认），进程被系统杀掉也不会重复打开。
+ * 找不到 KOReader 时也打开别的桌面，不会卡在这里。自己不显示任何界面。
  */
 public class HomeActivity extends Activity {
-    /** 上一次按主页键的时间（开机以来的毫秒）；进程还在就一直记着。 */
-    private static long lastHome = 0;
-    private static final long DOUBLE_PRESS_MS = 2000;
     private static final String[] KOREADER = {"org.koreader.launcher", "org.koreader.launcher.fdroid"};
+    private static final String PREFS = "boot";
+    private static final String KEY_BOOT = "koreader_opened_boot_ms";
+    /** 两次算出来的"开机时刻"相差这么多以内算同一次开机（currentTimeMillis 会被网络校时微调）。 */
+    private static final long SAME_BOOT_MS = 60_000;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -34,10 +37,13 @@ public class HomeActivity extends Activity {
     }
 
     private void go() {
-        long now = SystemClock.elapsedRealtime();
-        boolean twice = lastHome != 0 && now - lastHome < DOUBLE_PRESS_MS;
-        lastHome = twice ? 0 : now;
-        if (twice || !openKOReader()) {
+        long bootAt = System.currentTimeMillis() - SystemClock.elapsedRealtime();
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        long opened = prefs.getLong(KEY_BOOT, 0);
+        boolean openedThisBoot = Math.abs(bootAt - opened) < SAME_BOOT_MS;
+        if (!openedThisBoot && openKOReader()) {
+            prefs.edit().putLong(KEY_BOOT, bootAt).apply();
+        } else {
             openOtherHome();
         }
         finish();

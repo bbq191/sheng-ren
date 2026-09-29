@@ -28,7 +28,7 @@ if [[ ! -f $KS ]]; then
 fi
 
 "$BT/aapt2" link --manifest "$here/AndroidManifest.xml" -I "$JAR" -o "$out/base.apk" \
-  --min-sdk-version 21 --target-sdk-version 34 --version-code 1 --version-name 1.0
+  --min-sdk-version 21 --target-sdk-version 34 --version-code 2 --version-name 1.1
 mapfile -t srcs < <(find "$here/src" -name '*.java')
 javac -nowarn -Xlint:-options -source 11 -target 11 -classpath "$JAR" -d "$out/classes" "${srcs[@]}"
 mapfile -t classes < <(find "$out/classes" -name '*.class')
