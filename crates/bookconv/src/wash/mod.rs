@@ -4,11 +4,9 @@
 //! 规则（与 Calibre 参数一一对应）：
 //! 1. 伪 DRM 剥离（= `strip_pseudo_drm.py`）：`META-INF/encryption.xml` 只列样式/字体/脚本 → 丢弃这些文件 +
 //!    encryption.xml + OPF manifest 项；列了正文/图片/导航 = 真 DRM → **报错停下**。
-//! 2. CSS 锁剥离（**只剥字号/字体锁**：独立 .css、`<style>`、`style=""` 三处剥 `font-family`/`font-size`/`font`；
-//!    补优化器 `strip_font_locks` 只剥内联字体锁的缺口）：2026-09-17 前 `color`/`background-color`/`text-align`
-//!    也在剥离名单里，那是照抄 Calibre `--filter-css` 的通用参数、不是针对 xochitl 验证过的必要行为——EPUB 线
-//!    原则明确要求保留原书颜色/加粗等元素样式，只解锁字号，故收窄。`background`/`background-image` 仍然剥
-//!    （见规则⑧，xochitl 平铺背景图盖正文是坐实的渲染 bug，跟字号锁无关，不能一起放开）。
+//! 2. 字体字号解锁（独立 .css、`<style>`、`style=""` 三处，规则见 `crate::cssunlock`）：`font-family`、`line-height`、
+//!    绝对字号去掉，相对字号保留（正文整体那一层的除外），`font` 简写只留粗斜体，`background` 简写只留颜色
+//!    （背景图去掉：xochitl 把背景图平铺满页盖住正文，真机《飘》）。颜色、对齐等别的样式不动（用户 2026-09-29）。
 //! 3. 边距归零（= `--margin-* 0`）：body/html/@page 的 margin/padding 删掉，并注入 `html,body{margin:0;padding:0}`。
 //! 4. 段距归零 + 首行缩进（= `--remove-paragraph-spacing --remove-paragraph-spacing-indent-size 2`）：p/div 的
 //!    上下 margin/padding 归零（左右保留：blockquote/列表缩进不伤），`p{text-indent:2em}`；`keep_para_spacing` 时
@@ -116,13 +114,10 @@ impl Default for WashOpts {
 /// （《缩进诊断5》带 `.big` 类规则时整表不生效，diag6 纯 `p{}` 生效）。
 const WASH_CSS_NAME: &str = "eink-wash.css";
 
+// 要解锁的属性。怎么解（整条去掉，还是只去掉字体、背景图、绝对字号）见 `crate::cssunlock`。
 // background / background-image：书常在 body/分卷页用 CSS 背景图（装饰纹样、分卷插画）。xochitl **无视
 // no-repeat / background-size** → 把背景图**平铺**满页盖住正文（真机《飘》body.fen 的 `background:url() no-repeat`
-// 被铺成多幅）。剥掉背景图声明即净页（章头 <img> 装饰不受影响，仍保留）。@font-face 的 src:url() 由 filter_css 豁免。
-// ⚠ 2026-09-17 起不再剥 `color`/`background-color`/`text-align`——EPUB 线原则要求保留原书颜色/加粗等元素样式，
-// 只解锁字号；这三项此前只是照抄 Calibre `--filter-css` 通用参数，没有真机验证过是必须剥的。放开后如果书里有
-// "深底浅字"高亮块，Paper Pro Move 彩色 e-ink 屏在低对比场景下可能比剥离前更难读——`boost_text_contrast()`
-// 目前只处理文字颜色/字重，不处理背景色对比度，真机验证时要专门挑一本带彩色底纹的书测。
+// 被铺成多幅）；`background` 简写里的颜色保留成 `background-color`。
 // line-height（2026-09-27 用户定）：与字号字体同理，书写死行高会让设备的"行距"设置不起作用。
 pub const DEFAULT_FILTER_PROPS: &[&str] = &["font-family", "font-size", "font", "line-height", "background-image", "background"];
 const WASH_MARK: &str = "eink-wash";

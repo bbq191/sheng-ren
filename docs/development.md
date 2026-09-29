@@ -10,6 +10,9 @@ cargo clippy --workspace --all-targets      # 要求没有警告
 
 koreader/check.sh                            # KOReader 配置离线检查（改了 koreader/ 下的文件后跑；不带参数查全部设备）
 koreader/snap.sh 书.epub [--pages=N]          # 用本机 KOReader 按设备配置逐页截图（见下文）
+koreader/snap.sh 书.epub --links             # 查每个书内链接在 KOReader 里是注释弹窗还是跳转
+tools/regress/run.sh 某版/epub-optimize 目录   # 真书回归：全部文字书 + 一卷漫画各优化一遍（见下文）
+tools/regress/compare.py 旧目录 新目录          # 比较两次回归的产物
 shellcheck -x koreader/*.sh install.sh uninstall.sh
 
 ./install.sh --tools                         # 把命令装进 PATH，手工试用
@@ -17,10 +20,21 @@ shellcheck -x koreader/*.sh install.sh uninstall.sh
 
 ## 真书回归检查
 
-测试用真书在 `~/Documents/ereader/books/`（`haodoo/`、`小说/`、`原版小说/`、`收藏/` 是文字书，`漫画/` 是大体积漫画）。**只读，绝不改动**：
+测试用真书在 `~/Documents/ereader/books/`（路径里带"漫画"的是漫画，其余是文字书）。**只读，绝不改动**：
 产物一律写到临时目录，不要用 `epub-optimize` 的"输入输出同路径"就地覆盖。用户会自己整理这个目录，别假设书还在上次的位置。
 
-先在改动前的提交构建一份 `epub-optimize` 另存（比如 `git worktree add` 一个临时目录去编），再和改动后的各跑一遍全部文字书和一卷漫画（`--device=koreader`；改了彩色或阅读范围相关的处理，`xochitl` 也跑一遍）。
+先在改动前的提交构建一份 `epub-optimize` 另存，再和改动后的各跑一遍，然后比较：
+
+```sh
+git worktree add /tmp/base HEAD && (cd /tmp/base && cargo build --release -p bookconv --bin epub-optimize)
+tools/regress/run.sh /tmp/base/target/release/epub-optimize 旧            # 缺省 --device=koreader
+cargo build --release -p bookconv --bin epub-optimize
+tools/regress/run.sh target/release/epub-optimize 新
+tools/regress/compare.py 旧 新                                           # 改了彩色或阅读范围相关的处理，--device=xochitl 也跑一遍
+```
+
+`compare.py` 每本书报一行：`SAME`（每个 zip 条目逐字节相同）、`TEXT-SAME`（有条目变了，但可见文字一样）、`TEXT-DIFF`（可见文字变了，打印第一个不同处）。
+另外核对两件事，不过就算失败、退出码 1：新产物里不合法的 XML 不比旧的多；新产物的可见文字和**原书**逐字符对账（按字符计数，不管顺序——注释会挪到章末——但一个字不多一个字不少）。
 
 | 改动的性质 | 要求 |
 |---|---|
@@ -44,7 +58,8 @@ koreader/snap.sh 产物.epub kindle-pw12-sig --pages=60 --out=target/snap
 - 配置按 `apply.sh` 同样的顺序从空配置合并出来（个人 → 方案 → 设备 → 预设），放在临时的 `KO_HOME` 里，**不碰本机 KOReader 自己的设置**；书先复制到临时目录，`.sdr` 不会落到原书旁边。窗口不显示（SDL offscreen），窗口大小缺省 1264×1680（`device.conf` 里可以写 `SCREEN_W`、`SCREEN_H`，现在两台都用缺省）。
 - 输出：`pNNN.png` 每页一张；`info.txt` 第一行是总页数，之后每页开头的 xpointer（`DocFragment[n]` = spine 里第 n 个文件，看哪一页从新文件开始就知道分页对不对）；`koreader.log` 是 KOReader 的日志。不给 `--out` 就写到临时目录，结束时打印位置。
 - 本机没装设备上的字体（霞鹜文楷等）时退回 KOReader 自带的字体，每页的行数和真机不同；哪个文件从新的一页开始不受影响。
-- **只是预览，不算真机验证**：2026-09-29 用它确认了撤掉「避免章末空白页」后节与节分页正确，掌阅、Kindle 上还没看。
+- `--links`：不截图，逐页找出书内链接，调用 KOReader 自己的注释判定（`ReaderLink:showAsFootnotePopup`，设置里的 `footnote_link_in_popup`、`link_prefer_footnote` 照样生效），把每个链接记成"弹窗"或"跳转"写进 `links.txt`，末行是合计。缺省查全书，大书用 `--pages=N` 限定页数。
+- **只是预览，不算真机验证**：2026-09-29 用它确认了撤掉「避免章末空白页」后节与节分页正确，以及带 `noteref`/`footnote` 语义的注释在两种模式下都弹窗；掌阅、Kindle 上还没看。
 
 ## 版本号
 

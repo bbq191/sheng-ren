@@ -4,6 +4,8 @@ name = "KOReader（掌阅 Ocean 5 Pro、Kindle PW12 共用）"
 ppi = 300
 color = false
 formats = ["epub"]
+# 注释：点标号弹窗（KOReader 认 epub:type 的 noteref/footnote）
+notes = "popup"
 
 [screen]
 width = 1264

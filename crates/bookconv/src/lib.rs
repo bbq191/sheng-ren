@@ -11,6 +11,7 @@ pub mod check;
 pub mod comic_detect;
 pub mod ncx;
 pub mod convert;
+pub mod cssunlock;
 pub mod direction;
 pub mod epub;
 pub mod epubzip;

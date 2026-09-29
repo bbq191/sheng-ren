@@ -3,6 +3,8 @@ name = "xochitl（reMarkable Paper Pro Move 原生阅读器）"
 ppi = 264
 color = true
 formats = ["epub"]
+# 注释：点标号跳到章末、用阅读器的"返回"回来（xochitl 没有弹窗，只认同文件 #锚点）
+notes = "jump"
 
 [screen]
 width = 954

@@ -39,9 +39,8 @@ pub struct OutputStatus {
     pub fresh: Option<bool>,
 }
 
-/// 生成计划：阅读范围、指纹。
+/// 生成计划：指纹。
 struct Plan {
-    area: profile::Screen,
     fingerprint: String,
 }
 
@@ -63,9 +62,14 @@ impl Library {
         } else {
             format!("{PIPELINE_VERSION}c{}", bookconv::convert::CONVERT_VERSION)
         };
-        // 第 6 段原来是 AZW3 写出器的版本（2026-09-29 删掉），EPUB 产物一直是 "-"，保留占位，指纹格式不变
+        // 第 6 段原来是 AZW3 写出器的版本（2026-09-29 删掉），现在放注释呈现方式（profile 的 notes：弹窗/跳转，
+        // 书库 profiles/ 里的自定义模式改了它也要重建）
+        let notes = match device.notes {
+            profile::Notes::Popup => "popup",
+            profile::Notes::Jump => "jump",
+        };
         let fingerprint = format!(
-            "{}|{cover}|{info}|{pipeline}|{}|-|{}|{}x{}|{}|{}",
+            "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
@@ -74,7 +78,7 @@ impl Library {
             if device.color { "color" } else { "gray" },
             format.ext(),
         );
-        Ok(Plan { area, fingerprint })
+        Ok(Plan { fingerprint })
     }
 
     /// 这本书给该模式生成的话，产物的指纹（`sync --watch` 用它判断上次失败以后有没有变化）。
@@ -170,7 +174,7 @@ impl Library {
 
     /// 为一个阅读模式生成一本书的产物（没变化就跳过，`force` 强制重建）。放在哪见模块注释。
     pub fn build(&self, meta: &Meta, device: &Profile, force: bool) -> Result<Built, String> {
-        let Plan { area, fingerprint } = self.plan(meta, device)?;
+        let Plan { fingerprint } = self.plan(meta, device)?;
         let (root, dir) = self.output_dir(meta, device)?;
         let sp = self.state_path(&device.id);
         let state = self.states.get(&sp);
@@ -220,7 +224,7 @@ impl Library {
             let epub = self.epub_input(meta, &input, &tmp)?;
             // 书里没有的封面、简介、标签，书库里有找来的：补进去
             let epub = crate::metadata::with_additions(self, meta, &epub, &tmp)?;
-            let opts = bookconv::optimize::OptimizeOpts { wash: Some(Default::default()), grayscale: !device.color, ..bookconv::optimize::OptimizeOpts::new(area) };
+            let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
             bookconv::optimize::optimize_epub_file_streaming(&epub, &part, &opts, |_, _| {})?;
             let rep = bookconv::check::check_epub_file(&part)?;
             if !rep.ok {
