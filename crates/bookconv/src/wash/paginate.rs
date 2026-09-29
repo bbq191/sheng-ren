@@ -1060,10 +1060,12 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
     for (idx, pieces, prefix, suffix) in outputs {
         let orig = entries[idx].name.clone();
         // 后面各份的 `<body>` 去掉 id（id 只留在第一份）。prefix 以 body 开标签结尾。
+        // 原文件开头的字节序标记（U+FEFF）不复制进后面各份：它不是文字，每份都带一个没有意义（2026-09-29）。
         let later_prefix = match html::tags(&prefix).filter(|t| t.is_start() && t.is("body")).last().filter(|t| t.end == prefix.len()) {
             Some(t) => format!("{}{}", strip_stray_text(&prefix[..t.start]), html::remove_attr(&prefix[t.start..], "id")),
             None => strip_stray_text(&prefix),
         };
+        let later_prefix = later_prefix.trim_start_matches('\u{feff}');
         let later_suffix = strip_stray_text(&suffix);
         let mut new_entries = Vec::new();
         for (k, p) in pieces.iter().enumerate() {

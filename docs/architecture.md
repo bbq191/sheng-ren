@@ -34,6 +34,7 @@
 | `pdf_ingest/` | PDF 分类（有文字层 / 扫描件 / 漫画）、有文字层的转 EPUB、图片型的裁白边 |
 | `optimize/` | 按设备优化 EPUB 的主流程：流式读写（大漫画不整本进内存）、逐文件变换、图片并行处理 |
 | `wash/` | 清洗层：字体字号解锁、按语言排版、章节分页、目录修复与生成、全书 id 去重、章尾空白页。全书改链接统一走 `rewrite_book_links`（不改 OPF 的 `<item href>`） |
+| `wash/normalize` | 规范整理（清洗层最后一步）：XHTML 修成合法 XML、OPF 升级到 EPUB 3、按 NCX 生成 nav（或按 nav 生成 NCX）、guide 写成 landmarks；`content_properties`/`apply_content_properties` 由优化器在写 OPF 时按最终内容标 manifest 的 `properties` |
 | `wash/opf` | OPF 的读与改：往 manifest、metadata 里插入，删 item（连同 spine 引用），找封面；跟随原文件的命名空间前缀。清洗层、优化器、漫画标签、`ebook-meta` 共用这一份 |
 | `html` | 容错的 XHTML 工具：标签扫描（跳过注释/CDATA）、属性读写（单双引号、无引号）、纯文本、可见内容判断、CSS 声明切分。清洗层和注释处理都用它 |
 | `htmlproc/` | XHTML 处理规则：注释、对比度、重复 id |

@@ -197,11 +197,11 @@ pub fn insert_manifest_items(opf: &str, items: &[NewItem]) -> Option<String> {
     Some(format!("{}{s}{}", &opf[..at], &opf[at..]))
 }
 
-/// 把一段元数据插到 `</metadata>` 前。`xml` 里的 `<meta ` 跟着 metadata 的前缀改成 `<opf:meta `（`dc:` 元素有自己的命名空间，不动）。
+/// 把一段元数据插到 `</metadata>` 前。`xml` 里的 `<meta `/`</meta>` 跟着 metadata 的前缀改成 `<opf:meta `/`</opf:meta>`（`dc:` 元素有自己的命名空间，不动）。
 /// 没有 `</metadata>` → `None`。
 pub fn insert_metadata(opf: &str, xml: &str) -> Option<String> {
     let (at, prefix) = container_close(opf, "metadata")?;
-    let xml = if prefix.is_empty() { Cow::Borrowed(xml) } else { Cow::Owned(xml.replace("<meta ", &format!("<{prefix}meta "))) };
+    let xml = if prefix.is_empty() { Cow::Borrowed(xml) } else { Cow::Owned(xml.replace("<meta ", &format!("<{prefix}meta ")).replace("</meta>", &format!("</{prefix}meta>"))) };
     Some(format!("{}{xml}{}", &opf[..at], &opf[at..]))
 }
 
@@ -309,8 +309,8 @@ mod tests {
         let opf = r#"<opf:package><opf:metadata><dc:title>t</dc:title></opf:metadata><opf:manifest><opf:item id="a" href="a.xhtml" media-type="application/xhtml+xml"/></opf:manifest></opf:package>"#;
         let out = insert_manifest_items(opf, &[NewItem { id: "n", href: "x&y.css", media_type: "text/css", properties: "" }]).unwrap();
         assert!(out.contains(r#"<opf:item id="n" href="x&amp;y.css" media-type="text/css"/></opf:manifest>"#), "{out}");
-        let out = insert_metadata(&out, r#"<meta name="cover" content="c"/><dc:subject>漫画</dc:subject>"#).unwrap();
-        assert!(out.contains(r#"<opf:meta name="cover" content="c"/><dc:subject>漫画</dc:subject></opf:metadata>"#), "{out}");
+        let out = insert_metadata(&out, r#"<meta name="cover" content="c"/><dc:subject>漫画</dc:subject><meta property="dcterms:modified">x</meta>"#).unwrap();
+        assert!(out.contains(r#"<opf:meta name="cover" content="c"/><dc:subject>漫画</dc:subject><opf:meta property="dcterms:modified">x</opf:meta></opf:metadata>"#), "{out}");
         assert_eq!(insert_manifest_items("<package/>", &[]), None);
     }
 

@@ -146,8 +146,8 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     // （清洗层已把空页清理、目录归一，判定更准；不再判第二遍）。
     let is_comic_book = washed_comic.unwrap_or_else(|| crate::comic_detect::is_comic(&ordered));
     let opf = crate::wash::parse_opf(&ordered);
-    // 只在真要改 OPF 时才记它：改翻页方向、补远程图的 manifest 项、给漫画打标签。
-    let opf_name: Option<String> = opf.as_ref().filter(|_| opts.page_direction.is_some() || has_remote_imgs || is_comic_book).map(|o| ordered[o.index].name.clone());
+    // 只在真要改 OPF 时才记它：改翻页方向、补远程图的 manifest 项、给漫画打标签、（清洗过的书）按最终内容标 manifest 的 properties。
+    let opf_name: Option<String> = opf.as_ref().filter(|_| opts.page_direction.is_some() || has_remote_imgs || is_comic_book || opts.wash.is_some()).map(|o| ordered[o.index].name.clone());
     // 导航文档与目录文件：不收它们里面的注释引用，也不往里面搬注释。
     let mut skip_notes: HashSet<String> = ordered.iter().filter(|e| crate::wash::is_toc_file(&e.name)).map(|e| e.name.clone()).collect();
     skip_notes.extend(opf.and_then(|o| o.nav_doc));
@@ -264,6 +264,8 @@ struct EntryXform<'a> {
     taken_names: HashSet<String>,
     /// 抓到的远程图 (zip 路径, 字节)，结尾写进 zip 并补进 manifest。
     fetched_imgs: Vec<(String, Vec<u8>)>,
+    /// 清洗过的书：各 XHTML 最终内容用到的特性（zip 路径 → `wash::normalize::content_properties`），结尾写进 manifest 的 `properties`。
+    content_props: Option<HashMap<String, u8>>,
 }
 
 impl<'a> EntryXform<'a> {
@@ -281,6 +283,7 @@ impl<'a> EntryXform<'a> {
             img_agent: crate::netimg::http_agent(15),
             remote_counter: 0,
             fetched_imgs: Vec::new(),
+            content_props: opts.wash.as_ref().map(|_| HashMap::new()),
         }
     }
 
@@ -304,7 +307,13 @@ impl<'a> EntryXform<'a> {
         use std::borrow::Cow;
         if is_html {
             return Some(match std::str::from_utf8(data) {
-                Ok(text) => Cow::Owned(self.transform_html_chapter(text, name)),
+                Ok(text) => {
+                    let out = self.transform_html_chapter(text, name);
+                    if let (Some(props), Ok(t)) = (self.content_props.as_mut(), std::str::from_utf8(&out)) {
+                        props.insert(name.to_string(), crate::wash::normalize::content_properties(t));
+                    }
+                    Cow::Owned(out)
+                }
                 Err(_) => Cow::Borrowed(data),
             });
         }

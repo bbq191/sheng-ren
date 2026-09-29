@@ -19,6 +19,9 @@
 //!    `toc.ncx` + `nav.xhtml`（xochitl 两者都认）；`AutoToc::Always` 强制重建（原目录坏掉的书）。
 //! 7. 单标签重复 `id=` 折叠（`collapse_dup_id_attrs`）：非法 XHTML 会让 xochitl 整章白屏，这里先修、质量门再拦。
 //! 8. 全书 id 去重（`ids.rs`）：跨文件重复的 id 改名，全书指向它的链接一起改。
+//! 9. 规范整理（`normalize.rs`，最后一步）：XHTML 修成合法 XML（DOCTYPE、命名实体、裸 `&`/`<`、控制字符、空元素、多余闭合标签），
+//!    OPF 升级到 EPUB 3（`dcterms:modified` 固定值、唯一标识符、`opf:` 属性改 `refines`），缺导航文档的按 NCX 生成，guide 写成 landmarks；
+//!    NCX 与 `<spine toc>` 保留（xochitl 靠它）。
 //!
 //! 标签、属性、纯文本、可见性一律走 `crate::html`（完整属性名、两种引号、注释不当标签）。
 //! 全部规则幂等：注入块带 `class="eink-wash"` 标记，重复过不再叠加。
@@ -41,6 +44,7 @@ mod empty_pages;
 mod ids;
 mod layout;
 mod ncx_fix;
+pub mod normalize;
 pub mod opf;
 mod paginate;
 mod toc;
@@ -160,6 +164,16 @@ pub struct WashReport {
     pub trailing_blanks_removed: usize,
     /// 去掉了下边距/之后分页的样式表数（包住章节结尾的容器）。
     pub tail_spacing_rules_fixed: usize,
+    /// 规范整理的 XML 修复计数。见 `normalize.rs`。
+    pub xml_fixes: normalize::XmlFixes,
+    /// OPF 被改写（升级到 EPUB 3 或补必需项）：0 或 1。
+    pub epub3_upgraded: usize,
+    /// 按 NCX 新生成的导航文档条目数（0＝书本来就有 nav）。
+    pub nav_generated: usize,
+    /// 从 `<guide>` 写进 nav 的 landmarks 条数。
+    pub landmarks_added: usize,
+    /// 没有 NCX 的书按 nav 生成的 NCX 条目数（xochitl 读目录靠 NCX）。
+    pub ncx_generated: usize,
 }
 
 
@@ -269,8 +283,11 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     dedup_ids_across_book(entries, &mut rep);
     // 章尾空白页放在分页之后：拆出来的每一份文件末尾也要清。
     remove_chapter_end_blanks(entries, &mut rep);
-    fix_ncx_uid(entries, &mut rep);
     strip_ncx_doctype(entries, &mut rep);
+    // 规范整理：XML 修复、升级 EPUB 3、导航文档（见 `normalize.rs`）。放最后：前面各步新写的文件也要过一遍；
+    // 升级可能补了标识符，NCX 的 dtb:uid 在它之后对齐。
+    normalize::normalize_book(entries, &lang_tag, heading, &mut rep);
+    fix_ncx_uid(entries, &mut rep);
     Ok((rep, comic))
 }
 

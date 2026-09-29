@@ -276,7 +276,10 @@
         w.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><content src="text/c1.xhtml"/></navPoint></navMap></ncx>"#));
         let rep = wash_entries(&mut w, &WashOpts { paginate: false, ..Default::default() }).unwrap();
         assert_eq!(rep.toc_generated, 0);
-        assert!(!w.iter().any(|x| x.name == "OEBPS/nav.xhtml"));
+        // 自动目录不动 NCX；规范整理补 EPUB 3 必需的 nav（NCX 条目没有标签，退回一条指向第一章、标题用书名）
+        assert_eq!(rep.nav_generated, 1);
+        assert!(s(&w, "OEBPS/nav.xhtml").contains(r#"<li><a href="text/c1.xhtml">书</a></li>"#));
+        assert!(s(&w, "OEBPS/toc.ncx").contains(r#"<content src="text/c1.xhtml"/>"#), "NCX 原样");
     }
 
     /// 标题/书名里的字符引用（`&amp;`、`&#12288;` 全角空格）：自动目录只转义一次，不再出现 `&amp;amp;`、`&amp;#12288;`。
@@ -1394,4 +1397,19 @@
         let opf = s(&v, "content.opf");
         assert!(opf.contains(r#"<item id='img' properties="cover-image" href='i/c.jpg'"#) && opf.contains(r#"<meta name="cover" content="img"/></metadata>"#), "{opf}");
         assert!(!ensure_cover_declared(&mut v), "幂等");
+    }
+
+    /// 分页拆出来的后几份不再各带一个字节序标记（U+FEFF）：只有第一份（原文件）开头保留原来那个。
+    #[test]
+    fn paginated_pieces_do_not_repeat_bom() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = paged_book(&[("c1.xhtml", &format!("<h1>第一章</h1><p>{long}</p><h2>第一节</h2><p>{long}</p><h2>第二节</h2><p>{long}</p>"))]);
+        let c1 = v.iter_mut().find(|x| x.name == "OEBPS/Text/c1.xhtml").unwrap();
+        c1.data = [&[0xEF, 0xBB, 0xBF][..], &c1.data].concat();
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert!(rep.sections_paginated >= 2, "{rep:?}");
+        assert!(s(&v, "OEBPS/Text/c1.xhtml").starts_with('\u{feff}'));
+        for f in spine_files(&v).iter().filter(|f| f.as_str() != "OEBPS/Text/c1.xhtml") {
+            assert!(!s(&v, f).contains('\u{feff}'), "{f}");
+        }
     }
