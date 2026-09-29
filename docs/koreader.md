@@ -209,7 +209,8 @@ koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-
 - **每次开机只启动一次**：KOReader 退出时自带界面重新启动，会再触发一次开机任务；用 `/tmp`（内存盘）里的标记挡掉，不然永远退不出 KOReader。
 - **逃生口**：自启的 KOReader 没正常退出就关机（卡死后长按电源键重启、没电）→ 下次开机跳过自启、停在自带界面，只跳一次。
 - **关掉**：从电脑删 U 盘根目录的 `koreader-boot.enabled`（`deploy.sh --disable --write`）；彻底卸：书库里点「KOReader 开机启动：卸掉」，再 `deploy.sh --remove --write`。
-- **KOReader 运行时插 USB 没反应**（2026-09-29 真机）：USB 传文件归亚马逊界面管，它被停掉了。拷书、跑 `apply.sh` 前先在 KOReader 菜单里「退出」，回到自带界面再插，能识别（真机确认）。
+- **退出后回到独占方式**：书库里点「KOReader（独占）」（`deploy.sh` 一起拷过去的脚本书），和开机自启一样停掉亚马逊界面再打开 KOReader；书库里原来那本「KOReader」是普通方式（亚马逊界面留在后台）。重启 Kindle 也行。
+- **KOReader 运行时插 USB 没反应**（2026-09-29 真机）：KOReader 在 Kindle 上运行时故意挂起系统的 USB 服务（它自己就在要交给电脑的那块存储上，源码 `Kindle:usbPlugIn`），和停不停界面无关。拷书、跑 `apply.sh` 前先在 KOReader 菜单里「退出」，回到自带界面再插，能识别（真机确认）。
 - 停掉自带界面后 KOReader 看起来能联网（登录官方同步服务器时报的是"服务器错误"而不是"没有网络"），登录自己的服务器成功后才算确认。有人报告停界面的做法在某些机型上启动失败，出问题就先关掉自启。
 - **系统自动更新没有屏蔽**（用户定：自己控制联网）。自动更新可能让越狱和 KOReader 失效，联网时留意。
 
