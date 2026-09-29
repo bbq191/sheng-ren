@@ -19,7 +19,7 @@ copy_src=${2:-}
 snap() { # snap <从> <到>
   mkdir -p "$2/settings"
   local f
-  for f in "${KO_FILES[@]}"; do if [[ -f $1/$f ]]; then cp "$1/$f" "$2/$f"; fi; done
+  for f in "${KO_FILES[@]}"; do if [[ -f $1/$f ]]; then mkdir -p "$(dirname "$2/$f")"; cp "$1/$f" "$2/$f"; fi; done
 }
 net_changes() { # net_changes <旧目录> <新目录>：有净差异的文件数
   local f n=0 rc
@@ -106,8 +106,11 @@ assert(p['漫画·首次'] == nil and p['文字'] == nil, '配置档没撤掉')
   snap "$w/cur" "$w/un2"
   ko_unmerge_all "$w/un2" "$tmp/backups" "$dev" >/dev/null
   snap "$w/before" "$w/expect"
-  luajit "$KO_HERE/merge.lua" "$w/expect/settings.reader.lua" "$KO_HERE/personal/settings.reader.patch.lua" >/dev/null || true
-  luajit "$KO_HERE/merge.lua" "$w/expect/settings/gestures.lua" "$KO_HERE/personal/gestures.patch.lua" >/dev/null || true
+  while read -r target script patch kind; do # 个人设置层（卸载保留的）照样合并进预期结果
+    [[ $kind == personal ]] || continue
+    mkdir -p "$(dirname "$w/expect/$target")"
+    luajit "$KO_HERE/$script" "$w/expect/$target" "$KO_HERE/$patch" >/dev/null || true
+  done < <(ko_layers "$dev")
   for f in "${KO_FILES[@]}"; do
     rc=0; out=$(luajit "$KO_HERE/diff.lua" "$w/expect/$f" "$w/un2/$f") || rc=$?
     [[ $rc -eq 10 ]] || { echo "✗ $dev：卸载后 $f 没还原成原始配置 + 个人设置：" >&2; echo "$out" >&2; exit 7; }
