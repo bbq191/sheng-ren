@@ -26,7 +26,7 @@
   <text x="36" y="194">koreader/apply.sh &lt;设备&gt;</text>
   <text x="36" y="216" class="s">按顺序合并进设备上的配置：</text>
   <text x="44" y="238" class="m">personal/   个人设置（掌阅为准）</text>
-  <text x="44" y="258" class="m">schemes/    文字、漫画方案</text>
+  <text x="44" y="258" class="m">schemes/    文字、漫画、进度同步</text>
   <text x="44" y="278" class="m">devices/id/ 设备差异、字体</text>
   <text x="44" y="298" class="m">presets.lua 两个状态栏预设</text>
 
@@ -44,10 +44,10 @@
   <rect x="310" y="152" width="250" height="150" rx="8" class="txt"/>
   <text x="326" y="176" class="h">文字书 = 全局设置</text>
   <text x="326" y="198" class="s">个人排版（字体、字号、行距、页边距）</text>
-  <text x="326" y="218" class="s">脚注弹窗、放大链接点击区</text>
+  <text x="326" y="218" class="s">注释弹窗（小一号）、放大链接点击区</text>
   <text x="326" y="238" class="s">书没标语言时按中文断行</text>
-  <text x="326" y="258" class="s">文字页每 16 页全刷（Move 只在章节交界）</text>
-  <text x="326" y="278" class="s">状态栏：页码进度、剩余页数、剩余时间</text>
+  <text x="326" y="258" class="s">每个文件开头换页 · 每 16 页全刷</text>
+  <text x="326" y="278" class="s">进度同步（按文件名认书）</text>
 
   <!-- 漫画 -->
   <path d="M560 70 L610 70" class="l" marker-end="url(#a)"/>
