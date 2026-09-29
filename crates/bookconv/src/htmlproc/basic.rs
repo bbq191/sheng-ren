@@ -61,25 +61,28 @@ pub fn dedup_ids_in_chapter(html: &str, seen: &mut HashSet<String>) -> String {
 pub(crate) fn plan_id_renames(html: &str, seen: &mut HashSet<String>) -> HashMap<String, String> {
     let mut rename: HashMap<String, String> = HashMap::new();
     let mut local: HashSet<String> = HashSet::new();
-    for t in html::tags(html).filter(|t| t.is_start()) {
-        for a in html::attrs(&html[t.start..t.end]).into_iter().filter(|a| a.is("id") && !a.value.is_empty()) {
-            let id = a.value.to_string();
-            if !local.insert(id.clone()) {
-                continue; // 本章内同 id 只决策一次
+    let ids: Vec<String> = html::tags(html)
+        .filter(|t| t.is_start())
+        .flat_map(|t| html::attrs(&html[t.start..t.end]).into_iter().filter(|a| a.is("id") && !a.value.is_empty()).map(|a| a.value.to_string()).collect::<Vec<_>>())
+        .collect();
+    // 本章全部 id（新名不能撞上本章后面才出现的同名 id，2026-09-28 审计：`fn1` 改成 `fn1-x2`，本章后面本来就有个 `fn1-x2`）
+    let all_local: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    for id in ids.iter().cloned() {
+        if !local.insert(id.clone()) {
+            continue; // 本章内同 id 只决策一次
+        }
+        if seen.contains(&id) {
+            let mut n = 2usize;
+            let mut cand = format!("{id}-x{n}");
+            while seen.contains(&cand) || local.contains(&cand) || all_local.contains(cand.as_str()) {
+                n += 1;
+                cand = format!("{id}-x{n}");
             }
-            if seen.contains(&id) {
-                let mut n = 2usize;
-                let mut cand = format!("{id}-x{n}");
-                while seen.contains(&cand) || local.contains(&cand) {
-                    n += 1;
-                    cand = format!("{id}-x{n}");
-                }
-                seen.insert(cand.clone());
-                local.insert(cand.clone());
-                rename.insert(id, cand);
-            } else {
-                seen.insert(id);
-            }
+            seen.insert(cand.clone());
+            local.insert(cand.clone());
+            rename.insert(id, cand);
+        } else {
+            seen.insert(id);
         }
     }
     rename

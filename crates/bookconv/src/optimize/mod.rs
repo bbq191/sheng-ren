@@ -3,10 +3,8 @@
 //! 不重组目录/spine，最大限度兼容各家 EPUB。入口是流式的 [`optimize_epub_file_streaming`]（路径进路径出），
 //! 调用方是书库 `booklib`（`crates/library`）和命令行 `epub-optimize`。
 
-use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::sync::OnceLock;
 use zip::{ZipArchive, ZipWriter};
 
 /// 幂等标记：优化器把这个文件埋进产物 EPUB，内容=优化器版本号（见 [`marker_value`]）。放 META-INF/ 下
@@ -40,7 +38,12 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 /// - v24（2026-09-28）：漫画的 OPF 打上 `<dc:subject>漫画</dc:subject>`（KOReader 读成 keywords，配置档据此自动套漫画设置）。
 /// - v25（2026-09-28）：部标题后面紧跟章标题时部、章各占一页（《雪人》）；没有 `<hN>` 的书，目录锚点是标题段落前面的空元素时
 ///   也认得出标题（《福尔摩斯探案全集》此前整本没分页）；书自带目录指错位置的，核实后改指（《占星术杀人魔法》NCX 整体错位）。
-pub const OPTIMIZE_VERSION: &str = "25";
+/// - v26（2026-09-28 审计）：SVG 封面换 img 只换整页只有一张图的封面页（此前的正则会吞掉两个 svg 之间的正文）；分页并回空份时
+///   补闭合不再重复、只剩标题的份并回前页；交叉引用指向的普通段落不再当注释搬（要注释语义或在文件末尾注释区）；
+///   单引号 OPF 的空页删得掉；`Chapter 1` 不拆成两级；已嵌套的目录不压平，重写目录时保留 navPoint id 与 pageList；
+///   注释索引按 (文件, id)，目录页的链接不算注释引用，收集后没人接的注释放回原处；`@import` 后第一条规则照剥字体锁；
+///   英文首段顶格保留作者的强调类（只去掉写了 text-indent 的类）；`margin:inherit` 不再写坏；目录与 OPF 里新写的 href 百分号编码。
+pub const OPTIMIZE_VERSION: &str = "26";
 
 /// 脚注呈现方式。xochitl 没有弹窗脚注，统一用 `Anchor`（章末可见 + 同章锚点跳转 + 阅读器原生「返回」）。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -105,8 +108,10 @@ mod tests;
 struct Prepared {
     /// (条目名, 字节, 是否 html)，已过封面声明/清洗/第一遍 html 处理/注释块搬出；首个条目是重写过的 `mimetype`。
     entries: Vec<(String, Vec<u8>, bool)>,
-    /// 全书"被引用的注释块"索引（id → 块 html），第二遍 `preserve_relink_footnotes` 搬进引用它的那一章。
-    aside_index: std::collections::HashMap<String, String>,
+    /// 全书"被引用的注释块"索引（(所在文件, id) → 块 html），第二遍 `preserve_relink_footnotes` 搬进引用它的那一章。
+    aside_index: HashMap<crate::htmlproc::NoteKey, String>,
+    /// 不做注释搬移的页：导航文档、目录文件、目录样的页（它们的链接不算注释引用，也不往它们里面搬注释）。
+    skip_notes: HashSet<String>,
     is_comic_book: bool,
     /// 要改 OPF 时（指定了翻页方向，或书里有远程图、抓到的图要补进 manifest）的 OPF 条目名。
     opf_name: Option<String>,
@@ -124,9 +129,12 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     // 保证 OPF 声明了有效封面（见 `wash::ensure_cover_declared`）。
     // 必须在清洗之前：清洗会把只含 SVG 封面的 titlepage 当空页删掉。
     crate::wash::ensure_cover_declared(&mut raw);
-    let wash_rep = match &opts.wash {
-        Some(w) => Some(crate::wash::wash_entries(&mut raw, w)?),
-        None => None,
+    let (wash_rep, washed_comic) = match &opts.wash {
+        Some(w) => {
+            let (r, c) = crate::wash::wash_entries_detect(&mut raw, w)?;
+            (Some(r), Some(c))
+        }
+        None => (None, None),
     };
     let has_remote_imgs = raw.iter().any(|e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img));
     // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
@@ -134,19 +142,22 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: MIMETYPE.to_vec() });
     ordered.extend(raw.into_iter().filter(|e| e.name != "mimetype" && e.name != OPTIMIZE_MARKER));
 
-    // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。用清洗之后的条目判——
-    // 清洗层已把空页清理、目录归一，判定更准。
-    let is_comic_book = crate::comic_detect::is_comic(&ordered);
-    // 只在真要改 OPF 时才找它：改翻页方向、补远程图的 manifest 项、给漫画打标签。
-    let opf_name: Option<String> =
-        if opts.page_direction.is_some() || has_remote_imgs || is_comic_book { crate::wash::parse_opf(&ordered).map(|o| ordered[o.index].name.clone()) } else { None };
+    // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。清洗过的书用清洗层判好的
+    // （清洗层已把空页清理、目录归一，判定更准；不再判第二遍）。
+    let is_comic_book = washed_comic.unwrap_or_else(|| crate::comic_detect::is_comic(&ordered));
+    let opf = crate::wash::parse_opf(&ordered);
+    // 只在真要改 OPF 时才记它：改翻页方向、补远程图的 manifest 项、给漫画打标签。
+    let opf_name: Option<String> = opf.as_ref().filter(|_| opts.page_direction.is_some() || has_remote_imgs || is_comic_book).map(|o| ordered[o.index].name.clone());
+    // 导航文档与目录文件：不收它们里面的注释引用，也不往里面搬注释。
+    let mut skip_notes: HashSet<String> = ordered.iter().filter(|e| crate::wash::is_toc_file(&e.name)).map(|e| e.name.clone()).collect();
+    skip_notes.extend(opf.and_then(|o| o.nav_doc));
 
     let mut rep = Report { wash: wash_rep, total_files: 0, html_files: 0, bytes_before, bytes_after: 0 };
 
-    // 第一遍：xhtml → strip_font_locks；同时扫全书 marker 得**被引用**的尾注 frag 集（referenced），供下一步
-    // "只搬被引用的注释块"用。
+    // 第一遍：xhtml → strip_font_locks；同时扫全书 marker 得**被引用**的注释 (文件, id) 集（referenced），供下一步
+    // "只搬被引用的注释块"用。目录样的页（链接文字占大半）不算。
     let mut entries: Vec<(String, Vec<u8>, bool)> = Vec::with_capacity(ordered.len());
-    let mut referenced: HashSet<String> = HashSet::new(); // 被 marker 引用的注释 id（noteref + 跨文件普通<a>）
+    let mut referenced: HashMap<String, HashSet<String>> = HashMap::new(); // 注释所在文件 → 被 marker 引用的 id
     for crate::epubzip::Entry { name, data } in ordered {
         rep.total_files += 1;
         let ish = is_html_entry(&name, &data);
@@ -154,8 +165,17 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         let data = if ish {
             match String::from_utf8(data) {
                 Ok(text) => {
-                    let (stripped, refs) = first_pass_html(&text, &name);
-                    referenced.extend(refs);
+                    let stripped = first_pass_html(&text, &name);
+                    if !skip_notes.contains(&name) {
+                        let refs = crate::htmlproc::referenced_note_keys(&stripped, &name);
+                        if !refs.is_empty() && crate::wash::is_toc_like_page(&stripped) {
+                            skip_notes.insert(name.clone());
+                        } else {
+                            for (file, id) in refs {
+                                referenced.entry(file).or_default().insert(id);
+                            }
+                        }
+                    }
                     rep.html_files += 1;
                     stripped.into_bytes()
                 }
@@ -166,28 +186,71 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         };
         entries.push((name, data, ish));
     }
+    let aside_index = collect_notes(&mut entries, &mut referenced, &skip_notes);
+    Ok(Prepared { entries, aside_index, skip_notes, is_comic_book, opf_name, has_remote_imgs, rep })
+}
 
-    // 第一遍后半：把**被引用**的注释块（aside/p/li 且带注释语义）从各章移除、建全书索引 aside_index，
-    // 交给第二遍 preserve_relink_footnotes 搬进引用它的那一章。未被引用的块原样留在原处（零丢失）。
-    let mut aside_index: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for (_, data, ish) in entries.iter_mut() {
-        if !*ish {
+/// 第一遍后半：把**被引用**的注释块（aside/p/li/div 且带注释语义）从各章移除、建全书索引 (文件, id) → 块，交给第二遍
+/// `preserve_relink_footnotes` 搬进引用它的那一章。未被引用的块原样留在原处。
+///
+/// **搬走前核对每条都有人接**（2026-09-28 审计）：按第二遍真正会用的文字（先拆互指环、换 duokan 标记，这两步可能改掉 marker）
+/// 重新扫一遍全书的注释引用；收集了却没有任何一章会接的注释，从原文重新收集时不再收它——放回原处。放回的注释里要是还引用着
+/// 别的注释，下一轮会看到，所以反复到没有落空的为止。
+fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashMap<String, HashSet<String>>, skip: &HashSet<String>) -> HashMap<crate::htmlproc::NoteKey, String> {
+    let mut index: HashMap<crate::htmlproc::NoteKey, String> = HashMap::new();
+    let mut originals: HashMap<usize, Vec<u8>> = HashMap::new();
+    let collect_one = |text: &str, name: &str, referenced: &HashMap<String, HashSet<String>>| referenced.get(name).map(|ids| crate::htmlproc::collect_footnote_notes(text, ids, true));
+    for (i, (name, data, ish)) in entries.iter_mut().enumerate() {
+        if !*ish || !referenced.contains_key(name.as_str()) {
             continue;
         }
         let Ok(text) = std::str::from_utf8(data) else { continue };
-        let (cleaned, notes) = crate::htmlproc::collect_footnote_notes(text, &referenced, true);
+        let Some((cleaned, notes)) = collect_one(text, name, referenced) else { continue };
         if !notes.is_empty() {
-            aside_index.extend(notes);
+            index.extend(notes.into_iter().map(|(id, inner)| ((name.clone(), id), inner)));
+            originals.insert(i, std::mem::replace(data, cleaned.into_bytes()));
+        }
+    }
+    while !index.is_empty() {
+        let mut claimed: HashSet<crate::htmlproc::NoteKey> = HashSet::new();
+        for (name, data, ish) in entries.iter() {
+            if !*ish || skip.contains(name) {
+                continue;
+            }
+            let Ok(text) = std::str::from_utf8(data) else { continue };
+            let t = crate::htmlproc::fix_duokan_markers(&crate::htmlproc::break_footnote_cycles(text));
+            claimed.extend(crate::htmlproc::referenced_note_keys(&t, name).into_iter().filter(|k| index.contains_key(k)));
+        }
+        let unclaimed: Vec<crate::htmlproc::NoteKey> = index.keys().filter(|k| !claimed.contains(*k)).cloned().collect();
+        if unclaimed.is_empty() {
+            break;
+        }
+        let files: HashSet<String> = unclaimed.iter().map(|k| k.0.clone()).collect();
+        for (file, id) in &unclaimed {
+            if let Some(ids) = referenced.get_mut(file) {
+                ids.remove(id);
+            }
+        }
+        index.retain(|k, _| !files.contains(&k.0));
+        for (&i, orig) in &originals {
+            let (name, data, _) = &mut entries[i];
+            if !files.contains(name.as_str()) {
+                continue;
+            }
+            let Ok(text) = std::str::from_utf8(orig) else { continue };
+            let (cleaned, notes) = collect_one(text, name, referenced).unwrap_or_else(|| (text.to_string(), Vec::new()));
+            index.extend(notes.into_iter().map(|(id, inner)| ((name.clone(), id), inner)));
             *data = cleaned.into_bytes();
         }
     }
-    Ok(Prepared { entries, aside_index, is_comic_book, opf_name, has_remote_imgs, rep })
+    index
 }
 
 /// 第二遍的"文本类条目"变换器：html 章节 / 独立 css / （改翻页方向时）OPF。跨条目状态（远程图计数、全书 id 去重表、
 /// 抓到的远程图）都在这里。图片条目不归它管（走 `imgpool` 并行）。
 struct EntryXform<'a> {
-    aside_index: &'a std::collections::HashMap<String, String>,
+    aside_index: &'a HashMap<crate::htmlproc::NoteKey, String>,
+    skip_notes: &'a HashSet<String>,
     footnote: FootnoteMode,
     page_direction: Option<crate::direction::PageDirection>,
     /// 漫画：OPF 里打上漫画标签（`comic_detect::tag_opf_as_comic`）。
@@ -197,18 +260,22 @@ struct EntryXform<'a> {
     screen: crate::imgopt::Screen,
     img_agent: ureq::Agent, // 远程图抓取（仅当章内有远程 img 才发请求；抓不到 → 原样保留）
     remote_counter: usize,
+    /// zip 里已有的条目名（含已抓到的远程图）：新抓的图不能跟它们重名。
+    taken_names: HashSet<String>,
     /// 抓到的远程图 (zip 路径, 字节)，结尾写进 zip 并补进 manifest。
     fetched_imgs: Vec<(String, Vec<u8>)>,
 }
 
 impl<'a> EntryXform<'a> {
-    fn new(aside_index: &'a std::collections::HashMap<String, String>, opf_name: Option<&'a str>, comic: bool, opts: &OptimizeOpts) -> EntryXform<'a> {
+    fn new(prep: &'a Prepared, opts: &OptimizeOpts) -> EntryXform<'a> {
         EntryXform {
-            aside_index,
+            aside_index: &prep.aside_index,
+            skip_notes: &prep.skip_notes,
+            taken_names: prep.entries.iter().map(|e| e.0.clone()).collect(),
             footnote: opts.footnote,
             page_direction: opts.page_direction,
-            comic,
-            opf_name,
+            comic: prep.is_comic_book,
+            opf_name: prep.opf_name.as_deref(),
             screen: opts.screen,
             seen_ids: HashSet::new(),
             img_agent: crate::netimg::http_agent(15),
@@ -224,10 +291,10 @@ impl<'a> EntryXform<'a> {
         let t = crate::htmlproc::fix_duokan_markers(&t);
         let t = fix_cover_aspect(&t);
         let t = svg_cover_to_img(&t);
-        let t = crate::htmlproc::preserve_relink_footnotes(&t, self.aside_index, self.footnote);
+        let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
         let t = crate::htmlproc::boost_text_contrast(&t);
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
-        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, remote_img_fetcher(&self.img_agent, self.screen));
+        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
         self.fetched_imgs.extend(imgs);
         crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes()
     }

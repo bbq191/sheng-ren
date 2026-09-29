@@ -1,4 +1,5 @@
 //! 封面声明：保证 OPF 声明了有效封面图。
+use super::opf::{cover_meta_tags, declared_cover, first_spine_image, insert_metadata, is_image_item};
 use super::*;
 
 // ───────────────────────── 封面声明 ─────────────────────────
@@ -13,73 +14,53 @@ use super::*;
 /// meta，写入 `<meta name="cover" content="该条目 id"/>`，并给该条目补 `properties="cover-image"`（EPUB3），返回 `true`。
 /// **必须在清洗（`wash_entries`）之前调用**：清洗会把只含 SVG 封面的 titlepage 当空页删掉（2026-09-20《镖人(卷四)》真机核对）。
 /// 找不到候选也不动。只读 html/OPF 文本，不碰图片字节（流式优化阶段一时图片条目是空占位）。
+/// 判定与 `ebook-meta` 读封面（`epubzip::cover_image_of`）、改封面（`opfmeta`）共用 `wash::opf` 的一套。
 pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
     let Some(opf) = parse_opf(entries) else { return false };
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
-    struct It<'t> {
-        tag: &'t str,
-        id: &'t str,
-        path: String,
-        props: &'t str,
-        image: bool,
-    }
-    let items: Vec<It> = manifest_items(&text)
-        .into_iter()
-        .map(|m| {
-            let path = resolve(&opf.dir, &percent_decode(m.href));
-            let image = m.media_type.starts_with("image/") || is_image_ext(&path);
-            It { tag: m.tag, id: m.id, path, props: m.properties, image }
-        })
-        .collect();
-    let meta_re = cover_meta_re();
-    let has_prop = |i: &It| i.props.split_whitespace().any(|p| p == "cover-image");
+    let items = manifest_items(&text);
+    let has_prop = |i: &ManifestItem| i.properties.split_whitespace().any(|p| p == "cover-image");
+    let metas = cover_meta_tags(&text);
     // meta 声明指向的图片条目（若有效）
-    let meta_target = meta_re
-        .find_iter(&text)
-        .filter_map(|m| tag_attr(m.as_str(), "content"))
-        .find_map(|id| items.iter().find(|i| i.id == id && i.image));
+    let meta_target = metas.iter().find_map(|(_, _, id)| items.iter().find(|i| i.id == *id && is_image_item(i)));
     // 目标封面条目：meta 指向的有效图片 → 已带 cover-image 属性的图片 → 前几页的第一张真实图片（下面找）。
-    let existing = meta_target.or_else(|| items.iter().find(|i| i.image && has_prop(i)));
     // **meta 和 `properties="cover-image"` 必须同时有**（2026-09-20 真机对照实验：xochitl 对封面条目 id 带点的仅 meta 声明
     // ——如 Calibre/Sigil 产物的 `x00000001.jpg`——取不到封面，日志 `null cover image`；加上 `cover-image` 属性就取得到；
     // id 简单如 `cover` 时仅 meta 也行）。所以已有 meta 但条目缺属性也要补。
-    if let Some(t) = existing {
-        let meta_ok = meta_target.map(|m| m.id == t.id).unwrap_or(false);
-        if meta_ok && has_prop(t) {
+    let existing = declared_cover(&text);
+    if let Some(t) = &existing {
+        if meta_target.is_some_and(|m| m.id == t.id) && has_prop(t) {
             return false;
         }
     }
     // 候选：前 12 个 spine 页（跳过导航页）里第一张能对上 manifest 图片条目的图。多看几页是因为封面页常常是只含一张
     // SVG `<image>` 的 titlepage；有的书（《镖人(卷四)》）连封面图本身都坏了——titlepage 和 cover.xhtml 引用的都是一个 239 字节的
     // `cover.txt` 文本残片，书里没有真封面——此时兜底用书里第一张真实图片（漫画的第一页）。
-    static IMG: OnceLock<Regex> = OnceLock::new();
-    let img_re = IMG.get_or_init(|| Regex::new(r##"(?is)<(?:img|image)\b[^>]*?(?:src|xlink:href|href)\s*=\s*"([^"#]+)""##).unwrap());
-    let cand = existing.or_else(|| {
-        opf.spine
-            .iter()
-            .filter(|p| Some(*p) != opf.nav_doc.as_ref())
-            .take(12)
-            .find_map(|page| {
-                let e = entries.iter().find(|e| &e.name == page)?;
-                let html = std::str::from_utf8(&e.data).ok()?;
-                img_re.captures_iter(html).find_map(|c| {
-                    let path = resolve(dir_of(page), &percent_decode(&c[1]));
-                    items.iter().find(|i| i.image && i.path == path)
-                })
-            })
-    });
-    let Some(cover) = cand else { return false };
-    let mut out = meta_re.replace_all(&text, "").into_owned();
-    let new_tag = if has_prop(cover) {
-        cover.tag.to_string()
-    } else if cover.props.is_empty() {
-        cover.tag.replacen(&format!(r#"id="{}""#, cover.id), &format!(r#"id="{}" properties="cover-image""#, cover.id), 1)
-    } else {
-        cover.tag.replacen(&format!(r#"properties="{}""#, cover.props), &format!(r#"properties="{} cover-image""#, cover.props), 1)
+    let cover = match existing {
+        Some(t) => t,
+        None => {
+            let by_name: HashMap<&str, &Entry> = entries.iter().rev().map(|e| (e.name.as_str(), e)).collect();
+            let Some(path) = first_spine_image(&text, &opf.dir, 12, true, |p| by_name.get(p).and_then(|e| std::str::from_utf8(&e.data).ok()).map(str::to_string)) else { return false };
+            let Some(it) = items.into_iter().find(|i| is_image_item(i) && resolve(&opf.dir, &percent_decode(i.href)) == path) else { return false };
+            it
+        }
     };
-    out = out.replacen(cover.tag, &new_tag, 1);
-    let Some(pos) = out.find("</metadata>") else { return false };
-    out.insert_str(pos, &format!(r#"<meta name="cover" content="{}"/>"#, cover.id));
+    // 条目补 `properties="cover-image"`：没有 properties 时紧跟在 id 后面写（与此前产物逐字节一致），有就追加一个值。
+    let new_tag = if has_prop(&cover) {
+        cover.tag.to_string()
+    } else if cover.properties.is_empty() {
+        match html::attr(cover.tag, "id") {
+            Some(a) => format!(r#"{} properties="cover-image"{}"#, &cover.tag[..a.end], &cover.tag[a.end..]),
+            None => return false,
+        }
+    } else {
+        html::set_attr(cover.tag, "properties", &format!("{} cover-image", cover.properties))
+    };
+    let mut edits: Vec<(usize, usize, String)> = metas.iter().map(|&(s, e, _)| (s, e, String::new())).collect();
+    edits.push((cover.pos, cover.pos + cover.tag.len(), new_tag));
+    edits.sort_by_key(|e| e.0);
+    let out = html::apply_edits(&text, edits);
+    let Some(out) = insert_metadata(&out, &format!(r#"<meta name="cover" content="{}"/>"#, cover.id)) else { return false };
     entries[opf.index].data = out.into_bytes();
     true
 }

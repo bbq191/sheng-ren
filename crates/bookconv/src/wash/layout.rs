@@ -212,20 +212,12 @@ fn strip_tail_spacing(css: &str, classes: &HashSet<String>) -> String {
             let val = d.value;
             match prop.as_str() {
                 "margin-bottom" | "padding-bottom" | "page-break-after" | "break-after" => continue,
-                "margin" | "padding" => {
-                    let parts: Vec<&str> = val.split_whitespace().collect();
-                    let (t, r, l) = match parts.len() {
-                        1 => (parts[0], parts[0], parts[0]),
-                        2 => (parts[0], parts[1], parts[1]),
-                        3 => (parts[0], parts[1], parts[1]),
-                        4 => (parts[0], parts[1], parts[3]),
-                        _ => {
-                            out.push(format!("{prop}:{val}"));
-                            continue;
-                        }
-                    };
-                    out.push(format!("{prop}:{t} {r} 0 {l}"));
-                }
+                "margin" | "padding" => match box_sides(val) {
+                    BoxSides::Sides([t, r, _, l], important) => out.push(format!("{prop}:{t} {r} 0 {l}{important}")),
+                    // `margin:inherit`：下边不要，其余三边照原值写成分项
+                    BoxSides::Keyword(k, important) => out.push(format!("{prop}-top:{k}{important};{prop}-right:{k}{important};{prop}-left:{k}{important}")),
+                    BoxSides::Unknown => out.push(format!("{prop}:{val}")),
+                },
                 _ => out.push(format!("{prop}:{val}")),
             }
         }

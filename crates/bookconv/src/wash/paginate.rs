@@ -128,37 +128,17 @@ fn retarget_ncx_to_ids(entries: &mut [Entry], opf: &Opf, targets: &[(String, Str
     let Some(ncx) = opf.ncx.clone() else { return };
     let Some(e) = entries.iter_mut().find(|e| e.name == ncx) else { return };
     let text = String::from_utf8_lossy(&e.data).into_owned();
-    let mut out = String::with_capacity(text.len() + 64);
-    let mut last = 0;
-    let mut label = String::new();
-    let mut label_start: Option<usize> = None;
-    for t in html::tags(&text) {
-        if t.is("text") && t.kind == html::TagKind::Open {
-            label_start = Some(t.end);
-        } else if t.is("text") && t.kind == html::TagKind::Close {
-            if let Some(s) = label_start.take() {
-                label = squash(&crate::util::xml_unescape(&text[s..t.start]));
-            }
-        } else if t.is("content") && t.is_start() {
-            let tag = &text[t.start..t.end];
-            let Some(a) = html::attr(tag, "src") else { continue };
-            let (p, frag) = html::split_href(a.value);
-            if frag.is_some() {
-                continue;
-            }
-            let path = posix_norm(&resolve(dir_of(&ncx), &percent_decode(p)));
-            if let Some((_, _, id)) = targets.iter().find(|(f, l, _)| *f == path && squash(l) == label) {
-                let at = t.start + a.value_end;
-                out.push_str(&text[last..at]);
-                out.push('#');
-                out.push_str(&crate::util::xml_escape(id));
-                last = at;
-            }
+    let new = crate::ncx::rewrite_content_srcs(&text, |label, src| {
+        let (path, frag) = crate::epubzip::resolve_href(&ncx, src);
+        if frag.is_some() {
+            return None;
         }
-    }
-    if last > 0 {
-        out.push_str(&text[last..]);
-        e.data = out.into_bytes();
+        let label = squash_ws(label);
+        let (_, _, id) = targets.iter().find(|(f, l, _)| *f == path && squash_ws(l) == label)?;
+        Some(format!("{src}#{}", crate::util::xml_escape(id)))
+    });
+    if let Some(new) = new {
+        e.data = new.into_bytes();
     }
 }
 
@@ -263,36 +243,31 @@ fn toc_targets(entries: &[Entry], opf: &Opf) -> HashMap<String, Vec<TocTarget>> 
     let Some(e) = entries.iter().find(|e| &e.name == ncx) else { return map };
     let text = String::from_utf8_lossy(&e.data);
     for (depth, label, target) in crate::ncx::parse_ncx_flat(&text) {
-        let (p, frag) = html::split_href(&target);
-        let path = posix_norm(&resolve(dir_of(ncx), &percent_decode(p)));
+        let (path, frag) = crate::epubzip::resolve_href(ncx, &target);
         map.entry(path).or_default().push(TocTarget { frag: html::frag_id(frag.unwrap_or("")).into_owned(), depth: depth.min(6) as u8, label });
     }
     map
 }
 
-/// 比较标题文字用：去掉所有空白（含全角空格）。
-fn squash(t: &str) -> String {
-    t.chars().filter(|c| !c.is_whitespace()).collect()
-}
 
 /// 章名写成普通段落的书（好读：第一个正文文件的 `<h3>` 是书名，"第一章"只是一行字）：目录只指到文件、标签跟文件里某个
 /// 短段落的文字一样、而该文件的 `<hN>` 里没有这个文字时，把这个段落当作跟"目录认得出的其它章标题"同一级的标题候选。
 /// 级别取目录标签对得上的 `<hN>` 里最常见的那一级；一个都对不上就不补（拿不准）。返回 (文件下标, 候选)。
 fn toc_label_paragraphs(files: &[FileInfo], targets: &HashMap<String, Vec<TocTarget>>) -> Vec<(usize, (usize, u8))> {
-    let labels: HashSet<String> = targets.values().flatten().map(|t| squash(&t.label)).filter(|l| !l.is_empty()).collect();
+    let labels: HashSet<String> = targets.values().flatten().map(|t| squash_ws(&t.label)).filter(|l| !l.is_empty()).collect();
     let mut count = [0usize; 7];
-    for h in files.iter().flat_map(|f| f.heads.iter()).filter(|h| labels.contains(&squash(&h.text))) {
+    for h in files.iter().flat_map(|f| f.heads.iter()).filter(|h| labels.contains(&squash_ws(&h.text))) {
         count[h.level as usize] += 1;
     }
     let Some(level) = (1..=6u8).filter(|&l| count[l as usize] > 0).max_by_key(|&l| (count[l as usize], std::cmp::Reverse(l))) else { return Vec::new() };
     let mut out = Vec::new();
     for (fi, f) in files.iter().enumerate() {
         for t in targets.get(&f.path).into_iter().flatten().filter(|t| t.frag.is_empty()) {
-            let label = squash(&t.label);
-            if label.is_empty() || label.chars().count() > 60 || f.heads.iter().any(|h| squash(&h.text) == label) {
+            let label = squash_ws(&t.label);
+            if label.is_empty() || label.chars().count() > 60 || f.heads.iter().any(|h| squash_ws(&h.text) == label) {
                 continue;
             }
-            let hit = f.spans.iter().position(|sp| sp.open_start >= f.lo && leaf_block(&f.html, sp) && squash(&plain_text(&f.html[sp.open_end..sp.close_start])) == label);
+            let hit = f.spans.iter().position(|sp| sp.open_start >= f.lo && leaf_block(&f.html, sp) && squash_ws(&plain_text(&f.html[sp.open_end..sp.close_start])) == label);
             if let Some(i) = hit {
                 out.push((fi, (i, level)));
             }
@@ -303,7 +278,7 @@ fn toc_label_paragraphs(files: &[FileInfo], targets: &HashMap<String, Vec<TocTar
 
 /// 独占一段的节号的值：1–3 位阿拉伯/全角数字，或一…九十九的中文数字。
 pub(super) fn section_number(t: &str) -> Option<u32> {
-    let t = squash(t);
+    let t = squash_ws(t);
     let cs: Vec<char> = t.chars().collect();
     if cs.is_empty() || cs.len() > 3 {
         return None;
@@ -476,6 +451,12 @@ fn looks_like_toc_page(html: &str, lo: usize, hi: usize, spans: &[Span]) -> bool
     link_chars * 2 > all_chars
 }
 
+/// 整页看是不是目录页（口径同 [`looks_like_toc_page`]）。优化器收集注释引用时跳过这种页。
+pub(crate) fn is_toc_like_page(html: &str) -> bool {
+    let Some((lo, hi)) = html::body_range(html) else { return false };
+    looks_like_toc_page(html, lo, hi, &parse_spans(html, lo, hi))
+}
+
 // ───────────────────────── 切分 ─────────────────────────
 
 /// 切点（`html` 里的字节偏移，严格落在 body 内），切出的每一份都有文字。
@@ -578,26 +559,49 @@ fn split_body(html: &str, lo: usize, hi: usize, spans: &[Span], cuts: &[usize]) 
         .collect()
 }
 
-fn marker_like(a_tag_and_inner: &str, inner: &str, before: &str) -> bool {
+/// 链接像注释标号：文字是 `1`/`[1]`/`①`/`*`/`注1` 这类，或在 `<sup>` 里、包着 `<sup>`，或带 noteref/footnote 字样。
+/// `sup_parent`：这个 `<a>` 紧挨着包在 `<sup>` 里。
+fn marker_like(a_tag_and_inner: &str, inner: &str, sup_parent: bool) -> bool {
     static TEXT: OnceLock<Regex> = OnceLock::new();
-    static SUP_BEFORE: OnceLock<Regex> = OnceLock::new();
     let text = plain_text(inner);
     let text_re = TEXT.get_or_init(|| Regex::new(r#"^[\[\(（〔【<]?\s*(\d{1,4}|[*†‡§]{1,3}|[①-⑳]|[ⅰ-ⅹ]|注\s*\d{0,4}|[a-z])\s*[\]\)）〕】>]?$"#).unwrap());
-    let sup_before = SUP_BEFORE.get_or_init(|| Regex::new(r#"(?i)<sup\b[^>]*>\s*$"#).unwrap());
     let l = a_tag_and_inner.to_ascii_lowercase();
-    text_re.is_match(&text) || inner.to_ascii_lowercase().contains("<sup") || sup_before.is_match(before) || l.contains("noteref") || l.contains("footnote")
+    text_re.is_match(&text) || inner.to_ascii_lowercase().contains("<sup") || sup_parent || l.contains("noteref") || l.contains("footnote")
 }
 
 /// 搬注释块的上限：块里的字数超过这么多就不搬（真注释很少超过一页；再长多半是包住整章的 div，搬了会把正文挪走）。
 const NOTE_MAX_CHARS: usize = 1500;
 
+/// 一份的解析结果（元素 + 锚点 → 元素下标，同名取第一个）。每份只解析一次，改了才重来。
+struct PieceIndex {
+    spans: Vec<Span>,
+    anchors: HashMap<String, usize>,
+}
+
+impl PieceIndex {
+    fn new(body: &str) -> Self {
+        let spans = parse_spans(body, 0, body.len());
+        let mut anchors = HashMap::new();
+        for (i, s) in spans.iter().enumerate() {
+            let open = &body[s.open_start..s.open_end];
+            for a in html::attrs(open) {
+                if (a.is("id") || (a.is("name") && s.name == "a")) && !a.value.is_empty() {
+                    anchors.entry(a.value.to_string()).or_insert(i);
+                }
+            }
+        }
+        PieceIndex { spans, anchors }
+    }
+}
+
 /// `body` 里带锚点 `id` 的注释块：锚点元素本身是 `<p>`/`<li>`/`<div>`/`<aside>`，或锚点在这种块的最前面（块里锚点之前没有
 /// 可见内容）时取最近的这种祖先。块里有标题或字数超过 [`NOTE_MAX_CHARS`] 时不算。
-fn note_block(body: &str, spans: &[Span], id: &str) -> Option<usize> {
-    let ai = spans.iter().position(|s| {
-        let open = &body[s.open_start..s.open_end];
-        html::attr_value(open, "id") == Some(id) || (s.name == "a" && html::attr_value(open, "name") == Some(id))
-    })?;
+/// 还要确认它**是注释**（2026-09-28 审计：交叉引用"见第<a href="#a12">12</a>条"的文字也像标号，此前会把第 12 条正文段落搬走）：
+/// 块、锚点或它们的祖先带注释语义（`class`/`epub:type` 里有 note，`htmlproc::note_semantic`），或者块在文件末尾的注释区
+/// （`at_end`：这是最后一份，块后面到文件末尾除了别的注释块（`note_ids` 里的锚点）没有可见内容）。
+fn note_block(body: &str, ix: &PieceIndex, id: &str, at_end: bool, note_ids: &HashSet<String>) -> Option<usize> {
+    let spans = &ix.spans;
+    let ai = *ix.anchors.get(id)?;
     let mut bi = ai;
     loop {
         let s = &spans[bi];
@@ -612,34 +616,90 @@ fn note_block(body: &str, spans: &[Span], id: &str) -> Option<usize> {
     }
     let b = &spans[bi];
     let has_heading = spans.iter().any(|s| s.open_start >= b.open_end && s.close_end <= b.close_start && s.name.len() == 2 && s.name.starts_with('h') && s.name.as_bytes()[1].is_ascii_digit());
-    (!has_heading && text_len(&body[b.open_end..b.close_start]) <= NOTE_MAX_CHARS).then_some(bi)
+    if has_heading || text_len(&body[b.open_end..b.close_start]) > NOTE_MAX_CHARS {
+        return None;
+    }
+    let semantic = {
+        let mut cur = Some(ai);
+        let mut found = false;
+        while let Some(i) = cur {
+            if crate::htmlproc::note_semantic(&body[spans[i].open_start..spans[i].open_end]) {
+                found = true;
+                break;
+            }
+            cur = spans[i].parent;
+        }
+        found
+    };
+    (semantic || (at_end && only_notes_after(body, ix, b.close_end, note_ids))).then_some(bi)
 }
 
-/// 把"注释标号 → 后面某一份里的注释块"的注释块搬到引用它的那一份末尾。返回搬了几条。
-fn relocate_notes(pieces: &mut [Piece]) -> usize {
+/// `body[from..]` 里除了锚点在 `note_ids` 里的注释块（p/li/div/aside）之外没有可见内容。
+fn only_notes_after(body: &str, ix: &PieceIndex, from: usize, note_ids: &HashSet<String>) -> bool {
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut until = from;
+    for s in ix.spans.iter().filter(|s| s.open_start >= from && s.closed() && matches!(s.name.as_str(), "p" | "li" | "div" | "aside")) {
+        if s.open_start < until {
+            continue;
+        }
+        let open = &body[s.open_start..s.open_end];
+        let first_anchor = html::attr_value(open, "id").map(str::to_string).or_else(|| {
+            // 锚点在块开头的 `<a id>`/`<a name>`
+            ix.spans.iter().find(|c| c.open_start >= s.open_end && c.close_end <= s.close_start && c.name == "a").and_then(|c| {
+                let o = &body[c.open_start..c.open_end];
+                html::attr_value(o, "id").or_else(|| html::attr_value(o, "name")).map(str::to_string)
+            })
+        });
+        if first_anchor.is_some_and(|a| note_ids.contains(html::frag_id(&a).as_ref())) {
+            edits.push((s.open_start - from, s.close_end - from, String::new()));
+            until = s.close_end;
+        }
+    }
+    !has_visible(&html::apply_edits(&body[from..], edits))
+}
+
+/// 一份里像注释标号的同文件链接指向的 id（按文档序）。
+fn wanted_notes(body: &str, ix: &PieceIndex) -> Vec<String> {
+    ix.spans
+        .iter()
+        .filter(|s| s.name == "a" && s.closed())
+        .filter_map(|s| {
+            let frag = html::attr_value(&body[s.open_start..s.open_end], "href")?.strip_prefix('#')?;
+            let sup_parent = s.parent.is_some_and(|p| ix.spans[p].name == "sup" && !has_visible(&body[ix.spans[p].open_end..s.open_start]));
+            marker_like(&body[s.open_start..s.close_end], &body[s.open_end..s.close_start], sup_parent).then(|| html::frag_id(frag).into_owned())
+        })
+        .collect()
+}
+
+/// 把"注释标号 → 后面某一份里的注释块"的注释块搬到引用它的那一份末尾。返回 (搬了几条, 每份是否被搬走过注释块)。
+fn relocate_notes(pieces: &mut [Piece]) -> (usize, Vec<bool>) {
     let mut moved = 0;
+    let mut emptied = vec![false; pieces.len()];
+    let mut cache: Vec<Option<PieceIndex>> = (0..pieces.len()).map(|_| None).collect();
+    let last = pieces.len() - 1;
+    // 全文件里所有像注释标号的链接指向的 id（判断"文件末尾注释区"用）。
+    let mut note_ids: HashSet<String> = HashSet::new();
+    for (k, p) in pieces.iter().enumerate() {
+        let ix = cache[k].get_or_insert_with(|| PieceIndex::new(&p.body));
+        note_ids.extend(wanted_notes(&p.body, ix));
+    }
     for j in 0..pieces.len() {
-        let wanted: Vec<String> = {
-            let body = &pieces[j].body;
-            parse_spans(body, 0, body.len())
-                .iter()
-                .filter(|s| s.name == "a" && s.closed())
-                .filter_map(|s| {
-                    let frag = html::attr_value(&body[s.open_start..s.open_end], "href")?.strip_prefix('#')?;
-                    let mut from = s.open_start.saturating_sub(80);
-                    while !body.is_char_boundary(from) {
-                        from += 1;
-                    }
-                    marker_like(&body[s.open_start..s.close_end], &body[s.open_end..s.close_start], &body[from..s.open_start]).then(|| html::frag_id(frag).into_owned())
-                })
-                .collect()
+        let wanted = {
+            let ix = cache[j].get_or_insert_with(|| PieceIndex::new(&pieces[j].body));
+            wanted_notes(&pieces[j].body, ix)
         };
         for id in wanted {
-            let found = (j + 1..pieces.len()).filter(|&i| pieces[i].body.contains(id.as_str())).find_map(|i| {
-                let body = &pieces[i].body;
-                let spans = parse_spans(body, 0, body.len());
-                note_block(body, &spans, &id).map(|b| (i, spans[b].clone()))
-            });
+            let mut found = None;
+            for i in j + 1..pieces.len() {
+                let ix = cache[i].get_or_insert_with(|| PieceIndex::new(&pieces[i].body));
+                if !ix.anchors.contains_key(&id) {
+                    continue;
+                }
+                if let Some(b) = note_block(&pieces[i].body, ix, &id, i == last, &note_ids) {
+                    found = Some((i, ix.spans[b].clone()));
+                    break;
+                }
+            }
             let Some((i, sp)) = found else { continue };
             let body = &pieces[i].body;
             let block = if sp.name == "li" {
@@ -649,10 +709,21 @@ fn relocate_notes(pieces: &mut [Piece]) -> usize {
             };
             pieces[i].body.replace_range(sp.open_start..sp.close_end, "");
             pieces[j].body.push_str(&block);
+            cache[i] = None;
+            cache[j] = None;
+            emptied[i] = true;
             moved += 1;
         }
     }
-    moved
+    (moved, emptied)
+}
+
+/// 片段里的可见内容全在 `<h1>`–`<h6>` 里（至少有一个标题）。
+fn only_headings(body: &str) -> bool {
+    let spans = parse_spans(body, 0, body.len());
+    let heads: Vec<(usize, usize, String)> =
+        spans.iter().filter(|s| s.closed() && s.name.len() == 2 && s.name.starts_with('h') && s.name.as_bytes()[1].is_ascii_digit()).map(|s| (s.open_start, s.close_end, String::new())).collect();
+    !heads.is_empty() && !has_visible(&html::apply_edits(body, heads))
 }
 
 // ───────────────────────── 链接改写 ─────────────────────────
@@ -675,37 +746,29 @@ fn piece_ids(pieces: &[Piece]) -> HashMap<String, (usize, bool)> {
     ids
 }
 
-pub(super) fn encode_href_path(p: &str) -> String {
-    let mut out = String::with_capacity(p.len());
-    for b in p.bytes() {
-        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
+/// 指向被拆文件 `target`、锚点 `frag`（原文）的链接的新值：改指到 id 所在的那一份；`cur` = 链接所在文件。不用改 → `None`。
+fn retarget_split(target: &str, frag: Option<&str>, cur: &str, splits: &HashMap<String, Split>) -> Option<String> {
+    let frag = frag.filter(|f| !f.is_empty())?;
+    let split = splits.get(target)?;
+    let &(k, keep) = split.ids.get(html::frag_id(frag).as_ref())?;
+    let dest = &split.pieces[k];
+    Some(if dest == cur {
+        if keep { format!("#{frag}") } else { crate::epubzip::encode_href_path(dest.rsplit('/').next().unwrap_or(dest)) }
+    } else {
+        crate::epubzip::href_to(dir_of(cur), dest, if keep { frag } else { "" })
+    })
 }
 
-/// 改写 `text` 里指向被拆文件的 `href`/`src`（两种引号都认，锚点解码后对 id）。`cur` = 这段文字所在文件的路径，
-/// `origin` = 裸 `#frag` 指的文件（拆出来的份里是原文件路径，其它文件就是自己）。
+/// 改写拆出来的一份里指向被拆文件的 `href`/`src`（两种引号都认，锚点解码后对 id）。`cur` = 这一份的路径，
+/// `origin` = 裸 `#frag` 指的文件（原文件路径）。其它文件走 `wash::rewrite_book_links`。
 fn rewrite_links(text: &str, cur: &str, origin: &str, splits: &HashMap<String, Split>) -> String {
     html::rewrite_links(text, |v| {
         let (p, frag) = html::split_href(v);
         if html::is_external(p) {
             return None;
         }
-        let frag = frag.filter(|f| !f.is_empty())?;
-        let target = if p.is_empty() { origin.to_string() } else { posix_norm(&resolve(dir_of(cur), &percent_decode(p))) };
-        let split = splits.get(&target)?;
-        let &(k, keep) = split.ids.get(html::frag_id(frag).as_ref())?;
-        let dest = &split.pieces[k];
-        Some(if dest == cur {
-            if keep { format!("#{frag}") } else { encode_href_path(dest.rsplit('/').next().unwrap_or(dest)) }
-        } else {
-            let rel = encode_href_path(&relative_to(dir_of(cur), dest));
-            if keep { format!("{rel}#{frag}") } else { rel }
-        })
+        let target = if p.is_empty() { origin.to_string() } else { crate::epubzip::resolve_href(cur, v).0 };
+        retarget_split(&target, frag, cur, splits)
     })
     .into_owned()
 }
@@ -729,7 +792,7 @@ fn piece_path(orig: &str, k: usize, taken: &HashSet<String>) -> String {
 /// 一趟改完（此前每个被拆文件都把越来越长的 OPF 重新解析、整份复制一遍）。
 fn register_in_opf(opf_text: &str, opf_dir: &str, splits: &[(String, Vec<String>)]) -> String {
     let items = manifest_items(opf_text);
-    let by_path: HashMap<String, &ManifestItem> = items.iter().map(|it| (posix_norm(&resolve(opf_dir, &percent_decode(it.href))), it)).collect();
+    let by_path: HashMap<String, &ManifestItem> = items.iter().map(|it| (resolve(opf_dir, &percent_decode(it.href)), it)).collect();
     let irefs: HashMap<&str, html::Tag> = html::tags(opf_text)
         .filter(|t| t.is_start() && t.is("itemref"))
         .filter_map(|t| tag_attr(&opf_text[t.start..t.end], "idref").map(|id| (id, t)))
@@ -744,7 +807,7 @@ fn register_in_opf(opf_text: &str, opf_dir: &str, splits: &[(String, Vec<String>
         let iref = irefs.get(it.id).map(|t| html::remove_attr(&opf_text[t.start..t.end], "id"));
         for (k, p) in new_paths.iter().enumerate() {
             let nid = format!("{}-p{}", it.id, k + 2);
-            new_items.push_str(&format!("<item id=\"{nid}\" href=\"{}\" media-type=\"{}\"{props}/>", encode_href_path(&relative_to(opf_dir, p)), it.media_type));
+            new_items.push_str(&format!("<item id=\"{nid}\" href=\"{}\" media-type=\"{}\"{props}/>", crate::epubzip::href_to(opf_dir, p, ""), it.media_type));
             if let Some(r) = &iref {
                 new_refs.push_str(&html::set_attr(r, "idref", &nid));
             }
@@ -789,10 +852,8 @@ fn strip_stray_text(shell: &str) -> String {
 }
 
 /// 清洗层入口：拆分全书章节文件并改写链接。`toc_heading`：要新建 nav 时的目录标题（按书的语言）。
+/// 漫画不拆：调用方（`wash_entries`）已判过，漫画不会调到这里。
 pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep: &mut WashReport) {
-    if crate::comic_detect::is_comic(entries) {
-        return;
-    }
     let Some(opf) = parse_opf(entries) else { return };
     // 1. 收集 spine 各文件的标题（目录页、导航文件不算）。
     let mut files: Vec<FileInfo> = Vec::new();
@@ -944,16 +1005,24 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
             taken.insert(path.clone());
             pieces.push(Piece { path, open, body, close });
         }
-        rep.paginate_notes_moved += relocate_notes(&mut pieces);
-        // 搬走注释后变空的份（只剩注释块的尾巴）并回前一份。
+        let (moved, mut emptied) = relocate_notes(&mut pieces);
+        rep.paginate_notes_moved += moved;
+        // 搬走注释后变空的份（只剩注释块的尾巴），或者只剩一个标题（`<h1>注释</h1>` 底下的注释都搬走了）的，并回前一份。
+        // 前一份的补闭合换成被并那份的：前一份末尾补闭合的包裹元素，正是被并那份开头重新打开的那些，两者抵消
+        // （2026-09-28 审计：此前只拼了正文，前一份留着自己的补闭合，又接上被并那份的，产出 `</div></div></body>`）。
         let mut k = 1;
         while k < pieces.len() {
-            if has_visible(&pieces[k].body) {
+            if has_visible(&pieces[k].body) && !(emptied[k] && only_headings(&pieces[k].body)) {
                 k += 1;
                 continue;
             }
             let p = pieces.remove(k);
+            let was_emptied = emptied.remove(k);
             pieces[k - 1].body.push_str(&p.body);
+            pieces[k - 1].close = p.close;
+            // 并完的那一份再看一遍（它可能也只剩一个标题了）
+            emptied[k - 1] |= was_emptied;
+            k = (k - 1).max(1);
         }
         if pieces.len() < 2 {
             continue;
@@ -982,19 +1051,8 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
         rep.toc_sections_added += merge_sections_into_toc(entries, &sections, toc_heading);
         return;
     }
-    // 3. 改写全书链接（拆出来的各份按"原文件"解析裸 #frag）。
-    let split_idx: HashSet<usize> = outputs.iter().map(|o| o.0).collect();
-    for (i, e) in entries.iter_mut().enumerate() {
-        let l = e.name.to_ascii_lowercase();
-        if split_idx.contains(&i) || !(is_html_entry(&e.name, &e.data) || l.ends_with(".ncx") || l.ends_with(".opf")) {
-            continue;
-        }
-        let Ok(t) = std::str::from_utf8(&e.data) else { continue };
-        let new = rewrite_links(t, &e.name, &e.name, &splits);
-        if new != t {
-            e.data = new.into_bytes();
-        }
-    }
+    // 3. 改写全书链接（被拆的文件自己在第 4 步按"原文件"解析裸 #frag）。
+    rewrite_book_links(entries, |n| splits.contains_key(n), |l| retarget_split(&l.target, l.frag, l.file, &splits));
     // 4. 写出各份（第一份沿用原文件名），登记进 OPF。
     let opf_path = entries[opf.index].name.clone();
     let mut inserts: HashMap<usize, Vec<Entry>> = HashMap::new();

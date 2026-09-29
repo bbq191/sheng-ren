@@ -35,19 +35,39 @@
     #[test]
     fn inline_remote_images_fetches_and_keeps_local_and_failed() {
         // 本地图不动；远程抓到→内联改本地名+进资源；远程抓不到→<img> 原样保留（不改书的内容）
-        let html = r#"<p><img src="local.png"/><img class="c" src="https://x.com/a.png"/><img src="//y.com/b.png"/></p>"#;
+        let html = r#"<p><img src="local.png"/><img class="c" src="https://x.com/a.png"/><img src="//y.com/b.png"/><img alt='x>y' src='https://x.com/c.png?a=1&amp;b=2'/></p>"#;
         let mut n = 0usize;
-        let (out, res) = inline_remote_images(html, "OEBPS", &mut n, |src| {
-            if src.contains("a.png") { Some((vec![1, 2, 3], "png")) } else { None } // b 抓不到
+        // 已经优化过的书再跑：书里已有 remote_img_0.png，新抓的图不能重名
+        let mut taken: HashSet<String> = ["OEBPS/remote_img_0.png".to_string()].into_iter().collect();
+        let (out, res) = inline_remote_images(html, "OEBPS", &mut n, &mut taken, |src: &str| {
+            if src.contains("a.png") || src == "https://x.com/c.png?a=1&b=2" { Some((vec![1, 2, 3], "png")) } else { None } // b 抓不到
         });
         assert!(out.contains(r#"src="local.png""#), "本地图应原样: {out}");
-        assert!(out.contains(r#"src="remote_img_0.png""#), "远程抓到应改本地名: {out}");
-        assert!(out.contains(r#"class="c""#), "改 src 应保留其它属性: {out}");
+        assert!(out.contains(r#"class="c" src="remote_img_1.png""#), "远程抓到应改本地名、避开已有的名字: {out}");
         assert!(!out.contains("x.com"), "抓到的远程 URL 应换成本地名: {out}");
         assert!(out.contains(r#"<img src="//y.com/b.png"/>"#), "抓不到的远程 img 应原样保留: {out}");
-        assert_eq!(res.len(), 1, "只有 1 张抓到");
-        assert_eq!(res[0].0, "OEBPS/remote_img_0.png", "资源落本章目录");
+        assert!(out.contains(r#"<img alt='x>y' src='remote_img_2.png'/>"#), "单引号、属性值里有 > 也认，字符引用先还原再抓: {out}");
+        assert_eq!(res.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["OEBPS/remote_img_1.png", "OEBPS/remote_img_2.png"], "资源落本章目录");
         assert_eq!(res[0].1, vec![1, 2, 3]);
+        assert!(has_remote_img(r#"<img alt='a>b' src='https://a/b.jpg'/>"#));
+    }
+
+    #[test]
+    fn svg_cover_to_img_only_replaces_a_lone_cover_svg() {
+        // 审计复现：前一个 <svg> 没有 <image>，旧正则从它一路跨到后面那个 </svg>，把中间的正文吞了
+        let page = r#"<html><body><svg width="10" height="10"><text x="0" y="5">图中文字</text></svg><p>这一段正文会不会丢？</p><svg><image xlink:href="a.jpg"/></svg></body></html>"#;
+        assert_eq!(svg_cover_to_img(page), page, "页面还有别的可见内容：不是封面页，不动");
+        // 真封面页：只有一个 svg、里面只有一张图
+        let cover = r#"<html><body><div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800"><image width="600" height="800" xlink:href='../Images/cover.jpg'/></svg></div></body></html>"#;
+        assert_eq!(
+            svg_cover_to_img(cover),
+            r#"<html><body><div><img src="../Images/cover.jpg" alt="cover" style="display:block;margin:0 auto;max-width:100%;height:auto;"/></div></body></html>"#
+        );
+        // svg 里有文字、或有两张图：不动
+        let with_text = r#"<html><body><svg><image href="c.jpg"/><text>书名</text></svg></body></html>"#;
+        assert_eq!(svg_cover_to_img(with_text), with_text);
+        let two = r#"<html><body><svg><image href="a.jpg"/><image href="b.jpg"/></svg></body></html>"#;
+        assert_eq!(svg_cover_to_img(two), two);
     }
 
     /// 端到端设备优化：EPUB 含超大 JPEG + 灰字 CSS + 灰字/细体内联 style，过优化器后
@@ -486,6 +506,61 @@
         assert!(opf.contains(r#"idref="toc-html""#), "目录页的 itemref 不该从 spine 被删: {opf}");
     }
 
+    /// 只有 mimetype 与给定文件的最小 EPUB（没有 OPF）。
+    fn zip_book(files: &[(&str, &str)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zw.start_file("mimetype", stored).unwrap();
+            zw.write_all(b"application/epub+zip").unwrap();
+            for (n, d) in files {
+                zw.start_file(*n, stored).unwrap();
+                zw.write_all(d.as_bytes()).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        buf
+    }
+
+    fn text_of(epub: &[u8], name: &str) -> String {
+        String::from_utf8(entry_bytes(epub, name)).unwrap()
+    }
+
+    /// M1（2026-09-28 审计）：不清洗时两个注释文件里都有 `id="fn1"`，各章拿到的是自己那一条（此前索引只按 id，一条被另一条覆盖丢了）。
+    #[test]
+    fn audit_m1_same_note_id_in_two_files_without_wash() {
+        let book = zip_book(&[
+            ("ch1.xhtml", r#"<html><body><p>甲章<a href="n1.xhtml#fn1">1</a>。</p></body></html>"#),
+            ("ch2.xhtml", r#"<html><body><p>乙章<a href="n2.xhtml#fn1">1</a>。</p></body></html>"#),
+            ("n1.xhtml", r#"<html><body><p class="footnote" id="fn1">甲章的注释</p></body></html>"#),
+            ("n2.xhtml", r#"<html><body><p class="footnote" id="fn1">乙章的注释</p></body></html>"#),
+        ]);
+        let (out, _) = optimize_epub(&book, crate::imgopt::test_screen()).unwrap();
+        let (c1, c2) = (text_of(&out, "ch1.xhtml"), text_of(&out, "ch2.xhtml"));
+        assert!(c1.contains("甲章的注释") && !c1.contains("乙章的注释"), "{c1}");
+        assert!(c2.contains("乙章的注释") && !c2.contains("甲章的注释"), "{c2}");
+    }
+
+    /// M2：目录页（nav）里的链接不算注释引用、也不往目录页里搬注释；收集了却没有哪章会接的注释放回原处；
+    /// 属性值里有 `>` 的 marker 也认得。
+    #[test]
+    fn audit_m2_nav_refs_ignored_and_unclaimed_notes_put_back() {
+        let book = zip_book(&[
+            ("nav.xhtml", r#"<html><body><nav><ol><li><a href="notes.xhtml#n1">注一</a></li></ol></nav></body></html>"#),
+            // duokan 形态的 noteref：换标记后 href 变成本章 `#n2`，第二遍不会再接 n2
+            ("ch1.xhtml", r#"<html><body><p>正文<sup><a epub:type="noteref" href="notes.xhtml#n2">&lt;img class="duokan-footnote" alt="注释2"/&gt;</a></sup>，又<a title="a>b" href="notes.xhtml#n3">3</a>。</p></body></html>"#),
+            ("notes.xhtml", r#"<html><body><p class="footnote" id="n1">第一条注释</p><p class="footnote" id="n2">第二条注释</p><p class="footnote" id="n3">第三条注释</p></body></html>"#),
+        ]);
+        let (out, _) = optimize_epub(&book, crate::imgopt::test_screen()).unwrap();
+        let (nav, ch1, notes) = (text_of(&out, "nav.xhtml"), text_of(&out, "ch1.xhtml"), text_of(&out, "notes.xhtml"));
+        assert!(!nav.contains("第一条注释") && notes.contains("第一条注释"), "只有目录引用的注释留在原处: {nav} {notes}");
+        assert!(notes.contains("第二条注释") && !ch1.contains("第二条注释"), "没人接的注释放回原处: {notes}");
+        assert!(ch1.contains("第三条注释") && !notes.contains("第三条注释") && ch1.contains(r##"<a href="#n3">3</a>"##), "{ch1}");
+        let all = [&nav, &ch1, &notes].iter().map(|t| t.matches("条注释").count()).sum::<usize>();
+        assert_eq!(all, 3, "每条注释恰好出现一次");
+    }
+
     #[test]
     fn crossfile_endnotes_relinked_per_chapter() {
         let (out, _) = optimize_epub(&make_crossfile_endnote_epub(), crate::imgopt::test_screen()).unwrap();
@@ -662,7 +737,10 @@
     fn add_manifest_items_handles_prefix_and_relative_paths() {
         let imgs = vec![("OEBPS/text/remote_img_0.jpg".to_string(), vec![]), ("remote_img_1.gif".to_string(), vec![])];
         let out = add_manifest_items(r#"<opf:package><opf:manifest><opf:item id="a"/></opf:manifest></opf:package>"#, "OEBPS/content.opf", &imgs);
-        assert_eq!(out, r#"<opf:package><opf:manifest><opf:item id="a"/><item id="eink-remote-img-0" href="text/remote_img_0.jpg" media-type="image/jpeg"/><item id="eink-remote-img-1" href="../remote_img_1.gif" media-type="image/gif"/></opf:manifest></opf:package>"#);
+        // 元素名跟着 manifest 的前缀；已有的 eink-remote-img-0（上次优化抓的）不重复用
+        assert_eq!(out, r#"<opf:package><opf:manifest><opf:item id="a"/><opf:item id="eink-remote-img-0" href="text/remote_img_0.jpg" media-type="image/jpeg"/><opf:item id="eink-remote-img-1" href="../remote_img_1.gif" media-type="image/gif"/></opf:manifest></opf:package>"#);
+        let again = add_manifest_items(r#"<package><manifest><item id="eink-remote-img-0" href="old.png"/></manifest></package>"#, "a.opf", &imgs[..1]);
+        assert!(again.contains(r#"<item id="eink-remote-img-1" href="OEBPS/text/remote_img_0.jpg""#), "{again}");
         assert_eq!(add_manifest_items("<package/>", "a.opf", &imgs), "<package/>", "没有 manifest 原样");
         assert!(has_remote_img(r#"<IMG class="x" src="//cdn/a.png">"#) && has_remote_img(r#"<img src="https://a/b.jpg"/>"#));
         assert!(!has_remote_img(r#"<img data-src="https://a/b.jpg" src="b.jpg"/>"#));

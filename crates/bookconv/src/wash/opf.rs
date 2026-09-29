@@ -1,4 +1,8 @@
-//! OPF 视图：定位 OPF、解出 manifest/spine/nav/ncx，以及 OPF 里的标识符/书名。
+//! OPF 的读与改：定位 OPF、解出 manifest/spine/nav/ncx、标识符/书名；往 `</manifest>`/`</metadata>` 前插入、按条件删 manifest 项
+//! （连同 spine 引用）、封面声明。全书改 OPF 的地方（清洗层、优化器、漫画标签、`ebook-meta`）都走这里。
+//!
+//! 都基于 `crate::html` 的标签扫描：单双引号、注释、命名空间前缀（`<opf:manifest>`、`<opf:item>`）一视同仁；
+//! 插入的元素跟着所在容器的前缀走（前缀 OPF 里写 `<opf:item>`，免得落到空命名空间）。
 use super::*;
 
 pub(super) fn find_opf(entries: &[Entry]) -> Option<usize> {
@@ -55,7 +59,7 @@ pub struct ManifestItem<'a> {
 /// OPF 文本里全部带 `id` 与 `href` 的 manifest 项（文档序）。`parse_opf`、`ensure_cover_declared`、占位封面探测共用。
 pub fn manifest_items(opf_text: &str) -> Vec<ManifestItem<'_>> {
     html::tags(opf_text)
-        .filter(|t| t.is_start() && t.is("item"))
+        .filter(|t| t.is_start() && is_local(t.name, "item"))
         .filter_map(|t| {
             let tag = &opf_text[t.start..t.end];
             let (mut id, mut href, mut media_type, mut properties) = (None, None, "", "");
@@ -73,7 +77,7 @@ pub fn manifest_items(opf_text: &str) -> Vec<ManifestItem<'_>> {
         .collect()
 }
 
-/// `<meta name="cover" …>` 标签（`ensure_cover_declared` 与占位封面探测共用）。
+/// `<meta name="cover" …>` 标签（只认双引号；AZW3 写出器还在用。本 crate 内部改用 [`cover_meta_tags`]）。
 pub fn cover_meta_re() -> &'static Regex {
     static META: OnceLock<Regex> = OnceLock::new();
     META.get_or_init(|| Regex::new(r#"(?s)<meta\b[^>]*\bname\s*=\s*"cover"[^>]*?/?>"#).unwrap())
@@ -97,7 +101,7 @@ pub fn parse_opf(entries: &[Entry]) -> Option<Opf> {
         items.insert(it.id.to_string(), path);
     }
     let spine: Vec<String> = html::tags(&text)
-        .filter(|t| t.is_start() && t.is("itemref"))
+        .filter(|t| t.is_start() && is_local(t.name, "itemref"))
         .filter_map(|t| tag_attr(&text[t.start..t.end], "idref").and_then(|id| items.get(id)).cloned())
         .collect();
     Some(Opf { index, dir, items, spine, nav_doc, ncx })
@@ -162,4 +166,173 @@ pub fn opf_dc(opf: &str) -> OpfDc {
 /// OPF `<dc:title>` 的纯文本内容，取不到时兜底"目录"。
 pub(super) fn opf_book_title(entries: &[Entry], opf_index: usize) -> String {
     Some(opf_dc(&String::from_utf8_lossy(&entries[opf_index].data)).title).filter(|t| !t.is_empty()).unwrap_or_else(|| "目录".into())
+}
+
+// ───────────────────────── 改写 OPF ─────────────────────────
+
+/// 元素名去掉命名空间前缀后是不是 `local`（不分大小写）：`item`、`opf:item` 都算 `item`。
+pub fn is_local(name: &str, local: &str) -> bool {
+    name.rsplit(':').next().is_some_and(|n| n.eq_ignore_ascii_case(local))
+}
+
+/// 第一个 `</local>`（允许前缀）的起点与前缀（`"opf:"` 或 `""`）。
+fn container_close<'a>(opf: &'a str, local: &str) -> Option<(usize, &'a str)> {
+    html::tags(opf).find(|t| t.kind == html::TagKind::Close && is_local(t.name, local)).map(|t| (t.start, &t.name[..t.name.len() - local.len()]))
+}
+
+/// 要新加的一条 manifest 项。`href` 是属性值原文（相对 OPF 目录、已百分号编码，见 `epubzip::href_to`），写入时再 XML 转义。
+pub struct NewItem<'a> {
+    pub id: &'a str,
+    pub href: &'a str,
+    pub media_type: &'a str,
+    /// 空 = 不写 `properties`。
+    pub properties: &'a str,
+}
+
+/// 把 `items` 插到 `</manifest>` 前（元素名跟着 manifest 的前缀）。没有 `</manifest>` → `None`。
+pub fn insert_manifest_items(opf: &str, items: &[NewItem]) -> Option<String> {
+    let (at, prefix) = container_close(opf, "manifest")?;
+    let mut s = String::new();
+    for it in items {
+        s.push_str(&format!(r#"<{prefix}item id="{}" href="{}" media-type="{}""#, xml_escape(it.id), xml_escape(it.href), xml_escape(it.media_type)));
+        if !it.properties.is_empty() {
+            s.push_str(&format!(r#" properties="{}""#, xml_escape(it.properties)));
+        }
+        s.push_str("/>");
+    }
+    Some(format!("{}{s}{}", &opf[..at], &opf[at..]))
+}
+
+/// 把一段元数据插到 `</metadata>` 前。`xml` 里的 `<meta ` 跟着 metadata 的前缀改成 `<opf:meta `（`dc:` 元素有自己的命名空间，不动）。
+/// 没有 `</metadata>` → `None`。
+pub fn insert_metadata(opf: &str, xml: &str) -> Option<String> {
+    let (at, prefix) = container_close(opf, "metadata")?;
+    let xml = if prefix.is_empty() { Cow::Borrowed(xml) } else { Cow::Owned(xml.replace("<meta ", &format!("<{prefix}meta "))) };
+    Some(format!("{}{xml}{}", &opf[..at], &opf[at..]))
+}
+
+/// 元素的终点：自闭合就是标签本身；开标签后面紧跟（中间只有空白）自己的闭合标签时连它一起（`<item …></item>`）。
+fn element_end(text: &str, t: &html::Tag) -> usize {
+    if t.kind == html::TagKind::Open {
+        let ws = text[t.end..].len() - text[t.end..].trim_start().len();
+        if let Some(c) = html::tags_in(text, t.end + ws, text.len()).next() {
+            if c.kind == html::TagKind::Close && c.start == t.end + ws && c.name.eq_ignore_ascii_case(t.name) {
+                return c.end;
+            }
+        }
+    }
+    t.end
+}
+
+/// 删掉 `pred` 选中的 manifest 项，连同 spine 里引用它们的 `<itemref>`（各自连同后面的空白）。一个都没选中 → `None`。
+pub fn remove_items(opf: &str, pred: impl Fn(&ManifestItem) -> bool) -> Option<String> {
+    let ids: HashSet<&str> = manifest_items(opf).iter().filter(|it| pred(it)).map(|it| it.id).collect();
+    if ids.is_empty() {
+        return None;
+    }
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for t in html::tags(opf).filter(|t| t.is_start()) {
+        let key = if is_local(t.name, "item") {
+            "id"
+        } else if is_local(t.name, "itemref") {
+            "idref"
+        } else {
+            continue;
+        };
+        if !html::attr_value(&opf[t.start..t.end], key).is_some_and(|v| ids.contains(v)) {
+            continue;
+        }
+        let end = element_end(opf, &t);
+        let ws = opf[end..].len() - opf[end..].trim_start().len();
+        edits.push((t.start, end + ws, String::new()));
+    }
+    Some(html::apply_edits(opf, edits))
+}
+
+/// `<meta name="cover" …>`（任意引号、允许前缀）：(起点, 终点——含紧跟的 `</meta>`, `content` 值)，文档序。
+pub fn cover_meta_tags(opf: &str) -> Vec<(usize, usize, &str)> {
+    html::tags(opf)
+        .filter(|t| t.is_start() && is_local(t.name, "meta"))
+        .filter_map(|t| {
+            let tag = &opf[t.start..t.end];
+            (html::attr_value(tag, "name")? == "cover").then(|| (t.start, element_end(opf, &t), html::attr_value(tag, "content").unwrap_or("")))
+        })
+        .collect()
+}
+
+/// manifest 项是不是图片：`media-type` 是 `image/…`，或 href 是常见位图扩展名。
+pub fn is_image_item(it: &ManifestItem) -> bool {
+    it.media_type.starts_with("image/") || is_image_ext(html::split_href(it.href).0)
+}
+
+/// OPF 声明的封面图：`<meta name="cover" content="id">` 指向的图片项优先，其次带 `properties="cover-image"` 的图片项。
+/// 声明了但指向的不是图片（Calibre 产物的 `content="cover.txt"`）不算。
+pub fn declared_cover(opf: &str) -> Option<ManifestItem<'_>> {
+    let mut items = manifest_items(opf);
+    let by_meta = cover_meta_tags(opf).into_iter().find_map(|(_, _, id)| items.iter().position(|i| i.id == id && is_image_item(i)));
+    let pos = by_meta.or_else(|| items.iter().position(|i| is_image_item(i) && i.properties.split_whitespace().any(|p| p == "cover-image")))?;
+    Some(items.swap_remove(pos))
+}
+
+/// 封面兜底：前 `max_pages` 个 spine 页（跳过导航页）里第一张图（`<img src>`、SVG `<image href>`）。`in_manifest`：只认能对上
+/// manifest 图片项的（要把它声明成封面时必须如此）；否则 manifest 漏登记的图也算（只是读出封面图）。
+/// `read(zip 路径)` 取页面文本。返回图片的 zip 路径。
+pub fn first_spine_image(opf: &str, opf_dir: &str, max_pages: usize, in_manifest: bool, mut read: impl FnMut(&str) -> Option<String>) -> Option<String> {
+    let items = manifest_items(opf);
+    let path_of = |it: &ManifestItem| resolve(opf_dir, &percent_decode(it.href));
+    let images: HashSet<String> = items.iter().filter(|i| is_image_item(i)).map(path_of).collect();
+    let by_id: HashMap<&str, &ManifestItem> = items.iter().map(|i| (i.id, i)).collect();
+    let pages = html::tags(opf)
+        .filter(|t| t.is_start() && is_local(t.name, "itemref"))
+        .filter_map(|t| by_id.get(tag_attr(&opf[t.start..t.end], "idref")?).copied())
+        .filter(|it| !it.properties.split_whitespace().any(|p| p == "nav"))
+        .take(max_pages);
+    for it in pages {
+        let page = path_of(it);
+        let Some(text) = read(&page) else { continue };
+        for t in html::tags(&text).filter(|t| t.is_start() && (is_local(t.name, "img") || is_local(t.name, "image"))) {
+            let tag = &text[t.start..t.end];
+            let Some(v) = ["src", "xlink:href", "href"].iter().find_map(|a| html::attr_value(tag, a)) else { continue };
+            let (p, _) = html::split_href(v);
+            if p.is_empty() || html::is_external(p) {
+                continue;
+            }
+            let path = resolve(dir_of(&page), &percent_decode(&crate::util::xml_unescape(p)));
+            if images.contains(&path) || (!in_manifest && is_image_ext(&path)) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_follows_container_prefix() {
+        let opf = r#"<opf:package><opf:metadata><dc:title>t</dc:title></opf:metadata><opf:manifest><opf:item id="a" href="a.xhtml" media-type="application/xhtml+xml"/></opf:manifest></opf:package>"#;
+        let out = insert_manifest_items(opf, &[NewItem { id: "n", href: "x&y.css", media_type: "text/css", properties: "" }]).unwrap();
+        assert!(out.contains(r#"<opf:item id="n" href="x&amp;y.css" media-type="text/css"/></opf:manifest>"#), "{out}");
+        let out = insert_metadata(&out, r#"<meta name="cover" content="c"/><dc:subject>漫画</dc:subject>"#).unwrap();
+        assert!(out.contains(r#"<opf:meta name="cover" content="c"/><dc:subject>漫画</dc:subject></opf:metadata>"#), "{out}");
+        assert_eq!(insert_manifest_items("<package/>", &[]), None);
+    }
+
+    #[test]
+    fn remove_items_handles_single_quotes_and_spine_refs() {
+        let opf = "<package><manifest><item id='c0' href='c0.xhtml' media-type='application/xhtml+xml'></item>\n  <item id='c1' href='c1.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='c0'/>\n<itemref idref=\"c1\"/></spine></package>";
+        let out = remove_items(opf, |it| it.href == "c0.xhtml").unwrap();
+        assert_eq!(out, "<package><manifest><item id='c1' href='c1.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref=\"c1\"/></spine></package>");
+        assert_eq!(remove_items(opf, |_| false), None);
+    }
+
+    #[test]
+    fn declared_cover_and_first_spine_image() {
+        let opf = r#"<package><metadata><meta content='t' name='cover'/></metadata><manifest><item id="t" href="cover.txt" media-type="text/plain"/><item id="c" href="i/c.jpg" media-type="image/jpeg" properties="cover-image"/><item id="p" href="p.xhtml" media-type="application/xhtml+xml"/><item id="q" href="i/q.png" media-type="image/png"/></manifest><spine><itemref idref="p"/></spine></package>"#;
+        assert_eq!(declared_cover(opf).map(|i| i.id), Some("c"), "meta 指向 txt 不算，退到 cover-image 属性");
+        let page = r#"<html><body><img src="ext/none.jpg"/><svg><image xlink:href='i/q.png'/></svg></body></html>"#;
+        assert_eq!(first_spine_image(opf, "OEBPS", 12, true, |p| (p == "OEBPS/p.xhtml").then(|| page.to_string())), Some("OEBPS/i/q.png".into()));
+    }
 }
