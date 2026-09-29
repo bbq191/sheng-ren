@@ -76,7 +76,12 @@ local p = dofile('$w/cur/settings/profiles.lua')
 for _, n in ipairs({'漫画·首次', '漫画', '文字'}) do assert(p[n], '缺配置档 ' .. n) end
 local g = dofile('$w/cur/settings/gestures.lua')
 assert(g.gesture_reader.hold_top_left_corner.exit == true)
-assert(g.gesture_reader.tap_top_right_corner == nil, '删掉的手势不能留下 __DELETE__')
+local r = g.gesture_reader
+assert(r.hold_top_right_corner.suspend and not r.hold_top_right_corner.toggle_frontlight, '长按右上 = 休眠，原来的开关前光要去掉')
+assert(r.tap_top_right_corner.toc and not r.tap_top_right_corner.toggle_bookmark, '点右上 = 目录，缺省的书签要去掉')
+assert(r.one_finger_swipe_right_edge_up.increase_frontlight_warmth == 0 and not r.one_finger_swipe_right_edge_up.full_refresh, '右边缘 = 暖光')
+assert(r.short_diagonal_swipe == nil, '删掉的手势不能留下 __DELETE__')
+assert(not dofile('$KO_HERE/luaser.lua').serialize(g):find('__DELETE__'), '结果里不能留 __DELETE__')
 local t = s.style_tweaks
 assert(t and t.cjk_tailored and not t['docfragment_page-break-before_avoid '] and not t['h2_page-break-before_always']
   and not t['footnote-inpage_epub'], '分页、弹窗注释要撤掉的样式调整还在（或整张表没了：没了 KOReader 会退回缺省，页内注释又开了）')

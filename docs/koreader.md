@@ -13,7 +13,7 @@ reMarkable Move 上的 KOReader 2026-09-29 起不再管（Move 只用自带阅�
 | 文件 | 写进设备上的 | 内容 |
 |---|---|---|
 | `personal/settings.reader.patch.lua` | `settings.reader.lua` | 个人设置，以掌阅为准：排版（霞鹜文楷、字号 17、页边距、行距）、页眉页脚、中文排版微调、停用的插件、界面字体等五十多项 |
-| `personal/gestures.patch.lua` | `settings/gestures.lua` | 个人手势：掌阅上改过的 16 处 |
+| `personal/gestures.patch.lua` | `settings/gestures.lua` | 个人手势（见下文「手势」） |
 | `schemes/text.settings.patch.lua` | `settings.reader.lua` | 文字书方案：注释弹窗、分页相关的样式调整、断行、刷新等（见下） |
 | `schemes/comic.settings.patch.lua` | `settings.reader.lua` | 漫画方案的自动切换规则 |
 | `schemes/profiles.patch.lua` | `settings/profiles.lua` | 三个配置档：「漫画·首次」「漫画」「文字」 |
@@ -115,6 +115,29 @@ KOReader 把 `dc:subject` 读成书的 keywords，配置档的自动执行按"�
 - **位置可能差一点**：KOReader 记的进度是 xpointer（第几个文件里的哪个元素）。优化规则改了、书重新生成后，同一个 xpointer 可能落到稍微不同的地方，甚至相邻的节。
 - `--uninstall` 会撤掉这几项（它属于方案层），登录信息不动。
 - **还没在真机上试过**（2026-09-29）。怎么用见[使用指南 · 进度同步](usage.md#koreader-的阅读进度同步)。
+
+## 手势
+
+两台一样（`personal/gestures.patch.lua`，属于个人设置，`--uninstall` 不撤）。阅读界面（2026-09-29 定）：
+
+| 手势 | 动作 |
+|---|---|
+| 长按左上角 | 退出 KOReader |
+| 长按右上角 | 休眠 |
+| 长按左下角 | 截屏 |
+| 长按右下角 | 全刷（清残影） |
+| 点左上角 | 回文件管理器 |
+| 点右上角 | 书籍目录 |
+| 点左下角 | 开关触屏（锁屏防误触） |
+| 点右下角 | 交换翻页键方向 |
+| 左边缘上滑 / 下滑 | 前光调亮 / 调暗（按滑动距离连续调） |
+| 右边缘上滑 / 下滑 | 暖光调暖 / 调冷（设备没有暖光硬件时不起作用） |
+
+去掉了 KOReader 缺省的短斜滑全刷。其余是 KOReader 缺省：点左右两侧翻页、点中间开菜单、双击左右两侧跳 10 页等。漫画打开时自动反转翻页方向（见[漫画方案](#漫画方案)）。
+
+文件管理器：长按左下角截屏、长按右下角全刷、长按右上角交换翻页键；去掉了短斜滑全刷、点左下角开关前光。
+
+`gestures.lua` 是 KOReader 第一次运行时从缺省整份复制出来的，每个手势是一张"动作表"，合并是递归的：换动作时补丁里要把原来的动作写成 `"__DELETE__"`，不然新旧两个动作都在。
 
 ## 怎么应用
 
