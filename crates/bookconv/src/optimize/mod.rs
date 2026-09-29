@@ -43,7 +43,19 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 ///   单引号 OPF 的空页删得掉；`Chapter 1` 不拆成两级；已嵌套的目录不压平，重写目录时保留 navPoint id 与 pageList；
 ///   注释索引按 (文件, id)，目录页的链接不算注释引用，收集后没人接的注释放回原处；`@import` 后第一条规则照剥字体锁；
 ///   英文首段顶格保留作者的强调类（只去掉写了 text-indent 的类）；`margin:inherit` 不再写坏；目录与 OPF 里新写的 href 百分号编码。
-pub const OPTIMIZE_VERSION: &str = "26";
+/// - v27（2026-09-29，EPUB→EPUB 收窄）：
+///   ① 字体字号解锁但不动别的样式——相对字号保留（正文整体那一层除外）、`font` 简写留粗斜体、`background` 简写留颜色；
+///   不再把灰字改黑、细字重提到 400。
+///   ② 注释按阅读模式：KOReader 弹窗（标号 `epub:type="noteref"`、注释块 `<aside epub:type="footnote">`）、xochitl 跳转；
+///   标号原样、不再加 `[N]`；注释 0.85em、每条不跨页、图标标号限一个字高。
+///   ③ 规范整理——产物一律升级 EPUB 3（OPF 3.0、固定值 dcterms:modified、unique-identifier 修正、opf:role/file-as/scheme 改 refines、
+///   缺 nav 按 NCX 生成、只有 nav 的按 nav 生成 NCX、guide 写成 landmarks，NCX 与 spine toc 保留）；XHTML 修成合法 XML
+///   （DOCTYPE、HTML 命名实体转数字引用、裸 &/<、XML 不允许的控制字符、空元素自闭合、属性补引号、根元素 xmlns/xmlns:epub、
+///   多余闭合标签能配平才去）；manifest 的 svg/mathml/scripted/remote-resources 按最终内容标（OPF 最后写进 zip）；分页拆出的份不再重复 U+FEFF。
+///   ④ 漫画页四边留 `comic_margin`（profile 字段，缺省 1px）白边，画布即阅读范围；比框小的 JPEG 页 Lanczos 放大（KOReader 不放大小图），
+///   质量一律 95；PNG 按自身比例尺补白；已排好的页原样保留；900 万像素以上的页照常处理（只拒文件头超过 6400 万像素的）；
+///   静态 GIF/WebP 页转 PNG/JPEG（条目名不变、manifest media-type 跟着改）。
+pub const OPTIMIZE_VERSION: &str = "27";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，

@@ -223,8 +223,8 @@ mod tests {
         assert_eq!(ids, ["koreader", "xochitl"]);
         let k = get("koreader").unwrap();
         assert_eq!(k.screen, Screen { width: 1264, height: 1680 });
-        assert!(k.has_measured_readable(Format::Epub), "整页图铺满整屏（掌阅实测）");
-        assert_eq!(k.readable(Format::Epub), k.screen);
+        assert!(k.has_measured_readable(Format::Epub), "本机 KOReader 漫画方案实测");
+        assert_eq!(k.readable(Format::Epub), Screen { width: 1260, height: 1670 });
         assert!(!k.color);
         let x = get("xochitl").unwrap();
         assert_eq!(x.screen, Screen { width: 954, height: 1696 });

@@ -44,7 +44,7 @@ ko_merge_all "$tmp/home" "$dev"
 # 在开书时发的设置事件全被这个提示框吞掉，截出来的漫画还是文字书的样子（2026-09-29 查实）。设备上只在第一次建库时弹一次。
 printf 'return { ["plugins_disabled"] = { ["coverbrowser"] = true } }\n' >"$tmp/snap.patch.lua"
 luajit "$KO_HERE/merge.lua" "$tmp/home/settings.reader.lua" "$tmp/snap.patch.lua" >/dev/null || [[ $? -eq 10 ]]
-cp "$KO_HERE/snap/2-snap.lua" "$tmp/home/patches/"
+cp "$KO_HERE"/patches/*.lua "$KO_HERE/snap/2-snap.lua" "$tmp/home/patches/" # 和设备上一样装上我们的用户补丁
 cp "$book" "$tmp/book/"
 [[ -n $out ]] || out=$(mktemp -d)
 mkdir -p "$out"

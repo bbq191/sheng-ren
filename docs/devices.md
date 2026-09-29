@@ -7,7 +7,7 @@
 
 | 模式 | 给谁读 | 屏幕 | 阅读范围 | 黑白 / 彩色 |
 |---|---|---|---|---|
-| `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader | 1264×1680，300ppi | 1264×1680 | 黑白（漫画转 256 级灰度） |
+| `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader | 1264×1680，300ppi | 1260×1670 | 黑白（漫画转 256 级灰度） |
 | `xochitl` | reMarkable Paper Pro Move 自带的阅读器 | 954×1696，264ppi | 842×1455 | 彩色 |
 
 ```toml
@@ -56,7 +56,7 @@ height = 1680
 
 | 模式 | 阅读范围 | 依据 |
 |---|---|---|
-| `koreader` | 1264×1680 | 2026-09-27 在掌阅**自带阅读器**上用测量书截屏：整页大图铺满整屏，连页眉页脚也盖住。KOReader 的漫画方案去掉页边距、隐藏状态栏，按整屏算；**在 KOReader 上还没单独实测**。图文混排时不适用 |
+| `koreader` | 1260×1670 | 2026-09-29 用测量书（打上"漫画"标签）在**本机 KOReader** 上按 1264×1680 离屏渲染、套我们的漫画方案截屏实测（`koreader/snap.sh` + `readable-measure`）：页边距 0、隐藏状态栏并收回它的高度后，KOReader 左右各留 2px、底部留 10px。**掌阅、Kindle 真机上的 KOReader 还没实测**。图文混排时不适用 |
 | `xochitl` | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 在 xochitl 上实测）。改了页边距要跟着改（28 档 → 898 宽；1 档 → 952 宽） |
 
 ## 在真机上测量

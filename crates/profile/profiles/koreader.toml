@@ -14,10 +14,10 @@ comic_margin = 1
 width = 1264
 height = 1680
 
-# 真实可阅读范围（像素，竖屏），2026-09-27 用测量书在掌阅原生阅读器上截屏实测（readable-measure）：
-# 只放一张大图的页面，图铺满整屏（连页眉页脚区域也盖住），上下左右留白都是 0，所以等于标称尺寸。
-# 这是整页图（漫画）的情况；图文混排时图片受正文页边距限制，不适用这组数。
-# KOReader 的漫画方案去掉页边距、隐藏状态栏（见 koreader/），按整屏算；KOReader 上还没有单独实测。
+# 真实可阅读范围（像素，竖屏）：2026-09-29 用测量书（readable-probe，打上"漫画"标签）在本机 KOReader v2026.07.1 上按 1264×1680
+# 离屏渲染、套我们的漫画方案（页边距 0、隐藏状态栏，配 koreader/patches/2-footer-preset-reclaim.lua 收回状态栏的高度）截屏实测
+# （koreader/snap.sh + readable-measure）：左右各留 2px、底部留 10px，整页图最大 1260×1670。按这个排，KOReader 不再把整页图缩小一次。
+# 掌阅、Kindle 真机上的 KOReader 还没实测（真机屏幕像素、状态栏字体不同，可能差几个像素）。
 [readable.epub]
-width = 1264
-height = 1680
+width = 1260
+height = 1670

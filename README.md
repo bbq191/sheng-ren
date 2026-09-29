@@ -18,7 +18,7 @@
 
 | 模式 | 给谁读 | 屏幕 | 漫画按多大算 |
 |---|---|---|---|
-| `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader（两台共用一份） | 黑白，1264×1680 | 1264×1680（整屏） |
+| `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader（两台共用一份） | 黑白，1264×1680 | 1260×1670（KOReader 漫画方案，本机实测） |
 | `xochitl` | reMarkable Paper Pro Move 自带的阅读器 | 彩色，954×1696 | 842×1455 |
 
 Kindle 自带阅读器（要 AZW3）、Move 上的 KOReader 都不再单独出产物（2026-09-29 起），原因见[设备与可阅读范围](docs/devices.md)。

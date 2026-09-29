@@ -21,7 +21,7 @@ reMarkable Move 上的 KOReader 2026-09-29 起不再管（Move 只用自带阅�
 | `devices/<设备 id>/settings.reader.patch.lua` | `settings.reader.lua` | 随设备不同的：状态栏字体的文件路径 |
 | `devices/<设备 id>/device.conf` | — | 设备在 MTP 下叫什么、KOReader 目录在哪、怎么判断 KOReader 退没退出、要有哪些字体 |
 | `presets.lua` | `settings.reader.lua` | 按设备当前的状态栏生成两个状态栏预设 |
-| `patches/*.lua` | `patches/` | KOReader 用户补丁（启动时执行）：`2-ui-font-size.lua` 界面默认字号整体小 2 号 |
+| `patches/*.lua` | `patches/` | KOReader 用户补丁（启动时执行）：`2-ui-font-size.lua` 界面默认字号整体小 2 号；`2-footer-preset-reclaim.lua` 载入状态栏预设时连"状态栏覆盖正文"一起切（漫画用满整屏高度） |
 | `apply.sh` | — | 应用、还原（`--restore`）、撤销（`--uninstall`），见[怎么应用](#怎么应用) |
 | `check.sh` | — | 离线检查，不碰设备（见[改了配置之后](#改了配置之后)） |
 | `snap.sh`、`snap/2-snap.lua` | — | 用本机 KOReader 按设备配置逐页截图（见[开发 · 在电脑上预览 KOReader 分页](development.md#在电脑上预览-koreader-分页)） |
@@ -84,11 +84,11 @@ KOReader 把 `dc:subject` 读成书的 keywords，配置档的自动执行按"�
 - 2026-09-28 之前生成的漫画没有漫画标签：重新生成（`booklib build`，优化规则 v24 起会把它判为过期）并拷到设备上才会触发。
 - 漫画读到一半 KOReader 崩了、没走到"关书"，状态栏会一直隐藏，打开再关闭任意一本漫画就恢复。
 - 每次切换状态栏预设会弹一条"已载入预设"的小提示。
-- **隐藏的状态栏仍占着底部高度**（2026-09-29 本机 KOReader 截图，1264×1680 屏上 39px；真机按 DPI 放大）：个人设置 `footer.reclaim_height = false`，
-  crengine 的下页边距 = 页边距 + 状态栏高度（源码 `ReaderTypeset:onSetPageMargins`）。只在「漫画」预设里写 `reclaim_height = true` 不管用：
-  `ReaderFooter:loadPreset` 不更新这个开关，要到下次开书才读（试过，截图不变）。后果：整页漫画被缩到约 1260×1641，靠左放，右边、底下各空一条；
-  书里写了 `img { width:100% }` 的（乱马这类）图被**压扁约 2%**（宽 1260 不变、高挤进 1641，截图上的对角线斜率核实）。
-  要修得用一个补丁在载入预设时同步 `reclaim_height` 并重设页边距，还没做，也没真机验证。左右另有约 2px 空白，来源没查到。
+- **隐藏的状态栏本来仍占着底部高度**（2026-09-29 本机 KOReader 截图，1264×1680 屏上 39px）：crengine 的下页边距 = 页边距 + 状态栏高度，
+  除非开着"状态栏覆盖正文"（`footer.reclaim_height`，源码 `ReaderTypeset:onSetPageMargins`）。这个开关不能全局开：文字书状态栏一直显示，开了会压住正文最后一行。
+  所以只在「漫画」预设里开（`presets.lua`）；但 KOReader 载入预设时不切它、也不重算页边距，要配用户补丁 `patches/2-footer-preset-reclaim.lua` 补上这两步。
+  修好后本机实测整页图最大 1260×1670（左右各留 2px、底部 10px，是 KOReader 自己留的，来源没查到），`koreader` 模式的阅读范围就按这个写。
+  之前书里写了 `img { width:100% }` 的漫画（乱马这类）会被竖向压扁约 2%，现在画布和可用区域一致，不再压扁。**真机上还没看**。
 - **KOReader 不放大小图**：渲染 DPI 96 时 `<img>` 按原像素尺寸显示，只有书里写了 `width:100%` 才铺满（没写宽度、`height:100%`、`max-width:100%` 都不放大）。
   所以优化器把比屏幕小的漫画页预先放大（见[排版与优化规则 · 漫画](typesetting.md#漫画)）。
 

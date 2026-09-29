@@ -70,6 +70,7 @@ for dev in "${devs[@]}"; do
 local s = dofile('$w/cur/settings.reader.lua')
 assert(s.footer_presets and s.footer_presets['文字'] and s.footer_presets['漫画'], '缺状态栏预设')
 assert(s.footer_presets['漫画'].reader_footer_mode == 0, '漫画预设要隐藏状态栏')
+assert(s.footer_presets['漫画'].footer.reclaim_height == true and not s.footer_presets['文字'].footer.reclaim_height, '只有漫画预设收回状态栏高度')
 assert(s.profiles_autoexec.ReaderReadyAll['漫画·首次'].is_new == true)
 local p = dofile('$w/cur/settings/profiles.lua')
 for _, n in ipairs({'漫画·首次', '漫画', '文字'}) do assert(p[n], '缺配置档 ' .. n) end
