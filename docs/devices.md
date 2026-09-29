@@ -59,6 +59,27 @@ height = 1680
 | `koreader` | 1260×1670 | 2026-09-29 用测量书（打上"漫画"标签）在**本机 KOReader** 上按 1264×1680 离屏渲染、套我们的漫画方案截屏实测（`koreader/snap.sh` + `readable-measure`）：页边距 0、隐藏状态栏并收回它的高度后，KOReader 左右各留 2px、底部留 10px。**掌阅、Kindle 真机上的 KOReader 还没实测**。图文混排时不适用 |
 | `xochitl` | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 在 xochitl 上实测）。改了页边距要跟着改（28 档 → 898 宽；1 档 → 952 宽） |
 
+## xochitl 怎么存 EPUB 和阅读进度（2026-09-29 真机摸底，只读）
+
+Move 系统版本 20260827；数据目录 `/home/root/.local/share/remarkable/xochitl/`，每本书一个 UUID，一组同名文件：
+
+| 文件 | 内容 |
+|---|---|
+| `<uuid>.epub` | 传上去的原书，原样保存 |
+| `<uuid>.pdf` | **xochitl 按当前设置把整本书排成的 PDF**，屏幕上显示的是它（阅读位置 = 这个 PDF 的页码） |
+| `<uuid>.content` | JSON：`fileType: "epub"`、排版设置（`fontName`（用户用霞鹜文楷）、`lineHeight`、`margins`、`textScale`）、`pageCount`（总页数）、`pages`（每页一个 UUID）、`redirectionPageMap` |
+| `<uuid>.metadata` | JSON：`visibleName`（书名）、**`lastOpenedPage`（阅读进度，从 0 起：记 80 = 屏幕上 Page 81）**、`lastOpened`、`lastModified` |
+| `<uuid>.epubindex` | 二进制（Qt 数据流：大端、字符串是 4 字节长度 + UTF-16）。头部：标识 `rM epub index`、版本 2、页面尺寸 954×1696、字号缩放、页边距、行距、字体名；之后按 EPUB 里的文件分组：**每个文件从 PDF 第几页开始、文件里各锚点（如我们加的 `#eink-…`）在第几页**——EPUB 位置 ↔ PDF 页码的对照表 |
+| `<uuid>.local`、`.pagedata`、`.thumbnails/` | 本地标记、每页模板、缩略图 |
+| `<uuid>.tombstone` | 删掉的书留下的标记（只有删除时间） |
+
+- **进度写入时机**：翻页后马上写 `.metadata`（书没关着也写；翻 3 页后读到 `lastOpenedPage` 80，对应屏幕 81）。
+- 改字号、字体、行距、页边距会整本重排：PDF、总页数、对照表都换新的。
+- 用户没开 reMarkable 云同步。
+
+**和 KOReader 进度同步接起来的可能性**（用户 2026-09-29 定：暂时不做）：KOReader 记的是 xpointer（第几个文件里的哪一段），`.epubindex` 把"文件 + 锚点"对到 PDF 页码，
+两边能互相换算，锚点之间按字数比例估，精度约一页。Move → 掌阅、Kindle 只要读文件（风险低）；反方向要改写 `lastOpenedPage`，xochitl 会不会重新读外部改过的值没验证。
+
 ## 在真机上测量
 
 用"测量书"来量。书里有一张竖长和一张横宽的纯黑大图，阅读器会把它们等比缩小到放得下为止。竖长图显示出来的高度就是可用高度，横宽图的宽度就是可用宽度。
