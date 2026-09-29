@@ -10,7 +10,7 @@ use super::*;
 /// 才从源文件按需读回、交给 worker 并行处理、按原顺序写进目标文件，写完就丢。输出直接流式写文件（`ZipWriter` 包
 /// `BufWriter<File>`）。峰值内存量级是"并行中的几张图 + 全书文字部分"（并行上限见 [`crate::imgpool`]）。
 ///
-/// 书里有远程图时 OPF 推迟到最后写：抓图发生在阶段二处理各章时，抓到的图要补进 manifest（manifest 里没有的资源
+/// 书里有远程图、或清洗过（manifest 的 `properties` 按各章最终内容标）时 OPF 推迟到最后写：抓图发生在阶段二处理各章时，抓到的图要补进 manifest（manifest 里没有的资源
 /// 不算书的一部分），OPF 若先写出去就改不了了。EPUB 只要求 `mimetype` 排第一，其余条目的顺序阅读器不管。
 ///
 /// `on_progress(done, total)`：阶段二每写完一个条目回调一次，`total`＝要写出的条目总数（`entries.len()`，不含末尾的
@@ -25,8 +25,8 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     let prep = prepare_entries(raw, opts, bytes_before)?;
     let (screen, grayscale, is_comic_book) = (opts.screen, opts.grayscale, prep.is_comic_book);
     let entries = &prep.entries;
-    // 有远程图时推迟写的 OPF 条目名（见函数文档）。
-    let deferred_opf: Option<&str> = prep.opf_name.as_deref().filter(|_| prep.has_remote_imgs);
+    // 推迟写的 OPF 条目名（见函数文档）：有远程图时；清洗过的书也推迟——manifest 的 `properties` 要按各章最终内容标。
+    let deferred_opf: Option<&str> = prep.opf_name.as_deref().filter(|_| prep.has_remote_imgs || opts.wash.is_some());
     let mut deferred_opf_bytes: Option<Vec<u8>> = None;
 
     // 阶段二：流式写出。
@@ -102,8 +102,11 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     }
     if let (Some(name), Some(bytes)) = (deferred_opf, deferred_opf_bytes) {
         let bytes = match String::from_utf8(bytes) {
-            Ok(text) if !xf.fetched_imgs.is_empty() => add_manifest_items(&text, name, &xf.fetched_imgs).into_bytes(),
-            Ok(text) => text.into_bytes(),
+            Ok(text) => {
+                let text = if xf.fetched_imgs.is_empty() { text } else { add_manifest_items(&text, name, &xf.fetched_imgs) };
+                let props = xf.content_props.as_ref().and_then(|p| crate::wash::normalize::apply_content_properties(&text, crate::epubzip::dir_of(name), p));
+                props.unwrap_or(text).into_bytes()
+            }
             Err(e) => e.into_bytes(),
         };
         crate::epubzip::put_entry(&mut zw, name, deflated, &bytes)?;
