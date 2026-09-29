@@ -21,7 +21,7 @@ pub struct BookMeta {
     pub cover_media_type: String,
 }
 
-/// 章节 HTML 引用的图片等资源（如 FB2/MOBI 内联插图）。
+/// 章节 HTML 引用的图片等资源（如漫画页、网页插图）。
 /// `path` 为 OEBPS 内相对路径（如 `images/img1.jpg`），章节 html 以此相对引用。
 pub struct Resource {
     pub path: String,
@@ -35,8 +35,7 @@ pub struct Book {
     /// 章节引用的嵌入资源（插图、漫画页等），可以为空。
     pub resources: Vec<Resource>,
     /// 显式目录。空＝沿用"每个有标题的章节文件一条目录"；非空＝按这里生成 nav，条目可以指向
-    /// 文件内锚点、也可以多条指向同一个文件（PDF→EPUB 单文件模式/分组标题，见
-    /// `pdf_ingest::to_epub`）。
+    /// 文件内锚点、也可以多条指向同一个文件。
     pub nav: Vec<NavEntry>,
 }
 
@@ -51,7 +50,7 @@ pub struct NavEntry {
 /// 文字与属性值共用的 XML 转义（`& < > "`，见 `util::xml_escape`）。
 use crate::util::xml_escape as xesc;
 
-/// `assemble` 写出的 OPF 在 zip 里的路径（`container.xml` 指向它；PDF 来源识别等也按这个路径读）。
+/// `assemble` 写出的 OPF 在 zip 里的路径（`container.xml` 指向它）。
 pub(crate) const OPF_PATH: &str = "OEBPS/content.opf";
 /// 转换器组装的 EPUB 在 OPF `dc:identifier` 里写的前缀：`urn:bookconv:{book_id}`。
 pub(crate) const ID_SCHEME: &str = "urn:bookconv:";
@@ -208,37 +207,11 @@ fn nav_xhtml(book: &Book) -> String {
 }
 
 
-/// 组装时可选的外链共用样式表：写进 `OEBPS/<file>`、OPF manifest 补一项、**只给正文含 `<img` 的章节**挂 `<link>`
-/// （纯文字页不该吃到 `body{margin:0}` 之类的清零规则）。组装时一次写成，不必组出整本 zip 再读回改条目。
-pub(crate) struct SharedCss<'a> {
-    /// `OEBPS/` 下的文件名（也是章节 `<link href>` 的值）。
-    pub file: &'a str,
-    /// manifest 项 id。
-    pub id: &'a str,
-    pub css: &'a str,
-}
-
 /// [`assemble`] 的内部变体选项。`Default` = 与 [`assemble`] 完全相同。
 #[derive(Default)]
-pub(crate) struct AssembleOpts<'a> {
-    pub shared_css: Option<SharedCss<'a>>,
+pub(crate) struct AssembleOpts {
     /// 写完一份资源就释放它（组装后 `book.resources` 为空）：调用方不再用这批资源时，省掉"资源 + zip 缓冲"同时驻留的一整份体积。
     pub consume_resources: bool,
-    /// 书是"从右往左"翻页（日漫）：OPF `<spine>` 写上 `page-progression-direction="rtl"`（xochitl 的日漫翻页
-    /// 只看这个属性，2026-09-24）。
-    pub rtl: bool,
-}
-
-/// 不区分大小写的 `<img` 探测（不为此分配整章小写副本）。
-fn has_img_tag(html: &str) -> bool {
-    html.as_bytes().windows(4).any(|w| w.eq_ignore_ascii_case(b"<img"))
-}
-
-/// PDF→EPUB 颜色 span 探测（`optimize_pdf_to_epub` 生成的 `class="eink-cN"`）——共享 CSS 现在除了
-/// `pdf-img.css` 的图片尺寸规则，还可能带颜色规则（见 `assemble_pdf_derived`），纯文字页也可能
-/// 用到颜色，不能再只按"有没有 `<img`"决定要不要挂 `<link>`（2026-09-23）。
-fn has_color_span(html: &str) -> bool {
-    html.contains("class=\"eink-c")
 }
 
 /// 把 Book 打包成 EPUB 字节。组装前对每章：先 fix_internal_links（脚注同文件锚点规整），
@@ -247,30 +220,12 @@ pub fn assemble(book: &mut Book) -> Result<Vec<u8>, String> {
     assemble_with(book, AssembleOpts::default())
 }
 
-/// 转换器（FB2/MOBI/AZW3/CBZ/网页文章）组装**与设备无关的母版 EPUB** 的统一收尾：同 [`assemble`]，但写完一份资源
+/// 转换器（CBZ/网页文章）组装**与设备无关的母版 EPUB** 的统一收尾：同 [`assemble`]，但写完一份资源
 /// 就释放（组装后 `book.resources` 为空），不让"资源表 + zip 缓冲"同时各占一整份体积。产物字节与 [`assemble`] 相同。
 /// 按设备的优化（图片缩放、字体解锁等）在入库之后按 profile 另做，不在转换时写死某台设备。
 pub fn assemble_master(book: &mut Book) -> Result<Vec<u8>, String> {
-    assemble_with(book, AssembleOpts { consume_resources: true, ..Default::default() })
+    assemble_with(book, AssembleOpts { consume_resources: true })
 }
-
-/// PDF→EPUB 转出的书专用：`<img>` 没有 `width`/`height`（源自 PDF 页内嵌图，原始像素尺寸），也没有任何
-/// 外链 CSS 撑住布局：xochitl
-/// 原生阅读器走标准文档流，无 CSS 兜底的 `<img>` 不撑满、甚至整个不出现在渲染结果里（2026-09-23 真机
-/// 投一本真实 PDF 手册核实：内部生成的预览 PDF 里 `pdfimages -list` 空，24 张图一张没有）。跟漫画
-/// `COMIC_CSS`（`width:100%` 强撑满整页）不是一回事——PDF 里的图是跟正文混排的小插图/二维码，不该被
-/// 拉伸到整页宽；用 `max-width:100%` 只封顶超宽图，不撑大本来就小的图，也不清零正文页边距。
-/// `extra_css`：`optimize_pdf_to_epub` 返回的颜色 CSS（`.eink-cN{color:#rrggbb;}` 逐条，可能是空
-/// 串——全书没解析出任何非黑颜色时就是空）。拼进同一份共享样式表而不是另起一个文件：颜色规则
-/// 也得挂在"含 `<img` 或颜色 span 才 `<link>`"这同一条判定里，两份文件反而要维护两条判定逻辑。
-/// **组装后 `book.resources` 被清空**（写一张释放一张）：PDF 转出的书图片可达上百 MB，不让"资源表 + zip 缓冲"
-/// 同时各占一整份（2026-09-24 审计；调用方组装后不再用 `book`）。
-pub fn assemble_pdf_derived(book: &mut Book, extra_css: &str) -> Result<Vec<u8>, String> {
-    let css = format!("{PDF_IMG_CSS}{extra_css}");
-    assemble_with(book, AssembleOpts { shared_css: Some(SharedCss { file: "pdf-img.css", id: "pdf-img-css", css: &css }), consume_resources: true, rtl: false })
-}
-
-const PDF_IMG_CSS: &str = "img{max-width:100%;height:auto;}\n";
 
 pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u8>, String> {
     if book.chapters.is_empty() {
@@ -280,13 +235,7 @@ pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u
         ch.html_body = fix_internal_links(&ch.html_body);
         ch.html_body = crate::htmlproc::break_footnote_cycles(&ch.html_body);
     }
-    let mut opf = content_opf(book);
-    if opts.rtl {
-        opf = opf.replacen("<spine>", "<spine page-progression-direction=\"rtl\">", 1);
-    }
-    if let Some(c) = &opts.shared_css {
-        opf = opf.replacen("</manifest>", &format!("<item id=\"{}\" href=\"{}\" media-type=\"text/css\"/></manifest>", c.id, c.file), 1);
-    }
+    let opf = content_opf(book);
     // 预留足够容量：全部 STORED，产物 ≈ 资源 + 章节文本 + 少量固定条目。Vec 倍增扩容会在峰值瞬间同时持有新旧两块。
     let cap = book.resources.iter().map(|r| r.bytes.len()).sum::<usize>()
         + book.chapters.iter().map(|c| c.html_body.len() + 512).sum::<usize>()
@@ -308,11 +257,7 @@ pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u
             put(&mut z, "OEBPS/cover.xhtml", stored, cover_xhtml(&book.meta).as_bytes())?;
         }
         for (i, ch) in book.chapters.iter().enumerate() {
-            let link = match &opts.shared_css {
-                Some(c) if has_img_tag(&ch.html_body) || has_color_span(&ch.html_body) => format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>", c.file),
-                _ => String::new(),
-            };
-            put(&mut z, &format!("OEBPS/{}", chapter_filename(i)), stored, chapter_doc(ch, &book.meta.language, &link).as_bytes())?;
+            put(&mut z, &format!("OEBPS/{}", chapter_filename(i)), stored, chapter_doc(ch, &book.meta.language, "").as_bytes())?;
         }
         if opts.consume_resources {
             for r in std::mem::take(&mut book.resources) {
@@ -322,9 +267,6 @@ pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u
             for r in &book.resources {
                 put(&mut z, &format!("OEBPS/{}", r.path), stored, &r.bytes)?;
             }
-        }
-        if let Some(c) = &opts.shared_css {
-            put(&mut z, &format!("OEBPS/{}", c.file), stored, c.css.as_bytes())?;
         }
         z.finish().map_err(|e| e.to_string())?;
     }
@@ -478,36 +420,9 @@ mod nav_tests {
     fn assemble_with_consume_resources_is_byte_identical_and_empties_resources() {
         let plain = assemble(&mut two_chapter_book(true)).unwrap();
         let mut b = two_chapter_book(true);
-        let consumed = assemble_with(&mut b, AssembleOpts { shared_css: None, consume_resources: true, rtl: false }).unwrap();
+        let consumed = assemble_with(&mut b, AssembleOpts { consume_resources: true }).unwrap();
         assert_eq!(plain, consumed, "consume_resources 只影响内存，不影响产物");
         assert!(b.resources.is_empty(), "资源写完即释放");
-    }
-
-    #[test]
-    fn shared_css_goes_last_and_links_only_chapters_with_img_case_insensitively() {
-        let out = assemble_with(&mut two_chapter_book(true), AssembleOpts { shared_css: Some(SharedCss { file: "x.css", id: "xcss", css: "img{}" }), consume_resources: false, rtl: true }).unwrap();
-        let entries = zip_names_and_text(out);
-        assert_eq!(entries.last().unwrap().0, "OEBPS/x.css", "样式表条目排在资源之后");
-        assert_eq!(entries.last().unwrap().1, b"img{}");
-        let get = |n: &str| String::from_utf8(entries.iter().find(|(k, _)| k == n).unwrap().1.clone()).unwrap();
-        assert!(get("OEBPS/chap_0001.xhtml").contains("<link rel=\"stylesheet\" type=\"text/css\" href=\"x.css\"/></head>"), "含 <IMG（大小写不敏感）的章要挂 link");
-        assert!(!get("OEBPS/chap_0002.xhtml").contains("<link"), "纯文字章不挂");
-        assert!(get("OEBPS/content.opf").contains("<item id=\"xcss\" href=\"x.css\" media-type=\"text/css\"/></manifest>"));
-        assert!(get("OEBPS/content.opf").contains("<spine page-progression-direction=\"rtl\">"), "rtl 选项写进 spine");
-    }
-
-    /// `assemble_pdf_derived` 是 PDF→EPUB 路径实际调用的入口（2026-09-23 真机投一本真实 PDF
-    /// 手册发现：没有这条 CSS 时图片在 xochitl 原生阅读器里完全不出现，见函数头注）。这里只确认它正确
-    /// 接上了 `pdf-img.css`/`max-width`，不重复 `shared_css_goes_last...` 已经测过的通用机制。
-    #[test]
-    fn assemble_pdf_derived_links_max_width_css_to_image_chapters_only() {
-        let out = assemble_pdf_derived(&mut two_chapter_book(true), "").unwrap();
-        let entries = zip_names_and_text(out);
-        let get = |n: &str| String::from_utf8(entries.iter().find(|(k, _)| k == n).unwrap().1.clone()).unwrap();
-        assert_eq!(get("OEBPS/pdf-img.css"), "img{max-width:100%;height:auto;}\n");
-        assert!(get("OEBPS/chap_0001.xhtml").contains("href=\"pdf-img.css\""), "含图的章要挂 pdf-img.css");
-        assert!(!get("OEBPS/chap_0002.xhtml").contains("<link"), "纯文字章不挂");
-        assert!(get("OEBPS/content.opf").contains("<item id=\"pdf-img-css\" href=\"pdf-img.css\" media-type=\"text/css\"/>"));
     }
 
     #[test]

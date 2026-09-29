@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// 能入库的文件扩展名（小写）。
-pub const SUPPORTED_EXTS: &[&str] = &["epub", "pdf", "cbz", "mobi", "azw", "azw3", "prc", "fb2"];
+/// 能入库的文件扩展名（小写）。2026-09-29 起只有 EPUB 和 CBZ（MOBI/AZW3/FB2/PDF 等不再支持）。
+pub const SUPPORTED_EXTS: &[&str] = &["epub", "cbz"];
 
 fn is_supported(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| SUPPORTED_EXTS.contains(&e.to_ascii_lowercase().as_str()))
@@ -36,7 +36,7 @@ pub fn book_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// 跟踪的原件目录，以及其中每个文件上次看到时的样子（`sources.json`）。
-#[derive(Default, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Sources {
     dirs: Vec<PathBuf>,
     #[serde(default)]
@@ -83,6 +83,13 @@ pub struct SyncReport {
 pub struct SyncMemo {
     missing: HashSet<PathBuf>,
     bad_names: HashSet<PathBuf>,
+}
+
+impl Sources {
+    /// 跟踪的目录（`track` 时已规范化成绝对路径）。
+    pub(crate) fn dirs(&self) -> &[PathBuf] {
+        &self.dirs
+    }
 }
 
 impl Library {
@@ -242,6 +249,11 @@ impl Library {
         let mut missing_now: HashSet<PathBuf> = HashSet::new();
         for (path, seen) in &src.files {
             if seen.id.is_empty() || present.contains_key(path) || !self.entry_dir(&seen.id).is_dir() {
+                continue;
+            }
+            if !is_supported(path) && path.is_file() {
+                // 早期版本收的、现在不再支持的格式（MOBI/PDF 等）：文件还在，只是不再遍历它。不算原件不在，条目不删
+                kept_missing.insert(path.clone(), seen.clone());
                 continue;
             }
             if let Some(live_path) = live.get(&seen.id) {

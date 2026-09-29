@@ -1,8 +1,8 @@
-# reMarkable Paper Pro Move 上的原生阅读器 xochitl（KOReader 另见 rmpp-move-koreader）。7.3" Gallery 3，2026-09-27 核实。
-name = "reMarkable Paper Pro Move"
+# reMarkable Paper Pro Move 上的原生阅读器 xochitl。7.3" Gallery 3，2026-09-27 核实。
+name = "xochitl（reMarkable Paper Pro Move 原生阅读器）"
 ppi = 264
 color = true
-formats = ["epub", "pdf"]
+formats = ["epub"]
 
 [screen]
 width = 954
@@ -12,7 +12,6 @@ height = 1696
 # EPUB 图片框宽 = 页宽 − 2×页边距，默认页边距 56px → 954 − 112 = 842；
 # 垂直可用高度固定 462.1pt（上 35.5pt、下 40.3pt，与页边距无关），1px = 303/954 pt → 462.1 × 954/303 ≈ 1455。
 # 设备上改了页边距要同步改这里（28 档 → 898；1 → 952）。
-# PDF 实测左右留白 0.00%（页面尺寸等于屏幕时），按标称屏幕，不另写。
 [readable.epub]
 width = 842
 height = 1455

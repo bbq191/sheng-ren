@@ -1,4 +1,4 @@
-//! convert 各转换器共用的小工具——集中一处，避免 fb2/mobi/kf8/cbz 各写一遍漂移。
+//! convert 共用的小工具（图片格式识别、id 安全化）。
 
 /// 图片魔数 → (扩展名, MIME)。非已知图片返回 None。
 pub fn image_ext_mime(b: &[u8]) -> Option<(&'static str, &'static str)> {

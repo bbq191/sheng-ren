@@ -46,12 +46,12 @@ mod paginate;
 mod toc;
 mod typeset;
 
-// 对外（优化器、质量门、书库、AZW3 写出器、统计）用到的项；其余只在清洗层内部用。
+// 对外（优化器、质量门、书库、统计）用到的项；其余只在清洗层内部用。
 pub use self::cover::ensure_cover_declared;
 pub use self::css::{filter_css, wash_html};
 pub use self::drm::{encrypted_targets, real_drm_items, PSEUDO_DRM_SAFE_EXTS};
 pub(crate) use self::drm::cipher_reference_re;
-pub use self::opf::{cover_meta_re, manifest_items, opf_dc, parse_opf, tag_attr, ManifestItem, Opf, OpfDc};
+pub use self::opf::{manifest_items, opf_dc, parse_opf, tag_attr, ManifestItem, Opf, OpfDc};
 pub use self::toc::{href_re, is_toc_file, toc_entry_count};
 pub use self::typeset::{count_dup_id_tags, wash_css};
 pub use crate::html::plain_text;

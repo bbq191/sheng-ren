@@ -1,0 +1,18 @@
+# KOReader 阅读模式：掌阅 iReader Ocean 5 Pro、Kindle Paperwhite 12 代签名版上的 KOReader 共用这一份（两台都是
+# 7" Carta 1300、1264×1680、300ppi，2026-09-27 核实）。Move 上的 KOReader 2026-09-29 起不单独出一份。
+name = "KOReader（掌阅 Ocean 5 Pro、Kindle PW12 共用）"
+ppi = 300
+color = false
+formats = ["epub"]
+
+[screen]
+width = 1264
+height = 1680
+
+# 真实可阅读范围（像素，竖屏），2026-09-27 用测量书在掌阅原生阅读器上截屏实测（readable-measure）：
+# 只放一张大图的页面，图铺满整屏（连页眉页脚区域也盖住），上下左右留白都是 0，所以等于标称尺寸。
+# 这是整页图（漫画）的情况；图文混排时图片受正文页边距限制，不适用这组数。
+# KOReader 的漫画方案去掉页边距、隐藏状态栏（见 koreader/），按整屏算；KOReader 上还没有单独实测。
+[readable.epub]
+width = 1264
+height = 1680

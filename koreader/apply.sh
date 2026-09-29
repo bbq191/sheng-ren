@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把 koreader/ 里的配置应用到一台设备上的 KOReader，或者撤销、还原。设备经 USB（MTP：掌阅、Kindle）或 SSH（reMarkable Move）连着。
+# 把 koreader/ 里的配置应用到一台设备上的 KOReader，或者撤销、还原。设备经 USB（MTP：掌阅、Kindle）连着。
 #
 # 用法: koreader/apply.sh <设备 id> [--restore[=<时间>] | --uninstall] [--write] [--closed]
 #   缺省（应用）：个人设置 → 文字书方案 → 漫画方案 → 设备差异 → 状态栏预设，依次合并进设备上的配置；缺的字体、补丁拷过去。
@@ -12,7 +12,7 @@
 # 写入前把设备上要动的文件备份到 $KOREADER_BACKUP/<时间>/<设备 id>/（缺省 ~/Documents/ereader/koreader-backup）；
 # 每写一个文件就回读核对，任何一步失败都把已写的文件还原（原来没有的删掉）。字体从 $KOREADER_FONTS（缺省 ~/Documents/ereader/fonts）拷。
 # KOReader 运行中不能写：它退出时会把内存里的设置写回文件，覆盖掉这里写的。
-# 需要 luajit；MTP 设备要 gio（gvfs），SSH 设备要 ssh。
+# 需要 luajit 和 gio（gvfs）。
 set -euo pipefail
 
 KO_HERE=$(cd "$(dirname "$0")" && pwd)
@@ -42,7 +42,7 @@ show() { echo "${1/#$HOME/\~}"; }
 
 KO_TMP=$(mktemp -d)
 trap 'rm -rf "$KO_TMP"' EXIT
-ko_connect "$dev" "$KO_TMP"
+ko_connect "$dev"
 dev_has settings.reader.lua || { echo "✗ $dev 的 KOReader 目录里没有 settings.reader.lua（KOReader 没装、或还没运行过一次）" >&2; exit 1; }
 
 # ── 取回设备上的原文件。读失败（不是"没有这个文件"）就停：拿空表合并写回去会把整份配置冲掉 ──
