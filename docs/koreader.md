@@ -234,8 +234,9 @@ koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-
 - **字体**：插件用 KOReader 的界面字体表，`fontmap` 已统一成霞鹜文楷，不用另设。
 - **省电，去掉时钟**：主页时钟模块（`simpleui_hs_clock_enabled = false`）和顶栏时钟（`simpleui_topbar_config` 里 `clock = "hidden"`）都关。
   停在主页、书库时时钟每分钟重画一次，墨水屏每分钟局部刷新、唤醒一次处理器。顶栏配置要整张写全：只写 `clock` 一项，插件会把没写的电池、Wi-Fi 也当隐藏。
-- 自动检查更新缺省关着（插件不会自己联网），不用管。
-- 主页布局（模块、顺序、底栏按钮）：在掌阅上调好后收进 `personal/simpleui.patch.lua`，再同步到 Kindle。
+- **主页布局**（2026-09-29 从掌阅收进 `personal/simpleui.patch.lua`，已同步到 Kindle）：主页只开「在读」和「最近」，底栏、顶栏（Wi-Fi、电池）、快捷设置栏照掌阅。
+  不收插件自己的状态（版本号、迁移标记、连续阅读统计）。在掌阅上改了想同步：退出 KOReader 后让我重新收一遍（或照 `personal/simpleui.patch.lua` 的做法手改）。
+- 自动检查更新是用户在掌阅上开的（每 24 小时联网查一次 GitHub），照收。
 
 ## 字体
 
