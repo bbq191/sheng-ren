@@ -189,7 +189,7 @@ koreader/check.sh kindle-pw12-sig 目录   # 拿一份从设备拷回的 KOReade
 
 ## Kindle 开机直接进 KOReader
 
-`koreader/kindle-boot/`（2026-09-29，**还没在真机上试过**）：开机后自动打开 KOReader，并停掉亚马逊自带界面（书城、广告、自带阅读器都不跑，省电省内存）；
+`koreader/kindle-boot/`（2026-09-29 Kindle PW12 签名版真机：装上、重启后开机直接进 KOReader ✓；Wi-Fi、退出回自带界面、USB 拷书还没确认）：开机后自动打开 KOReader，并停掉亚马逊自带界面（书城、广告、自带阅读器都不跑，省电省内存）；
 退出 KOReader 时 KOReader 的启动脚本（`koreader.sh --framework_stop`）会把自带界面拉回来。要求 Kindle 已越狱、装了 KOReader。
 这台 Kindle（2026-09-29 查）是用 KindleModding 的包管理器 kpm 装的 KOReader，书库里的「KOReader」是一本脚本书（`documents/KOReader.sh`），没有 KUAL，
 所以装上/卸掉也做成两本脚本书（以 root 运行）；装了 KUAL 的机器也可以在 KUAL 菜单里点。
