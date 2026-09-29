@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 掌阅上的"KOReader 桌面"：设成默认桌面后，开机、按主页键都直接打开 KOReader；两秒内连按两次主页键打开掌阅原来的桌面。
+<!-- 掌阅上的"KOReader 桌面"：设成默认桌面后，每次开机自动打开一次 KOReader；之后回桌面（在 KOReader 里退出等）进掌阅原来的桌面。
      见 koreader/android-home/README.md。 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="local.eink.koreaderhome">
