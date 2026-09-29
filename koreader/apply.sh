@@ -96,6 +96,18 @@ if [[ $mode == apply ]]; then
   done
 fi
 
+# ── 阅读背景（koreader/backgrounds/*.png ↔ 设备的 backgrounds/；只在应用时拷缺的或大小不同的，卸载不删）──
+put_bgs=()
+if [[ $mode == apply ]]; then
+  for bg in "$KO_HERE"/backgrounds/*.png; do
+    [[ -f $bg ]] || continue
+    name=$(basename "$bg")
+    [[ $(dev_size "backgrounds/$name" || true) == "$(stat -c %s "$bg")" ]] && continue
+    echo "── 阅读背景 backgrounds/$name：会拷过去"
+    put_bgs+=("$name")
+  done
+fi
+
 # ── 用户补丁（koreader/patches/*.lua ↔ 设备的 patches/）──
 put_patches=() rm_patches=()
 for p in "$KO_HERE"/patches/*.lua; do
@@ -127,7 +139,7 @@ if [[ $mode == restore && -d $src/patches ]]; then
   done
 fi
 
-if [[ ${#changed[@]} -eq 0 && ${#missing_fonts[@]} -eq 0 && ${#put_patches[@]} -eq 0 && ${#rm_patches[@]} -eq 0 ]]; then
+if [[ ${#changed[@]} -eq 0 && ${#missing_fonts[@]} -eq 0 && ${#put_bgs[@]} -eq 0 && ${#put_patches[@]} -eq 0 && ${#rm_patches[@]} -eq 0 ]]; then
   echo "= $dev 不用改"; exit 0
 fi
 if [[ $write -eq 0 ]]; then echo "（dry run：以上是会改的；确认后加 --write 写入）"; exit 0; fi
@@ -187,6 +199,17 @@ for font in "${missing_fonts[@]}"; do # 字体大，按大小核对；失败只�
     echo "✗ 字体 fonts/$font 没拷成功（大小不对），什么都没改" >&2; exit 4
   fi
 done
+if [[ ${#put_bgs[@]} -gt 0 ]]; then # 背景图和字体一样按大小核对；拷坏了删掉，不影响配置
+  dev_mkdir backgrounds
+  for name in "${put_bgs[@]}"; do
+    if dev_put "$KO_HERE/backgrounds/$name" "backgrounds/$name" && [[ $(dev_size "backgrounds/$name") == "$(stat -c %s "$KO_HERE/backgrounds/$name")" ]]; then
+      echo "✓ 阅读背景 backgrounds/$name 已拷到设备"
+    else
+      dev_rm "backgrounds/$name" || true
+      echo "✗ 阅读背景 backgrounds/$name 没拷成功（大小不对），什么都没改" >&2; exit 4
+    fi
+  done
+fi
 if [[ ${#put_patches[@]} -gt 0 ]]; then
   dev_mkdir patches
   for name in "${put_patches[@]}"; do
