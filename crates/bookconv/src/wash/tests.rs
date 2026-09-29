@@ -968,7 +968,7 @@
     #[test]
     fn audit_css_decls_keep_data_urls() {
         let f: Vec<String> = DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect();
-        assert_eq!(filter_decls(r#"list-style-image:url(data:image/png;base64,AAAA);content:"a;b";font-size:2em"#, &f, Spacing::Keep), r#"list-style-image:url(data:image/png;base64,AAAA);content:"a;b";"#);
+        assert_eq!(filter_decls(r#"list-style-image:url(data:image/png;base64,AAAA);content:"a;b";font-size:20px"#, &f, Spacing::Keep), r#"list-style-image:url(data:image/png;base64,AAAA);content:"a;b";"#);
     }
 
     /// A7：分页后别的文件指向被拆文件的链接——单引号 id、NCX 里百分号编码的锚点、`<a name>` 注释落点——都改到对应的份。

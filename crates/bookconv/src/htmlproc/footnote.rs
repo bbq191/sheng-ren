@@ -134,8 +134,48 @@ pub(super) fn deprefix_footnote_hrefs(s: &str) -> String {
 /// aside/li/div 源块的**内层** html，源块自带 `<p>`（甚至嵌套块级标签）很常见——`<p id="frag">…</p>`
 /// 套出 `<p><p>…</p></p>` 是非法内容模型（`<p>` 不能合法含块级子元素），此前无防护代码也无样本验证过
 /// 真机渲染表现；`<div>` 天然兼容块级/内联两种子内容，同样能挂 `id` 当锚点落点，零风险替换。
-fn footnote_block(frag: &str, inner: &str) -> String {
-    format!("<div id=\"{frag}\">{inner}</div>")
+///
+/// 弹窗模式（`popup`）用 `<aside epub:type="footnote">`：KOReader 靠它认出注释（弹窗显示；配合"隐藏非线性内容"还能不在章末重复显示）。
+/// 每条都带 `eink-note` 类：样式表里 `page-break-inside:avoid`，一条注释不被拆到两页（长过一页的阅读器照常断开）。
+fn footnote_block(frag: &str, inner: &str, popup: bool) -> String {
+    if popup {
+        format!("<aside epub:type=\"footnote\" id=\"{frag}\" class=\"eink-note\">{inner}</aside>")
+    } else {
+        format!("<div id=\"{frag}\" class=\"eink-note\">{inner}</div>")
+    }
+}
+
+/// 标号里的 `<img>`（多看等书用小图标当注释标号）加上 `eink-noteicon` 类：样式表把它限成一个字高
+/// （xochitl、KOReader 对没写宽高的 `<img>` 都按图片本身的像素画，80×80 的图标在正文里撑成一大块，真机《甲午：摇摆的战争》）。
+fn mark_note_icons(content: &str) -> String {
+    let mut edits = Vec::new();
+    for t in html::tags(content) {
+        if t.kind == html::TagKind::Close || !t.is("img") {
+            continue;
+        }
+        let open = &content[t.start..t.end];
+        let new = match html::attrs(open).into_iter().find(|a| a.is("class")) {
+            Some(a) => html::set_attr(open, "class", &format!("{} eink-noteicon", a.value)),
+            None => format!("<img class=\"eink-noteicon\"{}", &open[4..]),
+        };
+        edits.push((t.start, t.end, new));
+    }
+    if edits.is_empty() {
+        content.to_string()
+    } else {
+        html::apply_edits(content, edits)
+    }
+}
+
+/// 根元素 `<html>` 上没声明 `epub` 命名空间就补上（用了 `epub:type` 的文件不声明就不是合法 XML）。
+pub(crate) fn ensure_epub_ns(doc: &str) -> String {
+    let Some(t) = html::tags(doc).find(|t| t.kind != html::TagKind::Close && t.is("html")) else { return doc.to_string() };
+    let open = &doc[t.start..t.end];
+    if html::attrs(open).iter().any(|a| a.name == "xmlns:epub") {
+        return doc.to_string();
+    }
+    let at = t.start + 5; // `<html` 之后
+    format!("{} xmlns:epub=\"http://www.idpf.org/2007/ops\"{}", &doc[..at], &doc[at..])
 }
 
 // ===== 优化器：跨文件普通尾注收集 + 全书 id 去重 =====
@@ -303,49 +343,40 @@ pub(super) fn inline_note_text(html: &str) -> String {
     xml_escape(&html::plain_text(html))
 }
 
-/// 优化器专用脚注处理：**尽量保留 marker 原始内容/样式**(sup/上标不动；图标例外，见下方 `make` 里
-/// 2026-09-23 的改动——无宽高约束的 `<img>` 图标真机会撑巨大，丢弃)，只把 `<a>`
-/// 上 xochitl 不认的 `epub:type` 去掉、href 规整成同章 `#frag`(xochitl 唯一会跳的形态)；
-/// 注释块(index 提供，跨文件也行；键是 (注释所在文件, id)，`name` = 本章 zip 路径)收集、移到本章末尾可见 `<div class="footnotes">`。
-/// marker 按元素认（[`a_elems`]，与 [`referenced_note_keys`] 同一口径）：`<sup>` 整个包住的 noteref、其余 noteref、
-/// 跨文件普通 `<a>`，依次处理（编号顺序与此前三遍正则一致）。
+/// 优化器专用脚注处理：**保留标号原样**（上标、数字、图标都不动，前后一个字不加），只把 `<a>` 的 href 规整成同章 `#frag`，
+/// 被引用的注释块（index 提供，跨文件也行；键是 (注释所在文件, id)，`name` = 本章 zip 路径）移到本章末尾 `<div class="footnotes">`。
+/// - `Anchor`（跳转，xochitl）：去掉 xochitl 不认的 `epub:type`，点标号跳到章末、用阅读器的"返回"回来；
+/// - `Popup`（KOReader）：标号标 `epub:type="noteref"`、注释块是 `<aside epub:type="footnote">`，KOReader 点标号弹窗显示；
+/// - `Inline`：注释文字就地内联〔…〕（只在测试里用）。
+///
+/// marker 按元素认（[`a_elems`]，与 [`referenced_note_keys`] 同一口径）：`<sup>` 整个包住的 noteref、其余 noteref、跨文件普通 `<a>`。
+/// 2026-09-29 起不再在标号后追加 `[N]`（用户定：严格说多了字符）。
 pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::collections::HashMap<NoteKey, String>, mode: crate::optimize::FootnoteMode) -> String {
     use crate::optimize::FootnoteMode;
     if index.is_empty() {
         return html_text.to_string();
     }
+    let popup = mode == FootnoteMode::Popup;
+    let noteref = if popup { " epub:type=\"noteref\"" } else { "" };
     let mut appended: Vec<String> = Vec::new();
     let mut seen: std::collections::HashSet<NoteKey> = std::collections::HashSet::new();
-    let mut counter = 0usize;
 
-    // 两种呈现：Inline=注释文字就地内联〔…〕始终可见、不跳转（xochitl 无弹窗）；
-    //          Anchor=注释移章末 + marker 改同章锚点（图标留原位、独立可点 [N]）。
     let mut make = |frag: &str, key: &NoteKey, text: &str, content: &str, sup_wrapped: bool| -> String {
         if mode == FootnoteMode::Inline {
-            // 内联：**丢弃原 marker**（很多书 marker 是图标 <img>，xochitl 按固有尺寸渲染=巨大且每条重复），
+            // 内联：**丢弃原 marker**（很多书 marker 是图标 <img>，按固有尺寸渲染=巨大且每条重复），
             // 就地只留内联注释 `〔…〕`（注释**去标签成纯文本**，杜绝块级标签塞进 <p> 致 xochitl 严格 XML 白屏）。
             return format!("<span class=\"eink-fnote\">〔{}〕</span>", inline_note_text(text));
         }
         if seen.insert(key.clone()) {
             // 注释放章末。不加可点回链——真机实测 reMarkable 会丢弃"marker↔注释"互指里较晚那条
-            // (注释回链)，加了也点不了、反成死链迷惑人。返回靠 xochitl 原生。
-            appended.push(footnote_block(&key.1, &deprefix_footnote_hrefs(text)));
+            // (注释回链)，加了也点不了、反成死链迷惑人。返回靠阅读器原生。
+            appended.push(footnote_block(&key.1, &deprefix_footnote_hrefs(text), popup));
         }
-        counter += 1;
+        let link = format!("<a href=\"#{frag}\"{noteref}>{}</a>", mark_note_icons(content));
         if sup_wrapped {
-            // 2026-09-23 真机改：图标 marker 曾经"留在原 <sup> 内、纯视觉不动"，但跟 Inline 分支同一个
-            // 病根——xochitl 对无宽高约束的 <img> 按固有像素渲染，DuoKan 常见的 80×80 图标在正文里
-            // 撑成一整块巨大黑方块（真机《甲午：摇摆的战争》坐实）。不能靠 CSS 兜底：本项目 CSS 只认
-            // 外链裸元素选择器，`sup img{}` 这种描述符选择器风险未知，而且这个图标本来就是纯装饰、
-            // 后面紧跟的 `[N]` 已经是可点的正常大小标记——直接丢图标，比硬凑一个像素尺寸更稳。
-            // 非图标的 sup 包裹内容（少见，比如纯数字）不动，只有真含 <img> 才丢。
-            if content.contains("<img") {
-                format!("<a href=\"#{frag}\">[{counter}]</a>")
-            } else {
-                format!("<sup>{content}</sup><a href=\"#{frag}\">[{counter}]</a>")
-            }
+            format!("<sup>{link}</sup>")
         } else {
-            format!("<a href=\"#{frag}\">{content}</a> <a href=\"#{frag}\">[{counter}]</a>")
+            link
         }
     };
 
@@ -397,15 +428,7 @@ pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::colle
         }
         let Some((_, frag, key, text)) = lookup(e) else { continue };
         let content = &html_text[e.open_end..e.close_start];
-        let new = if mode == FootnoteMode::Inline {
-            // 跨文件普通 <a> marker（多为"12"数字文本）——内联模式丢弃 marker，只留内联注释。
-            format!("<span class=\"eink-fnote\">〔{}〕</span>", inline_note_text(text))
-        } else {
-            if seen.insert(key.clone()) {
-                appended.push(footnote_block(&key.1, &deprefix_footnote_hrefs(text)));
-            }
-            format!("<a href=\"#{frag}\">{content}</a>")
-        };
+        let new = make(frag, &key, text, content, false);
         edits.push((e.start, e.end, new));
     }
     if edits.is_empty() {
@@ -414,14 +437,19 @@ pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::colle
     edits.sort_by_key(|e| e.0);
     let out = html::apply_edits(html_text, edits);
     if appended.is_empty() {
-        return out;
+        return if popup { ensure_epub_ns(&out) } else { out };
     }
     // ⚠ 注释区必须插到 </body> **之内**。optimize 处理的是完整 xhtml，若加到文件末尾就落在
     // </body></html> 外面=无效 HTML，xochitl 不为其中的 id 建锚点 → marker 死链、点不动。
     let block = format!("\n<hr/>\n<div class=\"footnotes\">\n{}\n</div>\n", appended.join("\n"));
-    match out.rfind("</body>") {
+    let out = match out.rfind("</body>") {
         Some(pos) => format!("{}{}{}", &out[..pos], block, &out[pos..]),
         None => format!("{out}{block}"),
+    };
+    if popup {
+        ensure_epub_ns(&out)
+    } else {
+        out
     }
 }
 
@@ -566,7 +594,7 @@ mod optimizer_footnote_tests {
         let out = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
         assert!(out.contains(r##"<a href="#n12">12</a>"##), "跨文件 marker 未改成同章锚点: {out}");
         assert!(!out.contains("notes.xhtml"), "跨文件 href 前缀未去掉: {out}");
-        assert!(out.contains(r##"<div id="n12">第十二条注释文本</div>"##), "注释未搬进本章章末: {out}");
+        assert!(out.contains(r##"<div id="n12" class="eink-note">第十二条注释文本</div>"##), "注释未搬进本章章末: {out}");
         // 注释区必须落在 </body> 之内
         let body_end = out.find("</body>").unwrap();
         assert!(out[..body_end].contains(r##"<div class="footnotes">"##), "注释区落到 </body> 外: {out}");
@@ -591,19 +619,34 @@ mod optimizer_footnote_tests {
         let chapter = r#"<html><body><p>正文<a href="notes.xhtml#fn1">1</a>续</p></body></html>"#;
         let out = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
         assert!(!out.contains("<p><p>") && !out.contains("<p><a href=\"#backref\">"), "落点不该是 <p> 包 <p>: {out}");
-        assert!(out.contains(r#"<div id="fn1"><p>注释正文"#), "落点应是 <div id> 包住源块内层 html 原样: {out}");
+        assert!(out.contains(r#"<div id="fn1" class="eink-note"><p>注释正文"#), "落点应是 <div id> 包住源块内层 html 原样: {out}");
     }
 
-    /// Anchor 模式下 `<sup>` 包裹的**真** noteref 图标 marker 必须丢弃，只留 `[N]`（真实导入书较少见
-    /// 这种形态，多数走下面 `fix_duokan_markers` 那条——这条测的是防御性兜底，不依赖 duokan 特征）。
+    /// `<sup>` 包裹的图标 noteref：标号原样保留（不再换成 `[N]`，2026-09-29 用户定），图标加 `eink-noteicon` 类限成一个字高。
     #[test]
-    fn anchor_drops_sup_wrapped_image_marker_keeps_bracket_number() {
+    fn sup_wrapped_image_marker_kept_with_icon_class() {
         let mut index: HashMap<NoteKey, String> = HashMap::new();
         index.insert(("c.xhtml".to_string(), "fo14".to_string()), "注释文字".to_string());
         let chapter = r##"<p>正文<sup><a type="noteref" href="#fo14"><img alt="" src="../Images/note.png"/></a></sup>续</p>"##;
         let out = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
-        assert!(!out.contains("<img"), "图标 marker 应被丢弃: {out}");
-        assert!(out.contains(r##"<a href="#fo14">[1]</a>"##), "应保留可点的 [N] 标记: {out}");
+        assert!(out.contains(r##"<sup><a href="#fo14"><img class="eink-noteicon" alt="" src="../Images/note.png"/></a></sup>续"##), "{out}");
+        assert!(!out.contains("[1]"), "不加 [N]: {out}");
+    }
+
+    /// 弹窗模式（KOReader）：标号 `epub:type="noteref"`、注释块 `<aside epub:type="footnote">`，根元素补 epub 命名空间；
+    /// 可见文字和跳转模式一样（标号原样，一个字不加）。
+    #[test]
+    fn popup_mode_marks_noteref_and_aside_footnote() {
+        let mut index: HashMap<NoteKey, String> = HashMap::new();
+        index.insert(("notes.xhtml".to_string(), "n1".to_string()), "注释一".to_string());
+        let chapter = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文<sup><a epub:type="noteref" href="notes.xhtml#n1">1</a></sup>续<a class="x" href="notes.xhtml#n1">1</a></p></body></html>"#;
+        let out = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Popup);
+        assert!(out.starts_with(r#"<html xmlns:epub="http://www.idpf.org/2007/ops" xmlns="http://www.w3.org/1999/xhtml">"#), "{out}");
+        assert!(out.contains(r##"<sup><a href="#n1" epub:type="noteref">1</a></sup>续<a href="#n1" epub:type="noteref">1</a>"##), "{out}");
+        assert_eq!(out.matches(r#"<aside epub:type="footnote" id="n1" class="eink-note">注释一</aside>"#).count(), 1, "同一条注释只放一次: {out}");
+        let jump = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
+        assert!(!jump.contains("epub:"), "跳转模式不带 epub:type（xochitl 不认）: {jump}");
+        assert_eq!(ensure_epub_ns(&out), out, "命名空间只补一次");
     }
 
     /// 真机《甲午：摇摆的战争》坐实的真实结构：`duokan-footnote` 类挂在外层 `<a>` 上（不在 `<img>`

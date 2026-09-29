@@ -104,14 +104,13 @@
         let (w, h) = image::load_from_memory(&ib).unwrap().dimensions();
         assert!(w <= 1696 && h <= 1696, "图应缩到 ≤1696，实为 {w}x{h}");
         assert!(ib.len() < jpg.len(), "缩后体积应变小");
-        // ② css 灰字→黑、彩色不动
+        // ② 颜色、字重原样保留（2026-09-29 起不再把灰字改黑、细字重提到 400）
         let mut css = String::new();
         ar.by_name("OEBPS/style.css").unwrap().read_to_string(&mut css).unwrap();
-        assert_eq!(css, "body{color:#000000}a{color:blue}", "css 灰字→黑、彩色不动: {css}");
-        // ② 内联 style 灰字→黑、细体→400
+        assert!(!css.contains("#000000"), "css 颜色不改: {css}");
         let mut x = String::new();
         ar.by_name("OEBPS/c1.xhtml").unwrap().read_to_string(&mut x).unwrap();
-        assert!(x.contains(r#"style="color:#000000;font-weight:400""#), "内联提对比: {x}");
+        assert!(!x.contains("#000000") && !x.contains("font-weight:400"), "内联颜色、字重不改: {x}");
     }
 
     #[test]

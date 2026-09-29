@@ -23,7 +23,7 @@ pub(super) enum Spacing {
 /// 对一段声明文本：剥 `filter` 里的属性；按 `spacing` 处理 margin/padding。（测试用薄封装）
 #[cfg(test)]
 pub(super) fn filter_decls(decls: &str, filter: &[String], spacing: Spacing) -> String {
-    filter_decls_with(decls, filter, spacing, None)
+    filter_decls_with(decls, filter, spacing, false, None)
 }
 
 /// 值是否"非零缩进"（`0` / `0em` / `0.0pt` 之类算零；负值=悬挂缩进，保留不动）。
@@ -37,14 +37,24 @@ pub(super) fn is_positive_indent(val: &str) -> bool {
 /// 为什么：书自带的类规则（calibre 转 AZW3 常见 `.calibre_ {text-indent:2em}`）xochitl 不认（只认裸 `p{}`），
 /// KOReader 认且类规则特异性高于我们的 `p{}`——不统一就"xochitl 1.2em、KOReader 2em"，两器同字节不同观感
 /// （2026-09-06 Phase E 英文书对照发现）。`text-indent:0`（诗歌/引文/列表明示不缩进）与负值保留。
-pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing, indent: Option<&str>) -> String {
+/// `filter` 里的属性按 [`crate::cssunlock::unlock`] 解锁（字体去掉、相对字号保留、`font`/`background` 简写只留样式和颜色……）；
+/// `base_text` = 这条规则作用在正文整体那一层（见 [`is_base_text_selector`]）。
+pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing, base_text: bool, indent: Option<&str>) -> String {
+    use crate::cssunlock::{unlock, Unlock};
     let mut out: Vec<String> = Vec::new();
     // 声明按分号切，引号/括号（`url(data:…;base64,…)`）/字符引用里的分号不算（`html::css_decls`）。
     for d in html::css_decls(decls) {
         let prop = d.prop.to_ascii_lowercase();
         let val = d.value;
         if filter.contains(&prop) {
-            continue;
+            match unlock(&prop, val, base_text) {
+                Unlock::Keep => {}
+                Unlock::Drop => continue,
+                Unlock::Replace(v) => {
+                    out.extend(v);
+                    continue;
+                }
+            }
         }
         // 占满一屏的高度（书名页/封面页常用）加上页眉页脚会溢出成空白页（章尾空白页，2026-09-27）。
         if (prop == "height" || prop == "min-height") && val.to_ascii_lowercase().contains("vh") {
@@ -162,6 +172,17 @@ pub(super) fn selector_spacing(selector: &str) -> Spacing {
     }
 }
 
+/// 选择器是不是作用在"正文整体那一层"：每个逗号分项的最后一个复合选择器都是不带类、id、属性的 `body`/`html`/`p`/`div`
+/// （`body`、`div.chapter p`、`html, body` 算；`p.small`、`.note`、`h1` 不算）。这一层上的相对字号也去掉（[`crate::cssunlock`]）。
+pub(super) fn is_base_text_selector(selector: &str) -> bool {
+    let parts: Vec<&str> = selector.split(',').map(str::trim).filter(|p| !p.is_empty()).collect();
+    !parts.is_empty()
+        && parts.iter().all(|p| {
+            let last = p.rsplit(|c: char| c.is_whitespace() || c == '>' || c == '+' || c == '~').next().unwrap_or("");
+            matches!(last.to_ascii_lowercase().as_str(), "body" | "html" | "p" | "div" | ":root")
+        })
+}
+
 /// 选择器是不是"注释容器类"：书自带的 `duokan-footnote-item`/`duokan-footnote-content` 这类，以及我们
 /// 自己生成的 `.footnotes`（章末块）/`.eink-fnote`（Inline 内联注释）——判据是选择器文本含
 /// "footnote"/"fnote"（大小写不敏感），不追求穷举每本书的命名，覆盖到目前真机见过的形态。
@@ -170,8 +191,8 @@ pub(super) fn is_footnote_container_selector(sel: &str) -> bool {
     l.contains("footnote") || l.contains("fnote")
 }
 
-/// 注释容器专用的字号：比正文小一档，相对单位（随用户当前字号缩放，不是又一个"锁死"）。
-pub(super) const FOOTNOTE_FONT_SIZE: &str = "0.9em";
+/// 注释容器专用的字号：比正文小一号（五号→小五是 0.857，用户 2026-09-29），相对单位（随用户当前字号缩放，不是又一个"锁死"）。
+pub(super) const FOOTNOTE_FONT_SIZE: &str = "0.85em";
 
 /// 整段 CSS（文件或 <style> 内容）：逐规则剥锁 + 边距处理。`@media{}` 嵌套靠"从内向外"匹配最内层规则。
 /// 注释容器类是唯一的例外分支：§03av EPUB 线原则②"解锁字号但保留原书颜色/加粗"保护的是**正文语义
@@ -197,11 +218,12 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
             if !filter.iter().any(|p| p == "font-weight") {
                 filter.push("font-weight".to_string());
             }
-            let mut decls = filter_decls_with(&c[2], &filter, spacing, Some(indent_for(opts)));
+            // base_text=true：书自己的字号（哪怕是相对的）一律去掉，换成下面统一的注释字号
+            let mut decls = filter_decls_with(&c[2], &filter, spacing, true, Some(indent_for(opts)));
             decls.push_str(&format!("font-size:{FOOTNOTE_FONT_SIZE};"));
             return format!("{lead}{sel}{{{decls}}}");
         }
-        format!("{lead}{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, Some(indent_for(opts))))
+        format!("{lead}{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, is_base_text_selector(sel), Some(indent_for(opts))))
     }).into_owned()
 }
 
@@ -260,7 +282,8 @@ pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashS
             "p" | "div" if !opts.keep_para_spacing => Spacing::Vertical,
             _ => Spacing::Keep,
         };
-        let cleaned = filter_decls_with(a.value, &opts.filter_props, spacing, Some(indent_for(opts)));
+        let base_text = matches!(t.name.to_ascii_lowercase().as_str(), "body" | "html");
+        let cleaned = filter_decls_with(a.value, &opts.filter_props, spacing, base_text, Some(indent_for(opts)));
         if cleaned.is_empty() {
             Edit::Remove
         } else if cleaned == a.value {
