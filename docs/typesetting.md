@@ -103,6 +103,28 @@
 - 浅灰色文字提成黑色（墨水屏上浅灰看不清）。
 - 封面页如果是一个 `<svg>` 里包一张 `<image>`（整页只有这张图、没有文字），换成 `<img>`：有的阅读器不显示 SVG 封面。页面上还有别的内容、SVG 里有文字的都不动。
 
+### 7. 规范整理：一律升级到 EPUB 3（v27）
+
+清洗的最后一步（`wash/normalize.rs`），文字书和漫画都做（用户 2026-09-29 定）。只改格式，可见文字不动：
+
+- **OPF**：`version="3.0"`；补 `<meta property="dcterms:modified">`，值固定为 `2000-01-01T00:00:00Z`（原书有格式正确的就用原书的）——不取当前时间，产物逐字节确定；
+  `unique-identifier` 保证指向一个有内容的 `<dc:identifier id>`（没有标识符的书按 OPF 原文派生一个 `urn:eink:…`）；缺 `dc:language` 按书的语言补；
+  EPUB 2 的 `opf:role`、`opf:file-as`、`opf:scheme` 改写成 `<meta refines>`，`opf:event` 去掉，多出来的 `dc:date` 改成 `dcterms:date`（EPUB 3 只许一个）。
+  `<meta name="cover">`、`<guide>` 是 EPUB 3 允许的旧写法，保留。
+- **目录**：`toc.ncx` 和 `<spine toc="ncx">` **保留**（xochitl 找目录靠 manifest 里 id 为 `ncx` 的 NCX），`dtb:uid` 在升级之后再对齐一次 OPF 标识符。
+  没有导航文档的书按 NCX 生成 `nav.xhtml`（层级照 NCX）；只有 nav、没有 NCX 的 EPUB 3 书（《恶女的告白》）反过来按 nav 生成 NCX。
+  `<guide>` 同时写成 nav 里的 `landmarks`（`hidden`，只写进不在 spine 里的 nav）。
+- **manifest 的 `properties`**：封面图 `cover-image`（原来就有）；内容文档用到内嵌 SVG、MathML、脚本、远程资源的，标 `svg`/`mathml`/`scripted`/`remote-resources`，
+  按优化器第二遍之后的**最终**内容标（SVG 封面会换成 `<img>`，远程图会抓进书里），所以清洗过的书 OPF 最后写进 zip。
+- **XHTML 修成合法 XML**：DOCTYPE 换成 `<!DOCTYPE html>`；HTML 命名实体（`&nbsp;` 等 HTML 4 那一套）换成数字引用（去掉 XHTML 1.1 的 DTD 后命名实体就是未定义），认不出的名字不动；
+  裸 `&`、不是标签开头的 `<` 转义；XML 不允许的控制字符去掉（《金庸全集》原书一处 U+0010，看不见的损坏字符——回归时字符账会少这一个，是预期的）；
+  `<br>` 这类空元素补成自闭合，无引号、无值的属性补引号；根元素补 `xmlns` 和 `xmlns:epub`（写坏成全角冒号的改正）；
+  没有对应开标签的闭合标签去掉（《绝叫》每章 `<head>` 里多一个 `</div>`），**只在去掉后整份标签完全配平时才去**，交叉嵌套之类拿不准的不动。
+- 分页拆出来的后几份不再各带一个字节序标记（U+FEFF），只有原文件开头的那个。
+
+**EPUB 3 在 xochitl 上还没真机验证**（KOReader 认 EPUB 3，也还没拿升级后的产物在真机上看过）。要在 Move 上看：书能打开、目录入口在且层级对、封面缩略图、注释跳转与返回、
+`<!DOCTYPE html>` 的章节正常显示（不白屏）、`hidden` 的 landmarks 不会被当正文显示。
+
 ## 漫画
 
 判断标准：图片 ≥ 20 张，且平均每张图配的文字少于 40 字。
@@ -132,6 +154,7 @@
 | 漫画补白到阅读范围 | ✓ | ✓（测量书） | 早期实测 | 未验证 |
 | 漫画标签被认出 | — | — | — | ✓（Kindle 上的 KOReader） |
 | 英文断字、英文首段顶格 | 未验证 | 未验证 | 未验证 | 未验证 |
+| EPUB 3 升级（v27） | — | 未验证 | 未验证 | 未验证 |
 
 ## 待定问题
 
