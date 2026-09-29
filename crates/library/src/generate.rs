@@ -69,9 +69,15 @@ impl Library {
             profile::Notes::Jump => "jump",
         };
         // 阅读范围后面带上漫画白边（`+1`，profile 的 comic_margin，2026-09-29 起），改了白边的书都要重新生成；
-        // 纯图页铺满（profile 的 comic_fullpage）开着时再带个 `f`
+        // 纯图页铺满（profile 的 comic_fullpage）开着时再带个 `f`；漫画阅读范围和阅读器页边距（comic_readable、comic_reader_margins）
+        // 跟在后面（`c952x1457m1`），和 EPUB 阅读范围一样时不写
+        let comic = device.comic_readable();
+        let comic_seg = match (comic != area, device.comic_reader_margins) {
+            (false, None) => String::new(),
+            (_, m) => format!("c{}x{}{}", comic.width, comic.height, m.map(|m| format!("m{m}")).unwrap_or_default()),
+        };
         let fingerprint = format!(
-            "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{}|{}|{}",
+            "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{}{comic_seg}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
