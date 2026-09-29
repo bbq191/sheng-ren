@@ -43,13 +43,13 @@ case $mode in
           has "extensions/koreader-boot/$f" && gio remove "$root/extensions/koreader-boot/$f"
         done
         gio remove "$root/extensions/koreader-boot"
-        for f in "KOReader开机启动-装上.sh" "KOReader开机启动-卸掉.sh"; do has "documents/$f" && gio remove "$root/documents/$f"; done
+        for f in "KOReader开机启动-装上.sh" "KOReader开机启动-卸掉.sh" "KOReader（独占）.sh"; do has "documents/$f" && gio remove "$root/documents/$f"; done
       fi
     else echo "= 扩展本来就没有"; fi ;;
   install)
     files=(config.xml menu.json koreader-boot.conf bin/common.sh bin/install.sh bin/uninstall.sh bin/status.sh)
     for f in "${files[@]}"; do echo "拷 extensions/koreader-boot/$f"; done
-    scriptlets=("KOReader开机启动-装上.sh" "KOReader开机启动-卸掉.sh")
+    scriptlets=("KOReader开机启动-装上.sh" "KOReader开机启动-卸掉.sh" "KOReader（独占）.sh")
     for f in "${scriptlets[@]}"; do echo "拷 documents/$f（书库里显示成一本书，点开就运行）"; done
     if [[ $write -eq 1 ]]; then
       has extensions/koreader-boot || gio mkdir "$root/extensions/koreader-boot"
