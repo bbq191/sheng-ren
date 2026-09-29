@@ -57,7 +57,10 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 ///   静态 GIF/WebP 页转 PNG/JPEG（条目名不变、manifest media-type 跟着改）。
 /// - v28（2026-09-29）：JPEG 哈夫曼表按图重做（`jpegopt`，无损：解码逐像素相同，每页还会解码比对，不同就用原来的），漫画同画质小 7%–9%；
 ///   多看的图标注释号保留原图标（加 `eink-noteicon` 限一个字高），不再换成上标数字（多出来的字，用户定）。
-pub const OPTIMIZE_VERSION: &str = "28";
+/// - v29（2026-09-29）：漫画纯图页（没有可见文字）的 `<body>` 加 `eink-fullpage` 类（`line-height:0;font-size:0`），只在 profile 开了
+///   `comic_fullpage` 时（koreader）：KOReader 里图在一行中，行高在下面留 10px、字号在行首多出 2px，去掉后整页图用满整屏，
+///   `koreader` 阅读范围改成 1264×1680，1px 白边就是到屏幕边缘 1px（本机 KOReader 截图验证）。
+pub const OPTIMIZE_VERSION: &str = "29";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -92,6 +95,8 @@ pub struct OptimizeOpts {
     pub grayscale: bool,
     /// 漫画页图到阅读范围四边的白边（像素，profile 的 `comic_margin`，缺省 1），见 `imgopt::prepare_comic_page_for_epub`。
     pub comic_margin: u32,
+    /// 漫画纯图页去掉行高和字号（profile 的 `comic_fullpage`），见 `html_pass::mark_fullpage`。
+    pub comic_fullpage: bool,
     pub wash: Option<crate::wash::WashOpts>,
     /// 脚注呈现方式（缺省 `Anchor`，书库与 `epub-optimize` 都用它）。
     pub footnote: FootnoteMode,
@@ -103,7 +108,7 @@ pub struct OptimizeOpts {
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, wash: None, footnote: FootnoteMode::default(), page_direction: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_fullpage: false, wash: None, footnote: FootnoteMode::default(), page_direction: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -113,6 +118,7 @@ impl OptimizeOpts {
             wash: Some(Default::default()),
             footnote: p.notes.into(),
             comic_margin: p.comic_margin,
+            comic_fullpage: p.comic_fullpage,
             ..OptimizeOpts::new(p.readable(profile::Format::Epub))
         }
     }
@@ -294,6 +300,8 @@ struct EntryXform<'a> {
     page_direction: Option<crate::direction::PageDirection>,
     /// 漫画：OPF 里打上漫画标签（`comic_detect::tag_opf_as_comic`）。
     comic: bool,
+    /// 漫画且 profile 开了 `comic_fullpage`：纯图页的 `<body>` 加 `eink-fullpage`。
+    fullpage: bool,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
@@ -316,6 +324,7 @@ impl<'a> EntryXform<'a> {
             footnote: opts.footnote,
             page_direction: opts.page_direction,
             comic: prep.is_comic_book,
+            fullpage: prep.is_comic_book && opts.comic_fullpage,
             opf_name: prep.opf_name.as_deref(),
             screen: opts.screen,
             seen_ids: HashSet::new(),
@@ -333,6 +342,7 @@ impl<'a> EntryXform<'a> {
         let t = crate::htmlproc::fix_duokan_markers(&t);
         let t = fix_cover_aspect(&t);
         let t = svg_cover_to_img(&t);
+        let t = if self.fullpage { mark_fullpage(&t).unwrap_or(t) } else { t };
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
         let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
