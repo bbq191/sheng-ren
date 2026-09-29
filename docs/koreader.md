@@ -214,6 +214,12 @@ koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-
 - 停掉自带界面后 KOReader 看起来能联网（登录官方同步服务器时报的是"服务器错误"而不是"没有网络"），登录自己的服务器成功后才算确认。有人报告停界面的做法在某些机型上启动失败，出问题就先关掉自启。
 - **系统自动更新没有屏蔽**（用户定：自己控制联网）。自动更新可能让越狱和 KOReader 失效，联网时留意。
 
+## 掌阅开机进 KOReader
+
+掌阅没有开发者选项、USB 调试，也没有主页键；但默认桌面可以换。`koreader/android-home/` 是一个几十 KB 的安卓桌面应用「KOReader 桌面」：
+开机、在 KOReader 里退出都（重新）打开 KOReader；**连着退出两次**（重开后 10 秒内又退出）进掌阅原来的桌面——**下发配置前要这样真正退出**。
+编译、安装、恢复见 [koreader/android-home/README.md](../koreader/android-home/README.md)。
+
 ## 阅读背景
 
 `koreader/backgrounds/`（2026-09-29，用户要"再生纸质感"）：`make.py` 生成可无缝平铺的灰度纹理，`apply.sh` 拷到设备的 `backgrounds/`，
