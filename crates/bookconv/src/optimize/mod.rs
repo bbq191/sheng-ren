@@ -64,7 +64,9 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   `koreader` 阅读范围改成 1264×1680，1px 白边就是到屏幕边缘 1px（本机 KOReader 截图验证）。
 /// - v30（2026-09-29）：xochitl 漫画按页边距 1 排（profile `comic_reader_margins` + `comic_readable` 952×1457，画布里不留白边）：
 ///   写 `META-INF/eink-reader-margins` 供 `xochitl/comic-margins.sh` 登记；文字页、混排页的字补回默认留白，图页去掉 `<body>` 的类（`comicpad`）。
-pub const OPTIMIZE_VERSION: &str = "30";
+/// - v31（2026-09-29）：只有图标的注释标号在 xochitl 模式换成上标数字（profile `note_icons = "number"`，`htmlproc::number_icon_note_links`）：
+///   xochitl 里只有图的链接点不了、CSS 限不住图标大小（Move 真机）。编号取注释开头的 `[N]`，其次图标 alt 里的"注释N"，再次本章顺序。
+pub const OPTIMIZE_VERSION: &str = "31";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -105,6 +107,8 @@ pub struct OptimizeOpts {
     pub comic_screen: Option<crate::imgopt::Screen>,
     /// 漫画在阅读器里要设成的页边距（profile 的 `comic_reader_margins`）：写标记、按 `comicpad` 处理各页。
     pub comic_reader_margins: Option<u32>,
+    /// 只有图标的注释标号换成上标数字（profile `note_icons = "number"`）。
+    pub number_note_icons: bool,
     pub wash: Option<crate::wash::WashOpts>,
     /// 脚注呈现方式（缺省 `Anchor`，书库与 `epub-optimize` 都用它）。
     pub footnote: FootnoteMode,
@@ -116,7 +120,7 @@ pub struct OptimizeOpts {
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_fullpage: false, comic_screen: None, comic_reader_margins: None, wash: None, footnote: FootnoteMode::default(), page_direction: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_fullpage: false, comic_screen: None, comic_reader_margins: None, number_note_icons: false, wash: None, footnote: FootnoteMode::default(), page_direction: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -129,6 +133,7 @@ impl OptimizeOpts {
             comic_fullpage: p.comic_fullpage,
             comic_screen: Some(p.comic_readable()),
             comic_reader_margins: p.comic_reader_margins,
+            number_note_icons: p.note_icons == profile::NoteIcons::Number,
             ..OptimizeOpts::new(p.readable(profile::Format::Epub))
         }
     }
@@ -314,6 +319,8 @@ struct EntryXform<'a> {
     fullpage: bool,
     /// 漫画且 profile 开了 `comic_reader_margins`：各页按 `comicpad` 处理，`eink-wash.css` 追加它的规则。
     reader_margins: bool,
+    /// 只有图标的注释标号换成上标数字。
+    number_note_icons: bool,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
@@ -338,6 +345,7 @@ impl<'a> EntryXform<'a> {
             comic: prep.is_comic_book,
             fullpage: prep.is_comic_book && opts.comic_fullpage,
             reader_margins: prep.is_comic_book && opts.comic_reader_margins.is_some(),
+            number_note_icons: opts.number_note_icons,
             opf_name: prep.opf_name.as_deref(),
             screen: opts.screen,
             seen_ids: HashSet::new(),
@@ -358,6 +366,7 @@ impl<'a> EntryXform<'a> {
         let t = if self.fullpage { mark_fullpage(&t).unwrap_or(t) } else { t };
         let t = if self.reader_margins { crate::comicpad::pad_page(&t).unwrap_or(t) } else { t };
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
+        let t = if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
         let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
         self.fetched_imgs.extend(imgs);
