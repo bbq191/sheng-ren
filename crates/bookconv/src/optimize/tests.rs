@@ -181,7 +181,7 @@
         assert!(tw <= crate::imgopt::test_screen().width && th <= crate::imgopt::test_screen().height, "文字书内嵌图也应该缩进屏幕框: {tw}x{th}");
         assert_eq!((cw, ch), (crate::imgopt::test_screen().width, crate::imgopt::test_screen().height), "缺省（开关关）漫画整页补白到屏幕比例 954×1696: {cw}x{ch}");
         // 传真实可阅读范围（Move EPUB 842×1455）：漫画页补白到阅读范围，文字书内嵌图只缩不补白
-        let area = OptimizeOpts::new(profile::get("rmpp-move").unwrap().readable(profile::Format::Epub));
+        let area = OptimizeOpts::new(profile::get("xochitl").unwrap().readable(profile::Format::Epub));
         let (a_out, _) = optimize_epub_with(&comic_buf, &area).unwrap();
         let mut a_img = Vec::new();
         ZipArchive::new(Cursor::new(&a_out)).unwrap().by_name("p1.jpg").unwrap().read_to_end(&mut a_img).unwrap();
@@ -693,7 +693,7 @@
         port
     }
 
-    /// 远程图端到端：抓到的图写进 zip、src 改本地名、**补进 OPF manifest**（AZW3 写出器只认 manifest）；抓不到的
+    /// 远程图端到端：抓到的图写进 zip、src 改本地名、**补进 OPF manifest**（manifest 里没有的资源不算书的一部分）；抓不到的
     /// `<img>` 原样保留。OPF 推迟到最后写，其它条目顺序不变。
     #[test]
     fn remote_images_are_added_to_manifest_and_failed_ones_kept() {

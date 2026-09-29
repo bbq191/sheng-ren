@@ -173,13 +173,7 @@ return {
     ["start_with"] = "filemanager",
     ["style_tweaks"] = {
         ["cjk_tailored"] = true,
-        ["docfragment_page-break-before_avoid "] = true,
-        ["footnote-inpage_epub"] = true,
         ["footnote-inpage_fb2"] = true,
-        ["h1_page-break-before_always"] = true,
-        ["h2_page-break-before_always"] = true,
-        ["h3_page-break-before_always"] = true,
-        ["inpage_footnote_font-size_smaller"] = true,
         ["paragraph_whitespace_half"] = true,
         ["pure_black_and_white"] = true,
     },

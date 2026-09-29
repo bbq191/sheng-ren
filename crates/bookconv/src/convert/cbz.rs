@@ -1,7 +1,6 @@
-//! CBZ（漫画 zip 归档）：解包 → 图片按文件名自然序排 → 母版 EPUB（入库用）或按设备的 PDF（`cbz2pdf` 用）。
+//! CBZ（漫画 zip 归档）：解包 → 图片按文件名自然序排 → 母版 EPUB（入库用）。
 //! macOS 打包带进来的 `__MACOSX/` 目录和 `._*` 资源分叉文件不是页面，跳过。
 
-use super::pdfwrite::{image_from_bytes, PdfPieceWriter};
 use std::io::Read;
 use zip::ZipArchive;
 
@@ -35,47 +34,6 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
         return Err(format!("{name}: 解压后超过单页上限 {} MB（损坏或恶意的压缩包？）", MAX_PAGE_BYTES >> 20));
     }
     Ok(bytes)
-}
-
-/// CBZ 字节 → 按设备的 PDF，一图一页（整份 PDF 在内存里；`cbz2pdf` 用 [`cbz_file_to_pdf`] 边读边写）。
-pub fn cbz_to_pdf(data: &[u8], screen: crate::imgopt::Screen, grayscale: bool) -> Result<Vec<u8>, String> {
-    let zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
-    zip_to_pdf(zip, Vec::new(), screen, grayscale)
-}
-
-/// CBZ 文件 → PDF 写进 `out`（从磁盘逐页读、逐页写，内存里只有当前这一页）。
-pub fn cbz_file_to_pdf<W: std::io::Write>(cbz: &std::path::Path, out: W, screen: crate::imgopt::Screen, grayscale: bool) -> Result<W, String> {
-    let file = std::fs::File::open(cbz).map_err(|e| format!("读 {}: {e}", cbz.display()))?;
-    let zip = ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("CBZ 打开: {e}"))?;
-    zip_to_pdf(zip, out, screen, grayscale)
-}
-
-/// `screen` = 设备 PDF 的阅读范围。每页单趟处理（`imgopt::prepare_comic_page_for_pdf`：解码一次 → 裁白边 →
-/// 按 PDF 里的整数绘制尺寸缩放一次 → 编码一次），什么都不用做的页原字节直接嵌；逐页读、逐页写，不把全书图片攒在内存里。
-/// 扩展名是图片但内容不是 JPEG/PNG 的条目跳过并警告（不让一页坏图拖垮整本）。
-fn zip_to_pdf<R: Read + std::io::Seek, W: std::io::Write>(mut zip: ZipArchive<R>, out: W, screen: crate::imgopt::Screen, grayscale: bool) -> Result<W, String> {
-    let names = page_names(&mut zip);
-    // 先认出真正的图片页（只读开头几个字节看魔数），页数定了才能开写。PDF 里只能嵌 JPEG/PNG。
-    let mut pages = Vec::with_capacity(names.len());
-    for name in names {
-        let mut magic = Vec::with_capacity(8);
-        zip.by_name(&name).map_err(|e| e.to_string())?.take(8).read_to_end(&mut magic).map_err(|e| format!("{name}: {e}"))?;
-        if matches!(super::common::image_ext_mime(&magic), Some(("jpg" | "png", _))) {
-            pages.push(name);
-        } else {
-            eprintln!("警告：{name} 不是可识别的图片，跳过");
-        }
-    }
-    if pages.is_empty() {
-        return Err("CBZ 内无图片（jpg/jpeg/png）".into());
-    }
-    let mut writer = PdfPieceWriter::begin_to(out, pages.len(), false, screen)?;
-    for name in &pages {
-        let raw = read_entry(&mut zip, name)?;
-        let sized = crate::imgopt::prepare_comic_page_for_pdf(&raw, screen.width, screen.height, grayscale).unwrap_or(raw);
-        writer.write_page(&image_from_bytes(&sized).map_err(|e| format!("{name}: {e}"))?)?;
-    }
-    writer.finish(&[])
 }
 
 /// CBZ 字节 → **与设备无关的母版 EPUB**：图片按文件名自然序每页一张，原图字节原样放进去（不缩放、不重编码），
@@ -203,18 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn oversized_page_downscaled_in_pdf() {
-        // 3392×1908（2× 屏）的漫画页 → 单趟处理后宽不超过 PDF 里的绘制宽（页宽 954 的 98% 取偶 = 934）
-        let buf = zip_of(&[("page_1.jpg", &jpeg(3392, 1908))]);
-        let pdf = cbz_to_pdf(&buf, crate::imgopt::test_screen(), false).unwrap();
-        let s = String::from_utf8_lossy(&pdf);
-        let at = s.find("/Subtype /Image /Width ").unwrap() + "/Subtype /Image /Width ".len();
-        let w: u32 = s[at..].split(' ').next().unwrap().parse().unwrap();
-        assert!(w <= 934, "超大页应缩到绘制宽以内: {w}");
-        assert!(s.contains("/MediaBox [0 0 954 1696]"), "页面是设备尺寸");
-    }
-
-    #[test]
     fn macos_junk_and_non_images_are_skipped() {
         let page = jpeg(100, 150);
         let buf = zip_of(&[
@@ -225,8 +171,6 @@ mod tests {
             ("vol/p1.jpg", &page),
             ("vol/p2.jpg", &page),
         ]);
-        let pdf = cbz_to_pdf(&buf, crate::imgopt::test_screen(), false).unwrap();
-        assert!(String::from_utf8_lossy(&pdf).contains("/Count 2"), "只剩两页真图");
         let epub = cbz_to_epub(&buf, "测试").unwrap();
         let names: Vec<String> = crate::epubzip::read_entries(&epub).unwrap().into_iter().map(|e| e.name).collect();
         assert!(names.iter().any(|n| n.ends_with("images/p0002.jpg")) && !names.iter().any(|n| n.ends_with("images/p0003.jpg")), "{names:?}");
@@ -240,7 +184,6 @@ mod tests {
             let z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             z.finish().unwrap();
         }
-        assert!(cbz_to_pdf(&buf, crate::imgopt::test_screen(), false).is_err());
         assert!(cbz_to_epub(&buf, "空").is_err());
     }
 }

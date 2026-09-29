@@ -77,12 +77,6 @@ pub fn manifest_items(opf_text: &str) -> Vec<ManifestItem<'_>> {
         .collect()
 }
 
-/// `<meta name="cover" …>` 标签（只认双引号；AZW3 写出器还在用。本 crate 内部改用 [`cover_meta_tags`]）。
-pub fn cover_meta_re() -> &'static Regex {
-    static META: OnceLock<Regex> = OnceLock::new();
-    META.get_or_init(|| Regex::new(r#"(?s)<meta\b[^>]*\bname\s*=\s*"cover"[^>]*?/?>"#).unwrap())
-}
-
 pub fn parse_opf(entries: &[Entry]) -> Option<Opf> {
     let index = find_opf(entries)?;
     let dir = dir_of(&entries[index].name).to_string();
@@ -133,7 +127,7 @@ pub struct OpfDc {
     pub description: String,
 }
 
-/// 从 OPF 文本读 [`OpfDc`]。书库入库、AZW3 写出、自动目录标题共用。
+/// 从 OPF 文本读 [`OpfDc`]。书库入库、自动目录标题共用。
 pub fn opf_dc(opf: &str) -> OpfDc {
     static DC: OnceLock<Regex> = OnceLock::new();
     let re = DC.get_or_init(|| {

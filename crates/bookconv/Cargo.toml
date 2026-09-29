@@ -2,48 +2,27 @@
 name = "bookconv"
 version.workspace = true
 edition = "2021"
-description = "电子书内容层：多格式→EPUB 转换、按设备优化 EPUB（清洗、排版、分页、漫画图片）、PDF 入库、质量门"
+description = "电子书内容层：CBZ/网页 → EPUB、按阅读模式优化 EPUB（清洗、排版、分页、漫画图片）、质量门"
 license = "MIT"
 
 [dependencies]
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-base64 = "0.22"
 ureq = "2"
-# 文字编码：MOBI 的 cp1252 正文、网页的 GBK 等非 UTF-8 页面（quick-xml "encoding" 已间接引入同一版本）
+# 文字编码：网页的 GBK 等非 UTF-8 页面（quick-xml "encoding" 已间接引入同一版本）
 encoding_rs = "0.8"
-png = "0.17"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-# PNG 像素 /FlateDecode 压缩（pdfwrite），纯 Rust、musl 友好
-miniz_oxide = "0.8"
 # 图片降采样/抖动：只启 jpeg+png 控体积
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 fast_image_resize = "6.1.0"
-# XML 事件解析（FB2→EPUB 等）
+# XML 事件解析（质量门、网页正文、EPUB 组装）
 quick-xml = { version = "0.30", features = ["encoding"] }
 # 网文获取（readlater 下沉，2026-09-05）：Readability 可读性抽取 + scraper 白名单重序列化成合法 XHTML
 readability-rust = "0.1.0"
 scraper = "0.18"
 ego-tree = "0.6"
-# 入库 PDF「优化」（有文字层→转 EPUB，无文字层/漫画→仅裁边，2026-09-19）：三者均纯 Rust、
-# 无 C 依赖（上游曾在 aarch64-unknown-linux-musl 全静态交叉编译验证过，含传递依赖 hayro-*/vello_cpu/skrifa/rayon 等）。
-# lopdf：通用 PDF 对象/xref/content stream 解析+构造，读第三方 PDF 结构（页树/字体资源/
-# 图片 XObject/书签目录），现有 `convert/pdfwrite.rs` 的手搓读写器只认自己产出的简单结构，
-# 读不了第三方复杂 PDF。默认 features 只留 rayon（载入时并行解析对象，大 PDF 快）；chrono（PDF 日期类型）用不上，关掉。
-# png 仍是 0.17（image 用 0.18，编了两份）：0.18 的 Decoder 要求 BufRead + Seek，升级要改 convert/pdfwrite.rs。
-lopdf ={ version = "0.45.0", default-features = false, features = ["rayon"] }
-# pdf-extract：基于 lopdf，暴露 OutputDev::output_character(变换矩阵+字体名+字号) 钩子，
-# 给文字层探测/字号识别标题/公式区域探测三处用，不用自己写 content stream 算子解释器（字体/glyph
-# 解码本身不重写——那是真正难、易错的部分）。2026-09-23 起改用本地 fork `pdf-extract`（补全颜色
-# 算子+暴露颜色/图片位置，见该 crate `src/lib.rs` 头注释），`package =` 让代码里仍用 `pdf_extract::`
-# 引用，text.rs 等调用点不用改名。
-pdf-extract = { path = "../pdf-extract" }
 profile = { path = "../profile" }
-# hayro：纯 Rust PDF 光栅化引擎（Apache-2.0/MIT，1000+ PDF 回归测试套件），把整页渲染成
-# 位图供公式区域裁剪用（没有按区域渲染的精确 API，渲染整页后用
-# `image::imageops::crop_imm` 裁出公式小块，见 `pdf_ingest::to_epub::crop_pixmap_to_png`）。
-hayro = "0.7.1"
 
 [dev-dependencies]
 tempfile = "3"
@@ -61,10 +40,6 @@ path = "src/bin/ebook_meta.rs"
 [[bin]]
 name = "cover-fix"
 path = "src/bin/cover_fix.rs"
-
-[[bin]]
-name = "cbz2pdf"
-path = "src/bin/cbz2pdf.rs"
 
 # 测量书：生成（readable-probe）与截图分析（readable-measure），量设备真实可阅读范围，见 `probe.rs`。
 [[bin]]

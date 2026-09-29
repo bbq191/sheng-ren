@@ -15,7 +15,7 @@ mod contrast;
 mod footnote;
 mod footnote_cycles;
 
-// 对外（优化器、EPUB 组装、MOBI 转换、PDF 入库）用到的项。
+// 对外（优化器、EPUB 组装）用到的项。
 pub use self::basic::{collapse_dup_id_attrs, dedup_ids_in_chapter, fix_internal_links};
 pub(crate) use self::basic::plan_id_renames;
 pub use self::contrast::{achromatic_dark, boost_contrast_css, boost_text_contrast, strip_font_locks};

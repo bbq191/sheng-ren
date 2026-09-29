@@ -64,6 +64,25 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     })
 }
 
+/// 把写好的临时文件 `tmp` 原子地换到 `dest`：先落盘 `tmp`，再改名，最后落盘目录（产物由优化器直接写进 `tmp`，
+/// `tmp` 用 [`tmp_sibling`] 取，和目标在同一目录）。失败时 `tmp` 留给调用方删。
+pub(crate) fn commit(tmp: &Path, dest: &Path) -> Result<(), String> {
+    let r = (|| {
+        File::open(tmp)?.sync_all()?;
+        std::fs::rename(tmp, dest)?;
+        sync_parent(dest)
+    })();
+    r.map_err(|e| format!("写 {}: {e}", dest.display()))
+}
+
+/// 落盘 `path` 所在的目录（改名、删除之后，让目录项的变化也落盘）。
+pub(crate) fn sync_parent(path: &Path) -> std::io::Result<()> {
+    match path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(dir) => File::open(dir)?.sync_all(),
+        None => Ok(()),
+    }
+}
+
 /// 读 JSON 文件；不在或读不出来返回 `None`。
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
@@ -85,7 +104,7 @@ fn file_key(path: &Path) -> Option<FileKey> {
     Some(FileKey(m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()))
 }
 
-/// 小 JSON 文件的读缓存（`.state.json`、`deliveries.json`）：文件没变（见 [`FileKey`]）就不重读、不重新解析。
+/// 小 JSON 文件的读缓存（`output-state/<模式>.json`、`sources.json`）：文件没变（见 [`FileKey`]）就不重读、不重新解析。
 /// 一次 `build`/`list` 里每本书都要查一遍，不缓存的话每本书都重读一次。
 pub(crate) struct JsonCache<T> {
     map: RefCell<HashMap<PathBuf, Cached<T>>>,
@@ -152,6 +171,16 @@ pub(crate) fn clean_tmp(dir: &Path) {
             continue;
         }
         let _ = if e.file_type().is_ok_and(|t| t.is_dir()) { std::fs::remove_dir_all(e.path()) } else { std::fs::remove_file(e.path()) };
+    }
+}
+
+/// 只删 `dir` 下名字以 [`TMP_PREFIX`] 开头的**文件**（不删目录）：产物目录在书库外（和原件目录并列），
+/// 里面只可能有本工具写产物时留下的 `.tmp-<进程号>-<计数>-<名>`。只在持锁时调用。
+pub(crate) fn clean_tmp_files(dir: &Path) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        if e.file_name().to_string_lossy().starts_with(TMP_PREFIX) && e.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(e.path());
+        }
     }
 }
 

@@ -1,13 +1,12 @@
-# host 端电子书入库与按设备优化工具（见 README.md 与 docs/）。
-# 依赖单向无环：library → azw3 → bookconv → profile / pdf-extract；drm 独立。
+# host 端电子书书库与 EPUB 优化工具（见 README.md 与 docs/）。
+# 依赖单向无环：library → bookconv → profile；drm 独立。
 [workspace]
 resolver = "2"
 members = [
     "crates/bookconv",
-    "crates/pdf-extract",
     "crates/profile",
     "crates/drm",
-    "crates/azw3", "crates/library",
+    "crates/library",
 ]
 
 [workspace.package]

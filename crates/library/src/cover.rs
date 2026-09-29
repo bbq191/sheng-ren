@@ -135,10 +135,10 @@ impl Library {
         Ok(info)
     }
 
-    /// 书自己有没有封面（EPUB 看封面声明和第一页的图；要转换的格式转一遍再看；PDF 算有）。
+    /// 书自己有没有封面（EPUB 看封面声明和第一页的图）。
     /// CBZ 不用转：转出来的 EPUB 总是拿第一张图当封面（`cbz_to_epub`；没有图的 CBZ 入库时就拒收了）。
     pub(crate) fn book_has_own_cover(&self, meta: &Meta) -> Result<bool, String> {
-        if matches!(meta.content_format(), "pdf" | "cbz") {
+        if meta.content_format() == "cbz" {
             return Ok(true);
         }
         let tmp = tempdir_in(&self.root)?;

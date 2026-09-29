@@ -1,8 +1,8 @@
 # shellcheck shell=bash disable=SC2034,SC2329
 # lib.sh —— apply.sh、check.sh 共用（source 进来用，不单独运行）。调用方先设好 KO_HERE（koreader/ 目录）。
 
-# 设备上归我们管的三个配置文件（相对 KOReader 目录）
-KO_FILES=(settings.reader.lua settings/gestures.lua settings/profiles.lua)
+# 设备上归我们管的配置文件（相对 KOReader 目录）
+KO_FILES=(settings.reader.lua settings/gestures.lua settings/profiles.lua settings/kosync.lua)
 
 # ko_layers <设备 id>：按应用顺序输出每一层「目标文件 脚本 补丁 类别」。
 #   类别 personal = 个人设置（卸载时保留），scheme = 文字书/漫画方案和设备差异（卸载时撤销），presets = 状态栏预设（卸载时撤销）。
@@ -15,10 +15,11 @@ settings.reader.lua merge.lua devices/$1/settings.reader.patch.lua scheme
 settings.reader.lua presets.lua - presets
 settings/gestures.lua merge.lua personal/gestures.patch.lua personal
 settings/profiles.lua merge.lua schemes/profiles.patch.lua scheme
+settings/kosync.lua merge.lua schemes/kosync.patch.lua scheme
 EOF
 }
 
-# ko_merge_all <目录> <设备 id>：把各层依次合并进 <目录> 下的三个配置文件（文件不存在就从空表开始）。
+# ko_merge_all <目录> <设备 id>：把各层依次合并进 <目录> 下的配置文件（文件不存在就从空表开始）。
 ko_merge_all() {
   local dir=$1 target script patch kind rc
   mkdir -p "$dir/settings"
@@ -55,7 +56,7 @@ ko_unmerge_all() {
 }
 
 # ── 设备文件操作（路径都相对 KOReader 目录）──
-# ko_connect <设备 id> <临时目录>：读 devices/<id>/device.conf，连上设备，定义下面几个原语：
+# ko_connect <设备 id>：读 devices/<id>/device.conf，连上设备，定义下面几个原语：
 #   dev_has <路径>        存在返回 0
 #   dev_get <路径> <本地> 读到本地文件；失败返回非 0 且不留半个文件
 #   dev_put <本地> <路径> 写入（原子：写完才替换）
@@ -65,10 +66,8 @@ ko_unmerge_all() {
 # MTP：一律经 gio 读写。gvfs 的 FUSE 路径（/run/user/…/gvfs/…）对读过的文件有缓存，gio 换掉文件后 FUSE 还会返回旧内容
 # （2026-09-28 Kindle 实测：写入 19524 字节，经 FUSE 读回的是旧的 11487 字节），所以内容一律不经 FUSE 读。
 # MTP 不支持覆盖写和改名：替换已有文件时先拷一份 .tmp，再删旧的、拷正式名——中途失败时设备上至少留着 .tmp 或旧文件。
-# SSH：不用 scp（OpenSSH 9 起 scp 走 SFTP，设备上未必有 sftp-server），一律 ssh + cat；连接复用（ControlMaster），
-# 一次 apply 只握手一次。写入先写同目录 .tmp 再 mv。
 ko_connect() {
-  local dev=$1 tmp=$2
+  local dev=$1
   TRANSPORT=mtp
   FONTS=()
   RUNNING_CHECK=ask
@@ -93,19 +92,7 @@ ko_connect() {
       dev_mkdir() { dev_has "$1" || gio mkdir "$KO_BASE/$1"; }
       dev_size() { gio info -a standard::size "$KO_BASE/$1" 2>/dev/null | awk '/standard::size:/ {print $2}'; }
       ;;
-    ssh)
-      command -v ssh >/dev/null || { echo "✗ 缺 ssh" >&2; return 1; }
-      KO_SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5 -o ControlMaster=auto -o "ControlPath=$tmp/ssh-%C" -o ControlPersist=60 "$SSH_HOST")
-      "${KO_SSH[@]}" true 2>/dev/null || { echo "✗ 连不上 $dev（ssh $SSH_HOST）：连上网络、屏幕解锁后再试" >&2; return 1; }
-      KO_BASE=$KOREADER_DIR
-      dev_has() { "${KO_SSH[@]}" "test -e '$KO_BASE/$1'"; }
-      dev_get() { "${KO_SSH[@]}" "cat '$KO_BASE/$1'" >"$2" 2>/dev/null || { rm -f "$2"; return 1; }; }
-      dev_put() { "${KO_SSH[@]}" "cat >'$KO_BASE/$2.tmp' && mv '$KO_BASE/$2.tmp' '$KO_BASE/$2'" <"$1"; }
-      dev_rm() { "${KO_SSH[@]}" "rm -f '$KO_BASE/$1'"; }
-      dev_mkdir() { "${KO_SSH[@]}" "mkdir -p '$KO_BASE/$1'"; }
-      dev_size() { "${KO_SSH[@]}" "wc -c <'$KO_BASE/$1'" 2>/dev/null | tr -d ' '; }
-      ;;
-    *) echo "✗ device.conf 的 TRANSPORT 只能是 mtp 或 ssh" >&2; return 2 ;;
+    *) echo "✗ device.conf 的 TRANSPORT 只能是 mtp" >&2; return 2 ;;
   esac
 }
 
@@ -119,13 +106,6 @@ ko_running() {
       start=$(grep -an "It's KOReader!" "$log" | tail -1 | cut -d: -f1 || true)
       stop=$(grep -an "Tearing down UIManager" "$log" | tail -1 | cut -d: -f1 || true)
       if [[ -n $stop && (-z $start || $stop -gt $start) ]]; then echo closed; else echo running; fi
-      ;;
-    proc) # 有没有进程在跑 reader.lua，且命令行或工作目录是这个 KOReader 目录（启动脚本常先 cd 再跑 ./reader.lua）
-      # 模式写成 reade[r].lua：这条命令自己的命令行里是字面的 "reade[r].lua"，不会被自己匹配上
-      local out rc=0
-      out=$("${KO_SSH[@]}" "for p in /proc/[0-9]*; do c=\$(tr '\\0' ' ' <\$p/cmdline 2>/dev/null); case \"\$c\" in *reade[r].lua*) echo \"\$c \$(readlink \$p/cwd)\";; esac; done" 2>/dev/null) || rc=$?
-      [[ $rc -eq 0 ]] || { echo "✗ 查 KOReader 进程失败（ssh 返回 $rc）" >&2; return 1; }
-      if grep -qF "$KO_BASE" <<<"$out"; then echo running; else echo closed; fi
       ;;
     *) echo unknown ;;
   esac

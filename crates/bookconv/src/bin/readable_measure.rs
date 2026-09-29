@@ -1,6 +1,6 @@
 //! 从测量书的两张截图（竖长黑块、横宽黑块）量出阅读器的真实可阅读范围，打印可直接贴进 profile 的 TOML。见 `bookconv::probe`。
 //!
-//! 用法: readable-measure [--format=epub|azw3|pdf] 竖长图截图.png 横宽图截图.png
+//! 用法: readable-measure 竖长图截图.png 横宽图截图.png
 //! 退出码: 0 成功（有可疑之处时仍输出，但会列出警告）；1 用法错；2 读图/测量失败。
 
 use bookconv::util::cli::{self, die};
@@ -8,10 +8,9 @@ use bookconv::util::cli::{self, die};
 fn main() {
     cli::restore_sigpipe();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let format = args.iter().find_map(|a| a.strip_prefix("--format=")).unwrap_or("epub");
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    if files.len() != 2 || !["epub", "azw3", "pdf"].contains(&format) {
-        die(cli::USAGE, "用法: readable-measure [--format=epub|azw3|pdf] 竖长图截图.png 横宽图截图.png");
+    if files.len() != 2 || files.len() != args.len() {
+        die(cli::USAGE, "用法: readable-measure 竖长图截图.png 横宽图截图.png");
     }
     let load = |p: &str| image::open(p).unwrap_or_else(|e| die(cli::FAILED, format!("读 {p}: {e}"))).to_luma8();
     let m = bookconv::probe::measure(&load(files[0]), &load(files[1])).unwrap_or_else(|e| die(cli::FAILED, format!("测量失败: {e}")));
@@ -24,5 +23,5 @@ fn main() {
     for w in &m.warnings {
         println!("⚠ {w}");
     }
-    println!("\n[readable.{format}]\nwidth = {rw}\nheight = {rh}");
+    println!("\n[readable.epub]\nwidth = {rw}\nheight = {rh}");
 }

@@ -1,11 +1,11 @@
-//! 命令行：按设备优化一本 EPUB（`optimize::optimize_epub_file_streaming`，与书库 `booklib build` 同一函数）。
+//! 命令行：按阅读模式（设备 profile）优化一本 EPUB（`optimize::optimize_epub_file_streaming`，与书库 `booklib build` 同一函数）。
 //! 缺省 = 清洗层（伪 DRM 剥离 / CSS 锁剥离 / 边距段距归零+首行缩进 / 空页清理 / 缺目录时自动目录 / 双 id 折叠 / 章节分页）
 //! 加优化器（脚注拆环 / duokan 标记 / 远程图内联 / 双 id 去重 / 图片按阅读范围缩放 / e-ink 提对比），产物自带
 //! `META-INF/eink-optimized` 标记。
 //!
 //! 用法: epub-optimize --device=<设备> [选项] 输入.epub 输出.epub
 //!   （流式处理，大漫画也不整本读进内存；产物先写到 `输出.epub.optimizing.tmp`，成功后改名，失败不留半成品）
-//!   --device=<id>    目标设备 profile（必填，见 profile crate 的 profiles/*.toml）
+//!   --device=<id>    阅读模式 profile（必填：koreader / xochitl，见 profile crate 的 profiles/*.toml）
 //!   --no-wash        只跑优化器不清洗
 //!   --keep-spacing   清洗但保留原书段间距（诗集/剧本）
 //!   --auto-toc       强制从 h1–h6 重建目录（缺省仅在无目录时生成）
@@ -27,9 +27,9 @@ fn main() {
     if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--no-paginate", "--footnote-anchor", "--check", "--require-toc"].contains(f)) {
         die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--footnote-anchor] [--check] [--require-toc] 输入.epub 输出.epub");
     }
-    // 该设备流式排版产物的真实可阅读范围（没有实测值时是标称屏幕）与是否黑白屏
+    // 该阅读模式 EPUB 的真实可阅读范围（没有实测值时是标称屏幕）与是否黑白屏
     let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
-    let (screen, grayscale) = (device.readable(device.reflow_format().unwrap_or(profile::Format::Epub)), !device.color);
+    let (screen, grayscale) = (device.readable(profile::Format::Epub), !device.color);
     let wash = if flags.contains(&"--no-wash") {
         None
     } else {

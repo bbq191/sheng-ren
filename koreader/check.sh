@@ -76,6 +76,11 @@ for _, n in ipairs({'漫画·首次', '漫画', '文字'}) do assert(p[n], '缺�
 local g = dofile('$w/cur/settings/gestures.lua')
 assert(g.gesture_reader.hold_top_left_corner.exit == true)
 assert(g.gesture_reader.tap_top_right_corner == nil, '删掉的手势不能留下 __DELETE__')
+local t = s.style_tweaks
+assert(t and t.cjk_tailored and not t['docfragment_page-break-before_avoid '] and not t['h2_page-break-before_always']
+  and not t['footnote-inpage_epub'], '分页、弹窗注释要撤掉的样式调整还在（或整张表没了：没了 KOReader 会退回缺省，页内注释又开了）')
+local k = dofile('$w/cur/settings/kosync.lua').settings
+assert(k.checksum_method == 1 and k.auto_sync == true and k.sync_forward and k.sync_backward, '进度同步设置不对')
 " || { echo "✗ $dev：应用结果不对" >&2; exit 4; }
 
   # 2. 卸载：没有原始配置 → 方案、预设撤掉，个人设置保留

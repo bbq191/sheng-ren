@@ -13,9 +13,9 @@ case ${1:-} in
 esac
 command -v cargo >/dev/null || { echo "✗ 没有 cargo：命令是用 cargo install 装的，卸载也要用它" >&2; exit 1; }
 
-# cargo install --list 的格式：「包名 版本 (路径):」一行，下面每个二进制缩进一行。只卸本项目的三个包。
+# cargo install --list 的格式：「包名 版本 (路径):」一行，下面每个二进制缩进一行。只卸本项目的包。
 removed=0
-for pkg in library bookconv azw3; do
+for pkg in library bookconv; do
   if cargo install --list | grep -q "^$pkg v"; then
     cargo uninstall --quiet "$pkg"
     echo "✓ 已卸载 $pkg"

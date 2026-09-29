@@ -1,33 +1,35 @@
-//! 书库命令行：入库、列出、按设备生成、删除、去重。见 `library` crate 头注释。
+//! 书库命令行：入库、列出、按阅读模式生成、删除、去重。见 `library` crate 头注释。
 //!
-//! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib；产物缺省放在书库的 output/<设备>/ 下。
+//! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib。产物：跟踪目录 D 里的书放在 D/../<模式>/（镜像子目录），
+//! add 进来的书和网址书放在书库的 output/<模式>/ 下（见 `library::generate`）。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
-use library::{Added, Built, CoverResult, Delivered, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo};
+use library::{Added, Built, CoverResult, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo};
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "用法:
   booklib [--library=目录] add <文件或网址>...           一次性入库单个文件（目录用 track）
-  booklib [--library=目录] list [书名片段或 id...]      列出书，以及给哪些设备生成过、是否最新
-  booklib [--library=目录] build --device=<设备>[,<设备>…] [--force] [--out=目录] [书名片段或 id...]
-      --device 可写多次或用逗号分隔，--device=all 表示全部设备；不写书名 = 全部书
-      产物生成在书库 output/<设备>/；--out 再拷过去（一台设备直接放进目录，多台放进 目录/<设备>/；
-      支持 MTP 挂载的阅读器；没变的不重拷）。路径有空格要加引号
+  booklib [--library=目录] list [书名片段或 id...]      列出书，以及给哪些阅读模式生成过、是否最新
+  booklib [--library=目录] build [--device=<模式>[,<模式>…]] [--force] [书名片段或 id...]
+      按阅读模式生成优化过的 EPUB（只支持 EPUB、CBZ 来源）；不写 --device = 全部模式（koreader、xochitl），
+      --device 可写多次或用逗号分隔，all = 全部；不写书名 = 全部书
+      产物：跟踪目录 D 里的书放在 D/../<模式>/，按原件所在子目录镜像；add 进来的书和网址书放在书库 output/<模式>/
   booklib [--library=目录] track <目录>...               跟踪目录（递归）：之后 sync 把它镜像进书库
   booklib [--library=目录] untrack <目录>...             不再跟踪（已入库的书保留）
-  booklib [--library=目录] sync [--prune] [--device=<设备>…] [--out=目录] [--watch[=秒]]
+  booklib [--library=目录] sync [--prune] [--device=<模式>…] [--no-build] [--watch[=秒]]
       新增的入库、改过的换成新版本、移动改名的认得出；原件删了的只报告，--prune 才从书库删掉
-      --device 给了就接着生成（只重建有变化的）；--watch 一直运行，每隔几秒（缺省 60）检查一次
+      接着按阅读模式生成（只重建有变化的；缺省全部模式，--device 只生成这几个，--no-build 不生成）
+      --watch 一直运行，每隔几秒（缺省 60）检查一次，原件有变化才生成
   booklib [--library=目录] meta [--force] [--clear] [书名片段或 id...]
       联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；
       生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动
       --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
-  booklib [--library=目录] remove <id>...               从书库删掉（连同产物；原件不动）。id 用 list 里显示的完整 id
+  booklib [--library=目录] remove <id>...               从书库删掉（连同生成记录里的产物；原件不动）。id 用 list 里显示的完整 id
   booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
-  booklib [--library=目录] devices                      列出设备（书库 profiles/ 目录里的自定义设备也算）";
+  booklib [--library=目录] devices                      列出阅读模式（书库 profiles/ 目录里的自定义 profile 也算）";
 
 fn usage_error(msg: &str) -> ! {
     if !msg.is_empty() {
@@ -97,9 +99,12 @@ fn added_line(a: &Added) -> String {
     }
 }
 
-/// `--device` 可写多次、可逗号分隔；all = 全部设备。写了不存在的设备直接报用法错。
+/// `--device` 可写多次、可逗号分隔；all = 全部模式；一个都没写也是全部模式。写了不存在的模式直接报用法错。
 fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
     let mut devices: Vec<&Profile> = Vec::new();
+    if !args.opts.iter().any(|(k, _)| k == "device") {
+        return lib.devices().iter().collect();
+    }
     for id in args.opts.iter().filter(|(k, _)| k == "device").flat_map(|(_, v)| v.split(',')).map(str::trim).filter(|v| !v.is_empty()) {
         if id == "all" {
             devices.extend(lib.devices().iter());
@@ -107,7 +112,7 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
         }
         match lib.devices().get(id) {
             Some(p) => devices.push(p),
-            None => usage_error(&format!("没有设备 {id}，运行 booklib devices 查看")),
+            None => usage_error(&format!("没有阅读模式 {id}，运行 booklib devices 查看")),
         }
     }
     devices.sort_by(|a, b| a.id.cmp(&b.id));
@@ -115,17 +120,21 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
     devices
 }
 
-/// `sync --watch` 记住的生成失败：(书 id, 设备 id) → 失败时的指纹和原件状态。都没变就不再重试、不再重复报错。
+/// `sync --watch` 记住的生成失败：(书 id, 模式 id) → 失败时的指纹和原件状态。都没变就不再重试、不再重复报错。
 type FailMemo = HashMap<(String, String), (String, OriginalState)>;
 
-/// 按设备 × 书逐本生成（没变化的跳过），每本一行结果。给了 `out` 就接着拷过去：只有一台设备时直接放进 `out`，
-/// 多台时放进 `out/<设备 id>/`。`quiet` 时不打印没变化的（sync 用：只报有变化的）。
+/// 按模式 × 书逐本生成（没变化的跳过），每本一行结果。`quiet` 时不打印没变化的（sync 用：只报有变化的）。
 /// 给了 `fails`（`sync --watch`）：上次失败以后指纹和原件状态都没变的书跳过。
+/// 不再支持的格式（早期版本收的 MOBI/PDF 等）跳过，每本只提示一次（`skipped` 记着提示过的）。
 #[allow(clippy::too_many_arguments)]
-fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: Option<&Path>, force: bool, quiet: bool, mut fails: Option<&mut FailMemo>, report: &mut impl FnMut(Result<String, String>)) {
+fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force: bool, quiet: bool, mut fails: Option<&mut FailMemo>, skipped: &mut HashSet<String>, report: &mut impl FnMut(Result<String, String>)) {
+    for m in books.iter().filter(|m| !m.supported()) {
+        if skipped.insert(m.id.clone()) {
+            report(Ok(format!("- 跳过 {}  {}：.{} 不再支持（只支持 EPUB 和 CBZ）", m.id, m.title, m.content_format())));
+        }
+    }
     for device in devices {
-        let dest = out.map(|o| if devices.len() == 1 { o.to_path_buf() } else { o.join(&device.id) });
-        for m in books {
+        for m in books.iter().filter(|m| m.supported()) {
             let key = (m.id.clone(), device.id.clone());
             let now = || (lib.fingerprint(m, device).unwrap_or_else(|e| e), lib.original_state(m));
             if let Some(f) = fails.as_deref_mut() {
@@ -142,6 +151,7 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: 
                     Some(std::iter::once(format!("✓ [{}] {} → {}", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
                 }
                 Ok(Built::UpToDate(path)) => (!quiet).then(|| format!("= [{}] {} 已是最新（{}）", device.id, m.title, path.display())),
+                Ok(Built::Moved { from, to }) => Some(format!("↪ [{}] {} 挪到 {}（原来在 {}）", device.id, m.title, to.display(), from.display())),
                 Err(e) => {
                     report(Err(format!("✗ [{}] {}: {e}", device.id, m.title)));
                     if let Some(f) = fails.as_deref_mut() {
@@ -152,13 +162,6 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: 
             };
             if let Some(line) = built {
                 report(Ok(line));
-            }
-            let Some(dest) = &dest else { continue };
-            match lib.deliver(m, device, dest, force) {
-                Ok(Delivered::Copied(p)) => report(Ok(format!("  → 拷到 {}", p.display()))),
-                Ok(Delivered::Unchanged(p)) if !quiet => report(Ok(format!("  = 目标已是最新（{}）", p.display()))),
-                Ok(Delivered::Unchanged(_)) => {}
-                Err(e) => report(Err(format!("  ✗ [{}] {} 拷贝失败: {e}", device.id, m.title))),
             }
         }
     }
@@ -190,7 +193,7 @@ fn info_summary(i: &library::BookInfo) -> String {
 /// 选书的参数里有像路径的（通常是路径里有空格没加引号，被拆开了），提示一下。
 fn path_hint(selectors: &[String]) -> String {
     match selectors.iter().find(|s| s.contains('/')) {
-        Some(s) => format!("\n（\"{s}\" 看起来像路径的一部分：路径里有空格时要整个加引号，如 --out=\"/run/…/Internal Storage/documents\"）"),
+        Some(s) => format!("\n（\"{s}\" 看起来像路径的一部分：路径里有空格时要整个加引号）"),
         None => String::new(),
     }
 }
@@ -201,8 +204,8 @@ fn main() {
     let Some(cmd) = args.pos.first().and_then(|c| c.to_str()).map(str::to_string) else { usage_error("") };
     match cmd.as_str() {
         "add" | "remove" | "dedupe" | "list" | "devices" | "track" | "untrack" => args.check(&cmd, &[], &[]),
-        "build" => args.check(&cmd, &["device", "out"], &["force"]),
-        "sync" => args.check(&cmd, &["device", "out", "watch"], &["prune", "watch"]),
+        "build" => args.check(&cmd, &["device"], &["force"]),
+        "sync" => args.check(&cmd, &["device", "watch"], &["prune", "watch", "no-build"]),
         "meta" => args.check(&cmd, &[], &["force", "clear"]),
         _ => usage_error(&format!("不认识的命令 {cmd}")),
     }
@@ -222,14 +225,13 @@ fn main() {
         Ok(line) => println!("{line}"),
         Err(e) => fail_line(&e),
     };
-    // 相对路径转成绝对路径：拷过的记录（deliveries.json）按目标路径记，换个目录运行也要对得上
-    let out = args.opt("out").map(|o| std::path::absolute(o).unwrap_or_else(|_| PathBuf::from(o)));
+    let mut skipped = HashSet::new();
     let rest = &args.pos[1..];
     match cmd.as_str() {
         "devices" => {
             for p in lib.devices().iter() {
-                let fmts: Vec<&str> = p.formats.iter().map(|f| f.ext()).collect();
-                println!("{:<20} {}  屏幕 {}×{}  {}", p.id, p.name, p.screen.width, p.screen.height, fmts.join("/"));
+                let r = p.readable(library::Format::Epub);
+                println!("{:<12} {}  屏幕 {}×{}  阅读范围 {}×{}  {}", p.id, p.name, p.screen.width, p.screen.height, r.width, r.height, if p.color { "彩色" } else { "黑白" });
             }
         }
         "add" => {
@@ -251,6 +253,9 @@ fn main() {
         "list" => {
             for m in lib.select(&args.texts()) {
                 println!("{}  {:<6} {}{}", m.id, m.source_format, m.title, if m.authors.is_empty() { String::new() } else { format!(" — {}", m.authors.join("、")) });
+                if !m.supported() {
+                    println!("      - 不再支持的格式（.{}）：不再生成，已有的产物不动；不要了就 remove", m.content_format());
+                }
                 match lib.original_state(&m) {
                     OriginalState::Missing => println!("      ✗ 原件不在了：{}（移动过就 sync 或重新 add；不要了就 remove）", m.source_path),
                     OriginalState::Touched => println!("      ⚠ 原件可能改过：{}（生成前会核对）", m.source_path),
@@ -265,14 +270,6 @@ fn main() {
                     let shown = o.path.strip_prefix(lib.root()).map(|p| p.to_path_buf()).unwrap_or(o.path.clone());
                     println!("      {:<20} {state}  {}", o.device, shown.display());
                 }
-                for d in lib.deliveries(&m) {
-                    let state = match d.fresh {
-                        Some(true) => "✓ 已拷",
-                        Some(false) => "⚠ 旧版",
-                        None => "? 不在",
-                    };
-                    println!("      {:<20} {state}  {}", d.device, d.path.display());
-                }
             }
             for id in lib.broken() {
                 eprintln!("⚠ 条目 {id} 的 meta.json 读不出来（写坏了）：booklib remove {id} 删掉，或重新 add 原文件覆盖");
@@ -281,14 +278,14 @@ fn main() {
         "build" => {
             let devices = parse_devices(&args, &lib);
             if devices.is_empty() {
-                usage_error("build 要用 --device= 指定设备");
+                usage_error("没有可用的阅读模式");
             }
             let books = lib.select(&args.texts());
             if books.is_empty() {
                 fail(&format!("没有匹配的书（booklib list 查看书库）{}", path_hint(&args.texts())));
             }
             let force = args.flags.iter().any(|f| f == "force");
-            build_all(&lib, &devices, &books, out.as_deref(), force, false, None, &mut report);
+            build_all(&lib, &devices, &books, force, false, None, &mut skipped, &mut report);
         }
         "dedupe" => {
             let dirs: Vec<PathBuf> = rest.iter().map(PathBuf::from).collect();
@@ -324,7 +321,14 @@ fn main() {
             if lib.tracked().is_empty() {
                 fail("还没有跟踪任何目录。先登记要跟踪的书目录（只需一次），例如：\n  booklib track ~/Documents/ereader/books\n之后 booklib sync 就会把它镜像进书库");
             }
-            let devices = parse_devices(&args, &lib);
+            let devices = if args.flags.iter().any(|f| f == "no-build") {
+                if args.opts.iter().any(|(k, _)| k == "device") {
+                    usage_error("--no-build 和 --device 不能一起用");
+                }
+                Vec::new()
+            } else {
+                parse_devices(&args, &lib)
+            };
             if !args.texts().is_empty() {
                 usage_error(&format!("sync 不接受书名参数{}", path_hint(&args.texts())));
             }
@@ -335,7 +339,7 @@ fn main() {
                 (None, false) => None,
             };
             // 跨轮次的记忆（--watch）：报过的问题不重复报；生成失败的书没变化不重试；
-            // 书库、产物、--out 目录都没变化、这一轮也没有新增更新删除时不跑生成（省得每轮把所有书的状态查一遍）
+            // 书库没变化、这一轮也没有新增更新删除时不跑生成（省得每轮把所有书的状态查一遍）
             let mut memo = SyncMemo::default();
             let mut fails = FailMemo::new();
             let mut last_stamp: Option<u64> = None;
@@ -357,10 +361,10 @@ fn main() {
                             Err(e) => report(Err(e)),
                         }
                         if !devices.is_empty() {
-                            let stamp = || change_stamp(&lib, &devices, out.as_deref());
+                            let stamp = || change_stamp(&lib);
                             if changed || last_stamp != Some(stamp()) {
                                 let fails = watch.is_some().then_some(&mut fails);
-                                build_all(&lib, &devices, &lib.list(), out.as_deref(), false, true, fails, &mut report);
+                                build_all(&lib, &devices, &lib.list(), false, true, fails, &mut skipped, &mut report);
                                 last_stamp = Some(stamp());
                             }
                         }
@@ -378,6 +382,10 @@ fn main() {
             }
             let (force, clear) = (args.flags.iter().any(|f| f == "force"), args.flags.iter().any(|f| f == "clear"));
             for m in &books {
+                if !m.supported() && !clear {
+                    println!("- 跳过 {}：.{} 不再支持", m.title, m.content_format());
+                    continue;
+                }
                 if lib.offline() {
                     fail_line("✗ 连不上网，这一轮中止（没查的书下次再查）");
                     break;
@@ -402,7 +410,7 @@ fn main() {
                 }).map_err(|e| format!("✗ {}: {e}", m.title)));
             }
             if !clear {
-                println!("  简介、标签、封面在生成产物时补进书里（书里已有的不动）：booklib build --device=… 会把这些书判为过期并重建");
+                println!("  简介、标签、封面在生成产物时补进书里（书里已有的不动）：booklib build 会把这些书判为过期并重建");
             }
         }
         "remove" => {
@@ -420,9 +428,9 @@ fn main() {
     }
 }
 
-/// 书库和产物的"有没有变化"戳（`sync --watch` 用）：`masters/` 与各条目目录、`output/` 与各设备目录的修改时间，
-/// 以及 `--out` 目录在不在（阅读器插上了）。条目、产物的增删改都会改它们所在目录的修改时间（原子写是改名）。
-fn change_stamp(lib: &Library, devices: &[&Profile], out: Option<&Path>) -> u64 {
+/// 书库的"有没有变化"戳（`sync --watch` 用）：`masters/` 与各条目目录、`output-state/` 的修改时间。条目的增删改
+/// （原件移动改名后改记位置、`meta` 找来封面）、生成记录的改动都会改它们所在目录的修改时间（原子写是改名）。
+fn change_stamp(lib: &Library) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let mut dir = |p: &Path, deep: bool| {
@@ -435,12 +443,6 @@ fn change_stamp(lib: &Library, devices: &[&Profile], out: Option<&Path>) -> u64 
         }
     };
     dir(&lib.root().join("masters"), true);
-    dir(&lib.root().join("output"), true);
-    if let Some(o) = out {
-        for d in devices {
-            let p = if devices.len() == 1 { o.to_path_buf() } else { o.join(&d.id) };
-            p.is_dir().hash(&mut h);
-        }
-    }
+    dir(&lib.root().join("output-state"), false);
     h.finish()
 }
