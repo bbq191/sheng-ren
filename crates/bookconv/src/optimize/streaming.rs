@@ -24,7 +24,9 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）。
     let raw = crate::epubzip::read_skeleton(&mut archive)?.entries;
     let prep = prepare_entries(raw, opts, bytes_before)?;
-    let (screen, comic_margin, grayscale, is_comic_book) = (opts.screen, opts.comic_margin, opts.grayscale, prep.is_comic_book);
+    let (comic_margin, grayscale, is_comic_book) = (opts.comic_margin, opts.grayscale, prep.is_comic_book);
+    // 漫画页按漫画的阅读范围排（xochitl 设成页边距 1 后更宽），其它图按 EPUB 的阅读范围缩
+    let screen = if is_comic_book { opts.comic_screen.unwrap_or(opts.screen) } else { opts.screen };
     let entries = &prep.entries;
     // 漫画里可能换格式的页（GIF/WebP）：处理后按实际格式改 manifest 的 media-type。
     let may_retype = |name: &str| is_comic_book && matches!(crate::util::image_ext_of(name).as_str(), "gif" | "webp");
@@ -122,6 +124,9 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
             Err(e) => e.into_bytes(),
         };
         crate::epubzip::put_entry(&mut zw, name, deflated, &bytes)?;
+    }
+    if let (true, Some(m)) = (is_comic_book, opts.comic_reader_margins) {
+        crate::epubzip::put_entry(&mut zw, READER_MARGINS_MARKER, deflated, m.to_string().as_bytes())?;
     }
     crate::epubzip::put_entry(&mut zw, OPTIMIZE_MARKER, deflated, marker_value(opts.wash.is_some()).as_bytes())?;
     // `finish()` 只保证写完中央目录，底下 `BufWriter` 自己的缓冲区不一定落盘——显式 flush，

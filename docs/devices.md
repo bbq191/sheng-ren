@@ -8,7 +8,7 @@
 | 模式 | 给谁读 | 屏幕 | 阅读范围 | 黑白 / 彩色 |
 |---|---|---|---|---|
 | `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader | 1264×1680，300ppi | 1264×1680 | 黑白（漫画转 256 级灰度） |
-| `xochitl` | reMarkable Paper Pro Move 自带的阅读器 | 954×1696，264ppi | 842×1455 | 彩色 |
+| `xochitl` | reMarkable Paper Pro Move 自带的阅读器 | 954×1696，264ppi | 842×1455（漫画 952×1457） | 彩色 |
 
 ```toml
 # crates/profile/profiles/koreader.toml
@@ -31,6 +31,9 @@ height = 1680
   受限的那条边两侧正好这么宽；须小于阅读范围短边的 1/4。用户要的是**离屏幕边缘** 1px：阅读范围等于整屏时（`koreader`）才是这个意思。
 - `comic_fullpage = true`（可选，缺省 false）：漫画纯图页的 `<body>` 加 `eink-fullpage`（`line-height:0;font-size:0`），KOReader 里整页图才能用满整屏
   （不加时图所在那一行的行高在下面留 10px、字号在行首多出 2px）。xochitl 不需要：它的留白 CSS 改不动（见下）。
+- `comic_reader_margins = 1`（可选）：漫画在阅读器里要设成的页边距。写了就给漫画写标记 `META-INF/eink-reader-margins`（`xochitl/comic-margins.sh` 凭它登记），
+  文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（`bookconv::comicpad`）。xochitl 用。
+- `[comic_readable]`（可选）：漫画页排版用的阅读范围（设成上面的页边距后实测），没写就用 `[readable.epub]`。
   `notes`、`comic_margin`、`comic_fullpage` 都进指纹，改了书库里的书都算过期。
 - 写了不认识的字段、不认识的格式会报错，防止拼错后被悄悄忽略。
 - `[readable.epub]` 不能超过屏幕尺寸。
@@ -60,7 +63,7 @@ height = 1680
 | 模式 | 阅读范围 | 依据 |
 |---|---|---|
 | `koreader` | 1264×1680（整屏） | 2026-09-29 用测量书（打上"漫画"标签）在**本机 KOReader** 上按 1264×1680 离屏渲染、套我们的漫画方案截屏实测（`koreader/snap.sh` + `readable-measure`）：页边距 0、隐藏状态栏并收回它的高度后，KOReader 左右各留 2px、底部留 10px——后来查明是图所在那一行的行高和字号撑出来的，页面设 `line-height:0; font-size:0` 后能用满 1264×1680（见 [koreader.md](koreader.md)）。漫画纯图页已经这样写（`comic_fullpage`，v29），全本截图和页面图逐像素一致。**掌阅、Kindle 真机上的 KOReader 还没实测**。图文混排时不适用 |
-| `xochitl` | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 在 xochitl 上实测）。改了页边距要跟着改（28 档 → 898 宽；1 档 → 952 宽）。2026-09-29 读 xochitl 排出的 PDF 核实：整页图原像素放在 (56, 112)，离屏幕左右 56、上 112、下 129px；比这大的图缩到宽 842、高最多约 1457；`@page{margin:0}`、负外边距、去行高都不起作用——**离屏幕边缘 1px 在 xochitl 上做不到**，只有页边距设置能缩左右 |
+| `xochitl` | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 在 xochitl 上实测）。改了页边距要跟着改（28 档 → 898 宽；1 档 → 952 宽）。2026-09-29 读 xochitl 排出的 PDF 核实：整页图原像素放在 (56, 112)，离屏幕左右 56、上 112、下 129px；比这大的图缩到宽 842、高最多约 1457；`@page{margin:0}`、负外边距、去行高都不起作用，只有页边距设置能缩左右。**漫画用 952×1457**（`[comic_readable]`）：页边距 1（界面上没有这档，靠 Move 上的页边距代理设，见[用法](usage.md#move-上的漫画登记页边距)）时图框左上角在 (1, 112)、宽 952、高 1457，2026-09-29 真机排出的 PDF 里 952×1457 的页原样显示、离屏幕左右各 1px、上 112、下 127px（上下 xochitl 固定留，做不到 1px）；文字页、混排页的字离边约 58px。界面最小档 28 时是 898 宽、左边 28、图靠左 |
 
 ## xochitl 怎么存 EPUB 和阅读进度（2026-09-29 真机摸底，只读）
 
@@ -110,6 +113,6 @@ cargo run --release -p bookconv --bin readable-measure -- 竖长.png 横宽.png
 
 | 阅读器 | 实测行为 |
 |---|---|
-| xochitl（Move） | 正文链接只认同一文件内的 `#锚点`；不认行内样式；NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录；页边距 1 时带 class 的 `<body>` 里图片会被吃掉约 20pt 宽 |
+| xochitl（Move） | 正文链接只认同一文件内的 `#锚点`；不认行内样式；NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录；页边距 1 时带 class 的 `<body>` 里图片会被吃掉约 20pt 宽（漫画的图页因此去掉 body 的类）；`padding` 一律不认，`margin` 用 pt 生效；页边距设置只对单本书 |
 | 掌阅自带阅读器 | 只放一张大图的页面，图片铺满整屏（`koreader` 的阅读范围就是按这个量的） |
 | KOReader | 「避免章末空白页」样式调整（`docfragment_page-break-before_avoid`）开着时，拆开的文件会连成一片，节与节不分页；配置里已撤掉，2026-09-29 只在电脑上的 KOReader 里确认过，见 [KOReader 配置](koreader.md#文字书方案)。不读 OPF 的 `page-progression-direction`（漫画从右往左靠配置档设） |

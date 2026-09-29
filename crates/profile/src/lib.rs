@@ -86,6 +86,12 @@ pub struct Profile {
     /// 让整页图能用满整个阅读区。KOReader 要它：图在一行里时行高在下面留 10px、字号在行首多出 2px（2026-09-29 本机截图）。
     /// TOML 里不写是 `false`。
     pub comic_fullpage: bool,
+    /// 漫画在阅读器里要设成的页边距（xochitl 设置里的"页边距"，单位同 `.content` 的 `margins`）。`Some` 时：优化器给漫画写
+    /// `META-INF/eink-reader-margins`（值就是它），`xochitl/comic-margins.sh` 凭它登记、Move 上的页边距代理在第一次开书时设好；
+    /// 漫画的文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（见 `bookconv::comicpad`）。
+    pub comic_reader_margins: Option<u32>,
+    /// 漫画的真实可阅读范围（设成 `comic_reader_margins` 后实测）；没写就和 EPUB 的一样。
+    comic_readable: Option<Screen>,
 }
 
 #[derive(Deserialize)]
@@ -102,13 +108,15 @@ struct ProfileFile {
     comic_margin: Option<u32>,
     #[serde(default)]
     comic_fullpage: bool,
+    comic_reader_margins: Option<u32>,
+    comic_readable: Option<Screen>,
 }
 
 impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_fullpage: f.comic_fullpage };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_fullpage: f.comic_fullpage, comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable };
         p.validate()?;
         Ok(p)
     }
@@ -138,6 +146,14 @@ impl Profile {
                 return Err(format!("profile {}: readable {fmt:?} 须非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
             }
         }
+        if let Some(r) = self.comic_readable {
+            if r.width == 0 || r.height == 0 || r.width > width || r.height > height {
+                return Err(format!("profile {}: comic_readable 须非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
+            }
+            if self.comic_margin >= r.width.min(r.height) / 4 {
+                return Err(format!("profile {}: comic_margin {} 须小于漫画阅读范围短边的 1/4（{}x{}）", self.id, self.comic_margin, r.width, r.height));
+            }
+        }
         // 漫画白边按每种格式的阅读范围（没有实测值的格式用屏幕）都要够小：留给图的框至少是阅读范围的一半
         for fmt in &self.formats {
             let r = self.readable(*fmt);
@@ -151,6 +167,11 @@ impl Profile {
     /// 产物为 `format` 时的真实可阅读范围：有内置实测值用实测值，否则用标称屏幕。
     pub fn readable(&self, format: Format) -> Screen {
         self.readable.get(&format).copied().unwrap_or(self.screen)
+    }
+
+    /// 漫画页排版用的阅读范围：`comic_readable`，没写就是 EPUB 的阅读范围。
+    pub fn comic_readable(&self) -> Screen {
+        self.comic_readable.unwrap_or_else(|| self.readable(Format::Epub))
     }
 
     /// `format` 的阅读范围是不是实测内置的（`false` = 退回了标称屏幕）。
@@ -237,8 +258,10 @@ mod tests {
         assert_eq!(x.readable(Format::Epub), Screen { width: 842, height: 1455 }, "EPUB 用实测阅读范围");
         assert!(x.color);
         assert_eq!(x.formats, [Format::Epub]);
-        assert_eq!((k.comic_margin, x.comic_margin), (1, 1));
+        assert_eq!((k.comic_margin, x.comic_margin), (1, 0));
         assert_eq!((k.comic_fullpage, x.comic_fullpage), (true, false));
+        assert_eq!((k.comic_reader_margins, x.comic_reader_margins), (None, Some(1)));
+        assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1264, height: 1680 }, Screen { width: 952, height: 1457 }));
         assert!(get("nope").is_none());
     }
 

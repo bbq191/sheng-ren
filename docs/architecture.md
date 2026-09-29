@@ -38,6 +38,7 @@
 | `imgopt` / `imgpool` | 图片处理（缩放、漫画单趟处理、灰度）与并发池 |
 | `opfmeta` | EPUB 元数据（Dublin Core、封面）的读取与改写：只动 OPF 和封面图，其余条目原样拷。`ebook-meta` 命令和书库生成时补简介/标签/封面共用 |
 | `comic_detect` | 判断一本书是不是漫画 |
+| `comicpad` | 漫画设成阅读器页边距 1 后各页的补救（文字页、混排页留边，图页去掉 body 的类） |
 | `check` | EPUB 质量门；按路径检查（`check_epub_file`）时图片不读进内存 |
 | `epub` / `epubzip` | EPUB 组装（CBZ 转换、网页抓取用，写一份资源释放一份）与读取；zip 内路径工具：`resolve_href`（链接 → zip 路径与锚点）、`href_to`（生成相对 href，百分号编码） |
 | `ncx` | NCX 目录解析、页码分段兜底书签；`rewrite_content_srcs` 逐条改目标，`replace_nav_map` 只换 navMap、其余原样 |

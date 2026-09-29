@@ -5,9 +5,11 @@ color = true
 formats = ["epub"]
 # 注释：点标号跳到章末、用阅读器的"返回"回来（xochitl 没有弹窗，只认同文件 #锚点）
 notes = "jump"
-# 漫画页图到可阅读范围四边的白边（像素）：图保比缩放进"阅读范围 − 2×白边"的框、居中，受限的那条边两侧正好这么宽，
-# 另一条边两侧更多（用户 2026-09-29 定：尽量贴边、留 1px）。不写缺省也是 1；须小于阅读范围短边的 1/4。
-comic_margin = 1
+# 漫画：用户要离屏幕边缘 1px（2026-09-29）。xochitl 设置里的页边距界面上只有 28/56/112 三档，但阅读器内部接口能设成 1，
+# Move 上装的页边距代理在第一次开书时替我们设（xochitl/comic-margins.sh 登记）。设成 1 后 xochitl 自己就在左右各留 1px，
+# 所以画布里不再留白边（comic_margin = 0）。上 112px、下 127px 是 xochitl 固定留的，改不了。
+comic_margin = 0
+comic_reader_margins = 1
 
 [screen]
 width = 954
@@ -20,3 +22,9 @@ height = 1696
 [readable.epub]
 width = 842
 height = 1455
+
+# 漫画设成页边距 1 后的可阅读范围（2026-09-29 Move 真机，读 xochitl 排出的 PDF 里图的摆放矩阵）：
+# 图框左上角在 (1, 112)，宽最多 952、高最多 1457（高和页边距无关；默认 56 档下 842×1455 的图原样显示，但比它高的图也缩到 1457 高）。
+[comic_readable]
+width = 952
+height = 1457
