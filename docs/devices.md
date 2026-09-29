@@ -31,6 +31,8 @@ height = 1680
   受限的那条边两侧正好这么宽；须小于阅读范围短边的 1/4。用户要的是**离屏幕边缘** 1px：阅读范围等于整屏时（`koreader`）才是这个意思。
 - `comic_fullpage = true`（可选，缺省 false）：漫画纯图页的 `<body>` 加 `eink-fullpage`（`line-height:0;font-size:0`），KOReader 里整页图才能用满整屏
   （不加时图所在那一行的行高在下面留 10px、字号在行首多出 2px）。xochitl 不需要：它的留白 CSS 改不动（见下）。
+- `note_icons = "keep"` 或 `"number"`（可选，缺省 keep）：只有小图标的注释标号保留图标（限一个字高）还是换成上标数字。xochitl 用 number：
+  只有图的链接点不了、CSS 限不住图标大小。进指纹（注释方式后面带 `#`）。
 - `comic_reader_margins = 1`（可选）：漫画在阅读器里要设成的页边距。写了就给漫画写标记 `META-INF/eink-reader-margins`（`xochitl/comic-margins.sh` 凭它登记），
   文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（`bookconv::comicpad`）。xochitl 用。
 - `[comic_readable]`（可选）：漫画页排版用的阅读范围（设成上面的页边距后实测），没写就用 `[readable.epub]`。
@@ -113,6 +115,6 @@ cargo run --release -p bookconv --bin readable-measure -- 竖长.png 横宽.png
 
 | 阅读器 | 实测行为 |
 |---|---|
-| xochitl（Move） | 正文链接只认同一文件内的 `#锚点`；不认行内样式；NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录；页边距 1 时带 class 的 `<body>` 里图片会被吃掉约 20pt 宽（漫画的图页因此去掉 body 的类）；`padding` 一律不认，`margin` 用 pt 生效；页边距设置只对单本书 |
+| xochitl（Move） | 正文链接只认同一文件内的 `#锚点`；不认行内样式；NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录；页边距 1 时带 class 的 `<body>` 里图片会被吃掉约 20pt 宽（漫画的图页因此去掉 body 的类）；`padding` 一律不认，`margin` 用 pt 生效；页边距设置只对单本书；只有图、没有字的链接点了没反应，外链 CSS 的 `height:1em` 限不住图片 |
 | 掌阅自带阅读器 | 只放一张大图的页面，图片铺满整屏（`koreader` 的阅读范围就是按这个量的） |
 | KOReader | 「避免章末空白页」样式调整（`docfragment_page-break-before_avoid`）开着时，拆开的文件会连成一片，节与节不分页；配置里已撤掉，2026-09-29 只在电脑上的 KOReader 里确认过，见 [KOReader 配置](koreader.md#文字书方案)。不读 OPF 的 `page-progression-direction`（漫画从右往左靠配置档设） |

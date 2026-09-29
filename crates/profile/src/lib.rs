@@ -65,6 +65,17 @@ pub enum Notes {
     Jump,
 }
 
+/// 注释标号只有一个小图标（多看等书）时怎么办。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteIcons {
+    /// 保留原图标，限成一个字高（KOReader：认 CSS 限高，图标链接也能点开弹窗）。
+    #[default]
+    Keep,
+    /// 换成上标数字（xochitl：只有图的链接点了没反应，CSS 也限不住图标大小）。
+    Number,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
     /// 文件名（不含 `.toml`），命令行与配置里用的标识。
@@ -77,6 +88,8 @@ pub struct Profile {
     pub formats: Vec<Format>,
     /// 注释的呈现方式。
     pub notes: Notes,
+    /// 只有图标的注释标号怎么办（TOML 里不写是 `keep`）。
+    pub note_icons: NoteIcons,
     /// 各格式在阅读器里的真实可阅读范围（像素，竖屏）；没有的格式用 `screen`。
     readable: BTreeMap<Format, Screen>,
     /// 漫画页图到可阅读范围四边的白边（像素）：图保比缩放进"阅读范围 − 2×白边"的框，受限的那条边两侧正好是这么宽。
@@ -104,6 +117,8 @@ struct ProfileFile {
     formats: Vec<Format>,
     notes: Notes,
     #[serde(default)]
+    note_icons: NoteIcons,
+    #[serde(default)]
     readable: BTreeMap<Format, Screen>,
     comic_margin: Option<u32>,
     #[serde(default)]
@@ -116,7 +131,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_fullpage: f.comic_fullpage, comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_fullpage: f.comic_fullpage, comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable };
         p.validate()?;
         Ok(p)
     }
@@ -260,6 +275,7 @@ mod tests {
         assert_eq!(x.formats, [Format::Epub]);
         assert_eq!((k.comic_margin, x.comic_margin), (1, 0));
         assert_eq!((k.comic_fullpage, x.comic_fullpage), (true, false));
+        assert_eq!((k.note_icons, x.note_icons), (NoteIcons::Keep, NoteIcons::Number));
         assert_eq!((k.comic_reader_margins, x.comic_reader_margins), (None, Some(1)));
         assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1264, height: 1680 }, Screen { width: 952, height: 1457 }));
         assert!(get("nope").is_none());
