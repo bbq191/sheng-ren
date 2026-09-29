@@ -7,24 +7,22 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Bundle;
 import android.os.SystemClock;
-import android.provider.Settings;
 import android.widget.Toast;
 
 import java.util.List;
 
 /**
- * 桌面（HOME）入口：每次开机后第一次"回桌面"（也就是开机）打开 KOReader；之后再回桌面（在 KOReader 里退出等）打开别的桌面
- * （掌阅原来的）。掌阅没有主页键（2026-09-29），不能靠按键逃生，所以做成"每次开机只自动打开一次"，和 Kindle 上一样。
- * 这次开机打开过没有，按系统的开机次数记在自己的设置里，进程被系统杀掉也不会重复打开；开机 3 分钟后一律进别的桌面。
- * 找不到 KOReader 时也打开别的桌面，不会卡在这里。自己不显示任何界面。
+ * 桌面（HOME）入口：系统要"回桌面"时（开机、在 KOReader 里退出）打开 KOReader——KOReader 就是桌面（用户 2026-09-29）。
+ * 出口：KOReader 被这里打开后 10 秒内又回到桌面（刚重开就又退出一次）→ 打开别的桌面（掌阅原来的）。
+ * 所以"连着退出两次"就能真正退出 KOReader（下发配置前要这样），KOReader 一启动就崩也不会死循环。
+ * 掌阅没有主页键，另一个出口是从屏幕顶端下拉系统控制中心 → 设置。找不到 KOReader 时也打开别的桌面。自己不显示任何界面。
  */
 public class HomeActivity extends Activity {
     private static final String[] KOREADER = {"org.koreader.launcher", "org.koreader.launcher.fdroid"};
-    private static final String PREFS = "boot";
-    private static final String KEY_BOOT = "koreader_opened_boot";
-    /** 开机超过这么久就不再自动打开 KOReader（保险：万一认不出"这次开机打开过"，也不会一直把人关在 KOReader 里）。 */
-    private static final long BOOT_WINDOW_MS = 3 * 60_000;
-    private static boolean openedInProcess = false;
+    private static final String PREFS = "home";
+    /** 上次由这里打开 KOReader 的时刻（开机以来的毫秒）。 */
+    private static final String KEY_LAST_OPEN = "koreader_opened_at";
+    private static final long QUICK_EXIT_MS = 10_000;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -39,36 +37,21 @@ public class HomeActivity extends Activity {
     }
 
     private void go() {
-        String boot = bootId();
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        // 取不到开机次数时只能靠进程里的记号（进程被杀会丢，但还有开机 3 分钟的窗口兜底）
-        boolean openedThisBoot = boot == null ? openedInProcess : boot.equals(prefs.getString(KEY_BOOT, ""));
-        boolean justBooted = SystemClock.elapsedRealtime() < BOOT_WINDOW_MS;
-        if (!openedThisBoot && justBooted) {
-            // 先记下再打开：就算打开时进程被杀，下次回桌面也不会再开
-            openedInProcess = true;
-            if (boot != null) {
-                prefs.edit().putString(KEY_BOOT, boot).commit();
-            }
-            if (openKOReader()) {
-                finish();
-                return;
+        long now = SystemClock.elapsedRealtime();
+        long last = prefs.getLong(KEY_LAST_OPEN, -1);
+        // last > now：上次记的是上一次开机的时刻（开机后计时从 0 起），不算
+        boolean quickExit = last >= 0 && last <= now && now - last < QUICK_EXIT_MS;
+        if (quickExit) {
+            prefs.edit().putLong(KEY_LAST_OPEN, -1).commit();
+            openOtherHome();
+        } else {
+            prefs.edit().putLong(KEY_LAST_OPEN, now).commit();
+            if (!openKOReader()) {
+                openOtherHome();
             }
         }
-        openOtherHome();
         finish();
-    }
-
-    /**
-     * 这次开机的标识（取不到返回 null）：系统的开机次数（Settings.Global.BOOT_COUNT，安卓 7 起，不要权限）。
-     * 1.1 版用"当前时间 − 开机后经过的时间"算开机时刻，开机后联网校时一跳就当成新的一次开机，KOReader 退出后又被打开（2026-09-29 掌阅实测）。
-     */
-    private String bootId() {
-        try {
-            return "count:" + Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT);
-        } catch (Settings.SettingNotFoundException | RuntimeException e) {
-            return null;
-        }
     }
 
     /** 打开 KOReader（已经开着就切回去，读到的位置不丢）。 */
