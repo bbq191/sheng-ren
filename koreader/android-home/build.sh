@@ -28,11 +28,11 @@ if [[ ! -f $KS ]]; then
 fi
 
 "$BT/aapt2" link --manifest "$here/AndroidManifest.xml" -I "$JAR" -o "$out/base.apk" \
-  --min-sdk-version 21 --target-sdk-version 34 --version-code 2 --version-name 1.1
+  --min-sdk-version 24 --target-sdk-version 34 --version-code 3 --version-name 1.2
 mapfile -t srcs < <(find "$here/src" -name '*.java')
 javac -nowarn -Xlint:-options -source 11 -target 11 -classpath "$JAR" -d "$out/classes" "${srcs[@]}"
 mapfile -t classes < <(find "$out/classes" -name '*.class')
-"$BT/d8" --lib "$JAR" --min-api 21 --output "$out/dex" "${classes[@]}"
+"$BT/d8" --lib "$JAR" --min-api 24 --output "$out/dex" "${classes[@]}"
 cp "$out/base.apk" "$out/unsigned.apk"
 (cd "$out/dex" && zip -qj "$out/unsigned.apk" classes.dex)
 "$BT/zipalign" -f 4 "$out/unsigned.apk" "$out/aligned.apk"
