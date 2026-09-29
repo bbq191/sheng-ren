@@ -214,6 +214,16 @@ koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-
 - 停掉自带界面后 KOReader 看起来能联网（登录官方同步服务器时报的是"服务器错误"而不是"没有网络"），登录自己的服务器成功后才算确认。有人报告停界面的做法在某些机型上启动失败，出问题就先关掉自启。
 - **系统自动更新没有屏蔽**（用户定：自己控制联网）。自动更新可能让越狱和 KOReader 失效，联网时留意。
 
+## 阅读背景
+
+`koreader/backgrounds/`（2026-09-29，用户要"再生纸质感"）：`make.py` 生成可无缝平铺的灰度纹理，`apply.sh` 拷到设备的 `backgrounds/`，
+设备层配置 `cre_background_image` 指向它（KOReader 菜单里没有这个设置；路径是设备上的绝对路径，所以写在 `devices/<id>/`）。只对 EPUB 等流式排版的书有效。
+
+- **底色保持纯白**：墨水屏本来就是类纸的漫反射，整体压暗只会降低文字对比度。纹理只有细纤维和小杂点，用屏幕能精确显示的几级浅灰（238、221、少量 204），
+  16 级灰度屏不会把它抖动成斑块。
+- `recycled-light.png`（非白像素 1%，缺省用它）、`recycled-medium.png`（2.4%）。想换：改 `devices/<id>/settings.reader.patch.lua` 里的文件名再 apply；不想要：删掉那一行。
+- 本机 KOReader 截图确认能生效（`snap.sh --extra=补丁.lua` 可以叠加这类设置预览）；**真机上的观感要你看**。
+
 ## 字体
 
 配置里只写字体名（正文）或字体文件路径（状态栏）。每台设备要有的字体文件列在 `device.conf` 的 `FONTS`，缺的 `apply.sh` 从本机字体目录拷：

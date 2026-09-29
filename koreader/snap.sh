@@ -6,6 +6,7 @@
 #   截图写到 --out（缺省临时目录，结束时打印位置）：pNNN.png + info.txt（总页数、每页开头的 xpointer）。
 #   --links：不截图，检查前 --pages 页（缺省改成 100000，即全书）上的书内链接在 KOReader 里点了是弹窗还是跳转
 #            （用 KOReader 自己的注释判定），写 links.txt，末行合计。
+#   --extra=<补丁.lua>：在设备配置上再叠一层 settings.reader.lua 补丁（试新设置用，比如阅读背景）。
 # 隔离运行：KO_HOME 指向临时目录，里面是按 apply.sh 同样的顺序从空配置合并出来的设置（个人 → 方案 → 设备 → 预设），
 # 不碰本机 KOReader 的设置；书先复制到临时目录，KOReader 写的 .sdr 不会落到原书旁边。窗口不显示（SDL offscreen）。
 # 要本机装了 KOReader（/usr/lib/koreader 或 $KOREADER_HOME）和 luajit。
@@ -15,13 +16,14 @@ KO_HERE=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=lib.sh
 source "$KO_HERE/lib.sh"
 
-book='' dev=ireader-ocean5-pro pages='' out='' links=0
+book='' dev=ireader-ocean5-pro pages='' out='' links=0 extra=''
 for a in "$@"; do
   case $a in
     --pages=*) pages=${a#--pages=} ;;
     --out=*) out=${a#--out=} ;;
     --links) links=1 ;;
-    -h | --help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --extra=*) extra=${a#--extra=} ;;
+    -h | --help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "不认识的参数 $a" >&2; exit 2 ;;
     *) if [[ -z $book ]]; then book=$a; else dev=$a; fi ;;
   esac
@@ -44,6 +46,7 @@ ko_merge_all "$tmp/home" "$dev"
 # 在开书时发的设置事件全被这个提示框吞掉，截出来的漫画还是文字书的样子（2026-09-29 查实）。设备上只在第一次建库时弹一次。
 printf 'return { ["plugins_disabled"] = { ["coverbrowser"] = true } }\n' >"$tmp/snap.patch.lua"
 luajit "$KO_HERE/merge.lua" "$tmp/home/settings.reader.lua" "$tmp/snap.patch.lua" >/dev/null || [[ $? -eq 10 ]]
+if [[ -n $extra ]]; then luajit "$KO_HERE/merge.lua" "$tmp/home/settings.reader.lua" "$extra" >/dev/null || [[ $? -eq 10 ]]; fi
 cp "$KO_HERE"/patches/*.lua "$KO_HERE/snap/2-snap.lua" "$tmp/home/patches/" # 和设备上一样装上我们的用户补丁
 cp "$book" "$tmp/book/"
 [[ -n $out ]] || out=$(mktemp -d)
