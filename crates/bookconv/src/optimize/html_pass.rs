@@ -123,6 +123,29 @@ pub(super) fn fix_cover_aspect(html_text: &str) -> String {
         .replace("preserveAspectRatio='none'", "preserveAspectRatio='xMidYMid meet'")
 }
 
+/// 漫画纯图页（`<body>` 里有图、没有可见文字）的 `<body>` 加上 `eink-fullpage` 类（`eink-wash.css`：`line-height:0;font-size:0`）。
+/// KOReader 把图排在一行里：这一行的行高在图下面留出 10px、字号在行首多出约 2px，整页图最大只有 1260×1670（1264×1680 屏）；
+/// 行高、字号归零后整页图按原像素用满整屏（2026-09-29 本机 KOReader 截图）。只加在没有字的页上：`font-size:0` 会把字藏掉。
+/// 子元素靠继承拿到 0（清洗层已去掉绝对单位的行高、字号，相对单位乘 0 还是 0），不用后代选择器——xochitl 的 CSS 解析器
+/// 只认单个裸选择器。不是纯图页、已经有这个类、没有 `<body>` 时返回 `None`。
+pub(super) fn mark_fullpage(html_text: &str) -> Option<String> {
+    const CLASS: &str = "eink-fullpage";
+    let body = html::tags(html_text).find(|t| t.is_start() && t.is("body"))?;
+    let rest = &html_text[body.end..];
+    let has_img = html::tags(rest).any(|t| t.is_start() && (crate::wash::opf::is_local(t.name, "img") || crate::wash::opf::is_local(t.name, "image")));
+    if !has_img || !html::plain_text(rest).is_empty() {
+        return None;
+    }
+    let tag = &html_text[body.start..body.end];
+    let old = html::attrs(tag).iter().find(|a| a.is("class")).map(|a| a.value.trim());
+    let class = match old {
+        Some(c) if c.split_ascii_whitespace().any(|x| x == CLASS) => return None,
+        Some(c) if !c.is_empty() => format!("{c} {CLASS}"),
+        _ => CLASS.to_string(),
+    };
+    Some(format!("{}{}{}", &html_text[..body.start], html::set_attr(tag, "class", &class), rest))
+}
+
 /// ASCII 不分大小写地包含。
 fn contains_ci(hay: &str, needle: &str) -> bool {
     hay.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))

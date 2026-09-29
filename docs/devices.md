@@ -7,7 +7,7 @@
 
 | 模式 | 给谁读 | 屏幕 | 阅读范围 | 黑白 / 彩色 |
 |---|---|---|---|---|
-| `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader | 1264×1680，300ppi | 1260×1670 | 黑白（漫画转 256 级灰度） |
+| `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader | 1264×1680，300ppi | 1264×1680 | 黑白（漫画转 256 级灰度） |
 | `xochitl` | reMarkable Paper Pro Move 自带的阅读器 | 954×1696，264ppi | 842×1455 | 彩色 |
 
 ```toml
@@ -28,7 +28,10 @@ height = 1680
 
 - `notes = "popup"` 或 `"jump"`：注释在这个阅读器里弹窗（KOReader）还是跳转（xochitl），见[排版规则](typesetting.md)。
 - `comic_margin = 1`（可选，缺省 1）：漫画页图到可阅读范围四边的白边（像素）。图保比缩放进"阅读范围 − 2×白边"的框、居中，
-  受限的那条边两侧正好这么宽；须小于阅读范围短边的 1/4。`notes`、`comic_margin` 都进指纹，改了书库里的书都算过期。
+  受限的那条边两侧正好这么宽；须小于阅读范围短边的 1/4。用户要的是**离屏幕边缘** 1px：阅读范围等于整屏时（`koreader`）才是这个意思。
+- `comic_fullpage = true`（可选，缺省 false）：漫画纯图页的 `<body>` 加 `eink-fullpage`（`line-height:0;font-size:0`），KOReader 里整页图才能用满整屏
+  （不加时图所在那一行的行高在下面留 10px、字号在行首多出 2px）。xochitl 不需要：它的留白 CSS 改不动（见下）。
+  `notes`、`comic_margin`、`comic_fullpage` 都进指纹，改了书库里的书都算过期。
 - 写了不认识的字段、不认识的格式会报错，防止拼错后被悄悄忽略。
 - `[readable.epub]` 不能超过屏幕尺寸。
 - 阅读范围以**截图的像素**为准。截图分辨率和标称的 `[screen]` 不一定是同一个坐标系（Kindle 的截图是 1272×1696，标称 1264×1680），量出来的数照截图写。
@@ -56,8 +59,8 @@ height = 1680
 
 | 模式 | 阅读范围 | 依据 |
 |---|---|---|
-| `koreader` | 1260×1670 | 2026-09-29 用测量书（打上"漫画"标签）在**本机 KOReader** 上按 1264×1680 离屏渲染、套我们的漫画方案截屏实测（`koreader/snap.sh` + `readable-measure`）：页边距 0、隐藏状态栏并收回它的高度后，KOReader 左右各留 2px、底部留 10px——后来查明是图所在那一行的行高和字号撑出来的，页面设 `line-height:0; font-size:0` 后能用满 1264×1680（见 [koreader.md](koreader.md)）。**掌阅、Kindle 真机上的 KOReader 还没实测**。图文混排时不适用 |
-| `xochitl` | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 在 xochitl 上实测）。改了页边距要跟着改（28 档 → 898 宽；1 档 → 952 宽） |
+| `koreader` | 1264×1680（整屏） | 2026-09-29 用测量书（打上"漫画"标签）在**本机 KOReader** 上按 1264×1680 离屏渲染、套我们的漫画方案截屏实测（`koreader/snap.sh` + `readable-measure`）：页边距 0、隐藏状态栏并收回它的高度后，KOReader 左右各留 2px、底部留 10px——后来查明是图所在那一行的行高和字号撑出来的，页面设 `line-height:0; font-size:0` 后能用满 1264×1680（见 [koreader.md](koreader.md)）。漫画纯图页已经这样写（`comic_fullpage`，v29），全本截图和页面图逐像素一致。**掌阅、Kindle 真机上的 KOReader 还没实测**。图文混排时不适用 |
+| `xochitl` | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 在 xochitl 上实测）。改了页边距要跟着改（28 档 → 898 宽；1 档 → 952 宽）。2026-09-29 读 xochitl 排出的 PDF 核实：整页图原像素放在 (56, 112)，离屏幕左右 56、上 112、下 129px；比这大的图缩到宽 842、高最多约 1457；`@page{margin:0}`、负外边距、去行高都不起作用——**离屏幕边缘 1px 在 xochitl 上做不到**，只有页边距设置能缩左右 |
 
 ## xochitl 怎么存 EPUB 和阅读进度（2026-09-29 真机摸底，只读）
 

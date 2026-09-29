@@ -10,14 +10,17 @@ notes = "popup"
 # 另一条边两侧更多（用户 2026-09-29 定：尽量贴边、留 1px）。不写缺省也是 1；须小于阅读范围短边的 1/4。
 comic_margin = 1
 
+# 漫画纯图页去掉行高和字号，整页图才能用满整屏（见 comic_fullpage 字段说明；2026-09-29 本机 KOReader 截图：不去时图最大 1260×1670，
+# 行高在下面留 10px、字号在行首多出 2px；去掉后 1264×1680 原样显示，1px 白边离屏幕四边正好 1px）。
+comic_fullpage = true
+
 [screen]
 width = 1264
 height = 1680
 
-# 真实可阅读范围（像素，竖屏）：2026-09-29 用测量书（readable-probe，打上"漫画"标签）在本机 KOReader v2026.07.1 上按 1264×1680
-# 离屏渲染、套我们的漫画方案（页边距 0、隐藏状态栏，配 koreader/patches/2-footer-preset-reclaim.lua 收回状态栏的高度）截屏实测
-# （koreader/snap.sh + readable-measure）：左右各留 2px、底部留 10px，整页图最大 1260×1670。按这个排，KOReader 不再把整页图缩小一次。
-# 掌阅、Kindle 真机上的 KOReader 还没实测（真机屏幕像素、状态栏字体不同，可能差几个像素）。
+# 真实可阅读范围（像素，竖屏）：2026-09-29 本机 KOReader v2026.07.1 按 1264×1680 离屏渲染、套我们的漫画方案（页边距 0、隐藏状态栏，
+# 配 koreader/patches/2-footer-preset-reclaim.lua 收回状态栏的高度）截屏实测（koreader/snap.sh）：纯图页去掉行高和字号后整屏可用。
+# 所以漫画的 1px 白边就是到屏幕边缘的 1px（用户 2026-09-29 定的意思）。掌阅、Kindle 真机上的 KOReader 还没实测。
 [readable.epub]
-width = 1260
-height = 1670
+width = 1264
+height = 1680

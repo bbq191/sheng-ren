@@ -236,7 +236,7 @@ booklib dedupe ~/Documents/ereader
 ### devices：列出阅读模式
 
 ```text
-koreader     KOReader（掌阅 Ocean 5 Pro、Kindle PW12 共用）  屏幕 1264×1680  阅读范围 1260×1670  黑白
+koreader     KOReader（掌阅 Ocean 5 Pro、Kindle PW12 共用）  屏幕 1264×1680  阅读范围 1264×1680  黑白
 xochitl      xochitl（reMarkable Paper Pro Move 原生阅读器）  屏幕 954×1696  阅读范围 842×1455  彩色
 ```
 
