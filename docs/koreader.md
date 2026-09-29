@@ -221,7 +221,7 @@ koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-
 
 - **底色保持纯白**：墨水屏本来就是类纸的漫反射，整体压暗只会降低文字对比度。纹理只有细纤维和小杂点，用屏幕能精确显示的几级浅灰（238、221、少量 204），
   16 级灰度屏不会把它抖动成斑块。
-- `recycled-light.png`（非白像素 1%，缺省用它）、`recycled-medium.png`（2.4%）。想换：改 `devices/<id>/settings.reader.patch.lua` 里的文件名再 apply；不想要：删掉那一行。
+- `recycled-light.png`（非白像素 1%）、`recycled-medium.png`（2.4%，现在用它：用户 2026-09-29 觉得浅的太淡）。想换：改 `devices/<id>/settings.reader.patch.lua` 里的文件名再 apply；不想要：删掉那一行。
 - 本机 KOReader 截图确认能生效（`snap.sh --extra=补丁.lua` 可以叠加这类设置预览）；**真机上的观感要你看**。
 
 ## 字体
