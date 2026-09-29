@@ -142,9 +142,17 @@ fn message(status: u16, text: &str) -> Response {
 pub fn handle(store: &mut Store, req: &Request, now: u64) -> Response {
     use serde_json::json;
     let authed = || -> Option<String> {
-        let user = req.headers.get("x-auth-user")?;
-        let key = req.headers.get("x-auth-key")?;
-        store.check(user, key).then(|| user.clone())
+        let (Some(user), Some(key)) = (req.headers.get("x-auth-user"), req.headers.get("x-auth-key")) else {
+            eprintln!("认证失败：请求没带 x-auth-user / x-auth-key");
+            return None;
+        };
+        if store.check(user, key) {
+            return Some(user.clone());
+        }
+        // 只记用户名和账号在不在（不记密钥），排查"用户名对不上"还是"密码对不上"用；进 journalctl -u kosync
+        let exists = store.users.contains_key(user.as_str());
+        eprintln!("认证失败：用户 {user:?}（{}）", if exists { "账号存在，密码不对" } else { "没有这个账号" });
+        None
     };
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/healthcheck") => reply(200, json!({ "state": "OK" })),
