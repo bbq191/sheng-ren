@@ -3,6 +3,9 @@ name = "xochitl（reMarkable Paper Pro Move 原生阅读器）"
 ppi = 264
 color = true
 formats = ["epub"]
+# 漫画页图到可阅读范围四边的白边（像素）：图保比缩放进"阅读范围 − 2×白边"的框、居中，受限的那条边两侧正好这么宽，
+# 另一条边两侧更多（用户 2026-09-29 定：尽量贴边、留 1px）。不写缺省也是 1；须小于阅读范围短边的 1/4。
+comic_margin = 1
 
 [screen]
 width = 954

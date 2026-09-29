@@ -63,14 +63,16 @@ impl Library {
         } else {
             format!("{PIPELINE_VERSION}c{}", bookconv::convert::CONVERT_VERSION)
         };
-        // 第 6 段原来是 AZW3 写出器的版本（2026-09-29 删掉），EPUB 产物一直是 "-"，保留占位，指纹格式不变
+        // 第 6 段原来是 AZW3 写出器的版本（2026-09-29 删掉），EPUB 产物一直是 "-"，保留占位。
+        // 阅读范围后面带上漫画白边（`+1`，profile 的 comic_margin，2026-09-29 起），改了白边的书都要重新生成
         let fingerprint = format!(
-            "{}|{cover}|{info}|{pipeline}|{}|-|{}|{}x{}|{}|{}",
+            "{}|{cover}|{info}|{pipeline}|{}|-|{}|{}x{}+{}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
             area.width,
             area.height,
+            device.comic_margin,
             if device.color { "color" } else { "gray" },
             format.ext(),
         );
@@ -220,7 +222,7 @@ impl Library {
             let epub = self.epub_input(meta, &input, &tmp)?;
             // 书里没有的封面、简介、标签，书库里有找来的：补进去
             let epub = crate::metadata::with_additions(self, meta, &epub, &tmp)?;
-            let opts = bookconv::optimize::OptimizeOpts { wash: Some(Default::default()), grayscale: !device.color, ..bookconv::optimize::OptimizeOpts::new(area) };
+            let opts = bookconv::optimize::OptimizeOpts { wash: Some(Default::default()), grayscale: !device.color, comic_margin: device.comic_margin, ..bookconv::optimize::OptimizeOpts::new(area) };
             bookconv::optimize::optimize_epub_file_streaming(&epub, &part, &opts, |_, _| {})?;
             let rep = bookconv::check::check_epub_file(&part)?;
             if !rep.ok {

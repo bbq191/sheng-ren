@@ -63,7 +63,10 @@ pub struct OptimizeOpts {
     /// 目标设备的真实可阅读范围（`profile::Profile::readable`），图片缩放与漫画补白都按它算。
     pub screen: crate::imgopt::Screen,
     /// 黑白屏设备（profile `color = false`）：漫画页转成单分量 8 位灰度（256 级，不抖动）。
+    /// `epub-optimize --keep-color` 关掉它（黑白屏也保留彩色，做灰度与彩色的对比）。
     pub grayscale: bool,
+    /// 漫画页图到阅读范围四边的白边（像素，profile 的 `comic_margin`，缺省 1），见 `imgopt::prepare_comic_page_for_epub`。
+    pub comic_margin: u32,
     pub wash: Option<crate::wash::WashOpts>,
     /// 脚注呈现方式（缺省 `Anchor`，书库与 `epub-optimize` 都用它）。
     pub footnote: FootnoteMode,
@@ -73,9 +76,9 @@ pub struct OptimizeOpts {
 }
 
 impl OptimizeOpts {
-    /// 只指定屏幕、其余取缺省（彩色、不清洗、`Anchor` 注释、保留原书翻页方向）。
+    /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, wash: None, footnote: FootnoteMode::default(), page_direction: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, wash: None, footnote: FootnoteMode::default(), page_direction: None }
     }
 }
 
