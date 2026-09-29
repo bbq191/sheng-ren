@@ -744,3 +744,31 @@
         assert!(has_remote_img(r#"<IMG class="x" src="//cdn/a.png">"#) && has_remote_img(r#"<img src="https://a/b.jpg"/>"#));
         assert!(!has_remote_img(r#"<img data-src="https://a/b.jpg" src="b.jpg"/>"#));
     }
+
+    /// 规范整理端到端（v27）：EPUB 2 书过完整优化 → OPF 3.0、有 nav、NCX 与 `spine toc` 保留且 dtb:uid 对上；
+    /// manifest 的 `properties` 按最终内容标（SVG 封面换成 img 后不再标 svg，正文里的内嵌 svg 标上）；两次产物逐字节相同。
+    #[test]
+    fn epub3_upgrade_is_deterministic_and_marks_final_properties() {
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf"><dc:title>书</dc:title><dc:creator opf:role="aut">某</dc:creator><dc:language>zh</dc:language><dc:identifier id="id">urn:uuid:1</dc:identifier></metadata><manifest><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="img" href="c.jpg" media-type="image/jpeg"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest><spine toc="ncx"><itemref idref="cover"/><itemref idref="c1"/></spine></package>"#;
+        let book = zip_book(&[
+            ("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+            ("OEBPS/content.opf", opf),
+            ("OEBPS/cover.xhtml", r#"<html><body><div><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 6 8"><image width="6" height="8" xlink:href="c.jpg"/></svg></div></body></html>"#),
+            ("OEBPS/c1.xhtml", "<html><body><h1>第一章</h1><p>甲&nbsp;乙</p><svg xmlns=\"http://www.w3.org/2000/svg\"><text>图</text></svg></body></html>"),
+            ("OEBPS/toc.ncx", r#"<ncx><head><meta name="dtb:uid" content="x"/></head><navMap><navPoint><navLabel><text>第一章</text></navLabel><content src="c1.xhtml"/></navPoint></navMap></ncx>"#),
+        ]);
+        let opts = OptimizeOpts { wash: Some(crate::wash::WashOpts::default()), ..OptimizeOpts::new(crate::imgopt::test_screen()) };
+        let (a, _) = optimize_epub_with(&book, &opts).unwrap();
+        let (b, _) = optimize_epub_with(&book, &opts).unwrap();
+        assert_eq!(a, b, "产物逐字节确定（dcterms:modified 是固定值）");
+        let opf = text_of(&a, "OEBPS/content.opf");
+        assert!(opf.contains(r#"version="3.0""#) && opf.contains(&format!(r#"<meta property="dcterms:modified">{}</meta>"#, crate::wash::normalize::EPUB3_MODIFIED)), "{opf}");
+        assert!(opf.contains(r#"properties="nav""#) && opf.contains(r#"<spine toc="ncx">"#), "{opf}");
+        assert!(opf.contains(r#"<item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>"#), "封面 svg 已换成 img，不标 svg: {opf}");
+        assert!(opf.contains(r#"<item id="c1" href="c1.xhtml" media-type="application/xhtml+xml" properties="svg"/>"#), "{opf}");
+        assert!(opf.contains(r#"properties="cover-image""#), "{opf}");
+        assert!(text_of(&a, "OEBPS/toc.ncx").contains(r#"<meta name="dtb:uid" content="urn:uuid:1"/>"#));
+        assert!(text_of(&a, "OEBPS/nav.xhtml").contains(r#"<a href="c1.xhtml">第一章</a>"#));
+        let c1 = text_of(&a, "OEBPS/c1.xhtml");
+        assert!(c1.contains(r#"xmlns:epub="http://www.idpf.org/2007/ops""#) && c1.contains("甲&#160;乙"), "{c1}");
+    }
