@@ -103,6 +103,7 @@ KOReader 把 `dc:subject` 读成书的 keywords，配置档的自动执行按"�
 
 | 设置 | 值 | 作用 |
 |---|---|---|
+| `custom_server` | `https://sync.vksight.com` | 自己的同步服务器（见下文） |
 | `checksum_method` | 1（按文件名） | 按文件名认书，不按文件内容：优化规则一升级、书重新生成，文件字节就变，按内容认会把进度断开；产物文件名只跟书名走，重新生成不变 |
 | `auto_sync` | 开 | 自动同步 |
 | `sync_forward` | 1（问一下） | 别的设备读得更靠后：问要不要跳过去 |
@@ -110,7 +111,11 @@ KOReader 把 `dc:subject` 读成书的 keywords，配置档的自动执行按"�
 
 后两项是插件的缺省值，也写出来：设备上还没有 `kosync.lua` 时只写前两项，插件会拿到空的策略、什么都不做。
 
-- **账号不进仓库**：每台设备上在 KOReader 菜单的「进度同步」里注册或登录，用户名、密钥、服务器由插件自己写进设备上的 `kosync.lua`（合并时这些键不动）。不设服务器就是 KOReader 官方的同步服务器。
+- **服务器是自己的 `sync.vksight.com`**：KOReader 官方的 `sync.koreader.rocks` 2026-09-29 不响应（Cloudflare 接得住、后面的源站不回，同一项目的主页正常；
+  KOReader 的问题列表里它以前也宕过几次）。服务端是本仓库的 `crates/kosync`（Rust，协议按 kosync 插件的 `api.json` 和客户端代码核对，
+  用本机 KOReader 自带的 `KOSyncClient` 测过），部署文件和步骤在 vksight 仓库 `ops/kosync/`。**注册接口关着**，账号在服务器上建：
+  `ssh -t vksight 'sudo -u kosync /usr/local/bin/kosync useradd <用户名> --data=/var/lib/kosync'`，设备上只点「登录」。
+- **账号不进仓库**：用户名、密钥由插件在登录时写进设备上的 `kosync.lua`（合并时这些键不动）。
 - **文件名要一致**：两台设备上同一本书的文件名一样才认得出，所以都拷同一份 `koreader/` 产物、不要在设备上改名。
 - **位置可能差一点**：KOReader 记的进度是 xpointer（第几个文件里的哪个元素）。优化规则改了、书重新生成后，同一个 xpointer 可能落到稍微不同的地方，甚至相邻的节。
 - `--uninstall` 会撤掉这几项（它属于方案层），登录信息不动。
@@ -204,7 +209,8 @@ koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-
 - **每次开机只启动一次**：KOReader 退出时自带界面重新启动，会再触发一次开机任务；用 `/tmp`（内存盘）里的标记挡掉，不然永远退不出 KOReader。
 - **逃生口**：自启的 KOReader 没正常退出就关机（卡死后长按电源键重启、没电）→ 下次开机跳过自启、停在自带界面，只跳一次。
 - **关掉**：从电脑删 U 盘根目录的 `koreader-boot.enabled`（`deploy.sh --disable --write`）；彻底卸：书库里点「KOReader 开机启动：卸掉」，再 `deploy.sh --remove --write`。
-- 停掉自带界面后要在真机上确认：KOReader 能自己开关 Wi-Fi（进度同步要用）、插 USB 还能拷书和跑 `apply.sh`。有人报告停界面的做法在某些机型上启动失败，出问题就先关掉自启。
+- **KOReader 运行时插 USB 没反应**（2026-09-29 真机）：USB 传文件归亚马逊界面管，它被停掉了。拷书、跑 `apply.sh` 前先在 KOReader 菜单里「退出」，回到自带界面再插，能识别（真机确认）。
+- 停掉自带界面后 KOReader 能联网（登录同步服务器时能收到服务器的回应）。有人报告停界面的做法在某些机型上启动失败，出问题就先关掉自启。
 - **系统自动更新没有屏蔽**（用户定：自己控制联网）。自动更新可能让越狱和 KOReader 失效，联网时留意。
 
 ## 字体
