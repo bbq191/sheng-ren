@@ -299,7 +299,8 @@ pub fn fix_duokan_markers(html: &str) -> String {
     let mut local = 0usize;
     // 标记替换（转义 img 版 / Calibre 真 img 版共用）：保留 href 与 `<a>` 自带 id（Calibre 形态的
     // 回链落点，丢了则注释里的回链悬空 → reMarkable 判互指整对丢弃）。
-    let mut rewrite = |a_attrs: &str, img_inner: &str, whole: &str| -> String {
+    // `escaped`：标记里的 <img> 是被转义成字面文字的（微读 CDN 图，离线显示成一串代码）；否则是真的 <img> 图标。
+    let mut rewrite = |a_attrs: &str, img_inner: &str, whole: &str, escaped: bool| -> String {
         // "duokan-footnote" 类名有两种真实变体：常见形态在 img 自己的 class 上（`img_inner`）；
         // 2026-09-23 真机《甲午：摇摆的战争》核实还有一种把这个类挂在外层 <a> 上、img 自己只是普通
         // `class="exs"` 图标——两种都得认，只查 img_inner 会漏判、图标原样穿透到 xochitl 按固有
@@ -307,22 +308,29 @@ pub fn fix_duokan_markers(html: &str) -> String {
         let is_duokan = img_inner.contains("duokan-footnote") || a_attrs.contains("duokan-footnote");
         match (is_duokan, href_fragment(a_attrs)) {
             (true, Some(frag)) => {
-                local += 1;
-                let num = duokan_note_num(img_inner).unwrap_or_else(|| local.to_string());
                 let id_attr = html::attr_value(a_attrs, "id").map(|v| format!(" id=\"{v}\"")).unwrap_or_default();
-                format!("<a href=\"#{frag}\"{id_attr}><sup>{}</sup></a>", xml_escape(&num))
+                if escaped {
+                    // 转义成文字的那种：原书显示的就是一串 `<img …>` 代码、图在网上离线看不到，换成它自己 alt 里的注释序号（"注释12" → 12）
+                    local += 1;
+                    let num = duokan_note_num(img_inner).unwrap_or_else(|| local.to_string());
+                    format!("<a href=\"#{frag}\"{id_attr}><sup>{}</sup></a>", xml_escape(&num))
+                } else {
+                    // 真图标：原样保留（不再换成上标数字——那是多出来的字，用户 2026-09-29 定），只加 `eink-noteicon` 类限成一个字高
+                    // （没写宽高的 80×80 图标在 xochitl 上撑成一大块，真机《甲午：摇摆的战争》）
+                    format!("<sup><a href=\"#{frag}\"{id_attr}>{}</a></sup>", mark_note_icons(&format!("<img{}/>", img_inner.trim_end().trim_end_matches('/'))))
+                }
             }
             _ => whole.to_string(),
         }
     };
     let markers = duokan_footnote_re()
         .replace_all(html, |c: &regex::Captures| {
-            rewrite(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), c.get(0).unwrap().as_str())
+            rewrite(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), c.get(0).unwrap().as_str(), true)
         })
         .into_owned();
     let markers = duokan_footnote_img_re()
         .replace_all(&markers, |c: &regex::Captures| {
-            rewrite(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), c.get(0).unwrap().as_str())
+            rewrite(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), c.get(0).unwrap().as_str(), false)
         })
         .into_owned();
     // 去链注释块里的悬空回链（#c_X_Y），否则 reMarkable 判互指对整对丢弃、正向也点不动。
@@ -476,10 +484,13 @@ mod footnote_inline_tests {
 
     #[test]
     fn fix_duokan_markers_calibre_real_img_keeps_id() {
-        // Calibre 洗后：真 <img>（本地图）+ <a> 自带回链落点 id。换上标、id 必须保留。
+        // Calibre 洗后：真 <img>（本地图）+ <a> 自带回链落点 id。图标保留（加限高的类）、id 必须保留，不换成数字。
         let html = r##"<sup class="calibre4"><a class="duokan-footnote" href="#a_2_1" id="c_2_1"><img alt="注释7" class="duokan-footnote1" src="../images/00003.png"/></a></sup>"##;
         let out = fix_duokan_markers(html);
-        assert_eq!(out, r##"<a href="#a_2_1" id="c_2_1"><sup>7</sup></a>"##);
+        assert_eq!(out, r##"<sup><a href="#a_2_1" id="c_2_1"><img alt="注释7" class="duokan-footnote1 eink-noteicon" src="../images/00003.png"/></a></sup>"##);
+        // 转义成文字的那种（微读 CDN 图）：原书显示的是一串代码，换成它 alt 里的序号
+        let esc = r##"<sup><a href="#fo3">&lt;img class="duokan-footnote" alt="注释3" src="https://cdn/x.png"/&gt;</a></sup>"##;
+        assert_eq!(fix_duokan_markers(esc), r##"<a href="#fo3"><sup>3</sup></a>"##);
         // 非 duokan 的真 img 链接不碰
         let other = r##"<sup><a href="#x"><img alt="图" class="icon" src="i.png"/></a></sup>"##;
         assert_eq!(fix_duokan_markers(other), other);
@@ -655,8 +666,7 @@ mod optimizer_footnote_tests {
     #[test]
     fn fix_duokan_markers_detects_class_on_outer_a_not_just_img() {
         let out = fix_duokan_markers(r##"<sup><a class="duokan-footnote" href="#fo14" id="foref14"><img alt="" class="exs" src="../Images/note.png"/></a></sup>"##);
-        assert!(!out.contains("<img"), "图标应被换成干净上标数字: {out}");
-        assert!(out.contains(r##"<a href="#fo14" id="foref14"><sup>1</sup></a>"##), "应换成可点上标: {out}");
+        assert_eq!(out, r##"<sup><a href="#fo14" id="foref14"><img alt="" class="exs eink-noteicon" src="../Images/note.png"/></a></sup>"##, "图标原样保留、加限高的类，不换成数字");
     }
 
     #[test]

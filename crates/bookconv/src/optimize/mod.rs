@@ -55,7 +55,9 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 ///   ④ 漫画页四边留 `comic_margin`（profile 字段，缺省 1px）白边，画布即阅读范围；比框小的 JPEG 页 Lanczos 放大（KOReader 不放大小图），
 ///   质量一律 95；PNG 按自身比例尺补白；已排好的页原样保留；900 万像素以上的页照常处理（只拒文件头超过 6400 万像素的）；
 ///   静态 GIF/WebP 页转 PNG/JPEG（条目名不变、manifest media-type 跟着改）。
-pub const OPTIMIZE_VERSION: &str = "27";
+/// - v28（2026-09-29）：JPEG 哈夫曼表按图重做（`jpegopt`，无损：解码逐像素相同，每页还会解码比对，不同就用原来的），漫画同画质小 7%–9%；
+///   多看的图标注释号保留原图标（加 `eink-noteicon` 限一个字高），不再换成上标数字（多出来的字，用户定）。
+pub const OPTIMIZE_VERSION: &str = "28";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
