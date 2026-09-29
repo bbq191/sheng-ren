@@ -5,6 +5,9 @@ color = true
 formats = ["epub"]
 # 注释：点标号跳到章末、用阅读器的"返回"回来（xochitl 没有弹窗，只认同文件 #锚点）
 notes = "jump"
+# 只有小图标的注释标号换成上标数字：xochitl 里只有图的链接点了没反应，外链 CSS 的 height:1em 也限不住图标
+# （2026-09-29 Move 真机注释探针：80/32/24/16 像素、带不带 <sup> 都一样；80×80 的图标撑成一大块）
+note_icons = "number"
 # 漫画：用户要离屏幕边缘 1px（2026-09-29）。xochitl 设置里的页边距界面上只有 28/56/112 三档，但阅读器内部接口能设成 1，
 # Move 上装的页边距代理在第一次开书时替我们设（xochitl/comic-margins.sh 登记）。设成 1 后 xochitl 自己就在左右各留 1px，
 # 所以画布里不再留白边（comic_margin = 0）。上 112px、下 127px 是 xochitl 固定留的，改不了。

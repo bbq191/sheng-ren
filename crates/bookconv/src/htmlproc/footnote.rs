@@ -167,6 +167,62 @@ fn mark_note_icons(content: &str) -> String {
     }
 }
 
+/// 同文件链接 `<a href="#x">` 里**只有图、没有文字**，而且链接或图带注释类（`note`/`footnote`/`eink-noteicon`），或目标元素
+/// 有注释语义（[`note_semantic`]）→ 图换成上标数字。给注释只能跳转、不认纯图链接的阅读器用（profile `note_icons = "number"`，xochitl）：
+/// 2026-09-29 Move 真机（上游设备增强项目的《注释探针》）：xochitl 里**只有图、没有文字的链接点了没反应**（80/32/24/16 像素、
+/// 带不带 `<sup>` 都一样），图标还按原图像素画、外链 CSS 的 `height:1em` 限不住（80×80 的图标撑成一大块，《甲午：摇摆的战争》）。
+/// 编号依次取：目标注释开头写的 `[14]` 这类作者编号（[`note_number`]）→ 图标 alt 里的"注释N" → 本章顺序数。
+/// `<sup>` 已包着链接时不再套一层。放在注释重排之后跑：多看标号、重排保留的标号到这里都是带 `eink-noteicon` 的图。
+pub fn number_icon_note_links(html_text: &str) -> String {
+    let tags: Vec<html::Tag> = html::tags(html_text).collect();
+    let mut counter = 0usize;
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for e in a_elems(&tags) {
+        let open = &html_text[e.start..e.open_end];
+        let Some(frag) = html::attr_value(open, "href").and_then(|h| h.strip_prefix('#')).filter(|f| !f.is_empty()) else { continue };
+        let content = &html_text[e.open_end..e.close_start];
+        let imgs: Vec<&str> = html::tags(content).filter(|t| t.kind != html::TagKind::Close && (t.is("img") || t.is("image"))).map(|t| &content[t.start..t.end]).collect();
+        if imgs.is_empty() || !html::plain_text(content).trim().is_empty() {
+            continue;
+        }
+        let noteish = |tag: &str| html::attr_value(tag, "class").is_some_and(|v| v.to_ascii_lowercase().contains("note"));
+        let target = tags.iter().find(|t| t.is_start() && html::attr_value(&html_text[t.start..t.end], "id") == Some(frag));
+        if !(noteish(open) || imgs.iter().any(|t| noteish(t)) || target.is_some_and(|t| note_semantic(&html_text[t.start..t.end]))) {
+            continue;
+        }
+        counter += 1;
+        let num = note_number(element_by_id(html_text, &tags, frag))
+            .or_else(|| imgs.iter().find_map(|t| duokan_note_num(t)))
+            .unwrap_or_else(|| counter.to_string());
+        let in_sup = e.open_ix.checked_sub(1).is_some_and(|k| tags[k].kind == html::TagKind::Open && tags[k].is("sup") && html_text[tags[k].end..e.start].trim().is_empty());
+        let label = if in_sup { xml_escape(&num) } else { format!("<sup>{}</sup>", xml_escape(&num)) };
+        edits.push((e.open_end, e.close_start, label));
+    }
+    if edits.is_empty() {
+        html_text.to_string()
+    } else {
+        html::apply_edits(html_text, edits)
+    }
+}
+
+/// 注释正文开头写的编号：`[14]`、`［14］`、`【14】`、`(14)`、`14.`、`14、`、`14．`——作者给的编号，全书连续，比按章数出来的准。
+/// 必须带括号或编号后的标点，免得把"1886年……"的年份当编号。
+fn note_number(note_html: &str) -> Option<String> {
+    static R: OnceLock<Regex> = OnceLock::new();
+    let t = html::plain_text(note_html);
+    let c = R.get_or_init(|| Regex::new(r"^\s*(?:[\[［【(（]\s*(\d{1,4})\s*[\]］】)）]|(\d{1,4})\s*[.、．])").unwrap()).captures(&t)?;
+    c.get(1).or_else(|| c.get(2)).map(|m| m.as_str().to_string())
+}
+
+/// 同文件里 `id="frag"` 那个元素的内容；找不到返回空串。
+fn element_by_id<'a>(html_text: &'a str, tags: &[html::Tag], frag: &str) -> &'a str {
+    let Some(open) = tags.iter().find(|t| t.is_start() && html::attr_value(&html_text[t.start..t.end], "id") == Some(frag)) else { return "" };
+    match html::find_close(html_text, open.end, open.name) {
+        Some(close) => &html_text[open.end..close.start],
+        None => "",
+    }
+}
+
 /// 根元素 `<html>` 上没声明 `epub` 命名空间就补上（用了 `epub:type` 的文件不声明就不是合法 XML）。
 pub(crate) fn ensure_epub_ns(doc: &str) -> String {
     let Some(t) = html::tags(doc).find(|t| t.kind != html::TagKind::Close && t.is("html")) else { return doc.to_string() };
@@ -667,6 +723,25 @@ mod optimizer_footnote_tests {
     fn fix_duokan_markers_detects_class_on_outer_a_not_just_img() {
         let out = fix_duokan_markers(r##"<sup><a class="duokan-footnote" href="#fo14" id="foref14"><img alt="" class="exs" src="../Images/note.png"/></a></sup>"##);
         assert_eq!(out, r##"<sup><a href="#fo14" id="foref14"><img alt="" class="exs eink-noteicon" src="../Images/note.png"/></a></sup>"##, "图标原样保留、加限高的类，不换成数字");
+    }
+
+    #[test]
+    fn number_icon_note_links_for_readers_without_image_links() {
+        // 多看标号（fix_duokan_markers 保留图标之后）：编号取注释开头的 [14]
+        let ch = r##"<p>正文<sup><a href="#fo14" id="foref14"><img alt="" class="exs eink-noteicon" src="../Images/note.png"/></a></sup>续</p><div id="fo14" class="eink-note"><p>[14] 注释文字</p></div>"##;
+        let out = number_icon_note_links(ch);
+        assert!(out.contains(r##"<sup><a href="#fo14" id="foref14">14</a></sup>续"##), "{out}");
+        assert!(out.contains("[14] 注释文字"), "注释本身不动");
+        // 没有作者编号：取 alt 里的"注释7"；再没有按本章顺序数；没包 <sup> 的补一层
+        let alt = r##"<a href="#n1"><img class="eink-noteicon" alt="注释7" src="i.png"/></a><a href="#n2"><img class="eink-noteicon" src="i.png"/></a><div id="n1">甲</div><div id="n2">乙</div>"##;
+        assert_eq!(number_icon_note_links(alt), r##"<a href="#n1"><sup>7</sup></a><a href="#n2"><sup>2</sup></a><div id="n1">甲</div><div id="n2">乙</div>"##);
+        // 没有注释特征的图片链接（插图放大、目录图标）、链接里有字的：不动
+        for keep in [r##"<a href="#fig1"><img src="small.png"/></a><div id="fig1"><img src="big.png"/></div>"##, r##"<a href="#fo1" class="note"><img src="i.png"/>注</a><p id="fo1">x</p>"##] {
+            assert_eq!(number_icon_note_links(keep), keep);
+        }
+        // 目标有注释语义也算
+        let sem = r##"<a href="#f"><img src="i.png"/></a><aside epub:type="footnote" id="f">（3）说明</aside>"##;
+        assert!(number_icon_note_links(sem).starts_with(r##"<a href="#f"><sup>3</sup></a>"##));
     }
 
     #[test]
