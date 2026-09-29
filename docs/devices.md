@@ -56,7 +56,7 @@ height = 1680
 
 | 模式 | 阅读范围 | 依据 |
 |---|---|---|
-| `koreader` | 1260×1670 | 2026-09-29 用测量书（打上"漫画"标签）在**本机 KOReader** 上按 1264×1680 离屏渲染、套我们的漫画方案截屏实测（`koreader/snap.sh` + `readable-measure`）：页边距 0、隐藏状态栏并收回它的高度后，KOReader 左右各留 2px、底部留 10px。**掌阅、Kindle 真机上的 KOReader 还没实测**。图文混排时不适用 |
+| `koreader` | 1260×1670 | 2026-09-29 用测量书（打上"漫画"标签）在**本机 KOReader** 上按 1264×1680 离屏渲染、套我们的漫画方案截屏实测（`koreader/snap.sh` + `readable-measure`）：页边距 0、隐藏状态栏并收回它的高度后，KOReader 左右各留 2px、底部留 10px——后来查明是图所在那一行的行高和字号撑出来的，页面设 `line-height:0; font-size:0` 后能用满 1264×1680（见 [koreader.md](koreader.md)）。**掌阅、Kindle 真机上的 KOReader 还没实测**。图文混排时不适用 |
 | `xochitl` | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 在 xochitl 上实测）。改了页边距要跟着改（28 档 → 898 宽；1 档 → 952 宽） |
 
 ## xochitl 怎么存 EPUB 和阅读进度（2026-09-29 真机摸底，只读）
