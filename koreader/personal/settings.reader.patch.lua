@@ -170,7 +170,10 @@ return {
     },
     ["reader_footer_mode"] = 1,
     ["show_hidden"] = true,
-    ["start_with"] = "filemanager",
+    -- 启动进 SimpleUI 主页（在读的书、最近的书、统计）当桌面用（用户 2026-09-29；值按 simpleui.koplugin main.lua）
+    ["start_with"] = "homescreen_simpleui",
+    -- 界面语言简体中文：Kindle 上 KOReader 缺省跟系统（英文），SimpleUI 也跟 KOReader 的语言走（用户 2026-09-29）
+    ["language"] = "zh_CN",
     ["style_tweaks"] = {
         ["cjk_tailored"] = true,
         ["footnote-inpage_fb2"] = true,

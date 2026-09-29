@@ -49,6 +49,7 @@ dev_has settings.reader.lua || { echo "✗ $dev 的 KOReader 目录里没有 set
 orig=$KO_TMP/orig new=$KO_TMP/new
 mkdir -p "$orig/settings" "$orig/patches" "$new/settings"
 for f in "${KO_FILES[@]}"; do
+  mkdir -p "$(dirname "$orig/$f")" "$(dirname "$new/$f")"
   if dev_has "$f"; then
     dev_get "$f" "$orig/$f" || { echo "✗ 读不出设备上的 $f（连接不稳？）" >&2; exit 1; }
     cp "$orig/$f" "$new/$f"
@@ -159,7 +160,7 @@ esac
 # ── 备份：要动的配置和补丁（原来没有的记下来，回滚时删掉）──
 backup=$backup_root/$(date +%Y-%m-%d_%H%M%S)/$dev
 mkdir -p "$backup/settings" "$backup/patches"
-for f in "${changed[@]}"; do [[ -f $orig/$f ]] && cp -p "$orig/$f" "$backup/$f"; done
+for f in "${changed[@]}"; do [[ -f $orig/$f ]] && mkdir -p "$(dirname "$backup/$f")" && cp -p "$orig/$f" "$backup/$f"; done
 for name in "${put_patches[@]}" "${rm_patches[@]}"; do
   [[ -f $orig/patches/$name ]] && cp -p "$orig/patches/$name" "$backup/patches/$name"
 done
@@ -225,6 +226,7 @@ for name in "${rm_patches[@]}"; do
   echo "✓ 补丁 patches/$name 已删掉"
 done
 for f in "${changed[@]}"; do
+  [[ $(dirname "$f") == . ]] || dev_mkdir "$(dirname "$f")" || rollback "建目录 $(dirname "$f") 失败"
   put_verified "$new/$f" "$f"
 done
 [[ ${#changed[@]} -gt 0 ]] && echo "✓ $dev：写入 ${changed[*]}，回读一致"

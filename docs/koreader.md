@@ -224,6 +224,19 @@ koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-
 - `recycled-light.png`（非白像素 1%）、`recycled-medium.png`（2.4%，现在用它：用户 2026-09-29 觉得浅的太淡）。想换：改 `devices/<id>/settings.reader.patch.lua` 里的文件名再 apply；不想要：删掉那一行。
 - 本机 KOReader 截图确认能生效（`snap.sh --extra=补丁.lua` 可以叠加这类设置预览）；**真机上的观感要你看**。
 
+## SimpleUI（主页插件）
+
+两台都装了第三方插件 SimpleUI（`simpleui.koplugin` v2.7.1，MIT，[GitHub](https://github.com/doctorhetfield-cmd/simpleui.koplugin)）：主页（在读的书、最近的书、阅读统计）、底部导航栏、顶栏。
+它的设置存在自己的文件 `settings/simpleui/sui_settings.lua`，归 `personal/simpleui.patch.lua` 管（个人设置层，两台统一，`--uninstall` 不撤）。
+
+- **启动进主页**：个人设置 `start_with = "homescreen_simpleui"`（原来写死的 `filemanager` 会把插件第一次运行时设的主页改回去）。
+- **中文**：个人设置 `language = "zh_CN"`。插件跟 KOReader 的界面语言走，自带简体中文翻译（939 条缺 1 条）；Kindle 上 KOReader 原来跟系统是英文。
+- **字体**：插件用 KOReader 的界面字体表，`fontmap` 已统一成霞鹜文楷，不用另设。
+- **省电，去掉时钟**：主页时钟模块（`simpleui_hs_clock_enabled = false`）和顶栏时钟（`simpleui_topbar_config` 里 `clock = "hidden"`）都关。
+  停在主页、书库时时钟每分钟重画一次，墨水屏每分钟局部刷新、唤醒一次处理器。顶栏配置要整张写全：只写 `clock` 一项，插件会把没写的电池、Wi-Fi 也当隐藏。
+- 自动检查更新缺省关着（插件不会自己联网），不用管。
+- 主页布局（模块、顺序、底栏按钮）：在掌阅上调好后收进 `personal/simpleui.patch.lua`，再同步到 Kindle。
+
 ## 字体
 
 配置里只写字体名（正文）或字体文件路径（状态栏）。每台设备要有的字体文件列在 `device.conf` 的 `FONTS`，缺的 `apply.sh` 从本机字体目录拷：
