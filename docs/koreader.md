@@ -190,18 +190,20 @@ koreader/check.sh kindle-pw12-sig 目录   # 拿一份从设备拷回的 KOReade
 ## Kindle 开机直接进 KOReader
 
 `koreader/kindle-boot/`（2026-09-29，**还没在真机上试过**）：开机后自动打开 KOReader，并停掉亚马逊自带界面（书城、广告、自带阅读器都不跑，省电省内存）；
-退出 KOReader 时 KOReader 的启动脚本（`koreader.sh --framework_stop`）会把自带界面拉回来。要求 Kindle 已越狱、装了 KUAL 和 KOReader。
+退出 KOReader 时 KOReader 的启动脚本（`koreader.sh --framework_stop`）会把自带界面拉回来。要求 Kindle 已越狱、装了 KOReader。
+这台 Kindle（2026-09-29 查）是用 KindleModding 的包管理器 kpm 装的 KOReader，书库里的「KOReader」是一本脚本书（`documents/KOReader.sh`），没有 KUAL，
+所以装上/卸掉也做成两本脚本书（以 root 运行）；装了 KUAL 的机器也可以在 KUAL 菜单里点。
 
 ```sh
 koreader/kindle-boot/deploy.sh            # 列出要拷的文件（dry run）
-koreader/kindle-boot/deploy.sh --write    # 把 KUAL 扩展拷进 Kindle 的 extensions/koreader-boot/
-# 拔掉 USB，在 Kindle 上：KUAL →「KOReader 开机启动」→「装上」，重启 Kindle
+koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-boot/ 和 documents/ 里的两本脚本书
+# 拔掉 USB，在 Kindle 书库里点开「KOReader 开机启动：装上」，看到「装好了」后重启 Kindle
 ```
 
-- 开机任务要写进根分区的 `/etc/upstart/`，电脑经 MTP 写不到，所以做成 KUAL 扩展，由 Kindle 上以 root 执行一次（`mntroot rw` 写完再 `mntroot ro`）。
+- 开机任务要写进根分区的 `/etc/upstart/`，电脑经 MTP 写不到，只能在 Kindle 上以 root 执行一次（`mntroot rw` 写完再 `mntroot ro`）。
 - **每次开机只启动一次**：KOReader 退出时自带界面重新启动，会再触发一次开机任务；用 `/tmp`（内存盘）里的标记挡掉，不然永远退不出 KOReader。
 - **逃生口**：自启的 KOReader 没正常退出就关机（卡死后长按电源键重启、没电）→ 下次开机跳过自启、停在自带界面，只跳一次。
-- **关掉**：从电脑删 U 盘根目录的 `koreader-boot.enabled`（`deploy.sh --disable --write`）；彻底卸：KUAL 里「卸掉」，再 `deploy.sh --remove --write`。
+- **关掉**：从电脑删 U 盘根目录的 `koreader-boot.enabled`（`deploy.sh --disable --write`）；彻底卸：书库里点「KOReader 开机启动：卸掉」，再 `deploy.sh --remove --write`。
 - 停掉自带界面后要在真机上确认：KOReader 能自己开关 Wi-Fi（进度同步要用）、插 USB 还能拷书和跑 `apply.sh`。有人报告停界面的做法在某些机型上启动失败，出问题就先关掉自启。
 - **系统自动更新没有屏蔽**（用户定：自己控制联网）。自动更新可能让越狱和 KOReader 失效，联网时留意。
 
