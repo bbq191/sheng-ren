@@ -5,6 +5,12 @@
 //! 另有 `cbz::cbz_to_pdf`（`cbz2pdf` 命令用，按设备出 PDF）和 `pdfwrite`（手写 PDF，漫画 PDF / 入库 PDF 裁边共用）。
 //! 不支持：HUFF/CDIC 压缩的 AZW3、带 DRM 的文件（`precheck` 直接拒）；CBR（RAR 解包要 C++ 依赖和受限许可，先用外部工具解成 CBZ）。
 
+/// 格式转换（本目录的 MOBI/AZW3/FB2/CBZ → EPUB、PDF 写出与裁边，以及 `pdf_ingest` 的有文字层 PDF → EPUB）的版本：
+/// 改了会影响转换结果的代码要加一。书库只把它放进**需要转换的来源**的指纹，原本就是 EPUB 的书不受影响。
+/// - 1（2026-09-28）：FB2 诗歌闭合标签、无 `<p>` 的标题不再丢字；KF8 切点落在标签里时吸附回标签开头；
+///   PDF 跨页接段补空格、嵌图支持更多位深和色彩空间（以前静默丢掉的图收进来）。
+pub const CONVERT_VERSION: &str = "1";
+
 pub mod cbz;
 pub mod common;
 pub mod fb2;

@@ -845,11 +845,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "r-efi 6.0.0",
  "rand_core 0.10.1",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -1247,7 +1245,6 @@ dependencies = [
  "fast2s",
  "image",
  "profile",
- "regex",
  "serde",
  "serde_json",
  "sha2",
@@ -1305,7 +1302,6 @@ dependencies = [
  "bitflags 2.13.2",
  "brotli-decompressor",
  "cbc",
- "chrono",
  "ecb",
  "encoding_rs",
  "flate2",
@@ -1474,7 +1470,6 @@ dependencies = [
  "euclid 0.20.14",
  "log",
  "lopdf",
- "postscript",
  "type1-encoding-parser",
  "unicode-normalization",
 ]
@@ -1676,12 +1671,6 @@ name = "pom"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60f6ce597ecdcc9a098e7fddacb1065093a3d66446fa16c675e7e71d1b5c28e6"
-
-[[package]]
-name = "postscript"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78451badbdaebaf17f053fd9152b3ffb33b516104eacb45e7864aaa9c712f306"
 
 [[package]]
 name = "potential_utf"

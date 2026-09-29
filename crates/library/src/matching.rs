@@ -2,9 +2,14 @@
 
 use crate::Meta;
 
+/// 全角 ASCII（U+FF01–FF5E）转成对应的半角字符，其余不变。
+pub(crate) fn to_halfwidth(c: char) -> char {
+    if ('\u{FF01}'..='\u{FF5E}').contains(&c) { char::from_u32(c as u32 - 0xFEE0).unwrap_or(c) } else { c }
+}
+
 /// 比较用的规整：全角转半角、去掉结尾括号里的消歧义说明（"雪人 (小說)"）、只留字母数字和汉字、小写。
 pub(crate) fn norm(s: &str) -> String {
-    let s: String = s.chars().map(|c| if ('\u{FF01}'..='\u{FF5E}').contains(&c) { char::from_u32(c as u32 - 0xFEE0).unwrap_or(c) } else { c }).collect();
+    let s: String = s.chars().map(to_halfwidth).collect();
     let s = s.trim();
     let s = match s.rfind(['(', '（']) {
         Some(i) if s.ends_with([')', '）']) && i > 0 => &s[..i],

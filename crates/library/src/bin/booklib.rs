@@ -3,9 +3,11 @@
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib；产物缺省放在书库的 output/<设备>/ 下。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
-use library::{Added, Built, CoverResult, Delivered, InfoResult, Library, OriginalState, Profile, SyncEvent};
+use library::{Added, Built, CoverResult, Delivered, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo};
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const USAGE: &str = "用法:
   booklib [--library=目录] add <文件或网址>...           一次性入库单个文件（目录用 track）
@@ -113,13 +115,28 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
     devices
 }
 
-/// 按设备 × 书逐本生成（没变化的跳过），每本一行结果。
+/// `sync --watch` 记住的生成失败：(书 id, 设备 id) → 失败时的指纹和原件状态。都没变就不再重试、不再重复报错。
+type FailMemo = HashMap<(String, String), (String, OriginalState)>;
+
 /// 按设备 × 书逐本生成（没变化的跳过），每本一行结果。给了 `out` 就接着拷过去：只有一台设备时直接放进 `out`，
 /// 多台时放进 `out/<设备 id>/`。`quiet` 时不打印没变化的（sync 用：只报有变化的）。
-fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: Option<&std::path::Path>, force: bool, quiet: bool, report: &mut impl FnMut(Result<String, String>)) {
+/// 给了 `fails`（`sync --watch`）：上次失败以后指纹和原件状态都没变的书跳过。
+#[allow(clippy::too_many_arguments)]
+fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: Option<&Path>, force: bool, quiet: bool, mut fails: Option<&mut FailMemo>, report: &mut impl FnMut(Result<String, String>)) {
     for device in devices {
         let dest = out.map(|o| if devices.len() == 1 { o.to_path_buf() } else { o.join(&device.id) });
         for m in books {
+            let key = (m.id.clone(), device.id.clone());
+            let now = || (lib.fingerprint(m, device).unwrap_or_else(|e| e), lib.original_state(m));
+            if let Some(f) = fails.as_deref_mut() {
+                match f.get(&key).map(|v| *v == now()) {
+                    Some(true) => continue,
+                    Some(false) => {
+                        f.remove(&key);
+                    }
+                    None => {}
+                }
+            }
             let built = match lib.build(m, device, force) {
                 Ok(Built::Written { path, warnings }) => {
                     Some(std::iter::once(format!("✓ [{}] {} → {}", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
@@ -127,6 +144,9 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: 
                 Ok(Built::UpToDate(path)) => (!quiet).then(|| format!("= [{}] {} 已是最新（{}）", device.id, m.title, path.display())),
                 Err(e) => {
                     report(Err(format!("✗ [{}] {}: {e}", device.id, m.title)));
+                    if let Some(f) = fails.as_deref_mut() {
+                        f.insert(key, now());
+                    }
                     continue;
                 }
             };
@@ -144,7 +164,6 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], out: 
     }
 }
 
-/// 选书的参数里有像路径的（通常是路径里有空格没加引号，被拆开了），提示一下。
 /// 元数据一行摘要：来源、简介字数、标签、参考版本。
 fn info_summary(i: &library::BookInfo) -> String {
     let mut parts = vec![i.source.clone()];
@@ -168,6 +187,7 @@ fn info_summary(i: &library::BookInfo) -> String {
     parts.join("；")
 }
 
+/// 选书的参数里有像路径的（通常是路径里有空格没加引号，被拆开了），提示一下。
 fn path_hint(selectors: &[String]) -> String {
     match selectors.iter().find(|s| s.contains('/')) {
         Some(s) => format!("\n（\"{s}\" 看起来像路径的一部分：路径里有空格时要整个加引号，如 --out=\"/run/…/Internal Storage/documents\"）"),
@@ -193,14 +213,17 @@ fn main() {
         "list" | "devices" | "sync" => None, // sync 每一轮自己加锁（--watch 时不能一直占着）
         _ => Some(lib.lock().unwrap_or_else(|e| fail(&e))),
     };
-    let mut failed = 0;
+    let failed = Cell::new(0usize);
+    let fail_line = |e: &str| {
+        failed.set(failed.get() + 1);
+        eprintln!("{e}");
+    };
     let mut report = |r: Result<String, String>| match r {
         Ok(line) => println!("{line}"),
-        Err(e) => {
-            failed += 1;
-            eprintln!("{e}");
-        }
+        Err(e) => fail_line(&e),
     };
+    // 相对路径转成绝对路径：拷过的记录（deliveries.json）按目标路径记，换个目录运行也要对得上
+    let out = args.opt("out").map(|o| std::path::absolute(o).unwrap_or_else(|_| PathBuf::from(o)));
     let rest = &args.pos[1..];
     match cmd.as_str() {
         "devices" => {
@@ -215,22 +238,14 @@ fn main() {
             }
             for item in rest {
                 let text = item.to_string_lossy().into_owned();
-                let path = std::path::Path::new(item);
-                let files: Vec<PathBuf> = if text.starts_with("http://") || text.starts_with("https://") {
-                    report(match lib.add_url(&text) {
-                        Ok(a) => Ok(added_line(&a)),
-                        Err(e) => Err(format!("✗ {text}: {e}")),
-                    });
-                    continue;
+                let path = Path::new(item);
+                report(if text.starts_with("http://") || text.starts_with("https://") {
+                    lib.add_url(&text).map(|a| added_line(&a)).map_err(|e| format!("✗ {text}: {e}"))
                 } else if path.is_dir() {
-                    report(Err(format!("✗ {text} 是目录：目录用 booklib track {text} 登记跟踪，再 booklib sync 入库（之后增删改都会同步）")));
-                    continue;
+                    Err(format!("✗ {text} 是目录：目录用 booklib track {text} 登记跟踪，再 booklib sync 入库（之后增删改都会同步）"))
                 } else {
-                    vec![path.to_path_buf()]
-                };
-                for f in files {
-                    report(lib.add_file(&f).map(|a| added_line(&a)).map_err(|e| format!("✗ {}: {e}", f.display())));
-                }
+                    lib.add_file(path).map(|a| added_line(&a)).map_err(|e| format!("✗ {text}: {e}"))
+                });
             }
         }
         "list" => {
@@ -268,13 +283,12 @@ fn main() {
             if devices.is_empty() {
                 usage_error("build 要用 --device= 指定设备");
             }
-            let out = args.opt("out").map(PathBuf::from);
             let books = lib.select(&args.texts());
             if books.is_empty() {
                 fail(&format!("没有匹配的书（booklib list 查看书库）{}", path_hint(&args.texts())));
             }
             let force = args.flags.iter().any(|f| f == "force");
-            build_all(&lib, &devices, &books, out.as_deref(), force, false, &mut report);
+            build_all(&lib, &devices, &books, out.as_deref(), force, false, None, &mut report);
         }
         "dedupe" => {
             let dirs: Vec<PathBuf> = rest.iter().map(PathBuf::from).collect();
@@ -292,7 +306,7 @@ fn main() {
                 usage_error(&format!("{cmd} 要给目录"));
             }
             for d in rest {
-                let d = std::path::Path::new(d);
+                let d = Path::new(d);
                 report(if cmd == "track" {
                     lib.track(d).map(|new| if new { format!("✓ 开始跟踪 {}（运行 booklib sync 入库）", d.display()) } else { format!("= 已在跟踪 {}", d.display()) })
                 } else {
@@ -311,7 +325,6 @@ fn main() {
                 fail("还没有跟踪任何目录。先登记要跟踪的书目录（只需一次），例如：\n  booklib track ~/Documents/ereader/books\n之后 booklib sync 就会把它镜像进书库");
             }
             let devices = parse_devices(&args, &lib);
-            let out = args.opt("out").map(PathBuf::from);
             if !args.texts().is_empty() {
                 usage_error(&format!("sync 不接受书名参数{}", path_hint(&args.texts())));
             }
@@ -321,26 +334,38 @@ fn main() {
                 (None, true) => Some(60),
                 (None, false) => None,
             };
+            // 跨轮次的记忆（--watch）：报过的问题不重复报；生成失败的书没变化不重试；
+            // 书库、产物、--out 目录都没变化、这一轮也没有新增更新删除时不跑生成（省得每轮把所有书的状态查一遍）
+            let mut memo = SyncMemo::default();
+            let mut fails = FailMemo::new();
+            let mut last_stamp: Option<u64> = None;
             loop {
                 match lib.lock() {
                     Ok(_guard) => {
-                        let r = lib.sync(prune, |ev| match ev {
+                        let r = lib.sync_with(prune, &mut memo, |ev| match ev {
                             SyncEvent::Added(p, m) => println!("✓ 入库 {}  {}  ({})", m.id, m.title, p.display()),
                             SyncEvent::Updated(p, m, old) => println!("↻ 更新 {}  {} ← {old}  ({})", m.id, m.title, p.display()),
                             SyncEvent::Missing(p, t, true) => println!("✗ 原件已删，书库里也删了  {t}  ({})", p.display()),
                             SyncEvent::Missing(p, t, false) => println!("? 原件不在了（--prune 才从书库删）  {t}  ({})", p.display()),
-                            SyncEvent::Failed(p, e) => eprintln!("✗ {}: {e}", p.display()),
+                            SyncEvent::Failed(p, e) => fail_line(&format!("✗ {}: {e}", p.display())),
                         });
+                        let changed = r.as_ref().map_or(true, |r| r.added + r.updated + r.pruned > 0);
                         match r {
                             // --watch 时没变化就不出声
                             Ok(r) if watch.is_some() && r.added + r.updated + r.missing + r.failed == 0 => {}
-                            r => report(r.map(|r| format!("同步完成：新增 {}，更新 {}，没变 {}，原件不在 {}（删了 {}），失败 {}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed))),
+                            Ok(r) => println!("同步完成：新增 {}，更新 {}，没变 {}，原件不在 {}（删了 {}），失败 {}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed),
+                            Err(e) => report(Err(e)),
                         }
                         if !devices.is_empty() {
-                            build_all(&lib, &devices, &lib.list(), out.as_deref(), false, true, &mut report);
+                            let stamp = || change_stamp(&lib, &devices, out.as_deref());
+                            if changed || last_stamp != Some(stamp()) {
+                                let fails = watch.is_some().then_some(&mut fails);
+                                build_all(&lib, &devices, &lib.list(), out.as_deref(), false, true, fails, &mut report);
+                                last_stamp = Some(stamp());
+                            }
                         }
                     }
-                    Err(e) => eprintln!("{e}"),
+                    Err(e) => fail_line(&e), // --watch 时只计数，下一轮再试
                 }
                 let Some(secs) = watch else { break };
                 std::thread::sleep(std::time::Duration::from_secs(secs));
@@ -353,6 +378,10 @@ fn main() {
             }
             let (force, clear) = (args.flags.iter().any(|f| f == "force"), args.flags.iter().any(|f| f == "clear"));
             for m in &books {
+                if lib.offline() {
+                    fail_line("✗ 连不上网，这一轮中止（没查的书下次再查）");
+                    break;
+                }
                 if clear {
                     report(lib.clear_metadata(m).map(|had| if had { format!("✓ 去掉找来的元数据和封面  {}", m.title) } else { format!("= 本来就没有找来的元数据  {}", m.title) }));
                     continue;
@@ -386,7 +415,32 @@ fn main() {
         }
         _ => unreachable!(),
     }
-    if failed > 0 {
+    if failed.get() > 0 {
         std::process::exit(2);
     }
+}
+
+/// 书库和产物的"有没有变化"戳（`sync --watch` 用）：`masters/` 与各条目目录、`output/` 与各设备目录的修改时间，
+/// 以及 `--out` 目录在不在（阅读器插上了）。条目、产物的增删改都会改它们所在目录的修改时间（原子写是改名）。
+fn change_stamp(lib: &Library, devices: &[&Profile], out: Option<&Path>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut dir = |p: &Path, deep: bool| {
+        let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        (p, mtime(p)).hash(&mut h);
+        if deep {
+            for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
+                (e.path(), mtime(&e.path())).hash(&mut h);
+            }
+        }
+    };
+    dir(&lib.root().join("masters"), true);
+    dir(&lib.root().join("output"), true);
+    if let Some(o) = out {
+        for d in devices {
+            let p = if devices.len() == 1 { o.to_path_buf() } else { o.join(&d.id) };
+            p.is_dir().hash(&mut h);
+        }
+    }
+    h.finish()
 }

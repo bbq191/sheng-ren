@@ -5,23 +5,6 @@
 package.path = (arg[0]:match("^(.*)/[^/]*$") or ".") .. "/?.lua;" .. package.path
 local L = require("luaser")
 
-local a, b = L.load(arg[1], false), L.load(arg[2], true)
-local out = {}
-local function walk(x, y, path)
-  local keys = {}
-  if type(x) == "table" then for k in pairs(x) do keys[k] = true end end
-  if type(y) == "table" then for k in pairs(y) do keys[k] = true end end
-  for k in pairs(keys) do
-    local p = (path == "" and tostring(k)) or (path .. "." .. tostring(k))
-    local vx, vy = x and x[k], y and y[k]
-    if type(vx) == "table" and type(vy) == "table" then
-      walk(vx, vy, p)
-    elseif not L.equal(vx, vy) then
-      out[#out + 1] = p .. ": " .. L.show(vx) .. " → " .. L.show(vy)
-    end
-  end
-end
-walk(a, b, "")
-table.sort(out)
+local out = L.diff(L.load(arg[1], false), L.load(arg[2], true))
 for _, l in ipairs(out) do io.write(l, "\n") end
 os.exit(#out > 0 and 0 or 10)

@@ -1,6 +1,6 @@
 # 解析 FDST 与片段/骨架/目录索引：python3 indexes.py 文件.azw3
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import sys, struct; from kf8lib import *
+import struct; from kf8lib import *
 f = F(sys.argv[1]); raw = rawml(f)
 print('rawml len', len(raw), 'text length hdr', struct.unpack('>I', f.r0[4:8])[0])
 fd = f.rec(f.u32(0xc0)); print('FDST', fd[:12].hex(), [struct.unpack('>II', fd[12+8*k:20+8*k]) for k in range(struct.unpack('>I', fd[8:12])[0])], 'len', len(fd))

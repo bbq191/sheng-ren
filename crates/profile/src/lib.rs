@@ -109,6 +109,9 @@ impl Profile {
         if self.formats.is_empty() {
             return Err(format!("profile {}: formats 为空", self.id));
         }
+        if let Some((i, f)) = self.formats.iter().enumerate().find(|(i, f)| self.formats[..*i].contains(f)) {
+            return Err(format!("profile {}: formats 第 {} 项 {f:?} 重复", self.id, i + 1));
+        }
         for (fmt, r) in &self.readable {
             if !self.formats.contains(fmt) {
                 return Err(format!("profile {}: readable 里的 {fmt:?} 不在 formats 里", self.id));
@@ -187,6 +190,15 @@ pub fn get(id: &str) -> Option<&'static Profile> {
     Registry::builtin().get(id)
 }
 
+/// 命令行参数里的 `--device=<id>`（必填）→ 内置 profile。缺失或未知 id 时 `Err` 带上可选 id 列表，供调用方报用法错。
+pub fn device_from_args<S: AsRef<str>>(args: &[S]) -> Result<&'static Profile, String> {
+    let id = args.iter().find_map(|a| a.as_ref().strip_prefix("--device="));
+    id.and_then(get).ok_or_else(|| {
+        let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
+        format!("需要 --device=<设备>，可选: {}", ids.join(" / "))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +225,14 @@ mod tests {
     }
 
     #[test]
+    fn device_from_args_finds_id_or_lists_choices() {
+        assert_eq!(device_from_args(&["a.epub", "--device=rmpp-move"]).unwrap().id, "rmpp-move");
+        let err = device_from_args(&["--device=nope"]).unwrap_err();
+        assert!(err.contains("kindle-pw12-sig") && err.contains("--device="), "{err}");
+        assert!(device_from_args::<&str>(&[]).is_err());
+    }
+
+    #[test]
     fn rejects_landscape_and_unknown_keys() {
         let base = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\n";
         assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 1680\nheight = 1264\n")).is_err());
@@ -222,6 +242,8 @@ mod tests {
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")).is_ok());
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")).is_err(), "阅读范围不能超过屏幕");
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.pdf]\nwidth = 90\nheight = 180\n")).is_err(), "formats 里没有的格式不能写阅读范围");
+        let dup = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"pdf\", \"epub\"]\n";
+        assert!(Profile::parse("x", &format!("{dup}{scr}")).is_err(), "formats 不能重复");
     }
 
     #[test]

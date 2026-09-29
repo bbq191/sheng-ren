@@ -1,120 +1,81 @@
 #!/usr/bin/env bash
-# 把 koreader/ 里的配置应用到一台设备上的 KOReader。设备经 USB（MTP 挂载，掌阅、Kindle）或 SSH（reMarkable Move）连着。
+# 把 koreader/ 里的配置应用到一台设备上的 KOReader，或者撤销、还原。设备经 USB（MTP：掌阅、Kindle）或 SSH（reMarkable Move）连着。
 #
-# 用法: koreader/apply.sh <设备 id> [--write] [--closed]
-#   不带 --write：只列出会改哪些键、缺哪些字体（dry run），什么都不写。
-#   --closed：声明已在设备上退出 KOReader（Android 上从电脑看不出来，不给这个参数就在终端里问）。
-#   带 --write：先把设备上的原配置备份到 ~/Documents/ereader/koreader-backup/<时间>/<设备 id>/，写入，回读核对；
-#               核对不一致就用备份还原。缺的字体从本机字体目录拷过去（见下）。
+# 用法: koreader/apply.sh <设备 id> [--restore[=<时间>] | --uninstall] [--write] [--closed]
+#   缺省（应用）：个人设置 → 文字书方案 → 漫画方案 → 设备差异 → 状态栏预设，依次合并进设备上的配置；缺的字体、补丁拷过去。
+#   --restore[=<时间>]：把配置还原成某次备份（缺省最近一次；<时间> 是备份目录名，如 2026-09-28_153012）。
+#   --uninstall：撤销方案、设备差异、状态栏预设和我们的补丁（patches/ 里内容和本仓库一致的才删）；个人设置、字体保留。
+#                撤销的键还原成第一次应用前的值（最早的备份）；没有备份就删掉，由 KOReader 用缺省值。之后在设备上手改过的键不动。
+#   --write：真的写。不带就只列出会改什么（dry run）。
+#   --closed：声明已在设备上退出 KOReader（Android 上从电脑看不出来，不给就在终端里问）。
 #
-# 应用顺序（后面的覆盖前面的）：
-#   settings.reader.lua  ← personal/ → schemes/text → schemes/comic → devices/<id>/ → 按当前状态栏生成两个预设（presets.lua）
-#   settings/gestures.lua ← personal/gestures
-#   settings/profiles.lua ← schemes/profiles
-#   patches/*.lua         ← patches/（KOReader 用户补丁，启动时执行；设备上没有或内容不同的才拷）
-# 字体：device.conf 的 FONTS 列出这台设备要有的字体文件（在 KOReader 的 fonts/ 下），缺的从 $KOREADER_FONTS
-#       （缺省 ~/Documents/ereader/koreader-fonts/）拷。
-# 需要 luajit；MTP 设备要 gio（gvfs），SSH 设备要 ssh/scp。KOReader 运行中不能写：它退出时会把内存里的设置写回文件。
+# 写入前把设备上要动的文件备份到 $KOREADER_BACKUP/<时间>/<设备 id>/（缺省 ~/Documents/ereader/koreader-backup）；
+# 每写一个文件就回读核对，任何一步失败都把已写的文件还原（原来没有的删掉）。字体从 $KOREADER_FONTS（缺省 ~/Documents/ereader/fonts）拷。
+# KOReader 运行中不能写：它退出时会把内存里的设置写回文件，覆盖掉这里写的。
+# 需要 luajit；MTP 设备要 gio（gvfs），SSH 设备要 ssh。
 set -euo pipefail
 
-here=$(cd "$(dirname "$0")" && pwd)
+KO_HERE=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=lib.sh
+source "$KO_HERE/lib.sh"
+
 dev=${1:-}
-write=0
-closed_flag=0
+mode=apply restore_from='' write=0 closed_flag=0
 for a in "${@:2}"; do
   case $a in
     --write) write=1 ;;
     --closed) closed_flag=1 ;;
+    --uninstall) mode=uninstall ;;
+    --restore) mode=restore ;;
+    --restore=*) mode=restore restore_from=${a#--restore=} ;;
     *) echo "不认识的参数 $a" >&2; exit 2 ;;
   esac
 done
-if [[ -z $dev || ! -f $here/devices/$dev/device.conf ]]; then
-  echo "用法: $0 <设备 id> [--write] [--closed]；设备: $(ls "$here/devices" | tr '\n' ' ')" >&2
+if [[ -z $dev || ! -f $KO_HERE/devices/$dev/device.conf ]]; then
+  echo "用法: $0 <设备 id> [--restore[=<时间>] | --uninstall] [--write] [--closed]；设备: $(ls "$KO_HERE/devices" | tr '\n' ' ')" >&2
   exit 2
 fi
-TRANSPORT=mtp
-FONTS=()
-# shellcheck source=/dev/null
-source "$here/devices/$dev/device.conf"
-font_src=${KOREADER_FONTS:-$HOME/Documents/ereader/koreader-fonts}
+command -v luajit >/dev/null || { echo "✗ 缺 luajit" >&2; exit 1; }
+font_src=${KOREADER_FONTS:-$HOME/Documents/ereader/fonts}
+backup_root=${KOREADER_BACKUP:-$HOME/Documents/ereader/koreader-backup}
+show() { echo "${1/#$HOME/\~}"; }
 
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-
-# ── 设备文件操作（路径都相对 KOReader 目录）──
-# MTP：一律经 gio 读写。gvfs 的 FUSE 路径（/run/user/…/gvfs/…）对读过的文件有缓存，gio 换掉文件后 FUSE 还会返回旧内容
-# （2026-09-28 Kindle 实测：写入 19524 字节，经 FUSE 读回的是旧的 11487 字节），所以内容一律不经 FUSE 读。
-# SSH：scp 进同目录的临时文件再 mv，写到一半断了不留半个配置。
-ssh_opts=(-o BatchMode=yes -o ConnectTimeout=5)
-case $TRANSPORT in
-  mtp)
-    uri=$(gio mount -li 2>/dev/null | grep -o "activation_root=mtp://${MTP_HOST_PREFIX}[^ ]*" | head -1 | cut -d= -f2 || true)
-    [[ -z $uri ]] && { echo "✗ 没找到 $dev：USB 连上并解锁设备后再试" >&2; exit 1; }
-    gio info "$uri" >/dev/null 2>&1 || gio mount "$uri" 2>/dev/null || true
-    base="${uri%/}/$KOREADER_DIR"
-    dev_get() { gio copy "$base/$1" "$2" 2>/dev/null; }
-    dev_has() { gio info "$base/$1" >/dev/null 2>&1; }
-    dev_put() { # MTP 不支持覆盖写：先删再拷
-      if dev_has "$2"; then gio remove "$base/$2"; fi
-      gio copy "$1" "$base/$2"
-    }
-    dev_mkdir() { dev_has "$1" || gio mkdir "$base/$1"; }
-    ;;
-  ssh)
-    ssh "${ssh_opts[@]}" "$SSH_HOST" true 2>/dev/null || { echo "✗ 连不上 $dev（ssh $SSH_HOST）：USB 连上、屏幕解锁后再试" >&2; exit 1; }
-    base=$KOREADER_DIR
-    dev_get() { scp -q "${ssh_opts[@]}" "$SSH_HOST:$base/$1" "$2" 2>/dev/null; }
-    dev_has() { ssh "${ssh_opts[@]}" "$SSH_HOST" "test -e '$base/$1'"; }
-    dev_put() { scp -q "${ssh_opts[@]}" "$1" "$SSH_HOST:$base/$2.tmp" && ssh "${ssh_opts[@]}" "$SSH_HOST" "mv '$base/$2.tmp' '$base/$2'"; }
-    dev_mkdir() { ssh "${ssh_opts[@]}" "$SSH_HOST" "mkdir -p '$base/$1'"; }
-    ;;
-  *) echo "✗ device.conf 的 TRANSPORT 只能是 mtp 或 ssh" >&2; exit 2 ;;
-esac
+KO_TMP=$(mktemp -d)
+trap 'rm -rf "$KO_TMP"' EXIT
+ko_connect "$dev" "$KO_TMP"
 dev_has settings.reader.lua || { echo "✗ $dev 的 KOReader 目录里没有 settings.reader.lua（KOReader 没装、或还没运行过一次）" >&2; exit 1; }
 
-# ── KOReader 在不在运行 ──
-closed=$closed_flag
-case $RUNNING_CHECK in
-  crashlog) # crash.log 里最后一次启动之后有没有"Tearing down UIManager"
-    closed=0
-    if dev_get crash.log "$work/crash.log"; then
-      start=$(grep -an "It's KOReader!" "$work/crash.log" | tail -1 | cut -d: -f1 || true)
-      stop=$(grep -an "Tearing down UIManager" "$work/crash.log" | tail -1 | cut -d: -f1 || true)
-      [[ -n $stop && ( -z $start || $stop -gt $start ) ]] && closed=1
-    fi
+# ── 取回设备上的原文件。读失败（不是"没有这个文件"）就停：拿空表合并写回去会把整份配置冲掉 ──
+orig=$KO_TMP/orig new=$KO_TMP/new
+mkdir -p "$orig/settings" "$orig/patches" "$new/settings"
+for f in "${KO_FILES[@]}"; do
+  if dev_has "$f"; then
+    dev_get "$f" "$orig/$f" || { echo "✗ 读不出设备上的 $f（连接不稳？）" >&2; exit 1; }
+    cp "$orig/$f" "$new/$f"
+  fi
+done
+
+# ── 算出新配置 ──
+case $mode in
+  apply) ko_merge_all "$new" "$dev" ;;
+  restore)
+    if [[ -n $restore_from ]]; then src=$backup_root/$restore_from/$dev
+    else src=$(ls -d "$backup_root"/*/"$dev" 2>/dev/null | sort | tail -1 || true); fi
+    [[ -n $src && -d $src ]] || { echo "✗ 没有 $dev 的备份（$(show "$backup_root")/<时间>/$dev/）" >&2; exit 1; }
+    echo "从备份还原：$(show "$src")"
+    for f in "${KO_FILES[@]}"; do [[ -f $src/$f ]] && cp "$src/$f" "$new/$f"; done
     ;;
-  proc) # 有没有进程在跑这个 KOReader 目录下的 reader.lua
-    closed=0
-    # 模式写成 reade[r].lua：这条命令自己的命令行里是字面的 "reade[r].lua"，不会被自己匹配上
-    ssh "${ssh_opts[@]}" "$SSH_HOST" "cat /proc/[0-9]*/cmdline 2>/dev/null | tr '\\0' ' ' | grep -q '$base/reade[r].lua'" || closed=1
+  uninstall)
+    ko_unmerge_all "$new" "$backup_root" "$dev"
     ;;
 esac
 
-# ── 取回设备上的原文件，在临时目录里合并 ──
-mkdir -p "$work/orig/settings" "$work/new/settings"
-files=(settings.reader.lua settings/gestures.lua settings/profiles.lua)
-for f in "${files[@]}"; do
-  if dev_get "$f" "$work/orig/$f"; then cp "$work/orig/$f" "$work/new/$f"; fi
-done
-
-# 分层合并（个人设置 → 方案 → 设备 → 预设），中间层改过、后面又改回来的键不算改动：只看原文件和最终结果的净差异。
-run() { # run <脚本> [参数…]：跑一步合并；0 有改动、10 没改动都算正常
-  local rc=0
-  luajit "$@" >/dev/null || rc=$?
-  [[ $rc -eq 0 || $rc -eq 10 ]] || { echo "✗ 合并出错（$*）" >&2; exit 3; }
-}
-run "$here/merge.lua" "$work/new/settings.reader.lua" "$here/personal/settings.reader.patch.lua"
-run "$here/merge.lua" "$work/new/settings.reader.lua" "$here/schemes/text.settings.patch.lua"
-run "$here/merge.lua" "$work/new/settings.reader.lua" "$here/schemes/comic.settings.patch.lua"
-run "$here/merge.lua" "$work/new/settings.reader.lua" "$here/devices/$dev/settings.reader.patch.lua"
-run "$here/presets.lua" "$work/new/settings.reader.lua"
-run "$here/merge.lua" "$work/new/settings/gestures.lua" "$here/personal/gestures.patch.lua"
-run "$here/merge.lua" "$work/new/settings/profiles.lua" "$here/schemes/profiles.patch.lua"
+# 净差异：中间层改过、后面又改回来的键不算
 changed=()
-for f in "${files[@]}"; do
-  [[ -f $work/orig/$f ]] || : >"$work/orig/$f.none"
+for f in "${KO_FILES[@]}"; do
+  [[ -f $new/$f ]] || continue
   rc=0
-  out=$(luajit "$here/diff.lua" "$work/orig/$f" "$work/new/$f") || rc=$?
+  out=$(luajit "$KO_HERE/diff.lua" "$orig/$f" "$new/$f") || rc=$?
   if [[ $rc -eq 0 ]]; then
     echo "── $f"
     printf '%s\n' "$out" | sed "s|^|  |"
@@ -124,66 +85,124 @@ for f in "${files[@]}"; do
   fi
 done
 
-# ── 字体 ──
+# ── 字体（只在应用时补缺的；卸载不删字体：可能是用户自己放的）──
 missing_fonts=()
-for font in "${FONTS[@]}"; do
-  dev_has "fonts/$font" || missing_fonts+=("$font")
-done
-for font in "${missing_fonts[@]}"; do
-  if [[ -f $font_src/$font ]]; then echo "── 字体 fonts/$font：设备上没有，会从 ${font_src/#$HOME/\~}/ 拷过去"
-  else echo "✗ 字体 fonts/$font：设备上没有，本机 ${font_src/#$HOME/\~}/ 里也没有，请先放进去" >&2; exit 1; fi
-done
+if [[ $mode == apply ]]; then
+  for font in "${FONTS[@]}"; do
+    dev_has "fonts/$font" && continue
+    [[ -f $font_src/$font ]] || { echo "✗ 字体 fonts/$font：设备上没有，本机 $(show "$font_src")/ 里也没有，请先放进去" >&2; exit 1; }
+    echo "── 字体 fonts/$font：设备上没有，会从 $(show "$font_src")/ 拷过去"
+    missing_fonts+=("$font")
+  done
+fi
 
-# ── 用户补丁（koreader/patches/*.lua → 设备的 patches/）：设备上没有或内容不同的才拷；不删设备上别的补丁 ──
-mkdir -p "$work/patches"
-patches=()
-for p in "$here"/patches/*.lua; do
+# ── 用户补丁（koreader/patches/*.lua ↔ 设备的 patches/）──
+put_patches=() rm_patches=()
+for p in "$KO_HERE"/patches/*.lua; do
   [[ -f $p ]] || continue
-  name=$(basename "$p")
-  if dev_get "patches/$name" "$work/patches/$name" && cmp -s "$p" "$work/patches/$name"; then continue; fi
-  echo "── 补丁 patches/$name：$([[ -f $work/patches/$name ]] && echo 内容不同，会更新 || echo 设备上没有，会拷过去)"
-  patches+=("$name")
+  name=$(basename "$p") on_dev=0
+  if dev_has "patches/$name"; then
+    dev_get "patches/$name" "$orig/patches/$name" || { echo "✗ 读不出设备上的 patches/$name" >&2; exit 1; }
+    on_dev=1
+  fi
+  case $mode in
+    apply)
+      [[ $on_dev -eq 1 ]] && cmp -s "$p" "$orig/patches/$name" && continue
+      echo "── 补丁 patches/$name：$([[ $on_dev -eq 1 ]] && echo 内容不同，会更新 || echo 设备上没有，会拷过去)"
+      put_patches+=("$name") ;;
+    uninstall)
+      [[ $on_dev -eq 1 ]] || continue
+      if cmp -s "$p" "$orig/patches/$name"; then echo "── 补丁 patches/$name：会删掉"; rm_patches+=("$name")
+      else echo "   补丁 patches/$name：和本仓库的不一样（在设备上改过？），不动"; fi ;;
+  esac
 done
+if [[ $mode == restore && -d $src/patches ]]; then
+  for p in "$src"/patches/*.lua; do
+    [[ -f $p ]] || continue
+    name=$(basename "$p")
+    [[ -f $orig/patches/$name ]] && cmp -s "$p" "$orig/patches/$name" && continue
+    echo "── 补丁 patches/$name：还原成备份里的"
+    cp "$p" "$KO_TMP/restore-$name"
+    put_patches+=("$name")
+  done
+fi
 
-if [[ ${#changed[@]} -eq 0 && ${#missing_fonts[@]} -eq 0 && ${#patches[@]} -eq 0 ]]; then echo "= $dev 已是最新，不用改"; exit 0; fi
+if [[ ${#changed[@]} -eq 0 && ${#missing_fonts[@]} -eq 0 && ${#put_patches[@]} -eq 0 && ${#rm_patches[@]} -eq 0 ]]; then
+  echo "= $dev 不用改"; exit 0
+fi
 if [[ $write -eq 0 ]]; then echo "（dry run：以上是会改的；确认后加 --write 写入）"; exit 0; fi
 
-# ── 写入 ──
-if [[ $closed -eq 0 ]]; then
-  case $RUNNING_CHECK in
-    crashlog) echo "✗ KOReader 看起来还在运行（crash.log 里最后一次启动之后没有退出记录）。先在设备上退出 KOReader 再写。" >&2; exit 1 ;;
-    proc) echo "✗ KOReader 正在运行。先在设备上退出 KOReader 再写。" >&2; exit 1 ;;
-  esac
-  read -r -p "确认已在设备上用 KOReader 菜单里的「退出」关掉了它（在最近任务里划掉不一定结束进程）？[y/N] " ans
-  [[ $ans == y || $ans == Y ]] || { echo "没写。"; exit 1; }
-fi
-for font in "${missing_fonts[@]}"; do
-  dev_put "$font_src/$font" "fonts/$font"
-  echo "✓ 字体 fonts/$font 已拷到设备"
+# ── KOReader 必须已退出 ──
+state=$(ko_running) || exit 1
+case $state in
+  running) echo "✗ KOReader 正在运行（$RUNNING_CHECK 检查）。先在设备上用 KOReader 菜单里的「退出」关掉它再写。" >&2; exit 1 ;;
+  unknown)
+    if [[ $closed_flag -eq 0 ]]; then
+      [[ -t 0 ]] || { echo "✗ 从电脑看不出 $dev 上的 KOReader 是否在运行：确认已退出后加 --closed 再跑" >&2; exit 1; }
+      read -r -p "确认已在设备上用 KOReader 菜单里的「退出」关掉了它（在最近任务里划掉不一定结束进程）？[y/N] " ans || ans=
+      [[ $ans == y || $ans == Y ]] || { echo "没写。"; exit 1; }
+    fi ;;
+esac
+
+# ── 备份：要动的配置和补丁（原来没有的记下来，回滚时删掉）──
+backup=$backup_root/$(date +%Y-%m-%d_%H%M%S)/$dev
+mkdir -p "$backup/settings" "$backup/patches"
+for f in "${changed[@]}"; do [[ -f $orig/$f ]] && cp -p "$orig/$f" "$backup/$f"; done
+for name in "${put_patches[@]}" "${rm_patches[@]}"; do
+  [[ -f $orig/patches/$name ]] && cp -p "$orig/patches/$name" "$backup/patches/$name"
 done
-if [[ ${#patches[@]} -gt 0 ]]; then
-  dev_mkdir patches
-  for name in "${patches[@]}"; do
-    dev_put "$here/patches/$name" "patches/$name"
-    rm -f "$work/back"
-    if dev_get "patches/$name" "$work/back" && cmp -s "$here/patches/$name" "$work/back"; then echo "✓ 补丁 patches/$name 已拷到设备，回读核对一致"
-    else echo "✗ 补丁 patches/$name 回读核对不一致" >&2; exit 4; fi
+
+# ── 写入。每个文件写完回读核对；失败就把已经写过的还原 ──
+touched=()
+verify() { # verify <本地> <设备路径>：回读逐字节比较
+  rm -f "$KO_TMP/back"
+  dev_get "$2" "$KO_TMP/back" && cmp -s "$1" "$KO_TMP/back"
+}
+rollback() {
+  echo "✗ $1，把已写的文件还原：" >&2
+  local rel bad=0
+  for rel in "${touched[@]}"; do
+    if [[ -f $backup/$rel ]]; then
+      if dev_put "$backup/$rel" "$rel" && verify "$backup/$rel" "$rel"; then echo "  ↺ $rel 已还原" >&2
+      else echo "  ✗ $rel 还原失败，备份在 $(show "$backup/$rel")" >&2; bad=1; fi
+    else
+      if dev_rm "$rel"; then echo "  ↺ $rel 原来没有，已删掉" >&2
+      else echo "  ✗ $rel 删不掉" >&2; bad=1; fi
+    fi
   done
-fi
-[[ ${#changed[@]} -eq 0 ]] && exit 0
-backup=~/Documents/ereader/koreader-backup/$(date +%Y-%m-%d_%H%M%S)/$dev
-mkdir -p "$backup/settings"
-for f in "${files[@]}"; do if [[ -f $work/orig/$f ]]; then cp -p "$work/orig/$f" "$backup/$f"; fi; done
-readback() { rm -f "$work/back"; dev_get "$1" "$work/back" && cmp -s "$work/new/$1" "$work/back"; }
-restore() { # restore <出问题的文件>
-  echo "✗ $1 回读核对不一致（应为 $(stat -c %s "$work/new/$1") 字节，设备上读回 $(stat -c %s "$work/back" 2>/dev/null || echo 读不到)），用备份还原" >&2
-  for f in "${changed[@]}"; do
-    if [[ -f $backup/$f ]]; then dev_put "$backup/$f" "$f"; fi
-  done
+  [[ $bad -eq 0 ]] || echo "  有文件没还原成功：按上面的备份路径手动处理" >&2
   exit 4
 }
-for f in "${changed[@]}"; do
-  dev_put "$work/new/$f" "$f"
-  readback "$f" || restore "$f"
+put_verified() { # put_verified <本地> <设备路径>
+  touched+=("$2")
+  dev_put "$1" "$2" || rollback "写 $2 失败"
+  verify "$1" "$2" || rollback "$2 回读核对不一致"
+}
+
+for font in "${missing_fonts[@]}"; do # 字体大，按大小核对；失败只删掉半个文件，不影响配置
+  if dev_put "$font_src/$font" "fonts/$font" && [[ $(dev_size "fonts/$font") == "$(stat -c %s "$font_src/$font")" ]]; then
+    echo "✓ 字体 fonts/$font 已拷到设备"
+  else
+    dev_rm "fonts/$font" || true
+    echo "✗ 字体 fonts/$font 没拷成功（大小不对），什么都没改" >&2; exit 4
+  fi
 done
-echo "✓ $dev：写入 ${changed[*]}，回读核对一致。原配置备份在 ${backup/#$HOME/\~}"
+if [[ ${#put_patches[@]} -gt 0 ]]; then
+  dev_mkdir patches
+  for name in "${put_patches[@]}"; do
+    local_src=$KO_HERE/patches/$name
+    [[ $mode == restore ]] && local_src=$KO_TMP/restore-$name
+    put_verified "$local_src" "patches/$name"
+    echo "✓ 补丁 patches/$name 已写入，回读一致"
+  done
+fi
+for name in "${rm_patches[@]}"; do
+  touched+=("patches/$name")
+  dev_rm "patches/$name" || rollback "删 patches/$name 失败"
+  echo "✓ 补丁 patches/$name 已删掉"
+done
+for f in "${changed[@]}"; do
+  put_verified "$new/$f" "$f"
+done
+[[ ${#changed[@]} -gt 0 ]] && echo "✓ $dev：写入 ${changed[*]}，回读一致"
+echo "  改动前的文件备份在 $(show "$backup")"

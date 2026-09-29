@@ -101,7 +101,7 @@ pub fn is_image_ext(name: &str) -> bool {
 }
 
 /// 图片路径的扩展名（小写、不带点）：取**文件名**最后一个 `.` 之后；文件名没有扩展名时当 `jpg`（EPUB 里绝大多数图是
-/// JPEG）。占位封面与漫画分卷重新落名图片共用——此前两处直接 `rsplit('.')`，无扩展名的路径会把整段路径连同 `/`
+/// JPEG）。读封面、占位封面、优化器给图片重新落名共用——此前各处直接 `rsplit('.')`，无扩展名的路径会把整段路径连同 `/`
 /// 当扩展名，写出 `cover.images/x`、`images/0001.oebps/images/x` 这种条目名。
 pub(crate) fn image_ext_of(path: &str) -> String {
     let base = path.rsplit('/').next().unwrap_or(path);
@@ -121,10 +121,23 @@ pub fn image_media_type_of_ext(ext: &str) -> &'static str {
     }
 }
 
-/// "先产出到临时文件、成功才改名覆盖目标、失败清掉半成品"的统一外壳（`epub-optimize` 用）。`produce(tmp)` 负责把产物写到 `tmp` 并返回任意结果（如统计报告）；
+/// "先产出到临时文件、成功才改名覆盖目标、失败清掉半成品"的统一外壳（命令行工具写产物都走它）。`produce(tmp)` 负责把产物写到 `tmp` 并返回任意结果（如统计报告）；
 /// 它出错或最后 `rename` 失败，`tmp` 都会被删掉，不在目录里留半成品。`tmp` 应与 `target` 同分区（rename 才原子）。
+/// 输入输出是同一个文件时也安全：产出期间原文件不动，改名那一刻才换掉。
 pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, produce: impl FnOnce(&std::path::Path) -> Result<T, String>) -> Result<T, String> {
-    let value = match produce(tmp) {
+    produce_then_replace_with(tmp, target, produce, || Ok(()))
+}
+
+/// [`produce_then_replace`]，另在产出成功之后、改名之前调 `before_rename`（如先备份原文件）；它出错时同样清掉 `tmp`、
+/// 目标不动。
+pub fn produce_then_replace_with<T>(
+    tmp: &std::path::Path,
+    target: &std::path::Path,
+    produce: impl FnOnce(&std::path::Path) -> Result<T, String>,
+    before_rename: impl FnOnce() -> Result<(), String>,
+) -> Result<T, String> {
+    let value = produce(tmp).and_then(|v| before_rename().map(|_| v));
+    let value = match value {
         Ok(v) => v,
         Err(e) => {
             let _ = std::fs::remove_file(tmp);
@@ -136,6 +149,47 @@ pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, 
         return Err(format!("改名覆盖 {} 失败: {e}", target.display()));
     }
     Ok(value)
+}
+
+/// 与 `target` 同目录的临时文件名 `<文件名>.<tag>.tmp`（同分区，[`produce_then_replace`] 的改名才原子）。
+pub fn tmp_beside(target: &std::path::Path, tag: &str) -> std::path::PathBuf {
+    let mut name = target.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{tag}.tmp"));
+    target.with_file_name(name)
+}
+
+/// 整份字节原子地写到 `target`（先写同目录临时文件再改名，失败不留半成品、不截断原文件）。
+pub fn write_atomic(target: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    produce_then_replace(&tmp_beside(target, "writing"), target, |t| std::fs::write(t, bytes).map_err(|e| format!("写 {}: {e}", target.display())))
+}
+
+/// 命令行工具（`bookconv`、`azw3` 的各个 bin）共用的样板：出错退出、读写文件、SIGPIPE。
+/// 退出码约定：1 = 用法错，2 = 读写或处理失败，3 起各工具自定。
+pub mod cli {
+    pub use super::restore_sigpipe;
+    use std::path::Path;
+
+    /// 用法错的退出码。
+    pub const USAGE: i32 = 1;
+    /// 读写或处理失败的退出码。
+    pub const FAILED: i32 = 2;
+
+    /// 把 `msg` 打到 stderr，以 `code` 退出。
+    pub fn die(code: i32, msg: impl std::fmt::Display) -> ! {
+        eprintln!("{msg}");
+        std::process::exit(code)
+    }
+
+    /// 读整个文件；失败以 [`FAILED`] 退出。
+    pub fn read_or_die(path: impl AsRef<Path>) -> Vec<u8> {
+        let path = path.as_ref();
+        std::fs::read(path).unwrap_or_else(|e| die(FAILED, format!("读 {}: {e}", path.display())))
+    }
+
+    /// 原子地写整个文件（[`super::write_atomic`]）；失败以 [`FAILED`] 退出。
+    pub fn write_or_die(path: impl AsRef<Path>, bytes: &[u8]) {
+        super::write_atomic(path.as_ref(), bytes).unwrap_or_else(|e| die(FAILED, e))
+    }
 }
 
 /// 书名 → 安全文件名：控制字符与路径字符（`/\:*?"<>|`）换下划线、去首尾空白、开头的 `.` 换下划线（免得成了隐藏文件）；
@@ -161,7 +215,7 @@ pub fn sanitize_filename(title: &str, default: &str) -> String {
 }
 
 /// 命令行工具的输出接到 `head` 这类提前关闭的管道时，像别的命令一样安静退出（Rust 缺省忽略 SIGPIPE，`println!` 会 panic）。
-/// 在 `main` 一开头、还没有其它线程时调用。`booklib`、`ebook-meta` 共用。
+/// 在 `main` 一开头、还没有其它线程时调用。`booklib` 和所有往 stdout 打印的 bin 共用（也经 [`cli`] 导出）。
 pub fn restore_sigpipe() {
     #[cfg(unix)]
     {
@@ -216,6 +270,25 @@ mod tests {
         let err = produce_then_replace(&tmp, &dir_target, |t| std::fs::write(t, b"z").map_err(|e| e.to_string())).unwrap_err();
         assert!(err.contains("改名覆盖"), "{err}");
         assert!(!tmp.exists());
+        // 改名前回调（备份）失败：目标不动、tmp 清掉；成功时先于改名执行
+        let err = produce_then_replace_with(&tmp, &target, |t| std::fs::write(t, b"x").map_err(|e| e.to_string()), || Err("备份失败".into())).unwrap_err();
+        assert_eq!(err, "备份失败");
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert!(!tmp.exists());
+        let bak = d.path().join("t.bak");
+        produce_then_replace_with(&tmp, &target, |t| std::fs::write(t, b"newer").map_err(|e| e.to_string()), || std::fs::copy(&target, &bak).map(|_| ()).map_err(|e| e.to_string())).unwrap();
+        assert_eq!((std::fs::read(&bak).unwrap(), std::fs::read(&target).unwrap()), (b"new".to_vec(), b"newer".to_vec()));
+    }
+
+    #[test]
+    fn write_atomic_replaces_and_tmp_sits_beside_target() {
+        let d = tempfile::tempdir().unwrap();
+        let target = d.path().join("书.epub");
+        assert_eq!(tmp_beside(&target, "x"), d.path().join("书.epub.x.tmp"));
+        std::fs::write(&target, b"old").unwrap();
+        write_atomic(&target, b"new").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1, "不留临时文件");
     }
 
     #[test]
