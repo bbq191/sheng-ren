@@ -10,6 +10,7 @@
 //!   --keep-spacing   清洗但保留原书段间距（诗集/剧本）
 //!   --auto-toc       强制从 h1–h6 重建目录（缺省仅在无目录时生成）
 //!   --no-paginate    不做章节分页（缺省：章标题独立一页、节与节之间分页）
+//!   --keep-color     黑白屏设备的漫画页也保留彩色（缺省转 256 级灰度）；用来对比灰度与彩色的体积、画质
 //!   --footnote-anchor 脚注用章末锚点跳转（缺省即 Anchor，此参数只为兼容旧脚本）
 //!   --check          产物过质量门，打印 JSON 报告；不过则退出码 3（产物仍写出）
 //!   --require-toc    质量门把"无目录"升为失败
@@ -24,12 +25,12 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flags: Vec<&str> = args.iter().filter(|a| a.starts_with("--") && !a.starts_with("--device=")).map(|s| s.as_str()).collect();
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--no-paginate", "--footnote-anchor", "--check", "--require-toc"].contains(f)) {
-        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--footnote-anchor] [--check] [--require-toc] 输入.epub 输出.epub");
+    if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--no-paginate", "--keep-color", "--footnote-anchor", "--check", "--require-toc"].contains(f)) {
+        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--keep-color] [--footnote-anchor] [--check] [--require-toc] 输入.epub 输出.epub");
     }
-    // 该阅读模式 EPUB 的真实可阅读范围（没有实测值时是标称屏幕）与是否黑白屏
+    // 该阅读模式 EPUB 的真实可阅读范围（没有实测值时是标称屏幕）、是否黑白屏、漫画白边
     let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
-    let (screen, grayscale) = (device.readable(profile::Format::Epub), !device.color);
+    let (screen, grayscale, comic_margin) = (device.readable(profile::Format::Epub), !device.color && !flags.contains(&"--keep-color"), device.comic_margin);
     let wash = if flags.contains(&"--no-wash") {
         None
     } else {
@@ -44,7 +45,7 @@ fn main() {
     let footnote = FootnoteMode::Anchor;
     // 先写临时文件，成功后再改名：输入输出同路径（就地覆盖）时不会边读边写同一个文件，失败也不留半成品。
     let target = std::path::Path::new(files[1]);
-    let opts = OptimizeOpts { screen, grayscale, wash, footnote, page_direction: None };
+    let opts = OptimizeOpts { screen, grayscale, comic_margin, wash, footnote, page_direction: None };
     let rep = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(target, "optimizing"), target, |t| optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), t, &opts, |_, _| {}))
         .unwrap_or_else(|e| die(cli::FAILED, format!("优化失败: {e}")));
     println!("epub-optimize v{}: {} 文件/{} 章, {} → {} 字节", optimize::OPTIMIZE_VERSION, rep.total_files, rep.html_files, rep.bytes_before, rep.bytes_after);
