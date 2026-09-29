@@ -24,6 +24,8 @@ end
 if type(presets["文字"]) == "table" and type(presets["文字"].footer) == "table" then
   local comic = L.copy(presets["文字"])
   comic.footer.disable_progress_bar = true
+  -- 隐藏的状态栏不再占页面底部（要配 patches/2-footer-preset-reclaim.lua：KOReader 载入预设时自己不切这个开关）
+  comic.footer.reclaim_height = true
   comic.reader_footer_mode = 0
   presets["漫画"] = comic
 end
