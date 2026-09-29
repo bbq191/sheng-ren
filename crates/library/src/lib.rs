@@ -1,12 +1,12 @@
-//! 书库：**只存索引**（每本书一个 `meta.json`：原件在哪、内容哈希、书名作者），按设备 profile 从原件生成产物。
+//! 书库：**只存索引**（每本书一个 `meta.json`：原件在哪、内容哈希、书名作者），按阅读模式（设备 profile）从原件生成优化过的 EPUB。
 //!
 //! 目录结构（`root` 缺省 `~/.local/share/booklib`）：
 //! ```text
 //! masters/<id>/meta.json                   一本书的索引：原件路径、SHA-256、大小与修改时间、书名、作者
 //! masters/<id>/cover.jpg                   可选：联网找来的封面（booklib meta），书里没封面时生成产物用
 //! masters/<id>/master.epub                 只有网址入库的书有（没有原件，抓下来的正文存这里）；早期版本入库的条目也可能有
-//! output/<设备 id>/<书名>.<epub|azw3|pdf>  产物；output/<设备 id>/.state.json 记每本书的生成指纹，没变就跳过
-//! deliveries.json                          build --out 拷出去的各份（没变不重拷，remove 时一起删）
+//! output/<模式>/<书名>.epub                 add 进来的书（不在跟踪目录里）和网址书的产物
+//! output-state/<模式>.json                 每个模式的生成记录：书 id → 产物绝对路径、指纹（没变就跳过；只删这里记着的文件）
 //! sources.json                             跟踪的原件目录（track），以及其中每个文件上次看到时的大小、修改时间、id
 //! profiles/*.toml                          可选：自定义设备 profile，同 id 覆盖内置
 //! .lock                                    进程锁
@@ -14,13 +14,16 @@
 //! ```
 //! `<id>` 是原件内容 SHA-256 的前 12 位十六进制：同一本书重复入库会认出来，改名移动了也认得出。
 //!
-//! 生成时读原件：EPUB、PDF 直接用；MOBI/AZW/AZW3/PRC/FB2、CBZ 当场转成 EPUB（与设备无关的转换，结果不落书库）。
+//! 跟踪目录 `D` 里的书，产物放在书库外、和 `D` 并列的 `D/../<模式>/` 下，按原件所在子目录镜像
+//! （`books/haodoo/x.epub` → `koreader/haodoo/<书名>.epub`），见 `generate.rs`。
+//!
+//! 生成时读原件：EPUB 直接用；CBZ 当场转成 EPUB（与设备无关的转换，结果不落书库）。
+//! 早期版本收过的其它格式（MOBI/AZW3/FB2/PDF 等）2026-09-29 起不再支持：条目保留（`list` 标出来），生成时跳过。
 //! 原件不在了或者内容变了（大小、修改时间变了就重算哈希核对），生成会停下来提示先 `sync` 或重新入库，
 //! 不会拿改过的内容冒充原来那本书。带 DRM 的书现在拒收（解 DRM 还没做）。
 
 mod cover;
 mod covergen;
-mod deliver;
 mod douban;
 mod fsutil;
 mod generate;
@@ -37,7 +40,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use cover::{CoverInfo, CoverResult};
-pub use deliver::{Delivered, DeliveryStatus};
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus};
 pub use metadata::{BookInfo, Edition, InfoResult};
@@ -72,9 +74,6 @@ pub struct Meta {
     /// 存着的母版文件的 SHA-256。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub master_sha256: String,
-    /// PDF 有没有文字层（有 → 转 EPUB；没有 → 图片型）。入库时判定一次存下来。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pdf_text_layer: Option<bool>,
     /// 联网找来的封面（`booklib meta`）；书里没有封面时，生成产物时放进去。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<CoverInfo>,
@@ -92,6 +91,11 @@ impl Meta {
     /// 内容的格式（小写扩展名）：存着的母版看母版文件名，否则是原件格式。
     pub fn content_format(&self) -> &str {
         if self.master.is_empty() { &self.source_format } else { self.master.rsplit_once('.').map_or("", |(_, e)| e) }
+    }
+
+    /// 内容格式现在还支持生成（EPUB、CBZ）。早期版本收过的 MOBI/AZW3/FB2/PDF 等不再支持：条目保留，生成时跳过。
+    pub fn supported(&self) -> bool {
+        SUPPORTED_EXTS.contains(&self.content_format())
     }
 
     /// 判断产物是否过期用的内容哈希。
@@ -137,9 +141,9 @@ pub struct Library {
     locked: Cell<bool>,
     /// 残留临时文件清理过了（每个进程第一次拿到锁时清一次）。
     cleaned: Cell<bool>,
-    /// 各设备产物目录的 `.state.json`、`deliveries.json`：一次 build/list 里每本书都要查，读一次缓存起来。
+    /// 各模式的生成记录 `output-state/<模式>.json`、`sources.json`：一次 build/list 里每本书都要查，读一次缓存起来。
     states: JsonCache<generate::State>,
-    deliveries_json: JsonCache<deliver::Deliveries>,
+    sources_json: JsonCache<sources::Sources>,
     /// 本进程里核对过哈希的原件：id → (路径, 大小与修改时间)。多台设备生成同一本书时不重算哈希。
     verified: RefCell<HashMap<String, Verified>>,
     /// 联网查书目用的 HTTP（节流、离线状态跨书共用）。
@@ -205,19 +209,16 @@ impl EpubInfo {
     }
 }
 
-fn is_pdf_text_layer(path: &Path) -> bool {
-    bookconv::pdf_ingest::classify_pdf(path) == bookconv::pdf_ingest::PdfKind::TextLayer
+/// 不再支持的格式的提示。
+pub(crate) fn unsupported(format: &str) -> String {
+    format!(".{format} 不再支持（只支持 EPUB 和 CBZ，或网址）")
 }
 
-/// 要转换才能用的原件格式 → EPUB 字节（与设备无关）。EPUB、PDF 不走这里。
-pub(crate) fn convert_to_epub(format: &str, name: &str, data: &[u8], title: &str) -> Result<Vec<u8>, String> {
+/// 要转换才能用的原件格式（CBZ）→ EPUB 字节（与设备无关）。EPUB 不走这里。
+pub(crate) fn convert_to_epub(format: &str, data: &[u8], title: &str) -> Result<Vec<u8>, String> {
     match format {
         "cbz" => bookconv::convert::cbz::cbz_to_epub(data, title),
-        "mobi" | "azw" | "azw3" | "prc" | "fb2" => {
-            bookconv::convert::precheck(name, data)?;
-            Ok(bookconv::convert::convert_file(name, data).ok_or("不支持的格式")??.data)
-        }
-        _ => Err(format!("不支持的格式 .{format}（支持 {}，或网址）", SUPPORTED_EXTS.join(" / "))),
+        _ => Err(unsupported(format)),
     }
 }
 
@@ -243,7 +244,7 @@ impl Library {
             locked: Cell::new(false),
             cleaned: Cell::new(false),
             states: JsonCache::new(),
-            deliveries_json: JsonCache::new(),
+            sources_json: JsonCache::new(),
             verified: RefCell::new(HashMap::new()),
             net: OnceCell::new(),
         })
@@ -268,7 +269,8 @@ impl Library {
         Ok(l)
     }
 
-    /// 书库里会放临时文件、临时目录的地方：书库根、`masters/` 和各条目、`output/<设备>/`。
+    /// 书库里会放临时文件、临时目录的地方：书库根、`masters/` 和各条目、`output-state/`、`output/<模式>/`，
+    /// 以及生成记录里产物所在的目录（那里只清临时文件，不动目录）。
     fn clean_leftovers(&self) {
         fsutil::clean_tmp(&self.root);
         let masters = self.root.join("masters");
@@ -276,10 +278,14 @@ impl Library {
         for id in self.entry_ids() {
             fsutil::clean_tmp(&masters.join(id));
         }
+        fsutil::clean_tmp(&self.root.join("output-state"));
         for dev in std::fs::read_dir(self.root.join("output")).into_iter().flatten().flatten() {
             if dev.file_type().is_ok_and(|t| t.is_dir()) {
                 fsutil::clean_tmp(&dev.path());
             }
+        }
+        for dir in self.output_dirs() {
+            fsutil::clean_tmp_files(&dir);
         }
     }
 
@@ -305,7 +311,7 @@ impl Library {
         fsutil::write_json(&self.entry_dir(&meta.id).join("meta.json"), meta)
     }
 
-    /// 读一个条目；早期条目缺的字段（母版哈希、PDF 类型）补算，持锁时写回（之后不用再算）。
+    /// 读一个条目；早期条目缺的字段（母版哈希）补算，持锁时写回（之后不用再算）。
     /// 不持锁（`list`）时只在内存里补，不写书库。
     fn load(&self, id: &str) -> Option<Meta> {
         let mut m = self.read_meta(id)?;
@@ -314,13 +320,6 @@ impl Library {
         if !m.master.is_empty() && m.master_sha256.is_empty() {
             if let Ok(sha) = sha256_file(&stored) {
                 m.master_sha256 = sha;
-                changed = true;
-            }
-        }
-        if m.content_format() == "pdf" && m.pdf_text_layer.is_none() {
-            let p = if m.master.is_empty() { PathBuf::from(&m.source_path) } else { stored };
-            if p.exists() {
-                m.pdf_text_layer = Some(is_pdf_text_layer(&p));
                 changed = true;
             }
         }
@@ -389,23 +388,21 @@ impl Library {
             }
             return Ok(Added::Existing(m));
         }
+        if !SUPPORTED_EXTS.contains(&ext.as_str()) {
+            return Err("只支持 EPUB 和 CBZ".into());
+        }
         let fallback_title = bookconv::naming::canonical_book_name(&stem);
-        // 检查能不能用、取书名作者：要转换的格式先转一遍（结果不存，生成时再转）
-        let (title, authors, pdf_text_layer) = match ext.as_str() {
-            "pdf" => (String::new(), Vec::new(), Some(is_pdf_text_layer(&path))),
-            _ => {
-                let info = if ext == "epub" {
-                    EpubInfo::read(std::fs::File::open(&path).map_err(|e| format!("读 {path_str}: {e}"))?)?
-                } else {
-                    let data = std::fs::read(&path).map_err(|e| format!("读 {path_str}: {e}"))?;
-                    EpubInfo::read(std::io::Cursor::new(convert_to_epub(&ext, &name, &data, &fallback_title)?))?
-                };
-                if let Some(d) = info.drm {
-                    return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
-                }
-                (info.title, info.authors, None)
-            }
+        // 检查能不能用、取书名作者：CBZ 先转一遍（结果不存，生成时再转）
+        let info = if ext == "epub" {
+            EpubInfo::read(std::fs::File::open(&path).map_err(|e| format!("读 {path_str}: {e}"))?)?
+        } else {
+            let data = std::fs::read(&path).map_err(|e| format!("读 {path_str}: {e}"))?;
+            EpubInfo::read(std::io::Cursor::new(convert_to_epub(&ext, &data, &fallback_title)?))?
         };
+        if let Some(d) = info.drm {
+            return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
+        }
+        let (title, authors) = (info.title, info.authors);
         unchanged()?;
         let meta = Meta {
             id,
@@ -418,7 +415,6 @@ impl Library {
             source_sha256: sha,
             source_size: size,
             source_mtime_ns: mtime_ns,
-            pdf_text_layer,
             ..Default::default()
         };
         self.store(&meta, &[])?;
@@ -579,7 +575,7 @@ impl Library {
         Ok(rep)
     }
 
-    /// 删掉一本书的索引、它在各设备下的产物和拷出去的各份。原件不动。`meta.json` 损坏的条目也能删。返回书名。
+    /// 删掉一本书的索引和它在各模式下的产物（只删生成记录里记着的文件）。原件不动。`meta.json` 损坏的条目也能删。返回书名。
     pub fn remove(&self, id: &str) -> Result<String, String> {
         let dir = self.entry_dir(id);
         if id.is_empty() || id.starts_with('.') || id.contains(['/', '\\']) || !dir.is_dir() {
@@ -587,7 +583,6 @@ impl Library {
         }
         let title = self.read_meta(id).map(|m| m.title).unwrap_or_else(|| "（条目已损坏）".into());
         self.remove_outputs(id)?;
-        self.remove_deliveries(id)?;
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
         self.verified.borrow_mut().remove(id);
         Ok(title)
