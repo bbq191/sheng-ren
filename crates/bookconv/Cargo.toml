@@ -13,8 +13,8 @@ ureq = "2"
 # 文字编码：网页的 GBK 等非 UTF-8 页面（quick-xml "encoding" 已间接引入同一版本）
 encoding_rs = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-# 图片降采样/抖动：只启 jpeg+png 控体积
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# 图片缩放与重编码：jpeg、png；gif、webp 只解码（漫画里的 GIF/WebP 页转 PNG/JPEG），都是纯 Rust 实现
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 fast_image_resize = "6.1.0"
 # XML 事件解析（质量门、网页正文、EPUB 组装）
 quick-xml = { version = "0.30", features = ["encoding"] }

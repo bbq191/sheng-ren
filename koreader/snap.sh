@@ -40,6 +40,10 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/home/patches" "$tmp/book"
 ko_merge_all "$tmp/home" "$dev"
+# 停用封面浏览插件：全新的 KO_HOME 第一次开书时它会弹一个模态提示（"Book info cache database updated."），配置档（漫画方案）
+# 在开书时发的设置事件全被这个提示框吞掉，截出来的漫画还是文字书的样子（2026-09-29 查实）。设备上只在第一次建库时弹一次。
+printf 'return { ["plugins_disabled"] = { ["coverbrowser"] = true } }\n' >"$tmp/snap.patch.lua"
+luajit "$KO_HERE/merge.lua" "$tmp/home/settings.reader.lua" "$tmp/snap.patch.lua" >/dev/null || [[ $? -eq 10 ]]
 cp "$KO_HERE/snap/2-snap.lua" "$tmp/home/patches/"
 cp "$book" "$tmp/book/"
 [[ -n $out ]] || out=$(mktemp -d)

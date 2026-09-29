@@ -74,7 +74,7 @@ pub(crate) fn put_entry<W: Write + Seek>(zw: &mut ZipWriter<W>, name: &str, opts
 
 /// [`read_skeleton`] 的结果。
 pub struct Skeleton {
-    /// 条目表：图片条目（`imgopt::is_downscalable`）的 `data` 为空占位，其余是真实字节。
+    /// 条目表：图片条目（`imgopt::is_page_image`）的 `data` 为空占位，其余是真实字节。
     pub entries: Vec<Entry>,
 }
 
@@ -89,7 +89,7 @@ pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton
             continue;
         }
         let name = f.name().to_string();
-        let data = if crate::imgopt::is_downscalable(&name) {
+        let data = if crate::imgopt::is_page_image(&name) {
             Vec::new()
         } else {
             let size = f.size();
@@ -346,14 +346,15 @@ mod tests {
 
     #[test]
     fn skeleton_leaves_images_empty_keeps_text() {
-        let bytes = zip_of(&[("dir/", b""), ("a.xhtml", b"<p>hi</p>"), ("images/p1.JPG", &[7u8; 300]), ("images/p2.gif", &[9u8; 10])]);
+        let bytes = zip_of(&[("dir/", b""), ("a.xhtml", b"<p>hi</p>"), ("images/p1.JPG", &[7u8; 300]), ("images/p2.gif", &[9u8; 10]), ("a.svg", b"<svg/>")]);
         let mut z = ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
         let sk = read_skeleton(&mut z).unwrap();
         let by: HashMap<&str, &Entry> = sk.entries.iter().map(|e| (e.name.as_str(), e)).collect();
-        assert_eq!(sk.entries.len(), 3, "目录项剔除");
+        assert_eq!(sk.entries.len(), 4, "目录项剔除");
         assert_eq!(by["a.xhtml"].data, b"<p>hi</p>");
-        assert!(by["images/p1.JPG"].data.is_empty(), "可降采样图片留空占位");
-        assert_eq!(by["images/p2.gif"].data.len(), 10, "gif 不在降采样范围，照常整份读");
+        assert!(by["images/p1.JPG"].data.is_empty(), "位图留空占位");
+        assert!(by["images/p2.gif"].data.is_empty(), "GIF/WebP 也留空（漫画页会处理它们，阶段二按需读）");
+        assert_eq!(by["a.svg"].data, b"<svg/>", "SVG 是文字，照常整份读");
     }
 
     /// 条目在 zip 目录里谎报解压大小（损坏/恶意文件）：不能照单预分配几 GB（设备上分配失败＝进程 abort）。

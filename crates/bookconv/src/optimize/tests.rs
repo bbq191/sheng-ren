@@ -193,6 +193,59 @@
         assert!(comic_img.len() > text_img.len(), "漫画书判定应触发更高质量重编码，体积应更大: comic={} text={}", comic_img.len(), text_img.len());
     }
 
+    /// 漫画里的静态 GIF 页转成 PNG（条目名不变），OPF manifest 的 media-type 跟着改；动图、文字书里的 GIF 原样，media-type 不动。
+    #[test]
+    fn comic_gif_pages_become_png_and_manifest_media_type_follows() {
+        let gif = |frames: Vec<image::RgbaImage>| {
+            let mut buf = Vec::new();
+            image::codecs::gif::GifEncoder::new(&mut buf).encode_frames(frames.into_iter().map(image::Frame::new)).unwrap();
+            buf
+        };
+        let page = |i: u32| image::RgbaImage::from_fn(200, 280, move |x, y| if (x / 10 + y / 10 + i).is_multiple_of(2) { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([230, 230, 230, 255]) });
+        let n = 20u32;
+        let mut buf = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zw.start_file("mimetype", stored).unwrap();
+            zw.write_all(b"application/epub+zip").unwrap();
+            let items: String = (1..=n).map(|i| format!(r#"<item id="c{i}" href="t/c{i}.xhtml" media-type="application/xhtml+xml"/><item id="p{i}" href="i/p%20{i}.gif" media-type="image/gif"/>"#)).collect();
+            let spine: String = (1..=n).map(|i| format!(r#"<itemref idref="c{i}"/>"#)).collect();
+            zw.start_file("O/content.opf", stored).unwrap();
+            zw.write_all(format!(r#"<package version="3.0"><metadata><dc:title>漫画</dc:title></metadata><manifest>{items}</manifest><spine>{spine}</spine></package>"#).as_bytes()).unwrap();
+            for i in 1..=n {
+                zw.start_file(format!("O/t/c{i}.xhtml"), stored).unwrap();
+                zw.write_all(format!(r#"<html><body><img src="../i/p%20{i}.gif"/></body></html>"#).as_bytes()).unwrap();
+                // 第 1 张是两帧动图：原样保留
+                let frames = if i == 1 { vec![page(0), page(1)] } else { vec![page(i)] };
+                zw.start_file(format!("O/i/p {i}.gif"), stored).unwrap();
+                zw.write_all(&gif(frames)).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let (out, _) = optimize_epub(&buf, crate::imgopt::Screen { width: 300, height: 400 }).unwrap();
+        let opf = String::from_utf8(entry_bytes(&out, "O/content.opf")).unwrap();
+        assert!(opf.contains(r#"href="i/p%201.gif" media-type="image/gif"/>"#), "动图不动: {opf}");
+        for i in 2..=n {
+            assert!(opf.contains(&format!(r#"<item id="p{i}" href="i/p%20{i}.gif" media-type="image/png"/>"#)), "第 {i} 张 media-type 改成 PNG: {opf}");
+            let img = entry_bytes(&out, &format!("O/i/p {i}.gif"));
+            assert_eq!(image::guess_format(&img).unwrap(), image::ImageFormat::Png);
+            assert_eq!({ let d = image::load_from_memory(&img).unwrap(); (d.width(), d.height()) }, (212, 282));
+        }
+        assert_eq!(image::guess_format(&entry_bytes(&out, "O/i/p 1.gif")).unwrap(), image::ImageFormat::Gif);
+        assert!(opf.contains("<dc:subject>漫画</dc:subject>"));
+    }
+
+    #[test]
+    fn set_manifest_media_types_matches_resolved_href_only() {
+        let opf = r#"<package><manifest><item id="a" href="img/a%20b.gif" media-type="image/gif"/><item media-type='image/webp' href="../x/c.webp" id="c"/><item id="d" href="img/d.gif"/><item id="e" href="img/e.gif" media-type="image/gif"/></manifest></package>"#;
+        let got = set_manifest_media_types(opf, "OEBPS/content.opf", &[("OEBPS/img/a b.gif".into(), "image/png"), ("x/c.webp".into(), "image/jpeg"), ("OEBPS/img/d.gif".into(), "image/png")]);
+        assert_eq!(
+            got,
+            r#"<package><manifest><item id="a" href="img/a%20b.gif" media-type="image/png"/><item media-type='image/jpeg' href="../x/c.webp" id="c"/><item id="d" href="img/d.gif"/><item id="e" href="img/e.gif" media-type="image/gif"/></manifest></package>"#
+        );
+    }
+
     #[test]
     fn streaming_reports_progress_per_entry() {
         let epub = make_crossfile_endnote_epub();
@@ -239,7 +292,7 @@
 
         let (stream_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
         let stream_img = entry_bytes(&stream_out, "p1.jpg");
-        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), false).unwrap();
+        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false).unwrap();
         assert_eq!(stream_img, direct, "流式并行处理结果应与直接处理逐字节一致");
         let mut ar = ZipArchive::new(Cursor::new(&stream_out)).unwrap();
         assert_eq!(ar.by_name("p1.jpg").unwrap().compression(), CompressionMethod::Stored, "已压缩的图片 STORED");
@@ -282,13 +335,13 @@
             let (mut x, mut y) = (Vec::new(), Vec::new());
             a.by_name(&name).unwrap().read_to_end(&mut x).unwrap();
             b.by_name(&name).unwrap().read_to_end(&mut y).unwrap();
-            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), false).unwrap_or(x);
+            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false).unwrap_or(x);
             assert_eq!(want, y, "第 {i} 张图并行结果与顺序结果不一致（乱序或串图）");
         }
         let mut y1 = Vec::new();
         b.by_name("p1.png").unwrap().read_to_end(&mut y1).unwrap();
         let (w1, h1) = image::ImageReader::new(Cursor::new(&y1)).with_guessed_format().unwrap().into_dimensions().unwrap();
-        assert!(h1 > 491 && w1 == 327, "应真的补白到设备长宽比（管线确实跑过）: {w1}x{h1}");
+        assert!(h1 > 491 && w1 == 329, "应真的补白到设备长宽比（管线确实跑过；PNG 不缩放，宽 327 + 两侧各 1px 白边）: {w1}x{h1}");
         let order = |z: &mut ZipArchive<Cursor<&Vec<u8>>>| -> Vec<String> { (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).filter(|n| n != OPTIMIZE_MARKER).collect() };
         assert_eq!(order(&mut a), order(&mut b), "条目顺序必须与原书一致");
     }

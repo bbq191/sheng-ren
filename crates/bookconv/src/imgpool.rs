@@ -6,10 +6,11 @@
 
 use std::sync::{Condvar, Mutex};
 
-/// 同时在处理的图片总像素上限：4 张单图解码上限（[`crate::imgopt::MAX_DECODE_PIXELS`]，900 万像素）＝ 3600 万像素。
+/// 同时在处理的图片总像素上限：4 张文字书插图解码上限（[`crate::imgopt::MAX_DECODE_PIXELS`]，900 万像素）＝ 3600 万像素。
 /// 实测整页处理约 9–16MB/百万像素（见 `MAX_DECODE_PIXELS` 文档），最坏情况（几张接近上限的超大图同时处理）峰值约
 /// 350–580MB，对电脑端足够安全；典型漫画页 100–200 万像素，[`worker_count`] 个线程可以全部同时开工（8 × 200 万 ＝
-/// 1600 万，远低于上限）。
+/// 1600 万，远低于上限）。比它还大的漫画页（最大 [`crate::imgopt::MAX_COMIC_DECODE_PIXELS`]）开工时独占全部额度：
+/// 等手上的图都做完才开始，做完之前别的图也不开工——大页一张一张来，峰值内存就是单张大页的量。
 pub const PIXEL_BUDGET: u64 = 4 * crate::imgopt::MAX_DECODE_PIXELS;
 
 /// 并行工作线程数上限。再往上加，写 zip（单线程、按顺序）和读原图会成为瓶颈，只多占内存不再明显加速。
