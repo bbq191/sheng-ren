@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>总体流程：入库 → 书库（索引）→ 按设备生成 → 设备</title>
+  <title>总体流程：入库 → 书库（索引）→ 按阅读模式生成 EPUB → 自己拷到设备</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0L10 5L0 10z" fill="#555"/>
@@ -13,6 +13,7 @@
       .h{font-weight:bold;font-size:15px}
       .s{font-size:12px;fill:#555}
       line,path.l{stroke:#555;stroke-width:1.4;fill:none}
+      path.d{stroke:#8a63c9;stroke-width:1.4;fill:none;stroke-dasharray:5 4}
     </style>
   </defs>
   <rect width="960" height="440" fill="#fafafa"/>
@@ -20,74 +21,74 @@
   <!-- 列标题 -->
   <text x="100" y="30" text-anchor="middle" class="h">① 入库 add / sync</text>
   <text x="370" y="30" text-anchor="middle" class="h">② 书库（索引）</text>
-  <text x="630" y="30" text-anchor="middle" class="h">③ 按设备生成 build</text>
-  <text x="870" y="30" text-anchor="middle" class="h">④ 设备</text>
+  <text x="630" y="30" text-anchor="middle" class="h">③ 按阅读模式生成</text>
+  <text x="865" y="30" text-anchor="middle" class="h">④ 自己拷到设备</text>
 
   <!-- 来源 -->
   <g>
-    <rect class="box src" x="20" y="50" width="160" height="40" rx="6"/><text x="100" y="75" text-anchor="middle">EPUB</text>
-    <rect class="box src" x="20" y="100" width="160" height="40" rx="6"/><text x="100" y="118" text-anchor="middle">MOBI / AZW / AZW3</text><text x="100" y="133" text-anchor="middle" class="s">PRC / FB2</text>
-    <rect class="box src" x="20" y="150" width="160" height="40" rx="6"/><text x="100" y="175" text-anchor="middle">CBZ 漫画</text>
-    <rect class="box src" x="20" y="200" width="160" height="40" rx="6"/><text x="100" y="225" text-anchor="middle">PDF</text>
-    <rect class="box src" x="20" y="250" width="160" height="40" rx="6"/><text x="100" y="275" text-anchor="middle">网页链接 https://</text>
-    <rect class="box" x="20" y="310" width="160" height="56" rx="6" fill="#fdecec" stroke="#c44"/>
-    <text x="100" y="333" text-anchor="middle" fill="#a22">带 DRM 的书</text><text x="100" y="352" text-anchor="middle" class="s">识别后拒收（解 DRM 暂停）</text>
+    <rect class="box src" x="20" y="60" width="160" height="40" rx="6"/><text x="100" y="85" text-anchor="middle">EPUB</text>
+    <rect class="box src" x="20" y="120" width="160" height="40" rx="6"/><text x="100" y="138" text-anchor="middle">CBZ 漫画</text><text x="100" y="153" text-anchor="middle" class="s">生成时当场转 EPUB</text>
+    <rect class="box src" x="20" y="180" width="160" height="40" rx="6"/><text x="100" y="205" text-anchor="middle">网页链接 https://</text>
+    <rect class="box" x="20" y="250" width="160" height="56" rx="6" fill="#fdecec" stroke="#c44"/>
+    <text x="100" y="273" text-anchor="middle" fill="#a22">不收</text><text x="100" y="292" text-anchor="middle" class="s">MOBI/AZW3/PDF 等、带 DRM</text>
+    <rect class="box" x="20" y="316" width="160" height="50" rx="6"/>
+    <text x="100" y="337" text-anchor="middle" class="s">track 书目录 → sync</text><text x="100" y="355" text-anchor="middle" class="s">增删改挪都跟着走</text>
   </g>
 
-  <!-- 母版库 -->
+  <!-- 书库 -->
   <rect class="box lib" x="250" y="50" width="240" height="316" rx="10"/>
   <text x="370" y="78" text-anchor="middle" class="h">只存索引，不复制原件</text>
   <text x="370" y="104" text-anchor="middle">每本书一个 meta.json：</text>
   <text x="370" y="128" text-anchor="middle">原件路径 · 内容哈希 · 书名作者</text>
-  <text x="370" y="152" text-anchor="middle">MOBI/FB2/CBZ 生成时当场转 EPUB</text>
-  <text x="370" y="176" text-anchor="middle">网页没有原件：存抓下来的 EPUB</text>
-  <line x1="270" y1="194" x2="470" y2="194" stroke="#e3c68c"/>
-  <text x="370" y="218" text-anchor="middle" class="s">产物都从原件派生，随时可重建</text>
-  <text x="370" y="240" text-anchor="middle" class="s">id = 原件内容 SHA-256 前 12 位</text>
-  <text x="370" y="262" text-anchor="middle" class="s">生成前核对原件没被改过</text>
-  <text x="370" y="284" text-anchor="middle" class="s">track + sync 跟着原件目录走</text>
-  <line x1="270" y1="300" x2="470" y2="300" stroke="#e3c68c"/>
-  <text x="370" y="324" text-anchor="middle">meta：联网补简介、标签、封面</text>
-  <text x="370" y="344" text-anchor="middle" class="s">豆瓣 → Wikidata → 生成封面</text>
+  <text x="370" y="152" text-anchor="middle">网页没有原件：存抓下来的 EPUB</text>
+  <line x1="270" y1="172" x2="470" y2="172" stroke="#e3c68c"/>
+  <text x="370" y="196" text-anchor="middle" class="s">产物都从原件派生，随时可重建</text>
+  <text x="370" y="218" text-anchor="middle" class="s">id = 原件内容 SHA-256 前 12 位</text>
+  <text x="370" y="240" text-anchor="middle" class="s">生成前核对原件没被改过</text>
+  <text x="370" y="262" text-anchor="middle" class="s">指纹没变就跳过，只重建有变化的</text>
+  <line x1="270" y1="290" x2="470" y2="290" stroke="#e3c68c"/>
+  <text x="370" y="316" text-anchor="middle">meta：联网补简介、标签、封面</text>
+  <text x="370" y="338" text-anchor="middle" class="s">豆瓣 → Wikidata → 生成封面</text>
 
-  <!-- 箭头：来源 → 母版 -->
-  <path class="l" d="M180 70 C215 70 215 150 248 150" marker-end="url(#a)"/>
-  <path class="l" d="M180 120 C215 120 215 160 248 160" marker-end="url(#a)"/>
-  <path class="l" d="M180 170 L248 170" marker-end="url(#a)"/>
-  <path class="l" d="M180 220 C215 220 215 180 248 180" marker-end="url(#a)"/>
-  <path class="l" d="M180 270 C215 270 215 190 248 190" marker-end="url(#a)"/>
+  <!-- 箭头：来源 → 书库 -->
+  <path class="l" d="M180 80 C215 80 215 150 248 150" marker-end="url(#a)"/>
+  <path class="l" d="M180 140 C215 140 215 165 248 165" marker-end="url(#a)"/>
+  <path class="l" d="M180 200 C215 200 215 180 248 180" marker-end="url(#a)"/>
+  <path class="l" d="M180 341 C215 341 215 200 248 200" marker-end="url(#a)"/>
 
   <!-- 生成 -->
   <rect class="box gen" x="540" y="50" width="180" height="316" rx="10"/>
-  <text x="630" y="78" text-anchor="middle" class="h">设备 profile</text>
-  <text x="630" y="98" text-anchor="middle" class="s">真实可阅读范围 · 黑白/彩色 · 格式</text>
+  <text x="630" y="78" text-anchor="middle" class="h">阅读模式 profile</text>
+  <text x="630" y="98" text-anchor="middle" class="s">真实可阅读范围 · 黑白/彩色</text>
   <rect class="box" x="556" y="112" width="148" height="44" rx="6"/>
   <text x="630" y="131" text-anchor="middle">文字书</text><text x="630" y="148" text-anchor="middle" class="s">清洗 · 排版 · 分页</text>
   <rect class="box" x="556" y="166" width="148" height="44" rx="6"/>
   <text x="630" y="185" text-anchor="middle">漫画</text><text x="630" y="202" text-anchor="middle" class="s">裁边 · 缩放 · 补白 · 灰度</text>
   <rect class="box" x="556" y="220" width="148" height="36" rx="6"/>
   <text x="630" y="243" text-anchor="middle">质量门（只警告）</text>
-  <rect class="box" x="556" y="266" width="148" height="36" rx="6"/>
-  <text x="630" y="289" text-anchor="middle">Kindle：转 AZW3</text>
-  <text x="630" y="326" text-anchor="middle" class="s">指纹没变就跳过</text>
-  <text x="630" y="346" text-anchor="middle" class="s">output/&lt;设备&gt;/书名.epub|azw3</text>
   <path class="l" d="M630 156 L630 164" marker-end="url(#a)"/>
   <path class="l" d="M630 210 L630 218" marker-end="url(#a)"/>
-  <path class="l" d="M630 256 L630 264" marker-end="url(#a)"/>
+  <text x="630" y="280" text-anchor="middle" class="s">产物只有 EPUB，放在</text>
+  <text x="630" y="300" text-anchor="middle" class="s">书目录旁的 koreader/、xochitl/</text>
+  <text x="630" y="320" text-anchor="middle" class="s">（镜像子目录）；add 的书在</text>
+  <text x="630" y="340" text-anchor="middle" class="s">书库 output/&lt;模式&gt;/</text>
 
   <path class="l" d="M490 208 L538 208" marker-end="url(#a)"/>
 
   <!-- 设备 -->
-  <rect class="box dev" x="776" y="70" width="178" height="86" rx="8"/>
-  <text x="865" y="96" text-anchor="middle">reMarkable</text><text x="865" y="114" text-anchor="middle">Paper Pro Move</text><text x="865" y="132" text-anchor="middle" class="s">EPUB · 彩色</text><text x="865" y="148" text-anchor="middle" class="s">xochitl 或 KOReader</text>
-  <rect class="box dev" x="776" y="170" width="178" height="86" rx="8"/>
-  <text x="865" y="196" text-anchor="middle">Kindle</text><text x="865" y="214" text-anchor="middle">Paperwhite 12 签名版</text><text x="865" y="232" text-anchor="middle" class="s">原生读 AZW3 · 黑白</text><text x="865" y="248" text-anchor="middle" class="s">KOReader 读 EPUB</text>
-  <rect class="box dev" x="776" y="270" width="178" height="86" rx="8"/>
-  <text x="865" y="296" text-anchor="middle">掌阅 iReader</text><text x="865" y="314" text-anchor="middle">Ocean 5 Pro</text><text x="865" y="332" text-anchor="middle" class="s">EPUB · 黑白</text><text x="865" y="348" text-anchor="middle" class="s">原生或 KOReader</text>
-  <path class="l" d="M720 180 C750 180 750 110 774 110" marker-end="url(#a)"/>
-  <path class="l" d="M720 210 L774 210" marker-end="url(#a)"/>
-  <path class="l" d="M720 230 C750 240 750 312 774 312" marker-end="url(#a)"/>
+  <rect class="box dev" x="776" y="60" width="178" height="132" rx="8"/>
+  <text x="865" y="84" text-anchor="middle" class="h">koreader/</text>
+  <text x="865" y="108" text-anchor="middle">Kindle PW12 签名版</text>
+  <text x="865" y="128" text-anchor="middle">掌阅 Ocean 5 Pro</text>
+  <text x="865" y="150" text-anchor="middle" class="s">都用 KOReader 读 · 黑白</text>
+  <text x="865" y="170" text-anchor="middle" class="s">两台之间同步阅读进度</text>
+  <rect class="box dev" x="776" y="220" width="178" height="96" rx="8"/>
+  <text x="865" y="244" text-anchor="middle" class="h">xochitl/</text>
+  <text x="865" y="268" text-anchor="middle">reMarkable Move</text>
+  <text x="865" y="288" text-anchor="middle" class="s">自带阅读器 · 彩色</text>
+  <path class="d" d="M720 180 C750 180 750 126 774 126" marker-end="url(#a)"/>
+  <path class="d" d="M720 240 C750 240 750 268 774 268" marker-end="url(#a)"/>
 
-  <text x="480" y="400" text-anchor="middle" class="s">一个命令生成多台设备：booklib build --device=kindle-pw12-sig,ireader-ocean5-pro（或 --device=all）；--out 直接拷到设备</text>
+  <text x="480" y="400" text-anchor="middle" class="s">booklib sync 同步后按全部阅读模式生成（--device=koreader 只生成一个）；拷到设备上用文件管理器或同步工具，自己来</text>
   <text x="480" y="422" text-anchor="middle" class="s">设备上的 KOReader 配置另用 koreader/apply.sh 下发（见 KOReader 配置）</text>
 </svg>

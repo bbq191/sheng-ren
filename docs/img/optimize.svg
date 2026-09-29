@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 600" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
-  <title>按设备优化一本书的流程（booklib build 内部）</title>
+  <title>按阅读模式优化一本书的流程（booklib build 内部）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
@@ -16,7 +16,7 @@
 
   <rect class="b" x="300" y="16" width="340" height="44" rx="8"/>
   <text x="470" y="36" text-anchor="middle" class="h">原件 EPUB</text>
-  <text x="470" y="52" text-anchor="middle" class="s">MOBI/FB2/CBZ、有文字层的 PDF 先转 EPUB</text>
+  <text x="470" y="52" text-anchor="middle" class="s">CBZ 先转成每页一张原图的 EPUB</text>
   <path class="l" d="M470 60 L470 80" marker-end="url(#a)"/>
 
   <rect class="b" x="300" y="82" width="340" height="44" rx="8"/>
@@ -44,7 +44,7 @@
     <text x="36" y="426">⑧ 删章尾空白页 · 修 NCX uid</text>
   </g>
   <line x1="36" y1="440" x2="444" y2="440" stroke="#b9c9ee"/>
-  <text x="36" y="462" class="s">然后：注释搬到本章末尾并可跳转/返回 · 提对比度（浅灰字 → 黑）</text>
+  <text x="36" y="462" class="s">然后：注释搬到本章末尾、标号改成同文件链接 · 浅灰字提成黑</text>
   <text x="36" y="482" class="s">插图按阅读范围缩小（超大才缩，不放大）</text>
 
   <!-- 漫画 -->
@@ -61,8 +61,8 @@
   </g>
   <g class="s">
     <text x="500" y="290">· 补白到阅读范围的宽高比（容差 0.3%），图片正好填满阅读器图片框</text>
-    <text x="500" y="312">· 黑白屏（Kindle、掌阅）：转 256 级灰度，<tspan font-weight="bold">不抖动</tspan></text>
-    <text x="500" y="334">· 彩色屏（Move）：保留彩色</text>
+    <text x="500" y="312">· 黑白屏（koreader 模式）：转 256 级灰度，<tspan font-weight="bold">不抖动</tspan></text>
+    <text x="500" y="334">· 彩色屏（xochitl 模式，Move）：保留彩色</text>
     <text x="500" y="356">· 已经合适的图不重新编码；透明背景先铺白</text>
     <text x="500" y="378">· 缩小用 JPEG 质量 95；比阅读范围小很多的页先放大（质量 85）</text>
     <text x="500" y="400">· 漫画里夹的文字页照常保留</text>
@@ -76,5 +76,5 @@
 
   <rect class="g" x="330" y="528" width="280" height="56" rx="8"/>
   <text x="470" y="550" text-anchor="middle" class="h">质量门 → 产物</text>
-  <text x="470" y="570" text-anchor="middle" class="s">XHTML 合法、引用齐全（没过只警告）；Kindle 再转 AZW3</text>
+  <text x="470" y="570" text-anchor="middle" class="s">XHTML 合法、引用齐全（没过只警告）→ EPUB</text>
 </svg>
