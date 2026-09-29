@@ -32,7 +32,7 @@ pub(super) fn cjk_paragraphize(html: &str) -> String {
     let (head, body, tail) = (&out[..lo], &out[lo..hi], &out[hi..]);
     let br = BR.get_or_init(|| Regex::new(r#"(?is)(?:\s*<br\b[^>]*>\s*)+"#).unwrap());
     // 块级开闭标签 / 整块元素：不裹进 p
-    let block = BLOCK.get_or_init(|| Regex::new(r#"(?is)^\s*(?:</?(?:div|section|article|body|blockquote|ul|ol|li|table|tr|td|th|figure|figcaption)\b[^>]*>|<h[1-6]\b[^>]*>.*?</h[1-6]>|<img\b[^>]*>|<hr\b[^>]*>|<a\b[^>]*id="[^"]*"[^>]*>\s*</a>)\s*"#).unwrap());
+    let block = BLOCK.get_or_init(|| Regex::new(r#"(?is)^\s*(?:</?(?:div|section|article|body|blockquote|ul|ol|li|table|tr|td|th|figure|figcaption)\b[^>]*>|<h[1-6]\b[^>]*>.*?</h[1-6]>|<img\b[^>]*>|<hr\b[^>]*>|<a\b[^>]*\bid\s*=\s*(?:"[^"]*"|'[^']*')[^>]*>\s*</a>)\s*"#).unwrap());
     let mut res = String::with_capacity(body.len() + 64);
     for piece in br.split(body) {
         let mut rest = piece;
@@ -122,7 +122,7 @@ fn inline_balanced(text: &str) -> bool {
 ///   Chapter/Book/Part/Prologue/Epilogue 开头）且不以句末标点结尾；③ 前一段以 ≥2 个 `<br>` 结尾或本身是空段（含 `<p/>`）/`* * *`
 ///   之类的分隔（空段过多的书——用空段当段距——不按分隔算）；④ 文件里第一个有正文的段（章首）。幂等。
 /// 一趟扫出块序列（标签扫描，`<p/>` 自闭合算空段，不会把下一段吞进来），再统计、改写。
-pub(super) fn flush_first_para_after_heading(html: &str) -> String {
+pub(super) fn flush_first_para_after_heading(html: &str, indent_classes: &HashSet<String>) -> String {
     static BR2: OnceLock<Regex> = OnceLock::new();
     static HEAD_WORD: OnceLock<Regex> = OnceLock::new();
     static SEP: OnceLock<Regex> = OnceLock::new();
@@ -201,12 +201,21 @@ pub(super) fn flush_first_para_after_heading(html: &str) -> String {
         let bold_wrapped = (inner_html.contains("<b>") || inner_html.contains("<strong") || inner_html.contains("bold")) && n <= 80;
         let heading_like = !terminal_latin(text) && n <= 80 && (bold_wrapped || head_word.is_match(text));
         if flush_next && !heading_like && !is_div {
-            // 只留 eink-flush 一个类、去掉 style：书的类规则（如 `.calibre_ {text-indent:1.2em}`）在 xochitl 里同为类规则时
-            // **先出现者胜**（诊断 13/14），带着书的类就压不住；元素/内联通道又都不通（诊断 7–10）。id 等其它属性保留。
-            let tag = html::remove_attr(&html::remove_attr(&html[open.0..open.1], "class"), "style");
+            // 书里**设了首行缩进的类**（`indent_classes`，如 `.calibre_ {text-indent:1.2em}`）不能留：xochitl 里同为类规则时
+            // **先出现者胜**（诊断 13/14），带着它就压不住 eink-flush；元素/内联通道又都不通（诊断 7–10）。别的类照留
+            // （2026-09-28 审计：此前连同所有类一起删，作者用类写的强调——斜体、小型大写、颜色——跟着丢了）。
+            // style 照留，只去掉 `text-indent`（KOReader 认行内样式，留着会压过 eink-flush）。id 等其它属性保留。
+            let orig = &html[open.0..open.1];
+            let classes: Vec<&str> = html::attr_value(orig, "class").unwrap_or("").split_whitespace().filter(|c| !indent_classes.contains(*c)).collect();
+            let mut tag = html::remove_attr(orig, "class");
+            if let Some(style) = html::attr_value(&tag, "style") {
+                let kept: String = html::css_decls(style).iter().filter(|d| !d.prop.eq_ignore_ascii_case("text-indent")).map(|d| d.raw).collect();
+                tag = if kept.trim().trim_matches(';').trim().is_empty() { html::remove_attr(&tag, "style") } else { html::set_attr(&tag, "style", kept.trim()) };
+            }
             let kept = tag[2..tag.len() - 1].trim(); // 去掉 "<p" 与 ">"
             let sp = if kept.is_empty() { "" } else { " " };
-            edits.push((open.0, *end, format!("<div class=\"eink-flush\"{sp}{kept}>{inner_html}</div>")));
+            let class = std::iter::once("eink-flush").chain(classes).collect::<Vec<_>>().join(" ").replace('"', "&quot;");
+            edits.push((open.0, *end, format!("<div class=\"{class}\"{sp}{kept}>{inner_html}</div>")));
         }
         // 下一段是否顶格：② 本段是标题样段落；③ 本段以双 <br> 结尾
         flush_next = heading_like || br2.is_match(inner_html);
@@ -215,6 +224,20 @@ pub(super) fn flush_first_para_after_heading(html: &str) -> String {
         return html.to_string();
     }
     html::apply_edits(html, edits)
+}
+
+/// 样式表里写了 `text-indent` 的规则用到的类名（选择器里的 `.类名`，不管选择器多复杂都算上——宁可多收）。
+/// 英文首段顶格时这些类不留在 `eink-flush` 的 div 上（见 [`flush_first_para_after_heading`]）。
+pub(super) fn indent_classes_of(css: &str) -> HashSet<String> {
+    static CLASS: OnceLock<Regex> = OnceLock::new();
+    let class = CLASS.get_or_init(|| Regex::new(r#"\.(-?[A-Za-z_][\w-]*)"#).unwrap());
+    let mut out = HashSet::new();
+    for c in css_rule_re().captures_iter(css) {
+        if html::css_decls(&c[2]).iter().any(|d| d.prop.eq_ignore_ascii_case("text-indent")) {
+            out.extend(class.captures_iter(&c[1]).map(|m| m[1].to_string()));
+        }
+    }
+    out
 }
 
 /// 拉丁段落是否以句末标点结束（标题样段落判定用）。

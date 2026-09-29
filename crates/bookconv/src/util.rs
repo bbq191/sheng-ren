@@ -38,7 +38,9 @@ pub fn xml_unescape(s: &str) -> std::borrow::Cow<'_, str> {
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         rest = &rest[i..];
-        let decoded = rest.find(';').filter(|&j| j <= 12).and_then(|j| {
+        // 只在 `&` 后面 12 字节内找 `;`（最长的字符引用 `&#x10FFFF;` 也够）：此前 `find` 一路找到文末，裸 `&` 多、`;` 少的
+        // 长文本是平方级。
+        let decoded = rest.as_bytes().iter().take(13).position(|&b| b == b';').and_then(|j| {
             let ent = &rest[1..j];
             let c = match ent {
                 "amp" => Some('&'),
@@ -248,6 +250,10 @@ mod tests {
         assert_eq!(xml_unescape("&#20013;&#x6587;&apos;"), "中文'");
         assert_eq!(xml_unescape("a & b &unknown; &#xZZ; &"), "a & b &unknown; &#xZZ; &", "认不出的原样保留");
         assert!(matches!(xml_unescape("plain"), std::borrow::Cow::Borrowed(_)));
+        // 裸 `&` 很多、`;` 在很远处：只在 `&` 后面 12 字节内找 `;`，结果不变、不再平方级
+        let s = format!("{}x;&amp;", "a & ".repeat(20_000));
+        assert!(xml_unescape(&s).ends_with("a & x;&"));
+        assert_eq!(xml_unescape("&#x10FFFF;&abcdefghijkl;"), "\u{10FFFF}&abcdefghijkl;");
     }
 
     #[test]

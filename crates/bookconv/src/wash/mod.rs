@@ -41,7 +41,7 @@ mod empty_pages;
 mod ids;
 mod layout;
 mod ncx_fix;
-mod opf;
+pub mod opf;
 mod paginate;
 mod toc;
 mod typeset;
@@ -65,6 +65,7 @@ use self::layout::*;
 use self::ncx_fix::*;
 use self::opf::{find_opf, opf_book_title, opf_unique_identifier};
 use self::paginate::paginate_sections;
+pub(crate) use self::paginate::is_toc_like_page;
 use self::toc::*;
 use self::typeset::*;
 
@@ -189,6 +190,12 @@ fn detect_dominant_script(entries: &[Entry]) -> LangMode {
 
 /// 对条目表就地清洗。真 DRM 返回 Err（调用方应整体失败、原样不动）。
 pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashReport, String> {
+    wash_entries_detect(entries, opts).map(|(rep, _)| rep)
+}
+
+/// 同 [`wash_entries`]，另返回漫画识别结果（`comic_detect::is_comic`，分页前判一次；优化器直接用，不再判第二遍——
+/// 分页只拆文件，不改图片数和字数，判定结果不变）。
+pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<(WashReport, bool), String> {
     let mut rep = WashReport::default();
     strip_pseudo_drm(entries, &mut rep)?;
     remove_empty_pages(entries, &mut rep);
@@ -222,16 +229,22 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
         }
         None => WASH_CSS_NAME.to_string(),
     };
-    for e in entries.iter_mut() {
-        let l = e.name.to_ascii_lowercase();
-        if l.ends_with(".css") {
-            if let Ok(t) = std::str::from_utf8(&e.data) {
-                e.data = filter_css(t, opts).into_bytes();
-                rep.css_files += 1;
+    // 书的样式表里写了首行缩进的类（英文首段顶格时不留在 eink-flush 上，见 `typeset::flush_first_para_after_heading`）
+    let mut indent_classes: HashSet<String> = HashSet::new();
+    for e in entries.iter_mut().filter(|e| e.name.to_ascii_lowercase().ends_with(".css")) {
+        if let Ok(t) = std::str::from_utf8(&e.data) {
+            let css = filter_css(t, opts);
+            if opts.lang == LangMode::Latin {
+                indent_classes.extend(indent_classes_of(&css));
             }
-        } else if is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name) {
+            e.data = css.into_bytes();
+            rep.css_files += 1;
+        }
+    }
+    for e in entries.iter_mut() {
+        if is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name) {
             if let Ok(t) = std::str::from_utf8(&e.data) {
-                let (out, dups) = wash_html(t, opts);
+                let (out, dups) = wash_html_with(t, opts, &indent_classes);
                 let href = relative_to(dir_of(&e.name), &css_path);
                 let out = inject_css_link(&out, &href);
                 let out = ensure_html_lang(&align_classes(&out), &lang_tag);
@@ -247,8 +260,9 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
     repair_ncx_targets(entries, &mut rep);
     restructure_existing_toc_parts(entries, opts.auto_toc, heading, &mut rep);
     auto_toc(entries, opts.auto_toc, heading, &mut rep);
-    // 分页放在自动目录之后：自动目录给标题补的 id 已经在，分页改写目录链接时能对上。
-    if opts.paginate {
+    // 分页放在自动目录之后：自动目录给标题补的 id 已经在，分页改写目录链接时能对上。漫画不拆。
+    let comic = crate::comic_detect::is_comic(entries);
+    if opts.paginate && !comic {
         paginate_sections(entries, heading, &mut rep);
     }
     // 全书 id 去重放在分页之后（拆出来的份不会新增重复 id，但链接要按拆好后的文件改）。
@@ -257,7 +271,7 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
     remove_chapter_end_blanks(entries, &mut rep);
     fix_ncx_uid(entries, &mut rep);
     strip_ncx_doctype(entries, &mut rep);
-    Ok(rep)
+    Ok((rep, comic))
 }
 
 /// 新增（或重优化时更新）外链 wash css 文件，并往 OPF manifest 补一条 `<item>`（幂等）。
@@ -269,13 +283,62 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
     }
     if let Some(oi) = opf_idx {
         let opf_dir = dir_of(&entries[oi].name).to_string();
-        let href = relative_to(&opf_dir, css_path);
-        let mut text = String::from_utf8_lossy(&entries[oi].data).into_owned();
-        if !text.contains(&format!("href=\"{href}\"")) {
-            if let Some(p) = text.find("</manifest>") {
-                text.insert_str(p, &format!("<item id=\"eink-wash-css\" href=\"{href}\" media-type=\"text/css\"/>"));
-                entries[oi].data = text.into_bytes();
-            }
+        let text = String::from_utf8_lossy(&entries[oi].data);
+        if manifest_items(&text).iter().any(|it| resolve(&opf_dir, &percent_decode(it.href)) == css_path) {
+            return;
+        }
+        let href = crate::epubzip::href_to(&opf_dir, css_path, "");
+        if let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id: "eink-wash-css", href: &href, media_type: "text/css", properties: "" }]) {
+            entries[oi].data = t.into_bytes();
         }
     }
+}
+
+/// 比较标题文字用：去掉所有空白（含全角空格）。
+pub(super) fn squash_ws(t: &str) -> String {
+    t.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 全书链接改写的一处链接：所在文件、链接值原文、解析出的目标文件与锚点（锚点原文，未解码）。
+pub(super) struct Link<'a> {
+    pub file: &'a str,
+    pub value: &'a str,
+    pub target: String,
+    pub frag: Option<&'a str>,
+}
+
+/// 全书（html、NCX、OPF）的 `href`/`src`/`xlink:href` 改写：`f` 返回新值就替换（保留原引号）。书外链接不回调；
+/// `skip(条目名)` 为真的条目不动；OPF 里只改 `<guide>` 这类引用，manifest 的 `<item href>` 是文件本身的声明、从不改
+/// （2026-09-28 审计：空页删除没删掉单引号 OPF 的 item 时，把它的 href 改成了邻页，spine 就重复了一章）。
+/// 空页清理、全书 id 去重、分页后的链接改写共用。返回改了的条目数。
+pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> bool, mut f: impl FnMut(&Link) -> Option<String>) -> usize {
+    let mut changed = 0;
+    for e in entries.iter_mut() {
+        let l = e.name.to_ascii_lowercase();
+        let is_opf = l.ends_with(".opf");
+        if skip(&e.name) || !(is_opf || l.ends_with(".ncx") || is_html_entry(&e.name, &e.data)) {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let name = e.name.as_str();
+        let new = html::edit_attrs(text, &["href", "src", "xlink:href"], |t, a| {
+            if is_opf && opf::is_local(t.name, "item") {
+                return Edit::Keep;
+            }
+            let (p, _) = html::split_href(a.value);
+            if html::is_external(p) {
+                return Edit::Keep;
+            }
+            let (target, frag) = crate::epubzip::resolve_href(name, a.value);
+            match f(&Link { file: name, value: a.value, target, frag }) {
+                Some(v) if v != a.value => Edit::Set(v),
+                _ => Edit::Keep,
+            }
+        });
+        if let Cow::Owned(new) = new {
+            e.data = new.into_bytes();
+            changed += 1;
+        }
+    }
+    changed
 }

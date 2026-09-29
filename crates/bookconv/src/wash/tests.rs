@@ -121,10 +121,10 @@
             "<spine>\n<itemref idref=\"p1\"/>\n<itemref linear=\"yes\" idref=\"p10\"></itemref>\n<itemref idref=\"p2\"/>\n</spine>"
         );
         let ids: HashSet<&str> = ["p1", "p10"].into_iter().collect();
-        let out = drop_opf_refs(opf, &ids);
+        let out = opf::remove_items(opf, |it| ids.contains(it.id)).unwrap();
         assert!(!out.contains("p1.xhtml") && !out.contains("p10.xhtml") && !out.contains("idref=\"p1\"") && !out.contains("idref=\"p10\""), "{out}");
         assert!(out.contains("<item id=\"p2\" href=\"p2.xhtml\"/>") && out.contains("<itemref idref=\"p2\"/>") && out.contains("a.png"), "无关项原样: {out}");
-        assert_eq!(drop_opf_refs(opf, &HashSet::new()), opf, "空集合 = 原样");
+        assert_eq!(opf::remove_items(opf, |_| false), None, "空集合 = 不改");
     }
 
     #[test]
@@ -495,13 +495,30 @@
         assert!(filter_css(".calibre_ {text-indent:1.2em}", &cjk).contains("text-indent:2em"));
         let (h, _) = wash_html(r#"<html><body><h1 id="a">T</h1>
 <div class="x"><p class="c" style="color:red;text-indent:2em">first</p><p>second</p></div><h2>U</h2><p style="text-indent:0">already</p></body></html>"#, &lat);
-        assert!(h.contains(r#"<div class="eink-flush">first</div>"#), "只留 eink-flush、剥 class/style: {h}");
+        assert!(h.contains(r#"<div class="eink-flush c" style="color:red;">first</div>"#), "书的类与颜色保留，行内 text-indent 去掉: {h}");
         assert!(h.contains(r#"<p>second</p>"#), "第二段不动: {h}");
         assert_eq!(h.matches("eink-flush").count(), 2, "h1 后与 h2 后各一段: {h}");
         let (h2, _) = wash_html(&h, &lat);
         assert_eq!(h2.matches("eink-flush").count(), 2, "幂等: {h2}");
         let (c, _) = wash_html("<html><body><h1>T</h1><p>x</p></body></html>", &cjk);
         assert!(!c.contains("text-indent:0"), "中文不做首段不缩进: {c}");
+    }
+
+    /// M4（2026-09-28 审计）：英文首段换成 eink-flush 的 div 时，作者用类写的强调（斜体、小型大写）保留；
+    /// 写了 text-indent 的段落类不留在 div 上（xochitl 同为类规则先出现者胜，会压住 eink-flush）。
+    #[test]
+    fn latin_flush_keeps_emphasis_classes_drops_indent_classes() {
+        let lat = WashOpts { lang: LangMode::Latin, ..Default::default() };
+        let mut v = vec![
+            e("content.opf", r#"<package version="2.0"><metadata><dc:title>B</dc:title><dc:language>en</dc:language></metadata><manifest><item id="css" href="s.css" media-type="text/css"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
+            e("s.css", ".body{display:block;text-indent:1.5em;margin:0} .ital{font-style:italic} .sc{font-variant:small-caps}"),
+            e("c1.xhtml", r#"<html><head><link href="s.css" rel="stylesheet" type="text/css"/></head><body><h1>One</h1><p class="body ital sc" id="p1">It was a dark night, and the rain fell in torrents except at occasional intervals.</p><p class="body">Next.</p></body></html>"#),
+        ];
+        wash_entries(&mut v, &WashOpts { paginate: false, ..lat }).unwrap();
+        let h = s(&v, "c1.xhtml");
+        assert!(h.contains(r#"<div class="eink-flush ital sc" id="p1">It was a dark night"#), "{h}");
+        assert!(h.contains(r#"<p class="body">Next.</p>"#), "{h}");
+        assert!(s(&v, "eink-wash.css").contains(".eink-flush{text-indent:0.01em;"), "首行不缩进的规则还在");
     }
 
     #[test]
@@ -527,7 +544,8 @@
         // 《Tell Me Your Dreams》形态：章名=加粗段落（非 <h>），场景切换=段末双 <br/>，无空段
         let lat = WashOpts { lang: LangMode::Latin, ..Default::default() };
         let src = r#"<html><body><div><p class="calibre_"><a href="x.html#1"><span class="bold"><span class="underline">Chapter Three</span></span></a></p><p class="calibre_"><span class="bold">I</span>N another place, at another time, Alette Peters could have been a successful artist.</p><p class="calibre_">Her father’s voice was blue.</p><p class="calibre_">The sound of running water was gray.<br class="calibre3"/><br class="calibre3"/></p><p class="calibre_">Alette Peters was twenty years old.</p><p class="calibre_">She could be plain-looking.</p><p class="calibre_">* * *</p><p class="calibre_">After the break.</p><p class="calibre_">Still after.</p></div></body></html>"#;
-        let (h, _) = wash_html(src, &lat);
+        // calibre_ 的规则写了 text-indent（真书里 `.calibre_ {display:block;text-indent:…}`）：不留在 eink-flush 上
+        let (h, _) = wash_html_with(src, &lat, &["calibre_".to_string()].into_iter().collect());
         assert_eq!(h.matches("eink-flush").count(), 3, "章首正文 + 双br 后 + * * * 后各一段: {h}");
         assert!(h.contains(r#"<div class="eink-flush"><span class="bold">I</span>N another"#), "章首正文顶格＝换成只带 eink-flush 的 div（章名段本身不算）: {h}");
         assert!(h.contains(r#"<div class="eink-flush">Alette Peters was twenty"#), "双 br 后顶格: {h}");
@@ -942,7 +960,7 @@
     #[test]
     fn audit_flush_self_closing_p() {
         let h = r#"<html><body><h1>T</h1><p class="a">One.</p><p class="a">1.</p><p class="a">2.</p><p/><p class="a">Two.</p><p class="a">Three.</p></body></html>"#;
-        let out = flush_first_para_after_heading(h);
+        let out = flush_first_para_after_heading(h, &["a".to_string()].into_iter().collect());
         assert_eq!(out, r#"<html><body><h1>T</h1><div class="eink-flush">One.</div><p class="a">1.</p><p class="a">2.</p><p/><div class="eink-flush">Two.</div><p class="a">Three.</p></body></html>"#);
     }
 
@@ -1225,4 +1243,155 @@
         for t in ["", "一十", "十十", "1234", "第一", "１a", "百"] {
             assert_eq!(section_number(t), None, "{t}");
         }
+    }
+
+    // ───────────────────────── 2026-09-28 审计复现的问题 ─────────────────────────
+
+    const LONG: &str = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+
+    /// XHTML 良构的粗查：每种元素开闭数目相等（自闭合不算）。
+    fn balanced(h: &str) -> bool {
+        let mut n: HashMap<String, i64> = HashMap::new();
+        for t in html::tags(h) {
+            match t.kind {
+                html::TagKind::Open => *n.entry(t.name.to_ascii_lowercase()).or_default() += 1,
+                html::TagKind::Close => *n.entry(t.name.to_ascii_lowercase()).or_default() -= 1,
+                _ => {}
+            }
+        }
+        n.values().all(|&v| v == 0)
+    }
+
+    /// H2：搬走注释后变空的一份并回前一份时，补闭合要换成被并那份的（此前产出 `</div></div></body>`）；
+    /// 注释都搬走后只剩 `<h1>注释</h1>` 的一份也并回前一份。
+    #[test]
+    fn audit_h2_merged_piece_takes_over_closing_tags() {
+        let mut v = paged_book(&[(
+            "c1.xhtml",
+            &format!(r##"<div class="w"><h1>第一章</h1><p>{LONG}<a href="#n1"><sup>1</sup></a></p><h1>注释</h1><p id="n1">注一：{LONG}</p></div>"##),
+        )]);
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.paginate_notes_moved, 1);
+        let spine = spine_files(&v);
+        assert_eq!(spine, ["OEBPS/Text/c1.xhtml", "OEBPS/Text/c1-p2.xhtml"], "注释那一份搬空、标题那一份只剩标题，都并回正文那一份");
+        for f in &spine {
+            let h = s(&v, f);
+            assert!(balanced(&h) && !h.contains("</div></div>"), "{f}: {h}");
+        }
+        let p2 = body_of(&v, "OEBPS/Text/c1-p2.xhtml");
+        assert!(p2.contains("注一") && p2.contains("注释") && p2.contains(r##"href="#n1""##), "{p2}");
+    }
+
+    /// H3：单引号 OPF 里的空页也删得掉，manifest 的 href 不被改成邻页（此前 spine 重复一章）。
+    #[test]
+    fn audit_h3_empty_page_in_single_quoted_opf() {
+        let mut v = vec![
+            e("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+            e("OEBPS/content.opf", "<package version='3.0'><metadata><dc:title>B</dc:title></metadata><manifest><item id='c0' href='c0.xhtml' media-type='application/xhtml+xml'/><item id='c1' href='c1.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='c0'/><itemref idref='c1'/></spine><guide><reference type='text' href='c0.xhtml'/></guide></package>"),
+            e("OEBPS/c0.xhtml", "<html><body><p> </p></body></html>"),
+            e("OEBPS/c1.xhtml", &format!("<html><body><p>{LONG}</p></body></html>")),
+        ];
+        let rep = wash_entries(&mut v, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        assert_eq!(rep.empty_pages_removed, ["OEBPS/c0.xhtml"]);
+        let opf = s(&v, "OEBPS/content.opf");
+        assert!(!opf.contains("c0.xhtml") || opf.contains("<reference type='text' href='c1.xhtml'/>"), "{opf}");
+        assert!(opf.contains("<item id='c1' href='c1.xhtml'") && !opf.contains("id='c0'"), "{opf}");
+        assert_eq!(spine_files(&v), ["OEBPS/c1.xhtml"]);
+    }
+
+    /// H4：`Chapter 1`、`Part 2`、`卷 一` 是这一条自己的编号，自动目录里不拆成两级。
+    #[test]
+    fn audit_h4_chapter_number_not_split() {
+        for t in ["Chapter 1", "Part 2", "卷 一", "BOOK 3", "第 三"] {
+            assert_eq!(split_numbered_title(t), None, "{t}");
+        }
+        assert_eq!(split_numbered_title("第一章 出獄 1"), Some(("第一章 出獄".into(), "1".into())));
+        let mut v = paged_book(&[("c1.xhtml", &format!("<h2>Chapter 1</h2><p>{LONG}</p><h2>Chapter 2</h2><p>{LONG}</p>"))]);
+        wash_entries(&mut v, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        let nav = s(&v, "OEBPS/nav.xhtml");
+        assert!(nav.contains(">Chapter 1</a></li><li>") && !nav.contains("<ol><li><a href=\"Text/c1.xhtml#eink-toc-1\">1</a>"), "{nav}");
+    }
+
+    /// H5：已经分了层级的目录不压平；扁平目录重建时 navPoint 的 id 与 pageList 保留。
+    #[test]
+    fn audit_h5_nested_toc_untouched_flat_toc_keeps_ids_and_page_list() {
+        let opf = r#"<package version="2.0" unique-identifier="u"><metadata><dc:identifier id="u">x</dc:identifier><dc:title>B</dc:title></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
+        let body = format!("<html><body><p id='a'>第一部</p><p id='b'>第一章</p><p id='c'>第一节</p><p>{LONG}</p></body></html>");
+        let nested = r#"<ncx><head><meta name="dtb:uid" content="x"/></head><navMap><navPoint id="p1" playOrder="1"><navLabel><text>第一部</text></navLabel><content src="c1.xhtml#a"/><navPoint id="p2" playOrder="2"><navLabel><text>第一章</text></navLabel><content src="c1.xhtml#b"/><navPoint id="p3" playOrder="3"><navLabel><text>第一节</text></navLabel><content src="c1.xhtml#c"/></navPoint></navPoint></navPoint></navMap></ncx>"#;
+        let mut v = vec![e("content.opf", opf), e("toc.ncx", nested), e("c1.xhtml", &body)];
+        let rep = wash_entries(&mut v, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        assert_eq!(rep.toc_parts_restructured, 0);
+        assert_eq!(s(&v, "toc.ncx"), nested, "已嵌套的目录原样");
+        let flat = r#"<ncx><head><meta name="dtb:uid" content="x"/><meta name="dtb:depth" content="1"/></head><docTitle><text>B</text></docTitle><navMap><navPoint id="n1" playOrder="1"><navLabel><text>第一部　第一章</text></navLabel><content src="c1.xhtml#a"/></navPoint><navPoint id="n2" playOrder="2"><navLabel><text>第一节</text></navLabel><content src="c1.xhtml#c"/></navPoint></navMap><pageList><pageTarget id="pg1" type="normal" value="1" playOrder="3"><navLabel><text>1</text></navLabel><content src="c1.xhtml#a"/></pageTarget></pageList></ncx>"#;
+        let mut w = vec![e("content.opf", opf), e("toc.ncx", flat), e("c1.xhtml", &body)];
+        let rep = wash_entries(&mut w, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        assert_eq!(rep.toc_parts_restructured, 3);
+        let out = s(&w, "toc.ncx");
+        assert!(out.contains(r#"<navPoint id="n1" playOrder="1"><navLabel><text>第一部</text></navLabel><content src="c1.xhtml#a"/><navPoint id="eink-np-1" playOrder="2"><navLabel><text>第一章</text>"#), "{out}");
+        assert!(out.contains(r#"<navPoint id="n2" playOrder="3"><navLabel><text>第一节</text>"#), "{out}");
+        assert!(out.contains(r#"<pageList><pageTarget id="pg1""#) && out.contains("<docTitle><text>B</text></docTitle>"), "NCX 其余部分原样: {out}");
+        assert!(out.contains(r#"<meta name="dtb:depth" content="2"/>"#), "{out}");
+    }
+
+    /// M3：样式表开头的 `@import` 不再让第一条规则整条跳过（字体锁照剥）。
+    #[test]
+    fn audit_m3_import_does_not_swallow_first_rule() {
+        let out = filter_css("@charset \"utf-8\";\n@import url(a.css);\np{font-size:12pt;color:red}\nh1{font-size:2em}", &WashOpts::default());
+        assert!(out.starts_with("@charset \"utf-8\";\n@import url(a.css);\np{"), "{out}");
+        assert!(!out.contains("font-size:12pt") && out.contains("color:red;"), "{out}");
+        assert_eq!(split_leading_statements("@import url('a;b.css');\n.x"), ("@import url('a;b.css');", "\n.x"));
+    }
+
+    /// M5：交叉引用"见第<a href=#a12>12</a>条"指向正文段落（没有注释语义、也不在文件末尾的注释区）时不搬。
+    #[test]
+    fn audit_m5_cross_reference_paragraph_not_moved() {
+        let mut v = paged_book(&[(
+            "c1.xhtml",
+            &format!(r##"<h1>第一章</h1><p>{LONG}</p><h2>第一节</h2><p>见第<a href="#a12">12</a>条。{LONG}</p><h2>第二节</h2><p id="a12">第十二条的正文。{LONG}</p><p>{LONG}</p>"##),
+        )]);
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.paginate_notes_moved, 0);
+        let s2 = body_of(&v, "OEBPS/Text/c1-p4.xhtml");
+        assert!(s2.contains("第二节") && s2.contains("第十二条的正文"), "{s2}");
+        // 带注释语义的照搬（不在末尾也搬）
+        let mut w = paged_book(&[(
+            "c1.xhtml",
+            &format!(r##"<h1>第一章</h1><p>{LONG}</p><h2>第一节</h2><p>正文<a href="#n1">1</a>。{LONG}</p><h2>第二节</h2><aside epub:type="footnote" id="n1">注一。</aside><p>{LONG}</p>"##),
+        )]);
+        assert_eq!(wash_entries(&mut w, &WashOpts::default()).unwrap().paginate_notes_moved, 1);
+    }
+
+    /// L：`margin:inherit` 不再写成非法的 `margin:0 inherit`；`!important` 与括号里的空格都认。
+    #[test]
+    fn audit_box_shorthand_keywords_and_important() {
+        let f: Vec<String> = DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(filter_decls("margin:inherit", &f, Spacing::Vertical), "margin-right:inherit;margin-left:inherit;");
+        assert_eq!(filter_decls("margin:1em 2em !important", &f, Spacing::Vertical), "margin:0 2em !important;");
+        assert_eq!(filter_decls("padding:calc(1em + 2px) 3px", &f, Spacing::Vertical), "padding:0 3px;");
+        assert_eq!(box_sides("1px 2px 3px"), BoxSides::Sides(["1px", "2px", "3px", "2px"], ""));
+        assert_eq!(box_sides("1px 2px 3px 4px 5px"), BoxSides::Unknown);
+    }
+
+    /// L：nav 文档不叫 nav.xhtml（OPF 里 `properties="nav"` 的 toc.xhtml）、又没有 NCX 时，也算书有目录，不被自动目录覆盖。
+    #[test]
+    fn audit_nav_named_toc_xhtml_counts_as_existing_toc() {
+        let opf = r#"<package version="3.0"><metadata><dc:title>B</dc:title></metadata><manifest><item id="t" href="contents.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+        let nav = r#"<html><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">作者的目录</a></li></ol></nav></body></html>"#;
+        let mut v = vec![e("content.opf", opf), e("contents.xhtml", nav), e("c1.xhtml", &format!("<html><body><h1>一</h1><p>{LONG}</p></body></html>"))];
+        let rep = wash_entries(&mut v, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        assert_eq!(rep.toc_generated, 0);
+        assert!(s(&v, "contents.xhtml").contains("作者的目录"));
+    }
+
+    /// L：封面声明认单引号的 manifest 项（此前 `replacen` 按双引号找 `id="…"`，补不上 `properties`）。
+    #[test]
+    fn audit_cover_declared_in_single_quoted_opf() {
+        let mut v = vec![
+            e("content.opf", "<package version='3.0'><metadata><dc:title>B</dc:title></metadata><manifest><item id='img' href='i/c.jpg' media-type='image/jpeg'/><item id='p' href='p.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='p'/></spine></package>"),
+            e("p.xhtml", "<html><body><img src='i/c.jpg'/></body></html>"),
+        ];
+        assert!(ensure_cover_declared(&mut v));
+        let opf = s(&v, "content.opf");
+        assert!(opf.contains(r#"<item id='img' properties="cover-image" href='i/c.jpg'"#) && opf.contains(r#"<meta name="cover" content="img"/></metadata>"#), "{opf}");
+        assert!(!ensure_cover_declared(&mut v), "幂等");
     }

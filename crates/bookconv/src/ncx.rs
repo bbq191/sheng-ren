@@ -8,12 +8,30 @@
 /// 按标签扫（`crate::html::tags`），不要求 `<content src>` 紧跟 `navLabel`、也不要求 `src` 是第一个属性
 /// （`<content id="x" src='a.html'/>` 也认）；有 `<navMap>` 时只收 navMap 里的条目（`<pageList>` 的页码不算目录）。
 pub fn parse_ncx_flat(ncx_text: &str) -> Vec<(usize, String, String)> {
+    parse_nav_points(ncx_text).into_iter().map(|p| (p.depth, p.label, p.src)).collect()
+}
+
+/// 展平的一条 NCX 目录（见 [`parse_ncx_flat`]），另带所在 `<navPoint …>` 开标签原文（重写目录时保留它的 `id`、`class` 等属性）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavPoint {
+    pub depth: usize,
+    /// 标签文字（字符引用已还原）。
+    pub label: String,
+    /// `<content src>` 原文。
+    pub src: String,
+    /// 所在 `<navPoint …>` 开标签原文；`content` 不在任何 navPoint 里时为空。
+    pub open_tag: String,
+}
+
+/// 同 [`parse_ncx_flat`]，每条带 navPoint 开标签原文。
+pub fn parse_nav_points(ncx_text: &str) -> Vec<NavPoint> {
     use crate::html::{self, TagKind};
     let has_navmap = html::tags(ncx_text).any(|t| t.kind == TagKind::Open && t.is("navMap"));
     let mut in_map = !has_navmap;
     let (mut depth, mut in_label) = (0usize, false);
     let mut text_start: Option<usize> = None;
     let mut cur_title = String::new();
+    let mut opens: Vec<&str> = Vec::new();
     let mut out = Vec::new();
     for t in html::tags(ncx_text) {
         if t.is("navMap") {
@@ -24,8 +42,14 @@ pub fn parse_ncx_flat(ncx_text: &str) -> Vec<(usize, String, String)> {
             continue;
         }
         match t.kind {
-            TagKind::Open if t.is("navPoint") => depth += 1,
-            TagKind::Close if t.is("navPoint") => depth = depth.saturating_sub(1),
+            TagKind::Open if t.is("navPoint") => {
+                depth += 1;
+                opens.push(&ncx_text[t.start..t.end]);
+            }
+            TagKind::Close if t.is("navPoint") => {
+                depth = depth.saturating_sub(1);
+                opens.pop();
+            }
             TagKind::Open if t.is("navLabel") => in_label = true,
             TagKind::Close if t.is("navLabel") => in_label = false,
             TagKind::Open if t.is("text") && in_label => text_start = Some(t.end),
@@ -38,13 +62,99 @@ pub fn parse_ncx_flat(ncx_text: &str) -> Vec<(usize, String, String)> {
             }
             TagKind::Open | TagKind::SelfClosing if t.is("content") => {
                 if let Some(src) = html::attr_value(&ncx_text[t.start..t.end], "src") {
-                    out.push((depth, std::mem::take(&mut cur_title), src.to_string()));
+                    let open_tag = opens.last().map_or(String::new(), |s| s.to_string());
+                    out.push(NavPoint { depth, label: std::mem::take(&mut cur_title), src: src.to_string(), open_tag });
                 }
             }
             _ => {}
         }
     }
     out
+}
+
+/// 逐个 `<content src>`（navMap、pageList 里的都算）调 `f(最近一个 <text> 的文字（字符引用已还原）, src 原文)`，返回新值
+/// （属性值原文，调用方已转义）就就地换掉。一处都没改 → `None`。分页后目录改指到补的 id、修复指错位置的目录共用。
+pub fn rewrite_content_srcs(ncx: &str, mut f: impl FnMut(&str, &str) -> Option<String>) -> Option<String> {
+    use crate::html::{self, TagKind};
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut label = String::new();
+    let mut label_start: Option<usize> = None;
+    for t in html::tags(ncx) {
+        if t.is("text") && t.kind == TagKind::Open {
+            label_start = Some(t.end);
+        } else if t.is("text") && t.kind == TagKind::Close {
+            if let Some(s) = label_start.take() {
+                label = crate::util::xml_unescape(&ncx[s..t.start]).into_owned();
+            }
+        } else if t.is("content") && t.is_start() {
+            let Some(a) = html::attr(&ncx[t.start..t.end], "src") else { continue };
+            if let Some(v) = f(&label, a.value) {
+                edits.push((t.start + a.value_start, t.start + a.value_end, v));
+            }
+        }
+    }
+    (!edits.is_empty()).then(|| html::apply_edits(ncx, edits))
+}
+
+/// 重写 navMap 用的一条：`depth` 从 1 起；`src` 是属性值原文（未转义）；`open_tag` 是原来的 `<navPoint …>`（`None` = 新加的）。
+pub struct NewNavPoint<'a> {
+    pub depth: u8,
+    pub label: &'a str,
+    pub src: &'a str,
+    pub open_tag: Option<&'a str>,
+}
+
+/// 只换 `<navMap>` 里的 navPoint 树，NCX 其余部分（`<head>`、`docTitle`、`pageList`、`navList`、navMap 自己的 `navInfo`）原样保留；
+/// 原有条目沿用自己的 `<navPoint>` 开标签（`id`、`class` 不变），新加的条目给一个 NCX 里没出现过的 `eink-np-N`。
+/// `playOrder` 按新树的顺序从 1 重排，`dtb:depth` 改成新树的深度。层级每次最多深入一层（保证良构）。没有成对的 `<navMap>` → `None`。
+pub fn replace_nav_map(ncx: &str, points: &[NewNavPoint]) -> Option<String> {
+    use crate::html::{self, TagKind};
+    use crate::util::xml_escape;
+    let open = html::tags(ncx).find(|t| t.kind == TagKind::Open && t.is("navMap"))?;
+    let close = html::tags_in(ncx, open.end, ncx.len()).filter(|t| t.kind == TagKind::Close && t.is("navMap")).last()?;
+    // navMap 里第一个 navPoint 之前的东西（navInfo/navLabel）保留
+    let first_np = html::tags_in(ncx, open.end, close.start).find(|t| t.is_start() && t.is("navPoint")).map_or(close.start, |t| t.start);
+    let mut s = String::new();
+    let (mut depth, mut max_depth, mut fresh) = (0u8, 0u8, 0usize);
+    for (i, p) in points.iter().enumerate() {
+        let d = p.depth.max(1).min(depth + 1);
+        if d <= depth {
+            for _ in 0..(depth - d + 1) {
+                s.push_str("</navPoint>");
+            }
+        }
+        let order = (i + 1).to_string();
+        let mut fresh_id = || loop {
+            fresh += 1;
+            let id = format!("eink-np-{fresh}");
+            if !ncx.contains(id.as_str()) {
+                break id;
+            }
+        };
+        let tag = match p.open_tag.filter(|t| !t.is_empty()) {
+            // 原来没有 id 的（NCX 规范要求有）补一个
+            Some(t) if html::attr_value(t, "id").is_some_and(|v| !v.is_empty()) => html::set_attr(t, "playOrder", &order),
+            Some(t) => html::set_attr(&html::set_attr(t, "id", &fresh_id()), "playOrder", &order),
+            None => format!(r#"<navPoint id="{}" playOrder="{order}">"#, fresh_id()),
+        };
+        s.push_str(&tag);
+        s.push_str(&format!(r#"<navLabel><text>{}</text></navLabel><content src="{}"/>"#, xml_escape(p.label), xml_escape(p.src)));
+        depth = d;
+        max_depth = max_depth.max(d);
+    }
+    for _ in 0..depth {
+        s.push_str("</navPoint>");
+    }
+    let mut out = format!("{}{}{}", &ncx[..first_np], s, &ncx[close.start..]);
+    // dtb:depth 跟着新树（没有就补在 `</head>` 前）
+    let depth = max_depth.max(1).to_string();
+    if let Some(m) = html::tags(&out).find(|t| t.is_start() && t.is("meta") && html::attr_value(&out[t.start..t.end], "name") == Some("dtb:depth")) {
+        let tag = html::set_attr(&out[m.start..m.end], "content", &depth);
+        out.replace_range(m.start..m.end, &tag);
+    } else if let Some(h) = html::tags(&out).find(|t| t.kind == TagKind::Close && t.is("head")) {
+        out.insert_str(h.start, &format!(r#"<meta name="dtb:depth" content="{depth}"/>"#));
+    }
+    Some(out)
 }
 
 // ───────────────────────── 兜底书签 ─────────────────────────
