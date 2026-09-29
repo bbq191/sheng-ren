@@ -14,9 +14,9 @@
   </defs>
   <rect width="940" height="600" fill="#fafafa"/>
 
-  <rect class="b" x="350" y="16" width="240" height="44" rx="8"/>
-  <text x="470" y="36" text-anchor="middle" class="h">母版 EPUB</text>
-  <text x="470" y="52" text-anchor="middle" class="s">PDF 有文字层的先转 EPUB</text>
+  <rect class="b" x="300" y="16" width="340" height="44" rx="8"/>
+  <text x="470" y="36" text-anchor="middle" class="h">原件 EPUB</text>
+  <text x="470" y="52" text-anchor="middle" class="s">MOBI/FB2/CBZ、有文字层的 PDF 先转 EPUB</text>
   <path class="l" d="M470 60 L470 80" marker-end="url(#a)"/>
 
   <rect class="b" x="300" y="82" width="340" height="44" rx="8"/>
@@ -38,7 +38,7 @@
     <text x="52" y="298">居中/居右换成 eink-center / eink-right 类，补 &lt;html lang&gt;</text>
     <text x="36" y="320">⑤ 注入 eink-wash.css：首行缩进（中 2em / 西 1.2em）、两端对齐、</text>
     <text x="52" y="340">英文断字、注释 0.9em（比正文小一号）</text>
-    <text x="36" y="362">⑥ 目录：修 NCX、整理已有目录、没有就按标题生成</text>
+    <text x="36" y="362">⑥ 目录：改指指错的条目、按部分层、没有就按标题生成</text>
     <text x="36" y="384">⑦ 章节分页：章标题独立一页，节与节、节与章之间分页，</text>
     <text x="52" y="404">目录缺的节补进去（缩进一级）</text>
     <text x="36" y="426">⑧ 删章尾空白页 · 修 NCX uid</text>
@@ -67,6 +67,8 @@
     <text x="500" y="378">· 缩小用 JPEG 质量 95；比阅读范围小很多的页先放大（质量 85）</text>
     <text x="500" y="400">· 漫画里夹的文字页照常保留</text>
     <text x="500" y="422">· 多张图并行处理，结果与逐张处理逐字节相同</text>
+    <text x="500" y="444">· OPF 加 dc:subject「漫画」，KOReader 据此自动套漫画设置</text>
+    <text x="500" y="466">· 超过 900 万像素、GIF/WebP 的页原样保留</text>
   </g>
 
   <path class="l" d="M240 494 C240 520 440 510 450 526" marker-end="url(#a)"/>
