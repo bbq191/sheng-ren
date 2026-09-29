@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 掌阅上的"KOReader 桌面"：设成默认桌面后，开机、按主页键都直接打开 KOReader；两秒内连按两次主页键打开掌阅原来的桌面。
+     见 koreader/android-home/README.md。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="local.eink.koreaderhome">
+
+    <!-- 安卓 11 起要声明会查询哪些应用：KOReader（官方版、F-Droid 版）和其它桌面 -->
+    <queries>
+        <package android:name="org.koreader.launcher" />
+        <package android:name="org.koreader.launcher.fdroid" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:label="KOReader 桌面"
+        android:allowBackup="false">
+        <activity
+            android:name=".HomeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:stateNotNeeded="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
