@@ -3,5 +3,12 @@
 CONF=/etc/upstart/koreader-boot.conf
 FLAG=/mnt/us/koreader-boot.enabled
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-# 在屏幕上打一行字（eips 列 1、行 2；后面补空格盖掉上次的字）
-say() { echo "$1"; eips 1 2 "$1                                  " >/dev/null 2>&1; }
+LOG=/mnt/us/koreader-boot.log
+# 结果：记进 U 盘根目录的 koreader-boot.log（插上电脑就能看），屏幕上打一行字（eips 列 1、行 2）并停 6 秒——
+# 脚本书运行完屏幕马上刷回书库，不停一下看不清（2026-09-29 用户反馈）
+say() {
+    echo "$(date '+%F %T') $1" >>"$LOG"
+    echo "$1"
+    eips 1 2 "$1                                  " >/dev/null 2>&1
+    sleep 6
+}
