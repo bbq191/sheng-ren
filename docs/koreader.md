@@ -217,7 +217,8 @@ koreader/kindle-boot/deploy.sh --write    # 拷进 Kindle：extensions/koreader-
 ## 掌阅开机进 KOReader
 
 掌阅没有开发者选项、USB 调试，也没有主页键；但默认桌面可以换。`koreader/android-home/` 是一个几十 KB 的安卓桌面应用「KOReader 桌面」：
-开机、在 KOReader 里退出都（重新）打开 KOReader；**连着退出两次**（重开后 10 秒内又退出）进掌阅原来的桌面——**下发配置前要这样真正退出**。
+开机、在 KOReader 里退出都（重新）打开 KOReader，退几次都一样（用户要）。唯一的出口是下拉系统控制中心 → 设置 → 默认应用 → 桌面改回「iReader 桌面」。
+**给掌阅下发配置前**，要先这样把默认桌面改回 iReader 桌面、再退出 KOReader（不然它还在运行，退出时会盖掉刚下发的设置），写完再改回来。
 编译、安装、恢复见 [koreader/android-home/README.md](../koreader/android-home/README.md)。
 
 ## 阅读背景
