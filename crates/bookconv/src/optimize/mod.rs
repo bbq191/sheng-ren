@@ -10,6 +10,8 @@ use zip::{ZipArchive, ZipWriter};
 /// 幂等标记：优化器把这个文件埋进产物 EPUB，内容=优化器版本号（见 [`marker_value`]）。放 META-INF/ 下
 /// （EPUB 规范允许该目录放额外文件，阅读器忽略）。重优化时旧标记剔除、结尾重写一条。
 pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
+/// 漫画要在阅读器里设成的页边距（内容就是数字），只有 profile 开了 `comic_reader_margins` 的漫画才有；`xochitl/comic-margins.sh` 凭它登记。
+pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// 优化逻辑版本。改了会影响产物的行为就 bump——书库按它（连同设备、阅读范围等）判断产物是否过期、需要重新生成。
 ///
 /// 历史（只记还有参考价值的结论）：
@@ -60,7 +62,9 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 /// - v29（2026-09-29）：漫画纯图页（没有可见文字）的 `<body>` 加 `eink-fullpage` 类（`line-height:0;font-size:0`），只在 profile 开了
 ///   `comic_fullpage` 时（koreader）：KOReader 里图在一行中，行高在下面留 10px、字号在行首多出 2px，去掉后整页图用满整屏，
 ///   `koreader` 阅读范围改成 1264×1680，1px 白边就是到屏幕边缘 1px（本机 KOReader 截图验证）。
-pub const OPTIMIZE_VERSION: &str = "29";
+/// - v30（2026-09-29）：xochitl 漫画按页边距 1 排（profile `comic_reader_margins` + `comic_readable` 952×1457，画布里不留白边）：
+///   写 `META-INF/eink-reader-margins` 供 `xochitl/comic-margins.sh` 登记；文字页、混排页的字补回默认留白，图页去掉 `<body>` 的类（`comicpad`）。
+pub const OPTIMIZE_VERSION: &str = "30";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -97,6 +101,10 @@ pub struct OptimizeOpts {
     pub comic_margin: u32,
     /// 漫画纯图页去掉行高和字号（profile 的 `comic_fullpage`），见 `html_pass::mark_fullpage`。
     pub comic_fullpage: bool,
+    /// 漫画页排版用的阅读范围（profile 的 `comic_readable`）；`None` 用 `screen`。
+    pub comic_screen: Option<crate::imgopt::Screen>,
+    /// 漫画在阅读器里要设成的页边距（profile 的 `comic_reader_margins`）：写标记、按 `comicpad` 处理各页。
+    pub comic_reader_margins: Option<u32>,
     pub wash: Option<crate::wash::WashOpts>,
     /// 脚注呈现方式（缺省 `Anchor`，书库与 `epub-optimize` 都用它）。
     pub footnote: FootnoteMode,
@@ -108,7 +116,7 @@ pub struct OptimizeOpts {
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_fullpage: false, wash: None, footnote: FootnoteMode::default(), page_direction: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_fullpage: false, comic_screen: None, comic_reader_margins: None, wash: None, footnote: FootnoteMode::default(), page_direction: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -119,6 +127,8 @@ impl OptimizeOpts {
             footnote: p.notes.into(),
             comic_margin: p.comic_margin,
             comic_fullpage: p.comic_fullpage,
+            comic_screen: Some(p.comic_readable()),
+            comic_reader_margins: p.comic_reader_margins,
             ..OptimizeOpts::new(p.readable(profile::Format::Epub))
         }
     }
@@ -185,7 +195,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
     let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len() + 1);
     ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: MIMETYPE.to_vec() });
-    ordered.extend(raw.into_iter().filter(|e| e.name != "mimetype" && e.name != OPTIMIZE_MARKER));
+    ordered.extend(raw.into_iter().filter(|e| e.name != "mimetype" && e.name != OPTIMIZE_MARKER && e.name != READER_MARGINS_MARKER));
 
     // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。清洗过的书用清洗层判好的
     // （清洗层已把空页清理、目录归一，判定更准；不再判第二遍）。
@@ -302,6 +312,8 @@ struct EntryXform<'a> {
     comic: bool,
     /// 漫画且 profile 开了 `comic_fullpage`：纯图页的 `<body>` 加 `eink-fullpage`。
     fullpage: bool,
+    /// 漫画且 profile 开了 `comic_reader_margins`：各页按 `comicpad` 处理，`eink-wash.css` 追加它的规则。
+    reader_margins: bool,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
@@ -325,6 +337,7 @@ impl<'a> EntryXform<'a> {
             page_direction: opts.page_direction,
             comic: prep.is_comic_book,
             fullpage: prep.is_comic_book && opts.comic_fullpage,
+            reader_margins: prep.is_comic_book && opts.comic_reader_margins.is_some(),
             opf_name: prep.opf_name.as_deref(),
             screen: opts.screen,
             seen_ids: HashSet::new(),
@@ -343,6 +356,7 @@ impl<'a> EntryXform<'a> {
         let t = fix_cover_aspect(&t);
         let t = svg_cover_to_img(&t);
         let t = if self.fullpage { mark_fullpage(&t).unwrap_or(t) } else { t };
+        let t = if self.reader_margins { crate::comicpad::pad_page(&t).unwrap_or(t) } else { t };
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
         let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
@@ -364,6 +378,13 @@ impl<'a> EntryXform<'a> {
                 }
                 Err(_) => Cow::Borrowed(data),
             });
+        }
+        if self.reader_margins && crate::wash::is_wash_css_name(name) {
+            let mut out = data.to_vec();
+            if !data.windows(crate::comicpad::CSS_RULES.len()).any(|w| w == crate::comicpad::CSS_RULES.as_bytes()) {
+                out.extend_from_slice(crate::comicpad::CSS_RULES.as_bytes());
+            }
+            return Some(Cow::Owned(out));
         }
         if self.opf_name == Some(name) && (self.page_direction.is_some() || self.comic) {
             let Ok(text) = std::str::from_utf8(data) else { return Some(Cow::Borrowed(data)) };

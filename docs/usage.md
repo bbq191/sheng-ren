@@ -260,6 +260,20 @@ booklib 只负责生成，**拷到设备上由你自己来**：把阅读模式�
 - Kindle 上用自带阅读器读 EPUB 是不行的（USB 传书它只认 AZW3），这里的产物只给 Kindle 上的 KOReader 读。
 - 漫画在 KOReader 里会被自动套上漫画设置（从右往左、铺满整屏）。设备上的 KOReader 配置见 [KOReader 配置](koreader.md)。
 
+### Move 上的漫画：登记页边距
+
+`xochitl/` 里的漫画按 xochitl 页边距 1 排（左右离屏幕 1px），拷到 Move 后要登记一下，第一次打开时才会自动设成 1：
+
+```sh
+xochitl/comic-margins.sh            # 列出要登记的漫画（USB 连着；Wi-Fi 用 --host=root@<Move 的 IP>）
+xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书，约 2 秒后页边距变成 1
+```
+
+- 没登记的漫画还是默认页边距 56：xochitl 会把整页图缩到 842 宽，画面变小，还多缩一次。
+- 每本只登记一次：之后你在界面上把页边距改回去，不会再被设回来。
+- 依赖 Move 上已经装好的书架服务和页边距代理，以及它网页里「管理→实验室→漫画页边距」开关（脚本会先检查）。
+- 界面上的页边距只有 28/56/112 三档，1 只能这样设。直接改 `.content` 会被运行中的 xochitl 盖回去。
+
 ### KOReader 的阅读进度同步
 
 掌阅、Kindle 读的是同一份 `koreader/` 产物，可以用 KOReader 自带的进度同步插件在两台之间接着读。配置里已经设好（`koreader/apply.sh` 写进去，见 [KOReader 配置 · 进度同步](koreader.md#进度同步)）：
