@@ -1,8 +1,10 @@
 # KOReader 配置
 
-三台设备（Kindle Paperwhite 12 签名版、掌阅 Ocean 5 Pro、reMarkable Paper Pro Move）上都装了 KOReader，用它读 EPUB。它的配置写成仓库里的文件（`koreader/`），
-用 `koreader/apply.sh` 应用到设备上（掌阅、Kindle 经 USB 的 MTP，Move 经 SSH）：写之前能看到改哪些键，重复应用不会越改越多，
-几台设备保持一致；写坏了能还原，不要了能撤掉。
+Kindle Paperwhite 12 签名版、掌阅 Ocean 5 Pro 上用 KOReader 读 `koreader` 阅读模式的 EPUB。KOReader 的配置写成仓库里的文件（`koreader/`），
+用 `koreader/apply.sh` 经 USB（MTP）应用到设备上：写之前能看到改哪些键，重复应用不会越改越多，两台设备保持一致；写坏了能还原，不要了能撤掉。
+
+reMarkable Move 上的 KOReader 2026-09-29 起不再管（Move 只用自带阅读器，原因见[设备与可阅读范围](devices.md#为什么这样分)）：`apply.sh` 不再支持 Move（SSH 那条路删了），
+以前写进 Move 的 KOReader 设置留在设备上，要清理得自己在设备上处理。
 
 ![KOReader 文字书 / 漫画两套方案怎么切换](img/koreader-schemes.svg)
 
@@ -12,48 +14,50 @@
 |---|---|---|
 | `personal/settings.reader.patch.lua` | `settings.reader.lua` | 个人设置，以掌阅为准：排版（霞鹜文楷、字号 17、页边距、行距）、页眉页脚、中文排版微调、停用的插件、界面字体等五十多项 |
 | `personal/gestures.patch.lua` | `settings/gestures.lua` | 个人手势：掌阅上改过的 16 处 |
-| `schemes/text.settings.patch.lua` | `settings.reader.lua` | 文字书方案的功能项（见下） |
+| `schemes/text.settings.patch.lua` | `settings.reader.lua` | 文字书方案：注释弹窗、分页相关的样式调整、断行、刷新等（见下） |
 | `schemes/comic.settings.patch.lua` | `settings.reader.lua` | 漫画方案的自动切换规则 |
 | `schemes/profiles.patch.lua` | `settings/profiles.lua` | 三个配置档：「漫画·首次」「漫画」「文字」 |
-| `devices/<设备 id>/settings.reader.patch.lua` | `settings.reader.lua` | 随设备不同的：状态栏字体的文件路径；Move 还有不分栏、彩色、刷新（见下） |
-| `devices/<设备 id>/device.conf` | — | 怎么连（MTP / SSH）、KOReader 目录在哪、怎么判断 KOReader 退没退出、要有哪些字体 |
+| `schemes/kosync.patch.lua` | `settings/kosync.lua` | 阅读进度同步（见[进度同步](#进度同步)） |
+| `devices/<设备 id>/settings.reader.patch.lua` | `settings.reader.lua` | 随设备不同的：状态栏字体的文件路径 |
+| `devices/<设备 id>/device.conf` | — | 设备在 MTP 下叫什么、KOReader 目录在哪、怎么判断 KOReader 退没退出、要有哪些字体 |
 | `presets.lua` | `settings.reader.lua` | 按设备当前的状态栏生成两个状态栏预设 |
 | `patches/*.lua` | `patches/` | KOReader 用户补丁（启动时执行）：`2-ui-font-size.lua` 界面默认字号整体小 2 号 |
 | `apply.sh` | — | 应用、还原（`--restore`）、撤销（`--uninstall`），见[怎么应用](#怎么应用) |
 | `check.sh` | — | 离线检查，不碰设备（见[改了配置之后](#改了配置之后)） |
-| `lib.sh` | — | 两个脚本共用：分层顺序、合并、设备读写（MTP / SSH）、判断 KOReader 退没退出 |
+| `snap.sh`、`snap/2-snap.lua` | — | 用本机 KOReader 按设备配置逐页截图（见[开发 · 在电脑上预览 KOReader 分页](development.md#在电脑上预览-koreader-分页)） |
+| `lib.sh` | — | 几个脚本共用：分层顺序、合并、设备读写（MTP）、判断 KOReader 退没退出 |
 | `luaser.lua` | — | 读写 KOReader 配置文件，以及合并规则：标量覆盖、表递归合并、纯数组（如页边距 `{ 10, 10 }`）整体替换、值为 `"__DELETE__"` 的删键 |
 | `merge.lua`、`diff.lua`、`unmerge.lua` | — | 合并一层补丁；两份配置的净差异（中间层改过、后面又改回来的键不算改动）；撤销方案层 |
 
-设备 id 与书库的设备 profile 相同（`kindle-pw12-sig`、`ireader-ocean5-pro`、`rmpp-move-koreader`）。
-
-**Move 与另两台不同的**（`devices/rmpp-move-koreader/`，用户 2026-09-28 定：个人设置也以掌阅为准，但 Move 屏幕特殊）：
-
-| 设置 | 掌阅 / Kindle | Move | 为什么 |
-|---|---|---|---|
-| `copt_visible_pages` | 2（两栏） | 1（不分栏） | 屏幕窄长（954×1696），两栏每栏太窄 |
-| `color_rendering` | 关 | 开 | 彩屏（Gallery 3），彩色封面、彩页要它 |
-| `full_refresh_count` | 16 | -1（只在章节交界全刷） | 彩屏全刷又慢又闪；这是 Move 上原有的设置 |
-
-Move 上原有的其它调优不动：刷新波形（`wf_level`）、菜单与键盘不闪、翻页点击区四周的握持死区（`defaults.custom.lua`）。
-原来按文件夹（`books/漫画/`、`books/小说/`）切换漫画方案的条件去掉了，统一按「漫画」标签；`settings/directory_defaults.lua` 里给
-`books/漫画/` 的单书设置还在（这里不碰它），放在那个文件夹里的漫画第一次打开时两套都会生效，设的是同样的东西。
+这里的设备 id 是 `kindle-pw12-sig`、`ireader-ocean5-pro`（`devices/` 下的目录名）。两台读的都是书库的 `koreader` 阅读模式的产物，设备 id 和阅读模式 id 不是一回事。
 
 **不同步的**（留在各设备自己的配置里）：书目录、最近打开的文件、设备标识、休眠和自动关机（Kindle 专有）、Android 专用的设置
 （音量键、系统字体、`cover_image_*`——它所属的插件在 Kindle 上会被 KOReader 自动停用）、更新源。
 
 ## 文字书方案
 
-全局设置就是文字书方案，任何没有单书设置的书都用它。排版照个人设置，另加这几项（用户 2026-09-28 选定）：
+全局设置就是文字书方案，任何没有单书设置的书都用它。排版照个人设置，另加这几项（用户 2026-09-28 选定，2026-09-29 补了分页、注释字号和进度同步）：
 
 | 设置 | 值 | 作用 |
 |---|---|---|
 | `footnote_link_in_popup` | 开 | 点注释号在底部弹窗显示注释，不跳页 |
+| `footnote_popup_relative_font_size` | -2 | 弹窗里的注释比正文小 2（正文 17 → 15，约小一号；用户 2026-09-29 定"注释比正文小 1 号"） |
 | `link_prefer_footnote` | 开 | 中文书的注释常没有 `epub:type`，放宽"是不是注释"的判定 |
 | `larger_tap_area_to_follow_links` | 开 | 上标注释号太小，放大点击范围 |
 | `swipe_to_go_back` | 开 | 跟着链接跳过去之后，左→右滑回原处；没有跳转记录时就是上一页，翻页不受影响 |
 | `text_lang_fallback` | `zh-CN` | 书没标语言时按中文断行（缺省 `en-US`） |
 | `full_refresh_count` | 16 | 文字页每 16 页全刷一次（缺省 6）。带图片的页 KOReader 缺省就每页全刷 |
+| `wifi_enable_action` | `turn_on` | 进度同步要能自己开 Wi-Fi：Kindle 上这项不是 `turn_on` 时，KOReader 启动时会把自动同步关掉。Android（掌阅）不受这项影响 |
+
+**撤掉的样式调整**（`style_tweaks` 里只存开着的项，删掉 = 关；这几项以前在个人设置里开着）：
+
+| 样式调整 | 为什么撤 |
+|---|---|
+| `docfragment_page-break-before_avoid `（「避免章末空白页」，键名末尾的空格是 KOReader 源码里就有的） | 它让每个文件开头不换页，把优化器按标题拆开的文件又连成一片——**KOReader 里节与节不分页的根因**。优化器靠"拆文件"分页（见[排版 · 章节分页](typesetting.md#4-章节分页)），KOReader 在每个文件开头换页 |
+| `h1_page-break-before_always`、`h2_…`、`h3_…`（H1–H3 前换页） | 副标题会和章标题分到两页（优化器让副标题留在章标题页） |
+| `footnote-inpage_epub`、`inpage_footnote_font-size_smaller`（页内注释） | 把注释排到引用它的那页页底；我们要点开弹窗，注释留在章末 |
+
+**验证情况**：2026-09-29 用 `koreader/snap.sh` 在电脑上的 KOReader 里看过，撤掉以后章、节都从新的一页开始；**掌阅、Kindle 真机上还没看**。注释弹窗和字号也还没在真机上看。
 
 ## 漫画方案
 
@@ -81,16 +85,35 @@ KOReader 把 `dc:subject` 读成书的 keywords，配置档的自动执行按"�
 - 漫画读到一半 KOReader 崩了、没走到"关书"，状态栏会一直隐藏，打开再关闭任意一本漫画就恢复。
 - 每次切换状态栏预设会弹一条"已载入预设"的小提示。
 
+## 进度同步
+
+掌阅、Kindle 读的是同一份产物，用 KOReader 自带的进度同步插件（kosync）在两台之间接着读。`schemes/kosync.patch.lua` 写进设备的 `settings/kosync.lua`
+（键名按 KOReader v2026.07 的 `plugins/kosync.koplugin/main.lua` 核过）：
+
+| 设置 | 值 | 作用 |
+|---|---|---|
+| `checksum_method` | 1（按文件名） | 按文件名认书，不按文件内容：优化规则一升级、书重新生成，文件字节就变，按内容认会把进度断开；产物文件名只跟书名走，重新生成不变 |
+| `auto_sync` | 开 | 自动同步 |
+| `sync_forward` | 1（问一下） | 别的设备读得更靠后：问要不要跳过去 |
+| `sync_backward` | 3（不跳） | 别的设备读得更靠前：不跳 |
+
+后两项是插件的缺省值，也写出来：设备上还没有 `kosync.lua` 时只写前两项，插件会拿到空的策略、什么都不做。
+
+- **账号不进仓库**：每台设备上在 KOReader 菜单的「进度同步」里注册或登录，用户名、密钥、服务器由插件自己写进设备上的 `kosync.lua`（合并时这些键不动）。不设服务器就是 KOReader 官方的同步服务器。
+- **文件名要一致**：两台设备上同一本书的文件名一样才认得出，所以都拷同一份 `koreader/` 产物、不要在设备上改名。
+- **位置可能差一点**：KOReader 记的进度是 xpointer（第几个文件里的哪个元素）。优化规则改了、书重新生成后，同一个 xpointer 可能落到稍微不同的地方，甚至相邻的节。
+- `--uninstall` 会撤掉这几项（它属于方案层），登录信息不动。
+- **还没在真机上试过**（2026-09-29）。怎么用见[使用指南 · 进度同步](usage.md#koreader-的阅读进度同步)。
+
 ## 怎么应用
 
-先连上设备（掌阅、Kindle：USB，解锁屏幕；Move：同一网络或 USB，地址在 `device.conf`，临时换用 `SSH_HOST=root@… koreader/apply.sh …`），
+先连上设备（USB，解锁屏幕），
 **在设备上退出 KOReader**——它退出时会把内存里的设置写回文件，运行中改了会被盖掉。
 
 ```sh
 koreader/apply.sh kindle-pw12-sig              # 只列出会改哪些键、缺哪些字体和补丁（dry run，什么都不写）
 koreader/apply.sh kindle-pw12-sig --write      # 写入
 koreader/apply.sh ireader-ocean5-pro --write --closed   # 掌阅：声明已退出 KOReader（不给 --closed 就在终端里问）
-koreader/apply.sh rmpp-move-koreader --write   # Move：经 SSH
 
 koreader/apply.sh kindle-pw12-sig --restore --write                    # 还原成最近一次备份
 koreader/apply.sh kindle-pw12-sig --restore=2026-09-28_153012 --write  # 还原成指定的备份（备份目录名）
@@ -102,13 +125,13 @@ koreader/apply.sh kindle-pw12-sig --uninstall --write                  # 撤掉�
 `--write` 时：
 
 1. **KOReader 退没退出**。Kindle 看 `crash.log`：最后一次启动（`It's KOReader!`）之后有没有 `Tearing down UIManager`。
-   Move 看有没有进程在跑 `reader.lua`，而且命令行或工作目录是它的 KOReader 目录（2026-09-28 改成也看工作目录，还没在 Move 上实测过）。Android 上从电脑看不出来，要你确认——
+   Android 上从电脑看不出来，要你确认——
    **用 KOReader 菜单里的「退出」关**，在最近任务里划掉不一定结束进程（2026-09-28 掌阅实测：划掉后写入的 `fontmap`，
    被仍在运行的 KOReader 存设置时整份覆盖掉了）。不在终端里运行时不会问，要加 `--closed`。
 2. **备份**：要改的配置文件、要覆盖或删掉的补丁，存到 `~/Documents/ereader/koreader-backup/<时间>/<设备 id>/`（`KOREADER_BACKUP` 可改目录）。
 3. **写入**，顺序是字体 → 补丁 → 配置，每个文件写完就读回来核对：
    - 字体：设备上缺的（`device.conf` 的 `FONTS`）从本机 `~/Documents/ereader/fonts/` 拷（`KOREADER_FONTS` 可改目录），按大小核对；
-   - 补丁、配置：逐字节核对。MTP 不支持覆盖写，替换已有文件时先拷一份 `.tmp` 再换；SSH 先写 `.tmp` 再改名。
+   - 补丁、配置：逐字节核对。MTP 不支持覆盖写，替换已有文件时先拷一份 `.tmp` 再换。
 4. **任何一个文件写入或核对失败，就把这次已经写过的全部还原**（从备份拷回，原来没有的删掉），还原不了的会报出备份路径。
 
 读设备上的配置失败（连接不稳，而不是设备上没有这个文件）时直接停下，不会拿空表去合并、把整份配置冲掉。
@@ -119,25 +142,22 @@ koreader/apply.sh kindle-pw12-sig --uninstall --write                  # 撤掉�
 
 **回读为什么要经 gio**：gvfs 的 FUSE 路径（`/run/user/<uid>/gvfs/…`）对读过的文件有缓存，用 gio 换掉文件后，经 FUSE 读到的还是旧内容
 （2026-09-28 Kindle 实测：写进去 19524 字节，经 FUSE 读回 11487 字节——旧文件的大小；经 gio 读回正确）。
-书库投递（`deliver.rs`）只经 FUSE 看文件大小决定跳不跳过，缓存旧了最多多拷一次，没有正确性问题。
-
-**SSH 为什么不用 scp**：OpenSSH 9 起 scp 缺省走 SFTP 协议，设备上不一定有 sftp-server；一律用 `ssh` + `cat`，一次应用只建一条连接（连接复用）。
 
 ### 改了配置之后
 
 ```sh
-koreader/check.sh                    # 三台设备都查；只查一台：koreader/check.sh kindle-pw12-sig
+koreader/check.sh                    # 两台设备都查；只查一台：koreader/check.sh kindle-pw12-sig
 koreader/check.sh kindle-pw12-sig 目录   # 拿一份从设备拷回的 KOReader 目录当起点
 ```
 
-离线检查，不碰设备：对空目录（或给定的副本）应用两遍，第二遍必须没有净改动；结果能被 Lua 读回；撤销后方案和预设都没了、个人设置还在，
+离线检查，不碰设备：对空目录（或给定的副本）应用两遍，第二遍必须没有净改动；结果能被 Lua 读回；分页、弹窗注释要撤的样式调整确实撤掉了，进度同步的设置对；撤销后方案和预设都没了、个人设置还在，
 而且有原始配置时能还原到"原始配置 + 个人设置"；补丁能编译、`device.conf` 语法正确；序列化和合并的边界情况（inf/nan、大整数、布尔键、数组替换）。
 
 ## 字体
 
 配置里只写字体名（正文）或字体文件路径（状态栏）。每台设备要有的字体文件列在 `device.conf` 的 `FONTS`，缺的 `apply.sh` 从本机字体目录拷：
 
-| 字体 | 用在 | 三台设备（用户 2026-09-28 统一） |
+| 字体 | 用在 | 两台设备（用户 2026-09-28 统一） |
 |---|---|---|
 | 霞鹜文楷 Medium `LXGWWenKai-Medium.ttf`（排版族名 LXGW WenKai） | 正文（`cre_font = "LXGW WenKai"`） | 都是这个文件；Regular 字重不放（放了 KOReader 很可能按族名选 Regular） |
 | 京華老宋体 v3.0 `京華老宋体v3.0.ttf`（族名 KingHwaOldSong） | 状态栏（按文件路径指定，见 `devices/<id>/`） | 都是这个文件 |
@@ -150,7 +170,7 @@ koreader/check.sh kindle-pw12-sig 目录   # 拿一份从设备拷回的 KOReade
 
 **界面字体**（菜单、按键、标题、提示）也是文楷 Medium（用户 2026-09-28）。KOReader 菜单里没有这个设置，但启动时会读
 `settings.reader.lua` 的 `fontmap` 覆盖 `frontend/ui/font.lua` 里写死的界面字体表（`reader.lua`「User fonts override」，在界面管理器
-加载之前，对全部界面生效）；写在个人设置里。**2026-09-28 掌阅真机确认生效**（Kindle、Move 已写入，还没看过）。等宽的四项（快捷键、按键帮助、输入框、代码）不换，文楷不是等宽，换了对不齐。
+加载之前，对全部界面生效）；写在个人设置里。**2026-09-28 掌阅真机确认生效**（Kindle 已写入，还没看过）。等宽的四项（快捷键、按键帮助、输入框、代码）不换，文楷不是等宽，换了对不齐。
 不用写用户补丁（`patches/`）：早期补丁（`1-`）在设备模块加载之前执行，引用界面字体模块会打乱初始化顺序。
 
 本机字体目录 `~/Documents/ereader/fonts/` 里放这两个文件，`apply.sh` 发现设备上缺哪个就拷哪个；不会删设备上的字体（撤销时也不删）。
@@ -158,6 +178,6 @@ koreader/check.sh kindle-pw12-sig 目录   # 拿一份从设备拷回的 KOReade
 ## 键名怎么核
 
 网上流传的 KOReader 配置模板里有不少键在 KOReader 里并不存在，写进去会被静默忽略。本目录的每个键都按设备上 KOReader
-（Kindle 上是 v2026.07.2，Move 上是 v2026.07.1）的 Lua 源码核过：设备上 `koreader/frontend/`、`koreader/plugins/` 就是源码，拷回电脑 grep。
+（Kindle 上是 v2026.07.2）的 Lua 源码核过：设备上 `koreader/frontend/`、`koreader/plugins/` 就是源码，拷回电脑 grep。
 `G_reader_settings:readSetting("键")` 这类调用就是全局设置的键；配置档能用的动作在 `frontend/dispatcher.lua` 的 `settingsList`。
 KOReader 升级后键名可能变，改配置前重新核一遍。
