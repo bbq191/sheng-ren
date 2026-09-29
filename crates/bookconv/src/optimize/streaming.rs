@@ -11,7 +11,8 @@ use super::*;
 /// `BufWriter<File>`）。峰值内存量级是"并行中的几张图 + 全书文字部分"（并行上限见 [`crate::imgpool`]）。
 ///
 /// 书里有远程图、或清洗过（manifest 的 `properties` 按各章最终内容标）时 OPF 推迟到最后写：抓图发生在阶段二处理各章时，抓到的图要补进 manifest（manifest 里没有的资源
-/// 不算书的一部分），OPF 若先写出去就改不了了。EPUB 只要求 `mimetype` 排第一，其余条目的顺序阅读器不管。
+/// 不算书的一部分），OPF 若先写出去就改不了了。漫画里有 GIF/WebP 页时也推迟：转成 PNG/JPEG 的页（条目名不变）要改
+/// manifest 的 media-type，转没转成要等图片处理完才知道。EPUB 只要求 `mimetype` 排第一，其余条目的顺序阅读器不管。
 ///
 /// `on_progress(done, total)`：阶段二每写完一个条目回调一次，`total`＝要写出的条目总数（`entries.len()`，不含末尾的
 /// 标记与抓到的远程图）。只在阶段二回调——阶段一对文字书通常是毫秒级，真正拖时间的是逐张图片的重编码。
@@ -23,10 +24,14 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）。
     let raw = crate::epubzip::read_skeleton(&mut archive)?.entries;
     let prep = prepare_entries(raw, opts, bytes_before)?;
-    let (screen, grayscale, is_comic_book) = (opts.screen, opts.grayscale, prep.is_comic_book);
+    let (screen, comic_margin, grayscale, is_comic_book) = (opts.screen, opts.comic_margin, opts.grayscale, prep.is_comic_book);
     let entries = &prep.entries;
-    // 推迟写的 OPF 条目名（见函数文档）：有远程图时；清洗过的书也推迟——manifest 的 `properties` 要按各章最终内容标。
-    let deferred_opf: Option<&str> = prep.opf_name.as_deref().filter(|_| prep.has_remote_imgs || opts.wash.is_some());
+    // 漫画里可能换格式的页（GIF/WebP）：处理后按实际格式改 manifest 的 media-type。
+    let may_retype = |name: &str| is_comic_book && matches!(crate::util::image_ext_of(name).as_str(), "gif" | "webp");
+    let has_retypable = entries.iter().any(|(n, _, ish)| !*ish && may_retype(n));
+    // 推迟写的 OPF 条目名（见函数文档）：有远程图、有可能换格式的页时；清洗过的书也推迟——manifest 的 `properties` 要按各章最终内容标。
+    let deferred_opf: Option<&str> = prep.opf_name.as_deref().filter(|_| prep.has_remote_imgs || has_retypable || opts.wash.is_some());
+    let mut retyped: Vec<(String, &'static str)> = Vec::new();
     let mut deferred_opf_bytes: Option<Vec<u8>> = None;
 
     // 阶段二：流式写出。
@@ -39,7 +44,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     // 提前提交 `lookahead` 张（读原图字节几乎不花时间，处理才慢），处理与写盘/读盘重叠。结果与逐张顺序处理逐字节相同。
     let workers = crate::imgpool::worker_count();
     let lookahead = workers + 2;
-    let image_positions: Vec<usize> = entries.iter().enumerate().filter(|(_, (n, _, ish))| !*ish && crate::imgopt::is_downscalable(n)).map(|(i, _)| i).collect();
+    let image_positions: Vec<usize> = entries.iter().enumerate().filter(|(_, (n, _, ish))| !*ish && crate::imgopt::is_page_image(n)).map(|(i, _)| i).collect();
     std::thread::scope(|scope| -> Result<(), String> {
         struct ImgJob {
             bytes: Vec<u8>,
@@ -57,7 +62,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
                 let px = std::panic::catch_unwind(|| crate::imgopt::pixel_count(&job.bytes)).unwrap_or(1_000_000);
                 let _permit = budget.acquire(px);
-                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, grayscale).unwrap_or(job.bytes);
+                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale).unwrap_or(job.bytes);
                 let _ = job.reply.send(out);
             });
         }
@@ -82,7 +87,13 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 None if is_image => {
                     let rx = pending.pop_front().ok_or("图片队列意外为空")?;
                     consumed += 1;
-                    std::borrow::Cow::Owned(rx.recv().map_err(|_| format!("图片处理线程异常退出（{name}）"))?)
+                    let out = rx.recv().map_err(|_| format!("图片处理线程异常退出（{name}）"))?;
+                    if may_retype(name) {
+                        if let Some(mt) = crate::imgopt::converted_media_type(name, &out) {
+                            retyped.push((name.clone(), mt));
+                        }
+                    }
+                    std::borrow::Cow::Owned(out)
                 }
                 None => std::borrow::Cow::Borrowed(data.as_slice()),
             };
@@ -104,6 +115,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
         let bytes = match String::from_utf8(bytes) {
             Ok(text) => {
                 let text = if xf.fetched_imgs.is_empty() { text } else { add_manifest_items(&text, name, &xf.fetched_imgs) };
+                let text = if retyped.is_empty() { text } else { set_manifest_media_types(&text, name, &retyped) };
                 let props = xf.content_props.as_ref().and_then(|p| crate::wash::normalize::apply_content_properties(&text, crate::epubzip::dir_of(name), p));
                 props.unwrap_or(text).into_bytes()
             }

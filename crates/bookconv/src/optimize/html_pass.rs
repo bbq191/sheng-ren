@@ -75,6 +75,28 @@ pub(super) fn add_manifest_items(opf: &str, opf_path: &str, imgs: &[(String, Vec
     crate::wash::opf::insert_manifest_items(opf, &items).unwrap_or_else(|| opf.to_string())
 }
 
+/// 漫画里转换了格式的图（GIF/WebP → PNG/JPEG，条目名不变）：把 OPF manifest 里对应项的 `media-type` 改成新格式。
+/// `retyped` 是 (zip 路径, 新 media-type)；href 按 OPF 所在目录解析（百分号解码）后比对。没有 `media-type` 属性的项不动。
+///
+/// 为什么不改名：改名要把全书 xhtml 的 `src`、SVG 的 `href`、CSS 的 `url()`、OPF、NCX 里指向它的链接都改掉，漏一处图就丢；
+/// EPUB 按 manifest 的 media-type 认图片格式，不看扩展名；KOReader（crengine）按文件内容认格式（2026-09-29 本机截图核对）。
+pub(super) fn set_manifest_media_types(opf: &str, opf_path: &str, retyped: &[(String, &'static str)]) -> String {
+    let dir = crate::epubzip::dir_of(opf_path);
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for it in crate::wash::manifest_items(opf) {
+        let path = crate::epubzip::resolve(dir, &crate::epubzip::percent_decode(it.href));
+        let Some((_, mt)) = retyped.iter().find(|(p, _)| *p == path) else { continue };
+        let Some(a) = html::attr(it.tag, "media-type") else { continue };
+        if a.value != *mt {
+            edits.push((it.pos + a.value_start, it.pos + a.value_end, (*mt).to_string()));
+        }
+    }
+    if edits.is_empty() {
+        return opf.to_string();
+    }
+    html::apply_edits(opf, edits)
+}
+
 /// 生产抓图闭包：`//`→https、Referer=图自身 origin（满足多数 CDN 同源防盗链）、抓取+降采样。
 pub(super) fn remote_img_fetcher(ag: &ureq::Agent, screen: crate::imgopt::Screen) -> impl Fn(&str) -> Option<(Vec<u8>, &'static str)> + '_ {
     move |src: &str| {
@@ -155,11 +177,11 @@ pub(super) fn first_pass_html(text: &str, name: &str) -> String {
 ///
 /// 解码器遇到畸形图片偶发 panic（第三方书的坏 JPEG/PNG 是外部输入）：这里兜住、按"失败原样保留"处理——否则 panic 会从
 /// 图片 worker 线程一路把整本书的优化搞砸（`thread::scope` 把子线程 panic 重新抛给调用方），只为一张坏图不值得。
-pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, grayscale: bool) -> Option<Vec<u8>> {
+pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool) -> Option<Vec<u8>> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if is_comic_book {
             // 单趟（解码/编码各一次、灰度保持、缩放走 SIMD），见 `prepare_comic_page_for_epub`。
-            crate::imgopt::prepare_comic_page_for_epub(bytes, screen, grayscale)
+            crate::imgopt::prepare_comic_page_for_epub(bytes, screen, comic_margin, grayscale)
         } else {
             crate::imgopt::downscale_for_epub(bytes, screen)
         }

@@ -14,6 +14,9 @@ use std::sync::OnceLock;
 
 include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
 
+/// profile 没写 `comic_margin` 时漫画页的白边（像素）。
+pub const DEFAULT_COMIC_MARGIN: u32 = 1;
+
 /// 产物格式。2026-09-29 起只有 EPUB（AZW3、PDF 已删）；TOML 里仍写成 `formats = ["epub"]`、`[readable.epub]`，
 /// 写了别的格式按未知值报错。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
@@ -76,6 +79,9 @@ pub struct Profile {
     pub notes: Notes,
     /// 各格式在阅读器里的真实可阅读范围（像素，竖屏）；没有的格式用 `screen`。
     readable: BTreeMap<Format, Screen>,
+    /// 漫画页图到可阅读范围四边的白边（像素）：图保比缩放进"阅读范围 − 2×白边"的框，受限的那条边两侧正好是这么宽。
+    /// TOML 里不写是 [`DEFAULT_COMIC_MARGIN`]；须小于阅读范围短边的 1/4。
+    pub comic_margin: u32,
 }
 
 #[derive(Deserialize)]
@@ -89,13 +95,14 @@ struct ProfileFile {
     notes: Notes,
     #[serde(default)]
     readable: BTreeMap<Format, Screen>,
+    comic_margin: Option<u32>,
 }
 
 impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, readable: f.readable };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN) };
         p.validate()?;
         Ok(p)
     }
@@ -123,6 +130,13 @@ impl Profile {
             }
             if r.width == 0 || r.height == 0 || r.width > width || r.height > height {
                 return Err(format!("profile {}: readable {fmt:?} 须非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
+            }
+        }
+        // 漫画白边按每种格式的阅读范围（没有实测值的格式用屏幕）都要够小：留给图的框至少是阅读范围的一半
+        for fmt in &self.formats {
+            let r = self.readable(*fmt);
+            if self.comic_margin >= r.width.min(r.height) / 4 {
+                return Err(format!("profile {}: comic_margin {} 须小于 {fmt:?} 阅读范围短边的 1/4（{}x{}）", self.id, self.comic_margin, r.width, r.height));
             }
         }
         Ok(())
@@ -217,6 +231,7 @@ mod tests {
         assert_eq!(x.readable(Format::Epub), Screen { width: 842, height: 1455 }, "EPUB 用实测阅读范围");
         assert!(x.color);
         assert_eq!(x.formats, [Format::Epub]);
+        assert_eq!((k.comic_margin, x.comic_margin), (1, 1));
         assert!(get("nope").is_none());
     }
 
@@ -232,8 +247,8 @@ mod tests {
     fn rejects_landscape_and_unknown_keys() {
         let base = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
         assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 1680\nheight = 1264\n")).is_err());
-        assert!(Profile::parse("x", &format!("{base}extra = 1\n[screen]\nwidth = 1\nheight = 2\n")).is_err());
-        assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 1\nheight = 2\n")).is_ok());
+        assert!(Profile::parse("x", &format!("{base}extra = 1\n[screen]\nwidth = 10\nheight = 20\n")).is_err());
+        assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 10\nheight = 20\n")).is_ok(), "comic_margin 缺省 1，要小于短边的 1/4");
         let scr = "[screen]\nwidth = 100\nheight = 200\n";
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")).is_ok());
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")).is_err(), "阅读范围不能超过屏幕");
@@ -244,6 +259,21 @@ mod tests {
         }
         let dup = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"epub\"]\nnotes = \"jump\"\n";
         assert!(Profile::parse("x", &format!("{dup}{scr}")).is_err(), "formats 不能重复");
+    }
+
+    #[test]
+    fn comic_margin_defaults_to_one_and_is_validated() {
+        let base = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
+        let scr = "[screen]\nwidth = 100\nheight = 200\n";
+        assert_eq!(Profile::parse("x", &format!("{base}{scr}")).unwrap().comic_margin, DEFAULT_COMIC_MARGIN);
+        assert_eq!(Profile::parse("x", &format!("{base}comic_margin = 0\n{scr}")).unwrap().comic_margin, 0);
+        assert_eq!(Profile::parse("x", &format!("{base}comic_margin = 24\n{scr}")).unwrap().comic_margin, 24);
+        assert!(Profile::parse("x", &format!("{base}comic_margin = 25\n{scr}")).is_err(), "短边 100 的 1/4 = 25，不能等于");
+        // 按阅读范围算，不按屏幕：阅读范围 80 宽时上限是 20
+        let rd = "[readable.epub]\nwidth = 80\nheight = 180\n";
+        assert!(Profile::parse("x", &format!("{base}comic_margin = 19\n{scr}{rd}")).is_ok());
+        assert!(Profile::parse("x", &format!("{base}comic_margin = 20\n{scr}{rd}")).is_err());
+        assert!(Profile::parse("x", &format!("{base}comic_margin = -1\n{scr}")).is_err(), "负数报错");
     }
 
     #[test]
