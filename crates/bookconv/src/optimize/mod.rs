@@ -45,16 +45,27 @@ pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 ///   英文首段顶格保留作者的强调类（只去掉写了 text-indent 的类）；`margin:inherit` 不再写坏；目录与 OPF 里新写的 href 百分号编码。
 pub const OPTIMIZE_VERSION: &str = "26";
 
-/// 脚注呈现方式。xochitl 没有弹窗脚注，统一用 `Anchor`（章末可见 + 同章锚点跳转 + 阅读器原生「返回」）。
+/// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
 /// EPUB 流式重排做不到（"页"是阅读器翻页时才算出来的），"跟着段落走"的近似不符合预期。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FootnoteMode {
-    /// 注释移章末 `<div class="footnotes">` + marker 改同章锚点，点跳、原生浮标返回。
+    /// 跳转（xochitl）：注释移章末 `<div class="footnotes">`，标号改同章锚点，点了跳过去、用阅读器的"返回"回来。
     #[default]
     Anchor,
-    /// 注释文字就地内联显示在引用处 `<span class="eink-fnote">〔…〕</span>`，始终可见、不跳转。
+    /// 弹窗（KOReader）：同 `Anchor`，另给标号标 `epub:type="noteref"`、注释块用 `<aside epub:type="footnote">`。
+    Popup,
+    /// 注释文字就地内联显示在引用处 `<span class="eink-fnote">〔…〕</span>`，始终可见、不跳转（只在测试里用）。
     Inline,
+}
+
+impl From<profile::Notes> for FootnoteMode {
+    fn from(n: profile::Notes) -> Self {
+        match n {
+            profile::Notes::Popup => FootnoteMode::Popup,
+            profile::Notes::Jump => FootnoteMode::Anchor,
+        }
+    }
 }
 
 /// 优化选项：`wash=Some` 时先过清洗层。没有缺省设备，所以不实现 `Default`，用 [`OptimizeOpts::new`] 起步。
@@ -76,6 +87,16 @@ impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
         OptimizeOpts { screen, grayscale: false, wash: None, footnote: FootnoteMode::default(), page_direction: None }
+    }
+
+    /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
+    pub fn for_profile(p: &profile::Profile) -> Self {
+        OptimizeOpts {
+            grayscale: !p.color,
+            wash: Some(Default::default()),
+            footnote: p.notes.into(),
+            ..OptimizeOpts::new(p.readable(profile::Format::Epub))
+        }
     }
 }
 
@@ -285,14 +306,13 @@ impl<'a> EntryXform<'a> {
     }
 
     /// 章节 html 最终变换链：解双向脚注互指环 → duokan 图片脚注标记换上标 → 封面拉伸/SVG 修复 → 脚注就地关联重排 →
-    /// e-ink 提对比 → 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
+    /// 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
     fn transform_html_chapter(&mut self, text: &str, name: &str) -> Vec<u8> {
         let t = crate::htmlproc::break_footnote_cycles(text);
         let t = crate::htmlproc::fix_duokan_markers(&t);
         let t = fix_cover_aspect(&t);
         let t = svg_cover_to_img(&t);
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
-        let t = crate::htmlproc::boost_text_contrast(&t);
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
         let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
         self.fetched_imgs.extend(imgs);
@@ -305,13 +325,6 @@ impl<'a> EntryXform<'a> {
         if is_html {
             return Some(match std::str::from_utf8(data) {
                 Ok(text) => Cow::Owned(self.transform_html_chapter(text, name)),
-                Err(_) => Cow::Borrowed(data),
-            });
-        }
-        if name.to_lowercase().ends_with(".css") {
-            // e-ink 提对比：独立 .css 文件里的灰字→纯黑、细字重→400。
-            return Some(match std::str::from_utf8(data) {
-                Ok(text) => Cow::Owned(crate::htmlproc::boost_contrast_css(text).into_bytes()),
                 Err(_) => Cow::Borrowed(data),
             });
         }

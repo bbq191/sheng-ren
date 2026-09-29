@@ -52,6 +52,16 @@ impl Screen {
     }
 }
 
+/// 注释在这个阅读器里怎么看（用户 2026-09-29 定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Notes {
+    /// 点标号弹窗显示（KOReader）：标号标 `epub:type="noteref"`、注释正文是 `<aside epub:type="footnote">`，阅读器据此认出注释。
+    Popup,
+    /// 点标号跳到注释、再返回（xochitl：没有弹窗，只认同文件 `#锚点`，不认 `epub:type`）。
+    Jump,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
     /// 文件名（不含 `.toml`），命令行与配置里用的标识。
@@ -62,6 +72,8 @@ pub struct Profile {
     pub color: bool,
     /// 首选产物格式在前。
     pub formats: Vec<Format>,
+    /// 注释的呈现方式。
+    pub notes: Notes,
     /// 各格式在阅读器里的真实可阅读范围（像素，竖屏）；没有的格式用 `screen`。
     readable: BTreeMap<Format, Screen>,
 }
@@ -74,6 +86,7 @@ struct ProfileFile {
     ppi: u32,
     color: bool,
     formats: Vec<Format>,
+    notes: Notes,
     #[serde(default)]
     readable: BTreeMap<Format, Screen>,
 }
@@ -82,7 +95,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, readable: f.readable };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, readable: f.readable };
         p.validate()?;
         Ok(p)
     }
@@ -217,7 +230,7 @@ mod tests {
 
     #[test]
     fn rejects_landscape_and_unknown_keys() {
-        let base = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\n";
+        let base = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
         assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 1680\nheight = 1264\n")).is_err());
         assert!(Profile::parse("x", &format!("{base}extra = 1\n[screen]\nwidth = 1\nheight = 2\n")).is_err());
         assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 1\nheight = 2\n")).is_ok());
@@ -226,10 +239,10 @@ mod tests {
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")).is_err(), "阅读范围不能超过屏幕");
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.pdf]\nwidth = 90\nheight = 180\n")).is_err(), "不再支持的格式（pdf）报错");
         for fmt in ["pdf", "azw3"] {
-            let old = format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"{fmt}\"]\n{scr}");
+            let old = format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"{fmt}\"]\nnotes = \"jump\"\n{scr}");
             assert!(Profile::parse("x", &old).is_err(), "formats 里写 {fmt} 报错");
         }
-        let dup = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"epub\"]\n";
+        let dup = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"epub\"]\nnotes = \"jump\"\n";
         assert!(Profile::parse("x", &format!("{dup}{scr}")).is_err(), "formats 不能重复");
     }
 
@@ -237,7 +250,7 @@ mod tests {
     fn dir_overrides_and_adds() {
         let dir = std::env::temp_dir().join(format!("profile-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let body = |w: u32| format!("name = \"t\"\nppi = 212\ncolor = false\nformats = [\"epub\"]\n[screen]\nwidth = {w}\nheight = 1448\n");
+        let body = |w: u32| format!("name = \"t\"\nppi = 212\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n[screen]\nwidth = {w}\nheight = 1448\n");
         std::fs::write(dir.join("xochitl.toml"), body(1072)).unwrap();
         std::fs::write(dir.join("new-dev.toml"), body(1000)).unwrap();
         std::fs::write(dir.join("README.md"), "ignored").unwrap();
