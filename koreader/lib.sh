@@ -2,7 +2,7 @@
 # lib.sh —— apply.sh、check.sh 共用（source 进来用，不单独运行）。调用方先设好 KO_HERE（koreader/ 目录）。
 
 # 设备上归我们管的配置文件（相对 KOReader 目录）
-KO_FILES=(settings.reader.lua settings/gestures.lua settings/profiles.lua settings/kosync.lua)
+KO_FILES=(settings.reader.lua settings/gestures.lua settings/profiles.lua settings/kosync.lua settings/simpleui/sui_settings.lua)
 
 # ko_layers <设备 id>：按应用顺序输出每一层「目标文件 脚本 补丁 类别」。
 #   类别 personal = 个人设置（卸载时保留），scheme = 文字书/漫画方案和设备差异（卸载时撤销），presets = 状态栏预设（卸载时撤销）。
@@ -16,6 +16,7 @@ settings.reader.lua presets.lua - presets
 settings/gestures.lua merge.lua personal/gestures.patch.lua personal
 settings/profiles.lua merge.lua schemes/profiles.patch.lua scheme
 settings/kosync.lua merge.lua schemes/kosync.patch.lua scheme
+settings/simpleui/sui_settings.lua merge.lua personal/simpleui.patch.lua personal
 EOF
 }
 
@@ -25,6 +26,7 @@ ko_merge_all() {
   mkdir -p "$dir/settings"
   while read -r target script patch kind; do
     rc=0
+    mkdir -p "$(dirname "$dir/$target")"
     if [[ $patch == - ]]; then luajit "$KO_HERE/$script" "$dir/$target" >/dev/null || rc=$?
     else luajit "$KO_HERE/$script" "$dir/$target" "$KO_HERE/$patch" >/dev/null || rc=$?; fi
     [[ $rc -eq 0 || $rc -eq 10 ]] || { echo "✗ 合并出错（$script $patch）" >&2; return 3; }
