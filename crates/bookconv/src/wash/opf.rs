@@ -25,12 +25,10 @@ pub struct Opf {
     pub index: usize,
     pub dir: String,
     /// manifest id → zip 路径
-    #[allow(dead_code)]
     pub items: HashMap<String, String>,
     /// spine 顺序的 zip 路径
     pub spine: Vec<String>,
     pub nav_doc: Option<String>,
-    #[allow(dead_code)]
     pub ncx: Option<String>,
 }
 
@@ -54,6 +52,14 @@ pub struct ManifestItem<'a> {
     pub href: &'a str,
     pub media_type: &'a str,
     pub properties: &'a str,
+}
+
+impl ManifestItem<'_> {
+    /// 这一项的 zip 路径：`href` 原文先还原字符引用、再百分号解码，相对 OPF 目录解析（2026-09-30 审计：此前不还原，
+    /// `href="a&amp;b.xhtml"` 对不上条目 `a&b.xhtml`）。
+    pub fn path(&self, opf_dir: &str) -> String {
+        resolve(opf_dir, &percent_decode(&crate::util::xml_unescape(self.href)))
+    }
 }
 
 /// OPF 文本里全部带 `id` 与 `href` 的 manifest 项（文档序）。`parse_opf`、`ensure_cover_declared`、占位封面探测共用。
@@ -85,7 +91,7 @@ pub fn parse_opf(entries: &[Entry]) -> Option<Opf> {
     let mut nav_doc = None;
     let mut ncx = None;
     for it in manifest_items(&text) {
-        let path = resolve(&dir, &percent_decode(it.href));
+        let path = it.path(&dir);
         if it.properties.split_whitespace().any(|x| x == "nav") {
             nav_doc = Some(path.clone());
         }
@@ -110,7 +116,7 @@ pub fn parse_opf(entries: &[Entry]) -> Option<Opf> {
 pub(super) fn opf_unique_identifier(entries: &[Entry]) -> Option<String> {
     let i = find_opf(entries)?;
     let text = String::from_utf8_lossy(&entries[i].data);
-    let uid_attr = html::tags(&text).find(|t| t.is_start() && t.is("package")).and_then(|t| tag_attr(&text[t.start..t.end], "unique-identifier"))?;
+    let uid_attr = html::tags(&text).find(|t| t.is_start() && is_local(t.name, "package")).and_then(|t| tag_attr(&text[t.start..t.end], "unique-identifier"))?;
     let t = html::tags(&text).find(|t| t.kind == html::TagKind::Open && t.is("dc:identifier") && tag_attr(&text[t.start..t.end], "id") == Some(uid_attr))?;
     let close = html::find_close(&text, t.end, "dc:identifier")?;
     Some(crate::util::xml_unescape(text[t.end..close.start].trim()).into_owned())
@@ -128,18 +134,21 @@ pub struct OpfDc {
 }
 
 /// 从 OPF 文本读 [`OpfDc`]。书库入库、自动目录标题共用。
+/// 按标签扫（注释里的、自闭合的 `<dc:title/>` 不算；属性值里的 `>` 不截断）：`<dc:X …>` 到它后面第一个这六种之一的闭合标签。
 pub fn opf_dc(opf: &str) -> OpfDc {
-    static DC: OnceLock<Regex> = OnceLock::new();
-    let re = DC.get_or_init(|| {
-        Regex::new(r#"(?s)<dc:(title|creator|publisher|language|date|description)\b[^>]*>(.*?)</dc:(?:title|creator|publisher|language|date|description)\s*>"#).unwrap()
-    });
+    fn local(name: &str) -> Option<&str> {
+        name.strip_prefix("dc:").filter(|n| ["title", "creator", "publisher", "language", "date", "description"].contains(n))
+    }
     let mut dc = OpfDc::default();
-    for c in re.captures_iter(opf) {
-        let v = plain_text(&c[2]);
+    let mut tags = html::tags(opf);
+    while let Some(t) = tags.next() {
+        let Some(kind) = local(t.name).filter(|_| t.kind == html::TagKind::Open) else { continue };
+        let Some(close) = tags.by_ref().find(|c| c.kind == html::TagKind::Close && local(c.name).is_some()) else { break };
+        let v = plain_text(&opf[t.end..close.start]);
         if v.is_empty() {
             continue;
         }
-        let slot = match &c[1] {
+        let slot = match kind {
             "creator" => {
                 dc.creators.push(v);
                 continue;
@@ -273,7 +282,7 @@ pub fn declared_cover(opf: &str) -> Option<ManifestItem<'_>> {
 /// `read(zip 路径)` 取页面文本。返回图片的 zip 路径。
 pub fn first_spine_image(opf: &str, opf_dir: &str, max_pages: usize, in_manifest: bool, mut read: impl FnMut(&str) -> Option<String>) -> Option<String> {
     let items = manifest_items(opf);
-    let path_of = |it: &ManifestItem| resolve(opf_dir, &percent_decode(it.href));
+    let path_of = |it: &ManifestItem| it.path(opf_dir);
     let images: HashSet<String> = items.iter().filter(|i| is_image_item(i)).map(path_of).collect();
     let by_id: HashMap<&str, &ManifestItem> = items.iter().map(|i| (i.id, i)).collect();
     let pages = html::tags(opf)

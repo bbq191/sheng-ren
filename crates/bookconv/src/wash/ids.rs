@@ -13,7 +13,7 @@ pub(super) fn dedup_ids_across_book(entries: &mut [Entry], rep: &mut WashReport)
     let Some(opf) = parse_opf(entries) else { return };
     let mut order: Vec<usize> = Vec::new();
     let mut in_order: HashSet<usize> = HashSet::new();
-    let by_name: HashMap<&str, usize> = entries.iter().enumerate().map(|(i, e)| (e.name.as_str(), i)).collect();
+    let by_name: HashMap<&str, usize> = name_index(entries);
     for p in &opf.spine {
         if let Some(&i) = by_name.get(p.as_str()) {
             if in_order.insert(i) {

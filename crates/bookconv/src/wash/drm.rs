@@ -36,7 +36,7 @@ pub(super) fn strip_pseudo_drm(entries: &mut Vec<Entry>, rep: &mut WashReport) -
         let opf_dir = dir_of(&entries[oi].name).to_string();
         let text = String::from_utf8_lossy(&entries[oi].data).into_owned();
         // manifest 里指向被剥文件的 `<item>`（连同后面的空白）一趟删掉。
-        if let Some(t) = opf::remove_items(&text, |it| drop.contains(&resolve(&opf_dir, &percent_decode(it.href)))) {
+        if let Some(t) = opf::remove_items(&text, |it| drop.contains(&it.path(&opf_dir))) {
             entries[oi].data = t.into_bytes();
         }
     }
