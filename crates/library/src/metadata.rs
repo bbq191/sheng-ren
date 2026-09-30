@@ -286,7 +286,7 @@ mod tests {
     fn sample(dir: &Path, description: &str) -> std::path::PathBuf {
         use bookconv::epub::{assemble, Book, BookMeta, Chapter};
         let mut book = Book {
-            meta: BookMeta { book_id: "t".into(), title: "书".into(), author: "作者".into(), language: "zh".into(), publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into() },
+            meta: BookMeta { book_id: "t".into(), title: "书".into(), author: "作者".into(), language: "zh".into(), publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
             chapters: vec![Chapter { title: "一".into(), html_body: "<h1>一</h1><p>正文</p>".into(), level: 1 }],
             resources: vec![],
             nav: vec![],

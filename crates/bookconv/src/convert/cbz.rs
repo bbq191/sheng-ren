@@ -14,6 +14,15 @@ fn page_names<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>) -> Vec<String> {
     names
 }
 
+/// 入库时的检查：是 zip、里面有页面图片（按扩展名）。只读目录，不解压图片——整本转换留到生成时。返回页数。
+pub fn check_cbz<R: Read + std::io::Seek>(reader: R) -> Result<usize, String> {
+    let mut zip = ZipArchive::new(reader).map_err(|e| format!("CBZ 打开: {e}"))?;
+    match page_names(&mut zip).len() {
+        0 => Err("CBZ 内无图片（jpg/jpeg/png/gif/webp）".into()),
+        n => Ok(n),
+    }
+}
+
 /// macOS 压缩时附带的元数据：`__MACOSX/` 下的一切，以及文件名以 `._` 开头的 AppleDouble 资源分叉。
 fn is_macos_junk(name: &str) -> bool {
     name.split('/').any(|seg| seg == "__MACOSX") || name.rsplit('/').next().is_some_and(|base| base.starts_with("._"))
@@ -74,6 +83,8 @@ pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
             cover: None,
             cover_ext: String::new(),
             cover_media_type: String::new(),
+            // CBZ 一律是漫画：打上标签，页数少于漫画判定的门槛（20 张）也按漫画处理
+            subjects: vec![crate::comic_detect::COMIC_SUBJECT.to_string()],
         },
         chapters,
         resources,

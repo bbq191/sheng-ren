@@ -46,6 +46,7 @@ pub fn probe_epub() -> Result<Vec<u8>, String> {
             cover: None,
             cover_ext: "png".into(),
             cover_media_type: "image/png".into(),
+            subjects: Vec::new(),
         },
         chapters: vec![
             page("说明", GUIDE),

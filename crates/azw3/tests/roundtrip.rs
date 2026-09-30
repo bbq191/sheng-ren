@@ -26,6 +26,7 @@ fn sample_epub_id(id: &str) -> Vec<u8> {
             cover: Some(png(600, 800)),
             cover_ext: "png".into(),
             cover_media_type: "image/png".into(),
+            subjects: Vec::new(),
         },
         chapters: vec![
             Chapter { title: "第一章".into(), html_body: format!(r##"<h1>第一章</h1><p>{long}<a href="chap_0002.xhtml#s2">跳到第二节</a></p><img src="images/a.png" alt=""/>"##), level: 1 },
@@ -90,7 +91,7 @@ fn base32_embed_and_link_offsets_read_back() {
     let imgs: String = (0..colors.len()).map(|i| format!(r#"<p><img src="images/i{i}.png" alt=""/></p>"#)).collect();
     let long = "填充文字。".repeat(3000); // 让目标偏移足够大，base32 里出现字母
     let mut book = Book {
-        meta: BookMeta { book_id: "t2".into(), title: "图多".into(), author: String::new(), language: "zh".into(), publisher: String::new(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into() },
+        meta: BookMeta { book_id: "t2".into(), title: "图多".into(), author: String::new(), language: "zh".into(), publisher: String::new(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
         chapters: vec![
             Chapter { title: "图".into(), html_body: format!(r##"<h1>图</h1>{imgs}<p><a href="chap_0002.xhtml#far">远处</a></p>"##), level: 1 },
             Chapter { title: "文".into(), html_body: format!(r#"<h1>文</h1><p>{long}</p><p id="far">目标段</p>"#), level: 1 },
@@ -150,7 +151,7 @@ fn static_webp_becomes_png() {
     let mut webp = Vec::new();
     image::codecs::webp::WebPEncoder::new_lossless(&mut webp).encode(img.as_raw(), 16, 12, image::ExtendedColorType::Rgba8).unwrap();
     let mut book = Book {
-        meta: BookMeta { book_id: "w".into(), title: "WebP".into(), author: String::new(), language: "zh".into(), publisher: String::new(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into() },
+        meta: BookMeta { book_id: "w".into(), title: "WebP".into(), author: String::new(), language: "zh".into(), publisher: String::new(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
         chapters: vec![Chapter { title: "图".into(), html_body: r#"<h1>图</h1><p><img src="images/w.webp" alt=""/></p>"#.into(), level: 1 }],
         resources: vec![Resource { path: "images/w.webp".into(), media_type: "image/webp".into(), bytes: webp }],
         nav: vec![],

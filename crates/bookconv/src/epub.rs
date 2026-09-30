@@ -19,6 +19,8 @@ pub struct BookMeta {
     pub cover: Option<Vec<u8>>,
     pub cover_ext: String,
     pub cover_media_type: String,
+    /// `<dc:subject>` 标签（CBZ 转出来的写"漫画"，见 [`crate::comic_detect::COMIC_SUBJECT`]）。
+    pub subjects: Vec<String>,
 }
 
 /// 章节 HTML 引用的图片等资源（如漫画页、网页插图）。
@@ -135,18 +137,20 @@ fn content_opf(book: &Book) -> String {
     } else {
         format!("\n    <dc:publisher>{}</dc:publisher>", xesc(&m.publisher))
     };
+    let subjects: String = m.subjects.iter().map(|s| format!("\n    <dc:subject>{}</dc:subject>", xesc(s))).collect();
     let cover_meta = if has_cover {
         "\n    <meta name=\"cover\" content=\"cover-image\"/>"
     } else {
         ""
     };
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"pub-id\">\n  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n    <dc:identifier id=\"pub-id\">{ID_SCHEME}{}</dc:identifier>\n    <dc:title>{}</dc:title>\n    <dc:language>{}</dc:language>{}{}{}\n  </metadata>\n  <manifest>\n{}\n  </manifest>\n  <spine>\n{}\n  </spine>\n</package>\n",
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"pub-id\">\n  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n    <dc:identifier id=\"pub-id\">{ID_SCHEME}{}</dc:identifier>\n    <dc:title>{}</dc:title>\n    <dc:language>{}</dc:language>{}{}{}{}\n  </metadata>\n  <manifest>\n{}\n  </manifest>\n  <spine>\n{}\n  </spine>\n</package>\n",
         xesc(&m.book_id),
         xesc(&m.title),
         xesc(&m.language),
         author,
         publisher,
+        subjects,
         cover_meta,
         manifest.join("\n"),
         spine.join("\n")
@@ -280,8 +284,7 @@ mod nav_tests {
         let book = Book {
             meta: BookMeta {
                 book_id: "b".into(), title: "t".into(), author: "".into(), language: "zh".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(),
-            },
+                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
             chapters: vec![ch("第一部", 1), ch("第一章", 2), ch("第二章", 2), ch("第二部", 1)],
             resources: vec![],
             nav: Vec::new(),
@@ -300,8 +303,7 @@ mod nav_tests {
         let mut book = Book {
             meta: BookMeta {
                 book_id: "b".into(), title: "t".into(), author: "".into(), language: "zh".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(),
-            },
+                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
             chapters: vec![Chapter { title: "章".into(), html_body: "<p><img src=\"images/a.png\"/></p>".into(), level: 1 }],
             resources: vec![Resource { path: "images/a.png".into(), media_type: "image/png".into(), bytes: vec![1, 2, 3, 4] }],
             nav: Vec::new(),
@@ -322,8 +324,7 @@ mod nav_tests {
         let book = Book {
             meta: BookMeta {
                 book_id: "b".into(), title: "t".into(), author: "".into(), language: "en".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(),
-            },
+                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
             chapters: vec![ch("部", 1), ch("章", 2), ch("节", 3), ch("小节", 4), ch("章二", 2), ch("跳级", 4), ch("部二", 1)],
             resources: vec![],
             nav: Vec::new(),
@@ -382,8 +383,7 @@ mod nav_tests {
         let book = Book {
             meta: BookMeta {
                 book_id: "b".into(), title: "t".into(), author: "".into(), language: "zh".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(),
-            },
+                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
             chapters: vec![ch("一", 1), ch("二", 1)],
             resources: vec![],
             nav: Vec::new(),
@@ -395,8 +395,7 @@ mod nav_tests {
         Book {
             meta: BookMeta {
                 book_id: "b".into(), title: "t".into(), author: "".into(), language: "zh".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(),
-            },
+                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
             chapters: vec![
                 Chapter { title: "图页".into(), html_body: if with_img { "<div><IMG src=\"images/a.png\"/></div>".into() } else { "<p>字</p>".into() }, level: 1 },
                 Chapter { title: "字页".into(), html_body: "<p>纯文字</p>".into(), level: 1 },
