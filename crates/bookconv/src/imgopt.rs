@@ -722,13 +722,13 @@ mod tests {
 
     #[test]
     fn frames_follow_the_given_screen() {
-        // 非 Move 的屏幕（KOReader 模式：掌阅 Ocean 5 Pro / Kindle PW12，1264×1680）：缩放框与漫画页框都按传入的屏幕算，不再是 954×1696。
-        let koreader = profile::get("koreader").unwrap().screen;
-        let (w, h) = image::load_from_memory(&downscale_for_epub(&jpeg_of(2400, 3200), koreader).unwrap()).unwrap().dimensions();
+        // 非 Move 的屏幕（掌阅 Ocean 5 Pro，1264×1680）：缩放框与漫画页框都按传入的屏幕算，不再是 954×1696。
+        let ireader = profile::get("ireader").unwrap().screen;
+        let (w, h) = image::load_from_memory(&downscale_for_epub(&jpeg_of(2400, 3200), ireader).unwrap()).unwrap().dimensions();
         assert_eq!((w, h), (1260, 1680), "竖图按 1264×1680 框等比缩");
-        let (w, h) = image::load_from_memory(&downscale_for_device(&jpeg_of(3200, 1600), koreader).unwrap()).unwrap().dimensions();
+        let (w, h) = image::load_from_memory(&downscale_for_device(&jpeg_of(3200, 1600), ireader).unwrap()).unwrap().dimensions();
         assert_eq!((w, h), (1680, 840), "横页按横向框 1680×1264");
-        let out = prep(&gray_jpeg_of(1091, 1592, 0), koreader, false).expect("要补白到屏幕比例");
+        let out = prep(&gray_jpeg_of(1091, 1592, 0), ireader, false).expect("要补白到屏幕比例");
         assert_eq!(image::load_from_memory(&out).unwrap().dimensions(), (1264, 1680));
     }
 
@@ -920,7 +920,7 @@ mod tests {
     /// （另一条边是按比例四舍五入的结果，误差不超过半像素），不拉伸不压扁。
     #[test]
     fn layout_puts_exact_margin_on_constrained_axis_and_keeps_aspect() {
-        let areas = [profile::get("koreader").unwrap().readable(profile::Format::Epub), test_area(), Screen { width: 300, height: 400 }];
+        let areas = [profile::get("ireader").unwrap().readable(profile::Format::Epub), test_area(), Screen { width: 300, height: 400 }];
         let sizes = [(1091u32, 1592u32), (1687, 2480), (566, 800), (700, 1600), (1600, 1000), (2000, 2000), (1264, 1680), (842, 1455), (3001, 4999), (301, 1999)];
         for area in areas {
             for m in [0u32, 1, 3] {
@@ -942,12 +942,12 @@ mod tests {
         }
     }
 
-    /// 端到端量产物：整张纯黑、画面到边的页，放大（KOReader 1264×1680，乱马同款 1091×1592）和缩小（死亡笔记同款
+    /// 端到端量产物：整张纯黑、画面到边的页，放大（掌阅 1264×1680，乱马同款 1091×1592）和缩小（死亡笔记同款
     /// 1687×2480 到 Move 842×1455）后，解码量深色内容到四边的距离：受限边两侧 1px，另一条边两侧相差不超过 1px。
     #[test]
     fn output_pages_measure_one_pixel_on_constrained_axis() {
-        let koreader = profile::get("koreader").unwrap().readable(profile::Format::Epub);
-        for (w, h, area) in [(1091u32, 1592u32, koreader), (1687, 2480, test_area()), (1300, 900, test_area())] {
+        let ireader = profile::get("ireader").unwrap().readable(profile::Format::Epub);
+        for (w, h, area) in [(1091u32, 1592u32, ireader), (1687, 2480, test_area()), (1300, 900, test_area())] {
             let out = prep(&black_jpeg(w, h), area, false).expect("要处理");
             let page = image::load_from_memory(&out).unwrap();
             assert_eq!(page.dimensions(), (area.width, area.height), "{w}x{h}");
@@ -956,7 +956,7 @@ mod tests {
             assert!(l.abs_diff(r) <= 1 && t.abs_diff(b) <= 1, "{w}x{h}: 居中，实际 左{l} 上{t} 右{r} 下{b}");
         }
         // 白边可配：3px
-        let out = prepare_comic_page_for_epub(&black_jpeg(1091, 1592), koreader, 3, false).unwrap();
+        let out = prepare_comic_page_for_epub(&black_jpeg(1091, 1592), ireader, 3, false).unwrap();
         let (l, t, r, b) = dark_margins(&image::load_from_memory(&out).unwrap());
         assert!((t, b) == (3, 3) && l.abs_diff(r) <= 1, "左{l} 上{t} 右{r} 下{b}");
     }

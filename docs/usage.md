@@ -6,14 +6,13 @@
 
 ```sh
 ./install.sh            # 装 booklib（书库）和 ebook-meta（改 EPUB 元数据）
-./install.sh --tools    # 另装开发、排查问题用的 epub-optimize、readable-probe、readable-measure
+./install.sh --tools    # 另装开发、排查问题用的 epub-optimize、epub-to-azw3、readable-probe、readable-measure
 ./uninstall.sh          # 卸载这些命令
 ```
 
 - 装到 cargo 的 bin 目录（`$CARGO_HOME/bin`，缺省 `~/.cargo/bin`；本机设了 `CARGO_HOME=~/.local/share/cargo`）。不在 `PATH` 里时安装脚本会提示怎么加。
 - 更新代码后重新运行一次 `./install.sh` 就是升级。编译复用仓库的 `target/`，改动少时很快。
-- **卸载只删命令**：书库、产物、KOReader 配置备份、设备上的东西都不动，脚本会告诉你它们在哪。书库不要了自己删那个目录；
-  设备上 KOReader 的方案设置用 `koreader/apply.sh <设备> --uninstall --write` 撤掉（见 [KOReader 配置](koreader.md#怎么应用)）。
+- **卸载只删命令**：书库、产物、设备上的东西都不动，脚本会告诉你书库在哪。书库不要了自己删那个目录。
 - Calibre 也有一个叫 `ebook-meta` 的命令。两个都装了的话，执行哪个取决于 `PATH` 的先后，安装时会提醒。
 - 不想安装也可以直接跑：`cargo run --release -p library --bin booklib -- <命令>`。
 
@@ -33,7 +32,7 @@
 |---|---|
 | `booklib add <文件或网址>...` | 一次性入库单个文件或网址 |
 | `booklib track <目录>...` / `untrack` | 跟踪书目录（递归）/ 不再跟踪 |
-| `booklib sync [--prune] [--device=…] [--no-build] [--watch]` | 把跟踪的目录镜像进书库，接着按阅读模式生成 |
+| `booklib sync [--prune] [--device=…] [--no-build] [--watch]` | 把跟踪的目录镜像进书库，接着按阅读模式生成（不写 `--device` 就是全部三个） |
 | `booklib list [书名片段或 id...]` | 列出书，以及各阅读模式的产物在哪、是否最新 |
 | `booklib build [--device=…] [--force] [书名片段或 id...]` | 按阅读模式生成 |
 | `booklib meta [--force] [--clear] [书名片段或 id...]` | 联网补元数据（简介、标签、原作名），没封面的顺带找封面 |
@@ -41,7 +40,7 @@
 | `booklib dedupe [目录...]` | 早期版本入库的书改成只存索引 |
 | `booklib devices` | 列出阅读模式 |
 
-**阅读模式**（`--device=` 的值）现在有两个：`koreader`（掌阅、Kindle 上的 KOReader 共用）和 `xochitl`（reMarkable Move 自带阅读器），见[设备与可阅读范围](devices.md)。
+**阅读模式**（`--device=` 的值）现在有三个：`kindle`（Kindle 自带阅读器，产物 AZW3）、`ireader`（掌阅自带阅读器）和 `xochitl`（reMarkable Move 自带阅读器），见[设备与可阅读范围](devices.md)。
 
 退出码：`0` 全部成功；`1` 命令写错了；`2` 有书处理失败（或书库打不开、没有匹配的书）。
 `sync` 里有文件入库失败、旧版本删不掉、拿不到书库的锁，也算失败；`--watch` 时只计数，不退出。
@@ -64,7 +63,7 @@ booklib add 三体.epub 乱马01.cbz https://example.com/post
 | CBZ 漫画 | 当场转成每页一张原图的 EPUB（转换结果不存） |
 | 网址 | 没有原件：入库时抓正文和图片组成 EPUB，**这一种存在书库里** |
 
-其它格式（MOBI、AZW3、FB2、PDF 等）**不收**，入库时报"只支持 EPUB 和 CBZ"。入库时也会完整检查一遍（有没有 DRM、是不是有效的 EPUB、CBZ 里有没有图），不能用的当场拒收。
+其它格式（MOBI、AZW3、FB2、PDF 等）**不收**（AZW3 只是给 Kindle 的产物格式，不能入库），入库时报"只支持 EPUB 和 CBZ"。入库时也会完整检查一遍（有没有 DRM、是不是有效的 EPUB、CBZ 里有没有图），不能用的当场拒收。
 
 - 同一个文件重复入库会显示 `= 已在库里`（按内容判断，文件改名也认得出）。原件移动过的话，在新位置重新 `add` 一次就更新了位置。
 - **原件是书库的一部分**：原件删了，这本书就没法再生成；原件被改了，生成时会发现并停下来（见下文"原件的核对"）。
@@ -76,13 +75,13 @@ booklib add 三体.epub 乱马01.cbz https://example.com/post
 ```sh
 booklib track ~/Documents/ereader/books          # 登记要跟踪的目录（可以多个）
 booklib sync                                     # 镜像进书库，接着按全部阅读模式生成（只重建有变化的）
-booklib sync --device=koreader                   # 只生成这一个模式
+booklib sync --device=kindle                     # 只生成这一个模式
 booklib sync --no-build                          # 只同步，不生成
 booklib sync --watch                             # 一直运行，每 60 秒检查一次（--watch=300 改间隔）
 ```
 
 和已跟踪的目录互相包含（它的父目录或子目录）的不能再 `track`，要换就先 `untrack`。
-跟踪的目录**不要用阅读模式的 id 命名**（`koreader`、`xochitl`）：产物目录就叫这个名字，会被当成新书入库，生成时会报错。
+跟踪的目录**不要用阅读模式的 id 命名**（`kindle`、`ireader`、`xochitl`）：产物目录就叫这个名字，会被当成新书入库，生成时会报错。
 
 `sync` 对每个 EPUB、CBZ 文件（别的扩展名不看）：
 
@@ -109,39 +108,40 @@ booklib sync --watch                             # 一直运行，每 60 秒检�
 
 ```sh
 booklib build                                  # 全部书、全部阅读模式
-booklib build --device=koreader 三体            # 只生成书名含"三体"的、只给 koreader
+booklib build --device=ireader 三体             # 只生成书名含"三体"的、只给 ireader
 booklib build --device=all --force             # 全部重建
 ```
 
-- 不写 `--device` 就是全部阅读模式；`--device` 可以写多次，也可以用逗号分隔，`all` 表示全部。写成 `--device koreader`（空格）会报错。
+- 不写 `--device` 就是全部阅读模式；`--device` 可以写多次，也可以用逗号分隔，`all` 表示全部。写成 `--device ireader`（空格）会报错。
 - 书的选择：书名片段或 id 前缀（`list` 第一列），不写就是全部书。
 - 每本书记一个**指纹**（原件内容、阅读模式、阅读范围、处理程序版本等）。都没变就显示 `= 已是最新` 并跳过，所以可以放心反复运行。`--force` 强制重建。
 - **路径里有空格要整个加引号**。没加引号时，后半截会被当成书名，结果"没有匹配的书"，这时会提示你。
 - 输出里的 `⚠ 质量门未过` 只是提示，产物照样生成。出现时说明原书结构有问题（比如 XHTML 不合法），可以在设备上看看效果。
 
-#**`sync`、`build` 的输出**（2026-09-29 起）：
+**`sync`、`build` 的输出**（2026-09-29 起）：
 
 ```
 原件：新增 0，改过 0，没变 35，不在了 0（从书库删了 0），出错 0      ← 跟踪目录里的原书有没有变化
-✓ 生成 [koreader] 一九八四 → ~/Documents/ereader/koreader/好读精排/一九八四.epub
-生成：重新生成 70 本，挪位置 0 本，已是最新 0 本，失败 0 本          ← 这次实际做了什么
+✓ 生成 [kindle] 一九八四 → ~/Documents/ereader/kindle/好读精排/一九八四.azw3
+生成：重新生成 105 本，挪位置 0 本，已是最新 0 本，失败 0 本          ← 这次实际做了什么
 ```
 
 优化规则升级（版本号加一）后，原件都没变也会整批"重新生成"；`build` 还会逐本列出"已是最新"的。
 
 ## 产物放在哪
 
-每个阅读模式一个文件夹，文件名是 `书名.epub`：
+每个阅读模式一个文件夹，文件名是 `书名.epub`（`kindle` 模式是 `书名.azw3`）：
 
 | 书从哪来 | 产物 |
 |---|---|
-| 跟踪目录 `D` 里的书 | `D` 旁边的 `D/../<模式>/`，子目录和原件在 `D` 里的一样。例：跟踪 `~/Documents/ereader/books`，原件 `books/haodoo/x.epub` → `~/Documents/ereader/koreader/haodoo/<书名>.epub` 和 `~/Documents/ereader/xochitl/haodoo/<书名>.epub` |
-| `add` 进来的单个文件（不在跟踪目录里）、网址书 | 书库的 `output/<模式>/<书名>.epub` |
+| 跟踪目录 `D` 里的书 | `D` 旁边的 `D/../<模式>/`，子目录和原件在 `D` 里的一样。例：跟踪 `~/Documents/ereader/books`，原件 `books/haodoo/x.epub` → `~/Documents/ereader/kindle/haodoo/<书名>.azw3`、`~/Documents/ereader/ireader/haodoo/<书名>.epub`、`~/Documents/ereader/xochitl/haodoo/<书名>.epub` |
+| `add` 进来的单个文件（不在跟踪目录里）、网址书 | 书库的 `output/<模式>/<书名>.epub`（或 `.azw3`） |
 
 - 生成记录在书库的 `output-state/<模式>.json`（书 → 产物路径、指纹）。**只删记录里记着的文件**：原件移动改名、书名变了，旧位置的产物删掉（内容没变的直接挪过去，不重新生成），删空的子目录一起删；产物文件夹里你自己放的文件一概不动。
-- 两本书在同一个目录里同名（不分大小写），或者目录里已有一个不是本工具生成的同名文件时，后来的那本加上 `[id 前 6 位]`，不覆盖。一本书用上了哪个名字就一直用下去（KOReader 的进度同步按文件名认书）。
+- 两本书在同一个目录里同名（不分大小写），或者目录里已有一个不是本工具生成的同名文件时，后来的那本加上 `[id 前 6 位]`，不覆盖。一本书用上了哪个名字就一直用下去（设备上覆盖旧文件就行，不会多出一本）。
 - 产物先写成同目录的临时文件，过了质量门、落盘后才改名到位，中途失败不留半成品，也不会覆盖掉上一版。
 - 早期版本的产物在书库的 `output/<旧设备 id>/`（比如 `kindle-pw12-sig`、`ireader-ocean5-pro`），现在不再管理，不要了自己删。
+  2026-09-29 到 09-30 用过的 `koreader` 模式也一样：跟踪目录旁的 `koreader/` 文件夹不再更新，`list` 里显示 `? 未知`，不要了自己删。
 
 ### 原件的核对
 
@@ -155,7 +155,8 @@ booklib build --device=all --force             # 全部重建
 
 ```text
 3fa9c1e07b2d  epub   三体 — 刘慈欣
-      koreader             ✓ 最新  /home/你/Documents/ereader/koreader/小说/三体.epub
+      ireader              ✓ 最新  /home/你/Documents/ereader/ireader/小说/三体.epub
+      kindle               ✓ 最新  /home/你/Documents/ereader/kindle/小说/三体.azw3
       xochitl              ⚠ 过期  /home/你/Documents/ereader/xochitl/小说/三体.epub
 ```
 
@@ -236,8 +237,9 @@ booklib dedupe ~/Documents/ereader
 ### devices：列出阅读模式
 
 ```text
-koreader     KOReader（掌阅 Ocean 5 Pro、Kindle PW12 共用）  屏幕 1264×1680  阅读范围 1264×1680  黑白
-xochitl      xochitl（reMarkable Paper Pro Move 原生阅读器）  屏幕 954×1696  阅读范围 842×1455  彩色
+ireader      掌阅自带阅读器（iReader Ocean 5 Pro）  EPUB  屏幕 1264×1680  阅读范围 1264×1680  黑白
+kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  AZW3  屏幕 1264×1680  阅读范围 1104×1546  黑白
+xochitl      xochitl（reMarkable Paper Pro Move 原生阅读器）  EPUB  屏幕 954×1696  阅读范围 842×1455  彩色
 ```
 
 书库的 `profiles/` 目录里放 `<id>.toml` 可以加自定义阅读模式，或覆盖内置模式的参数（比如你在阅读器里改了页边距）。写法见[设备与可阅读范围](devices.md)。
@@ -249,16 +251,16 @@ booklib 只负责生成，**拷到设备上由你自己来**：把阅读模式�
 
 | 设备 | 拷哪个文件夹 | 怎么拷 |
 |---|---|---|
-| Kindle PW12（用 KOReader 读） | `~/Documents/ereader/koreader/` | USB 连电脑，在文件管理器里（Linux 上是 MTP）拷进 KOReader 能浏览到的目录，比如现在用的 `koreader/resources/books/` |
-| 掌阅 Ocean 5 Pro（用 KOReader 读） | 同一个 `koreader/` | 同上；现在用的是 `koreader/books/` |
+| Kindle PW12（自带阅读器） | `~/Documents/ereader/kindle/` 里的 `.azw3` | USB 连电脑，拷进 Kindle 的 `documents/` 文件夹。USB 传书只认 AZW3，不认 EPUB（2026-09-27 真机实测） |
+| 掌阅 Ocean 5 Pro（自带阅读器） | `~/Documents/ereader/ireader/` | USB 连电脑，用掌阅自己的导入方式。Linux 上掌阅是 MTP 挂载（gvfs）：普通的写文件、改名都不行，只能 `gio copy` 或文件管理器拷 |
 | reMarkable Move（自带阅读器） | `~/Documents/ereader/xochitl/` | 用 reMarkable 自带的传书方式 |
 
-`add` 进来的书、网址书在书库的 `output/koreader/`、`output/xochitl/` 里，一样拷。
+`add` 进来的书、网址书在书库的 `output/kindle/`、`output/ireader/`、`output/xochitl/` 里，一样拷。
 
 - 用什么工具拷都行：文件管理器、任何能同步目录的工具。**重新生成后直接覆盖设备上的旧文件**，文件名不会变（除非书名变了）。
+- Kindle 上覆盖同名的 `.azw3` 后还是"同一本书"：AZW3 里的唯一 ID 由书的 id 和入库时间派生，重建不变，阅读进度不丢（见 [AZW3 写出器](azw3.md#取舍)）。
 - 书库删掉的书、改了名的书，产物文件夹里的旧文件会被删掉，设备上的那份要你自己删（用同步工具的"镜像"方式可以一起删掉）。
-- Kindle 上用自带阅读器读 EPUB 是不行的（USB 传书它只认 AZW3），这里的产物只给 Kindle 上的 KOReader 读。
-- 漫画在 KOReader 里会被自动套上漫画设置（从右往左、铺满整屏）。设备上的 KOReader 配置见 [KOReader 配置](koreader.md)。
+- 2026-09-30 起的产物（优化器 v32）还没在 Kindle、掌阅真机上看过。
 
 ### Move 上的漫画：登记页边距
 
@@ -274,29 +276,18 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 - 依赖 Move 上已经装好的书架服务和页边距代理，以及它网页里「管理→实验室→漫画页边距」开关（脚本会先检查）。
 - 界面上的页边距只有 28/56/112 三档，1 只能这样设。直接改 `.content` 会被运行中的 xochitl 盖回去。
 
-### KOReader 的阅读进度同步
-
-掌阅、Kindle 读的是同一份 `koreader/` 产物，可以用 KOReader 自带的进度同步插件在两台之间接着读。配置里已经设好（`koreader/apply.sh` 写进去，见 [KOReader 配置 · 进度同步](koreader.md#进度同步)）：
-
-1. 每台设备上各做一次：在 KOReader 菜单里找到「进度同步」，用同一个账号注册（第一次）或登录。账号、服务器由 KOReader 自己存在设备上，不在仓库里；不改服务器就是 KOReader 官方的同步服务器。
-2. 之后自动同步：打开书时拉取另一台的进度，读的过程中和关书时上传自己的（要联网：Kindle 上 KOReader 会自己开 Wi-Fi）。另一台读得更靠后时会问你要不要跳过去；读得更靠前时不跳。
-
-- **按文件名认书**，不按文件内容：优化规则一升级、书重新生成，文件的字节就变了，按内容认的话进度会断开；产物的文件名只跟书名走，重新生成不变。
-  所以两台设备上**同一本书的文件名要一样**（都拷同一份产物、不要在设备上改名），不同的书也不要同名。
-- **重新生成后位置可能差一点**：KOReader 记的进度是"第几个文件里的哪个元素"。优化规则改了（比如分页拆文件的方式变了），同一个位置在新产物里可能挪了，跳过去会差几段甚至到相邻的节，往前后翻一下就好。
-- 还没在真机上试过（2026-09-29）。
-
 ## 空间占用
 
 - **书库几乎不占空间**：只有每本书一个 `meta.json`（几 KB），网址入库的书另存一份 EPUB。书的内容只在你的原件目录里有一份。
-- **产物文件夹**（`koreader/`、`xochitl/`、书库的 `output/`）是处理后的新文件，会占空间。它们随时能用 `build` 重新生成。
+- **产物文件夹**（`kindle/`、`ireader/`、`xochitl/`、书库的 `output/`）是处理后的新文件，会占空间。它们随时能用 `build` 重新生成。
 
 ## 单独的命令行工具
 
 书库之外，底层的每一步也能单独用。开发和排查问题时有用（`./install.sh --tools` 装上，或 `cargo run --release -p bookconv --bin <命令> --`）：
 
 ```sh
-epub-optimize --device=koreader 输入.epub 输出.epub
+epub-optimize --device=ireader 输入.epub 输出.epub
+epub-to-azw3 [--ebok] 优化后.epub 输出.azw3       # 见"AZW3 写出器"；输入应是 --device=kindle 优化过的
 readable-probe 测量书.epub                   # 见"设备与可阅读范围"
 readable-measure 竖长.png 横宽.png
 cover-fix 输入.epub 输出.epub [缩略图.png]   # 只补封面声明（xochitl 缩略图用），不装，cargo run -p bookconv --bin cover-fix
@@ -308,8 +299,7 @@ cover-fix 输入.epub 输出.epub [缩略图.png]   # 只补封面声明（xochi
 
 ### ebook-meta：查看、改写 EPUB 的元数据
 
-改的是 EPUB 文件本身（OPF 里的 Dublin Core 和封面），不是阅读器的旁路缓存——KOReader 里"书籍信息 → 自定义"只写进 `.sdr`，
-换设备、换软件看到的还是原值。
+改的是 EPUB 文件本身（OPF 里的 Dublin Core 和封面），不是阅读器自己的缓存：换设备、换软件看到的也是改后的值。
 
 ```sh
 ebook-meta 书.epub                                         # 查看：标题、作者、语言、出版社、简介、标签、标识符、日期、封面
@@ -329,7 +319,7 @@ ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
 - `--identifier` 不动 OPF 的唯一标识（`unique-identifier` 指向的那个）：删了 OPF 就不合法，NCX 的 `dtb:uid` 也会对不上（reMarkable 会不显示目录）。
 - 书库生成产物时补简介、标签、封面（`booklib meta` 找来的）用的是同一份实现（`bookconv::opfmeta`）。
 - 改了跟踪目录里的原件，`booklib sync` 会把它当成新版本重新入库（内容哈希变了）。
-- 改了书名，产物的文件名也跟着变，KOReader 的进度同步会把它当成另一本书。
+- 改了书名，产物的文件名也跟着变，设备上会多出一本（旧的那份要自己删）。
 
 ## 常见问题
 
@@ -341,7 +331,7 @@ ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
 可阅读范围跟着变了。漫画要按新范围重新量一次、写进 `书库/profiles/<模式 id>.toml`，再 `build`。文字书不受影响。
 
 **MOBI、AZW3、PDF 的书怎么办？**
-现在不收（2026-09-29 起只做 EPUB → EPUB）。可以先用别的工具转成 EPUB 再入库；带 DRM 的书现在一律拒收。
+现在不收，入库只收 EPUB、CBZ（AZW3 只是给 Kindle 的产物格式）。可以先用别的工具转成 EPUB 再入库；带 DRM 的书现在一律拒收。
 
 **提示"另一个 booklib 正在使用书库"？**
 同一时间只允许一个会改动书库的命令运行（`list`、`devices` 只读，不受限；`sync --watch` 每一轮自己加锁，两轮之间不占着）。等前一个结束再试。如果确定没有别的 booklib 在跑，这个提示不会出现：锁在进程退出时自动释放。

@@ -9,6 +9,10 @@ pub const CONVERT_VERSION: &str = "1";
 
 pub mod cbz;
 pub mod common;
+/// KF8（AZW3）读取器：**只给 AZW3 写出器（`azw3` crate）回读自检和测试用**，不是输入格式（入库只收 EPUB、CBZ）。
+pub mod kf8;
+/// MOBI/PalmDB 容器的公共部分（`kf8` 用）。
+pub mod palm;
 
 /// 不用转换、原样作母版的格式。
 #[derive(Clone, Copy, PartialEq, Debug)]

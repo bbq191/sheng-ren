@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>总体流程：入库 → 书库（索引）→ 按阅读模式生成 EPUB → 自己拷到设备</title>
+  <title>总体流程：入库 → 书库（索引）→ 按阅读模式生成 EPUB / AZW3 → 自己拷到设备</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0L10 5L0 10z" fill="#555"/>
@@ -68,27 +68,34 @@
   <text x="630" y="243" text-anchor="middle">质量门（只警告）</text>
   <path class="l" d="M630 156 L630 164" marker-end="url(#a)"/>
   <path class="l" d="M630 210 L630 218" marker-end="url(#a)"/>
-  <text x="630" y="280" text-anchor="middle" class="s">产物只有 EPUB，放在</text>
-  <text x="630" y="300" text-anchor="middle" class="s">书目录旁的 koreader/、xochitl/</text>
-  <text x="630" y="320" text-anchor="middle" class="s">（镜像子目录）；add 的书在</text>
-  <text x="630" y="340" text-anchor="middle" class="s">书库 output/&lt;模式&gt;/</text>
+  <text x="630" y="274" text-anchor="middle" class="s">产物是 EPUB；kindle 模式</text>
+  <text x="630" y="292" text-anchor="middle" class="s">再转成 AZW3。放在书目录旁的</text>
+  <text x="630" y="310" text-anchor="middle" class="s">kindle/ ireader/ xochitl/</text>
+  <text x="630" y="328" text-anchor="middle" class="s">（镜像子目录）；add 的书在</text>
+  <text x="630" y="346" text-anchor="middle" class="s">书库 output/&lt;模式&gt;/</text>
 
   <path class="l" d="M490 208 L538 208" marker-end="url(#a)"/>
 
   <!-- 设备 -->
-  <rect class="box dev" x="776" y="60" width="178" height="132" rx="8"/>
-  <text x="865" y="84" text-anchor="middle" class="h">koreader/</text>
-  <text x="865" y="108" text-anchor="middle">Kindle PW12 签名版</text>
-  <text x="865" y="128" text-anchor="middle">掌阅 Ocean 5 Pro</text>
-  <text x="865" y="150" text-anchor="middle" class="s">都用 KOReader 读 · 黑白</text>
-  <text x="865" y="170" text-anchor="middle" class="s">两台之间同步阅读进度</text>
-  <rect class="box dev" x="776" y="220" width="178" height="96" rx="8"/>
-  <text x="865" y="244" text-anchor="middle" class="h">xochitl/</text>
-  <text x="865" y="268" text-anchor="middle">reMarkable Move</text>
-  <text x="865" y="288" text-anchor="middle" class="s">自带阅读器 · 彩色</text>
-  <path class="d" d="M720 180 C750 180 750 126 774 126" marker-end="url(#a)"/>
-  <path class="d" d="M720 240 C750 240 750 268 774 268" marker-end="url(#a)"/>
+  <rect class="box dev" x="776" y="50" width="178" height="96" rx="8"/>
+  <text x="865" y="73" text-anchor="middle" class="h">kindle/（AZW3）</text>
+  <text x="865" y="96" text-anchor="middle">Kindle PW12 签名版</text>
+  <text x="865" y="116" text-anchor="middle" class="s">自带阅读器 · 黑白</text>
+  <text x="865" y="134" text-anchor="middle" class="s">USB 拷进 documents/</text>
+  <rect class="box dev" x="776" y="160" width="178" height="96" rx="8"/>
+  <text x="865" y="183" text-anchor="middle" class="h">ireader/（EPUB）</text>
+  <text x="865" y="206" text-anchor="middle">掌阅 Ocean 5 Pro</text>
+  <text x="865" y="226" text-anchor="middle" class="s">自带阅读器 · 黑白</text>
+  <text x="865" y="244" text-anchor="middle" class="s">USB（MTP）导入</text>
+  <rect class="box dev" x="776" y="270" width="178" height="96" rx="8"/>
+  <text x="865" y="293" text-anchor="middle" class="h">xochitl/（EPUB）</text>
+  <text x="865" y="316" text-anchor="middle">reMarkable Move</text>
+  <text x="865" y="336" text-anchor="middle" class="s">自带阅读器 · 彩色</text>
+  <text x="865" y="354" text-anchor="middle" class="s">自带的传书方式</text>
+  <path class="d" d="M720 180 C750 180 750 98 774 98" marker-end="url(#a)"/>
+  <path class="d" d="M720 208 L774 208" marker-end="url(#a)"/>
+  <path class="d" d="M720 236 C750 236 750 318 774 318" marker-end="url(#a)"/>
 
-  <text x="480" y="400" text-anchor="middle" class="s">booklib sync 同步后按全部阅读模式生成（--device=koreader 只生成一个）；拷到设备上用文件管理器或同步工具，自己来</text>
-  <text x="480" y="422" text-anchor="middle" class="s">设备上的 KOReader 配置另用 koreader/apply.sh 下发（见 KOReader 配置）</text>
+  <text x="480" y="400" text-anchor="middle" class="s">booklib sync 同步后按全部阅读模式生成（--device=kindle 只生成一个）；拷到设备上用文件管理器或同步工具，自己来</text>
+  <text x="480" y="422" text-anchor="middle" class="s">三个模式用同一套优化规则，只是阅读范围、黑白彩色不同；Kindle 的产物是同一份优化结果再转 AZW3</text>
 </svg>

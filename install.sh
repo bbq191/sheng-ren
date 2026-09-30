@@ -3,7 +3,7 @@
 #
 # 用法: ./install.sh [--tools]
 #   缺省装：booklib（书库）、ebook-meta（查看/改写 EPUB 元数据）
-#   --tools 另装开发和排查问题用的：epub-optimize、readable-probe、readable-measure
+#   --tools 另装开发和排查问题用的：epub-optimize、epub-to-azw3、readable-probe、readable-measure
 # 重复运行 = 用当前代码重新编译安装（升级）。卸载见 ./uninstall.sh。
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -37,13 +37,14 @@ echo "编译安装 booklib…"
 install library --bin booklib
 echo "编译安装 ${names[*]}…"
 install bookconv "${bins[@]}"
+if [[ $tools -eq 1 ]]; then
+  echo "编译安装 epub-to-azw3…"
+  install azw3 --bin epub-to-azw3
+fi
 
 echo "✓ 已装到 ${bindir/#$HOME/\~}/"
 case ":$PATH:" in
   *":$bindir:"*) ;;
   *) echo "  这个目录不在 PATH 里：把 export PATH=\"$bindir:\$PATH\" 加进 shell 的配置文件（fish：fish_add_path $bindir）" ;;
 esac
-missing=()
-for c in luajit gio; do command -v "$c" >/dev/null || missing+=("$c"); done
-[[ ${#missing[@]} -eq 0 ]] || echo "  给设备上的 KOReader 下发配置（koreader/apply.sh）还需要：${missing[*]}"
 echo "  开始用：booklib --help，完整用法见 docs/usage.md"

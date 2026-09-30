@@ -1,9 +1,11 @@
 //! 按阅读模式（设备 profile）生成产物：生成计划与指纹、产物放在哪、跳过没变的、生成记录。
 //!
 //! 产物位置（每个模式一份，`<名>` 见 [`State::file_name_for`]）：
-//! - 原件在跟踪目录 `D` 里：`D/../<模式 id>/<原件所在目录相对 D 的路径>/<名>.epub`，和 `D` 并列、镜像子目录。
-//!   例：跟踪 `~/Documents/ereader/books`，原件 `books/haodoo/x.epub` → `~/Documents/ereader/koreader/haodoo/<书名>.epub`；
-//! - `add` 进来的单个文件（不在跟踪目录里）、网址书：`<书库>/output/<模式 id>/<名>.epub`。
+//! - 原件在跟踪目录 `D` 里：`D/../<模式 id>/<原件所在目录相对 D 的路径>/<名>.<扩展名>`，和 `D` 并列、镜像子目录。
+//!   例：跟踪 `~/Documents/ereader/books`，原件 `books/haodoo/x.epub` → `~/Documents/ereader/kindle/haodoo/<书名>.azw3`；
+//! - `add` 进来的单个文件（不在跟踪目录里）、网址书：`<书库>/output/<模式 id>/<名>.<扩展名>`。
+//!
+//! 产物格式按模式：EPUB 直接是优化结果；AZW3（Kindle）是同一份优化结果再转一次（`azw3` crate）。
 //!
 //! 生成记录 `<书库>/output-state/<模式 id>.json`：书 id → 产物绝对路径、产物根目录、指纹。产物位置变了（原件移动、
 //! 改名换了目录，书名改了）时删掉旧位置的文件——**只删记录里记着的文件**，不认识的文件一概不动；删完顺带删掉
@@ -52,8 +54,13 @@ impl Library {
         if meta.content_sha().is_empty() {
             return Err("条目缺内容哈希（早期版本入库），先运行 booklib dedupe 迁移".into());
         }
-        let format = Format::Epub;
+        let format = device.format();
         let area = device.readable(format);
+        // AZW3 再带上写出器的版本（写出器改了也要重建）
+        let format_seg = match format {
+            Format::Epub => format.ext().to_string(),
+            Format::Azw3 => format!("{}{}", format.ext(), azw3::WRITER_VERSION),
+        };
         let cover = meta.cover.as_ref().map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
         let info = meta.info.as_ref().and_then(|i| i.injected_sig()).unwrap_or_else(|| "-".into());
         // 要当场转换的来源（CBZ）再带上格式转换的版本；写在流程版本后面，EPUB 来源的指纹保持原样（不白重建）
@@ -71,7 +78,7 @@ impl Library {
         // 图标注释号换数字（profile 的 note_icons = "number"）时再带个 `#`
         let notes = if device.note_icons == profile::NoteIcons::Number { format!("{notes}#") } else { notes.to_string() };
         // 阅读范围后面带上漫画白边（`+1`，profile 的 comic_margin，2026-09-29 起），改了白边的书都要重新生成；
-        // 纯图页铺满（profile 的 comic_fullpage）开着时再带个 `f`；漫画阅读范围和阅读器页边距（comic_readable、comic_reader_margins）
+        // 漫画阅读范围和阅读器页边距（comic_readable、comic_reader_margins）
         // 跟在后面（`c952x1457m1`），和 EPUB 阅读范围一样时不写
         let comic = device.comic_readable();
         let comic_seg = match (comic != area, device.comic_reader_margins) {
@@ -79,16 +86,15 @@ impl Library {
             (_, m) => format!("c{}x{}{}", comic.width, comic.height, m.map(|m| format!("m{m}")).unwrap_or_default()),
         };
         let fingerprint = format!(
-            "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{}{comic_seg}|{}|{}",
+            "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{comic_seg}|{}|{}",
             meta.content_sha(),
             bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
             area.width,
             area.height,
             device.comic_margin,
-            if device.comic_fullpage { "f" } else { "" },
             if device.color { "color" } else { "gray" },
-            format.ext(),
+            format_seg,
         );
         Ok(Plan { fingerprint })
     }
@@ -190,7 +196,7 @@ impl Library {
         let (root, dir) = self.output_dir(meta, device)?;
         let sp = self.state_path(&device.id);
         let state = self.states.get(&sp);
-        let out = dir.join(state.file_name_for(meta, &dir)?);
+        let out = dir.join(state.file_name_for(meta, &dir, device.format().ext())?);
         let prev = state.books.get(&meta.id).cloned();
         drop(state);
         let done = prev.as_ref().filter(|p| !force && p.fingerprint == fingerprint && p.path.is_file());
@@ -237,10 +243,21 @@ impl Library {
             // 书里没有的封面、简介、标签，书库里有找来的：补进去
             let epub = crate::metadata::with_additions(self, meta, &epub, &tmp)?;
             let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
-            bookconv::optimize::optimize_epub_file_streaming(&epub, &part, &opts, |_, _| {})?;
-            let rep = bookconv::check::check_epub_file(&part)?;
+            // 要转 AZW3 的，优化结果先放临时目录
+            let optimized = if device.format() == Format::Epub { part.clone() } else { tmp.join("optimized.epub") };
+            bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
+            let rep = bookconv::check::check_epub_file(&optimized)?;
             if !rep.ok {
                 warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
+            }
+            if device.format() == Format::Azw3 {
+                let epub = std::fs::read(&optimized).map_err(|e| e.to_string())?;
+                // 唯一 ID 取自书的 id、时间取入库时间：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
+                let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
+                let aopts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
+                let (bytes, w) = azw3::epub_to_azw3_with_warnings(&epub, &aopts)?;
+                warnings.extend(w);
+                std::fs::write(&part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
             }
             commit(&part, &out)?;
             Ok(warnings)
@@ -358,13 +375,13 @@ impl State {
         left
     }
 
-    /// 产物文件名：`书名.epub`。同一目录里和别的书撞名（不分大小写：阅读器的文件系统多半不分），或者目录里已有
-    /// 一个不是本书产物的同名文件时，用 `书名 [id 前 6 位].epub`，不覆盖别人的文件。
-    /// 本书在这个目录里已经用着其中一个名字的，一直用下去（名字稳定：KOReader 按文件名同步阅读进度）。
-    fn file_name_for(&self, meta: &Meta, dir: &Path) -> Result<String, String> {
+    /// 产物文件名：`书名.<ext>`。同一目录里和别的书撞名（不分大小写：阅读器的文件系统多半不分），或者目录里已有
+    /// 一个不是本书产物的同名文件时，用 `书名 [id 前 6 位].<ext>`，不覆盖别人的文件。
+    /// 本书在这个目录里已经用着其中一个名字的，一直用下去（名字稳定，重新生成后覆盖设备上的旧文件就行）。
+    fn file_name_for(&self, meta: &Meta, dir: &Path, ext: &str) -> Result<String, String> {
         let base = bookconv::util::sanitize_filename(&meta.title, &meta.id);
-        let plain = format!("{base}.epub");
-        let suffixed = format!("{base} [{}].epub", meta.id.get(..6).unwrap_or(&meta.id));
+        let plain = format!("{base}.{ext}");
+        let suffixed = format!("{base} [{}].{ext}", meta.id.get(..6).unwrap_or(&meta.id));
         if let Some(e) = self.books.get(&meta.id).filter(|e| e.path.parent() == Some(dir)) {
             if let Some(name) = e.path.file_name().and_then(|n| n.to_str()).filter(|n| *n == plain || *n == suffixed) {
                 return Ok(name.to_string());

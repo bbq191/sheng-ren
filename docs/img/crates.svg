@@ -28,13 +28,21 @@
   <text x="430" y="325" text-anchor="middle" class="n">profile</text>
   <text x="430" y="344" text-anchor="middle" class="s">阅读模式参数（TOML 嵌入）</text>
 
-  <rect class="c" x="640" y="150" width="180" height="60" fill="#fff" stroke="#bbb" stroke-dasharray="5 4"/>
-  <text x="730" y="175" text-anchor="middle" class="n" fill="#888">drm</text>
-  <text x="730" y="194" text-anchor="middle" class="s">空壳（暂停，独立）</text>
+  <rect class="c" x="630" y="40" width="210" height="96" fill="#eaf7ee" stroke="#3f9a5b"/>
+  <text x="735" y="65" text-anchor="middle" class="n">azw3</text>
+  <text x="735" y="84" text-anchor="middle" class="s">EPUB → AZW3（KF8 写出器）</text>
+  <text x="735" y="102" text-anchor="middle" class="s">bin: epub-to-azw3</text>
+  <text x="735" y="120" text-anchor="middle" class="s">用 bookconv 的 KF8 读取器回读自检</text>
+
+  <rect class="c" x="640" y="300" width="180" height="60" fill="#fff" stroke="#bbb" stroke-dasharray="5 4"/>
+  <text x="730" y="325" text-anchor="middle" class="n" fill="#888">drm</text>
+  <text x="730" y="344" text-anchor="middle" class="s">空壳（暂停，独立）</text>
 
   <path class="l" d="M430 90 L430 148" marker-end="url(#a)"/>
   <path class="l" d="M430 246 L430 298" marker-end="url(#a)"/>
   <path class="l" d="M300 90 C200 140 200 300 328 325" marker-end="url(#a)"/>
+  <path class="l" d="M580 70 L628 78" marker-end="url(#a)"/>
+  <path class="l" d="M700 136 C690 170 640 190 592 195" marker-end="url(#a)"/>
 
-  <text x="430" y="388" text-anchor="middle" class="s">箭头 = 依赖方向，单向无环（library 也直接读 profile）</text>
+  <text x="430" y="388" text-anchor="middle" class="s">箭头 = 依赖方向，单向无环（library 也直接用 profile、bookconv）</text>
 </svg>

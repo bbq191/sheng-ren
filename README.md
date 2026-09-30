@@ -1,6 +1,6 @@
 # 电子书入库与按阅读模式优化工具
 
-在电脑上把 EPUB 和 CBZ 漫画收进一个**书库**，再按阅读器的屏幕特点**生成优化过的 EPUB**，自己拷到设备上读。
+在电脑上把 EPUB 和 CBZ 漫画收进一个**书库**，再按阅读器的屏幕特点**生成优化过的书**（Kindle 是 AZW3，其余是 EPUB），自己拷到设备上读。
 
 ![总体流程](docs/img/overview.svg)
 
@@ -14,15 +14,16 @@
 
 ## 阅读模式
 
-产物只有 EPUB。每种阅读器一个**阅读模式**（profile），一个模式出一份产物：
+每种阅读器一个**阅读模式**（profile），一个模式出一份产物。三个模式都是设备自带的阅读器，用同一套优化规则，只是阅读范围、黑白彩色、产物格式不同：
 
-| 模式 | 给谁读 | 屏幕 | 漫画按多大算 |
-|---|---|---|---|
-| `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader（两台共用一份） | 黑白，1264×1680 | 1260×1670（KOReader 漫画方案，本机实测） |
-| `xochitl` | reMarkable Paper Pro Move 自带的阅读器 | 彩色，954×1696 | 842×1455 |
+| 模式 | 给谁读 | 产物 | 屏幕 | 漫画按多大算 |
+|---|---|---|---|---|
+| `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | AZW3 | 黑白，1264×1680 | 1104×1546（真机实测） |
+| `ireader` | 掌阅 iReader Ocean 5 Pro 自带阅读器 | EPUB | 黑白，1264×1680 | 1264×1680（真机实测，整页图铺满整屏） |
+| `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB | 彩色，954×1696 | 952×1457（页边距设成 1 后实测） |
 
-Kindle 自带阅读器（要 AZW3）、Move 上的 KOReader 都不再单独出产物（2026-09-29 起），原因见[设备与可阅读范围](docs/devices.md)。
-加一种阅读模式只要写一个配置文件，也见那一篇。
+Kindle USB 传书只认 AZW3，所以 `kindle` 模式先按同一套规则优化出 EPUB，再转成 AZW3（[AZW3 写出器](docs/azw3.md)）。
+2026-09-30 起掌阅、Kindle 都换回自带阅读器，不再用 KOReader。模式的配置、可阅读范围怎么量、加新模式，见[设备与可阅读范围](docs/devices.md)。
 
 ## 快速开始
 
@@ -36,26 +37,27 @@ booklib sync                                  # 同步进书库，并按全部�
 booklib list                                  # 看每本书的产物在哪、是否最新
 ```
 
-跟踪 `~/Documents/ereader/books` 时，产物在它旁边的 `~/Documents/ereader/koreader/`、`~/Documents/ereader/xochitl/`，子目录和 `books/` 里一样。
-把这两个文件夹拷到对应的设备上即可（怎么拷、KOReader 的阅读进度同步，见[使用指南 · 传书到设备](docs/usage.md#传书到设备)）。
+跟踪 `~/Documents/ereader/books` 时，产物在它旁边的 `~/Documents/ereader/kindle/`、`ireader/`、`xochitl/`，子目录和 `books/` 里一样。
+把这几个文件夹拷到对应的设备上即可（怎么拷，见[使用指南 · 传书到设备](docs/usage.md#传书到设备)）。
 单个文件或网址用 `booklib add`，产物在书库的 `output/<模式>/` 下。完整用法见[使用指南](docs/usage.md)。
 
 ## 文档
 
 | 文档 | 内容 |
 |---|---|
-| [使用指南](docs/usage.md) | 安装与卸载、各命令、产物放在哪、联网补元数据、传书到设备、进度同步、常见问题 |
+| [使用指南](docs/usage.md) | 安装与卸载、各命令、产物放在哪、联网补元数据、传书到设备、常见问题 |
 | [排版与优化规则](docs/typesetting.md) | 文字书、漫画各做了什么，为什么这样做 |
 | [设备与可阅读范围](docs/devices.md) | 阅读模式的配置、怎么在真机上量可阅读范围、加新模式 |
+| [AZW3 写出器](docs/azw3.md) | Kindle 产物怎么从优化后的 EPUB 转成 AZW3、clean-room 来源、怎么核对 |
 | [架构](docs/architecture.md) | 各 crate 的职责、数据怎么流动、书库怎么存 |
-| [KOReader 配置](docs/koreader.md) | 掌阅、Kindle 上 KOReader 的个人设置、文字书与漫画两套方案、进度同步、怎么应用 |
-| [开发](docs/development.md) | 测试、真书回归检查、在电脑上预览 KOReader 分页、工程约束 |
+| [开发](docs/development.md) | 测试、真书回归检查、工程约束 |
 
 ## 现状
 
-- **分页在 KOReader 上的修复还没上真机**：以前 KOReader 里节与节不分页，根因是它的「避免章末空白页」样式调整把拆开的文件又连成一片。配置里撤掉了它，2026-09-29 只在电脑上的 KOReader（`koreader/snap.sh`）里看过分页正确，掌阅、Kindle 上还没看。
-- KOReader 的进度同步（按文件名认书）已写进配置，还没在真机上试过。
-- KOReader 漫画按书的"漫画"标签自动套用从右往左、铺满整屏：Kindle 上核实过标签能被读到；界面字体在掌阅上确认生效，Kindle 上还没看。
+- **2026-09-30 的新流程还没上真机**：Kindle、掌阅自带阅读器上还没看过现在（优化器 v32）的产物——分页、注释跳转、图标注释换成的数字标号、漫画都要重新看。
+  电脑上已核对：28 本文字书转成 AZW3 后可见文字和优化后的 EPUB 逐字一致（`tools/kf8/textcheck.py`），一卷 196 页的彩漫转成 1104×1546 灰度页。
+- 以前（2026-09-27，AZW3 线删掉之前）在 Kindle 自带阅读器上验证过章标题独立一页、字号字体可调、目录与注释跳转、135MB 漫画能打开。
+- **漫画离屏幕边缘 1px**：掌阅上阅读范围就是整屏，`comic_margin = 1` 就是离屏幕 1px（还没重新验证）；Kindle 自带阅读器自己留左右 84、上下 75px，**还没做到**，待查（也许要用固定版式）。
+  Move 上靠页边距 1 做到了左右 1px（上下是 xochitl 固定留的）。
 - Move 自带阅读器（xochitl）的分页与排版还没在真机上验证。
-- 以前在 Kindle 自带阅读器上（当时出 AZW3）验证过章标题独立一页、字号字体可调、目录与注释跳转、135MB 漫画；这条线已经删了，这些结论不能推到 KOReader 上。
 - 带 DRM 的书现在拒收（解 DRM 暂停，见[开发](docs/development.md#drm)）。

@@ -2,54 +2,59 @@
 
 ## 阅读模式（profile）
 
-优化按**阅读模式**来：一种阅读软件在一类屏幕上的样子，一个模式出一份 EPUB。每个模式是一个 TOML 文件，文件名就是 id（`--device=` 的值）。
+优化按**阅读模式**来：一种阅读软件在一类屏幕上的样子，一个模式出一份产物。每个模式是一个 TOML 文件，文件名就是 id（`--device=` 的值）。
 内置的在 `crates/profile/profiles/`，构建时整个目录嵌进程序，**增删模式只要增删文件，不用改代码**。
 
-| 模式 | 给谁读 | 屏幕 | 阅读范围 | 黑白 / 彩色 |
-|---|---|---|---|---|
-| `koreader` | Kindle Paperwhite 12 代签名版、掌阅 iReader Ocean 5 Pro 上的 KOReader | 1264×1680，300ppi | 1264×1680 | 黑白（漫画转 256 级灰度） |
-| `xochitl` | reMarkable Paper Pro Move 自带的阅读器 | 954×1696，264ppi | 842×1455（漫画 952×1457） | 彩色 |
+| 模式 | 给谁读 | 产物 | 屏幕 | 阅读范围 | 黑白 / 彩色 | 注释 |
+|---|---|---|---|---|---|---|
+| `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | AZW3 | 1264×1680，300ppi | 1104×1546 | 黑白（漫画转 256 级灰度） | 跳转；图标标号换数字 |
+| `ireader` | 掌阅 iReader Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 黑白（漫画转 256 级灰度） | 跳转；图标标号换数字 |
+| `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB | 954×1696，264ppi | 842×1455（漫画 952×1457） | 彩色 | 跳转；图标标号换数字 |
+
+三个模式用的是同一套优化规则（`OptimizeOpts::for_profile`），区别全在 profile 的字段里。`kindle` 模式先优化出 EPUB，再转成 AZW3（见 [AZW3 写出器](azw3.md)）。
 
 ```toml
-# crates/profile/profiles/koreader.toml
-name = "KOReader（掌阅 Ocean 5 Pro、Kindle PW12 共用）"
+# crates/profile/profiles/ireader.toml
+name = "掌阅自带阅读器（iReader Ocean 5 Pro）"
 ppi = 300
 color = false            # 黑白屏：漫画转 256 级灰度
-formats = ["epub"]       # 产物格式，现在只能是 epub
+formats = ["epub"]       # 产物格式：epub 或 azw3（取第一个）
+notes = "jump"
+note_icons = "number"
+comic_margin = 1
 
 [screen]                 # 标称分辨率，竖屏填写（width ≤ height）
 width = 1264
 height = 1680
 
-[readable.epub]          # 真实可阅读范围（可选，不写就用 [screen]）
+[readable.epub]          # 真实可阅读范围（可选，不写就用 [screen]）；键是产物格式，kindle 写 [readable.azw3]
 width = 1264
 height = 1680
 ```
 
-- `notes = "popup"` 或 `"jump"`：注释在这个阅读器里弹窗（KOReader）还是跳转（xochitl），见[排版规则](typesetting.md)。
+- `formats`：产物格式，`["epub"]` 或 `["azw3"]`。`azw3` 是先按同样的规则优化出 EPUB、再转 AZW3；阅读范围取对应格式的 `[readable.<格式>]`。
+- `notes = "jump"` 或 `"popup"`：注释是点标号跳到章末再返回，还是弹窗。三个内置模式都用 `jump`；`popup` 会给标号标 `epub:type="noteref"`、注释写成 `<aside epub:type="footnote">`，现在没有模式用。见[排版规则](typesetting.md#3-注释点标号跳到章末比正文小一号)。
 - `comic_margin = 1`（可选，缺省 1）：漫画页图到可阅读范围四边的白边（像素）。图保比缩放进"阅读范围 − 2×白边"的框、居中，
-  受限的那条边两侧正好这么宽；须小于阅读范围短边的 1/4。用户要的是**离屏幕边缘** 1px：阅读范围等于整屏时（`koreader`）才是这个意思。
-- `comic_fullpage = true`（可选，缺省 false）：漫画纯图页的 `<body>` 加 `eink-fullpage`（`line-height:0;font-size:0`），KOReader 里整页图才能用满整屏
-  （不加时图所在那一行的行高在下面留 10px、字号在行首多出 2px）。xochitl 不需要：它的留白 CSS 改不动（见下）。
-- `note_icons = "keep"` 或 `"number"`（可选，缺省 keep）：只有小图标的注释标号保留图标（限一个字高）还是换成上标数字。xochitl 用 number：
-  只有图的链接点不了、CSS 限不住图标大小。进指纹（注释方式后面带 `#`）。
+  受限的那条边两侧正好这么宽；须小于阅读范围短边的 1/4。用户要的是**离屏幕边缘** 1px：阅读范围等于整屏时（`ireader`）才是这个意思；
+  `kindle` 的阅读器自己还留左右 84、上下 75px，离屏幕 1px **还没做到**（待查，也许要用固定版式）。
+- `note_icons = "keep"` 或 `"number"`（可选，缺省 keep）：只有小图标的注释标号保留图标（限一个字高）还是换成上标数字。三个内置模式都用 number：
+  xochitl 上实测只有图的链接点不了、CSS 限不住图标大小；Kindle 以前的 AZW3 就是数字、真机能点；掌阅自带阅读器上图标能不能点没验证，数字最稳。进指纹（注释方式后面带 `#`）。
 - `comic_reader_margins = 1`（可选）：漫画在阅读器里要设成的页边距。写了就给漫画写标记 `META-INF/eink-reader-margins`（`xochitl/comic-margins.sh` 凭它登记），
   文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（`bookconv::comicpad`）。xochitl 用。
-- `[comic_readable]`（可选）：漫画页排版用的阅读范围（设成上面的页边距后实测），没写就用 `[readable.epub]`。
-  `notes`、`comic_margin`、`comic_fullpage` 都进指纹，改了书库里的书都算过期。
+- `[comic_readable]`（可选）：漫画页排版用的阅读范围（设成上面的页边距后实测），没写就用产物格式的阅读范围。
+  `notes`、`note_icons`、`comic_margin`、`comic_readable`、`comic_reader_margins` 都进指纹，改了书库里的书都算过期。
 - 写了不认识的字段、不认识的格式会报错，防止拼错后被悄悄忽略。
-- `[readable.epub]` 不能超过屏幕尺寸。
+- `[readable.<格式>]` 不能超过屏幕尺寸。
 - 阅读范围以**截图的像素**为准。截图分辨率和标称的 `[screen]` 不一定是同一个坐标系（Kindle 的截图是 1272×1696，标称 1264×1680），量出来的数照截图写。
 - **自定义模式**：放在书库的 `profiles/` 目录（缺省 `~/.local/share/booklib/profiles/<id>.toml`），同 id 覆盖内置的。`booklib devices` 会列出来。
 
 ### 为什么这样分
 
-- **掌阅和 Kindle 共用 `koreader`**：两台都是 7 英寸 1264×1680、300ppi 的黑白屏（2026-09-27 核实），读书都用 KOReader，KOReader 的配置两台也一样（见 [KOReader 配置](koreader.md)）。
-  共用一份产物，文件名也就一样，KOReader 的进度同步才能在两台之间认出同一本书。
-- **Kindle 自带阅读器不再出产物**（2026-09-29）：它 USB 传书只认 AZW3，而 AZW3 写出器已经删了；Kindle 上改用 KOReader 读 EPUB。
-- **Move 只用自带阅读器**（2026-09-29 撤掉 Move 上的 KOReader）：KOReader 在 Move 上翻页闪得厉害。Paper Pro、Move 的屏幕刷新由 xochitl 那一层（qtfb / shim）控制，KOReader 自己的刷新设置管不到。
+- **三台设备各用自带阅读器**（2026-09-30 用户定）：掌阅、Kindle 上的 KOReader 卸掉了，换回自带阅读器；Move 上的 KOReader 2026-09-29 就撤了（屏幕刷新由 xochitl 那一层控制，翻页闪得厉害）。
+- **Kindle 单独一个模式**：USB 传书只认 AZW3，而且自带阅读器留页边距、页眉页脚，阅读范围（1104×1546）比掌阅小。
+- **掌阅单独一个模式**：屏幕和 Kindle 一样是 7 英寸 1264×1680、300ppi 黑白屏（2026-09-27 核实），但读 EPUB，整页图铺满整屏，阅读范围不同。
 
-旧的设备 id（`kindle-pw12-sig`、`ireader-ocean5-pro`、`rmpp-move`、`rmpp-move-koreader`）已经不是阅读模式了；`kindle-pw12-sig`、`ireader-ocean5-pro` 现在只用作 `koreader/` 里的设备名（给哪台设备下发 KOReader 配置）。
+旧的设备 id（`kindle-pw12-sig`、`ireader-ocean5-pro`、`rmpp-move`、`rmpp-move-koreader`、`koreader`）已经不是阅读模式了；书库里它们的旧产物不再管理。
 拷哪个文件夹、拷到哪，见[使用指南 · 传书到设备](usage.md#传书到设备)。
 
 ## 为什么要"真实可阅读范围"
@@ -58,13 +63,14 @@ height = 1680
 
 `[screen]` 是设备标称的分辨率，但阅读器要留页边距、页眉页脚，真正用来显示内容的区域更小。漫画页按这个区域缩放、补白，才能正好填满，不会被阅读器再缩一次或者留出白条。
 
-- **有实测值就用实测值**（写在 `[readable.epub]`），没有就退回标称屏幕。
+- **有实测值就用实测值**（写在 `[readable.<格式>]`），没有就退回标称屏幕。
 - **阅读器里的页边距设置变了，阅读范围也会变**，要重新量。
 - 程序里不写死任何屏幕数字：图片缩放、漫画补白都从 profile 读。
 
 | 模式 | 阅读范围 | 依据 |
 |---|---|---|
-| `koreader` | 1264×1680（整屏） | 2026-09-29 用测量书（打上"漫画"标签）在**本机 KOReader** 上按 1264×1680 离屏渲染、套我们的漫画方案截屏实测（`koreader/snap.sh` + `readable-measure`）：页边距 0、隐藏状态栏并收回它的高度后，KOReader 左右各留 2px、底部留 10px——后来查明是图所在那一行的行高和字号撑出来的，页面设 `line-height:0; font-size:0` 后能用满 1264×1680（见 [koreader.md](koreader.md)）。漫画纯图页已经这样写（`comic_fullpage`，v29），全本截图和页面图逐像素一致。**掌阅、Kindle 真机上的 KOReader 还没实测**。图文混排时不适用 |
+| `kindle` | 1104×1546 | 2026-09-27 用测量书（转成 AZW3）在 Kindle 真机上截屏实测：左右页边距各 84，上下页眉页脚各 75。截图分辨率是 1272×1696（设备实际的显示缓冲区），不是标称的 1264×1680，阅读范围是在截图像素上量的，和 `[screen]` 相比差不到 1%。比页面窄的图片靠左放、不居中，所以漫画要补白到这个比例。离屏幕边缘 1px 还没做到（这 84/75 是阅读器留的） |
+| `ireader` | 1264×1680（整屏） | 2026-09-27 用测量书在掌阅真机上截屏实测：只放一张大图的页面，掌阅把图铺满整屏（连页眉页脚区域也盖住），四边留白都是 0。所以 `comic_margin = 1` 就是离屏幕 1px（v32 的产物还没重新看过）。图文混排时图片受正文页边距限制，不适用 |
 | `xochitl` | 842×1455 | xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 在 xochitl 上实测）。改了页边距要跟着改（28 档 → 898 宽；1 档 → 952 宽）。2026-09-29 读 xochitl 排出的 PDF 核实：整页图原像素放在 (56, 112)，离屏幕左右 56、上 112、下 129px；比这大的图缩到宽 842、高最多约 1457；`@page{margin:0}`、负外边距、去行高都不起作用，只有页边距设置能缩左右。**漫画用 952×1457**（`[comic_readable]`）：页边距 1（界面上没有这档，靠 Move 上的页边距代理设，见[用法](usage.md#move-上的漫画登记页边距)）时图框左上角在 (1, 112)、宽 952、高 1457，2026-09-29 真机排出的 PDF 里 952×1457 的页原样显示、离屏幕左右各 1px、上 112、下 127px（上下 xochitl 固定留，做不到 1px）；文字页、混排页的字离边约 58px。界面最小档 28 时是 898 宽、左边 28、图靠左 |
 
 ## xochitl 怎么存 EPUB 和阅读进度（2026-09-29 真机摸底，只读）
@@ -85,16 +91,14 @@ Move 系统版本 20260827；数据目录 `/home/root/.local/share/remarkable/xo
 - 改字号、字体、行距、页边距会整本重排：PDF、总页数、对照表都换新的。
 - 用户没开 reMarkable 云同步。
 
-**和 KOReader 进度同步接起来的可能性**（用户 2026-09-29 定：暂时不做）：KOReader 记的是 xpointer（第几个文件里的哪一段），`.epubindex` 把"文件 + 锚点"对到 PDF 页码，
-两边能互相换算，锚点之间按字数比例估，精度约一页。Move → 掌阅、Kindle 只要读文件（风险低）；反方向要改写 `lastOpenedPage`，xochitl 会不会重新读外部改过的值没验证。
-
 ## 在真机上测量
 
 用"测量书"来量。书里有一张竖长和一张横宽的纯黑大图，阅读器会把它们等比缩小到放得下为止。竖长图显示出来的高度就是可用高度，横宽图的宽度就是可用宽度。
 
 ```sh
-# 1. 生成测量书
+# 1. 生成测量书（Kindle 还要转成 AZW3）
 cargo run --release -p bookconv --bin readable-probe -- 测量书.epub
+cargo run --release -p azw3 --bin epub-to-azw3 -- 测量书.epub 测量书.azw3
 
 # 2. 传到设备上，用要量的那个阅读软件打开，分别翻到"竖长图"和"横宽图"那两页，各截一张屏
 
@@ -102,13 +106,14 @@ cargo run --release -p bookconv --bin readable-probe -- 测量书.epub
 cargo run --release -p bookconv --bin readable-measure -- 竖长.png 横宽.png
 ```
 
+输出里的节名总是 `[readable.epub]`，给 Kindle（AZW3）量的要改成 `[readable.azw3]`。
 把输出贴进对应的 profile（内置的改 `crates/profile/profiles/`，自己用的放书库的 `profiles/`），并在注释里写明测量日期和条件（哪个阅读软件、页边距设置等）。
 
 ## 加一个阅读模式
 
-1. 写 `<id>.toml`：`name`、`ppi`、`color`、`formats = ["epub"]`、`[screen]`。
-2. 在真机上用那个阅读软件量可阅读范围，写进 `[readable.epub]`。量不了就先不写，按标称屏幕处理。
-3. 把阅读器的特殊行为记下来（比如 xochitl 只认同文件锚点）。以后这类差异也要做成 profile 字段，不要在算法里按模式名写分支。
+1. 写 `<id>.toml`：`name`、`ppi`、`color`、`formats`（`["epub"]` 或 `["azw3"]`）、`notes`、`[screen]`。
+2. 在真机上用那个阅读软件量可阅读范围，写进 `[readable.<格式>]`。量不了就先不写，按标称屏幕处理。
+3. 把阅读器的特殊行为记下来（比如 Kindle 的窄图靠左、xochitl 只认同文件锚点）。以后这类差异也要做成 profile 字段，不要在算法里按模式名写分支。
 4. 真机上检查文字书和漫画的效果，再写"已验证"。
 
 ## 已知的阅读器特性
@@ -116,5 +121,5 @@ cargo run --release -p bookconv --bin readable-measure -- 竖长.png 横宽.png
 | 阅读器 | 实测行为 |
 |---|---|
 | xochitl（Move） | 正文链接只认同一文件内的 `#锚点`；不认行内样式；NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录；页边距 1 时带 class 的 `<body>` 里图片会被吃掉约 20pt 宽（漫画的图页因此去掉 body 的类）；`padding` 一律不认，`margin` 用 pt 生效；页边距设置只对单本书；只有图、没有字的链接点了没反应，外链 CSS 的 `height:1em` 限不住图片 |
-| 掌阅自带阅读器 | 只放一张大图的页面，图片铺满整屏（`koreader` 的阅读范围就是按这个量的） |
-| KOReader | 「避免章末空白页」样式调整（`docfragment_page-break-before_avoid`）开着时，拆开的文件会连成一片，节与节不分页；配置里已撤掉，2026-09-29 只在电脑上的 KOReader 里确认过，见 [KOReader 配置](koreader.md#文字书方案)。不读 OPF 的 `page-progression-direction`（漫画从右往左靠配置档设） |
+| Kindle 自带阅读器（PW12） | USB 传书只认 AZW3，不认 EPUB；比页面窄的图片靠左不居中；侧载书归"文档"分类时封面最稳（2026-09-27 真机） |
+| 掌阅自带阅读器 | 只放一张大图的页面，图片铺满整屏（2026-09-27 真机；`ireader` 的阅读范围就是按这个量的） |

@@ -15,7 +15,7 @@
 //! `<id>` 是原件内容 SHA-256 的前 12 位十六进制：同一本书重复入库会认出来，改名移动了也认得出。
 //!
 //! 跟踪目录 `D` 里的书，产物放在书库外、和 `D` 并列的 `D/../<模式>/` 下，按原件所在子目录镜像
-//! （`books/haodoo/x.epub` → `koreader/haodoo/<书名>.epub`），见 `generate.rs`。
+//! （`books/haodoo/x.epub` → `kindle/haodoo/<书名>.azw3`），见 `generate.rs`。
 //!
 //! 生成时读原件：EPUB 直接用；CBZ 当场转成 EPUB（与设备无关的转换，结果不落书库）。
 //! 早期版本收过的其它格式（MOBI/AZW3/FB2/PDF 等）2026-09-29 起不再支持：条目保留（`list` 标出来），生成时跳过。

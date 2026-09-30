@@ -3,7 +3,7 @@
 #
 # 用法: tools/regress/run.sh <epub-optimize 路径> <输出目录> [--device=<模式>] [epub-optimize 的其它参数…]
 #   书从 $REGRESS_BOOKS（缺省 ~/Documents/ereader/books）里找：路径含"漫画"的算漫画（只取排序后第一卷），其余是文字书。
-#   原书只读：产物只写到输出目录。缺省模式 koreader。
+#   原书只读：产物只写到输出目录。缺省模式 ireader（Kindle 的规则和它一样、只是阅读范围不同，AZW3 转换另有 azw3 crate 的回读测试）。
 #   输出目录里：NN.epub（文字书）、comic.epub、NN.log、index.txt（编号 → 原书路径，compare.py 做"对原书"核对时用）。
 # 典型用法（改动前后各跑一次再比）：
 #   git worktree add /tmp/base HEAD && (cd /tmp/base && cargo build --release -p bookconv --bin epub-optimize)
@@ -13,7 +13,7 @@
 set -euo pipefail
 bin=${1:?用法见文件头} out=${2:?用法见文件头}
 shift 2
-dev=--device=koreader
+dev=--device=ireader
 args=()
 for a in "$@"; do case $a in --device=*) dev=$a ;; *) args+=("$a") ;; esac; done
 books=${REGRESS_BOOKS:-$HOME/Documents/ereader/books}
