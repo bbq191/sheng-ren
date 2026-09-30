@@ -149,11 +149,12 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
     let mut counts = BuildCounts::default();
     for m in books.iter().filter(|m| !m.supported()) {
         if skipped.insert(m.id.clone()) {
-            report(Ok(format!("- 跳过 {}  {}：.{} 不再支持（只支持 EPUB 和 CBZ）", m.id, m.title, m.content_format())));
+            report(Ok(format!("- 跳过 {}  {}：{}", m.id, m.title, library::unsupported(m.content_format()))));
         }
     }
-    for device in devices {
-        for m in books.iter().filter(|m| m.supported()) {
+    // 书在外层、模式在内层：同一本书与模式无关的中间文件（CBZ 转换、补元数据）只做一次
+    for m in books.iter().filter(|m| m.supported()) {
+        for device in devices {
             let key = (m.id.clone(), device.id.clone());
             let now = || (lib.fingerprint(m, device).unwrap_or_else(|e| e), lib.original_state(m));
             if let Some(f) = fails.as_deref_mut() {
@@ -192,6 +193,7 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
             }
         }
     }
+    lib.release_prepared();
     counts
 }
 
@@ -390,7 +392,7 @@ fn main() {
                             Err(e) => report(Err(e)),
                         }
                         if !devices.is_empty() {
-                            let stamp = || change_stamp(&lib);
+                            let stamp = || lib.change_stamp();
                             if changed || last_stamp != Some(stamp()) {
                                 let fails = watch.is_some().then_some(&mut fails);
                                 let counts = build_all(&lib, &devices, &lib.list(), false, true, fails, &mut skipped, &mut report);
@@ -416,7 +418,7 @@ fn main() {
             let (force, clear) = (args.flags.iter().any(|f| f == "force"), args.flags.iter().any(|f| f == "clear"));
             for m in &books {
                 if !m.supported() && !clear {
-                    println!("- 跳过 {}：.{} 不再支持", m.title, m.content_format());
+                    println!("- 跳过 {}：{}", m.title, library::unsupported(m.content_format()));
                     continue;
                 }
                 if lib.offline() {
@@ -471,25 +473,4 @@ fn main() {
     if failed.get() > 0 {
         std::process::exit(2);
     }
-}
-
-/// 书库的"有没有变化"戳（`sync --watch` 用）：`masters/` 与各条目目录、`output-state/` 的修改时间，以及 `sources.json`。
-/// 条目的增删改（原件移动改名后改记位置、`meta` 找来封面）、生成记录的改动都会改它们所在目录的修改时间（原子写是改名）；
-/// 别的进程 track/untrack 会换掉 `sources.json`（产物根目录跟着变）。
-fn change_stamp(lib: &Library) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    let mut dir = |p: &Path, deep: bool| {
-        let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-        (p, mtime(p)).hash(&mut h);
-        if deep {
-            for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
-                (e.path(), mtime(&e.path())).hash(&mut h);
-            }
-        }
-    };
-    dir(&lib.root().join("masters"), true);
-    dir(&lib.root().join("output-state"), false);
-    dir(&lib.root().join("sources.json"), false);
-    h.finish()
 }
