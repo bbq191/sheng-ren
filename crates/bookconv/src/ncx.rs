@@ -1,6 +1,6 @@
 //! EPUB 的 NCX 目录解析。
 
-/// 线性扫 `toc.ncx`，展平成 `(depth, title, target)` 序列（不建真正的树——跟本 crate 一贯的
+/// 线性扫 `toc.ncx`，展平成 `(depth, title, target)` 序列（title、target 的字符引用都已还原，见 [`NavPoint`]）（不建真正的树——跟本 crate 一贯的
 /// "扁平+depth"写法一致，如 `wash::toc::dense_ranks`）。NCX 规范保证 `<navLabel>` 和 `<content>`
 /// 总是先于自己的子 `<navPoint>` 出现，扫描时按"刚看到 content 就用当前 depth/title 落地一条"
 /// 处理即可，不用等子节点扫完。
@@ -17,7 +17,9 @@ pub struct NavPoint {
     pub depth: usize,
     /// 标签文字（字符引用已还原）。
     pub label: String,
-    /// `<content src>` 原文。
+    /// `<content src>` 的值，**字符引用已还原**（`a&amp;b.xhtml` → `a&b.xhtml`；百分号编码照留，拆路径、锚点时再解码）。
+    /// 写回 XML 时调用方要再转义（`replace_nav_map` 会转义）。2026-09-30 审计：此前给原文，调用方拿去解析路径、再经
+    /// `replace_nav_map` 转义一次，`a&amp;b.xhtml` 变成 `a&amp;amp;b.xhtml`。
     pub src: String,
     /// 所在 `<navPoint …>` 开标签原文；`content` 不在任何 navPoint 里时为空。
     pub open_tag: String,
@@ -63,7 +65,7 @@ pub fn parse_nav_points(ncx_text: &str) -> Vec<NavPoint> {
             TagKind::Open | TagKind::SelfClosing if t.is("content") => {
                 if let Some(src) = html::attr_value(&ncx_text[t.start..t.end], "src") {
                     let open_tag = opens.last().map_or(String::new(), |s| s.to_string());
-                    out.push(NavPoint { depth, label: std::mem::take(&mut cur_title), src: src.to_string(), open_tag });
+                    out.push(NavPoint { depth, label: std::mem::take(&mut cur_title), src: crate::util::xml_unescape(src).into_owned(), open_tag });
                 }
             }
             _ => {}
@@ -73,7 +75,8 @@ pub fn parse_nav_points(ncx_text: &str) -> Vec<NavPoint> {
 }
 
 /// 逐个 `<content src>`（navMap、pageList 里的都算）调 `f(最近一个 <text> 的文字（字符引用已还原）, src 原文)`，返回新值
-/// （属性值原文，调用方已转义）就就地换掉。一处都没改 → `None`。分页后目录改指到补的 id、修复指错位置的目录共用。
+/// （属性值原文，调用方已转义）就就地换掉。注意 src 给的是**原文**（和 [`NavPoint::src`] 不同）：拿它解析路径前先
+/// `xml_unescape`，原样拼进新值时不要再转义。一处都没改 → `None`。分页后目录改指到补的 id、修复指错位置的目录共用。
 pub fn rewrite_content_srcs(ncx: &str, mut f: impl FnMut(&str, &str) -> Option<String>) -> Option<String> {
     use crate::html::{self, TagKind};
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
@@ -189,5 +192,8 @@ mod tests {
         let ncx2 = r#"<ncx><navMap><navPoint id="n1"><navLabel id="l"><text>甲</text></navLabel><!-- x --><content id="c1" src='a.html#%E6%B3%A8'/></navPoint></navMap>
 <pageList><pageTarget><navLabel><text>1</text></navLabel><content src="a.html#p1"/></pageTarget></pageList></ncx>"#;
         assert_eq!(parse_ncx_flat(ncx2), [(1, "甲".to_string(), "a.html#%E6%B3%A8".to_string())]);
+        // src 的字符引用还原一次（百分号编码照留）
+        let ncx3 = r#"<navMap><navPoint><navLabel><text>丙</text></navLabel><content src="a&amp;b%20c.html#x&amp;y"/></navPoint></navMap>"#;
+        assert_eq!(parse_nav_points(ncx3)[0].src, "a&b%20c.html#x&y");
     }
 }

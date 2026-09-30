@@ -7,10 +7,10 @@
 //! 2. 字体字号解锁（独立 .css、`<style>`、`style=""` 三处，规则见 `crate::cssunlock`）：`font-family`、`line-height`、
 //!    绝对字号去掉，相对字号保留（正文整体那一层的除外），`font` 简写只留粗斜体，`background` 简写只留颜色
 //!    （背景图去掉：xochitl 把背景图平铺满页盖住正文，真机《飘》）。颜色、对齐等别的样式不动（用户 2026-09-29）。
-//! 3. 边距归零（= `--margin-* 0`）：body/html/@page 的 margin/padding 删掉，并注入 `html,body{margin:0;padding:0}`。
+//! 3. 边距归零（= `--margin-* 0`）：body/html/@page 的 margin/padding 删掉（不另注入规则）。
 //! 4. 段距归零 + 首行缩进（= `--remove-paragraph-spacing --remove-paragraph-spacing-indent-size 2`）：p/div 的
 //!    上下 margin/padding 归零（左右保留：blockquote/列表缩进不伤），`p{text-indent:2em}`；`keep_para_spacing` 时
-//!    只注缩进（= `WASH_KEEP_PARA_SPACING=1`）。类规则须带元素名才压得过书自带类规则（见书架白皮书 §03y 的七条规则；xochitl 不认 `!important`）。
+//!    只注缩进。类规则须带元素名才压得过书自带类规则（见书架白皮书 §03y 的七条规则；xochitl 不认 `!important`）。
 //! 5. 空页清理：正文无文字无图（Calibre MOBI 转出的 `mbppagebreak` 独占页）→ 从 spine/manifest/zip 删除，
 //!    目录里指向它的条目改指下一篇。
 //! 6. 自动目录（= `--use-auto-toc --level1-toc //h:h1 --level2-toc //h:h2`）：缺省**仅在书无目录时**从 h1/h2 生成
@@ -96,7 +96,7 @@ pub struct WashOpts {
     /// 保留原书段间距（诗集/剧本靠空行分节）。
     pub keep_para_spacing: bool,
     pub auto_toc: AutoToc,
-    /// 剥掉的 CSS 属性（小写）。缺省与 host `--filter-css` 一致。
+    /// 剥掉的 CSS 属性（小写）。缺省 [`DEFAULT_FILTER_PROPS`]。
     pub filter_props: Vec<String>,
     /// 正文排版语言（`Auto`=自动探测）。
     pub lang: LangMode,
@@ -112,7 +112,7 @@ impl Default for WashOpts {
 
 /// 注入排版规则的外链 css 文件名（放 OPF 同目录）。真机坐实（2026-09-04《缩进诊断6》/《飘》）：
 /// **xochitl 只认外链 `.css` 文件里的规则，完全无视内联 `<style>` 块和元素 `style=` 属性**——所以
-/// 排版规则（首行缩进/边距）必须写成外链 css 才在 xochitl 生效（KOReader/crengine 两者都认）。
+/// 排版规则（首行缩进/边距）必须写成外链 css 才在 xochitl 生效（按标准 CSS 渲染的阅读器外链、内联都认）。
 /// ⚠ xochitl 的 css 解析器很脆：**只用裸元素选择器**（`p`/`body`），一条类/复杂选择器就可能让整表失效
 /// （《缩进诊断5》带 `.big` 类规则时整表不生效，diag6 纯 `p{}` 生效）。
 const WASH_CSS_NAME: &str = "eink-wash.css";
@@ -317,7 +317,7 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
     if let Some(oi) = opf_idx {
         let opf_dir = dir_of(&entries[oi].name).to_string();
         let text = String::from_utf8_lossy(&entries[oi].data);
-        if manifest_items(&text).iter().any(|it| resolve(&opf_dir, &percent_decode(it.href)) == css_path) {
+        if manifest_items(&text).iter().any(|it| it.path(&opf_dir) == css_path) {
             return;
         }
         let href = crate::epubzip::href_to(&opf_dir, css_path, "");
@@ -330,6 +330,14 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
 /// 比较标题文字用：去掉所有空白（含全角空格）。
 pub(super) fn squash_ws(t: &str) -> String {
     t.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// 链接值原文（属性原文）→ (目标文件的 zip 路径, 锚点原文)。路径部分先还原字符引用再百分号解码（`a&amp;b.xhtml` 是文件
+/// `a&b.xhtml`）；锚点原样给出，拿去对 id 原文时再 `html::frag_id`。空路径（`#x`）指 `file` 自己。
+pub(super) fn link_target<'v>(file: &str, value: &'v str) -> (String, Option<&'v str>) {
+    let (p, frag) = html::split_href(value);
+    let path = if p.is_empty() { file.to_string() } else { resolve(dir_of(file), &percent_decode(&crate::util::xml_unescape(p))) };
+    (path, frag)
 }
 
 /// 全书链接改写的一处链接：所在文件、链接值原文、解析出的目标文件与锚点（锚点原文，未解码）。
@@ -362,7 +370,7 @@ pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> b
             if html::is_external(p) {
                 return Edit::Keep;
             }
-            let (target, frag) = crate::epubzip::resolve_href(name, a.value);
+            let (target, frag) = link_target(name, a.value);
             match f(&Link { file: name, value: a.value, target, frag }) {
                 Some(v) if v != a.value => Edit::Set(v),
                 _ => Edit::Keep,
