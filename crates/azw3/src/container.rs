@@ -19,6 +19,8 @@ pub struct Meta<'a> {
     pub date: &'a str,
     pub description: &'a str,
     pub rtl: bool,
+    /// 固定版式的 EXTH 记录（编号, 值），见 `book::Meta::fixed_layout`。
+    pub fixed_layout: &'a [(u32, String)],
     pub cdetype: &'a str,
     pub asin: &'a str,
     pub uid: u32,
@@ -196,6 +198,9 @@ fn exth(meta: &Meta, (resource_count, cover, thumb): (u32, Option<u32>, Option<u
     }
     if meta.rtl {
         recs.push((527, s("rtl")));
+    }
+    for (n, v) in meta.fixed_layout {
+        recs.push((*n, s(v)));
     }
     recs.push((125, resource_count.to_be_bytes().to_vec()));
     recs.push((131, 0u32.to_be_bytes().to_vec()));

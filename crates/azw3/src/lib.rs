@@ -94,6 +94,7 @@ pub fn epub_to_azw3_with_warnings(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, 
         date: &book.meta.date,
         description: &book.meta.description,
         rtl: book.meta.rtl,
+        fixed_layout: &book.meta.fixed_layout,
         cdetype: match opts.cdetype {
             CdeType::Pdoc => "PDOC",
             CdeType::Ebok => "EBOK",
