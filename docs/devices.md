@@ -41,10 +41,13 @@ height = 1680
   xochitl 上实测只有图的链接点不了、CSS 限不住图标大小；Kindle 以前的 AZW3 就是数字、真机能点；掌阅自带阅读器上图标能不能点没验证，数字最稳。
 - `note_backlinks = true` 或 `false`（可选，缺省 true）：保留原书注释里"跳回正文"的回链。只有 `xochitl` 写 `false`：它遇到标号和注释互相链接的一对会整对丢掉
   （正向也点不动），只好去掉回链、返回靠它自己的"返回第 X 页"；Kindle 自带阅读器点注释后跳不回原处（2026-09-30 真机），要靠回链。
+- `comic_page_direction = "ltr"` 或 `"rtl"`（可选）：漫画的翻页方向改成这个（写进 OPF 的 `page-progression-direction`），不写就照原书。
+  只有 `ireader` 写 `"ltr"`：掌阅遇到从右往左翻的书（日漫都这样写）会四周留边、整页图铺不满，离屏幕左右 92、上下 124px（2026-09-30 真机：
+  只差这一个属性的两本测试书，一本铺满、一本留边；固定版式、页面写法都不影响）。用户选了铺满，代价是日漫在掌阅上也往左翻。
 - `comic_reader_margins = 1`（可选）：漫画在阅读器里要设成的页边距。写了就给漫画写标记 `META-INF/eink-reader-margins`（`xochitl/comic-margins.sh` 凭它登记），
   文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（`bookconv::comicpad`）。xochitl 用。
 - `[comic_readable]`（可选）：漫画页排版用的阅读范围（设成上面的页边距后实测），没写就用产物格式的阅读范围。
-- `notes`、`note_icons`、`note_backlinks`、`comic_margin`、`comic_readable`、`comic_reader_margins` 都进指纹，改了书库里的书都算过期。
+- `notes`、`note_icons`、`note_backlinks`、`comic_page_direction`、`comic_margin`、`comic_readable`、`comic_reader_margins` 都进指纹，改了书库里的书都算过期。
 - 写了不认识的字段、不认识的格式会报错，防止拼错后被悄悄忽略。
 - `[readable.<格式>]` 不能超过屏幕尺寸。
 - 阅读范围以**截图的像素**为准。截图分辨率和标称的 `[screen]` 不一定是同一个坐标系（Kindle 的截图是 1272×1696，标称 1264×1680），量出来的数照截图写。
@@ -153,4 +156,4 @@ cargo run --release -p bookconv --bin readable-measure -- --device=kindle 竖长
 |---|---|
 | xochitl（Move） | 正文链接只认同一文件内的 `#锚点`；不认行内样式；NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录；页边距 1 时带 class 的 `<body>` 里图片会被吃掉约 20pt 宽（漫画的图页因此去掉 body 的类）；`padding` 一律不认，`margin` 用 pt 生效；页边距设置只对单本书；只有图、没有字的链接点了没反应，外链 CSS 的 `height:1em` 限不住图片 |
 | Kindle 自带阅读器（PW12） | USB 传书只认 AZW3，不认 EPUB；比页面窄的图片靠左不居中；侧载书归"文档"分类时封面最稳（2026-09-27 真机） |
-| 掌阅自带阅读器 | 只放一张大图的页面，图片铺满整屏（2026-09-27 真机；`ireader` 的阅读范围就是按这个量的） |
+| 掌阅自带阅读器 | 只放一张大图的页面，图片铺满整屏（2026-09-27 真机；`ireader` 的阅读范围就是按这个量的）；但书声明了从右往左翻（`page-progression-direction="rtl"`）时不铺满，四周留左右 92、上下 124px（2026-09-30 真机） |

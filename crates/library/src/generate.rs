@@ -104,6 +104,11 @@ impl Library {
             (false, None) => String::new(),
             (_, m) => format!("c{}x{}{}", comic.width, comic.height, m.map(|m| format!("m{m}")).unwrap_or_default()),
         };
+        // 漫画翻页方向改写（profile 的 comic_page_direction，如 `dltr`）
+        let comic_seg = match &device.comic_page_direction {
+            Some(d) => format!("{comic_seg}d{d}"),
+            None => comic_seg,
+        };
         let fingerprint = format!(
             "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{comic_seg}|{}|{}",
             meta.content_sha(),
