@@ -9,7 +9,7 @@ const HEADER_LEN: usize = 192;
 const MAX_RECORD: usize = 0xF000;
 
 /// 前向变长整数：大端 7 位一组，最后一个字节最高位置 1（与读取侧共用一份）。
-pub use bookconv::convert::palm::fwd_varint;
+pub use crate::read::palm::fwd_varint;
 
 /// TAGX 里的一个标签：(标签号, 每次出现的值个数, 控制字节掩码)。
 #[derive(Clone, Copy)]

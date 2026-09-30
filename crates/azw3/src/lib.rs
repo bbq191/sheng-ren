@@ -1,7 +1,7 @@
 //! EPUB → AZW3（KF8）写出器：Kindle USB 侧载的唯一可用格式（EPUB 不认，2026-09-27 真机实测）。
 //!
 //! clean-room：依 MobileRead 的 MOBI 容器文档，加上对 KF8 样本文件的**黑盒数据分析**（只看文件字节，不看任何
-//! 工具的代码）实现，不参考 GPL 的 KindleUnpack / Calibre 代码；读取侧 `bookconv::convert::{palm, kf8}` 做往返校验。
+//! 工具的代码）实现，不参考 GPL 的 KindleUnpack / Calibre 代码；读取侧 [`read`]（`palm`、`kf8`）做往返校验。
 //!
 //! 输入应是已经按设备优化过的 EPUB（`epub-optimize --device=kindle`）；这里只做格式转换，不改内容。
 //! 不嵌字体（`@font-face` 去掉，字体交给阅读器设置）；SVG 图片暂不支持（引用保持原样）。
@@ -11,6 +11,7 @@ mod container;
 pub mod indx;
 pub mod palmdoc;
 mod text;
+pub mod read;
 
 use std::collections::HashMap;
 

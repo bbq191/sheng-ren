@@ -1,19 +1,15 @@
-//! PalmDB / MOBI 容器共享底座。MOBI6 与 KF8/AZW3 是**同一 PalmDB + PalmDOC + EXTH 容器**，
-//! 仅正文语义不同（MOBI6=单 HTML 靠 `<mbp:pagebreak>` 分页；KF8=预组装好的 XHTML 文档序列）。
-//! 把容器解析（记录表 / PalmDOC 解压 / extra_data_flags 尾字节剥离 / EXTH / 图片 / 封面）统一在此，
-//! `mobi.rs` 与 `kf8.rs` 两条线共用。
+//! PalmDB / MOBI 容器的读取（KF8 读取器 [`super::kf8`] 用）：记录表、PalmDOC 解压、extra_data_flags 尾随字节剥离、
+//! EXTH、图片、封面、INDX（片段/目录索引）。base32、正向变长整数与写出器共用这一份。
 //!
-//! ⚠ 为什么不用 `mobi` crate 做解压：真机词典样本（现代汉语词典.mobi，extra_data_flags=3）暴露
-//! `mobi` 0.8 在**尾字节位置**上判断错误（它按标准 0xF2 读到 0xffff），跨记录拼接错位 → 整本乱码、
-//! 找不到 `<body>`。本模块按「record0 起 +0xF2 == MOBI 头起 +0xE2」正确定位，词典真样本解压干净。
+//! 尾随字节标志的位置按「record0 起 +0xF2 == MOBI 头起 +0xE2」定位（[`read_extra_flags`]）；标志位错了跨记录拼接会错位、整本乱码。
 
-use super::common;
-use crate::epub::{Book, BookMeta, Chapter, Resource};
+use bookconv::convert::common;
+use bookconv::epub::{Book, BookMeta, Chapter, Resource};
 use regex::Regex;
 use std::sync::OnceLock;
 
 /// 剥掉切出来的一段 HTML 的结构壳：XML 声明、`<head>…</head>`、`<html …>`/`</html>`、`<body …>`/`</body>`。
-/// MOBI6 的段与 KF8 的段共用（两边正文都是整份 HTML 文档切开的）。
+/// KF8 的段是整份 XHTML 文档切开的，切出来的段可能带着这些壳。
 pub(super) fn strip_shell(seg: &str) -> String {
     static RX: OnceLock<Regex> = OnceLock::new();
     static RH: OnceLock<Regex> = OnceLock::new();
@@ -83,9 +79,7 @@ pub struct Header<'a> {
     /// r0[16..]，即 MOBI 魔数开始处。
     pub mobi: &'a [u8],
     pub mobi_hlen: usize,
-    /// 正文与 EXTH 字符串的编码：MOBI 头 +0x0C（record0 +0x1C），1252 = cp1252，65001 = UTF-8。
-    pub encoding: u32,
-    /// 第一条资源（图片）记录号：MOBI 头 +0x5C（record0 +0x6C）。`<img recindex=N>`、`kindle:embed:N`、
+    /// 第一条资源（图片）记录号：MOBI 头 +0x5C（record0 +0x6C）。`kindle:embed:N`、
     /// EXTH 201 封面偏移都从这条记录数起。缺失/非法时为 `None`。
     pub first_resource: Option<usize>,
 }
@@ -110,32 +104,17 @@ pub fn parse_header(r0: &[u8]) -> Result<Header<'_>, String> {
     }
     let mobi_hlen = u32::from_be_bytes([mobi[4], mobi[5], mobi[6], mobi[7]]) as usize;
     let extra_flags = read_extra_flags(mobi);
-    let encoding = text_encoding(mobi);
     let first_resource = be_u32(mobi, 0x5C).map(|v| v as usize).filter(|&v| v > 0 && v != 0xFFFF_FFFF);
-    Ok(Header { compression, encryption, text_record_count, extra_flags, mobi, mobi_hlen, encoding, first_resource })
+    Ok(Header { compression, encryption, text_record_count, extra_flags, mobi, mobi_hlen, first_resource })
 }
 
 fn be_u32(b: &[u8], o: usize) -> Option<u32> {
     b.get(o..o + 4).map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
 }
 
-/// MOBI 头里的文字编码（缺失时按 UTF-8）。
-fn text_encoding(mobi: &[u8]) -> u32 {
-    be_u32(mobi, 0x0C).unwrap_or(65001)
-}
-
-/// 按 MOBI 编码把一段字节解成字符串（1252 → cp1252，其余按 UTF-8，坏字节换成 U+FFFD）。
-fn decode_str(b: &[u8], encoding: u32) -> String {
-    if encoding == 1252 {
-        encoding_rs::WINDOWS_1252.decode_without_bom_handling(b).0.into_owned()
-    } else {
-        String::from_utf8_lossy(b).into_owned()
-    }
-}
-
-/// 解码后的正文 + 「原始字节偏移 → 解码后字节偏移」对照。MOBI 的 `filepos`、KF8 的 NCX 位置 / 片段起点都是
-/// **原始字节**偏移；正文是 cp1252（一个字节变成 1–3 个 UTF-8 字节）或含坏 UTF-8 序列（变成 3 字节的 U+FFFD）时，
-/// 解码后位置会漂，必须经 [`RawText::pos`] 换算。纯 UTF-8 正文不建对照表（恒等）。
+/// 解码后的正文 + 「原始字节偏移 → 解码后字节偏移」对照。KF8 的 NCX 位置 / 片段起点都是**原始字节**偏移；
+/// 正文含坏 UTF-8 序列（变成 3 字节的 U+FFFD）时解码后位置会漂，必须经 [`RawText::pos`] 换算。
+/// 写出器只写 UTF-8（MOBI 头编码 65001），所以这里只按 UTF-8 解；合法 UTF-8 正文不建对照表（恒等）。
 pub struct RawText {
     pub text: String,
     /// `map[原始偏移] = 解码后偏移`，长度 = 原始长度 + 1；`None` = 恒等。
@@ -144,16 +123,8 @@ pub struct RawText {
 }
 
 impl RawText {
-    pub fn decode(raw: Vec<u8>, encoding: u32) -> Self {
+    pub fn decode(raw: Vec<u8>) -> Self {
         let raw_len = raw.len();
-        if encoding == 1252 {
-            // cp1252 是单字节编码，每个字节恰好解成一个字符。
-            let text = encoding_rs::WINDOWS_1252.decode_without_bom_handling(&raw).0.into_owned();
-            let mut map: Vec<u32> = text.char_indices().map(|(i, _)| i as u32).collect();
-            debug_assert_eq!(map.len(), raw_len);
-            map.push(text.len() as u32);
-            return RawText { text, map: Some(map), raw_len };
-        }
         let raw = match String::from_utf8(raw) {
             Ok(text) => return RawText { text, map: None, raw_len },
             Err(e) => e.into_bytes(),
@@ -198,7 +169,7 @@ pub fn char_floor(s: &str, mut pos: usize) -> usize {
     pos
 }
 
-/// 解压文本记录 1..=text_record_count → 完整正文字节（MOBI6=单 HTML；KF8=rawML）。
+/// 解压文本记录 1..=text_record_count → 完整正文字节（KF8 的 rawML）。
 /// 每条记录先剥 trailing bytes（extra_data_flags）再 PalmDOC 解压（compression==1 时原样拼）。
 pub fn decompress_text(records: &[&[u8]], h: &Header) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::new();
@@ -318,7 +289,6 @@ impl<'a> ImgRec<'a> {
 }
 
 /// 扫所有记录收集图片（JPEG/PNG/GIF），按记录序。资源区里只有图片时，这个顺序就是：
-/// - MOBI6 `<img recindex="N">` 的 1-based 索引空间（`images[N-1]`）；
 /// - KF8 `kindle:embed:NNNN` 的 1-based 索引空间；
 /// - EXTH 201 封面偏移（相对首图记录）的 0-based 索引空间（`images[cover_idx]`）。
 ///
@@ -327,7 +297,7 @@ pub fn collect_images<'a>(records: &[&'a [u8]]) -> Vec<ImgRec<'a>> {
     records.iter().filter_map(|r| ImgRec::of(r)).collect()
 }
 
-/// 1-based 资源序号 `n`（`recindex` / `kindle:embed`）→ 图片。优先按 MOBI 头的首个资源记录号直接取
+/// 1-based 资源序号 `n`（`kindle:embed`）→ 图片。优先按 MOBI 头的首个资源记录号直接取
 /// `records[first_resource + n - 1]`；那里不是图片（头字段缺失或不可信）时退回 `images[n - 1]`。
 pub fn resource_image<'a>(records: &[&'a [u8]], h: &Header, images: &[ImgRec<'a>], n: usize) -> Option<ImgRec<'a>> {
     if n == 0 {
@@ -354,9 +324,8 @@ pub fn lang_or_default(lang: &str) -> String {
     if t.is_empty() { "en".to_string() } else { t.to_string() }
 }
 
-/// 解析 EXTH 头（紧跟 MOBI 头之后）。字符串按 MOBI 头的文字编码解。
+/// 解析 EXTH 头（紧跟 MOBI 头之后）。字符串按 UTF-8 解（坏字节换成 U+FFFD）。
 pub fn parse_exth(mobi: &[u8], mobi_hlen: usize) -> Exth {
-    let enc = text_encoding(mobi);
     let mut e = Exth::default();
     if mobi_hlen == 0 || mobi.len() < mobi_hlen + 12 || &mobi[mobi_hlen..mobi_hlen + 4] != b"EXTH" {
         return e;
@@ -383,9 +352,9 @@ pub fn parse_exth(mobi: &[u8], mobi_hlen: usize) -> Exth {
             }
         };
         match rtype {
-            503 => e.title = decode_str(val, enc),
-            100 if e.author.is_empty() => e.author = decode_str(val, enc),
-            101 if e.publisher.is_empty() => e.publisher = decode_str(val, enc),
+            503 => e.title = String::from_utf8_lossy(val).into_owned(),
+            100 if e.author.is_empty() => e.author = String::from_utf8_lossy(val).into_owned(),
+            101 if e.publisher.is_empty() => e.publisher = String::from_utf8_lossy(val).into_owned(),
             201 => e.cover_index = as_u32(),
             202 => e.thumb_index = as_u32(),
             524 if e.language.is_empty() => e.language = String::from_utf8_lossy(val).to_string(),
@@ -397,13 +366,13 @@ pub fn parse_exth(mobi: &[u8], mobi_hlen: usize) -> Exth {
 }
 
 /// 按 EXTH 选封面：201（相对首个资源记录的偏移）优先，取不到退 202 缩略图，再退首图。
-/// 偏移换算同 [`resource_image`]（真机 dict/azw3 样本验证命中）。
+/// 偏移换算同 [`resource_image`]（对 AZW3 样本验证过）。
 pub fn pick_cover<'a>(records: &[&'a [u8]], h: &Header, images: &[ImgRec<'a>], exth: &Exth) -> Option<ImgRec<'a>> {
     let at = |i: Option<usize>| i.and_then(|i| resource_image(records, h, images, i + 1));
     at(exth.cover_index).or_else(|| at(exth.thumb_index)).or_else(|| resource_image(records, h, images, 1))
 }
 
-/// MOBI6 / KF8 转换的共同收尾：书名 + EXTH 元数据 + 封面 + 章节/资源 → 母版 EPUB。`scheme` 是 `book_id` 前缀。
+/// 读回的收尾：书名 + EXTH 元数据 + 封面 + 章节/资源 → EPUB。`scheme` 是 `book_id` 前缀。
 pub fn assemble_book(
     scheme: &str,
     title: String,
@@ -431,7 +400,7 @@ pub fn assemble_book(
         resources,
         nav: Vec::new(),
     };
-    Ok((crate::epub::assemble_master(&mut book)?, title))
+    Ok((bookconv::epub::assemble_master(&mut book)?, title))
 }
 
 /// 一条 NCX 目录项：`pos`=章在 rawML 的字节偏移，`label`=真章名，`level`=层级（0=顶层）。
@@ -582,7 +551,7 @@ type IndxEntry<'a> = (&'a [u8], Vec<(u8, Vec<usize>)>);
 fn indx_read<'a>(records: &[&'a [u8]], mobi: &[u8], field_off: usize) -> Option<(usize, usize, Vec<IndxEntry<'a>>)> {
     let (idx, hdr, ndata) = indx_locate(records, mobi, field_off)?;
     // TAGX 标签定义表（每项 4 字节：tag / nvals / mask / eof）
-    let tagx_at = crate::util::memfind(hdr, b"TAGX")?;
+    let tagx_at = bookconv::util::memfind(hdr, b"TAGX")?;
     if tagx_at + 12 > hdr.len() {
         return None;
     }
@@ -827,19 +796,15 @@ mod tests {
     }
 
     #[test]
-    fn raw_text_maps_cp1252_and_bad_utf8_offsets() {
-        // cp1252：é(0xE9)、’(0x92) 各 1 字节 → UTF-8 2/3 字节，后面的 '<' 偏移要跟着挪
-        let t = RawText::decode(b"caf\xE9 l\x92a<p>".to_vec(), 1252);
-        assert_eq!(t.text, "café l’a<p>");
-        assert_eq!(&t.text[t.pos(8).unwrap()..], "<p>");
-        assert_eq!(t.pos(11), Some(t.text.len()));
-        assert_eq!(t.pos(12), None);
+    fn raw_text_maps_bad_utf8_offsets() {
         // UTF-8 里夹坏字节：坏字节换成 U+FFFD，后续偏移照样对得上
-        let t = RawText::decode(b"a\xFFb<i>".to_vec(), 65001);
+        let t = RawText::decode(b"a\xFFb<i>".to_vec());
         assert_eq!(t.text, "a\u{FFFD}b<i>");
         assert_eq!(&t.text[t.pos(3).unwrap()..], "<i>");
+        assert_eq!(t.pos(6), Some(t.text.len()));
+        assert_eq!(t.pos(7), None);
         // 合法 UTF-8：恒等，落在多字节字符中间时下取到字符边界
-        let t = RawText::decode("中<b>".as_bytes().to_vec(), 65001);
+        let t = RawText::decode("中<b>".as_bytes().to_vec());
         assert_eq!(t.pos(1), Some(0));
         assert_eq!(t.pos(3), Some(3));
     }
