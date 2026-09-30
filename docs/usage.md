@@ -10,9 +10,11 @@
 ./uninstall.sh          # 卸载这些命令
 ```
 
-- 装到 cargo 的 bin 目录（`$CARGO_HOME/bin`，缺省 `~/.cargo/bin`；本机设了 `CARGO_HOME=~/.local/share/cargo`）。不在 `PATH` 里时安装脚本会提示怎么加。
-- 更新代码后重新运行一次 `./install.sh` 就是升级。编译复用仓库的 `target/`，改动少时很快。
+- 装到 cargo 的 bin 目录（`$CARGO_INSTALL_ROOT/bin` 或 `$CARGO_HOME/bin`，缺省 `~/.cargo/bin`）。`booklib` 不在 `PATH` 里时安装脚本会提示怎么加。
+- 更新代码后重新运行一次 `./install.sh` 就是升级。编译复用仓库的 `target/`，改动少时很快；第一次要编几分钟，中间不出声。
+  以前用 `--tools` 装过的，不加 `--tools` 也会一起升级（免得开发工具停在旧版本、规则和 `booklib` 对不上）。
 - **卸载只删命令**：书库、产物、设备上的东西都不动，脚本会告诉你书库在哪。书库不要了自己删那个目录。
+  卸载只认从本仓库路径装的包（`library`、`bookconv`、`azw3` 这些名字很普通，别处装的同名包不会被误删）。
 - Calibre 也有一个叫 `ebook-meta` 的命令。两个都装了的话，执行哪个取决于 `PATH` 的先后，安装时会提醒。
 - 不想安装也可以直接跑：`cargo run --release -p library --bin booklib -- <命令>`。
 
@@ -60,10 +62,11 @@ booklib add 三体.epub 乱马01.cbz https://example.com/post
 | 输入 | 生成时 |
 |---|---|
 | EPUB | 直接用原件 |
-| CBZ 漫画 | 当场转成每页一张原图的 EPUB（转换结果不存） |
+| CBZ 漫画 | 当场转成每页一张原图的 EPUB（转换结果不存；一本书给几个模式生成时只转一次） |
 | 网址 | 没有原件：入库时抓正文和图片组成 EPUB，**这一种存在书库里** |
 
-其它格式（MOBI、AZW3、FB2、PDF 等）**不收**（AZW3 只是给 Kindle 的产物格式，不能入库），入库时报"只支持 EPUB 和 CBZ"。入库时也会完整检查一遍（有没有 DRM、是不是有效的 EPUB、CBZ 里有没有图），不能用的当场拒收。
+其它格式（MOBI、AZW3、FB2、PDF 等）**不收**（AZW3 只是给 Kindle 的产物格式，不能入库），入库时报"只支持 EPUB 和 CBZ"。
+入库时也会检查一遍（EPUB：是不是有效的 EPUB、有没有 DRM；CBZ：是不是 zip、里面有没有页面图片），不能用的当场拒收。CBZ 的书名取文件名。
 
 - 同一个文件重复入库会显示 `= 已在库里`（按内容判断，文件改名也认得出）。原件移动过的话，在新位置重新 `add` 一次就更新了位置。
 - **原件是书库的一部分**：原件删了，这本书就没法再生成；原件被改了，生成时会发现并停下来（见下文"原件的核对"）。
@@ -76,7 +79,7 @@ booklib add 三体.epub 乱马01.cbz https://example.com/post
 booklib track ~/Documents/ereader/books          # 登记要跟踪的目录（可以多个）
 booklib sync                                     # 镜像进书库，接着按全部阅读模式生成（只重建有变化的）
 booklib sync --device=kindle                     # 只生成这一个模式
-booklib sync --no-build                          # 只同步，不生成
+booklib sync --no-build                          # 只同步，不生成（不能和 --device 一起用）
 booklib sync --watch                             # 一直运行，每 60 秒检查一次（--watch=300 改间隔）
 ```
 
@@ -101,7 +104,7 @@ booklib sync --watch                             # 一直运行，每 60 秒检�
 `untrack` 不再跟踪一个目录，已入库的书保留。
 
 `--watch` 适合放在后台一直跑，没变化时几乎不耗电：每轮只看文件的大小和修改时间（不读内容、不算哈希），什么都没变就不写任何文件；
-只有这一轮有新增、更新、删除，或者书库、生成记录有变化时才去生成。生成失败的书在原件和处理规则都没变之前不再重试，
+只有这一轮有新增、更新、删除，或者书库、生成记录、跟踪目录（别的进程 `track`/`untrack`）有变化时才去生成。生成失败的书在原件和处理规则都没变之前不再重试，
 原件不在的只在第一次发现时报告。也可以不用 `--watch`，改用 systemd 定时器或 cron 定期执行 `booklib sync`。
 
 ### build：按阅读模式生成
@@ -203,7 +206,7 @@ booklib meta --force 雪人      # 重找
 
 生成封面要系统里有中文字体（缺省用思源宋体繁体 Noto Serif CJK TC，`fc-match` 找）；换字体用环境变量 `BOOKLIB_COVER_FONT=字体文件[:序号]`。
 
-- 找到的封面存在书库条目里（`masters/<id>/cover.jpg`），`meta.json` 记着匹配到哪个条目或作品、从哪下载的，输出里也会列出来，方便核对。
+- 找到的封面存在书库条目里（`masters/<id>/cover.jpg`，PNG 图是 `cover.png`），`meta.json` 记着匹配到哪个条目或作品、从哪下载的，输出里也会列出来，方便核对。
 - **漫画跳过**（2026-09-30 用户定）：漫画不联网找元数据和封面，输出 `- 跳过 书名：漫画不找元数据`。CBZ 一律算漫画；EPUB 按优化器同一套判定
   （图 ≥ 20 张、平均每张图配的字少于 40），只读文字部分。`--force` 也不找；以前给漫画找过的还在，不要了用 `booklib meta --clear <漫画目录>` 去掉。
 - **原件不动**。生成产物时，书里没有封面才把它放进去（只在 OPF 里声明封面图，不加封面页，正文不变）。封面、简介、标签变了，产物判为过期，下次 `build` 重建。
@@ -262,11 +265,13 @@ booklib 只负责生成，**拷到设备上由你自己来**：把阅读模式�
 - 用什么工具拷都行：文件管理器、任何能同步目录的工具。**重新生成后直接覆盖设备上的旧文件**，文件名不会变（除非书名变了）。
 - Kindle 上覆盖同名的 `.azw3` 后还是"同一本书"：AZW3 里的唯一 ID 由书的 id 和入库时间派生，重建不变，阅读进度不丢（见 [AZW3 写出器](azw3.md#取舍)）。
 - 书库删掉的书、改了名的书，产物文件夹里的旧文件会被删掉，设备上的那份要你自己删（用同步工具的"镜像"方式可以一起删掉）。
-- 2026-09-30 起的产物（优化器 v32）还没在 Kindle、掌阅真机上看过。
+- 现在的产物还没在 Kindle、掌阅真机上看过（见[验证情况](typesetting.md#验证情况)）。
 
 ### Move 上的漫画：登记页边距
 
 `xochitl/` 里的漫画按 xochitl 页边距 1 排（左右离屏幕 1px），拷到 Move 后要登记一下，第一次打开时才会自动设成 1：
+
+![Move 上的漫画怎么设成页边距 1](img/comic-margins.svg)
 
 ```sh
 xochitl/comic-margins.sh            # 列出要登记的漫画（USB 连着；Wi-Fi 用 --host=root@<Move 的 IP>）
@@ -275,7 +280,8 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 
 - 没登记的漫画还是默认页边距 56：xochitl 会把整页图缩到 842 宽，画面变小，还多缩一次。
 - 每本只登记一次：之后你在界面上把页边距改回去，不会再被设回来。
-- 依赖 Move 上已经装好的书架服务和页边距代理，以及它网页里「管理→实验室→漫画页边距」开关（脚本会先检查）。
+- 依赖 Move 上已经装好的书架服务和页边距代理，以及它网页里「管理→实验室→漫画页边距」开关（脚本会先检查，还查 Move 上有没有 `unzip`）。
+- 脚本写登记队列前会核对队列没被书架服务同时改过；改过就不写，提示你再跑一次。
 - 界面上的页边距只有 28/56/112 三档，1 只能这样设。直接改 `.content` 会被运行中的 xochitl 盖回去。
 
 ## 空间占用
@@ -285,19 +291,20 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 
 ## 单独的命令行工具
 
-书库之外，底层的每一步也能单独用。开发和排查问题时有用（`./install.sh --tools` 装上，或 `cargo run --release -p bookconv --bin <命令> --`）：
+书库之外，底层的每一步也能单独用。开发和排查问题时有用（`./install.sh --tools` 装上；不装就 `cargo run --release -p bookconv --bin <命令> --`，
+`epub-to-azw3` 在 `azw3` 包里：`cargo run --release -p azw3 --bin epub-to-azw3 --`）：
 
 ```sh
 epub-optimize --device=ireader 输入.epub 输出.epub
 epub-to-azw3 [--ebok] 优化后.epub 输出.azw3       # 见"AZW3 写出器"；输入应是 --device=kindle 优化过的
 readable-probe 测量书.epub                   # 见"设备与可阅读范围"
-readable-measure 竖长.png 横宽.png
-cover-fix 输入.epub 输出.epub [缩略图.png]   # 只补封面声明（xochitl 缩略图用），不装，cargo run -p bookconv --bin cover-fix
+readable-measure [--device=kindle] 竖长.png 横宽.png   # 给了 --device 按它的产物格式写段名（kindle 是 [readable.azw3]）
 ```
 
 - `epub-optimize` 要求 `--device=<阅读模式>`，不写或写错会列出可用的 id；它按该模式的阅读范围处理，和 `booklib build` 是同一个函数。
 - 写文件的工具都先写同目录的临时文件，成功才改名覆盖，中途失败不留半成品；输入和输出可以是同一个文件。**测试用的真书别这样就地改**。
-- 退出码统一：`0` 成功，`1` 用法错，`2` 读写或处理失败。
+- 退出码：`0` 成功，`1` 用法错，`2` 读写或处理失败；`epub-optimize --check` 质量门没过是 `3`（产物照样写出）。
+- `epub-to-azw3` 单独用时，AZW3 的唯一 ID 由书的 OPF 标识符派生（同一本书每次转出来一样）；书库生成时由书 id 和入库时间派生。
 
 ### ebook-meta：查看、改写 EPUB 的元数据
 
@@ -318,12 +325,13 @@ ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
   `--author`、`--tag`、`--identifier` 可重复，给出即**整体替换**（给几个就是最终的几个）。
 - **写出的书和 booklib 的产物一样符合 EPUB 3**（2026-09-30）：改完元数据和封面，再过一遍和清洗层同一套的规范整理——XHTML 修成合法 XML
   （DOCTYPE、命名实体、命名空间等）、OPF 升到 3.0、没有导航文档的补一份 `nav.xhtml`（含 landmarks）、NCX 的 `dtb:uid` 对齐 OPF；
-  `dcterms:modified` 写成改的时间。**可见文字一个不变**（《兒女英雄傳》69.6 万字逐字核对过），图片等其余文件原样。
+  `dcterms:modified` 写成改的时间。**可见文字一个不变**（《兒女英雄傳》69.6 万字逐字核对过）。
+  只读、只重写文字条目，图片等其余文件原样拷过去（不解压不重压），一百多 MB 的书也只占几十 MB 内存。
 - 写前缺省备份成 `书.epub.bak-<时间戳>`（`--no-backup` 不备份）；先写临时文件再改名，中途失败原文件不动。
 - 换封面：书里声明了封面图就**原地换掉它的内容**（格式不同时转成原图的格式，封面页里引用它的地方跟着变），没有就新加一个并声明。
 - 删掉旧值时，EPUB3 用 `refines` 挂在它们身上的子属性（作者角色、排序名等）一起删；EPUB2 的作者写成 `opf:role="aut"`。
 - `--identifier` 不动 OPF 的唯一标识（`unique-identifier` 指向的那个）：删了 OPF 就不合法，NCX 的 `dtb:uid` 也会对不上（reMarkable 会不显示目录）。
-- 书库生成产物时补简介、标签、封面（`booklib meta` 找来的）用的是同一份实现（`bookconv::opfmeta`）。
+- 书库生成产物时补简介、标签、封面（`booklib meta` 找来的）用的是同一份实现（`bookconv::opfmeta`），只是不做规范整理（优化器会做）。
 - 改了跟踪目录里的原件，`booklib sync` 会把它当成新版本重新入库（内容哈希变了）。
 - 改了书名，产物的文件名也跟着变，设备上会多出一本（旧的那份要自己删）。
 
@@ -340,10 +348,16 @@ ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
 现在不收，入库只收 EPUB、CBZ（AZW3 只是给 Kindle 的产物格式）。可以先用别的工具转成 EPUB 再入库；带 DRM 的书现在一律拒收。
 
 **提示"另一个 booklib 正在使用书库"？**
-同一时间只允许一个会改动书库的命令运行（`list`、`devices` 只读，不受限；`sync --watch` 每一轮自己加锁，两轮之间不占着）。等前一个结束再试。如果确定没有别的 booklib 在跑，这个提示不会出现：锁在进程退出时自动释放。
+同一时间只允许一个会改动书库的命令运行（`list`、`devices` 只读，不受限；`sync --watch` 每一轮自己加锁，两轮之间不占着）。等前一个结束再试。
+锁在进程退出时（包括被杀）自动释放，不会有"残留的锁"要手工删；看到这个提示，就是真的还有一个 booklib 在跑（比如后台的 `sync --watch`）。
 
 **原件放在 U 盘或移动硬盘上可以吗？**
 可以。没插上时生成会提示原件不在，插上后照常生成；`sync` 遇到整个目录不在也什么都不动。
+
+**提示 `sources.json` 或 `output-state/<模式>.json` "坏了"？**
+这两份是书库的记录（跟踪的目录、各模式产物在哪）。读不出来时会改书库的命令都拒绝运行，免得当成空的写回去、把记录全丢了
+（生成记录丢了，旧产物再也认不出来，产物目录里每本书会变成两份）。能修就修好；修不了就把它挪走再运行：跟踪目录要重新 `track`，
+产物会重新生成，旧产物要自己删。
 
 **`list` 提示某个条目的 meta.json 读不出来？**
 书库的文件都是先写临时文件、落盘后再改名，断电一般不会写坏；真出现了，`booklib remove <id>` 删掉它，或者重新 `add` 同一个原件覆盖它。

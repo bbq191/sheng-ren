@@ -1,9 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 600" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
-  <title>按阅读模式优化一本书的流程（booklib build 内部）</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 700" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>按阅读模式优化一本书的流程（booklib build 内部，三个模式同一套规则）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
       .b{fill:#fff;stroke:#999;stroke-width:1.1}
+      .w{fill:#f3eefa;stroke:#8a63c9;stroke-width:1.2}
       .t{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.2}
       .c{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.2}
       .g{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.2}
@@ -12,69 +13,78 @@
       .l{stroke:#555;stroke-width:1.3;fill:none}
     </style>
   </defs>
-  <rect width="940" height="600" fill="#fafafa"/>
+  <rect width="940" height="700" fill="#fafafa"/>
 
-  <rect class="b" x="300" y="16" width="340" height="44" rx="8"/>
-  <text x="470" y="36" text-anchor="middle" class="h">原件 EPUB</text>
-  <text x="470" y="52" text-anchor="middle" class="s">CBZ 先转成每页一张原图的 EPUB</text>
-  <path class="l" d="M470 60 L470 80" marker-end="url(#a)"/>
+  <rect class="b" x="300" y="14" width="340" height="44" rx="8"/>
+  <text x="470" y="34" text-anchor="middle" class="h">原件 EPUB</text>
+  <text x="470" y="50" text-anchor="middle" class="s">CBZ 先转成每页一张原图的 EPUB（标"漫画"）</text>
+  <path class="l" d="M470 58 L470 76" marker-end="url(#a)"/>
 
-  <rect class="b" x="300" y="82" width="340" height="44" rx="8"/>
-  <text x="470" y="101" text-anchor="middle">判断是不是漫画</text>
-  <text x="470" y="118" text-anchor="middle" class="s">图 ≥ 20 张且平均每张图配的文字 &lt; 40 字</text>
-  <path class="l" d="M400 126 C400 150 240 140 240 162" marker-end="url(#a)"/>
-  <path class="l" d="M540 126 C540 150 700 140 700 162" marker-end="url(#a)"/>
-  <text x="300" y="150" class="s">文字书</text>
-  <text x="620" y="150" class="s">漫画</text>
+  <!-- 清洗层：文字书和漫画都做 -->
+  <rect class="w" x="20" y="78" width="900" height="206" rx="10"/>
+  <text x="470" y="100" text-anchor="middle" class="h">清洗层 wash（文字书、漫画都做；漫画不分页）</text>
+  <g class="s">
+    <text x="40" y="126">① 剥"伪 DRM"（真 DRM 报错）· 删空白页 · 删失效引用</text>
+    <text x="40" y="148">② 判断主语言（dc:language + 正文字符分布）</text>
+    <text x="40" y="170">③ CSS 解锁：去字体、绝对字号、行高、vh 高度</text>
+    <text x="40" y="192">④ 段首缩进空白交给 CSS · 居中居右换成类 · 补 lang</text>
+    <text x="40" y="214">⑤ 注入 eink-wash.css：缩进、两端对齐、断字、注释 0.85em</text>
+    <text x="490" y="126">⑥ 目录：改指指错的条目、按部分层、没有就按标题生成</text>
+    <text x="490" y="148">⑦ 章节分页：章标题独立一页，节与节、节与章之间分页，</text>
+    <text x="506" y="168">目录缺的节补进去（缩进一级）</text>
+    <text x="490" y="190">⑧ 删章尾空白页 · NCX uid 对齐 OPF</text>
+    <text x="490" y="212">⑨ 规范整理：XHTML 修成合法 XML、OPF 3.0、nav + NCX、landmarks</text>
+  </g>
+  <line x1="40" y1="232" x2="900" y2="232" stroke="#c9b8e8"/>
+  <text x="40" y="254" class="s">可见文字一个不多一个不少（真书回归逐字符核对）；拿不准的结构原样保留。</text>
+  <text x="40" y="274" class="s">判断是不是漫画：图 ≥ 20 张（标了"漫画"的不看张数）且平均每张图配的文字 &lt; 40 字。</text>
+
+  <path class="l" d="M300 284 C300 304 240 296 240 316" marker-end="url(#a)"/>
+  <path class="l" d="M640 284 C640 304 700 296 700 316" marker-end="url(#a)"/>
+  <text x="200" y="306" class="s">文字书</text>
+  <text x="720" y="306" class="s">漫画</text>
 
   <!-- 文字书 -->
-  <rect class="t" x="20" y="164" width="440" height="330" rx="10"/>
-  <text x="240" y="186" text-anchor="middle" class="h">清洗层 wash（按顺序）</text>
+  <rect class="t" x="20" y="318" width="440" height="262" rx="10"/>
+  <text x="240" y="340" text-anchor="middle" class="h">文字书</text>
   <g class="s">
-    <text x="36" y="212">① 剥"伪 DRM"（只加密字体）· 删空白页 · 删失效引用</text>
-    <text x="36" y="234">② 判断主语言（dc:language + 正文字符分布）</text>
-    <text x="36" y="256">③ CSS：去掉 font-size / font-family / font / line-height / vh 高度</text>
-    <text x="36" y="278">④ 正文：中文分段、标题后首段顶格、重复 id 折叠</text>
-    <text x="52" y="298">居中/居右换成 eink-center / eink-right 类，补 &lt;html lang&gt;</text>
-    <text x="36" y="320">⑤ 注入 eink-wash.css：首行缩进（中 2em / 西 1.2em）、两端对齐、</text>
-    <text x="52" y="340">英文断字、注释 0.9em（比正文小一号）</text>
-    <text x="36" y="362">⑥ 目录：改指指错的条目、按部分层、没有就按标题生成</text>
-    <text x="36" y="384">⑦ 章节分页：章标题独立一页，节与节、节与章之间分页，</text>
-    <text x="52" y="404">目录缺的节补进去（缩进一级）</text>
-    <text x="36" y="426">⑧ 删章尾空白页 · 修 NCX uid</text>
+    <text x="36" y="366">· 注释搬到引用它的那一份末尾，标号改成同文件链接</text>
+    <text x="52" y="386">（xochitl 只认同文件 #锚点；几章都引用的留在原处）</text>
+    <text x="36" y="410">· 只有小图标的注释号换成上标数字（三个模式都这样）</text>
+    <text x="36" y="434">· 书里引用的网上图片抓进书里；抓不到的删掉 &lt;img&gt;</text>
+    <text x="36" y="458">· 插图超过阅读范围才缩小（带 EXIF 方向的先摆正）</text>
+    <text x="36" y="482">· 封面 SVG 换成 &lt;img&gt;；本章重复的 id 改名</text>
+    <text x="36" y="506">· manifest 的 properties 按最终内容标</text>
+    <text x="36" y="540" class="s">不改：颜色、背景色、粗体、斜体、对齐等原书样式；</text>
+    <text x="36" y="560" class="s">标点、全半角、中英文间距（会多字少字）</text>
   </g>
-  <line x1="36" y1="440" x2="444" y2="440" stroke="#b9c9ee"/>
-  <text x="36" y="462" class="s">然后：注释搬到本章末尾、标号改成同文件链接 · 浅灰字提成黑</text>
-  <text x="36" y="482" class="s">插图按阅读范围缩小（超大才缩，不放大）</text>
 
   <!-- 漫画 -->
-  <rect class="c" x="480" y="164" width="440" height="330" rx="10"/>
-  <text x="700" y="186" text-anchor="middle" class="h">漫画页：每张图单趟处理，只编码一次</text>
+  <rect class="c" x="480" y="318" width="440" height="262" rx="10"/>
+  <text x="700" y="340" text-anchor="middle" class="h">漫画页：每张图单趟处理，只编码一次</text>
   <g>
-    <rect class="b" x="500" y="204" width="80" height="54" rx="6"/><text x="540" y="228" text-anchor="middle">解码</text><text x="540" y="246" text-anchor="middle" class="s">一次</text>
-    <rect class="b" x="598" y="204" width="80" height="54" rx="6"/><text x="638" y="228" text-anchor="middle">裁白边</text><text x="638" y="246" text-anchor="middle" class="s">扫描白框</text>
-    <rect class="b" x="696" y="204" width="80" height="54" rx="6"/><text x="736" y="228" text-anchor="middle">缩放</text><text x="736" y="246" text-anchor="middle" class="s">到阅读范围</text>
-    <rect class="b" x="794" y="204" width="110" height="54" rx="6"/><text x="849" y="228" text-anchor="middle">补白 + 编码</text><text x="849" y="246" text-anchor="middle" class="s">JPEG 一次</text>
-    <path class="l" d="M580 231 L596 231" marker-end="url(#a)"/>
-    <path class="l" d="M678 231 L694 231" marker-end="url(#a)"/>
-    <path class="l" d="M776 231 L792 231" marker-end="url(#a)"/>
+    <rect class="b" x="496" y="354" width="78" height="50" rx="6"/><text x="535" y="376" text-anchor="middle">解码</text><text x="535" y="394" text-anchor="middle" class="s">按 EXIF 摆正</text>
+    <rect class="b" x="590" y="354" width="78" height="50" rx="6"/><text x="629" y="376" text-anchor="middle">裁白边</text><text x="629" y="394" text-anchor="middle" class="s">扫描白框</text>
+    <rect class="b" x="684" y="354" width="98" height="50" rx="6"/><text x="733" y="376" text-anchor="middle">缩放 + 补白</text><text x="733" y="394" text-anchor="middle" class="s">到阅读范围</text>
+    <rect class="b" x="798" y="354" width="108" height="50" rx="6"/><text x="852" y="376" text-anchor="middle">编码 q95</text><text x="852" y="394" text-anchor="middle" class="s">+ 哈夫曼表重做</text>
+    <path class="l" d="M574 379 L588 379" marker-end="url(#a)"/>
+    <path class="l" d="M668 379 L682 379" marker-end="url(#a)"/>
+    <path class="l" d="M782 379 L796 379" marker-end="url(#a)"/>
   </g>
   <g class="s">
-    <text x="500" y="290">· 补白到阅读范围的宽高比（容差 0.3%），图片正好填满阅读器图片框</text>
-    <text x="500" y="312">· 黑白屏（kindle、ireader 模式）：转 256 级灰度，<tspan font-weight="bold">不抖动</tspan></text>
-    <text x="500" y="334">· 彩色屏（xochitl 模式，Move）：保留彩色</text>
-    <text x="500" y="356">· 已经合适的图不重新编码；透明背景先铺白</text>
-    <text x="500" y="378">· JPEG 一律质量 95；比阅读范围小的页先放大（最多 3 倍）</text>
-    <text x="500" y="400">· 漫画里夹的文字页照常保留</text>
-    <text x="500" y="422">· 多张图并行处理，结果与逐张处理逐字节相同</text>
-    <text x="500" y="444">· OPF 加 dc:subject「漫画」（只动元数据）</text>
-    <text x="500" y="466">· 静态 GIF/WebP 转格式处理；动图、超过 6400 万像素的原样保留</text>
+    <text x="496" y="430">· 画布 = 阅读范围，图保比放进"阅读范围 − 2×白边"（1px）</text>
+    <text x="496" y="452">· 黑白屏（kindle、ireader）转 256 级灰度，<tspan font-weight="bold">不抖动</tspan>；xochitl 保留彩色</text>
+    <text x="496" y="474">· 已经合适的图不重新编码；透明背景先铺白</text>
+    <text x="496" y="496">· 静态 GIF/WebP 转 PNG/JPEG；动图、解压炸弹原样保留</text>
+    <text x="496" y="518">· xochitl：按页边距 1 排，写登记标记；文字页的字补回留白</text>
+    <text x="496" y="540">· 多张图并行处理（按像素额度限内存），结果与逐张相同</text>
+    <text x="496" y="562">· 夹在漫画里的文字页照常保留；OPF 标"漫画"</text>
   </g>
 
-  <path class="l" d="M240 494 C240 520 440 510 450 526" marker-end="url(#a)"/>
-  <path class="l" d="M700 494 C700 520 500 510 490 526" marker-end="url(#a)"/>
+  <path class="l" d="M240 580 C240 610 440 600 450 622" marker-end="url(#a)"/>
+  <path class="l" d="M700 580 C700 610 500 600 490 622" marker-end="url(#a)"/>
 
-  <rect class="g" x="260" y="528" width="420" height="56" rx="8"/>
-  <text x="470" y="550" text-anchor="middle" class="h">质量门 → 产物</text>
-  <text x="470" y="570" text-anchor="middle" class="s">XHTML 合法、引用齐全（没过只警告）→ EPUB；kindle 模式再转 AZW3</text>
+  <rect class="g" x="190" y="624" width="560" height="60" rx="8"/>
+  <text x="470" y="646" text-anchor="middle" class="h">质量门 → 产物</text>
+  <text x="470" y="666" text-anchor="middle" class="s">XHTML 合法、目录和资源引用找得到、没有 DRM（没过只警告）→ EPUB；kindle 模式再转 AZW3</text>
 </svg>
