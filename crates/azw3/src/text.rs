@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// base32 编码（数字 0-9A-V）与读取侧共用一份。
-pub use bookconv::convert::palm::base32;
+pub use crate::read::palm::base32;
 
 const POS_PLACEHOLDER: &str = "kindle:pos:fid:####:off:##########";
 

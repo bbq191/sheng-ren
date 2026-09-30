@@ -47,7 +47,7 @@ fn add_build_skip_remove() {
     // Kindle 的产物是 AZW3（PalmDB 头里的类型/创建者是 BOOKMOBI），能用读取器转回 EPUB
     let azw3 = std::fs::read(out.join("kindle/风起.azw3")).unwrap();
     assert_eq!(&azw3[60..68], b"BOOKMOBI");
-    assert!(bookconv::convert::kf8::azw3_to_epub(&azw3).is_ok());
+    assert!(azw3::read::kf8::azw3_to_epub(&azw3).is_ok());
     // 产物指纹被改（模拟母版或规则变化）→ 过期
     let state_path = lib.root().join("output-state/xochitl.json");
     let st = std::fs::read_to_string(&state_path).unwrap().replace(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION), "|0|");
