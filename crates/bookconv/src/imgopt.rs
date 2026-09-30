@@ -499,12 +499,6 @@ fn encode_keep_gray(fmt: ImageFormat, img: &image::DynamicImage, jpeg_quality: u
     Some(out)
 }
 
-/// 条目是否是可降采样图片（按扩展名快筛，真正的格式判定在 `downscale_for_device` 里用魔数）。
-pub fn is_downscalable(name: &str) -> bool {
-    let l = name.to_lowercase();
-    l.ends_with(".jpg") || l.ends_with(".jpeg") || l.ends_with(".png")
-}
-
 /// 优化器交给图片处理的条目（按扩展名：jpg/jpeg/png/gif/webp）。GIF/WebP 只有漫画页会处理（[`prepare_comic_page_for_epub`]），
 /// 文字书里的原样保留（[`downscale_for_epub`] 只认 JPEG/PNG）。流式优化阶段一这些条目只占位、不读字节。
 pub fn is_page_image(name: &str) -> bool {
@@ -1043,13 +1037,5 @@ mod tests {
         assert_eq!(webp_is_lossless(b"RIFF\0\0\0\0WEBP"), None);
         assert_eq!(converted_media_type("a/p.jpg", &black_jpeg(8, 8)), None, "没换格式");
         assert_eq!(converted_media_type("a/p.webp", &black_jpeg(8, 8)), Some("image/jpeg"), "有损 WebP 转成 JPEG");
-    }
-
-    #[test]
-    fn is_downscalable_by_ext() {
-        assert!(is_downscalable("OEBPS/images/p1.JPG"));
-        assert!(is_downscalable("a/b.png"));
-        assert!(!is_downscalable("style.css"));
-        assert!(!is_downscalable("cover.gif"));
     }
 }
