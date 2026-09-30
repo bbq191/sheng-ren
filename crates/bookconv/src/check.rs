@@ -12,7 +12,7 @@
 //!
 //! 告警（不拦）：无 nav/ncx 或零条目（`require_toc` 时升为失败）；目录锚点丢失（xochitl 退化到文件级跳转）。
 use crate::epubzip::{dir_of, is_html_entry, percent_decode, resolve, Entry};
-use crate::wash::{count_dup_id_tags, href_re, is_toc_file};
+use crate::wash::{count_dup_id_tags, encrypted_targets, is_toc_file, real_drm_items};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -107,19 +107,33 @@ fn add_mimetype_problem<R: std::io::Read + std::io::Seek>(rep: &mut CheckReport,
     }
 }
 
+/// 文档里指向书内文件的链接：(zip 路径, 锚点)。`href`/`src`/`xlink:href`，单双引号都认（`data-src` 不算），
+/// 书外链接（带协议、`data:`）和纯同文件锚点跳过。
+fn internal_links(base: &str, html: &str) -> Vec<(String, String)> {
+    crate::html::link_values(html)
+        .into_iter()
+        .filter_map(|v| {
+            let v = crate::util::xml_unescape(v);
+            let (path, frag) = crate::html::split_href(&v);
+            if path.is_empty() || crate::html::is_external(path) {
+                return None;
+            }
+            Some((resolve(base, &percent_decode(path)), frag.map(percent_decode).unwrap_or_default()))
+        })
+        .collect()
+}
+
 pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     let mut rep = CheckReport::default();
     let names: HashMap<&str, &Entry> = entries.iter().map(|e| (e.name.as_str(), e)).collect();
 
     // 1. DRM
-    if let Some(enc) = names.get("META-INF/encryption.xml") {
-        let t = String::from_utf8_lossy(&enc.data);
-        let targets: Vec<String> = crate::wash::cipher_reference_re().captures_iter(&t).map(|c| c[1].to_string()).collect();
-        let non_font: Vec<&String> = targets.iter().filter(|x| { let l = x.to_ascii_lowercase(); !(l.ends_with(".ttf") || l.ends_with(".otf") || l.ends_with(".woff") || l.ends_with(".woff2")) }).collect();
-        if !non_font.is_empty() {
-            rep.errors.push(format!("加密 EPUB（DRM，加密了 {} 等），阅读器都读不了", non_font.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join("、")));
+    if let Some(targets) = encrypted_targets(entries) {
+        let bad = real_drm_items(&targets);
+        if !bad.is_empty() {
+            rep.errors.push(format!("加密 EPUB（DRM，加密了 {} 等），阅读器都读不了", bad.iter().take(3).map(String::as_str).collect::<Vec<_>>().join("、")));
         } else {
-            rep.warnings.push(format!("仅字体混淆（{} 个字体文件，非 DRM，可读）", targets.len()));
+            rep.warnings.push(format!("仅字体/样式混淆（{} 个文件，非 DRM，可读）", targets.len()));
         }
     }
 
@@ -129,14 +143,7 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     for tf in &rep.toc_files {
         let base = dir_of(tf);
         let t = String::from_utf8_lossy(&names[tf.as_str()].data);
-        for c in href_re().captures_iter(&t) {
-            let raw = &c[2];
-            if raw.starts_with("http://") || raw.starts_with("https://") {
-                continue;
-            }
-            let frag = c.get(3).map(|m| percent_decode(m.as_str().trim_start_matches('#'))).unwrap_or_default();
-            targets.push((resolve(base, &percent_decode(raw)), frag));
-        }
+        targets.extend(internal_links(base, &t));
     }
     rep.toc_entries = targets.len();
     if rep.toc_files.is_empty() || targets.is_empty() {
@@ -176,21 +183,14 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
         rep.errors.push(format!("{} 个标签带双 id 属性（非法 XHTML，xochitl 整章白屏）", rep.dup_id_tags));
     }
 
-    // 4. 正文资源引用（img src / link href 等，`href_re` 同一条正则，跟目录用的那节区别只是扫的文件
-    // 不是 toc 而是每章正文自己）：跳过远程 URL 与 data: 内联，跳过纯同文件锚点（href_re 的 group2
-    // 要求 # 前至少一个字符，`href="#frag"` 天然不落进来）。命中率阈值跟目录那节一致，同一份"到底
-    // 该拦还是该忍"判断标准，不搞两套。
+    // 4. 正文资源引用（img src / link href 等，和目录那节同一个 [`internal_links`]，区别只是扫的是每章正文）：
+    // 书外链接、data: 内联、纯同文件锚点不算。命中率阈值跟目录那节一致，同一份"该拦还是该忍"的标准。
     let mut res_examples: Vec<String> = Vec::new();
     for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data)) {
         let base = dir_of(&e.name);
         let t = String::from_utf8_lossy(&e.data);
-        for c in href_re().captures_iter(&t) {
-            let raw = &c[2];
-            if raw.starts_with("http://") || raw.starts_with("https://") || raw.starts_with("data:") || raw.starts_with("mailto:") {
-                continue;
-            }
+        for (target, _) in internal_links(base, &t) {
             rep.resource_refs_total += 1;
-            let target = resolve(base, &percent_decode(raw));
             if names.contains_key(target.as_str()) {
                 rep.resource_refs_hit += 1;
             } else if res_examples.len() < 3 {
@@ -264,7 +264,7 @@ mod tests {
         assert_eq!((r.toc_entries, r.href_file_hit, r.frag_hit, r.frag_total), (2, 2, 1, 1));
         assert_eq!(r.summary(), "目录 2 条");
         // 命中率低 + 锚点丢 + 双 id + DRM + 正文资源引用命中率低（nav.xhtml 本身也是合法 html，它那 4 条
-        // href 被目录那节（2）与正文资源引用那节（4）各扫一遍——同一份 href_re 结果，两节各自独立判命中率，
+        // href 被目录那节（2）与正文资源引用那节（4）各扫一遍——同一份 internal_links 结果，两节各自独立判命中率，
         // 不是重复 bug）。
         let bad = vec![
             e("META-INF/encryption.xml", r#"<CipherReference URI="OEBPS/text/c1.xhtml"/>"#),
@@ -281,7 +281,10 @@ mod tests {
         let none = vec![e("META-INF/encryption.xml", r#"<CipherReference URI="f.ttf"/>"#), e("c.xhtml", "<html/>")];
         assert!(check_entries(&none, false).ok);
         let r = check_entries(&none, true);
-        assert!(!r.ok && r.warnings.iter().any(|w| w.contains("字体混淆")));
+        assert!(!r.ok && r.warnings.iter().any(|w| w.contains("混淆")));
+        // 单引号、带前缀的 CipherReference 也认（以前只认双引号，真 DRM 会被放过）
+        let single = vec![e("META-INF/encryption.xml", r#"<enc:CipherReference URI='OEBPS/c.xhtml'/>"#), e("c.xhtml", "<html/>")];
+        assert!(check_entries(&single, false).errors.iter().any(|x| x.contains("DRM")));
     }
 
     #[test]

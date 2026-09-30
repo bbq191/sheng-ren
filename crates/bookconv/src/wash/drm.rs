@@ -5,17 +5,19 @@ use super::*;
 pub const PSEUDO_DRM_SAFE_EXTS: &[&str] = &[".css", ".ttf", ".otf", ".woff", ".woff2", ".js"];
 // ───────────────────────── 1. 伪 DRM ─────────────────────────
 
-/// encryption.xml 里的加密目标（zip 内路径）。
-/// `META-INF/encryption.xml` 里 `<CipherReference URI="…">` 的匹配（质量门 `check` 与清洗层共用）。
-pub(crate) fn cipher_reference_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"CipherReference\s+URI="([^"]+)""#).unwrap())
-}
-
+/// `META-INF/encryption.xml` 里的加密目标（zip 内路径）：每个 `<CipherReference URI="…">`（单双引号、带前缀都认）。
+/// 没有 `encryption.xml` 返回 `None`。质量门 `check`、入库、清洗层共用。
 pub fn encrypted_targets(entries: &[Entry]) -> Option<Vec<String>> {
     let enc = entries.iter().find(|e| e.name == "META-INF/encryption.xml")?;
     let t = String::from_utf8_lossy(&enc.data);
-    Some(cipher_reference_re().captures_iter(&t).map(|c| posix_norm(&percent_decode(&c[1]))).filter(|u| !u.starts_with('#')).collect())
+    Some(
+        html::tags(&t)
+            .filter(|tag| tag.is_start() && opf::is_local(tag.name, "CipherReference"))
+            .filter_map(|tag| html::attr_value(&t[tag.start..tag.end], "URI"))
+            .map(|u| posix_norm(&percent_decode(&crate::util::xml_unescape(u))))
+            .filter(|u| !u.is_empty() && !u.starts_with('#'))
+            .collect(),
+    )
 }
 
 /// 真 DRM 判据：加密了非样式/字体/脚本的文件。返回违规项。

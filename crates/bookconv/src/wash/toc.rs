@@ -10,12 +10,6 @@ pub fn is_toc_file(name: &str) -> bool {
     l.ends_with(".ncx") || (base.starts_with("nav") && (base.ends_with(".xhtml") || base.ends_with(".html")))
 }
 
-/// `src="路径#锚点"`/`href=…`（只认双引号；三段捕获：属性名 / 路径 / `#锚点`）。质量门 `check` 用；清洗层内部走 `html::link_values`。
-pub fn href_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r##"(src|href)="([^"#]+)(#[^"]*)?""##).unwrap())
-}
-
 /// 一条目录：级别（h 级别或目录深度）、标题（纯文本）、目标文件的 zip 路径、锚点（原文，空 = 指文件本身）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TocItem {

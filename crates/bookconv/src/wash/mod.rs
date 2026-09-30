@@ -52,9 +52,8 @@ mod typeset;
 pub use self::cover::ensure_cover_declared;
 pub use self::css::{filter_css, wash_html};
 pub use self::drm::{encrypted_targets, real_drm_items, PSEUDO_DRM_SAFE_EXTS};
-pub(crate) use self::drm::cipher_reference_re;
 pub use self::opf::{manifest_items, opf_dc, parse_opf, tag_attr, ManifestItem, Opf, OpfDc};
-pub use self::toc::{href_re, is_toc_file, toc_entry_count};
+pub use self::toc::{is_toc_file, toc_entry_count};
 pub use self::typeset::{count_dup_id_tags, wash_css};
 pub use crate::html::plain_text;
 
