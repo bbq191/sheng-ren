@@ -4,11 +4,11 @@
 use std::io::Read;
 use zip::ZipArchive;
 
-/// 归档里的页面图片条目名（jpg/jpeg/png，按文件名自然序：page_2 < page_10）。跳过目录、macOS 垃圾条目和非图片条目。
+/// 归档里的页面图片条目名（jpg/jpeg/png/gif/webp，按文件名自然序：page_2 < page_10）。跳过目录、macOS 垃圾条目和非图片条目。
 fn page_names<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>) -> Vec<String> {
     let mut names: Vec<String> = (0..zip.len())
         .filter_map(|i| zip.by_index(i).ok().filter(|f| !f.is_dir()).map(|f| f.name().to_string()))
-        .filter(|n| !is_macos_junk(n) && crate::imgopt::is_downscalable(n))
+        .filter(|n| !is_macos_junk(n) && crate::util::is_image_ext(n))
         .collect();
     names.sort_by(|a, b| natural_cmp(a, b));
     names
@@ -36,9 +36,13 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
     Ok(bytes)
 }
 
-/// CBZ 字节 → **与设备无关的母版 EPUB**：图片按文件名自然序每页一张，原图字节原样放进去（不缩放、不重编码），
-/// 第一张当封面。按设备的缩放/补白在之后的优化步骤里做（整本会被判成漫画）。
+/// CBZ 字节 → **与设备无关的母版 EPUB**：图片按文件名自然序每页一张，原图字节原样放进去（不缩放、不重编码）。
+/// 按设备的缩放/补白在之后的优化步骤里做（整本会被判成漫画；GIF/WebP 页由优化器转成 PNG/JPEG）。
 /// 扩展名是图片但内容认不出的条目跳过并警告。
+///
+/// 不另放封面页：第一页就是封面。以前把第一页复制一份当 `cover.jpg` + `cover.xhtml` 放进 spine，读的时候第一页出现两次。
+/// 优化器的 `wash::ensure_cover_declared` 会把第一页的图声明成封面（`<meta name="cover">` + `properties="cover-image"`），
+/// 书库判断"书自己有没有封面"（`epubzip::cover_image_of`）也按第一页的图算。
 pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
     use crate::epub::{Book, BookMeta, Chapter, Resource};
     let mut zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
@@ -47,7 +51,8 @@ pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
     let mut chapters = Vec::with_capacity(names.len());
     for name in &names {
         let bytes = read_entry(&mut zip, name)?;
-        let Some((ext, mime)) = super::common::image_ext_mime(&bytes) else {
+        let known = super::common::image_ext_mime(&bytes).or_else(|| super::common::is_webp(&bytes).then_some(("webp", "image/webp")));
+        let Some((ext, mime)) = known else {
             eprintln!("警告：{name} 不是可识别的图片，跳过");
             continue;
         };
@@ -56,13 +61,20 @@ pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
         chapters.push(Chapter { title: format!("第 {n} 页"), html_body: format!(r#"<div><img src="{path}" alt=""/></div>"#), level: 1 });
         resources.push(Resource { path, media_type: mime.to_string(), bytes });
     }
-    let Some(first) = resources.first() else {
-        return Err("CBZ 内无图片（jpg/jpeg/png）".into());
-    };
-    let cover_ext = first.path.rsplit('.').next().unwrap_or("jpg").to_string();
-    let (cover, cover_media_type) = (Some(first.bytes.clone()), first.media_type.clone());
+    if resources.is_empty() {
+        return Err("CBZ 内无图片（jpg/jpeg/png/gif/webp）".into());
+    }
     let mut book = Book {
-        meta: BookMeta { book_id: format!("cbz:{}", super::common::sanitize_id(title)), title: title.to_string(), author: String::new(), language: "zh".into(), publisher: String::new(), cover, cover_ext, cover_media_type },
+        meta: BookMeta {
+            book_id: format!("cbz:{}", super::common::sanitize_id(title)),
+            title: title.to_string(),
+            author: String::new(),
+            language: "zh".into(),
+            publisher: String::new(),
+            cover: None,
+            cover_ext: String::new(),
+            cover_media_type: String::new(),
+        },
         chapters,
         resources,
         nav: Vec::new(),
@@ -174,6 +186,33 @@ mod tests {
         let epub = cbz_to_epub(&buf, "测试").unwrap();
         let names: Vec<String> = crate::epubzip::read_entries(&epub).unwrap().into_iter().map(|e| e.name).collect();
         assert!(names.iter().any(|n| n.ends_with("images/p0002.jpg")) && !names.iter().any(|n| n.ends_with("images/p0003.jpg")), "{names:?}");
+    }
+
+    #[test]
+    fn gif_and_webp_pages_kept_in_order_and_first_page_is_the_cover() {
+        use image::{DynamicImage, RgbImage};
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(60, 90, |x, y| image::Rgb([(x * 4) as u8, (y * 2) as u8, 40])));
+        let enc = |fmt| {
+            let mut out = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut out), fmt).unwrap();
+            out
+        };
+        let buf = zip_of(&[("p3.gif", &enc(image::ImageFormat::Gif)), ("p1.jpg", &jpeg(60, 90)), ("p2.webp", &enc(image::ImageFormat::WebP))]);
+        let epub = cbz_to_epub(&buf, "混合").unwrap();
+        let entries = crate::epubzip::read_entries(&epub).unwrap();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        for want in ["OEBPS/images/p0001.jpg", "OEBPS/images/p0002.webp", "OEBPS/images/p0003.gif"] {
+            assert!(names.contains(&want), "{want}: {names:?}");
+        }
+        assert!(!names.iter().any(|n| n.contains("cover")), "第一页不另复制成封面页: {names:?}");
+        let opf = String::from_utf8_lossy(&entries.iter().find(|e| e.name.ends_with(".opf")).unwrap().data).into_owned();
+        assert!(opf.contains(r#"href="images/p0002.webp" media-type="image/webp""#), "{opf}");
+        assert_eq!(opf.matches("<itemref").count(), 3, "spine 里正好三页: {opf}");
+        // 优化器补封面声明时认第一页的图
+        let mut entries = entries;
+        assert!(crate::wash::ensure_cover_declared(&mut entries));
+        let opf = String::from_utf8_lossy(&entries.iter().find(|e| e.name.ends_with(".opf")).unwrap().data).into_owned();
+        assert!(opf.lines().any(|l| l.contains(r#"href="images/p0001.jpg""#) && l.contains(r#"properties="cover-image""#)), "{opf}");
     }
 
     #[test]
