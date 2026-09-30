@@ -67,7 +67,11 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v31（2026-09-29）：只有图标的注释标号在 xochitl 模式换成上标数字（profile `note_icons = "number"`，`htmlproc::number_icon_note_links`）：
 ///   xochitl 里只有图的链接点不了、CSS 限不住图标大小（Move 真机）。编号取注释开头的 `[N]`，其次图标 alt 里的"注释N"，再次本章顺序。
 /// - v32（2026-09-30）：撤掉 v29 的 `eink-fullpage`（只为 KOReader 加的，用户撤了 KOReader）；样式表少了这条规则。
-pub const OPTIMIZE_VERSION: &str = "32";
+/// - v33（2026-09-30）：抓不到的远程图删掉（原来原样保留，设备不联网只是断图）；图标注释号换成数字的模式里，样式表去掉用不上的 `.eink-noteicon`。
+pub const OPTIMIZE_VERSION: &str = "33";
+
+/// 清洗层样式表里限图标注释号高度的那条规则（`wash::typeset`），图标都换成数字时删掉。
+const NOTEICON_RULE: &str = ".eink-noteicon{height:1em;width:auto;}\n";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -382,9 +386,15 @@ impl<'a> EntryXform<'a> {
                 Err(_) => Cow::Borrowed(data),
             });
         }
-        if self.reader_margins && crate::wash::is_wash_css_name(name) {
+        if (self.reader_margins || self.number_note_icons) && crate::wash::is_wash_css_name(name) {
             let mut out = data.to_vec();
-            if !data.windows(crate::comicpad::CSS_RULES.len()).any(|w| w == crate::comicpad::CSS_RULES.as_bytes()) {
+            // 图标注释号都换成数字的模式里，限图标高度的 `.eink-noteicon` 用不上了（2026-09-30 用户：失效样式删掉）
+            if self.number_note_icons {
+                if let Some(i) = out.windows(NOTEICON_RULE.len()).position(|w| w == NOTEICON_RULE.as_bytes()) {
+                    out.drain(i..i + NOTEICON_RULE.len());
+                }
+            }
+            if self.reader_margins && !out.windows(crate::comicpad::CSS_RULES.len()).any(|w| w == crate::comicpad::CSS_RULES.as_bytes()) {
                 out.extend_from_slice(crate::comicpad::CSS_RULES.as_bytes());
             }
             return Some(Cow::Owned(out));
