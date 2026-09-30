@@ -47,7 +47,7 @@ fn add_build_skip_remove() {
     // Kindle 的产物是 AZW3（PalmDB 头里的类型/创建者是 BOOKMOBI），能用读取器转回 EPUB
     let azw3 = std::fs::read(out.join("kindle/风起.azw3")).unwrap();
     assert_eq!(&azw3[60..68], b"BOOKMOBI");
-    assert!(bookconv::convert::kf8::azw3_to_epub(&azw3).is_ok());
+    assert!(azw3::read::kf8::azw3_to_epub(&azw3).is_ok());
     // 产物指纹被改（模拟母版或规则变化）→ 过期
     let state_path = lib.root().join("output-state/xochitl.json");
     let st = std::fs::read_to_string(&state_path).unwrap().replace(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION), "|0|");
@@ -450,7 +450,7 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     assert_eq!(std::fs::read(other.join("甲.epub")).unwrap(), b"user's own file");
     assert!(!base.join("ereader/xochitl/haodoo/甲.epub").exists(), "旧产物（记着的）删掉");
     assert_eq!(std::fs::read(base.join("ereader/xochitl/haodoo/笔记.txt")).unwrap(), b"mine", "不认识的文件不删");
-    // 名字稳定：不认识的文件没了，也继续用带后缀的名字（KOReader 按文件名对阅读进度）
+    // 名字稳定：不认识的文件没了，也继续用带后缀的名字（产物改名，拷到设备上就成了另一本书）
     std::fs::remove_file(other.join("甲.epub")).unwrap();
     assert!(matches!(lib.build(&m, xochitl, true).unwrap(), Built::Written { path, .. } if path == to));
 

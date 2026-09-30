@@ -7,6 +7,7 @@
 
 use crate::book::Loaded;
 use bookconv::epubzip::{dir_of, percent_decode, posix_norm, resolve};
+use bookconv::html;
 use bookconv::util::xml_unescape;
 use regex::Regex;
 use std::borrow::Cow;
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// base32 编码（数字 0-9A-V）与读取侧共用一份。
-pub use bookconv::convert::palm::base32;
+pub use crate::read::palm::base32;
 
 const POS_PLACEHOLDER: &str = "kindle:pos:fid:####:off:##########";
 
@@ -42,12 +43,6 @@ pub struct Layout {
     /// CSS 流（第 1 条起）。
     pub css_flows: Vec<Vec<u8>>,
     pub ncx: Vec<NcxItem>,
-}
-
-/// 标签里的 href/src 属性（单双引号都认）。
-fn attr_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"(?i)(\s)(href|src|xlink:href)(\s*=\s*)(?:"([^"]*)"|'([^']*)')"#).unwrap())
 }
 
 fn url_re() -> &'static Regex {
@@ -93,13 +88,15 @@ struct DocCtx<'a> {
 }
 
 /// 改写一个开标签里的引用。返回新标签，和其中链接占位串的 (标签内偏移, 目标文档, id)。标签整个去掉时返回空串。
+/// 属性按 [`html::attrs`] 取（单双引号、无引号都认，属性值里的 `>` 不截断标签）；改写后的值一律写成双引号。
 fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize, String)>) {
+    let all = html::attrs(tag);
     // 属性原文先还原字符引用（`&amp;` 等），再按路径/锚点分别百分号解码（与 id_offsets 对 id 的处理一致）。
-    let attr = |a: &regex::Captures| xml_unescape(a.get(4).or(a.get(5)).map_or("", |m| m.as_str())).into_owned();
-    let is_css_link = name == "link" && tag.to_ascii_lowercase().contains("stylesheet");
+    let val = |a: &html::Attr| xml_unescape(a.value).into_owned();
     // 非样式表的 <link>（Adobe 的 page-template.xpgt 等）和指向书里不存在的样式表的 <link>，Kindle 用不上，去掉。
+    let is_css_link = name == "link" && all.iter().any(|a| a.is("rel") && a.value.split_ascii_whitespace().any(|w| w.eq_ignore_ascii_case("stylesheet")));
     if name == "link" {
-        let href = attr_re().captures_iter(tag).find(|a| a[2].eq_ignore_ascii_case("href")).map(|a| attr(&a)).unwrap_or_default();
+        let href = all.iter().find(|a| a.is("href")).map(val).unwrap_or_default();
         let target = posix_norm(&resolve(dir_of(cx.path), &percent_decode(href.split('#').next().unwrap_or(""))));
         if !is_css_link || !cx.flows.contains_key(&target) {
             return (String::new(), Vec::new());
@@ -108,14 +105,18 @@ fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize
     let mut out = String::with_capacity(tag.len());
     let mut links = Vec::new();
     let mut last = 0;
-    for a in attr_re().captures_iter(tag) {
-        let m = a.get(0).unwrap();
-        let v = attr(&a);
-        if v.contains(':') && !v.starts_with('#') {
+    for a in all.iter().filter(|a| a.is("href") || a.is("src") || a.is("xlink:href")) {
+        if a.quote.is_none() && a.value.is_empty() {
+            continue; // `<a href>`：没有值
+        }
+        let v = val(a);
+        let (p, frag) = v.split_once('#').unwrap_or((&v, ""));
+        if html::is_external(p) {
             continue; // http:、mailto:、data: 等外部地址
         }
-        let (p, frag) = v.split_once('#').unwrap_or((&v, ""));
         let target = if p.is_empty() { cx.path.to_string() } else { posix_norm(&resolve(dir_of(cx.path), &percent_decode(p))) };
+        // 换掉的是整个值（连同原来的引号）
+        let (vs, ve) = if a.quote.is_some() { (a.value_start - 1, a.end) } else { (a.value_start, a.value_end) };
         let new = if is_css_link {
             match cx.flows.get(&target) {
                 Some(n) => format!("kindle:flow:{}?mime=text/css", base32(*n, 4)),
@@ -124,20 +125,21 @@ fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize
         } else if let Some((n, mime)) = cx.res.get(&target).filter(|_| name != "a") {
             format!("kindle:embed:{}?mime={mime}", base32(*n, 4))
         } else if let Some(&j) = cx.doc_index.get(&target).filter(|_| name == "a" || name == "area") {
-            out.push_str(&tag[last..m.start()]);
-            let prefix = format!("{}{}{}\"", &a[1], &a[2], &a[3]);
-            links.push((out.len() + prefix.len(), j, percent_decode(frag)));
-            out.push_str(&prefix);
+            out.push_str(&tag[last..vs]);
+            out.push('"');
+            links.push((out.len(), j, percent_decode(frag)));
             out.push_str(POS_PLACEHOLDER);
             out.push('"');
-            last = m.end();
+            last = ve;
             continue;
         } else {
             continue;
         };
-        out.push_str(&tag[last..m.start()]);
-        out.push_str(&format!("{}{}{}\"{new}\"", &a[1], &a[2], &a[3]));
-        last = m.end();
+        out.push_str(&tag[last..vs]);
+        out.push('"');
+        out.push_str(&new);
+        out.push('"');
+        last = ve;
     }
     out.push_str(&tag[last..]);
     (out, links)
@@ -145,27 +147,24 @@ fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize
 
 fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> {
     static SCRIPT: OnceLock<Regex> = OnceLock::new();
-    static TAG: OnceLock<Regex> = OnceLock::new();
     static STYLE: OnceLock<Regex> = OnceLock::new();
     let path = cx.path;
     let html = SCRIPT.get_or_init(|| Regex::new(r#"(?is)<script\b.*?</script>"#).unwrap()).replace_all(html, "");
     let html = STYLE
         .get_or_init(|| Regex::new(r#"(?is)(<style\b[^>]*>)(.*?)(</style>)"#).unwrap())
         .replace_all(&html, |c: &regex::Captures| format!("{}{}{}", &c[1], rewrite_css(&c[2], path, cx.res), &c[3]));
-    // 注释原样跳过（里面的标签不改写）；只认开标签
-    let tag_re = TAG.get_or_init(|| Regex::new(r#"(?s)<!--.*?-->|<([A-Za-z][A-Za-z0-9:]*)\b[^>]*>"#).unwrap());
+    // 只改开标签（含自闭合）；注释、CDATA、声明原样跳过（注释里的标签不改写）
     let mut out = String::with_capacity(html.len() + html.len() / 8);
     let mut links: Vec<(usize, usize, String)> = Vec::new();
     let mut body_open: Option<(usize, usize)> = None; // body 开标签在 out 里的 (起, 止)
     let mut last = 0;
-    for c in tag_re.captures_iter(&html) {
-        let Some(name) = c.get(1) else { continue };
-        let m = c.get(0).unwrap();
-        out.push_str(&html[last..m.start()]);
-        last = m.end();
-        let name = name.as_str().to_ascii_lowercase();
+    for t in html::tags(&html).filter(|t| t.is_start()) {
+        out.push_str(&html[last..t.start]);
+        last = t.end;
+        let raw = &html[t.start..t.end];
+        let name = t.name.to_ascii_lowercase();
         // 书里原有的 aid（单双引号、无引号都认）去掉，免得和骨架的 aid 冲突
-        let tag = if has_ci(m.as_str().as_bytes(), b"aid") { Cow::Owned(bookconv::html::remove_attr(m.as_str(), "aid")) } else { Cow::Borrowed(m.as_str()) };
+        let tag = if html::attrs(raw).iter().any(|a| a.is("aid")) { Cow::Owned(html::remove_attr(raw, "aid")) } else { Cow::Borrowed(raw) };
         let (mut new, tag_links) = rewrite_tag(&tag, &name, cx);
         if name == "body" && body_open.is_none() {
             // body 开标签带上 aid（片段插回的位置由它标识）
@@ -179,7 +178,8 @@ fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> 
     }
     out.push_str(&html[last..]);
     let (_, b_end) = body_open.ok_or_else(|| format!("{path} 没有 <body>"))?;
-    let close = rfind_ci(out.as_bytes(), b"</body>").filter(|&c| c >= b_end).ok_or_else(|| format!("{path} 没有 </body>"))?;
+    // 最后一个 </body>（body_range 找的第一个 body 开标签就是上面加了 aid 的那个）
+    let close = html::body_range(&out).map(|(_, c)| c).filter(|&c| c >= b_end).ok_or_else(|| format!("{path} 没有 </body>"))?;
     let mut head = out[..b_end].to_string();
     let frag = out[b_end..close].to_string();
     let mut tail = out[close..].to_string();
@@ -198,24 +198,22 @@ fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> 
     Ok(Rewritten { head, frag, tail, links: body_links })
 }
 
-/// `hay` 里是否含 `needle`（ASCII 不分大小写）。
-fn has_ci(hay: &[u8], needle: &[u8]) -> bool {
-    hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
-}
-
-/// `needle` 在 `hay` 里最后一次出现的位置（ASCII 不分大小写，不复制 `hay`）。
-fn rfind_ci(hay: &[u8], needle: &[u8]) -> Option<usize> {
-    hay.windows(needle.len()).rposition(|w| w.eq_ignore_ascii_case(needle))
-}
-
-/// 片段里各 id 的字节偏移（单双引号都认；同名只记第一个）。
+/// 片段里各锚点的字节偏移（所在标签的起点）：任何元素的 `id`，外加 `<a name>`（老书的注释落点常这样写）。
+/// 值先还原字符引用；同名只记第一个，`id` 优先于同名的 `<a name>`（HTML 找锚点也是 id 优先）。
 fn id_offsets(frag: &str) -> HashMap<String, usize> {
-    static ID: OnceLock<Regex> = OnceLock::new();
-    let re = ID.get_or_init(|| Regex::new(r#"(?i)<[A-Za-z][^>]*?\sid\s*=\s*(?:"([^"]+)"|'([^']+)')"#).unwrap());
     let mut m = HashMap::new();
-    for c in re.captures_iter(frag) {
-        let id = c.get(1).or(c.get(2)).unwrap().as_str();
-        m.entry(xml_unescape(id).into_owned()).or_insert(c.get(0).unwrap().start());
+    let mut names = Vec::new();
+    for t in html::tags(frag).filter(|t| t.is_start()) {
+        for a in html::attrs(&frag[t.start..t.end]).into_iter().filter(|a| !a.value.is_empty()) {
+            if a.is("id") {
+                m.entry(xml_unescape(a.value).into_owned()).or_insert(t.start);
+            } else if a.is("name") && t.is("a") {
+                names.push((a.value, t.start));
+            }
+        }
+    }
+    for (v, at) in names {
+        m.entry(xml_unescape(v).into_owned()).or_insert(at);
     }
     m
 }
@@ -282,9 +280,41 @@ mod tests {
     }
 
     fn lay(docs: Vec<crate::book::Doc>) -> (Layout, Vec<String>) {
+        lay_with(docs, &HashMap::new())
+    }
+
+    fn lay_with(docs: Vec<crate::book::Doc>, res: &HashMap<String, (u32, &'static str)>) -> (Layout, Vec<String>) {
         let book = Loaded { meta: Default::default(), docs, css: vec![], images: vec![], cover: None, toc: vec![] };
         let mut w = Vec::new();
-        (layout(&book, &HashMap::new(), &mut w).unwrap(), w)
+        (layout(&book, res, &mut w).unwrap(), w)
+    }
+
+    #[test]
+    fn gt_inside_quoted_attribute_does_not_cut_the_tag() {
+        // 属性值里的 `>`：以前正则在这里把标签截断，图片丢、链接死
+        let a = r#"<html><body><img title="x>y" src="images/a.png"/><a title='1>0' href="b.xhtml#s2">跳</a><!-- <img src="images/a.png"/> --></body></html>"#;
+        let b = r#"<html><body><p>前</p><h2 id="s2">目标</h2></body></html>"#;
+        let res = HashMap::from([("images/a.png".to_string(), (1u32, "image/png"))]);
+        let (l, w) = lay_with(vec![doc("a.xhtml", a), doc("b.xhtml", b)], &res);
+        let fa = frag_text(&l, 0);
+        assert!(fa.starts_with(r#"<img title="x>y" src="kindle:embed:0001?mime=image/png"/>"#), "{fa}");
+        let off = frag_text(&l, 1).find("<h2").unwrap() as u32;
+        assert!(fa.contains(&format!(r#"<a title='1>0' href="kindle:pos:fid:0001:off:{}">"#, base32(off, 10))), "{fa}");
+        assert!(fa.contains(r#"<!-- <img src="images/a.png"/> -->"#), "注释里的不改: {fa}");
+        assert!(w.is_empty(), "{w:?}");
+    }
+
+    #[test]
+    fn a_name_anchor_is_a_link_target_but_id_wins() {
+        let a = r#"<html><body><a href="b.xhtml#n1">1</a><a href="b.xhtml#dup">2</a><a href="b.xhtml#x:y">3</a></body></html>"#;
+        let b = r#"<html><body><p><a name="dup"></a>甲</p><p><a name="n1">乙</a></p><p id="dup">丙</p><p id="x:y">丁</p></body></html>"#;
+        let (l, w) = lay(vec![doc("a.xhtml", a), doc("b.xhtml", b)]);
+        let (fa, fb) = (frag_text(&l, 0), frag_text(&l, 1));
+        let at = |needle: &str| base32(fb.find(needle).unwrap() as u32, 10);
+        assert!(fa.contains(&format!(r#"off:{}">1<"#, at(r#"<a name="n1">"#))), "{fa}");
+        assert!(fa.contains(&format!(r#"off:{}">2<"#, at(r#"<p id="dup">"#))), "id 优先于同名的 <a name>: {fa}");
+        assert!(fa.contains(&format!(r#"off:{}">3<"#, at(r#"<p id="x:y">"#))), "锚点里有冒号不算外部链接: {fa}");
+        assert!(w.is_empty(), "{w:?}");
     }
 
     /// 第 i 个片段的文字：流里每个文档是"骨架、片段"相连，片段紧跟在骨架后面。

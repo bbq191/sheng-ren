@@ -8,7 +8,7 @@ description = "EPUB → AZW3（KF8）写出器，clean-room：依公开的 MOBI 
 [dependencies]
 bookconv = { path = "../bookconv" }
 regex = "1"
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 
 [[bin]]
 name = "epub-to-azw3"

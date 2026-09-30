@@ -17,7 +17,7 @@ pub fn is_toc_file(name: &str) -> bool {
 /// 锚点是**字符引用已还原**的值（百分号编码照原样）：写进 NCX/nav 时由 `build_ncx`/`nav_ol`/`replace_nav_map` 转义一次；
 /// 从 `id` 属性原文取来的要先 `xml_unescape`（2026-09-30 审计：此前原文直接进来，`id="a&amp;b"` 写成 `#a&amp;amp;b`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct TocItem {
+pub struct TocItem {
     pub level: u8,
     pub title: String,
     pub path: String,
