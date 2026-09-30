@@ -8,10 +8,10 @@
 //!
 //! 5. OPF 不是合法 XML（非法控制字符/结构错误；xochitl 严格解析，整本读不出来）。正文章节不合法只告警。
 //! 6. `mimetype` 缺失、不是第一个条目、被压缩或内容不对（EPUB 规范 OCF 的硬性要求，只在按 zip 检查的
-//!    [`check_epub`]/[`check_epub_file`] 里查，[`check_entries`] 看不到压缩方式）。
+//!    [`check_epub_file`] 里查，[`check_entries`] 看不到压缩方式）。
 //!
 //! 告警（不拦）：无 nav/ncx 或零条目（`require_toc` 时升为失败）；目录锚点丢失（xochitl 退化到文件级跳转）。
-use crate::epubzip::{dir_of, is_html_entry, percent_decode, resolve, Entry};
+use crate::epubzip::{dir_of, is_html_entry, percent_decode, resolve_rel, Entry};
 use crate::wash::{count_dup_id_tags, encrypted_targets, is_toc_file, real_drm_items};
 use std::collections::HashMap;
 
@@ -49,27 +49,19 @@ impl CheckReport {
     }
 }
 
-pub use crate::epubzip::read_entries;
-
+/// 按内存里的 zip 字节检查（测试用；命令行与书库走 [`check_epub_file`]）。
+#[cfg(test)]
 pub fn check_epub(epub: &[u8], require_toc: bool) -> Result<CheckReport, String> {
     // zip 目录只解析一遍：条目和 mimetype 检查都从这一个 archive 读。
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
-    let mut entries = Vec::with_capacity(zip.len());
-    for i in 0..zip.len() {
-        let mut f = zip.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
-        if f.is_dir() {
-            continue;
-        }
-        let (name, size) = (f.name().to_string(), f.size());
-        entries.push(Entry { name, data: crate::epubzip::read_all(&mut f, size)? });
-    }
+    let entries = crate::epubzip::read_entries_from(&mut zip, |_| true)?;
     let mut rep = check_entries(&entries, require_toc);
     add_mimetype_problem(&mut rep, &mut zip);
     Ok(rep)
 }
 
-/// [`check_epub`] 的按路径、省内存变体：用 [`crate::epubzip::read_skeleton`]（图片条目留空占位，
-/// 只有非图片的真实字节整份读入）而不是 [`read_entries`] 整本读进内存——大漫画优化产物整本读回内存
+/// 按路径检查、省内存：用 [`crate::epubzip::read_skeleton`]（图片条目留空占位，
+/// 只有非图片的真实字节整份读入）而不是整本读进内存——大漫画优化产物整本读回内存
 /// 就白费了流式优化省下的内存。质量门这几条规则（双 id/href 命中率/正文资源引用）都只看 html/toc
 /// 文本内容，不看图片字节，检查结果不受影响。
 /// 目录缺失只告警（书库生成用）；要把"无目录"升为失败用 [`check_epub_file_with`]。
@@ -118,7 +110,7 @@ fn internal_links(base: &str, html: &str) -> Vec<(String, String)> {
             if path.is_empty() || crate::html::is_external(path) {
                 return None;
             }
-            Some((resolve(base, &percent_decode(path)), frag.map(percent_decode).unwrap_or_default()))
+            Some((resolve_rel(base, path), frag.map(percent_decode).unwrap_or_default()))
         })
         .collect()
 }

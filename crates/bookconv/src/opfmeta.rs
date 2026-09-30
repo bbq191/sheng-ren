@@ -1,13 +1,19 @@
 //! EPUB 元数据（OPF 里的 Dublin Core 与封面）的读取和改写：`ebook-meta` 命令、书库生成时补简介/标签/封面共用。
 //!
-//! 改写只动 OPF（改了书名时连 NCX 的书名）和封面图这几个条目，其余条目按原样**原始拷贝**（不解压不重压），
-//! 正文一个字节都不变。
+//! 改写动 OPF（改了书名时连 NCX 的书名）和封面（图、只放封面的页面、目录里指向它的条目）；`ebook-meta` 另做一遍
+//! EPUB 3 规范整理（[`Edits::normalize`]，会改 XHTML/OPF/NCX 的标记，可见文字不动）。没改到的条目按原样**原始拷贝**
+//! （不解压不重压），图片只读要换的封面那一张以外一张都不解压。
 //! 设字段 = 先删掉这个字段的全部元素（连同 EPUB3 用 `refines="#id"` 挂在它们身上的 `<meta>`，如作者的角色、排序名），
 //! 再在第一个被删元素原来的位置写新值；书里原来没有这个字段就插在 `</metadata>` 前面。
 
 use crate::html::{self, TagKind};
 use crate::util::xml_escape;
 use std::path::Path;
+
+/// 补元数据（[`edit_epub`]）的版本：改了会影响书库产物的行为就加一。书库补过东西的书的指纹带着它（`i{VERSION}`），没补过的不受影响。
+/// - 3（2026-09-30）：补完做 EPUB 3 规范整理。
+/// - 4（2026-09-30）：书库补元数据不再做规范整理（[`Edits::normalize`]，优化器的清洗层反正要做），和没补过东西的书走同一条路。
+pub const VERSION: &str = "4";
 
 /// 支持读写的 Dublin Core 字段。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -100,6 +106,9 @@ pub struct Edits {
     /// 写进 `dcterms:modified` 的时间（`ebook-meta` 命令给现在的时间）；`None` 不改（booklib 生成产物前补元数据时用：
     /// 产物要逐字节可重现）。
     pub modified: Option<String>,
+    /// 改完再做 EPUB 3 规范整理（[`crate::wash::normalize_epub3`]）。`ebook-meta` 要（写出的书和 booklib 的产物一样符合 EPUB 3）；
+    /// booklib 生成产物前补元数据不要——补完马上要过优化器，清洗层会做同一套整理。
+    pub normalize: bool,
 }
 
 /// 封面怎么改。
@@ -184,24 +193,44 @@ fn set_ncx_title(ncx: &str, title: &str) -> String {
 /// 书里声明的封面图：(zip 路径, 扩展名)。判定见 `wash::opf::declared_cover`（与优化器、`cover_image_of` 同一套）。
 fn declared_cover(opf: &str, opf_dir: &str) -> Option<(String, String)> {
     let item = crate::wash::opf::declared_cover(opf)?;
-    let path = crate::epubzip::resolve(opf_dir, &crate::epubzip::percent_decode(item.href));
+    let path = crate::epubzip::resolve_rel(opf_dir, item.href);
     let ext = crate::util::image_ext_of(&path);
     Some((path, ext))
 }
 
-/// 把图片转成 `ext`（jpg/png）格式；已经是就原样返回。
-fn to_format(image: &[u8], ext: &str) -> Result<Vec<u8>, String> {
-    let (have, _) = crate::convert::common::image_ext_mime(image).ok_or("封面图不是 JPEG/PNG")?;
+/// 换封面图的内容：`ext` 是原封面图的扩展名。返回 (新字节, 要改成的 manifest `media-type`)。
+/// - 原图是 jpg/png：转成原图的格式（已经是就原样），条目名、media-type 都不用动；
+/// - 原图是别的格式（gif、webp）：新图原样写进这个条目，manifest 的 `media-type` 改成新图的格式。条目不改名——改名要把
+///   全书指向它的 `src`、`href`、`url()` 都改掉，漏一处图就丢；EPUB 按 manifest 的 media-type 认图片格式
+///   （优化器把漫画里的 GIF/WebP 页转成 PNG/JPEG 也是这么做的）。此前一律转成 JPEG 写进 `.gif` 条目、media-type 还是 gif。
+fn to_format(image: &[u8], ext: &str) -> Result<(Vec<u8>, Option<&'static str>), String> {
+    let (have, mime) = crate::convert::common::image_ext_mime(image).ok_or("封面图不是 JPEG/PNG")?;
     let want = if ext == "jpeg" { "jpg" } else { ext };
+    if want != "jpg" && want != "png" {
+        return Ok((image.to_vec(), Some(mime)));
+    }
     if have == want {
-        return Ok(image.to_vec());
+        return Ok((image.to_vec(), None));
     }
     let img = image::load_from_memory(image).map_err(|e| format!("封面图解不开：{e}"))?;
     let mut out = Vec::new();
     let fmt = if want == "png" { image::ImageFormat::Png } else { image::ImageFormat::Jpeg };
     let img = if fmt == image::ImageFormat::Jpeg { image::DynamicImage::ImageRgb8(img.to_rgb8()) } else { img };
     img.write_to(&mut std::io::Cursor::new(&mut out), fmt).map_err(|e| format!("封面图转格式失败：{e}"))?;
-    Ok(out)
+    Ok((out, None))
+}
+
+/// OPF 里 zip 路径为 `path` 的 manifest 项的 `media-type` 改成 `mt`（没有这一项或它没有 `media-type` 属性就原样）。
+fn set_media_type(opf: &str, opf_dir: &str, path: &str, mt: &str) -> String {
+    for it in crate::wash::manifest_items(opf) {
+        if crate::epubzip::resolve_rel(opf_dir, it.href) != path {
+            continue;
+        }
+        if let Some(a) = html::attr(it.tag, "media-type") {
+            return html::apply_edits(opf, vec![(it.pos + a.value_start, it.pos + a.value_end, mt.to_string())]);
+        }
+    }
+    opf.to_string()
 }
 
 /// 要改写的 zip 条目：(路径, 新内容)。
@@ -211,12 +240,12 @@ pub type Rewritten = (String, Vec<u8>);
 /// 只有这一张图；连同 spine、guide、NCX、nav 里指向它的条目），以及封面图本身——正文别的页也用着这张图时图留着，只去掉声明。
 /// `read(zip 路径)` 取文本。返回 (新 OPF, 要从 zip 删掉的条目, 要改写的条目 (路径, 新内容))。书里没有声明封面图 → 原样。
 pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Option<String>) -> (String, Vec<String>, Vec<Rewritten>) {
-    use crate::epubzip::{percent_decode, resolve, resolve_href};
+    use crate::epubzip::{resolve_href, resolve_rel};
     use crate::wash::opf as o;
     let Some(cover) = o::declared_cover(opf) else { return (opf.to_string(), Vec::new(), Vec::new()) };
-    let (cover_id, cover_path) = (cover.id.to_string(), resolve(opf_dir, &percent_decode(cover.href)));
+    let (cover_id, cover_path) = (cover.id.to_string(), resolve_rel(opf_dir, cover.href));
     let items = o::manifest_items(opf);
-    let path_of = |href: &str| resolve(opf_dir, &percent_decode(href));
+    let path_of = |href: &str| resolve_rel(opf_dir, href);
     // 页面里引用的图（img src、SVG image href）
     let images_in = |page: &str, text: &str| -> Vec<String> {
         html::tags(text)
@@ -359,15 +388,16 @@ pub fn read_epub(path: &Path) -> Result<Vec<(DcField, Vec<String>)>, String> {
 
 /// 把 `src` 改好写到 `dst`（`dst` 不能是 `src`；原地改由调用方先写临时文件再改名）。
 ///
-/// 写出的书**和 booklib 的产物一样符合 EPUB 3**（2026-09-30 用户定）：改完元数据和封面后过一遍清洗层的规范整理
-/// （[`crate::wash::normalize_epub3`]：XHTML 修成合法 XML、OPF 升到 3.0、补导航文档和 landmarks、NCX 标识对齐），
+/// 只把文字条目读进内存（`epubzip::read_skeleton`，图片不解压）；写出时内容变了的条目重写，其余条目原样拷贝压缩数据。
+/// [`Edits::normalize`] 时再过一遍清洗层的规范整理（[`crate::wash::normalize_epub3`]：XHTML 修成合法 XML、OPF 升到 3.0、
+/// 补导航文档和 landmarks、NCX 标识对齐；2026-09-30 用户定：`ebook-meta` 写出的书和 booklib 的产物一样符合 EPUB 3），
 /// 给了 [`Edits::modified`] 就把 `dcterms:modified` 写成它（`ebook-meta` 给现在的时间：书确实改了）。
 /// 可见文字一个不动；XHTML 的变化只限规范整理那几条（DOCTYPE、命名实体、命名空间等）。
 pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, String> {
-    let (_, opf_path, opf_text) = crate::epubzip::open_opf(src)?;
-    let bytes = std::fs::read(src).map_err(|e| format!("{}: {e}", src.display()))?;
-    let mut entries = crate::epubzip::read_entries(&bytes)?;
-    drop(bytes);
+    let (mut zip, opf_path, opf_text) = crate::epubzip::open_opf(src)?;
+    let mut entries = crate::epubzip::read_skeleton(&mut zip)?.entries;
+    // 读进来时的样子（图片是空占位）：写出时内容没变的条目原样拷贝
+    let before: std::collections::HashMap<String, Vec<u8>> = entries.iter().map(|e| (e.name.clone(), e.data.clone())).collect();
     let opf_dir = crate::epubzip::dir_of(&opf_path).to_string();
     let mut opf = apply_fields(&opf_text, &edits.set)?;
     let mut report = EditReport { fields: edits.set.iter().map(|(f, _)| *f).collect(), cover_replaced: None, cover_removed: None };
@@ -379,10 +409,7 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
 
     // 换了书名：NCX 的 docTitle 一起换
     if let Some(t) = edits.set.iter().find(|(f, _)| *f == DcField::Title).and_then(|(_, v)| v.first()) {
-        let ncx = crate::wash::manifest_items(&opf)
-            .iter()
-            .find(|i| i.media_type.contains("dtbncx"))
-            .map(|i| crate::epubzip::resolve(&opf_dir, &crate::epubzip::percent_decode(i.href)));
+        let ncx = crate::wash::manifest_items(&opf).iter().find(|i| i.media_type.contains("dtbncx")).map(|i| crate::epubzip::resolve_rel(&opf_dir, i.href));
         if let Some(ncx) = ncx {
             if let Some(text) = text_of(&entries, &ncx) {
                 set_entry(&mut entries, ncx, set_ncx_title(&text, t).into_bytes());
@@ -403,7 +430,11 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
         }
         Some(CoverEdit::Set(image)) => match declared_cover(&opf, &opf_dir) {
             Some((path, ext)) => {
-                set_entry(&mut entries, path, to_format(image, &ext)?);
+                let (bytes, retype) = to_format(image, &ext)?;
+                if let Some(mt) = retype {
+                    opf = set_media_type(&opf, &opf_dir, &path, mt);
+                }
+                set_entry(&mut entries, path, bytes);
                 report.cover_replaced = Some(true);
             }
             None => {
@@ -422,22 +453,23 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
     }
     set_entry(&mut entries, opf_path.clone(), opf.into_bytes());
 
-    // 规范整理成 EPUB 3，修改时间写现在
-    crate::wash::normalize_epub3(&mut entries);
+    if edits.normalize {
+        crate::wash::normalize_epub3(&mut entries);
+    }
     if let (Some(when), Some(e)) = (&edits.modified, entries.iter_mut().find(|e| e.name == opf_path)) {
         e.data = set_modified(&String::from_utf8_lossy(&e.data), when).into_bytes();
     }
 
-    // mimetype 第一个、不压缩（EPUB 规定）；图片不压缩（本来就压过），其余压缩
-    let out = std::fs::File::create(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
-    let mut zw = zip::ZipWriter::new(out);
-    let (stored, deflated) = (crate::epubzip::stored(), crate::epubzip::deflated());
-    crate::epubzip::put_entry(&mut zw, "mimetype", stored, b"application/epub+zip")?;
+    // mimetype 第一个、不压缩（`EpubWriter` 管）；变了的条目重写（图片不压缩，其余压缩），没变的原样拷贝
+    let mut w = crate::epubzip::EpubWriter::create(dst)?;
     for e in entries.iter().filter(|e| e.name != "mimetype") {
-        let opts = if crate::util::is_image_ext(&e.name) { stored } else { deflated };
-        crate::epubzip::put_entry(&mut zw, &e.name, opts, &e.data)?;
+        if before.get(&e.name) == Some(&e.data) {
+            w.raw_copy(zip.by_name(&e.name).map_err(|err| format!("{}: {err}", e.name))?)?;
+        } else {
+            w.put(&e.name, &e.data)?;
+        }
     }
-    zw.finish().map_err(|e| e.to_string())?;
+    w.finish()?;
     Ok(report)
 }
 
