@@ -7,7 +7,6 @@
 
 use crate::html::{self, TagKind};
 use crate::util::xml_escape;
-use std::io::{Read, Seek, Write};
 use std::path::Path;
 
 /// 支持读写的 Dublin Core 字段。
@@ -96,15 +95,25 @@ pub fn read(opf: &str) -> Vec<(DcField, Vec<String>)> {
 pub struct Edits {
     /// 整体替换这些字段（给几个值就是最终的几个；空列表 = 删掉这个字段）。
     pub set: Vec<(DcField, Vec<String>)>,
-    /// 封面图（JPEG/PNG 字节）。书里声明了封面图就原地换掉它的内容（格式不同时转成原图的格式），没有就新加一个。
-    pub cover: Option<Vec<u8>>,
-    /// 去掉书里的封面（见 [`remove_cover`]）。和 `cover` 同时给时以 `cover` 为准（换封面）。
-    pub remove_cover: bool,
+    /// 封面：`None` 不动。
+    pub cover: Option<CoverEdit>,
+    /// 写进 `dcterms:modified` 的时间（`ebook-meta` 命令给现在的时间）；`None` 不改（booklib 生成产物前补元数据时用：
+    /// 产物要逐字节可重现）。
+    pub modified: Option<String>,
+}
+
+/// 封面怎么改。
+#[derive(Clone, Debug)]
+pub enum CoverEdit {
+    /// 换成这张图（JPEG/PNG 字节）：书里声明了封面图就原地换掉它的内容（格式不同时转成原图的格式），没有就新加一个。
+    Set(Vec<u8>),
+    /// 去掉（见 [`remove_cover`]）。
+    Remove,
 }
 
 impl Edits {
     pub fn is_empty(&self) -> bool {
-        self.set.is_empty() && self.cover.is_none() && !self.remove_cover
+        self.set.is_empty() && self.cover.is_none()
     }
 }
 
@@ -342,11 +351,6 @@ pub struct EditReport {
     pub cover_removed: Option<Vec<String>>,
 }
 
-fn read_text<R: Read + Seek>(z: &mut zip::ZipArchive<R>, name: &str) -> Result<String, String> {
-    let b = crate::epubzip::read_by_name(z, name)?;
-    Ok(String::from_utf8_lossy(&b).into_owned())
-}
-
 /// 读一本 EPUB 的元数据：(OPF 路径, 各字段)。
 pub fn read_epub(path: &Path) -> Result<Vec<(DcField, Vec<String>)>, String> {
     let (_, _, opf) = crate::epubzip::open_opf(path)?;
@@ -354,42 +358,52 @@ pub fn read_epub(path: &Path) -> Result<Vec<(DcField, Vec<String>)>, String> {
 }
 
 /// 把 `src` 改好写到 `dst`（`dst` 不能是 `src`；原地改由调用方先写临时文件再改名）。
+///
+/// 写出的书**和 booklib 的产物一样符合 EPUB 3**（2026-09-30 用户定）：改完元数据和封面后过一遍清洗层的规范整理
+/// （[`crate::wash::normalize_epub3`]：XHTML 修成合法 XML、OPF 升到 3.0、补导航文档和 landmarks、NCX 标识对齐），
+/// 给了 [`Edits::modified`] 就把 `dcterms:modified` 写成它（`ebook-meta` 给现在的时间：书确实改了）。
+/// 可见文字一个不动；XHTML 的变化只限规范整理那几条（DOCTYPE、命名实体、命名空间等）。
 pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, String> {
-    let (mut zin, opf_path, opf_text) = crate::epubzip::open_opf(src)?;
+    let (_, opf_path, opf_text) = crate::epubzip::open_opf(src)?;
+    let bytes = std::fs::read(src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mut entries = crate::epubzip::read_entries(&bytes)?;
+    drop(bytes);
     let opf_dir = crate::epubzip::dir_of(&opf_path).to_string();
     let mut opf = apply_fields(&opf_text, &edits.set)?;
     let mut report = EditReport { fields: edits.set.iter().map(|(f, _)| *f).collect(), cover_replaced: None, cover_removed: None };
+    let text_of = |entries: &[crate::epubzip::Entry], n: &str| entries.iter().find(|e| e.name == n).map(|e| String::from_utf8_lossy(&e.data).into_owned());
+    let set_entry = |entries: &mut Vec<crate::epubzip::Entry>, n: String, data: Vec<u8>| match entries.iter_mut().find(|e| e.name == n) {
+        Some(e) => e.data = data,
+        None => entries.push(crate::epubzip::Entry { name: n, data }),
+    };
 
     // 换了书名：NCX 的 docTitle 一起换
-    let mut replaced: Vec<(String, Vec<u8>)> = Vec::new();
-    if let Some((_, titles)) = edits.set.iter().find(|(f, _)| *f == DcField::Title) {
-        if let Some(t) = titles.first() {
-            let ncx = crate::wash::manifest_items(&opf)
-                .iter()
-                .find(|i| i.media_type.contains("dtbncx"))
-                .map(|i| crate::epubzip::resolve(&opf_dir, &crate::epubzip::percent_decode(i.href)));
-            if let Some(ncx) = ncx {
-                if let Ok(text) = read_text(&mut zin, &ncx) {
-                    replaced.push((ncx, set_ncx_title(&text, t).into_bytes()));
-                }
+    if let Some(t) = edits.set.iter().find(|(f, _)| *f == DcField::Title).and_then(|(_, v)| v.first()) {
+        let ncx = crate::wash::manifest_items(&opf)
+            .iter()
+            .find(|i| i.media_type.contains("dtbncx"))
+            .map(|i| crate::epubzip::resolve(&opf_dir, &crate::epubzip::percent_decode(i.href)));
+        if let Some(ncx) = ncx {
+            if let Some(text) = text_of(&entries, &ncx) {
+                set_entry(&mut entries, ncx, set_ncx_title(&text, t).into_bytes());
             }
         }
     }
-    // 去封面
-    let mut dropped: Vec<String> = Vec::new();
-    if edits.remove_cover && edits.cover.is_none() {
-        let (new_opf, gone, rewritten) = remove_cover(&opf, &opf_dir, |n| read_text(&mut zin, n).ok());
-        opf = new_opf;
-        replaced.extend(rewritten);
-        dropped = gone;
-        report.cover_removed = Some(dropped.clone());
-    }
     // 封面
-    let mut added: Vec<(String, Vec<u8>)> = Vec::new();
-    if let Some(image) = &edits.cover {
-        match declared_cover(&opf, &opf_dir) {
+    match &edits.cover {
+        None => {}
+        Some(CoverEdit::Remove) => {
+            let (new_opf, gone, rewritten) = remove_cover(&opf, &opf_dir, |n| text_of(&entries, n));
+            opf = new_opf;
+            for (n, data) in rewritten {
+                set_entry(&mut entries, n, data);
+            }
+            entries.retain(|e| !gone.contains(&e.name));
+            report.cover_removed = Some(gone);
+        }
+        Some(CoverEdit::Set(image)) => match declared_cover(&opf, &opf_dir) {
             Some((path, ext)) => {
-                replaced.push((path, to_format(image, &ext)?));
+                set_entry(&mut entries, path, to_format(image, &ext)?);
                 report.cover_replaced = Some(true);
             }
             None => {
@@ -401,39 +415,43 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
                 let old: Vec<(usize, usize, String)> = o::cover_meta_tags(&opf).into_iter().map(|(s, e, _)| (s, e, String::new())).collect();
                 opf = html::apply_edits(&opf, old);
                 opf = o::insert_metadata(&opf, r#"<meta name="cover" content="eink-cover"/>"#).ok_or("OPF 里没有 </metadata>")?;
-                added.push((if opf_dir.is_empty() { name } else { format!("{opf_dir}/{name}") }, image.clone()));
+                set_entry(&mut entries, if opf_dir.is_empty() { name } else { format!("{opf_dir}/{name}") }, image.clone());
                 report.cover_replaced = Some(false);
             }
-        }
+        },
     }
-    replaced.push((opf_path, opf.into_bytes()));
+    set_entry(&mut entries, opf_path.clone(), opf.into_bytes());
 
+    // 规范整理成 EPUB 3，修改时间写现在
+    crate::wash::normalize_epub3(&mut entries);
+    if let (Some(when), Some(e)) = (&edits.modified, entries.iter_mut().find(|e| e.name == opf_path)) {
+        e.data = set_modified(&String::from_utf8_lossy(&e.data), when).into_bytes();
+    }
+
+    // mimetype 第一个、不压缩（EPUB 规定）；图片不压缩（本来就压过），其余压缩
     let out = std::fs::File::create(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
     let mut zw = zip::ZipWriter::new(out);
-    let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for i in 0..zin.len() {
-        let e = zin.by_index_raw(i).map_err(|e| e.to_string())?;
-        let name = e.name().to_string();
-        if dropped.contains(&name) {
-            continue;
-        }
-        match replaced.iter().find(|(n, _)| *n == name) {
-            Some((_, data)) => {
-                drop(e);
-                let opts = if crate::util::is_image_ext(&name) { stored } else { deflated };
-                zw.start_file(name.as_str(), opts).map_err(|e| e.to_string())?;
-                zw.write_all(data).map_err(|e| e.to_string())?;
-            }
-            None => zw.raw_copy_file(e).map_err(|e| e.to_string())?,
-        }
-    }
-    for (name, data) in &added {
-        zw.start_file(name.as_str(), stored).map_err(|e| e.to_string())?;
-        zw.write_all(data).map_err(|e| e.to_string())?;
+    let (stored, deflated) = (crate::epubzip::stored(), crate::epubzip::deflated());
+    crate::epubzip::put_entry(&mut zw, "mimetype", stored, b"application/epub+zip")?;
+    for e in entries.iter().filter(|e| e.name != "mimetype") {
+        let opts = if crate::util::is_image_ext(&e.name) { stored } else { deflated };
+        crate::epubzip::put_entry(&mut zw, &e.name, opts, &e.data)?;
     }
     zw.finish().map_err(|e| e.to_string())?;
     Ok(report)
+}
+
+/// 把 `<meta property="dcterms:modified">` 的值换成 `when`；没有就在 `</metadata>` 前补一条（EPUB 3 必需）。
+fn set_modified(opf: &str, when: &str) -> String {
+    for t in html::tags(opf).filter(|t| t.kind == TagKind::Open && crate::wash::opf::is_local(t.name, "meta")) {
+        if html::attr_value(&opf[t.start..t.end], "property") != Some("dcterms:modified") {
+            continue;
+        }
+        if let Some(close) = html::tags_in(opf, t.end, opf.len()).find(|c| c.kind == TagKind::Close && crate::wash::opf::is_local(c.name, "meta")) {
+            return format!("{}{when}{}", &opf[..t.end], &opf[close.start..]);
+        }
+    }
+    crate::wash::opf::insert_metadata(opf, &format!(r#"<meta property="dcterms:modified">{when}</meta>"#)).unwrap_or_else(|| opf.to_string())
 }
 
 #[cfg(test)]
