@@ -3,7 +3,7 @@ use super::*;
 
 /// 中文书两种"假段落"归一（2026-09-06 《人骨拼圖》2017 旧 EPUB 真机）：
 /// ① 全书没有 `<p>`，每章一个 `<div>` 里 `<br/>` 分行、段首两个全角空格——`p{text-indent:2em}` 没有对象，xochitl 又把
-///    U+3000 折叠掉 → 零缩进；KOReader 把 U+3000 按字体宽度画出来 → "换字体缩进跟着变"。→ 按 `<br>` 切成 `<p>`。
+///    U+3000 折叠掉 → 零缩进；按字体宽度画 U+3000 的阅读器上换字体缩进跟着变。→ 按 `<br>` 切成 `<p>`。
 /// ② 段首烘死的全角空格 / nbsp（有 `<p>` 的书也常见）→ 剥掉，缩进统一走外链 css（字体无关的精确 2em）。
 ///
 /// 只在文件里 `<br>` 数 ≥ 4 且没有 `<p>` 时做 ①；② 对所有 `<p>` 做。块级标签（h1–h6/div/section 的开闭、img、table）原样保留。
@@ -67,13 +67,22 @@ pub(super) fn cjk_paragraphize(html: &str) -> String {
     format!("{head}{res}{tail}")
 }
 
-/// 每个 `<p>` 开标签后面紧跟的空白、全角空格、不换行空格（含字符引用）剥掉。
+/// 每个 `<p>` 开标签后面紧跟的空白、全角空格、不换行空格（含字符引用）剥掉——**只在段里后面还有可见内容时**。
+/// 整段只有空白的（`<p>&nbsp;</p>`、`<p>　</p>`）是作者留的空行（场景分隔），剥成 `<p></p>` 就没有高度、空行没了，原样留着
+/// （2026-09-30 审计）。段的范围到下一个 `<p` 开/闭标签为止（p 里不嵌 p）。
 fn strip_para_lead_spaces(html: &str) -> String {
     static LEAD: OnceLock<Regex> = OnceLock::new();
     let lead = LEAD.get_or_init(|| Regex::new(r#"^(?:\s|\u{3000}|&#12288;|&#x3000;|&nbsp;|&#160;|&#xa0;)+"#).unwrap());
-    let edits: Vec<(usize, usize, String)> = html::tags(html)
-        .filter(|t| t.kind == html::TagKind::Open && t.is("p"))
-        .filter_map(|t| lead.find(&html[t.end..]).map(|m| (t.end, t.end + m.end(), String::new())))
+    let ps: Vec<html::Tag> = html::tags(html).filter(|t| t.is("p")).collect();
+    let edits: Vec<(usize, usize, String)> = ps
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.kind == html::TagKind::Open)
+        .filter_map(|(k, t)| {
+            let m = lead.find(&html[t.end..])?;
+            let end = ps.get(k + 1).map_or(html.len(), |n| n.start).max(t.end + m.end());
+            html::has_visible(&html[t.end + m.end()..end]).then(|| (t.end, t.end + m.end(), String::new()))
+        })
         .collect();
     if edits.is_empty() {
         return html.to_string();
@@ -116,7 +125,7 @@ fn inline_balanced(text: &str) -> bool {
 /// xochitl 的 CSS 引擎（2026-09-06 八轮渲染缓存量化，书架白皮书 §03y）：不认内联 `style=""`；`text-indent:0` 当"没设"；
 /// 类规则压过元素规则，但同为类规则时**先出现者胜**（书的表链接在前）；规则最后一个无分号的声明被丢。
 /// 因此顶格段＝`<div class="eink-flush">`（**剥掉书的类与 style**，只留 eink-flush，id 等保留）+ 外链 `.eink-flush{text-indent:0.01em;…;}`；
-/// KOReader 走标准 CSS 同样顶格。判定"前面是标题/切换"的信号（2026-09-06 用《Tell Me Your Dreams》AZW3 定，它的章名不是 `<h>`
+/// 按标准 CSS 渲染的阅读器同样顶格。判定"前面是标题/切换"的信号（2026-09-06 用《Tell Me Your Dreams》AZW3 定，它的章名不是 `<h>`
 /// 而是加粗段落、场景切换是段末双 `<br/>`）：
 ///   ① 前一个块是 `</h1>`–`</h6>`；② 前一段是"标题样段落"：≤80 字且（全文加粗/strong/class 含 bold、或以
 ///   Chapter/Book/Part/Prologue/Epilogue 开头）且不以句末标点结尾；③ 前一段以 ≥2 个 `<br>` 结尾或本身是空段（含 `<p/>`）/`* * *`
@@ -204,7 +213,7 @@ pub(super) fn flush_first_para_after_heading(html: &str, indent_classes: &HashSe
             // 书里**设了首行缩进的类**（`indent_classes`，如 `.calibre_ {text-indent:1.2em}`）不能留：xochitl 里同为类规则时
             // **先出现者胜**（诊断 13/14），带着它就压不住 eink-flush；元素/内联通道又都不通（诊断 7–10）。别的类照留
             // （2026-09-28 审计：此前连同所有类一起删，作者用类写的强调——斜体、小型大写、颜色——跟着丢了）。
-            // style 照留，只去掉 `text-indent`（KOReader 认行内样式，留着会压过 eink-flush）。id 等其它属性保留。
+            // style 照留，只去掉 `text-indent`（认行内样式的阅读器上，留着会压过 eink-flush）。id 等其它属性保留。
             let orig = &html[open.0..open.1];
             let classes: Vec<&str> = html::attr_value(orig, "class").unwrap_or("").split_whitespace().filter(|c| !indent_classes.contains(*c)).collect();
             let mut tag = html::remove_attr(orig, "class");
@@ -234,7 +243,7 @@ pub(super) fn indent_classes_of(css: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     for c in css_rule_re().captures_iter(css) {
         if html::css_decls(&c[2]).iter().any(|d| d.prop.eq_ignore_ascii_case("text-indent")) {
-            out.extend(class.captures_iter(&c[1]).map(|m| m[1].to_string()));
+            out.extend(class.captures_iter(&strip_css_comments(&c[1])).map(|m| m[1].to_string()));
         }
     }
     out
@@ -246,17 +255,17 @@ pub(super) fn terminal_latin(t: &str) -> bool {
 }
 
 /// 给 `<head>` 注入指向外链 wash css 的 `<link>`（`href`=该 html 相对 css 的路径）。幂等（已有则跳过）。
-/// 无 `</head>` 时补一对 head；无 `<body` 也不动（异常文件）。
+/// 无 `</head>` 时补一对 head；无 `<body` 也不动（异常文件）。标签按 `crate::html` 扫（不分大小写，注释里的不算）。
 pub(super) fn inject_css_link(html: &str, href: &str) -> String {
-    let marker = format!("href=\"{href}\"");
-    if html.contains(&marker) {
+    let has = html::tags(html).any(|t| t.is_start() && t.is("link") && html::attr_value(&html[t.start..t.end], "href") == Some(href));
+    if has {
         return html.to_string();
     }
     let link = format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{href}\"/>");
-    if let Some(i) = html.find("</head>") {
-        format!("{}{}{}", &html[..i], link, &html[i..])
-    } else if let Some(i) = html.find("<body") {
-        format!("{}<head>{}</head>{}", &html[..i], link, &html[i..])
+    if let Some(h) = html::tags(html).find(|t| t.kind == html::TagKind::Close && t.is("head")) {
+        format!("{}{}{}", &html[..h.start], link, &html[h.start..])
+    } else if let Some(b) = html::tags(html).find(|t| t.is_start() && t.is("body")) {
+        format!("{}<head>{}</head>{}", &html[..b.start], link, &html[b.start..])
     } else {
         html.to_string()
     }
@@ -280,10 +289,10 @@ pub fn wash_css(opts: &WashOpts) -> String {
     }
     // ⚠ 每条声明都以 `;` 收尾：xochitl 会丢掉规则里最后一个没分号的声明（2026-09-06 诊断 11/12：`p{text-indent:2em}`
     // 整条不生效、`p{text-indent:2em;}` 生效）——keep_para_spacing 档位此前因此在 xochitl 上没缩进。
-    // `.eink-flush`：拉丁首段顶格段（wash_html 换成的 `<div class="eink-flush">`），KOReader 靠它归零缩进/段距；
+    // `.eink-flush`：拉丁首段顶格段（wash_html 换成的 `<div class="eink-flush">`），按标准 CSS 渲染的阅读器靠它归零缩进/段距；
     // xochitl 上 div 本就无 p 规则、且书的类规则够不到（类已剥），此条只是保险。
     // ⚠ 值用 0.01em 不用 0：xochitl 把 `text-indent:0` 当"没设"→ 落回从外层 `<div class="calibre1">` 之类**继承**来的缩进
-    //   （诊断 14 V1/V7 vs Sheldon v5，2026-09-06）；0.01em ≈ 0.1pt 肉眼不可见，KOReader 同样视为顶格。
+    //   （诊断 14 V1/V7 vs Sheldon v5，2026-09-06）；0.01em ≈ 0.1pt 肉眼不可见，看上去就是顶格。
     let flush = if opts.keep_para_spacing { ".eink-flush{text-indent:0.01em;}" } else { ".eink-flush{text-indent:0.01em;margin-top:0;margin-bottom:0;}" };
     // figure/figcaption：以前这条规则只管了 `<p>` 的边距，`article.rs` 网文管线常把图片包成
     // `<figure><img/><figcaption>…</figcaption></figure>`（真机书里也不算罕见），这两个元素
