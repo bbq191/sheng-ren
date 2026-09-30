@@ -61,7 +61,7 @@
   <text x="572" y="404" class="h">指纹：什么变了就重新生成</text>
   <text x="572" y="428" class="s">原件哈希 · 找来的封面 · 补进去的简介标签</text>
   <text x="572" y="448" class="s">流程版本（CBZ 来源加格式转换版本）· 优化器版本</text>
-  <text x="572" y="468" class="s">注释方式 · 模式 id · 阅读范围 · 黑白/彩色</text>
+  <text x="572" y="468" class="s">注释方式 · 模式 id · 阅读范围与漫画排法 · 黑白/彩色</text>
   <text x="572" y="488" class="s">格式（AZW3 再加写出器版本）</text>
   <text x="572" y="510" class="s">都没变 → build 直接跳过；list 显示 ✓ 最新 / ⚠ 过期</text>
 </svg>

@@ -49,7 +49,7 @@
   <text x="240" y="340" text-anchor="middle" class="h">文字书</text>
   <g class="s">
     <text x="36" y="366">· 注释搬到引用它的那一份末尾，标号改成同文件链接</text>
-    <text x="52" y="386">（xochitl 只认同文件 #锚点；几章都引用的留在原处）</text>
+    <text x="52" y="386">（几章都引用的留在原处；回链 xochitl 去掉，另两台保留）</text>
     <text x="36" y="410">· 只有小图标的注释号换成上标数字（三个模式都这样）</text>
     <text x="36" y="434">· 书里引用的网上图片抓进书里；抓不到的删掉 &lt;img&gt;</text>
     <text x="36" y="458">· 插图超过阅读范围才缩小（带 EXIF 方向的先摆正）</text>
@@ -76,7 +76,7 @@
     <text x="496" y="452">· 黑白屏（kindle、ireader）转 256 级灰度，<tspan font-weight="bold">不抖动</tspan>；xochitl 保留彩色</text>
     <text x="496" y="474">· 已经合适的图不重新编码；透明背景先铺白</text>
     <text x="496" y="496">· 静态 GIF/WebP 转 PNG/JPEG；动图、解压炸弹原样保留</text>
-    <text x="496" y="518">· xochitl：按页边距 1 排，写登记标记；文字页的字补回留白</text>
+    <text x="496" y="518">· kindle 写成固定版式；ireader 改往左翻；xochitl 按页边距 1 排</text>
     <text x="496" y="540">· 多张图并行处理（按像素额度限内存），结果与逐张相同</text>
     <text x="496" y="562">· 夹在漫画里的文字页照常保留；OPF 标"漫画"</text>
   </g>

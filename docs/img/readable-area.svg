@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 550" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
-  <title>标称屏幕与真实可阅读范围（按比例缩小 1/5）</title>
+  <title>屏幕与真实可阅读范围（按比例缩小 1/5）</title>
   <style>
     .scr{fill:#e9e9e9;stroke:#666;stroke-width:1.2}
     .rd{fill:#d9f0df;stroke:#3f9a5b;stroke-width:1.4}
@@ -7,7 +7,7 @@
     .s{font-size:12px;fill:#444}
   </style>
   <rect width="900" height="550" fill="#fafafa"/>
-  <text x="450" y="24" text-anchor="middle" class="h">灰色 = 标称屏幕　绿色 = 阅读器真正用来显示内容的范围（优化按绿色算）</text>
+  <text x="450" y="24" text-anchor="middle" class="h">灰色 = 屏幕　绿色 = 阅读器真正用来显示内容的范围（文字书里的插图按绿色缩放）</text>
 
   <!-- 缩放 1/5；原点对齐各自屏幕左上角 -->
   <!-- Move 954x1696 -> 190.8x339.2 ; readable 842x1455 -> 168.4x291, 水平居中(56px→11.2)，上 35.5pt≈111.8px→22.4 -->
@@ -21,15 +21,15 @@
     <text x="95.4" y="410" text-anchor="middle" class="s">来源：在 xochitl 上实测换算</text>
   </g>
 
-  <!-- Kindle 截图坐标 1272x1696 -> 254.4x339.2 ; readable 1104x1546 -> 220.8x309.2，左右 84→16.8，上下 75→15 -->
+  <!-- Kindle 屏幕（实际显示缓冲区）1272x1696 -> 254.4x339.2 ; readable 1104x1546 -> 220.8x309.2，左右 84→16.8，上下 75→15 -->
   <g transform="translate(290,50)">
     <rect class="scr" width="254.4" height="339.2" rx="6"/>
     <rect class="rd" x="16.8" y="15" width="220.8" height="309.2"/>
     <text x="127.2" y="165" text-anchor="middle">1104 × 1546</text>
     <text x="127.2" y="360" text-anchor="middle" class="h">kindle 模式（Kindle PW12）</text>
-    <text x="127.2" y="378" text-anchor="middle" class="s">屏幕 1264 × 1680，黑白，产物 AZW3</text>
+    <text x="127.2" y="378" text-anchor="middle" class="s">屏幕 1272 × 1696（实际），黑白，产物 AZW3</text>
     <text x="127.2" y="394" text-anchor="middle" class="s">左右页边距各 84，上下页眉页脚各 75</text>
-    <text x="127.2" y="410" text-anchor="middle" class="s">来源：真机截屏实测（截图 1272 × 1696）</text>
+    <text x="127.2" y="410" text-anchor="middle" class="s">来源：真机截屏实测（2026-09-27 的页边距设置）</text>
   </g>
 
   <!-- 1264x1680 -> 252.8x336 ; readable 全屏 -->
@@ -44,6 +44,6 @@
   </g>
 
   <text x="450" y="494" text-anchor="middle" class="s">用"测量书"实测：readable-probe 生成 → 设备上截屏 → readable-measure 读出尺寸。阅读器页边距设置改了就要重量。</text>
-  <text x="450" y="515" text-anchor="middle" class="s">三个数都是只放一张大图的页面上量的（给漫画用）；图文混排时图片受正文页边距限制，不适用。</text>
-  <text x="450" y="536" text-anchor="middle" class="s">xochitl 的漫画另按页边距 1 排（952 × 1457）；Kindle 阅读器自己留左右 84、上下 75，漫画离屏幕边缘 1px 还没做到（待查）。</text>
+  <text x="450" y="515" text-anchor="middle" class="s">三个数都是只放一张大图的页面上量的；漫画另有画布（[comic_readable]），见"漫画页在三台设备上的位置"那张图。</text>
+  <text x="450" y="536" text-anchor="middle" class="s">漫画：Kindle 写成固定版式按整屏排，掌阅整屏，xochitl 按页边距 1 排（952 × 1457）。</text>
 </svg>
