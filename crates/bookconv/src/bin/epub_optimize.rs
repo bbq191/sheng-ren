@@ -1,6 +1,6 @@
 //! 命令行：按阅读模式（设备 profile）优化一本 EPUB（`optimize::optimize_epub_file_streaming`，与书库 `booklib build` 同一函数）。
 //! 缺省 = 清洗层（伪 DRM 剥离 / CSS 锁剥离 / 边距段距归零+首行缩进 / 空页清理 / 缺目录时自动目录 / 双 id 折叠 / 章节分页）
-//! 加优化器（脚注按阅读模式弹窗或跳转 / duokan 标记 / 远程图内联 / 双 id 去重 / 图片按阅读范围缩放），产物自带
+//! 加优化器（被引用的脚注移到引用它的章末、标号改同章锚点 / duokan 标记 / 远程图内联 / 双 id 去重 / 图片按阅读范围缩放），产物自带
 //! `META-INF/eink-optimized` 标记。
 //!
 //! 用法: epub-optimize --device=<设备> [选项] 输入.epub 输出.epub
@@ -28,7 +28,7 @@ fn main() {
     if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--no-paginate", "--keep-color", "--check", "--require-toc"].contains(f)) {
         die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--keep-color] [--check] [--require-toc] 输入.epub 输出.epub");
     }
-    // 阅读模式定阅读范围、黑白屏转灰度、注释弹窗还是跳转（和书库生成同一个起点）
+    // 阅读模式定阅读范围、黑白屏转灰度、注释呈现方式（和书库生成同一个起点）
     let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
     let wash = if flags.contains(&"--no-wash") {
         None
