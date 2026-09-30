@@ -12,7 +12,7 @@ pub fn is_toc_file(name: &str) -> bool {
 
 /// 一条目录：级别（h 级别或目录深度）、标题（纯文本）、目标文件的 zip 路径、锚点（原文，空 = 指文件本身）。
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct TocItem {
+pub struct TocItem {
     pub level: u8,
     pub title: String,
     pub path: String,

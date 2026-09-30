@@ -5,6 +5,7 @@ use bookconv::convert::common::{image_ext_mime, is_webp};
 use bookconv::html;
 use bookconv::util::xml_unescape;
 use bookconv::wash::opf::is_local;
+use bookconv::wash::normalize::nav_toc_items;
 use bookconv::wash::{manifest_items, opf_dc, parse_opf, tag_attr};
 use regex::Regex;
 use std::collections::HashMap;
@@ -93,30 +94,13 @@ pub struct Loaded {
     pub toc: Vec<TocItem>,
 }
 
-/// EPUB3 nav 文档里的目录（`epub:type` 含 `toc` 的那个 `<nav>`，landmarks、page-list 不算）：`<ol>` 嵌套深度即层级。
+/// EPUB3 nav 文档里的目录（`epub:type` 含 `toc` 的那个 `<nav>`）：和优化器补 NCX 用同一套解析（[`nav_toc_items`]，
+/// `<ol>` 嵌套深度即层级，从 1 起），这里换成从 0 起、锚点百分号解码。
 fn nav_toc(html: &str, nav_path: &str) -> Vec<TocItem> {
-    static TOK: OnceLock<Regex> = OnceLock::new();
-    static NAV: OnceLock<Regex> = OnceLock::new();
-    let nav = NAV.get_or_init(|| Regex::new(r#"(?is)(<nav\b[^>]*>)(.*?)</nav>"#).unwrap());
-    let is_toc = |tag: &str| bookconv::html::attr_value(tag, "epub:type").is_some_and(|t| t.split_whitespace().any(|w| w == "toc"));
-    let Some(body) = nav.captures_iter(html).find(|c| is_toc(&c[1])).map(|c| c.get(2).unwrap().as_str()) else { return Vec::new() };
-    let tok = TOK.get_or_init(|| Regex::new(r#"(?is)<ol\b[^>]*>|</ol>|(<a\b[^>]*>)(.*?)</a>"#).unwrap());
-    let mut depth = 0u32;
-    let mut out = Vec::new();
-    for c in tok.captures_iter(body) {
-        let t = c.get(0).unwrap().as_str();
-        if t.len() >= 3 && t[..3].eq_ignore_ascii_case("<ol") {
-            depth += 1;
-        } else if t.eq_ignore_ascii_case("</ol>") {
-            depth = depth.saturating_sub(1);
-        } else if let (Some(h), Some(label)) = (c.get(1).and_then(|a| bookconv::html::attr_value(a.as_str(), "href")), c.get(2)) {
-            let label = bookconv::wash::plain_text(label.as_str());
-            let h = bookconv::util::xml_unescape(h);
-            let (p, f) = h.split_once('#').unwrap_or((&h, ""));
-            out.push(TocItem { label, level: depth.saturating_sub(1), path: posix_norm(&resolve(dir_of(nav_path), &percent_decode(p))), frag: percent_decode(f) });
-        }
-    }
-    out
+    nav_toc_items(html, nav_path)
+        .into_iter()
+        .map(|t| TocItem { label: t.title, level: u32::from(t.level.saturating_sub(1)), path: t.path, frag: percent_decode(&t.frag) })
+        .collect()
 }
 
 /// 静态 WebP → PNG（KF8 不认 WebP）：解码后无损编码，像素不变（有损 WebP 的像素就是它解出来的样子）。动画 WebP 只取一帧会丢内容，
