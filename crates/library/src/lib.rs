@@ -261,12 +261,23 @@ impl Library {
 
     /// 加进程锁。会改动书库的操作（add/build/remove/sync/dedupe/meta）之前调用，持有到操作结束。
     /// 本进程第一次拿到锁时，顺带清理进程被杀时留下的临时文件和目录（`.tmp-*`）。
+    /// 书库的记录文件读不出来时拒绝加锁（见 [`fsutil::check_json`]）。
     pub fn lock(&self) -> Result<Lock<'_>, String> {
         let l = fsutil::lock(&self.root, &self.locked)?;
+        self.check_records()?;
         if !self.cleaned.replace(true) {
             self.clean_leftovers();
         }
         Ok(l)
+    }
+
+    /// 核对 `sources.json` 和各模式的生成记录都读得出来。
+    fn check_records(&self) -> Result<(), String> {
+        fsutil::check_json::<sources::Sources>(&self.root.join("sources.json"))?;
+        for (_, p) in self.state_files() {
+            fsutil::check_json::<generate::State>(&p)?;
+        }
+        Ok(())
     }
 
     /// 书库里会放临时文件、临时目录的地方：书库根、`masters/` 和各条目、`output-state/`、`output/<模式>/`，
@@ -336,16 +347,22 @@ impl Library {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
         let result = (|| {
+            // 各文件落盘后再改名（断电后不会出现 0 字节的 meta.json）
+            let write = |name: &str, data: &[u8]| {
+                let mut f = std::fs::File::create(tmp.join(name))?;
+                std::io::Write::write_all(&mut f, data)?;
+                f.sync_all()
+            };
             for (name, data) in files {
-                std::fs::write(tmp.join(name), data).map_err(|e| format!("写 {name}: {e}"))?;
+                write(name, data).map_err(|e| format!("写 {name}: {e}"))?;
             }
             let json = serde_json::to_string_pretty(meta).map_err(|e| format!("写 meta.json: {e}"))?;
-            std::fs::write(tmp.join("meta.json"), json).map_err(|e| format!("写 meta.json: {e}"))?;
+            write("meta.json", json.as_bytes()).map_err(|e| format!("写 meta.json: {e}"))?;
             // 同 id 的目录还在但 meta 读不出来（写坏了）：内容由 id 决定，用这次的新条目替换
             if dir.exists() {
                 std::fs::remove_dir_all(&dir).map_err(|e| format!("替换损坏条目 {}: {e}", dir.display()))?;
             }
-            std::fs::rename(&tmp, &dir).map_err(|e| format!("落库失败: {e}"))
+            std::fs::rename(&tmp, &dir).and_then(|_| fsutil::sync_parent(&dir)).map_err(|e| format!("落库失败: {e}"))
         })();
         if result.is_err() {
             let _ = std::fs::remove_dir_all(&tmp);

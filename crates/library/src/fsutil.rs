@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,47 +44,30 @@ pub(crate) fn tmp_sibling(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// 原子写：先写临时文件、落盘（fsync），再改名，最后把目录也落盘。中途断电或出错不会留下写了一半的目标文件。
+/// 原子写：临时文件 → 落盘 → 改名 → 落盘目录（[`bookconv::util::produce_then_replace`]）。
 pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
-    let tmp = tmp_sibling(path);
-    let result = (|| {
-        let mut f = File::create(&tmp)?;
-        f.write_all(data)?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, path)?;
-        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            File::open(dir)?.sync_all()?;
-        }
-        Ok::<(), std::io::Error>(())
-    })();
-    result.map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("写 {}: {e}", path.display())
-    })
+    bookconv::util::produce_then_replace(&tmp_sibling(path), path, |t| std::fs::write(t, data).map_err(|e| format!("写 {}: {e}", path.display())))
 }
 
-/// 把写好的临时文件 `tmp` 原子地换到 `dest`：先落盘 `tmp`，再改名，最后落盘目录（产物由优化器直接写进 `tmp`，
-/// `tmp` 用 [`tmp_sibling`] 取，和目标在同一目录）。失败时 `tmp` 留给调用方删。
-pub(crate) fn commit(tmp: &Path, dest: &Path) -> Result<(), String> {
-    let r = (|| {
-        File::open(tmp)?.sync_all()?;
-        std::fs::rename(tmp, dest)?;
-        sync_parent(dest)
-    })();
-    r.map_err(|e| format!("写 {}: {e}", dest.display()))
-}
+pub(crate) use bookconv::util::{commit, sync_parent};
 
-/// 落盘 `path` 所在的目录（改名、删除之后，让目录项的变化也落盘）。
-pub(crate) fn sync_parent(path: &Path) -> std::io::Result<()> {
-    match path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        Some(dir) => File::open(dir)?.sync_all(),
-        None => Ok(()),
-    }
-}
-
-/// 读 JSON 文件；不在或读不出来返回 `None`。
+/// 读 JSON 文件；不在或读不出来返回 `None`（只读的场合用；会改书库的命令持锁时先用 [`check_json`] 核对过）。
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+/// 核对 JSON 文件读得出来：不在算好的；在但读不出、解析不了 → 错误。
+/// 书库的记录（`sources.json`、生成记录）坏了要停下来，不能当成空的再写回去——那会丢掉全部记录
+/// （生成记录丢了，旧产物再也认不出来，每本书在产物目录里变两份）。
+pub(crate) fn check_json<T: DeserializeOwned>(path: &Path) -> Result<(), String> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("读 {}: {e}", path.display())),
+    };
+    serde_json::from_slice::<T>(&bytes)
+        .map(|_| ())
+        .map_err(|e| format!("{} 坏了（{e}）：修好它，或者挪走它（记录会重建，但以前的产物认不出来了）再试", path.display()))
 }
 
 /// 原子写 JSON（缩进格式）。序列化失败（比如路径不是 UTF-8）返回错误，不 panic。
@@ -204,6 +186,15 @@ mod tests {
         assert_eq!(read_json::<Vec<i32>>(&p), Some(vec![1, 2]), "失败时原文件不动");
         let names: Vec<String> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["a.json"], "不留临时文件");
+    }
+
+    #[test]
+    fn broken_json_is_an_error_missing_is_fine() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("s.json");
+        assert!(check_json::<Vec<i32>>(&p).is_ok(), "不在不算错");
+        std::fs::write(&p, b"[1,").unwrap();
+        assert!(check_json::<Vec<i32>>(&p).unwrap_err().contains("坏了"));
     }
 
     #[test]
