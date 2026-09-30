@@ -1,6 +1,6 @@
 # 排版与优化规则
 
-`booklib build` 对每本书做的事，以及背后的理由。规则的版本号是 `OPTIMIZE_VERSION`（现在 34），正文里的"v27""v34"指从哪一版起这样做。实现在 `crates/bookconv`：清洗层 `wash/`、优化器 `optimize/`、图片 `imgopt.rs`。
+`booklib build` 对每本书做的事，以及背后的理由。规则的版本号是 `OPTIMIZE_VERSION`（现在 35），正文里的"v27""v34"指从哪一版起这样做。实现在 `crates/bookconv`：清洗层 `wash/`、优化器 `optimize/`、图片 `imgopt.rs`。
 三个阅读模式用的是同一套规则；`kindle` 模式最后再把优化好的 EPUB 转成 AZW3（只转格式，不改内容，见 [AZW3 写出器](azw3.md)）。
 
 ![优化流程](img/optimize.svg)
@@ -63,6 +63,9 @@
 | 点标号 | 跳到章末注释，用阅读器的"返回"回来 | 阅读器认得出注释的话弹窗显示 |
 | 标号 | 普通 `<a href="#id">`（xochitl 不认 `epub:type`，不带） | `<a epub:type="noteref">` |
 | 章末的每条注释 | `<div>` | `<aside epub:type="footnote">` |
+
+- **回链**（注释里点一下跳回正文的那个链接）：原书有的，`kindle`、`ireader` 保留（改成同文件锚点，v35）；`xochitl` 去掉
+  （它遇到互相链接的一对会整对丢掉，正向也点不动），返回靠 xochitl 自己的"返回第 X 页"。见 profile 的 `note_backlinks`。
 
 - 注释正文用相对单位 `0.85em`，比正文小一号（五号→小五是 0.857），跟着阅读器字号一起缩放。
 - 每条注释带 `eink-note` 类，样式表里是 `page-break-inside: avoid`：一条注释不会被拆到两页（长过一页的阅读器照常断开）。

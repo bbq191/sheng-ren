@@ -145,11 +145,37 @@ fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize
     (out, links)
 }
 
+/// `<head>` 里只留 `<title>`、`<meta>`、`<link>`、`<style>`、`<base>`：别的元素和散落的文字去掉。
+/// EPUB 阅读器按 XHTML 处理，`<head>` 里的东西一概不显示；Kindle 会把它们当正文显示在章首——
+/// 《绝叫》原书每章 `<head>` 里漏进一个 SVG 封面和一大段样式代码（多一个 `</div>*/` 把样式表截断了），
+/// 在 Kindle 上满页代码（2026-09-30 真机）。只动 `<head>`，正文一个字不改（EPUB 阅读器本来就看不到这些）。
+fn clean_head(html: &str) -> Cow<'_, str> {
+    const KEEP: [&str; 5] = ["title", "meta", "link", "style", "base"];
+    let Some(open) = html::tags(html).find(|t| t.is_start() && t.is("head")) else { return Cow::Borrowed(html) };
+    let Some(close) = html::find_close(html, open.end, "head") else { return Cow::Borrowed(html) };
+    let mut kept = String::new();
+    let mut pos = open.end;
+    for t in html::tags_in(html, open.end, close.start) {
+        if t.start < pos || !t.is_start() || !KEEP.iter().any(|k| t.is(k)) {
+            continue;
+        }
+        // title、style 连同内容和闭合标签一起留
+        let end = if t.is("title") || t.is("style") { html::find_close(html, t.end, t.name).map_or(t.end, |c| c.end) } else { t.end };
+        kept.push_str(&html[t.start..end]);
+        pos = end;
+    }
+    if html[open.end..close.start] == kept {
+        return Cow::Borrowed(html);
+    }
+    Cow::Owned(format!("{}{kept}{}", &html[..open.end], &html[close.start..]))
+}
+
 fn rewrite_doc(html: &str, aid: &str, cx: &DocCtx) -> Result<Rewritten, String> {
     static SCRIPT: OnceLock<Regex> = OnceLock::new();
     static STYLE: OnceLock<Regex> = OnceLock::new();
     let path = cx.path;
-    let html = SCRIPT.get_or_init(|| Regex::new(r#"(?is)<script\b.*?</script>"#).unwrap()).replace_all(html, "");
+    let html = clean_head(html);
+    let html = SCRIPT.get_or_init(|| Regex::new(r#"(?is)<script\b.*?</script>"#).unwrap()).replace_all(&html, "");
     let html = STYLE
         .get_or_init(|| Regex::new(r#"(?is)(<style\b[^>]*>)(.*?)(</style>)"#).unwrap())
         .replace_all(&html, |c: &regex::Captures| format!("{}{}{}", &c[1], rewrite_css(&c[2], path, cx.res), &c[3]));
@@ -287,6 +313,14 @@ mod tests {
         let book = Loaded { meta: Default::default(), docs, css: vec![], images: vec![], cover: None, toc: vec![] };
         let mut w = Vec::new();
         (layout(&book, res, &mut w).unwrap(), w)
+    }
+
+    #[test]
+    fn stray_head_content_dropped_title_and_styles_kept() {
+        let h = r#"<html><head><title>T</title><svg><image href="a.jpg"/></svg></div>*/ .x{a:b}<link rel="stylesheet" href="s.css"/><style>p{}</style></head><body><p>正文</p></body></html>"#;
+        assert_eq!(clean_head(h), r#"<html><head><title>T</title><link rel="stylesheet" href="s.css"/><style>p{}</style></head><body><p>正文</p></body></html>"#);
+        let ok = r#"<html><head><title>T</title></head><body/></html>"#;
+        assert!(matches!(clean_head(ok), Cow::Borrowed(_)), "干净的不动");
     }
 
     #[test]

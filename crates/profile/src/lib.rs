@@ -93,6 +93,9 @@ pub struct Profile {
     pub notes: Notes,
     /// 只有图标的注释标号怎么办（TOML 里不写是 `keep`）。
     pub note_icons: NoteIcons,
+    /// 保留原书注释里"跳回正文"的回链（TOML 里不写是 `true`）。xochitl 写 `false`：它遇到标号↔注释互相链接的一对，
+    /// 两条链接都丢掉（正向也点不动），只能去掉回链、返回靠阅读器自己的"返回"。Kindle 自带阅读器没有可靠的"返回"，要靠回链。
+    pub note_backlinks: bool,
     /// 各格式在阅读器里的真实可阅读范围（像素，竖屏）；没有的格式用 `screen`。
     readable: BTreeMap<Format, Screen>,
     /// 漫画页图到可阅读范围四边的白边（像素）：图保比缩放进"阅读范围 − 2×白边"的框，受限的那条边两侧正好是这么宽。
@@ -117,6 +120,8 @@ struct ProfileFile {
     notes: Notes,
     #[serde(default)]
     note_icons: NoteIcons,
+    #[serde(default = "yes")]
+    note_backlinks: bool,
     #[serde(default)]
     readable: BTreeMap<Format, Screen>,
     comic_margin: Option<u32>,
@@ -124,11 +129,15 @@ struct ProfileFile {
     comic_readable: Option<Screen>,
 }
 
+fn yes() -> bool {
+    true
+}
+
 impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable };
         p.validate()?;
         Ok(p)
     }
