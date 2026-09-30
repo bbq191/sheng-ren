@@ -3,7 +3,7 @@
 //! clean-room：依 MobileRead 的 MOBI 容器文档，加上对 KF8 样本文件的**黑盒数据分析**（只看文件字节，不看任何
 //! 工具的代码）实现，不参考 GPL 的 KindleUnpack / Calibre 代码；读取侧 `bookconv::convert::{palm, kf8}` 做往返校验。
 //!
-//! 输入应是已经按设备优化过的 EPUB（`epub-optimize --device=kindle-…`）；这里只做格式转换，不改内容。
+//! 输入应是已经按设备优化过的 EPUB（`epub-optimize --device=kindle`）；这里只做格式转换，不改内容。
 //! 不嵌字体（`@font-face` 去掉，字体交给阅读器设置）；SVG 图片暂不支持（引用保持原样）。
 
 mod book;
@@ -29,7 +29,8 @@ pub enum CdeType {
 #[derive(Clone, Debug)]
 pub struct Opts {
     pub cdetype: CdeType,
-    /// 固定唯一 ID 与时间戳（测试要可重复；书库用书的 id 和入库时间，重建后 Kindle 仍认作同一本书）；`None` 按当前时间生成。
+    /// 固定唯一 ID 与时间戳（书库用书的 id 和入库时间，重建后 Kindle 仍认作同一本书）；`None` 按书自己派生：
+    /// ID 取 OPF 唯一标识符的哈希（没有就取 OPF 原文的哈希），时间取 `dcterms:modified`（没有就 2000-01-01）。
     pub fixed_id: Option<(u32, u32)>,
 }
 
@@ -38,6 +39,9 @@ impl Default for Opts {
         Opts { cdetype: CdeType::Pdoc, fixed_id: None }
     }
 }
+
+/// 书里没有可用的 `dcterms:modified` 时的时间戳：2000-01-01T00:00:00Z（和优化器升级 EPUB 3 时补的固定值一致）。
+const DEFAULT_TIMESTAMP: u32 = 946_684_800;
 
 /// 缩略图高度（像素）。
 const THUMB_H: u32 = 330;
@@ -72,9 +76,10 @@ pub fn epub_to_azw3_with_warnings(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, 
         records.len() as u32 - 1
     });
     let layout = text::layout(&book, &res_map, &mut warnings)?;
+    // 没给固定 ID 时按书自己派生（不取当前时间）：同一本 EPUB 每次转出来逐字节相同，Kindle 也认作同一本书。
     let (uid, timestamp) = opts.fixed_id.unwrap_or_else(|| {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        ((now.as_nanos() as u32) ^ 0x5A5A_1234, now.as_secs() as u32)
+        let h = book.meta.stable_id;
+        ((h >> 32) as u32 ^ h as u32, book.meta.modified.unwrap_or(DEFAULT_TIMESTAMP))
     });
     let asin = format!("{uid:08x}-{timestamp:08x}");
     let meta = container::Meta {
