@@ -37,6 +37,10 @@ AZW3 只是**产物**格式，不是输入：入库仍然只收 EPUB、CBZ。
 
 ## 取舍
 
+- **漫画写成固定版式**：OPF 里有 KindleGen 约定的 `<meta name="fixed-layout" content="true"/>` 时，这一组声明（`fixed-layout`、`book-type`、
+  `orientation-lock`、`original-resolution`、`zero-gutter`、`zero-margin`）原样写成同名的 EXTH 记录 122–128（编号见 MobileRead Wiki 的 MOBI 页）。
+  书库的 `kindle` 模式给漫画写上这组声明、画布是整屏 1272×1696（`bookconv::comicfxl`），Kindle 按 1:1 整页显示、离屏幕 1px
+  （流式排版下 Kindle 强制留页边距做不到；2026-09-30 测试书截图逐像素对齐）。没有 `fixed-layout = true` 的书这组一概不写。
 - **不嵌字体**：去掉 `@font-face`，字体交给阅读器设置。
 - **`<head>` 里只留 title、meta、link、style、base**：EPUB 阅读器不显示 `<head>`，Kindle 却会把里面散落的文字、图显示在章首
   （《绝叫》原书每章 `<head>` 里漏进一段样式代码，Kindle 上满页代码，2026-09-30 真机）。正文不动。
@@ -44,7 +48,7 @@ AZW3 只是**产物**格式，不是输入：入库仍然只收 EPUB、CBZ。
 - **归类**：缺省"文档"（PDOC），侧载书的封面显示最稳；`--ebok` 归到"书籍"。书库生成时用缺省。
 - **唯一 ID**：书库生成时由书的 id 和入库时间派生，重建出来还是"同一本书"，Kindle 上的阅读进度不丢。
   单独用 `epub-to-azw3` 时由 OPF 的唯一标识符派生（没有就用整份 OPF），时间取 `dcterms:modified`：同一本书每次转出来逐字节一样。
-- 日漫（OPF spine 写了 `page-progression-direction="rtl"`）写 EXTH 527 = rtl（未在真机验证）。
+- 日漫（OPF spine 写了 `page-progression-direction="rtl"`）写 EXTH 527 = rtl（翻页方向在真机上还没专门看过）。
 - 找不到目标 id 的链接、目录项会落到所在章节开头，并给出警告（书库生成时显示在这本书的输出里）。
 
 ## 验证
@@ -53,10 +57,11 @@ AZW3 只是**产物**格式，不是输入：入库仍然只收 EPUB、CBZ。
 - `tools/kf8/textcheck.py 文件.azw3 源.epub`：EPUB 按 spine 顺序、AZW3 按片段顺序取正文的可见文字（去掉标签、注释、script/style，还原字符引用，不计空白），
   整本书的字符序列逐字比对，一致时报 `SAME`，不一致时报第一处差异、退出码 1。源 EPUB 用**优化后的**那份（AZW3 就是从它转的）。
 - `tools/kf8/` 另有 `dump.py`（记录 0、MOBI 头、EXTH）、`indexes.py`（FDST、片段/骨架/目录索引），`kf8lib.py` 是它们共用的只读解析。
-- **2026-09-30 本机**（没上真机）：`~/Documents/ereader/books` 里 28 本文字书全部按 `kindle` 模式优化 → AZW3，`textcheck.py` 都是 `SAME`（包括 134MB 的《金庸作品全集》）；
-  196 页的漫画《哆啦A夢全彩版》卷01 转成 1104×1546 的灰度页，AZW3 93MB。
+- **本机**（2026-09-30）：`~/Documents/ereader/books` 里 28 本文字书和一卷漫画按 `kindle` 模式优化 → AZW3，`textcheck.py` 都是 `SAME`（包括 134MB 的《金庸作品全集》）；
+  196 页的《哆啦A夢全彩版》卷01 写成固定版式，每页 1272×1696 灰度，AZW3 约 107MB。
 - **Kindle PW12 真机**（2026-09-27，当时的 AZW3 线，删掉之前）：测量书；《疯探》（封面、章标题独立一页、字号字体可调、目录跳转）；《桥头楼上》（节缩进挂在章下、跳转正确）；
-  《ABC谋杀案》（注释标号跳转与返回）；135MB 漫画能打开、翻页正常。**2026-09-30 恢复后的产物还没在真机上看过**：分页、注释跳转、图标注释换成的数字标号、漫画都要重新看
-  （见[验证情况](typesetting.md#验证情况)）。
+  《ABC谋杀案》（注释标号跳转与返回）；135MB 漫画能打开、翻页正常。
+- **Kindle PW12 真机**（2026-09-30，现在的产物）：文字书字号字体、分页、目录、注释跳转与返回 ✓（《绝叫》的两处问题修好后复验）；固定版式测试书整页铺满 ✓。
+  逐条见[验证情况](typesetting.md#验证情况)。
 
 改了会影响产物字节的地方，要把 `azw3::WRITER_VERSION` 加一（见[开发 · 版本号](development.md#版本号)）；怎么确认一次改动没改变产物，见[开发 · 真书回归检查](development.md#真书回归检查)。

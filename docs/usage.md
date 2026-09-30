@@ -243,7 +243,7 @@ booklib dedupe ~/Documents/ereader
 
 ```text
 ireader      掌阅自带阅读器（iReader Ocean 5 Pro）  EPUB  屏幕 1264×1680  阅读范围 1264×1680  黑白
-kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  AZW3  屏幕 1264×1680  阅读范围 1104×1546  黑白
+kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  AZW3  屏幕 1272×1696  阅读范围 1104×1546  黑白
 xochitl      xochitl（reMarkable Paper Pro Move 原生阅读器）  EPUB  屏幕 954×1696  阅读范围 842×1455  彩色
 ```
 
@@ -342,7 +342,9 @@ ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
 只改了 CBZ 的转换时，只有 CBZ 来源的书过期，原本就是 EPUB 的书不受影响。
 
 **我在阅读器里改了页边距，要做什么？**
-可阅读范围跟着变了。漫画要按新范围重新量一次、写进 `书库/profiles/<模式 id>.toml`，再 `build`。文字书不受影响。
+漫画不受影响：Kindle 的漫画是固定版式、掌阅整页铺满、Move 的漫画按登记的页边距 1 排，都不看阅读器里的页边距设置。
+文字书的正文自动重排，也不受影响；只有文字书里的大插图按阅读范围缩放，差一点没关系。真要精确，按[设备与可阅读范围](devices.md#在真机上测量)重量一次，
+写进 `书库/profiles/<模式 id>.toml`，再 `build`。
 
 **MOBI、AZW3、PDF 的书怎么办？**
 现在不收，入库只收 EPUB、CBZ（AZW3 只是给 Kindle 的产物格式）。可以先用别的工具转成 EPUB 再入库；带 DRM 的书现在一律拒收。

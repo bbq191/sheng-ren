@@ -5,59 +5,61 @@
 优化按**阅读模式**来：一种阅读软件在一类屏幕上的样子，一个模式出一份产物。每个模式是一个 TOML 文件，文件名就是 id（`--device=` 的值）。
 内置的在 `crates/profile/profiles/`，构建时整个目录嵌进程序，**增删模式只要增删文件，不用改代码**。
 
-| 模式 | 给谁读 | 产物 | 屏幕 | 阅读范围 | 黑白 / 彩色 | 注释 |
+| 模式 | 给谁读 | 产物 | 屏幕（截图坐标） | 文字书阅读范围 | 漫画画布 | 黑白 / 彩色 |
 |---|---|---|---|---|---|---|
-| `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | AZW3 | 1264×1680，300ppi | 1104×1546 | 黑白（漫画转 256 级灰度） | 跳转；图标标号换数字 |
-| `ireader` | 掌阅 iReader Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 黑白（漫画转 256 级灰度） | 跳转；图标标号换数字 |
-| `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB | 954×1696，264ppi | 842×1455（漫画 952×1457） | 彩色 | 跳转；图标标号换数字 |
+| `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | AZW3 | 1272×1696，300ppi | 1104×1546 | 1272×1696（固定版式，整屏） | 黑白（漫画转 256 级灰度） |
+| `ireader` | 掌阅 iReader Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白（漫画转 256 级灰度） |
+| `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB | 954×1696，264ppi | 842×1455 | 952×1457（页边距设成 1） | 彩色 |
 
-三个模式用的是同一套优化规则（`OptimizeOpts::for_profile`），区别全在 profile 的字段里。`kindle` 模式先优化出 EPUB，再转成 AZW3（见 [AZW3 写出器](azw3.md)）。
+三个模式用的是同一套优化规则（`OptimizeOpts::for_profile`），区别全在 profile 的字段里——阅读器各有各的怪癖，每个怪癖对应一个字段：
+
+![三台阅读器的怪癖和对应的字段](img/reader-quirks.svg)
 
 ```toml
-# crates/profile/profiles/ireader.toml
+# crates/profile/profiles/ireader.toml（节选）
 name = "掌阅自带阅读器（iReader Ocean 5 Pro）"
 ppi = 300
-color = false            # 黑白屏：漫画转 256 级灰度
-formats = ["epub"]       # 产物格式：epub 或 azw3（取第一个）
+color = false                  # 黑白屏：漫画转 256 级灰度
+formats = ["epub"]             # 产物格式：epub 或 azw3
 notes = "jump"
 note_icons = "number"
 comic_margin = 1
+comic_page_direction = "ltr"
 
-[screen]                 # 标称分辨率，竖屏填写（width ≤ height）
+[screen]                       # 屏幕，按截图的像素写（width ≤ height）
 width = 1264
 height = 1680
 
-[readable.epub]          # 真实可阅读范围（可选，不写就用 [screen]）；键是产物格式，kindle 写 [readable.azw3]
+[readable.epub]                # 真实可阅读范围（可选，不写就用 [screen]）；键是产物格式，kindle 写 [readable.azw3]
 width = 1264
 height = 1680
 ```
 
-- `formats`：产物格式，`["epub"]` 或 `["azw3"]`。`azw3` 是先按同样的规则优化出 EPUB、再转 AZW3；阅读范围取对应格式的 `[readable.<格式>]`。
-- `notes = "jump"` 或 `"popup"`：注释是点标号跳到章末再返回，还是弹窗。三个内置模式都用 `jump`；`popup` 会给标号标 `epub:type="noteref"`、注释写成 `<aside epub:type="footnote">`，现在没有模式用。见[排版规则](typesetting.md#3-注释点标号跳到章末比正文小一号)。
-- `comic_margin = 1`（可选，缺省 1）：漫画页图到可阅读范围四边的白边（像素）。图保比缩放进"阅读范围 − 2×白边"的框、居中，
-  受限的那条边两侧正好这么宽；须小于阅读范围短边的 1/4。用户要的是**离屏幕边缘** 1px：阅读范围等于整屏时（`ireader`）才是这个意思；
-  `kindle` 的阅读器自己还留左右 84、上下 75px，离屏幕 1px **还没做到**（待查，也许要用固定版式）。见下面的图。
-- `note_icons = "keep"` 或 `"number"`（可选，缺省 keep）：只有小图标的注释标号保留图标（限一个字高）还是换成上标数字。三个内置模式都用 number：
-  xochitl 上实测只有图的链接点不了、CSS 限不住图标大小；Kindle 以前的 AZW3 就是数字、真机能点；掌阅自带阅读器上图标能不能点没验证，数字最稳。
-- `note_backlinks = true` 或 `false`（可选，缺省 true）：保留原书注释里"跳回正文"的回链。只有 `xochitl` 写 `false`：它遇到标号和注释互相链接的一对会整对丢掉
-  （正向也点不动），只好去掉回链、返回靠它自己的"返回第 X 页"；Kindle 自带阅读器点注释后跳不回原处（2026-09-30 真机），要靠回链。
-- `comic_page_direction = "ltr"` 或 `"rtl"`（可选）：漫画的翻页方向改成这个（写进 OPF 的 `page-progression-direction`），不写就照原书。
-  只有 `ireader` 写 `"ltr"`：掌阅遇到从右往左翻的书（日漫都这样写）会四周留边、整页图铺不满，离屏幕左右 92、上下 124px（2026-09-30 真机：
-  只差这一个属性的两本测试书，一本铺满、一本留边；固定版式、页面写法都不影响）。用户选了铺满，代价是日漫在掌阅上也往左翻。
-- `comic_reader_margins = 1`（可选）：漫画在阅读器里要设成的页边距。写了就给漫画写标记 `META-INF/eink-reader-margins`（`xochitl/comic-margins.sh` 凭它登记），
-  文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（`bookconv::comicpad`）。xochitl 用。
-- `[comic_readable]`（可选）：漫画页排版用的阅读范围（设成上面的页边距后实测），没写就用产物格式的阅读范围。
-- `notes`、`note_icons`、`note_backlinks`、`comic_page_direction`、`comic_margin`、`comic_readable`、`comic_reader_margins` 都进指纹，改了书库里的书都算过期。
-- 写了不认识的字段、不认识的格式会报错，防止拼错后被悄悄忽略。
-- `[readable.<格式>]` 不能超过屏幕尺寸。
-- 阅读范围以**截图的像素**为准。截图分辨率和标称的 `[screen]` 不一定是同一个坐标系（Kindle 的截图是 1272×1696，标称 1264×1680），量出来的数照截图写。
+| 字段 | 意思 | 缺省 | 谁不一样、为什么 |
+|---|---|---|---|
+| `formats` | 产物格式，`["epub"]` 或 `["azw3"]`；`azw3` 是先按同样的规则优化出 EPUB 再转 | 必填 | `kindle` 是 AZW3：USB 传书只认它 |
+| `color` | 彩色屏；黑白屏的漫画转 256 级灰度 | 必填 | `xochitl` 彩色 |
+| `[screen]`、`[readable.<格式>]` | 屏幕、真实可阅读范围（见下一节） | 阅读范围不写 = 屏幕 | 三台各量各的 |
+| `notes` | `"jump"`：点标号跳到章末注释；`"popup"`：标 `epub:type` 弹窗 | 必填 | 三台都是 `jump`；`popup` 留给自定义模式 |
+| `note_icons` | 只有小图标的注释标号：`"keep"` 保留图标（限一个字高）、`"number"` 换成上标数字 | `keep` | 三台都是 `number`：xochitl 上只有图的链接点不了、CSS 限不住图标；另两台没验证过图标能不能点，数字最稳 |
+| `note_backlinks` | 保留原书注释里"跳回正文"的回链 | `true` | `xochitl` 是 `false`：它遇到标号和注释互相链接的一对会整对丢掉（正向也点不动）；Kindle 点注释后没有可靠的"返回"，要靠回链（2026-09-30 真机） |
+| `comic_margin` | 漫画的图到画布四边的白边（像素） | 1 | `xochitl` 是 0：页边距设成 1 后 xochitl 自己留了 1px |
+| `[comic_readable]` | 漫画画布；不写就用产物格式的阅读范围 | — | `kindle` 整屏 1272×1696、`xochitl` 952×1457 |
+| `comic_fixed_layout` | 漫画写成固定版式（`bookconv::comicfxl`） | `false` | `kindle` 是 `true`：流式排版下 Kindle 强制留页边距（最小档左右还有 101px），固定版式才能整页铺满 |
+| `comic_page_direction` | 漫画的翻页方向改成 `"ltr"` 或 `"rtl"` | 照原书 | `ireader` 是 `"ltr"`：掌阅遇到往右翻（日漫都这样写）的书会四周留边、铺不满；用户选了铺满，日漫在掌阅上也往左翻 |
+| `comic_reader_margins` | 漫画在阅读器里要设成的页边距：写标记 `META-INF/eink-reader-margins` 供登记脚本用，文字页补回留白（`bookconv::comicpad`） | 不写 | `xochitl` 是 1：xochitl 的四周留白 CSS 改不动，只能靠页边距（见[使用指南](usage.md#move-上的漫画登记页边距)） |
+
+- 这些字段都进指纹，改了哪个，书库里受影响的书都算过期、下次重建。
+- 写了不认识的字段、不认识的格式、`comic_page_direction` 写了别的值，都会报错，防止拼错后被悄悄忽略。
+- `[readable.<格式>]`、`[comic_readable]` 不能超过 `[screen]`。
+- **屏幕和阅读范围都按截图的像素写**：Kindle 截图是 1272×1696（设备实际的显示缓冲区），标称 1264×1680，写的是前者。
 - **自定义模式**：放在书库的 `profiles/` 目录（缺省 `~/.local/share/booklib/profiles/<id>.toml`），同 id 覆盖内置的。`booklib devices` 会列出来。
 
 ### 为什么这样分
 
 - **三台设备各用自带阅读器**（2026-09-30 用户定）：掌阅、Kindle 上的 KOReader 卸掉了，换回自带阅读器；Move 上的 KOReader 2026-09-29 就撤了（屏幕刷新由 xochitl 那一层控制，翻页闪得厉害）。
-- **Kindle 单独一个模式**：USB 传书只认 AZW3，而且自带阅读器留页边距、页眉页脚，阅读范围（1104×1546）比掌阅小。
-- **掌阅单独一个模式**：屏幕和 Kindle 一样是 7 英寸 1264×1680、300ppi 黑白屏（2026-09-27 核实），但读 EPUB，整页图铺满整屏，阅读范围不同。
+- **Kindle 单独一个模式**：USB 传书只认 AZW3，自带阅读器留页边距、页眉页脚，漫画要写成固定版式。
+- **掌阅单独一个模式**：屏幕和 Kindle 一样是 7 英寸 300ppi 黑白屏（2026-09-27 核实），但读 EPUB，整页图铺满整屏。
 
 旧的设备 id（`kindle-pw12-sig`、`ireader-ocean5-pro`、`rmpp-move`、`rmpp-move-koreader`、`koreader`）已经不是阅读模式了；书库里它们的旧产物不再管理。
 拷哪个文件夹、拷到哪，见[使用指南 · 传书到设备](usage.md#传书到设备)。
@@ -77,12 +79,15 @@ height = 1680
 
 各模式的阅读范围从哪来：
 
-**`kindle`：1104×1546**。2026-09-27 用测量书（转成 AZW3）在 Kindle 真机上截屏实测：左右页边距各 84，上下页眉页脚各 75。
-截图分辨率是 1272×1696（设备实际的显示缓冲区），不是标称的 1264×1680；阅读范围按截图像素量，和 `[screen]` 相比差不到 1%。
-比页面窄的图片靠左放、不居中，所以漫画要补白到这个比例。这 84/75 是阅读器自己留的，所以漫画离屏幕边缘 1px 还没做到。
+**`kindle`：文字书 1104×1546，漫画整屏 1272×1696（固定版式）**。
+- 2026-09-27 用测量书（转成 AZW3）在 Kindle 真机上截屏实测：左右页边距各 84，上下页眉页脚各 75；比页面窄的图片靠左放、不居中。
+  2026-09-30 用户把页边距调到最小后截图，左右还有 101px（每次截图角落也会叫出页脚），所以流式排版下离屏幕 1px 做不到。
+- 漫画写成固定版式：每页画布就是整屏 1272×1696，Kindle 按 1:1 整页显示（2026-09-30 测试书截图和页面图逐像素对齐，四边偏差 0）。
 
 **`ireader`：1264×1680（整屏）**。2026-09-27 用测量书在掌阅真机上截屏实测：只放一张大图的页面，掌阅把图铺满整屏（连页眉页脚区域也盖住），
-四边留白都是 0，所以 `comic_margin = 1` 就是离屏幕 1px（现在的产物还没重新上真机看）。图文混排时图片受正文页边距限制，不适用。
+四边留白都是 0，所以 `comic_margin = 1` 就是离屏幕 1px。图文混排时图片受正文页边距限制，不适用。
+但书声明了往右翻（`page-progression-direction="rtl"`）时，掌阅不铺满、四周留左右 92、上下 124px（2026-09-30 真机：只差这一个属性的两本测试书，
+一本铺满、一本留边；固定版式、页面写法都不影响），所以 `ireader` 的漫画改成往左翻。
 
 **`xochitl`：842×1455（文字书），漫画 952×1457**。
 - xochitl 默认页边距 56：宽 = 954 − 2×56；高按固定上下留白 462.1pt 换算（2026-09-21 实测）。改了页边距要跟着改（28 档 → 898 宽）。
@@ -92,7 +97,7 @@ height = 1680
   这时图框左上角在 (1, 112)、宽 952、高 1457；2026-09-29 真机排出的 PDF 里 952×1457 的页原样显示，离屏幕左右各 1px、上 112、下 127px
   （上下是 xochitl 固定留的，做不到 1px）；文字页、混排页的字离边约 58px。
 
-![漫画页在三台设备上的位置](img/comic-geometry.svg)
+漫画在三台上怎么做到离屏幕 1px，见[排版规则 · 离屏幕边缘 1px](typesetting.md#离屏幕边缘-1px三台各一种做法)。
 
 ## xochitl 怎么存 EPUB 和阅读进度（2026-09-29 真机摸底，只读）
 
@@ -155,5 +160,5 @@ cargo run --release -p bookconv --bin readable-measure -- --device=kindle 竖长
 | 阅读器 | 实测行为 |
 |---|---|
 | xochitl（Move） | 正文链接只认同一文件内的 `#锚点`；不认行内样式；NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录；页边距 1 时带 class 的 `<body>` 里图片会被吃掉约 20pt 宽（漫画的图页因此去掉 body 的类）；`padding` 一律不认，`margin` 用 pt 生效；页边距设置只对单本书；只有图、没有字的链接点了没反应，外链 CSS 的 `height:1em` 限不住图片 |
-| Kindle 自带阅读器（PW12） | USB 传书只认 AZW3，不认 EPUB；比页面窄的图片靠左不居中；侧载书归"文档"分类时封面最稳（2026-09-27 真机） |
+| Kindle 自带阅读器（PW12） | USB 传书只认 AZW3，不认 EPUB；比页面窄的图片靠左不居中；侧载书归"文档"分类时封面最稳（2026-09-27 真机）；流式排版强制留页边距（最小档左右 101px），固定版式按画布 1:1 整页显示；会把 `<head>` 里散落的文字显示在章首；点注释跳过去后没有可靠的"返回"，靠注释里的回链回来；书旁 `.sdr` 里的阅读进度只写不读（2026-09-30 真机） |
 | 掌阅自带阅读器 | 只放一张大图的页面，图片铺满整屏（2026-09-27 真机；`ireader` 的阅读范围就是按这个量的）；但书声明了从右往左翻（`page-progression-direction="rtl"`）时不铺满，四周留左右 92、上下 124px（2026-09-30 真机） |
