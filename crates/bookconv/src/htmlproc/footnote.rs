@@ -353,6 +353,20 @@ fn mentions_referenced_id(html: &str, referenced: &std::collections::HashSet<Str
 /// 注释块是合法 `<li id="a_X_Y"><p>…<a href="#c_X_Y">`（真 2-环）——真 img 也换上标、**id 保留**，
 /// 环交给前置的 `break_footnote_cycles` 拆（回链去链、id 留作落点）；合法嵌套的 li 不动。
 pub fn fix_duokan_markers(html: &str) -> String {
+    fix_duokan_markers_with(html, true)
+}
+
+/// 注释链接的前处理（优化器第二遍的前两步）：`drop_backlinks` 时先拆"标号↔注释"互指环（注释里的回链去链），
+/// 再换多看标记（连同它注释块里的回链一起去链）；不去回链时两处回链都留着（profile `note_backlinks`）。
+pub fn prepare_note_links(html: &str, drop_backlinks: bool) -> String {
+    if drop_backlinks {
+        fix_duokan_markers_with(&crate::htmlproc::break_footnote_cycles(html), true)
+    } else {
+        fix_duokan_markers_with(html, false)
+    }
+}
+
+fn fix_duokan_markers_with(html: &str, unlink_backlinks: bool) -> String {
     let mut local = 0usize;
     // 标记替换（转义 img 版 / Calibre 真 img 版共用）：保留 href 与 `<a>` 自带 id（Calibre 形态的
     // 回链落点，丢了则注释里的回链悬空 → reMarkable 判互指整对丢弃）。
@@ -390,10 +404,12 @@ pub fn fix_duokan_markers(html: &str) -> String {
             rewrite(c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), c.get(0).unwrap().as_str(), false)
         })
         .into_owned();
-    // 去链注释块里的悬空回链（#c_X_Y），否则 reMarkable 判互指对整对丢弃、正向也点不动。
-    let unlinked = duokan_backlink_re()
-        .replace_all(&markers, |c: &regex::Captures| c.get(1).unwrap().as_str().to_string())
-        .into_owned();
+    // 去链注释块里的回链（#c_X_Y），否则 reMarkable 判互指对整对丢弃、正向也点不动（只在去回链的模式）。
+    let unlinked = if unlink_backlinks {
+        duokan_backlink_re().replace_all(&markers, |c: &regex::Captures| c.get(1).unwrap().as_str().to_string()).into_owned()
+    } else {
+        markers
+    };
     // 拍平注释块的无效嵌套 <p>（成簇相邻时会被 reMarkable 吞掉一条），锚点保留。
     duokan_note_block_re()
         .replace_all(&unlinked, |c: &regex::Captures| {

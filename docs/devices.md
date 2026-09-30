@@ -39,10 +39,12 @@ height = 1680
   `kindle` 的阅读器自己还留左右 84、上下 75px，离屏幕 1px **还没做到**（待查，也许要用固定版式）。见下面的图。
 - `note_icons = "keep"` 或 `"number"`（可选，缺省 keep）：只有小图标的注释标号保留图标（限一个字高）还是换成上标数字。三个内置模式都用 number：
   xochitl 上实测只有图的链接点不了、CSS 限不住图标大小；Kindle 以前的 AZW3 就是数字、真机能点；掌阅自带阅读器上图标能不能点没验证，数字最稳。
+- `note_backlinks = true` 或 `false`（可选，缺省 true）：保留原书注释里"跳回正文"的回链。只有 `xochitl` 写 `false`：它遇到标号和注释互相链接的一对会整对丢掉
+  （正向也点不动），只好去掉回链、返回靠它自己的"返回第 X 页"；Kindle 自带阅读器点注释后跳不回原处（2026-09-30 真机），要靠回链。
 - `comic_reader_margins = 1`（可选）：漫画在阅读器里要设成的页边距。写了就给漫画写标记 `META-INF/eink-reader-margins`（`xochitl/comic-margins.sh` 凭它登记），
   文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（`bookconv::comicpad`）。xochitl 用。
 - `[comic_readable]`（可选）：漫画页排版用的阅读范围（设成上面的页边距后实测），没写就用产物格式的阅读范围。
-- `notes`、`note_icons`、`comic_margin`、`comic_readable`、`comic_reader_margins` 都进指纹，改了书库里的书都算过期。
+- `notes`、`note_icons`、`note_backlinks`、`comic_margin`、`comic_readable`、`comic_reader_margins` 都进指纹，改了书库里的书都算过期。
 - 写了不认识的字段、不认识的格式会报错，防止拼错后被悄悄忽略。
 - `[readable.<格式>]` 不能超过屏幕尺寸。
 - 阅读范围以**截图的像素**为准。截图分辨率和标称的 `[screen]` 不一定是同一个坐标系（Kindle 的截图是 1272×1696，标称 1264×1680），量出来的数照截图写。

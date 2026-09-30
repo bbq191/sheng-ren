@@ -19,6 +19,6 @@ mod footnote_cycles;
 pub use self::basic::{collapse_dup_id_attrs, dedup_ids_in_chapter, fix_internal_links};
 pub(crate) use self::basic::plan_id_renames;
 pub use self::fontlock::strip_font_locks;
-pub use self::footnote::{collect_footnote_notes, fix_duokan_markers, normalize_self_hrefs, number_icon_note_links, preserve_relink_footnotes, referenced_note_keys, NoteKey};
+pub use self::footnote::{collect_footnote_notes, fix_duokan_markers, normalize_self_hrefs, prepare_note_links, number_icon_note_links, preserve_relink_footnotes, referenced_note_keys, NoteKey};
 pub(crate) use self::footnote::note_semantic;
 pub use self::footnote_cycles::break_footnote_cycles;
