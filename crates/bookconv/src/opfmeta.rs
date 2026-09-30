@@ -586,6 +586,58 @@ mod tests {
         assert!(out.contains(r#"<dc:identifier id="uid">urn:x</dc:identifier>"#));
     }
 
+    /// 写一本最小 EPUB（图片 deflate 压缩，好看出是不是原样拷贝的）。
+    fn epub_with(path: &Path, cover_href: &str, cover_mt: &str) {
+        use std::io::Write;
+        let opf = format!(
+            r#"<package version="2.0" unique-identifier="uid"><metadata><dc:identifier id="uid">x</dc:identifier><dc:title>t</dc:title><meta name="cover" content="cv"/></metadata><manifest><item id="cv" href="{cover_href}" media-type="{cover_mt}"/><item id="p" href="p.png" media-type="image/png"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#
+        );
+        let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let d = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (n, b) in [
+            ("mimetype", b"application/epub+zip".as_slice()),
+            ("META-INF/container.xml", br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#.as_slice()),
+            ("OEBPS/content.opf", opf.as_bytes()),
+            ("OEBPS/c1.xhtml", "<html><body><p>&nbsp;正文</p></body></html>".as_bytes()),
+            ("OEBPS/p.png", &[7u8; 64]),
+            (&format!("OEBPS/{cover_href}"), b"GIF89a-old"),
+        ] {
+            z.start_file(n, d).unwrap();
+            z.write_all(b).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    /// 原封面是 GIF：新图原样写进这个条目、manifest 的 media-type 跟着改（此前转成 JPEG 塞进 .gif、media-type 还是 gif）；
+    /// 没改的条目原样拷贝（压缩数据不动）；不要规范整理时 XHTML 一个字节不变，要时 OPF 升到 3.0。
+    #[test]
+    fn edit_epub_retypes_gif_cover_and_raw_copies_the_rest() {
+        let d = tempfile::tempdir().unwrap();
+        let (src, dst) = (d.path().join("a.epub"), d.path().join("b.epub"));
+        epub_with(&src, "cv.gif", "image/gif");
+        let mut png = Vec::new();
+        image::RgbImage::new(4, 6).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let edits = Edits { cover: Some(CoverEdit::Set(png.clone())), ..Default::default() };
+        assert_eq!(edit_epub(&src, &dst, &edits).unwrap().cover_replaced, Some(true));
+        let mut z = zip::ZipArchive::new(std::fs::File::open(&dst).unwrap()).unwrap();
+        let names: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).collect();
+        assert_eq!(names[0], "mimetype");
+        assert_eq!(z.by_index(0).unwrap().compression(), zip::CompressionMethod::Stored);
+        let read = |z: &mut zip::ZipArchive<std::fs::File>, n: &str| crate::epubzip::read_by_name(z, n).unwrap();
+        assert_eq!(read(&mut z, "OEBPS/cv.gif"), png);
+        let opf = String::from_utf8(read(&mut z, "OEBPS/content.opf")).unwrap();
+        assert!(opf.contains(r#"<item id="cv" href="cv.gif" media-type="image/png"/>"#), "{opf}");
+        assert_eq!(read(&mut z, "OEBPS/c1.xhtml"), "<html><body><p>&nbsp;正文</p></body></html>".as_bytes(), "不整理：正文条目原样");
+        assert_eq!(z.by_name("OEBPS/p.png").unwrap().compression(), zip::CompressionMethod::Deflated, "没改的图片原样拷贝，压缩方式不变");
+
+        let edits = Edits { set: vec![(DcField::Title, vec!["新".into()])], normalize: true, ..Default::default() };
+        edit_epub(&src, &dst, &edits).unwrap();
+        let mut z = zip::ZipArchive::new(std::fs::File::open(&dst).unwrap()).unwrap();
+        let opf = String::from_utf8(read(&mut z, "OEBPS/content.opf")).unwrap();
+        assert!(opf.contains(r#"version="3.0""#) && opf.contains("<dc:title>新</dc:title>"), "{opf}");
+        assert_eq!(read(&mut z, "OEBPS/cv.gif"), b"GIF89a-old");
+    }
+
     #[test]
     fn ncx_title_replaced() {
         let ncx = "<ncx><docTitle><text>旧</text></docTitle><navMap/></ncx>";

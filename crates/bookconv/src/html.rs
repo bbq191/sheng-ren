@@ -395,6 +395,23 @@ pub fn rewrite_links<'a>(html: &'a str, mut f: impl FnMut(&str) -> Option<String
     })
 }
 
+/// 开标签的 `class` 里有没有 `class` 这个类（按空白分词，区分大小写）。
+pub fn has_class(tag: &str, class: &str) -> bool {
+    attrs(tag).iter().any(|a| a.is("class") && a.value.split_ascii_whitespace().any(|c| c == class))
+}
+
+/// 开标签加一个类：已经有这个类就原样返回（重复处理不会越加越多）；没有 `class` 或它是空的就写成这个类，否则追加在
+/// 原有的类后面。其它属性、原引号都保留；新加的 `class` 属性放在最后一个属性后面（见 [`set_attr`]）。
+pub fn add_class(tag: &str, class: &str) -> String {
+    if has_class(tag, class) {
+        return tag.to_string();
+    }
+    match attr_value(tag, "class").map(str::trim) {
+        Some(v) if !v.is_empty() => set_attr(tag, "class", &format!("{v} {class}")),
+        _ => set_attr(tag, "class", class),
+    }
+}
+
 // ───────────────────────── 链接 ─────────────────────────
 
 /// 链接值拆成 (路径, 锚点)；锚点是原文（可能百分号编码），没有 `#` 时为 `None`。

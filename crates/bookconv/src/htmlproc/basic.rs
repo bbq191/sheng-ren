@@ -47,14 +47,44 @@ pub fn collapse_dup_id_attrs(html: &str) -> String {
 /// 所有 `#fn1` 都跳到全书第一处。按章调用、跨章累积 `seen`：本章某 id 若已在别章出现过，就把它
 /// （及本章内指向它的**同文件** `href="#id"`）改成全书唯一名。跨文件 `href="f#id"` 这里看不到——开了清洗时
 /// 清洗层（`wash::dedup_ids_across_book`）已先在全书范围改名并同步改写所有文件的链接，走到这里不会再有跨章重复；
-/// 这里只是不清洗时的兜底。**先折叠单元素重复 id 属性**（非法 XHTML 兜底，见 `collapse_dup_id_attrs`），再做跨章值去重。
+/// 这里只是不清洗时的兜底。**先折叠单元素重复 id 属性**（非法 XHTML 兜底，见 `collapse_dup_id_attrs`），再把本章里重复的 id
+/// 改开（[`rename_repeated_ids`]），最后做跨章值去重。
 pub fn dedup_ids_in_chapter(html: &str, seen: &mut HashSet<String>) -> String {
     let html = &collapse_dup_id_attrs(html);
+    let html = &rename_repeated_ids(html, seen);
     let rename = plan_id_renames(html, seen);
     if rename.is_empty() {
         return html.to_string();
     }
     rename_ids(html, &rename)
+}
+
+/// 同一章里同一个 id 出现不止一次（`<p id="a">…<div id="a">`，不合法；不清洗的书、搬进本章的注释撞上本章原有的 id 都会这样）：
+/// 第一个不动，后面的元素各改成全书唯一的新名（`{id}-x{n}`，避开本章全部 id 和 `seen`）。本章指向它的 `#id` 不改——仍指向第一个
+/// （阅读器遇到重复 id 本来也是跳第一个）。没有重复时原样返回。
+fn rename_repeated_ids(html: &str, seen: &HashSet<String>) -> String {
+    let tags: Vec<html::Tag> = html::tags(html).filter(|t| t.is_start()).collect();
+    let ids: Vec<(usize, html::Attr)> = tags.iter().flat_map(|t| html::attrs(&html[t.start..t.end]).into_iter().filter(|a| a.is("id") && !a.value.is_empty()).map(move |a| (t.start, a))).collect();
+    let all: HashSet<&str> = ids.iter().map(|(_, a)| a.value).collect();
+    if all.len() == ids.len() {
+        return html.to_string();
+    }
+    let (mut first, mut taken): (HashSet<&str>, HashSet<String>) = (HashSet::new(), HashSet::new());
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for (pos, a) in &ids {
+        if first.insert(a.value) {
+            continue;
+        }
+        let mut n = 2usize;
+        let mut cand = format!("{}-x{n}", a.value);
+        while seen.contains(&cand) || all.contains(cand.as_str()) || taken.contains(&cand) {
+            n += 1;
+            cand = format!("{}-x{n}", a.value);
+        }
+        taken.insert(cand.clone());
+        edits.push((pos + a.value_start, pos + a.value_end, cand));
+    }
+    html::apply_edits(html, edits)
 }
 
 /// 本章里已在别处（`seen`）出现过的 id → 新名（`{id}-x{n}`，全书唯一）；本章新见到的 id 记进 `seen`。

@@ -82,6 +82,18 @@
         assert!(!css.contains("noteicon") && css.contains(".eink-note{"), "换成数字的模式去掉，别的规则不动: {css}");
     }
 
+    /// 只改标签上的 `preserveAspectRatio="none"`，正文里写着这串字的不动（此前对全文做字符串替换）。
+    #[test]
+    fn fix_cover_aspect_only_touches_the_attribute() {
+        let page = r#"<svg preserveaspectratio="none" viewBox="0 0 1 1"><image PreserveAspectRatio='none'/></svg><p>属性写法 preserveAspectRatio="none" 会拉伸</p><svg preserveAspectRatio="xMinYMin"/>"#;
+        assert_eq!(
+            fix_cover_aspect(page),
+            r#"<svg preserveAspectRatio="xMidYMid meet" viewBox="0 0 1 1"><image preserveAspectRatio='xMidYMid meet'/></svg><p>属性写法 preserveAspectRatio="none" 会拉伸</p><svg preserveAspectRatio="xMinYMin"/>"#
+        );
+        let text_only = r#"<p>preserveAspectRatio="none"</p>"#;
+        assert_eq!(fix_cover_aspect(text_only), text_only);
+    }
+
     #[test]
     fn svg_cover_to_img_only_replaces_a_lone_cover_svg() {
         // 审计复现：前一个 <svg> 没有 <image>，旧正则从它一路跨到后面那个 </svg>，把中间的正文吞了
@@ -642,6 +654,23 @@
         assert_eq!(all, 3, "每条注释恰好出现一次");
     }
 
+    /// 2026-09-30 审计：两章都引用同一条注释时，此前每章章末各放一份（注释文字重复）。现在不止一章引用的注释留在原处、
+    /// 链接照原书是跨文件的；只有一章引用的照常搬进那一章。
+    #[test]
+    fn note_referenced_from_two_chapters_stays_in_place() {
+        let book = zip_book(&[
+            ("a.xhtml", r#"<html><body><p>甲章<a href="n.xhtml#fn1">1</a>，又<a href="n.xhtml#fn2">2</a>。</p></body></html>"#),
+            ("b.xhtml", r#"<html><body><p>乙章<a href="n.xhtml#fn1">1</a>。</p></body></html>"#),
+            ("n.xhtml", r#"<html><body><p class="footnote" id="fn1">共用的注释</p><p class="footnote" id="fn2">甲章自己的注释</p></body></html>"#),
+        ]);
+        let (out, _) = optimize_epub(&book, crate::imgopt::test_screen()).unwrap();
+        let (a, b, n) = (text_of(&out, "a.xhtml"), text_of(&out, "b.xhtml"), text_of(&out, "n.xhtml"));
+        let all = [&a, &b, &n].iter().map(|t| t.matches("共用的注释").count()).sum::<usize>();
+        assert_eq!(all, 1, "注释文字只能出现一次: {a}\n{b}\n{n}");
+        assert!(n.contains(r#"id="fn1""#) && a.contains(r##"href="n.xhtml#fn1""##) && b.contains(r##"href="n.xhtml#fn1""##), "留在原处、链接不动: {a}\n{b}\n{n}");
+        assert!(a.contains("甲章自己的注释") && a.contains(r##"<a href="#fn2">2</a>"##) && !n.contains("甲章自己的注释"), "只有一章引用的照常搬: {a}\n{n}");
+    }
+
     #[test]
     fn crossfile_endnotes_relinked_per_chapter() {
         let (out, _) = optimize_epub(&make_crossfile_endnote_epub(), crate::imgopt::test_screen()).unwrap();
@@ -666,7 +695,7 @@
     #[test]
     fn double_optimize_inline_footnote_no_dup() {
         // 版本升级会重优化已优化过的旧书——重优化不得把已内联的注释再翻倍。
-        let opts = OptimizeOpts { wash: Some(crate::wash::WashOpts::default()), footnote: FootnoteMode::Inline, ..OptimizeOpts::new(crate::imgopt::test_screen()) };
+        let opts = OptimizeOpts { wash: Some(crate::wash::WashOpts::default()), footnote: FootnoteMode::Anchor, ..OptimizeOpts::new(crate::imgopt::test_screen()) };
         let (out, _) = optimize_epub_with(&make_crossfile_endnote_epub(), &opts).unwrap();
         let (out2, _) = optimize_epub_with(&out, &opts).unwrap();
         let mut ar = ZipArchive::new(Cursor::new(&out2)).unwrap();
@@ -690,7 +719,7 @@
             zw.write_all(r##"<html><body><p>正文<a href="#n1">1</a>结束</p><div class="footnotes"><p id="n1">第一章的注释</p></div></body></html>"##.as_bytes()).unwrap();
             zw.finish().unwrap();
         }
-        let opts = OptimizeOpts { wash: Some(crate::wash::WashOpts::default()), footnote: FootnoteMode::Inline, ..OptimizeOpts::new(crate::imgopt::test_screen()) };
+        let opts = OptimizeOpts { wash: Some(crate::wash::WashOpts::default()), footnote: FootnoteMode::Anchor, ..OptimizeOpts::new(crate::imgopt::test_screen()) };
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
         let mut ar = ZipArchive::new(Cursor::new(&out)).unwrap();
         let mut ch1 = String::new();

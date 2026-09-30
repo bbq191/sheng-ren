@@ -322,23 +322,16 @@ mod tests {
         assert!(inject(&src, &dst, &Additions { cover: Some((jpg, "jpg")), info: Some(&info) }).unwrap());
         assert!(epub_has_cover(&dst));
         let (a, b) = (bookconv::epubzip::read_entries(&std::fs::read(&src).unwrap()).unwrap(), bookconv::epubzip::read_entries(&std::fs::read(&dst).unwrap()).unwrap());
-        // 新加了封面图；过了 EPUB 3 规范整理，没有导航文档的书补一份 nav
-        assert!(b.len() > a.len());
+        // 只新加了封面图、改了 OPF；不做规范整理（优化器的清洗层会做），别的条目逐字节原样
+        assert_eq!(b.len(), a.len() + 1);
         for e in a.iter().filter(|e| !e.name.ends_with(".opf")) {
-            let out = &b.iter().find(|x| x.name == e.name).unwrap().data;
-            if bookconv::epubzip::is_html(&e.name) || e.name.ends_with(".ncx") {
-                let text = |d: &[u8]| bookconv::html::plain_text(&String::from_utf8_lossy(d));
-                assert_eq!(text(out), text(&e.data), "{} 可见文字不变", e.name);
-            } else {
-                assert_eq!(*out, e.data, "{} 原样", e.name);
-            }
+            assert_eq!(b.iter().find(|x| x.name == e.name).unwrap().data, e.data, "{} 原样", e.name);
         }
         let opf = String::from_utf8(b.iter().find(|e| e.name.ends_with(".opf")).unwrap().data.clone()).unwrap();
         let dc = bookconv::wash::opf_dc(&opf);
         assert_eq!(dc.description, "简介 & <引号> 第二段", "{opf}");
         assert_eq!(dc.title, "书");
         assert_eq!(opf.matches("<dc:subject>").count(), 2);
-        assert!(opf.contains(r#"version="3.0""#) && opf.contains("dcterms:modified"), "EPUB 3: {opf}");
 
         // 书里已有简介：不覆盖；什么都不用补时不写
         let src2 = sample(d.path(), "原书简介");
