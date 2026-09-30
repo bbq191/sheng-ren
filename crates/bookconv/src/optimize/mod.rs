@@ -124,12 +124,14 @@ pub struct OptimizeOpts {
     /// 翻页方向（按书手动指定）：`Some` 时把 OPF `<spine page-progression-direction>` 写成这个值，
     /// `None`（缺省）＝保留原书。见 [`crate::direction`]。
     pub page_direction: Option<crate::direction::PageDirection>,
+    /// 漫画的翻页方向（profile 的 `comic_page_direction`）；`page_direction` 按书指定了的以它为准。
+    pub comic_page_direction: Option<crate::direction::PageDirection>,
 }
 
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -143,6 +145,7 @@ impl OptimizeOpts {
             comic_reader_margins: p.comic_reader_margins,
             number_note_icons: p.note_icons == profile::NoteIcons::Number,
             drop_note_backlinks: !p.note_backlinks,
+            comic_page_direction: p.comic_page_direction.as_deref().and_then(crate::direction::PageDirection::parse),
             ..OptimizeOpts::new(p.output_readable())
         }
     }
@@ -216,7 +219,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     let is_comic_book = washed_comic.unwrap_or_else(|| crate::comic_detect::is_comic(&ordered));
     let opf = crate::wash::parse_opf(&ordered);
     // 只在真要改 OPF 时才记它：改翻页方向、补远程图的 manifest 项、给漫画打标签、（清洗过的书）按最终内容标 manifest 的 properties。
-    let opf_name: Option<String> = opf.as_ref().filter(|_| opts.page_direction.is_some() || has_remote_imgs || is_comic_book || opts.wash.is_some()).map(|o| ordered[o.index].name.clone());
+    let opf_name: Option<String> = opf.as_ref().filter(|_| opts.page_direction.is_some() || (is_comic_book && opts.comic_page_direction.is_some()) || has_remote_imgs || is_comic_book || opts.wash.is_some()).map(|o| ordered[o.index].name.clone());
     // 导航文档与目录文件：不收它们里面的注释引用，也不往里面搬注释。
     let mut skip_notes: HashSet<String> = ordered.iter().filter(|e| crate::wash::is_toc_file(&e.name)).map(|e| e.name.clone()).collect();
     skip_notes.extend(opf.and_then(|o| o.nav_doc));
@@ -375,7 +378,7 @@ impl<'a> EntryXform<'a> {
             pre_done: &prep.pre_done,
             taken_names: prep.entries.iter().map(|e| e.0.clone()).collect(),
             footnote: opts.footnote,
-            page_direction: opts.page_direction,
+            page_direction: opts.page_direction.or(opts.comic_page_direction.filter(|_| prep.is_comic_book)),
             comic: prep.is_comic_book,
             reader_margins: prep.is_comic_book && opts.comic_reader_margins.is_some(),
             number_note_icons: opts.number_note_icons,

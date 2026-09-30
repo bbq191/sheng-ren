@@ -107,6 +107,9 @@ pub struct Profile {
     pub comic_reader_margins: Option<u32>,
     /// 漫画的真实可阅读范围（设成 `comic_reader_margins` 后实测）；没写就和 EPUB 的一样。
     comic_readable: Option<Screen>,
+    /// 漫画的翻页方向改成这个（`"ltr"` 或 `"rtl"`，写进 OPF 的 `page-progression-direction`）；不写就照原书。
+    /// ireader 写 `"ltr"`：掌阅遇到从右往左翻的书会四周留边、整页图铺不满（2026-09-30 真机），用户选了铺满。
+    pub comic_page_direction: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +130,7 @@ struct ProfileFile {
     comic_margin: Option<u32>,
     comic_reader_margins: Option<u32>,
     comic_readable: Option<Screen>,
+    comic_page_direction: Option<String>,
 }
 
 fn yes() -> bool {
@@ -137,12 +141,15 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction };
         p.validate()?;
         Ok(p)
     }
 
     fn validate(&self) -> Result<(), String> {
+        if let Some(d) = self.comic_page_direction.as_deref().filter(|d| !matches!(*d, "ltr" | "rtl")) {
+            return Err(format!("profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}", self.id));
+        }
         let Screen { width, height } = self.screen;
         if self.id.is_empty() {
             return Err("profile id 为空".into());
@@ -293,6 +300,8 @@ mod tests {
         assert_eq!(x.note_icons, NoteIcons::Number);
         assert_eq!((k.comic_reader_margins, x.comic_reader_margins), (None, Some(1)));
         assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1104, height: 1546 }, Screen { width: 952, height: 1457 }));
+        assert_eq!((k.note_backlinks, i.note_backlinks, x.note_backlinks), (true, true, false), "只有 xochitl 去注释回链");
+        assert_eq!((k.comic_page_direction.as_deref(), i.comic_page_direction.as_deref(), x.comic_page_direction.as_deref()), (None, Some("ltr"), None), "掌阅漫画从左往右翻才铺满");
         assert!(get("nope").is_none());
     }
 
@@ -310,6 +319,7 @@ mod tests {
         assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 1680\nheight = 1264\n")).is_err());
         assert!(Profile::parse("x", &format!("{base}extra = 1\n[screen]\nwidth = 10\nheight = 20\n")).is_err());
         assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 10\nheight = 20\n")).is_ok(), "comic_margin 缺省 1，要小于短边的 1/4");
+        assert!(Profile::parse("x", &format!("{base}comic_page_direction = \"up\"\n[screen]\nwidth = 100\nheight = 200\n")).is_err(), "翻页方向只能 ltr/rtl");
         let scr = "[screen]\nwidth = 100\nheight = 200\n";
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")).is_ok());
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")).is_err(), "阅读范围不能超过屏幕");
