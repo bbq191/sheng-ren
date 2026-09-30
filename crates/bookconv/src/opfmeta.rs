@@ -193,7 +193,7 @@ fn set_ncx_title(ncx: &str, title: &str) -> String {
 /// 书里声明的封面图：(zip 路径, 扩展名)。判定见 `wash::opf::declared_cover`（与优化器、`cover_image_of` 同一套）。
 fn declared_cover(opf: &str, opf_dir: &str) -> Option<(String, String)> {
     let item = crate::wash::opf::declared_cover(opf)?;
-    let path = crate::epubzip::resolve_rel(opf_dir, item.href);
+    let path = item.path(opf_dir);
     let ext = crate::util::image_ext_of(&path);
     Some((path, ext))
 }
@@ -223,7 +223,7 @@ fn to_format(image: &[u8], ext: &str) -> Result<(Vec<u8>, Option<&'static str>),
 /// OPF 里 zip 路径为 `path` 的 manifest 项的 `media-type` 改成 `mt`（没有这一项或它没有 `media-type` 属性就原样）。
 fn set_media_type(opf: &str, opf_dir: &str, path: &str, mt: &str) -> String {
     for it in crate::wash::manifest_items(opf) {
-        if crate::epubzip::resolve_rel(opf_dir, it.href) != path {
+        if it.path(opf_dir) != path {
             continue;
         }
         if let Some(a) = html::attr(it.tag, "media-type") {
@@ -243,9 +243,8 @@ pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Opti
     use crate::epubzip::{resolve_href, resolve_rel};
     use crate::wash::opf as o;
     let Some(cover) = o::declared_cover(opf) else { return (opf.to_string(), Vec::new(), Vec::new()) };
-    let (cover_id, cover_path) = (cover.id.to_string(), resolve_rel(opf_dir, cover.href));
+    let (cover_id, cover_path) = (cover.id.to_string(), cover.path(opf_dir));
     let items = o::manifest_items(opf);
-    let path_of = |href: &str| resolve_rel(opf_dir, href);
     // 页面里引用的图（img src、SVG image href）
     let images_in = |page: &str, text: &str| -> Vec<String> {
         html::tags(text)
@@ -257,7 +256,7 @@ pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Opti
     };
     let (mut cover_pages, mut used_elsewhere) = (Vec::<(String, String)>::new(), false);
     for it in items.iter().filter(|i| i.media_type.contains("html")) {
-        let page = path_of(it.href);
+        let page = it.path(opf_dir);
         let Some(text) = read(&page) else { continue };
         let imgs = images_in(&page, &text);
         if !imgs.contains(&cover_path) {
@@ -277,7 +276,7 @@ pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Opti
     let mut edits: Vec<(usize, usize, String)> = o::cover_meta_tags(&opf).into_iter().map(|(s, e, _)| (s, e, String::new())).collect();
     for t in html::tags(&opf).filter(|t| t.is_start()) {
         let tag = &opf[t.start..t.end];
-        if o::is_local(t.name, "reference") && html::attr_value(tag, "href").is_some_and(|h| page_paths.contains(&path_of(html::split_href(h).0).as_str())) {
+        if o::is_local(t.name, "reference") && html::attr_value(tag, "href").is_some_and(|h| page_paths.contains(&resolve_rel(opf_dir, &crate::util::xml_unescape(html::split_href(h).0)).as_str())) {
             let end = o::element_end(&opf, &t);
             let ws = opf[end..].len() - opf[end..].trim_start().len();
             edits.push((t.start, end + ws, String::new()));
@@ -306,7 +305,7 @@ pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Opti
     let mut rewritten = Vec::new();
     if !page_paths.is_empty() {
         for it in o::manifest_items(&opf).iter().filter(|i| i.media_type.contains("dtbncx") || i.properties.split_whitespace().any(|p| p == "nav")) {
-            let file = path_of(it.href);
+            let file = it.path(opf_dir);
             let Some(text) = read(&file) else { continue };
             let elem = if it.media_type.contains("dtbncx") { "navPoint" } else { "li" };
             let new = drop_entries_pointing_to(&text, &file, elem, &page_paths);
@@ -409,7 +408,7 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
 
     // 换了书名：NCX 的 docTitle 一起换
     if let Some(t) = edits.set.iter().find(|(f, _)| *f == DcField::Title).and_then(|(_, v)| v.first()) {
-        let ncx = crate::wash::manifest_items(&opf).iter().find(|i| i.media_type.contains("dtbncx")).map(|i| crate::epubzip::resolve_rel(&opf_dir, i.href));
+        let ncx = crate::wash::manifest_items(&opf).iter().find(|i| i.media_type.contains("dtbncx")).map(|i| i.path(&opf_dir));
         if let Some(ncx) = ncx {
             if let Some(text) = text_of(&entries, &ncx) {
                 set_entry(&mut entries, ncx, set_ncx_title(&text, t).into_bytes());

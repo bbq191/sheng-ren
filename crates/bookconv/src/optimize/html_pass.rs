@@ -93,7 +93,7 @@ pub(super) fn set_manifest_media_types(opf: &str, opf_path: &str, retyped: &[(St
     let dir = crate::epubzip::dir_of(opf_path);
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for it in crate::wash::manifest_items(opf) {
-        let path = crate::epubzip::resolve_rel(dir, it.href);
+        let path = it.path(dir);
         let Some((_, mt)) = retyped.iter().find(|(p, _)| *p == path) else { continue };
         let Some(a) = html::attr(it.tag, "media-type") else { continue };
         if a.value != *mt {
