@@ -2,9 +2,10 @@
 //!
 //! - [`Entry`]：zip 条目（目录项已剔除）。
 //! - [`read_entries`]：整本读入；[`read_skeleton`]：只读"骨架"——图片条目留空占位、其余整份读（流式优化、
-//!   质量门的阶段一）。
+//!   质量门的阶段一）；两者都走 [`read_entries_from`]。
+//! - [`EpubWriter`]：写 EPUB（`mimetype` 置首 STORED，图片 STORED、其余 deflate，可原样拷贝源条目）。
 //! - [`cover_image_of`]：只读 container.xml、OPF 与少数几个条目取出封面图。
-//! - `posix_norm/dir_of/resolve/relative_to/percent_decode/is_html`：EPUB 内路径与文件名判断。
+//! - `posix_norm/dir_of/resolve/resolve_rel/resolve_href/relative_to/percent_decode/is_html`：EPUB 内路径与文件名判断。
 use std::io::{Read, Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -55,22 +56,72 @@ pub(crate) fn read_all(mut r: impl Read, declared: u64) -> Result<Vec<u8>, Strin
     Ok(v)
 }
 
-/// 不压缩的条目选项（EPUB 的 `mimetype` 必须 STORED 且排第一；`epub::assemble` 全部条目也用它）。
-pub(crate) fn stored() -> SimpleFileOptions {
+/// 不压缩的条目选项。
+fn stored() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
 }
 
 /// deflate 压缩的条目选项（缺省级别）。
-pub(crate) fn deflated() -> SimpleFileOptions {
+fn deflated() -> SimpleFileOptions {
     SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)
 }
 
-/// 往 zip 写一个完整条目（`start_file` + `write_all`，错误转成字符串）。优化器两条路径、`epub::assemble`、占位文档共用
-/// （此前每处都是一对 `.map_err(|e| e.to_string())?` 样板）。
-pub(crate) fn put_entry<W: Write + Seek>(zw: &mut ZipWriter<W>, name: &str, opts: SimpleFileOptions, data: &[u8]) -> Result<(), String> {
-    zw.start_file(name, opts).map_err(|e| e.to_string())?;
-    zw.write_all(data).map_err(|e| e.to_string())
+/// 写 EPUB 的 zip：建的时候先写 `mimetype`（第一个条目、STORED、内容就是 `application/epub+zip`，EPUB 规范 OCF 的要求），
+/// 之后 [`put`](EpubWriter::put) 按条目名选压缩方式——本身已压缩的图片（jpg/png/gif/webp，再 deflate 几乎没收益、白花 CPU）
+/// STORED，其余 deflate（缺省级别）。优化器、`opfmeta` 改元数据、`epub::assemble` 组装母版共用（此前各写一份）。
+/// 条目时间戳是 zip 的缺省值（没开 zip 的 `time` 特性），同样的输入写出逐字节相同。
+pub struct EpubWriter<W: Write + Seek> {
+    zw: ZipWriter<W>,
 }
+
+impl EpubWriter<std::io::BufWriter<std::fs::File>> {
+    /// 建输出文件（带缓冲）并写好 `mimetype`。
+    pub fn create(path: &std::path::Path) -> Result<Self, String> {
+        let f = std::fs::File::create(path).map_err(|e| format!("建输出文件 {} 失败: {e}", path.display()))?;
+        EpubWriter::new(std::io::BufWriter::new(f))
+    }
+}
+
+impl<W: Write + Seek> EpubWriter<W> {
+    /// 在 `w` 上开一个 EPUB 并写好 `mimetype`。
+    pub fn new(w: W) -> Result<Self, String> {
+        let mut me = EpubWriter { zw: ZipWriter::new(w) };
+        me.put_with("mimetype", stored(), MIMETYPE)?;
+        Ok(me)
+    }
+
+    /// 写一个条目：图片 STORED，其余 deflate（见类型文档）。不要再写 `mimetype`（建的时候写过了）。
+    pub fn put(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
+        let opts = if crate::util::is_image_ext(name) { stored() } else { deflated() };
+        self.put_with(name, opts, data)
+    }
+
+    /// 写一个 STORED 条目（`epub::assemble` 的母版全部不压缩）。
+    pub fn put_stored(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
+        self.put_with(name, stored(), data)
+    }
+
+    fn put_with(&mut self, name: &str, opts: SimpleFileOptions, data: &[u8]) -> Result<(), String> {
+        self.zw.start_file(name, opts).map_err(|e| e.to_string())?;
+        self.zw.write_all(data).map_err(|e| e.to_string())
+    }
+
+    /// 原样拷贝源 zip 的一个条目（压缩数据一个字节不动，不解压不重压）。
+    pub fn raw_copy(&mut self, f: zip::read::ZipFile) -> Result<(), String> {
+        self.zw.raw_copy_file(f).map_err(|e| e.to_string())
+    }
+
+    /// 写中央目录并 flush（`finish()` 只保证写完中央目录，底下 `BufWriter` 的缓冲不一定落盘——显式 flush，
+    /// 不指望 Drop 的静默兜底，出错会被吞掉）。
+    pub fn finish(self) -> Result<W, String> {
+        let mut w = self.zw.finish().map_err(|e| e.to_string())?;
+        w.flush().map_err(|e| e.to_string())?;
+        Ok(w)
+    }
+}
+
+/// EPUB 规范：`mimetype` 的内容（不带换行）。
+pub const MIMETYPE: &[u8] = b"application/epub+zip";
 
 /// [`read_skeleton`] 的结果。
 pub struct Skeleton {
@@ -78,10 +129,9 @@ pub struct Skeleton {
     pub entries: Vec<Entry>,
 }
 
-/// 读"骨架"：非图片条目整份读，图片条目只记名字和大小、`data` 留空（真实字节留到阶段二按需读回）。
-/// 流式路径的峰值内存因此是"全书文字 + 一张图"而不是"全书图片"。目录项剔除；任一条目读失败整体报错
-/// （绝不能静默跳过条目产出残缺 EPUB）。
-pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton, String> {
+/// 逐个读 zip 条目（目录项剔除，zip 里的顺序）：`keep_bytes(条目名)` 为假的只记名字、`data` 留空占位。
+/// 任一条目读失败整体报错（绝不能静默跳过条目产出残缺 EPUB）。[`read_skeleton`]、[`read_entries`]、质量门共用。
+pub fn read_entries_from<R: Read + Seek>(zip: &mut ZipArchive<R>, keep_bytes: impl Fn(&str) -> bool) -> Result<Vec<Entry>, String> {
     let mut entries = Vec::with_capacity(zip.len());
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
@@ -89,15 +139,21 @@ pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton
             continue;
         }
         let name = f.name().to_string();
-        let data = if crate::imgopt::is_page_image(&name) {
-            Vec::new()
-        } else {
+        let data = if keep_bytes(&name) {
             let size = f.size();
             read_all(&mut f, size)?
+        } else {
+            Vec::new()
         };
         entries.push(Entry { name, data });
     }
-    Ok(Skeleton { entries })
+    Ok(entries)
+}
+
+/// 读"骨架"：非图片条目整份读，图片条目只记名字、`data` 留空（真实字节留到阶段二按需读回）。
+/// 流式路径的峰值内存因此是"全书文字 + 一张图"而不是"全书图片"。
+pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton, String> {
+    Ok(Skeleton { entries: read_entries_from(zip, |n| !crate::imgopt::is_page_image(n))? })
 }
 
 /// 按名字读一个 zip 条目的全部字节；条目不存在 → `Ok(None)`，其它（损坏/IO）错误 → `Err`。
@@ -117,20 +173,10 @@ pub fn read_by_name<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Resu
     read_by_name_opt(zip, name)?.ok_or_else(|| format!("zip 里没有条目 {name}"))
 }
 
-/// 从 zip 字节读条目表（目录项剔除，图片也整份读）。优化器与质量门共用。
+/// 从 zip 字节读条目表（目录项剔除，图片也整份读）。
 pub fn read_entries(epub: &[u8]) -> Result<Vec<Entry>, String> {
     let mut archive = ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
-    let mut out = Vec::with_capacity(archive.len());
-    for i in 0..archive.len() {
-        let mut f = archive.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
-        if f.is_dir() {
-            continue;
-        }
-        let name = f.name().to_string();
-        let size = f.size();
-        out.push(Entry { name, data: read_all(&mut f, size)? });
-    }
-    Ok(out)
+    read_entries_from(&mut archive, |_| true)
 }
 
 // ───────────────────────── 按路径读 OPF 与封面 ─────────────────────────
@@ -160,7 +206,7 @@ pub fn cover_image_of(epub: &std::path::Path) -> Option<(String, Vec<u8>)> {
     let (mut zip, opf_path, text) = open_opf(epub).ok()?;
     let dir = dir_of(&opf_path);
     let path = match opf::declared_cover(&text) {
-        Some(it) => resolve(dir, &percent_decode(it.href)),
+        Some(it) => resolve_rel(dir, it.href),
         None => opf::first_spine_image(&text, dir, 12, false, |p| read_text_opt(&mut zip, p))?,
     };
     Some((crate::util::image_ext_of(&path), read_by_name_opt(&mut zip, &path).ok()??))
@@ -194,6 +240,12 @@ pub fn resolve(base_dir: &str, rel: &str) -> String {
     }
 }
 
+/// 属性里写的相对路径（百分号编码的原文，如 OPF manifest 的 `href`，不带 `#锚点`）→ zip 路径：先百分号解码，再按 `base_dir` 解析。
+/// 带锚点、以所在文件为基准的链接用 [`resolve_href`]。
+pub fn resolve_rel(base_dir: &str, href: &str) -> String {
+    resolve(base_dir, &percent_decode(href))
+}
+
 /// `target` 相对 `base_dir` 的路径（都是 zip 内绝对路径）。
 pub fn relative_to(base_dir: &str, target: &str) -> String {
     let b: Vec<&str> = base_dir.split('/').filter(|s| !s.is_empty()).collect();
@@ -209,7 +261,7 @@ pub fn relative_to(base_dir: &str, target: &str) -> String {
 /// 书外链接（`http:`、`mailto:`…）不该传进来，调用方先用 [`crate::html::is_external`] 筛掉。
 pub fn resolve_href<'a>(base_file: &str, href: &'a str) -> (String, Option<&'a str>) {
     let (p, frag) = crate::html::split_href(href);
-    let path = if p.is_empty() { base_file.to_string() } else { resolve(dir_of(base_file), &percent_decode(p)) };
+    let path = if p.is_empty() { base_file.to_string() } else { resolve_rel(dir_of(base_file), p) };
     (path, frag)
 }
 

@@ -63,9 +63,9 @@ impl Library {
         };
         let cover = meta.cover.as_ref().map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
         let info = meta.info.as_ref().and_then(|i| i.injected_sig()).unwrap_or_else(|| "-".into());
-        // 补元数据那一步（`metadata::inject`）2026-09-30 起先做 EPUB 3 规范整理：补过东西的书产物字节变了（内容一样，元素顺序不同），
-        // 只让这些书过期（`i3`），没补过东西的书指纹不变
-        let info = if cover != "-" || info != "-" { format!("{info}i3") } else { info };
+        // 补元数据那一步（`metadata::inject`）改了会影响产物时 `bookconv::opfmeta::VERSION` 加一：只让补过东西的书过期（`i4`），
+        // 没补过东西的书指纹不变
+        let info = if cover != "-" || info != "-" { format!("{info}i{}", bookconv::opfmeta::VERSION) } else { info };
         // 要当场转换的来源（CBZ）再带上格式转换的版本；写在流程版本后面，EPUB 来源的指纹保持原样（不白重建）
         let pipeline = if meta.content_format() == "epub" {
             PIPELINE_VERSION.to_string()
