@@ -47,9 +47,9 @@ const DEFAULT_TIMESTAMP: u32 = 946_684_800;
 /// 缩略图高度（像素）。
 const THUMB_H: u32 = 330;
 
-/// 封面缩略图：高度缩到 [`THUMB_H`]，本来就不高于它的不放大。
+/// 封面缩略图：高度缩到 [`THUMB_H`]，本来就不高于它的不放大。带 EXIF 方向的封面先摆正（缩略图是重编码的，不带 EXIF）。
 fn thumbnail(cover: &[u8]) -> Option<Vec<u8>> {
-    let img = image::load_from_memory(cover).ok()?;
+    let img = bookconv::imgopt::decode_oriented(cover)?;
     let img = if img.height() > THUMB_H { img.resize(u32::MAX, THUMB_H, image::imageops::FilterType::Lanczos3) } else { img };
     let mut out = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&img.to_rgb8()).ok()?;

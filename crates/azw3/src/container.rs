@@ -333,7 +333,8 @@ pub fn assemble(meta: &Meta, mut layout: Layout, res: Resources) -> Result<Vec<u
     let mut records: Vec<Vec<u8>> = vec![Vec::new()]; // 0 号稍后填
     records.extend(trecs);
     records.push(vec![0]);
-    // 待核：MOBI 头 0x50「第一条非正文记录」这里指向片段索引（补位记录之后）；样本与公开文档是否一致还没核对，先不动。
+    // **未核实**：MOBI 头 0x50「第一条非正文记录」这里指向片段索引（补位记录之后）。没有拿样本和公开文档核对过，
+    // 也没在真机上单独验证过这个字段；照现状先不动。
     let first_non_book = records.len() as u32;
     let frag = records.len() as u32;
     records.extend(fragment_index(layout));
