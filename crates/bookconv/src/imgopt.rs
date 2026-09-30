@@ -490,7 +490,7 @@ fn encode_keep_gray(fmt: ImageFormat, img: &image::DynamicImage, jpeg_quality: u
                 DynamicImage::ImageRgb8(c) => enc.write_image(c.as_raw(), c.width(), c.height(), ExtendedColorType::Rgb8).ok()?,
                 _ => return None,
             }
-            // 哈夫曼表按这张图重做（无损：解码逐像素相同，见 `jpegopt`），同样画质小 13%–16%
+            // 哈夫曼表按这张图重做（无损：解码逐像素相同，见 `jpegopt`），同样画质小约 7%–16%
             return Some(crate::jpegopt::optimize_verified(out));
         }
         ImageFormat::Png => img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?,
