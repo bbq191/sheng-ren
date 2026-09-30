@@ -308,6 +308,7 @@ ebook-meta 书.epub --language zh --publisher 出版社 --date 2026-09-28 --desc
 ebook-meta 书.epub --tag 小说 --tag 科幻                    # 标签整体替换
 ebook-meta 书.epub --publisher ""                          # 值给空字符串 = 删掉这个字段
 ebook-meta 书.epub --cover 封面.jpg                         # 换封面
+ebook-meta 书.epub --remove-cover                          # 去掉封面：封面声明、只放封面的那一页（连同目录、guide 里的条目）、封面图；正文别处用着的图留着
 ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
 ```
 
