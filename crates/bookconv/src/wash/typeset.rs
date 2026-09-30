@@ -298,7 +298,8 @@ pub fn wash_css(opts: &WashOpts) -> String {
     // 章末块 / `.eink-fnote` Inline 内联注释）兜底，不然那些书的注释永远跟正文同号，不满足这条通用
     // 要求。跟 `.eink-flush` 一样是单个裸类选择器，不逗号连写。
     // `.eink-note`：章末的每条注释（`htmlproc::footnote`）不拆到两页（用户 2026-09-29：注释内容要在同一页内；长过一页的阅读器照常断开）。
-    // `.eink-noteicon`：图标标号限成一个字高（没写宽高的 <img> 两个阅读器都按图片像素画，80×80 的图标撑成一大块）。
+    // `.eink-noteicon`：图标标号限成一个字高（没写宽高的 <img> 阅读器按图片像素画，80×80 的图标撑成一大块）；
+    //   profile 的 note_icons = "number"（图标换成数字）时优化器第二遍把这条删掉（`optimize::NOTEICON_RULE`，改这里要一起改）。
     let latin = if opts.lang == LangMode::Latin { "p{hyphens:auto;-webkit-hyphens:auto;orphans:2;widows:2;}\n" } else { "" };
     format!(
         "p{{{decl}}}\n{latin}.eink-center{{text-align:center;text-indent:0.01em;}}\n.eink-right{{text-align:right;text-indent:0.01em;}}\n{flush}\nfigure{{margin:0;padding:0;}}\nfigcaption{{margin:0;padding:0;}}\n.footnotes{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-fnote{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-note{{page-break-inside:avoid;}}\n.eink-noteicon{{height:1em;width:auto;}}\n"

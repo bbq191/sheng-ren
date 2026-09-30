@@ -33,9 +33,9 @@
     }
 
     #[test]
-    fn inline_remote_images_fetches_and_keeps_local_and_failed() {
-        // 本地图不动；远程抓到→内联改本地名+进资源；远程抓不到→<img> 原样保留（不改书的内容）
-        let html = r#"<p><img src="local.png"/><img class="c" src="https://x.com/a.png"/><img src="//y.com/b.png"/><img alt='x>y' src='https://x.com/c.png?a=1&amp;b=2'/></p>"#;
+    fn inline_remote_images_fetches_and_keeps_local_and_drops_failed() {
+        // 本地图不动；远程抓到→内联改本地名+进资源；远程抓不到→删掉这个 <img>（设备不联网，留着是断图）
+        let html = r#"<p><img src="local.png"/><img class="c" src="https://x.com/a.png"/><img src="//y.com/b.png"/>字<img src="http://z/d.png"></img><img alt='x>y' src='https://x.com/c.png?a=1&amp;b=2'/></p>"#;
         let mut n = 0usize;
         // 已经优化过的书再跑：书里已有 remote_img_0.png，新抓的图不能重名
         let mut taken: HashSet<String> = ["OEBPS/remote_img_0.png".to_string()].into_iter().collect();
@@ -45,11 +45,40 @@
         assert!(out.contains(r#"src="local.png""#), "本地图应原样: {out}");
         assert!(out.contains(r#"class="c" src="remote_img_1.png""#), "远程抓到应改本地名、避开已有的名字: {out}");
         assert!(!out.contains("x.com"), "抓到的远程 URL 应换成本地名: {out}");
-        assert!(out.contains(r#"<img src="//y.com/b.png"/>"#), "抓不到的远程 img 应原样保留: {out}");
+        assert!(!out.contains("y.com") && !out.contains("z/d.png") && !out.contains("</img>"), "抓不到的远程 img 删掉（连闭合标签）: {out}");
+        assert!(out.contains(r#"remote_img_1.png"/>字<img alt="#), "旁边的字不动: {out}");
         assert!(out.contains(r#"<img alt='x>y' src='remote_img_2.png'/>"#), "单引号、属性值里有 > 也认，字符引用先还原再抓: {out}");
         assert_eq!(res.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["OEBPS/remote_img_1.png", "OEBPS/remote_img_2.png"], "资源落本章目录");
         assert_eq!(res[0].1, vec![1, 2, 3]);
         assert!(has_remote_img(r#"<img alt='a>b' src='https://a/b.jpg'/>"#));
+    }
+
+    #[test]
+    fn noteicon_rule_dropped_only_when_icons_become_numbers() {
+        let mut epub = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut epub));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            for (name, body) in [
+                ("mimetype", "application/epub+zip"),
+                ("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+                ("OEBPS/content.opf", r#"<package version="3.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="text/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
+                ("OEBPS/text/c1.xhtml", r#"<html><head><title>t</title></head><body><p>正文</p></body></html>"#),
+            ] {
+                zw.start_file(name, stored).unwrap();
+                zw.write_all(body.as_bytes()).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let css_of = |number: bool| {
+            let opts = OptimizeOpts { wash: Some(Default::default()), number_note_icons: number, ..OptimizeOpts::new(crate::imgopt::test_screen()) };
+            let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
+            let name = crate::epubzip::read_entries(&out).unwrap().into_iter().find(|e| crate::wash::is_wash_css_name(&e.name)).unwrap();
+            String::from_utf8(name.data).unwrap()
+        };
+        assert!(css_of(false).contains(".eink-noteicon{"), "保留图标的模式要这条");
+        let css = css_of(true);
+        assert!(!css.contains("noteicon") && css.contains(".eink-note{"), "换成数字的模式去掉，别的规则不动: {css}");
     }
 
     #[test]
@@ -747,7 +776,7 @@
     /// 远程图端到端：抓到的图写进 zip、src 改本地名、**补进 OPF manifest**（manifest 里没有的资源不算书的一部分）；抓不到的
     /// `<img>` 原样保留。OPF 推迟到最后写，其它条目顺序不变。
     #[test]
-    fn remote_images_are_added_to_manifest_and_failed_ones_kept() {
+    fn remote_images_are_added_to_manifest_and_failed_ones_dropped() {
         let mut png = Vec::new();
         image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(20, 10, image::Rgb([200, 10, 10]))).write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
         let port = serve_png(png.clone(), 1);
@@ -771,7 +800,7 @@
         let (out, _) = optimize_epub(&buf, crate::imgopt::test_screen()).unwrap();
         let ch = String::from_utf8(entry_bytes(&out, "OEBPS/text/c1.xhtml")).unwrap();
         assert!(ch.contains(r#"src="remote_img_0.png""#), "抓到的图改本地名: {ch}");
-        assert!(ch.contains(&format!(r#"<img alt="x" src="http://127.0.0.1:{dead}/b.png"/>"#)), "抓不到的原样保留: {ch}");
+        assert!(!ch.contains(&format!("127.0.0.1:{dead}")) && ch.contains("<p></p>"), "抓不到的删掉: {ch}");
         assert_eq!(entry_bytes(&out, "OEBPS/text/remote_img_0.png"), png, "小图不缩放，原样写入");
         let opf = String::from_utf8(entry_bytes(&out, "OEBPS/content.opf")).unwrap();
         assert!(opf.contains(r#"<item id="eink-remote-img-0" href="text/remote_img_0.png" media-type="image/png"/></manifest>"#), "{opf}");
