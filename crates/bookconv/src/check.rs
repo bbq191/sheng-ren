@@ -117,7 +117,7 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
         let targets: Vec<String> = crate::wash::cipher_reference_re().captures_iter(&t).map(|c| c[1].to_string()).collect();
         let non_font: Vec<&String> = targets.iter().filter(|x| { let l = x.to_ascii_lowercase(); !(l.ends_with(".ttf") || l.ends_with(".otf") || l.ends_with(".woff") || l.ends_with(".woff2")) }).collect();
         if !non_font.is_empty() {
-            rep.errors.push(format!("加密 EPUB（DRM，加密了 {} 等），xochitl/KOReader 都读不了", non_font.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join("、")));
+            rep.errors.push(format!("加密 EPUB（DRM，加密了 {} 等），阅读器都读不了", non_font.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join("、")));
         } else {
             rep.warnings.push(format!("仅字体混淆（{} 个字体文件，非 DRM，可读）", targets.len()));
         }

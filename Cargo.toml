@@ -7,7 +7,7 @@ members = [
     "crates/profile",
     "crates/drm",
     "crates/library",
-    "crates/kosync",
+    "crates/azw3",
 ]
 
 [workspace.package]

@@ -5,7 +5,8 @@
 //!
 //! 用法: epub-optimize --device=<设备> [选项] 输入.epub 输出.epub
 //!   （流式处理，大漫画也不整本读进内存；产物先写到 `输出.epub.optimizing.tmp`，成功后改名，失败不留半成品）
-//!   --device=<id>    阅读模式 profile（必填：koreader / xochitl，见 profile crate 的 profiles/*.toml）
+//!   --device=<id>    阅读模式 profile（必填：kindle / ireader / xochitl，见 profile crate 的 profiles/*.toml；
+//!                    kindle 出的仍是 EPUB，再用 epub-to-azw3 转）
 //!   --no-wash        只跑优化器不清洗
 //!   --keep-spacing   清洗但保留原书段间距（诗集/剧本）
 //!   --auto-toc       强制从 h1–h6 重建目录（缺省仅在无目录时生成）

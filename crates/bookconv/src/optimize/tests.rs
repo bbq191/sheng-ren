@@ -53,19 +53,6 @@
     }
 
     #[test]
-    fn mark_fullpage_only_on_image_only_pages() {
-        let page = r#"<html><head><title>第 1 頁</title></head><body><center><div class="fs"><img src="a.jpg" alt="第 1 頁"/></div></center></body></html>"#;
-        assert_eq!(mark_fullpage(page).unwrap(), page.replace("<body>", r#"<body class="eink-fullpage">"#));
-        let with_class = r#"<body class='x'>&nbsp;<img src="a.jpg"/></body>"#;
-        let marked = mark_fullpage(with_class).unwrap();
-        assert_eq!(marked, r#"<body class='x eink-fullpage'>&nbsp;<img src="a.jpg"/></body>"#);
-        assert_eq!(mark_fullpage(&marked), None, "已经有了不再加");
-        assert_eq!(mark_fullpage(r#"<body><p>字</p><img src="a.jpg"/></body>"#), None, "有字的页不加：font-size:0 会把字藏掉");
-        assert_eq!(mark_fullpage("<body><p> </p></body>"), None, "没有图的页不加");
-        assert!(mark_fullpage(r#"<body><svg><image href="a.jpg"/></svg></body>"#).is_some());
-    }
-
-    #[test]
     fn svg_cover_to_img_only_replaces_a_lone_cover_svg() {
         // 审计复现：前一个 <svg> 没有 <image>，旧正则从它一路跨到后面那个 </svg>，把中间的正文吞了
         let page = r#"<html><body><svg width="10" height="10"><text x="0" y="5">图中文字</text></svg><p>这一段正文会不会丢？</p><svg><image xlink:href="a.jpg"/></svg></body></html>"#;

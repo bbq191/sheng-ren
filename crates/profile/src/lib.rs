@@ -1,5 +1,5 @@
-//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有两份：`koreader`（掌阅、Kindle 上的
-//! KOReader 共用）和 `xochitl`（reMarkable Move 原生阅读器）。
+//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有三份，都是设备自带的阅读器（2026-09-30 用户撤了 KOReader）：
+//! `kindle`（Kindle PW12 签名版，AZW3）、`ireader`（掌阅 Ocean 5 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -17,12 +17,12 @@ include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
 /// profile 没写 `comic_margin` 时漫画页的白边（像素）。
 pub const DEFAULT_COMIC_MARGIN: u32 = 1;
 
-/// 产物格式。2026-09-29 起只有 EPUB（AZW3、PDF 已删）；TOML 里仍写成 `formats = ["epub"]`、`[readable.epub]`，
-/// 写了别的格式按未知值报错。
+/// 产物格式。AZW3 是先按同一套规则优化出 EPUB、再转成 AZW3（2026-09-30 恢复，给 Kindle 自带阅读器）；PDF 已删，写了按未知值报错。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Epub,
+    Azw3,
 }
 
 impl Format {
@@ -30,6 +30,7 @@ impl Format {
     pub fn ext(self) -> &'static str {
         match self {
             Format::Epub => "epub",
+            Format::Azw3 => "azw3",
         }
     }
 }
@@ -95,10 +96,6 @@ pub struct Profile {
     /// 漫画页图到可阅读范围四边的白边（像素）：图保比缩放进"阅读范围 − 2×白边"的框，受限的那条边两侧正好是这么宽。
     /// TOML 里不写是 [`DEFAULT_COMIC_MARGIN`]；须小于阅读范围短边的 1/4。
     pub comic_margin: u32,
-    /// 漫画的纯图页（没有可见文字）去掉行高和字号（`<body class="eink-fullpage">`，`line-height:0;font-size:0`），
-    /// 让整页图能用满整个阅读区。KOReader 要它：图在一行里时行高在下面留 10px、字号在行首多出 2px（2026-09-29 本机截图）。
-    /// TOML 里不写是 `false`。
-    pub comic_fullpage: bool,
     /// 漫画在阅读器里要设成的页边距（xochitl 设置里的"页边距"，单位同 `.content` 的 `margins`）。`Some` 时：优化器给漫画写
     /// `META-INF/eink-reader-margins`（值就是它），`xochitl/comic-margins.sh` 凭它登记、Move 上的页边距代理在第一次开书时设好；
     /// 漫画的文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（见 `bookconv::comicpad`）。
@@ -121,8 +118,6 @@ struct ProfileFile {
     #[serde(default)]
     readable: BTreeMap<Format, Screen>,
     comic_margin: Option<u32>,
-    #[serde(default)]
-    comic_fullpage: bool,
     comic_reader_margins: Option<u32>,
     comic_readable: Option<Screen>,
 }
@@ -131,7 +126,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_fullpage: f.comic_fullpage, comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable };
         p.validate()?;
         Ok(p)
     }
@@ -184,9 +179,19 @@ impl Profile {
         self.readable.get(&format).copied().unwrap_or(self.screen)
     }
 
-    /// 漫画页排版用的阅读范围：`comic_readable`，没写就是 EPUB 的阅读范围。
+    /// 产物格式：`formats` 的第一个。
+    pub fn format(&self) -> Format {
+        self.formats[0]
+    }
+
+    /// 产物格式的阅读范围（[`Profile::readable`]`(self.format())`）。
+    pub fn output_readable(&self) -> Screen {
+        self.readable(self.format())
+    }
+
+    /// 漫画页排版用的阅读范围：`comic_readable`，没写就是产物格式的阅读范围。
     pub fn comic_readable(&self) -> Screen {
-        self.comic_readable.unwrap_or_else(|| self.readable(Format::Epub))
+        self.comic_readable.unwrap_or_else(|| self.output_readable())
     }
 
     /// `format` 的阅读范围是不是实测内置的（`false` = 退回了标称屏幕）。
@@ -262,22 +267,21 @@ mod tests {
     #[test]
     fn builtin_profiles_parse() {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["koreader", "xochitl"]);
-        let k = get("koreader").unwrap();
-        assert_eq!(k.screen, Screen { width: 1264, height: 1680 });
-        assert!(k.has_measured_readable(Format::Epub), "本机 KOReader 漫画方案实测");
-        assert_eq!(k.readable(Format::Epub), Screen { width: 1264, height: 1680 });
-        assert!(!k.color);
+        assert_eq!(ids, ["ireader", "kindle", "xochitl"]);
+        let k = get("kindle").unwrap();
+        assert_eq!((k.format(), k.output_readable()), (Format::Azw3, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
+        let i = get("ireader").unwrap();
+        assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
+        assert!(!k.color && !i.color);
         let x = get("xochitl").unwrap();
         assert_eq!(x.screen, Screen { width: 954, height: 1696 });
         assert_eq!(x.readable(Format::Epub), Screen { width: 842, height: 1455 }, "EPUB 用实测阅读范围");
         assert!(x.color);
         assert_eq!(x.formats, [Format::Epub]);
-        assert_eq!((k.comic_margin, x.comic_margin), (1, 0));
-        assert_eq!((k.comic_fullpage, x.comic_fullpage), (true, false));
-        assert_eq!((k.note_icons, x.note_icons), (NoteIcons::Keep, NoteIcons::Number));
+        assert_eq!((k.comic_margin, i.comic_margin, x.comic_margin), (1, 1, 0));
+        assert_eq!(x.note_icons, NoteIcons::Number);
         assert_eq!((k.comic_reader_margins, x.comic_reader_margins), (None, Some(1)));
-        assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1264, height: 1680 }, Screen { width: 952, height: 1457 }));
+        assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1104, height: 1546 }, Screen { width: 952, height: 1457 }));
         assert!(get("nope").is_none());
     }
 
@@ -285,7 +289,7 @@ mod tests {
     fn device_from_args_finds_id_or_lists_choices() {
         assert_eq!(device_from_args(&["a.epub", "--device=xochitl"]).unwrap().id, "xochitl");
         let err = device_from_args(&["--device=nope"]).unwrap_err();
-        assert!(err.contains("koreader") && err.contains("--device="), "{err}");
+        assert!(err.contains("kindle") && err.contains("--device="), "{err}");
         assert!(device_from_args::<&str>(&[]).is_err());
     }
 
@@ -299,7 +303,8 @@ mod tests {
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")).is_ok());
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")).is_err(), "阅读范围不能超过屏幕");
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.pdf]\nwidth = 90\nheight = 180\n")).is_err(), "不再支持的格式（pdf）报错");
-        for fmt in ["pdf", "azw3"] {
+        assert!(Profile::parse("x", &format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"azw3\"]\nnotes = \"jump\"\n{scr}")).is_ok(), "azw3 可以");
+        for fmt in ["pdf", "mobi"] {
             let old = format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"{fmt}\"]\nnotes = \"jump\"\n{scr}");
             assert!(Profile::parse("x", &old).is_err(), "formats 里写 {fmt} 报错");
         }

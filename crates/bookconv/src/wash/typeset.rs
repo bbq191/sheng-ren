@@ -299,10 +299,9 @@ pub fn wash_css(opts: &WashOpts) -> String {
     // 要求。跟 `.eink-flush` 一样是单个裸类选择器，不逗号连写。
     // `.eink-note`：章末的每条注释（`htmlproc::footnote`）不拆到两页（用户 2026-09-29：注释内容要在同一页内；长过一页的阅读器照常断开）。
     // `.eink-noteicon`：图标标号限成一个字高（没写宽高的 <img> 两个阅读器都按图片像素画，80×80 的图标撑成一大块）。
-    // `.eink-fullpage`：漫画纯图页去掉行高和字号，整页图才能用满整屏（只有 profile 开了 `comic_fullpage` 时才有页面带这个类，见 `optimize::html_pass::mark_fullpage`）。
     let latin = if opts.lang == LangMode::Latin { "p{hyphens:auto;-webkit-hyphens:auto;orphans:2;widows:2;}\n" } else { "" };
     format!(
-        "p{{{decl}}}\n{latin}.eink-center{{text-align:center;text-indent:0.01em;}}\n.eink-right{{text-align:right;text-indent:0.01em;}}\n{flush}\nfigure{{margin:0;padding:0;}}\nfigcaption{{margin:0;padding:0;}}\n.footnotes{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-fnote{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-note{{page-break-inside:avoid;}}\n.eink-noteicon{{height:1em;width:auto;}}\n.eink-fullpage{{line-height:0;font-size:0;}}\n"
+        "p{{{decl}}}\n{latin}.eink-center{{text-align:center;text-indent:0.01em;}}\n.eink-right{{text-align:right;text-indent:0.01em;}}\n{flush}\nfigure{{margin:0;padding:0;}}\nfigcaption{{margin:0;padding:0;}}\n.footnotes{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-fnote{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-note{{page-break-inside:avoid;}}\n.eink-noteicon{{height:1em;width:auto;}}\n"
     )
 }
 

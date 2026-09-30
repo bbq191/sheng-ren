@@ -132,6 +132,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "azw3"
+version = "0.1.0"
+dependencies = [
+ "bookconv",
+ "image",
+ "regex",
+]
+
+[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -863,16 +872,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kosync"
-version = "0.1.0"
-dependencies = [
- "md-5",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -889,6 +888,7 @@ name = "library"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
+ "azw3",
  "bookconv",
  "fast2s",
  "image",
@@ -952,16 +952,6 @@ dependencies = [
  "string_cache",
  "string_cache_codegen",
  "tendril",
-]
-
-[[package]]
-name = "md-5"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69b6441f590336821bb897fb28fc622898ccceb1d6cea3fde5ea86b090c4de98"
-dependencies = [
- "cfg-if",
- "digest",
 ]
 
 [[package]]
