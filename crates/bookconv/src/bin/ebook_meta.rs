@@ -133,6 +133,7 @@ fn main() {
         return;
     }
     edits.modified = Some(bookconv::util::utc_now_w3c());
+    edits.normalize = true;
 
     // 先写临时文件；备份（在改名之前）和改名任何一步失败，临时文件都清掉、原文件不动。
     let backup_then = || -> Result<(), String> {

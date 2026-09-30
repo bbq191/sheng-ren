@@ -1,11 +1,6 @@
 //! reading 线通用小工具——集中一处，消除各处重复（XML 转义、书名→文件名安全化）。
 //! HTTP Agent 见 `crate::netimg::http_agent`。
 
-/// XML/XHTML 文本与属性通用转义：`& < > "`（转义 `"` 对文本无害、对属性必需，故一个函数通吃）。
-/// epub 章节组装、稍后读正文、来源脚注等全共用，替代原先散落的 `xesc`/`xml_escape`。
-/// 顺带丢弃 XML 1.0 不允许出现的字符（见 [`is_xml_char`]）——转义救不了它们，留着整份文档就不是合法
-/// XML：2026-09-23 真机《T.E.双语》PDF 标题是 UTF-16BE，被当 UTF-8 解出一串 `\0`，写进 OPF 的
-/// `dc:title` 后 xochitl 解析 OPF 失败、整本只渲染出 1 页。
 /// 现在的 UTC 时间，写成 `2026-09-30T08:05:09Z`（EPUB 3 的 `dcterms:modified` 格式）。
 pub fn utc_now_w3c() -> String {
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -27,6 +22,11 @@ pub fn utc_w3c(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
+/// XML/XHTML 文本与属性通用转义：`& < > "`（转义 `"` 对文本无害、对属性必需，故一个函数通吃）。
+/// epub 章节组装、稍后读正文、来源脚注等全共用，替代原先散落的 `xesc`/`xml_escape`。
+/// 顺带丢弃 XML 1.0 不允许出现的字符（见 [`is_xml_char`]）——转义救不了它们，留着整份文档就不是合法
+/// XML：2026-09-23 真机《T.E.双语》PDF 标题是 UTF-16BE，被当 UTF-8 解出一串 `\0`，写进 OPF 的
+/// `dc:title` 后 xochitl 解析 OPF 失败、整本只渲染出 1 页。
 pub fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -98,20 +98,6 @@ pub fn xml_unescape(s: &str) -> std::borrow::Cow<'_, str> {
 /// （Rust `char` 本来就不含代理区）。
 pub fn is_xml_char(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
-}
-
-/// HTML 片段里最后一个可见字符（跳过末尾的标签与空白），用于判断一段话是否以句末标点收尾。
-pub fn strip_tags_tail_char(html: &str) -> Option<char> {
-    let mut in_tag = false;
-    for c in html.chars().rev() {
-        match c {
-            '>' => in_tag = true,
-            '<' => in_tag = false,
-            _ if in_tag || c.is_whitespace() => {}
-            _ => return Some(c),
-        }
-    }
-    None
 }
 
 /// 路径/文件名是不是常见位图（按扩展名，忽略大小写）：jpg/jpeg/png/gif/webp。封面声明、占位封面探测共用；

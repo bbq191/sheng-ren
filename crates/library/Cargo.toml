@@ -19,7 +19,7 @@ fast2s = "0.3.1"
 
 [dev-dependencies]
 tempfile = "3"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
 
 [[bin]]
 name = "booklib"

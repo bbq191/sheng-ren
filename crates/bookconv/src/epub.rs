@@ -67,10 +67,10 @@ fn lang_attrs(lang: &str) -> String {
     if valid { format!(" lang=\"{lang}\" xml:lang=\"{lang}\"") } else { String::new() }
 }
 
-/// `head_extra` 原样插在 `</head>` 前（外链样式表 `<link>` 等），普通章节传 `""`。
-fn chapter_doc(ch: &Chapter, lang: &str, head_extra: &str) -> String {
+/// 一章的完整 XHTML 文档。
+fn chapter_doc(ch: &Chapter, lang: &str) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"{}>\n<head><title>{}</title>{head_extra}</head>\n<body>{}</body>\n</html>\n",
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"{}>\n<head><title>{}</title></head>\n<body>{}</body>\n</html>\n",
         lang_attrs(lang),
         xesc(&ch.title),
         ch.html_body
@@ -243,32 +243,28 @@ pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u
         + 16 * 1024;
     let mut buf: Vec<u8> = Vec::with_capacity(cap);
     {
-        let cursor = std::io::Cursor::new(&mut buf);
-        let mut z = zip::ZipWriter::new(cursor);
-        let stored = crate::epubzip::stored();
-        let put = crate::epubzip::put_entry;
-        // mimetype 必须首个、STORED
-        put(&mut z, "mimetype", stored, b"application/epub+zip")?;
-        put(&mut z, "META-INF/container.xml", stored, container_xml().as_bytes())?;
-        put(&mut z, OPF_PATH, stored, opf.as_bytes())?;
-        put(&mut z, "OEBPS/nav.xhtml", stored, nav_xhtml(book).as_bytes())?;
+        // mimetype 首个、STORED（`EpubWriter::new` 写），其余也全部 STORED
+        let mut z = crate::epubzip::EpubWriter::new(std::io::Cursor::new(&mut buf))?;
+        z.put_stored("META-INF/container.xml", container_xml().as_bytes())?;
+        z.put_stored(OPF_PATH, opf.as_bytes())?;
+        z.put_stored("OEBPS/nav.xhtml", nav_xhtml(book).as_bytes())?;
         if let Some(cover) = &book.meta.cover {
-            put(&mut z, &format!("OEBPS/cover.{}", book.meta.cover_ext), stored, cover)?;
-            put(&mut z, "OEBPS/cover.xhtml", stored, cover_xhtml(&book.meta).as_bytes())?;
+            z.put_stored(&format!("OEBPS/cover.{}", book.meta.cover_ext), cover)?;
+            z.put_stored("OEBPS/cover.xhtml", cover_xhtml(&book.meta).as_bytes())?;
         }
         for (i, ch) in book.chapters.iter().enumerate() {
-            put(&mut z, &format!("OEBPS/{}", chapter_filename(i)), stored, chapter_doc(ch, &book.meta.language, "").as_bytes())?;
+            z.put_stored(&format!("OEBPS/{}", chapter_filename(i)), chapter_doc(ch, &book.meta.language).as_bytes())?;
         }
         if opts.consume_resources {
             for r in std::mem::take(&mut book.resources) {
-                put(&mut z, &format!("OEBPS/{}", r.path), stored, &r.bytes)?; // r 在本次迭代结束即释放
+                z.put_stored(&format!("OEBPS/{}", r.path), &r.bytes)?; // r 在本次迭代结束即释放
             }
         } else {
             for r in &book.resources {
-                put(&mut z, &format!("OEBPS/{}", r.path), stored, &r.bytes)?;
+                z.put_stored(&format!("OEBPS/{}", r.path), &r.bytes)?;
             }
         }
-        z.finish().map_err(|e| e.to_string())?;
+        z.finish()?;
     }
     Ok(buf)
 }

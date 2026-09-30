@@ -54,8 +54,7 @@ pub fn is_comic(entries: &[Entry]) -> bool {
     images >= MIN_IMAGES && (text as f64) < TEXT_PER_IMAGE * images as f64
 }
 
-/// 漫画在 OPF 里打的标签（`<dc:subject>`）：书库、阅读器按标签分类时能认出漫画（2026-09-28 起给 KOReader 的配置档自动套漫画设置用，
-/// KOReader 2026-09-30 撤了，标签留着）。
+/// 漫画在 OPF 里打的标签（`<dc:subject>`）：书库、阅读器按标签分类时能认出漫画。
 pub const COMIC_SUBJECT: &str = "漫画";
 
 /// 给漫画的 OPF 加上 [`COMIC_SUBJECT`] 标签：已经有同名 `dc:subject` 的不动；插在 `</metadata>` 前面（`dc` 前缀，
