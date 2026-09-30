@@ -9,6 +9,10 @@ notes = "jump"
 note_icons = "number"
 # 漫画页图到可阅读范围四边留 1px；阅读范围就是整屏，所以离屏幕边缘也是 1px（用户 2026-09-29 要的意思）
 comic_margin = 1
+# 漫画一律从左往右翻：掌阅遇到从右往左翻（page-progression-direction="rtl"，日漫都这样写）的书，整页图不铺满、四周留边
+# （左右 92、上下 124，2026-09-30 真机：只差这一个属性的两本测试书，一本铺满、一本留边）。用户选了铺满（离屏幕 1px），
+# 代价是日漫也往左翻。
+comic_page_direction = "ltr"
 
 [screen]
 width = 1264
