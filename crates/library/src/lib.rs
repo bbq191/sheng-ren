@@ -465,13 +465,24 @@ impl Library {
         self.entry_ids().into_iter().filter(|id| self.read_meta(id).is_none()).collect()
     }
 
-    /// 按 id 前缀或书名片段挑书；`selectors` 为空＝全部。
+    /// 按 id 前缀、书名片段或原件路径挑书；`selectors` 为空＝全部。存在的文件＝原件就是它的那本，存在的目录＝原件在它下面（递归）的所有书
+    /// （2026-09-30：用户直接给原件路径 `booklib meta --clear ~/…/书.epub` 时报"没有匹配的书"）。
     pub fn select(&self, selectors: &[String]) -> Vec<Meta> {
         let all = self.list();
         if selectors.is_empty() {
             return all;
         }
-        all.into_iter().filter(|m| selectors.iter().any(|s| m.id.starts_with(s.as_str()) || m.title.contains(s.as_str()))).collect()
+        // 路径形式的选择词：规范化成和 `source_path` 一样的绝对路径（入库时就是 canonicalize 过的）
+        let paths: Vec<(String, bool)> = selectors
+            .iter()
+            .filter_map(|s| std::fs::canonicalize(s).ok())
+            .filter_map(|p| Some((p.to_str()?.to_string(), p.is_dir())))
+            .collect();
+        let by_path = |m: &Meta| {
+            !m.source_path.is_empty()
+                && paths.iter().any(|(p, dir)| if *dir { Path::new(&m.source_path).starts_with(p) } else { m.source_path == *p })
+        };
+        all.into_iter().filter(|m| by_path(m) || selectors.iter().any(|s| m.id.starts_with(s.as_str()) || m.title.contains(s.as_str()))).collect()
     }
 
     /// 原件现在的状态（只看文件属性，不读内容）。

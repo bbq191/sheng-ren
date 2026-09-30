@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 
 const USAGE: &str = "用法:
   booklib [--library=目录] add <文件或网址>...           一次性入库单个文件（目录用 track）
-  booklib [--library=目录] list [书名片段或 id...]      列出书，以及给哪些阅读模式生成过、是否最新
-  booklib [--library=目录] build [--device=<模式>[,<模式>…]] [--force] [书名片段或 id...]
+  booklib [--library=目录] list [书名片段、id 或原件路径...]      列出书，以及给哪些阅读模式生成过、是否最新
+  booklib [--library=目录] build [--device=<模式>[,<模式>…]] [--force] [书名片段、id 或原件路径...]
       按阅读模式生成优化过的书（只支持 EPUB、CBZ 来源；kindle 出 AZW3，ireader、xochitl 出 EPUB）；不写 --device = 全部模式，
-      --device 可写多次或用逗号分隔，all = 全部；不写书名 = 全部书
+      --device 可写多次或用逗号分隔，all = 全部；不写书名 = 全部书；原件路径可以是文件，也可以是目录（下面所有的书）
       产物：跟踪目录 D 里的书放在 D/../<模式>/，按原件所在子目录镜像；add 进来的书和网址书放在书库 output/<模式>/
   booklib [--library=目录] track <目录>...               跟踪目录（递归）：之后 sync 把它镜像进书库
   booklib [--library=目录] untrack <目录>...             不再跟踪（已入库的书保留）
@@ -23,7 +23,7 @@ const USAGE: &str = "用法:
       新增的入库、改过的换成新版本、移动改名的认得出；原件删了的只报告，--prune 才从书库删掉
       接着按阅读模式生成（只重建有变化的；缺省全部模式，--device 只生成这几个，--no-build 不生成）
       --watch 一直运行，每隔几秒（缺省 60）检查一次，原件有变化才生成
-  booklib [--library=目录] meta [--force] [--clear] [书名片段或 id...]
+  booklib [--library=目录] meta [--force] [--clear] [书名片段、id 或原件路径...]
       联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；
       生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动
       --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）

@@ -406,6 +406,11 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     lib.sync(false, |_| {}).unwrap();
     let find = |t: &str| lib.list().into_iter().find(|m| m.title == t).unwrap();
     let (ireader, xochitl) = (profile::get("ireader").unwrap(), profile::get("xochitl").unwrap());
+    // 用原件路径挑书：文件＝那一本，目录＝下面所有的；路径可以是相对的、不规范的
+    let titles = |sel: &str| lib.select(&[sel.to_string()]).into_iter().map(|m| m.title).collect::<Vec<_>>();
+    assert_eq!(titles(books.join("haodoo/x.epub").to_str().unwrap()), ["甲"]);
+    assert_eq!(titles(books.join("haodoo/../haodoo").to_str().unwrap()), ["甲"]);
+    assert_eq!(titles(books.to_str().unwrap()).len(), 2);
 
     // 跟踪目录 D 里的书：D/../<模式>/<子目录>/<书名>.epub
     let Built::Written { path, .. } = lib.build(&find("甲"), ireader, false).unwrap() else { panic!() };
