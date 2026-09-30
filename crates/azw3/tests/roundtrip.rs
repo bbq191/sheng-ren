@@ -1,6 +1,6 @@
 //! 往返校验：组一本小 EPUB → AZW3 → 用 bookconv 的 KF8 读取器读回来。
 
-use bookconv::convert::palm;
+use azw3::read::palm;
 use bookconv::epub::{assemble, Book, BookMeta, Chapter, NavEntry, Resource};
 
 fn png(w: u32, h: u32) -> Vec<u8> {
@@ -71,7 +71,7 @@ fn azw3_reads_back_with_kf8_reader() {
     let labels: Vec<(&str, u8)> = ncx.iter().map(|e| (e.label.as_str(), e.level)).collect();
     assert!(labels.contains(&("第一章", 0)) && labels.contains(&("第二章", 0)) && labels.contains(&("第二节", 1)), "{labels:?}");
     // 整本读回成 EPUB
-    let (back, _) = bookconv::convert::kf8::azw3_to_epub(&azw3).unwrap();
+    let (back, _) = azw3::read::kf8::azw3_to_epub(&azw3).unwrap();
     let entries = bookconv::epubzip::read_entries(&back).unwrap();
     let text: String = entries.iter().filter(|e| e.name.ends_with(".xhtml")).map(|e| String::from_utf8_lossy(&e.data).into_owned()).collect();
     assert!(text.contains("节正文。") && text.contains("正文段落"), "内容读得回来");
@@ -106,7 +106,7 @@ fn base32_embed_and_link_offsets_read_back() {
     let link = raw.find("kindle:pos:fid:").unwrap();
     assert!(raw[link + 24..link + 34].bytes().any(|b| b.is_ascii_uppercase()), "样本偏移里要有字母: {}", &raw[link..link + 34]);
 
-    let (back, _) = bookconv::convert::kf8::azw3_to_epub(&azw3).unwrap();
+    let (back, _) = azw3::read::kf8::azw3_to_epub(&azw3).unwrap();
     let entries = bookconv::epubzip::read_entries(&back).unwrap();
     let html: String = entries.iter().filter(|e| e.name.ends_with(".xhtml")).map(|e| String::from_utf8_lossy(&e.data).into_owned()).collect();
     // 图片：按出现顺序取回，逐张核对颜色（序号 ≥ 10 的曾被当十进制读，丢图或串图）
