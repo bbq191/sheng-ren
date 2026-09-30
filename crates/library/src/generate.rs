@@ -41,6 +41,21 @@ pub struct OutputStatus {
     pub fresh: Option<bool>,
 }
 
+/// 与模式无关的中间文件：CBZ 转出来的 EPUB、补了元数据的 EPUB（在书库的 `.tmp-<id>-src/` 里）。
+/// 一本书要给几个模式生成时只做一次（一本 135MB 的漫画以前每个模式都整本转一遍）。丢掉时删目录。
+pub(crate) struct PreparedInput {
+    /// 内容哈希 + 补的封面 + 补的元数据：任何一样变了就重做。
+    key: String,
+    dir: PathBuf,
+    epub: PathBuf,
+}
+
+impl Drop for PreparedInput {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 /// 生成计划：指纹。
 struct Plan {
     fingerprint: String,
@@ -72,8 +87,7 @@ impl Library {
         } else {
             format!("{PIPELINE_VERSION}c{}", bookconv::convert::CONVERT_VERSION)
         };
-        // 第 6 段原来是 AZW3 写出器的版本（2026-09-29 删掉），现在放注释呈现方式（profile 的 notes：弹窗/跳转，
-        // 书库 profiles/ 里的自定义模式改了它也要重建）
+        // 注释呈现方式（profile 的 notes：弹窗/跳转；书库 profiles/ 里的自定义模式改了它也要重建）
         let notes = match device.notes {
             profile::Notes::Popup => "popup",
             profile::Notes::Jump => "jump",
@@ -232,19 +246,15 @@ impl Library {
             }
         }
 
-        // 内容从哪读：书库里存着的，或核对过的原件
-        let input = self.content_path(meta)?;
-        // 中间文件（转换出来的 EPUB、补了元数据的 EPUB）放在书库的临时目录里；产物直接写成目标旁边的临时文件，
-        // 过了质量门、落盘后改名到位（中途失败不会留下半个产物，也不会覆盖掉上一版）
+        // 要优化的 EPUB（与模式无关，见 [`PreparedInput`]）；AZW3 的中间产物放在书库的临时目录里；
+        // 产物直接写成目标旁边的临时文件，过了质量门、落盘后改名到位（中途失败不会留下半个产物，也不会覆盖掉上一版）
+        let epub = self.prepared_input(meta)?;
         let tmp = self.root.join(format!("{TMP_PREFIX}{}-{}", meta.id, device.id));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
         let part = tmp_sibling(&out);
         let result = (|| -> Result<Vec<String>, String> {
             let mut warnings = Vec::new();
-            let epub = self.epub_input(meta, &input, &tmp)?;
-            // 书里没有的封面、简介、标签，书库里有找来的：补进去
-            let epub = crate::metadata::with_additions(self, meta, &epub, &tmp)?;
             let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
             // 要转 AZW3 的，优化结果先放临时目录
             let optimized = if device.format() == Format::Epub { part.clone() } else { tmp.join("optimized.epub") };
@@ -272,6 +282,35 @@ impl Library {
         entry.fingerprint = fingerprint;
         self.finish(&sp, meta, entry)?;
         Ok(Built::Written { path: out, warnings })
+    }
+
+    /// 要优化的 EPUB：原件（EPUB）或当场转换的（CBZ），再补上书里没有、书库里有找来的封面、简介、标签。
+    /// 和上一次是同一本书、同样的补充时，直接用上次的中间文件。
+    fn prepared_input(&self, meta: &Meta) -> Result<PathBuf, String> {
+        let input = self.content_path(meta)?;
+        let cover = meta.cover.as_ref().map_or("", |c| c.sha256.as_str());
+        let info = meta.info.as_ref().and_then(|i| i.injected_sig()).unwrap_or_default();
+        let key = format!("{}|{cover}|{info}", meta.content_sha());
+        if let Some(p) = self.prepared.borrow().as_ref().filter(|p| p.key == key) {
+            return Ok(p.epub.clone());
+        }
+        self.prepared.replace(None);
+        let dir = self.root.join(format!("{TMP_PREFIX}{}-src", meta.id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let mut prepared = PreparedInput { key, dir, epub: PathBuf::new() };
+        prepared.epub = self.epub_input(meta, &input, &prepared.dir).and_then(|e| crate::metadata::with_additions(self, meta, &e, &prepared.dir))?;
+        if prepared.epub == input {
+            return Ok(input); // 原件直接用：`prepared` 丢掉时删空目录
+        }
+        let epub = prepared.epub.clone();
+        self.prepared.replace(Some(prepared));
+        Ok(epub)
+    }
+
+    /// 删掉留着给下一个模式用的中间文件（一轮生成结束时调）。
+    pub fn release_prepared(&self) {
+        self.prepared.replace(None);
     }
 
     /// 写一条记录（其余不动）。

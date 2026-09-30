@@ -148,6 +148,8 @@ pub struct Library {
     verified: RefCell<HashMap<String, Verified>>,
     /// 联网查书目用的 HTTP（节流、离线状态跨书共用）。
     net: OnceCell<net::Net>,
+    /// 上一本书与模式无关的中间文件（见 [`generate::PreparedInput`]）：同一本书接着给别的模式生成时直接用。
+    prepared: RefCell<Option<generate::PreparedInput>>,
 }
 
 /// 核对过的原件：路径，和核对时的大小、修改时间。
@@ -210,7 +212,7 @@ impl EpubInfo {
 }
 
 /// 不再支持的格式的提示。
-pub(crate) fn unsupported(format: &str) -> String {
+pub fn unsupported(format: &str) -> String {
     format!(".{format} 不再支持（只支持 EPUB 和 CBZ，或网址）")
 }
 
@@ -247,11 +249,33 @@ impl Library {
             sources_json: JsonCache::new(),
             verified: RefCell::new(HashMap::new()),
             net: OnceCell::new(),
+            prepared: RefCell::new(None),
         })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// 书库的"有没有变化"戳（`sync --watch` 用）：`masters/` 与各条目目录、`output-state/` 的修改时间，以及 `sources.json`。
+    /// 条目的增删改（原件移动改名后改记位置、`meta` 找来封面）、生成记录的改动都会改它们所在目录的修改时间（原子写是改名）；
+    /// 别的进程 track/untrack 会换掉 `sources.json`（产物根目录跟着变）。
+    pub fn change_stamp(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut dir = |p: &Path, deep: bool| {
+            let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+            (p, mtime(p)).hash(&mut h);
+            if deep {
+                for e in std::fs::read_dir(p).into_iter().flatten().flatten() {
+                    (e.path(), mtime(&e.path())).hash(&mut h);
+                }
+            }
+        };
+        dir(&self.root.join("masters"), true);
+        dir(&self.root.join("output-state"), false);
+        dir(&self.root.join("sources.json"), false);
+        h.finish()
     }
 
     /// 本书库可用的设备 profile。

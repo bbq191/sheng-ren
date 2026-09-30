@@ -60,7 +60,8 @@ impl Screen {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Notes {
-    /// 点标号弹窗显示（KOReader）：标号标 `epub:type="noteref"`、注释正文是 `<aside epub:type="footnote">`，阅读器据此认出注释。
+    /// 点标号弹窗显示：标号标 `epub:type="noteref"`、注释正文是 `<aside epub:type="footnote">`，阅读器据此认出注释。
+    /// 内置的三个模式都不用（自带阅读器上没验证过弹窗），留给书库 `profiles/` 里的自定义模式。
     Popup,
     /// 点标号跳到注释、再返回（xochitl：没有弹窗，只认同文件 `#锚点`，不认 `epub:type`）。
     Jump,
@@ -70,7 +71,8 @@ pub enum Notes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteIcons {
-    /// 保留原图标，限成一个字高（KOReader：认 CSS 限高，图标链接也能点开弹窗）。
+    /// 保留原图标，限成一个字高（要阅读器认 CSS 限高、图标链接也能点）。内置的三个模式都换数字（见 `Number`），
+    /// 留给自定义模式。
     #[default]
     Keep,
     /// 换成上标数字（xochitl：只有图的链接点了没反应，CSS 也限不住图标大小）。
