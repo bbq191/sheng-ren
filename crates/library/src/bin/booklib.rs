@@ -24,7 +24,7 @@ const USAGE: &str = "用法:
       接着按阅读模式生成（只重建有变化的；缺省全部模式，--device 只生成这几个，--no-build 不生成）
       --watch 一直运行，每隔几秒（缺省 60）检查一次，原件有变化才生成
   booklib [--library=目录] meta [--force] [--clear] [书名片段、id 或原件路径...]
-      联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；
+      联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过；
       生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动
       --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
   booklib [--library=目录] remove <id>...               从书库删掉（连同生成记录里的产物；原件不动）。id 用 list 里显示的完整 id
@@ -426,6 +426,18 @@ fn main() {
                 if clear {
                     report(lib.clear_metadata(m).map(|had| if had { format!("✓ 去掉找来的元数据和封面  {}", m.title) } else { format!("= 本来就没有找来的元数据  {}", m.title) }));
                     continue;
+                }
+                // 漫画不联网找元数据（2026-09-30 用户定：豆瓣等按书名搜漫画多半对不上，书里的封面就是第一页）
+                match lib.is_comic(m) {
+                    Ok(true) => {
+                        println!("- 跳过 {}：漫画不找元数据", m.title);
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        fail_line(&format!("✗ {}: {e}", m.title));
+                        continue;
+                    }
                 }
                 report(lib.fetch_metadata(m, force).map(|(info, cover)| {
                     let info = match info {
