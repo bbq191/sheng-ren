@@ -33,6 +33,8 @@ ssh_ true || { echo "✗ 连不上 $host（USB 连着是 root@10.11.99.1，Wi-Fi
 ssh_ "ls /home/root/xovi/exthome/qt-resource-rebuilder/shelf-comic-margins.qmd >/dev/null 2>&1" \
   || { echo "✗ Move 上没有页边距代理（shelf-comic-margins.qmd），登记了也没人执行" >&2; exit 1; }
 ssh_ "test -d ${queue%/*}" || { echo "✗ Move 上没有书架服务的队列目录 ${queue%/*}" >&2; exit 1; }
+# 认书靠 unzip 读书里的标记：没有 unzip 时每本都会被当成"没标记"，误报"没有要登记的漫画"
+ssh_ "command -v unzip >/dev/null" || { echo "✗ Move 上没有 unzip 命令，读不了书里的标记" >&2; exit 1; }
 # 开关文件在书架服务自己的数据目录里（~/.local/share/<目录>/reading-qol.json），按文件名找
 if ! ssh_ "grep -qs '\"comicMinMargin\": *true' /home/root/.local/share/*/reading-qol.json"; then
   echo "✗ 「漫画页边距」开关没开（reading-qol.json 的 comicMinMargin）：代理会忽略登记。先在 Move 的网页「管理→实验室」打开" >&2
@@ -40,7 +42,7 @@ if ! ssh_ "grep -qs '\"comicMinMargin\": *true' /home/root/.local/share/*/readin
 fi
 
 # 列出候选：uuid|要设的页边距|现在的页边距|书名（只看 EPUB；busybox 环境，逐本读标记）
-list=$(ssh_ "cd $lib && touch -c $done_file 2>/dev/null; for c in *.content; do
+list=$(ssh_ "cd $lib || exit 1; for c in *.content; do
   u=\${c%.content}
   grep -q '\"fileType\": *\"epub\"' \$c || continue
   want=\$(unzip -p \$u.epub META-INF/eink-reader-margins 2>/dev/null) || continue
@@ -49,7 +51,7 @@ list=$(ssh_ "cd $lib && touch -c $done_file 2>/dev/null; for c in *.content; do
   cur=\$(grep -o '\"margins\": *[0-9]*' \$c | grep -o '[0-9]*\$')
   name=\$(grep -o '\"visibleName\": *\"[^\"]*\"' \$u.metadata | cut -d'\"' -f4)
   echo \"\$u|\$want|\$cur|\$name\"
-done")
+done") || { echo "✗ 读 Move 书库（$lib）失败" >&2; exit 1; }
 
 todo=()
 while IFS='|' read -r u want cur name; do
@@ -71,9 +73,14 @@ if [[ $write -eq 0 ]]; then
   exit 0
 fi
 
-# 合并进队列（队列里别的书保持不动），先写临时文件再改名
+# 合并进队列（队列里别的书保持不动），先写临时文件再改名。书架服务会边执行边从队列里删：
+# 写回前核对队列没被改过（比对读时的内容），改过就不写、让你重跑，免得把它刚删掉的条目又写回去。
 now=$(date +%s)
-new=$(ssh_ "cat $queue 2>/dev/null || echo '[]'" | python3 -c '
+# 一次读回"校验和 + 内容"（队列还没有时校验和记 none）
+qsum="if [ -f $queue ]; then md5sum < $queue | cut -d' ' -f1; else echo none; fi"
+snap=$(ssh_ "$qsum; cat $queue 2>/dev/null || echo '[]'")
+sum=${snap%%$'\n'*} old=${snap#*$'\n'}
+new=$(printf '%s' "$old" | python3 -c '
 import json, sys
 q = json.loads(sys.stdin.read() or "[]")
 have = {p["uuid"] for p in q}
@@ -83,6 +90,7 @@ for item in sys.argv[2:]:
         q.append({"uuid": u, "margins": int(m), "at": int(sys.argv[1])})
 print(json.dumps(q, ensure_ascii=False))
 ' "$now" "${todo[@]}")
-printf '%s' "$new" | ssh_ "cat > $queue.eink-tmp && mv $queue.eink-tmp $queue"
+printf '%s' "$new" | ssh_ "[ \"\$($qsum)\" = $sum ] || { echo '✗ 队列刚被书架服务改过，没写：再跑一次' >&2; exit 3; }
+  cat > $queue.eink-tmp && mv $queue.eink-tmp $queue"
 printf '%s\n' "${todo[@]%%|*}" | ssh_ "mkdir -p ${done_file%/*} && cat >> $done_file"
 echo "✓ 登记了 ${#todo[@]} 本：在 Move 上打开这些书，约 2 秒后页边距自动变成 1（每本只设这一次）"
