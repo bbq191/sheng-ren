@@ -13,6 +13,7 @@ const USAGE: &str = "用法:
   ebook-meta 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
   ebook-meta 书.epub --tag 小说 --tag 科幻               标签整体替换
   ebook-meta 书.epub --cover 封面.jpg                    换封面（书里有封面图就原地换掉，没有就加上）
+  ebook-meta 书.epub --remove-cover                     去掉封面（封面声明、只放封面的那一页、封面图；正文别处用着的图留着）
   ebook-meta 书.epub --get-cover 封面.jpg                取出封面
 选项:
   --title --author --language --publisher --description --tag --date --identifier
@@ -59,7 +60,7 @@ fn main() {
     let mut file: Option<PathBuf> = None;
     let mut singles: Vec<(DcField, String)> = Vec::new();
     let mut multis: Vec<(DcField, Vec<String>)> = Vec::new();
-    let (mut cover, mut get_cover, mut backup) = (None::<PathBuf>, None::<PathBuf>, true);
+    let (mut cover, mut get_cover, mut backup, mut remove_cover) = (None::<PathBuf>, None::<PathBuf>, true, false);
     while let Some(a) = args.next() {
         let a = a.to_string_lossy().into_owned();
         let (key, inline) = match a.split_once('=') {
@@ -91,6 +92,7 @@ fn main() {
             }
             "--cover" => cover = Some(PathBuf::from(value())),
             "--get-cover" => get_cover = Some(PathBuf::from(value())),
+            "--remove-cover" => remove_cover = true,
             "--no-backup" => backup = false,
             k if k.starts_with('-') => fail(&format!("不认识的选项 {k}\n{USAGE}")),
             _ if file.is_none() => file = Some(PathBuf::from(a)),
@@ -117,6 +119,10 @@ fn main() {
         let list: Vec<String> = list.into_iter().filter(|v| !v.trim().is_empty()).collect();
         edits.set.push((field, list));
     }
+    if remove_cover && cover.is_some() {
+        fail("--cover 和 --remove-cover 只能给一个");
+    }
+    edits.remove_cover = remove_cover;
     if let Some(p) = &cover {
         edits.cover = Some(std::fs::read(p).unwrap_or_else(|e| fail(&format!("{}: {e}", p.display()))));
     }
@@ -136,7 +142,14 @@ fn main() {
     };
     let edited = bookconv::util::produce_then_replace_with(&bookconv::util::tmp_beside(&file, "ebook-meta"), &file, |tmp| opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}")), backup_then);
     let report = edited.unwrap_or_else(|e| fail(&e));
-    let what: Vec<&str> = report.fields.iter().map(|f| f.label()).chain(report.cover_replaced.map(|r| if r { "封面（换掉原图）" } else { "封面（新加）" })).collect();
+    let removed = report.cover_removed.as_ref().map(|gone| if gone.is_empty() { "封面（书里本来就没有）".to_string() } else { format!("封面（去掉 {}）", gone.join("、")) });
+    let what: Vec<String> = report
+        .fields
+        .iter()
+        .map(|f| f.label().to_string())
+        .chain(report.cover_replaced.map(|r| if r { "封面（换掉原图）" } else { "封面（新加）" }.to_string()))
+        .chain(removed)
+        .collect();
     println!("已写入：{}（{}）", file.display(), what.join("、"));
     show(&file);
 }
