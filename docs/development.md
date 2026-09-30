@@ -4,14 +4,14 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试（2026-09-30：bookconv 297、azw3 8+2、library 7+15、profile 5）
+cargo test --workspace                      # 全部测试（要求全部通过）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的测试
 cargo clippy --workspace --all-targets      # 要求没有警告
 
 tools/regress/run.sh 某版/epub-optimize 目录   # 真书回归：全部文字书 + 一卷漫画各优化一遍（见下文）
 tools/regress/compare.py 旧目录 新目录          # 比较两次回归的产物
 python3 tools/kf8/textcheck.py 书.azw3 优化后.epub   # AZW3 与源 EPUB 的可见文字逐字比对（见 AZW3 写出器）
-shellcheck -x install.sh uninstall.sh xochitl/*.sh
+shellcheck -x install.sh uninstall.sh xochitl/*.sh tools/regress/run.sh
 
 ./install.sh --tools                         # 把命令装进 PATH，手工试用
 ```
@@ -24,14 +24,16 @@ shellcheck -x install.sh uninstall.sh xochitl/*.sh
 先在改动前的提交构建一份 `epub-optimize` 另存，再和改动后的各跑一遍，然后比较：
 
 ```sh
-git worktree add /tmp/base HEAD && (cd /tmp/base && cargo build --release -p bookconv --bin epub-optimize)
-tools/regress/run.sh /tmp/base/target/release/epub-optimize 旧            # 缺省 --device=ireader
+git worktree add target/regress-base HEAD && (cd target/regress-base && cargo build --release -p bookconv --bin epub-optimize)
+tools/regress/run.sh target/regress-base/target/release/epub-optimize 旧   # 缺省 --device=ireader；/tmp 是内存盘，别放那里
 cargo build --release -p bookconv --bin epub-optimize
 tools/regress/run.sh target/release/epub-optimize 新
 tools/regress/compare.py 旧 新                                           # 改了彩色或阅读范围相关的处理，--device=xochitl 也跑一遍
 ```
 
-`compare.py` 每本书报一行：`SAME`（每个 zip 条目逐字节相同）、`TEXT-SAME`（有条目变了，但可见文字一样）、`TEXT-DIFF`（可见文字变了，打印第一个不同处）。
+`compare.py` 按原书路径配对新旧两次的产物（两边的 `index.txt`；两次之间增删、改名了书也不会错配），每本书报一行：
+`SAME`（每个 zip 条目逐字节相同）、`TEXT-SAME`（有条目变了，但可见文字一样）、`TEXT-DIFF`（可见文字变了，打印第一个不同处）、`MISSING`/`NEW`（只有一边有）。
+优化器版本号一变，每本书的 `META-INF/eink-optimized` 都跟着变，所以升了版本后全是 `TEXT-SAME`，要逐条目比才看得出哪些书真的变了。
 另外核对两件事，不过就算失败、退出码 1：新产物里不合法的 XML 不比旧的多；新产物的可见文字和**原书**逐字符对账（按字符计数，不管顺序——注释会挪到章末——但一个字不多一个字不少）。
 
 | 改动的性质 | 要求 |
@@ -41,12 +43,12 @@ tools/regress/compare.py 旧 新                                           # 改
 | 任何改动 | 输出的 XHTML、OPF、NCX 都是合法 XML，不合法的数量不比改动前多（v27 起是 0；此前的 85 个来自《绝叫》、金庸全集原书的缺陷，规范整理修掉了） |
 | 改了漫画处理 | 拿一卷漫画比图片字节 |
 
-回归工具在 `tools/regress/`（`run.sh` 跑全部测试书、`compare.py` 比较两次产物：SAME / TEXT-SAME / TEXT-DIFF、不合法 XML 数、对原书的字符账）。
-v27 起《金庸全集》对原书的字符账会少一个 U+0010（原书里的损坏控制字符，XML 不允许，规范整理去掉了），这是预期的。
+字符账不计空白、U+FEFF 和控制字符：《金庸全集》原书里有一个损坏的 U+0010（XML 不允许，规范整理去掉了），不算少字。
 
 `kindle` 模式和 `ireader` 用同一套规则，只是阅读范围不同，所以回归缺省只跑 `ireader`；改了漫画的阅读范围相关处理时 `--device=kindle` 也跑一遍。
 AZW3 这一步另外核对：改了 `crates/azw3` 或会影响正文的规则后，把 `--device=kindle` 的回归产物逐本转成 AZW3，用 `tools/kf8/textcheck.py` 和对应的优化后 EPUB 比，全部要 `SAME`
-（2026-09-30：28 本文字书全部 `SAME`，包括 134MB 的《金庸作品全集》）。只重构写出器时，书库生成的 AZW3 应逐字节不变（唯一 ID、时间由书 id 和入库时间固定）；单独用 `epub-to-azw3` 时唯一 ID 按当前时间生成，不能直接逐字节比。
+（2026-09-30：28 本文字书和一卷漫画全部 `SAME`，包括 134MB 的《金庸作品全集》）。只重构写出器时，AZW3 应逐字节不变：
+书库生成时唯一 ID、时间由书 id 和入库时间固定，单独用 `epub-to-azw3` 时由 OPF 标识符和 `dcterms:modified` 派生，都是确定的。
 
 ## 版本号
 
@@ -56,17 +58,19 @@ AZW3 这一步另外核对：改了 `crates/azw3` 或会影响正文的规则后
 |---|---|
 | 清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明）。只进 CBZ 来源的指纹，EPUB 书不受影响 |
+| 生成时往书里补封面、简介、标签（`metadata::inject`） | `bookconv::opfmeta::VERSION`。只进补过东西的书的指纹（`i` + 版本） |
 | EPUB → AZW3 的转换 | `azw3::WRITER_VERSION`。只进 AZW3 模式（`kindle`）的指纹 |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（所有书都会过期，慎用） |
 
 ## 工程约束
 
 - **只用 Rust，不用 Calibre**（包括 `ebook-convert`、DeDRM 插件、KFX Output 插件）。
-- **clean-room**：解 DRM（以后重启时）、Kindle 格式的读写（`crates/azw3`、`bookconv::convert::{kf8,palm}`，见 [AZW3 写出器](azw3.md)），都只照公开的格式说明和对样本文件的黑盒分析实现，不读也不移植 GPL 代码（DeDRM_tools、KFX Input、KindleUnpack、Calibre）。许可证事实要下载 LICENSE 文件确认，不凭印象。
+- **clean-room**：解 DRM（以后重启时）、Kindle 格式的读写（`crates/azw3`，含读取器 `azw3::read`，见 [AZW3 写出器](azw3.md)），都只照公开的格式说明和对样本文件的黑盒分析实现，不读也不移植 GPL 代码（DeDRM_tools、KFX Input、KindleUnpack、Calibre）。许可证事实要下载 LICENSE 文件确认，不凭印象。
 - **命名**：命令和二进制按功能命名。写进书里的 CSS 类统一用 `eink-` 前缀（`eink-flush`、`eink-center`），样式表叫 `eink-wash.css`，优化标记是 `META-INF/eink-optimized`。
-- **不写死屏幕数字**：一律从 profile 读，调用方传 `Profile::readable(格式)`。`OptimizeOpts` 没有缺省设备，用 `OptimizeOpts::new(阅读范围)` 创建。
+- **不写死屏幕数字**：一律从 profile 读。优化选项用 `OptimizeOpts::for_profile(模式)` 创建（书库和 `epub-optimize` 同一个起点）；测试里才用 `OptimizeOpts::new(阅读范围)`。
 - **真机验证后才能说完成**：改变阅读效果的规则，没在目标设备上看过，就不写"已验证"；一台设备上验证过不能推到别的设备，电脑上的检查（回归、`textcheck.py`）也不能代替真机。单元测试只能证明逻辑没错。
-- **HTML 操作一律用 `bookconv::html`**（容错单双引号、注释、不把 `data-id` 当 `id`），不写只认双引号的正则。
+- **HTML 操作一律用 `bookconv::html`**（容错单双引号、注释、不把 `data-id` 当 `id`），不写只认双引号的正则；AZW3 写出器、质量门、DRM 判定也一样。
+  OPF manifest 项的路径用 `ManifestItem::path`（先还原 `&amp;` 再百分号解码），写 EPUB 用 `epubzip::EpubWriter`，写文件用 `util` 的原子写——别再各写一份。
 - **不可信输入不能让进程崩溃**：书的字节全是外来数据，数值相加用 `checked_add`、切片用 `get`，解压设上限。
 - **以实测为准**：Kindle、掌阅、xochitl 等阅读器的实测行为，踩到一条就记进[设备与可阅读范围](devices.md#已知的阅读器特性)。
 

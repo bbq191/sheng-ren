@@ -21,7 +21,7 @@
   <rect class="c" x="270" y="150" width="320" height="96" fill="#eef4ff" stroke="#5b7fd6"/>
   <text x="430" y="175" text-anchor="middle" class="n">bookconv</text>
   <text x="430" y="194" text-anchor="middle" class="s">CBZ/网页 → EPUB · 清洗 · 优化 · 图片 · 质量门</text>
-  <text x="430" y="214" text-anchor="middle" class="s">bin: epub-optimize / ebook-meta / cover-fix</text>
+  <text x="430" y="214" text-anchor="middle" class="s">bin: epub-optimize / ebook-meta</text>
   <text x="430" y="232" text-anchor="middle" class="s">readable-probe / readable-measure</text>
 
   <rect class="c" x="330" y="300" width="200" height="60" fill="#f3eefa" stroke="#8a63c9"/>
@@ -32,7 +32,7 @@
   <text x="735" y="65" text-anchor="middle" class="n">azw3</text>
   <text x="735" y="84" text-anchor="middle" class="s">EPUB → AZW3（KF8 写出器）</text>
   <text x="735" y="102" text-anchor="middle" class="s">bin: epub-to-azw3</text>
-  <text x="735" y="120" text-anchor="middle" class="s">用 bookconv 的 KF8 读取器回读自检</text>
+  <text x="735" y="120" text-anchor="middle" class="s">azw3::read：KF8 读取器，回读自检</text>
 
   <rect class="c" x="640" y="300" width="180" height="60" fill="#fff" stroke="#bbb" stroke-dasharray="5 4"/>
   <text x="730" y="325" text-anchor="middle" class="n" fill="#888">drm</text>
