@@ -12,7 +12,9 @@ serde_json = "1"
 ureq = "2"
 # 文字编码：网页的 GBK 等非 UTF-8 页面（quick-xml "encoding" 已间接引入同一版本）
 encoding_rs = "0.8"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# 只要 flate2 的 deflate（zip 的 "deflate" 特性还会带上用不到的 zopfli；缺省压缩级别本来就走 flate2，产物逐字节不变）
+zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 # 图片缩放与重编码：jpeg、png；gif、webp 只解码（漫画里的 GIF/WebP 页转 PNG/JPEG），都是纯 Rust 实现
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 fast_image_resize = "6.1.0"
@@ -20,7 +22,8 @@ fast_image_resize = "6.1.0"
 quick-xml = { version = "0.30", features = ["encoding"] }
 # 网文获取（readlater 下沉，2026-09-05）：Readability 可读性抽取 + scraper 白名单重序列化成合法 XHTML
 readability-rust = "0.1.0"
-scraper = "0.18"
+# deterministic：属性按原文顺序遍历（缺省是 HashMap，同一页每次输出的属性顺序可能不同）
+scraper = { version = "0.18", features = ["deterministic"] }
 ego-tree = "0.6"
 profile = { path = "../profile" }
 
@@ -35,11 +38,6 @@ path = "src/bin/epub_optimize.rs"
 [[bin]]
 name = "ebook-meta"
 path = "src/bin/ebook_meta.rs"
-
-# 给已有 EPUB 无损补封面声明（只改 OPF，其余条目原样拷）。
-[[bin]]
-name = "cover-fix"
-path = "src/bin/cover_fix.rs"
 
 # 测量书：生成（readable-probe）与截图分析（readable-measure），量设备真实可阅读范围，见 `probe.rs`。
 [[bin]]

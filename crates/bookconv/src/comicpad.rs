@@ -31,21 +31,9 @@ div.eink-tx{margin-left:17.8pt;margin-right:17.8pt;}
 
 const MEDIA: [&str; 6] = ["img", "image", "svg", "video", "object", "canvas"];
 
-fn has_class(tag: &str, class: &str) -> bool {
-    html::attrs(tag).iter().any(|a| a.is("class") && a.value.split_ascii_whitespace().any(|c| c == class))
-}
-
-/// 开标签追加一个类（保留原有的类和其它属性）。
-fn add_class(tag: &str, class: &str) -> String {
-    match html::attrs(tag).iter().find(|a| a.is("class")).map(|a| a.value.trim()) {
-        Some(v) if !v.is_empty() => html::set_attr(tag, "class", &format!("{v} {class}")),
-        _ => html::set_attr(tag, "class", class),
-    }
-}
-
 /// 是不是要留边的文字块：`<p>`、`<h1>`–`<h6>`，以及清洗层生成的 `<div class="eink-flush">`（普通结构 div 不算，加了会挤压图）。
 fn is_text_block(t: &html::Tag, tag: &str) -> bool {
-    t.is("p") || t.heading_level().is_some() || (t.is("div") && has_class(tag, "eink-flush"))
+    t.is("p") || t.heading_level().is_some() || (t.is("div") && html::has_class(tag, "eink-flush"))
 }
 
 /// 按页面类型处理一页（见模块文档）。没有 `<body>`、空页、已经处理过 → `None`。
@@ -56,7 +44,7 @@ pub fn pad_page(page: &str) -> Option<String> {
     let has_text = !html::plain_text(rest).is_empty();
     let body_tag = &page[body.start..body.end];
     let (new_body, new_rest) = match (has_media, has_text) {
-        (false, true) if !has_class(body_tag, TEXT_PAGE_CLASS) => (add_class(body_tag, TEXT_PAGE_CLASS), rest.to_string()),
+        (false, true) if !html::has_class(body_tag, TEXT_PAGE_CLASS) => (html::add_class(body_tag, TEXT_PAGE_CLASS), rest.to_string()),
         (true, _) => {
             let new_body = html::remove_attr(body_tag, "class");
             let mut out = String::with_capacity(rest.len());
@@ -64,9 +52,9 @@ pub fn pad_page(page: &str) -> Option<String> {
             if has_text {
                 for t in html::tags(rest).filter(|t| t.is_start()) {
                     let tag = &rest[t.start..t.end];
-                    if is_text_block(&t, tag) && !has_class(tag, TEXT_BLOCK_CLASS) {
+                    if is_text_block(&t, tag) && !html::has_class(tag, TEXT_BLOCK_CLASS) {
                         out.push_str(&rest[last..t.start]);
-                        out.push_str(&add_class(tag, TEXT_BLOCK_CLASS));
+                        out.push_str(&html::add_class(tag, TEXT_BLOCK_CLASS));
                         last = t.end;
                     }
                 }
