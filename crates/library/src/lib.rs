@@ -519,6 +519,19 @@ impl Library {
     }
 
     /// 生成时读的内容：书库里存着的母版，或核对过的原件。
+    /// 是不是漫画：CBZ 一律算；EPUB 按优化器同一套判定（`bookconv::comic_detect::is_comic`：图 ≥ 20 张、平均每张图配的字少于 40），
+    /// 只读文字部分（图片条目不读内容）。
+    pub fn is_comic(&self, m: &Meta) -> Result<bool, String> {
+        if m.content_format() == "cbz" {
+            return Ok(true);
+        }
+        let path = self.content_path(m)?;
+        let file = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut zip = bookconv::zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("{}: {e}", path.display()))?;
+        let sk = bookconv::epubzip::read_skeleton(&mut zip)?;
+        Ok(bookconv::comic_detect::is_comic(&sk.entries))
+    }
+
     pub(crate) fn content_path(&self, m: &Meta) -> Result<PathBuf, String> {
         match m.source() {
             Source::Stored => Ok(self.entry_dir(&m.id).join(&m.master)),
