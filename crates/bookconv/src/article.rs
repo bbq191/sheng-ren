@@ -59,6 +59,7 @@ pub fn build_article_epub(url: &str) -> Result<(Vec<u8>, String), String> {
             cover: None,
             cover_ext: "jpg".into(),
             cover_media_type: "image/jpeg".into(),
+            subjects: Vec::new(),
         },
         chapters: vec![Chapter { title: title.clone(), html_body: body, level: 1 }],
         resources,

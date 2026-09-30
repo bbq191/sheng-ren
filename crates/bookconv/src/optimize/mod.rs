@@ -67,7 +67,11 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   xochitl 里只有图的链接点不了、CSS 限不住图标大小（Move 真机）。编号取注释开头的 `[N]`，其次图标 alt 里的"注释N"，再次本章顺序。
 /// - v32（2026-09-30）：撤掉 v29 的 `eink-fullpage`（只为 KOReader 加的，用户撤了 KOReader）；样式表少了这条规则。
 /// - v33（2026-09-30）：抓不到的远程图删掉（原来原样保留，设备不联网只是断图）；图标注释号换成数字的模式里，样式表去掉用不上的 `.eink-noteicon`。
-pub const OPTIMIZE_VERSION: &str = "33";
+/// - v34（2026-09-30，全系统审计）：只有空白的段落（`<p>&nbsp;</p>`、场景空行）不再被剥空；CSS 选择器前面的 `/* 注释 */` 不再
+///   参与判断（以前会把注释里提到 p、footnote 的规则误当正文或注释容器改掉）；属性值里的 `<` 转义（XML 合法）；目录、链接里的
+///   `&amp;` 只还原一次；被几章同时引用的注释留在原处（以前每章各复制一份，多出字）；封面 SVG 的 `preserveAspectRatio` 只改属性；
+///   本章重复 id 改名；带 EXIF 方向的图先摆正再处理；标了"漫画"的书不到 20 张图也按漫画处理。
+pub const OPTIMIZE_VERSION: &str = "34";
 
 /// 清洗层样式表里限图标注释号高度的那条规则（`wash::typeset`），图标都换成数字时删掉。
 const NOTEICON_RULE: &str = ".eink-noteicon{height:1em;width:auto;}\n";

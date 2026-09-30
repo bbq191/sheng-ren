@@ -48,10 +48,24 @@ pub fn epub_image_stats(entries: &[Entry]) -> (usize, usize) {
     (images, text)
 }
 
-/// 判定：图 ≥[`MIN_IMAGES`] 张且平均每张图配的文字 <[`TEXT_PER_IMAGE`] 字。
+/// 判定：平均每张图配的文字 <[`TEXT_PER_IMAGE`] 字，而且图 ≥[`MIN_IMAGES`] 张——OPF 里已经标了 [`COMIC_SUBJECT`]
+/// （CBZ 转出来的、优化过的漫画）时不看张数，薄薄一册也按漫画处理。
 pub fn is_comic(entries: &[Entry]) -> bool {
     let (images, text) = epub_image_stats(entries);
-    images >= MIN_IMAGES && (text as f64) < TEXT_PER_IMAGE * images as f64
+    let enough = images >= MIN_IMAGES || (images > 0 && tagged_comic(entries));
+    enough && (text as f64) < TEXT_PER_IMAGE * images as f64
+}
+
+/// OPF 里有没有 `<dc:subject>漫画</dc:subject>`。
+fn tagged_comic(entries: &[Entry]) -> bool {
+    parse_opf(entries).is_some_and(|o| has_comic_subject(&String::from_utf8_lossy(&entries[o.index].data)))
+}
+
+fn has_comic_subject(opf: &str) -> bool {
+    use crate::html::{self, TagKind};
+    html::tags(opf).filter(|t| t.kind == TagKind::Open && crate::wash::opf::is_local(t.name, "subject")).any(|t| {
+        html::find_close(opf, t.end, t.name).is_some_and(|c| crate::util::xml_unescape(opf[t.end..c.start].trim()) == COMIC_SUBJECT)
+    })
 }
 
 /// 漫画在 OPF 里打的标签（`<dc:subject>`）：书库、阅读器按标签分类时能认出漫画。
@@ -60,11 +74,7 @@ pub const COMIC_SUBJECT: &str = "漫画";
 /// 给漫画的 OPF 加上 [`COMIC_SUBJECT`] 标签：已经有同名 `dc:subject` 的不动；插在 `</metadata>` 前面（`dc` 前缀，
 /// EPUB 的 OPF 都声明了）。没有 `</metadata>` 的不动。返回 `None` 表示没改。
 pub fn tag_opf_as_comic(opf: &str) -> Option<String> {
-    use crate::html::{self, TagKind};
-    let has = html::tags(opf).filter(|t| t.kind == TagKind::Open && t.name.eq_ignore_ascii_case("dc:subject")).any(|t| {
-        html::find_close(opf, t.end, t.name).is_some_and(|c| crate::util::xml_unescape(opf[t.end..c.start].trim()) == COMIC_SUBJECT)
-    });
-    if has {
+    if has_comic_subject(opf) {
         return None;
     }
     crate::wash::opf::insert_metadata(opf, &format!("<dc:subject>{COMIC_SUBJECT}</dc:subject>"))
@@ -113,6 +123,20 @@ mod tests {
             v.push(e(&format!("c{i}.xhtml"), &format!(r#"<html><body><img src="p{i}.jpg"/></body></html>"#)));
         }
         assert!(!is_comic(&v), "只有 10 张图，没到 MIN_IMAGES 阈值");
+    }
+
+    #[test]
+    fn tagged_comic_counts_even_below_threshold() {
+        let items: String = (1..=10).map(|i| format!(r#"<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>"#)).collect();
+        let spine: String = (1..=10).map(|i| format!(r#"<itemref idref="c{i}"/>"#)).collect();
+        let tagged = format!(r#"<package version="3.0"><metadata><dc:subject>漫画</dc:subject></metadata><manifest>{items}</manifest><spine>{spine}</spine></package>"#);
+        let mut v = vec![e("content.opf", &tagged)];
+        for i in 1..=10 {
+            v.push(e(&format!("c{i}.xhtml"), &format!(r#"<html><body><img src="p{i}.jpg"/></body></html>"#)));
+        }
+        assert!(is_comic(&v), "标了漫画（CBZ 转出来的）的，10 页也算");
+        v[0] = e("content.opf", &tagged.replace("<dc:subject>漫画</dc:subject>", ""));
+        assert!(!is_comic(&v), "没标的照旧要 20 张");
     }
 
     #[test]
