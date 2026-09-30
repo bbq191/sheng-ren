@@ -88,12 +88,12 @@ pub(super) fn add_manifest_items(opf: &str, opf_path: &str, imgs: &[(String, Vec
 /// `retyped` 是 (zip 路径, 新 media-type)；href 按 OPF 所在目录解析（百分号解码）后比对。没有 `media-type` 属性的项不动。
 ///
 /// 为什么不改名：改名要把全书 xhtml 的 `src`、SVG 的 `href`、CSS 的 `url()`、OPF、NCX 里指向它的链接都改掉，漏一处图就丢；
-/// EPUB 按 manifest 的 media-type 认图片格式，不看扩展名；KOReader（crengine）按文件内容认格式（2026-09-29 本机截图核对）。
+/// EPUB 按 manifest 的 media-type 认图片格式，不看扩展名。
 pub(super) fn set_manifest_media_types(opf: &str, opf_path: &str, retyped: &[(String, &'static str)]) -> String {
     let dir = crate::epubzip::dir_of(opf_path);
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for it in crate::wash::manifest_items(opf) {
-        let path = crate::epubzip::resolve(dir, &crate::epubzip::percent_decode(it.href));
+        let path = crate::epubzip::resolve_rel(dir, it.href);
         let Some((_, mt)) = retyped.iter().find(|(p, _)| *p == path) else { continue };
         let Some(a) = html::attr(it.tag, "media-type") else { continue };
         if a.value != *mt {
@@ -120,16 +120,22 @@ pub(super) fn remote_img_fetcher(ag: &ureq::Agent, screen: crate::imgopt::Screen
 }
 
 /// 修封面拉伸变形：calibre 封面页 SVG 常用 preserveAspectRatio="none"（强制铺满、不保宽高比，
-/// 封面被拉伸放大变形），改成 "xMidYMid meet"（保持比例缩放到适配）。覆盖小写/标准两种写法、两种引号。
+/// 封面被拉伸放大变形），改成 "xMidYMid meet"（保持比例缩放到适配）。只改标签上的这个属性（按属性解析，属性名不分大小写、
+/// 两种引号；小写写法的属性名顺带改成标准的 `preserveAspectRatio`）——此前对全文做字符串替换，正文里写着这串字的也会被改。
 pub(super) fn fix_cover_aspect(html_text: &str) -> String {
-    if !html_text.contains("none") {
+    if !contains_ci(html_text, "preserveaspectratio") {
         return html_text.to_string();
     }
-    html_text
-        .replace("preserveaspectratio=\"none\"", "preserveAspectRatio=\"xMidYMid meet\"")
-        .replace("preserveAspectRatio=\"none\"", "preserveAspectRatio=\"xMidYMid meet\"")
-        .replace("preserveaspectratio='none'", "preserveAspectRatio='xMidYMid meet'")
-        .replace("preserveAspectRatio='none'", "preserveAspectRatio='xMidYMid meet'")
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for t in html::tags(html_text).filter(|t| t.is_start()) {
+        for a in html::attrs(&html_text[t.start..t.end]).into_iter().filter(|a| a.is("preserveAspectRatio") && a.value == "none") {
+            edits.push((t.start + a.start, t.start + a.end, format!("preserveAspectRatio={q}xMidYMid meet{q}", q = a.quote.unwrap_or('"'))));
+        }
+    }
+    if edits.is_empty() {
+        return html_text.to_string();
+    }
+    html::apply_edits(html_text, edits)
 }
 
 /// ASCII 不分大小写地包含。
