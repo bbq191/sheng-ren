@@ -450,7 +450,7 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     assert_eq!(std::fs::read(other.join("甲.epub")).unwrap(), b"user's own file");
     assert!(!base.join("ereader/xochitl/haodoo/甲.epub").exists(), "旧产物（记着的）删掉");
     assert_eq!(std::fs::read(base.join("ereader/xochitl/haodoo/笔记.txt")).unwrap(), b"mine", "不认识的文件不删");
-    // 名字稳定：不认识的文件没了，也继续用带后缀的名字（KOReader 按文件名对阅读进度）
+    // 名字稳定：不认识的文件没了，也继续用带后缀的名字（产物改名，拷到设备上就成了另一本书）
     std::fs::remove_file(other.join("甲.epub")).unwrap();
     assert!(matches!(lib.build(&m, xochitl, true).unwrap(), Built::Written { path, .. } if path == to));
 
