@@ -1,5 +1,5 @@
-//! AZW3 (KF8) → EPUB，纯 Rust clean-room（依 KF8/MOBI 格式规范 + MobileRead KF8 wiki，
-//! **不抄 GPL 的 KindleUnpack 代码**）。
+//! 把写出的 AZW3（KF8）读回成可读的 EPUB，**只给写出器做回读自检和测试用**，不是输入格式（入库只收 EPUB、CBZ）。
+//! clean-room：依 MobileRead 的 MOBI/KF8 文档 + 对样本的黑盒分析，不看 KindleUnpack 的代码。
 //!
 //! 关键简化（真样本验证）：KF8 的 rawML（PalmDOC 解压全部文本记录后拼接）本身**已是重组好的
 //! XHTML 文档序列**（skeleton 与其 fragment 交错、按存储序≈阅读序）。故**跳过最复杂的
@@ -8,9 +8,14 @@
 //! 引用里的数字（资源序号、片段号、片段内偏移）都是 base32（`palm::base32_decode`）。
 
 use super::palm;
-use crate::epub::{Chapter, Resource};
+use bookconv::epub::{Chapter, Resource};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
+
+/// 第 `i` 章（0 起）在组出来的 EPUB 里的文件名（`bookconv::epub` 组包时的命名：`chap_0001.xhtml` 起）。
+fn chapter_filename(i: usize) -> String {
+    format!("chap_{:04}.xhtml", i + 1)
+}
 
 /// AZW3 字节 → (母版 EPUB 字节, 书名)。
 pub fn azw3_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
@@ -22,7 +27,7 @@ pub fn azw3_to_epub(data: &[u8]) -> Result<(Vec<u8>, String), String> {
     let exth = palm::parse_exth(h.mobi, h.mobi_hlen);
 
     // 解压文本记录 1..=trecs（剥 trailing bytes）→ rawML。NCX 位置、片段起点都是原始字节偏移，经 `raw.pos` 换算。
-    let raw = palm::RawText::decode(palm::decompress_text(&records, &h), h.encoding);
+    let raw = palm::RawText::decode(palm::decompress_text(&records, &h));
     let rawml = raw.text.as_str();
 
     // 图片资源：`kindle:embed:XXXX` 是 1 起的资源序号（base32）。扫 rawML 用到的序号，为其建资源 + 序号→路径映射。
@@ -118,12 +123,12 @@ fn clean(seg: &str, embed_path: &HashMap<usize, String>) -> String {
 /// calibre 做的 AZW3 元素常**同时**带 aid 与既存 `id="filepos…"`/`calibre_pb_…`：同一标签上的既存 id 先删掉，
 /// 否则转换后同标签出现两个 id 属性 = 非法 XHTML → reMarkable 严格 XML 解析遇重复属性整章失败（真机《消失的爱人》
 /// 只 7 页根因，2026-09-01）。KF8 内链走 kindle:pos→#aid<X>，既存 filepos id 无链接引用，删之安全。
-/// 属性按 `crate::html` 解析：单双引号都认，`data-aid` 不算 aid、`data-id` 不算 id。
+/// 属性按 `bookconv::html` 解析：单双引号都认，`data-aid` 不算 aid、`data-id` 不算 id。
 fn aid_to_id(s: &str) -> std::borrow::Cow<'_, str> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for t in crate::html::tags(s).filter(|t| t.is_start()) {
+    for t in bookconv::html::tags(s).filter(|t| t.is_start()) {
         let tag = &s[t.start..t.end];
-        let attrs = crate::html::attrs(tag);
+        let attrs = bookconv::html::attrs(tag);
         let Some(first_aid) = attrs.iter().position(|a| a.is("aid")) else { continue };
         for (k, a) in attrs.iter().enumerate() {
             if k == first_aid {
@@ -136,7 +141,7 @@ fn aid_to_id(s: &str) -> std::borrow::Cow<'_, str> {
     if edits.is_empty() {
         return std::borrow::Cow::Borrowed(s);
     }
-    std::borrow::Cow::Owned(crate::html::apply_edits(s, edits))
+    std::borrow::Cow::Owned(bookconv::html::apply_edits(s, edits))
 }
 
 /// 内链重映射上下文：fragment 起始偏移表 + rawML 中 aid 位置表（排序），把 `kindle:pos:fid:off` 解析成
@@ -151,13 +156,13 @@ struct LinkCtx {
 impl LinkCtx {
     fn build(rawml: &str, frag_starts: Vec<usize>) -> Self {
         // 记标签起点（不是属性的位置）：链接偏移指向目标标签的 `<`，"≤ 目标的最近一个"才是它自己。
-        let anchors = crate::html::tags(rawml)
+        let anchors = bookconv::html::tags(rawml)
             .filter(|t| t.is_start())
             .filter_map(|t| {
                 let tag = &rawml[t.start..t.end];
-                let id = match crate::html::attr_value(tag, "aid").filter(|v| !v.is_empty()) {
+                let id = match bookconv::html::attr_value(tag, "aid").filter(|v| !v.is_empty()) {
                     Some(aid) => format!("aid{aid}"),
-                    None => crate::html::attr_value(tag, "id").filter(|v| !v.is_empty())?.to_string(),
+                    None => bookconv::html::attr_value(tag, "id").filter(|v| !v.is_empty())?.to_string(),
                 };
                 Some((t.start, id))
             })
@@ -186,17 +191,17 @@ fn remap_links(
     ch_ranges: &[(usize, usize)],
     live_ids: &HashSet<String>,
 ) -> String {
-    // 属性按 `crate::html` 解析（单双引号都认）。`xlink:href` 也管：SVG 里残留的 kindle: 引用同样是死链。
-    crate::html::edit_attrs(html, &["href", "xlink:href"], |_, a| {
+    // 属性按 `bookconv::html` 解析（单双引号都认）。`xlink:href` 也管：SVG 里残留的 kindle: 引用同样是死链。
+    bookconv::html::edit_attrs(html, &["href", "xlink:href"], |_, a| {
         let v = a.value;
         if !v.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("kindle:")) {
-            return crate::html::Edit::Keep;
+            return bookconv::html::Edit::Keep;
         }
         let resolved = parse_kindle_pos(v).and_then(|(fid, off)| ctx.resolve(fid, off));
-        crate::html::Edit::Set(match resolved {
+        bookconv::html::Edit::Set(match resolved {
             Some((t, id)) => {
                 let ci = ch_ranges.partition_point(|(a, _)| *a <= t).saturating_sub(1);
-                let file = crate::epub::chapter_filename(ci);
+                let file = chapter_filename(ci);
                 if live_ids.contains(&id) {
                     format!("{file}#{id}")
                 } else {
@@ -309,8 +314,8 @@ fn build_chapters(
         // 收集清洗后实际存活的 id（shell 上的 aid、带 aid 标签原有的 id 已被剥，不在此集）→ 决定锚点 vs 跳章首。
         let mut live_ids: HashSet<String> = HashSet::new();
         for (ch, _) in &built {
-            for t in crate::html::tags(&ch.html_body).filter(|t| t.is_start()) {
-                if let Some(id) = crate::html::attr_value(&ch.html_body[t.start..t.end], "id").filter(|v| !v.is_empty()) {
+            for t in bookconv::html::tags(&ch.html_body).filter(|t| t.is_start()) {
+                if let Some(id) = bookconv::html::attr_value(&ch.html_body[t.start..t.end], "id").filter(|v| !v.is_empty()) {
                     live_ids.insert(id.to_string());
                 }
             }
@@ -324,10 +329,10 @@ fn build_chapters(
 
 /// 切点 `pos` 落在某个标签里面（它前面最近的 `<` 起的那个标签到 `pos` 还没结束）时吸附回那个 `<`，否则原样。
 /// 此前在切出来的段里"裁到第一个 `>`"：前一章尾部留下半截标签、这一章丢掉那个标签（连同它的 aid 锚点），
-/// 切点落在含 `>` 的正文文字里时还会把这段文字当残片裁掉。标签边界按 `crate::html` 扫（属性值里的 `>` 不算结束）。
+/// 切点落在含 `>` 的正文文字里时还会把这段文字当残片裁掉。标签边界按 `bookconv::html` 扫（属性值里的 `>` 不算结束）。
 fn snap_out_of_tag(rawml: &str, pos: usize) -> usize {
     let Some(lt) = rawml[..pos].rfind('<') else { return pos };
-    match crate::html::tags_in(rawml, lt, rawml.len()).next() {
+    match bookconv::html::tags_in(rawml, lt, rawml.len()).next() {
         Some(t) if t.start == lt && t.end > pos => lt,
         _ => pos,
     }

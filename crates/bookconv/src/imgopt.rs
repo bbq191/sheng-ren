@@ -50,38 +50,28 @@ const JPEG_QUALITY_COMIC: u8 = 95;
 /// 预放大的倍数上限：超过就不放大，按图自己的比例尺补白（见 [`comic_layout`]）。
 const MAX_UPSCALE: f64 = 3.0;
 
-/// 按 `fmt` 编码回同一格式：JPEG 用 `quality`（哈夫曼表按图重做，无损，见 `jpegopt`），PNG 无损；其余格式 `None`。各处理函数共用（此前每处各抄一份 match）。
-fn encode_as(fmt: ImageFormat, img: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
-    match fmt {
-        ImageFormat::Jpeg => {
-            JpegEncoder::new_with_quality(&mut out, quality).encode_image(img).ok()?;
-            return Some(crate::jpegopt::optimize_verified(out));
-        }
-        ImageFormat::Png => img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?,
-        _ => return None,
-    }
-    Some(out)
-}
-
 /// 保比缩进 `max_w × max_h` 框（宽高比保持、保原格式，JPEG 质量 [`JPEG_QUALITY`]），只在超框时动；返回新字节或 `None`
 /// （已达标 / 非 JPEG·PNG / 解码失败 / 重编码没变小 → 调用方原样保留）。
+/// 带 EXIF 方向的图按**摆正后**的宽高判断超不超框；要重编码时先摆正（重编码不带 EXIF，不摆正就转歪了，见 [`decode_oriented`]）。
 fn downscale_into(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Vec<u8>> {
     let (fmt, (w, h)) = header_dims(bytes)?;
+    let orientation = orientation_of(bytes, fmt);
+    let (w, h) = if swaps_axes(orientation) { (h, w) } else { (w, h) };
     if w <= max_w && h <= max_h {
         return None; // 已达标：不解码不重编码（避免无谓的二次有损压缩；2473 页漫画只读头是秒级、全解是分钟级）
     }
     if !within_decode_budget(w, h) {
         return None; // 极端高分辨率原图：不整个解出来，原样保留（见 MAX_DECODE_PIXELS 文档）
     }
-    let img = image::load_from_memory_with_format(bytes, fmt).ok()?;
+    let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
+    img.apply_orientation(orientation);
     // 缩放走 SIMD 版 Lanczos3（`resize_lanczos3`，同漫画页；尺寸算法与 `DynamicImage::resize` 相同），编码时灰度保持单分量。
     // 此前 `img.resize` 是 `image` 自带的标量实现（实测慢约 20 倍，且中间缓冲是 f32，内存大），`encode_image` 还会把
     // 灰度图写成 3 分量 JPEG（体积白涨）——文字书插图每张都走这里（2026-09-25 审计）。非 L8/RGB8 类型（带透明 PNG 等）照旧。
     let (nw, nh) = fit_within(w, h, max_w, max_h);
     let resized = resize_lanczos3(&img, nw, nh);
     drop(img);
-    let out = encode_keep_gray(fmt, &resized, JPEG_QUALITY).or_else(|| encode_as(fmt, &resized, JPEG_QUALITY))?;
+    let out = encode_keep_gray(fmt, &resized, JPEG_QUALITY)?;
     // 只有确实变小才采用（极端下重编码可能变大 → 保留原图，不倒退体积）。
     (out.len() < bytes.len()).then_some(out)
 }
@@ -100,6 +90,30 @@ pub fn downscale_for_device(bytes: &[u8], screen: Screen) -> Option<Vec<u8>> {
     let (long, short) = (screen.long_edge(), screen.short_edge());
     let (max_w, max_h) = if w >= h { (long, short) } else { (short, long) };
     downscale_into(bytes, max_w, max_h)
+}
+
+/// 图片里 EXIF 的方向标签（JPEG、PNG 的 eXIf、WebP 的 EXIF 块）；没有或读不出 → 不用转。只读文件头，不解码像素。
+fn orientation_of(bytes: &[u8], fmt: ImageFormat) -> image::metadata::Orientation {
+    use image::ImageDecoder;
+    image::ImageReader::with_format(Cursor::new(bytes), fmt)
+        .into_decoder()
+        .and_then(|mut d| d.orientation())
+        .unwrap_or(image::metadata::Orientation::NoTransforms)
+}
+
+/// 这个方向摆正时宽高互换（转 90°/270° 的四种）。
+fn swaps_axes(o: image::metadata::Orientation) -> bool {
+    use image::metadata::Orientation::*;
+    matches!(o, Rotate90 | Rotate270 | Rotate90FlipH | Rotate270FlipH)
+}
+
+/// 解码并按 EXIF 方向摆正（格式按魔数认）。重编码写不回 EXIF：像素不摆正的话，在按 EXIF 显示的阅读器上
+/// 原来正的图就转歪了；摆正后像素本身就是该显示的样子，认不认 EXIF 的阅读器看到的都一样。缩略图等只读用途也用它。
+pub fn decode_oriented(bytes: &[u8]) -> Option<image::DynamicImage> {
+    let fmt = image::guess_format(bytes).ok()?;
+    let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
+    img.apply_orientation(orientation_of(bytes, fmt));
+    Some(img)
 }
 
 /// 图片头部声明的像素数（不解码，JPEG/PNG/GIF/WebP）；读不出来按 100 万像素估，给并行内存预算用（[`crate::imgpool`]）。
@@ -219,18 +233,17 @@ struct ComicSrc {
     out_fmt: ImageFormat,
     /// 彩色转成了灰度（黑白屏）：像素已经和原图不同，原字节不能原样沿用。
     to_gray: bool,
+    /// 按 EXIF 方向摆正过：原字节靠 EXIF 才显示正，重编码（不带 EXIF）时必须用摆正后的像素；也不原样沿用原字节
+    /// （阅读器认不认 EXIF 没验证过，摆正后哪台都一样）。
+    rotated: bool,
 }
 
 /// 漫画页产物的编码格式：JPEG、PNG 保持原格式；GIF 转 PNG（调色板图，无损）；WebP 看编码方式——有损的转 JPEG，无损的转 PNG。
 /// 动图（多帧 GIF、动画 WebP）返回 `None`：只取第一帧会丢内容，原样保留。
 fn comic_output_format(fmt: ImageFormat, bytes: &[u8]) -> Option<ImageFormat> {
-    use image::AnimationDecoder;
     match fmt {
         ImageFormat::Jpeg | ImageFormat::Png => Some(fmt),
-        ImageFormat::Gif => {
-            let frames = image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).ok()?.into_frames().take(2).count();
-            (frames == 1).then_some(ImageFormat::Png)
-        }
+        ImageFormat::Gif => (gif_frame_count(bytes, 2)? == 1).then_some(ImageFormat::Png),
         ImageFormat::WebP => {
             if image::codecs::webp::WebPDecoder::new(Cursor::new(bytes)).ok()?.has_animation() {
                 return None;
@@ -238,6 +251,42 @@ fn comic_output_format(fmt: ImageFormat, bytes: &[u8]) -> Option<ImageFormat> {
             Some(if webp_is_lossless(bytes)? { ImageFormat::Png } else { ImageFormat::Jpeg })
         }
         _ => None,
+    }
+}
+
+/// GIF 里有几帧（数到 `limit` 为止）：按 GIF89a 的块结构跳过去数图像描述符（`0x2C`），不解码像素。
+/// 以前用解码器逐帧解出来数，静态页随后还要再整张解一遍。结构不对、截断 → `None`。
+fn gif_frame_count(b: &[u8], limit: usize) -> Option<usize> {
+    if b.len() < 13 || !(b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a")) {
+        return None;
+    }
+    let table = |packed: u8| if packed & 0x80 != 0 { 3usize << ((packed & 7) + 1) } else { 0 };
+    // 子块序列：长度字节 + 数据，长度 0 结束
+    let skip_sub_blocks = |mut i: usize| -> Option<usize> {
+        loop {
+            let n = *b.get(i)? as usize;
+            i += 1 + n;
+            if n == 0 {
+                return Some(i);
+            }
+        }
+    };
+    let mut i = 13 + table(b[10]);
+    let mut frames = 0;
+    loop {
+        match *b.get(i)? {
+            0x21 => i = skip_sub_blocks(i + 2)?,
+            0x2C => {
+                frames += 1;
+                if frames >= limit {
+                    return Some(frames);
+                }
+                let packed = *b.get(i + 9)?;
+                i = skip_sub_blocks(i + 10 + table(packed) + 1)?; // 局部色表之后是 LZW 最小码长（1 字节）
+            }
+            0x3B => return Some(frames),
+            _ => return None,
+        }
     }
 }
 
@@ -264,7 +313,7 @@ fn webp_is_lossless(bytes: &[u8]) -> Option<bool> {
 /// 用 `into_luma8`/`into_rgb8`：解码结果本来就是 8 位对应类型（几乎所有漫画页）时**不再拷贝整图**，
 /// 且不再让"原始解码图 + 归一副本"同时占内存。带透明通道的图（RGBA/LA 的 PNG、带透明色的 GIF）先合成到白底再归一
 /// （[`flatten_alpha_on_white`]）——直接丢掉 alpha 会把透明区域变成它底下存的颜色，通常是纯黑。
-/// `grayscale`（黑白屏设备）时彩色图顺手转成单通道 8 位灰度（256 级，不抖动）。
+/// `grayscale`（黑白屏设备）时彩色图顺手转成单通道 8 位灰度（256 级，不抖动）。带 EXIF 方向的先摆正（[`decode_oriented`]）。
 /// 只合成了白底、别的都不用做时不算改动：原图照旧原样保留，透明区域交给阅读器按页面底色显示。
 /// 超过 [`MAX_COMIC_DECODE_PIXELS`]、动图、解不开 → `None`（原样保留）。
 fn decode_comic(bytes: &[u8], grayscale: bool) -> Option<ComicSrc> {
@@ -274,12 +323,15 @@ fn decode_comic(bytes: &[u8], grayscale: bool) -> Option<ComicSrc> {
         return None; // 解压炸弹或离谱的大图：不整个解出来，原样保留
     }
     let out_fmt = comic_output_format(fmt, bytes)?;
-    let decoded = image::load_from_memory_with_format(bytes, fmt).ok()?;
+    let orientation = orientation_of(bytes, fmt);
+    let mut decoded = image::load_from_memory_with_format(bytes, fmt).ok()?;
+    decoded.apply_orientation(orientation);
+    let rotated = orientation != image::metadata::Orientation::NoTransforms;
     let gray = matches!(decoded.color(), image::ColorType::L8 | image::ColorType::L16 | image::ColorType::La8 | image::ColorType::La16);
     let to_gray = grayscale && !gray;
     let decoded = if decoded.color().has_alpha() { flatten_alpha_on_white(decoded) } else { decoded };
     let img = if gray || to_gray { DynamicImage::ImageLuma8(decoded.into_luma8()) } else { DynamicImage::ImageRgb8(decoded.into_rgb8()) };
-    Some(ComicSrc { img, out_fmt, to_gray })
+    Some(ComicSrc { img, out_fmt, to_gray, rotated })
 }
 
 /// 裁掉四边纯色留白（[`trim_bounds`]）：返回 (裁后的图, 左偏移, 上偏移)。没得裁时原图原样返回、偏移 0。
@@ -385,8 +437,8 @@ fn effective_margin(margin: u32, area: Screen) -> u32 {
 ///
 /// - **常规**：图保比放进 `(W − 2m) × (H − 2m)` 的框（[`fit_box`]），居中放在 `W × H` 白底画布上。受限的那条边两侧正好
 ///   各 `m` 像素，另一条边两侧更多（差奇数时右、下多 1px）；宽高比不变，不拉伸不压扁。比框大的缩小；比框小的 JPEG
-///   **放大**（`may_upscale`，倍数不超过 [`MAX_UPSCALE`]）：KOReader 在多数页面写法下不放大图片，按原像素尺寸显示
-///   （2026-09-29 本机 KOReader 截图实测，见 docs/typesetting.md），不预先放大小图就铺不满屏幕。
+///   **放大**（`may_upscale`，倍数不超过 [`MAX_UPSCALE`]）：画布是阅读范围大小，图按原尺寸放就只占中间一小块；
+///   预先放大后铺满画布，不依赖阅读器会不会、怎么放大图片（各阅读器放不放大没逐一验证）。
 /// - **不放大**（PNG 等无损格式、或要放大超过 [`MAX_UPSCALE`] 倍）：图保持原尺寸，画布按图自己的比例尺补到阅读范围的
 ///   宽高比，白边按比例缩小（至少 1px，`margin = 0` 时为 0）——阅读器把整页放大到屏幕后，受限边的白边仍约 `m` 像素。
 fn comic_layout(w: u32, h: u32, area: Screen, margin: u32, may_upscale: bool) -> PageLayout {
@@ -421,19 +473,20 @@ fn comic_layout(w: u32, h: u32, area: Screen, margin: u32, may_upscale: bool) ->
 /// - 静态 GIF 转 PNG、WebP 转 JPEG/PNG（[`comic_output_format`]）；动图原样保留。
 /// - 短边不到阅读范围宽度 1/3 的装饰小图只裁边（和换格式、转灰度），不缩放、不补白。
 /// - 已经排好的页（和目标排版相差不超过 1px，见 [`PageLayout::matches_original`]）、没有别的要改时返回 `None`（原字节零损失）。
+///   带 EXIF 方向（非"不用转"）的页一律摆正后重编码。
 /// - 超过 [`MAX_COMIC_DECODE_PIXELS`] 的图、解不开的图返回 `None`。
 pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, grayscale: bool) -> Option<Vec<u8>> {
-    let ComicSrc { img, out_fmt, to_gray } = decode_comic(bytes, grayscale)?;
+    let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale)?;
     let orig = (img.width(), img.height());
     let (img, tl, tt) = trim_comic(img);
     let (cw, ch) = (img.width(), img.height());
     let trimmed = (cw, ch) != orig;
     if cw.min(ch) < area.width / 3 {
         // 装饰小图：只裁边
-        return if trimmed || to_gray { encode_keep_gray(out_fmt, &img, JPEG_QUALITY_COMIC) } else { None };
+        return if trimmed || to_gray || rotated { encode_keep_gray(out_fmt, &img, JPEG_QUALITY_COMIC) } else { None };
     }
     let lay = comic_layout(cw, ch, area, margin, out_fmt == ImageFormat::Jpeg);
-    if !to_gray && lay.matches_original(orig, (tl, tt), (cw, ch), area, effective_margin(margin, area)) {
+    if !to_gray && !rotated && lay.matches_original(orig, (tl, tt), (cw, ch), area, effective_margin(margin, area)) {
         return None;
     }
     let img = if (lay.nw, lay.nh) != (cw, ch) { resize_lanczos3(&img, lay.nw, lay.nh) } else { img };
@@ -490,19 +543,13 @@ fn encode_keep_gray(fmt: ImageFormat, img: &image::DynamicImage, jpeg_quality: u
                 DynamicImage::ImageRgb8(c) => enc.write_image(c.as_raw(), c.width(), c.height(), ExtendedColorType::Rgb8).ok()?,
                 _ => return None,
             }
-            // 哈夫曼表按这张图重做（无损：解码逐像素相同，见 `jpegopt`），同样画质小 13%–16%
+            // 哈夫曼表按这张图重做（无损：解码逐像素相同，见 `jpegopt`），同样画质小约 7%–16%
             return Some(crate::jpegopt::optimize_verified(out));
         }
         ImageFormat::Png => img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?,
         _ => return None,
     }
     Some(out)
-}
-
-/// 条目是否是可降采样图片（按扩展名快筛，真正的格式判定在 `downscale_for_device` 里用魔数）。
-pub fn is_downscalable(name: &str) -> bool {
-    let l = name.to_lowercase();
-    l.ends_with(".jpg") || l.ends_with(".jpeg") || l.ends_with(".png")
 }
 
 /// 优化器交给图片处理的条目（按扩展名：jpg/jpeg/png/gif/webp）。GIF/WebP 只有漫画页会处理（[`prepare_comic_page_for_epub`]），
@@ -1045,11 +1092,66 @@ mod tests {
         assert_eq!(converted_media_type("a/p.webp", &black_jpeg(8, 8)), Some("image/jpeg"), "有损 WebP 转成 JPEG");
     }
 
+    /// 横放存储、EXIF 方向 6（顺时针转 90° 显示）的 JPEG：原图左半黑、右半白，摆正后上半黑、下半白。
+    fn exif_rotated_jpeg(w: u32, h: u32) -> Vec<u8> {
+        let img = image::GrayImage::from_fn(w, h, |x, _| image::Luma([if x < w / 2 { 0 } else { 255 }]));
+        // TIFF 头（小端）+ 一个 IFD：0x0112 Orientation，SHORT，值 6
+        let exif = vec![0x49, 0x49, 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0];
+        let mut buf = Vec::new();
+        let mut enc = JpegEncoder::new_with_quality(&mut buf, 95);
+        image::ImageEncoder::set_exif_metadata(&mut enc, exif).unwrap();
+        image::ImageEncoder::write_image(enc, img.as_raw(), w, h, image::ExtendedColorType::L8).unwrap();
+        buf
+    }
+
+    /// 上下两半的平均灰度。
+    fn top_bottom_luma(img: &DynamicImage) -> (f64, f64) {
+        let g = img.to_luma8();
+        let (w, h) = g.dimensions();
+        let avg = |y0: u32, y1: u32| (y0..y1).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| g.get_pixel(x, y)[0] as f64).sum::<f64>() / ((y1 - y0) * w) as f64;
+        (avg(0, h / 3), avg(h - h / 3, h))
+    }
+
     #[test]
-    fn is_downscalable_by_ext() {
-        assert!(is_downscalable("OEBPS/images/p1.JPG"));
-        assert!(is_downscalable("a/b.png"));
-        assert!(!is_downscalable("style.css"));
-        assert!(!is_downscalable("cover.gif"));
+    fn exif_orientation_is_applied_before_reencoding() {
+        let src = exif_rotated_jpeg(3000, 2000);
+        assert_eq!(decode_oriented(&src).unwrap().dimensions(), (2000, 3000));
+        // 文字书插图：按摆正后的竖图缩进竖框，像素也摆正（重编码不带 EXIF）
+        let out = image::load_from_memory(&downscale_for_epub(&src, test_screen()).unwrap()).unwrap();
+        assert!(out.height() > out.width(), "{:?}", out.dimensions());
+        let (top, bottom) = top_bottom_luma(&out);
+        assert!(top < 30.0 && bottom > 225.0, "上黑下白: {top} {bottom}");
+        // 摆正后本来就在框里：不动（原字节连同 EXIF 保留）
+        assert!(downscale_for_epub(&exif_rotated_jpeg(1200, 900), test_screen()).is_none());
+        // 漫画页：同样先摆正再排版——和直接存成竖图（不带 EXIF）的同一张图结果逐字节相同（PNG 无损，比得了字节）
+        let raw = image::RgbImage::from_fn(1200, 800, |x, y| image::Rgb([(x * 7 % 256) as u8, (y * 5 % 256) as u8, ((x * y) % 256) as u8]));
+        let png = |img: &image::RgbImage, exif: Option<Vec<u8>>| {
+            let mut buf = Vec::new();
+            let mut enc = image::codecs::png::PngEncoder::new(&mut buf);
+            if let Some(e) = exif {
+                image::ImageEncoder::set_exif_metadata(&mut enc, e).unwrap();
+            }
+            image::ImageEncoder::write_image(enc, img.as_raw(), img.width(), img.height(), image::ExtendedColorType::Rgb8).unwrap();
+            buf
+        };
+        let exif6 = vec![0x49, 0x49, 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0];
+        let tagged = png(&raw, Some(exif6));
+        let upright = png(&image::imageops::rotate90(&raw), None);
+        assert_eq!(decode_oriented(&tagged).unwrap().to_rgb8(), image::imageops::rotate90(&raw));
+        assert_eq!(prep(&tagged, test_area(), false).unwrap(), prep(&upright, test_area(), false).unwrap());
+        assert_eq!(prep(&tagged, test_area(), true).unwrap(), prep(&upright, test_area(), true).unwrap());
+        // 已经是阅读范围大小的页，带 EXIF 方向也要重编码（不能原样沿用靠 EXIF 才正的字节）
+        let exact = exif_rotated_jpeg(test_area().height, test_area().width);
+        assert!(prep(&exact, test_area(), false).is_some());
+    }
+
+    #[test]
+    fn gif_frames_counted_without_decoding() {
+        let f = image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]));
+        assert_eq!(gif_frame_count(&gif_of(std::slice::from_ref(&f)), 2), Some(1));
+        assert_eq!(gif_frame_count(&gif_of(&[f.clone(), f.clone(), f.clone()]), 2), Some(2));
+        let one = gif_of(&[f]);
+        assert_eq!(gif_frame_count(&one[..one.len() - 3], 2), None, "截断");
+        assert_eq!(gif_frame_count(b"GIF89a", 2), None);
     }
 }

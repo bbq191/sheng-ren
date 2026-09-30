@@ -1,9 +1,9 @@
 //! EPUB → AZW3（KF8）写出器：Kindle USB 侧载的唯一可用格式（EPUB 不认，2026-09-27 真机实测）。
 //!
 //! clean-room：依 MobileRead 的 MOBI 容器文档，加上对 KF8 样本文件的**黑盒数据分析**（只看文件字节，不看任何
-//! 工具的代码）实现，不参考 GPL 的 KindleUnpack / Calibre 代码；读取侧 `bookconv::convert::{palm, kf8}` 做往返校验。
+//! 工具的代码）实现，不参考 GPL 的 KindleUnpack / Calibre 代码；读取侧 [`read`]（`palm`、`kf8`）做往返校验。
 //!
-//! 输入应是已经按设备优化过的 EPUB（`epub-optimize --device=kindle-…`）；这里只做格式转换，不改内容。
+//! 输入应是已经按设备优化过的 EPUB（`epub-optimize --device=kindle`）；这里只做格式转换，不改内容。
 //! 不嵌字体（`@font-face` 去掉，字体交给阅读器设置）；SVG 图片暂不支持（引用保持原样）。
 
 mod book;
@@ -11,11 +11,14 @@ mod container;
 pub mod indx;
 pub mod palmdoc;
 mod text;
+pub mod read;
 
 use std::collections::HashMap;
 
 /// 写出器版本：改了产物字节的修改要加一，书库据此判断旧的 AZW3 产物过期。
-pub const WRITER_VERSION: &str = "1";
+/// - 2（2026-09-30）：属性值里有 `>` 的标签不再被截断（图片、链接不丢）；`<a name>` 也当链接目标；静态 WebP 转 PNG 写进去；
+///   封面缩略图按 EXIF 方向摆正。正常的书产物不变（28 本真书 + 1 卷漫画逐字节相同），受影响的书要重转。
+pub const WRITER_VERSION: &str = "2";
 
 /// Kindle 书库里的归类。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,7 +32,8 @@ pub enum CdeType {
 #[derive(Clone, Debug)]
 pub struct Opts {
     pub cdetype: CdeType,
-    /// 固定唯一 ID 与时间戳（测试要可重复；书库用书的 id 和入库时间，重建后 Kindle 仍认作同一本书）；`None` 按当前时间生成。
+    /// 固定唯一 ID 与时间戳（书库用书的 id 和入库时间，重建后 Kindle 仍认作同一本书）；`None` 按书自己派生：
+    /// ID 取 OPF 唯一标识符的哈希（没有就取 OPF 原文的哈希），时间取 `dcterms:modified`（没有就 2000-01-01）。
     pub fixed_id: Option<(u32, u32)>,
 }
 
@@ -39,12 +43,15 @@ impl Default for Opts {
     }
 }
 
+/// 书里没有可用的 `dcterms:modified` 时的时间戳：2000-01-01T00:00:00Z（和优化器升级 EPUB 3 时补的固定值一致）。
+const DEFAULT_TIMESTAMP: u32 = 946_684_800;
+
 /// 缩略图高度（像素）。
 const THUMB_H: u32 = 330;
 
-/// 封面缩略图：高度缩到 [`THUMB_H`]，本来就不高于它的不放大。
+/// 封面缩略图：高度缩到 [`THUMB_H`]，本来就不高于它的不放大。带 EXIF 方向的封面先摆正（缩略图是重编码的，不带 EXIF）。
 fn thumbnail(cover: &[u8]) -> Option<Vec<u8>> {
-    let img = image::load_from_memory(cover).ok()?;
+    let img = bookconv::imgopt::decode_oriented(cover)?;
     let img = if img.height() > THUMB_H { img.resize(u32::MAX, THUMB_H, image::imageops::FilterType::Lanczos3) } else { img };
     let mut out = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&img.to_rgb8()).ok()?;
@@ -72,9 +79,10 @@ pub fn epub_to_azw3_with_warnings(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, 
         records.len() as u32 - 1
     });
     let layout = text::layout(&book, &res_map, &mut warnings)?;
+    // 没给固定 ID 时按书自己派生（不取当前时间）：同一本 EPUB 每次转出来逐字节相同，Kindle 也认作同一本书。
     let (uid, timestamp) = opts.fixed_id.unwrap_or_else(|| {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-        ((now.as_nanos() as u32) ^ 0x5A5A_1234, now.as_secs() as u32)
+        let h = book.meta.stable_id;
+        ((h >> 32) as u32 ^ h as u32, book.meta.modified.unwrap_or(DEFAULT_TIMESTAMP))
     });
     let asin = format!("{uid:08x}-{timestamp:08x}");
     let meta = container::Meta {

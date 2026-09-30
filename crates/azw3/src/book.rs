@@ -1,7 +1,11 @@
 //! 读 EPUB：元数据、spine 里的 XHTML、CSS、图片、封面、目录。
 
 use bookconv::epubzip::{dir_of, percent_decode, posix_norm, read_entries, resolve};
-use bookconv::convert::common::image_ext_mime;
+use bookconv::convert::common::{image_ext_mime, is_webp};
+use bookconv::html;
+use bookconv::util::xml_unescape;
+use bookconv::wash::opf::is_local;
+use bookconv::wash::normalize::nav_toc_items;
 use bookconv::wash::{manifest_items, opf_dc, parse_opf, tag_attr};
 use regex::Regex;
 use std::collections::HashMap;
@@ -30,6 +34,49 @@ pub struct Meta {
     pub description: String,
     /// spine `page-progression-direction="rtl"`（日漫）。
     pub rtl: bool,
+    /// 这本书的确定性指纹：OPF `unique-identifier` 指向的标识符的 FNV-1a 64 位哈希，没有标识符时取整个 OPF 的哈希。
+    /// 调用方没给固定 ID 时用它派生唯一 ID（同一本书每次转出来一样）。
+    pub stable_id: u64,
+    /// `dcterms:modified`（`CCYY-MM-DDThh:mm:ssZ`）换算成的 Unix 秒；没有或格式不对为 `None`。
+    pub modified: Option<u32>,
+}
+
+/// FNV-1a 64 位。
+fn fnv64(b: &[u8]) -> u64 {
+    b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
+}
+
+/// OPF `<package unique-identifier="X">` 指向的 `<dc:identifier id="X">` 的文本（字符引用已还原、去掉首尾空白）。
+fn unique_identifier(opf: &str) -> Option<String> {
+    let pkg = html::tags(opf).find(|t| t.is_start() && is_local(t.name, "package"))?;
+    let want = html::attr_value(&opf[pkg.start..pkg.end], "unique-identifier")?;
+    let t = html::tags(opf).find(|t| t.kind == html::TagKind::Open && is_local(t.name, "identifier") && html::attr_value(&opf[t.start..t.end], "id") == Some(want))?;
+    let close = html::find_close(opf, t.end, t.name)?;
+    let v = xml_unescape(opf[t.end..close.start].trim()).into_owned();
+    (!v.is_empty()).then_some(v)
+}
+
+/// 第一个 `<meta property="dcterms:modified">` 的值换算成 Unix 秒（只认 `CCYY-MM-DDThh:mm:ssZ`，1970–2105 年）。
+fn modified_secs(opf: &str) -> Option<u32> {
+    let t = html::tags(opf).find(|t| t.kind == html::TagKind::Open && is_local(t.name, "meta") && html::attr_value(&opf[t.start..t.end], "property") == Some("dcterms:modified"))?;
+    let close = html::find_close(opf, t.end, t.name)?;
+    let v = opf[t.end..close.start].trim().as_bytes();
+    if v.len() != 20 || v[4] != b'-' || v[7] != b'-' || v[10] != b'T' || v[13] != b':' || v[16] != b':' || v[19] != b'Z' {
+        return None;
+    }
+    let num = |a: usize, b: usize| -> Option<i64> { std::str::from_utf8(&v[a..b]).ok()?.parse::<i64>().ok() };
+    let (y, mo, d, h, mi, s) = (num(0, 4)?, num(5, 7)?, num(8, 10)?, num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    // 公历日期 → 1970-01-01 起的天数（按 3 月起算的年，闰日落在年末）
+    let (yy, mm) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
+    let era = yy.div_euclid(400);
+    let yoe = yy - era * 400;
+    let doy = (153 * mm + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    u32::try_from(days * 86400 + h * 3600 + mi * 60 + s).ok()
 }
 
 pub struct Image {
@@ -47,30 +94,26 @@ pub struct Loaded {
     pub toc: Vec<TocItem>,
 }
 
-/// EPUB3 nav 文档里的目录（`epub:type` 含 `toc` 的那个 `<nav>`，landmarks、page-list 不算）：`<ol>` 嵌套深度即层级。
+/// EPUB3 nav 文档里的目录（`epub:type` 含 `toc` 的那个 `<nav>`）：和优化器补 NCX 用同一套解析（[`nav_toc_items`]，
+/// `<ol>` 嵌套深度即层级，从 1 起），这里换成从 0 起、锚点百分号解码。
 fn nav_toc(html: &str, nav_path: &str) -> Vec<TocItem> {
-    static TOK: OnceLock<Regex> = OnceLock::new();
-    static NAV: OnceLock<Regex> = OnceLock::new();
-    let nav = NAV.get_or_init(|| Regex::new(r#"(?is)(<nav\b[^>]*>)(.*?)</nav>"#).unwrap());
-    let is_toc = |tag: &str| bookconv::html::attr_value(tag, "epub:type").is_some_and(|t| t.split_whitespace().any(|w| w == "toc"));
-    let Some(body) = nav.captures_iter(html).find(|c| is_toc(&c[1])).map(|c| c.get(2).unwrap().as_str()) else { return Vec::new() };
-    let tok = TOK.get_or_init(|| Regex::new(r#"(?is)<ol\b[^>]*>|</ol>|(<a\b[^>]*>)(.*?)</a>"#).unwrap());
-    let mut depth = 0u32;
-    let mut out = Vec::new();
-    for c in tok.captures_iter(body) {
-        let t = c.get(0).unwrap().as_str();
-        if t.len() >= 3 && t[..3].eq_ignore_ascii_case("<ol") {
-            depth += 1;
-        } else if t.eq_ignore_ascii_case("</ol>") {
-            depth = depth.saturating_sub(1);
-        } else if let (Some(h), Some(label)) = (c.get(1).and_then(|a| bookconv::html::attr_value(a.as_str(), "href")), c.get(2)) {
-            let label = bookconv::wash::plain_text(label.as_str());
-            let h = bookconv::util::xml_unescape(h);
-            let (p, f) = h.split_once('#').unwrap_or((&h, ""));
-            out.push(TocItem { label, level: depth.saturating_sub(1), path: posix_norm(&resolve(dir_of(nav_path), &percent_decode(p))), frag: percent_decode(f) });
-        }
+    nav_toc_items(html, nav_path)
+        .into_iter()
+        .map(|t| TocItem { label: t.title, level: u32::from(t.level.saturating_sub(1)), path: t.path, frag: percent_decode(&t.frag) })
+        .collect()
+}
+
+/// 静态 WebP → PNG（KF8 不认 WebP）：解码后无损编码，像素不变（有损 WebP 的像素就是它解出来的样子）。动画 WebP 只取一帧会丢内容，
+/// 返回 `None`（当作不支持的图片，给出警告）。
+fn webp_to_png(b: &[u8]) -> Option<Vec<u8>> {
+    let dec = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(b)).ok()?;
+    if dec.has_animation() {
+        return None;
     }
-    out
+    let img = image::DynamicImage::from_decoder(dec).ok()?;
+    let mut out = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
+    Some(out)
 }
 
 /// 读 EPUB。`warnings` 收集放不进 AZW3 的内容（不认识的图片格式）。
@@ -81,7 +124,9 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
     let index: HashMap<String, usize> = entries.iter().enumerate().map(|(i, e)| (e.name.clone(), i)).collect();
 
     let dc = opf_dc(&opf_text);
-    let mut meta = Meta { title: dc.title, authors: dc.creators, publisher: dc.publisher, language: dc.language, date: dc.date, description: dc.description, rtl: false };
+    let stable_id = unique_identifier(&opf_text).map_or_else(|| fnv64(&entries[opf.index].data), |id| fnv64(id.as_bytes()));
+    let modified = modified_secs(&opf_text);
+    let mut meta = Meta { title: dc.title, authors: dc.creators, publisher: dc.publisher, language: dc.language, date: dc.date, description: dc.description, rtl: false, stable_id, modified };
     static SPINE: OnceLock<Regex> = OnceLock::new();
     if let Some(m) = SPINE.get_or_init(|| Regex::new(r#"<spine\b[^>]*>"#).unwrap()).find(&opf_text) {
         meta.rtl = tag_attr(m.as_str(), "page-progression-direction") == Some("rtl");
@@ -104,12 +149,14 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
         } else if let Some((_, mime)) = image_ext_mime(&entries[i].data) {
             // 图片字节直接移走，不复制（大漫画省一份内存）
             images.push(Image { path, bytes: std::mem::take(&mut entries[i].data), mime });
+        } else if let Some(png) = is_webp(&entries[i].data).then(|| webp_to_png(&entries[i].data)).flatten() {
+            images.push(Image { path, bytes: png, mime: "image/png" });
         } else if it.media_type.starts_with("image/") {
             unsupported.push(path);
         }
     }
     if !unsupported.is_empty() {
-        warnings.push(format!("{} 张图片格式不支持（只支持 JPEG/PNG/GIF），在 Kindle 上不显示：{}", unsupported.len(), unsupported[0]));
+        warnings.push(format!("{} 张图片格式不支持（只支持 JPEG/PNG/GIF 和静态 WebP），在 Kindle 上不显示：{}", unsupported.len(), unsupported[0]));
     }
     if cover.is_none() {
         if let Some(&(_, _, id)) = bookconv::wash::opf::cover_meta_tags(&opf_text).first() {
@@ -171,6 +218,17 @@ mod tests {
         let toc = nav_toc(html, "OEBPS/nav.xhtml");
         let got: Vec<_> = toc.iter().map(|t| (t.label.as_str(), t.level, t.path.as_str(), t.frag.as_str())).collect();
         assert_eq!(got, [("第一章", 0, "OEBPS/Text/c1.xhtml", "s 1"), ("第二节", 1, "OEBPS/Text/c2.xhtml?a=1&b=2", "")]);
+    }
+
+    #[test]
+    fn stable_id_from_unique_identifier_and_modified_time() {
+        let opf = r#"<package unique-identifier="bid"><metadata><dc:identifier id="other">x</dc:identifier><dc:identifier id='bid'> urn:uuid:1&amp;2 </dc:identifier>
+<meta property="dcterms:modified">2024-02-29T23:59:59Z</meta></metadata></package>"#;
+        assert_eq!(unique_identifier(opf).as_deref(), Some("urn:uuid:1&2"));
+        assert_eq!(modified_secs(opf), Some(1_709_251_199));
+        assert_eq!(modified_secs(r#"<meta property="dcterms:modified">2000-01-01T00:00:00Z</meta>"#), Some(946_684_800));
+        assert_eq!(modified_secs(r#"<meta property="dcterms:modified">2000-13-01T00:00:00Z</meta>"#), None);
+        assert_eq!(unique_identifier(r#"<package><dc:identifier id="bid">x</dc:identifier></package>"#), None);
     }
 
     #[test]
