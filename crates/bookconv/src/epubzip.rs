@@ -206,7 +206,7 @@ pub fn cover_image_of(epub: &std::path::Path) -> Option<(String, Vec<u8>)> {
     let (mut zip, opf_path, text) = open_opf(epub).ok()?;
     let dir = dir_of(&opf_path);
     let path = match opf::declared_cover(&text) {
-        Some(it) => resolve_rel(dir, it.href),
+        Some(it) => it.path(dir),
         None => opf::first_spine_image(&text, dir, 12, false, |p| read_text_opt(&mut zip, p))?,
     };
     Some((crate::util::image_ext_of(&path), read_by_name_opt(&mut zip, &path).ok()??))
@@ -240,8 +240,8 @@ pub fn resolve(base_dir: &str, rel: &str) -> String {
     }
 }
 
-/// 属性里写的相对路径（百分号编码的原文，如 OPF manifest 的 `href`，不带 `#锚点`）→ zip 路径：先百分号解码，再按 `base_dir` 解析。
-/// 带锚点、以所在文件为基准的链接用 [`resolve_href`]。
+/// 已还原字符引用的相对路径（还可能百分号编码，不带 `#锚点`）→ zip 路径：先百分号解码，再按 `base_dir` 解析。
+/// OPF manifest 项用 [`crate::wash::ManifestItem::path`]（属性原文还要先还原 `&amp;` 等）；带锚点、以所在文件为基准的链接用 [`resolve_href`]。
 pub fn resolve_rel(base_dir: &str, href: &str) -> String {
     resolve(base_dir, &percent_decode(href))
 }
