@@ -16,7 +16,9 @@ pub mod read;
 use std::collections::HashMap;
 
 /// 写出器版本：改了产物字节的修改要加一，书库据此判断旧的 AZW3 产物过期。
-pub const WRITER_VERSION: &str = "1";
+/// - 2（2026-09-30）：属性值里有 `>` 的标签不再被截断（图片、链接不丢）；`<a name>` 也当链接目标；静态 WebP 转 PNG 写进去；
+///   封面缩略图按 EXIF 方向摆正。正常的书产物不变（28 本真书 + 1 卷漫画逐字节相同），受影响的书要重转。
+pub const WRITER_VERSION: &str = "2";
 
 /// Kindle 书库里的归类。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
