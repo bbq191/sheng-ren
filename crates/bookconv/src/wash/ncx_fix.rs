@@ -46,7 +46,7 @@ pub(super) fn fix_ncx_manifest_id(entries: &mut [Entry], rep: &mut WashReport) {
     let mut new_text = format!("{}{}{}", &text[..pos], html::set_attr(item.tag, "id", "ncx"), &text[pos + item.tag.len()..]);
     // <spine toc="OLD_ID"> 同步改，不然这个属性从此指向一个不存在的 id（没有这个属性的书——极少
     // 见——说明它压根没靠 spine 的 toc 属性定位目录，不用管）。
-    if let Some(t) = html::tags(&new_text).find(|t| t.is_start() && t.is("spine")) {
+    if let Some(t) = html::tags(&new_text).find(|t| t.is_start() && opf::is_local(t.name, "spine")) {
         let tag = &new_text[t.start..t.end];
         if tag_attr(tag, "toc") == Some(old_id.as_str()) {
             new_text = format!("{}{}{}", &new_text[..t.start], html::set_attr(tag, "toc", "ncx"), &new_text[t.end..]);

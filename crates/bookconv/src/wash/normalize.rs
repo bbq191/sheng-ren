@@ -4,7 +4,7 @@
 //!    - `<!DOCTYPE …>` 换成 EPUB 3 的 `<!DOCTYPE html>`（《金庸全集》原书有几份写坏成 `<!DOCTYpE html pUBLIC "-//W4C//…`）；
 //!    - HTML 命名实体（`&nbsp;`、`&hellip;`……，HTML 4 那一套）换成数字引用：换掉 DOCTYPE 后外部 DTD 不在了，
 //!      命名实体按 XML 读就是未定义；认不出的名字原样留着（拿不准）；
-//!    - 裸 `&` → `&amp;`，不是标签开头的 `<`（`a < b`）→ `&lt;`（标签之间的文字和属性值里）；
+//!    - 裸 `&` → `&amp;`，不是标签开头的 `<`（`a < b`）→ `&lt;`（标签之间的文字）；属性值里的 `<` 一律 → `&lt;`；
 //!    - XML 1.0 不允许的控制字符（原书损坏留下的 U+0010 之类）去掉：它们不是看得见的字；
 //!    - 空元素没闭合（`<br>`、`<img …>`）补成自闭合，无引号/无值属性补引号（`nowrap` → `nowrap="nowrap"`）；
 //!    - 没有对应开标签的闭合标签（《绝叫》`<head>` 里多出来的 `</div>`）去掉——**只在去掉后整份标签配对完全平衡时**才去，
@@ -173,8 +173,9 @@ fn parse_ref(s: &str) -> Ref<'_> {
 }
 
 /// 一段字符数据（标签之间的文字或属性值原文）的修复：命名实体 → 数字引用、裸 `&`、裸 `<`、非法数字引用。
-/// `quote`：属性值的引号（无引号的值写回时要加双引号，值里的 `"` 要转义）。没有要改的原样借用。
-fn fix_chars<'a>(s: &'a str, quote_dq: bool, fx: &mut XmlFixes) -> Cow<'a, str> {
+/// `quote_dq`：无引号的属性值（写回时要加双引号，值里的 `"` 要转义）。`in_attr`：属性值（里面的 `<` 一律转义，见下）。
+/// 没有要改的原样借用。
+fn fix_chars<'a>(s: &'a str, quote_dq: bool, in_attr: bool, fx: &mut XmlFixes) -> Cow<'a, str> {
     if !s.bytes().any(|b| b == b'&' || b == b'<' || (quote_dq && b == b'"')) {
         return Cow::Borrowed(s);
     }
@@ -219,8 +220,10 @@ fn fix_chars<'a>(s: &'a str, quote_dq: bool, fx: &mut XmlFixes) -> Cow<'a, str> 
                 }
             },
             b'<' => {
-                // 后面是字母、`/`、`!`、`?` 的可能是扫描器没认出来的标签（引号没配对之类），拿不准，不动。
-                if rest.as_bytes().get(1).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'/' | b'!' | b'?')) {
+                // 标签之间：后面是字母、`/`、`!`、`?` 的可能是扫描器没认出来的标签（引号没配对之类），拿不准，不动。
+                // 属性值里（扫描器已经按引号认出了值的范围）`<` 在 XML 里一律不合法（`alt="<b>x</b>"` 会让 xochitl
+                // 整章白屏，2026-09-30 审计），全部转义。
+                if !in_attr && rest.as_bytes().get(1).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'/' | b'!' | b'?')) {
                     out.push('<');
                 } else {
                     out.push_str("&lt;");
@@ -250,13 +253,13 @@ fn fix_start_tag<'a>(raw: &'a str, fx: &mut XmlFixes) -> Cow<'a, str> {
         match a.quote {
             Some(_) => {
                 // 引号里的值：同种引号不会出现在值里，只修实体、`&`、`<`。
-                if let Cow::Owned(v) = fix_chars(a.value, false, fx) {
+                if let Cow::Owned(v) = fix_chars(a.value, false, true, fx) {
                     edits.push((a.value_start, a.value_end, v));
                 }
             }
             None if a.value_end > a.value_start => {
                 // 无引号的值（`width=100`）：补双引号。
-                let v = fix_chars(a.value, true, fx);
+                let v = fix_chars(a.value, true, true, fx);
                 edits.push((a.value_start, a.value_end, format!("\"{v}\"")));
                 fx.attrs_quoted += 1;
             }
@@ -325,7 +328,7 @@ fn markup_pass(text: &str, xhtml: bool, drop_stray: bool, fx: &mut XmlFixes) -> 
     let mut stack: Vec<&str> = Vec::new();
     let (mut pos, mut seen_root) = (0usize, false);
     for (k, t) in tags.iter().enumerate() {
-        out.push_str(&fix_chars(&text[pos..t.start], false, fx));
+        out.push_str(&fix_chars(&text[pos..t.start], false, false, fx));
         pos = t.end;
         let raw = &text[t.start..t.end];
         match t.kind {
@@ -384,7 +387,7 @@ fn markup_pass(text: &str, xhtml: bool, drop_stray: bool, fx: &mut XmlFixes) -> 
             }
         }
     }
-    out.push_str(&fix_chars(&text[pos..], false, fx));
+    out.push_str(&fix_chars(&text[pos..], false, false, fx));
     out
 }
 
@@ -630,8 +633,7 @@ pub(super) fn ensure_nav(entries: &mut Vec<Entry>, heading: &str, rep: &mut Wash
                         if label.is_empty() {
                             continue; // nav 里的链接必须有文字
                         }
-                        let src = crate::util::xml_unescape(&p.src);
-                        let (path, frag) = crate::epubzip::resolve_href(ncx_path, &src);
+                        let (path, frag) = crate::epubzip::resolve_href(ncx_path, &p.src);
                         items.push(toc::TocItem::new(p.depth.clamp(1, 255) as u8, label, path, frag.unwrap_or("")));
                     }
                 }
@@ -727,12 +729,11 @@ fn add_landmarks(entries: &mut [Entry], nav_path: &str) -> usize {
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut lis = String::new();
     let mut n = 0;
-    let in_guide = |pos: usize| {
-        let open = html::tags(&opf_text).find(|t| t.kind == html::TagKind::Open && opf::is_local(t.name, "guide"));
-        let close = html::tags(&opf_text).find(|t| t.kind == html::TagKind::Close && opf::is_local(t.name, "guide"));
-        matches!((open, close), (Some(o), Some(c)) if o.end <= pos && pos < c.start)
-    };
-    for t in html::tags(&opf_text).filter(|t| t.is_start() && opf::is_local(t.name, "reference") && in_guide(t.start)) {
+    // `<guide>` 的范围（第一个开标签到第一个闭合标签）只找一次
+    let open = html::tags(&opf_text).find(|t| t.kind == html::TagKind::Open && opf::is_local(t.name, "guide"));
+    let close = html::tags(&opf_text).find(|t| t.kind == html::TagKind::Close && opf::is_local(t.name, "guide"));
+    let Some((lo, hi)) = open.zip(close).map(|(o, c)| (o.end, c.start)).filter(|(lo, hi)| lo <= hi) else { return 0 };
+    for t in html::tags_in(&opf_text, lo, hi).filter(|t| t.is_start() && opf::is_local(t.name, "reference")) {
         let tag = &opf_text[t.start..t.end];
         let (Some(ty), Some(href)) = (html::attr_value(tag, "type").and_then(landmark_type), html::attr_value(tag, "href")) else { continue };
         let href = crate::util::xml_unescape(href);
@@ -814,7 +815,7 @@ pub fn apply_content_properties(opf_text: &str, opf_dir: &str, props: &HashMap<S
     }
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for it in manifest_items(opf_text) {
-        let Some(&f) = props.get(&resolve(opf_dir, &percent_decode(it.href))) else { continue };
+        let Some(&f) = props.get(&it.path(opf_dir)) else { continue };
         let mut kept: Vec<&str> = it.properties.split_whitespace().filter(|p| !MANAGED.iter().any(|(_, m)| m == p)).collect();
         kept.extend(MANAGED.iter().filter(|(b, _)| f & b != 0).map(|(_, m)| *m));
         let new = kept.join(" ");
@@ -856,7 +857,7 @@ mod tests {
             }
         }
         let mut fx = XmlFixes::default();
-        let chars_ok = matches!(fix_chars(t, false, &mut fx), Cow::Borrowed(_)) && fx.unknown_entities == 0;
+        let chars_ok = matches!(fix_chars(t, false, false, &mut fx), Cow::Borrowed(_)) && fx.unknown_entities == 0;
         tags_balanced(t) && t.chars().all(crate::util::is_xml_char) && chars_ok
     }
 

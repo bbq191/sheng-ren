@@ -93,7 +93,7 @@ impl Drawn {
         let mut d = Drawn::default();
         let mut add_css = |css: &str| {
             for c in css_rule_re().captures_iter(css) {
-                let sel = &c[1];
+                let sel = strip_css_comments(&c[1]);
                 let pseudo = sel.contains(":before") || sel.contains(":after");
                 if !html::css_decls(&c[2]).iter().any(|x| decl_draws(x.prop, x.value, pseudo)) {
                     continue;
@@ -201,9 +201,9 @@ fn selects_class(selector: &str, classes: &HashSet<String>) -> bool {
 }
 
 /// 从这些类的规则里去掉下边距、下内边距和"之后分页"（简写的 margin/padding 只把下边改成 0）。
-fn strip_tail_spacing(css: &str, classes: &HashSet<String>) -> String {
+pub(super) fn strip_tail_spacing(css: &str, classes: &HashSet<String>) -> String {
     css_rule_re().replace_all(css, |c: &regex::Captures| {
-        if !selects_class(&c[1], classes) {
+        if !selects_class(&strip_css_comments(&c[1]), classes) {
             return c[0].to_string();
         }
         let mut out: Vec<String> = Vec::new();
@@ -252,7 +252,7 @@ pub(super) fn remove_chapter_end_blanks(entries: &mut [Entry], rep: &mut WashRep
     if tail_classes.is_empty() {
         return;
     }
-    for e in entries.iter_mut().filter(|e| e.name.to_ascii_lowercase().ends_with(".css") && !e.name.ends_with(WASH_CSS_NAME)) {
+    for e in entries.iter_mut().filter(|e| e.name.to_ascii_lowercase().ends_with(".css") && !is_wash_css_name(&e.name)) {
         let Ok(css) = std::str::from_utf8(&e.data) else { continue };
         let new = strip_tail_spacing(css, &tail_classes);
         if new != css {

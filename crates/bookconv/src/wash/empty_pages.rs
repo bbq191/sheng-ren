@@ -13,15 +13,12 @@ pub(super) fn remove_empty_pages(entries: &mut Vec<Entry>, rep: &mut WashReport)
     let Some(opf) = parse_opf(entries) else { return };
     let mut removed: Vec<String> = Vec::new();
     // 条目名索引建一次（此前每个 spine 页线性找一遍全书条目，几千页漫画是"页数 × 条目数"次比较；同名取第一条）。
-    let mut by_name: HashMap<&str, &Entry> = HashMap::with_capacity(entries.len());
-    for e in entries.iter() {
-        by_name.entry(e.name.as_str()).or_insert(e);
-    }
+    let by_name = name_index(entries);
     for p in &opf.spine {
         if Some(p) == opf.nav_doc.as_ref() {
             continue;
         }
-        if let Some(e) = by_name.get(p.as_str()) {
+        if let Some(e) = by_name.get(p.as_str()).map(|&i| &entries[i]) {
             if is_html_entry(&e.name, &e.data) && is_empty_page(&String::from_utf8_lossy(&e.data)) {
                 removed.push(p.clone());
             }
@@ -41,7 +38,7 @@ pub(super) fn remove_empty_pages(entries: &mut Vec<Entry>, rep: &mut WashReport)
     // 删不掉就整个不做（下面改链接会把目录指到邻页，spine 里却还有这页）。
     let opf_dir = opf.dir.clone();
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
-    let Some(text) = opf::remove_items(&text, |it| removed_set.contains(&resolve(&opf_dir, &percent_decode(it.href)))) else { return };
+    let Some(text) = opf::remove_items(&text, |it| removed_set.contains(&it.path(&opf_dir))) else { return };
     entries[opf.index].data = text.into_bytes();
     // 全书指向被删页的链接 → 改指替换页（空页没有内容，锚点一并去掉）：目录（ncx/nav）、正文里的目录页、OPF `<guide>`。
     rewrite_book_links(entries, |n| removed_set.contains(&n.to_string()), |l| {
