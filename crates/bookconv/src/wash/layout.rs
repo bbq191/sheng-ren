@@ -45,13 +45,9 @@ pub(super) fn align_classes(html: &str) -> String {
             .or_else(|| html::attr_value(tag, "style").and_then(|s| style_align.captures(s).map(|m| m[1].to_ascii_lowercase())));
         let Some(align) = align else { continue };
         let class = format!("eink-{align}");
-        let new = match html::attr_value(tag, "class") {
-            Some(cls) if cls.split_whitespace().any(|x| x == class) => continue,
-            Some(cls) if cls.trim().is_empty() => html::set_attr(tag, "class", &class),
-            Some(cls) => html::set_attr(tag, "class", &format!("{cls} {class}")),
-            None => html::set_attr(tag, "class", &class),
-        };
-        edits.push((t.start, t.end, new));
+        if !html::has_class(tag, &class) {
+            edits.push((t.start, t.end, html::add_class(tag, &class)));
+        }
     }
     if edits.is_empty() {
         return html.to_string();
