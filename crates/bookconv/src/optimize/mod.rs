@@ -126,12 +126,14 @@ pub struct OptimizeOpts {
     pub page_direction: Option<crate::direction::PageDirection>,
     /// 漫画的翻页方向（profile 的 `comic_page_direction`）；`page_direction` 按书指定了的以它为准。
     pub comic_page_direction: Option<crate::direction::PageDirection>,
+    /// 漫画写成固定版式（profile 的 `comic_fixed_layout`），画布是 `comic_screen`。见 [`crate::comicfxl`]。
+    pub comic_fixed_layout: bool,
 }
 
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -146,6 +148,7 @@ impl OptimizeOpts {
             number_note_icons: p.note_icons == profile::NoteIcons::Number,
             drop_note_backlinks: !p.note_backlinks,
             comic_page_direction: p.comic_page_direction.as_deref().and_then(crate::direction::PageDirection::parse),
+            comic_fixed_layout: p.comic_fixed_layout,
             ..OptimizeOpts::new(p.output_readable())
         }
     }
@@ -357,6 +360,8 @@ struct EntryXform<'a> {
     /// 只有图标的注释标号换成上标数字。
     number_note_icons: bool,
     drop_note_backlinks: bool,
+    /// 漫画写成固定版式时的画布（宽, 高）。
+    fixed_layout: Option<(u32, u32)>,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
@@ -383,6 +388,10 @@ impl<'a> EntryXform<'a> {
             reader_margins: prep.is_comic_book && opts.comic_reader_margins.is_some(),
             number_note_icons: opts.number_note_icons,
             drop_note_backlinks: opts.drop_note_backlinks,
+            fixed_layout: (prep.is_comic_book && opts.comic_fixed_layout).then(|| {
+                let s = opts.comic_screen.unwrap_or(opts.screen);
+                (s.width, s.height)
+            }),
             opf_name: prep.opf_name.as_deref(),
             screen: opts.screen,
             seen_ids: HashSet::new(),
@@ -401,6 +410,10 @@ impl<'a> EntryXform<'a> {
         let t = fix_cover_aspect(&t);
         let t = svg_cover_to_img(&t);
         let t = if self.reader_margins { crate::comicpad::pad_page(&t).unwrap_or(t) } else { t };
+        let t = match self.fixed_layout {
+            Some((w, h)) => crate::comicfxl::page(&t, w, h).unwrap_or(t),
+            None => t,
+        };
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
         let t = if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
@@ -424,7 +437,7 @@ impl<'a> EntryXform<'a> {
                 Err(_) => Cow::Borrowed(data),
             });
         }
-        if (self.reader_margins || self.number_note_icons) && crate::wash::is_wash_css_name(name) {
+        if (self.reader_margins || self.number_note_icons || self.fixed_layout.is_some()) && crate::wash::is_wash_css_name(name) {
             let mut out = data.to_vec();
             // 图标注释号都换成数字的模式里，限图标高度的 `.eink-noteicon` 用不上了（2026-09-30 用户：失效样式删掉）
             if self.number_note_icons {
@@ -434,6 +447,9 @@ impl<'a> EntryXform<'a> {
             }
             if self.reader_margins && !out.windows(crate::comicpad::CSS_RULES.len()).any(|w| w == crate::comicpad::CSS_RULES.as_bytes()) {
                 out.extend_from_slice(crate::comicpad::CSS_RULES.as_bytes());
+            }
+            if self.fixed_layout.is_some() && !out.windows(crate::comicfxl::CSS_RULES.len()).any(|w| w == crate::comicfxl::CSS_RULES.as_bytes()) {
+                out.extend_from_slice(crate::comicfxl::CSS_RULES.as_bytes());
             }
             return Some(Cow::Owned(out));
         }
@@ -447,6 +463,9 @@ impl<'a> EntryXform<'a> {
                 if let Some(t) = crate::comic_detect::tag_opf_as_comic(&text) {
                     text = Cow::Owned(t);
                 }
+            }
+            if let Some((w, h)) = self.fixed_layout {
+                text = Cow::Owned(crate::comicfxl::opf(&text, w, h));
             }
             return Some(match text {
                 Cow::Borrowed(_) => Cow::Borrowed(data),

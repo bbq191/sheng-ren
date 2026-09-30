@@ -110,6 +110,9 @@ pub struct Profile {
     /// 漫画的翻页方向改成这个（`"ltr"` 或 `"rtl"`，写进 OPF 的 `page-progression-direction`）；不写就照原书。
     /// ireader 写 `"ltr"`：掌阅遇到从右往左翻的书会四周留边、整页图铺不满（2026-09-30 真机），用户选了铺满。
     pub comic_page_direction: Option<String>,
+    /// 漫画写成固定版式，画布是 `comic_readable`（Kindle：流式版式下阅读器强制留页边距，固定版式才能整页铺满，
+    /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
+    pub comic_fixed_layout: bool,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +134,8 @@ struct ProfileFile {
     comic_reader_margins: Option<u32>,
     comic_readable: Option<Screen>,
     comic_page_direction: Option<String>,
+    #[serde(default)]
+    comic_fixed_layout: bool,
 }
 
 fn yes() -> bool {
@@ -141,7 +146,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout };
         p.validate()?;
         Ok(p)
     }
@@ -299,7 +304,8 @@ mod tests {
         assert_eq!((k.comic_margin, i.comic_margin, x.comic_margin), (1, 1, 0));
         assert_eq!(x.note_icons, NoteIcons::Number);
         assert_eq!((k.comic_reader_margins, x.comic_reader_margins), (None, Some(1)));
-        assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1104, height: 1546 }, Screen { width: 952, height: 1457 }));
+        assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1272, height: 1696 }, Screen { width: 952, height: 1457 }), "Kindle 漫画固定版式整屏");
+        assert!(k.comic_fixed_layout && !i.comic_fixed_layout && !x.comic_fixed_layout);
         assert_eq!((k.note_backlinks, i.note_backlinks, x.note_backlinks), (true, true, false), "只有 xochitl 去注释回链");
         assert_eq!((k.comic_page_direction.as_deref(), i.comic_page_direction.as_deref(), x.comic_page_direction.as_deref()), (None, Some("ltr"), None), "掌阅漫画从左往右翻才铺满");
         assert!(get("nope").is_none());

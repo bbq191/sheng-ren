@@ -109,6 +109,8 @@ impl Library {
             Some(d) => format!("{comic_seg}d{d}"),
             None => comic_seg,
         };
+        // 漫画写成固定版式（profile 的 comic_fixed_layout）
+        let comic_seg = if device.comic_fixed_layout { format!("{comic_seg}f") } else { comic_seg };
         let fingerprint = format!(
             "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{comic_seg}|{}|{}",
             meta.content_sha(),
