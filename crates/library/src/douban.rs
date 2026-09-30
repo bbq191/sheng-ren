@@ -93,7 +93,6 @@ pub(crate) struct Subject {
     pub(crate) publisher: String,
     pub(crate) pubdate: String,
     pub(crate) isbn: String,
-    pub(crate) series: String,
     /// 内容简介，段落之间用换行分开。
     pub(crate) description: String,
     pub(crate) tags: Vec<String>,
@@ -161,7 +160,6 @@ fn parse_subject(html: &str) -> Subject {
                 "ISBN" => s.isbn = v,
                 "原作名" => s.original_title = v,
                 "副标题" => s.subtitle = v,
-                "丛书" => s.series = v,
                 _ => {}
             }
         }
