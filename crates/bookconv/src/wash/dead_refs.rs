@@ -3,8 +3,9 @@ use super::*;
 
 // ───────────────────────── 无效引用清理 ─────────────────────────
 
-/// 引用目标是否在书外（远程/内嵌数据/纯锚点）——不是"书内缺文件"，一律不判无效。
-pub(super) fn is_external_ref(r: &str) -> bool {
+/// 引用指的不是书内文件（空值、纯锚点 `#x`、`data:`、`http(s):`、`//` 开头）——谈不上"书内缺文件"，一律不判无效。
+/// 和 [`crate::html::is_external`]（"带协议的书外链接"，全书改链接时用）口径不同：这里空值和纯锚点也算，别的协议（`res:` 等）不算。
+pub(super) fn is_non_file_ref(r: &str) -> bool {
     let l = r.trim().to_ascii_lowercase();
     l.is_empty() || l.starts_with('#') || l.starts_with("data:") || l.starts_with("http:") || l.starts_with("https:") || l.starts_with("//")
 }
@@ -23,7 +24,7 @@ pub(super) fn drop_dead_imgs(html: &str, base_dir: &str, exact: &HashSet<String>
     for t in html::tags(html).filter(|t| t.is_start() && t.is("img")) {
         let tag = &html[t.start..t.end];
         let Some(r) = html::attr_value(tag, "src") else { continue };
-        if is_external_ref(r) || ref_exists(exact, lower, base_dir, r) {
+        if is_non_file_ref(r) || ref_exists(exact, lower, base_dir, r) {
             continue;
         }
         let alt_text = html::attr_value(tag, "alt").map(str::trim).unwrap_or_default();
@@ -60,7 +61,7 @@ pub(super) fn drop_dead_font_faces(css: &str, base_dir: &str, exact: &HashSet<St
             total += 1;
             let r = u.get(1).or_else(|| u.get(2)).or_else(|| u.get(3)).map(|m| m.as_str()).unwrap_or("");
             let device_path = r.trim().to_ascii_lowercase().starts_with("res:");
-            if device_path || !(is_external_ref(r) || ref_exists(exact, lower, base_dir, r)) {
+            if device_path || !(is_non_file_ref(r) || ref_exists(exact, lower, base_dir, r)) {
                 let m = u.get(0).unwrap();
                 dead.push((m.start(), m.end()));
             }

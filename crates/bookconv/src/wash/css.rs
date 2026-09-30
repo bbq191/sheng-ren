@@ -3,11 +3,29 @@ use super::*;
 
 // ───────────────────────── 2–4. CSS 声明处理 ─────────────────────────
 
-/// CSS 规则 `选择器{声明}`（只匹配最内层：`@media{}` 里的规则由"从内向外"匹配到）。`filter_css` 与章尾容器
-/// 去下边距（`layout::strip_tail_spacing`）共用。
+/// CSS 规则 `选择器{声明}`（只匹配最内层：`@media{}` 里的规则由"从内向外"匹配到）。`filter_css`、章尾容器
+/// 去下边距（`layout::strip_tail_spacing`）、`layout::Drawn`、`typeset::indent_classes_of` 共用。
+/// ⚠ 选择器（第 1 组）会带上前面的 `/* … */` 注释：拿它判断之前先过 [`strip_css_comments`]，写回仍用原文。
 pub(super) fn css_rule_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r#"(?s)([^{}]+)\{([^{}]*)\}"#).unwrap())
+}
+
+/// 去掉 `/* … */` 注释（换成一个空格；没闭合的去到末尾）。只用来判断选择器（2026-09-30 审计：`/* p 的边距 */ .note{…}`
+/// 被当成 p 规则改了边距，`/* footnote */` 让普通规则被当成注释容器，`/* fonts */ @font-face{…}` 没认出是 @font-face、字体名被剥）。
+pub(super) fn strip_css_comments(s: &str) -> Cow<'_, str> {
+    if !s.contains("/*") {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("/*") {
+        out.push_str(&rest[..i]);
+        out.push(' ');
+        rest = rest[i + 2..].find("*/").map_or("", |j| &rest[i + 2 + j + 2..]);
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -35,7 +53,7 @@ pub(super) fn is_positive_indent(val: &str) -> bool {
 
 /// 同 `filter_decls`，另把书里**非零** `text-indent` 统一改成 `indent`（Some 时）。
 /// 为什么：书自带的类规则（calibre 转 AZW3 常见 `.calibre_ {text-indent:2em}`）xochitl 不认（只认裸 `p{}`），
-/// KOReader 认且类规则特异性高于我们的 `p{}`——不统一就"xochitl 1.2em、KOReader 2em"，两器同字节不同观感
+/// 按标准 CSS 渲染的阅读器认、且类规则特异性高于我们的 `p{}`——不统一就同一本书在 xochitl 上 1.2em、别的阅读器上 2em
 /// （2026-09-06 Phase E 英文书对照发现）。`text-indent:0`（诗歌/引文/列表明示不缩进）与负值保留。
 /// `filter` 里的属性按 [`crate::cssunlock::unlock`] 解锁（字体去掉、相对字号保留、`font`/`background` 简写只留样式和颜色……）；
 /// `base_text` = 这条规则作用在正文整体那一层（见 [`is_base_text_selector`]）。
@@ -205,15 +223,17 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
         // 规则前面的语句式 at-rule（`@import url(a.css);`、`@charset "utf-8";`）会被正则算进选择器里：拆出来原样保留，
         // 后面的才是真正的选择器（2026-09-28 审计：样式表开头的 `@import` 让紧跟的第一条规则整条跳过，字体锁没剥）。
         let (lead, sel) = split_leading_statements(&c[1]);
-        let trimmed = sel.trim_start();
+        // 判断用去掉注释的选择器；写回用原文（注释照留）。
+        let clean = strip_css_comments(sel);
+        let trimmed = clean.trim_start();
         if trimmed.starts_with("@font-face") || trimmed.starts_with("@import") {
             return c[0].to_string();
         }
-        let spacing = match selector_spacing(sel) {
+        let spacing = match selector_spacing(&clean) {
             Spacing::Vertical if opts.keep_para_spacing => Spacing::Keep,
             s => s,
         };
-        if is_footnote_container_selector(sel) {
+        if is_footnote_container_selector(&clean) {
             let mut filter = opts.filter_props.clone();
             if !filter.iter().any(|p| p == "font-weight") {
                 filter.push("font-weight".to_string());
@@ -223,22 +243,30 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
             decls.push_str(&format!("font-size:{FOOTNOTE_FONT_SIZE};"));
             return format!("{lead}{sel}{{{decls}}}");
         }
-        format!("{lead}{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, is_base_text_selector(sel), Some(indent_for(opts))))
+        format!("{lead}{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, is_base_text_selector(&clean), Some(indent_for(opts))))
     }).into_owned()
 }
 
-/// 选择器文本开头的语句式 at-rule（以 `@` 开头、到括号和引号之外的 `;` 为止，可以有好几条）拆成 (这些语句, 其余)。
-/// 没有就是 `("", 原文)`。
+/// 选择器文本开头的语句式 at-rule（以 `@` 开头、到括号、引号和注释之外的 `;` 为止，可以有好几条，前后可以夹注释）
+/// 拆成 (这些语句, 其余)。没有就是 `("", 原文)`。
 pub(super) fn split_leading_statements(sel: &str) -> (&str, &str) {
     let mut cut = 0;
     loop {
         let rest = &sel[cut..];
-        if !rest.trim_start().starts_with('@') {
+        if !strip_css_comments(rest).trim_start().starts_with('@') {
             break;
         }
         let (mut depth, mut quote) = (0usize, None::<char>);
         let mut end = None;
+        let mut skip_to = 0; // 注释结束处
         for (i, ch) in rest.char_indices() {
+            if i < skip_to {
+                continue;
+            }
+            if quote.is_none() && rest[i..].starts_with("/*") {
+                skip_to = rest[i + 2..].find("*/").map_or(rest.len(), |j| i + 2 + j + 2);
+                continue;
+            }
             match (quote, ch) {
                 (Some(q), c) if c == q => quote = None,
                 (Some(_), _) => {}

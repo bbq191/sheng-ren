@@ -79,9 +79,14 @@ impl Tag<'_> {
     }
     /// `<h1>`–`<h6>` 的级别。
     pub fn heading_level(&self) -> Option<u8> {
-        let b = self.name.as_bytes();
-        (b.len() == 2 && b[0].eq_ignore_ascii_case(&b'h') && (b'1'..=b'6').contains(&b[1])).then(|| b[1] - b'0')
+        heading_level_of(self.name)
     }
+}
+
+/// 元素名是 `h1`–`h6`（不分大小写）时的级别；`h0`、`h7` 之类不算。
+pub fn heading_level_of(name: &str) -> Option<u8> {
+    let b = name.as_bytes();
+    (b.len() == 2 && b[0].eq_ignore_ascii_case(&b'h') && (b'1'..=b'6').contains(&b[1])).then(|| b[1] - b'0')
 }
 
 /// [`tags`] 的迭代器。
@@ -439,6 +444,10 @@ impl Span {
     pub fn closed(&self) -> bool {
         !self.void && self.close_end > self.close_start
     }
+    /// `<h1>`–`<h6>` 的级别（口径同 [`Tag::heading_level`]）。
+    pub fn heading_level(&self) -> Option<u8> {
+        heading_level_of(&self.name)
+    }
 }
 
 /// 解析 `html[lo..hi]` 里的元素（容错：闭合标签找不到对应开标签就忽略，中间没闭合的元素视为在此处隐式闭合，
@@ -745,6 +754,13 @@ mod tests {
         let names: Vec<&str> = s.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["div", "p", "b", "p"]);
         assert!(s[0].closed() && s[1].closed() && !s[2].closed() && s[3].void);
+    }
+
+    #[test]
+    fn heading_levels_only_h1_to_h6() {
+        let h = "<H2>a</H2><h0>b</h0><h7>c</h7><hr/><h6>d</h6>";
+        let got: Vec<Option<u8>> = parse_spans(h, 0, h.len()).iter().map(Span::heading_level).collect();
+        assert_eq!(got, [Some(2), None, None, None, Some(6)]);
     }
 
     #[test]
