@@ -206,7 +206,7 @@ pub fn insert_metadata(opf: &str, xml: &str) -> Option<String> {
 }
 
 /// 元素的终点：自闭合就是标签本身；开标签后面紧跟（中间只有空白）自己的闭合标签时连它一起（`<item …></item>`）。
-fn element_end(text: &str, t: &html::Tag) -> usize {
+pub(crate) fn element_end(text: &str, t: &html::Tag) -> usize {
     if t.kind == html::TagKind::Open {
         let ws = text[t.end..].len() - text[t.end..].trim_start().len();
         if let Some(c) = html::tags_in(text, t.end + ws, text.len()).next() {
