@@ -19,7 +19,7 @@
     <text x="36" y="66">masters/</text>
     <text x="52" y="88">3fa9c1e07b2d/</text><text x="200" y="88" class="s">← id = 原件 SHA-256 前 12 位</text>
     <text x="68" y="110" fill="#1d4fa8">meta.json</text><text x="200" y="110" class="s">原件路径、哈希、大小、时间、书名、找来的元数据</text>
-    <text x="68" y="132">cover.jpg</text><text x="200" y="132" class="s">booklib meta 找来的封面（书里没封面时）</text>
+    <text x="68" y="132">cover.jpg/png</text><text x="200" y="132" class="s">booklib meta 找来的封面（书里没封面时）</text>
     <text x="52" y="158">8c01d4a9e2f3/</text>
     <text x="68" y="180" fill="#1d4fa8">meta.json</text><text x="200" y="180" class="s">CBZ 也只存索引，生成时当场转换</text>
     <text x="52" y="206">5e77a0c3b1d9/</text><text x="200" y="206" class="s">← 网址入库（没有原件）</text>

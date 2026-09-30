@@ -25,7 +25,7 @@
   <text x="450" y="126" text-anchor="middle" class="s">output-state/&lt;模式&gt;.json：这本书上次的产物在哪、指纹是什么</text>
 
   <path class="l" d="M300 138 C300 170 110 160 110 186" marker-end="url(#a)"/>
-  <text x="160" y="164" class="s">指纹一样、位置一样</text>
+  <text x="60" y="160" class="s">指纹一样、位置一样</text>
   <rect class="g" x="20" y="188" width="180" height="48" rx="8"/>
   <text x="110" y="208" text-anchor="middle" class="h">= 已是最新</text>
   <text x="110" y="226" text-anchor="middle" class="s">什么都不做</text>
@@ -37,7 +37,7 @@
   <text x="450" y="226" text-anchor="middle" class="s">原件改名移动、书名变了：直接挪过去</text>
 
   <path class="l" d="M600 138 C600 170 790 160 790 186" marker-end="url(#a)"/>
-  <text x="680" y="164" class="s">指纹变了、没有产物</text>
+  <text x="760" y="160" class="s">指纹变了、没有产物</text>
   <rect class="b" x="680" y="188" width="200" height="48" rx="8"/>
   <text x="780" y="208" text-anchor="middle" class="h">先登记新位置</text>
   <text x="780" y="226" text-anchor="middle" class="s">中途打断也认得出、旧的也会删</text>
@@ -47,7 +47,7 @@
   <text x="720" y="284" text-anchor="middle" class="h">核对原件</text>
   <text x="720" y="302" text-anchor="middle" class="s">大小、修改时间没变 → 直接用；变了 → 重算哈希</text>
   <text x="720" y="318" text-anchor="middle" class="s">内容不一样 → 停下（提示先 sync）</text>
-  <path class="l" d="M560 312 C520 320 480 360 470 360" />
+  <path class="l" d="M600 326 L600 342" marker-end="url(#a)"/>
   <rect class="e" x="740" y="336" width="140" height="34" rx="8"/>
   <text x="810" y="358" text-anchor="middle" class="s">✗ 报错，旧产物不动</text>
   <path class="l" d="M810 326 L810 334" marker-end="url(#a)"/>
