@@ -1,25 +1,28 @@
 //! ebook-meta：查看、改写 EPUB 的元数据（OPF 里的 Dublin Core）和封面。改的是文件本身（不是阅读器的旁路缓存）。
 //!
-//! 只改 OPF（改书名时连 NCX 里的书名）和封面图这几个条目，其余条目原样拷贝，正文一个字节都不变。
+//! 改 OPF（改书名时连 NCX 里的书名）和封面；写出的书和 booklib 的产物一样过一遍 EPUB 3 规范整理（XHTML 修成合法 XML、
+//! OPF 升到 3.0、补导航文档），`dcterms:modified` 写成现在的时间。可见文字一个不动。
+//! 参数统一：任何选项给空字符串 = 删掉这一项（`--cover ""` 就是去掉封面）。
 //! 写前缺省备份成 `<文件>.bak-<时间戳>`；写入先写临时文件再改名，中途失败原文件不动。
 
 use bookconv::opfmeta::{self, DcField, Edits};
 use bookconv::util::cli;
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "用法:
+const USAGE: &str = r#"用法:
   ebook-meta 书.epub                                    查看
   ebook-meta 书.epub --title 书名 --author 作者甲 --author 作者乙
   ebook-meta 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
   ebook-meta 书.epub --tag 小说 --tag 科幻               标签整体替换
   ebook-meta 书.epub --cover 封面.jpg                    换封面（书里有封面图就原地换掉，没有就加上）
-  ebook-meta 书.epub --remove-cover                     去掉封面（封面声明、只放封面的那一页、封面图；正文别处用着的图留着）
+  ebook-meta 书.epub --cover ""                         去掉封面（封面声明、只放封面的那一页、封面图；正文别处用着的图留着）
   ebook-meta 书.epub --get-cover 封面.jpg                取出封面
 选项:
-  --title --author --language --publisher --description --tag --date --identifier
-      --author/--tag/--identifier 可重复，给出即整体替换（给几个就是最终的几个）；其余是单值；值给空字符串 = 删掉这个字段
+  --title --author --language --publisher --description --tag --date --identifier --cover
+      值给空字符串 = 删掉这一项（字段、封面都一样）
+      --author/--tag/--identifier 可重复，给出即整体替换（给几个就是最终的几个）；其余是单值
       --identifier 不动 OPF 唯一标识（unique-identifier 指向的那个），只替换其余标识符
-  --no-backup   不写 .bak 备份";
+  --no-backup   不写 .bak 备份"#;
 
 fn fail(msg: &str) -> ! {
     cli::die(cli::USAGE, msg)
@@ -60,7 +63,7 @@ fn main() {
     let mut file: Option<PathBuf> = None;
     let mut singles: Vec<(DcField, String)> = Vec::new();
     let mut multis: Vec<(DcField, Vec<String>)> = Vec::new();
-    let (mut cover, mut get_cover, mut backup, mut remove_cover) = (None::<PathBuf>, None::<PathBuf>, true, false);
+    let (mut cover, mut get_cover, mut backup) = (None::<String>, None::<PathBuf>, true);
     while let Some(a) = args.next() {
         let a = a.to_string_lossy().into_owned();
         let (key, inline) = match a.split_once('=') {
@@ -90,9 +93,8 @@ fn main() {
                     None => multis.push((field, vec![v])),
                 }
             }
-            "--cover" => cover = Some(PathBuf::from(value())),
+            "--cover" => cover = Some(value()),
             "--get-cover" => get_cover = Some(PathBuf::from(value())),
-            "--remove-cover" => remove_cover = true,
             "--no-backup" => backup = false,
             k if k.starts_with('-') => fail(&format!("不认识的选项 {k}\n{USAGE}")),
             _ if file.is_none() => file = Some(PathBuf::from(a)),
@@ -119,17 +121,18 @@ fn main() {
         let list: Vec<String> = list.into_iter().filter(|v| !v.trim().is_empty()).collect();
         edits.set.push((field, list));
     }
-    if remove_cover && cover.is_some() {
-        fail("--cover 和 --remove-cover 只能给一个");
-    }
-    edits.remove_cover = remove_cover;
-    if let Some(p) = &cover {
-        edits.cover = Some(std::fs::read(p).unwrap_or_else(|e| fail(&format!("{}: {e}", p.display()))));
-    }
+    edits.cover = cover.map(|p| {
+        if p.trim().is_empty() {
+            opfmeta::CoverEdit::Remove
+        } else {
+            opfmeta::CoverEdit::Set(std::fs::read(&p).unwrap_or_else(|e| fail(&format!("{p}: {e}"))))
+        }
+    });
     if edits.is_empty() {
         show(&file);
         return;
     }
+    edits.modified = Some(bookconv::util::utc_now_w3c());
 
     // 先写临时文件；备份（在改名之前）和改名任何一步失败，临时文件都清掉、原文件不动。
     let backup_then = || -> Result<(), String> {

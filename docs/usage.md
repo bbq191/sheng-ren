@@ -306,14 +306,17 @@ ebook-meta 书.epub                                         # 查看：标题、
 ebook-meta 书.epub --title 书名 --author 作者甲 --author 作者乙
 ebook-meta 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
 ebook-meta 书.epub --tag 小说 --tag 科幻                    # 标签整体替换
-ebook-meta 书.epub --publisher ""                          # 值给空字符串 = 删掉这个字段
+ebook-meta 书.epub --publisher ""                          # 值给空字符串 = 删掉这一项（所有选项都这样）
 ebook-meta 书.epub --cover 封面.jpg                         # 换封面
-ebook-meta 书.epub --remove-cover                          # 去掉封面：封面声明、只放封面的那一页（连同目录、guide 里的条目）、封面图；正文别处用着的图留着
+ebook-meta 书.epub --cover ""                              # 去掉封面：封面声明、只放封面的那一页（连同目录、guide 里的条目）、封面图；正文别处用着的图留着
 ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
 ```
 
-- 给了哪个字段就只改哪个，其余不动；`--author`、`--tag`、`--identifier` 可重复，给出即**整体替换**（给几个就是最终的几个）。
-- **正文一个字节不变**：只重写 OPF（改书名时连 NCX 里的书名）和封面图，其余条目原样拷贝，不解压不重压。
+- 给了哪个选项就只改哪个，其余不动；**值给空字符串就是删掉**，字段和封面一样，没有单独的删除选项（2026-09-30 统一）。
+  `--author`、`--tag`、`--identifier` 可重复，给出即**整体替换**（给几个就是最终的几个）。
+- **写出的书和 booklib 的产物一样符合 EPUB 3**（2026-09-30）：改完元数据和封面，再过一遍和清洗层同一套的规范整理——XHTML 修成合法 XML
+  （DOCTYPE、命名实体、命名空间等）、OPF 升到 3.0、没有导航文档的补一份 `nav.xhtml`（含 landmarks）、NCX 的 `dtb:uid` 对齐 OPF；
+  `dcterms:modified` 写成改的时间。**可见文字一个不变**（《兒女英雄傳》69.6 万字逐字核对过），图片等其余文件原样。
 - 写前缺省备份成 `书.epub.bak-<时间戳>`（`--no-backup` 不备份）；先写临时文件再改名，中途失败原文件不动。
 - 换封面：书里声明了封面图就**原地换掉它的内容**（格式不同时转成原图的格式，封面页里引用它的地方跟着变），没有就新加一个并声明。
 - 删掉旧值时，EPUB3 用 `refines` 挂在它们身上的子属性（作者角色、排序名等）一起删；EPUB2 的作者写成 `opf:role="aut"`。

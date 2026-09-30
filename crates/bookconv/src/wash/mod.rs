@@ -225,13 +225,7 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     let opts = &opts;
     // 书的语言标签：OPF `dc:language` 优先，没有就按探测到的主语言。补给缺 lang 的 <html>。
     let opf_idx = find_opf(entries);
-    let lang_tag = opf_idx
-        .and_then(|i| {
-            static DC_LANG: OnceLock<Regex> = OnceLock::new();
-            let t = String::from_utf8_lossy(&entries[i].data);
-            DC_LANG.get_or_init(|| Regex::new(r#"(?s)<dc:language\b[^>]*>\s*([A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*)\s*</dc:language>"#).unwrap()).captures(&t).map(|c| c[1].to_string())
-        })
-        .unwrap_or_else(|| if opts.lang == LangMode::Latin { "en".into() } else { "zh".into() });
+    let lang_tag = book_lang_tag(entries, opf_idx, opts.lang);
     // 新建目录时的标题按书的语言（中文"目录"、其它"Contents"）。
     let heading = toc_title(opts.lang);
     // 外链 wash css 的 zip 路径（放 OPF 同目录；无 OPF 兜底放根）。排版规则写这里、逐 html 加 <link>——
@@ -289,6 +283,29 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     normalize::normalize_book(entries, &lang_tag, heading, &mut rep);
     fix_ncx_uid(entries, &mut rep);
     Ok((rep, comic))
+}
+
+/// 书的语言标签：OPF `dc:language` 优先，没有就按主语言（`Latin` → en，其余 zh）。
+fn book_lang_tag(entries: &[Entry], opf_idx: Option<usize>, lang: LangMode) -> String {
+    opf_idx
+        .and_then(|i| {
+            static DC_LANG: OnceLock<Regex> = OnceLock::new();
+            let t = String::from_utf8_lossy(&entries[i].data);
+            DC_LANG.get_or_init(|| Regex::new(r#"(?s)<dc:language\b[^>]*>\s*([A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*)\s*</dc:language>"#).unwrap()).captures(&t).map(|c| c[1].to_string())
+        })
+        .unwrap_or_else(|| if lang == LangMode::Latin { "en".into() } else { "zh".into() })
+}
+
+/// **只做规范整理**（EPUB 3），和清洗层最后一步是同一套：NCX 去 DOCTYPE → XML 修复 → OPF 升级 3.0 → 导航文档与 landmarks → NCX
+/// `dtb:uid` 对齐 OPF。给 `ebook-meta` 用（2026-09-30 用户：改元数据写出的书也要和 booklib 一样符合 EPUB 3）。不做排版、分页等清洗。
+pub fn normalize_epub3(entries: &mut Vec<Entry>) -> WashReport {
+    let mut rep = WashReport::default();
+    let lang = detect_dominant_script(entries);
+    let lang_tag = book_lang_tag(entries, find_opf(entries), lang);
+    strip_ncx_doctype(entries, &mut rep);
+    normalize::normalize_book(entries, &lang_tag, toc_title(lang), &mut rep);
+    fix_ncx_uid(entries, &mut rep);
+    rep
 }
 
 /// 新增（或重优化时更新）外链 wash css 文件，并往 OPF manifest 补一条 `<item>`（幂等）。
