@@ -4,8 +4,7 @@
 //! 调用方是书库 `booklib`（`crates/library`）和命令行 `epub-optimize`。
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
-use zip::{ZipArchive, ZipWriter};
+use zip::ZipArchive;
 
 /// 幂等标记：优化器把这个文件埋进产物 EPUB，内容=优化器版本号（见 [`marker_value`]）。放 META-INF/ 下
 /// （EPUB 规范允许该目录放额外文件，阅读器忽略）。重优化时旧标记剔除、结尾重写一条。
@@ -37,7 +36,7 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   全书没有节一级标题时，独占一段、每章从 1 连续编号的节号（`１`、`一`）当节标题，进目录。
 /// - v23（2026-09-28）：和章标题同级、只写节号的标题（《13級階梯》`<h3>２</h3>` 单独成文件）至少两章都是这种编号时
 ///   降成节：不再单独占一页，跟正文同页；书自带的平目录里的节缩进到章下面，章标签末尾重复的第一节节号去掉。
-/// - v24（2026-09-28）：漫画的 OPF 打上 `<dc:subject>漫画</dc:subject>`（KOReader 读成 keywords，配置档据此自动套漫画设置）。
+/// - v24（2026-09-28）：漫画的 OPF 打上 `<dc:subject>漫画</dc:subject>`（当时给 KOReader 配置档按关键字套漫画设置用；KOReader 已撤，标签留作漫画标记）。
 /// - v25（2026-09-28）：部标题后面紧跟章标题时部、章各占一页（《雪人》）；没有 `<hN>` 的书，目录锚点是标题段落前面的空元素时
 ///   也认得出标题（《福尔摩斯探案全集》此前整本没分页）；书自带目录指错位置的，核实后改指（《占星术杀人魔法》NCX 整体错位）。
 /// - v26（2026-09-28 审计）：SVG 封面换 img 只换整页只有一张图的封面页（此前的正则会吞掉两个 svg 之间的正文）；分页并回空份时
@@ -48,13 +47,13 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v27（2026-09-29，EPUB→EPUB 收窄）：
 ///   ① 字体字号解锁但不动别的样式——相对字号保留（正文整体那一层除外）、`font` 简写留粗斜体、`background` 简写留颜色；
 ///   不再把灰字改黑、细字重提到 400。
-///   ② 注释按阅读模式：KOReader 弹窗（标号 `epub:type="noteref"`、注释块 `<aside epub:type="footnote">`）、xochitl 跳转；
+///   ② 注释按阅读模式：弹窗（标号 `epub:type="noteref"`、注释块 `<aside epub:type="footnote">`，当时给 KOReader）、跳转（xochitl）；
 ///   标号原样、不再加 `[N]`；注释 0.85em、每条不跨页、图标标号限一个字高。
 ///   ③ 规范整理——产物一律升级 EPUB 3（OPF 3.0、固定值 dcterms:modified、unique-identifier 修正、opf:role/file-as/scheme 改 refines、
 ///   缺 nav 按 NCX 生成、只有 nav 的按 nav 生成 NCX、guide 写成 landmarks，NCX 与 spine toc 保留）；XHTML 修成合法 XML
 ///   （DOCTYPE、HTML 命名实体转数字引用、裸 &/<、XML 不允许的控制字符、空元素自闭合、属性补引号、根元素 xmlns/xmlns:epub、
 ///   多余闭合标签能配平才去）；manifest 的 svg/mathml/scripted/remote-resources 按最终内容标（OPF 最后写进 zip）；分页拆出的份不再重复 U+FEFF。
-///   ④ 漫画页四边留 `comic_margin`（profile 字段，缺省 1px）白边，画布即阅读范围；比框小的 JPEG 页 Lanczos 放大（KOReader 不放大小图），
+///   ④ 漫画页四边留 `comic_margin`（profile 字段，缺省 1px）白边，画布即阅读范围；比框小的 JPEG 页 Lanczos 放大（当时 KOReader 实测不放大小图），
 ///   质量一律 95；PNG 按自身比例尺补白；已排好的页原样保留；900 万像素以上的页照常处理（只拒文件头超过 6400 万像素的）；
 ///   静态 GIF/WebP 页转 PNG/JPEG（条目名不变、manifest media-type 跟着改）。
 /// - v28（2026-09-29）：JPEG 哈夫曼表按图重做（`jpegopt`，无损：解码逐像素相同，每页还会解码比对，不同就用原来的），漫画同画质小 7%–9%；
@@ -78,13 +77,12 @@ const NOTEICON_RULE: &str = ".eink-noteicon{height:1em;width:auto;}\n";
 /// EPUB 流式重排做不到（"页"是阅读器翻页时才算出来的），"跟着段落走"的近似不符合预期。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FootnoteMode {
-    /// 跳转（xochitl）：注释移章末 `<div class="footnotes">`，标号改同章锚点，点了跳过去、用阅读器的"返回"回来。
+    /// 跳转（现有三个阅读模式都用它）：注释移章末 `<div class="footnotes">`，标号改同章锚点，点了跳过去、用阅读器的"返回"回来。
     #[default]
     Anchor,
-    /// 弹窗（KOReader）：同 `Anchor`，另给标号标 `epub:type="noteref"`、注释块用 `<aside epub:type="footnote">`。
+    /// 弹窗（profile `notes = "popup"`，给认 EPUB 3 弹出式注释的阅读器）：同 `Anchor`，另给标号标 `epub:type="noteref"`、
+    /// 注释块用 `<aside epub:type="footnote">`。
     Popup,
-    /// 注释文字就地内联显示在引用处 `<span class="eink-fnote">〔…〕</span>`，始终可见、不跳转（只在测试里用）。
-    Inline,
 }
 
 impl From<profile::Notes> for FootnoteMode {
@@ -174,16 +172,16 @@ struct Prepared {
     aside_index: HashMap<crate::htmlproc::NoteKey, String>,
     /// 不做注释搬移的页：导航文档、目录文件、目录样的页（它们的链接不算注释引用，也不往它们里面搬注释）。
     skip_notes: HashSet<String>,
+    /// 已经拆过互指环、换过 duokan 标记的章节（`collect_notes` 核对注释时算好写回的），第二遍跳过这两步。
+    pre_done: HashSet<String>,
     is_comic_book: bool,
-    /// 要改 OPF 时（指定了翻页方向，或书里有远程图、抓到的图要补进 manifest）的 OPF 条目名。
+    /// 第二遍要改 OPF 时的 OPF 条目名：指定了翻页方向、书里有远程图（抓到的图要补进 manifest）、漫画（打漫画标签）、
+    /// 清洗过（按各章最终内容标 manifest 的 `properties`）。都不用改时是 `None`。
     opf_name: Option<String>,
     /// 有章节引用远程图：OPF 推迟到最后写，好把抓到的图补进 manifest（见 `streaming`）。
     has_remote_imgs: bool,
     rep: Report,
 }
-
-/// EPUB 规范：`mimetype` 必须是 zip 的第一个条目、STORED、内容就是这串（不带换行）。
-const MIMETYPE: &[u8] = b"application/epub+zip";
 
 /// 阶段一：`raw` → 封面声明 → 清洗 → 排序（mimetype 置首、旧标记剔除）→ 漫画识别 → 第一遍 html → 注释块搬出。
 /// 图片条目是空占位——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
@@ -201,7 +199,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     let has_remote_imgs = raw.iter().any(|e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img));
     // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
     let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len() + 1);
-    ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: MIMETYPE.to_vec() });
+    ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: crate::epubzip::MIMETYPE.to_vec() });
     ordered.extend(raw.into_iter().filter(|e| e.name != "mimetype" && e.name != OPTIMIZE_MARKER && e.name != READER_MARGINS_MARKER));
 
     // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。清洗过的书用清洗层判好的
@@ -248,17 +246,23 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         };
         entries.push((name, data, ish));
     }
-    let aside_index = collect_notes(&mut entries, &mut referenced, &skip_notes);
-    Ok(Prepared { entries, aside_index, skip_notes, is_comic_book, opf_name, has_remote_imgs, rep })
+    let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &skip_notes);
+    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, rep })
 }
 
 /// 第一遍后半：把**被引用**的注释块（aside/p/li/div 且带注释语义）从各章移除、建全书索引 (文件, id) → 块，交给第二遍
 /// `preserve_relink_footnotes` 搬进引用它的那一章。未被引用的块原样留在原处。
 ///
-/// **搬走前核对每条都有人接**（2026-09-28 审计）：按第二遍真正会用的文字（先拆互指环、换 duokan 标记，这两步可能改掉 marker）
+/// **搬走前核对每条都恰好有一章接**（2026-09-28 审计）：按第二遍真正会用的文字（先拆互指环、换 duokan 标记，这两步可能改掉 marker）
 /// 重新扫一遍全书的注释引用；收集了却没有任何一章会接的注释，从原文重新收集时不再收它——放回原处。放回的注释里要是还引用着
 /// 别的注释，下一轮会看到，所以反复到没有落空的为止。
-fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashMap<String, HashSet<String>>, skip: &HashSet<String>) -> HashMap<crate::htmlproc::NoteKey, String> {
+///
+/// **不止一章引用的注释也放回原处**（2026-09-30 审计：此前每一章都在章末各放一份，同一段注释文字在书里出现好几次）。
+/// 另一种做法是只搬进第一个引用它的章、别的章改链到那一章——可那样别的章的链接照样是跨文件的（xochitl 只跟同文件 `#锚点`，
+/// 一样点不了），还得等第一章的 id 去重做完才知道链接该写成什么；留在原处则链接和原书一模一样，认跨文件链接的阅读器照常能跳。
+///
+/// 返回 (注释索引, 已经拆过互指环、换过 duokan 标记的章节名)：核对时算出来的这两步结果直接写回 `entries`，第二遍对这些章节不再算一遍。
+fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashMap<String, HashSet<String>>, skip: &HashSet<String>) -> (HashMap<crate::htmlproc::NoteKey, String>, HashSet<String>) {
     let mut index: HashMap<crate::htmlproc::NoteKey, String> = HashMap::new();
     let mut originals: HashMap<usize, Vec<u8>> = HashMap::new();
     let collect_one = |text: &str, name: &str, referenced: &HashMap<String, HashSet<String>>| referenced.get(name).map(|ids| crate::htmlproc::collect_footnote_notes(text, ids, true));
@@ -273,22 +277,33 @@ fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashM
             originals.insert(i, std::mem::replace(data, cleaned.into_bytes()));
         }
     }
+    // 各章拆过互指环、换过 duokan 标记的文字（第二遍的前两步）：只在条目内容变了（放回注释）时重算
+    let mut pre: HashMap<usize, String> = HashMap::new();
     while !index.is_empty() {
-        let mut claimed: HashSet<crate::htmlproc::NoteKey> = HashSet::new();
-        for (name, data, ish) in entries.iter() {
+        // 每条注释有几章引用（一章里引用几次都算一章）
+        let mut claims: HashMap<crate::htmlproc::NoteKey, usize> = HashMap::new();
+        for (i, (name, data, ish)) in entries.iter().enumerate() {
             if !*ish || skip.contains(name) {
                 continue;
             }
-            let Ok(text) = std::str::from_utf8(data) else { continue };
-            let t = crate::htmlproc::fix_duokan_markers(&crate::htmlproc::break_footnote_cycles(text));
-            claimed.extend(crate::htmlproc::referenced_note_keys(&t, name).into_iter().filter(|k| index.contains_key(k)));
+            let t = match pre.entry(i) {
+                std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    let Ok(text) = std::str::from_utf8(data) else { continue };
+                    v.insert(crate::htmlproc::fix_duokan_markers(&crate::htmlproc::break_footnote_cycles(text)))
+                }
+            };
+            let keys: HashSet<crate::htmlproc::NoteKey> = crate::htmlproc::referenced_note_keys(t, name).into_iter().filter(|k| index.contains_key(k)).collect();
+            for k in keys {
+                *claims.entry(k).or_default() += 1;
+            }
         }
-        let unclaimed: Vec<crate::htmlproc::NoteKey> = index.keys().filter(|k| !claimed.contains(*k)).cloned().collect();
-        if unclaimed.is_empty() {
+        let put_back: Vec<crate::htmlproc::NoteKey> = index.keys().filter(|k| claims.get(*k) != Some(&1)).cloned().collect();
+        if put_back.is_empty() {
             break;
         }
-        let files: HashSet<String> = unclaimed.iter().map(|k| k.0.clone()).collect();
-        for (file, id) in &unclaimed {
+        let files: HashSet<String> = put_back.iter().map(|k| k.0.clone()).collect();
+        for (file, id) in &put_back {
             if let Some(ids) = referenced.get_mut(file) {
                 ids.remove(id);
             }
@@ -303,9 +318,16 @@ fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashM
             let (cleaned, notes) = collect_one(text, name, referenced).unwrap_or_else(|| (text.to_string(), Vec::new()));
             index.extend(notes.into_iter().map(|(id, inner)| ((name.clone(), id), inner)));
             *data = cleaned.into_bytes();
+            pre.remove(&i);
         }
     }
-    index
+    let mut pre_done = HashSet::new();
+    for (i, t) in pre {
+        let (name, data, _) = &mut entries[i];
+        *data = t.into_bytes();
+        pre_done.insert(name.clone());
+    }
+    (index, pre_done)
 }
 
 /// 第二遍的"文本类条目"变换器：html 章节 / 独立 css / （改翻页方向时）OPF。跨条目状态（远程图计数、全书 id 去重表、
@@ -313,6 +335,7 @@ fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashM
 struct EntryXform<'a> {
     aside_index: &'a HashMap<crate::htmlproc::NoteKey, String>,
     skip_notes: &'a HashSet<String>,
+    pre_done: &'a HashSet<String>,
     footnote: FootnoteMode,
     page_direction: Option<crate::direction::PageDirection>,
     /// 漫画：OPF 里打上漫画标签（`comic_detect::tag_opf_as_comic`）。
@@ -324,7 +347,7 @@ struct EntryXform<'a> {
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
-    img_agent: ureq::Agent, // 远程图抓取（仅当章内有远程 img 才发请求；抓不到 → 原样保留）
+    img_agent: ureq::Agent, // 远程图抓取（仅当章内有远程 img 才发请求；抓不到 → 删掉这个 <img>）
     remote_counter: usize,
     /// zip 里已有的条目名（含已抓到的远程图）：新抓的图不能跟它们重名。
     taken_names: HashSet<String>,
@@ -339,6 +362,7 @@ impl<'a> EntryXform<'a> {
         EntryXform {
             aside_index: &prep.aside_index,
             skip_notes: &prep.skip_notes,
+            pre_done: &prep.pre_done,
             taken_names: prep.entries.iter().map(|e| e.0.clone()).collect(),
             footnote: opts.footnote,
             page_direction: opts.page_direction,
@@ -358,8 +382,8 @@ impl<'a> EntryXform<'a> {
     /// 章节 html 最终变换链：解双向脚注互指环 → duokan 图片脚注标记换上标 → 封面拉伸/SVG 修复 → 脚注就地关联重排 →
     /// 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
     fn transform_html_chapter(&mut self, text: &str, name: &str) -> Vec<u8> {
-        let t = crate::htmlproc::break_footnote_cycles(text);
-        let t = crate::htmlproc::fix_duokan_markers(&t);
+        // 前两步 `collect_notes` 可能已经做过（`pre_done`）
+        let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::fix_duokan_markers(&crate::htmlproc::break_footnote_cycles(text)) };
         let t = fix_cover_aspect(&t);
         let t = svg_cover_to_img(&t);
         let t = if self.reader_margins { crate::comicpad::pad_page(&t).unwrap_or(t) } else { t };
