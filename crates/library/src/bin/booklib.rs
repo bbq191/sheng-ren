@@ -473,8 +473,9 @@ fn main() {
     }
 }
 
-/// 书库的"有没有变化"戳（`sync --watch` 用）：`masters/` 与各条目目录、`output-state/` 的修改时间。条目的增删改
-/// （原件移动改名后改记位置、`meta` 找来封面）、生成记录的改动都会改它们所在目录的修改时间（原子写是改名）。
+/// 书库的"有没有变化"戳（`sync --watch` 用）：`masters/` 与各条目目录、`output-state/` 的修改时间，以及 `sources.json`。
+/// 条目的增删改（原件移动改名后改记位置、`meta` 找来封面）、生成记录的改动都会改它们所在目录的修改时间（原子写是改名）；
+/// 别的进程 track/untrack 会换掉 `sources.json`（产物根目录跟着变）。
 fn change_stamp(lib: &Library) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -489,5 +490,6 @@ fn change_stamp(lib: &Library) -> u64 {
     };
     dir(&lib.root().join("masters"), true);
     dir(&lib.root().join("output-state"), false);
+    dir(&lib.root().join("sources.json"), false);
     h.finish()
 }

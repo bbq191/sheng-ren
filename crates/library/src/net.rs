@@ -6,6 +6,9 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::time::{Duration, Instant};
 
+/// 一次响应最多读多少字节。
+const MAX_BODY: u64 = 20 << 20;
+
 pub(crate) const UA: &str = "booklib/0.1 (personal e-book library tool)";
 
 /// 最多试几次（429、5xx、超时这类临时错误才重试）。
@@ -80,7 +83,9 @@ impl Net {
             let wait = match req.call() {
                 Ok(r) => {
                     let mut buf = Vec::new();
-                    match r.into_reader().take(20 << 20).read_to_end(&mut buf) {
+                    match r.into_reader().take(MAX_BODY + 1).read_to_end(&mut buf) {
+                        // 超过上限的不是封面也不是条目页：报错，不能截断了当成功（截断的图读得出尺寸，会被当封面存下）
+                        Ok(_) if buf.len() as u64 > MAX_BODY => return Err(format!("{url}: 响应超过 {} MB", MAX_BODY >> 20)),
                         Ok(_) => {
                             self.down_since_ok.set(0);
                             return Ok(buf);

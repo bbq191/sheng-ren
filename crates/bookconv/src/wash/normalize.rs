@@ -277,7 +277,7 @@ fn fix_start_tag<'a>(raw: &'a str, fx: &mut XmlFixes) -> Cow<'a, str> {
 
 /// 全角 ASCII（U+FF01–U+FF5E）换成半角。
 fn fold_fullwidth(s: &str) -> String {
-    s.chars().map(|c| if ('\u{FF01}'..='\u{FF5E}').contains(&c) { char::from_u32(c as u32 - 0xFEE0).unwrap_or(c) } else { c }).collect()
+    s.chars().map(crate::util::to_halfwidth).collect()
 }
 
 /// 标签配对是否完全平衡（按原文大小写严格比较，与 XML 一致）：每个闭合标签都关掉栈顶，结束时栈空。空元素须已自闭合或紧跟闭合标签。

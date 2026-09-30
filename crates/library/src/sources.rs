@@ -133,7 +133,8 @@ impl Library {
 
     /// 不再跟踪一个目录。已经入库的书保留。没在跟踪返回 `false`。
     pub fn untrack(&self, dir: &Path) -> Result<bool, String> {
-        let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        // 目录已经删了时 canonicalize 会失败：退回绝对路径（记录里存的都是绝对路径）
+        let dir = std::fs::canonicalize(dir).or_else(|_| std::path::absolute(dir)).unwrap_or_else(|_| dir.to_path_buf());
         let mut s = self.load_sources();
         let before = s.dirs.len();
         s.dirs.retain(|d| d != &dir);

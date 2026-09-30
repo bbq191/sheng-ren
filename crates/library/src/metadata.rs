@@ -157,12 +157,26 @@ impl Library {
         let from_douban = info.is_some();
 
         // ② Wikidata：原作（元数据没找到、或封面还没有时）
+        // Wikidata 出错（有些网络里单独连不上）不能连累豆瓣已经找到的元数据：先存元数据，封面这一步再报错
         let mut work = None;
+        let mut work_err = None;
         if (need_info && info.is_none()) || (need_cover && cover.is_none()) {
             for t in &titles {
-                if let Some(w) = wikidata::find_work(net, t, &meta.authors)? {
-                    work = Some(w);
-                    break;
+                match wikidata::find_work(net, t, &meta.authors) {
+                    Ok(Some(w)) => {
+                        work = Some(w);
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        work_err = Some(e);
+                        break;
+                    }
+                }
+            }
+            if !from_douban {
+                if let Some(e) = work_err {
+                    return Err(e);
                 }
             }
             if need_info && info.is_none() {
@@ -187,6 +201,9 @@ impl Library {
             InfoResult::NotFound("豆瓣、Wikidata 里都找不到书名、作者对得上的书".into())
         };
         if need_cover && cover.is_none() {
+            if let Some(e) = work_err {
+                return Err(incomplete(&e));
+            }
             cover = Some(match self.cover_from_work(net, meta, work.as_ref())? {
                 Ok(c) => CoverResult::Found(c),
                 // 没找到是因为网络出错：不生成（生成的会存下来，以后就不找了）
@@ -203,11 +220,12 @@ impl Library {
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
         let had = m.info.take().is_some();
         let cover: Option<CoverInfo> = m.cover.take();
-        if let Some(c) = &cover {
-            let _ = std::fs::remove_file(self.entry_dir(&meta.id).join(&c.file));
-        }
         if had || cover.is_some() {
             self.save_meta(&m)?;
+        }
+        // meta 存好了才删图：存失败时 meta 还指着它
+        if let Some(c) = &cover {
+            let _ = std::fs::remove_file(self.entry_dir(&meta.id).join(&c.file));
         }
         Ok(had || cover.is_some())
     }
