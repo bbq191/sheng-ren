@@ -71,7 +71,9 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   参与判断（以前会把注释里提到 p、footnote 的规则误当正文或注释容器改掉）；属性值里的 `<` 转义（XML 合法）；目录、链接里的
 ///   `&amp;` 只还原一次；被几章同时引用的注释留在原处（以前每章各复制一份，多出字）；封面 SVG 的 `preserveAspectRatio` 只改属性；
 ///   本章重复 id 改名；带 EXIF 方向的图先摆正再处理；标了"漫画"的书不到 20 张图也按漫画处理。
-pub const OPTIMIZE_VERSION: &str = "34";
+/// - v35（2026-09-30）：注释回链按 profile `note_backlinks` 决定：Kindle、掌阅保留原书的回链（改成同文件锚点），只有 xochitl 去掉
+///   （以前三个模式都去掉，Kindle 上点注释跳不回正文，真机）。
+pub const OPTIMIZE_VERSION: &str = "35";
 
 /// 清洗层样式表里限图标注释号高度的那条规则（`wash::typeset`），图标都换成数字时删掉。
 const NOTEICON_RULE: &str = ".eink-noteicon{height:1em;width:auto;}\n";
@@ -114,6 +116,8 @@ pub struct OptimizeOpts {
     pub comic_reader_margins: Option<u32>,
     /// 只有图标的注释标号换成上标数字（profile `note_icons = "number"`）。
     pub number_note_icons: bool,
+    /// 去掉注释里跳回正文的回链（profile `note_backlinks = false`，xochitl）。
+    pub drop_note_backlinks: bool,
     pub wash: Option<crate::wash::WashOpts>,
     /// 脚注呈现方式（缺省 `Anchor`，书库与 `epub-optimize` 都用它）。
     pub footnote: FootnoteMode,
@@ -125,7 +129,7 @@ pub struct OptimizeOpts {
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, wash: None, footnote: FootnoteMode::default(), page_direction: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -138,6 +142,7 @@ impl OptimizeOpts {
             comic_screen: Some(p.comic_readable()),
             comic_reader_margins: p.comic_reader_margins,
             number_note_icons: p.note_icons == profile::NoteIcons::Number,
+            drop_note_backlinks: !p.note_backlinks,
             ..OptimizeOpts::new(p.output_readable())
         }
     }
@@ -250,7 +255,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         };
         entries.push((name, data, ish));
     }
-    let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &skip_notes);
+    let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &skip_notes, opts.drop_note_backlinks);
     Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, rep })
 }
 
@@ -266,7 +271,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
 /// 一样点不了），还得等第一章的 id 去重做完才知道链接该写成什么；留在原处则链接和原书一模一样，认跨文件链接的阅读器照常能跳。
 ///
 /// 返回 (注释索引, 已经拆过互指环、换过 duokan 标记的章节名)：核对时算出来的这两步结果直接写回 `entries`，第二遍对这些章节不再算一遍。
-fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashMap<String, HashSet<String>>, skip: &HashSet<String>) -> (HashMap<crate::htmlproc::NoteKey, String>, HashSet<String>) {
+fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashMap<String, HashSet<String>>, skip: &HashSet<String>, drop_backlinks: bool) -> (HashMap<crate::htmlproc::NoteKey, String>, HashSet<String>) {
     let mut index: HashMap<crate::htmlproc::NoteKey, String> = HashMap::new();
     let mut originals: HashMap<usize, Vec<u8>> = HashMap::new();
     let collect_one = |text: &str, name: &str, referenced: &HashMap<String, HashSet<String>>| referenced.get(name).map(|ids| crate::htmlproc::collect_footnote_notes(text, ids, true));
@@ -294,7 +299,7 @@ fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashM
                 std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
                 std::collections::hash_map::Entry::Vacant(v) => {
                     let Ok(text) = std::str::from_utf8(data) else { continue };
-                    v.insert(crate::htmlproc::fix_duokan_markers(&crate::htmlproc::break_footnote_cycles(text)))
+                    v.insert(crate::htmlproc::prepare_note_links(text, drop_backlinks))
                 }
             };
             let keys: HashSet<crate::htmlproc::NoteKey> = crate::htmlproc::referenced_note_keys(t, name).into_iter().filter(|k| index.contains_key(k)).collect();
@@ -348,6 +353,7 @@ struct EntryXform<'a> {
     reader_margins: bool,
     /// 只有图标的注释标号换成上标数字。
     number_note_icons: bool,
+    drop_note_backlinks: bool,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
@@ -373,6 +379,7 @@ impl<'a> EntryXform<'a> {
             comic: prep.is_comic_book,
             reader_margins: prep.is_comic_book && opts.comic_reader_margins.is_some(),
             number_note_icons: opts.number_note_icons,
+            drop_note_backlinks: opts.drop_note_backlinks,
             opf_name: prep.opf_name.as_deref(),
             screen: opts.screen,
             seen_ids: HashSet::new(),
@@ -387,7 +394,7 @@ impl<'a> EntryXform<'a> {
     /// 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
     fn transform_html_chapter(&mut self, text: &str, name: &str) -> Vec<u8> {
         // 前两步 `collect_notes` 可能已经做过（`pre_done`）
-        let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::fix_duokan_markers(&crate::htmlproc::break_footnote_cycles(text)) };
+        let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };
         let t = fix_cover_aspect(&t);
         let t = svg_cover_to_img(&t);
         let t = if self.reader_margins { crate::comicpad::pad_page(&t).unwrap_or(t) } else { t };

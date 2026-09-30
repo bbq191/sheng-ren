@@ -94,6 +94,8 @@ impl Library {
         };
         // 图标注释号换数字（profile 的 note_icons = "number"）时再带个 `#`
         let notes = if device.note_icons == profile::NoteIcons::Number { format!("{notes}#") } else { notes.to_string() };
+        // 保留注释回链（profile 的 note_backlinks，缺省保留）时再带个 `<`
+        let notes = if device.note_backlinks { format!("{notes}<") } else { notes };
         // 阅读范围后面带上漫画白边（`+1`，profile 的 comic_margin，2026-09-29 起），改了白边的书都要重新生成；
         // 漫画阅读范围和阅读器页边距（comic_readable、comic_reader_margins）
         // 跟在后面（`c952x1457m1`），和 EPUB 阅读范围一样时不写
