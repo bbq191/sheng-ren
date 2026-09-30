@@ -1,7 +1,8 @@
 //! JPEG 无损瘦身：只重做哈夫曼编码表，图像数据（量化后的 DCT 系数）一个不动，解码出来逐像素相同（用户 2026-09-29：换压缩更好的编码、画质必须不变）。
 //!
 //! `image` 库的 JPEG 编码器用 JPEG 标准附录 K 的通用哈夫曼表；按这张图实际出现的符号频率重建最优表（附录 K.2 的算法，码长限 16 位），
-//! 同样的系数能少占 13%–16%（2026-09-29 拿《亂馬½》漫画页实测）。做法同 `jpegtran -optimize`，这里自己实现（只用 Rust）：
+//! 同样的系数能少占约 7%–16%（2026-09-29《亂馬½》漫画页 13%–16%；2026-09-30 页面缩到 1104×1546、q95：
+//! 《死亡筆記》愛藏版卷01 灰度 8.0%，《哆啦A夢全彩版》卷01 彩色 7.5%、转灰度 9.0%）。做法同 `jpegtran -optimize`，这里自己实现（只用 Rust）：
 //!
 //! 1. 解析头部：SOF0（基线顺序式）、DQT、DHT、SOS；
 //! 2. 按原表把熵编码数据解成符号流（DC 差值类别、AC 游程/类别 + 附加位），同时统计每张表的符号频率；
@@ -9,6 +10,9 @@
 //!
 //! 只处理本 crate 自己编出来的这类 JPEG（基线、单次扫描、没有重启间隔）；别的形态（渐进式、算术编码、多次扫描、DRI）原样返回 `None`。
 //! 调用方（`imgopt`）还会把新旧两份都解码逐像素比对，不一致就用旧的——正确性不只靠这里的实现。
+//!
+//! 速度（2026-09-30）：熵编码数据按 64 位缓冲读写、哈夫曼码先查 9 位表（长码再逐位），结果与逐位实现逐字节相同；
+//! 537 张 1104×1546 q95 漫画页 `optimize` 平均约 17ms → 6ms/张（逐位读写时它占整页处理时间四成多）。
 
 /// 一张哈夫曼表：按码长排好的符号（附录 C 的 BITS/HUFFVAL）。
 #[derive(Clone, Default)]
@@ -17,12 +21,18 @@ struct Table {
     vals: Vec<u8>,
 }
 
-/// 解码用：附录 F.2.2.3 的 MAXCODE/VALPTR/MINCODE。
+/// 查表解码一次看的位数：码长不超过它的码字一次查出（通用表和按图重做的表里绝大多数符号都在 9 位以内）。
+const LUT_BITS: u32 = 9;
+/// 查表项：高 8 位是码长（0 = 前缀不够长，走逐位解码），低 8 位是符号；[`LUT_BAD`] = 码字对不上表（数据损坏）。
+const LUT_BAD: u16 = 0xFFFF;
+
+/// 解码用：附录 F.2.2.3 的 MAXCODE/VALPTR/MINCODE，外加 [`LUT_BITS`] 位的查找表。
 struct Decoder {
     maxcode: [i32; 18],
     valptr: [i32; 17],
     mincode: [i32; 17],
     vals: Vec<u8>,
+    lut: Vec<u16>,
 }
 
 impl Decoder {
@@ -41,85 +51,158 @@ impl Decoder {
             code <<= 1;
         }
         maxcode[17] = i32::MAX;
-        Decoder { maxcode, valptr, mincode, vals: t.vals.clone() }
+        let mut d = Decoder { maxcode, valptr, mincode, vals: t.vals.clone(), lut: Vec::new() };
+        // 查找表：对每个 LUT_BITS 位前缀按附录 F.2.2.3 的逐位算法走到 LUT_BITS 位为止，结果和逐位解码完全一样（包括坏表的情形）。
+        d.lut = (0..1u32 << LUT_BITS)
+            .map(|v| {
+                for l in 1..=LUT_BITS as usize {
+                    let code = (v >> (LUT_BITS as usize - l)) as i32;
+                    if code <= d.maxcode[l] {
+                        return d.symbol(l, code).map_or(LUT_BAD, |s| ((l as u16) << 8) | s as u16);
+                    }
+                }
+                0
+            })
+            .collect();
+        d
+    }
+
+    /// 码长 `l`、码值 `code` 对应的符号（附录 F.2.2.3 的 VALPTR 取值）。
+    fn symbol(&self, l: usize, code: i32) -> Option<u8> {
+        self.vals.get((self.valptr[l] + code - self.mincode[l]) as usize).copied()
     }
 }
 
-/// 熵编码数据的位读取器（跳过 0xFF 后的填充 0x00）。
+/// 熵编码数据的位读取器（跳过 0xFF 后的填充 0x00）。一次预读多个字节进 64 位缓冲；遇到标记（0xFF 后不是 0x00）
+/// 或数据读完就不再预读，之后再要位 = 损坏（与逐位读的判定一致）。
 struct BitReader<'a> {
     data: &'a [u8],
+    /// 下一个没读进缓冲的字节。
     pos: usize,
-    acc: u32,
+    /// 低 `nbits` 位是还没用的位，下一位是第 `nbits - 1` 位。
+    acc: u64,
     nbits: u32,
 }
 
 impl<'a> BitReader<'a> {
-    fn bit(&mut self) -> Option<u32> {
-        if self.nbits == 0 {
-            let b = *self.data.get(self.pos)?;
-            self.pos += 1;
+    fn new(data: &'a [u8]) -> Self {
+        BitReader { data, pos: 0, acc: 0, nbits: 0 }
+    }
+
+    /// 缓冲补到至少 57 位（数据读完或遇到标记时可能更少）。
+    #[inline]
+    fn refill(&mut self) {
+        while self.nbits <= 56 {
+            let Some(&b) = self.data.get(self.pos) else { return };
             if b == 0xFF {
-                // 填充字节 0x00；别的就是标记（数据读完了还要位 = 损坏）
-                if *self.data.get(self.pos)? != 0 {
-                    return None;
+                // 填充字节 0x00；别的就是标记（或数据截断），停在这里
+                if self.data.get(self.pos + 1) != Some(&0) {
+                    return;
                 }
+                self.pos += 2;
+            } else {
                 self.pos += 1;
             }
-            self.acc = b as u32;
-            self.nbits = 8;
+            self.acc = (self.acc << 8) | b as u64;
+            self.nbits += 8;
         }
-        self.nbits -= 1;
-        Some((self.acc >> self.nbits) & 1)
     }
 
+    /// 读 `n`（≤ 16）位；不够 → `None`。
+    #[inline]
     fn bits(&mut self, n: u32) -> Option<u32> {
-        let mut v = 0;
-        for _ in 0..n {
-            v = (v << 1) | self.bit()?;
+        if n == 0 {
+            return Some(0);
         }
-        Some(v)
+        if self.nbits < n {
+            self.refill();
+            if self.nbits < n {
+                return None;
+            }
+        }
+        self.nbits -= n;
+        Some(((self.acc >> self.nbits) & ((1u64 << n) - 1)) as u32)
     }
 
+    #[inline]
     fn decode(&mut self, d: &Decoder) -> Option<u8> {
-        let mut code = self.bit()? as i32;
+        if self.nbits < LUT_BITS {
+            self.refill();
+        }
+        if self.nbits >= LUT_BITS {
+            let e = d.lut[((self.acc >> (self.nbits - LUT_BITS)) & ((1 << LUT_BITS) - 1)) as usize];
+            if e == LUT_BAD {
+                return None;
+            }
+            if e >> 8 != 0 {
+                self.nbits -= (e >> 8) as u32;
+                return Some(e as u8);
+            }
+        }
+        // 码长超过 LUT_BITS，或数据快读完了：逐位走附录 F.2.2.3
+        let mut code = self.bits(1)? as i32;
         for l in 1..=16 {
             if code <= d.maxcode[l] {
-                return d.vals.get((d.valptr[l] + code - d.mincode[l]) as usize).copied();
+                return d.symbol(l, code);
             }
-            code = (code << 1) | self.bit()? as i32;
+            code = (code << 1) | self.bits(1)? as i32;
         }
         None
+    }
+
+    /// 已经用掉的数据到哪为止（最后一个用到的位所在字节之后；缓冲里整字节没用的退回去，填充的 0x00 一并算）。
+    fn consumed(&self) -> usize {
+        let mut pos = self.pos;
+        for i in 0..self.nbits / 8 {
+            let b = (self.acc >> (8 * i)) as u8;
+            pos -= if b == 0xFF { 2 } else { 1 };
+        }
+        pos
     }
 }
 
 /// 位写入器（写出时给 0xFF 补填充 0x00，结尾补 1）。
 struct BitWriter {
     out: Vec<u8>,
-    acc: u32,
+    /// 低 `nbits` 位是还没写出的位（每次 `put` 之后 `nbits` < 32）。
+    acc: u64,
     nbits: u32,
 }
 
 impl BitWriter {
+    /// 写 `value` 的低 `n`（≤ 32）位。攒够 32 位整批写出 4 个字节。
+    #[inline]
     fn put(&mut self, value: u32, n: u32) {
-        for i in (0..n).rev() {
-            self.acc = (self.acc << 1) | ((value >> i) & 1);
-            self.nbits += 1;
-            if self.nbits == 8 {
-                let b = self.acc as u8;
-                self.out.push(b);
-                if b == 0xFF {
-                    self.out.push(0);
+        self.acc = (self.acc << n) | (value as u64 & ((1u64 << n) - 1));
+        self.nbits += n;
+        if self.nbits >= 32 {
+            self.nbits -= 32;
+            let w = ((self.acc >> self.nbits) as u32).to_be_bytes();
+            if w.contains(&0xFF) {
+                for b in w {
+                    self.out.push(b);
+                    if b == 0xFF {
+                        self.out.push(0);
+                    }
                 }
-                self.acc = 0;
-                self.nbits = 0;
+            } else {
+                self.out.extend_from_slice(&w);
             }
         }
     }
 
+    /// 剩下的位补 1 凑满字节写出。
     fn finish(mut self) -> Vec<u8> {
-        if self.nbits > 0 {
-            let pad = 8 - self.nbits;
-            self.put((1 << pad) - 1, pad);
+        let pad = (8 - self.nbits % 8) % 8;
+        self.acc = (self.acc << pad) | ((1u64 << pad) - 1);
+        self.nbits += pad;
+        while self.nbits > 0 {
+            self.nbits -= 8;
+            let b = (self.acc >> self.nbits) as u8;
+            self.out.push(b);
+            if b == 0xFF {
+                self.out.push(0);
+            }
         }
         self.out
     }
@@ -325,7 +408,7 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
 
     // ── 解出符号流 ──
     let data = &jpeg[sos_start + 2 + sos_len..];
-    let mut br = BitReader { data, pos: 0, acc: 0, nbits: 0 };
+    let mut br = BitReader::new(data);
     let (hmax, vmax) = (scan.iter().map(|s| s.0).max()?, scan.iter().map(|s| s.1).max()?);
     // 单分量扫描不交错：按块数算；多分量按 MCU 算
     let (mcus, blocks_per): (usize, Vec<usize>) = if ns == 1 {
@@ -372,7 +455,7 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
         }
     }
     // 熵编码数据之后应当紧跟 EOI（中间允许补位用的 1）
-    let rest = &data[br.pos..];
+    let rest = &data[br.consumed()..];
     let eoi = rest.windows(2).position(|w| w == [0xFF, 0xD9])?;
     if rest[..eoi].iter().any(|&b| b != 0xFF) {
         return None;
@@ -394,8 +477,8 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
         if len == 0 {
             return None;
         }
-        bw.put(code as u32, len as u32);
-        bw.put(s.extra as u32, s.nextra as u32);
+        // 码字和附加位一起写（最多 16 + 11 位）
+        bw.put(((code as u32) << s.nextra) | s.extra as u32, (len + s.nextra) as u32);
     }
     let entropy = bw.finish();
 
@@ -479,6 +562,54 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn buffered_bit_io_matches_bit_by_bit_with_stuffing() {
+        // 逐位的参照：先拼成位串，再按字节切、0xFF 后补 0x00、结尾补 1
+        let mut s = 7u32;
+        let mut items = Vec::new();
+        for i in 0..5000u32 {
+            s = s.wrapping_mul(1103515245).wrapping_add(12345);
+            let n = 1 + (s >> 8) % 27;
+            // 常出现全 1，逼出 0xFF 填充
+            let v = if i % 5 == 0 { u32::MAX } else { s >> 3 };
+            items.push((v & ((1u32 << n) - 1), n));
+        }
+        let mut bitstr = Vec::new();
+        for &(v, n) in &items {
+            for i in (0..n).rev() {
+                bitstr.push((v >> i) & 1);
+            }
+        }
+        while bitstr.len() % 8 != 0 {
+            bitstr.push(1);
+        }
+        let mut want = Vec::new();
+        for c in bitstr.chunks(8) {
+            let b = c.iter().fold(0u8, |a, &x| (a << 1) | x as u8);
+            want.push(b);
+            if b == 0xFF {
+                want.push(0);
+            }
+        }
+        let mut w = BitWriter { out: Vec::new(), acc: 0, nbits: 0 };
+        for &(v, n) in &items {
+            w.put(v, n);
+        }
+        let got = w.finish();
+        assert_eq!(got, want);
+        // 读回来：每段位一样；后面跟着 EOI 时读完的位置停在它前面
+        let mut data = got.clone();
+        data.extend_from_slice(&[0xFF, 0xD9]);
+        let mut r = BitReader::new(&data);
+        for &(v, n) in &items {
+            let got = if n > 16 { (r.bits(n - 16).unwrap() << 16) | r.bits(16).unwrap() } else { r.bits(n).unwrap() };
+            assert_eq!(got, v);
+        }
+        assert_eq!(r.consumed(), got.len(), "最后一个字节用到了就算读过");
+        while r.bits(1).is_some() {}
+        assert_eq!(r.consumed(), got.len(), "填充的 1 读完后停在标记前");
     }
 
     #[test]
