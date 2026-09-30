@@ -20,7 +20,7 @@
     <text x="127.2" y="358" text-anchor="middle" class="h">kindle（Kindle 自带）</text>
     <text x="127.2" y="376" text-anchor="middle" class="s">漫画写成固定版式，画布 = 整屏 1272 × 1696</text>
     <text x="127.2" y="392" text-anchor="middle" class="s">（流式排版时阅读器强制留左右 101px）</text>
-    <text x="127.2" y="410" text-anchor="middle" class="ok">✓ 测试书截图逐像素对齐</text>
+    <text x="127.2" y="410" text-anchor="middle" class="ok">✓ 真机离屏幕 1px（2026-09-30）</text>
   </g>
 
   <!-- ireader：1264x1680 -> 252.8x336，阅读范围 = 整屏 -->
@@ -32,7 +32,7 @@
     <text x="126.4" y="358" text-anchor="middle" class="h">ireader（掌阅自带）</text>
     <text x="126.4" y="376" text-anchor="middle" class="s">整页图铺满整屏，画布 = 整屏 1264 × 1680</text>
     <text x="126.4" y="392" text-anchor="middle" class="s">漫画改成往左翻（往右翻的书会四周留边）</text>
-    <text x="126.4" y="410" text-anchor="middle" class="ok">✓ 测试书截图离屏幕 0–1px</text>
+    <text x="126.4" y="410" text-anchor="middle" class="ok">✓ 真机离屏幕 1px（2026-09-30）</text>
   </g>
 
   <!-- xochitl：954x1696 -> 190.8x339.2；页边距 1 时图框 (1,112) 952x1457 -->
