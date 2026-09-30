@@ -2,10 +2,7 @@
 
 use crate::Meta;
 
-/// 全角 ASCII（U+FF01–FF5E）转成对应的半角字符，其余不变。
-pub(crate) fn to_halfwidth(c: char) -> char {
-    if ('\u{FF01}'..='\u{FF5E}').contains(&c) { char::from_u32(c as u32 - 0xFEE0).unwrap_or(c) } else { c }
-}
+pub(crate) use bookconv::util::to_halfwidth;
 
 /// 比较用的规整：全角转半角、去掉结尾括号里的消歧义说明（"雪人 (小說)"）、只留字母数字和汉字、小写。
 pub(crate) fn norm(s: &str) -> String {

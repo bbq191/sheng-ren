@@ -116,7 +116,7 @@ impl Library {
     }
 
     /// `output-state/` 下各模式的生成记录（包括 profile 已经删掉的模式）：(模式 id, 记录文件)。
-    fn state_files(&self) -> Vec<(String, PathBuf)> {
+    pub(crate) fn state_files(&self) -> Vec<(String, PathBuf)> {
         let mut v: Vec<(String, PathBuf)> = std::fs::read_dir(self.state_dir())
             .into_iter()
             .flatten()
@@ -262,7 +262,7 @@ impl Library {
                 warnings.extend(w);
                 std::fs::write(&part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
             }
-            commit(&part, &out)?;
+            commit(&part, &out).map_err(|e| format!("写 {}: {e}", out.display()))?;
             Ok(warnings)
         })();
         let _ = std::fs::remove_dir_all(&tmp);

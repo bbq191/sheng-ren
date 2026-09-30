@@ -142,7 +142,12 @@ pub fn image_media_type_of_ext(ext: &str) -> &'static str {
     }
 }
 
-/// "先产出到临时文件、成功才改名覆盖目标、失败清掉半成品"的统一外壳（命令行工具写产物都走它）。`produce(tmp)` 负责把产物写到 `tmp` 并返回任意结果（如统计报告）；
+/// 全角 ASCII（U+FF01–U+FF5E）转成对应的半角字符，其余不变。
+pub fn to_halfwidth(c: char) -> char {
+    if ('\u{FF01}'..='\u{FF5E}').contains(&c) { char::from_u32(c as u32 - 0xFEE0).unwrap_or(c) } else { c }
+}
+
+/// "先产出到临时文件、成功才落盘改名覆盖目标、失败清掉半成品"的统一外壳（命令行工具和书库写文件都走它）。`produce(tmp)` 负责把产物写到 `tmp` 并返回任意结果（如统计报告）；
 /// 它出错或最后 `rename` 失败，`tmp` 都会被删掉，不在目录里留半成品。`tmp` 应与 `target` 同分区（rename 才原子）。
 /// 输入输出是同一个文件时也安全：产出期间原文件不动，改名那一刻才换掉。
 pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, produce: impl FnOnce(&std::path::Path) -> Result<T, String>) -> Result<T, String> {
@@ -165,11 +170,27 @@ pub fn produce_then_replace_with<T>(
             return Err(e);
         }
     };
-    if let Err(e) = std::fs::rename(tmp, target) {
+    if let Err(e) = commit(tmp, target) {
         let _ = std::fs::remove_file(tmp);
         return Err(format!("改名覆盖 {} 失败: {e}", target.display()));
     }
     Ok(value)
+}
+
+/// 把写好的临时文件 `tmp` 换到 `target`：先落盘 `tmp`（fsync），再改名，最后落盘所在目录。
+/// 中途断电不会留下写了一半的目标文件。失败时 `tmp` 留给调用方删。
+pub fn commit(tmp: &std::path::Path, target: &std::path::Path) -> std::io::Result<()> {
+    std::fs::File::open(tmp)?.sync_all()?;
+    std::fs::rename(tmp, target)?;
+    sync_parent(target)
+}
+
+/// 落盘 `path` 所在的目录（改名、删除之后，让目录项的变化也落盘）。
+pub fn sync_parent(path: &std::path::Path) -> std::io::Result<()> {
+    match path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        Some(dir) => std::fs::File::open(dir)?.sync_all(),
+        None => Ok(()),
+    }
 }
 
 /// 与 `target` 同目录的临时文件名 `<文件名>.<tag>.tmp`（同分区，[`produce_then_replace`] 的改名才原子）。

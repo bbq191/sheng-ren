@@ -127,40 +127,27 @@ impl Library {
         let dir = self.entry_dir(&meta.id);
         crate::fsutil::write_atomic(&dir.join(&info.file), bytes)?;
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
-        if let Some(old) = m.cover.as_ref().filter(|o| o.file != info.file) {
+        let old = m.cover.replace(info.clone()).filter(|o| o.file != info.file);
+        self.save_meta(&m)?;
+        // meta 存好了才删旧图：存失败时 meta 还指着旧图
+        if let Some(old) = old {
             let _ = std::fs::remove_file(dir.join(&old.file));
         }
-        m.cover = Some(info.clone());
-        self.save_meta(&m)?;
         Ok(info)
     }
 
     /// 书自己有没有封面（EPUB 看封面声明和第一页的图）。
     /// CBZ 不用转：转出来的 EPUB 总是拿第一张图当封面（`cbz_to_epub`；没有图的 CBZ 入库时就拒收了）。
     pub(crate) fn book_has_own_cover(&self, meta: &Meta) -> Result<bool, String> {
-        if meta.content_format() == "cbz" {
-            return Ok(true);
+        match meta.content_format() {
+            "cbz" => Ok(true),
+            "epub" => Ok(epub_has_cover(&self.content_path(meta)?)),
+            other => Err(crate::unsupported(other)),
         }
-        let tmp = tempdir_in(&self.root)?;
-        let result = (|| {
-            let input = self.content_path(meta)?;
-            let epub = self.epub_input(meta, &input, &tmp)?;
-            Ok(epub_has_cover(&epub))
-        })();
-        let _ = std::fs::remove_dir_all(&tmp);
-        result
     }
 }
 
 /// 因为网络出错没查完时的提示。
 pub(crate) fn incomplete(e: &str) -> String {
     format!("网络出错，没查完（{e}）；没有生成封面，下次再试")
-}
-
-/// 书库里的临时目录（和产物在同一文件系统）。
-pub(crate) fn tempdir_in(root: &Path) -> Result<std::path::PathBuf, String> {
-    let d = root.join(format!("{}cover-{}", crate::fsutil::TMP_PREFIX, std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    Ok(d)
 }

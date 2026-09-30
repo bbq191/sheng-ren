@@ -4,6 +4,7 @@
 # 用法: ./install.sh [--tools]
 #   缺省装：booklib（书库）、ebook-meta（查看/改写 EPUB 元数据）
 #   --tools 另装开发和排查问题用的：epub-optimize、epub-to-azw3、readable-probe、readable-measure
+#   以前用 --tools 装过的，不加 --tools 重跑也会一起升级（免得开发工具停在旧版本、和 booklib 的规则对不上）
 # 重复运行 = 用当前代码重新编译安装（升级）。卸载见 ./uninstall.sh。
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
@@ -12,7 +13,7 @@ tools=0
 for a in "$@"; do
   case $a in
     --tools) tools=1 ;;
-    -h | --help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "不认识的参数 $a（见 --help）" >&2; exit 2 ;;
   esac
 done
@@ -21,30 +22,37 @@ bindir=${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin
 # 复用仓库的 target/（和 cargo build --release 共享编译缓存；不设的话 cargo install 每次在临时目录里从头编）
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$here/target}
 
+# 本仓库装过的包：cargo install --list 里「包名 版本 (路径):」一行，下面每个二进制缩进一行
+installed=$(cargo install --list)
+if [[ $tools -eq 0 ]] && grep -A20 -F "($here/crates/bookconv):" <<<"$installed" | grep -qx '    epub-optimize'; then
+  echo "上次装过开发工具，这次一起升级"
+  tools=1
+fi
+
 # Calibre 也有一个叫 ebook-meta 的命令：同名时谁生效取决于 PATH 里的先后
 other=$(command -v ebook-meta || true)
 if [[ -n $other && $other != "$bindir/ebook-meta" ]]; then
   echo "注意：PATH 里已有另一个 ebook-meta（$other，可能是 Calibre 的）。装好后执行哪个取决于 PATH 顺序。" >&2
 fi
 
-# 同一个包的二进制一次装齐（cargo 按包记账，分几次装会互相覆盖记录）；--force：代码改过也重新装
-install() { cargo install --locked --force --quiet --path "$here/crates/$1" "${@:2}"; }
+# 同一个包的二进制一次装齐：cargo 按包记账，这次没列出的二进制会留在旧版本。--force：代码改过也重新装
+cargo_install() { cargo install --locked --force --quiet --path "$here/crates/$1" "${@:2}"; }
 names=(ebook-meta)
 [[ $tools -eq 1 ]] && names+=(epub-optimize readable-probe readable-measure)
 bins=()
 for n in "${names[@]}"; do bins+=(--bin "$n"); done
-echo "编译安装 booklib…"
-install library --bin booklib
+echo "编译安装 booklib…（第一次要编几分钟，中间不出声）"
+cargo_install library --bin booklib
 echo "编译安装 ${names[*]}…"
-install bookconv "${bins[@]}"
+cargo_install bookconv "${bins[@]}"
 if [[ $tools -eq 1 ]]; then
   echo "编译安装 epub-to-azw3…"
-  install azw3 --bin epub-to-azw3
+  cargo_install azw3 --bin epub-to-azw3
 fi
 
 echo "✓ 已装到 ${bindir/#$HOME/\~}/"
-case ":$PATH:" in
-  *":$bindir:"*) ;;
-  *) echo "  这个目录不在 PATH 里：把 export PATH=\"$bindir:\$PATH\" 加进 shell 的配置文件（fish：fish_add_path $bindir）" ;;
-esac
+# 用 command -v 判断而不是比对目录：~/.cargo/config.toml 里的 install.root 也能改安装位置
+if ! command -v booklib >/dev/null; then
+  echo "  booklib 不在 PATH 里：把 export PATH=\"$bindir:\$PATH\" 加进 shell 的配置文件（fish：fish_add_path $bindir）"
+fi
 echo "  开始用：booklib --help，完整用法见 docs/usage.md"
