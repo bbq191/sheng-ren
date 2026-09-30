@@ -39,6 +39,38 @@ pub struct Meta {
     pub stable_id: u64,
     /// `dcterms:modified`（`CCYY-MM-DDThh:mm:ssZ`）换算成的 Unix 秒；没有或格式不对为 `None`。
     pub modified: Option<u32>,
+    /// 固定版式的声明（EXTH 编号, 值）：OPF 里 KindleGen 约定的 `<meta name="fixed-layout" content="true"/>` 等几项，
+    /// 原样写成同名的 EXTH 记录（编号见 MobileRead Wiki 的 MOBI 页）。没有 `fixed-layout = true` 时为空（流式排版）。
+    pub fixed_layout: Vec<(u32, String)>,
+}
+
+/// OPF `<meta name=…>` 的名字 → EXTH 编号（固定版式那一组，MobileRead Wiki「MOBI」页的 EXTH 表）。
+const FIXED_LAYOUT_EXTH: [(&str, u32); 6] = [
+    ("fixed-layout", 122),
+    ("book-type", 123),
+    ("orientation-lock", 124),
+    ("original-resolution", 126),
+    ("zero-gutter", 127),
+    ("zero-margin", 128),
+];
+
+/// OPF 里固定版式那一组 `<meta name content>`；`fixed-layout` 不是 `true` 时一律不要（流式排版的书写了别的几项也没用）。
+fn fixed_layout_metas(opf: &str) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    for t in bookconv::html::tags(opf).filter(|t| t.is_start() && bookconv::wash::opf::is_local(t.name, "meta")) {
+        let tag = &opf[t.start..t.end];
+        let (Some(name), Some(content)) = (bookconv::html::attr_value(tag, "name"), bookconv::html::attr_value(tag, "content")) else { continue };
+        if let Some((_, n)) = FIXED_LAYOUT_EXTH.iter().find(|(k, _)| *k == name) {
+            if !out.iter().any(|(m, _)| m == n) {
+                out.push((*n, content.trim().to_string()));
+            }
+        }
+    }
+    if !out.iter().any(|(n, v)| *n == 122 && v == "true") {
+        return Vec::new();
+    }
+    out.sort_by_key(|(n, _)| *n);
+    out
 }
 
 /// FNV-1a 64 位。
@@ -126,7 +158,7 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
     let dc = opf_dc(&opf_text);
     let stable_id = unique_identifier(&opf_text).map_or_else(|| fnv64(&entries[opf.index].data), |id| fnv64(id.as_bytes()));
     let modified = modified_secs(&opf_text);
-    let mut meta = Meta { title: dc.title, authors: dc.creators, publisher: dc.publisher, language: dc.language, date: dc.date, description: dc.description, rtl: false, stable_id, modified };
+    let mut meta = Meta { title: dc.title, authors: dc.creators, publisher: dc.publisher, language: dc.language, date: dc.date, description: dc.description, rtl: false, stable_id, modified, fixed_layout: fixed_layout_metas(&opf_text) };
     static SPINE: OnceLock<Regex> = OnceLock::new();
     if let Some(m) = SPINE.get_or_init(|| Regex::new(r#"<spine\b[^>]*>"#).unwrap()).find(&opf_text) {
         meta.rtl = tag_attr(m.as_str(), "page-progression-direction") == Some("rtl");
