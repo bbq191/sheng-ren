@@ -1,6 +1,7 @@
 //! 优化器单测。全部走生产路径 [`optimize_epub_file_streaming`]（经临时文件），不另设内存版实现。
     use super::*;
-    use std::io::{Cursor, Read};
+    use std::io::{Cursor, Read, Write};
+    use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
 

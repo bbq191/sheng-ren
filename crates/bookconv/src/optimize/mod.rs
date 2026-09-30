@@ -4,8 +4,7 @@
 //! 调用方是书库 `booklib`（`crates/library`）和命令行 `epub-optimize`。
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
-use zip::{ZipArchive, ZipWriter};
+use zip::ZipArchive;
 
 /// 幂等标记：优化器把这个文件埋进产物 EPUB，内容=优化器版本号（见 [`marker_value`]）。放 META-INF/ 下
 /// （EPUB 规范允许该目录放额外文件，阅读器忽略）。重优化时旧标记剔除、结尾重写一条。
@@ -182,9 +181,6 @@ struct Prepared {
     rep: Report,
 }
 
-/// EPUB 规范：`mimetype` 必须是 zip 的第一个条目、STORED、内容就是这串（不带换行）。
-const MIMETYPE: &[u8] = b"application/epub+zip";
-
 /// 阶段一：`raw` → 封面声明 → 清洗 → 排序（mimetype 置首、旧标记剔除）→ 漫画识别 → 第一遍 html → 注释块搬出。
 /// 图片条目是空占位——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
 fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize) -> Result<Prepared, String> {
@@ -201,7 +197,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     let has_remote_imgs = raw.iter().any(|e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img));
     // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
     let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len() + 1);
-    ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: MIMETYPE.to_vec() });
+    ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: crate::epubzip::MIMETYPE.to_vec() });
     ordered.extend(raw.into_iter().filter(|e| e.name != "mimetype" && e.name != OPTIMIZE_MARKER && e.name != READER_MARGINS_MARKER));
 
     // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。清洗过的书用清洗层判好的
