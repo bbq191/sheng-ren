@@ -29,6 +29,7 @@ fn add_build_skip_remove() {
     assert_eq!(meta.title, "风起");
     assert_eq!(meta.authors, ["作者"]);
     assert!(matches!(lib.add_file(&src).unwrap(), Added::Existing(_)), "同一本书重复入库要认出来");
+    assert!(!lib.is_comic(&meta).unwrap(), "文字书不算漫画");
     assert_eq!(lib.list().len(), 1);
 
     // add 进来的书（不在跟踪目录里）：产物在书库 output/<模式>/
@@ -78,6 +79,7 @@ fn cbz_becomes_comic_epub_master_and_drm_epub_is_refused() {
     }
     let Added::New(m) = lib.add_file(&cbz).unwrap() else { panic!() };
     assert_eq!(m.title, "漫画 - 01卷");
+    assert!(lib.is_comic(&m).unwrap(), "CBZ 算漫画（booklib meta 跳过）");
     assert!(!dir.path().join(format!("lib/masters/{}/master.epub", m.id)).exists(), "转换结果不落书库");
     // 生成时当场转换：三页都在
     let Built::Written { path, .. } = lib.build(&m, profile::get("xochitl").unwrap(), false).unwrap() else { panic!() };
