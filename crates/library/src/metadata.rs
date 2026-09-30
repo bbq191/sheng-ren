@@ -221,13 +221,13 @@ pub(crate) struct Additions<'a> {
 }
 
 /// 复制 `src` 到 `dst`，补上书里没有的：封面、`dc:description`、`dc:subject`。书里已有的不动。
-/// 改写用 `bookconv::opfmeta`（与 `ebook-meta` 命令同一份实现）：只动 OPF 和新加的封面图，其余条目原样拷。
+/// 改写用 `bookconv::opfmeta`（与 `ebook-meta` 命令同一份实现，含 EPUB 3 规范整理；不改 `dcterms:modified`，产物逐字节可重现）。
 /// 什么都不用补时不写 `dst`，返回 `false`。
 pub(crate) fn inject(src: &Path, dst: &Path, add: &Additions) -> Result<bool, String> {
     use bookconv::opfmeta::{self, DcField, Edits};
     let current = opfmeta::read_epub(src)?;
     let has = |f: DcField| current.iter().any(|(x, v)| *x == f && !v.is_empty());
-    let mut edits = Edits { cover: add.cover.as_ref().map(|(b, _)| b.clone()), ..Default::default() };
+    let mut edits = Edits { cover: add.cover.as_ref().map(|(b, _)| bookconv::opfmeta::CoverEdit::Set(b.clone())), ..Default::default() };
     if let Some(info) = add.info {
         if !has(DcField::Description) && !info.description.is_empty() {
             edits.set.push((DcField::Description, vec![info.description.clone()]));
@@ -304,15 +304,23 @@ mod tests {
         assert!(inject(&src, &dst, &Additions { cover: Some((jpg, "jpg")), info: Some(&info) }).unwrap());
         assert!(epub_has_cover(&dst));
         let (a, b) = (bookconv::epubzip::read_entries(&std::fs::read(&src).unwrap()).unwrap(), bookconv::epubzip::read_entries(&std::fs::read(&dst).unwrap()).unwrap());
-        assert_eq!(b.len(), a.len() + 1);
+        // 新加了封面图；过了 EPUB 3 规范整理，没有导航文档的书补一份 nav
+        assert!(b.len() > a.len());
         for e in a.iter().filter(|e| !e.name.ends_with(".opf")) {
-            assert_eq!(b.iter().find(|x| x.name == e.name).unwrap().data, e.data, "{} 原样", e.name);
+            let out = &b.iter().find(|x| x.name == e.name).unwrap().data;
+            if bookconv::epubzip::is_html(&e.name) || e.name.ends_with(".ncx") {
+                let text = |d: &[u8]| bookconv::html::plain_text(&String::from_utf8_lossy(d));
+                assert_eq!(text(out), text(&e.data), "{} 可见文字不变", e.name);
+            } else {
+                assert_eq!(*out, e.data, "{} 原样", e.name);
+            }
         }
         let opf = String::from_utf8(b.iter().find(|e| e.name.ends_with(".opf")).unwrap().data.clone()).unwrap();
         let dc = bookconv::wash::opf_dc(&opf);
         assert_eq!(dc.description, "简介 & <引号> 第二段", "{opf}");
         assert_eq!(dc.title, "书");
         assert_eq!(opf.matches("<dc:subject>").count(), 2);
+        assert!(opf.contains(r#"version="3.0""#) && opf.contains("dcterms:modified"), "EPUB 3: {opf}");
 
         // 书里已有简介：不覆盖；什么都不用补时不写
         let src2 = sample(d.path(), "原书简介");

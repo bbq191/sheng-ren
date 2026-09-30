@@ -6,6 +6,27 @@
 /// 顺带丢弃 XML 1.0 不允许出现的字符（见 [`is_xml_char`]）——转义救不了它们，留着整份文档就不是合法
 /// XML：2026-09-23 真机《T.E.双语》PDF 标题是 UTF-16BE，被当 UTF-8 解出一串 `\0`，写进 OPF 的
 /// `dc:title` 后 xochitl 解析 OPF 失败、整本只渲染出 1 页。
+/// 现在的 UTC 时间，写成 `2026-09-30T08:05:09Z`（EPUB 3 的 `dcterms:modified` 格式）。
+pub fn utc_now_w3c() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    utc_w3c(secs)
+}
+
+/// Unix 秒数 → `YYYY-MM-DDThh:mm:ssZ`（公历换算按 Howard Hinnant 的 civil_from_days）。
+pub fn utc_w3c(secs: u64) -> String {
+    let (days, rem) = ((secs / 86400) as i64, secs % 86400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
 pub fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -310,7 +331,14 @@ mod tests {
     }
 
     #[test]
-    fn xml_escape_covers_amp_lt_gt_quote() {
+    fn utc_w3c_formats_dates() {
+        assert_eq!(utc_w3c(0), "1970-01-01T00:00:00Z");
+        assert_eq!(utc_w3c(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(utc_w3c(1_790_755_509), "2026-09-30T08:05:09Z");
+    }
+
+    #[test]
+        fn xml_escape_covers_amp_lt_gt_quote() {
         assert_eq!(xml_escape(r#"a&b<c>d"e"#), "a&amp;b&lt;c&gt;d&quot;e");
         assert_eq!(xml_escape("纯文本"), "纯文本");
         assert_eq!(xml_escape("a\u{0}b\u{1}c\td\u{FFFE}e"), "abc\tde", "XML 1.0 不允许的字符直接丢弃");
