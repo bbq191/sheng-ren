@@ -61,20 +61,20 @@
   </g>
   <g class="s">
     <text x="500" y="290">· 补白到阅读范围的宽高比（容差 0.3%），图片正好填满阅读器图片框</text>
-    <text x="500" y="312">· 黑白屏（koreader 模式）：转 256 级灰度，<tspan font-weight="bold">不抖动</tspan></text>
+    <text x="500" y="312">· 黑白屏（kindle、ireader 模式）：转 256 级灰度，<tspan font-weight="bold">不抖动</tspan></text>
     <text x="500" y="334">· 彩色屏（xochitl 模式，Move）：保留彩色</text>
     <text x="500" y="356">· 已经合适的图不重新编码；透明背景先铺白</text>
-    <text x="500" y="378">· 缩小用 JPEG 质量 95；比阅读范围小很多的页先放大（质量 85）</text>
+    <text x="500" y="378">· JPEG 一律质量 95；比阅读范围小的页先放大（最多 3 倍）</text>
     <text x="500" y="400">· 漫画里夹的文字页照常保留</text>
     <text x="500" y="422">· 多张图并行处理，结果与逐张处理逐字节相同</text>
-    <text x="500" y="444">· OPF 加 dc:subject「漫画」，KOReader 据此自动套漫画设置</text>
-    <text x="500" y="466">· 超过 900 万像素、GIF/WebP 的页原样保留</text>
+    <text x="500" y="444">· OPF 加 dc:subject「漫画」（只动元数据）</text>
+    <text x="500" y="466">· 静态 GIF/WebP 转格式处理；动图、超过 6400 万像素的原样保留</text>
   </g>
 
   <path class="l" d="M240 494 C240 520 440 510 450 526" marker-end="url(#a)"/>
   <path class="l" d="M700 494 C700 520 500 510 490 526" marker-end="url(#a)"/>
 
-  <rect class="g" x="330" y="528" width="280" height="56" rx="8"/>
+  <rect class="g" x="260" y="528" width="420" height="56" rx="8"/>
   <text x="470" y="550" text-anchor="middle" class="h">质量门 → 产物</text>
-  <text x="470" y="570" text-anchor="middle" class="s">XHTML 合法、引用齐全（没过只警告）→ EPUB</text>
+  <text x="470" y="570" text-anchor="middle" class="s">XHTML 合法、引用齐全（没过只警告）→ EPUB；kindle 模式再转 AZW3</text>
 </svg>

@@ -14,7 +14,7 @@ const USAGE: &str = "用法:
   booklib [--library=目录] add <文件或网址>...           一次性入库单个文件（目录用 track）
   booklib [--library=目录] list [书名片段或 id...]      列出书，以及给哪些阅读模式生成过、是否最新
   booklib [--library=目录] build [--device=<模式>[,<模式>…]] [--force] [书名片段或 id...]
-      按阅读模式生成优化过的 EPUB（只支持 EPUB、CBZ 来源）；不写 --device = 全部模式（koreader、xochitl），
+      按阅读模式生成优化过的书（只支持 EPUB、CBZ 来源；kindle 出 AZW3，ireader、xochitl 出 EPUB）；不写 --device = 全部模式，
       --device 可写多次或用逗号分隔，all = 全部；不写书名 = 全部书
       产物：跟踪目录 D 里的书放在 D/../<模式>/，按原件所在子目录镜像；add 进来的书和网址书放在书库 output/<模式>/
   booklib [--library=目录] track <目录>...               跟踪目录（递归）：之后 sync 把它镜像进书库
@@ -258,8 +258,8 @@ fn main() {
     match cmd.as_str() {
         "devices" => {
             for p in lib.devices().iter() {
-                let r = p.readable(library::Format::Epub);
-                println!("{:<12} {}  屏幕 {}×{}  阅读范围 {}×{}  {}", p.id, p.name, p.screen.width, p.screen.height, r.width, r.height, if p.color { "彩色" } else { "黑白" });
+                let r = p.output_readable();
+                println!("{:<12} {}  {}  屏幕 {}×{}  阅读范围 {}×{}  {}", p.id, p.name, p.format().ext().to_uppercase(), p.screen.width, p.screen.height, r.width, r.height, if p.color { "彩色" } else { "黑白" });
             }
         }
         "add" => {

@@ -6,6 +6,7 @@ license.workspace = true
 description = "书库：入库（只存索引）、跟踪原件目录、按设备 profile 生成产物、联网补封面"
 
 [dependencies]
+azw3 = { path = "../azw3" }
 bookconv = { path = "../bookconv" }
 profile = { path = "../profile" }
 serde = { version = "1", features = ["derive"] }
