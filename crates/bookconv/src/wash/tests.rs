@@ -1413,3 +1413,85 @@
             assert!(!s(&v, f).contains('\u{feff}'), "{f}");
         }
     }
+
+    // ───────────────────────── 2026-09-30 审计 ─────────────────────────
+
+    /// B2：整段只有空白的段落（作者留的空行）不剥成 `<p></p>`；有正文的段首空白照剥。
+    #[test]
+    fn audit_b2_blank_paragraphs_kept() {
+        let h = "<html><body><p>　　正文一</p><p>&nbsp;</p><p>　</p><p> </p><p>&#12288;<span>乙</span></p><p>\u{3000}</p></body></html>";
+        assert_eq!(cjk_paragraphize(h), "<html><body><p>正文一</p><p>&nbsp;</p><p>　</p><p> </p><p><span>乙</span></p><p>\u{3000}</p></body></html>");
+        assert_eq!(cjk_paragraphize("<p>　<img src='a.png'/></p><p>　</p>"), "<p><img src='a.png'/></p><p>　</p>", "图片也算内容");
+    }
+
+    /// B3：选择器前面的 `/* … */` 注释不参与判断（注释原样留在输出里）。
+    #[test]
+    fn audit_b3_css_comments_not_part_of_selector() {
+        let o = WashOpts::default();
+        // 注释里提到 p：.note 不是 p 规则，上下边距不动
+        let out = filter_css("/* p 的样式 */ .note{margin:1em 2em}", &o);
+        assert_eq!(out, "/* p 的样式 */ .note{margin:1em 2em;}");
+        // 注释里提到 footnote：普通规则不当注释容器（不加注释字号、不剥字重）
+        let out = filter_css("/* footnote 在后面 */\n.big{font-weight:bold}", &o);
+        assert_eq!(out, "/* footnote 在后面 */\n.big{font-weight:bold;}");
+        // 注释后面的 @font-face 照样认出来，字体名不剥
+        let face = "/* fonts */ @font-face{font-family:\"A\";src:url(a.ttf)}";
+        assert_eq!(filter_css(face, &o), face);
+        // 注释后面的 @import 也照样拆出来
+        let out = filter_css("/* x; y */ @import url(a.css);\np{font-size:12pt;color:red}", &o);
+        assert!(out.starts_with("/* x; y */ @import url(a.css);\np{") && !out.contains("12pt"), "{out}");
+        // 章尾容器、首行缩进类、会画线的类也不受注释影响
+        let mut cls = HashSet::new();
+        cls.insert("tail".to_string());
+        assert_eq!(strip_tail_spacing("/* 结尾 */ .tail{margin-bottom:1em;color:red}", &cls), "/* 结尾 */ .tail{color:red;}");
+        assert!(indent_classes_of("/* .fake */ .real{text-indent:2em}").iter().eq(["real".to_string()].iter()));
+    }
+
+    /// B4：属性值里的 `<` 一律转义（标签之间的 `<字母` 照旧不动）。
+    #[test]
+    fn audit_b4_lt_in_attribute_escaped() {
+        let mut fx = normalize::XmlFixes::default();
+        let out = normalize::normalize_markup(r#"<html><body><img alt="<b>x</b>" src="a.png"/><p title=a<b>t</p></body></html>"#, true, &mut fx);
+        assert!(out.contains(r#"<img alt="&lt;b>x&lt;/b>" src="a.png"/>"#) && out.contains(r#"<p title="a&lt;b">t</p>"#), "{out}");
+        assert_eq!(fx.bare_lts, 3);
+    }
+
+    /// B5：目录链接里的字符引用只转义一次（重建目录、补节、按标题生成目录都不会把 `&amp;` 写成 `&amp;amp;`）。
+    #[test]
+    fn audit_b5_toc_srcs_not_double_escaped() {
+        let opf = r#"<package version="2.0" unique-identifier="u"><metadata><dc:identifier id="u">x</dc:identifier><dc:title>B</dc:title></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="a&amp;b.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#;
+        let ncx = r#"<ncx><head><meta name="dtb:uid" content="x"/></head><navMap><navPoint id="n1"><navLabel><text>第一部　楔子</text></navLabel><content src="a&amp;b.xhtml#x&amp;y"/></navPoint><navPoint id="n2"><navLabel><text>尾声</text></navLabel><content src="c2.xhtml"/></navPoint></navMap></ncx>"#;
+        let mut v = vec![e("content.opf", opf), e("toc.ncx", ncx), e("a&b.xhtml", "<html><body><p id='x&amp;y'>楔子</p></body></html>"), e("c2.xhtml", "<html><body><p>尾声</p></body></html>")];
+        let rep = wash_entries(&mut v, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        assert_eq!(rep.toc_parts_restructured, 3);
+        let out = s(&v, "toc.ncx");
+        assert!(out.contains(r#"<content src="a%26b.xhtml#x&amp;y"/>"#) && !out.contains("&amp;amp;"), "{out}");
+        // 按标题生成目录：标题 id 里的 `&amp;` 进目录时不再转义第二次
+        let mut w = paged_book(&[("c1.xhtml", &format!("<h1 id='a&amp;b'>第一章</h1><p>{LONG}</p><h1>第二章</h1><p>{LONG}</p>"))]);
+        wash_entries(&mut w, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        let ncx = s(&w, "OEBPS/toc.ncx");
+        assert!(ncx.contains(r#"src="Text/c1.xhtml#a&amp;b""#) && !ncx.contains("&amp;amp;"), "{ncx}");
+        let nav = s(&w, "OEBPS/nav.xhtml");
+        assert!(nav.contains(r#"href="Text/c1.xhtml#a&amp;b""#) && !nav.contains("&amp;amp;"), "{nav}");
+    }
+
+    /// B6：只有文件名正好是 nav.xhtml/nav.html 的才按名字算目录文件。
+    #[test]
+    fn audit_b6_nav_prefixed_chapters_are_not_toc_files() {
+        assert!(is_toc_file("OEBPS/nav.xhtml") && is_toc_file("NAV.html") && is_toc_file("x/toc.ncx"));
+        assert!(!is_toc_file("Text/navarre.xhtml") && !is_toc_file("navy.html") && !is_toc_file("nav-1.xhtml"));
+    }
+
+    /// 带命名空间前缀的 OPF：拆出来的份照样登记进 manifest 和 spine，新项跟着前缀；读 DC 元数据不认注释里的。
+    #[test]
+    fn audit_prefixed_opf_registers_split_pieces() {
+        let opf = r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf" version="3.0"><opf:metadata><dc:title>书</dc:title></opf:metadata><opf:manifest><opf:item id="c0" href="Text/c1.xhtml" media-type="application/xhtml+xml"/></opf:manifest><opf:spine><opf:itemref idref="c0"/></opf:spine></opf:package>"#;
+        let body = format!("<h1>第一章</h1><p>{LONG}</p><h1>第二章</h1><p>{LONG}</p>");
+        let mut v = vec![e("OEBPS/content.opf", opf), e("OEBPS/Text/c1.xhtml", &format!("<html><head><title>t</title></head><body>{body}</body></html>"))];
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        let o = s(&v, "OEBPS/content.opf");
+        assert!(o.contains(r#"<opf:item id="c0-p2" href="Text/c1-p2.xhtml""#) && o.contains(r#"<opf:itemref idref="c0-p2"/>"#), "{o}");
+        assert_eq!(spine_files(&v).len(), 4, "章标题独立一页：标题、正文各一份: {o}");
+        let dc = opf_dc(r#"<metadata><!-- <dc:title>旧</dc:title> --><dc:title/><dc:title id='t' data-x="a>b">新 &amp; 书</dc:title ><dc:creator>甲</dc:creator></metadata>"#);
+        assert_eq!((dc.title.as_str(), dc.creators), ("新 & 书", vec!["甲".to_string()]));
+    }

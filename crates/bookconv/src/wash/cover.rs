@@ -39,9 +39,9 @@ pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
     let cover = match existing {
         Some(t) => t,
         None => {
-            let by_name: HashMap<&str, &Entry> = entries.iter().rev().map(|e| (e.name.as_str(), e)).collect();
-            let Some(path) = first_spine_image(&text, &opf.dir, 12, true, |p| by_name.get(p).and_then(|e| std::str::from_utf8(&e.data).ok()).map(str::to_string)) else { return false };
-            let Some(it) = items.into_iter().find(|i| is_image_item(i) && resolve(&opf.dir, &percent_decode(i.href)) == path) else { return false };
+            let by_name = name_index(entries);
+            let Some(path) = first_spine_image(&text, &opf.dir, 12, true, |p| by_name.get(p).and_then(|&i| std::str::from_utf8(&entries[i].data).ok()).map(str::to_string)) else { return false };
+            let Some(it) = items.into_iter().find(|i| is_image_item(i) && i.path(&opf.dir) == path) else { return false };
             it
         }
     };

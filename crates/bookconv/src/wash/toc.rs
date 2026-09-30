@@ -4,13 +4,18 @@
 //! 原 toc 的标题（`<h1>目录</h1>`/`<h2>Contents</h2>`）沿用；新建时标题按书的语言（中文"目录"、其它"Contents"）。
 use super::*;
 
+/// 按文件名看是不是目录文件：NCX（`*.ncx`），或文件名正好是 `nav.xhtml`/`nav.html`（不分大小写）。
+/// OPF 声明的导航文档（`properties="nav"`，不一定叫 nav）由调用方另外认（`Opf::nav_doc`）。
+/// 2026-09-30 审计：此前只看文件名以 `nav` 开头，`navarre.xhtml`、`navy.html` 这类正文章节被当成目录、整章跳过清洗和分页。
 pub fn is_toc_file(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     let base = l.rsplit('/').next().unwrap_or(&l);
-    l.ends_with(".ncx") || (base.starts_with("nav") && (base.ends_with(".xhtml") || base.ends_with(".html")))
+    l.ends_with(".ncx") || base == "nav.xhtml" || base == "nav.html"
 }
 
-/// 一条目录：级别（h 级别或目录深度）、标题（纯文本）、目标文件的 zip 路径、锚点（原文，空 = 指文件本身）。
+/// 一条目录：级别（h 级别或目录深度）、标题（纯文本）、目标文件的 zip 路径、锚点（空 = 指文件本身）。
+/// 锚点是**字符引用已还原**的值（百分号编码照原样）：写进 NCX/nav 时由 `build_ncx`/`nav_ol`/`replace_nav_map` 转义一次；
+/// 从 `id` 属性原文取来的要先 `xml_unescape`（2026-09-30 审计：此前原文直接进来，`id="a&amp;b"` 写成 `#a&amp;amp;b`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TocItem {
     pub level: u8,
@@ -89,7 +94,7 @@ pub(super) fn collect_toc_headings(entries: &mut [Entry], spine: &[String], nav_
             }
             let open = &html[t.start..t.end];
             let frag = match html::attr_value(open, "id").filter(|v| !v.is_empty()) {
-                Some(id) => id.to_string(),
+                Some(id) => crate::util::xml_unescape(id).into_owned(),
                 None => {
                     counter += 1;
                     let f = format!("eink-toc-{counter}");
@@ -178,7 +183,7 @@ pub(super) fn write_nav(existing: Option<&str>, items: &[TocItem], nav_dir: &str
     let Some(ti) = toc else { return build_nav(items, nav_dir, heading) };
     let nav = &spans[ti];
     // 原 toc 的标题：nav 的直接子元素里第一个 h1–h6。
-    let title = spans.iter().find(|s| s.parent == Some(ti) && s.closed() && s.name.len() == 2 && s.name.starts_with('h') && s.name.as_bytes()[1].is_ascii_digit());
+    let title = spans.iter().find(|s| s.parent == Some(ti) && s.closed() && s.heading_level().is_some());
     let title = title.map_or(String::new(), |s| doc[s.open_start..s.close_end].to_string());
     format!("{}{}{}{}{}", &doc[..nav.open_end], title, nav_ol(items, nav_dir), &doc[nav.close_start..nav.close_end], &doc[nav.close_end..])
 }
@@ -429,6 +434,7 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
     }
     let spine_pos: HashMap<&str, usize> = opf.spine.iter().enumerate().map(|(i, p)| (p.as_str(), i)).collect();
     // 文件 → (锚点 → 偏移)，按需建一次。
+    // 锚点、节 id 一律按字符引用还原后的值比（NCX 的 src 已还原，见 `ncx::NavPoint::src`；id 属性是原文）。
     let mut anchor_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
     let mut key_of = |path: &str, frag: &str| -> (usize, usize) {
         let sp = spine_pos.get(path).copied().unwrap_or(usize::MAX);
@@ -439,14 +445,15 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
             let mut m = HashMap::new();
             if let Some(e) = entries.iter().find(|e| e.name == path) {
                 for (id, pos) in html::anchors(&String::from_utf8_lossy(&e.data)) {
-                    m.entry(id.to_string()).or_insert(pos);
+                    m.entry(crate::util::xml_unescape(id).into_owned()).or_insert(pos);
                 }
             }
             m
         });
         (sp, map.get(frag).copied().unwrap_or(0))
     };
-    let sec_ids: HashSet<(&str, &str)> = sections.iter().map(|s| (s.path.as_str(), s.id.as_str())).collect();
+    let sec_id = |s: &SectionRef| crate::util::xml_unescape(&s.id).into_owned();
+    let sec_ids: HashSet<(&str, String)> = sections.iter().map(|s| (s.path.as_str(), sec_id(s))).collect();
     // 只指到文件的条目算节，要求节标题就在那个文件开头（文件开头是章标题、节在后面时，这条目录是章）
     let sec_paths: HashSet<&str> = sections.iter().filter(|s| section_starts_file(entries, &s.path, &s.id)).map(|s| s.path.as_str()).collect();
     struct Item {
@@ -463,7 +470,7 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
             let path = posix_norm(&resolve(dir_of(&ncx_path), &percent_decode(p)));
             let f = f.unwrap_or("");
             let id = html::frag_id(f).into_owned();
-            let is_sec = if id.is_empty() { sec_paths.contains(path.as_str()) } else { sec_ids.contains(&(path.as_str(), id.as_str())) };
+            let is_sec = if id.is_empty() { sec_paths.contains(path.as_str()) } else { sec_ids.contains(&(path.as_str(), id.clone())) };
             let key = key_of(&path, &id);
             Item { toc: TocItem { np: Some(open_tag).filter(|t| !t.is_empty()), ..TocItem::new(depth.max(1) as u8, label, path, f) }, is_sec, key, inserted: false }
         })
@@ -472,18 +479,19 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
     let mut present: HashSet<(String, String)> = items.iter().filter(|it| it.is_sec).map(|it| (it.toc.path.clone(), html::frag_id(&it.toc.frag).into_owned())).collect();
     let mut added = 0;
     for s in sections {
-        if present.contains(&(s.path.clone(), s.id.clone())) || present.contains(&(s.path.clone(), String::new())) {
+        let id = sec_id(s);
+        if present.contains(&(s.path.clone(), id.clone())) || present.contains(&(s.path.clone(), String::new())) {
             continue;
         }
-        let key = key_of(&s.path, &s.id);
+        let key = key_of(&s.path, &id);
         let at = items.iter().rposition(|it| it.key <= key).map_or(0, |i| i + 1);
         let depth = match items[..at].last() {
             Some(prev) if prev.is_sec => prev.toc.level,
             Some(prev) => prev.toc.level + 1,
             None => 1,
         };
-        items.insert(at, Item { toc: TocItem::new(depth, s.label.clone(), s.path.clone(), s.id.clone()), is_sec: true, key, inserted: true });
-        present.insert((s.path.clone(), s.id.clone()));
+        items.insert(at, Item { toc: TocItem::new(depth, s.label.clone(), s.path.clone(), id.clone()), is_sec: true, key, inserted: true });
+        present.insert((s.path.clone(), id));
         added += 1;
     }
     // 书自带的节条目缩进到所属章下面、标签去掉首尾空白；章标签末尾重复第一节的节号的去掉。
@@ -538,7 +546,7 @@ fn section_starts_file(entries: &[Entry], path: &str, id: &str) -> bool {
 
 // ───────────────────────── 书自带目录指错位置的修复 ─────────────────────────
 
-/// 条目名 → 下标（同名取第一条）。
+/// 条目名 → 下标（同名取第一条；清洗层按名字找条目都用这一份）。
 pub(super) fn name_index(entries: &[Entry]) -> HashMap<&str, usize> {
     let mut m = HashMap::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
@@ -548,7 +556,7 @@ pub(super) fn name_index(entries: &[Entry]) -> HashMap<&str, usize> {
 }
 
 /// 一个文件的正文范围与锚点表（锚点 → 偏移，同名取第一处）。
-type FileAnchors<'a> = (Option<(usize, usize)>, HashMap<&'a str, usize>);
+type FileAnchors<'a> = (Option<(usize, usize)>, HashMap<Cow<'a, str>, usize>);
 
 /// 读"某文件某锚点后面的文字"用的缓存：每个文件的正文范围与锚点表只算一次（此前每条目录都把目标文件的锚点整份重扫一遍）。
 struct TextAt<'a> {
@@ -574,7 +582,7 @@ impl<'a> TextAt<'a> {
         let (body, anchors) = self.files.entry(path.to_string()).or_insert_with(|| {
             let mut m = HashMap::new();
             for (id, pos) in html::anchors(t) {
-                m.entry(id).or_insert(pos);
+                m.entry(crate::util::xml_unescape(id)).or_insert(pos);
             }
             (html::body_range(t), m)
         });
@@ -606,8 +614,10 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
     let Some(ncx_path) = opf.ncx.clone() else { return };
     let Some(ncx_text) = entries.iter().find(|e| e.name == ncx_path).and_then(|e| String::from_utf8(e.data.clone()).ok()) else { return };
     let ncx_dir = dir_of(&ncx_path).to_string();
+    // 属性原文 → 字符引用还原 → 百分号解码（锚点表也按还原后的 id 建，见 `TextAt::get`）
     let resolve_decoded = |base: &str, href: &str| -> (String, String) {
-        let (path, frag) = crate::epubzip::resolve_href(base, href);
+        let href = crate::util::xml_unescape(href);
+        let (path, frag) = crate::epubzip::resolve_href(base, &href);
         (path, html::frag_id(frag.unwrap_or("")).into_owned())
     };
     let mut cache = TextAt::new(entries);
@@ -641,7 +651,7 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
                 continue;
             }
             let target = match html::attr_value(&t[g.start..g.end], "id").filter(|id| !id.is_empty()) {
-                Some(id) => Some((path.clone(), id.to_string())),
+                Some(id) => Some((path.clone(), crate::util::xml_unescape(id).into_owned())),
                 None => (!html::has_visible(&t[lo..g.start])).then(|| (path.clone(), String::new())),
             };
             headings.entry(label).or_default().push(target);
