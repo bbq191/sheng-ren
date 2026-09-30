@@ -11,10 +11,14 @@ fn png(w: u32, h: u32) -> Vec<u8> {
 }
 
 fn sample_epub() -> Vec<u8> {
+    sample_epub_id("t")
+}
+
+fn sample_epub_id(id: &str) -> Vec<u8> {
     let long = "正文段落，含中文与 English mixed text。".repeat(300); // 跨多条 4096 字节记录，也会有多字节字符跨记录
     let mut book = Book {
         meta: BookMeta {
-            book_id: "t".into(),
+            book_id: id.into(),
             title: "测试书".into(),
             author: "作者甲".into(),
             language: "zh".into(),
@@ -128,4 +132,36 @@ fn base32_embed_and_link_offsets_read_back() {
     assert!(file.starts_with("chap_"), "{tag}");
     let target = entries.iter().find(|e| e.name.ends_with(file)).unwrap();
     assert!(String::from_utf8_lossy(&target.data).contains("目标段"), "{tag}");
+}
+
+#[test]
+fn without_fixed_id_output_is_deterministic_and_per_book() {
+    let a = azw3::epub_to_azw3(&sample_epub(), &azw3::Opts::default()).unwrap();
+    let b = azw3::epub_to_azw3(&sample_epub(), &azw3::Opts::default()).unwrap();
+    assert!(a == b, "同一本 EPUB 转两次要逐字节相同");
+    let c = azw3::epub_to_azw3(&sample_epub_id("u"), &azw3::Opts::default()).unwrap();
+    assert!(a != c, "标识符不同的书唯一 ID 不同（别的内容一样）");
+}
+
+/// KF8 不认 WebP：静态 WebP 转成 PNG 放进去（像素不变），引用改成 `kindle:embed`，不丢图。
+#[test]
+fn static_webp_becomes_png() {
+    let img = image::RgbaImage::from_fn(16, 12, |x, y| image::Rgba([(x * 15) as u8, (y * 20) as u8, 77, 255]));
+    let mut webp = Vec::new();
+    image::codecs::webp::WebPEncoder::new_lossless(&mut webp).encode(img.as_raw(), 16, 12, image::ExtendedColorType::Rgba8).unwrap();
+    let mut book = Book {
+        meta: BookMeta { book_id: "w".into(), title: "WebP".into(), author: String::new(), language: "zh".into(), publisher: String::new(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into() },
+        chapters: vec![Chapter { title: "图".into(), html_body: r#"<h1>图</h1><p><img src="images/w.webp" alt=""/></p>"#.into(), level: 1 }],
+        resources: vec![Resource { path: "images/w.webp".into(), media_type: "image/webp".into(), bytes: webp }],
+        nav: vec![],
+    };
+    let epub = assemble(&mut book).unwrap();
+    let (azw3, warnings) = azw3::epub_to_azw3_with_warnings(&epub, &azw3::Opts::default()).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let records = palm::parse_palmdb(&azw3).unwrap();
+    let h = palm::parse_header(records[0]).unwrap();
+    let raw = String::from_utf8(palm::decompress_text(&records, &h)).unwrap();
+    assert!(raw.contains("kindle:embed:0001?mime=image/png"), "{raw}");
+    let png = records.iter().find(|r| r.starts_with(&[0x89, b'P', b'N', b'G'])).expect("PNG 记录");
+    assert_eq!(image::load_from_memory(png).unwrap().to_rgba8(), img);
 }
