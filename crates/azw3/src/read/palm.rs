@@ -395,6 +395,7 @@ pub fn assemble_book(
             cover,
             cover_ext,
             cover_media_type,
+            subjects: Vec::new(),
         },
         chapters,
         resources,

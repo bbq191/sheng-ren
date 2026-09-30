@@ -5,7 +5,7 @@ use std::io::Write;
 fn sample_epub(title: &str) -> Vec<u8> {
     let long = "正文段落，足够长的文字内容，确保标题页之后的内容超过门槛。".repeat(5);
     let mut book = Book {
-        meta: BookMeta { book_id: "t".into(), title: title.into(), author: "作者".into(), language: "zh".into(), publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into() },
+        meta: BookMeta { book_id: "t".into(), title: title.into(), author: "作者".into(), language: "zh".into(), publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
         chapters: vec![Chapter { title: "第一章".into(), html_body: format!("<h1>第一章</h1><p>{long}</p><h2>第一节</h2><p>{long}</p>"), level: 1 }],
         resources: vec![],
         nav: vec![],

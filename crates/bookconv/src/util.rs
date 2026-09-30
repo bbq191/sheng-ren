@@ -100,8 +100,8 @@ pub fn is_xml_char(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
 }
 
-/// 路径/文件名是不是常见位图（按扩展名，忽略大小写）：jpg/jpeg/png/gif/webp。封面声明、占位封面探测共用；
-/// 注意跟 `imgopt::is_downscalable`（只认 jpg/jpeg/png——能重编码降采样的那几种）是两个不同的判据。
+/// 路径/文件名是不是常见位图（按扩展名，忽略大小写）：jpg/jpeg/png/gif/webp。封面声明、占位封面探测、CBZ 收页、
+/// 优化器挑要处理的图（`imgopt::is_page_image`）共用。
 pub fn is_image_ext(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     l.ends_with(".jpg") || l.ends_with(".jpeg") || l.ends_with(".png") || l.ends_with(".gif") || l.ends_with(".webp")

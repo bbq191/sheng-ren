@@ -433,12 +433,13 @@ impl Library {
             return Err("只支持 EPUB 和 CBZ".into());
         }
         let fallback_title = bookconv::naming::canonical_book_name(&stem);
-        // 检查能不能用、取书名作者：CBZ 先转一遍（结果不存，生成时再转）
+        // 检查能不能用、取书名作者。CBZ 只看目录里有没有页面图片（不整本转换；书名取文件名，生成时再转）
+        let file = std::fs::File::open(&path).map_err(|e| format!("读 {path_str}: {e}"))?;
         let info = if ext == "epub" {
-            EpubInfo::read(std::fs::File::open(&path).map_err(|e| format!("读 {path_str}: {e}"))?)?
+            EpubInfo::read(file)?
         } else {
-            let data = std::fs::read(&path).map_err(|e| format!("读 {path_str}: {e}"))?;
-            EpubInfo::read(std::io::Cursor::new(convert_to_epub(&ext, &data, &fallback_title)?))?
+            bookconv::convert::cbz::check_cbz(std::io::BufReader::new(file))?;
+            EpubInfo { title: String::new(), authors: Vec::new(), drm: None }
         };
         if let Some(d) = info.drm {
             return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
