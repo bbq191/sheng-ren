@@ -195,10 +195,13 @@ fn to_format(image: &[u8], ext: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// 要改写的 zip 条目：(路径, 新内容)。
+pub type Rewritten = (String, Vec<u8>);
+
 /// 去掉书里的封面（2026-09-30 用户要）：封面声明（`<meta name="cover">`、`cover-image`）、**只放封面图的页面**（没有可见文字、
 /// 只有这一张图；连同 spine、guide、NCX、nav 里指向它的条目），以及封面图本身——正文别的页也用着这张图时图留着，只去掉声明。
 /// `read(zip 路径)` 取文本。返回 (新 OPF, 要从 zip 删掉的条目, 要改写的条目 (路径, 新内容))。书里没有声明封面图 → 原样。
-pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Option<String>) -> (String, Vec<String>, Vec<(String, Vec<u8>)>) {
+pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Option<String>) -> (String, Vec<String>, Vec<Rewritten>) {
     use crate::epubzip::{percent_decode, resolve, resolve_href};
     use crate::wash::opf as o;
     let Some(cover) = o::declared_cover(opf) else { return (opf.to_string(), Vec::new(), Vec::new()) };
