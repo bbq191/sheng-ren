@@ -104,7 +104,7 @@ mod tests {
     fn roundtrip(data: &[u8]) {
         let c = compress(data);
         let mut out = Vec::new();
-        bookconv::convert::palm::palmdoc_decompress(&c, &mut out);
+        crate::read::palm::palmdoc_decompress(&c, &mut out);
         assert_eq!(out, data, "压缩后解压必须逐字节一致");
     }
 

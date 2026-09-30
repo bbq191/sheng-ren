@@ -667,7 +667,7 @@ pub(super) fn ensure_nav(entries: &mut Vec<Entry>, heading: &str, rep: &mut Wash
 }
 
 /// 导航文档 `<nav epub:type="toc">` 里的目录条目（`<ol>` 嵌套深度当级别；没有 `href` 的 `<span>` 标题跳过）。
-fn nav_toc_items(doc: &str, nav_path: &str) -> Vec<toc::TocItem> {
+pub fn nav_toc_items(doc: &str, nav_path: &str) -> Vec<toc::TocItem> {
     let spans = html::parse_spans(doc, 0, doc.len());
     let Some(nav) = spans.iter().find(|s| s.name == "nav" && html::attr_value(&doc[s.open_start..s.open_end], "epub:type").is_some_and(|t| t.split_whitespace().any(|x| x == "toc"))) else { return Vec::new() };
     let mut out = Vec::new();
