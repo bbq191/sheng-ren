@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 430" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>Move 上的漫画怎么设成页边距 1</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <style>
+      .pc{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.2}
+      .mv{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.2}
+      .you{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.2}
+      .h{font-weight:bold;font-size:14px}
+      .s{font-size:12px;fill:#444}
+      .l{stroke:#555;stroke-width:1.3;fill:none}
+    </style>
+  </defs>
+  <rect width="900" height="430" fill="#fafafa"/>
+  <text x="20" y="28" class="h">蓝 = 电脑上　橙 = Move 上　绿 = 你要做的</text>
+
+  <rect class="pc" x="20" y="50" width="200" height="92" rx="8"/>
+  <text x="120" y="72" text-anchor="middle" class="h">① booklib build</text>
+  <text x="120" y="92" text-anchor="middle" class="s">漫画按页边距 1 排（952 × 1457）</text>
+  <text x="120" y="110" text-anchor="middle" class="s">书里写标记</text>
+  <text x="120" y="128" text-anchor="middle" class="s">META-INF/eink-reader-margins = 1</text>
+  <path class="l" d="M220 96 L250 96" marker-end="url(#a)"/>
+
+  <rect class="you" x="252" y="50" width="180" height="92" rx="8"/>
+  <text x="342" y="72" text-anchor="middle" class="h">② 拷到 Move</text>
+  <text x="342" y="92" text-anchor="middle" class="s">reMarkable 自带的传书方式</text>
+  <text x="342" y="110" text-anchor="middle" class="s">（USB 网页上传单本 &lt; 88MB）</text>
+  <path class="l" d="M432 96 L462 96" marker-end="url(#a)"/>
+
+  <rect class="you" x="464" y="50" width="200" height="92" rx="8"/>
+  <text x="564" y="72" text-anchor="middle" class="h">③ comic-margins.sh --write</text>
+  <text x="564" y="92" text-anchor="middle" class="s">经 SSH 找出带标记、页边距</text>
+  <text x="564" y="110" text-anchor="middle" class="s">还不是 1、没登记过的书</text>
+  <text x="564" y="128" text-anchor="middle" class="s">（不加 --write 只列出来）</text>
+  <path class="l" d="M664 96 L694 96" marker-end="url(#a)"/>
+
+  <rect class="mv" x="696" y="50" width="184" height="92" rx="8"/>
+  <text x="788" y="72" text-anchor="middle" class="h">④ 写进登记队列</text>
+  <text x="788" y="92" text-anchor="middle" class="s">书架服务的 comic-margins.json</text>
+  <text x="788" y="110" text-anchor="middle" class="s">每本记进 comic-margins.done</text>
+  <text x="788" y="128" text-anchor="middle" class="s">（只登记一次）</text>
+  <path class="l" d="M788 142 L788 186" marker-end="url(#a)"/>
+  <text x="796" y="170" class="s">拷完书，下一步</text>
+
+  <rect class="you" x="640" y="188" width="240" height="92" rx="8"/>
+  <text x="760" y="210" text-anchor="middle" class="h">⑤ 在 Move 上打开书</text>
+  <text x="760" y="230" text-anchor="middle" class="s">第一次打开时生效</text>
+  <path class="l" d="M640 234 L582 234" marker-end="url(#a)"/>
+
+  <rect class="mv" x="300" y="188" width="280" height="92" rx="8"/>
+  <text x="440" y="210" text-anchor="middle" class="h">⑥ 页边距代理（注入 xochitl）</text>
+  <text x="440" y="230" text-anchor="middle" class="s">开书约 2 秒后查队列，调 xochitl 自己的</text>
+  <text x="440" y="248" text-anchor="middle" class="s">setMargins(1)；开关：网页「管理→实验室</text>
+  <text x="440" y="266" text-anchor="middle" class="s">→漫画页边距」（comicMinMargin）</text>
+  <path class="l" d="M300 234 L262 234" marker-end="url(#a)"/>
+
+  <rect class="mv" x="20" y="188" width="240" height="92" rx="8"/>
+  <text x="140" y="210" text-anchor="middle" class="h">⑦ xochitl 按页边距 1 重排</text>
+  <text x="140" y="230" text-anchor="middle" class="s">整页图左右离屏幕 1px、</text>
+  <text x="140" y="248" text-anchor="middle" class="s">上 112、下 127（固定留）</text>
+
+  <g class="s">
+    <text x="20" y="318">· 为什么这么绕：xochitl 界面上的页边距只有 28 / 56 / 112 三档；直接改书的 .content 会被运行中的 xochitl 用内存里的状态盖回去，只能让它自己设。</text>
+    <text x="20" y="340">· 登记之后你在界面上把页边距改回去，不会再被设回来（每本只设一次）。</text>
+    <text x="20" y="362">· 脚本先检查：连得上、代理装了、队列目录在、开关开着、有 unzip；写队列前核对它没被书架服务同时改过（改过就不写，让你重跑）。</text>
+    <text x="20" y="384">· 暂不自动化（2026-09-29 用户定）：每次拷完书手工跑一次 --write。</text>
+    <text x="20" y="406">· 文字书不用登记：它们按默认页边距 56 排（842 × 1455）。</text>
+  </g>
+</svg>
