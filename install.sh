@@ -29,16 +29,6 @@ if [[ $tools -eq 0 ]] && grep -A20 -F "($here/crates/bookconv):" <<<"$installed"
   tools=1
 fi
 
-# 以前的版本单独装过 ebook-meta（在 bookconv 包里，2026-10-01 并进 booklib meta --edit）：整个包先卸掉，
-# 不然 cargo 按包记账，重装 bookconv 时没列出的 ebook-meta 会留在旧版本
-line=$(grep -F " ($here/crates/bookconv):" <<<"$installed" | grep '^bookconv v' || true)
-if [[ -n $line ]] && grep -A20 -F "($here/crates/bookconv):" <<<"$installed" | grep -qx '    ebook-meta'; then
-  ver=${line#bookconv v}
-  ver=${ver%% *}
-  cargo uninstall --quiet "path+file://$here/crates/bookconv#bookconv@$ver"
-  echo "卸掉了旧的 ebook-meta（改用 booklib meta --edit）"
-fi
-
 # 同一个包的二进制一次装齐：cargo 按包记账，这次没列出的二进制会留在旧版本。--force：代码改过也重新装
 cargo_install() { cargo install --locked --force --quiet --path "$here/crates/$1" "${@:2}"; }
 echo "编译安装 booklib…（第一次要编几分钟，中间不出声）"
