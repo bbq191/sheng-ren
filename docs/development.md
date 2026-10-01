@@ -61,7 +61,7 @@ AZW3 这一步另外核对：改了 `crates/azw3` 或会影响正文的规则后
 |---|---|
 | 清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明）。只进 CBZ 来源的指纹，EPUB 书不受影响 |
-| 生成时往书里补封面、简介、标签（`metadata::inject`） | `bookconv::opfmeta::VERSION`。只进补过东西的书的指纹（`i` + 版本） |
+| 生成时往书里补封面、简介、标签（`metadata::with_additions`） | `bookconv::opfmeta::VERSION`。只进补过东西的书的指纹（`i` + 版本） |
 | EPUB → AZW3 的转换 | `azw3::WRITER_VERSION`。只进 AZW3 模式（`kindle`）的指纹 |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（所有书都会过期，慎用） |
 
