@@ -48,7 +48,7 @@ AZW3 只是**产物**格式，不是输入：入库仍然只收 EPUB、CBZ。
 - **归类**：缺省"文档"（PDOC），侧载书的封面显示最稳；`--ebok` 归到"书籍"。书库生成时用缺省。
 - **唯一 ID**：书库生成时由书的 id 和入库时间派生，重建出来还是"同一本书"，Kindle 上的阅读进度不丢。
   单独用 `epub-to-azw3` 时由 OPF 的唯一标识符派生（没有就用整份 OPF），时间取 `dcterms:modified`：同一本书每次转出来逐字节一样。
-- 日漫（OPF spine 写了 `page-progression-direction="rtl"`）写 EXTH 527 = rtl（翻页方向在真机上还没专门看过）。
+- 日漫（OPF spine 写了 `page-progression-direction="rtl"`）写 EXTH 527 = rtl：Kindle 上从右往左翻（2026-10-01 真机，固定版式的《死亡笔记》）。
 - 找不到目标 id 的链接、目录项会落到所在章节开头，并给出警告（书库生成时显示在这本书的输出里）。
 
 ## 验证

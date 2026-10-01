@@ -137,19 +137,7 @@ pub fn to_halfwidth(c: char) -> char {
 /// 它出错或最后 `rename` 失败，`tmp` 都会被删掉，不在目录里留半成品。`tmp` 应与 `target` 同分区（rename 才原子）。
 /// 输入输出是同一个文件时也安全：产出期间原文件不动，改名那一刻才换掉。
 pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, produce: impl FnOnce(&std::path::Path) -> Result<T, String>) -> Result<T, String> {
-    produce_then_replace_with(tmp, target, produce, || Ok(()))
-}
-
-/// [`produce_then_replace`]，另在产出成功之后、改名之前调 `before_rename`（如先备份原文件）；它出错时同样清掉 `tmp`、
-/// 目标不动。
-pub fn produce_then_replace_with<T>(
-    tmp: &std::path::Path,
-    target: &std::path::Path,
-    produce: impl FnOnce(&std::path::Path) -> Result<T, String>,
-    before_rename: impl FnOnce() -> Result<(), String>,
-) -> Result<T, String> {
-    let value = produce(tmp).and_then(|v| before_rename().map(|_| v));
-    let value = match value {
+    let value = match produce(tmp) {
         Ok(v) => v,
         Err(e) => {
             let _ = std::fs::remove_file(tmp);
@@ -298,14 +286,6 @@ mod tests {
         let err = produce_then_replace(&tmp, &dir_target, |t| std::fs::write(t, b"z").map_err(|e| e.to_string())).unwrap_err();
         assert!(err.contains("改名覆盖"), "{err}");
         assert!(!tmp.exists());
-        // 改名前回调（备份）失败：目标不动、tmp 清掉；成功时先于改名执行
-        let err = produce_then_replace_with(&tmp, &target, |t| std::fs::write(t, b"x").map_err(|e| e.to_string()), || Err("备份失败".into())).unwrap_err();
-        assert_eq!(err, "备份失败");
-        assert_eq!(std::fs::read(&target).unwrap(), b"new");
-        assert!(!tmp.exists());
-        let bak = d.path().join("t.bak");
-        produce_then_replace_with(&tmp, &target, |t| std::fs::write(t, b"newer").map_err(|e| e.to_string()), || std::fs::copy(&target, &bak).map(|_| ()).map_err(|e| e.to_string())).unwrap();
-        assert_eq!((std::fs::read(&bak).unwrap(), std::fs::read(&target).unwrap()), (b"new".to_vec(), b"newer".to_vec()));
     }
 
     #[test]

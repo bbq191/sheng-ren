@@ -4,7 +4,7 @@
 //! 改 OPF（改书名时连 NCX 里的书名）和封面；写出的书和 booklib 的产物一样过一遍 EPUB 3 规范整理（XHTML 修成合法 XML、
 //! OPF 升到 3.0、补导航文档），`dcterms:modified` 写成现在的时间。可见文字一个不动。
 //! 参数统一：任何选项给空字符串 = 删掉这一项（`--cover ""` 就是去掉封面）；`--名字 值` 和 `--名字=值` 两种写法都认。
-//! 写前缺省备份成 `<文件>.bak-<时间戳>`；写入先写临时文件再改名，中途失败原文件不动。
+//! 不备份（2026-10-01 用户定）；写入先写临时文件再改名，中途失败原文件不动。
 
 use bookconv::opfmeta::{self, DcField, Edits};
 use std::ffi::OsString;
@@ -23,7 +23,6 @@ pub const USAGE: &str = r#"用法:
       值给空字符串 = 删掉这一项（字段、封面都一样）
       --author/--tag/--identifier 可重复，给出即整体替换（给几个就是最终的几个）；其余是单值
       --identifier 不动 OPF 唯一标识（unique-identifier 指向的那个），只替换其余标识符
-  --no-backup   不写 .bak 备份
 改的是任意一个 EPUB 文件，和书库无关；改了跟踪目录里的原件，下次 sync 会当成新版本重新入库"#;
 
 fn usage(msg: &str) -> ! {
@@ -49,29 +48,13 @@ fn show(path: &Path) {
     }
 }
 
-/// 同目录下不重名的备份文件名：`<文件>.bak-<时间戳>`（1 秒内连跑多次加序号）。
-fn backup_path(file: &Path) -> PathBuf {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let mut name = file.as_os_str().to_os_string();
-    name.push(format!(".bak-{secs}"));
-    let mut p = PathBuf::from(&name);
-    let mut n = 1;
-    while p.exists() {
-        let mut alt = name.clone();
-        alt.push(format!("-{n}"));
-        p = PathBuf::from(alt);
-        n += 1;
-    }
-    p
-}
-
 /// `args`：`meta` 之后、去掉 `--edit` 的参数（`--library=` 已去掉：改文件用不到书库）。
 pub fn run(args: Vec<OsString>) {
     let mut args = args.into_iter();
     let mut file: Option<PathBuf> = None;
     let mut singles: Vec<(DcField, String)> = Vec::new();
     let mut multis: Vec<(DcField, Vec<String>)> = Vec::new();
-    let (mut cover, mut get_cover, mut backup) = (None::<String>, None::<PathBuf>, true);
+    let (mut cover, mut get_cover) = (None::<String>, None::<PathBuf>);
     while let Some(a) = args.next() {
         let a = a.to_string_lossy().into_owned();
         let (key, inline) = match a.split_once('=') {
@@ -103,7 +86,6 @@ pub fn run(args: Vec<OsString>) {
             }
             "--cover" => cover = Some(value()),
             "--get-cover" => get_cover = Some(PathBuf::from(value())),
-            "--no-backup" => backup = false,
             "--fetch" | "--force" | "--clear" => usage(&format!("{key} 是 meta --fetch 的选项，不能和 --edit 一起用")),
             k if k.starts_with('-') => usage(&format!("meta --edit 不认识选项 {k}")),
             _ if file.is_none() => file = Some(PathBuf::from(a)),
@@ -144,16 +126,8 @@ pub fn run(args: Vec<OsString>) {
     edits.modified = Some(bookconv::util::utc_now_w3c());
     edits.normalize = true;
 
-    // 先写临时文件；备份（在改名之前）和改名任何一步失败，临时文件都清掉、原文件不动。
-    let backup_then = || -> Result<(), String> {
-        if backup {
-            let b = backup_path(&file);
-            std::fs::copy(&file, &b).map_err(|e| format!("备份失败，没改：{e}"))?;
-            println!("已备份：{}", b.display());
-        }
-        Ok(())
-    };
-    let edited = bookconv::util::produce_then_replace_with(&bookconv::util::tmp_beside(&file, "meta-edit"), &file, |tmp| opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}")), backup_then);
+    // 先写临时文件再改名（不备份：2026-10-01 用户定），中途失败原文件不动。
+    let edited = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(&file, "meta-edit"), &file, |tmp| opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}")));
     let report = edited.unwrap_or_else(|e| fail(&e));
     let removed = report.cover_removed.as_ref().map(|gone| if gone.is_empty() { "封面（书里本来就没有）".to_string() } else { format!("封面（去掉 {}）", gone.join("、")) });
     let what: Vec<String> = report
