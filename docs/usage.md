@@ -248,7 +248,7 @@ booklib meta --edit 书.epub --get-cover 封面.jpg                     # 取出
   （DOCTYPE、命名实体、命名空间等）、OPF 升到 3.0、没有导航文档的补一份 `nav.xhtml`（含 landmarks）、NCX 的 `dtb:uid` 对齐 OPF；
   `dcterms:modified` 写成改的时间。**可见文字一个不变**（《兒女英雄傳》69.6 万字逐字核对过）。
   只读、只重写文字条目，图片等其余文件原样拷过去（不解压不重压），一百多 MB 的书也只占几十 MB 内存。
-- 不打开书库、不用 `--library=`。写前缺省备份成 `书.epub.bak-<时间戳>`（`--no-backup` 不备份）；先写临时文件再改名，中途失败原文件不动。
+- 不打开书库、不用 `--library=`。不备份（要留底请自己先拷一份）；先写临时文件再改名，中途失败原文件不动。
 - 换封面：书里声明了封面图就**原地换掉它的内容**（格式不同时转成原图的格式，封面页里引用它的地方跟着变），没有就新加一个并声明。
 - 删掉旧值时，EPUB3 用 `refines` 挂在它们身上的子属性（作者角色、排序名等）一起删；EPUB2 的作者写成 `opf:role="aut"`。
 - `--identifier` 不动 OPF 的唯一标识（`unique-identifier` 指向的那个）：删了 OPF 就不合法，NCX 的 `dtb:uid` 也会对不上（reMarkable 会不显示目录）。
