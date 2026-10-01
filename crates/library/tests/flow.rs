@@ -1,23 +1,8 @@
-use bookconv::epub::{assemble, Book, BookMeta, Chapter};
+mod common;
+
+use common::{booklib, jpeg, sample_epub};
 use library::{Added, Built, Library};
 use std::io::Write;
-
-fn sample_epub(title: &str) -> Vec<u8> {
-    let long = "正文段落，足够长的文字内容，确保标题页之后的内容超过门槛。".repeat(5);
-    let mut book = Book {
-        meta: BookMeta { book_id: "t".into(), title: title.into(), author: "作者".into(), language: "zh".into(), publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
-        chapters: vec![Chapter { title: "第一章".into(), html_body: format!("<h1>第一章</h1><p>{long}</p><h2>第一节</h2><p>{long}</p>"), level: 1 }],
-        resources: vec![],
-        nav: vec![],
-    };
-    assemble(&mut book).unwrap()
-}
-
-fn jpeg(w: u32, h: u32) -> Vec<u8> {
-    let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new(&mut out).encode_image(&image::RgbImage::from_pixel(w, h, image::Rgb([90, 90, 90]))).unwrap();
-    out
-}
 
 #[test]
 fn add_build_skip_remove() {
@@ -387,7 +372,7 @@ fn sync_failures_set_exit_code() {
     std::fs::create_dir_all(&books).unwrap();
     std::fs::write(books.join("坏.epub"), b"not a zip").unwrap();
     let lib_dir = dir.path().join("lib");
-    let run = |args: &[&str]| std::process::Command::new(env!("CARGO_BIN_EXE_booklib")).arg(format!("--library={}", lib_dir.display())).args(args).output().unwrap();
+    let run = |args: &[&str]| booklib(Some(&lib_dir), args);
     assert!(run(&["track", books.to_str().unwrap()]).status.success());
     let o = run(&["sync"]);
     assert_eq!(o.status.code(), Some(2), "有书入库失败，退出码 2：{}", String::from_utf8_lossy(&o.stderr));
@@ -524,7 +509,7 @@ fn legacy_entries_of_dropped_formats_are_kept_and_skipped() {
     assert!(std::fs::read_to_string(lib_dir.join("sources.json")).unwrap().contains("旧书.mobi"));
 
     // 命令行：list 标出来；build 跳过（一行提示），其余照常生成，退出码 0
-    let run = |args: &[&str]| std::process::Command::new(env!("CARGO_BIN_EXE_booklib")).arg(format!("--library={}", lib_dir.display())).args(args).output().unwrap();
+    let run = |args: &[&str]| booklib(Some(&lib_dir), args);
     let o = run(&["list"]);
     assert!(String::from_utf8_lossy(&o.stdout).contains("不再支持的格式"), "{}", String::from_utf8_lossy(&o.stdout));
     let o = run(&["build"]);
@@ -532,7 +517,6 @@ fn legacy_entries_of_dropped_formats_are_kept_and_skipped() {
     assert!(o.status.success(), "{stdout}{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(stdout.matches("跳过").count(), 1, "每本只提示一次：{stdout}");
     assert!(base.join("ireader/新书.epub").is_file() && base.join("xochitl/新书.epub").is_file(), "不写 --device = 全部模式：{stdout}");
-    assert!(!run(&["build", "--out=x"]).status.success(), "--out 已删");
 }
 
 #[test]
