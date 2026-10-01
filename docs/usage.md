@@ -5,7 +5,7 @@
 需要 Rust 工具链（`cargo`）。在仓库目录里：
 
 ```sh
-./install.sh            # 装 booklib（书库）和 ebook-meta（改 EPUB 元数据）
+./install.sh            # 装 booklib（书库；改 EPUB 元数据也在里面）
 ./install.sh --tools    # 另装开发、排查问题用的 epub-optimize、epub-to-azw3、readable-probe、readable-measure
 ./uninstall.sh          # 卸载这些命令
 ```
@@ -15,7 +15,7 @@
   以前用 `--tools` 装过的，不加 `--tools` 也会一起升级（免得开发工具停在旧版本、规则和 `booklib` 对不上）。
 - **卸载只删命令**：书库、产物、设备上的东西都不动，脚本会告诉你书库在哪。书库不要了自己删那个目录。
   卸载只认从本仓库路径装的包（`library`、`bookconv`、`azw3` 这些名字很普通，别处装的同名包不会被误删）。
-- Calibre 也有一个叫 `ebook-meta` 的命令。两个都装了的话，执行哪个取决于 `PATH` 的先后，安装时会提醒。
+- 以前单独装过的 `ebook-meta` 命令（2026-10-01 并进 `booklib meta --edit`），重跑 `./install.sh` 会自动卸掉。
 - 不想安装也可以直接跑：`cargo run --release -p library --bin booklib -- <命令>`。
 
 ## 书库在哪
@@ -37,7 +37,8 @@
 | `booklib sync [--prune] [--device=…] [--no-build] [--watch]` | 把跟踪的目录镜像进书库，接着按阅读模式生成（不写 `--device` 就是全部三个） |
 | `booklib list [书名片段、id 或原件路径...]` | 列出书，以及各阅读模式的产物在哪、是否最新 |
 | `booklib build [--device=…] [--force] [书名片段、id 或原件路径...]` | 按阅读模式生成 |
-| `booklib meta [--force] [--clear] [书名片段、id 或原件路径...]` | 联网补元数据（简介、标签、原作名），没封面的顺带找封面 |
+| `booklib meta --fetch [--force] [--clear] [书名片段、id 或原件路径...]` | 联网补元数据（简介、标签、原作名），没封面的顺带找封面 |
+| `booklib meta --edit 书.epub [--title … --tag … --cover 图 …]` | 查看、改写一个 EPUB 文件的元数据和封面（改文件本身，和书库无关） |
 | `booklib remove <id>...` | 从书库删掉一本书（索引和它的所有产物；原件不动） |
 | `booklib dedupe [目录...]` | 早期版本入库的书改成只存索引 |
 | `booklib devices` | 列出阅读模式 |
@@ -116,7 +117,7 @@ booklib build --device=all --force             # 全部重建
 ```
 
 - 不写 `--device` 就是全部阅读模式；`--device` 可以写多次，也可以用逗号分隔，`all` 表示全部。写成 `--device ireader`（空格）会报错。
-- 书的选择：书名片段、id 前缀（`list` 第一列），或原件路径：文件就是那一本，目录就是它下面（递归）所有的书，比如 `booklib meta --clear ~/Documents/ereader/books/好读精排/文康《兒女英雄傳》.epub`。不写就是全部书。`list`、`build`、`meta` 都这样选。
+- 书的选择：书名片段、id 前缀（`list` 第一列），或原件路径：文件就是那一本，目录就是它下面（递归）所有的书，比如 `booklib meta --fetch --clear ~/Documents/ereader/books/好读精排/文康《兒女英雄傳》.epub`。不写就是全部书。`list`、`build`、`meta --fetch` 都这样选。
 - 每本书记一个**指纹**（原件内容、阅读模式、阅读范围、处理程序版本等）。都没变就显示 `= 已是最新` 并跳过，所以可以放心反复运行。`--force` 强制重建。
 - **路径里有空格要整个加引号**。没加引号时，后半截会被当成书名，结果"没有匹配的书"，这时会提示你。
 - 输出里的 `⚠ 质量门未过` 只是提示，产物照样生成。出现时说明原书结构有问题（比如 XHTML 不合法），可以在设备上看看效果。
@@ -170,13 +171,20 @@ booklib build --device=all --force             # 全部重建
 - 书库里的产物显示相对书库的路径（`output/…`），书库外的显示绝对路径。
 - `list` 只读，不写书库，别的命令运行时也能用。
 
-### meta：联网补元数据和封面
+### meta：元数据
+
+`meta` 有两种用法，必须写明是哪一种（光写 `booklib meta` 会报用法错，免得一不小心给全部书联网）：
+
+- `--fetch`：联网给**书库里的书**补元数据和封面，补进**产物**，原件不动；
+- `--edit`：查看、改写**任意一个 EPUB 文件**本身的元数据和封面，和书库无关（见下面"[meta --edit](#meta---edit查看改写一个-epub-的元数据)"）。
+
+#### meta --fetch：联网补元数据和封面
 
 ```sh
-booklib meta                  # 所有书（找过的跳过）
-booklib meta 白夜行            # 只找某本
-booklib meta --clear 雪人      # 找错了：去掉找来的元数据和封面
-booklib meta --force 雪人      # 重找
+booklib meta --fetch                  # 所有书（找过的跳过）
+booklib meta --fetch 白夜行            # 只找某本
+booklib meta --fetch --clear 雪人      # 找错了：去掉找来的元数据和封面
+booklib meta --fetch --force 雪人      # 重找
 ```
 
 ```text
@@ -208,7 +216,7 @@ booklib meta --force 雪人      # 重找
 
 - 找到的封面存在书库条目里（`masters/<id>/cover.jpg`，PNG 图是 `cover.png`），`meta.json` 记着匹配到哪个条目或作品、从哪下载的，输出里也会列出来，方便核对。
 - **漫画跳过**（2026-09-30 用户定）：漫画不联网找元数据和封面，输出 `- 跳过 书名：漫画不找元数据`。CBZ 一律算漫画；EPUB 按优化器同一套判定
-  （图 ≥ 20 张、平均每张图配的字少于 40），只读文字部分。`--force` 也不找；以前给漫画找过的还在，不要了用 `booklib meta --clear <漫画目录>` 去掉。
+  （图 ≥ 20 张、平均每张图配的字少于 40），只读文字部分。`--force` 也不找；以前给漫画找过的还在，不要了用 `booklib meta --fetch --clear <漫画目录>` 去掉。
 - **原件不动**。生成产物时，书里没有封面才把它放进去（只在 OPF 里声明封面图，不加封面页，正文不变）。封面、简介、标签变了，产物判为过期，下次 `build` 重建。
 - 所有请求间隔 1.2 秒（Wikidata 限速严，被限速时按它给的时间等），只需要每本书跑一次。
 - **网络出错不当"没找到"**：某本书查到一半网络出错（连不上某个网站、重试几次还是失败），这本书报错，不生成封面、不拿不完整的结果存下来，下次运行再查。
@@ -219,6 +227,35 @@ booklib meta --force 雪人      # 重找
 2026-09-27 实测好读的 18 本没封面的书：11 本用豆瓣的中文版封面（《一九八四》《動物農莊》《白夜行》《雪人》《斜屋犯罪》等），2 本用原作封面（《ABC謀殺案》《鼠疫》），5 本生成（台湾自编的选集、《13級階梯》）。全程约 12 分钟（Wikidata 限速）。
 
 Google Books、Hardcover 也是可用的源，但都要自己申请 API key，暂时没接。
+
+#### meta --edit：查看、改写一个 EPUB 的元数据
+
+改的是 EPUB 文件本身（OPF 里的 Dublin Core 和封面），不是阅读器自己的缓存：换设备、换软件看到的也是改后的值。
+
+```sh
+booklib meta --edit 书.epub                                         # 查看：标题、作者、语言、出版社、简介、标签、标识符、日期、封面
+booklib meta --edit 书.epub --title 书名 --author 作者甲 --author 作者乙
+booklib meta --edit 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
+booklib meta --edit 书.epub --tag 小说 --tag 科幻                    # 标签整体替换
+booklib meta --edit 书.epub --publisher ""                          # 值给空字符串 = 删掉这一项（所有选项都这样）
+booklib meta --edit 书.epub --cover 封面.jpg                         # 换封面
+booklib meta --edit 书.epub --cover ""                              # 去掉封面：封面声明、只放封面的那一页（连同目录、guide 里的条目）、封面图；正文别处用着的图留着
+booklib meta --edit 书.epub --get-cover 封面.jpg                     # 取出封面
+```
+
+- 选项写成 `--名字 值` 或 `--名字=值` 都行（和 booklib 其他命令不同，这里值可以是空字符串）。给了哪个选项就只改哪个，其余不动；**值给空字符串就是删掉**，字段和封面一样，没有单独的删除选项（2026-09-30 统一）。
+  `--author`、`--tag`、`--identifier` 可重复，给出即**整体替换**（给几个就是最终的几个）。
+- **写出的书和 booklib 的产物一样符合 EPUB 3**（2026-09-30）：改完元数据和封面，再过一遍和清洗层同一套的规范整理——XHTML 修成合法 XML
+  （DOCTYPE、命名实体、命名空间等）、OPF 升到 3.0、没有导航文档的补一份 `nav.xhtml`（含 landmarks）、NCX 的 `dtb:uid` 对齐 OPF；
+  `dcterms:modified` 写成改的时间。**可见文字一个不变**（《兒女英雄傳》69.6 万字逐字核对过）。
+  只读、只重写文字条目，图片等其余文件原样拷过去（不解压不重压），一百多 MB 的书也只占几十 MB 内存。
+- 不打开书库、不用 `--library=`。写前缺省备份成 `书.epub.bak-<时间戳>`（`--no-backup` 不备份）；先写临时文件再改名，中途失败原文件不动。
+- 换封面：书里声明了封面图就**原地换掉它的内容**（格式不同时转成原图的格式，封面页里引用它的地方跟着变），没有就新加一个并声明。
+- 删掉旧值时，EPUB3 用 `refines` 挂在它们身上的子属性（作者角色、排序名等）一起删；EPUB2 的作者写成 `opf:role="aut"`。
+- `--identifier` 不动 OPF 的唯一标识（`unique-identifier` 指向的那个）：删了 OPF 就不合法，NCX 的 `dtb:uid` 也会对不上（reMarkable 会不显示目录）。
+- 书库生成产物时补简介、标签、封面（`meta --fetch` 找来的）用的是同一份实现（`bookconv::opfmeta`），只是不做规范整理（优化器会做）。
+- 改了跟踪目录里的原件，`booklib sync` 会把它当成新版本重新入库（内容哈希变了）。
+- 改了书名，产物的文件名也跟着变，设备上会多出一本（旧的那份要自己删）。
 
 ### remove：删书
 
@@ -305,35 +342,6 @@ readable-measure [--device=kindle] 竖长.png 横宽.png   # 给了 --device 按
 - 写文件的工具都先写同目录的临时文件，成功才改名覆盖，中途失败不留半成品；输入和输出可以是同一个文件。**测试用的真书别这样就地改**。
 - 退出码：`0` 成功，`1` 用法错，`2` 读写或处理失败；`epub-optimize --check` 质量门没过是 `3`（产物照样写出）。
 - `epub-to-azw3` 单独用时，AZW3 的唯一 ID 由书的 OPF 标识符派生（同一本书每次转出来一样）；书库生成时由书 id 和入库时间派生。
-
-### ebook-meta：查看、改写 EPUB 的元数据
-
-改的是 EPUB 文件本身（OPF 里的 Dublin Core 和封面），不是阅读器自己的缓存：换设备、换软件看到的也是改后的值。
-
-```sh
-ebook-meta 书.epub                                         # 查看：标题、作者、语言、出版社、简介、标签、标识符、日期、封面
-ebook-meta 书.epub --title 书名 --author 作者甲 --author 作者乙
-ebook-meta 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
-ebook-meta 书.epub --tag 小说 --tag 科幻                    # 标签整体替换
-ebook-meta 书.epub --publisher ""                          # 值给空字符串 = 删掉这一项（所有选项都这样）
-ebook-meta 书.epub --cover 封面.jpg                         # 换封面
-ebook-meta 书.epub --cover ""                              # 去掉封面：封面声明、只放封面的那一页（连同目录、guide 里的条目）、封面图；正文别处用着的图留着
-ebook-meta 书.epub --get-cover 封面.jpg                     # 取出封面
-```
-
-- 给了哪个选项就只改哪个，其余不动；**值给空字符串就是删掉**，字段和封面一样，没有单独的删除选项（2026-09-30 统一）。
-  `--author`、`--tag`、`--identifier` 可重复，给出即**整体替换**（给几个就是最终的几个）。
-- **写出的书和 booklib 的产物一样符合 EPUB 3**（2026-09-30）：改完元数据和封面，再过一遍和清洗层同一套的规范整理——XHTML 修成合法 XML
-  （DOCTYPE、命名实体、命名空间等）、OPF 升到 3.0、没有导航文档的补一份 `nav.xhtml`（含 landmarks）、NCX 的 `dtb:uid` 对齐 OPF；
-  `dcterms:modified` 写成改的时间。**可见文字一个不变**（《兒女英雄傳》69.6 万字逐字核对过）。
-  只读、只重写文字条目，图片等其余文件原样拷过去（不解压不重压），一百多 MB 的书也只占几十 MB 内存。
-- 写前缺省备份成 `书.epub.bak-<时间戳>`（`--no-backup` 不备份）；先写临时文件再改名，中途失败原文件不动。
-- 换封面：书里声明了封面图就**原地换掉它的内容**（格式不同时转成原图的格式，封面页里引用它的地方跟着变），没有就新加一个并声明。
-- 删掉旧值时，EPUB3 用 `refines` 挂在它们身上的子属性（作者角色、排序名等）一起删；EPUB2 的作者写成 `opf:role="aut"`。
-- `--identifier` 不动 OPF 的唯一标识（`unique-identifier` 指向的那个）：删了 OPF 就不合法，NCX 的 `dtb:uid` 也会对不上（reMarkable 会不显示目录）。
-- 书库生成产物时补简介、标签、封面（`booklib meta` 找来的）用的是同一份实现（`bookconv::opfmeta`），只是不做规范整理（优化器会做）。
-- 改了跟踪目录里的原件，`booklib sync` 会把它当成新版本重新入库（内容哈希变了）。
-- 改了书名，产物的文件名也跟着变，设备上会多出一本（旧的那份要自己删）。
 
 ## 常见问题
 

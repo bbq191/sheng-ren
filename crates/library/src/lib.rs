@@ -3,7 +3,7 @@
 //! 目录结构（`root` 缺省 `~/.local/share/booklib`）：
 //! ```text
 //! masters/<id>/meta.json                   一本书的索引：原件路径、SHA-256、大小与修改时间、书名、作者
-//! masters/<id>/cover.jpg                   可选：联网找来的封面（booklib meta），书里没封面时生成产物用
+//! masters/<id>/cover.jpg                   可选：联网找来的封面（booklib meta --fetch），书里没封面时生成产物用
 //! masters/<id>/master.epub                 只有网址入库的书有（没有原件，抓下来的正文存这里）；早期版本入库的条目也可能有
 //! output/<模式>/<书名>.epub                 add 进来的书（不在跟踪目录里）和网址书的产物
 //! output-state/<模式>.json                 每个模式的生成记录：书 id → 产物绝对路径、指纹（没变就跳过；只删这里记着的文件）
@@ -74,10 +74,10 @@ pub struct Meta {
     /// 存着的母版文件的 SHA-256。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub master_sha256: String,
-    /// 联网找来的封面（`booklib meta`）；书里没有封面时，生成产物时放进去。
+    /// 联网找来的封面（`booklib meta --fetch`）；书里没有封面时，生成产物时放进去。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<CoverInfo>,
-    /// 联网找来的元数据（`booklib meta`）；简介、标签书里没有的，生成产物时补进去。
+    /// 联网找来的元数据（`booklib meta --fetch`）；简介、标签书里没有的，生成产物时补进去。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info: Option<BookInfo>,
 }
@@ -329,7 +329,7 @@ impl Library {
         self.net.get_or_init(net::Net::new)
     }
 
-    /// 联网时看起来整个断网了（接连两个网站连不上，见 `Net::offline`）。`booklib meta` 看到它就中止整轮。
+    /// 联网时看起来整个断网了（接连两个网站连不上，见 `Net::offline`）。`booklib meta --fetch` 看到它就中止整轮。
     pub fn offline(&self) -> bool {
         self.net.get().is_some_and(net::Net::offline)
     }
@@ -508,7 +508,7 @@ impl Library {
     }
 
     /// 按 id 前缀、书名片段或原件路径挑书；`selectors` 为空＝全部。存在的文件＝原件就是它的那本，存在的目录＝原件在它下面（递归）的所有书
-    /// （2026-09-30：用户直接给原件路径 `booklib meta --clear ~/…/书.epub` 时报"没有匹配的书"）。
+    /// （2026-09-30：用户直接给原件路径 `booklib meta --fetch --clear ~/…/书.epub` 时报"没有匹配的书"）。
     pub fn select(&self, selectors: &[String]) -> Vec<Meta> {
         let all = self.list();
         if selectors.is_empty() {

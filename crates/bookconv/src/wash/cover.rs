@@ -14,7 +14,7 @@ use super::*;
 /// meta，写入 `<meta name="cover" content="该条目 id"/>`，并给该条目补 `properties="cover-image"`（EPUB3），返回 `true`。
 /// **必须在清洗（`wash_entries`）之前调用**：清洗会把只含 SVG 封面的 titlepage 当空页删掉（2026-09-20《镖人(卷四)》真机核对）。
 /// 找不到候选也不动。只读 html/OPF 文本，不碰图片字节（流式优化阶段一时图片条目是空占位）。
-/// 判定与 `ebook-meta` 读封面（`epubzip::cover_image_of`）、改封面（`opfmeta`）共用 `wash::opf` 的一套。
+/// 判定与 `booklib meta --edit` 读封面（`epubzip::cover_image_of`）、改封面（`opfmeta`）共用 `wash::opf` 的一套。
 pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
     let Some(opf) = parse_opf(entries) else { return false };
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();

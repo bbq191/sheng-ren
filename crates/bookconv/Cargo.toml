@@ -35,10 +35,6 @@ tempfile = "3"
 name = "epub-optimize"
 path = "src/bin/epub_optimize.rs"
 
-[[bin]]
-name = "ebook-meta"
-path = "src/bin/ebook_meta.rs"
-
 # 测量书：生成（readable-probe）与截图分析（readable-measure），量设备真实可阅读范围，见 `probe.rs`。
 [[bin]]
 name = "readable-probe"

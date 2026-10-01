@@ -1,4 +1,4 @@
-//! 联网补元数据：`booklib meta`。
+//! 联网补元数据：`booklib meta --fetch`。
 //!
 //! 按书名、作者找到这本书，存下元数据（`Meta::info`），书里没有封面的顺带找封面（见 `cover`）：
 //! 1. **豆瓣**条目（中文版）：内容简介、标签、原作名，以及条目对应版本的出版社、出版年、ISBN、译者；
@@ -239,7 +239,7 @@ pub(crate) struct Additions<'a> {
 }
 
 /// 复制 `src` 到 `dst`，补上书里没有的：封面、`dc:description`、`dc:subject`。书里已有的不动。
-/// 改写用 `bookconv::opfmeta`（与 `ebook-meta` 命令同一份实现；不做 EPUB 3 规范整理——优化器的清洗层会做；不改 `dcterms:modified`，产物逐字节可重现）。
+/// 改写用 `bookconv::opfmeta`（与 `booklib meta --edit` 同一份实现；不做 EPUB 3 规范整理——优化器的清洗层会做；不改 `dcterms:modified`，产物逐字节可重现）。
 /// 什么都不用补时不写 `dst`，返回 `false`。
 pub(crate) fn inject(src: &Path, dst: &Path, add: &Additions) -> Result<bool, String> {
     use bookconv::opfmeta::{self, DcField, Edits};

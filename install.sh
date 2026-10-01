@@ -2,7 +2,7 @@
 # 安装命令行工具到 cargo 的 bin 目录（$CARGO_INSTALL_ROOT/bin 或 $CARGO_HOME/bin，缺省 ~/.cargo/bin）。
 #
 # 用法: ./install.sh [--tools]
-#   缺省装：booklib（书库）、ebook-meta（查看/改写 EPUB 元数据）
+#   缺省装：booklib（书库；查看/改写 EPUB 元数据也在里面：booklib meta --edit）
 #   --tools 另装开发和排查问题用的：epub-optimize、epub-to-azw3、readable-probe、readable-measure
 #   以前用 --tools 装过的，不加 --tools 重跑也会一起升级（免得开发工具停在旧版本、和 booklib 的规则对不上）
 # 重复运行 = 用当前代码重新编译安装（升级）。卸载见 ./uninstall.sh。
@@ -29,23 +29,23 @@ if [[ $tools -eq 0 ]] && grep -A20 -F "($here/crates/bookconv):" <<<"$installed"
   tools=1
 fi
 
-# Calibre 也有一个叫 ebook-meta 的命令：同名时谁生效取决于 PATH 里的先后
-other=$(command -v ebook-meta || true)
-if [[ -n $other && $other != "$bindir/ebook-meta" ]]; then
-  echo "注意：PATH 里已有另一个 ebook-meta（$other，可能是 Calibre 的）。装好后执行哪个取决于 PATH 顺序。" >&2
+# 以前的版本单独装过 ebook-meta（在 bookconv 包里，2026-10-01 并进 booklib meta --edit）：整个包先卸掉，
+# 不然 cargo 按包记账，重装 bookconv 时没列出的 ebook-meta 会留在旧版本
+line=$(grep -F " ($here/crates/bookconv):" <<<"$installed" | grep '^bookconv v' || true)
+if [[ -n $line ]] && grep -A20 -F "($here/crates/bookconv):" <<<"$installed" | grep -qx '    ebook-meta'; then
+  ver=${line#bookconv v}
+  ver=${ver%% *}
+  cargo uninstall --quiet "path+file://$here/crates/bookconv#bookconv@$ver"
+  echo "卸掉了旧的 ebook-meta（改用 booklib meta --edit）"
 fi
 
 # 同一个包的二进制一次装齐：cargo 按包记账，这次没列出的二进制会留在旧版本。--force：代码改过也重新装
 cargo_install() { cargo install --locked --force --quiet --path "$here/crates/$1" "${@:2}"; }
-names=(ebook-meta)
-[[ $tools -eq 1 ]] && names+=(epub-optimize readable-probe readable-measure)
-bins=()
-for n in "${names[@]}"; do bins+=(--bin "$n"); done
 echo "编译安装 booklib…（第一次要编几分钟，中间不出声）"
 cargo_install library --bin booklib
-echo "编译安装 ${names[*]}…"
-cargo_install bookconv "${bins[@]}"
 if [[ $tools -eq 1 ]]; then
+  echo "编译安装 epub-optimize readable-probe readable-measure…"
+  cargo_install bookconv --bin epub-optimize --bin readable-probe --bin readable-measure
   echo "编译安装 epub-to-azw3…"
   cargo_install azw3 --bin epub-to-azw3
 fi
