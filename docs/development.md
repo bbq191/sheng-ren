@@ -16,6 +16,9 @@ shellcheck -x install.sh uninstall.sh xochitl/*.sh tools/regress/run.sh
 ./install.sh --tools                         # 把命令装进 PATH，手工试用
 ```
 
+书库的集成测试在 `crates/library/tests/`：`flow.rs` 测书库流程（入库、跟踪同步、生成、挪位置、删书），`cli.rs` 直接运行 `booklib`，测参数解析、报错和退出码
+（含 `meta --fetch` 不联网的两条路和 `meta --edit` 的查看、改写、空值删除、出错不动原文件），共用的造书和跑命令的函数在 `common/mod.rs`。都不联网。
+
 ## 真书回归检查
 
 测试用真书在 `~/Documents/ereader/books/`（路径里带"漫画"的是漫画，其余是文字书）。**只读，绝不改动**：
