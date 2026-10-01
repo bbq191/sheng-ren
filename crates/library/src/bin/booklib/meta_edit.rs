@@ -1,31 +1,39 @@
-//! ebook-meta：查看、改写 EPUB 的元数据（OPF 里的 Dublin Core）和封面。改的是文件本身（不是阅读器的旁路缓存）。
+//! `booklib meta --edit`：查看、改写一个 EPUB 文件的元数据（OPF 里的 Dublin Core）和封面。改的是文件本身（不是阅读器的旁路缓存），
+//! 和书库无关（不打开书库、不加锁）。2026-10-01 从单独的 `ebook-meta` 命令并进来（用户：少装一个命令）。
 //!
 //! 改 OPF（改书名时连 NCX 里的书名）和封面；写出的书和 booklib 的产物一样过一遍 EPUB 3 规范整理（XHTML 修成合法 XML、
 //! OPF 升到 3.0、补导航文档），`dcterms:modified` 写成现在的时间。可见文字一个不动。
-//! 参数统一：任何选项给空字符串 = 删掉这一项（`--cover ""` 就是去掉封面）。
+//! 参数统一：任何选项给空字符串 = 删掉这一项（`--cover ""` 就是去掉封面）；`--名字 值` 和 `--名字=值` 两种写法都认。
 //! 写前缺省备份成 `<文件>.bak-<时间戳>`；写入先写临时文件再改名，中途失败原文件不动。
 
 use bookconv::opfmeta::{self, DcField, Edits};
-use bookconv::util::cli;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = r#"用法:
-  ebook-meta 书.epub                                    查看
-  ebook-meta 书.epub --title 书名 --author 作者甲 --author 作者乙
-  ebook-meta 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
-  ebook-meta 书.epub --tag 小说 --tag 科幻               标签整体替换
-  ebook-meta 书.epub --cover 封面.jpg                    换封面（书里有封面图就原地换掉，没有就加上）
-  ebook-meta 书.epub --cover ""                         去掉封面（封面声明、只放封面的那一页、封面图；正文别处用着的图留着）
-  ebook-meta 书.epub --get-cover 封面.jpg                取出封面
-选项:
+pub const USAGE: &str = r#"用法:
+  booklib meta --edit 书.epub                                    查看
+  booklib meta --edit 书.epub --title 书名 --author 作者甲 --author 作者乙
+  booklib meta --edit 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
+  booklib meta --edit 书.epub --tag 小说 --tag 科幻               标签整体替换
+  booklib meta --edit 书.epub --cover 封面.jpg                    换封面（书里有封面图就原地换掉，没有就加上）
+  booklib meta --edit 书.epub --cover ""                         去掉封面（封面声明、只放封面的那一页、封面图；正文别处用着的图留着）
+  booklib meta --edit 书.epub --get-cover 封面.jpg                取出封面
+选项（--名字 值 或 --名字=值）:
   --title --author --language --publisher --description --tag --date --identifier --cover
       值给空字符串 = 删掉这一项（字段、封面都一样）
       --author/--tag/--identifier 可重复，给出即整体替换（给几个就是最终的几个）；其余是单值
       --identifier 不动 OPF 唯一标识（unique-identifier 指向的那个），只替换其余标识符
-  --no-backup   不写 .bak 备份"#;
+  --no-backup   不写 .bak 备份
+改的是任意一个 EPUB 文件，和书库无关；改了跟踪目录里的原件，下次 sync 会当成新版本重新入库"#;
+
+fn usage(msg: &str) -> ! {
+    eprintln!("{msg}\n\n{USAGE}");
+    std::process::exit(1)
+}
 
 fn fail(msg: &str) -> ! {
-    cli::die(cli::USAGE, msg)
+    eprintln!("{msg}");
+    std::process::exit(2)
 }
 
 fn show(path: &Path) {
@@ -57,9 +65,9 @@ fn backup_path(file: &Path) -> PathBuf {
     p
 }
 
-fn main() {
-    cli::restore_sigpipe();
-    let mut args = std::env::args_os().skip(1);
+/// `args`：`meta` 之后、去掉 `--edit` 的参数（`--library=` 已去掉：改文件用不到书库）。
+pub fn run(args: Vec<OsString>) {
+    let mut args = args.into_iter();
     let mut file: Option<PathBuf> = None;
     let mut singles: Vec<(DcField, String)> = Vec::new();
     let mut multis: Vec<(DcField, Vec<String>)> = Vec::new();
@@ -70,7 +78,7 @@ fn main() {
             Some((k, v)) if k.starts_with("--") => (k.to_string(), Some(v.to_string())),
             _ => (a.clone(), None),
         };
-        let mut value = || inline.clone().or_else(|| args.next().map(|v| v.to_string_lossy().into_owned())).unwrap_or_else(|| fail(&format!("{key} 要给值\n{USAGE}")));
+        let mut value = || inline.clone().or_else(|| args.next().map(|v| v.to_string_lossy().into_owned())).unwrap_or_else(|| usage(&format!("{key} 要给值")));
         match key.as_str() {
             "-h" | "--help" => {
                 println!("{USAGE}");
@@ -96,12 +104,13 @@ fn main() {
             "--cover" => cover = Some(value()),
             "--get-cover" => get_cover = Some(PathBuf::from(value())),
             "--no-backup" => backup = false,
-            k if k.starts_with('-') => fail(&format!("不认识的选项 {k}\n{USAGE}")),
+            "--fetch" | "--force" | "--clear" => usage(&format!("{key} 是 meta --fetch 的选项，不能和 --edit 一起用")),
+            k if k.starts_with('-') => usage(&format!("meta --edit 不认识选项 {k}")),
             _ if file.is_none() => file = Some(PathBuf::from(a)),
-            _ => fail(&format!("只能给一个文件\n{USAGE}")),
+            _ => usage("meta --edit 只能给一个文件（路径里有空格时要整个加引号）"),
         }
     }
-    let file = file.unwrap_or_else(|| fail(USAGE));
+    let file = file.unwrap_or_else(|| usage("meta --edit 要给一个 EPUB 文件"));
     if !file.is_file() {
         fail(&format!("文件不存在：{}", file.display()));
     }
@@ -144,7 +153,7 @@ fn main() {
         }
         Ok(())
     };
-    let edited = bookconv::util::produce_then_replace_with(&bookconv::util::tmp_beside(&file, "ebook-meta"), &file, |tmp| opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}")), backup_then);
+    let edited = bookconv::util::produce_then_replace_with(&bookconv::util::tmp_beside(&file, "meta-edit"), &file, |tmp| opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}")), backup_then);
     let report = edited.unwrap_or_else(|e| fail(&e));
     let removed = report.cover_removed.as_ref().map(|gone| if gone.is_empty() { "封面（书里本来就没有）".to_string() } else { format!("封面（去掉 {}）", gone.join("、")) });
     let what: Vec<String> = report

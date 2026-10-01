@@ -79,7 +79,7 @@ fn cbz_becomes_comic_epub_master_and_drm_epub_is_refused() {
     }
     let Added::New(m) = lib.add_file(&cbz).unwrap() else { panic!() };
     assert_eq!(m.title, "漫画 - 01卷");
-    assert!(lib.is_comic(&m).unwrap(), "CBZ 算漫画（booklib meta 跳过）");
+    assert!(lib.is_comic(&m).unwrap(), "CBZ 算漫画（booklib meta --fetch 跳过）");
     assert!(!dir.path().join(format!("lib/masters/{}/master.epub", m.id)).exists(), "转换结果不落书库");
     // 生成时当场转换：三页都在
     let Built::Written { path, .. } = lib.build(&m, profile::get("xochitl").unwrap(), false).unwrap() else { panic!() };

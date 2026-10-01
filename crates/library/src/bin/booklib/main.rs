@@ -2,7 +2,10 @@
 //!
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib。产物：跟踪目录 D 里的书放在 D/../<模式>/（镜像子目录），
 //! add 进来的书和网址书放在书库的 output/<模式>/ 下（见 `library::generate`）。
+//! `meta --edit` 改单个 EPUB 文件、不碰书库，在 `meta_edit` 里（参数规则也不同：值可以是空字符串）。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
+
+mod meta_edit;
 
 use library::{Added, Built, CoverResult, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo};
 use std::cell::Cell;
@@ -23,10 +26,12 @@ const USAGE: &str = "用法:
       新增的入库、改过的换成新版本、移动改名的认得出；原件删了的只报告，--prune 才从书库删掉
       接着按阅读模式生成（只重建有变化的；缺省全部模式，--device 只生成这几个，--no-build 不生成）
       --watch 一直运行，每隔几秒（缺省 60）检查一次，原件有变化才生成
-  booklib [--library=目录] meta [--force] [--clear] [书名片段、id 或原件路径...]
+  booklib [--library=目录] meta --fetch [--force] [--clear] [书名片段、id 或原件路径...]
       联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过；
       生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动
       --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
+  booklib meta --edit 书.epub [--title 书名 --author 作者 --tag 标签 --cover 图 …]
+      查看、改写一个 EPUB 文件的元数据和封面（改文件本身，和书库无关；值给空字符串 = 删掉），详见 booklib meta --edit --help
   booklib [--library=目录] remove <id>...               从书库删掉（连同生成记录里的产物；原件不动）。id 用 list 里显示的完整 id
   booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
   booklib [--library=目录] devices                      列出阅读模式（书库 profiles/ 目录里的自定义 profile 也算）";
@@ -228,15 +233,39 @@ fn path_hint(selectors: &[String]) -> String {
     }
 }
 
+/// `booklib [--library=…] meta … --edit …`：返回 `meta` 之后的参数（去掉第一个 `--edit` 和 `--library=`），交给 `meta_edit`。
+/// 它在通用解析之前分出去：通用解析不许 `--名字=` 留空，而 `--edit` 的空值表示删掉。
+fn meta_edit_args() -> Option<Vec<OsString>> {
+    let is_library = |a: &OsString| a.to_str().is_some_and(|s| s.starts_with("--library="));
+    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let i = raw.iter().position(|a| !is_library(a))?;
+    if raw[i] != "meta" {
+        return None;
+    }
+    let mut rest: Vec<OsString> = raw[i + 1..].iter().filter(|a| !is_library(a)).cloned().collect();
+    let e = rest.iter().position(|a| a == "--edit")?;
+    rest.remove(e);
+    Some(rest)
+}
+
 fn main() {
     bookconv::util::restore_sigpipe();
+    if let Some(rest) = meta_edit_args() {
+        meta_edit::run(rest);
+        return;
+    }
     let args = Args::parse();
     let Some(cmd) = args.pos.first().and_then(|c| c.to_str()).map(str::to_string) else { usage_error("") };
     match cmd.as_str() {
         "add" | "remove" | "dedupe" | "list" | "devices" | "track" | "untrack" => args.check(&cmd, &[], &[]),
         "build" => args.check(&cmd, &["device"], &["force"]),
         "sync" => args.check(&cmd, &["device", "watch"], &["prune", "watch", "no-build"]),
-        "meta" => args.check(&cmd, &[], &["force", "clear"]),
+        "meta" => {
+            args.check(&cmd, &[], &["fetch", "force", "clear"]);
+            if !args.flags.iter().any(|f| f == "fetch") {
+                usage_error("meta 要选一种：--fetch（联网给书库里的书补元数据，原来的 booklib meta）或 --edit 书.epub（查看、改写一个 EPUB 文件）");
+            }
+        }
         _ => usage_error(&format!("不认识的命令 {cmd}")),
     }
     let root = args.opt("library").map(PathBuf::from).unwrap_or_else(Library::default_root);

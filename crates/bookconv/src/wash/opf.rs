@@ -1,5 +1,5 @@
 //! OPF 的读与改：定位 OPF、解出 manifest/spine/nav/ncx、标识符/书名；往 `</manifest>`/`</metadata>` 前插入、按条件删 manifest 项
-//! （连同 spine 引用）、封面声明。全书改 OPF 的地方（清洗层、优化器、漫画标签、`ebook-meta`）都走这里。
+//! （连同 spine 引用）、封面声明。全书改 OPF 的地方（清洗层、优化器、漫画标签、`booklib meta --edit`）都走这里。
 //!
 //! 都基于 `crate::html` 的标签扫描：单双引号、注释、命名空间前缀（`<opf:manifest>`、`<opf:item>`）一视同仁；
 //! 插入的元素跟着所在容器的前缀走（前缀 OPF 里写 `<opf:item>`，免得落到空命名空间）。

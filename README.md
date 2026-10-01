@@ -30,7 +30,7 @@ Kindle USB 传书只认 AZW3，所以 `kindle` 模式先按同一套规则优化
 需要 Rust 工具链（`cargo`）。
 
 ```sh
-./install.sh                                  # 安装 booklib、ebook-meta 命令（卸载：./uninstall.sh）
+./install.sh                                  # 安装 booklib 命令（卸载：./uninstall.sh）
 
 booklib track ~/Documents/ereader/books       # 登记要跟踪的书目录（只需一次）
 booklib sync                                  # 同步进书库，并按全部阅读模式生成

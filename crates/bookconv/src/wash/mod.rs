@@ -296,7 +296,7 @@ fn book_lang_tag(entries: &[Entry], opf_idx: Option<usize>, lang: LangMode) -> S
 }
 
 /// **只做规范整理**（EPUB 3），和清洗层最后一步是同一套：NCX 去 DOCTYPE → XML 修复 → OPF 升级 3.0 → 导航文档与 landmarks → NCX
-/// `dtb:uid` 对齐 OPF。给 `ebook-meta` 用（2026-09-30 用户：改元数据写出的书也要和 booklib 一样符合 EPUB 3）。不做排版、分页等清洗。
+/// `dtb:uid` 对齐 OPF。给 `booklib meta --edit` 用（2026-09-30 用户：改元数据写出的书也要和 booklib 一样符合 EPUB 3）。不做排版、分页等清洗。
 pub fn normalize_epub3(entries: &mut Vec<Entry>) -> WashReport {
     let mut rep = WashReport::default();
     let lang = detect_dominant_script(entries);

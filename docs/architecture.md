@@ -18,7 +18,7 @@
 | crate | 职责 | 命令 |
 |---|---|---|
 | `library` | 书库：入库（索引）、跟踪同步、按阅读模式生成、产物放在哪、产物指纹 | `booklib` |
-| `bookconv` | 内容层：CBZ → EPUB、网页 → EPUB、清洗、优化、图片处理、质量门。不管书库，只按调用方传入的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure`、`ebook-meta` |
+| `bookconv` | 内容层：CBZ → EPUB、网页 → EPUB、清洗、优化、图片处理、质量门。不管书库，只按调用方传入的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
 | `azw3` | EPUB → AZW3（KF8）写出器，clean-room，见 [AZW3 写出器](azw3.md)。书库生成 `kindle` 模式时把优化好的 EPUB 转一次。`azw3::read` 是 KF8 读取器，只给写出器回读自检和测试用 | `epub-to-azw3` |
 | `profile` | 阅读模式的参数，TOML 构建时嵌入，见[设备与可阅读范围](devices.md)；命令行的 `--device=` 用 `device_from_args` 解析 | |
 | `drm` | 空壳，解 DRM 暂停 | |
@@ -35,12 +35,12 @@
 | `optimize/` | 按阅读模式优化 EPUB 的主流程：流式读写（大漫画不整本进内存）、逐文件变换、图片并行处理 |
 | `wash/` | 清洗层：字体字号解锁、按语言排版、章节分页、目录修复与生成、全书 id 去重、章尾空白页。全书改链接统一走 `rewrite_book_links`（不改 OPF 的 `<item href>`） |
 | `wash/normalize` | 规范整理（清洗层最后一步）：XHTML 修成合法 XML、OPF 升级到 EPUB 3、按 NCX 生成 nav（或按 nav 生成 NCX）、guide 写成 landmarks；`content_properties`/`apply_content_properties` 由优化器在写 OPF 时按最终内容标 manifest 的 `properties` |
-| `wash/opf` | OPF 的读与改：往 manifest、metadata 里插入，删 item（连同 spine 引用），找封面；跟随原文件的命名空间前缀（`<opf:item>` 也认）。manifest 项的 zip 路径一律用 `ManifestItem::path`（先还原 `&amp;` 再百分号解码）。清洗层、优化器、漫画标签、`ebook-meta` 共用这一份 |
+| `wash/opf` | OPF 的读与改：往 manifest、metadata 里插入，删 item（连同 spine 引用），找封面；跟随原文件的命名空间前缀（`<opf:item>` 也认）。manifest 项的 zip 路径一律用 `ManifestItem::path`（先还原 `&amp;` 再百分号解码）。清洗层、优化器、漫画标签、`booklib meta --edit` 共用这一份 |
 | `html` | 容错的 XHTML 工具：标签扫描（跳过注释/CDATA）、属性读写（单双引号、无引号）、加类（`add_class`，已有就不加）、纯文本、可见内容判断、CSS 声明切分。全仓库的 HTML 操作都用它（AZW3 写出器也是） |
 | `htmlproc/` | XHTML 处理规则：注释搬移与编号（`footnote`、`footnote_cycles`）、字体锁（`fontlock`）、重复 id（`basic`） |
 | `cssunlock` | 解开字体、字号、行高的锁（样式表、`<style>`、`style=""` 三处同一张表） |
 | `imgopt` / `imgpool` / `jpegopt` | 图片处理（按 EXIF 方向摆正、缩放、漫画单趟处理、灰度）；并发池（按像素额度限内存）；JPEG 哈夫曼表无损重做 |
-| `opfmeta` | EPUB 元数据（Dublin Core、封面）的读取与改写：只读、只重写文字条目，图片等原样拷（不解压不重压）；`ebook-meta` 再做一遍 EPUB 3 规范整理，书库生成时补简介/标签/封面不做（优化器会做）。版本号 `opfmeta::VERSION` 进书库指纹 |
+| `opfmeta` | EPUB 元数据（Dublin Core、封面）的读取与改写：只读、只重写文字条目，图片等原样拷（不解压不重压）；`booklib meta --edit` 再做一遍 EPUB 3 规范整理，书库生成时补简介/标签/封面不做（优化器会做）。版本号 `opfmeta::VERSION` 进书库指纹 |
 | `comic_detect` | 判断一本书是不是漫画（OPF 标了"漫画"的不看张数） |
 | `comicfxl` | 漫画写成固定版式（kindle）：OPF 的版式声明、每页 `viewport`、整页图按画布显示 |
 | `comicpad` | 漫画设成阅读器页边距 1 后各页的补救（文字页、混排页留边，图页去掉 body 的类） |
@@ -57,7 +57,7 @@
 | `lib.rs` | 条目（`Meta`）、入库、原件核对、迁移（`dedupe`）、删除 |
 | `sources.rs` | 跟踪目录（`track`）与同步（`sync`） |
 | `generate.rs` | 生成计划与指纹、产物放在哪（跟踪目录旁镜像 / 书库 `output/`）、与模式无关的中间文件（`PreparedInput`，一本书几个模式共用）、按阅读模式生成（AZW3 模式再调 `azw3` 转一次）、生成记录 |
-| `metadata.rs` | `booklib meta`：联网补元数据、调度找封面；生成时往书里补缺的封面、简介、标签 |
+| `metadata.rs` | `booklib meta --fetch`：联网补元数据、调度找封面；生成时往书里补缺的封面、简介、标签 |
 | `douban.rs` / `wikidata.rs` | 书目源：豆瓣（搜索建议 + 条目页）、Wikidata（作品、作者照片） |
 | `net.rs` / `matching.rs` | 节流重试的 HTTP；书名人名比对（全半角、繁简、译名用字） |
 | `cover.rs` / `covergen.rs` | 找原作封面（Open Library / Commons）、生成封面 |
@@ -102,7 +102,7 @@ HTTP（`net.rs`）在一次运行里各本书共用：请求间隔 1.2 秒；429
 流程图见[使用指南 · meta](usage.md#meta联网补元数据和封面)。
 
 生成时 `metadata::with_additions` 把书里**没有的**封面、`dc:description`、`dc:subject` 补进 OPF（其余条目原样拷）；版本信息（出版社、ISBN、译者）不写进书。封面哈希和补进去的简介标签的哈希都进指纹。
-`booklib meta` 跳过漫画（CBZ 一律算；EPUB 按优化器同一套判定，只读文字部分）。
+`booklib meta --fetch` 跳过漫画（CBZ 一律算；EPUB 按优化器同一套判定，只读文字部分）。
 
 ### 生成（`Library::build`，`generate.rs`）
 

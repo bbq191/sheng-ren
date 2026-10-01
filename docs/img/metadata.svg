@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 485" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>booklib meta：元数据和封面从哪来、写到哪里</title>
+  <title>booklib meta --fetch：元数据和封面从哪来、写到哪里</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0L10 5L0 10z" fill="#555"/>
@@ -73,7 +73,7 @@
   <path class="l" d="M480 269 C510 269 510 150 538 150" marker-end="url(#a)"/>
   <path class="l" d="M740 198 L740 220" marker-end="url(#a)"/>
 
-  <text x="480" y="430" text-anchor="middle" class="s">booklib meta [--force] [书…]：已经找过的不再找（--force 重找）；找错了用 booklib meta --clear 书 去掉</text>
-  <text x="480" y="450" text-anchor="middle" class="s">也可以手改：ebook-meta 书.epub --title … --tag … --cover 图（可见文字不变，图片原样）</text>
+  <text x="480" y="430" text-anchor="middle" class="s">booklib meta --fetch [--force] [书…]：已经找过的不再找（--force 重找）；找错了用 --clear 去掉</text>
+  <text x="480" y="450" text-anchor="middle" class="s">也可以手改文件本身：booklib meta --edit 书.epub --title … --tag … --cover 图（可见文字不变，图片原样）</text>
   <text x="480" y="470" text-anchor="middle" class="s">漫画跳过（CBZ 一律算；EPUB 按优化器同一套判定）：书里的封面就是第一页，按书名搜漫画多半对不上</text>
 </svg>

@@ -23,4 +23,4 @@ zip = { version = "2", default-features = false, features = ["deflate-flate2", "
 
 [[bin]]
 name = "booklib"
-path = "src/bin/booklib.rs"
+path = "src/bin/booklib/main.rs"
