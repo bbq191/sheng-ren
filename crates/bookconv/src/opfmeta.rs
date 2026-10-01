@@ -1,6 +1,6 @@
-//! EPUB 元数据（OPF 里的 Dublin Core 与封面）的读取和改写：`ebook-meta` 命令、书库生成时补简介/标签/封面共用。
+//! EPUB 元数据（OPF 里的 Dublin Core 与封面）的读取和改写：`booklib meta --edit` 命令、书库生成时补简介/标签/封面共用。
 //!
-//! 改写动 OPF（改了书名时连 NCX 的书名）和封面（图、只放封面的页面、目录里指向它的条目）；`ebook-meta` 另做一遍
+//! 改写动 OPF（改了书名时连 NCX 的书名）和封面（图、只放封面的页面、目录里指向它的条目）；`booklib meta --edit` 另做一遍
 //! EPUB 3 规范整理（[`Edits::normalize`]，会改 XHTML/OPF/NCX 的标记，可见文字不动）。没改到的条目按原样**原始拷贝**
 //! （不解压不重压），图片只读要换的封面那一张以外一张都不解压。
 //! 设字段 = 先删掉这个字段的全部元素（连同 EPUB3 用 `refines="#id"` 挂在它们身上的 `<meta>`，如作者的角色、排序名），
@@ -103,10 +103,10 @@ pub struct Edits {
     pub set: Vec<(DcField, Vec<String>)>,
     /// 封面：`None` 不动。
     pub cover: Option<CoverEdit>,
-    /// 写进 `dcterms:modified` 的时间（`ebook-meta` 命令给现在的时间）；`None` 不改（booklib 生成产物前补元数据时用：
+    /// 写进 `dcterms:modified` 的时间（`booklib meta --edit` 命令给现在的时间）；`None` 不改（booklib 生成产物前补元数据时用：
     /// 产物要逐字节可重现）。
     pub modified: Option<String>,
-    /// 改完再做 EPUB 3 规范整理（[`crate::wash::normalize_epub3`]）。`ebook-meta` 要（写出的书和 booklib 的产物一样符合 EPUB 3）；
+    /// 改完再做 EPUB 3 规范整理（[`crate::wash::normalize_epub3`]）。`booklib meta --edit` 要（写出的书和 booklib 的产物一样符合 EPUB 3）；
     /// booklib 生成产物前补元数据不要——补完马上要过优化器，清洗层会做同一套整理。
     pub normalize: bool,
 }
@@ -389,8 +389,8 @@ pub fn read_epub(path: &Path) -> Result<Vec<(DcField, Vec<String>)>, String> {
 ///
 /// 只把文字条目读进内存（`epubzip::read_skeleton`，图片不解压）；写出时内容变了的条目重写，其余条目原样拷贝压缩数据。
 /// [`Edits::normalize`] 时再过一遍清洗层的规范整理（[`crate::wash::normalize_epub3`]：XHTML 修成合法 XML、OPF 升到 3.0、
-/// 补导航文档和 landmarks、NCX 标识对齐；2026-09-30 用户定：`ebook-meta` 写出的书和 booklib 的产物一样符合 EPUB 3），
-/// 给了 [`Edits::modified`] 就把 `dcterms:modified` 写成它（`ebook-meta` 给现在的时间：书确实改了）。
+/// 补导航文档和 landmarks、NCX 标识对齐；2026-09-30 用户定：`booklib meta --edit` 写出的书和 booklib 的产物一样符合 EPUB 3），
+/// 给了 [`Edits::modified`] 就把 `dcterms:modified` 写成它（`booklib meta --edit` 给现在的时间：书确实改了）。
 /// 可见文字一个不动；XHTML 的变化只限规范整理那几条（DOCTYPE、命名实体、命名空间等）。
 pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, String> {
     let (mut zip, opf_path, opf_text) = crate::epubzip::open_opf(src)?;
