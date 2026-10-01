@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 卸载 install.sh 装的命令（booklib 以及 --tools 装的那些；以前版本装的 ebook-meta 也一起卸）。
+# 卸载 install.sh 装的命令（booklib 以及 --tools 装的那些）。
 #
 # 用法: ./uninstall.sh
 # 只删命令本身。书库（索引、找来的封面、生成的产物）、设备上的东西都不动，只告诉你在哪：
