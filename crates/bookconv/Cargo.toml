@@ -3,7 +3,7 @@ name = "bookconv"
 version.workspace = true
 edition = "2021"
 description = "电子书内容层：CBZ/网页 → EPUB、按阅读模式优化 EPUB（清洗、排版、分页、漫画图片）、质量门"
-license = "MIT"
+license.workspace = true
 
 [dependencies]
 regex = "1"
