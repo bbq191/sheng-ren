@@ -47,7 +47,7 @@
   <text x="370" y="240" text-anchor="middle" class="s">生成前核对原件没被改过</text>
   <text x="370" y="262" text-anchor="middle" class="s">指纹没变就跳过，只重建有变化的</text>
   <line x1="270" y1="290" x2="470" y2="290" stroke="#e3c68c"/>
-  <text x="370" y="316" text-anchor="middle">meta：联网补简介、标签、封面</text>
+  <text x="370" y="316" text-anchor="middle">meta --fetch：联网补简介、标签、封面</text>
   <text x="370" y="338" text-anchor="middle" class="s">豆瓣 → Wikidata → 生成封面</text>
 
   <!-- 箭头：来源 → 书库 -->
