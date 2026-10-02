@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 掌阅上的"设置入口"：试着直接打开被藏起来的安卓设置页（开发者选项、关于本机、设置搜索……），看掌阅是只藏了入口还是连页面都删了。
+     结果写进 Android/data/local.eink.settingsprobe/files/report.txt，USB 连电脑就能读。见 koreader/android-settings/README.md。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="local.eink.settingsprobe">
+
+    <!-- 列出所有已装应用（系统应用的包名，以后要停用哪个得先知道名字）；侧载的应用可以声明 -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <application
+        android:label="设置入口"
+        android:icon="@drawable/ic_launcher"
+        android:allowBackup="false">
+        <activity
+            android:name=".ProbeActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -1,7 +1,23 @@
-# KOReader 桌面（掌阅）——已停用
+# KOReader 桌面（掌阅）
 
-> **2026-10-02 停用**（用户定）：掌阅停不了系统应用，"独占"只是换了桌面，不省内存也不省电，下发配置还要来回切桌面。
-> 掌阅上已改回 iReader 桌面、卸掉本应用；代码留着作参考，`build.sh` 照样能编。见 `koreader/README.md`。
+> **2026-10-02 重新启用，真独占**（用户定）：掌阅能开开发者模式和 USB 调试，adb shell 是 root（见 `../android-settings/README.md`），
+> `exclusive.sh --write` 把本应用设成默认桌面，停用掌阅桌面、掌阅阅读器和一批系统应用；`--undo --write` 恢复。
+> 同一天早些时候曾因"停不了系统应用"停用过本应用。
+
+## 独占（`exclusive.sh`）
+
+- 停用（`pm disable-user`，数据保留）：A 档 应用市场、系统升级、小i、智能助手、音乐&录音、朗读服务、图库、换机助手、inkShare、产线；
+  B 档 掌阅阅读器、词典&翻译；C 档 iReader 桌面。不停：掌阅系统界面（控制中心、前光）、掌阅设置、iReader 输入法。
+- 执行前的状态存在 `~/.local/state/sheng-ren/ireader-exclusive/before.txt`，`--undo` 只启用本脚本停掉的。
+- **真机**（2026-10-02）：按主页键进 KOReader ✓；重启后开机直接进 KOReader ✓，停用、默认桌面、开发者模式都保留，**USB 调试每次开机被关掉**
+  （要用 adb 时：下拉控制中心 → 设置 → 应用 →「设置入口」→ 打开 →「开发者选项」里再开）。
+- **常驻应用停不掉**：系统升级（`abupdate`）和音乐&录音是 `PERSISTENT`，系统开机照样拉起；`pm disable-user`、root 的 `pm disable`（这两个现在是 enabled=2）
+  都不管用，root `kill` 后立刻被拉起。剩下的办法是 `pm uninstall -k --user 0`（系统分区里的包不动、数据保留，`cmd package install-existing` 装回），
+  2026-10-02 用户自己对音乐&录音执行了：进程随即结束、不再被拉起，`pm list packages -u` 里还在、`/data/data/…` 保留 ✓（重启后待确认）。
+  系统升级同日用户也执行了：卸载没结束已在跑的进程，root `kill` 后不再被拉起 ✓。两个都只在 `pm list packages -u` 里（重启后待确认）。
+  `--undo` 会先 `install-existing` 装回再启用。
+- 掌阅桌面停了以后没有应用列表：「设置入口」等要从 设置 → 应用 → 某应用 → 打开。
+- 下发 KOReader 配置不用再切桌面：`adb shell am force-stop org.koreader.launcher` 关掉 KOReader 再写（apply.sh 还没接上，待做）。
 
 掌阅 Ocean 5 Pro 没有开发者选项、没有 USB 调试（2026-09-29 用户确认），装不了也停用不了系统应用；但「设置 → 应用 → 默认应用 → 桌面」可以换。
 KOReader 安卓版自己不能当桌面（它的清单里没有 HOME 类别），所以做一个只有几十 KB 的桌面应用：
@@ -23,7 +39,7 @@ KOReader 安卓版自己不能当桌面（它的清单里没有 HOME 类别）�
 ## 编译
 
 ```sh
-koreader/android-home/build.sh     # → target/android-home/koreader-home.apk
+koreader/android-home/build.sh     # → target/koreader-home/koreader-home.apk（编译步骤在 ../android-build.sh，和 android-settings/ 共用）
 ```
 
 要 Java 17+、`rsvg-convert`（转图标）和安卓 SDK（`~/.local/share/android-sdk`，或 `$ANDROID_HOME`）：
