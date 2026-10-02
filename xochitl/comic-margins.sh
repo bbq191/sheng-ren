@@ -76,13 +76,14 @@ fi
 # 合并进队列（队列里别的书保持不动），先写临时文件再改名。书架服务会边执行边从队列里删：
 # 写回前核对队列没被改过（比对读时的内容），改过就不写、让你重跑，免得把它刚删掉的条目又写回去。
 now=$(date +%s)
-# 一次读回"校验和 + 内容"（队列还没有时校验和记 none）
+# 一次读回"校验和 + 内容"（队列还没有时校验和记 none；文件空着时内容按 []，校验和那行总以换行结尾）
 qsum="if [ -f $queue ]; then md5sum < $queue | cut -d' ' -f1; else echo none; fi"
-snap=$(ssh_ "$qsum; cat $queue 2>/dev/null || echo '[]'")
+snap=$(ssh_ "$qsum; if [ -s $queue ]; then cat $queue; else echo '[]'; fi")
 sum=${snap%%$'\n'*} old=${snap#*$'\n'}
+[[ $snap == *$'\n'* && $sum =~ ^([0-9a-f]{32}|none)$ ]] || { echo "✗ 读回的队列不认识：$sum" >&2; exit 1; }
 new=$(printf '%s' "$old" | python3 -c '
 import json, sys
-q = json.loads(sys.stdin.read() or "[]")
+q = json.loads(sys.stdin.read().strip() or "[]")
 have = {p["uuid"] for p in q}
 for item in sys.argv[2:]:
     u, m = item.split("|")
@@ -90,7 +91,21 @@ for item in sys.argv[2:]:
         q.append({"uuid": u, "margins": int(m), "at": int(sys.argv[1])})
 print(json.dumps(q, ensure_ascii=False))
 ' "$now" "${todo[@]}")
-printf '%s' "$new" | ssh_ "[ \"\$($qsum)\" = $sum ] || { echo '✗ 队列刚被书架服务改过，没写：再跑一次' >&2; exit 3; }
-  cat > $queue.eink-tmp && mv $queue.eink-tmp $queue"
-printf '%s\n' "${todo[@]%%|*}" | ssh_ "mkdir -p ${done_file%/*} && cat >> $done_file"
+uuids=("${todo[@]%%|*}")
+for u in "${uuids[@]}"; do
+  [[ $u =~ ^[0-9a-fA-F-]+$ ]] || { echo "✗ 不认识的 uuid：$u" >&2; exit 1; }
+done
+len=$(printf '%s' "$new" | wc -c)
+# 写队列和记 done 在同一次 ssh 里：先把两个临时文件都写好、核对完，再依次改名；任一步失败整体失败、临时文件删掉。
+# （分两次 ssh 的话，队列写成了而记 done 那次失败，下次会重复登记。）
+printf '%s' "$new" | ssh_ "set -e
+  qt=$queue.eink-tmp dt=$done_file.eink-tmp
+  trap 'rm -f \$qt \$dt' EXIT
+  [ \"\$($qsum)\" = $sum ] || { echo '✗ 队列刚被书架服务改过，没写：再跑一次' >&2; exit 3; }
+  mkdir -p ${done_file%/*}
+  cat > \$qt
+  [ \$((\$(wc -c < \$qt))) -eq $((len)) ] || { echo '✗ 队列没传完整，没写' >&2; exit 4; }
+  { if [ -f $done_file ]; then cat $done_file; fi; printf '%s\\n' ${uuids[*]}; } > \$dt
+  mv \$qt $queue
+  mv \$dt $done_file"
 echo "✓ 登记了 ${#todo[@]} 本：在 Move 上打开这些书，约 2 秒后页边距自动变成 1（每本只设这一次）"
