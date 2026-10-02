@@ -12,6 +12,10 @@ import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.Parcel;
 import android.os.UserManager;
 import android.provider.Settings;
 import android.view.View;
@@ -82,6 +86,16 @@ public class ProbeActivity extends Activity {
         }
         button(box, "设置首页", new Intent(Settings.ACTION_SETTINGS));
 
+        // 掌阅前光（2026-10-02 摸底）：掌阅的系统服务 ireader（android.os.IIreaderManager）有 setColdBrightness=39、setWarmBrightness=40，
+        // 参数是灯的原始值 0–255（root 的 adb 实测）。这里试普通应用能不能调：冷光设 80，2 秒后改回。
+        header(box, "前光");
+        Button light = new Button(this);
+        light.setText("试调前光（冷光设 80，2 秒后改回）");
+        light.setAllCaps(false);
+        light.setTextSize(16);
+        light.setOnClickListener((View v) -> tryLight());
+        box.addView(light);
+
         List<ActivityInfo> pages = settingsActivities(settingsPkg);
         header(box, "设置应用（" + settingsPkg + "）里名字相关的页面");
         int n = 0;
@@ -136,6 +150,75 @@ public class ProbeActivity extends Activity {
         }
         log.append(result + "\n");
         append(stamp() + " " + result + "  " + i + "\n");
+    }
+
+    private static final String IREADER_DESCRIPTOR = "android.os.IIreaderManager";
+    private static final int TX_SET_COLD = 39;
+    private static final String COLD_NODE = "/sys/class/backlight/lm3630a_ledb/actual_brightness";
+
+    private void tryLight() {
+        String before = readNode(COLD_NODE);
+        IBinder b;
+        try {
+            b = (IBinder) Class.forName("android.os.ServiceManager").getMethod("getService", String.class).invoke(null, "ireader");
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            result("✗ 前光：拿不到 ServiceManager.getService（" + e + "）");
+            return;
+        }
+        if (b == null) {
+            result("✗ 前光：getService(\"ireader\") 返回空（多半是 SELinux 不许普通应用找这个服务）");
+            return;
+        }
+        String err = setCold(b, 80);
+        if (err != null) {
+            result("✗ 前光：调用失败（" + err + "）");
+            return;
+        }
+        String after = readNode(COLD_NODE);
+        result("✓ 前光：调用成功；冷光节点 " + before + " → " + after);
+        int restore;
+        try {
+            restore = Integer.parseInt(before.trim());
+        } catch (NumberFormatException e) {
+            result("  （读不到原来的冷光值，没法改回，请用控制中心调回去）");
+            return;
+        }
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            String e2 = setCold(b, restore);
+            result(e2 == null ? "  已改回 " + restore + "（节点现在 " + readNode(COLD_NODE) + "）" : "  改回失败（" + e2 + "）");
+        }, 2000);
+    }
+
+    /** 调 IIreaderManager.setColdBrightness；成功返回 null，失败返回原因。 */
+    private static String setCold(IBinder b, int v) {
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(IREADER_DESCRIPTOR);
+            data.writeInt(v);
+            b.transact(TX_SET_COLD, data, reply, 0);
+            reply.readException();
+            return null;
+        } catch (Exception e) {
+            return e.toString();
+        } finally {
+            data.recycle();
+            reply.recycle();
+        }
+    }
+
+    private static String readNode(String path) {
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(new java.io.FileInputStream(path), StandardCharsets.UTF_8))) {
+            String line = in.readLine();
+            return line != null ? line.trim() : "（空）";
+        } catch (IOException e) {
+            return "（读不到：" + e.getMessage() + "）";
+        }
+    }
+
+    private void result(String line) {
+        log.append(line + "\n");
+        append(stamp() + " " + line + "\n");
     }
 
     private static Intent component(String pkg, String cls) {

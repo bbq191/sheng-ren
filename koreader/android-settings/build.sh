@@ -4,4 +4,4 @@
 # 用法: koreader/android-settings/build.sh     → target/settings-probe/settings-probe.apk
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
-exec "$here/../android-build.sh" "$here" settings-probe 4 1.3
+exec "$here/../android-build.sh" "$here" settings-probe 5 1.4

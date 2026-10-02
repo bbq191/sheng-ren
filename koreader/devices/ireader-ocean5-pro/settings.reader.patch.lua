@@ -7,4 +7,7 @@ return {
     ["cre_background_image"] = "/storage/emulated/0/koreader/backgrounds/recycled-medium.png", -- 中档（用户 2026-09-29：浅的太淡）
     -- 文件管理器起始目录：存储根下的 books（用户 2026-10-02 定，两台一样；apply.sh 按 device.conf 的 BOOKS_DIR 建好）
     ["home_dir"] = "/storage/emulated/0/books",
+    -- 按太阳调前光（plugins/sunlight.koplugin，用户 2026-10-02 要）：位置昆明。档位值在插件菜单里用「把现在的灯存为本档」调，存在 sunlight_steps。
+    ["sunlight_enabled"] = true,
+    ["sunlight_location"] = { ["name"] = "昆明", ["lat"] = 25.04, ["lon"] = 102.71 },
 }
