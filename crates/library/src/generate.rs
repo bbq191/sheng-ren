@@ -14,7 +14,7 @@
 //! 换位置时先把记录改成新位置（指纹留空＝没完成，旧位置记进 `old` 待删），产物写好再补上指纹、删旧文件：
 //! 中途被打断的话，下次生成还认得新位置上的文件是这本书的（不会因为"有个不认识的同名文件"而改名），旧文件也还会删。
 
-use crate::fsutil::{commit, tmp_sibling, TMP_PREFIX};
+use crate::fsutil::{tmp_sibling, TMP_PREFIX};
 use crate::{Library, Meta};
 use profile::{Format, Profile};
 use serde::{Deserialize, Serialize};
@@ -77,7 +77,7 @@ impl Library {
             Format::Azw3 => format!("{}{}", format.ext(), azw3::WRITER_VERSION),
         };
         let cover = meta.cover.as_ref().map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
-        let info = meta.info.as_ref().and_then(|i| i.injected_sig()).unwrap_or_else(|| "-".into());
+        let info = self.injected_info_sig(meta).unwrap_or_else(|| "-".into());
         // 补元数据那一步（`metadata::inject`）改了会影响产物时 `bookconv::opfmeta::VERSION` 加一：只让补过东西的书过期（`i4`），
         // 没补过东西的书指纹不变
         let info = if cover != "-" || info != "-" { format!("{info}i{}", bookconv::opfmeta::VERSION) } else { info };
@@ -123,6 +123,36 @@ impl Library {
             format_seg,
         );
         Ok(Plan { fingerprint })
+    }
+
+    /// 生成时真正会补进书里的简介、标签的指纹（书里已有的那项不补、不进指纹：不然书里有简介的书，找来的简介变了也白重建）。
+    /// 要看书里有没有：EPUB 读一下 OPF（按内容哈希缓存）；读不出来（原件不在了）、CBZ（当场转换，补进的是转换结果）时
+    /// 按两项都补算（与以前的指纹相同）。
+    fn injected_info_sig(&self, meta: &Meta) -> Option<String> {
+        let info = meta.info.as_ref()?;
+        info.injected_sig()?;
+        let sha = meta.content_sha();
+        let cached = self.own_dc.borrow().get(sha).copied();
+        let own = match cached {
+            Some(own) => Some(own),
+            None if meta.content_format() == "epub" => {
+                let path = match meta.source() {
+                    crate::Source::Stored => self.entry_dir(&meta.id).join(&meta.master),
+                    crate::Source::Original => PathBuf::from(&meta.source_path),
+                };
+                let own = crate::metadata::own_description_subjects(&path).ok();
+                // 原件动过（可能不是这个内容了）的不记：生成前会核对，核对过再算
+                if let Some(o) = own.filter(|_| self.original_state(meta) != crate::OriginalState::Touched) {
+                    self.own_dc.borrow_mut().insert(sha.to_string(), o);
+                }
+                own
+            }
+            None => None,
+        };
+        match own {
+            Some((d, s)) => info.injected_sig_for(d, s),
+            None => info.injected_sig(),
+        }
     }
 
     /// 这本书给该模式生成的话，产物的指纹（`sync --watch` 用它判断上次失败以后有没有变化）。
@@ -172,13 +202,13 @@ impl Library {
             return Ok((lib_root.clone(), lib_root));
         }
         let src = Path::new(&meta.source_path);
-        let sources = self.sources_json.get(&self.root.join("sources.json"));
+        let sources = self.sources_json.get(&self.sources_path());
         let Some((d, parent)) = sources.dirs().iter().find(|d| src.starts_with(d)).and_then(|d| Some((d, d.parent()?))) else {
             return Ok((lib_root.clone(), lib_root));
         };
         let root = parent.join(&device.id);
-        if let Some(t) = sources.dirs().iter().find(|t| root.starts_with(t)) {
-            return Err(format!("产物目录 {} 在跟踪的目录 {} 里面，生成出来的书会被当成新书入库（跟踪的目录不要用模式 id 命名）", root.display(), t.display()));
+        if let Some(t) = sources.dirs().iter().find(|t| crate::sources::overlaps(&root, t)) {
+            return Err(output_overlap(&root, t));
         }
         let rel = src.parent().and_then(|p| p.strip_prefix(d).ok()).unwrap_or(Path::new(""));
         let dir = root.join(rel);
@@ -218,6 +248,11 @@ impl Library {
 
     /// 为一个阅读模式生成一本书的产物（没变化就跳过，`force` 强制重建）。放在哪见模块注释。
     pub fn build(&self, meta: &Meta, device: &Profile, force: bool) -> Result<Built, String> {
+        // 原件的大小或修改时间变了：先核对内容（改过了就停下来），不能因为指纹没变就说"已是最新"。
+        // 原件不在了的不在这里报：产物还是那本书的，照旧算最新（`sync`/`list` 会报原件不在）
+        if self.original_state(meta) == crate::OriginalState::Touched {
+            self.verified_original(meta)?;
+        }
         let Plan { fingerprint } = self.plan(meta, device)?;
         let (root, dir) = self.output_dir(meta, device)?;
         let sp = self.state_path(&device.id);
@@ -261,8 +296,8 @@ impl Library {
         let tmp = self.root.join(format!("{TMP_PREFIX}{}-{}", meta.id, device.id));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-        let part = tmp_sibling(&out);
-        let result = (|| -> Result<Vec<String>, String> {
+        let result = bookconv::util::produce_then_replace(&tmp_sibling(&out), &out, |part| {
+            let part = part.to_path_buf();
             let mut warnings = Vec::new();
             let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
             // 要转 AZW3 的，优化结果先放临时目录
@@ -281,13 +316,10 @@ impl Library {
                 warnings.extend(w);
                 std::fs::write(&part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
             }
-            commit(&part, &out).map_err(|e| format!("写 {}: {e}", out.display()))?;
             Ok(warnings)
-        })();
+        });
         let _ = std::fs::remove_dir_all(&tmp);
-        let warnings = result.inspect_err(|_| {
-            let _ = std::fs::remove_file(&part);
-        })?;
+        let warnings = result?;
         entry.fingerprint = fingerprint;
         self.finish(&sp, meta, entry)?;
         Ok(Built::Written { path: out, warnings })
@@ -330,11 +362,15 @@ impl Library {
         self.states.put(sp, state)
     }
 
-    /// 产物已经到位：删掉记着的旧位置（删不掉的留着下次再删），写上完成的记录。
+    /// 产物已经到位：删掉记着的旧位置（删不掉的留着下次再删），写上完成的记录。记录和原来一样（旧位置还是删不掉，
+    /// `sync --watch` 每轮都会走到这里）时不写。
     fn finish(&self, sp: &Path, meta: &Meta, mut entry: StateEntry) -> Result<(), String> {
         let mut state = (*self.states.get(sp)).clone();
-        state.books.remove(&meta.id);
+        let prev = state.books.remove(&meta.id);
         entry.old = state.delete_placements(std::mem::take(&mut entry.old));
+        if prev.as_ref() == Some(&entry) {
+            return Ok(());
+        }
         state.books.insert(meta.id.clone(), entry);
         std::fs::create_dir_all(self.state_dir()).map_err(|e| format!("{}: {e}", self.state_dir().display()))?;
         self.states.put(sp, state)
@@ -354,6 +390,15 @@ impl Library {
             other => Err(crate::unsupported(other)),
         }
     }
+}
+
+/// 产物根目录和跟踪目录互相包含时的提示（`build` 和 `track` 共用）。
+pub(crate) fn output_overlap(root: &Path, tracked: &Path) -> String {
+    format!(
+        "产物目录 {} 和跟踪的目录 {} 互相包含，生成出来的书会被当成新书入库、层层嵌套（跟踪的目录不要用模式 id 命名，也不要放在别的跟踪目录的产物目录里）",
+        root.display(),
+        tracked.display()
+    )
 }
 
 /// 某模式的生成记录（`output-state/<模式 id>.json`）：书 id → 产物在哪、指纹。
