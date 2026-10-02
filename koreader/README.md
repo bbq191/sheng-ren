@@ -61,18 +61,18 @@ Kindle 另停 hotkeys（没有实体键，掌阅有翻页键所以留着）。
 留着的：自动休眠、自动色温、封面浏览（文件夹封面补丁靠它）、手势、进度同步、阅读统计（状态栏剩余时间靠它）、生词本、补丁管理。
 插件管理里可以随时再打开。
 
-## 开机直接进 KOReader，回原生、再回去
+## Kindle 开机直接进 KOReader，回原生、再回去
 
-用户 2026-10-02 要：两台开机都直接进 KOReader，尽量独占；回到原生系统后也要能一步回去。
-Kindle 后来改成**普通模式**（亚马逊界面留在后台，不停也不重启），原因见下面"Kindle 为什么不独占"。
+用户 2026-10-02 要：开机直接进 KOReader，回到原生系统后也要能一步回去。Kindle 用**普通模式**（亚马逊界面留在后台，不停也不重启），原因见下面"Kindle 为什么不独占"。
+掌阅的「KOReader 桌面」（`android-home/`）**已停用**：见本节最后。
 
-| | Kindle（`kindle-boot/`） | 掌阅（`android-home/`，「KOReader 桌面」1.6） |
-|---|---|---|
-| 开机 | 开机任务在亚马逊界面起来后打开 KOReader（普通模式，后台跑） | 「KOReader 桌面」设成**默认桌面**：开机、在 KOReader 里退出都（重新）打开 KOReader。掌阅自己的系统应用停不了（没有 USB 调试），只能做到桌面就是 KOReader |
-| 回原生系统 | KOReader 菜单里「退出」 | 下拉控制中心 → 设置 → 默认应用 → 桌面改回「iReader 桌面」 |
-| 再回 KOReader | 书库里点「KOReader」（kpm 装的那本脚本书）或重启 | 掌阅桌面上点「KOReader 独占」图标，在打开的设置页里选「KOReader 桌面」 |
-| 装 | `kindle-boot/deploy.sh --write` 拷文件，再在 Kindle 书库里点「KOReader 开机启动：装上」（开机任务要写进根分区，只能在 Kindle 上以 root 跑） | `android-home/build.sh` 编，拷到 `Download/`，在掌阅上点开安装，「默认应用 → 桌面」选「KOReader 桌面」 |
-| 关掉 | 书库里点「KOReader 开机启动：卸掉」 | 默认桌面改回 iReader 桌面，再卸载「KOReader 桌面」 |
+| | Kindle（`kindle-boot/`） |
+|---|---|
+| 开机 | 开机任务在亚马逊界面起来后打开 KOReader（普通模式，后台跑） |
+| 回原生系统 | KOReader 菜单里「退出」 |
+| 再回 KOReader | 书库里点「KOReader」（kpm 装的那本脚本书）或重启 |
+| 装 | `kindle-boot/deploy.sh --write` 拷文件，再在 Kindle 书库里点「KOReader 开机启动：装上」（开机任务要写进根分区，只能在 Kindle 上以 root 跑） |
+| 关掉 | 书库里点「KOReader 开机启动：卸掉」 |
 
 **Kindle 为什么不独占**（2026-10-02 真机，看 Kindle 自动生成的诊断包里的系统日志）：
 - 独占 = 进 KOReader 时停掉亚马逊界面、退出时重启它（`koreader.sh --framework_stop`）。开机后**第三次**重启界面时，解锁之后亚马逊主界面程序
@@ -95,8 +95,12 @@ Kindle 后来改成**普通模式**（亚马逊界面留在后台，不停也不
 程序文件时收到 SIGBUS 崩溃。MTP 服务 `tizen-mtp` 本身独立于亚马逊界面，但锁分区是系统设计，绕不开（除非把 KOReader 整个搬出书库分区，系统分区放不下）。
 所以拷书、跑 `apply.sh` 前仍要先「退出」回到自带界面再插线。
 
-- **掌阅下发配置（`apply.sh ireader-ocean5-pro`）前**：先把默认桌面改回 iReader 桌面，再在 KOReader 里退出（不然会被马上重开，它退出时把内存里的设置写回去，盖掉刚下发的），写完点「KOReader 独占」回去。
-- **真机**（2026-10-02）：Kindle 开机直接进 KOReader、退出回亚马逊界面 ✓（独占模式的第三次退出白屏见上，普通模式待验证）；掌阅装「KOReader 桌面」、开机进 KOReader、图标「Kr」用户确认可以。
+- **真机**（2026-10-02）：Kindle 开机直接进 KOReader、退出回亚马逊界面 ✓（独占模式的第三次退出白屏见上，普通模式待验证）。
+
+**掌阅不再把 KOReader 设成桌面**（2026-10-02 用户定）：「KOReader 桌面」1.6（`android-home/`：设成默认桌面，开机、退出都回 KOReader；
+「KOReader 独占」图标带到默认桌面设置页；图标「Kr」）真机能用，但掌阅没有 USB 调试、系统应用一个也停不了，"独占"只是换了桌面，
+不省内存也不省电；每次下发配置还得先把桌面改回 iReader 桌面、退出、写完再改回来。撤掉：默认桌面改回「iReader 桌面」、卸载「KOReader 桌面」，
+KOReader 点它自己的图标打开。代码留在 `android-home/` 作参考（`build.sh` 照样能编）。
 
 ## 读什么书、放哪
 
