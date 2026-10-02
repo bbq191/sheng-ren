@@ -10,10 +10,11 @@
 //! 6. `mimetype` 缺失、不是第一个条目、被压缩或内容不对（EPUB 规范 OCF 的硬性要求，只在按 zip 检查的
 //!    [`check_epub_file`] 里查，[`check_entries`] 看不到压缩方式）。
 //!
-//! 告警（不拦）：无 nav/ncx 或零条目（`require_toc` 时升为失败）；目录锚点丢失（xochitl 退化到文件级跳转）。
-use crate::epubzip::{dir_of, is_html_entry, percent_decode, resolve_rel, Entry};
+//! 告警（不拦）：无 nav/ncx 或零条目（`require_toc` 时升为失败）；目录锚点丢失（xochitl 退化到文件级跳转）；
+//! 正文链接的锚点不存在（同文件 `#x` 也查：注释回链指向被丢掉的 id 就是这样查出来的）。
+use crate::epubzip::{is_html_entry, resolve_link, Entry};
 use crate::wash::{count_dup_id_tags, encrypted_targets, is_toc_file, real_drm_items};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +31,8 @@ pub struct CheckReport {
     pub html_files: usize,
     pub resource_refs_total: usize,
     pub resource_refs_hit: usize,
+    /// 正文里锚点不存在的链接数（目标文件在、`#锚点` 找不到；同文件 `#x` 也算）。
+    pub dead_anchor_links: usize,
 }
 
 impl CheckReport {
@@ -99,20 +102,26 @@ fn add_mimetype_problem<R: std::io::Read + std::io::Seek>(rep: &mut CheckReport,
     }
 }
 
-/// 文档里指向书内文件的链接：(zip 路径, 锚点)。`href`/`src`/`xlink:href`，单双引号都认（`data-src` 不算），
-/// 书外链接（带协议、`data:`）和纯同文件锚点跳过。
-fn internal_links(base: &str, html: &str) -> Vec<(String, String)> {
+/// 文档 `file`（zip 路径）里指向书内的链接：(目标 zip 路径, 解码后的锚点, 是不是纯同文件锚点 `#x`)。
+/// `href`/`src`/`xlink:href`，单双引号都认（`data-src` 不算），书外链接（带协议、`data:`）跳过。解析走 `epubzip::resolve_link`。
+fn internal_links(file: &str, html: &str) -> Vec<(String, String, bool)> {
     crate::html::link_values(html)
         .into_iter()
         .filter_map(|v| {
-            let v = crate::util::xml_unescape(v);
-            let (path, frag) = crate::html::split_href(&v);
-            if path.is_empty() || crate::html::is_external(path) {
+            let path = crate::html::split_href(v).0;
+            if crate::html::is_external(&crate::util::xml_unescape(path)) {
                 return None;
             }
-            Some((resolve_rel(base, path), frag.map(percent_decode).unwrap_or_default()))
+            let (target, frag) = resolve_link(file, v);
+            Some((target, frag.unwrap_or_default(), path.is_empty()))
         })
         .collect()
+}
+
+/// 一页里的全部锚点（任何元素的 `id`、`<a name>`；单双引号都认，`data-id` 不算），字符引用已还原（和解码后的锚点比）。
+fn anchor_set(data: &[u8]) -> HashSet<String> {
+    let html = String::from_utf8_lossy(data);
+    crate::html::anchors(&html).into_iter().map(|(v, _)| crate::util::xml_unescape(v).into_owned()).collect()
 }
 
 pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
@@ -133,9 +142,8 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     rep.toc_files = entries.iter().filter(|e| is_toc_file(&e.name)).map(|e| e.name.clone()).collect();
     let mut targets: Vec<(String, String)> = Vec::new(); // (zip 路径, frag)
     for tf in &rep.toc_files {
-        let base = dir_of(tf);
         let t = String::from_utf8_lossy(&names[tf.as_str()].data);
-        targets.extend(internal_links(base, &t));
+        targets.extend(internal_links(tf, &t).into_iter().filter(|l| !l.2).map(|(p, f, _)| (p, f)));
     }
     rep.toc_entries = targets.len();
     if rep.toc_files.is_empty() || targets.is_empty() {
@@ -151,13 +159,10 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
         rep.errors.push(format!("目录 href 文件命中率过低 {}/{}", rep.href_file_hit, targets.len()));
     }
     // 每个目标页只扫一遍收集全部锚点（任何元素的 `id`、`<a name>`；单双引号都认，`data-id` 不算），再按集合判命中。
-    let mut cache: HashMap<&str, std::collections::HashSet<String>> = HashMap::new();
+    let mut cache: HashMap<&str, HashSet<String>> = HashMap::new();
     for (t, frag) in targets.iter().filter(|(t, f)| !f.is_empty() && names.contains_key(t.as_str())) {
         rep.frag_total += 1;
-        let anchors = cache.entry(t.as_str()).or_insert_with(|| {
-            let html = String::from_utf8_lossy(&names[t.as_str()].data);
-            crate::html::anchors(&html).into_iter().map(|(v, _)| v.to_string()).collect()
-        });
+        let anchors = cache.entry(t.as_str()).or_insert_with(|| anchor_set(&names[t.as_str()].data));
         if anchors.contains(frag) {
             rep.frag_hit += 1;
         }
@@ -178,10 +183,24 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     // 4. 正文资源引用（img src / link href 等，和目录那节同一个 [`internal_links`]，区别只是扫的是每章正文）：
     // 书外链接、data: 内联、纯同文件锚点不算。命中率阈值跟目录那节一致，同一份"该拦还是该忍"的标准。
     let mut res_examples: Vec<String> = Vec::new();
+    let mut dead_examples: Vec<String> = Vec::new();
     for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data)) {
-        let base = dir_of(&e.name);
         let t = String::from_utf8_lossy(&e.data);
-        for (target, _) in internal_links(base, &t) {
+        for (target, frag, same_file) in internal_links(&e.name, &t) {
+            // 正文链接的锚点（同文件 `#x` 也查）：目标文件在、锚点却找不到的算死链
+            if !frag.is_empty() {
+                if let Some(target_entry) = names.get(target.as_str()) {
+                    if !cache.entry(target_entry.name.as_str()).or_insert_with(|| anchor_set(&target_entry.data)).contains(&frag) {
+                        rep.dead_anchor_links += 1;
+                        if dead_examples.len() < 3 {
+                            dead_examples.push(format!("{}→#{frag}", e.name));
+                        }
+                    }
+                }
+            }
+            if same_file {
+                continue;
+            }
             rep.resource_refs_total += 1;
             if names.contains_key(target.as_str()) {
                 rep.resource_refs_hit += 1;
@@ -189,6 +208,9 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
                 res_examples.push(format!("{}→{target}", e.name));
             }
         }
+    }
+    if rep.dead_anchor_links > 0 {
+        rep.warnings.push(format!("正文链接锚点不存在 {} 处（如 {}），点了跳不到", rep.dead_anchor_links, dead_examples.join("、")));
     }
     if rep.resource_refs_total > 0 && (rep.resource_refs_hit as f64) / (rep.resource_refs_total as f64) < 0.8 {
         rep.errors.push(format!(
@@ -285,6 +307,17 @@ mod tests {
         let chap = e("OEBPS/c.xhtml", r#"<html><body><p id='a'>x</p><p data-id="b">y</p><a name="n"/></body></html>"#);
         let r = check_entries(&[toc, chap], false);
         assert_eq!((r.frag_hit, r.frag_total), (2, 3), "单引号 id、<a name> 算锚点，data-id 不算");
+    }
+
+    /// 正文链接的锚点要在：同文件 `#x`、跨文件、字符引用与百分号编码都按解码后的值对 id。
+    #[test]
+    fn body_link_anchors_checked_including_same_file() {
+        let ch = e("OEBPS/c.xhtml", r##"<html><body><p id="fnref1">正文<a href="#fn1">1</a></p><p id='a&amp;b'>x</p><a href="#a&amp;b">2</a><a href="n.xhtml#%E6%B3%A8">3</a><a href="#gone">4</a></body></html>"##);
+        let notes = e("OEBPS/n.xhtml", r##"<html><body><p id="注">注 <a href="c.xhtml#fnref1">↩</a><a href="c.xhtml#fnref9">↩</a></p></body></html>"##);
+        let r = check_entries(&[ch, notes], false);
+        assert_eq!(r.dead_anchor_links, 3, "#fn1、#gone、#fnref9 不存在: {:?}", r.warnings);
+        assert!(r.warnings.iter().any(|w| w.contains("正文链接锚点不存在 3 处")), "{:?}", r.warnings);
+        assert_eq!((r.resource_refs_total, r.resource_refs_hit), (3, 3), "同文件锚点不算资源引用");
     }
 
     #[test]
