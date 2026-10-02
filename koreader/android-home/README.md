@@ -16,6 +16,8 @@
   2026-10-02 用户自己对音乐&录音执行了：进程随即结束、不再被拉起，`pm list packages -u` 里还在、`/data/data/…` 保留 ✓（重启后待确认）。
   系统升级同日用户也执行了：卸载没结束已在跑的进程，root `kill` 后不再被拉起 ✓。两个都只在 `pm list packages -u` 里（重启后待确认）。
   `--undo` 会先 `install-existing` 装回再启用。
+- **回桌面**：从屏幕底部中间往上滑（掌阅自己的手势区，2026-10-02 用户实测）。
+- 下发配置：`apply.sh` 前先 `adb shell pm disable-user --user 0 local.eink.koreaderhome`、在 KOReader 里「退出」、写完 `pm enable` 再 `cmd package set-home-activity local.eink.koreaderhome/.HomeActivity`（2026-10-02 这样下发了按太阳调前光）。jmtpfs 挂载会让 adb 掉线，`adb kill-server` 后恢复。
 - 掌阅桌面停了以后没有应用列表：「设置入口」等要从 设置 → 应用 → 某应用 → 打开。
 - 下发 KOReader 配置不用再切桌面：`adb shell am force-stop org.koreader.launcher` 关掉 KOReader 再写（apply.sh 还没接上，待做）。
 
