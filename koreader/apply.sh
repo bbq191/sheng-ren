@@ -9,6 +9,7 @@
 #   --write：真的写。不带就只列出会改什么（dry run）。
 #   --closed：声明已在设备上退出 KOReader（Android 上从电脑看不出来，不给就在终端里问）。
 #
+# 词典从 $KOREADER_DICTS（缺省 ~/Documents/ereader/dict/stardict，mobi-dict-to-stardict 的输出）拷到 data/dict/，按大小比，缺的或大小不同的才拷。
 # 写入前把设备上要动的文件备份到 $KOREADER_BACKUP/<时间>/<设备 id>/（缺省 ~/Documents/ereader/koreader-backup）；
 # 每写一个文件就回读核对，任何一步失败都把已写的文件还原（原来没有的删掉）。字体从 $KOREADER_FONTS（缺省 ~/Documents/ereader/fonts）拷。
 # KOReader 运行中不能写：它退出时会把内存里的设置写回文件，覆盖掉这里写的。
@@ -37,6 +38,7 @@ if [[ -z $dev || ! -f $KO_HERE/devices/$dev/device.conf ]]; then
 fi
 command -v luajit >/dev/null || { echo "✗ 缺 luajit" >&2; exit 1; }
 font_src=${KOREADER_FONTS:-$HOME/Documents/ereader/fonts}
+dict_src=${KOREADER_DICTS:-$HOME/Documents/ereader/dict/stardict}
 backup_root=${KOREADER_BACKUP:-$HOME/Documents/ereader/koreader-backup}
 show() { echo "${1/#$HOME/\~}"; }
 
@@ -109,6 +111,29 @@ if [[ $mode == apply ]]; then
   done
 fi
 
+# ── 词典（$dict_src/<名>/*.{ifo,idx,dict} ↔ 设备的 data/dict/<名>/；只在应用时拷缺的或大小不同的，卸载不删）──
+put_dicts=()
+if [[ $mode == apply && -d $dict_src ]]; then
+  for d in "$dict_src"/*/; do
+    dname=$(basename "$d")
+    compgen -G "$d*.ifo" >/dev/null || continue
+    for f in "$d"*.ifo "$d"*.idx "$d"*.dict "$d"*.dict.dz "$d"*.syn; do
+      [[ -f $f ]] || continue
+      rel="data/dict/$dname/$(basename "$f")"
+      [[ $(dev_size "$rel" || true) == "$(stat -c %s "$f")" ]] && continue
+      echo "── 词典 $rel：会拷过去（$(( $(stat -c %s "$f") / 1024 / 1024 )) MB）"
+      put_dicts+=("$f")
+    done
+  done
+fi
+
+# ── 放书的目录（device.conf 的 BOOKS_DIR，相对设备存储根；KOReader 起始目录 home_dir 指向它）：没有就建 ──
+need_books_dir=0
+if [[ $mode == apply && -n ${BOOKS_DIR:-} ]] && ! gio info "$KO_MOUNT/$BOOKS_DIR" >/dev/null 2>&1; then
+  echo "── 目录 $BOOKS_DIR：设备上没有，会建"
+  need_books_dir=1
+fi
+
 # ── 用户补丁和插件（koreader/patches/*.lua ↔ 设备的 patches/；device.conf 的 PLUGINS 列的 koreader/plugins/<名>/ ↔ 设备的 plugins/<名>/）──
 # 都按文件比：路径用设备上的相对路径（patches/x.lua、plugins/y.koplugin/main.lua），本地文件在 $KO_HERE 下同样的路径。
 code_files=()
@@ -147,7 +172,7 @@ if [[ $mode == restore ]]; then
   done < <(cd "$src" && find patches plugins -type f 2>/dev/null | sort)
 fi
 
-if [[ ${#changed[@]} -eq 0 && ${#missing_fonts[@]} -eq 0 && ${#put_bgs[@]} -eq 0 && ${#put_code[@]} -eq 0 && ${#rm_code[@]} -eq 0 ]]; then
+if [[ ${#changed[@]} -eq 0 && ${#missing_fonts[@]} -eq 0 && ${#put_bgs[@]} -eq 0 && ${#put_dicts[@]} -eq 0 && $need_books_dir -eq 0 && ${#put_code[@]} -eq 0 && ${#rm_code[@]} -eq 0 ]]; then
   echo "= $dev 不用改"; exit 0
 fi
 if [[ $write -eq 0 ]]; then echo "（dry run：以上是会改的；确认后加 --write 写入）"; exit 0; fi
@@ -206,6 +231,20 @@ for font in "${missing_fonts[@]}"; do # 字体大，按大小核对；失败只�
   else
     dev_rm "fonts/$font" || true
     echo "✗ 字体 fonts/$font 没拷成功（大小不对），什么都没改" >&2; exit 4
+  fi
+done
+if [[ $need_books_dir -eq 1 ]]; then
+  gio mkdir -p "$KO_MOUNT/$BOOKS_DIR" || { echo "✗ 建不了 $BOOKS_DIR" >&2; exit 4; }
+  echo "✓ 目录 $BOOKS_DIR 已建"
+fi
+for f in "${put_dicts[@]}"; do # 词典大，和字体一样按大小核对；拷坏了删掉，不影响配置
+  rel="data/dict/$(basename "$(dirname "$f")")/$(basename "$f")"
+  dev_mkdir data && dev_mkdir data/dict && dev_mkdir "$(dirname "$rel")" || { echo "✗ 建不了 $(dirname "$rel")" >&2; exit 4; }
+  if dev_put "$f" "$rel" && [[ $(dev_size "$rel") == "$(stat -c %s "$f")" ]]; then
+    echo "✓ 词典 $rel 已拷到设备"
+  else
+    dev_rm "$rel" || true
+    echo "✗ 词典 $rel 没拷成功（大小不对）" >&2; exit 4
   fi
 done
 if [[ ${#put_bgs[@]} -gt 0 ]]; then # 背景图和字体一样按大小核对；拷坏了删掉，不影响配置

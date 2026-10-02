@@ -329,11 +329,12 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 ## 单独的命令行工具
 
 书库之外，底层的每一步也能单独用。开发和排查问题时有用（`./install.sh --tools` 装上；不装就 `cargo run --release -p bookconv --bin <命令> --`，
-`epub-to-azw3` 在 `azw3` 包里：`cargo run --release -p azw3 --bin epub-to-azw3 --`）：
+`epub-to-azw3` 在 `azw3` 包里：`cargo run --release -p azw3 --bin epub-to-azw3 --`；`mobi-dict-to-stardict` 在 `mobidict` 包里）：
 
 ```sh
 epub-optimize --device=ireader 输入.epub 输出.epub
 epub-to-azw3 [--ebok] 优化后.epub 输出.azw3       # 见"AZW3 写出器"；输入应是 --device=kindle 优化过的
+mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict，给 KOReader 查词，见 koreader/README.md
 readable-probe 测量书.epub                   # 见"设备与可阅读范围"
 readable-measure [--device=kindle] 竖长.png 横宽.png   # 给了 --device 按它的产物格式写段名（kindle 是 [readable.azw3]）
 ```

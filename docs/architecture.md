@@ -20,10 +20,11 @@
 | `library` | 书库：入库（索引）、跟踪同步、按阅读模式生成、产物放在哪、产物指纹 | `booklib` |
 | `bookconv` | 内容层：CBZ → EPUB、网页 → EPUB、清洗、优化、图片处理、质量门。不管书库，只按调用方传入的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
 | `azw3` | EPUB → AZW3（KF8）写出器，clean-room，见 [AZW3 写出器](azw3.md)。书库生成 `kindle` 模式时把优化好的 EPUB 转一次。`azw3::read` 是 KF8 读取器，只给写出器回读自检和测试用 | `epub-to-azw3` |
+| `mobidict` | MOBI 词典 → StarDict，给 KOReader 查词用（只转自己手上的词典，产物不进仓库），clean-room；读 MOBI 容器借 `azw3::read::palm`。见 [koreader/README.md](../koreader/README.md#词典) | `mobi-dict-to-stardict` |
 | `profile` | 阅读模式的参数，TOML 构建时嵌入，见[设备与可阅读范围](devices.md)；命令行的 `--device=` 用 `device_from_args` 解析 | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
-依赖单向无环：`library` → `azw3` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`drm` 独立。
+依赖单向无环：`library` → `azw3` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`mobidict` → `azw3`、`bookconv`；`drm` 独立。
 输入只收 EPUB、CBZ（和网址）；AZW3 只是 `kindle` 模式的产物格式。
 
 ### bookconv 模块

@@ -543,13 +543,13 @@ fn indx_split_entry(entry: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 /// 一族 INDX 解析后的条目：(id 文本, [(tag, 该 tag 的全部值)])。
-type IndxEntry<'a> = (&'a [u8], Vec<(u8, Vec<usize>)>);
+pub type IndxEntry<'a> = (&'a [u8], Vec<(u8, Vec<usize>)>);
 
 /// 解析一族 INDX（头记录的 `TAGX` 标签表 + 各数据块条目）。返回 (头记录号, 数据块数, 条目)。
 /// 条目 = id 文本 + 控制字节（个数见 TAGX `+8`）+ 按 TAGX 顺序的 tag 值（前向变长整数）。某 tag 在控制字节里
 /// 对应掩码位上的数 = 出现次数，每次 `nvals` 个值；掩码多位全置 1 的"次数另写"形式没见过样本，遇到时该条目
 /// 后面的 tag 不再解析。
-fn indx_read<'a>(records: &[&'a [u8]], mobi: &[u8], field_off: usize) -> Option<(usize, usize, Vec<IndxEntry<'a>>)> {
+pub fn indx_read<'a>(records: &[&'a [u8]], mobi: &[u8], field_off: usize) -> Option<(usize, usize, Vec<IndxEntry<'a>>)> {
     let (idx, hdr, ndata) = indx_locate(records, mobi, field_off)?;
     // TAGX 标签定义表（每项 4 字节：tag / nvals / mask / eof）
     let tagx_at = bookconv::util::memfind(hdr, b"TAGX")?;
@@ -599,7 +599,7 @@ fn indx_read<'a>(records: &[&'a [u8]], mobi: &[u8], field_off: usize) -> Option<
 }
 
 /// 条目里某个 tag 的第 `i` 个值。
-fn tag_val(tags: &[(u8, Vec<usize>)], tag: u8, i: usize) -> Option<usize> {
+pub fn tag_val(tags: &[(u8, Vec<usize>)], tag: u8, i: usize) -> Option<usize> {
     tags.iter().find(|(t, _)| *t == tag).and_then(|(_, v)| v.get(i).copied())
 }
 

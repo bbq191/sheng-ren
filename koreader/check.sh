@@ -75,6 +75,8 @@ assert(r.tap_top_right_corner.toc and not r.tap_top_right_corner.toggle_bookmark
 assert(r.one_finger_swipe_right_edge_up.increase_frontlight_warmth == 0 and not r.one_finger_swipe_right_edge_up.full_refresh, '右边缘 = 暖光')
 assert(r.short_diagonal_swipe == nil, '删掉的手势不能留下 __DELETE__')
 assert(not dofile('$KO_HERE/luaser.lua').serialize(g):find('__DELETE__'), '结果里不能留 __DELETE__')
+local k = dofile('$w/cur/settings/kosync.lua').settings
+assert(k.custom_server == 'https://sync.vksight.com' and k.checksum_method == 1 and k.auto_sync == true and k.sync_forward and k.sync_backward, '进度同步设置不对')
 local t = s.style_tweaks
 assert(t and t.cjk_tailored and not t['docfragment_page-break-before_avoid '] and not t['h2_page-break-before_always']
   and not t['footnote-inpage_epub'], '分页、弹窗注释要撤掉的样式调整还在（或整张表没了：没了 KOReader 会退回缺省，页内注释又开了）')

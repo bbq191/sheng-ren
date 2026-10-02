@@ -2,7 +2,7 @@
 # lib.sh —— apply.sh、check.sh 共用（source 进来用，不单独运行）。调用方先设好 KO_HERE（koreader/ 目录）。
 
 # 设备上归我们管的配置文件（相对 KOReader 目录）
-KO_FILES=(settings.reader.lua settings/gestures.lua)
+KO_FILES=(settings.reader.lua settings/gestures.lua settings/kosync.lua)
 
 # ko_layers <设备 id>：按应用顺序输出每一层「目标文件 脚本 补丁 类别」。
 #   类别 personal = 个人设置（卸载时保留），scheme = 文字书方案和设备差异（卸载时撤销）。
@@ -12,6 +12,7 @@ settings.reader.lua merge.lua personal/settings.reader.patch.lua personal
 settings.reader.lua merge.lua schemes/text.settings.patch.lua scheme
 settings.reader.lua merge.lua devices/$1/settings.reader.patch.lua scheme
 settings/gestures.lua merge.lua personal/gestures.patch.lua personal
+settings/kosync.lua merge.lua schemes/kosync.patch.lua scheme
 EOF
 }
 
@@ -67,6 +68,7 @@ ko_connect() {
   TRANSPORT=mtp
   FONTS=()
   PLUGINS=()
+  BOOKS_DIR=
   RUNNING_CHECK=ask
   # shellcheck source=/dev/null
   source "$KO_HERE/devices/$dev/device.conf"
@@ -77,6 +79,7 @@ ko_connect() {
       uri=$(gio mount -li 2>/dev/null | grep -o "activation_root=mtp://${MTP_HOST_PREFIX}[^ ]*" | head -1 | cut -d= -f2 || true)
       [[ -z $uri ]] && { echo "✗ 没找到 $dev：USB 连上并解锁设备后再试" >&2; return 1; }
       gio info "$uri" >/dev/null 2>&1 || gio mount "$uri" 2>/dev/null || true
+      KO_MOUNT="${uri%/}"
       KO_BASE="${uri%/}/$KOREADER_DIR"
       dev_has() { gio info "$KO_BASE/$1" >/dev/null 2>&1; }
       dev_get() { rm -f "$2"; gio copy "$KO_BASE/$1" "$2" 2>/dev/null || { rm -f "$2"; return 1; }; }
