@@ -616,9 +616,8 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
     let ncx_dir = dir_of(&ncx_path).to_string();
     // 属性原文 → 字符引用还原 → 百分号解码（锚点表也按还原后的 id 建，见 `TextAt::get`）
     let resolve_decoded = |base: &str, href: &str| -> (String, String) {
-        let href = crate::util::xml_unescape(href);
-        let (path, frag) = crate::epubzip::resolve_href(base, &href);
-        (path, html::frag_id(frag.unwrap_or("")).into_owned())
+        let (path, frag) = crate::epubzip::resolve_link(base, href);
+        (path, frag.unwrap_or_default())
     };
     let mut cache = TextAt::new(entries);
     // 书里所有链接：标题 → 目标（同一标题可能有好几个目标，比如每个故事都有"第一章"）
