@@ -45,7 +45,7 @@ local DEFAULT_LOCATION = { name = "昆明", lat = 25.04, lon = 102.71 }
 --- 档位：太阳高度（度）≥ min 的最后一档生效，从低到高排。值是灯的原始值 0–255（掌阅控制中心最亮约 210）。
 --- 起点是估的，用「把现在的灯存为本档」按自己的眼睛调。
 local DEFAULT_STEPS = {
-    { min = -90, name = "深夜", cold = 4, warm = 30 },   -- 天文昏影终以后（太阳在地平线下 18° 以下）
+    { min = -90, name = "深夜", cold = 6, warm = 30 },   -- 天文昏影终以后（太阳在地平线下 18° 以下）；冷光最低有效值约 5–8（设 4 硬件读数为 0）
     { min = -18, name = "夜", cold = 8, warm = 50 },     -- 天文、航海晨昏
     { min = -6, name = "晨昏", cold = 25, warm = 50 },   -- 民用晨昏：天还有点亮
     { min = -0.833, name = "日出日落", cold = 40, warm = 25 }, -- 太阳在地平线上 10° 以内
@@ -193,8 +193,9 @@ function SunLight:adjust()
     end
     local idx = self:stepIndex(self:elevation())
     local cold, warm = read_node(COLD_NODE), read_node(WARM_NODE)
-    -- 灯和上次自动设的不一样 = 用户手动调过：那一档里不再动
-    if self.last_set and not (near(cold, self.last_set.cold) and near(warm, self.last_set.warm)) then
+    -- 灯和上次自动设的不一样、且不是全灭（掌阅屏保休眠时把两路都关成 0，别当成手动调）= 用户手动调过：那一档里不再动
+    if self.last_set and (cold > 0 or warm > 0)
+        and not (near(cold, self.last_set.cold) and near(warm, self.last_set.warm)) then
         self.manual_step = self.last_set.step
         logger.dbg("SunLight: 手动调过灯", self.last_set.cold, self.last_set.warm, "→", cold, warm)
         self.last_set = nil
@@ -213,8 +214,10 @@ function SunLight:adjust()
 end
 
 function SunLight:onResume()
-    -- 唤醒时掌阅可能先把灯恢复成它记着的值；等一下再设，记账从这次重新开始（不把恢复动作当成手动调）。手动档照旧保留。
+    -- 唤醒时掌阅可能先把灯恢复成它记着的值；记账重开，也清掉休眠前的"手动档"——手动微调不跨越休眠，醒来一律按太阳档重设
+    -- （2026-10-02 真机：屏保休眠把灯关成 0/0，旧逻辑把这当成手动调、之后一直不管灯）。
     self.last_set = nil
+    self.manual_step = nil
     self:schedule(2)
 end
 
