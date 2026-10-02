@@ -63,30 +63,41 @@ Kindle 另停 hotkeys（没有实体键，掌阅有翻页键所以留着）。
 
 ## Kindle 开机直接进 KOReader，回原生、再回去
 
-用户 2026-10-02 要：开机直接进 KOReader，回到原生系统后也要能一步回去。Kindle 用**普通模式**（亚马逊界面留在后台，不停也不重启），原因见下面"Kindle 为什么不独占"。
-掌阅的「KOReader 桌面」（`android-home/`）**已停用**：见本节最后。
+用户 2026-10-02 要：开机直接进 KOReader，回到原生系统后也要能一步回去。Kindle 先用了普通模式（亚马逊界面留在后台），
+同一天查完社区方案后用户定**改成独占、退出即整机重启**（见下面"Kindle 独占：退出即重启"）。
+掌阅的「KOReader 桌面」（`android-home/`）**已停用**：见本节最后；能不能开 USB 调试在用 `android-settings/` 摸底。
 
 | | Kindle（`kindle-boot/`） |
 |---|---|
-| 开机 | 开机任务在亚马逊界面起来后打开 KOReader（普通模式，后台跑） |
-| 回原生系统 | KOReader 菜单里「退出」 |
-| 再回 KOReader | 书库里点「KOReader」（kpm 装的那本脚本书）或重启 |
+| 开机 | 开机任务在亚马逊界面起来后停掉界面、独占打开 KOReader（`bin/run.sh`，后台跑） |
+| 回原生系统 | KOReader 菜单里「退出」→ 整机重启，这次开机停在自带界面 |
+| 再回 KOReader | 书库里点脚本书「KOReader（独占）」，或再重启一次 |
 | 装 | `kindle-boot/deploy.sh --write` 拷文件，再在 Kindle 书库里点「KOReader 开机启动：装上」（开机任务要写进根分区，只能在 Kindle 上以 root 跑） |
 | 关掉 | 书库里点「KOReader 开机启动：卸掉」 |
 
-**Kindle 为什么不独占**（2026-10-02 真机，看 Kindle 自动生成的诊断包里的系统日志）：
+**Kindle 独占：退出即重启**（2026-10-02 用户定，**还没上真机**）：`koreader.sh --kual --framework_stop` 照旧停界面，`bin/run.sh` 在它的 PATH
+最前面垫一个 `start`（`bin/start-shim.sh`，拷到 `/var/tmp/koreader-boot-shim/start`）。KOReader 退出（或崩溃）后 koreader.sh 执行 `start lab126_gui`
+拉回界面时，垫片改成：留记号 `koreader-boot.native`、清诊断包、`sync`、`reboot`。开机任务看到记号就这次不自启（只一次）。界面一次也不重启，下面的白屏条件就没了。
+别的 `start` 原样转给系统的。垫片没接管时（PATH 被改掉之类）koreader.sh 照原样拉回界面，`run.sh` 收尾，最坏就是旧的独占行为。
+- 代价：每次回原生都要等整机重启；KOReader 运行时本来就不能用 USB（见下），所以拷书、跑 `apply.sh` 也要先退出（重启）。
+- KOReader 菜单里的重启、关机不经过垫片，留着"运行中"标记，下次开机按逃生口停在自带界面。
+- koreader.sh 里的停启框架逻辑是照上游 master 读的（`start lab126_gui` 是按 PATH 找的、PATH 不重设）；设备上的版本（v2026.07.2 nightly）上真机时核对。
+
+**Kindle 为什么不用原来的独占**（2026-10-02 真机，看 Kindle 自动生成的诊断包里的系统日志）：
 - 独占 = 进 KOReader 时停掉亚马逊界面、退出时重启它（`koreader.sh --framework_stop`）。开机后**第三次**重启界面时，解锁之后亚马逊主界面程序
   `KPPMainAppV2` 不画界面，一直白屏，约 10 分钟后被系统杀掉。前两次都正常；它的"崩溃循环检测"每次都判正常退出，不是这个原因。问题在亚马逊闭源程序里，查不下去。
 - 普通模式不停、不重启界面，触发条件没了。代价：亚马逊界面在后台多占内存和电。
 - 9/29 写的「KOReader（独占）」和今天出白屏的是同一个启动方式（`koreader.sh --kual --framework_stop`），当时只验证过开机进 KOReader、没在一次开机里连着进出三次，
-  不是"以前好、后来坏"。独占下的解法只剩"退出即整机重启"或"解锁后补开主界面"（没把握），用户 2026-10-02 定：**保持普通模式**，不再追独占。
+  不是"以前好、后来坏"。独占下的解法只剩"退出即整机重启"或"解锁后补开主界面"（没把握）。用户先定保持普通模式，查完社区方案（下一条）后改选退出即重启（见上）。
 - 停界面时主界面程序偶尔在关闭途中段错误，系统往 `documents/` 写崩溃诊断包（`Oct_02_10.06.28_2026.txt`、约 3MB 的 `.tgz`、`.sdr`，含设备信息和 Wi-Fi 日志，别外传）。
-  普通模式下应该不再出现；开机自启仍在启动 KOReader 前、退出后各跑一次 `bin/clean-dumps.sh` 清掉（只删名字完全是「月_日_时.分.秒_年」的这几样；用户要的自动清理）。
-- 原来的脚本书「KOReader（独占）」和临时取证脚本 `bin/exit-log.sh` 已从仓库去掉（`deploy.sh --remove` 仍会清它们）。
+  `bin/run.sh` 在启动 KOReader 前、垫片在重启前各跑一次 `bin/clean-dumps.sh` 清掉（只删名字完全是「月_日_时.分.秒_年」的这几样；用户要的自动清理）。
+- 临时取证脚本 `bin/exit-log.sh` 已从仓库去掉（`deploy.sh --remove` 仍会清它）。脚本书「KOReader（独占）」2026-10-02 换成调 `bin/run.sh` 重新加回来。
+- **社区方案调研**（2026-10-02）：没找到能解决这个白屏的现成办法。Kindle Modding 社区（Discord，answeroverflow 存档）有人报「无界面 KOReader 退出后白屏、要强制重启」，附的也是 `KPPMainAppV2` 崩溃日志；zen-os issue #539（Kindle Basic 2024、5.19.6）退出后界面起不来；都没有找到根因。meepcat55/Kindle-KOReader-On-Boot（KUAL 开机自启）明说「不停 Kindle 界面，停了好像会失败」，跟我们的普通模式是同一个做法；MobileRead 上懂行的人反对改 upstart 做独占（KOReader 启动就崩会一直重启）。mireq/KOReader-without-framework-support 只是模拟 KAF 让电源键能用，管不到退出白屏。
 
 **Kindle 开机任务的其他要点**：
 - **KOReader 要在后台跑**（2026-10-02 真机：原来在开机任务里前台跑，独占时退出会死锁白屏）：开机任务是"亚马逊界面已启动"触发的，koreader.sh 退出时要重启界面，
-  界面又要等这个任务结束，互相等。改成 `setsid` 后台跑、任务马上结束。普通模式不重启界面，但仍按后台跑。改了开机任务要在 Kindle 书库里再点一次「装上」才生效。
+  界面又要等这个任务结束，互相等。改成 `setsid` 后台跑、任务马上结束。现在退出改成重启、不再拉回界面，但垫片失效时仍会拉回，所以照旧后台跑。
+  改了开机任务要在 Kindle 书库里再点一次「装上」才生效。
 - **逃生口**：自启的 KOReader 没正常退出就关机（卡死后长按电源键、没电）→ 下次开机跳过自启、停在自带界面，只跳一次。
   要回原生界面又退不出来时，就在 KOReader **运行中**长按电源键重启（先点退出会把标记清掉）。
 
@@ -95,12 +106,21 @@ Kindle 另停 hotkeys（没有实体键，掌阅有翻页键所以留着）。
 程序文件时收到 SIGBUS 崩溃。MTP 服务 `tizen-mtp` 本身独立于亚马逊界面，但锁分区是系统设计，绕不开（除非把 KOReader 整个搬出书库分区，系统分区放不下）。
 所以拷书、跑 `apply.sh` 前仍要先「退出」回到自带界面再插线。
 
-- **真机**（2026-10-02）：Kindle 开机直接进 KOReader、退出回亚马逊界面 ✓（独占模式的第三次退出白屏见上，普通模式待验证）。
+- **真机**（2026-10-02）：普通模式开机直接进 KOReader、退出回亚马逊界面 ✓。独占＋退出即重启：**待验证**（开机进、退出重启停在自带界面、脚本书再进、连着进出三次以上）。
+- 电脑上没有 gvfs-mtp 时：`KO_LOCAL_ROOT=/run/user/1000/mtp/kindle kindle-boot/deploy.sh --write`（jmtpfs 挂好的目录）。
 
-**掌阅不再把 KOReader 设成桌面**（2026-10-02 用户定）：「KOReader 桌面」1.6（`android-home/`：设成默认桌面，开机、退出都回 KOReader；
+**掌阅独占（2026-10-02 晚些时候，用户定）**：开发者模式、USB 调试都打得开，adb shell 是 root；`android-home/exclusive.sh --write`
+设 KOReader 桌面为默认、停用掌阅桌面和阅读器等 13 个系统应用，真机开机直接进 KOReader ✓。常驻的系统升级、音乐停用无效，用户手工 `pm uninstall -k --user 0` 去掉；USB 调试每次开机被关。
+详见 `android-home/README.md`。下面这段是同一天早些时候的情况：
+
+**掌阅不再把 KOReader 设成桌面**（2026-10-02 用户定，后被上面一段取代）：「KOReader 桌面」1.6（`android-home/`：设成默认桌面，开机、退出都回 KOReader；
 「KOReader 独占」图标带到默认桌面设置页；图标「Kr」）真机能用，但掌阅没有 USB 调试、系统应用一个也停不了，"独占"只是换了桌面，
 不省内存也不省电；每次下发配置还得先把桌面改回 iReader 桌面、退出、写完再改回来。撤掉：默认桌面改回「iReader 桌面」、卸载「KOReader 桌面」，
 KOReader 点它自己的图标打开。代码留在 `android-home/` 作参考（`build.sh` 照样能编）。
+
+社区线索（2026-10-02 调研，没在真机上试过）：akhan23wgu/iReader-Zhangyue-USBDebug（Ocean 2）让掌阅桌面崩溃，在弹出的「应用信息」页右上角有个看不见的搜索按钮，搜「关于」→ 连点版本号打开开发者选项 → 开 USB 调试（作者说电脑还是认不出 adb）。Manhhao/Ocean5Pro 在 Ocean 5 Pro 上直接用 adb，还有 `adb shell stop`、往 `/product` 里 `mount --bind`（要 root 权限的 shell），但没写怎么开的调试，可能是海外版固件。能开 adb 的话，`pm disable-user --user 0 <包名>` 一般不用 root 就能停系统应用，那时独占才有意义。
+**摸底工具 `android-settings/`「设置入口」**（2026-10-02，**还没在真机上试**）：直接用 Intent 打开开发者选项、关于本机、设置搜索、掌阅桌面的应用信息页，
+以及设置应用里名字相关的所有页面，看掌阅是只藏了入口还是连页面都删了；设备信息、设置应用全部页面、已装应用写进 report.txt。见 `android-settings/README.md`。
 
 ## 读什么书、放哪
 
