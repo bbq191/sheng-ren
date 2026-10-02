@@ -2,7 +2,7 @@
 # lib.sh —— apply.sh、check.sh 共用（source 进来用，不单独运行）。调用方先设好 KO_HERE（koreader/ 目录）。
 
 # 设备上归我们管的配置文件（相对 KOReader 目录）
-KO_FILES=(settings.reader.lua settings/gestures.lua settings/kosync.lua)
+KO_FILES=(settings.reader.lua settings/gestures.lua settings/kosync.lua defaults.custom.lua)
 
 # ko_layers <设备 id>：按应用顺序输出每一层「目标文件 脚本 补丁 类别」。
 #   类别 personal = 个人设置（卸载时保留），scheme = 文字书方案和设备差异（卸载时撤销）。
@@ -12,6 +12,7 @@ settings.reader.lua merge.lua personal/settings.reader.patch.lua personal
 settings.reader.lua merge.lua schemes/text.settings.patch.lua scheme
 settings.reader.lua merge.lua devices/$1/settings.reader.patch.lua scheme
 settings/gestures.lua merge.lua personal/gestures.patch.lua personal
+defaults.custom.lua merge.lua personal/defaults.custom.patch.lua personal
 settings/kosync.lua merge.lua schemes/kosync.patch.lua scheme
 EOF
 }

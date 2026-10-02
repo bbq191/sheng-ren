@@ -75,6 +75,9 @@ assert(r.tap_top_right_corner.toc and not r.tap_top_right_corner.toggle_bookmark
 assert(r.one_finger_swipe_right_edge_up.increase_frontlight_warmth == 0 and not r.one_finger_swipe_right_edge_up.full_refresh, '右边缘 = 暖光')
 assert(r.short_diagonal_swipe == nil, '删掉的手势不能留下 __DELETE__')
 assert(not dofile('$KO_HERE/luaser.lua').serialize(g):find('__DELETE__'), '结果里不能留 __DELETE__')
+assert(dofile('$w/cur/defaults.custom.lua').DGENERIC_ICON_SIZE == 32, '图标大小没写进 defaults.custom.lua')
+assert(s.cre_font == 'LXGW Neo XiHei Plus' and s.fontmap.cfont == 'LXGWNeoXiHeiPlus.ttf', '字体没换成新晰黑')
+assert(s.plugins_disabled.autodim and s.plugins_disabled.opds and not s.plugins_disabled.kosync and not s.plugins_disabled.statistics, '插件停用表不对')
 local k = dofile('$w/cur/settings/kosync.lua').settings
 assert(k.custom_server == 'https://sync.vksight.com' and k.checksum_method == 1 and k.auto_sync == true and k.sync_forward and k.sync_backward, '进度同步设置不对')
 local t = s.style_tweaks
