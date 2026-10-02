@@ -18,7 +18,7 @@ command -v cargo >/dev/null || { echo "✗ 没有 cargo：命令是用 cargo ins
 # 包名 library、bookconv 很普通，别处可能装着同名的包：只认从本仓库路径装的，按「路径#包名@版本」精确卸载。
 installed=$(cargo install --list)
 removed=0
-for pkg in library bookconv azw3; do
+for pkg in library bookconv azw3 mobidict; do
   line=$(grep -F " ($here/crates/$pkg):" <<<"$installed" | grep "^$pkg v" || true)
   [[ -n $line ]] || continue
   ver=${line#"$pkg v"}

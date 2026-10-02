@@ -2,6 +2,7 @@
 //! 入库只收 EPUB、CBZ，遇到 AZW3 照样拒收。和写出器一样 clean-room：依 MobileRead 的 MOBI 容器文档 + 对 KF8 样本的
 //! 黑盒分析实现，不看 KindleUnpack / Calibre 的代码。
 //! - [`palm`]：PalmDB 容器、PalmDOC 解压、尾随字节、EXTH、INDX（片段/目录索引）；base32、正向变长整数与写出器共用。
+//!   词典转换（`mobidict` crate）也借这里的容器读取和 INDX 解析。
 //! - [`kf8`]：AZW3 → 可读的 EPUB（按目录位置切章，还原 `kindle:embed`/`kindle:pos` 引用），用来核对写出的内容读得回来。
 
 pub mod kf8;

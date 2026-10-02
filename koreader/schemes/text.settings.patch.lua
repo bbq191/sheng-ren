@@ -24,6 +24,11 @@ return {
         ["inpage_footnote_font-size_smaller"] = "__DELETE__",
     },
 
+    -- ── 阅读进度同步（两台读同一份 EPUB；插件设置在 settings/kosync.lua，见 schemes/kosync.patch.lua） ──
+    -- 自动同步要能自己开 Wi-Fi：Kindle 上这项不是 turn_on 时，KOReader 启动时会把自动同步关掉（kosync main.lua）。
+    -- Android（掌阅）不受这项影响。
+    ["wifi_enable_action"] = "turn_on",
+
     -- ── 断行 ──
     ["text_lang_fallback"] = "zh-CN",           -- 书没标语言时按中文断行（缺省 en-US）
 

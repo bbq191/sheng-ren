@@ -67,8 +67,9 @@ height = 1680
 **设备上的 KOReader 残留**（卸 KOReader 之后）：Kindle 的开机任务 `/etc/upstart/koreader-boot.conf` 找不到 KOReader 会直接退出，不影响界面，
 要清掉用书库里的「KOReader开机启动-卸掉」脚本书；掌阅的「KOReader 桌面」找不到 KOReader 时回系统桌面，在 设置 → 默认应用 → 桌面 换回 iReader 桌面后再卸掉它。
 
-**KOReader 又装回来了**（2026-10-02，掌阅、Kindle）：阅读模式不变，书照样按自带阅读器生成；KOReader 只恢复个人配置、几个补丁和 Kindle 上的感光插件，
-用 `koreader/apply.sh` 下发，见 [koreader/README.md](../koreader/README.md)。
+**KOReader 又装回来了**（2026-10-02，掌阅、Kindle）：阅读模式不变，书照样按自带阅读器生成。两台的 KOReader 都读 `ireader/` 的 EPUB
+（KOReader 不认 `.azw3`），放存储根的 `books/`，进度经自建的 sync.vksight.com 同步；词典用自己的 MOBI 转成 StarDict。
+配置用 `koreader/apply.sh` 下发，见 [koreader/README.md](../koreader/README.md)。
 
 ## 为什么要"真实可阅读范围"
 

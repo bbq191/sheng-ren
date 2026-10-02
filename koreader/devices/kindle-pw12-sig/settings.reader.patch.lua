@@ -10,4 +10,6 @@ return {
     -- 色温同步：KOReader 读暖光时取 Kindle 按自己的时间表设的当前值（用户 2026-10-02 在设备上打开）。
     -- 别再开 KOReader 自带的自动色温（autowarmth_activate），两套时间表会来回改暖光（插件 README）。
     ["kindleautobrightness_warmth_enabled"] = true,
+    -- 文件管理器起始目录：存储根下的 books（用户 2026-10-02 定，两台一样；apply.sh 按 device.conf 的 BOOKS_DIR 建好）
+    ["home_dir"] = "/mnt/us/books",
 }

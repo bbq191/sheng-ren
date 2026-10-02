@@ -3,7 +3,8 @@
 #
 # 用法: ./install.sh [--tools]
 #   缺省装：booklib（书库；查看/改写 EPUB 元数据也在里面：booklib meta --edit）
-#   --tools 另装开发和排查问题用的：epub-optimize、epub-to-azw3、readable-probe、readable-measure
+#   --tools 另装开发和排查问题用的：epub-optimize、epub-to-azw3、readable-probe、readable-measure，
+#           以及给 KOReader 转词典的 mobi-dict-to-stardict
 #   以前用 --tools 装过的，不加 --tools 重跑也会一起升级（免得开发工具停在旧版本、和 booklib 的规则对不上）
 # 重复运行 = 用当前代码重新编译安装（升级）。卸载见 ./uninstall.sh。
 set -euo pipefail
@@ -13,7 +14,7 @@ tools=0
 for a in "$@"; do
   case $a in
     --tools) tools=1 ;;
-    -h | --help) sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "不认识的参数 $a（见 --help）" >&2; exit 2 ;;
   esac
 done
@@ -38,6 +39,8 @@ if [[ $tools -eq 1 ]]; then
   cargo_install bookconv --bin epub-optimize --bin readable-probe --bin readable-measure
   echo "编译安装 epub-to-azw3…"
   cargo_install azw3 --bin epub-to-azw3
+  echo "编译安装 mobi-dict-to-stardict…"
+  cargo_install mobidict --bin mobi-dict-to-stardict
 fi
 
 echo "✓ 已装到 ${bindir/#$HOME/\~}/"
