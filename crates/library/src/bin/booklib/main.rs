@@ -101,6 +101,7 @@ fn added_line(a: &Added) -> String {
     match a {
         Added::New(m) => format!("✓ 入库 {}  {}", m.id, m.title),
         Added::Existing(m) => format!("= 已在库里 {}  {}", m.id, m.title),
+        Added::Replaced(m, old) => format!("↻ 原件改过，换成新版本 {}  {} ← {old}（旧版本的条目和产物已删）", m.id, m.title),
     }
 }
 
@@ -412,12 +413,17 @@ fn main() {
                             SyncEvent::Missing(p, t, true) => println!("✗ 原件已删，书库里也删了  {t}  ({})", p.display()),
                             SyncEvent::Missing(p, t, false) => println!("? 原件不在了（--prune 才从书库删）  {t}  ({})", p.display()),
                             SyncEvent::Failed(p, e) => fail_line(&format!("✗ {}: {e}", p.display())),
+                            // 算失败（退出码 2）：这次同步不完整
+                            SyncEvent::Unreadable(p, e) => fail_line(&format!("✗ 目录读不了，里面的书这次没同步（已登记的原样保留，不删）：{}（{e}）", p.display())),
                         });
                         let changed = r.as_ref().map_or(true, |r| r.added + r.updated + r.pruned > 0);
                         match r {
                             // --watch 时没变化就不出声
-                            Ok(r) if watch.is_some() && r.added + r.updated + r.missing + r.failed == 0 => {}
-                            Ok(r) => println!("原件：新增 {}，改过 {}，没变 {}，不在了 {}（从书库删了 {}），出错 {}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed),
+                            Ok(r) if watch.is_some() && r.added + r.updated + r.missing + r.failed + r.unreadable == 0 => {}
+                            Ok(r) => {
+                                let unreadable = if r.unreadable > 0 { format!("，读不了的目录 {}", r.unreadable) } else { String::new() };
+                                println!("原件：新增 {}，改过 {}，没变 {}，不在了 {}（从书库删了 {}），出错 {}{unreadable}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed)
+                            }
                             Err(e) => report(Err(e)),
                         }
                         if !devices.is_empty() {
@@ -470,20 +476,28 @@ fn main() {
                         continue;
                     }
                 }
-                report(lib.fetch_metadata(m, force).map(|(info, cover)| {
-                    let info = match info {
-                        InfoResult::Found(i) => format!("元数据 ← {}", info_summary(&i)),
-                        InfoResult::Existing(i) => format!("元数据 = 已有 ← {}", info_summary(&i)),
-                        InfoResult::NotFound(why) => format!("元数据 ? {why}"),
-                    };
-                    let cover = match cover {
-                        CoverResult::Found(c) => format!("封面 ← {}（{}）", c.work, c.source_url),
-                        CoverResult::Existing(c) => format!("封面 = 已有 ← {}", c.work),
-                        CoverResult::HasCover => "封面 = 书里有".to_string(),
-                        CoverResult::Generated(c, why) => format!("封面 ◇ {why}，{}", c.work),
-                    };
-                    format!("✓ {}\n      {info}\n      {cover}", m.title)
-                }).map_err(|e| format!("✗ {}: {e}", m.title)));
+                match lib.fetch_metadata(m, force) {
+                    Ok((info, cover)) => {
+                        // 一半有结果、一半网络出错没查成：有结果的那半已存下，整本算失败（退出码 2），下次再查没查成的
+                        let partial = matches!(info, InfoResult::Failed(_)) || matches!(cover, CoverResult::Failed(_));
+                        let info = match info {
+                            InfoResult::Found(i) => format!("元数据 ← {}", info_summary(&i)),
+                            InfoResult::Existing(i) => format!("元数据 = 已有 ← {}", info_summary(&i)),
+                            InfoResult::NotFound(why) => format!("元数据 ? {why}"),
+                            InfoResult::Failed(why) => format!("元数据 ✗ {why}"),
+                        };
+                        let cover = match cover {
+                            CoverResult::Found(c) => format!("封面 ← {}（{}）", c.work, c.source_url),
+                            CoverResult::Existing(c) => format!("封面 = 已有 ← {}", c.work),
+                            CoverResult::HasCover => "封面 = 书里有".to_string(),
+                            CoverResult::Generated(c, why) => format!("封面 ◇ {why}，{}", c.work),
+                            CoverResult::Failed(why) => format!("封面 ✗ {why}"),
+                        };
+                        let mark = if partial { "⚠" } else { "✓" };
+                        report(if partial { Err } else { Ok }(format!("{mark} {}\n      {info}\n      {cover}", m.title)));
+                    }
+                    Err(e) => report(Err(format!("✗ {}: {e}", m.title))),
+                }
             }
             if !clear {
                 println!("  简介、标签、封面在生成产物时补进书里（书里已有的不动）：booklib build 会把这些书判为过期并重建");
@@ -494,7 +508,11 @@ fn main() {
                 usage_error("remove 要给 id");
             }
             for id in args.texts() {
+                let tracked = lib.tracked_original(&id);
                 report(lib.remove(&id).map(|title| format!("✓ 删除 {id}  {title}")).map_err(|e| format!("✗ {e}")));
+                if let Some(p) = tracked.filter(|_| !lib.entry_exists(&id)) {
+                    println!("  ⚠ 这本的原件在跟踪的目录里：{}\n    下次 sync 会再入库；要彻底不要，就从书目录里删掉原件", p.display());
+                }
             }
         }
         _ => unreachable!(),
