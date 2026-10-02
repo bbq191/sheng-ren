@@ -258,6 +258,11 @@ pub fn memfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+/// FNV-1a 64 位（稳定的书 ID 用，结果进产物，别改算法）。
+pub fn fnv64(b: &[u8]) -> u64 {
+    b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

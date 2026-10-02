@@ -19,18 +19,24 @@ args=()
 for a in "$@"; do case $a in --device=*) dev=$a ;; *) args+=("$a") ;; esac; done
 books=${REGRESS_BOOKS:-$HOME/Documents/ereader/books}
 mkdir -p "$out"
+# 清掉上次留下的产物：不清的话这次没生成的书会拿旧 NN.epub 去比，悄悄通过
+rm -f -- "$out"/*.epub "$out"/*.log "$out/index.txt" "$out/device.txt"
 : >"$out/index.txt"
 echo "$dev" >"$out/device.txt"
 fail=0
 i=0
 while IFS= read -r -d '' f; do
   i=$((i + 1)); n=$(printf %02d $i)
-  "$bin" "$dev" "${args[@]}" "$f" "$out/$n.epub" >"$out/$n.log" 2>&1 || { echo "✗ $n $f（见 $n.log）"; fail=1; }
+  "$bin" "$dev" "${args[@]}" "$f" "$out/$n.epub" </dev/null >"$out/$n.log" 2>&1 || { echo "✗ $n $f（见 $n.log）"; fail=1; }
   printf '%s\t%s\n' "$n" "$f" >>"$out/index.txt"
 done < <(find "$books" -name '*.epub' -not -path '*漫画*' -print0 | sort -z)
 comic=$(find "$books" -path '*漫画*' -name '*.epub' -print0 | sort -z | { IFS= read -r -d '' f || true; printf '%s' "$f"; })
+if [[ $i -eq 0 && -z $comic ]]; then
+  echo "✗ $books 里一本 EPUB 都没找到" >&2
+  exit 2
+fi
 if [[ -n $comic ]]; then
-  "$bin" "$dev" "${args[@]}" "$comic" "$out/comic.epub" >"$out/comic.log" 2>&1 || { echo "✗ 漫画 $comic"; fail=1; }
+  "$bin" "$dev" "${args[@]}" "$comic" "$out/comic.epub" </dev/null >"$out/comic.log" 2>&1 || { echo "✗ 漫画 $comic"; fail=1; }
   printf 'comic\t%s\n' "$comic" >>"$out/index.txt"
 fi
 echo "$([[ $fail -eq 0 ]] && echo ✓ || echo ✗) $i 本文字书$([[ -n $comic ]] && echo " + 1 卷漫画") → $out"

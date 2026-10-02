@@ -108,7 +108,8 @@ pub fn parse_header(r0: &[u8]) -> Result<Header<'_>, String> {
     Ok(Header { compression, encryption, text_record_count, extra_flags, mobi, mobi_hlen, first_resource })
 }
 
-fn be_u32(b: &[u8], o: usize) -> Option<u32> {
+/// 偏移 `o` 处的大端 u32；越界为 `None`。
+pub fn be_u32(b: &[u8], o: usize) -> Option<u32> {
     b.get(o..o + 4).map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
 }
 
@@ -186,20 +187,13 @@ pub fn decompress_text(records: &[&[u8]], h: &Header) -> Vec<u8> {
     out
 }
 
-/// extra_data_flags：正确位置是「record0 起 +0xF2」== 「MOBI 头起 +0xE2」。标准文档常写 0xF2 是相对
-/// record0；本函数以 MOBI 头为基。先试 0xE2，再退 0xF2，取「合理小值」（仅低几位是标志位）。
+/// extra_data_flags：MOBI 头起 `+0xE2`（== record0 起 `+0xF2`）的 u16。MOBI 头长度（`+4`）不到 0xE4 时
+/// 这个字段不存在，那里已是 EXTH，按 0（没有尾随字节）处理。
 pub fn read_extra_flags(mobi: &[u8]) -> u16 {
-    let at = |o: usize| -> Option<u16> {
-        if mobi.len() >= o + 2 { Some(u16::from_be_bytes([mobi[o], mobi[o + 1]])) } else { None }
-    };
-    for o in [0xE2usize, 0xF2] {
-        if let Some(v) = at(o) {
-            if v <= 0x3F {
-                return v;
-            }
-        }
+    match be_u32(mobi, 4) {
+        Some(hlen) if hlen >= 0xE4 && mobi.len() >= 0xE4 => u16::from_be_bytes([mobi[0xE2], mobi[0xE3]]),
+        _ => 0,
     }
-    0
 }
 
 /// 每条文本记录尾部 trailing bytes 大小（多字节重叠 + TBS 索引项，须剥离再解压）。
@@ -611,29 +605,32 @@ pub fn tag_val(tags: &[(u8, Vec<usize>)], tag: u8, i: usize) -> Option<usize> {
 /// 5 本真机样本（俄/日/中，4–30 条，含层级）验证。解析失败/非预期结构 → 返回空（调用方退化，不崩不回归）。
 pub fn parse_ncx(records: &[&[u8]], h: &Header) -> Vec<NcxEntry> {
     let Some((ncx, ndata, entries)) = indx_read(records, h.mobi, 0xE4) else { return vec![] };
-    // CNCX 紧跟数据块；截断的文件可能没有这条记录。
-    let cncx = match records.get(ncx + 1 + ndata) {
-        Some(r) => *r,
-        None => return vec![],
-    };
+    // CNCX 紧跟数据块，可能有好几条（头 INDX `+0x34` = 条数；写出器每条不超过 0xF000 字节）；
+    // 截断的文件可能一条都没有。
+    let first = ncx + 1 + ndata;
+    let ncncx = records.get(ncx).and_then(|hdr| be_u32(hdr, 0x34)).map_or(1, |n| (n as usize).max(1));
+    let cncx: &[&[u8]] = &records[first.min(records.len())..first.saturating_add(ncncx).min(records.len())];
+    let Some(&cncx0) = cncx.first() else { return vec![] };
     // CNCX 文本校验：首串须 UTF-8 可解，否则判定不是我们要的 NCX（防误读别的索引族）
     {
         let mut p = 0usize;
-        let l = read_varint_fwd(cncx, &mut p);
-        if l == 0 || p + l > cncx.len() || std::str::from_utf8(&cncx[p..p + l]).is_err() {
+        let l = read_varint_fwd(cncx0, &mut p);
+        if l == 0 || p + l > cncx0.len() || std::str::from_utf8(&cncx0[p..p + l]).is_err() {
             return vec![];
         }
     }
+    // 标签偏移 = CNCX 记录序号 << 16 | 记录内偏移
     let label_at = |o: usize| -> String {
-        if o >= cncx.len() {
+        let Some(&rec) = cncx.get(o >> 16) else { return String::new() };
+        let mut p = o & 0xFFFF;
+        if p >= rec.len() {
             return String::new();
         }
-        let mut p = o;
-        let l = read_varint_fwd(cncx, &mut p);
-        if p + l > cncx.len() {
+        let l = read_varint_fwd(rec, &mut p);
+        if p + l > rec.len() {
             return String::new();
         }
-        String::from_utf8_lossy(&cncx[p..p + l]).into_owned()
+        String::from_utf8_lossy(&rec[p..p + l]).into_owned()
     };
     entries
         .iter()
@@ -721,15 +718,51 @@ mod tests {
     }
 
     #[test]
-    fn read_extra_flags_prefers_e2_plausible() {
-        // MOBI 头：前 0xE2 填 0，然后 0xE2 处放 0x0003（合理），0xF2 处放 0xffff（不合理，跳过）。
-        let mut m = vec![0u8; 0xF4];
+    fn read_extra_flags_needs_long_enough_mobi_header() {
+        let mut m = vec![0u8; 0x100];
         m[0..4].copy_from_slice(b"MOBI");
         m[0xE2] = 0x00;
         m[0xE3] = 0x03;
-        m[0xF2] = 0xff;
-        m[0xF3] = 0xff;
+        m[0xF2] = 0x00;
+        m[0xF3] = 0x07;
+        m[4..8].copy_from_slice(&0xE8u32.to_be_bytes());
         assert_eq!(read_extra_flags(&m), 3);
+        // 头只有 0xE0 字节：0xE2 已是 EXTH 的内容，不当标志读，也不去 0xF2 找
+        m[4..8].copy_from_slice(&0xE0u32.to_be_bytes());
+        assert_eq!(read_extra_flags(&m), 0);
+        // 头长度声明够、但切片被截断
+        let mut short = m[..0xE2].to_vec();
+        short[4..8].copy_from_slice(&0xE8u32.to_be_bytes());
+        assert_eq!(read_extra_flags(&short), 0);
+    }
+
+    #[test]
+    fn ncx_labels_span_several_cncx_records() {
+        use crate::indx::{build_with_cncx, Cncx, Entry, TagDef};
+        // 600 条 × 约 150 字节的章名 ≈ 90 KB，超过单条 CNCX 上限 0xF000 → 至少两条 CNCX
+        let labels: Vec<String> = (0..600).map(|i| format!("第{i}章 {}", "长".repeat(45))).collect();
+        let mut cncx = Cncx::default();
+        let entries: Vec<Entry> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| Entry { key: format!("{i:04X}").into_bytes(), tags: vec![(1, vec![i as u32 * 10]), (3, vec![cncx.add(l)]), (4, vec![0])] })
+            .collect();
+        let tagx = [TagDef { tag: 1, values: 1, mask: 1 }, TagDef { tag: 3, values: 1, mask: 2 }, TagDef { tag: 4, values: 1, mask: 4 }];
+        let idx = build_with_cncx(&tagx, &entries, cncx);
+        let ndata = u32::from_be_bytes(idx[0][0x18..0x1C].try_into().unwrap()) as usize;
+        assert!(idx.len() - 1 - ndata >= 2, "测试数据要跨两条以上 CNCX");
+        let mut r0 = vec![0u8; 16 + 0xE8];
+        r0[16..20].copy_from_slice(b"MOBI");
+        r0[20..24].copy_from_slice(&0xE8u32.to_be_bytes());
+        r0[16 + 0xE4..16 + 0xE8].copy_from_slice(&1u32.to_be_bytes());
+        let mut records: Vec<&[u8]> = vec![&r0];
+        records.extend(idx.iter().map(|r| r.as_slice()));
+        let h = parse_header(&r0).unwrap();
+        let ncx = parse_ncx(&records, &h);
+        assert_eq!(ncx.len(), labels.len());
+        for (i, (e, l)) in ncx.iter().zip(&labels).enumerate() {
+            assert_eq!((e.pos, e.label.as_str()), (i * 10, l.as_str()));
+        }
     }
 
     fn mobi_header(first_resource: u32) -> Vec<u8> {

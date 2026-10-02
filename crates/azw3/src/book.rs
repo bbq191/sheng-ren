@@ -3,13 +3,11 @@
 use bookconv::epubzip::{dir_of, percent_decode, posix_norm, read_entries, resolve};
 use bookconv::convert::common::{image_ext_mime, is_webp};
 use bookconv::html;
-use bookconv::util::xml_unescape;
+use bookconv::util::{fnv64, xml_unescape};
 use bookconv::wash::opf::is_local;
 use bookconv::wash::normalize::nav_toc_items;
-use bookconv::wash::{manifest_items, opf_dc, parse_opf, tag_attr};
-use regex::Regex;
+use bookconv::wash::{manifest_items, opf_dc, parse_opf};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 pub struct Doc {
     pub path: String,
@@ -73,9 +71,11 @@ fn fixed_layout_metas(opf: &str) -> Vec<(u32, String)> {
     out
 }
 
-/// FNV-1a 64 位。
-fn fnv64(b: &[u8]) -> u64 {
-    b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
+/// 第一个 `<spine>`（认带前缀的 `<opf:spine>`）的 `page-progression-direction` 是不是 `rtl`。
+fn spine_rtl(opf: &str) -> bool {
+    html::tags(opf)
+        .find(|t| t.is_start() && is_local(t.name, "spine"))
+        .is_some_and(|t| html::attr_value(&opf[t.start..t.end], "page-progression-direction") == Some("rtl"))
 }
 
 /// OPF `<package unique-identifier="X">` 指向的 `<dc:identifier id="X">` 的文本（字符引用已还原、去掉首尾空白）。
@@ -159,10 +159,7 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
     let stable_id = unique_identifier(&opf_text).map_or_else(|| fnv64(&entries[opf.index].data), |id| fnv64(id.as_bytes()));
     let modified = modified_secs(&opf_text);
     let mut meta = Meta { title: dc.title, authors: dc.creators, publisher: dc.publisher, language: dc.language, date: dc.date, description: dc.description, rtl: false, stable_id, modified, fixed_layout: fixed_layout_metas(&opf_text) };
-    static SPINE: OnceLock<Regex> = OnceLock::new();
-    if let Some(m) = SPINE.get_or_init(|| Regex::new(r#"<spine\b[^>]*>"#).unwrap()).find(&opf_text) {
-        meta.rtl = tag_attr(m.as_str(), "page-progression-direction") == Some("rtl");
-    }
+    meta.rtl = spine_rtl(&opf_text);
 
     let mut media: HashMap<String, String> = HashMap::new();
     let mut cover: Option<String> = None;
@@ -261,6 +258,15 @@ mod tests {
         assert_eq!(modified_secs(r#"<meta property="dcterms:modified">2000-01-01T00:00:00Z</meta>"#), Some(946_684_800));
         assert_eq!(modified_secs(r#"<meta property="dcterms:modified">2000-13-01T00:00:00Z</meta>"#), None);
         assert_eq!(unique_identifier(r#"<package><dc:identifier id="bid">x</dc:identifier></package>"#), None);
+    }
+
+    #[test]
+    fn spine_rtl_accepts_prefixed_opf_and_any_quote() {
+        assert!(spine_rtl(r#"<package><spine toc="ncx" page-progression-direction="rtl"></spine></package>"#));
+        assert!(spine_rtl(r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf"><opf:spine page-progression-direction='rtl'><opf:itemref idref="a"/></opf:spine></opf:package>"#));
+        assert!(!spine_rtl(r#"<opf:spine page-progression-direction="ltr"/>"#));
+        assert!(!spine_rtl(r#"<spinex page-progression-direction="rtl"/><spine/>"#));
+        assert!(!spine_rtl(r#"<!-- <spine page-progression-direction="rtl"> --><spine/>"#));
     }
 
     #[test]
