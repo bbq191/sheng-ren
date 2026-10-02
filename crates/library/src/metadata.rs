@@ -51,12 +51,20 @@ pub struct Edition {
 }
 
 impl BookInfo {
-    /// 会写进书里的部分的指纹（变了产物就过期）。没有要写的返回 `None`。
+    /// 可能写进书里的部分（简介、标签）的指纹。没有要写的返回 `None`。
     pub(crate) fn injected_sig(&self) -> Option<String> {
-        if self.description.is_empty() && self.subjects.is_empty() {
+        self.injected_sig_for(false, false)
+    }
+
+    /// 真正会写进书里的部分的指纹（变了产物就过期）：书里已有简介（`has_description`）、标签（`has_subjects`）的，
+    /// 那一项不补（与 [`inject`] 的判定一致），也不进指纹。没有要写的返回 `None`。两项都缺时和 [`BookInfo::injected_sig`] 相同。
+    pub(crate) fn injected_sig_for(&self, has_description: bool, has_subjects: bool) -> Option<String> {
+        let description = if has_description { "" } else { self.description.as_str() };
+        let subjects: &[String] = if has_subjects { &[] } else { &self.subjects };
+        if description.is_empty() && subjects.is_empty() {
             return None;
         }
-        let s = format!("{}\u{0}{}", self.description, self.subjects.join("\u{0}"));
+        let s = format!("{description}\u{0}{}", subjects.join("\u{0}"));
         Some(crate::fsutil::sha256_hex(s.as_bytes())[..12].to_string())
     }
 }
@@ -68,6 +76,8 @@ pub enum InfoResult {
     Existing(BookInfo),
     /// 没找到（原因）。
     NotFound(String),
+    /// 网络出错没查成（原因），什么都没存、下次再查；封面这一步有结果（已存下）时才这样报，不然整本报错。
+    Failed(String),
 }
 
 fn from_douban(hit: &douban::Hit, s: douban::Subject, authors: &[String]) -> BookInfo {
@@ -155,6 +165,8 @@ impl Library {
         }
 
         let from_douban = info.is_some();
+        // 豆瓣的封面已经存下了：后面出错也不整本报错，如实报"封面已存、元数据没查成"
+        let cover_stored = cover.is_some();
 
         // ② Wikidata：原作（元数据没找到、或封面还没有时）
         // Wikidata 出错（有些网络里单独连不上）不能连累豆瓣已经找到的元数据：先存元数据，封面这一步再报错
@@ -174,9 +186,9 @@ impl Library {
                     }
                 }
             }
-            if !from_douban {
-                if let Some(e) = work_err {
-                    return Err(e);
+            if !from_douban && !cover_stored {
+                if let Some(e) = &work_err {
+                    return Err(e.clone());
                 }
             }
             if need_info && info.is_none() {
@@ -195,21 +207,33 @@ impl Library {
             m.info = Some(i.clone());
             self.save_meta(&m)?;
             InfoResult::Found(i)
-        } else if let Some(e) = net.transient_error() {
-            return Err(format!("网络出错，没查完（{e}），下次再试"));
+        } else if let Some(e) = net.transient_error().or_else(|| work_err.clone()) {
+            let e = format!("网络出错，没查完（{e}），下次再试");
+            if !cover_stored {
+                return Err(e);
+            }
+            InfoResult::Failed(e)
         } else {
             InfoResult::NotFound("豆瓣、Wikidata 里都找不到书名、作者对得上的书".into())
         };
         if need_cover && cover.is_none() {
-            if let Some(e) = work_err {
-                return Err(incomplete(&e));
-            }
-            cover = Some(match self.cover_from_work(net, meta, work.as_ref())? {
-                Ok(c) => CoverResult::Found(c),
-                // 没找到是因为网络出错：不生成（生成的会存下来，以后就不找了）
-                Err(_) if net.transient_error().is_some() => return Err(incomplete(&net.transient_error().unwrap_or_default())),
-                // ③ 都没有：生成
-                Err(why) => CoverResult::Generated(self.generate_cover(net, meta)?, why),
+            let found = (|| {
+                if let Some(e) = &work_err {
+                    return Err(incomplete(e));
+                }
+                Ok(match self.cover_from_work(net, meta, work.as_ref())? {
+                    Ok(c) => CoverResult::Found(c),
+                    // 没找到是因为网络出错：不生成（生成的会存下来，以后就不找了）
+                    Err(_) if net.transient_error().is_some() => return Err(incomplete(&net.transient_error().unwrap_or_default())),
+                    // ③ 都没有：生成
+                    Err(why) => CoverResult::Generated(self.generate_cover(net, meta)?, why),
+                })
+            })();
+            cover = Some(match found {
+                Ok(c) => c,
+                // 元数据这次已经存下了：如实报"元数据已存、封面没查成"，不整本报错
+                Err(e) if matches!(info_result, InfoResult::Found(_)) => CoverResult::Failed(e),
+                Err(e) => return Err(e),
             });
         }
         Ok((info_result, cover.unwrap_or_else(existing_cover)))
@@ -238,19 +262,26 @@ pub(crate) struct Additions<'a> {
     pub info: Option<&'a BookInfo>,
 }
 
+/// 书里已有（非空的）简介、标签：(有简介, 有标签)。[`inject`] 和生成指纹共用这一个判定。
+pub(crate) fn own_description_subjects(epub: &Path) -> Result<(bool, bool), String> {
+    use bookconv::opfmeta::{self, DcField};
+    let current = opfmeta::read_epub(epub)?;
+    let has = |f: DcField| current.iter().any(|(x, v)| *x == f && !v.is_empty());
+    Ok((has(DcField::Description), has(DcField::Subject)))
+}
+
 /// 复制 `src` 到 `dst`，补上书里没有的：封面、`dc:description`、`dc:subject`。书里已有的不动。
 /// 改写用 `bookconv::opfmeta`（与 `booklib meta --edit` 同一份实现；不做 EPUB 3 规范整理——优化器的清洗层会做；不改 `dcterms:modified`，产物逐字节可重现）。
 /// 什么都不用补时不写 `dst`，返回 `false`。
 pub(crate) fn inject(src: &Path, dst: &Path, add: &Additions) -> Result<bool, String> {
     use bookconv::opfmeta::{self, DcField, Edits};
-    let current = opfmeta::read_epub(src)?;
-    let has = |f: DcField| current.iter().any(|(x, v)| *x == f && !v.is_empty());
+    let (has_description, has_subjects) = own_description_subjects(src)?;
     let mut edits = Edits { cover: add.cover.as_ref().map(|(b, _)| bookconv::opfmeta::CoverEdit::Set(b.clone())), ..Default::default() };
     if let Some(info) = add.info {
-        if !has(DcField::Description) && !info.description.is_empty() {
+        if !has_description && !info.description.is_empty() {
             edits.set.push((DcField::Description, vec![info.description.clone()]));
         }
-        if !has(DcField::Subject) && !info.subjects.is_empty() {
+        if !has_subjects && !info.subjects.is_empty() {
             edits.set.push((DcField::Subject, info.subjects.clone()));
         }
     }
