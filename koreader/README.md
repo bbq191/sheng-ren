@@ -82,12 +82,12 @@ Kindle 另停 hotkeys（没有实体键，掌阅有翻页键所以留着）。
 | 装 | `kindle-boot/deploy.sh --write` 拷文件，再在 Kindle 书库里点「KOReader 开机启动：装上」（开机任务要写进根分区，只能在 Kindle 上以 root 跑） |
 | 关掉 | 书库里点「KOReader 开机启动：卸掉」 |
 
-**Kindle 独占：退出即重启**（2026-10-02 用户定，**还没上真机**）：`koreader.sh --kual --framework_stop` 照旧停界面，`bin/run.sh` 在它的 PATH
+**Kindle 独占：退出即重启**（2026-10-02 用户定，真机 ✓）：`koreader.sh --kual --framework_stop` 照旧停界面，`bin/run.sh` 在它的 PATH
 最前面垫一个 `start`（`bin/start-shim.sh`，拷到 `/var/tmp/koreader-boot-shim/start`）。KOReader 退出（或崩溃）后 koreader.sh 执行 `start lab126_gui`
 拉回界面时，垫片改成：留记号 `koreader-boot.native`、清诊断包、`sync`、`reboot`。开机任务看到记号就这次不自启（只一次）。界面一次也不重启，下面的白屏条件就没了。
 别的 `start` 原样转给系统的。垫片没接管时（PATH 被改掉之类）koreader.sh 照原样拉回界面，`run.sh` 收尾，最坏就是旧的独占行为。
 - 代价：每次回原生都要等整机重启；KOReader 运行时本来就不能用 USB（见下），所以拷书、跑 `apply.sh` 也要先退出（重启）。
-- KOReader 菜单里的重启、关机不经过垫片，留着"运行中"标记，下次开机按逃生口停在自带界面。
+- 两台的 KOReader 菜单里都没有「重启设备」「关机」（2026-10-02 用户确认），所以"运行中"标记只在卡死后长按电源键、没电时留下（逃生口）。
 - koreader.sh 里的停启框架逻辑是照上游 master 读的（`start lab126_gui` 是按 PATH 找的、PATH 不重设）；设备上的版本（v2026.07.2 nightly）上真机时核对。
 
 **Kindle 为什么不用原来的独占**（2026-10-02 真机，看 Kindle 自动生成的诊断包里的系统日志）：
@@ -113,7 +113,7 @@ Kindle 另停 hotkeys（没有实体键，掌阅有翻页键所以留着）。
 程序文件时收到 SIGBUS 崩溃。MTP 服务 `tizen-mtp` 本身独立于亚马逊界面，但锁分区是系统设计，绕不开（除非把 KOReader 整个搬出书库分区，系统分区放不下）。
 所以拷书、跑 `apply.sh` 前仍要先「退出」回到自带界面再插线。
 
-- **真机**（2026-10-02）：普通模式开机直接进 KOReader、退出回亚马逊界面 ✓。独占＋退出即重启：**待验证**（开机进、退出重启停在自带界面、脚本书再进、连着进出三次以上）。
+- **真机**（2026-10-02）：普通模式开机直接进 KOReader、退出回亚马逊界面 ✓。独占＋退出即重启 ✓：自带界面「设置 → 重启」后开机直接进 KOReader；KOReader 里退出 → 整机重启、停在自带界面；脚本书「KOReader（独占）」再进。每次退出都重启，一次开机里最多进出一次，碰不到第三次退出的白屏。
 - 电脑上没有 gvfs-mtp 时：`KO_LOCAL_ROOT=/run/user/1000/mtp/kindle kindle-boot/deploy.sh --write`（jmtpfs 挂好的目录）。
 
 **掌阅独占（2026-10-02 晚些时候，用户定）**：开发者模式、USB 调试都打得开，adb shell 是 root；`android-home/exclusive.sh --write`
