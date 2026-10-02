@@ -54,7 +54,7 @@ pub use self::css::{filter_css, wash_html};
 pub use self::drm::{encrypted_targets, real_drm_items, PSEUDO_DRM_SAFE_EXTS};
 pub use self::opf::{manifest_items, opf_dc, parse_opf, tag_attr, ManifestItem, Opf, OpfDc};
 pub use self::toc::{is_toc_file, toc_entry_count, TocItem};
-pub use self::typeset::{count_dup_id_tags, wash_css};
+pub use self::typeset::{count_dup_id_tags, wash_css, NOTEICON_RULE};
 pub use crate::html::plain_text;
 
 use self::css::*;
@@ -332,14 +332,6 @@ pub(super) fn squash_ws(t: &str) -> String {
     t.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-/// 链接值原文（属性原文）→ (目标文件的 zip 路径, 锚点原文)。路径部分先还原字符引用再百分号解码（`a&amp;b.xhtml` 是文件
-/// `a&b.xhtml`）；锚点原样给出，拿去对 id 原文时再 `html::frag_id`。空路径（`#x`）指 `file` 自己。
-pub(super) fn link_target<'v>(file: &str, value: &'v str) -> (String, Option<&'v str>) {
-    let (p, frag) = html::split_href(value);
-    let path = if p.is_empty() { file.to_string() } else { resolve(dir_of(file), &percent_decode(&crate::util::xml_unescape(p))) };
-    (path, frag)
-}
-
 /// 全书链接改写的一处链接：所在文件、链接值原文、解析出的目标文件与锚点（锚点原文，未解码）。
 pub(super) struct Link<'a> {
     pub file: &'a str,
@@ -370,8 +362,9 @@ pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> b
             if html::is_external(p) {
                 return Edit::Keep;
             }
-            let (target, frag) = link_target(name, a.value);
-            match f(&Link { file: name, value: a.value, target, frag }) {
+            // 目标文件按 `epubzip::resolve_link` 解析；锚点给原文（改链时原样写回，对 id 时再 `html::frag_id`）
+            let target = crate::epubzip::resolve_link(name, a.value).0;
+            match f(&Link { file: name, value: a.value, target, frag: html::split_href(a.value).1 }) {
                 Some(v) if v != a.value => Edit::Set(v),
                 _ => Edit::Keep,
             }

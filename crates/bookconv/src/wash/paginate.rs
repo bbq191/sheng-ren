@@ -129,9 +129,8 @@ fn retarget_ncx_to_ids(entries: &mut [Entry], opf: &Opf, targets: &[(String, Str
     let Some(e) = entries.iter_mut().find(|e| e.name == ncx) else { return };
     let text = String::from_utf8_lossy(&e.data).into_owned();
     let new = crate::ncx::rewrite_content_srcs(&text, |label, src| {
-        // src 是属性原文：解析路径前还原字符引用；拼新值时原文照用。
-        let src_text = crate::util::xml_unescape(src);
-        let (path, frag) = crate::epubzip::resolve_href(&ncx, &src_text);
+        // src 是属性原文（`resolve_link` 解析时还原字符引用）；拼新值时原文照用。
+        let (path, frag) = crate::epubzip::resolve_link(&ncx, src);
         if frag.is_some() {
             return None;
         }
@@ -807,7 +806,7 @@ fn rewrite_links(text: &str, cur: &str, origin: &str, splits: &HashMap<String, S
         if html::is_external(p) {
             return None;
         }
-        let target = if p.is_empty() { origin.to_string() } else { link_target(cur, v).0 };
+        let target = if p.is_empty() { origin.to_string() } else { crate::epubzip::resolve_link(cur, v).0 };
         retarget_split(&target, frag, cur, splits)
     })
     .into_owned()

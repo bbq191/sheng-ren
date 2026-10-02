@@ -75,9 +75,6 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   （以前三个模式都去掉，Kindle 上点注释跳不回正文，真机）。
 pub const OPTIMIZE_VERSION: &str = "35";
 
-/// 清洗层样式表里限图标注释号高度的那条规则（`wash::typeset`），图标都换成数字时删掉。
-const NOTEICON_RULE: &str = ".eink-noteicon{height:1em;width:auto;}\n";
-
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
 /// EPUB 流式重排做不到（"页"是阅读器翻页时才算出来的），"跟着段落走"的近似不符合预期。
@@ -184,7 +181,7 @@ struct Prepared {
     /// (条目名, 字节, 是否 html)，已过封面声明/清洗/第一遍 html 处理/注释块搬出；首个条目是重写过的 `mimetype`。
     entries: Vec<(String, Vec<u8>, bool)>,
     /// 全书"被引用的注释块"索引（(所在文件, id) → 块 html），第二遍 `preserve_relink_footnotes` 搬进引用它的那一章。
-    aside_index: HashMap<crate::htmlproc::NoteKey, String>,
+    aside_index: HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note>,
     /// 不做注释搬移的页：导航文档、目录文件、目录样的页（它们的链接不算注释引用，也不往它们里面搬注释）。
     skip_notes: HashSet<String>,
     /// 已经拆过互指环、换过 duokan 标记的章节（`collect_notes` 核对注释时算好写回的），第二遍跳过这两步。
@@ -277,8 +274,8 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
 /// 一样点不了），还得等第一章的 id 去重做完才知道链接该写成什么；留在原处则链接和原书一模一样，认跨文件链接的阅读器照常能跳。
 ///
 /// 返回 (注释索引, 已经拆过互指环、换过 duokan 标记的章节名)：核对时算出来的这两步结果直接写回 `entries`，第二遍对这些章节不再算一遍。
-fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashMap<String, HashSet<String>>, skip: &HashSet<String>, drop_backlinks: bool) -> (HashMap<crate::htmlproc::NoteKey, String>, HashSet<String>) {
-    let mut index: HashMap<crate::htmlproc::NoteKey, String> = HashMap::new();
+fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashMap<String, HashSet<String>>, skip: &HashSet<String>, drop_backlinks: bool) -> (HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note>, HashSet<String>) {
+    let mut index: HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note> = HashMap::new();
     let mut originals: HashMap<usize, Vec<u8>> = HashMap::new();
     let collect_one = |text: &str, name: &str, referenced: &HashMap<String, HashSet<String>>| referenced.get(name).map(|ids| crate::htmlproc::collect_footnote_notes(text, ids, true));
     for (i, (name, data, ish)) in entries.iter_mut().enumerate() {
@@ -348,7 +345,7 @@ fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashM
 /// 第二遍的"文本类条目"变换器：html 章节 / 独立 css / （改翻页方向时）OPF。跨条目状态（远程图计数、全书 id 去重表、
 /// 抓到的远程图）都在这里。图片条目不归它管（走 `imgpool` 并行）。
 struct EntryXform<'a> {
-    aside_index: &'a HashMap<crate::htmlproc::NoteKey, String>,
+    aside_index: &'a HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note>,
     skip_notes: &'a HashSet<String>,
     pre_done: &'a HashSet<String>,
     footnote: FootnoteMode,
@@ -404,7 +401,8 @@ impl<'a> EntryXform<'a> {
 
     /// 章节 html 最终变换链：解双向脚注互指环 → duokan 图片脚注标记换上标 → 封面拉伸/SVG 修复 → 脚注就地关联重排 →
     /// 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
-    fn transform_html_chapter(&mut self, text: &str, name: &str) -> Vec<u8> {
+    /// 远程图抓不到时返回错误（见 [`inline_remote_images`]）。
+    fn transform_html_chapter(&mut self, text: &str, name: &str) -> Result<Vec<u8>, String> {
         // 前两步 `collect_notes` 可能已经做过（`pre_done`）
         let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };
         let t = fix_cover_aspect(&t);
@@ -417,32 +415,35 @@ impl<'a> EntryXform<'a> {
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
         let t = if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
-        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
+        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen)).map_err(|e| format!("{name}：{e}"))?;
         self.fetched_imgs.extend(imgs);
-        crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes()
+        Ok(crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes())
     }
 
     /// 文本类条目 → `Some(最终字节)`（无法按 UTF-8 解读的原样借回）；不是文本类（图片/其它）→ `None`，调用方自己处理。
-    fn transform_text<'d>(&mut self, name: &str, data: &'d [u8], is_html: bool) -> Option<std::borrow::Cow<'d, [u8]>> {
+    /// 章节里的远程图抓不到 → `Err`（整本这次不生成）。
+    fn transform_text<'d>(&mut self, name: &str, data: &'d [u8], is_html: bool) -> Result<Option<std::borrow::Cow<'d, [u8]>>, String> {
         use std::borrow::Cow;
         if is_html {
-            return Some(match std::str::from_utf8(data) {
+            return Ok(Some(match std::str::from_utf8(data) {
                 Ok(text) => {
-                    let out = self.transform_html_chapter(text, name);
+                    let out = self.transform_html_chapter(text, name)?;
                     if let (Some(props), Ok(t)) = (self.content_props.as_mut(), std::str::from_utf8(&out)) {
                         props.insert(name.to_string(), crate::wash::normalize::content_properties(t));
                     }
                     Cow::Owned(out)
                 }
                 Err(_) => Cow::Borrowed(data),
-            });
+            }));
         }
         if (self.reader_margins || self.number_note_icons || self.fixed_layout.is_some()) && crate::wash::is_wash_css_name(name) {
             let mut out = data.to_vec();
             // 图标注释号都换成数字的模式里，限图标高度的 `.eink-noteicon` 用不上了（2026-09-30 用户：失效样式删掉）
             if self.number_note_icons {
-                if let Some(i) = out.windows(NOTEICON_RULE.len()).position(|w| w == NOTEICON_RULE.as_bytes()) {
-                    out.drain(i..i + NOTEICON_RULE.len());
+                // 规则文本取清洗层生成样式表时用的同一个常量（`wash::NOTEICON_RULE`），不在这里另写一份
+                let rule = crate::wash::NOTEICON_RULE.as_bytes();
+                if let Some(i) = out.windows(rule.len()).position(|w| w == rule) {
+                    out.drain(i..i + rule.len());
                 }
             }
             if self.reader_margins && !out.windows(crate::comicpad::CSS_RULES.len()).any(|w| w == crate::comicpad::CSS_RULES.as_bytes()) {
@@ -451,10 +452,10 @@ impl<'a> EntryXform<'a> {
             if self.fixed_layout.is_some() && !out.windows(crate::comicfxl::CSS_RULES.len()).any(|w| w == crate::comicfxl::CSS_RULES.as_bytes()) {
                 out.extend_from_slice(crate::comicfxl::CSS_RULES.as_bytes());
             }
-            return Some(Cow::Owned(out));
+            return Ok(Some(Cow::Owned(out)));
         }
         if self.opf_name == Some(name) && (self.page_direction.is_some() || self.comic) {
-            let Ok(text) = std::str::from_utf8(data) else { return Some(Cow::Borrowed(data)) };
+            let Ok(text) = std::str::from_utf8(data) else { return Ok(Some(Cow::Borrowed(data))) };
             let mut text = Cow::Borrowed(text);
             if let Some(dir) = self.page_direction {
                 text = Cow::Owned(crate::direction::set_spine_direction(&text, dir));
@@ -467,11 +468,11 @@ impl<'a> EntryXform<'a> {
             if let Some((w, h)) = self.fixed_layout {
                 text = Cow::Owned(crate::comicfxl::opf(&text, w, h));
             }
-            return Some(match text {
+            return Ok(Some(match text {
                 Cow::Borrowed(_) => Cow::Borrowed(data),
                 Cow::Owned(t) => Cow::Owned(t.into_bytes()),
-            });
+            }));
         }
-        None
+        Ok(None)
     }
 }
