@@ -6,6 +6,8 @@ return {
     -- 只能写这里；路径要写设备上的绝对路径，所以放在设备层。不想要：删掉这一行再 apply（或 --uninstall 撤方案）。
     ["cre_background_image"] = "/mnt/us/koreader/backgrounds/recycled-medium.png", -- 中档（用户 2026-09-29：浅的太淡）
     -- 感光插件（plugins/kindleautobrightness.koplugin）缺省关着，这里打开。要先在 Kindle 下拉菜单里开「自动亮度」再进 KOReader。
-    -- 色温同步（kindleautobrightness_warmth_enabled）不开：和 KOReader 自己的自动色温插件同时开，两套日程各管各的（插件 README）。
     ["kindleautobrightness_enabled"] = true,
+    -- 色温同步：KOReader 读暖光时取 Kindle 按自己的时间表设的当前值（用户 2026-10-02 在设备上打开）。
+    -- 别再开 KOReader 自带的自动色温（autowarmth_activate），两套时间表会来回改暖光（插件 README）。
+    ["kindleautobrightness_warmth_enabled"] = true,
 }
