@@ -294,6 +294,7 @@ booklib 只负责生成，**拷到设备上由你自己来**：把阅读模式�
 
 | 设备 | 拷哪个文件夹 | 怎么拷 |
 |---|---|---|
+| Kindle、掌阅上的 KOReader（2026-10-02 起日常用） | `~/Documents/ereader/ireader/` | 拷到存储根的 `books/`（KOReader 起始目录）。Kindle 上 KOReader 开着不能直接插线，见 koreader-setup 仓库的「USB 传书」 |
 | Kindle PW12（自带阅读器） | `~/Documents/ereader/kindle/` 里的 `.azw3` | USB 连电脑，拷进 Kindle 的 `documents/` 文件夹。USB 传书只认 AZW3，不认 EPUB（2026-09-27 真机实测） |
 | 掌阅 Ocean 5 Pro（自带阅读器） | `~/Documents/ereader/ireader/` | USB 连电脑，用掌阅自己的导入方式。Linux 上掌阅是 MTP 挂载（gvfs）：普通的写文件、改名都不行，只能 `gio copy` 或文件管理器拷 |
 | reMarkable Move（自带阅读器） | `~/Documents/ereader/xochitl/` | 用 reMarkable 自带的传书方式。USB 网页上传（`http://10.11.99.1`）有体积上限，约 88MB 以上的书会被拒（大漫画、《金庸全集》这类），要换别的办法传 |
@@ -334,7 +335,7 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 ```sh
 epub-optimize --device=ireader 输入.epub 输出.epub
 epub-to-azw3 [--ebok] 优化后.epub 输出.azw3       # 见"AZW3 写出器"；输入应是 --device=kindle 优化过的
-mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict，给 KOReader 查词，见 koreader/README.md
+mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict，给 KOReader 查词，词典放哪见 koreader-setup 仓库
 readable-probe 测量书.epub                   # 见"设备与可阅读范围"
 readable-measure [--device=kindle] 竖长.png 横宽.png   # 给了 --device 按它的产物格式写段名（kindle 是 [readable.azw3]）
 ```

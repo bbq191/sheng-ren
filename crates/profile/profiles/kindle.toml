@@ -1,5 +1,5 @@
 # Kindle Paperwhite 12 代签名版（2024）上的自带阅读器。7" Carta 1300，2026-09-27 核实。
-# USB 传书只认 AZW3，不认 EPUB（用户 2026-09-27 真机实测）：先按和别的模式同一套规则优化出 EPUB，再转成 AZW3（2026-09-30 用户撤了 KOReader、恢复这条线）。
+# USB 传书只认 AZW3，不认 EPUB（用户 2026-09-27 真机实测）：先按和别的模式同一套规则优化出 EPUB，再转成 AZW3（2026-09-30 恢复这条线；2026-10-02 起 Kindle 日常独占跑 KOReader、读 `ireader` 的 EPUB，这份只在回自带阅读器时用）。
 name = "Kindle 自带阅读器（Paperwhite 12 代签名版）"
 ppi = 300
 color = false
