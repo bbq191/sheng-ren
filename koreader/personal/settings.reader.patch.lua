@@ -190,6 +190,9 @@ return {
     },
     ["reader_footer_mode"] = 1,
     ["show_hidden"] = true,
+    -- 休眠屏幕显示「书籍状态」：当前书的封面缩略图、书名作者、读到百分之多少、剩余页数和预计时间（用户 2026-10-02；KOReader 缺省是 disable 保持原样）。
+    -- Kindle 普通模式下亚马逊自己的屏保/锁屏可能盖在上面，以真机为准。
+    ["screensaver_type"] = "bookstatus",
     -- 界面语言简体中文：Kindle 上 KOReader 缺省跟系统（英文）（用户 2026-09-29）
     ["language"] = "zh_CN",
     ["style_tweaks"] = {

@@ -61,6 +61,7 @@ ko_unmerge_all() {
 #   dev_rm <路径>         删除（不存在也算成功）
 #   dev_mkdir <路径>      建目录（已存在也算成功）
 #   dev_size <路径>       输出字节数
+#   mnt_has / mnt_mkdir <路径>  同上，但相对设备存储的挂载点（放书的目录 BOOKS_DIR 用）
 # MTP：一律经 gio 读写。gvfs 的 FUSE 路径（/run/user/…/gvfs/…）对读过的文件有缓存，gio 换掉文件后 FUSE 还会返回旧内容
 # （2026-09-28 Kindle 实测：写入 19524 字节，经 FUSE 读回的是旧的 11487 字节），所以内容一律不经 FUSE 读。
 # MTP 不支持覆盖写和改名：替换已有文件时先拷一份 .tmp，再删旧的、拷正式名——中途失败时设备上至少留着 .tmp 或旧文件。
@@ -73,6 +74,27 @@ ko_connect() {
   RUNNING_CHECK=ask
   # shellcheck source=/dev/null
   source "$KO_HERE/devices/$dev/device.conf"
+  # 备用：KO_LOCAL_ROOT 指向已经挂好的设备存储（如 jmtpfs 挂载点，下面有「Internal Storage」之类的目录），按普通文件读写。
+  # 电脑上没有 gvfs-mtp 时用（2026-10-02 起）：jmtpfs <挂载点> && KO_LOCAL_ROOT=<挂载点> koreader/apply.sh …
+  if [[ -n ${KO_LOCAL_ROOT:-} ]]; then
+    [[ -d $KO_LOCAL_ROOT/$KOREADER_DIR ]] || { echo "✗ $KO_LOCAL_ROOT/$KOREADER_DIR 不存在（挂载点不对，或不是 $dev）" >&2; return 1; }
+    KO_MOUNT=$KO_LOCAL_ROOT
+    KO_BASE="$KO_LOCAL_ROOT/$KOREADER_DIR"
+    dev_has() { [[ -e $KO_BASE/$1 ]]; }
+    dev_get() { rm -f "$2"; cp "$KO_BASE/$1" "$2" 2>/dev/null || { rm -f "$2"; return 1; }; }
+    dev_rm() { rm -f "$KO_BASE/$1" 2>/dev/null; ! [[ -e $KO_BASE/$1 ]]; }
+    # MTP 挂载上改名不可靠：和 gio 那套一样先拷 .tmp、再删旧的、拷正式名
+    dev_put() {
+      if ! dev_has "$2"; then cp "$1" "$KO_BASE/$2"; return; fi
+      dev_rm "$2.tmp" && cp "$1" "$KO_BASE/$2.tmp" || return 1
+      dev_rm "$2" && cp "$1" "$KO_BASE/$2" && dev_rm "$2.tmp"
+    }
+    dev_mkdir() { dev_has "$1" || mkdir "$KO_BASE/$1"; }
+    dev_size() { stat -c %s "$KO_BASE/$1" 2>/dev/null; }
+    mnt_has() { [[ -e $KO_MOUNT/$1 ]]; }
+    mnt_mkdir() { mkdir -p "$KO_MOUNT/$1"; }
+    return 0
+  fi
   case $TRANSPORT in
     mtp)
       command -v gio >/dev/null || { echo "✗ 缺 gio（gvfs）" >&2; return 1; }
@@ -92,6 +114,8 @@ ko_connect() {
       }
       dev_mkdir() { dev_has "$1" || gio mkdir "$KO_BASE/$1"; }
       dev_size() { gio info -a standard::size "$KO_BASE/$1" 2>/dev/null | awk '/standard::size:/ {print $2}'; }
+      mnt_has() { gio info "$KO_MOUNT/$1" >/dev/null 2>&1; }
+      mnt_mkdir() { gio mkdir -p "$KO_MOUNT/$1"; }
       ;;
     *) echo "✗ device.conf 的 TRANSPORT 只能是 mtp" >&2; return 2 ;;
   esac
