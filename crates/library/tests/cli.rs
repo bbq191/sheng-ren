@@ -170,3 +170,21 @@ fn meta_edit_errors_leave_the_file_untouched() {
     assert_eq!(code(&o), Some(0));
     assert!(stdout(&o).contains("booklib meta --edit 书.epub"), "{}", stdout(&o));
 }
+
+#[test]
+fn meta_edit_keeps_symlinks_and_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("真.epub");
+    std::fs::write(&real, sample_epub("风起")).unwrap();
+    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let link = dir.path().join("链接.epub");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let o = booklib(None, &["meta", "--edit", link.to_str().unwrap(), "--title", "新书名"]);
+    assert_eq!(code(&o), Some(0), "{}", stderr(&o));
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "链接还是链接");
+    assert_eq!(std::fs::read_link(&link).unwrap(), real);
+    assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640, "权限不变");
+    assert!(stdout(&booklib(None, &["meta", "--edit", real.to_str().unwrap()])).contains("标题: 新书名"), "改的是链接指向的文件");
+    only(dir.path(), &["真.epub", "链接.epub"]);
+}

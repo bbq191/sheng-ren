@@ -127,7 +127,14 @@ pub fn run(args: Vec<OsString>) {
     edits.normalize = true;
 
     // 先写临时文件再改名（不备份：2026-10-01 用户定），中途失败原文件不动。
-    let edited = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(&file, "meta-edit"), &file, |tmp| opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}")));
+    // 符号链接改它指向的文件（不把链接换成普通文件）；写回的文件保留原来的权限（临时文件新建出来是缺省权限）
+    let file = std::fs::canonicalize(&file).unwrap_or_else(|e| fail(&format!("{}: {e}", file.display())));
+    let perms = std::fs::metadata(&file).map(|m| m.permissions()).unwrap_or_else(|e| fail(&format!("{}: {e}", file.display())));
+    let edited = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(&file, "meta-edit"), &file, |tmp| {
+        let report = opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}"))?;
+        std::fs::set_permissions(tmp, perms).map_err(|e| format!("没改：设权限 {}: {e}", tmp.display()))?;
+        Ok(report)
+    });
     let report = edited.unwrap_or_else(|e| fail(&e));
     let removed = report.cover_removed.as_ref().map(|gone| if gone.is_empty() { "封面（书里本来就没有）".to_string() } else { format!("封面（去掉 {}）", gone.join("、")) });
     let what: Vec<String> = report
