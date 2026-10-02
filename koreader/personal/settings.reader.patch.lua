@@ -1,31 +1,31 @@
 -- 个人设置（settings.reader.lua 补丁）：以掌阅上的设置为准，所有设备共用（用户 2026-09-28 定）。
--- 来源：2026-09-28 掌阅 settings.reader.lua 里、跟 KOReader 缺省不同的全部个人项——排版（copt_*、正文字体霞鹜文楷）、
+-- 来源：2026-09-28 掌阅 settings.reader.lua 里、跟 KOReader 缺省不同的全部个人项——排版（copt_*、正文字体，10-02 换成霞鹜新晰黑＋）、
 -- 页眉（cre_header_*）、状态栏（footer）、中文排版微调（style_tweaks）、停用的插件、返回键行为、启动进文件管理器等。
 -- 不在这里的：随设备的路径和标识（devices/<id>/）、状态栏字体的文件路径（devices/<id>/）、文字书方案（schemes/）。
 -- 在设备上改了个人设置、想让另一台也跟上：改这里再对两台各跑一次 apply.sh。
 -- 语义见 merge.lua：标量覆盖、表递归、"__DELETE__" 删键。正文字体要设备上装了才生效（见 docs/koreader.md「字体」）。
 return {
-    -- 界面字体（菜单、按键、标题、提示、状态栏里的文字）：霞鹜文楷 Medium（用户 2026-09-28：三台统一）。
+    -- 界面字体（菜单、按键、标题、提示、状态栏里的文字）：霞鹜新晰黑＋（用户 2026-10-02 从文楷 Medium 换过来；状态栏的京華老宋体不变）。
     -- KOReader 菜单里没有这个设置，但启动时会读 settings.reader.lua 的 fontmap 覆盖 frontend/ui/font.lua 里写死的
     -- Font.fontmap（reader.lua「User fonts override」，在界面管理器加载之前）。只写文件名，Font:getFace 先找 KOReader 的
     -- fonts/，找不到再搜所有字体目录。等宽的几项（scfont 快捷键、hpkfont 按键帮助、infont 输入框、smallinfont 代码）不换：
-    -- 文楷不是等宽，换了对不齐。字体文件不在时 KOReader 会退回缺省字体。
+    -- 新晰黑不是等宽，换了对不齐。字体文件不在时 KOReader 会退回缺省字体。
     ["fontmap"] = {
-        ["cfont"] = "LXGWWenKai-Medium.ttf",
-        ["tfont"] = "LXGWWenKai-Medium.ttf",
-        ["smalltfont"] = "LXGWWenKai-Medium.ttf",
-        ["x_smalltfont"] = "LXGWWenKai-Medium.ttf",
-        ["ffont"] = "LXGWWenKai-Medium.ttf",
-        ["smallffont"] = "LXGWWenKai-Medium.ttf",
-        ["largeffont"] = "LXGWWenKai-Medium.ttf",
-        ["rifont"] = "LXGWWenKai-Medium.ttf",
-        ["pgfont"] = "LXGWWenKai-Medium.ttf",
-        ["hfont"] = "LXGWWenKai-Medium.ttf",
-        ["infofont"] = "LXGWWenKai-Medium.ttf",
-        ["smallinfofont"] = "LXGWWenKai-Medium.ttf",
-        ["smallinfofontbold"] = "LXGWWenKai-Medium.ttf",
-        ["x_smallinfofont"] = "LXGWWenKai-Medium.ttf",
-        ["xx_smallinfofont"] = "LXGWWenKai-Medium.ttf",
+        ["cfont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["tfont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["smalltfont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["x_smalltfont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["ffont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["smallffont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["largeffont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["rifont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["pgfont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["hfont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["infofont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["smallinfofont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["smallinfofontbold"] = "LXGWNeoXiHeiPlus.ttf",
+        ["x_smallinfofont"] = "LXGWNeoXiHeiPlus.ttf",
+        ["xx_smallinfofont"] = "LXGWNeoXiHeiPlus.ttf",
     },
     ["autowarmth_fl_off_during_day"] = true,
     ["back_in_filemanager"] = "default",
@@ -62,7 +62,7 @@ return {
         [1] = 95,
         [2] = 75,
     },
-    ["cre_font"] = "LXGW WenKai",
+    ["cre_font"] = "LXGW Neo XiHei Plus", -- 正文字体：霞鹜新晰黑＋（用户 2026-10-02 从文楷换过来；名字是字体文件里的字体族名）
     ["cre_header_battery_percent"] = 1,
     ["cre_header_chapter_marks"] = 0,
     ["cre_header_page_count"] = 0,
@@ -155,15 +155,35 @@ return {
     ["lock_rotation"] = true,
     ["low_pan_rate"] = true,
     ["night_mode"] = false,
+    -- 停用的插件（用户 2026-10-02：关掉用不到的，菜单清爽、启动少加载）。留着的：autosuspend（闲置自动休眠）、autowarmth（按时间调暖光）、
+    -- coverbrowser（封面浏览，2-browser-folder-cover 补丁靠它）、gestures、kosync（进度同步）、statistics（状态栏的剩余时间靠它）、
+    -- vocabbuilder（查过的词做成生词本）；hotkeys 只在 Kindle 上停（掌阅有翻页键，见 devices/）。
     ["plugins_disabled"] = {
-        ["archiveviewer"] = true,
+        ["archiveviewer"] = true,      -- 浏览 zip
+        ["autodim"] = true,            -- 闲置时调暗前光：和自动前光打架
+        ["autostandby"] = true,        -- Kobo 的待机
         ["autoturn"] = true,
+        ["batterystat"] = true,
+        ["bookshortcuts"] = true,
         ["calibre"] = true,
+        ["cloudstorage"] = true,
+        ["coverimage"] = true,
+        ["docsettingtweak"] = true,
         ["exporter"] = true,
+        ["externalkeyboard"] = true,
+        ["hello"] = true,
         ["httpinspector"] = true,
         ["japanese"] = true,
+        ["keepalive"] = true,
+        ["movetoarchive"] = true,
         ["newsdownloader"] = true,
+        ["opds"] = true,               -- 书用 USB 拷
+        ["perceptionexpander"] = true,
+        ["profiles"] = true,           -- 漫画配置档没恢复，用不到
         ["qrclipboard"] = true,
+        ["readtimer"] = true,
+        ["SSH"] = true,                -- Kindle 版自带；不用
+        ["systemstat"] = true,
         ["terminal"] = true,
         ["texteditor"] = true,
         ["wallabag"] = true,
