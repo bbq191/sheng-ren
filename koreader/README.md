@@ -39,9 +39,10 @@
 
 | 插件 | 装在 | 来源 | 做什么 |
 |---|---|---|---|
-| `autolight.koplugin`「自动前光」 | Kindle | 本仓库（2026-10-02） | **按光线传感器自动调前光**：亮着灯时每 60 秒和每次唤醒读一次光照（直接读传感器芯片 opt3001 的 `/sys/bus/iio/devices/iio:deviceN/in_illuminance_input`，读不到才退回 powerd 的 `alsLux`），按曲线设亮度（**两头低、中间高**，用户 2026-10-02：墨水屏靠反射环境光，越亮前光越没用；PW12 共 0–24 档：全黑 4、3 lux 6、昏暗室内 30 lux 10（最高）、150 lux 9、500 lux 5、2000 lux 以上 1，之间按对数插值；亮处只降到最低档、不关灯），差 2 档以上才改；手动调过亮度会记成偏好偏移。灯关着不动 |
+| `autolight.koplugin`「自动前光」 | Kindle | 本仓库（2026-10-02） | **按光线传感器自动调前光**：亮着灯时每 60 秒和每次唤醒读一次光照（直接读传感器芯片 opt3001 的 `/sys/bus/iio/devices/iio:deviceN/in_illuminance_input`，读不到才退回 powerd 的 `alsLux`），按曲线设亮度（**两头低、中间高**：墨水屏靠反射环境光，越亮前光越没用；PW12 共 0–24 档，2026-10-02 拉开对比：全黑 6、3 lux 11、昏暗室内 30 lux 18（最高）、150 lux 12、500 lux 5、2000 lux 以上 1，之间按对数插值；亮处只降到最低档、不关灯），每 15 秒测一次、差 1 档以上才改；手动调过亮度会记成偏好偏移。灯关着不动 |
 | `sunlight.koplugin`「按太阳调前光」 | 掌阅 | 本仓库（2026-10-02） | **按太阳高度分档设冷光、暖光**（位置昆明 25.04, 102.71，设备层 `sunlight_location`）：深夜（太阳 < -18°）冷 4 暖 30、夜（-18～-6°）冷 8 暖 50、晨昏（-6～-0.833°）冷 25 暖 50、日出日落（-0.833～10°）冷 40 暖 25、白天（≥ 10°）冷 30 暖 0（灯的原始值 0–255，起点是估的）。每 2 分钟和每次唤醒定档，进新档才设；灯的实际值和上次设的不一样 = 手动调过，这一档里不动、下一档再接管。菜单「把现在的灯存为本档」改档位值 |
 | `usbtransfer.koplugin`「USB 传书」 | Kindle | 本仓库（2026-10-02） | **不用重启就能插线拷书**（真机 ✓，前提关掉设备密码，见下面 USB 传书）：工具菜单（也可以绑手势）点「USB 传书」→ 确认 → 留记号 `/tmp/koreader-boot.usb`、像菜单「退出」一样关掉 KOReader（存进度）；`kindle-boot/bin/run.sh` 看到记号不重启、跑 `bin/usb.sh` 开 MTP，拔线后断开 USB、再经垫片起 KOReader。只在 KOReader 是 `run.sh` 起的（`KOREADER_BOOT=1`）时显示 |
+| `flsuspend.koplugin`「休眠关前光」 | Kindle | 本仓库（2026-10-02） | **独占时休眠自己关前光**：KOReader 在 Kindle 上靠亚马逊界面关/开前光（`KindlePowerD:beforeSuspend` 不动灯），独占停了界面就没人关、休眠时灯一直亮。休眠（Suspend 事件）记下亮度再关硬件，唤醒（Resume）自己按记下的亮度恢复——不能只关硬件指望系统恢复：`setIntensityHW` 结尾 `_decideFrontlightState()` 会把"开着"的逻辑状态按硬件 0 翻成"关着"，唤醒就没人开了（2026-10-02 真机）。只在框架被停（`STOP_FRAMEWORK=yes`）时启用 |
 | `kindleautobrightness.koplugin` | Kindle | [alexferrari88/kindle-auto-brightness-bridge](https://github.com/alexferrari88/kindle-auto-brightness-bridge)（MIT，取自 `a45b01c`） | 现在只用它的**色温同步**（KOReader 读暖光时取 Kindle 按时间表设的值）；亮度同步关了 |
 
 - **为什么自己写自动前光**（2026-10-02 用户反馈"好像没生效"）：上面那个桥接插件只让 KOReader 读亮度时取硬件值，真正调灯的是 Kindle 自带的「自动亮度」；
@@ -126,6 +127,7 @@ Kindle 另停 hotkeys（没有实体键，掌阅有翻页键所以留着）。
 程序文件时收到 SIGBUS 崩溃。MTP 服务 `tizen-mtp` 本身独立于亚马逊界面，但锁分区是系统设计，绕不开（除非把 KOReader 整个搬出书库分区，系统分区放不下）。
 所以拷书、跑 `apply.sh` 前仍要先「退出」回到自带界面再插线。
 
+- **独占休眠关前光**（`flsuspend.koplugin`，2026-10-02 真机）：休眠灯灭 ✓；唤醒恢复要插件自己做（见插件表，旧做法唤醒灯回不来）。
 - **真机**（2026-10-02）：普通模式开机直接进 KOReader、退出回亚马逊界面 ✓。独占＋退出即重启 ✓：自带界面「设置 → 重启」后开机直接进 KOReader；KOReader 里退出 → 整机重启、停在自带界面；脚本书「KOReader（独占）」再进。每次退出都重启，一次开机里最多进出一次，碰不到第三次退出的白屏。
 - 电脑上没有 gvfs-mtp 时：`KO_LOCAL_ROOT=/run/user/1000/mtp/kindle kindle-boot/deploy.sh --write`（jmtpfs 挂好的目录）。
 

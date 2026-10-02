@@ -15,8 +15,8 @@ local logger = require("logger")
 local _ = require("gettext")
 local T = require("ffi/util").template
 
-local INTERVAL_S = 60
-local MIN_CHANGE = 2
+local INTERVAL_S = 15  -- 测光间隔（秒）：2026-10-02 从 60 缩到 15，遮挡/换环境十几秒内就跟上（用户觉得 60 秒太慢像没反应）
+local MIN_CHANGE = 1  -- 和当前差这么多档才调：2026-10-02 从 2 降到 1，小变化也跟（用户觉得死区太大）
 
 local function powerd()
     local ok, p = pcall(Device.getPowerDevice, Device)
@@ -87,13 +87,13 @@ local AutoLight = WidgetContainer:extend{
 --- 越亮前光越没用，不该像手机屏那样越亮越开大）。全黑时眼睛适应了黑暗，也要低；昏暗室内纸面发灰，补光最有用。
 --- 节点之间按 log10(lux) 线性插值。亮处只降到最低档、不关灯（灯关着插件就不动，关了回到暗处就不会再开）。
 local CURVE = {
-    { 0, 4 },     -- 全黑
-    { 3, 6 },     -- 很暗
-    { 30, 10 },   -- 昏暗室内（Kindle 自带的自动亮度 28 lux 时设 9 档，2026-10-02 真机）
-    { 150, 9 },   -- 普通室内
+    { 0, 6 },     -- 全黑（眼睛已适应，低一点；但墨水屏全黑没光看不见，留够能读）
+    { 3, 11 },    -- 很暗
+    { 30, 18 },   -- 昏暗室内（纸面发灰、补光最有用，设最高档）
+    { 150, 12 },  -- 普通室内
     { 500, 5 },   -- 明亮室内
     { 2000, 1 },  -- 窗边、户外
-}
+}  -- 2026-10-02 拉开对比（原来 4/6/10/9/5/1 中段太平、变化看不出）；PW12 共 0–24 档，target 会按 p.fl_max 截断
 
 function AutoLight:curve(lux)
     local x = math.log10(lux + 1)
