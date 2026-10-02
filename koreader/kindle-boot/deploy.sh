@@ -54,7 +54,7 @@ case $mode in
     if has extensions/koreader-boot; then
       echo "删 extensions/koreader-boot/ 和两本脚本书（先在书库里点「KOReader 开机启动：卸掉」，不然 /etc/upstart 里的开机任务还在）"
       if [[ $write -eq 1 ]]; then
-        for f in bin/common.sh bin/install.sh bin/uninstall.sh bin/status.sh bin/clean-dumps.sh bin/run.sh bin/start-shim.sh bin/exit-log.sh bin koreader-boot.conf menu.json config.xml; do
+        for f in bin/common.sh bin/install.sh bin/uninstall.sh bin/status.sh bin/clean-dumps.sh bin/run.sh bin/start-shim.sh bin/usb.sh bin/exit-log.sh bin koreader-boot.conf menu.json config.xml; do
           has "extensions/koreader-boot/$f" && del "extensions/koreader-boot/$f"
         done
         del extensions/koreader-boot
@@ -62,7 +62,7 @@ case $mode in
       fi
     else echo "= 扩展本来就没有"; fi ;;
   install)
-    files=(config.xml menu.json koreader-boot.conf bin/common.sh bin/install.sh bin/uninstall.sh bin/status.sh bin/clean-dumps.sh bin/run.sh bin/start-shim.sh)
+    files=(config.xml menu.json koreader-boot.conf bin/common.sh bin/install.sh bin/uninstall.sh bin/status.sh bin/clean-dumps.sh bin/run.sh bin/start-shim.sh bin/usb.sh)
     for f in "${files[@]}"; do echo "拷 extensions/koreader-boot/$f"; done
     scriptlets=("KOReader开机启动-装上.sh" "KOReader开机启动-卸掉.sh" "KOReader（独占）.sh")
     for f in "${scriptlets[@]}"; do echo "拷 documents/$f（书库里显示成一本书，点开就运行）"; done

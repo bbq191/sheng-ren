@@ -41,6 +41,7 @@
 |---|---|---|---|
 | `autolight.koplugin`「自动前光」 | Kindle | 本仓库（2026-10-02） | **按光线传感器自动调前光**：亮着灯时每 60 秒和每次唤醒读一次光照（直接读传感器芯片 opt3001 的 `/sys/bus/iio/devices/iio:deviceN/in_illuminance_input`，读不到才退回 powerd 的 `alsLux`），按曲线设亮度（**两头低、中间高**，用户 2026-10-02：墨水屏靠反射环境光，越亮前光越没用；PW12 共 0–24 档：全黑 4、3 lux 6、昏暗室内 30 lux 10（最高）、150 lux 9、500 lux 5、2000 lux 以上 1，之间按对数插值；亮处只降到最低档、不关灯），差 2 档以上才改；手动调过亮度会记成偏好偏移。灯关着不动 |
 | `sunlight.koplugin`「按太阳调前光」 | 掌阅 | 本仓库（2026-10-02） | **按太阳高度分档设冷光、暖光**（位置昆明 25.04, 102.71，设备层 `sunlight_location`）：深夜（太阳 < -18°）冷 4 暖 30、夜（-18～-6°）冷 8 暖 50、晨昏（-6～-0.833°）冷 25 暖 50、日出日落（-0.833～10°）冷 40 暖 25、白天（≥ 10°）冷 30 暖 0（灯的原始值 0–255，起点是估的）。每 2 分钟和每次唤醒定档，进新档才设；灯的实际值和上次设的不一样 = 手动调过，这一档里不动、下一档再接管。菜单「把现在的灯存为本档」改档位值 |
+| `usbtransfer.koplugin`「USB 传书」 | Kindle | 本仓库（2026-10-02） | **（还不能用，见下面 USB 传书）不用重启就能插线拷书**：工具菜单（也可以绑手势）点「USB 传书」→ 确认 → 留记号 `/tmp/koreader-boot.usb`、像菜单「退出」一样关掉 KOReader（存进度）；`kindle-boot/bin/run.sh` 看到记号不重启、跑 `bin/usb.sh` 开 MTP，拔线后断开 USB、再经垫片起 KOReader。只在 KOReader 是 `run.sh` 起的（`KOREADER_BOOT=1`）时显示 |
 | `kindleautobrightness.koplugin` | Kindle | [alexferrari88/kindle-auto-brightness-bridge](https://github.com/alexferrari88/kindle-auto-brightness-bridge)（MIT，取自 `a45b01c`） | 现在只用它的**色温同步**（KOReader 读暖光时取 Kindle 按时间表设的值）；亮度同步关了 |
 
 - **为什么自己写自动前光**（2026-10-02 用户反馈"好像没生效"）：上面那个桥接插件只让 KOReader 读亮度时取硬件值，真正调灯的是 Kindle 自带的「自动亮度」；
@@ -107,6 +108,18 @@ Kindle 另停 hotkeys（没有实体键，掌阅有翻页键所以留着）。
   改了开机任务要在 Kindle 书库里再点一次「装上」才生效。
 - **逃生口**：自启的 KOReader 没正常退出就关机（卡死后长按电源键、没电）→ 下次开机跳过自启、停在自带界面，只跳一次。
   要回原生界面又退不出来时，就在 KOReader **运行中**长按电源键重启（先点退出会把标记清掉）。
+
+**USB 传书**（2026-10-02，**还不能用**：点了会退出 KOReader、等 120 秒或拔线后回来，但电脑打不开 Kindle）：插件 `usbtransfer.koplugin` 留记号退出 KOReader，
+垫片见记号不重启，`run.sh` 跑 `bin/usb.sh`、拔线后再经垫片起 KOReader——这一段真机 ✓。卡在开 MTP，四版的结论（日志 `koreader-boot-usb.log`，摸底用脚本书「USB 诊断」写 `usb-diag.txt`）：
+- 正常插线（亚马逊界面开着）：插线 → volumd `call_mtp_start` → mtp-responder 启用 MTP gadget → 短暂停用、`mtp.sh` 发 `com.lab126.hal usbConfigured` → **powerd 转发 `usbConfigured`**
+  → volumd `plug_in Signal`、等 800ms 看有没有人推迟 → `DRIVE_MODE_ON` → mtp-responder 再启用 MTP、会话成功。界面（blanket）只画提示画面。
+- 独占（界面停着）：前面都一样，但 **powerd 收到 hal 的 usbConfigured 却没转发**（日志没有 `sm:sent usbConfigured`），volumd 等 10 秒走 `plug_in Timeout … Never Mind`，MTP 不开。
+  推测 powerd 没有界面喂它、状态机停在屏保之类的状态（中等把握）。下一步：弄清 powerd 什么状态下转发，或由脚本直接让 volumd 收到 usbConfigured。
+- 排除掉的：照社区 zen-mtp 自己重启 mtp、把控制器接到 mtpgadget（电脑认得到、会话打不开，mtp_state 0）；暂停 volumd（同样打不开）；
+  替界面写 volumd 的 `userstoreReadyToUnMount`=1（写成功，volumd 照样超时）。zen-mtp 能用是因为它退出 KOReader 时 koreader.sh 把亚马逊界面拉回来了——每传一次重启一次界面，和独占的目的冲突。
+- 事实：configfs gadget `/sys/kernel/config/usb_gadget/mtpgadget`，控制器 `11211000.usb`（mtu3），MTP 是 upstart 任务 `mtp`（`tizen-mtp -f`，日志里叫 mtp-responder），
+  volumd 的 lipc 属性有 `userstoreReadyToUnMount`、`userstoreDeferUnmountRequest`、`shutdownMTP`（只写）等，事件 `userstoreIsLikelyToUnMount`、`driveModeStateChanged`。
+- 现在传书仍是：KOReader 里退出（整机重启、停在自带界面）再插线。
 
 **Kindle 上 KOReader 运行时不能用 USB**（2026-10-02 实验，结论高把握）：KOReader 启动时挂起 `volumd`（负责插线的服务）。实验在 KOReader 运行中恢复它：
 插线后系统进入 USB 模式、把书库分区（`/mnt/us`，一层 FUSE 文件服务）锁住，`blanket` 弹出 USB 提示窗盖住屏幕，约一分钟后 KOReader 访问自己在书库分区上的
