@@ -34,24 +34,27 @@
     }
 
     #[test]
-    fn inline_remote_images_fetches_and_keeps_local_and_drops_failed() {
-        // 本地图不动；远程抓到→内联改本地名+进资源；远程抓不到→删掉这个 <img>（设备不联网，留着是断图）
-        let html = r#"<p><img src="local.png"/><img class="c" src="https://x.com/a.png"/><img src="//y.com/b.png"/>字<img src="http://z/d.png"></img><img alt='x>y' src='https://x.com/c.png?a=1&amp;b=2'/></p>"#;
+    fn inline_remote_images_fetches_and_keeps_local_and_fails_on_unfetchable() {
+        // 本地图不动；远程抓到→内联改本地名+进资源
+        let html = r#"<p><img src="local.png"/><img class="c" src="https://x.com/a.png"/>字<img alt='x>y' src='https://x.com/c.png?a=1&amp;b=2'/></p>"#;
         let mut n = 0usize;
         // 已经优化过的书再跑：书里已有 remote_img_0.png，新抓的图不能重名
         let mut taken: HashSet<String> = ["OEBPS/remote_img_0.png".to_string()].into_iter().collect();
-        let (out, res) = inline_remote_images(html, "OEBPS", &mut n, &mut taken, |src: &str| {
-            if src.contains("a.png") || src == "https://x.com/c.png?a=1&b=2" { Some((vec![1, 2, 3], "png")) } else { None } // b 抓不到
-        });
+        let fetch = |src: &str| if src.contains("a.png") || src == "https://x.com/c.png?a=1&b=2" { Some((vec![1, 2, 3], "png")) } else { None };
+        let (out, res) = inline_remote_images(html, "OEBPS", &mut n, &mut taken, fetch).unwrap();
         assert!(out.contains(r#"src="local.png""#), "本地图应原样: {out}");
         assert!(out.contains(r#"class="c" src="remote_img_1.png""#), "远程抓到应改本地名、避开已有的名字: {out}");
         assert!(!out.contains("x.com"), "抓到的远程 URL 应换成本地名: {out}");
-        assert!(!out.contains("y.com") && !out.contains("z/d.png") && !out.contains("</img>"), "抓不到的远程 img 删掉（连闭合标签）: {out}");
         assert!(out.contains(r#"remote_img_1.png"/>字<img alt="#), "旁边的字不动: {out}");
         assert!(out.contains(r#"<img alt='x>y' src='remote_img_2.png'/>"#), "单引号、属性值里有 > 也认，字符引用先还原再抓: {out}");
         assert_eq!(res.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["OEBPS/remote_img_1.png", "OEBPS/remote_img_2.png"], "资源落本章目录");
         assert_eq!(res[0].1, vec![1, 2, 3]);
         assert!(has_remote_img(r#"<img alt='a>b' src='https://a/b.jpg'/>"#));
+        // 有一张抓不到：这次生成失败（产物不随网络变，书库不记指纹、下次再试），错误里带图的地址
+        for bad in [r#"<img src="//y.com/b.png"/>"#, r#"<img src="http://z/d.png"></img>"#] {
+            let err = inline_remote_images(bad, "OEBPS", &mut n, &mut taken, fetch).unwrap_err();
+            assert!(err.contains("y.com/b.png") || err.contains("z/d.png"), "{err}");
+        }
     }
 
     #[test]
@@ -649,7 +652,7 @@
         let (nav, ch1, notes) = (text_of(&out, "nav.xhtml"), text_of(&out, "ch1.xhtml"), text_of(&out, "notes.xhtml"));
         assert!(!nav.contains("第一条注释") && notes.contains("第一条注释"), "只有目录引用的注释留在原处: {nav} {notes}");
         assert!(notes.contains("第二条注释") && !ch1.contains("第二条注释"), "没人接的注释放回原处: {notes}");
-        assert!(ch1.contains("第三条注释") && !notes.contains("第三条注释") && ch1.contains(r##"<a href="#n3">3</a>"##), "{ch1}");
+        assert!(ch1.contains("第三条注释") && !notes.contains("第三条注释") && ch1.contains(r##"<a title="a>b" href="#n3">3</a>"##), "标号只改 href、别的属性留着: {ch1}");
         let all = [&nav, &ch1, &notes].iter().map(|t| t.matches("条注释").count()).sum::<usize>();
         assert_eq!(all, 3, "每条注释恰好出现一次");
     }
@@ -803,16 +806,36 @@
         port
     }
 
-    /// 远程图端到端：抓到的图写进 zip、src 改本地名、**补进 OPF manifest**（manifest 里没有的资源不算书的一部分）；抓不到的
-    /// `<img>` 原样保留。OPF 推迟到最后写，其它条目顺序不变。
+    /// 远程图端到端：抓到的图写进 zip、src 改本地名、**补进 OPF manifest**（manifest 里没有的资源不算书的一部分）；有抓不到的
+    /// 整本这次不生成（返回错误、不留半成品）。OPF 推迟到最后写，其它条目顺序不变。
     #[test]
-    fn remote_images_are_added_to_manifest_and_failed_ones_dropped() {
+    fn remote_images_are_added_to_manifest_and_failure_aborts() {
         let mut png = Vec::new();
         image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(20, 10, image::Rgb([200, 10, 10]))).write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-        let port = serve_png(png.clone(), 1);
+        let port = serve_png(png.clone(), 2);
         // 拿一个肯定没人监听的端口：绑定后立刻释放。
         let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let chapter = format!(r#"<html><body><p>正文<img src="http://127.0.0.1:{port}/a.png"/></p><p><img alt="x" src="http://127.0.0.1:{dead}/b.png"/></p></body></html>"#);
+        let good = format!(r#"<html><body><p>正文<img src="http://127.0.0.1:{port}/a.png"/></p></body></html>"#);
+        let bad = format!(r#"<html><body><p>正文<img src="http://127.0.0.1:{port}/a.png"/></p><p><img alt="x" src="http://127.0.0.1:{dead}/b.png"/></p></body></html>"#);
+        let err = optimize_epub(&remote_book(&bad), crate::imgopt::test_screen()).unwrap_err();
+        assert!(err.contains(&format!("127.0.0.1:{dead}/b.png")), "{err}");
+        let (out, _) = optimize_epub(&remote_book(&good), crate::imgopt::test_screen()).unwrap();
+        let ch = String::from_utf8(entry_bytes(&out, "OEBPS/text/c1.xhtml")).unwrap();
+        assert!(ch.contains(r#"src="remote_img_0.png""#), "抓到的图改本地名: {ch}");
+        assert_eq!(entry_bytes(&out, "OEBPS/text/remote_img_0.png"), png, "小图不缩放，原样写入");
+        let opf = String::from_utf8(entry_bytes(&out, "OEBPS/content.opf")).unwrap();
+        assert!(opf.contains(r#"<item id="eink-remote-img-0" href="text/remote_img_0.png" media-type="image/png"/></manifest>"#), "{opf}");
+        let names: Vec<String> = {
+            let mut ar = ZipArchive::new(Cursor::new(&out)).unwrap();
+            (0..ar.len()).map(|i| ar.by_index(i).unwrap().name().to_string()).collect()
+        };
+        assert_eq!(names, ["mimetype", "META-INF/container.xml", "OEBPS/text/c1.xhtml", "OEBPS/text/remote_img_0.png", "OEBPS/content.opf", OPTIMIZE_MARKER]);
+        let rep = crate::check::check_epub(&out, false).unwrap();
+        assert!(rep.ok, "{:?}", rep.errors);
+    }
+
+    /// 一章的书（OPF 在 `OEBPS/`，章节 `OEBPS/text/c1.xhtml`）。
+    fn remote_book(chapter: &str) -> Vec<u8> {
         let mut buf = Vec::new();
         {
             let mut zw = ZipWriter::new(Cursor::new(&mut buf));
@@ -827,20 +850,7 @@
             zw.write_all(chapter.as_bytes()).unwrap();
             zw.finish().unwrap();
         }
-        let (out, _) = optimize_epub(&buf, crate::imgopt::test_screen()).unwrap();
-        let ch = String::from_utf8(entry_bytes(&out, "OEBPS/text/c1.xhtml")).unwrap();
-        assert!(ch.contains(r#"src="remote_img_0.png""#), "抓到的图改本地名: {ch}");
-        assert!(!ch.contains(&format!("127.0.0.1:{dead}")) && ch.contains("<p></p>"), "抓不到的删掉: {ch}");
-        assert_eq!(entry_bytes(&out, "OEBPS/text/remote_img_0.png"), png, "小图不缩放，原样写入");
-        let opf = String::from_utf8(entry_bytes(&out, "OEBPS/content.opf")).unwrap();
-        assert!(opf.contains(r#"<item id="eink-remote-img-0" href="text/remote_img_0.png" media-type="image/png"/></manifest>"#), "{opf}");
-        let names: Vec<String> = {
-            let mut ar = ZipArchive::new(Cursor::new(&out)).unwrap();
-            (0..ar.len()).map(|i| ar.by_index(i).unwrap().name().to_string()).collect()
-        };
-        assert_eq!(names, ["mimetype", "META-INF/container.xml", "OEBPS/text/c1.xhtml", "OEBPS/text/remote_img_0.png", "OEBPS/content.opf", OPTIMIZE_MARKER]);
-        let rep = crate::check::check_epub(&out, false).unwrap();
-        assert!(rep.ok, "{:?}", rep.errors);
+        buf
     }
 
     #[test]

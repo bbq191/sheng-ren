@@ -685,9 +685,10 @@ pub fn nav_toc_items(doc: &str, nav_path: &str) -> Vec<toc::TocItem> {
             }
             p = spans[j].parent;
         }
-        let href = crate::util::xml_unescape(href);
-        let (path, frag) = crate::epubzip::resolve_href(nav_path, &href);
-        out.push(toc::TocItem::new(depth.max(1), label, path, frag.unwrap_or("")));
+        // 锚点照 `TocItem` 的口径：字符引用还原、百分号编码照留（写回目录时原样用）
+        let path = crate::epubzip::resolve_link(nav_path, href).0;
+        let frag = crate::util::xml_unescape(html::split_href(href).1.unwrap_or(""));
+        out.push(toc::TocItem::new(depth.max(1), label, path, frag));
     }
     out
 }
@@ -736,15 +737,16 @@ fn add_landmarks(entries: &mut [Entry], nav_path: &str) -> usize {
     for t in html::tags_in(&opf_text, lo, hi).filter(|t| t.is_start() && opf::is_local(t.name, "reference")) {
         let tag = &opf_text[t.start..t.end];
         let (Some(ty), Some(href)) = (html::attr_value(tag, "type").and_then(landmark_type), html::attr_value(tag, "href")) else { continue };
-        let href = crate::util::xml_unescape(href);
-        if html::is_external(html::split_href(&href).0) {
+        let (raw_path, raw_frag) = html::split_href(href);
+        if html::is_external(&crate::util::xml_unescape(raw_path)) {
             continue;
         }
-        let (path, frag) = crate::epubzip::resolve_href(&opf_name, &href);
+        let path = crate::epubzip::resolve_link(&opf_name, href).0;
         if !names.contains(path.as_str()) {
             continue;
         }
-        let link = crate::epubzip::href_to(dir_of(nav_path), &path, frag.unwrap_or(""));
+        // 锚点原样写回（字符引用还原、百分号编码照留；拼好的链接整体再转义一次）
+        let link = crate::epubzip::href_to(dir_of(nav_path), &path, &crate::util::xml_unescape(raw_frag.unwrap_or("")));
         if !seen.insert((ty.to_string(), link.clone())) {
             continue;
         }
