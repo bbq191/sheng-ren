@@ -1,7 +1,7 @@
 # KOReader 配置、补丁与插件
 
 掌阅 Ocean 5 Pro、Kindle Paperwhite 12 签名版上 KOReader 的个人配置，2026-10-02 从 git 历史（`b4ef84a^`）取回。
-**只恢复配置，加几个补丁和一个感光插件**（用户定）：书库里没有 `koreader` 阅读模式，SimpleUI、进度同步（kosync）、漫画自动配置档、状态栏预设
+**只恢复配置，加几个补丁、一个感光插件、进度同步和词典**（用户定）：书库里没有 `koreader` 阅读模式，SimpleUI、漫画自动配置档、状态栏预设
 （连同只为它写的补丁 `2-footer-preset-reclaim.lua`）、Kindle 开机启动、掌阅「KOReader 桌面」都不恢复。要找原来的样子：`git show b4ef84a^:koreader/<文件>`。
 
 ## 里面有什么
@@ -11,7 +11,8 @@
 | `personal/settings.reader.patch.lua` | `settings.reader.lua` | 个人设置：排版（字号 17、页边距、两栏）、正文字体霞鹜文楷、界面字体、页眉、状态栏、中文排版微调、停用的插件、界面中文 |
 | `personal/gestures.patch.lua` | `settings/gestures.lua` | 手势：长按四角（退出、休眠、截屏、全刷）、点四角（文件管理器、目录、开关触屏、交换翻页键）、左边缘前光、右边缘暖光 |
 | `schemes/text.settings.patch.lua` | `settings.reader.lua` | 文字书：注释弹窗（小 2 号）、跳转后右滑回原处、撤掉和拆文件分页打架的样式调整、按中文断行、每 16 页全刷 |
-| `devices/<id>/` | `settings.reader.lua` | 随设备的：状态栏字体路径、阅读背景路径；`device.conf` 写 MTP 挂载名和 KOReader 目录 |
+| `schemes/kosync.patch.lua` | `settings/kosync.lua` | 进度同步：服务器 `https://sync.vksight.com`、按文件名认书、自动同步，见下 |
+| `devices/<id>/` | `settings.reader.lua` | 随设备的：状态栏字体路径、阅读背景路径、起始目录 `home_dir`；`device.conf` 写 MTP 挂载名、KOReader 目录、放书的目录、要装的插件 |
 | `patches/` | `patches/` | 用户补丁，见下 |
 | `plugins/<名>/` | `plugins/<名>/` | 插件，按 `device.conf` 的 `PLUGINS` 装，见下 |
 | `backgrounds/` | `backgrounds/` | 再生纸背景（设备层用中档 `recycled-medium.png`；`make.py` 生成） |
@@ -45,6 +46,33 @@
 - 掌阅不装：插件只认 Kindle（别的设备上自己停用）。KOReader 自带的 autofrontlight 插件已从新版里删掉（只支持过 Voyage/Oasis）。
 - 卸载（`--uninstall`）删掉内容和本仓库一致的插件文件，目录空了一并删。
 
+## 读什么书、放哪
+
+- **两台都读书库 `ireader/` 里的 EPUB**：Kindle 上的 KOReader 不认 `.azw3`（源码里电子书扩展名只注册了 `azw`、`mobi`），
+  `kindle/` 的 AZW3 只给 Kindle 自带阅读器。两台屏幕都是 7 英寸 300ppi，文字书共用一份；漫画用自带阅读器看（在 KOReader 里铺不满）。
+- **放在存储根下的 `books/`**（用户 2026-10-02 定）：Kindle `/mnt/us/books`、掌阅 `/storage/emulated/0/books`，KOReader 起始目录指向它，
+  `apply.sh` 按 `device.conf` 的 `BOOKS_DIR` 建好。Kindle 自带书库只扫 `documents/`，放 `books/` 的 EPUB 不会混进去。拷书由自己来。
+
+## 进度同步
+
+- 服务器 `sync.vksight.com` 是自建的：程序、部署、账号管理都在 **vksight 仓库 `ops/kosync/`**（用户 2026-10-02 定：同步服务归 vksight）。这里只放设备上的设置。
+- **按文件名认书**（不按内容）：书重新生成文件字节会变，按内容认会断；两台的文件名一样（都拷 `ireader/` 的同一份）才对得上。
+- 每台要**在设备上登录一次**：工具 → 进度同步 → 登录（不要点注册，服务器不开放注册）。密码只在设备上输，不进仓库。
+- 别的设备读得更靠后时问一下再跳，更靠前时不跳。Kindle 上 `wifi_enable_action = turn_on`，不然 KOReader 启动时会关掉自动同步。
+- 进度是 KOReader 的 xpointer（指向 DOM 位置）：书按新规则重新生成后，旧进度可能落到附近。
+
+## 词典
+
+- 手上的《牛津高阶双解》《现代汉语词典》是 MOBI，KOReader 只认 StarDict；网上的 StarDict 版都是未经授权的转制，**用自己的 MOBI 转**（用户 2026-10-02 定，只自己用，产物不进仓库）：
+  ```sh
+  cargo run --release -p mobidict --bin mobi-dict-to-stardict -- ~/Documents/ereader/dict/现代汉语词典.mobi ~/Documents/ereader/dict/stardict
+  ```
+  转出来放在 `~/Documents/ereader/dict/stardict/<名>/`（`$KOREADER_DICTS` 可改），`apply.sh` 拷到两台的 `data/dict/`（缺的或大小不同的才拷，卸载不删）。
+- 转换内容：词头索引的全部词条（含《现代汉语词典》的异体字别名，如 㕑 → 厨）；`filepos` 互查链接换成 `bword://`；图片不带。
+- **没转词形变化索引**：MOBI 的变形表是按规则变换词头的，没解。这本牛津把 `ran` 这类不规则变形收成了词头；
+  `books` 这类规则变形靠 KOReader 的模糊查找（查 `books` 会给出 `book`）。
+- 2026-10-02 本机用 KOReader 自带的 `sdcv` 查过：厨、㕑、唱名（两条）、AA制、run、Run、because、'cause 都对。
+
 ## 怎么用
 
 先在设备上装好 KOReader 并打开一次（要有 `settings.reader.lua`），USB 连上电脑、解锁。
@@ -60,4 +88,4 @@ koreader/check.sh                             # 离线自检，不碰设备
 
 - **写之前要在 KOReader 菜单里「退出」**：它退出时把内存里的设置写回文件，运行中改的会被覆盖。掌阅上在最近任务里划掉不一定结束进程。
 - 需要 `luajit`、`gio`（gvfs）。MTP 只能经 `gio` 读写（FUSE 路径有缓存，回读会拿到旧内容）。
-- 书库的 `kindle/` 产物是 AZW3，按 Kindle 自带阅读器做的；KOReader 读 KF8 的支持不完整，没在这套产物上验证过。
+- 词典大（牛津 .dict 约 111MB），MTP 拷要一两分钟。

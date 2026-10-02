@@ -1,0 +1,15 @@
+[package]
+name = "mobidict"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MOBI 词典 → StarDict（给 KOReader 查词，只转自己手上的词典），clean-room：依公开的 MOBI 容器文档 + 对词典样本的黑盒分析实现"
+
+[dependencies]
+azw3 = { path = "../azw3" }
+bookconv = { path = "../bookconv" }
+regex = "1"
+
+[[bin]]
+name = "mobi-dict-to-stardict"
+path = "src/bin/mobi_dict_to_stardict.rs"
