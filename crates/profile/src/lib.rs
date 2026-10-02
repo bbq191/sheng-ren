@@ -1,4 +1,4 @@
-//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有三份，都是设备自带的阅读器（2026-09-30 用户撤了 KOReader）：
+//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有三份，都按设备自带的阅读器量（2026-10-02 起 Kindle、掌阅日常用 KOReader 读 `ireader` 的产物，KOReader 上没单独量过，见 docs/devices.md）：
 //! `kindle`（Kindle PW12 签名版，AZW3）、`ireader`（掌阅 Ocean 5 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是

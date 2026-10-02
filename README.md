@@ -25,6 +25,8 @@
 Kindle USB 传书只认 AZW3，所以 `kindle` 模式先按同一套规则优化出 EPUB，再转成 AZW3（[AZW3 写出器](docs/azw3.md)）。
 模式的配置、可阅读范围怎么量、加新模式，见[设备与可阅读范围](docs/devices.md)。
 
+> 2026-10-02 起 Kindle、掌阅日常独占跑 KOReader，两台都读 `ireader` 模式的 EPUB（KOReader 不认 AZW3）；`kindle` 模式留给回到自带阅读器时用。`ireader` 的阅读范围是在掌阅自带阅读器上量的，KOReader 上没单独量过。设备上 KOReader 的配置、插件、开机独占在另一个仓库 koreader-setup。
+
 ## 快速开始
 
 需要 Rust 工具链（`cargo`）。

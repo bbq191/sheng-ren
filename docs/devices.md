@@ -57,19 +57,17 @@ height = 1680
 
 ### 为什么这样分
 
-- **三台设备各用自带阅读器**（2026-09-30 用户定）：掌阅、Kindle 上的 KOReader 卸掉了，换回自带阅读器；Move 上的 KOReader 2026-09-29 就撤了（屏幕刷新由 xochitl 那一层控制，翻页闪得厉害）。
+- **阅读模式按三台设备的自带阅读器做**（2026-09-30 用户定，当时掌阅、Kindle 上的 KOReader 卸掉了；2026-10-02 又装回来，见下）；Move 上的 KOReader 2026-09-29 就撤了（屏幕刷新由 xochitl 那一层控制，翻页闪得厉害）。
 - **Kindle 单独一个模式**：USB 传书只认 AZW3，自带阅读器留页边距、页眉页脚，漫画要写成固定版式。
 - **掌阅单独一个模式**：屏幕和 Kindle 一样是 7 英寸 300ppi 黑白屏（2026-09-27 核实），但读 EPUB，整页图铺满整屏。
 
 旧的设备 id（`kindle-pw12-sig`、`ireader-ocean5-pro`、`rmpp-move`、`rmpp-move-koreader`、`koreader`）已经不是阅读模式了；书库里它们的旧产物不再管理。
 拷哪个文件夹、拷到哪，见[使用指南 · 传书到设备](usage.md#传书到设备)。
 
-**设备上的 KOReader 残留**（卸 KOReader 之后）：Kindle 的开机任务 `/etc/upstart/koreader-boot.conf` 找不到 KOReader 会直接退出，不影响界面，
-要清掉用书库里的「KOReader开机启动-卸掉」脚本书；掌阅的「KOReader 桌面」找不到 KOReader 时回系统桌面，在 设置 → 默认应用 → 桌面 换回 iReader 桌面后再卸掉它。
-
-**KOReader 又装回来了**（2026-10-02，掌阅、Kindle）：阅读模式不变，书照样按自带阅读器生成。两台的 KOReader 都读 `ireader/` 的 EPUB
-（KOReader 不认 `.azw3`），放存储根的 `books/`，进度经自建的 sync.vksight.com 同步；词典用自己的 MOBI 转成 StarDict。
-配置用 `koreader/apply.sh` 下发，见 [koreader/README.md](../koreader/README.md)。
+**KOReader 又装回来了**（2026-10-02，掌阅、Kindle，两台都开机独占进 KOReader）：阅读模式不变，书照样按自带阅读器生成。两台的 KOReader 都读 `ireader/` 的 EPUB
+（KOReader 不认 `.azw3`），放存储根的 `books/`，进度经自建的 sync.vksight.com 按文件名同步——**所以 `ireader/` 产物的文件名要稳定**；词典用自己的 MOBI 转成 StarDict（本仓库的 `mobi-dict-to-stardict`）。
+`ireader` 的阅读范围（1264×1680、整页图铺满）是在掌阅自带阅读器上量的，**KOReader 里没单独量过**，漫画离屏幕边缘是不是 1px 没验证；`kindle` 模式（AZW3）只在回到自带阅读器时用。
+设备上 KOReader 的配置、插件、开机独占、掌阅安卓小应用 2026-10-03 拆到单独的仓库 koreader-setup（本机 `~/Projects/koreader-setup`）。
 
 ## 为什么要"真实可阅读范围"
 
