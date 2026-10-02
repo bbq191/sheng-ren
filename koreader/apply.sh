@@ -13,7 +13,7 @@
 # 写入前把设备上要动的文件备份到 $KOREADER_BACKUP/<时间>/<设备 id>/（缺省 ~/Documents/ereader/koreader-backup）；
 # 每写一个文件就回读核对，任何一步失败都把已写的文件还原（原来没有的删掉）。字体从 $KOREADER_FONTS（缺省 ~/Documents/ereader/fonts）拷。
 # KOReader 运行中不能写：它退出时会把内存里的设置写回文件，覆盖掉这里写的。
-# 需要 luajit 和 gio（gvfs）。
+# 需要 luajit 和 gio（gvfs-mtp）；没有 gvfs-mtp 时先用 jmtpfs 把设备挂到一个目录，再设 KO_LOCAL_ROOT=<挂载点> 跑（见 lib.sh 的 ko_connect）。
 set -euo pipefail
 
 KO_HERE=$(cd "$(dirname "$0")" && pwd)
@@ -129,7 +129,7 @@ fi
 
 # ── 放书的目录（device.conf 的 BOOKS_DIR，相对设备存储根；KOReader 起始目录 home_dir 指向它）：没有就建 ──
 need_books_dir=0
-if [[ $mode == apply && -n ${BOOKS_DIR:-} ]] && ! gio info "$KO_MOUNT/$BOOKS_DIR" >/dev/null 2>&1; then
+if [[ $mode == apply && -n ${BOOKS_DIR:-} ]] && ! mnt_has "$BOOKS_DIR"; then
   echo "── 目录 $BOOKS_DIR：设备上没有，会建"
   need_books_dir=1
 fi
@@ -234,7 +234,7 @@ for font in "${missing_fonts[@]}"; do # 字体大，按大小核对；失败只�
   fi
 done
 if [[ $need_books_dir -eq 1 ]]; then
-  gio mkdir -p "$KO_MOUNT/$BOOKS_DIR" || { echo "✗ 建不了 $BOOKS_DIR" >&2; exit 4; }
+  mnt_mkdir "$BOOKS_DIR" || { echo "✗ 建不了 $BOOKS_DIR" >&2; exit 4; }
   echo "✓ 目录 $BOOKS_DIR 已建"
 fi
 for f in "${put_dicts[@]}"; do # 词典大，和字体一样按大小核对；拷坏了删掉，不影响配置
@@ -276,7 +276,7 @@ for rel in "${rm_code[@]}"; do
   echo "✓ $(kind "$rel") $rel 已删掉"
 done
 for plugin in "${PLUGINS[@]}"; do # 卸载后插件目录空了就删掉（不空 gio 会拒绝，正好不动）
-  [[ $mode == uninstall ]] && gio remove "$KO_BASE/plugins/$plugin" 2>/dev/null || true
+  [[ $mode == uninstall ]] && { rmdir "$KO_BASE/plugins/$plugin" 2>/dev/null || gio remove "$KO_BASE/plugins/$plugin" 2>/dev/null; } || true
 done
 for f in "${changed[@]}"; do
   [[ $(dirname "$f") == . ]] || dev_mkdir "$(dirname "$f")" || rollback "建目录 $(dirname "$f") 失败"

@@ -139,5 +139,7 @@ koreader/check.sh                             # 离线自检，不碰设备
 ```
 
 - **写之前要在 KOReader 菜单里「退出」**：它退出时把内存里的设置写回文件，运行中改的会被覆盖。掌阅上在最近任务里划掉不一定结束进程。
-- 需要 `luajit`、`gio`（gvfs）。MTP 只能经 `gio` 读写（FUSE 路径有缓存，回读会拿到旧内容）。
+- 需要 `luajit`、`gio`（gvfs-mtp）。gvfs 的 MTP 只能经 `gio` 读写（它的 FUSE 路径有缓存，回读会拿到旧内容）。
+- **没有 gvfs-mtp 时**（2026-10-02 起电脑上卸了）：用 `jmtpfs` 挂好的目录，`KO_LOCAL_ROOT=<挂载点> koreader/apply.sh …`，按普通文件读写。
+  这台电脑插上设备会被自己配的 jmtpfs 自动挂载：Kindle `/run/user/1000/mtp/kindle`、掌阅 `/run/user/1000/mtp/ireader`，直接把 `KO_LOCAL_ROOT` 设成它。
 - 词典大（牛津 .dict 约 111MB），MTP 拷要一两分钟。
