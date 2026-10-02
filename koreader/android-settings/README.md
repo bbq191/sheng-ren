@@ -39,4 +39,5 @@ getprop：`ro.debuggable=0`、`ro.adb.secure=1`、`init.svc.adbd=stopped`、`sys
 **安全**：USB 调试开着时，任何插上线、被授权过的电脑都有 root；不用时可以关掉（`pm disable-user` 停掉的应用关了调试也保持停用）。
 当时（掌阅桌面是默认桌面、刚用过掌阅阅读器）掌阅自己的进程合计约 700MB PSS（阅读器 178、掌阅系统界面 101、掌阅设置 89、应用市场 74、桌面 70、输入法 66、
 词典 50、系统升级 23、智能助手 19、音乐 13、TTS 12、小i 12），总内存 4GB、可用 1.6GB。
+**前光**（1.4 加「试调前光」）：掌阅系统服务 `ireader` 的 `setColdBrightness`（事务号 39）普通应用能调，见 `../README.md` 按太阳调前光。
 掌阅的系统应用：桌面 `com.szzy.ireader.ink.launcher`、阅读器 `com.zhangyue.iReader.Eink`、应用市场、小i、智能助手等（包名前缀 `com.szzy.ireader`）。
