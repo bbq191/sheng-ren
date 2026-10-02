@@ -40,7 +40,8 @@
 | `kindleautobrightness.koplugin` | Kindle | [alexferrari88/kindle-auto-brightness-bridge](https://github.com/alexferrari88/kindle-auto-brightness-bridge)（MIT，取自 `a45b01c`） | 感光调亮度：灯光仍由 Kindle 自带的「自动亮度」按光线传感器调，插件让 KOReader 读亮度时取硬件当前值，手动调亮度不会从旧值跳回来。只读不写、不常驻轮询 |
 
 - **要先在 Kindle 下拉菜单里打开「自动亮度」再进 KOReader**（KOReader 运行中才打开的，要重启 KOReader）。插件开关在 工具 → 更多工具 →「Synchronize with Kindle Auto Brightness」，Kindle 设备层已设成开。
-- 色温同步（同一插件的另一个开关）没开：和 KOReader 自带的自动色温同时开，两套日程各管各的。
+- 色温同步（同一插件的另一个开关）也开着（用户 2026-10-02）：暖光仍由 Kindle 按时间表调（不看光线），KOReader 读暖光时取当前值。
+  别再开 KOReader 自带的自动色温，两套时间表会来回改。
 - 掌阅不装：插件只认 Kindle（别的设备上自己停用）。KOReader 自带的 autofrontlight 插件已从新版里删掉（只支持过 Voyage/Oasis）。
 - 卸载（`--uninstall`）删掉内容和本仓库一致的插件文件，目录空了一并删。
 
