@@ -14,7 +14,7 @@
 - **常驻应用停不掉**：系统升级（`abupdate`）和音乐&录音是 `PERSISTENT`，系统开机照样拉起；`pm disable-user`、root 的 `pm disable`（这两个现在是 enabled=2）
   都不管用，root `kill` 后立刻被拉起。剩下的办法是 `pm uninstall -k --user 0`（系统分区里的包不动、数据保留，`cmd package install-existing` 装回），
   2026-10-02 用户自己对音乐&录音执行了：进程随即结束、不再被拉起，`pm list packages -u` 里还在、`/data/data/…` 保留 ✓（重启后待确认）。
-  系统升级同日用户也执行了：卸载没结束已在跑的进程，root `kill` 后不再被拉起 ✓。两个都只在 `pm list packages -u` 里（重启后待确认）。
+  系统升级同日用户也执行了：卸载没结束已在跑的进程，root `kill` 后不再被拉起 ✓。两个都只在 `pm list packages -u` 里；重启后没再出现 ✓（2026-10-02）。
   `--undo` 会先 `install-existing` 装回再启用。
 - **回桌面**：从屏幕底部中间往上滑（掌阅自己的手势区，2026-10-02 用户实测）。
 - 下发配置：`apply.sh` 前先 `adb shell pm disable-user --user 0 local.eink.koreaderhome`、在 KOReader 里「退出」、写完 `pm enable` 再 `cmd package set-home-activity local.eink.koreaderhome/.HomeActivity`（2026-10-02 这样下发了按太阳调前光）。jmtpfs 挂载会让 adb 掉线，`adb kill-server` 后恢复。
