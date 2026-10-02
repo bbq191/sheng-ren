@@ -308,12 +308,16 @@ pub fn wash_css(opts: &WashOpts) -> String {
     // 要求。跟 `.eink-flush` 一样是单个裸类选择器，不逗号连写。
     // `.eink-note`：章末的每条注释（`htmlproc::footnote`）不拆到两页（用户 2026-09-29：注释内容要在同一页内；长过一页的阅读器照常断开）。
     // `.eink-noteicon`：图标标号限成一个字高（没写宽高的 <img> 阅读器按图片像素画，80×80 的图标撑成一大块）；
-    //   profile 的 note_icons = "number"（图标换成数字）时优化器第二遍把这条删掉（`optimize::NOTEICON_RULE`，改这里要一起改）。
+    //   profile 的 note_icons = "number"（图标换成数字）时优化器第二遍按同一个常量 [`NOTEICON_RULE`] 把这条删掉。
     let latin = if opts.lang == LangMode::Latin { "p{hyphens:auto;-webkit-hyphens:auto;orphans:2;widows:2;}\n" } else { "" };
     format!(
-        "p{{{decl}}}\n{latin}.eink-center{{text-align:center;text-indent:0.01em;}}\n.eink-right{{text-align:right;text-indent:0.01em;}}\n{flush}\nfigure{{margin:0;padding:0;}}\nfigcaption{{margin:0;padding:0;}}\n.footnotes{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-fnote{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-note{{page-break-inside:avoid;}}\n.eink-noteicon{{height:1em;width:auto;}}\n"
+        "p{{{decl}}}\n{latin}.eink-center{{text-align:center;text-indent:0.01em;}}\n.eink-right{{text-align:right;text-indent:0.01em;}}\n{flush}\nfigure{{margin:0;padding:0;}}\nfigcaption{{margin:0;padding:0;}}\n.footnotes{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-fnote{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-note{{page-break-inside:avoid;}}\n{NOTEICON_RULE}"
     )
 }
+
+/// 样式表里限图标注释号高度的那条规则（写在 [`wash_css`] 生成的样式表末尾）。注释标号换成数字的模式里优化器按这个常量把它删掉
+/// （`optimize` 第二遍），两处用同一份文字。
+pub const NOTEICON_RULE: &str = ".eink-noteicon{height:1em;width:auto;}\n";
 
 /// 带不止一个 `id` 属性的开标签数（质量门与清洗报告用；`aid`/`data-id` 不算 id）。
 pub fn count_dup_id_tags(html: &str) -> usize {

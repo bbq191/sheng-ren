@@ -81,7 +81,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 next_submit += 1;
             }
             let is_image = image_positions.get(consumed) == Some(&i);
-            let final_data: std::borrow::Cow<[u8]> = match xf.transform_text(name, data, *ish) {
+            let final_data: std::borrow::Cow<[u8]> = match xf.transform_text(name, data, *ish)? {
                 Some(t) => t,
                 None if is_image => {
                     let rx = pending.pop_front().ok_or("图片队列意外为空")?;

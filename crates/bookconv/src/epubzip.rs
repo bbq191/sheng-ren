@@ -5,7 +5,8 @@
 //!   质量门的阶段一）；两者都走 [`read_entries_from`]。
 //! - [`EpubWriter`]：写 EPUB（`mimetype` 置首 STORED，图片 STORED、其余 deflate，可原样拷贝源条目）。
 //! - [`cover_image_of`]：只读 container.xml、OPF 与少数几个条目取出封面图。
-//! - `posix_norm/dir_of/resolve/resolve_rel/resolve_href/relative_to/percent_decode/is_html`：EPUB 内路径与文件名判断。
+//! - `posix_norm/dir_of/resolve/resolve_rel/resolve_href/relative_to/percent_decode/is_html`：EPUB 内路径与文件名判断；
+//!   [`resolve_link`]：链接属性原文 → (zip 路径, 解码后的锚点)，全书解析链接的统一入口。
 use std::io::{Read, Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -265,6 +266,18 @@ pub fn resolve_href<'a>(base_file: &str, href: &'a str) -> (String, Option<&'a s
     (path, frag)
 }
 
+/// 链接**属性原文** → (目标文件的 zip 路径, 解码后的锚点)。全书"属性原文里的链接指向哪里"一律走这里：依次还原字符引用
+/// （`a&amp;b.xhtml` 是文件 `a&b.xhtml`）、拆出锚点、路径与锚点各自百分号解码、按 `base_file` 所在目录解析规整；路径部分为空
+/// （`#x`）时目标就是 `base_file`。锚点拿去对 id 时，id 也要先还原字符引用（`util::xml_unescape`）。没有 `#` 时锚点是 `None`。
+/// 要把锚点**原样写回**链接的调用方（目录、改链）别用这里的锚点，用 [`crate::html::split_href`] 拆出的原文。
+/// 书外链接不该传进来，调用方先用 [`crate::html::is_external`] 筛掉。
+pub fn resolve_link(base_file: &str, raw: &str) -> (String, Option<String>) {
+    let v = crate::util::xml_unescape(raw);
+    let (p, frag) = crate::html::split_href(&v);
+    let path = if p.is_empty() { base_file.to_string() } else { resolve_rel(dir_of(base_file), p) };
+    (path, frag.map(percent_decode))
+}
+
 /// zip 内路径写进 `href`/`src` 用的百分号编码：字母数字与 `-._~/` 原样，其余（空格、`#`、`%`、非 ASCII）按 UTF-8 字节编码。
 pub fn encode_href_path(p: &str) -> String {
     let mut out = String::with_capacity(p.len());
@@ -314,6 +327,13 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::io::Write;
+
+    #[test]
+    fn resolve_link_unescapes_then_splits_and_decodes() {
+        assert_eq!(resolve_link("OEBPS/t/c.xhtml", "../n&amp;b%20x.xhtml#%E6%B3%A8&amp;1"), ("OEBPS/n&b x.xhtml".to_string(), Some("注&1".to_string())));
+        assert_eq!(resolve_link("OEBPS/c.xhtml", "#a"), ("OEBPS/c.xhtml".to_string(), Some("a".to_string())));
+        assert_eq!(resolve_link("c.xhtml", "./x.xhtml"), ("x.xhtml".to_string(), None));
+    }
 
     /// 写一本最小 EPUB 到 `path`：OPF 在 `opf_path`，`files` 是其余条目。
     fn write_epub(path: &std::path::Path, opf_path: &str, opf: &str, files: &[(&str, &[u8])]) {

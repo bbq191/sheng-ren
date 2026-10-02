@@ -9,34 +9,31 @@ fn remote_src(tag: &str) -> Option<(html::Attr<'_>, String)> {
     (src.starts_with("http://") || src.starts_with("https://") || src.starts_with("//")).then_some((a, src))
 }
 
+/// 抓到的远程图：(zip 路径, 字节)。
+pub(super) type Resource = (String, Vec<u8>);
+
 /// HTML 里的远程图（http(s)/协议相对 `//`）→ 抓取降采样内联进 EPUB：抓到→存进 zip（与本章同目录，src 改本地文件名，
-/// 免相对路径计算），调用方再把它补进 OPF manifest（[`add_manifest_items`]）；抓不到→**删掉这个 `<img>`**（2026-09-30 用户定：
-/// 设备上的阅读器不联网，留着只是一个显示不出来的空框或断图标）。`chap_dir`=本章 zip 内目录；`counter` 跨章递增，`taken`（zip 里已有的条目名，含本次已抓到的）
+/// 免相对路径计算），调用方再把它补进 OPF manifest（[`add_manifest_items`]）；**抓不到→返回错误，这次生成失败**（书库因此不记指纹，
+/// 下次再试）：此前是删掉这个 `<img>`，产物取决于当时的网络、指纹却不变，网络好了也不会重新生成（2026-10-03 审计）。`chap_dir`=本章 zip 内目录；`counter` 跨章递增，`taken`（zip 里已有的条目名，含本次已抓到的）
 /// 保资源名唯一——已经优化过的书再跑时书里已有 `remote_img_0.png`，新抓到的图不能再用这个名字（2026-09-28 审计）。
-/// `fetch(src)->Some((字节,ext))|None`（依赖注入便于测试，生产传抓图闭包）。返回（改写后 html, 新增资源 [(zip路径, 字节)]）。
+/// `fetch(src)->Some((字节,ext))|None`（依赖注入便于测试，生产传抓图闭包）。返回（改写后 html, 新增资源 [(zip路径, 字节)]）；
+/// 有一张抓不到就返回 `Err`（说明里带图的地址）。
 pub(super) fn inline_remote_images<F>(
     html_text: &str,
     chap_dir: &str,
     counter: &mut usize,
     taken: &mut HashSet<String>,
     fetch: F,
-) -> (String, Vec<(String, Vec<u8>)>)
+) -> Result<(String, Vec<Resource>), String>
 where
     F: Fn(&str) -> Option<(Vec<u8>, &'static str)>,
 {
     let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    let tags: Vec<html::Tag> = html::tags(html_text).collect();
-    for (k, t) in tags.iter().enumerate().filter(|(_, t)| t.is_start() && t.is("img")) {
+    for t in html::tags(html_text).filter(|t| t.is_start() && t.is("img")) {
         let Some((a, src)) = remote_src(&html_text[t.start..t.end]) else { continue };
         let Some((bytes, ext)) = fetch(&src) else {
-            // 抓不到 → 删掉（写成 `<img …></img>` 的连闭合标签一起删）
-            let end = match tags.get(k + 1) {
-                Some(c) if t.kind == html::TagKind::Open && c.kind == html::TagKind::Close && c.is("img") => c.end,
-                _ => t.end,
-            };
-            edits.push((t.start, end, String::new()));
-            continue;
+            return Err(format!("远程图抓不到（{src}），这次不生成，网络好了再试"));
         };
         let (fname, path) = loop {
             let fname = format!("remote_img_{}.{ext}", *counter);
@@ -50,9 +47,9 @@ where
         edits.push((t.start + a.value_start, t.start + a.value_end, fname));
     }
     if edits.is_empty() {
-        return (html_text.to_string(), resources);
+        return Ok((html_text.to_string(), resources));
     }
-    (html::apply_edits(html_text, edits), resources)
+    Ok((html::apply_edits(html_text, edits), resources))
 }
 
 /// 章节里有没有远程图（与 [`inline_remote_images`] 同一判据的快速预扫，只决定要不要推迟写 OPF）。
@@ -123,7 +120,7 @@ pub(super) fn remote_img_fetcher(ag: &ureq::Agent, screen: crate::imgopt::Screen
 /// 封面被拉伸放大变形），改成 "xMidYMid meet"（保持比例缩放到适配）。只改标签上的这个属性（按属性解析，属性名不分大小写、
 /// 两种引号；小写写法的属性名顺带改成标准的 `preserveAspectRatio`）——此前对全文做字符串替换，正文里写着这串字的也会被改。
 pub(super) fn fix_cover_aspect(html_text: &str) -> String {
-    if !contains_ci(html_text, "preserveaspectratio") {
+    if !html::contains_ci(html_text, "preserveaspectratio") {
         return html_text.to_string();
     }
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
@@ -138,11 +135,6 @@ pub(super) fn fix_cover_aspect(html_text: &str) -> String {
     html::apply_edits(html_text, edits)
 }
 
-/// ASCII 不分大小写地包含。
-fn contains_ci(hay: &str, needle: &str) -> bool {
-    hay.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
-}
-
 /// 封面 SVG 换普通 img：calibre 封面页 `<svg ...><image (xlink:)href="X"/></svg>` 被 xochitl
 /// 拉伸放大（改 preserveAspectRatio 都不吃），换成标准 `<img src="X" style=max-width:100%>` 更可控。
 ///
@@ -151,7 +143,7 @@ fn contains_ci(hay: &str, needle: &str) -> bool {
 /// 它里面**只有一个** `<image>`、没有可见文字（`<text>` 之类），且页面正文里除了它没有别的可见内容。不满足就原样不动。
 pub(super) fn svg_cover_to_img(html_text: &str) -> String {
     use crate::wash::opf::is_local;
-    if !contains_ci(html_text, "<svg") {
+    if !html::contains_ci(html_text, "<svg") {
         return html_text.to_string();
     }
     let (lo, hi) = html::body_range(html_text).unwrap_or((0, html_text.len()));
