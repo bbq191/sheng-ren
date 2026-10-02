@@ -7,7 +7,7 @@
 -- framework.jar 的 Stub 读出来，root 的 adb 和普通应用都实测有效）。这里经 JNI 拿 binder、直接 transact。
 --
 -- 做法：亮着屏时每 2 分钟、以及每次唤醒，按太阳高度定档；进了新的一档就把灯设成这一档的值。
--- 灯的实际值（sysfs，普通应用读得到）和上次设的不一样 = 用户在控制中心手动调过：这一档里不再动，到下一档再接管。
+-- 完全接管（用户 2026-10-02 定，和 Kindle autolight 一致）：每次检查都把灯拉回当前太阳档，灯的实际值和当前档不一样（含被控制中心手动改过）就重设；想一直手动就关掉本插件。
 -- 太阳高度用天文年历的低精度公式（精度约 0.01°，和公开数据对过：昆明 2026-10-02 日出 07:02、日落 18:56），只要经纬度，不用时区。
 -- 只在找得到掌阅这两路灯的安卓设备上启用；别的设备上自己隐藏。
 
@@ -132,8 +132,7 @@ function SunLight:init()
     self.enabled = G_reader_settings:nilOrTrue("sunlight_enabled")
     self.location = G_reader_settings:readSetting("sunlight_location") or DEFAULT_LOCATION
     self.steps = G_reader_settings:readSetting("sunlight_steps") or copy_steps(DEFAULT_STEPS)
-    self.last_set = nil -- { cold, warm, step }：上次自动设的值和档位
-    self.manual_step = nil -- 手动调过的档位：这一档里不再自动设
+    self.last_set_step = nil -- 上次设的档位序号（只为少写日志；完全接管下每次都会按需重设）
     self.failed = false
     self.ui.menu:registerToMainMenu(self)
     if self.enabled then
@@ -192,32 +191,21 @@ function SunLight:adjust()
         return
     end
     local idx = self:stepIndex(self:elevation())
+    local s = self.steps[idx]
     local cold, warm = read_node(COLD_NODE), read_node(WARM_NODE)
-    -- 灯和上次自动设的不一样、且不是全灭（掌阅屏保休眠时把两路都关成 0，别当成手动调）= 用户手动调过：那一档里不再动
-    if self.last_set and (cold > 0 or warm > 0)
-        and not (near(cold, self.last_set.cold) and near(warm, self.last_set.warm)) then
-        self.manual_step = self.last_set.step
-        logger.dbg("SunLight: 手动调过灯", self.last_set.cold, self.last_set.warm, "→", cold, warm)
-        self.last_set = nil
-    end
-    if self.manual_step and self.manual_step ~= idx then
-        self.manual_step = nil -- 到了下一档，重新接管
-    end
-    if not self.manual_step then
-        local s = self.steps[idx]
-        if not (self.last_set and self.last_set.step == idx) and self:setLights(s.cold, s.warm) then
-            self.last_set = { cold = s.cold, warm = s.warm, step = idx }
+    -- 完全接管：灯和当前档不一致（含手动改过、屏保余留的 0）就拉回当前档
+    if not (near(cold, s.cold) and near(warm, s.warm)) then
+        if self:setLights(s.cold, s.warm) and self.last_set_step ~= idx then
             logger.dbg("SunLight: 档位", s.name, "冷", s.cold, "暖", s.warm)
+            self.last_set_step = idx
         end
     end
     self:schedule()
 end
 
 function SunLight:onResume()
-    -- 唤醒时掌阅可能先把灯恢复成它记着的值；记账重开，也清掉休眠前的"手动档"——手动微调不跨越休眠，醒来一律按太阳档重设
-    -- （2026-10-02 真机：屏保休眠把灯关成 0/0，旧逻辑把这当成手动调、之后一直不管灯）。
-    self.last_set = nil
-    self.manual_step = nil
+    -- 唤醒后按当前太阳档重设（屏保休眠会把灯关成 0/0）
+    self.last_set_step = nil
     self:schedule(2)
 end
 
@@ -244,7 +232,7 @@ function SunLight:addToMainMenu(menu_items)
                 callback = function()
                     self.enabled = not self.enabled
                     G_reader_settings:saveSetting("sunlight_enabled", self.enabled)
-                    self.last_set, self.manual_step = nil, nil
+                    self.last_set_step = nil
                     if self.enabled then self:schedule(1) else UIManager:unschedule(self.tick) end
                 end,
             },
@@ -252,8 +240,7 @@ function SunLight:addToMainMenu(menu_items)
                 text_func = function()
                     local elev = self:elevation()
                     local s = self.steps[self:stepIndex(elev)]
-                    local state = self.failed and _("（调灯失败）")
-                        or self.manual_step and _("（手动调过，到下一档再接管）") or ""
+                    local state = self.failed and _("（调灯失败）") or ""
                     return T(_("现在：太阳 %1°，%2档（冷 %3 暖 %4），灯 冷 %5 暖 %6%7"), string.format("%.1f", elev),
                         s.name, s.cold, s.warm, read_node(COLD_NODE) or "?", read_node(WARM_NODE) or "?", state)
                 end,
@@ -281,8 +268,7 @@ function SunLight:addToMainMenu(menu_items)
                     if cold and warm then
                         self.steps[idx].cold, self.steps[idx].warm = cold, warm
                         self:saveSteps()
-                        self.last_set = { cold = cold, warm = warm, step = idx }
-                        self.manual_step = nil
+                        self.last_set_step = nil
                     end
                     touchmenu_instance:updateItems()
                 end,
@@ -294,7 +280,7 @@ function SunLight:addToMainMenu(menu_items)
                 callback = function(touchmenu_instance)
                     self.steps = copy_steps(DEFAULT_STEPS)
                     G_reader_settings:delSetting("sunlight_steps")
-                    self.last_set, self.manual_step = nil, nil
+                    self.last_set_step = nil
                     self:schedule(1)
                     touchmenu_instance:updateItems()
                 end,
