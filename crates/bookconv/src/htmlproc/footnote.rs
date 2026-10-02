@@ -39,11 +39,59 @@ fn is_noteref(open: &str) -> bool {
     html::attrs(open).iter().any(|a| (a.is("type") || a.name.to_ascii_lowercase().ends_with(":type")) && a.value.split_whitespace().any(|v| v == "noteref"))
 }
 
-/// 链接指向的注释键：锚点先百分号解码（NCX/正文常把中文锚点写成 `%E6%B3%A8`），路径按本章解析（`#x` 就是本章）。
+/// 链接（`href` 属性原文）指向的注释键：按 `epubzip::resolve_link` 解析——字符引用还原、锚点百分号解码（NCX/正文常把中文锚点
+/// 写成 `%E6%B3%A8`），路径按本章解析（`#x` 就是本章）。键里的 id 是解码后的值，和注释块 `id` 属性还原字符引用后的值比。
 fn note_key(name: &str, href: &str) -> Option<NoteKey> {
-    let (path, frag) = crate::epubzip::resolve_href(name, href);
-    let frag = frag.filter(|f| !f.is_empty())?;
-    Some((path, html::frag_id(frag).into_owned()))
+    let (path, frag) = crate::epubzip::resolve_link(name, href);
+    Some((path, frag.filter(|f| !f.is_empty())?))
+}
+
+/// 搬走的注释块（[`collect_footnote_notes`] 收集、[`preserve_relink_footnotes`] 放到引用它的那一章末尾）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Note {
+    /// 注释块的内层 html。
+    pub inner: String,
+    /// 来自有序列表 `<ol><li>` 的注释：列表编号是读者看得见的内容，搬过去时连同编号整个 `<li>` 保留在 `<ol start=N>` 里。
+    pub list: Option<ListItem>,
+}
+
+/// 有序列表里的一条注释（见 [`Note::list`]）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListItem {
+    /// 原 `<ol>` 开标签，去掉了 `id`、`start`、`reversed`（`class`、`type`、`style` 这些管编号样式的照留）；放过去时按 `number` 写 `start`。
+    pub ol_open: String,
+    /// 原 `<li>` 开标签原文（`id`、`class`、`value` 都在）。
+    pub li_open: String,
+    /// 这一项在原书里显示的编号（按 `<ol>` 的 `start`/`reversed` 与各项的 `value` 算）。
+    pub number: i64,
+}
+
+/// `<li>`（`spans[li]`）在它的父 `<ol>` 里显示的编号与 `<ol>` 开标签；父元素不是 `<ol>`（`<ul>` 没有编号）→ `None`。
+fn list_item(html_text: &str, spans: &[html::Span], li: usize) -> Option<ListItem> {
+    let pi = spans[li].parent?;
+    let ol = &spans[pi];
+    if ol.name != "ol" {
+        return None;
+    }
+    let ol_open = &html_text[ol.open_start..ol.open_end];
+    let reversed = html::attr(ol_open, "reversed").is_some();
+    let int = |tag: &str, name: &str| html::attr_value(tag, name).and_then(|v| v.trim().parse::<i64>().ok());
+    let items: Vec<usize> = (pi + 1..spans.len()).take_while(|&k| spans[k].open_start < ol.close_start).filter(|&k| spans[k].parent == Some(pi) && spans[k].name == "li").collect();
+    let start = int(ol_open, "start").unwrap_or(if reversed { items.len() as i64 } else { 1 });
+    let step = if reversed { -1 } else { 1 };
+    let mut number = start;
+    for (k, &it) in items.iter().enumerate() {
+        let open = &html_text[spans[it].open_start..spans[it].open_end];
+        number = int(open, "value").unwrap_or(if k == 0 { start } else { number + step });
+        if it == li {
+            let mut ol_tag = ol_open.to_string();
+            for a in ["id", "start", "reversed"] {
+                ol_tag = html::remove_attr(&ol_tag, a);
+            }
+            return Some(ListItem { ol_open: ol_tag, li_open: open.to_string(), number });
+        }
+    }
+    None
 }
 /// 微读 **duokan 图片脚注**标记：`<sup..><a href="#frag">&lt;img ... class="duokan-footnote.." ../&gt;</a></sup>`。
 /// 与 qqreader 版不同：注释块**已在同文件** `<p id="frag">`（前向锚有效），且标记里的 `<img>` 被
@@ -91,30 +139,66 @@ pub fn normalize_self_hrefs(html: &str, own: &str) -> String {
     })
     .into_owned()
 }
-/// 从（转义的）img 内层抽注释序号：`alt="注释12"` → `12`。取不到返回 None（调用方用章内计数兜底）。
+/// 从 img 标签（或转义 img 的内层）抽注释序号：`alt` 属性（任意引号）里的第一串数字，`alt="注释12"` → `12`。
+/// 取不到返回 None（调用方用章内计数兜底）。按属性名完整匹配，`data-alt` 不算。
 pub(super) fn duokan_note_num(img_inner: &str) -> Option<String> {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?i)alt="[^"]*?(\d+)"#).unwrap())
-        .captures(img_inner)
-        .map(|c| c.get(1).unwrap().as_str().to_string())
+    let alt = html::attr_value(img_inner, "alt")?;
+    R.get_or_init(|| Regex::new(r"\d+").unwrap()).find(alt).map(|m| m.as_str().to_string())
 }
+
+/// `前缀数字_数字`（多看的回链落点 `c_3_1`、注释块 id `a_3_1`）。
+fn is_duokan_pair_id(v: &str, prefix: &str) -> bool {
+    v.strip_prefix(prefix).and_then(|r| r.split_once('_')).is_some_and(|(a, b)| [a, b].iter().all(|x| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit())))
+}
+
 /// duokan 注释块里的**回链** `<a ... href="#c_X_Y">注释文字</a>`（跳回标记的 `c_X_Y` 锚，
 /// 但该 id 在书里根本不存在=悬空）。**必须去链成纯文本**：reMarkable 链接索引器遇到"注释块内含
 /// 出链"会把整个脚注对判为互指对而**整对丢弃 → 正向 marker 也点不动**（同 break_footnote_cycles
 /// 的病理，但那里只拆真 2-环、够不到这悬空回链）。去链后注释跟 qqreader 版一样纯文本、正向恢复可跳。
-pub(super) fn duokan_backlink_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r##"(?si)<a\b[^>]*\bhref="#c_\d+_\d+"[^>]*>(.*?)</a>"##).unwrap())
+/// 按元素认（`html::tags`：任意引号，`data-href` 不算）。
+fn unlink_duokan_backlinks(html_text: &str) -> String {
+    let tags: Vec<html::Tag> = html::tags(html_text).collect();
+    let edits: Vec<(usize, usize, String)> = a_elems(&tags)
+        .into_iter()
+        .filter(|e| html::attr_value(&html_text[e.start..e.open_end], "href").and_then(|h| h.strip_prefix('#')).is_some_and(|f| is_duokan_pair_id(f, "c_")))
+        .map(|e| (e.start, e.end, html_text[e.open_end..e.close_start].to_string()))
+        .collect();
+    if edits.is_empty() {
+        html_text.to_string()
+    } else {
+        html::apply_edits(html_text, edits)
+    }
 }
+
 /// duokan 注释块是**无效嵌套 `<p>`**：`<p id="a_X_Y"><p class="pfootnotetext">注释文字</p></p>`。
 /// 多条注释成簇相邻时，reMarkable 渲染无效嵌套 `<p>` 会自动闭合外层 + 杂散 `</p>` → **吞/合并其中一条**
-/// （"缺一条"根因）。拍平成合法单段 `<p id="a_X_Y">注释文字</p>`，锚点保留、每条独立可跳。
-/// group1=id（a_X_Y）、group2=内层 `<p>` 属性、group3=注释文字。
-pub(super) fn duokan_note_block_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r##"(?si)<p\b[^>]*\bid="(a_\d+_\d+)"[^>]*>\s*<p\b([^>]*)>(.*?)</p>\s*</p>"##).unwrap()
-    })
+/// （"缺一条"根因）。拍平成合法单段 `<p id="a_X_Y" + 内层 <p> 的属性>注释文字</p>`，锚点保留、每条独立可跳。
+/// 按标签认（`html::tags`：id 任意引号，`data-id` 不算）；两层 `<p>` 之间、两个 `</p>` 之间只能有空白。
+fn flatten_duokan_note_blocks(html_text: &str) -> String {
+    let tags: Vec<html::Tag> = html::tags(html_text).collect();
+    let is_p = |t: &html::Tag, kind: html::TagKind| t.kind == kind && t.is("p");
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut k = 0;
+    while k < tags.len() {
+        let t = &tags[k];
+        k += 1;
+        if !is_p(t, html::TagKind::Open) {
+            continue;
+        }
+        let Some(id) = html::attr_value(&html_text[t.start..t.end], "id").filter(|v| is_duokan_pair_id(v, "a_")) else { continue };
+        let Some(inner) = tags.get(k).filter(|x| is_p(x, html::TagKind::Open) && html_text[t.end..x.start].trim().is_empty()) else { continue };
+        let Some(c1) = (k + 1..tags.len()).find(|&m| is_p(&tags[m], html::TagKind::Close)) else { continue };
+        let Some(c2) = tags.get(c1 + 1).filter(|x| is_p(x, html::TagKind::Close) && html_text[tags[c1].end..x.start].trim().is_empty()) else { continue };
+        let inner_attrs = &html_text[inner.start + 2..inner.end - 1];
+        edits.push((t.start, c2.end, format!("<p id=\"{id}\"{inner_attrs}>{}</p>", &html_text[inner.end..tags[c1].start])));
+        k = c1 + 2;
+    }
+    if edits.is_empty() {
+        html_text.to_string()
+    } else {
+        html::apply_edits(html_text, edits)
+    }
 }
 /// 属性串里 `href` 的锚点（`href="x.html#f"` / `href='#f'` → `f`）。
 pub(super) fn href_fragment(attrs: &str) -> Option<String> {
@@ -137,11 +221,76 @@ pub(super) fn deprefix_footnote_hrefs(s: &str) -> String {
 ///
 /// 弹窗模式（`popup`）用 `<aside epub:type="footnote">`：EPUB 3 标注脚注的写法，支持弹窗的阅读器据此认出注释。
 /// 每条都带 `eink-note` 类：样式表里 `page-break-inside:avoid`，一条注释不被拆到两页（长过一页的阅读器照常断开）。
-fn footnote_block(frag: &str, inner: &str, popup: bool) -> String {
+///
+/// `id` 是解码后的值（注释键），拼进属性前转义。
+fn footnote_block(id: &str, inner: &str, popup: bool) -> String {
+    let id = xml_escape(id);
     if popup {
-        format!("<aside epub:type=\"footnote\" id=\"{frag}\" class=\"eink-note\">{inner}</aside>")
+        format!("<aside epub:type=\"footnote\" id=\"{id}\" class=\"eink-note\">{inner}</aside>")
     } else {
-        format!("<div id=\"{frag}\" class=\"eink-note\">{inner}</div>")
+        format!("<div id=\"{id}\" class=\"eink-note\">{inner}</div>")
+    }
+}
+
+/// 有序列表来的注释放到章末时的 `<li>`：原 `<li>` 开标签（id、class、value 都在）加 `eink-note` 类，弹窗模式标 `epub:type="footnote"`。
+fn footnote_list_item(item: &ListItem, inner: &str, popup: bool) -> String {
+    let mut open = html::add_class(&item.li_open, "eink-note");
+    if popup {
+        open = html::set_attr(&open, "epub:type", "footnote");
+    }
+    format!("{open}{inner}</li>")
+}
+
+/// 章末注释区里的一条：普通块，或有序列表里的一项（相邻、同一个列表、编号连续的几项合成一个 `<ol start=N>`）。
+enum Placed {
+    Block(String),
+    Item { file: String, ol_open: String, number: i64, li: String },
+}
+
+/// 把章末注释区的各条拼起来（列表项按 [`Placed`] 的规则分组）。
+fn render_placed(placed: &[Placed]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut k = 0;
+    while k < placed.len() {
+        match &placed[k] {
+            Placed::Block(b) => {
+                out.push(b.clone());
+                k += 1;
+            }
+            Placed::Item { file, ol_open, number, .. } => {
+                let mut lis: Vec<&str> = Vec::new();
+                let mut next = *number;
+                while let Some(Placed::Item { file: f, ol_open: o, number: n, li }) = placed.get(k) {
+                    if f != file || o != ol_open || *n != next {
+                        break;
+                    }
+                    lis.push(li);
+                    next += 1;
+                    k += 1;
+                }
+                out.push(format!("{}\n{}\n</ol>", html::set_attr(ol_open, "start", &number.to_string()), lis.join("\n")));
+            }
+        }
+    }
+    out.join("\n")
+}
+
+/// 标号 `<a>` 开标签改成指向本章 `#frag`：其它属性（`id` 回链落点、`class`……）原样保留，只改 `href`；弹窗模式标
+/// `epub:type="noteref"`，跳转模式去掉标 noteref 的 `type`/`epub:type`（xochitl 不认）。
+fn relinked_marker_open(open: &str, frag: &str, popup: bool) -> String {
+    let tag = html::set_attr(open, "href", &format!("#{frag}"));
+    if popup {
+        return html::set_attr(&tag, "epub:type", "noteref");
+    }
+    let edits: Vec<(usize, usize, String)> = html::attrs(&tag)
+        .into_iter()
+        .filter(|a| (a.is("type") || a.name.to_ascii_lowercase().ends_with(":type")) && a.value.split_whitespace().any(|v| v == "noteref"))
+        .map(|a| (tag[..a.start].trim_end().len(), a.end, String::new()))
+        .collect();
+    if edits.is_empty() {
+        tag
+    } else {
+        html::apply_edits(&tag, edits)
     }
 }
 
@@ -296,21 +445,25 @@ fn referenced_note_frags(html_text: &str) -> Vec<String> {
 /// `require_semantic`：优化器传 true——对任意导入书要求块自带 footnote/note 语义（`note_semantic`），
 /// 防把普通跨文件交叉引用误当尾注搬走；传 **false** 时"**id 被 marker 引用**"本身即注释的充分证据
 /// （微读注释块 class 是混淆名，如 `class_s1r`，13·67 的 `<p>` 注释即此）。
+///
+/// `referenced` 与返回的 id 都是解码后的值（`id` 属性还原字符引用，见 `note_key`）。有序列表 `<ol><li>` 里的注释连同编号记下
+/// （[`Note::list`]）；搬空了的 `<ol>`，以及只剩分隔线的注释区容器（带注释语义、没有 `id`）连同紧挨在前面的 `<hr>` 一起去掉——
+/// 注释会在引用它的章末重新放一个带分隔线的注释区，原处只剩空列表和多出来的分隔线。
 pub fn collect_footnote_notes(
     html_text: &str,
     referenced: &std::collections::HashSet<String>,
     require_semantic: bool,
-) -> (String, Vec<(String, String)>) {
-    let mut index: Vec<(String, String)> = Vec::new();
+) -> (String, Vec<(String, Note)>) {
+    let mut index: Vec<(String, Note)> = Vec::new();
     // 快速路径：块只有在开标签带 `id="X"` 且 X 被引用时才会被搬走。本章任何位置都找不到一个被引用的
     // `id="…"` 值 → 结果必然与原文相同，不必解析（2026-09-24 审计实测这一步占章节变换耗时的大头，绝大多数章节其实没有注释块）。
     if !mentions_referenced_id(html_text, referenced) {
         return (html_text.to_string(), index);
     }
     let spans = html::parse_spans(html_text, 0, html_text.len());
-    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut taken: Vec<usize> = Vec::new();
     let mut taken_until = 0usize;
-    for sp in &spans {
+    for (si, sp) in spans.iter().enumerate() {
         if sp.open_start < taken_until || !sp.closed() || !matches!(sp.name.as_str(), "aside" | "p" | "li" | "div") {
             continue;
         }
@@ -320,28 +473,76 @@ pub fn collect_footnote_notes(
             continue; // 嵌套 div：原样保留不搬
         }
         let Some(id) = html::attr_value(open, "id").filter(|v| !v.is_empty()) else { continue };
-        if referenced.contains(id) && (!require_semantic || note_semantic(open)) {
-            index.push((id.to_string(), inner.to_string()));
-            edits.push((sp.open_start, sp.close_end, String::new()));
+        let id = crate::util::xml_unescape(id);
+        if referenced.contains(id.as_ref()) && (!require_semantic || note_semantic(open)) {
+            let list = if sp.name == "li" { list_item(html_text, &spans, si) } else { None };
+            index.push((id.into_owned(), Note { inner: inner.to_string(), list }));
+            taken.push(si);
             taken_until = sp.close_end;
         }
     }
-    if edits.is_empty() {
+    if taken.is_empty() {
         return (html_text.to_string(), index);
     }
-    (html::apply_edits(html_text, edits), index)
+    let mut removed: Vec<(usize, usize)> = taken.iter().map(|&si| (spans[si].open_start, spans[si].close_end)).collect();
+    // 搬空的列表、只剩分隔线的注释区：从被搬走的块往上找
+    let mut checked: HashSet<usize> = HashSet::new();
+    for &si in &taken {
+        let mut p = spans[si].parent;
+        while let Some(pi) = p {
+            if !checked.insert(pi) {
+                break;
+            }
+            let sp = &spans[pi];
+            let open = &html_text[sp.open_start..sp.open_end];
+            let container = matches!(sp.name.as_str(), "ol" | "ul") || (note_semantic(open) && !matches!(sp.name.as_str(), "body" | "html"));
+            if !container || !sp.closed() || html::attr(open, "id").is_some() || !leftover_is_empty(html_text, sp.open_end, sp.close_start, &removed) {
+                break;
+            }
+            // 紧挨在前面的分隔线（中间只有空白）一起去掉
+            let before = html::tags(&html_text[..sp.open_start]).last().filter(|t| t.is_start() && t.is("hr") && html_text[t.end..sp.open_start].trim().is_empty());
+            removed.push((before.map_or(sp.open_start, |t| t.start), sp.close_end));
+            p = sp.parent;
+        }
+    }
+    removed.sort_by_key(|r| (r.0, std::cmp::Reverse(r.1)));
+    (html::apply_edits(html_text, removed.into_iter().map(|(s, e)| (s, e, String::new())).collect()), index)
 }
 
-/// `html` 里有没有某处 `id` 属性的值在 `referenced` 里：每个 `id`（不分大小写、不看词边界）出现的位置都按属性解析一次
-/// （`html::attrs`，和 [`collect_footnote_notes`] 取 id 用的是同一套：`id = "n1"`、单引号、不带引号都认）。
-/// 是开标签上 `id` 属性可能取到的值的超集，所以返回 `false` 时可以断定没有块会被搬走。
+/// `html[lo..hi]` 去掉 `removed` 里落在其中的区间、再去掉分隔线 `<hr>` 后，还有没有读者看得见的内容（口径同 `html::has_visible`）。
+fn leftover_is_empty(html_text: &str, lo: usize, hi: usize, removed: &[(usize, usize)]) -> bool {
+    let mut cut: Vec<(usize, usize)> = removed.iter().copied().filter(|&(s, e)| s >= lo && e <= hi).collect();
+    cut.sort();
+    let mut rest = String::new();
+    let mut pos = lo;
+    for (s, e) in cut {
+        if s >= pos {
+            rest.push_str(&html_text[pos..s]);
+        }
+        pos = pos.max(e);
+    }
+    rest.push_str(&html_text[pos..hi]);
+    let hrs: Vec<(usize, usize, String)> = html::tags(&rest).filter(|t| t.is_start() && t.is("hr")).map(|t| (t.start, t.end, String::new())).collect();
+    !html::has_visible(&html::apply_edits(&rest, hrs))
+}
+
+/// `html` 里有没有某个开标签的 `id` 属性值（还原字符引用后）在 `referenced` 里。只看标签（`html::tags`）里、前一个字节是空白或
+/// 引号的 `id`（不分大小写），在那里按属性解析（`html::attrs`，和 [`collect_footnote_notes`] 取 id 用的是同一套：`id = "n1"`、单引号、
+/// 不带引号都认）——正文里的 "id" 不解析、不分配。是开标签上 `id` 属性可能取到的值的超集，所以返回 `false` 时可以断定没有块会被搬走。
 fn mentions_referenced_id(html: &str, referenced: &std::collections::HashSet<String>) -> bool {
     if referenced.is_empty() {
         return false;
     }
-    let b = html.as_bytes();
-    // `i` 处是 ASCII 字节 `i`/`I`，必是字符边界
-    (0..b.len().saturating_sub(1)).any(|i| b[i..i + 2].eq_ignore_ascii_case(b"id") && html::attrs(&html[i..]).first().is_some_and(|a| a.is("id") && referenced.contains(a.value)))
+    html::tags(html).filter(|t| t.is_start()).any(|t| {
+        let tag = &html[t.start..t.end];
+        let b = tag.as_bytes();
+        // `i` 处是 ASCII 字节 `i`/`I`，必是字符边界
+        (1..b.len().saturating_sub(1)).any(|i| {
+            b[i..i + 2].eq_ignore_ascii_case(b"id")
+                && matches!(b[i - 1], b' ' | b'\t' | b'\n' | b'\r' | b'\x0c' | b'"' | b'\'')
+                && html::attrs(&tag[i..]).first().is_some_and(|a| a.is("id") && referenced.contains(crate::util::xml_unescape(a.value).as_ref()))
+        })
+    })
 }
 
 /// 修微读 **duokan 图片脚注标记**（导入优化器 `optimize_epub` 用）：
@@ -405,17 +606,9 @@ fn fix_duokan_markers_with(html: &str, unlink_backlinks: bool) -> String {
         })
         .into_owned();
     // 去链注释块里的回链（#c_X_Y），否则 reMarkable 判互指对整对丢弃、正向也点不动（只在去回链的模式）。
-    let unlinked = if unlink_backlinks {
-        duokan_backlink_re().replace_all(&markers, |c: &regex::Captures| c.get(1).unwrap().as_str().to_string()).into_owned()
-    } else {
-        markers
-    };
+    let unlinked = if unlink_backlinks { unlink_duokan_backlinks(&markers) } else { markers };
     // 拍平注释块的无效嵌套 <p>（成簇相邻时会被 reMarkable 吞掉一条），锚点保留。
-    duokan_note_block_re()
-        .replace_all(&unlinked, |c: &regex::Captures| {
-            format!("<p id=\"{}\"{}>{}</p>", c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str(), c.get(3).unwrap().as_str())
-        })
-        .into_owned()
+    flatten_duokan_note_blocks(&unlinked)
 }
 
 /// 优化器专用脚注处理：**保留标号原样**（上标、数字、图标都不动，前后一个字不加），只把 `<a>` 的 href 规整成同章 `#frag`，
@@ -425,35 +618,36 @@ fn fix_duokan_markers_with(html: &str, unlink_backlinks: bool) -> String {
 ///
 /// marker 按元素认（[`a_elems`]，与 [`referenced_note_keys`] 同一口径）：`<sup>` 整个包住的 noteref、其余 noteref、跨文件普通 `<a>`。
 /// 2026-09-29 起不再在标号后追加 `[N]`（用户定：严格说多了字符）。
-pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::collections::HashMap<NoteKey, String>, mode: crate::optimize::FootnoteMode) -> String {
+///
+/// 标号原样：`<a>` 只改 `href`（弹窗模式另标 `epub:type`），`id`（注释回链的落点）、`class` 等属性和外面的 `<sup>` 都不动——此前整个
+/// 重写成 `<a href>`，丢了 `id`，注释里指回 `#fnref1` 的回链成了死链（pandoc 的写法）。有序列表来的注释连同编号放成 `<ol start=N>`。
+pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::collections::HashMap<NoteKey, Note>, mode: crate::optimize::FootnoteMode) -> String {
     use crate::optimize::FootnoteMode;
     if index.is_empty() {
         return html_text.to_string();
     }
     let popup = mode == FootnoteMode::Popup;
-    let noteref = if popup { " epub:type=\"noteref\"" } else { "" };
-    let mut appended: Vec<String> = Vec::new();
+    let mut appended: Vec<Placed> = Vec::new();
     let mut seen: std::collections::HashSet<NoteKey> = std::collections::HashSet::new();
 
-    let mut make = |frag: &str, key: &NoteKey, text: &str, content: &str, sup_wrapped: bool| -> String {
+    let mut make = |frag: &str, key: &NoteKey, note: &Note, open: &str, content: &str| -> String {
         if seen.insert(key.clone()) {
             // 注释放章末。不加可点回链——真机实测 reMarkable 会丢弃"marker↔注释"互指里较晚那条
             // (注释回链)，加了也点不了、反成死链迷惑人。返回靠阅读器原生。
-            appended.push(footnote_block(&key.1, &deprefix_footnote_hrefs(text), popup));
+            let inner = deprefix_footnote_hrefs(&note.inner);
+            appended.push(match &note.list {
+                Some(item) => Placed::Item { file: key.0.clone(), ol_open: item.ol_open.clone(), number: item.number, li: footnote_list_item(item, &inner, popup) },
+                None => Placed::Block(footnote_block(&key.1, &inner, popup)),
+            });
         }
-        let link = format!("<a href=\"#{frag}\"{noteref}>{}</a>", mark_note_icons(content));
-        if sup_wrapped {
-            format!("<sup>{link}</sup>")
-        } else {
-            link
-        }
+        format!("{}{}</a>", relinked_marker_open(open, frag, popup), mark_note_icons(content))
     };
 
     let tags: Vec<html::Tag> = html::tags(html_text).collect();
     let elems = a_elems(&tags);
     let only_ws = |a: usize, b: usize| html_text[a..b].trim().is_empty();
-    // 每个 <a>：(href, 锚点原文, 注释键, 注释正文)——只有键在 index 里的才算 marker。
-    let lookup = |e: &AElem| -> Option<(&str, &str, NoteKey, &String)> {
+    // 每个 <a>：(href, 锚点原文, 注释键, 注释)——只有键在 index 里的才算 marker。
+    let lookup = |e: &AElem| -> Option<(&str, &str, NoteKey, &Note)> {
         let href = html::attr_value(&html_text[e.start..e.open_end], "href")?;
         if html::is_external(html::split_href(href).0) {
             return None;
@@ -465,28 +659,25 @@ pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::colle
     };
     let mut done = vec![false; elems.len()];
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    // 1) <sup> 整体包裹的图标 noteref；2) 剩余裸 noteref
+    // 1) <sup> 整体包裹的 noteref；2) 剩余裸 noteref（两遍只决定注释在章末的先后，`<sup>` 本身不动，只改里面的 `<a>`）
     for pass_sup in [true, false] {
         for (i, e) in elems.iter().enumerate() {
             if done[i] || !is_noteref(&html_text[e.start..e.open_end]) {
                 continue;
             }
-            let range = if pass_sup {
+            if pass_sup {
                 let sup_open = e.open_ix.checked_sub(1).map(|k| &tags[k]).filter(|t| t.kind == html::TagKind::Open && t.is("sup") && only_ws(t.end, e.start));
                 let sup_close = tags.get(e.close_ix + 1).filter(|t| t.kind == html::TagKind::Close && t.is("sup") && only_ws(e.end, t.start));
-                match (sup_open, sup_close) {
-                    (Some(o), Some(c)) => (o.start, c.end),
-                    _ => continue,
+                if sup_open.is_none() || sup_close.is_none() {
+                    continue;
                 }
-            } else {
-                (e.start, e.end)
-            };
-            let Some((_, frag, key, text)) = lookup(e) else {
+            }
+            let Some((_, frag, key, note)) = lookup(e) else {
                 done[i] = true; // 查不到（不是收集来的注释）：三遍都不会改它
                 continue;
             };
             done[i] = true;
-            edits.push((range.0, range.1, make(frag, &key, text, &html_text[e.open_end..e.close_start], pass_sup)));
+            edits.push((e.start, e.end, make(frag, &key, note, &html_text[e.start..e.open_end], &html_text[e.open_end..e.close_start])));
         }
     }
     // 3) 跨文件普通 <a href="其他文件#frag">：非 noteref，但 frag 已被 collect_footnote_notes 收进
@@ -495,9 +686,8 @@ pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::colle
         if done[i] || href_crossfile_fragment(&html_text[e.start..e.open_end]).is_none() {
             continue;
         }
-        let Some((_, frag, key, text)) = lookup(e) else { continue };
-        let content = &html_text[e.open_end..e.close_start];
-        let new = make(frag, &key, text, content, false);
+        let Some((_, frag, key, note)) = lookup(e) else { continue };
+        let new = make(frag, &key, note, &html_text[e.start..e.open_end], &html_text[e.open_end..e.close_start]);
         edits.push((e.start, e.end, new));
     }
     if edits.is_empty() {
@@ -510,7 +700,7 @@ pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::colle
     }
     // ⚠ 注释区必须插到 </body> **之内**。optimize 处理的是完整 xhtml，若加到文件末尾就落在
     // </body></html> 外面=无效 HTML，xochitl 不为其中的 id 建锚点 → marker 死链、点不动。
-    let block = format!("\n<hr/>\n<div class=\"footnotes\">\n{}\n</div>\n", appended.join("\n"));
+    let block = format!("\n<hr/>\n<div class=\"footnotes\">\n{}\n</div>\n", render_placed(&appended));
     // 按 `html::body_range` 找 `</body>`（不分大小写；此前只认小写，`</BODY>` 的书注释区落到 `</html>` 后面）
     let out = match html::body_range(&out) {
         Some((_, pos)) => format!("{}{}{}", &out[..pos], block, &out[pos..]),
@@ -597,7 +787,7 @@ mod footnote_inline_tests {
         let notes = r#"<aside id="a51U" type="footnote" class="class_svk"><a href="x#y">4</a>. CID</aside><p id='a51T' class="class_s1r"><a href="part0037.html#a541">3</a>. 帮办、大帮：一词八十年代已式微</p>"#;
         let referenced: HashSet<String> = referenced_note_frags(text).into_iter().collect();
         let (notes_cleaned, collected) = collect_footnote_notes(notes, &referenced, false);
-        let map: HashMap<String, String> = collected.into_iter().collect();
+        let map: HashMap<String, Note> = collected.into_iter().collect();
         assert!(map.contains_key("a51T"), "单引号 id 的 <p> 注释也要收: keys={:?}", map.keys().collect::<Vec<_>>());
         assert!(!notes_cleaned.contains("a51T"), "a51T 注释未从原位移除");
     }
@@ -607,6 +797,10 @@ mod footnote_inline_tests {
 mod optimizer_footnote_tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
+
+    fn note(inner: &str) -> Note {
+        Note { inner: inner.to_string(), list: None }
+    }
 
     // ---- collect_footnote_notes：只搬被引用 + 语义确证的块 ----
     #[test]
@@ -661,8 +855,8 @@ mod optimizer_footnote_tests {
     // ---- preserve_relink_footnotes：跨文件普通尾注（"中间章节点了不跳"的主因）----
     #[test]
     fn crossfile_plain_endnote_relinked() {
-        let mut index: HashMap<NoteKey, String> = HashMap::new();
-        index.insert(("notes/notes.xhtml".to_string(), "n12".to_string()), "第十二条注释文本".to_string());
+        let mut index: HashMap<NoteKey, Note> = HashMap::new();
+        index.insert(("notes/notes.xhtml".to_string(), "n12".to_string()), note("第十二条注释文本"));
         let chapter = r#"<html><body><p>正文波波<a href="../notes/notes.xhtml#n12">12</a>后续</p></body></html>"#;
         let out = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
         assert!(out.contains(r##"<a href="#n12">12</a>"##), "跨文件 marker 未改成同章锚点: {out}");
@@ -687,8 +881,8 @@ mod optimizer_footnote_tests {
         let mut referenced = HashSet::new();
         referenced.insert("fn1".to_string());
         let (_, idx_vec) = collect_footnote_notes(notes_chapter, &referenced, true);
-        let index: HashMap<NoteKey, String> = idx_vec.into_iter().map(|(id, t)| (("notes.xhtml".to_string(), id), t)).collect();
-        assert!(index.get(&("notes.xhtml".to_string(), "fn1".to_string())).unwrap().contains("<p>"), "前提：源块内层确实带 <p>，测试才有意义");
+        let index: HashMap<NoteKey, Note> = idx_vec.into_iter().map(|(id, t)| (("notes.xhtml".to_string(), id), t)).collect();
+        assert!(index.get(&("notes.xhtml".to_string(), "fn1".to_string())).unwrap().inner.contains("<p>"), "前提：源块内层确实带 <p>，测试才有意义");
 
         let chapter = r#"<html><body><p>正文<a href="notes.xhtml#fn1">1</a>续</p></body></html>"#;
         let out = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
@@ -699,8 +893,8 @@ mod optimizer_footnote_tests {
     /// `<sup>` 包裹的图标 noteref：标号原样保留（不再换成 `[N]`，2026-09-29 用户定），图标加 `eink-noteicon` 类限成一个字高。
     #[test]
     fn sup_wrapped_image_marker_kept_with_icon_class() {
-        let mut index: HashMap<NoteKey, String> = HashMap::new();
-        index.insert(("c.xhtml".to_string(), "fo14".to_string()), "注释文字".to_string());
+        let mut index: HashMap<NoteKey, Note> = HashMap::new();
+        index.insert(("c.xhtml".to_string(), "fo14".to_string()), note("注释文字"));
         let chapter = r##"<p>正文<sup><a type="noteref" href="#fo14"><img alt="" src="../Images/note.png"/></a></sup>续</p>"##;
         let out = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
         assert!(out.contains(r##"<sup><a href="#fo14"><img class="eink-noteicon" alt="" src="../Images/note.png"/></a></sup>续"##), "{out}");
@@ -711,12 +905,12 @@ mod optimizer_footnote_tests {
     /// 可见文字和跳转模式一样（标号原样，一个字不加）。
     #[test]
     fn popup_mode_marks_noteref_and_aside_footnote() {
-        let mut index: HashMap<NoteKey, String> = HashMap::new();
-        index.insert(("notes.xhtml".to_string(), "n1".to_string()), "注释一".to_string());
+        let mut index: HashMap<NoteKey, Note> = HashMap::new();
+        index.insert(("notes.xhtml".to_string(), "n1".to_string()), note("注释一"));
         let chapter = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文<sup><a epub:type="noteref" href="notes.xhtml#n1">1</a></sup>续<a class="x" href="notes.xhtml#n1">1</a></p></body></html>"#;
         let out = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Popup);
         assert!(out.starts_with(r#"<html xmlns:epub="http://www.idpf.org/2007/ops" xmlns="http://www.w3.org/1999/xhtml">"#), "{out}");
-        assert!(out.contains(r##"<sup><a href="#n1" epub:type="noteref">1</a></sup>续<a href="#n1" epub:type="noteref">1</a>"##), "{out}");
+        assert!(out.contains(r##"<sup><a epub:type="noteref" href="#n1">1</a></sup>续<a class="x" href="#n1" epub:type="noteref">1</a>"##), "{out}");
         assert_eq!(out.matches(r#"<aside epub:type="footnote" id="n1" class="eink-note">注释一</aside>"#).count(), 1, "同一条注释只放一次: {out}");
         let jump = preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
         assert!(!jump.contains("epub:"), "跳转模式不带 epub:type（xochitl 不认）: {jump}");
@@ -789,7 +983,7 @@ mod optimizer_footnote_tests {
     #[test]
     fn crossfile_nonnote_link_untouched() {
         // 目标不在 index（不是注释）→ 跨文件链接原样不动，绝不误搬目录/交叉引用。
-        let index: HashMap<NoteKey, String> = HashMap::new();
+        let index: HashMap<NoteKey, Note> = HashMap::new();
         let chapter = r#"<p>见<a href="chap03.xhtml#sec2">第三章</a></p>"#;
         assert_eq!(preserve_relink_footnotes(chapter, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor), chapter);
     }
@@ -863,5 +1057,87 @@ mod optimizer_footnote_tests {
         // 三个 id 也只留首个
         let three = r#"<div id="a" id="b" id="c"></div>"#;
         assert_eq!(collapse_dup_id_attrs(three), r#"<div id="a"></div>"#);
+    }
+
+    /// 2026-10-03 审计：重建标号时整个 `<a>` 重写成 `<a href>`，丢了 `id="fnref1"`，注释里指回 `#fnref1` 的回链成了死链（pandoc 写法）。
+    /// 现在只改 `href`，`id`/`class` 和 `<sup>` 的属性都留着；质量门查同文件锚点，回链指得到。
+    #[test]
+    fn marker_keeps_id_so_note_backlink_resolves() {
+        let ch = r##"<html><body><p>正文<sup class="s"><a href="#fn1" class="footnote-ref" id="fnref1" epub:type="noteref">1</a></sup>续</p><section class="footnotes" epub:type="footnotes"><hr/><ol><li id="fn1" class="footnote"><p>注释<a href="#fnref1" class="footnote-back">↩</a></p></li></ol></section></body></html>"##;
+        let referenced: HashSet<String> = referenced_note_keys(ch, "OEBPS/c.xhtml").into_iter().map(|k| k.1).collect();
+        let (cleaned, idx) = collect_footnote_notes(ch, &referenced, true);
+        let index: HashMap<NoteKey, Note> = idx.into_iter().map(|(id, n)| (("OEBPS/c.xhtml".to_string(), id), n)).collect();
+        let out = preserve_relink_footnotes(&cleaned, "OEBPS/c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
+        assert!(out.contains(r##"<sup class="s"><a href="#fn1" class="footnote-ref" id="fnref1">1</a></sup>续"##), "标号只改 href、去掉 noteref 类型: {out}");
+        assert!(out.contains(r##"<a href="#fnref1" class="footnote-back">↩</a>"##), "{out}");
+        let rep = crate::check::check_entries(&[crate::epubzip::Entry { name: "OEBPS/c.xhtml".into(), data: out.clone().into_bytes() }], false);
+        assert_eq!(rep.dead_anchor_links, 0, "回链与标号都指得到: {:?} {out}", rep.warnings);
+        // 旧写法（丢 id）质量门报得出来
+        let broken = out.replace(r#" id="fnref1""#, "");
+        let rep = crate::check::check_entries(&[crate::epubzip::Entry { name: "OEBPS/c.xhtml".into(), data: broken.into_bytes() }], false);
+        assert_eq!(rep.dead_anchor_links, 1, "{:?}", rep.warnings);
+    }
+
+    /// 注释块的 id 带字符引用、注释文件名带 `&`：链接解析还原字符引用后才认得出（此前把属性原文直接拿去解析路径）；放过去时 id 再转义。
+    #[test]
+    fn note_keys_decode_char_refs_in_path_and_id() {
+        let ch = r##"<p>正文<a epub:type="noteref" href="n&amp;b.xhtml#a&amp;1">1</a></p>"##;
+        assert_eq!(referenced_note_keys(ch, "OEBPS/c.xhtml"), [("OEBPS/n&b.xhtml".to_string(), "a&1".to_string())]);
+        let referenced: HashSet<String> = ["a&1".to_string()].into_iter().collect();
+        let (_, idx) = collect_footnote_notes(r#"<aside id="a&amp;1" class="footnote">注</aside>"#, &referenced, true);
+        assert_eq!(idx[0].0, "a&1");
+        let index: HashMap<NoteKey, Note> = idx.into_iter().map(|(id, n)| (("OEBPS/n&b.xhtml".to_string(), id), n)).collect();
+        let out = preserve_relink_footnotes(ch, "OEBPS/c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
+        assert!(out.contains(r##"<a href="#a&amp;1">1</a>"##) && out.contains(r#"<div id="a&amp;1" class="eink-note">注</div>"#), "{out}");
+    }
+
+    /// 有序列表里的注释：列表编号是看得见的内容，搬过去连同编号放成 `<ol start=N>`（相邻、编号连续的合成一组）；
+    /// 搬空的 `<ol>` 与只剩分隔线的注释区一起清掉，不留空列表、不多一条分隔线。
+    #[test]
+    fn ordered_list_notes_keep_numbers_and_leave_no_empty_list() {
+        let notes = r##"<html><body><p>后记</p>
+<hr/>
+<section class="footnotes"><hr/><ol start="3" class="fn"><li id="n3" class="footnote">甲</li><li id="n4" class="footnote">乙</li><li id="n9" class="footnote" value="9">丙</li></ol></section>
+</body></html>"##;
+        let referenced: HashSet<String> = ["n3", "n4", "n9"].iter().map(|s| s.to_string()).collect();
+        let (cleaned, idx) = collect_footnote_notes(notes, &referenced, true);
+        assert_eq!(cleaned, "<html><body><p>后记</p>\n\n</body></html>", "空列表、注释区与它前面的分隔线都去掉");
+        let nums: Vec<i64> = idx.iter().map(|(_, n)| n.list.as_ref().unwrap().number).collect();
+        assert_eq!(nums, [3, 4, 9]);
+        assert_eq!(idx[0].1.list.as_ref().unwrap().ol_open, r#"<ol class="fn">"#);
+        let index: HashMap<NoteKey, Note> = idx.into_iter().map(|(id, n)| (("n.xhtml".to_string(), id), n)).collect();
+        let ch = r##"<html><body><p>正文<a href="n.xhtml#n3">3</a><a href="n.xhtml#n4">4</a><a href="n.xhtml#n9">9</a></p></body></html>"##;
+        let out = preserve_relink_footnotes(ch, "c.xhtml", &index, crate::optimize::FootnoteMode::Anchor);
+        assert!(out.contains("<div class=\"footnotes\">\n<ol class=\"fn\" start=\"3\">\n<li id=\"n3\" class=\"footnote eink-note\">甲</li>\n<li id=\"n4\" class=\"footnote eink-note\">乙</li>\n</ol>\n<ol class=\"fn\" start=\"9\">\n<li id=\"n9\" class=\"footnote eink-note\" value=\"9\">丙</li>\n</ol>\n</div>"), "{out}");
+        assert_eq!(out.matches("<hr/>").count(), 1, "{out}");
+        // 只搬走一部分：列表还在，编号照算（倒序列表也认）
+        let part = r#"<ol id="R" reversed="reversed"><li id="a" class="footnote">一</li><li id="b" class="footnote">二</li></ol>"#;
+        let (cleaned, idx) = collect_footnote_notes(part, &["b".to_string()].into_iter().collect(), true);
+        assert_eq!(cleaned, r#"<ol id="R" reversed="reversed"><li id="a" class="footnote">一</li></ol>"#);
+        assert_eq!((idx[0].1.list.as_ref().unwrap().number, idx[0].1.list.as_ref().unwrap().ol_open.as_str()), (1, "<ol>"));
+        // 无序列表、带 id 的容器：编号不记 / 容器不删
+        let (cleaned, idx) = collect_footnote_notes(r#"<div class="notes" id="end"><ul><li id="u" class="footnote">x</li></ul></div>"#, &["u".to_string()].into_iter().collect(), true);
+        assert_eq!(cleaned, r#"<div class="notes" id="end"></div>"#);
+        assert!(idx[0].1.list.is_none());
+    }
+
+    /// 多看注释的三处识别改用 `crate::html`：单引号也认，`data-id`/`data-alt`/`data-href` 不算。
+    #[test]
+    fn duokan_patterns_use_attribute_parsing() {
+        assert_eq!(duokan_note_num(r#"<img data-alt="注释9" alt='注释12' src="x"/>"#), Some("12".to_string()));
+        assert_eq!(duokan_note_num(r#"<img data-alt="注释9"/>"#), None);
+        let blocks = r#"<p id='a_1_2'><p class="t">注</p></p><p data-id="a_1_3"><p class="t">别</p></p>"#;
+        assert_eq!(flatten_duokan_note_blocks(blocks), r#"<p id="a_1_2" class="t">注</p><p data-id="a_1_3"><p class="t">别</p></p>"#);
+        let back = r##"<a class='x' href='#c_1_2'>回</a><a data-href="#c_1_3" href="#y">留</a><a href="#c_1_x">留</a>"##;
+        assert_eq!(unlink_duokan_backlinks(back), r##"回<a data-href="#c_1_3" href="#y">留</a><a href="#c_1_x">留</a>"##);
+    }
+
+    /// 快速预判只看标签里的 `id` 属性：正文里写着的 `id="n1"` 不算。
+    #[test]
+    fn mentions_referenced_id_ignores_text() {
+        let referenced: HashSet<String> = ["n1".to_string()].into_iter().collect();
+        assert!(!mentions_referenced_id(r#"<p>写法是 id="n1" 这样</p><p data-id="n1">x</p>"#, &referenced));
+        assert!(mentions_referenced_id(r#"<p class="a"id="n1">x</p>"#, &referenced));
+        assert!(mentions_referenced_id(r#"<p title='a>b' id="n1">x</p>"#, &referenced), "属性值里的 > 不截断标签");
     }
 }

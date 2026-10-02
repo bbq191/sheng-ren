@@ -240,7 +240,7 @@ pub type Rewritten = (String, Vec<u8>);
 /// 只有这一张图；连同 spine、guide、NCX、nav 里指向它的条目），以及封面图本身——正文别的页也用着这张图时图留着，只去掉声明。
 /// `read(zip 路径)` 取文本。返回 (新 OPF, 要从 zip 删掉的条目, 要改写的条目 (路径, 新内容))。书里没有声明封面图 → 原样。
 pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Option<String>) -> (String, Vec<String>, Vec<Rewritten>) {
-    use crate::epubzip::{resolve_href, resolve_rel};
+    use crate::epubzip::{resolve_link, resolve_rel};
     use crate::wash::opf as o;
     let Some(cover) = o::declared_cover(opf) else { return (opf.to_string(), Vec::new(), Vec::new()) };
     let (cover_id, cover_path) = (cover.id.to_string(), cover.path(opf_dir));
@@ -251,7 +251,7 @@ pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Opti
             .filter(|t| t.is_start() && (o::is_local(t.name, "img") || o::is_local(t.name, "image")))
             .filter_map(|t| ["src", "xlink:href", "href"].iter().find_map(|a| html::attr_value(&text[t.start..t.end], a)))
             .filter(|v| !html::is_external(v))
-            .map(|v| resolve_href(page, &crate::util::xml_unescape(v)).0)
+            .map(|v| resolve_link(page, v).0)
             .collect()
     };
     let (mut cover_pages, mut used_elsewhere) = (Vec::<(String, String)>::new(), false);
@@ -336,7 +336,7 @@ fn drop_entries_pointing_to(text: &str, file: &str, elem: &str, pages: &[&str]) 
             html::attr_value(tag, "src").or_else(|| html::attr_value(tag, "href"))
         });
         let Some(link) = link else { continue };
-        if !pages.contains(&crate::epubzip::resolve_href(file, link).0.as_str()) {
+        if !pages.contains(&crate::epubzip::resolve_link(file, link).0.as_str()) {
             continue;
         }
         let Some(close) = find_matching_close(text, &tags, k) else { continue };

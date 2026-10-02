@@ -514,13 +514,33 @@ pub fn body_range(html: &str) -> Option<(usize, usize)> {
 pub fn first_body_inner(html: &str) -> Option<&str> {
     let open = tags(html).find(|t| t.is_start() && t.is("body"))?;
     let rest = &html[open.end..];
-    let end = rest.as_bytes().windows(7).position(|w| w.eq_ignore_ascii_case(b"</body>"))?;
+    let end = find_ci(rest, "</body>")?;
     Some(&rest[..end])
 }
 
-fn rfind_ci(hay: &str, needle: &str) -> Option<usize> {
+// ───────────────────────── 不分大小写查找 ─────────────────────────
+
+/// ASCII 不分大小写地找 `needle` 第一次出现的起点（`needle` 为空时是 0）。
+pub fn find_ci(hay: &str, needle: &str) -> Option<usize> {
     let n = needle.as_bytes();
+    if n.is_empty() {
+        return Some(0);
+    }
+    hay.as_bytes().windows(n.len()).position(|w| w.eq_ignore_ascii_case(n))
+}
+
+/// ASCII 不分大小写地找 `needle` 最后一次出现的起点（`needle` 为空时是 `hay.len()`）。
+pub fn rfind_ci(hay: &str, needle: &str) -> Option<usize> {
+    let n = needle.as_bytes();
+    if n.is_empty() {
+        return Some(hay.len());
+    }
     hay.as_bytes().windows(n.len()).rposition(|w| w.eq_ignore_ascii_case(n))
+}
+
+/// ASCII 不分大小写地包含。
+pub fn contains_ci(hay: &str, needle: &str) -> bool {
+    find_ci(hay, needle).is_some()
 }
 
 // ───────────────────────── 文字 ─────────────────────────
