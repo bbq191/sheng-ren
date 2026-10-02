@@ -118,6 +118,9 @@ def main():
                 d_more = collections.Counter(tb) - collections.Counter(ts)
                 d_less = collections.Counter(ts) - collections.Counter(tb)
                 notes.append(f'对原书字符账不平：多 {dict(d_more.most_common(8))} 少 {dict(d_less.most_common(8))}')
+        else:
+            # 没核对就不能算通过（计为问题）
+            notes.append(f'未核对：原书不在（{src}）' if src else '未核对：原书不在（index.txt 里没有这本的原书路径）')
         if za is None:
             status = 'NEW'
         elif {n: za.read(n) for n in za.namelist()} == {n: zb.read(n) for n in zb.namelist()}:

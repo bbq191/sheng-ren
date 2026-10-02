@@ -15,7 +15,7 @@
 
 pub mod stardict;
 
-use azw3::read::palm;
+use azw3::read::palm::{self, be_u32};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -74,10 +74,6 @@ pub fn read(data: &[u8]) -> Result<Dict, String> {
     let exth = palm::parse_exth(h.mobi, h.mobi_hlen);
     let title = if exth.title.trim().is_empty() { palm::palmdb_name(data) } else { exth.title.trim().to_string() };
     Ok(Dict { title, text, entries })
-}
-
-fn be_u32(b: &[u8], o: usize) -> Option<u32> {
-    b.get(o..o + 4).map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
 }
 
 /// 词头的解码方式（见模块说明）。
