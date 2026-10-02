@@ -242,6 +242,7 @@ fn events(lib: &Library, prune: bool) -> (library::SyncReport, Vec<String>) {
                 library::SyncEvent::Updated(p, _, _) => format!("updated {}", p.display()),
                 library::SyncEvent::Missing(p, _, _) => format!("missing {}", p.display()),
                 library::SyncEvent::Failed(p, e) => format!("failed {}: {e}", p.display()),
+                library::SyncEvent::Unreadable(p, e) => format!("unreadable {}: {e}", p.display()),
             })
         })
         .unwrap();
@@ -463,12 +464,191 @@ fn tracked_dir_named_like_a_mode_is_refused() {
     let books = base.join("ireader");
     std::fs::create_dir_all(&books).unwrap();
     std::fs::write(books.join("a.epub"), sample_epub("书")).unwrap();
-    lib.track(&books).unwrap();
+    // track 时就拒绝：产物目录就是它自己
+    assert!(lib.track(&books).unwrap_err().contains("产物目录"));
+    // 早期版本已经跟踪了的：build 时拒绝这个模式，别的模式照常
+    std::fs::write(base.join("lib/sources.json"), serde_json::json!({"dirs": [books]}).to_string()).unwrap();
     lib.sync(false, |_| {}).unwrap();
     let m = lib.list().remove(0);
     let e = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap_err();
     assert!(e.contains("跟踪的目录"), "{e}");
     assert!(lib.build(&m, profile::get("xochitl").unwrap(), false).is_ok());
+}
+
+#[test]
+fn tracked_dir_inside_another_dirs_output_root_is_refused() {
+    // 跟踪 e/books 和 e/ireader/sub：books 的 ireader 产物（e/ireader/…）包住了 e/ireader/sub，产物会被当新书入库、层层嵌套
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib = Library::open(base.join("lib")).unwrap();
+    let books = base.join("e/books");
+    let sub = base.join("e/ireader/sub");
+    std::fs::create_dir_all(books.join("sub")).unwrap();
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(books.join("sub/a.epub"), sample_epub("甲")).unwrap();
+    lib.track(&books).unwrap();
+    assert!(lib.track(&sub).unwrap_err().contains("产物目录"), "后跟踪的在前一个的产物目录里");
+    // 顺序反过来也拒绝
+    let lib2 = Library::open(base.join("lib2")).unwrap();
+    lib2.track(&sub).unwrap();
+    assert!(lib2.track(&books).unwrap_err().contains("产物目录"), "后跟踪的产物目录包住前一个");
+    // 早期版本已经这样跟踪了：build 拒绝，不往跟踪目录里写产物
+    std::fs::write(base.join("lib/sources.json"), serde_json::json!({"dirs": [books, sub]}).to_string()).unwrap();
+    lib.sync(false, |_| {}).unwrap();
+    let m = lib.list().remove(0);
+    let e = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap_err();
+    assert!(e.contains("互相包含"), "{e}");
+    assert!(!base.join("e/ireader/sub/甲.epub").exists());
+    assert_eq!(lib.sync(false, |_| {}).unwrap().added, 0);
+}
+
+#[test]
+fn unreadable_subdir_keeps_its_books_even_with_prune() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let lib = Library::open(&lib_dir).unwrap();
+    let books = base.join("books");
+    let locked = books.join("锁");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(books.join("甲.epub"), sample_epub("甲")).unwrap();
+    std::fs::write(locked.join("乙.epub"), sample_epub("乙")).unwrap();
+    lib.track(&books).unwrap();
+    lib.sync(false, |_| {}).unwrap();
+    let ireader = profile::get("ireader").unwrap();
+    for m in lib.list() {
+        lib.build(&m, ireader, false).unwrap();
+    }
+    let out = base.join("ireader/锁/乙.epub");
+    assert!(out.is_file());
+    // 000：读不了；444：列得出名字但取不到属性。两种都不能当成书没了
+    for mode in [0o000, 0o444] {
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode)).unwrap();
+        if std::fs::read_dir(&locked).ok().and_then(|mut d| d.next()).is_some_and(|e| e.is_ok_and(|e| e.metadata().is_ok())) {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return; // 以 root 运行：权限挡不住，测不了
+        }
+        let (r, ev) = events(&lib, true);
+        assert_eq!((r.unreadable, r.missing, r.pruned), (1, 0, 0), "{mode:o} {ev:?}");
+        assert_eq!(lib.list().len(), 2, "{mode:o}：读不了的目录里的书原样保留");
+        assert!(std::fs::read_to_string(lib_dir.join("sources.json")).unwrap().contains("乙.epub"));
+        // 命令行：明确报出来，退出码 2
+        let o = booklib(Some(&lib_dir), &["sync", "--prune", "--no-build"]);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
+        assert!(String::from_utf8_lossy(&o.stderr).contains("读不了"), "{}", String::from_utf8_lossy(&o.stderr));
+        assert!(out.is_file(), "产物也不删");
+    }
+    let (r, _) = events(&lib, true);
+    assert_eq!((r.unreadable, r.missing, r.added, r.failed), (0, 0, 0, 0), "恢复后照常");
+    assert_eq!(lib.list().len(), 2);
+}
+
+#[test]
+fn changed_added_original_is_caught_by_build_and_re_add_replaces_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib = Library::open(base.join("lib")).unwrap();
+    let src = base.join("书.epub");
+    std::fs::write(&src, sample_epub("第一版")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
+    let dev = profile::get("ireader").unwrap();
+    let Built::Written { path, .. } = lib.build(&m, dev, false).unwrap() else { panic!() };
+    assert!(matches!(lib.build(&m, dev, false).unwrap(), Built::UpToDate(_)));
+    // 原件被改：build 不再说"已是最新"，停下来
+    std::fs::write(&src, sample_epub("第二版")).unwrap();
+    let e = lib.build(&m, dev, false).unwrap_err();
+    assert!(e.contains("改过"), "{e}");
+    // 再 add：换成新版本（和 sync 一样），旧条目连同产物删掉，不留重复条目
+    let Added::Replaced(m2, old) = lib.add_file(&src).unwrap() else { panic!("应换成新版本") };
+    assert_eq!((m2.title.as_str(), old.as_str()), ("第二版", "第一版"));
+    assert_eq!(lib.list().into_iter().map(|m| m.id).collect::<Vec<_>>(), std::slice::from_ref(&m2.id));
+    assert!(!path.exists(), "旧版本的产物删掉");
+    let Built::Written { path: p2, .. } = lib.build(&m2, dev, false).unwrap() else { panic!() };
+    assert!(p2.ends_with("第二版.epub"));
+    assert!(matches!(lib.add_file(&src).unwrap(), Added::Existing(_)));
+
+    // 跟踪目录里的文件被 add 换了新版本：sources.json 也记成新版本，下次 sync 不再报"更新"
+    let books = base.join("books");
+    std::fs::create_dir_all(&books).unwrap();
+    let t = books.join("跟踪.epub");
+    std::fs::write(&t, sample_epub("跟踪一")).unwrap();
+    lib.track(&books).unwrap();
+    lib.sync(false, |_| {}).unwrap();
+    std::fs::write(&t, sample_epub("跟踪二")).unwrap();
+    assert!(matches!(lib.add_file(&t).unwrap(), Added::Replaced(..)));
+    let (r, ev) = events(&lib, false);
+    assert_eq!((r.added, r.updated, r.unchanged), (0, 0, 1), "{ev:?}");
+    assert_eq!(lib.list().len(), 2);
+}
+
+#[test]
+fn undeletable_old_output_does_not_rewrite_the_record_every_time() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib = Library::open(base.join("lib")).unwrap();
+    let src = base.join("书.epub");
+    std::fs::write(&src, sample_epub("书")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
+    let dev = profile::get("ireader").unwrap();
+    lib.build(&m, dev, false).unwrap();
+    // 旧位置在只读目录里：删不掉
+    let ro = base.join("只读");
+    std::fs::create_dir_all(&ro).unwrap();
+    let stale = ro.join("旧.epub");
+    std::fs::write(&stale, b"old").unwrap();
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let sp = base.join("lib/output-state/ireader.json");
+    let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    st["books"][&m.id]["old"] = serde_json::json!([{"path": stale, "root": ro}]);
+    std::fs::write(&sp, st.to_string()).unwrap();
+    let ino = |p: &std::path::Path| std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(p).unwrap());
+    let before = ino(&sp);
+    assert!(matches!(lib.build(&m, dev, false).unwrap(), Built::UpToDate(_)));
+    assert!(matches!(lib.build(&m, dev, false).unwrap(), Built::UpToDate(_)));
+    let root_run = !stale.exists();
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if root_run {
+        return; // 以 root 运行：只读目录挡不住删除
+    }
+    assert_eq!(ino(&sp), before, "待删列表没变：不重写生成记录");
+    assert!(std::fs::read_to_string(&sp).unwrap().contains("旧.epub"), "删不掉的继续记着");
+}
+
+#[test]
+fn fetched_description_already_in_the_book_does_not_change_the_fingerprint() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib = Library::open(base.join("lib")).unwrap();
+    // 书里自己有简介、没有标签
+    let plain = base.join("plain.epub");
+    std::fs::write(&plain, sample_epub("书")).unwrap();
+    let src = base.join("书.epub");
+    let edits = bookconv::opfmeta::Edits { set: vec![(bookconv::opfmeta::DcField::Description, vec!["原书简介".into()])], ..Default::default() };
+    bookconv::opfmeta::edit_epub(&plain, &src, &edits).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
+    let dev = profile::get("ireader").unwrap();
+    let fp0 = lib.fingerprint(&m, dev).unwrap();
+    let set_info = |v: serde_json::Value| {
+        let mp = base.join(format!("lib/masters/{}/meta.json", m.id));
+        let mut j: serde_json::Value = serde_json::from_slice(&std::fs::read(&mp).unwrap()).unwrap();
+        j["info"] = v;
+        std::fs::write(&mp, j.to_string()).unwrap();
+        lib.list().remove(0)
+    };
+    // 找来的简介：书里已有，不会补进去 → 指纹不变（不白重建）
+    let m1 = set_info(serde_json::json!({"source": "t", "description": "找来的简介"}));
+    assert_eq!(lib.fingerprint(&m1, dev).unwrap(), fp0);
+    let m2 = set_info(serde_json::json!({"source": "t", "description": "换了一份简介"}));
+    assert_eq!(lib.fingerprint(&m2, dev).unwrap(), fp0);
+    // 标签书里没有，会补 → 指纹变；简介再变也不影响
+    let m3 = set_info(serde_json::json!({"source": "t", "description": "找来的简介", "subjects": ["推理"]}));
+    let fp3 = lib.fingerprint(&m3, dev).unwrap();
+    assert_ne!(fp3, fp0);
+    let m4 = set_info(serde_json::json!({"source": "t", "description": "又一份", "subjects": ["推理"]}));
+    assert_eq!(lib.fingerprint(&m4, dev).unwrap(), fp3);
 }
 
 #[test]

@@ -38,7 +38,9 @@ pub(crate) fn search(net: &Net, titles: &[String], authors: &[String]) -> Vec<Hi
         if nt.is_empty() {
             continue;
         }
-        let Ok(v) = net.json(&format!("https://book.douban.com/j/subject_suggest?q={}", enc(t))) else { continue };
+        // 出错（被拦、回来的不是 JSON、网络问题）已记成临时错误（`Net::transient_error`），调用方不会当成"没这本书"；
+        // 别的书名也不用再试了
+        let Ok(v) = net.json_strict(&format!("https://book.douban.com/j/subject_suggest?q={}", enc(t))) else { break };
         let mut hits = Vec::new();
         for x in v.as_array().into_iter().flatten() {
             let g = |k: &str| x[k].as_str().unwrap_or("").to_string();

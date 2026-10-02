@@ -39,6 +39,8 @@ pub enum CoverResult {
     Existing(CoverInfo),
     /// 没找到封面，生成了一张（第二项是没找到的原因）。
     Generated(CoverInfo, String),
+    /// 网络出错没查成（原因），没存、下次再查；元数据这一步有结果（已存下）时才这样报，不然整本报错。
+    Failed(String),
 }
 
 pub(crate) fn cover_urls(net: &Net, w: &Work) -> Vec<String> {

@@ -16,7 +16,7 @@ const TRIES: usize = 4;
 
 /// 带节流和重试的 HTTP：Wikidata 限速严（连续请求会 429），每个请求间隔至少 1.2 秒，429 时按 Retry-After 等。
 ///
-/// - 4xx（除了 429）是"没有"，不重试；
+/// - 4xx（除了 429、403）是"没有"，不重试；403 不重试、但算临时错误（多半是被反爬拦了，见下）；
 /// - 连不上某个网站（DNS 解析失败、连接失败）就记下这个网站，之后发给它的请求立即失败，不再每次重试等待；
 ///   一个网站连不上不等于没网（Wikidata、Open Library 在有些网络里单独连不上）：接连有两个不同的网站连不上、
 ///   其间没有任何请求成功，才算**离线**（[`Net::offline`]）；
@@ -70,9 +70,10 @@ impl Net {
         let mut last_err = String::new();
         for attempt in 1..=TRIES {
             if let Some(t) = self.last.get() {
-                let gap = Duration::from_millis(1200);
-                if t.elapsed() < gap {
-                    std::thread::sleep(gap - t.elapsed());
+                // 先取一次已过时间再减：判断和相减之间时间还在走，`gap - t.elapsed()` 可能下溢 panic
+                let wait = Duration::from_millis(1200).saturating_sub(t.elapsed());
+                if !wait.is_zero() {
+                    std::thread::sleep(wait);
                 }
             }
             self.last.set(Some(Instant::now()));
@@ -99,6 +100,12 @@ impl Net {
                 Err(ureq::Error::Status(code, r)) if code == 429 || code >= 500 => {
                     last_err = format!("HTTP {code}");
                     r.header("Retry-After").and_then(|v| v.parse().ok()).unwrap_or(5u64).min(60)
+                }
+                // 403 多半是被反爬拦了（豆瓣），不是"没有"：记成临时错误，本次不落结论（不当成没这本书、不生成封面存下）
+                Err(ureq::Error::Status(403, _)) => {
+                    let e = format!("{url}: HTTP 403（可能被网站拦了）");
+                    self.note_transient(&e);
+                    return Err(e);
                 }
                 Err(ureq::Error::Status(code, _)) => return Err(format!("{url}: HTTP {code}")),
                 Err(e @ ureq::Error::Transport(_)) => match e.kind() {
@@ -128,6 +135,17 @@ impl Net {
 
     pub(crate) fn json(&self, url: &str) -> Result<Value, String> {
         serde_json::from_slice(&self.fetch(url)?).map_err(|e| format!("{url}: {e}"))
+    }
+
+    /// 同 [`Net::json`]，但回来的不是 JSON 也算临时错误：豆瓣反爬时搜索接口照样回 200，内容是验证页，
+    /// 不能当成"没这本书"（那样会生成封面存下来、以后不再找）。
+    pub(crate) fn json_strict(&self, url: &str) -> Result<Value, String> {
+        let body = self.fetch(url)?;
+        serde_json::from_slice(&body).map_err(|e| {
+            let e = format!("{url}: 回来的不是 JSON（{e}，可能被网站拦了）");
+            self.note_transient(&e);
+            e
+        })
     }
 }
 

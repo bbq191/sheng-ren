@@ -49,7 +49,7 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
     bookconv::util::produce_then_replace(&tmp_sibling(path), path, |t| std::fs::write(t, data).map_err(|e| format!("写 {}: {e}", path.display())))
 }
 
-pub(crate) use bookconv::util::{commit, sync_parent};
+pub(crate) use bookconv::util::sync_parent;
 
 /// 读 JSON 文件；不在或读不出来返回 `None`（只读的场合用；会改书库的命令持锁时先用 [`check_json`] 核对过）。
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
