@@ -25,11 +25,13 @@ snap() {
     ps_=""
     for f in /sys/class/power_supply/*/online; do [ -r "$f" ] && ps_="$ps_ ${f#/sys/class/power_supply/}=$(cat "$f")"; done
     vol=$(ps -o stat,comm 2>/dev/null | awk '$2 == "volumd" {print $1}')
-    echo "mtpgadget.UDC=[${a}] state=${st} power:${ps_% } volumd=${vol:-?}"
+    pd=$(lipc-get-prop com.lab126.powerd state 2>/dev/null)
+    echo "mtpgadget.UDC=[${a}] state=${st} power:${ps_% } volumd=${vol:-?} powerd=${pd:-?}"
 }
 say() { eips -c >/dev/null 2>&1; eips -c >/dev/null 2>&1; i=3; for line in "$@"; do eips 2 "$i" "$line" >/dev/null 2>&1; i=$((i + 2)); done; }
+# 是否连上电脑：直接看 USB 控制器硬件状态，跟用哪个 usb_gadget 无关（系统原生开 MTP 用的不是我们的 mtpgadget，
+# 2026-10-02 真机：那样查 $GDIR/UDC 永远是空，脚本察觉不到已连上，一直空等、拔线也没走到收尾）。
 connected() {
-    [ -n "$(cat "$GDIR/UDC" 2>/dev/null)" ] || return 1
     case $(cat "/sys/class/udc/$UDC/state" 2>/dev/null) in configured | suspended) return 0 ;; esac
     return 1
 }
@@ -38,7 +40,9 @@ finish() {
     log "结束：$1（$(snap)）"
     echo "$(date '+%F %T') USB 传书：$1" >>/mnt/us/koreader-boot.log
     { echo "--- 系统日志里 volumd/mtp 相关的最后 40 行"
-      grep -a -i -E "volumd|mtp-responder|mtp:|usbConfigured|DRIVE_MODE" /var/log/messages 2>/dev/null | grep -v BroadcastController | tail -40; echo "---"; } >>"$LOG"
+      grep -a -i -E "volumd|mtp-responder|mtp:|usbConfigured|DRIVE_MODE" /var/log/messages 2>/dev/null | grep -v BroadcastController | tail -40
+      echo "--- 系统日志里 powerd 的最后 60 行（状态机：独占时它收到 hal 的 usbConfigured 却不转发）"
+      grep -a "powerd\[" /var/log/messages 2>/dev/null | grep -v metric | tail -60; echo "---"; } >>"$LOG"
     say "Back to KOReader ..."
     exit 0
 }
