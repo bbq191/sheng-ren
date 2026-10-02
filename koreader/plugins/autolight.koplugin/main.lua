@@ -85,7 +85,7 @@ local AutoLight = WidgetContainer:extend{
 
 --- 光照（lux）→ 基准亮度（powerd 的档位，PW12 是 0–24）：两头低、中间高（用户 2026-10-02：墨水屏靠反射环境光，
 --- 越亮前光越没用，不该像手机屏那样越亮越开大）。全黑时眼睛适应了黑暗，也要低；昏暗室内纸面发灰，补光最有用。
---- 节点之间按 log10(lux) 线性插值。亮处只降到最低档、不关灯（灯关着插件就不动，关了回到暗处就不会再开）。
+--- 节点之间按 log10(lux) 线性插值。亮处只降到最低档（1），不设 0。用户 2026-10-02 定：自动前光完全接管——灯灭了也按环境点亮（想一直灭就关掉本插件）。
 local CURVE = {
     { 0, 6 },     -- 全黑（眼睛已适应，低一点；但墨水屏全黑没光看不见，留够能读）
     { 3, 11 },    -- 很暗
@@ -137,17 +137,18 @@ end
 
 function AutoLight:adjust()
     local p = powerd()
-    if self.enabled and p and p:isFrontlightOn() then
+    if self.enabled and p then
         local lux = read_lux(p)
-        local cur = p:frontlightIntensity()
+        local cur = p:frontlightIntensity() -- 灯灭时返回 0
         if lux then
-            -- 和上次自动设的不一样 = 用户手动调过：把差值记成偏好
-            if self.last_set and cur ~= self.last_set then
+            -- 只在灯亮着(cur>0)、且和上次自动设的不一样时，才把差值记成手动偏好；
+            -- 灯是 0（关着、或休眠余留）不算手动调，下面照样按环境点亮（用户 2026-10-02：完全接管）
+            if self.last_set and cur > 0 and cur ~= self.last_set then
                 self.offset = self.offset + (cur - self.last_set)
                 G_reader_settings:saveSetting("autolight_offset", self.offset)
                 logger.dbg("AutoLight: 手动调过亮度", self.last_set, "→", cur, "偏移", self.offset)
             end
-            local want = self:target(p, lux)
+            local want = self:target(p, lux) -- 至少 1，灯灭(0)时必定 >= MIN_CHANGE，于是点亮
             if math.abs(want - cur) >= MIN_CHANGE then
                 p:setIntensity(want)
                 cur = p:frontlightIntensity()
