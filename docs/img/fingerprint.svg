@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1130 430" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>指纹由哪几段组成，每段变了哪些书过期</title>
+  <style>
+    .h{font-weight:bold;font-size:13.5px}
+    .s{font-size:12px;fill:#444}
+    .m{font-family:monospace;font-size:11.5px;fill:#4b2e83;font-variant-ligatures:none}
+    .t{font-weight:bold;font-size:15px}
+  </style>
+  <rect width="1130" height="430" fill="#ffffff"/>
+  <text x="20" y="30" class="t">指纹 = 下面十段用 | 连起来；任何一段变了，产物就算过期、下次 build 重建</text>
+  <text x="20" y="54" class="s">例（kindle 模式；P、O、C、W 是各版本号）：</text><text x="272" y="54" class="m">3fa9c1… | - | - | P | O | jump#&lt; | kindle | 1104x1546+1c1272x1696f | gray | azw3W</text>
+  <rect x="20" y="72" width="96" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="68.0" y="98" text-anchor="middle" class="h">原件</text>
+  <text x="68.0" y="122" text-anchor="middle" class="m">SHA-256</text>
+  <path d="M68.0 136 L68.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="20" y="158" width="96" height="74" rx="6" fill="#eef4ff" stroke="#5b7fd6" stroke-width="1.2"/>
+  <text x="68.0" y="180" text-anchor="middle" class="s">这一本</text>
+  <rect x="120" y="72" width="104" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="172.0" y="98" text-anchor="middle" class="h">封面</text>
+  <text x="172.0" y="122" text-anchor="middle" class="s">找来的封面哈希</text>
+  <path d="M172.0 136 L172.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="120" y="158" width="104" height="74" rx="6" fill="#eef4ff" stroke="#5b7fd6" stroke-width="1.2"/>
+  <text x="172.0" y="180" text-anchor="middle" class="s">这一本</text>
+  <rect x="228" y="72" width="122" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="289.0" y="98" text-anchor="middle" class="h">简介标签</text>
+  <text x="289.0" y="122" text-anchor="middle" class="s">真正补进书的</text>
+  <path d="M289.0 136 L289.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="228" y="158" width="122" height="74" rx="6" fill="#fff6e5" stroke="#d69a2b" stroke-width="1.2"/>
+  <text x="289.0" y="180" text-anchor="middle" class="s">这一本；</text>
+  <text x="289.0" y="199" text-anchor="middle" class="s">opfmeta 版本变：</text>
+  <text x="289.0" y="218" text-anchor="middle" class="s">只有补过东西的书</text>
+  <rect x="354" y="72" width="124" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="416.0" y="98" text-anchor="middle" class="h">流程版本</text>
+  <text x="416.0" y="122" text-anchor="middle" class="m">P / PcC</text>
+  <path d="M416.0 136 L416.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="354" y="158" width="124" height="74" rx="6" fill="#fdecea" stroke="#b2452d" stroke-width="1.2"/>
+  <text x="416.0" y="180" text-anchor="middle" class="s">PIPELINE 变：全部</text>
+  <text x="416.0" y="199" text-anchor="middle" class="s">CONVERT 变：</text>
+  <text x="416.0" y="218" text-anchor="middle" class="s">只有 CBZ 来源</text>
+  <rect x="482" y="72" width="96" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="530.0" y="98" text-anchor="middle" class="h">优化器</text>
+  <text x="530.0" y="122" text-anchor="middle" class="m">O</text>
+  <path d="M530.0 136 L530.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="482" y="158" width="96" height="74" rx="6" fill="#fdecea" stroke="#b2452d" stroke-width="1.2"/>
+  <text x="530.0" y="180" text-anchor="middle" class="s">OPTIMIZE 变：</text>
+  <text x="530.0" y="199" text-anchor="middle" class="s">全部</text>
+  <rect x="582" y="72" width="100" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="632.0" y="98" text-anchor="middle" class="h">注释方式</text>
+  <text x="632.0" y="122" text-anchor="middle" class="m">jump#&lt;</text>
+  <path d="M632.0 136 L632.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="582" y="158" width="100" height="74" rx="6" fill="#eaf7ee" stroke="#3f9a5b" stroke-width="1.2"/>
+  <text x="632.0" y="180" text-anchor="middle" class="s">这个模式的全部</text>
+  <rect x="686" y="72" width="80" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="726.0" y="98" text-anchor="middle" class="h">模式</text>
+  <text x="726.0" y="122" text-anchor="middle" class="m">kindle</text>
+  <path d="M726.0 136 L726.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="686" y="158" width="80" height="74" rx="6" fill="#f4f4f4" stroke="#999" stroke-width="1.2"/>
+  <text x="726.0" y="180" text-anchor="middle" class="s">—</text>
+  <rect x="770" y="72" width="132" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="836.0" y="98" text-anchor="middle" class="h">阅读范围与漫画</text>
+  <text x="836.0" y="122" text-anchor="middle" class="m">1104x1546+1</text>
+  <path d="M836.0 136 L836.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="770" y="158" width="132" height="74" rx="6" fill="#eaf7ee" stroke="#3f9a5b" stroke-width="1.2"/>
+  <text x="836.0" y="180" text-anchor="middle" class="s">这个模式的全部</text>
+  <rect x="906" y="72" width="96" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="954.0" y="98" text-anchor="middle" class="h">黑白彩色</text>
+  <text x="954.0" y="122" text-anchor="middle" class="m">gray</text>
+  <path d="M954.0 136 L954.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="906" y="158" width="96" height="74" rx="6" fill="#eaf7ee" stroke="#3f9a5b" stroke-width="1.2"/>
+  <text x="954.0" y="180" text-anchor="middle" class="s">这个模式的全部</text>
+  <rect x="1006" y="72" width="104" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
+  <text x="1058.0" y="98" text-anchor="middle" class="h">格式</text>
+  <text x="1058.0" y="122" text-anchor="middle" class="m">epub / azw3W</text>
+  <path d="M1058.0 136 L1058.0 156" stroke="#888" stroke-width="1.2"/>
+  <rect x="1006" y="158" width="104" height="74" rx="6" fill="#fff6e5" stroke="#d69a2b" stroke-width="1.2"/>
+  <text x="1058.0" y="180" text-anchor="middle" class="s">WRITER 变：</text>
+  <text x="1058.0" y="199" text-anchor="middle" class="s">只有 kindle</text>
+  <rect x="20" y="262" width="20" height="16" rx="3" fill="#fdecea" stroke="#b2452d"/>
+  <text x="48" y="275" class="s">全部书</text>
+  <rect x="190" y="262" width="20" height="16" rx="3" fill="#fff6e5" stroke="#d69a2b"/>
+  <text x="218" y="275" class="s">一部分书</text>
+  <rect x="360" y="262" width="20" height="16" rx="3" fill="#eaf7ee" stroke="#3f9a5b"/>
+  <text x="388" y="275" class="s">这个模式的全部书</text>
+  <rect x="530" y="262" width="20" height="16" rx="3" fill="#eef4ff" stroke="#5b7fd6"/>
+  <text x="558" y="275" class="s">只有这一本</text>
+  <text x="20" y="316" class="s" xml:space="preserve">· 简介标签：书里本来就有简介（或标签）的，那一项不补、也不算进指纹；补过东西的再带 i + opfmeta 版本号。</text>
+  <text x="20" y="338" class="s" xml:space="preserve">· 流程版本：EPUB 来源只写 PIPELINE_VERSION；CBZ 来源再带 c + CONVERT_VERSION（PcC），所以只改 CBZ 转换不会让 EPUB 书白重建。</text>
+  <text x="20" y="360" class="s" xml:space="preserve">· 注释方式：jump/popup，图标换数字带 #，保留回链带 &lt;。阅读范围后面带漫画白边（+1）；漫画画布、阅读器页边距、翻页方向、固定版式</text>
+  <text x="20" y="382" class="s" xml:space="preserve">  和文字书不同时再接上（如 c1272x1696f、c952x1457m1、dltr）。格式：EPUB 写 epub，AZW3 带写出器版本（azw3W）。</text>
+  <text x="20" y="404" class="s" xml:space="preserve">· 改模式的 TOML（含书库 profiles/ 里的自定义）也会让这个模式的书过期：这些字段都在指纹里。</text>
+</svg>

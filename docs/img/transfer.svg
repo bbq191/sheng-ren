@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
+  <title>传书路线：产物文件夹拷到哪台设备、哪个阅读器</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <style>
+      .fd{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.3}
+      .r{fill:#f3eefa;stroke:#8a63c9;stroke-width:1.3}
+      .rb{fill:#ffffff;stroke:#8a63c9;stroke-width:1.3;stroke-dasharray:6 4}
+      .n{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.3}
+      .h{font-weight:bold;font-size:15px}
+      .s{font-size:12.5px;fill:#444}
+      .m{font-family:monospace;font-size:12.5px;fill:#2a5c36}
+      .l{stroke:#555;stroke-width:1.4;fill:none}
+      .ld{stroke:#555;stroke-width:1.4;fill:none;stroke-dasharray:6 4}
+    </style>
+  </defs>
+  <rect width="1000" height="540" fill="#ffffff"/>
+
+  <text x="110" y="30" text-anchor="middle" class="h">电脑上（书目录旁边）</text>
+  <text x="770" y="30" text-anchor="middle" class="h">设备上的阅读器</text>
+
+  <!-- 文件夹 -->
+  <path class="fd" d="M20 72 h56 l10 -10 h40 l10 10 h64 v62 h-180 z"/>
+  <text x="110" y="98" text-anchor="middle" class="h">kindle/</text>
+  <text x="110" y="120" text-anchor="middle" class="s">AZW3</text>
+
+  <path class="fd" d="M20 216 h56 l10 -10 h40 l10 10 h64 v62 h-180 z"/>
+  <text x="110" y="242" text-anchor="middle" class="h">ireader/</text>
+  <text x="110" y="264" text-anchor="middle" class="s">EPUB</text>
+
+  <path class="fd" d="M20 396 h56 l10 -10 h40 l10 10 h64 v62 h-180 z"/>
+  <text x="110" y="422" text-anchor="middle" class="h">xochitl/</text>
+  <text x="110" y="444" text-anchor="middle" class="s">EPUB（彩色）</text>
+
+  <!-- 阅读器 -->
+  <rect class="r" x="560" y="56" width="420" height="62" rx="8"/>
+  <text x="576" y="80" class="h">Kindle 自带阅读器</text>
+  <text x="576" y="104" class="s">USB（MTP）拷进 documents/；只认 .azw3</text>
+
+  <rect class="r" x="560" y="134" width="420" height="80" rx="8"/>
+  <text x="576" y="158" class="h">Kindle 上的 KOReader（日常）</text>
+  <text x="576" y="180" class="s">拷到存储根的 books/（KOReader 起始目录）</text>
+  <text x="576" y="200" class="s">KOReader 开着不能直接插线：先在里面点「USB 传书」</text>
+
+  <rect class="r" x="560" y="230" width="420" height="62" rx="8"/>
+  <text x="576" y="254" class="h">掌阅上的 KOReader（日常）</text>
+  <text x="576" y="278" class="s">USB（MTP）拷到存储根的 books/</text>
+
+  <rect class="rb" x="560" y="308" width="420" height="62" rx="8"/>
+  <text x="576" y="332" class="h" fill="#555">掌阅自带阅读器（备选）</text>
+  <text x="576" y="356" class="s">USB 连电脑导入</text>
+
+  <rect class="r" x="560" y="386" width="420" height="62" rx="8"/>
+  <text x="576" y="410" class="h">Move 自带阅读器</text>
+  <text x="576" y="434" class="s">网页上传 http://10.11.99.1/upload（单本约 88MB 以上被拒）</text>
+
+  <rect class="n" x="560" y="462" width="420" height="44" rx="8"/>
+  <text x="576" y="482" class="s">漫画拷完再跑：</text>
+  <text x="576" y="499" class="m">xochitl/comic-margins.sh --write</text>
+  <path class="l" d="M770 448 L770 460" marker-end="url(#a)"/>
+
+  <!-- 箭头 -->
+  <path class="l" d="M200 103 C380 103 380 87 558 87" marker-end="url(#a)"/>
+  <path class="l" d="M200 237 C380 237 380 174 558 174" marker-end="url(#a)"/>
+  <path class="l" d="M200 247 C380 247 380 261 558 261" marker-end="url(#a)"/>
+  <path class="ld" d="M200 257 C380 257 380 339 558 339" marker-end="url(#a)"/>
+  <path class="l" d="M200 427 C380 427 380 417 558 417" marker-end="url(#a)"/>
+
+  <text x="290" y="168" class="s">两台 KOReader 读的是同一份</text>
+  <text x="290" y="186" class="s">（KOReader 不认 AZW3）</text>
+
+  <text x="20" y="528" class="s">重新生成后直接覆盖设备上的旧文件；KOReader 按文件名同步进度，别手工改 ireader/ 里的文件名。</text>
+</svg>

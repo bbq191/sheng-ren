@@ -15,6 +15,10 @@
   </defs>
   <rect width="900" height="640" fill="#fafafa"/>
 
+  <rect class="q" x="14" y="14" width="214" height="50" rx="8"/>
+  <text x="121" y="34" text-anchor="middle" class="h">先看原件动过没有</text>
+  <text x="121" y="52" text-anchor="middle" class="s">动过就核对内容，改过了 → 停下</text>
+  <path class="l" d="M228 39 L248 39" marker-end="url(#a)"/>
   <rect class="b" x="250" y="14" width="400" height="50" rx="8"/>
   <text x="450" y="34" text-anchor="middle" class="h">算指纹</text>
   <text x="450" y="52" text-anchor="middle" class="s">原件哈希 · 找来的封面和简介 · 各版本号 · 阅读模式的参数 · 产物格式</text>
