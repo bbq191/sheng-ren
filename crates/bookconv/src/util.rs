@@ -118,14 +118,44 @@ pub(crate) fn image_ext_of(path: &str) -> String {
     }
 }
 
+/// 认得的位图格式：`image` 库的格式、条目扩展名（不带点）、media-type。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageKind {
+    pub format: image::ImageFormat,
+    pub ext: &'static str,
+    pub mime: &'static str,
+}
+
+/// 书里会出现、本 crate 能解码的位图格式（`image` 只开了这四种）。按魔数认（[`image_kind`]）、按扩展名查 media-type
+/// （[`image_media_type_of_ext`]）都用这一张表——此前魔数识别有三套（`convert::common`、`imgopt` 里的 `image::guess_format`、
+/// 这里按扩展名的），各写各的。
+const IMAGE_KINDS: [ImageKind; 4] = [
+    ImageKind { format: image::ImageFormat::Jpeg, ext: "jpg", mime: "image/jpeg" },
+    ImageKind { format: image::ImageFormat::Png, ext: "png", mime: "image/png" },
+    ImageKind { format: image::ImageFormat::Gif, ext: "gif", mime: "image/gif" },
+    ImageKind { format: image::ImageFormat::WebP, ext: "webp", mime: "image/webp" },
+];
+
+/// 按文件头魔数认图片格式（JPEG `FF D8 FF`、PNG 8 字节签名、`GIF87a`/`GIF89a`、RIFF 容器里标 `WEBP`）；不认得 → `None`。
+/// 与 `image::guess_format` 对这四种的判定相同。
+pub fn image_kind(b: &[u8]) -> Option<ImageKind> {
+    let i = if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        0
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        1
+    } else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
+        2
+    } else if b.len() >= 12 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP" {
+        3
+    } else {
+        return None;
+    };
+    Some(IMAGE_KINDS[i])
+}
+
 /// 图片扩展名（不带点、小写）→ media-type；认不出的当 JPEG（EPUB 里绝大多数图是 JPEG）。
 pub fn image_media_type_of_ext(ext: &str) -> &'static str {
-    match ext {
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        _ => "image/jpeg",
-    }
+    IMAGE_KINDS.iter().find(|k| k.ext == ext).map_or("image/jpeg", |k| k.mime)
 }
 
 /// 全角 ASCII（U+FF01–U+FF5E）转成对应的半角字符，其余不变。
@@ -315,6 +345,8 @@ mod tests {
         assert_eq!(image_media_type_of_ext("gif"), "image/gif");
         assert_eq!(image_media_type_of_ext("jpg"), "image/jpeg");
         assert_eq!(image_media_type_of_ext("bmp"), "image/jpeg", "认不出当 JPEG");
+        assert_eq!(image_media_type_of_ext("webp"), "image/webp");
+        assert_eq!(image_media_type_of_ext("jpeg"), "image/jpeg");
     }
 
     #[test]
