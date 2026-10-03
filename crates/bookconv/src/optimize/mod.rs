@@ -401,8 +401,7 @@ impl<'a> EntryXform<'a> {
 
     /// 章节 html 最终变换链：解双向脚注互指环 → duokan 图片脚注标记换上标 → 封面拉伸/SVG 修复 → 脚注就地关联重排 →
     /// 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
-    /// 远程图抓不到时返回错误（见 [`inline_remote_images`]）。
-    fn transform_html_chapter(&mut self, text: &str, name: &str) -> Result<Vec<u8>, String> {
+    fn transform_html_chapter(&mut self, text: &str, name: &str) -> Vec<u8> {
         // 前两步 `collect_notes` 可能已经做过（`pre_done`）
         let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };
         let t = fix_cover_aspect(&t);
@@ -415,26 +414,25 @@ impl<'a> EntryXform<'a> {
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
         let t = if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
-        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen)).map_err(|e| format!("{name}：{e}"))?;
+        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
         self.fetched_imgs.extend(imgs);
-        Ok(crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes())
+        crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes()
     }
 
     /// 文本类条目 → `Some(最终字节)`（无法按 UTF-8 解读的原样借回）；不是文本类（图片/其它）→ `None`，调用方自己处理。
-    /// 章节里的远程图抓不到 → `Err`（整本这次不生成）。
-    fn transform_text<'d>(&mut self, name: &str, data: &'d [u8], is_html: bool) -> Result<Option<std::borrow::Cow<'d, [u8]>>, String> {
+    fn transform_text<'d>(&mut self, name: &str, data: &'d [u8], is_html: bool) -> Option<std::borrow::Cow<'d, [u8]>> {
         use std::borrow::Cow;
         if is_html {
-            return Ok(Some(match std::str::from_utf8(data) {
+            return Some(match std::str::from_utf8(data) {
                 Ok(text) => {
-                    let out = self.transform_html_chapter(text, name)?;
+                    let out = self.transform_html_chapter(text, name);
                     if let (Some(props), Ok(t)) = (self.content_props.as_mut(), std::str::from_utf8(&out)) {
                         props.insert(name.to_string(), crate::wash::normalize::content_properties(t));
                     }
                     Cow::Owned(out)
                 }
                 Err(_) => Cow::Borrowed(data),
-            }));
+            });
         }
         if (self.reader_margins || self.number_note_icons || self.fixed_layout.is_some()) && crate::wash::is_wash_css_name(name) {
             let mut out = data.to_vec();
@@ -452,10 +450,10 @@ impl<'a> EntryXform<'a> {
             if self.fixed_layout.is_some() && !out.windows(crate::comicfxl::CSS_RULES.len()).any(|w| w == crate::comicfxl::CSS_RULES.as_bytes()) {
                 out.extend_from_slice(crate::comicfxl::CSS_RULES.as_bytes());
             }
-            return Ok(Some(Cow::Owned(out)));
+            return Some(Cow::Owned(out));
         }
         if self.opf_name == Some(name) && (self.page_direction.is_some() || self.comic) {
-            let Ok(text) = std::str::from_utf8(data) else { return Ok(Some(Cow::Borrowed(data))) };
+            let Ok(text) = std::str::from_utf8(data) else { return Some(Cow::Borrowed(data)) };
             let mut text = Cow::Borrowed(text);
             if let Some(dir) = self.page_direction {
                 text = Cow::Owned(crate::direction::set_spine_direction(&text, dir));
@@ -468,11 +466,11 @@ impl<'a> EntryXform<'a> {
             if let Some((w, h)) = self.fixed_layout {
                 text = Cow::Owned(crate::comicfxl::opf(&text, w, h));
             }
-            return Ok(Some(match text {
+            return Some(match text {
                 Cow::Borrowed(_) => Cow::Borrowed(data),
                 Cow::Owned(t) => Cow::Owned(t.into_bytes()),
-            }));
+            });
         }
-        Ok(None)
+        None
     }
 }
