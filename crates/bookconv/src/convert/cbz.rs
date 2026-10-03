@@ -60,8 +60,7 @@ pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
     let mut chapters = Vec::with_capacity(names.len());
     for name in &names {
         let bytes = read_entry(&mut zip, name)?;
-        let known = super::common::image_ext_mime(&bytes).or_else(|| super::common::is_webp(&bytes).then_some(("webp", "image/webp")));
-        let Some((ext, mime)) = known else {
+        let Some(crate::util::ImageKind { ext, mime, .. }) = crate::util::image_kind(&bytes) else {
             eprintln!("警告：{name} 不是可识别的图片，跳过");
             continue;
         };
