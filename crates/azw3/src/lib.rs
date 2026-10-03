@@ -19,7 +19,8 @@ use std::collections::HashMap;
 /// - 2（2026-09-30）：属性值里有 `>` 的标签不再被截断（图片、链接不丢）；`<a name>` 也当链接目标；静态 WebP 转 PNG 写进去；
 ///   封面缩略图按 EXIF 方向摆正。正常的书产物不变（28 本真书 + 1 卷漫画逐字节相同），受影响的书要重转。
 /// - 3（2026-09-30）：`<head>` 里只留 title/meta/link/style/base，散落的文字和别的元素去掉（Kindle 会把它们显示在章首，《绝叫》满页样式代码）。
-pub const WRITER_VERSION: &str = "3";
+/// - 4（2026-10-03）：带前缀的 `<opf:spine page-progression-direction="rtl">` 也认出从右往左翻（以前漏写 EXTH 527，日漫翻页方向错）。
+pub const WRITER_VERSION: &str = "4";
 
 /// Kindle 书库里的归类。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
