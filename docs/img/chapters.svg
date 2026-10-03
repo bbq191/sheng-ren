@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
+  <title>章节判定：哪一级标题是章、哪一级是节</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <style>
+      .q{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.3}
+      .ch{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.3}
+      .sec{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.3}
+      .no{fill:#f4f4f4;stroke:#999;stroke-width:1.2}
+      .hd{fill:#f3eefa;stroke:#8a63c9;stroke-width:1.3}
+      .h{font-weight:bold;font-size:14px}
+      .s{font-size:12.5px;fill:#444}
+      .y{font-size:12px;fill:#2a7a3f;font-weight:bold}
+      .n{font-size:12px;fill:#a33;font-weight:bold}
+      .l{stroke:#555;stroke-width:1.4;fill:none}
+    </style>
+  </defs>
+  <rect width="960" height="600" fill="#ffffff"/>
+
+  <!-- 起点 -->
+  <rect class="q" x="270" y="20" width="260" height="44" rx="22"/>
+  <text x="400" y="47" text-anchor="middle" class="h">全书用到 &lt;h1&gt;–&lt;h6&gt; 了吗？</text>
+
+  <!-- 否 -->
+  <path class="l" d="M270 42 L120 42 L120 92" marker-end="url(#a)"/>
+  <text x="190" y="36" class="n">没有</text>
+  <rect class="no" x="20" y="94" width="200" height="86" rx="8"/>
+  <text x="120" y="116" text-anchor="middle" class="h">按目录找标题</text>
+  <text x="120" y="138" text-anchor="middle" class="s">目录指向的短段落（≤60 字）</text>
+  <text x="120" y="156" text-anchor="middle" class="s">当章标题；锚点可在段前</text>
+  <text x="120" y="174" text-anchor="middle" class="s">的空元素上。没有目录：不分页</text>
+
+  <g transform="translate(70,0)">
+  <!-- 是 -->
+  <path class="l" d="M330 64 L330 92" marker-end="url(#a)"/>
+  <text x="338" y="84" class="y">有</text>
+  <rect class="ch" x="230" y="94" width="200" height="40" rx="8"/>
+  <text x="330" y="119" text-anchor="middle" class="h">最浅一级 = 章</text>
+
+  <path class="l" d="M330 134 L330 160" marker-end="url(#a)"/>
+  <rect class="q" x="160" y="162" width="340" height="76" rx="12"/>
+  <text x="330" y="184" text-anchor="middle" class="h">下一级也算章吗？</text>
+  <text x="330" y="204" text-anchor="middle" class="s">最浅一级是"第X部/卷"、全书只出现一次（书名），</text>
+  <text x="330" y="222" text-anchor="middle" class="s">或下一级多是"第X章"</text>
+  <path class="l" d="M500 200 L568 200" marker-end="url(#a)"/>
+  <text x="512" y="194" class="y">是</text>
+  <rect class="ch" x="570" y="180" width="180" height="40" rx="8"/>
+  <text x="660" y="205" text-anchor="middle" class="h">下一级也是章</text>
+  <path class="l" d="M660 220 C660 260 470 250 430 280" marker-end="url(#a)"/>
+
+  <path class="l" d="M330 238 L330 268" marker-end="url(#a)"/>
+  <text x="338" y="258" class="n">否</text>
+  <rect class="q" x="160" y="270" width="340" height="60" rx="12"/>
+  <text x="330" y="294" text-anchor="middle" class="h">章标题后紧跟着、中间没有正文的那一级？</text>
+  <text x="330" y="316" text-anchor="middle" class="s">如 &lt;h1&gt;第一章&lt;/h1&gt;&lt;h2&gt;风起&lt;/h2&gt;</text>
+  <path class="l" d="M500 300 L568 300" marker-end="url(#a)"/>
+  <text x="512" y="294" class="y">是</text>
+  <rect class="ch" x="570" y="280" width="180" height="40" rx="8"/>
+  <text x="660" y="305" text-anchor="middle" class="h">副标题：和章同页</text>
+
+  <path class="l" d="M330 330 L330 360" marker-end="url(#a)"/>
+  <rect class="sec" x="160" y="362" width="340" height="44" rx="8"/>
+  <text x="330" y="389" text-anchor="middle" class="h">再下一级 = 节：新起一页，和正文同页</text>
+  <path class="l" d="M660 320 C660 345 520 350 502 375" marker-end="url(#a)"/>
+
+  <path class="l" d="M330 406 L330 430" marker-end="url(#a)"/>
+  <rect class="no" x="200" y="432" width="260" height="36" rx="8"/>
+  <text x="330" y="455" text-anchor="middle" class="h">更深的标题：不分页</text>
+
+  </g>
+  <!-- 结果说明 -->
+  <rect class="ch" x="20" y="500" width="20" height="16" rx="3"/><text x="48" y="513" class="s">章：独立一页</text>
+  <rect class="sec" x="160" y="500" width="20" height="16" rx="3"/><text x="188" y="513" class="s">节：和正文同页，节与节之间分页</text>
+  <text x="20" y="560" class="s">章标题后只跟着不到 30 字（书名页的作者行）不单独成页；但部标题后紧跟章标题时，部、章各占一页。</text>
+  <text x="20" y="582" class="s">漫画、目录页不拆；已经拆过的书再处理不会再拆。</text>
+
+  <!-- 好读补充 -->
+  <rect class="hd" x="620" y="384" width="320" height="150" rx="10"/>
+  <text x="636" y="406" class="h">好读的书另有三条补充</text>
+  <text x="636" y="430" class="s">· 目录指到的、只是一段字的章名</text>
+  <text x="650" y="447" class="s">→ 当章标题（《白夜行》"第一章"）</text>
+  <text x="636" y="470" class="s">· 独占一段、从 1 连续的数字</text>
+  <text x="650" y="487" class="s">→ 当节标题（１、２ 或 一、二）</text>
+  <text x="636" y="510" class="s">· 和章同级的数字标题，至少两章都这样</text>
+  <text x="650" y="527" class="s">→ 降成节（《１３級階梯》&lt;h3&gt;２&lt;/h3&gt;）</text>
+</svg>

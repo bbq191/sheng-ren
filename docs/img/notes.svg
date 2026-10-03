@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
+  <title>注释处理前后对比</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f6fd0"/></marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f9a5b"/></marker>
+    <style>
+      .pg{fill:#fff;stroke:#888;stroke-width:1.2}
+      .nb{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.1}
+      .h{font-weight:bold;font-size:15px}
+      .fn{font-size:12px;fill:#666}
+      .s{font-size:12.5px;fill:#444}
+      .m{font-family:monospace;font-size:11.5px;fill:#4b2e83}
+      .sup{font-size:10px;fill:#3f6fd0;font-weight:bold}
+      .fw{stroke:#3f6fd0;stroke-width:1.4;fill:none}
+      .bk{stroke:#3f9a5b;stroke-width:1.4;fill:none;stroke-dasharray:5 4}
+      .l{stroke:#555;stroke-width:1.6;fill:none}
+      .tip{fill:#f6f6f6;stroke:#bbb;stroke-width:1}
+    </style>
+  </defs>
+  <rect width="960" height="600" fill="#ffffff"/>
+
+  <text x="20" y="30" class="h">原书：注释在另一个文件</text>
+  <text x="520" y="30" class="h">处理后：注释搬到同一文件的章末</text>
+
+  <!-- 原书 -->
+  <rect class="pg" x="20" y="46" width="200" height="220" rx="6"/>
+  <text x="30" y="66" class="fn">ch1.xhtml</text>
+  <text x="34" y="98">……正文正文</text><text x="118" y="91" class="sup">1</text>
+  <text x="34" y="124">正文正文……</text>
+  <text x="34" y="150">……正文</text><text x="90" y="143" class="sup">2</text>
+  <text x="34" y="176">正文正文……</text>
+  <rect class="pg" x="260" y="46" width="200" height="220" rx="6"/>
+  <text x="270" y="66" class="fn">notes.xhtml</text>
+  <rect class="nb" x="272" y="80" width="176" height="40" rx="4"/>
+  <text x="280" y="105" font-size="13">1. 注释内容 ↩</text>
+  <rect class="nb" x="272" y="130" width="176" height="40" rx="4"/>
+  <text x="280" y="155" font-size="13">2. 注释内容 ↩</text>
+  <path class="fw" d="M126 88 C190 60 230 80 270 96" marker-end="url(#b)"/>
+  <path class="bk" d="M420 104 C440 210 160 230 126 104" marker-end="url(#g)"/>
+  <text x="34" y="250" class="s">回链（↩）跳回正文</text>
+  <text x="20" y="290" class="m">&lt;a href="notes.xhtml#n1" id="r1"&gt;&lt;sup&gt;1&lt;/sup&gt;&lt;/a&gt;</text>
+
+  <path class="l" d="M474 150 L506 150" marker-end="url(#a)"/>
+
+  <!-- 处理后 -->
+  <rect class="pg" x="520" y="46" width="230" height="220" rx="6"/>
+  <text x="530" y="66" class="fn">ch1.xhtml</text>
+  <text x="534" y="98">……正文正文</text><text x="618" y="91" class="sup">1</text>
+  <text x="534" y="124">正文正文……</text>
+  <text x="534" y="150">……正文</text><text x="590" y="143" class="sup">2</text>
+  <line x1="534" y1="172" x2="736" y2="172" stroke="#ccc" stroke-dasharray="3 3"/>
+  <rect class="nb" x="532" y="180" width="206" height="34" rx="4"/>
+  <text x="540" y="202" font-size="12.5">1. 注释内容（0.85em） ↩</text>
+  <rect class="nb" x="532" y="220" width="206" height="34" rx="4"/>
+  <text x="540" y="242" font-size="12.5">2. 注释内容（0.85em） ↩</text>
+  <path class="fw" d="M626 88 C700 90 760 140 740 192" marker-end="url(#b)"/>
+  <path class="bk" d="M700 196 C800 170 790 70 628 92" marker-end="url(#g)"/>
+  <text x="520" y="290" class="m">&lt;a href="#n1" id="r1"&gt;&lt;sup&gt;1&lt;/sup&gt;&lt;/a&gt;</text>
+
+  <g class="s">
+    <text x="770" y="70">· 只改 href</text>
+    <text x="784" y="90">id、class、&lt;sup&gt; 都保留</text>
+    <text x="770" y="112">· 标号前后一个字不加</text>
+    <text x="770" y="134">· 回链 ↩：</text>
+    <text x="784" y="154">kindle、ireader 保留</text>
+    <text x="784" y="174">xochitl 去掉</text>
+    <text x="770" y="196">· 每条注释不拆到两页</text>
+  </g>
+
+  <!-- 特例 -->
+  <text x="20" y="336" class="h">几种特殊情况</text>
+
+  <rect class="tip" x="20" y="350" width="300" height="104" rx="8"/>
+  <text x="34" y="374" class="h" font-size="14">图标标号 → 上标数字</text>
+  <rect x="40" y="390" width="18" height="18" rx="3" fill="#888"/>
+  <path class="l" d="M70 399 L104 399" marker-end="url(#a)"/>
+  <text x="114" y="404">正文</text><text x="144" y="397" class="sup">14</text>
+  <text x="34" y="436" class="s">编号取作者写的 [14]、alt 里的"注释N"、本章顺序</text>
+
+  <rect class="tip" x="330" y="350" width="300" height="104" rx="8"/>
+  <text x="344" y="374" class="h" font-size="14">&lt;ol&gt; 列表写的注释</text>
+  <text x="344" y="400" class="m">&lt;ol&gt;&lt;li&gt;…</text><text x="420" y="400" class="s">第 3 条</text>
+  <path class="l" d="M474 396 L500 396" marker-end="url(#a)"/>
+  <text x="508" y="400" class="m">&lt;ol start="3"&gt;</text>
+  <text x="344" y="426" class="s">搬走后编号不丢；原处剩下的空列表、</text>
+  <text x="344" y="444" class="s">只剩分隔线的注释区一起清掉</text>
+
+  <rect class="tip" x="640" y="350" width="300" height="104" rx="8"/>
+  <text x="654" y="374" class="h" font-size="14">被几章同时引用的注释</text>
+  <text x="654" y="400" class="s">留在原处，不往每章复制一份</text>
+  <text x="654" y="420" class="s">（复制会让全书多出字）</text>
+  <text x="654" y="444" class="s">代价：xochitl 上点了不跳</text>
+
+  <rect class="tip" x="20" y="466" width="920" height="96" rx="8"/>
+  <text x="34" y="490" class="h" font-size="14">只搬真的注释</text>
+  <text x="34" y="514" class="s">· 要被标号链接引用，而且带注释语义（class、epub:type、type 里有 note）；目录页里的链接不算引用。</text>
+  <text x="34" y="534" class="s">· "见第 12 条"这种交叉引用指向的正文段落不搬；搬之前核对每条都有章节接收，没人接的留在原处。</text>
+  <text x="34" y="554" class="s">· 为什么要搬：xochitl 只认同一文件里的 #锚点，分页又把一章拆成几个文件，所以注释跟着引用它的那一份走。</text>
+</svg>
