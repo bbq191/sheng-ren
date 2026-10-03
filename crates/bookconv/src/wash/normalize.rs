@@ -423,10 +423,6 @@ fn metadata_elements(opf: &str) -> Vec<MetaEl<'_>> {
     out
 }
 
-/// FNV-1a 64 位：书没有任何标识符时，按 OPF 原文派生一个确定的标识符。
-fn fnv64(b: &[u8]) -> u64 {
-    b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
-}
 
 /// `dcterms:modified` 的格式：`CCYY-MM-DDThh:mm:ssZ`。
 fn is_w3c_utc(v: &str) -> bool {
@@ -533,7 +529,7 @@ pub(crate) fn upgrade_opf(opf: &str, lang_tag: &str) -> Option<String> {
             }
             None => {
                 let id = new_id("eink-uid");
-                add_meta.push_str(&format!(r#"<dc:identifier id="{id}">urn:eink:{:016x}</dc:identifier>"#, fnv64(opf.as_bytes())));
+                add_meta.push_str(&format!(r#"<dc:identifier id="{id}">urn:eink:{:016x}</dc:identifier>"#, crate::util::fnv64(opf.as_bytes())));
                 new_uid = Some(id);
             }
         }

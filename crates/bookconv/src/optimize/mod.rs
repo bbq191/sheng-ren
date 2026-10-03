@@ -73,7 +73,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   本章重复 id 改名；带 EXIF 方向的图先摆正再处理；标了"漫画"的书不到 20 张图也按漫画处理。
 /// - v35（2026-09-30）：注释回链按 profile `note_backlinks` 决定：Kindle、掌阅保留原书的回链（改成同文件锚点），只有 xochitl 去掉
 ///   （以前三个模式都去掉，Kindle 上点注释跳不回正文，真机）。
-pub const OPTIMIZE_VERSION: &str = "35";
+/// - v36（2026-10-03，全系统审计）：注释标号只改 `<a>` 的 href，原有的 id、class 等属性和外面的 `<sup>` 保留（以前整个重写，
+///   注释里指回 `#fnref1` 的回链成了死链）；`<ol><li>` 形式的注释搬走后保留列表和编号（`<ol start=N>`，以前编号丢了、原处剩空列表）；
+///   注释块 id 转义；漫画只裁接近白的边（以前黑底、纯色出血也裁掉再补成白边，改了原画）；网上的图先按 EXIF 方向摆正再选横竖框。
+pub const OPTIMIZE_VERSION: &str = "36";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
