@@ -9,10 +9,12 @@
 //! 3. 按频率生成最优码长与码字，用新 DHT 替换旧的，按新表重新编码符号流（附加位原样）。
 //!
 //! 只处理本 crate 自己编出来的这类 JPEG（基线、单次扫描、没有重启间隔）；别的形态（渐进式、算术编码、多次扫描、DRI）原样返回 `None`。
-//! 调用方（`imgopt`）还会把新旧两份都解码逐像素比对，不一致就用旧的——正确性不只靠这里的实现。
+//! [`optimize_verified`] 还会把产物按新表重新解析、与原符号流逐项比对，不一致就用旧的——正确性不只靠编码这一半的实现。
 //!
 //! 速度（2026-09-30）：熵编码数据按 64 位缓冲读写、哈夫曼码先查 9 位表（长码再逐位），结果与逐位实现逐字节相同；
 //! 537 张 1104×1546 q95 漫画页 `optimize` 平均约 17ms → 6ms/张（逐位读写时它占整页处理时间四成多）。
+//! 核对（2026-10-03）：从"新旧两份都整张解码逐像素比"改成"按新表重新解析、逐项比符号流"，合成的 1104×1546 q95 带噪页上
+//! 核对开销约 22ms → 9ms/张，整页处理约少两成；产物字节不变。
 
 /// 一张哈夫曼表：按码长排好的符号（附录 C 的 BITS/HUFFVAL）。
 #[derive(Clone, Default)]
@@ -209,6 +211,7 @@ impl BitWriter {
 }
 
 /// 符号流里的一项：用哪张表（`slot` = 类别*4 + 表号）、符号、附加位。
+#[derive(PartialEq, Eq)]
 struct Sym {
     slot: u8,
     sym: u8,
@@ -317,8 +320,33 @@ fn be16(b: &[u8], i: usize) -> Option<usize> {
     Some(((*b.get(i)? as usize) << 8) | *b.get(i + 1)? as usize)
 }
 
+/// 解析出来的 JPEG：除 DHT 以外原样保留的段、SOS 段、按原表解出的符号流、每张表的符号频率。
+struct Parsed<'a> {
+    kept: Vec<&'a [u8]>,
+    sos: &'a [u8],
+    syms: Vec<Sym>,
+    freq: [[u32; 256]; 8],
+}
+
 /// 重做哈夫曼表。不是本模块能处理的形态、数据损坏、或者没变小，返回 `None`（调用方用原来的）。
 pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
+    rebuild(&parse(jpeg)?, jpeg.len())
+}
+
+/// 解析头部、按文件里的哈夫曼表把熵编码数据解成符号流（同时统计频率）。不是本模块能处理的形态、数据损坏 → `None`。
+fn parse(jpeg: &[u8]) -> Option<Parsed<'_>> {
+    let mut syms: Vec<Sym> = Vec::with_capacity(jpeg.len());
+    let mut freq = [[0u32; 256]; 8];
+    let (kept, sos) = parse_with(jpeg, |s| {
+        freq[s.slot as usize][s.sym as usize] += 1;
+        syms.push(s);
+        Some(())
+    })?;
+    Some(Parsed { kept, sos, syms, freq })
+}
+
+/// [`parse`] 的主体：符号逐个交给 `emit`（它返回 `None` 就中止），返回 DHT 以外原样保留的段和 SOS 段。
+fn parse_with(jpeg: &[u8], mut emit: impl FnMut(Sym) -> Option<()>) -> Option<(Vec<&[u8]>, &[u8])> {
     if jpeg.get(..2)? != [0xFF, 0xD8] {
         return None;
     }
@@ -416,8 +444,6 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
     } else {
         (width.div_ceil(8 * hmax) * height.div_ceil(8 * vmax), scan.iter().map(|s| s.0 * s.1).collect())
     };
-    let mut syms: Vec<Sym> = Vec::with_capacity(mcus * 64);
-    let mut freq = [[0u32; 256]; 8];
     for _ in 0..mcus {
         for (ci, &nb) in blocks_per.iter().enumerate() {
             let (_, _, dc, ac) = scan[ci];
@@ -427,8 +453,7 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
                     return None;
                 }
                 let extra = br.bits(s as u32)?;
-                freq[dc][s as usize] += 1;
-                syms.push(Sym { slot: dc as u8, sym: s, extra: extra as u16, nextra: s });
+                emit(Sym { slot: dc as u8, sym: s, extra: extra as u16, nextra: s })?;
                 let mut k = 1;
                 while k < 64 {
                     let rs = br.decode(decoders[ac].as_ref()?)?;
@@ -437,8 +462,7 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
                         return None;
                     }
                     let extra = br.bits(size as u32)?;
-                    freq[ac][rs as usize] += 1;
-                    syms.push(Sym { slot: ac as u8, sym: rs, extra: extra as u16, nextra: size });
+                    emit(Sym { slot: ac as u8, sym: rs, extra: extra as u16, nextra: size })?;
                     if size == 0 {
                         if run == 15 {
                             k += 16; // ZRL：16 个零
@@ -460,6 +484,12 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
     if rest[..eoi].iter().any(|&b| b != 0xFF) {
         return None;
     }
+    Some((kept, sos))
+}
+
+/// 按 `p` 的符号频率生成最优表、重新编码，拼回完整的 JPEG；没比 `orig_len` 小 → `None`。
+fn rebuild(p: &Parsed, orig_len: usize) -> Option<Vec<u8>> {
+    let Parsed { kept, sos, syms, freq } = p;
 
     // ── 新表、重新编码 ──
     let mut new_tables: [Option<Table>; 8] = Default::default();
@@ -471,8 +501,8 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
             new_tables[slot] = Some(t);
         }
     }
-    let mut bw = BitWriter { out: Vec::with_capacity(data.len()), acc: 0, nbits: 0 };
-    for s in &syms {
+    let mut bw = BitWriter { out: Vec::with_capacity(orig_len), acc: 0, nbits: 0 };
+    for s in syms {
         let (code, len) = new_codes[s.slot as usize][s.sym as usize];
         if len == 0 {
             return None;
@@ -482,9 +512,9 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
     }
     let entropy = bw.finish();
 
-    let mut out = Vec::with_capacity(jpeg.len());
+    let mut out = Vec::with_capacity(orig_len);
     out.extend_from_slice(&[0xFF, 0xD8]);
-    for seg in &kept {
+    for seg in kept {
         out.extend_from_slice(seg);
     }
     let mut dht = Vec::new();
@@ -501,21 +531,35 @@ pub fn optimize(jpeg: &[u8]) -> Option<Vec<u8>> {
     out.extend_from_slice(sos);
     out.extend_from_slice(&entropy);
     out.extend_from_slice(&[0xFF, 0xD9]);
-    (out.len() < jpeg.len()).then_some(out)
+    (out.len() < orig_len).then_some(out)
 }
 
-/// [`optimize`] 之后把新旧两份都解码、逐像素比对：完全相同才用新的，否则用原来的（画质不变的保证不只靠上面的实现）。
+/// [`optimize`] 并自证无损：把产物按它自己的新表重新解析一遍，与原文件的解析结果逐项比对——DHT 以外的段（SOF、DQT 等）
+/// 逐字节相同、SOS 相同、符号流（每一项的表、符号、附加位）完全相同，才用新的，否则用原来的。
+///
+/// 为什么这等于"解码逐像素相同"：解码结果只取决于帧头、量化表、扫描头和熵编码数据还原出的 DCT 系数；前三者逐字节相同，
+/// 系数由符号流（游程/类别 + 附加位）唯一决定，哈夫曼表只是符号的编码方式。所以比符号流就是比系数，不必把两份都解码成像素
+/// （2026-10-03 以前就是两份都整张解码逐像素比，占整页处理时间约 28%）。像素级比对留在测试里。
 pub fn optimize_verified(jpeg: Vec<u8>) -> Vec<u8> {
-    let Some(new) = optimize(&jpeg) else { return jpeg };
-    let same = match (image::load_from_memory(&jpeg), image::load_from_memory(&new)) {
-        (Ok(a), Ok(b)) => a.color() == b.color() && a.width() == b.width() && a.height() == b.height() && a.as_bytes() == b.as_bytes(),
-        _ => false,
-    };
-    if same {
+    let Some(old) = parse(&jpeg) else { return jpeg };
+    let Some(new) = rebuild(&old, jpeg.len()) else { return jpeg };
+    if same_coefficients(&old, &new) {
         new
     } else {
         jpeg
     }
+}
+
+/// `new` 按它自己的哈夫曼表解析出来，与 `old` 的非 DHT 段、SOS、符号流逐项相同。
+fn same_coefficients(old: &Parsed, new: &[u8]) -> bool {
+    // 边解边比，不另存一份符号流
+    let mut i = 0usize;
+    let same_syms = |s: Sym| {
+        let ok = old.syms.get(i) == Some(&s);
+        i += 1;
+        ok.then_some(())
+    };
+    parse_with(new, same_syms).is_some_and(|(kept, sos)| kept == old.kept && sos == old.sos) && i == old.syms.len()
 }
 
 #[cfg(test)]
@@ -558,7 +602,9 @@ mod tests {
                         assert!(w * h < 64 * 64, "{w}x{h} q{q} 这么大的图应当能变小");
                     }
                     let v = optimize_verified(orig.clone());
-                    assert_eq!(image::load_from_memory(&v).unwrap().as_bytes(), a.as_bytes());
+                    assert_eq!(image::load_from_memory(&v).unwrap().as_bytes(), a.as_bytes(), "{w}x{h} q{q}：核对过的产物解码逐像素相同");
+                    // 符号流核对不误拒：能优化的都采用了优化结果
+                    assert_eq!(Some(v), optimize(&orig), "{w}x{h} q{q}");
                 }
             }
         }
@@ -640,5 +686,40 @@ mod tests {
         j.truncate(j.len() / 2); // 截断的
         assert!(optimize(&j).is_none());
         assert_eq!(optimize_verified(j.clone()), j);
+        // 渐进式（SOF2）、带重启间隔（DRI）的：不处理，原样返回
+        let base = encode(&DynamicImage::ImageRgb8(textured(64, 64).1), 90);
+        let sof = base.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+        let mut prog = base.clone();
+        prog[sof + 1] = 0xC2;
+        assert!(optimize(&prog).is_none());
+        assert_eq!(optimize_verified(prog.clone()), prog);
+        let mut dri = base[..2].to_vec();
+        dri.extend_from_slice(&[0xFF, 0xDD, 0, 4, 0, 0]); // 重启间隔 0（不重启），解码结果不变
+        dri.extend_from_slice(&base[2..]);
+        assert_eq!(image::load_from_memory(&dri).unwrap().as_bytes(), image::load_from_memory(&base).unwrap().as_bytes());
+        assert!(optimize(&dri).is_none());
+        assert_eq!(optimize_verified(dri.clone()), dri);
+    }
+
+    /// 符号流核对真能拦下错误的产物：熵编码数据改一位、或量化表改一个字节，都判成不一致。
+    #[test]
+    fn verification_rejects_tampered_output() {
+        let (g, c) = textured(120, 90);
+        for img in [DynamicImage::ImageLuma8(g), DynamicImage::ImageRgb8(c)] {
+            let orig = encode(&img, 90);
+            let old = parse(&orig).unwrap();
+            let new = rebuild(&old, orig.len()).unwrap();
+            assert!(same_coefficients(&old, &new));
+            let sos = new.windows(2).rposition(|w| w == [0xFF, 0xDA]).unwrap();
+            let mut bad = new.clone();
+            // 改熵编码数据的一位（避开 0xFF 及其填充字节，不造出标记）
+            let i = (sos + 40..new.len()).find(|&i| new[i] < 0xFE && new[i - 1] != 0xFF).unwrap();
+            bad[i] ^= 1;
+            assert!(!same_coefficients(&old, &bad));
+            let dqt = new.windows(2).position(|w| w == [0xFF, 0xDB]).unwrap();
+            let mut bad = new.clone();
+            bad[dqt + 10] ^= 1;
+            assert!(!same_coefficients(&old, &bad));
+        }
     }
 }

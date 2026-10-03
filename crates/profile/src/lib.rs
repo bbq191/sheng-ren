@@ -175,13 +175,14 @@ impl Profile {
             if !self.formats.contains(fmt) {
                 return Err(format!("profile {}: readable 里的 {fmt:?} 不在 formats 里", self.id));
             }
-            if r.width == 0 || r.height == 0 || r.width > width || r.height > height {
-                return Err(format!("profile {}: readable {fmt:?} 须非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
+            // 竖屏（宽 ≤ 高）：长边、短边（`Screen::long_edge`/`short_edge`）和漫画排版都按竖屏算，写反了会把横竖框选反
+            if r.width == 0 || r.height == 0 || r.width > width || r.height > height || r.width > r.height {
+                return Err(format!("profile {}: readable {fmt:?} 须为竖屏（宽 ≤ 高）、非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
             }
         }
         if let Some(r) = self.comic_readable {
-            if r.width == 0 || r.height == 0 || r.width > width || r.height > height {
-                return Err(format!("profile {}: comic_readable 须非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
+            if r.width == 0 || r.height == 0 || r.width > width || r.height > height || r.width > r.height {
+                return Err(format!("profile {}: comic_readable 须为竖屏（宽 ≤ 高）、非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
             }
             if self.comic_margin >= r.width.min(r.height) / 4 {
                 return Err(format!("profile {}: comic_margin {} 须小于漫画阅读范围短边的 1/4（{}x{}）", self.id, self.comic_margin, r.width, r.height));
@@ -329,6 +330,12 @@ mod tests {
         let scr = "[screen]\nwidth = 100\nheight = 200\n";
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")).is_ok());
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")).is_err(), "阅读范围不能超过屏幕");
+        // 阅读范围写反（横的）：屏幕是竖的，阅读范围也必须是竖的
+        let wide = "[screen]\nwidth = 200\nheight = 200\n";
+        assert!(Profile::parse("x", &format!("{base}{wide}[readable.epub]\nwidth = 200\nheight = 199\n")).is_err(), "readable 横的报错");
+        assert!(Profile::parse("x", &format!("{base}{wide}[readable.epub]\nwidth = 199\nheight = 199\n")).is_ok(), "方的可以");
+        assert!(Profile::parse("x", &format!("{base}{wide}[comic_readable]\nwidth = 200\nheight = 150\n")).is_err(), "comic_readable 横的报错");
+        assert!(Profile::parse("x", &format!("{base}{wide}[comic_readable]\nwidth = 150\nheight = 200\n")).is_ok());
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.pdf]\nwidth = 90\nheight = 180\n")).is_err(), "不再支持的格式（pdf）报错");
         assert!(Profile::parse("x", &format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"azw3\"]\nnotes = \"jump\"\n{scr}")).is_ok(), "azw3 可以");
         for fmt in ["pdf", "mobi"] {

@@ -69,9 +69,20 @@ fn downscale_into(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Vec<u8>> {
     // 此前 `img.resize` 是 `image` 自带的标量实现（实测慢约 20 倍，且中间缓冲是 f32，内存大），`encode_image` 还会把
     // 灰度图写成 3 分量 JPEG（体积白涨）——文字书插图每张都走这里（2026-09-25 审计）。非 L8/RGB8 类型（带透明 PNG 等）照旧。
     let (nw, nh) = fit_within(w, h, max_w, max_h);
-    let resized = resize_lanczos3(&img, nw, nh);
-    drop(img);
-    let out = encode_keep_gray(fmt, &resized, JPEG_QUALITY)?;
+    let out = match Page8::try_from_dynamic(img) {
+        Ok(page) => page.resize_lanczos3(nw, nh).encode(fmt, JPEG_QUALITY)?,
+        // 带透明、16 位等其它类型（只有 PNG 会到这里）：`image` 自带缩放，类型不变、原样写 PNG；JPEG 不收这种类型
+        Err(img) => {
+            let resized = img.resize_exact(nw, nh, FilterType::Lanczos3);
+            drop(img);
+            if fmt != ImageFormat::Png {
+                return None;
+            }
+            let mut out = Vec::new();
+            resized.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+            out
+        }
+    };
     // 只有确实变小才采用（极端下重编码可能变大 → 保留原图，不倒退体积）。
     (out.len() < bytes.len()).then_some(out)
 }
@@ -85,8 +96,10 @@ fn fit_within(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
 
 /// **CBZ/漫画整页**降采样：按朝向选盒（竖 短边×长边 / 横 长边×短边），页整张填屏、横页横读可用长边宽。
 /// 真机探针（2026-09-02，Move，5 张 400–2400px 宽图上机看渲染的 `<uuid>.pdf`）：只卡长边会让方图多留 1.8× 无用像素。
+/// 横竖按**摆正后**（EXIF 方向）的宽高判断：存成横的、靠 EXIF 转 90° 显示的竖图要进竖框。
 pub fn downscale_for_device(bytes: &[u8], screen: Screen) -> Option<Vec<u8>> {
-    let (_, (w, h)) = header_dims(bytes)?;
+    let (fmt, (w, h)) = header_dims(bytes)?;
+    let (w, h) = if swaps_axes(orientation_of(bytes, fmt)) { (h, w) } else { (w, h) };
     let (long, short) = (screen.long_edge(), screen.short_edge());
     let (max_w, max_h) = if w >= h { (long, short) } else { (short, long) };
     downscale_into(bytes, max_w, max_h)
@@ -110,7 +123,7 @@ fn swaps_axes(o: image::metadata::Orientation) -> bool {
 /// 解码并按 EXIF 方向摆正（格式按魔数认）。重编码写不回 EXIF：像素不摆正的话，在按 EXIF 显示的阅读器上
 /// 原来正的图就转歪了；摆正后像素本身就是该显示的样子，认不认 EXIF 的阅读器看到的都一样。缩略图等只读用途也用它。
 pub fn decode_oriented(bytes: &[u8]) -> Option<image::DynamicImage> {
-    let fmt = image::guess_format(bytes).ok()?;
+    let fmt = crate::util::image_kind(bytes)?.format;
     let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
     img.apply_orientation(orientation_of(bytes, fmt));
     Some(img)
@@ -132,7 +145,7 @@ fn comic_header_dims(bytes: &[u8]) -> Option<(ImageFormat, (u32, u32))> {
 }
 
 fn header_dims_if(bytes: &[u8], ok: impl Fn(ImageFormat) -> bool) -> Option<(ImageFormat, (u32, u32))> {
-    let fmt = image::guess_format(bytes).ok()?;
+    let fmt = crate::util::image_kind(bytes)?.format;
     if !ok(fmt) {
         return None;
     }
@@ -157,30 +170,41 @@ const TRIM_TOLERANCE: u8 = 8;
 /// 累加最多到 0.7×边长，仍留 30% 给内容，不会把整页裁没。
 const TRIM_MAX_FRACTION: f32 = 0.35;
 
-/// 一行/一列像素是否"纯色"（每个像素与首像素的 RGB 通道极差都 ≤ [`TRIM_TOLERANCE`]）。`px(i)` 取该行/列第 i 个像素。
-fn line_is_uniform(len: u32, px: impl Fn(u32) -> [u8; 3]) -> bool {
-    if len <= 1 {
+/// 留白的亮度下限：一行/列的首像素 R、G、B 都 ≥ 这个值、其余像素与它的差都在 [`TRIM_TOLERANCE`] 以内，才算留白。
+///
+/// 只裁接近白的边：裁掉的边最后补的是白边（[`Page8::paste_on_white`]），黑色、灰色、彩色的边（出血到页边的黑底页、
+/// 深色满版画面）裁了再补白就改了原画（2026-10-03 审计：此前只看"纯色"，黑底页的黑边被裁掉换成白边）。
+/// 235 的依据：BT.601 有限范围（16–235）里 235 就是标称白，按这个范围出的扫描、视频截图里纸白落在 235 附近。
+/// 只卡首像素、其余仍按容差比：贴着画面的那一两行留白有 JPEG 振铃（实测 q90 纸白 241 的边上有 233），这样判定与以前对
+/// 白边的结果完全相同，只是多排除了不白的边。泛黄的纸、浅灰底低于它的不裁——拿不准就不处理。
+const TRIM_WHITE_MIN: u8 = 235;
+
+/// 一行/一列像素是否"白色留白"：首像素各通道都 ≥ [`TRIM_WHITE_MIN`]，其余像素与首像素的通道差都 ≤ [`TRIM_TOLERANCE`]。
+/// `px(i)` 取该行/列第 i 个像素。
+fn line_is_blank(len: u32, px: impl Fn(u32) -> [u8; 3]) -> bool {
+    if len == 0 {
         return true;
     }
     let first = px(0);
-    (1..len).all(|i| {
-        let p = px(i);
-        (0..3).all(|c| (p[c] as i16 - first[c] as i16).unsigned_abs() as u8 <= TRIM_TOLERANCE)
-    })
+    first.iter().all(|&c| c >= TRIM_WHITE_MIN)
+        && (1..len).all(|i| {
+            let p = px(i);
+            (0..3).all(|c| p[c].abs_diff(first[c]) <= TRIM_TOLERANCE)
+        })
 }
 
-/// 四边纯色留白的检测：返回 `(left, top, 裁后宽, 裁后高)`；没有可裁的留白 / 图太小 / 会裁成空 → `None`。
-/// 只在"确实是留白"时裁——边缘整行/整列像素高度一致（[`TRIM_TOLERANCE`]）才算留白，一遇到不满足就停，
+/// 四边白色留白的检测：返回 `(left, top, 裁后宽, 裁后高)`；没有可裁的留白 / 图太小 / 会裁成空 → `None`。
+/// 只在"确实是留白"时裁——边缘整行/整列像素接近白（[`TRIM_WHITE_MIN`]）且高度一致（[`TRIM_TOLERANCE`]）才算留白，一遇到不满足就停，
 /// 不会裁进真实画面。单边最多裁 [`TRIM_MAX_FRACTION`]，兜底极端误判。
-/// `px(x, y)` 取像素 RGB——灰度图直接返回 `[v; 3]`，不必先造一份 3 倍大的 RGB 副本（此前灰度页为探测边缘整图 `to_rgb8()`）。
+/// `px(x, y)` 取像素 RGB（[`Page8::rgb_at`]）。
 fn trim_bounds_with(w: u32, h: u32, px: impl Fn(u32, u32) -> [u8; 3]) -> Option<(u32, u32, u32, u32)> {
     if w < 4 || h < 4 {
         return None;
     }
     let max_v = ((h as f32) * TRIM_MAX_FRACTION) as u32;
     let max_h = ((w as f32) * TRIM_MAX_FRACTION) as u32;
-    let row = |y: u32| line_is_uniform(w, |x| px(x, y));
-    let col = |x: u32| line_is_uniform(h, |y| px(x, y));
+    let row = |y: u32| line_is_blank(w, |x| px(x, y));
+    let col = |x: u32| line_is_blank(h, |y| px(x, y));
     let mut top = 0u32;
     while top < max_v && top + 1 < h && row(top) {
         top += 1;
@@ -207,27 +231,10 @@ fn trim_bounds_with(w: u32, h: u32, px: impl Fn(u32, u32) -> [u8; 3]) -> Option<
     Some((left, top, new_w, new_h))
 }
 
-/// [`trim_bounds_with`] 的 `DynamicImage` 入口：`Luma8`/`Rgb8` 直接读像素，其它类型（调用方已归一，实际不会到）退化成 RGB 副本。
-fn trim_bounds(img: &image::DynamicImage) -> Option<(u32, u32, u32, u32)> {
-    use image::DynamicImage;
-    let (w, h) = (img.width(), img.height());
-    match img {
-        DynamicImage::ImageLuma8(g) => trim_bounds_with(w, h, |x, y| {
-            let v = g.get_pixel(x, y)[0];
-            [v, v, v]
-        }),
-        DynamicImage::ImageRgb8(c) => trim_bounds_with(w, h, |x, y| c.get_pixel(x, y).0),
-        other => {
-            let c = other.to_rgb8();
-            trim_bounds_with(w, h, |x, y| c.get_pixel(x, y).0)
-        }
-    }
-}
-
 /// 解码后的漫画页（[`decode_comic`]）。
 struct ComicSrc {
-    /// 归一到 `Luma8`/`Rgb8` 的整页。
-    img: image::DynamicImage,
+    /// 归一到 8 位灰度/RGB 的整页。
+    img: Page8,
     /// 要重新编码时用的格式（[`comic_output_format`]）。GIF/WebP 只在本来就要改像素（裁边、缩放、补白、转灰度）时才换格式，
     /// 光是格式不同不算改动：不需要动的 GIF/WebP 原样保留。
     out_fmt: ImageFormat,
@@ -317,7 +324,6 @@ fn webp_is_lossless(bytes: &[u8]) -> Option<bool> {
 /// 只合成了白底、别的都不用做时不算改动：原图照旧原样保留，透明区域交给阅读器按页面底色显示。
 /// 超过 [`MAX_COMIC_DECODE_PIXELS`]、动图、解不开 → `None`（原样保留）。
 fn decode_comic(bytes: &[u8], grayscale: bool) -> Option<ComicSrc> {
-    use image::DynamicImage;
     let (fmt, (w, h)) = comic_header_dims(bytes)?;
     if (w as u64) * (h as u64) > MAX_COMIC_DECODE_PIXELS {
         return None; // 解压炸弹或离谱的大图：不整个解出来，原样保留
@@ -330,15 +336,16 @@ fn decode_comic(bytes: &[u8], grayscale: bool) -> Option<ComicSrc> {
     let gray = matches!(decoded.color(), image::ColorType::L8 | image::ColorType::L16 | image::ColorType::La8 | image::ColorType::La16);
     let to_gray = grayscale && !gray;
     let decoded = if decoded.color().has_alpha() { flatten_alpha_on_white(decoded) } else { decoded };
-    let img = if gray || to_gray { DynamicImage::ImageLuma8(decoded.into_luma8()) } else { DynamicImage::ImageRgb8(decoded.into_rgb8()) };
+    let img = if gray || to_gray { Page8::Gray(decoded.into_luma8()) } else { Page8::Rgb(decoded.into_rgb8()) };
     Some(ComicSrc { img, out_fmt, to_gray, rotated })
 }
 
-/// 裁掉四边纯色留白（[`trim_bounds`]）：返回 (裁后的图, 左偏移, 上偏移)。没得裁时原图原样返回、偏移 0。
+/// 裁掉四边白色留白（[`trim_bounds_with`]）：返回 (裁后的图, 左偏移, 上偏移)。没得裁时原图原样返回、偏移 0。
 /// 按值接收：裁了边时原图在这里就释放，不和裁后的副本同时占内存。
-fn trim_comic(img: image::DynamicImage) -> (image::DynamicImage, u32, u32) {
-    match trim_bounds(&img) {
-        Some((l, t, cw, ch)) => (img.crop_imm(l, t, cw, ch), l, t),
+fn trim_comic(img: Page8) -> (Page8, u32, u32) {
+    let (w, h) = img.dimensions();
+    match trim_bounds_with(w, h, |x, y| img.rgb_at(x, y)) {
+        Some((l, t, cw, ch)) => (img.crop(l, t, cw, ch), l, t),
         None => (img, 0, 0),
     }
 }
@@ -364,28 +371,6 @@ fn flatten_alpha_on_white(img: image::DynamicImage) -> image::DynamicImage {
                 let p = rgba.get_pixel(x, y).0;
                 image::Rgb([blend(p[0], p[3]), blend(p[1], p[3]), blend(p[2], p[3])])
             }))
-        }
-    }
-}
-
-/// 白底画布上放置 `img`（保持 `Luma8`/`Rgb8` 类型，偏移 `off_x/off_y`）。
-fn paste_on_white(img: &image::DynamicImage, cw: u32, ch: u32, off_x: u32, off_y: u32) -> image::DynamicImage {
-    use image::DynamicImage;
-    match img {
-        DynamicImage::ImageLuma8(g) => {
-            let mut canvas = image::GrayImage::from_pixel(cw, ch, image::Luma([255]));
-            image::imageops::overlay(&mut canvas, g, off_x as i64, off_y as i64);
-            DynamicImage::ImageLuma8(canvas)
-        }
-        DynamicImage::ImageRgb8(c) => {
-            let mut canvas = image::RgbImage::from_pixel(cw, ch, image::Rgb([255, 255, 255]));
-            image::imageops::overlay(&mut canvas, c, off_x as i64, off_y as i64);
-            DynamicImage::ImageRgb8(canvas)
-        }
-        other => {
-            let mut canvas = image::RgbImage::from_pixel(cw, ch, image::Rgb([255, 255, 255]));
-            image::imageops::overlay(&mut canvas, &other.to_rgb8(), off_x as i64, off_y as i64);
-            DynamicImage::ImageRgb8(canvas)
         }
     }
 }
@@ -477,79 +462,143 @@ fn comic_layout(w: u32, h: u32, area: Screen, margin: u32, may_upscale: bool) ->
 /// - 超过 [`MAX_COMIC_DECODE_PIXELS`] 的图、解不开的图返回 `None`。
 pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, grayscale: bool) -> Option<Vec<u8>> {
     let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale)?;
-    let orig = (img.width(), img.height());
+    let orig = img.dimensions();
     let (img, tl, tt) = trim_comic(img);
-    let (cw, ch) = (img.width(), img.height());
+    let (cw, ch) = img.dimensions();
     let trimmed = (cw, ch) != orig;
     if cw.min(ch) < area.width / 3 {
         // 装饰小图：只裁边
-        return if trimmed || to_gray || rotated { encode_keep_gray(out_fmt, &img, JPEG_QUALITY_COMIC) } else { None };
+        return if trimmed || to_gray || rotated { img.encode(out_fmt, JPEG_QUALITY_COMIC) } else { None };
     }
     let lay = comic_layout(cw, ch, area, margin, out_fmt == ImageFormat::Jpeg);
     if !to_gray && !rotated && lay.matches_original(orig, (tl, tt), (cw, ch), area, effective_margin(margin, area)) {
         return None;
     }
-    let img = if (lay.nw, lay.nh) != (cw, ch) { resize_lanczos3(&img, lay.nw, lay.nh) } else { img };
-    let page = if (lay.canvas_w, lay.canvas_h) != (lay.nw, lay.nh) { paste_on_white(&img, lay.canvas_w, lay.canvas_h, lay.x, lay.y) } else { img };
-    encode_keep_gray(out_fmt, &page, JPEG_QUALITY_COMIC)
+    let img = if (lay.nw, lay.nh) != (cw, ch) { img.resize_lanczos3(lay.nw, lay.nh) } else { img };
+    let page = if (lay.canvas_w, lay.canvas_h) != (lay.nw, lay.nh) { img.paste_on_white(lay.canvas_w, lay.canvas_h, lay.x, lay.y) } else { img };
+    page.encode(out_fmt, JPEG_QUALITY_COMIC)
 }
 
-/// Lanczos3 重采样，SIMD 实现（`fast_image_resize`，x86 SSE4/AVX2、aarch64 NEON 运行期自动选）。
-///
-/// 替换 `DynamicImage::resize_exact(.., Lanczos3)` 的原因：2026-09-20 分阶段计时（乱马/镖人，
-/// release、每页 ~1000×1500）显示**缩放占整页处理时间的 74–79%**（145–218ms/页），编码 15–22%，
-/// 解码/裁边探测可忽略；`fast_image_resize` 同一算法（Lanczos3 卷积）快约 **20 倍**（7–11ms/页）。
-/// **不是逐位一致**：与 `image` 库实现的像素差均值 0.1–0.2 灰阶、最大 ~30（仅高对比边缘），二者对
-/// 浮点参照（PIL）都是 53–55dB——远低于随后 JPEG q95 编码本身的误差（约 45dB），没有可见差别。
-/// 仅处理 `Luma8`/`Rgb8`（调用方已归一到这两种）；其它类型或库报错时退回 `image` 自带实现。
-fn resize_lanczos3(img: &image::DynamicImage, dw: u32, dh: u32) -> image::DynamicImage {
-    use fast_image_resize::images::{Image, ImageRef};
-    use fast_image_resize::{FilterType as FirFilter, PixelType, ResizeAlg, ResizeOptions, Resizer};
-    use image::DynamicImage;
-    let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FirFilter::Lanczos3));
-    let fast = || -> Option<DynamicImage> {
-        let mut resizer = Resizer::new();
+/// 归一后的 8 位整页：单通道灰度或 RGB。漫画页解码时一次归一（[`decode_comic`]），文字书插图解出来正好是这两种时也走它
+/// （[`downscale_into`]）；裁边、缩放、补白、编码都只对这两种写，不再各自留一个"其它类型"的分支。
+enum Page8 {
+    Gray(image::GrayImage),
+    Rgb(image::RgbImage),
+}
+
+impl Page8 {
+    /// 本来就是 8 位灰度/RGB 的图直接接过来（不拷贝）；其它类型原样退回。
+    fn try_from_dynamic(img: image::DynamicImage) -> Result<Page8, image::DynamicImage> {
         match img {
-            DynamicImage::ImageLuma8(g) => {
-                let src = ImageRef::new(g.width(), g.height(), g.as_raw(), PixelType::U8).ok()?;
-                let mut dst = Image::new(dw, dh, PixelType::U8);
-                resizer.resize(&src, &mut dst, &opts).ok()?;
-                image::GrayImage::from_raw(dw, dh, dst.into_vec()).map(DynamicImage::ImageLuma8)
+            image::DynamicImage::ImageLuma8(g) => Ok(Page8::Gray(g)),
+            image::DynamicImage::ImageRgb8(c) => Ok(Page8::Rgb(c)),
+            other => Err(other),
+        }
+    }
+
+    fn into_dynamic(self) -> image::DynamicImage {
+        match self {
+            Page8::Gray(g) => image::DynamicImage::ImageLuma8(g),
+            Page8::Rgb(c) => image::DynamicImage::ImageRgb8(c),
+        }
+    }
+
+    fn dimensions(&self) -> (u32, u32) {
+        match self {
+            Page8::Gray(g) => g.dimensions(),
+            Page8::Rgb(c) => c.dimensions(),
+        }
+    }
+
+    /// 像素的 RGB（灰度给 `[v; 3]`，不必先造一份 3 倍大的 RGB 副本）。
+    fn rgb_at(&self, x: u32, y: u32) -> [u8; 3] {
+        match self {
+            Page8::Gray(g) => [g.get_pixel(x, y)[0]; 3],
+            Page8::Rgb(c) => c.get_pixel(x, y).0,
+        }
+    }
+
+    /// 裁出 `(x, y)` 起 `w × h` 的一块。
+    fn crop(self, x: u32, y: u32, w: u32, h: u32) -> Page8 {
+        match self {
+            Page8::Gray(g) => Page8::Gray(image::imageops::crop_imm(&g, x, y, w, h).to_image()),
+            Page8::Rgb(c) => Page8::Rgb(image::imageops::crop_imm(&c, x, y, w, h).to_image()),
+        }
+    }
+
+    /// 放到 `cw × ch` 的白底画布上，左上角在 (`x`, `y`)；类型不变。
+    fn paste_on_white(&self, cw: u32, ch: u32, x: u32, y: u32) -> Page8 {
+        match self {
+            Page8::Gray(g) => {
+                let mut canvas = image::GrayImage::from_pixel(cw, ch, image::Luma([255]));
+                image::imageops::overlay(&mut canvas, g, x as i64, y as i64);
+                Page8::Gray(canvas)
             }
-            DynamicImage::ImageRgb8(c) => {
-                let src = ImageRef::new(c.width(), c.height(), c.as_raw(), PixelType::U8x3).ok()?;
-                let mut dst = Image::new(dw, dh, PixelType::U8x3);
-                resizer.resize(&src, &mut dst, &opts).ok()?;
-                image::RgbImage::from_raw(dw, dh, dst.into_vec()).map(DynamicImage::ImageRgb8)
+            Page8::Rgb(c) => {
+                let mut canvas = image::RgbImage::from_pixel(cw, ch, image::Rgb([255, 255, 255]));
+                image::imageops::overlay(&mut canvas, c, x as i64, y as i64);
+                Page8::Rgb(canvas)
+            }
+        }
+    }
+
+    /// Lanczos3 重采样到 `dw × dh`，SIMD 实现（`fast_image_resize`，x86 SSE4/AVX2、aarch64 NEON 运行期自动选）。
+    ///
+    /// 替换 `DynamicImage::resize_exact(.., Lanczos3)` 的原因：2026-09-20 分阶段计时（乱马/镖人，
+    /// release、每页 ~1000×1500）显示**缩放占整页处理时间的 74–79%**（145–218ms/页），编码 15–22%，
+    /// 解码/裁边探测可忽略；`fast_image_resize` 同一算法（Lanczos3 卷积）快约 **20 倍**（7–11ms/页）。
+    /// **不是逐位一致**：与 `image` 库实现的像素差均值 0.1–0.2 灰阶、最大 ~30（仅高对比边缘），二者对
+    /// 浮点参照（PIL）都是 53–55dB——远低于随后 JPEG q95 编码本身的误差（约 45dB），没有可见差别。
+    /// 库报错时退回 `image` 自带实现（类型不变）。
+    fn resize_lanczos3(self, dw: u32, dh: u32) -> Page8 {
+        use fast_image_resize::images::{Image, ImageRef};
+        use fast_image_resize::{FilterType as FirFilter, PixelType, ResizeAlg, ResizeOptions, Resizer};
+        let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FirFilter::Lanczos3));
+        let (w, h) = self.dimensions();
+        let (raw, pt) = match &self {
+            Page8::Gray(g) => (g.as_raw(), PixelType::U8),
+            Page8::Rgb(c) => (c.as_raw(), PixelType::U8x3),
+        };
+        let fast = || -> Option<Vec<u8>> {
+            let src = ImageRef::new(w, h, raw, pt).ok()?;
+            let mut dst = Image::new(dw, dh, pt);
+            Resizer::new().resize(&src, &mut dst, &opts).ok()?;
+            Some(dst.into_vec())
+        };
+        let out = fast().and_then(|v| match self {
+            Page8::Gray(_) => image::GrayImage::from_raw(dw, dh, v).map(Page8::Gray),
+            Page8::Rgb(_) => image::RgbImage::from_raw(dw, dh, v).map(Page8::Rgb),
+        });
+        out.unwrap_or_else(|| match self.into_dynamic().resize_exact(dw, dh, FilterType::Lanczos3) {
+            image::DynamicImage::ImageLuma8(g) => Page8::Gray(g),
+            other => Page8::Rgb(other.into_rgb8()),
+        })
+    }
+
+    /// 按 `fmt` 编码（JPEG 质量 `jpeg_quality`）；JPEG、PNG 以外 → `None`。JPEG **灰度保持单分量**：`image` 0.25 的
+    /// `JpegEncoder::encode_image(&DynamicImage)` 对 `ImageLuma8` 也会转成 3 分量 RGB 输出（2026-09-20 实测 SOF 分量数=3、
+    /// 回读 `Rgb8`），必须走 `ImageEncoder::write_image(.., ExtendedColorType::L8)` 才是真灰度 JPEG。
+    fn encode(self, fmt: ImageFormat, jpeg_quality: u8) -> Option<Vec<u8>> {
+        use image::{ExtendedColorType, ImageEncoder};
+        let (w, h) = self.dimensions();
+        let (raw, ct) = match &self {
+            Page8::Gray(g) => (g.as_raw(), ExtendedColorType::L8),
+            Page8::Rgb(c) => (c.as_raw(), ExtendedColorType::Rgb8),
+        };
+        let mut out = Vec::new();
+        match fmt {
+            ImageFormat::Jpeg => {
+                JpegEncoder::new_with_quality(&mut out, jpeg_quality).write_image(raw, w, h, ct).ok()?;
+                // 哈夫曼表按这张图重做（无损：系数一个不动，见 `jpegopt`），同样画质小约 7%–16%
+                Some(crate::jpegopt::optimize_verified(out))
+            }
+            ImageFormat::Png => {
+                image::codecs::png::PngEncoder::new(&mut out).write_image(raw, w, h, ct).ok()?;
+                Some(out)
             }
             _ => None,
         }
-    };
-    fast().unwrap_or_else(|| img.resize_exact(dw, dh, FilterType::Lanczos3))
-}
-
-/// 按 `fmt` 编码，JPEG **保持灰度图为单分量**。`image` 0.25 的 `JpegEncoder::encode_image(&DynamicImage)` 对
-/// `ImageLuma8` 也会转成 3 分量 RGB 输出（2026-09-20 实测 SOF 分量数=3、回读 `Rgb8`），必须走
-/// `ImageEncoder::write_image(.., ExtendedColorType::L8)` 才是真灰度 JPEG。仅接受 `Luma8`/`Rgb8`
-/// （调用方已归一到这两种），JPEG 遇其它类型返回 `None`；PNG 走 `image` 自带无损编码；其余格式 `None`。
-fn encode_keep_gray(fmt: ImageFormat, img: &image::DynamicImage, jpeg_quality: u8) -> Option<Vec<u8>> {
-    use image::{DynamicImage, ExtendedColorType, ImageEncoder};
-    let mut out = Vec::new();
-    match fmt {
-        ImageFormat::Jpeg => {
-            let enc = JpegEncoder::new_with_quality(&mut out, jpeg_quality);
-            match img {
-                DynamicImage::ImageLuma8(g) => enc.write_image(g.as_raw(), g.width(), g.height(), ExtendedColorType::L8).ok()?,
-                DynamicImage::ImageRgb8(c) => enc.write_image(c.as_raw(), c.width(), c.height(), ExtendedColorType::Rgb8).ok()?,
-                _ => return None,
-            }
-            // 哈夫曼表按这张图重做（无损：解码逐像素相同，见 `jpegopt`），同样画质小约 7%–16%
-            return Some(crate::jpegopt::optimize_verified(out));
-        }
-        ImageFormat::Png => img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?,
-        _ => return None,
     }
-    Some(out)
 }
 
 /// 优化器交给图片处理的条目（按扩展名：jpg/jpeg/png/gif/webp）。GIF/WebP 只有漫画页会处理（[`prepare_comic_page_for_epub`]），
@@ -561,11 +610,7 @@ pub fn is_page_image(name: &str) -> bool {
 /// 图片条目处理后换了格式（漫画里的 GIF/WebP 转成 PNG/JPEG，条目名不变）时，OPF manifest 该写的新 media-type；
 /// 没换格式 → `None`。按产物字节的魔数判断，不看处理过程。
 pub fn converted_media_type(name: &str, out: &[u8]) -> Option<&'static str> {
-    let mt = match image::guess_format(out).ok()? {
-        ImageFormat::Jpeg => "image/jpeg",
-        ImageFormat::Png => "image/png",
-        _ => return None,
-    };
+    let mt = crate::util::image_kind(out).filter(|k| matches!(k.format, ImageFormat::Jpeg | ImageFormat::Png))?.mime;
     (crate::util::image_media_type_of_ext(&crate::util::image_ext_of(name)) != mt).then_some(mt)
 }
 
@@ -622,7 +667,7 @@ mod tests {
         let orig = src.img.dimensions();
         let (img, _, _) = trim_comic(src.img);
         let changed = img.dimensions() != orig || src.to_gray;
-        Some((img, src.out_fmt, changed))
+        Some((img.into_dynamic(), src.out_fmt, changed))
     }
 
     /// 页图里深色内容（< 128）的外框到四边的距离（左, 上, 右, 下）。
@@ -715,7 +760,9 @@ mod tests {
         let mut mid = Vec::new();
         JpegEncoder::new_with_quality(&mut mid, 95).encode_image(&DynamicImage::ImageRgb8(RgbImage::from_pixel(842, 1455, image::Rgb([128, 128, 128])))).unwrap();
         let g = image::load_from_memory(&prep(&mid, test_area(), true).unwrap()).unwrap().to_luma8();
-        assert!(g.pixels().all(|p| (120..=136).contains(&p.0[0])), "中灰保持中灰，没有抖动成黑白点");
+        // 灰色的边不是留白、不裁：整页按 1px 白边重排，白边以内的像素都是中灰
+        let (w, h) = g.dimensions();
+        assert!((3..w - 3).all(|x| (3..h - 3).all(|y| (120..=136).contains(&g.get_pixel(x, y).0[0]))), "中灰保持中灰，没有抖动成黑白点");
     }
 
     #[test]
@@ -745,7 +792,7 @@ mod tests {
         }));
         let gray = DynamicImage::ImageLuma8(image::GrayImage::from_fn(700, 1000, |x, y| image::Luma([((x * 3 + y * 5) % 256) as u8])));
         for (img, (dw, dh)) in [(rgb, (934u32, 1363u32)), (gray, (934, 1334))] {
-            let fast = resize_lanczos3(&img, dw, dh);
+            let fast = Page8::try_from_dynamic(img.clone()).ok().unwrap().resize_lanczos3(dw, dh).into_dynamic();
             let slow = img.resize_exact(dw, dh, FilterType::Lanczos3);
             assert_eq!(fast.color(), slow.color());
             assert_eq!(fast.dimensions(), (dw, dh));
@@ -822,6 +869,37 @@ mod tests {
         let framed = framed_jpeg(200, 300, 10);
         let (w, h) = trim_dims(&framed).expect("四边留白应触发裁边");
         assert_eq!((w, h), (180, 280), "应精确裁掉 10px 留白: got {w}x{h}");
+    }
+
+    /// 只裁接近白的边：黑底出血页、灰边、彩色边都不裁（裁了再补白就改了原画）；略带噪声的浅色纸白照裁。
+    #[test]
+    fn trim_only_near_white_borders() {
+        let bordered = |c: [u8; 3]| {
+            let img = DynamicImage::ImageRgb8(RgbImage::from_fn(200, 300, |x, y| {
+                if !(20..180).contains(&x) || !(20..280).contains(&y) { image::Rgb(c) } else { image::Rgb([(x % 256) as u8, (y % 256) as u8, 128]) }
+            }));
+            let mut buf = Vec::new();
+            JpegEncoder::new_with_quality(&mut buf, 100).encode_image(&img).unwrap();
+            buf
+        };
+        for c in [[0u8, 0, 0], [128, 128, 128], [200, 30, 30], [230, 230, 230]] {
+            assert!(trim_dims(&bordered(c)).is_none(), "{c:?} 的边不该裁");
+        }
+        for c in [[255u8, 255, 255], [240, 242, 238]] {
+            assert_eq!(trim_dims(&bordered(c)), Some((160, 260)), "{c:?} 是纸白，要裁");
+        }
+        // 端到端：黑边页已经是阅读范围大小 → 原样；大一圈的黑边页缩放后黑边还在（画面到边，四周只有 1px 白边）
+        let area = test_area();
+        let black_frame = |w: u32, h: u32| {
+            let px: Vec<u8> = (0..h).flat_map(|y| (0..w).map(move |x| if x < 40 || y < 40 || x + 40 >= w || y + 40 >= h { 0 } else { (128 + (x + y) % 100) as u8 })).collect();
+            let mut buf = Vec::new();
+            image::ImageEncoder::write_image(JpegEncoder::new_with_quality(&mut buf, 95), &px, w, h, image::ExtendedColorType::L8).unwrap();
+            buf
+        };
+        assert!(prep(&black_frame(area.width, area.height), area, false).is_none(), "黑底页不裁不补");
+        let out = image::load_from_memory(&prep(&black_frame(1091, 1592), area, false).unwrap()).unwrap();
+        let (l, t, r, b) = dark_margins(&out);
+        assert!((l, r) == (1, 1) || (t, b) == (1, 1), "黑边保留、整页缩放：左{l} 上{t} 右{r} 下{b}");
     }
 
     #[test]
@@ -1039,6 +1117,34 @@ mod tests {
         assert!(prep(&gray_jpeg_of(842, 1455, 60), area, false).is_some());
     }
 
+    /// 固定版式按画布显示的判定（`comicfxl::fills_canvas`）和这里的排版一致：排过版的页（放大、缩小、不放大补白的 PNG、
+    /// 原样保留的已排好的页）都是画布比例；装饰小图不是。
+    #[test]
+    fn laid_out_pages_fill_the_fixed_layout_canvas() {
+        let kindle = profile::get("kindle").unwrap().comic_readable();
+        let png = |w: u32, h: u32| {
+            let mut b = Vec::new();
+            DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 9]))).write_to(&mut Cursor::new(&mut b), ImageFormat::Png).unwrap();
+            b
+        };
+        let cases: [(Vec<u8>, bool); 9] = [
+            (black_jpeg(566, 800), true),
+            (black_jpeg(1687, 2480), true),
+            (black_jpeg(1300, 900), true),
+            (black_jpeg(1272, 1696), true),
+            (png(700, 1000), true),
+            (png(450, 1203), true),
+            (png(401, 1203), false), // 短边不到阅读范围宽的 1/3：按装饰小图只裁边
+            (png(900, 600), true),
+            (black_jpeg(300, 200), false),
+        ];
+        for (src, want) in cases {
+            let out = prepare_comic_page_for_epub(&src, kindle, 1, true).unwrap_or_else(|| src.clone());
+            let dims = image::load_from_memory(&out).unwrap().dimensions();
+            assert_eq!(crate::comicfxl::fills_canvas(dims, kindle.width, kindle.height), want, "{dims:?}");
+        }
+    }
+
     fn gif_of(frames: &[image::RgbaImage]) -> Vec<u8> {
         let mut buf = Vec::new();
         {
@@ -1121,6 +1227,9 @@ mod tests {
         assert!(out.height() > out.width(), "{:?}", out.dimensions());
         let (top, bottom) = top_bottom_luma(&out);
         assert!(top < 30.0 && bottom > 225.0, "上黑下白: {top} {bottom}");
+        // 网络图（按朝向选框）：摆正后是竖图，进竖框 954×1696，而不是按存储的横向宽高进横框
+        let out = image::load_from_memory(&downscale_for_device(&src, test_screen()).unwrap()).unwrap();
+        assert_eq!(out.dimensions(), (954, 1431), "2000×3000 摆正后按竖框缩");
         // 摆正后本来就在框里：不动（原字节连同 EXIF 保留）
         assert!(downscale_for_epub(&exif_rotated_jpeg(1200, 900), test_screen()).is_none());
         // 漫画页：同样先摆正再排版——和直接存成竖图（不带 EXIF）的同一张图结果逐字节相同（PNG 无损，比得了字节）
