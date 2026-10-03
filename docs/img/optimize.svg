@@ -64,15 +64,15 @@
   <text x="700" y="340" text-anchor="middle" class="h">漫画页：每张图单趟处理，只编码一次</text>
   <g>
     <rect class="b" x="496" y="354" width="78" height="50" rx="6"/><text x="535" y="376" text-anchor="middle">解码</text><text x="535" y="394" text-anchor="middle" class="s">按 EXIF 摆正</text>
-    <rect class="b" x="590" y="354" width="78" height="50" rx="6"/><text x="629" y="376" text-anchor="middle">裁白边</text><text x="629" y="394" text-anchor="middle" class="s">扫描白框</text>
-    <rect class="b" x="684" y="354" width="98" height="50" rx="6"/><text x="733" y="376" text-anchor="middle">缩放 + 补白</text><text x="733" y="394" text-anchor="middle" class="s">到阅读范围</text>
+    <rect class="b" x="590" y="354" width="78" height="50" rx="6"/><text x="629" y="376" text-anchor="middle">裁边</text><text x="629" y="394" text-anchor="middle" class="s">只裁近白的边</text>
+    <rect class="b" x="684" y="354" width="98" height="50" rx="6"/><text x="733" y="376" text-anchor="middle">缩放 + 补白</text><text x="733" y="394" text-anchor="middle" class="s">到漫画画布</text>
     <rect class="b" x="798" y="354" width="108" height="50" rx="6"/><text x="852" y="376" text-anchor="middle">编码 q95</text><text x="852" y="394" text-anchor="middle" class="s">+ 哈夫曼表重做</text>
     <path class="l" d="M574 379 L588 379" marker-end="url(#a)"/>
     <path class="l" d="M668 379 L682 379" marker-end="url(#a)"/>
     <path class="l" d="M782 379 L796 379" marker-end="url(#a)"/>
   </g>
   <g class="s">
-    <text x="496" y="430">· 画布 = 阅读范围，图保比放进"阅读范围 − 2×白边"（1px）</text>
+    <text x="496" y="430">· 画布 = comic_readable（Kindle 整屏），图保比放进"画布 − 2×白边"</text>
     <text x="496" y="452">· 黑白屏（kindle、ireader）转 256 级灰度，<tspan font-weight="bold">不抖动</tspan>；xochitl 保留彩色</text>
     <text x="496" y="474">· 已经合适的图不重新编码；透明背景先铺白</text>
     <text x="496" y="496">· 静态 GIF/WebP 转 PNG/JPEG；动图、解压炸弹原样保留</text>

@@ -59,6 +59,6 @@
   <text x="36" y="412" class="h">要点</text>
   <text x="36" y="434" class="s">· 依据公开的 MOBI 格式文档 + 对 KF8 样本文件的黑盒分析实现（clean-room，不看 KindleUnpack / Calibre 代码）。</text>
   <text x="36" y="454" class="s">· 不嵌字体（去掉 @font-face，字号字体交给阅读器）；缺省归"文档"（PDOC，侧载书封面最稳），--ebok 归"书籍"。</text>
-  <text x="36" y="474" class="s">· 漫画：OPF 里的固定版式声明（fixed-layout、original-resolution 等）写成同名 EXTH 122–128，Kindle 整页铺满；&lt;head&gt; 只留 title/meta/link/style。</text>
+  <text x="36" y="474" class="s">· 漫画：OPF 里的固定版式声明（fixed-layout、original-resolution 等）写成同名 EXTH 122–128，Kindle 整页铺满；&lt;head&gt; 只留 title/meta/link/style/base。</text>
   <text x="36" y="494" class="s">· 验证：roundtrip 测试用 azw3::read 读回核对；28 本真书 + 1 卷漫画可见文字逐字一致；Kindle 真机看过文字书和固定版式漫画。</text>
 </svg>
