@@ -83,7 +83,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   行内元素）加 `eink-annot`，字号 0.85em；分页按书自带目录的层级定书/卷、章、节（合集和普通书统一，章名写成段落的也认，
 ///   数字章名和正文同页，「部」下面的章深一层），目录里一层平排的「第X部」把后面的条目收到它下面；清章尾空白时自闭合的
 ///   `<span/>` 不再连着后面的 `</p>` 一起删（以前产出不合法 XML）。
-pub const OPTIMIZE_VERSION: &str = "38";
+/// - v39（2026-10-05）：注释识别统一成"互相链接的一对"（同 KFX 写出器）：标号样的普通链接（`[1]`、`<sup>`）指到的块，开头的回链
+///   指回这个标号，就算注释（不要求 class/epub:type 里有 note）；块的锚点也认段首的 `<a id>`。跨文件的这种注释各模式都搬进
+///   引用它的那一章；同文件的只有弹窗模式（掌阅）搬到章末写成弹窗，跳转模式照旧原地不动。
+pub const OPTIMIZE_VERSION: &str = "39";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -242,6 +245,8 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     // "只搬被引用的注释块"用。目录样的页（链接文字占大半）不算。
     let mut entries: Vec<(String, Vec<u8>, bool)> = Vec::with_capacity(ordered.len());
     let mut referenced: HashMap<String, HashSet<String>> = HashMap::new(); // 注释所在文件 → 被 marker 引用的 id
+    // 注释所在文件 → (注释 id → 引用它的标号 id)：没有注释语义的块靠"开头的回链指回标号"认（`marker_backrefs`）
+    let mut backrefs: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
     for crate::epubzip::Entry { name, data } in ordered {
         rep.total_files += 1;
         let ish = is_html_entry(&name, &data);
@@ -251,11 +256,19 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
                 Ok(text) => {
                     let stripped = first_pass_html(&text, &name, &keep_fonts);
                     if !skip_notes.contains(&name) {
+                        for ((file, id), marker) in crate::htmlproc::marker_backrefs(&stripped, &name) {
+                            backrefs.entry(file).or_default().entry(id).or_default().insert(marker);
+                        }
                         let refs = crate::htmlproc::referenced_note_keys(&stripped, &name);
                         if !refs.is_empty() && crate::wash::is_toc_like_page(&stripped) {
                             skip_notes.insert(name.clone());
                         } else {
                             for (file, id) in refs {
+                                // 同文件的注释：跳转模式留在原处（分页时跟着所在的节走）；弹窗模式也搬到章末写成
+                                // `<aside epub:type="footnote">`，阅读器才弹窗（掌阅 2026-10-05 真机）。
+                                if file == name && opts.footnote != FootnoteMode::Popup {
+                                    continue;
+                                }
                                 referenced.entry(file).or_default().insert(id);
                             }
                         }
@@ -270,7 +283,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         };
         entries.push((name, data, ish));
     }
-    let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &skip_notes, opts.drop_note_backlinks);
+    let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &backrefs, &skip_notes, opts.drop_note_backlinks);
     Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, rep })
 }
 
@@ -286,10 +299,20 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
 /// 一样点不了），还得等第一章的 id 去重做完才知道链接该写成什么；留在原处则链接和原书一模一样，认跨文件链接的阅读器照常能跳。
 ///
 /// 返回 (注释索引, 已经拆过互指环、换过 duokan 标记的章节名)：核对时算出来的这两步结果直接写回 `entries`，第二遍对这些章节不再算一遍。
-fn collect_notes(entries: &mut [(String, Vec<u8>, bool)], referenced: &mut HashMap<String, HashSet<String>>, skip: &HashSet<String>, drop_backlinks: bool) -> (HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note>, HashSet<String>) {
+#[allow(clippy::type_complexity)]
+fn collect_notes(
+    entries: &mut [(String, Vec<u8>, bool)],
+    referenced: &mut HashMap<String, HashSet<String>>,
+    backrefs: &HashMap<String, HashMap<String, HashSet<String>>>,
+    skip: &HashSet<String>,
+    drop_backlinks: bool,
+) -> (HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note>, HashSet<String>) {
     let mut index: HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note> = HashMap::new();
     let mut originals: HashMap<usize, Vec<u8>> = HashMap::new();
-    let collect_one = |text: &str, name: &str, referenced: &HashMap<String, HashSet<String>>| referenced.get(name).map(|ids| crate::htmlproc::collect_footnote_notes(text, ids, true));
+    let none = HashMap::new();
+    let collect_one = |text: &str, name: &str, referenced: &HashMap<String, HashSet<String>>| {
+        referenced.get(name).map(|ids| crate::htmlproc::collect_footnote_notes_with(text, ids, true, backrefs.get(name).unwrap_or(&none)))
+    };
     for (i, (name, data, ish)) in entries.iter_mut().enumerate() {
         if !*ish || !referenced.contains_key(name.as_str()) {
             continue;
