@@ -18,7 +18,7 @@
 | 定了什么 | 为什么 |
 |---|---|
 | 书库只存索引，不复制原件；网址书例外（没有原件） | 不占双份空间，原件是唯一内容（理由是推断的，待用户确认） |
-| 解 DRM 暂停，识别出 DRM 就拒收；KFX 不考虑 | 找不到独立的公开资料，见[开发 · DRM](development.md#drm) |
+| 解 DRM 暂停，识别出 DRM 就拒收；KFX 不考虑 | 找不到独立的公开资料，见[开发 · DRM](development.md#drm)（**2026-10-05 已改**：KFX 写出器开始做，DRM 仍暂停） |
 | 去掉书里写死的行高 | 写死的行高让阅读器的行距设置不起作用 |
 | 正文两端对齐 | 中文排版规范 |
 
@@ -70,7 +70,7 @@
 
 | 定了什么 | 为什么 |
 |---|---|
-| Kindle、掌阅开机直接进 KOReader（独占）；两台都读 `ireader/` 的 EPUB，放存储根的 `books/` | KOReader 不认 AZW3；阅读模式不变，不恢复 `koreader` 模式 |
+| Kindle、掌阅开机直接进 KOReader（独占）；两台都读 `ireader/` 的 EPUB，放存储根的 `books/` | KOReader 不认 AZW3；阅读模式不变，不恢复 `koreader` 模式（**2026-10-05 已改**：Kindle 读 KFX 时回到自带阅读器） |
 | 进度同步：两台的 KOReader 经自建同步服务按文件名同步；服务端归 vksight 仓库 | 自带阅读器之间做不到同步 |
 | 词典用自己的 MOBI 转 StarDict（`mobi-dict-to-stardict`） | 网上的 StarDict 版是未授权转制 |
 
@@ -80,7 +80,15 @@
 |---|---|
 | KOReader 的设备配置（设置、插件、开机独占、掌阅小应用）拆到单独的仓库 koreader-setup | 和电脑端书库无关 |
 
+## 2026-10-05
+
+| 定了什么 | 为什么 |
+|---|---|
+| 做 EPUB → KFX 写出器（clean-room：只照 Ion 公开规范和样本黑盒分析），推翻 09-27 的"KFX 不考虑" | 要 Kindle 自带阅读器的增强排版；KOReader 打不开 KFX，Kindle 读这类书回到自带阅读器 |
+
 ## 待定
 
 - **Kindle 固定版式漫画里比例和画布不一致的图**（装饰小图、短边不到阅读范围宽 1/3 的窄页）现在会被拉伸到整屏。已写好 `comicfxl::page_sized`（只给画布比例的图写画布宽高，其余只限最大宽高），但没接进优化器——接上要调整流式处理的顺序，并上 Kindle 真机看。
+- **KFX 接进书库的方式**：`kindle` 模式改出 KFX（替换 AZW3），还是另立一个模式；Kindle 日常是 KOReader 还是自带阅读器也跟着定。见[KFX](kfx.md)。
+- **KFX 对照样本从哪来**：Send to Kindle 推最小测试 EPUB（只用合成的测试书）还是 Kindle Previewer 3（Wine）；见[KFX](kfx.md)。
 - **解 DRM 重启时走哪条路**：见[开发 · DRM](development.md#drm)。

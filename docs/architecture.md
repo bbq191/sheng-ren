@@ -18,10 +18,11 @@
 | `bookconv` | 内容层：CBZ/网页 → EPUB、清洗、优化、图片、质量门。**不管书库**，只按调用方给的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
 | `azw3` | EPUB → AZW3 写出器（clean-room，见 [AZW3 写出器](azw3.md)）；`azw3::read` 只给回读自检和测试用 | `epub-to-azw3` |
 | `mobidict` | MOBI 词典 → StarDict，给 KOReader 查词（clean-room，读 MOBI 容器借 `azw3::read::palm`） | `mobi-dict-to-stardict` |
+| `kfx` | KFX：Ion 编解码、容器读写（clean-room，见 [KFX](kfx.md)）；进行中，EPUB → KFX 写出器还没做，不进书库 | `kfx-dump`、`kfx-repack`（分析用，不随 `--tools` 装） |
 | `profile` | 阅读模式的参数，TOML 编译时嵌入；`--device=` 的解析 | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
-依赖单向无环：`library` → `azw3` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`mobidict` → `azw3`、`bookconv`；`drm` 独立。
+依赖单向无环：`library` → `azw3` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`mobidict` → `azw3`、`bookconv`；`kfx`、`drm` 独立。
 
 ### bookconv 模块
 

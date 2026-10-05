@@ -9,6 +9,7 @@ members = [
     "crates/library",
     "crates/azw3",
     "crates/mobidict",
+    "crates/kfx",
 ]
 
 [workspace.package]
