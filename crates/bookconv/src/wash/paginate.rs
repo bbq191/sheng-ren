@@ -969,6 +969,24 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
     if !roles.contains(&Role::Title) {
         return;
     }
+    // 节一级的标题一个也没有跟在同文件的章标题后面（只出现在单独成页的版权页、目录页上，如《ABC谋杀案》的
+    // h2「版权信息」「目录」），它不是节：节换成更深一级里跟在章标题后面的那一级（《ABC谋杀案》的 h3「1」「2」）。
+    if demoted_level.is_none() {
+        let follows_title = |level: usize| {
+            files.iter().any(|f| {
+                let first = f.heads.iter().position(|h| roles[h.level as usize] == Role::Title);
+                first.is_some_and(|t| f.heads[t + 1..].iter().any(|h| h.level as usize == level))
+            })
+        };
+        if let Some(sl) = (0..roles.len()).find(|&l| roles[l] == Role::Section) {
+            if !follows_title(sl) {
+                if let Some(deeper) = (sl + 1..roles.len()).find(|&l| follows_title(l)) {
+                    roles[sl] = Role::Other;
+                    roles[deeper] = Role::Section;
+                }
+            }
+        }
+    }
     // 全书没有节一级的标题时，认独占一段的节号（好读：`１`、`２`…）当节标题，级别取没用过的更深一级。
     let deepest = files.iter().flat_map(|f| f.heads.iter()).map(|h| h.level).max().unwrap_or(0);
     if !roles.contains(&Role::Section) && deepest < 6 {
