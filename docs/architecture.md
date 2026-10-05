@@ -18,11 +18,11 @@
 | `bookconv` | 内容层：CBZ/网页 → EPUB、清洗、优化、图片、质量门。**不管书库**，只按调用方给的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
 | `azw3` | EPUB → AZW3 写出器（clean-room，见 [AZW3 写出器](azw3.md)）；`azw3::read` 只给回读自检和测试用 | `epub-to-azw3` |
 | `mobidict` | MOBI 词典 → StarDict，给 KOReader 查词（clean-room，读 MOBI 容器借 `azw3::read::palm`） | `mobi-dict-to-stardict` |
-| `kfx` | KFX：Ion 编解码、容器读写（clean-room，见 [KFX](kfx.md)）；进行中，EPUB → KFX 写出器还没做，不进书库 | `kfx-dump`、`kfx-repack`（分析用，不随 `--tools` 装） |
+| `kfx` | KFX：Ion 编解码、容器读写、EPUB → KFX 写出器（clean-room，见 [KFX](kfx.md)）；书库 `kindle` 模式的文字书用它 | `epub-to-kfx`；`kfx-dump`、`kfx-repack`（分析用，不随 `--tools` 装） |
 | `profile` | 阅读模式的参数，TOML 编译时嵌入；`--device=` 的解析 | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
-依赖单向无环：`library` → `azw3` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`mobidict` → `azw3`、`bookconv`；`kfx`、`drm` 独立。
+依赖单向无环：`library` → `azw3`、`kfx` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`mobidict` → `azw3`、`bookconv`；`drm` 独立。
 
 ### bookconv 模块
 
@@ -93,7 +93,7 @@
 3. 指纹没变、产物在原位 → 跳过；只是位置变了 → 挪过去，不重新生成。
 4. 位置变了先登记再生成：记录先改成新位置（指纹留空 = 没完成）、旧位置记进待删，中途打断下次也认得出。
 5. 与模式无关的中间文件（CBZ 转出的 EPUB、补了元数据的 EPUB）放在 `.tmp-<id>-src/`，同一本书的几个模式共用。
-6. 流式优化，直接写成目标旁的临时文件 → 质量门 → 落盘、改名到位。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 AZW3。
+6. 流式优化，直接写成目标旁的临时文件 → 质量门 → 落盘、改名到位。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（文字书）或 AZW3（漫画，profile 的 `comic_format`；是不是漫画同优化器的判定，按内容哈希缓存）。
 7. 补上指纹，删掉待删的旧位置和变空的目录（只在产物根目录以内）。
 
 生成记录是 `<书库>/output-state/<模式 id>.json`：书 id → 产物路径、指纹、待删的旧位置。**只删这里记着的文件**。
@@ -115,7 +115,7 @@
 | 模式 id | `kindle` 等 | — |
 | 阅读范围与漫画 | 阅读范围 + 漫画白边；漫画画布、阅读器页边距、翻页方向、固定版式不同时再带上 | 这个模式的全部 |
 | 黑白彩色 | `gray`/`color` | 这个模式的全部 |
-| 格式 | `epub`；AZW3 再带写出器版本 | 写出器版本变了只有 `kindle` |
+| 格式 | `epub`；AZW3、KFX 再带各自写出器的版本 | 写出器版本变了只有 `kindle` 的（KFX 只有文字书、AZW3 只有漫画） |
 
 版本号什么时候加一、现在是多少，见[开发 · 版本号](development.md#版本号)。
 

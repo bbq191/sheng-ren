@@ -17,12 +17,14 @@ include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
 /// profile 没写 `comic_margin` 时漫画页的白边（像素）。
 pub const DEFAULT_COMIC_MARGIN: u32 = 1;
 
-/// 产物格式。AZW3 是先按同一套规则优化出 EPUB、再转成 AZW3（2026-09-30 恢复，给 Kindle 自带阅读器）；PDF 已删，写了按未知值报错。
+/// 产物格式。AZW3、KFX 都是先按同一套规则优化出 EPUB、再转换（给 Kindle 自带阅读器：AZW3 2026-09-30 恢复，
+/// KFX 2026-10-05 起文字书用，见 docs/kfx.md）；PDF 已删，写了按未知值报错。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Epub,
     Azw3,
+    Kfx,
 }
 
 impl Format {
@@ -31,6 +33,7 @@ impl Format {
         match self {
             Format::Epub => "epub",
             Format::Azw3 => "azw3",
+            Format::Kfx => "kfx",
         }
     }
 }
@@ -113,6 +116,9 @@ pub struct Profile {
     /// 漫画写成固定版式，画布是 `comic_readable`（Kindle：流式版式下阅读器强制留页边距，固定版式才能整页铺满，
     /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
     pub comic_fixed_layout: bool,
+    /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。kindle 写 `azw3`：文字书出 KFX，
+    /// 漫画仍出真机验证过的 AZW3 固定版式（KFX 固定版式没做，用户 2026-10-05 定）。
+    pub comic_format: Option<Format>,
 }
 
 #[derive(Deserialize)]
@@ -136,6 +142,7 @@ struct ProfileFile {
     comic_page_direction: Option<String>,
     #[serde(default)]
     comic_fixed_layout: bool,
+    comic_format: Option<Format>,
 }
 
 fn yes() -> bool {
@@ -146,7 +153,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format };
         p.validate()?;
         Ok(p)
     }
@@ -170,6 +177,9 @@ impl Profile {
         }
         if let Some((i, f)) = self.formats.iter().enumerate().find(|(i, f)| self.formats[..*i].contains(f)) {
             return Err(format!("profile {}: formats 第 {} 项 {f:?} 重复", self.id, i + 1));
+        }
+        if let Some(f) = self.comic_format.filter(|f| !self.formats.contains(f)) {
+            return Err(format!("profile {}: comic_format {f:?} 不在 formats 里", self.id));
         }
         for (fmt, r) in &self.readable {
             if !self.formats.contains(fmt) {
@@ -206,6 +216,14 @@ impl Profile {
     /// 产物格式：`formats` 的第一个。
     pub fn format(&self) -> Format {
         self.formats[0]
+    }
+
+    /// 一本书的产物格式：漫画用 `comic_format`（有的话），别的用 [`Profile::format`]。
+    pub fn format_for(&self, comic: bool) -> Format {
+        match self.comic_format {
+            Some(f) if comic => f,
+            _ => self.format(),
+        }
     }
 
     /// 产物格式的阅读范围（[`Profile::readable`]`(self.format())`）。
@@ -293,7 +311,9 @@ mod tests {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, ["ireader", "kindle", "xochitl"]);
         let k = get("kindle").unwrap();
-        assert_eq!((k.format(), k.output_readable()), (Format::Azw3, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
+        assert_eq!((k.format(), k.output_readable()), (Format::Kfx, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
+        assert_eq!((k.format_for(false), k.format_for(true)), (Format::Kfx, Format::Azw3), "kindle：文字书 KFX、漫画 AZW3");
+        assert_eq!(k.readable(Format::Azw3), k.readable(Format::Kfx));
         let i = get("ireader").unwrap();
         assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);

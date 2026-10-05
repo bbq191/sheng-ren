@@ -57,6 +57,45 @@ pub const START: u32 = 184;
 pub const NODE_TEXT: u32 = 269;
 pub const NODE_CONTAINER: u32 = 270;
 pub const NODE_IMAGE: u32 = 271;
+/// 列表、列表项（2026-10-05 测试书对照，见 `docs/kfx.md#列表`）。
+pub const NODE_LIST: u32 = 276;
+pub const NODE_LIST_ITEM: u32 = 277;
+/// 表格：表 → 表头/表体/表脚 → 行 → 单元格（`$270` 容器）。
+pub const NODE_TABLE: u32 = 278;
+pub const NODE_THEAD: u32 = 151;
+pub const NODE_TBODY: u32 = 454;
+pub const NODE_TFOOT: u32 = 455;
+pub const NODE_ROW: u32 = 279;
+/// 水平线 `<hr>`。
+pub const NODE_HR: u32 = 596;
+// ---- 列表、表格节点上的字段
+/// 列表符号（`list-style-type`）。
+pub const LIST_STYLE: u32 = 100;
+/// 列表的 `start`、列表项的 `value`。
+pub const LIST_START: u32 = 104;
+/// `list-style-position: inside`：`$551: $552`。
+pub const LIST_POSITION: u32 = 551;
+pub const LIST_INSIDE: u32 = 552;
+pub const LIST_DISC: u32 = 340;
+pub const LIST_SQUARE: u32 = 341;
+pub const LIST_CIRCLE: u32 = 342;
+pub const LIST_DECIMAL: u32 = 343;
+pub const LIST_LOWER_ROMAN: u32 = 344;
+pub const LIST_UPPER_ROMAN: u32 = 345;
+pub const LIST_LOWER_ALPHA: u32 = 346;
+pub const LIST_UPPER_ALPHA: u32 = 347;
+pub const LIST_CJK: u32 = 736;
+pub const LIST_LOWER_GREEK: u32 = 791;
+pub const LIST_DECIMAL_ZERO: u32 = 796;
+/// `border-collapse: collapse`（布尔）。
+pub const TABLE_COLLAPSE: u32 = 150;
+/// `border-spacing` 水平、竖直（缺省 2px＝0.9pt）。
+pub const TABLE_SPACING_H: u32 = 456;
+pub const TABLE_SPACING_V: u32 = 457;
+/// 列宽：`[{$56: 宽度}, …]`。
+pub const TABLE_COLUMNS: u32 = 152;
+/// 表格标题 `<caption>`：`$269` 节点上 `$615: $453`，里面套文字。
+pub const CAPTION: u32 = 453;
 
 // ---- 版面模板（整页图片版面）
 pub const TMPL_WIDTH: u32 = 66;
@@ -87,10 +126,41 @@ pub const P_MARGIN_LEFT: u32 = 48;
 pub const P_MARGIN_BOTTOM: u32 = 49;
 pub const P_MARGIN_RIGHT: u32 = 50;
 pub const P_PADDING_TOP: u32 = 52;
-pub const P_PADDING_RIGHT: u32 = 53;
+/// 左右和外边距一样是「上、左、下、右」的顺序（2026-10-05 测试书 B13 `padding-left` → `$53`；以前左右写反了）。
+pub const P_PADDING_LEFT: u32 = 53;
 pub const P_PADDING_BOTTOM: u32 = 54;
-pub const P_PADDING_LEFT: u32 = 55;
+pub const P_PADDING_RIGHT: u32 = 55;
 pub const P_BACKGROUND: u32 = 70;
+/// 下划线、删除线、上划线（取值 `$328`）、small-caps（`$583: $369`）、字间距（em）。
+pub const P_UNDERLINE: u32 = 23;
+pub const P_LINE_THROUGH: u32 = 27;
+pub const P_OVERLINE: u32 = 554;
+pub const P_FONT_VARIANT: u32 = 583;
+pub const SMALL_CAPS: u32 = 369;
+pub const P_LETTER_SPACING: u32 = 32;
+pub const P_WIDTH: u32 = 56;
+/// 推测：排版提示（标题样式上是 `[$760]`，表格标题上是 `[$453]`）。
+pub const P_LAYOUT_HINTS: u32 = 761;
+/// 单元格：跨列、跨行、竖直对齐（`$58` top、`$320` middle、`$60` bottom）。
+pub const P_COLSPAN: u32 = 148;
+pub const P_ROWSPAN: u32 = 149;
+pub const P_CELL_VALIGN: u32 = 633;
+pub const VALIGN_TOP: u32 = 58;
+pub const VALIGN_BOTTOM: u32 = 60;
+/// 边框：四边一样时写「全部」，否则按「上、左、下、右」各写（同外边距的顺序）。
+pub const P_BORDER_COLOR: [u32; 5] = [83, 84, 85, 86, 87];
+pub const P_BORDER_STYLE: [u32; 5] = [88, 89, 90, 91, 92];
+pub const P_BORDER_WIDTH: [u32; 5] = [93, 94, 95, 96, 97];
+/// 圆角：左上、右上、左下、右下（右上和左下的先后是推测：测试书只有「1em 0」）。
+pub const P_BORDER_RADIUS: [u32; 4] = [459, 460, 461, 462];
+pub const BORDER_SOLID: u32 = 328;
+pub const BORDER_DOUBLE: u32 = 329;
+pub const BORDER_DASHED: u32 = 330;
+pub const BORDER_DOTTED: u32 = 331;
+pub const BORDER_GROOVE: u32 = 334;
+pub const BORDER_RIDGE: u32 = 335;
+pub const BORDER_INSET: u32 = 336;
+pub const BORDER_OUTSET: u32 = 337;
 
 // ---- 取值
 pub const UNIT: u32 = 306;
@@ -114,6 +184,7 @@ pub const FONT_NORMAL: u32 = 350;
 /// 推测：italic。
 pub const STYLE_ITALIC: u32 = 382;
 pub const VALIGN_SUPER: u32 = 370;
+pub const VALIGN_SUB: u32 = 371;
 
 // ---- 阅读顺序、导航
 pub const READING_ORDERS: u32 = 169;

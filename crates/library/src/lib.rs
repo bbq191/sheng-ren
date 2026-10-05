@@ -152,6 +152,8 @@ pub struct Library {
     prepared: RefCell<Option<generate::PreparedInput>>,
     /// 内容哈希 → 书里有没有简介、标签（生成指纹用，见 `generate::injected_info_sig`）。
     own_dc: RefCell<HashMap<String, (bool, bool)>>,
+    /// 内容哈希 → 是不是漫画（决定 kindle 出 KFX 还是 AZW3；生成计划每次都要用，按内容缓存）。
+    comic: RefCell<HashMap<String, bool>>,
 }
 
 /// 核对过的原件：路径，和核对时的大小、修改时间。
@@ -268,6 +270,7 @@ impl Library {
             net: OnceCell::new(),
             prepared: RefCell::new(None),
             own_dc: RefCell::new(HashMap::new()),
+            comic: RefCell::new(HashMap::new()),
         })
     }
 

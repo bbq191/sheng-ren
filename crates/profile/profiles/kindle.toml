@@ -1,9 +1,11 @@
 # Kindle Paperwhite 12 代签名版（2024）上的自带阅读器。7" Carta 1300，2026-09-27 核实。
-# USB 传书只认 AZW3，不认 EPUB（用户 2026-09-27 真机实测）：先按和别的模式同一套规则优化出 EPUB，再转成 AZW3（2026-09-30 恢复这条线；2026-10-02 起 Kindle 日常独占跑 KOReader、读 `ireader` 的 EPUB，这份只在回自带阅读器时用）。
+# USB 传书不认 EPUB（用户 2026-09-27 真机实测）：先按和别的模式同一套规则优化出 EPUB，再转成 KFX（文字书）或 AZW3（漫画）。
 name = "Kindle 自带阅读器（Paperwhite 12 代签名版）"
 ppi = 300
 color = false
-formats = ["azw3"]
+# 2026-10-05 起文字书出 KFX（clean-room 写出器，注释弹窗、段间距字间距可调，见 docs/kfx.md），漫画仍出 AZW3 固定版式（用户定）。
+formats = ["kfx", "azw3"]
+comic_format = "azw3"
 # 注释：点标号跳到章末（2026-09-27 前在这台 Kindle 上真机验证过跳转）
 notes = "jump"
 # 只有小图标的注释标号换成上标数字（2026-09-28 前的 AZW3 就是数字，真机能点；图标在 Kindle 上没验证过）
@@ -22,6 +24,11 @@ height = 1696
 # 左右各 84（页边距）、上下各 75（页眉时间、页脚位置/进度）。比页面窄的图片靠左放、不居中，漫画必须补白到这个比例。
 # 用的是测量时的页边距设置；在 Kindle 上改了页边距要重新量。漫画不按它排：漫画写成固定版式、整页铺满（见 comic_fixed_layout）。
 [readable.azw3]
+width = 1104
+height = 1546
+
+# KFX 是同一个阅读器、同样的页边距设置，沿用 AZW3 的实测（没单独量过）。
+[readable.kfx]
 width = 1104
 height = 1546
 

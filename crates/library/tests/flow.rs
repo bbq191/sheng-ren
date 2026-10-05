@@ -19,7 +19,7 @@ fn add_build_skip_remove() {
 
     // add 进来的书（不在跟踪目录里）：产物在书库 output/<模式>/
     let out = std::path::absolute(lib.root()).unwrap().join("output");
-    for (dev, ext) in [("ireader", "epub"), ("kindle", "azw3"), ("xochitl", "epub")] {
+    for (dev, ext) in [("ireader", "epub"), ("kindle", "kfx"), ("xochitl", "epub")] {
         let p = profile::get(dev).unwrap();
         let Built::Written { path, warnings } = lib.build(&meta, p, false).unwrap() else { panic!("{dev} 第一次应生成") };
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -29,10 +29,10 @@ fn add_build_skip_remove() {
     }
     let status: Vec<(String, Option<bool>)> = lib.outputs(&meta).into_iter().map(|o| (o.device, o.fresh)).collect();
     assert_eq!(status, [("ireader".to_string(), Some(true)), ("kindle".to_string(), Some(true)), ("xochitl".to_string(), Some(true))], "list 能看到三个模式的产物且都最新");
-    // Kindle 的产物是 AZW3（PalmDB 头里的类型/创建者是 BOOKMOBI），能用读取器转回 EPUB
-    let azw3 = std::fs::read(out.join("kindle/风起.azw3")).unwrap();
-    assert_eq!(&azw3[60..68], b"BOOKMOBI");
-    assert!(azw3::read::kf8::azw3_to_epub(&azw3).is_ok());
+    // Kindle 文字书的产物是 KFX（`CONT` 容器，读得回来）
+    let kfx = std::fs::read(out.join("kindle/风起.kfx")).unwrap();
+    assert_eq!(&kfx[..4], b"CONT");
+    assert!(kfx::Container::parse(&kfx).is_ok());
     // 产物指纹被改（模拟母版或规则变化）→ 过期
     let state_path = lib.root().join("output-state/xochitl.json");
     let st = std::fs::read_to_string(&state_path).unwrap().replace(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION), "|0|");
@@ -46,7 +46,7 @@ fn add_build_skip_remove() {
 
     lib.remove(&meta.id).unwrap();
     assert!(lib.list().is_empty());
-    assert!(!out.join("xochitl/风起.epub").exists() && !out.join("ireader/风起.epub").exists() && !out.join("kindle/风起.azw3").exists(), "删书连产物一起删");
+    assert!(!out.join("xochitl/风起.epub").exists() && !out.join("ireader/风起.epub").exists() && !out.join("kindle/风起.kfx").exists(), "删书连产物一起删");
 }
 
 #[test]
@@ -70,6 +70,10 @@ fn cbz_becomes_comic_epub_master_and_drm_epub_is_refused() {
     let Built::Written { path, .. } = lib.build(&m, profile::get("xochitl").unwrap(), false).unwrap() else { panic!() };
     let names: Vec<String> = bookconv::epubzip::read_entries(&std::fs::read(path).unwrap()).unwrap().into_iter().map(|e| e.name).collect();
     assert_eq!(names.iter().filter(|n| n.contains("images/p")).count(), 3, "{names:?}");
+    // kindle：漫画仍出 AZW3（固定版式），文字书才出 KFX
+    let Built::Written { path, .. } = lib.build(&m, profile::get("kindle").unwrap(), false).unwrap() else { panic!() };
+    assert_eq!(path.extension().and_then(|e| e.to_str()), Some("azw3"));
+    assert_eq!(&std::fs::read(path).unwrap()[60..68], b"BOOKMOBI");
 
     let drm = dir.path().join("加密.epub");
     {

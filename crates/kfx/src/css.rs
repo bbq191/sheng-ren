@@ -1,6 +1,7 @@
 //! 够写 KFX 用的 CSS：解析样式表、按选择器优先级层叠、算出每个元素的计算值。
 //!
-//! 只认 KFX 能表达的属性（字体、字号、字重、斜体、对齐、缩进、行高、边距、内边距、颜色、背景色、上下标）；
+//! 只认 KFX 能表达的属性（字体、字号、字重、斜体、对齐、缩进、行高、边距、内边距、颜色、背景色、上下标、边框、
+//! 列表符号、表格边框合并与间距、文字装饰、字间距、`pre`）；
 //! 别的属性忽略。选择器匹配用 scraper（html5ever DOM），优先级自己算。
 //! `@media` 只收 `all`/`screen`/`amzn-kf8`，`@font-face`、`@page` 等跳过（字体先交给阅读器）。
 
@@ -118,9 +119,60 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
         };
         ["top", "right", "bottom", "left"].iter().zip([t, r, b, l]).map(|(side, v)| (format!("{base}-{side}"), v.to_string())).collect()
     };
+    // `border-top: 1px solid red` 这类：拆成样式、宽度、颜色（没写的按 CSS 缺省：无、medium、当前颜色）。
+    let border_side = |side: &str| -> Vec<(String, String)> {
+        let (mut style, mut width, mut color) = ("none".to_string(), "medium".to_string(), String::new());
+        for t in split_top(value, ' ').into_iter().map(str::trim).filter(|t| !t.is_empty()) {
+            let l = t.to_ascii_lowercase();
+            if BORDER_STYLES.contains(&l.as_str()) {
+                style = l;
+            } else if parse_color(t).is_some() || l == "currentcolor" || l == "transparent" {
+                color = t.to_string();
+            } else {
+                width = t.to_string();
+            }
+        }
+        let mut v = vec![(format!("border-{side}-style"), style), (format!("border-{side}-width"), width)];
+        v.push((format!("border-{side}-color"), color));
+        v
+    };
+    let sides = ["top", "right", "bottom", "left"];
     match prop {
         "margin" => four("margin"),
         "padding" => four("padding"),
+        "border" => sides.iter().flat_map(|s| border_side(s)).collect(),
+        "border-top" | "border-right" | "border-bottom" | "border-left" => border_side(&prop[7..]),
+        "border-style" | "border-width" | "border-color" => {
+            let what = &prop[7..];
+            four("border").into_iter().map(|(k, v)| (format!("{k}-{what}"), v)).collect()
+        }
+        "border-radius" => {
+            // 只取「/」前面的（水平半径）；顺序是左上、右上、右下、左下。
+            let h = value.split('/').next().unwrap_or("");
+            let v: Vec<&str> = h.split_whitespace().collect();
+            let (tl, tr, br, bl) = match v.as_slice() {
+                [a] => (*a, *a, *a, *a),
+                [a, b] => (*a, *b, *a, *b),
+                [a, b, c] => (*a, *b, *c, *b),
+                [a, b, c, d, ..] => (*a, *b, *c, *d),
+                [] => return Vec::new(),
+            };
+            ["top-left", "top-right", "bottom-right", "bottom-left"].iter().zip([tl, tr, br, bl]).map(|(c, v)| (format!("border-{c}-radius"), v.to_string())).collect()
+        }
+        "list-style" => {
+            let mut out = Vec::new();
+            for t in value.split_whitespace() {
+                let l = t.to_ascii_lowercase();
+                if l == "inside" || l == "outside" {
+                    out.push(("list-style-position".to_string(), l));
+                } else if !l.starts_with("url(") {
+                    out.push(("list-style-type".to_string(), l));
+                }
+            }
+            out
+        }
+        // `text-decoration: underline solid red` 只留线的种类。
+        "text-decoration" | "text-decoration-line" => vec![("text-decoration".to_string(), value.to_ascii_lowercase())],
         // background 简写只取颜色。
         "background" => value
             .split_whitespace()
@@ -130,6 +182,8 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
         _ => vec![(prop.to_string(), value.to_string())],
     }
 }
+
+const BORDER_STYLES: &[&str] = &["none", "hidden", "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset"];
 
 /// 一个选择器的优先级 (id, 类/属性/伪类, 标签)。
 fn specificity(sel: &str) -> (u32, u32, u32) {
@@ -360,11 +414,71 @@ pub struct Computed {
     pub color: Option<u32>,
     pub lang: Option<String>,
     pub superscript: bool,
+    pub subscript: bool,
+    /// 下划线、删除线、上划线（CSS 里不继承，但画在子元素上，按继承处理）。
+    pub decoration: [bool; 3],
+    pub small_caps: bool,
+    /// 字间距，单位：元素字号的倍数。
+    pub letter_spacing: Option<f64>,
+    /// `white-space: pre`（`<pre>`）：空格、换行原样保留。
+    pub pre: bool,
+    /// `list-style-type`（`None`＝按标签缺省）、`list-style-position: inside`。
+    pub list_style: Option<String>,
+    pub list_inside: bool,
+    /// 表格：`border-collapse: collapse`、`border-spacing`（这两个 CSS 里是继承的）。
+    pub border_collapse: bool,
+    pub border_spacing: Option<Len>,
     // 不继承的
     pub display: Option<String>,
     pub margin: [Option<Len>; 4],
     pub padding: [Option<Len>; 4],
     pub background: Option<u32>,
+    /// 四边边框（上、右、下、左）。
+    pub border: [Option<Border>; 4],
+    /// 圆角：左上、右上、右下、左下。
+    pub radius: [Option<Len>; 4],
+    pub width: Option<Len>,
+    /// 单元格的 `vertical-align`。
+    pub valign: Option<String>,
+}
+
+/// 一条边：样式（`solid` 等，不含 none）、宽度、颜色（没写＝当前颜色）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct Border {
+    pub style: String,
+    pub width: BorderWidth,
+    pub color: Option<u32>,
+}
+
+/// 边框宽度：pt 或 em（样本里 px 一律按 1px＝0.45pt 换算，thin/medium/thick＝1/3/5px）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BorderWidth {
+    Pt(f64),
+    Em(f64),
+}
+
+pub fn parse_border_width(v: &str) -> Option<BorderWidth> {
+    let v = v.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "thin" => return Some(BorderWidth::Pt(0.45)),
+        "medium" => return Some(BorderWidth::Pt(1.35)),
+        "thick" => return Some(BorderWidth::Pt(2.25)),
+        _ => {}
+    }
+    if let Some(n) = v.strip_suffix("px") {
+        return n.trim().parse::<f64>().ok().map(|n| BorderWidth::Pt(n * 0.45));
+    }
+    match parse_len(&v)? {
+        Len::Em(n) => Some(BorderWidth::Em(n)),
+        Len::Pt(n) => Some(BorderWidth::Pt(n)),
+        Len::Percent(_) => None,
+    }
+}
+
+impl Computed {
+    pub fn has_border(&self) -> bool {
+        self.border.iter().any(|b| b.as_ref().is_some_and(|b| b.width != BorderWidth::Pt(0.0) && b.width != BorderWidth::Em(0.0)))
+    }
 }
 
 impl Computed {
@@ -380,27 +494,68 @@ impl Computed {
             color: None,
             lang: None,
             superscript: false,
+            subscript: false,
+            decoration: [false; 3],
+            small_caps: false,
+            letter_spacing: None,
+            pre: false,
+            list_style: None,
+            list_inside: false,
+            border_collapse: false,
+            border_spacing: None,
             display: None,
             margin: [None; 4],
             padding: [None; 4],
             background: None,
+            border: [None, None, None, None],
+            radius: [None; 4],
+            width: None,
+            valign: None,
+        }
+    }
+
+    fn reset_box(&self) -> Computed {
+        Computed {
+            display: None,
+            margin: [None; 4],
+            padding: [None; 4],
+            background: None,
+            border: [None, None, None, None],
+            radius: [None; 4],
+            width: None,
+            valign: None,
+            ..self.clone()
         }
     }
 
     /// 只留继承的属性（匿名块用：外边距、内边距、背景属于包着它的元素）。
     pub fn inherited(&self) -> Computed {
-        Computed { display: None, margin: [None; 4], padding: [None; 4], background: None, ..self.clone() }
+        self.reset_box()
     }
 
     /// 由父元素的计算值和本元素的声明算出本元素的计算值。
     pub fn derive(parent: &Computed, decls: &HashMap<String, String>, tag: &str) -> Computed {
-        let mut c = Computed { display: None, margin: [None; 4], padding: [None; 4], background: None, ..parent.clone() };
+        let mut c = parent.reset_box();
         // 标签的缺省样式（阅读器的 UA 样式表里有的）。
         match tag {
-            "b" | "strong" | "th" => c.bold = true,
+            "b" | "strong" => c.bold = true,
+            "th" => {
+                c.bold = true;
+                c.text_align = Some("center".into());
+            }
+            "caption" => c.text_align = Some("center".into()),
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => c.bold = true,
             "i" | "em" | "cite" | "var" | "dfn" => c.italic = true,
             "sup" => c.superscript = true,
+            "sub" => c.subscript = true,
+            "u" | "ins" => c.decoration[0] = true,
+            "s" | "strike" | "del" => c.decoration[1] = true,
+            "pre" => {
+                c.pre = true;
+                if c.font_family.is_none() {
+                    c.font_family = Some("monospace".into());
+                }
+            }
             _ => {}
         }
         let get = |k: &str| decls.get(k).map(String::as_str);
@@ -469,8 +624,64 @@ impl Computed {
             }
         }
         if let Some(v) = get("vertical-align") {
-            c.superscript = matches!(v.trim(), "super" | "top" | "text-top");
+            let v = v.trim().to_ascii_lowercase();
+            if matches!(tag, "td" | "th" | "tr") {
+                c.valign = Some(v);
+            } else {
+                c.superscript = matches!(v.as_str(), "super" | "top" | "text-top");
+                c.subscript = v == "sub";
+            }
         }
+        if let Some(v) = get("text-decoration") {
+            if v.contains("none") {
+                c.decoration = [false; 3];
+            }
+            for (i, k) in ["underline", "line-through", "overline"].iter().enumerate() {
+                if v.contains(k) {
+                    c.decoration[i] = true;
+                }
+            }
+        }
+        if let Some(v) = get("font-variant").or_else(|| get("font-variant-caps")) {
+            c.small_caps = v.contains("small-caps");
+        }
+        if let Some(v) = get("letter-spacing") {
+            c.letter_spacing = match parse_len(v) {
+                Some(Len::Em(n)) if v.trim() != "normal" => Some(n),
+                Some(Len::Pt(n)) => Some(n / 12.0 / c.font_size),
+                _ => None,
+            };
+        }
+        if let Some(v) = get("white-space") {
+            c.pre = matches!(v.trim(), "pre" | "pre-wrap" | "break-spaces");
+        }
+        if let Some(v) = get("list-style-type") {
+            c.list_style = Some(v.trim().to_ascii_lowercase());
+        }
+        if let Some(v) = get("list-style-position") {
+            c.list_inside = v.trim().eq_ignore_ascii_case("inside");
+        }
+        if let Some(v) = get("border-collapse") {
+            c.border_collapse = v.trim().eq_ignore_ascii_case("collapse");
+        }
+        if let Some(v) = get("border-spacing") {
+            c.border_spacing = v.split_whitespace().next().and_then(parse_len);
+        }
+        for (i, side) in ["top", "right", "bottom", "left"].iter().enumerate() {
+            let style = get(&format!("border-{side}-style")).map(|v| v.trim().to_ascii_lowercase());
+            c.border[i] = match style {
+                Some(st) if st != "none" && st != "hidden" && BORDER_STYLES.contains(&st.as_str()) => Some(Border {
+                    style: st,
+                    width: get(&format!("border-{side}-width")).and_then(parse_border_width).unwrap_or(BorderWidth::Pt(1.35)),
+                    color: get(&format!("border-{side}-color")).and_then(parse_color).map(|c| c | 0xFF00_0000),
+                }),
+                _ => None,
+            };
+        }
+        for (i, corner) in ["top-left", "top-right", "bottom-right", "bottom-left"].iter().enumerate() {
+            c.radius[i] = get(&format!("border-{corner}-radius")).and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
+        }
+        c.width = get("width").and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
         c.display = get("display").map(|v| v.trim().to_ascii_lowercase());
         for (i, side) in ["top", "right", "bottom", "left"].iter().enumerate() {
             c.margin[i] = get(&format!("margin-{side}")).and_then(parse_len);

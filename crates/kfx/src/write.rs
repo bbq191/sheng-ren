@@ -2,11 +2,10 @@
 //!
 //! 输入应是已经按设备优化过的 EPUB；这里只做格式转换，不改内容。
 //! 写的片段是删除实验（`docs/kfx.md#删除实验`）定下的最小集合；分词、`$550`/`$621` 位置点、`$597`、`$585` 不写。
-//! 现在支持：段落、标题、行内样式（粗体、斜体、颜色、字号、字体、上标）、`<br>`、块级图片和整页图片、目录。
-//! 还不支持：链接与注释跳转、表格、列表编号、边框、嵌入字体（`@font-face` 去掉，字体交给阅读器）。
+//! 支持的内容见 `docs/kfx.md#写出器`（段落、标题、行内样式、图片、链接与注释弹窗、目录、嵌入字体、列表、表格、边框）。
 
 use crate::container::{Body, Entity};
-use crate::css::{Computed, Len, Sheet};
+use crate::css::{Border, BorderWidth, Computed, Len, Sheet};
 use crate::ion::{self, Item, Value};
 use crate::yj::*;
 use bookconv::epubbook::{self, Loaded};
@@ -17,7 +16,7 @@ use scraper::{ElementRef, Html, Node};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。
-pub const WRITER_VERSION: &str = "1";
+pub const WRITER_VERSION: &str = "2";
 
 /// 第一个本地符号的编号：系统表 9 个 + `YJ_symbols` v10 的 859 个。
 const FIRST_LOCAL_SID: u32 = 10 + 859;
@@ -85,6 +84,12 @@ struct Block {
     ids: Vec<(String, usize)>,
     /// 注释正文（弹窗里显示的内容）：见 [`mark_notes`]。
     note: bool,
+    /// 节点类型（`None`＝文字 `$269`／容器 `$270`）：列表、列表项、表格各层、水平线。
+    ty: Option<u32>,
+    /// 节点上的字段（列表符号、表格边框合并等）。
+    attrs: Vec<(u32, Value)>,
+    /// 额外的样式属性（单元格跨行跨列、竖直对齐，表格宽度等）。
+    extra: Vec<(u32, Value)>,
 }
 
 const BLOCK_TAGS: &[&str] = &[
@@ -199,6 +204,37 @@ impl Doc<'_> {
         if matches!(name, "head" | "script" | "style" | "title") {
             return;
         }
+        match name {
+            "ul" | "ol" => {
+                // 列表符号看列表项（`li` 上写的优先，《雪国》把 `cjk-ideographic` 写在 `li` 上）；列表项写成
+                // `display:block` 的不显示符号（《啸风山庄》`li {display:block}`），和 `list-style:none` 一样当普通块。
+                let first = el.children().filter_map(ElementRef::wrap).find(|c| c.value().name() == "li").map(|li| self.comp(&li, &comp));
+                let mut comp = comp.clone();
+                if let Some(li) = &first {
+                    if li.list_style.is_some() {
+                        comp.list_style = li.list_style.clone();
+                    }
+                }
+                let marker = first.as_ref().is_none_or(|li| li.display.as_deref().is_none_or(|d| d == "list-item"));
+                if marker && comp.list_style.as_deref() != Some("none") {
+                    return out.push(self.list(el, comp));
+                }
+            }
+            "table" => return out.push(self.table(el, comp)),
+            "hr" => {
+                let mut b = self.boxed(Kind::Container(Vec::new()), comp, el.value().attr("id"));
+                b.ty = Some(NODE_HR);
+                // UA 样式：上下 0.5em。
+                if b.comp.margin[0].is_none() {
+                    b.margin_top = 0.5 * b.comp.font_size;
+                }
+                if b.comp.margin[2].is_none() {
+                    b.margin_bottom = 0.5 * b.comp.font_size;
+                }
+                return out.push(b);
+            }
+            _ => {}
+        }
         let fs = comp.font_size;
         let heading = bookconv::html::heading_level_of(name);
         let mut children = Vec::new();
@@ -208,14 +244,18 @@ impl Doc<'_> {
         }
         let margin_top = to_vert(comp.margin[0], fs);
         let margin_bottom = to_vert(comp.margin[2], fs);
-        let ml = to_horiz(comp.margin[3], fs);
+        let mut ml = to_horiz(comp.margin[3], fs);
         let mr = to_horiz(comp.margin[1], fs);
         let padding = [0, 1, 2, 3].map(|i| to_vert(comp.padding[i], fs));
+        // 不显示符号的列表（`list-style:none`）当普通块，照 Amazon 缩进 1.5em（测试书 L04：`$48` 4.688%）。
+        if matches!(name, "ul" | "ol") && comp.margin[3].is_none() && comp.padding[3].is_none() {
+            ml.em += 1.5;
+        }
         let id = el.value().attr("id").map(str::to_string);
         // 自己只包着一个文字块（普通段落）：本元素就是这个块。
         // 有背景或内边距的块写成容器套文字（样本里带背景色的 h1 就是这样；背景、内边距、负外边距直接放在文字段落上，
         // Kindle 上长标题会溢出屏幕，2026-10-05 真机）。
-        let boxed = comp.background.is_some() || padding.iter().any(|p| *p != 0.0);
+        let boxed = comp.background.is_some() || padding.iter().any(|p| *p != 0.0) || comp.has_border();
         let own = !boxed && children.len() == 1 && matches!(children[0].kind, Kind::Text { .. }) && children[0].is_anonymous();
         if own {
             let mut b = children.pop().unwrap_or_else(|| unreachable!());
@@ -244,6 +284,9 @@ impl Doc<'_> {
                 padding,
                 ids: id.map(|i| vec![(i, 0)]).unwrap_or_default(),
                 note: false,
+                ty: None,
+                attrs: Vec::new(),
+                extra: Vec::new(),
             });
             return;
         }
@@ -268,6 +311,168 @@ impl Doc<'_> {
             c.margin_right.pct += mr.pct;
             out.push(c);
         }
+    }
+
+    /// 自己的外边距、内边距照计算值的块（列表、表格、单元格、水平线用；不摊平、不并进子块）。
+    fn boxed(&self, kind: Kind, comp: Computed, id: Option<&str>) -> Block {
+        let fs = comp.font_size;
+        let mut b = Block::anonymous(kind, comp, id.map(|i| vec![(i.to_string(), 0)]).unwrap_or_default());
+        b.margin_top = to_vert(b.comp.margin[0], fs);
+        b.margin_bottom = to_vert(b.comp.margin[2], fs);
+        b.margin_left = to_horiz(b.comp.margin[3], fs);
+        b.margin_right = to_horiz(b.comp.margin[1], fs);
+        b.padding = [0, 1, 2, 3].map(|i| to_vert(b.comp.padding[i], fs));
+        b
+    }
+
+    /// 元素的子块；只有一个匿名文字块时直接用它当 `ty` 类型的节点（列表项、表格标题里的文字），否则包成容器。
+    fn wrap_children(&self, el: ElementRef, comp: Computed, ty: Option<u32>) -> Block {
+        let mut kids = Vec::new();
+        self.children(el, &comp, &mut kids);
+        let id = el.value().attr("id");
+        if ty.is_some() && kids.len() == 1 && matches!(kids[0].kind, Kind::Text { .. }) && kids[0].is_anonymous() {
+            if let Some(k) = kids.pop() {
+                let mut b = self.boxed(k.kind, comp, id);
+                b.ids.extend(k.ids);
+                b.ty = ty;
+                return b;
+            }
+        }
+        let mut b = self.boxed(Kind::Container(kids), comp, id);
+        b.ty = ty;
+        b
+    }
+
+    /// `<ul>`/`<ol>` → `$276` 列表，`<li>` → `$277` 列表项（只有文字的列表项本身就是文字节点）。
+    /// 列表符号的缺省按标签和嵌套层数（同浏览器：圆点 → 空心圆 → 方块），Amazon 转出来也是这样（2026-10-05 测试书）。
+    fn list(&self, el: ElementRef, comp: Computed) -> Block {
+        let ordered = el.value().name() == "ol";
+        let depth = el.ancestors().filter_map(ElementRef::wrap).filter(|a| a.value().name() == "ul").count();
+        let style = match comp.list_style.as_deref() {
+            Some("disc") => LIST_DISC,
+            Some("circle") => LIST_CIRCLE,
+            Some("square") => LIST_SQUARE,
+            Some("decimal") => LIST_DECIMAL,
+            Some("decimal-leading-zero") => LIST_DECIMAL_ZERO,
+            Some("lower-roman") => LIST_LOWER_ROMAN,
+            Some("upper-roman") => LIST_UPPER_ROMAN,
+            Some("lower-alpha" | "lower-latin") => LIST_LOWER_ALPHA,
+            Some("upper-alpha" | "upper-latin") => LIST_UPPER_ALPHA,
+            Some("lower-greek") => LIST_LOWER_GREEK,
+            Some("cjk-ideographic" | "simp-chinese-informal" | "trad-chinese-informal" | "cjk-decimal") => LIST_CJK,
+            _ if ordered => LIST_DECIMAL,
+            _ => [LIST_DISC, LIST_CIRCLE, LIST_SQUARE][depth.min(2)],
+        };
+        let mut items = Vec::new();
+        for child in el.children().filter_map(ElementRef::wrap) {
+            let c = self.comp(&child, &comp);
+            if c.display.as_deref() == Some("none") {
+                continue;
+            }
+            let mut item = self.wrap_children(child, c, Some(NODE_LIST_ITEM));
+            if let Some(v) = child.value().attr("value").and_then(|v| v.trim().parse::<i64>().ok()) {
+                item.attrs.push((LIST_START, Value::Int(v)));
+            }
+            items.push(item);
+        }
+        let inside = comp.list_inside;
+        let mut b = self.boxed(Kind::Container(items), comp, el.value().attr("id"));
+        b.ty = Some(NODE_LIST);
+        b.attrs.push((LIST_STYLE, Value::Symbol(style)));
+        if let Some(n) = el.value().attr("start").and_then(|v| v.trim().parse::<i64>().ok()) {
+            b.attrs.push((LIST_START, Value::Int(n)));
+        }
+        if inside {
+            b.attrs.push((LIST_POSITION, Value::Symbol(LIST_INSIDE)));
+        }
+        b
+    }
+
+    /// `<table>` → `$278` 表 → `$151`/`$454`/`$455` 表头/表体/表脚 → `$279` 行 → `$270` 单元格（2026-10-05 《绍宋》样本和测试书对照）。
+    /// 跨列、跨行、竖直对齐写在单元格的样式里；`<caption>` 是 `$269` 节点（`$615: $453`）套文字。
+    fn table(&self, el: ElementRef, comp: Computed) -> Block {
+        let mut parts = Vec::new();
+        let mut col_widths: Option<Vec<Len>> = None;
+        let spacing = |l: Option<Len>| match l {
+            Some(Len::Pt(n)) => n * 0.6,
+            Some(Len::Em(n)) => n * 12.0 * comp.font_size,
+            _ => 0.9,
+        };
+        for part in el.children().filter_map(ElementRef::wrap) {
+            let pc = self.comp(&part, &comp);
+            if pc.display.as_deref() == Some("none") {
+                continue;
+            }
+            match part.value().name() {
+                "caption" => {
+                    let mut cap = self.wrap_children(part, pc, None);
+                    cap.ty = Some(NODE_TEXT);
+                    cap.attrs.push((NOTE_CONTENT, Value::Symbol(CAPTION)));
+                    cap.extra.push((P_LAYOUT_HINTS, Value::List(vec![Value::Symbol(CAPTION)])));
+                    parts.push(cap);
+                }
+                tag @ ("thead" | "tbody" | "tfoot") => {
+                    let ty = match tag {
+                        "thead" => NODE_THEAD,
+                        "tfoot" => NODE_TFOOT,
+                        _ => NODE_TBODY,
+                    };
+                    let mut rows = Vec::new();
+                    for tr in part.children().filter_map(ElementRef::wrap).filter(|e| e.value().name() == "tr") {
+                        let rc = self.comp(&tr, &pc);
+                        let mut cells = Vec::new();
+                        let mut widths = Vec::new();
+                        for td in tr.children().filter_map(ElementRef::wrap).filter(|e| matches!(e.value().name(), "td" | "th")) {
+                            let mut cc = self.comp(&td, &rc);
+                            if cc.width.is_none() {
+                                cc.width = td.value().attr("width").and_then(crate::css::parse_len);
+                            }
+                            // UA 样式：单元格内边距 1px。
+                            for p in cc.padding.iter_mut() {
+                                p.get_or_insert(Len::Pt(0.75));
+                            }
+                            widths.push(cc.width);
+                            let valign = match cc.valign.as_deref() {
+                                Some("top" | "text-top") => VALIGN_TOP,
+                                Some("bottom" | "text-bottom") => VALIGN_BOTTOM,
+                                _ => ALIGN_CENTER,
+                            };
+                            let mut cell = self.wrap_children(td, cc, None);
+                            cell.extra.push((P_CELL_VALIGN, Value::Symbol(valign)));
+                            for (attr, key) in [("colspan", P_COLSPAN), ("rowspan", P_ROWSPAN)] {
+                                if let Some(n) = td.value().attr(attr).and_then(|v| v.trim().parse::<i64>().ok()).filter(|n| *n > 1) {
+                                    cell.extra.push((key, Value::Int(n)));
+                                }
+                            }
+                            cells.push(cell);
+                        }
+                        if col_widths.is_none() {
+                            col_widths = Some(widths.into_iter().map_while(|w| w).collect());
+                        }
+                        let mut row = Block::anonymous(Kind::Container(cells), rc.inherited(), Vec::new());
+                        row.ty = Some(NODE_ROW);
+                        rows.push(row);
+                    }
+                    let mut p = Block::anonymous(Kind::Container(rows), pc.inherited(), Vec::new());
+                    p.ty = Some(ty);
+                    parts.push(p);
+                }
+                _ => {}
+            }
+        }
+        let mut attrs = vec![
+            (TABLE_COLLAPSE, Value::Bool(comp.border_collapse)),
+            (TABLE_SPACING_H, num(spacing(comp.border_spacing), U_PT)),
+            (TABLE_SPACING_V, num(spacing(comp.border_spacing), U_PT)),
+        ];
+        let cols: Vec<Value> = col_widths.unwrap_or_default().into_iter().filter_map(|w| width_value(w, comp.font_size)).map(|v| Value::Struct(vec![(P_WIDTH, v)])).collect();
+        if !cols.is_empty() {
+            attrs.push((TABLE_COLUMNS, Value::List(cols)));
+        }
+        let mut b = self.boxed(Kind::Container(parts), comp, el.value().attr("id"));
+        b.ty = Some(NODE_TABLE);
+        b.attrs = attrs;
+        b
     }
 
     /// 块级元素的子节点：连续的行内内容合成匿名文字块，块级子元素递归，图片单独成块。
@@ -304,7 +509,7 @@ impl Doc<'_> {
 
     fn inline_or_block(&self, node: NodeRef<Node>, block_comp: &Computed, parent: &Computed, inl: &mut Inline, out: &mut Vec<Block>) {
         match node.value() {
-            Node::Text(t) => inl.push_text(t, false),
+            Node::Text(t) => inl.push_text(t, parent.pre),
             Node::Element(_) => {
                 let Some(el) = ElementRef::wrap(node) else { return };
                 let name = el.value().name();
@@ -366,11 +571,14 @@ impl Block {
             padding: [0.0; 4],
             ids,
             note: false,
+            ty: None,
+            attrs: Vec::new(),
+            extra: Vec::new(),
         }
     }
 
     fn is_anonymous(&self) -> bool {
-        self.margin_top == 0.0 && self.margin_bottom == 0.0 && self.heading.is_none() && self.margin_left == Horiz::default()
+        self.margin_top == 0.0 && self.margin_bottom == 0.0 && self.heading.is_none() && self.margin_left == Horiz::default() && self.ty.is_none()
     }
 }
 
@@ -390,7 +598,12 @@ fn run_differs(a: &Computed, b: &Computed) -> bool {
         || (a.font_size - b.font_size).abs() > 1e-6
         || a.font_family != b.font_family
         || a.superscript != b.superscript
+        || a.subscript != b.subscript
+        || a.decoration != b.decoration
+        || a.small_caps != b.small_caps
+        || a.letter_spacing != b.letter_spacing
         || a.background.is_some()
+        || a.has_border()
 }
 
 /// 解析好的一个文档：(spine 下标, 路径, 语言, 块)。
@@ -667,6 +880,13 @@ impl Builder {
         if let Some(bg) = c.background {
             p.push((P_BACKGROUND, Value::Int(i64::from(bg))));
         }
+        p.extend(border_props(c));
+        if matches!(b.ty, Some(NODE_TABLE | NODE_HR)) {
+            if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
+                p.push((P_WIDTH, v));
+            }
+        }
+        p.extend(b.extra.iter().cloned());
         p
     }
 
@@ -684,7 +904,8 @@ impl Builder {
                 let idx = ctx.texts.len();
                 ctx.texts.push(Value::String(text.clone()));
                 let style = self.style(props);
-                let mut f = vec![(EID, Value::Int(eid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(NODE_TEXT))];
+                let mut f = vec![(EID, Value::Int(eid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(b.ty.unwrap_or(NODE_TEXT)))];
+                f.extend(b.attrs.iter().cloned());
                 if let Some(h) = b.heading {
                     f.push((HEADING_LEVEL, Value::Int(i64::from(h))));
                 }
@@ -708,7 +929,10 @@ impl Builder {
                             let mut rp = text_props(rc, b.comp.font_size);
                             if rc.superscript && !b.comp.superscript {
                                 rp.push((P_VERTICAL_ALIGN, Value::Symbol(VALIGN_SUPER)));
+                            } else if rc.subscript && !b.comp.subscript {
+                                rp.push((P_VERTICAL_ALIGN, Value::Symbol(VALIGN_SUB)));
                             }
+                            rp.extend(border_props(rc));
                             if let Some(bg) = rc.background {
                                 rp.push((P_INLINE_BACKGROUND, Value::Int(i64::from(bg))));
                             }
@@ -749,18 +973,91 @@ impl Builder {
                 if let Some(h) = b.heading {
                     self.headings.push((h, eid));
                 }
-                let style = self.style(props);
+                let ty = b.ty.unwrap_or(NODE_CONTAINER);
+                // 表体、行这些结构层没有样式（同样本）。
+                let styled = !matches!(ty, NODE_THEAD | NODE_TBODY | NODE_TFOOT | NODE_ROW);
+                let style = styled.then(|| self.style(props));
                 let kids: Vec<Value> = children.iter().filter_map(|c| self.node(c, b.comp.font_size, ctx)).collect();
-                let mut f = vec![(EID, Value::Int(eid)), (TMPL_FIT, Value::Symbol(CONTAINER_LAYOUT)), (STYLE_REF, Value::Symbol(style))];
+                let mut f = vec![(EID, Value::Int(eid))];
+                if ty == NODE_CONTAINER {
+                    f.push((TMPL_FIT, Value::Symbol(CONTAINER_LAYOUT)));
+                }
+                if let Some(style) = style {
+                    f.push((STYLE_REF, Value::Symbol(style)));
+                }
+                f.extend(b.attrs.iter().cloned());
                 if let Some(h) = b.heading {
                     f.push((HEADING_LEVEL, Value::Int(i64::from(h))));
                 }
-                f.push((NODE_TYPE, Value::Symbol(NODE_CONTAINER)));
-                f.push((CHILDREN, Value::List(kids)));
+                f.push((NODE_TYPE, Value::Symbol(ty)));
+                if !kids.is_empty() {
+                    f.push((CHILDREN, Value::List(kids)));
+                }
                 Some(Value::Struct(f))
             }
         }
     }
+}
+
+/// 宽度：百分比照写，em/pt 换成 em。
+fn width_value(l: Len, fs: f64) -> Option<Value> {
+    match l {
+        Len::Percent(p) => Some(num(p, U_PERCENT)),
+        Len::Em(n) if n > 0.0 => Some(num(n, U_EM)),
+        Len::Pt(n) if n > 0.0 => Some(num(n / 12.0 / fs, U_EM)),
+        _ => None,
+    }
+}
+
+/// 边框、圆角（块和行内区间共用）。四边样式、宽度、颜色都一样时写「全部」那一组，否则按边写（上、左、下、右）。
+fn border_props(c: &Computed) -> Vec<(u32, Value)> {
+    let mut p = Vec::new();
+    let bw = |w: BorderWidth| match w {
+        BorderWidth::Pt(n) => num(n, U_PT),
+        BorderWidth::Em(n) => num(n, U_EM),
+    };
+    let style = |b: &Border| match b.style.as_str() {
+        "dashed" => BORDER_DASHED,
+        "dotted" => BORDER_DOTTED,
+        "double" => BORDER_DOUBLE,
+        "groove" => BORDER_GROOVE,
+        "ridge" => BORDER_RIDGE,
+        "inset" => BORDER_INSET,
+        "outset" => BORDER_OUTSET,
+        _ => BORDER_SOLID,
+    };
+    let zero = |b: &Border| matches!(b.width, BorderWidth::Pt(n) | BorderWidth::Em(n) if n == 0.0);
+    let sides: Vec<Option<&Border>> = c.border.iter().map(|b| b.as_ref().filter(|b| !zero(b))).collect();
+    let mut emit = |slot: usize, b: &Border| {
+        p.push((P_BORDER_STYLE[slot], Value::Symbol(style(b))));
+        p.push((P_BORDER_WIDTH[slot], bw(b.width)));
+        if let Some(col) = b.color {
+            p.push((P_BORDER_COLOR[slot], Value::Int(i64::from(col))));
+        }
+    };
+    if let (Some(first), true) = (sides[0], sides.iter().all(|s| *s == sides[0])) {
+        emit(0, first);
+    } else {
+        // CSS 顺序（上、右、下、左）→ KFX 顺序（上、左、下、右）的下标
+        for (css_i, slot) in [(0, 1), (3, 2), (2, 3), (1, 4)] {
+            if let Some(b) = sides[css_i] {
+                emit(slot, b);
+            }
+        }
+    }
+    if c.radius.iter().any(Option::is_some) {
+        // 左上、右上、右下、左下 → `$459`、`$460`、`$462`、`$461`
+        for (i, slot) in [(0, 0), (1, 1), (2, 3), (3, 2)] {
+            let v = match c.radius[i] {
+                Some(Len::Em(n)) => num(n, U_EM),
+                Some(Len::Pt(n)) => num(n * 0.6, U_PT),
+                Some(Len::Percent(n)) => num(n, U_PERCENT),
+                None => num(0.0, U_PT),
+            };
+            p.push((P_BORDER_RADIUS[slot], v));
+        }
+    }
+    p
 }
 
 /// 字体、字号、粗体、斜体、颜色（块和行内区间共用）。
@@ -777,6 +1074,17 @@ fn text_props(c: &Computed, parent_fs: f64) -> Vec<(u32, Value)> {
     }
     if let Some(col) = c.color {
         p.push((P_COLOR, Value::Int(i64::from(col))));
+    }
+    for (on, k) in c.decoration.iter().zip([P_UNDERLINE, P_LINE_THROUGH, P_OVERLINE]) {
+        if *on {
+            p.push((k, Value::Symbol(BORDER_SOLID)));
+        }
+    }
+    if c.small_caps {
+        p.push((P_FONT_VARIANT, Value::Symbol(SMALL_CAPS)));
+    }
+    if let Some(ls) = c.letter_spacing {
+        p.push((P_LETTER_SPACING, num(ls, U_EM)));
     }
     p
 }
@@ -1448,6 +1756,46 @@ mod tests {
         let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
         assert_eq!(story.matches(&format!("({NOTE_REF}, Symbol({NOTE_REF_POPUP}))")).count(), 1, "{story}");
         assert_eq!(story.matches(&format!("({NOTE_CONTENT}, Symbol({NOTE_CONTENT_FOOTNOTE}))")).count(), 1, "{story}");
+    }
+
+    /// 列表、表格、边框按 2026-10-05 测试书（Amazon 转出的 KFX）对照出来的写法。
+    #[test]
+    fn lists_tables_borders_like_amazon() {
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>td{border:1px solid #000;vertical-align:top} .b{border-top:2px dashed red;padding-left:0.5em} li.x{list-style-type:lower-roman}</style></head><body>
+            <ul><li>甲<ul><li>乙</li></ul></li></ul>
+            <ol start="3"><li class="x">丙</li><li value="9"><p>丁</p><p>戊</p></li></ol>
+            <ul style="list-style:none"><li>己</li></ul>
+            <table style="border-collapse:collapse;width:80%"><caption>表题</caption><tr><td colspan="2" style="width:30%">庚</td></tr><tr><td rowspan="2">辛</td><td></td></tr></table>
+            <div class="b"><p>壬</p></div><hr/><p>前<u>癸</u></p></body></html>"#.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        let has = |k: u32, v: u32| story.contains(&format!("({k}, Symbol({v}))"));
+        // 列表：嵌套的 ul 换空心圆；li 上写的符号优先；start/value；不显示符号的不是列表
+        assert!(has(LIST_STYLE, LIST_DISC) && has(LIST_STYLE, LIST_CIRCLE) && has(LIST_STYLE, LIST_LOWER_ROMAN), "{story}");
+        assert_eq!(story.matches(&format!("({NODE_TYPE}, Symbol({NODE_LIST}))")).count(), 3, "{story}");
+        assert!(story.contains(&format!("({LIST_START}, Int(3))")) && story.contains(&format!("({LIST_START}, Int(9))")), "{story}");
+        // 表格：表 → 表体 → 行 → 单元格，标题；跨列跨行、竖直对齐、列宽、边框合并
+        for t in [NODE_TABLE, NODE_TBODY, NODE_ROW] {
+            assert!(has(NODE_TYPE, t), "{t}: {story}");
+        }
+        assert!(has(NOTE_CONTENT, CAPTION) && story.contains(&format!("({TABLE_COLLAPSE}, Bool(true))")) && story.contains(&format!("({TABLE_COLUMNS}, ")), "{story}");
+        assert!(styles.contains(&format!("({P_COLSPAN}, Int(2))")) && styles.contains(&format!("({P_ROWSPAN}, Int(2))")), "{styles}");
+        assert!(styles.contains(&format!("({P_CELL_VALIGN}, Symbol({VALIGN_TOP}))")), "{styles}");
+        // 边框：四边一样写「全部」（1px＝0.45pt），只有上边写上边；左内边距是 `$53`
+        assert!(styles.contains(&format!("({}, Symbol({BORDER_SOLID}))", P_BORDER_STYLE[0])) && styles.contains("(307, F64(0.45))"), "{styles}");
+        assert!(styles.contains(&format!("({}, Symbol({BORDER_DASHED}))", P_BORDER_STYLE[1])) && styles.contains(&format!("({}, Int({}))", P_BORDER_COLOR[1], 0xFFFF0000u32)), "{styles}");
+        assert!(styles.contains(&format!("({P_PADDING_LEFT}, ")), "{styles}");
+        assert!(has(NODE_TYPE, NODE_HR) && styles.contains(&format!("({P_UNDERLINE}, Symbol({BORDER_SOLID}))")), "{story}");
+        // 文字一个不多一个不少
+        let texts: Vec<String> = c.entities.iter().filter(|e| e.ty == T_TEXT_POOL).flat_map(|e| e.value().unwrap().field(CHILDREN).unwrap().as_list().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>()).collect();
+        assert_eq!(texts.concat(), "甲乙丙丁戊己表题庚辛壬前癸");
     }
 
     #[test]

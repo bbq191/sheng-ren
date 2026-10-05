@@ -208,7 +208,7 @@ booklib dedupe ~/Documents/ereader
 
 ```text
 ireader      掌阅自带阅读器（iReader Ocean 5 Pro）  EPUB  屏幕 1264×1680  阅读范围 1264×1680  黑白
-kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  AZW3  屏幕 1272×1696  阅读范围 1104×1546  黑白
+kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  KFX（漫画 AZW3）  屏幕 1272×1696  阅读范围 1104×1546  黑白
 xochitl      xochitl（reMarkable Paper Pro Move 原生阅读器）  EPUB  屏幕 954×1696  阅读范围 842×1455  彩色
 ```
 
@@ -238,7 +238,7 @@ booklib 只生成，**拷到设备上由你自己来**：把模式的文件夹�
 | 读的阅读器 | 拷哪个文件夹 | 怎么拷 |
 |---|---|---|
 | Kindle、掌阅上的 KOReader（日常用） | `ireader/` | 拷到设备存储根的 `books/`。Kindle 上 KOReader 开着不能直接插线，先在 KOReader 里点「USB 传书」（见 koreader-setup 仓库） |
-| Kindle 自带阅读器 | `kindle/` 里的 `.azw3` | USB 连电脑，拷进 `documents/`。自带阅读器 USB 传书只认 AZW3 |
+| Kindle 自带阅读器 | `kindle/` 里的 `.kfx`（文字书）、`.azw3`（漫画） | USB 连电脑，拷进 `documents/`。自带阅读器 USB 传书不认 EPUB |
 | 掌阅自带阅读器（备选） | `ireader/` | USB 连电脑导入 |
 | Move 自带阅读器 | `xochitl/` | reMarkable 自带的传书方式。USB 网页上传（`http://10.11.99.1`）单本约 88MB 以上会被拒 |
 
