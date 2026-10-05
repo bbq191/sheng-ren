@@ -7,7 +7,7 @@
 
 | 模式 | 给谁读 | 产物 | 屏幕（截图像素） | 文字书阅读范围 | 漫画画布 | 屏幕 |
 |---|---|---|---|---|---|---|
-| `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | AZW3 | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
+| `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | 文字书 KFX、漫画 AZW3 | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
 | `ireader` | 掌阅 Ocean 5 Pro 自带阅读器（KOReader 也读它） | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白 |
 | `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB | 954×1696，264ppi | 842×1455 | 952×1457（页边距 1） | 彩色 |
 
@@ -132,7 +132,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 
 **现状**：Kindle、掌阅日常开机直接进 KOReader（独占），Move 用自带阅读器。
 
-- **读哪份产物**：两台的 KOReader 都读 `ireader/` 的 EPUB（KOReader 不认 `.azw3`），拷到存储根的 `books/`（KOReader 的起始目录）。`kindle` 模式的 AZW3 只在回到 Kindle 自带阅读器时用。
+- **读哪份产物**：两台的 KOReader 都读 `ireader/` 的 EPUB（KOReader 不认 `.azw3`），拷到存储根的 `books/`（KOReader 的起始目录）。`kindle` 模式的产物（文字书 KFX、漫画 AZW3）只在回到 Kindle 自带阅读器时用。
 - **没有单独的模式**：`ireader` 的阅读范围是在掌阅自带阅读器上量的，KOReader 里没单独量，漫画离屏幕是不是 1px 没验证。
 - **进度同步**：两台的 KOReader 经自建的同步服务（KOReader 的 kosync 协议）按**文件名**认书、同步进度，所以 `ireader/` 产物的文件名要稳定。服务端归 vksight 仓库，设备上的设置在 koreader-setup 仓库。
 - **词典**：用自己手上的 MOBI 词典，经本仓库的 `mobi-dict-to-stardict` 转成 StarDict（网上现成的 StarDict 版是未授权转制，不用）。

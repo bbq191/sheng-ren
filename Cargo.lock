@@ -904,6 +904,7 @@ dependencies = [
  "bookconv",
  "fast2s",
  "image",
+ "kfx",
  "profile",
  "serde",
  "serde_json",

@@ -1,7 +1,7 @@
 //! 从测量书的两张截图（竖长黑块、横宽黑块）量出阅读器的真实可阅读范围，打印可直接贴进 profile 的 TOML。见 `bookconv::probe`。
 //!
 //! 用法: readable-measure [--device=<id>] 竖长图截图.png 横宽图截图.png
-//!   TOML 段名按产物格式：`[readable.epub]`、Kindle 的 `[readable.azw3]`。给了 `--device` 按这个阅读模式的产物格式写，
+//!   TOML 段名按产物格式：`[readable.epub]`、Kindle 的 `[readable.kfx]`（漫画 `[readable.azw3]`）。给了 `--device` 按这个阅读模式的产物格式写，
 //!   没给写 `[readable.epub]` 并提示。
 //! 退出码: 0 成功（有可疑之处时仍输出，但会列出警告）；1 用法错；2 读图/测量失败。
 
@@ -29,7 +29,7 @@ fn main() {
     }
     let ext = format.map_or("epub", |f| f.ext());
     if format.is_none() {
-        println!("\n（产物是 AZW3 的阅读模式（kindle）段名要写 [readable.azw3]；给 --device=<id> 自动按产物格式写）");
+        println!("\n（产物是 KFX 的阅读模式（kindle）段名要写 [readable.kfx]；给 --device=<id> 自动按产物格式写）");
     }
     println!("\n[readable.{ext}]\nwidth = {rw}\nheight = {rh}");
 }

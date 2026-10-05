@@ -5,7 +5,8 @@
 //!   例：跟踪 `~/Documents/ereader/books`，原件 `books/haodoo/x.epub` → `~/Documents/ereader/kindle/haodoo/<书名>.azw3`；
 //! - `add` 进来的单个文件（不在跟踪目录里）、网址书：`<书库>/output/<模式 id>/<名>.<扩展名>`。
 //!
-//! 产物格式按模式：EPUB 直接是优化结果；AZW3（Kindle）是同一份优化结果再转一次（`azw3` crate）。
+//! 产物格式按模式：EPUB 直接是优化结果；KFX、AZW3（Kindle）是同一份优化结果再转一次（`kfx`、`azw3` crate）。
+//! kindle 模式文字书出 KFX、漫画出 AZW3（profile 的 `comic_format`，见 [`Library::output_format`]）。
 //!
 //! 生成记录 `<书库>/output-state/<模式 id>.json`：书 id → 产物绝对路径、产物根目录、指纹。产物位置变了（原件移动、
 //! 改名换了目录，书名改了）时删掉旧位置的文件——**只删记录里记着的文件**，不认识的文件一概不动；删完顺带删掉
@@ -59,6 +60,7 @@ impl Drop for PreparedInput {
 /// 生成计划：指纹。
 struct Plan {
     fingerprint: String,
+    format: Format,
 }
 
 impl Library {
@@ -69,12 +71,13 @@ impl Library {
         if meta.content_sha().is_empty() {
             return Err("条目缺内容哈希（早期版本入库），先运行 booklib dedupe 迁移".into());
         }
-        let format = device.format();
+        let format = self.output_format(meta, device)?;
         let area = device.readable(format);
-        // AZW3 再带上写出器的版本（写出器改了也要重建）
+        // AZW3、KFX 再带上写出器的版本（写出器改了也要重建）
         let format_seg = match format {
             Format::Epub => format.ext().to_string(),
             Format::Azw3 => format!("{}{}", format.ext(), azw3::WRITER_VERSION),
+            Format::Kfx => format!("{}{}", format.ext(), kfx::write::WRITER_VERSION),
         };
         let cover = meta.cover.as_ref().map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
         let info = self.injected_info_sig(meta).unwrap_or_else(|| "-".into());
@@ -122,7 +125,26 @@ impl Library {
             if device.color { "color" } else { "gray" },
             format_seg,
         );
-        Ok(Plan { fingerprint })
+        Ok(Plan { fingerprint, format })
+    }
+
+    /// 这本书在这个模式下的产物格式：profile 给漫画另配了格式（kindle：漫画 AZW3、文字书 KFX）时要先判断是不是漫画
+    /// （同优化器的判定，按内容哈希缓存）。
+    pub(crate) fn output_format(&self, meta: &Meta, device: &Profile) -> Result<Format, String> {
+        if device.format_for(true) == device.format_for(false) {
+            return Ok(device.format());
+        }
+        let sha = meta.content_sha().to_string();
+        let cached = self.comic.borrow().get(&sha).copied();
+        let comic = match cached {
+            Some(c) => c,
+            None => {
+                let c = self.is_comic(meta)?;
+                self.comic.borrow_mut().insert(sha, c);
+                c
+            }
+        };
+        Ok(device.format_for(comic))
     }
 
     /// 生成时真正会补进书里的简介、标签的指纹（书里已有的那项不补、不进指纹：不然书里有简介的书，找来的简介变了也白重建）。
@@ -253,11 +275,11 @@ impl Library {
         if self.original_state(meta) == crate::OriginalState::Touched {
             self.verified_original(meta)?;
         }
-        let Plan { fingerprint } = self.plan(meta, device)?;
+        let Plan { fingerprint, format } = self.plan(meta, device)?;
         let (root, dir) = self.output_dir(meta, device)?;
         let sp = self.state_path(&device.id);
         let state = self.states.get(&sp);
-        let out = dir.join(state.file_name_for(meta, &dir, device.format().ext())?);
+        let out = dir.join(state.file_name_for(meta, &dir, format.ext())?);
         let prev = state.books.get(&meta.id).cloned();
         drop(state);
         let done = prev.as_ref().filter(|p| !force && p.fingerprint == fingerprint && p.path.is_file());
@@ -300,19 +322,24 @@ impl Library {
             let part = part.to_path_buf();
             let mut warnings = Vec::new();
             let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
-            // 要转 AZW3 的，优化结果先放临时目录
-            let optimized = if device.format() == Format::Epub { part.clone() } else { tmp.join("optimized.epub") };
+            // 要转 AZW3、KFX 的，优化结果先放临时目录
+            let optimized = if format == Format::Epub { part.clone() } else { tmp.join("optimized.epub") };
             bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
             let rep = bookconv::check::check_epub_file(&optimized)?;
             if !rep.ok {
                 warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
             }
-            if device.format() == Format::Azw3 {
+            if format != Format::Epub {
                 let epub = std::fs::read(&optimized).map_err(|e| e.to_string())?;
-                // 唯一 ID 取自书的 id、时间取入库时间：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
-                let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
-                let aopts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
-                let (bytes, w) = azw3::epub_to_azw3_with_warnings(&epub, &aopts)?;
+                // 唯一 ID 取自书的 id（AZW3 再加入库时间）：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
+                let (bytes, w) = if format == Format::Kfx {
+                    let id = meta.id.get(..16).and_then(|h| u64::from_str_radix(h, 16).ok());
+                    kfx::write::epub_to_kfx(&epub, &kfx::write::Opts { fixed_id: id })?
+                } else {
+                    let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
+                    let aopts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
+                    azw3::epub_to_azw3_with_warnings(&epub, &aopts)?
+                };
                 warnings.extend(w);
                 std::fs::write(&part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
             }

@@ -43,19 +43,21 @@
   <text x="730" y="331" text-anchor="middle" class="n" fill="#888">drm</text>
   <text x="730" y="350" text-anchor="middle" class="s">空壳（暂停，独立）</text>
 
-  <rect class="c" x="20" y="150" width="200" height="96" fill="#f0f7f7" stroke="#3c8f8f" stroke-dasharray="5 4"/>
+  <rect class="c" x="20" y="150" width="200" height="96" fill="#f0f7f7" stroke="#3c8f8f"/>
   <text x="120" y="175" text-anchor="middle" class="n">kfx</text>
-  <text x="120" y="194" text-anchor="middle" class="s">Ion 编解码 · KFX 容器读写</text>
-  <text x="120" y="214" text-anchor="middle" class="s">bin: kfx-dump / kfx-repack</text>
-  <text x="120" y="232" text-anchor="middle" class="s">（进行中，独立，写出器未做）</text>
+  <text x="120" y="194" text-anchor="middle" class="s">EPUB → KFX 写出器</text>
+  <text x="120" y="214" text-anchor="middle" class="s">Ion 编解码 · KFX 容器读写</text>
+  <text x="120" y="232" text-anchor="middle" class="s">bin: epub-to-kfx / kfx-dump</text>
 
   <path class="l" d="M430 90 L430 148" marker-end="url(#a)"/>
   <path class="l" d="M430 246 L430 298" marker-end="url(#a)"/>
-  <path class="l" d="M300 90 C200 140 200 300 328 325" marker-end="url(#a)"/>
+  <path class="l" d="M300 90 C245 140 245 300 328 325" marker-end="url(#a)"/>
+  <path class="l" d="M290 90 L170 148" marker-end="url(#a)"/>
+  <path class="l" d="M220 205 L268 205" marker-end="url(#a)"/>
   <path class="l" d="M580 70 L628 78" marker-end="url(#a)"/>
   <path class="l" d="M700 136 C690 170 640 190 592 195" marker-end="url(#a)"/>
   <path class="l" d="M790 200 L790 138" marker-end="url(#a)"/>
   <path class="l" d="M618 240 L592 232" marker-end="url(#a)"/>
 
-  <text x="430" y="388" text-anchor="middle" class="s">箭头 = 依赖方向，单向无环（library 也直接用 profile、bookconv；mobidict 借 azw3::read 读 MOBI 容器）</text>
+  <text x="430" y="388" text-anchor="middle" class="s">箭头 = 依赖方向，单向无环（library 也直接用 profile、bookconv；kindle 文字书走 kfx、漫画走 azw3；mobidict 借 azw3::read 读 MOBI 容器）</text>
 </svg>
