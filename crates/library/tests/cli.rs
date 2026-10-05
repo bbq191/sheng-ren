@@ -188,3 +188,21 @@ fn meta_edit_keeps_symlinks_and_permissions() {
     assert!(stdout(&booklib(None, &["meta", "--edit", real.to_str().unwrap()])).contains("标题: 新书名"), "改的是链接指向的文件");
     only(dir.path(), &["真.epub", "链接.epub"]);
 }
+
+/// `meta --show`：只列跟踪目录里的书，书里写的和找来的元数据都显示；不加锁、不联网。
+#[test]
+fn meta_show_lists_tracked_books() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    let books = dir.path().join("books");
+    std::fs::create_dir_all(&books).unwrap();
+    std::fs::write(books.join("风起.epub"), sample_epub("风起")).unwrap();
+    expect(booklib(Some(&lib), &["meta", "--show"]), 2, "没有跟踪的目录");
+    assert_eq!(code(&booklib(Some(&lib), &["track", books.to_str().unwrap()])), Some(0));
+    assert_eq!(code(&booklib(Some(&lib), &["sync", "--no-build"])), Some(0));
+    let o = booklib(Some(&lib), &["meta", "--show"]);
+    assert_eq!(code(&o), Some(0), "{}", stderr(&o));
+    let out = stdout(&o);
+    assert!(out.contains("风起") && out.contains("书里 标题：风起") && out.contains("找来：没找过") && out.contains("共 1 本"), "{out}");
+    expect(booklib(Some(&lib), &["meta", "--show", "--fetch"]), 1, "不能一起用");
+}

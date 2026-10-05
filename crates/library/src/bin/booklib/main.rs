@@ -30,6 +30,8 @@ const USAGE: &str = "用法:
       联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过；
       生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动
       --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
+  booklib [--library=目录] meta --show [书名片段、id 或原件路径...]
+      查看跟踪目录里的书的元数据：书里写的（标题、作者、语言、出版社、日期、标签、简介、封面），和 --fetch 找来的；只读
   booklib meta --edit 书.epub [--title 书名 --author 作者 --tag 标签 --cover 图 …]
       查看、改写一个 EPUB 文件的元数据和封面（改文件本身，和书库无关；值给空字符串 = 删掉），详见 booklib meta --edit --help
   booklib [--library=目录] remove <id>...               从书库删掉（连同生成记录里的产物；原件不动）。id 用 list 里显示的完整 id
@@ -226,6 +228,43 @@ fn info_summary(i: &library::BookInfo) -> String {
     parts.join("；")
 }
 
+/// `meta --show` 的一本：书里写的元数据（读原件的 OPF），和联网找来的。
+fn show_meta(m: &library::Meta, fail_line: &mut dyn FnMut(String)) {
+    println!("{}  {}{}", m.id, m.title, if m.authors.is_empty() { String::new() } else { format!(" — {}", m.authors.join("、")) });
+    println!("  原件：{}", m.source_path);
+    let path = Path::new(&m.source_path);
+    if m.content_format() != "epub" {
+        println!("  书里：（{} 来源，没有 OPF 元数据）", m.content_format().to_uppercase());
+    } else if !path.is_file() {
+        fail_line(format!("  ✗ 原件不在了：{}（改名或移动过就 booklib sync）", m.source_path));
+    } else {
+        match bookconv::opfmeta::read_epub(path) {
+            Ok(fields) => {
+                for (field, values) in fields.iter().filter(|(_, v)| !v.is_empty()) {
+                    let v = values.join("; ");
+                    let v = if v.chars().count() > 80 { format!("{}…（{} 字）", v.chars().take(80).collect::<String>(), v.chars().count()) } else { v };
+                    println!("  书里 {}：{}", field.label(), v.replace('\n', " "));
+                }
+                match bookconv::epubzip::cover_image_of(path) {
+                    Some((ext, bytes)) => {
+                        let dims = image::load_from_memory(&bytes).map(|i| format!("，{}×{}", i.width(), i.height())).unwrap_or_default();
+                        println!("  书里 封面：有（{ext}{dims}，{} KB）", bytes.len() / 1024);
+                    }
+                    None => println!("  书里 封面：无"),
+                }
+            }
+            Err(e) => fail_line(format!("  ✗ 读不出元数据：{e}")),
+        }
+    }
+    match &m.info {
+        Some(i) => println!("  找来：{}", info_summary(i)),
+        None => println!("  找来：没找过（booklib meta --fetch）"),
+    }
+    if let Some(c) = &m.cover {
+        println!("  找来 封面：{}（{}）", c.work, c.source_url);
+    }
+}
+
 /// 选书的参数里有像路径的（通常是路径里有空格没加引号，被拆开了），提示一下。
 fn path_hint(selectors: &[String]) -> String {
     match selectors.iter().find(|s| s.contains('/')) {
@@ -262,9 +301,12 @@ fn main() {
         "build" => args.check(&cmd, &["device"], &["force"]),
         "sync" => args.check(&cmd, &["device", "watch"], &["prune", "watch", "no-build"]),
         "meta" => {
-            args.check(&cmd, &[], &["fetch", "force", "clear"]);
-            if !args.flags.iter().any(|f| f == "fetch") {
-                usage_error("meta 要选一种：--fetch（联网给书库里的书补元数据，原来的 booklib meta）或 --edit 书.epub（查看、改写一个 EPUB 文件）");
+            args.check(&cmd, &[], &["fetch", "force", "clear", "show"]);
+            match (args.flags.iter().any(|f| f == "fetch"), args.flags.iter().any(|f| f == "show")) {
+                (true, true) => usage_error("meta 的 --fetch 和 --show 不能一起用"),
+                (false, true) if args.flags.iter().any(|f| f == "force" || f == "clear") => usage_error("--force、--clear 只配 --fetch"),
+                (false, false) => usage_error("meta 要选一种：--fetch（联网给书库里的书补元数据）、--show（查看跟踪目录里的书的元数据）或 --edit 书.epub（查看、改写一个 EPUB 文件）"),
+                _ => {}
             }
         }
         _ => usage_error(&format!("不认识的命令 {cmd}")),
@@ -274,6 +316,7 @@ fn main() {
     // 会改动书库的命令持锁到结束
     let _lock = match cmd.as_str() {
         "list" | "devices" | "sync" => None, // sync 每一轮自己加锁（--watch 时不能一直占着）
+        "meta" if args.flags.iter().any(|f| f == "show") => None, // 只读
         _ => Some(lib.lock().unwrap_or_else(|e| fail(&e))),
     };
     let failed = Cell::new(0usize);
@@ -447,6 +490,20 @@ fn main() {
                 let Some(secs) = watch else { break };
                 std::thread::sleep(std::time::Duration::from_secs(secs));
             }
+        }
+        "meta" if args.flags.iter().any(|f| f == "show") => {
+            let tracked = lib.tracked();
+            let books: Vec<_> = lib.select(&args.texts()).into_iter().filter(|m| !m.source_path.is_empty() && tracked.iter().any(|d| Path::new(&m.source_path).starts_with(d))).collect();
+            if books.is_empty() {
+                fail(if tracked.is_empty() { "没有跟踪的目录（booklib track 目录）" } else { "跟踪目录里没有匹配的书（booklib list 查看书库）" });
+            }
+            for (i, m) in books.iter().enumerate() {
+                if i > 0 {
+                    println!();
+                }
+                show_meta(m, &mut |e| fail_line(&e));
+            }
+            println!("\n共 {} 本（跟踪目录：{}）", books.len(), tracked.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join("、"));
         }
         "meta" => {
             let books = lib.select(&args.texts());
