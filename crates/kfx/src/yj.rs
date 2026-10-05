@@ -42,6 +42,12 @@ pub const SECTION_REF: u32 = 174;
 pub const TEMPLATES: u32 = 141;
 pub const RUNS: u32 = 142;
 pub const LINK_TO: u32 = 179;
+/// 链接区间上：注释引用（`$617`，Kindle 点了弹窗显示注释）。
+pub const NOTE_REF: u32 = 616;
+pub const NOTE_REF_POPUP: u32 = 617;
+/// 段落节点上：注释正文（`$618`）。
+pub const NOTE_CONTENT: u32 = 615;
+pub const NOTE_CONTENT_FOOTNOTE: u32 = 618;
 pub const HEADING_LEVEL: u32 = 790;
 pub const STYLE_NAME: u32 = 173;
 pub const LIST: u32 = 181;

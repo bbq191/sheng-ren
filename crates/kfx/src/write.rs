@@ -14,7 +14,7 @@ use bookconv::epubzip::resolve_link;
 use bookconv::util::fnv64;
 use ego_tree::NodeRef;
 use scraper::{ElementRef, Html, Node};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。
 pub const WRITER_VERSION: &str = "1";
@@ -60,6 +60,8 @@ struct Run {
     comp: Option<Computed>,
     /// 书内链接的目标（文件, 锚点）。
     link: Option<(String, String)>,
+    /// 注释引用（点了弹窗）：见 [`mark_notes`]。
+    note_ref: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +83,8 @@ struct Block {
     padding: [Vert; 4],
     /// 本块里元素的 id → 字符偏移（目录、锚点用）。
     ids: Vec<(String, usize)>,
+    /// 注释正文（弹窗里显示的内容）：见 [`mark_notes`]。
+    note: bool,
 }
 
 const BLOCK_TAGS: &[&str] = &[
@@ -239,6 +243,7 @@ impl Doc<'_> {
                 margin_right: mr,
                 padding,
                 ids: id.map(|i| vec![(i, 0)]).unwrap_or_default(),
+                note: false,
             });
             return;
         }
@@ -340,7 +345,7 @@ impl Doc<'_> {
                     });
                 let styled = run_differs(&comp, block_comp);
                 if inl.chars > start && (styled || link.is_some()) {
-                    inl.runs.insert(run_at, Run { start, len: inl.chars - start, comp: styled.then_some(comp), link });
+                    inl.runs.insert(run_at, Run { start, len: inl.chars - start, comp: styled.then_some(comp), link, note_ref: false });
                 }
             }
             _ => {}
@@ -360,6 +365,7 @@ impl Block {
             margin_right: Horiz::default(),
             padding: [0.0; 4],
             ids,
+            note: false,
         }
     }
 
@@ -385,6 +391,105 @@ fn run_differs(a: &Computed, b: &Computed) -> bool {
         || a.font_family != b.font_family
         || a.superscript != b.superscript
         || a.background.is_some()
+}
+
+/// 解析好的一个文档：(spine 下标, 路径, 语言, 块)。
+type ParsedDoc<'a> = (usize, &'a str, Option<String>, Vec<Block>);
+
+/// 全书的文字块按深度优先编号（含容器里的），`f` 拿到 (文档下标, 编号, 块)。
+fn each_text_block(docs: &mut [ParsedDoc], mut f: impl FnMut(usize, usize, &mut Block)) {
+    fn walk(blocks: &mut [Block], di: usize, n: &mut usize, f: &mut dyn FnMut(usize, usize, &mut Block)) {
+        for b in blocks {
+            match &mut b.kind {
+                Kind::Container(c) => walk(c, di, n, f),
+                Kind::Text { .. } => {
+                    f(di, *n, b);
+                    *n += 1;
+                }
+                Kind::Image { .. } => {}
+            }
+        }
+    }
+    let mut n = 0;
+    for (di, d) in docs.iter_mut().enumerate() {
+        walk(&mut d.3, di, &mut n, &mut f);
+    }
+}
+
+/// 注释配对（同 Amazon 的转换：原书多半只是普通链接，没有 `epub:type`）：正文链接指到后面的一个块，那个块**开头**的链接
+/// 指回这个正文链接所在的位置（链接自己或包着它的元素的 id），正文链接就是注释引用（`$616: $617`，Kindle 点了弹窗），目标块是注释正文
+/// （`$615: $618`）。优化器 `kindle` 模式保留回链（`note_backlinks`）、把注释搬到引用它的那一份末尾，正好配得上。
+/// 返回配上了几条。
+fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
+    // 第一遍：每个块的 id、每个链接区间（块编号, 区间下标, 目标, 区间起点处的 id）
+    let mut id_block: HashMap<(String, String), usize> = HashMap::new();
+    // (块编号, 区间下标, 目标, 区间起点处的 id)
+    type Link = (usize, usize, (String, String), Vec<String>);
+    let mut links: Vec<Link> = Vec::new();
+    let paths: Vec<String> = docs.iter().map(|d| d.1.to_string()).collect();
+    each_text_block(docs, |di, n, b| {
+        for (id, _) in &b.ids {
+            id_block.entry((paths[di].clone(), id.clone())).or_insert(n);
+        }
+        if let Kind::Text { runs, .. } = &b.kind {
+            for (ri, r) in runs.iter().enumerate() {
+                if let Some(t) = &r.link {
+                    let src: Vec<String> = b.ids.iter().filter(|(_, o)| *o >= r.start && *o <= r.start + r.len).map(|(i, _)| i.clone()).collect();
+                    links.push((n, ri, t.clone(), src));
+                }
+            }
+        }
+    });
+    // 每个块开头（第一个字起）的链接链回到哪里：注释正文的回链在段首（「[1]Queen of Sheba…」）
+    let mut back: HashMap<usize, Vec<(String, String)>> = HashMap::new();
+    let mut run_start: HashMap<(usize, usize), usize> = HashMap::new();
+    each_text_block(docs, |_, n, b| {
+        if let Kind::Text { runs, .. } = &b.kind {
+            for (ri, r) in runs.iter().enumerate() {
+                run_start.insert((n, ri), r.start);
+            }
+        }
+    });
+    for (n, ri, t, _) in &links {
+        if run_start.get(&(*n, *ri)).is_some_and(|&s| s == 0) {
+            back.entry(*n).or_default().push(t.clone());
+        }
+    }
+    let block_path: HashMap<usize, usize> = {
+        let mut m = HashMap::new();
+        each_text_block(docs, |di, n, _| {
+            m.insert(n, di);
+        });
+        m
+    };
+    let mut refs: HashSet<(usize, usize)> = HashSet::new();
+    let mut notes: HashSet<usize> = HashSet::new();
+    for (n, ri, target, src) in &links {
+        // 注释在引用后面（优化器把注释搬到引用它的那一份末尾）；反过来那条是回链。
+        let Some(&tb) = id_block.get(target) else { continue };
+        if tb <= *n {
+            continue;
+        }
+        let src_path = &paths[block_path[n]];
+        let points_back = back.get(&tb).is_some_and(|ts| ts.iter().any(|(p, f)| p == src_path && src.contains(f)));
+        if points_back {
+            refs.insert((*n, *ri));
+            notes.insert(tb);
+        }
+    }
+    each_text_block(docs, |_, n, b| {
+        if notes.contains(&n) {
+            b.note = true;
+        }
+        if let Kind::Text { runs, .. } = &mut b.kind {
+            for (ri, r) in runs.iter_mut().enumerate() {
+                if refs.contains(&(n, ri)) {
+                    r.note_ref = true;
+                }
+            }
+        }
+    });
+    refs.len()
 }
 
 /// 相邻块的外边距折叠（同一层）。
@@ -583,6 +688,9 @@ impl Builder {
                 if let Some(h) = b.heading {
                     f.push((HEADING_LEVEL, Value::Int(i64::from(h))));
                 }
+                if b.note {
+                    f.push((NOTE_CONTENT, Value::Symbol(NOTE_CONTENT_FOOTNOTE)));
+                }
                 if let Some(h) = b.heading {
                     self.headings.push((h, eid));
                 }
@@ -590,6 +698,9 @@ impl Builder {
                     .iter()
                     .map(|r| {
                         let mut f = vec![(OFFSET, Value::Int(r.start as i64)), (LENGTH, Value::Int(r.len as i64))];
+                        if r.note_ref {
+                            f.push((NOTE_REF, Value::Symbol(NOTE_REF_POPUP)));
+                        }
                         if let Some(key) = &r.link {
                             f.push((LINK_TO, Value::Symbol(self.anchor(key.clone()))));
                         }
@@ -793,6 +904,8 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     // 没有可见内容的文件（只有隐藏标题之类）：目录项、链接改指到下一个版面的开头。
     let mut empty_docs: Vec<String> = Vec::new();
 
+    // 先把所有文档解析成块（注释配对要看全书），再逐个生成版面。
+    let mut parsed: Vec<ParsedDoc> = Vec::new();
     for (si, doc) in book.docs.iter().enumerate() {
         let html = Html::parse_document(&doc.html);
         let mut sheet = Sheet::default();
@@ -818,20 +931,24 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             d.block(body, &root_comp, &mut blocks);
         }
         collapse_siblings(&mut blocks);
+        parsed.push((si, &doc.path, d.lang.clone(), blocks));
+    }
+    mark_notes(&mut parsed);
+    for (si, path, lang, blocks) in parsed {
         if blocks.is_empty() {
-            empty_docs.push(doc.path.clone());
+            empty_docs.push(path.to_string());
             continue;
         }
         let sec_name = b.sym(&format!("sec{si}"));
         let story_name = b.sym(&format!("story{si}"));
         let pool = b.sym(&format!("text{si}"));
         let tmpl_eid = b.eid();
-        let mut ctx = SectionCtx { pool, texts: Vec::new(), order: vec![(tmpl_eid, 1)], ids: Vec::new(), resources: Vec::new(), lang: d.lang.clone() };
+        let mut ctx = SectionCtx { pool, texts: Vec::new(), order: vec![(tmpl_eid, 1)], ids: Vec::new(), resources: Vec::new(), lang };
         // 只有一张图的文档写成整页图片版面（封面、插图页），和样本一样。
         let single_image = blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. });
         let nodes: Vec<Value> = blocks.iter().filter_map(|bl| b.node(bl, 1.0, &mut ctx)).collect();
         if nodes.is_empty() {
-            empty_docs.push(doc.path.clone());
+            empty_docs.push(path.to_string());
             continue;
         }
         let mut tmpl = vec![(EID, Value::Int(tmpl_eid)), (STORYLINE_REF, Value::Symbol(story_name))];
@@ -854,12 +971,12 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             entities.push(ent(pool, T_TEXT_POOL, Value::Struct(vec![(NAME, Value::Symbol(pool)), (CHILDREN, Value::List(std::mem::take(&mut ctx.texts)))])));
         }
         let first_eid = ctx.order.get(1).map_or(tmpl_eid, |o| o.0);
-        id_map.insert((doc.path.clone(), String::new()), (first_eid, 0));
+        id_map.insert((path.to_string(), String::new()), (first_eid, 0));
         for p in empty_docs.drain(..) {
             id_map.insert((p, String::new()), (first_eid, 0));
         }
         for (i, e, o) in &ctx.ids {
-            id_map.entry((doc.path.clone(), i.clone())).or_insert((*e, *o));
+            id_map.entry((path.to_string(), i.clone())).or_insert((*e, *o));
         }
         let length = ctx.order.iter().map(|o| o.1).sum();
         sections.push(SectionOut {
@@ -1316,6 +1433,21 @@ mod tests {
             let sum: i64 = m.value().unwrap().field(LIST).unwrap().as_list().unwrap().iter().map(|x| x.as_list().map_or_else(|| x.as_int().unwrap(), |p| p[0].as_int().unwrap())).sum();
             assert_eq!(sum, r.field(LENGTH).unwrap().as_int().unwrap());
         }
+    }
+
+    /// 注释配对：正文链接 → 章末注释，注释开头的回链指回正文链接。只有正文那条算注释引用，回链不算。
+    #[test]
+    fn notes_paired_by_backlink() {
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("c1.xhtml", r##"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文<a id="r1" href="#n1"><sup>[1]</sup></a>接着</p><p>别的<a href="#x">链接</a></p><p id="x">目标</p><p class="fn"><a id="n1" href="#r1">[1]</a>注释正文</p></body></html>"##.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert_eq!(story.matches(&format!("({NOTE_REF}, Symbol({NOTE_REF_POPUP}))")).count(), 1, "{story}");
+        assert_eq!(story.matches(&format!("({NOTE_CONTENT}, Symbol({NOTE_CONTENT_FOOTNOTE}))")).count(), 1, "{story}");
     }
 
     #[test]
