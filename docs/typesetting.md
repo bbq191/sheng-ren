@@ -190,7 +190,7 @@
 
 | 模式 | 挡着的怪癖 | 做法 |
 |---|---|---|
-| `kindle` | 流式排版下强制留页边距（最小档左右还有 101px） | 漫画写成**固定版式**（`comic_fixed_layout`，`comicfxl.rs`）：OPF 写上固定版式声明、每页加 `viewport`，画布是整屏 1272×1696；AZW3 写出器把声明写进文件头 |
+| `kindle` | 流式排版下强制留页边距（最小档左右还有 101px） | 漫画写成**固定版式**（`comic_fixed_layout`，`comicfxl.rs`）：OPF 写上固定版式声明、每页加 `viewport`，画布是整屏 1272×1696；KFX 写出器据此写成固定版式（见 [KFX · 固定版式](kfx.md#固定版式)） |
 | `ireader` | 书声明了往右翻（日漫都这样）时，整页图四周留边 | 漫画改成**往左翻**（`comic_page_direction = "ltr"`）：宁可日漫也往左翻，换整页铺满 |
 | `xochitl` | 四周留白 CSS 改不动，只有页边距设置管用 | 漫画按**页边距 1** 排（画布 952×1457，画布里不留白边），拷书后跑 `xochitl/comic-margins.sh --write` 登记（见[使用指南](usage.md#move-上的漫画登记页边距)）。上下留白是 xochitl 固定的，做不到 1px |
 

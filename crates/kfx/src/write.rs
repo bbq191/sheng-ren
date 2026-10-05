@@ -16,7 +16,7 @@ use scraper::{ElementRef, Html, Node};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。
-pub const WRITER_VERSION: &str = "2";
+pub const WRITER_VERSION: &str = "3";
 
 /// 第一个本地符号的编号：系统表 9 个 + `YJ_symbols` v10 的 859 个。
 const FIRST_LOCAL_SID: u32 = 10 + 859;
@@ -705,6 +705,22 @@ fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
     refs.len()
 }
 
+/// 正文字体（字数最多的那个）没有嵌入时不写进样式：Kindle 遇到不认识的字体名会换成别的字体，和没写字体的表格、
+/// 阅读器设置里选的字体都对不上（《啸风山庄》正文写着没嵌入的「AR MingU30 DemiBold」，2026-10-05 真机）。
+/// 正文本来就该用阅读器的字体（用户定的字体规矩，见 typesetting.md）。
+fn body_font_to_drop(docs: &mut [ParsedDoc], book: &Loaded) -> Option<String> {
+    let mut count: HashMap<Option<String>, usize> = HashMap::new();
+    each_text_block(docs, |_, _, b| {
+        if let Kind::Text { text, .. } = &b.kind {
+            *count.entry(b.comp.font_family.as_ref().map(|f| f.to_lowercase())).or_default() += text.chars().count();
+        }
+    });
+    let body = count.into_iter().max_by_key(|(_, n)| *n)?.0?;
+    let files: HashSet<&str> = book.fonts.iter().map(|(p, _)| p.as_str()).collect();
+    let embedded = book.css.iter().flat_map(|(p, t)| crate::css::font_faces(t, p)).any(|f| f.family.to_lowercase() == body && files.contains(f.path.as_str()));
+    (!embedded).then_some(body)
+}
+
 /// 相邻块的外边距折叠（同一层）。
 fn collapse_siblings(blocks: &mut [Block]) {
     for i in 1..blocks.len() {
@@ -754,6 +770,8 @@ struct Builder {
     headings: Vec<(u8, i64)>,
     /// 样式里用到的字体名（嵌入字体只嵌这些）。
     used_fonts: std::collections::BTreeSet<String>,
+    /// 不写进样式的字体名：没嵌入的正文字体（见 [`body_font_to_drop`]）。
+    drop_font: Option<String>,
 }
 
 impl Builder {
@@ -786,6 +804,9 @@ impl Builder {
     /// 样式去重：属性一样的共用一个样式片段。
     fn style(&mut self, mut props: Vec<(u32, Value)>) -> u32 {
         props.sort_by_key(|(k, _)| *k);
+        if let Some(d) = &self.drop_font {
+            props.retain(|(k, v)| !(*k == P_FONT_FAMILY && matches!(v, Value::String(f) if f.eq_ignore_ascii_case(d))));
+        }
         for (k, v) in &props {
             if let (P_FONT_FAMILY, Value::String(f)) = (*k, v) {
                 self.used_fonts.insert(f.clone());
@@ -1185,6 +1206,7 @@ pub fn epub_to_kfx(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), S
         anchor_index: HashMap::new(),
         headings: Vec::new(),
         used_fonts: Default::default(),
+        drop_font: None,
     };
     // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字：元数据 `cover_image` 也是按「这个名字的符号编号 − 9」
     // 找封面资源的（6 本样本的 `e6` 减 9 都正好是封面 JPEG 的 `$164`；书架缩略图靠它，2026-10-05 真机）。
@@ -1205,6 +1227,18 @@ pub fn epub_to_kfx(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), S
 fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     let css: HashMap<&str, &str> = book.css.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
     let book_lang = (!book.meta.language.is_empty()).then(|| book.meta.language.clone());
+    // 固定版式（漫画，优化器 `comicfxl` 写的 `fixed-layout`/`original-resolution`）：画布宽高。见 docs/kfx.md#固定版式。
+    let fixed_canvas: Option<(i64, i64)> = (!book.meta.fixed_layout.is_empty()).then(|| {
+        book.meta
+            .fixed_layout
+            .iter()
+            .find(|(n, _)| *n == 126)
+            .and_then(|(_, v)| v.split_once('x'))
+            .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
+            .unwrap_or((0, 0))
+    });
+    // 翻页方向：`$557` 从左往右、`$559` 从右往左（2026-10-05 测试漫画 LTR/RTL 两本只差这一处）。
+    let direction = if book.meta.rtl { DIR_RTL } else { DIR_LTR };
     let mut sections: Vec<SectionOut> = Vec::new();
     let mut entities: Vec<Entity> = Vec::new();
     let mut id_map: HashMap<(String, String), (i64, usize)> = HashMap::new();
@@ -1242,6 +1276,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         parsed.push((si, &doc.path, d.lang.clone(), blocks));
     }
     mark_notes(&mut parsed);
+    b.drop_font = body_font_to_drop(&mut parsed, book);
     for (si, path, lang, blocks) in parsed {
         if blocks.is_empty() {
             empty_docs.push(path.to_string());
@@ -1254,13 +1289,38 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let mut ctx = SectionCtx { pool, texts: Vec::new(), order: vec![(tmpl_eid, 1)], ids: Vec::new(), resources: Vec::new(), lang };
         // 只有一张图的文档写成整页图片版面（封面、插图页），和样本一样。
         let single_image = blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. });
-        let nodes: Vec<Value> = blocks.iter().filter_map(|bl| b.node(bl, 1.0, &mut ctx)).collect();
+        let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src }) = (single_image, fixed_canvas, &blocks[0].kind) {
+            // 固定版式的一页：图片节点只带画布宽高的样式（同样本），不走流式的块样式
+            let Some(r) = b.resource(src) else { continue };
+            let eid = b.eid();
+            ctx.order.push((eid, 1));
+            ctx.resources.push(r);
+            let (w, h) = if cw > 0 { (cw, ch) } else { (i64::from(b.resources[r].width), i64::from(b.resources[r].height)) };
+            let style = b.style(vec![(P_WIDTH, Value::F64(w as f64)), (P_HEIGHT, Value::F64(h as f64)), (P_SIZING, Value::Symbol(SIZING_VALUE))]);
+            let res = b.sym(&b.resources[r].name.clone());
+            vec![Value::Struct(vec![(EID, Value::Int(eid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(NODE_IMAGE)), (RESOURCE_REF, Value::Symbol(res))])]
+        } else {
+            blocks.iter().filter_map(|bl| b.node(bl, 1.0, &mut ctx)).collect()
+        };
         if nodes.is_empty() {
             empty_docs.push(path.to_string());
             continue;
         }
         let mut tmpl = vec![(EID, Value::Int(tmpl_eid)), (STORYLINE_REF, Value::Symbol(story_name))];
-        if single_image {
+        if let (true, Some((cw, ch))) = (single_image, fixed_canvas.filter(|c| c.0 > 0)) {
+            tmpl.push((TMPL_WIDTH, Value::Int(cw)));
+            tmpl.push((TMPL_HEIGHT, Value::Int(ch)));
+            tmpl.push((FIXED_PAGE_FIT, Value::Symbol(FIXED_PAGE_FIT_VALUE)));
+            tmpl.push((P_FONT_SIZE, Value::F64(16.0)));
+            tmpl.push((DOC_DIRECTION, Value::Symbol(direction)));
+            tmpl.push((DOC_WRITING_MODE, Value::Symbol(WRITING_HORIZONTAL)));
+            tmpl.push((TMPL_FIT, Value::Symbol(TMPL_FIT_VALUE)));
+            tmpl.push((TMPL_ALIGN, Value::Symbol(ALIGN_CENTER)));
+            tmpl.push((NODE_TYPE, Value::Symbol(NODE_CONTAINER)));
+            if book.cover.as_deref() == b.res_by_path.iter().find(|(_, &i)| i == ctx.resources[0]).map(|(p, _)| p.as_str()) {
+                cover_tmpl.get_or_insert(tmpl_eid);
+            }
+        } else if single_image {
             let r = &b.resources[ctx.resources[0]];
             tmpl.push((TMPL_WIDTH, Value::Int(i64::from(r.width))));
             tmpl.push((TMPL_HEIGHT, Value::Int(i64::from(r.height))));
@@ -1553,31 +1613,43 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         Value::Struct(vec![(
             META_GROUPS,
             Value::List(vec![
-                group("kindle_ebook_metadata", vec![kv("nested_span", s("enabled")), kv("selection", s("enabled"))]),
+                if fixed_canvas.is_some() {
+                    // 固定版式（同 Amazon 转的测试漫画）：锁竖屏、声明固定版式
+                    let lock = book.meta.fixed_layout.iter().find(|(n, _)| *n == 124).map_or("portrait", |(_, v)| v.as_str());
+                    group("kindle_ebook_metadata", vec![kv("book_orientation_lock", s(lock))])
+                } else {
+                    group("kindle_ebook_metadata", vec![kv("nested_span", s("enabled")), kv("selection", s("enabled"))])
+                },
                 group("kindle_title_metadata", title_meta),
                 group("kindle_audit_metadata", vec![kv("creator_version", s(WRITER_VERSION)), kv("file_creator", s("epub-to-kfx"))]),
-            ]),
+            ]
+            .into_iter()
+            .chain(fixed_canvas.map(|_| group("kindle_capability_metadata", vec![kv("yj_fixed_layout", Value::Int(1)), kv("continuous_popup_progression", Value::Int(0))])))
+            .collect()),
         )]),
     ));
 
     // 文档数据（照样本的值，含义还没全弄清）。
-    let mut doc_data = vec![
-        (112, Value::Symbol(383)),
-        (P_FONT_SIZE, num(1.0, U_EM)),
-        (192, Value::Symbol(376)),
-        (560, Value::Symbol(557)),
-        (436, Value::Symbol(441)),
-    ];
+    let mut doc_data = if fixed_canvas.is_some() {
+        vec![(DOC_DIRECTION, Value::Symbol(direction)), (DOC_WRITING_MODE, Value::Symbol(WRITING_HORIZONTAL)), (DOC_FIXED, Value::Symbol(DOC_FIXED_VALUE))]
+    } else {
+        vec![
+            (112, Value::Symbol(383)),
+            (P_FONT_SIZE, num(1.0, U_EM)),
+            (DOC_WRITING_MODE, Value::Symbol(WRITING_HORIZONTAL)),
+            (DOC_DIRECTION, Value::Symbol(direction)),
+            (436, Value::Symbol(441)),
+        ]
+    };
     if cover_res.is_some() {
         let aux = b.sym(COVER_AUX);
         doc_data.push((DOC_AUX, Value::Struct(vec![(DOC_AUX_NAME, Value::Symbol(aux))])));
     }
-    doc_data.extend([
-        (ion::SID_MAX_ID, Value::Int(b.next_eid)),
-        (P_LINE_HEIGHT, num(LH_EM, U_EM)),
-        (477, Value::Symbol(56)),
-        (READING_ORDERS, reading_orders),
-    ]);
+    doc_data.push((ion::SID_MAX_ID, Value::Int(b.next_eid)));
+    if fixed_canvas.is_none() {
+        doc_data.push((P_LINE_HEIGHT, num(LH_EM, U_EM)));
+    }
+    doc_data.extend([(477, Value::Symbol(56)), (READING_ORDERS, reading_orders)]);
     entities.push(ent(NO_NAME, T_DOCUMENT_DATA, Value::Struct(doc_data)));
 
     // 按类型排序（和样本一样），清单放最后。
@@ -1796,6 +1868,45 @@ mod tests {
         // 文字一个不多一个不少
         let texts: Vec<String> = c.entities.iter().filter(|e| e.ty == T_TEXT_POOL).flat_map(|e| e.value().unwrap().field(CHILDREN).unwrap().as_list().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>()).collect();
         assert_eq!(texts.concat(), "甲乙丙丁戊己表题庚辛壬前癸");
+    }
+
+    /// 固定版式（漫画）：照 Amazon 转的测试漫画写元数据、文档数据和每页的画布版面；从右往左翻写 `$559`。
+    #[test]
+    fn fixed_layout_comic_like_amazon() {
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg).encode_image(&image::GrayImage::from_pixel(12, 16, image::Luma([128]))).unwrap();
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language><meta name="fixed-layout" content="true"/><meta name="original-resolution" content="1272x1696"/><meta name="orientation-lock" content="portrait"/></metadata><manifest><item id="i" href="i.jpg" media-type="image/jpeg"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="p2.xhtml" media-type="application/xhtml+xml"/></manifest><spine page-progression-direction="rtl"><itemref idref="p1"/><itemref idref="p2"/></spine></package>"#).unwrap();
+        w.put("i.jpg", &jpeg).unwrap();
+        for p in ["p1.xhtml", "p2.xhtml"] {
+            w.put(p, br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div><img src="i.jpg" style="width:1272px;height:1696px"/></div></body></html>"#).unwrap();
+        }
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let dump = |ty: u32| format!("{:?}", c.entities.iter().filter(|e| e.ty == ty).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        let meta = dump(T_METADATA);
+        assert!(meta.contains(r#"String("yj_fixed_layout")), (307, Int(1))"#) && meta.contains(r#"String("book_orientation_lock")), (307, String("portrait"))"#), "{meta}");
+        let doc = dump(T_DOCUMENT_DATA);
+        assert!(doc.contains(&format!("({DOC_FIXED}, Symbol({DOC_FIXED_VALUE}))")) && doc.contains(&format!("({DOC_DIRECTION}, Symbol({DIR_RTL}))")), "{doc}");
+        let secs = dump(T_SECTION);
+        assert_eq!(secs.matches(&format!("({TMPL_WIDTH}, Int(1272)), ({TMPL_HEIGHT}, Int(1696)), ({FIXED_PAGE_FIT}, Symbol({FIXED_PAGE_FIT_VALUE}))")).count(), 2, "{secs}");
+        assert!(dump(T_STYLE).contains(&format!("({P_WIDTH}, F64(1272.0)), ({P_HEIGHT}, F64(1696.0))")), "{}", dump(T_STYLE));
+    }
+
+    /// 没嵌入的正文字体不写进样式（Kindle 会换成别的字体，和表格、阅读器设置都对不上）；嵌入的装饰字体照写。
+    #[test]
+    fn unembedded_body_font_dropped() {
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>p{font-family:"AR MingU30"} h1{font-family:"黑体"}</style></head><body><h1>标题</h1><p>很长很长的正文一</p><p>很长很长的正文二</p><table><tr><td>表格</td></tr></table></body></html>"#.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(!styles.contains("AR MingU30") && styles.contains("黑体"), "{styles}");
     }
 
     #[test]

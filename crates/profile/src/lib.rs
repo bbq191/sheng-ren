@@ -116,8 +116,8 @@ pub struct Profile {
     /// 漫画写成固定版式，画布是 `comic_readable`（Kindle：流式版式下阅读器强制留页边距，固定版式才能整页铺满，
     /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
     pub comic_fixed_layout: bool,
-    /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。kindle 写 `azw3`：文字书出 KFX，
-    /// 漫画仍出真机验证过的 AZW3 固定版式（KFX 固定版式没做，用户 2026-10-05 定）。
+    /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。内置模式都不写（kindle 2026-10-05
+    /// 曾经写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式。
     pub comic_format: Option<Format>,
 }
 
@@ -312,8 +312,7 @@ mod tests {
         assert_eq!(ids, ["ireader", "kindle", "xochitl"]);
         let k = get("kindle").unwrap();
         assert_eq!((k.format(), k.output_readable()), (Format::Kfx, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
-        assert_eq!((k.format_for(false), k.format_for(true)), (Format::Kfx, Format::Azw3), "kindle：文字书 KFX、漫画 AZW3");
-        assert_eq!(k.readable(Format::Azw3), k.readable(Format::Kfx));
+        assert_eq!((k.format_for(false), k.format_for(true)), (Format::Kfx, Format::Kfx), "kindle：文字书、漫画都出 KFX");
         let i = get("ireader").unwrap();
         assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);

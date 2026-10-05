@@ -1,6 +1,6 @@
 # 电子书入库与按阅读模式优化工具
 
-在电脑上把 EPUB 和 CBZ 漫画收进一个**书库**，再按阅读器的屏幕特点**生成优化过的书**（Kindle 文字书出 KFX、漫画出 AZW3，其余出 EPUB），自己拷到设备上读。
+在电脑上把 EPUB 和 CBZ 漫画收进一个**书库**，再按阅读器的屏幕特点**生成优化过的书**（Kindle 出 KFX，其余出 EPUB），自己拷到设备上读。
 
 ![总体流程](docs/img/overview.svg)
 
@@ -29,7 +29,7 @@ booklib list                                  # 看每本书的产物在哪、�
 
 | 模式 | 给谁读 | 产物 |
 |---|---|---|
-| `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画 AZW3） |
+| `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX |
 | `ireader` | 掌阅 Ocean 5 Pro 自带阅读器；Kindle、掌阅上的 KOReader 也读它 | EPUB |
 | `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB（彩色） |
 

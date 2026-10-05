@@ -6,7 +6,7 @@
 //! - `add` 进来的单个文件（不在跟踪目录里）、网址书：`<书库>/output/<模式 id>/<名>.<扩展名>`。
 //!
 //! 产物格式按模式：EPUB 直接是优化结果；KFX、AZW3（Kindle）是同一份优化结果再转一次（`kfx`、`azw3` crate）。
-//! kindle 模式文字书出 KFX、漫画出 AZW3（profile 的 `comic_format`，见 [`Library::output_format`]）。
+//! profile 可以给漫画另配格式（`comic_format`，见 [`Library::output_format`]）；内置模式都不用（kindle 文字书、漫画都出 KFX）。
 //!
 //! 生成记录 `<书库>/output-state/<模式 id>.json`：书 id → 产物绝对路径、产物根目录、指纹。产物位置变了（原件移动、
 //! 改名换了目录，书名改了）时删掉旧位置的文件——**只删记录里记着的文件**，不认识的文件一概不动；删完顺带删掉
@@ -128,7 +128,7 @@ impl Library {
         Ok(Plan { fingerprint, format })
     }
 
-    /// 这本书在这个模式下的产物格式：profile 给漫画另配了格式（kindle：漫画 AZW3、文字书 KFX）时要先判断是不是漫画
+    /// 这本书在这个模式下的产物格式：profile 给漫画另配了格式（`comic_format`）时要先判断是不是漫画
     /// （同优化器的判定，按内容哈希缓存）。
     pub(crate) fn output_format(&self, meta: &Meta, device: &Profile) -> Result<Format, String> {
         if device.format_for(true) == device.format_for(false) {

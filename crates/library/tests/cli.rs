@@ -65,7 +65,7 @@ fn devices_lists_the_three_modes() {
     let o = booklib(Some(&dir.path().join("lib")), &["devices"]);
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     let out = stdout(&o);
-    for (id, fmt) in [("ireader", "EPUB"), ("kindle", "KFX（漫画 AZW3）"), ("xochitl", "EPUB")] {
+    for (id, fmt) in [("ireader", "EPUB"), ("kindle", "KFX"), ("xochitl", "EPUB")] {
         assert!(out.lines().any(|l| l.starts_with(id) && l.contains(fmt)), "{id} {fmt}：{out}");
     }
 }
