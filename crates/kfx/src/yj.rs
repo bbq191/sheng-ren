@@ -15,6 +15,9 @@ pub const T_NAV_ROOTS: u32 = 389;
 pub const T_NAV_CONTAINER: u32 = 391;
 pub const T_NAV_EMPTY: u32 = 395;
 pub const T_RAW_MEDIA: u32 = 417;
+/// 嵌入字体：字体片段（字体名、字形、字重、宽度、资源路径）和字体字节。
+pub const T_FONT: u32 = 262;
+pub const T_RAW_FONT: u32 = 418;
 pub const T_MANIFEST: u32 = 419;
 pub const T_METADATA: u32 = 490;
 pub const T_DOCUMENT_DATA: u32 = 538;
@@ -64,6 +67,8 @@ pub const P_FONT_FAMILY: u32 = 11;
 /// 推测：font-style（样本里只见过 `$382`，没对上原书）。
 pub const P_FONT_STYLE: u32 = 12;
 pub const P_FONT_WEIGHT: u32 = 13;
+/// 推测：font-stretch（只在字体片段里见过，取 `$350`）。
+pub const P_FONT_STRETCH: u32 = 15;
 pub const P_FONT_SIZE: u32 = 16;
 pub const P_COLOR: u32 = 19;
 pub const P_INLINE_BACKGROUND: u32 = 21;
@@ -94,8 +99,12 @@ pub const ALIGN_LEFT: u32 = 59;
 pub const ALIGN_RIGHT: u32 = 61;
 pub const ALIGN_CENTER: u32 = 320;
 pub const ALIGN_JUSTIFY: u32 = 321;
-pub const WEIGHT_BOLD: u32 = 350;
-pub const WEIGHT_NORMAL: u32 = 361;
+/// 2026-10-05 对照改正：以前写反了（ABC 的 `.contents-chapter{font-weight:bold}` 是 `$361`，`.bodycontent-title{font-weight:normal}` 是 `$350`；
+/// 《绍宋》字体片段 `$262` 的字形、字重、宽度都写 `$350`＝normal）。
+pub const WEIGHT_BOLD: u32 = 361;
+pub const WEIGHT_NORMAL: u32 = 350;
+/// 字形、宽度的 normal（和字重的 normal 同一个符号）。
+pub const FONT_NORMAL: u32 = 350;
 /// 推测：italic。
 pub const STYLE_ITALIC: u32 = 382;
 pub const VALIGN_SUPER: u32 = 370;

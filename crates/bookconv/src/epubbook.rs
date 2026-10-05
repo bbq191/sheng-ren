@@ -122,6 +122,8 @@ pub struct Loaded {
     pub docs: Vec<Doc>,
     pub css: Vec<(String, String)>,
     pub images: Vec<Image>,
+    /// 嵌入的字体文件（TrueType/OpenType，按文件头认；WOFF 不收）：(路径, 字节)。KFX 写出器用，AZW3 不嵌字体。
+    pub fonts: Vec<(String, Vec<u8>)>,
     pub cover: Option<String>,
     pub toc: Vec<TocItem>,
 }
@@ -148,6 +150,11 @@ fn webp_to_png(b: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// TrueType / OpenType 字体的文件头。
+fn is_sfnt(b: &[u8]) -> bool {
+    matches!(b.get(..4), Some([0, 1, 0, 0] | b"OTTO" | b"true" | b"ttcf"))
+}
+
 /// 读 EPUB。`warnings` 收集放不进 AZW3 的内容（不认识的图片格式）。
 pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
     let mut entries = read_entries(epub)?;
@@ -165,6 +172,7 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
     let mut cover: Option<String> = None;
     let mut css = Vec::new();
     let mut images = Vec::new();
+    let mut fonts = Vec::new();
     let mut unsupported = Vec::new();
     for it in manifest_items(&opf_text) {
         let path = posix_norm(&resolve(&opf.dir, &percent_decode(it.href)));
@@ -180,6 +188,8 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
             images.push(Image { path, bytes: std::mem::take(&mut entries[i].data), mime });
         } else if let Some(png) = is_webp(&entries[i].data).then(|| webp_to_png(&entries[i].data)).flatten() {
             images.push(Image { path, bytes: png, mime: "image/png" });
+        } else if is_sfnt(&entries[i].data) {
+            fonts.push((path, std::mem::take(&mut entries[i].data)));
         } else if it.media_type.starts_with("image/") {
             unsupported.push(path);
         }
@@ -221,7 +231,7 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
     let doc_paths: std::collections::HashSet<&str> = docs.iter().map(|d| d.path.as_str()).collect();
     toc.retain(|t| !t.label.trim().is_empty() && doc_paths.contains(t.path.as_str()));
     clamp_levels(&mut toc);
-    Ok(Loaded { meta, docs, css, images, cover, toc })
+    Ok(Loaded { meta, docs, css, images, fonts, cover, toc })
 }
 
 /// 去掉目录项后层级可能断档（0 → 2）：每一项最多比前一项深一级。KF8 目录索引的父子区间依赖这一点。

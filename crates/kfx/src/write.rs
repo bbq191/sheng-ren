@@ -434,6 +434,8 @@ struct Builder {
     anchor_index: HashMap<(String, String), u32>,
     /// 标题（级别, 节点 id），按书里的顺序。
     headings: Vec<(u8, i64)>,
+    /// 样式里用到的字体名（嵌入字体只嵌这些）。
+    used_fonts: std::collections::BTreeSet<String>,
 }
 
 impl Builder {
@@ -466,6 +468,11 @@ impl Builder {
     /// 样式去重：属性一样的共用一个样式片段。
     fn style(&mut self, mut props: Vec<(u32, Value)>) -> u32 {
         props.sort_by_key(|(k, _)| *k);
+        for (k, v) in &props {
+            if let (P_FONT_FAMILY, Value::String(f)) = (*k, v) {
+                self.used_fonts.insert(f.clone());
+            }
+        }
         let mut key = Vec::new();
         ion::encode_value(&mut key, &Value::Struct(props.clone()));
         let key: String = key.iter().map(|b| format!("{b:02x}")).collect();
@@ -758,6 +765,7 @@ pub fn epub_to_kfx(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), S
         anchors: Vec::new(),
         anchor_index: HashMap::new(),
         headings: Vec::new(),
+        used_fonts: Default::default(),
     };
     // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字：元数据 `cover_image` 也是按「这个名字的符号编号 − 9」
     // 找封面资源的（6 本样本的 `e6` 减 9 都正好是封面 JPEG 的 `$164`；书架缩略图靠它，2026-10-05 真机）。
@@ -782,6 +790,8 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     let mut entities: Vec<Entity> = Vec::new();
     let mut id_map: HashMap<(String, String), (i64, usize)> = HashMap::new();
     let mut cover_tmpl: Option<i64> = None;
+    // 没有可见内容的文件（只有隐藏标题之类）：目录项、链接改指到下一个版面的开头。
+    let mut empty_docs: Vec<String> = Vec::new();
 
     for (si, doc) in book.docs.iter().enumerate() {
         let html = Html::parse_document(&doc.html);
@@ -809,6 +819,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         }
         collapse_siblings(&mut blocks);
         if blocks.is_empty() {
+            empty_docs.push(doc.path.clone());
             continue;
         }
         let sec_name = b.sym(&format!("sec{si}"));
@@ -820,6 +831,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let single_image = blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. });
         let nodes: Vec<Value> = blocks.iter().filter_map(|bl| b.node(bl, 1.0, &mut ctx)).collect();
         if nodes.is_empty() {
+            empty_docs.push(doc.path.clone());
             continue;
         }
         let mut tmpl = vec![(EID, Value::Int(tmpl_eid)), (STORYLINE_REF, Value::Symbol(story_name))];
@@ -843,6 +855,9 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         }
         let first_eid = ctx.order.get(1).map_or(tmpl_eid, |o| o.0);
         id_map.insert((doc.path.clone(), String::new()), (first_eid, 0));
+        for p in empty_docs.drain(..) {
+            id_map.insert((p, String::new()), (first_eid, 0));
+        }
         for (i, e, o) in &ctx.ids {
             id_map.entry((doc.path.clone(), i.clone())).or_insert((*e, *o));
         }
@@ -858,6 +873,11 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     }
     if sections.is_empty() {
         return Err("书里没有可显示的内容".into());
+    }
+    if let Some(last) = sections.last() {
+        for p in empty_docs.drain(..) {
+            id_map.insert((p, String::new()), (last.first_eid, 0));
+        }
     }
     // 封面图即使没出现在正文里也要带上（书架缩略图）。
     let cover_res = book.cover.as_deref().and_then(|c| b.resource(c));
@@ -875,22 +895,58 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     }
     let res_list: Vec<(String, String, u32, &'static str, u32, u32)> =
         b.resources.iter().map(|r| (r.name.clone(), r.location.clone(), r.format, r.mime, r.width, r.height)).collect();
+    // 嵌入字体：样式里用到、书里有 `@font-face` 和字体文件的（正文、批注的字体优化器已经去掉，不会出现在这里）。
+    let mut faces: HashMap<String, crate::css::FontFace> = HashMap::new();
+    for (path, text) in &book.css {
+        for f in crate::css::font_faces(text, path) {
+            faces.entry(f.family.to_lowercase()).or_insert(f);
+        }
+    }
+    let font_files: HashMap<&str, &Vec<u8>> = book.fonts.iter().map(|(p, b)| (p.as_str(), b)).collect();
+    let fonts: Vec<(String, crate::css::FontFace, Vec<u8>)> = b
+        .used_fonts
+        .iter()
+        .filter_map(|f| {
+            let face = faces.get(&f.to_lowercase())?;
+            let bytes = font_files.get(face.path.as_str())?;
+            Some((f.clone(), face.clone(), (*bytes).clone()))
+        })
+        .collect();
+    // 字节实体名、资源路径：图片在前、字体在后，一起按组分配符号。
+    let mut raws: Vec<(String, String)> = res_list.iter().enumerate().map(|(i, (name, loc, ..))| (raw_name(i, name), loc.clone())).collect();
+    raws.extend((0..fonts.len()).map(|i| (format!("font{i}-ad"), format!("resource/font{i}"))));
     // 图片字节实体和资源路径的符号要隔 9 个：Kindle 按「`$165` 资源路径的符号编号 − 9」找图片字节
     // （6 本样本 443 个资源全是这样；只改资源路径或只给字节实体改名，书架缩略图就没了，2026-10-05 真机）。
     // 每 9 个资源一组：先这组的字节实体名，不满 9 个用占位符号补齐，再这组的资源路径。
-    let mut raw_sids = vec![0u32; res_list.len()];
-    for (g, chunk) in res_list.chunks(SID_GAP as usize).enumerate() {
+    let mut raw_sids = vec![0u32; raws.len()];
+    for (g, chunk) in raws.chunks(SID_GAP as usize).enumerate() {
         let base = g * SID_GAP as usize;
-        for (k, (name, ..)) in chunk.iter().enumerate() {
-            raw_sids[base + k] = b.sym(&raw_name(base + k, name));
+        for (k, (raw, _)) in chunk.iter().enumerate() {
+            raw_sids[base + k] = b.sym(raw);
         }
         for k in chunk.len()..SID_GAP as usize {
             b.sym(&format!("pad{g}-{k}"));
         }
-        for (k, (_, loc, ..)) in chunk.iter().enumerate() {
+        for (k, (_, loc)) in chunk.iter().enumerate() {
             let l = b.sym(loc);
             debug_assert_eq!(l, raw_sids[base + k] + SID_GAP);
         }
+    }
+    for (i, (family, face, bytes)) in fonts.into_iter().enumerate() {
+        let (raw, loc) = &raws[res_list.len() + i];
+        entities.push(ent(
+            NO_NAME,
+            T_FONT,
+            Value::Struct(vec![
+                (P_FONT_FAMILY, Value::String(family)),
+                (P_FONT_STYLE, Value::Symbol(if face.italic { STYLE_ITALIC } else { FONT_NORMAL })),
+                (P_FONT_WEIGHT, Value::Symbol(if face.bold { WEIGHT_BOLD } else { WEIGHT_NORMAL })),
+                (P_FONT_STRETCH, Value::Symbol(FONT_NORMAL)),
+                (RES_LOCATION, Value::String(loc.clone())),
+            ]),
+        ));
+        let id = b.local_index[raw];
+        entities.push(Entity { id, ty: T_RAW_FONT, version: 1, header: entity_header(), body: Body::Raw(bytes) });
     }
     for (i, (name, loc, format, mime, w, h)) in res_list.iter().enumerate() {
         let n = b.sym(name);
@@ -1051,7 +1107,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         kv("book_id", s(&book_id)),
         kv("title", s(&book.meta.title)),
         kv("publisher", s(&book.meta.publisher)),
-        kv("language", s(book_lang.as_deref().unwrap_or("zh"))),
+        kv("language", s(&meta_language(book_lang.as_deref()))),
         kv("issue_date", s(book.meta.date.get(..10).unwrap_or("2000-01-01"))),
         kv("content_id", s(&content_id)),
         kv("cde_content_type", s("PDOC")),
@@ -1181,6 +1237,17 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     Ok(c.to_bytes())
 }
 
+/// 元数据里写的语言。中文书写 `en`：Kindle 只看元数据语言决定开不开「Aa → 间距」里的段间距、字间距、字符间距，
+/// 中文书不开；正文样式里的 `$10` 仍是书本身的语言，中文排版（字体、避头尾、标点挤压）不受影响。代价是长按查词
+/// 默认弹英文词典，要在右下角手动切到中文词典（用户 2026-10-05 选的，真机「封面结构63」）。
+fn meta_language(book_lang: Option<&str>) -> String {
+    match book_lang {
+        Some(l) if l.to_ascii_lowercase().starts_with("zh") => "en".to_string(),
+        Some(l) => l.to_string(),
+        None => "en".to_string(),
+    }
+}
+
 fn close_level(stack: &mut Vec<(u32, Vec<Value>)>) {
     let Some((_, kids)) = stack.pop() else { return };
     if kids.is_empty() {
@@ -1228,6 +1295,10 @@ mod tests {
         // 封面：`cover_image` 的符号编号 − 9 = 封面资源；字节实体叫 `$538.$597.$614` + `-ad`。
         let meta = format!("{:?}", of(T_METADATA).next().unwrap().value().unwrap());
         assert!(meta.contains(&format!("String({COVER_REF:?})")), "{meta}");
+        // 中文书的元数据语言写 en（开间距设置），正文样式里仍是 zh。
+        assert!(meta.contains(r#"String("language")), (307, String("en"))"#), "{meta}");
+        let styles = format!("{:?}", of(T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(styles.contains(r#"(10, String("zh"))"#), "{styles}");
         assert_eq!(syms.sid(COVER_REF).unwrap() - SID_GAP, res.field(RESOURCE_REF).unwrap().as_symbol().unwrap());
         let aux = of(T_DOCUMENT_DATA).next().unwrap().value().unwrap().field(DOC_AUX).unwrap().field(DOC_AUX_NAME).unwrap().as_symbol().unwrap();
         assert_eq!(syms.display(raw.id), format!("{}-ad", syms.display(aux)));

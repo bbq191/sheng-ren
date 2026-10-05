@@ -243,6 +243,43 @@ impl Sheet {
     }
 }
 
+/// 一条 `@font-face`：字体名、字体文件（相对书根的路径）、是不是粗体、斜体。
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontFace {
+    pub family: String,
+    pub path: String,
+    pub bold: bool,
+    pub italic: bool,
+}
+
+/// 样式表里的 `@font-face`（只收 `src` 里有 `url()` 指到书内文件的）。`base` 是样式表所在文件的路径。
+pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
+    let css = strip_comments(css);
+    let mut out = Vec::new();
+    let mut rest: &str = &css;
+    while let Some(at) = rest.to_ascii_lowercase().find("@font-face") {
+        let Some(open) = rest[at..].find('{').map(|o| at + o) else { break };
+        let Some(close) = matching_brace(rest, open) else { break };
+        let decls = parse_decls(&rest[open + 1..close]);
+        let get = |k: &str| decls.iter().rev().find(|d| d.prop == k).map(|d| d.value.as_str());
+        let family = get("font-family").map(|f| f.trim().trim_matches(['"', '\'']).to_string()).filter(|f| !f.is_empty());
+        let url = get("src").and_then(|src| {
+            let i = src.to_ascii_lowercase().find("url(")?;
+            let after = &src[i + 4..];
+            let j = after.find(')')?;
+            let raw = after[..j].trim().trim_matches(['"', '\'']).trim();
+            (!raw.is_empty() && !raw.contains("://") && !raw.starts_with("data:")).then(|| bookconv::epubzip::resolve_link(base, raw).0)
+        });
+        if let (Some(family), Some(path)) = (family, url) {
+            let bold = get("font-weight").is_some_and(|w| matches!(w.trim(), "bold" | "bolder") || w.trim().parse::<u32>().is_ok_and(|n| n >= 600));
+            let italic = get("font-style").is_some_and(|v| matches!(v.trim(), "italic" | "oblique"));
+            out.push(FontFace { family, path, bold, italic });
+        }
+        rest = &rest[close + 1..];
+    }
+    out
+}
+
 // ---------------------------------------------------------------- 值
 
 /// 长度。`Em` 相对元素自己的字号。
@@ -478,6 +515,14 @@ mod tests {
         let d = s.cascade(&p);
         assert_eq!(d.get("color").map(String::as_str), Some("blue"));
         assert_eq!(d.get("text-indent").map(String::as_str), Some("2em"));
+    }
+
+    #[test]
+    fn font_face_urls() {
+        let f = font_faces(r#"@font-face{font-family:"宋体";src:local("st")}@font-face{font-family:"juan";src:url("../Fonts/juan.ttf")}@font-face{font-family:'b';font-weight:bold;src:local(x),url(../Fonts/b.ttf) format("truetype")}"#, "OEBPS/Styles/s.css");
+        assert_eq!(f.len(), 2);
+        assert_eq!(f[0], FontFace { family: "juan".into(), path: "OEBPS/Fonts/juan.ttf".into(), bold: false, italic: false });
+        assert!(f[1].bold && f[1].path == "OEBPS/Fonts/b.ttf");
     }
 
     #[test]
