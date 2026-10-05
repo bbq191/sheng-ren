@@ -139,6 +139,10 @@ pub const P_FONT_VARIANT: u32 = 583;
 pub const SMALL_CAPS: u32 = 369;
 pub const P_LETTER_SPACING: u32 = 32;
 pub const P_WIDTH: u32 = 56;
+pub const P_HEIGHT: u32 = 57;
+/// 推测：尺寸按内容盒算（有宽度的样式上常见 `$546: $377`）。
+pub const P_SIZING: u32 = 546;
+pub const SIZING_VALUE: u32 = 377;
 /// 推测：排版提示（标题样式上是 `[$760]`，表格标题上是 `[$453]`）。
 pub const P_LAYOUT_HINTS: u32 = 761;
 /// 单元格：跨列、跨行、竖直对齐（`$58` top、`$320` middle、`$60` bottom）。
@@ -233,3 +237,17 @@ pub const CAPABILITIES: u32 = 593;
 /// 文档数据里指向文档级附加数据的字段：`$597: {$614: 名字}`；封面图实体名＝这个名字 + `-ad`。
 pub const DOC_AUX: u32 = 597;
 pub const DOC_AUX_NAME: u32 = 614;
+// ---- 固定版式（2026-10-05 Send to Kindle 测试漫画对照，见 docs/kfx.md#固定版式）
+/// 文档数据、固定版式版面上的翻页方向：`$557` 从左往右、`$559` 从右往左。
+pub const DOC_DIRECTION: u32 = 560;
+pub const DIR_LTR: u32 = 557;
+pub const DIR_RTL: u32 = 559;
+/// 推测：书写方向（横排 `$376`）。
+pub const DOC_WRITING_MODE: u32 = 192;
+pub const WRITING_HORIZONTAL: u32 = 376;
+/// 文档数据上的固定版式标记 `$433: $385`（流式的书没有）。
+pub const DOC_FIXED: u32 = 433;
+pub const DOC_FIXED_VALUE: u32 = 385;
+/// 固定版式版面上的 `$434: $441`（含义不明，照样本）。
+pub const FIXED_PAGE_FIT: u32 = 434;
+pub const FIXED_PAGE_FIT_VALUE: u32 = 441;

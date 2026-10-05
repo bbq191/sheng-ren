@@ -70,10 +70,11 @@ fn cbz_becomes_comic_epub_master_and_drm_epub_is_refused() {
     let Built::Written { path, .. } = lib.build(&m, profile::get("xochitl").unwrap(), false).unwrap() else { panic!() };
     let names: Vec<String> = bookconv::epubzip::read_entries(&std::fs::read(path).unwrap()).unwrap().into_iter().map(|e| e.name).collect();
     assert_eq!(names.iter().filter(|n| n.contains("images/p")).count(), 3, "{names:?}");
-    // kindle：漫画仍出 AZW3（固定版式），文字书才出 KFX
+    // kindle：漫画也出 KFX（固定版式）
     let Built::Written { path, .. } = lib.build(&m, profile::get("kindle").unwrap(), false).unwrap() else { panic!() };
-    assert_eq!(path.extension().and_then(|e| e.to_str()), Some("azw3"));
-    assert_eq!(&std::fs::read(path).unwrap()[60..68], b"BOOKMOBI");
+    assert_eq!(path.extension().and_then(|e| e.to_str()), Some("kfx"));
+    let meta = format!("{:?}", kfx::Container::parse(&std::fs::read(path).unwrap()).unwrap().entities.iter().filter(|e| e.ty == 490).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+    assert!(meta.contains("yj_fixed_layout"), "{meta}");
 
     let drm = dir.path().join("加密.epub");
     {
