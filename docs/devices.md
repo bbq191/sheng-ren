@@ -22,7 +22,7 @@
 | `formats`（必填） | 产物格式 | `["azw3"]` | `["epub"]` | `["epub"]` | Kindle 自带阅读器 USB 传书只认 AZW3；`azw3` 是先按同样规则优化出 EPUB 再转 |
 | `color`（必填） | 彩色屏 | `false` | `false` | `true` | 黑白屏的漫画转 256 级灰度 |
 | `[screen]`、`[readable.<格式>]` | 屏幕、真实可阅读范围（不写 = 屏幕） | 1272×1696、1104×1546 | 整屏 | 954×1696、842×1455 | 阅读器各自留页边距、页眉页脚，见[可阅读范围](#可阅读范围) |
-| `notes`（必填） | `"jump"` 点标号跳到章末；`"popup"` 标成弹窗注释 | jump | jump | jump | 三台都不弹窗；`popup` 留给自定义模式 |
+| `notes`（必填） | `"jump"` 点标号跳到章末；`"popup"` 标成弹窗注释 | jump | popup | jump | 掌阅自带阅读器认弹窗（2026-10-05 真机）；Kindle 的 AZW3 不认（KFX 由写出器另写弹窗，见 [KFX](kfx.md)）；xochitl 只认同文件跳转 |
 | `note_icons`（`"keep"`） | 只有图标的注释标号：保留图标，或换成上标数字 | number | number | number | xochitl 里只有图的链接点不了、CSS 限不住图标；另两台也用数字，都验证过能跳 |
 | `note_backlinks`（`true`） | 保留注释里"跳回正文"的回链 | 保留 | 保留 | 去掉 | Kindle 点注释后没有可靠的"返回"，要靠回链；xochitl 遇到互相链接的一对会整对丢掉（正向也点不动） |
 | `comic_margin`（1） | 漫画的图到画布四边的白边（像素） | 1 | 1 | 0 | xochitl 页边距设成 1 后自己就留了 1px |
