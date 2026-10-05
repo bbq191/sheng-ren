@@ -177,9 +177,9 @@ pub(super) fn svg_cover_to_img(html_text: &str) -> String {
 
 /// 第一遍 html 处理：归一同文件 href（part0004.html#x 写在 part0004.html 里→改裸锚 #x，否则下面
 /// referenced/搬注释/拆环全把同章脚注误当跨文件）→ 剥字体锁。
-pub(super) fn first_pass_html(text: &str, name: &str) -> String {
+pub(super) fn first_pass_html(text: &str, name: &str, keep_fonts: &HashSet<String>) -> String {
     let text = crate::htmlproc::normalize_self_hrefs(text, name);
-    crate::htmlproc::strip_font_locks(&text)
+    crate::htmlproc::strip_font_locks_keeping(&text, keep_fonts)
 }
 
 /// 图片最终变换：按漫画/文字书分流（漫画只裁边/适配阅读范围，画质优先）。

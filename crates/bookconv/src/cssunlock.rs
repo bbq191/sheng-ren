@@ -4,7 +4,7 @@
 //!
 //! | 属性 | 处理 |
 //! |---|---|
-//! | `font-family` | 去掉（字体交给阅读器） |
+//! | `font-family` | 去掉（字体交给阅读器）；书里嵌了文件、又不是正文字体的保留（用户 2026-10-05，见 `wash::fonts`） |
 //! | `font-size` | 绝对单位（px/pt/cm…、`medium` 这类关键字）去掉；相对单位（em/%/rem/ex/ch、`smaller`/`larger`）保留——标题、小字、上标的层次是原书的样式，随阅读器字号一起缩放，不算锁；但正文整体那一层（`body`/`html`、不带类的 `p`/`div`）上的相对字号也去掉，否则全书正文被缩放一遍，阅读器里设的字号就不是实际字号 |
 //! | `font` 简写 | 拆开：字体、字号、行高去掉，`font-style`/`font-weight`/`font-variant` 保留成分项 |
 //! | `line-height` | 去掉（2026-09-27 用户定：写死的行高让阅读器的"行距"不起作用） |
@@ -12,6 +12,8 @@
 //! | `background-image` | 去掉（同上） |
 //!
 //! 这些属性要在调用方的过滤清单里（`WashOpts::filter_props`）才处理；不在清单里的原样保留。
+
+use std::collections::HashSet;
 
 /// 一条声明怎么处理。
 #[derive(Debug, PartialEq, Eq)]
@@ -23,8 +25,10 @@ pub enum Unlock {
 }
 
 /// 判断一条（已在过滤清单里的）声明。`base_text` = 这条声明作用在正文整体那一层（`body`/`html`、不带类的 `p`/`div`）。
-pub fn unlock(prop: &str, value: &str, base_text: bool) -> Unlock {
+/// `keep_fonts`：保留的字体（规范化的名字，见 `wash::fonts::norm_family`）；`font-family` 的第一个字体在里面就保留。
+pub fn unlock(prop: &str, value: &str, base_text: bool, keep_fonts: &HashSet<String>) -> Unlock {
     match prop.to_ascii_lowercase().as_str() {
+        "font-family" if crate::wash::fonts::norm_family(value).is_some_and(|f| keep_fonts.contains(&f)) => Unlock::Keep,
         "font-family" | "line-height" | "background-image" => Unlock::Drop,
         "font-size" => {
             if !base_text && is_relative_size(value) {
@@ -156,40 +160,49 @@ mod tests {
     #[test]
     fn font_size_relative_kept_absolute_dropped() {
         for v in ["0.8em", "120%", "1.2rem", "smaller", "larger", "calc(1em + 10%)", "0.9em !important"] {
-            assert_eq!(unlock("font-size", v, false), Unlock::Keep, "{v}");
+            assert_eq!(unlock("font-size", v, false, &HashSet::new()), Unlock::Keep, "{v}");
         }
         for v in ["12px", "10.5pt", "medium", "x-large", "calc(1em + 2px)", "0", "small"] {
-            assert_eq!(unlock("font-size", v, false), Unlock::Drop, "{v}");
+            assert_eq!(unlock("font-size", v, false, &HashSet::new()), Unlock::Drop, "{v}");
         }
-        assert_eq!(unlock("font-size", "0.9em", true), Unlock::Drop, "正文整体那一层的相对字号也去掉");
+        assert_eq!(unlock("font-size", "0.9em", true, &HashSet::new()), Unlock::Drop, "正文整体那一层的相对字号也去掉");
+    }
+
+    #[test]
+    fn font_family_kept_only_when_in_keep_set() {
+        let keep: HashSet<String> = ["letter".to_string()].into();
+        assert_eq!(unlock("font-family", "\"letter\", serif", false, &keep), Unlock::Keep);
+        assert_eq!(unlock("font-family", "'Letter' !important", false, &keep), Unlock::Keep, "大小写、引号、!important 不影响");
+        assert_eq!(unlock("font-family", "\"宋体\"", false, &keep), Unlock::Drop);
+        assert_eq!(unlock("font-family", "serif, letter", false, &keep), Unlock::Drop, "只看第一个字体");
     }
 
     #[test]
     fn font_shorthand_keeps_style_and_weight() {
         assert_eq!(
-            unlock("font", "italic bold 12px/30px Georgia, serif", false),
+            unlock("font", "italic bold 12px/30px Georgia, serif", false, &HashSet::new()),
             Unlock::Replace(vec!["font-style:italic".into(), "font-weight:bold".into()])
         );
-        assert_eq!(unlock("font", "700 1em \"Foo\" !important", false), Unlock::Replace(vec!["font-weight:700 !important".into()]));
-        assert_eq!(unlock("font", "normal small-caps 10pt serif", false), Unlock::Replace(vec!["font-variant:small-caps".into()]));
-        assert_eq!(unlock("font", "12px serif", false), Unlock::Drop);
-        assert_eq!(unlock("font", "caption", false), Unlock::Drop);
+        assert_eq!(unlock("font", "700 1em \"Foo\" !important", false, &HashSet::new()), Unlock::Replace(vec!["font-weight:700 !important".into()]));
+        assert_eq!(unlock("font", "normal small-caps 10pt serif", false, &HashSet::new()), Unlock::Replace(vec!["font-variant:small-caps".into()]));
+        assert_eq!(unlock("font", "12px serif", false, &HashSet::new()), Unlock::Drop);
+        assert_eq!(unlock("font", "caption", false, &HashSet::new()), Unlock::Drop);
     }
 
     #[test]
     fn background_keeps_only_color() {
-        assert_eq!(unlock("background", "url(a.png) no-repeat #eee", false), Unlock::Replace(vec!["background-color:#eee".into()]));
-        assert_eq!(unlock("background", "rgb(0, 0, 0) url(\"x y.png\")", false), Unlock::Replace(vec!["background-color:rgb(0, 0, 0)".into()]));
-        assert_eq!(unlock("background", "LightYellow", false), Unlock::Replace(vec!["background-color:LightYellow".into()]));
-        assert_eq!(unlock("background", "url(a.png) no-repeat center", false), Unlock::Drop);
-        assert_eq!(unlock("background", "none", false), Unlock::Drop);
-        assert_eq!(unlock("background-image", "url(a.png)", false), Unlock::Drop);
+        assert_eq!(unlock("background", "url(a.png) no-repeat #eee", false, &HashSet::new()), Unlock::Replace(vec!["background-color:#eee".into()]));
+        assert_eq!(unlock("background", "rgb(0, 0, 0) url(\"x y.png\")", false, &HashSet::new()), Unlock::Replace(vec!["background-color:rgb(0, 0, 0)".into()]));
+        assert_eq!(unlock("background", "LightYellow", false, &HashSet::new()), Unlock::Replace(vec!["background-color:LightYellow".into()]));
+        assert_eq!(unlock("background", "url(a.png) no-repeat center", false, &HashSet::new()), Unlock::Drop);
+        assert_eq!(unlock("background", "none", false, &HashSet::new()), Unlock::Drop);
+        assert_eq!(unlock("background-image", "url(a.png)", false, &HashSet::new()), Unlock::Drop);
     }
 
     #[test]
     fn other_listed_props_dropped() {
-        assert_eq!(unlock("font-weight", "bold", false), Unlock::Drop, "调用方额外加进清单的属性整条去掉");
-        assert_eq!(unlock("font-family", "Foo", false), Unlock::Drop);
-        assert_eq!(unlock("line-height", "1.5", false), Unlock::Drop);
+        assert_eq!(unlock("font-weight", "bold", false, &HashSet::new()), Unlock::Drop, "调用方额外加进清单的属性整条去掉");
+        assert_eq!(unlock("font-family", "Foo", false, &HashSet::new()), Unlock::Drop);
+        assert_eq!(unlock("line-height", "1.5", false, &HashSet::new()), Unlock::Drop);
     }
 }

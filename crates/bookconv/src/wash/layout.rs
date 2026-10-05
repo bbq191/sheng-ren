@@ -164,6 +164,11 @@ fn trim_tail(html: &str, referenced: &HashSet<String>, drawn: &Drawn) -> (String
                     return whole.to_string();
                 }
                 n += 1;
+                // 自闭合的 `<span …/>` 被第一种写法当成了开始标签、和后面别人的闭合标签（`</p>`）配成一对：只删它自己，
+                // 闭合标签留着（2026-10-05：章名 `<p>第十九章<span/></p>` 单独成一份后落在末尾，`</p>` 被删、XML 不合法）。
+                if open.trim_end_matches('>').trim_end().ends_with('/') && open.len() < whole.len() {
+                    return whole[open_end..].to_string();
+                }
                 String::new()
             })
             .into_owned();

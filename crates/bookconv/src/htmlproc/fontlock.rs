@@ -10,13 +10,18 @@ use super::*;
 /// 只认名字正好是 `style` 的属性（2026-09-27 审计：旧正则 `\s*style="` 没有左边界，`data-style=""`、
 /// SVG 的 `font-style=""` 也被当成 style 改写，产出非法 XML）；值按声明切（引号/括号/字符引用里的 `;` 不算）。
 pub fn strip_font_locks(html: &str) -> String {
+    strip_font_locks_keeping(html, &std::collections::HashSet::new())
+}
+
+/// 同 [`strip_font_locks`]，`keep_fonts` 里的字体保留（嵌了文件、又不是正文字体的，见 `wash::fonts`）。
+pub fn strip_font_locks_keeping(html: &str, keep_fonts: &std::collections::HashSet<String>) -> String {
     use crate::cssunlock::{unlock, Unlock};
     html::edit_attrs(html, &["style"], |t, a| {
         let base_text = matches!(t.name.to_ascii_lowercase().as_str(), "body" | "html");
         let decls = html::css_decls(a.value);
         let font = |d: &html::CssDecl| ["font", "font-family", "font-size"].iter().any(|p| d.prop.eq_ignore_ascii_case(p));
         let edits: Vec<(&html::CssDecl, Unlock)> =
-            decls.iter().filter(|d| font(d)).map(|d| (d, unlock(d.prop, d.value, base_text))).filter(|(_, u)| *u != Unlock::Keep).collect();
+            decls.iter().filter(|d| font(d)).map(|d| (d, unlock(d.prop, d.value, base_text, keep_fonts))).filter(|(_, u)| *u != Unlock::Keep).collect();
         if edits.is_empty() {
             return Edit::Keep;
         }

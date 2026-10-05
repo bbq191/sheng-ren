@@ -311,7 +311,7 @@ pub fn wash_css(opts: &WashOpts) -> String {
     //   profile 的 note_icons = "number"（图标换成数字）时优化器第二遍按同一个常量 [`NOTEICON_RULE`] 把这条删掉。
     let latin = if opts.lang == LangMode::Latin { "p{hyphens:auto;-webkit-hyphens:auto;orphans:2;widows:2;}\n" } else { "" };
     format!(
-        "p{{{decl}}}\n{latin}.eink-center{{text-align:center;text-indent:0.01em;}}\n.eink-right{{text-align:right;text-indent:0.01em;}}\n{flush}\nfigure{{margin:0;padding:0;}}\nfigcaption{{margin:0;padding:0;}}\n.footnotes{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-fnote{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-note{{page-break-inside:avoid;}}\n{NOTEICON_RULE}"
+        "p{{{decl}}}\n{latin}.eink-center{{text-align:center;text-indent:0.01em;}}\n.eink-right{{text-align:right;text-indent:0.01em;}}\n{flush}\nfigure{{margin:0;padding:0;}}\nfigcaption{{margin:0;padding:0;}}\n.footnotes{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-fnote{{font-size:{FOOTNOTE_FONT_SIZE};}}\nspan.eink-annot{{font-family:inherit;font-size:{FOOTNOTE_FONT_SIZE};}}\np.eink-annot{{font-family:inherit;font-size:{FOOTNOTE_FONT_SIZE};}}\ndiv.eink-annot{{font-family:inherit;font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-note{{page-break-inside:avoid;}}\n{NOTEICON_RULE}"
     )
 }
 

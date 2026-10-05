@@ -358,6 +358,70 @@ pub(super) fn restructure_existing_toc_parts(entries: &mut [Entry], mode: AutoTo
     rep.toc_parts_restructured = items.len();
 }
 
+/// 目录里任意一层的兄弟条目中有「第X部/卷/篇」、而它自己下面没有子条目时，把它后面到下一个「部」之前的兄弟条目
+/// 缩进到它下面（福尔摩斯全集里《恐怖谷》：书下面「第一部 伯尔斯通惨剧」「第一章 警讯」…「第二部」「第一章」…平排）。
+/// 第一个「部」前面的条目（书名页、前言）不动。全书一层平排的目录由 [`restructure_existing_toc_parts`] 处理（还要拆标签）。
+/// 用户 2026-10-05：目录按书/卷 → 章 → 节嵌套。返回缩进了几条。
+pub(super) fn nest_parts_among_siblings(entries: &mut [Entry], mode: AutoToc, heading: &str, rep: &mut WashReport) {
+    if mode == AutoToc::Off {
+        return;
+    }
+    let Some(opf) = parse_opf(entries) else { return };
+    let Some(ncx_path) = opf.ncx.clone() else { return };
+    let Some(e) = entries.iter().find(|e| e.name == ncx_path) else { return };
+    let Ok(ncx_text) = std::str::from_utf8(&e.data) else { return };
+    let points = crate::ncx::parse_nav_points(ncx_text);
+    if points.len() < 2 || points.iter().all(|p| p.depth == 1) {
+        return;
+    }
+    let re = part_prefix_re();
+    let is_part = |l: &str| re.is_match(&l.split_whitespace().collect::<Vec<_>>().join(" "));
+    let mut depth: Vec<usize> = points.iter().map(|p| p.depth).collect();
+    let mut moved = 0usize;
+    // 每条的子树结束位置（下一个层级不比它深的条目）。
+    let subtree_end = |depth: &[usize], i: usize| (i + 1..depth.len()).find(|&j| depth[j] <= depth[i]).unwrap_or(depth.len());
+    let mut i = 0;
+    while i < points.len() {
+        let d = depth[i];
+        let end = subtree_end(&depth, i);
+        let childless = end == i + 1;
+        if is_part(&points[i].label) && childless {
+            // 后面同一父条目下、到下一个「部」（或父条目结束）之前的兄弟条目，连子树一起深一层。
+            let mut j = end;
+            let mut last = end;
+            while j < depth.len() && depth[j] >= d {
+                if depth[j] == d && is_part(&points[j].label) {
+                    break;
+                }
+                last = j + 1;
+                j += 1;
+            }
+            if last > end {
+                for dk in &mut depth[end..last] {
+                    *dk += 1;
+                }
+                moved += (end..last).filter(|&k| depth[k] == d + 1).count();
+            }
+        }
+        i += 1;
+    }
+    if moved == 0 {
+        return;
+    }
+    let ncx_dir = dir_of(&ncx_path).to_string();
+    let items: Vec<TocItem> = points
+        .iter()
+        .zip(&depth)
+        .map(|(p, &d)| {
+            let (raw_path, frag) = html::split_href(&p.src);
+            let np = Some(p.open_tag.clone()).filter(|t| !t.is_empty());
+            TocItem { np, ..TocItem::new(d.min(255) as u8, p.label.clone(), resolve(&ncx_dir, &percent_decode(raw_path)), frag.unwrap_or("").to_string()) }
+        })
+        .collect();
+    rewrite_toc_files(entries, &opf, &ncx_path, &items, heading);
+    rep.toc_parts_restructured += moved;
+}
+
 pub(super) fn auto_toc(entries: &mut Vec<Entry>, mode: AutoToc, heading: &str, rep: &mut WashReport) {
     if mode == AutoToc::Off || (mode == AutoToc::IfMissing && toc_entry_count(entries) > 0) {
         return;
