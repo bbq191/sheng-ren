@@ -26,7 +26,7 @@ AZW3 只是**产物**格式，不是输入：入库仍然只收 EPUB、CBZ。
 
 | 步骤 | 模块 | 做法 |
 |---|---|---|
-| 读 EPUB | `book.rs` | 元数据、spine 里的 XHTML、CSS、图片（JPEG/PNG/GIF；静态 WebP 转成 PNG，像素不变）、封面、目录（NCX，没有就用 EPUB 3 nav） |
+| 读 EPUB | `bookconv::epubbook`（和 KFX 写出器共用） | 元数据、spine 里的 XHTML、CSS、图片（JPEG/PNG/GIF；静态 WebP 转成 PNG，像素不变）、封面、目录（NCX，没有就用 EPUB 3 nav） |
 | 排版 | `text.rs` | 每个 XHTML 拆成**骨架**（`<html><head>…<body aid="N"></body></html>`）和**片段**（body 里的内容），依次排成"骨架、片段、骨架、片段…"；CSS 各自一条流 |
 | 改写引用 | `text.rs` | 图片 → `kindle:embed:序号`；样式表 → `kindle:flow:序号`；书内链接 → `kindle:pos:fid:片段号:off:偏移`（base32）。标签属性用 `bookconv::html` 扫；链接目标认 `id` 和 `<a name>` |
 | 索引 | `indx.rs`、`container.rs` | 片段索引、骨架索引、目录索引（INDX + TAGX + CNCX） |
