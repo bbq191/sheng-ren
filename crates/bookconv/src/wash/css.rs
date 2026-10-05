@@ -64,6 +64,11 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
     for d in html::css_decls(decls) {
         let prop = d.prop.to_ascii_lowercase();
         let val = d.value;
+        // 保留背景图的模式（过滤清单里有 `background`、没有 `background-image`）：简写拆成分项（见 `background_longhands`）
+        if prop == "background" && filter.contains(&prop) && !filter.iter().any(|f| f == "background-image") {
+            out.extend(crate::cssunlock::background_longhands(val, !filter.iter().any(|f| f == "background-size")));
+            continue;
+        }
         if filter.contains(&prop) {
             match unlock(&prop, val, base_text, keep_fonts) {
                 Unlock::Keep => {}

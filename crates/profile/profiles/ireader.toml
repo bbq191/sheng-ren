@@ -5,6 +5,10 @@ color = false
 formats = ["epub"]
 # 注释：弹窗（2026-10-05 真机：掌阅自带阅读器认 epub:type="noteref" + <aside epub:type="footnote">，点标号弹出小窗，章末注释照常显示）
 notes = "popup"
+# 保留 CSS 背景图（分卷页、卷首语的背景），和 kindle 同一套（用户 2026-10-05）；xochitl 仍去掉（平铺满页盖住正文）。
+background_images = true
+# 背景图的尺寸、fixed 去掉：掌阅写了 background-size 会把图挤变形（2026-10-05 真机对照书）。
+background_sizing = false
 # 只有小图标的注释标号换成上标数字（图标在掌阅自带阅读器里能不能点、会不会撑大还没验证，数字最稳）
 note_icons = "number"
 # 漫画页图到可阅读范围四边留 1px；阅读范围就是整屏，所以离屏幕边缘也是 1px（用户 2026-09-29 要的意思）

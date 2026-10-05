@@ -174,12 +174,88 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
         // `text-decoration: underline solid red` 只留线的种类。
         "text-decoration" | "text-decoration-line" => vec![("text-decoration".to_string(), value.to_ascii_lowercase())],
         // background 简写只取颜色。
-        "background" => value
-            .split_whitespace()
-            .find(|t| parse_color(t).is_some())
-            .map(|c| vec![("background-color".to_string(), c.to_string())])
-            .unwrap_or_default(),
+        "background" => background_shorthand(value),
         _ => vec![(prop.to_string(), value.to_string())],
+    }
+}
+
+/// `background: url(…) bottom / 100% no-repeat fixed rgba(…)` 拆成各项（没写的不出现，不重置）。
+fn background_shorthand(value: &str) -> Vec<(String, String)> {
+    let spaced = {
+        // 把括号外的 `/` 隔开当单独的词
+        let mut out = String::new();
+        let mut depth = 0i32;
+        for c in value.chars() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            if c == '/' && depth == 0 {
+                out.push_str(" / ");
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    let (mut pos, mut size, mut after_slash) = (Vec::new(), Vec::new(), false);
+    let mut out = Vec::new();
+    for t in split_top(&spaced, ' ').into_iter().map(str::trim).filter(|t| !t.is_empty()) {
+        let l = t.to_ascii_lowercase();
+        if l.starts_with("url(") {
+            out.push(("background-image".to_string(), t.to_string()));
+        } else if l == "/" {
+            after_slash = true;
+        } else if ["repeat", "no-repeat", "repeat-x", "repeat-y", "space", "round"].contains(&l.as_str()) {
+            out.push(("background-repeat".to_string(), l));
+        } else if ["fixed", "scroll", "local"].contains(&l.as_str()) {
+            out.push(("background-attachment".to_string(), l));
+        } else if parse_color(t).is_some() || l == "transparent" {
+            out.push(("background-color".to_string(), t.to_string()));
+        } else if after_slash {
+            size.push(l);
+        } else {
+            pos.push(l);
+        }
+    }
+    if !pos.is_empty() {
+        out.push(("background-position".to_string(), pos.join(" ")));
+    }
+    if !size.is_empty() {
+        out.push(("background-size".to_string(), size.join(" ")));
+    }
+    out
+}
+
+/// `background-position` → (x, y) 百分比或长度；关键字按 CSS（只写一个时另一维居中）。
+pub fn parse_bg_position(v: &str) -> [Option<Len>; 2] {
+    let kw = |t: &str| match t {
+        "left" | "top" => Some(Len::Percent(0.0)),
+        "center" => Some(Len::Percent(50.0)),
+        "right" | "bottom" => Some(Len::Percent(100.0)),
+        _ => parse_len(t),
+    };
+    let t: Vec<&str> = v.split_whitespace().collect();
+    match t.as_slice() {
+        [a] if matches!(*a, "top" | "bottom") => [Some(Len::Percent(50.0)), kw(a)],
+        [a] => [kw(a), Some(Len::Percent(50.0))],
+        [a, b] if matches!(*a, "top" | "bottom") || matches!(*b, "left" | "right") => [kw(b), kw(a)],
+        [a, b, ..] => [kw(a), kw(b)],
+        [] => [None, None],
+    }
+}
+
+/// `background-size` → (宽, 高)；`cover` 照 Amazon 写成 100% 100%（《绍宋》样本），`auto` 不写。
+pub fn parse_bg_size(v: &str) -> [Option<Len>; 2] {
+    let one = |t: &str| (t != "auto").then(|| parse_len(t)).flatten();
+    let t: Vec<&str> = v.split_whitespace().collect();
+    match t.as_slice() {
+        ["cover"] => [Some(Len::Percent(100.0)), Some(Len::Percent(100.0))],
+        ["contain"] => [Some(Len::Percent(100.0)), None],
+        [a] => [one(a), None],
+        [a, b, ..] => [one(a), one(b)],
+        [] => [None, None],
     }
 }
 
@@ -239,7 +315,12 @@ fn media_ok(query: &str) -> bool {
 
 impl Sheet {
     /// 追加一份样式表。`order` 是全局序号起点（后出现的规则优先），返回下一个序号。
-    pub fn add(&mut self, css: &str, mut order: usize) -> usize {
+    pub fn add(&mut self, css: &str, order: usize) -> usize {
+        self.add_at(css, order, "")
+    }
+
+    /// 同 [`Sheet::add`]，`url(…)` 按样式表自己的路径 `base`（书内路径）换成书内路径。
+    pub fn add_at(&mut self, css: &str, mut order: usize, base: &str) -> usize {
         let css = strip_comments(css);
         let mut rest: &str = &css;
         while let Some(open) = rest.find('{') {
@@ -252,11 +333,17 @@ impl Sheet {
                 let lower = at.to_ascii_lowercase();
                 if let Some(q) = lower.strip_prefix("media") {
                     if media_ok(q) {
-                        order = self.add(body, order);
+                        order = self.add_at(body, order, base);
                     }
                 }
             } else if !head.is_empty() {
-                let decls = parse_decls(body);
+                let mut decls = parse_decls(body);
+                if !base.is_empty() {
+                    for d in decls.iter_mut().filter(|d| d.value.to_ascii_lowercase().starts_with("url(")) {
+                        let inner = d.value[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']);
+                        d.value = format!("url({})", bookconv::epubzip::resolve_link(base, inner).0);
+                    }
+                }
                 if !decls.is_empty() {
                     for one in split_top(head, ',') {
                         let one = one.trim();
@@ -440,6 +527,12 @@ pub struct Computed {
     pub width: Option<Len>,
     /// 单元格的 `vertical-align`。
     pub valign: Option<String>,
+    /// 背景图（书内路径）、不重复、固定、位置 (x, y)、尺寸 (宽, 高)。
+    pub bg_image: Option<String>,
+    pub bg_no_repeat: bool,
+    pub bg_fixed: bool,
+    pub bg_position: [Option<Len>; 2],
+    pub bg_size: [Option<Len>; 2],
 }
 
 /// 一条边：样式（`solid` 等，不含 none）、宽度、颜色（没写＝当前颜色）。
@@ -511,6 +604,11 @@ impl Computed {
             radius: [None; 4],
             width: None,
             valign: None,
+            bg_image: None,
+            bg_no_repeat: false,
+            bg_fixed: false,
+            bg_position: [None; 2],
+            bg_size: [None; 2],
         }
     }
 
@@ -524,6 +622,11 @@ impl Computed {
             radius: [None; 4],
             width: None,
             valign: None,
+            bg_image: None,
+            bg_no_repeat: false,
+            bg_fixed: false,
+            bg_position: [None; 2],
+            bg_size: [None; 2],
             ..self.clone()
         }
     }
@@ -688,6 +791,11 @@ impl Computed {
             c.padding[i] = get(&format!("padding-{side}")).and_then(parse_len);
         }
         c.background = get("background-color").and_then(parse_color).filter(|c| c >> 24 != 0);
+        c.bg_image = get("background-image").filter(|v| v.to_ascii_lowercase().starts_with("url(")).map(|v| v[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']).to_string());
+        c.bg_no_repeat = get("background-repeat").is_some_and(|v| v.trim() == "no-repeat");
+        c.bg_fixed = get("background-attachment").is_some_and(|v| v.trim() == "fixed");
+        c.bg_position = get("background-position").map(|v| parse_bg_position(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
+        c.bg_size = get("background-size").map(|v| parse_bg_size(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
         c
     }
 }

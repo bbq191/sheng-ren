@@ -30,14 +30,15 @@ fn main() {
     }
     // 阅读模式定阅读范围、黑白屏转灰度、注释呈现方式（和书库生成同一个起点）
     let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
+    // 清洗选项从模式的缺省起步（kindle 保留背景图等），再按命令行改
     let wash = if flags.contains(&"--no-wash") {
         None
     } else {
-        Some(WashOpts {
+        OptimizeOpts::for_profile(device).wash.map(|w| WashOpts {
             keep_para_spacing: flags.contains(&"--keep-spacing"),
             auto_toc: if flags.contains(&"--auto-toc") { AutoToc::Always } else { AutoToc::IfMissing },
             paginate: !flags.contains(&"--no-paginate"),
-            ..Default::default()
+            ..w
         })
     };
     // 先写临时文件，成功后再改名：输入输出同路径（就地覆盖）时不会边读边写同一个文件，失败也不留半成品。

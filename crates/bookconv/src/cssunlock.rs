@@ -115,6 +115,88 @@ fn font_shorthand_style(value: &str) -> Vec<String> {
     out
 }
 
+/// 保留背景图的模式（profile 的 `background_images`）里 `background` 简写拆成分项：背景色、背景图、重复、位置，
+/// `sizing` 时再加尺寸（`/ cover`）和附着（`fixed`）。掌阅不认 `background` 简写（整条不生效），`background-size`
+/// 会把图挤变形；Kindle 要 `fixed` 和尺寸才按整页铺（2026-10-05 真机）。KFX 写出器两种写法都认。
+pub fn background_longhands(value: &str, sizing: bool) -> Vec<String> {
+    let (v, important) = split_important(value);
+    // 括号外的 `/`（位置 / 尺寸）隔开成单独的词，`url(../a.png)` 里的不动
+    let mut spaced = String::new();
+    let mut depth = 0i32;
+    for c in v.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        if c == '/' && depth == 0 {
+            spaced.push_str(" / ");
+        } else {
+            spaced.push(c);
+        }
+    }
+    let mut out = Vec::new();
+    let mut pos = Vec::new();
+    let mut size = Vec::new();
+    let mut after_slash = false;
+    for t in top_level_tokens(&spaced) {
+        let l = t.to_ascii_lowercase();
+        if after_slash && !(["cover", "contain", "auto"].contains(&l.as_str()) || l.starts_with(|c: char| c.is_ascii_digit() || c == '.')) {
+            after_slash = false; // 尺寸写完了
+        }
+        if l.starts_with("url(") {
+            out.push(format!("background-image:{t}{important}"));
+        } else if l == "/" {
+            after_slash = true;
+        } else if ["repeat", "no-repeat", "repeat-x", "repeat-y", "space", "round"].contains(&l.as_str()) {
+            out.push(format!("background-repeat:{l}{important}"));
+        } else if after_slash {
+            size.push(t);
+        } else if ["fixed", "scroll", "local"].contains(&l.as_str()) {
+            if sizing {
+                out.push(format!("background-attachment:{l}{important}"));
+            }
+        } else if ["border-box", "padding-box", "content-box", "none"].contains(&l.as_str()) {
+            // 盒子：不要
+        } else if ["left", "right", "top", "bottom", "center"].contains(&l.as_str()) || l.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.') {
+            pos.push(t);
+        } else {
+            out.push(format!("background-color:{t}{important}"));
+        }
+    }
+    if !pos.is_empty() {
+        out.push(format!("background-position:{}{important}", pos.join(" ")));
+    }
+    if sizing && !size.is_empty() {
+        out.push(format!("background-size:{}{important}", size.join(" ")));
+    }
+    out
+}
+
+/// 按顶层空白切词，括号里的空格不算（`rgb(0, 0, 0)`、`url(a b.png)`）。
+fn top_level_tokens(v: &str) -> Vec<&str> {
+    let mut toks = Vec::new();
+    let (mut depth, mut start) = (0i32, None::<usize>);
+    for (i, ch) in v.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(s) = start.take() {
+                    toks.push(&v[s..i]);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        start.get_or_insert(i);
+    }
+    if let Some(s) = start {
+        toks.push(&v[s..]);
+    }
+    toks
+}
+
 /// `background` 简写里的颜色：`#hex`、`rgb()/rgba()/hsl()/hsla()`、`transparent`、命名色。没有就 `None`。
 fn background_color(value: &str) -> Option<String> {
     let (v, important) = split_important(value);
@@ -156,6 +238,19 @@ fn background_color(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_shorthand_split_for_readers() {
+        assert_eq!(
+            background_longhands(r#"url("../Images/jsy.png") bottom / cover no-repeat fixed rgba(117, 0, 0, 1)"#, false),
+            [r#"background-image:url("../Images/jsy.png")"#, "background-repeat:no-repeat", "background-color:rgba(117, 0, 0, 1)", "background-position:bottom"]
+        );
+        assert_eq!(background_longhands("url(a.png) no-repeat fixed #111", false), ["background-image:url(a.png)", "background-repeat:no-repeat", "background-color:#111"]);
+        assert_eq!(
+            background_longhands("url(a.png) bottom / 100% no-repeat fixed #111", true),
+            ["background-image:url(a.png)", "background-repeat:no-repeat", "background-attachment:fixed", "background-color:#111", "background-position:bottom", "background-size:100%"]
+        );
+    }
 
     #[test]
     fn font_size_relative_kept_absolute_dropped() {
