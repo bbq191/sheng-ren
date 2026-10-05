@@ -919,6 +919,25 @@
         assert_eq!(crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx")).len(), 4);
     }
 
+    /// 《ABC谋杀案》：h2 只用在单独成页的版权页、目录页，真正的节是 h3（「1」「2」）。节一级不能被 h2 占掉。
+    #[test]
+    fn front_matter_only_level_is_not_section() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = paged_book(&[
+            ("cp.xhtml", "<h2>版权信息</h2><p>书名：甲</p>"),
+            ("c1.xhtml", &format!(r#"<h1 id="c1">第一章</h1><h3>1</h3><p>{long}</p><h3>2</h3><p>{long}</p>"#)),
+            ("c2.xhtml", &format!(r#"<h1 id="c2">第二章</h1><p>{long}</p>"#)),
+        ]);
+        v.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><navLabel><text>第一章</text></navLabel><content src="Text/c1.xhtml#c1"/></navPoint><navPoint><navLabel><text>第二章</text></navLabel><content src="Text/c2.xhtml#c2"/></navPoint></navMap></ncx>"#));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.toc_sections_added, 2);
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let got: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
+        assert_eq!(got, [(1, "第一章"), (2, "1"), (2, "2"), (1, "第二章")]);
+    }
+
     // ───────────────────────── 2026-09-27 审计回归 ─────────────────────────
 
     /// A1/A5：`data-id` 不是 id；单引号的 id 也算已有，不再追加第二个 id。

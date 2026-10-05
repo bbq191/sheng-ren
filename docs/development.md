@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-03：392 个）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-05：410 个）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -53,7 +53,7 @@ tools/regress/compare.py 旧 新
 
 | 改了什么 | 版本号 | 现值 | 过期的书 |
 |---|---|---|---|
-| 清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 36 | 全部 |
+| 清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 37 | 全部 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 4 | 只有补过东西的 |
 | EPUB → AZW3 | `azw3::WRITER_VERSION` | 4 | 只有 `kindle` 模式的 |
@@ -80,7 +80,7 @@ tools/regress/compare.py 旧 新
 - 一篇 2008 年的博客只讲了流程，没有密钥常量、从序列号算 PID 的方法和凭证结构；
 - 细节齐全的只有一份照 DeDRM 的 GPL 代码写的讲解，照它实现等于间接移植 GPL 代码。
 
-而且入库只收 EPUB、CBZ，解了 DRM 也还得先转成 EPUB。重启前要用户在几条路里选一条：先确认手上的文件是旧格式还是 KFX（KFX 暂不考虑）；把 DRM 单独做成 GPL 模块；或交给外部工具解完、转成 EPUB 再入库。
+而且入库只收 EPUB、CBZ，解了 DRM 也还得先转成 EPUB。重启前要用户在几条路里选一条：先确认手上的文件是旧格式还是 KFX（KFX 的 DRM 不考虑；DRM-free 的 KFX 写出器见 [KFX](kfx.md)）；把 DRM 单独做成 GPL 模块；或交给外部工具解完、转成 EPUB 再入库。
 
 ## 参考资料
 
