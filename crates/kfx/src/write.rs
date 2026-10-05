@@ -16,7 +16,7 @@ use scraper::{ElementRef, Html, Node};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。
-pub const WRITER_VERSION: &str = "3";
+pub const WRITER_VERSION: &str = "4";
 
 /// 第一个本地符号的编号：系统表 9 个 + `YJ_symbols` v10 的 859 个。
 const FIRST_LOCAL_SID: u32 = 10 + 859;
@@ -255,7 +255,7 @@ impl Doc<'_> {
         // 自己只包着一个文字块（普通段落）：本元素就是这个块。
         // 有背景或内边距的块写成容器套文字（样本里带背景色的 h1 就是这样；背景、内边距、负外边距直接放在文字段落上，
         // Kindle 上长标题会溢出屏幕，2026-10-05 真机）。
-        let boxed = comp.background.is_some() || padding.iter().any(|p| *p != 0.0) || comp.has_border();
+        let boxed = comp.background.is_some() || comp.bg_image.is_some() || padding.iter().any(|p| *p != 0.0) || comp.has_border();
         let own = !boxed && children.len() == 1 && matches!(children[0].kind, Kind::Text { .. }) && children[0].is_anonymous();
         if own {
             let mut b = children.pop().unwrap_or_else(|| unreachable!());
@@ -995,6 +995,28 @@ impl Builder {
                     self.headings.push((h, eid));
                 }
                 let ty = b.ty.unwrap_or(NODE_CONTAINER);
+                let mut props = props;
+                // 背景图：样式里指向图片资源（`$479`），同《绍宋》样本 `body.juan` 等
+                if let Some(r) = b.comp.bg_image.as_deref().and_then(|src| self.resource(src)) {
+                    ctx.resources.push(r);
+                    props.push((P_BG_IMAGE, Value::Symbol(self.sym(&self.resources[r].name.clone()))));
+                    if b.comp.bg_no_repeat {
+                        props.push((P_BG_REPEAT, Value::Symbol(BG_NO_REPEAT)));
+                    }
+                    if b.comp.bg_fixed {
+                        props.push((P_BG_ATTACHMENT, Value::Symbol(BG_FIXED)));
+                    }
+                    let len = |l: Len| match l {
+                        Len::Percent(p) => num(p, U_PERCENT),
+                        Len::Em(n) => num(n, U_EM),
+                        Len::Pt(n) => num(n, U_PT),
+                    };
+                    for (v, k) in b.comp.bg_position.iter().zip([P_BG_POS_X, P_BG_POS_Y]).chain(b.comp.bg_size.iter().zip([P_BG_SIZE_W, P_BG_SIZE_H])) {
+                        if let Some(l) = v {
+                            props.push((k, len(*l)));
+                        }
+                    }
+                }
                 // 表体、行这些结构层没有样式（同样本）。
                 let styled = !matches!(ty, NODE_THEAD | NODE_TBODY | NODE_TFOOT | NODE_ROW);
                 let style = styled.then(|| self.style(props));
@@ -1254,11 +1276,11 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let mut order = 0;
         for el in html.select(&scraper::Selector::parse("link, style").unwrap_or_else(|_| unreachable!())) {
             if el.value().name() == "style" {
-                order = sheet.add(&el.text().collect::<String>(), order);
+                order = sheet.add_at(&el.text().collect::<String>(), order, &doc.path);
             } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
                 if let Some(h) = el.value().attr("href") {
                     if let Some(c) = css.get(resolve_link(&doc.path, h).0.as_str()) {
-                        order = sheet.add(c, order);
+                        order = sheet.add_at(c, order, &resolve_link(&doc.path, h).0);
                     }
                 }
             }
@@ -1907,6 +1929,27 @@ mod tests {
         let c = crate::container::Container::parse(&kfx).unwrap();
         let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
         assert!(!styles.contains("AR MingU30") && styles.contains("黑体"), "{styles}");
+    }
+
+    /// 背景图：同《绍宋》样本，写在包住整页的容器上（`$479` 指向资源、不重复、固定、位置、尺寸）；`url()` 按样式表路径解析。
+    #[test]
+    fn background_image_like_amazon() {
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(4, 4, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="O/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("O/c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="s" href="S/a.css" media-type="text/css"/><item id="b" href="I/bg.png" media-type="image/png"/><item id="c1" href="T/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("O/S/a.css", br#"body.j{background:url("../I/bg.png") bottom / cover no-repeat fixed rgba(117, 0, 0, 1)}"#).unwrap();
+        w.put("O/I/bg.png", &png).unwrap();
+        w.put("O/T/c1.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="../S/a.css"/></head><body class="j"><p>x</p></body></html>"#).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(styles.contains(&format!("({P_BG_IMAGE}, Symbol(")) && styles.contains(&format!("({P_BG_REPEAT}, Symbol({BG_NO_REPEAT}))")) && styles.contains(&format!("({P_BG_ATTACHMENT}, Symbol({BG_FIXED}))")), "{styles}");
+        assert!(styles.contains(&format!("({P_BG_SIZE_H}, ")) && styles.contains(&format!("({P_BACKGROUND}, Int({}))", 0xFF750000u32)), "{styles}");
+        assert!(c.entities.iter().any(|e| e.ty == T_RESOURCE), "背景图登记成资源");
     }
 
     #[test]

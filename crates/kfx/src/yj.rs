@@ -131,6 +131,16 @@ pub const P_PADDING_LEFT: u32 = 53;
 pub const P_PADDING_BOTTOM: u32 = 54;
 pub const P_PADDING_RIGHT: u32 = 55;
 pub const P_BACKGROUND: u32 = 70;
+/// 背景图（指向 `$164` 图片资源）、不重复（`$484: $487`）、固定（`$547: $378`）、位置 x/y、尺寸宽/高（《绍宋》样本 `body.bq/juan/jsy`）。
+pub const P_BG_IMAGE: u32 = 479;
+pub const P_BG_REPEAT: u32 = 484;
+pub const BG_NO_REPEAT: u32 = 487;
+pub const P_BG_ATTACHMENT: u32 = 547;
+pub const BG_FIXED: u32 = 378;
+pub const P_BG_POS_X: u32 = 480;
+pub const P_BG_POS_Y: u32 = 481;
+pub const P_BG_SIZE_W: u32 = 482;
+pub const P_BG_SIZE_H: u32 = 483;
 /// 下划线、删除线、上划线（取值 `$328`）、small-caps（`$583: $369`）、字间距（em）。
 pub const P_UNDERLINE: u32 = 23;
 pub const P_LINE_THROUGH: u32 = 27;
@@ -220,7 +230,7 @@ pub const RES_LOCATION: u32 = 165;
 pub const RES_WIDTH: u32 = 422;
 pub const RES_HEIGHT: u32 = 423;
 pub const FORMAT_JPG: u32 = 285;
-/// 推测：PNG（样本里没有 PNG 图）。
+/// PNG（样本里没有，Amazon 都转成 JPEG XR；2026-10-05 真机《绍宋》PNG 封面、插图、背景图都显示）。
 pub const FORMAT_PNG: u32 = 284;
 pub const FORMAT_GIF: u32 = 286;
 

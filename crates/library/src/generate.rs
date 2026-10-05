@@ -114,6 +114,12 @@ impl Library {
         };
         // 漫画写成固定版式（profile 的 comic_fixed_layout）
         let comic_seg = if device.comic_fixed_layout { format!("{comic_seg}f") } else { comic_seg };
+        // 保留背景图（profile 的 background_images）
+        let comic_seg = match (device.background_images, device.background_sizing) {
+            (true, true) => format!("{comic_seg}b"),
+            (true, false) => format!("{comic_seg}bn"),
+            _ => comic_seg,
+        };
         let fingerprint = format!(
             "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{comic_seg}|{}|{}",
             meta.content_sha(),

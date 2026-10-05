@@ -19,7 +19,7 @@
 
 | 字段（缺省） | 意思 | `kindle` | `ireader` | `xochitl` | 为什么（实测怪癖） |
 |---|---|---|---|---|---|
-| `formats`（必填） | 产物格式 | `["azw3"]` | `["epub"]` | `["epub"]` | Kindle 自带阅读器 USB 传书只认 AZW3；`azw3` 是先按同样规则优化出 EPUB 再转 |
+| `formats`（必填） | 产物格式 | `["kfx"]` | `["epub"]` | `["epub"]` | Kindle 自带阅读器 USB 传书不认 EPUB；`kfx` 是先按同样规则优化出 EPUB 再转（`azw3` 写出器还在，书库不用） |
 | `color`（必填） | 彩色屏 | `false` | `false` | `true` | 黑白屏的漫画转 256 级灰度 |
 | `[screen]`、`[readable.<格式>]` | 屏幕、真实可阅读范围（不写 = 屏幕） | 1272×1696、1104×1546 | 整屏 | 954×1696、842×1455 | 阅读器各自留页边距、页眉页脚，见[可阅读范围](#可阅读范围) |
 | `notes`（必填） | `"jump"` 点标号跳到章末；`"popup"` 标成弹窗注释 | jump | popup | jump | 掌阅自带阅读器认弹窗（2026-10-05 真机）；Kindle 的 AZW3 不认（KFX 由写出器另写弹窗，见 [KFX](kfx.md)）；xochitl 只认同文件跳转 |
@@ -28,6 +28,8 @@
 | `comic_margin`（1） | 漫画的图到画布四边的白边（像素） | 1 | 1 | 0 | xochitl 页边距设成 1 后自己就留了 1px |
 | `[comic_readable]`（= 阅读范围） | 漫画画布 | 1272×1696 | 不写 | 952×1457 | 漫画要贴屏幕边，画布和文字书的阅读范围不同 |
 | `comic_fixed_layout`（`false`） | 漫画写成固定版式 | `true` | — | — | Kindle 流式排版强制留页边距（最小档左右 101px），固定版式才按画布 1:1 整页显示 |
+| `background_images`（`false`） | 保留 CSS 背景图（`background` 简写拆成背景色、背景图、重复、位置等分项） | `true` | `true` | — | xochitl 不认 `no-repeat`，把背景图平铺满页盖住正文；掌阅不认 `background` 简写（2026-10-05 真机对照书），拆开写就正常 |
+| `background_sizing`（`true`） | 保留背景图时也留 `background-size`、`background-attachment` | 留 | 去掉 | — | 掌阅写了尺寸会把图挤变形；Kindle 留着（和 Amazon 写法一致） |
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"` | — | `"ltr"` | — | 掌阅遇到往右翻的书，整页图四周留左右 92、上下 124px |
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记给登记脚本、文字页补回留白 | — | — | 1 | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |
 

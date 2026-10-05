@@ -27,8 +27,9 @@
 | `line-height` | 去掉（写死的行高让阅读器的行距设置不起作用） |
 | 段落（`p`、`div`）的上下边距 | 去掉，段与段之间靠首行缩进区分（`epub-optimize --keep-spacing` 保留）；左右边距保留 |
 | `body`、`html` 的边距 | 去掉，页边距交给阅读器 |
-| `background` 简写 | 只留颜色，背景图去掉（xochitl 会把背景图平铺满页、盖住正文） |
-| `background-image` | 去掉（同上） |
+| `background` 简写 | 只留颜色，背景图去掉（xochitl 会把背景图平铺满页、盖住正文）。保留背景图的模式（kindle、ireader，profile 的 `background_images`）拆成背景色、背景图、重复、位置等分项（掌阅不认简写）；ireader 再去掉尺寸和 `fixed`（`background_sizing = false`：`background-size` 把图挤变形），kindle 保留 |
+| `background-image` | 去掉（同上）；保留背景图的模式不动 |
+| `background-size`、`background-attachment` | ireader 去掉（同上） |
 | 用 `vh` 写的高度 | 去掉（占满一屏的书名页加上页眉页脚会溢出成空白页） |
 
 - 样式表、`<style>` 块、`style=""` 三处都按这张表处理（`cssunlock.rs`）。

@@ -119,6 +119,12 @@ pub struct Profile {
     /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。内置模式都不写（kindle 2026-10-05
     /// 曾经写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式。
     pub comic_format: Option<Format>,
+    /// 保留 CSS 背景图（TOML 里不写是 `false`：清洗层去掉背景图，只留背景色——xochitl 不认 `no-repeat`，把背景图
+    /// 平铺满页盖住正文）。kindle 写 `true`：KFX 写出器照 Amazon 的写法写背景图（2026-10-05）。
+    pub background_images: bool,
+    /// 保留背景图时也保留 `background-size`、`background-attachment`（TOML 里不写是 `true`）。Kindle 要靠 `fixed` 和尺寸
+    /// 按整页铺背景图（去掉后只铺在内容那一块）；掌阅写了尺寸会把图挤变形，ireader 写 `false`（2026-10-05 真机）。
+    pub background_sizing: bool,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +149,10 @@ struct ProfileFile {
     #[serde(default)]
     comic_fixed_layout: bool,
     comic_format: Option<Format>,
+    #[serde(default)]
+    background_images: bool,
+    #[serde(default = "yes")]
+    background_sizing: bool,
 }
 
 fn yes() -> bool {
@@ -153,7 +163,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing };
         p.validate()?;
         Ok(p)
     }
@@ -313,6 +323,8 @@ mod tests {
         let k = get("kindle").unwrap();
         assert_eq!((k.format(), k.output_readable()), (Format::Kfx, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
         assert_eq!((k.format_for(false), k.format_for(true)), (Format::Kfx, Format::Kfx), "kindle：文字书、漫画都出 KFX");
+        assert!(k.background_images && get("ireader").unwrap().background_images && !get("xochitl").unwrap().background_images, "背景图：kindle、ireader 保留，xochitl 去掉");
+        assert!(k.background_sizing && !get("ireader").unwrap().background_sizing, "背景图尺寸：kindle 保留，ireader 去掉");
         let i = get("ireader").unwrap();
         assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);

@@ -150,7 +150,18 @@ impl OptimizeOpts {
     pub fn for_profile(p: &profile::Profile) -> Self {
         OptimizeOpts {
             grayscale: !p.color,
-            wash: Some(Default::default()),
+            wash: Some(if p.background_images {
+                // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
+                // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`
+                let mut w = crate::wash::WashOpts::default();
+                w.filter_props.retain(|f| f != "background-image");
+                if !p.background_sizing {
+                    w.filter_props.extend(["background-size".to_string(), "background-attachment".to_string()]);
+                }
+                w
+            } else {
+                Default::default()
+            }),
             footnote: p.notes.into(),
             comic_margin: p.comic_margin,
             comic_screen: Some(p.comic_readable()),

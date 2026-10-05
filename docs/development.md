@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-05：430 个）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-05：432 个）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -57,7 +57,7 @@ tools/regress/compare.py 旧 新
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 4 | 只有补过东西的 |
 | EPUB → AZW3 | `azw3::WRITER_VERSION` | 4 | 书库已不出 AZW3（`epub-to-azw3` 还在） |
-| EPUB → KFX | `kfx::write::WRITER_VERSION` | 3 | 只有 `kindle` 模式的 |
+| EPUB → KFX | `kfx::write::WRITER_VERSION` | 4 | 只有 `kindle` 模式的 |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 ## 工程约束
