@@ -6,7 +6,7 @@
 //! 输入应是已经按设备优化过的 EPUB（`epub-optimize --device=kindle`）；这里只做格式转换，不改内容。
 //! 不嵌字体（`@font-face` 去掉，字体交给阅读器设置）；SVG 图片暂不支持（引用保持原样）。
 
-mod book;
+use bookconv::epubbook as book;
 mod container;
 pub mod indx;
 pub mod palmdoc;

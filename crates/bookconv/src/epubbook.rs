@@ -1,12 +1,12 @@
-//! 读 EPUB：元数据、spine 里的 XHTML、CSS、图片、封面、目录。
+//! 读 EPUB：元数据、spine 里的 XHTML、CSS、图片、封面、目录（AZW3、KFX 写出器共用）。
 
-use bookconv::epubzip::{dir_of, percent_decode, posix_norm, read_entries, resolve};
-use bookconv::convert::common::{image_ext_mime, is_webp};
-use bookconv::html;
-use bookconv::util::{fnv64, xml_unescape};
-use bookconv::wash::opf::is_local;
-use bookconv::wash::normalize::nav_toc_items;
-use bookconv::wash::{manifest_items, opf_dc, parse_opf};
+use crate::epubzip::{dir_of, percent_decode, posix_norm, read_entries, resolve};
+use crate::convert::common::{image_ext_mime, is_webp};
+use crate::html;
+use crate::util::{fnv64, xml_unescape};
+use crate::wash::opf::is_local;
+use crate::wash::normalize::nav_toc_items;
+use crate::wash::{manifest_items, opf_dc, parse_opf};
 use std::collections::HashMap;
 
 pub struct Doc {
@@ -55,9 +55,9 @@ const FIXED_LAYOUT_EXTH: [(&str, u32); 6] = [
 /// OPF 里固定版式那一组 `<meta name content>`；`fixed-layout` 不是 `true` 时一律不要（流式排版的书写了别的几项也没用）。
 fn fixed_layout_metas(opf: &str) -> Vec<(u32, String)> {
     let mut out = Vec::new();
-    for t in bookconv::html::tags(opf).filter(|t| t.is_start() && bookconv::wash::opf::is_local(t.name, "meta")) {
+    for t in crate::html::tags(opf).filter(|t| t.is_start() && crate::wash::opf::is_local(t.name, "meta")) {
         let tag = &opf[t.start..t.end];
-        let (Some(name), Some(content)) = (bookconv::html::attr_value(tag, "name"), bookconv::html::attr_value(tag, "content")) else { continue };
+        let (Some(name), Some(content)) = (crate::html::attr_value(tag, "name"), crate::html::attr_value(tag, "content")) else { continue };
         if let Some((_, n)) = FIXED_LAYOUT_EXTH.iter().find(|(k, _)| *k == name) {
             if !out.iter().any(|(m, _)| m == n) {
                 out.push((*n, content.trim().to_string()));
@@ -188,7 +188,7 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
         warnings.push(format!("{} 张图片格式不支持（只支持 JPEG/PNG/GIF 和静态 WebP），在 Kindle 上不显示：{}", unsupported.len(), unsupported[0]));
     }
     if cover.is_none() {
-        if let Some(&(_, _, id)) = bookconv::wash::opf::cover_meta_tags(&opf_text).first() {
+        if let Some(&(_, _, id)) = crate::wash::opf::cover_meta_tags(&opf_text).first() {
             cover = opf.items.get(id).cloned();
         }
     }
@@ -208,7 +208,7 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
     let get = |p: &str| index.get(p).map(|&i| &entries[i]);
     let mut toc = Vec::new();
     if let Some(ncx) = opf.ncx.as_ref().and_then(|p| get(p).map(|e| (p, e))) {
-        for (depth, label, target) in bookconv::ncx::parse_ncx_flat(&String::from_utf8_lossy(&ncx.1.data)) {
+        for (depth, label, target) in crate::ncx::parse_ncx_flat(&String::from_utf8_lossy(&ncx.1.data)) {
             let (p, f) = target.split_once('#').unwrap_or((target.as_str(), ""));
             toc.push(TocItem { label, level: depth.saturating_sub(1) as u32, path: posix_norm(&resolve(dir_of(ncx.0), &percent_decode(p))), frag: percent_decode(f) });
         }

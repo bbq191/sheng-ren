@@ -16,6 +16,7 @@ pub mod convert;
 pub mod cssunlock;
 pub mod direction;
 pub mod epub;
+pub mod epubbook;
 pub mod epubzip;
 pub mod html;
 pub mod htmlproc;

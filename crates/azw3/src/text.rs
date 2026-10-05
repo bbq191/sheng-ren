@@ -5,7 +5,7 @@
 //! 书内链接 → `kindle:pos:fid:XXXX:off:YYYYYYYYYY`（fid = 片段序号，off = 目标在片段里的字节偏移，base32）。
 //! 链接先写成等长占位串，所有文档排完、偏移定下来之后再回填，回填不改变任何偏移。
 
-use crate::book::Loaded;
+use bookconv::epubbook::Loaded;
 use bookconv::epubzip::{dir_of, percent_decode, posix_norm, resolve};
 use bookconv::html;
 use bookconv::util::xml_unescape;
@@ -301,15 +301,15 @@ pub fn layout(book: &Loaded, res: &HashMap<String, (u32, &'static str)>, warning
 mod tests {
     use super::*;
 
-    fn doc(path: &str, html: &str) -> crate::book::Doc {
-        crate::book::Doc { path: path.into(), html: html.into() }
+    fn doc(path: &str, html: &str) -> bookconv::epubbook::Doc {
+        bookconv::epubbook::Doc { path: path.into(), html: html.into() }
     }
 
-    fn lay(docs: Vec<crate::book::Doc>) -> (Layout, Vec<String>) {
+    fn lay(docs: Vec<bookconv::epubbook::Doc>) -> (Layout, Vec<String>) {
         lay_with(docs, &HashMap::new())
     }
 
-    fn lay_with(docs: Vec<crate::book::Doc>, res: &HashMap<String, (u32, &'static str)>) -> (Layout, Vec<String>) {
+    fn lay_with(docs: Vec<bookconv::epubbook::Doc>, res: &HashMap<String, (u32, &'static str)>) -> (Layout, Vec<String>) {
         let book = Loaded { meta: Default::default(), docs, css: vec![], images: vec![], cover: None, toc: vec![] };
         let mut w = Vec::new();
         (layout(&book, res, &mut w).unwrap(), w)
