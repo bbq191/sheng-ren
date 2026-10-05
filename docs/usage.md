@@ -271,6 +271,7 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 ```sh
 epub-optimize --device=ireader [选项] 输入.epub 输出.epub
 epub-to-azw3 [--ebok] 优化后.epub 输出.azw3            # 输入应是 --device=kindle 优化过的，见 AZW3 写出器
+epub-to-kfx [--id=N] 优化后.epub 输出.kfx              # KFX（Kindle 增强排版）最小版写出器，进行中，见 docs/kfx.md；cargo run -p kfx --bin epub-to-kfx
 mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict，给 KOReader 查词
 readable-probe 测量书.epub                              # 生成测量书，见设备与阅读模式
 readable-measure [--device=kindle] 竖长.png 横宽.png    # 从截图量出可阅读范围

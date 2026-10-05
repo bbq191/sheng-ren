@@ -1,0 +1,25 @@
+[package]
+name = "kfx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "EPUB → KFX 写出器与 KFX 容器读写，clean-room：依公开的 Amazon Ion 规范 + 对 KFX 样本文件的黑盒分析实现"
+
+[dependencies]
+sha1 = "0.11"
+bookconv = { path = "../bookconv" }
+scraper = { version = "0.18", features = ["deterministic"] }
+ego-tree = "0.6"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+
+[[bin]]
+name = "kfx-dump"
+path = "src/bin/kfx_dump.rs"
+
+[[bin]]
+name = "kfx-repack"
+path = "src/bin/kfx_repack.rs"
+
+[[bin]]
+name = "epub-to-kfx"
+path = "src/bin/epub_to_kfx.rs"
