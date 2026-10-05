@@ -494,6 +494,52 @@
         assert!(!x.contains("<p id=\"a_2_1\">\n"), "不该产出无效嵌套 <p id><p>: {x}");
     }
 
+    fn one_entry_epub(files: &[(&str, &str)]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zw.start_file("mimetype", stored).unwrap();
+            zw.write_all(b"application/epub+zip").unwrap();
+            for (n, body) in files {
+                zw.start_file(*n, stored).unwrap();
+                zw.write_all(body.as_bytes()).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        buf
+    }
+
+    /// 注释识别统一成"互相链接的一对"（2026-10-05）：注释段落没有 note 语义（《罗杰疑案》`class="fncontent"`、锚点在段首的
+    /// `<a id>`）、和正文同一个文件。弹窗模式搬到章末写成弹窗；跳转模式同文件的留在原处。
+    #[test]
+    fn same_file_backlink_pair_becomes_popup_only_in_popup_mode() {
+        let ch = r##"<html><body><p>对付希巴女王<a id="zw1" href="#zhu1"><sup>[1]</sup></a>那样</p><p>别的段落<a href="#x">交叉引用</a></p><p id="x">目标段落</p><p class="fncontent"><a id="zhu1" href="#zw1">[1]</a>Queen of Sheba。</p></body></html>"##;
+        let raw = one_entry_epub(&[("c.xhtml", ch)]);
+        let base = OptimizeOpts { wash: None, ..OptimizeOpts::new(crate::imgopt::test_screen()) };
+        let (pop, _) = optimize_epub_with(&raw, &OptimizeOpts { footnote: FootnoteMode::Popup, ..base.clone() }).unwrap();
+        let x = String::from_utf8(entry_bytes(&pop, "c.xhtml")).unwrap();
+        assert_eq!(x.matches(r#"epub:type="noteref""#).count(), 1, "{x}");
+        assert!(x.contains(r#"<aside epub:type="footnote" id="zhu1""#) && x.contains("Queen of Sheba"), "{x}");
+        assert!(x.contains(r#"<p id="x">目标段落</p>"#), "交叉引用的目标不是注释：{x}");
+        let (jump, _) = optimize_epub_with(&raw, &OptimizeOpts { footnote: FootnoteMode::Anchor, ..base }).unwrap();
+        let y = String::from_utf8(entry_bytes(&jump, "c.xhtml")).unwrap();
+        // 测试缺省选项去掉回链（回链换成 `<span>`，同 xochitl），注释段落本身原地不动
+        assert!(!y.contains("<aside") && y.contains(r#"<p class="fncontent">"#) && y.contains("Queen of Sheba。</p></body>"), "跳转模式同文件注释原地不动：{y}");
+    }
+
+    /// 跨文件、没有 note 语义、靠回链配对的注释：跳转模式也搬进引用它的那一章。
+    #[test]
+    fn crossfile_backlink_pair_without_semantic_is_moved() {
+        let raw = one_entry_epub(&[
+            ("ch1.xhtml", r#"<html><body><p>正文<a id="r1" href="notes.xhtml#n1"><sup>1</sup></a>结束</p></body></html>"#),
+            ("notes.xhtml", r#"<html><body><p class="x" id="n1"><a href="ch1.xhtml#r1">1</a>注释内容</p></body></html>"#),
+        ]);
+        let (out, _) = optimize_epub_with(&raw, &OptimizeOpts { wash: None, footnote: FootnoteMode::Anchor, ..OptimizeOpts::new(crate::imgopt::test_screen()) }).unwrap();
+        let ch1 = String::from_utf8(entry_bytes(&out, "ch1.xhtml")).unwrap();
+        assert!(ch1.contains("注释内容") && ch1.contains(r##"href="#n1""##), "{ch1}");
+    }
+
     /// 造一本"正文章引用书末尾注文件"的 EPUB（bug 复现形态）：两章各引用 notes.xhtml 里的一条
     /// 普通尾注（<a href="notes.xhtml#nX">，非 noteref；注释为 <p id="nX">）。优化后每章 marker 应变
     /// 同章锚点、注释搬进对应章，且两章共用形态不撞 id。

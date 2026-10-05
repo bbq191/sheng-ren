@@ -43,7 +43,59 @@ fn is_noteref(open: &str) -> bool {
 /// 写成 `%E6%B3%A8`），路径按本章解析（`#x` 就是本章）。键里的 id 是解码后的值，和注释块 `id` 属性还原字符引用后的值比。
 fn note_key(name: &str, href: &str) -> Option<NoteKey> {
     let (path, frag) = crate::epubzip::resolve_link(name, href);
+    let path = if path.is_empty() { name.to_string() } else { path };
     Some((path, frag.filter(|f| !f.is_empty())?))
+}
+
+/// `<a>` 像注释标号（普通链接、没有 noteref 语义时用）：文字是 `1`/`[1]`/`①`/`*`/`注1` 这类，或里面/外面紧挨着 `<sup>`。
+fn marker_like_link(html_text: &str, tags: &[html::Tag], e: &AElem) -> bool {
+    static TEXT: OnceLock<Regex> = OnceLock::new();
+    let re = TEXT.get_or_init(|| Regex::new(r#"^[\[\(（〔【<]?\s*(\d{1,4}|[*†‡§]{1,3}|[①-⑳]|[ⅰ-ⅹ]|注\s*\d{0,4})\s*[\]\)）〕】>]?$"#).unwrap());
+    let inner = &html_text[e.open_end..e.close_start];
+    let text = html::plain_text(inner);
+    let only_ws = |a: usize, b: usize| html_text[a..b].trim().is_empty();
+    let sup_around = e.open_ix.checked_sub(1).map(|k| &tags[k]).is_some_and(|t| t.kind == html::TagKind::Open && t.is("sup") && only_ws(t.end, e.start));
+    (re.is_match(&text) || inner.to_ascii_lowercase().contains("<sup") || sup_around) && text.chars().count() <= 8
+}
+
+/// 标号样的普通链接（同文件、跨文件都算）连同它自己的 id：(注释键, 标号 id)。注释块开头的回链指回这个 id 时，
+/// 这一对就是注释（[`collect_footnote_notes`] 的 `backrefs`；同 KFX 写出器配注释的办法，原书多半没有 note 语义：
+/// 《罗杰疑案》`<a id="zw1" href="#zhu1"><sup>[1]</sup></a>` ↔ `<p class="fncontent"><a id="zhu1" href="#zw1">[1]</a>…`）。
+pub fn marker_backrefs(html_text: &str, name: &str) -> Vec<(NoteKey, String)> {
+    let tags: Vec<html::Tag> = html::tags(html_text).collect();
+    let mut out = Vec::new();
+    for e in a_elems(&tags) {
+        let open = &html_text[e.start..e.open_end];
+        let Some(href) = html::attr_value(open, "href") else { continue };
+        if html::is_external(html::split_href(href).0) || !marker_like_link(html_text, &tags, &e) {
+            continue;
+        }
+        let Some(id) = html::attr_value(open, "id").filter(|v| !v.is_empty()) else { continue };
+        if let Some(k) = note_key(name, href) {
+            out.push((k, crate::util::xml_unescape(id).into_owned()));
+        }
+    }
+    out
+}
+
+/// 块开头（前面没有看得见的字）的 `<a>` 的 `id`（或 `name`），还原字符引用。
+fn leading_anchor_id(inner: &str) -> Option<String> {
+    let t = html::tags(inner).find(|t| t.is_start())?;
+    if !t.is("a") || html::has_visible(&inner[..t.start]) {
+        return None;
+    }
+    let open = &inner[t.start..t.end];
+    html::attr_value(open, "id").or_else(|| html::attr_value(open, "name")).filter(|v| !v.is_empty()).map(|v| crate::util::xml_unescape(v).into_owned())
+}
+
+/// 块开头（前面没有看得见的字）就是一个指回 `markers` 里某个 id 的链接：注释块的回链。
+fn starts_with_backlink(inner: &str, markers: &HashSet<String>) -> bool {
+    let tags: Vec<html::Tag> = html::tags(inner).collect();
+    let Some(e) = a_elems(&tags).into_iter().next() else { return false };
+    if html::has_visible(&inner[..e.start]) {
+        return false;
+    }
+    html::attr_value(&inner[e.start..e.open_end], "href").and_then(|h| html::split_href(h).1.map(|f| crate::util::xml_unescape(f).into_owned())).is_some_and(|f| markers.contains(&f))
 }
 
 /// 搬走的注释块（[`collect_footnote_notes`] 收集、[`preserve_relink_footnotes`] 放到引用它的那一章末尾）。
@@ -424,7 +476,7 @@ pub fn referenced_note_keys(html_text: &str, name: &str) -> Vec<NoteKey> {
         if html::is_external(html::split_href(href).0) {
             continue;
         }
-        if is_noteref(open) || href_crossfile_fragment(open).is_some() {
+        if is_noteref(open) || href_crossfile_fragment(open).is_some() || marker_like_link(html_text, &tags, &a) {
             out.extend(note_key(name, href));
         }
     }
@@ -454,6 +506,17 @@ pub fn collect_footnote_notes(
     referenced: &std::collections::HashSet<String>,
     require_semantic: bool,
 ) -> (String, Vec<(String, Note)>) {
+    collect_footnote_notes_with(html_text, referenced, require_semantic, &HashMap::new())
+}
+
+/// 同 [`collect_footnote_notes`]；`backrefs`（注释 id → 引用它的标号 id，见 [`marker_backrefs`]）：块没有注释语义、但开头的
+/// 回链指回引用它的标号时，也算注释（2026-10-05 用户定：注释识别和 KFX 统一成"互相链接的一对"）。
+pub fn collect_footnote_notes_with(
+    html_text: &str,
+    referenced: &std::collections::HashSet<String>,
+    require_semantic: bool,
+    backrefs: &HashMap<String, HashSet<String>>,
+) -> (String, Vec<(String, Note)>) {
     let mut index: Vec<(String, Note)> = Vec::new();
     // 快速路径：块只有在开标签带 `id="X"` 且 X 被引用时才会被搬走。本章任何位置都找不到一个被引用的
     // `id="…"` 值 → 结果必然与原文相同，不必解析（2026-09-24 审计实测这一步占章节变换耗时的大头，绝大多数章节其实没有注释块）。
@@ -472,9 +535,18 @@ pub fn collect_footnote_notes(
         if sp.name == "div" && inner.contains("<div") {
             continue; // 嵌套 div：原样保留不搬
         }
-        let Some(id) = html::attr_value(open, "id").filter(|v| !v.is_empty()) else { continue };
-        let id = crate::util::xml_unescape(id);
-        if referenced.contains(id.as_ref()) && (!require_semantic || note_semantic(open)) {
+        // 锚点在块自己身上，或在块开头的 `<a id>`/`<a name>` 上（《罗杰疑案》`<p class="fncontent"><a id="zhu1" href="#zw1">[1]</a>…`）
+        let own = html::attr_value(open, "id").filter(|v| !v.is_empty()).map(crate::util::xml_unescape);
+        let lead = || leading_anchor_id(inner);
+        let id = match own {
+            Some(i) if referenced.contains(i.as_ref()) => i,
+            _ => match lead() {
+                Some(i) => std::borrow::Cow::Owned(i),
+                None => continue,
+            },
+        };
+        let paired = || backrefs.get(id.as_ref()).is_some_and(|m| starts_with_backlink(inner, m));
+        if referenced.contains(id.as_ref()) && (!require_semantic || note_semantic(open) || paired()) {
             let list = if sp.name == "li" { list_item(html_text, &spans, si) } else { None };
             index.push((id.into_owned(), Note { inner: inner.to_string(), list }));
             taken.push(si);
@@ -680,10 +752,11 @@ pub fn preserve_relink_footnotes(html_text: &str, name: &str, index: &std::colle
             edits.push((e.start, e.end, make(frag, &key, note, &html_text[e.start..e.open_end], &html_text[e.open_end..e.close_start])));
         }
     }
-    // 3) 跨文件普通 <a href="其他文件#frag">：非 noteref，但 frag 已被 collect_footnote_notes 收进
-    //    index（确证是注释）→ 改同章锚点 + 注释搬章末。目标不在 index 的（目录/交叉引用）不动。
+    // 3) 普通 <a href="[其他文件]#frag">：非 noteref，但 frag 已被 collect_footnote_notes 收进 index（确证是注释：有注释语义，
+    //    或和它互相链接）→ 改同章锚点 + 注释搬章末。同文件的也算（《罗杰疑案》注释和正文在同一个文件）。目标不在 index 的
+    //    （目录/交叉引用）不动。
     for (i, e) in elems.iter().enumerate() {
-        if done[i] || href_crossfile_fragment(&html_text[e.start..e.open_end]).is_none() {
+        if done[i] || html::attr_value(&html_text[e.start..e.open_end], "href").and_then(|h| html::split_href(h).1).is_none_or(|f| f.is_empty()) {
             continue;
         }
         let Some((_, frag, key, note)) = lookup(e) else { continue };
