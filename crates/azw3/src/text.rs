@@ -310,7 +310,7 @@ mod tests {
     }
 
     fn lay_with(docs: Vec<bookconv::epubbook::Doc>, res: &HashMap<String, (u32, &'static str)>) -> (Layout, Vec<String>) {
-        let book = Loaded { meta: Default::default(), docs, css: vec![], images: vec![], cover: None, toc: vec![] };
+        let book = Loaded { meta: Default::default(), docs, css: vec![], images: vec![], fonts: vec![], cover: None, toc: vec![] };
         let mut w = Vec::new();
         (layout(&book, res, &mut w).unwrap(), w)
     }
