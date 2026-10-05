@@ -39,6 +39,7 @@ mod css;
 mod dead_refs;
 mod drm;
 mod empty_pages;
+pub mod fonts;
 mod ids;
 mod layout;
 mod ncx_fix;
@@ -102,11 +103,13 @@ pub struct WashOpts {
     pub lang: LangMode,
     /// 章节分页：章标题独立一页、节与节/节与章之间分页（见 `paginate.rs`）。文字书缺省开，漫画自动跳过。
     pub paginate: bool,
+    /// 保留的字体（规范化的名字）。`wash_entries` 开头按全书分析填上（见 `fonts`），调用方不用给。
+    pub keep_fonts: HashSet<String>,
 }
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, paginate: true }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, paginate: true, keep_fonts: HashSet::new() }
     }
 }
 
@@ -134,6 +137,10 @@ const WASH_MARK: &str = "eink-wash";
 pub struct WashReport {
     pub pseudo_drm_stripped: Vec<String>,
     pub css_files: usize,
+    /// 保留下来的嵌入字体（规范化的名字，排好序）。
+    pub kept_fonts: Vec<String>,
+    /// 标成批注（`eink-annot`）的元素个数。
+    pub annotations_marked: usize,
     pub html_files: usize,
     pub empty_pages_removed: Vec<String>,
     pub toc_generated: usize,
@@ -214,13 +221,17 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     remove_empty_pages(entries, &mut rep);
     drop_dead_refs(entries, &mut rep);
     // Auto → 探测主语言，解析成具体 Cjk/Latin 再逐文件注排版（探测在剥空页之后、注样式之前）。
-    let opts = if opts.lang == LangMode::Auto {
+    let font_plan = fonts::analyze(entries);
+    let opts = {
         let mut o = opts.clone();
-        o.lang = detect_dominant_script(entries);
+        if o.lang == LangMode::Auto {
+            o.lang = detect_dominant_script(entries);
+        }
+        o.keep_fonts = font_plan.keep.clone();
         o
-    } else {
-        opts.clone()
     };
+    rep.kept_fonts = font_plan.keep.iter().cloned().collect();
+    rep.kept_fonts.sort();
     let opts = &opts;
     // 书的语言标签：OPF `dc:language` 优先，没有就按探测到的主语言。补给缺 lang 的 <html>。
     let opf_idx = find_opf(entries);
@@ -251,7 +262,9 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     for e in entries.iter_mut() {
         if is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name) {
             if let Ok(t) = std::str::from_utf8(&e.data) {
-                let (out, dups) = wash_html_with(t, opts, &indent_classes);
+                let (marked, n) = fonts::mark_annotations(t, &font_plan);
+                rep.annotations_marked += n;
+                let (out, dups) = wash_html_with(&marked, opts, &indent_classes);
                 let href = relative_to(dir_of(&e.name), &css_path);
                 let out = inject_css_link(&out, &href);
                 let out = ensure_html_lang(&align_classes(&out), &lang_tag);
@@ -266,6 +279,7 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     // 目录指错位置的先修好：后面的分部重建、分页都按目录找标题
     repair_ncx_targets(entries, &mut rep);
     restructure_existing_toc_parts(entries, opts.auto_toc, heading, &mut rep);
+    nest_parts_among_siblings(entries, opts.auto_toc, heading, &mut rep);
     auto_toc(entries, opts.auto_toc, heading, &mut rep);
     // 分页放在自动目录之后：自动目录给标题补的 id 已经在，分页改写目录链接时能对上。漫画不拆。
     let comic = crate::comic_detect::is_comic(entries);

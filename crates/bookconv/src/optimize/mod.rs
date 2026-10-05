@@ -78,7 +78,12 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   注释块 id 转义；漫画只裁接近白的边（以前黑底、纯色出血也裁掉再补成白边，改了原画）；网上的图先按 EXIF 方向摆正再选横竖框。
 /// - v37（2026-10-05）：节一级的标题一个也没跟在同文件的章标题后面（只在版权页、目录页上）时，节换成更深一级
 ///   （《ABC谋杀案》h2 只用在版权页、目录页，真正的节 h3「1」「2」以前没补进目录）。
-pub const OPTIMIZE_VERSION: &str = "37";
+/// - v38（2026-10-05）：写着 `display:none`/`hidden` 的标题不当章标题切页（《绍宋》每章前一页空白）；嵌入字体按用户 2026-10-05
+///   的规则：正文、批注不用嵌入字体，其余（章名、书信……）保留书里嵌了文件的字体；批注（「注：」段落、括号里换了字体的
+///   行内元素）加 `eink-annot`，字号 0.85em；分页按书自带目录的层级定书/卷、章、节（合集和普通书统一，章名写成段落的也认，
+///   数字章名和正文同页，「部」下面的章深一层），目录里一层平排的「第X部」把后面的条目收到它下面；清章尾空白时自闭合的
+///   `<span/>` 不再连着后面的 `</p>` 一起删（以前产出不合法 XML）。
+pub const OPTIMIZE_VERSION: &str = "38";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -213,6 +218,8 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         }
         None => (None, None),
     };
+    // 清洗层定下的保留字体（嵌了文件、又不是正文字体的）：第一遍剥行内字体锁时也留着。
+    let keep_fonts: HashSet<String> = wash_rep.as_ref().map(|r| r.kept_fonts.iter().cloned().collect()).unwrap_or_default();
     let has_remote_imgs = raw.iter().any(|e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img));
     // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
     let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len() + 1);
@@ -242,7 +249,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         let data = if ish {
             match String::from_utf8(data) {
                 Ok(text) => {
-                    let stripped = first_pass_html(&text, &name);
+                    let stripped = first_pass_html(&text, &name, &keep_fonts);
                     if !skip_notes.contains(&name) {
                         let refs = crate::htmlproc::referenced_note_keys(&stripped, &name);
                         if !refs.is_empty() && crate::wash::is_toc_like_page(&stripped) {

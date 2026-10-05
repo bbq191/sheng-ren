@@ -919,6 +919,215 @@
         assert_eq!(crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx")).len(), 4);
     }
 
+    /// 《绍宋》：每章开头是 `<h2 style="display:none;">` 隐藏标题（只给目录定位），看得见的章名是后面的段落。
+    /// 不能按它切页：切了每章前面是一页什么都看不见的空白。
+    #[test]
+    fn hidden_heading_does_not_cut_a_blank_page() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = paged_book(&[
+            ("c1.xhtml", &format!(r#"<h2 style="display:none;">第一章 甲</h2><p class="t">第一章</p><p>{long}</p>"#)),
+            ("c2.xhtml", &format!(r#"<h2 hidden="hidden">第二章 乙</h2><p class="t">第二章</p><p>{long}</p>"#)),
+        ]);
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.sections_paginated, 0);
+        assert_eq!(spine_files(&v), ["OEBPS/Text/c1.xhtml", "OEBPS/Text/c2.xhtml"]);
+    }
+
+    /// 嵌套目录的书：[(层级, 标签, 文件)]。
+    fn nested_ncx_book(files: &[(&str, &str)], toc: &[(usize, &str, &str)]) -> Vec<Entry> {
+        let mut v = paged_book(files);
+        let mut xml = String::new();
+        let mut depth = 0;
+        for (d, l, f) in toc {
+            while depth >= *d {
+                xml.push_str("</navPoint>");
+                depth -= 1;
+            }
+            xml.push_str(&format!("<navPoint><navLabel><text>{l}</text></navLabel><content src=\"Text/{f}\"/>"));
+            depth = *d;
+        }
+        for _ in 0..depth {
+            xml.push_str("</navPoint>");
+        }
+        v.push(e("OEBPS/toc.ncx", &format!("<ncx><navMap>{xml}</navMap></ncx>")));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        v
+    }
+
+    /// 《绍宋》（卷 → 章）：章名是装饰图 + 「第一章」「明道宫」两段，前面一个隐藏的 h2。按目录层级：卷、章的标题都独占一页，
+    /// 装饰图跟着章名。
+    #[test]
+    fn toc_driven_volume_and_paragraph_chapter_titles() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let ch = |n: &str, name: &str| format!(r#"<h2 style="display:none;">{n} {name}</h2><div class="j"><img src="../Images/j.png" alt="j"/></div><p class="j11">{n}</p><p class="j1">{name}</p><p>{long}</p><p>{long}</p>"#);
+        let mut v = nested_ncx_book(
+            &[("J01.xhtml", r#"<h1 class="juan">第一卷 靖康遗志</h1>"#), ("c1.xhtml", &ch("第一章", "明道宫")), ("c2.xhtml", &ch("第二章", "赤心队"))],
+            &[(1, "第一卷 靖康遗志", "J01.xhtml"), (2, "第一章 明道宫", "c1.xhtml"), (2, "第二章 赤心队", "c2.xhtml")],
+        );
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        let c1 = body_of(&v, "OEBPS/Text/c1.xhtml");
+        assert!(c1.contains("明道宫") && c1.contains("j.png") && !c1.contains("这是足够长"), "章名（连装饰图）独占一页：{c1}");
+        assert!(body_of(&v, "OEBPS/Text/c1-p2.xhtml").contains("这是足够长"));
+    }
+
+    /// 合集（书 → 回）：书名、第一回各占一页；书名下面一层像「第X回」，最上一层就是书一级。
+    #[test]
+    fn toc_driven_collection_book_and_chapter_pages() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = nested_ncx_book(
+            &[
+                ("b1.xhtml", &format!(r#"<h1 id="b">书剑恩仇录</h1><h2 id="h1">第一回</h2><p>{long}</p>"#)),
+                ("b1c2.xhtml", &format!(r#"<h2>第二回</h2><p>{long}</p>"#)),
+                ("b2.xhtml", &format!(r#"<h1>碧血剑</h1><h2>第一回</h2><p>{long}</p>"#)),
+            ],
+            &[(1, "书剑恩仇录", "b1.xhtml#b"), (2, "第一回", "b1.xhtml#h1"), (2, "第二回", "b1c2.xhtml"), (1, "碧血剑", "b2.xhtml"), (2, "第一回", "b2.xhtml")],
+        );
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        let b1 = body_of(&v, "OEBPS/Text/b1.xhtml");
+        assert!(b1.contains("书剑恩仇录") && !b1.contains("第一回"), "书名独占一页：{b1}");
+        let p2 = body_of(&v, "OEBPS/Text/b1-p2.xhtml");
+        assert!(p2.contains("第一回") && !p2.contains("这是足够长"), "第一回独占一页：{p2}");
+        assert!(body_of(&v, "OEBPS/Text/b1-p3.xhtml").contains("这是足够长"));
+    }
+
+    /// 合集里章名全是数字的书（《深夜小狗神秘事件》：2、3、5、7…）：数字章和正文同页，目录不重复补「2」下面的「2」。
+    #[test]
+    fn numeric_chapters_in_collection_not_duplicated_in_toc() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = nested_ncx_book(
+            &[
+                ("b1.xhtml", r#"<h1>恶意</h1>"#),
+                ("b1c1.xhtml", &format!(r#"<h2>事件之章</h2><p>{long}</p>"#)),
+                ("b2.xhtml", r#"<h1>深夜小狗神秘事件</h1>"#),
+                ("b2p.xhtml", &format!(r#"<h2>前言</h2><p>{long}</p>"#)),
+                ("b2c2.xhtml", &format!(r#"<div id="a2"></div><h2>2</h2><p>{long}</p>"#)),
+                ("b2c3.xhtml", &format!(r#"<div id="a3"></div><h2>3</h2><p>{long}</p>"#)),
+                ("b3.xhtml", r#"<h1>混凝土里的金发女郎</h1>"#),
+                ("b3p.xhtml", &format!(r#"<h2>序幕</h2><p>{long}</p>"#)),
+                ("b3c1.xhtml", &format!(r#"<h2>2</h2><p>{long}</p>"#)),
+                ("b3c2.xhtml", &format!(r#"<h2>3</h2><p>{long}</p>"#)),
+            ],
+            &[
+                (1, "恶意", "b1.xhtml"),
+                (2, "事件之章", "b1c1.xhtml"),
+                (1, "深夜小狗神秘事件", "b2.xhtml"),
+                (2, "前言", "b2p.xhtml"),
+                (2, "2", "b2c2.xhtml#a2"),
+                (2, "3", "b2c3.xhtml#a3"),
+                (1, "混凝土里的金发女郎", "b3.xhtml"),
+                (2, "序幕", "b3p.xhtml"),
+                (2, "2", "b3c1.xhtml"),
+                (2, "3", "b3c2.xhtml"),
+            ],
+        );
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.toc_sections_added, 0, "普通章名后面跟着数字章不是《13級階梯》那种节");
+        assert_eq!(crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx")).len(), 10);
+        assert!(body_of(&v, "OEBPS/Text/b2c2.xhtml").contains("这是足够长"), "数字章名和正文同页");
+    }
+
+    /// 《克莱因壶》：「著作权使用契约书」后面一串「01」「02」…是章（数字章名），只有一串，不缩进到前一条下面。
+    #[test]
+    fn single_numeric_run_after_front_matter_not_indented() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = nested_ncx_book(
+            &[("cp.xhtml", &format!(r#"<h2>著作权使用契约书</h2><p>{long}</p>"#)), ("c1.xhtml", &format!(r#"<h2>01</h2><p>{long}</p>"#)), ("c2.xhtml", &format!(r#"<h2>02</h2><p>{long}</p>"#))],
+            &[(1, "著作权使用契约书", "cp.xhtml"), (1, "01", "c1.xhtml"), (1, "02", "c2.xhtml")],
+        );
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        assert!(flat.iter().all(|(d, _, _)| *d == 1), "{flat:?}");
+    }
+
+    /// 福尔摩斯全集里的《恐怖谷》：书下面「第一部」「第一章」…「第二部」「第一章」…平排。目录嵌成书 → 部 → 章，
+    /// 部、章各占一页（章不因为深了一层就当成节）。
+    #[test]
+    fn parts_among_siblings_nested_and_chapters_stay_chapters() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = nested_ncx_book(
+            &[
+                ("a.xhtml", r#"<h1>血字的研究</h1>"#),
+                ("a1.xhtml", &format!(r#"<h2>第一章 歇洛克·福尔摩斯先生</h2><p>{long}</p>"#)),
+                ("b.xhtml", r#"<h1>恐怖谷</h1>"#),
+                ("bp1.xhtml", r#"<h2>第一部 伯尔斯通惨剧</h2>"#),
+                ("b1.xhtml", &format!(r#"<h2>第一章 警讯</h2><p>{long}</p>"#)),
+                ("bp2.xhtml", r#"<h2>第二部 死酷党人</h2>"#),
+                ("b2.xhtml", &format!(r#"<h2>第一章 某人</h2><p>{long}</p>"#)),
+            ],
+            &[
+                (1, "血字的研究", "a.xhtml"),
+                (2, "第一章 歇洛克·福尔摩斯先生", "a1.xhtml"),
+                (1, "恐怖谷", "b.xhtml"),
+                (2, "第一部 伯尔斯通惨剧", "bp1.xhtml"),
+                (2, "第一章 警讯", "b1.xhtml"),
+                (2, "第二部 死酷党人", "bp2.xhtml"),
+                (2, "第一章 某人", "b2.xhtml"),
+            ],
+        );
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let got: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
+        assert_eq!(got, [(1, "血字的研究"), (2, "第一章 歇洛克·福尔摩斯先生"), (1, "恐怖谷"), (2, "第一部 伯尔斯通惨剧"), (3, "第一章 警讯"), (2, "第二部 死酷党人"), (3, "第一章 某人")]);
+        let b1 = body_of(&v, "OEBPS/Text/b1.xhtml");
+        assert!(b1.contains("警讯") && !b1.contains("这是足够长"), "部下面的章仍独占一页：{b1}");
+    }
+
+    /// 《啸风山庄》：目录锚点是自闭合的空段落 `<p id="…"/>`，章名段落里有自闭合的 `<span/>`。切点不能落在章名段落里面。
+    #[test]
+    fn toc_anchor_on_self_closed_paragraph() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let body = |n: &str, id: &str| format!(r#"<div class="x"><p class="chapter" id="{id}"/><p class="h1">{n}<span class="o"/></p><p class="p">{long}</p></div>"#);
+        let mut v = nested_ncx_book(
+            &[("c18.xhtml", &body("第十八章", "m18")), ("c19.xhtml", &body("第十九章", "m19"))],
+            &[(1, "第十八章", "c18.xhtml#m18"), (1, "第十九章", "c19.xhtml#m19")],
+        );
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        for e in v.iter().filter(|e| e.name.ends_with(".xhtml")) {
+            let t = std::str::from_utf8(&e.data).unwrap();
+            assert!(quick_xml_ok(t), "{}: {t}", e.name);
+        }
+        let c19 = body_of(&v, "OEBPS/Text/c19.xhtml");
+        assert!(c19.contains("第十九章") && !c19.contains("这是足够长"), "{c19}");
+    }
+
+    fn quick_xml_ok(t: &str) -> bool {
+        let mut r = quick_xml::Reader::from_str(t);
+        let mut stack: Vec<Vec<u8>> = Vec::new();
+        loop {
+            match r.read_event() {
+                Ok(quick_xml::events::Event::Start(e)) => stack.push(e.name().as_ref().to_vec()),
+                Ok(quick_xml::events::Event::End(e)) => {
+                    if stack.pop().as_deref() != Some(e.name().as_ref()) {
+                        return false;
+                    }
+                }
+                Ok(quick_xml::events::Event::Eof) => return stack.is_empty(),
+                Err(_) => return false,
+                _ => {}
+            }
+        }
+    }
+
+    /// 《飘》版权页：隐藏的 h1 后面是目录认出的可见标题段落。切页不能剩下只有隐藏标题的一份（开头一页空白）。
+    #[test]
+    fn piece_with_only_hidden_heading_is_merged() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = paged_book(&[
+            ("cp.xhtml", &format!(r#"<h1 style="display:none;">版权信息</h1><p id="t">版权信息</p><p>{long}</p>"#)),
+            ("c1.xhtml", &format!(r#"<h1 id="c1">第一章</h1><p>{long}</p>"#)),
+        ]);
+        v.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><navLabel><text>版权信息</text></navLabel><content src="Text/cp.xhtml"/></navPoint><navPoint><navLabel><text>第一章</text></navLabel><content src="Text/c1.xhtml#c1"/></navPoint></navMap></ncx>"#));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        wash_entries(&mut v, &WashOpts::default()).unwrap();
+        for f in spine_files(&v) {
+            let b = body_of(&v, &f);
+            let without_hidden = b.replace(r#"<h1 style="display:none;">版权信息</h1>"#, "");
+            assert!(crate::html::has_visible(&without_hidden), "{f} 只剩隐藏内容：{b}");
+        }
+    }
+
     /// 《ABC谋杀案》：h2 只用在单独成页的版权页、目录页，真正的节是 h3（「1」「2」）。节一级不能被 h2 占掉。
     #[test]
     fn front_matter_only_level_is_not_section() {
@@ -1160,7 +1369,8 @@
         assert_eq!((rep2.sections_paginated, rep2.toc_sections_added), (0, 0), "幂等");
     }
 
-    /// 反例：全书只有一串同级数字标题（《月亮和六便士》`<h3>二</h3>`… 是章），不降成节。
+    /// 反例：全书只有一串同级数字标题（《月亮和六便士》`<h3>二</h3>`… 是章），目录不改成两级。
+    /// 章名只是数字时和正文同页（用户 2026-10-05：免得一页只有一个数字）。
     #[test]
     fn single_run_of_numbered_headings_stays_chapters() {
         let t = HAODOO_TEXT;
@@ -1169,7 +1379,7 @@
         wash_entries(&mut v, &WashOpts::default()).unwrap();
         let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
         assert!(flat.iter().all(|(d, _, _)| *d == 1), "{flat:?}");
-        assert!(!body_of(&v, "OEBPS/Text/2.xhtml").contains("鐵路"), "二 仍是章：标题独立一页");
+        assert!(body_of(&v, "OEBPS/Text/2.xhtml").contains("鐵路"), "章名只是数字：和正文同页");
     }
 
     /// 章标签末尾的数字是章自己的编号（《鼠疫》"部　一"，节都是新补的）：不去掉。

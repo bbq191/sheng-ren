@@ -41,7 +41,7 @@ pub(super) enum Spacing {
 /// 对一段声明文本：剥 `filter` 里的属性；按 `spacing` 处理 margin/padding。（测试用薄封装）
 #[cfg(test)]
 pub(super) fn filter_decls(decls: &str, filter: &[String], spacing: Spacing) -> String {
-    filter_decls_with(decls, filter, spacing, false, None)
+    filter_decls_with(decls, filter, spacing, false, None, &HashSet::new())
 }
 
 /// 值是否"非零缩进"（`0` / `0em` / `0.0pt` 之类算零；负值=悬挂缩进，保留不动）。
@@ -57,7 +57,7 @@ pub(super) fn is_positive_indent(val: &str) -> bool {
 /// （2026-09-06 Phase E 英文书对照发现）。`text-indent:0`（诗歌/引文/列表明示不缩进）与负值保留。
 /// `filter` 里的属性按 [`crate::cssunlock::unlock`] 解锁（字体去掉、相对字号保留、`font`/`background` 简写只留样式和颜色……）；
 /// `base_text` = 这条规则作用在正文整体那一层（见 [`is_base_text_selector`]）。
-pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing, base_text: bool, indent: Option<&str>) -> String {
+pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing, base_text: bool, indent: Option<&str>, keep_fonts: &HashSet<String>) -> String {
     use crate::cssunlock::{unlock, Unlock};
     let mut out: Vec<String> = Vec::new();
     // 声明按分号切，引号/括号（`url(data:…;base64,…)`）/字符引用里的分号不算（`html::css_decls`）。
@@ -65,7 +65,7 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
         let prop = d.prop.to_ascii_lowercase();
         let val = d.value;
         if filter.contains(&prop) {
-            match unlock(&prop, val, base_text) {
+            match unlock(&prop, val, base_text, keep_fonts) {
                 Unlock::Keep => {}
                 Unlock::Drop => continue,
                 Unlock::Replace(v) => {
@@ -239,11 +239,12 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
                 filter.push("font-weight".to_string());
             }
             // base_text=true：书自己的字号（哪怕是相对的）一律去掉，换成下面统一的注释字号
-            let mut decls = filter_decls_with(&c[2], &filter, spacing, true, Some(indent_for(opts)));
+            // 注释容器的字体一律去掉（批注不用嵌入字体，用户 2026-10-05）。
+            let mut decls = filter_decls_with(&c[2], &filter, spacing, true, Some(indent_for(opts)), &HashSet::new());
             decls.push_str(&format!("font-size:{FOOTNOTE_FONT_SIZE};"));
             return format!("{lead}{sel}{{{decls}}}");
         }
-        format!("{lead}{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, is_base_text_selector(&clean), Some(indent_for(opts))))
+        format!("{lead}{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, is_base_text_selector(&clean), Some(indent_for(opts)), &opts.keep_fonts))
     }).into_owned()
 }
 
@@ -311,7 +312,7 @@ pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashS
             _ => Spacing::Keep,
         };
         let base_text = matches!(t.name.to_ascii_lowercase().as_str(), "body" | "html");
-        let cleaned = filter_decls_with(a.value, &opts.filter_props, spacing, base_text, Some(indent_for(opts)));
+        let cleaned = filter_decls_with(a.value, &opts.filter_props, spacing, base_text, Some(indent_for(opts)), &opts.keep_fonts);
         if cleaned.is_empty() {
             Edit::Remove
         } else if cleaned == a.value {
