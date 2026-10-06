@@ -38,6 +38,43 @@ const USAGE: &str = "用法:
   booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
   booklib [--library=目录] devices                      列出阅读模式（书库 profiles/ 目录里的自定义 profile 也算）";
 
+/// `USAGE` 里属于命令 `cmd` 的几段（从 `booklib … cmd` 那一行到下一个命令之前；meta 有三段）。
+fn command_usage(cmd: &str) -> Option<String> {
+    let mut out = Vec::new();
+    let mut take = false;
+    for line in USAGE.lines().skip(1) {
+        if let Some(rest) = line.strip_prefix("  booklib ") {
+            let rest = rest.strip_prefix("[--library=目录] ").unwrap_or(rest);
+            take = rest.split_whitespace().next() == Some(cmd);
+        }
+        if take {
+            out.push(line);
+        }
+    }
+    (!out.is_empty()).then(|| format!("用法:\n{}", out.join("\n")))
+}
+
+/// `booklib --help`、`-h`、`help` 打印全部用法；`booklib <命令> --help`（或 `-h`）、`booklib help <命令>` 只打印这个命令的。
+/// 打到标准输出、退出码 0（要看帮助不算用错）。`--` 之后的参数不算。
+fn print_help_if_asked() {
+    let raw: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+    let args: Vec<&str> = raw.iter().map(String::as_str).take_while(|a| *a != "--").filter(|a| !a.starts_with("--library=")).collect();
+    let is_help = |a: &&str| matches!(*a, "--help" | "-h");
+    let cmd = match args.first() {
+        None => return,
+        Some(&"help") => args.get(1).copied(),
+        Some(a) if is_help(a) => None,
+        Some(c) if args.iter().any(is_help) => Some(*c),
+        _ => return,
+    };
+    match cmd.map(|c| (c, command_usage(c))) {
+        None => println!("{USAGE}"),
+        Some((_, Some(u))) => println!("{u}"),
+        Some((c, None)) => usage_error(&format!("不认识的命令 {c}")),
+    }
+    std::process::exit(0);
+}
+
 fn usage_error(msg: &str) -> ! {
     if !msg.is_empty() {
         eprintln!("{msg}\n");
@@ -294,6 +331,7 @@ fn main() {
         meta_edit::run(rest);
         return;
     }
+    print_help_if_asked();
     let args = Args::parse();
     let Some(cmd) = args.pos.first().and_then(|c| c.to_str()).map(str::to_string) else { usage_error("") };
     match cmd.as_str() {
