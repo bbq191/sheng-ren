@@ -46,6 +46,7 @@ mod ncx_fix;
 pub mod normalize;
 pub mod opf;
 mod paginate;
+mod safe_names;
 mod toc;
 mod typeset;
 
@@ -136,6 +137,8 @@ const WASH_MARK: &str = "eink-wash";
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct WashReport {
     pub pseudo_drm_stripped: Vec<String>,
+    /// 文件名里有安卓存储不能用的字符（`*:?` 等）而改了名的条目：(原名, 新名)。流式优化器按原名回原书读图片字节。
+    pub renamed: Vec<(String, String)>,
     pub css_files: usize,
     /// 保留下来的嵌入字体（规范化的名字，排好序）。
     pub kept_fonts: Vec<String>,
@@ -218,6 +221,8 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
 pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<(WashReport, bool), String> {
     let mut rep = WashReport::default();
     strip_pseudo_drm(entries, &mut rep)?;
+    // 文件名有安卓存储不能用的字符的先改名：后面各步按条目名找文件
+    safe_names::rename_unsafe_entries(entries, &mut rep);
     remove_empty_pages(entries, &mut rep);
     drop_dead_refs(entries, &mut rep);
     // Auto → 探测主语言，解析成具体 Cjk/Latin 再逐文件注排版（探测在剥空页之后、注样式之前）。
