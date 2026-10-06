@@ -1,5 +1,5 @@
-//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有三份，都按设备自带的阅读器量（2026-10-02 起 Kindle、掌阅日常用 KOReader 读 `ireader` 的产物，KOReader 上没单独量过，见 docs/devices.md）：
-//! `kindle`（Kindle PW12 签名版，AZW3）、`ireader`（掌阅 Ocean 5 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
+//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有三份，都按设备自带的阅读器量（见 docs/devices.md）：
+//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Ocean 5 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -176,6 +176,11 @@ impl Profile {
         if self.id.is_empty() {
             return Err("profile id 为空".into());
         }
+        // id 是产物目录名（`<跟踪目录旁>/<id>/`）和生成记录的文件名（`output-state/<id>.json`）：`.` 开头的记录文件书库不认
+        // （删书时删不到这个模式的产物），`.tmp-` 开头的还会被当成残留临时文件清掉；`--device=` 按逗号分开
+        if self.id.starts_with('.') || self.id.contains([',', '/', '\\']) {
+            return Err(format!("profile id {:?} 不能以 . 开头、不能含逗号或斜杠（改文件名）", self.id));
+        }
         if width == 0 || height == 0 || width > height {
             return Err(format!("profile {}: screen 须为竖屏且非零（width <= height），实际 {width}x{height}", self.id));
         }
@@ -278,7 +283,8 @@ impl Registry {
         let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         for e in entries {
             let path = e.map_err(|e| e.to_string())?.path();
-            if path.extension().is_none_or(|x| x != "toml") {
+            // 隐藏文件（编辑器的锁文件、备份等）不算 profile
+            if path.extension().is_none_or(|x| x != "toml") || path.file_name().is_some_and(|n| n.as_encoded_bytes().starts_with(b".")) {
                 continue;
             }
             let id = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| format!("{}: 文件名不是 UTF-8", path.display()))?;
@@ -357,6 +363,9 @@ mod tests {
         assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 1680\nheight = 1264\n")).is_err());
         assert!(Profile::parse("x", &format!("{base}extra = 1\n[screen]\nwidth = 10\nheight = 20\n")).is_err());
         assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 10\nheight = 20\n")).is_ok(), "comic_margin 缺省 1，要小于短边的 1/4");
+        for bad in [".hidden", ".tmp-x", "a,b"] {
+            assert!(Profile::parse(bad, &format!("{base}[screen]\nwidth = 10\nheight = 20\n")).is_err(), "id {bad} 不行");
+        }
         assert!(Profile::parse("x", &format!("{base}comic_page_direction = \"up\"\n[screen]\nwidth = 100\nheight = 200\n")).is_err(), "翻页方向只能 ltr/rtl");
         let scr = "[screen]\nwidth = 100\nheight = 200\n";
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")).is_ok());
@@ -400,6 +409,7 @@ mod tests {
         std::fs::write(dir.join("xochitl.toml"), body(1072)).unwrap();
         std::fs::write(dir.join("new-dev.toml"), body(1000)).unwrap();
         std::fs::write(dir.join("README.md"), "ignored").unwrap();
+        std::fs::write(dir.join(".#xochitl.toml"), "编辑器锁文件").unwrap();
         let r = Registry::with_dir(&dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(r.get("xochitl").unwrap().screen.width, 1072);
