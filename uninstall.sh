@@ -4,6 +4,7 @@
 # 用法: ./uninstall.sh
 # 只删命令本身。书库（索引、找来的封面、生成的产物）、书目录旁边生成的 kindle/ ireader/ xochitl/、设备上的东西都不动，
 # 只告诉你书库在哪：不要了就自己删那个目录。
+# 退出码：0 卸完（或本来就没装）；1 没有 cargo 或卸载失败；2 参数不对。
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd -P)
 # shellcheck source=tools/cargo-pkgs.sh
@@ -11,9 +12,10 @@ here=$(cd "$(dirname "$0")" && pwd -P)
 
 case ${1:-} in
   "") ;;
-  -h | --help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h | --help) print_header "$here/uninstall.sh"; exit 0 ;;
   *) echo "不认识的参数 $1（见 --help）" >&2; exit 2 ;;
 esac
+[[ $# -le 1 ]] || { echo "多余的参数 $2（见 --help）" >&2; exit 2; }
 command -v cargo >/dev/null || { echo "✗ 没有 cargo：命令是用 cargo install 装的，卸载也要用它" >&2; exit 1; }
 cargo_list >/dev/null
 
@@ -38,5 +40,5 @@ done
 # 书库缺省位置和 booklib 一致：$BOOKLIB_DIR，否则 $XDG_DATA_HOME/booklib，否则 ~/.local/share/booklib（空值按没设处理）
 lib=${BOOKLIB_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/booklib}
 if [[ -d $lib ]]; then
-  echo "  书库还在：${lib/#$HOME/\~}（$(du -sh "$lib" 2>/dev/null | cut -f1)）。不要了就自己删这个目录；书目录旁边生成的 kindle/ ireader/ xochitl/ 也一样。"
+  echo "  书库还在：${lib/#"$HOME"/\~}（$(du -sh "$lib" 2>/dev/null | cut -f1)）。不要了就自己删这个目录；书目录旁边生成的 kindle/ ireader/ xochitl/ 也一样。"
 fi
