@@ -165,19 +165,20 @@ pub fn to_halfwidth(c: char) -> char {
 
 /// "先产出到临时文件、成功才落盘改名覆盖目标、失败清掉半成品"的统一外壳（命令行工具和书库写文件都走它）。`produce(tmp)` 负责把产物写到 `tmp` 并返回任意结果（如统计报告）；
 /// 它出错或最后 `rename` 失败，`tmp` 都会被删掉，不在目录里留半成品。`tmp` 应与 `target` 同分区（rename 才原子）。
-/// 输入输出是同一个文件时也安全：产出期间原文件不动，改名那一刻才换掉。
+/// 输入输出是同一个文件时也安全：产出期间原文件不动，改名那一刻才换掉。`produce` 中途 panic 时 `tmp` 也会删掉
+/// （以前只在返回错误时删，panic 一路展开出去，半成品留在目标旁边）。
 pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, produce: impl FnOnce(&std::path::Path) -> Result<T, String>) -> Result<T, String> {
-    let value = match produce(tmp) {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = std::fs::remove_file(tmp);
-            return Err(e);
+    /// 没换到位就删掉临时文件（出错返回、panic 展开都走 `drop`）。
+    struct Cleanup<'a>(&'a std::path::Path);
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(self.0);
         }
-    };
-    if let Err(e) = commit(tmp, target) {
-        let _ = std::fs::remove_file(tmp);
-        return Err(format!("改名覆盖 {} 失败: {e}", target.display()));
     }
+    let cleanup = Cleanup(tmp);
+    let value = produce(tmp)?;
+    commit(tmp, target).map_err(|e| format!("改名覆盖 {} 失败: {e}", target.display()))?;
+    std::mem::forget(cleanup);
     Ok(value)
 }
 
@@ -330,6 +331,16 @@ mod tests {
         let err = produce_then_replace(&tmp, &dir_target, |t| std::fs::write(t, b"z").map_err(|e| e.to_string())).unwrap_err();
         assert!(err.contains("改名覆盖"), "{err}");
         assert!(!tmp.exists());
+        // 产出途中 panic：半成品也清掉，原文件不动
+        let r = std::panic::catch_unwind(|| {
+            produce_then_replace(&tmp, &target, |t| -> Result<(), String> {
+                std::fs::write(t, b"half").unwrap();
+                panic!("优化时崩了");
+            })
+        });
+        assert!(r.is_err());
+        assert!(!tmp.exists(), "panic 也不留半成品");
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
     }
 
     #[test]
