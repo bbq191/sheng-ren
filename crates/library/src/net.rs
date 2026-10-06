@@ -3,7 +3,6 @@
 use serde_json::Value;
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::io::Read;
 use std::time::{Duration, Instant};
 
 /// 一次响应最多读多少字节。
@@ -88,11 +87,10 @@ impl Net {
             }
             let wait = match res {
                 Ok(r) => {
-                    let mut buf = Vec::new();
-                    match r.into_reader().take(MAX_BODY + 1).read_to_end(&mut buf) {
+                    match bookconv::util::read_capped(r.into_reader(), MAX_BODY, 0) {
                         // 超过上限的不是封面也不是条目页：报错，不能截断了当成功（截断的图读得出尺寸，会被当封面存下）
-                        Ok(_) if buf.len() as u64 > MAX_BODY => return Err(format!("{url}: 响应超过 {} MB", MAX_BODY >> 20)),
-                        Ok(_) => return Ok(buf),
+                        Ok(None) => return Err(format!("{url}: 响应超过 {} MB", MAX_BODY >> 20)),
+                        Ok(Some(buf)) => return Ok(buf),
                         Err(e) => {
                             last_err = e.to_string();
                             2

@@ -1275,8 +1275,13 @@ fn pid_map(order: &[(i64, usize)]) -> Vec<Value> {
 
 /// EPUB → KFX。返回 KFX 字节和警告。
 pub fn epub_to_kfx(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), String> {
+    epub_to_kfx_from(std::io::Cursor::new(epub), opts)
+}
+
+/// 同 [`epub_to_kfx`]，从可定位的读取器（如打开的文件）读 EPUB：不用先把整本读进内存，峰值少一份压缩包大小。
+pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) -> Result<(Vec<u8>, Vec<String>), String> {
     let mut warnings = Vec::new();
-    let mut book = epubbook::load(epub, &mut warnings)?;
+    let mut book = epubbook::load_from(epub, &mut warnings)?;
     // 图片字节从书里搬出来（写出器只在这里用到它们），不复制。
     let images = std::mem::take(&mut book.images).into_iter().map(|i| (i.path, (i.bytes, i.mime))).collect();
     let mut b = Builder {

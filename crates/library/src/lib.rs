@@ -236,9 +236,9 @@ pub fn unsupported(format: &str) -> String {
 }
 
 /// 要转换才能用的原件格式（CBZ）→ EPUB 字节（与设备无关）。EPUB 不走这里。
-pub(crate) fn convert_to_epub(format: &str, data: &[u8], title: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn convert_to_epub(format: &str, data: impl std::io::Read + std::io::Seek, title: &str) -> Result<Vec<u8>, String> {
     match format {
-        "cbz" => bookconv::convert::cbz::cbz_to_epub(data, title),
+        "cbz" => bookconv::convert::cbz::cbz_to_epub_from(data, title),
         _ => Err(unsupported(format)),
     }
 }
