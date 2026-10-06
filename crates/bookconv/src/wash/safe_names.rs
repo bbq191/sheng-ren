@@ -27,7 +27,9 @@ fn safe_file_name(file: &str, dir: &str, taken: &HashSet<String>) -> String {
 }
 
 /// CSS（样式表、`<style>`、`style` 属性）里的 `url(…)`：书内文件改了名的换成新路径（相对 `base_dir`）。
-fn rewrite_css_urls(text: &str, base_dir: &str, map: &HashMap<String, String>) -> Option<String> {
+/// 样式表里一律写成 `url("…")`；`in_html` 时照原来的引号写（原来没引号就不加：新路径百分号编码过，不带空格、括号、引号）——
+/// 2026-10-06 审计：此前 html 里也写成双引号，`style="background:url('…')"` 改成 `style="background:url("…")"`，属性被截断、XML 不合法。
+fn rewrite_css_urls(text: &str, base_dir: &str, map: &HashMap<String, String>, in_html: bool) -> Option<String> {
     static URL: OnceLock<Regex> = OnceLock::new();
     let url = URL.get_or_init(|| Regex::new(r#"(?i)url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s'"]*))\s*\)"#).unwrap());
     let mut changed = false;
@@ -41,7 +43,14 @@ fn rewrite_css_urls(text: &str, base_dir: &str, map: &HashMap<String, String>) -
         match map.get(&target) {
             Some(new) => {
                 changed = true;
-                format!("url(\"{}\")", crate::epubzip::href_to(base_dir, new, ""))
+                let q = if !in_html || c.get(1).is_some() {
+                    "\""
+                } else if c.get(2).is_some() {
+                    "'"
+                } else {
+                    ""
+                };
+                format!("url({q}{}{q})", crate::epubzip::href_to(base_dir, new, ""))
             }
             None => c[0].to_string(),
         }
@@ -114,12 +123,12 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport)
         }
     }
     for e in entries.iter_mut() {
-        let l = e.name.to_ascii_lowercase();
-        if !(l.ends_with(".css") || is_html_entry(&e.name, &e.data)) {
+        let is_css = e.name.to_ascii_lowercase().ends_with(".css");
+        if !(is_css || is_html_entry(&e.name, &e.data)) {
             continue;
         }
         let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        if let Some(new) = rewrite_css_urls(text, dir_of(&e.name), &map) {
+        if let Some(new) = rewrite_css_urls(text, dir_of(&e.name), &map, !is_css) {
             e.data = new.into_bytes();
         }
     }
@@ -143,7 +152,7 @@ mod tests {
         let mut v = vec![
             e("mimetype", "application/epub+zip"),
             e("OEBPS/content.opf", &format!(r#"<package><manifest><item id="f45" properties="cover-image" href="Images/{enc}" media-type="image/jpeg"/><item id="c" href="Text/c.xhtml" media-type="application/xhtml+xml"/><item id="s" href="Styles/s.css" media-type="text/css"/></manifest><spine><itemref idref="c"/></spine></package>"#)),
-            e("OEBPS/Text/c.xhtml", &format!(r#"<html><body><img src="../Images/{enc}"/><div style="background:url('../Images/{enc}')"></div></body></html>"#)),
+            e("OEBPS/Text/c.xhtml", &format!(r#"<html><head><style>p{{background:url("../Images/{enc}")}}</style></head><body><img src="../Images/{enc}"/><div style="background:url('../Images/{enc}')"></div><p style="background-image:url(../Images/{enc})"></p></body></html>"#)),
             e("OEBPS/Styles/s.css", &format!("body{{background-image:url(../Images/{enc})}}")),
             e("OEBPS/nav.xhtml", r#"<html><body><nav><ol><li><a href="Text/**::x.xhtml#a">一</a></li><li><a href="http://e.com/a:b">外</a></li></ol></nav></body></html>"#),
             e("OEBPS/Text/**::x.xhtml", "<html><body><p id='a'>x</p></body></html>"),
@@ -159,7 +168,11 @@ mod tests {
         assert!(v.iter().any(|x| x.name == "OEBPS/Images/____.jpg"));
         let s = |n: &str| String::from_utf8(v.iter().find(|x| x.name == n).unwrap().data.clone()).unwrap();
         assert!(s("OEBPS/content.opf").contains(r#"href="Images/____.jpg""#), "{}", s("OEBPS/content.opf"));
-        assert!(s("OEBPS/Text/c.xhtml").contains(r#"src="../Images/____.jpg""#) && s("OEBPS/Text/c.xhtml").contains(r#"url("../Images/____.jpg")"#), "{}", s("OEBPS/Text/c.xhtml"));
+        // html 里照原来的引号写：`style="…"` 属性里写成双引号会截断属性（此前的毛病）
+        assert_eq!(
+            s("OEBPS/Text/c.xhtml"),
+            r#"<html><head><style>p{background:url("../Images/____.jpg")}</style></head><body><img src="../Images/____.jpg"/><div style="background:url('../Images/____.jpg')"></div><p style="background-image:url(../Images/____.jpg)"></p></body></html>"#
+        );
         assert_eq!(s("OEBPS/Styles/s.css"), r#"body{background-image:url("../Images/____.jpg")}"#);
         // 正常的名字不动
         assert!(v.iter().any(|x| x.name == "OEBPS/Images/__--.jpg"));
