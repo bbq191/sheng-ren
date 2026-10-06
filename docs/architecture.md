@@ -36,6 +36,8 @@
 | `htmlproc/` | 注释搬移与编号、字体锁、重复 id |
 | `cssunlock` | 解开字体、字号、行高的锁 |
 | `bgfit` | 整页背景图的尺寸意图（`cover`、`contain`、宽 100%、没写尺寸），去掉 `background-size` 的模式按它预先缩图 |
+| `capfit` | 带图注、会超页的竖长图给 `<img>` 写宽度百分比，图和图注同页（profile `caption_fit`） |
+| `imgalpha` | 正文 `<img>`/SVG `<image>` 用到、CSS 没用到的图：不认透明的阅读器（profile `image_alpha = false`）把它们合成白底 |
 | `imgopt` / `imgpool` / `jpegopt` | 图片处理（摆正、裁边、缩放、灰度；`guard` 把解码器的 panic 变成"这张不处理"）；按像素额度限内存的并发池；JPEG 哈夫曼表无损重做 |
 | `opfmeta` | EPUB 元数据与封面的读改：只重写文字条目，图片原样拷；`meta --edit` 和生成时补元数据共用 |
 | `comic_detect` / `comicfxl` / `comicpad` | 判断是不是漫画；漫画固定版式（kindle）；页边距 1 时各页的补救（xochitl） |
@@ -130,7 +132,7 @@
 | 优化器版本 | `OPTIMIZE_VERSION` | 全部 |
 | 注释方式 | `jump`/`popup`，图标换数字带 `#`，保留回链带 `<` | 这个模式的全部 |
 | 模式 id | `kindle` 等 | — |
-| 阅读范围与漫画 | 优化器实际用的阅读范围（`output_readable`）+ 漫画白边，如 `1104x1546+1`；漫画画布和阅读器页边距（`c952x1457m1`）、翻页方向（`dltr`）、固定版式（`f`）、保留背景图（`b`，去掉尺寸时 `bn`）有的时候再带上 | 这个模式的全部 |
+| 阅读范围与漫画 | 优化器实际用的阅读范围（`output_readable`）+ 漫画白边，如 `1104x1546+1`；漫画画布和阅读器页边距（`c952x1457m1`）、翻页方向（`dltr`）、固定版式（`f`）、保留背景图（`b`，去掉尺寸时 `bn`）、不认 `rgba()`（`r`）、带图注的竖长图写宽度（`k`）、正文图片透明处合成白底（`a`）有的时候再带上 | 这个模式的全部 |
 | 黑白彩色 | `gray`/`color` | 这个模式的全部 |
 | 格式 | `epub`；KFX 带写出器版本（`kfx7`），AZW3 同理（`azw34`，书库已不出） | 写出器版本变了只有 `kindle` 的 |
 

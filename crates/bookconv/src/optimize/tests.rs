@@ -334,7 +334,7 @@
 
         let (stream_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
         let stream_img = entry_bytes(&stream_out, "p1.jpg");
-        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false, None).unwrap();
+        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false, None, false).unwrap();
         assert_eq!(stream_img, direct, "流式并行处理结果应与直接处理逐字节一致");
         let mut ar = ZipArchive::new(Cursor::new(&stream_out)).unwrap();
         assert_eq!(ar.by_name("p1.jpg").unwrap().compression(), CompressionMethod::Stored, "已压缩的图片 STORED");
@@ -377,7 +377,7 @@
             let (mut x, mut y) = (Vec::new(), Vec::new());
             a.by_name(&name).unwrap().read_to_end(&mut x).unwrap();
             b.by_name(&name).unwrap().read_to_end(&mut y).unwrap();
-            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false, None).unwrap_or(x);
+            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false, None, false).unwrap_or(x);
             assert_eq!(want, y, "第 {i} 张图并行结果与顺序结果不一致（乱序或串图）");
         }
         let mut y1 = Vec::new();
@@ -997,4 +997,87 @@
         for (n, b) in &imgs {
             assert_eq!(&entry_bytes(&out, n), &crate::imgopt::downscale_for_epub(b, screen).unwrap_or(b.clone()), "{n}");
         }
+    }
+
+
+    /// 透明图书：`logo.png`（左半透明、透明处存黑色）只当 `<img>`；`bg.png`（同样带透明）只当 CSS 背景；`both.png` 两样都用；
+    /// `opaque.png` 是 RGBA 但全不透明；`tall.jpg` 120×220 带多看图注。
+    fn alpha_book() -> (Vec<u8>, Vec<(&'static str, Vec<u8>)>) {
+        let png = |alpha: u8| {
+            let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(40, 20, |x, _| if x < 20 { image::Rgba([0, 0, 0, alpha]) } else { image::Rgba([200, 30, 30, 255]) }));
+            let mut b = Vec::new();
+            img.write_to(&mut Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+            b
+        };
+        let jpg = {
+            let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(120, 220, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])));
+            let mut b = Vec::new();
+            img.write_to(&mut Cursor::new(&mut b), image::ImageFormat::Jpeg).unwrap();
+            b
+        };
+        let imgs = vec![("OEBPS/i/logo.png", png(0)), ("OEBPS/i/bg.png", png(0)), ("OEBPS/i/both.png", png(0)), ("OEBPS/i/opaque.png", png(255)), ("OEBPS/i/tall.jpg", jpg)];
+        let mut epub = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut epub));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let files: Vec<(&str, &[u8])> = vec![
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+                ("OEBPS/content.opf", br#"<package version="3.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.css" media-type="text/css"/><item id="a" href="i/logo.png" media-type="image/png"/><item id="b" href="i/bg.png" media-type="image/png"/><item id="c" href="i/both.png" media-type="image/png"/><item id="d" href="i/opaque.png" media-type="image/png"/><item id="e" href="i/tall.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
+                ("OEBPS/s.css", b"body.x{background:url(i/bg.png) no-repeat #700} div.y{background-image:url('i/both.png')}"),
+                ("OEBPS/c1.xhtml", r#"<html><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body class="x"><div class="logo"><img class="logo" src="i/logo.png"/></div><p>正文</p><img src="i/both.png"/><img src="i/opaque.png"/><div class="duokan-image-gallery"><div class="duokan-image-gallery-cell"><img src="i/tall.jpg" alt=""/><p class="duokan-image-maintitle">沧州赵玖</p></div></div></body></html>"#.as_bytes()),
+            ];
+            for (name, body) in files.into_iter().chain(imgs.iter().map(|(n, b)| (*n, b.as_slice()))) {
+                zw.start_file(name, stored).unwrap();
+                zw.write_all(body).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        (epub, imgs)
+    }
+
+    #[test]
+    fn kindle_flattens_transparent_img_on_white_only() {
+        let (epub, imgs) = alpha_book();
+        let opts = OptimizeOpts::for_profile(profile::get("kindle").unwrap());
+        assert!(opts.flatten_alpha);
+        let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
+        let logo = entry_bytes(&out, "OEBPS/i/logo.png");
+        assert_eq!(crate::util::image_kind(&logo).unwrap().format, image::ImageFormat::Png, "仍是 PNG");
+        let img = image::load_from_memory(&logo).unwrap();
+        assert!(!img.color().has_alpha(), "没有透明通道了");
+        let rgb = img.to_rgb8();
+        assert_eq!((rgb.get_pixel(5, 5).0, rgb.get_pixel(30, 5).0), ([255, 255, 255], [200, 30, 30]), "透明处是白的，不透明处不变");
+        let orig = |n: &str| imgs.iter().find(|(m, _)| *m == n).unwrap().1.clone();
+        for n in ["OEBPS/i/bg.png", "OEBPS/i/both.png", "OEBPS/i/opaque.png"] {
+            assert_eq!(entry_bytes(&out, n), orig(n), "{n}：背景图、两用的、全不透明的都不动");
+        }
+    }
+
+    #[test]
+    fn ireader_keeps_transparency() {
+        let (epub, imgs) = alpha_book();
+        let opts = OptimizeOpts::for_profile(profile::get("ireader").unwrap());
+        assert!(!opts.flatten_alpha);
+        let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
+        assert_eq!(entry_bytes(&out, "OEBPS/i/logo.png"), imgs[0].1);
+    }
+
+    #[test]
+    fn caption_fit_follows_profile_and_readable_area() {
+        let (epub, imgs) = alpha_book();
+        let html = |p: &str| {
+            let (out, _) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(profile::get(p).unwrap())).unwrap();
+            (text_of(&out, "OEBPS/c1.xhtml"), out)
+        };
+        // 掌阅 1264×1680：0.8 × 1680 × 120/220 / 1264 = 0.58 → 57%；Kindle 1104×1546 → 61%
+        let (ir, ir_out) = html("ireader");
+        assert!(ir.contains(r#"<img src="i/tall.jpg" alt="" style="width:57%"/>"#), "{ir}");
+        assert_eq!(entry_bytes(&ir_out, "OEBPS/i/tall.jpg"), imgs[4].1, "图片字节不动");
+        let (k, _) = html("kindle");
+        assert!(k.contains(r#"style="width:61%""#), "{k}");
+        let (x, _) = html("xochitl");
+        assert!(!x.contains("width:"), "xochitl 不开：{x}");
+        // 别的图不动
+        assert!(ir.contains(r#"<img class="logo" src="i/logo.png"/>"#), "{ir}");
     }

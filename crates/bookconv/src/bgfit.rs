@@ -160,7 +160,7 @@ fn is_page_selector(sel: &str) -> bool {
 }
 
 /// 值里每个 `url(…)` 的地址（去掉引号）。
-fn urls(value: &str) -> Vec<String> {
+pub(crate) fn urls(value: &str) -> Vec<String> {
     let mut out = Vec::new();
     let lower = value.to_ascii_lowercase();
     let mut from = 0;

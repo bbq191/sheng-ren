@@ -170,6 +170,38 @@ pub fn downscale_for_epub(bytes: &[u8], screen: Screen) -> Option<Vec<u8>> {
     downscale_into(bytes, screen.width, screen.height)
 }
 
+/// 图片按 EXIF 方向摆正后的宽高（JPEG/PNG/GIF/WebP，只读文件头）。给按宽高比排版的地方用（[`crate::capfit`]）。
+pub fn display_dims(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (fmt, (w, h)) = comic_header_dims(bytes)?;
+    Some(if swaps_axes(orientation_of(bytes, fmt)) { (h, w) } else { (w, h) })
+}
+
+/// 带透明像素的 PNG 合成到白底，仍写成 PNG（灰度+透明 → 灰度，其余 → RGB；按 EXIF 摆正）。不是 PNG、没有透明通道、
+/// alpha 全是不透明、超过解码上限、解不开 → `None`（原样保留）。给不认透明的阅读器用（[`crate::imgalpha`]）。
+pub fn flatten_transparent_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    let (fmt, (w, h)) = header_dims(bytes)?;
+    if fmt != ImageFormat::Png || !within_decode_budget(w, h) {
+        return None;
+    }
+    let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
+    if !img.color().has_alpha() {
+        return None;
+    }
+    let transparent = match &img {
+        image::DynamicImage::ImageLumaA8(i) => i.pixels().any(|p| p.0[1] < 255),
+        image::DynamicImage::ImageRgba8(i) => i.pixels().any(|p| p.0[3] < 255),
+        other => other.to_rgba8().pixels().any(|p| p.0[3] < 255),
+    };
+    if !transparent {
+        return None;
+    }
+    img.apply_orientation(orientation_of(bytes, fmt));
+    let flat = flatten_alpha_on_white(img);
+    let mut out = Vec::new();
+    flat.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+    Some(out)
+}
+
 /// **整页背景图**按原书的尺寸意图缩进阅读范围（见 [`crate::bgfit`]）：只缩不放、保原格式、带透明的保持透明（不铺白底：
 /// 阅读器在透明处画背景色）。和 [`downscale_into`] 不同，缩了就用，不管重编码后是不是变小（调色板 PNG 解成 RGBA 再写回常常
 /// 更大）——这类图显示对比体积重要。不用缩、不是 JPEG/PNG、超过解码上限、解码失败 → `None`（原样保留）。
