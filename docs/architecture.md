@@ -31,7 +31,7 @@
 | `convert/` | CBZ → 每页一张原图的 EPUB（第一页就是封面，OPF 标"漫画"）；入库时的轻量检查。有打不开的页（不支持的压缩方式等）时生成报错，不出缺页的书 |
 | `article` | 网页 → EPUB（正文抽取，图片保留原图，按 HTTP 头 / `<meta charset>` 认编码） |
 | `optimize/` | 优化主流程：流式读写、逐文件变换、图片并行处理 |
-| `wash/` | 清洗层：解锁字体字号、按语言排版、章节分页（`paginate`）、目录修复与生成（`toc`）、全书 id 去重、章尾空白；`fonts` 定哪些嵌入字体保留、哪些是批注；`safe_names` 给文件名里有安卓存储不能用的字符的条目改名；`normalize` 是最后一步的 EPUB 3 规范整理；`opf` 是 OPF 的读改（清洗、优化、`meta --edit` 共用） |
+| `wash/` | 清洗层：解锁字体字号、按语言排版、章节分页（`paginate`）、目录修复与生成（`toc`）、全书 id 去重、章尾空白；`fonts` 定哪些嵌入字体保留、哪些是批注；`safe_names` 给文件名里有安卓存储不能用的字符的条目改名；`normalize` 是最后一步的 EPUB 3 规范整理；`opf` 是 OPF 的读改（清洗、优化、`meta --edit` 共用；读唯一标识符全书只用 `opf::unique_identifier`：`<package unique-identifier>` 指向的任意前缀 identifier，值去空白、空值算没有，NCX 的 `dtb:uid`、规范整理、`epubbook` 的稳定 ID 都按它） |
 | `html` | 容错的 XHTML 工具：标签扫描、属性读写（单双引号、无引号）、加类、纯文本。全仓库的 HTML 操作都用它 |
 | `htmlproc/` | 注释搬移与编号、字体锁、重复 id |
 | `cssunlock` | 解开字体、字号、行高的锁 |
@@ -42,7 +42,7 @@
 | `epub` / `epubzip` | EPUB 组装与读写（每个 zip 条目解压上限 `MAX_ENTRY_BYTES` 256MB，EPUB、CBZ 共用，超过报错）：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`、zip 内路径工具、书里链接解析 `resolve_link` |
 | `epubbook` | 读整本 EPUB（元数据、spine 里的 XHTML、CSS、图片、封面、目录），AZW3 和 KFX 写出器共用 |
 | `ncx` | NCX 目录解析与改写 |
-| `netimg` / `direction` / `probe` | 远程图抓取（单张上限 `MAX_IMAGE_BYTES` 20MB；`origin_of` 取网址的站点）；翻页方向；测量书 |
+| `netimg` / `direction` / `probe` | 远程图抓取（单张上限 `MAX_IMAGE_BYTES` 20MB；`origin_of` 取网址的站点）；翻页方向（读写 spine `page-progression-direction` 全书只用 `direction::spine_direction`/`set_spine_direction`）；测量书 |
 | `util` / `naming` | 转义、全角转半角、文件名、书名规整；原子写（`produce_then_replace`、`commit`，书库也用；产出途中 panic 也删临时文件）；带上限的读取 `read_capped`（超过报错、不截断）；命令行公共函数 |
 
 ### kfx 模块
@@ -106,7 +106,7 @@
 3. 指纹没变、产物在原位 → 跳过；只是位置变了 → 挪过去，不重新生成。
 4. 位置变了先登记再生成：记录先改成新位置（指纹留空 = 没完成）、旧位置记进待删，中途打断下次也认得出。
 5. 与模式无关的中间文件（CBZ 转出的 EPUB、补了元数据的 EPUB）放在 `.tmp-<id>-src/`，同一本书的几个模式共用。
-6. 流式优化，直接写成目标旁的临时文件 → 质量门 → 落盘、改名到位。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（profile 可以用 `comic_format` 给漫画另配格式，内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。KFX 的唯一 ID 现在实际取自 OPF 唯一标识符（见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机) 的已知问题）。
+6. 流式优化，直接写成目标旁的临时文件 → 质量门 → 落盘、改名到位。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（profile 可以用 `comic_format` 给漫画另配格式，内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。KFX 的唯一 ID 取自书 id（`kfx_id`，见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机)），`@media` 按这个模式的阅读范围、屏幕求值（`kfx::css::MediaEnv::for_profile`）。
 7. 补上指纹，删掉待删的旧位置和变空的目录（只在产物根目录以内）。
 
 生成记录是 `<书库>/output-state/<模式 id>.json`：书 id → 产物路径、指纹、待删的旧位置。**只删这里记着的文件**。
