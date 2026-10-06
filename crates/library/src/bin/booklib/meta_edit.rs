@@ -54,14 +54,20 @@ pub fn run(args: Vec<OsString>) {
     let mut file: Option<PathBuf> = None;
     let mut singles: Vec<(DcField, String)> = Vec::new();
     let mut multis: Vec<(DcField, Vec<String>)> = Vec::new();
-    let (mut cover, mut get_cover) = (None::<String>, None::<PathBuf>);
-    while let Some(a) = args.next() {
-        let a = a.to_string_lossy().into_owned();
-        let (key, inline) = match a.split_once('=') {
-            Some((k, v)) if k.starts_with("--") => (k.to_string(), Some(v.to_string())),
+    let (mut cover, mut get_cover) = (None::<PathBuf>, None::<PathBuf>);
+    while let Some(raw) = args.next() {
+        // 文件路径（书、封面图）按原样的字节用：文件名不是 UTF-8 的也找得到（转成字符串会变成 U+FFFD、报"文件不存在"）
+        let a = raw.to_string_lossy().into_owned();
+        let (key, inline) = match raw.as_encoded_bytes().iter().position(|&b| b == b'=') {
+            Some(i) if a.starts_with("--") => {
+                let b = raw.as_encoded_bytes();
+                let os = |x: &[u8]| <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(x).to_os_string();
+                (String::from_utf8_lossy(&b[..i]).into_owned(), Some(os(&b[i + 1..])))
+            }
             _ => (a.clone(), None),
         };
-        let mut value = || inline.clone().or_else(|| args.next().map(|v| v.to_string_lossy().into_owned())).unwrap_or_else(|| usage(&format!("{key} 要给值")));
+        let mut value_os = || inline.clone().or_else(|| args.next()).unwrap_or_else(|| usage(&format!("{key} 要给值")));
+        let mut value = || value_os().to_string_lossy().into_owned();
         match key.as_str() {
             "-h" | "--help" => {
                 println!("{USAGE}");
@@ -84,11 +90,11 @@ pub fn run(args: Vec<OsString>) {
                     None => multis.push((field, vec![v])),
                 }
             }
-            "--cover" => cover = Some(value()),
-            "--get-cover" => get_cover = Some(PathBuf::from(value())),
+            "--cover" => cover = Some(PathBuf::from(value_os())),
+            "--get-cover" => get_cover = Some(PathBuf::from(value_os())),
             "--fetch" | "--force" | "--clear" => usage(&format!("{key} 是 meta --fetch 的选项，不能和 --edit 一起用")),
             k if k.starts_with('-') => usage(&format!("meta --edit 不认识选项 {k}")),
-            _ if file.is_none() => file = Some(PathBuf::from(a)),
+            _ if file.is_none() => file = Some(PathBuf::from(raw)),
             _ => usage("meta --edit 只能给一个文件（路径里有空格时要整个加引号）"),
         }
     }
@@ -113,10 +119,10 @@ pub fn run(args: Vec<OsString>) {
         edits.set.push((field, list));
     }
     edits.cover = cover.map(|p| {
-        if p.trim().is_empty() {
+        if p.to_string_lossy().trim().is_empty() {
             opfmeta::CoverEdit::Remove
         } else {
-            opfmeta::CoverEdit::Set(std::fs::read(&p).unwrap_or_else(|e| fail(&format!("{p}: {e}"))))
+            opfmeta::CoverEdit::Set(std::fs::read(&p).unwrap_or_else(|e| fail(&format!("{}: {e}", p.display()))))
         }
     });
     if edits.is_empty() {
