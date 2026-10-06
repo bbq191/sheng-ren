@@ -24,6 +24,8 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     let raw = crate::epubzip::read_skeleton(&mut archive)?.entries;
     let prep = prepare_entries(raw, opts, bytes_before)?;
     let (comic_margin, grayscale, is_comic_book) = (opts.comic_margin, opts.grayscale, prep.is_comic_book);
+    // 固定版式的漫画页一律补成整个画布（见 `imgopt::prepare_comic_page_for_epub`）
+    let full_canvas = is_comic_book && opts.comic_fixed_layout;
     // 漫画页按漫画的阅读范围排（xochitl 设成页边距 1 后更宽），其它图按 EPUB 的阅读范围缩
     let screen = if is_comic_book { opts.comic_screen.unwrap_or(opts.screen) } else { opts.screen };
     let entries = &prep.entries;
@@ -61,7 +63,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
                 let px = std::panic::catch_unwind(|| crate::imgopt::pixel_count(&job.bytes)).unwrap_or(1_000_000);
                 let _permit = budget.acquire(px);
-                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale).unwrap_or(job.bytes);
+                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale, full_canvas).unwrap_or(job.bytes);
                 let _ = job.reply.send(out);
             });
         }

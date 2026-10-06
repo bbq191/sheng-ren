@@ -334,7 +334,7 @@
 
         let (stream_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
         let stream_img = entry_bytes(&stream_out, "p1.jpg");
-        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false).unwrap();
+        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false, false).unwrap();
         assert_eq!(stream_img, direct, "流式并行处理结果应与直接处理逐字节一致");
         let mut ar = ZipArchive::new(Cursor::new(&stream_out)).unwrap();
         assert_eq!(ar.by_name("p1.jpg").unwrap().compression(), CompressionMethod::Stored, "已压缩的图片 STORED");
@@ -377,7 +377,7 @@
             let (mut x, mut y) = (Vec::new(), Vec::new());
             a.by_name(&name).unwrap().read_to_end(&mut x).unwrap();
             b.by_name(&name).unwrap().read_to_end(&mut y).unwrap();
-            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false).unwrap_or(x);
+            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false, false).unwrap_or(x);
             assert_eq!(want, y, "第 {i} 张图并行结果与顺序结果不一致（乱序或串图）");
         }
         let mut y1 = Vec::new();

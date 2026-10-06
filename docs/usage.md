@@ -247,8 +247,8 @@ booklib 只生成，**拷到设备上由你自己来**：把模式的文件夹�
 
 | 读的阅读器 | 拷哪个文件夹 | 怎么拷 |
 |---|---|---|
-| Kindle、掌阅上的 KOReader（日常用） | `ireader/` | 拷到设备存储根的 `books/`。Kindle 上 KOReader 开着不能直接插线，先在 KOReader 里点「USB 传书」（见 koreader-setup 仓库） |
-| Kindle 自带阅读器 | `kindle/` 里的 `.kfx` | USB 连电脑，拷进 `documents/`。自带阅读器 USB 传书不认 EPUB |
+| Kindle、掌阅上的 KOReader（2026-10-05 起 Kindle 上没有了） | `ireader/` | 拷到设备存储根的 `books/`。Kindle 上 KOReader 开着不能直接插线，先在 KOReader 里点「USB 传书」（见 koreader-setup 仓库） |
+| Kindle 自带阅读器（2026-10-05 起日常用） | `kindle/` 里的 `.kfx` | USB 连电脑，拷进 `documents/`。自带阅读器 USB 传书不认 EPUB |
 | 掌阅自带阅读器（备选） | `ireader/` | USB 连电脑导入 |
 | Move 自带阅读器 | `xochitl/` | reMarkable 自带的传书方式。USB 网页上传（`http://10.11.99.1`）单本约 88MB 以上会被拒 |
 

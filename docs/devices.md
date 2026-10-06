@@ -75,7 +75,7 @@ height = 1680
 
 ### 为什么这样分
 
-- **按设备自带的阅读器分模式**：Kindle 单独一个，因为 USB 传书只认 AZW3、强制留页边距、漫画要写成固定版式；掌阅屏幕和 Kindle 一样是 7 英寸 300ppi 黑白屏，但读 EPUB、整页图铺满整屏；Move 是彩色屏、怪癖最多。
+- **按设备自带的阅读器分模式**：Kindle 单独一个，因为 USB 传书不认 EPUB（认 AZW3、KFX，现在出 KFX）、强制留页边距、漫画要写成固定版式；掌阅屏幕和 Kindle 一样是 7 英寸 300ppi 黑白屏，但读 EPUB、整页图铺满整屏；Move 是彩色屏、怪癖最多。
 - 旧的设备 id（`kindle-pw12-sig`、`ireader-ocean5-pro`、`rmpp-move`、`rmpp-move-koreader`、`koreader`）已经不是模式了，书库里它们的旧产物不再管理。来龙去脉见[决定记录](decisions.md)。
 
 ## 可阅读范围
@@ -132,9 +132,9 @@ readable-measure --device=kindle 竖长.png 横宽.png
 
 ## KOReader
 
-**现状**：Kindle、掌阅日常开机直接进 KOReader（独占），Move 用自带阅读器。
+**现状**：2026-10-02 起 Kindle、掌阅曾日常开机直接进 KOReader（独占）。**2026-10-05 起 Kindle 上 `koreader/` 不在了（像是重置过），Kindle 改用自带阅读器读 `kindle/` 的 KFX**；掌阅现在是否还独占跑 KOReader 没再确认。Move 用自带阅读器。
 
-- **读哪份产物**：两台的 KOReader 都读 `ireader/` 的 EPUB（KOReader 不认 `.azw3`），拷到存储根的 `books/`（KOReader 的起始目录）。`kindle` 模式的 KFX 只在回到 Kindle 自带阅读器时用。
+- **读哪份产物**：KOReader 读 `ireader/` 的 EPUB（KOReader 不认 `.azw3`），拷到存储根的 `books/`（KOReader 的起始目录）。`kindle` 模式的 KFX 只在回到 Kindle 自带阅读器时用。
 - **没有单独的模式**：`ireader` 的阅读范围是在掌阅自带阅读器上量的，KOReader 里没单独量，漫画离屏幕是不是 1px 没验证。
 - **进度同步**：两台的 KOReader 经自建的同步服务（KOReader 的 kosync 协议）按**文件名**认书、同步进度，所以 `ireader/` 产物的文件名要稳定。服务端归 vksight 仓库，设备上的设置在 koreader-setup 仓库。
 - **词典**：用自己手上的 MOBI 词典，经本仓库的 `mobi-dict-to-stardict` 转成 StarDict（网上现成的 StarDict 版是未授权转制，不用）。

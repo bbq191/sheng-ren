@@ -15,8 +15,13 @@ use ego_tree::NodeRef;
 use scraper::{ElementRef, Html, Node};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// 写出器版本：改了产物字节的修改要加一。
-pub const WRITER_VERSION: &str = "4";
+/// 写出器版本：改了产物字节的修改要加一。只进书库指纹，**不写进书里**（见 [`FILE_CREATOR_VERSION`]）。
+pub const WRITER_VERSION: &str = "5";
+
+/// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
+/// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
+/// 写出器升版本后内容没变的书要生成逐字节相同的文件，所以这里不跟 [`WRITER_VERSION`] 走。
+const FILE_CREATOR_VERSION: &str = "1";
 
 /// 第一个本地符号的编号：系统表 9 个 + `YJ_symbols` v10 的 859 个。
 const FIRST_LOCAL_SID: u32 = 10 + 859;
@@ -1317,8 +1322,17 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             let eid = b.eid();
             ctx.order.push((eid, 1));
             ctx.resources.push(r);
-            let (w, h) = if cw > 0 { (cw, ch) } else { (i64::from(b.resources[r].width), i64::from(b.resources[r].height)) };
-            let style = b.style(vec![(P_WIDTH, Value::F64(w as f64)), (P_HEIGHT, Value::F64(h as f64)), (P_SIZING, Value::Symbol(SIZING_VALUE))]);
+            let (w, h) = fixed_image_size((i64::from(b.resources[r].width), i64::from(b.resources[r].height)), (cw, ch));
+            let mut props = vec![(P_WIDTH, Value::F64(w as f64)), (P_HEIGHT, Value::F64(h as f64)), (P_SIZING, Value::Symbol(SIZING_VALUE))];
+            // 比画布小的图居中：上、左外边距写差值的一半（同宽高，裸浮点数；不写时贴在左上角，2026-10-06 真机）
+            if cw > 0 {
+                for (prop, gap) in [(P_MARGIN_TOP, ch - h), (P_MARGIN_LEFT, cw - w)] {
+                    if gap > 1 {
+                        props.push((prop, Value::F64((gap / 2) as f64)));
+                    }
+                }
+            }
+            let style = b.style(props);
             let res = b.sym(&b.resources[r].name.clone());
             vec![Value::Struct(vec![(EID, Value::Int(eid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(NODE_IMAGE)), (RESOURCE_REF, Value::Symbol(res))])]
         } else {
@@ -1643,7 +1657,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
                     group("kindle_ebook_metadata", vec![kv("nested_span", s("enabled")), kv("selection", s("enabled"))])
                 },
                 group("kindle_title_metadata", title_meta),
-                group("kindle_audit_metadata", vec![kv("creator_version", s(WRITER_VERSION)), kv("file_creator", s("epub-to-kfx"))]),
+                group("kindle_audit_metadata", vec![kv("creator_version", s(FILE_CREATOR_VERSION)), kv("file_creator", s("epub-to-kfx"))]),
             ]
             .into_iter()
             .chain(fixed_canvas.map(|_| group("kindle_capability_metadata", vec![kv("yj_fixed_layout", Value::Int(1)), kv("continuous_popup_progression", Value::Int(0))])))
@@ -1749,7 +1763,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         (SID_CAPS_LENGTH, Value::Int(0)),
     ]);
     let kfxgen = format!(
-        "[{{key:\"kfxgen_package_version\",value:\"epub-to-kfx {WRITER_VERSION}\"}},{{key:\"kfxgen_payload_sha1\",value:\"{}\"}},{{key:\"kfxgen_acr\",value:\"{container_id}\"}}]",
+        "[{{key:\"kfxgen_package_version\",value:\"epub-to-kfx {FILE_CREATOR_VERSION}\"}},{{key:\"kfxgen_payload_sha1\",value:\"{}\"}},{{key:\"kfxgen_acr\",value:\"{container_id}\"}}]",
         "0".repeat(40)
     );
     let c = Container { version: 2, info, symtab, capabilities: caps, kfxgen: kfxgen.into_bytes(), entities };
@@ -1775,6 +1789,21 @@ fn close_level(stack: &mut Vec<(u32, Vec<Value>)>) {
     if let Some(Value::Struct(f)) = stack.last_mut().and_then(|p| p.1.last_mut()) {
         f.push((NAV_ENTRIES, Value::List(kids)));
     }
+}
+
+/// 固定版式一页里图片的显示宽高：保持比例缩进画布，**不超过图自己的尺寸**——节点比图片资源大时 Kindle 不放大、整页空白
+/// （2026-10-06 真机：954×1272 的图写成画布 1272×1696 → 空白页）。所以比例和画布一致（`comicfxl::fills_canvas`，误差 1px 内）
+/// 且不比画布小的写画布大小，比画布小的、比例不一致的（装饰小图、窄页、跨页）按缩放后的尺寸，由调用方居中。
+/// 以前一律写画布大小：比例不一致的被拉伸，小的空白。画布宽高未知（0）或图的尺寸取不到时退回另一方。
+fn fixed_image_size((iw, ih): (i64, i64), (cw, ch): (i64, i64)) -> (i64, i64) {
+    if cw <= 0 || ch <= 0 {
+        return (iw, ih);
+    }
+    if iw <= 0 || ih <= 0 || (iw >= cw && bookconv::comicfxl::fills_canvas((iw as u32, ih as u32), cw as u32, ch as u32)) {
+        return (cw, ch);
+    }
+    let s = (cw as f64 / iw as f64).min(ch as f64 / ih as f64).min(1.0);
+    (((iw as f64 * s).round() as i64).max(1), ((ih as f64 * s).round() as i64).max(1))
 }
 
 #[cfg(test)]
@@ -1894,9 +1923,21 @@ mod tests {
 
     /// 固定版式（漫画）：照 Amazon 转的测试漫画写元数据、文档数据和每页的画布版面；从右往左翻写 `$559`。
     #[test]
+    fn fixed_layout_odd_shaped_images_keep_aspect() {
+        assert_eq!(fixed_image_size((1272, 1696), (1272, 1696)), (1272, 1696));
+        assert_eq!(fixed_image_size((954, 1272), (1272, 1696)), (954, 1272), "同比例的小图不放大（Kindle 不放大、会空白）");
+        assert_eq!(fixed_image_size((1440, 1920), (1272, 1696)), (1272, 1696), "同比例的大图缩到画布");
+        assert_eq!(fixed_image_size((2544, 1696), (1272, 1696)), (1272, 848), "跨页按宽缩进画布");
+        assert_eq!(fixed_image_size((300, 200), (1272, 1696)), (300, 200), "小图不放大");
+        assert_eq!(fixed_image_size((400, 3392), (1272, 1696)), (200, 1696), "窄长图按高缩");
+        assert_eq!(fixed_image_size((0, 0), (1272, 1696)), (1272, 1696));
+        assert_eq!(fixed_image_size((300, 200), (0, 0)), (300, 200));
+    }
+
+    #[test]
     fn fixed_layout_comic_like_amazon() {
         let mut jpeg = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new(&mut jpeg).encode_image(&image::GrayImage::from_pixel(12, 16, image::Luma([128]))).unwrap();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg).encode_image(&image::GrayImage::from_pixel(1272, 1696, image::Luma([128]))).unwrap();
         let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
         w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
         w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language><meta name="fixed-layout" content="true"/><meta name="original-resolution" content="1272x1696"/><meta name="orientation-lock" content="portrait"/></metadata><manifest><item id="i" href="i.jpg" media-type="image/jpeg"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="p2.xhtml" media-type="application/xhtml+xml"/></manifest><spine page-progression-direction="rtl"><itemref idref="p1"/><itemref idref="p2"/></spine></package>"#).unwrap();
