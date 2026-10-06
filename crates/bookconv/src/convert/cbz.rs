@@ -5,19 +5,18 @@ use std::io::Read;
 use zip::ZipArchive;
 
 /// 归档里的页面图片条目名（jpg/jpeg/png/gif/webp，按文件名自然序：page_2 < page_10）。跳过目录、macOS 垃圾条目和非图片条目。
-fn page_names<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>) -> Vec<String> {
-    let mut names: Vec<String> = (0..zip.len())
-        .filter_map(|i| zip.by_index(i).ok().filter(|f| !f.is_dir()).map(|f| f.name().to_string()))
-        .filter(|n| !is_macos_junk(n) && crate::util::is_image_ext(n))
-        .collect();
+/// 只看中央目录里的名字（不逐个打开条目）：此前逐个 `by_index` 打开，读不出本地文件头的条目被悄悄当成"不是页面"漏掉，
+/// 转出来的书少一页也不报错；现在它在读页面时报错。
+fn page_names<R: Read + std::io::Seek>(zip: &ZipArchive<R>) -> Vec<String> {
+    let mut names: Vec<String> = zip.file_names().filter(|n| !is_macos_junk(n) && crate::util::is_image_ext(n)).map(str::to_string).collect();
     names.sort_by(|a, b| natural_cmp(a, b));
     names
 }
 
 /// 入库时的检查：是 zip、里面有页面图片（按扩展名）。只读目录，不解压图片——整本转换留到生成时。返回页数。
 pub fn check_cbz<R: Read + std::io::Seek>(reader: R) -> Result<usize, String> {
-    let mut zip = ZipArchive::new(reader).map_err(|e| format!("CBZ 打开: {e}"))?;
-    match page_names(&mut zip).len() {
+    let zip = ZipArchive::new(reader).map_err(|e| format!("CBZ 打开: {e}"))?;
+    match page_names(&zip).len() {
         0 => Err("CBZ 内无图片（jpg/jpeg/png/gif/webp）".into()),
         n => Ok(n),
     }
@@ -26,23 +25,6 @@ pub fn check_cbz<R: Read + std::io::Seek>(reader: R) -> Result<usize, String> {
 /// macOS 压缩时附带的元数据：`__MACOSX/` 下的一切，以及文件名以 `._` 开头的 AppleDouble 资源分叉。
 fn is_macos_junk(name: &str) -> bool {
     name.split('/').any(|seg| seg == "__MACOSX") || name.rsplit('/').next().is_some_and(|base| base.starts_with("._"))
-}
-
-/// 单页图片解压后的上限。真实漫画页（含 600dpi 扫描的 PNG）远小于它；几 KB 的压缩条目能解出几 GB（zip 炸弹），
-/// 目录里声明的大小也可以造假，所以既查声明、读的时候也按上限截。
-const MAX_PAGE_BYTES: u64 = 256 * 1024 * 1024;
-
-fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, String> {
-    let f = zip.by_name(name).map_err(|e| e.to_string())?;
-    if f.size() > MAX_PAGE_BYTES {
-        return Err(format!("{name}: 解压后 {} MB，超过单页上限 {} MB（损坏或恶意的压缩包？）", f.size() >> 20, MAX_PAGE_BYTES >> 20));
-    }
-    let mut bytes = Vec::with_capacity(f.size() as usize);
-    f.take(MAX_PAGE_BYTES + 1).read_to_end(&mut bytes).map_err(|e| format!("{name}: {e}"))?;
-    if bytes.len() as u64 > MAX_PAGE_BYTES {
-        return Err(format!("{name}: 解压后超过单页上限 {} MB（损坏或恶意的压缩包？）", MAX_PAGE_BYTES >> 20));
-    }
-    Ok(bytes)
 }
 
 /// CBZ 字节 → **与设备无关的母版 EPUB**：图片按文件名自然序每页一张，原图字节原样放进去（不缩放、不重编码）。
@@ -55,11 +37,12 @@ fn read_entry<R: Read + std::io::Seek>(zip: &mut ZipArchive<R>, name: &str) -> R
 pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
     use crate::epub::{Book, BookMeta, Chapter, Resource};
     let mut zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
-    let names = page_names(&mut zip);
+    let names = page_names(&zip);
     let mut resources: Vec<Resource> = Vec::with_capacity(names.len());
     let mut chapters = Vec::with_capacity(names.len());
     for name in &names {
-        let bytes = read_entry(&mut zip, name)?;
+        // 解压上限（防 zip 炸弹）与读 EPUB 条目同一个：`epubzip::MAX_ENTRY_BYTES`
+        let bytes = crate::epubzip::read_by_name(&mut zip, name)?;
         let Some(crate::util::ImageKind { ext, mime, .. }) = crate::util::image_kind(&bytes) else {
             eprintln!("警告：{name} 不是可识别的图片，跳过");
             continue;
@@ -223,6 +206,22 @@ mod tests {
         assert!(crate::wash::ensure_cover_declared(&mut entries));
         let opf = String::from_utf8_lossy(&entries.iter().find(|e| e.name.ends_with(".opf")).unwrap().data).into_owned();
         assert!(opf.lines().any(|l| l.contains(r#"href="images/p0001.jpg""#) && l.contains(r#"properties="cover-image""#)), "{opf}");
+    }
+
+    /// 某一页打不开（7-Zip 打包时选了 bzip2/LZMA 之类本 crate 不支持的压缩方式）：以前收页时逐个打开条目，打不开的被当成
+    /// "不是页面"悄悄漏掉，转出来少一页也不报错（全都打不开时报的是"内无图片"）。现在读这一页时报错。
+    #[test]
+    fn unreadable_page_is_an_error_not_a_silently_missing_page() {
+        let page = jpeg(40, 60);
+        let mut buf = zip_of(&[("p1.jpg", &page), ("p2.jpg", &page), ("p3.jpg", &page)]);
+        // 第二个条目的压缩方式改成 bzip2（12）：本地文件头偏移 8、中央目录项偏移 10
+        let nth = |buf: &[u8], sig: &[u8; 4], k: usize| buf.windows(4).enumerate().filter(|(_, w)| w == sig).nth(k).unwrap().0;
+        let (local, central) = (nth(&buf, b"PK\x03\x04", 1), nth(&buf, b"PK\x01\x02", 1));
+        buf[local + 8..local + 10].copy_from_slice(&12u16.to_le_bytes());
+        buf[central + 10..central + 12].copy_from_slice(&12u16.to_le_bytes());
+        assert_eq!(check_cbz(std::io::Cursor::new(&buf)).unwrap(), 3, "入库检查只看目录");
+        let err = cbz_to_epub(&buf, "坏页").unwrap_err();
+        assert!(err.contains("p2.jpg"), "{err}");
     }
 
     #[test]
