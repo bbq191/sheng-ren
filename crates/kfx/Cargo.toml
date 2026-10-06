@@ -8,6 +8,7 @@ description = "EPUB → KFX 写出器与 KFX 容器读写，clean-room：依公�
 [dependencies]
 sha1 = "0.11"
 bookconv = { path = "../bookconv" }
+profile = { path = "../profile" }
 scraper = { version = "0.18", features = ["deterministic"] }
 ego-tree = "0.6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
