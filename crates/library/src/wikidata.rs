@@ -56,7 +56,9 @@ pub(crate) fn wikidata_search(net: &Net, q: &str) -> Result<Vec<String>, String>
     for lang in ["zh", "zh-hant"] {
         let url = format!("https://www.wikidata.org/w/api.php?action=wbsearchentities&type=item&limit=7&format=json&language={lang}&uselang={lang}&search={}", enc(q));
         for x in net.json(&url)?["search"].as_array().into_iter().flatten() {
-            if let Some(id) = x["id"].as_str().filter(|id| !ids.iter().any(|i: &String| i == id)) {
+            // 只收 `Q<数字>`：id 要拼进 SPARQL 查询，别的字符不让进
+            let item = |id: &&str| id.strip_prefix('Q').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+            if let Some(id) = x["id"].as_str().filter(item).filter(|id| !ids.iter().any(|i: &String| i == id)) {
                 ids.push(id.to_string());
             }
         }

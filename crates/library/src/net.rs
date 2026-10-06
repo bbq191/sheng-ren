@@ -81,16 +81,18 @@ impl Net {
             if let Some(r) = referer {
                 req = req.set("Referer", r);
             }
-            let wait = match req.call() {
+            let res = req.call();
+            // 网站回了 HTTP 状态（哪怕是 404、403、5xx），说明网是通的：断网的判定（接连两个网站连不上）从头算
+            if matches!(res, Ok(_) | Err(ureq::Error::Status(..))) {
+                self.down_since_ok.set(0);
+            }
+            let wait = match res {
                 Ok(r) => {
                     let mut buf = Vec::new();
                     match r.into_reader().take(MAX_BODY + 1).read_to_end(&mut buf) {
                         // 超过上限的不是封面也不是条目页：报错，不能截断了当成功（截断的图读得出尺寸，会被当封面存下）
                         Ok(_) if buf.len() as u64 > MAX_BODY => return Err(format!("{url}: 响应超过 {} MB", MAX_BODY >> 20)),
-                        Ok(_) => {
-                            self.down_since_ok.set(0);
-                            return Ok(buf);
-                        }
+                        Ok(_) => return Ok(buf),
                         Err(e) => {
                             last_err = e.to_string();
                             2
@@ -169,6 +171,36 @@ pub(crate) fn enc(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::Net;
+    use std::io::{Read, Write};
+
+    /// 本机上一个关着的端口（连上去立刻被拒）。
+    fn closed_port() -> u16 {
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    }
+
+    #[test]
+    fn an_http_error_reply_proves_the_network_is_up() {
+        // 本机的小服务器：每个连接都回 404
+        let srv = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = srv.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut c in srv.incoming().flatten() {
+                let mut buf = [0u8; 4096];
+                let _ = c.read(&mut buf);
+                let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            }
+        });
+        let net = Net::new();
+        assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());
+        assert!(!net.offline(), "一个网站连不上不算断网");
+        assert!(net.fetch(&format!("http://127.0.0.1:{port}/x")).unwrap_err().contains("404"));
+        assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());
+        assert!(!net.offline(), "两个连不上的网站之间有网站回了 404：网是通的，不算断网");
+        assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());
+        assert!(net.offline(), "接连两个网站连不上才算断网");
+    }
+
     #[test]
     fn host_of_takes_the_authority_part() {
         assert_eq!(super::host_of("https://book.douban.com/j/subject_suggest?q=x"), "book.douban.com");

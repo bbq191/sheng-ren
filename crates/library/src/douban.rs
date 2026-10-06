@@ -143,9 +143,10 @@ fn split_names(v: &str) -> Vec<String> {
 
 fn parse_subject(html: &str) -> Subject {
     let mut s = Subject::default();
+    // 标签写坏了（属性后面直接是 `</span>`、没有 `>`）时 `>` 在 `</span>` 里面，起点会越过终点：用 `get` 取，取不到就算没有
     if let Some(i) = html.find("property=\"v:itemreviewed\"") {
-        if let Some(e) = html[i..].find("</span>") {
-            s.title = plain_text(&html[i + html[i..].find('>').unwrap_or(0) + 1..i + e]);
+        if let (Some(e), Some(g)) = (html[i..].find("</span>"), html[i..].find('>')) {
+            s.title = html.get(i + g + 1..i + e).map(plain_text).unwrap_or_default();
         }
     }
     // 信息栏：一项一行（`<br/>` 分开），"作者: A / B"
@@ -223,5 +224,14 @@ mod tests {
         assert_eq!(s.original_title, "白夜行");
         assert_eq!(s.description, "第一段 & 引号\n第二段");
         assert_eq!(s.tags, ["东野圭吾", "推理", "日本文学"]);
+    }
+
+    #[test]
+    fn malformed_pages_do_not_panic() {
+        // 书名标签没有 `>`：以前切片起点越过终点 panic
+        assert_eq!(parse_subject(r#"<span property="v:itemreviewed"</span>"#).title, "");
+        for html in [r#"<div id="info""#, r#"<div id="link-report"><div class="intro">"#, "criteria = '7:a", ""] {
+            let _ = parse_subject(html);
+        }
     }
 }
