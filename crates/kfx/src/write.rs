@@ -17,7 +17,9 @@ use std::collections::{HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。只进书库指纹，**不写进书里**（见 [`FILE_CREATOR_VERSION`]）。
 /// - 7（2026-10-06）：`rgb()`/`rgba()` 的百分比按百分比算；负字号作废；算不出有限值的长度（字号 0 时除以 0）写 0，不写 NaN。
-///   只影响用到这些写法的书（23 本测试书一本没有，产物逐字节不变）；未真机验证。
+///   没有文字的元素（`<span id>`、`<div id>`）、图片自己的 id 当锚点（挂到下一个块开头，文末的挂到最后一个块末尾），
+///   以前丢掉、链接和目录退回文件开头。23 本测试书只有《福尔摩斯探案全集》变了（1101 个锚点、目录、115 个版面多配上注释弹窗），
+///   其余逐字节不变；未真机验证。
 pub const WRITER_VERSION: &str = "7";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
@@ -144,6 +146,10 @@ struct Doc<'a> {
     path: &'a str,
     sheet: Sheet,
     lang: Option<String>,
+    /// 还没落到内容上的锚点：没有文字的元素（`<span id="x"></span>`、`<div id="x"></div>`）的 id。挂到文档顺序里
+    /// 下一个生成的块的开头（[`Doc::take_pending`]）。以前直接丢掉，指向它们的链接、目录项退回到文件开头
+    /// （《福尔摩斯探案全集》目录页「第一册」指向页末插图前的空锚点，点了停在目录页开头；全书 1102 处）。
+    pending: std::cell::RefCell<Vec<String>>,
 }
 
 /// 收集行内内容：文字（空白按 CSS 折叠）、`<br>`、行内元素的样式区间、遇到图片就切开。
@@ -191,7 +197,30 @@ impl Inline {
     }
 }
 
+/// 文档末尾没落到内容上的锚点（`…</p><span id="x"></span></body>`）挂到最后一个块的末尾。
+fn attach_trailing(blocks: &mut [Block], ids: Vec<String>) {
+    let Some(last) = blocks.last_mut() else { return };
+    match &mut last.kind {
+        Kind::Container(c) if !c.is_empty() => attach_trailing(c, ids),
+        Kind::Text { text, .. } => {
+            let end = text.chars().count();
+            last.ids.extend(ids.into_iter().map(|i| (i, end)));
+        }
+        _ => last.ids.extend(ids.into_iter().map(|i| (i, 0))),
+    }
+}
+
+/// 把 `lead` 里的锚点放到块开头（字符偏移 0）。
+fn prepend_ids(ids: &mut Vec<(String, usize)>, lead: Vec<String>) {
+    ids.splice(0..0, lead.into_iter().map(|i| (i, 0)));
+}
+
 impl Doc<'_> {
+    /// 取走还没落到内容上的锚点（见 [`Doc::pending`]）。
+    fn take_pending(&self) -> Vec<String> {
+        self.pending.take()
+    }
+
     fn comp(&self, el: &ElementRef, parent: &Computed) -> Computed {
         let decls = self.sheet.cascade(el);
         let mut c = Computed::derive(parent, &decls, el.value().name());
@@ -210,6 +239,8 @@ impl Doc<'_> {
         if matches!(name, "head" | "script" | "style" | "title") {
             return;
         }
+        // 本元素之前攒下的锚点落在本元素的开头。
+        let pre = self.take_pending();
         match name {
             "ul" | "ol" => {
                 // 列表符号看列表项（`li` 上写的优先，《雪国》把 `cjk-ideographic` 写在 `li` 上）；列表项写成
@@ -223,10 +254,16 @@ impl Doc<'_> {
                 }
                 let marker = first.as_ref().is_none_or(|li| li.display.as_deref().is_none_or(|d| d == "list-item"));
                 if marker && comp.list_style.as_deref() != Some("none") {
-                    return out.push(self.list(el, comp));
+                    let mut b = self.list(el, comp);
+                    prepend_ids(&mut b.ids, pre);
+                    return out.push(b);
                 }
             }
-            "table" => return out.push(self.table(el, comp)),
+            "table" => {
+                let mut b = self.table(el, comp);
+                prepend_ids(&mut b.ids, pre);
+                return out.push(b);
+            }
             "hr" => {
                 let mut b = self.boxed(Kind::Container(Vec::new()), comp, el.value().attr("id"));
                 b.ty = Some(NODE_HR);
@@ -237,6 +274,7 @@ impl Doc<'_> {
                 if b.comp.margin[2].is_none() {
                     b.margin_bottom = 0.5 * b.comp.font_size;
                 }
+                prepend_ids(&mut b.ids, pre);
                 return out.push(b);
             }
             _ => {}
@@ -245,7 +283,15 @@ impl Doc<'_> {
         let heading = bookconv::html::heading_level_of(name);
         let mut children = Vec::new();
         self.children(el, &comp, &mut children);
+        let id = el.value().attr("id").map(str::to_string);
+        // 开头的锚点：之前攒下的 + 本元素自己的 id。
+        let mut lead = pre;
+        lead.extend(id);
         if children.is_empty() {
+            // 没有内容的元素：锚点（连同里面攒下的）留给后面的内容。
+            let inner = self.take_pending();
+            lead.extend(inner);
+            *self.pending.borrow_mut() = lead;
             return;
         }
         let margin_top = to_vert(comp.margin[0], fs);
@@ -257,7 +303,6 @@ impl Doc<'_> {
         if matches!(name, "ul" | "ol") && comp.margin[3].is_none() && comp.padding[3].is_none() {
             ml.em += 1.5;
         }
-        let id = el.value().attr("id").map(str::to_string);
         // 自己只包着一个文字块（普通段落）：本元素就是这个块。
         // 有背景或内边距的块写成容器套文字（样本里带背景色的 h1 就是这样；背景、内边距、负外边距直接放在文字段落上，
         // Kindle 上长标题会溢出屏幕，2026-10-05 真机）。
@@ -272,9 +317,7 @@ impl Doc<'_> {
             b.margin_left = ml;
             b.margin_right = mr;
             b.padding = padding;
-            if let Some(id) = id {
-                b.ids.insert(0, (id, 0));
-            }
+            prepend_ids(&mut b.ids, lead);
             out.push(b);
             return;
         }
@@ -288,7 +331,7 @@ impl Doc<'_> {
                 margin_left: ml,
                 margin_right: mr,
                 padding,
-                ids: id.map(|i| vec![(i, 0)]).unwrap_or_default(),
+                ids: lead.into_iter().map(|i| (i, 0)).collect(),
                 note: false,
                 ty: None,
                 attrs: Vec::new(),
@@ -298,12 +341,11 @@ impl Doc<'_> {
         }
         // 没有背景的包裹层摊平：竖直外边距、内边距并进首尾子块，水平外边距加到每个子块上。
         let n = children.len();
+        let mut lead = Some(lead);
         for (i, mut c) in children.into_iter().enumerate() {
             if i == 0 {
                 c.margin_top = collapse(margin_top + padding[0], c.margin_top);
-                if let Some(id) = &id {
-                    c.ids.insert(0, (id.clone(), 0));
-                }
+                prepend_ids(&mut c.ids, lead.take().unwrap_or_default());
                 if c.heading.is_none() {
                     c.heading = heading;
                 }
@@ -493,6 +535,8 @@ impl Doc<'_> {
     fn flush(&self, inl: &mut Inline, comp: &Computed, out: &mut Vec<Block>) {
         let taken = inl.take();
         if taken.is_empty() {
+            // 没有文字：里面的锚点留给后面的内容。
+            self.pending.borrow_mut().extend(taken.ids.into_iter().map(|(i, _)| i));
             return;
         }
         let mut text = taken.text;
@@ -509,7 +553,8 @@ impl Doc<'_> {
                 (r.len > 0).then_some(r)
             })
             .collect();
-        let ids = taken.ids.into_iter().map(|(i, o)| (i, o.min(chars))).collect();
+        let mut ids = taken.ids.into_iter().map(|(i, o)| (i, o.min(chars))).collect();
+        prepend_ids(&mut ids, self.take_pending());
         out.push(Block::anonymous(Kind::Text { text, runs }, comp.inherited(), ids));
     }
 
@@ -526,7 +571,11 @@ impl Doc<'_> {
                 if let Some(src) = image_src(&el) {
                     self.flush(inl, block_comp, out);
                     let comp = self.comp(&el, parent);
-                    out.push(Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0 }, comp, Vec::new()));
+                    // 图片自己的 id（`<img id="filepos152">`）也是锚点
+                    let mut lead = self.take_pending();
+                    lead.extend(el.value().attr("id").map(str::to_string));
+                    let ids = lead.into_iter().map(|i| (i, 0)).collect();
+                    out.push(Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0 }, comp, ids));
                     return;
                 }
                 let comp = self.comp(&el, parent);
@@ -1307,13 +1356,14 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         }
         let root = html.root_element();
         let lang = root.value().attr("xml:lang").or_else(|| root.value().attr("lang")).map(str::to_string).or_else(|| book_lang.clone());
-        let d = Doc { path: &doc.path, sheet, lang: lang.clone() };
+        let d = Doc { path: &doc.path, sheet, lang: lang.clone(), pending: Default::default() };
         let mut blocks = Vec::new();
         let root_comp = d.comp(&root, &Computed::root());
         if let Some(body) = root.children().filter_map(ElementRef::wrap).find(|e| e.value().name() == "body") {
             // body 也当一层包裹：它的水平外边距加到每个块上（样本里 body 的 5pt 边距出现在每个段落上）。
             d.block(body, d.comp(&body, &root_comp), &mut blocks);
         }
+        attach_trailing(&mut blocks, d.take_pending());
         collapse_siblings(&mut blocks);
         parsed.push((si, &doc.path, d.lang.clone(), blocks));
     }
@@ -2062,6 +2112,42 @@ mod tests {
             compress_ids(ids),
             Value::List(vec![Value::Int(31), Value::List(vec![Value::Int(267), Value::Int(5)]), Value::Int(3088)])
         );
+    }
+
+    /// 没有文字的元素的 id 也是锚点：挂到文档顺序里下一个块的开头，文末的挂到最后一个块的末尾；图片自己的 id 也算。
+    /// 以前丢掉，链接退回文件开头（《福尔摩斯探案全集》目录页「第一册」点了停在目录页开头）。
+    #[test]
+    fn empty_element_ids_anchor_to_next_block() {
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(4, 4, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="i" href="i.png" media-type="image/png"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("i.png", &png).unwrap();
+        w.put("c1.xhtml", r##"<html xmlns="http://www.w3.org/1999/xhtml"><body><p><a href="#a">1</a><a href="#b">2</a><a href="#c">3</a><a href="#d">4</a></p><p>甲</p><p><span id="a"></span></p><p>乙</p><div id="b"></div><p><img id="c" src="i.png"/></p><p>丙丁</p><span id="d"></span></body></html>"##.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        // 节点 id：按文字找文字节点，图片节点按类型找
+        let story = c.entities.iter().find(|e| e.ty == T_STORYLINE).unwrap().value().unwrap().field(CHILDREN).unwrap().as_list().unwrap().to_vec();
+        let pool = c.entities.iter().find(|e| e.ty == T_TEXT_POOL).unwrap().value().unwrap().field(CHILDREN).unwrap().as_list().unwrap().to_vec();
+        let eid_of_text = |t: &str| {
+            let idx = pool.iter().position(|v| v.as_str() == Some(t)).unwrap() as i64;
+            story.iter().find(|n| n.field(TEXT_REF).and_then(|r| r.field(TEXT_INDEX)).and_then(Value::as_int) == Some(idx)).unwrap().field(EID).unwrap().as_int().unwrap()
+        };
+        let img = story.iter().find(|n| n.field(NODE_TYPE) == Some(&Value::Symbol(NODE_IMAGE))).unwrap().field(EID).unwrap().as_int().unwrap();
+        // 链接按出现顺序配锚点：anchor0..3 → #a #b #c #d
+        let syms = c.symbols();
+        let target = |name: &str| {
+            let sid = syms.sid(name).unwrap();
+            let a = c.entities.iter().find(|e| e.ty == T_ANCHOR && e.id == sid).unwrap().value().unwrap().field(ANCHOR_POSITION).unwrap().clone();
+            (a.field(EID).unwrap().as_int().unwrap(), a.field(OFFSET).unwrap().as_int().unwrap())
+        };
+        assert_eq!(target("anchor0"), (eid_of_text("乙"), 0), "空段落里的 span → 下一段开头");
+        assert_eq!(target("anchor1"), (img, 0), "空 div → 下一块（图片）");
+        assert_eq!(target("anchor2"), (img, 0), "图片自己的 id");
+        assert_eq!(target("anchor3"), (eid_of_text("丙丁"), 2), "文末的 → 最后一块末尾");
     }
 
     #[test]
