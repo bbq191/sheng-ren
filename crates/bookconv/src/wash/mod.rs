@@ -69,6 +69,7 @@ use self::ncx_fix::*;
 use self::opf::{find_opf, opf_book_title, opf_unique_identifier};
 use self::paginate::paginate_sections;
 pub(crate) use self::paginate::is_toc_like_page;
+pub(crate) use self::toc::name_index;
 use self::toc::*;
 use self::typeset::*;
 

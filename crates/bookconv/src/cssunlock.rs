@@ -55,7 +55,7 @@ pub fn unlock(prop: &str, value: &str, base_text: bool, keep_fonts: &HashSet<Str
 }
 
 /// `!important` 拆出来：(值, " !important" 或 "")。
-fn split_important(value: &str) -> (&str, &'static str) {
+pub(crate) fn split_important(value: &str) -> (&str, &'static str) {
     let v = value.trim();
     match v.rfind('!') {
         Some(i) if v[i + 1..].trim().eq_ignore_ascii_case("important") => (v[..i].trim_end(), " !important"),
@@ -139,7 +139,7 @@ pub fn background_longhands(value: &str, sizing: bool) -> Vec<String> {
     let mut pos = Vec::new();
     let mut size = Vec::new();
     let mut after_slash = false;
-    for t in top_level_tokens(&spaced) {
+    for t in top_level_tokens(&spaced).0 {
         let l = t.to_ascii_lowercase();
         if after_slash && !(["cover", "contain", "auto"].contains(&l.as_str()) || l.starts_with(|c: char| c.is_ascii_digit() || c == '.')) {
             after_slash = false; // 尺寸写完了
@@ -173,8 +173,9 @@ pub fn background_longhands(value: &str, sizing: bool) -> Vec<String> {
     out
 }
 
-/// 按顶层空白切词，括号里的空格不算（`rgb(0, 0, 0)`、`url(a b.png)`）。
-fn top_level_tokens(v: &str) -> Vec<&str> {
+/// 按顶层空白切词，括号里的空格不算（`rgb(0, 0, 0)`、`url(a b.png)`）。另返回括号配不配对（`(` 与 `)` 个数相同）。
+/// `background` 简写（这里）和 `margin`/`padding` 简写（`wash::css::box_sides`）共用。
+pub(crate) fn top_level_tokens(v: &str) -> (Vec<&str>, bool) {
     let mut toks = Vec::new();
     let (mut depth, mut start) = (0i32, None::<usize>);
     for (i, ch) in v.char_indices() {
@@ -194,32 +195,13 @@ fn top_level_tokens(v: &str) -> Vec<&str> {
     if let Some(s) = start {
         toks.push(&v[s..]);
     }
-    toks
+    (toks, depth == 0)
 }
 
 /// `background` 简写里的颜色：`#hex`、`rgb()/rgba()/hsl()/hsla()`、`transparent`、命名色。没有就 `None`。
 fn background_color(value: &str) -> Option<String> {
     let (v, important) = split_important(value);
-    // 按顶层空白切词，括号里的空格不算（`rgb(0, 0, 0)`、`url(a b.png)`）
-    let mut toks = Vec::new();
-    let (mut depth, mut start) = (0i32, None::<usize>);
-    for (i, ch) in v.char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            c if c.is_whitespace() && depth == 0 => {
-                if let Some(s) = start.take() {
-                    toks.push(&v[s..i]);
-                }
-                continue;
-            }
-            _ => {}
-        }
-        start.get_or_insert(i);
-    }
-    if let Some(s) = start {
-        toks.push(&v[s..]);
-    }
+    let (toks, _) = top_level_tokens(v);
     const NOT_COLOR: &[&str] = &[
         "none", "repeat", "no-repeat", "repeat-x", "repeat-y", "space", "round", "left", "right", "top", "bottom", "center", "fixed",
         "scroll", "local", "cover", "contain", "auto", "border-box", "padding-box", "content-box", "text", "inherit", "initial", "unset",

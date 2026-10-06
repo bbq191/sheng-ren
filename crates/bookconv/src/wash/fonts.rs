@@ -81,7 +81,7 @@ fn css_rules(css: &str) -> (Pairs, Pairs) {
 /// `src` 里的 `url(...)` 有没有一个指到书里存在的文件。
 fn src_embedded(src: &str, base_dir: &str, names: &HashSet<&str>) -> bool {
     let mut rest = src;
-    while let Some(i) = rest.to_ascii_lowercase().find("url(") {
+    while let Some(i) = html::find_ci(rest, "url(") {
         let after = &rest[i + 4..];
         let Some(j) = after.find(')') else { break };
         let raw = after[..j].trim().trim_matches(['"', '\'']).trim();
@@ -218,29 +218,36 @@ const OPEN_BRACKETS: [char; 2] = ['（', '('];
 const CLOSE_BRACKETS: [char; 2] = ['）', ')'];
 
 /// 这个元素是不是批注（规则②③；规则①注释块由样式表那边按选择器处理）。
+/// 先按元素名、字体筛掉不可能的，再去找闭合标签（2026-10-06 审计：此前每个开标签都先往后找闭合标签，`<br/>`、`<img>` 这种
+/// 没有闭合标签的一路找到文件末尾，`<br>` 多的章节是平方级）。
 fn is_annotation(h: &str, t: &html::Tag, plan: &FontPlan) -> bool {
     let name = t.name.to_ascii_lowercase();
     let tag = &h[t.start..t.end];
-    let Some(close) = html::find_close(h, t.end, &name) else { return false };
-    let inner = &h[t.end..close.start];
+    let inner_of = |close: &html::Tag| &h[t.end..close.start];
     match name.as_str() {
-            "p" | "div" => {
-                let text = html::plain_text(inner);
-                let text = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{3000}');
-                // 只认叶子块：里面再有段落的 div 不算（免得整章被当成批注）。
-                !html::tags(inner).any(|x| x.is_start() && matches!(x.name.to_ascii_lowercase().as_str(), "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"))
-                    && note_prefix(text)
+        "p" | "div" => {
+            let Some(close) = html::find_close(h, t.end, &name) else { return false };
+            let inner = inner_of(&close);
+            let text = html::plain_text(inner);
+            let text = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{3000}');
+            // 只认叶子块：里面再有段落的 div 不算（免得整章被当成批注）。
+            !html::tags(inner).any(|x| x.is_start() && matches!(x.name.to_ascii_lowercase().as_str(), "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"))
+                && note_prefix(text)
+        }
+        "span" | "font" | "small" | "em" | "i" | "cite" => {
+            let own = plan.own_family(tag);
+            if !own.as_ref().is_some_and(|f| plan.embedded.contains(f)) || own == plan.body {
+                return false;
             }
-            "span" | "font" | "small" | "em" | "i" | "cite" => {
-                let own = plan.own_family(tag);
-                let text = html::plain_text(inner);
-                let text = text.trim();
-                let inside = text.starts_with(OPEN_BRACKETS) && text.ends_with(CLOSE_BRACKETS);
-                let before = h[..t.start].trim_end().chars().last().is_some_and(|c| OPEN_BRACKETS.contains(&c));
-                let after = h[close.end..].trim_start().chars().next().is_some_and(|c| CLOSE_BRACKETS.contains(&c));
-                own.as_ref().is_some_and(|f| plan.embedded.contains(f)) && own != plan.body && !text.is_empty() && (inside || (before && after))
-            }
-            _ => false,
+            let Some(close) = html::find_close(h, t.end, &name) else { return false };
+            let text = html::plain_text(inner_of(&close));
+            let text = text.trim();
+            let inside = text.starts_with(OPEN_BRACKETS) && text.ends_with(CLOSE_BRACKETS);
+            let before = h[..t.start].trim_end().chars().last().is_some_and(|c| OPEN_BRACKETS.contains(&c));
+            let after = h[close.end..].trim_start().chars().next().is_some_and(|c| CLOSE_BRACKETS.contains(&c));
+            !text.is_empty() && (inside || (before && after))
+        }
+        _ => false,
     }
 }
 

@@ -1343,11 +1343,12 @@ pub(super) fn paginate_sections(entries: &mut Vec<Entry>, toc_heading: &str, rep
     let Some(opf) = parse_opf(entries) else { return };
     // 1. 收集 spine 各文件的标题（目录页、导航文件不算）。
     let mut files: Vec<FileInfo> = Vec::new();
+    let index = name_index(entries);
     for path in &opf.spine {
         if Some(path) == opf.nav_doc.as_ref() || is_toc_file(path) {
             continue;
         }
-        let Some(idx) = entries.iter().position(|e| &e.name == path) else { continue };
+        let Some(&idx) = index.get(path.as_str()) else { continue };
         let Ok(html) = std::str::from_utf8(&entries[idx].data) else { continue };
         let Some((lo, hi)) = html::body_range(html) else { continue };
         let spans = parse_spans(html, lo, hi);
