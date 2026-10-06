@@ -166,3 +166,26 @@ fn static_webp_becomes_png() {
     let png = records.iter().find(|r| r.starts_with(&[0x89, b'P', b'N', b'G'])).expect("PNG 记录");
     assert_eq!(image::load_from_memory(png).unwrap().to_rgba8(), img);
 }
+
+/// 读取器也给词典转换（`mobidict`）读外来的 MOBI：文件里任何一个字节坏掉都只能读出错的东西或报错，不能 panic。
+#[test]
+fn corrupted_azw3_never_panics_reader() {
+    let good = azw3::epub_to_azw3(&sample_epub(), &azw3::Opts::default()).unwrap();
+    let mut x = 0x2545_F491u32;
+    // 头和记录表逐字节改，正文区抽样改（每个位置都试太慢）
+    let positions: Vec<usize> = (0..good.len().min(4096)).chain((4096..good.len()).step_by(7)).collect();
+    for at in positions {
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        let mut b = good.clone();
+        b[at] = x as u8;
+        let Ok(records) = palm::parse_palmdb(&b) else { continue };
+        let Ok(h) = palm::parse_header(records[0]) else { continue };
+        let _ = palm::decompress_text(&records, &h);
+        let _ = palm::parse_ncx(&records, &h);
+        let _ = palm::parse_fragment_starts(&records, &h);
+        let _ = palm::Kf8Map::parse(&records, &h);
+        let _ = palm::parse_exth(h.mobi, h.mobi_hlen);
+    }
+}
