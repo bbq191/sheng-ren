@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-06：461 个）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-06：466 个）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -65,7 +65,7 @@ done
 | 改动的性质 | 要求 |
 |---|---|
 | 重构、提速写出器 | 同一份优化后 EPUB，新旧写出器的 KFX 逐字节相同（2026-10-06 提速省内存那次：《北斗之拳》卷01 峰值 1.45→0.73GB，金庸全集 0.87→0.56GB、1.7→0.7 秒，阿加莎全集 3.3→1.4 秒，产物逐字节不变） |
-| 改了写出器的行为 | 只有该变的书变了，逐本说明（比如写出器 7 只有《福尔摩斯探案全集》变）；`WRITER_VERSION` 加一；上真机看过再写 ✓ |
+| 改了写出器的行为 | 只有该变的书变了，逐本说明（比如写出器 7 只有《福尔摩斯探案全集》变；写出器 8 同一个 `--id` 下全部逐字节不变，书库产物因唯一 ID 改取书 id 全变）；`WRITER_VERSION` 加一；上真机看过再写 ✓ |
 | 改了容器读写（`ion`、`container`） | `kfx-repack` 解开再打包设备上的样本（`target/kfx-samples/` 等）全部逐字节相同 |
 
 改了优化器而 KFX 字节变了的书，覆盖到 Kindle 上会丢进度（见[设备 · 重拷书以后进度还在不在](devices.md#重拷书以后进度还在不在)），值得在提交说明里写清是哪些书。
@@ -80,11 +80,11 @@ done
 
 | 改了什么 | 版本号 | 现值 | 过期的书 |
 |---|---|---|---|
-| 清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 44 | 全部 |
+| 清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 45 | 全部 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 4 | 只有补过东西的 |
 | EPUB → AZW3 | `azw3::WRITER_VERSION` | 4 | 书库已不出 AZW3（`epub-to-azw3` 还在） |
-| EPUB → KFX | `kfx::write::WRITER_VERSION` | 7 | 只有 `kindle` 模式的 |
+| EPUB → KFX | `kfx::write::WRITER_VERSION` | 8 | 只有 `kindle` 模式的 |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 ## 工程约束

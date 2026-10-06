@@ -96,7 +96,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v44（2026-10-06）：清洗层审计：同一章两条注释同 id 时后一条留在原处（此前只放得回一条，《绝叫》丢了一条注释）；改名文件的 html 里
 ///   `url()` 照原引号写（此前 `style="…url("…")"` 截断属性）；章尾空白不再连外层容器的闭合标签一起删（`<p></div>`）；
 ///   翻页方向认没引号的 `page-progression-direction`、不再插出重复属性；保留背景图时渐变写成 `background-image`。
-pub const OPTIMIZE_VERSION: &str = "44";
+/// - v45（2026-10-06）：OPF 唯一标识符和翻页方向各统一一个口径（`wash::opf::unique_identifier`、`direction::spine_direction`）：
+///   唯一标识符认任意前缀的 identifier（`dc11:identifier` 不再被当成没有、另补一个）、id 和值去空白，空值算没有（NCX 的 dtb:uid
+///   不再被改成空）；spine 方向值去空白、不分大小写（`" RTL "` 已是从右往左，不改写）。20 本测试书和一卷漫画三个模式逐字节不变。
+pub const OPTIMIZE_VERSION: &str = "45";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，

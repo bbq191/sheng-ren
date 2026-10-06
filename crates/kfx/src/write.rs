@@ -20,7 +20,11 @@ use std::collections::{HashMap, HashSet};
 ///   没有文字的元素（`<span id>`、`<div id>`）、图片自己的 id 当锚点（挂到下一个块开头，文末的挂到最后一个块末尾），
 ///   以前丢掉、链接和目录退回文件开头。23 本测试书只有《福尔摩斯探案全集》变了（1101 个锚点、目录、115 个版面多配上注释弹窗），
 ///   其余逐字节不变；未真机验证。
-pub const WRITER_VERSION: &str = "7";
+/// - 8（2026-10-06）：书库生成时唯一 ID 取书 id（以前取不到，退回 OPF 唯一标识符的哈希，见 `library` 的 `kfx_id`）：**书库的 kindle 产物全部变了**
+///   （容器 id、content_id、book_id；Kindle 上进度清零，用户接受）。`@media` 按阅读模式的阅读范围、屏幕求值（以前含 screen 就整块收），
+///   `<link>`/`<style>` 的 `media` 属性同样处理；选择器优先级不再把伪类括号里的字计成标签；颜色认 `#rgba`/`#rrggbbaa`；声明用
+///   `bookconv::html::css_decls` 切。同一份优化后 EPUB、同一个 `--id`，20 本测试书和一卷漫画新旧写出器逐字节相同（书里都没用到这些写法）。
+pub const WRITER_VERSION: &str = "8";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
