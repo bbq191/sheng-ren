@@ -2,11 +2,14 @@
 use crate::convert::common;
 use crate::imgopt;
 
+/// 远程图的下载上限。
+pub const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
 /// 抓图 UA（网页抽取与优化器共用同一标识）。
 pub const UA: &str = "Mozilla/5.0 (compatible; readlater/1.0)";
 
 /// 抓远程图；给了 `screen` 就按该设备降采样，`None` = 保留原图（入库母版用）。`src` 支持协议相对 `//host/path`；非 http(s) 返回 None。
-/// 返回 (字节, 扩展名, mime)；非图（魔数不认）→ None。上限 20MB。
+/// 返回 (字节, 扩展名, mime)；非图（魔数不认）、超过 [`MAX_IMAGE_BYTES`] → None。
 pub fn fetch_image(ag: &ureq::Agent, src: &str, referer: &str, screen: Option<imgopt::Screen>) -> Option<(Vec<u8>, &'static str, &'static str)> {
     // 协议相对 URL（`//host/path`，Wikipedia 等常用）补 https:；其余非 http(s)（data:/未解析相对）跳过。
     let abs = if let Some(rest) = src.strip_prefix("//") {
@@ -21,9 +24,8 @@ pub fn fetch_image(ag: &ureq::Agent, src: &str, referer: &str, screen: Option<im
         req = req.set("Referer", referer);
     }
     let resp = req.call().ok()?;
-    let mut bytes: Vec<u8> = Vec::new();
-    use std::io::Read;
-    resp.into_reader().take(20 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
+    // 超过上限按抓不到算：以前截到 20MB 照样用，前半截图片魔数对得上，坏图就进了书
+    let bytes = crate::util::read_capped(resp.into_reader(), MAX_IMAGE_BYTES, 0).ok()??;
     let (ext, mime) = common::image_ext_mime(&bytes)?; // 魔数识别 JPEG/PNG/GIF；非图→None
     // 网上的图是外部输入：解码器 panic 时按没缩放算（原图），不让一张图摔掉整本书的优化（这里在主线程）
     if let Some(smaller) = screen.and_then(|s| imgopt::guard(|| imgopt::downscale_for_device(&bytes, s))) {

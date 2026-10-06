@@ -84,9 +84,10 @@ fn strip_bad_params(url: &str) -> String {
 fn fetch_text(url: &str) -> Result<String, String> {
     let resp = http_agent(30).get(url).set("User-Agent", UA).set("Accept", "text/html,application/xhtml+xml").call().map_err(|e| format!("抓取失败: {e}"))?;
     let header_charset = resp.header("Content-Type").and_then(charset_param).map(str::to_string);
-    let mut bytes = Vec::new();
-    use std::io::Read;
-    resp.into_reader().take(MAX_PAGE_BYTES).read_to_end(&mut bytes).map_err(|e| format!("读取网页正文失败: {e}"))?;
+    // 超过上限报错：以前截到 20MB 照样抽正文，文章后半截悄悄没了
+    let bytes = crate::util::read_capped(resp.into_reader(), MAX_PAGE_BYTES, 0)
+        .map_err(|e| format!("读取网页正文失败: {e}"))?
+        .ok_or(format!("网页超过 {} MB，不收", MAX_PAGE_BYTES >> 20))?;
     Ok(decode_html(&bytes, header_charset.as_deref()))
 }
 

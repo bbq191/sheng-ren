@@ -280,6 +280,15 @@ pub fn restore_sigpipe() {
 /// [`sanitize_filename`] 结果的字节上限。
 pub const MAX_NAME_BYTES: usize = 200;
 
+/// 读完 `r`，最多 `cap` 字节；超过上限返回 `Ok(None)`——不把截断的前半截当完整内容用。`prealloc` 是预分配的字节数
+/// （再封顶到 `cap`，别直接信外来的声明大小）。读 zip 条目（解压上限）、抓网页和远程图（下载上限）共用。
+pub fn read_capped(r: impl std::io::Read, cap: u64, prealloc: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let mut v = Vec::with_capacity(prealloc.min(cap) as usize);
+    r.take(cap.saturating_add(1)).read_to_end(&mut v)?;
+    Ok((v.len() as u64 <= cap).then_some(v))
+}
+
 /// 字节串里第一次出现 `needle` 的位置；`needle` 为空时返回 `None`。
 pub fn memfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || hay.len() < needle.len() {
@@ -352,6 +361,15 @@ mod tests {
         assert_eq!(image_media_type_of_ext("bmp"), "image/jpeg", "认不出当 JPEG");
         assert_eq!(image_media_type_of_ext("webp"), "image/webp");
         assert_eq!(image_media_type_of_ext("jpeg"), "image/jpeg");
+    }
+
+    /// 超过上限不返回截断的前半截（以前抓远程图截到 20MB 照用，魔数对得上的坏图进了书；网页正文截断后照抽）。
+    #[test]
+    fn read_capped_rejects_instead_of_truncating() {
+        assert_eq!(read_capped(&b"abcd"[..], 4, 100).unwrap(), Some(b"abcd".to_vec()));
+        assert_eq!(read_capped(&b"abcde"[..], 4, 0).unwrap(), None);
+        assert_eq!(read_capped(&b""[..], 0, u64::MAX).unwrap(), Some(Vec::new()));
+        assert!(read_capped(&b"abc"[..], 10, u64::MAX).unwrap().unwrap().capacity() <= 10, "预分配封顶到上限");
     }
 
     #[test]

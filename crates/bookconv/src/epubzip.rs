@@ -61,12 +61,9 @@ pub(crate) fn read_all(r: impl Read, declared: u64, name: &str) -> Result<Vec<u8
 }
 
 fn read_all_capped(r: impl Read, declared: u64, name: &str, cap: u64) -> Result<Vec<u8>, String> {
-    let mut v = Vec::with_capacity(declared.min(PREALLOC_CAP).min(cap) as usize);
-    r.take(cap + 1).read_to_end(&mut v).map_err(|e| format!("{name}: {e}"))?;
-    if v.len() as u64 > cap {
-        return Err(format!("{name}: 解压后超过单个条目上限 {} MB（损坏或恶意的压缩包？）", cap >> 20));
-    }
-    Ok(v)
+    crate::util::read_capped(r, cap, declared.min(PREALLOC_CAP))
+        .map_err(|e| format!("{name}: {e}"))?
+        .ok_or_else(|| format!("{name}: 解压后超过单个条目上限 {} MB（损坏或恶意的压缩包？）", cap >> 20))
 }
 
 /// 不压缩的条目选项。
