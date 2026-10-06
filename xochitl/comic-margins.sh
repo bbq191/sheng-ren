@@ -17,7 +17,7 @@ for a in "$@"; do
   case $a in
     --host=*) host=${a#--host=} ;;
     --write) write=1 ;;
-    -h | --help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h | --help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
     *) echo "不认识的参数 $a" >&2; exit 2 ;;
   esac
 done

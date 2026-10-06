@@ -18,6 +18,8 @@ dev=--device=ireader
 args=()
 for a in "$@"; do case $a in --device=*) dev=$a ;; *) args+=("$a") ;; esac; done
 books=${REGRESS_BOOKS:-$HOME/Documents/ereader/books}
+[[ -x $bin && -f $bin ]] || { echo "✗ $bin 不是可执行文件" >&2; exit 2; }
+[[ -d $books ]] || { echo "✗ 没有书目录 $books" >&2; exit 2; }
 mkdir -p "$out"
 # 清掉上次留下的产物：不清的话这次没生成的书会拿旧 NN.epub 去比，悄悄通过
 rm -f -- "$out"/*.epub "$out"/*.log "$out/index.txt" "$out/device.txt"
@@ -30,7 +32,9 @@ while IFS= read -r -d '' f; do
   "$bin" "$dev" "${args[@]}" "$f" "$out/$n.epub" </dev/null >"$out/$n.log" 2>&1 || { echo "✗ $n $f（见 $n.log）"; fail=1; }
   printf '%s\t%s\n' "$n" "$f" >>"$out/index.txt"
 done < <(find "$books" -name '*.epub' -not -path '*漫画*' -print0 | sort -z)
-comic=$(find "$books" -path '*漫画*' -name '*.epub' -print0 | sort -z | { IFS= read -r -d '' f || true; printf '%s' "$f"; })
+# 全读进数组再取第一个：管道里读完第一个就走的话，漫画多时 sort 写不完收到 SIGPIPE，pipefail 下整个脚本就退出了
+mapfile -d '' comics < <(find "$books" -path '*漫画*' -name '*.epub' -print0 | sort -z)
+comic=${comics[0]-}
 if [[ $i -eq 0 && -z $comic ]]; then
   echo "✗ $books 里一本 EPUB 都没找到" >&2
   exit 2
