@@ -1,4 +1,4 @@
-//! EPUB → AZW3（KF8），给 Kindle 用 USB 侧载。输入应是已按设备优化过的 EPUB（`epub-optimize --device=kindle`；书库 `booklib build` 自动转）。
+//! EPUB → AZW3（KF8），给 Kindle 用 USB 侧载。输入应是已按设备优化过的 EPUB（`epub-optimize --device=kindle`；书库 `booklib sync` 生成时自动转）。
 //!
 //! 用法: epub-to-azw3 [--ebok] 输入.epub 输出.azw3
 //!   --ebok   归到 Kindle 的"书籍"（缺省"文档"PDOC：侧载书的封面显示最稳）

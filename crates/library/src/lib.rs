@@ -44,7 +44,7 @@ pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
-pub use sources::{book_files, SyncEvent, SyncMemo, SyncReport, SUPPORTED_EXTS};
+pub use sources::{book_files, Prune, SyncEvent, SyncMemo, SyncReport, SUPPORTED_EXTS};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Meta {
@@ -141,7 +141,7 @@ pub struct Library {
     locked: Cell<bool>,
     /// 残留临时文件清理过了（每个进程第一次拿到锁时清一次）。
     cleaned: Cell<bool>,
-    /// 各模式的生成记录 `output-state/<模式>.json`、`sources.json`：一次 build/list 里每本书都要查，读一次缓存起来。
+    /// 各模式的生成记录 `output-state/<模式>.json`、`sources.json`：一次生成、list 里每本书都要查，读一次缓存起来。
     states: JsonCache<generate::State>,
     sources_json: JsonCache<sources::Sources>,
     /// 本进程里核对过哈希的原件：id → (路径, 大小与修改时间)。多台设备生成同一本书时不重算哈希。
@@ -304,7 +304,7 @@ impl Library {
         &self.registry
     }
 
-    /// 加进程锁。会改动书库的操作（add/build/remove/sync/dedupe/meta）之前调用，持有到操作结束。
+    /// 加进程锁。会改动书库的操作（add/sync/remove/dedupe/meta）之前调用，持有到操作结束。
     /// 本进程第一次拿到锁时，顺带清理进程被杀时留下的临时文件和目录（`.tmp-*`）。
     /// 书库的记录文件读不出来时拒绝加锁（见 [`fsutil::check_json`]）。
     pub fn lock(&self) -> Result<Lock<'_>, String> {

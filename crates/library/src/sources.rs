@@ -117,11 +117,22 @@ pub enum SyncEvent<'a> {
     Added(&'a Path, &'a Meta),
     /// 原件内容变了：旧版本的条目已换成新的。参数是旧书名。
     Updated(&'a Path, &'a Meta, &'a str),
-    /// 原件不在了（`prune` 时已删掉对应条目）。
+    /// 原件不在了（不是挪动）：原件路径、书名、是不是已从书库删掉（连同产物；[`Prune::Keep`] 时不删）。
     Missing(&'a Path, &'a str, bool),
     Failed(&'a Path, &'a str),
     /// 读不了的目录（权限、读出错）和原因：里面的书状态未知，原样保留（不删、不报"原件不在"、不入库新的）。
     Unreadable(&'a Path, &'a str),
+}
+
+/// 原件不在了（不是挪动）的书怎么处理。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Prune {
+    /// 缺省：书库严格镜像跟踪目录，跟踪目录里登记过的书原件不在了就连同产物从书库删掉（2026-10-06 用户定）。
+    /// 删的只是索引和能重建的产物，原件不动；删错了（比如文件只是暂时挪开）放回去再 `sync` 就回来。
+    #[default]
+    Auto,
+    /// `--keep`：这一次不删，只报告。
+    Keep,
 }
 
 /// `sync` 的汇总。
@@ -166,7 +177,7 @@ impl Sources {
 }
 
 impl Library {
-    /// `sources.json`（经缓存读：一次 build 里每本书都要查跟踪目录）。
+    /// `sources.json`（经缓存读：一次生成里每本书都要查跟踪目录）。
     pub(crate) fn load_sources(&self) -> Sources {
         (*self.sources_json.get(&self.sources_path())).clone()
     }
@@ -214,7 +225,7 @@ impl Library {
         }
         // 产物放在跟踪目录旁边的 `<模式 id>/`（见 `generate`）：新目录和任何一个跟踪目录（包括它自己）的产物根目录互相包含的，
         // 生成出来的书会被当成新书入库、层层嵌套
-        // （只查和新目录有关的组合：已有的组合 build 时会报）
+        // （只查和新目录有关的组合：已有的组合生成时会报）
         let all: Vec<&PathBuf> = s.dirs.iter().chain(std::iter::once(&dir)).collect();
         for d in &all {
             let Some(parent) = d.parent() else { continue };
@@ -244,7 +255,7 @@ impl Library {
     }
 
     /// 把跟踪的目录镜像进书库（一次性运行：每个问题都报）。见 [`Library::sync_with`]。
-    pub fn sync(&self, prune: bool, on: impl FnMut(SyncEvent)) -> Result<SyncReport, String> {
+    pub fn sync(&self, prune: Prune, on: impl FnMut(SyncEvent)) -> Result<SyncReport, String> {
         self.sync_with(prune, &mut SyncMemo::default(), on)
     }
 
@@ -252,12 +263,14 @@ impl Library {
     /// - 新文件入库；大小和修改时间没变的文件跳过（不重读）；
     /// - 内容变了的文件入库新版本，旧版本的条目（没有别的原件在用时）连同产物删掉；新版本入库失败的，旧版本继续跟踪；
     /// - 移动、改名的文件按内容认出来，不重复入库；同一本书有两份、删了其中一份的，索引改记成还在的那份；
-    /// - 原件不在了的只报告；`prune` 时删掉对应条目（别的原件还用着同一内容的、条目记着的原件在别处还在的不删）；
+    /// - 原件不在了的（别的原件还用着同一内容的、条目记着的原件在别处还在的不算）：缺省（[`Prune::Auto`]）连同产物从书库删掉，
+    ///   [`Prune::Keep`] 只报告、继续记着下次再看。删产物只删生成记录里记在这本名下的文件，已经记在别的书名下的路径不删
+    ///   （见 `generate::State::delete_placements`）；这一步在生成之前，同名的新书接着生成时可以用上旧书腾出来的文件名；
     /// - 文件名不是 UTF-8 的报错，不入库也不记下来（改名后下次同步入库）；
-    /// - 读不了的目录（权限等）报出来，里面已登记的书状态未知、原样保留（`prune` 也不删）。
+    /// - 读不了的目录（权限等）报出来，里面已登记的书状态未知、原样保留、不删；整个跟踪目录不在的什么都不动。
     ///
     /// `memo` 跨轮次记住已经报过的问题（`--watch`），只在新出现时报一次。没有变化时不写 `sources.json`。
-    pub fn sync_with(&self, prune: bool, memo: &mut SyncMemo, mut on: impl FnMut(SyncEvent)) -> Result<SyncReport, String> {
+    pub fn sync_with(&self, prune: Prune, memo: &mut SyncMemo, mut on: impl FnMut(SyncEvent)) -> Result<SyncReport, String> {
         let src = self.load_sources();
         let mut rep = SyncReport::default();
         let mut present: BTreeMap<PathBuf, Seen> = BTreeMap::new();
@@ -273,7 +286,7 @@ impl Library {
             }
             let scan = scan_books(dir);
             for (u, why) in &scan.unreadable {
-                // 读不了的目录（权限不够等）：和目录整个不见了一样，里面的记录原样保留——不能当成书都删了（`--prune` 会删条目和产物）
+                // 读不了的目录（权限不够等）：和目录整个不见了一样，里面的记录原样保留——不能当成书都删了（原件不在的会连同产物从书库删掉）
                 present.extend(src.files.iter().filter(|(p, _)| p.starts_with(u)).map(|(p, s)| (p.clone(), s.clone())));
                 unreadable_now.insert(u.clone());
                 if memo.unreadable.insert(u.clone()) {
@@ -386,7 +399,8 @@ impl Library {
                 continue; // 条目记着的原件在跟踪目录以外（add 进来的），还在：这本书没丢
             }
             let title = self.read_meta(&seen.id).map(|m| m.title).unwrap_or_default();
-            if prune {
+            // 只自动删跟踪目录里登记过的（不在任何跟踪目录下的旧记录不该有，有也只报告）
+            if prune == Prune::Auto && src.dirs.iter().any(|d| path.starts_with(d)) {
                 match self.remove(&seen.id) {
                     Ok(_) => {
                         on(SyncEvent::Missing(path, &title, true));
@@ -394,14 +408,14 @@ impl Library {
                         rep.pruned += 1;
                     }
                     Err(e) => {
-                        on(SyncEvent::Failed(path, &format!("原件不在了，从书库删掉失败：{e}")));
+                        on(SyncEvent::Failed(path, &format!("原件不在了，从书库删掉失败：{e}（下次 sync 再删）")));
                         rep.failed += 1;
                         kept_missing.insert(path.clone(), seen.clone());
                     }
                 }
                 continue;
             }
-            // 继续记着，下次还报告（watch 时只在新出现时报一次）
+            // 继续记着，下次再看（watch 时只在新出现时报一次）
             kept_missing.insert(path.clone(), seen.clone());
             missing_now.insert(path.clone());
             if memo.missing.insert(path.clone()) {

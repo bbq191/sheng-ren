@@ -1,7 +1,7 @@
 mod common;
 
-use common::{booklib, jpeg, sample_epub};
-use library::{Added, Built, Library};
+use common::{booklib, jpeg, sample_epub, sample_epub_with};
+use library::{Added, Built, Library, Prune};
 use std::io::Write;
 
 #[test]
@@ -223,55 +223,55 @@ fn track_and_sync_mirror_a_directory() {
     assert!(lib.track(&books).unwrap());
     assert!(!lib.track(&books).unwrap(), "重复跟踪");
     assert!(lib.track(&dir.path().join("lib")).is_err(), "不能跟踪书库自己");
-    let r = lib.sync(false, |_| {}).unwrap();
+    let r = lib.sync(Prune::Keep, |_| {}).unwrap();
     assert_eq!((r.added, r.updated, r.missing), (2, 0, 0));
     assert_eq!(lib.list().len(), 2);
 
     // 没变：不重读
-    let r = lib.sync(false, |_| {}).unwrap();
+    let r = lib.sync(Prune::Keep, |_| {}).unwrap();
     assert_eq!((r.added, r.unchanged), (0, 2));
 
     // 改名移动：认得出，不重复入库，也不算"原件不在"
     std::fs::rename(books.join("子目录/乙.epub"), books.join("乙（改名）.epub")).unwrap();
-    let r = lib.sync(false, |_| {}).unwrap();
+    let r = lib.sync(Prune::Keep, |_| {}).unwrap();
     assert_eq!((r.added, r.missing), (0, 0));
     assert_eq!(lib.list().len(), 2);
 
     // 内容变了：换成新版本，旧版本删掉
     std::fs::write(books.join("甲.epub"), sample_epub("甲（修订版）")).unwrap();
-    let r = lib.sync(false, |_| {}).unwrap();
+    let r = lib.sync(Prune::Keep, |_| {}).unwrap();
     assert_eq!(r.updated, 1);
     let titles: Vec<String> = lib.list().into_iter().map(|m| m.title).collect();
     assert!(titles.contains(&"甲（修订版）".to_string()) && !titles.contains(&"甲".to_string()), "{titles:?}");
 
     // 入库失败的记住，不反复重试
     std::fs::write(books.join("坏.epub"), b"not a zip").unwrap();
-    assert_eq!(lib.sync(false, |_| {}).unwrap().failed, 1);
-    assert_eq!(lib.sync(false, |_| {}).unwrap().failed, 0, "文件没变就不再重试");
+    assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().failed, 1);
+    assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().failed, 0, "文件没变就不再重试");
 
-    // 原件删了：缺省只报告；--prune 才删
+    // 原件删了：--keep 只报告；缺省连同产物删掉
     std::fs::remove_file(books.join("乙（改名）.epub")).unwrap();
-    let r = lib.sync(false, |_| {}).unwrap();
+    let r = lib.sync(Prune::Keep, |_| {}).unwrap();
     assert_eq!((r.missing, r.pruned), (1, 0));
     assert_eq!(lib.list().len(), 2);
-    let r = lib.sync(true, |_| {}).unwrap();
+    let r = lib.sync(Prune::Auto, |_| {}).unwrap();
     assert_eq!((r.missing, r.pruned), (1, 1));
     assert_eq!(lib.list().len(), 1);
-    assert_eq!(lib.sync(false, |_| {}).unwrap().missing, 0, "删过就不再报告");
+    assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().missing, 0, "删过就不再报告");
 
     assert!(lib.untrack(&books).unwrap());
     assert!(lib.tracked().is_empty());
     assert_eq!(lib.list().len(), 1, "不跟踪了，已入库的书保留");
 }
 
-fn events(lib: &Library, prune: bool) -> (library::SyncReport, Vec<String>) {
+fn events(lib: &Library, prune: Prune) -> (library::SyncReport, Vec<String>) {
     let mut ev = Vec::new();
     let r = lib
         .sync(prune, |e| {
             ev.push(match e {
                 library::SyncEvent::Added(p, _) => format!("added {}", p.display()),
                 library::SyncEvent::Updated(p, _, _) => format!("updated {}", p.display()),
-                library::SyncEvent::Missing(p, _, _) => format!("missing {}", p.display()),
+                library::SyncEvent::Missing(p, _, removed) => format!("missing {} {removed}", p.display()),
                 library::SyncEvent::Failed(p, e) => format!("failed {}: {e}", p.display()),
                 library::SyncEvent::Unreadable(p, e) => format!("unreadable {}: {e}", p.display()),
             })
@@ -292,14 +292,14 @@ fn non_utf8_file_names_are_reported_not_panicked() {
     std::fs::write(&bad, sample_epub("坏名")).unwrap();
     assert!(lib.add_file(&bad).err().unwrap().contains("UTF-8"), "add 拒收");
     lib.track(&books).unwrap();
-    let (r, ev) = events(&lib, false);
+    let (r, ev) = events(&lib, Prune::Keep);
     assert_eq!((r.added, r.failed), (1, 1), "{ev:?}");
     assert!(ev.iter().any(|e| e.starts_with("failed") && e.contains("UTF-8")), "{ev:?}");
     let sources = std::fs::read_to_string(dir.path().join("lib/sources.json")).unwrap();
     assert!(sources.contains("好.epub") && !sources.contains("\\u"), "坏名字的不记下来：{sources}");
     // 改名后下次同步入库
     std::fs::rename(&bad, books.join("改好了.epub")).unwrap();
-    let (r, _) = events(&lib, false);
+    let (r, _) = events(&lib, Prune::Keep);
     assert_eq!((r.added, r.failed), (1, 0));
 }
 
@@ -312,12 +312,12 @@ fn two_copies_deleting_the_indexed_one_repoints_to_the_other() {
     std::fs::write(books.join("a.epub"), sample_epub("同一本")).unwrap();
     std::fs::write(books.join("b.epub"), sample_epub("同一本")).unwrap();
     lib.track(&books).unwrap();
-    let (r, _) = events(&lib, false);
+    let (r, _) = events(&lib, Prune::Keep);
     assert_eq!((r.added, r.unchanged), (1, 1));
     let m = lib.list().remove(0);
     assert!(m.source_path.ends_with("a.epub"));
     std::fs::remove_file(books.join("a.epub")).unwrap();
-    let (r, ev) = events(&lib, true);
+    let (r, ev) = events(&lib, Prune::Auto);
     assert_eq!((r.missing, r.pruned), (0, 0), "还有一份，不算不在：{ev:?}");
     let m = lib.list().remove(0);
     assert!(m.source_path.ends_with("b.epub"), "索引改记成还在的那份：{}", m.source_path);
@@ -335,17 +335,17 @@ fn failed_new_version_keeps_old_tracked_and_failed_removal_is_retried() {
     let f = books.join("书.epub");
     std::fs::write(&f, sample_epub("第一版")).unwrap();
     lib.track(&books).unwrap();
-    events(&lib, false);
+    events(&lib, Prune::Keep);
     let v1 = lib.list().remove(0).id;
 
     // 新版本入库失败：报错，旧版本继续跟踪（不算原件不在，文件没变不重试）
     std::fs::write(&f, b"not a zip").unwrap();
-    let (r, ev) = events(&lib, false);
+    let (r, ev) = events(&lib, Prune::Keep);
     assert_eq!((r.failed, r.updated), (1, 0), "{ev:?}");
     assert_eq!(lib.list().into_iter().map(|m| m.id).collect::<Vec<_>>(), std::slice::from_ref(&v1));
     let sources = std::fs::read_to_string(dir.path().join("lib/sources.json")).unwrap();
     assert!(sources.contains(&v1), "旧 id 还在跟踪：{sources}");
-    let (r, _) = events(&lib, true);
+    let (r, _) = events(&lib, Prune::Auto);
     assert_eq!((r.failed, r.missing, r.pruned), (0, 0, 0));
 
     // 换成能用的新版本：旧版本删除失败时报错、下次再删
@@ -355,7 +355,7 @@ fn failed_new_version_keeps_old_tracked_and_failed_removal_is_retried() {
     let masters = dir.path().join("lib/masters");
     let mut ev = Vec::new();
     let r = lib
-        .sync(false, |e| match e {
+        .sync(Prune::Keep, |e| match e {
             library::SyncEvent::Updated(..) => std::fs::set_permissions(&masters, std::fs::Permissions::from_mode(0o555)).unwrap(),
             library::SyncEvent::Failed(_, e) => ev.push(e.to_string()),
             _ => {}
@@ -370,7 +370,7 @@ fn failed_new_version_keeps_old_tracked_and_failed_removal_is_retried() {
     assert!(old_dir.exists());
     let sources = std::fs::read_to_string(dir.path().join("lib/sources.json")).unwrap();
     assert!(sources.contains("stale") && sources.contains(&v1), "{sources}");
-    let (r, ev) = events(&lib, false);
+    let (r, ev) = events(&lib, Prune::Keep);
     assert_eq!(r.failed, 0, "{ev:?}");
     assert!(!old_dir.exists(), "下次 sync 删掉旧版本");
     assert_eq!(lib.list().len(), 1);
@@ -387,16 +387,16 @@ fn watch_memo_reports_missing_once_and_track_rejects_nesting() {
     lib.track(&books).unwrap();
     assert!(lib.track(&books.join("子")).unwrap_err().contains("包含"));
     let mut memo = library::SyncMemo::default();
-    lib.sync_with(false, &mut memo, |_| {}).unwrap();
+    lib.sync_with(Prune::Keep, &mut memo, |_| {}).unwrap();
     let sources = dir.path().join("lib/sources.json");
     let t0 = std::fs::metadata(&sources).unwrap().modified().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(20));
-    lib.sync_with(false, &mut memo, |_| {}).unwrap();
+    lib.sync_with(Prune::Keep, &mut memo, |_| {}).unwrap();
     assert_eq!(std::fs::metadata(&sources).unwrap().modified().unwrap(), t0, "没变化不写 sources.json");
     std::fs::remove_file(books.join("甲.epub")).unwrap();
-    assert_eq!(lib.sync_with(false, &mut memo, |_| {}).unwrap().missing, 1);
-    assert_eq!(lib.sync_with(false, &mut memo, |_| {}).unwrap().missing, 0, "watch 下只报一次");
-    assert_eq!(lib.sync(false, |_| {}).unwrap().missing, 1, "一次性 sync 每次都报");
+    assert_eq!(lib.sync_with(Prune::Keep, &mut memo, |_| {}).unwrap().missing, 1);
+    assert_eq!(lib.sync_with(Prune::Keep, &mut memo, |_| {}).unwrap().missing, 0, "watch 下只报一次");
+    assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().missing, 1, "一次性 sync 每次都报");
 }
 
 #[test]
@@ -424,7 +424,7 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     std::fs::write(books.join("haodoo/x.epub"), sample_epub("甲")).unwrap();
     std::fs::write(books.join("根.epub"), sample_epub("根")).unwrap();
     lib.track(&books).unwrap();
-    lib.sync(false, |_| {}).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
     let find = |t: &str| lib.list().into_iter().find(|m| m.title == t).unwrap();
     let (ireader, xochitl) = (profile::get("ireader").unwrap(), profile::get("xochitl").unwrap());
     // 用原件路径挑书：文件＝那一本，目录＝下面所有的；路径可以是相对的、不规范的
@@ -450,7 +450,7 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     // 原件挪到别的子目录：产物跟着挪（内容没变，不重新生成），旧文件删掉，变空的旧目录也删掉
     std::fs::create_dir_all(books.join("收藏")).unwrap();
     std::fs::rename(books.join("haodoo/x.epub"), books.join("收藏/x（改名）.epub")).unwrap();
-    lib.sync(false, |_| {}).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
     let Built::Moved { from, to } = lib.build(&find("甲"), ireader, false).unwrap() else { panic!("应挪过去") };
     assert_eq!((from, to.clone()), (base.join("ereader/ireader/haodoo/甲.epub"), base.join("ereader/ireader/收藏/甲.epub")));
     assert!(to.is_file());
@@ -501,7 +501,7 @@ fn tracked_dir_named_like_a_mode_is_refused() {
     assert!(lib.track(&books).unwrap_err().contains("产物目录"));
     // 早期版本已经跟踪了的：build 时拒绝这个模式，别的模式照常
     std::fs::write(base.join("lib/sources.json"), serde_json::json!({"dirs": [books]}).to_string()).unwrap();
-    lib.sync(false, |_| {}).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
     let m = lib.list().remove(0);
     let e = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap_err();
     assert!(e.contains("跟踪的目录"), "{e}");
@@ -527,16 +527,16 @@ fn tracked_dir_inside_another_dirs_output_root_is_refused() {
     assert!(lib2.track(&books).unwrap_err().contains("产物目录"), "后跟踪的产物目录包住前一个");
     // 早期版本已经这样跟踪了：build 拒绝，不往跟踪目录里写产物
     std::fs::write(base.join("lib/sources.json"), serde_json::json!({"dirs": [books, sub]}).to_string()).unwrap();
-    lib.sync(false, |_| {}).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
     let m = lib.list().remove(0);
     let e = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap_err();
     assert!(e.contains("互相包含"), "{e}");
     assert!(!base.join("e/ireader/sub/甲.epub").exists());
-    assert_eq!(lib.sync(false, |_| {}).unwrap().added, 0);
+    assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().added, 0);
 }
 
 #[test]
-fn unreadable_subdir_keeps_its_books_even_with_prune() {
+fn unreadable_subdir_keeps_its_books() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let base = std::fs::canonicalize(dir.path()).unwrap();
@@ -548,7 +548,7 @@ fn unreadable_subdir_keeps_its_books_even_with_prune() {
     std::fs::write(books.join("甲.epub"), sample_epub("甲")).unwrap();
     std::fs::write(locked.join("乙.epub"), sample_epub("乙")).unwrap();
     lib.track(&books).unwrap();
-    lib.sync(false, |_| {}).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
     let ireader = profile::get("ireader").unwrap();
     for m in lib.list() {
         lib.build(&m, ireader, false).unwrap();
@@ -562,18 +562,18 @@ fn unreadable_subdir_keeps_its_books_even_with_prune() {
             std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
             return; // 以 root 运行：权限挡不住，测不了
         }
-        let (r, ev) = events(&lib, true);
+        let (r, ev) = events(&lib, Prune::Auto);
         assert_eq!((r.unreadable, r.missing, r.pruned), (1, 0, 0), "{mode:o} {ev:?}");
         assert_eq!(lib.list().len(), 2, "{mode:o}：读不了的目录里的书原样保留");
         assert!(std::fs::read_to_string(lib_dir.join("sources.json")).unwrap().contains("乙.epub"));
         // 命令行：明确报出来，退出码 2
-        let o = booklib(Some(&lib_dir), &["sync", "--prune", "--no-build"]);
+        let o = booklib(Some(&lib_dir), &["sync", "--no-build"]);
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(o.status.code(), Some(2), "{}", String::from_utf8_lossy(&o.stderr));
         assert!(String::from_utf8_lossy(&o.stderr).contains("读不了"), "{}", String::from_utf8_lossy(&o.stderr));
         assert!(out.is_file(), "产物也不删");
     }
-    let (r, _) = events(&lib, true);
+    let (r, _) = events(&lib, Prune::Auto);
     assert_eq!((r.unreadable, r.missing, r.added, r.failed), (0, 0, 0, 0), "恢复后照常");
     assert_eq!(lib.list().len(), 2);
 }
@@ -608,10 +608,10 @@ fn changed_added_original_is_caught_by_build_and_re_add_replaces_it() {
     let t = books.join("跟踪.epub");
     std::fs::write(&t, sample_epub("跟踪一")).unwrap();
     lib.track(&books).unwrap();
-    lib.sync(false, |_| {}).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
     std::fs::write(&t, sample_epub("跟踪二")).unwrap();
     assert!(matches!(lib.add_file(&t).unwrap(), Added::Replaced(..)));
-    let (r, ev) = events(&lib, false);
+    let (r, ev) = events(&lib, Prune::Keep);
     assert_eq!((r.added, r.updated, r.unchanged), (0, 0, 1), "{ev:?}");
     assert_eq!(lib.list().len(), 2);
 }
@@ -715,17 +715,17 @@ fn legacy_entries_of_dropped_formats_are_kept_and_skipped() {
     assert!(lib.add_file(&base.join("另一本.pdf")).is_err());
     std::fs::write(base.join("另一本.pdf"), b"%PDF-1.4").unwrap();
     assert_eq!(lib.add_file(&base.join("另一本.pdf")).err().unwrap(), "只支持 EPUB 和 CBZ");
-    // sync：还在的旧格式文件不算"原件不在"，--prune 也不删
-    let r = lib.sync(true, |_| {}).unwrap();
+    // sync：还在的旧格式文件不算"原件不在"，不删
+    let r = lib.sync(Prune::Auto, |_| {}).unwrap();
     assert_eq!((r.added, r.missing, r.pruned), (1, 0, 0));
     assert!(lib.list().iter().any(|m| m.id == id));
     assert!(std::fs::read_to_string(lib_dir.join("sources.json")).unwrap().contains("旧书.mobi"));
 
-    // 命令行：list 标出来；build 跳过（一行提示），其余照常生成，退出码 0
+    // 命令行：list 标出来；sync 生成时跳过（一行提示），其余照常生成，退出码 0
     let run = |args: &[&str]| booklib(Some(&lib_dir), args);
     let o = run(&["list"]);
     assert!(String::from_utf8_lossy(&o.stdout).contains("不再支持的格式"), "{}", String::from_utf8_lossy(&o.stdout));
-    let o = run(&["build"]);
+    let o = run(&["sync"]);
     let stdout = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success(), "{stdout}{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(stdout.matches("跳过").count(), 1, "每本只提示一次：{stdout}");
@@ -823,4 +823,189 @@ fn comic_fingerprint_follows_the_readable_area_the_optimizer_uses() {
         lib.fingerprint(&m, lib.devices().get("t").unwrap()).unwrap()
     };
     assert_ne!(fp(800), fp(700));
+/// 跑 booklib，要求退出码 0，返回 stdout。
+#[track_caller]
+fn ok(lib: &std::path::Path, args: &[&str]) -> String {
+    let o = booklib(Some(lib), args);
+    assert_eq!(o.status.code(), Some(0), "{args:?}\nstdout: {}\nstderr: {}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+/// 目录里的文件名（排好序）；目录不在算空。
+fn names(dir: &std::path::Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    v.sort();
+    v
+}
+
+/// 产物 EPUB 的正文里有没有 `marker`。
+#[track_caller]
+fn output_has(path: &std::path::Path, marker: &str) -> bool {
+    let entries = bookconv::epubzip::read_entries(&std::fs::read(path).unwrap()).unwrap();
+    entries.iter().any(|e| bookconv::epubzip::is_html(&e.name) && String::from_utf8_lossy(&e.data).contains(marker))
+}
+
+/// sync 选书：只生成选中的书；`--force` 重建；不跟踪目录时只生成 add 进来的书。
+#[test]
+fn sync_with_selection_builds_only_selected_books() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib = base.join("lib");
+    let books = base.join("ereader/books");
+    std::fs::create_dir_all(&books).unwrap();
+    std::fs::write(books.join("甲.epub"), sample_epub("甲")).unwrap();
+    std::fs::write(books.join("乙.epub"), sample_epub("乙")).unwrap();
+    let out = base.join("ereader/ireader");
+    ok(&lib, &["track", books.to_str().unwrap()]);
+    // 选书前先扫目录：两本都入库，只生成甲
+    let s = ok(&lib, &["sync", "--device=ireader", "甲"]);
+    assert!(s.contains("新增 2"), "{s}");
+    assert_eq!(names(&out), ["甲.epub"], "{s}");
+    let s = ok(&lib, &["sync", "--device=ireader", "甲"]);
+    assert!(s.contains("已是最新") && s.contains("重新生成 0 本"), "选了书时没变化的也报：{s}");
+    let s = ok(&lib, &["sync", "--device=ireader", "--force", books.join("甲.epub").to_str().unwrap()]);
+    assert!(s.contains("✓ 生成 [ireader] 甲") && s.contains("重新生成 1 本"), "--force 重建，原件路径也能选：{s}");
+    // 不选书：全部，只报有变化的
+    let s = ok(&lib, &["sync", "--device=ireader"]);
+    assert!(s.contains("✓ 生成 [ireader] 乙") && !s.contains("已是最新（"), "{s}");
+    assert_eq!(names(&out), ["乙.epub", "甲.epub"]);
+    let o = booklib(Some(&lib), &["sync", "--device=ireader", "丙"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("没有匹配的书"));
+
+    // 没跟踪任何目录：sync 照样生成 add 进来的书
+    let lib2 = base.join("lib2");
+    let single = base.join("单本.epub");
+    std::fs::write(&single, sample_epub("单本")).unwrap();
+    ok(&lib2, &["add", single.to_str().unwrap()]);
+    ok(&lib2, &["sync", "--device=ireader"]);
+    assert!(lib2.join("output/ireader/单本.epub").is_file());
+}
+
+/// 缺省的清理：原件删了的连同产物从书库删掉；挪动、--keep、跟踪目录整个不在、add 进来的书不删。
+#[test]
+fn sync_prunes_missing_originals_automatically() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib = base.join("lib");
+    let books = base.join("ereader/books");
+    std::fs::create_dir_all(books.join("子")).unwrap();
+    for t in ["甲", "乙"] {
+        std::fs::write(books.join(format!("{t}.epub")), sample_epub(t)).unwrap();
+    }
+    std::fs::write(books.join("子/丙.epub"), sample_epub("丙")).unwrap();
+    let outside = base.join("外/外.epub");
+    std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+    std::fs::write(&outside, sample_epub("外")).unwrap();
+    ok(&lib, &["track", books.to_str().unwrap()]);
+    ok(&lib, &["add", outside.to_str().unwrap()]);
+    ok(&lib, &["sync", "--device=ireader"]);
+    let out = base.join("ereader/ireader");
+    assert!(out.join("乙.epub").is_file() && out.join("子/丙.epub").is_file());
+    let count = || Library::open(&lib).unwrap().list().len();
+    assert_eq!(count(), 4);
+
+    // 删一个原件：书库和产物都没了
+    std::fs::remove_file(books.join("乙.epub")).unwrap();
+    let s = ok(&lib, &["sync", "--device=ireader"]);
+    assert!(s.contains("书库里也删了") && s.contains("不在了 1（从书库删了 1）"), "{s}");
+    assert!(!out.join("乙.epub").exists());
+    assert_eq!(count(), 3);
+
+    // 挪动：按内容认出来，不删，产物跟着挪
+    std::fs::rename(books.join("子/丙.epub"), books.join("丙（挪过）.epub")).unwrap();
+    let s = ok(&lib, &["sync", "--device=ireader"]);
+    assert!(s.contains("不在了 0"), "{s}");
+    assert_eq!(count(), 3);
+    assert!(out.join("丙.epub").is_file() && !out.join("子").exists(), "{s}");
+
+    // --keep：这一次只报告；下次缺省的 sync 再删
+    std::fs::remove_file(books.join("甲.epub")).unwrap();
+    let s = ok(&lib, &["sync", "--keep", "--device=ireader"]);
+    assert!(s.contains("--keep，这次没从书库删") && s.contains("（从书库删了 0）"), "{s}");
+    assert_eq!(count(), 3);
+    assert!(out.join("甲.epub").is_file());
+
+    // 跟踪目录整个不在（U 盘没插）：什么都不动
+    let away = base.join("ereader/books.挪开");
+    std::fs::rename(&books, &away).unwrap();
+    let s = ok(&lib, &["sync", "--no-build"]);
+    assert!(s.contains("不在了 0"), "{s}");
+    assert_eq!(count(), 3);
+    std::fs::rename(&away, &books).unwrap();
+
+    // 恢复后缺省 sync：--keep 留下的那本这次删掉
+    let s = ok(&lib, &["sync", "--no-build"]);
+    assert!(s.contains("不在了 1（从书库删了 1）"), "{s}");
+    assert!(!out.join("甲.epub").exists());
+    assert_eq!(count(), 2);
+
+    // add 进来、原件在跟踪目录以外的书：原件没了也不自动删
+    std::fs::remove_file(&outside).unwrap();
+    ok(&lib, &["sync", "--no-build"]);
+    let titles: Vec<String> = Library::open(&lib).unwrap().list().into_iter().map(|m| m.title).collect();
+    assert!(titles.contains(&"外".to_string()), "{titles:?}");
+}
+
+/// 书的更新（同名同作者、内容不同 → 新 id）：产物路径和旧条目的一样，清理旧条目时不能删掉新书的产物；
+/// 同一次 sync 里旧的走、新的来，产物目录里只剩新书、新内容。同名的两本同时在时各用各的文件名，互不覆盖。
+#[test]
+fn book_updates_replace_outputs_without_deleting_the_new_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib = base.join("lib");
+    let books = base.join("ereader/books");
+    std::fs::create_dir_all(&books).unwrap();
+    let out = base.join("ereader/ireader");
+    let plain = out.join("同名.epub");
+    let sync = || ok(&lib, &["sync", "--device=ireader"]);
+    ok(&lib, &["track", books.to_str().unwrap()]);
+    let count = || Library::open(&lib).unwrap().list().len();
+
+    std::fs::write(books.join("同名.epub"), sample_epub_with("同名", "第一版")).unwrap();
+    sync();
+    assert!(output_has(&plain, "第一版"));
+
+    // 1. 同一路径换内容（换成新版本）
+    std::fs::write(books.join("同名.epub"), sample_epub_with("同名", "第二版")).unwrap();
+    let s = sync();
+    assert!(s.contains("改过 1"), "{s}");
+    assert_eq!(names(&out), ["同名.epub"], "{s}");
+    assert!(output_has(&plain, "第二版") && count() == 1);
+
+    // 2. 删旧加新，文件名不同
+    std::fs::remove_file(books.join("同名.epub")).unwrap();
+    std::fs::write(books.join("同名（修订）.epub"), sample_epub_with("同名", "第三版")).unwrap();
+    let s = sync();
+    assert!(s.contains("新增 1") && s.contains("从书库删了 1"), "{s}");
+    assert_eq!(names(&out), ["同名.epub"], "{s}");
+    assert!(output_has(&plain, "第三版") && count() == 1);
+
+    // 3. 删旧加新，文件名相同（先删再放，比如从别处拷过来覆盖）
+    std::fs::remove_file(books.join("同名（修订）.epub")).unwrap();
+    std::fs::write(books.join("同名（修订）.epub"), sample_epub_with("同名", "第四版")).unwrap();
+    let s = sync();
+    assert_eq!(names(&out), ["同名.epub"], "{s}");
+    assert!(output_has(&plain, "第四版") && count() == 1);
+
+    // 4. 同名的两本同时在：后来的那本加 [id 前 6 位]，各是各的内容
+    std::fs::write(books.join("另一份.epub"), sample_epub_with("同名", "另一份")).unwrap();
+    let s = sync();
+    let ls = names(&out);
+    assert_eq!(ls.len(), 2, "{ls:?} {s}");
+    let other = out.join(ls.iter().find(|n| n.starts_with("同名 [")).unwrap());
+    assert!(output_has(&plain, "第四版") && output_has(&other, "另一份"));
+    let s = sync();
+    assert!(s.contains("重新生成 0 本") && names(&out) == ls, "再跑一次不动：{s}");
+    // 删掉其中一本：只删它自己的产物
+    std::fs::remove_file(books.join("另一份.epub")).unwrap();
+    sync();
+    assert_eq!(names(&out), ["同名.epub"]);
+    assert!(output_has(&plain, "第四版") && count() == 1);
+    // 同一次 sync 里一本走、一本来：新来的用上腾出来的名字
+    std::fs::remove_file(books.join("同名（修订）.epub")).unwrap();
+    std::fs::write(books.join("另一份.epub"), sample_epub_with("同名", "另一份")).unwrap();
+    let s = sync();
+    assert_eq!(names(&out), ["同名.epub"], "{s}");
+    assert!(output_has(&plain, "另一份") && count() == 1);
 }
