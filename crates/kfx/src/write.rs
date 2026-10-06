@@ -16,7 +16,7 @@ use scraper::{ElementRef, Html, Node};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。只进书库指纹，**不写进书里**（见 [`FILE_CREATOR_VERSION`]）。
-pub const WRITER_VERSION: &str = "5";
+pub const WRITER_VERSION: &str = "6";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -1317,24 +1317,43 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         // 只有一张图的文档写成整页图片版面（封面、插图页），和样本一样。
         let single_image = blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. });
         let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src }) = (single_image, fixed_canvas, &blocks[0].kind) {
-            // 固定版式的一页：图片节点只带画布宽高的样式（同样本），不走流式的块样式
+            // 固定版式的一页，照 Amazon 转的异形页样本：整页容器（画布宽高、`$476`、position relative）里放一个绝对定位的
+            // 图片节点（宽高、上、左）。比画布小的图有的页整页空白是资源符号顺序造成的，不是这里（见下面分配资源符号处）。
             let Some(r) = b.resource(src) else { continue };
-            let eid = b.eid();
-            ctx.order.push((eid, 1));
+            let (cid, iid) = (b.eid(), b.eid());
+            ctx.order.push((cid, 1));
+            ctx.order.push((iid, 1));
             ctx.resources.push(r);
             let (w, h) = fixed_image_size((i64::from(b.resources[r].width), i64::from(b.resources[r].height)), (cw, ch));
-            let mut props = vec![(P_WIDTH, Value::F64(w as f64)), (P_HEIGHT, Value::F64(h as f64)), (P_SIZING, Value::Symbol(SIZING_VALUE))];
-            // 比画布小的图居中：上、左外边距写差值的一半（同宽高，裸浮点数；不写时贴在左上角，2026-10-06 真机）
-            if cw > 0 {
-                for (prop, gap) in [(P_MARGIN_TOP, ch - h), (P_MARGIN_LEFT, cw - w)] {
-                    if gap > 1 {
-                        props.push((prop, Value::F64((gap / 2) as f64)));
-                    }
-                }
-            }
-            let style = b.style(props);
             let res = b.sym(&b.resources[r].name.clone());
-            vec![Value::Struct(vec![(EID, Value::Int(eid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(NODE_IMAGE)), (RESOURCE_REF, Value::Symbol(res))])]
+            if cw > 0 {
+                let cstyle = b.style(vec![
+                    (P_WIDTH, Value::F64(cw as f64)),
+                    (P_HEIGHT, Value::F64(ch as f64)),
+                    (P_SIZING, Value::Symbol(SIZING_VALUE)),
+                    (P_CLIP, Value::Bool(true)),
+                    (P_POSITION, Value::Symbol(POSITION_RELATIVE)),
+                ]);
+                let istyle = b.style(vec![
+                    (P_WIDTH, Value::F64(w as f64)),
+                    (P_HEIGHT, Value::F64(h as f64)),
+                    (P_SIZING, Value::Symbol(SIZING_VALUE)),
+                    (P_TOP, Value::F64(((ch - h) / 2) as f64)),
+                    (P_LEFT, Value::F64(((cw - w) / 2) as f64)),
+                    (P_POSITION, Value::Symbol(POSITION_ABSOLUTE)),
+                ]);
+                let img = Value::Struct(vec![(EID, Value::Int(iid)), (STYLE_REF, Value::Symbol(istyle)), (NODE_TYPE, Value::Symbol(NODE_IMAGE)), (RESOURCE_REF, Value::Symbol(res))]);
+                vec![Value::Struct(vec![
+                    (EID, Value::Int(cid)),
+                    (TMPL_FIT, Value::Symbol(CONTAINER_LAYOUT)),
+                    (STYLE_REF, Value::Symbol(cstyle)),
+                    (NODE_TYPE, Value::Symbol(NODE_CONTAINER)),
+                    (CHILDREN, Value::List(vec![img])),
+                ])]
+            } else {
+                let style = b.style(vec![(P_WIDTH, Value::F64(w as f64)), (P_HEIGHT, Value::F64(h as f64)), (P_SIZING, Value::Symbol(SIZING_VALUE))]);
+                vec![Value::Struct(vec![(EID, Value::Int(iid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(NODE_IMAGE)), (RESOURCE_REF, Value::Symbol(res))])]
+            }
         } else {
             blocks.iter().filter_map(|bl| b.node(bl, 1.0, &mut ctx)).collect()
         };
@@ -1433,61 +1452,6 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             Some((f.clone(), face.clone(), (*bytes).clone()))
         })
         .collect();
-    // 字节实体名、资源路径：图片在前、字体在后，一起按组分配符号。
-    let mut raws: Vec<(String, String)> = res_list.iter().enumerate().map(|(i, (name, loc, ..))| (raw_name(i, name), loc.clone())).collect();
-    raws.extend((0..fonts.len()).map(|i| (format!("font{i}-ad"), format!("resource/font{i}"))));
-    // 图片字节实体和资源路径的符号要隔 9 个：Kindle 按「`$165` 资源路径的符号编号 − 9」找图片字节
-    // （6 本样本 443 个资源全是这样；只改资源路径或只给字节实体改名，书架缩略图就没了，2026-10-05 真机）。
-    // 每 9 个资源一组：先这组的字节实体名，不满 9 个用占位符号补齐，再这组的资源路径。
-    let mut raw_sids = vec![0u32; raws.len()];
-    for (g, chunk) in raws.chunks(SID_GAP as usize).enumerate() {
-        let base = g * SID_GAP as usize;
-        for (k, (raw, _)) in chunk.iter().enumerate() {
-            raw_sids[base + k] = b.sym(raw);
-        }
-        for k in chunk.len()..SID_GAP as usize {
-            b.sym(&format!("pad{g}-{k}"));
-        }
-        for (k, (_, loc)) in chunk.iter().enumerate() {
-            let l = b.sym(loc);
-            debug_assert_eq!(l, raw_sids[base + k] + SID_GAP);
-        }
-    }
-    for (i, (family, face, bytes)) in fonts.into_iter().enumerate() {
-        let (raw, loc) = &raws[res_list.len() + i];
-        entities.push(ent(
-            NO_NAME,
-            T_FONT,
-            Value::Struct(vec![
-                (P_FONT_FAMILY, Value::String(family)),
-                (P_FONT_STYLE, Value::Symbol(if face.italic { STYLE_ITALIC } else { FONT_NORMAL })),
-                (P_FONT_WEIGHT, Value::Symbol(if face.bold { WEIGHT_BOLD } else { WEIGHT_NORMAL })),
-                (P_FONT_STRETCH, Value::Symbol(FONT_NORMAL)),
-                (RES_LOCATION, Value::String(loc.clone())),
-            ]),
-        ));
-        let id = b.local_index[raw];
-        entities.push(Entity { id, ty: T_RAW_FONT, version: 1, header: entity_header(), body: Body::Raw(bytes) });
-    }
-    for (i, (name, loc, format, mime, w, h)) in res_list.iter().enumerate() {
-        let n = b.sym(name);
-        let l = raw_sids[i];
-        entities.push(ent(
-            n,
-            T_RESOURCE,
-            Value::Struct(vec![
-                (RES_FORMAT, Value::Symbol(*format)),
-                (RES_MIME, Value::String(mime.to_string())),
-                (RES_LOCATION, Value::String(loc.clone())),
-                (RES_WIDTH, Value::Int(i64::from(*w))),
-                (RESOURCE_REF, Value::Symbol(n)),
-                (RES_HEIGHT, Value::Int(i64::from(*h))),
-            ]),
-        ));
-        let bytes = std::mem::take(&mut b.resources[i].bytes);
-        entities.push(Entity { id: l, ty: T_RAW_MEDIA, version: 1, header: entity_header(), body: Body::Raw(bytes) });
-    }
-
     // 阅读顺序、位置映射。
     let order_list = Value::List(sections.iter().map(|s| Value::Symbol(s.name)).collect());
     let reading_orders =
@@ -1687,6 +1651,64 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     }
     doc_data.extend([(477, Value::Symbol(56)), (READING_ORDERS, reading_orders)]);
     entities.push(ent(NO_NAME, T_DOCUMENT_DATA, Value::Struct(doc_data)));
+
+    // 资源（字节实体名、资源路径）的符号最后分配：书里不能有实体的 id 排在资源路径的符号后面。以前资源先分配、目录锚点和
+    // 导航后分配，固定版式里比画布小的图有的页整页空白（哪几页随实体集合变）；Amazon 转的书从来不这样排，给它加上排在后面的
+    // 锚点也出空白页（2026-10-06 真机，42 本测试书对照，见 docs/kfx.md）。
+    // 字节实体名、资源路径：图片在前、字体在后，一起按组分配符号。
+    let mut raws: Vec<(String, String)> = res_list.iter().enumerate().map(|(i, (name, loc, ..))| (raw_name(i, name), loc.clone())).collect();
+    raws.extend((0..fonts.len()).map(|i| (format!("font{i}-ad"), format!("resource/font{i}"))));
+    // 图片字节实体和资源路径的符号要隔 9 个：Kindle 按「`$165` 资源路径的符号编号 − 9」找图片字节
+    // （6 本样本 443 个资源全是这样；只改资源路径或只给字节实体改名，书架缩略图就没了，2026-10-05 真机）。
+    // 每 9 个资源一组：先这组的字节实体名，不满 9 个用占位符号补齐，再这组的资源路径。
+    let mut raw_sids = vec![0u32; raws.len()];
+    for (g, chunk) in raws.chunks(SID_GAP as usize).enumerate() {
+        let base = g * SID_GAP as usize;
+        for (k, (raw, _)) in chunk.iter().enumerate() {
+            raw_sids[base + k] = b.sym(raw);
+        }
+        for k in chunk.len()..SID_GAP as usize {
+            b.sym(&format!("pad{g}-{k}"));
+        }
+        for (k, (_, loc)) in chunk.iter().enumerate() {
+            let l = b.sym(loc);
+            debug_assert_eq!(l, raw_sids[base + k] + SID_GAP);
+        }
+    }
+    for (i, (family, face, bytes)) in fonts.into_iter().enumerate() {
+        let (raw, loc) = &raws[res_list.len() + i];
+        entities.push(ent(
+            NO_NAME,
+            T_FONT,
+            Value::Struct(vec![
+                (P_FONT_FAMILY, Value::String(family)),
+                (P_FONT_STYLE, Value::Symbol(if face.italic { STYLE_ITALIC } else { FONT_NORMAL })),
+                (P_FONT_WEIGHT, Value::Symbol(if face.bold { WEIGHT_BOLD } else { WEIGHT_NORMAL })),
+                (P_FONT_STRETCH, Value::Symbol(FONT_NORMAL)),
+                (RES_LOCATION, Value::String(loc.clone())),
+            ]),
+        ));
+        let id = b.local_index[raw];
+        entities.push(Entity { id, ty: T_RAW_FONT, version: 1, header: entity_header(), body: Body::Raw(bytes) });
+    }
+    for (i, (name, loc, format, mime, w, h)) in res_list.iter().enumerate() {
+        let n = b.sym(name);
+        let l = raw_sids[i];
+        entities.push(ent(
+            n,
+            T_RESOURCE,
+            Value::Struct(vec![
+                (RES_FORMAT, Value::Symbol(*format)),
+                (RES_MIME, Value::String(mime.to_string())),
+                (RES_LOCATION, Value::String(loc.clone())),
+                (RES_WIDTH, Value::Int(i64::from(*w))),
+                (RESOURCE_REF, Value::Symbol(n)),
+                (RES_HEIGHT, Value::Int(i64::from(*h))),
+            ]),
+        ));
+        let bytes = std::mem::take(&mut b.resources[i].bytes);
+        entities.push(Entity { id: l, ty: T_RAW_MEDIA, version: 1, header: entity_header(), body: Body::Raw(bytes) });
+    }
 
     // 按类型排序（和样本一样），清单放最后。
     entities.sort_by_key(|e| e.ty);
@@ -1956,6 +1978,11 @@ mod tests {
         let secs = dump(T_SECTION);
         assert_eq!(secs.matches(&format!("({TMPL_WIDTH}, Int(1272)), ({TMPL_HEIGHT}, Int(1696)), ({FIXED_PAGE_FIT}, Symbol({FIXED_PAGE_FIT_VALUE}))")).count(), 2, "{secs}");
         assert!(dump(T_STYLE).contains(&format!("({P_WIDTH}, F64(1272.0)), ({P_HEIGHT}, F64(1696.0))")), "{}", dump(T_STYLE));
+        // 没有实体的 id 排在资源路径的符号后面（否则 Kindle 上比画布小的图有的页空白）
+        let syms = c.symbols();
+        let max_loc = c.entities.iter().filter(|e| e.ty == T_RESOURCE).filter_map(|e| e.value()?.field(RES_LOCATION)?.as_str().and_then(|l| syms.sid(l))).max().unwrap();
+        let max_ent = c.entities.iter().map(|e| e.id).max().unwrap();
+        assert!(max_ent < max_loc, "最大实体 id {max_ent} 不能排在资源路径符号 {max_loc} 后面");
     }
 
     /// 没嵌入的正文字体不写进样式（Kindle 会换成别的字体，和表格、阅读器设置都对不上）；嵌入的装饰字体照写。
