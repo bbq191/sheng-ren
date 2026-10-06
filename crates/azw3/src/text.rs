@@ -6,7 +6,7 @@
 //! 链接先写成等长占位串，所有文档排完、偏移定下来之后再回填，回填不改变任何偏移。
 
 use bookconv::epubbook::Loaded;
-use bookconv::epubzip::{dir_of, percent_decode, posix_norm, resolve};
+use bookconv::epubzip::{dir_of, percent_decode, resolve_rel};
 use bookconv::html;
 use bookconv::util::xml_unescape;
 use regex::Regex;
@@ -56,7 +56,7 @@ fn rewrite_css(css: &str, css_path: &str, res: &HashMap<String, (u32, &'static s
     let css = FACE.get_or_init(|| Regex::new(r#"(?is)@font-face\s*\{[^}]*\}"#).unwrap()).replace_all(css, "");
     url_re()
         .replace_all(&css, |c: &regex::Captures| {
-            let p = posix_norm(&resolve(dir_of(css_path), &percent_decode(&c[1])));
+            let p = resolve_rel(dir_of(css_path), &c[1]);
             match res.get(&p) {
                 Some((n, mime)) => format!("url(kindle:embed:{}?mime={mime})", base32(*n, 4)),
                 None => c[0].to_string(),
@@ -97,7 +97,7 @@ fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize
     let is_css_link = name == "link" && all.iter().any(|a| a.is("rel") && a.value.split_ascii_whitespace().any(|w| w.eq_ignore_ascii_case("stylesheet")));
     if name == "link" {
         let href = all.iter().find(|a| a.is("href")).map(val).unwrap_or_default();
-        let target = posix_norm(&resolve(dir_of(cx.path), &percent_decode(href.split('#').next().unwrap_or(""))));
+        let target = resolve_rel(dir_of(cx.path), href.split('#').next().unwrap_or(""));
         if !is_css_link || !cx.flows.contains_key(&target) {
             return (String::new(), Vec::new());
         }
@@ -114,7 +114,7 @@ fn rewrite_tag(tag: &str, name: &str, cx: &DocCtx) -> (String, Vec<(usize, usize
         if html::is_external(p) {
             continue; // http:、mailto:、data: 等外部地址
         }
-        let target = if p.is_empty() { cx.path.to_string() } else { posix_norm(&resolve(dir_of(cx.path), &percent_decode(p))) };
+        let target = if p.is_empty() { cx.path.to_string() } else { resolve_rel(dir_of(cx.path), p) };
         // 换掉的是整个值（连同原来的引号）
         let (vs, ve) = if a.quote.is_some() { (a.value_start - 1, a.end) } else { (a.value_start, a.value_end) };
         let new = if is_css_link {
