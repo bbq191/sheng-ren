@@ -120,7 +120,8 @@ pub fn replace_nav_map(ncx: &str, points: &[NewNavPoint]) -> Option<String> {
     let mut s = String::new();
     let (mut depth, mut max_depth, mut fresh) = (0u8, 0u8, 0usize);
     for (i, p) in points.iter().enumerate() {
-        let d = p.depth.max(1).min(depth + 1);
+        // 层数到 u8 上限就不再深入（不可信的 NCX 嵌套 255 层以上时 `depth + 1` 溢出）
+        let d = p.depth.max(1).min(depth.saturating_add(1));
         if d <= depth {
             for _ in 0..(depth - d + 1) {
                 s.push_str("</navPoint>");
@@ -181,6 +182,16 @@ mod tests {
         assert_eq!(page_chunk_titles(1), vec![(0, "第 1–1 页".to_string())]);
         assert_eq!(page_chunk_titles(20).len(), 1);
         assert_eq!(page_chunk_titles(21).last(), Some(&(20, "第 21–21 页".to_string())));
+    }
+
+    #[test]
+    fn replace_nav_map_deeper_than_u8_stays_well_formed() {
+        let ncx = "<ncx><head></head><navMap></navMap></ncx>";
+        let points: Vec<NewNavPoint> = (0..300).map(|_| NewNavPoint { depth: 255, label: "x", src: "a.html", open_tag: None }).collect();
+        let out = replace_nav_map(ncx, &points).unwrap();
+        assert_eq!(out.matches("<navPoint ").count(), 300);
+        assert_eq!(out.matches("</navPoint>").count(), 300);
+        assert!(out.contains(r#"<meta name="dtb:depth" content="255"/>"#));
     }
 
     #[test]
