@@ -5,7 +5,7 @@
 优化按**阅读模式**（profile）来：一种阅读软件在一块屏幕上的样子，一个模式出一份产物。每个模式是一个 TOML 文件，文件名就是 id（`--device=` 的值）。
 内置的在 `crates/profile/profiles/`，编译时整个目录嵌进程序，**增删模式只要增删文件，不用改代码**。
 
-| 模式 | 给谁读 | 产物 | 屏幕（截图像素） | 文字书阅读范围 | 漫画画布 | 屏幕 |
+| 模式 | 给谁读 | 产物 | 屏幕（截图像素） | 文字书阅读范围 | 漫画画布 | 黑白彩色 |
 |---|---|---|---|---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画固定版式） | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
 | `ireader` | 掌阅 Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白 |
@@ -22,7 +22,7 @@
 | `formats`（必填） | 产物格式 | `["kfx"]` | `["epub"]` | `["epub"]` | Kindle 自带阅读器 USB 传书不认 EPUB；`kfx` 是先按同样规则优化出 EPUB 再转（`azw3` 写出器还在，书库不用） |
 | `color`（必填） | 彩色屏 | `false` | `false` | `true` | 黑白屏的漫画转 256 级灰度 |
 | `[screen]`、`[readable.<格式>]` | 屏幕、真实可阅读范围（不写 = 屏幕） | 1272×1696、1104×1546 | 整屏 | 954×1696、842×1455 | 阅读器各自留页边距、页眉页脚，见[可阅读范围](#可阅读范围) |
-| `notes`（必填） | `"jump"` 点标号跳到章末；`"popup"` 标成弹窗注释 | jump | popup | jump | 掌阅自带阅读器认弹窗（2026-10-05 真机）；Kindle 的 AZW3 不认（KFX 由写出器另写弹窗，见 [KFX](kfx.md)）；xochitl 只认同文件跳转 |
+| `notes`（必填） | 优化出的 EPUB 里注释怎么写：`"jump"` 普通链接、注释搬到章末；`"popup"` 再标上 `epub:type="noteref"` + `<aside epub:type="footnote">` | jump | popup | jump | 掌阅自带阅读器认弹窗（2026-10-05 真机）；xochitl 只认同文件跳转。**Kindle 写 jump 但实际有弹窗**：KFX 写出器不看 `epub:type`，按"互相链接的一对"（标号 ↔ 回链）自己认注释、写成弹窗（见 [KFX · 注释弹窗](kfx.md#注释弹窗)），所以 kindle 要保留回链 |
 | `note_icons`（`"keep"`） | 只有图标的注释标号：保留图标，或换成上标数字 | number | number | number | xochitl 里只有图的链接点不了、CSS 限不住图标；另两台也用数字，都验证过能跳 |
 | `note_backlinks`（`true`） | 保留注释里"跳回正文"的回链 | 保留 | 保留 | 去掉 | Kindle 点注释后没有可靠的"返回"，要靠回链；xochitl 遇到互相链接的一对会整对丢掉（正向也点不动） |
 | `comic_margin`（1） | 漫画的图到画布四边的白边（像素） | 1 | 1 | 0 | xochitl 页边距设成 1 后自己就留了 1px |
@@ -30,6 +30,7 @@
 | `comic_fixed_layout`（`false`） | 漫画写成固定版式 | `true` | — | — | Kindle 流式排版强制留页边距（最小档左右 101px），固定版式才按画布 1:1 整页显示 |
 | `background_images`（`false`） | 保留 CSS 背景图（`background` 简写拆成背景色、背景图、重复、位置等分项） | `true` | `true` | — | xochitl 不认 `no-repeat`，把背景图平铺满页盖住正文；掌阅不认 `background` 简写（2026-10-05 真机对照书），拆开写就正常 |
 | `background_sizing`（`true`） | 保留背景图时也留 `background-size`、`background-attachment` | 留 | 去掉 | — | 掌阅写了尺寸会把图挤变形；Kindle 留着（和 Amazon 写法一致） |
+| `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"` | — | `"ltr"` | — | 掌阅遇到往右翻的书，整页图四周留左右 92、上下 124px |
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记给登记脚本、文字页补回留白 | — | — | 1 | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |
 
@@ -42,15 +43,17 @@
 - 写了不认识的字段、格式，`comic_page_direction` 写了别的值，都会报错，防止拼错后被悄悄忽略。
 - 屏幕、阅读范围、漫画画布都要写成竖屏（宽 ≤ 高），阅读范围和画布不能超过屏幕，否则报错。
 - **按截图的像素写**：Kindle 截图是 1272×1696（设备实际的显示缓冲区），标称 1264×1680，写的是前者。
-- **自定义模式**：放在书库的 `profiles/<id>.toml`，同 id 覆盖内置的；`booklib devices` 会列出来。
+- **自定义模式**：放在书库的 `profiles/<id>.toml`，同 id 覆盖内置的；`booklib devices` 会列出来。id 不能以 `.` 开头、不能含逗号或斜杠（`--device=` 用逗号分隔，id 还要当目录名）；`profiles/` 里的隐藏文件跳过。
 
 ```toml
-# crates/profile/profiles/ireader.toml（节选）
+# crates/profile/profiles/ireader.toml（节选，去掉了注释）
 name = "掌阅自带阅读器（iReader Ocean 5 Pro）"
 ppi = 300
 color = false
 formats = ["epub"]
-notes = "jump"
+notes = "popup"
+background_images = true
+background_sizing = false
 note_icons = "number"
 comic_margin = 1
 comic_page_direction = "ltr"
@@ -59,7 +62,7 @@ comic_page_direction = "ltr"
 width = 1264
 height = 1680
 
-[readable.epub]          # kindle 写 [readable.azw3]
+[readable.epub]          # 段名跟产物格式走：kindle 写 [readable.kfx]
 width = 1264
 height = 1680
 ```
@@ -73,10 +76,10 @@ height = 1680
 | xochitl | NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录 | 对齐成一致 |
 | xochitl | 背景图会平铺满页、盖住正文 | 去掉背景图 |
 | xochitl | 页边距 1 时，带类的 `<body>` 里图会被吃掉约 20pt 宽 | 漫画图页去掉 body 的类 |
-| Kindle | 把 `<head>` 里散落的文字显示在章首 | AZW3 的 `<head>` 只留 title、meta、link、style、base |
+| Kindle（AZW3 时代） | 把 `<head>` 里散落的文字显示在章首 | AZW3 写出器的 `<head>` 只留 title、meta、link、style、base（KFX 不写 `<head>`，不涉及） |
 | 三台 | 不支持 CSS 断字 | 规则留着，不插软连字符 |
 
-其它实测行为（不需要处理）：Kindle 侧载书归"文档"分类时封面最稳；Kindle 书旁 `.sdr` 里的进度只写不读；掌阅用中文字体显示英文时弯引号是全角宽；xochitl 每本书排出的 PDF 最后多一页空白、页边距设置只对单本书、USB 网页上传约 88MB 以上的书回 413。
+其它实测行为（不需要处理）：Kindle 侧载书归"文档"（PDOC）时封面最稳；Kindle 书旁 `.sdr` 里的进度文件只写不读（AZW3 时代的 `.azw3f`；KFX 的 `.yjf` 见[附录](#自带阅读器之间能不能同步进度2026-09-30-真机)）；掌阅用中文字体显示英文时弯引号是全角宽；xochitl 每本书排出的 PDF 最后多一页空白、页边距设置只对单本书、USB 网页上传约 88MB 以上的书回 413。
 
 ### 为什么这样分
 
@@ -96,7 +99,7 @@ height = 1680
 ### 各模式的数字
 
 **`kindle`：文字书 1104×1546，漫画整屏 1272×1696。**
-- 2026-09-27 用测量书（转成 AZW3）截屏实测：左右页边距各 84，上下页眉页脚各 75。
+- 2026-09-27 用测量书（当时转成 AZW3）截屏实测：左右页边距各 84，上下页眉页脚各 75。KFX 是同一个阅读器、同样的页边距设置，沿用这组数（没单独量过）。
 - 页边距调到最小后左右还有 101px，所以流式排版下离屏幕 1px 做不到；漫画写成固定版式，Kindle 按画布 1:1 整页显示：测试书截图和页面图逐像素对齐，四边偏差 0（2026-09-30）。
 - 测量书里比页面窄的图靠左，实际文字书里的插图不靠左（2026-10-01）。
 
@@ -116,9 +119,9 @@ height = 1680
 用"测量书"：书里有一张竖长和一张横宽的纯黑大图，阅读器会把它们等比缩小到放得下为止。竖长图显示的高度就是可用高度，横宽图的宽度就是可用宽度。
 
 ```sh
-# 1. 生成测量书（Kindle 还要转成 AZW3）
+# 1. 生成测量书（Kindle 还要转成 KFX）
 readable-probe 测量书.epub
-epub-to-azw3 测量书.epub 测量书.azw3
+epub-to-kfx 测量书.epub 测量书.kfx
 
 # 2. 拷到设备上，用要量的阅读软件打开，翻到"竖长图""横宽图"两页各截一张屏
 
@@ -126,7 +129,7 @@ epub-to-azw3 测量书.epub 测量书.azw3
 readable-measure --device=kindle 竖长.png 横宽.png
 ```
 
-给了 `--device` 就按它的产物格式写段名（Kindle 是 `[readable.azw3]`，其余 `[readable.epub]`）。贴进对应的模式文件，注释里写明测量日期和条件（哪个阅读软件、页边距设置）。
+给了 `--device` 就按它的产物格式写段名（Kindle 是 `[readable.kfx]`，其余 `[readable.epub]`）；没给写 `[readable.epub]` 并提示。贴进对应的模式文件，注释里写明测量日期和条件（哪个阅读软件、页边距设置）。
 
 ## 加一个阅读模式
 
@@ -135,14 +138,29 @@ readable-measure --device=kindle 竖长.png 横宽.png
 3. 把阅读器的特殊行为记进上面的表；需要不同处理的做成字段，不在算法里按模式名写分支。
 4. 真机上看过文字书和漫画，再在[验证情况](typesetting.md#验证情况)里写"✓"。
 
+## 重拷书以后进度还在不在
+
+**这是"覆盖产物后进度保不保留"的唯一出处**，别处都链到这里。规则或书有更新时，重新生成的产物文件名不变（除非书名变了），拷过去直接覆盖设备上的旧文件。覆盖以后（2026-10-06 真机）：
+
+![三台覆盖产物后进度保不保留](img/progress.svg)
+
+| 设备 | 结果 | 我们怎么配合 |
+|---|---|---|
+| Kindle 自带阅读器（KFX） | **字节有任何不同就清零**（只差写进书里的写出器版本号也一样，《绍宋》），**逐字节相同才保留**（《啸风山庄》）。`.sdr/*.yjf` 里的 `lpr` 是阅读位置，书换了以后从头重新记 | KFX 里不写写出器版本（创建器版本固定写 `1`），容器 id 重建不变；内容没变的书升版本后重建出来逐字节相同。内容真变了（规则改了正文、换了封面）的书覆盖后进度清零，躲不开。见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机) |
+| 掌阅自带阅读器（EPUB） | **字节变了也保留**：同一本《罗杰疑案》只改 `META-INF/eink-optimized` 的版本号、重新打包覆盖，两次都还停在原来的位置 | EPUB 里照旧记优化器版本 |
+| Move（xochitl） | 没测：xochitl 按 UUID 存书，覆盖要走它自己的上传 | — |
+
+- **文件名要稳定**：覆盖靠同名文件。书名变了产物文件名才跟着变，设备上会多出一本新的、旧的要自己删。
+- 几台之间不能同步进度，见下面[附录](#自带阅读器之间能不能同步进度2026-09-30-真机)。
+
 ## KOReader
 
 **现状：两台都不装 KOReader（2026-10-06 用户定）**，三台都用自带阅读器：Kindle 读 `kindle/` 的 KFX，掌阅读 `ireader/` 的 EPUB，Move 读 `xochitl/`。2026-10-02～10-05 Kindle、掌阅曾日常开机直接进 KOReader（独占）；10-05 Kindle 上 `koreader/` 不在了（像是重置过）。下面是当时的记录，留作参考。
 
-- **读哪份产物**：KOReader 读 `ireader/` 的 EPUB（KOReader 不认 `.azw3`），拷到存储根的 `books/`（KOReader 的起始目录）。`kindle` 模式的 KFX 只在回到 Kindle 自带阅读器时用。
+- **读哪份产物**：KOReader 读 `ireader/` 的 EPUB（KOReader 不认 AZW3、打不开 KFX），拷到存储根的 `books/`（KOReader 的起始目录）。
 - **没有单独的模式**：`ireader` 的阅读范围是在掌阅自带阅读器上量的，KOReader 里没单独量，漫画离屏幕是不是 1px 没验证。
-- **进度同步**：两台的 KOReader 经自建的同步服务（KOReader 的 kosync 协议）按**文件名**认书、同步进度，所以 `ireader/` 产物的文件名要稳定。服务端归 vksight 仓库，设备上的设置在 koreader-setup 仓库。
-- **词典**：用自己手上的 MOBI 词典，经本仓库的 `mobi-dict-to-stardict` 转成 StarDict（网上现成的 StarDict 版是未授权转制，不用）。
+- **进度同步**：两台的 KOReader 经自建的同步服务（KOReader 的 kosync 协议）按**文件名**认书、同步进度（当时要求 `ireader/` 产物文件名稳定的原因之一；现在的原因见[上一节](#重拷书以后进度还在不在)）。服务端归 vksight 仓库，设备上的设置在 koreader-setup 仓库。
+- **词典**：用自己手上的 MOBI 词典，经本仓库的 `mobi-dict-to-stardict` 转成 StarDict（网上现成的 StarDict 版是未授权转制，不用）。现在掌阅自带阅读器直接用 MOBI 词典（见上面[字段](#怪癖--字段)下的说明），`mobidict` 暂时保留（用户 2026-10-06：别删）。
 - **设备上的配置**（个人设置、手势、字体、插件、开机独占、USB 传书、前光）都在单独的仓库 **koreader-setup**，本仓库不管。
 - Move 上不用 KOReader：屏幕刷新由 xochitl 那一层控制，翻页闪得厉害。
 
@@ -174,16 +192,8 @@ Move 系统版本 20260827；数据目录 `/home/root/.local/share/remarkable/xo
 
 | 设备 | 读进度 | 写进度 |
 |---|---|---|
-| Kindle（未越狱） | ✓ 书旁 `<书名>.sdr/<书名><哈希>.azw3f` 里的 `lpr`（最后读到）、`fpr`（读到最远），值是 AZW3 解压后正文的**字节偏移**；AZW3 是我们写的，能换算成全书第几个字。只有打开过的书才有 | ✗ 改文件 Kindle 不认、之后还会覆盖掉；删书再拷回也当新书从头开始 |
+| Kindle（未越狱） | ✓（AZW3 时代）书旁 `<书名>.sdr/<书名><哈希>.azw3f` 里的 `lpr`（最后读到）、`fpr`（读到最远），值是 AZW3 解压后正文的**字节偏移**；AZW3 是我们写的，能换算成全书第几个字。只有打开过的书才有。现在出 KFX：进度在 `.sdr/*.yjf` 的 `lpr`（如 `AUQAAAAAAAAA:3184`），怎么换算没研究；真正的进度看来记在系统数据库里（MTP 看不到），见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机) | ✗ 改文件 Kindle 不认、之后还会覆盖掉；删书再拷回也当新书从头开始 |
 | 掌阅（未 root） | ✗ 共享存储里没有进度文件，`iReader/backup/ireader2.db` 是加密的；当时 ADB 没开（后来开发者模式能打开，adb shell 是 root，没再查） | ✗ |
 | Move（xochitl） | ✓ `.metadata` 的 `lastOpenedPage` + `.epubindex` 对照表 | 可能能：像漫画页边距那样让 xochitl 自己设（没试） |
 
-所以自带阅读器之间最多做到"连上电脑时，把 Kindle 的进度换算后推给 Move"，没有做。当时日常的进度同步靠 KOReader（见上，现在不装了）。
-
-### 重拷书以后进度还在不在（2026-10-06 真机）
-
-| 设备 | 结果 |
-|---|---|
-| Kindle 自带阅读器（KFX） | **字节有任何不同就清零**（只差写进书里的版本号也一样），逐字节相同才保留。所以 KFX 里不写写出器版本，内容没变的书重建后逐字节相同，见 [kfx.md](kfx.md#阅读进度2026-10-06-真机) |
-| 掌阅自带阅读器（EPUB） | **字节变了也保留**：同一本《罗杰疑案》只改 `META-INF/eink-optimized` 的版本号、重新打包覆盖，两次都还停在原来的位置。所以 EPUB 里照旧记优化器版本 |
-| Move | 没测（覆盖 xochitl 的书要走它自己的上传） |
+所以自带阅读器之间最多做到"连上电脑时，把 Kindle 的进度换算后推给 Move"（AZW3 时代的设想），没有做。当时日常的进度同步靠 KOReader（见上，现在不装了）。
