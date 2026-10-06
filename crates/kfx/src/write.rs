@@ -16,7 +16,9 @@ use scraper::{ElementRef, Html, Node};
 use std::collections::{HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。只进书库指纹，**不写进书里**（见 [`FILE_CREATOR_VERSION`]）。
-pub const WRITER_VERSION: &str = "6";
+/// - 7（2026-10-06）：`rgb()`/`rgba()` 的百分比按百分比算；负字号作废；算不出有限值的长度（字号 0 时除以 0）写 0，不写 NaN。
+///   只影响用到这些写法的书（23 本测试书一本没有，产物逐字节不变）；未真机验证。
+pub const WRITER_VERSION: &str = "7";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -743,7 +745,8 @@ fn collapse_siblings(blocks: &mut [Block]) {
 
 fn num(v: f64, unit: u32) -> Value {
     // 保留 6 位有效数字左右（和样本一样的精度，避免 0.8333333333 这种长尾）。
-    let r = (v * 1e6).round() / 1e6;
+    // 字号 0 的元素换算长度时会除以 0：算不出有限值的写 0，不往书里写 NaN、无穷大。
+    let r = if v.is_finite() { (v * 1e6).round() / 1e6 } else { 0.0 };
     Value::Struct(vec![(VALUE, Value::F64(if r == 0.0 { 0.0 } else { r })), (UNIT, Value::Symbol(unit))])
 }
 
@@ -2059,6 +2062,14 @@ mod tests {
             compress_ids(ids),
             Value::List(vec![Value::Int(31), Value::List(vec![Value::Int(267), Value::Int(5)]), Value::Int(3088)])
         );
+    }
+
+    #[test]
+    fn non_finite_lengths_written_as_zero() {
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(num(v, U_EM), num(0.0, U_EM));
+        }
+        assert_eq!(num(0.8333333333, U_LH), Value::Struct(vec![(VALUE, Value::F64(0.833333)), (UNIT, Value::Symbol(U_LH))]));
     }
 
     #[test]
