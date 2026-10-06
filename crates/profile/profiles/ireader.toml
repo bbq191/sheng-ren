@@ -1,4 +1,4 @@
-# 掌阅 iReader Ocean 5 Pro 上的自带阅读器。7" Carta 1300，2026-09-27 核实。阅读范围按自带阅读器量；2026-10-02 起两台的 KOReader 也读这份产物，KOReader 上没单独量过。
+# 掌阅 iReader Ocean 5 Pro 上的自带阅读器。7" Carta 1300，2026-09-27 核实。阅读范围按自带阅读器量（2026-10-06 起两台都不装 KOReader，都用自带阅读器）。
 name = "掌阅自带阅读器（iReader Ocean 5 Pro）"
 ppi = 300
 color = false
