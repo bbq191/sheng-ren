@@ -452,7 +452,7 @@ pub(crate) fn ensure_epub_ns(doc: &str) -> String {
 
 /// 元素开标签是否带"注释"语义：epub:type/type/class 含 footnote|endnote|rearnote|note。
 /// 只认语义确证的块 → 目录页/普通交叉引用的跨文件链接绝不会被误当尾注搬走。
-pub(crate) fn note_semantic(open_tag: &str) -> bool {
+fn note_semantic(open_tag: &str) -> bool {
     html::attrs(open_tag).iter().any(|a| {
         let n = a.name.to_ascii_lowercase();
         (n == "type" || n == "class" || n.ends_with(":type")) && a.value.to_ascii_lowercase().contains("note")

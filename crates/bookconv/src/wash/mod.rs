@@ -15,6 +15,8 @@
 //!    目录里指向它的条目改指下一篇。
 //! 6. 自动目录（= `--use-auto-toc --level1-toc //h:h1 --level2-toc //h:h2`）：缺省**仅在书无目录时**从 h1/h2 生成
 //!    `toc.ncx` + `nav.xhtml`（xochitl 两者都认）；`AutoToc::Always` 强制重建（原目录坏掉的书）。
+//!    定章节（`chapters.rs`，文字书）：按目录层级定书/卷、章、节，漏掉的节补进目录、目录改指到文件中间的标题。
+//!    **不拆文件**（2026-10-06 用户定：章节不强制分页，原书的文件结构原样保留）。
 //! 7. 单标签重复 `id=` 折叠（`collapse_dup_id_attrs`）：非法 XHTML 会让 xochitl 整章白屏，这里先修、质量门再拦。
 //! 8. 全书 id 去重（`ids.rs`）：跨文件重复的 id 改名，全书指向它的链接一起改。
 //! 9. 规范整理（`normalize.rs`，最后一步）：XHTML 修成合法 XML（DOCTYPE、命名实体、裸 `&`/`<`、控制字符、空元素、多余闭合标签），
@@ -34,6 +36,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 // 按职责拆成子模块（原 `wash.rs` 一个文件 2000+ 行）；兄弟模块之间的互相调用走这层（各子模块 `use super::*`）。
+mod chapters;
 mod cover;
 mod css;
 mod dead_refs;
@@ -45,7 +48,6 @@ mod layout;
 mod ncx_fix;
 pub mod normalize;
 pub mod opf;
-mod paginate;
 mod safe_names;
 mod toc;
 mod typeset;
@@ -68,8 +70,8 @@ use self::ids::dedup_ids_across_book;
 use self::layout::*;
 use self::ncx_fix::*;
 use self::opf::{find_opf, opf_book_title, opf_unique_identifier};
-use self::paginate::paginate_sections;
-pub(crate) use self::paginate::is_toc_like_page;
+use self::chapters::chapters_into_toc;
+pub(crate) use self::chapters::is_toc_like_page;
 pub(crate) use self::toc::name_index;
 use self::toc::*;
 use self::typeset::*;
@@ -104,15 +106,13 @@ pub struct WashOpts {
     pub filter_props: Vec<String>,
     /// 正文排版语言（`Auto`=自动探测）。
     pub lang: LangMode,
-    /// 章节分页：章标题独立一页、节与节/节与章之间分页（见 `paginate.rs`）。文字书缺省开，漫画自动跳过。
-    pub paginate: bool,
     /// 保留的字体（规范化的名字）。`wash_entries` 开头按全书分析填上（见 `fonts`），调用方不用给。
     pub keep_fonts: HashSet<String>,
 }
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, paginate: true, keep_fonts: HashSet::new() }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new() }
     }
 }
 
@@ -161,11 +161,7 @@ pub struct WashReport {
     pub ncx_manifest_id_fixed: usize,
     /// 指向书内不存在文件的 `<img>` / 字体全缺的 `@font-face` 被去掉的个数。见 `drop_dead_refs`。
     pub dead_refs_removed: usize,
-    /// 章节分页新拆出来的文件数（0＝没有需要拆的章节）。见 `paginate.rs`。
-    pub sections_paginated: usize,
-    /// 分页时搬到引用处那一份的注释块数。
-    pub paginate_notes_moved: usize,
-    /// 书自带目录漏掉、分页时补进目录的节数。
+    /// 书自带目录漏掉、补进目录的节数。见 `chapters.rs`。
     pub toc_sections_added: usize,
     /// 书自带目录（NCX）指错位置、按书里的目录页或下一个文件核实后改指的条目数。见 `toc::repair_ncx_targets`。
     pub ncx_targets_repaired: usize,
@@ -218,8 +214,8 @@ pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashRep
     wash_entries_detect(entries, opts).map(|(rep, _)| rep)
 }
 
-/// 同 [`wash_entries`]，另返回漫画识别结果（`comic_detect::is_comic`，分页前判一次；优化器直接用，不再判第二遍——
-/// 分页只拆文件，不改图片数和字数，判定结果不变）。
+/// 同 [`wash_entries`]，另返回漫画识别结果（`comic_detect::is_comic`，定章节前判一次；优化器直接用，不再判第二遍——
+/// 后面各步只补 id、改目录、清章尾空白，不改图片数和字数，判定结果不变）。
 pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<(WashReport, bool), String> {
     let mut rep = WashReport::default();
     strip_pseudo_drm(entries, &mut rep)?;
@@ -283,19 +279,19 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     }
     add_wash_css_entry(entries, opf_idx, &css_path, &wash_css(opts));
     fix_ncx_manifest_id(entries, &mut rep);
-    // 目录指错位置的先修好：后面的分部重建、分页都按目录找标题
+    // 目录指错位置的先修好：后面的分部重建、定章节都按目录找标题
     repair_ncx_targets(entries, &mut rep);
     restructure_existing_toc_parts(entries, opts.auto_toc, heading, &mut rep);
     nest_parts_among_siblings(entries, opts.auto_toc, heading, &mut rep);
     auto_toc(entries, opts.auto_toc, heading, &mut rep);
-    // 分页放在自动目录之后：自动目录给标题补的 id 已经在，分页改写目录链接时能对上。漫画不拆。
+    // 定章节、补节进目录放在自动目录之后：自动目录给标题补的 id 已经在，改目录链接时能对上。漫画不做。
+    // 不拆文件（2026-10-06 用户定：章节不强制分页，原书的文件结构原样保留）。
     let comic = crate::comic_detect::is_comic(entries);
-    if opts.paginate && !comic {
-        paginate_sections(entries, heading, &mut rep);
+    if !comic {
+        chapters_into_toc(entries, heading, &mut rep);
     }
-    // 全书 id 去重放在分页之后（拆出来的份不会新增重复 id，但链接要按拆好后的文件改）。
+    // 全书 id 去重放在补 id 之后：补的 `eink-sec-N` 只避开本文件已有的锚点，跨文件撞名在这里改。
     dedup_ids_across_book(entries, &mut rep);
-    // 章尾空白页放在分页之后：拆出来的每一份文件末尾也要清。
     remove_chapter_end_blanks(entries, &mut rep);
     strip_ncx_doctype(entries, &mut rep);
     // 规范整理：XML 修复、升级 EPUB 3、导航文档（见 `normalize.rs`）。放最后：前面各步新写的文件也要过一遍；
@@ -317,7 +313,7 @@ fn book_lang_tag(entries: &[Entry], opf_idx: Option<usize>, lang: LangMode) -> S
 }
 
 /// **只做规范整理**（EPUB 3），和清洗层最后一步是同一套：NCX 去 DOCTYPE → XML 修复 → OPF 升级 3.0 → 导航文档与 landmarks → NCX
-/// `dtb:uid` 对齐 OPF。给 `booklib meta --edit` 用（2026-09-30 用户：改元数据写出的书也要和 booklib 一样符合 EPUB 3）。不做排版、分页等清洗。
+/// `dtb:uid` 对齐 OPF。给 `booklib meta --edit` 用（2026-09-30 用户：改元数据写出的书也要和 booklib 一样符合 EPUB 3）。不做排版、目录等清洗。
 pub fn normalize_epub3(entries: &mut Vec<Entry>) -> WashReport {
     let mut rep = WashReport::default();
     let lang = detect_dominant_script(entries);
@@ -364,7 +360,7 @@ pub(super) struct Link<'a> {
 /// 全书（html、NCX、OPF）的 `href`/`src`/`xlink:href` 改写：`f` 返回新值就替换（保留原引号）。书外链接不回调；
 /// `skip(条目名)` 为真的条目不动；OPF 里只改 `<guide>` 这类引用，manifest 的 `<item href>` 是文件本身的声明、从不改
 /// （2026-09-28 审计：空页删除没删掉单引号 OPF 的 item 时，把它的 href 改成了邻页，spine 就重复了一章）。
-/// 空页清理、全书 id 去重、分页后的链接改写共用。返回改了的条目数。
+/// 空页清理、全书 id 去重共用。返回改了的条目数。
 pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> bool, mut f: impl FnMut(&Link) -> Option<String>) -> usize {
     let mut changed = 0;
     for e in entries.iter_mut() {

@@ -4,7 +4,7 @@ use super::*;
 // ───────────────────────── 5. 空页清理 ─────────────────────────
 
 /// 页面 body 里没有读者看得见的内容（口径见 `html::has_visible`：非空白文字，或图片/分隔线/表格等媒体）。
-/// 2026-09-27：与章节分页共用同一套判定（此前这里只认 img/svg/image/video/audio，只有 `<hr/>`/表格的页会被当空页删掉）。
+/// 2026-09-27：与定章节共用同一套判定（此前这里只认 img/svg/image/video/audio，只有 `<hr/>`/表格的页会被当空页删掉）。
 pub(super) fn is_empty_page(html: &str) -> bool {
     !html::has_visible(html::first_body_inner(html).unwrap_or(""))
 }

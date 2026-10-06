@@ -1,7 +1,7 @@
 //! bookconv —— 电子书内容层：与设备无关的内容处理，按调用方传入的阅读范围与选项工作，自己不落盘、不管书库。
 //!
 //! - `convert`：CBZ → EPUB 母版；`article`：网页 → EPUB。
-//! - `optimize`：按设备优化 EPUB（图片缩放、漫画单趟处理、灰度），内含清洗层 `wash`（字体字号解锁、排版、章节分页、目录）。
+//! - `optimize`：按设备优化 EPUB（图片缩放、漫画单趟处理、灰度），内含清洗层 `wash`（字体字号解锁、排版、章节与目录）。
 //! - `htmlproc`：XHTML 处理规则（注释、对比度、重复 id）；`imgopt`/`imgpool`：图片处理与并发。
 //! - `check`：EPUB 质量门；`epub`/`epubzip`：EPUB 组装与读取；`probe`：量可阅读范围用的测量书。
 //!
