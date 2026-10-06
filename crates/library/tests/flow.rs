@@ -823,6 +823,8 @@ fn comic_fingerprint_follows_the_readable_area_the_optimizer_uses() {
         lib.fingerprint(&m, lib.devices().get("t").unwrap()).unwrap()
     };
     assert_ne!(fp(800), fp(700));
+}
+
 /// 跑 booklib，要求退出码 0，返回 stdout。
 #[track_caller]
 fn ok(lib: &std::path::Path, args: &[&str]) -> String {
