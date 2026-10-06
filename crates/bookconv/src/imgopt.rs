@@ -170,6 +170,49 @@ pub fn downscale_for_epub(bytes: &[u8], screen: Screen) -> Option<Vec<u8>> {
     downscale_into(bytes, screen.width, screen.height)
 }
 
+/// **整页背景图**按原书的尺寸意图缩进阅读范围（见 [`crate::bgfit`]）：只缩不放、保原格式、带透明的保持透明（不铺白底：
+/// 阅读器在透明处画背景色）。和 [`downscale_into`] 不同，缩了就用，不管重编码后是不是变小（调色板 PNG 解成 RGBA 再写回常常
+/// 更大）——这类图显示对比体积重要。不用缩、不是 JPEG/PNG、超过解码上限、解码失败 → `None`（原样保留）。
+pub fn downscale_background(bytes: &[u8], fit: crate::bgfit::BgFit, area: Screen) -> Option<Vec<u8>> {
+    let (fmt, (w, h)) = header_dims(bytes)?;
+    let orientation = orientation_of(bytes, fmt);
+    let (w, h) = if swaps_axes(orientation) { (h, w) } else { (w, h) };
+    let (nw, nh) = fit.target(w, h, area)?;
+    if !within_decode_budget(w, h) {
+        return None;
+    }
+    let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
+    img.apply_orientation(orientation);
+    match Page8::try_from_dynamic(img) {
+        Ok(page) => page.resize_lanczos3(nw, nh).encode(fmt, JPEG_QUALITY),
+        Err(img) if fmt == ImageFormat::Png => resize_alpha_png(img, nw, nh),
+        Err(_) => None,
+    }
+}
+
+/// 带透明（或 16 位等）的 PNG 缩放后写回 PNG。透明的按预乘 alpha 缩（`fast_image_resize` 缺省如此），透明像素的颜色
+/// 不会渗进边缘（`image` 自带的缩放不预乘，调色板图透明处常是黑色，边上会出黑边）。16 位的降成 8 位。
+fn resize_alpha_png(img: image::DynamicImage, nw: u32, nh: u32) -> Option<Vec<u8>> {
+    use fast_image_resize::images::{Image, ImageRef};
+    use fast_image_resize::{FilterType as FirFilter, PixelType, ResizeAlg, ResizeOptions, Resizer};
+    use image::{ExtendedColorType, ImageEncoder};
+    let (w, h) = (img.width(), img.height());
+    let (raw, pt, ct) = match img {
+        image::DynamicImage::ImageLumaA8(i) => (i.into_raw(), PixelType::U8x2, ExtendedColorType::La8),
+        image::DynamicImage::ImageLuma16(_) => (img.into_luma8().into_raw(), PixelType::U8, ExtendedColorType::L8),
+        i if !i.color().has_alpha() => (i.into_rgb8().into_raw(), PixelType::U8x3, ExtendedColorType::Rgb8),
+        i if !i.color().has_color() => (i.into_luma_alpha8().into_raw(), PixelType::U8x2, ExtendedColorType::La8),
+        i => (i.into_rgba8().into_raw(), PixelType::U8x4, ExtendedColorType::Rgba8),
+    };
+    let src = ImageRef::new(w, h, &raw, pt).ok()?;
+    let mut dst = Image::new(nw, nh, pt);
+    let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FirFilter::Lanczos3));
+    Resizer::new().resize(&src, &mut dst, &opts).ok()?;
+    let mut out = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut out).write_image(dst.buffer(), nw, nh, ct).ok()?;
+    Some(out)
+}
+
 /// 裁边判定容差：一行/列里像素两两 RGB 通道极差都 ≤ 这个值才算"纯色留白"。留够松（8）容 JPEG 压缩
 /// 噪声，但不到能吃掉真实画面渐变的地步。
 const TRIM_TOLERANCE: u8 = 8;

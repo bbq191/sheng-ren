@@ -104,7 +104,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   拆分时跟着搬的同文件注释留在原处（跳转模式；弹窗模式照旧搬到章末）。`epub-optimize --no-paginate` 删掉。
 /// - v47（2026-10-06）：NCX 缺 `dtb:uid` 的补上（和 OPF 唯一标识符一致），`dtb:depth` 不是正整数的改成 navMap 实际层数。
 ///   《绝叫》原书 head 只有一条内容是 uid 的 `dtb:depth`、没有 `dtb:uid`，掌阅自带阅读器建不出目录；测试书里只有这一本这样。
-pub const OPTIMIZE_VERSION: &str = "47";
+/// - v48（2026-10-06）：去掉 `background-size` 的模式（掌阅）整页背景图按原书的尺寸意图预先缩进阅读范围（`bgfit`）：`cover` 盖满、
+///   `contain`/没写尺寸缩进、宽 `100%` 宽撑满；只缩不放、缩了就用（不管变没变小）、透明保持透明。《绍宋》卷首页的 juan.png
+///   2160×3124 以前重编码变大没采用，掌阅上只露出左上一块。kindle 产物不变。
+pub const OPTIMIZE_VERSION: &str = "48";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -156,12 +159,15 @@ pub struct OptimizeOpts {
     pub comic_page_direction: Option<crate::direction::PageDirection>,
     /// 漫画写成固定版式（profile 的 `comic_fixed_layout`），画布是 `comic_screen`。见 [`crate::comicfxl`]。
     pub comic_fixed_layout: bool,
+    /// 整页背景图按原书的尺寸意图缩进阅读范围（`screen`）：去掉 `background-size` 的模式（profile `background_sizing = false`，
+    /// 掌阅）才开，见 [`crate::bgfit`]。只管文字书。
+    pub fit_backgrounds: bool,
 }
 
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -188,6 +194,7 @@ impl OptimizeOpts {
             drop_note_backlinks: !p.note_backlinks,
             comic_page_direction: p.comic_page_direction.as_deref().and_then(crate::direction::PageDirection::parse),
             comic_fixed_layout: p.comic_fixed_layout,
+            fit_backgrounds: p.background_images && !p.background_sizing,
             ..OptimizeOpts::new(p.output_readable())
         }
     }
@@ -234,6 +241,8 @@ struct Prepared {
     opf_name: Option<String>,
     /// 有章节引用远程图：OPF 推迟到最后写，好把抓到的图补进 manifest（见 `streaming`）。
     has_remote_imgs: bool,
+    /// 要按原书尺寸意图缩的整页背景图（清洗后的 zip 路径 → 意图），见 [`OptimizeOpts::fit_backgrounds`]。
+    bg_fits: HashMap<String, crate::bgfit::BgFit>,
     rep: Report,
 }
 
@@ -243,6 +252,8 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     // 保证 OPF 声明了有效封面（见 `wash::ensure_cover_declared`）。
     // 必须在清洗之前：清洗会把只含 SVG 封面的 titlepage 当空页删掉。
     crate::wash::ensure_cover_declared(&mut raw);
+    // 整页背景图的尺寸意图要在清洗前读（清洗会去掉 `background-size`）
+    let mut bg_fits = if opts.fit_backgrounds { crate::bgfit::plan(&raw) } else { HashMap::new() };
     let (wash_rep, washed_comic) = match &opts.wash {
         Some(w) => {
             let (r, c) = crate::wash::wash_entries_detect(&mut raw, w)?;
@@ -261,6 +272,16 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。清洗过的书用清洗层判好的
     // （清洗层已把空页清理、目录归一，判定更准；不再判第二遍）。
     let is_comic_book = washed_comic.unwrap_or_else(|| crate::comic_detect::is_comic(&ordered));
+    if is_comic_book {
+        bg_fits.clear();
+    } else if let Some(w) = &wash_rep {
+        // 清洗时改过名的图换成新名
+        for (old, new) in &w.renamed {
+            if let Some(f) = bg_fits.remove(old) {
+                bg_fits.insert(new.clone(), f);
+            }
+        }
+    }
     let opf = crate::wash::parse_opf(&ordered);
     // 只在真要改 OPF 时才记它：改翻页方向、补远程图的 manifest 项、给漫画打标签、（清洗过的书）按最终内容标 manifest 的 properties。
     let opf_name: Option<String> = opf.as_ref().filter(|_| opts.page_direction.is_some() || (is_comic_book && opts.comic_page_direction.is_some()) || has_remote_imgs || is_comic_book || opts.wash.is_some()).map(|o| ordered[o.index].name.clone());
@@ -313,7 +334,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         entries.push((name, data, ish));
     }
     let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &backrefs, &skip_notes, opts.drop_note_backlinks);
-    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, rep })
+    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, bg_fits, rep })
 }
 
 /// 第一遍后半：把**被引用**的注释块（aside/p/li/div 且带注释语义）从各章移除、建全书索引 (文件, id) → 块，交给第二遍

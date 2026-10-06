@@ -179,9 +179,12 @@ pub(super) fn first_pass_html(text: &str, name: &str, keep_fonts: &HashSet<Strin
 /// 图片最终变换：按漫画/文字书分流（漫画只裁边/适配阅读范围，画质优先）。
 /// 返回 `None` = 无需改动、沿用原字节（调用方自己决定借用还是移走，不为"没变"整张图克隆一份）。
 /// 解码器遇到畸形图片偶发 panic：兜住、按"失败原样保留"处理（[`crate::imgopt::guard`]）。
-pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool) -> Option<Vec<u8>> {
+pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool, bg: Option<crate::bgfit::BgFit>) -> Option<Vec<u8>> {
     crate::imgopt::guard(|| {
-        if is_comic_book {
+        if let Some(fit) = bg {
+            // 整页背景图：按原书尺寸意图缩，不再按普通插图缩（见 `bgfit`）
+            crate::imgopt::downscale_background(bytes, fit, screen)
+        } else if is_comic_book {
             // 单趟（解码/编码各一次、灰度保持、缩放走 SIMD），见 `prepare_comic_page_for_epub`。
             crate::imgopt::prepare_comic_page_for_epub(bytes, screen, comic_margin, grayscale)
         } else {

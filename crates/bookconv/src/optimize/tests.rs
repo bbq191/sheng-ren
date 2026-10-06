@@ -334,7 +334,7 @@
 
         let (stream_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
         let stream_img = entry_bytes(&stream_out, "p1.jpg");
-        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false).unwrap();
+        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false, None).unwrap();
         assert_eq!(stream_img, direct, "流式并行处理结果应与直接处理逐字节一致");
         let mut ar = ZipArchive::new(Cursor::new(&stream_out)).unwrap();
         assert_eq!(ar.by_name("p1.jpg").unwrap().compression(), CompressionMethod::Stored, "已压缩的图片 STORED");
@@ -377,7 +377,7 @@
             let (mut x, mut y) = (Vec::new(), Vec::new());
             a.by_name(&name).unwrap().read_to_end(&mut x).unwrap();
             b.by_name(&name).unwrap().read_to_end(&mut y).unwrap();
-            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false).unwrap_or(x);
+            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false, None).unwrap_or(x);
             assert_eq!(want, y, "第 {i} 张图并行结果与顺序结果不一致（乱序或串图）");
         }
         let mut y1 = Vec::new();
@@ -928,4 +928,73 @@
         assert!(text_of(&a, "OEBPS/nav.xhtml").contains(r#"<a href="c1.xhtml">第一章</a>"#));
         let c1 = text_of(&a, "OEBPS/c1.xhtml");
         assert!(c1.contains(r#"xmlns:epub="http://www.idpf.org/2007/ops""#) && c1.contains("甲&#160;乙"), "{c1}");
+    }
+
+    /// 带整页背景图的书：`body.c` cover、`body.n` 没写尺寸（带透明的 PNG）、`body.s` cover 但同一张图还被 `<img>` 用。
+    fn bg_book() -> (Vec<u8>, Vec<(&'static str, Vec<u8>)>) {
+        let png = |w: u32, h: u32, alpha: bool| {
+            let img = if alpha {
+                image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(w, h, |x, _| if x < w / 2 { image::Rgba([0, 0, 0, 0]) } else { image::Rgba([200, 30, 30, 255]) }))
+            } else {
+                image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])))
+            };
+            let mut b = Vec::new();
+            img.write_to(&mut Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+            b
+        };
+        let imgs = vec![("OEBPS/i/a.png", png(1200, 1600, false)), ("OEBPS/i/b.png", png(1080, 1560, true)), ("OEBPS/i/d.png", png(1500, 1600, false))];
+        let mut epub = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut epub));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let files: Vec<(&str, &[u8])> = vec![
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+                ("OEBPS/content.opf", br#"<package version="3.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.css" media-type="text/css"/><item id="a" href="i/a.png" media-type="image/png"/><item id="b" href="i/b.png" media-type="image/png"/><item id="d" href="i/d.png" media-type="image/png"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
+                ("OEBPS/s.css", b"body.c{background:url(i/a.png) bottom / cover no-repeat fixed #700} body.n{background:url(\"i/b.png\") no-repeat fixed #111} body.s{background:url(i/d.png) / cover no-repeat}"),
+                ("OEBPS/c1.xhtml", r#"<html><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body class="c"><p>正文</p><img src="i/d.png"/></body></html>"#.as_bytes()),
+            ];
+            for (name, body) in files.into_iter().chain(imgs.iter().map(|(n, b)| (*n, b.as_slice()))) {
+                zw.start_file(name, stored).unwrap();
+                zw.write_all(body).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        (epub, imgs)
+    }
+
+    #[test]
+    fn page_backgrounds_prescaled_by_intent_when_sizes_are_dropped() {
+        let (epub, imgs) = bg_book();
+        let screen = crate::imgopt::Screen { width: 600, height: 800 };
+        let opts = OptimizeOpts { screen, ..OptimizeOpts::for_profile(profile::get("ireader").unwrap()) };
+        assert!(opts.fit_backgrounds, "ireader 去掉 background-size，要预先缩");
+        let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
+        let img = |n: &str| image::load_from_memory(&entry_bytes(&out, n)).unwrap();
+        // cover：宽高两个比例取大者（600/1200、800/1600 都是 0.5）
+        assert_eq!((img("OEBPS/i/a.png").width(), img("OEBPS/i/a.png").height()), (600, 800));
+        // 没写尺寸：缩进阅读范围（800/1560 小于 600/1080）；透明保持透明，不铺白底
+        let b = img("OEBPS/i/b.png").to_rgba8();
+        assert_eq!(b.dimensions(), (554, 800));
+        assert_eq!((b.get_pixel(10, 10)[3], b.get_pixel(500, 10)[3]), (0, 255));
+        // 透明处是黑色：按预乘 alpha 缩，交界处不透明的像素不被染黑（`image` 自带的缩放不预乘，会出黑边）
+        let edge = (277..290).find(|&x| b.get_pixel(x, 10)[3] > 128).unwrap();
+        assert!(b.get_pixel(edge, 10)[0] > 180, "交界处 {:?}", b.get_pixel(edge, 10));
+        // 同一张图也被 <img> 用：不按 cover 缩，照普通插图处理
+        let d = &imgs[2].1;
+        assert_eq!(entry_bytes(&out, "OEBPS/i/d.png"), crate::imgopt::downscale_for_epub(d, screen).unwrap_or(d.clone()));
+        assert!(!String::from_utf8(entry_bytes(&out, "OEBPS/s.css")).unwrap().contains("background-size"));
+    }
+
+    #[test]
+    fn page_backgrounds_untouched_when_sizes_are_kept() {
+        // kindle 保留 background-size：背景图照普通插图处理（和以前一样）
+        let (epub, imgs) = bg_book();
+        let screen = crate::imgopt::Screen { width: 600, height: 800 };
+        let opts = OptimizeOpts { screen, ..OptimizeOpts::for_profile(profile::get("kindle").unwrap()) };
+        assert!(!opts.fit_backgrounds);
+        let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
+        for (n, b) in &imgs {
+            assert_eq!(&entry_bytes(&out, n), &crate::imgopt::downscale_for_epub(b, screen).unwrap_or(b.clone()), "{n}");
+        }
     }
