@@ -24,7 +24,9 @@ use std::collections::{HashMap, HashSet};
 ///   （容器 id、content_id、book_id；Kindle 上进度清零，用户接受）。`@media` 按阅读模式的阅读范围、屏幕求值（以前含 screen 就整块收），
 ///   `<link>`/`<style>` 的 `media` 属性同样处理；选择器优先级不再把伪类括号里的字计成标签；颜色认 `#rgba`/`#rrggbbaa`；声明用
 ///   `bookconv::html::css_decls` 切。同一份优化后 EPUB、同一个 `--id`，20 本测试书和一卷漫画新旧写出器逐字节相同（书里都没用到这些写法）。
-pub const WRITER_VERSION: &str = "8";
+/// - 9（2026-10-06）：图片节点写 CSS 的百分比宽度（`$56`，单位 `$314`，同表格宽度的写法；没有图片宽度的样本，按表格样本推的）。
+///   以前图片一律不写宽度，Kindle 按图自身大小显示；优化器 v50 起给带图注的竖长图写 `width:P%`，图和图注排在同一页。
+pub const WRITER_VERSION: &str = "9";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -974,7 +976,10 @@ impl Builder {
             p.push((P_BACKGROUND, Value::Int(i64::from(bg))));
         }
         p.extend(border_props(c));
-        if matches!(b.ty, Some(NODE_TABLE | NODE_HR)) {
+        // 图片只认百分比宽度（写出器 9）：优化器给带图注的竖长图写的 `width:P%`（`bookconv::capfit`）、书里样式表的 `width:40%`；
+        // 别的单位（em、px）没对过样本，不写
+        let image_pct = matches!(b.kind, Kind::Image { .. }) && matches!(c.width, Some(Len::Percent(_)));
+        if matches!(b.ty, Some(NODE_TABLE | NODE_HR)) || image_pct {
             if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
                 p.push((P_WIDTH, v));
             }
@@ -2107,6 +2112,31 @@ mod tests {
         assert!(styles.contains(&format!("({P_BG_IMAGE}, Symbol(")) && styles.contains(&format!("({P_BG_REPEAT}, Symbol({BG_NO_REPEAT}))")) && styles.contains(&format!("({P_BG_ATTACHMENT}, Symbol({BG_FIXED}))")), "{styles}");
         assert!(styles.contains(&format!("({P_BG_SIZE_H}, ")) && styles.contains(&format!("({P_BACKGROUND}, Int({}))", 0xFF750000u32)), "{styles}");
         assert!(c.entities.iter().any(|e| e.ty == T_RESOURCE), "背景图登记成资源");
+    }
+
+    /// 图片的百分比宽度写进样式（`$56`，单位百分比，同表格宽度）；别的单位不写（写出器 9）。
+    #[test]
+    fn image_percent_width() {
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(4, 8, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>img.l{{width:40%}} img.e{{width:10em}}</style></head><body><p>甲</p>{body}<p>乙</p></body></html>"#);
+        let styles_of = |body: &str| {
+            let mut w2 = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+            w2.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+            w2.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="i" href="i.png" media-type="image/png"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+            w2.put("i.png", &png).unwrap();
+            w2.put("c1.xhtml", page(body).as_bytes()).unwrap();
+            let epub = w2.finish().unwrap().into_inner();
+            let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+            assert!(warnings.is_empty(), "{warnings:?}");
+            let c = crate::container::Container::parse(&kfx).unwrap();
+            format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>())
+        };
+        let want = |p: f64| format!("({P_WIDTH}, {:?})", num(p, U_PERCENT));
+        assert!(styles_of(r#"<div><img src="i.png" style="width:61%"/></div>"#).contains(&want(61.0)), "行内百分比");
+        assert!(styles_of(r#"<div><img class="l" src="i.png"/></div>"#).contains(&want(40.0)), "样式表百分比");
+        assert!(!styles_of(r#"<div><img class="e" src="i.png"/></div>"#).contains(&format!("({P_WIDTH}, ")), "em 宽度不写");
+        assert!(!styles_of(r#"<div><img src="i.png"/></div>"#).contains(&format!("({P_WIDTH}, ")), "没写宽度");
     }
 
     #[test]
