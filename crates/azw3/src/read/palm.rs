@@ -615,7 +615,7 @@ pub fn parse_ncx(records: &[&[u8]], h: &Header) -> Vec<NcxEntry> {
     {
         let mut p = 0usize;
         let l = read_varint_fwd(cncx0, &mut p);
-        if l == 0 || p + l > cncx0.len() || std::str::from_utf8(&cncx0[p..p + l]).is_err() {
+        if l == 0 || cncx_str(cncx0, p, l).is_none_or(|b| std::str::from_utf8(b).is_err()) {
             return vec![];
         }
     }
@@ -627,10 +627,7 @@ pub fn parse_ncx(records: &[&[u8]], h: &Header) -> Vec<NcxEntry> {
             return String::new();
         }
         let l = read_varint_fwd(rec, &mut p);
-        if p + l > rec.len() {
-            return String::new();
-        }
-        String::from_utf8_lossy(&rec[p..p + l]).into_owned()
+        cncx_str(rec, p, l).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default()
     };
     entries
         .iter()
@@ -640,6 +637,11 @@ pub fn parse_ncx(records: &[&[u8]], h: &Header) -> Vec<NcxEntry> {
             (!label.trim().is_empty()).then(|| NcxEntry { pos, label, level: tag_val(tags, 4, 0).unwrap_or(0) as u8 })
         })
         .collect()
+}
+
+/// CNCX 记录里 `p` 起 `l` 字节的串。长度来自文件（变长整数读满 64 位会是天文数字），`p + l` 溢出或越界都返回 `None`。
+fn cncx_str(rec: &[u8], p: usize, l: usize) -> Option<&[u8]> {
+    rec.get(p..p.checked_add(l)?)
 }
 
 /// 解析 KF8 **fragment 索引** → 每个 fragment 的插入位置（下标=fragment id）。
@@ -858,6 +860,19 @@ mod tests {
         let records: Vec<&[u8]> = vec![&r0, &hdr, &data];
         let h = parse_header(&r0).unwrap();
         assert!(parse_ncx(&records, &h).is_empty());
+    }
+
+    /// CNCX 串长是文件里的变长整数：十个 0x7F 再一个 0xFF 读出来接近 2^64，算结束位置不能溢出 panic。
+    #[test]
+    fn huge_cncx_length_does_not_overflow() {
+        let mut rec = vec![0x7Fu8; 10];
+        rec.push(0xFF);
+        rec.extend(b"abc");
+        let mut p = 0;
+        let l = read_varint_fwd(&rec, &mut p);
+        assert!(l > rec.len());
+        assert_eq!(cncx_str(&rec, p, l), None);
+        assert_eq!(cncx_str(&rec, p, 3), Some(&b"abc"[..]));
     }
 
     #[test]
