@@ -879,6 +879,7 @@ dependencies = [
  "bookconv",
  "ego-tree",
  "image",
+ "profile",
  "scraper",
  "sha1",
 ]

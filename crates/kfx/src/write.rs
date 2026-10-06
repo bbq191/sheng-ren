@@ -46,6 +46,9 @@ const COVER_AUX: &str = "kfxdoc";
 pub struct Opts {
     /// 固定唯一 ID（书库用书的 id）；`None` 按书的 OPF 唯一标识符派生。
     pub fixed_id: Option<u64>,
+    /// 求值 `@media` 特性条件（`min-width` 等）用的阅读范围、屏幕（[`crate::css::MediaEnv::for_profile`]）；
+    /// `None` 时带特性条件的一律不收，只看媒体类型。
+    pub media: Option<crate::css::MediaEnv>,
 }
 
 // ---------------------------------------------------------------- 中间结构
@@ -829,6 +832,8 @@ struct Builder {
     used_fonts: std::collections::BTreeSet<String>,
     /// 不写进样式的字体名：没嵌入的正文字体（见 [`body_font_to_drop`]）。
     drop_font: Option<String>,
+    /// 求值 `@media` 用（见 [`Opts::media`]）。
+    media: Option<crate::css::MediaEnv>,
 }
 
 impl Builder {
@@ -1304,6 +1309,7 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
         headings: Vec::new(),
         used_fonts: Default::default(),
         drop_font: None,
+        media: opts.media,
     };
     // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字：元数据 `cover_image` 也是按「这个名字的符号编号 − 9」
     // 找封面资源的（6 本样本的 `e6` 减 9 都正好是封面 JPEG 的 `$164`；书架缩略图靠它，2026-10-05 真机）。
@@ -1352,13 +1358,17 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let mut sheet = Sheet::default();
         let mut order = 0;
         for el in html.select(&scraper::Selector::parse("link, style").unwrap_or_else(|_| unreachable!())) {
+            // `<link>`/`<style>` 的 `media` 属性和 `@media` 同一口径
+            if el.value().attr("media").is_some_and(|m| !crate::css::media_ok(m, b.media.as_ref())) {
+                continue;
+            }
             if el.value().name() == "style" {
-                order = sheet.add_at(&el.text().collect::<String>(), order, &doc.path);
+                order = sheet.add_at(&el.text().collect::<String>(), order, &doc.path, b.media.as_ref());
             } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
                 if let Some(h) = el.value().attr("href") {
                     let path = resolve_link(&doc.path, h).0;
                     if let Some(c) = css.get(path.as_str()) {
-                        let rules = sheets.entry(path).or_insert_with_key(|p| crate::css::Rules::parse(c, p)).clone();
+                        let rules = sheets.entry(path).or_insert_with_key(|p| crate::css::Rules::parse(c, p, b.media.as_ref())).clone();
                         order = sheet.add_rules(rules, order);
                     }
                 }
@@ -1924,7 +1934,7 @@ mod tests {
         w.put("OEBPS/c2.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h3 id="s">1</h3><p>戊</p></body></html>"#.as_bytes()).unwrap();
         let epub = w.finish().unwrap().into_inner();
 
-        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let c = Container::parse(&kfx).unwrap();
         let syms: SymbolTable = c.symbols();
@@ -1971,7 +1981,7 @@ mod tests {
         w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
         w.put("c1.xhtml", r##"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>正文<a id="r1" href="#n1"><sup>[1]</sup></a>接着</p><p>别的<a href="#x">链接</a></p><p id="x">目标</p><p class="fn"><a id="n1" href="#r1">[1]</a>注释正文</p></body></html>"##.as_bytes()).unwrap();
         let epub = w.finish().unwrap().into_inner();
-        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
         let c = crate::container::Container::parse(&kfx).unwrap();
         let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
         assert_eq!(story.matches(&format!("({NOTE_REF}, Symbol({NOTE_REF_POPUP}))")).count(), 1, "{story}");
@@ -1991,7 +2001,7 @@ mod tests {
             <table style="border-collapse:collapse;width:80%"><caption>表题</caption><tr><td colspan="2" style="width:30%">庚</td></tr><tr><td rowspan="2">辛</td><td></td></tr></table>
             <div class="b"><p>壬</p></div><hr/><p>前<u>癸</u></p></body></html>"#.as_bytes()).unwrap();
         let epub = w.finish().unwrap().into_inner();
-        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let c = crate::container::Container::parse(&kfx).unwrap();
         let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
@@ -2043,7 +2053,7 @@ mod tests {
             w.put(p, br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div><img src="i.jpg" style="width:1272px;height:1696px"/></div></body></html>"#).unwrap();
         }
         let epub = w.finish().unwrap().into_inner();
-        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
         let c = crate::container::Container::parse(&kfx).unwrap();
         let dump = |ty: u32| format!("{:?}", c.entities.iter().filter(|e| e.ty == ty).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
         let meta = dump(T_METADATA);
@@ -2068,7 +2078,7 @@ mod tests {
         w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
         w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>p{font-family:"AR MingU30"} h1{font-family:"黑体"}</style></head><body><h1>标题</h1><p>很长很长的正文一</p><p>很长很长的正文二</p><table><tr><td>表格</td></tr></table></body></html>"#.as_bytes()).unwrap();
         let epub = w.finish().unwrap().into_inner();
-        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
         let c = crate::container::Container::parse(&kfx).unwrap();
         let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
         assert!(!styles.contains("AR MingU30") && styles.contains("黑体"), "{styles}");
@@ -2086,7 +2096,7 @@ mod tests {
         w.put("O/I/bg.png", &png).unwrap();
         w.put("O/T/c1.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="../S/a.css"/></head><body class="j"><p>x</p></body></html>"#).unwrap();
         let epub = w.finish().unwrap().into_inner();
-        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let c = crate::container::Container::parse(&kfx).unwrap();
         let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
@@ -2136,7 +2146,7 @@ mod tests {
         w.put("i.png", &png).unwrap();
         w.put("c1.xhtml", r##"<html xmlns="http://www.w3.org/1999/xhtml"><body><p><a href="#a">1</a><a href="#b">2</a><a href="#c">3</a><a href="#d">4</a></p><p>甲</p><p><span id="a"></span></p><p>乙</p><div id="b"></div><p><img id="c" src="i.png"/></p><p>丙丁</p><span id="d"></span></body></html>"##.as_bytes()).unwrap();
         let epub = w.finish().unwrap().into_inner();
-        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let c = crate::container::Container::parse(&kfx).unwrap();
         // 节点 id：按文字找文字节点，图片节点按类型找

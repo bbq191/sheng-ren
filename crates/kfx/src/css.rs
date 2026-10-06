@@ -3,7 +3,7 @@
 //! 只认 KFX 能表达的属性（字体、字号、字重、斜体、对齐、缩进、行高、边距、内边距、颜色、背景色、上下标、边框、
 //! 列表符号、表格边框合并与间距、文字装饰、字间距、`pre`）；
 //! 别的属性忽略。选择器匹配用 scraper（html5ever DOM），优先级自己算。
-//! `@media` 只收 `all`/`screen`/`amzn-kf8`，`@font-face`、`@page` 等跳过（字体先交给阅读器）。
+//! `@media` 按阅读模式的阅读范围、屏幕求值（见 [`media_ok`]），`@font-face`、`@page` 等跳过（嵌入字体另由 [`font_faces`] 读）。
 
 use scraper::{ElementRef, Selector};
 use std::collections::HashMap;
@@ -80,13 +80,14 @@ pub struct Rules(Vec<Rule>);
 
 impl Rules {
     /// 解析一份样式表；`url(…)` 按样式表自己的路径 `base`（书内路径）换成书内路径（`base` 空时不换）。
-    pub fn parse(css: &str, base: &str) -> Rc<Rules> {
+    /// `@media` 块按 `media` 求值（见 [`media_ok`]）。
+    pub fn parse(css: &str, base: &str, media: Option<&MediaEnv>) -> Rc<Rules> {
         let mut r = Rules::default();
-        r.add(css, base);
+        r.add(css, base, media);
         Rc::new(r)
     }
 
-    fn add(&mut self, css: &str, base: &str) {
+    fn add(&mut self, css: &str, base: &str, media: Option<&MediaEnv>) {
         let css = strip_comments(css);
         let mut rest: &str = &css;
         while let Some(open) = rest.find('{') {
@@ -98,8 +99,8 @@ impl Rules {
             if let Some(at) = head.strip_prefix('@') {
                 let lower = at.to_ascii_lowercase();
                 if let Some(q) = lower.strip_prefix("media") {
-                    if media_ok(q) {
-                        self.add(body, base);
+                    if media_ok(q, media) {
+                        self.add(body, base, media);
                     }
                 }
             } else if !head.is_empty() {
@@ -368,67 +369,300 @@ pub fn parse_bg_size(v: &str) -> [Option<Len>; 2] {
 
 const BORDER_STYLES: &[&str] = &["none", "hidden", "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset"];
 
-/// 一个选择器的优先级 (id, 类/属性/伪类, 标签)。
+/// 一个选择器的优先级 (id, 类/属性/伪类, 标签与伪元素)，按 Selectors 规范：`:not()`/`:is()`/`:has()` 取括号里最高的那个，
+/// `:where()` 算 0，别的带括号的伪类（`:nth-child(2n+1)`、`:lang(zh)`）算一个伪类，括号里的字不计（2026-10-06 以前计成标签）。
+/// 单冒号的 `:before`/`:after`/`:first-line`/`:first-letter` 是伪元素。
 fn specificity(sel: &str) -> (u32, u32, u32) {
-    let (mut a, mut b, mut c) = (0, 0, 0);
-    let mut prev_ident = false;
-    let bytes: Vec<char> = sel.chars().collect();
+    let ch: Vec<char> = sel.chars().collect();
+    let (mut a, mut b, mut c) = (0u32, 0u32, 0u32);
+    let is_ident = |x: char| x.is_alphanumeric() || x == '-' || x == '_' || !x.is_ascii();
+    // 从 i 起跳过一个标识符（含 `\` 转义），返回结束位置
+    let skip_ident = |mut i: usize| -> usize {
+        while i < ch.len() {
+            if ch[i] == '\\' {
+                i += 2;
+            } else if is_ident(ch[i]) {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+        i.min(ch.len())
+    };
+    // 从 open（`(` 或 `[`）起找配对的右括号，引号里的不算；返回右括号位置（没配上返回末尾）
+    let close_of = |open: usize, l: char, r: char| -> usize {
+        let (mut depth, mut quote, mut i) = (0i32, None::<char>, open);
+        while i < ch.len() {
+            let x = ch[i];
+            match quote {
+                Some(q) if x == q => quote = None,
+                Some(_) => {}
+                None if x == '"' || x == '\'' => quote = Some(x),
+                None if x == l => depth += 1,
+                None if x == r => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return i;
+                    }
+                }
+                None => {}
+            }
+            i += 1;
+        }
+        ch.len()
+    };
     let mut i = 0;
-    while i < bytes.len() {
-        let ch = bytes[i];
-        match ch {
+    while i < ch.len() {
+        match ch[i] {
             '#' => {
                 a += 1;
-                prev_ident = true;
+                i = skip_ident(i + 1);
             }
-            '.' | '[' => {
+            '.' => {
                 b += 1;
-                prev_ident = true;
-                if ch == '[' {
-                    while i < bytes.len() && bytes[i] != ']' {
-                        i += 1;
+                i = skip_ident(i + 1);
+            }
+            '[' => {
+                b += 1;
+                i = close_of(i, '[', ']') + 1;
+            }
+            ':' => {
+                let element = ch.get(i + 1) == Some(&':');
+                let start = i + if element { 2 } else { 1 };
+                i = skip_ident(start);
+                let name = ch[start.min(i)..i].iter().collect::<String>().to_ascii_lowercase();
+                let mut args: Option<String> = None;
+                if ch.get(i) == Some(&'(') {
+                    let end = close_of(i, '(', ')');
+                    args = Some(ch[i + 1..end.min(ch.len())].iter().collect());
+                    i = end + 1;
+                }
+                if element || matches!(name.as_str(), "before" | "after" | "first-line" | "first-letter") {
+                    c += 1;
+                } else {
+                    match (name.as_str(), args) {
+                        ("not" | "is" | "matches" | "-webkit-any" | "-moz-any" | "has", Some(inner)) => {
+                            let m = split_top(&inner, ',').into_iter().map(specificity).max().unwrap_or_default();
+                            (a, b, c) = (a + m.0, b + m.1, c + m.2);
+                        }
+                        ("where", Some(_)) => {}
+                        _ => b += 1,
                     }
                 }
             }
-            ':' => {
-                if bytes.get(i + 1) == Some(&':') {
-                    c += 1;
-                    i += 1;
-                } else {
-                    b += 1;
-                }
-                prev_ident = true;
+            x if is_ident(x) || x == '\\' => {
+                c += 1;
+                i = skip_ident(i);
             }
-            c2 if c2.is_alphanumeric() || c2 == '-' || c2 == '_' || c2 == '*' => {
-                if !prev_ident && c2 != '*' {
-                    c += 1;
-                }
-                prev_ident = true;
-            }
-            _ => prev_ident = false,
+            _ => i += 1,
         }
-        i += 1;
     }
     (a, b, c)
 }
 
-fn media_ok(query: &str) -> bool {
-    let q = query.to_ascii_lowercase();
-    if q.contains("amzn-mobi") || q.contains("print") && !q.contains("screen") {
-        return false;
+/// 求值 `@media` 特性条件用的环境（像素）：`width`/`height` 是阅读范围，`device-width`/`device-height` 是屏幕，
+/// 都由调用方从阅读模式传入（[`MediaEnv::for_profile`]），这里不写死数字。CSS 的 1px 按设备 1 像素算（Kindle 实际怎么算没核实）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MediaEnv {
+    pub width: f64,
+    pub height: f64,
+    pub device_width: f64,
+    pub device_height: f64,
+    /// 彩色屏（`false`＝黑白：`(color)` 不成立、`(monochrome)` 成立）。
+    pub color: bool,
+}
+
+impl MediaEnv {
+    /// 阅读模式的 KFX 阅读范围、屏幕、黑白彩色。
+    pub fn for_profile(p: &profile::Profile) -> MediaEnv {
+        let r = p.readable(profile::Format::Kfx);
+        MediaEnv { width: r.width.into(), height: r.height.into(), device_width: p.screen.width.into(), device_height: p.screen.height.into(), color: p.color }
     }
-    q.trim().is_empty() || q.contains("all") || q.contains("screen") || q.contains("amzn-kf8")
+}
+
+/// 收的媒体类型：`all`、`screen` 和 Kindle 的 `amzn-kf8`、`amzn-kfx`（`amzn-mobi`、`print` 等都不是）。
+const MEDIA_TYPES: &[&str] = &["all", "screen", "amzn-kf8", "amzn-kfx"];
+
+/// `@media`（或 `<link>`/`<style>` 的 `media` 属性）的条件成不成立。按 Media Queries 规范：逗号列表任一条成立即成立；
+/// 每条是 `[not|only] 媒体类型 [and (特性)]*` 或 `(特性) [and (特性)]*`，`not` 把整条取反；媒体类型不认识的算不成立
+/// （所以 `not amzn-mobi` 成立）。特性按 `env` 求值；**求值不了的**（没有 `env`、`em` 之类相对单位、`resolution`、
+/// 范围写法 `(width >= 600px)`、`or` 等）和写错的那一条**不收**，带 `not` 也不收。空条件成立。
+pub fn media_ok(query: &str, env: Option<&MediaEnv>) -> bool {
+    let q = query.trim();
+    q.is_empty() || split_top(q, ',').into_iter().any(|one| media_query(one, env) == Some(true))
+}
+
+/// 一条媒体查询：`Some(成立与否)`；写错或求值不了 → `None`。
+fn media_query(q: &str, env: Option<&MediaEnv>) -> Option<bool> {
+    let q = q.trim().to_ascii_lowercase();
+    // 切成词和括号组
+    let mut toks: Vec<&str> = Vec::new();
+    let mut i = 0;
+    let b = q.as_bytes();
+    while i < b.len() {
+        if b[i].is_ascii_whitespace() {
+            i += 1;
+        } else if b[i] == b'(' {
+            let mut depth = 0;
+            let start = i;
+            while i < b.len() {
+                match b[i] {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            if i >= b.len() {
+                return None;
+            }
+            toks.push(&q[start..=i]);
+            i += 1;
+        } else {
+            let start = i;
+            while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'(' {
+                i += 1;
+            }
+            toks.push(&q[start..i]);
+        }
+    }
+    let mut rest = toks.as_slice();
+    let negate = match rest.first() {
+        Some(&"not") => {
+            rest = &rest[1..];
+            true
+        }
+        Some(&"only") => {
+            rest = &rest[1..];
+            false
+        }
+        _ => false,
+    };
+    let mut ok = true;
+    match rest.first() {
+        Some(t) if t.starts_with('(') => {}
+        Some(t) => {
+            ok = MEDIA_TYPES.contains(t);
+            rest = &rest[1..];
+            if let Some((&"and", r)) = rest.split_first() {
+                rest = r;
+                if rest.is_empty() {
+                    return None;
+                }
+            } else if !rest.is_empty() {
+                return None;
+            }
+        }
+        None => return None,
+    }
+    // 特性：(特性) [and (特性)]*
+    let mut expect_feature = !rest.is_empty();
+    for t in rest {
+        if expect_feature {
+            let inner = t.strip_prefix('(')?.strip_suffix(')')?;
+            ok &= media_feature(inner, env?)?;
+        } else if *t != "and" {
+            return None;
+        }
+        expect_feature = !expect_feature;
+    }
+    if !rest.is_empty() && expect_feature {
+        return None; // 以 `and` 结尾
+    }
+    Some(ok != negate)
+}
+
+/// 一个特性（括号里面的部分）：`Some(成立与否)`；不认识、求值不了 → `None`。
+fn media_feature(f: &str, env: &MediaEnv) -> Option<bool> {
+    let (name, value) = match f.split_once(':') {
+        Some((n, v)) => (n.trim(), Some(v.trim())),
+        None => (f.trim(), None),
+    };
+    if name.is_empty() || !name.bytes().all(|c| c.is_ascii_lowercase() || c == b'-') {
+        return None; // 范围写法、嵌套、`or` 等
+    }
+    let (cmp, base) = match name.strip_prefix("min-") {
+        Some(b) => (std::cmp::Ordering::Greater, b),
+        None => match name.strip_prefix("max-") {
+            Some(b) => (std::cmp::Ordering::Less, b),
+            None => (std::cmp::Ordering::Equal, name),
+        },
+    };
+    let cmp_num = |actual: f64, want: f64| -> bool {
+        let eps = 1e-6;
+        match cmp {
+            std::cmp::Ordering::Greater => actual >= want - eps,
+            std::cmp::Ordering::Less => actual <= want + eps,
+            std::cmp::Ordering::Equal => (actual - want).abs() <= eps,
+        }
+    };
+    let ratio = |v: &str| -> Option<f64> {
+        let (a, b) = v.split_once('/').unwrap_or((v, "1"));
+        let (a, b): (f64, f64) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
+        (b > 0.0 && a.is_finite()).then(|| a / b)
+    };
+    let length = |actual: f64| -> Option<bool> { Some(cmp_num(actual, media_px(value?)?)) };
+    match base {
+        "width" => length(env.width),
+        "height" => length(env.height),
+        "device-width" => length(env.device_width),
+        "device-height" => length(env.device_height),
+        "aspect-ratio" => Some(cmp_num(env.width / env.height, ratio(value?)?)),
+        "device-aspect-ratio" => Some(cmp_num(env.device_width / env.device_height, ratio(value?)?)),
+        "orientation" if cmp == std::cmp::Ordering::Equal => match value? {
+            "portrait" => Some(env.height >= env.width),
+            "landscape" => Some(env.width > env.height),
+            _ => None,
+        },
+        // 颜色位数只知道是不是 0：黑白屏 color 是 0，彩色屏 monochrome 是 0；别的位数不知道 → 求值不了
+        "color" | "monochrome" => {
+            let zero = if base == "color" { !env.color } else { env.color };
+            match value {
+                None if cmp == std::cmp::Ordering::Equal => Some(!zero),
+                None => None,
+                Some(v) => {
+                    let want: f64 = v.parse().ok()?;
+                    zero.then(|| cmp_num(0.0, want))
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+/// 媒体查询里的长度 → 像素：`px` 和绝对单位（1in = 96px）；`em`/`rem`/`vw` 等相对单位求值不了。
+fn media_px(v: &str) -> Option<f64> {
+    let v = v.trim();
+    let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
+    let n: f64 = v[..end].parse().ok()?;
+    let per = match &v[end..] {
+        "px" => 1.0,
+        "" if n == 0.0 => 1.0,
+        "in" => 96.0,
+        "cm" => 96.0 / 2.54,
+        "mm" => 96.0 / 25.4,
+        "q" => 96.0 / 101.6,
+        "pt" => 96.0 / 72.0,
+        "pc" => 16.0,
+        _ => return None,
+    };
+    Some(n * per)
 }
 
 impl Sheet {
     /// 追加一份样式表。`order` 是全局序号起点（后出现的规则优先），返回下一个序号。
     pub fn add(&mut self, css: &str, order: usize) -> usize {
-        self.add_at(css, order, "")
+        self.add_at(css, order, "", None)
     }
 
     /// 同 [`Sheet::add`]，`url(…)` 按样式表自己的路径 `base`（书内路径）换成书内路径。
-    pub fn add_at(&mut self, css: &str, order: usize, base: &str) -> usize {
-        self.add_rules(Rules::parse(css, base), order)
+    pub fn add_at(&mut self, css: &str, order: usize, base: &str, media: Option<&MediaEnv>) -> usize {
+        self.add_rules(Rules::parse(css, base, media), order)
     }
 
     /// 追加一份解析好的样式表（见 [`Rules::parse`]），返回下一个序号。
@@ -529,17 +763,20 @@ pub fn parse_len(v: &str) -> Option<Len> {
     }
 }
 
-/// `#rgb`、`#rrggbb`、`rgb()`/`rgba()`、常见色名 → ARGB。
+/// `#rgb`、`#rgba`、`#rrggbb`、`#rrggbbaa`、`rgb()`/`rgba()`、常见色名 → ARGB（透明度和 `rgba()` 一样写进最高字节）。
 pub fn parse_color(v: &str) -> Option<u32> {
     let v = v.trim().to_ascii_lowercase();
     if let Some(h) = v.strip_prefix('#') {
+        if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
         let n = u32::from_str_radix(h, 16).ok()?;
+        let nib = |k: u32| ((n >> (4 * k)) & 0xF) * 17;
         return match h.len() {
-            3 => {
-                let (r, g, b) = ((n >> 8) & 0xF, (n >> 4) & 0xF, n & 0xF);
-                Some(0xFF00_0000 | ((r * 17) << 16) | ((g * 17) << 8) | (b * 17))
-            }
+            3 => Some(0xFF00_0000 | nib(2) << 16 | nib(1) << 8 | nib(0)),
+            4 => Some(nib(0) << 24 | nib(3) << 16 | nib(2) << 8 | nib(1)),
             6 => Some(0xFF00_0000 | n),
+            8 => Some(n.rotate_right(8)),
             _ => None,
         };
     }
@@ -959,6 +1196,16 @@ mod tests {
         assert_eq!(specificity("#x .a span"), (1, 1, 1));
         assert_eq!(specificity("div > p:first-child"), (0, 1, 2));
         assert_eq!(specificity("*"), (0, 0, 0));
+        // 括号里的字不计成标签；:not/:is 取参数里最高的，:where 算 0
+        assert_eq!(specificity("li:nth-child(2n+1)"), (0, 1, 1));
+        assert_eq!(specificity("p:not(.a)"), (0, 1, 1));
+        assert_eq!(specificity("p:not(#x, span)"), (1, 0, 1));
+        assert_eq!(specificity("p:where(.a #b)"), (0, 0, 1));
+        assert_eq!(specificity("p:is(div p, .a)"), (0, 1, 1));
+        assert_eq!(specificity("p::first-line"), (0, 0, 2));
+        assert_eq!(specificity("p:before"), (0, 0, 2));
+        assert_eq!(specificity("a[href='x y']:lang(zh-Hant)"), (0, 2, 1));
+        assert_eq!(specificity(r"p.a\.b"), (0, 1, 1));
     }
 
     #[test]
@@ -973,6 +1220,38 @@ mod tests {
     }
 
     #[test]
+    fn media_queries_by_env() {
+        let env = MediaEnv { width: 1104.0, height: 1546.0, device_width: 1272.0, device_height: 1696.0, color: false };
+        let ok = |q: &str| media_ok(q, Some(&env));
+        for q in ["", "all", "screen", "amzn-kf8", "amzn-kfx", "only screen", "not amzn-mobi", "not print", "print, screen", "SCREEN"] {
+            assert!(ok(q), "{q}");
+        }
+        for q in ["print", "amzn-mobi", "speech", "not screen", "screen and", "screen (min-width: 1px)", "and (color)"] {
+            assert!(!ok(q), "{q}");
+        }
+        // 特性按阅读范围、屏幕求值
+        for q in ["screen and (min-width: 600px)", "(max-width: 1104px)", "(min-height: 1500px) and (orientation: portrait)", "(min-device-width: 1272px)", "(max-aspect-ratio: 3/4)", "(monochrome)", "not (color)", "(min-width: 10in)", "(color: 0)", "not screen and (max-width: 480px)"] {
+            assert!(ok(q), "{q}");
+        }
+        for q in ["screen and (max-width: 480px)", "(min-width: 1105px)", "(orientation: landscape)", "(color)"] {
+            assert!(!ok(q), "{q}");
+        }
+        // 求值不了的不收，带 not 也不收
+        for q in ["(min-width: 30em)", "not screen and (min-width: 30em)", "(min-resolution: 2dppx)", "(width >= 600px)", "(min-monochrome: 4)", "(min-width: 600px) or (color)"] {
+            assert!(!ok(q), "{q}");
+        }
+        // 没有环境：只看媒体类型
+        assert!(media_ok("screen", None) && !media_ok("screen and (min-width: 1px)", None));
+        // 样式表里的 @media
+        let mut with = Sheet::default();
+        with.add_rules(Rules::parse("p{color:red} @media screen and (max-width: 480px){p{color:blue}} @media (min-width: 600px){p{text-indent:2em}}", "", Some(&env)), 0);
+        let html = scraper::Html::parse_document("<p>x</p>");
+        let p = html.select(&Selector::parse("p").unwrap()).next().unwrap();
+        let d = with.cascade(&p);
+        assert_eq!((d.get("color").map(String::as_str), d.get("text-indent").map(String::as_str)), (Some("red"), Some("2em")));
+    }
+
+    #[test]
     fn font_face_urls() {
         let f = font_faces(r#"@font-face{font-family:"宋体";src:local("st")}@font-face{font-family:"juan";src:url("../Fonts/juan.ttf")}@font-face{font-family:'b';font-weight:bold;src:local(x),url(../Fonts/b.ttf) format("truetype")}"#, "OEBPS/Styles/s.css");
         assert_eq!(f.len(), 2);
@@ -984,6 +1263,11 @@ mod tests {
     fn colors_and_lengths() {
         assert_eq!(parse_color("#01a0ea"), Some(0xFF01A0EA));
         assert_eq!(parse_color("#fff"), Some(0xFFFFFFFF));
+        // #rgba、#rrggbbaa：透明度写进最高字节（同 rgba()）
+        assert_eq!(parse_color("#f008"), Some(0x88FF0000));
+        assert_eq!(parse_color("#01a0ea80"), Some(0x8001A0EA));
+        assert_eq!(parse_color("#12345"), None);
+        assert_eq!(parse_color("#+12"), None);
         assert_eq!(parse_color("rgba(128, 0, 0, 0.7)"), Some(0xB3800000));
         assert_eq!(parse_color("rgb(100%, 0%, 50%)"), Some(0xFFFF0080));
         assert_eq!(parse_color("rgba(0, 0, 0, 50%)"), Some(0x80000000));
