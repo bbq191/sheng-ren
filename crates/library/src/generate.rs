@@ -338,15 +338,16 @@ impl Library {
                 warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
             }
             if format != Format::Epub {
-                let epub = std::fs::read(&optimized).map_err(|e| e.to_string())?;
+                // 按文件读（不先整本读进内存）；BufReader：zip 按条目小块读
+                let open = || std::fs::File::open(&optimized).map(std::io::BufReader::new).map_err(|e| format!("读 {}: {e}", optimized.display()));
                 // 唯一 ID 取自书的 id（AZW3 再加入库时间）：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
                 let (bytes, w) = if format == Format::Kfx {
                     let id = meta.id.get(..16).and_then(|h| u64::from_str_radix(h, 16).ok());
-                    kfx::write::epub_to_kfx(&epub, &kfx::write::Opts { fixed_id: id })?
+                    kfx::write::epub_to_kfx_from(open()?, &kfx::write::Opts { fixed_id: id })?
                 } else {
                     let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
                     let aopts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
-                    azw3::epub_to_azw3_with_warnings(&epub, &aopts)?
+                    azw3::epub_to_azw3_from(open()?, &aopts)?
                 };
                 warnings.extend(w);
                 std::fs::write(&part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
@@ -416,8 +417,9 @@ impl Library {
         match meta.content_format() {
             "epub" => Ok(input.to_path_buf()),
             "cbz" => {
-                let data = std::fs::read(input).map_err(|e| format!("读 {}: {e}", input.display()))?;
-                let bytes = crate::convert_to_epub("cbz", &data, &meta.title)?;
+                // 按文件读（不先把整个 CBZ 读进内存）
+                let file = std::fs::File::open(input).map(std::io::BufReader::new).map_err(|e| format!("读 {}: {e}", input.display()))?;
+                let bytes = crate::convert_to_epub("cbz", file, &meta.title)?;
                 let p = tmp.join("master.epub");
                 std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
                 Ok(p)

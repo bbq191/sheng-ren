@@ -67,8 +67,13 @@ pub fn epub_to_azw3(epub: &[u8], opts: &Opts) -> Result<Vec<u8>, String> {
 
 /// 同 [`epub_to_azw3`]，另外返回转换中丢掉或降级的内容（不支持的图片格式、找不到目标的链接），给调用方提示用户。
 pub fn epub_to_azw3_with_warnings(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), String> {
+    epub_to_azw3_from(std::io::Cursor::new(epub), opts)
+}
+
+/// 同 [`epub_to_azw3_with_warnings`]，从可定位的读取器（如打开的文件）读 EPUB：不用先把整本读进内存。
+pub fn epub_to_azw3_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) -> Result<(Vec<u8>, Vec<String>), String> {
     let mut warnings = Vec::new();
-    let mut book = book::load(epub, &mut warnings)?;
+    let mut book = book::load_from(epub, &mut warnings)?;
     let mut res_map: HashMap<String, (u32, &'static str)> = HashMap::new();
     let mut records = Vec::with_capacity(book.images.len() + 1);
     for img in std::mem::take(&mut book.images) {
