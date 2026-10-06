@@ -206,3 +206,18 @@ fn meta_show_lists_tracked_books() {
     assert!(out.contains("风起") && out.contains("书里 标题：风起") && out.contains("找来：没找过") && out.contains("共 1 本"), "{out}");
     expect(booklib(Some(&lib), &["meta", "--show", "--fetch"]), 1, "不能一起用");
 }
+
+#[test]
+fn meta_edit_takes_non_utf8_paths_as_they_are() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let book = dir.path().join(std::ffi::OsStr::from_bytes(b"\xff\xfe.epub"));
+    std::fs::write(&book, sample_epub("风起")).unwrap();
+    let img = dir.path().join(std::ffi::OsStr::from_bytes(b"\xff.jpg"));
+    std::fs::write(&img, jpeg(300, 400)).unwrap();
+    let mut cover = std::ffi::OsString::from("--cover=");
+    cover.push(&img);
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib")).arg("meta").arg("--edit").arg(&book).arg(&cover).output().unwrap();
+    assert_eq!(code(&o), Some(0), "以前文件名转成字符串后找不到文件：{}", stderr(&o));
+    assert!(stdout(&o).contains("封面: 有（jpg，300×400"), "{}", stdout(&o));
+}

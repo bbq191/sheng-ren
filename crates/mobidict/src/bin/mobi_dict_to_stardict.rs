@@ -9,27 +9,29 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     cli::restore_sigpipe();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `args_os`：路径不是 UTF-8 时 `std::env::args` 会 panic
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let mut name: Option<String> = None;
-    let mut files = Vec::new();
-    for a in &args {
+    let mut files: Vec<&Path> = Vec::new();
+    for raw in &args {
+        let a = raw.to_string_lossy();
         match a.strip_prefix("--name=") {
             Some(n) if !n.trim().is_empty() => name = Some(n.trim().to_string()),
             _ if a.starts_with("--") => die(cli::USAGE, format!("不认识的参数 {a}\n用法: mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]")),
-            _ => files.push(a.as_str()),
+            _ => files.push(Path::new(raw)),
         }
     }
     if files.len() != 2 {
         die(cli::USAGE, "用法: mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]");
     }
-    let src = Path::new(files[0]);
+    let src = files[0];
     let name = name.unwrap_or_else(|| src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
     let name = bookconv::util::sanitize_filename(&name, "dict");
 
     let data = cli::read_or_die(src);
     let dict = mobidict::read(&data).unwrap_or_else(|e| die(cli::FAILED, format!("读 {}: {e}", src.display())));
     let (out, stats) = mobidict::to_stardict(&dict, &name);
-    let target = Path::new(files[1]).join(&name);
+    let target = files[1].join(&name);
     write_dir(&target, &name, &out).unwrap_or_else(|e| die(cli::FAILED, e));
     println!(
         "mobi-dict-to-stardict: {} → {}/（{} 个词头，{} 段释义，.dict {} 字节）",
