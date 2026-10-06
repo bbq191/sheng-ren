@@ -1,6 +1,6 @@
 # 排版与优化规则
 
-`booklib build` 对每本书做了什么，以及为什么。三个模式用同一套规则，差别都在模式的配置里（见[设备与阅读模式](devices.md)）；`kindle` 模式最后再把优化好的 EPUB 转成 KFX（文字书流式、漫画固定版式，见 [KFX](kfx.md)），只转格式。
+`booklib sync` 生成时对每本书做了什么，以及为什么。三个模式用同一套规则，差别都在模式的配置里（见[设备与阅读模式](devices.md)）；`kindle` 模式最后再把优化好的 EPUB 转成 KFX（文字书流式、漫画固定版式，见 [KFX](kfx.md)），只转格式。
 实现在 `crates/bookconv`：清洗层 `wash/`、优化器 `optimize/`、图片 `imgopt.rs`。
 
 ![优化流程](img/optimize.svg)
