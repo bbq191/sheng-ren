@@ -1,23 +1,72 @@
 //! NCX 修复：`dtb:uid` 对齐 OPF、manifest 里 NCX 的 `id` 规整、剥外部 DTD `<!DOCTYPE>`。
 use super::*;
 
-/// 修 `toc.ncx` 的 `dtb:uid` 跟 OPF 实际标识符不一致的问题（见 `opf_unique_identifier` 注释）。
-/// 幂等、只在真的不一致时改；OPF 没有可解析的标识符（极少见）时不动。
+/// 修 `toc.ncx` 的 `<head>`：`dtb:uid` 跟 OPF 实际标识符不一致的改成一致、**缺了的补上**（见 `opf_unique_identifier` 注释）；
+/// `dtb:depth` 不是正整数的改成 navMap 实际的嵌套层数。
+/// 《绝叫》原书的 head 只有一条 `<meta name="dtb:depth" content="urn:uuid:…">`（uid 写错了名字），没有 `dtb:uid`：掌阅自带阅读器建不出目录（2026-10-06）。
+/// 幂等、只在真的不对时改；OPF 没有可解析的标识符（极少见）时 uid 不动。
 pub(super) fn fix_ncx_uid(entries: &mut [Entry], rep: &mut WashReport) {
-    let Some(uid) = opf_unique_identifier(entries) else { return };
-    let want = xml_escape(&uid);
+    let want = opf_unique_identifier(entries).map(|u| xml_escape(&u));
     for e in entries.iter_mut().filter(|e| e.name.to_ascii_lowercase().ends_with(".ncx")) {
         let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let meta = html::tags(text).find(|t| t.is_start() && t.is("meta") && tag_attr(&text[t.start..t.end], "name") == Some("dtb:uid"));
-        let Some(t) = meta else { continue };
-        let tag = &text[t.start..t.end];
-        if tag_attr(tag, "content").is_none_or(|c| c == want) {
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+        let meta = |name: &str| html::tags(text).find(|t| t.is_start() && t.is("meta") && tag_attr(&text[t.start..t.end], "name") == Some(name));
+        if let Some(want) = &want {
+            match meta("dtb:uid") {
+                Some(t) => {
+                    let tag = &text[t.start..t.end];
+                    if tag_attr(tag, "content").is_some_and(|c| c != want) {
+                        edits.push((t.start, t.end, html::set_attr(tag, "content", want)));
+                    }
+                }
+                None => {
+                    let uid = format!(r#"<meta name="dtb:uid" content="{want}"/>"#);
+                    if let Some(h) = html::tags(text).find(|t| t.is_start() && t.is("head")) {
+                        if matches!(h.kind, html::TagKind::SelfClosing) {
+                            edits.push((h.start, h.end, format!("<head>{uid}</head>")));
+                        } else {
+                            edits.push((h.end, h.end, uid));
+                        }
+                    } else if let Some(n) = html::tags(text).find(|t| t.is_start() && t.is("ncx") && !matches!(t.kind, html::TagKind::SelfClosing)) {
+                        edits.push((n.end, n.end, format!("<head>{uid}</head>")));
+                    }
+                }
+            }
+        }
+        if let Some(t) = meta("dtb:depth") {
+            let tag = &text[t.start..t.end];
+            if !tag_attr(tag, "content").is_some_and(|c| c.trim().parse::<u32>().is_ok_and(|n| n > 0)) {
+                edits.push((t.start, t.end, html::set_attr(tag, "content", &nav_depth(text).max(1).to_string())));
+            }
+        }
+        if edits.is_empty() {
             continue;
         }
-        let new_tag = html::set_attr(tag, "content", &want);
-        e.data = format!("{}{}{}", &text[..t.start], new_tag, &text[t.end..]).into_bytes();
+        // 从后往前改；同一位置先替换后插入（插入点就在被替换的标签开头时，先插会让替换的偏移错位）
+        edits.sort_by_key(|&(s, en, _)| std::cmp::Reverse((s, en)));
+        let mut out = text.to_string();
+        for (s, en, r) in edits {
+            out.replace_range(s..en, &r);
+        }
+        e.data = out.into_bytes();
         rep.ncx_uid_fixed += 1;
     }
+}
+
+/// navMap 里 `<navPoint>` 最深的嵌套层数。
+fn nav_depth(ncx: &str) -> usize {
+    let (mut d, mut max) = (0usize, 0usize);
+    for t in html::tags(ncx).filter(|t| t.is("navPoint")) {
+        match t.kind {
+            html::TagKind::Open => {
+                d += 1;
+                max = max.max(d);
+            }
+            html::TagKind::Close => d = d.saturating_sub(1),
+            _ => {}
+        }
+    }
+    max
 }
 
 /// xochitl 定位目录文件不是走 EPUB 规范的 `<spine toc="IDREF">`，而是在二进制里**硬编码死查**

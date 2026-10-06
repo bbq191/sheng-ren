@@ -102,7 +102,9 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v46（2026-10-06，用户定）：文字书**不再按章节拆文件**（章标题独立一页、节与节分页都撤了），原书的 XHTML 文件结构原样保留；
 ///   目录不变：仍按目录层级定书/卷、章、节，漏掉的节补进目录，原来指向拆出文件的条目改指原文件里标题的 `#id`（没有的补 id）。
 ///   拆分时跟着搬的同文件注释留在原处（跳转模式；弹窗模式照旧搬到章末）。`epub-optimize --no-paginate` 删掉。
-pub const OPTIMIZE_VERSION: &str = "46";
+/// - v47（2026-10-06）：NCX 缺 `dtb:uid` 的补上（和 OPF 唯一标识符一致），`dtb:depth` 不是正整数的改成 navMap 实际层数。
+///   《绝叫》原书 head 只有一条内容是 uid 的 `dtb:depth`、没有 `dtb:uid`，掌阅自带阅读器建不出目录；测试书里只有这一本这样。
+pub const OPTIMIZE_VERSION: &str = "47";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，

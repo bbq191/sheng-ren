@@ -83,7 +83,7 @@ _anchor_cache = {}
 
 
 def anchors(z, path):
-    key = (id(z), path)
+    key = (z.filename, path)  # 别用 id(z)：前一本的 ZipFile 回收后 id 会被下一本复用，拿到别的书的锚点
     if key not in _anchor_cache:
         t = z.read(path).decode('utf-8', 'replace')
         ids = set()
