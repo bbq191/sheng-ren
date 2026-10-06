@@ -4,7 +4,7 @@ Kindle 自带阅读器 USB 传书不认 EPUB，认 AZW3（KF8）和侧载的 KFX
 
 ## 用法
 
-书库生成 `kindle` 模式时自动调用（先按和别的模式同一套规则优化出 EPUB，再转）。单独用（`./install.sh --tools` 装）：
+书库不再调用它（2026-09-30～10-05 书库的 `kindle` 模式用它出 AZW3）。现在单独用（`./install.sh --tools` 装）：先按 `kindle` 模式优化出 EPUB，再转：
 
 ```sh
 epub-optimize --device=kindle 输入.epub 优化后.epub
@@ -39,18 +39,18 @@ AZW3 只是**产物**格式，不是输入：入库仍然只收 EPUB、CBZ。
 ## 取舍
 
 - **`<head>` 里只留 title、meta、link、style、base**：EPUB 阅读器不显示 `<head>`，Kindle 却会把里面散落的文字显示在章首（《绝叫》原书每章 `<head>` 漏进一段样式代码，Kindle 上满页代码）。正文不动。
-- **漫画写成固定版式**：OPF 里有 `<meta name="fixed-layout" content="true"/>` 时，这一组声明（`fixed-layout`、`book-type`、`orientation-lock`、`original-resolution`、`zero-gutter`、`zero-margin`）原样写成 EXTH 122–128。书库的 `kindle` 模式给漫画写上这组声明，画布整屏 1272×1696（为什么见[排版 · 离屏幕边缘 1px](typesetting.md#离屏幕边缘-1px三种做法)）。没有这个声明的书一概不写。
+- **漫画写成固定版式**：OPF 里有 `<meta name="fixed-layout" content="true"/>` 时，这一组声明（`fixed-layout`、`book-type`、`orientation-lock`、`original-resolution`、`zero-gutter`、`zero-margin`）原样写成 EXTH 122–128。`epub-optimize --device=kindle` 给漫画写上这组声明，画布整屏 1272×1696（为什么见[排版 · 离屏幕边缘 1px](typesetting.md#离屏幕边缘-1px三种做法)）。没有这个声明的书一概不写。
 - **日漫从右往左翻**：spine 写了 `page-progression-direction="rtl"`（带 `opf:` 前缀的也认）时写 EXTH 527 = rtl。
 - **不嵌字体**：去掉 `@font-face`，字体交给阅读器。
 - **SVG 图片、动画 WebP 不支持**：给出警告，引用保持原样。
-- **归类**：缺省"文档"（PDOC），侧载书的封面显示最稳；`--ebok` 归"书籍"。书库生成时用缺省。
-- **唯一 ID 稳定**：书库生成时由书 id 和入库时间派生，重建出来 Kindle 仍认作同一本书，进度不丢。单独用 `epub-to-azw3` 时由 OPF 的唯一标识符派生、时间取 `dcterms:modified`：同一本书每次转出来逐字节一样。
-- 找不到目标的链接、目录项落到所在章节开头，并给出警告（书库生成时显示在这本书的输出里）。
+- **归类**：缺省"文档"（PDOC），侧载书的封面显示最稳；`--ebok` 归"书籍"。
+- **唯一 ID 稳定**：由 OPF 的唯一标识符派生、时间取 `dcterms:modified`：同一本书每次转出来逐字节一样。（历史：书库出 AZW3 时由书 id 和入库时间派生，重建出来 Kindle 仍认作同一本书。）
+- 找不到目标的链接、目录项落到所在章节开头，并给出警告。
 
 ## 电脑上的核对
 
 - `crates/azw3` 的单元测试和 `tests/roundtrip.rs`：用 `azw3::read` 读回来，核对索引、链接偏移、目录层级。
 - `tools/kf8/textcheck.py 书.azw3 优化后.epub`：两边按阅读顺序取可见文字（去标签、还原字符引用、不计空白），整本逐字比对，一致报 `SAME`，不一致报第一处差异、退出码 1。源 EPUB 用**优化后的**那份。
-- `tools/kf8/dump.py`（记录 0、MOBI 头、EXTH）、`indexes.py`（FDST、各索引）用来看文件内部，`kf8lib.py` 是它们共用的只读解析。
+- `tools/kf8/dump.py`（记录 0、MOBI 头、EXTH）、`indexes.py`（FDST、各索引）用来看文件内部，`kf8lib.py` 是它们共用的只读解析。这些脚本和 `epub-to-azw3` 都认 `-h`/`--help`。
 
 什么时候要跑这些核对、版本号什么时候加一，见[开发](development.md#真书回归)；真机上看过什么，见[排版 · 验证情况](typesetting.md#验证情况)。

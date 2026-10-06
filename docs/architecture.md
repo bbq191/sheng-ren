@@ -16,9 +16,9 @@
 |---|---|---|
 | `library` | 书库：入库、跟踪同步、按模式生成、产物放哪、指纹、联网补元数据 | `booklib` |
 | `bookconv` | 内容层：CBZ/网页 → EPUB、清洗、优化、图片、质量门。**不管书库**，只按调用方给的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
-| `azw3` | EPUB → AZW3 写出器（clean-room，见 [AZW3 写出器](azw3.md)）；`azw3::read` 只给回读自检和测试用 | `epub-to-azw3` |
-| `mobidict` | MOBI 词典 → StarDict，给 KOReader 查词（clean-room，读 MOBI 容器借 `azw3::read::palm`） | `mobi-dict-to-stardict` |
-| `kfx` | KFX：Ion 编解码、容器读写、EPUB → KFX 写出器（clean-room，见 [KFX](kfx.md)）；书库 `kindle` 模式的文字书用它 | `epub-to-kfx`；`kfx-dump`、`kfx-repack`（分析用，不随 `--tools` 装） |
+| `azw3` | EPUB → AZW3 写出器（clean-room，见 [AZW3 写出器](azw3.md)）；书库 2026-10-05 起不用，命令还在；`azw3::read` 只给回读自检、测试和 `mobidict` 读 MOBI 容器用 | `epub-to-azw3` |
+| `mobidict` | MOBI 词典 → StarDict，当初给 KOReader 查词（clean-room，读 MOBI 容器借 `azw3::read::palm`）。2026-10-06 起两台都不装 KOReader、掌阅自带阅读器直接用 MOBI 词典，这个包暂时保留（用户定：别删） | `mobi-dict-to-stardict` |
+| `kfx` | KFX：Ion 编解码、容器读写、EPUB → KFX 写出器（clean-room，见 [KFX](kfx.md)）；书库 `kindle` 模式的文字书和漫画都用它 | `epub-to-kfx`、`kfx-dump`、`kfx-repack`（三个都不随 `--tools` 装，用 `cargo run -p kfx --bin …`） |
 | `profile` | 阅读模式的参数，TOML 编译时嵌入；`--device=` 的解析 | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
@@ -28,21 +28,34 @@
 
 | 模块 | 职责 |
 |---|---|
-| `convert/` | CBZ → 每页一张原图的 EPUB（第一页就是封面，OPF 标"漫画"）；入库时的轻量检查 |
+| `convert/` | CBZ → 每页一张原图的 EPUB（第一页就是封面，OPF 标"漫画"）；入库时的轻量检查。有打不开的页（不支持的压缩方式等）时生成报错，不出缺页的书 |
 | `article` | 网页 → EPUB（正文抽取，图片保留原图，按 HTTP 头 / `<meta charset>` 认编码） |
 | `optimize/` | 优化主流程：流式读写、逐文件变换、图片并行处理 |
-| `wash/` | 清洗层：解锁字体字号、按语言排版、章节分页、目录修复与生成、全书 id 去重、章尾空白；`normalize` 是最后一步的 EPUB 3 规范整理；`opf` 是 OPF 的读改（清洗、优化、`meta --edit` 共用） |
+| `wash/` | 清洗层：解锁字体字号、按语言排版、章节分页（`paginate`）、目录修复与生成（`toc`）、全书 id 去重、章尾空白；`fonts` 定哪些嵌入字体保留、哪些是批注；`safe_names` 给文件名里有安卓存储不能用的字符的条目改名；`normalize` 是最后一步的 EPUB 3 规范整理；`opf` 是 OPF 的读改（清洗、优化、`meta --edit` 共用） |
 | `html` | 容错的 XHTML 工具：标签扫描、属性读写（单双引号、无引号）、加类、纯文本。全仓库的 HTML 操作都用它 |
 | `htmlproc/` | 注释搬移与编号、字体锁、重复 id |
 | `cssunlock` | 解开字体、字号、行高的锁 |
-| `imgopt` / `imgpool` / `jpegopt` | 图片处理（摆正、裁边、缩放、灰度）；按像素额度限内存的并发池；JPEG 哈夫曼表无损重做 |
+| `imgopt` / `imgpool` / `jpegopt` | 图片处理（摆正、裁边、缩放、灰度；`guard` 把解码器的 panic 变成"这张不处理"）；按像素额度限内存的并发池；JPEG 哈夫曼表无损重做 |
 | `opfmeta` | EPUB 元数据与封面的读改：只重写文字条目，图片原样拷；`meta --edit` 和生成时补元数据共用 |
 | `comic_detect` / `comicfxl` / `comicpad` | 判断是不是漫画；漫画固定版式（kindle）；页边距 1 时各页的补救（xochitl） |
 | `check` | 质量门 |
-| `epub` / `epubzip` | EPUB 组装与读写：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`、zip 内路径工具 |
+| `epub` / `epubzip` | EPUB 组装与读写（每个 zip 条目解压上限 `MAX_ENTRY_BYTES` 256MB，EPUB、CBZ 共用，超过报错）：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`、zip 内路径工具、书里链接解析 `resolve_link` |
+| `epubbook` | 读整本 EPUB（元数据、spine 里的 XHTML、CSS、图片、封面、目录），AZW3 和 KFX 写出器共用 |
 | `ncx` | NCX 目录解析与改写 |
-| `netimg` / `direction` / `probe` | 远程图抓取；翻页方向；测量书 |
-| `util` / `naming` | 转义、全角转半角、文件名、书名规整；原子写（`produce_then_replace`、`commit`，书库也用）；命令行公共函数 |
+| `netimg` / `direction` / `probe` | 远程图抓取（单张上限 `MAX_IMAGE_BYTES` 20MB；`origin_of` 取网址的站点）；翻页方向；测量书 |
+| `util` / `naming` | 转义、全角转半角、文件名、书名规整；原子写（`produce_then_replace`、`commit`，书库也用；产出途中 panic 也删临时文件）；带上限的读取 `read_capped`（超过报错、不截断）；命令行公共函数 |
+
+### kfx 模块
+
+| 模块 | 职责 |
+|---|---|
+| `ion` | Amazon Ion 1.0 二进制编解码（只照公开规范），符号按编号存；编码取最短表示，解开再编回逐字节相同 |
+| `container` | KFX 容器（`CONT`）读写：索引表、符号表、实体；没改动的容器写出来和原文件逐字节相同；`set_container_id` 一次换掉容器 id 的 4 处 |
+| `yj` | 用到的 `YJ_symbols` 编号和我们起的名字（含义是对照样本推的） |
+| `css` | 够写 KFX 用的 CSS：解析、按选择器优先级层叠、算出每个元素的计算值 |
+| `write` | EPUB → KFX 写出器：版面、排版流、样式、位置映射、锚点、目录、注释弹窗、图片字体资源、固定版式 |
+
+结构见 [KFX · 容器与符号](kfx.md#容器样本-2026-10-05-读出)。
 
 ### library 模块
 
@@ -57,7 +70,7 @@
 | `net.rs` / `matching.rs` | 节流重试的 HTTP；书名人名比对（全半角、繁简、译名用字） |
 | `fsutil.rs` | 临时文件命名、JSON 读写与缓存、记录文件核对、流式哈希、进程锁、残留临时文件清理 |
 
-**联网策略**（`net.rs`，一次运行里各本书共用）：请求间隔 1.2 秒；429 按 `Retry-After` 等，5xx、超时重试几次；其它 4xx 当"没有"、不重试；**403 和"豆瓣搜索回 200 但不是 JSON"算临时出错**（多半是被反爬拦了），不当"没有"。连不上的网站记下来，之后发给它的请求立即失败；接连两个网站连不上、其间没有请求成功，算断网，整轮中止。临时出错的书不存不完整的结果、不生成封面，下次再查。用户看到的流程见[使用指南 · meta --fetch](usage.md#meta---fetch联网补简介标签封面)。
+**联网策略**（`net.rs`，一次运行里各本书共用）：请求间隔 1.2 秒；429 按 `Retry-After` 等，5xx、超时重试几次；其它 4xx 当"没有"、不重试；**403 和"豆瓣搜索回 200 但不是 JSON"算临时出错**（多半是被反爬拦了），不当"没有"。连不上的网站记下来，之后发给它的请求立即失败；接连两个网站连不上、其间没有请求成功，算断网，整轮中止——网站回了任何 HTTP 状态（含 404、403、5xx）都说明网是通的，断网的判定从头算。Wikidata 的 id 只收 `Q<数字>`（要拼进 SPARQL 查询）。临时出错的书不存不完整的结果、不生成封面，下次再查。用户看到的流程见[使用指南 · meta --fetch](usage.md#meta---fetch联网补简介标签封面)。
 
 ## 书库
 
@@ -93,7 +106,7 @@
 3. 指纹没变、产物在原位 → 跳过；只是位置变了 → 挪过去，不重新生成。
 4. 位置变了先登记再生成：记录先改成新位置（指纹留空 = 没完成）、旧位置记进待删，中途打断下次也认得出。
 5. 与模式无关的中间文件（CBZ 转出的 EPUB、补了元数据的 EPUB）放在 `.tmp-<id>-src/`，同一本书的几个模式共用。
-6. 流式优化，直接写成目标旁的临时文件 → 质量门 → 落盘、改名到位。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（profile 可以用 `comic_format` 给漫画另配格式，内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。
+6. 流式优化，直接写成目标旁的临时文件 → 质量门 → 落盘、改名到位。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（profile 可以用 `comic_format` 给漫画另配格式，内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。KFX 的唯一 ID 现在实际取自 OPF 唯一标识符（见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机) 的已知问题）。
 7. 补上指纹，删掉待删的旧位置和变空的目录（只在产物根目录以内）。
 
 生成记录是 `<书库>/output-state/<模式 id>.json`：书 id → 产物路径、指纹、待删的旧位置。**只删这里记着的文件**。
@@ -113,9 +126,9 @@
 | 优化器版本 | `OPTIMIZE_VERSION` | 全部 |
 | 注释方式 | `jump`/`popup`，图标换数字带 `#`，保留回链带 `<` | 这个模式的全部 |
 | 模式 id | `kindle` 等 | — |
-| 阅读范围与漫画 | 阅读范围 + 漫画白边；漫画画布、阅读器页边距、翻页方向、固定版式、保留背景图（`b`，去掉尺寸时 `bn`）不同时再带上 | 这个模式的全部 |
+| 阅读范围与漫画 | 优化器实际用的阅读范围（`output_readable`）+ 漫画白边，如 `1104x1546+1`；漫画画布和阅读器页边距（`c952x1457m1`）、翻页方向（`dltr`）、固定版式（`f`）、保留背景图（`b`，去掉尺寸时 `bn`）有的时候再带上 | 这个模式的全部 |
 | 黑白彩色 | `gray`/`color` | 这个模式的全部 |
-| 格式 | `epub`；AZW3、KFX 再带各自写出器的版本 | 写出器版本变了只有 `kindle` 的 |
+| 格式 | `epub`；KFX 带写出器版本（`kfx7`），AZW3 同理（`azw34`，书库已不出） | 写出器版本变了只有 `kindle` 的 |
 
 版本号什么时候加一、现在是多少，见[开发 · 版本号](development.md#版本号)。
 
@@ -125,8 +138,10 @@
 |---|---|
 | 写到一半断电 | `meta.json`、`sources.json`、生成记录和产物都先写临时文件（`.tmp-<进程号>-<计数>-<名>`）、落盘，再改名、落盘目录；进程被杀留下的临时文件下次拿到锁时清掉（书库外只删 `.tmp-` 开头的） |
 | `meta.json` 坏了 | `list` 报出来；`remove` 能删；重新 `add` 同一原件会替换 |
+| 删书删到一半断电 | `remove` 先把条目目录原子改名成临时目录再删，残留的下次拿到锁时清掉 |
+| `dedupe` 把副本当原件 | 书库里的文件（各条目存的副本）不算原件，给了书库所在的目录也不会配成自己 |
 | `sources.json`、生成记录坏了 | 加锁时核对，读不出来就拒绝运行（当成空的写回去会丢掉全部记录） |
-| 两个 booklib 同时运行 | `.lock` 文件锁；`list` 不持锁、不写书库 |
+| 两个 booklib 同时运行 | `.lock` 文件锁；`list` 不持锁、不写书库（核对原件时也不写 `meta.json`） |
 | 原件被改、挪、删 | 生成前核对内容；按内容 id 认出挪动；删了的 `list`、`sync` 报出来 |
 | 删错用户的文件 | 只删生成记录里记着的文件，删空目录只在产物根目录以内 |
 | 产物重名、文件名过长 | 不分大小写判断撞名，撞了加 id 后缀；书名按字节截断到 200 字节 |
