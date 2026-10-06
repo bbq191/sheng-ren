@@ -110,7 +110,11 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v49（2026-10-06）：阅读器不认 `rgba()` 颜色的模式（profile `css_rgba = false`，掌阅）把 `rgba()` 换成 `#rrggbb`（不透明的颜色
 ///   不变；半透明按白底混合，全透明写 `transparent`）——掌阅把 `rgba()` 那条声明整条作废，《绍宋》深红底色显示成白底（真机测试书）。
 ///   整页背景图（v48）一律不超出阅读范围：`cover` 也缩成整张看得见（《雪国》封底不再被裁掉上半截；不删原书内容）。
-pub const OPTIMIZE_VERSION: &str = "49";
+/// - v50（2026-10-06）：带图注、按满宽显示会超出一页的图（多看图集的一格、`<figure>`、图块后紧跟不超过 40 字的短段落）给 `<img>`
+///   写行内 `width:P%`，图和图注同页（profile `caption_fit`，掌阅、Kindle；`capfit`）——掌阅、Kindle 不认多看图集，《绍宋》简介页
+///   人物图撑满一页、人名掉到下一页。Kindle（profile `image_alpha = false`）把正文 `<img>`/SVG `<image>` 用到的、有透明像素的 PNG
+///   合成到白底（`imgalpha`；CSS 背景图、两用的不动）——Kindle 把透明处显示成黑色，《绍宋》章标题图 logo.png 成了黑底。
+pub const OPTIMIZE_VERSION: &str = "50";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -165,12 +169,17 @@ pub struct OptimizeOpts {
     /// 整页背景图按原书的尺寸意图缩进阅读范围（`screen`）：去掉 `background-size` 的模式（profile `background_sizing = false`，
     /// 掌阅）才开，见 [`crate::bgfit`]。只管文字书。
     pub fit_backgrounds: bool,
+    /// 带图注、按满宽显示会超出一页的图写宽度百分比，图和图注同页（profile `caption_fit`），见 [`crate::capfit`]。只管文字书。
+    pub caption_fit: bool,
+    /// 正文 `<img>`/SVG `<image>` 用到的带透明像素的图合成到白底（profile `image_alpha = false`，Kindle），见 [`crate::imgalpha`]。
+    /// 只管文字书（漫画页本来就合成白底）。
+    pub flatten_alpha: bool,
 }
 
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -198,6 +207,8 @@ impl OptimizeOpts {
             comic_page_direction: p.comic_page_direction.as_deref().and_then(crate::direction::PageDirection::parse),
             comic_fixed_layout: p.comic_fixed_layout,
             fit_backgrounds: p.background_images && !p.background_sizing,
+            caption_fit: p.caption_fit,
+            flatten_alpha: !p.image_alpha,
             ..OptimizeOpts::new(p.output_readable())
         }
     }
@@ -246,6 +257,8 @@ struct Prepared {
     has_remote_imgs: bool,
     /// 要按原书尺寸意图缩的整页背景图（清洗后的 zip 路径 → 意图），见 [`OptimizeOpts::fit_backgrounds`]。
     bg_fits: HashMap<String, crate::bgfit::BgFit>,
+    /// 要合成白底的正文图（zip 路径），见 [`OptimizeOpts::flatten_alpha`]。
+    alpha_imgs: HashSet<String>,
     rep: Report,
 }
 
@@ -337,7 +350,8 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         entries.push((name, data, ish));
     }
     let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &backrefs, &skip_notes, opts.drop_note_backlinks);
-    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, bg_fits, rep })
+    let alpha_imgs = if opts.flatten_alpha && !is_comic_book { crate::imgalpha::plan(&entries) } else { HashSet::new() };
+    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, bg_fits, alpha_imgs, rep })
 }
 
 /// 第一遍后半：把**被引用**的注释块（aside/p/li/div 且带注释语义）从各章移除、建全书索引 (文件, id) → 块，交给第二遍
@@ -458,6 +472,8 @@ struct EntryXform<'a> {
     fetched_imgs: Vec<(String, Vec<u8>)>,
     /// 清洗过的书：各 XHTML 最终内容用到的特性（zip 路径 → `wash::normalize::content_properties`），结尾写进 manifest 的 `properties`。
     content_props: Option<HashMap<String, u8>>,
+    /// 带图注的竖长图写宽度（[`crate::capfit`]）要用的全书信息（图片宽高、样式表里的图片宽度）；`None`＝不做。
+    caption_ctx: Option<crate::capfit::Ctx>,
 }
 
 impl<'a> EntryXform<'a> {
@@ -484,6 +500,7 @@ impl<'a> EntryXform<'a> {
             remote_counter: 0,
             fetched_imgs: Vec::new(),
             content_props: opts.wash.as_ref().map(|_| HashMap::new()),
+            caption_ctx: None,
         }
     }
 
@@ -501,6 +518,10 @@ impl<'a> EntryXform<'a> {
         };
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
         let t = if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
+        let t = match &self.caption_ctx {
+            Some(d) => crate::capfit::apply(&t, name, d, self.screen).unwrap_or(t),
+            None => t,
+        };
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
         let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
         self.fetched_imgs.extend(imgs);

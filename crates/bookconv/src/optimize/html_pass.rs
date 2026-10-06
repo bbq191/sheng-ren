@@ -179,8 +179,12 @@ pub(super) fn first_pass_html(text: &str, name: &str, keep_fonts: &HashSet<Strin
 /// 图片最终变换：按漫画/文字书分流（漫画只裁边/适配阅读范围，画质优先）。
 /// 返回 `None` = 无需改动、沿用原字节（调用方自己决定借用还是移走，不为"没变"整张图克隆一份）。
 /// 解码器遇到畸形图片偶发 panic：兜住、按"失败原样保留"处理（[`crate::imgopt::guard`]）。
-pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool, bg: Option<crate::bgfit::BgFit>) -> Option<Vec<u8>> {
+/// `flatten`：正文图合成白底（[`crate::imgalpha`]）——先合成再缩（带透明的图缩放时透明处的颜色会渗进边缘）。
+pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool, bg: Option<crate::bgfit::BgFit>, flatten: bool) -> Option<Vec<u8>> {
     crate::imgopt::guard(|| {
+        if let Some(flat) = flatten.then(|| crate::imgopt::flatten_transparent_png(bytes)).flatten() {
+            return Some(crate::imgopt::downscale_for_epub(&flat, screen).unwrap_or(flat));
+        }
         if let Some(fit) = bg {
             // 整页背景图：按原书尺寸意图缩，不再按普通插图缩（见 `bgfit`）
             crate::imgopt::downscale_background(bytes, fit, screen)

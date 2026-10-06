@@ -39,6 +39,9 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     // 阶段二：流式写出。
     let mut zw = crate::epubzip::EpubWriter::create(output_path)?;
     let mut xf = EntryXform::new(&prep, opts);
+    if opts.caption_fit && !is_comic_book {
+        xf.caption_ctx = Some(caption_ctx(entries, &src_names, &mut archive)?);
+    }
     let total_entries = entries.len();
     // 图片并行处理（见 `imgpool`）：主线程按条目顺序读原图字节、提交给 worker、按原顺序取回结果写 zip；
     // 提前提交 `lookahead` 张（读原图字节几乎不花时间，处理才慢），处理与写盘/读盘重叠。结果与逐张顺序处理逐字节相同。
@@ -49,6 +52,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
         struct ImgJob {
             bytes: Vec<u8>,
             bg: Option<crate::bgfit::BgFit>,
+            flatten: bool,
             reply: std::sync::mpsc::Sender<Vec<u8>>,
         }
         let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<ImgJob>(lookahead);
@@ -63,7 +67,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
                 let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&job.bytes))).unwrap_or(1_000_000);
                 let _permit = budget.acquire(px);
-                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale, job.bg).unwrap_or(job.bytes);
+                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale, job.bg, job.flatten).unwrap_or(job.bytes);
                 let _ = job.reply.send(out);
             });
         }
@@ -80,7 +84,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 let src_name = src_names.get(img_name.as_str()).copied().unwrap_or(img_name.as_str());
                 let real_bytes = crate::epubzip::read_by_name(&mut archive, src_name).map_err(|e| format!("重读图片失败: {e}"))?;
                 let (tx, rx) = std::sync::mpsc::channel();
-                job_tx.send(ImgJob { bytes: real_bytes, bg: prep.bg_fits.get(img_name.as_str()).copied(), reply: tx }).map_err(|_| "图片处理线程已退出".to_string())?;
+                job_tx.send(ImgJob { bytes: real_bytes, bg: prep.bg_fits.get(img_name.as_str()).copied(), flatten: prep.alpha_imgs.contains(img_name.as_str()), reply: tx }).map_err(|_| "图片处理线程已退出".to_string())?;
                 pending.push_back(rx);
                 next_submit += 1;
             }
@@ -135,4 +139,36 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     let mut rep = prep.rep;
     rep.bytes_after = std::fs::metadata(output_path).map(|m| m.len() as usize).unwrap_or(0);
     Ok(rep)
+}
+
+/// 写图注宽度（[`crate::capfit`]）要的全书信息：带图注的 `<img>` 引用的图的显示宽高（按原书读回这几张图的字节、只读文件头），
+/// 全书样式表和 `<style>` 里给图片定的宽高。
+fn caption_ctx<R: std::io::Read + std::io::Seek>(entries: &[(String, Vec<u8>, bool)], src_names: &HashMap<&str, &str>, archive: &mut ZipArchive<R>) -> Result<crate::capfit::Ctx, String> {
+    let images: HashSet<&str> = entries.iter().filter(|(_, _, ish)| !*ish).map(|(n, _, _)| n.as_str()).collect();
+    let mut ctx = crate::capfit::Ctx::default();
+    for (name, data, ish) in entries {
+        let Ok(text) = std::str::from_utf8(data) else { continue };
+        if !*ish {
+            if name.to_ascii_lowercase().ends_with(".css") {
+                ctx.add_css(text);
+            }
+            continue;
+        }
+        for c in crate::html::style_block_re().captures_iter(text) {
+            ctx.add_css(&c[2]);
+        }
+        let dims = &mut ctx.dims;
+        for c in crate::capfit::candidates(text) {
+            let path = crate::epubzip::resolve_link(name, &c.src).0;
+            if dims.contains_key(&path) || !images.contains(path.as_str()) {
+                continue;
+            }
+            let src = src_names.get(path.as_str()).copied().unwrap_or(path.as_str());
+            let bytes = crate::epubzip::read_by_name(archive, src).map_err(|e| format!("重读图片失败: {e}"))?;
+            if let Some(d) = crate::imgopt::guard(|| crate::imgopt::display_dims(&bytes)) {
+                dims.insert(path, d);
+            }
+        }
+    }
+    Ok(ctx)
 }

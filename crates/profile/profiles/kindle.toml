@@ -10,6 +10,10 @@ formats = ["kfx"]
 notes = "jump"
 # 只有小图标的注释标号换成上标数字（2026-09-28 前的 AZW3 就是数字，真机能点；图标在 Kindle 上没验证过）
 note_icons = "number"
+# 带图注的竖长图写宽度百分比，图和图注同页（同 ireader；KFX 写出器只认图片宽度，不认高度）。
+caption_fit = true
+# 正文图片的透明处 Kindle 显示成黑色（《绍宋》章标题图 logo.png，2026-10-06 真机）：<img> 用到的带透明的图先合成到白底。
+image_alpha = false
 comic_margin = 1
 # 漫画写成固定版式、画布取屏幕实际分辨率（下面的 [comic_readable]）：流式版式下 Kindle 强制留页边距（最小档左右还有 101px），
 # 固定版式每页按画布 1:1 铺满整屏（2026-09-30 真机截图逐像素对齐），加上 1px 白边就是离屏幕 1px。

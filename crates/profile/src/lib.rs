@@ -128,6 +128,13 @@ pub struct Profile {
     /// 阅读器认 CSS 的 `rgba()` 颜色（TOML 里不写是 `true`）。掌阅不认：`rgba()` 写的颜色连同那条声明作废（《绍宋》深红底色
     /// 显示成白底），ireader 写 `false`，优化器换成 `#rrggbb`（2026-10-06 真机测试书）。
     pub css_rgba: bool,
+    /// 带图注、按满宽显示会超出一页的图（竖长的人物图之类）给 `<img>` 写行内宽度百分比，图和图注排在同一页（TOML 里不写是
+    /// `false`）。掌阅、Kindle 不认多看图集，图一张张排开撑满一页、图注掉到下一页；限高的写法掌阅都不认（`max-height`、
+    /// `page-break-inside`），宽度百分比认（2026-10-06 掌阅真机 adb 截屏），KFX 写出器也只认宽度。见 `bookconv::capfit`。
+    pub caption_fit: bool,
+    /// 阅读器能正确显示图片的透明通道（TOML 里不写是 `true`）。Kindle（KFX）把正文图片透明的地方显示成黑色（《绍宋》章标题图，
+    /// 2026-10-06 真机），写 `false`：正文 `<img>`/SVG `<image>` 用到的带透明像素的图先合成到白底（格式不变）。
+    pub image_alpha: bool,
 }
 
 #[derive(Deserialize)]
@@ -158,6 +165,10 @@ struct ProfileFile {
     background_sizing: bool,
     #[serde(default = "yes")]
     css_rgba: bool,
+    #[serde(default)]
+    caption_fit: bool,
+    #[serde(default = "yes")]
+    image_alpha: bool,
 }
 
 fn yes() -> bool {
@@ -168,7 +179,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha };
         p.validate()?;
         Ok(p)
     }
@@ -337,6 +348,8 @@ mod tests {
         assert!(k.background_images && get("ireader").unwrap().background_images && !get("xochitl").unwrap().background_images, "背景图：kindle、ireader 保留，xochitl 去掉");
         assert!(k.background_sizing && !get("ireader").unwrap().background_sizing, "背景图尺寸：kindle 保留，ireader 去掉");
         assert!(k.css_rgba && !get("ireader").unwrap().css_rgba && get("xochitl").unwrap().css_rgba, "rgba()：只有掌阅不认");
+        assert!(k.caption_fit && get("ireader").unwrap().caption_fit && !get("xochitl").unwrap().caption_fit, "图注同页：kindle、ireader 开");
+        assert!(!k.image_alpha && get("ireader").unwrap().image_alpha && get("xochitl").unwrap().image_alpha, "透明图合成白底：只有 kindle");
         let i = get("ireader").unwrap();
         assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);
