@@ -24,11 +24,10 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     let raw = crate::epubzip::read_skeleton(&mut archive)?.entries;
     let prep = prepare_entries(raw, opts, bytes_before)?;
     let (comic_margin, grayscale, is_comic_book) = (opts.comic_margin, opts.grayscale, prep.is_comic_book);
-    // 固定版式的漫画页一律补成整个画布（见 `imgopt::prepare_comic_page_for_epub`）
-    let full_canvas = is_comic_book && opts.comic_fixed_layout;
     // 漫画页按漫画的阅读范围排（xochitl 设成页边距 1 后更宽），其它图按 EPUB 的阅读范围缩
     let screen = if is_comic_book { opts.comic_screen.unwrap_or(opts.screen) } else { opts.screen };
     let entries = &prep.entries;
+    let src_names: HashMap<&str, &str> = prep.rep.wash.iter().flat_map(|w| w.renamed.iter().map(|(old, new)| (new.as_str(), old.as_str()))).collect();
     // 漫画里可能换格式的页（GIF/WebP）：处理后按实际格式改 manifest 的 media-type。
     let may_retype = |name: &str| is_comic_book && matches!(crate::util::image_ext_of(name).as_str(), "gif" | "webp");
     let has_retypable = entries.iter().any(|(n, _, ish)| !*ish && may_retype(n));
@@ -63,7 +62,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
                 let px = std::panic::catch_unwind(|| crate::imgopt::pixel_count(&job.bytes)).unwrap_or(1_000_000);
                 let _permit = budget.acquire(px);
-                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale, full_canvas).unwrap_or(job.bytes);
+                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale).unwrap_or(job.bytes);
                 let _ = job.reply.send(out);
             });
         }
@@ -76,7 +75,9 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
             // 补满提前量：读原图字节（archive 支持随时按名字重新 seek 读，跟阶段一是同一个源文件）并提交。
             while pending.len() < lookahead && next_submit < image_positions.len() {
                 let img_name = &entries[image_positions[next_submit]].0;
-                let real_bytes = crate::epubzip::read_by_name(&mut archive, img_name).map_err(|e| format!("重读图片 {img_name} 失败: {e}"))?;
+                // 清洗时改过名的（文件名有安卓存储不能用的字符）按原名回原书读
+                let src_name = src_names.get(img_name.as_str()).copied().unwrap_or(img_name.as_str());
+                let real_bytes = crate::epubzip::read_by_name(&mut archive, src_name).map_err(|e| format!("重读图片 {src_name} 失败: {e}"))?;
                 let (tx, rx) = std::sync::mpsc::channel();
                 job_tx.send(ImgJob { bytes: real_bytes, reply: tx }).map_err(|_| "图片处理线程已退出".to_string())?;
                 pending.push_back(rx);
