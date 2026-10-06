@@ -95,6 +95,7 @@ fn original_is_checked_before_build_and_can_move() {
     let lib = Library::open(dir.path().join("lib")).unwrap();
     let src = dir.path().join("书.epub");
     std::fs::write(&src, sample_epub("书")).unwrap();
+    let _lock = lib.lock().unwrap(); // build 持锁时才把核对结果写回书库
     let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
     let ireader = lib.devices().get("ireader").unwrap();
 
@@ -325,15 +326,17 @@ fn failed_new_version_keeps_old_tracked_and_failed_removal_is_retried() {
     // 换成能用的新版本：旧版本删除失败时报错、下次再删
     std::fs::write(&f, sample_epub("第二版")).unwrap();
     let old_dir = dir.path().join(format!("lib/masters/{v1}"));
+    // 删条目是先把条目目录改名再删：`masters/` 只读时改不了名，删不掉
+    let masters = dir.path().join("lib/masters");
     let mut ev = Vec::new();
     let r = lib
         .sync(false, |e| match e {
-            library::SyncEvent::Updated(..) => std::fs::set_permissions(&old_dir, std::fs::Permissions::from_mode(0o555)).unwrap(),
+            library::SyncEvent::Updated(..) => std::fs::set_permissions(&masters, std::fs::Permissions::from_mode(0o555)).unwrap(),
             library::SyncEvent::Failed(_, e) => ev.push(e.to_string()),
             _ => {}
         })
         .unwrap();
-    std::fs::set_permissions(&old_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&masters, std::fs::Permissions::from_mode(0o755)).unwrap();
     if r.failed == 0 {
         return; // 以 root 运行：只读目录挡不住删除，测不了后半段
     }
@@ -728,4 +731,71 @@ fn interrupted_move_is_finished_next_time() {
     assert_eq!(again, path, "新位置上的文件认得是本书的，不改名");
     assert!(!stale.exists(), "旧位置补删");
     assert!(!std::fs::read_to_string(&sp).unwrap().contains("\"old\""));
+}
+
+#[test]
+fn dedupe_never_takes_the_librarys_own_copy_for_the_original() {
+    // 早期条目：书库里存着副本 master.epub（和原件内容相同，id 就是它的哈希），记着的原件已经不在了。
+    // 给 dedupe 的目录正好包含书库：以前把副本当成"找到的原件"，改记成它再删掉副本——书就没了
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("lib");
+    let lib = Library::open(&root).unwrap();
+    let bytes = sample_epub("孤本");
+    let sha: String = {
+        use sha2::Digest;
+        sha2::Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect()
+    };
+    let id = &sha[..12];
+    let edir = root.join("masters").join(id);
+    std::fs::create_dir_all(&edir).unwrap();
+    std::fs::write(edir.join("master.epub"), &bytes).unwrap();
+    let meta = serde_json::json!({"id":id,"title":"孤本","authors":[],"source":"孤本.epub","source_format":"epub","master":"master.epub","added":1,"source_path":"/不存在/孤本.epub"});
+    std::fs::write(edir.join("meta.json"), meta.to_string()).unwrap();
+    let rep = lib.dedupe(&[dir.path().to_path_buf()]).unwrap();
+    assert_eq!((rep.migrated, rep.kept.len()), (0, 1), "书库里的副本不算原件");
+    assert!(edir.join("master.epub").exists(), "副本还在");
+    assert_eq!(lib.list()[0].source(), library::Source::Stored);
+}
+
+#[test]
+fn removed_entry_leaves_nothing_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("lib");
+    let lib = Library::open(&root).unwrap();
+    let src = dir.path().join("书.epub");
+    std::fs::write(&src, sample_epub("书")).unwrap();
+    let _l = lib.lock().unwrap();
+    let id = lib.add_file(&src).unwrap().meta().id.clone();
+    lib.remove(&id).unwrap();
+    let left: Vec<_> = std::fs::read_dir(root.join("masters")).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert!(left.is_empty(), "改名成临时目录再删，删完不留东西：{left:?}");
+    assert!(lib.remove(&id).is_err());
+}
+
+#[test]
+fn comic_fingerprint_follows_the_readable_area_the_optimizer_uses() {
+    // 自定义模式：漫画另配格式（azw3），两种格式的阅读范围不同，漫画阅读范围单写。优化器的阅读范围是 formats 第一个（epub）的，
+    // 它变了漫画产物会变——指纹也要变（以前指纹取的是漫画产物格式 azw3 的阅读范围，epub 的改了不过期）
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("lib");
+    std::fs::create_dir_all(root.join("profiles")).unwrap();
+    let profile = |w: u32| {
+        format!("name = \"t\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"azw3\"]\ncomic_format = \"azw3\"\nnotes = \"jump\"\n[screen]\nwidth = 1000\nheight = 1500\n[readable.epub]\nwidth = {w}\nheight = 1400\n[readable.azw3]\nwidth = 900\nheight = 1400\n[comic_readable]\nwidth = 1000\nheight = 1500\n")
+    };
+    let cbz = dir.path().join("漫画.cbz");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&cbz).unwrap());
+        for i in 0..3 {
+            z.start_file(format!("{i:02}.jpg"), zip::write::SimpleFileOptions::default()).unwrap();
+            z.write_all(&jpeg(400, 600)).unwrap();
+        }
+        z.finish().unwrap();
+    }
+    let fp = |w: u32| {
+        std::fs::write(root.join("profiles/t.toml"), profile(w)).unwrap();
+        let lib = Library::open(&root).unwrap();
+        let m = lib.add_file(&cbz).unwrap().meta().clone();
+        lib.fingerprint(&m, lib.devices().get("t").unwrap()).unwrap()
+    };
+    assert_ne!(fp(800), fp(700));
 }

@@ -2,7 +2,7 @@
 //!
 //! 产物位置（每个模式一份，`<名>` 见 [`State::file_name_for`]）：
 //! - 原件在跟踪目录 `D` 里：`D/../<模式 id>/<原件所在目录相对 D 的路径>/<名>.<扩展名>`，和 `D` 并列、镜像子目录。
-//!   例：跟踪 `~/Documents/ereader/books`，原件 `books/haodoo/x.epub` → `~/Documents/ereader/kindle/haodoo/<书名>.azw3`；
+//!   例：跟踪 `~/Documents/ereader/books`，原件 `books/haodoo/x.epub` → `~/Documents/ereader/kindle/haodoo/<书名>.kfx`；
 //! - `add` 进来的单个文件（不在跟踪目录里）、网址书：`<书库>/output/<模式 id>/<名>.<扩展名>`。
 //!
 //! 产物格式按模式：EPUB 直接是优化结果；KFX、AZW3（Kindle）是同一份优化结果再转一次（`kfx`、`azw3` crate）。
@@ -72,7 +72,9 @@ impl Library {
             return Err("条目缺内容哈希（早期版本入库），先运行 booklib dedupe 迁移".into());
         }
         let format = self.output_format(meta, device)?;
-        let area = device.readable(format);
+        // 优化器用的阅读范围（`OptimizeOpts::for_profile` 取 `output_readable`，漫画另配格式时也是它），不是这本书产物格式的；
+        // 内置模式两者相同
+        let area = device.output_readable();
         // AZW3、KFX 再带上写出器的版本（写出器改了也要重建）
         let format_seg = match format {
             Format::Epub => format.ext().to_string(),
