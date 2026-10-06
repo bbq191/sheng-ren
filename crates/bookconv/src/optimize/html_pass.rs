@@ -109,13 +109,7 @@ pub(super) fn set_manifest_media_types(opf: &str, opf_path: &str, retyped: &[(St
 /// 生产抓图闭包：`//`→https、Referer=图自身 origin（满足多数 CDN 同源防盗链）、抓取+降采样。
 pub(super) fn remote_img_fetcher(ag: &ureq::Agent, screen: crate::imgopt::Screen) -> impl Fn(&str) -> Option<(Vec<u8>, &'static str)> + '_ {
     move |src: &str| {
-        let abs = if let Some(r) = src.strip_prefix("//") { format!("https://{r}") } else { src.to_string() };
-        let referer = abs
-            .find("://")
-            .and_then(|i| abs[i + 3..].find('/').map(|j| &abs[..i + 3 + j + 1]))
-            .unwrap_or("")
-            .to_string();
-        crate::netimg::fetch_image(ag, src, &referer, Some(screen)).map(|(b, ext, _mime)| (b, ext))
+        crate::netimg::fetch_image(ag, src, &crate::netimg::origin_of(src), Some(screen)).map(|(b, ext, _mime)| (b, ext))
     }
 }
 

@@ -32,6 +32,19 @@ pub fn fetch_image(ag: &ureq::Agent, src: &str, referer: &str, screen: Option<im
     Some((bytes, ext, mime))
 }
 
+/// URL 的 origin（`scheme://host/`），抓图时作 Referer（微信 mmbiz 等防盗链要；多数 CDN 只认同源）。协议相对的 `//host/…`
+/// 按 https 算；不是 URL → 空串（不带 Referer）。网页抽取（页面的 origin）和优化器抓远程图（图自己的 origin）共用。
+pub fn origin_of(url: &str) -> String {
+    let (scheme, rest) = match url.strip_prefix("//") {
+        Some(r) => ("https", r),
+        None => match url.split_once("://") {
+            Some(p) => p,
+            None => return String::new(),
+        },
+    };
+    format!("{scheme}://{}/", rest.split('/').next().unwrap_or(rest))
+}
+
 /// 统一超时的 HTTP agent（`timeout_secs`=0 表示不限）。
 pub fn http_agent(timeout_secs: u64) -> ureq::Agent {
     let mut b = ureq::AgentBuilder::new();
@@ -39,4 +52,17 @@ pub fn http_agent(timeout_secs: u64) -> ureq::Agent {
         b = b.timeout(std::time::Duration::from_secs(timeout_secs));
     }
     b.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_of_extracts_scheme_host() {
+        assert_eq!(origin_of("https://mp.weixin.qq.com/s/ID?x=1"), "https://mp.weixin.qq.com/");
+        assert_eq!(origin_of("//cdn.example.com/a/b.png"), "https://cdn.example.com/");
+        assert_eq!(origin_of("http://host"), "http://host/");
+        assert_eq!(origin_of("notaurl"), "");
+    }
 }
