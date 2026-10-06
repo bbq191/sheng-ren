@@ -42,7 +42,9 @@ fn spine_tag(opf: &str) -> Option<html::Tag<'_>> {
 
 const ATTR: &str = "page-progression-direction";
 
-/// 读 OPF 文本里写明的方向：`rtl`/`ltr` → `Some`；没写、写 `default` 或别的值 → `None`。
+/// 读 OPF 文本里写明的方向：`rtl`/`ltr` → `Some`；没写、写 `default` 或别的值 → `None`。值去空白、不分大小写。
+/// **全书判翻页方向只用这一个**（`epubbook` 给 AZW3、KFX 读的 `rtl` 也调它；2026-10-06 以前那边另写一份，
+/// 值要逐字等于 `rtl` 才算）。
 pub fn spine_direction(opf: &str) -> Option<PageDirection> {
     let t = spine_tag(opf)?;
     PageDirection::parse(html::attr_value(&opf[t.start..t.end], ATTR)?)
@@ -56,7 +58,8 @@ pub fn set_spine_direction(opf: &str, dir: PageDirection) -> String {
     let tag = &opf[t.start..t.end];
     let new_attr = format!(r#"{ATTR}="{}""#, dir.as_str());
     let new_tag = match html::attr(tag, ATTR) {
-        Some(a) if a.value == dir.as_str() => return opf.to_string(),
+        // 已是这个方向（`" RTL "` 这种写法也算，与 [`spine_direction`] 同一口径）：不动
+        Some(a) if PageDirection::parse(a.value) == Some(dir) => return opf.to_string(),
         Some(a) => format!("{}{new_attr}{}", &tag[..a.start], &tag[a.end..]),
         // 插在标签名之后：`<spine toc="ncx">` → `<spine page-progression-direction="rtl" toc="ncx">`。
         None => {
@@ -92,6 +95,10 @@ mod tests {
         let ltr = set_spine_direction(&rtl, PageDirection::Ltr);
         assert_eq!(ltr, rtl.replace(r#""rtl""#, r#""ltr""#), "已有属性只改值");
         assert_eq!(set_spine_direction(&ltr, PageDirection::Ltr), ltr, "已是这个值 → 逐字节不变");
+        let spaced = r#"<spine page-progression-direction=" RTL ">"#;
+        assert_eq!(spine_direction(spaced), Some(PageDirection::Rtl));
+        assert_eq!(set_spine_direction(spaced, PageDirection::Rtl), spaced, "值去空白、不分大小写后相同 → 不动");
+        assert_eq!(spine_direction(r#"<spine toc="a>b" page-progression-direction="rtl">"#), Some(PageDirection::Rtl), "属性值里的 > 不截断");
         // 自闭合、单引号、无属性
         assert_eq!(set_spine_direction("<spine/>", PageDirection::Rtl), r#"<spine page-progression-direction="rtl"/>"#);
         assert_eq!(set_spine_direction("<spine>", PageDirection::Rtl), r#"<spine page-progression-direction="rtl">"#);

@@ -71,11 +71,9 @@ fn fixed_layout_metas(opf: &str) -> Vec<(u32, String)> {
     out
 }
 
-/// 第一个 `<spine>`（认带前缀的 `<opf:spine>`）的 `page-progression-direction` 是不是 `rtl`。
+/// spine 的翻页方向是不是从右往左（口径见 [`crate::direction::spine_direction`]，全书只这一处实现）。
 fn spine_rtl(opf: &str) -> bool {
-    html::tags(opf)
-        .find(|t| t.is_start() && is_local(t.name, "spine"))
-        .is_some_and(|t| html::attr_value(&opf[t.start..t.end], "page-progression-direction") == Some("rtl"))
+    crate::direction::spine_direction(opf) == Some(crate::direction::PageDirection::Rtl)
 }
 
 /// OPF `<package unique-identifier="X">` 指向的 `<dc:identifier id="X">` 的文本（字符引用已还原、去掉首尾空白）。
@@ -284,6 +282,10 @@ mod tests {
         assert!(!spine_rtl(r#"<opf:spine page-progression-direction="ltr"/>"#));
         assert!(!spine_rtl(r#"<spinex page-progression-direction="rtl"/><spine/>"#));
         assert!(!spine_rtl(r#"<!-- <spine page-progression-direction="rtl"> --><spine/>"#));
+        // 和 `direction::spine_direction` 同一口径：值去空白、不分大小写，认无引号写法，属性值里的 `>` 不截断
+        assert!(spine_rtl(r#"<spine page-progression-direction=" RTL ">"#));
+        assert!(spine_rtl(r#"<spine page-progression-direction=rtl toc=ncx>"#));
+        assert!(spine_rtl(r#"<spine toc="a>b" page-progression-direction="rtl">"#));
     }
 
     #[test]
