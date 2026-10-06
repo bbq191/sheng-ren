@@ -24,16 +24,16 @@
   <rect class="w" x="20" y="78" width="900" height="206" rx="10"/>
   <text x="470" y="100" text-anchor="middle" class="h">清洗层 wash（文字书、漫画都做；漫画不分页）</text>
   <g class="s">
-    <text x="40" y="126">① 剥"伪 DRM"（真 DRM 报错）· 删空白页 · 删失效引用</text>
+    <text x="40" y="126">① 剥"伪 DRM"（真 DRM 报错）· 删空白页、失效引用 · 坏文件名改名</text>
     <text x="40" y="148">② 判断主语言（dc:language + 正文字符分布）</text>
-    <text x="40" y="170">③ CSS 解锁：去字体、绝对字号、行高、vh 高度</text>
-    <text x="40" y="192">④ 段首缩进空白交给 CSS · 居中居右换成类 · 补 lang</text>
-    <text x="40" y="214">⑤ 注入 eink-wash.css：缩进、两端对齐、断字、注释 0.85em</text>
-    <text x="490" y="126">⑥ 目录：改指指错的条目、按部分层、没有就按标题生成</text>
-    <text x="490" y="148">⑦ 章节分页：章标题独立一页，节与节、节与章之间分页，</text>
-    <text x="506" y="168">目录缺的节补进去（缩进一级）</text>
-    <text x="490" y="190">⑧ 删章尾空白页 · NCX uid 对齐 OPF</text>
-    <text x="490" y="212">⑨ 规范整理：XHTML 修成合法 XML、OPF 3.0、nav + NCX、landmarks</text>
+    <text x="40" y="170">③ CSS 解锁：去字体、绝对字号、行高、vh 高度；背景图按模式留或去</text>
+    <text x="40" y="192">④ 嵌入字体：正文、批注不用；章名、书信等装饰字体保留</text>
+    <text x="40" y="214">⑤ 段首缩进空白交给 CSS · 居中居右换成类 · 补 lang</text>
+    <text x="490" y="126">⑥ 注入 eink-wash.css：缩进、两端对齐、断字、注释和批注 0.85em</text>
+    <text x="490" y="148">⑦ 目录：改指指错的、按层级重建（册/作品/部/章）、没有就生成</text>
+    <text x="490" y="170">⑧ 分页：书/卷、章独占一页，节另起一页（按目录层级）</text>
+    <text x="490" y="192">⑨ 删章尾空白页 · NCX uid 对齐 OPF</text>
+    <text x="490" y="214">⑩ 规范整理：XHTML 修成合法 XML、OPF 3.0、nav + NCX、landmarks</text>
   </g>
   <line x1="40" y1="232" x2="900" y2="232" stroke="#c9b8e8"/>
   <text x="40" y="254" class="s">可见文字一个不多一个不少（真书回归逐字符核对）；拿不准的结构原样保留。</text>
@@ -86,5 +86,5 @@
 
   <rect class="g" x="190" y="624" width="560" height="60" rx="8"/>
   <text x="470" y="646" text-anchor="middle" class="h">质量门 → 产物</text>
-  <text x="470" y="666" text-anchor="middle" class="s">XHTML 合法、目录和资源引用找得到、没有 DRM（没过只警告）→ EPUB；kindle 模式再转 AZW3</text>
+  <text x="470" y="666" text-anchor="middle" class="s">XHTML 合法、目录和资源引用找得到、没有 DRM（没过只警告）→ EPUB；kindle 模式再转 KFX</text>
 </svg>
