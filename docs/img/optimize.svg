@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 700" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
-  <title>按阅读模式优化一本书的流程（booklib build 内部，三个模式同一套规则）</title>
+  <title>按阅读模式优化一本书的流程（booklib sync 生成时，三个模式同一套规则）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
