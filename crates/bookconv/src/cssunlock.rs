@@ -144,7 +144,8 @@ pub fn background_longhands(value: &str, sizing: bool) -> Vec<String> {
         if after_slash && !(["cover", "contain", "auto"].contains(&l.as_str()) || l.starts_with(|c: char| c.is_ascii_digit() || c == '.')) {
             after_slash = false; // 尺寸写完了
         }
-        if l.starts_with("url(") {
+        // 图：`url()`，以及渐变、`image-set()`（此前渐变落到最后一支，写成了不合法的 `background-color:linear-gradient(…)`）
+        if l.starts_with("url(") || l.starts_with("image-set(") || l.split_once('(').is_some_and(|(f, _)| f.ends_with("gradient")) {
             out.push(format!("background-image:{t}{important}"));
         } else if l == "/" {
             after_slash = true;
@@ -228,6 +229,12 @@ mod tests {
             [r#"background-image:url("../Images/jsy.png")"#, "background-repeat:no-repeat", "background-color:rgba(117, 0, 0, 1)", "background-position:bottom"]
         );
         assert_eq!(background_longhands("url(a.png) no-repeat fixed #111", false), ["background-image:url(a.png)", "background-repeat:no-repeat", "background-color:#111"]);
+        assert_eq!(
+            background_longhands("linear-gradient(to bottom, #fff 0%, #eee 100%) #ddd", false),
+            ["background-image:linear-gradient(to bottom, #fff 0%, #eee 100%)", "background-color:#ddd"],
+            "渐变是背景图，不是背景色"
+        );
+        assert_eq!(background_longhands("-webkit-repeating-linear-gradient(red, blue)", false), ["background-image:-webkit-repeating-linear-gradient(red, blue)"]);
         assert_eq!(
             background_longhands("url(a.png) bottom / 100% no-repeat fixed #111", true),
             ["background-image:url(a.png)", "background-repeat:no-repeat", "background-attachment:fixed", "background-color:#111", "background-position:bottom", "background-size:100%"]

@@ -526,6 +526,9 @@ pub fn collect_footnote_notes_with(
     let spans = html::parse_spans(html_text, 0, html_text.len());
     let mut taken: Vec<usize> = Vec::new();
     let mut taken_until = 0usize;
+    // 已收的 id：同一章里两条注释用了同一个 id（《绝叫》两条不同的注释都叫 `footnote-3-15`），后一条留在原处——
+    // 注释按 (文件, id) 进索引，两条都搬走只放得回一条，另一条就丢了（2026-10-06 审计：真书回归《绝叫》少了「专业漫画用纸……」）。
+    let mut ids_taken: HashSet<String> = HashSet::new();
     for (si, sp) in spans.iter().enumerate() {
         if sp.open_start < taken_until || !sp.closed() || !matches!(sp.name.as_str(), "aside" | "p" | "li" | "div") {
             continue;
@@ -546,7 +549,8 @@ pub fn collect_footnote_notes_with(
             },
         };
         let paired = || backrefs.get(id.as_ref()).is_some_and(|m| starts_with_backlink(inner, m));
-        if referenced.contains(id.as_ref()) && (!require_semantic || note_semantic(open) || paired()) {
+        if referenced.contains(id.as_ref()) && !ids_taken.contains(id.as_ref()) && (!require_semantic || note_semantic(open) || paired()) {
+            ids_taken.insert(id.to_string());
             let list = if sp.name == "li" { list_item(html_text, &spans, si) } else { None };
             index.push((id.into_owned(), Note { inner: inner.to_string(), list }));
             taken.push(si);
@@ -890,6 +894,17 @@ mod optimizer_footnote_tests {
         assert!(!ids.contains(&"plain"), "无注释语义的 <p> 不该被搬: {ids:?}");
         assert!(!cleaned.contains(r##"id="n1""##) && !cleaned.contains(r##"id="n2""##), "已收注释应从原位移除: {cleaned}");
         assert!(cleaned.contains(r##"id="plain""##), "普通段落应原样保留: {cleaned}");
+    }
+
+    #[test]
+    fn duplicate_note_id_second_stays_in_place() {
+        // 《绝叫》：两条不同的注释都叫 footnote-3-15（id 还重复写在里面的 li 上）。只能搬一条，另一条留在原处，一个字不丢。
+        let notes = r#"<p>甲</p><aside epub:type="footnote" id="n1"><ol><li id="n1">第一条</li></ol></aside><p>乙</p><aside epub:type="footnote" id="n1"><ol><li id="n1">第二条</li></ol></aside>"#;
+        let referenced: HashSet<String> = ["n1".to_string()].into();
+        let (cleaned, idx) = collect_footnote_notes(notes, &referenced, true);
+        assert_eq!(idx.len(), 1);
+        assert!(idx[0].1.inner.contains("第一条"));
+        assert_eq!(cleaned, r#"<p>甲</p><p>乙</p><aside epub:type="footnote" id="n1"><ol><li id="n1">第二条</li></ol></aside>"#);
     }
 
     #[test]
