@@ -1001,7 +1001,7 @@
 
 
     /// 透明图书：`logo.png`（左半透明、透明处存黑色）只当 `<img>`；`bg.png`（同样带透明）只当 CSS 背景；`both.png` 两样都用；
-    /// `opaque.png` 是 RGBA 但全不透明；`tall.jpg` 120×220 带多看图注。
+    /// `opaque.png` 是 RGBA 但全不透明；`tall.jpg` 900×1650（放得进掌阅阅读范围、原尺寸显示又超出 0.8 屏高）带多看图注。
     fn alpha_book() -> (Vec<u8>, Vec<(&'static str, Vec<u8>)>) {
         let png = |alpha: u8| {
             let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(40, 20, |x, _| if x < 20 { image::Rgba([0, 0, 0, alpha]) } else { image::Rgba([200, 30, 30, 255]) }));
@@ -1010,7 +1010,7 @@
             b
         };
         let jpg = {
-            let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(120, 220, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])));
+            let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(900, 1650, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])));
             let mut b = Vec::new();
             img.write_to(&mut Cursor::new(&mut b), image::ImageFormat::Jpeg).unwrap();
             b
@@ -1070,7 +1070,7 @@
             let (out, _) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(profile::get(p).unwrap())).unwrap();
             (text_of(&out, "OEBPS/c1.xhtml"), out)
         };
-        // 掌阅 1264×1680：0.8 × 1680 × 120/220 / 1264 = 0.58 → 57%；Kindle 1104×1546 → 61%
+        // 掌阅 1264×1680：0.8 × 1680 × 900/1650 / 1264 = 0.57998 → 57%；Kindle 1104×1546 → 61%
         let (ir, ir_out) = html("ireader");
         assert!(ir.contains(r#"<img src="i/tall.jpg" alt="" style="width:57%"/>"#), "{ir}");
         assert_eq!(entry_bytes(&ir_out, "OEBPS/i/tall.jpg"), imgs[4].1, "图片字节不动");
