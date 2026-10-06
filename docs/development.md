@@ -10,6 +10,7 @@ cargo clippy --workspace --all-targets      # 要求 0 警告
 
 tools/regress/run.sh <epub-optimize> 目录 [--device=…]   # 真书回归（见下）
 tools/regress/compare.py 旧目录 新目录                    # 比较两次回归
+tools/regress/tocchk.py 旧目录 新目录                     # 核对 spine 文件数（不拆文件）和目录（层级、标签、锚点都在）
 python3 tools/kf8/textcheck.py 书.azw3 优化后.epub         # AZW3 与源 EPUB 可见文字逐字比
 shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.sh tools/regress/run.sh
 
@@ -40,7 +41,7 @@ tools/regress/compare.py 旧 新
 | 改动的性质 | 要求 |
 |---|---|
 | 重构、提速、修不影响产物的问题 | EPUB 产物逐个 zip 条目字节相同（EPUB 输出是确定的） |
-| 改了会影响正文的规则 | 可见文字改动前后一致；spine 文件数和原书一样（不拆文件，原有的空页清理除外）；目录（NCX）条目数、层级、标签前后一致，每条的目标文件和锚点都在；有变化的逐条说明原因 |
+| 改了会影响正文的规则 | 可见文字改动前后一致；spine 文件数和原书一样（不拆文件，原有的空页清理除外）；目录（NCX）条目数、层级、标签前后一致，每条的目标文件和锚点都在（`tocchk.py`）；有变化的逐条说明原因 |
 | 任何改动 | 输出的 XHTML、OPF、NCX 都是合法 XML（现在是 0 个不合法） |
 | 改了漫画处理 | 拿一卷漫画比图片字节 |
 
