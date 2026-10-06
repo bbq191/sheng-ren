@@ -480,8 +480,8 @@ impl MediaEnv {
     }
 }
 
-/// 收的媒体类型：`all`、`screen` 和 Kindle 的 `amzn-kf8`、`amzn-kfx`（`amzn-mobi`、`print` 等都不是）。
-const MEDIA_TYPES: &[&str] = &["all", "screen", "amzn-kf8", "amzn-kfx"];
+/// 收的媒体类型：`all`、`screen` 和 Kindle 的 `amzn-kf8`（`amzn-mobi`、`print` 等都不是）。
+const MEDIA_TYPES: &[&str] = &["all", "screen", "amzn-kf8"];
 
 /// `@media`（或 `<link>`/`<style>` 的 `media` 属性）的条件成不成立。按 Media Queries 规范：逗号列表任一条成立即成立；
 /// 每条是 `[not|only] 媒体类型 [and (特性)]*` 或 `(特性) [and (特性)]*`，`not` 把整条取反；媒体类型不认识的算不成立
@@ -1223,7 +1223,7 @@ mod tests {
     fn media_queries_by_env() {
         let env = MediaEnv { width: 1104.0, height: 1546.0, device_width: 1272.0, device_height: 1696.0, color: false };
         let ok = |q: &str| media_ok(q, Some(&env));
-        for q in ["", "all", "screen", "amzn-kf8", "amzn-kfx", "only screen", "not amzn-mobi", "not print", "print, screen", "SCREEN"] {
+        for q in ["", "all", "screen", "amzn-kf8", "only screen", "not amzn-mobi", "not print", "print, screen", "SCREEN"] {
             assert!(ok(q), "{q}");
         }
         for q in ["print", "amzn-mobi", "speech", "not screen", "screen and", "screen (min-width: 1px)", "and (color)"] {
