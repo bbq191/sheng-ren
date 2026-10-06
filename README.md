@@ -30,7 +30,7 @@ booklib list                                  # 看每本书的产物在哪、�
 | 模式 | 给谁读 | 产物 |
 |---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX |
-| `ireader` | 掌阅 Ocean 5 Pro 自带阅读器；Kindle、掌阅上的 KOReader 也读它 | EPUB |
+| `ireader` | 掌阅 Ocean 5 Pro 自带阅读器 | EPUB |
 | `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB（彩色） |
 
 三个模式用同一套规则，区别（屏幕、阅读范围、阅读器的怪癖）都写在模式的配置里，见[设备与阅读模式](docs/devices.md)。
@@ -61,7 +61,7 @@ booklib list                                  # 看每本书的产物在哪、�
 ## 现状
 
 - 三台设备的自带阅读器上，文字书和漫画都在真机上看过，逐条见[验证情况](docs/typesetting.md#验证情况)。
-- 自带阅读器之间不能同步阅读进度；Kindle、掌阅上的 KOReader 之间可以（见[设备 · KOReader](docs/devices.md#koreader)）。
+- 自带阅读器之间不能同步阅读进度（两台都不装 KOReader，见[设备 · KOReader](docs/devices.md#koreader)）。
 - 带 DRM 的书拒收（解 DRM 暂停，见[开发 · DRM](docs/development.md#drm)）。
 
 ## 许可证
