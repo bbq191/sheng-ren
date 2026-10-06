@@ -153,6 +153,15 @@ pub const P_HEIGHT: u32 = 57;
 /// 推测：尺寸按内容盒算（有宽度的样式上常见 `$546: $377`）。
 pub const P_SIZING: u32 = 546;
 pub const SIZING_VALUE: u32 = 377;
+/// 固定版式一页的定位（2026-10-06 Amazon 转的异形页样本）：整页容器 `{$476: true, $183: $488}`，里面的图片节点
+/// `{$58: 上, $59: 左, $183: $324}`（裸浮点数）。按 CSS 推测 `$183` 是 position（`$488` relative、`$324` absolute），
+/// `$476` 像 overflow:hidden。
+pub const P_TOP: u32 = 58;
+pub const P_LEFT: u32 = 59;
+pub const P_POSITION: u32 = 183;
+pub const POSITION_ABSOLUTE: u32 = 324;
+pub const POSITION_RELATIVE: u32 = 488;
+pub const P_CLIP: u32 = 476;
 /// 推测：排版提示（标题样式上是 `[$760]`，表格标题上是 `[$453]`）。
 pub const P_LAYOUT_HINTS: u32 = 761;
 /// 单元格：跨列、跨行、竖直对齐（`$58` top、`$320` middle、`$60` bottom）。

@@ -461,8 +461,7 @@ fn comic_layout(w: u32, h: u32, area: Screen, margin: u32, may_upscale: bool) ->
 ///   带 EXIF 方向（非"不用转"）的页一律摆正后重编码。
 /// - 超过 [`MAX_COMIC_DECODE_PIXELS`] 的图、解不开的图返回 `None`。
 /// - `full_canvas`（固定版式，Kindle）：装饰小图、不放大的页也居中补白成整个阅读范围大小（比框大的先缩小，小的不放大）。
-///   KFX 固定版式里图片节点比画布小（异形页）的页 Kindle 会整页空白，原因没查清；画布大小的页一直正常（2026-10-06 真机，
-///   用户选补白）。
+///   2026-10-06 用户选补白（当时 KFX 里比画布小的图有的页整页空白，后来查清是写出器的符号顺序问题、已修，补白照旧）。
 pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, full_canvas: bool) -> Option<Vec<u8>> {
     let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale)?;
     let orig = img.dimensions();
