@@ -13,7 +13,8 @@
 另外两项核对，任何一本不过都算失败：
   - 新产物里 XHTML/OPF/NCX 不是合法 XML 的数量（不能比旧的多）；
   - 对原书的"字符账"：新产物可见文字的字符计数，和 index.txt 里记的原书 spine 可见文字逐字符相等
-    （顺序不管：注释会从原处挪到章末，但一个字不多一个字不少）。
+    （顺序不管：注释会从原处挪到章末，但一个字不多一个字不少）。唯一的例外是只有图标的注释号换成数字（用户定的规则）：
+    只多出 ASCII 数字、原书里有只含图片的链接、多出的位数不超过按图标个数连续编号的位数时，只注明、不算不平。
 
 --strip-old-markers：旧产物里优化器自己加的注释标号 `<a href="#…">[N]</a>` 不算正文（v27 起不再加），比较前从旧的里去掉。
 退出码：全部通过 0，否则 1。
@@ -58,6 +59,26 @@ def spine_text(z, strip_markers=False):
         # 去空白、U+FEFF 和 C0 控制字符（XML 1.0 不允许，规范整理会删掉；不是可见文字）
         out.append(re.sub(r'[\s\x00-\x1f]+', '', html.unescape(t)).replace('﻿', ''))
     return ''.join(out)
+
+
+LINK = re.compile(r'(?is)<a\b[^>]*\bhref=["\'][^"\']*#[^>]*>(.*?)</a>')
+
+
+def icon_note_links(src):
+    """原书里只有图、没有文字的链接个数（图标注释号；优化器会把它换成数字）。"""
+    n = 0
+    with zipfile.ZipFile(src) as z:
+        for name in z.namelist():
+            if re.search(r'\.x?html?$', name, re.I):
+                for inner in LINK.findall(z.read(name).decode('utf-8', 'replace')):
+                    if re.search(r'(?i)<img\b', inner) and not re.sub(r'(?s)<[^>]+>|\s', '', inner):
+                        n += 1
+    return n
+
+
+def icon_digit_budget(n):
+    """n 个注释号最多多出的数字个数：每章从 1 编号也不会超过 1..n 连写的位数。"""
+    return sum(len(str(i)) for i in range(1, n + 1))
 
 
 def invalid_xml(z):
@@ -126,6 +147,7 @@ def main():
         inv_old += xo
         inv_new += xn
         notes = []
+        info = []  # 只说明、不算问题
         src = in_.get(nb)
         ts = None
         if src and os.path.exists(src):
@@ -138,7 +160,12 @@ def main():
             if collections.Counter(ts) != collections.Counter(tb):
                 d_more = collections.Counter(tb) - collections.Counter(ts)
                 d_less = collections.Counter(ts) - collections.Counter(tb)
-                notes.append(f'对原书字符账不平：多 {dict(d_more.most_common(8))} 少 {dict(d_less.most_common(8))}')
+                # 只有图标的注释标号换成了数字（用户定的规则）：只多出 ASCII 数字、且原书有这种图标链接时不算不平，只报个数
+                icons = icon_note_links(src) if not d_less and set(d_more) <= set('0123456789') else 0
+                if icons and sum(d_more.values()) <= icon_digit_budget(icons):
+                    info.append(f'注：多出 {sum(d_more.values())} 个数字（原书 {icons} 个图标注释号换成了数字，不算不平）')
+                else:
+                    notes.append(f'对原书字符账不平：多 {dict(d_more.most_common(8))} 少 {dict(d_less.most_common(8))}')
         elif not notes:
             # 没核对就不能算通过（计为问题）
             notes.append(f'未核对：原书不在（{src}）' if src else '未核对：原书不在（index.txt 里没有这本的原书路径）')
@@ -157,7 +184,7 @@ def main():
         if status == 'TEXT-DIFF' or notes:
             bad += 1
         name = nb if na in (None, nb) else f'{na}→{nb}'
-        print(status, name, f'不合法 XML {xo}→{xn}', ('\n   ' + '\n   '.join(notes)) if notes else '')
+        print(status, name, f'不合法 XML {xo}→{xn}', ''.join('\n   ' + x for x in notes + info))
     if inv_new > inv_old:
         bad += 1
     print(f'有问题的书: {bad}；不合法 XML 合计 {inv_old} → {inv_new}')
