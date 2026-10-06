@@ -32,6 +32,13 @@ impl TocItem {
     }
 }
 
+/// NCX 里一条 `<content src>`（[`crate::ncx::NavPoint::src`]，字符引用已还原）→ (目标文件的 zip 路径, 锚点原文——没有是空串)。
+/// 路径百分号解码、相对 NCX 所在目录解析；锚点原样（写回目录时照用）。
+fn ncx_target<'a>(ncx_path: &str, src: &'a str) -> (String, &'a str) {
+    let (path, frag) = crate::epubzip::resolve_href(ncx_path, src);
+    (path, frag.unwrap_or(""))
+}
+
 /// 新建目录时的标题：中文书"目录"，其它"Contents"。
 pub(super) fn toc_title(lang: LangMode) -> &'static str {
     if lang == LangMode::Latin { "Contents" } else { "目录" }
@@ -243,10 +250,11 @@ pub(super) fn fallback_spine_toc(entries: &[Entry], spine: &[String], nav_doc: O
     if pages.is_empty() {
         return Vec::new();
     }
+    let index = name_index(entries);
     let texts: Vec<Option<String>> = pages
         .iter()
         .map(|p| {
-            let e = entries.iter().find(|e| &&e.name == p)?;
+            let e = &entries[*index.get(p.as_str())?];
             let html = std::str::from_utf8(&e.data).ok()?;
             let t = plain_text(html::first_body_inner(html).unwrap_or(""));
             if t.is_empty() { None } else { Some(t) }
@@ -332,11 +340,10 @@ pub(super) fn restructure_existing_toc_parts(entries: &mut [Entry], mode: AutoTo
     }
     // 标题里的空白折叠成单个空格（全角空格分隔的"第一部　01　雪人"→"第一部 01 雪人"，跟标题里其它空白一视同仁）。
     let flat: Vec<(String, &crate::ncx::NavPoint)> = points.iter().map(|p| (p.label.split_whitespace().collect::<Vec<_>>().join(" "), p)).collect();
-    let ncx_dir = dir_of(&ncx_path).to_string();
     let to_item = |depth: u8, title: &str, p: &crate::ncx::NavPoint| {
-        let (raw_path, frag) = html::split_href(&p.src);
+        let (path, frag) = ncx_target(&ncx_path, &p.src);
         let np = Some(p.open_tag.clone()).filter(|t| !t.is_empty());
-        TocItem { np, ..TocItem::new(depth, title, resolve(&ncx_dir, &percent_decode(raw_path)), frag.unwrap_or("").to_string()) }
+        TocItem { np, ..TocItem::new(depth, title, path, frag) }
     };
     let titles: Vec<&str> = flat.iter().map(|(t, _)| t.as_str()).collect();
     if let Some(depths) = collection_depths(&titles) {
@@ -352,11 +359,10 @@ pub(super) fn restructure_existing_toc_parts(entries: &mut [Entry], mode: AutoTo
     let mut items: Vec<TocItem> = Vec::with_capacity(flat.len());
     let mut in_part = false;
     for (title, p) in &flat {
-        let (raw_path, frag) = html::split_href(&p.src);
-        let (path, frag) = (resolve(&ncx_dir, &percent_decode(raw_path)), frag.unwrap_or("").to_string());
+        let (path, frag) = ncx_target(&ncx_path, &p.src);
         let np = Some(p.open_tag.clone()).filter(|t| !t.is_empty());
         if let Some(c) = re.captures(title) {
-            items.push(TocItem { np, ..TocItem::new(1, &c[1], path.clone(), frag.clone()) });
+            items.push(TocItem { np, ..TocItem::new(1, &c[1], path.clone(), frag) });
             let rest = c[2].trim();
             if !rest.is_empty() {
                 items.push(TocItem::new(2, rest, path, frag));
@@ -509,14 +515,13 @@ pub(super) fn nest_parts_among_siblings(entries: &mut [Entry], mode: AutoToc, he
     if moved == 0 {
         return;
     }
-    let ncx_dir = dir_of(&ncx_path).to_string();
     let items: Vec<TocItem> = points
         .iter()
         .zip(&depth)
         .map(|(p, &d)| {
-            let (raw_path, frag) = html::split_href(&p.src);
+            let (path, frag) = ncx_target(&ncx_path, &p.src);
             let np = Some(p.open_tag.clone()).filter(|t| !t.is_empty());
-            TocItem { np, ..TocItem::new(d.min(255) as u8, p.label.clone(), resolve(&ncx_dir, &percent_decode(raw_path)), frag.unwrap_or("").to_string()) }
+            TocItem { np, ..TocItem::new(d.min(255) as u8, p.label.clone(), path, frag) }
         })
         .collect();
     rewrite_toc_files(entries, &opf, &ncx_path, &items, heading);
@@ -631,9 +636,7 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
     let mut items: Vec<Item> = flat
         .into_iter()
         .map(|crate::ncx::NavPoint { depth, label, src: target, open_tag }| {
-            let (p, f) = html::split_href(&target);
-            let path = posix_norm(&resolve(dir_of(&ncx_path), &percent_decode(p)));
-            let f = f.unwrap_or("");
+            let (path, f) = ncx_target(&ncx_path, &target);
             let id = html::frag_id(f).into_owned();
             let is_sec = if id.is_empty() { sec_paths.contains(path.as_str()) } else { sec_ids.contains(&(path.as_str(), id.clone())) };
             let key = key_of(&path, &id);
@@ -711,8 +714,8 @@ fn section_starts_file(entries: &[Entry], path: &str, id: &str) -> bool {
 
 // ───────────────────────── 书自带目录指错位置的修复 ─────────────────────────
 
-/// 条目名 → 下标（同名取第一条；清洗层按名字找条目都用这一份）。
-pub(super) fn name_index(entries: &[Entry]) -> HashMap<&str, usize> {
+/// 条目名 → 下标（同名取第一条；清洗层、漫画识别按名字找条目都用这一份）。
+pub(crate) fn name_index(entries: &[Entry]) -> HashMap<&str, usize> {
     let mut m = HashMap::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
         m.entry(e.name.as_str()).or_insert(i);

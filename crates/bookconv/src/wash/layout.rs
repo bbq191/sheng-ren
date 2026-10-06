@@ -237,11 +237,13 @@ pub(super) fn remove_chapter_end_blanks(entries: &mut [Entry], rep: &mut WashRep
     let referenced = referenced_frags(entries);
     let drawn = Drawn::collect(entries);
     let mut tail_classes: HashSet<String> = HashSet::new();
+    // 条目名 → 下标建一次（此前每个 spine 页线性找一遍全书条目）
+    let index: HashMap<String, usize> = name_index(entries).into_iter().map(|(n, i)| (n.to_string(), i)).collect();
     for path in &opf.spine {
         if Some(path) == opf.nav_doc.as_ref() || is_toc_file(path) {
             continue;
         }
-        let Some(e) = entries.iter_mut().find(|e| &e.name == path) else { continue };
+        let Some(e) = index.get(path).map(|&i| &mut entries[i]) else { continue };
         let Ok(html) = std::str::from_utf8(&e.data) else { continue };
         let (new, removed, classes) = trim_tail(html, &referenced, &drawn);
         tail_classes.extend(classes);
