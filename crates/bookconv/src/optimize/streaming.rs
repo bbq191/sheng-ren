@@ -60,7 +60,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 let Ok(job) = job else { break };
                 // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
                 // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
-                let px = std::panic::catch_unwind(|| crate::imgopt::pixel_count(&job.bytes)).unwrap_or(1_000_000);
+                let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&job.bytes))).unwrap_or(1_000_000);
                 let _permit = budget.acquire(px);
                 let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale).unwrap_or(job.bytes);
                 let _ = job.reply.send(out);

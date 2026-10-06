@@ -120,13 +120,23 @@ fn swaps_axes(o: image::metadata::Orientation) -> bool {
     matches!(o, Rotate90 | Rotate270 | Rotate90FlipH | Rotate270FlipH)
 }
 
+/// 跑一段处理外来图片的代码，兜住解码器的 panic，按处理失败（`None`）算。书里、网上的图都是外部输入，第三方解码器遇到畸形
+/// 图片偶尔会 panic：不兜住的话一张坏图会摔掉整本书的优化（图片 worker 的 panic 经 `thread::scope` 重新抛给调用方；
+/// 抓远程图、换封面在主线程，直接 panic）。优化器处理图片、读图片头、抓远程图、解封面共用。
+pub(crate) fn guard<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(None)
+}
+
 /// 解码并按 EXIF 方向摆正（格式按魔数认）。重编码写不回 EXIF：像素不摆正的话，在按 EXIF 显示的阅读器上
 /// 原来正的图就转歪了；摆正后像素本身就是该显示的样子，认不认 EXIF 的阅读器看到的都一样。缩略图等只读用途也用它。
+/// 解不开（含解码器 panic，见 [`guard`]）→ `None`。
 pub fn decode_oriented(bytes: &[u8]) -> Option<image::DynamicImage> {
-    let fmt = crate::util::image_kind(bytes)?.format;
-    let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
-    img.apply_orientation(orientation_of(bytes, fmt));
-    Some(img)
+    guard(|| {
+        let fmt = crate::util::image_kind(bytes)?.format;
+        let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
+        img.apply_orientation(orientation_of(bytes, fmt));
+        Some(img)
+    })
 }
 
 /// 图片头部声明的像素数（不解码，JPEG/PNG/GIF/WebP）；读不出来按 100 万像素估，给并行内存预算用（[`crate::imgpool`]）。
@@ -690,6 +700,14 @@ mod tests {
         let mut buf = Vec::new();
         image::ImageEncoder::write_image(JpegEncoder::new_with_quality(&mut buf, 95), &px, w, h, image::ExtendedColorType::L8).unwrap();
         buf
+    }
+
+    /// 解码器 panic 按处理失败算（抓远程图、解封面以前没兜住，一张坏图摔掉整本书的优化）。
+    #[test]
+    fn guard_turns_decoder_panic_into_none() {
+        assert_eq!(guard(|| -> Option<u8> { panic!("坏图") }), None);
+        assert_eq!(guard(|| Some(3)), Some(3));
+        assert!(decode_oriented(b"\xFF\xD8\xFF garbage").is_none());
     }
 
     #[test]
