@@ -7,6 +7,7 @@
 
 use scraper::{ElementRef, Selector};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// 一条声明。
 #[derive(Clone, Debug, PartialEq)]
@@ -18,14 +19,115 @@ pub struct Decl {
 
 struct Rule {
     sel: Selector,
+    /// 快速排除：元素不满足它就一定匹配不上（见 [`Need::of`]）；`None` 时只能完整匹配。
+    need: Option<Need>,
     spec: (u32, u32, u32),
-    order: usize,
     decls: Vec<Decl>,
 }
 
+/// 选择器最右边那一节（`p.a.b#x`）要求元素有的标签名、类、id。只是**必要条件**：比较一律不分 ASCII 大小写
+/// （怪异模式下类名、id 不分大小写，宽一点不会把能匹配的排除掉），满足了还要完整匹配。
+/// 大合集几十万个元素、每份样式表几十条规则，逐条完整匹配是写出器最慢的一步（2026-10-06：阿加莎全集层叠 1.1 秒）。
+#[derive(Debug, PartialEq)]
+struct Need {
+    tag: Option<String>,
+    classes: Vec<String>,
+    ids: Vec<String>,
+}
+
+impl Need {
+    /// 只认由标识符、`.`、`#`、空白和 `>`/`+`/`~` 组成的选择器；带属性、伪类、`*`、命名空间、转义的不做（返回 `None`）。
+    fn of(sel: &str) -> Option<Need> {
+        let ident = |c: char| c.is_alphanumeric() || c == '-' || c == '_';
+        if !sel.chars().all(|c| ident(c) || matches!(c, '.' | '#' | '>' | '+' | '~') || c.is_whitespace()) {
+            return None;
+        }
+        let last = sel.rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~')).next()?;
+        if last.is_empty() {
+            return None;
+        }
+        let mut need = Need { tag: None, classes: Vec::new(), ids: Vec::new() };
+        let mut rest = last;
+        let tag_end = rest.find(['.', '#']).unwrap_or(rest.len());
+        if tag_end > 0 {
+            need.tag = Some(rest[..tag_end].to_string());
+        }
+        rest = &rest[tag_end..];
+        while let Some(kind) = rest.chars().next() {
+            let body = &rest[1..];
+            let end = body.find(['.', '#']).unwrap_or(body.len());
+            if end == 0 {
+                return None;
+            }
+            let name = body[..end].to_string();
+            if kind == '.' { need.classes.push(name) } else { need.ids.push(name) }
+            rest = &body[end..];
+        }
+        Some(need)
+    }
+
+    fn may_match(&self, el: &ElementRef) -> bool {
+        let v = el.value();
+        self.tag.as_deref().is_none_or(|t| v.name().eq_ignore_ascii_case(t))
+            && self.ids.iter().all(|i| v.id().is_some_and(|x| x.eq_ignore_ascii_case(i)))
+            && self.classes.iter().all(|c| v.classes().any(|x| x.eq_ignore_ascii_case(c)))
+    }
+}
+
+/// 解析好的一份样式表（规则按出现顺序）。同一份样式表被很多文档引用时只解析一次，各文档的 [`Sheet`] 共用。
+#[derive(Default)]
+pub struct Rules(Vec<Rule>);
+
+impl Rules {
+    /// 解析一份样式表；`url(…)` 按样式表自己的路径 `base`（书内路径）换成书内路径（`base` 空时不换）。
+    pub fn parse(css: &str, base: &str) -> Rc<Rules> {
+        let mut r = Rules::default();
+        r.add(css, base);
+        Rc::new(r)
+    }
+
+    fn add(&mut self, css: &str, base: &str) {
+        let css = strip_comments(css);
+        let mut rest: &str = &css;
+        while let Some(open) = rest.find('{') {
+            let head = rest[..open].trim();
+            let Some(close) = matching_brace(rest, open) else { break };
+            let body = &rest[open + 1..close];
+            // 前面可能残留 `@charset …;` 之类以分号结束的 at 规则。
+            let head = head.rsplit(';').next().unwrap_or("").trim();
+            if let Some(at) = head.strip_prefix('@') {
+                let lower = at.to_ascii_lowercase();
+                if let Some(q) = lower.strip_prefix("media") {
+                    if media_ok(q) {
+                        self.add(body, base);
+                    }
+                }
+            } else if !head.is_empty() {
+                let mut decls = parse_decls(body);
+                if !base.is_empty() {
+                    for d in decls.iter_mut().filter(|d| d.value.to_ascii_lowercase().starts_with("url(")) {
+                        let inner = d.value[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']);
+                        d.value = format!("url({})", bookconv::epubzip::resolve_link(base, inner).0);
+                    }
+                }
+                if !decls.is_empty() {
+                    for one in split_top(head, ',') {
+                        let one = one.trim();
+                        if let Ok(sel) = Selector::parse(one) {
+                            self.0.push(Rule { sel, need: Need::of(one), spec: specificity(one), decls: decls.clone() });
+                        }
+                    }
+                }
+            }
+            rest = &rest[close + 1..];
+        }
+    }
+}
+
+/// 一个文档用到的样式表：各份 [`Rules`] 和它们第一条规则的全局序号（后出现的规则优先）。
 #[derive(Default)]
 pub struct Sheet {
-    rules: Vec<Rule>,
+    parts: Vec<(Rc<Rules>, usize)>,
 }
 
 fn strip_comments(css: &str) -> String {
@@ -320,43 +422,15 @@ impl Sheet {
     }
 
     /// 同 [`Sheet::add`]，`url(…)` 按样式表自己的路径 `base`（书内路径）换成书内路径。
-    pub fn add_at(&mut self, css: &str, mut order: usize, base: &str) -> usize {
-        let css = strip_comments(css);
-        let mut rest: &str = &css;
-        while let Some(open) = rest.find('{') {
-            let head = rest[..open].trim();
-            let Some(close) = matching_brace(rest, open) else { break };
-            let body = &rest[open + 1..close];
-            // 前面可能残留 `@charset …;` 之类以分号结束的 at 规则。
-            let head = head.rsplit(';').next().unwrap_or("").trim();
-            if let Some(at) = head.strip_prefix('@') {
-                let lower = at.to_ascii_lowercase();
-                if let Some(q) = lower.strip_prefix("media") {
-                    if media_ok(q) {
-                        order = self.add_at(body, order, base);
-                    }
-                }
-            } else if !head.is_empty() {
-                let mut decls = parse_decls(body);
-                if !base.is_empty() {
-                    for d in decls.iter_mut().filter(|d| d.value.to_ascii_lowercase().starts_with("url(")) {
-                        let inner = d.value[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']);
-                        d.value = format!("url({})", bookconv::epubzip::resolve_link(base, inner).0);
-                    }
-                }
-                if !decls.is_empty() {
-                    for one in split_top(head, ',') {
-                        let one = one.trim();
-                        if let Ok(sel) = Selector::parse(one) {
-                            self.rules.push(Rule { sel, spec: specificity(one), order, decls: decls.clone() });
-                            order += 1;
-                        }
-                    }
-                }
-            }
-            rest = &rest[close + 1..];
-        }
-        order
+    pub fn add_at(&mut self, css: &str, order: usize, base: &str) -> usize {
+        self.add_rules(Rules::parse(css, base), order)
+    }
+
+    /// 追加一份解析好的样式表（见 [`Rules::parse`]），返回下一个序号。
+    pub fn add_rules(&mut self, rules: Rc<Rules>, order: usize) -> usize {
+        let next = order + rules.0.len();
+        self.parts.push((rules, order));
+        next
     }
 
     /// 一个元素上生效的声明（按层叠排好，后面的覆盖前面的），含行内 `style`。
@@ -364,10 +438,12 @@ impl Sheet {
         // (!important, 优先级, 出现顺序, 声明)
         type Hit<'a> = (bool, (u32, u32, u32), usize, &'a Decl);
         let mut hits: Vec<Hit> = Vec::new();
-        for r in &self.rules {
-            if r.sel.matches(el) {
-                for d in &r.decls {
-                    hits.push((d.important, r.spec, r.order, d));
+        for (rules, base) in &self.parts {
+            for (i, r) in rules.0.iter().enumerate() {
+                if r.need.as_ref().is_none_or(|n| n.may_match(el)) && r.sel.matches(el) {
+                    for d in &r.decls {
+                        hits.push((d.important, r.spec, base + i, d));
+                    }
                 }
             }
         }
@@ -464,12 +540,21 @@ pub fn parse_color(v: &str) -> Option<u32> {
         };
     }
     if let Some(inner) = v.strip_prefix("rgba(").or_else(|| v.strip_prefix("rgb(")).and_then(|s| s.strip_suffix(')')) {
-        let p: Vec<f64> = inner.split(',').map(|x| x.trim().trim_end_matches('%').parse().unwrap_or(0.0)).collect();
+        // 每一项可以是数（颜色 0–255、透明度 0–1）或百分比（100% = 255 / 1）。以前把 `%` 直接去掉，
+        // `rgb(100%, 0%, 0%)` 成了 (100, 0, 0)，`rgba(…, 50%)` 成了不透明。
+        let p: Vec<(f64, bool)> = inner
+            .split(',')
+            .map(|x| {
+                let x = x.trim();
+                let pct = x.ends_with('%');
+                (x.trim_end_matches('%').trim().parse().unwrap_or(0.0), pct)
+            })
+            .collect();
         if p.len() < 3 {
             return None;
         }
-        let a = p.get(3).map(|a| (a.clamp(0.0, 1.0) * 255.0).round() as u32).unwrap_or(255);
-        let c = |x: f64| x.clamp(0.0, 255.0).round() as u32;
+        let a = p.get(3).map(|&(a, pct)| ((if pct { a / 100.0 } else { a }).clamp(0.0, 1.0) * 255.0).round() as u32).unwrap_or(255);
+        let c = |(x, pct): (f64, bool)| (if pct { x / 100.0 * 255.0 } else { x }).clamp(0.0, 255.0).round() as u32;
         return Some(a << 24 | c(p[0]) << 16 | c(p[1]) << 8 | c(p[2]));
     }
     let named = match v.as_str() {
@@ -680,6 +765,10 @@ impl Computed {
                     None => parent.font_size,
                 },
             };
+            // 负的字号不合法（CSS 里这条声明作废、照父元素）；以前照算出负字号，换算出的长度跟着变号。
+            if !(c.font_size >= 0.0 && c.font_size.is_finite()) {
+                c.font_size = parent.font_size;
+            }
         }
         if let Some(v) = get("font-family") {
             let first = split_top(v, ',').into_iter().next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string();
@@ -770,25 +859,35 @@ impl Computed {
         if let Some(v) = get("border-spacing") {
             c.border_spacing = v.split_whitespace().next().and_then(parse_len);
         }
-        for (i, side) in ["top", "right", "bottom", "left"].iter().enumerate() {
-            let style = get(&format!("border-{side}-style")).map(|v| v.trim().to_ascii_lowercase());
+        // 属性名写成常量（每个元素都要查，逐个 format! 很费）；四边顺序：上、右、下、左。
+        const BORDER: [[&str; 3]; 4] = [
+            ["border-top-style", "border-top-width", "border-top-color"],
+            ["border-right-style", "border-right-width", "border-right-color"],
+            ["border-bottom-style", "border-bottom-width", "border-bottom-color"],
+            ["border-left-style", "border-left-width", "border-left-color"],
+        ];
+        const RADIUS: [&str; 4] = ["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"];
+        const MARGIN: [&str; 4] = ["margin-top", "margin-right", "margin-bottom", "margin-left"];
+        const PADDING: [&str; 4] = ["padding-top", "padding-right", "padding-bottom", "padding-left"];
+        for (i, [style, width, color]) in BORDER.into_iter().enumerate() {
+            let style = get(style).map(|v| v.trim().to_ascii_lowercase());
             c.border[i] = match style {
                 Some(st) if st != "none" && st != "hidden" && BORDER_STYLES.contains(&st.as_str()) => Some(Border {
                     style: st,
-                    width: get(&format!("border-{side}-width")).and_then(parse_border_width).unwrap_or(BorderWidth::Pt(1.35)),
-                    color: get(&format!("border-{side}-color")).and_then(parse_color).map(|c| c | 0xFF00_0000),
+                    width: get(width).and_then(parse_border_width).unwrap_or(BorderWidth::Pt(1.35)),
+                    color: get(color).and_then(parse_color).map(|c| c | 0xFF00_0000),
                 }),
                 _ => None,
             };
         }
-        for (i, corner) in ["top-left", "top-right", "bottom-right", "bottom-left"].iter().enumerate() {
-            c.radius[i] = get(&format!("border-{corner}-radius")).and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
+        for (i, corner) in RADIUS.into_iter().enumerate() {
+            c.radius[i] = get(corner).and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
         }
         c.width = get("width").and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
         c.display = get("display").map(|v| v.trim().to_ascii_lowercase());
-        for (i, side) in ["top", "right", "bottom", "left"].iter().enumerate() {
-            c.margin[i] = get(&format!("margin-{side}")).and_then(parse_len);
-            c.padding[i] = get(&format!("padding-{side}")).and_then(parse_len);
+        for i in 0..4 {
+            c.margin[i] = get(MARGIN[i]).and_then(parse_len);
+            c.padding[i] = get(PADDING[i]).and_then(parse_len);
         }
         c.background = get("background-color").and_then(parse_color).filter(|c| c >> 24 != 0);
         c.bg_image = get("background-image").filter(|v| v.to_ascii_lowercase().starts_with("url(")).map(|v| v[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']).to_string());
@@ -814,6 +913,33 @@ mod tests {
         assert_eq!(get("margin-left"), Some("0"));
         assert_eq!(get("background-color"), Some("#fff"));
         assert!(d.iter().any(|x| x.prop == "color" && x.important));
+    }
+
+    #[test]
+    fn prefilter_is_only_a_necessary_condition() {
+        assert_eq!(Need::of("div > p.a.B#x"), Some(Need { tag: Some("p".into()), classes: vec!["a".into(), "B".into()], ids: vec!["x".into()] }));
+        assert_eq!(Need::of(".a"), Some(Need { tag: None, classes: vec!["a".into()], ids: vec![] }));
+        for s in ["p:first-child", "a[href]", "*", "p *", "svg|a", r"p.a\:b", "p > ", "p.", "p..a"] {
+            assert_eq!(Need::of(s), None, "{s}");
+        }
+        // 用预筛和不用预筛，每个元素层叠出来的结果一样
+        let css = "p{color:red} p.a{color:blue} .A{text-indent:1em} div p.b{margin-top:1em} #X{font-size:2em} h1+p{color:green} span.c.d{font-weight:bold} li > span{color:gray} p:first-child{margin-left:1em}";
+        let html = scraper::Html::parse_document(r#"<html><body><div><p class="a b" id="x">1</p><h1>t</h1><p class="A">2<span class="d c">3</span></p><ul><li><span>4</span></li></ul></div></body></html>"#);
+        let mut with = Sheet::default();
+        with.add(css, 0);
+        let mut without = Sheet::default();
+        without.add(css, 0);
+        for part in &mut without.parts {
+            for r in &mut Rc::get_mut(&mut part.0).unwrap().0 {
+                r.need = None;
+            }
+        }
+        let mut n = 0;
+        for el in html.root_element().descendants().filter_map(ElementRef::wrap) {
+            assert_eq!(with.cascade(&el), without.cascade(&el), "{}", el.html());
+            n += 1;
+        }
+        assert!(n > 8);
     }
 
     #[test]
@@ -849,6 +975,8 @@ mod tests {
         assert_eq!(parse_color("#01a0ea"), Some(0xFF01A0EA));
         assert_eq!(parse_color("#fff"), Some(0xFFFFFFFF));
         assert_eq!(parse_color("rgba(128, 0, 0, 0.7)"), Some(0xB3800000));
+        assert_eq!(parse_color("rgb(100%, 0%, 50%)"), Some(0xFFFF0080));
+        assert_eq!(parse_color("rgba(0, 0, 0, 50%)"), Some(0x80000000));
         assert_eq!(parse_len("1.5em"), Some(Len::Em(1.5)));
         assert_eq!(parse_len("30%"), Some(Len::Percent(30.0)));
         assert_eq!(parse_len("4px"), Some(Len::Pt(3.0)));
@@ -865,5 +993,8 @@ mod tests {
         let child = Computed::derive(&h, &HashMap::new(), "span");
         assert_eq!(child.font_size, 2.0);
         assert_eq!(child.margin[0], None);
+        // 负字号作废，照父元素
+        let neg = Computed::derive(&h, &HashMap::from([("font-size".to_string(), "-1em".to_string())]), "span");
+        assert_eq!(neg.font_size, 2.0);
     }
 }

@@ -1,8 +1,9 @@
 """按阅读顺序打印第 N 个版面的节点树：python3 tree.py 书.kfx N"""
 import sys
-from kfx import load
+from kfx import load, cli_args
 from ion import Annot, short
-r,ci,ents=load(sys.argv[1])
+kfx_path, want = cli_args(2, "用法：python3 tree.py 书.kfx 版面序号")[:2]
+r,ci,ents=load(kfx_path)
 E={}
 for i,t,b in ents: E.setdefault(t,{})[i]=b[0] if isinstance(b,list) and b else b
 pools={k:v['$146'] for k,v in E['$145'].items()}
@@ -16,7 +17,7 @@ def node(n,d=0,out=print):
     out(s)
     for k in kids or []: node(k,d+1,out)
 order=E['$258'][list(E['$258'])[0]]['$169'][0]['$170']
-want=int(sys.argv[2])
+want=int(want)
 sec=E['$260'][order[want]]
 print('section',order[want],short(sec,maxlen=40))
 for pt in sec['$141']:

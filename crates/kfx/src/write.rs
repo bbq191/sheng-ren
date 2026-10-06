@@ -13,10 +13,14 @@ use bookconv::epubzip::resolve_link;
 use bookconv::util::fnv64;
 use ego_tree::NodeRef;
 use scraper::{ElementRef, Html, Node};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。只进书库指纹，**不写进书里**（见 [`FILE_CREATOR_VERSION`]）。
-pub const WRITER_VERSION: &str = "6";
+/// - 7（2026-10-06）：`rgb()`/`rgba()` 的百分比按百分比算；负字号作废；算不出有限值的长度（字号 0 时除以 0）写 0，不写 NaN。
+///   没有文字的元素（`<span id>`、`<div id>`）、图片自己的 id 当锚点（挂到下一个块开头，文末的挂到最后一个块末尾），
+///   以前丢掉、链接和目录退回文件开头。23 本测试书只有《福尔摩斯探案全集》变了（1101 个锚点、目录、115 个版面多配上注释弹窗），
+///   其余逐字节不变；未真机验证。
+pub const WRITER_VERSION: &str = "7";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -142,6 +146,10 @@ struct Doc<'a> {
     path: &'a str,
     sheet: Sheet,
     lang: Option<String>,
+    /// 还没落到内容上的锚点：没有文字的元素（`<span id="x"></span>`、`<div id="x"></div>`）的 id。挂到文档顺序里
+    /// 下一个生成的块的开头（[`Doc::take_pending`]）。以前直接丢掉，指向它们的链接、目录项退回到文件开头
+    /// （《福尔摩斯探案全集》目录页「第一册」指向页末插图前的空锚点，点了停在目录页开头；全书 1102 处）。
+    pending: std::cell::RefCell<Vec<String>>,
 }
 
 /// 收集行内内容：文字（空白按 CSS 折叠）、`<br>`、行内元素的样式区间、遇到图片就切开。
@@ -189,7 +197,30 @@ impl Inline {
     }
 }
 
+/// 文档末尾没落到内容上的锚点（`…</p><span id="x"></span></body>`）挂到最后一个块的末尾。
+fn attach_trailing(blocks: &mut [Block], ids: Vec<String>) {
+    let Some(last) = blocks.last_mut() else { return };
+    match &mut last.kind {
+        Kind::Container(c) if !c.is_empty() => attach_trailing(c, ids),
+        Kind::Text { text, .. } => {
+            let end = text.chars().count();
+            last.ids.extend(ids.into_iter().map(|i| (i, end)));
+        }
+        _ => last.ids.extend(ids.into_iter().map(|i| (i, 0))),
+    }
+}
+
+/// 把 `lead` 里的锚点放到块开头（字符偏移 0）。
+fn prepend_ids(ids: &mut Vec<(String, usize)>, lead: Vec<String>) {
+    ids.splice(0..0, lead.into_iter().map(|i| (i, 0)));
+}
+
 impl Doc<'_> {
+    /// 取走还没落到内容上的锚点（见 [`Doc::pending`]）。
+    fn take_pending(&self) -> Vec<String> {
+        self.pending.take()
+    }
+
     fn comp(&self, el: &ElementRef, parent: &Computed) -> Computed {
         let decls = self.sheet.cascade(el);
         let mut c = Computed::derive(parent, &decls, el.value().name());
@@ -199,9 +230,8 @@ impl Doc<'_> {
         c
     }
 
-    /// 把一个块级元素展开成块序列。
-    fn block(&self, el: ElementRef, parent: &Computed, out: &mut Vec<Block>) {
-        let comp = self.comp(&el, parent);
+    /// 把一个块级元素（计算值 `comp` 由调用方算好，层叠不重复做）展开成块序列。
+    fn block(&self, el: ElementRef, comp: Computed, out: &mut Vec<Block>) {
         if comp.display.as_deref() == Some("none") {
             return;
         }
@@ -209,6 +239,8 @@ impl Doc<'_> {
         if matches!(name, "head" | "script" | "style" | "title") {
             return;
         }
+        // 本元素之前攒下的锚点落在本元素的开头。
+        let pre = self.take_pending();
         match name {
             "ul" | "ol" => {
                 // 列表符号看列表项（`li` 上写的优先，《雪国》把 `cjk-ideographic` 写在 `li` 上）；列表项写成
@@ -222,10 +254,16 @@ impl Doc<'_> {
                 }
                 let marker = first.as_ref().is_none_or(|li| li.display.as_deref().is_none_or(|d| d == "list-item"));
                 if marker && comp.list_style.as_deref() != Some("none") {
-                    return out.push(self.list(el, comp));
+                    let mut b = self.list(el, comp);
+                    prepend_ids(&mut b.ids, pre);
+                    return out.push(b);
                 }
             }
-            "table" => return out.push(self.table(el, comp)),
+            "table" => {
+                let mut b = self.table(el, comp);
+                prepend_ids(&mut b.ids, pre);
+                return out.push(b);
+            }
             "hr" => {
                 let mut b = self.boxed(Kind::Container(Vec::new()), comp, el.value().attr("id"));
                 b.ty = Some(NODE_HR);
@@ -236,6 +274,7 @@ impl Doc<'_> {
                 if b.comp.margin[2].is_none() {
                     b.margin_bottom = 0.5 * b.comp.font_size;
                 }
+                prepend_ids(&mut b.ids, pre);
                 return out.push(b);
             }
             _ => {}
@@ -244,7 +283,15 @@ impl Doc<'_> {
         let heading = bookconv::html::heading_level_of(name);
         let mut children = Vec::new();
         self.children(el, &comp, &mut children);
+        let id = el.value().attr("id").map(str::to_string);
+        // 开头的锚点：之前攒下的 + 本元素自己的 id。
+        let mut lead = pre;
+        lead.extend(id);
         if children.is_empty() {
+            // 没有内容的元素：锚点（连同里面攒下的）留给后面的内容。
+            let inner = self.take_pending();
+            lead.extend(inner);
+            *self.pending.borrow_mut() = lead;
             return;
         }
         let margin_top = to_vert(comp.margin[0], fs);
@@ -256,7 +303,6 @@ impl Doc<'_> {
         if matches!(name, "ul" | "ol") && comp.margin[3].is_none() && comp.padding[3].is_none() {
             ml.em += 1.5;
         }
-        let id = el.value().attr("id").map(str::to_string);
         // 自己只包着一个文字块（普通段落）：本元素就是这个块。
         // 有背景或内边距的块写成容器套文字（样本里带背景色的 h1 就是这样；背景、内边距、负外边距直接放在文字段落上，
         // Kindle 上长标题会溢出屏幕，2026-10-05 真机）。
@@ -271,9 +317,7 @@ impl Doc<'_> {
             b.margin_left = ml;
             b.margin_right = mr;
             b.padding = padding;
-            if let Some(id) = id {
-                b.ids.insert(0, (id, 0));
-            }
+            prepend_ids(&mut b.ids, lead);
             out.push(b);
             return;
         }
@@ -287,7 +331,7 @@ impl Doc<'_> {
                 margin_left: ml,
                 margin_right: mr,
                 padding,
-                ids: id.map(|i| vec![(i, 0)]).unwrap_or_default(),
+                ids: lead.into_iter().map(|i| (i, 0)).collect(),
                 note: false,
                 ty: None,
                 attrs: Vec::new(),
@@ -297,12 +341,11 @@ impl Doc<'_> {
         }
         // 没有背景的包裹层摊平：竖直外边距、内边距并进首尾子块，水平外边距加到每个子块上。
         let n = children.len();
+        let mut lead = Some(lead);
         for (i, mut c) in children.into_iter().enumerate() {
             if i == 0 {
                 c.margin_top = collapse(margin_top + padding[0], c.margin_top);
-                if let Some(id) = &id {
-                    c.ids.insert(0, (id.clone(), 0));
-                }
+                prepend_ids(&mut c.ids, lead.take().unwrap_or_default());
                 if c.heading.is_none() {
                     c.heading = heading;
                 }
@@ -492,6 +535,8 @@ impl Doc<'_> {
     fn flush(&self, inl: &mut Inline, comp: &Computed, out: &mut Vec<Block>) {
         let taken = inl.take();
         if taken.is_empty() {
+            // 没有文字：里面的锚点留给后面的内容。
+            self.pending.borrow_mut().extend(taken.ids.into_iter().map(|(i, _)| i));
             return;
         }
         let mut text = taken.text;
@@ -508,7 +553,8 @@ impl Doc<'_> {
                 (r.len > 0).then_some(r)
             })
             .collect();
-        let ids = taken.ids.into_iter().map(|(i, o)| (i, o.min(chars))).collect();
+        let mut ids = taken.ids.into_iter().map(|(i, o)| (i, o.min(chars))).collect();
+        prepend_ids(&mut ids, self.take_pending());
         out.push(Block::anonymous(Kind::Text { text, runs }, comp.inherited(), ids));
     }
 
@@ -525,7 +571,11 @@ impl Doc<'_> {
                 if let Some(src) = image_src(&el) {
                     self.flush(inl, block_comp, out);
                     let comp = self.comp(&el, parent);
-                    out.push(Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0 }, comp, Vec::new()));
+                    // 图片自己的 id（`<img id="filepos152">`）也是锚点
+                    let mut lead = self.take_pending();
+                    lead.extend(el.value().attr("id").map(str::to_string));
+                    let ids = lead.into_iter().map(|i| (i, 0)).collect();
+                    out.push(Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0 }, comp, ids));
                     return;
                 }
                 let comp = self.comp(&el, parent);
@@ -534,7 +584,7 @@ impl Doc<'_> {
                 }
                 if is_block_el(&el, &comp) {
                     self.flush(inl, block_comp, out);
-                    self.block(el, parent, out);
+                    self.block(el, comp, out);
                     return;
                 }
                 if let Some(id) = el.value().attr("id") {
@@ -744,7 +794,8 @@ fn collapse_siblings(blocks: &mut [Block]) {
 
 fn num(v: f64, unit: u32) -> Value {
     // 保留 6 位有效数字左右（和样本一样的精度，避免 0.8333333333 这种长尾）。
-    let r = (v * 1e6).round() / 1e6;
+    // 字号 0 的元素换算长度时会除以 0：算不出有限值的写 0，不往书里写 NaN、无穷大。
+    let r = if v.is_finite() { (v * 1e6).round() / 1e6 } else { 0.0 };
     Value::Struct(vec![(VALUE, Value::F64(if r == 0.0 { 0.0 } else { r })), (UNIT, Value::Symbol(unit))])
 }
 
@@ -762,7 +813,8 @@ struct Builder {
     locals: Vec<String>,
     local_index: HashMap<String, u32>,
     next_eid: i64,
-    styles: BTreeMap<String, String>,
+    /// 样式去重：属性编码 → 样式名的符号。
+    styles: HashMap<Vec<u8>, u32>,
     style_entities: Vec<(String, Vec<(u32, Value)>)>,
     resources: Vec<Res>,
     res_by_path: HashMap<String, usize>,
@@ -817,35 +869,41 @@ impl Builder {
                 self.used_fonts.insert(f.clone());
             }
         }
+        // 键：每个属性的编号 + 值的 Ion 编码（Ion 值自带长度，拼起来不会混淆）。
         let mut key = Vec::new();
-        ion::encode_value(&mut key, &Value::Struct(props.clone()));
-        let key: String = key.iter().map(|b| format!("{b:02x}")).collect();
-        if let Some(name) = self.styles.get(&key).cloned() {
-            return self.sym(&name);
+        for (k, v) in &props {
+            key.extend(k.to_le_bytes());
+            ion::encode_value(&mut key, v);
+        }
+        if let Some(&s) = self.styles.get(&key) {
+            return s;
         }
         let name = format!("style{}", self.style_entities.len());
-        self.styles.insert(key, name.clone());
-        self.style_entities.push((name.clone(), props));
-        self.sym(&name)
+        let s = self.sym(&name);
+        self.styles.insert(key, s);
+        self.style_entities.push((name, props));
+        s
     }
 
     fn resource(&mut self, path: &str) -> Option<usize> {
         if let Some(&i) = self.res_by_path.get(path) {
             return Some(i);
         }
-        let Some((bytes, mime)) = self.images.get(path).cloned() else {
-            self.warnings.push(format!("图片找不到或格式不支持：{path}"));
-            return None;
-        };
-        let (format, mime) = match mime {
-            "image/jpeg" => (FORMAT_JPG, "image/jpg"),
-            "image/png" => (FORMAT_PNG, "image/png"),
-            "image/gif" => (FORMAT_GIF, "image/gif"),
-            other => {
+        let (format, mime) = match self.images.get(path).map(|(_, m)| *m) {
+            Some("image/jpeg") => (FORMAT_JPG, "image/jpg"),
+            Some("image/png") => (FORMAT_PNG, "image/png"),
+            Some("image/gif") => (FORMAT_GIF, "image/gif"),
+            Some(other) => {
                 self.warnings.push(format!("图片格式 {other} 不支持：{path}"));
                 return None;
             }
+            None => {
+                self.warnings.push(format!("图片找不到或格式不支持：{path}"));
+                return None;
+            }
         };
+        // 字节搬进资源，不复制（大漫画几百 MB）；同一路径以后走上面的 `res_by_path`，不会再来取。
+        let (bytes, _) = self.images.remove(path)?;
         let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
             .with_guessed_format()
             .ok()
@@ -1218,16 +1276,18 @@ fn pid_map(order: &[(i64, usize)]) -> Vec<Value> {
 /// EPUB → KFX。返回 KFX 字节和警告。
 pub fn epub_to_kfx(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), String> {
     let mut warnings = Vec::new();
-    let book = epubbook::load(epub, &mut warnings)?;
+    let mut book = epubbook::load(epub, &mut warnings)?;
+    // 图片字节从书里搬出来（写出器只在这里用到它们），不复制。
+    let images = std::mem::take(&mut book.images).into_iter().map(|i| (i.path, (i.bytes, i.mime))).collect();
     let mut b = Builder {
         locals: Vec::new(),
         local_index: HashMap::new(),
         next_eid: 1,
-        styles: BTreeMap::new(),
+        styles: HashMap::new(),
         style_entities: Vec::new(),
         resources: Vec::new(),
         res_by_path: HashMap::new(),
-        images: book.images.iter().map(|i| (i.path.clone(), (i.bytes.clone(), i.mime))).collect(),
+        images,
         warnings,
         anchors: Vec::new(),
         anchor_index: HashMap::new(),
@@ -1275,6 +1335,8 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
 
     // 先把所有文档解析成块（注释配对要看全书），再逐个生成版面。
     let mut parsed: Vec<ParsedDoc> = Vec::new();
+    // 外部样式表按路径只解析一次（大合集几百个文档共用一份样式表）。
+    let mut sheets: HashMap<String, std::rc::Rc<crate::css::Rules>> = HashMap::new();
     for (si, doc) in book.docs.iter().enumerate() {
         let html = Html::parse_document(&doc.html);
         let mut sheet = Sheet::default();
@@ -1284,21 +1346,24 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
                 order = sheet.add_at(&el.text().collect::<String>(), order, &doc.path);
             } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
                 if let Some(h) = el.value().attr("href") {
-                    if let Some(c) = css.get(resolve_link(&doc.path, h).0.as_str()) {
-                        order = sheet.add_at(c, order, &resolve_link(&doc.path, h).0);
+                    let path = resolve_link(&doc.path, h).0;
+                    if let Some(c) = css.get(path.as_str()) {
+                        let rules = sheets.entry(path).or_insert_with_key(|p| crate::css::Rules::parse(c, p)).clone();
+                        order = sheet.add_rules(rules, order);
                     }
                 }
             }
         }
         let root = html.root_element();
         let lang = root.value().attr("xml:lang").or_else(|| root.value().attr("lang")).map(str::to_string).or_else(|| book_lang.clone());
-        let d = Doc { path: &doc.path, sheet, lang: lang.clone() };
+        let d = Doc { path: &doc.path, sheet, lang: lang.clone(), pending: Default::default() };
         let mut blocks = Vec::new();
         let root_comp = d.comp(&root, &Computed::root());
         if let Some(body) = root.children().filter_map(ElementRef::wrap).find(|e| e.value().name() == "body") {
             // body 也当一层包裹：它的水平外边距加到每个块上（样本里 body 的 5pt 边距出现在每个段落上）。
-            d.block(body, &root_comp, &mut blocks);
+            d.block(body, d.comp(&body, &root_comp), &mut blocks);
         }
+        attach_trailing(&mut blocks, d.take_pending());
         collapse_siblings(&mut blocks);
         parsed.push((si, &doc.path, d.lang.clone(), blocks));
     }
@@ -2047,6 +2112,50 @@ mod tests {
             compress_ids(ids),
             Value::List(vec![Value::Int(31), Value::List(vec![Value::Int(267), Value::Int(5)]), Value::Int(3088)])
         );
+    }
+
+    /// 没有文字的元素的 id 也是锚点：挂到文档顺序里下一个块的开头，文末的挂到最后一个块的末尾；图片自己的 id 也算。
+    /// 以前丢掉，链接退回文件开头（《福尔摩斯探案全集》目录页「第一册」点了停在目录页开头）。
+    #[test]
+    fn empty_element_ids_anchor_to_next_block() {
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(4, 4, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="i" href="i.png" media-type="image/png"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("i.png", &png).unwrap();
+        w.put("c1.xhtml", r##"<html xmlns="http://www.w3.org/1999/xhtml"><body><p><a href="#a">1</a><a href="#b">2</a><a href="#c">3</a><a href="#d">4</a></p><p>甲</p><p><span id="a"></span></p><p>乙</p><div id="b"></div><p><img id="c" src="i.png"/></p><p>丙丁</p><span id="d"></span></body></html>"##.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1) }).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        // 节点 id：按文字找文字节点，图片节点按类型找
+        let story = c.entities.iter().find(|e| e.ty == T_STORYLINE).unwrap().value().unwrap().field(CHILDREN).unwrap().as_list().unwrap().to_vec();
+        let pool = c.entities.iter().find(|e| e.ty == T_TEXT_POOL).unwrap().value().unwrap().field(CHILDREN).unwrap().as_list().unwrap().to_vec();
+        let eid_of_text = |t: &str| {
+            let idx = pool.iter().position(|v| v.as_str() == Some(t)).unwrap() as i64;
+            story.iter().find(|n| n.field(TEXT_REF).and_then(|r| r.field(TEXT_INDEX)).and_then(Value::as_int) == Some(idx)).unwrap().field(EID).unwrap().as_int().unwrap()
+        };
+        let img = story.iter().find(|n| n.field(NODE_TYPE) == Some(&Value::Symbol(NODE_IMAGE))).unwrap().field(EID).unwrap().as_int().unwrap();
+        // 链接按出现顺序配锚点：anchor0..3 → #a #b #c #d
+        let syms = c.symbols();
+        let target = |name: &str| {
+            let sid = syms.sid(name).unwrap();
+            let a = c.entities.iter().find(|e| e.ty == T_ANCHOR && e.id == sid).unwrap().value().unwrap().field(ANCHOR_POSITION).unwrap().clone();
+            (a.field(EID).unwrap().as_int().unwrap(), a.field(OFFSET).unwrap().as_int().unwrap())
+        };
+        assert_eq!(target("anchor0"), (eid_of_text("乙"), 0), "空段落里的 span → 下一段开头");
+        assert_eq!(target("anchor1"), (img, 0), "空 div → 下一块（图片）");
+        assert_eq!(target("anchor2"), (img, 0), "图片自己的 id");
+        assert_eq!(target("anchor3"), (eid_of_text("丙丁"), 2), "文末的 → 最后一块末尾");
+    }
+
+    #[test]
+    fn non_finite_lengths_written_as_zero() {
+        for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(num(v, U_EM), num(0.0, U_EM));
+        }
+        assert_eq!(num(0.8333333333, U_LH), Value::Struct(vec![(VALUE, Value::F64(0.833333)), (UNIT, Value::Symbol(U_LH))]));
     }
 
     #[test]

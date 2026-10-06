@@ -1,8 +1,8 @@
 # KF8/AZW3 结构查看（黑盒分析用）：python3 dump.py 文件.azw3
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import struct
-from kf8lib import F
-f = F(sys.argv[1]); d = f.d; n = f.n; r0 = f.r0
+from kf8lib import F, cli_args
+f = F(cli_args(1, "用法：python3 dump.py 文件.azw3")[0]); d = f.d; n = f.n; r0 = f.r0
 print('PDB name', d[:32].split(b'\0')[0], 'type/creator', d[60:68], 'records', n, 'seed', struct.unpack('>I', d[68:72])[0])
 print('record attrs/ids first 4:', [d[78+8*i+4:78+8*i+8].hex() for i in range(min(4, n))])
 print('palmdoc', struct.unpack('>HHIHHHH', r0[:16]))
