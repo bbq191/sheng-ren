@@ -115,11 +115,31 @@ pub fn parse_opf(entries: &[Entry]) -> Option<Opf> {
 /// 显示空列表），换一本 `dtb:uid` 匹配的书（《雪人》）目录入口就在。见 `fix_ncx_uid`。
 pub(super) fn opf_unique_identifier(entries: &[Entry]) -> Option<String> {
     let i = find_opf(entries)?;
-    let text = String::from_utf8_lossy(&entries[i].data);
-    let uid_attr = html::tags(&text).find(|t| t.is_start() && is_local(t.name, "package")).and_then(|t| tag_attr(&text[t.start..t.end], "unique-identifier"))?;
-    let t = html::tags(&text).find(|t| t.kind == html::TagKind::Open && t.is("dc:identifier") && tag_attr(&text[t.start..t.end], "id") == Some(uid_attr))?;
-    let close = html::find_close(&text, t.end, "dc:identifier")?;
-    Some(crate::util::xml_unescape(text[t.end..close.start].trim()).into_owned())
+    unique_identifier(&String::from_utf8_lossy(&entries[i].data))
+}
+
+/// `<package unique-identifier="X">`（认 `<opf:package>`）的 X，去掉首尾空白；没写或空值 → `None`。
+pub fn package_unique_identifier(opf: &str) -> Option<&str> {
+    let pkg = html::tags(opf).find(|t| t.is_start() && is_local(t.name, "package"))?;
+    html::attr_value(&opf[pkg.start..pkg.end], "unique-identifier").map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// 标识符元素的文本：字符引用还原、去掉首尾空白；空的算没有（`None`）。
+pub(crate) fn identifier_text(raw: &str) -> Option<String> {
+    let v = crate::util::xml_unescape(raw.trim());
+    let v = v.trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+/// OPF 唯一标识符：[`package_unique_identifier`] 指向的那个 `<…:identifier id="X">`（任意命名空间前缀，`id` 去空白比）的文本
+/// （见 [`identifier_text`]）。找不到或是空值 → `None`，退路由调用方定（NCX 的 `dtb:uid` 不改或写清洗标记，
+/// `epubbook` 的稳定 ID 用 OPF 字节的哈希）。**全书读唯一标识符只用这一个**（2026-10-06 收拢：以前 `epubbook` 另写一份认任意前缀、
+/// 这里只认 `dc:identifier` 且空值也返回，两边对同一本书可能不一致）。
+pub fn unique_identifier(opf: &str) -> Option<String> {
+    let want = package_unique_identifier(opf)?;
+    let t = html::tags(opf).find(|t| t.kind == html::TagKind::Open && is_local(t.name, "identifier") && html::attr_value(&opf[t.start..t.end], "id").map(str::trim) == Some(want))?;
+    let close = html::find_close(opf, t.end, t.name)?;
+    identifier_text(&opf[t.end..close.start])
 }
 
 /// OPF 里的 Dublin Core 元数据（纯文本：标签去掉、字符引用还原）。多值的只有作者；其余取第一个非空值。
@@ -312,6 +332,18 @@ pub fn first_spine_image(opf: &str, opf_dir: &str, max_pages: usize, in_manifest
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unique_identifier_one_rule() {
+        let opf = r#"<opf:package unique-identifier=" bid "><opf:metadata><dc:identifier id="other">x</dc:identifier><dc11:identifier id='bid'> urn:uuid:1&amp;2 </dc11:identifier></opf:metadata></opf:package>"#;
+        assert_eq!(package_unique_identifier(opf), Some("bid"));
+        assert_eq!(unique_identifier(opf).as_deref(), Some("urn:uuid:1&2"), "任意前缀、id 去空白比、值还原字符引用并去空白");
+        assert_eq!(unique_identifier(r#"<package unique-identifier="u"><dc:identifier id="u">  </dc:identifier></package>"#), None, "空值算没有");
+        assert_eq!(unique_identifier(r#"<package unique-identifier="u"><dc:identifier id="u"/></package>"#), None);
+        assert_eq!(unique_identifier(r#"<package><dc:identifier id="u">x</dc:identifier></package>"#), None, "package 没指向");
+        assert_eq!(unique_identifier(r#"<package unique-identifier=""><dc:identifier id="">x</dc:identifier></package>"#), None);
+        assert_eq!(unique_identifier(r#"<package unique-identifier="u"><!-- <dc:identifier id="u">旧</dc:identifier> --><dc:identifier id="u">新</dc:identifier></package>"#).as_deref(), Some("新"), "注释里的不算");
+    }
 
     #[test]
     fn insert_follows_container_prefix() {

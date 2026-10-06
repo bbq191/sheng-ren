@@ -3,8 +3,8 @@
 use crate::epubzip::{dir_of, percent_decode, posix_norm, read_entries_from, resolve};
 use crate::convert::common::{image_ext_mime, is_webp};
 use crate::html;
-use crate::util::{fnv64, xml_unescape};
-use crate::wash::opf::is_local;
+use crate::util::fnv64;
+use crate::wash::opf::{is_local, unique_identifier};
 use crate::wash::normalize::nav_toc_items;
 use crate::wash::{manifest_items, opf_dc, parse_opf};
 use std::collections::HashMap;
@@ -74,16 +74,6 @@ fn fixed_layout_metas(opf: &str) -> Vec<(u32, String)> {
 /// spine 的翻页方向是不是从右往左（口径见 [`crate::direction::spine_direction`]，全书只这一处实现）。
 fn spine_rtl(opf: &str) -> bool {
     crate::direction::spine_direction(opf) == Some(crate::direction::PageDirection::Rtl)
-}
-
-/// OPF `<package unique-identifier="X">` 指向的 `<dc:identifier id="X">` 的文本（字符引用已还原、去掉首尾空白）。
-fn unique_identifier(opf: &str) -> Option<String> {
-    let pkg = html::tags(opf).find(|t| t.is_start() && is_local(t.name, "package"))?;
-    let want = html::attr_value(&opf[pkg.start..pkg.end], "unique-identifier")?;
-    let t = html::tags(opf).find(|t| t.kind == html::TagKind::Open && is_local(t.name, "identifier") && html::attr_value(&opf[t.start..t.end], "id") == Some(want))?;
-    let close = html::find_close(opf, t.end, t.name)?;
-    let v = xml_unescape(opf[t.end..close.start].trim()).into_owned();
-    (!v.is_empty()).then_some(v)
 }
 
 /// 第一个 `<meta property="dcterms:modified">` 的值换算成 Unix 秒（只认 `CCYY-MM-DDThh:mm:ssZ`，1970–2105 年）。

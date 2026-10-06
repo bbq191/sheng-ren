@@ -508,16 +508,17 @@ pub(crate) fn upgrade_opf(opf: &str, lang_tag: &str) -> Option<String> {
         }
     }
 
-    // 2. unique-identifier 指向一个非空的 <dc:identifier id>。
-    let idents: Vec<usize> = (0..els.len()).filter(|&i| is_dc(&els[i], "identifier") && !dropped.contains(&i)).collect();
-    let text_of = |i: usize| opf[els[i].open_end..els[i].close_start].trim();
-    let uid_attr = html::attr_value(pkg_tag, "unique-identifier");
-    let uid_ok = uid_attr.is_some_and(|u| idents.iter().any(|&i| html::attr_value(&opens[i], "id") == Some(u) && !text_of(i).is_empty()));
+    // 2. unique-identifier 指向一个非空的标识符元素。口径同 `opf::unique_identifier`（NCX 的 dtb:uid 按它对齐）：
+    //    任意命名空间前缀的 `identifier`，id 去空白比，文本字符引用还原、去空白后非空。
+    let idents: Vec<usize> = (0..els.len()).filter(|&i| opf::is_local(els[i].name, "identifier") && !dropped.contains(&i)).collect();
+    let has_text = |i: usize| opf::identifier_text(&opf[els[i].open_end..els[i].close_start]).is_some();
+    let uid_attr = opf::package_unique_identifier(opf);
+    let uid_ok = uid_attr.is_some_and(|u| idents.iter().any(|&i| html::attr_value(&opens[i], "id").map(str::trim) == Some(u) && has_text(i)));
     let mut new_uid: Option<String> = None;
     if !uid_ok {
-        match idents.iter().copied().find(|&i| !text_of(i).is_empty()) {
+        match idents.iter().copied().find(|&i| has_text(i)) {
             Some(i) => {
-                let id = match html::attr_value(&opens[i], "id").filter(|v| !v.is_empty()) {
+                let id = match html::attr_value(&opens[i], "id").map(str::trim).filter(|v| !v.is_empty()) {
                     Some(id) => id.to_string(),
                     None => {
                         let id = new_id("eink-uid");

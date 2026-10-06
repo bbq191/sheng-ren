@@ -325,6 +325,26 @@
     }
 
     #[test]
+    fn empty_or_prefixed_unique_identifier_still_matches_ncx() {
+        // 唯一标识符是空值：规范整理改指向别的非空标识符，NCX 的 dtb:uid 跟着它（以前空值也当标识符，dtb:uid 会被改成空）。
+        let opf = r#"<package version="2.0" unique-identifier="bookid"><metadata><dc:title>书</dc:title><dc:identifier id="bookid"> </dc:identifier><dc:identifier id="isbn">978-7</dc:identifier></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
+        // 带别的前缀的标识符（`dc11:`）：认得出来，不另补一个
+        let opf2 = r#"<package version="2.0" unique-identifier="bookid" xmlns:dc11="http://purl.org/dc/elements/1.1/"><metadata><dc:title>书</dc:title><dc11:identifier id="bookid">urn:x</dc11:identifier></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
+        for (opf, want) in [(opf, "978-7"), (opf2, "urn:x")] {
+            let mut v = vec![
+                e("content.opf", opf),
+                e("toc.ncx", r#"<ncx><head><meta name="dtb:uid" content="stale"/></head><navMap><navPoint><navLabel><text>章一</text></navLabel><content src="c1.xhtml"/></navPoint></navMap></ncx>"#),
+                e("c1.xhtml", "<html><body><p>正文</p></body></html>"),
+            ];
+            wash_entries(&mut v, &WashOpts::default()).unwrap();
+            let new_opf = s(&v, "content.opf");
+            assert_eq!(opf::unique_identifier(&new_opf).as_deref(), Some(want), "{new_opf}");
+            assert!(!new_opf.contains("urn:eink:"), "有非空标识符就不另补: {new_opf}");
+            assert!(s(&v, "toc.ncx").contains(&format!(r#"content="{want}""#)), "{}", s(&v, "toc.ncx"));
+        }
+    }
+
+    #[test]
     fn ncx_manifest_id_renamed_to_ncx_and_spine_toc_synced() {
         // 真机回归（2026-09-19，《疯探》，反编译 xochitl 二进制坐实）：dtb:uid、DOCTYPE 都修一致
         // 后原生目录入口依然不出现——根因是 xochitl 定位目录文件硬编码死查 manifest 里 id="ncx"，
