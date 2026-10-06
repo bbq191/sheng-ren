@@ -334,7 +334,6 @@ pub fn percent_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::io::Write;
 
     #[test]
@@ -430,12 +429,13 @@ mod tests {
         let bytes = zip_of(&[("dir/", b""), ("a.xhtml", b"<p>hi</p>"), ("images/p1.JPG", &[7u8; 300]), ("images/p2.gif", &[9u8; 10]), ("a.svg", b"<svg/>")]);
         let mut z = ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
         let sk = read_skeleton(&mut z).unwrap();
-        let by: HashMap<&str, &Entry> = sk.entries.iter().map(|e| (e.name.as_str(), e)).collect();
+        let idx = crate::wash::name_index(&sk.entries);
+        let by = |n: &str| &sk.entries[idx[n]];
         assert_eq!(sk.entries.len(), 4, "目录项剔除");
-        assert_eq!(by["a.xhtml"].data, b"<p>hi</p>");
-        assert!(by["images/p1.JPG"].data.is_empty(), "位图留空占位");
-        assert!(by["images/p2.gif"].data.is_empty(), "GIF/WebP 也留空（漫画页会处理它们，阶段二按需读）");
-        assert_eq!(by["a.svg"].data, b"<svg/>", "SVG 是文字，照常整份读");
+        assert_eq!(by("a.xhtml").data, b"<p>hi</p>");
+        assert!(by("images/p1.JPG").data.is_empty(), "位图留空占位");
+        assert!(by("images/p2.gif").data.is_empty(), "GIF/WebP 也留空（漫画页会处理它们，阶段二按需读）");
+        assert_eq!(by("a.svg").data, b"<svg/>", "SVG 是文字，照常整份读");
     }
 
     /// 条目在 zip 目录里谎报解压大小（损坏/恶意文件）：不能照单预分配几 GB（设备上分配失败＝进程 abort）。

@@ -5,7 +5,8 @@
 //! 退出码: 0 成功；1 用法错；2 读取/转换/写出失败（先写临时目录再改名，失败不留半成品，已有的同名词典不动）。
 
 use bookconv::util::cli::{self, die};
-use std::path::{Path, PathBuf};
+use bookconv::util::tmp_beside;
+use std::path::Path;
 
 fn main() {
     cli::restore_sigpipe();
@@ -44,11 +45,12 @@ fn main() {
 }
 
 /// 先写到同级临时目录，写完落盘再换上去；原来有同名目录的，换上之后才删旧的。
+/// 换的是整个目录（`rename` 不能盖掉非空目录），所以不走 `util::produce_then_replace`，只共用临时名的规则。
 fn write_dir(target: &Path, name: &str, f: &mobidict::stardict::Files) -> Result<(), String> {
     let parent = target.parent().ok_or("输出目录不对")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("建 {}: {e}", parent.display()))?;
-    let tmp = sibling(target, "writing");
-    let old = sibling(target, "old");
+    let tmp = tmp_beside(target, "writing");
+    let old = tmp_beside(target, "old");
     let _ = std::fs::remove_dir_all(&tmp);
     let result = (|| {
         std::fs::create_dir(&tmp).map_err(|e| format!("建 {}: {e}", tmp.display()))?;
@@ -73,10 +75,4 @@ fn write_dir(target: &Path, name: &str, f: &mobidict::stardict::Files) -> Result
     }
     let _ = std::fs::remove_dir_all(&old);
     Ok(())
-}
-
-fn sibling(target: &Path, tag: &str) -> PathBuf {
-    let mut n = target.file_name().unwrap_or_default().to_os_string();
-    n.push(format!(".{tag}.tmp"));
-    target.with_file_name(n)
 }

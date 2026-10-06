@@ -35,8 +35,13 @@ fn is_macos_junk(name: &str) -> bool {
 /// 优化器的 `wash::ensure_cover_declared` 会把第一页的图声明成封面（`<meta name="cover">` + `properties="cover-image"`），
 /// 书库判断"书自己有没有封面"（`epubzip::cover_image_of`）也按第一页的图算。
 pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
+    cbz_to_epub_from(std::io::Cursor::new(data), title)
+}
+
+/// 同 [`cbz_to_epub`]，从可定位的读取器（如打开的文件）读：不用先把整个 CBZ 读进内存，峰值少一份压缩包大小。
+pub fn cbz_to_epub_from<R: Read + std::io::Seek>(reader: R, title: &str) -> Result<Vec<u8>, String> {
     use crate::epub::{Book, BookMeta, Chapter, Resource};
-    let mut zip = ZipArchive::new(std::io::Cursor::new(data)).map_err(|e| format!("CBZ 打开: {e}"))?;
+    let mut zip = ZipArchive::new(reader).map_err(|e| format!("CBZ 打开: {e}"))?;
     let names = page_names(&zip);
     let mut resources: Vec<Resource> = Vec::with_capacity(names.len());
     let mut chapters = Vec::with_capacity(names.len());

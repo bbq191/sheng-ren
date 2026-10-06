@@ -1,6 +1,6 @@
 //! 读 EPUB：元数据、spine 里的 XHTML、CSS、图片、封面、目录（AZW3、KFX 写出器共用）。
 
-use crate::epubzip::{dir_of, percent_decode, posix_norm, read_entries, resolve};
+use crate::epubzip::{dir_of, percent_decode, posix_norm, read_entries_from, resolve};
 use crate::convert::common::{image_ext_mime, is_webp};
 use crate::html;
 use crate::util::{fnv64, xml_unescape};
@@ -157,7 +157,14 @@ fn is_sfnt(b: &[u8]) -> bool {
 
 /// 读 EPUB。`warnings` 收集放不进 AZW3 的内容（不认识的图片格式）。
 pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, String> {
-    let mut entries = read_entries(epub)?;
+    load_from(std::io::Cursor::new(epub), warnings)
+}
+
+/// 同 [`load`]，从可定位的读取器（如打开的文件）读：不用先把整本 EPUB 读进内存，峰值少一份压缩包大小。
+pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec<String>) -> Result<Loaded, String> {
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
+    let mut entries = read_entries_from(&mut archive, |_| true)?;
+    drop(archive);
     let opf = parse_opf(&entries).ok_or("找不到 OPF")?;
     let opf_text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
     let index: HashMap<String, usize> = entries.iter().enumerate().map(|(i, e)| (e.name.clone(), i)).collect();

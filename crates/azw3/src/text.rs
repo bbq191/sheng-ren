@@ -52,8 +52,7 @@ fn url_re() -> &'static Regex {
 
 /// CSS 里的 `url(图片)` 改成 `kindle:embed`；去掉 `@font-face`（不嵌字体，字体交给阅读器设置）。
 fn rewrite_css(css: &str, css_path: &str, res: &HashMap<String, (u32, &'static str)>) -> String {
-    static FACE: OnceLock<Regex> = OnceLock::new();
-    let css = FACE.get_or_init(|| Regex::new(r#"(?is)@font-face\s*\{[^}]*\}"#).unwrap()).replace_all(css, "");
+    let css = bookconv::wash::font_face_re().replace_all(css, "");
     url_re()
         .replace_all(&css, |c: &regex::Captures| {
             let p = resolve_rel(dir_of(css_path), &c[1]);

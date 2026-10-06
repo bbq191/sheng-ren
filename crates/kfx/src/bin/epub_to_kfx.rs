@@ -24,8 +24,7 @@ fn main() {
         }
     }
     let [input, output] = args.as_slice() else { die(cli::USAGE, USAGE) };
-    let data = cli::read_or_die(input);
-    let (kfx, warnings) = kfx::epub_to_kfx(&data, &opts).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
+    let (kfx, warnings) = kfx::epub_to_kfx_from(cli::open_or_die(input), &opts).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
     for w in &warnings {
         eprintln!("警告：{w}");
     }
