@@ -179,7 +179,7 @@ Amazon 转固定版式时还把大图缩到最长边 1448、给比缩略图大�
 覆盖书的文件时：**逐字节相同 → 进度还在**（《啸风山庄》），**字节有任何不同 → 进度清零**，哪怕只差写进书里的写出器版本号（《绍宋》）。`.sdr/*.yjf` 里的 `lpr`（如 `AUQAAAAAAAAA:3184`）是阅读位置，书换了以后 Kindle 从头重新记；真正的进度看来记在系统数据库里（MTP 看不到）。
 所以书里的创建器版本（`creator_version`、`kfxgen_package_version`）固定写 `1`，写出器版本只进书库指纹：升版本后内容没变的书生成逐字节相同的 KFX（优化器升版本只改 EPUB 里的 `META-INF/eink-optimized`，KFX 不读它，也逐字节相同）。三台的对比见[设备 · 重拷书以后进度还在不在](devices.md#重拷书以后进度还在不在)。
 
-**容器 id（唯一 ID）怎么来的**：书库生成时取**书库的书 id**（12 位十六进制，按十六进制读成整数，`generate.rs` 的 `kfx_id`），容器 id、`content_id`、`book_id` 都由它派生（`kfx::write::container_id`），书里 4 处一致；同一本书重建不变，OPF 唯一标识符相同的两本书（同一模板做的书）也各是各的。`epub-to-kfx` 不给 `--id` 时由 OPF 唯一标识符的 fnv64 哈希派生（`epubbook` 的 `stable_id`；标识符口径见[架构](architecture.md)的 `wash::opf::unique_identifier`）。
+**容器 id（唯一 ID）怎么来的**：书库生成时取**书库的书 id**（12 位十六进制，按十六进制读成整数，`generate.rs` 的 `kfx_id`），容器 id、`content_id`、`book_id` 都由它派生（`kfx::write::container_id`），书里 4 处一致；同一本书重建不变，OPF 唯一标识符相同的两本书（同一模板做的书）也各是各的。写出器 8 换成书 id 派生后真机 ✓（2026-10-06 全部重拷，书架封面、封面页、目录跳转正常）。`epub-to-kfx` 不给 `--id` 时由 OPF 唯一标识符的 fnv64 哈希派生（`epubbook` 的 `stable_id`；标识符口径见[架构](architecture.md)的 `wash::opf::unique_identifier`）。
 历史（2026-10-06 修，写出器 8，用户定）：以前书库取 `meta.id` 的前 16 位，12 位的书 id 永远取不到，书库也退回 OPF 标识符的哈希。修了以后书库的 `kindle/` 产物字节全变，Kindle 上进度清零（用户接受）。
 
 ## 背景图（2026-10-05《绍宋》样本）
@@ -261,7 +261,7 @@ Amazon 转固定版式时还把大图缩到最长边 1448、给比缩略图大�
 - **固定版式**：OPF 有 `fixed-layout`（优化器给漫画写的）时整本按固定版式写，见「固定版式」。
 - **正文字体没嵌入时不写字体名**：字数最多的字体没有嵌入（优化器按用户的字体规矩去掉了正文字体的嵌入）时，样式里不写它，正文和表格都用阅读器设置的字体（《啸风山庄》正文写着没嵌入的「AR MingU30 DemiBold」，Kindle 换成了别的字体，和没写字体的表格对不上）。
 - **背景图**：见「背景图」。
-- **没有文字的元素当锚点**（写出器 7，2026-10-06）：`<span id=…></span>`、`<div id=…></div>` 和图片自己的 id 挂到文档顺序里下一个块的开头（在文末的挂到最后一块末尾）。以前直接丢掉，链接、目录退回文件开头：《福尔摩斯探案全集》1102 处（目录页「第一册」点了停在目录页开头），配不上的注释也因此没有弹窗。23 本测试书只有福尔摩斯变了（1101 个锚点位置、目录、115 个版面多配上注释弹窗，正文文字不变）。**未真机验证**。
+- **没有文字的元素当锚点**（写出器 7，2026-10-06）：`<span id=…></span>`、`<div id=…></div>` 和图片自己的 id 挂到文档顺序里下一个块的开头（在文末的挂到最后一块末尾）。以前直接丢掉，链接、目录退回文件开头：《福尔摩斯探案全集》1102 处（目录页「第一册」点了停在目录页开头），配不上的注释也因此没有弹窗。23 本测试书只有福尔摩斯变了（1101 个锚点位置、目录、115 个版面多配上注释弹窗，正文文字不变）。真机 ✓（2026-10-06 福尔摩斯目录与跳转）。
 - **CSS 数值**（写出器 7）：`rgb()`/`rgba()` 认百分比；负字号作废；字号 0 不再写出 NaN。写出器 8 补 `#rgba`/`#rrggbbaa`（透明度和 `rgba()` 一样写进 ARGB 的最高字节）。
 - **CSS 解析**（写出器 8）：声明用优化器同一个 `bookconv::html::css_decls` 切（引号里的转义、`url(data:…;…)`、坏引号退回按分号切），`*color` 这类 IE 写法照旧不收；`@font-face` 块用 `wash::font_face_re` 找。选择器优先级按 Selectors 规范：`:not()`/`:is()`/`:has()` 取参数里最高的，`:where()` 算 0，`:nth-child(2n+1)` 这类括号里的字不再计成标签，单冒号的 `:before`/`:first-line` 等算伪元素。
 - **`@media`**（写出器 8）：按 Media Queries 规范求值，`<link>`/`<style>` 的 `media` 属性同样处理。媒体类型收 `all`、`screen`、`amzn-kf8`，别的（`print`、`amzn-mobi`…）不成立；`not`/`only`、逗号列表（任一条成立）照规范（`not amzn-mobi` 成立）。特性 `width`/`height`（阅读范围）、`device-width`/`device-height`（屏幕）、`aspect-ratio`、`device-aspect-ratio`、`orientation`（都可带 `min-`/`max-`）、`color`/`monochrome`（只知道黑白屏 color 位数是 0）按调用方传入的阅读模式求值（`MediaEnv::for_profile`：KFX 阅读范围、屏幕、黑白彩色；书库按生成的模式，`epub-to-kfx --device=`，缺省 `kindle`），长度认 `px` 和绝对单位（1in＝96px），CSS 1px 按设备 1 像素算——**Kindle 自己怎么算没核实**。求值不了的（`em` 等相对单位、`resolution`、范围写法 `(width >= 600px)`、`or`）和写错的那一条不收，带 `not` 也不收。以前只要条件里有 `screen`/`all` 就整块收下、特性条件不看（`screen and (max-width: 480px)` 也收）。测试书里都没有 `@media`，产物不变。
