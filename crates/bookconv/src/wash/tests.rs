@@ -325,6 +325,28 @@
     }
 
     #[test]
+    fn missing_ncx_dtb_uid_added_and_bad_depth_fixed() {
+        // 《绝叫》原书（2026-10-06，掌阅自带阅读器建不出目录）：head 里只有 dtb:depth，内容却是 uid；没有 dtb:uid。
+        let opf = r#"<package version="2.0" unique-identifier="pub-id"><metadata><dc:title>书</dc:title><dc:identifier id="pub-id">urn:uuid:99de</dc:identifier></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
+        let ncx = r#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:depth" content="urn:uuid:99de"></meta></head><navMap><navPoint id="a"><navLabel><text>一</text></navLabel><content src="c1.xhtml"/><navPoint id="b"><navLabel><text>甲</text></navLabel><content src="c1.xhtml#x"/></navPoint></navPoint></navMap></ncx>"#;
+        let mut v = vec![e("content.opf", opf), e("toc.ncx", ncx), e("c1.xhtml", r#"<html><body><p>正文</p><p id="x">节</p></body></html>"#)];
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.ncx_uid_fixed, 1);
+        let out = s(&v, "toc.ncx");
+        assert!(out.contains(r#"<meta name="dtb:uid" content="urn:uuid:99de"/>"#), "{out}");
+        assert!(out.contains(r#"name="dtb:depth" content="2""#), "{out}");
+        // 再跑一遍不动
+        let before = out.clone();
+        let rep2 = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep2.ncx_uid_fixed, 0);
+        assert_eq!(s(&v, "toc.ncx"), before);
+        // 没有 head 的也补上
+        let mut w = vec![e("content.opf", opf), e("toc.ncx", r#"<ncx><navMap><navPoint><navLabel><text>一</text></navLabel><content src="c1.xhtml"/></navPoint></navMap></ncx>"#), e("c1.xhtml", "<html><body><p>正文</p></body></html>")];
+        wash_entries(&mut w, &WashOpts::default()).unwrap();
+        assert!(s(&w, "toc.ncx").contains(r#"<ncx><head><meta name="dtb:uid" content="urn:uuid:99de"/></head><navMap>"#), "{}", s(&w, "toc.ncx"));
+    }
+
+    #[test]
     fn empty_or_prefixed_unique_identifier_still_matches_ncx() {
         // 唯一标识符是空值：规范整理改指向别的非空标识符，NCX 的 dtb:uid 跟着它（以前空值也当标识符，dtb:uid 会被改成空）。
         let opf = r#"<package version="2.0" unique-identifier="bookid"><metadata><dc:title>书</dc:title><dc:identifier id="bookid"> </dc:identifier><dc:identifier id="isbn">978-7</dc:identifier></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
