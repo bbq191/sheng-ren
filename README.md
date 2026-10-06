@@ -41,10 +41,11 @@ booklib list                                  # 看每本书的产物在哪、�
 |---|---|
 | [使用指南](docs/usage.md) | 安装、各命令、产物在哪、传书到设备、常见问题 |
 | [排版与优化规则](docs/typesetting.md) | 文字书、漫画各做了什么、为什么；真机验证情况 |
-| [设备与阅读模式](docs/devices.md) | 模式的字段、各阅读器的怪癖、可阅读范围怎么量、KOReader |
-| [AZW3 写出器](docs/azw3.md) | Kindle 产物怎么从 EPUB 转成 AZW3 |
+| [设备与阅读模式](docs/devices.md) | 模式的字段、各阅读器的怪癖、可阅读范围怎么量、重拷书以后进度还在不在、KOReader（历史） |
+| [KFX](docs/kfx.md) | Kindle 产物怎么从 EPUB 转成 KFX：容器结构、对照样本推出的写法、真机结论 |
+| [AZW3 写出器](docs/azw3.md) | EPUB → AZW3（书库 2026-10-05 起不用，命令还在） |
 | [架构](docs/architecture.md) | 代码怎么分、书库怎么存、生成流程 |
-| [开发](docs/development.md) | 测试、真书回归、版本号、工程约束、DRM |
+| [开发](docs/development.md) | 测试、真书回归（含 KFX）、版本号、工程约束、DRM |
 | [决定记录](docs/decisions.md) | 用户定过的事（按日期）和待定的事 |
 
 ## 几个词

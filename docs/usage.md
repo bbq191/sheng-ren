@@ -6,12 +6,15 @@
 
 ```sh
 ./install.sh             # 装 booklib（书库；改 EPUB 元数据的 meta --edit 也在里面）
-./install.sh --tools     # 另装开发、排查用的 epub-optimize、epub-to-azw3、readable-probe、readable-measure、mobi-dict-to-stardict
+./install.sh --tools     # 另装开发、排查用的 epub-optimize、epub-to-azw3、readable-probe、readable-measure，以及转 MOBI 词典的 mobi-dict-to-stardict
 ./install.sh --no-tools  # 卸掉这些开发工具，只留 booklib
 ./uninstall.sh           # 卸载
+./install.sh --help      # 打印脚本开头的说明（uninstall.sh 同样）
 ```
 
-- 装到 cargo 的 bin 目录（`$CARGO_INSTALL_ROOT/bin` 或 `$CARGO_HOME/bin`，缺省 `~/.cargo/bin`）。
+- 装到 cargo 的 bin 目录，优先级和 cargo 一致：`$CARGO_INSTALL_ROOT/bin` > cargo 配置里的 `install.root`（仓库目录往上各级 `.cargo/config.toml` 越近越优先，最后是 `$CARGO_HOME/config.toml`）> `$CARGO_HOME/bin` > `~/.cargo/bin`。`CARGO_INSTALL_ROOT` 设成空值按没设处理。
+- `--tools` 装的是 `bookconv`、`azw3`、`mobidict` 三个包里的命令；`kfx` 包的 `epub-to-kfx`、`kfx-dump`、`kfx-repack` 不随它装，用 `cargo run --release -p kfx --bin <命令> --`。
+- 退出码：`0` 装好（卸完）；`1` 没有 cargo、同名命令被别的包占着、编译或卸载失败；`2` 参数不对。
 - **升级**：更新代码后再跑一次 `./install.sh`。不加 `--tools`/`--no-tools` 时沿用上次的选择：装过开发工具就一起升级，免得工具停在旧版本、和 `booklib` 的规则对不上。编译复用仓库的 `target/`，第一次要几分钟。
 - **同名命令被别的包占着**（比如别处装过一个也叫 `booklib` 的）：脚本报出是哪个包、然后停下，不会悄悄抢过来。确认不要了先 `cargo uninstall` 它再装。
 - 装完会核对 `PATH` 里先找到的 `booklib` 是不是刚装的那个；不在 `PATH` 里会告诉你怎么加（fish 给 `fish_add_path`）。
@@ -56,9 +59,9 @@
 booklib add 三体.epub 乱马01.cbz https://example.com/post
 ```
 
-- 只收 **EPUB、CBZ 和网址**。MOBI、AZW3、FB2、PDF 等报"只支持 EPUB 和 CBZ"（AZW3 只是给 Kindle 的产物格式）。给它一个目录会提示改用 `track`。
+- 只收 **EPUB、CBZ 和网址**。MOBI、AZW3、KFX、FB2、PDF 等报"只支持 EPUB 和 CBZ"（KFX 只是给 Kindle 的产物格式）。给它一个目录会提示改用 `track`。
 - 入库时先检查能不能用：EPUB 是不是有效、有没有 DRM；CBZ 是不是 zip、里面有没有页面图片。不能用的当场拒收。只加密了字体的"伪 DRM"不算，照常入库。CBZ 的书名取文件名。
-- 生成时读原件：EPUB 直接用；CBZ 当场转成每页一张原图的 EPUB（不存）；网址没有原件，入库时抓正文和图片组成 EPUB，**只有这种存在书库里**。
+- 生成时读原件：EPUB 直接用；CBZ 当场转成每页一张原图的 EPUB（不存），有打不开的页（不支持的压缩方式等）就报错、不出缺页的书；网址没有原件，入库时抓正文和图片组成 EPUB，**只有这种存在书库里**（网页超过 20MB 不收）。
 - 同一个文件重复入库显示 `= 已在库里`（按内容认，改名也认得出）。原件挪了位置，在新位置再 `add` 一次就更新了。
 - 同一个路径、内容变了：当成新版本，显示 `↻ 原件改过，换成新版本 … ← 旧书名`，旧条目连同产物删掉。
 - 早期版本收进来的 MOBI、PDF 等条目还在书库里：`list` 标"不再支持的格式"，`build`、`sync` 跳过（每本提示一次），已有的产物不动。不要了就 `remove`。
@@ -201,7 +204,7 @@ booklib meta --edit 书.epub --get-cover 封面.jpg               # 取出封面
 booklib remove 3fa9c1e07b2d
 ```
 
-删这本书的索引和它在各模式下的产物。要用 `list` 里的完整 id（删除不做模糊匹配）。原件不受影响；拷到设备上的那份也要自己删。
+删这本书的索引和它在各模式下的产物。要用 `list` 里的完整 id（删除不做模糊匹配）。条目目录先整个改名再删，中途断电不会剩下半个条目，残留的下次运行时清掉。原件不受影响；拷到设备上的那份也要自己删。
 原件在跟踪目录里的会提示：**下次 `sync` 会再入库**，要彻底不要就从书目录里删掉原件。
 
 ### dedupe：迁移早期版本的书库
@@ -212,7 +215,7 @@ booklib remove 3fa9c1e07b2d
 booklib dedupe ~/Documents/ereader
 ```
 
-先看 `meta.json` 记着的位置，再在给出的目录里找内容相同的文件；找到就改成只存索引、删掉副本，找不到的保留副本并列出来。网址书不动。可以反复跑。
+先看 `meta.json` 记着的位置，再在给出的目录里找内容相同的文件；找到就改成只存索引、删掉副本，找不到的保留副本并列出来。书库里的文件本身不算原件（给的目录包含书库也不会把副本配成自己）。网址书不动。可以反复跑。
 
 ### devices：列出阅读模式
 
@@ -247,12 +250,13 @@ booklib 只生成，**拷到设备上由你自己来**：把模式的文件夹�
 
 | 读的阅读器 | 拷哪个文件夹 | 怎么拷 |
 |---|---|---|
-| Kindle 自带阅读器（2026-10-05 起日常用） | `kindle/` 里的 `.kfx` | USB 连电脑，拷进 `documents/`。自带阅读器 USB 传书不认 EPUB |
-| 掌阅自带阅读器 | `ireader/` | USB 连电脑导入 |
+| Kindle 自带阅读器 | `kindle/` 里的 `.kfx` | USB 连电脑，拷进 `documents/`。自带阅读器 USB 传书不认 EPUB |
+| 掌阅自带阅读器 | `ireader/` 里的 `.epub` | USB 连电脑导入 |
 | Move 自带阅读器 | `xochitl/` | reMarkable 自带的传书方式。USB 网页上传（`http://10.11.99.1`）单本约 88MB 以上会被拒 |
 
-- Kindle、掌阅在 Linux 上是 MTP 设备。用 gvfs 挂载时普通的写文件、改名都不行，只能 `gio copy` 或文件管理器拷。
-- **重新生成后直接覆盖设备上的旧文件**，文件名不会变（除非书名变了）。Kindle 的 KFX 唯一 ID 取自书的 id，重新生成后不变；**内容没变的书重建出来逐字节相同，覆盖后进度还在，字节有任何不同 Kindle 就从头记**（所以写出器、优化器升级后内容变了的书会丢进度）。掌阅覆盖 EPUB 字节变了进度也保留（2026-10-06 真机，见[设备](devices.md#重拷书以后进度还在不在2026-10-06-真机)）。
+- Kindle、掌阅在 Linux 上是 MTP 设备。本机 2026-10-02 起由 jmtpfs 自动挂到 `/run/user/1000/mtp/kindle`、`…/ireader`，按普通文件拷就行。（以前用 gvfs 挂载时普通的写文件、改名都不行，只能 `gio copy` 或文件管理器拷。）
+- **重新生成后直接覆盖设备上的旧文件**，文件名不会变（除非书名变了）。覆盖后进度保不保留：Kindle 只有逐字节相同才保留，掌阅保留，见[设备 · 重拷书以后进度还在不在](devices.md#重拷书以后进度还在不在)。
+- **已知问题（待定）**：Kindle 的 KFX 唯一 ID 原意是取自书库的书 id，实际取不到（代码取 id 前 16 位，书 id 只有 12 位），退回 OPF 唯一标识符的哈希。同一本书重建时仍然不变，但 OPF 标识符相同的两本书（比如同一模板做的书）在 Kindle 上会被当成同一本。修不修要用户定：修了所有 `kindle/` 产物字节都变，Kindle 上的进度清零。
 - 书库删掉的、改了名的书，产物文件夹里的旧文件会删掉，设备上的那份要你自己删（同步工具用"镜像"方式可以一起删）。
 
 ### Move 上的漫画：登记页边距
@@ -274,13 +278,15 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 
 ## 单独的命令行工具
 
-书库之外，底层每一步也能单独用，开发和排查时有用（`./install.sh --tools` 装；不装就 `cargo run --release -p <包> --bin <命令> --`，包分别是 `bookconv`、`azw3`、`mobidict`）：
+书库之外，底层每一步也能单独用，开发和排查时有用（`./install.sh --tools` 装 `bookconv`、`azw3`、`mobidict` 三个包的命令；`kfx` 包的不随它装。不装就 `cargo run --release -p <包> --bin <命令> --`）：
 
 ```sh
 epub-optimize --device=ireader [选项] 输入.epub 输出.epub
 epub-to-azw3 [--ebok] 优化后.epub 输出.azw3            # 输入应是 --device=kindle 优化过的，见 AZW3 写出器
-epub-to-kfx [--id=N] 优化后.epub 输出.kfx              # KFX（Kindle 增强排版）最小版写出器，进行中，见 docs/kfx.md；cargo run -p kfx --bin epub-to-kfx
-mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict（当初给 KOReader 用；掌阅自带阅读器直接认 MOBI 词典）
+epub-to-kfx [--id=N] 优化后.epub 输出.kfx              # KFX 写出器（书库 kindle 模式用的就是它），见 docs/kfx.md；包 kfx
+kfx-dump [--type=N] [--full] 书.kfx                    # 看 KFX 结构；包 kfx
+kfx-repack 入.kfx 出.kfx                               # KFX 解开再打包，没改动应逐字节相同；包 kfx
+mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict（当初给 KOReader 用；掌阅自带阅读器直接认 MOBI 词典，暂时保留）
 readable-probe 测量书.epub                              # 生成测量书，见设备与阅读模式
 readable-measure [--device=kindle] 竖长.png 横宽.png    # 从截图量出可阅读范围
 ```
@@ -298,8 +304,9 @@ readable-measure [--device=kindle] 竖长.png 横宽.png    # 从截图量出可
 | `--require-toc` | 和 `--check` 一起用：没有目录也算质量门没过 |
 
 - 写文件的工具都先写临时文件、成功才改名，中途失败不留半成品；输入输出可以是同一个文件——**测试用的真书别这样就地改**。
-- 退出码：`0` 成功，`1` 用法错，`2` 读写或处理失败，`3` 质量门没过（只有 `--check` 时）。
-- `epub-to-azw3` 单独用时，AZW3 的唯一 ID 由 OPF 的标识符派生（同一本书每次转出来一样）；书库生成时由书 id 和入库时间派生。
+- `epub-to-azw3`、`epub-to-kfx`、`kfx-dump`、`kfx-repack` 认 `-h`/`--help`。退出码：`0` 成功，`1` 用法错，`2` 读写或处理失败，`3` 质量门没过（只有 `epub-optimize --check` 时）。
+- `epub-to-azw3`、`epub-to-kfx` 不给 `--id` 时唯一 ID 由 OPF 的唯一标识符派生（同一本书每次转出来一样）。
+- `mobi-dict-to-stardict` 和 `booklib meta --edit` 的路径可以不是 UTF-8。
 
 ## 常见问题
 
