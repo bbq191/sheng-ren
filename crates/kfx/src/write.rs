@@ -693,7 +693,7 @@ fn each_text_block(docs: &mut [ParsedDoc], mut f: impl FnMut(usize, usize, &mut 
 
 /// 注释配对（同 Amazon 的转换：原书多半只是普通链接，没有 `epub:type`）：正文链接指到后面的一个块，那个块**开头**的链接
 /// 指回这个正文链接所在的位置（链接自己或包着它的元素的 id），正文链接就是注释引用（`$616: $617`，Kindle 点了弹窗），目标块是注释正文
-/// （`$615: $618`）。优化器 `kindle` 模式保留回链（`note_backlinks`）、把注释搬到引用它的那一份末尾，正好配得上。
+/// （`$615: $618`）。优化器 `kindle` 模式保留回链（`note_backlinks`）、把注释搬到引用它的那一章（文件）末尾，正好配得上。
 /// 返回配上了几条。
 fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
     // 第一遍：每个块的 id、每个链接区间（块编号, 区间下标, 目标, 区间起点处的 id）
@@ -740,7 +740,7 @@ fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
     let mut refs: HashSet<(usize, usize)> = HashSet::new();
     let mut notes: HashSet<usize> = HashSet::new();
     for (n, ri, target, src) in &links {
-        // 注释在引用后面（优化器把注释搬到引用它的那一份末尾）；反过来那条是回链。
+        // 注释在引用后面（优化器把注释搬到引用它的那一章（文件）末尾）；反过来那条是回链。
         let Some(&tb) = id_block.get(target) else { continue };
         if tb <= *n {
             continue;

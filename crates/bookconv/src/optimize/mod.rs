@@ -99,7 +99,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v45（2026-10-06）：OPF 唯一标识符和翻页方向各统一一个口径（`wash::opf::unique_identifier`、`direction::spine_direction`）：
 ///   唯一标识符认任意前缀的 identifier（`dc11:identifier` 不再被当成没有、另补一个）、id 和值去空白，空值算没有（NCX 的 dtb:uid
 ///   不再被改成空）；spine 方向值去空白、不分大小写（`" RTL "` 已是从右往左，不改写）。20 本测试书和一卷漫画三个模式逐字节不变。
-pub const OPTIMIZE_VERSION: &str = "45";
+/// - v46（2026-10-06，用户定）：文字书**不再按章节拆文件**（章标题独立一页、节与节分页都撤了），原书的 XHTML 文件结构原样保留；
+///   目录不变：仍按目录层级定书/卷、章、节，漏掉的节补进目录，原来指向拆出文件的条目改指原文件里标题的 `#id`（没有的补 id）。
+///   拆分时跟着搬的同文件注释留在原处（跳转模式；弹窗模式照旧搬到章末）。`epub-optimize --no-paginate` 删掉。
+pub const OPTIMIZE_VERSION: &str = "46";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -288,7 +291,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
                             skip_notes.insert(name.clone());
                         } else {
                             for (file, id) in refs {
-                                // 同文件的注释：跳转模式留在原处（分页时跟着所在的节走）；弹窗模式也搬到章末写成
+                                // 同文件的注释：跳转模式留在原处；弹窗模式也搬到章末写成
                                 // `<aside epub:type="footnote">`，阅读器才弹窗（掌阅 2026-10-05 真机）。
                                 if file == name && opts.footnote != FootnoteMode::Popup {
                                     continue;

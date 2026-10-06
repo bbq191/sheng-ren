@@ -76,7 +76,7 @@ pub fn parse_nav_points(ncx_text: &str) -> Vec<NavPoint> {
 
 /// 逐个 `<content src>`（navMap、pageList 里的都算）调 `f(最近一个 <text> 的文字（字符引用已还原）, src 原文)`，返回新值
 /// （属性值原文，调用方已转义）就就地换掉。注意 src 给的是**原文**（和 [`NavPoint::src`] 不同）：拿它解析路径前先
-/// `xml_unescape`，原样拼进新值时不要再转义。一处都没改 → `None`。分页后目录改指到补的 id、修复指错位置的目录共用。
+/// `xml_unescape`，原样拼进新值时不要再转义。一处都没改 → `None`。定章节后目录改指到补的 id、修复指错位置的目录共用。
 pub fn rewrite_content_srcs(ncx: &str, mut f: impl FnMut(&str, &str) -> Option<String>) -> Option<String> {
     use crate::html::{self, TagKind};
     let mut edits: Vec<(usize, usize, String)> = Vec::new();

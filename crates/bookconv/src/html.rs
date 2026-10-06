@@ -392,14 +392,6 @@ pub fn link_values(html: &str) -> Vec<&str> {
     out
 }
 
-/// 改写全文每个 `href`/`src`/`xlink:href`：`f(值原文)` 返回新值就替换（保留原引号）。
-pub fn rewrite_links<'a>(html: &'a str, mut f: impl FnMut(&str) -> Option<String>) -> Cow<'a, str> {
-    edit_attrs(html, &["href", "src", "xlink:href"], |_, a| match f(a.value) {
-        Some(v) if v != a.value => Edit::Set(v),
-        _ => Edit::Keep,
-    })
-}
-
 /// 开标签的 `class` 里有没有 `class` 这个类（按空白分词，区分大小写）。
 pub fn has_class(tag: &str, class: &str) -> bool {
     attrs(tag).iter().any(|a| a.is("class") && a.value.split_ascii_whitespace().any(|c| c == class))
@@ -589,7 +581,7 @@ fn text_visible(t: &str) -> bool {
     xml_unescape(&t).chars().any(|c| !c.is_whitespace())
 }
 
-/// 片段里有没有读者看得见的内容。全书一套口径（章节分页、空页清理、章尾空白共用）：
+/// 片段里有没有读者看得见的内容。全书一套口径（定章节、空页清理、章尾空白共用）：
 /// - 非空白文字：空白含 U+00A0、U+3000；`&nbsp;`、`&#160;`、`&#xa0;`、`&#12288;` 这类只表示空白的字符引用也算空白；
 /// - 或媒体元素 [`MEDIA_ELEMENTS`]（图片 `img`/`svg`/`image`、分隔线 `hr`、表格、公式、音视频、`object`）。
 ///

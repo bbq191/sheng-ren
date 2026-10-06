@@ -31,7 +31,7 @@
 | `convert/` | CBZ → 每页一张原图的 EPUB（第一页就是封面，OPF 标"漫画"）；入库时的轻量检查。有打不开的页（不支持的压缩方式等）时生成报错，不出缺页的书 |
 | `article` | 网页 → EPUB（正文抽取，图片保留原图，按 HTTP 头 / `<meta charset>` 认编码） |
 | `optimize/` | 优化主流程：流式读写、逐文件变换、图片并行处理 |
-| `wash/` | 清洗层：解锁字体字号、按语言排版、章节分页（`paginate`）、目录修复与生成（`toc`）、全书 id 去重、章尾空白；`fonts` 定哪些嵌入字体保留、哪些是批注；`safe_names` 给文件名里有安卓存储不能用的字符的条目改名；`normalize` 是最后一步的 EPUB 3 规范整理；`opf` 是 OPF 的读改（清洗、优化、`meta --edit` 共用；读唯一标识符全书只用 `opf::unique_identifier`：`<package unique-identifier>` 指向的任意前缀 identifier，值去空白、空值算没有，NCX 的 `dtb:uid`、规范整理、`epubbook` 的稳定 ID 都按它） |
+| `wash/` | 清洗层：解锁字体字号、按语言排版、定章节（`chapters`：按目录层级定书/卷、章、节，漏掉的节补进目录、目录改指到文件中间的标题；不拆文件）、目录修复与生成（`toc`）、全书 id 去重、章尾空白；`fonts` 定哪些嵌入字体保留、哪些是批注；`safe_names` 给文件名里有安卓存储不能用的字符的条目改名；`normalize` 是最后一步的 EPUB 3 规范整理；`opf` 是 OPF 的读改（清洗、优化、`meta --edit` 共用）；读唯一标识符全书只用 `opf::unique_identifier`：`<package unique-identifier>` 指向的任意前缀 identifier，值去空白、空值算没有，NCX 的 `dtb:uid`、规范整理、`epubbook` 的稳定 ID 都按它） |
 | `html` | 容错的 XHTML 工具：标签扫描、属性读写（单双引号、无引号）、加类、纯文本。全仓库的 HTML 操作都用它 |
 | `htmlproc/` | 注释搬移与编号、字体锁、重复 id |
 | `cssunlock` | 解开字体、字号、行高的锁 |

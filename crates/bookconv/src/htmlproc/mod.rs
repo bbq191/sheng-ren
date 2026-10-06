@@ -20,5 +20,4 @@ pub use self::basic::{collapse_dup_id_attrs, dedup_ids_in_chapter, fix_internal_
 pub(crate) use self::basic::plan_id_renames;
 pub use self::fontlock::{strip_font_locks, strip_font_locks_keeping};
 pub use self::footnote::{collect_footnote_notes, collect_footnote_notes_with, fix_duokan_markers, marker_backrefs, normalize_self_hrefs, prepare_note_links, number_icon_note_links, preserve_relink_footnotes, referenced_note_keys, ListItem, Note, NoteKey};
-pub(crate) use self::footnote::note_semantic;
 pub use self::footnote_cycles::break_footnote_cycles;
