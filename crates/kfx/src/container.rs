@@ -200,16 +200,21 @@ impl Container {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        // 实体区。
-        let mut payload = Vec::new();
+        // 实体区：每个实体编码成「头 + Ion 正文」，原始字节（图片、字体）借用不复制，最后直接拼进输出——
+        // 不先拼一份实体区再整体复制（大漫画几百 MB，省一份峰值内存和一遍拷贝）。
+        let parts: Vec<(Vec<u8>, &[u8])> = self.entities.iter().map(entity_parts).collect();
         let mut index = Vec::with_capacity(self.entities.len() * INDEX_ENTRY);
-        for e in &self.entities {
-            let data = entity_bytes(e);
+        let mut sha = Sha1::new();
+        let mut payload_len = 0usize;
+        for (e, (head, raw)) in self.entities.iter().zip(&parts) {
+            let len = head.len() + raw.len();
             index.extend(e.id.to_le_bytes());
             index.extend(e.ty.to_le_bytes());
-            index.extend((payload.len() as u64).to_le_bytes());
-            index.extend((data.len() as u64).to_le_bytes());
-            payload.extend(data);
+            index.extend((payload_len as u64).to_le_bytes());
+            index.extend((len as u64).to_le_bytes());
+            sha.update(head);
+            sha.update(raw);
+            payload_len += len;
         }
         let symtab = ion::encode_stream(&self.symtab);
         let caps = ion::encode_stream(&self.capabilities);
@@ -228,10 +233,10 @@ impl Container {
             set_field(&mut info, SID_CAPS_LENGTH, caps.len());
         }
         let info_bytes = ion::encode_stream(&[Item::Bvm, Item::Value(info)]);
-        let kfxgen = update_payload_sha1(&self.kfxgen, &payload);
+        let kfxgen = update_payload_sha1(&self.kfxgen, &sha.finalize());
         let header_len = info_off + info_bytes.len() + kfxgen.len();
 
-        let mut out = Vec::with_capacity(header_len + payload.len());
+        let mut out = Vec::with_capacity(header_len + payload_len);
         out.extend(MAGIC);
         out.extend(self.version.to_le_bytes());
         out.extend((header_len as u32).to_le_bytes());
@@ -242,7 +247,10 @@ impl Container {
         out.extend(caps);
         out.extend(info_bytes);
         out.extend(kfxgen);
-        out.extend(payload);
+        for (head, raw) in &parts {
+            out.extend_from_slice(head);
+            out.extend_from_slice(raw);
+        }
         out
     }
 }
@@ -266,7 +274,8 @@ fn parse_entity(id: u32, ty: u32, d: &[u8]) -> Result<Entity> {
     Ok(Entity { id, ty, version, header, body })
 }
 
-fn entity_bytes(e: &Entity) -> Vec<u8> {
+/// 一个实体的字节，分两段：实体头 + Ion 正文（编码出来的），原始字节正文（借用）。
+fn entity_parts(e: &Entity) -> (Vec<u8>, &[u8]) {
     let header = ion::encode_stream(&e.header);
     let mut out = Vec::new();
     out.extend(ENTITY_MAGIC);
@@ -274,10 +283,17 @@ fn entity_bytes(e: &Entity) -> Vec<u8> {
     out.extend(((ENTITY_FIXED + header.len()) as u32).to_le_bytes());
     out.extend(header);
     match &e.body {
-        Body::Ion(items) => out.extend(ion::encode_stream(items)),
-        Body::Raw(b) => out.extend(b),
+        Body::Ion(items) => {
+            for it in items {
+                match it {
+                    Item::Bvm => out.extend(ion::BVM),
+                    Item::Value(v) => ion::encode_value(&mut out, v),
+                }
+            }
+            (out, &[])
+        }
+        Body::Raw(b) => (out, b),
     }
-    out
 }
 
 /// 改结构体里已有字段的值；没有就追加在末尾。
@@ -326,15 +342,15 @@ fn replace_bytes(hay: &[u8], old: &[u8], new: &[u8]) -> Vec<u8> {
     out
 }
 
-/// kfxgen 信息里 `kfxgen_payload_sha1` 的值是实体区的 SHA-1（十六进制）。设备不校验它（2026-10-05 真机），照样更新。
-fn update_payload_sha1(kfxgen: &[u8], payload: &[u8]) -> Vec<u8> {
+/// kfxgen 信息里 `kfxgen_payload_sha1` 的值是实体区的 SHA-1（十六进制，`digest` 是算好的摘要）。设备不校验它（2026-10-05 真机），照样更新。
+fn update_payload_sha1(kfxgen: &[u8], digest: &[u8]) -> Vec<u8> {
     const KEY: &[u8] = b"key:\"kfxgen_payload_sha1\",value:\"";
     let Some(p) = kfxgen.windows(KEY.len()).position(|w| w == KEY) else { return kfxgen.to_vec() };
     let start = p + KEY.len();
     if kfxgen.len() < start + 40 {
         return kfxgen.to_vec();
     }
-    let hex: String = Sha1::digest(payload).iter().map(|b| format!("{b:02x}")).collect();
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     let mut out = kfxgen.to_vec();
     out[start..start + 40].copy_from_slice(hex.as_bytes());
     out
@@ -447,6 +463,29 @@ mod tests {
             let mut b = good.clone();
             b[at] = 0xFF;
             let _ = Container::parse(&b);
+        }
+    }
+
+    /// 文件里任何一处字节坏掉（索引、符号表、实体头、Ion 正文）都只能报错，不能 panic；能解开的再写出也不能 panic。
+    #[test]
+    fn corrupted_bytes_anywhere_never_panic() {
+        let good = sample().to_bytes();
+        let mut x = 0x9E37_79B9u32;
+        for at in 0..good.len() {
+            for _ in 0..4 {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                let mut b = good.clone();
+                b[at] = x as u8;
+                if let Ok(c) = Container::parse(&b) {
+                    let _ = c.to_bytes();
+                    let _ = c.symbols();
+                }
+            }
+        }
+        for n in 0..good.len() {
+            let _ = Container::parse(&good[..n]);
         }
     }
 }

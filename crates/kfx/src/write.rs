@@ -13,7 +13,7 @@ use bookconv::epubzip::resolve_link;
 use bookconv::util::fnv64;
 use ego_tree::NodeRef;
 use scraper::{ElementRef, Html, Node};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 /// 写出器版本：改了产物字节的修改要加一。只进书库指纹，**不写进书里**（见 [`FILE_CREATOR_VERSION`]）。
 pub const WRITER_VERSION: &str = "6";
@@ -199,9 +199,8 @@ impl Doc<'_> {
         c
     }
 
-    /// 把一个块级元素展开成块序列。
-    fn block(&self, el: ElementRef, parent: &Computed, out: &mut Vec<Block>) {
-        let comp = self.comp(&el, parent);
+    /// 把一个块级元素（计算值 `comp` 由调用方算好，层叠不重复做）展开成块序列。
+    fn block(&self, el: ElementRef, comp: Computed, out: &mut Vec<Block>) {
         if comp.display.as_deref() == Some("none") {
             return;
         }
@@ -534,7 +533,7 @@ impl Doc<'_> {
                 }
                 if is_block_el(&el, &comp) {
                     self.flush(inl, block_comp, out);
-                    self.block(el, parent, out);
+                    self.block(el, comp, out);
                     return;
                 }
                 if let Some(id) = el.value().attr("id") {
@@ -762,7 +761,8 @@ struct Builder {
     locals: Vec<String>,
     local_index: HashMap<String, u32>,
     next_eid: i64,
-    styles: BTreeMap<String, String>,
+    /// 样式去重：属性编码 → 样式名的符号。
+    styles: HashMap<Vec<u8>, u32>,
     style_entities: Vec<(String, Vec<(u32, Value)>)>,
     resources: Vec<Res>,
     res_by_path: HashMap<String, usize>,
@@ -817,35 +817,41 @@ impl Builder {
                 self.used_fonts.insert(f.clone());
             }
         }
+        // 键：每个属性的编号 + 值的 Ion 编码（Ion 值自带长度，拼起来不会混淆）。
         let mut key = Vec::new();
-        ion::encode_value(&mut key, &Value::Struct(props.clone()));
-        let key: String = key.iter().map(|b| format!("{b:02x}")).collect();
-        if let Some(name) = self.styles.get(&key).cloned() {
-            return self.sym(&name);
+        for (k, v) in &props {
+            key.extend(k.to_le_bytes());
+            ion::encode_value(&mut key, v);
+        }
+        if let Some(&s) = self.styles.get(&key) {
+            return s;
         }
         let name = format!("style{}", self.style_entities.len());
-        self.styles.insert(key, name.clone());
-        self.style_entities.push((name.clone(), props));
-        self.sym(&name)
+        let s = self.sym(&name);
+        self.styles.insert(key, s);
+        self.style_entities.push((name, props));
+        s
     }
 
     fn resource(&mut self, path: &str) -> Option<usize> {
         if let Some(&i) = self.res_by_path.get(path) {
             return Some(i);
         }
-        let Some((bytes, mime)) = self.images.get(path).cloned() else {
-            self.warnings.push(format!("图片找不到或格式不支持：{path}"));
-            return None;
-        };
-        let (format, mime) = match mime {
-            "image/jpeg" => (FORMAT_JPG, "image/jpg"),
-            "image/png" => (FORMAT_PNG, "image/png"),
-            "image/gif" => (FORMAT_GIF, "image/gif"),
-            other => {
+        let (format, mime) = match self.images.get(path).map(|(_, m)| *m) {
+            Some("image/jpeg") => (FORMAT_JPG, "image/jpg"),
+            Some("image/png") => (FORMAT_PNG, "image/png"),
+            Some("image/gif") => (FORMAT_GIF, "image/gif"),
+            Some(other) => {
                 self.warnings.push(format!("图片格式 {other} 不支持：{path}"));
                 return None;
             }
+            None => {
+                self.warnings.push(format!("图片找不到或格式不支持：{path}"));
+                return None;
+            }
         };
+        // 字节搬进资源，不复制（大漫画几百 MB）；同一路径以后走上面的 `res_by_path`，不会再来取。
+        let (bytes, _) = self.images.remove(path)?;
         let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
             .with_guessed_format()
             .ok()
@@ -1218,16 +1224,18 @@ fn pid_map(order: &[(i64, usize)]) -> Vec<Value> {
 /// EPUB → KFX。返回 KFX 字节和警告。
 pub fn epub_to_kfx(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), String> {
     let mut warnings = Vec::new();
-    let book = epubbook::load(epub, &mut warnings)?;
+    let mut book = epubbook::load(epub, &mut warnings)?;
+    // 图片字节从书里搬出来（写出器只在这里用到它们），不复制。
+    let images = std::mem::take(&mut book.images).into_iter().map(|i| (i.path, (i.bytes, i.mime))).collect();
     let mut b = Builder {
         locals: Vec::new(),
         local_index: HashMap::new(),
         next_eid: 1,
-        styles: BTreeMap::new(),
+        styles: HashMap::new(),
         style_entities: Vec::new(),
         resources: Vec::new(),
         res_by_path: HashMap::new(),
-        images: book.images.iter().map(|i| (i.path.clone(), (i.bytes.clone(), i.mime))).collect(),
+        images,
         warnings,
         anchors: Vec::new(),
         anchor_index: HashMap::new(),
@@ -1275,6 +1283,8 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
 
     // 先把所有文档解析成块（注释配对要看全书），再逐个生成版面。
     let mut parsed: Vec<ParsedDoc> = Vec::new();
+    // 外部样式表按路径只解析一次（大合集几百个文档共用一份样式表）。
+    let mut sheets: HashMap<String, std::rc::Rc<crate::css::Rules>> = HashMap::new();
     for (si, doc) in book.docs.iter().enumerate() {
         let html = Html::parse_document(&doc.html);
         let mut sheet = Sheet::default();
@@ -1284,8 +1294,10 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
                 order = sheet.add_at(&el.text().collect::<String>(), order, &doc.path);
             } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
                 if let Some(h) = el.value().attr("href") {
-                    if let Some(c) = css.get(resolve_link(&doc.path, h).0.as_str()) {
-                        order = sheet.add_at(c, order, &resolve_link(&doc.path, h).0);
+                    let path = resolve_link(&doc.path, h).0;
+                    if let Some(c) = css.get(path.as_str()) {
+                        let rules = sheets.entry(path).or_insert_with_key(|p| crate::css::Rules::parse(c, p)).clone();
+                        order = sheet.add_rules(rules, order);
                     }
                 }
             }
@@ -1297,7 +1309,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let root_comp = d.comp(&root, &Computed::root());
         if let Some(body) = root.children().filter_map(ElementRef::wrap).find(|e| e.value().name() == "body") {
             // body 也当一层包裹：它的水平外边距加到每个块上（样本里 body 的 5pt 边距出现在每个段落上）。
-            d.block(body, &root_comp, &mut blocks);
+            d.block(body, d.comp(&body, &root_comp), &mut blocks);
         }
         collapse_siblings(&mut blocks);
         parsed.push((si, &doc.path, d.lang.clone(), blocks));
