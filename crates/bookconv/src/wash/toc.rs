@@ -332,11 +332,23 @@ pub(super) fn restructure_existing_toc_parts(entries: &mut [Entry], mode: AutoTo
     }
     // 标题里的空白折叠成单个空格（全角空格分隔的"第一部　01　雪人"→"第一部 01 雪人"，跟标题里其它空白一视同仁）。
     let flat: Vec<(String, &crate::ncx::NavPoint)> = points.iter().map(|p| (p.label.split_whitespace().collect::<Vec<_>>().join(" "), p)).collect();
+    let ncx_dir = dir_of(&ncx_path).to_string();
+    let to_item = |depth: u8, title: &str, p: &crate::ncx::NavPoint| {
+        let (raw_path, frag) = html::split_href(&p.src);
+        let np = Some(p.open_tag.clone()).filter(|t| !t.is_empty());
+        TocItem { np, ..TocItem::new(depth, title, resolve(&ncx_dir, &percent_decode(raw_path)), frag.unwrap_or("").to_string()) }
+    };
+    let titles: Vec<&str> = flat.iter().map(|(t, _)| t.as_str()).collect();
+    if let Some(depths) = collection_depths(&titles) {
+        let items: Vec<TocItem> = flat.iter().zip(&depths).map(|((t, p), &d)| to_item(d, t, p)).collect();
+        rewrite_toc_files(entries, &opf, &ncx_path, &items, heading);
+        rep.toc_parts_restructured = items.len();
+        return;
+    }
     let re = part_prefix_re();
     if flat.len() < 2 || !flat.iter().any(|(t, _)| re.is_match(t)) {
         return;
     }
-    let ncx_dir = dir_of(&ncx_path).to_string();
     let mut items: Vec<TocItem> = Vec::with_capacity(flat.len());
     let mut in_part = false;
     for (title, p) in &flat {
@@ -356,6 +368,95 @@ pub(super) fn restructure_existing_toc_parts(entries: &mut [Entry], mode: AutoTo
     }
     rewrite_toc_files(entries, &opf, &ncx_path, &items, heading);
     rep.toc_parts_restructured = items.len();
+}
+
+/// 一层平排的合集目录（福尔摩斯全集：「第一册」「书名页」「目录」「暗红习作」「第一部」「第一章……」…「四签名」「第一章……」…）的层级。
+/// 认两种信号，都没有时返回 `None`（按「第X部」重建或原样不动）：
+/// - **册**：「第X册」「上册/中册/下册」至少两条——各册是最上一层，后面到下一册之前的条目都挂在它下面；第一册前面的（出版说明、序言）不动。
+/// - **作品**：普通条目后面（跳过题献、前言这类）紧跟「第一部」或「第一章」，即编号从头开始——全书至少两处才算合集，
+///   这样的条目是作品，后面的部、章、题献挂在它下面，到下一个普通条目为止（第六册的短篇一篇篇平排）。
+///   只有一处的是普通小说（「序章」「第一部」「第一章」…「第二部」「第一章」），不当作品。
+///
+/// 「部」下面挂着它后面的章，到下一个部或普通条目为止。
+fn collection_depths(titles: &[&str]) -> Option<Vec<u8>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum K {
+        Volume,
+        Part,
+        Chapter,
+        Front,
+        Plain,
+    }
+    static RE: OnceLock<[Regex; 4]> = OnceLock::new();
+    let [vol, part, chap, front] = RE.get_or_init(|| {
+        const N: &str = "0-9０-９〇零一二三四五六七八九十百千两";
+        [
+            Regex::new(&format!(r#"^(第[{N}]+册|[上中下]册)$"#)).unwrap(),
+            Regex::new(&format!(r#"^第[{N}]+[部卷篇辑]"#)).unwrap(),
+            Regex::new(&format!(r#"^第[{N}]+[章回]"#)).unwrap(),
+            Regex::new(r#"^(题献|献词|献辞|题记|前言|序|序言|序章|引言|引子|楔子|译序|译者序|出版说明|书名页|目录|版权页?)$"#).unwrap(),
+        ]
+    });
+    let kind = |t: &str| {
+        let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
+        if vol.is_match(&compact) {
+            K::Volume
+        } else if part.is_match(t) {
+            K::Part
+        } else if chap.is_match(t) {
+            K::Chapter
+        } else if front.is_match(&compact) {
+            K::Front
+        } else {
+            K::Plain
+        }
+    };
+    let first = |t: &str| {
+        let rest = t.strip_prefix('第').unwrap_or("");
+        let mut cs = rest.chars();
+        matches!(cs.next(), Some('一' | '1' | '１')) && cs.next().is_some_and(|c| matches!(c, '部' | '卷' | '篇' | '辑' | '章' | '回'))
+    };
+    let kinds: Vec<K> = titles.iter().map(|t| kind(t)).collect();
+    // 作品：普通条目，往后跳过 Front 的第一条是编号从 1 起的部/章
+    let work: Vec<bool> = (0..titles.len())
+        .map(|i| kinds[i] == K::Plain && (i + 1..titles.len()).find(|&j| kinds[j] != K::Front).is_some_and(|j| matches!(kinds[j], K::Part | K::Chapter) && first(titles[j])))
+        .collect();
+    let volumes = kinds.iter().filter(|k| **k == K::Volume).count();
+    let works = work.iter().filter(|w| **w).count();
+    let (use_vol, use_work) = (volumes >= 2, works >= 2);
+    if !use_vol && !use_work {
+        return None;
+    }
+    let mut out = Vec::with_capacity(titles.len());
+    let (mut base, mut in_work, mut in_part) = (1u8, false, false);
+    for (i, &k) in kinds.iter().enumerate() {
+        let d = match k {
+            K::Volume if use_vol => {
+                base = 2;
+                in_work = false;
+                in_part = false;
+                1
+            }
+            _ if use_work && work[i] => {
+                in_work = true;
+                in_part = false;
+                base
+            }
+            K::Part => {
+                in_part = true;
+                base + in_work as u8
+            }
+            K::Chapter => base + in_work as u8 + in_part as u8,
+            K::Front if in_work => base + 1,
+            _ => {
+                in_work = false;
+                in_part = false;
+                base
+            }
+        };
+        out.push(d);
+    }
+    Some(out)
 }
 
 /// 目录里任意一层的兄弟条目中有「第X部/卷/篇」、而它自己下面没有子条目时，把它后面到下一个「部」之前的兄弟条目
@@ -763,3 +864,24 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
     }
 }
 
+#[cfg(test)]
+mod collection_tests {
+    use super::collection_depths;
+
+    /// 福尔摩斯全集的平排目录：册 → 作品 → 部 → 章；短篇平排在册下面；题献挂在作品下面。
+    #[test]
+    fn flat_collection_gets_volume_work_part_levels() {
+        let t = [
+            "出版说明", "第一册", "书名页", "暗红习作", "第一部", "第一章 歇洛克·福尔摩斯先生", "第二部", "第一章 盐碱之原", "四签名", "第一章 演绎法",
+            "第二册", "书名页", "波希米亚丑闻", "红发俱乐部", "第五册", "巴斯克维尔的猎犬", "题　献", "第一章 歇洛克·福尔摩斯先生", "恐怖谷", "第一部 伯尔斯通惨剧", "第一章 警　讯",
+        ];
+        assert_eq!(collection_depths(&t).unwrap(), [1, 1, 2, 2, 3, 4, 3, 4, 2, 3, 1, 2, 2, 2, 1, 2, 3, 3, 2, 3, 4]);
+    }
+
+    /// 普通小说（编号只从头开始一次、没有册）不当合集：交给按「第X部」重建。
+    #[test]
+    fn single_novel_is_not_a_collection() {
+        assert_eq!(collection_depths(&["序章", "第一部", "第一章", "第二章", "第二部", "第一章"]), None);
+        assert_eq!(collection_depths(&["第一部 01 雪人", "02 大雪", "第二部 03 雪地"]), None);
+    }
+}

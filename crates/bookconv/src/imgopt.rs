@@ -460,17 +460,31 @@ fn comic_layout(w: u32, h: u32, area: Screen, margin: u32, may_upscale: bool) ->
 /// - 已经排好的页（和目标排版相差不超过 1px，见 [`PageLayout::matches_original`]）、没有别的要改时返回 `None`（原字节零损失）。
 ///   带 EXIF 方向（非"不用转"）的页一律摆正后重编码。
 /// - 超过 [`MAX_COMIC_DECODE_PIXELS`] 的图、解不开的图返回 `None`。
-pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, grayscale: bool) -> Option<Vec<u8>> {
+/// - `full_canvas`（固定版式，Kindle）：装饰小图、不放大的页也居中补白成整个阅读范围大小（比框大的先缩小，小的不放大）。
+///   KFX 固定版式里图片节点比画布小（异形页）的页 Kindle 会整页空白，原因没查清；画布大小的页一直正常（2026-10-06 真机，
+///   用户选补白）。
+pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, full_canvas: bool) -> Option<Vec<u8>> {
     let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale)?;
     let orig = img.dimensions();
     let (img, tl, tt) = trim_comic(img);
     let (cw, ch) = img.dimensions();
     let trimmed = (cw, ch) != orig;
     if cw.min(ch) < area.width / 3 {
+        if full_canvas {
+            let m = effective_margin(margin, area);
+            let (bw, bh) = (area.width - 2 * m, area.height - 2 * m);
+            let (nw, nh) = if cw <= bw && ch <= bh { (cw, ch) } else { fit_box(cw, ch, bw, bh) };
+            let img = if (nw, nh) != (cw, ch) { img.resize_lanczos3(nw, nh) } else { img };
+            return img.paste_on_white(area.width, area.height, (area.width - nw) / 2, (area.height - nh) / 2).encode(out_fmt, JPEG_QUALITY_COMIC);
+        }
         // 装饰小图：只裁边
         return if trimmed || to_gray || rotated { img.encode(out_fmt, JPEG_QUALITY_COMIC) } else { None };
     }
-    let lay = comic_layout(cw, ch, area, margin, out_fmt == ImageFormat::Jpeg);
+    let mut lay = comic_layout(cw, ch, area, margin, out_fmt == ImageFormat::Jpeg);
+    if full_canvas && (lay.canvas_w, lay.canvas_h) != (area.width, area.height) {
+        // 不放大的页：画布换成整个阅读范围，图居中
+        lay = PageLayout { canvas_w: area.width, canvas_h: area.height, x: (area.width - lay.nw) / 2, y: (area.height - lay.nh) / 2, ..lay };
+    }
     if !to_gray && !rotated && lay.matches_original(orig, (tl, tt), (cw, ch), area, effective_margin(margin, area)) {
         return None;
     }
@@ -658,7 +672,7 @@ mod tests {
 
     /// 生产入口，白边取缺省 1px。
     fn prep(bytes: &[u8], area: Screen, grayscale: bool) -> Option<Vec<u8>> {
-        prepare_comic_page_for_epub(bytes, area, 1, grayscale)
+        prepare_comic_page_for_epub(bytes, area, 1, grayscale, false)
     }
 
     /// 解码 + 裁边（生产的前两步）：返回 (裁后的图, 产物格式, 是否已经和原图不同——裁了边、转了灰度或换了格式)。
@@ -1081,7 +1095,7 @@ mod tests {
             assert!(l.abs_diff(r) <= 1 && t.abs_diff(b) <= 1, "{w}x{h}: 居中，实际 左{l} 上{t} 右{r} 下{b}");
         }
         // 白边可配：3px
-        let out = prepare_comic_page_for_epub(&black_jpeg(1091, 1592), ireader, 3, false).unwrap();
+        let out = prepare_comic_page_for_epub(&black_jpeg(1091, 1592), ireader, 3, false, false).unwrap();
         let (l, t, r, b) = dark_margins(&image::load_from_memory(&out).unwrap());
         assert!((t, b) == (3, 3) && l.abs_diff(r) <= 1, "左{l} 上{t} 右{r} 下{b}");
     }
@@ -1138,11 +1152,19 @@ mod tests {
             (png(900, 600), true),
             (black_jpeg(300, 200), false),
         ];
-        for (src, want) in cases {
-            let out = prepare_comic_page_for_epub(&src, kindle, 1, true).unwrap_or_else(|| src.clone());
+        for (src, want) in &cases {
+            let out = prepare_comic_page_for_epub(src, kindle, 1, true, false).unwrap_or_else(|| src.clone());
             let dims = image::load_from_memory(&out).unwrap().dimensions();
-            assert_eq!(crate::comicfxl::fills_canvas(dims, kindle.width, kindle.height), want, "{dims:?}");
+            assert_eq!(crate::comicfxl::fills_canvas(dims, kindle.width, kindle.height), *want, "{dims:?}");
         }
+        // 固定版式（full_canvas）：装饰小图、不放大的 PNG 也补成整个画布，图居中、不放大
+        for (src, _) in &cases {
+            let out = prepare_comic_page_for_epub(src, kindle, 1, true, true).unwrap_or_else(|| src.clone());
+            assert_eq!(image::load_from_memory(&out).unwrap().dimensions(), (kindle.width, kindle.height));
+        }
+        let out = image::load_from_memory(&prepare_comic_page_for_epub(&black_jpeg(300, 200), kindle, 1, true, true).unwrap()).unwrap().to_luma8();
+        let (x0, y0) = ((kindle.width - 300) / 2, (kindle.height - 200) / 2);
+        assert!(out.get_pixel(x0 + 150, y0 + 100)[0] < 30 && out.get_pixel(x0 - 5, y0 + 100)[0] > 225 && out.get_pixel(x0 + 150, y0 - 5)[0] > 225, "原尺寸居中");
     }
 
     fn gif_of(frames: &[image::RgbaImage]) -> Vec<u8> {

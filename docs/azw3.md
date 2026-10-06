@@ -1,6 +1,6 @@
 # AZW3 写出器
 
-Kindle 自带阅读器 USB 传书只认 AZW3（KF8），不认 EPUB。`crates/azw3` 把已经按 `kindle` 模式优化过的 EPUB 转成 AZW3，**只转格式，不改内容**。
+Kindle 自带阅读器 USB 传书不认 EPUB，认 AZW3（KF8）和侧载的 KFX。**书库 2026-10-05 起给 Kindle 出 KFX（见 [kfx.md](kfx.md)），AZW3 写出器不再进书库**，命令行 `epub-to-azw3` 还在。`crates/azw3` 把已经按 `kindle` 模式优化过的 EPUB 转成 AZW3，**只转格式，不改内容**。
 
 ## 用法
 

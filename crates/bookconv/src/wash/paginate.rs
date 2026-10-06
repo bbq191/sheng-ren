@@ -52,6 +52,12 @@ fn part_like(t: &str) -> bool {
     RE.get_or_init(|| Regex::new(&format!(r#"(?i)^\s*(第[{CN_NUM}]+\s*[部卷篇辑编]|(part|book|volume)\b)"#)).unwrap()).is_match(t)
 }
 
+/// 「第X册」「上册」——合集的装订分册。
+fn volume_like(t: &str) -> bool {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(&format!(r#"^\s*(第[{CN_NUM}]+\s*册|[上中下]\s*册)\s*$"#)).unwrap()).is_match(t)
+}
+
 fn chapter_like(t: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -481,10 +487,15 @@ fn title_key(t: &str) -> String {
 /// 最上一层算书/卷级：带子条目的至少两条（只有一条时要像「第X部/卷」），并且①带子条目的多数像「第X卷/部」，或②最上一层不像章、下一层多数像
 /// 「第X章/回」或「第X部」，或③最上一层不像章、目录有三层且分在至少两本书下面（《揭露人性》：书 → 「事件之章」 → 手记）。
 /// 下一层只是数字（阿加莎的「1」「2」）不算像章：那时最上一层当章、数字当节，结果和"书独占一页、数字章和正文同页"一样。
+/// 最上一层带子条目的多数是「第X册」时（福尔摩斯全集：册 → 作品 → 部 → 章），册只是装订单位、不会是章：去掉这一层再判断。
 fn chapter_depth(flat: &[(usize, String, String)]) -> usize {
     let Some(top) = flat.iter().map(|x| x.0).min() else { return 1 };
     let has_child = |i: usize| flat.get(i + 1).is_some_and(|n| n.0 > flat[i].0);
     let parents: Vec<usize> = (0..flat.len()).filter(|&i| flat[i].0 == top && has_child(i)).collect();
+    if parents.len() >= 2 && parents.iter().filter(|&&i| volume_like(&flat[i].1)).count() * 2 > parents.len() {
+        let inner: Vec<(usize, String, String)> = flat.iter().filter(|x| x.0 > top).cloned().collect();
+        return chapter_depth(&inner);
+    }
     // 只有一个带子条目的：它像「第X部/卷」才算书/卷级（只出了一部的书），否则当章。
     if parents.is_empty() || (parents.len() == 1 && !part_like(&flat[parents[0]].1)) {
         return top;
@@ -1263,7 +1274,8 @@ fn register_in_opf(opf_text: &str, opf_dir: &str, splits: &[(String, Vec<String>
         let prefix = html::tags(it.tag).next().map_or("", |t| &t.name[..t.name.len().saturating_sub(4)]);
         let mut new_items = String::new();
         let mut new_refs = String::new();
-        let iref = irefs.get(it.id).map(|t| html::remove_attr(&opf_text[t.start..t.end], "id"));
+        // 新 itemref 照原 itemref 抄（属性、前缀），一律写成自闭合（原来写成 `<itemref …></itemref>` 时抄出的开标签没人闭合）
+        let iref = irefs.get(it.id).map(|t| self_closed(&html::remove_attr(&opf_text[t.start..t.end], "id")));
         for (k, p) in new_paths.iter().enumerate() {
             let mut nid = format!("{}-p{}", it.id, k + 2);
             while ids.contains(nid.as_str()) || fresh.contains(&nid) {
@@ -1275,13 +1287,24 @@ fn register_in_opf(opf_text: &str, opf_dir: &str, splits: &[(String, Vec<String>
                 new_refs.push_str(&html::set_attr(r, "idref", &nid));
             }
         }
-        edits.push((it.pos + it.tag.len(), it.pos + it.tag.len(), new_items));
+        // 插在原项、原 itemref 整个元素后面：`<item …></item>` 写法时插在开标签后会成了它的子元素（2026-10-06《绝叫》OPF 不合法）
+        let item_end = html::tags_in(opf_text, it.pos, opf_text.len()).next().map_or(it.pos + it.tag.len(), |t| opf::element_end(opf_text, &t));
+        edits.push((item_end, item_end, new_items));
         if let Some(t) = irefs.get(it.id).filter(|_| !new_refs.is_empty()) {
-            edits.push((t.end, t.end, new_refs));
+            let end = opf::element_end(opf_text, t);
+            edits.push((end, end, new_refs));
         }
     }
     edits.sort_by_key(|e| e.0);
     html::apply_edits(opf_text, edits)
+}
+
+/// 开标签改成自闭合（`<a x="1">` → `<a x="1"/>`），已经是自闭合的原样。
+fn self_closed(tag: &str) -> String {
+    match tag.strip_suffix("/>") {
+        Some(_) => tag.to_string(),
+        None => format!("{}/>", tag.strip_suffix('>').unwrap_or(tag).trim_end()),
+    }
 }
 
 /// body 之外、`<head>` 之外的杂散文字（坏书把 CSS 写在 `<html>` 与 `<head>` 之间，宽松的阅读器会当正文显示）去掉。
@@ -1609,5 +1632,16 @@ mod tests {
         let shell = "\u{feff}<?xml version=\"1.0\"?><html><link href=\"a.css\"/>\np {\n\ttext-indent:2em;\n}\n<head><title>第三十八回</title></head><body>";
         assert_eq!(strip_stray_text(shell), "\u{feff}<?xml version=\"1.0\"?><html><link href=\"a.css\"/><head><title>第三十八回</title></head><body>");
         assert_eq!(strip_stray_text("\n</html>\n"), "\n</html>\n");
+    }
+
+    #[test]
+    fn split_registered_after_explicitly_closed_item_and_itemref() {
+        // 《绝叫》：item、itemref 都写成 `<x …></x>`，新项以前插进了原项里面、新 itemref 没闭合
+        let opf = r#"<package><manifest><item id="c1" href="t/c1.xhtml" media-type="application/xhtml+xml"></item><item id="c2" href="t/c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1" linear="yes"></itemref><itemref idref="c2"/></spine></package>"#;
+        let out = register_in_opf(opf, "", &[("t/c1.xhtml".into(), vec!["t/c1-p2.xhtml".into()]), ("t/c2.xhtml".into(), vec!["t/c2-p2.xhtml".into()])]);
+        assert_eq!(
+            out,
+            r#"<package><manifest><item id="c1" href="t/c1.xhtml" media-type="application/xhtml+xml"></item><item id="c1-p2" href="t/c1-p2.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="t/c2.xhtml" media-type="application/xhtml+xml"/><item id="c2-p2" href="t/c2-p2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1" linear="yes"></itemref><itemref idref="c1-p2" linear="yes"/><itemref idref="c2"/><itemref idref="c2-p2"/></spine></package>"#
+        );
     }
 }
