@@ -166,7 +166,10 @@ fn trim_tail(html: &str, referenced: &HashSet<String>, drawn: &Drawn) -> (String
                 n += 1;
                 // 自闭合的 `<span …/>` 被第一种写法当成了开始标签、和后面别人的闭合标签（`</p>`）配成一对：只删它自己，
                 // 闭合标签留着（2026-10-05：章名 `<p>第十九章<span/></p>` 单独成一份后落在末尾，`</p>` 被删、XML 不合法）。
-                if open.trim_end_matches('>').trim_end().ends_with('/') && open.len() < whole.len() {
+                // 开闭标签名字不同（HTML 写法没闭合的空段 `<p></div>`）同理：`</div>` 是外层容器的，留着（2026-10-06 审计）。
+                let close_name = html::tags(whole).last().filter(|t| t.kind == html::TagKind::Close).map_or("", |t| t.name);
+                let self_closing = open.trim_end_matches('>').trim_end().ends_with('/');
+                if (self_closing || !close_name.eq_ignore_ascii_case(name)) && open.len() < whole.len() {
                     return whole[open_end..].to_string();
                 }
                 String::new()
@@ -237,11 +240,13 @@ pub(super) fn remove_chapter_end_blanks(entries: &mut [Entry], rep: &mut WashRep
     let referenced = referenced_frags(entries);
     let drawn = Drawn::collect(entries);
     let mut tail_classes: HashSet<String> = HashSet::new();
+    // 条目名 → 下标建一次（此前每个 spine 页线性找一遍全书条目）
+    let index: HashMap<String, usize> = name_index(entries).into_iter().map(|(n, i)| (n.to_string(), i)).collect();
     for path in &opf.spine {
         if Some(path) == opf.nav_doc.as_ref() || is_toc_file(path) {
             continue;
         }
-        let Some(e) = entries.iter_mut().find(|e| &e.name == path) else { continue };
+        let Some(e) = index.get(path).map(|&i| &mut entries[i]) else { continue };
         let Ok(html) = std::str::from_utf8(&e.data) else { continue };
         let (new, removed, classes) = trim_tail(html, &referenced, &drawn);
         tail_classes.extend(classes);
@@ -303,6 +308,10 @@ mod tests {
         assert_eq!(classes, ["chapter-content"], "包住结尾、里面还有段落的容器；段落自己不算");
         let (_, n2, _) = trim_tail(&out, &refs, &drawn);
         assert_eq!(n2, 0, "幂等");
+        // 没闭合的空段后面是外层容器的闭合标签：只删空段，`</div>` 留着（此前连它一起删，div 没了闭合）
+        let (out, n, _) = trim_tail("<html><body><div class=\"c\"><p>最后一段。<p> <br/></div>\n</body></html>", &refs, &drawn);
+        assert_eq!(out, "<html><body><div class=\"c\"><p>最后一段。 </div>\n</body></html>");
+        assert_eq!(n, 2);
     }
 
     #[test]
