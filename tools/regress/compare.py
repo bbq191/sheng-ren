@@ -9,6 +9,7 @@
   TEXT-DIFF  可见文字变了：打印第一个不同处，需要逐条说明原因
   MISSING    旧的有、新的没有（按原书路径配对，两边都有 index.txt 时；否则按编号）
   NEW        新的有、旧的没有（两次回归之间增删了书）：只做下面两项核对
+  BROKEN     产物读不出来（不是 zip、没有 container.xml 等）
 另外两项核对，任何一本不过都算失败：
   - 新产物里 XHTML/OPF/NCX 不是合法 XML 的数量（不能比旧的多）；
   - 对原书的"字符账"：新产物可见文字的字符计数，和 index.txt 里记的原书 spine 可见文字逐字符相等
@@ -23,7 +24,7 @@ import os
 import re
 import sys
 import zipfile
-import xml.dom.minidom as md
+import xml.parsers.expat
 from urllib.parse import unquote
 
 MARKER = re.compile(r'<a\b[^>]*\bhref=["\']#[^"\']*["\'][^>]*>\s*\[\d+\]\s*</a>')
@@ -63,17 +64,26 @@ def invalid_xml(z):
     n = 0
     for name in z.namelist():
         if name.endswith(('.xhtml', '.html', '.htm', '.opf', '.ncx')):
+            # 直接用 expat（minidom 底下也是它）：带命名空间处理，未声明的前缀照样算不合法；不建 DOM，大书快得多
             try:
-                md.parseString(z.read(name))
-            except Exception:
+                xml.parsers.expat.ParserCreate(namespace_separator=' ').Parse(z.read(name), True)
+            except xml.parsers.expat.ExpatError:
                 n += 1
     return n
 
 
+def same_entries(za, zb):
+    """两个 zip 的条目（名字和字节）完全相同。先比目录里的名字、大小、CRC，都对上了再逐个条目比字节（不整本读进内存）。"""
+    ia = sorted((i.filename, i.file_size, i.CRC) for i in za.infolist())
+    ib = sorted((i.filename, i.file_size, i.CRC) for i in zb.infolist())
+    return ia == ib and all(za.read(n) == zb.read(n) for n, _, _ in ia)
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    strip = '--strip-old-markers' in sys.argv
-    if len(args) != 2:
+    flags = [a for a in sys.argv[1:] if a.startswith('--')]
+    strip = '--strip-old-markers' in flags
+    if len(args) != 2 or any(f != '--strip-old-markers' for f in flags):
         sys.exit(__doc__)
     old, new = args
 
@@ -104,26 +114,37 @@ def main():
             print('MISSING', na, io_.get(na, ''))
             bad += 1
             continue
-        zb = zipfile.ZipFile(os.path.join(new, nb + '.epub'))
-        za = zipfile.ZipFile(os.path.join(old, na + '.epub')) if na else None
-        xo, xn = (invalid_xml(za) if za else 0), invalid_xml(zb)
+        try:
+            zb = zipfile.ZipFile(os.path.join(new, nb + '.epub'))
+            za = zipfile.ZipFile(os.path.join(old, na + '.epub')) if na else None
+            xo, xn = (invalid_xml(za) if za else 0), invalid_xml(zb)
+            tb = spine_text(zb)
+        except Exception as e:  # 产物坏了（不是 zip、没有 container.xml 等）：这本报出来，不让整轮崩
+            print('BROKEN', nb, f'{type(e).__name__}: {e}')
+            bad += 1
+            continue
         inv_old += xo
         inv_new += xn
-        tb = spine_text(zb)
         notes = []
         src = in_.get(nb)
+        ts = None
         if src and os.path.exists(src):
-            ts = spine_text(zipfile.ZipFile(src))
+            try:
+                with zipfile.ZipFile(src) as zs:
+                    ts = spine_text(zs)
+            except Exception as e:
+                notes.append(f'未核对：原书读不出来（{type(e).__name__}: {e}）')
+        if ts is not None:
             if collections.Counter(ts) != collections.Counter(tb):
                 d_more = collections.Counter(tb) - collections.Counter(ts)
                 d_less = collections.Counter(ts) - collections.Counter(tb)
                 notes.append(f'对原书字符账不平：多 {dict(d_more.most_common(8))} 少 {dict(d_less.most_common(8))}')
-        else:
+        elif not notes:
             # 没核对就不能算通过（计为问题）
             notes.append(f'未核对：原书不在（{src}）' if src else '未核对：原书不在（index.txt 里没有这本的原书路径）')
         if za is None:
             status = 'NEW'
-        elif {n: za.read(n) for n in za.namelist()} == {n: zb.read(n) for n in zb.namelist()}:
+        elif same_entries(za, zb):
             status = 'SAME'
         else:
             ta = spine_text(za, strip)
