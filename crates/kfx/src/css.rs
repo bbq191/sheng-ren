@@ -166,13 +166,18 @@ fn matching_brace(s: &str, open: usize) -> Option<usize> {
     None
 }
 
-/// 解析 `a: b; c: d !important`。
+/// 解析 `a: b; c: d !important`。切声明用 [`bookconv::html::css_decls`]（和优化器同一个：引号、括号里的 `;` 不切，
+/// 引号里的转义、坏引号退回按 `;` 切），这里只管 `!important` 和展开简写。
 pub fn parse_decls(s: &str) -> Vec<Decl> {
     let mut out = Vec::new();
-    for part in split_top(s, ';') {
-        let Some((p, v)) = part.split_once(':') else { continue };
-        let prop = p.trim().to_ascii_lowercase();
-        let mut value = v.trim().to_string();
+    for d in bookconv::html::css_decls(s) {
+        // `css_decls` 会跳过属性名前面的杂字符（`*zoom` → `zoom`）；IE 的 `*color:red` 这类在浏览器里是无效声明，照旧不收。
+        let lead = (d.prop.as_ptr() as usize).saturating_sub(d.raw.as_ptr() as usize);
+        if !d.raw.get(..lead).unwrap_or("").trim().is_empty() {
+            continue;
+        }
+        let prop = d.prop.to_ascii_lowercase();
+        let mut value = d.value.to_string();
         let mut important = false;
         if let Some(i) = value.to_ascii_lowercase().rfind("!important") {
             value.truncate(i);
@@ -473,11 +478,11 @@ pub struct FontFace {
 pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
     let css = strip_comments(css);
     let mut out = Vec::new();
-    let mut rest: &str = &css;
-    while let Some(at) = rest.to_ascii_lowercase().find("@font-face") {
-        let Some(open) = rest[at..].find('{').map(|o| at + o) else { break };
-        let Some(close) = matching_brace(rest, open) else { break };
-        let decls = parse_decls(&rest[open + 1..close]);
+    // 找 `@font-face {…}` 块用优化器同一个正则（`bookconv::wash::font_face_re`）。
+    for m in bookconv::wash::font_face_re().find_iter(&css) {
+        let block = m.as_str();
+        let Some(open) = block.find('{') else { continue };
+        let decls = parse_decls(&block[open + 1..block.len() - 1]);
         let get = |k: &str| decls.iter().rev().find(|d| d.prop == k).map(|d| d.value.as_str());
         let family = get("font-family").map(|f| f.trim().trim_matches(['"', '\'']).to_string()).filter(|f| !f.is_empty());
         let url = get("src").and_then(|src| {
@@ -492,7 +497,6 @@ pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
             let italic = get("font-style").is_some_and(|v| matches!(v.trim(), "italic" | "oblique"));
             out.push(FontFace { family, path, bold, italic });
         }
-        rest = &rest[close + 1..];
     }
     out
 }
@@ -913,6 +917,12 @@ mod tests {
         assert_eq!(get("margin-left"), Some("0"));
         assert_eq!(get("background-color"), Some("#fff"));
         assert!(d.iter().any(|x| x.prop == "color" && x.important));
+        // 和优化器同一个切法：引号里的 `;`、转义的引号、`url(data:…;base64,…)` 不切；坏引号不吞掉后面的声明；`*color` 不收
+        let d = parse_decls(r#"font-family: "a;\"b"; background-image: url(data:image/png;base64,AA==); *color: blue; color: red"#);
+        let got: Vec<(&str, &str)> = d.iter().map(|x| (x.prop.as_str(), x.value.as_str())).collect();
+        assert_eq!(got, [("font-family", r#""a;\"b""#), ("background-image", "url(data:image/png;base64,AA==)"), ("color", "red")]);
+        let d = parse_decls("font-family: Georgia'; color: red");
+        assert!(d.iter().any(|x| x.prop == "color" && x.value == "red"), "{d:?}");
     }
 
     #[test]
