@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-06：461 个）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-06：451 个）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -40,7 +40,7 @@ tools/regress/compare.py 旧 新
 | 改动的性质 | 要求 |
 |---|---|
 | 重构、提速、修不影响产物的问题 | EPUB 产物逐个 zip 条目字节相同（EPUB 输出是确定的） |
-| 改了会影响正文的规则 | 可见文字改动前后一致；带分页和加 `--no-paginate` 一致；有变化的逐条说明原因 |
+| 改了会影响正文的规则 | 可见文字改动前后一致；spine 文件数和原书一样（不拆文件，原有的空页清理除外）；目录（NCX）条目数、层级、标签前后一致，每条的目标文件和锚点都在；有变化的逐条说明原因 |
 | 任何改动 | 输出的 XHTML、OPF、NCX 都是合法 XML（现在是 0 个不合法） |
 | 改了漫画处理 | 拿一卷漫画比图片字节 |
 
@@ -80,7 +80,7 @@ done
 
 | 改了什么 | 版本号 | 现值 | 过期的书 |
 |---|---|---|---|
-| 清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 44 | 全部 |
+| 清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 45 | 全部 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 4 | 只有补过东西的 |
 | EPUB → AZW3 | `azw3::WRITER_VERSION` | 4 | 书库已不出 AZW3（`epub-to-azw3` 还在） |

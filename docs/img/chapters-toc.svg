@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>按目录层级分页：哪一层是书/卷、章、节</title>
+  <title>按目录层级定书/卷、章、节（只管目录，不拆文件）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
@@ -27,7 +27,7 @@
   <path class="l" d="M380 82 L230 130" marker-end="url(#a)"/>
   <text x="270" y="104" class="y">是：合集</text>
   <rect class="bk" x="40" y="132" width="340" height="62" rx="8"/>
-  <text x="210" y="156" text-anchor="middle" class="h">第一层 = 书/卷（独占一页）</text>
+  <text x="210" y="156" text-anchor="middle" class="h">第一层 = 书/卷</text>
   <text x="210" y="178" text-anchor="middle" class="s">第二层 = 章，第三层 = 节</text>
 
   <!-- 否 -->
@@ -52,23 +52,24 @@
 
   <rect class="bk" x="20" y="364" width="220" height="92" rx="8"/>
   <text x="130" y="388" text-anchor="middle" class="h">书/卷、挂着章的「第X部」</text>
-  <text x="130" y="410" text-anchor="middle" class="s">独占一页</text>
-  <text x="130" y="430" text-anchor="middle" class="s">后面紧跟章名也各占一页</text>
+  <text x="130" y="410" text-anchor="middle" class="s">目录里最外层</text>
+  <text x="130" y="430" text-anchor="middle" class="s">章挂在它下面</text>
 
   <rect class="ch" x="260" y="364" width="220" height="92" rx="8"/>
   <text x="370" y="388" text-anchor="middle" class="h">章</text>
-  <text x="370" y="410" text-anchor="middle" class="s">独占一页（紧跟的回目</text>
-  <text x="370" y="430" text-anchor="middle" class="s">等副标题同页）</text>
+  <text x="370" y="410" text-anchor="middle" class="s">标题在文件中间的补 id，</text>
+  <text x="370" y="430" text-anchor="middle" class="s">目录改指到「文件#id」</text>
 
   <rect class="sec" x="500" y="364" width="220" height="92" rx="8"/>
   <text x="610" y="388" text-anchor="middle" class="h">节、章名只是数字</text>
-  <text x="610" y="410" text-anchor="middle" class="s">另起一页，和正文同页</text>
-  <text x="610" y="430" text-anchor="middle" class="s">（阿加莎「1」「2」）</text>
+  <text x="610" y="410" text-anchor="middle" class="s">挂在章下面一层；目录漏了的</text>
+  <text x="610" y="430" text-anchor="middle" class="s">补 id、按阅读顺序补进去</text>
 
   <rect class="no" x="740" y="364" width="220" height="92" rx="8"/>
   <text x="850" y="388" text-anchor="middle" class="h">更深的</text>
-  <text x="850" y="410" text-anchor="middle" class="s">不分页</text>
+  <text x="850" y="410" text-anchor="middle" class="s">不补进目录</text>
 
   <text x="490" y="494" text-anchor="middle" class="s">目录里没有的：章后面更深一级、不超过 40 字、不是「注：」开头的 &lt;hN&gt; 补成节；好读的「１」「２」节号段落补成节</text>
   <text x="490" y="518" text-anchor="middle" class="s">没有书自带目录、或六成以上的目录条目找不到标题时，退回按 &lt;h1&gt;–&lt;h6&gt; 级别判断（下一张图）</text>
+  <text x="490" y="542" text-anchor="middle" class="s">原书的文件一个不拆、不并（2026-10-06 起不再分页）；只改目录和给标题补 id</text>
 </svg>
