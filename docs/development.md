@@ -98,10 +98,11 @@ done
   | 要做的事 | 用这个 |
   |---|---|
   | HTML 操作（容错单双引号、注释、不把 `data-id` 当 `id`；别写只认双引号的正则） | `bookconv::html`；加类 `html::add_class`；不分大小写查找 `html::{find_ci, contains_ci}` |
-  | 写 EPUB / 读条目 / 读整本（元数据、spine、CSS、图片、目录） | `epubzip::EpubWriter` / `read_entries_from` / `epubbook::load`（AZW3、KFX 共用） |
+  | 写 EPUB / 读条目 / 读整本（元数据、spine、CSS、图片、目录） | `epubzip::EpubWriter` / `read_entries_from` / `epubbook::load`（AZW3、KFX 共用；从文件读用 `epubbook::load_from`，不整本读进内存） |
   | manifest 路径；书里链接解析（还原字符引用 → 拆锚点 → 百分号解码 → 规整路径） | `ManifestItem::path`；`epubzip::resolve_link` |
   | 原子写文件（书库也用） | `util` 的 `produce_then_replace`、`commit` |
   | DRM 判定；全角转半角；图片格式识别；哈希 | `wash::encrypted_targets`；`util::to_halfwidth`；`util::image_kind`；`util::fnv64` |
+  | `@font-face` 规则匹配（清洗层、AZW3 写出器共用） | `wash::font_face_re` |
   | install / uninstall 共用的包列表和路径 | `tools/cargo-pkgs.sh` |
 - **不可信输入不能让进程崩溃**：书的字节全是外来数据，数值相加用 `checked_add`、切片用 `get`；图片解码器 panic 由 `imgopt::guard` 兜住。**读外来数据设上限，超过就报错、不截断照用**（读用 `util::read_capped`）：
   - zip 条目解压 `epubzip::MAX_ENTRY_BYTES`（256MB，EPUB 与 CBZ 共用）；
