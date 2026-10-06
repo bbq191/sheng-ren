@@ -109,13 +109,7 @@ pub(super) fn set_manifest_media_types(opf: &str, opf_path: &str, retyped: &[(St
 /// 生产抓图闭包：`//`→https、Referer=图自身 origin（满足多数 CDN 同源防盗链）、抓取+降采样。
 pub(super) fn remote_img_fetcher(ag: &ureq::Agent, screen: crate::imgopt::Screen) -> impl Fn(&str) -> Option<(Vec<u8>, &'static str)> + '_ {
     move |src: &str| {
-        let abs = if let Some(r) = src.strip_prefix("//") { format!("https://{r}") } else { src.to_string() };
-        let referer = abs
-            .find("://")
-            .and_then(|i| abs[i + 3..].find('/').map(|j| &abs[..i + 3 + j + 1]))
-            .unwrap_or("")
-            .to_string();
-        crate::netimg::fetch_image(ag, src, &referer, Some(screen)).map(|(b, ext, _mime)| (b, ext))
+        crate::netimg::fetch_image(ag, src, &crate::netimg::origin_of(src), Some(screen)).map(|(b, ext, _mime)| (b, ext))
     }
 }
 
@@ -184,17 +178,14 @@ pub(super) fn first_pass_html(text: &str, name: &str, keep_fonts: &HashSet<Strin
 
 /// 图片最终变换：按漫画/文字书分流（漫画只裁边/适配阅读范围，画质优先）。
 /// 返回 `None` = 无需改动、沿用原字节（调用方自己决定借用还是移走，不为"没变"整张图克隆一份）。
-///
-/// 解码器遇到畸形图片偶发 panic（第三方书的坏 JPEG/PNG 是外部输入）：这里兜住、按"失败原样保留"处理——否则 panic 会从
-/// 图片 worker 线程一路把整本书的优化搞砸（`thread::scope` 把子线程 panic 重新抛给调用方），只为一张坏图不值得。
+/// 解码器遇到畸形图片偶发 panic：兜住、按"失败原样保留"处理（[`crate::imgopt::guard`]）。
 pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool) -> Option<Vec<u8>> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    crate::imgopt::guard(|| {
         if is_comic_book {
             // 单趟（解码/编码各一次、灰度保持、缩放走 SIMD），见 `prepare_comic_page_for_epub`。
             crate::imgopt::prepare_comic_page_for_epub(bytes, screen, comic_margin, grayscale)
         } else {
             crate::imgopt::downscale_for_epub(bytes, screen)
         }
-    }))
-    .unwrap_or(None)
+    })
 }

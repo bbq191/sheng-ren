@@ -167,18 +167,20 @@ pub fn apply_fields(opf: &str, set: &[(DcField, Vec<String>)]) -> Result<String,
             removals.push((t.start, end));
         }
     }
-    // 从后往前：同一位置先插入再删除（插入点就是第一个被删元素的开头）
-    let mut ops: Vec<(usize, Option<usize>, String)> = removals.into_iter().map(|(s, e)| (s, Some(e), String::new())).collect();
-    ops.extend(inserts.into_iter().map(|(at, text)| (at, None, text)));
-    ops.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.is_none().cmp(&b.1.is_none())));
-    let mut out = opf.to_string();
-    for (at, end, text) in ops {
-        match end {
-            Some(e) => out.replace_range(at..e, ""),
-            None => out.insert_str(at, &text),
+    // 坏 OPF 里元素可能套着元素，要删的范围会重叠：插入点落在别的要删的范围里面时挪到那个范围的开头（不然新值跟着被删掉）；
+    // 重叠的删除由 `apply_edits` 跳过（外面那个已经连里面一起删了）。
+    removals.sort();
+    for (at, _) in inserts.iter_mut() {
+        if let Some(&(s, _)) = removals.iter().find(|&&(s, e)| s < *at && *at < e) {
+            *at = s;
         }
     }
-    Ok(out)
+    // 同一位置：先插入再删除（插入点就是第一个被删元素的开头）；几个字段插在同一处时后给的在前（以前从后往前逐个插入就是这个顺序）
+    inserts.reverse();
+    let mut ops: Vec<(usize, usize, String)> = inserts.into_iter().map(|(at, text)| (at, at, text)).collect();
+    ops.extend(removals.into_iter().map(|(s, e)| (s, e, String::new())));
+    ops.sort_by_key(|&(s, e, _)| (s, e > s));
+    Ok(html::apply_edits(opf, ops))
 }
 
 /// NCX 的 `<docTitle><text>` 换成新书名（阅读器目录顶上显示的书名）。没有 docTitle 原样返回。
@@ -212,7 +214,7 @@ fn to_format(image: &[u8], ext: &str) -> Result<(Vec<u8>, Option<&'static str>),
     if have == want {
         return Ok((image.to_vec(), None));
     }
-    let img = image::load_from_memory(image).map_err(|e| format!("封面图解不开：{e}"))?;
+    let img = crate::imgopt::guard(|| Some(image::load_from_memory(image))).ok_or("封面图解不开")?.map_err(|e| format!("封面图解不开：{e}"))?;
     let mut out = Vec::new();
     let fmt = if want == "png" { image::ImageFormat::Png } else { image::ImageFormat::Jpeg };
     let img = if fmt == image::ImageFormat::Jpeg { image::DynamicImage::ImageRgb8(img.to_rgb8()) } else { img };
@@ -575,6 +577,28 @@ mod tests {
         // 再改一次结果一样（幂等）
         let again = apply_fields(&out, &[(DcField::Title, vec!["新书名 & 副题".into()])]).unwrap();
         assert_eq!(read(&again), read(&out));
+    }
+
+    /// 坏 OPF 里元素套着元素（`<dc:title>` 没闭合就又开一个、作者写在书名里面）：要删的范围互相重叠。以前按原文偏移从后往前
+    /// 删，删完里面那个再删外面那个时偏移已经越界，panic（`booklib meta --edit`、生成时补元数据都会遇到外来的 OPF）。
+    #[test]
+    fn nested_elements_do_not_panic() {
+        let opf = r##"<package version="3.0"><metadata><dc:title>甲<dc:title>乙</dc:title></dc:title><dc:subject>A<dc:creator id="c">作者</dc:creator></dc:subject><meta refines="#c" property="role">aut</meta></metadata></package>"##;
+        let out = apply_fields(opf, &[(DcField::Title, vec!["新".into()]), (DcField::Creator, vec!["丙".into()]), (DcField::Subject, vec!["标签".into()])]).unwrap();
+        let m = read(&out);
+        let get = |f: DcField| m.iter().find(|(x, _)| *x == f).unwrap().1.clone();
+        assert_eq!(get(DcField::Title), ["新"], "{out}");
+        assert_eq!(get(DcField::Creator), ["丙"], "套在别的元素里的作者也换掉，新值不丢：{out}");
+        assert_eq!(get(DcField::Subject), ["标签"], "{out}");
+        assert!(!out.contains("refines"), "{out}");
+    }
+
+    /// 几个字段都插在同一处（OPF 里原来都没有）时的先后顺序：和以前从后往前插入的结果一样（后给的字段在前）。
+    #[test]
+    fn inserts_at_same_place_keep_previous_order() {
+        let opf = "<package><metadata><dc:identifier>x</dc:identifier></metadata></package>";
+        let out = apply_fields(opf, &[(DcField::Publisher, vec!["社".into()]), (DcField::Date, vec!["2020".into()])]).unwrap();
+        assert_eq!(out, "<package><metadata><dc:identifier>x</dc:identifier><dc:date>2020</dc:date><dc:publisher>社</dc:publisher></metadata></package>");
     }
 
     #[test]

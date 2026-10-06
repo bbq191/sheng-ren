@@ -60,7 +60,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 let Ok(job) = job else { break };
                 // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
                 // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
-                let px = std::panic::catch_unwind(|| crate::imgopt::pixel_count(&job.bytes)).unwrap_or(1_000_000);
+                let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&job.bytes))).unwrap_or(1_000_000);
                 let _permit = budget.acquire(px);
                 let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale).unwrap_or(job.bytes);
                 let _ = job.reply.send(out);
@@ -77,7 +77,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 let img_name = &entries[image_positions[next_submit]].0;
                 // 清洗时改过名的（文件名有安卓存储不能用的字符）按原名回原书读
                 let src_name = src_names.get(img_name.as_str()).copied().unwrap_or(img_name.as_str());
-                let real_bytes = crate::epubzip::read_by_name(&mut archive, src_name).map_err(|e| format!("重读图片 {src_name} 失败: {e}"))?;
+                let real_bytes = crate::epubzip::read_by_name(&mut archive, src_name).map_err(|e| format!("重读图片失败: {e}"))?;
                 let (tx, rx) = std::sync::mpsc::channel();
                 job_tx.send(ImgJob { bytes: real_bytes, reply: tx }).map_err(|_| "图片处理线程已退出".to_string())?;
                 pending.push_back(rx);
