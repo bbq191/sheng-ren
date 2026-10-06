@@ -15,7 +15,7 @@
 //! `<id>` 是原件内容 SHA-256 的前 12 位十六进制：同一本书重复入库会认出来，改名移动了也认得出。
 //!
 //! 跟踪目录 `D` 里的书，产物放在书库外、和 `D` 并列的 `D/../<模式>/` 下，按原件所在子目录镜像
-//! （`books/haodoo/x.epub` → `kindle/haodoo/<书名>.azw3`），见 `generate.rs`。
+//! （`books/haodoo/x.epub` → `kindle/haodoo/<书名>.kfx`），见 `generate.rs`。
 //!
 //! 生成时读原件：EPUB 直接用；CBZ 当场转成 EPUB（与设备无关的转换，结果不落书库）。
 //! 早期版本收过的其它格式（MOBI/AZW3/FB2/PDF 等）2026-09-29 起不再支持：条目保留（`list` 标出来），生成时跳过。
@@ -595,6 +595,10 @@ impl Library {
             return Err(format!("原件改过了：{}（内容和入库时不同。booklib sync 或重新 add 入库新版本）", path.display()));
         }
         self.verified.borrow_mut().insert(m.id.clone(), (m.source_path.clone(), st));
+        // 不持锁（`list` 经 `is_comic` 走到这里）时只记在本进程里，不写书库
+        if !self.locked.get() {
+            return Ok(path);
+        }
         // 从书库重读再改：调用方手里的 `m` 可能是旧的（比如之后 meta 找来了封面）
         let mut cur = self.read_meta(&m.id).unwrap_or_else(|| m.clone());
         if cur.source_path == m.source_path {
@@ -648,6 +652,9 @@ impl Library {
             hashed.insert(p.to_path_buf(), h.clone());
             Some(h)
         };
+        // 书库里的文件（各条目存着的副本）不算原件：`dedupe` 给了书库所在的目录时，副本和原件内容相同、会被当成"找到了原件"，
+        // 接着把它自己删掉——这本书就没了
+        let root = std::fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
         for mut m in legacy {
             let dir = self.entry_dir(&m.id);
             let mut tries: Vec<PathBuf> = Vec::new();
@@ -657,6 +664,9 @@ impl Library {
             tries.extend(candidates.iter().filter(|p| p.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case(&m.source_format))).cloned());
             let found = tries.into_iter().filter(|p| p.is_file()).find_map(|p| {
                 let p = std::fs::canonicalize(&p).unwrap_or(p);
+                if p.starts_with(&root) {
+                    return None;
+                }
                 let s = p.to_str()?.to_string();
                 hash_of(&p).filter(|h| h.starts_with(&m.id)).map(|h| (p, s, h))
             });
@@ -697,7 +707,12 @@ impl Library {
         }
         let title = self.read_meta(id).map(|m| m.title).unwrap_or_else(|| "（条目已损坏）".into());
         self.remove_outputs(id)?;
-        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+        // 先改名成临时目录再删：`remove_dir_all` 中途断电的话，条目目录里可能只剩一半文件（比如 meta.json 删了、
+        // master.epub 还在，成了"损坏的条目"）；改名是原子的，留下的临时目录下次拿到锁时清掉
+        let doomed = fsutil::tmp_sibling(&dir);
+        std::fs::rename(&dir, &doomed).map_err(|e| format!("删 {}: {e}", dir.display()))?;
+        let _ = fsutil::sync_parent(&dir);
+        let _ = std::fs::remove_dir_all(&doomed);
         self.verified.borrow_mut().remove(id);
         Ok(title)
     }
