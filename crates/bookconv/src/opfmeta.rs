@@ -76,7 +76,7 @@ fn dc_elements(opf: &str) -> Vec<DcElem> {
         let Some(local) = t.name.strip_prefix("dc:").or_else(|| t.name.strip_prefix("DC:")) else { continue };
         let Some(field) = DcField::ALL.into_iter().find(|f| f.name().eq_ignore_ascii_case(local)) else { continue };
         let tag = &opf[t.start..t.end];
-        let id = html::attr_value(tag, "id").filter(|v| !v.is_empty()).map(str::to_string);
+        let id = html::attr_value(tag, "id").map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
         let (end, value) = if t.kind == TagKind::SelfClosing {
             (t.end, String::new())
         } else {
@@ -140,7 +140,7 @@ pub fn apply_fields(opf: &str, set: &[(DcField, Vec<String>)]) -> Result<String,
     let mut inserts: Vec<(usize, String)> = Vec::new();
     let mut removed_ids: Vec<String> = Vec::new();
     // `<package unique-identifier="X">` 指向的那个标识符不能删（删了 OPF 不合法，NCX 的 dtb:uid 也对不上，reMarkable 会不显示目录）
-    let uid = html::tags(opf).find(|t| t.is_start() && t.is("package")).and_then(|t| html::attr_value(&opf[t.start..t.end], "unique-identifier")).map(str::to_string);
+    let uid = crate::wash::opf::package_unique_identifier(opf).map(str::to_string);
     for (field, values) in set {
         let old: Vec<&DcElem> = elems.iter().filter(|e| e.field == *field && !(e.field == DcField::Identifier && uid.is_some() && e.id == uid)).collect();
         let at = old.first().map_or(meta_close, |e| e.start);
