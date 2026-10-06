@@ -540,12 +540,21 @@ pub fn parse_color(v: &str) -> Option<u32> {
         };
     }
     if let Some(inner) = v.strip_prefix("rgba(").or_else(|| v.strip_prefix("rgb(")).and_then(|s| s.strip_suffix(')')) {
-        let p: Vec<f64> = inner.split(',').map(|x| x.trim().trim_end_matches('%').parse().unwrap_or(0.0)).collect();
+        // 每一项可以是数（颜色 0–255、透明度 0–1）或百分比（100% = 255 / 1）。以前把 `%` 直接去掉，
+        // `rgb(100%, 0%, 0%)` 成了 (100, 0, 0)，`rgba(…, 50%)` 成了不透明。
+        let p: Vec<(f64, bool)> = inner
+            .split(',')
+            .map(|x| {
+                let x = x.trim();
+                let pct = x.ends_with('%');
+                (x.trim_end_matches('%').trim().parse().unwrap_or(0.0), pct)
+            })
+            .collect();
         if p.len() < 3 {
             return None;
         }
-        let a = p.get(3).map(|a| (a.clamp(0.0, 1.0) * 255.0).round() as u32).unwrap_or(255);
-        let c = |x: f64| x.clamp(0.0, 255.0).round() as u32;
+        let a = p.get(3).map(|&(a, pct)| ((if pct { a / 100.0 } else { a }).clamp(0.0, 1.0) * 255.0).round() as u32).unwrap_or(255);
+        let c = |(x, pct): (f64, bool)| (if pct { x / 100.0 * 255.0 } else { x }).clamp(0.0, 255.0).round() as u32;
         return Some(a << 24 | c(p[0]) << 16 | c(p[1]) << 8 | c(p[2]));
     }
     let named = match v.as_str() {
@@ -756,6 +765,10 @@ impl Computed {
                     None => parent.font_size,
                 },
             };
+            // 负的字号不合法（CSS 里这条声明作废、照父元素）；以前照算出负字号，换算出的长度跟着变号。
+            if !(c.font_size >= 0.0 && c.font_size.is_finite()) {
+                c.font_size = parent.font_size;
+            }
         }
         if let Some(v) = get("font-family") {
             let first = split_top(v, ',').into_iter().next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string();
@@ -962,6 +975,8 @@ mod tests {
         assert_eq!(parse_color("#01a0ea"), Some(0xFF01A0EA));
         assert_eq!(parse_color("#fff"), Some(0xFFFFFFFF));
         assert_eq!(parse_color("rgba(128, 0, 0, 0.7)"), Some(0xB3800000));
+        assert_eq!(parse_color("rgb(100%, 0%, 50%)"), Some(0xFFFF0080));
+        assert_eq!(parse_color("rgba(0, 0, 0, 50%)"), Some(0x80000000));
         assert_eq!(parse_len("1.5em"), Some(Len::Em(1.5)));
         assert_eq!(parse_len("30%"), Some(Len::Percent(30.0)));
         assert_eq!(parse_len("4px"), Some(Len::Pt(3.0)));
@@ -978,5 +993,8 @@ mod tests {
         let child = Computed::derive(&h, &HashMap::new(), "span");
         assert_eq!(child.font_size, 2.0);
         assert_eq!(child.margin[0], None);
+        // 负字号作废，照父元素
+        let neg = Computed::derive(&h, &HashMap::from([("font-size".to_string(), "-1em".to_string())]), "span");
+        assert_eq!(neg.font_size, 2.0);
     }
 }
