@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>章节判定：哪一级标题是章、哪一级是节</title>
+  <title>章节判定（退路）：哪一级标题是章、哪一级是节</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
@@ -28,7 +28,7 @@
   <text x="120" y="116" text-anchor="middle" class="h">按目录找标题</text>
   <text x="120" y="138" text-anchor="middle" class="s">目录指向的短段落（≤60 字）</text>
   <text x="120" y="156" text-anchor="middle" class="s">当章标题；锚点可在段前</text>
-  <text x="120" y="174" text-anchor="middle" class="s">的空元素上。没有目录：不分页</text>
+  <text x="120" y="174" text-anchor="middle" class="s">的空元素上。没有目录：不判</text>
 
   <g transform="translate(70,0)">
   <!-- 是 -->
@@ -56,23 +56,23 @@
   <path class="l" d="M500 300 L568 300" marker-end="url(#a)"/>
   <text x="512" y="294" class="y">是</text>
   <rect class="ch" x="570" y="280" width="180" height="40" rx="8"/>
-  <text x="660" y="305" text-anchor="middle" class="h">副标题：和章同页</text>
+  <text x="660" y="305" text-anchor="middle" class="h">副标题：算章名的一部分</text>
 
   <path class="l" d="M330 330 L330 360" marker-end="url(#a)"/>
   <rect class="sec" x="160" y="362" width="340" height="44" rx="8"/>
-  <text x="330" y="389" text-anchor="middle" class="h">再下一级 = 节：新起一页，和正文同页</text>
+  <text x="330" y="389" text-anchor="middle" class="h">再下一级 = 节：挂在章下面进目录</text>
   <path class="l" d="M660 320 C660 345 520 350 502 375" marker-end="url(#a)"/>
 
   <path class="l" d="M330 406 L330 430" marker-end="url(#a)"/>
   <rect class="no" x="200" y="432" width="260" height="36" rx="8"/>
-  <text x="330" y="455" text-anchor="middle" class="h">更深的标题：不分页</text>
+  <text x="330" y="455" text-anchor="middle" class="h">更深的标题：不补进目录</text>
 
   </g>
   <!-- 结果说明 -->
-  <rect class="ch" x="20" y="500" width="20" height="16" rx="3"/><text x="48" y="513" class="s">章：独立一页</text>
-  <rect class="sec" x="160" y="500" width="20" height="16" rx="3"/><text x="188" y="513" class="s">节：和正文同页，节与节之间分页</text>
-  <text x="20" y="560" class="s">章标题后只跟着不到 30 字（书名页的作者行）不单独成页；但部标题后紧跟章标题时，部、章各占一页。</text>
-  <text x="20" y="582" class="s">漫画、目录页不拆；已经拆过的书再处理不会再拆。</text>
+  <rect class="ch" x="20" y="500" width="20" height="16" rx="3"/><text x="48" y="513" class="s">章：目录第一层</text>
+  <rect class="sec" x="160" y="500" width="20" height="16" rx="3"/><text x="188" y="513" class="s">节：目录里挂在章下面；书自带目录漏了的补进去（没有 id 的补 id）</text>
+  <text x="20" y="560" class="s">只管目录：原书的文件不拆不并（2026-10-06 起不再分页）。补进目录的只有和章标题在同一个原文件里的节。</text>
+  <text x="20" y="582" class="s">漫画、目录页不判；再处理一遍不会重复补。</text>
 
   <!-- 好读补充 -->
   <rect class="hd" x="620" y="384" width="320" height="150" rx="10"/>

@@ -22,7 +22,7 @@
 
   <!-- 清洗层：文字书和漫画都做 -->
   <rect class="w" x="20" y="78" width="900" height="206" rx="10"/>
-  <text x="470" y="100" text-anchor="middle" class="h">清洗层 wash（文字书、漫画都做；漫画不分页）</text>
+  <text x="470" y="100" text-anchor="middle" class="h">清洗层 wash（文字书、漫画都做；⑧ 只做文字书）</text>
   <g class="s">
     <text x="40" y="126">① 剥"伪 DRM"（真 DRM 报错）· 删空白页、失效引用 · 坏文件名改名</text>
     <text x="40" y="148">② 判断主语言（dc:language + 正文字符分布）</text>
@@ -31,7 +31,7 @@
     <text x="40" y="214">⑤ 段首缩进空白交给 CSS · 居中居右换成类 · 补 lang</text>
     <text x="490" y="126">⑥ 注入 eink-wash.css：缩进、两端对齐、断字、注释和批注 0.85em</text>
     <text x="490" y="148">⑦ 目录：改指指错的、按层级重建（册/作品/部/章）、没有就生成</text>
-    <text x="490" y="170">⑧ 分页：书/卷、章独占一页，节另起一页（按目录层级）</text>
+    <text x="490" y="170">⑧ 定章节（按目录层级）：漏掉的节补进目录，不拆文件</text>
     <text x="490" y="192">⑨ 删章尾空白页 · NCX uid 对齐 OPF</text>
     <text x="490" y="214">⑩ 规范整理：XHTML 修成合法 XML、OPF 3.0、nav + NCX、landmarks</text>
   </g>
@@ -48,7 +48,7 @@
   <rect class="t" x="20" y="318" width="440" height="262" rx="10"/>
   <text x="240" y="340" text-anchor="middle" class="h">文字书</text>
   <g class="s">
-    <text x="36" y="366">· 注释搬到引用它的那一份末尾，标号改成同文件链接</text>
+    <text x="36" y="366">· 注释搬到引用它的那一章末尾，标号改成同文件链接</text>
     <text x="52" y="386">（几章都引用的留在原处；回链 xochitl 去掉，另两台保留）</text>
     <text x="36" y="410">· 只有小图标的注释号换成上标数字（三个模式都这样）</text>
     <text x="36" y="434">· 书里引用的网上图片抓进书里；抓不到的删掉 &lt;img&gt;</text>
