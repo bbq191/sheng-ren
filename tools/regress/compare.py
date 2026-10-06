@@ -13,7 +13,7 @@
 另外两项核对，任何一本不过都算失败：
   - 新产物里 XHTML/OPF/NCX 不是合法 XML 的数量（不能比旧的多）；
   - 对原书的"字符账"：新产物可见文字的字符计数，和 index.txt 里记的原书 spine 可见文字逐字符相等
-    （顺序不管：注释会从原处挪到章末，但一个字不多一个字不少）。唯一的例外是只有图标的注释号换成数字（用户定的规则）：
+    （顺序不管：注释会从原处挪到章末，但一个字不多一个字不少）；正文图片（<img>、SVG <image>）不比原书少。唯一的例外是只有图标的注释号换成数字（用户定的规则）：
     只多出 ASCII 数字、原书里有只含图片的链接、多出的位数不超过按图标个数连续编号的位数时，只注明、不算不平。
 
 --strip-old-markers：旧产物里优化器自己加的注释标号 `<a href="#…">[N]</a>` 不算正文（v27 起不再加），比较前从旧的里去掉。
@@ -31,7 +31,8 @@ from urllib.parse import unquote
 MARKER = re.compile(r'<a\b[^>]*\bhref=["\']#[^"\']*["\'][^>]*>\s*\[\d+\]\s*</a>')
 
 
-def spine_text(z, strip_markers=False):
+def spine_paths(z):
+    """spine 顺序的条目路径（manifest 里找不到的 idref 跳过）。"""
     opf_path = re.search(r'full-path=["\']([^"\']+)', z.read('META-INF/container.xml').decode()).group(1)
     opf = z.read(opf_path).decode('utf-8', 'replace')
     base = os.path.dirname(opf_path)
@@ -42,12 +43,14 @@ def spine_text(z, strip_markers=False):
         h = re.search(r'\bhref=["\']([^"\']+)', t)
         if i and h:
             items[i.group(1)] = h.group(1)
+    return [os.path.normpath(os.path.join(base, unquote(html.unescape(items[i])))).replace('\\', '/')
+            for i in re.findall(r'<itemref\b[^>]*\bidref=["\']([^"\']+)', opf) if i in items]
+
+
+def spine_text(z, strip_markers=False):
     out = []
     names = set(z.namelist())
-    for idref in re.findall(r'<itemref\b[^>]*\bidref=["\']([^"\']+)', opf):
-        if idref not in items:
-            continue
-        p = os.path.normpath(os.path.join(base, unquote(html.unescape(items[idref])))).replace('\\', '/')
+    for p in spine_paths(z):
         if p not in names:  # spine 指向不存在的条目（原书就坏）：跳过，不让整轮崩
             continue
         t = z.read(p).decode('utf-8', 'replace')
@@ -62,6 +65,21 @@ def spine_text(z, strip_markers=False):
 
 
 LINK = re.compile(r'(?is)<a\b[^>]*\bhref=["\'][^"\']*#[^>]*>(.*?)</a>')
+
+
+def body_images(z):
+    """spine 里正文图片的个数（`<img>`、SVG `<image>`），不算只有图、没有文字的链接里的图（图标注释号，优化器换成数字）。"""
+    n = 0
+    names = set(z.namelist())
+    for p in spine_paths(z):
+        if p not in names:
+            continue
+        t = re.sub(r'(?is)<head\b.*?</head>', '', z.read(p).decode('utf-8', 'replace'))
+        n += len(re.findall(r'(?i)<(?:img|image)\b', t))
+        for inner in LINK.findall(t):
+            if not re.sub(r'(?s)<[^>]+>|\s', '', inner):
+                n -= len(re.findall(r'(?i)<(?:img|image)\b', inner))
+    return n
 
 
 def icon_note_links(src):
@@ -157,6 +175,15 @@ def main():
             except Exception as e:
                 notes.append(f'未核对：原书读不出来（{type(e).__name__}: {e}）')
         if ts is not None:
+            # 图片账：正文图片一张不能少（字符账只管文字，只有图的页被删了它看不出来）
+            try:
+                with zipfile.ZipFile(src) as zs:
+                    ia = body_images(zs)
+                ib = body_images(zb)
+                if ib < ia:
+                    notes.append(f'对原书图片账不平：原书正文图 {ia} 张，新产物 {ib} 张')
+            except Exception as e:
+                notes.append(f'图片未核对（{type(e).__name__}: {e}）')
             if collections.Counter(ts) != collections.Counter(tb):
                 d_more = collections.Counter(tb) - collections.Counter(ts)
                 d_less = collections.Counter(ts) - collections.Counter(tb)
