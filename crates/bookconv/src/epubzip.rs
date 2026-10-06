@@ -49,11 +49,23 @@ pub fn is_html_entry(name: &str, data: &[u8]) -> bool {
 /// 真实条目超过这个值时 `read_to_end` 照常按需扩容，结果不变。
 const PREALLOC_CAP: u64 = 32 * 1024 * 1024;
 
-/// 读完一个 zip 条目的全部字节（`declared` = 目录里声明的解压大小，只用来预分配，封顶 [`PREALLOC_CAP`]）。
-/// 本模块各读取入口共用。
-pub(crate) fn read_all(mut r: impl Read, declared: u64) -> Result<Vec<u8>, String> {
-    let mut v = Vec::with_capacity(declared.min(PREALLOC_CAP) as usize);
-    r.read_to_end(&mut v).map_err(|e| e.to_string())?;
+/// 单个条目解压后的上限。真实书里最大的条目（600dpi 扫描的漫画页、整本一个文件的网文、嵌入字体）远小于它；
+/// 几 KB 的压缩数据能解出几 GB（zip 炸弹），目录里声明的大小也可以造假，所以读的时候按实际解出的字节数截。
+/// EPUB 和 CBZ 的各读取入口共用（此前只有 CBZ 收页设了上限，读 EPUB 条目没有）。
+pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
+
+/// 读完一个 zip 条目的全部字节（`declared` = 目录里声明的解压大小，只用来预分配，封顶 [`PREALLOC_CAP`]）；
+/// 解出来超过 [`MAX_ENTRY_BYTES`] 报错。本模块各读取入口和 CBZ 收页共用。
+pub(crate) fn read_all(r: impl Read, declared: u64, name: &str) -> Result<Vec<u8>, String> {
+    read_all_capped(r, declared, name, MAX_ENTRY_BYTES)
+}
+
+fn read_all_capped(r: impl Read, declared: u64, name: &str, cap: u64) -> Result<Vec<u8>, String> {
+    let mut v = Vec::with_capacity(declared.min(PREALLOC_CAP).min(cap) as usize);
+    r.take(cap + 1).read_to_end(&mut v).map_err(|e| format!("{name}: {e}"))?;
+    if v.len() as u64 > cap {
+        return Err(format!("{name}: 解压后超过单个条目上限 {} MB（损坏或恶意的压缩包？）", cap >> 20));
+    }
     Ok(v)
 }
 
@@ -142,7 +154,7 @@ pub fn read_entries_from<R: Read + Seek>(zip: &mut ZipArchive<R>, keep_bytes: im
         let name = f.name().to_string();
         let data = if keep_bytes(&name) {
             let size = f.size();
-            read_all(&mut f, size)?
+            read_all(&mut f, size, &name)?
         } else {
             Vec::new()
         };
@@ -163,10 +175,10 @@ pub fn read_by_name_opt<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> 
     let mut f = match zip.by_name(name) {
         Ok(f) => f,
         Err(zip::result::ZipError::FileNotFound) => return Ok(None),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(format!("{name}: {e}")),
     };
     let size = f.size();
-    read_all(&mut f, size).map(Some)
+    read_all(&mut f, size, name).map(Some)
 }
 
 /// 同 [`read_by_name_opt`]，条目不存在也算错误。
@@ -442,6 +454,30 @@ mod tests {
         assert_eq!(sk.entries[0].data, b"<p>hi</p>");
         assert!(sk.entries[0].data.capacity() as u64 <= PREALLOC_CAP, "预分配必须封顶");
         assert!(read_by_name_opt(&mut z, "a.xhtml").unwrap().unwrap().capacity() as u64 <= PREALLOC_CAP);
+    }
+
+    /// zip 炸弹：压缩数据很小、解出来超过上限的条目报错，而不是一直解到内存耗尽（以前读 EPUB 条目没有上限）。
+    /// 生产上限 256MB，测试用同一实现、小上限。
+    #[test]
+    fn entry_bigger_than_cap_is_rejected_not_read_to_the_end() {
+        let bytes = zip_of(&[("a.xhtml", &[b'x'; 5000]), ("b.xhtml", &[b'y'; 100])]);
+        let mut z = ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let read = |z: &mut ZipArchive<std::io::Cursor<&Vec<u8>>>, n: &str, cap| {
+            let mut f = z.by_name(n).unwrap();
+            let size = f.size();
+            read_all_capped(&mut f, size, n, cap)
+        };
+        let err = read(&mut z, "a.xhtml", 4096).unwrap_err();
+        assert!(err.contains("a.xhtml") && err.contains("上限"), "{err}");
+        assert_eq!(read(&mut z, "a.xhtml", 5000).unwrap().len(), 5000, "正好等于上限的照常读");
+        assert_eq!(read(&mut z, "b.xhtml", 4096).unwrap(), vec![b'y'; 100]);
+        // 谎报很小的声明大小也拦得住（上限按实际解出的字节数算）
+        let mut lying = zip_of(&[("a.xhtml", &[b'x'; 5000])]);
+        let cd = lying.windows(4).rposition(|w| w == b"PK\x01\x02").unwrap();
+        lying[cd + 24..cd + 28].copy_from_slice(&10u32.to_le_bytes());
+        let mut z = ZipArchive::new(std::io::Cursor::new(&lying)).unwrap();
+        let mut f = z.by_name("a.xhtml").unwrap();
+        assert!(read_all_capped(&mut f, 10, "a.xhtml", 4096).is_err());
     }
 
     #[test]
