@@ -96,7 +96,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v44（2026-10-06）：清洗层审计：同一章两条注释同 id 时后一条留在原处（此前只放得回一条，《绝叫》丢了一条注释）；改名文件的 html 里
 ///   `url()` 照原引号写（此前 `style="…url("…")"` 截断属性）；章尾空白不再连外层容器的闭合标签一起删（`<p></div>`）；
 ///   翻页方向认没引号的 `page-progression-direction`、不再插出重复属性；保留背景图时渐变写成 `background-image`。
-pub const OPTIMIZE_VERSION: &str = "44";
+/// - v45（2026-10-06，用户定）：文字书**不再按章节拆文件**（章标题独立一页、节与节分页都撤了），原书的 XHTML 文件结构原样保留；
+///   目录不变：仍按目录层级定书/卷、章、节，漏掉的节补进目录，原来指向拆出文件的条目改指原文件里标题的 `#id`（没有的补 id）。
+///   拆分时跟着搬的同文件注释留在原处（跳转模式；弹窗模式照旧搬到章末）。`epub-optimize --no-paginate` 删掉。
+pub const OPTIMIZE_VERSION: &str = "45";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -285,7 +288,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
                             skip_notes.insert(name.clone());
                         } else {
                             for (file, id) in refs {
-                                // 同文件的注释：跳转模式留在原处（分页时跟着所在的节走）；弹窗模式也搬到章末写成
+                                // 同文件的注释：跳转模式留在原处；弹窗模式也搬到章末写成
                                 // `<aside epub:type="footnote">`，阅读器才弹窗（掌阅 2026-10-05 真机）。
                                 if file == name && opts.footnote != FootnoteMode::Popup {
                                     continue;

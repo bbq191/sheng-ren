@@ -983,7 +983,7 @@ mod tests {
     #[test]
     fn epub2_book_gets_nav_landmarks_and_keeps_ncx() {
         let mut v = epub2_book();
-        let rep = wash_entries(&mut v, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
         assert_eq!((rep.epub3_upgraded, rep.nav_generated, rep.landmarks_added, rep.ncx_generated), (1, 2, 1, 0));
         let opf = s(&v, "OEBPS/content.opf");
         assert!(opf.contains(r#"version="3.0""#) && opf.contains(r#"<item id="eink-nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#), "{opf}");
@@ -1000,7 +1000,7 @@ mod tests {
         }
         // 再洗一遍：不再生成 nav、OPF 不再变
         let before = v.clone();
-        let rep2 = wash_entries(&mut v, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        let rep2 = wash_entries(&mut v, &WashOpts::default()).unwrap();
         assert_eq!((rep2.epub3_upgraded, rep2.nav_generated, rep2.landmarks_added), (0, 0, 0));
         assert_eq!(s(&v, "OEBPS/content.opf"), s(&before, "OEBPS/content.opf"));
         assert_eq!(s(&v, "OEBPS/nav.xhtml"), s(&before, "OEBPS/nav.xhtml"));
@@ -1014,7 +1014,7 @@ mod tests {
             e("nav.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="t/c1.xhtml">第一章</a><ol><li><a href="t/c1.xhtml#s">一节</a></li></ol></li></ol></nav></body></html>"#),
             e("t/c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><h1>第一章</h1><p>甲</p><h2 id="s">一节</h2><p>乙</p></body></html>"#),
         ];
-        let rep = wash_entries(&mut v, &WashOpts { paginate: false, ..Default::default() }).unwrap();
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
         assert_eq!(rep.ncx_generated, 2);
         let opf = s(&v, "content.opf");
         assert!(opf.contains(r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#) && opf.contains(r#"<spine toc="ncx">"#), "{opf}");
