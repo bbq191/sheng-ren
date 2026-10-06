@@ -308,11 +308,12 @@ fn value(c: &mut Cursor, depth: usize) -> Result<Option<Value>> {
     let v = match t {
         2 | 3 => {
             let m = uint_be(d, body_at)?;
-            let m = i64::try_from(m).map_err(|_| Error { offset: body_at, msg: "整数超出 i64" })?;
             if t == 3 && m == 0 {
                 return err(at, "负零整数");
             }
-            Value::Int(if t == 3 { -m } else { m })
+            // 负数的绝对值可以到 2^63（i64::MIN），编码时就是这么写的，读回来也要认。
+            let v = if t == 3 { 0i64.checked_sub_unsigned(m) } else { i64::try_from(m).ok() };
+            Value::Int(v.ok_or(Error { offset: body_at, msg: "整数超出 i64" })?)
         }
         4 => match n {
             0 => Value::F64(0.0),
@@ -566,10 +567,21 @@ pub fn encode_stream(items: &[Item]) -> Vec<u8> {
 // ---------------------------------------------------------------- 符号表
 
 /// SID → 名字。导入的共享表没有名字（`None`），本地符号有名字。
-#[derive(Clone, Debug, Default, PartialEq)]
+///
+/// 导入的共享表只记它占了多少个 SID（`shared_end`），不逐个占位：`max_id` 来自文件，坏文件写个几十亿
+/// 也不该先分配几十 GB（以前按 `max_id` 往表里塞 `None`，会耗尽内存）。
+#[derive(Clone, Debug, PartialEq)]
 pub struct SymbolTable {
-    /// 下标 = SID；0 号永远是 `None`。
-    names: Vec<Option<String>>,
+    /// 系统符号（1–9）和导入的共享表占到的 SID（不含）；本地符号从这里编起。
+    shared_end: u32,
+    /// 本地符号：下标 + `shared_end` = SID。
+    locals: Vec<Option<String>>,
+}
+
+impl Default for SymbolTable {
+    fn default() -> Self {
+        SymbolTable::system()
+    }
 }
 
 /// 共享表导入项。
@@ -582,26 +594,33 @@ pub struct Import {
 
 impl SymbolTable {
     pub fn system() -> Self {
-        let mut names = vec![None];
-        names.extend(SYSTEM_SYMBOLS.iter().map(|s| Some(s.to_string())));
-        SymbolTable { names }
+        SymbolTable { shared_end: SYSTEM_SYMBOLS.len() as u32 + 1, locals: Vec::new() }
     }
 
     pub fn len(&self) -> usize {
-        self.names.len()
+        self.shared_end as usize + self.locals.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.names.len() <= 1
+        self.len() <= 1
     }
 
     pub fn name(&self, sid: u32) -> Option<&str> {
-        self.names.get(sid as usize)?.as_deref()
+        if sid == 0 {
+            return None;
+        }
+        if let Some(s) = SYSTEM_SYMBOLS.get(sid as usize - 1) {
+            return Some(s);
+        }
+        self.locals.get(sid.checked_sub(self.shared_end)? as usize)?.as_deref()
     }
 
     /// 按名字找 SID（只找有名字的）。
     pub fn sid(&self, name: &str) -> Option<u32> {
-        self.names.iter().position(|n| n.as_deref() == Some(name)).map(|i| i as u32)
+        if let Some(i) = SYSTEM_SYMBOLS.iter().position(|s| *s == name) {
+            return Some(i as u32 + 1);
+        }
+        self.locals.iter().position(|n| n.as_deref() == Some(name)).map(|i| self.shared_end + i as u32)
     }
 
     /// 显示用：有名字给名字，没有给 `$N`。
@@ -611,8 +630,8 @@ impl SymbolTable {
 
     /// 追加一个本地符号，返回它的 SID。
     pub fn push(&mut self, name: &str) -> u32 {
-        self.names.push(Some(name.to_string()));
-        (self.names.len() - 1) as u32
+        self.locals.push(Some(name.to_string()));
+        (self.len() - 1) as u32
     }
 
     /// 按 `$ion_symbol_table::{imports, symbols}` 更新：`imports` 是 `$ion_symbol_table` 符号时在现有表后追加，
@@ -625,7 +644,7 @@ impl SymbolTable {
                 *self = SymbolTable::system();
                 for imp in other.and_then(Value::as_list).unwrap_or(&[]) {
                     let max_id = imp.field(SID_MAX_ID).and_then(Value::as_int).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
-                    self.names.extend(std::iter::repeat_n(None, max_id as usize));
+                    self.shared_end = self.shared_end.saturating_add(max_id);
                     imports.push(Import {
                         name: imp.field(SID_NAME).and_then(Value::as_str).unwrap_or_default().to_string(),
                         version: imp.field(SID_VERSION).and_then(Value::as_int).unwrap_or(1),
@@ -635,7 +654,7 @@ impl SymbolTable {
             }
         }
         for s in st.field(SID_SYMBOLS).and_then(Value::as_list).unwrap_or(&[]) {
-            self.names.push(s.as_str().map(str::to_string));
+            self.locals.push(s.as_str().map(str::to_string));
         }
         imports
     }
@@ -702,6 +721,8 @@ mod tests {
     fn roundtrips() {
         rt(Value::Int(4278190080));
         rt(Value::Int(-300));
+        rt(Value::Int(i64::MIN));
+        rt(Value::Int(i64::MAX));
         rt(Value::F64(1.29167));
         rt(Value::F64(0.0));
         rt(Value::F32(1.5));
@@ -749,5 +770,28 @@ mod tests {
         assert_eq!(t.display(500), "$500");
         assert_eq!(t.sid("c0"), Some(869));
         assert_eq!(t.name(4), Some("name"));
+    }
+
+    /// 共享表的 `max_id` 来自文件：写成 u32 上限也只记个数、不按它分配内存（以前逐个占位，坏文件能把内存耗尽）。
+    #[test]
+    fn huge_import_max_id_does_not_allocate() {
+        let st = Value::Struct(vec![
+            (SID_IMPORTS, Value::List(vec![
+                Value::Struct(vec![(SID_NAME, Value::String("a".into())), (SID_MAX_ID, Value::Int(i64::from(u32::MAX)))]),
+                Value::Struct(vec![(SID_NAME, Value::String("b".into())), (SID_MAX_ID, Value::Int(10))]),
+            ])),
+            (SID_SYMBOLS, Value::List(vec![Value::String("x".into())])),
+        ]);
+        let (t, imps) = SymbolTable::from_stream(&[Item::Value(Value::Annotated(vec![SID_ION_SYMBOL_TABLE], Box::new(st)))]);
+        assert_eq!(imps.len(), 2);
+        assert_eq!(t.name(3), Some("$ion_symbol_table"));
+        assert_eq!(t.name(1_000_000), None);
+        assert_eq!(t.len(), u32::MAX as usize + 1);
+        assert_eq!(t.name(u32::MAX), Some("x"), "加起来溢出时封顶，本地符号排在最后");
+        // 追加模式（`imports: $ion_symbol_table`）接着现有的表编号
+        let mut t = SymbolTable::system();
+        t.push("a");
+        t.apply(&Value::Struct(vec![(SID_IMPORTS, Value::Symbol(SID_ION_SYMBOL_TABLE)), (SID_SYMBOLS, Value::List(vec![Value::String("b".into())]))]));
+        assert_eq!((t.sid("a"), t.sid("b"), t.name(0), t.name(12)), (Some(10), Some(11), None, None));
     }
 }
