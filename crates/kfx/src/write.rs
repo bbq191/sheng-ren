@@ -1215,6 +1215,11 @@ struct SectionOut {
 }
 
 /// 32 进制大写（容器 id、book_id 用）。
+/// 唯一 ID → 容器 id（`CR!` + 28 个字符）。书里存 4 处（见 `Container::set_container_id`），都写这一个值。
+pub fn container_id(id: u64) -> String {
+    format!("CR!{}", base32(id, 28))
+}
+
 fn base32(mut n: u64, len: usize) -> String {
     const A: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
     let mut s = Vec::with_capacity(len);
@@ -1654,7 +1659,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
 
     // 元数据。
     let content_id = format!("{:016X}{:016X}", id, fnv64(&id.to_le_bytes()));
-    let container_id = format!("CR!{}", base32(id, 28));
+    let container_id = container_id(id);
     let book_id = base32(id.rotate_left(17), 23);
     let kv = |k: &str, v: Value| Value::Struct(vec![(META_KEY, Value::String(k.into())), (META_VALUE, v)]);
     let s = |v: &str| Value::String(v.to_string());

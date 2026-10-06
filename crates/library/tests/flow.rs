@@ -49,6 +49,31 @@ fn add_build_skip_remove() {
     assert!(!out.join("xochitl/风起.epub").exists() && !out.join("ireader/风起.epub").exists() && !out.join("kindle/风起.kfx").exists(), "删书连产物一起删");
 }
 
+/// KFX 的容器 id 由书库的书 id 决定（不是 OPF 唯一标识符）：两本 OPF 标识符相同的书容器 id 不同；书里 4 处一致。
+#[test]
+fn kfx_container_id_comes_from_book_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = Library::open(dir.path().join("lib")).unwrap();
+    let kindle = profile::get("kindle").unwrap();
+    let mut ids = Vec::new();
+    for title in ["甲书", "乙书"] {
+        let src = dir.path().join(format!("{title}.epub"));
+        std::fs::write(&src, sample_epub(title)).unwrap(); // 两本的 OPF 唯一标识符都是 "t"
+        let Added::New(meta) = lib.add_file(&src).unwrap() else { panic!() };
+        let Built::Written { path, .. } = lib.build(&meta, kindle, false).unwrap() else { panic!() };
+        let bytes = std::fs::read(&path).unwrap();
+        let id = kfx::Container::parse(&bytes).unwrap().container_id().unwrap().to_string();
+        assert_eq!(id, kfx::write::container_id(u64::from_str_radix(&meta.id, 16).unwrap()), "容器 id 由书 id 派生");
+        // 容器信息、kfxgen 的 kfxgen_acr、$419 清单、$490 的 asset_id
+        assert_eq!(bytes.windows(id.len()).filter(|w| *w == id.as_bytes()).count(), 4, "容器 id 在书里 4 处一致");
+        // 重建不变（Kindle 进度靠它）
+        let Built::Written { path: again, .. } = lib.build(&meta, kindle, true).unwrap() else { panic!() };
+        assert_eq!(std::fs::read(again).unwrap(), bytes, "同一本书重建逐字节相同");
+        ids.push(id);
+    }
+    assert_ne!(ids[0], ids[1], "OPF 标识符相同的两本书容器 id 不同");
+}
+
 #[test]
 fn cbz_becomes_comic_epub_master_and_drm_epub_is_refused() {
     let dir = tempfile::tempdir().unwrap();

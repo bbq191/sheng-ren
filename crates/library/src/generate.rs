@@ -342,8 +342,7 @@ impl Library {
                 let open = || std::fs::File::open(&optimized).map(std::io::BufReader::new).map_err(|e| format!("读 {}: {e}", optimized.display()));
                 // 唯一 ID 取自书的 id（AZW3 再加入库时间）：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
                 let (bytes, w) = if format == Format::Kfx {
-                    let id = meta.id.get(..16).and_then(|h| u64::from_str_radix(h, 16).ok());
-                    kfx::write::epub_to_kfx_from(open()?, &kfx::write::Opts { fixed_id: id })?
+                    kfx::write::epub_to_kfx_from(open()?, &kfx::write::Opts { fixed_id: kfx_id(&meta.id) })?
                 } else {
                     let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
                     let aopts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
@@ -547,5 +546,27 @@ impl State {
         } else {
             Err(format!("{} 里已经有 {plain} 和 {suffixed}，都不是这本书的产物，不覆盖", dir.display()))
         }
+    }
+}
+
+/// KFX 的唯一 ID（容器 id `CR!…`、`content_id`、`book_id` 都由它派生）：书库的书 id（SHA-256 前 12 位十六进制）按十六进制读成整数。
+/// 同一本书重建不变；OPF 唯一标识符相同的两本书（模板生成的书常见）也各是各的。2026-10-06 以前取 `get(..16)`，
+/// 12 位的书 id 永远取不到，退回 OPF 标识符的哈希。读不出来（书 id 不是不超过 16 位的十六进制，只有手改过的书库会这样）时
+/// 返回 `None`，写出器退回 OPF 标识符。
+fn kfx_id(book_id: &str) -> Option<u64> {
+    if book_id.is_empty() || book_id.len() > 16 {
+        return None;
+    }
+    u64::from_str_radix(book_id, 16).ok()
+}
+
+#[cfg(test)]
+mod kfx_id_tests {
+    #[test]
+    fn book_id_is_parsed_whole() {
+        assert_eq!(super::kfx_id("0123456789ab"), Some(0x0123_4567_89ab));
+        assert_eq!(super::kfx_id(""), None);
+        assert_eq!(super::kfx_id("xyz"), None);
+        assert_eq!(super::kfx_id("0123456789abcdef0"), None);
     }
 }
