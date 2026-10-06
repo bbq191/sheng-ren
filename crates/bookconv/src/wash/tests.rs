@@ -1724,3 +1724,27 @@
         let dc = opf_dc(r#"<metadata><!-- <dc:title>旧</dc:title> --><dc:title/><dc:title id='t' data-x="a>b">新 &amp; 书</dc:title ><dc:creator>甲</dc:creator></metadata>"#);
         assert_eq!((dc.title.as_str(), dc.creators), ("新 & 书", vec!["甲".to_string()]));
     }
+
+    /// 不可信的 NCX 嵌套超过 255 层：目录补节、重写 NCX/nav 时层级到 u8 为止，不溢出（此前 debug 构建 panic、release 回绕成 0 层）。
+    #[test]
+    fn audit_toc_deeper_than_u8_does_not_overflow() {
+        let opf = r#"<package version="2.0"><metadata><dc:title>书</dc:title></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="a"/></spine></package>"#;
+        let mut ncx = String::from("<ncx><head></head><navMap>");
+        for i in 0..300 {
+            ncx.push_str(&format!("<navPoint id=\"n{i}\"><navLabel><text>第{i}层</text></navLabel><content src=\"a.xhtml\"/>"));
+        }
+        ncx.push_str(&"</navPoint>".repeat(300));
+        ncx.push_str("</navMap></ncx>");
+        let page = format!("<html><body><p>{LONG}</p><h2 id=\"s1\">一节</h2><p>{LONG}</p></body></html>");
+        let mut v = vec![e("OEBPS/content.opf", opf), e("OEBPS/toc.ncx", &ncx), e("OEBPS/a.xhtml", &page)];
+        let added = toc::merge_sections_into_toc(&mut v, &[toc::SectionRef { path: "OEBPS/a.xhtml".into(), id: "s1".into(), label: "一节".into() }], "目录");
+        assert_eq!(added, 1);
+        let out = s(&v, "OEBPS/toc.ncx");
+        assert_eq!(out.matches("<navPoint ").count(), 301);
+        assert_eq!(out.matches("</navPoint>").count(), 301, "{out}");
+        let items: Vec<TocItem> = (1..=255u8).chain([255, 1]).map(|l| TocItem::new(l, "x", "OEBPS/a.xhtml", "")).collect();
+        let built = toc::build_ncx(&items, "OEBPS", "书", "u");
+        assert_eq!(built.matches("<navPoint ").count(), built.matches("</navPoint>").count());
+        let nav = toc::build_nav(&items, "OEBPS", "目录");
+        assert_eq!(nav.matches("<ol>").count(), nav.matches("</ol>").count());
+    }
