@@ -23,9 +23,13 @@ fn usage_errors_exit_1() {
     let lib = Some(lib.as_path());
     expect(booklib(lib, &[]), 1, "用法");
     expect(booklib(lib, &["frobnicate"]), 1, "不认识的命令 frobnicate");
-    expect(booklib(lib, &["build", "--device", "kindle"]), 1, "要写成 --device=值");
-    expect(booklib(lib, &["build", "--device=nosuch"]), 1, "没有阅读模式 nosuch");
-    expect(booklib(lib, &["build", "--out=x"]), 1, "不认识选项 --out=");
+    expect(booklib(lib, &["sync", "--device", "kindle"]), 1, "要写成 --device=值");
+    expect(booklib(lib, &["sync", "--device=nosuch"]), 1, "没有阅读模式 nosuch");
+    expect(booklib(lib, &["sync", "--out=x"]), 1, "不认识选项 --out=");
+    // build 并入了 sync；sync 总会清理，--prune 去掉了
+    expect(booklib(lib, &["build"]), 1, "build 已并入 sync：booklib sync [--device=…] [--force] [书...]");
+    expect(booklib(lib, &["build", "--force", "三体"]), 1, "build 已并入 sync");
+    expect(booklib(lib, &["sync", "--prune"]), 1, "sync 现在总会清理");
     expect(booklib(lib, &["list", "--device="]), 1, "--device= 后面要写值");
     expect(booklib(lib, &["add"]), 1, "add 要给文件或网址");
     expect(booklib(lib, &["remove"]), 1, "remove 要给 id");
@@ -41,7 +45,10 @@ fn usage_errors_exit_1() {
     assert_eq!(code(&booklib(lib, &["track", books.to_str().unwrap()])), Some(0));
     expect(booklib(lib, &["sync", "--no-build", "--device=kindle"]), 1, "--no-build 和 --device 不能一起用");
     expect(booklib(lib, &["sync", "--watch=0"]), 1, "--watch= 要写正整数秒数");
-    expect(booklib(lib, &["sync", "白夜行"]), 1, "sync 不接受书名参数");
+    expect(booklib(lib, &["sync", "--no-build", "--force"]), 1, "--no-build 不生成，不能和 --force、书名一起用");
+    expect(booklib(lib, &["sync", "--no-build", "白夜行"]), 1, "--no-build 不生成");
+    expect(booklib(lib, &["sync", "--watch", "白夜行"]), 1, "--watch 每轮同步、生成全部书，不能和 --force、书名一起用");
+    expect(booklib(lib, &["sync", "--watch=5", "--force"]), 1, "--watch 每轮同步");
 }
 
 #[test]
@@ -76,9 +83,9 @@ fn processing_failures_exit_2() {
     let lib = dir.path().join("lib");
     let lib = Some(lib.as_path());
     expect(booklib(lib, &["sync"]), 2, "还没有跟踪任何目录");
-    expect(booklib(lib, &["build", "不存在的书"]), 2, "没有匹配的书");
+    expect(booklib(lib, &["sync", "不存在的书"]), 2, "没有匹配的书");
     expect(booklib(lib, &["meta", "--fetch", "不存在的书"]), 2, "没有匹配的书");
-    expect(booklib(lib, &["build", "a/b"]), 2, "路径里有空格时要整个加引号");
+    expect(booklib(lib, &["sync", "a/b"]), 2, "路径里有空格时要整个加引号");
     expect(booklib(lib, &["remove", "ffffffffffff"]), 2, "");
     let missing = dir.path().join("没有这本.epub");
     expect(booklib(lib, &["add", missing.to_str().unwrap()]), 2, "✗");

@@ -430,7 +430,7 @@ impl Library {
     }
 }
 
-/// 产物根目录和跟踪目录互相包含时的提示（`build` 和 `track` 共用）。
+/// 产物根目录和跟踪目录互相包含时的提示（生成和 `track` 共用）。
 pub(crate) fn output_overlap(root: &Path, tracked: &Path) -> String {
     format!(
         "产物目录 {} 和跟踪的目录 {} 互相包含，生成出来的书会被当成新书入库、层层嵌套（跟踪的目录不要用模式 id 命名，也不要放在别的跟踪目录的产物目录里）",

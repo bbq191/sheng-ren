@@ -87,7 +87,7 @@ fn file_key(path: &Path) -> Option<FileKey> {
 }
 
 /// 小 JSON 文件的读缓存（`output-state/<模式>.json`、`sources.json`）：文件没变（见 [`FileKey`]）就不重读、不重新解析。
-/// 一次 `build`/`list` 里每本书都要查一遍，不缓存的话每本书都重读一次。
+/// 一次生成（`sync`）、`list` 里每本书都要查一遍，不缓存的话每本书都重读一次。
 pub(crate) struct JsonCache<T> {
     map: RefCell<HashMap<PathBuf, Cached<T>>>,
 }
