@@ -9,7 +9,7 @@
 
 use crate::convert::common;
 use crate::epub::{Book, BookMeta, Chapter, Resource};
-use crate::netimg::{fetch_image, http_agent, UA};
+use crate::netimg::{fetch_image, http_agent, origin_of, UA};
 use crate::util::xml_escape;
 use readability_rust::Readability;
 use regex::Regex;
@@ -84,9 +84,10 @@ fn strip_bad_params(url: &str) -> String {
 fn fetch_text(url: &str) -> Result<String, String> {
     let resp = http_agent(30).get(url).set("User-Agent", UA).set("Accept", "text/html,application/xhtml+xml").call().map_err(|e| format!("抓取失败: {e}"))?;
     let header_charset = resp.header("Content-Type").and_then(charset_param).map(str::to_string);
-    let mut bytes = Vec::new();
-    use std::io::Read;
-    resp.into_reader().take(MAX_PAGE_BYTES).read_to_end(&mut bytes).map_err(|e| format!("读取网页正文失败: {e}"))?;
+    // 超过上限报错：以前截到 20MB 照样抽正文，文章后半截悄悄没了
+    let bytes = crate::util::read_capped(resp.into_reader(), MAX_PAGE_BYTES, 0)
+        .map_err(|e| format!("读取网页正文失败: {e}"))?
+        .ok_or(format!("网页超过 {} MB，不收", MAX_PAGE_BYTES >> 20))?;
     Ok(decode_html(&bytes, header_charset.as_deref()))
 }
 
@@ -202,15 +203,6 @@ fn fetch_images(imgs: &[ImgRef], referer: &str) -> Vec<Option<Fetched>> {
         }
     });
     results.into_inner().unwrap()
-}
-
-/// URL 的 origin（scheme://host/），作抓图 Referer。
-fn origin_of(url: &str) -> String {
-    let after = match url.split_once("://") {
-        Some((scheme, rest)) => format!("{scheme}://{}", rest.split('/').next().unwrap_or(rest)),
-        None => return String::new(),
-    };
-    format!("{after}/")
 }
 
 /// 白名单排版标签（其余标签「拆壳」——丢标签保子内容）。
@@ -357,12 +349,6 @@ mod tests {
         assert_eq!(strip_bad_params("https://mp.weixin.qq.com/s/ID?poc_token=ABC"), "https://mp.weixin.qq.com/s/ID");
         assert_eq!(strip_bad_params("https://x/s/ID?a=1&poc_token=ABC&b=2"), "https://x/s/ID?a=1&b=2");
         assert_eq!(strip_bad_params("https://x/s/ID"), "https://x/s/ID"); // 无 token 原样
-    }
-
-    #[test]
-    fn origin_of_extracts_scheme_host() {
-        assert_eq!(origin_of("https://mp.weixin.qq.com/s/ID?x=1"), "https://mp.weixin.qq.com/");
-        assert_eq!(origin_of("notaurl"), "");
     }
 
     #[test]
