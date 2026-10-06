@@ -39,7 +39,7 @@
   <text x="572" y="66" class="m">books/</text><text x="700" y="66" class="s">← track 的目录（你的原件）</text>
   <text x="588" y="88" class="m" fill="#1d4fa8">小说/三体.epub</text>
   <text x="588" y="110" class="m" fill="#1d4fa8">漫画/乱马01.cbz</text>
-  <text x="572" y="140" class="m" fill="#2e7d4a">kindle/<tspan x="652">小说/三体.azw3</tspan><tspan x="780">漫画/…</tspan></text>
+  <text x="572" y="140" class="m" fill="#2e7d4a">kindle/<tspan x="652">小说/三体.kfx</tspan><tspan x="780">漫画/…</tspan></text>
   <text x="572" y="164" class="m" fill="#2e7d4a">ireader/<tspan x="652">小说/三体.epub</tspan><tspan x="780">漫画/…</tspan></text>
   <text x="572" y="188" class="m" fill="#2e7d4a">xochitl/<tspan x="652">小说/三体.epub</tspan><tspan x="780">漫画/…</tspan></text>
   <text x="572" y="214" class="s">↑ 产物：每个阅读模式一个文件夹，镜像 books/ 的子目录</text>
@@ -62,6 +62,6 @@
   <text x="572" y="428" class="s">原件哈希 · 找来的封面 · 补进去的简介标签</text>
   <text x="572" y="448" class="s">流程版本（CBZ 来源加格式转换版本）· 优化器版本</text>
   <text x="572" y="468" class="s">注释方式 · 模式 id · 阅读范围与漫画排法 · 黑白/彩色</text>
-  <text x="572" y="488" class="s">格式（AZW3 再加写出器版本）</text>
+  <text x="572" y="488" class="s">格式（KFX 再加写出器版本）</text>
   <text x="572" y="510" class="s">都没变 → build 直接跳过；list 显示 ✓ 最新 / ⚠ 过期</text>
 </svg>

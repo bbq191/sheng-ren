@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
+  <title>一层平排的合集目录（福尔摩斯全集）重建成册 → 作品 → 部 → 章</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <style>
+      .box{fill:#fff;stroke:#888;stroke-width:1.2}
+      .bk{fill:#f3eefa;stroke:#8a63c9;stroke-width:1.2}
+      .wk{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.2}
+      .pt{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.2}
+      .ch{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.2}
+      .h{font-weight:bold;font-size:15px}
+      .s{font-size:12.5px;fill:#444}
+      .g{fill:#888}
+      .l{stroke:#555;stroke-width:1.4;fill:none}
+      .t{stroke:#aaa;stroke-width:1.2;fill:none}
+    </style>
+  </defs>
+  <rect width="980" height="560" fill="#ffffff"/>
+
+  <text x="170" y="30" text-anchor="middle" class="h">原书目录：全部一层平排</text>
+  <text x="680" y="30" text-anchor="middle" class="h">重建后（v40，collection_depths）</text>
+
+  <!-- 左：平排 -->
+  <rect class="box" x="20" y="46" width="300" height="372" rx="10"/>
+  <g>
+    <rect class="bk" x="36" y="58" width="268" height="24" rx="4"/><text x="48" y="75">第一册</text>
+    <text x="48" y="103" class="g">书名页</text>
+    <text x="48" y="127" class="g">目录</text>
+    <rect class="wk" x="36" y="134" width="268" height="24" rx="4"/><text x="48" y="151">暗红习作</text>
+    <rect class="pt" x="36" y="162" width="268" height="24" rx="4"/><text x="48" y="179">第一部</text>
+    <rect class="ch" x="36" y="190" width="268" height="24" rx="4"/><text x="48" y="207">第一章 ……</text>
+    <rect class="ch" x="36" y="218" width="268" height="24" rx="4"/><text x="48" y="235">第二章 ……</text>
+    <text x="48" y="261" class="g">……</text>
+    <rect class="wk" x="36" y="270" width="268" height="24" rx="4"/><text x="48" y="287">四签名</text>
+    <rect class="ch" x="36" y="298" width="268" height="24" rx="4"/><text x="48" y="315">第一章 ……</text>
+    <text x="48" y="341" class="g">……</text>
+    <rect class="bk" x="36" y="350" width="268" height="24" rx="4"/><text x="48" y="367">第二册</text>
+    <text x="48" y="397" class="g">……（连书名都和章同一层）</text>
+  </g>
+
+  <path class="l" d="M330 230 L392 230" marker-end="url(#a)"/>
+
+  <!-- 右：树 -->
+  <rect class="box" x="400" y="46" width="560" height="372" rx="10"/>
+  <g>
+    <rect class="bk" x="416" y="58" width="120" height="24" rx="4"/><text x="428" y="75">第一册</text>
+    <text x="548" y="75" class="s">册（装订分册）</text>
+    <path class="t" d="M430 82 V122 H446"/><path class="t" d="M430 98 H446"/>
+    <text x="452" y="103" class="g">书名页</text>
+    <text x="452" y="127" class="g">目录</text>
+    <path class="t" d="M430 122 V284"/>
+    <path class="t" d="M430 146 H446"/>
+    <rect class="wk" x="448" y="134" width="120" height="24" rx="4"/><text x="460" y="151">暗红习作</text>
+    <text x="580" y="151" class="s">作品（后面编号从「第一部/第一章」重新开始）</text>
+    <path class="t" d="M462 158 V174 H478"/>
+    <rect class="pt" x="480" y="162" width="120" height="24" rx="4"/><text x="492" y="179">第一部</text>
+    <text x="612" y="179" class="s">部（它后面的章挂在下面）</text>
+    <path class="t" d="M494 186 V230 H510"/><path class="t" d="M494 202 H510"/>
+    <rect class="ch" x="512" y="190" width="120" height="24" rx="4"/><text x="524" y="207">第一章 ……</text>
+    <rect class="ch" x="512" y="218" width="120" height="24" rx="4"/><text x="524" y="235">第二章 ……</text>
+    <text x="644" y="221" class="s">章</text>
+    <text x="524" y="261" class="g">……</text>
+    <path class="t" d="M430 284 H446"/>
+    <rect class="wk" x="448" y="272" width="120" height="24" rx="4"/><text x="460" y="289">四签名</text>
+    <path class="t" d="M462 296 V312 H478"/>
+    <rect class="ch" x="480" y="300" width="120" height="24" rx="4"/><text x="492" y="317">第一章 ……</text>
+    <text x="492" y="343" class="g">……</text>
+    <rect class="bk" x="416" y="350" width="120" height="24" rx="4"/><text x="428" y="367">第二册</text>
+    <text x="548" y="367" class="s">短篇不成部、章，一篇篇平排挂在册下面</text>
+    <text x="428" y="397" class="g">……</text>
+  </g>
+
+  <!-- 判定 -->
+  <text x="20" y="450" class="s">· 「第X册」「上册/下册」至少两条 → 册是最上一层，后面到下一册之前的条目挂在它下面（第一册前面的出版说明、序言不动）。</text>
+  <text x="20" y="472" class="s">· 普通条目后面（跳过题献、前言、书名页、目录）紧跟「第一部」或「第一章」、全书至少两处 → 它是作品，后面的题献、部、章挂在它下面。</text>
+  <text x="20" y="494" class="s" xml:space="preserve">  只有一处的是普通小说（「序章」「第一部」「第一章」…），不当合集。《啸风山庄》的「【第一部】」「【第二部】」也这样认成作品。</text>
+  <text x="20" y="516" class="s">· 分页时去掉「册」这一层再定哪一层是章：作品/部独占一页、章独占一页，和不分层时一样。</text>
+  <text x="20" y="538" class="s">· Kindle（KFX）上 2026-10-06 真机看过福尔摩斯、《啸风山庄》的目录层级和跳转 ✓；掌阅、Move 没验证。</text>
+</svg>

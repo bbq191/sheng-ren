@@ -76,31 +76,31 @@
   <path class="l" d="M694 242 C694 256 660 256 650 262" marker-end="url(#a)"/>
   <rect class="box" x="560" y="264" width="140" height="32" rx="6"/>
   <text x="630" y="285" text-anchor="middle">质量门（只警告）</text>
-  <text x="630" y="318" text-anchor="middle" class="s">产物是 EPUB；kindle 模式再转 AZW3</text>
+  <text x="630" y="318" text-anchor="middle" class="s">产物是 EPUB；kindle 模式再转 KFX</text>
   <text x="630" y="338" text-anchor="middle" class="s">放在书目录旁的 kindle/ ireader/ xochitl/</text>
   <text x="630" y="356" text-anchor="middle" class="s">（add 的书在书库 output/&lt;模式&gt;/）</text>
 
   <path class="l" d="M450 208 L498 208" marker-end="url(#a)"/>
 
   <!-- 设备 -->
-  <rect class="box dev" x="810" y="50" width="250" height="84" rx="8"/>
-  <text x="935" y="72" text-anchor="middle" class="h">kindle/（AZW3）</text>
-  <text x="935" y="94" text-anchor="middle">Kindle 自带阅读器</text>
-  <text x="935" y="114" text-anchor="middle" class="s">USB 拷进 documents/</text>
-  <rect class="box dev" x="810" y="146" width="250" height="118" rx="8"/>
-  <text x="935" y="168" text-anchor="middle" class="h">ireader/（EPUB）</text>
-  <text x="935" y="190" text-anchor="middle">Kindle、掌阅上的 KOReader</text>
-  <text x="935" y="208" text-anchor="middle" class="s">日常用 · 拷到存储根的 books/</text>
-  <text x="935" y="232" text-anchor="middle">掌阅自带阅读器</text>
-  <text x="935" y="250" text-anchor="middle" class="s">备选 · USB 导入</text>
+  <rect class="box dev" x="810" y="50" width="250" height="100" rx="8"/>
+  <text x="935" y="74" text-anchor="middle" class="h">kindle/（KFX）</text>
+  <text x="935" y="98" text-anchor="middle">Kindle 自带阅读器</text>
+  <text x="935" y="120" text-anchor="middle" class="s">文字书流式 · 漫画固定版式</text>
+  <text x="935" y="138" text-anchor="middle" class="s">USB 拷进 documents/</text>
+  <rect class="box dev" x="810" y="162" width="250" height="102" rx="8"/>
+  <text x="935" y="186" text-anchor="middle" class="h">ireader/（EPUB）</text>
+  <text x="935" y="210" text-anchor="middle">掌阅自带阅读器</text>
+  <text x="935" y="232" text-anchor="middle" class="s">注释弹窗 · 漫画往左翻</text>
+  <text x="935" y="250" text-anchor="middle" class="s">USB 导入</text>
   <rect class="box dev" x="810" y="276" width="250" height="90" rx="8"/>
   <text x="935" y="298" text-anchor="middle" class="h">xochitl/（EPUB，彩色）</text>
   <text x="935" y="320" text-anchor="middle">Move 自带阅读器</text>
   <text x="935" y="340" text-anchor="middle" class="s">网页上传；漫画要登记页边距</text>
-  <path class="d" d="M760 180 C786 180 786 92 808 92" marker-end="url(#a)"/>
+  <path class="d" d="M760 180 C786 180 786 100 808 100" marker-end="url(#a)"/>
   <path class="d" d="M760 208 L808 208" marker-end="url(#a)"/>
   <path class="d" d="M760 236 C786 236 786 320 808 320" marker-end="url(#a)"/>
 
   <text x="540" y="410" text-anchor="middle" class="s">booklib sync 同步后按全部阅读模式生成（--device=kindle 只生成一个）；拷到设备上由你自己来（文件管理器或同步工具）</text>
-  <text x="540" y="434" text-anchor="middle" class="s">三个模式用同一套规则，差别都写在模式的配置里；Kindle 的产物是同一份优化结果再转 AZW3</text>
+  <text x="540" y="434" text-anchor="middle" class="s">三个模式用同一套规则，差别都写在模式的配置里；Kindle 的产物是同一份优化结果再转 KFX；三台都用自带阅读器，不装 KOReader</text>
 </svg>
