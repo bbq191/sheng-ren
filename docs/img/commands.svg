@@ -36,7 +36,7 @@
   <text x="815" y="118" text-anchor="middle" class="s">books/ 旁边的 kindle/ ireader/ xochitl/</text>
   <text x="815" y="140" text-anchor="middle" class="s">（add 的书在书库 output/ 里）</text>
   <text x="815" y="170" text-anchor="middle" class="s">你拷到设备上读</text>
-  <text x="815" y="190" text-anchor="middle" class="s">删了也能用 build 重建</text>
+  <text x="815" y="190" text-anchor="middle" class="s">删了也能用 sync 重建</text>
 
   <!-- 原件 → 书库 -->
   <path class="l" d="M262 120 L362 120" marker-end="url(#a)"/>
@@ -46,8 +46,8 @@
 
   <!-- 书库 → 产物 -->
   <path class="l" d="M597 120 L697 120" marker-end="url(#a)"/>
-  <text x="647" y="62" text-anchor="middle" class="cmd">build</text>
-  <text x="647" y="80" text-anchor="middle" class="cmd">sync</text>
+  <text x="647" y="62" text-anchor="middle" class="cmd">sync</text>
+  <text x="647" y="80" text-anchor="middle" class="s">（可选书）</text>
   <text x="647" y="140" text-anchor="middle" class="s">读原件生成</text>
   <path class="l" d="M145 222 C145 262 815 262 815 224" marker-end="url(#a)"/>
   <text x="290" y="276" text-anchor="middle" class="s">生成时读原件（先核对还是入库时那本书）</text>
@@ -63,6 +63,7 @@
   <path class="ld" d="M597 200 L697 200" marker-end="url(#r)"/>
   <text x="647" y="186" text-anchor="middle" class="del">remove</text>
   <text x="647" y="218" text-anchor="middle" class="s">删条目和产物</text>
+  <text x="647" y="240" text-anchor="middle" class="s">sync：原件删了的也删</text>
 
   <!-- meta edit -->
   <rect class="box" x="30" y="405" width="230" height="70" rx="10" fill="#ffffff" stroke="#888"/>

@@ -15,7 +15,7 @@
   <text x="20" y="28" class="h">蓝 = 电脑上　橙 = Move 上　绿 = 你要做的</text>
 
   <rect class="pc" x="20" y="50" width="200" height="92" rx="8"/>
-  <text x="120" y="72" text-anchor="middle" class="h">① booklib build</text>
+  <text x="120" y="72" text-anchor="middle" class="h">① booklib sync</text>
   <text x="120" y="92" text-anchor="middle" class="s">漫画按页边距 1 排（952 × 1457）</text>
   <text x="120" y="110" text-anchor="middle" class="s">书里写标记</text>
   <text x="120" y="128" text-anchor="middle" class="s">META-INF/eink-reader-margins = 1</text>

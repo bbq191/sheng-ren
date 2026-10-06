@@ -62,12 +62,12 @@
   <text x="560" y="182" class="s">封面图存在书库条目目录（cover.jpg / cover.png）</text>
 
   <rect class="box dev" x="540" y="222" width="400" height="164" rx="8"/>
-  <text x="560" y="246" class="h">生成的书（booklib build 时补进去）</text>
+  <text x="560" y="246" class="h">生成的书（booklib sync 生成时补进去）</text>
   <text x="560" y="272">只补书里没有的：</text>
   <text x="560" y="294">内容简介（dc:description）· 标签（dc:subject）· 封面</text>
   <text x="560" y="320" class="s">书名、作者一律用书自己的，不改；正文一个字不动</text>
   <text x="560" y="340" class="s">原件不动：补在生成的副本里</text>
-  <text x="560" y="360" class="s">真正补进书的才进指纹：找到新东西，下次 build 重建这本</text>
+  <text x="560" y="360" class="s">真正补进书的才进指纹：找到新东西，下次 sync 重建这本</text>
 
   <path class="l" d="M480 162 C510 162 510 123 538 123" marker-end="url(#a)"/>
   <path class="l" d="M480 269 C510 269 510 150 538 150" marker-end="url(#a)"/>

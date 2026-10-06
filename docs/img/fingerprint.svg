@@ -7,7 +7,7 @@
     .t{font-weight:bold;font-size:15px}
   </style>
   <rect width="1130" height="430" fill="#ffffff"/>
-  <text x="20" y="30" class="t">指纹 = 下面十段用 | 连起来；任何一段变了，产物就算过期、下次 build 重建</text>
+  <text x="20" y="30" class="t">指纹 = 下面十段用 | 连起来；任何一段变了，产物就算过期、下次 sync 重建</text>
   <text x="20" y="54" class="s">例（kindle 模式；P、O、C、W 是各版本号）：</text><text x="272" y="54" class="m">3fa9c1… | - | - | P | O | jump#&lt; | kindle | 1104x1546+1c1272x1696fb | gray | kfxW</text>
   <rect x="20" y="72" width="96" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
   <text x="68.0" y="98" text-anchor="middle" class="h">原件</text>
