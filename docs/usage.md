@@ -247,14 +247,12 @@ booklib 只生成，**拷到设备上由你自己来**：把模式的文件夹�
 
 | 读的阅读器 | 拷哪个文件夹 | 怎么拷 |
 |---|---|---|
-| Kindle、掌阅上的 KOReader（2026-10-05 起 Kindle 上没有了） | `ireader/` | 拷到设备存储根的 `books/`。Kindle 上 KOReader 开着不能直接插线，先在 KOReader 里点「USB 传书」（见 koreader-setup 仓库） |
 | Kindle 自带阅读器（2026-10-05 起日常用） | `kindle/` 里的 `.kfx` | USB 连电脑，拷进 `documents/`。自带阅读器 USB 传书不认 EPUB |
-| 掌阅自带阅读器（备选） | `ireader/` | USB 连电脑导入 |
+| 掌阅自带阅读器 | `ireader/` | USB 连电脑导入 |
 | Move 自带阅读器 | `xochitl/` | reMarkable 自带的传书方式。USB 网页上传（`http://10.11.99.1`）单本约 88MB 以上会被拒 |
 
 - Kindle、掌阅在 Linux 上是 MTP 设备。用 gvfs 挂载时普通的写文件、改名都不行，只能 `gio copy` 或文件管理器拷。
-- **重新生成后直接覆盖设备上的旧文件**，文件名不会变（除非书名变了）。Kindle 的 KFX 唯一 ID 取自书的 id，重新生成后不变（覆盖同名 `.kfx` 后进度是否保留还没在真机上验证）。
-- KOReader 按文件名同步进度，所以 `ireader/` 的文件名稳定很重要——别手工改名。
+- **重新生成后直接覆盖设备上的旧文件**，文件名不会变（除非书名变了）。Kindle 的 KFX 唯一 ID 取自书的 id，重新生成后不变；**内容没变的书重建出来逐字节相同，覆盖后进度还在，字节有任何不同 Kindle 就从头记**（所以写出器、优化器升级后内容变了的书会丢进度）。掌阅覆盖 EPUB 字节变了进度也保留（2026-10-06 真机，见[设备](devices.md#重拷书以后进度还在不在2026-10-06-真机)）。
 - 书库删掉的、改了名的书，产物文件夹里的旧文件会删掉，设备上的那份要你自己删（同步工具用"镜像"方式可以一起删）。
 
 ### Move 上的漫画：登记页边距
@@ -282,7 +280,7 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 epub-optimize --device=ireader [选项] 输入.epub 输出.epub
 epub-to-azw3 [--ebok] 优化后.epub 输出.azw3            # 输入应是 --device=kindle 优化过的，见 AZW3 写出器
 epub-to-kfx [--id=N] 优化后.epub 输出.kfx              # KFX（Kindle 增强排版）最小版写出器，进行中，见 docs/kfx.md；cargo run -p kfx --bin epub-to-kfx
-mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict，给 KOReader 查词
+mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict（当初给 KOReader 用；掌阅自带阅读器直接认 MOBI 词典）
 readable-probe 测量书.epub                              # 生成测量书，见设备与阅读模式
 readable-measure [--device=kindle] 竖长.png 横宽.png    # 从截图量出可阅读范围
 ```

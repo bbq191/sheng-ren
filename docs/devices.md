@@ -8,7 +8,7 @@
 | 模式 | 给谁读 | 产物 | 屏幕（截图像素） | 文字书阅读范围 | 漫画画布 | 屏幕 |
 |---|---|---|---|---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画固定版式） | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
-| `ireader` | 掌阅 Ocean 5 Pro 自带阅读器（KOReader 也读它） | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白 |
+| `ireader` | 掌阅 Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白 |
 | `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB | 954×1696，264ppi | 842×1455 | 952×1457（页边距 1） | 彩色 |
 
 ### 怪癖 → 字段
@@ -34,9 +34,9 @@
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记给登记脚本、文字页补回留白 | — | — | 1 | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |
 
 - 这些字段都进指纹：改了哪个，受影响的书都算过期、下次重建。
-- **掌阅自带阅读器的词典**（2026-10-06 真机）：内置有道词典（存储根 `dict/` 下的 `c2170331.ydd`、`e2170331.ydd` 等），也能查在线翻译；自己的 **MOBI 词典直接拷进 `iReader/dict/`** 就能在查词里用（《牛津高阶英语双解》68MB、《现代汉语词典》9MB ✓，不用转格式；社区说法是单本不超过 100MB，没验证上限）。KOReader 用的是 `mobi-dict-to-stardict` 转出的 StarDict，两边互不影响。
+- **掌阅自带阅读器的词典**（2026-10-06 真机）：内置有道词典（存储根 `dict/` 下的 `c2170331.ydd`、`e2170331.ydd` 等），也能查在线翻译；自己的 **MOBI 词典直接拷进 `iReader/dict/`** 就能在查词里用（《牛津高阶英语双解》68MB、《现代汉语词典》9MB ✓，不用转格式；社区说法是单本不超过 100MB，没验证上限）。（`mobi-dict-to-stardict` 转 StarDict 是当初给 KOReader 用的，现在两台都不装 KOReader。）
 - **掌阅自带阅读器的字体**（2026-10-06 真机）：字体都在共享存储的 `iReader/fonts/`，自带的（方正新书宋等，删了会自动重新下载）和自己导入的放在一起；**字体列表显示的就是文件名去掉扩展名**，不读字体里登记的名字，自带字体的文件名本来就是中文（`方正新书宋.TTF`）。所以导入的字体想显示中文名，就把文件改成中文名（`SourceHanSerifSC-SemiBold.otf` → `思源宋体 SemiBold.otf`）。阅读器设置（`text_book_config.db` 的 `fontFamily`）记的也是这个名字，改名后用到它的书要重新选一次字体。
-- **掌阅开 adb**：设置里藏了「关于本机」，要装 koreader-setup 仓库的「设置入口」小应用（`android-settings/`）打开它、连点版本号开开发者选项，再开 USB 调试；adb shell 是 root；每次开机 USB 调试被关。
+- **掌阅开 adb**：设置里藏了「关于本机」，要装「设置入口」小应用（代码在 koreader-setup 仓库的 `android-settings/`，独立的安卓应用，不需要 KOReader）打开它、连点版本号开开发者选项，再开 USB 调试；adb shell 是 root；每次开机 USB 调试被关。
 - 不做成字段、各模式一律处理的怪癖：掌阅自带阅读器遇到文件名里有 `*`、`:` 这类字符的封面图（《春雪》《飘》原书的 `**::…jpg`），书架没有封面缩略图（2026-10-06），清洗时一律改名（见[排版 · 目录与其它修复](typesetting.md#6-目录与其它修复)）。
 - 写了不认识的字段、格式，`comic_page_direction` 写了别的值，都会报错，防止拼错后被悄悄忽略。
 - 屏幕、阅读范围、漫画画布都要写成竖屏（宽 ≤ 高），阅读范围和画布不能超过屏幕，否则报错。
@@ -136,7 +136,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 
 ## KOReader
 
-**现状**：2026-10-02 起 Kindle、掌阅曾日常开机直接进 KOReader（独占）。**2026-10-05 起 Kindle 上 `koreader/` 不在了（像是重置过），Kindle 改用自带阅读器读 `kindle/` 的 KFX**；掌阅现在是否还独占跑 KOReader 没再确认。Move 用自带阅读器。
+**现状：两台都不装 KOReader（2026-10-06 用户定）**，三台都用自带阅读器：Kindle 读 `kindle/` 的 KFX，掌阅读 `ireader/` 的 EPUB，Move 读 `xochitl/`。2026-10-02～10-05 Kindle、掌阅曾日常开机直接进 KOReader（独占）；10-05 Kindle 上 `koreader/` 不在了（像是重置过）。下面是当时的记录，留作参考。
 
 - **读哪份产物**：KOReader 读 `ireader/` 的 EPUB（KOReader 不认 `.azw3`），拷到存储根的 `books/`（KOReader 的起始目录）。`kindle` 模式的 KFX 只在回到 Kindle 自带阅读器时用。
 - **没有单独的模式**：`ireader` 的阅读范围是在掌阅自带阅读器上量的，KOReader 里没单独量，漫画离屏幕是不是 1px 没验证。
@@ -177,7 +177,7 @@ Move 系统版本 20260827；数据目录 `/home/root/.local/share/remarkable/xo
 | 掌阅（未 root） | ✗ 共享存储里没有进度文件，`iReader/backup/ireader2.db` 是加密的；当时 ADB 没开（后来开发者模式能打开，adb shell 是 root，没再查） | ✗ |
 | Move（xochitl） | ✓ `.metadata` 的 `lastOpenedPage` + `.epubindex` 对照表 | 可能能：像漫画页边距那样让 xochitl 自己设（没试） |
 
-所以自带阅读器之间最多做到"连上电脑时，把 Kindle 的进度换算后推给 Move"，没有做。日常的进度同步现在靠 KOReader（见上）。
+所以自带阅读器之间最多做到"连上电脑时，把 Kindle 的进度换算后推给 Move"，没有做。当时日常的进度同步靠 KOReader（见上，现在不装了）。
 
 ### 重拷书以后进度还在不在（2026-10-06 真机）
 
