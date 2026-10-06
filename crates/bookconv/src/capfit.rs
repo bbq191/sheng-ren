@@ -11,8 +11,8 @@
 //! - 一个块里只有一张 `<img>`（或 `<img>` 本身），紧跟着一个短文字段落（`<p>`/`<div>`，可见文字不超过 [`MAX_CAPTION_CHARS`]
 //!   个字、里面没有图）。
 //!
-//! 只处理**按满宽显示会超出一页**的图：宽高比比 阅读范围宽 / (阅读范围高 × [`IMAGE_SHARE`]) 更竖长时，`<img>` 写行内
-//! `width:P%`，P = ⌊[`IMAGE_SHARE`] × 阅读范围高 × 图宽 / 图高 / 阅读范围宽 × 100⌋，不小于 [`MIN_PERCENT`]。原书已经定的宽度
+//! 只处理**按原尺寸显示会超出一页**的图（图宽超过阅读范围宽时按满宽算）：显示高度超过 阅读范围高 × [`IMAGE_SHARE`] 时，`<img>` 写行内
+//! `width:P%`，P = ⌊[`IMAGE_SHARE`] × 阅读范围高 × 图宽 / 图高 / 阅读范围宽 × 100⌋，不小于 [`MIN_PERCENT`]。**只缩不放**：本来就放得下的小图不动，写的宽度也不超过图按原尺寸显示的宽度。原书已经定的宽度
 //! （行内样式、`width` 属性、样式表——样式表按真的选择器匹配，取匹配到的最小百分比）不比 P 大的照旧（阿加莎全集的 `image-60`、
 //! 《深夜小狗》的 `…-alone40` 本来就不超页）；宽度不是百分比、写了高度的不动（拿不准）。图片字节不动。
 
@@ -36,13 +36,20 @@ pub struct Cand {
     pub src: String,
 }
 
-/// `w × h` 的图在 `area` 里按满宽显示会超出一页（留出图注）时，图该写的宽度百分比；不超页 → `None`。
+/// `w × h` 的图在 `area` 里按原尺寸显示（宽过阅读范围时按满宽）会超出一页（留出图注）时，图该写的宽度百分比；不超页 → `None`。
+/// 只缩不放：结果不超过图按原尺寸显示占阅读范围宽的比例。
 pub fn percent(w: u32, h: u32, area: crate::imgopt::Screen) -> Option<u32> {
     if w == 0 || h == 0 || area.width == 0 {
         return None;
     }
-    let p = IMAGE_SHARE * area.height as f64 * w as f64 / h as f64 / area.width as f64 * 100.0;
-    (p < 100.0).then(|| (p.floor() as u32).max(MIN_PERCENT))
+    let (w, h, aw, ah) = (w as f64, h as f64, area.width as f64, area.height as f64);
+    let shown_w = w.min(aw);
+    if shown_w * h / w <= IMAGE_SHARE * ah {
+        return None; // 原尺寸显示放得下（含小图）：不动
+    }
+    let natural = shown_w / aw * 100.0;
+    let p = (IMAGE_SHARE * ah * w / h / aw * 100.0).min(natural);
+    Some((p.floor() as u32).max(MIN_PERCENT).min(natural.floor() as u32))
 }
 
 /// 页面里带图注的 `<img>`（见模块文档的三种结构）。
@@ -348,7 +355,10 @@ mod tests {
         assert_eq!(percent(1200, 2200, crate::imgopt::Screen { width: 1104, height: 1546 }), Some(61));
         assert_eq!(percent(1200, 800, area()), None, "横图不超页");
         assert_eq!(percent(1000, 1000, area()), None, "方图按满宽 1264 高、不到 0.8×1680 → 不动");
-        assert_eq!(percent(100, 2000, area()), Some(MIN_PERCENT), "极细长的图有下限");
+        assert_eq!(percent(100, 2000, area()), Some(7), "极细长的小图：下限也不超过它原尺寸占的宽度（只缩不放）");
+        assert_eq!(percent(400, 3000, area()), Some(MIN_PERCENT), "极细长的图有下限");
+        assert_eq!(percent(300, 600, area()), None, "小图原尺寸放得下：不放大");
+        assert_eq!(percent(600, 1500, area()), Some(42), "比阅读范围窄、但原尺寸显示超页（1500>0.8×1680）：缩到 42%（原尺寸占 47%）");
     }
 
     #[test]
