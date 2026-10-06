@@ -195,7 +195,7 @@ Amazon 转固定版式时还把大图缩到最长边 1448、给比缩略图大�
 | `$482`/`$483` | 尺寸宽/高（`100%` 只写宽，`cover` 宽高都写 100%） |
 | `$70` | 背景色（原有） |
 
-写出器照写；`url()` 按样式表自己的路径解析。优化器在 kindle、ireader 模式保留背景图（profile 的 `background_images`），`background` 简写拆成分项；kindle 保留尺寸和 `fixed`（`background_sizing`），ireader 去掉。PNG（`$284`）真机能显示（样本里没有 PNG，Amazon 都转成了 JPEG XR）。
+写出器照写；`url()` 按样式表自己的路径解析。优化器在 kindle、ireader 模式保留背景图（profile 的 `background_images`），`background` 简写拆成分项；kindle 保留尺寸和 `fixed`（`background_sizing`），ireader 去掉、整页背景图改为按尺寸意图预先缩好（v48，见[排版](typesetting.md#1-解开字体字号行高的锁别的样式不动)；kindle 产物不受影响）。PNG（`$284`）真机能显示（样本里没有 PNG，Amazon 都转成了 JPEG XR）。
 
 **Kindle 只在容器（内容）范围里画背景**，不按整页铺：带不带 `fixed`、尺寸都一样；Amazon 自己转的《绍宋》同样几页也是这样（卷首页只露出图的一角，比我们的还少），所以这是阅读器的行为，写出器和 Amazon 一致。
 
