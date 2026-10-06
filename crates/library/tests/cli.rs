@@ -65,13 +65,17 @@ fn help_prints_to_stdout_and_exits_0_without_touching_the_library() {
         let o = booklib(Some(&lib), args);
         assert_eq!(code(&o), Some(0), "{args:?}");
         let out = stdout(&o);
-        assert!(out.contains("sync [--prune]") && out.contains("--watch 一直运行") && !out.contains(" build ") && !out.contains("untrack"), "{args:?}: {out}");
+        assert!(out.contains("] sync [--device=") && out.contains("--watch") && !out.contains("] add ") && !out.contains("untrack"), "{args:?}: {out}");
     }
     let out = stdout(&booklib(Some(&lib), &["meta", "--help"]));
     assert!(out.contains("meta --fetch") && out.contains("meta --show") && out.contains("meta --edit") && !out.contains(" sync "), "{out}");
     let out = stdout(&booklib(Some(&lib), &["track", "-h"]));
     assert!(out.contains(" track <目录>") && !out.contains("untrack"), "{out}");
     expect(booklib(Some(&lib), &["help", "frobnicate"]), 1, "不认识的命令 frobnicate");
+    // build 已并入 sync：看它的帮助也给出这句提示
+    for args in [&["help", "build"][..], &["build", "--help"]] {
+        expect(booklib(Some(&lib), args), 1, "build 已并入 sync");
+    }
     assert!(!lib.exists(), "看帮助不该建书库");
     // `--` 之后的 --help 是书名（这里是 id），不是要帮助
     expect(booklib(Some(&lib), &["remove", "--", "--help"]), 2, "--help");

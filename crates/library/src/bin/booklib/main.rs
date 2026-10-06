@@ -70,10 +70,14 @@ fn print_help_if_asked() {
     match cmd.map(|c| (c, command_usage(c))) {
         None => println!("{USAGE}"),
         Some((_, Some(u))) => println!("{u}"),
+        Some(("build", None)) => usage_error(BUILD_MERGED),
         Some((c, None)) => usage_error(&format!("不认识的命令 {c}")),
     }
     std::process::exit(0);
 }
+
+/// 2026-10-06 起 `build` 并入 `sync`：敲旧命令（或看它的帮助）时的提示。
+const BUILD_MERGED: &str = "build 已并入 sync：booklib sync [--device=…] [--force] [书...]";
 
 fn usage_error(msg: &str) -> ! {
     if !msg.is_empty() {
@@ -336,7 +340,7 @@ fn main() {
     let Some(cmd) = args.pos.first().and_then(|c| c.to_str()).map(str::to_string) else { usage_error("") };
     match cmd.as_str() {
         "add" | "remove" | "dedupe" | "list" | "devices" | "track" | "untrack" => args.check(&cmd, &[], &[]),
-        "build" => usage_error("build 已并入 sync：booklib sync [--device=…] [--force] [书...]"),
+        "build" => usage_error(BUILD_MERGED),
         "sync" if args.flags.iter().any(|f| f == "prune") => usage_error("sync 现在总会清理（原件删了的连同产物从书库删掉），不用 --prune；这一次不想删就加 --keep"),
         "sync" => args.check(&cmd, &["device", "watch"], &["keep", "watch", "no-build", "force"]),
         "meta" => {
