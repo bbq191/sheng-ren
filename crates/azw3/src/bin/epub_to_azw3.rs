@@ -20,9 +20,9 @@ fn main() {
     if files.len() != 2 || flags.iter().any(|f| *f != "--ebok") {
         die(cli::USAGE, USAGE);
     }
-    let epub = cli::read_or_die(files[0]);
+    let epub = cli::open_or_die(files[0]);
     let opts = azw3::Opts { cdetype: if flags.contains(&"--ebok") { azw3::CdeType::Ebok } else { azw3::CdeType::Pdoc }, ..Default::default() };
-    let out = azw3::epub_to_azw3(&epub, &opts).unwrap_or_else(|e| die(cli::FAILED, format!("转换失败: {e}")));
+    let out = azw3::epub_to_azw3_from(epub, &opts).map(|(b, _)| b).unwrap_or_else(|e| die(cli::FAILED, format!("转换失败: {e}")));
     cli::write_or_die(files[1], &out);
     println!("epub-to-azw3: {} → {}（{} 字节）", files[0], files[1], out.len());
 }

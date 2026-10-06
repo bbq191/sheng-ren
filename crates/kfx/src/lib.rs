@@ -11,4 +11,4 @@ pub mod write;
 pub mod yj;
 
 pub use container::{Body, Container, Entity};
-pub use write::{epub_to_kfx, Opts, WRITER_VERSION};
+pub use write::{epub_to_kfx, epub_to_kfx_from, Opts, WRITER_VERSION};

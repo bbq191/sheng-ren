@@ -233,6 +233,12 @@ pub mod cli {
         std::fs::read(path).unwrap_or_else(|e| die(FAILED, format!("读 {}: {e}", path.display())))
     }
 
+    /// 打开文件按块读（给按读取器读 EPUB 的入口，不先整本读进内存）；失败以 [`FAILED`] 退出。
+    pub fn open_or_die(path: impl AsRef<Path>) -> std::io::BufReader<std::fs::File> {
+        let path = path.as_ref();
+        std::fs::File::open(path).map(std::io::BufReader::new).unwrap_or_else(|e| die(FAILED, format!("读 {}: {e}", path.display())))
+    }
+
     /// 原子地写整个文件（[`super::write_atomic`]）；失败以 [`FAILED`] 退出。
     pub fn write_or_die(path: impl AsRef<Path>, bytes: &[u8]) {
         super::write_atomic(path.as_ref(), bytes).unwrap_or_else(|e| die(FAILED, e))
