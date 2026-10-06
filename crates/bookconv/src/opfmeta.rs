@@ -214,7 +214,7 @@ fn to_format(image: &[u8], ext: &str) -> Result<(Vec<u8>, Option<&'static str>),
     if have == want {
         return Ok((image.to_vec(), None));
     }
-    let img = image::load_from_memory(image).map_err(|e| format!("封面图解不开：{e}"))?;
+    let img = crate::imgopt::guard(|| Some(image::load_from_memory(image))).ok_or("封面图解不开")?.map_err(|e| format!("封面图解不开：{e}"))?;
     let mut out = Vec::new();
     let fmt = if want == "png" { image::ImageFormat::Png } else { image::ImageFormat::Jpeg };
     let img = if fmt == image::ImageFormat::Jpeg { image::DynamicImage::ImageRgb8(img.to_rgb8()) } else { img };

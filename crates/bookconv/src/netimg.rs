@@ -25,7 +25,8 @@ pub fn fetch_image(ag: &ureq::Agent, src: &str, referer: &str, screen: Option<im
     use std::io::Read;
     resp.into_reader().take(20 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
     let (ext, mime) = common::image_ext_mime(&bytes)?; // 魔数识别 JPEG/PNG/GIF；非图→None
-    if let Some(smaller) = screen.and_then(|s| imgopt::downscale_for_device(&bytes, s)) {
+    // 网上的图是外部输入：解码器 panic 时按没缩放算（原图），不让一张图摔掉整本书的优化（这里在主线程）
+    if let Some(smaller) = screen.and_then(|s| imgopt::guard(|| imgopt::downscale_for_device(&bytes, s))) {
         return Some((smaller, ext, mime));
     }
     Some((bytes, ext, mime))
