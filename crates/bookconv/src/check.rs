@@ -126,7 +126,7 @@ fn anchor_set(data: &[u8]) -> HashSet<String> {
 
 pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     let mut rep = CheckReport::default();
-    let names: HashMap<&str, &Entry> = entries.iter().map(|e| (e.name.as_str(), e)).collect();
+    let names = crate::wash::name_index(entries);
 
     // 1. DRM
     if let Some(targets) = encrypted_targets(entries) {
@@ -142,7 +142,7 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     rep.toc_files = entries.iter().filter(|e| is_toc_file(&e.name)).map(|e| e.name.clone()).collect();
     let mut targets: Vec<(String, String)> = Vec::new(); // (zip 路径, frag)
     for tf in &rep.toc_files {
-        let t = String::from_utf8_lossy(&names[tf.as_str()].data);
+        let t = String::from_utf8_lossy(&entries[names[tf.as_str()]].data);
         targets.extend(internal_links(tf, &t).into_iter().filter(|l| !l.2).map(|(p, f, _)| (p, f)));
     }
     rep.toc_entries = targets.len();
@@ -162,7 +162,7 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     let mut cache: HashMap<&str, HashSet<String>> = HashMap::new();
     for (t, frag) in targets.iter().filter(|(t, f)| !f.is_empty() && names.contains_key(t.as_str())) {
         rep.frag_total += 1;
-        let anchors = cache.entry(t.as_str()).or_insert_with(|| anchor_set(&names[t.as_str()].data));
+        let anchors = cache.entry(t.as_str()).or_insert_with(|| anchor_set(&entries[names[t.as_str()]].data));
         if anchors.contains(frag) {
             rep.frag_hit += 1;
         }
@@ -189,7 +189,7 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
         for (target, frag, same_file) in internal_links(&e.name, &t) {
             // 正文链接的锚点（同文件 `#x` 也查）：目标文件在、锚点却找不到的算死链
             if !frag.is_empty() {
-                if let Some(target_entry) = names.get(target.as_str()) {
+                if let Some(target_entry) = names.get(target.as_str()).map(|&i| &entries[i]) {
                     if !cache.entry(target_entry.name.as_str()).or_insert_with(|| anchor_set(&target_entry.data)).contains(&frag) {
                         rep.dead_anchor_links += 1;
                         if dead_examples.len() < 3 {
