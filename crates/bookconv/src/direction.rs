@@ -6,8 +6,7 @@
 //!
 //! 不自动判：漫画识别（`comic_detect`）只能看出"是漫画"，看不出"是日漫"——国漫、美漫是从左往右，
 //! 自动设 rtl 会把它们翻反（规范白皮书 §4.6）。
-use regex::Regex;
-use std::sync::OnceLock;
+use crate::html;
 
 /// 书的翻页方向（EPUB 3 `page-progression-direction` 的两个显式值；`default` 与缺省按 `Ltr` 以外的"未写"处理）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,41 +35,36 @@ impl PageDirection {
     }
 }
 
-/// `<spine …>` 开标签（允许命名空间前缀如 `<opf:spine`，允许自闭合）。
-fn spine_tag_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?s)<(?:[A-Za-z_][\w.-]*:)?spine\b[^>]*>"#).unwrap())
+/// 第一个 `<spine …>` 开标签（认带前缀的 `<opf:spine>`、自闭合；按 `crate::html` 扫，注释里的不算）。
+fn spine_tag(opf: &str) -> Option<html::Tag<'_>> {
+    html::tags(opf).find(|t| t.is_start() && crate::wash::opf::is_local(t.name, "spine"))
 }
 
-/// 开标签里的 `page-progression-direction="…"`（单双引号都认）。
-fn attr_re() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"(?s)(\s)page-progression-direction\s*=\s*(?:"([^"]*)"|'([^']*)')"#).unwrap())
-}
+const ATTR: &str = "page-progression-direction";
 
 /// 读 OPF 文本里写明的方向：`rtl`/`ltr` → `Some`；没写、写 `default` 或别的值 → `None`。
 pub fn spine_direction(opf: &str) -> Option<PageDirection> {
-    let tag = spine_tag_re().find(opf)?.as_str();
-    let c = attr_re().captures(tag)?;
-    PageDirection::parse(c.get(2).or_else(|| c.get(3)).map_or("", |m| m.as_str()))
+    let t = spine_tag(opf)?;
+    PageDirection::parse(html::attr_value(&opf[t.start..t.end], ATTR)?)
 }
 
-/// 把 OPF 的 spine 方向改成 `dir`：已有属性就改值，没有就插在 `<spine` 标签名后面；找不到 `<spine>` 原样返回。
-/// 已是这个值时返回的字符串与输入逐字节相同。
+/// 把 OPF 的 spine 方向改成 `dir`：已有属性就改值（写成双引号），没有就插在 `<spine` 标签名后面；找不到 `<spine>` 原样返回。
+/// 已是这个值时返回的字符串与输入逐字节相同。2026-10-06 审计：此前按正则找，`page-progression-direction=rtl`（没引号）认不出，
+/// 又插进一个同名属性，OPF 不合法；注释里的 `<spine>` 也会被改。
 pub fn set_spine_direction(opf: &str, dir: PageDirection) -> String {
-    let Some(m) = spine_tag_re().find(opf) else { return opf.to_string() };
-    let tag = m.as_str();
-    let new_tag = if attr_re().is_match(tag) {
-        attr_re().replace(tag, |c: &regex::Captures| format!(r#"{}page-progression-direction="{}""#, &c[1], dir.as_str())).into_owned()
-    } else {
+    let Some(t) = spine_tag(opf) else { return opf.to_string() };
+    let tag = &opf[t.start..t.end];
+    let new_attr = format!(r#"{ATTR}="{}""#, dir.as_str());
+    let new_tag = match html::attr(tag, ATTR) {
+        Some(a) if a.value == dir.as_str() => return opf.to_string(),
+        Some(a) => format!("{}{new_attr}{}", &tag[..a.start], &tag[a.end..]),
         // 插在标签名之后：`<spine toc="ncx">` → `<spine page-progression-direction="rtl" toc="ncx">`。
-        let name_end = tag.find(|c: char| c.is_whitespace() || c == '>' || c == '/').unwrap_or(tag.len());
-        format!(r#"{} page-progression-direction="{}"{}"#, &tag[..name_end], dir.as_str(), &tag[name_end..])
+        None => {
+            let name_end = 1 + t.name.len();
+            format!("{} {new_attr}{}", &tag[..name_end], &tag[name_end..])
+        }
     };
-    if new_tag == tag {
-        return opf.to_string();
-    }
-    format!("{}{}{}", &opf[..m.start()], new_tag, &opf[m.end()..])
+    format!("{}{}{}", &opf[..t.start], new_tag, &opf[t.end..])
 }
 
 #[cfg(test)]
@@ -103,5 +97,11 @@ mod tests {
         assert_eq!(set_spine_direction("<spine>", PageDirection::Rtl), r#"<spine page-progression-direction="rtl">"#);
         assert_eq!(set_spine_direction(r#"<spine page-progression-direction='rtl' toc="x">"#, PageDirection::Ltr), r#"<spine page-progression-direction="ltr" toc="x">"#);
         assert_eq!(set_spine_direction("<package/>", PageDirection::Rtl), "<package/>", "没有 spine 不动");
+        // 没引号的值就地改，不再多插一个同名属性；注释里的 spine、名字只是以 spine 开头的元素不算
+        assert_eq!(set_spine_direction("<spine page-progression-direction=rtl toc=ncx>", PageDirection::Ltr), r#"<spine page-progression-direction="ltr" toc=ncx>"#);
+        assert_eq!(spine_direction("<spine page-progression-direction=rtl toc=ncx>"), Some(PageDirection::Rtl));
+        let c = r#"<!-- <spine page-progression-direction="rtl"> --><spine-x/><opf:spine toc="ncx"/>"#;
+        assert_eq!(spine_direction(c), None);
+        assert_eq!(set_spine_direction(c, PageDirection::Rtl), r#"<!-- <spine page-progression-direction="rtl"> --><spine-x/><opf:spine page-progression-direction="rtl" toc="ncx"/>"#);
     }
 }

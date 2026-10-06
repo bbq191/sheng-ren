@@ -140,32 +140,9 @@ pub(super) enum BoxSides<'a> {
 /// 拆 `margin`/`padding` 简写的值（`css.rs` 段距归零与 `layout.rs` 章尾去下边距共用）：1–4 个值按 CSS 规则展开成四边；
 /// 括号里的空格不算分隔（`calc(1em + 2px)`）。
 pub(super) fn box_sides(val: &str) -> BoxSides<'_> {
-    let v = val.trim();
-    let lower = v.to_ascii_lowercase();
-    let (v, important) = match lower.rfind('!') {
-        Some(i) if lower[i + 1..].trim() == "important" => (v[..i].trim_end(), " !important"),
-        _ => (v, ""),
-    };
-    let mut parts: Vec<&str> = Vec::new();
-    let (mut depth, mut start) = (0i32, None::<usize>);
-    for (i, ch) in v.char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => depth -= 1,
-            c if c.is_whitespace() && depth == 0 => {
-                if let Some(s) = start.take() {
-                    parts.push(&v[s..i]);
-                }
-                continue;
-            }
-            _ => {}
-        }
-        start.get_or_insert(i);
-    }
-    if let Some(s) = start {
-        parts.push(&v[s..]);
-    }
-    if depth != 0 {
+    let (v, important) = crate::cssunlock::split_important(val);
+    let (parts, balanced) = crate::cssunlock::top_level_tokens(v);
+    if !balanced {
         return BoxSides::Unknown;
     }
     let keyword = |p: &str| matches!(p.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer");
