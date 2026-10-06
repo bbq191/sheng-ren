@@ -3,6 +3,12 @@ use super::*;
 
 // ───────────────────────── 无效引用清理 ─────────────────────────
 
+/// 一条 `@font-face { … }` 规则（不跨嵌套花括号）。清洗层剔除死字体引用和 AZW3 写出器去掉字体声明共用。
+pub fn font_face_re() -> &'static Regex {
+    static FACE: OnceLock<Regex> = OnceLock::new();
+    FACE.get_or_init(|| Regex::new(r#"(?is)@font-face\s*\{[^}]*\}"#).unwrap())
+}
+
 /// 引用指的不是书内文件（空值、纯锚点 `#x`、`data:`、`http(s):`、`//` 开头）——谈不上"书内缺文件"，一律不判无效。
 /// 和 [`crate::html::is_external`]（"带协议的书外链接"，全书改链接时用）口径不同：这里空值和纯锚点也算，别的协议（`res:` 等）不算。
 pub(super) fn is_non_file_ref(r: &str) -> bool {
@@ -47,9 +53,8 @@ pub(super) fn drop_dead_imgs(html: &str, base_dir: &str, exact: &HashSet<String>
 ///
 /// 外部（http/data）来源视为活。返回 (新 css, 改动的规则数)。
 pub(super) fn drop_dead_font_faces(css: &str, base_dir: &str, exact: &HashSet<String>, lower: &HashSet<String>) -> (String, usize) {
-    static FACE: OnceLock<Regex> = OnceLock::new();
     static URL: OnceLock<Regex> = OnceLock::new();
-    let face = FACE.get_or_init(|| Regex::new(r#"(?is)@font-face\s*\{[^}]*\}"#).unwrap());
+    let face = font_face_re();
     let url = URL.get_or_init(|| Regex::new(r#"(?is)url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)(?:\s*format\([^)]*\))?"#).unwrap());
     let mut n = 0;
     let out = face.replace_all(css, |c: &regex::Captures| {

@@ -52,6 +52,7 @@ mod typeset;
 
 // 对外（优化器、质量门、书库、统计）用到的项；其余只在清洗层内部用。
 pub use self::cover::ensure_cover_declared;
+pub use self::dead_refs::font_face_re;
 pub use self::css::{filter_css, wash_html};
 pub use self::drm::{encrypted_targets, real_drm_items, PSEUDO_DRM_SAFE_EXTS};
 pub use self::opf::{manifest_items, opf_dc, parse_opf, tag_attr, ManifestItem, Opf, OpfDc};
