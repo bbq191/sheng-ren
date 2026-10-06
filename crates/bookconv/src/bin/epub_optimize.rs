@@ -1,5 +1,5 @@
 //! 命令行：按阅读模式（设备 profile）优化一本 EPUB（`optimize::optimize_epub_file_streaming`，与书库 `booklib build` 同一函数）。
-//! 缺省 = 清洗层（伪 DRM 剥离 / CSS 锁剥离 / 边距段距归零+首行缩进 / 空页清理 / 缺目录时自动目录 / 双 id 折叠 / 章节分页）
+//! 缺省 = 清洗层（伪 DRM 剥离 / CSS 锁剥离 / 边距段距归零+首行缩进 / 空页清理 / 缺目录时自动目录 / 双 id 折叠 / 定章节、目录补节）
 //! 加优化器（被引用的脚注移到引用它的章末、标号改同章锚点 / duokan 标记 / 远程图内联 / 双 id 去重 / 图片按阅读范围缩放），产物自带
 //! `META-INF/eink-optimized` 标记。
 //!
@@ -10,7 +10,6 @@
 //!   --no-wash        只跑优化器不清洗
 //!   --keep-spacing   清洗但保留原书段间距（诗集/剧本）
 //!   --auto-toc       强制从 h1–h6 重建目录（缺省仅在无目录时生成）
-//!   --no-paginate    不做章节分页（缺省：章标题独立一页、节与节之间分页）
 //!   --keep-color     黑白屏设备的漫画页也保留彩色（缺省转 256 级灰度）；用来对比灰度与彩色的体积、画质
 //!   --check          产物过质量门，打印 JSON 报告；不过则退出码 3（产物仍写出）
 //!   --require-toc    质量门把"无目录"升为失败
@@ -25,8 +24,8 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let flags: Vec<&str> = args.iter().filter(|a| a.starts_with("--") && !a.starts_with("--device=")).map(|s| s.as_str()).collect();
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--no-paginate", "--keep-color", "--check", "--require-toc"].contains(f)) {
-        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--no-paginate] [--keep-color] [--check] [--require-toc] 输入.epub 输出.epub");
+    if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--keep-color", "--check", "--require-toc"].contains(f)) {
+        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--keep-color] [--check] [--require-toc] 输入.epub 输出.epub");
     }
     // 阅读模式定阅读范围、黑白屏转灰度、注释呈现方式（和书库生成同一个起点）
     let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
@@ -37,7 +36,6 @@ fn main() {
         OptimizeOpts::for_profile(device).wash.map(|w| WashOpts {
             keep_para_spacing: flags.contains(&"--keep-spacing"),
             auto_toc: if flags.contains(&"--auto-toc") { AutoToc::Always } else { AutoToc::IfMissing },
-            paginate: !flags.contains(&"--no-paginate"),
             ..w
         })
     };
@@ -50,8 +48,8 @@ fn main() {
     println!("epub-optimize v{}: {} 文件/{} 章, {} → {} 字节", optimize::OPTIMIZE_VERSION, rep.total_files, rep.html_files, rep.bytes_before, rep.bytes_after);
     if let Some(w) = &rep.wash {
         println!(
-            "清洗: css {} / html {} / 伪DRM剥离 {:?} / 空页 {:?} / 自动目录 {} 条 / 双id折叠 {} / 分部重建 {} 条 / ncx uid 修复 {} / ncx doctype 剥离 {} / ncx manifest id 修复 {} / 分页新增 {} 份 / 注释随节搬移 {} / 目录补节 {} / 目录改指 {}",
-            w.css_files, w.html_files, w.pseudo_drm_stripped, w.empty_pages_removed, w.toc_generated, w.dup_id_tags_collapsed, w.toc_parts_restructured, w.ncx_uid_fixed, w.ncx_doctype_stripped, w.ncx_manifest_id_fixed, w.sections_paginated, w.paginate_notes_moved, w.toc_sections_added, w.ncx_targets_repaired
+            "清洗: css {} / html {} / 伪DRM剥离 {:?} / 空页 {:?} / 自动目录 {} 条 / 双id折叠 {} / 分部重建 {} 条 / ncx uid 修复 {} / ncx doctype 剥离 {} / ncx manifest id 修复 {} / 目录补节 {} / 目录改指 {}",
+            w.css_files, w.html_files, w.pseudo_drm_stripped, w.empty_pages_removed, w.toc_generated, w.dup_id_tags_collapsed, w.toc_parts_restructured, w.ncx_uid_fixed, w.ncx_doctype_stripped, w.ncx_manifest_id_fixed, w.toc_sections_added, w.ncx_targets_repaired
         );
         let x = &w.xml_fixes;
         println!(

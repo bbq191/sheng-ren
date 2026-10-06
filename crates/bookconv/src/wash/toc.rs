@@ -1,4 +1,4 @@
-//! 目录：目录文件判定、自动生成目录（ncx+nav）、已有扁平目录按"第X部"重建为两级、章节分页后补节。
+//! 目录：目录文件判定、自动生成目录（ncx+nav）、已有扁平目录按"第X部"重建为两级、定章节后补节。
 //!
 //! 重建已有目录时只换 nav 文档里的 `<nav epub:type="toc">`：landmarks、page-list 等其它 `<nav>` 和 head 原样保留，
 //! 原 toc 的标题（`<h1>目录</h1>`/`<h2>Contents</h2>`）沿用；新建时标题按书的语言（中文"目录"、其它"Contents"）。
@@ -6,7 +6,7 @@ use super::*;
 
 /// 按文件名看是不是目录文件：NCX（`*.ncx`），或文件名正好是 `nav.xhtml`/`nav.html`（不分大小写）。
 /// OPF 声明的导航文档（`properties="nav"`，不一定叫 nav）由调用方另外认（`Opf::nav_doc`）。
-/// 2026-09-30 审计：此前只看文件名以 `nav` 开头，`navarre.xhtml`、`navy.html` 这类正文章节被当成目录、整章跳过清洗和分页。
+/// 2026-09-30 审计：此前只看文件名以 `nav` 开头，`navarre.xhtml`、`navy.html` 这类正文章节被当成目录、整章跳过清洗和定章节。
 pub fn is_toc_file(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
     let base = l.rsplit('/').next().unwrap_or(&l);
@@ -74,7 +74,7 @@ pub(super) fn dense_ranks(items: &[TocItem]) -> Vec<u8> {
 }
 
 /// 从 spine 各章 h1–h6 生成目录条目；标题没有 id 就补 `id="eink-toc-N"`（已有 `id`——单引号也算——沿用，不追加第二个）。
-/// 与分页的标题识别（`paginate::collect_headings`）不同：这里只要 `<hN>` 有文字就收，不判角色。
+/// 与定章节的标题识别（`chapters::collect_headings`）不同：这里只要 `<hN>` 有文字就收，不判角色。
 pub(super) fn collect_toc_headings(entries: &mut [Entry], spine: &[String], nav_doc: Option<&String>) -> Vec<TocItem> {
     let mut out = Vec::new();
     let mut counter = 0usize;
@@ -580,14 +580,14 @@ pub(super) fn auto_toc(entries: &mut Vec<Entry>, mode: AutoToc, heading: &str, r
     rep.toc_generated = headings.len();
 }
 
-/// 分页拆出来的一节：所在文件（拆过的是那一份）、标题 id、标题文字。
+/// 要进目录的一节：所在文件、标题 id、标题文字。
 pub(super) struct SectionRef {
     pub path: String,
     pub id: String,
     pub label: String,
 }
 
-/// 章节分页后把书自带目录里**漏掉的节**补进去（用户 2026-09-27：节要缩进出现在目录里）。`sections` 按阅读顺序。
+/// 定完章节后把书自带目录里**漏掉的节**补进去（用户 2026-09-27：节要缩进出现在目录里）。`sections` 按阅读顺序。
 /// 书自带的条目原样保留、顺序不动；缺的节插在阅读顺序上它之前的最后一条后面，
 /// 层级 = 往前找到的第一条"章"（非节条目）的下一级，前一条本身就是节时同级。没有 NCX 的书不动（自动目录已含全部标题）。
 /// 书自带目录里**已有**的节条目（和章平排的，如《13級階梯》`第一章　出獄　　１`、`　　２`、`　　３`）缩进到所属章下面、
@@ -684,9 +684,9 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
         }
         // 只在书自带目录本来就列着后面的节（紧接着是书自带的第 n+1 节）时去掉：章标签末尾的数字才确定是第一节的节号，
         // 不是章自己的编号（《鼠疫》"部　一"后面的节都是补的，"一"是部的编号，不动）。
-        let n = super::paginate::section_number(&items[i].toc.title);
+        let n = super::chapters::section_number(&items[i].toc.title);
         let next_listed = n.is_some_and(|n| {
-            items.get(i + 1).is_some_and(|x| x.is_sec && !x.inserted && super::paginate::section_number(&x.toc.title) == Some(n + 1))
+            items.get(i + 1).is_some_and(|x| x.is_sec && !x.inserted && super::chapters::section_number(&x.toc.title) == Some(n + 1))
         });
         if i == c + 1 && items[i].inserted && next_listed {
             let label = items[i].toc.title.clone();
