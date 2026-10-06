@@ -6,14 +6,14 @@ use super::*;
 /// CSS 规则 `选择器{声明}`（只匹配最内层：`@media{}` 里的规则由"从内向外"匹配到）。`filter_css`、章尾容器
 /// 去下边距（`layout::strip_tail_spacing`）、`layout::Drawn`、`typeset::indent_classes_of` 共用。
 /// ⚠ 选择器（第 1 组）会带上前面的 `/* … */` 注释：拿它判断之前先过 [`strip_css_comments`]，写回仍用原文。
-pub(super) fn css_rule_re() -> &'static Regex {
+pub(crate) fn css_rule_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r#"(?s)([^{}]+)\{([^{}]*)\}"#).unwrap())
 }
 
 /// 去掉 `/* … */` 注释（换成一个空格；没闭合的去到末尾）。只用来判断选择器（2026-09-30 审计：`/* p 的边距 */ .note{…}`
 /// 被当成 p 规则改了边距，`/* footnote */` 让普通规则被当成注释容器，`/* fonts */ @font-face{…}` 没认出是 @font-face、字体名被剥）。
-pub(super) fn strip_css_comments(s: &str) -> Cow<'_, str> {
+pub(crate) fn strip_css_comments(s: &str) -> Cow<'_, str> {
     if !s.contains("/*") {
         return Cow::Borrowed(s);
     }

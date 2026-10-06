@@ -72,6 +72,7 @@ use self::ncx_fix::*;
 use self::opf::{find_opf, opf_book_title, opf_unique_identifier};
 use self::chapters::chapters_into_toc;
 pub(crate) use self::chapters::is_toc_like_page;
+pub(crate) use self::css::{css_rule_re, strip_css_comments};
 pub(crate) use self::toc::name_index;
 use self::toc::*;
 use self::typeset::*;
