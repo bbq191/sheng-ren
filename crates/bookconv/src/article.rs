@@ -9,7 +9,7 @@
 
 use crate::convert::common;
 use crate::epub::{Book, BookMeta, Chapter, Resource};
-use crate::netimg::{fetch_image, http_agent, UA};
+use crate::netimg::{fetch_image, http_agent, origin_of, UA};
 use crate::util::xml_escape;
 use readability_rust::Readability;
 use regex::Regex;
@@ -204,15 +204,6 @@ fn fetch_images(imgs: &[ImgRef], referer: &str) -> Vec<Option<Fetched>> {
     results.into_inner().unwrap()
 }
 
-/// URL 的 origin（scheme://host/），作抓图 Referer。
-fn origin_of(url: &str) -> String {
-    let after = match url.split_once("://") {
-        Some((scheme, rest)) => format!("{scheme}://{}", rest.split('/').next().unwrap_or(rest)),
-        None => return String::new(),
-    };
-    format!("{after}/")
-}
-
 /// 白名单排版标签（其余标签「拆壳」——丢标签保子内容）。
 fn is_whitelisted(name: &str) -> bool {
     matches!(
@@ -357,12 +348,6 @@ mod tests {
         assert_eq!(strip_bad_params("https://mp.weixin.qq.com/s/ID?poc_token=ABC"), "https://mp.weixin.qq.com/s/ID");
         assert_eq!(strip_bad_params("https://x/s/ID?a=1&poc_token=ABC&b=2"), "https://x/s/ID?a=1&b=2");
         assert_eq!(strip_bad_params("https://x/s/ID"), "https://x/s/ID"); // 无 token 原样
-    }
-
-    #[test]
-    fn origin_of_extracts_scheme_host() {
-        assert_eq!(origin_of("https://mp.weixin.qq.com/s/ID?x=1"), "https://mp.weixin.qq.com/");
-        assert_eq!(origin_of("notaurl"), "");
     }
 
     #[test]

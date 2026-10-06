@@ -493,14 +493,14 @@ impl<'a> EntryXform<'a> {
             if self.number_note_icons {
                 // 规则文本取清洗层生成样式表时用的同一个常量（`wash::NOTEICON_RULE`），不在这里另写一份
                 let rule = crate::wash::NOTEICON_RULE.as_bytes();
-                if let Some(i) = out.windows(rule.len()).position(|w| w == rule) {
+                if let Some(i) = crate::util::memfind(&out, rule) {
                     out.drain(i..i + rule.len());
                 }
             }
-            if self.reader_margins && !out.windows(crate::comicpad::CSS_RULES.len()).any(|w| w == crate::comicpad::CSS_RULES.as_bytes()) {
+            if self.reader_margins && crate::util::memfind(&out, crate::comicpad::CSS_RULES.as_bytes()).is_none() {
                 out.extend_from_slice(crate::comicpad::CSS_RULES.as_bytes());
             }
-            if self.fixed_layout.is_some() && !out.windows(crate::comicfxl::CSS_RULES.len()).any(|w| w == crate::comicfxl::CSS_RULES.as_bytes()) {
+            if self.fixed_layout.is_some() && crate::util::memfind(&out, crate::comicfxl::CSS_RULES.as_bytes()).is_none() {
                 out.extend_from_slice(crate::comicfxl::CSS_RULES.as_bytes());
             }
             return Some(Cow::Owned(out));
