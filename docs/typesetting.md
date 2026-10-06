@@ -28,6 +28,7 @@
 | 段落（`p`、`div`）的上下边距 | 去掉，段与段之间靠首行缩进区分（`epub-optimize --keep-spacing` 保留）；左右边距保留 |
 | `body`、`html` 的边距 | 去掉，页边距交给阅读器 |
 | `background` 简写 | 只留颜色，背景图去掉（xochitl 会把背景图平铺满页、盖住正文）。保留背景图的模式（kindle、ireader，profile 的 `background_images`）拆成背景色、背景图、重复、位置等分项（掌阅不认简写；渐变、`image-set()` 也归背景图，v44）；ireader 再去掉尺寸和 `fixed`（`background_sizing = false`：`background-size` 把图挤变形），kindle 保留。KFX 里怎么写见 [KFX · 背景图](kfx.md#背景图2026-10-05绍宋样本) |
+| `rgba()` 颜色 | 阅读器不认 `rgba()` 的模式（profile `css_rgba = false`，掌阅）换成 `#rrggbb`：不透明的颜色一点不变，半透明按白底混合，全透明写 `transparent`；分量写成百分比、斜杠语法这类认不准的不动（v49）。掌阅不认时整条声明作废，《绍宋》深红底色显示成白底 |
 | `background-image` | 去掉（同上）；保留背景图的模式不动 |
 | `background-size`、`background-attachment` | ireader 去掉（同上） |
 

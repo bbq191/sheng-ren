@@ -122,6 +122,8 @@ impl Library {
             (true, false) => format!("{comic_seg}bn"),
             _ => comic_seg,
         };
+        // 阅读器不认 rgba() 颜色（profile 的 css_rgba = false）
+        let comic_seg = if device.css_rgba { comic_seg } else { format!("{comic_seg}r") };
         let fingerprint = format!(
             "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{comic_seg}|{}|{}",
             meta.content_sha(),

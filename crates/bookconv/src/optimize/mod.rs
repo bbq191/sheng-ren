@@ -107,7 +107,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v48（2026-10-06）：去掉 `background-size` 的模式（掌阅）整页背景图按原书的尺寸意图预先缩进阅读范围（`bgfit`）：`cover` 盖满、
 ///   `contain`/没写尺寸缩进、宽 `100%` 宽撑满；只缩不放、缩了就用（不管变没变小）、透明保持透明。《绍宋》卷首页的 juan.png
 ///   2160×3124 以前重编码变大没采用，掌阅上只露出左上一块。kindle 产物不变。
-pub const OPTIMIZE_VERSION: &str = "48";
+/// - v49（2026-10-06）：阅读器不认 `rgba()` 颜色的模式（profile `css_rgba = false`，掌阅）把 `rgba()` 换成 `#rrggbb`（不透明的颜色
+///   不变；半透明按白底混合，全透明写 `transparent`）——掌阅把 `rgba()` 那条声明整条作废，《绍宋》深红底色显示成白底（真机测试书）。
+///   整页背景图（v48）一律不超出阅读范围：`cover` 也缩成整张看得见（《雪国》封底不再被裁掉上半截；不删原书内容）。
+pub const OPTIMIZE_VERSION: &str = "49";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -174,17 +177,17 @@ impl OptimizeOpts {
     pub fn for_profile(p: &profile::Profile) -> Self {
         OptimizeOpts {
             grayscale: !p.color,
-            wash: Some(if p.background_images {
-                // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
-                // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`
-                let mut w = crate::wash::WashOpts::default();
-                w.filter_props.retain(|f| f != "background-image");
-                if !p.background_sizing {
-                    w.filter_props.extend(["background-size".to_string(), "background-attachment".to_string()]);
+            wash: Some({
+                let mut w = crate::wash::WashOpts { css_rgba: p.css_rgba, ..Default::default() };
+                if p.background_images {
+                    // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
+                    // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`
+                    w.filter_props.retain(|f| f != "background-image");
+                    if !p.background_sizing {
+                        w.filter_props.extend(["background-size".to_string(), "background-attachment".to_string()]);
+                    }
                 }
                 w
-            } else {
-                Default::default()
             }),
             footnote: p.notes.into(),
             comic_margin: p.comic_margin,

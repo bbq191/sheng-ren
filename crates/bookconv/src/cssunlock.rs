@@ -174,6 +174,27 @@ pub fn background_longhands(value: &str, sizing: bool) -> Vec<String> {
     out
 }
 
+/// 声明里的 `rgba(r, g, b, a)` 换成阅读器认的写法（profile 的 `css_rgba = false`，掌阅：`rgba()` 一律不认，连同那条声明作废，
+/// `rgb()`、`#rrggbb` 认，2026-10-06 真机测试书）。不透明（a≥1）→ `#rrggbb`，颜色一点不变；全透明（a≤0）→ `transparent`；
+/// 半透明按白底混合成不透明色（掌阅纸面是白的；叠在别的底色上时有偏差，比整条作废强）。分量写成百分比、斜杠语法等认不准的
+/// 原样不动（拿不准就不处理）。
+pub(crate) fn rgba_to_opaque(decls: &str) -> std::borrow::Cow<'_, str> {
+    use std::sync::LazyLock;
+    static RGBA: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\brgba\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*([0-9]*\.?[0-9]+)(%)?\s*\)").unwrap()
+    });
+    RGBA.replace_all(decls, |c: &regex::Captures| {
+        let ch = |k: usize| c[k].parse::<u32>().ok().filter(|v| *v <= 255);
+        let (Some(r), Some(g), Some(b), Ok(a)) = (ch(1), ch(2), ch(3), c[4].parse::<f64>()) else { return c[0].to_string() };
+        let a = if c.get(5).is_some() { a / 100.0 } else { a };
+        if a <= 0.0 {
+            return "transparent".to_string();
+        }
+        let mix = |v: u32| (v as f64 * a.min(1.0) + 255.0 * (1.0 - a.min(1.0))).round() as u32;
+        format!("#{:02x}{:02x}{:02x}", mix(r), mix(g), mix(b))
+    })
+}
+
 /// 按顶层空白切词，括号里的空格不算（`rgb(0, 0, 0)`、`url(a b.png)`）。另返回括号配不配对（`(` 与 `)` 个数相同）。
 /// `background` 简写（这里）和 `margin`/`padding` 简写（`wash::css::box_sides`）共用。
 pub(crate) fn top_level_tokens(v: &str) -> (Vec<&str>, bool) {
@@ -288,5 +309,17 @@ mod tests {
         assert_eq!(unlock("font-weight", "bold", false, &HashSet::new()), Unlock::Drop, "调用方额外加进清单的属性整条去掉");
         assert_eq!(unlock("font-family", "Foo", false, &HashSet::new()), Unlock::Drop);
         assert_eq!(unlock("line-height", "1.5", false, &HashSet::new()), Unlock::Drop);
+    }
+
+    #[test]
+    fn rgba_becomes_opaque_hex_for_readers_without_rgba() {
+        use super::rgba_to_opaque as f;
+        assert_eq!(f("background-color:rgba(117, 0, 0, 1);color:RGBA(255,255,255,1)"), "background-color:#750000;color:#ffffff");
+        assert_eq!(f("color:rgba(0,0,0,0)"), "color:transparent");
+        assert_eq!(f("background-color:rgba(204, 194, 188, 0.8)"), "background-color:#d6cec9", "半透明按白底混合");
+        assert_eq!(f("color:rgba(0,0,0,50%)"), "color:#808080");
+        for keep in ["color:rgba(10%,0,0,1)", "color:rgba(0 0 0 / 1)", "color:rgb(1,2,3)", "color:#123", "color:rgba(300,0,0,1)"] {
+            assert_eq!(f(keep), keep, "认不准的、本来就认的不动");
+        }
     }
 }

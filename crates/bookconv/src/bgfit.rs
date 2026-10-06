@@ -10,6 +10,9 @@
 //! | `100%`、`100% auto` | 宽撑满阅读范围的宽 |
 //! | 没写尺寸、`no-repeat` | 等比缩进阅读范围（取小者） |
 //!
+//! **最后都不超出阅读范围**（再和"缩进阅读范围"取小者）：图有一截显示不出来，等于原书内容看不见（用户 2026-10-06：不删原书
+//! 任何内容）。所以 `cover` 实际效果和 `contain` 一样——整张图都看得见，最多一边留白；《雪国》封底 1080×2400 缩成 756×1680。
+//!
 //! **只缩不放**：比目标小的图不动——PNG 放大只会糊、文件变大，而且掌阅按图自身像素显示，放大后的像素也不会比原图多出细节；
 //! 原书意图（宽 100%）在掌阅上本来就做不到，宁可小一点也不改原画。
 //!
@@ -38,7 +41,9 @@ impl BgFit {
             BgFit::Cover => sw.max(sh),
             BgFit::Contain => sw.min(sh),
             BgFit::Width => sw,
-        };
+        }
+        .min(sw.min(sh)); // 不超出阅读范围：超出的那截显示不出来
+
         if s >= 1.0 {
             return None;
         }
@@ -225,11 +230,13 @@ mod tests {
     #[test]
     fn targets_follow_intent_and_never_upscale() {
         // 《绍宋》的三张图在掌阅阅读范围里
-        assert_eq!(BgFit::Cover.target(2400, 3200, area()), Some((1264, 1685)));
+        assert_eq!(BgFit::Cover.target(2400, 3200, area()), Some((1260, 1680)), "cover 也不超出阅读范围：整张图看得见");
+        assert_eq!(BgFit::Cover.target(1080, 2400, area()), Some((756, 1680)), "《雪国》封底：高出阅读范围的要缩，不能裁掉上半截");
         assert_eq!(BgFit::Contain.target(2160, 3124, area()), Some((1162, 1680)));
         assert_eq!(BgFit::Width.target(1080, 1562, area()), None, "比阅读范围窄：不放大");
         assert_eq!(BgFit::Width.target(2000, 1000, area()), Some((1264, 632)));
         assert_eq!(BgFit::Contain.target(1264, 1680, area()), None);
-        assert_eq!(BgFit::Cover.target(1000, 3000, area()), None, "盖满要放大：不动");
+        assert_eq!(BgFit::Cover.target(1000, 1500, area()), None, "盖满要放大：不动");
+        assert_eq!(BgFit::Width.target(2000, 4000, area()), Some((840, 1680)), "宽撑满后高出阅读范围：再缩进去");
     }
 }

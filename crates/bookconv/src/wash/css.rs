@@ -57,6 +57,17 @@ pub(super) fn is_positive_indent(val: &str) -> bool {
 /// （2026-09-06 Phase E 英文书对照发现）。`text-indent:0`（诗歌/引文/列表明示不缩进）与负值保留。
 /// `filter` 里的属性按 [`crate::cssunlock::unlock`] 解锁（字体去掉、相对字号保留、`font`/`background` 简写只留样式和颜色……）；
 /// `base_text` = 这条规则作用在正文整体那一层（见 [`is_base_text_selector`]）。
+/// 阅读器不认 `rgba()` 时（`WashOpts::css_rgba = false`）把清洗后的声明里的 `rgba()` 换成不透明写法。
+fn colors_for(opts: &WashOpts, decls: String) -> String {
+    if opts.css_rgba {
+        return decls;
+    }
+    match crate::cssunlock::rgba_to_opaque(&decls) {
+        std::borrow::Cow::Borrowed(_) => decls,
+        std::borrow::Cow::Owned(s) => s,
+    }
+}
+
 pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing, base_text: bool, indent: Option<&str>, keep_fonts: &HashSet<String>) -> String {
     use crate::cssunlock::{unlock, Unlock};
     let mut out: Vec<String> = Vec::new();
@@ -222,11 +233,11 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
             }
             // base_text=true：书自己的字号（哪怕是相对的）一律去掉，换成下面统一的注释字号
             // 注释容器的字体一律去掉（批注不用嵌入字体，用户 2026-10-05）。
-            let mut decls = filter_decls_with(&c[2], &filter, spacing, true, Some(indent_for(opts)), &HashSet::new());
+            let mut decls = colors_for(opts, filter_decls_with(&c[2], &filter, spacing, true, Some(indent_for(opts)), &HashSet::new()));
             decls.push_str(&format!("font-size:{FOOTNOTE_FONT_SIZE};"));
             return format!("{lead}{sel}{{{decls}}}");
         }
-        format!("{lead}{}{{{}}}", sel, filter_decls_with(&c[2], &opts.filter_props, spacing, is_base_text_selector(&clean), Some(indent_for(opts)), &opts.keep_fonts))
+        format!("{lead}{}{{{}}}", sel, colors_for(opts, filter_decls_with(&c[2], &opts.filter_props, spacing, is_base_text_selector(&clean), Some(indent_for(opts)), &opts.keep_fonts)))
     }).into_owned()
 }
 
@@ -294,7 +305,7 @@ pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashS
             _ => Spacing::Keep,
         };
         let base_text = matches!(t.name.to_ascii_lowercase().as_str(), "body" | "html");
-        let cleaned = filter_decls_with(a.value, &opts.filter_props, spacing, base_text, Some(indent_for(opts)), &opts.keep_fonts);
+        let cleaned = colors_for(opts, filter_decls_with(a.value, &opts.filter_props, spacing, base_text, Some(indent_for(opts)), &opts.keep_fonts));
         if cleaned.is_empty() {
             Edit::Remove
         } else if cleaned == a.value {
