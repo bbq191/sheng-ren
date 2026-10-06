@@ -4,7 +4,7 @@
 import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import re, html, posixpath, zipfile
 from urllib.parse import unquote
-from kf8lib import F, rawml, parse_indx
+from kf8lib import F, rawml, parse_indx, cli_args
 
 def visible(fragment):
     t = re.sub(r'(?is)<!--.*?-->|<script\b.*?</script>|<style\b.*?</style>', '', fragment)
@@ -46,7 +46,8 @@ def epub_text(path):
         parts.append(visible(b.group(1) if b else ''))
     return parts
 
-a, info = azw3_text(sys.argv[1]); b = epub_text(sys.argv[2])
+azw3_path, epub_path = cli_args(2, "用法：python3 textcheck.py 文件.azw3 源.epub")[:2]
+a, info = azw3_text(azw3_path); b = epub_text(epub_path)
 sa, sb = ''.join(a), ''.join(b)
 stat = f"docs={len(a)}/{len(b)} chars={len(sa)} frags={info['frags']} toc={info['toc']} size={info['size']}KB"
 if sa == sb and len(a) == len(b):

@@ -2,49 +2,33 @@
 //! 用法：epub-to-kfx [--id=数字] 优化过的.epub 输出.kfx
 //! `--id` 固定唯一 ID（同一本书做几个测试版本时用，Kindle 按 ID 认书）；不给就按书的 OPF 唯一标识符派生。
 //! 输入应先经 `epub-optimize --device=kindle` 优化；这里只做格式转换。
+//! 退出码：0 成功；1 用法错；2 读写或转换失败（先写临时文件再改名，失败不留半成品）。
 
-use std::process::ExitCode;
+use bookconv::util::cli::{self, die};
 
-fn main() -> ExitCode {
+const USAGE: &str = "用法：epub-to-kfx [--id=数字] 优化过的.epub 输出.kfx";
+
+fn main() {
+    cli::restore_sigpipe();
     let mut opts = kfx::Opts::default();
     let mut args = Vec::new();
     for a in std::env::args().skip(1) {
+        if a == "-h" || a == "--help" {
+            println!("{USAGE}");
+            return;
+        }
         match a.strip_prefix("--id=") {
-            Some(n) => match n.parse() {
-                Ok(n) => opts.fixed_id = Some(n),
-                Err(_) => {
-                    eprintln!("--id 要给数字");
-                    return ExitCode::from(2);
-                }
-            },
+            Some(n) => opts.fixed_id = Some(n.parse().unwrap_or_else(|_| die(cli::USAGE, "--id 要给数字"))),
+            None if a.starts_with("--") => die(cli::USAGE, format!("不认识的参数 {a}\n{USAGE}")),
             None => args.push(a),
         }
     }
-    let [input, output] = args.as_slice() else {
-        eprintln!("用法：epub-to-kfx [--id=数字] 优化过的.epub 输出.kfx");
-        return ExitCode::from(2);
-    };
-    let data = match std::fs::read(input) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("读 {input} 失败：{e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let (kfx, warnings) = match kfx::epub_to_kfx(&data, &opts) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("{input}：{e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let [input, output] = args.as_slice() else { die(cli::USAGE, USAGE) };
+    let data = cli::read_or_die(input);
+    let (kfx, warnings) = kfx::epub_to_kfx(&data, &opts).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
     for w in &warnings {
         eprintln!("警告：{w}");
     }
-    if let Err(e) = bookconv::util::write_atomic(std::path::Path::new(output), &kfx) {
-        eprintln!("写 {output} 失败：{e}");
-        return ExitCode::FAILURE;
-    }
+    cli::write_or_die(output, &kfx);
     println!("{output}：{} 字节", kfx.len());
-    ExitCode::SUCCESS
 }

@@ -2,10 +2,10 @@
 用法：python3 pair.py 书.kfx 原书.epub"""
 import sys, zipfile, re, posixpath, collections
 from html.parser import HTMLParser
-from kfx import load
+from kfx import load, cli_args
 from ion import short
 
-kfx_path, epub_path = sys.argv[1], sys.argv[2]
+kfx_path, epub_path = cli_args(2, "用法：python3 pair.py 书.kfx 原书.epub [--unmatched]")[:2]
 r,ci,ents=load(kfx_path)
 E={}
 for i,t,b in ents: E.setdefault(t,{})[i]=b[0] if isinstance(b,list) and b else b

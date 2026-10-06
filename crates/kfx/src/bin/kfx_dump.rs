@@ -5,7 +5,7 @@
 use kfx::ion::{SymbolTable, Value};
 use kfx::{Body, Container};
 use std::collections::BTreeMap;
-use std::process::ExitCode;
+use bookconv::util::cli::{self, die};
 
 struct Fmt<'a> {
     syms: &'a SymbolTable,
@@ -83,36 +83,30 @@ impl Fmt<'_> {
     }
 }
 
-fn main() -> ExitCode {
+const USAGE: &str = "用法：kfx-dump [--type=N]… [--full] 书.kfx";
+
+fn main() {
+    // 输出常接 `head`、`less`：管道提前关了就安静退出，不 panic。
+    cli::restore_sigpipe();
     let mut types = Vec::new();
     let mut full = false;
     let mut path = None;
     for a in std::env::args().skip(1) {
-        if let Some(t) = a.strip_prefix("--type=") {
-            match t.trim_start_matches('$').parse::<u32>() {
-                Ok(n) => types.push(n),
-                Err(_) => {
-                    eprintln!("--type 要给编号，比如 --type=145");
-                    return ExitCode::from(2);
-                }
-            }
+        if a == "-h" || a == "--help" {
+            println!("{USAGE}");
+            return;
+        } else if let Some(t) = a.strip_prefix("--type=") {
+            types.push(t.trim_start_matches('$').parse::<u32>().unwrap_or_else(|_| die(cli::USAGE, "--type 要给编号，比如 --type=145")));
         } else if a == "--full" {
             full = true;
+        } else if a.starts_with("--") || path.is_some() {
+            die(cli::USAGE, format!("不认识的参数 {a}\n{USAGE}"));
         } else {
             path = Some(a);
         }
     }
-    let Some(path) = path else {
-        eprintln!("用法：kfx-dump [--type=N]… [--full] 书.kfx");
-        return ExitCode::from(2);
-    };
-    let c = match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|d| Container::parse(&d).map_err(|e| e.to_string())) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{path}：{e}");
-            return ExitCode::FAILURE;
-        }
-    };
+    let Some(path) = path else { die(cli::USAGE, USAGE) };
+    let c = Container::parse(&cli::read_or_die(&path)).unwrap_or_else(|e| die(cli::FAILED, format!("{path}：{e}")));
     let syms = c.symbols();
     let f = Fmt { syms: &syms, full };
     let show_entity = |e: &kfx::Entity| {
@@ -126,7 +120,7 @@ fn main() -> ExitCode {
         for e in c.entities.iter().filter(|e| types.contains(&e.ty)) {
             show_entity(e);
         }
-        return ExitCode::SUCCESS;
+        return;
     }
     println!("版本 {}，符号 {} 个，实体 {} 个", c.version, syms.len(), c.entities.len());
     println!("容器信息：{}", f.show(&c.info));
@@ -143,5 +137,4 @@ fn main() -> ExitCode {
         println!();
         show_entity(es[0]);
     }
-    ExitCode::SUCCESS
 }

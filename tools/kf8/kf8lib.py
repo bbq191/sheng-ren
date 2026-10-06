@@ -73,3 +73,14 @@ def parse_indx(f, first):
                 vals[tag] = vs
             entries.append((key, vals, e.hex() if len(e) < 40 else e[:40].hex()))
     return dict(hl=hl, typ=typ, nrec=nrec, enc=enc, total=total, cb=cb, tags=tags, ncncx=ncncx, header_hex=h[:hl].hex()), entries
+
+def cli_args(n, usage):
+    """命令行位置参数（不含 `--` 开头的开关）；`-h`/`--help` 打印用法退出 0，少于 `n` 个打印用法退出 1。"""
+    import sys
+    a = sys.argv[1:]
+    if any(x in ('-h', '--help') for x in a):
+        print(usage); sys.exit(0)
+    pos = [x for x in a if not x.startswith('--')]
+    if len(pos) < n:
+        print(usage, file=sys.stderr); sys.exit(1)
+    return pos

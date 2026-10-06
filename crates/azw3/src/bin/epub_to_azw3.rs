@@ -6,13 +6,19 @@
 
 use bookconv::util::cli::{self, die};
 
+const USAGE: &str = "用法: epub-to-azw3 [--ebok] 输入.epub 输出.azw3";
+
 fn main() {
     cli::restore_sigpipe();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{USAGE}");
+        return;
+    }
     let flags: Vec<&str> = args.iter().filter(|a| a.starts_with("--")).map(|s| s.as_str()).collect();
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if files.len() != 2 || flags.iter().any(|f| *f != "--ebok") {
-        die(cli::USAGE, "用法: epub-to-azw3 [--ebok] 输入.epub 输出.azw3");
+        die(cli::USAGE, USAGE);
     }
     let epub = cli::read_or_die(files[0]);
     let opts = azw3::Opts { cdetype: if flags.contains(&"--ebok") { azw3::CdeType::Ebok } else { azw3::CdeType::Pdoc }, ..Default::default() };
