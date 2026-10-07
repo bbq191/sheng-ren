@@ -7,7 +7,7 @@
 
 mod meta_edit;
 
-use library::{Added, Built, CoverResult, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo};
+use library::{Added, Built, CoverResult, InfoResult, Library, OriginalState, Profile, Step, SyncEvent, SyncMemo};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -304,6 +304,7 @@ type FailMemo = HashMap<(String, String), (String, OriginalState)>;
 struct BuildCounts {
     written: usize,
     same: usize,
+    adopted: usize,
     moved: usize,
     up_to_date: usize,
     failed: usize,
@@ -312,10 +313,11 @@ struct BuildCounts {
 impl BuildCounts {
     fn summary(&self) -> String {
         let same = if self.same > 0 { format!("，重新生成但内容没变（没再传）{} 本", self.same) } else { String::new() };
-        format!("生成：重新生成并传上 {} 本{same}，挪位置 {} 本，已是最新 {} 本，失败 {} 本", self.written, self.moved, self.up_to_date, self.failed)
+        let adopted = if self.adopted > 0 { format!("，认领设备上已有的 {} 本", self.adopted) } else { String::new() };
+        format!("生成：重新生成并传上 {} 本{same}{adopted}，挪位置 {} 本，已是最新 {} 本，失败 {} 本", self.written, self.moved, self.up_to_date, self.failed)
     }
     fn any(&self) -> bool {
-        self.written + self.same + self.moved + self.failed > 0
+        self.written + self.same + self.adopted + self.moved + self.failed > 0
     }
 }
 
@@ -348,53 +350,112 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
             }
         }
     }
-    // 书在外层、模式在内层：同一本书与模式无关的中间文件（CBZ 转换、补元数据）只做一次
-    for m in books.iter().filter(|m| m.supported()) {
-        for device in &live {
-            let key = (m.id.clone(), device.id.clone());
-            let now = || (lib.fingerprint(m, device).unwrap_or_else(|e| e), lib.original_state(m));
-            if let Some(f) = fails.as_deref_mut() {
-                match f.get(&key).map(|v| *v == now()) {
-                    Some(true) => continue,
-                    Some(false) => {
-                        f.remove(&key);
-                    }
-                    None => {}
+    // 先比较、再生成（主线程）；要传的交给各设备的传输线程，和生成同时进行；传完的随时取回来记下、报一行
+    let mut pipe = library::Pipeline::default();
+    let landed = |lib: &Library, counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, report: &mut dyn FnMut(Result<String, String>), (t, r): (library::Transfer, Result<library::Done, String>)| {
+        let (device, title) = (t.device.clone(), t.title.clone());
+        let book = t.book_id().to_string();
+        match lib.complete(t, r) {
+            Ok(b) => {
+                if let Some(line) = built_line(&device, &title, b, quiet, counts) {
+                    report(Ok(line));
                 }
             }
-            let built = match lib.build(m, device, force) {
-                Ok(Built::Written { path, warnings }) => {
-                    counts.written += 1;
-                    Some(std::iter::once(format!("✓ 生成 [{}] {} → {}", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
+            Err(e) => {
+                counts.failed += 1;
+                report(Err(format!("✗ [{device}] {title}: {e}")));
+                if let (Some(f), Some(m), Some(p)) = (fails.as_deref_mut(), books.iter().find(|m| m.id == book), lib.devices().get(&device)) {
+                    f.insert((book, device), (lib.fingerprint(m, p).unwrap_or_else(|e| e), lib.original_state(m)));
                 }
-                Ok(Built::Same { path, warnings }) => {
-                    counts.same += 1;
-                    Some(std::iter::once(format!("≡ 重新生成 [{}] {}：和设备上的一样，没再传（{}）", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
+            }
+        }
+    };
+    // 一本书一个模式：比较、生成，要传的交给传输线程
+    let one = |m: &library::Meta, device: &Profile, counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, pipe: &mut library::Pipeline, report: &mut dyn FnMut(Result<String, String>)| {
+        let key = (m.id.clone(), device.id.clone());
+        let now = || (lib.fingerprint(m, device).unwrap_or_else(|e| e), lib.original_state(m));
+        if let Some(f) = fails.as_deref_mut() {
+            match f.get(&key).map(|v| *v == now()) {
+                Some(true) => return,
+                Some(false) => {
+                    f.remove(&key);
                 }
-                Ok(Built::UpToDate(path)) => {
-                    counts.up_to_date += 1;
-                    (!quiet).then(|| format!("= [{}] {} 已是最新（{}）", device.id, m.title, path.display()))
+                None => {}
+            }
+        }
+        match lib.prepare(m, device, force) {
+            Ok(Step::Done(b)) => {
+                if let Some(line) = built_line(&device.id, &m.title, b, quiet, counts) {
+                    report(Ok(line));
                 }
-                Ok(Built::Moved { from, to }) => {
-                    counts.moved += 1;
-                    Some(format!("↪ 挪位置 [{}] {} → {}（原来在 {}）", device.id, m.title, to.display(), from.display()))
+            }
+            Ok(Step::Transfer(t)) => pipe.submit(*t),
+            Err(e) => {
+                counts.failed += 1;
+                report(Err(format!("✗ [{}] {}: {e}", device.id, m.title)));
+                if let Some(f) = fails.as_deref_mut() {
+                    f.insert(key, now());
                 }
-                Err(e) => {
-                    counts.failed += 1;
-                    report(Err(format!("✗ [{}] {}: {e}", device.id, m.title)));
-                    if let Some(f) = fails.as_deref_mut() {
-                        f.insert(key, now());
-                    }
-                    continue;
-                }
-            };
-            if let Some(line) = built {
-                report(Ok(line));
+            }
+        }
+    };
+    // 书在外层、模式在内层：同一本书与模式无关的中间文件（CBZ 转换、补元数据）只做一次。
+    // 哪台设备那边排满了（Move 排版慢），先跳过它做别的设备，留到最后补，不让一台挡住另外几台
+    let mut later: Vec<(&library::Meta, &Profile)> = Vec::new();
+    for m in books.iter().filter(|m| m.supported()) {
+        for device in &live {
+            while let Some(x) = pipe.next(false) {
+                landed(lib, &mut counts, &mut fails, report, x);
+            }
+            if pipe.has_room(&device.id) {
+                one(m, device, &mut counts, &mut fails, &mut pipe, report);
+            } else {
+                later.push((m, device));
             }
         }
     }
+    for (m, device) in later {
+        while !pipe.has_room(&device.id) {
+            let Some(x) = pipe.next(true) else { break };
+            landed(lib, &mut counts, &mut fails, report, x);
+        }
+        one(m, device, &mut counts, &mut fails, &mut pipe, report);
+    }
     lib.release_prepared();
+    if pipe.in_flight() > 0 {
+        report(Ok(format!("… 都生成好了，等设备那边传完（还有 {} 本；Move 加入时要排版，大书要几分钟）", pipe.in_flight())));
+    }
+    while let Some(x) = pipe.next(true) {
+        landed(lib, &mut counts, &mut fails, report, x);
+    }
     counts
+}
+
+/// 一本书一个模式的结果一行（`quiet` 时没变化的不报），顺带计数。
+fn built_line(device: &str, title: &str, b: Built, quiet: bool, counts: &mut BuildCounts) -> Option<String> {
+    let with_warnings = |head: String, warnings: &[String]| std::iter::once(head).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n");
+    match b {
+        Built::Written { path, warnings } => {
+            counts.written += 1;
+            Some(with_warnings(format!("✓ 生成 [{device}] {title} → {}", path.display()), &warnings))
+        }
+        Built::Same { path, warnings } => {
+            counts.same += 1;
+            Some(with_warnings(format!("≡ 重新生成 [{device}] {title}：和设备上的一样，没再传（{}）", path.display()), &warnings))
+        }
+        Built::UpToDate(path) => {
+            counts.up_to_date += 1;
+            (!quiet).then(|| format!("= [{device}] {title} 已是最新（{}）", path.display()))
+        }
+        Built::Adopted(path) => {
+            counts.adopted += 1;
+            Some(format!("= [{device}] {title} 认领设备上已有的那份，没重新生成（{}）", path.display()))
+        }
+        Built::Moved { from, to } => {
+            counts.moved += 1;
+            Some(format!("↪ 挪位置 [{device}] {title} → {}（原来在 {}）", to.display(), from.display()))
+        }
+    }
 }
 
 /// 元数据一行摘要：来源、简介字数、标签、参考版本。

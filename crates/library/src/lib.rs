@@ -41,9 +41,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use cover::{CoverInfo, CoverResult};
-pub use deliver::DeviceEnv;
+pub use deliver::{DeviceEnv, Doc, Pipeline};
 pub use fsutil::Lock;
-pub use generate::{Built, OutputStatus};
+pub use generate::{Built, Done, OutputStatus, Step, Transfer};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
 pub use sources::{book_files, Prune, SyncEvent, SyncMemo, SyncReport, SUPPORTED_EXTS};

@@ -107,22 +107,34 @@ fn serve(s: std::net::TcpStream, docs: &Mutex<BTreeMap<String, MoveDoc>>) -> std
     let reply = |code: u16, v: serde_json::Value| (code, v.to_string());
     let (code, out) = match (method.as_str(), path) {
         ("GET", "/status") => reply(200, serde_json::json!({})),
+        // 和真的书架服务一样：收下书体立即回任务号（202），结果查 /import/jobs/<号>（这里当场就做完）
         ("POST", "/import") => match q.get("uuid") {
             Some(u) => match docs.get_mut(u).filter(|d| !d.deleted) {
                 Some(d) => {
                     d.bytes = body;
                     d.replaced += 1;
-                    reply(200, serde_json::json!({"uuid": u, "name": d.name, "folder": d.folder}))
+                    let done = serde_json::json!({"state": "done", "uuid": u, "name": d.name, "folder": d.folder});
+                    reply(202, serde_json::json!({"job": job(done)}))
                 }
                 None => reply(404, serde_json::json!({"message": "没有这本"})),
             },
             None => {
-                let uuid = format!("00000000-0000-0000-0000-{:012}", docs.len() + 1);
                 let name = q.get("name").cloned().unwrap_or_default().trim_end_matches(".epub").to_string();
                 let folder = q.get("folder").cloned().unwrap_or_default();
-                docs.insert(uuid.clone(), MoveDoc { name: name.clone(), folder: folder.clone(), bytes: body, deleted: false, replaced: 0 });
-                reply(200, serde_json::json!({"uuid": uuid, "name": name, "folder": folder}))
+                // 同一文件夹里已有内容一样的：认回那本（幂等）
+                let same = docs.iter().find(|(_, d)| !d.deleted && d.folder == folder && d.bytes == body).map(|(u, _)| u.clone());
+                let uuid = same.unwrap_or_else(|| {
+                    let uuid = format!("00000000-0000-0000-0000-{:012}", docs.len() + 1);
+                    docs.insert(uuid.clone(), MoveDoc { name: name.clone(), folder: folder.clone(), bytes: body, deleted: false, replaced: 0 });
+                    uuid
+                });
+                let done = serde_json::json!({"state": "done", "uuid": uuid, "name": docs[&uuid].name, "folder": folder});
+                reply(202, serde_json::json!({"job": job(done)}))
             }
+        },
+        ("GET", p) if p.starts_with("/import/jobs/") => match JOBS.lock().unwrap().get(&p["/import/jobs/".len()..]) {
+            Some(v) => reply(200, v.clone()),
+            None => reply(404, serde_json::json!({})),
         },
         ("GET", p) if p.starts_with("/import/") => match docs.get(&p["/import/".len()..]) {
             Some(d) => reply(200, serde_json::json!({"deleted": d.deleted, "name": d.name})),
@@ -143,6 +155,16 @@ fn serve(s: std::net::TcpStream, docs: &Mutex<BTreeMap<String, MoveDoc>>) -> std
     let mut s = s;
     write!(s, "HTTP/1.1 {code} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len())?;
     s.flush()
+}
+
+/// 假书架服务的导入任务：号 → 结果。
+static JOBS: std::sync::LazyLock<Mutex<BTreeMap<String, serde_json::Value>>> = std::sync::LazyLock::new(Default::default);
+
+fn job(result: serde_json::Value) -> String {
+    let mut jobs = JOBS.lock().unwrap();
+    let id = format!("j{}", jobs.len() + 1);
+    jobs.insert(id.clone(), result);
+    id
 }
 
 fn unpct(v: &str) -> String {

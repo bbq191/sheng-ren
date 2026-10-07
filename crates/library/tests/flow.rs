@@ -1119,7 +1119,8 @@ fn local_outputs_from_before_move_onto_devices() {
     assert_eq!(mv.live(), [(String::new(), "书".to_string())]);
 }
 
-/// 以前在电脑上生成、用户自己拷上设备（电脑上的已经挪走）的产物：设备上同子目录同名的那份当成本书的，覆盖它，不另起 `[id]` 名字。
+/// 以前在电脑上生成、用户自己拷上设备（电脑上的已经挪走）的产物：先比较——指纹没变，设备上同子目录同名的那份直接认领、
+/// 不重新生成；指纹变了才重新生成，覆盖那份（不另起 `[id]` 名字）。
 #[test]
 fn manual_copies_on_device_are_taken_over() {
     let dir = tempfile::tempdir().unwrap();
@@ -1134,16 +1135,69 @@ fn manual_copies_on_device_are_taken_over() {
     let m = lib.list().remove(0);
     let docs = common::documents(&lib_dir, "ireader");
     let Built::Written { path, .. } = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap() else { panic!() };
-    // 改成：记录说产物在电脑上（ereader/ireader/子/书.epub，已被用户挪走），设备上是一份旧版本
-    std::fs::write(&path, b"older version copied by hand").unwrap();
+    // 改成：记录说产物在电脑上（ereader/ireader/子/书.epub，已被用户挪走），设备上是用户拷上去的那份
+    std::fs::write(&path, b"copied by hand").unwrap();
     let sp = lib_dir.join("output-state/ireader.json");
     let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
     st["books"][&m.id]["path"] = serde_json::json!(base.join("ereader/ireader/子/书.epub"));
     st["books"][&m.id]["root"] = serde_json::json!(base.join("ereader/ireader"));
+    st["books"][&m.id].as_object_mut().unwrap().remove("sha");
+    std::fs::write(&sp, st.to_string()).unwrap();
+    let lib = common::open(&lib_dir);
+    let Built::Adopted(again) = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap() else { panic!("指纹没变：认领，不重新生成") };
+    assert_eq!(again, docs.join("子/书.epub"));
+    assert_eq!(std::fs::read(&again).unwrap(), b"copied by hand", "认领不动设备上的文件");
+    assert!(matches!(lib.build(&m, profile::get("ireader").unwrap(), false).unwrap(), Built::UpToDate(_)));
+    // 指纹变了（规则升级）：重新生成，和设备上那份不同就覆盖，名字不变
+    let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    st["books"][&m.id]["fingerprint"] = "旧规则".into();
     std::fs::write(&sp, st.to_string()).unwrap();
     let lib = common::open(&lib_dir);
     let Built::Written { path: again, .. } = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap() else { panic!() };
-    assert_eq!(again, docs.join("子/书.epub"), "覆盖手工拷上去的那份");
-    assert_ne!(std::fs::read(&again).unwrap(), b"older version copied by hand");
+    assert_eq!(again, docs.join("子/书.epub"), "覆盖那份，不另起名字");
+    assert_ne!(std::fs::read(&again).unwrap(), b"copied by hand");
     assert_eq!(names(&docs.join("子")), ["书.epub"], "不留重复");
+}
+
+/// sync 的做法：先比较、生成（prepare），传设备交给各设备的传输线程（Pipeline），传完记下来（complete）。
+/// 几本书、Kindle 和 Move 同时在传；第二轮全都已是最新。
+#[test]
+fn pipeline_transfers_in_background_and_records_when_done() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let mv = common::FakeMove::start();
+    let lib = common::open_with(&lib_dir, Some(&mv));
+    for t in ["甲", "乙", "丙"] {
+        let p = dir.path().join(format!("{t}.epub"));
+        std::fs::write(&p, sample_epub(t)).unwrap();
+        lib.add_file(&p).unwrap();
+    }
+    let devices = [profile::get("ireader").unwrap(), profile::get("xochitl").unwrap()];
+    let run = || {
+        let mut pipe = library::Pipeline::default();
+        let mut results = Vec::new();
+        for m in lib.list() {
+            for d in devices {
+                while !pipe.has_room(&d.id) {
+                    let (t, r) = pipe.next(true).unwrap();
+                    results.push(lib.complete(t, r).unwrap());
+                }
+                match lib.prepare(&m, d, false).unwrap() {
+                    library::Step::Done(b) => results.push(b),
+                    library::Step::Transfer(t) => pipe.submit(*t),
+                }
+            }
+        }
+        while let Some((t, r)) = pipe.next(true) {
+            results.push(lib.complete(t, r).unwrap());
+        }
+        results
+    };
+    let first = run();
+    assert_eq!(first.iter().filter(|b| matches!(b, Built::Written { .. })).count(), 6, "{first:?}");
+    assert_eq!(mv.live().len(), 3);
+    assert_eq!(common::documents(&lib_dir, "ireader").read_dir().unwrap().count(), 3);
+    assert!(std::fs::read_dir(&lib_dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".tmp-")), "临时目录传完就删");
+    let second = run();
+    assert!(second.iter().all(|b| matches!(b, Built::UpToDate(_))), "{second:?}");
 }
