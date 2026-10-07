@@ -9,6 +9,7 @@
 //!
 //! 一轮 `sync` 里每台设备只连一次（[`crate::Library::refresh_devices`] 清掉重连，`--watch` 每轮清一次）。
 
+use crate::generate::{Done, Transfer, Work};
 use profile::{Deliver, Profile};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -102,10 +103,13 @@ fn mtp_storage(point: &Path) -> Option<PathBuf> {
     }
 }
 
-/// 把文件 `src` 放到 `dest`（同一文件系统直接改名；`keep_src` 时或跨文件系统时复制）。`compare` 时 `dest` 已经是逐字节相同的
+/// 把文件 `src` 放到 `dest`（目录没有就建；同一文件系统直接改名；`keep_src` 时或跨文件系统时复制）。`compare` 时 `dest` 已经是逐字节相同的
 /// 文件就不动它（Kindle 覆盖成不同字节会清掉阅读进度，相同的不会；也省得在 MTP 上白拷）——要把 `dest` 读回来，调用方能用记录的
 /// 哈希判断时传 `false`。复制先写旁边的临时文件再换上去：MTP 上改名不能覆盖已有文件，先删旧的再改名。返回有没有真的写。
 pub(crate) fn put_file(src: &Path, dest: &Path, keep_src: bool, compare: bool) -> Result<bool, String> {
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
     if compare && same_bytes(src, dest) {
         if !keep_src {
             let _ = std::fs::remove_file(src);
@@ -168,119 +172,104 @@ pub(crate) fn same_bytes(a: &Path, b: &Path) -> bool {
 
 /// xochitl 里的一本书（导入接口的回执）。
 #[derive(Debug, Clone)]
-pub(crate) struct Doc {
+pub struct Doc {
     pub uuid: String,
     /// xochitl 书库里显示的名字（`.metadata` 的 `visibleName`；回收站接口要核对它）。
     pub name: String,
 }
 
-/// 到 Move 上书架服务的连接：SSH 端口转发（[`Xochitl::connect`]）或直接给的地址（测试）。
-pub(crate) struct Xochitl {
+/// 交了导入（或替换）以后：书架服务给的任务号（它在后台加入 xochitl、等排版，之后查 [`MoveClient::poll`]），
+/// 或旧版书架服务当场给的结果。
+pub(crate) enum Submitted {
+    Job(String),
+    Done(Doc),
+}
+
+/// 导入任务现在怎样。
+pub(crate) enum JobState {
+    /// 还在做（排队、建文件夹、等 xochitl 排版……）。
+    Running,
+    Done(Doc),
+    Failed(String),
+}
+
+/// 查导入任务的间隔。
+const POLL: Duration = Duration::from_secs(2);
+
+/// 调 Move 上书架服务的接口：只有地址和 HTTP 客户端，能复制、能交给传输线程用（SSH 隧道留在 [`Xochitl`] 里）。
+#[derive(Clone)]
+pub(crate) struct MoveClient {
     base: String,
     agent: ureq::Agent,
-    tunnel: std::cell::RefCell<Option<Child>>,
-    /// 连的是哪台（提示用）。
-    pub host: String,
 }
 
-impl Drop for Xochitl {
-    fn drop(&mut self) {
-        if let Some(c) = self.tunnel.get_mut().as_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-    }
-}
-
-/// 大书经 USB 也要传一阵、第一次导入时设备上还要排版：读写超时放宽。
-const IO_TIMEOUT: Duration = Duration::from_secs(600);
-
-impl Xochitl {
-    fn agent() -> ureq::Agent {
-        ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(5)).timeout_read(IO_TIMEOUT).timeout_write(IO_TIMEOUT).build()
-    }
-
-    fn direct(url: &str) -> Result<Xochitl, String> {
-        let x = Xochitl { base: url.to_string(), agent: Self::agent(), tunnel: Default::default(), host: url.to_string() };
-        x.status()?;
-        Ok(x)
-    }
-
-    /// 依次试 `hosts`：SSH 连得上、端口转发建得起来、书架服务答话的第一个。
-    fn connect(hosts: &[String], port: u16) -> Result<Xochitl, String> {
-        let mut why = Vec::new();
-        for host in hosts {
-            match Self::tunnel(host, port) {
-                Ok(x) => return Ok(x),
-                Err(e) => why.push(format!("{host}：{e}")),
-            }
-        }
-        Err(format!("没接上（{}）", why.join("；")))
-    }
-
-    fn tunnel(host: &str, port: u16) -> Result<Xochitl, String> {
-        // 本地随便挑一个空闲端口（绑 0 再放开；和 ssh 绑上之间被别人占走的话，ssh 因 ExitOnForwardFailure 退出，报连不上）
-        let local = std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map_err(|e| e.to_string())?.port();
-        let child = Command::new("ssh")
-            // 不复用 ssh 配置里的 ControlMaster：复用时转发交给已有的主连接、ssh 本身立刻退出，转发也不随本进程结束
-            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-N", "-L"])
-            .arg(format!("127.0.0.1:{local}:127.0.0.1:{port}"))
-            .arg(host)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("起不了 ssh：{e}"))?;
-        let x = Xochitl { base: format!("http://127.0.0.1:{local}"), agent: Self::agent(), tunnel: std::cell::RefCell::new(Some(child)), host: host.to_string() };
-        let deadline = Instant::now() + Duration::from_secs(8);
-        loop {
-            if let Some(st) = x.tunnel.borrow_mut().as_mut().and_then(|c| c.try_wait().ok().flatten()) {
-                return Err(format!("SSH 连不上（{st}）"));
-            }
-            if std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], local).into(), Duration::from_millis(300)).is_ok() {
-                // 转发通了还要书架服务答话（服务没起时连接会被设备那头断掉）
-                match x.status() {
-                    Ok(()) => return Ok(x),
-                    Err(e) if Instant::now() > deadline => return Err(e),
-                    Err(_) => {}
-                }
-            } else if Instant::now() > deadline {
-                return Err("端口转发没建起来".into());
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-    }
-
-    /// 隧道还在、书架服务还答话（Move 拔了、睡了、服务停了都算断了）。
-    pub(crate) fn alive(&self) -> bool {
-        let tunnel_up = self.tunnel.borrow_mut().as_mut().is_none_or(|c| matches!(c.try_wait(), Ok(None)));
-        tunnel_up && self.status().is_ok()
+impl MoveClient {
+    fn new(base: String) -> MoveClient {
+        // 读写超时只管一次请求（传书体、查任务）；等 xochitl 排版是查任务，不挂着连接
+        MoveClient { base, agent: ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(5)).timeout_read(IO_TIMEOUT).timeout_write(IO_TIMEOUT).build() }
     }
 
     fn status(&self) -> Result<(), String> {
         self.agent.get(&format!("{}/status", self.base)).timeout(Duration::from_secs(5)).call().map(|_| ()).map_err(|e| format!("书架服务没答话（{}）", http_err(e)))
     }
 
-    /// 新加入 xochitl：放进文件夹 `folder`（空 = 书库根；没有就让设备建）。
-    pub(crate) fn import(&self, file: &Path, name: &str, folder: &str) -> Result<Doc, String> {
+    /// 交一本新书：放进文件夹 `folder`（`a/b` 多级，书架服务逐级找、没有就建；空 = 书库根）。
+    pub(crate) fn submit_import(&self, file: &Path, name: &str, folder: &str) -> Result<Submitted, String> {
         let url = format!("{}/import?name={}&folder={}", self.base, enc(name), enc(folder));
         self.send(&url, file)?.ok_or_else(|| "导入接口回 404（设备上的书架服务太旧，没有导入接口）".into())
     }
 
-    /// 原地替换 `uuid` 的内容（保留 uuid、进度、文件夹）。这本在设备上已经不在了（删了、进了回收站）返回 `None`。
-    pub(crate) fn replace(&self, uuid: &str, file: &Path, name: &str) -> Result<Option<Doc>, String> {
+    /// 交一份新内容原地替换 `uuid`（保留 uuid、进度、文件夹）。这本在设备上已经不在了（删了、进了回收站）返回 `None`。
+    pub(crate) fn submit_replace(&self, uuid: &str, file: &Path, name: &str) -> Result<Option<Submitted>, String> {
         let url = format!("{}/import?uuid={}&name={}", self.base, enc(uuid), enc(name));
         self.send(&url, file)
     }
 
-    fn send(&self, url: &str, file: &Path) -> Result<Option<Doc>, String> {
+    fn send(&self, url: &str, file: &Path) -> Result<Option<Submitted>, String> {
         let f = std::fs::File::open(file).map_err(|e| format!("读 {}: {e}", file.display()))?;
         let len = f.metadata().map_err(|e| e.to_string())?.len();
         let r = self.agent.post(url).set("Content-Type", "application/epub+zip").set("Content-Length", &len.to_string()).send(std::io::BufReader::with_capacity(COPY_BUF, f));
         match r {
-            Ok(resp) => doc_of(resp).map(Some),
+            Ok(resp) => {
+                let v = json_of(resp)?;
+                Ok(Some(match v["job"].as_str() {
+                    Some(job) => Submitted::Job(job.to_string()),
+                    None => Submitted::Done(doc_of(&v)?),
+                }))
+            }
             Err(ureq::Error::Status(404, _)) => Ok(None),
             Err(e) => Err(format!("传到 Move 失败：{}", http_err(e))),
+        }
+    }
+
+    /// 查导入任务。书架服务不认识这个任务（重启过）算失败：书可能已经加进去了，下次 sync 交同样的内容时它会认回来，不重复加。
+    pub(crate) fn poll(&self, job: &str) -> Result<JobState, String> {
+        match self.agent.get(&format!("{}/import/jobs/{}", self.base, enc(job))).call() {
+            Ok(resp) => {
+                let v = json_of(resp)?;
+                Ok(match v["state"].as_str() {
+                    Some("done") => JobState::Done(doc_of(&v)?),
+                    Some("failed") => JobState::Failed(v["message"].as_str().unwrap_or("书架服务没说原因").to_string()),
+                    _ => JobState::Running,
+                })
+            }
+            Err(ureq::Error::Status(404, _)) => Ok(JobState::Failed("书架服务那边没有这个导入任务了（重启过？）".into())),
+            Err(e) => Err(format!("查 Move 上的导入任务失败：{}", http_err(e))),
+        }
+    }
+
+    /// 等交出去的这件做完（单本生成、测试用；`sync` 的传输线程自己轮流查，见 [`crate::Pipeline`]）。
+    pub(crate) fn wait(&self, s: Submitted) -> Result<Doc, String> {
+        let job = match s {
+            Submitted::Done(d) => return Ok(d),
+            Submitted::Job(j) => j,
+        };
+        loop {
+            match self.poll(&job)? {
+                JobState::Done(d) => return Ok(d),
+                JobState::Failed(m) => return Err(format!("Move 上加入失败：{m}")),
+                JobState::Running => std::thread::sleep(POLL),
+            }
         }
     }
 
@@ -310,13 +299,104 @@ impl Xochitl {
     }
 }
 
+/// 到 Move 上书架服务的连接：SSH 端口转发（[`Xochitl::connect`]）或直接给的地址（测试）。接口调用见 [`MoveClient`]（`Deref`）。
+pub(crate) struct Xochitl {
+    client: MoveClient,
+    tunnel: std::cell::RefCell<Option<Child>>,
+    /// 连的是哪台（提示用）。
+    pub host: String,
+}
+
+impl std::ops::Deref for Xochitl {
+    type Target = MoveClient;
+    fn deref(&self) -> &MoveClient {
+        &self.client
+    }
+}
+
+impl Drop for Xochitl {
+    fn drop(&mut self) {
+        if let Some(c) = self.tunnel.get_mut().as_mut() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
+/// 传书体（大漫画经 USB 也要一阵）、查一次的读写超时。等排版不靠它（查任务）。
+const IO_TIMEOUT: Duration = Duration::from_secs(600);
+
+impl Xochitl {
+    fn direct(url: &str) -> Result<Xochitl, String> {
+        let x = Xochitl { client: MoveClient::new(url.to_string()), tunnel: Default::default(), host: url.to_string() };
+        x.status()?;
+        Ok(x)
+    }
+
+    /// 给传输线程用的一份客户端。
+    pub(crate) fn client(&self) -> MoveClient {
+        self.client.clone()
+    }
+
+    /// 依次试 `hosts`：SSH 连得上、端口转发建得起来、书架服务答话的第一个。
+    fn connect(hosts: &[String], port: u16) -> Result<Xochitl, String> {
+        let mut why = Vec::new();
+        for host in hosts {
+            match Self::tunnel(host, port) {
+                Ok(x) => return Ok(x),
+                Err(e) => why.push(format!("{host}：{e}")),
+            }
+        }
+        Err(format!("没接上（{}）", why.join("；")))
+    }
+
+    fn tunnel(host: &str, port: u16) -> Result<Xochitl, String> {
+        // 本地随便挑一个空闲端口（绑 0 再放开；和 ssh 绑上之间被别人占走的话，ssh 因 ExitOnForwardFailure 退出，报连不上）
+        let local = std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map_err(|e| e.to_string())?.port();
+        let child = Command::new("ssh")
+            // 不复用 ssh 配置里的 ControlMaster：复用时转发交给已有的主连接、ssh 本身立刻退出，转发也不随本进程结束
+            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-N", "-L"])
+            .arg(format!("127.0.0.1:{local}:127.0.0.1:{port}"))
+            .arg(host)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("起不了 ssh：{e}"))?;
+        let x = Xochitl { client: MoveClient::new(format!("http://127.0.0.1:{local}")), tunnel: std::cell::RefCell::new(Some(child)), host: host.to_string() };
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if let Some(st) = x.tunnel.borrow_mut().as_mut().and_then(|c| c.try_wait().ok().flatten()) {
+                return Err(format!("SSH 连不上（{st}）"));
+            }
+            if std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], local).into(), Duration::from_millis(300)).is_ok() {
+                // 转发通了还要书架服务答话（服务没起时连接会被设备那头断掉）
+                match x.status() {
+                    Ok(()) => return Ok(x),
+                    Err(e) if Instant::now() > deadline => return Err(e),
+                    Err(_) => {}
+                }
+            } else if Instant::now() > deadline {
+                return Err("端口转发没建起来".into());
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    /// 隧道还在、书架服务还答话（Move 拔了、睡了、服务停了都算断了）。
+    pub(crate) fn alive(&self) -> bool {
+        let tunnel_up = self.tunnel.borrow_mut().as_mut().is_none_or(|c| matches!(c.try_wait(), Ok(None)));
+        tunnel_up && self.status().is_ok()
+    }
+
+}
+
 fn json_of(resp: ureq::Response) -> Result<serde_json::Value, String> {
     let body = resp.into_string().map_err(|e| format!("回执读不出来：{e}"))?;
     serde_json::from_str(&body).map_err(|e| format!("回执不是 JSON：{e}"))
 }
 
-fn doc_of(resp: ureq::Response) -> Result<Doc, String> {
-    let v = json_of(resp)?;
+fn doc_of(v: &serde_json::Value) -> Result<Doc, String> {
     let uuid = v["uuid"].as_str().filter(|u| !u.is_empty()).ok_or("导入接口回执里没有 uuid")?.to_string();
     Ok(Doc { uuid, name: v["name"].as_str().unwrap_or_default().to_string() })
 }
@@ -344,6 +424,134 @@ fn enc(s: &str) -> String {
         }
     }
     out
+}
+
+/// `sync` 的传输线程：每台设备一条，主线程比较、生成的同时这里往设备上放（Move 排版、MTP 拷大漫画都不挡生成）。
+/// 每台在传（含排队）的最多 [`LANE_DEPTH`] 本（[`Pipeline::has_room`]；满了调用方先去做别的设备），书库临时目录里堆不起大漫画。
+/// 传完的结果由主线程取回（[`Pipeline::next`]）、调 [`crate::Library::complete`] 记下来：书库的记录只在主线程里改。
+pub struct Pipeline {
+    lanes: std::collections::HashMap<String, (std::sync::mpsc::Sender<Transfer>, std::thread::JoinHandle<()>)>,
+    done_tx: std::sync::mpsc::Sender<(Transfer, Result<Done, String>)>,
+    done_rx: std::sync::mpsc::Receiver<(Transfer, Result<Done, String>)>,
+    /// 各设备在传（含排队）的件数。
+    busy: std::collections::HashMap<String, usize>,
+}
+
+/// 每台设备在传（含排队）的上限。
+const LANE_DEPTH: usize = 2;
+
+impl Default for Pipeline {
+    fn default() -> Self {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        Pipeline { lanes: Default::default(), done_tx, done_rx, busy: Default::default() }
+    }
+}
+
+impl Pipeline {
+    /// 这台设备的传输线程还能再收一件（在传的不到 [`LANE_DEPTH`] 件）。
+    pub fn has_room(&self, device: &str) -> bool {
+        self.busy.get(device).copied().unwrap_or(0) < LANE_DEPTH
+    }
+
+    /// 交给这台设备的传输线程（第一次用时起）。不等：先用 [`Pipeline::has_room`] 看有没有空。
+    pub fn submit(&mut self, t: Transfer) {
+        *self.busy.entry(t.device.clone()).or_default() += 1;
+        let (tx, _) = self.lanes.entry(t.device.clone()).or_insert_with_key(|_| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let done = self.done_tx.clone();
+            let h = if t.is_move() { std::thread::spawn(move || move_lane(rx, done)) } else { std::thread::spawn(move || file_lane(rx, done)) };
+            (tx, h)
+        });
+        tx.send(t).expect("传输线程不会先退出");
+    }
+
+    /// 取一件传完的：`wait` 时没有就等到有；没有在传的了返回 `None`。
+    pub fn next(&mut self, wait: bool) -> Option<(Transfer, Result<Done, String>)> {
+        if self.in_flight() == 0 {
+            return None;
+        }
+        let r = if wait { self.done_rx.recv().ok() } else { self.done_rx.try_recv().ok() };
+        if let Some((t, _)) = &r {
+            if let Some(n) = self.busy.get_mut(&t.device) {
+                *n -= 1;
+            }
+        }
+        r
+    }
+
+    /// 还在传（含排队）的件数。
+    pub fn in_flight(&self) -> usize {
+        self.busy.values().sum()
+    }
+}
+
+impl Drop for Pipeline {
+    fn drop(&mut self) {
+        // 关掉各条队列，等线程把手上的做完退出
+        for (_, (tx, h)) in self.lanes.drain() {
+            drop(tx);
+            let _ = h.join();
+        }
+    }
+}
+
+/// Kindle、掌阅（文件）：一件一件放。
+fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<(Transfer, Result<Done, String>)>) {
+    for t in rx {
+        let r = t.run();
+        if done.send((t, r)).is_err() {
+            return;
+        }
+    }
+}
+
+/// Move：交出去一件，等它在 Move 上做完（书架服务在后台加入 xochitl、等排版）再交下一件——Move 上排队的书每本都占一份
+/// 完整的空间，不一下子全推上去。
+fn move_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<(Transfer, Result<Done, String>)>) {
+    let mut pending: Vec<(Transfer, String)> = Vec::new();
+    let mut open = true;
+    while open || !pending.is_empty() {
+        let next = if open && pending.is_empty() { rx.recv().map_err(|_| open = false).ok() } else { None };
+        let got = next.is_some();
+        if let Some(t) = next {
+            match t.submit() {
+                Ok(Submitted::Done(d)) => {
+                    let _ = done.send((t, Ok(Done::Move(d))));
+                }
+                Ok(Submitted::Job(job)) => {
+                    t.release_src();
+                    pending.push((t, job));
+                }
+                Err(e) => {
+                    let _ = done.send((t, Err(e)));
+                }
+            }
+        }
+        // 有一件在 Move 上做：隔一会查一次
+        if !got && !pending.is_empty() {
+            std::thread::sleep(POLL);
+        }
+        let mut still = Vec::new();
+        for (t, job) in pending.drain(..) {
+            let state = match &t.work {
+                Work::Move { client, .. } => client.poll(&job),
+                Work::File { .. } => unreachable!(),
+            };
+            match state {
+                Ok(JobState::Running) => still.push((t, job)),
+                Ok(JobState::Done(d)) => {
+                    let _ = done.send((t, Ok(Done::Move(d))));
+                }
+                Ok(JobState::Failed(m)) => {
+                    let _ = done.send((t, Err(format!("Move 上加入失败：{m}"))));
+                }
+                Err(e) => {
+                    let _ = done.send((t, Err(e)));
+                }
+            }
+        }
+        pending = still;
+    }
 }
 
 #[cfg(test)]
