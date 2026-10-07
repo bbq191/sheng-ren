@@ -1,21 +1,28 @@
-//! 按阅读模式（设备 profile）生成产物：生成计划与指纹、产物放在哪、跳过没变的、生成记录。
+//! 按阅读模式（设备 profile）生成产物并送到设备上：生成计划与指纹、产物放在哪、跳过没变的、生成记录。
 //!
-//! 产物位置（每个模式一份，`<名>` 见 [`State::file_name_for`]）：
-//! - 原件在跟踪目录 `D` 里：`D/../<模式 id>/<原件所在目录相对 D 的路径>/<名>.<扩展名>`，和 `D` 并列、镜像子目录。
-//!   例：跟踪 `~/Documents/ereader/books`，原件 `books/haodoo/x.epub` → `~/Documents/ereader/kindle/haodoo/<书名>.kfx`；
-//! - `add` 进来的单个文件（不在跟踪目录里）、网址书：`<书库>/output/<模式 id>/<名>.<扩展名>`。
+//! 产物位置（每个模式一份，`<名>` 见 [`State::file_name_for`]；2026-10-07 起直接送设备，电脑上不留，见 [`crate::deliver`]）：
+//! - Kindle、掌阅（profile `[deliver] kind = "mtp"`）：设备存储根目录的 `documents/<原件所在目录相对跟踪目录的路径>/<名>.<扩展名>`；
+//!   `add` 进来的单个文件（不在跟踪目录里）、网址书放 `documents/` 顶层。先在书库的临时目录里生成，再拷上去
+//!   （设备上已有逐字节相同的就不拷：Kindle 覆盖成不同字节会清掉阅读进度）。
+//! - Move（`kind = "xochitl"`）：经书架服务加入 xochitl，文件夹名是原件所在目录相对跟踪目录的路径；同一文件夹同一书名的
+//!   原地替换（保留 uuid、进度）；文件夹或书名变了加入新的、旧的进回收站。
+//! - 没写 `[deliver]` 的自定义模式：电脑上，跟踪目录 `D` 旁的 `D/../<模式 id>/<子目录>/`；add 进来的、网址书在 `<书库>/output/<模式 id>/`。
+//!
+//! 设备没接上的模式不生成（`sync` 跳过，下次接上再传）。
 //!
 //! 产物格式按模式：EPUB 直接是优化结果；KFX、AZW3（Kindle）是同一份优化结果再转一次（`kfx`、`azw3` crate）。
 //! profile 可以给漫画另配格式（`comic_format`，见 [`Library::output_format`]）；内置模式都不用（kindle 文字书、漫画都出 KFX）。
 //!
-//! 生成记录 `<书库>/output-state/<模式 id>.json`：书 id → 产物绝对路径、产物根目录、指纹。产物位置变了（原件移动、
-//! 改名换了目录，书名改了）时删掉旧位置的文件——**只删记录里记着的文件**，不认识的文件一概不动；删完顺带删掉
-//! 产物根目录以内变空的目录。内容没变、只是位置变了的，把已有产物挪过去，不重新生成。
+//! 生成记录 `<书库>/output-state/<模式 id>.json`：书 id → 产物绝对路径（Move 上的是 uuid 和 `文件夹/文件名`）、产物根目录、指纹。
+//! 产物位置变了（原件移动、改名换了目录，书名改了）时删掉旧位置的——**只删记录里记着的**，不认识的文件一概不动；删完顺带删掉
+//! 产物根目录以内变空的目录。内容没变、只是位置变了的，把已有产物挪过去，不重新生成（改成送设备以前留在电脑上的产物也这样挪上设备）。
+//! 删书时设备没接上、删不掉的记在 `orphans`，接上后删。
 //!
-//! 换位置时先把记录改成新位置（指纹留空＝没完成，旧位置记进 `old` 待删），产物写好再补上指纹、删旧文件：
+//! 换位置时先把记录改成新位置（指纹留空＝没完成，旧位置记进 `old` 待删），产物放好再补上指纹、删旧的：
 //! 中途被打断的话，下次生成还认得新位置上的文件是这本书的（不会因为"有个不认识的同名文件"而改名），旧文件也还会删。
 
-use crate::fsutil::{tmp_sibling, TMP_PREFIX};
+use crate::deliver::{self, Target};
+use crate::fsutil::TMP_PREFIX;
 use crate::{Library, Meta};
 use profile::{Format, Profile};
 use serde::{Deserialize, Serialize};
@@ -220,152 +227,268 @@ impl Library {
         v
     }
 
-    /// 生成记录里产物所在的所有目录（拿到锁时清理残留临时文件用）。
+    /// 生成记录里产物所在的所有目录（拿到锁时清理残留临时文件用）：电脑上的和接着的 MTP 设备上的（没挂上的读不到，跳过）。
     pub(crate) fn output_dirs(&self) -> BTreeSet<PathBuf> {
         let mut dirs = BTreeSet::new();
         for (_, sp) in self.state_files() {
-            for e in self.states.get(&sp).books.values() {
-                dirs.extend(e.placements().into_iter().filter_map(|p| p.path.parent().map(Path::to_path_buf)));
-            }
+            let state = self.states.get(&sp);
+            let files = state.books.values().flat_map(StateEntry::placements).chain(state.orphans.iter().cloned());
+            dirs.extend(files.filter(|p| p.uuid.is_empty() && p.path.is_absolute()).filter_map(|p| p.path.parent().map(Path::to_path_buf)));
         }
         dirs
     }
 
-    /// 这本书在该模式下的产物根目录和产物所在目录（绝对路径），见模块注释。
-    fn output_dir(&self, meta: &Meta, device: &Profile) -> Result<(PathBuf, PathBuf), String> {
-        let lib_root = std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone()).join("output").join(&device.id);
+    /// 原件在跟踪目录里的话：(跟踪目录, 原件所在目录相对它的路径)。
+    fn tracked_rel(&self, meta: &Meta) -> Option<(PathBuf, PathBuf)> {
         if meta.source() == crate::Source::Stored || meta.source_path.is_empty() {
-            return Ok((lib_root.clone(), lib_root));
+            return None;
         }
         let src = Path::new(&meta.source_path);
         let sources = self.sources_json.get(&self.sources_path());
-        let Some((d, parent)) = sources.dirs().iter().find(|d| src.starts_with(d)).and_then(|d| Some((d, d.parent()?))) else {
+        let d = sources.dirs().iter().find(|d| src.starts_with(d))?.clone();
+        let rel = src.parent().and_then(|p| p.strip_prefix(&d).ok()).unwrap_or(Path::new("")).to_path_buf();
+        Some((d, rel))
+    }
+
+    /// 这本书在该模式下的产物根目录和产物所在目录（绝对路径），见模块注释。`target` 是 MTP 设备时根目录是设备上的
+    /// `<存储>/<dir>`，否则是电脑上跟踪目录旁的 `<模式 id>/`（add 进来的书、网址书在书库 `output/<模式 id>/`）。
+    fn output_dir(&self, meta: &Meta, device: &Profile, target: &Target) -> Result<(PathBuf, PathBuf), String> {
+        let device_root = match target {
+            Target::Dir { root } => Some(root.clone()),
+            _ => None,
+        };
+        let lib_root = device_root.clone().unwrap_or_else(|| std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone()).join("output").join(&device.id));
+        let Some((d, rel)) = self.tracked_rel(meta) else {
             return Ok((lib_root.clone(), lib_root));
         };
-        let root = parent.join(&device.id);
-        if let Some(t) = sources.dirs().iter().find(|t| crate::sources::overlaps(&root, t)) {
-            return Err(output_overlap(&root, t));
-        }
-        let rel = src.parent().and_then(|p| p.strip_prefix(d).ok()).unwrap_or(Path::new(""));
+        let root = match device_root {
+            Some(r) => r,
+            None => {
+                let Some(parent) = d.parent() else { return Ok((lib_root.clone(), lib_root)) };
+                let root = parent.join(&device.id);
+                let sources = self.sources_json.get(&self.sources_path());
+                if let Some(t) = sources.dirs().iter().find(|t| crate::sources::overlaps(&root, t)) {
+                    return Err(output_overlap(&root, t));
+                }
+                root
+            }
+        };
         let dir = root.join(rel);
         Ok((root, dir))
     }
 
-    /// 删掉一本书在所有模式下的产物（生成记录里记着的文件，包括还没删掉的旧位置），并从记录里去掉。
+    /// Move 上放进哪个文件夹：原件所在目录相对跟踪目录的路径（`a/b` 整个当一个文件夹名，xochitl 的文件夹只有一层）；
+    /// 跟踪目录顶层的书、add 进来的书、网址书放书库根（空）。
+    fn xochitl_folder(&self, meta: &Meta) -> String {
+        let Some((_, rel)) = self.tracked_rel(meta) else { return String::new() };
+        rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")
+    }
+
+    /// 删掉一本书在所有模式下的产物（生成记录里记着的，包括还没删掉的旧位置），并从记录里去掉。
+    /// 设备没接上、删不掉的记进 `orphans`，下次接上时删（[`Library::flush_removed`]）。
     pub(crate) fn remove_outputs(&self, id: &str) -> Result<(), String> {
-        for (_, sp) in self.state_files() {
+        for (dev_id, sp) in self.state_files() {
             let state = self.states.get(&sp);
             let Some(entry) = state.books.get(id).cloned() else { continue };
             let mut state = (*state).clone();
             state.books.remove(id);
-            let left = state.delete_placements(entry.placements());
-            if !left.is_empty() {
-                return Err(format!("删产物失败：{}", left.iter().map(|p| p.path.display().to_string()).collect::<Vec<_>>().join("、")));
-            }
+            let t = self.registry.get(&dev_id).map(|p| self.target(p));
+            let target = t.as_deref().and_then(|r| r.as_ref().ok());
+            let left = state.delete_placements(entry.placements(), target, &self.device_env.mtp_base);
+            state.orphans.extend(left);
             self.states.put(&sp, state)?;
         }
         Ok(())
     }
 
-    /// 这本书在各模式下的产物，以及是否最新。
+    /// 删了的书留在设备上的产物（当时设备没接上）：设备接上了就删。返回删掉几个。
+    pub fn flush_removed(&self, device: &Profile) -> Result<usize, String> {
+        let sp = self.state_path(&device.id);
+        let state = self.states.get(&sp);
+        if state.orphans.is_empty() {
+            return Ok(0);
+        }
+        let t = self.target(device);
+        let Ok(target) = &*t else { return Ok(0) };
+        let mut state = (*state).clone();
+        let before = state.orphans.len();
+        let list = std::mem::take(&mut state.orphans);
+        state.orphans = state.delete_placements(list, Some(target), &self.device_env.mtp_base);
+        let n = before - state.orphans.len();
+        if n > 0 {
+            self.states.put(&sp, state)?;
+        }
+        Ok(n)
+    }
+
+    /// 这本书在各模式下的产物，以及是否最新。Move 上的书只看记录（不联网查），路径显示成 `xochitl:文件夹/文件名`。
     pub fn outputs(&self, meta: &Meta) -> Vec<OutputStatus> {
         let mut out = Vec::new();
         for (dev_id, sp) in self.state_files() {
             let Some(entry) = self.states.get(&sp).books.get(&meta.id).cloned() else { continue };
-            let fresh = if !entry.path.is_file() {
+            let fresh = if entry.uuid.is_empty() && !entry.path.is_file() {
                 None
             } else {
                 self.registry.get(&dev_id).and_then(|p| self.plan(meta, p).ok()).map(|plan| plan.fingerprint == entry.fingerprint)
             };
-            out.push(OutputStatus { device: dev_id, path: entry.path, fresh });
+            out.push(OutputStatus { device: dev_id, path: entry.shown(), fresh });
         }
         out
     }
 
-    /// 为一个阅读模式生成一本书的产物（没变化就跳过，`force` 强制重建）。放在哪见模块注释。
+    /// 为一个阅读模式生成一本书的产物并送到设备上（没变化就跳过，`force` 强制重建）。放在哪见模块注释。
+    /// 设备没接上返回错误（`sync` 先用 [`Library::device_status`] 看过，没接上的模式整个跳过）。
     pub fn build(&self, meta: &Meta, device: &Profile, force: bool) -> Result<Built, String> {
         // 原件的大小或修改时间变了：先核对内容（改过了就停下来），不能因为指纹没变就说"已是最新"。
         // 原件不在了的不在这里报：产物还是那本书的，照旧算最新（`sync`/`list` 会报原件不在）
         if self.original_state(meta) == crate::OriginalState::Touched {
             self.verified_original(meta)?;
         }
-        let Plan { fingerprint, format } = self.plan(meta, device)?;
-        let (root, dir) = self.output_dir(meta, device)?;
+        let plan = self.plan(meta, device)?;
+        let t = self.target(device);
+        let target = t.as_ref().as_ref().map_err(|e| format!("{} {e}", device.id))?;
+        match target {
+            Target::Xochitl(_) => self.build_xochitl(meta, device, target, plan, force),
+            _ => self.build_file(meta, device, target, plan, force),
+        }
+    }
+
+    /// 产物是文件（电脑上、MTP 设备上）：先在书库的临时目录里生成，再放到位。
+    fn build_file(&self, meta: &Meta, device: &Profile, target: &Target, plan: Plan, force: bool) -> Result<Built, String> {
+        let Plan { fingerprint, format } = plan;
+        let (root, dir) = self.output_dir(meta, device, target)?;
         let sp = self.state_path(&device.id);
         let state = self.states.get(&sp);
-        let out = dir.join(state.file_name_for(meta, &dir, format.ext())?);
+        let out = dir.join(state.file_name_for(meta, &dir, format.ext(), None)?);
         let prev = state.books.get(&meta.id).cloned();
         drop(state);
-        let done = prev.as_ref().filter(|p| !force && p.fingerprint == fingerprint && p.path.is_file());
+        let done = prev.as_ref().filter(|p| !force && p.fingerprint == fingerprint && p.uuid.is_empty() && p.path.is_file());
         if let Some(p) = done.filter(|p| p.path == out) {
             if !p.old.is_empty() {
-                self.finish(&sp, meta, p.clone())?; // 上次没删掉的旧位置
+                self.finish(&sp, meta, p.clone(), Some(target))?; // 上次没删掉的旧位置
             }
             return Ok(Built::UpToDate(out));
         }
-        // 先把记录改成新位置（指纹留空＝没完成），旧位置记进待删
-        let mut entry = StateEntry { path: out.clone(), root, fingerprint: String::new(), old: Vec::new() };
-        if let Some(p) = &prev {
-            entry.old = p.placements().into_iter().filter(|x| x.path != out).collect();
-            if p.path == out {
-                entry.fingerprint = p.fingerprint.clone(); // 同一位置重建：记录不用预先改
-            }
-        }
-        if entry.fingerprint.is_empty() || entry.old != prev.as_ref().map_or(Vec::new(), |p| p.old.clone()) {
-            self.put_entry(&sp, meta, entry.clone())?;
-        }
-        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-
-        // 内容没变、只是位置变了：挪过去（跨文件系统挪不了就重新生成）
-        if let Some(p) = done {
-            if !out.exists() && std::fs::rename(&p.path, &out).is_ok() {
-                let _ = crate::fsutil::sync_parent(&out);
-                entry.fingerprint = fingerprint;
-                self.finish(&sp, meta, entry)?;
-                return Ok(Built::Moved { from: p.path.clone(), to: out });
-            }
-        }
-
-        // 要优化的 EPUB（与模式无关，见 [`PreparedInput`]）；AZW3 的中间产物放在书库的临时目录里；
-        // 产物直接写成目标旁边的临时文件，过了质量门、落盘后改名到位（中途失败不会留下半个产物，也不会覆盖掉上一版）
-        let epub = self.prepared_input(meta)?;
         let tmp = self.root.join(format!("{TMP_PREFIX}{}-{}", meta.id, device.id));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-        let result = bookconv::util::produce_then_replace(&tmp_sibling(&out), &out, |part| {
-            let part = part.to_path_buf();
-            let mut warnings = Vec::new();
-            let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
-            // 要转 AZW3、KFX 的，优化结果先放临时目录
-            let optimized = if format == Format::Epub { part.clone() } else { tmp.join("optimized.epub") };
-            bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
-            let rep = bookconv::check::check_epub_file(&optimized)?;
-            if !rep.ok {
-                warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
+        let result = (|| {
+            // 来源：内容没变、只是位置变了的已有产物（挪过去，不重新生成），或者新生成的
+            let (src, warnings) = match done {
+                Some(p) => (p.path.clone(), Vec::new()),
+                None => {
+                    let src = tmp.join(format!("out.{}", format.ext()));
+                    let w = self.produce(meta, device, format, &src, &tmp)?;
+                    (src, w)
+                }
+            };
+            // 目录里已有一个不认识的同名文件、和这份逐字节相同（以前手工拷上去的）：认领它，不另起名字
+            let out = dir.join(self.states.get(&sp).file_name_for(meta, &dir, format.ext(), Some(&src))?);
+            // 先把记录改成新位置（指纹留空＝没完成），旧位置记进待删：中途被打断的话，下次还认得新位置上的文件是这本书的
+            let mut entry = StateEntry { path: out.clone(), root, fingerprint: String::new(), uuid: String::new(), name: String::new(), old: Vec::new() };
+            if let Some(p) = &prev {
+                entry.old = p.placements().into_iter().filter(|x| x.path != out || !x.uuid.is_empty()).collect();
+                if p.path == out && p.uuid.is_empty() {
+                    entry.fingerprint = p.fingerprint.clone(); // 同一位置重建：记录不用预先改
+                }
             }
-            if format != Format::Epub {
-                // 按文件读（不先整本读进内存）；BufReader：zip 按条目小块读
-                let open = || std::fs::File::open(&optimized).map(std::io::BufReader::new).map_err(|e| format!("读 {}: {e}", optimized.display()));
-                // 唯一 ID 取自书的 id（AZW3 再加入库时间）：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
-                let (bytes, w) = if format == Format::Kfx {
-                    kfx::write::epub_to_kfx_from(open()?, &kfx::write::Opts { fixed_id: kfx_id(&meta.id), media: Some(kfx::css::MediaEnv::for_profile(device)) })?
-                } else {
-                    let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
-                    let aopts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
-                    azw3::epub_to_azw3_from(open()?, &aopts)?
-                };
-                warnings.extend(w);
-                std::fs::write(&part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
+            if entry.fingerprint.is_empty() || entry.old != prev.as_ref().map_or(Vec::new(), |p| p.old.clone()) {
+                self.put_entry(&sp, meta, entry.clone())?;
             }
-            Ok(warnings)
-        });
+            std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            deliver::put_file(&src, &out, false)?;
+            entry.fingerprint = fingerprint.clone();
+            self.finish(&sp, meta, entry, Some(target))?;
+            Ok(match done {
+                Some(p) => Built::Moved { from: p.path.clone(), to: out },
+                None => Built::Written { path: out, warnings },
+            })
+        })();
         let _ = std::fs::remove_dir_all(&tmp);
-        let warnings = result?;
-        entry.fingerprint = fingerprint;
-        self.finish(&sp, meta, entry)?;
-        Ok(Built::Written { path: out, warnings })
+        result
     }
 
+    /// Move（xochitl）：经书架服务的导入接口加入，同一文件夹里的同一本原地替换（保留 uuid 和阅读进度）。
+    /// 文件夹或书名变了：加入一本新的，旧的进回收站。
+    fn build_xochitl(&self, meta: &Meta, device: &Profile, target: &Target, plan: Plan, force: bool) -> Result<Built, String> {
+        let Target::Xochitl(x) = target else { unreachable!("只给 xochitl 调") };
+        let Plan { fingerprint, format } = plan;
+        if format != Format::Epub {
+            return Err(format!("xochitl 只收 EPUB，这个模式出的是 {}", format.ext()));
+        }
+        let folder = self.xochitl_folder(meta);
+        let name = format!("{}.{}", bookconv::util::sanitize_filename(&meta.title, &meta.id), format.ext());
+        let loc = if folder.is_empty() { PathBuf::from(&name) } else { Path::new(&folder).join(&name) };
+        let sp = self.state_path(&device.id);
+        let prev = self.states.get(&sp).books.get(&meta.id).cloned();
+        let same = prev.as_ref().filter(|p| !p.uuid.is_empty() && p.path == loc);
+        if let Some(p) = same.filter(|p| !force && p.fingerprint == fingerprint) {
+            if x.present(&p.uuid)? {
+                if !p.old.is_empty() {
+                    self.finish(&sp, meta, p.clone(), Some(target))?;
+                }
+                return Ok(Built::UpToDate(p.shown()));
+            }
+        }
+        // 电脑上以前生成的同一份（改成直接送设备以前的产物）：直接传它，不重新生成
+        let from = prev.as_ref().filter(|p| !force && p.fingerprint == fingerprint && p.uuid.is_empty() && p.path.is_file()).map(|p| p.path.clone());
+        let tmp = self.root.join(format!("{TMP_PREFIX}{}-{}", meta.id, device.id));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+        let result = (|| {
+            let (src, warnings) = match &from {
+                Some(f) => (f.clone(), Vec::new()),
+                None => {
+                    let src = tmp.join(format!("out.{}", format.ext()));
+                    let w = self.produce(meta, device, format, &src, &tmp)?;
+                    (src, w)
+                }
+            };
+            let doc = match same.and_then(|p| x.replace(&p.uuid, &src, &name).transpose()) {
+                Some(d) => d?,
+                None => x.import(&src, &name, &folder)?,
+            };
+            let old = prev.as_ref().map_or(Vec::new(), |p| p.placements().into_iter().filter(|o| o.uuid != doc.uuid).collect());
+            let entry = StateEntry { path: loc.clone(), root: PathBuf::new(), fingerprint: fingerprint.clone(), uuid: doc.uuid, name: doc.name, old };
+            let shown = entry.shown();
+            self.finish(&sp, meta, entry, Some(target))?;
+            Ok(match from {
+                Some(f) => Built::Moved { from: f, to: shown },
+                None => Built::Written { path: shown, warnings },
+            })
+        })();
+        let _ = std::fs::remove_dir_all(&tmp);
+        result
+    }
+
+    /// 生成产物写到 `part`（书库临时目录里）：EPUB 直接是优化结果；KFX、AZW3 是同一份优化结果再转一次（中间文件放 `tmp`）。
+    fn produce(&self, meta: &Meta, device: &Profile, format: Format, part: &Path, tmp: &Path) -> Result<Vec<String>, String> {
+        let epub = self.prepared_input(meta)?;
+        let mut warnings = Vec::new();
+        let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
+        // 要转 AZW3、KFX 的，优化结果先放临时目录
+        let optimized = if format == Format::Epub { part.to_path_buf() } else { tmp.join("optimized.epub") };
+        bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
+        let rep = bookconv::check::check_epub_file(&optimized)?;
+        if !rep.ok {
+            warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
+        }
+        if format != Format::Epub {
+            // 按文件读（不先整本读进内存）；BufReader：zip 按条目小块读
+            let open = || std::fs::File::open(&optimized).map(std::io::BufReader::new).map_err(|e| format!("读 {}: {e}", optimized.display()));
+            // 唯一 ID 取自书的 id（AZW3 再加入库时间）：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
+            let (bytes, w) = if format == Format::Kfx {
+                kfx::write::epub_to_kfx_from(open()?, &kfx::write::Opts { fixed_id: kfx_id(&meta.id), media: Some(kfx::css::MediaEnv::for_profile(device)) })?
+            } else {
+                let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
+                let aopts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
+                azw3::epub_to_azw3_from(open()?, &aopts)?
+            };
+            warnings.extend(w);
+            std::fs::write(part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
+        }
+        Ok(warnings)
+    }
     /// 要优化的 EPUB：原件（EPUB）或当场转换的（CBZ），再补上书里没有、书库里有找来的封面、简介、标签。
     /// 和上一次是同一本书、同样的补充时，直接用上次的中间文件。
     fn prepared_input(&self, meta: &Meta) -> Result<PathBuf, String> {
@@ -405,10 +528,10 @@ impl Library {
 
     /// 产物已经到位：删掉记着的旧位置（删不掉的留着下次再删），写上完成的记录。记录和原来一样（旧位置还是删不掉，
     /// `sync --watch` 每轮都会走到这里）时不写。
-    fn finish(&self, sp: &Path, meta: &Meta, mut entry: StateEntry) -> Result<(), String> {
+    fn finish(&self, sp: &Path, meta: &Meta, mut entry: StateEntry, target: Option<&Target>) -> Result<(), String> {
         let mut state = (*self.states.get(sp)).clone();
         let prev = state.books.remove(&meta.id);
-        entry.old = state.delete_placements(std::mem::take(&mut entry.old));
+        entry.old = state.delete_placements(std::mem::take(&mut entry.old), target, &self.device_env.mtp_base);
         if prev.as_ref() == Some(&entry) {
             return Ok(());
         }
@@ -447,6 +570,9 @@ pub(crate) fn output_overlap(root: &Path, tracked: &Path) -> String {
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub(crate) struct State {
     books: BTreeMap<String, StateEntry>,
+    /// 从书库删了的书留在设备上的产物：删的时候设备没接上，接上了再删（[`Library::flush_removed`]）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    orphans: Vec<Placement>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
@@ -457,39 +583,67 @@ struct StateEntry {
     root: PathBuf,
     /// 空 = 这个位置的产物还没生成完（换位置时先登记，见模块注释）。
     fingerprint: String,
+    /// 在 Move 的 xochitl 书库里：这本的 uuid 和显示名（`.metadata` 的 `visibleName`）。这时 `path` 是相对的
+    /// `文件夹/文件名`（只用来认位置变没变），`root` 为空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    uuid: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
     /// 以前的位置、还没删掉的产物。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     old: Vec<Placement>,
 }
 
-/// 一个产物文件和它的根目录。
+/// 一个产物文件和它的根目录；或者 Move 上的一本（`uuid`、`name`）。
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 struct Placement {
     path: PathBuf,
     root: PathBuf,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    uuid: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
 }
 
 impl StateEntry {
-    /// 这条记录名下的所有文件：现在的位置和待删的旧位置。
+    /// 这条记录名下的所有产物：现在的位置和待删的旧位置。
     fn placements(&self) -> Vec<Placement> {
-        let mut v = vec![Placement { path: self.path.clone(), root: self.root.clone() }];
+        let mut v = vec![Placement { path: self.path.clone(), root: self.root.clone(), uuid: self.uuid.clone(), name: self.name.clone() }];
         v.extend(self.old.iter().cloned());
         v
+    }
+
+    /// 给人看的位置：文件的绝对路径；Move 上的是 `xochitl:文件夹/文件名`。
+    fn shown(&self) -> PathBuf {
+        if self.uuid.is_empty() { self.path.clone() } else { PathBuf::from(format!("xochitl:{}", self.path.display())) }
     }
 }
 
 impl State {
-    /// 这个路径现在（或待删的旧位置里）是不是记在别的书名下。
-    fn claimed(&self, path: &Path) -> bool {
-        self.books.values().any(|e| e.path == path || e.old.iter().any(|o| o.path == path))
+    /// 这个产物现在（或待删的旧位置里）是不是记在别的书名下。Move 上的按 uuid 认，文件按路径认。
+    fn claimed(&self, p: &Placement) -> bool {
+        let same = |path: &Path, uuid: &str| if p.uuid.is_empty() { uuid.is_empty() && path == p.path } else { uuid == p.uuid };
+        self.books.values().any(|e| same(&e.path, &e.uuid) || e.old.iter().any(|o| same(&o.path, &o.uuid)))
     }
 
-    /// 删掉这些文件（已经不在记录里的书名下），并在各自的根目录以内删掉变空的目录。返回删不掉的（下次再删）。
-    /// 调用前要先把本书的记录从 `self` 里拿掉，别的书还记着的路径不删。
-    fn delete_placements(&self, list: Vec<Placement>) -> Vec<Placement> {
+    /// 删掉这些产物（已经不在记录里的书名下），文件在各自的根目录以内删掉变空的目录。返回删不掉的（下次再删）：
+    /// Move 上的要连着 Move（`target`）才删得了（进 xochitl 回收站）；MTP 设备（`mtp_base` 下）上的文件，设备没挂上时不当成已删。
+    /// 调用前要先把本书的记录从 `self` 里拿掉，别的书还记着的不删。
+    fn delete_placements(&self, list: Vec<Placement>, target: Option<&Target>, mtp_base: &Path) -> Vec<Placement> {
         let mut left = Vec::new();
         for p in list {
-            if self.claimed(&p.path) {
+            if self.claimed(&p) {
+                continue;
+            }
+            if !p.uuid.is_empty() {
+                match target {
+                    Some(Target::Xochitl(x)) if x.trash(&p.uuid, &p.name).is_ok() => {}
+                    _ => left.push(p),
+                }
+                continue;
+            }
+            if !p.path.is_absolute() || (p.path.starts_with(mtp_base) && !p.root.is_dir()) {
+                left.push(p);
                 continue;
             }
             match std::fs::remove_file(&p.path) {
@@ -516,7 +670,8 @@ impl State {
     /// 产物文件名：`书名.<ext>`。同一目录里和别的书撞名（不分大小写：阅读器的文件系统多半不分），或者目录里已有
     /// 一个不是本书产物的同名文件时，用 `书名 [id 前 6 位].<ext>`，不覆盖别人的文件。
     /// 本书在这个目录里已经用着其中一个名字的，一直用下去（名字稳定，重新生成后覆盖设备上的旧文件就行）。
-    fn file_name_for(&self, meta: &Meta, dir: &Path, ext: &str) -> Result<String, String> {
+    /// 给了 `same_as`（这次要放上去的产物）时，目录里不认识的同名文件和它逐字节相同的（以前手工拷上设备的）也可以用：认领它。
+    fn file_name_for(&self, meta: &Meta, dir: &Path, ext: &str, same_as: Option<&Path>) -> Result<String, String> {
         let base = bookconv::util::sanitize_filename(&meta.title, &meta.id);
         let plain = format!("{base}.{ext}");
         let suffixed = format!("{base} [{}].{ext}", meta.id.get(..6).unwrap_or(&meta.id));
@@ -544,7 +699,8 @@ impl State {
             .filter(|p| p.path.parent() == Some(dir))
             .filter_map(|p| p.path.file_name().map(|n| fold(&n.to_string_lossy())))
             .collect();
-        let free = |n: &str| !others.contains(&fold(n)) && (!existing.contains(&fold(n)) || mine.contains(&fold(n)));
+        let adopt = |n: &str| same_as.is_some_and(|s| deliver::same_bytes(s, &dir.join(n)));
+        let free = |n: &str| !others.contains(&fold(n)) && (!existing.contains(&fold(n)) || mine.contains(&fold(n)) || adopt(n));
         if free(&plain) {
             Ok(plain)
         } else if free(&suffixed) {

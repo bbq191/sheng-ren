@@ -39,3 +39,9 @@ height = 1546
 [comic_readable]
 width = 1272
 height = 1696
+
+# 产物直接传进 Kindle（2026-10-07 用户定）：USB 连上、jmtpfs 挂好就传进存储根目录的 documents/，子目录照跟踪目录。
+[deliver]
+kind = "mtp"
+mount = "kindle"
+dir = "documents"

@@ -223,13 +223,14 @@ impl Library {
         if let Some(d) = s.dirs.iter().find(|d| overlaps(&dir, d)) {
             return Err(format!("{} 和已跟踪的 {} 互相包含（同一个文件会被跟踪两遍）：要换的话先 untrack 那个", dir.display(), d.display()));
         }
-        // 产物放在跟踪目录旁边的 `<模式 id>/`（见 `generate`）：新目录和任何一个跟踪目录（包括它自己）的产物根目录互相包含的，
+        // 产物放在电脑上的模式（没写 `[deliver]` 的自定义模式；内置模式都直接送设备）产物在跟踪目录旁边的 `<模式 id>/`（见 `generate`）：
+        // 新目录和任何一个跟踪目录（包括它自己）的产物根目录互相包含的，
         // 生成出来的书会被当成新书入库、层层嵌套
         // （只查和新目录有关的组合：已有的组合生成时会报）
         let all: Vec<&PathBuf> = s.dirs.iter().chain(std::iter::once(&dir)).collect();
         for d in &all {
             let Some(parent) = d.parent() else { continue };
-            for dev in self.devices().iter() {
+            for dev in self.devices().iter().filter(|p| p.deliver.is_none()) {
                 let root = parent.join(&dev.id);
                 if let Some(t) = all.iter().find(|t| (**d == dir || ***t == dir) && overlaps(&root, t)) {
                     return Err(crate::generate::output_overlap(&root, t));

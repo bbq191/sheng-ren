@@ -33,3 +33,9 @@ height = 1680
 [readable.epub]
 width = 1264
 height = 1680
+
+# 产物直接传进掌阅（2026-10-07 用户定）：同 Kindle，放存储根目录的 documents/（没有就建）。
+[deliver]
+kind = "mtp"
+mount = "ireader"
+dir = "documents"

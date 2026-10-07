@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 640" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
-  <title>生成一本书（booklib sync 生成时每本书、每个阅读模式走一遍）</title>
+  <title>生成一本书并传到设备（booklib sync 时每本书、每台接着的设备走一遍）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
@@ -26,7 +26,7 @@
 
   <rect class="q" x="250" y="88" width="400" height="50" rx="8"/>
   <text x="450" y="108" text-anchor="middle" class="h">和生成记录比</text>
-  <text x="450" y="126" text-anchor="middle" class="s">output-state/&lt;模式&gt;.json：这本书上次的产物在哪、指纹是什么</text>
+  <text x="450" y="126" text-anchor="middle" class="s">output-state/&lt;模式&gt;.json：这本书在设备上的位置（Move 上是 uuid）、指纹是什么</text>
 
   <path class="l" d="M300 138 C300 170 110 160 110 186" marker-end="url(#a)"/>
   <text x="60" y="160" class="s">指纹一样、位置一样</text>
@@ -38,7 +38,7 @@
   <text x="458" y="166" class="s">指纹一样、位置变了</text>
   <rect class="g" x="340" y="188" width="220" height="48" rx="8"/>
   <text x="450" y="208" text-anchor="middle" class="h">↪ 挪位置</text>
-  <text x="450" y="226" text-anchor="middle" class="s">原件改名移动、书名变了：直接挪过去</text>
+  <text x="450" y="226" text-anchor="middle" class="s">改名移动、书名变了：直接挪（Move 是加新删旧）</text>
 
   <path class="l" d="M600 138 C600 170 790 160 790 186" marker-end="url(#a)"/>
   <text x="760" y="160" class="s">指纹变了、没有产物</text>
@@ -63,7 +63,7 @@
 
   <rect class="w" x="100" y="416" width="600" height="50" rx="8"/>
   <text x="400" y="436" text-anchor="middle" class="h">按阅读模式优化（bookconv::optimize，三个模式同一套规则）</text>
-  <text x="400" y="454" text-anchor="middle" class="s">直接写成目标旁边的临时文件；流式处理，大漫画不整本进内存</text>
+  <text x="400" y="454" text-anchor="middle" class="s">先写进书库的临时目录；流式处理，大漫画不整本进内存</text>
   <path class="l" d="M400 466 L400 486" marker-end="url(#a)"/>
 
   <rect class="w" x="100" y="488" width="290" height="50" rx="8"/>
@@ -76,7 +76,7 @@
   <path class="l" d="M400 538 L400 558" marker-end="url(#a)"/>
 
   <rect class="g" x="100" y="560" width="600" height="62" rx="8"/>
-  <text x="400" y="580" text-anchor="middle" class="h">✓ 落盘后改名到位，补上指纹，删掉记录里的旧位置</text>
-  <text x="400" y="598" text-anchor="middle" class="s">只删生成记录里记着的文件；产物目录里别的文件一概不动</text>
+  <text x="400" y="580" text-anchor="middle" class="h">✓ 传上设备（相同字节不拷；Move 原地替换），补上指纹，删掉旧位置</text>
+  <text x="400" y="598" text-anchor="middle" class="s">只删生成记录里记着的；设备上别的书一概不动</text>
   <text x="400" y="614" text-anchor="middle" class="s">中途失败：临时文件删掉，上一版产物还在</text>
 </svg>

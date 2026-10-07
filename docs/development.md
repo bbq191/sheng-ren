@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-07：492 个）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-07：497 个）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -17,7 +17,7 @@ shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.
 ./install.sh --tools                        # 装进 PATH 手工试
 ```
 
-书库的集成测试在 `crates/library/tests/`：`flow.rs` 测入库、同步、生成、挪位置、删书；`cli.rs` 直接运行 `booklib`，测参数、报错和退出码。都不联网。
+书库的集成测试在 `crates/library/tests/`：`flow.rs` 测入库、同步、生成、挪位置、删书、传设备；`cli.rs` 直接运行 `booklib`，测参数、报错和退出码。都不联网、**不碰真设备**：`tests/common` 把 MTP 挂载目录指到 `<书库>-dev/`（下面造 kindle、ireader 的存储目录），Move 不走 SSH（`BOOKLIB_NO_SSH=1`），要测 Move 的用 `FakeMove`（本机起一个只实现导入接口的假书架服务）。
 
 ## 真书回归
 
