@@ -34,3 +34,9 @@ height = 1455
 [comic_readable]
 width = 952
 height = 1457
+
+# 产物直接加入 Move 上的 xochitl（2026-10-07 用户定）：经 SSH 调书架服务的导入接口，不进它的母版库；USB 先、Wi-Fi 后。
+[deliver]
+kind = "xochitl"
+hosts = ["root@10.11.99.1", "root@10.42.0.224"]
+port = 8790

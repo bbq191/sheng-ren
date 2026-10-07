@@ -5,8 +5,8 @@
 //! masters/<id>/meta.json                   一本书的索引：原件路径、SHA-256、大小与修改时间、书名、作者
 //! masters/<id>/cover.jpg                   可选：联网找来的封面（booklib meta --fetch），书里没封面时生成产物用
 //! masters/<id>/master.epub                 只有网址入库的书有（没有原件，抓下来的正文存这里）；早期版本入库的条目也可能有
-//! output/<模式>/<书名>.epub                 add 进来的书（不在跟踪目录里）和网址书的产物
-//! output-state/<模式>.json                 每个模式的生成记录：书 id → 产物绝对路径、指纹（没变就跳过；只删这里记着的文件）
+//! output/<模式>/<书名>.epub                 产物放电脑上的自定义模式：add 进来的书（不在跟踪目录里）和网址书的产物
+//! output-state/<模式>.json                 每个模式的生成记录：书 id → 产物在设备上的位置、指纹（没变就跳过；只删这里记着的）
 //! sources.json                             跟踪的原件目录（track），以及其中每个文件上次看到时的大小、修改时间、id
 //! profiles/*.toml                          可选：自定义设备 profile，同 id 覆盖内置
 //! .lock                                    进程锁
@@ -14,8 +14,8 @@
 //! ```
 //! `<id>` 是原件内容 SHA-256 的前 12 位十六进制：同一本书重复入库会认出来，改名移动了也认得出。
 //!
-//! 跟踪目录 `D` 里的书，产物放在书库外、和 `D` 并列的 `D/../<模式>/` 下，按原件所在子目录镜像
-//! （`books/haodoo/x.epub` → `kindle/haodoo/<书名>.kfx`），见 `generate.rs`。
+//! 产物直接送到接着的设备上（2026-10-07 起，见 `deliver.rs`、`generate.rs`）：跟踪目录 `D` 里的书按原件所在子目录镜像
+//! （`books/haodoo/x.epub` → Kindle 上 `documents/haodoo/<书名>.kfx`、Move 上文件夹 `haodoo`）。
 //!
 //! 生成时读原件：EPUB 直接用；CBZ 当场转成 EPUB（与设备无关的转换，结果不落书库）。
 //! 早期版本收过的其它格式（MOBI/AZW3/FB2/PDF 等）2026-09-29 起不再支持：条目保留（`list` 标出来），生成时跳过。
@@ -24,6 +24,7 @@
 
 mod cover;
 mod covergen;
+mod deliver;
 mod douban;
 mod fsutil;
 mod generate;
@@ -40,6 +41,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use cover::{CoverInfo, CoverResult};
+pub use deliver::DeviceEnv;
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus};
 pub use metadata::{BookInfo, Edition, InfoResult};
@@ -154,6 +156,10 @@ pub struct Library {
     own_dc: RefCell<HashMap<String, (bool, bool)>>,
     /// 内容哈希 → 是不是漫画（决定 kindle 出 KFX 还是 AZW3；生成计划每次都要用，按内容缓存）。
     comic: RefCell<HashMap<String, bool>>,
+    /// 设备在哪找（见 [`deliver::DeviceEnv`]）。
+    device_env: DeviceEnv,
+    /// 这一轮连上的设备：模式 id → 送到哪，或没接上的原因（见 [`Library::refresh_devices`]）。
+    targets: RefCell<HashMap<String, std::rc::Rc<Result<deliver::Target, String>>>>,
 }
 
 /// 核对过的原件：路径，和核对时的大小、修改时间。
@@ -271,7 +277,40 @@ impl Library {
             prepared: RefCell::new(None),
             own_dc: RefCell::new(HashMap::new()),
             comic: RefCell::new(HashMap::new()),
+            device_env: DeviceEnv::from_env(),
+            targets: RefCell::default(),
         })
+    }
+
+    /// 改设备在哪找（测试、特殊环境；缺省从环境变量读，见 [`DeviceEnv::from_env`]）。
+    pub fn set_device_env(&mut self, env: DeviceEnv) {
+        self.device_env = env;
+        self.targets.borrow_mut().clear();
+    }
+
+    /// 忘掉这一轮连上的设备（断开到 Move 的 SSH）：下次用到时重新看接没接上。`sync --watch` 每轮调一次。
+    pub fn refresh_devices(&self) {
+        self.targets.borrow_mut().clear();
+    }
+
+    /// 这个模式的产物送到哪：设备接上了（或产物放电脑上）`Ok`，没接上 `Err(原因)`。一轮里只连一次。
+    pub(crate) fn target(&self, p: &Profile) -> std::rc::Rc<Result<deliver::Target, String>> {
+        if let Some(t) = self.targets.borrow().get(&p.id) {
+            return t.clone();
+        }
+        let t = std::rc::Rc::new(deliver::connect(&self.device_env, p));
+        self.targets.borrow_mut().insert(p.id.clone(), t.clone());
+        t
+    }
+
+    /// 设备接没接上（`sync` 开头报一次）：`Ok(Some(说明))` 接上了，`Ok(None)` 产物放电脑上，`Err(原因)` 没接上。
+    pub fn device_status(&self, p: &Profile) -> Result<Option<String>, String> {
+        match &*self.target(p) {
+            Ok(deliver::Target::Local) => Ok(None),
+            Ok(deliver::Target::Dir { root }) => Ok(Some(root.display().to_string())),
+            Ok(deliver::Target::Xochitl(x)) => Ok(Some(format!("xochitl（经 {}）", x.host))),
+            Err(e) => Err(e.clone()),
+        }
     }
 
     pub fn root(&self) -> &Path {

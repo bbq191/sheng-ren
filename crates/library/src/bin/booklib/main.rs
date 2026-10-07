@@ -1,7 +1,7 @@
 //! 书库命令行：入库、跟踪与同步（含按阅读模式生成）、列出、删除、去重。见 `library` crate 头注释。
 //!
-//! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib。产物：跟踪目录 D 里的书放在 D/../<模式>/（镜像子目录），
-//! add 进来的书和网址书放在书库的 output/<模式>/ 下（见 `library::generate`）。
+//! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib。产物直接传到接着的设备上（见 `library::generate`、`library::deliver`）：
+//! Kindle、掌阅放 documents/（镜像子目录），Move 加入 xochitl；没写 [deliver] 的自定义模式才放电脑上。
 //! `meta --edit` 改单个 EPUB 文件、不碰书库，在 `meta_edit` 里（参数规则也不同：值可以是空字符串）。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
@@ -21,10 +21,13 @@ const USAGE: &str = "用法:
   booklib [--library=目录] sync [--device=<模式>[,<模式>…]] [--force] [--no-build] [--keep] [--watch[=秒]] [书名片段、id 或原件路径...]
       先同步跟踪的目录（书库严格镜像它）：新增的入库、改过的换成新版本、移动改名的认得出、原件删了的连同产物从书库删掉
       （原件不动；跟踪目录整个不在、读不了的目录里的书不删；--keep 这一次只报告不删）
-      接着按阅读模式生成优化过的书（kindle 出 KFX，ireader、xochitl 出 EPUB；只重建有变化的，--force 全部重建）：
+      接着按阅读模式生成优化过的书，直接传到接着的设备上（kindle 出 KFX，ireader、xochitl 出 EPUB；
+      只传有变化的，--force 全部重建；没接上的设备跳过，下次接上再传）：
       不写 --device = 全部模式，--device 可写多次或用逗号分隔，all = 全部；不写书名 = 全部书（含 add 进来的），
       写了只生成这几本；原件路径可以是文件，也可以是目录（下面所有的书）；--no-build 只同步不生成
-      产物：跟踪目录 D 里的书放在 D/../<模式>/，按原件所在子目录镜像；add 进来的书和网址书放在书库 output/<模式>/
+      放哪：Kindle、掌阅（USB，jmtpfs 挂载）放存储根目录的 documents/，按原件在跟踪目录里的子目录镜像；
+      Move（USB 或 Wi-Fi，SSH）经书架服务直接加入 xochitl，子目录路径当文件夹名，更新时原地替换（保留进度）；
+      原件删了的书设备上也删（Move 上进回收站）；电脑上不留产物（自定义模式没写 [deliver] 的除外）
       --watch 一直运行，每隔几秒（缺省 60）检查一次，原件有变化才生成（不能和书名、--force 一起用）
   booklib [--library=目录] meta --fetch [--force] [--clear] [书名片段、id 或原件路径...]
       联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过；
@@ -36,7 +39,7 @@ const USAGE: &str = "用法:
       查看、改写一个 EPUB 文件的元数据和封面（改文件本身，和书库无关；值给空字符串 = 删掉），详见 booklib meta --edit --help
   booklib [--library=目录] remove <id>...               从书库删掉（连同生成记录里的产物；原件不动）。id 用 list 里显示的完整 id
   booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
-  booklib [--library=目录] devices                      列出阅读模式（书库 profiles/ 目录里的自定义 profile 也算）";
+  booklib [--library=目录] devices                      列出阅读模式（书库 profiles/ 目录里的自定义 profile 也算）和设备接没接上";
 
 /// `USAGE` 里属于命令 `cmd` 的几段（从 `booklib … cmd` 那一行到下一个命令之前；meta 有三段）。
 fn command_usage(cmd: &str) -> Option<String> {
@@ -172,7 +175,8 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
 /// `sync --watch` 记住的生成失败：(书 id, 模式 id) → 失败时的指纹和原件状态。都没变就不再重试、不再重复报错。
 type FailMemo = HashMap<(String, String), (String, OriginalState)>;
 
-/// 按模式 × 书逐本生成（没变化的跳过），每本一行结果。`quiet` 时不打印没变化的（没选书时：只报有变化的）。
+/// 按模式 × 书逐本生成并送到设备上（没变化的跳过），每本一行结果。`quiet` 时不打印没变化的（没选书时：只报有变化的）。
+/// 设备没接上的模式跳过，报一行（`absent_reported` 记着报过的，`--watch` 时不重复报）。
 /// 给了 `fails`（`sync --watch`）：上次失败以后指纹和原件状态都没变的书跳过。
 /// 不再支持的格式（早期版本收的 MOBI/PDF 等）跳过，每本只提示一次（`skipped` 记着提示过的）。
 /// `build_all` 的结果计数（结尾打一行汇总：用户 2026-09-29 反馈"看不出是否更新过"）。
@@ -194,16 +198,37 @@ impl BuildCounts {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force: bool, quiet: bool, mut fails: Option<&mut FailMemo>, skipped: &mut HashSet<String>, report: &mut impl FnMut(Result<String, String>)) -> BuildCounts {
+fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force: bool, quiet: bool, mut fails: Option<&mut FailMemo>, skipped: &mut HashSet<String>, absent_reported: &mut HashSet<String>, report: &mut impl FnMut(Result<String, String>)) -> BuildCounts {
     let mut counts = BuildCounts::default();
     for m in books.iter().filter(|m| !m.supported()) {
         if skipped.insert(m.id.clone()) {
             report(Ok(format!("- 跳过 {}  {}：{}", m.id, m.title, library::unsupported(m.content_format()))));
         }
     }
+    // 产物直接送设备（profile 的 [deliver]）：没接上的设备这一轮整个跳过（每轮报一次），接上的先删掉以前删书时没删成的
+    let mut live: Vec<&Profile> = Vec::new();
+    for device in devices {
+        match lib.device_status(device) {
+            Ok(_) => {
+                match lib.flush_removed(device) {
+                    Ok(0) => {}
+                    Ok(n) => report(Ok(format!("✓ [{}] 删掉了 {n} 本已从书库删除的书", device.id))),
+                    Err(e) => report(Err(format!("✗ [{}] 删已从书库删除的书：{e}", device.id))),
+                }
+                live.push(device);
+            }
+            Err(e) => {
+                // --watch（给了 fails）时同一台没接上只报一次
+                if fails.is_none() || !absent_reported.contains(&device.id) {
+                    report(Ok(format!("- [{}] {e}，这次不传", device.id)));
+                }
+                absent_reported.insert(device.id.clone());
+            }
+        }
+    }
     // 书在外层、模式在内层：同一本书与模式无关的中间文件（CBZ 转换、补元数据）只做一次
     for m in books.iter().filter(|m| m.supported()) {
-        for device in devices {
+        for device in &live {
             let key = (m.id.clone(), device.id.clone());
             let now = || (lib.fingerprint(m, device).unwrap_or_else(|e| e), lib.original_state(m));
             if let Some(f) = fails.as_deref_mut() {
@@ -381,6 +406,11 @@ fn main() {
                     Some(c) => format!("{}（漫画 {}）", p.format().ext().to_uppercase(), c.ext().to_uppercase()),
                     None => p.format().ext().to_uppercase(),
                 }, p.screen.width, p.screen.height, r.width, r.height, if p.color { "彩色" } else { "黑白" });
+                match lib.device_status(p) {
+                    Ok(Some(at)) => println!("{:<12} ✓ 接上了：{at}", ""),
+                    Ok(None) => println!("{:<12} 产物放电脑上", ""),
+                    Err(e) => println!("{:<12} - {e}", ""),
+                }
             }
         }
         "add" => {
@@ -488,7 +518,11 @@ fn main() {
             let mut memo = SyncMemo::default();
             let mut fails = FailMemo::new();
             let mut last_stamp: Option<u64> = None;
+            // 没接上的设备报过了（--watch 时只在接上又拔掉以后再报）；上一轮接着哪些设备（接上新设备也要跑一轮生成）
+            let mut absent_reported = HashSet::new();
+            let mut last_live: Option<Vec<bool>> = None;
             loop {
+                lib.refresh_devices();
                 match lib.lock() {
                     Ok(_guard) => {
                         let mut changed = true;
@@ -515,14 +549,21 @@ fn main() {
                         }
                         if !devices.is_empty() {
                             let stamp = || lib.change_stamp();
-                            if changed || last_stamp != Some(stamp()) {
+                            let live: Vec<bool> = devices.iter().map(|d| lib.device_status(d).is_ok()).collect();
+                            for (d, ok) in devices.iter().zip(&live) {
+                                if *ok {
+                                    absent_reported.remove(&d.id);
+                                }
+                            }
+                            if changed || last_stamp != Some(stamp()) || last_live.as_ref() != Some(&live) {
+                                last_live = Some(live);
                                 // 没选书：全部书，只报有变化的；选了书：只生成这几本，每本都报
                                 let books = if selectors.is_empty() { lib.list() } else { lib.select(&selectors) };
                                 if books.is_empty() && !selectors.is_empty() {
                                     fail(&format!("没有匹配的书（booklib list 查看书库）{}", path_hint(&selectors)));
                                 }
                                 let fails = watch.is_some().then_some(&mut fails);
-                                let counts = build_all(&lib, &devices, &books, force, selectors.is_empty(), fails, &mut skipped, &mut report);
+                                let counts = build_all(&lib, &devices, &books, force, selectors.is_empty(), fails, &mut skipped, &mut absent_reported, &mut report);
                                 // --watch 时没有生成、挪动、失败就不出声
                                 if watch.is_none() || counts.any() {
                                     report(Ok(counts.summary()));

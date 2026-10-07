@@ -82,6 +82,20 @@ pub enum NoteIcons {
     Number,
 }
 
+/// 产物怎么送到设备上（`[deliver]`，2026-10-07 用户定：`booklib sync` 按设备接没接上直接传，不在电脑上留产物）。
+/// 不写这一节的模式（书库 `profiles/` 里的自定义模式）产物照旧放在电脑上（跟踪目录旁的 `<模式 id>/`）。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum Deliver {
+    /// MTP 设备（Kindle、掌阅）：jmtpfs 自动挂到 `$XDG_RUNTIME_DIR/mtp/<mount>`，下面是存储（如「Internal Storage」），
+    /// 产物放进存储根目录的 `dir`（如 `documents`），子目录照跟踪目录镜像。挂载点在、里面有存储就算接上了。
+    Mtp { mount: String, dir: String },
+    /// Move（xochitl）：经 SSH 端口转发调设备上书架服务的导入接口（`port` 是它在设备本机监听的端口），直接加入 xochitl、
+    /// 原地替换保留 UUID。`hosts` 依次试（`用户@地址`，USB、Wi-Fi），第一个连得上的算接上了。文件夹只有一层：
+    /// 跟踪目录里的子目录路径（`a/b`）整个当文件夹名。
+    Xochitl { hosts: Vec<String>, port: u16 },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
     /// 文件名（不含 `.toml`），命令行与配置里用的标识。
@@ -135,6 +149,8 @@ pub struct Profile {
     /// 阅读器能正确显示图片的透明通道（TOML 里不写是 `true`）。Kindle（KFX）把正文图片透明的地方显示成黑色（《绍宋》章标题图，
     /// 2026-10-06 真机），写 `false`：正文 `<img>`/SVG `<image>` 用到的带透明像素的图先合成到白底（格式不变）。
     pub image_alpha: bool,
+    /// 产物送到哪台设备、怎么送；`None` 时产物留在电脑上。不影响产物内容（不进指纹）。
+    pub deliver: Option<Deliver>,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +185,7 @@ struct ProfileFile {
     caption_fit: bool,
     #[serde(default = "yes")]
     image_alpha: bool,
+    deliver: Option<Deliver>,
 }
 
 fn yes() -> bool {
@@ -179,7 +196,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
@@ -187,6 +204,19 @@ impl Profile {
     fn validate(&self) -> Result<(), String> {
         if let Some(d) = self.comic_page_direction.as_deref().filter(|d| !matches!(*d, "ltr" | "rtl")) {
             return Err(format!("profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}", self.id));
+        }
+        match &self.deliver {
+            Some(Deliver::Mtp { mount, dir }) => {
+                let bad = |v: &str| v.is_empty() || v.starts_with('.') || v.contains(['/', '\\']);
+                if bad(mount) || bad(dir) {
+                    return Err(format!("profile {}: [deliver] 的 mount、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）", self.id));
+                }
+            }
+            Some(Deliver::Xochitl { hosts, port }) if hosts.is_empty() || hosts.iter().any(|h| h.is_empty() || h.starts_with('-') || h.contains(char::is_whitespace)) || *port == 0 => {
+                return Err(format!("profile {}: [deliver] 的 hosts 须非空（每项是 用户@地址）、port 非零", self.id));
+            }
+            Some(Deliver::Xochitl { .. }) => {}
+            None => {}
         }
         let Screen { width, height } = self.screen;
         if self.id.is_empty() {
