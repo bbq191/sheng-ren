@@ -251,7 +251,7 @@ xochitl      xochitl（reMarkable Paper Pro Move 原生阅读器）  EPUB  屏�
 | 掌阅（`ireader`，`.epub`） | USB，挂到 `/run/user/1000/mtp/ireader` | 存储根目录的 `documents/<子目录>/<书名>.epub`（没有 `documents/` 就建） |
 | Move（`xochitl`，`.epub`） | SSH（USB `root@10.11.99.1`，不通再试 Wi-Fi `root@10.42.0.224`），调 Move 上书架服务的导入接口 | 直接加入 xochitl 书库（不进书架的母版库），放进文件夹 `<子目录>` |
 
-- `<子目录>`：原件在跟踪目录里所在的子目录，例：原件 `~/Documents/ereader/books/好读/x.epub` → Kindle 上 `documents/好读/<书名>.kfx`、Move 上文件夹「好读」。Move 的文件夹只有一层，多级子目录 `a/b` 整个当一个文件夹名。跟踪目录顶层的书、`add` 进来的书、网址书放 `documents/` 顶层（Move 上放书库根）。
+- `<子目录>`：原件在跟踪目录里所在的子目录，例：原件 `~/Documents/ereader/books/好读/x.epub` → Kindle 上 `documents/好读/<书名>.kfx`、Move 上文件夹「好读」。多级子目录在 Move 上也按层建：`漫画/死亡筆記` 是「漫画」文件夹里的「死亡筆記」文件夹（书架服务逐级找，没有就建）。跟踪目录顶层的书、`add` 进来的书、网址书放 `documents/` 顶层（Move 上放书库根）。
 - `booklib devices` 列出各设备接没接上。挂载目录可以用 `BOOKLIB_MTP_DIR` 改，`BOOKLIB_NO_SSH=1` 不连 Move。
 - **增量**：每本书在每台设备上记一个指纹和传上去的那份的哈希。指纹没变就不生成；变了（规则升级、`--force`）就重新生成，生成出来和传上去的那份一样（看哈希，不把设备上的文件读回来）就不再传，输出 `≡ 重新生成 … 和设备上的一样，没再传`。Kindle、掌阅上已有逐字节相同的文件也不再拷（Kindle 覆盖成不同字节会清掉阅读进度，见[设备 · 重拷书以后进度还在不在](devices.md#重拷书以后进度还在不在)）；设备上那本被你删了的，下次 `sync` 补传。Move 上的书更新时**原地替换**（同一个 uuid，阅读进度、所在文件夹保留；xochitl 下次打开时重新排版）。
 - **只删自己传上去的**：原件删了（`sync` 自动清理）、`remove` 了的书，设备上的那份一起删（Move 上进回收站，能恢复）；当时设备没接上的，下次接上时删。原件挪了、书名变了，设备上旧位置的删掉（Kindle、掌阅上内容没变的直接挪过去；Move 上文件夹或书名变了是加一本新的、旧的进回收站），删空的子目录一起删。设备上你自己放的书一概不动。

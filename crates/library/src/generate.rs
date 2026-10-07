@@ -279,7 +279,7 @@ impl Library {
         Ok((root, dir))
     }
 
-    /// Move 上放进哪个文件夹：原件所在目录相对跟踪目录的路径（`a/b` 整个当一个文件夹名，xochitl 的文件夹只有一层）；
+    /// Move 上放进哪个文件夹：原件所在目录相对跟踪目录的路径（`a/b`：书架服务按层建，先「a」、再它里面的「b」，2026-10-07 用户定）；
     /// 跟踪目录顶层的书、add 进来的书、网址书放书库根（空）。
     fn xochitl_folder(&self, meta: &Meta) -> String {
         let Some((_, rel)) = self.tracked_rel(meta) else { return String::new() };
