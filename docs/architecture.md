@@ -161,4 +161,12 @@
 
 峰值内存约为"全书文字 + 同时在处理的几张图"，不随漫画页数增长。并行处理的结果和逐张处理逐字节相同。
 
+给别的程序当库用的接口（2026-10-07 加，缺省值下产物逐字节不变）：
+
+- `OptimizeOpts::limits`（`Limits { max_decode_pixels, pool_pixel_budget }`）：单张解码上限（缺省 6400 万，漫画页直接用、插图另外不超过 900 万）和并行像素额度（缺省 3600 万）。内存小的设备调小，超过的图原样保留、不删。
+- `OptimizeOpts::title: Option<String>`：改 OPF 的 `dc:title`（`opfmeta::apply_fields`）。
+- `optimize_epub_file_streaming_with_cancel(…, cancel: &dyn Fn() -> bool)`：逐条目问一次，取消时返回以 `CANCELLED_MSG` 开头的错误，这次建出的输出文件删掉。
+- `optimized_version_file(路径)`：读书里 `META-INF/eink-optimized` 的版本。
+- 模式运行时可改：`profile::get(id).clone()` 后改公开字段，私有的阅读范围用 `set_readable`/`set_comic_readable`，`without_comic_reader_margins()` 关掉 xochitl 的漫画页边距模式。
+
 各步骤做了什么，见[排版与优化规则](typesetting.md)。

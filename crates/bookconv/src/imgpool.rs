@@ -33,8 +33,9 @@ pub struct Permit<'a> {
 }
 
 impl PixelBudget {
+    /// `cap` 是 0 时按 1 算（每张图都独占）。
     pub fn new(cap: u64) -> PixelBudget {
-        PixelBudget { cap, used: Mutex::new(0), cv: Condvar::new() }
+        PixelBudget { cap: cap.max(1), used: Mutex::new(0), cv: Condvar::new() }
     }
 
     /// 申请 `px` 像素的额度（超过总预算按总预算算，即独占）。阻塞到有额度；返回的 [`Permit`] 析构时归还。

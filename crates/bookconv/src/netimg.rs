@@ -8,7 +8,7 @@ pub const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 /// 抓图 UA（网页抽取与优化器共用同一标识）。
 pub const UA: &str = "Mozilla/5.0 (compatible; readlater/1.0)";
 
-/// 抓远程图；给了 `screen` 就按书里插图的规则降采样（[`fit_for_epub`]），`None` = 保留原图（入库母版用）。`src` 支持协议相对 `//host/path`；非 http(s) 返回 None。
+/// 抓远程图；给了 `screen` 就按书里插图的规则降采样（`fit_for_epub`），`None` = 保留原图（入库母版用）。`src` 支持协议相对 `//host/path`；非 http(s) 返回 None。
 /// 返回 (字节, 扩展名, mime)；非图（魔数不认）、超过 [`MAX_IMAGE_BYTES`] → None。
 pub fn fetch_image(ag: &ureq::Agent, src: &str, referer: &str, screen: Option<imgopt::Screen>) -> Option<(Vec<u8>, &'static str, &'static str)> {
     // 协议相对 URL（`//host/path`，Wikipedia 等常用）补 https:；其余非 http(s)（data:/未解析相对）跳过。

@@ -15,7 +15,44 @@ use super::*;
 ///
 /// `on_progress(done, total)`：阶段二每写完一个条目回调一次，`total`＝要写出的条目总数（`entries.len()`，不含末尾的
 /// 标记与抓到的远程图）。只在阶段二回调——阶段一对文字书通常是毫秒级，真正拖时间的是逐张图片的重编码。
-pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &std::path::Path, opts: &OptimizeOpts, mut on_progress: impl FnMut(usize, usize)) -> Result<Report, String> {
+pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &std::path::Path, opts: &OptimizeOpts, on_progress: impl FnMut(usize, usize)) -> Result<Report, String> {
+    optimize_epub_file_streaming_with_cancel(input_path, output_path, opts, on_progress, &|| false)
+}
+
+/// 同 [`optimize_epub_file_streaming`]，另可中途取消：`cancel()` 返回 `true` 就停下，返回 `Err`，错误串以 [`CANCELLED_MSG`] 开头。
+/// 读完骨架后、写每个条目之前、收尾之前各问一次（大书一个条目也就一张图的工夫）。
+///
+/// 出错（含取消）时，这次已经建出来的 `output_path` 删掉，不留半成品；还没开始写就出错的不碰 `output_path`
+/// （那里可能是调用方原有的文件）。调用方照旧用 `util::produce_then_replace` 写临时文件、成功才改名。
+pub fn optimize_epub_file_streaming_with_cancel(
+    input_path: &std::path::Path,
+    output_path: &std::path::Path,
+    opts: &OptimizeOpts,
+    on_progress: impl FnMut(usize, usize),
+    cancel: &dyn Fn() -> bool,
+) -> Result<Report, String> {
+    let mut created = false;
+    let r = optimize_inner(input_path, output_path, opts, on_progress, cancel, &mut created);
+    if r.is_err() && created {
+        let _ = std::fs::remove_file(output_path);
+    }
+    r
+}
+
+/// 取消时返回 `Err(CANCELLED_MSG)`。
+fn check_cancel(cancel: &dyn Fn() -> bool) -> Result<(), String> {
+    if cancel() { Err(CANCELLED_MSG.to_string()) } else { Ok(()) }
+}
+
+fn optimize_inner(
+    input_path: &std::path::Path,
+    output_path: &std::path::Path,
+    opts: &OptimizeOpts,
+    mut on_progress: impl FnMut(usize, usize),
+    cancel: &dyn Fn() -> bool,
+    created: &mut bool,
+) -> Result<Report, String> {
+    check_cancel(cancel)?;
     let in_file = std::fs::File::open(input_path).map_err(|e| format!("打开输入失败: {e}"))?;
     let bytes_before = in_file.metadata().map(|m| m.len() as usize).unwrap_or(0);
     let mut archive = ZipArchive::new(std::io::BufReader::new(in_file)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
@@ -23,6 +60,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
     // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）。
     let raw = crate::epubzip::read_skeleton(&mut archive)?.entries;
     let prep = prepare_entries(raw, opts, bytes_before)?;
+    check_cancel(cancel)?;
     let (comic_margin, grayscale, is_comic_book) = (opts.comic_margin, opts.grayscale, prep.is_comic_book);
     // 漫画页按漫画的阅读范围排（xochitl 设成页边距 1 后更宽），其它图按 EPUB 的阅读范围缩
     let screen = if is_comic_book { opts.comic_screen.unwrap_or(opts.screen) } else { opts.screen };
@@ -38,6 +76,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
 
     // 阶段二：流式写出。
     let mut zw = crate::epubzip::EpubWriter::create(output_path)?;
+    *created = true;
     let mut xf = EntryXform::new(&prep, opts);
     if opts.caption_fit && !is_comic_book {
         xf.caption_ctx = Some(caption_ctx(entries, &src_names, &mut archive)?);
@@ -57,7 +96,8 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
         }
         let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<ImgJob>(lookahead);
         let job_rx = std::sync::Arc::new(std::sync::Mutex::new(job_rx));
-        let budget = std::sync::Arc::new(crate::imgpool::PixelBudget::new(crate::imgpool::PIXEL_BUDGET));
+        let budget = std::sync::Arc::new(crate::imgpool::PixelBudget::new(opts.limits.pool_pixel_budget));
+        let max_px = opts.limits.max_decode_pixels;
         for _ in 0..workers {
             let (rx, budget) = (job_rx.clone(), budget.clone());
             scope.spawn(move || loop {
@@ -67,7 +107,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
                 // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
                 let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&job.bytes))).unwrap_or(1_000_000);
                 let _permit = budget.acquire(px);
-                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale, job.bg, job.flatten).unwrap_or(job.bytes);
+                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale, job.bg, job.flatten, max_px).unwrap_or(job.bytes);
                 let _ = job.reply.send(out);
             });
         }
@@ -77,6 +117,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
         let mut next_submit = 0usize;
         let mut consumed = 0usize; // 已取回的图片数：第 consumed 张图片对应 image_positions[consumed]
         for (i, (name, data, ish)) in entries.iter().enumerate() {
+            check_cancel(cancel)?;
             // 补满提前量：读原图字节（archive 支持随时按名字重新 seek 读，跟阶段一是同一个源文件）并提交。
             while pending.len() < lookahead && next_submit < image_positions.len() {
                 let img_name = &entries[image_positions[next_submit]].0;
@@ -115,6 +156,7 @@ pub fn optimize_epub_file_streaming(input_path: &std::path::Path, output_path: &
         drop(job_tx); // 关闭队列，worker 退出，scope 才能 join
         Ok(())
     })?;
+    check_cancel(cancel)?;
     // 收尾：抓到的远程图（与引用它的章同目录、src 已改本地名）→ 推迟的 OPF（补上这些图的 manifest 项）→ 幂等标记。
     for (path, bytes) in &xf.fetched_imgs {
         zw.put(path, bytes)?;

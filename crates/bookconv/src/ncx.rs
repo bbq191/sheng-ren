@@ -165,8 +165,9 @@ pub fn replace_nav_map(ncx: &str, points: &[NewNavPoint]) -> Option<String> {
 
 /// 页码分段书签：没有可用目录的漫画（PDF 裁白边产物、清洗层给漫画补的目录）按页分段，至少能按段跳转。
 /// 没有源目录时的兜底书签：每 [`FALLBACK_TOC_PAGES`] 页一条，标题"第 N–M 页"（页码 1 起），如实标注不是章节。
-const FALLBACK_TOC_PAGES: usize = 20;
-pub(crate) fn page_chunk_titles(total_pages: usize) -> Vec<(usize, String)> {
+pub const FALLBACK_TOC_PAGES: usize = 20;
+/// 每 [`FALLBACK_TOC_PAGES`]（20）页一条书签：`(起始页下标（0 起）, "第 N–M 页")`。
+pub fn page_chunk_titles(total_pages: usize) -> Vec<(usize, String)> {
     (0..total_pages)
         .step_by(FALLBACK_TOC_PAGES)
         .map(|start| (start, format!("第 {}–{} 页", start + 1, (start + FALLBACK_TOC_PAGES).min(total_pages))))
