@@ -105,12 +105,37 @@ done
   | DRM 判定；全角转半角；图片格式识别；哈希 | `wash::encrypted_targets`；`util::to_halfwidth`；`util::image_kind`；`util::fnv64` |
   | `@font-face` 规则匹配（清洗层、AZW3 写出器共用） | `wash::font_face_re` |
   | install / uninstall 共用的包列表和路径 | `tools/cargo-pkgs.sh` |
+  | 逐文件独立的步骤多线程做（结果按原顺序；`f` 必须是纯的） | `util::par_map`（只读）/ `par_map_mut`（就地改） |
+  | 在别的线程先压好一个 zip 条目，再按顺序写 | `epubzip::Precompressed` + `EpubWriter::put_precompressed` |
 - **不可信输入不能让进程崩溃**：书的字节全是外来数据，数值相加用 `checked_add`、切片用 `get`；图片解码器 panic 由 `imgopt::guard` 兜住。**读外来数据设上限，超过就报错、不截断照用**（读用 `util::read_capped`）：
   - zip 条目解压 `epubzip::MAX_ENTRY_BYTES`（256MB，EPUB 与 CBZ 共用）；
   - 远程图下载 `netimg::MAX_IMAGE_BYTES`（20MB，超过算抓不到）；
   - 网址入库的网页 20MB（`article.rs`）。
 - `produce_then_replace` 产出途中出错或 panic 都删掉临时文件。
 - **踩到的阅读器怪癖**记进[设备 · 怪癖 → 字段](devices.md#怪癖--字段)；用户定的事记进[决定记录](decisions.md)。
+
+## 性能
+
+2026-10-07 一轮提速（产物逐字节不变：38 本真书 × 三种模式的 EPUB 和 kindle 的 KFX 共 152 个产物与改动前逐字节相同）。
+24 核电脑、release、`epub-optimize --device=…`（KFX 是 `epub-to-kfx`），耗时秒 / 峰值内存 MB：
+
+| 样本 | 模式 | 改前 | 改后 |
+|---|---|---|---|
+| 金庸作品全集（122MB） | kindle / ireader / xochitl | 2.04/97 · 2.13/77 · 2.44/122 | 0.69/91 · 0.60/90 · 0.94/110 |
+| 阿加莎全集（27MB，2410 个文件） | kindle / ireader / xochitl | 3.20/253 · 3.13/236 · 2.88/242 | 1.33/249 · 1.28/234 · 1.14/249 |
+| 杀死一只知更鸟插图版（78MB） | kindle / ireader / xochitl | 1.45/142 · 1.45/151 · 1.69/184 | 1.07/115 · 1.03/123 · 1.28/173 |
+| 绍宋（30MB） | kindle / ireader / xochitl | 0.81/309 · 0.79/241 · 0.71/259 | 0.45/327 · 0.44/256 · 0.39/249 |
+| 福尔摩斯全集（23MB） | kindle / ireader / xochitl | 0.49/26 · 0.47/26 · 0.45/26 | 0.26/42 · 0.26/44 · 0.23/42 |
+| 死亡筆記 卷01（280MB） | kindle / ireader / xochitl | 2.79/414 · 2.86/413 · 2.72/350 | 2.10/379 · 2.12/379 · 2.17/347 |
+| 北斗之拳 卷01（287MB） | kindle / ireader / xochitl | 2.26/220 · 2.24/207 · 2.2–6.2/268 | 1.67/213 · 1.64/214 · 1.74/224 |
+| 哆啦A夢 卷01（87MB，彩色） | kindle / ireader / xochitl | 2.40/136 · 2.33/148 · 2.24/194 | 0.79/128 · 0.78/130 · 1.06/159 |
+| KFX：金庸 / 阿加莎 / 死亡筆記 / 北斗 | kindle | 0.72/417 · 1.29/469 · 0.36/421 · 0.48/479 | 0.54/404 · 0.89/419 · 0.37/218 · 0.39/246 |
+
+- 漫画：JPEG 直接编（省掉按通用表编一遍、解回一遍）、彩色转灰度查表，每页 CPU 少约 25%；彩色漫画转灰度（哆啦A夢）快 3 倍。
+  黑白漫画受并行像素额度和 8 个 worker 限制，墙钟少约 25%。
+- 文字书：清洗层逐文件步骤多线程、deflate 交给 worker、读骨架多线程、目录驱动定章节去掉了按条目重扫全文件的平方级查找。
+- KFX：各文档多线程解析（解析结果在主线程复制一份，不然 worker 分配区里的空洞让峰值涨三成）；容器写出边拷边放，漫画峰值减半。
+- 内存：多线程时 glibc 每个线程一个分配区，小书峰值多十来 MB（福尔摩斯 26 → 42MB，`MALLOC_ARENA_MAX=1` 时 27MB）；其余持平或更低。
 
 ## DRM
 

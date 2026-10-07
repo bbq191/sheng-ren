@@ -89,12 +89,21 @@ fn rename_repeated_ids(html: &str, seen: &HashSet<String>) -> String {
 
 /// 本章里已在别处（`seen`）出现过的 id → 新名（`{id}-x{n}`，全书唯一）；本章新见到的 id 记进 `seen`。
 pub(crate) fn plan_id_renames(html: &str, seen: &mut HashSet<String>) -> HashMap<String, String> {
-    let mut rename: HashMap<String, String> = HashMap::new();
-    let mut local: HashSet<String> = HashSet::new();
-    let ids: Vec<String> = html::tags(html)
+    plan_id_renames_of(chapter_ids(html), seen)
+}
+
+/// 本章开标签上的全部非空 id，文档序（[`plan_id_renames`] 的前一半：只看本章，可以各章同时做）。
+pub(crate) fn chapter_ids(html: &str) -> Vec<String> {
+    html::tags(html)
         .filter(|t| t.is_start())
         .flat_map(|t| html::attrs(&html[t.start..t.end]).into_iter().filter(|a| a.is("id") && !a.value.is_empty()).map(|a| a.value.to_string()).collect::<Vec<_>>())
-        .collect();
+        .collect()
+}
+
+/// [`plan_id_renames`] 的后一半：按本章的 id（[`chapter_ids`]）和全书已见过的 `seen` 定改名。
+pub(crate) fn plan_id_renames_of(ids: Vec<String>, seen: &mut HashSet<String>) -> HashMap<String, String> {
+    let mut rename: HashMap<String, String> = HashMap::new();
+    let mut local: HashSet<String> = HashSet::new();
     // 本章全部 id（新名不能撞上本章后面才出现的同名 id，2026-09-28 审计：`fn1` 改成 `fn1-x2`，本章后面本来就有个 `fn1-x2`）
     let all_local: HashSet<&str> = ids.iter().map(String::as_str).collect();
     for id in ids.iter().cloned() {

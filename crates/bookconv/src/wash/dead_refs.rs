@@ -102,13 +102,13 @@ pub(super) fn drop_dead_font_faces(css: &str, base_dir: &str, exact: &HashSet<St
 pub(super) fn drop_dead_refs(entries: &mut [Entry], rep: &mut WashReport) {
     let exact: HashSet<String> = entries.iter().map(|e| e.name.clone()).collect();
     let lower: HashSet<String> = exact.iter().map(|n| n.to_ascii_lowercase()).collect();
-    let mut total = 0;
-    for e in entries.iter_mut() {
+    // 各文件独立，多线程做（`util::par_map_mut`）
+    let removed = crate::util::par_map_mut(entries, |e| {
         let is_css = e.name.to_ascii_lowercase().ends_with(".css");
         if !is_css && !is_html_entry(&e.name, &e.data) {
-            continue;
+            return 0;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
         let base = dir_of(&e.name).to_string();
         let (new, n) = if is_css {
             drop_dead_font_faces(text, &base, &exact, &lower)
@@ -124,8 +124,9 @@ pub(super) fn drop_dead_refs(entries: &mut [Entry], rep: &mut WashReport) {
         };
         if n > 0 {
             e.data = new.into_bytes();
-            total += n;
         }
-    }
+        n
+    });
+    let total: usize = removed.into_iter().sum();
     rep.dead_refs_removed = total;
 }

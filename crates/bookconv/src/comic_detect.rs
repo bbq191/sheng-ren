@@ -30,20 +30,17 @@ pub fn epub_image_stats(entries: &[Entry]) -> (usize, usize) {
     let Some(opf) = parse_opf(entries) else { return (0, 0) };
     // 条目名索引建一次（此前每个 spine 页 `entries.iter().find`，几千页漫画是"页数 × 条目数"次比较；同名取第一条）。
     let by_name = crate::wash::name_index(entries);
-    let mut images = 0usize;
-    let mut text = 0usize;
-    for p in &opf.spine {
+    // 各页独立数，多线程（`util::par_map`），再加起来
+    let per_page = crate::util::par_map(&opf.spine, |p| {
         if crate::util::is_image_ext(p) {
-            images += 1; // 少数畸形 EPUB 把图片文件直接列进 spine
-            continue;
+            return (1, 0); // 少数畸形 EPUB 把图片文件直接列进 spine
         }
-        let Some(e) = by_name.get(p.as_str()).map(|&i| &entries[i]) else { continue };
-        let Ok(html) = std::str::from_utf8(&e.data) else { continue };
-        images += count_images(html);
+        let Some(e) = by_name.get(p.as_str()).map(|&i| &entries[i]) else { return (0, 0) };
+        let Ok(html) = std::str::from_utf8(&e.data) else { return (0, 0) };
         let body = strip_noise_tags(html);
-        text += crate::wash::plain_text(&body).chars().filter(|c| !c.is_whitespace()).count();
-    }
-    (images, text)
+        (count_images(html), crate::wash::plain_text(&body).chars().filter(|c| !c.is_whitespace()).count())
+    });
+    per_page.into_iter().fold((0, 0), |(i, t), (pi, pt)| (i + pi, t + pt))
 }
 
 /// 判定：平均每张图配的文字 <[`TEXT_PER_IMAGE`] 字，而且图 ≥[`MIN_IMAGES`] 张——OPF 里已经标了 [`COMIC_SUBJECT`]
