@@ -265,20 +265,24 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
             rep.css_files += 1;
         }
     }
-    for e in entries.iter_mut() {
-        if is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name) {
-            if let Ok(t) = std::str::from_utf8(&e.data) {
-                let (marked, n) = fonts::mark_annotations(t, &font_plan);
-                rep.annotations_marked += n;
-                let (out, dups) = wash_html_with(&marked, opts, &indent_classes);
-                let href = relative_to(dir_of(&e.name), &css_path);
-                let out = inject_css_link(&out, &href);
-                let out = ensure_html_lang(&align_classes(&out), &lang_tag);
-                rep.dup_id_tags_collapsed += dups;
-                e.data = out.into_bytes();
-                rep.html_files += 1;
-            }
+    // 逐文件独立，多线程做（`util::par_map_mut`，结果与逐个做相同）
+    let counts = crate::util::par_map_mut(entries, |e| {
+        if !is_html_entry(&e.name, &e.data) || is_toc_file(&e.name) {
+            return None;
         }
+        let t = std::str::from_utf8(&e.data).ok()?;
+        let (marked, n) = fonts::mark_annotations(t, &font_plan);
+        let (out, dups) = wash_html_with(&marked, opts, &indent_classes);
+        let href = relative_to(dir_of(&e.name), &css_path);
+        let out = inject_css_link(&out, &href);
+        let out = ensure_html_lang(&align_classes(&out), &lang_tag);
+        e.data = out.into_bytes();
+        Some((n, dups))
+    });
+    for (n, dups) in counts.into_iter().flatten() {
+        rep.annotations_marked += n;
+        rep.dup_id_tags_collapsed += dups;
+        rep.html_files += 1;
     }
     add_wash_css_entry(entries, opf_idx, &css_path, &wash_css(opts));
     fix_ncx_manifest_id(entries, &mut rep);
@@ -364,15 +368,15 @@ pub(super) struct Link<'a> {
 /// `skip(条目名)` 为真的条目不动；OPF 里只改 `<guide>` 这类引用，manifest 的 `<item href>` 是文件本身的声明、从不改
 /// （2026-09-28 审计：空页删除没删掉单引号 OPF 的 item 时，把它的 href 改成了邻页，spine 就重复了一章）。
 /// 空页清理、全书 id 去重共用。返回改了的条目数。
-pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> bool, mut f: impl FnMut(&Link) -> Option<String>) -> usize {
-    let mut changed = 0;
-    for e in entries.iter_mut() {
+pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> bool + Sync, f: impl Fn(&Link) -> Option<String> + Sync) -> usize {
+    // 各文件独立，多线程做（`util::par_map_mut`）
+    let changed = crate::util::par_map_mut(entries, |e| {
         let l = e.name.to_ascii_lowercase();
         let is_opf = l.ends_with(".opf");
         if skip(&e.name) || !(is_opf || l.ends_with(".ncx") || is_html_entry(&e.name, &e.data)) {
-            continue;
+            return false;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let Ok(text) = std::str::from_utf8(&e.data) else { return false };
         let name = e.name.as_str();
         let new = html::edit_attrs(text, &["href", "src", "xlink:href"], |t, a| {
             if is_opf && opf::is_local(t.name, "item") {
@@ -389,10 +393,13 @@ pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> b
                 _ => Edit::Keep,
             }
         });
-        if let Cow::Owned(new) = new {
-            e.data = new.into_bytes();
-            changed += 1;
+        match new {
+            Cow::Owned(new) => {
+                e.data = new.into_bytes();
+                true
+            }
+            Cow::Borrowed(_) => false,
         }
-    }
-    changed
+    });
+    changed.into_iter().filter(|&c| c).count()
 }

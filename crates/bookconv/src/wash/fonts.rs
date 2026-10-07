@@ -156,20 +156,32 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
             take(t, dir_of(&e.name), &mut plan);
         }
     }
-    // 正文字体：段落按字数投票。
+    // 正文字体：段落按字数投票。各文件的 `<style>` 按文件顺序陆续加进 `plan`，后面文件的段落按加过的规则认字体，所以分两步：
+    // 先多线程把每个文件的 `<style>` 和段落（开标签、字数）扫出来（最花时间的是数字数），再按文件顺序逐个加规则、投票。
+    let html_files: Vec<&Entry> = entries.iter().filter(|e| is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name)).collect();
+    let scanned = crate::util::par_map(&html_files, |e| {
+        let Ok(h) = std::str::from_utf8(&e.data) else { return (Vec::new(), Vec::new()) };
+        let styles: Vec<&str> = html::tags(h)
+            .filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("style"))
+            .filter_map(|t| html::find_close(h, t.end, "style").map(|close| &h[t.end..close.start]))
+            .collect();
+        let paras: Vec<(&str, usize)> = html::tags(h)
+            .filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("p"))
+            .filter_map(|t| {
+                let close = html::find_close(h, t.end, "p")?;
+                Some((&h[t.start..t.end], html::plain_text(&h[t.end..close.start]).chars().filter(|c| !c.is_whitespace()).count()))
+            })
+            .collect();
+        (styles, paras)
+    });
     let mut votes: HashMap<String, usize> = HashMap::new();
-    for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name)) {
-        let Ok(h) = std::str::from_utf8(&e.data) else { continue };
-        for t in html::tags(h).filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("style")) {
-            if let Some(close) = html::find_close(h, t.end, "style") {
-                take(&h[t.end..close.start], dir_of(&e.name), &mut plan);
-            }
+    for (e, (styles, paras)) in html_files.iter().zip(scanned) {
+        for css in styles {
+            take(css, dir_of(&e.name), &mut plan);
         }
         let fallback = plan.tag_family.get("p").or_else(|| plan.tag_family.get("body")).or_else(|| plan.tag_family.get("html")).cloned();
-        for t in html::tags(h).filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("p")) {
-            let Some(close) = html::find_close(h, t.end, "p") else { continue };
-            let n = html::plain_text(&h[t.end..close.start]).chars().filter(|c| !c.is_whitespace()).count();
-            if let Some(f) = plan.own_family(&h[t.start..t.end]).or_else(|| fallback.clone()) {
+        for (tag, n) in paras {
+            if let Some(f) = plan.own_family(tag).or_else(|| fallback.clone()) {
                 *votes.entry(f).or_default() += n;
             }
         }
@@ -177,21 +189,26 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
     plan.body = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).map(|(f, _)| f);
     // 只被批注用到的字体不留：看每个嵌入字体有没有用在批注以外的元素上。
     plan.embedded = embedded.clone();
-    let mut used_elsewhere: HashSet<String> = HashSet::new();
-    for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name)) {
-        let Ok(h) = std::str::from_utf8(&e.data) else { continue };
+    // 各文件独立找（多线程），再并起来
+    let used_elsewhere: HashSet<String> = crate::util::par_map(&html_files, |e| {
+        let mut used: HashSet<String> = HashSet::new();
+        let Ok(h) = std::str::from_utf8(&e.data) else { return used };
         for t in html::tags(h).filter(|t| t.is_start()) {
             let tag = &h[t.start..t.end];
             if let Some(f) = plan.own_family(tag) {
-                if !embedded.contains(&f) || used_elsewhere.contains(&f) {
+                if !embedded.contains(&f) || used.contains(&f) {
                     continue;
                 }
                 if !is_annotation(h, &t, &plan) {
-                    used_elsewhere.insert(f);
+                    used.insert(f);
                 }
             }
         }
-    }
+        used
+    })
+    .into_iter()
+    .flatten()
+    .collect();
     plan.keep = embedded.into_iter().filter(|f| Some(f) != plan.body.as_ref() && used_elsewhere.contains(f)).collect();
     plan
 }

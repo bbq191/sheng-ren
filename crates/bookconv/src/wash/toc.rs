@@ -625,7 +625,7 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
     let sec_id = |s: &SectionRef| crate::util::xml_unescape(&s.id).into_owned();
     let sec_ids: HashSet<(&str, String)> = sections.iter().map(|s| (s.path.as_str(), sec_id(s))).collect();
     // 只指到文件的条目算节，要求节标题就在那个文件开头（文件开头是章标题、节在后面时，这条目录是章）
-    let sec_paths: HashSet<&str> = sections.iter().filter(|s| section_starts_file(entries, &s.path, &s.id)).map(|s| s.path.as_str()).collect();
+    let sec_paths: HashSet<&str> = sections_starting_files(entries, sections);
     struct Item {
         toc: TocItem,
         is_sec: bool,
@@ -706,11 +706,39 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
 }
 
 /// 节标题（`id`）是不是在文件 `path` 的正文最前面（前面没有可见内容）。
-fn section_starts_file(entries: &[Entry], path: &str, id: &str) -> bool {
-    let Some(e) = entries.iter().find(|e| e.name == path) else { return false };
-    let t = String::from_utf8_lossy(&e.data);
-    let Some((lo, _)) = html::body_range(&t) else { return false };
-    html::anchors(&t).into_iter().find(|(a, _)| *a == id).is_some_and(|(_, p)| p >= lo && !html::has_visible(&t[lo..p]))
+fn section_starts_file(t: &str, lo: usize, anchors: &HashMap<String, usize>, id: &str) -> bool {
+    anchors.get(id).is_some_and(|&p| p >= lo && !html::has_visible(&t[lo..p]))
+}
+
+/// 标题就在文件开头的节（[`section_starts_file`]）所在的文件。每个文件的正文范围、锚点表只算一次（以前每个节都把整个文件的锚点
+/// 重扫一遍，节多的大文件是平方级），各文件、各节多线程算。
+fn sections_starting_files<'s>(entries: &[Entry], sections: &'s [SectionRef]) -> HashSet<&'s str> {
+    let index = name_index(entries);
+    let mut paths: Vec<&str> = sections.iter().map(|s| s.path.as_str()).collect();
+    paths.sort_unstable();
+    paths.dedup();
+    // 文件 → (文字, 正文开头, 锚点 → 第一处的位置)
+    let files = crate::util::par_map(&paths, |path| {
+        let e = &entries[*index.get(path)?];
+        let t = String::from_utf8_lossy(&e.data);
+        let (lo, _) = html::body_range(&t)?;
+        Some((t, lo))
+    });
+    let anchors = crate::util::par_map(&files, |f| {
+        let mut m: HashMap<String, usize> = HashMap::new();
+        if let Some((t, _)) = f {
+            for (a, p) in html::anchors(t) {
+                m.entry(a.to_string()).or_insert(p);
+            }
+        }
+        m
+    });
+    let by_path: HashMap<&str, usize> = paths.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+    let starts = crate::util::par_map(sections, |s| {
+        let i = by_path[s.path.as_str()];
+        files[i].as_ref().is_some_and(|(t, lo)| section_starts_file(t, *lo, &anchors[i], &s.id))
+    });
+    sections.iter().zip(starts).filter(|(_, ok)| *ok).map(|(s, _)| s.path.as_str()).collect()
 }
 
 // ───────────────────────── 书自带目录指错位置的修复 ─────────────────────────
@@ -793,8 +821,13 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
     let mut links: HashMap<String, Vec<(String, String)>> = HashMap::new();
     // 书里的 `<h1>`–`<h6>` 标题：文字 → 能指到它的位置（有 id 指 id；没 id 但在文件开头指文件；都不行记 None）
     let mut headings: HashMap<String, Vec<Option<(String, String)>>> = HashMap::new();
-    for path in &opf.spine {
-        let Some(t) = cache.text(path) else { continue };
+    // 各文件独立扫（多线程，`util::par_map`），按 spine 顺序并起来
+    type Target = (String, String);
+    // (链接：标题 → 目标, 标题：文字 → 能指到它的位置)
+    type FileScan = (Vec<(String, Target)>, Vec<(String, Option<Target>)>);
+    let per_file = crate::util::par_map(&opf.spine, |path| -> FileScan {
+        let (mut file_links, mut file_heads) = (Vec::new(), Vec::new());
+        let Some(t) = cache.text(path) else { return (file_links, file_heads) };
         for g in html::tags(t).filter(|g| g.kind == html::TagKind::Open && g.is("a")) {
             let Some(href) = html::attr_value(&t[g.start..g.end], "href") else { continue };
             if href.contains("://") {
@@ -805,13 +838,9 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
             if label.is_empty() || label.chars().count() > 60 {
                 continue;
             }
-            let target = resolve_decoded(path, href);
-            let v = links.entry(label).or_default();
-            if !v.contains(&target) {
-                v.push(target);
-            }
+            file_links.push((label, resolve_decoded(path, href)));
         }
-        let Some((lo, _)) = html::body_range(t) else { continue };
+        let Some((lo, _)) = html::body_range(t) else { return (file_links, file_heads) };
         for g in html::tags(t).filter(|g| g.kind == html::TagKind::Open && g.start >= lo && g.heading_level().is_some()) {
             let Some(close) = html::find_close(t, g.end, g.name) else { continue };
             let label = squash_ws(&plain_text(&t[g.end..close.start]));
@@ -822,6 +851,18 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
                 Some(id) => Some((path.clone(), crate::util::xml_unescape(id).into_owned())),
                 None => (!html::has_visible(&t[lo..g.start])).then(|| (path.clone(), String::new())),
             };
+            file_heads.push((label, target));
+        }
+        (file_links, file_heads)
+    });
+    for (file_links, file_heads) in per_file {
+        for (label, target) in file_links {
+            let v = links.entry(label).or_default();
+            if !v.contains(&target) {
+                v.push(target);
+            }
+        }
+        for (label, target) in file_heads {
             headings.entry(label).or_default().push(target);
         }
     }
