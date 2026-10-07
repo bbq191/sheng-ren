@@ -91,8 +91,8 @@ pub enum Deliver {
     /// 产物放进存储根目录的 `dir`（如 `documents`），子目录照跟踪目录镜像。挂载点在、里面有存储就算接上了。
     Mtp { mount: String, dir: String },
     /// Move（xochitl）：经 SSH 端口转发调设备上书架服务的导入接口（`port` 是它在设备本机监听的端口），直接加入 xochitl、
-    /// 原地替换保留 UUID。`hosts` 依次试（`用户@地址`，USB、Wi-Fi），第一个连得上的算接上了。文件夹只有一层：
-    /// 跟踪目录里的子目录路径（`a/b`）整个当文件夹名。
+    /// 原地替换保留 UUID。`hosts` 依次试（`用户@地址`，USB、Wi-Fi），第一个连得上的算接上了。文件夹按层建：
+    /// 跟踪目录里的子目录路径 `a/b` 是 xochitl 里「a」文件夹里的「b」文件夹（书架服务逐级找、没有就建）。
     Xochitl { hosts: Vec<String>, port: u16 },
 }
 
