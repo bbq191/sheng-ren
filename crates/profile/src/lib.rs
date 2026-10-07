@@ -267,6 +267,27 @@ impl Profile {
         self.comic_readable.unwrap_or_else(|| self.output_readable())
     }
 
+    /// 运行时改 `format` 的阅读范围（比如设备上量出来的值）。公开字段直接改，这两个私有字段走这里和 [`Profile::set_comic_readable`]。
+    pub fn set_readable(&mut self, format: Format, area: Screen) -> &mut Self {
+        self.readable.insert(format, area);
+        self
+    }
+
+    /// 运行时改漫画的阅读范围；`None` = 和产物格式的阅读范围一样。
+    pub fn set_comic_readable(&mut self, area: Option<Screen>) -> &mut Self {
+        self.comic_readable = area;
+        self
+    }
+
+    /// 关掉漫画的页边距模式（xochitl 的 `comic_reader_margins` + `comic_readable`）：漫画按产物格式的阅读范围排、不写
+    /// `META-INF/eink-reader-margins`、各页不做 `comicpad` 处理。`comic_margin` 不动（xochitl 是 0），要白边的调用方自己设。
+    /// 用法：`let mut p = profile::get("xochitl").unwrap().clone(); p.without_comic_reader_margins();`
+    pub fn without_comic_reader_margins(&mut self) -> &mut Self {
+        self.comic_reader_margins = None;
+        self.comic_readable = None;
+        self
+    }
+
     /// `format` 的阅读范围是不是实测内置的（`false` = 退回了标称屏幕）。
     pub fn has_measured_readable(&self, format: Format) -> bool {
         self.readable.contains_key(&format)
@@ -337,6 +358,19 @@ pub fn device_from_args<S: AsRef<str>>(args: &[S]) -> Result<&'static Profile, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 运行时从内置模式起步改字段：关掉漫画页边距模式后漫画按 EPUB 的阅读范围排；改阅读范围立刻生效。内置的不受影响。
+    #[test]
+    fn runtime_overrides_from_builtin() {
+        let mut p = get("xochitl").unwrap().clone();
+        assert_eq!((p.comic_reader_margins, p.comic_readable()), (Some(1), Screen { width: 952, height: 1457 }));
+        p.without_comic_reader_margins();
+        assert_eq!(p.comic_reader_margins, None);
+        assert_eq!(p.comic_readable(), Screen { width: 842, height: 1455 });
+        p.set_readable(Format::Epub, Screen { width: 800, height: 1400 }).set_comic_readable(Some(Screen { width: 900, height: 1450 }));
+        assert_eq!((p.output_readable(), p.comic_readable()), (Screen { width: 800, height: 1400 }, Screen { width: 900, height: 1450 }));
+        assert_eq!(get("xochitl").unwrap().comic_reader_margins, Some(1));
+    }
 
     #[test]
     fn builtin_profiles_parse() {

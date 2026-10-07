@@ -53,11 +53,12 @@ pub struct NavEntry {
 use crate::util::xml_escape as xesc;
 
 /// `assemble` 写出的 OPF 在 zip 里的路径（`container.xml` 指向它）。
-pub(crate) const OPF_PATH: &str = "OEBPS/content.opf";
+pub const OPF_PATH: &str = "OEBPS/content.opf";
 /// 转换器组装的 EPUB 在 OPF `dc:identifier` 里写的前缀：`urn:bookconv:{book_id}`。
-pub(crate) const ID_SCHEME: &str = "urn:bookconv:";
+pub const ID_SCHEME: &str = "urn:bookconv:";
 
-pub(crate) fn chapter_filename(i: usize) -> String {
+/// 转换器组装的 EPUB 里第 `i` 章（0 起）的 XHTML 文件名：`chap_0001.xhtml`……（在 `OEBPS/` 下）。
+pub fn chapter_filename(i: usize) -> String {
     format!("chap_{:04}.xhtml", i + 1)
 }
 

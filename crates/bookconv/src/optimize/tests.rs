@@ -18,13 +18,12 @@
         optimize_epub_with(epub, &OptimizeOpts::new(screen))
     }
 
-    /// 产物里的幂等标记内容；没有标记 / 不是 zip → `None`。
+    /// 产物里的幂等标记内容（走正式入口 [`optimized_version_file`]）；没有标记 / 不是 zip → `None`。
     fn optimized_version(epub: &[u8]) -> Option<String> {
-        let mut ar = ZipArchive::new(Cursor::new(epub)).ok()?;
-        let mut f = ar.by_name(OPTIMIZE_MARKER).ok()?;
-        let mut s = String::new();
-        f.read_to_string(&mut s).ok()?;
-        Some(s.trim().to_string())
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("b.epub");
+        std::fs::write(&p, epub).unwrap();
+        optimized_version_file(&p)
     }
 
     fn entry_bytes(epub: &[u8], name: &str) -> Vec<u8> {
@@ -334,7 +333,7 @@
 
         let (stream_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
         let stream_img = entry_bytes(&stream_out, "p1.jpg");
-        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false, None, false).unwrap();
+        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false, None, false, Limits::default().max_decode_pixels).unwrap();
         assert_eq!(stream_img, direct, "流式并行处理结果应与直接处理逐字节一致");
         let mut ar = ZipArchive::new(Cursor::new(&stream_out)).unwrap();
         assert_eq!(ar.by_name("p1.jpg").unwrap().compression(), CompressionMethod::Stored, "已压缩的图片 STORED");
@@ -377,7 +376,7 @@
             let (mut x, mut y) = (Vec::new(), Vec::new());
             a.by_name(&name).unwrap().read_to_end(&mut x).unwrap();
             b.by_name(&name).unwrap().read_to_end(&mut y).unwrap();
-            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false, None, false).unwrap_or(x);
+            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false, None, false, Limits::default().max_decode_pixels).unwrap_or(x);
             assert_eq!(want, y, "第 {i} 张图并行结果与顺序结果不一致（乱序或串图）");
         }
         let mut y1 = Vec::new();
@@ -1080,4 +1079,75 @@
         assert!(!x.contains("width:"), "xochitl 不开：{x}");
         // 别的图不动
         assert!(ir.contains(r#"<img class="logo" src="i/logo.png"/>"#), "{ir}");
+    }
+
+    /// `title`：OPF 的 `dc:title` 换成新书名（转义、挂在旧书名上的 refines 一起删）；缺省 `None` 和空白串都不动，产物逐字节相同。
+    #[test]
+    fn title_option_rewrites_dc_title_only_when_given() {
+        let (epub, _) = bg_book();
+        let base = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        let (plain, _) = optimize_epub_with(&epub, &base).unwrap();
+        let (blank, _) = optimize_epub_with(&epub, &OptimizeOpts { title: Some("  ".into()), ..base.clone() }).unwrap();
+        assert_eq!(plain, blank, "空白书名当没给");
+        let (out, _) = optimize_epub_with(&epub, &OptimizeOpts { title: Some(" 新书名 & <副题> ".into()), ..base.clone() }).unwrap();
+        let opf = String::from_utf8(entry_bytes(&out, "OEBPS/content.opf")).unwrap();
+        assert!(opf.contains("<dc:title>新书名 &amp; &lt;副题&gt;</dc:title>"), "{opf}");
+        assert_eq!(opf.matches("<dc:title").count(), 1, "{opf}");
+        let rep = crate::check::check_epub(&out, false).unwrap();
+        assert!(rep.ok, "改了书名的书照样过质量门：{:?}", rep.errors);
+        // 除 OPF 外各条目不变
+        let names = |b: &[u8]| { let ar = ZipArchive::new(Cursor::new(b)).unwrap(); ar.file_names().map(str::to_string).collect::<Vec<_>>() };
+        assert_eq!(names(&out), names(&plain));
+        for n in names(&plain).iter().filter(|n| *n != "OEBPS/content.opf") {
+            assert_eq!(entry_bytes(&out, n), entry_bytes(&plain, n), "{n}");
+        }
+    }
+
+    /// 取消：`cancel()` 为真时返回以 `CANCELLED_MSG` 开头的错误，已建出的输出文件删掉；第几次问到时取消都一样。
+    #[test]
+    fn cancel_stops_and_leaves_no_output() {
+        let (epub, _) = bg_book();
+        let t = tempfile::tempdir().unwrap();
+        let (input, output) = (t.path().join("in.epub"), t.path().join("out.epub"));
+        std::fs::write(&input, &epub).unwrap();
+        let opts = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        for after in 0..8 {
+            let n = std::cell::Cell::new(0);
+            let cancel = || { n.set(n.get() + 1); n.get() > after };
+            let err = optimize_epub_file_streaming_with_cancel(&input, &output, &opts, |_, _| {}, &cancel).unwrap_err();
+            assert!(err.starts_with(CANCELLED_MSG), "{err}");
+            assert!(!output.exists(), "第 {after} 次之后取消：不留半成品");
+        }
+        // 还没开始写就取消：不碰调用方原有的文件
+        std::fs::write(&output, b"old").unwrap();
+        assert!(optimize_epub_file_streaming_with_cancel(&input, &output, &opts, |_, _| {}, &|| true).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"old");
+        // 不取消：和没有取消参数的入口逐字节相同
+        optimize_epub_file_streaming_with_cancel(&input, &output, &opts, |_, _| {}, &|| false).unwrap();
+        assert_eq!(std::fs::read(&output).unwrap(), optimize_epub_with(&epub, &opts).unwrap().0);
+    }
+
+    /// `limits`：缺省值和以前的常量一样（产物不变）；调小解码上限后超过的图原样保留（不删图），并行额度给 0 也不卡死。
+    #[test]
+    fn limits_default_matches_constants_and_smaller_limit_keeps_images() {
+        assert_eq!(Limits::default(), Limits { max_decode_pixels: 64_000_000, pool_pixel_budget: 36_000_000 });
+        let (epub, imgs) = bg_book();
+        let base = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        assert_eq!(base.limits, Limits::default());
+        let small = OptimizeOpts { limits: Limits { max_decode_pixels: 1_000_000, pool_pixel_budget: 0 }, ..base.clone() };
+        let (out, _) = optimize_epub_with(&epub, &small).unwrap();
+        for (n, b) in &imgs {
+            assert_eq!(&entry_bytes(&out, n), b, "超过解码上限的图原样保留：{n}");
+        }
+        let (full, _) = optimize_epub_with(&epub, &base).unwrap();
+        assert_ne!(entry_bytes(&full, "OEBPS/i/d.png"), imgs[2].1, "缺省上限下照常缩");
+    }
+
+    #[test]
+    fn optimized_version_file_reads_marker() {
+        let t = tempfile::tempdir().unwrap();
+        assert_eq!(optimized_version_file(&t.path().join("none.epub")), None, "没有文件");
+        let p = t.path().join("x.epub");
+        std::fs::write(&p, b"not a zip").unwrap();
+        assert_eq!(optimized_version_file(&p), None, "不是 zip");
     }

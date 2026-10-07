@@ -12,7 +12,8 @@ pub const MIN_IMAGES: usize = 20;
 /// 判定漫画的"平均每张图配的文字数"上限。
 pub const TEXT_PER_IMAGE: f64 = 40.0;
 
-pub(crate) fn strip_noise_tags(html: &str) -> String {
+/// 去掉 `<script>`、`<style>`、`<head>` 整块（数正文文字、判断是不是漫画前用，这几块里的字不算正文）。
+pub fn strip_noise_tags(html: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     // regex crate 不支持反向引用，三种标签各写一条 alternation。
     RE.get_or_init(|| Regex::new(r#"(?is)<script\b.*?</script>|<style\b.*?</style>|<head\b.*?</head>"#).unwrap()).replace_all(html, "").into_owned()

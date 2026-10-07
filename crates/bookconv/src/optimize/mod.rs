@@ -140,6 +140,26 @@ impl From<profile::Notes> for FootnoteMode {
     }
 }
 
+/// 取消优化（[`optimize_epub_file_streaming_with_cancel`]）时返回的错误串以它开头。
+pub const CANCELLED_MSG: &str = "已取消";
+
+/// 图片处理的资源上限。缺省值就是电脑上一直用的常量；内存小的设备可以调小（比如解码 900 万、并行额度 600 万像素）。
+/// 只影响哪些图处理、哪些原样保留和并行度，不影响别的；缺省值下产物逐字节不变。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// 单张图允许解码的像素数（宽×高，按文件头）。超过的图不解码、原样保留（不删图）。漫画页直接用它（缺省 6400 万，
+    /// `imgopt::MAX_COMIC_DECODE_PIXELS`）；文字书插图、背景图、透明图合成白底另外不超过 900 万（`imgopt::MAX_DECODE_PIXELS`）。
+    pub max_decode_pixels: u64,
+    /// 同时在处理的图片总像素（缺省 3600 万，[`crate::imgpool::PIXEL_BUDGET`]）；比它大的图开工时独占全部额度。
+    pub pool_pixel_budget: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits { max_decode_pixels: crate::imgopt::MAX_COMIC_DECODE_PIXELS, pool_pixel_budget: crate::imgpool::PIXEL_BUDGET }
+    }
+}
+
 /// 优化选项：`wash=Some` 时先过清洗层。没有缺省设备，所以不实现 `Default`，用 [`OptimizeOpts::new`] 起步。
 #[derive(Clone, Debug, PartialEq)]
 pub struct OptimizeOpts {
@@ -176,12 +196,17 @@ pub struct OptimizeOpts {
     /// 正文 `<img>`/SVG `<image>` 用到的带透明像素的图合成到白底（profile `image_alpha = false`，Kindle），见 [`crate::imgalpha`]。
     /// 只管文字书（漫画页本来就合成白底）。
     pub flatten_alpha: bool,
+    /// 图片处理的资源上限（缺省 [`Limits::default`]）。
+    pub limits: Limits,
+    /// 改书名：`Some` 时 OPF 的 `dc:title` 换成它（`opfmeta::apply_fields`，原来的书名连同挂在上面的 `refines` 一起换掉）；
+    /// 空白串当没给。缺省 `None`：书名不动。
+    pub title: Option<String>,
 }
 
 impl OptimizeOpts {
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, limits: Limits::default(), title: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -476,10 +501,12 @@ struct EntryXform<'a> {
     content_props: Option<HashMap<String, u8>>,
     /// 带图注的竖长图写宽度（[`crate::capfit`]）要用的全书信息（图片宽高、样式表里的图片宽度）；`None`＝不做。
     caption_ctx: Option<crate::capfit::Ctx>,
+    /// 新书名（`OptimizeOpts::title`，去掉了空白串）。
+    title: Option<&'a str>,
 }
 
 impl<'a> EntryXform<'a> {
-    fn new(prep: &'a Prepared, opts: &OptimizeOpts) -> EntryXform<'a> {
+    fn new(prep: &'a Prepared, opts: &'a OptimizeOpts) -> EntryXform<'a> {
         EntryXform {
             aside_index: &prep.aside_index,
             skip_notes: &prep.skip_notes,
@@ -503,6 +530,7 @@ impl<'a> EntryXform<'a> {
             fetched_imgs: Vec::new(),
             content_props: opts.wash.as_ref().map(|_| HashMap::new()),
             caption_ctx: None,
+            title: opts.title.as_deref().map(str::trim).filter(|t| !t.is_empty()),
         }
     }
 
@@ -563,7 +591,7 @@ impl<'a> EntryXform<'a> {
             }
             return Some(Cow::Owned(out));
         }
-        if self.opf_name == Some(name) && (self.page_direction.is_some() || self.comic) {
+        if self.opf_name == Some(name) && (self.page_direction.is_some() || self.comic || self.title.is_some()) {
             let Ok(text) = std::str::from_utf8(data) else { return Some(Cow::Borrowed(data)) };
             let mut text = Cow::Borrowed(text);
             if let Some(dir) = self.page_direction {
@@ -576,6 +604,12 @@ impl<'a> EntryXform<'a> {
             }
             if let Some((w, h)) = self.fixed_layout {
                 text = Cow::Owned(crate::comicfxl::opf(&text, w, h));
+            }
+            if let Some(title) = self.title {
+                // 没有 `</metadata>` 的坏 OPF 改不了，书名照旧
+                if let Ok(t) = crate::opfmeta::apply_fields(&text, &[(crate::opfmeta::DcField::Title, vec![title.to_string()])]) {
+                    text = Cow::Owned(t);
+                }
             }
             return Some(match text {
                 Cow::Borrowed(_) => Cow::Borrowed(data),

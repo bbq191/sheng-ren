@@ -54,9 +54,9 @@ const PREALLOC_CAP: u64 = 32 * 1024 * 1024;
 /// EPUB 和 CBZ 的各读取入口共用（此前只有 CBZ 收页设了上限，读 EPUB 条目没有）。
 pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 
-/// 读完一个 zip 条目的全部字节（`declared` = 目录里声明的解压大小，只用来预分配，封顶 [`PREALLOC_CAP`]）；
+/// 读完一个 zip 条目的全部字节（`declared` = 目录里声明的解压大小，只用来预分配，封顶 `PREALLOC_CAP`）；
 /// 解出来超过 [`MAX_ENTRY_BYTES`] 报错。本模块各读取入口和 CBZ 收页共用。
-pub(crate) fn read_all(r: impl Read, declared: u64, name: &str) -> Result<Vec<u8>, String> {
+pub fn read_all(r: impl Read, declared: u64, name: &str) -> Result<Vec<u8>, String> {
     read_all_capped(r, declared, name, MAX_ENTRY_BYTES)
 }
 
@@ -191,7 +191,8 @@ pub fn read_entries(epub: &[u8]) -> Result<Vec<Entry>, String> {
 
 // ───────────────────────── 按路径读 OPF 与封面 ─────────────────────────
 
-type FileZip = ZipArchive<std::io::BufReader<std::fs::File>>;
+/// 从文件读的 zip（带缓冲），[`open_opf`] 返回它。
+pub type FileZip = ZipArchive<std::io::BufReader<std::fs::File>>;
 
 /// 条目按文本读（非 UTF-8 字节按 lossy 替换）；不存在或读失败都是 `None`。
 fn read_text_opt(zip: &mut FileZip, name: &str) -> Option<String> {
@@ -199,7 +200,7 @@ fn read_text_opt(zip: &mut FileZip, name: &str) -> Option<String> {
 }
 
 /// 打开 EPUB 并读出 OPF：`(zip, OPF 在 zip 里的路径, OPF 文本)`。只读 container.xml 和 OPF 两个条目，不解压整本。
-pub(crate) fn open_opf(epub: &std::path::Path) -> Result<(FileZip, String, String), String> {
+pub fn open_opf(epub: &std::path::Path) -> Result<(FileZip, String, String), String> {
     let file = std::fs::File::open(epub).map_err(|e| format!("打开 {} 失败: {e}", epub.display()))?;
     let mut zip = ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB 失败: {e}"))?;
     let container = read_text_opt(&mut zip, "META-INF/container.xml").ok_or("缺 META-INF/container.xml")?;

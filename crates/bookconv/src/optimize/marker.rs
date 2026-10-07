@@ -5,3 +5,13 @@ use super::*;
 pub fn marker_value(full: bool) -> String {
     if full { OPTIMIZE_VERSION.to_string() } else { format!("{OPTIMIZE_VERSION}-core") }
 }
+
+/// 书里优化标记（[`OPTIMIZE_MARKER`]）的内容（去掉首尾空白），即优化它的优化器版本（见 [`marker_value`]）。
+/// 文件打不开、不是 zip、没有标记、标记不是 UTF-8 → `None`（没优化过，或不是本优化器的产物）。标记超过 64 字节也算读不出来。
+pub fn optimized_version_file(path: &std::path::Path) -> Option<String> {
+    let f = std::fs::File::open(path).ok()?;
+    let mut ar = ZipArchive::new(std::io::BufReader::new(f)).ok()?;
+    let entry = ar.by_name(OPTIMIZE_MARKER).ok()?;
+    let bytes = crate::util::read_capped(entry, 64, 0).ok()??;
+    Some(String::from_utf8(bytes).ok()?.trim().to_string())
+}

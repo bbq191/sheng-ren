@@ -30,17 +30,19 @@ pub(crate) fn test_screen() -> Screen {
 /// 真实漫画/书籍扫描页）单张峰值约 100–110MB。超限的图直接放弃处理、原样保留原图字节——调用方对返回 `None`
 /// 本来就是"原样保留"语义。并行时的总量另由 [`crate::imgpool::PIXEL_BUDGET`] 约束。
 /// 只管文字书插图（[`downscale_for_epub`] 等）；漫画页的上限是 [`MAX_COMIC_DECODE_PIXELS`]。
-pub(crate) const MAX_DECODE_PIXELS: u64 = 9_000_000;
+pub const MAX_DECODE_PIXELS: u64 = 9_000_000;
 
-fn within_decode_budget(w: u32, h: u32) -> bool {
-    (w as u64) * (h as u64) <= MAX_DECODE_PIXELS
+/// 文字书插图能不能解码：不超过 [`MAX_DECODE_PIXELS`]，也不超过调用方给的解码上限 `max_px`
+/// （`OptimizeOpts::limits.max_decode_pixels`，缺省 [`MAX_COMIC_DECODE_PIXELS`]，比 900 万大，等于不起作用）。
+fn within_decode_budget(w: u32, h: u32, max_px: u64) -> bool {
+    (w as u64) * (h as u64) <= MAX_DECODE_PIXELS.min(max_px)
 }
 
 /// 漫画页单张允许解码的像素数上限：只防解压炸弹（几 KB 的文件声明几亿像素），真实的高分辨率扫描页照常处理。
 /// 6400 万像素约是 A4 600dpi 双页跨页（约 7000×9900 的一半再大一些）；按实测约 9–16MB/百万像素，最坏单张峰值约 1GB。
 /// 超过 [`crate::imgpool::PIXEL_BUDGET`] 的大页开工时独占全部额度，不与别的图同时处理，所以总内存仍有上界。
 /// 2026-09-29 之前漫画页也用 [`MAX_DECODE_PIXELS`]，超过 900 万像素的页原样保留（没缩放、没补白、没转灰度）。
-pub(crate) const MAX_COMIC_DECODE_PIXELS: u64 = 64_000_000;
+pub const MAX_COMIC_DECODE_PIXELS: u64 = 64_000_000;
 
 /// 重编码 JPEG 质量（0–100）。85 = 视觉无损级，体积/画质平衡；e-ink 上更看不出差异。
 const JPEG_QUALITY: u8 = 85;
@@ -53,14 +55,14 @@ const MAX_UPSCALE: f64 = 3.0;
 /// 保比缩进 `max_w × max_h` 框（宽高比保持、保原格式，JPEG 质量 [`JPEG_QUALITY`]），只在超框时动；返回新字节或 `None`
 /// （已达标 / 非 JPEG·PNG / 解码失败 / 重编码没变小 → 调用方原样保留）。
 /// 带 EXIF 方向的图按**摆正后**的宽高判断超不超框；要重编码时先摆正（重编码不带 EXIF，不摆正就转歪了，见 [`decode_oriented`]）。
-fn downscale_into(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Vec<u8>> {
+fn downscale_into(bytes: &[u8], max_w: u32, max_h: u32, max_px: u64) -> Option<Vec<u8>> {
     let (fmt, (w, h)) = header_dims(bytes)?;
     let orientation = orientation_of(bytes, fmt);
     let (w, h) = if swaps_axes(orientation) { (h, w) } else { (w, h) };
     if w <= max_w && h <= max_h {
         return None; // 已达标：不解码不重编码（避免无谓的二次有损压缩；2473 页漫画只读头是秒级、全解是分钟级）
     }
-    if !within_decode_budget(w, h) {
+    if !within_decode_budget(w, h, max_px) {
         return None; // 极端高分辨率原图：不整个解出来，原样保留（见 MAX_DECODE_PIXELS 文档）
     }
     let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
@@ -102,7 +104,7 @@ pub fn downscale_for_device(bytes: &[u8], screen: Screen) -> Option<Vec<u8>> {
     let (w, h) = if swaps_axes(orientation_of(bytes, fmt)) { (h, w) } else { (w, h) };
     let (long, short) = (screen.long_edge(), screen.short_edge());
     let (max_w, max_h) = if w >= h { (long, short) } else { (short, long) };
-    downscale_into(bytes, max_w, max_h)
+    downscale_into(bytes, max_w, max_h, MAX_COMIC_DECODE_PIXELS)
 }
 
 /// 图片里 EXIF 的方向标签（JPEG、PNG 的 eXIf、WebP 的 EXIF 块）；没有或读不出 → 不用转。只读文件头，不解码像素。
@@ -144,8 +146,8 @@ pub fn pixel_count(bytes: &[u8]) -> u64 {
     comic_header_dims(bytes).map(|(_, (w, h))| (w as u64) * (h as u64)).unwrap_or(1_000_000)
 }
 
-/// 只读文件头取 (格式, 宽, 高)，不解码像素。非 JPEG/PNG → None。
-pub(crate) fn header_dims(bytes: &[u8]) -> Option<(ImageFormat, (u32, u32))> {
+/// 只读文件头取 (格式, 宽, 高)，不解码像素（不按 EXIF 方向换宽高）。非 JPEG/PNG → None。
+pub fn header_dims(bytes: &[u8]) -> Option<(ImageFormat, (u32, u32))> {
     header_dims_if(bytes, |f| matches!(f, ImageFormat::Jpeg | ImageFormat::Png))
 }
 
@@ -167,7 +169,13 @@ fn header_dims_if(bytes: &[u8], ok: impl Fn(ImageFormat) -> bool) -> Option<(Ima
 /// 尺寸渲染、不认 CSS），横图容许长边宽会让行内横幅溢出竖屏——2026-09-04 Move 真机《飘》1696×630 的
 /// `class="logo"` 内联横幅溢出坐实。竖向框下：块级图仍适配列宽（显示无变化）、行内图不再超宽。
 pub fn downscale_for_epub(bytes: &[u8], screen: Screen) -> Option<Vec<u8>> {
-    downscale_into(bytes, screen.width, screen.height)
+    downscale_for_epub_limited(bytes, screen, MAX_COMIC_DECODE_PIXELS)
+}
+
+/// 同 [`downscale_for_epub`]，另给解码上限 `max_px`（像素，`OptimizeOpts::limits.max_decode_pixels`）：超过它或
+/// [`MAX_DECODE_PIXELS`] 的图不解码、原样保留。
+pub fn downscale_for_epub_limited(bytes: &[u8], screen: Screen, max_px: u64) -> Option<Vec<u8>> {
+    downscale_into(bytes, screen.width, screen.height, max_px)
 }
 
 /// 图片按 EXIF 方向摆正后的宽高（JPEG/PNG/GIF/WebP，只读文件头）。给按宽高比排版的地方用（[`crate::capfit`]）。
@@ -177,10 +185,11 @@ pub fn display_dims(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// 带透明像素的 PNG 合成到白底，仍写成 PNG（灰度+透明 → 灰度，其余 → RGB；按 EXIF 摆正）。不是 PNG、没有透明通道、
-/// alpha 全是不透明、超过解码上限、解不开 → `None`（原样保留）。给不认透明的阅读器用（[`crate::imgalpha`]）。
-pub fn flatten_transparent_png(bytes: &[u8]) -> Option<Vec<u8>> {
+/// alpha 全是不透明、超过解码上限（[`MAX_DECODE_PIXELS`] 和 `max_px` 中小的那个）、解不开 → `None`（原样保留）。
+/// 给不认透明的阅读器用（[`crate::imgalpha`]）。
+pub fn flatten_transparent_png(bytes: &[u8], max_px: u64) -> Option<Vec<u8>> {
     let (fmt, (w, h)) = header_dims(bytes)?;
-    if fmt != ImageFormat::Png || !within_decode_budget(w, h) {
+    if fmt != ImageFormat::Png || !within_decode_budget(w, h, max_px) {
         return None;
     }
     let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
@@ -204,13 +213,14 @@ pub fn flatten_transparent_png(bytes: &[u8]) -> Option<Vec<u8>> {
 
 /// **整页背景图**按原书的尺寸意图缩进阅读范围（见 [`crate::bgfit`]）：只缩不放、保原格式、带透明的保持透明（不铺白底：
 /// 阅读器在透明处画背景色）。和 [`downscale_into`] 不同，缩了就用，不管重编码后是不是变小（调色板 PNG 解成 RGBA 再写回常常
-/// 更大）——这类图显示对比体积重要。不用缩、不是 JPEG/PNG、超过解码上限、解码失败 → `None`（原样保留）。
-pub fn downscale_background(bytes: &[u8], fit: crate::bgfit::BgFit, area: Screen) -> Option<Vec<u8>> {
+/// 更大）——这类图显示对比体积重要。不用缩、不是 JPEG/PNG、超过解码上限（[`MAX_DECODE_PIXELS`] 和 `max_px` 中小的那个）、
+/// 解码失败 → `None`（原样保留）。
+pub fn downscale_background(bytes: &[u8], fit: crate::bgfit::BgFit, area: Screen, max_px: u64) -> Option<Vec<u8>> {
     let (fmt, (w, h)) = header_dims(bytes)?;
     let orientation = orientation_of(bytes, fmt);
     let (w, h) = if swaps_axes(orientation) { (h, w) } else { (w, h) };
     let (nw, nh) = fit.target(w, h, area)?;
-    if !within_decode_budget(w, h) {
+    if !within_decode_budget(w, h, max_px) {
         return None;
     }
     let mut img = image::load_from_memory_with_format(bytes, fmt).ok()?;
@@ -407,10 +417,10 @@ fn webp_is_lossless(bytes: &[u8]) -> Option<bool> {
 /// （[`flatten_alpha_on_white`]）——直接丢掉 alpha 会把透明区域变成它底下存的颜色，通常是纯黑。
 /// `grayscale`（黑白屏设备）时彩色图顺手转成单通道 8 位灰度（256 级，不抖动）。带 EXIF 方向的先摆正（[`decode_oriented`]）。
 /// 只合成了白底、别的都不用做时不算改动：原图照旧原样保留，透明区域交给阅读器按页面底色显示。
-/// 超过 [`MAX_COMIC_DECODE_PIXELS`]、动图、解不开 → `None`（原样保留）。
-fn decode_comic(bytes: &[u8], grayscale: bool) -> Option<ComicSrc> {
+/// 超过解码上限 `max_px`（缺省 [`MAX_COMIC_DECODE_PIXELS`]）、动图、解不开 → `None`（原样保留）。
+fn decode_comic(bytes: &[u8], grayscale: bool, max_px: u64) -> Option<ComicSrc> {
     let (fmt, (w, h)) = comic_header_dims(bytes)?;
-    if (w as u64) * (h as u64) > MAX_COMIC_DECODE_PIXELS {
+    if (w as u64) * (h as u64) > max_px {
         return None; // 解压炸弹或离谱的大图：不整个解出来，原样保留
     }
     let out_fmt = comic_output_format(fmt, bytes)?;
@@ -546,7 +556,13 @@ fn comic_layout(w: u32, h: u32, area: Screen, margin: u32, may_upscale: bool) ->
 ///   带 EXIF 方向（非"不用转"）的页一律摆正后重编码。
 /// - 超过 [`MAX_COMIC_DECODE_PIXELS`] 的图、解不开的图返回 `None`。
 pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, grayscale: bool) -> Option<Vec<u8>> {
-    let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale)?;
+    prepare_comic_page_limited(bytes, area, margin, grayscale, MAX_COMIC_DECODE_PIXELS)
+}
+
+/// 同 [`prepare_comic_page_for_epub`]，另给解码上限 `max_px`（像素，`OptimizeOpts::limits.max_decode_pixels`）：
+/// 超过的页不解码、原样保留。
+pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, max_px: u64) -> Option<Vec<u8>> {
+    let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale, max_px)?;
     let orig = img.dimensions();
     let (img, tl, tt) = trim_comic(img);
     let (cw, ch) = img.dimensions();
@@ -748,7 +764,7 @@ mod tests {
 
     /// 解码 + 裁边（生产的前两步）：返回 (裁后的图, 产物格式, 是否已经和原图不同——裁了边、转了灰度或换了格式)。
     fn decode_trim_comic(bytes: &[u8], grayscale: bool) -> Option<(DynamicImage, ImageFormat, bool)> {
-        let src = decode_comic(bytes, grayscale)?;
+        let src = decode_comic(bytes, grayscale, MAX_COMIC_DECODE_PIXELS)?;
         let orig = src.img.dimensions();
         let (img, _, _) = trim_comic(src.img);
         let changed = img.dimensions() != orig || src.to_gray;
@@ -1087,8 +1103,9 @@ mod tests {
 
     #[test]
     fn within_decode_budget_boundary() {
-        assert!(within_decode_budget(3000, 3000), "900 万像素，等于上限，应允许");
-        assert!(!within_decode_budget(3001, 3000), "超一点点也该拒绝");
+        assert!(within_decode_budget(3000, 3000, MAX_COMIC_DECODE_PIXELS), "900 万像素，等于上限，应允许");
+        assert!(!within_decode_budget(3001, 3000, MAX_COMIC_DECODE_PIXELS), "超一点点也该拒绝");
+        assert!(!within_decode_budget(2000, 2000, 3_000_000), "调用方给的上限更小时按它");
     }
 
     /// 超限图（见 `MAX_DECODE_PIXELS` 文档：阈值按实测峰值内存定）：各解码入口都该直接放弃处理、原样保留，
@@ -1105,6 +1122,16 @@ mod tests {
         assert_eq!(page.color(), image::ColorType::L8);
     }
 
+    /// 调用方调小解码上限（设备上内存小）：超过的漫画页、插图不解码，原样保留；没超过的照常处理。
+    #[test]
+    fn caller_decode_limit_keeps_larger_images() {
+        let page = gray_jpeg_of(2000, 3000, 0); // 600 万像素
+        assert!(prepare_comic_page_limited(&page, test_area(), 1, false, 5_000_000).is_none(), "超过调用方上限的漫画页原样保留");
+        assert_eq!(prepare_comic_page_limited(&page, test_area(), 1, false, 6_000_000), prep(&page, test_area(), false), "没超过的和缺省一样");
+        assert!(downscale_for_epub_limited(&page, test_screen(), 5_000_000).is_none(), "插图同理");
+        assert_eq!(downscale_for_epub_limited(&page, test_screen(), 9_000_000), downscale_for_epub(&page, test_screen()));
+    }
+
     /// 文件头声明超过 [`MAX_COMIC_DECODE_PIXELS`] 的图（解压炸弹）：不解码，原样保留。
     #[test]
     fn comic_decode_refuses_decompression_bomb_by_header() {
@@ -1113,7 +1140,7 @@ mod tests {
         let sof = bomb.windows(2).position(|w| w == [0xFF, 0xC0]).expect("基线 JPEG 有 SOF0");
         bomb[sof + 5..sof + 9].copy_from_slice(&[0x23, 0x28, 0x23, 0x28]);
         assert_eq!(comic_header_dims(&bomb).map(|d| d.1), Some((9000, 9000)));
-        assert!(decode_comic(&bomb, false).is_none());
+        assert!(decode_comic(&bomb, false, MAX_COMIC_DECODE_PIXELS).is_none());
         assert!(prep(&bomb, test_area(), true).is_none());
     }
 
