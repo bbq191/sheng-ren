@@ -9,8 +9,8 @@
 #       页边距（.content 的 margins）还不是这个值，而且以前没登记过。
 # 每本只登记一次（记在 Move 上的 /home/root/.local/state/eink/comic-margins.done）：之后你在界面上改回去，不会再被设回来。
 # 为什么不直接改 .content：运行中的 xochitl 会用内存里的状态把它盖回去（上游真机 5 次只成功 1 次），只能让 xochitl 自己设。
-# 依赖 Move 上已经装好的书架服务（book-serve 的队列 comic-margins.json）和注入 xochitl 的页边距代理（shelf-comic-margins.qmd），
-# 以及网页「管理→实验室→漫画页边距」开关（reading-qol.json 的 comicMinMargin）打开。
+# 依赖 Move 上已经装好的书架服务（book-serve 的队列 comic-margins.json）和注入 xochitl 的页边距代理（shelf-comic-margins.qmd）。
+# 书架服务 2026-10-07 起没有「漫画页边距」开关了，登记的书一律生效；更早的版本要在网页「管理→实验室」打开这个开关。
 set -euo pipefail
 host=root@10.11.99.1 write=0
 for a in "$@"; do
@@ -29,17 +29,12 @@ ssh_() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "$@"; }
 
 ssh_ true || { echo "✗ 连不上 $host（USB 连着是 root@10.11.99.1，Wi-Fi 是 root@<Move 的 IP>）" >&2; exit 1; }
 
-# 前提：代理装了、队列目录在、开关开着
+# 前提：代理装了、队列目录在
 ssh_ "ls /home/root/xovi/exthome/qt-resource-rebuilder/shelf-comic-margins.qmd >/dev/null 2>&1" \
   || { echo "✗ Move 上没有页边距代理（shelf-comic-margins.qmd），登记了也没人执行" >&2; exit 1; }
 ssh_ "test -d ${queue%/*}" || { echo "✗ Move 上没有书架服务的队列目录 ${queue%/*}" >&2; exit 1; }
 # 认书靠 unzip 读书里的标记：没有 unzip 时每本都会被当成"没标记"，误报"没有要登记的漫画"
 ssh_ "command -v unzip >/dev/null" || { echo "✗ Move 上没有 unzip 命令，读不了书里的标记" >&2; exit 1; }
-# 开关文件在书架服务自己的数据目录里（~/.local/share/<目录>/reading-qol.json），按文件名找
-if ! ssh_ "grep -qs '\"comicMinMargin\": *true' /home/root/.local/share/*/reading-qol.json"; then
-  echo "✗ 「漫画页边距」开关没开（reading-qol.json 的 comicMinMargin）：代理会忽略登记。先在 Move 的网页「管理→实验室」打开" >&2
-  exit 1
-fi
 
 # 列出候选：uuid|要设的页边距|现在的页边距|书名（只看 EPUB；busybox 环境，逐本读标记）
 list=$(ssh_ "cd $lib || exit 1; for c in *.content; do

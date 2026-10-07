@@ -50,8 +50,8 @@
   <rect class="mv" x="300" y="188" width="280" height="92" rx="8"/>
   <text x="440" y="210" text-anchor="middle" class="h">⑥ 页边距代理（注入 xochitl）</text>
   <text x="440" y="230" text-anchor="middle" class="s">开书约 2 秒后查队列，调 xochitl 自己的</text>
-  <text x="440" y="248" text-anchor="middle" class="s">setMargins(1)；开关：网页「管理→实验室</text>
-  <text x="440" y="266" text-anchor="middle" class="s">→漫画页边距」（comicMinMargin）</text>
+  <text x="440" y="248" text-anchor="middle" class="s">setMargins(1)，然后销账</text>
+  <text x="440" y="266" text-anchor="middle" class="s">（每本只设一次）</text>
   <path class="l" d="M300 234 L262 234" marker-end="url(#a)"/>
 
   <rect class="mv" x="20" y="188" width="240" height="92" rx="8"/>
@@ -62,7 +62,7 @@
   <g class="s">
     <text x="20" y="318">· 为什么这么绕：xochitl 界面上的页边距只有 28 / 56 / 112 三档；直接改书的 .content 会被运行中的 xochitl 用内存里的状态盖回去，只能让它自己设。</text>
     <text x="20" y="340">· 登记之后你在界面上把页边距改回去，不会再被设回来（每本只设一次）。</text>
-    <text x="20" y="362">· 脚本先检查：连得上、代理装了、队列目录在、开关开着、有 unzip；写队列前核对它没被书架服务同时改过（改过就不写，让你重跑）。</text>
+    <text x="20" y="362">· 脚本先检查：连得上、代理装了、队列目录在、有 unzip；写队列前核对它没被书架服务同时改过（改过就不写，让你重跑）。</text>
     <text x="20" y="384">· 暂不自动化（2026-09-29 用户定）：每次拷完书手工跑一次 --write。</text>
     <text x="20" y="406">· 文字书不用登记：它们按默认页边距 56 排（842 × 1455）。</text>
   </g>
