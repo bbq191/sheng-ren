@@ -62,40 +62,46 @@ fn note(uses: &mut Uses, path: String, fit: Option<BgFit>) {
 /// 扫全书（样式表、`<style>`、各种引用），返回能按意图缩放的整页背景图（zip 路径 → 意图）。
 /// 要在清洗之前调用（清洗会去掉 `background-size`）；清洗改了名的图由调用方换成新名。
 pub fn plan(entries: &[crate::epubzip::Entry]) -> HashMap<String, BgFit> {
-    let mut uses: Uses = HashMap::new();
-    for e in entries {
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+    // 各条目独立扫出 (图, 意图) 的记录（多线程，`util::par_map`），再按条目顺序记进去（结果其实与顺序无关：同一张图的记录全一样才留意图）
+    let per_entry = crate::util::par_map(entries, |e| {
+        let mut notes: Vec<(String, Option<BgFit>)> = Vec::new();
+        let Ok(text) = std::str::from_utf8(&e.data) else { return notes };
         if e.name.to_ascii_lowercase().ends_with(".css") {
-            scan_css(text, &e.name, &mut uses);
+            scan_css(text, &e.name, &mut notes);
         } else if crate::epubzip::is_html_entry(&e.name, &e.data) {
             for c in crate::html::style_block_re().captures_iter(text) {
-                scan_css(&c[2], &e.name, &mut uses);
+                scan_css(&c[2], &e.name, &mut notes);
             }
             // `<img src>`、SVG `<image xlink:href>`、链接：都算别的用法
             for v in crate::html::link_values(text) {
                 if !crate::html::is_external(v) {
-                    note(&mut uses, crate::epubzip::resolve_link(&e.name, v).0, None);
+                    notes.push((crate::epubzip::resolve_link(&e.name, v).0, None));
                 }
             }
             // 内联样式里的 `url()`：不处理
             for t in crate::html::tags(text).filter(|t| t.is_start()) {
                 if let Some(s) = crate::html::attr_value(&text[t.start..t.end], "style") {
                     for u in urls(s) {
-                        note(&mut uses, crate::epubzip::resolve_link(&e.name, &u).0, None);
+                        notes.push((crate::epubzip::resolve_link(&e.name, &u).0, None));
                     }
                 }
             }
         } else if e.name.to_ascii_lowercase().ends_with(".opf") {
             if let Some(c) = crate::wash::opf::declared_cover(text) {
-                note(&mut uses, crate::epubzip::resolve_link(&e.name, c.href).0, None);
+                notes.push((crate::epubzip::resolve_link(&e.name, c.href).0, None));
             }
         }
+        notes
+    });
+    let mut uses: Uses = HashMap::new();
+    for (path, fit) in per_entry.into_iter().flatten() {
+        note(&mut uses, path, fit);
     }
     uses.into_iter().filter_map(|(p, f)| f.map(|f| (p, f))).collect()
 }
 
 /// 样式表里每条规则的 `url()`：整页背景的记下意图，别的（`@font-face` 里的字体也在内，反正不是图）记成拿不准。
-fn scan_css(css: &str, base: &str, uses: &mut Uses) {
+fn scan_css(css: &str, base: &str, notes: &mut Vec<(String, Option<BgFit>)>) {
     for c in crate::wash::css_rule_re().captures_iter(css) {
         let sel = crate::wash::strip_css_comments(&c[1]);
         let decls = crate::html::css_decls(&c[2]);
@@ -107,7 +113,7 @@ fn scan_css(css: &str, base: &str, uses: &mut Uses) {
                 if crate::html::is_external(&u) {
                     continue;
                 }
-                note(uses, crate::epubzip::resolve_link(base, &u).0, if is_bg { fit } else { None });
+                notes.push((crate::epubzip::resolve_link(base, &u).0, if is_bg { fit } else { None }));
             }
         }
     }

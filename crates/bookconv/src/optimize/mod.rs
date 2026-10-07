@@ -306,7 +306,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     };
     // 清洗层定下的保留字体（嵌了文件、又不是正文字体的）：第一遍剥行内字体锁时也留着。
     let keep_fonts: HashSet<String> = wash_rep.as_ref().map(|r| r.kept_fonts.iter().cloned().collect()).unwrap_or_default();
-    let has_remote_imgs = raw.iter().any(|e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img));
+    let has_remote_imgs = crate::util::par_map(&raw, |e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img)).contains(&true);
     // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
     let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len() + 1);
     ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: crate::epubzip::MIMETYPE.to_vec() });
@@ -340,41 +340,68 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     let mut referenced: HashMap<String, HashSet<String>> = HashMap::new(); // 注释所在文件 → 被 marker 引用的 id
     // 注释所在文件 → (注释 id → 引用它的标号 id)：没有注释语义的块靠"开头的回链指回标号"认（`marker_backrefs`）
     let mut backrefs: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
-    for crate::epubzip::Entry { name, data } in ordered {
-        rep.total_files += 1;
-        let ish = is_html_entry(&name, &data);
+    /// 一页里的注释引用：标号回链（`marker_backrefs`）、引用的注释（`referenced_note_keys`）、是不是目录样的页。
+    struct NoteScan {
+        backrefs: Vec<(crate::htmlproc::NoteKey, String)>,
+        refs: Vec<crate::htmlproc::NoteKey>,
+        toc_like: bool,
+    }
+    /// 一个条目第一遍扫出来的东西。
+    struct Scan {
+        ish: bool,
+        /// 是能按 UTF-8 读的 html（剥过字体锁）。
+        text: bool,
+        /// 不收注释的页（导航文档、目录文件）为 `None`。
+        notes: Option<NoteScan>,
+    }
+    // 各文件独立，多线程做（`util::par_map_mut`）：剥字体锁写回条目，顺带扫出注释引用；下面按原顺序合并，结果和逐个做相同。
+    let scans = crate::util::par_map_mut(&mut ordered, |e| {
+        let ish = is_html_entry(&e.name, &e.data);
+        if !ish {
+            return Scan { ish, text: false, notes: None };
+        }
         // 非 UTF-8 的 html 原样保留（`from_utf8` 失败时把字节还回来，不克隆）。
-        let data = if ish {
-            match String::from_utf8(data) {
-                Ok(text) => {
-                    let stripped = first_pass_html(&text, &name, &keep_fonts);
-                    if !skip_notes.contains(&name) {
-                        for ((file, id), marker) in crate::htmlproc::marker_backrefs(&stripped, &name) {
-                            backrefs.entry(file).or_default().entry(id).or_default().insert(marker);
-                        }
-                        let refs = crate::htmlproc::referenced_note_keys(&stripped, &name);
-                        if !refs.is_empty() && crate::wash::is_toc_like_page(&stripped) {
-                            skip_notes.insert(name.clone());
-                        } else {
-                            for (file, id) in refs {
-                                // 同文件的注释：跳转模式留在原处；弹窗模式也搬到章末写成
-                                // `<aside epub:type="footnote">`，阅读器才弹窗（掌阅 2026-10-05 真机）。
-                                if file == name && opts.footnote != FootnoteMode::Popup {
-                                    continue;
-                                }
-                                referenced.entry(file).or_default().insert(id);
-                            }
-                        }
-                    }
-                    rep.html_files += 1;
-                    stripped.into_bytes()
-                }
-                Err(e) => e.into_bytes(),
+        let text = match String::from_utf8(std::mem::take(&mut e.data)) {
+            Ok(text) => text,
+            Err(err) => {
+                e.data = err.into_bytes();
+                return Scan { ish, text: false, notes: None };
             }
-        } else {
-            data
         };
-        entries.push((name, data, ish));
+        let stripped = first_pass_html(&text, &e.name, &keep_fonts);
+        drop(text);
+        let notes = (!skip_notes.contains(&e.name)).then(|| {
+            let refs = crate::htmlproc::referenced_note_keys(&stripped, &e.name);
+            let toc_like = !refs.is_empty() && crate::wash::is_toc_like_page(&stripped);
+            NoteScan { backrefs: crate::htmlproc::marker_backrefs(&stripped, &e.name), refs, toc_like }
+        });
+        e.data = stripped.into_bytes();
+        Scan { ish, text: true, notes }
+    });
+    for (crate::epubzip::Entry { name, data }, scan) in ordered.into_iter().zip(scans) {
+        rep.total_files += 1;
+        // 同名条目的前一个被认成目录样的页时，这一个也不收（逐个做时就是这样）
+        if let Some(NoteScan { backrefs: marker_refs, refs, toc_like }) = scan.notes.filter(|_| !skip_notes.contains(&name)) {
+            for ((file, id), marker) in marker_refs {
+                backrefs.entry(file).or_default().entry(id).or_default().insert(marker);
+            }
+            if toc_like {
+                skip_notes.insert(name.clone());
+            } else {
+                for (file, id) in refs {
+                    // 同文件的注释：跳转模式留在原处；弹窗模式也搬到章末写成
+                    // `<aside epub:type="footnote">`，阅读器才弹窗（掌阅 2026-10-05 真机）。
+                    if file == name && opts.footnote != FootnoteMode::Popup {
+                        continue;
+                    }
+                    referenced.entry(file).or_default().insert(id);
+                }
+            }
+        }
+        if scan.text {
+            rep.html_files += 1;
+        }
+        entries.push((name, data, scan.ish));
     }
     let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &backrefs, &skip_notes, opts.drop_note_backlinks);
     let alpha_imgs = if opts.flatten_alpha && !is_comic_book { crate::imgalpha::plan(&entries) } else { HashSet::new() };
@@ -407,37 +434,45 @@ fn collect_notes(
     let collect_one = |text: &str, name: &str, referenced: &HashMap<String, HashSet<String>>| {
         referenced.get(name).map(|ids| crate::htmlproc::collect_footnote_notes_with(text, ids, true, backrefs.get(name).unwrap_or(&none)))
     };
-    for (i, (name, data, ish)) in entries.iter_mut().enumerate() {
-        if !*ish || !referenced.contains_key(name.as_str()) {
-            continue;
+    // 各文件独立收集（多线程，`util::par_map_mut`），按原顺序并进索引
+    let referenced_ro: &HashMap<String, HashSet<String>> = referenced;
+    let collected = crate::util::par_map_mut(entries, |(name, data, ish)| {
+        if !*ish || !referenced_ro.contains_key(name.as_str()) {
+            return None;
         }
-        let Ok(text) = std::str::from_utf8(data) else { continue };
-        let Some((cleaned, notes)) = collect_one(text, name, referenced) else { continue };
-        if !notes.is_empty() {
+        let text = std::str::from_utf8(data).ok()?;
+        let (cleaned, notes) = collect_one(text, name, referenced_ro)?;
+        if notes.is_empty() {
+            return None;
+        }
+        Some((notes, std::mem::replace(data, cleaned.into_bytes())))
+    });
+    for (i, c) in collected.into_iter().enumerate() {
+        if let Some((notes, orig)) = c {
+            let name = &entries[i].0;
             index.extend(notes.into_iter().map(|(id, inner)| ((name.clone(), id), inner)));
-            originals.insert(i, std::mem::replace(data, cleaned.into_bytes()));
+            originals.insert(i, orig);
         }
     }
     // 各章拆过互指环、换过 duokan 标记的文字（第二遍的前两步）：只在条目内容变了（放回注释）时重算
-    let mut pre: HashMap<usize, String> = HashMap::new();
+    let mut pre: Vec<Option<String>> = vec![None; entries.len()];
+    // 要数引用的章节：html、收注释的、能按 UTF-8 读的
+    let counted: Vec<usize> = entries.iter().enumerate().filter(|(_, (name, data, ish))| *ish && !skip.contains(name) && std::str::from_utf8(data).is_ok()).map(|(i, _)| i).collect();
     while !index.is_empty() {
+        // 还没算的先多线程算好
+        let missing: Vec<usize> = counted.iter().copied().filter(|&i| pre[i].is_none()).collect();
+        let computed = crate::util::par_map(&missing, |&i| std::str::from_utf8(&entries[i].1).map(|t| crate::htmlproc::prepare_note_links(t, drop_backlinks)).unwrap_or_default());
+        for (i, t) in missing.into_iter().zip(computed) {
+            pre[i] = Some(t);
+        }
         // 每条注释有几章引用（一章里引用几次都算一章）
+        let per_chapter = crate::util::par_map(&counted, |&i| -> Vec<crate::htmlproc::NoteKey> {
+            let keys: HashSet<crate::htmlproc::NoteKey> = crate::htmlproc::referenced_note_keys(pre[i].as_deref().unwrap_or_default(), &entries[i].0).into_iter().filter(|k| index.contains_key(k)).collect();
+            keys.into_iter().collect()
+        });
         let mut claims: HashMap<crate::htmlproc::NoteKey, usize> = HashMap::new();
-        for (i, (name, data, ish)) in entries.iter().enumerate() {
-            if !*ish || skip.contains(name) {
-                continue;
-            }
-            let t = match pre.entry(i) {
-                std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
-                std::collections::hash_map::Entry::Vacant(v) => {
-                    let Ok(text) = std::str::from_utf8(data) else { continue };
-                    v.insert(crate::htmlproc::prepare_note_links(text, drop_backlinks))
-                }
-            };
-            let keys: HashSet<crate::htmlproc::NoteKey> = crate::htmlproc::referenced_note_keys(t, name).into_iter().filter(|k| index.contains_key(k)).collect();
-            for k in keys {
-                *claims.entry(k).or_default() += 1;
-            }
+        for k in per_chapter.into_iter().flatten() {
+            *claims.entry(k).or_default() += 1;
         }
         let put_back: Vec<crate::htmlproc::NoteKey> = index.keys().filter(|k| claims.get(*k) != Some(&1)).cloned().collect();
         if put_back.is_empty() {
@@ -459,14 +494,16 @@ fn collect_notes(
             let (cleaned, notes) = collect_one(text, name, referenced).unwrap_or_else(|| (text.to_string(), Vec::new()));
             index.extend(notes.into_iter().map(|(id, inner)| ((name.clone(), id), inner)));
             *data = cleaned.into_bytes();
-            pre.remove(&i);
+            pre[i] = None;
         }
     }
     let mut pre_done = HashSet::new();
-    for (i, t) in pre {
-        let (name, data, _) = &mut entries[i];
-        *data = t.into_bytes();
-        pre_done.insert(name.clone());
+    for (i, t) in pre.into_iter().enumerate() {
+        if let Some(t) = t {
+            let (name, data, _) = &mut entries[i];
+            *data = t.into_bytes();
+            pre_done.insert(name.clone());
+        }
     }
     (index, pre_done)
 }
@@ -536,7 +573,17 @@ impl<'a> EntryXform<'a> {
 
     /// 章节 html 最终变换链：解双向脚注互指环 → duokan 图片脚注标记换上标 → 封面拉伸/SVG 修复 → 脚注就地关联重排 →
     /// 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
-    fn transform_html_chapter(&mut self, text: &str, name: &str) -> Vec<u8> {
+    fn transform_html_chapter(&mut self, text: &str, name: &str, prefix: Option<String>) -> Vec<u8> {
+        let t = prefix.unwrap_or_else(|| self.html_prefix(text, name));
+        let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
+        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
+        self.fetched_imgs.extend(imgs);
+        crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes()
+    }
+
+    /// [`transform_html_chapter`](Self::transform_html_chapter) 的前几步（到写图注宽度为止）：只看本章和第一遍的全书索引，
+    /// 各章互不相干，可以同时做（`streaming` 先多线程算好一批，再按顺序做后面两步）。远程图内联、全书 id 去重要跨章累计，留在后面。
+    fn html_prefix(&self, text: &str, name: &str) -> String {
         // 前两步 `collect_notes` 可能已经做过（`pre_done`）
         let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };
         let t = fix_cover_aspect(&t);
@@ -548,23 +595,25 @@ impl<'a> EntryXform<'a> {
         };
         let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
         let t = if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
-        let t = match &self.caption_ctx {
+        match &self.caption_ctx {
             Some(d) => crate::capfit::apply(&t, name, d, self.screen).unwrap_or(t),
             None => t,
-        };
-        let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
-        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
-        self.fetched_imgs.extend(imgs);
-        crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes()
+        }
+    }
+
+    /// 一批条目里的 html 章节先多线程做完 [`html_prefix`](Self::html_prefix)（不是 html、不是 UTF-8 的给 `None`）。
+    fn html_prefixes(&self, batch: &[(String, Vec<u8>, bool)]) -> Vec<Option<String>> {
+        crate::util::par_map(batch, |(name, data, ish)| if *ish { std::str::from_utf8(data).ok().map(|t| self.html_prefix(t, name)) } else { None })
     }
 
     /// 文本类条目 → `Some(最终字节)`（无法按 UTF-8 解读的原样借回）；不是文本类（图片/其它）→ `None`，调用方自己处理。
-    fn transform_text<'d>(&mut self, name: &str, data: &'d [u8], is_html: bool) -> Option<std::borrow::Cow<'d, [u8]>> {
+    /// `prefix`：这一章预先算好的 [`html_prefix`](Self::html_prefix)（没有就当场算）。
+    fn transform_text<'d>(&mut self, name: &str, data: &'d [u8], is_html: bool, prefix: Option<String>) -> Option<std::borrow::Cow<'d, [u8]>> {
         use std::borrow::Cow;
         if is_html {
             return Some(match std::str::from_utf8(data) {
                 Ok(text) => {
-                    let out = self.transform_html_chapter(text, name);
+                    let out = self.transform_html_chapter(text, name, prefix);
                     if let (Some(props), Ok(t)) = (self.content_props.as_mut(), std::str::from_utf8(&out)) {
                         props.insert(name.to_string(), crate::wash::normalize::content_properties(t));
                     }

@@ -28,15 +28,19 @@ pub(super) fn dedup_ids_across_book(entries: &mut [Entry], rep: &mut WashReport)
     }
     let mut seen: HashSet<String> = HashSet::new();
     let mut renames: HashMap<String, HashMap<String, String>> = HashMap::new();
-    for &i in &order {
+    // 各章的 id 多线程扫出来（`util::par_map`），改名按阅读顺序逐章定（先出现的保留原名）
+    let ids = crate::util::par_map(&order, |&i| {
         let e = &entries[i];
         if !is_html_entry(&e.name, &e.data) {
-            continue;
+            return None;
         }
-        let Ok(t) = std::str::from_utf8(&e.data) else { continue };
-        let r = crate::htmlproc::plan_id_renames(t, &mut seen);
+        std::str::from_utf8(&e.data).ok().map(crate::htmlproc::chapter_ids)
+    });
+    for (&i, ids) in order.iter().zip(ids) {
+        let Some(ids) = ids else { continue };
+        let r = crate::htmlproc::plan_id_renames_of(ids, &mut seen);
         if !r.is_empty() {
-            renames.insert(e.name.clone(), r);
+            renames.insert(entries[i].name.clone(), r);
         }
     }
     if renames.is_empty() {
@@ -44,14 +48,14 @@ pub(super) fn dedup_ids_across_book(entries: &mut [Entry], rep: &mut WashReport)
     }
     rep.dup_ids_renamed = renames.values().map(HashMap::len).sum();
     // 先改 id 属性本身，再改全书指向它们的链接。
-    for e in entries.iter_mut() {
-        let Some(own) = renames.get(&e.name) else { continue };
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+    crate::util::par_map_mut(entries, |e| {
+        let Some(own) = renames.get(&e.name) else { return };
+        let Ok(text) = std::str::from_utf8(&e.data) else { return };
         let new = html::edit_attrs(text, &["id"], |_, a| own.get(a.value).map_or(Edit::Keep, |n| Edit::Set(n.clone())));
         if let Cow::Owned(new) = new {
             e.data = new.into_bytes();
         }
-    }
+    });
     rewrite_book_links(entries, |_| false, |l| {
         let frag = l.frag.filter(|f| !f.is_empty())?;
         let n = renames.get(&l.target)?.get(html::frag_id(frag).as_ref())?;

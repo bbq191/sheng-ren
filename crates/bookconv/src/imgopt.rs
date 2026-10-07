@@ -8,7 +8,6 @@
 //! 漫画页另有一套（[`prepare_comic_page_for_epub`]）：按阅读范围放大或缩小、四边留 `comic_margin` 像素白边；
 //! 静态的 GIF/WebP 页也处理（转成 PNG/JPEG）。
 
-use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::ImageFormat;
 use std::io::Cursor;
@@ -456,8 +455,61 @@ fn decode_comic(bytes: &[u8], grayscale: bool, max_px: u64, apply_exif: bool) ->
     let gray = matches!(decoded.color(), image::ColorType::L8 | image::ColorType::L16 | image::ColorType::La8 | image::ColorType::La16);
     let to_gray = grayscale && !gray;
     let decoded = if decoded.color().has_alpha() { flatten_alpha_on_white(decoded) } else { decoded };
-    let img = if gray || to_gray { Page8::Gray(decoded.into_luma8()) } else { Page8::Rgb(decoded.into_rgb8()) };
+    let img = if gray || to_gray { Page8::Gray(into_luma8(decoded)) } else { Page8::Rgb(decoded.into_rgb8()) };
     Some(ComicSrc { img, out_fmt, to_gray, rotated })
+}
+
+/// 转成 8 位灰度，结果和 `image` 0.25 的 `DynamicImage::into_luma8` 逐字节相同。8 位 RGB（彩色页在黑白屏上转灰度，最常见的情形）
+/// 走 [`rgb8_into_luma8`]，其余类型交给 `image`。
+fn into_luma8(img: image::DynamicImage) -> image::GrayImage {
+    match img {
+        image::DynamicImage::ImageRgb8(c) => rgb8_into_luma8(c),
+        other => other.into_luma8(),
+    }
+}
+
+/// `image` 0.25 把 sRGB 原色的 RGB 转灰度时用的亮度系数（`moxcms` 由 BT.709 原色、D65 白点算出的 XYZ 矩阵的 Y 行，f32 的位）。
+const SRGB_LUMA: [f32; 3] = [f32::from_bits(0x3e59_c05b), f32::from_bits(0x3f37_15fc), f32::from_bits(0x3d93_cf75)];
+
+/// 8 位 RGB → 8 位灰度，和 `image` 0.25 的 `into_luma8` 逐字节相同，只是快：它按 256 像素一批展开成 f32、算亮度、每个像素调一次
+/// `roundf`（x86-64 基线没有取整指令，是函数调用），2026-10-07 量《死亡筆記》彩色扫描页转灰度占整页处理的约两成。这里照它的
+/// 运算顺序逐像素算：分量乘 1/255 → 按 [`SRGB_LUMA`] 乘加（编译目标有 FMA 时是融合乘加，同 `image` 的 `multiply_accumulate`）→
+/// 乘 255 → 四舍五入（远离零）→ 饱和转 u8。色彩空间不是 sRGB 原色的（系数不同）交给 `image` 自己转。测试里和 `image` 逐个对照。
+fn rgb8_into_luma8(img: image::RgbImage) -> image::GrayImage {
+    let cs = img.color_space();
+    if cs.primaries != image::metadata::CicpColorPrimaries::SRgb {
+        return image::DynamicImage::ImageRgb8(img).into_luma8();
+    }
+    // 和 `image` 的 `multiply_accumulate` 同一个条件：编译目标有 FMA（aarch64 一律有）时是融合乘加，否则先乘（舍入）再加
+    const FUSED: bool = cfg!(any(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "fma"), all(target_arch = "aarch64", target_feature = "neon")));
+    // `image` 的算法（逐项照搬，查不准时用它）：分量乘 1/255 → 按系数乘加（第一项 `0 + r'·kr` 就是乘积舍入一次）→ 乘 255 → 取整
+    const R: f32 = 1.0 / 255.0;
+    let k = SRGB_LUMA;
+    let exact = |p: &[u8]| -> u8 {
+        let (r, g, b) = (f32::from(p[0]) * R, f32::from(p[1]) * R, f32::from(p[2]) * R);
+        let v = if FUSED { b.mul_add(k[2], g.mul_add(k[1], r * k[0])) } else { r * k[0] + g * k[1] + b * k[2] } * 255.0;
+        // `v.round() as u8`：v 不小于 0；`v - 整数部分` 在这个范围里是精确的，≥ 0.5 进一，和 `round` 的远离零一致；超过 255 的饱和
+        let i = v as i32;
+        (i + i32::from(v - i as f32 >= 0.5)).clamp(0, 255) as u8
+    };
+    // 快路：同一个亮度 `Σ kᵢ·cᵢ` 用 2^-20 定点查表相加（每项误差不到 2^-21），加 0.5 取整数部分。f32 那条路的误差不到 1e-4，
+    // 定点值的小数部分离 .5 超过 2^-10（约 0.001）时两边一定舍到同一个整数；离得更近的（约千分之二的像素）走 `exact`。
+    const SHIFT: u32 = 20;
+    const NEAR: u32 = 1 << 10;
+    let fixed = |k: f32| -> [u32; 256] { std::array::from_fn(|c| (c as f64 * f64::from(k) * f64::from(1u32 << SHIFT)).round() as u32) };
+    let (fr, fg, fb) = (fixed(k[0]), fixed(k[1]), fixed(k[2]));
+    let (w, h) = img.dimensions();
+    let raw = img.as_raw();
+    let mut px = vec![0u8; raw.len() / 3];
+    for (o, p) in px.iter_mut().zip(raw.chunks_exact(3)) {
+        let s = fr[p[0] as usize] + fg[p[1] as usize] + fb[p[2] as usize] + (1 << (SHIFT - 1));
+        let t = s & ((1 << SHIFT) - 1);
+        *o = if (NEAR..(1 << SHIFT) - NEAR).contains(&t) { (s >> SHIFT).min(255) as u8 } else { exact(p) };
+    }
+    let mut out = image::GrayImage::from_raw(w, h, px).expect("逐像素映射，长度正好是宽×高");
+    // 同 `image`：输出沿用原图的色彩空间
+    let _ = out.set_color_space(cs);
+    out
 }
 
 /// [`decode_page`] 的选项。
@@ -727,10 +779,11 @@ impl Page8 {
         })
     }
 
-    /// 按 `fmt` 编码（JPEG 质量 `jpeg_quality`）；JPEG、PNG 以外 → `None`。JPEG **灰度保持单分量**：`image` 0.25 的
-    /// `JpegEncoder::encode_image(&DynamicImage)` 对 `ImageLuma8` 也会转成 3 分量 RGB 输出（2026-09-20 实测 SOF 分量数=3、
-    /// 回读 `Rgb8`），必须走 `ImageEncoder::write_image(.., ExtendedColorType::L8)` 才是真灰度 JPEG。
-    /// JPEG 编码后做无损的哈夫曼表重做（[`crate::jpegopt::optimize_verified`]）。
+    /// 按 `fmt` 编码（JPEG 质量 `jpeg_quality`）；JPEG、PNG 以外 → `None`。JPEG **灰度保持单分量**（`image` 0.25 的
+    /// `JpegEncoder::encode_image(&DynamicImage)` 对 `ImageLuma8` 也会转成 3 分量 RGB 输出，2026-09-20 实测 SOF 分量数=3、回读 `Rgb8`）。
+    /// JPEG 编码时哈夫曼表按这张图重做（无损，见 [`crate::jpegopt`]）：[`crate::jpegopt::encode_optimized`] 直接从像素编，
+    /// 和"`image` 的 `JpegEncoder` 编一遍再 [`crate::jpegopt::optimize_verified`]"逐字节相同，只是快（不按通用表编一遍再解回来）。
+    /// 那种写法会 panic 的极端情形（系数超出通用哈夫曼表的范围）这里返回 `None`。
     pub fn encode(self, fmt: ImageFormat, jpeg_quality: u8) -> Option<Vec<u8>> {
         use image::{ExtendedColorType, ImageEncoder};
         let (w, h) = self.dimensions();
@@ -740,11 +793,8 @@ impl Page8 {
         };
         let mut out = Vec::new();
         match fmt {
-            ImageFormat::Jpeg => {
-                JpegEncoder::new_with_quality(&mut out, jpeg_quality).write_image(raw, w, h, ct).ok()?;
-                // 哈夫曼表按这张图重做（无损：系数一个不动，见 `jpegopt`），同样画质小约 7%–16%
-                Some(crate::jpegopt::optimize_verified(out))
-            }
+            // 同样画质小约 7%–16%
+            ImageFormat::Jpeg => crate::jpegopt::encode_optimized(raw, w, h, ct == ExtendedColorType::L8, jpeg_quality),
             ImageFormat::Png => {
                 image::codecs::png::PngEncoder::new(&mut out).write_image(raw, w, h, ct).ok()?;
                 Some(out)
@@ -770,6 +820,7 @@ pub fn converted_media_type(name: &str, out: &[u8]) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::codecs::jpeg::JpegEncoder;
     use image::{DynamicImage, GenericImageView, RgbImage};
 
 
@@ -1466,5 +1517,30 @@ mod tests {
         let one = gif_of(&[f]);
         assert_eq!(gif_frame_count(&one[..one.len() - 3], 2), None, "截断");
         assert_eq!(gif_frame_count(b"GIF89a", 2), None);
+    }
+
+    /// 快速 RGB → 灰度和 `image` 的 `into_luma8` 逐像素相同：所有 (R, G) 组合配一组 B（含 0、255 和取整边界附近的值）。
+    /// 全部 2^24 种颜色的对照见下面 `#[ignore]` 的测试（release 下跑：`cargo test --release -p bookconv rgb_to_luma -- --ignored`）。
+    #[test]
+    fn rgb_to_luma_matches_image() {
+        let bs = [0u8, 1, 2, 63, 64, 127, 128, 129, 191, 200, 254, 255];
+        let mut raw = Vec::with_capacity(256 * 256 * bs.len() * 3);
+        for &b in &bs {
+            for g in 0..=255u8 {
+                for r in 0..=255u8 {
+                    raw.extend([r, g, b]);
+                }
+            }
+        }
+        let img = RgbImage::from_raw(256 * 256, bs.len() as u32, raw).unwrap();
+        assert_eq!(rgb8_into_luma8(img.clone()).as_raw(), DynamicImage::ImageRgb8(img).into_luma8().as_raw());
+    }
+
+    #[test]
+    #[ignore]
+    fn rgb_to_luma_matches_image_exhaustive() {
+        let raw: Vec<u8> = (0..1u32 << 24).flat_map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]).collect();
+        let img = RgbImage::from_raw(4096, 4096, raw).unwrap();
+        assert_eq!(rgb8_into_luma8(img.clone()).as_raw(), DynamicImage::ImageRgb8(img).into_luma8().as_raw());
     }
 }

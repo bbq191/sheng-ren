@@ -121,12 +121,35 @@ impl<W: Write + Seek> EpubWriter<W> {
         self.zw.raw_copy_file(f).map_err(|e| e.to_string())
     }
 
+    /// 写一个 [`Precompressed`] 条目：拷它压好的数据，产物和直接 [`put`](EpubWriter::put) 同名同内容的条目逐字节相同。
+    pub fn put_precompressed(&mut self, p: Precompressed) -> Result<(), String> {
+        let mut z = ZipArchive::new(std::io::Cursor::new(p.0)).map_err(|e| format!("预压缩条目: {e}"))?;
+        let f = z.by_index(0).map_err(|e| format!("预压缩条目: {e}"))?;
+        self.zw.raw_copy_file(f).map_err(|e| e.to_string())
+    }
+
     /// 写中央目录并 flush（`finish()` 只保证写完中央目录，底下 `BufWriter` 的缓冲不一定落盘——显式 flush，
     /// 不指望 Drop 的静默兜底，出错会被吞掉）。
     pub fn finish(self) -> Result<W, String> {
         let mut w = self.zw.finish().map_err(|e| e.to_string())?;
         w.flush().map_err(|e| e.to_string())?;
         Ok(w)
+    }
+}
+
+/// 在别的线程里先压好的一个条目（[`Precompressed::new`]），交给 [`EpubWriter::put_precompressed`] 按顺序写。
+/// deflate 是写 EPUB 时最花时间的一步（文字多的书占优化主线程的两三成），这样可以几个条目同时压。
+pub struct Precompressed(Vec<u8>);
+
+impl Precompressed {
+    /// 按 [`EpubWriter::put`] 的选项（按条目名选 STORED 或 deflate）把这一个条目写进内存里的 zip。写进 EPUB 时 zip 库原样拷压好的数据和
+    /// CRC、大小，本地头、中央目录的各字段（时间、权限、版本、标志）都和直接写一样，所以产物逐字节相同（测试和真书回归核对过）。
+    pub fn new(name: &str, data: &[u8]) -> Result<Precompressed, String> {
+        let mut zw = ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(data.len() / 3 + 256)));
+        let opts = if crate::util::is_image_ext(name) { stored() } else { deflated() };
+        zw.start_file(name, opts).map_err(|e| e.to_string())?;
+        zw.write_all(data).map_err(|e| e.to_string())?;
+        Ok(Precompressed(zw.finish().map_err(|e| e.to_string())?.into_inner()))
     }
 }
 
@@ -166,6 +189,72 @@ pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton
     Ok(Skeleton { entries: read_entries_from(zip, |n| !crate::imgopt::is_page_image(n))? })
 }
 
+/// 同 [`read_skeleton`]（`zip` 是 `path` 打开的），几个线程各自打开 `path` 同时解压：文字多的书读骨架时 inflate 是大头。
+/// 结果（条目、顺序、出错时报哪个条目的错）和 [`read_skeleton`] 相同；打不开第二个句柄时就在本线程逐个读。
+pub(crate) fn read_skeleton_par<R: Read + Seek>(path: &std::path::Path, zip: &mut ZipArchive<R>) -> Result<Skeleton, String> {
+    let n = zip.len();
+    let workers = crate::imgpool::worker_count().min(n / 16);
+    if workers <= 1 {
+        return read_skeleton(zip);
+    }
+    let keep = |name: &str| !crate::imgopt::is_page_image(name);
+    // 第 i 个条目：`Ok(None)` 是目录项
+    type Read1 = Result<Option<Entry>, String>;
+    let read_one = |z: &mut FileZip, i: usize| -> Read1 {
+        let mut f = z.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
+        if f.is_dir() {
+            return Ok(None);
+        }
+        let name = f.name().to_string();
+        let data = if keep(&name) {
+            let size = f.size();
+            read_all(&mut f, size, &name)?
+        } else {
+            Vec::new()
+        };
+        Ok(Some(Entry { name, data }))
+    };
+    const CHUNK: usize = 16;
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let parts: Vec<Option<Vec<(usize, Read1)>>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut z = open_file_zip(path).ok()?;
+                    if z.len() != n {
+                        return None;
+                    }
+                    let mut got = Vec::new();
+                    loop {
+                        let start = next.fetch_add(CHUNK, std::sync::atomic::Ordering::Relaxed);
+                        if start >= n {
+                            break;
+                        }
+                        for i in start..(start + CHUNK).min(n) {
+                            got.push((i, read_one(&mut z, i)));
+                        }
+                    }
+                    Some(got)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+    });
+    // 有线程没打开文件：它领走的条目没读，整个退回逐个读
+    if parts.iter().any(Option::is_none) {
+        return read_skeleton(zip);
+    }
+    let mut all: Vec<(usize, Read1)> = parts.into_iter().flatten().flatten().collect();
+    all.sort_unstable_by_key(|x| x.0);
+    let mut entries = Vec::with_capacity(n);
+    for (_, r) in all {
+        if let Some(e) = r? {
+            entries.push(e);
+        }
+    }
+    Ok(Skeleton { entries })
+}
+
 /// 按名字读一个 zip 条目的全部字节；条目不存在 → `Ok(None)`，其它（损坏/IO）错误 → `Err`。
 /// 流式路径"图片按需从源 zip 读回"的统一入口。
 pub fn read_by_name_opt<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Option<Vec<u8>>, String> {
@@ -197,6 +286,12 @@ pub type FileZip = ZipArchive<std::io::BufReader<std::fs::File>>;
 /// 条目按文本读（非 UTF-8 字节按 lossy 替换）；不存在或读失败都是 `None`。
 fn read_text_opt(zip: &mut FileZip, name: &str) -> Option<String> {
     read_by_name_opt(zip, name).ok().flatten().map(|b| String::from_utf8(b).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
+}
+
+/// 打开一个 zip 文件（带缓冲）。
+pub fn open_file_zip(path: &std::path::Path) -> Result<FileZip, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("打开 {} 失败: {e}", path.display()))?;
+    ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB 失败: {e}"))
 }
 
 /// 打开 EPUB 并读出 OPF：`(zip, OPF 在 zip 里的路径, OPF 文本)`。只读 container.xml 和 OPF 两个条目，不解压整本。
@@ -439,6 +534,22 @@ mod tests {
         assert_eq!(by("a.svg").data, b"<svg/>", "SVG 是文字，照常整份读");
     }
 
+    /// 多线程读骨架（各线程自己打开文件）和逐个读结果相同：条目、顺序、目录项剔除、图片留空。
+    #[test]
+    fn parallel_skeleton_matches_sequential() {
+        let names: Vec<String> = (0..300).map(|i| if i % 7 == 0 { format!("d{i}/") } else if i % 5 == 0 { format!("i/p{i}.jpg") } else { format!("t/c{i}.xhtml") }).collect();
+        let bodies: Vec<Vec<u8>> = (0..300).map(|i| if names[i].ends_with('/') { Vec::new() } else { format!("<p>第{i}章</p>").repeat(i % 13 + 1).into_bytes() }).collect();
+        let files: Vec<(&str, &[u8])> = names.iter().map(String::as_str).zip(bodies.iter().map(Vec::as_slice)).collect();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.epub");
+        std::fs::write(&path, zip_of(&files)).unwrap();
+        let mut z = ZipArchive::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap())).unwrap();
+        let seq = read_skeleton(&mut z).unwrap().entries;
+        let par = read_skeleton_par(&path, &mut z).unwrap().entries;
+        assert_eq!(seq.len(), 300 - 43, "目录项剔除");
+        assert_eq!(par, seq);
+    }
+
     /// 条目在 zip 目录里谎报解压大小（损坏/恶意文件）：不能照单预分配几 GB（设备上分配失败＝进程 abort）。
     #[test]
     fn lying_declared_size_does_not_drive_huge_preallocation() {
@@ -494,5 +605,35 @@ mod tests {
         let e = read_entries(&bytes).unwrap();
         assert_eq!(e, vec![Entry { name: "a.xhtml".into(), data: b"x".to_vec() }, Entry { name: "i.png".into(), data: vec![1u8; 5] }]);
         assert!(read_entries(b"definitely not a zip").unwrap_err().contains("非 zip"));
+    }
+
+    /// 先在别处压好再写（`Precompressed` + `put_precompressed`）和直接 `put` 写出的 EPUB 逐字节相同：文字、图片（STORED）、空条目、
+    /// 非 ASCII 条目名、大条目混在一起。
+    #[test]
+    fn precompressed_entries_write_identical_bytes() {
+        let big: Vec<u8> = (0..300_000u32).flat_map(|i| format!("<p>第{i}段 text</p>").into_bytes()).collect();
+        let files: Vec<(&str, Vec<u8>)> = vec![
+            ("META-INF/container.xml", b"<container/>".to_vec()),
+            ("OEBPS/content.opf", b"<package/>".to_vec()),
+            ("OEBPS/text/章1.xhtml", big),
+            ("OEBPS/empty.css", Vec::new()),
+            ("OEBPS/i/a.jpg", vec![0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9]),
+            ("OEBPS/f.ttf", (0..70_000u32).map(|i| (i * 7 % 251) as u8).collect()),
+        ];
+        let direct = {
+            let mut w = EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+            for (n, d) in &files {
+                w.put(n, d).unwrap();
+            }
+            w.finish().unwrap().into_inner()
+        };
+        let pre = {
+            let mut w = EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+            for (n, d) in &files {
+                w.put_precompressed(Precompressed::new(n, d).unwrap()).unwrap();
+            }
+            w.finish().unwrap().into_inner()
+        };
+        assert_eq!(direct, pre);
     }
 }

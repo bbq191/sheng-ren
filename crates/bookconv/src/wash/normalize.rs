@@ -73,18 +73,22 @@ impl XmlFixes {
 
 /// 清洗层入口：XML 修复 → OPF 升级 → 导航文档与 landmarks。`lang_tag`：缺 `dc:language` 时补的值；`heading`：新建 nav 的标题。
 pub(super) fn normalize_book(entries: &mut Vec<Entry>, lang_tag: &str, heading: &str, rep: &mut WashReport) {
-    for e in entries.iter_mut() {
+    // 各文件独立，多线程做（`util::par_map_mut`），计数再加起来
+    let fixes = crate::util::par_map_mut(entries, |e| {
         let l = e.name.to_ascii_lowercase();
         let xhtml = is_html_entry(&e.name, &e.data);
         if !(xhtml || l.ends_with(".opf") || l.ends_with(".ncx")) {
-            continue;
+            return None;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let text = std::str::from_utf8(&e.data).ok()?;
         let mut fx = XmlFixes::default();
         if let Cow::Owned(t) = normalize_markup(text, xhtml, &mut fx) {
             e.data = t.into_bytes();
         }
-        rep.xml_fixes.add(&fx);
+        Some(fx)
+    });
+    for fx in fixes.iter().flatten() {
+        rep.xml_fixes.add(fx);
     }
     let Some(oi) = find_opf(entries) else { return };
     let opf_text = String::from_utf8_lossy(&entries[oi].data).into_owned();
