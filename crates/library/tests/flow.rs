@@ -1111,3 +1111,32 @@ fn local_outputs_from_before_move_onto_devices() {
     assert!(common::documents(&lib_dir, "ireader").join("书.epub").is_file());
     assert_eq!(mv.live(), [(String::new(), "书".to_string())]);
 }
+
+/// 以前在电脑上生成、用户自己拷上设备（电脑上的已经挪走）的产物：设备上同子目录同名的那份当成本书的，覆盖它，不另起 `[id]` 名字。
+#[test]
+fn manual_copies_on_device_are_taken_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let lib = common::open(&lib_dir);
+    let books = base.join("ereader/books");
+    std::fs::create_dir_all(books.join("子")).unwrap();
+    std::fs::write(books.join("子/x.epub"), sample_epub("书")).unwrap();
+    lib.track(&books).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
+    let m = lib.list().remove(0);
+    let docs = common::documents(&lib_dir, "ireader");
+    let Built::Written { path, .. } = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap() else { panic!() };
+    // 改成：记录说产物在电脑上（ereader/ireader/子/书.epub，已被用户挪走），设备上是一份旧版本
+    std::fs::write(&path, b"older version copied by hand").unwrap();
+    let sp = lib_dir.join("output-state/ireader.json");
+    let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    st["books"][&m.id]["path"] = serde_json::json!(base.join("ereader/ireader/子/书.epub"));
+    st["books"][&m.id]["root"] = serde_json::json!(base.join("ereader/ireader"));
+    std::fs::write(&sp, st.to_string()).unwrap();
+    let lib = common::open(&lib_dir);
+    let Built::Written { path: again, .. } = lib.build(&m, profile::get("ireader").unwrap(), false).unwrap() else { panic!() };
+    assert_eq!(again, docs.join("子/书.epub"), "覆盖手工拷上去的那份");
+    assert_ne!(std::fs::read(&again).unwrap(), b"older version copied by hand");
+    assert_eq!(names(&docs.join("子")), ["书.epub"], "不留重复");
+}

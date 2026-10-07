@@ -359,8 +359,14 @@ impl Library {
         let (root, dir) = self.output_dir(meta, device, target)?;
         let sp = self.state_path(&device.id);
         let state = self.states.get(&sp);
-        let out = dir.join(state.file_name_for(meta, &dir, format.ext(), None)?);
         let prev = state.books.get(&meta.id).cloned();
+        // 记录里这本书的产物以前放在电脑上、用户自己拷上设备的（2026-10-07 以前的做法）：设备上同一子目录里叫那个名字的文件
+        // 就是那份拷贝，当成本书的（覆盖它），不另起名字、不留重复
+        let copied = prev.as_ref().filter(|p| p.uuid.is_empty() && !p.root.as_os_str().is_empty() && p.root != root).and_then(|p| {
+            let rel = p.path.strip_prefix(&p.root).ok()?;
+            (dir.strip_prefix(&root).ok()? == rel.parent()?).then(|| rel.file_name()?.to_str().map(str::to_string)).flatten()
+        });
+        let out = dir.join(state.file_name_for(meta, &dir, format.ext(), None, copied.as_deref())?);
         drop(state);
         let done = prev.as_ref().filter(|p| !force && p.fingerprint == fingerprint && p.uuid.is_empty() && p.path.is_file());
         if let Some(p) = done.filter(|p| p.path == out) {
@@ -383,7 +389,7 @@ impl Library {
                 }
             };
             // 目录里已有一个不认识的同名文件、和这份逐字节相同（以前手工拷上去的）：认领它，不另起名字
-            let out = dir.join(self.states.get(&sp).file_name_for(meta, &dir, format.ext(), Some(&src))?);
+            let out = dir.join(self.states.get(&sp).file_name_for(meta, &dir, format.ext(), Some(&src), copied.as_deref())?);
             // 先把记录改成新位置（指纹留空＝没完成），旧位置记进待删：中途被打断的话，下次还认得新位置上的文件是这本书的
             let mut entry = StateEntry { path: out.clone(), root, fingerprint: String::new(), uuid: String::new(), name: String::new(), old: Vec::new() };
             if let Some(p) = &prev {
@@ -671,7 +677,8 @@ impl State {
     /// 一个不是本书产物的同名文件时，用 `书名 [id 前 6 位].<ext>`，不覆盖别人的文件。
     /// 本书在这个目录里已经用着其中一个名字的，一直用下去（名字稳定，重新生成后覆盖设备上的旧文件就行）。
     /// 给了 `same_as`（这次要放上去的产物）时，目录里不认识的同名文件和它逐字节相同的（以前手工拷上设备的）也可以用：认领它。
-    fn file_name_for(&self, meta: &Meta, dir: &Path, ext: &str, same_as: Option<&Path>) -> Result<String, String> {
+    /// `copied` 是本书以前放在电脑上的产物的文件名：设备上叫这个名字的文件是用户拷上去的那份，也算本书的。
+    fn file_name_for(&self, meta: &Meta, dir: &Path, ext: &str, same_as: Option<&Path>, copied: Option<&str>) -> Result<String, String> {
         let base = bookconv::util::sanitize_filename(&meta.title, &meta.id);
         let plain = format!("{base}.{ext}");
         let suffixed = format!("{base} [{}].{ext}", meta.id.get(..6).unwrap_or(&meta.id));
@@ -699,7 +706,7 @@ impl State {
             .filter(|p| p.path.parent() == Some(dir))
             .filter_map(|p| p.path.file_name().map(|n| fold(&n.to_string_lossy())))
             .collect();
-        let adopt = |n: &str| same_as.is_some_and(|s| deliver::same_bytes(s, &dir.join(n)));
+        let adopt = |n: &str| copied == Some(n) || same_as.is_some_and(|s| deliver::same_bytes(s, &dir.join(n)));
         let free = |n: &str| !others.contains(&fold(n)) && (!existing.contains(&fold(n)) || mine.contains(&fold(n)) || adopt(n));
         if free(&plain) {
             Ok(plain)
