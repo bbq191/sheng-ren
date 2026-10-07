@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use cover::{CoverInfo, CoverResult};
-pub use deliver::{DeviceEnv, Doc, Pipeline};
+pub use deliver::{DeviceEnv, Doc, Event, Pipeline};
 pub use fsutil::Lock;
 pub use generate::{Built, Done, OutputStatus, Step, Transfer};
 pub use metadata::{BookInfo, Edition, InfoResult};

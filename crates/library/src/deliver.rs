@@ -178,6 +178,12 @@ pub struct Doc {
     pub name: String,
 }
 
+/// 给人看的时长：`45 秒`、`2 分 10 秒`。
+fn elapsed(d: Duration) -> String {
+    let s = d.as_secs();
+    if s < 60 { format!("{s} 秒") } else { format!("{} 分 {} 秒", s / 60, s % 60) }
+}
+
 /// 交了导入（或替换）以后：书架服务给的任务号（它在后台加入 xochitl、等排版，之后查 [`MoveClient::poll`]），
 /// 或旧版书架服务当场给的结果。
 pub(crate) enum Submitted {
@@ -187,8 +193,8 @@ pub(crate) enum Submitted {
 
 /// 导入任务现在怎样。
 pub(crate) enum JobState {
-    /// 还在做（排队、建文件夹、等 xochitl 排版……）。
-    Running,
+    /// 还在做：书架服务说的当前阶段（排队、建文件夹、等 xochitl 排版……）。
+    Running(String),
     Done(Doc),
     Failed(String),
 }
@@ -250,7 +256,7 @@ impl MoveClient {
                 Ok(match v["state"].as_str() {
                     Some("done") => JobState::Done(doc_of(&v)?),
                     Some("failed") => JobState::Failed(v["message"].as_str().unwrap_or("书架服务没说原因").to_string()),
-                    _ => JobState::Running,
+                    _ => JobState::Running(v["stage"].as_str().unwrap_or_default().to_string()),
                 })
             }
             Err(ureq::Error::Status(404, _)) => Ok(JobState::Failed("书架服务那边没有这个导入任务了（重启过？）".into())),
@@ -268,7 +274,7 @@ impl MoveClient {
             match self.poll(&job)? {
                 JobState::Done(d) => return Ok(d),
                 JobState::Failed(m) => return Err(format!("Move 上加入失败：{m}")),
-                JobState::Running => std::thread::sleep(POLL),
+                JobState::Running(_) => std::thread::sleep(POLL),
             }
         }
     }
@@ -429,13 +435,26 @@ fn enc(s: &str) -> String {
 /// `sync` 的传输线程：每台设备一条，主线程比较、生成的同时这里往设备上放（Move 排版、MTP 拷大漫画都不挡生成）。
 /// 每台在传（含排队）的最多 [`LANE_DEPTH`] 本（[`Pipeline::has_room`]；满了调用方先去做别的设备），书库临时目录里堆不起大漫画。
 /// 传完的结果由主线程取回（[`Pipeline::next`]）、调 [`crate::Library::complete`] 记下来：书库的记录只在主线程里改。
+/// Move 上一本做得久的，中途还交回进度（[`Event::Progress`]）。
 pub struct Pipeline {
     lanes: std::collections::HashMap<String, (std::sync::mpsc::Sender<Transfer>, std::thread::JoinHandle<()>)>,
-    done_tx: std::sync::mpsc::Sender<(Transfer, Result<Done, String>)>,
-    done_rx: std::sync::mpsc::Receiver<(Transfer, Result<Done, String>)>,
+    done_tx: std::sync::mpsc::Sender<Event>,
+    done_rx: std::sync::mpsc::Receiver<Event>,
     /// 各设备在传（含排队）的件数。
     busy: std::collections::HashMap<String, usize>,
 }
+
+/// 传输线程交回的。
+pub enum Event {
+    /// 传完一件（成功或失败）：交给 [`crate::Library::complete`]。
+    Done(Box<Transfer>, Result<Done, String>),
+    /// 还在做的一件的进度（给人看的一行）。
+    Progress(String),
+}
+
+/// Move 上一本做了多久以后开始报进度、阶段没变时隔多久再报一次。
+const PROGRESS_AFTER: Duration = Duration::from_secs(30);
+const PROGRESS_EVERY: Duration = Duration::from_secs(60);
 
 /// 每台设备在传（含排队）的上限。
 const LANE_DEPTH: usize = 2;
@@ -465,13 +484,13 @@ impl Pipeline {
         tx.send(t).expect("传输线程不会先退出");
     }
 
-    /// 取一件传完的：`wait` 时没有就等到有；没有在传的了返回 `None`。
-    pub fn next(&mut self, wait: bool) -> Option<(Transfer, Result<Done, String>)> {
+    /// 取一件传输线程交回的（传完的、进度）：`wait` 时没有就等到有；没有在传的了返回 `None`。
+    pub fn next(&mut self, wait: bool) -> Option<Event> {
         if self.in_flight() == 0 {
             return None;
         }
         let r = if wait { self.done_rx.recv().ok() } else { self.done_rx.try_recv().ok() };
-        if let Some((t, _)) = &r {
+        if let Some(Event::Done(t, _)) = &r {
             if let Some(n) = self.busy.get_mut(&t.device) {
                 *n -= 1;
             }
@@ -496,10 +515,10 @@ impl Drop for Pipeline {
 }
 
 /// Kindle、掌阅（文件）：一件一件放。
-fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<(Transfer, Result<Done, String>)>) {
+fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<Event>) {
     for t in rx {
         let r = t.run();
-        if done.send((t, r)).is_err() {
+        if done.send(Event::Done(Box::new(t), r)).is_err() {
             return;
         }
     }
@@ -507,23 +526,25 @@ fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sen
 
 /// Move：交出去一件，等它在 Move 上做完（书架服务在后台加入 xochitl、等排版）再交下一件——Move 上排队的书每本都占一份
 /// 完整的空间，不一下子全推上去。
-fn move_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<(Transfer, Result<Done, String>)>) {
-    let mut pending: Vec<(Transfer, String)> = Vec::new();
+fn move_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<Event>) {
+    // 交出去在 Move 上做的：(那件, 任务号, 交出的时刻, 上次报的阶段, 上次报的时刻)
+    let mut pending: Vec<(Transfer, String, Instant, String, Option<Instant>)> = Vec::new();
     let mut open = true;
     while open || !pending.is_empty() {
         let next = if open && pending.is_empty() { rx.recv().map_err(|_| open = false).ok() } else { None };
         let got = next.is_some();
         if let Some(t) = next {
+            let at = Instant::now();
             match t.submit() {
                 Ok(Submitted::Done(d)) => {
-                    let _ = done.send((t, Ok(Done::Move(d))));
+                    let _ = done.send(Event::Done(Box::new(t), Ok(Done::Move(d))));
                 }
                 Ok(Submitted::Job(job)) => {
                     t.release_src();
-                    pending.push((t, job));
+                    pending.push((t, job, at, String::new(), None));
                 }
                 Err(e) => {
-                    let _ = done.send((t, Err(e)));
+                    let _ = done.send(Event::Done(Box::new(t), Err(e)));
                 }
             }
         }
@@ -532,21 +553,32 @@ fn move_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sen
             std::thread::sleep(POLL);
         }
         let mut still = Vec::new();
-        for (t, job) in pending.drain(..) {
+        for (t, job, at, last_stage, last_emit) in pending.drain(..) {
             let state = match &t.work {
                 Work::Move { client, .. } => client.poll(&job),
                 Work::File { .. } => unreachable!(),
             };
             match state {
-                Ok(JobState::Running) => still.push((t, job)),
+                Ok(JobState::Running(stage)) => {
+                    // 做了 30 秒以上：阶段变了马上报，没变每分钟报一次
+                    let due = at.elapsed() >= PROGRESS_AFTER && (stage != last_stage || last_emit.is_none_or(|e| e.elapsed() >= PROGRESS_EVERY));
+                    let emitted = if due {
+                        let what = if stage.is_empty() { "在做" } else { stage.as_str() };
+                        let _ = done.send(Event::Progress(format!("… [{}] {}：Move 上{what}（已 {}）", t.device, t.title, elapsed(at.elapsed()))));
+                        Some(Instant::now())
+                    } else {
+                        last_emit
+                    };
+                    still.push((t, job, at, if due { stage } else { last_stage }, emitted));
+                }
                 Ok(JobState::Done(d)) => {
-                    let _ = done.send((t, Ok(Done::Move(d))));
+                    let _ = done.send(Event::Done(Box::new(t), Ok(Done::Move(d))));
                 }
                 Ok(JobState::Failed(m)) => {
-                    let _ = done.send((t, Err(format!("Move 上加入失败：{m}"))));
+                    let _ = done.send(Event::Done(Box::new(t), Err(format!("Move 上加入失败：{m}"))));
                 }
                 Err(e) => {
-                    let _ = done.send((t, Err(e)));
+                    let _ = done.send(Event::Done(Box::new(t), Err(e)));
                 }
             }
         }
@@ -582,6 +614,12 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"abd");
         assert!(!src.exists(), "不留来源时挪走");
         assert!(!same_bytes(&dest, &d.path().join("x")));
+    }
+
+    #[test]
+    fn elapsed_reads_naturally() {
+        assert_eq!(elapsed(Duration::from_secs(45)), "45 秒");
+        assert_eq!(elapsed(Duration::from_secs(130)), "2 分 10 秒");
     }
 
     #[test]

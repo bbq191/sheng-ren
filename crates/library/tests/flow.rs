@@ -1179,8 +1179,9 @@ fn pipeline_transfers_in_background_and_records_when_done() {
         for m in lib.list() {
             for d in devices {
                 while !pipe.has_room(&d.id) {
-                    let (t, r) = pipe.next(true).unwrap();
-                    results.push(lib.complete(t, r).unwrap());
+                    if let library::Event::Done(t, r) = pipe.next(true).unwrap() {
+                        results.push(lib.complete(*t, r).unwrap());
+                    }
                 }
                 match lib.prepare(&m, d, false).unwrap() {
                     library::Step::Done(b) => results.push(b),
@@ -1188,8 +1189,10 @@ fn pipeline_transfers_in_background_and_records_when_done() {
                 }
             }
         }
-        while let Some((t, r)) = pipe.next(true) {
-            results.push(lib.complete(t, r).unwrap());
+        while let Some(ev) = pipe.next(true) {
+            if let library::Event::Done(t, r) = ev {
+                results.push(lib.complete(*t, r).unwrap());
+            }
         }
         results
     };
