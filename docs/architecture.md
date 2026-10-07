@@ -168,5 +168,7 @@
 - `optimize_epub_file_streaming_with_cancel(…, cancel: &dyn Fn() -> bool)`：逐条目问一次，取消时返回以 `CANCELLED_MSG` 开头的错误，这次建出的输出文件删掉。
 - `optimized_version_file(路径)`：读书里 `META-INF/eink-optimized` 的版本。
 - 模式运行时可改：`profile::get(id).clone()` 后改公开字段，私有的阅读范围用 `set_readable`/`set_comic_readable`，`without_comic_reader_margins()` 关掉 xochitl 的漫画页边距模式。
+- 组装器 `epub::assemble_with(book, AssembleOpts)`：`id_scheme`（OPF `dc:identifier` 前缀，缺省 `urn:bookconv:`）、`shared_css`（`SharedCss`：一份章节共用的外链样式表，`link_if` 按章节正文决定挂不挂）；`AssembleOpts::default()` 和 `assemble` 逐字节相同。
+- 整页图片处理 `imgopt::decode_page`（`PageDecode { grayscale, max_px, apply_exif }`，图来自不认 EXIF 的容器如 PDF 时 `apply_exif: false`）→ `trim_page(img, TrimMode)` → `Page8::resize_lanczos3` → `Page8::encode`，给自己排版整页的调用方用。`TrimMode::WhiteOnly` 是本仓库漫画页用的（只裁接近白的边）；`AnyUniform` 任何纯色边都裁（扫描件黑框等），本仓库不用。
 
 各步骤做了什么，见[排版与优化规则](typesetting.md)。

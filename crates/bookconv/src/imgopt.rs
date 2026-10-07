@@ -48,7 +48,8 @@ pub const MAX_COMIC_DECODE_PIXELS: u64 = 64_000_000;
 const JPEG_QUALITY: u8 = 85;
 /// 漫画页重编码质量（缩小、放大、补白都用它）——漫画不压画质：95 接近视觉无损。
 /// 2026-09-29 之前预放大的页用 85（怕体积暴涨），用户定：漫画一律 95。
-const JPEG_QUALITY_COMIC: u8 = 95;
+/// 公开给自己排版整页图的调用方（[`decode_page`] → [`trim_page`] → [`Page8::encode`]）用同一个质量。
+pub const JPEG_QUALITY_COMIC: u8 = 95;
 /// 预放大的倍数上限：超过就不放大，按图自己的比例尺补白（见 [`comic_layout`]）。
 const MAX_UPSCALE: f64 = 3.0;
 
@@ -274,14 +275,35 @@ const TRIM_MAX_FRACTION: f32 = 0.35;
 /// 白边的结果完全相同，只是多排除了不白的边。泛黄的纸、浅灰底低于它的不裁——拿不准就不处理。
 const TRIM_WHITE_MIN: u8 = 235;
 
-/// 一行/一列像素是否"白色留白"：首像素各通道都 ≥ [`TRIM_WHITE_MIN`]，其余像素与首像素的通道差都 ≤ [`TRIM_TOLERANCE`]。
+/// 裁边认哪种边算留白（[`trim_page`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrimMode {
+    /// 只裁接近白的纯色边（首像素各通道 ≥ [`TRIM_WHITE_MIN`]）。本 crate 的漫画页都用它：裁掉的边之后补的是白边，
+    /// 黑色、彩色的边裁了再补白就改了原画。
+    WhiteOnly,
+    /// 任何颜色的纯色边都裁（黑、灰、彩色）。给要去掉扫描件黑框之类、且不会再补白边的调用方用；
+    /// 出血到页边的黑底页、深色满版画面的边也会被裁掉，用之前想清楚。
+    AnyUniform,
+}
+
+impl TrimMode {
+    /// 首像素各通道的亮度下限。
+    fn white_min(self) -> u8 {
+        match self {
+            TrimMode::WhiteOnly => TRIM_WHITE_MIN,
+            TrimMode::AnyUniform => 0,
+        }
+    }
+}
+
+/// 一行/一列像素是否"留白"：首像素各通道都 ≥ `white_min`（[`TrimMode::white_min`]），其余像素与首像素的通道差都 ≤ [`TRIM_TOLERANCE`]。
 /// `px(i)` 取该行/列第 i 个像素。
-fn line_is_blank(len: u32, px: impl Fn(u32) -> [u8; 3]) -> bool {
+fn line_is_blank(len: u32, white_min: u8, px: impl Fn(u32) -> [u8; 3]) -> bool {
     if len == 0 {
         return true;
     }
     let first = px(0);
-    first.iter().all(|&c| c >= TRIM_WHITE_MIN)
+    first.iter().all(|&c| c >= white_min)
         && (1..len).all(|i| {
             let p = px(i);
             (0..3).all(|c| p[c].abs_diff(first[c]) <= TRIM_TOLERANCE)
@@ -292,14 +314,16 @@ fn line_is_blank(len: u32, px: impl Fn(u32) -> [u8; 3]) -> bool {
 /// 只在"确实是留白"时裁——边缘整行/整列像素接近白（[`TRIM_WHITE_MIN`]）且高度一致（[`TRIM_TOLERANCE`]）才算留白，一遇到不满足就停，
 /// 不会裁进真实画面。单边最多裁 [`TRIM_MAX_FRACTION`]，兜底极端误判。
 /// `px(x, y)` 取像素 RGB（[`Page8::rgb_at`]）。
-fn trim_bounds_with(w: u32, h: u32, px: impl Fn(u32, u32) -> [u8; 3]) -> Option<(u32, u32, u32, u32)> {
+/// `mode` 为 [`TrimMode::AnyUniform`] 时不看亮度，任何纯色边都算留白。
+fn trim_bounds_with(w: u32, h: u32, mode: TrimMode, px: impl Fn(u32, u32) -> [u8; 3]) -> Option<(u32, u32, u32, u32)> {
     if w < 4 || h < 4 {
         return None;
     }
     let max_v = ((h as f32) * TRIM_MAX_FRACTION) as u32;
     let max_h = ((w as f32) * TRIM_MAX_FRACTION) as u32;
-    let row = |y: u32| line_is_blank(w, |x| px(x, y));
-    let col = |x: u32| line_is_blank(h, |y| px(x, y));
+    let white_min = mode.white_min();
+    let row = |y: u32| line_is_blank(w, white_min, |x| px(x, y));
+    let col = |x: u32| line_is_blank(h, white_min, |y| px(x, y));
     let mut top = 0u32;
     while top < max_v && top + 1 < h && row(top) {
         top += 1;
@@ -418,13 +442,14 @@ fn webp_is_lossless(bytes: &[u8]) -> Option<bool> {
 /// `grayscale`（黑白屏设备）时彩色图顺手转成单通道 8 位灰度（256 级，不抖动）。带 EXIF 方向的先摆正（[`decode_oriented`]）。
 /// 只合成了白底、别的都不用做时不算改动：原图照旧原样保留，透明区域交给阅读器按页面底色显示。
 /// 超过解码上限 `max_px`（缺省 [`MAX_COMIC_DECODE_PIXELS`]）、动图、解不开 → `None`（原样保留）。
-fn decode_comic(bytes: &[u8], grayscale: bool, max_px: u64) -> Option<ComicSrc> {
+/// `apply_exif = false` 时不看 EXIF 方向（图来自不认 EXIF 的容器，见 [`PageDecode::apply_exif`]）。
+fn decode_comic(bytes: &[u8], grayscale: bool, max_px: u64, apply_exif: bool) -> Option<ComicSrc> {
     let (fmt, (w, h)) = comic_header_dims(bytes)?;
     if (w as u64) * (h as u64) > max_px {
         return None; // 解压炸弹或离谱的大图：不整个解出来，原样保留
     }
     let out_fmt = comic_output_format(fmt, bytes)?;
-    let orientation = orientation_of(bytes, fmt);
+    let orientation = if apply_exif { orientation_of(bytes, fmt) } else { image::metadata::Orientation::NoTransforms };
     let mut decoded = image::load_from_memory_with_format(bytes, fmt).ok()?;
     decoded.apply_orientation(orientation);
     let rotated = orientation != image::metadata::Orientation::NoTransforms;
@@ -435,11 +460,35 @@ fn decode_comic(bytes: &[u8], grayscale: bool, max_px: u64) -> Option<ComicSrc> 
     Some(ComicSrc { img, out_fmt, to_gray, rotated })
 }
 
-/// 裁掉四边白色留白（[`trim_bounds_with`]）：返回 (裁后的图, 左偏移, 上偏移)。没得裁时原图原样返回、偏移 0。
+/// [`decode_page`] 的选项。
+#[derive(Debug, Clone, Copy)]
+pub struct PageDecode {
+    /// 彩色图转成单通道 8 位灰度（256 级，不抖动）。
+    pub grayscale: bool,
+    /// 解码上限（像素数，w×h）：超过的图不解码，返回 `None`。漫画页缺省 [`MAX_COMIC_DECODE_PIXELS`]，内存紧的调用方给更小的值
+    /// （比如 [`MAX_DECODE_PIXELS`]）。
+    pub max_px: u64,
+    /// 按 EXIF 方向摆正。图来自不认 EXIF 的容器时（比如 PDF 里嵌的 JPEG：PDF 阅读器按原始像素画，不看 EXIF）传 `false`，
+    /// 否则摆正后反而和原来显示的方向不一样。
+    pub apply_exif: bool,
+}
+
+/// 解码一张整页图（JPEG/PNG/静态 GIF/静态 WebP）并归一到 8 位灰度或 RGB（[`Page8`]）：带透明通道的先合成到白底，
+/// 灰度图保持灰度。返回 `(图, 要重新编码时用的格式)`：JPEG、PNG 保持原格式，GIF 转 PNG，WebP 有损转 JPEG、无损转 PNG。
+/// 动图、超过 `opts.max_px`、解不开 → `None`。
+///
+/// 给自己排版整页图的调用方用（本 crate 的漫画页走 [`prepare_comic_page_for_epub`]，内部是同一套解码）：之后接
+/// [`trim_page`] 裁边、[`Page8::resize_lanczos3`] 缩放、[`Page8::encode`] 编码。不兜 panic，需要时调用方自己兜。
+pub fn decode_page(bytes: &[u8], opts: PageDecode) -> Option<(Page8, ImageFormat)> {
+    decode_comic(bytes, opts.grayscale, opts.max_px, opts.apply_exif).map(|s| (s.img, s.out_fmt))
+}
+
+/// 裁掉四边纯色留白（哪种边算留白见 [`TrimMode`]）：返回 (裁后的图, 左偏移, 上偏移)。没得裁时原图原样返回、偏移 0。
+/// 一行/列里像素两两通道差都在 8 以内才算留白，一遇到不满足就停；单边最多裁边长的 35%，兜底极端误判。
 /// 按值接收：裁了边时原图在这里就释放，不和裁后的副本同时占内存。
-fn trim_comic(img: Page8) -> (Page8, u32, u32) {
+pub fn trim_page(img: Page8, mode: TrimMode) -> (Page8, u32, u32) {
     let (w, h) = img.dimensions();
-    match trim_bounds_with(w, h, |x, y| img.rgb_at(x, y)) {
+    match trim_bounds_with(w, h, mode, |x, y| img.rgb_at(x, y)) {
         Some((l, t, cw, ch)) => (img.crop(l, t, cw, ch), l, t),
         None => (img, 0, 0),
     }
@@ -562,9 +611,9 @@ pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, gray
 /// 同 [`prepare_comic_page_for_epub`]，另给解码上限 `max_px`（像素，`OptimizeOpts::limits.max_decode_pixels`）：
 /// 超过的页不解码、原样保留。
 pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, max_px: u64) -> Option<Vec<u8>> {
-    let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale, max_px)?;
+    let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale, max_px, true)?;
     let orig = img.dimensions();
-    let (img, tl, tt) = trim_comic(img);
+    let (img, tl, tt) = trim_page(img, TrimMode::WhiteOnly);
     let (cw, ch) = img.dimensions();
     let trimmed = (cw, ch) != orig;
     if cw.min(ch) < area.width / 3 {
@@ -582,7 +631,8 @@ pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grays
 
 /// 归一后的 8 位整页：单通道灰度或 RGB。漫画页解码时一次归一（[`decode_comic`]），文字书插图解出来正好是这两种时也走它
 /// （[`downscale_into`]）；裁边、缩放、补白、编码都只对这两种写，不再各自留一个"其它类型"的分支。
-enum Page8 {
+/// 公开给 [`decode_page`] 的调用方：取尺寸、缩放、编码用下面的公开方法。
+pub enum Page8 {
     Gray(image::GrayImage),
     Rgb(image::RgbImage),
 }
@@ -604,7 +654,8 @@ impl Page8 {
         }
     }
 
-    fn dimensions(&self) -> (u32, u32) {
+    /// `(宽, 高)`。
+    pub fn dimensions(&self) -> (u32, u32) {
         match self {
             Page8::Gray(g) => g.dimensions(),
             Page8::Rgb(c) => c.dimensions(),
@@ -651,7 +702,7 @@ impl Page8 {
     /// **不是逐位一致**：与 `image` 库实现的像素差均值 0.1–0.2 灰阶、最大 ~30（仅高对比边缘），二者对
     /// 浮点参照（PIL）都是 53–55dB——远低于随后 JPEG q95 编码本身的误差（约 45dB），没有可见差别。
     /// 库报错时退回 `image` 自带实现（类型不变）。
-    fn resize_lanczos3(self, dw: u32, dh: u32) -> Page8 {
+    pub fn resize_lanczos3(self, dw: u32, dh: u32) -> Page8 {
         use fast_image_resize::images::{Image, ImageRef};
         use fast_image_resize::{FilterType as FirFilter, PixelType, ResizeAlg, ResizeOptions, Resizer};
         let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FirFilter::Lanczos3));
@@ -679,7 +730,8 @@ impl Page8 {
     /// 按 `fmt` 编码（JPEG 质量 `jpeg_quality`）；JPEG、PNG 以外 → `None`。JPEG **灰度保持单分量**：`image` 0.25 的
     /// `JpegEncoder::encode_image(&DynamicImage)` 对 `ImageLuma8` 也会转成 3 分量 RGB 输出（2026-09-20 实测 SOF 分量数=3、
     /// 回读 `Rgb8`），必须走 `ImageEncoder::write_image(.., ExtendedColorType::L8)` 才是真灰度 JPEG。
-    fn encode(self, fmt: ImageFormat, jpeg_quality: u8) -> Option<Vec<u8>> {
+    /// JPEG 编码后做无损的哈夫曼表重做（[`crate::jpegopt::optimize_verified`]）。
+    pub fn encode(self, fmt: ImageFormat, jpeg_quality: u8) -> Option<Vec<u8>> {
         use image::{ExtendedColorType, ImageEncoder};
         let (w, h) = self.dimensions();
         let (raw, ct) = match &self {
@@ -764,9 +816,9 @@ mod tests {
 
     /// 解码 + 裁边（生产的前两步）：返回 (裁后的图, 产物格式, 是否已经和原图不同——裁了边、转了灰度或换了格式)。
     fn decode_trim_comic(bytes: &[u8], grayscale: bool) -> Option<(DynamicImage, ImageFormat, bool)> {
-        let src = decode_comic(bytes, grayscale, MAX_COMIC_DECODE_PIXELS)?;
+        let src = decode_comic(bytes, grayscale, MAX_COMIC_DECODE_PIXELS, true)?;
         let orig = src.img.dimensions();
-        let (img, _, _) = trim_comic(src.img);
+        let (img, _, _) = trim_page(src.img, TrimMode::WhiteOnly);
         let changed = img.dimensions() != orig || src.to_gray;
         Some((img.into_dynamic(), src.out_fmt, changed))
     }
@@ -1140,7 +1192,7 @@ mod tests {
         let sof = bomb.windows(2).position(|w| w == [0xFF, 0xC0]).expect("基线 JPEG 有 SOF0");
         bomb[sof + 5..sof + 9].copy_from_slice(&[0x23, 0x28, 0x23, 0x28]);
         assert_eq!(comic_header_dims(&bomb).map(|d| d.1), Some((9000, 9000)));
-        assert!(decode_comic(&bomb, false, MAX_COMIC_DECODE_PIXELS).is_none());
+        assert!(decode_comic(&bomb, false, MAX_COMIC_DECODE_PIXELS, true).is_none());
         assert!(prep(&bomb, test_area(), true).is_none());
     }
 
@@ -1336,6 +1388,38 @@ mod tests {
         let (w, h) = g.dimensions();
         let avg = |y0: u32, y1: u32| (y0..y1).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| g.get_pixel(x, y)[0] as f64).sum::<f64>() / ((y1 - y0) * w) as f64;
         (avg(0, h / 3), avg(h - h / 3, h))
+    }
+
+    /// 公开的整页接口：`AnyUniform` 连黑边、彩边也裁，`WhiteOnly` 只裁白边；`apply_exif: false` 不按 EXIF 摆正。
+    #[test]
+    fn public_page_api_trim_modes_and_exif_switch() {
+        let bordered = |c: [u8; 3]| {
+            let img = DynamicImage::ImageRgb8(RgbImage::from_fn(200, 300, |x, y| {
+                if !(20..180).contains(&x) || !(20..280).contains(&y) { image::Rgb(c) } else { image::Rgb([(x % 256) as u8, (y % 256) as u8, 128]) }
+            }));
+            let mut buf = Vec::new();
+            JpegEncoder::new_with_quality(&mut buf, 100).encode_image(&img).unwrap();
+            buf
+        };
+        let opts = PageDecode { grayscale: false, max_px: MAX_DECODE_PIXELS, apply_exif: true };
+        for c in [[0u8, 0, 0], [128, 128, 128], [200, 30, 30], [255, 255, 255]] {
+            let (img, fmt) = decode_page(&bordered(c), opts).unwrap();
+            assert_eq!(fmt, ImageFormat::Jpeg);
+            let (img, l, t) = trim_page(img, TrimMode::AnyUniform);
+            assert_eq!((img.dimensions(), l, t), ((160, 260), 20, 20), "{c:?} 的纯色边在 AnyUniform 下要裁");
+        }
+        let (img, _) = decode_page(&bordered([0, 0, 0]), opts).unwrap();
+        assert_eq!(trim_page(img, TrimMode::WhiteOnly).0.dimensions(), (200, 300), "WhiteOnly 不裁黑边");
+        // 编码保持格式与尺寸
+        let (img, fmt) = decode_page(&bordered([255, 255, 255]), opts).unwrap();
+        let out = img.resize_lanczos3(100, 150).encode(fmt, JPEG_QUALITY_COMIC).unwrap();
+        assert_eq!(image::load_from_memory(&out).unwrap().dimensions(), (100, 150));
+        // EXIF：摆正后宽高互换；不摆正保持存储的宽高
+        let src = exif_rotated_jpeg(300, 200);
+        assert_eq!(decode_page(&src, opts).unwrap().0.dimensions(), (200, 300));
+        assert_eq!(decode_page(&src, PageDecode { apply_exif: false, ..opts }).unwrap().0.dimensions(), (300, 200));
+        // 解码上限
+        assert!(decode_page(&src, PageDecode { max_px: 300 * 200 - 1, ..opts }).is_none());
     }
 
     #[test]
