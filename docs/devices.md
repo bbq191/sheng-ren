@@ -80,10 +80,13 @@ height = 1680
 | xochitl | NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录 | 对齐成一致 |
 | xochitl | 背景图会平铺满页、盖住正文 | 去掉背景图 |
 | xochitl | 页边距 1 时，带类的 `<body>` 里图会被吃掉约 20pt 宽 | 漫画图页去掉 body 的类 |
+| xochitl | 找 NCX 只认 manifest 里 `id="ncx"` 的项，叫别的原生目录入口不出现 | NCX 的 manifest id 改成 `ncx` |
+| xochitl | 封面条目 id 带点、又只有 `<meta name="cover">` 时取不到封面 | `<meta name="cover">` 和 `properties="cover-image"` 同时写 |
+| xochitl | 严格 XML：同一标签两个 `id` 整章空白，OPF 不合法整本只排 1 页 | 合并重复 `id`，XHTML、OPF 一律修成合法 XML |
 | Kindle（AZW3 时代） | 把 `<head>` 里散落的文字显示在章首 | AZW3 写出器的 `<head>` 只留 title、meta、link、style、base（KFX 不写 `<head>`，不涉及） |
 | 三台 | 不支持 CSS 断字 | 规则留着，不插软连字符 |
 
-其它实测行为（不需要处理）：Kindle 侧载书归"文档"（PDOC）时封面最稳；Kindle 书旁 `.sdr` 里的进度文件只写不读（AZW3 时代的 `.azw3f`；KFX 的 `.yjf` 见[附录](#自带阅读器之间能不能同步进度2026-09-30-真机)）；掌阅用中文字体显示英文时弯引号是全角宽；xochitl 每本书排出的 PDF 最后多一页空白、页边距设置只对单本书、USB 网页上传约 88MB 以上的书回 413。
+其它实测行为（不需要处理）：Kindle 侧载书归"文档"（PDOC）时封面最稳；Kindle 书旁 `.sdr` 里的进度文件只写不读（AZW3 时代的 `.azw3f`；KFX 的 `.yjf` 见[附录](#自带阅读器之间能不能同步进度2026-09-30-真机)）；掌阅用中文字体显示英文时弯引号是全角宽；xochitl 每本书排出的 PDF 最后多一页空白、页边距设置只对单本书、USB 网页上传约 88MB 以上的书回 413。xochitl 的怪癖来由、细节和验证程度集中在 [xochitl 阅读器踩坑](xochitl.md)。
 
 ### 为什么这样分
 
