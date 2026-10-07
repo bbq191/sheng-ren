@@ -30,10 +30,17 @@ fn add_build_skip_remove() {
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(path, want);
         assert!(matches!(lib.build(&meta, p, false).unwrap(), Built::UpToDate(_)), "{dev} 没变化应跳过");
-        assert!(matches!(lib.build(&meta, p, true).unwrap(), Built::Written { .. }), "--force 重建");
+        assert!(matches!(lib.build(&meta, p, true).unwrap(), Built::Same { .. }), "{dev} --force 重建：和设备上的一样，不再传");
     }
     assert!(!std::path::absolute(lib.root()).unwrap().join("output").exists(), "电脑上不留产物");
-    // Move：--force 重建是原地替换同一本（uuid 不变），不另加一本
+    // Move：--force 重建出来一样的不再传；内容变了（这里改记录里的哈希来模拟）是原地替换同一本（uuid 不变），不另加一本
+    assert_eq!(mv.docs.lock().unwrap().values().next().unwrap().replaced, 0);
+    let xp = lib.root().join("output-state/xochitl.json");
+    let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&xp).unwrap()).unwrap();
+    st["books"][&meta.id]["sha"] = "旧的".into();
+    std::fs::write(&xp, st.to_string()).unwrap();
+    let lib = common::open_with(&lib_dir, Some(&mv));
+    assert!(matches!(lib.build(&meta, profile::get("xochitl").unwrap(), true).unwrap(), Built::Written { .. }));
     let docs = mv.docs.lock().unwrap().clone();
     assert_eq!(docs.len(), 1);
     let doc = docs.values().next().unwrap();
@@ -79,7 +86,7 @@ fn absent_device_defers_removal_and_identical_copy_is_adopted() {
     let bytes = std::fs::read(&path).unwrap();
     // 记录丢了、设备上那份当成"手工拷上去的"：重建出来逐字节相同，认领原名
     std::fs::remove_dir_all(lib.root().join("output-state")).unwrap();
-    let Built::Written { path: again, .. } = lib.build(&m, ireader, false).unwrap() else { panic!() };
+    let Built::Same { path: again, .. } = lib.build(&m, ireader, false).unwrap() else { panic!("重建出来一样，不再拷") };
     assert_eq!(again, path, "逐字节相同的同名文件认领");
     // 拔掉：没接上
     let storage = common::dev_dir(&lib_dir).join("ireader/Internal Storage");
@@ -116,7 +123,7 @@ fn kfx_container_id_comes_from_book_id() {
         // 容器信息、kfxgen 的 kfxgen_acr、$419 清单、$490 的 asset_id
         assert_eq!(bytes.windows(id.len()).filter(|w| *w == id.as_bytes()).count(), 4, "容器 id 在书里 4 处一致");
         // 重建不变（Kindle 进度靠它）
-        let Built::Written { path: again, .. } = lib.build(&meta, kindle, true).unwrap() else { panic!() };
+        let Built::Same { path: again, .. } = lib.build(&meta, kindle, true).unwrap() else { panic!("重建逐字节相同，不再传") };
         assert_eq!(std::fs::read(again).unwrap(), bytes, "同一本书重建逐字节相同");
         ids.push(id);
     }
@@ -528,7 +535,7 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     assert_eq!(std::fs::read(kd.join("haodoo/笔记.txt")).unwrap(), b"mine", "不认识的文件不删");
     // 名字稳定：不认识的文件没了，也继续用带后缀的名字（产物改名，设备上就成了另一本书）
     std::fs::remove_file(other.join("甲.kfx")).unwrap();
-    assert!(matches!(lib.build(&m, kindle, true).unwrap(), Built::Written { path, .. } if path == to));
+    assert!(matches!(lib.build(&m, kindle, true).unwrap(), Built::Same { path, .. } if path == to));
 
     // 书名变了：改用新名字（内容没变，直接改名），旧文件不留
     let meta_path = base.join(format!("lib/masters/{}/meta.json", m.id));
@@ -812,7 +819,7 @@ fn interrupted_move_is_finished_next_time() {
     e["old"] = serde_json::json!([{"path": stale, "root": docs}]);
     std::fs::write(&sp, st.to_string()).unwrap();
     assert_eq!(lib.outputs(&m)[0].fresh, Some(false), "没完成的算过期");
-    let Built::Written { path: again, .. } = lib.build(&m, dev, false).unwrap() else { panic!("没完成的要重建") };
+    let Built::Same { path: again, .. } = lib.build(&m, dev, false).unwrap() else { panic!("没完成的要重建（和设备上的一样，不再拷）") };
     assert_eq!(again, path, "新位置上的文件认得是本书的，不改名");
     assert!(!stale.exists(), "旧位置补删");
     assert!(!std::fs::read_to_string(&sp).unwrap().contains("\"old\""));
@@ -924,9 +931,9 @@ fn sync_with_selection_builds_only_selected_books() {
     assert!(s.contains("新增 2"), "{s}");
     assert_eq!(names(&out), ["甲.epub"], "{s}");
     let s = ok(&lib, &["sync", "--device=ireader", "甲"]);
-    assert!(s.contains("已是最新") && s.contains("重新生成 0 本"), "选了书时没变化的也报：{s}");
+    assert!(s.contains("已是最新") && s.contains("重新生成并传上 0 本"), "选了书时没变化的也报：{s}");
     let s = ok(&lib, &["sync", "--device=ireader", "--force", books.join("甲.epub").to_str().unwrap()]);
-    assert!(s.contains("✓ 生成 [ireader] 甲") && s.contains("重新生成 1 本"), "--force 重建，原件路径也能选：{s}");
+    assert!(s.contains("≡ 重新生成 [ireader] 甲") && s.contains("内容没变（没再传）1 本"), "--force 重建（一样的不再传），原件路径也能选：{s}");
     // 不选书：全部，只报有变化的
     let s = ok(&lib, &["sync", "--device=ireader"]);
     assert!(s.contains("✓ 生成 [ireader] 乙") && !s.contains("已是最新（"), "{s}");
@@ -1058,7 +1065,7 @@ fn book_updates_replace_outputs_without_deleting_the_new_one() {
     let other = out.join(ls.iter().find(|n| n.starts_with("同名 [")).unwrap());
     assert!(output_has(&plain, "第四版") && output_has(&other, "另一份"));
     let s = sync();
-    assert!(s.contains("重新生成 0 本") && names(&out) == ls, "再跑一次不动：{s}");
+    assert!(s.contains("重新生成并传上 0 本") && names(&out) == ls, "再跑一次不动：{s}");
     // 删掉其中一本：只删它自己的产物
     std::fs::remove_file(books.join("另一份.epub")).unwrap();
     sync();

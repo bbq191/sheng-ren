@@ -76,6 +76,15 @@ fn help_prints_to_stdout_and_exits_0_without_touching_the_library() {
     for args in [&["help", "build"][..], &["build", "--help"]] {
         expect(booklib(Some(&lib), args), 1, "build 已并入 sync");
     }
+    // 版本号：提交号和各项规则版本
+    for args in [&["--version"][..], &["-V"], &["version"], &["--library=x", "--version"]] {
+        let o = booklib(Some(&lib), args);
+        assert_eq!(code(&o), Some(0), "{args:?}");
+        assert!(stdout(&o).starts_with("booklib ") && stdout(&o).contains(&format!("优化 {}", bookconv::optimize::OPTIMIZE_VERSION)), "{args:?}: {}", stdout(&o));
+    }
+    // 用错时只给这个命令的写法，不把全部用法刷一屏
+    let o = booklib(Some(&lib), &["sync", "--frob"]);
+    assert!(stderr(&o).contains("sync 不认识 --frob") && stderr(&o).contains("booklib sync --help") && !stderr(&o).contains("dedupe"), "{}", stderr(&o));
     assert!(!lib.exists(), "看帮助不该建书库");
     // `--` 之后的 --help 是书名（这里是 id），不是要帮助
     expect(booklib(Some(&lib), &["remove", "--", "--help"]), 2, "--help");

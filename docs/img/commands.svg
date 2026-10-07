@@ -14,7 +14,7 @@
     .ld{stroke:#c0392b;stroke-width:1.6;fill:none;stroke-dasharray:5 4}
   </style>
   <rect width="960" height="545" fill="#fafafa"/>
-  <text x="480" y="28" text-anchor="middle" class="h">booklib 各命令读写什么：原件只读，书库只存索引，产物随时能重建</text>
+  <text x="480" y="28" text-anchor="middle" class="h">booklib 各命令读写什么：原件只读，书库只存索引，产物直接传设备、随时能重建</text>
 
   <!-- 三个主体 -->
   <rect class="box" x="30" y="70" width="230" height="150" rx="10" fill="#eaf7ee" stroke="#3f9a5b"/>
@@ -29,14 +29,14 @@
   <text x="480" y="118" text-anchor="middle" class="s">~/.local/share/booklib/</text>
   <text x="480" y="140" text-anchor="middle" class="s">每本书一个 meta.json：原件在哪、哈希</text>
   <text x="480" y="160" text-anchor="middle" class="s">找来的简介、标签、封面</text>
-  <text x="480" y="180" text-anchor="middle" class="s">生成记录：产物在哪、指纹</text>
+  <text x="480" y="180" text-anchor="middle" class="s">生成记录：设备上哪一份、指纹</text>
 
   <rect class="box" x="700" y="70" width="230" height="150" rx="10" fill="#eef4ff" stroke="#5b7fd6"/>
-  <text x="815" y="96" text-anchor="middle" class="h">产物文件夹</text>
-  <text x="815" y="118" text-anchor="middle" class="s">books/ 旁边的 kindle/ ireader/ xochitl/</text>
-  <text x="815" y="140" text-anchor="middle" class="s">（add 的书在书库 output/ 里）</text>
-  <text x="815" y="170" text-anchor="middle" class="s">你拷到设备上读</text>
-  <text x="815" y="190" text-anchor="middle" class="s">删了也能用 sync 重建</text>
+  <text x="815" y="96" text-anchor="middle" class="h">设备（接着的）</text>
+  <text x="815" y="118" text-anchor="middle" class="s">Kindle、掌阅、Move</text>
+  <text x="815" y="140" text-anchor="middle" class="s">电脑上不留产物</text>
+  <text x="815" y="170" text-anchor="middle" class="s">sync 直接传，没接上的下次传</text>
+  <text x="815" y="190" text-anchor="middle" class="s">设备上删了，sync 再传</text>
 
   <!-- 原件 → 书库 -->
   <path class="l" d="M262 120 L362 120" marker-end="url(#a)"/>
@@ -48,7 +48,7 @@
   <path class="l" d="M597 120 L697 120" marker-end="url(#a)"/>
   <text x="647" y="62" text-anchor="middle" class="cmd">sync</text>
   <text x="647" y="80" text-anchor="middle" class="s">（可选书）</text>
-  <text x="647" y="140" text-anchor="middle" class="s">读原件生成</text>
+  <text x="647" y="140" text-anchor="middle" class="s">读原件生成并传</text>
   <path class="l" d="M145 222 C145 262 815 262 815 224" marker-end="url(#a)"/>
   <text x="290" y="276" text-anchor="middle" class="s">生成时读原件（先核对还是入库时那本书）</text>
 
@@ -76,7 +76,7 @@
 
   <!-- 只读 -->
   <text x="700" y="425" class="cmd">list · devices</text>
-  <text x="700" y="445" class="s">只读：看书库、产物是否最新、有哪些模式</text>
+  <text x="700" y="445" class="s">只读：看书库、产物是否最新、设备接没接上</text>
   <text x="700" y="473" class="cmd">dedupe · untrack</text>
   <text x="700" y="493" class="s">整理书库（迁移旧条目、不再跟踪目录）</text>
 

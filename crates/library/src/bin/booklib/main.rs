@@ -13,55 +13,168 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "用法:
-  booklib [--library=目录] add <文件或网址>...           一次性入库单个文件（目录用 track）
-  booklib [--library=目录] list [书名片段、id 或原件路径...]      列出书，以及给哪些阅读模式生成过、是否最新
-  booklib [--library=目录] track <目录>...               跟踪目录（递归）：之后 sync 把它镜像进书库
-  booklib [--library=目录] untrack <目录>...             不再跟踪（已入库的书保留）
-  booklib [--library=目录] sync [--device=<模式>[,<模式>…]] [--force] [--no-build] [--keep] [--watch[=秒]] [书名片段、id 或原件路径...]
-      先同步跟踪的目录（书库严格镜像它）：新增的入库、改过的换成新版本、移动改名的认得出、原件删了的连同产物从书库删掉
-      （原件不动；跟踪目录整个不在、读不了的目录里的书不删；--keep 这一次只报告不删）
-      接着按阅读模式生成优化过的书，直接传到接着的设备上（kindle 出 KFX，ireader、xochitl 出 EPUB；
-      只传有变化的，--force 全部重建；没接上的设备跳过，下次接上再传）：
-      不写 --device = 全部模式，--device 可写多次或用逗号分隔，all = 全部；不写书名 = 全部书（含 add 进来的），
-      写了只生成这几本；原件路径可以是文件，也可以是目录（下面所有的书）；--no-build 只同步不生成
-      放哪：Kindle、掌阅（USB，jmtpfs 挂载）放存储根目录的 documents/，按原件在跟踪目录里的子目录镜像；
-      Move（USB 或 Wi-Fi，SSH）经书架服务直接加入 xochitl，子目录路径当文件夹名，更新时原地替换（保留进度）；
-      原件删了的书设备上也删（Move 上进回收站）；电脑上不留产物（自定义模式没写 [deliver] 的除外）
-      --watch 一直运行，每隔几秒（缺省 60）检查一次，原件有变化才生成（不能和书名、--force 一起用）
-  booklib [--library=目录] meta --fetch [--force] [--clear] [书名片段、id 或原件路径...]
-      联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过；
-      生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动
-      --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
-  booklib [--library=目录] meta --show [书名片段、id 或原件路径...]
-      查看跟踪目录里的书的元数据：书里写的（标题、作者、语言、出版社、日期、标签、简介、封面），和 --fetch 找来的；只读
-  booklib meta --edit 书.epub [--title 书名 --author 作者 --tag 标签 --cover 图 …]
-      查看、改写一个 EPUB 文件的元数据和封面（改文件本身，和书库无关；值给空字符串 = 删掉），详见 booklib meta --edit --help
-  booklib [--library=目录] remove <id>...               从书库删掉（连同生成记录里的产物；原件不动）。id 用 list 里显示的完整 id
-  booklib [--library=目录] dedupe [目录...]             早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）
-  booklib [--library=目录] devices                      列出阅读模式（书库 profiles/ 目录里的自定义 profile 也算）和设备接没接上";
-
-/// `USAGE` 里属于命令 `cmd` 的几段（从 `booklib … cmd` 那一行到下一个命令之前；meta 有三段）。
-fn command_usage(cmd: &str) -> Option<String> {
-    let mut out = Vec::new();
-    let mut take = false;
-    for line in USAGE.lines().skip(1) {
-        if let Some(rest) = line.strip_prefix("  booklib ") {
-            let rest = rest.strip_prefix("[--library=目录] ").unwrap_or(rest);
-            take = rest.split_whitespace().next() == Some(cmd);
-        }
-        if take {
-            out.push(line);
-        }
-    }
-    (!out.is_empty()).then(|| format!("用法:\n{}", out.join("\n")))
+/// 一个命令的说明：参数写法（`booklib [--library=目录] ` 之后的部分；meta 有三种写法）、一句话、详细说明。
+struct Help {
+    name: &'static str,
+    synopsis: &'static [&'static str],
+    brief: &'static str,
+    detail: &'static str,
 }
 
-/// `booklib --help`、`-h`、`help` 打印全部用法；`booklib <命令> --help`（或 `-h`）、`booklib help <命令>` 只打印这个命令的。
-/// 打到标准输出、退出码 0（要看帮助不算用错）。`--` 之后的参数不算。
+const HELP: &[Help] = &[
+    Help {
+        name: "sync",
+        synopsis: &["sync [--device=<模式>[,<模式>…]] [--force] [--no-build] [--keep] [--watch[=秒]] [书…]"],
+        brief: "同步跟踪目录，按阅读模式生成优化过的书，直接传到接着的设备（日常用这一条）",
+        detail: "\
+第一步 同步：书库严格镜像跟踪的目录——新增的入库，改过的换成新版本，挪动、改名的按内容认出来；
+  原件删了的连同设备上的那本一起删（Move 上进回收站）。跟踪目录整个不在、读不了的目录里的书不删。
+第二步 生成并传：只给接着的设备生成，传上去，电脑上不留产物：
+  kindle   Kindle（USB）  KFX   存储根目录 documents/<子目录>/
+  ireader  掌阅（USB）    EPUB  存储根目录 documents/<子目录>/
+  xochitl  Move（SSH）    EPUB  经 Move 上的书架服务加入 xochitl，放进文件夹 <子目录>；更新时原地替换
+  <子目录> 是原件在跟踪目录里所在的子目录。没接上的设备这次跳过，下次接上再传。
+  没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢，Move 不重排）。
+
+选项：
+  --device=<模式>  只处理这几个模式（可写多次或用逗号分隔；all 或不写 = 全部）
+  --force          选中的书（没选就是全部）重新生成；和设备上一样的照样不传
+  --no-build       只同步，不生成、不传（不能和 --device、--force、书一起用）
+  --keep           这一次原件不在了的只报告，不从书库删
+  --watch[=秒]     一直运行，每隔几秒（缺省 60）看一次，原件有变化或接上设备就处理（不能和书、--force 一起用）
+  书…              只处理这几本：书名片段、id，或原件路径（文件，或目录 = 下面所有的书）
+
+例子：
+  booklib sync                         全部
+  booklib sync --device=kindle 三体     只给 Kindle、只处理书名含「三体」的
+  booklib sync --watch=300             挂着，每 5 分钟看一次",
+    },
+    Help {
+        name: "track",
+        synopsis: &["track <目录>…"],
+        brief: "跟踪书目录（递归，收 .epub、.cbz）：之后 sync 把它镜像进书库",
+        detail: "只需登记一次。和已跟踪的目录互相包含（父目录或子目录）的会被拒绝。",
+    },
+    Help { name: "untrack", synopsis: &["untrack <目录>…"], brief: "不再跟踪这个目录（已入库的书和设备上的产物都保留）", detail: "" },
+    Help {
+        name: "add",
+        synopsis: &["add <文件或网址>…"],
+        brief: "入库单个 EPUB、CBZ 文件或网址（整个目录用 track）",
+        detail: "\
+add 进来的书 sync 照样生成、传（放设备 documents/ 顶层，Move 上放书库根）；原件没了也不自动删，不要了用 remove。
+网址：抓网页正文做成 EPUB，存在书库里。同一路径的文件内容改了，再 add 一次换成新版本。",
+    },
+    Help {
+        name: "list",
+        synopsis: &["list [书…]"],
+        brief: "列出书，以及在各设备上的产物是否最新",
+        detail: "\
+书：书名片段、id 或原件路径；不写 = 全部。每本一行（id、格式、书名、作者），下面每个模式一行：
+  ✓ 最新   ⚠ 过期（下次 sync 会重新生成）   ? 未知（设备没接上，或设备上那本不在了）
+Move 上的显示成 xochitl:文件夹/文件名（只看记录，不连 Move）。",
+    },
+    Help {
+        name: "meta",
+        synopsis: &["meta --fetch [--force] [--clear] [书…]", "meta --show [书…]", "meta --edit 书.epub [--title 书名 --author 作者 --tag 标签 --cover 图 …]"],
+        brief: "书的元数据：联网补、查看、改写一个 EPUB",
+        detail: "\
+--fetch  联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过。
+         生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动。
+         --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
+--show   查看跟踪目录里的书的元数据：书里写的，和 --fetch 找来的；只读
+--edit   查看、改写一个 EPUB 文件的元数据和封面（改文件本身，和书库无关；值给空字符串 = 删掉），
+         详见 booklib meta --edit --help",
+    },
+    Help {
+        name: "remove",
+        synopsis: &["remove <id>…"],
+        brief: "从书库删书，连同设备上的产物（Move 上进回收站；设备没接上的下次接上时删）。原件不动",
+        detail: "id 用 list 里显示的完整 id（不做模糊匹配）。原件在跟踪目录里的，下次 sync 会再入库：要彻底不要就删掉原件。",
+    },
+    Help {
+        name: "dedupe",
+        synopsis: &["dedupe [目录…]"],
+        brief: "早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）",
+        detail: "找不到原件的保留书库里的副本并列出来。可以反复跑。",
+    },
+    Help {
+        name: "devices",
+        synopsis: &["devices"],
+        brief: "列出阅读模式，以及设备接没接上（只看，不往设备上写）",
+        detail: "书库的 profiles/ 里放 <id>.toml 可以加模式或覆盖内置的参数（写法见 docs/devices.md）。",
+    },
+];
+
+/// 日常用法、通用选项、环境变量、退出码（`booklib --help` 的头尾）。
+const HELP_HEAD: &str = "\
+booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅、Move 的自带阅读器优化，直接传到接着的设备
+
+用法：booklib [--library=目录] <命令> [参数]
+
+日常：
+  booklib track ~/Documents/ereader/books    第一次：登记要跟踪的书目录
+  booklib sync                               之后每次：同步书目录、优化、传到接着的设备
+  booklib devices                            看设备接没接上";
+
+const HELP_TAIL: &str = "\
+通用选项：
+  --library=目录   书库目录（缺省 $BOOKLIB_DIR，没设就是 ~/.local/share/booklib）
+  -h, --help       帮助；booklib <命令> --help（或 booklib help <命令>）只看这个命令的详细说明
+  -V, --version    版本：提交号、各项规则的版本
+  --               之后的参数都当书名、路径（以 - 开头的书名用）
+
+环境变量：
+  BOOKLIB_DIR       书库目录
+  BOOKLIB_MTP_DIR   Kindle、掌阅的 jmtpfs 挂载点所在的目录（缺省 $XDG_RUNTIME_DIR/mtp）
+  BOOKLIB_NO_SSH=1  不连 Move
+
+退出码：0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）";
+
+/// 命令的参数写法，每种一行（`  booklib [--library=目录] …`）。
+fn synopsis(h: &Help) -> String {
+    h.synopsis.iter().map(|s| format!("  booklib [--library=目录] {s}")).collect::<Vec<_>>().join("\n")
+}
+
+/// `booklib --help` 的全文。
+fn full_help() -> String {
+    let cmds: Vec<String> = HELP.iter().map(|h| format!("{}\n      {}", synopsis(h), h.brief)).collect();
+    format!("{HELP_HEAD}\n\n命令：\n{}\n\n{HELP_TAIL}", cmds.join("\n"))
+}
+
+/// 一个命令的详细说明。
+fn command_usage(cmd: &str) -> Option<String> {
+    let h = HELP.iter().find(|h| h.name == cmd)?;
+    let detail = if h.detail.is_empty() { String::new() } else { format!("\n\n{}", h.detail) };
+    Some(format!("用法：\n{}\n\n{}{detail}", synopsis(h), h.brief))
+}
+
+/// `booklib --version`、`-V`、`version`。
+fn version() -> String {
+    let date = env!("BOOKLIB_GIT_DATE");
+    let rules: Vec<String> = library::rule_versions().into_iter().map(|(k, v)| format!("{k} {v}")).collect();
+    format!(
+        "booklib {}（提交 {}{}）\n规则版本：{}",
+        env!("CARGO_PKG_VERSION"),
+        env!("BOOKLIB_GIT_COMMIT"),
+        if date.is_empty() { String::new() } else { format!("，{date}") },
+        rules.join(" · ")
+    )
+}
+
+/// 命令行里的命令名（跳过 `--library=` 等选项；`--` 之前）。
+fn command_word() -> Option<String> {
+    std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).take_while(|a| a != "--").find(|a| !a.starts_with('-'))
+}
+
+/// `booklib --help`、`-h`、`help` 打印全部用法；`booklib <命令> --help`（或 `-h`）、`booklib help <命令>` 只打印这个命令的；
+/// `--version`、`-V`、`version` 打印版本。打到标准输出、退出码 0（不算用错）。`--` 之后的参数不算。
 fn print_help_if_asked() {
     let raw: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     let args: Vec<&str> = raw.iter().map(String::as_str).take_while(|a| *a != "--").filter(|a| !a.starts_with("--library=")).collect();
+    if matches!(args.first(), Some(&("--version" | "-V" | "version"))) {
+        println!("{}", version());
+        std::process::exit(0);
+    }
     let is_help = |a: &&str| matches!(*a, "--help" | "-h");
     let cmd = match args.first() {
         None => return,
@@ -71,7 +184,7 @@ fn print_help_if_asked() {
         _ => return,
     };
     match cmd.map(|c| (c, command_usage(c))) {
-        None => println!("{USAGE}"),
+        None => println!("{}", full_help()),
         Some((_, Some(u))) => println!("{u}"),
         Some(("build", None)) => usage_error(BUILD_MERGED),
         Some((c, None)) => usage_error(&format!("不认识的命令 {c}")),
@@ -82,11 +195,18 @@ fn print_help_if_asked() {
 /// 2026-10-06 起 `build` 并入 `sync`：敲旧命令（或看它的帮助）时的提示。
 const BUILD_MERGED: &str = "build 已并入 sync：booklib sync [--device=…] [--force] [书...]";
 
+/// 用法错：说明哪里错了，再给这个命令的写法（不认识的命令给命令一览），退出码 1。
 fn usage_error(msg: &str) -> ! {
     if !msg.is_empty() {
         eprintln!("{msg}\n");
     }
-    eprintln!("{USAGE}");
+    match command_word().and_then(|c| HELP.iter().find(|h| h.name == c)) {
+        Some(h) => eprintln!("用法：\n{}\n\n详细说明：booklib {} --help", synopsis(h), h.name),
+        None => {
+            let names: Vec<&str> = HELP.iter().map(|h| h.name).collect();
+            eprintln!("用法：booklib [--library=目录] <命令> [参数]\n命令：{}\n\n全部说明：booklib --help", names.join("、"));
+        }
+    }
     std::process::exit(1);
 }
 
@@ -183,6 +303,7 @@ type FailMemo = HashMap<(String, String), (String, OriginalState)>;
 #[derive(Default)]
 struct BuildCounts {
     written: usize,
+    same: usize,
     moved: usize,
     up_to_date: usize,
     failed: usize,
@@ -190,10 +311,11 @@ struct BuildCounts {
 
 impl BuildCounts {
     fn summary(&self) -> String {
-        format!("生成：重新生成 {} 本，挪位置 {} 本，已是最新 {} 本，失败 {} 本", self.written, self.moved, self.up_to_date, self.failed)
+        let same = if self.same > 0 { format!("，重新生成但内容没变（没再传）{} 本", self.same) } else { String::new() };
+        format!("生成：重新生成并传上 {} 本{same}，挪位置 {} 本，已是最新 {} 本，失败 {} 本", self.written, self.moved, self.up_to_date, self.failed)
     }
     fn any(&self) -> bool {
-        self.written + self.moved + self.failed > 0
+        self.written + self.same + self.moved + self.failed > 0
     }
 }
 
@@ -244,6 +366,10 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
                 Ok(Built::Written { path, warnings }) => {
                     counts.written += 1;
                     Some(std::iter::once(format!("✓ 生成 [{}] {} → {}", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
+                }
+                Ok(Built::Same { path, warnings }) => {
+                    counts.same += 1;
+                    Some(std::iter::once(format!("≡ 重新生成 [{}] {}：和设备上的一样，没再传（{}）", device.id, m.title, path.display())).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n"))
                 }
                 Ok(Built::UpToDate(path)) => {
                     counts.up_to_date += 1;

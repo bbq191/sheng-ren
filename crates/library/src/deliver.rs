@@ -102,11 +102,11 @@ fn mtp_storage(point: &Path) -> Option<PathBuf> {
     }
 }
 
-/// 把本地文件 `src` 放到 `dest`（同一文件系统直接改名、`keep_src` 时或跨文件系统时复制）。`dest` 已经是逐字节相同的文件
-/// 就不动它（Kindle 覆盖成不同字节会清掉阅读进度，相同的不会；也省得在 MTP 上白拷）。复制先写旁边的临时文件再换上去：
-/// MTP 上改名不能覆盖已有文件，先删旧的再改名。返回有没有真的写。
-pub(crate) fn put_file(src: &Path, dest: &Path, keep_src: bool) -> Result<bool, String> {
-    if same_bytes(src, dest) {
+/// 把文件 `src` 放到 `dest`（同一文件系统直接改名；`keep_src` 时或跨文件系统时复制）。`compare` 时 `dest` 已经是逐字节相同的
+/// 文件就不动它（Kindle 覆盖成不同字节会清掉阅读进度，相同的不会；也省得在 MTP 上白拷）——要把 `dest` 读回来，调用方能用记录的
+/// 哈希判断时传 `false`。复制先写旁边的临时文件再换上去：MTP 上改名不能覆盖已有文件，先删旧的再改名。返回有没有真的写。
+pub(crate) fn put_file(src: &Path, dest: &Path, keep_src: bool, compare: bool) -> Result<bool, String> {
+    if compare && same_bytes(src, dest) {
         if !keep_src {
             let _ = std::fs::remove_file(src);
         }
@@ -118,10 +118,11 @@ pub(crate) fn put_file(src: &Path, dest: &Path, keep_src: bool) -> Result<bool, 
     }
     let tmp = crate::fsutil::tmp_sibling(dest);
     let copy = || -> std::io::Result<()> {
-        let mut r = std::fs::File::open(src)?;
-        let mut w = std::fs::File::create(&tmp)?;
+        // 大块读写：经 FUSE（jmtpfs）每次写都是一次往返，缺省 8KB 一块太碎
+        let mut r = std::io::BufReader::with_capacity(COPY_BUF, std::fs::File::open(src)?);
+        let mut w = std::io::BufWriter::with_capacity(COPY_BUF, std::fs::File::create(&tmp)?);
         std::io::copy(&mut r, &mut w)?;
-        w.sync_all()
+        w.into_inner().map_err(|e| e.into_error())?.sync_all()
     };
     if let Err(e) = copy() {
         let _ = std::fs::remove_file(&tmp);
@@ -138,6 +139,9 @@ pub(crate) fn put_file(src: &Path, dest: &Path, keep_src: bool) -> Result<bool, 
     }
     Ok(true)
 }
+
+/// 往设备上拷文件、传给 Move 的读写块大小。
+const COPY_BUF: usize = 1 << 20;
 
 /// 两个文件逐字节相同（`b` 不在算不同）。先比大小，一样才读。
 pub(crate) fn same_bytes(a: &Path, b: &Path) -> bool {
@@ -174,14 +178,14 @@ pub(crate) struct Doc {
 pub(crate) struct Xochitl {
     base: String,
     agent: ureq::Agent,
-    tunnel: Option<Child>,
+    tunnel: std::cell::RefCell<Option<Child>>,
     /// 连的是哪台（提示用）。
     pub host: String,
 }
 
 impl Drop for Xochitl {
     fn drop(&mut self) {
-        if let Some(c) = self.tunnel.as_mut() {
+        if let Some(c) = self.tunnel.get_mut().as_mut() {
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -197,7 +201,7 @@ impl Xochitl {
     }
 
     fn direct(url: &str) -> Result<Xochitl, String> {
-        let x = Xochitl { base: url.to_string(), agent: Self::agent(), tunnel: None, host: url.to_string() };
+        let x = Xochitl { base: url.to_string(), agent: Self::agent(), tunnel: Default::default(), host: url.to_string() };
         x.status()?;
         Ok(x)
     }
@@ -227,10 +231,10 @@ impl Xochitl {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("起不了 ssh：{e}"))?;
-        let mut x = Xochitl { base: format!("http://127.0.0.1:{local}"), agent: Self::agent(), tunnel: Some(child), host: host.to_string() };
+        let x = Xochitl { base: format!("http://127.0.0.1:{local}"), agent: Self::agent(), tunnel: std::cell::RefCell::new(Some(child)), host: host.to_string() };
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
-            if let Some(st) = x.tunnel.as_mut().and_then(|c| c.try_wait().ok().flatten()) {
+            if let Some(st) = x.tunnel.borrow_mut().as_mut().and_then(|c| c.try_wait().ok().flatten()) {
                 return Err(format!("SSH 连不上（{st}）"));
             }
             if std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], local).into(), Duration::from_millis(300)).is_ok() {
@@ -245,6 +249,12 @@ impl Xochitl {
             }
             std::thread::sleep(Duration::from_millis(200));
         }
+    }
+
+    /// 隧道还在、书架服务还答话（Move 拔了、睡了、服务停了都算断了）。
+    pub(crate) fn alive(&self) -> bool {
+        let tunnel_up = self.tunnel.borrow_mut().as_mut().is_none_or(|c| matches!(c.try_wait(), Ok(None)));
+        tunnel_up && self.status().is_ok()
     }
 
     fn status(&self) -> Result<(), String> {
@@ -266,7 +276,7 @@ impl Xochitl {
     fn send(&self, url: &str, file: &Path) -> Result<Option<Doc>, String> {
         let f = std::fs::File::open(file).map_err(|e| format!("读 {}: {e}", file.display()))?;
         let len = f.metadata().map_err(|e| e.to_string())?.len();
-        let r = self.agent.post(url).set("Content-Type", "application/epub+zip").set("Content-Length", &len.to_string()).send(std::io::BufReader::new(f));
+        let r = self.agent.post(url).set("Content-Type", "application/epub+zip").set("Content-Length", &len.to_string()).send(std::io::BufReader::with_capacity(COPY_BUF, f));
         match r {
             Ok(resp) => doc_of(resp).map(Some),
             Err(ureq::Error::Status(404, _)) => Ok(None),
@@ -356,10 +366,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (src, dest) = (d.path().join("src"), d.path().join("dest"));
         std::fs::write(&src, b"abc").unwrap();
-        assert!(put_file(&src, &dest, true).unwrap(), "不在：写");
-        assert!(!put_file(&src, &dest, true).unwrap(), "相同：不写");
+        assert!(put_file(&src, &dest, true, true).unwrap(), "不在：写");
+        assert!(!put_file(&src, &dest, true, true).unwrap(), "相同：不写");
+        assert!(put_file(&src, &dest, true, false).unwrap(), "不比较：照写");
         std::fs::write(&src, b"abd").unwrap();
-        assert!(put_file(&src, &dest, false).unwrap());
+        assert!(put_file(&src, &dest, false, true).unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"abd");
         assert!(!src.exists(), "不留来源时挪走");
         assert!(!same_bytes(&dest, &d.path().join("x")));
