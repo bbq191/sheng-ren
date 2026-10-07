@@ -1358,26 +1358,32 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     // 没有可见内容的文件（只有隐藏标题之类）：目录项、链接改指到下一个版面的开头。
     let mut empty_docs: Vec<String> = Vec::new();
 
-    // 先把所有文档解析成块（注释配对要看全书），再逐个生成版面。
-    let mut parsed: Vec<ParsedDoc> = Vec::new();
-    // 外部样式表按路径只解析一次（大合集几百个文档共用一份样式表）。
-    let mut sheets: HashMap<String, std::rc::Rc<crate::css::Rules>> = HashMap::new();
-    for (si, doc) in book.docs.iter().enumerate() {
+    // 先把所有文档解析成块（注释配对要看全书），再逐个生成版面。各文档独立，多线程解析（`bookconv::util::par_map`，按原顺序收回）。
+    // 外部样式表按路径只解析一次（大合集几百个文档共用一份样式表），各线程共用。
+    let sheets: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::css::Rules>>> = Default::default();
+    let media = b.media;
+    let docs: Vec<(usize, &bookconv::epubbook::Doc)> = book.docs.iter().enumerate().collect();
+    let parse_doc = |&(si, doc): &(usize, &bookconv::epubbook::Doc)| -> (usize, Option<String>, Vec<Block>) {
         let html = Html::parse_document(&doc.html);
         let mut sheet = Sheet::default();
         let mut order = 0;
         for el in html.select(&scraper::Selector::parse("link, style").unwrap_or_else(|_| unreachable!())) {
             // `<link>`/`<style>` 的 `media` 属性和 `@media` 同一口径
-            if el.value().attr("media").is_some_and(|m| !crate::css::media_ok(m, b.media.as_ref())) {
+            if el.value().attr("media").is_some_and(|m| !crate::css::media_ok(m, media.as_ref())) {
                 continue;
             }
             if el.value().name() == "style" {
-                order = sheet.add_at(&el.text().collect::<String>(), order, &doc.path, b.media.as_ref());
+                order = sheet.add_at(&el.text().collect::<String>(), order, &doc.path, media.as_ref());
             } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
                 if let Some(h) = el.value().attr("href") {
                     let path = resolve_link(&doc.path, h).0;
                     if let Some(c) = css.get(path.as_str()) {
-                        let rules = sheets.entry(path).or_insert_with_key(|p| crate::css::Rules::parse(c, p, b.media.as_ref())).clone();
+                        let cached = sheets.lock().unwrap_or_else(|e| e.into_inner()).get(&path).cloned();
+                        // 没解析过的在锁外解析（几个线程同时碰上同一份时各解析一次，结果一样，留先放进去的那份）
+                        let rules = cached.unwrap_or_else(|| {
+                            let r = crate::css::Rules::parse(c, &path, media.as_ref());
+                            sheets.lock().unwrap_or_else(|e| e.into_inner()).entry(path).or_insert(r).clone()
+                        });
                         order = sheet.add_rules(rules, order);
                     }
                 }
@@ -1394,7 +1400,15 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         }
         attach_trailing(&mut blocks, d.take_pending());
         collapse_siblings(&mut blocks);
-        parsed.push((si, &doc.path, d.lang.clone(), blocks));
+        (si, d.lang.clone(), blocks)
+    };
+    // 一批批解析，每批的结果在本线程复制一份、工作线程分配的那份随即释放：块是在工作线程里边解析 DOM 边分配的，和已经释放的 DOM
+    // 交错着留在那几个线程的分配区里，本线程后面生成版面时用不上那些空洞（glibc 按线程分区），不复制的话《阿加莎全集》峰值
+    // 从 0.47GB 涨到 0.63GB；复制一遍只多花约 0.1 秒，工作线程那份整块释放掉。
+    let mut parsed: Vec<ParsedDoc> = Vec::with_capacity(docs.len());
+    for batch in docs.chunks(64) {
+        let got = bookconv::util::par_map(batch, parse_doc);
+        parsed.extend(got.iter().map(|(si, l, b)| (*si, book.docs[*si].path.as_str(), l.clone(), b.clone())));
     }
     mark_notes(&mut parsed);
     b.drop_font = body_font_to_drop(&mut parsed, book);
@@ -1883,7 +1897,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         "0".repeat(40)
     );
     let c = Container { version: 2, info, symtab, capabilities: caps, kfxgen: kfxgen.into_bytes(), entities };
-    Ok(c.to_bytes())
+    Ok(c.into_bytes())
 }
 
 /// 元数据里写的语言。中文书写 `en`：Kindle 只看元数据语言决定开不开「Aa → 间距」里的段间距、字间距、字符间距，
