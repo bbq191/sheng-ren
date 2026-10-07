@@ -3,7 +3,7 @@
 //! （`booklib add <网址>` 入库）。
 //!
 //! 能力边界（据实告知，非 bug）：可读性抽取对**静态 HTML 的文章/博客/新闻**效果好；SPA（纯 JS 渲染）、
-//! 付费墙、反爬站抽不出——纯 Rust 无头浏览器的天花板。网页按 HTTP 头 / `<meta charset>` 解码（GBK 等中文站可用）。
+//! 付费墙、反爬站抽不出——纯 Rust 无头浏览器的天花板。网页按 BOM / HTTP 头 / `<meta charset>` 解码，没声明又不是 UTF-8 的按 GB18030（GBK 等中文站可用）。
 //! 配图最多下载 [`MAX_IMAGES`] 张（4 路并发）；超出上限或下载失败的图**保留原远程地址**，不从正文里删掉。
 //! 当前恒产**单章**（单篇文章足够；多章连载的目录抓取+分章列为后续）。
 
@@ -79,8 +79,7 @@ fn strip_bad_params(url: &str) -> String {
     s.replace("?&", "?").replace("&&", "&").trim_end_matches(['?', '&']).to_string()
 }
 
-/// 抓网页 HTML 并解码成文本：编码按 HTTP 头 `Content-Type` 的 charset → BOM → 页面 `<meta charset>` 的顺序认，
-/// 都没有按 UTF-8（坏字节换成 U+FFFD，不整页失败）。
+/// 抓网页 HTML 并解码成文本（编码怎么认见 [`decode_html`]）。
 fn fetch_text(url: &str) -> Result<String, String> {
     let resp = http_agent(30).get(url).set("User-Agent", UA).set("Accept", "text/html,application/xhtml+xml").call().map_err(|e| format!("抓取失败: {e}"))?;
     let header_charset = resp.header("Content-Type").and_then(charset_param).map(str::to_string);
@@ -99,16 +98,27 @@ fn charset_param(content_type: &str) -> Option<&str> {
     })
 }
 
+/// 网页字节解码成文本。编码按 BOM → HTTP 头 `Content-Type` 的 charset → 页面 `<meta charset>` 的顺序认；
+/// 都没声明时字节是合法 UTF-8 就按 UTF-8，否则按 GB18030（中文站最常见的非 UTF-8 编码，兼容 GBK/GB2312）；
+/// 声明了 UTF-8 但字节不是合法 UTF-8（站点声明错了）也改按 GB18030。解码后去掉替换字符 U+FFFD（坏字节不进正文）。
 fn decode_html(bytes: &[u8], header_charset: Option<&str>) -> String {
     let by_label = |l: &str| encoding_rs::Encoding::for_label(l.trim().as_bytes());
-    let (enc, body) = if let Some(enc) = header_charset.and_then(by_label) {
-        (enc, bytes)
-    } else if let Some((enc, bom_len)) = encoding_rs::Encoding::for_bom(bytes) {
-        (enc, &bytes[bom_len..])
-    } else {
-        (meta_charset(bytes).and_then(|l| by_label(&l)).unwrap_or(encoding_rs::UTF_8), bytes)
+    let (declared, body) = match encoding_rs::Encoding::for_bom(bytes) {
+        Some((enc, bom_len)) => (Some(enc), &bytes[bom_len..]),
+        None => (header_charset.and_then(by_label).or_else(|| meta_charset(bytes).and_then(|l| by_label(&l))), bytes),
     };
-    enc.decode_without_bom_handling(body).0.into_owned()
+    let utf8_ok = || std::str::from_utf8(body).is_ok();
+    let enc = match declared {
+        Some(enc) if enc != encoding_rs::UTF_8 || utf8_ok() => enc,
+        _ if utf8_ok() => encoding_rs::UTF_8,
+        _ => encoding_rs::GB18030,
+    };
+    let text = enc.decode_without_bom_handling(body).0;
+    if text.contains('\u{FFFD}') {
+        text.chars().filter(|&c| c != '\u{FFFD}').collect()
+    } else {
+        text.into_owned()
+    }
 }
 
 /// 页面开头的 `<meta charset="gbk">` 或 `<meta http-equiv="Content-Type" content="text/html; charset=gb2312">`。
@@ -336,6 +346,16 @@ mod tests {
         let old = b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=gb2312\"><p>\xd6\xd0</p>";
         assert!(decode_html(old, None).contains("中"));
         assert!(decode_html("纯 UTF-8".as_bytes(), None).contains("纯 UTF-8"));
+        // 没声明编码、字节不是合法 UTF-8 → 按 GB18030（「中文」的 GBK 字节）
+        assert_eq!(decode_html(b"<p>\xd6\xd0\xce\xc4</p>", None), "<p>中文</p>");
+        // 声明 UTF-8 但字节是 GBK（站点声明错了）→ 回退 GB18030
+        assert!(decode_html(b"<meta charset=\"utf-8\"><p>\xd6\xd0\xce\xc4</p>", None).contains("中文"));
+        assert!(decode_html(b"<p>\xd6\xd0\xce\xc4</p>", Some("UTF-8")).contains("中文"));
+        // BOM 优先于 HTTP 头
+        assert_eq!(decode_html(b"\xef\xbb\xbf\xe4\xb8\xad", Some("gbk")), "中");
+        // 解码后去掉 U+FFFD：GBK 页面末尾截断的半个字不进正文
+        assert_eq!(decode_html(b"\xd6\xd0\xce", Some("gbk")), "中");
+        assert!(!decode_html(b"a\xff\xfeb", Some("utf-8")).contains('\u{FFFD}'));
     }
 
     #[test]

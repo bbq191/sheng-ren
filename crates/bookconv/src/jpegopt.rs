@@ -378,7 +378,11 @@ fn parse_with(jpeg: &[u8], mut emit: impl FnMut(Sym) -> Option<()>) -> Option<(V
                 for c in 0..n {
                     let p = 10 + 3 * c;
                     let hv = *seg.get(p + 1)?;
-                    comps.push(Comp { id: *seg.get(p)?, h: (hv >> 4) as usize, v: (hv & 15) as usize });
+                    let (h, v) = ((hv >> 4) as usize, (hv & 15) as usize);
+                    if !(1..=4).contains(&h) || !(1..=4).contains(&v) {
+                        return None; // 采样因子只能是 1–4（0 会在算 MCU 数时除零）：坏图，原图照用
+                    }
+                    comps.push(Comp { id: *seg.get(p)?, h, v });
                 }
                 kept.push(seg);
             }
@@ -426,7 +430,11 @@ fn parse_with(jpeg: &[u8], mut emit: impl FnMut(Sym) -> Option<()>) -> Option<(V
         let cid = *sos.get(5 + 2 * s)?;
         let t = *sos.get(6 + 2 * s)?;
         let c = comps.iter().find(|c| c.id == cid)?;
-        scan.push((c.h, c.v, (t >> 4) as usize, 4 + (t & 15) as usize));
+        let (td, ta) = ((t >> 4) as usize, (t & 15) as usize);
+        if td > 3 || ta > 3 {
+            return None; // 表号只有 0–3（大了会越界）：坏图，原图照用
+        }
+        scan.push((c.h, c.v, td, 4 + ta));
     }
     // 频谱选择与逐次逼近：基线必须是 0..63、0
     if sos.get(5 + 2 * ns..8 + 2 * ns)? != [0, 63, 0] {
@@ -583,6 +591,35 @@ mod tests {
         let g = GrayImage::from_fn(w, h, |x, y| image::Luma([((x * 7 + y * 3) as u8).wrapping_add(rnd() % 40)]));
         let c = RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 5) as u8, (y * 3) as u8, rnd()]));
         (g, c)
+    }
+
+    /// 头部第一个 `marker` 段的起点（`FF xx` 的位置）。
+    fn seg_pos(jpeg: &[u8], marker: u8) -> usize {
+        let mut pos = 2;
+        loop {
+            if jpeg[pos + 1] == marker {
+                return pos;
+            }
+            pos += 2 + be16(jpeg, pos + 2).unwrap();
+        }
+    }
+
+    /// 坏图不 panic、返回 `None`（原图照用）：采样因子为 0（算 MCU 数时会除零）、扫描里的表号大于 3（会越界）。
+    #[test]
+    fn malformed_sampling_or_table_id_rejected() {
+        let (_, c) = textured(64, 64);
+        let orig = encode(&DynamicImage::ImageRgb8(c), 90);
+        assert!(optimize(&orig).is_some(), "好图本来能处理");
+        for hv in [0x00, 0x10, 0x01, 0x51] {
+            let mut bad = orig.clone();
+            bad[seg_pos(&orig, 0xC0) + 11] = hv; // 第一个分量的 HV
+            assert_eq!(optimize(&bad), None, "HV={hv:#04x}");
+        }
+        for t in [0x40, 0x04, 0xFF] {
+            let mut bad = orig.clone();
+            bad[seg_pos(&orig, 0xDA) + 6] = t; // 第一个分量的 DC/AC 表号
+            assert_eq!(optimize(&bad), None, "表号={t:#04x}");
+        }
     }
 
     #[test]

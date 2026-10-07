@@ -114,7 +114,9 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   写行内 `width:P%`，图和图注同页（profile `caption_fit`，掌阅、Kindle；`capfit`）——掌阅、Kindle 不认多看图集，《绍宋》简介页
 ///   人物图撑满一页、人名掉到下一页。Kindle（profile `image_alpha = false`）把正文 `<img>`/SVG `<image>` 用到的、有透明像素的 PNG
 ///   合成到白底（`imgalpha`；CSS 背景图、两用的不动）——Kindle 把透明处显示成黑色，《绍宋》章标题图 logo.png 成了黑底。
-pub const OPTIMIZE_VERSION: &str = "50";
+/// - v51（2026-10-07，审计）：有 `<body>` 没 `</body>` 的截断页（和没有 body 的片段）不再当空页整页删掉（拿不准就不删）；
+///   抓到的远程图按本地插图的竖向框缩（宽不超过阅读范围宽；以前按横竖选框，横幅能宽到阅读范围的长边）。
+pub const OPTIMIZE_VERSION: &str = "51";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
