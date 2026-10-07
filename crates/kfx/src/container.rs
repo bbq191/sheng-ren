@@ -203,10 +203,41 @@ impl Container {
         // 实体区：每个实体编码成「头 + Ion 正文」，原始字节（图片、字体）借用不复制，最后直接拼进输出——
         // 不先拼一份实体区再整体复制（大漫画几百 MB，省一份峰值内存和一遍拷贝）。
         let parts: Vec<(Vec<u8>, &[u8])> = self.entities.iter().map(entity_parts).collect();
+        let (mut out, _) = self.header(&parts);
+        for (head, raw) in &parts {
+            out.extend_from_slice(head);
+            out.extend_from_slice(raw);
+        }
+        out
+    }
+
+    /// 同 [`to_bytes`](Self::to_bytes)（字节相同），但消耗容器：每个实体的原始字节（图片、字体）拷进输出就释放，峰值内存是
+    /// "输出一份"而不是"输出 + 全部图片"（写出器生成整本书时用；大漫画峰值约减半）。
+    pub fn into_bytes(mut self) -> Vec<u8> {
+        let (heads, mut out) = {
+            let parts: Vec<(Vec<u8>, &[u8])> = self.entities.iter().map(entity_parts).collect();
+            let (header, payload_len) = self.header(&parts);
+            // 输出一次分配够（没写到的页不占物理内存），写的过程中不再扩容复制
+            let mut out = Vec::with_capacity(header.len() + payload_len);
+            out.extend_from_slice(&header);
+            (parts.into_iter().map(|p| p.0).collect::<Vec<_>>(), out)
+        };
+        for (e, head) in std::mem::take(&mut self.entities).into_iter().zip(heads) {
+            out.extend_from_slice(&head);
+            if let Body::Raw(b) = &e.body {
+                out.extend_from_slice(b);
+            }
+        }
+        out
+    }
+
+    /// 实体区之前的全部字节（固定头、索引表、符号表、格式能力、容器信息、kfxgen 信息），和实体区的总长。`parts` 是各实体的
+    /// （头 + Ion 正文, 原始字节），顺序同 `self.entities`。
+    fn header(&self, parts: &[(Vec<u8>, &[u8])]) -> (Vec<u8>, usize) {
         let mut index = Vec::with_capacity(self.entities.len() * INDEX_ENTRY);
         let mut sha = Sha1::new();
         let mut payload_len = 0usize;
-        for (e, (head, raw)) in self.entities.iter().zip(&parts) {
+        for (e, (head, raw)) in self.entities.iter().zip(parts) {
             let len = head.len() + raw.len();
             index.extend(e.id.to_le_bytes());
             index.extend(e.ty.to_le_bytes());
@@ -236,7 +267,7 @@ impl Container {
         let kfxgen = update_payload_sha1(&self.kfxgen, &sha.finalize());
         let header_len = info_off + info_bytes.len() + kfxgen.len();
 
-        let mut out = Vec::with_capacity(header_len + payload_len);
+        let mut out = Vec::with_capacity(header_len);
         out.extend(MAGIC);
         out.extend(self.version.to_le_bytes());
         out.extend((header_len as u32).to_le_bytes());
@@ -247,11 +278,7 @@ impl Container {
         out.extend(caps);
         out.extend(info_bytes);
         out.extend(kfxgen);
-        for (head, raw) in &parts {
-            out.extend_from_slice(head);
-            out.extend_from_slice(raw);
-        }
-        out
+        (out, payload_len)
     }
 }
 
@@ -423,6 +450,8 @@ mod tests {
         let hl = u32_at(&b, 6).unwrap() as usize;
         let hex: String = Sha1::digest(&b[hl..]).iter().map(|x| format!("{x:02x}")).collect();
         assert!(String::from_utf8_lossy(&back.kfxgen).contains(&hex));
+        // 消耗容器的写法字节相同
+        assert_eq!(c.into_bytes(), b);
     }
 
     #[test]

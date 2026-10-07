@@ -7,7 +7,7 @@
 
 use scraper::{ElementRef, Selector};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// 一条声明。
 #[derive(Clone, Debug, PartialEq)]
@@ -81,10 +81,10 @@ pub struct Rules(Vec<Rule>);
 impl Rules {
     /// 解析一份样式表；`url(…)` 按样式表自己的路径 `base`（书内路径）换成书内路径（`base` 空时不换）。
     /// `@media` 块按 `media` 求值（见 [`media_ok`]）。
-    pub fn parse(css: &str, base: &str, media: Option<&MediaEnv>) -> Rc<Rules> {
+    pub fn parse(css: &str, base: &str, media: Option<&MediaEnv>) -> Arc<Rules> {
         let mut r = Rules::default();
         r.add(css, base, media);
-        Rc::new(r)
+        Arc::new(r)
     }
 
     fn add(&mut self, css: &str, base: &str, media: Option<&MediaEnv>) {
@@ -128,7 +128,7 @@ impl Rules {
 /// 一个文档用到的样式表：各份 [`Rules`] 和它们第一条规则的全局序号（后出现的规则优先）。
 #[derive(Default)]
 pub struct Sheet {
-    parts: Vec<(Rc<Rules>, usize)>,
+    parts: Vec<(Arc<Rules>, usize)>,
 }
 
 fn strip_comments(css: &str) -> String {
@@ -666,7 +666,7 @@ impl Sheet {
     }
 
     /// 追加一份解析好的样式表（见 [`Rules::parse`]），返回下一个序号。
-    pub fn add_rules(&mut self, rules: Rc<Rules>, order: usize) -> usize {
+    pub fn add_rules(&mut self, rules: Arc<Rules>, order: usize) -> usize {
         let next = order + rules.0.len();
         self.parts.push((rules, order));
         next
@@ -1177,7 +1177,7 @@ mod tests {
         let mut without = Sheet::default();
         without.add(css, 0);
         for part in &mut without.parts {
-            for r in &mut Rc::get_mut(&mut part.0).unwrap().0 {
+            for r in &mut Arc::get_mut(&mut part.0).unwrap().0 {
                 r.need = None;
             }
         }
