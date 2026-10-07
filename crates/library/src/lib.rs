@@ -236,6 +236,17 @@ impl EpubInfo {
     }
 }
 
+/// 产物用到的各项规则的版本（`booklib --version` 显示）：(名称, 值)。哪一项变了，哪些书的产物就过期，见 docs/development.md#版本号。
+pub fn rule_versions() -> Vec<(&'static str, String)> {
+    vec![
+        ("优化", bookconv::optimize::OPTIMIZE_VERSION.to_string()),
+        ("CBZ 转换", bookconv::convert::CONVERT_VERSION.to_string()),
+        ("补元数据", bookconv::opfmeta::VERSION.to_string()),
+        ("KFX 写出器", kfx::write::WRITER_VERSION.to_string()),
+        ("生成流程", generate::PIPELINE_VERSION.to_string()),
+    ]
+}
+
 /// 不再支持的格式的提示。
 pub fn unsupported(format: &str) -> String {
     format!(".{format} 不再支持（只支持 EPUB 和 CBZ，或网址）")
@@ -288,9 +299,10 @@ impl Library {
         self.targets.borrow_mut().clear();
     }
 
-    /// 忘掉这一轮连上的设备（断开到 Move 的 SSH）：下次用到时重新看接没接上。`sync --watch` 每轮调一次。
+    /// 重新看设备接没接上（`sync --watch` 每轮调一次）：MTP 设备、没接上的下次用到时重新看；到 Move 的 SSH 隧道还通就接着用
+    /// （不每轮重连），断了才重连。
     pub fn refresh_devices(&self) {
-        self.targets.borrow_mut().clear();
+        self.targets.borrow_mut().retain(|_, t| matches!(&**t, Ok(deliver::Target::Xochitl(x)) if x.alive()));
     }
 
     /// 这个模式的产物送到哪：设备接上了（或产物放电脑上）`Ok`，没接上 `Err(原因)`。一轮里只连一次。
