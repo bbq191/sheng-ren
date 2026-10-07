@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>xochitl 里什么样的链接点得动</title>
+  <defs>
+    <marker id="ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f9a5b"/></marker>
+    <marker id="no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#c8483a"/></marker>
+    <style>
+      .hd{font-weight:bold;font-size:15px}
+      .s{font-size:12px;fill:#444}
+      .fn{font-size:12px;fill:#666}
+      .m{font-family:monospace;font-size:11.5px;fill:#4b2e83}
+      .pg{fill:#fff;stroke:#888;stroke-width:1.2}
+      .nav{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.2}
+      .tg{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.1}
+      .bad{fill:#fdecea;stroke:#c8483a;stroke-width:1.1}
+      .okl{stroke:#3f9a5b;stroke-width:1.6;fill:none}
+      .nol{stroke:#c8483a;stroke-width:1.6;fill:none;stroke-dasharray:6 4}
+      .okt{font-size:12px;fill:#2f7a47;font-weight:bold}
+      .not{font-size:12px;fill:#b03a2e;font-weight:bold}
+    </style>
+  </defs>
+  <rect width="960" height="560" fill="#ffffff"/>
+  <text x="20" y="30" class="hd">正文链接只认"同一文件里、指向有内容元素的 #锚点"；目录不受这条限制</text>
+
+  <!-- 目录 -->
+  <rect class="nav" x="330" y="48" width="300" height="56" rx="6"/>
+  <text x="342" y="68" class="fn">nav.xhtml / toc.ncx（目录）</text>
+  <text x="342" y="90" class="m">a.xhtml#ch2　　b.xhtml#sec3</text>
+
+  <!-- a.xhtml -->
+  <rect class="pg" x="20" y="130" width="420" height="390" rx="6"/>
+  <text x="32" y="150" class="fn">a.xhtml（正文一章）</text>
+
+  <text x="36" y="182">①</text><text x="56" y="182" class="m">&lt;a href="#n1"&gt;1&lt;/a&gt;</text>
+  <text x="36" y="214">②</text><text x="56" y="214" class="m">&lt;a href="b.xhtml#n2"&gt;2&lt;/a&gt;</text>
+  <text x="36" y="246">③</text><text x="56" y="246" class="m">&lt;a href="#n3"&gt;3&lt;/a&gt;</text>
+  <text x="36" y="278">④</text><text x="56" y="278" class="m">&lt;a href="#n4"&gt;&lt;img src="note.png"/&gt;&lt;/a&gt;</text>
+  <text x="36" y="310">⑤</text><text x="56" y="310" class="m">&lt;a id="r5" href="#n5"&gt;5&lt;/a&gt;</text>
+
+
+  <text x="400" y="182" class="okt">✓</text>
+  <text x="400" y="246" class="not">✗</text>
+  <text x="400" y="278" class="not">✗</text>
+  <text x="400" y="310" class="not">✗</text>
+  <line x1="36" y1="340" x2="424" y2="340" stroke="#ccc" stroke-dasharray="3 3"/>
+  <text x="36" y="360" class="fn">章末</text>
+  <rect class="tg" x="36" y="368" width="388" height="28" rx="4"/>
+  <text x="46" y="387" class="m">&lt;div id="n1"&gt;1. 注释内容&lt;/div&gt;</text>
+  <rect class="bad" x="36" y="402" width="388" height="28" rx="4"/>
+  <text x="46" y="421" class="m">&lt;a id="n3"&gt;&lt;/a&gt;3. 注释内容</text>
+  <rect class="tg" x="36" y="436" width="388" height="28" rx="4"/>
+  <text x="46" y="455" class="m">&lt;div id="n4"&gt;4. 注释内容&lt;/div&gt;</text>
+  <rect class="bad" x="36" y="470" width="388" height="28" rx="4"/>
+  <text x="46" y="489" class="m">&lt;div id="n5"&gt;&lt;a href="#r5"&gt;↩&lt;/a&gt; 5. …&lt;/div&gt;</text>
+
+  <!-- b.xhtml -->
+  <rect class="pg" x="560" y="130" width="380" height="200" rx="6"/>
+  <text x="572" y="150" class="fn">b.xhtml（另一个文件）</text>
+  <rect class="tg" x="576" y="170" width="348" height="28" rx="4"/>
+  <text x="586" y="189" class="m">&lt;h2 id="sec3"&gt;第三节&lt;/h2&gt;</text>
+  <rect class="tg" x="576" y="210" width="348" height="28" rx="4"/>
+  <text x="586" y="229" class="m">&lt;div id="n2"&gt;2. 注释内容&lt;/div&gt;</text>
+
+  <!-- 目录箭头 -->
+  <path class="okl" d="M420 104 C400 118 330 124 300 150" marker-end="url(#ok)"/>
+  <path class="okl" d="M600 104 C640 112 700 118 720 128" marker-end="url(#ok)"/>
+  <text x="736" y="116" class="okt">目录可以跨文件 ✓</text>
+
+  <!-- ① -->
+  <path class="okl" d="M196 178 C500 180 500 370 426 382" marker-end="url(#ok)"/>
+  <text x="470" y="300" class="okt">① 能跳 ✓</text>
+  <!-- ② -->
+  <path class="nol" d="M236 210 C380 200 470 220 574 224" marker-end="url(#no)"/>
+  <text x="460" y="250" class="not">② 跨文件：当外部网址 ✗</text>
+
+  <!-- 说明 -->
+  <rect x="560" y="350" width="380" height="170" rx="6" fill="#f6f6f6" stroke="#bbb"/>
+  <text x="574" y="374" class="not">③ 目标是空元素：不登记，点了不动 ✗</text>
+  <text x="590" y="394" class="s">id 要挂在有字的 &lt;p&gt;/&lt;div&gt;/&lt;h2&gt;/&lt;li&gt; 上</text>
+  <text x="574" y="420" class="not">④ 链接里只有图、没有字：点不了 ✗</text>
+  <text x="590" y="440" class="s">图标标号换成上标数字（note_icons）</text>
+  <text x="574" y="466" class="not">⑤ 标号 ↔ 回链互相链接：整对丢掉 ✗</text>
+  <text x="590" y="486" class="s">去掉回链（note_backlinks = false），</text>
+  <text x="590" y="504" class="s">返回靠 xochitl 自己的"返回第 X 页"</text>
+</svg>
