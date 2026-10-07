@@ -70,10 +70,10 @@ fn lang_attrs(lang: &str) -> String {
     if valid { format!(" lang=\"{lang}\" xml:lang=\"{lang}\"") } else { String::new() }
 }
 
-/// 一章的完整 XHTML 文档。
-fn chapter_doc(ch: &Chapter, lang: &str) -> String {
+/// 一章的完整 XHTML 文档。`head_extra` 原样插在 `</head>` 前（共用样式表的 `<link>`），没有时传 `""`。
+fn chapter_doc(ch: &Chapter, lang: &str, head_extra: &str) -> String {
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"{}>\n<head><title>{}</title></head>\n<body>{}</body>\n</html>\n",
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"{}>\n<head><title>{}</title>{head_extra}</head>\n<body>{}</body>\n</html>\n",
         lang_attrs(lang),
         xesc(&ch.title),
         ch.html_body
@@ -96,7 +96,7 @@ fn cover_xhtml(m: &BookMeta) -> String {
     )
 }
 
-fn content_opf(book: &Book) -> String {
+fn content_opf(book: &Book, opts: &AssembleOpts) -> String {
     let m = &book.meta;
     let has_cover = m.cover.is_some();
     let mut manifest: Vec<String> = vec![
@@ -128,6 +128,10 @@ fn content_opf(book: &Book) -> String {
             xesc(&r.media_type)
         ));
     }
+    if let Some(css) = &opts.shared_css {
+        manifest.push(format!("    <item id=\"{}\" href=\"{}\" media-type=\"text/css\"/>", xesc(&css.id), xesc(&css.file)));
+    }
+    let id_scheme = opts.id_scheme.as_deref().unwrap_or(ID_SCHEME);
     let author = if m.author.is_empty() {
         String::new()
     } else {
@@ -145,7 +149,8 @@ fn content_opf(book: &Book) -> String {
         ""
     };
     format!(
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"pub-id\">\n  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n    <dc:identifier id=\"pub-id\">{ID_SCHEME}{}</dc:identifier>\n    <dc:title>{}</dc:title>\n    <dc:language>{}</dc:language>{}{}{}{}\n  </metadata>\n  <manifest>\n{}\n  </manifest>\n  <spine>\n{}\n  </spine>\n</package>\n",
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"pub-id\">\n  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n    <dc:identifier id=\"pub-id\">{}{}</dc:identifier>\n    <dc:title>{}</dc:title>\n    <dc:language>{}</dc:language>{}{}{}{}\n  </metadata>\n  <manifest>\n{}\n  </manifest>\n  <spine>\n{}\n  </spine>\n</package>\n",
+        xesc(id_scheme),
         xesc(&m.book_id),
         xesc(&m.title),
         xesc(&m.language),
@@ -212,11 +217,29 @@ fn nav_xhtml(book: &Book) -> String {
 }
 
 
-/// [`assemble`] 的内部变体选项。`Default` = 与 [`assemble`] 完全相同。
+/// 章节共用的一份外链样式表（[`AssembleOpts::shared_css`]）：写成 `OEBPS/{file}`（zip 里排在资源之后），进 manifest，
+/// 按 `link_if` 挂到章节的 `<head>` 上。
+pub struct SharedCss {
+    /// `OEBPS/` 下的文件名，也是章节 `<link href>` 的值（章节都在 `OEBPS/` 下，相对路径即文件名），如 `extra.css`。
+    pub file: String,
+    /// manifest 里的 `id`，不能和组装器自己的 id（`nav`、`cover`、`cover-image`、`c1`…、`res1`…）重名。
+    pub id: String,
+    /// 样式表内容。
+    pub content: String,
+    /// 哪些章节挂 `<link>`：参数是章节正文（`Chapter::html_body`，已做过链接规整）。`None` = 每章都挂。
+    /// 只给用得着的章节挂，免得纯文字章也被一条外链样式表改动排版。
+    pub link_if: Option<fn(&str) -> bool>,
+}
+
+/// [`assemble_with`] 的选项。`Default` = 与 [`assemble`] 完全相同（产物逐字节一致）。
 #[derive(Default)]
-pub(crate) struct AssembleOpts {
+pub struct AssembleOpts {
     /// 写完一份资源就释放它（组装后 `book.resources` 为空）：调用方不再用这批资源时，省掉"资源 + zip 缓冲"同时驻留的一整份体积。
     pub consume_resources: bool,
+    /// OPF `dc:identifier` 的前缀（写成 `{前缀}{book_id}`）。`None` = [`ID_SCHEME`]。调用方靠自己的前缀认出自己转出来的书时用。
+    pub id_scheme: Option<String>,
+    /// 章节共用的外链样式表（见 [`SharedCss`]）。`None` = 不写。
+    pub shared_css: Option<SharedCss>,
 }
 
 /// 把 Book 打包成 EPUB 字节。组装前对每章：先 fix_internal_links（脚注同文件锚点规整），
@@ -229,10 +252,12 @@ pub fn assemble(book: &mut Book) -> Result<Vec<u8>, String> {
 /// 就释放（组装后 `book.resources` 为空），不让"资源表 + zip 缓冲"同时各占一整份体积。产物字节与 [`assemble`] 相同。
 /// 按设备的优化（图片缩放、字体解锁等）在入库之后按 profile 另做，不在转换时写死某台设备。
 pub fn assemble_master(book: &mut Book) -> Result<Vec<u8>, String> {
-    assemble_with(book, AssembleOpts { consume_resources: true })
+    assemble_with(book, AssembleOpts { consume_resources: true, ..Default::default() })
 }
 
-pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u8>, String> {
+/// 带选项的组装（[`AssembleOpts`]）：[`assemble`]、[`assemble_master`] 都是它的特例。组装前同样对每章做
+/// `fix_internal_links` 与 `break_footnote_cycles`；mimetype 首个，全部条目 STORED。
+pub fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u8>, String> {
     if book.chapters.is_empty() {
         return Err("EPUB 至少要有一章".into());
     }
@@ -240,11 +265,12 @@ pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u
         ch.html_body = fix_internal_links(&ch.html_body);
         ch.html_body = crate::htmlproc::break_footnote_cycles(&ch.html_body);
     }
-    let opf = content_opf(book);
+    let opf = content_opf(book, &opts);
     // 预留足够容量：全部 STORED，产物 ≈ 资源 + 章节文本 + 少量固定条目。Vec 倍增扩容会在峰值瞬间同时持有新旧两块。
     let cap = book.resources.iter().map(|r| r.bytes.len()).sum::<usize>()
         + book.chapters.iter().map(|c| c.html_body.len() + 512).sum::<usize>()
         + opf.len()
+        + opts.shared_css.as_ref().map_or(0, |c| c.content.len())
         + 16 * 1024;
     let mut buf: Vec<u8> = Vec::with_capacity(cap);
     {
@@ -257,8 +283,13 @@ pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u
             z.put_stored(&format!("OEBPS/cover.{}", book.meta.cover_ext), cover)?;
             z.put_stored("OEBPS/cover.xhtml", cover_xhtml(&book.meta).as_bytes())?;
         }
+        let css_link = opts.shared_css.as_ref().map(|c| (format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>", xesc(&c.file)), c.link_if));
         for (i, ch) in book.chapters.iter().enumerate() {
-            z.put_stored(&format!("OEBPS/{}", chapter_filename(i)), chapter_doc(ch, &book.meta.language).as_bytes())?;
+            let head_extra = match &css_link {
+                Some((link, cond)) if cond.is_none_or(|f| f(&ch.html_body)) => link.as_str(),
+                _ => "",
+            };
+            z.put_stored(&format!("OEBPS/{}", chapter_filename(i)), chapter_doc(ch, &book.meta.language, head_extra).as_bytes())?;
         }
         if opts.consume_resources {
             for r in std::mem::take(&mut book.resources) {
@@ -268,6 +299,9 @@ pub(crate) fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u
             for r in &book.resources {
                 z.put_stored(&format!("OEBPS/{}", r.path), &r.bytes)?;
             }
+        }
+        if let Some(css) = &opts.shared_css {
+            z.put_stored(&format!("OEBPS/{}", css.file), css.content.as_bytes())?;
         }
         z.finish()?;
     }
@@ -309,7 +343,7 @@ mod nav_tests {
             resources: vec![Resource { path: "images/a.png".into(), media_type: "image/png".into(), bytes: vec![1, 2, 3, 4] }],
             nav: Vec::new(),
         };
-        let opf = content_opf(&book);
+        let opf = content_opf(&book, &AssembleOpts::default());
         assert!(opf.contains("id=\"res1\" href=\"images/a.png\" media-type=\"image/png\""), "manifest 缺资源项: {opf}");
         let bytes = assemble(&mut book).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
@@ -416,9 +450,36 @@ mod nav_tests {
     fn assemble_with_consume_resources_is_byte_identical_and_empties_resources() {
         let plain = assemble(&mut two_chapter_book(true)).unwrap();
         let mut b = two_chapter_book(true);
-        let consumed = assemble_with(&mut b, AssembleOpts { consume_resources: true }).unwrap();
+        let consumed = assemble_with(&mut b, AssembleOpts { consume_resources: true, ..Default::default() }).unwrap();
         assert_eq!(plain, consumed, "consume_resources 只影响内存，不影响产物");
         assert!(b.resources.is_empty(), "资源写完即释放");
+    }
+
+    #[test]
+    fn shared_css_links_only_matching_chapters_and_id_scheme_is_configurable() {
+        fn has_img(body: &str) -> bool {
+            body.contains("<IMG")
+        }
+        let mut b = two_chapter_book(true);
+        let opts = AssembleOpts {
+            consume_resources: true,
+            id_scheme: Some("urn:x:".into()),
+            shared_css: Some(SharedCss { file: "extra.css".into(), id: "extra-css".into(), content: "img{max-width:100%;}\n".into(), link_if: Some(has_img) }),
+        };
+        let entries = zip_names_and_text(assemble_with(&mut b, opts).unwrap());
+        assert_eq!(entries.last().unwrap().0, "OEBPS/extra.css", "样式表排在资源之后");
+        let get = |n: &str| String::from_utf8(entries.iter().find(|(k, _)| k == n).unwrap().1.clone()).unwrap();
+        assert_eq!(get("OEBPS/extra.css"), "img{max-width:100%;}\n");
+        assert!(get("OEBPS/chap_0001.xhtml").contains("<title>图页</title><link rel=\"stylesheet\" type=\"text/css\" href=\"extra.css\"/></head>"));
+        assert!(!get("OEBPS/chap_0002.xhtml").contains("<link"), "不满足 link_if 的章不挂");
+        let opf = get(OPF_PATH);
+        assert!(opf.contains(">urn:x:b</dc:identifier>"), "{opf}");
+        assert!(opf.contains("    <item id=\"extra-css\" href=\"extra.css\" media-type=\"text/css\"/>\n  </manifest>"), "{opf}");
+        // link_if 为 None：每章都挂
+        let mut b = two_chapter_book(false);
+        let opts = AssembleOpts { shared_css: Some(SharedCss { file: "a.css".into(), id: "a".into(), content: String::new(), link_if: None }), ..Default::default() };
+        let entries = zip_names_and_text(assemble_with(&mut b, opts).unwrap());
+        assert_eq!(entries.iter().filter(|(k, v)| k.contains("chap_") && String::from_utf8_lossy(v).contains("href=\"a.css\"")).count(), 2);
     }
 
     #[test]
