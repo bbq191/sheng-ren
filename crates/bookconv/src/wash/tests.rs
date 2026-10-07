@@ -148,6 +148,24 @@
         assert!(!is_empty_page(r#"<html><body><img src="a.png"/></body></html>"#));
     }
 
+    /// 有 `<body>` 没有 `</body>` 的截断页不是空页，整页留着（v51；以前判成空页、正文整页被删）。
+    #[test]
+    fn truncated_page_without_body_close_kept() {
+        let mut v = vec![
+            e("content.opf", OPF),
+            e("style.css", ""),
+            e("dkagent.css", ""),
+            e("toc.ncx", r#"<ncx><navMap><navPoint><content src="c1.xhtml"/></navPoint><navPoint><content src="pb.xhtml"/></navPoint></navMap></ncx>"#),
+            e("c1.xhtml", "<html><body><p>a</p></body></html>"),
+            e("pb.xhtml", "<html><body><p>截断的正文"),
+            e("c2.xhtml", "<html><body><p>c</p></body></html>"),
+        ];
+        let rep = wash_entries(&mut v, &WashOpts { auto_toc: AutoToc::Off, ..Default::default() }).unwrap();
+        assert!(rep.empty_pages_removed.is_empty(), "{:?}", rep.empty_pages_removed);
+        assert!(v.iter().any(|x| x.name == "pb.xhtml"));
+        assert!(s(&v, "content.opf").contains(r#"idref="pb""#));
+    }
+
     fn cover_book(meta: &str) -> Vec<Entry> {
         let opf = format!(r#"<package version="2.0"><metadata><dc:title>书</dc:title>{meta}</metadata><manifest><item id="p1" href="Text/p1.xhtml" media-type="application/xhtml+xml"/><item id="img1" href="Images/001.jpg" media-type="image/jpeg"/><item id="cover.txt" href="cover.txt" media-type="text/plain"/></manifest><spine><itemref idref="p1"/></spine></package>"#);
         vec![
@@ -775,7 +793,10 @@
         for b in ["x", "<p>字</p>", "&amp;", "<IMG src=a>", "<p><Svg/></p>", "<image/>", "<video>", "<hr/>", "<table><tr><td></td></tr></table>", "a < b"] {
             assert!(!is_empty_page(&page(b)), "{b:?}");
         }
-        assert!(is_empty_page("<p>没有 body 的片段按空页算（与旧实现一致）</p>"));
+        // 找不到完整 body 的页拿不准，不算空页（v51：以前按空 body 算，截断页的正文整页被删）
+        assert!(!is_empty_page("<p>没有 body 的片段</p>"));
+        assert!(!is_empty_page("<html><body><p>截断的页：有 body 没有 &lt;/body&gt;"));
+        assert!(!is_empty_page("<html><body>"));
     }
 
     /// 全书没有 `<h>` 标题、目录里没有中文时，新建目录标题用"Contents"；重建已有 nav 时其它 `<nav>`（landmarks）与原标题保留。

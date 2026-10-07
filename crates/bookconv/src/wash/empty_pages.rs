@@ -5,8 +5,9 @@ use super::*;
 
 /// 页面 body 里没有读者看得见的内容（口径见 `html::has_visible`：非空白文字，或图片/分隔线/表格等媒体）。
 /// 2026-09-27：与定章节共用同一套判定（此前这里只认 img/svg/image/video/audio，只有 `<hr/>`/表格的页会被当空页删掉）。
+/// 找不到完整的 `<body>…</body>`（截断的页、没有 body 的片段）不算空页：拿不准就不删（以前按空 body 算，整页正文被删掉）。
 pub(super) fn is_empty_page(html: &str) -> bool {
-    !html::has_visible(html::first_body_inner(html).unwrap_or(""))
+    html::first_body_inner(html).is_some_and(|body| !html::has_visible(body))
 }
 
 pub(super) fn remove_empty_pages(entries: &mut Vec<Entry>, rep: &mut WashReport) {

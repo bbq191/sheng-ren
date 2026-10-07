@@ -13,7 +13,9 @@ use std::path::Path;
 /// 补元数据（[`edit_epub`]）的版本：改了会影响书库产物的行为就加一。书库补过东西的书的指纹带着它（`i{VERSION}`），没补过的不受影响。
 /// - 3（2026-09-30）：补完做 EPUB 3 规范整理。
 /// - 4（2026-09-30）：书库补元数据不再做规范整理（[`Edits::normalize`]，优化器的清洗层反正要做），和没补过东西的书走同一条路。
-pub const VERSION: &str = "4";
+/// - 5（2026-10-07）：`<opf:package>`、`<opf:metadata>` 这类带前缀的 OPF 也认（以前插入点找得到，EPUB2 判定和挂在旧元素上的
+///   `<opf:meta refines>` 认不出：EPUB2 作者少了 `opf:role`、旧的 refines 留着成了悬空引用）。
+pub const VERSION: &str = "5";
 
 /// 支持读写的 Dublin Core 字段。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -128,10 +130,12 @@ impl Edits {
 
 /// 改写 OPF 文本里的字段（封面另算，见 [`edit_epub`]）。`<metadata>` 找不到时报错。
 pub fn apply_fields(opf: &str, set: &[(DcField, Vec<String>)]) -> Result<String, String> {
-    let meta_close = html::tags(opf).find(|t| t.kind == TagKind::Close && (t.is("metadata") || t.is("opf:metadata"))).ok_or("OPF 里没有 </metadata>")?.start;
+    // `<package>`、`<metadata>`、`<meta>` 都认带命名空间前缀的写法（`<opf:package>` 等），同 `wash::opf::package_unique_identifier`
+    use crate::wash::opf::is_local;
+    let meta_close = html::tags(opf).find(|t| t.kind == TagKind::Close && is_local(t.name, "metadata")).ok_or("OPF 里没有 </metadata>")?.start;
     let elems = dc_elements(opf);
     let epub2 = html::tags(opf)
-        .find(|t| t.is_start() && t.is("package"))
+        .find(|t| t.is_start() && is_local(t.name, "package"))
         .and_then(|t| html::attr_value(&opf[t.start..t.end], "version"))
         .is_some_and(|v| v.starts_with('2'))
         && opf.contains("xmlns:opf");
@@ -158,7 +162,7 @@ pub fn apply_fields(opf: &str, set: &[(DcField, Vec<String>)]) -> Result<String,
     }
     // 挂在被删元素上的 `<meta refines="#id">`（EPUB3：作者角色、排序名、书名类型等）一起删
     if !removed_ids.is_empty() {
-        for t in html::tags(opf).filter(|t| t.is_start() && t.is("meta")) {
+        for t in html::tags(opf).filter(|t| t.is_start() && is_local(t.name, "meta")) {
             let Some(r) = html::attr_value(&opf[t.start..t.end], "refines") else { continue };
             if !removed_ids.iter().any(|id| r.strip_prefix('#') == Some(id.as_str())) {
                 continue;
@@ -599,6 +603,16 @@ mod tests {
         let opf = "<package><metadata><dc:identifier>x</dc:identifier></metadata></package>";
         let out = apply_fields(opf, &[(DcField::Publisher, vec!["社".into()]), (DcField::Date, vec!["2020".into()])]).unwrap();
         assert_eq!(out, "<package><metadata><dc:identifier>x</dc:identifier><dc:date>2020</dc:date><dc:publisher>社</dc:publisher></metadata></package>");
+    }
+
+    /// 带 `opf:` 前缀的写法（`<opf:package>`、`<opf:metadata>`、`<opf:meta refines>`）：EPUB2 判定、插入点、挂在旧元素上的 refines 都认。
+    #[test]
+    fn opf_prefixed_package_and_metadata() {
+        let opf = r##"<opf:package xmlns:opf="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="uid"><opf:metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">x</dc:identifier><dc:creator id="c">甲</dc:creator><opf:meta refines="#c" property="role">aut</opf:meta></opf:metadata><opf:manifest/></opf:package>"##;
+        let out = apply_fields(opf, &[(DcField::Title, vec!["新".into()]), (DcField::Creator, vec!["乙".into()])]).unwrap();
+        assert!(out.contains(r#"<dc:title>新</dc:title></opf:metadata>"#), "没有的字段插在 </opf:metadata> 前：{out}");
+        assert!(out.contains(r#"<dc:creator opf:role="aut">乙</dc:creator>"#), "认出是 EPUB2：{out}");
+        assert!(!out.contains("refines"), "挂在旧作者上的 <opf:meta refines> 一起删：{out}");
     }
 
     #[test]
