@@ -352,10 +352,14 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
     }
     // 先比较、再生成（主线程）；要传的交给各设备的传输线程，和生成同时进行；传完的随时取回来记下、报一行
     let mut pipe = library::Pipeline::default();
-    let landed = |lib: &Library, counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, report: &mut dyn FnMut(Result<String, String>), (t, r): (library::Transfer, Result<library::Done, String>)| {
+    let landed = |lib: &Library, counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, report: &mut dyn FnMut(Result<String, String>), ev: library::Event| {
+        let (t, r) = match ev {
+            library::Event::Done(t, r) => (t, r),
+            library::Event::Progress(line) => return report(Ok(line)),
+        };
         let (device, title) = (t.device.clone(), t.title.clone());
         let book = t.book_id().to_string();
-        match lib.complete(t, r) {
+        match lib.complete(*t, r) {
             Ok(b) => {
                 if let Some(line) = built_line(&device, &title, b, quiet, counts) {
                     report(Ok(line));
