@@ -15,14 +15,13 @@ pub(super) fn remove_empty_pages(entries: &mut Vec<Entry>, rep: &mut WashReport)
     let mut removed: Vec<String> = Vec::new();
     // 条目名索引建一次（此前每个 spine 页线性找一遍全书条目，几千页漫画是"页数 × 条目数"次比较；同名取第一条）。
     let by_name = name_index(entries);
-    for p in &opf.spine {
-        if Some(p) == opf.nav_doc.as_ref() {
-            continue;
-        }
-        if let Some(e) = by_name.get(p.as_str()).map(|&i| &entries[i]) {
-            if is_html_entry(&e.name, &e.data) && is_empty_page(&String::from_utf8_lossy(&e.data)) {
-                removed.push(p.clone());
-            }
+    // 各页独立判断，多线程（`util::par_map`），按 spine 顺序收回
+    let empty = crate::util::par_map(&opf.spine, |p| {
+        Some(p) != opf.nav_doc.as_ref() && by_name.get(p.as_str()).map(|&i| &entries[i]).is_some_and(|e| is_html_entry(&e.name, &e.data) && is_empty_page(&String::from_utf8_lossy(&e.data)))
+    });
+    for (p, empty) in opf.spine.iter().zip(empty) {
+        if empty {
+            removed.push(p.clone());
         }
     }
     if removed.is_empty() || removed.len() >= opf.spine.len() {

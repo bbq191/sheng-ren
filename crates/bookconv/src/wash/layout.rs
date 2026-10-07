@@ -57,19 +57,16 @@ pub(super) fn align_classes(html: &str) -> String {
 
 /// 全书被链接指到的 fragment（`#x`）。
 fn referenced_frags(entries: &[Entry]) -> HashSet<String> {
-    let mut set = HashSet::new();
-    for e in entries {
+    // 各文件独立收集（多线程），再并起来
+    let per_file = crate::util::par_map(entries, |e| {
         let l = e.name.to_ascii_lowercase();
-        if is_html_entry(&e.name, &e.data) || l.ends_with(".ncx") || l.ends_with(".opf") {
-            let t = String::from_utf8_lossy(&e.data);
-            for v in html::link_values(&t) {
-                if let (_, Some(f)) = html::split_href(v) {
-                    set.insert(html::frag_id(f).into_owned());
-                }
-            }
+        if !(is_html_entry(&e.name, &e.data) || l.ends_with(".ncx") || l.ends_with(".opf")) {
+            return Vec::new();
         }
-    }
-    set
+        let t = String::from_utf8_lossy(&e.data);
+        html::link_values(&t).into_iter().filter_map(|v| html::split_href(v).1.map(|f| html::frag_id(f).into_owned())).collect()
+    });
+    per_file.into_iter().flatten().collect()
 }
 
 /// 书里"会画出东西"的 CSS：选择器里出现的类名与裸元素名。空元素只要带着这样的类（或自己的 `style` 会画），就不是空白。
@@ -86,8 +83,7 @@ impl Drawn {
         static ELEM: OnceLock<Regex> = OnceLock::new();
         let class_re = CLASS.get_or_init(|| Regex::new(r#"\.([A-Za-z0-9_-]+)"#).unwrap());
         let elem_re = ELEM.get_or_init(|| Regex::new(r#"(?:^|[\s,>+~])([A-Za-z][A-Za-z0-9]*)"#).unwrap());
-        let mut d = Drawn::default();
-        let mut add_css = |css: &str| {
+        let add_css = |css: &str, d: &mut Drawn| {
             for c in css_rule_re().captures_iter(css) {
                 let sel = strip_css_comments(&c[1]);
                 let pseudo = sel.contains(":before") || sel.contains(":after");
@@ -102,15 +98,23 @@ impl Drawn {
                 }
             }
         };
-        for e in entries {
+        // 各条目独立收集（多线程，`util::par_map`），再并起来
+        let per_entry = crate::util::par_map(entries, |e| {
+            let mut d = Drawn::default();
             if e.name.to_ascii_lowercase().ends_with(".css") {
-                add_css(&String::from_utf8_lossy(&e.data));
+                add_css(&String::from_utf8_lossy(&e.data), &mut d);
             } else if is_html_entry(&e.name, &e.data) {
                 let t = String::from_utf8_lossy(&e.data);
                 for c in html::style_block_re().captures_iter(&t) {
-                    add_css(&c[2]);
+                    add_css(&c[2], &mut d);
                 }
             }
+            d
+        });
+        let mut d = Drawn::default();
+        for x in per_entry {
+            d.classes.extend(x.classes);
+            d.elements.extend(x.elements);
         }
         d
     }
@@ -242,18 +246,27 @@ pub(super) fn remove_chapter_end_blanks(entries: &mut [Entry], rep: &mut WashRep
     let mut tail_classes: HashSet<String> = HashSet::new();
     // 条目名 → 下标建一次（此前每个 spine 页线性找一遍全书条目）
     let index: HashMap<String, usize> = name_index(entries).into_iter().map(|(n, i)| (n.to_string(), i)).collect();
-    for path in &opf.spine {
-        if Some(path) == opf.nav_doc.as_ref() || is_toc_file(path) {
-            continue;
-        }
-        let Some(e) = index.get(path).map(|&i| &mut entries[i]) else { continue };
-        let Ok(html) = std::str::from_utf8(&e.data) else { continue };
+    let pages: Vec<usize> = opf.spine.iter().filter(|p| Some(*p) != opf.nav_doc.as_ref() && !is_toc_file(p)).filter_map(|p| index.get(p).copied()).collect();
+    let trim = |e: &mut Entry| -> (usize, Vec<String>) {
+        let Ok(html) = std::str::from_utf8(&e.data) else { return (0, Vec::new()) };
         let (new, removed, classes) = trim_tail(html, &referenced, &drawn);
-        tail_classes.extend(classes);
         if removed > 0 {
-            rep.trailing_blanks_removed += removed;
             e.data = new.into_bytes();
         }
+        (removed, classes)
+    };
+    let pages_set: HashSet<usize> = pages.iter().copied().collect();
+    let results = if pages_set.len() == pages.len() {
+        // 各页独立，多线程做（结果与按 spine 顺序逐页做相同）
+        let mut picked: Vec<&mut Entry> = entries.iter_mut().enumerate().filter(|(i, _)| pages_set.contains(i)).map(|(_, e)| e).collect();
+        crate::util::par_map_mut(&mut picked, |e| trim(e))
+    } else {
+        // spine 里同一页出现不止一次：照原来的顺序逐页做（同一页要在前一次的结果上再做）
+        pages.iter().map(|&i| trim(&mut entries[i])).collect()
+    };
+    for (removed, classes) in results {
+        rep.trailing_blanks_removed += removed;
+        tail_classes.extend(classes);
     }
     if tail_classes.is_empty() {
         return;

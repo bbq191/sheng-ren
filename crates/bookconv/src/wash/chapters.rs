@@ -505,7 +505,7 @@ fn in_hidden(html: &str, spans: &[Span], mut i: usize) -> bool {
 /// 目录条目在文件里的标题块：(标题元素下标, 范围)。从锚点（没有锚点就从文件开头）往后找标题元素或段落，
 /// 一个接一个拼文字，正好拼成目录标签就是标题块（《绍宋》：「第一章」+「明道宫」= 「第一章 明道宫」）；拼不成时
 /// 第一个是 `<hN>` 或不超过 60 字就只取它。从文件开头找时，标题前面只隔着装饰图的，图也算进标题块。
-fn locate_title(f: &FileInfo, frag: &str, label: &str) -> Option<(usize, Extent)> {
+fn locate_title(f: &FileInfo, ids: &HashMap<String, usize>, frag: &str, label: &str) -> Option<(usize, Extent)> {
     let want = title_key(label);
     if frag.is_empty() {
         // 只指到文件：从开头拼得上最好；拼不上时文件里别处有完全对得上的（好读：开头是书名页，「第一章」是后面一段），取它。
@@ -525,14 +525,21 @@ fn locate_title(f: &FileInfo, frag: &str, label: &str) -> Option<(usize, Extent)
         }
         return Some((from_start.0, from_start.1));
     }
-    let start = {
-        let has = |sp: &Span| {
-            let open = &f.html[sp.open_start..sp.open_end];
-            html::attr_value(open, "id").or_else(|| (sp.name == "a").then(|| html::attr_value(open, "name")).flatten()).is_some_and(|v| crate::util::xml_unescape(v) == frag)
-        };
-        f.spans[f.spans.iter().position(has)?].open_start
-    };
+    let start = f.spans[*ids.get(frag)?].open_start;
     title_from(f, start, &want, false).map(|(k, e, _)| (k, e))
+}
+
+/// 文件里各元素的锚点名 → 第一个带它的元素（下标）：`id`，`<a>` 没有 `id` 时看 `name`（字符引用还原）。[`locate_title`] 按锚点找
+/// 元素用（以前每个目录条目都把全文件的元素挨个解析一遍属性，几千条目录的合集是平方级）。
+fn anchor_index(f: &FileInfo) -> HashMap<String, usize> {
+    let mut m = HashMap::new();
+    for (i, sp) in f.spans.iter().enumerate() {
+        let open = &f.html[sp.open_start..sp.open_end];
+        if let Some(v) = html::attr_value(open, "id").or_else(|| (sp.name == "a").then(|| html::attr_value(open, "name")).flatten()) {
+            m.entry(crate::util::xml_unescape(v).into_owned()).or_insert(i);
+        }
+    }
+    m
 }
 
 /// 从 `start` 往后拼标题块（见 [`locate_title`]）。返回 (标题元素, 范围, 是否正好拼成目录标签)。
@@ -542,7 +549,9 @@ fn title_from(f: &FileInfo, start: usize, want: &str, file_start: bool) -> Optio
     let (mut first_text, mut first_media, mut last): (Option<usize>, Option<usize>, Option<usize>) = (None, None, None);
     let mut acc = String::new();
     let mut taken_end = start;
-    for (i, sp) in spans.iter().enumerate() {
+    // 元素按开标签位置排着：`start` 之前的一个都不看，直接从这里开始
+    let from = spans.partition_point(|sp| sp.open_start < start);
+    for (i, sp) in spans.iter().enumerate().skip(from) {
         if sp.open_start < taken_end || !sp.closed() {
             continue;
         }
@@ -609,6 +618,9 @@ struct TocDriven {
     in_toc: HashSet<ElemRef>,
 }
 
+/// 一个文件里的目录标题：(标题元素, 级别, 范围, 在章这一层或更上面)。
+type TocTitle = (usize, u8, Extent, bool);
+
 fn toc_driven(files: &mut [FileInfo], entries: &[Entry], opf: &Opf) -> Option<TocDriven> {
     let ncx = opf.ncx.as_ref()?;
     let e = entries.iter().find(|e| &e.name == ncx)?;
@@ -621,22 +633,30 @@ fn toc_driven(files: &mut [FileInfo], entries: &[Entry], opf: &Opf) -> Option<To
     // 目录顺序上的 (文件, 标题元素, 级别, 层级, 显示的数字, 像带着第 1 节的章：标签末尾是节号「１」，或章名后面单独一段「１」)
     let mut order: Vec<(usize, usize, u8, usize, Option<u32>, bool)> = Vec::new();
     // 每个文件的目录标题：(标题元素, 级别, 范围, 在章这一层或更上面)
-    let mut per_file: Vec<Vec<(usize, u8, Extent, bool)>> = vec![Vec::new(); files.len()];
+    let mut per_file: Vec<Vec<TocTitle>> = vec![Vec::new(); files.len()];
     // 章这一层按分支算：章这一层或更深处挂着子条目的「第X部/卷」（福尔摩斯全集《恐怖谷》：书 → 部 → 章），它下面的
     // 章深一层，「部」自己算书/卷级。
     let mut ancestors: Vec<(usize, bool)> = Vec::new(); // (层级, 是挂着子条目的「部」)
-    for (ti, (depth, label, target)) in flat.iter().enumerate() {
+    // 各目录条目指到哪个文件、标题块在哪：只读各文件，多线程先算好（`util::par_map`），下面按目录顺序逐条用
+    let anchors: Vec<HashMap<String, usize>> = crate::util::par_map(files, anchor_index);
+    let located = crate::util::par_map(&flat, |(_, label, target)| {
+        let (path, frag) = crate::epubzip::resolve_href(ncx, target);
+        let &fi = file_of.get(path.as_str())?;
+        let frag = html::frag_id(frag.unwrap_or("")).into_owned();
+        let title = locate_title(&files[fi], &anchors[fi], &frag, label);
+        Some((fi, frag, title))
+    });
+    drop(anchors);
+    for (ti, ((depth, label, _), located)) in flat.iter().zip(located).enumerate() {
         while ancestors.last().is_some_and(|a| a.0 >= *depth) {
             ancestors.pop();
         }
         let part_here = *depth >= chapter && part_like(label) && flat.get(ti + 1).is_some_and(|n| n.0 > *depth);
         let eff = chapter + ancestors.iter().filter(|a| a.1 && a.0 >= chapter).count();
         ancestors.push((*depth, part_here));
-        let (path, frag) = crate::epubzip::resolve_href(ncx, target);
-        let Some(&fi) = file_of.get(path.as_str()) else { continue };
+        let Some((fi, frag, title)) = located else { continue };
         total += 1;
-        let frag = html::frag_id(frag.unwrap_or("")).into_owned();
-        let Some((key, ext)) = locate_title(&files[fi], &frag, label) else { continue };
+        let Some((key, ext)) = title else { continue };
         found += 1;
         if frag.is_empty() && has_visible(&files[fi].html[files[fi].lo..files[fi].spans[key].open_start]) {
             late.insert((fi, key));
@@ -760,9 +780,11 @@ fn toc_driven(files: &mut [FileInfo], entries: &[Entry], opf: &Opf) -> Option<To
             extra_by_file[x.fi].push((x.elem, 3));
         }
     }
-    for (fi, f) in files.iter_mut().enumerate() {
-        let toc = std::mem::take(&mut per_file[fi]);
-        let mut extra = std::mem::take(&mut extra_by_file[fi]);
+    // 各文件独立，多线程做（`util::par_map_mut`）
+    let mut work: Vec<_> = files.iter_mut().zip(per_file).zip(extra_by_file).enumerate().collect();
+    crate::util::par_map_mut(&mut work, |(fi, ((f, toc), extra))| {
+        let (fi, toc) = (*fi, std::mem::take(toc));
+        let mut extra = std::mem::take(extra);
         for (k, lv, e, _) in &toc {
             if *lv <= 2 && first_sections.contains(&(fi, *k)) {
                 let end = f.spans[e.last].close_end;
@@ -785,7 +807,7 @@ fn toc_driven(files: &mut [FileInfo], entries: &[Entry], opf: &Opf) -> Option<To
                 f.add_headings(&secs);
             }
         }
-    }
+    });
     let mut roles = [Role::Other; 7];
     roles[1] = Role::Title;
     roles[2] = Role::Title;
@@ -850,22 +872,25 @@ pub(crate) fn is_toc_like_page(html: &str) -> bool {
 pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &mut WashReport) {
     let Some(opf) = parse_opf(entries) else { return };
     // 1. 收集 spine 各文件的标题（目录页、导航文件不算）。
-    let mut files: Vec<FileInfo> = Vec::new();
     let index = name_index(entries);
-    for path in &opf.spine {
+    // 各文件独立，多线程扫（`util::par_map`，按 spine 顺序收回）
+    let mut files: Vec<FileInfo> = crate::util::par_map(&opf.spine, |path| {
         if Some(path) == opf.nav_doc.as_ref() || is_toc_file(path) {
-            continue;
+            return None;
         }
-        let Some(&idx) = index.get(path.as_str()) else { continue };
-        let Ok(html) = std::str::from_utf8(&entries[idx].data) else { continue };
-        let Some((lo, hi)) = html::body_range(html) else { continue };
+        let &idx = index.get(path.as_str())?;
+        let html = std::str::from_utf8(&entries[idx].data).ok()?;
+        let (lo, hi) = html::body_range(html)?;
         let spans = parse_spans(html, lo, hi);
         if looks_like_toc_page(html, lo, hi, &spans) {
-            continue;
+            return None;
         }
         let heads = collect_headings(html, &spans, &h_candidates(html, &spans));
-        files.push(FileInfo { idx, path: path.clone(), html: html.to_string(), lo, hi, spans, heads, extents: HashMap::new() });
-    }
+        Some(FileInfo { idx, path: path.clone(), html: html.to_string(), lo, hi, spans, heads, extents: HashMap::new() })
+    })
+    .into_iter()
+    .flatten()
+    .collect();
     // 只信书自带的目录：本次清洗自动生成的目录（`toc_generated > 0`）是按文件/页数凑的，不代表章节结构。
     // 书自带目录用得上时按目录层级定标题和角色（用户 2026-10-05），否则按 `<hN>` 级别判断（下面这一大段）。
     let (toc_roles, mut label_paragraphs, in_toc) = match (rep.toc_generated == 0).then(|| toc_driven(&mut files, entries, &opf)).flatten() {

@@ -58,7 +58,7 @@ fn optimize_inner(
     let mut archive = ZipArchive::new(std::io::BufReader::new(in_file)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
 
     // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）。
-    let raw = crate::epubzip::read_skeleton(&mut archive)?.entries;
+    let raw = crate::epubzip::read_skeleton_par(input_path, &mut archive)?.entries;
     let prep = prepare_entries(raw, opts, bytes_before)?;
     check_cancel(cancel)?;
     let (comic_margin, grayscale, is_comic_book) = (opts.comic_margin, opts.grayscale, prep.is_comic_book);
@@ -82,77 +82,178 @@ fn optimize_inner(
         xf.caption_ctx = Some(caption_ctx(entries, &src_names, &mut archive)?);
     }
     let total_entries = entries.len();
-    // 图片并行处理（见 `imgpool`）：主线程按条目顺序读原图字节、提交给 worker、按原顺序取回结果写 zip；
-    // 提前提交 `lookahead` 张（读原图字节几乎不花时间，处理才慢），处理与写盘/读盘重叠。结果与逐张顺序处理逐字节相同。
+    // 并行（见 `imgpool`）：主线程按条目顺序变换文字条目，把图片处理和 deflate 压缩交给 worker，再按原顺序取回写 zip。
+    // 图片提前提交 `lookahead` 张，worker 自己打开源文件读原图字节（原图在 zip 里是压缩的时，解压整卷漫画在主线程上要近一秒），
+    // 处理与写盘重叠。要 deflate 的条目（文字、样式、字体……）也交给 worker 压（[`crate::epubzip::Precompressed`]：文字多的书
+    // deflate 占主线程两三成），写进 zip 时原样拷压好的数据。结果与逐条顺序处理、直接写逐字节相同。
     let workers = crate::imgpool::worker_count();
     let lookahead = workers + 2;
+    // 已交出去、还没写进 zip 的条目最多这么多（压好的、处理好的结果在这里排队等前面的写完）
+    let max_queued = lookahead;
     let image_positions: Vec<usize> = entries.iter().enumerate().filter(|(_, (n, _, ish))| !*ish && crate::imgopt::is_page_image(n)).map(|(i, _)| i).collect();
     std::thread::scope(|scope| -> Result<(), String> {
-        struct ImgJob {
-            bytes: Vec<u8>,
-            bg: Option<crate::bgfit::BgFit>,
-            flatten: bool,
-            reply: std::sync::mpsc::Sender<Vec<u8>>,
+        enum Job<'e> {
+            /// `src`：原书里的条目名（清洗时改过名的是原名）。
+            Image { src: &'e str, bg: Option<crate::bgfit::BgFit>, flatten: bool, reply: std::sync::mpsc::Sender<Result<Vec<u8>, String>> },
+            Deflate { name: &'e str, data: std::borrow::Cow<'e, [u8]>, reply: std::sync::mpsc::Sender<Result<crate::epubzip::Precompressed, String>> },
         }
-        let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<ImgJob>(lookahead);
+        /// 按条目顺序排队等写进 zip 的东西。
+        enum Out<'e> {
+            /// 图片：等 worker 处理完（条目名用来判断换没换格式）。
+            Image(&'e str, std::sync::mpsc::Receiver<Result<Vec<u8>, String>>),
+            /// 等 worker 压好。
+            Deflate(std::sync::mpsc::Receiver<Result<crate::epubzip::Precompressed, String>>),
+            /// 直接写（STORED 的条目）。
+            Direct(&'e str, std::borrow::Cow<'e, [u8]>),
+            /// 不写（`mimetype` 建 `EpubWriter` 时写过了；推迟的 OPF 最后写），只算进度。
+            Skip,
+        }
+        let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<Job>(lookahead);
         let job_rx = std::sync::Arc::new(std::sync::Mutex::new(job_rx));
         let budget = std::sync::Arc::new(crate::imgpool::PixelBudget::new(opts.limits.pool_pixel_budget));
         let max_px = opts.limits.max_decode_pixels;
         for _ in 0..workers {
             let (rx, budget) = (job_rx.clone(), budget.clone());
-            scope.spawn(move || loop {
-                let job = { rx.lock().unwrap_or_else(|e| e.into_inner()).recv() };
-                let Ok(job) = job else { break };
-                // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
-                // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
-                let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&job.bytes))).unwrap_or(1_000_000);
-                let _permit = budget.acquire(px);
-                let out = transform_image_bytes(&job.bytes, is_comic_book, screen, comic_margin, grayscale, job.bg, job.flatten, max_px).unwrap_or(job.bytes);
-                let _ = job.reply.send(out);
+            scope.spawn(move || {
+                // 读原图用的源文件（第一次用到时打开，同阶段一读的是同一个文件）
+                let mut source: Option<crate::epubzip::FileZip> = None;
+                loop {
+                    let job = { rx.lock().unwrap_or_else(|e| e.into_inner()).recv() };
+                    let Ok(job) = job else { break };
+                    match job {
+                        Job::Image { src, bg, flatten, reply } => {
+                            let bytes = match &mut source {
+                                Some(z) => Ok(z),
+                                None => crate::epubzip::open_file_zip(input_path).map(|z| source.insert(z)),
+                            }
+                            .and_then(|z| crate::epubzip::read_by_name(z, src))
+                            .map_err(|e| format!("重读图片失败: {e}"));
+                            let Ok(bytes) = bytes else {
+                                let _ = reply.send(bytes);
+                                continue;
+                            };
+                            // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
+                            // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
+                            let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&bytes))).unwrap_or(1_000_000);
+                            let _permit = budget.acquire(px);
+                            let out = transform_image_bytes(&bytes, is_comic_book, screen, comic_margin, grayscale, bg, flatten, max_px).unwrap_or(bytes);
+                            let _ = reply.send(Ok(out));
+                        }
+                        Job::Deflate { name, data, reply } => {
+                            let _ = reply.send(crate::epubzip::Precompressed::new(name, &data));
+                        }
+                    }
+                }
             });
         }
         // 接收端只由 worker 持有：万一 worker 全部退出，`job_tx.send` 立刻报错而不是在满队列上永远阻塞。
         drop(job_rx);
-        let mut pending: std::collections::VecDeque<std::sync::mpsc::Receiver<Vec<u8>>> = std::collections::VecDeque::new();
+        let mut pending: std::collections::VecDeque<std::sync::mpsc::Receiver<Result<Vec<u8>, String>>> = std::collections::VecDeque::new();
+        let mut queue: std::collections::VecDeque<Out> = std::collections::VecDeque::new();
         let mut next_submit = 0usize;
         let mut consumed = 0usize; // 已取回的图片数：第 consumed 张图片对应 image_positions[consumed]
+        let mut queued_images = 0usize; // 排在 `queue` 里、还没写的图片
+        let mut written = 0usize;
+        // 一批最多这么多个条目、这么多字节的 html
+        const PREFIX_BATCH: usize = 32;
+        const PREFIX_BATCH_BYTES: usize = 2 << 20;
+        let (mut prefix_end, mut prefixes) = (0usize, Vec::new().into_iter());
+        // 按顺序写 `queue` 前面的：`wait` 为假时只写已经好了的，为真时等前面那个好了再写。返回写没写。
+        let mut write_front = |queue: &mut std::collections::VecDeque<Out>, wait: bool, queued_images: &mut usize| -> Result<bool, String> {
+            use std::sync::mpsc::TryRecvError;
+            let Some(front) = queue.front() else { return Ok(false) };
+            match front {
+                Out::Image(name, rx) => {
+                    let out = match if wait { rx.recv().map_err(|_| TryRecvError::Disconnected) } else { rx.try_recv() } {
+                        Ok(out) => out?,
+                        Err(TryRecvError::Empty) => return Ok(false),
+                        Err(TryRecvError::Disconnected) => return Err(format!("图片处理线程异常退出（{name}）")),
+                    };
+                    if may_retype(name) {
+                        if let Some(mt) = crate::imgopt::converted_media_type(name, &out) {
+                            retyped.push((name.to_string(), mt));
+                        }
+                    }
+                    zw.put(name, &out)?;
+                    *queued_images -= 1;
+                }
+                Out::Deflate(rx) => {
+                    let z = match if wait { rx.recv().map_err(|_| TryRecvError::Disconnected) } else { rx.try_recv() } {
+                        Ok(z) => z?,
+                        Err(TryRecvError::Empty) => return Ok(false),
+                        Err(TryRecvError::Disconnected) => return Err("压缩线程异常退出".to_string()),
+                    };
+                    zw.put_precompressed(z)?;
+                }
+                Out::Direct(name, data) => zw.put(name, data)?,
+                Out::Skip => {}
+            }
+            queue.pop_front();
+            written += 1;
+            on_progress(written, total_entries);
+            Ok(true)
+        };
         for (i, (name, data, ish)) in entries.iter().enumerate() {
             check_cancel(cancel)?;
-            // 补满提前量：读原图字节（archive 支持随时按名字重新 seek 读，跟阶段一是同一个源文件）并提交。
-            while pending.len() < lookahead && next_submit < image_positions.len() {
+            // 交出去还没写的图片已经有 `lookahead` 张：先等前面的写掉，腾出位置（至少能交这一张）
+            while queued_images >= lookahead {
+                write_front(&mut queue, true, &mut queued_images)?;
+            }
+            // 补满提前量（原图字节由 worker 自己从源文件读）
+            while pending.len() + queued_images < lookahead && next_submit < image_positions.len() {
                 let img_name = &entries[image_positions[next_submit]].0;
                 // 清洗时改过名的（文件名有安卓存储不能用的字符）按原名回原书读
-                let src_name = src_names.get(img_name.as_str()).copied().unwrap_or(img_name.as_str());
-                let real_bytes = crate::epubzip::read_by_name(&mut archive, src_name).map_err(|e| format!("重读图片失败: {e}"))?;
+                let src = src_names.get(img_name.as_str()).copied().unwrap_or(img_name.as_str());
                 let (tx, rx) = std::sync::mpsc::channel();
-                job_tx.send(ImgJob { bytes: real_bytes, bg: prep.bg_fits.get(img_name.as_str()).copied(), flatten: prep.alpha_imgs.contains(img_name.as_str()), reply: tx }).map_err(|_| "图片处理线程已退出".to_string())?;
+                job_tx
+                    .send(Job::Image { src, bg: prep.bg_fits.get(img_name.as_str()).copied(), flatten: prep.alpha_imgs.contains(img_name.as_str()), reply: tx })
+                    .map_err(|_| "图片处理线程已退出".to_string())?;
                 pending.push_back(rx);
                 next_submit += 1;
             }
             let is_image = image_positions.get(consumed) == Some(&i);
-            let final_data: std::borrow::Cow<[u8]> = match xf.transform_text(name, data, *ish) {
-                Some(t) => t,
-                None if is_image => {
-                    let rx = pending.pop_front().ok_or("图片队列意外为空")?;
-                    consumed += 1;
-                    let out = rx.recv().map_err(|_| format!("图片处理线程异常退出（{name}）"))?;
-                    if may_retype(name) {
-                        if let Some(mt) = crate::imgopt::converted_media_type(name, &out) {
-                            retyped.push((name.clone(), mt));
-                        }
-                    }
-                    std::borrow::Cow::Owned(out)
+            // html 章节变换的前几步（各章独立）一批一批预先多线程算好；分批是为了不让整本书的文字多出一份
+            if i == prefix_end {
+                let mut bytes = 0usize;
+                prefix_end = i;
+                while prefix_end < entries.len() && prefix_end - i < PREFIX_BATCH && (prefix_end == i || bytes < PREFIX_BATCH_BYTES) {
+                    bytes += if entries[prefix_end].2 { entries[prefix_end].1.len() } else { 0 };
+                    prefix_end += 1;
                 }
-                None => std::borrow::Cow::Borrowed(data.as_slice()),
-            };
-            if deferred_opf == Some(name.as_str()) {
-                deferred_opf_bytes = Some(final_data.into_owned());
-            } else if name != "mimetype" {
-                // `mimetype`（阶段一放在第一个）建 `EpubWriter` 时已经写了
-                zw.put(name, &final_data)?;
+                prefixes = xf.html_prefixes(&entries[i..prefix_end]).into_iter();
             }
-            on_progress(i + 1, total_entries);
+            let prefix = prefixes.next().flatten();
+            let out = match xf.transform_text(name, data, *ish, prefix) {
+                None if is_image => {
+                    consumed += 1;
+                    queued_images += 1;
+                    Out::Image(name, pending.pop_front().ok_or("图片队列意外为空")?)
+                }
+                // `mimetype`（阶段一放在第一个）建 `EpubWriter` 时已经写了
+                _ if name == "mimetype" => Out::Skip,
+                t => {
+                    let t = t.unwrap_or(std::borrow::Cow::Borrowed(data.as_slice()));
+                    if deferred_opf == Some(name.as_str()) {
+                        deferred_opf_bytes = Some(t.into_owned());
+                        Out::Skip
+                    } else if crate::util::is_image_ext(name) {
+                        Out::Direct(name, t)
+                    } else {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        job_tx.send(Job::Deflate { name, data: t, reply: tx }).map_err(|_| "压缩线程已退出".to_string())?;
+                        Out::Deflate(rx)
+                    }
+                }
+            };
+            queue.push_back(out);
+            loop {
+                let wait = queue.len() > max_queued;
+                if !write_front(&mut queue, wait, &mut queued_images)? {
+                    break;
+                }
+            }
         }
+        while write_front(&mut queue, true, &mut queued_images)? {}
         drop(job_tx); // 关闭队列，worker 退出，scope 才能 join
         Ok(())
     })?;

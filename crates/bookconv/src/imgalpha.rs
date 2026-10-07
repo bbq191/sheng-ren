@@ -16,17 +16,17 @@ use crate::html;
 /// 可能要合成白底的图（zip 路径；是不是 PNG、有没有透明像素，处理图片时再看）：正文 `<img src>`、SVG `<image href>` 引用、又没在任何 CSS 里被引用的。`entries` 是
 /// (条目名, 字节, 是否 html)，路径都是清洗改名后的。
 pub fn plan(entries: &[(String, Vec<u8>, bool)]) -> HashSet<String> {
-    let mut imgs: HashSet<String> = HashSet::new();
-    let mut css: HashSet<String> = HashSet::new();
-    let css_urls = |text: &str, base: &str, css: &mut HashSet<String>| {
+    let css_urls = |text: &str, base: &str, css: &mut Vec<String>| {
         for u in crate::bgfit::urls(text) {
             if !html::is_external(&u) {
-                css.insert(crate::epubzip::resolve_link(base, &u).0);
+                css.push(crate::epubzip::resolve_link(base, &u).0);
             }
         }
     };
-    for (name, data, ish) in entries {
-        let Ok(text) = std::str::from_utf8(data) else { continue };
+    // 各条目独立扫（多线程，`util::par_map`）：(正文用到的图, CSS 引用的图)，再并起来
+    let per_entry = crate::util::par_map(entries, |(name, data, ish)| {
+        let (mut imgs, mut css) = (Vec::new(), Vec::new());
+        let Ok(text) = std::str::from_utf8(data) else { return (imgs, css) };
         if name.to_ascii_lowercase().ends_with(".css") {
             css_urls(text, name, &mut css);
         } else if *ish {
@@ -46,10 +46,17 @@ pub fn plan(entries: &[(String, Vec<u8>, bool)]) -> HashSet<String> {
                     None
                 };
                 if let Some(v) = src.filter(|v| !v.is_empty() && !html::is_external(v)) {
-                    imgs.insert(crate::epubzip::resolve_link(name, v).0);
+                    imgs.push(crate::epubzip::resolve_link(name, v).0);
                 }
             }
         }
+        (imgs, css)
+    });
+    let mut imgs: HashSet<String> = HashSet::new();
+    let mut css: HashSet<String> = HashSet::new();
+    for (i, c) in per_entry {
+        imgs.extend(i);
+        css.extend(c);
     }
     imgs.retain(|p| !css.contains(p));
     imgs

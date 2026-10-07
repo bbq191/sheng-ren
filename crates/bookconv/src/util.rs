@@ -304,6 +304,65 @@ pub fn memfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+/// 并行处理时一个线程一次领多少个（太少争锁，太多分不匀：一本书常有一两个特别大的文件）。
+const PAR_CHUNK: usize = 8;
+
+/// 对 `items` 的每一项并行调用 `f`（只读共享的东西），结果按原顺序返回。`f` 必须是纯的（同样的输入同样的输出），
+/// 所以结果和顺序执行逐字节相同。线程数同图片处理（[`crate::imgpool::worker_count`]）；项数少时直接在本线程做。
+/// 清洗层、优化器里"逐文件独立"的几步（每一步都要扫全书的文字）、KFX 写出器解析各文档用它。
+pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let workers = crate::imgpool::worker_count().min(items.len().div_ceil(PAR_CHUNK));
+    if workers <= 1 {
+        return items.iter().map(f).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut parts: Vec<(usize, Vec<R>)> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut got = Vec::new();
+                    loop {
+                        let c = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(chunk) = items.get(c * PAR_CHUNK..) else { break };
+                        got.push((c, chunk.iter().take(PAR_CHUNK).map(&f).collect::<Vec<R>>()));
+                    }
+                    got
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+    });
+    parts.sort_unstable_by_key(|p| p.0);
+    parts.into_iter().flat_map(|p| p.1).collect()
+}
+
+/// 同 [`par_map`]，`f` 可以改它拿到的那一项（各线程拿到的项互不重叠）。每项就地改，不会整本书新旧两份同时在内存里。
+pub(crate) fn par_map_mut<T: Send, R: Send>(items: &mut [T], f: impl Fn(&mut T) -> R + Sync) -> Vec<R> {
+    let workers = crate::imgpool::worker_count().min(items.len().div_ceil(PAR_CHUNK));
+    if workers <= 1 {
+        return items.iter_mut().map(f).collect();
+    }
+    let chunks = std::sync::Mutex::new(items.chunks_mut(PAR_CHUNK).enumerate());
+    let mut parts: Vec<(usize, Vec<R>)> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                s.spawn(|| {
+                    let mut got = Vec::new();
+                    loop {
+                        let next = chunks.lock().unwrap_or_else(|e| e.into_inner()).next();
+                        let Some((c, chunk)) = next else { break };
+                        got.push((c, chunk.iter_mut().map(&f).collect::<Vec<R>>()));
+                    }
+                    got
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+    });
+    parts.sort_unstable_by_key(|p| p.0);
+    parts.into_iter().flat_map(|p| p.1).collect()
+}
+
 /// FNV-1a 64 位（稳定的书 ID 用，结果进产物，别改算法）。
 pub fn fnv64(b: &[u8]) -> u64 {
     b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
@@ -422,5 +481,21 @@ mod tests {
         assert_eq!(sanitize_filename("  ", "book"), "book");
         assert_eq!(sanitize_filename("   ", "article"), "article");
         assert_eq!(sanitize_filename("正常书名", "book"), "正常书名");
+    }
+
+    /// 并行逐项处理：结果按原顺序，就地改的改到对应那一项；项数少时也对。
+    #[test]
+    fn par_map_keeps_order_and_mutates_each_item() {
+        for n in [0usize, 1, 7, 8, 9, 100, 1000] {
+            let v: Vec<usize> = (0..n).collect();
+            assert_eq!(par_map(&v, |x| x * 3), v.iter().map(|x| x * 3).collect::<Vec<_>>());
+            let mut m: Vec<String> = v.iter().map(|x| x.to_string()).collect();
+            let lens = par_map_mut(&mut m, |s| {
+                s.push('!');
+                s.len()
+            });
+            assert_eq!(m, v.iter().map(|x| format!("{x}!")).collect::<Vec<_>>());
+            assert_eq!(lens, m.iter().map(String::len).collect::<Vec<_>>());
+        }
     }
 }
