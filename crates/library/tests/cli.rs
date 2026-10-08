@@ -205,7 +205,10 @@ fn meta_edit_errors_leave_the_file_untouched() {
     expect(booklib(None, &["meta", "--edit", b, "--force"]), 1, "是 meta --fetch 的选项");
     expect(booklib(None, &["meta", "--edit", b, "--no-backup"]), 1, "不认识选项 --no-backup");
     expect(booklib(None, &["meta", "--edit", b, "--title"]), 1, "--title 要给值");
-    expect(booklib(None, &["meta", "--edit", dir.path().join("没有.epub").to_str().unwrap()]), 2, "文件不存在");
+    // 不是文件就去书库找；书库不在时不新建
+    let no_lib = dir.path().join("没有书库");
+    expect(booklib(Some(&no_lib), &["meta", "--edit", dir.path().join("没有.epub").to_str().unwrap()]), 2, "文件不存在");
+    assert!(!no_lib.exists(), "找书不建书库");
     expect(booklib(None, &["meta", "--edit", b, "--get-cover", dir.path().join("x.jpg").to_str().unwrap()]), 2, "书里没有封面");
     expect(booklib(None, &["meta", "--edit", b, "--title", "新", "--cover", dir.path().join("没有.jpg").to_str().unwrap()]), 2, "没有.jpg");
     std::fs::write(dir.path().join("坏.epub"), b"not a zip").unwrap();
@@ -251,6 +254,40 @@ fn meta_show_lists_tracked_books() {
     let out = stdout(&o);
     assert!(out.contains("风起") && out.contains("书里 标题：风起") && out.contains("找来：没找过") && out.contains("共 1 本"), "{out}");
     expect(booklib(Some(&lib), &["meta", "--show", "--fetch"]), 1, "不能一起用");
+}
+
+#[test]
+fn meta_edit_finds_books_by_id_or_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    let books = dir.path().join("books");
+    std::fs::create_dir_all(&books).unwrap();
+    std::fs::write(books.join("恶女的告白.epub"), sample_epub("恶女的告白")).unwrap();
+    std::fs::write(books.join("恶女的告白·续.epub"), sample_epub("恶女的告白·续")).unwrap();
+    std::fs::write(books.join("绝叫.epub"), sample_epub("绝叫")).unwrap();
+    assert_eq!(code(&booklib(Some(&lib), &["track", books.to_str().unwrap()])), Some(0));
+    assert_eq!(code(&booklib(Some(&lib), &["sync", "--no-build"])), Some(0));
+    let view = |f: &str| stdout(&booklib(None, &["meta", "--edit", books.join(f).to_str().unwrap()]));
+
+    // 书名片段：改的是原件
+    let o = booklib(Some(&lib), &["meta", "--edit", "绝叫", "--author", "叶真中显"]);
+    assert_eq!(code(&o), Some(0), "{}", stderr(&o));
+    assert!(stdout(&o).contains("→ ") && stdout(&o).contains("已写入"), "{}", stdout(&o));
+    assert!(view("绝叫.epub").contains("作者: 叶真中显"), "{}", view("绝叫.epub"));
+
+    // 对上几本：列出来，不改
+    let before = std::fs::read(books.join("恶女的告白.epub")).unwrap();
+    expect(booklib(Some(&lib), &["meta", "--edit", "恶女", "--author", "x"]), 2, "对上 2 本书");
+    assert_eq!(std::fs::read(books.join("恶女的告白.epub")).unwrap(), before);
+
+    // id 前缀（只看不改也行）
+    let list = stdout(&booklib(Some(&lib), &["list"]));
+    let id = list.lines().find(|l| l.contains("恶女的告白") && !l.contains("续")).and_then(|l| l.split_whitespace().next()).unwrap().to_string();
+    let o = booklib(Some(&lib), &["meta", "--edit", &id]);
+    assert_eq!(code(&o), Some(0), "{}", stderr(&o));
+    assert!(stdout(&o).contains("标题: 恶女的告白"), "{}", stdout(&o));
+
+    expect(booklib(Some(&lib), &["meta", "--edit", "没有这本"]), 2, "书库里也没有");
 }
 
 #[test]

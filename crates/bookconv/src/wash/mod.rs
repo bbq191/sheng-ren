@@ -111,11 +111,14 @@ pub struct WashOpts {
     pub keep_fonts: HashSet<String>,
     /// 阅读器认 `rgba()` 颜色（profile 的 `css_rgba`，缺省 `true`）；`false` 时换成不透明写法（见 `cssunlock::rgba_to_opaque`）。
     pub css_rgba: bool,
+    /// 只修复（文字书，profile `text_repair_only`）：只做 EPUB 3 修复和目录（[`repair_entries`]），不解锁、不排版、不删空白页，
+    /// 别的选项不看。调用方已判定不是漫画。
+    pub repair_only: bool,
 }
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, repair_only: false }
     }
 }
 
@@ -224,6 +227,10 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     strip_pseudo_drm(entries, &mut rep)?;
     // 文件名有安卓存储不能用的字符的先改名：后面各步按条目名找文件
     safe_names::rename_unsafe_entries(entries, &mut rep);
+    if opts.repair_only {
+        repair_entries(entries, opts.auto_toc, &mut rep);
+        return Ok((rep, false));
+    }
     remove_empty_pages(entries, &mut rep);
     drop_dead_refs(entries, &mut rep);
     // Auto → 探测主语言，解析成具体 Cjk/Latin 再逐文件注排版（探测在剥空页之后、注样式之前）。
@@ -306,6 +313,41 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     normalize::normalize_book(entries, &lang_tag, heading, &mut rep);
     fix_ncx_uid(entries, &mut rep);
     Ok((rep, comic))
+}
+
+/// 只修复（[`WashOpts::repair_only`]，文字书；2026-10-08 用户定 Kindle、掌阅这样做）：书里的文字、图片、样式一概不动，只做
+/// - 合规：指向不存在文件的引用去掉（`drop_dead_refs`）、一个标签上重复的 `id` 合并、跨文件重复的 id 改名（链接跟着改）、
+///   NCX 的 DOCTYPE 和 manifest id、`dtb:uid` 对齐，最后规范整理成 EPUB 3（`normalize.rs`：合法 XML、OPF 3.0、nav 与 NCX 互补）；
+/// - 目录：指错位置的改指、分部重建、没有目录的按标题生成、按目录层级定章节并把漏掉的节补进目录（补的 id 不改显示）。
+///
+/// 伪 DRM 剥离、文件名改安全字符在调用方（[`wash_entries_detect`]）已经做了。
+fn repair_entries(entries: &mut Vec<Entry>, auto_toc_mode: AutoToc, rep: &mut WashReport) {
+    drop_dead_refs(entries, rep);
+    let lang = detect_dominant_script(entries);
+    let lang_tag = book_lang_tag(entries, find_opf(entries), lang);
+    let heading = toc_title(lang);
+    let dups = crate::util::par_map_mut(entries, |e| {
+        if !is_html_entry(&e.name, &e.data) || is_toc_file(&e.name) {
+            return 0;
+        }
+        let Ok(t) = std::str::from_utf8(&e.data) else { return 0 };
+        let n = count_dup_id_tags(t);
+        if n > 0 {
+            e.data = collapse_dup_id_attrs(t).into_bytes();
+        }
+        n
+    });
+    rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
+    fix_ncx_manifest_id(entries, rep);
+    repair_ncx_targets(entries, rep);
+    restructure_existing_toc_parts(entries, auto_toc_mode, heading, rep);
+    nest_parts_among_siblings(entries, auto_toc_mode, heading, rep);
+    auto_toc(entries, auto_toc_mode, heading, rep);
+    chapters_into_toc(entries, heading, rep);
+    dedup_ids_across_book(entries, rep);
+    strip_ncx_doctype(entries, rep);
+    normalize::normalize_book(entries, &lang_tag, heading, rep);
+    fix_ncx_uid(entries, rep);
 }
 
 /// 书的语言标签：OPF `dc:language` 优先，没有就按主语言（`Latin` → en，其余 zh）。

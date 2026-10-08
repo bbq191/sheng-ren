@@ -2,22 +2,22 @@
 //!
 //! 按书名、作者找到这本书，存下元数据（`Meta::info`），书里没有封面的顺带找封面（见 `cover`）：
 //! 1. **豆瓣**条目（中文版）：内容简介、标签、原作名，以及条目对应版本的出版社、出版年、ISBN、译者；
-//! 2. 豆瓣没有时 **Wikidata** 作品：原作名、首次出版年。
+//! 2. 豆瓣没有时 **QQ 阅读**（`qqread`，网络文学多在这里）：内容简介、分类当标签、封面；
+//! 3. 都没有时 **Wikidata** 作品：原作名、首次出版年。
 //!
 //! **写进书里的只有"作品"层面的信息，而且只补书里没有的**：内容简介（`dc:description`）、标签（`dc:subject`）。
 //! 出版社、ISBN、译者这些是豆瓣那个**版本**的，不一定是你手上这本（好读的书多是台湾译本，豆瓣条目多是大陆版），
 //! 只记在 `meta.json` 里给人参考，不写进书。书名、作者一律用书自己的，不改。正文不动。
 
 use crate::cover::{epub_has_cover, incomplete, CoverInfo, CoverResult};
-use crate::matching::title_candidates;
-use crate::{douban, wikidata, Library, Meta};
+use crate::{douban, qqread, wikidata, Library, Meta};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// 联网找来的元数据（`Meta::info`）。
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct BookInfo {
-    /// 从哪来的："豆瓣 <网址>" 或 "Wikidata Q…"。
+    /// 从哪来的："豆瓣 <网址>"、"QQ阅读 <网址>" 或 "Wikidata Q…"。
     pub source: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub original_title: String,
@@ -101,6 +101,12 @@ fn from_douban(hit: &douban::Hit, s: douban::Subject, authors: &[String]) -> Boo
     }
 }
 
+fn from_qqread(hit: &qqread::Hit, authors: &[String]) -> BookInfo {
+    let author_keys: Vec<String> = authors.iter().map(|a| crate::matching::norm_author(a)).collect();
+    let subjects = hit.categories.iter().filter(|t| !author_keys.contains(&crate::matching::norm_author(t))).take(8).cloned().collect();
+    BookInfo { source: format!("QQ阅读 {}", hit.url()), description: hit.intro.clone(), subjects, ..Default::default() }
+}
+
 fn from_wikidata(w: &wikidata::Work) -> BookInfo {
     BookInfo {
         source: format!("Wikidata {}", w.qid),
@@ -141,12 +147,13 @@ impl Library {
             return Err("连不上网".into());
         }
         net.clear_transient();
-        let titles = title_candidates(meta);
+        // 找书只用书里的元数据：书名 + 作者（2026-10-08 用户定，不再从文件名里取书名）
+        let title = meta.title.trim();
         let mut info: Option<BookInfo> = None;
         let mut cover: Option<CoverResult> = None;
 
         // ① 豆瓣
-        let hits = douban::search(net, &titles, &meta.authors);
+        let hits = douban::search(net, title, &meta.authors);
         let mut chosen = 0; // 元数据取哪个条目：封面用了哪个就取哪个
         if need_cover {
             if let Some((i, bytes, ext)) = douban::best_cover(net, &hits) {
@@ -164,29 +171,35 @@ impl Library {
             }
         }
 
-        let from_douban = info.is_some();
-        // 豆瓣的封面已经存下了：后面出错也不整本报错，如实报"封面已存、元数据没查成"
+        // ② QQ 阅读：豆瓣没有的（网络文学多是这样）。豆瓣是出错没查成时不查：QQ 阅读的结果存下了，以后就不会再去豆瓣找
+        if net.transient_error().is_none() && ((need_info && info.is_none()) || (need_cover && cover.is_none())) {
+            let hits = qqread::search(net, title, &meta.authors);
+            let mut chosen = 0;
+            if need_cover && cover.is_none() {
+                if let Some((i, bytes, ext)) = qqread::first_cover(net, &hits) {
+                    chosen = i;
+                    cover = Some(CoverResult::Found(self.store_cover(meta, &bytes, ext, hits[i].cover.clone(), hits[i].label())?));
+                }
+            }
+            if need_info && info.is_none() {
+                info = hits.get(chosen).map(|h| from_qqread(h, &meta.authors));
+            }
+        }
+
+        let from_site = info.is_some();
+        // 豆瓣、QQ 阅读的封面已经存下了：后面出错也不整本报错，如实报"封面已存、元数据没查成"
         let cover_stored = cover.is_some();
 
-        // ② Wikidata：原作（元数据没找到、或封面还没有时）
+        // ③ Wikidata：原作（元数据没找到、或封面还没有时）
         // Wikidata 出错（有些网络里单独连不上）不能连累豆瓣已经找到的元数据：先存元数据，封面这一步再报错
         let mut work = None;
         let mut work_err = None;
         if (need_info && info.is_none()) || (need_cover && cover.is_none()) {
-            for t in &titles {
-                match wikidata::find_work(net, t, &meta.authors) {
-                    Ok(Some(w)) => {
-                        work = Some(w);
-                        break;
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        work_err = Some(e);
-                        break;
-                    }
-                }
+            match wikidata::find_work(net, title, &meta.authors) {
+                Ok(w) => work = w,
+                Err(e) => work_err = Some(e),
             }
-            if !from_douban && !cover_stored {
+            if !from_site && !cover_stored {
                 if let Some(e) = &work_err {
                     return Err(e.clone());
                 }
@@ -196,7 +209,7 @@ impl Library {
             }
         }
         // 网络出过错（豆瓣可能只是没查成）：不拿 Wikidata 的元数据凑数——存下了下次就不再查
-        if !from_douban && net.transient_error().is_some() {
+        if !from_site && net.transient_error().is_some() {
             info = None;
         }
 
@@ -214,7 +227,7 @@ impl Library {
             }
             InfoResult::Failed(e)
         } else {
-            InfoResult::NotFound("豆瓣、Wikidata 里都找不到书名、作者对得上的书".into())
+            InfoResult::NotFound("豆瓣、QQ 阅读、Wikidata 里都找不到书名、作者对得上的书".into())
         };
         if need_cover && cover.is_none() {
             let found = (|| {
@@ -225,7 +238,7 @@ impl Library {
                     Ok(c) => CoverResult::Found(c),
                     // 没找到是因为网络出错：不生成（生成的会存下来，以后就不找了）
                     Err(_) if net.transient_error().is_some() => return Err(incomplete(&net.transient_error().unwrap_or_default())),
-                    // ③ 都没有：生成
+                    // ④ 都没有：生成
                     Err(why) => CoverResult::Generated(self.generate_cover(net, meta)?, why),
                 })
             })();

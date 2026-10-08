@@ -75,14 +75,14 @@ Move 上的显示成 xochitl:文件夹/文件名（只看记录，不连 Move）
     },
     Help {
         name: "meta",
-        synopsis: &["meta --fetch [--force] [--clear] [书…]", "meta --show [书…]", "meta --edit 书.epub [--title 书名 --author 作者 --tag 标签 --cover 图 …]"],
+        synopsis: &["meta --fetch [--force] [--clear] [书…]", "meta --show [书…]", "meta --edit 书.epub|书 [--title 书名 --author 作者 --tag 标签 --cover 图 …]"],
         brief: "书的元数据：联网补、查看、改写一个 EPUB",
         detail: "\
---fetch  联网补元数据（豆瓣 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过。
+--fetch  联网补元数据（豆瓣 → QQ 阅读 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过。
          生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动。
          --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
 --show   查看跟踪目录里的书的元数据：书里写的，和 --fetch 找来的；只读
---edit   查看、改写一个 EPUB 文件的元数据和封面（改文件本身，和书库无关；值给空字符串 = 删掉），
+--edit   查看、改写一个 EPUB 文件的元数据和封面（改文件本身；值给空字符串 = 删掉）。给书库 id 或书名时改那本书的原件，
          详见 booklib meta --edit --help",
     },
     Help {
@@ -530,9 +530,9 @@ fn path_hint(selectors: &[String]) -> String {
     }
 }
 
-/// `booklib [--library=…] meta … --edit …`：返回 `meta` 之后的参数（去掉第一个 `--edit` 和 `--library=`），交给 `meta_edit`。
+/// `booklib [--library=…] meta … --edit …`：返回 `meta` 之后的参数（去掉第一个 `--edit` 和 `--library=`）和 `--library=` 的值，交给 `meta_edit`。
 /// 它在通用解析之前分出去：通用解析不许 `--名字=` 留空，而 `--edit` 的空值表示删掉。
-fn meta_edit_args() -> Option<Vec<OsString>> {
+fn meta_edit_args() -> Option<(Vec<OsString>, Option<PathBuf>)> {
     let is_library = |a: &OsString| a.to_str().is_some_and(|s| s.starts_with("--library="));
     let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
     let i = raw.iter().position(|a| !is_library(a))?;
@@ -542,13 +542,14 @@ fn meta_edit_args() -> Option<Vec<OsString>> {
     let mut rest: Vec<OsString> = raw[i + 1..].iter().filter(|a| !is_library(a)).cloned().collect();
     let e = rest.iter().position(|a| a == "--edit")?;
     rest.remove(e);
-    Some(rest)
+    let library = raw.iter().rev().find_map(|a| a.to_str()?.strip_prefix("--library=").map(PathBuf::from));
+    Some((rest, library))
 }
 
 fn main() {
     bookconv::util::restore_sigpipe();
-    if let Some(rest) = meta_edit_args() {
-        meta_edit::run(rest);
+    if let Some((rest, library)) = meta_edit_args() {
+        meta_edit::run(rest, library.unwrap_or_else(Library::default_root));
         return;
     }
     print_help_if_asked();

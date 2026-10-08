@@ -29,42 +29,52 @@ impl Hit {
     }
 }
 
-/// 按书名找：书名（简体化后）相同、或只差卷次后缀（≤2 字），且作者对得上的条目（没有作者信息时书名要完全相同）。
-/// 依次试各个书名，第一个有结果的为准，保持豆瓣给的顺序。
-pub(crate) fn search(net: &Net, titles: &[String], authors: &[String]) -> Vec<Hit> {
+/// 按书里元数据的书名、作者找（2026-10-08 用户定）：搜「书名 作者」，搜不到再只搜书名（书里没写作者时只搜书名）；
+/// 书名（简体化后）相同、或只差卷次后缀（≤2 字），且作者对得上的条目（没有作者信息时书名要完全相同），保持豆瓣给的顺序。
+/// 书名同时是人名的（《张居正》）光搜书名回空列表，带上作者才有书（2026-10-08 实测）。
+pub(crate) fn search(net: &Net, title: &str, authors: &[String]) -> Vec<Hit> {
+    let nt = norm_s(title);
+    if nt.is_empty() {
+        return Vec::new();
+    }
     let want_authors: Vec<String> = authors.iter().map(|a| norm_author(a)).filter(|a| !a.is_empty()).collect();
-    for t in titles {
-        let nt = norm_s(t);
-        if nt.is_empty() {
-            continue;
-        }
+    let author_q = crate::matching::author_for_query(authors);
+    let title = title.trim();
+    let queries = author_q.map(|a| format!("{title} {a}")).into_iter().chain(std::iter::once(title.to_string()));
+    for q in queries {
         // 出错（被拦、回来的不是 JSON、网络问题）已记成临时错误（`Net::transient_error`），调用方不会当成"没这本书"；
-        // 别的书名也不用再试了
-        let Ok(v) = net.json_strict(&format!("https://book.douban.com/j/subject_suggest?q={}", enc(t))) else { break };
-        let mut hits = Vec::new();
-        for x in v.as_array().into_iter().flatten() {
-            let g = |k: &str| x[k].as_str().unwrap_or("").to_string();
-            let (title, author, pic, id) = (g("title"), g("author_name"), g("pic"), g("id"));
-            if id.is_empty() || x["type"].as_str().is_some_and(|ty| ty != "b") {
-                continue;
-            }
-            let dt = norm_s(&title);
-            let title_ok = dt == nt || ((nt.starts_with(&dt) || dt.starts_with(&nt)) && nt.chars().count().abs_diff(dt.chars().count()) <= 2);
-            let author_ok = if want_authors.is_empty() {
-                dt == nt
-            } else {
-                author.split(['/', '、', ',', '，']).any(|a| want_authors.iter().any(|w| similarity(w, &norm_author(a)) >= 0.6))
-            };
-            if title_ok && author_ok {
-                let pic = pic.replace("/view/subject/s/", "/view/subject/l/").replace("/view/subject/m/", "/view/subject/l/");
-                hits.push(Hit { id, title, author, year: g("year"), pic });
-            }
-        }
+        // 别的搜索词也不用再试了
+        let Ok(v) = net.json_strict(&format!("https://book.douban.com/j/subject_suggest?q={}", enc(&q))) else { break };
+        let hits = matching_hits(&v, &nt, &want_authors);
         if !hits.is_empty() {
             return hits;
         }
     }
     Vec::new()
+}
+
+/// 搜索建议返回的条目里书名、作者对得上的（见 [`search`]）。
+fn matching_hits(v: &serde_json::Value, nt: &str, want_authors: &[String]) -> Vec<Hit> {
+    let mut hits = Vec::new();
+    for x in v.as_array().into_iter().flatten() {
+        let g = |k: &str| x[k].as_str().unwrap_or("").to_string();
+        let (title, author, pic, id) = (g("title"), g("author_name"), g("pic"), g("id"));
+        if id.is_empty() || x["type"].as_str().is_some_and(|ty| ty != "b") {
+            continue;
+        }
+        let dt = norm_s(&title);
+        let title_ok = dt == nt || ((nt.starts_with(&dt) || dt.starts_with(nt)) && nt.chars().count().abs_diff(dt.chars().count()) <= 2);
+        let author_ok = if want_authors.is_empty() {
+            dt == nt
+        } else {
+            author.split(['/', '、', ',', '，']).any(|a| want_authors.iter().any(|w| similarity(w, &norm_author(a)) >= 0.6))
+        };
+        if title_ok && author_ok {
+            let pic = pic.replace("/view/subject/s/", "/view/subject/l/").replace("/view/subject/m/", "/view/subject/l/");
+            hits.push(Hit { id, title, author, year: g("year"), pic });
+        }
+    }
+    hits
 }
 
 /// 前几个条目里挑分辨率最高、像封面的封面图（老条目只有 200 多像素宽的小图）。返回（条目下标, 图片, 扩展名）。
@@ -224,6 +234,19 @@ mod tests {
         assert_eq!(s.original_title, "白夜行");
         assert_eq!(s.description, "第一段 & 引号\n第二段");
         assert_eq!(s.tags, ["东野圭吾", "推理", "日本文学"]);
+    }
+
+    #[test]
+    fn hits_need_title_and_author() {
+        let v: serde_json::Value = serde_json::from_str(r#"[
+            {"title":"熊召政","type":"a","id":"112478"},
+            {"title":"张居正","author_name":"熊召政","year":"2022","type":"b","id":"34955795","pic":"https://img2.doubanio.com/view/subject/s/public/s1.jpg"},
+            {"title":"张居正・木兰歌","author_name":"熊召政","type":"b","id":"1034733"},
+            {"title":"张居正","author_name":"朱东润","type":"b","id":"1"}
+        ]"#).unwrap();
+        let hits = matching_hits(&v, &norm_s("张居正"), &[norm_author("熊召政")]);
+        assert_eq!(hits.iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["34955795"], "作者条目、书名多出一截的、作者对不上的都不要");
+        assert!(hits[0].pic.contains("/view/subject/l/"), "封面换大图");
     }
 
     #[test]

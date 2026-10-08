@@ -19,11 +19,6 @@
 use super::*;
 use crate::html::{has_visible, parse_spans, Span};
 
-/// 片段里的文字字数（不含空白）。
-fn text_len(fragment: &str) -> usize {
-    plain_text(fragment).chars().filter(|c| !c.is_whitespace()).count()
-}
-
 // ───────────────────────── 标题角色 ─────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -320,94 +315,8 @@ pub(super) fn section_number(t: &str) -> Option<u32> {
 /// 目录里没有、靠 `<hN>` 补认的节标题最长这么多字（再长多半是用标题标签排的注释、引文）。
 const SECTION_TITLE_MAX_CHARS: usize = 40;
 
-/// 节号段落之间（以及最后一个之后）至少要有这么多字，才像"一节正文"（排除目录样的一串数字）。
-const NUMBERED_SECTION_MIN_CHARS: usize = 50;
-
-/// 节标题只是独占一段的数字（好读：`　　１`、`　　一`）：文件里第一个标题之后、从 1 开始严格连续、至少 2 个、每节都有正文
-/// 的这种段落（元素下标）。楼层号（不从 1 开始）、目录样的数字列表（中间没有正文）、中途断号的都不算。
-fn numbered_sections(f: &FileInfo) -> Vec<usize> {
-    let Some(after) = f.heads.first().map(|h| h.end) else { return Vec::new() };
-    let mut seq: Vec<usize> = Vec::new();
-    for (i, sp) in f.spans.iter().enumerate().filter(|(_, sp)| sp.open_start >= after && leaf_block(&f.html, sp)) {
-        let Some(v) = section_number(&plain_text(&f.html[sp.open_end..sp.close_start])) else { continue };
-        if v as usize != seq.len() + 1 {
-            return Vec::new();
-        }
-        seq.push(i);
-    }
-    if seq.len() < 2 {
-        return Vec::new();
-    }
-    let ends = seq.iter().skip(1).map(|&i| f.spans[i].open_start).chain(std::iter::once(f.hi));
-    let enough = seq.iter().zip(ends).all(|(&i, e)| text_len(&f.html[f.spans[i].close_end..e]) >= NUMBERED_SECTION_MIN_CHARS);
-    if enough { seq } else { Vec::new() }
-}
-
 /// 全书里的一个元素：(文件下标, 元素下标)。
 type ElemRef = (usize, usize);
-
-/// `pos` 之后第一个有文字的段落（元素下标），中间不能有别的可见内容。
-fn first_block_after(f: &FileInfo, pos: usize) -> Option<usize> {
-    let i = f.spans.iter().position(|sp| sp.open_start >= pos && leaf_block(&f.html, sp) && has_visible(&f.html[sp.open_end..sp.close_start]))?;
-    (!has_visible(&f.html[pos..f.spans[i].open_start])).then_some(i)
-}
-
-/// 和章标题同级、只写节号的标题（《13級階梯》：`<h3>第一章 出獄</h3>` 的文件里第 1 节是单独一段 `１`，后面的文件是
-/// `<h3>２</h3>`、`<h3>３</h3>`）：紧跟在一个非数字标题后面、同级、从 1 严格连续编号的标题（或者从 2 开始、而章标题后面
-/// 第一段就是 `１`），每节都有正文，一章至少 2 节；**全书至少两章**这样才认——全书只有一串的
-/// （《月亮和六便士》`<h3>二</h3>`…`<h3>五十八</h3>` 是章）不算。返回 (要降成节的标题, 补认成节标题的 `１` 段落)，
-/// 都是 (文件下标, 元素下标)。
-fn numbered_heading_runs(files: &[FileInfo]) -> (Vec<ElemRef>, Vec<ElemRef>) {
-    let seq: Vec<(usize, usize)> = files.iter().enumerate().flat_map(|(fi, f)| (0..f.heads.len()).map(move |hi| (fi, hi))).collect();
-    let head = |(fi, hi): (usize, usize)| &files[fi].heads[hi];
-    // 标题到本文件下一个标题（或正文末尾）之间的字数
-    let body_after = |(fi, hi): (usize, usize), from: usize| {
-        let f = &files[fi];
-        let end = f.heads.get(hi + 1).map_or(f.hi, |n| n.start);
-        text_len(&f.html[from.min(end)..end])
-    };
-    let (mut heads, mut paras) = (Vec::new(), Vec::new());
-    let mut runs = 0;
-    let mut i = 0;
-    while i < seq.len() {
-        let ch = head(seq[i]);
-        if section_number(&ch.text).is_some() {
-            i += 1;
-            continue;
-        }
-        // 第 1 节的 `１`：章标题后面第一段；章标题所在文件后面已经没有内容（`１` 在下一个文件开头）时，
-        // 看紧接着的下一个没有标题的文件的开头。
-        let (cfi, _) = seq[i];
-        let at = if has_visible(&files[cfi].html[ch.end..files[cfi].hi]) {
-            Some((cfi, ch.end))
-        } else {
-            files.get(cfi + 1).filter(|n| n.heads.is_empty()).map(|n| (cfi + 1, n.lo))
-        };
-        let para1 = at.and_then(|(pfi, pos)| {
-            let f = &files[pfi];
-            let e = first_block_after(f, pos)?;
-            let after = if pfi == cfi { body_after(seq[i], f.spans[e].close_end) } else { text_len(&f.html[f.spans[e].close_end..f.hi]) };
-            (section_number(&plain_text(&f.html[f.spans[e].open_end..f.spans[e].close_start])) == Some(1) && after >= NUMBERED_SECTION_MIN_CHARS).then_some((pfi, e))
-        });
-        let mut expect = if para1.is_some() { 2 } else { 1 };
-        let mut j = i + 1;
-        while j < seq.len() {
-            let h = head(seq[j]);
-            if h.level != ch.level || section_number(&h.text) != Some(expect) || body_after(seq[j], h.end) < NUMBERED_SECTION_MIN_CHARS {
-                break;
-            }
-            expect += 1;
-            j += 1;
-        }
-        if expect > 2 {
-            runs += 1;
-            paras.extend(para1);
-            heads.extend(seq[i + 1..j].iter().map(|&(fi, hi)| (fi, files[fi].heads[hi].span)));
-        }
-        i = j;
-    }
-    if runs >= 2 { (heads, paras) } else { (Vec::new(), Vec::new()) }
-}
 
 fn collect_headings(html: &str, spans: &[Span], candidates: &[(usize, u8)]) -> Vec<Heading> {
     collect_headings_ext(html, spans, candidates, &HashMap::new(), 0)
@@ -450,9 +359,9 @@ fn title_key(t: &str) -> String {
 }
 
 /// 哪一层目录是「章」（用户 2026-10-05）：最上一层是一本本书或部、卷（下面挂着章）时是第二层，否则是第一层。
-/// 最上一层算书/卷级：带子条目的至少两条（只有一条时要像「第X部/卷」），并且①带子条目的多数像「第X卷/部」，或②最上一层不像章、下一层多数像
-/// 「第X章/回」或「第X部」，或③最上一层不像章、目录有三层且分在至少两本书下面（《揭露人性》：书 → 「事件之章」 → 手记）。
-/// 下一层只是数字（阿加莎的「1」「2」）不算像章：那时最上一层当章、数字当节，结果和"书独占一页、数字章和正文同页"一样。
+/// 最上一层算书/卷级：带子条目的至少两条（只有一条时要像「第X部/卷」），并且①带子条目的多数像「第X卷/部」，或②最上一层多数不像
+/// 「第X章/回」、序、后记这类章名（阿加莎全集：书名 → 「1」「2」；《揭露人性》：书 → 「事件之章」 → 手记）。
+/// **只看层级，不看下一层是不是数字**（2026-10-08 用户定：有的书「1」「2」「3」是章，纯数字不能当节的依据）。
 /// 最上一层带子条目的多数是「第X册」时（福尔摩斯全集：册 → 作品 → 部 → 章），册只是装订单位、不会是章：去掉这一层再判断。
 fn chapter_depth(flat: &[(usize, String, String)]) -> usize {
     let Some(top) = flat.iter().map(|x| x.0).min() else { return 1 };
@@ -469,20 +378,7 @@ fn chapter_depth(flat: &[(usize, String, String)]) -> usize {
     let majority = |labels: &[&str], f: &dyn Fn(&str) -> bool| !labels.is_empty() && labels.iter().filter(|l| f(l)).count() * 2 > labels.len();
     let parent_labels: Vec<&str> = parents.iter().map(|&i| flat[i].1.as_str()).collect();
     let top_labels: Vec<&str> = flat.iter().filter(|x| x.0 == top).map(|x| x.1.as_str()).collect();
-    let kids: Vec<&str> = flat.iter().filter(|x| x.0 == top + 1).map(|x| x.1.as_str()).collect();
-    let top_chapter = majority(&top_labels, &chapter_like);
-    // 第三层分在几本书下面
-    let mut book = None;
-    let mut books_with_grandkids: HashSet<usize> = HashSet::new();
-    for (i, x) in flat.iter().enumerate() {
-        if x.0 == top {
-            book = Some(i);
-        } else if x.0 >= top + 2 {
-            books_with_grandkids.extend(book);
-        }
-    }
-    let chapter_or_part = |l: &str| chapter_like(l) || part_like(l);
-    if majority(&parent_labels, &part_like) || (!top_chapter && majority(&kids, &chapter_or_part)) || (!top_chapter && books_with_grandkids.len() >= 2) {
+    if majority(&parent_labels, &part_like) || !majority(&top_labels, &chapter_like) {
         top + 1
     } else {
         top
@@ -572,10 +468,6 @@ fn title_from(f: &FileInfo, start: usize, want: &str, file_start: bool) -> Optio
             }
             break;
         }
-        // 章名后面单独一段节号（《13級階梯》「第一章　出獄」后面的「１」）是第 1 节，不并进章标题。
-        if first_text.is_some() && section_number(&text).is_some() {
-            break;
-        }
         taken_end = sp.close_end;
         first_text.get_or_insert(i);
         acc.push_str(&text);
@@ -603,8 +495,8 @@ fn title_from(f: &FileInfo, start: usize, want: &str, file_start: bool) -> Optio
     Some((key, Extent { first, last }, exact))
 }
 
-/// 目录驱动的标题与角色（用户 2026-10-05：按目录层级统一）。书/卷级 → 级别 1、章 → 2，
-/// 章名只是数字的 → 3；节（章的下一层）→ 3；更深 → 4（不进目录）。目录里没有、跟在章标题后面
+/// 目录驱动的标题与角色（用户 2026-10-05：按目录层级统一）。书/卷级 → 级别 1、章 → 2（章名只是数字也是章，
+/// 2026-10-08 用户定）；节（章的下一层）→ 3；更深 → 4（不进目录）。目录里没有、跟在章标题后面
 /// 的更深一级 `<hN>` 也算节（以后补进目录）；紧跟在章标题后面、中间没有正文的短 `<hN>` 并进标题块（副标题）。
 /// 目录用不上（没有 NCX、指到 spine 文件的条目不到 2 条、六成以上找不到标题）时返回 `None`，退回按 `<hN>` 级别判断。
 /// [`toc_driven`] 的结果。
@@ -612,9 +504,7 @@ struct TocDriven {
     roles: [Role; 7],
     /// 只指到文件、标题却不在文件开头的（标题元素）：补 id、目录改指过去。
     late: HashSet<ElemRef>,
-    /// 来自书自带目录的节（标题元素）中，**不**交给"目录补节"的：目录里已经有了，再补会重复
-    /// （《深夜小狗》数字章名当节处理，补了就成「2」下面又挂一个「2」）。紧跟在普通章名后面的数字条目
-    /// （《13級階梯》「第一章　出獄」后面的「２」「３」）除外：它们和章平排，要交给目录补节缩进到章下面。
+    /// 来自书自带目录的节（标题元素）：目录里已经有了，不交给"目录补节"（再补会重复）。
     in_toc: HashSet<ElemRef>,
 }
 
@@ -630,8 +520,8 @@ fn toc_driven(files: &mut [FileInfo], entries: &[Entry], opf: &Opf) -> Option<To
     let (mut total, mut found) = (0usize, 0usize);
     // 只指到文件、标题却不在文件开头的条目（标题元素）：之后补 id、目录改指过去（同 `toc_label_paragraphs`）。
     let mut late: HashSet<(usize, usize)> = HashSet::new();
-    // 目录顺序上的 (文件, 标题元素, 级别, 层级, 显示的数字, 像带着第 1 节的章：标签末尾是节号「１」，或章名后面单独一段「１」)
-    let mut order: Vec<(usize, usize, u8, usize, Option<u32>, bool)> = Vec::new();
+    // 来自书自带目录的节
+    let mut in_toc: HashSet<ElemRef> = HashSet::new();
     // 每个文件的目录标题：(标题元素, 级别, 范围, 在章这一层或更上面)
     let mut per_file: Vec<Vec<TocTitle>> = vec![Vec::new(); files.len()];
     // 章这一层按分支算：章这一层或更深处挂着子条目的「第X部/卷」（福尔摩斯全集《恐怖谷》：书 → 部 → 章），它下面的
@@ -661,21 +551,16 @@ fn toc_driven(files: &mut [FileInfo], entries: &[Entry], opf: &Opf) -> Option<To
         if frag.is_empty() && has_visible(&files[fi].html[files[fi].lo..files[fi].spans[key].open_start]) {
             late.insert((fi, key));
         }
-        let f = &files[fi];
-        let shown = plain_text(&f.html[ext.first.map_or(f.lo, |i| f.spans[i].open_start)..f.spans[ext.last].close_end]);
         let level: u8 = match depth.cmp(&eff) {
             _ if part_here => 1,
             std::cmp::Ordering::Less => 1,
-            // 章名只是数字（看实际显示的标题，不看目录标签）：和正文同页，按节处理。
-            std::cmp::Ordering::Equal if section_number(&shown).is_some() => 3,
             std::cmp::Ordering::Equal => 2,
             std::cmp::Ordering::Greater if *depth == eff + 1 => 3,
             std::cmp::Ordering::Greater => 4,
         };
-        let label_ends_1 = label.trim_end().rsplit(|c: char| c.is_whitespace() || c == '\u{3000}').next().is_some_and(|t| section_number(t) == Some(1)) && section_number(label).is_none();
-        let para_1 = first_block_after(f, f.spans[ext.last].close_end).is_some_and(|b| section_number(&plain_text(&f.html[f.spans[b].open_end..f.spans[b].close_start])) == Some(1));
-        // 节号条目串按分支的章层级比（"层级"记成相对章这一层的位置）
-        order.push((fi, key, level, depth + chapter - eff, section_number(&shown), label_ends_1 || para_1));
+        if level == 3 {
+            in_toc.insert((fi, key));
+        }
         let v = &mut per_file[fi];
         let top = *depth <= eff;
         match v.iter_mut().find(|x| x.0 == key) {
@@ -687,45 +572,6 @@ fn toc_driven(files: &mut [FileInfo], entries: &[Entry], opf: &Opf) -> Option<To
     }
     if total < 2 || found * 10 < total * 6 {
         return None;
-    }
-    // 和章平排的节号条目（《13級階梯》：目录是「第一章　出獄　　１」「　　２」「　　３」）：带着第 1 节的章（标签末尾是「１」
-    // 或章名后面单独一段「１」）后面跟着一串从 2 起连续编号的数字条目，全书至少两章这样才算节——要交给目录补节缩进到章下面，章标题后面单独一段的「１」补成第 1 节。
-    // 只有一串的（《克莱因壶》「著作权使用契约书」后面的「01」…「44」是章）不算。其余来自目录的节都不交给目录补节（已经在目录里）。
-    let mut runs: Vec<(usize, Vec<usize>)> = Vec::new(); // (章在 order 里的下标, 节号条目的下标)
-    let mut cur: Option<(usize, Vec<usize>, u32)> = None;
-    for (i, &(_, _, level, depth, num, with_1)) in order.iter().enumerate() {
-        if depth != chapter {
-            if depth < chapter {
-                runs.extend(cur.take().map(|(c, m, _)| (c, m)));
-            }
-            continue;
-        }
-        match (num, &mut cur) {
-            (Some(n), Some((_, m, expect))) if (m.is_empty() && n == 2) || (!m.is_empty() && n == *expect) => {
-                m.push(i);
-                *expect = n + 1;
-            }
-            (Some(_), _) => runs.extend(cur.take().map(|(c, m, _)| (c, m))),
-            (None, _) if level == 2 => {
-                runs.extend(cur.take().map(|(c, m, _)| (c, m)));
-                // 只有带着第 1 节的章后面才可能跟一串节号条目（《深夜小狗》「前言」后面的 2、3、5 是章）
-                cur = with_1.then(|| (i, Vec::new(), 0));
-            }
-            (None, _) => runs.extend(cur.take().map(|(c, m, _)| (c, m))),
-        }
-    }
-    runs.extend(cur.take().map(|(c, m, _)| (c, m)));
-    runs.retain(|(_, m)| !m.is_empty());
-    let section_runs = runs.len() >= 2;
-    let mut in_toc: HashSet<ElemRef> = order.iter().filter(|x| x.2 == 3).map(|x| (x.0, x.1)).collect();
-    let mut first_sections: HashSet<ElemRef> = HashSet::new();
-    if section_runs {
-        for (c, m) in &runs {
-            first_sections.insert((order[*c].0, order[*c].1));
-            for &i in m {
-                in_toc.remove(&(order[i].0, order[i].1));
-            }
-        }
     }
     // 目录里没有的 `<hN>`：先全书收集（紧跟在章标题后面、中间没有正文的记下来），再按 `<hN>` 级别定是副标题还是节——
     // 这一级在全书**每一处**都紧跟在章标题后面才是副标题（金庸的回目），否则是节（《射雕》附录「成吉思汗家族」的
@@ -781,32 +627,13 @@ fn toc_driven(files: &mut [FileInfo], entries: &[Entry], opf: &Opf) -> Option<To
         }
     }
     // 各文件独立，多线程做（`util::par_map_mut`）
-    let mut work: Vec<_> = files.iter_mut().zip(per_file).zip(extra_by_file).enumerate().collect();
-    crate::util::par_map_mut(&mut work, |(fi, ((f, toc), extra))| {
-        let (fi, toc) = (*fi, std::mem::take(toc));
-        let mut extra = std::mem::take(extra);
-        for (k, lv, e, _) in &toc {
-            if *lv <= 2 && first_sections.contains(&(fi, *k)) {
-                let end = f.spans[e.last].close_end;
-                if let Some(b) = first_block_after(f, end) {
-                    let t = plain_text(&f.html[f.spans[b].open_end..f.spans[b].close_start]);
-                    if section_number(&t) == Some(1) && text_len(&f.html[f.spans[b].close_end..f.hi]) >= NUMBERED_SECTION_MIN_CHARS {
-                        extra.push((b, 3));
-                    }
-                }
-            }
-        }
+    let mut work: Vec<_> = files.iter_mut().zip(per_file).zip(extra_by_file).collect();
+    crate::util::par_map_mut(&mut work, |((f, toc), extra)| {
+        let (toc, extra) = (std::mem::take(toc), std::mem::take(extra));
         f.extents = toc.iter().map(|(k, _, e, _)| (*k, *e)).collect();
         let mut cands: Vec<(usize, u8)> = toc.iter().map(|(k, lv, _, _)| (*k, *lv)).chain(extra).collect();
         sort_candidates(&mut cands, &f.spans);
         f.heads = collect_headings_ext(&f.html, &f.spans, &cands, &f.extents, f.lo);
-        // 节号段落（好读的「１」「２」）：本文件有章标题、又没有节一级的标题时补成节。
-        if f.heads.iter().any(|h| h.level <= 2) && !f.heads.iter().any(|h| h.level == 3) {
-            let secs: Vec<(usize, u8)> = numbered_sections(f).into_iter().map(|i| (i, 3)).collect();
-            if !secs.is_empty() {
-                f.add_headings(&secs);
-            }
-        }
     });
     let mut roles = [Role::Other; 7];
     roles[1] = Role::Title;
@@ -913,28 +740,6 @@ pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &
             }
         }
     }
-    // 和章同级、只写节号的标题（《13級階梯》）降成节：级别取没用过的更深一级，章标题后面单独一段的 `１` 也算节标题。
-    let mut demoted: HashSet<ElemRef> = HashSet::new();
-    let mut demoted_level = None;
-    let deepest = files.iter().flat_map(|f| f.heads.iter()).map(|h| h.level).max().unwrap_or(0);
-    if deepest < 6 && toc_roles.is_none() {
-        let (heads, paras) = numbered_heading_runs(&files);
-        if !heads.is_empty() {
-            let level = deepest + 1;
-            for (fi, f) in files.iter_mut().enumerate() {
-                for h in f.heads.iter_mut().filter(|h| heads.contains(&(fi, h.span))) {
-                    h.level = level;
-                }
-                let extra: Vec<(usize, u8)> = paras.iter().filter(|p| p.0 == fi).map(|p| (p.1, level)).collect();
-                if !extra.is_empty() {
-                    f.add_headings(&extra);
-                }
-            }
-            demoted.extend(heads);
-            demoted.extend(paras);
-            demoted_level = Some(level);
-        }
-    }
     let mut roles = match toc_roles {
         Some(r) => r,
         None => {
@@ -942,15 +747,12 @@ pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &
             classify(&all)
         }
     };
-    if let Some(l) = demoted_level {
-        roles[l as usize] = Role::Section;
-    }
     if !roles.contains(&Role::Title) {
         return;
     }
     // 节一级的标题一个也没有跟在同文件的章标题后面（只出现在单独成页的版权页、目录页上，如《ABC谋杀案》的
     // h2「版权信息」「目录」），它不是节：节换成更深一级里跟在章标题后面的那一级（《ABC谋杀案》的 h3「1」「2」）。
-    if demoted_level.is_none() && toc_roles.is_none() {
+    if toc_roles.is_none() {
         let follows_title = |level: usize| {
             files.iter().any(|f| {
                 let first = f.heads.iter().position(|h| roles[h.level as usize] == Role::Title);
@@ -964,22 +766,6 @@ pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &
                     roles[deeper] = Role::Section;
                 }
             }
-        }
-    }
-    // 全书没有节一级的标题时，认独占一段的节号（好读：`１`、`２`…）当节标题，级别取没用过的更深一级。
-    let deepest = files.iter().flat_map(|f| f.heads.iter()).map(|h| h.level).max().unwrap_or(0);
-    if toc_roles.is_none() && !roles.contains(&Role::Section) && deepest < 6 {
-        let level = deepest + 1;
-        let mut found = false;
-        for f in files.iter_mut() {
-            let secs: Vec<(usize, u8)> = numbered_sections(f).into_iter().map(|i| (i, level)).collect();
-            if !secs.is_empty() {
-                f.add_headings(&secs);
-                found = true;
-            }
-        }
-        if found {
-            roles[level as usize] = Role::Section;
         }
     }
     // 节标题要进目录：没有 id 的补一个（插入后该文件重新解析，偏移变了）。记下 (原文件, id, 标题文字)。
@@ -1018,12 +804,11 @@ pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &
             .heads
             .iter()
             .enumerate()
-            // 降成节的数字标题单独成文件，前面没有章标题，但书自带目录列着它们（跟在章后面）
-            // 目录驱动时节都来自书自带的目录（或跟在同文件的章标题后面），单独成文件的也收（《13級階梯》的「２」「３」）。
+            // 目录驱动时节都来自书自带的目录（或跟在同文件的章标题后面）。
             .filter(|&(hi, h)| {
                 roles[h.level as usize] == Role::Section
                     && !in_toc.contains(&(fi, h.span))
-                    && (toc_roles.is_some() || first_title.is_some_and(|t| t < hi) || demoted.contains(&(fi, h.span)))
+                    && (toc_roles.is_some() || first_title.is_some_and(|t| t < hi))
             })
             .map(|(hi, _)| hi)
             .collect();

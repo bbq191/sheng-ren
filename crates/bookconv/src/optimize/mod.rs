@@ -11,7 +11,8 @@ use zip::ZipArchive;
 pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 /// 漫画要在阅读器里设成的页边距（内容就是数字），只有 profile 开了 `comic_reader_margins` 的漫画才有；`xochitl/comic-margins.sh` 凭它登记。
 pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
-/// 优化逻辑版本。改了会影响产物的行为就 bump——书库按它（连同设备、阅读范围等）判断产物是否过期、需要重新生成。
+/// 优化逻辑版本（**文字书**这一路）。改了会影响文字书产物的行为就 bump——书库按它（连同设备、阅读范围等）判断产物是否过期、需要重新生成。
+/// 漫画这一路是 [`COMIC_VERSION`]：两路共用的代码（清洗层、规范整理、写 zip）改了影响产物时两个都加一。
 ///
 /// 历史（只记还有参考价值的结论）：
 /// - v2–v5：duokan 图片脚注标记修复；图片按屏幕降采样、e-ink 提对比（灰字→纯黑、细字重→400）；远程图内联；
@@ -116,7 +117,18 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   合成到白底（`imgalpha`；CSS 背景图、两用的不动）——Kindle 把透明处显示成黑色，《绍宋》章标题图 logo.png 成了黑底。
 /// - v51（2026-10-07，审计）：有 `<body>` 没 `</body>` 的截断页（和没有 body 的片段）不再当空页整页删掉（拿不准就不删）；
 ///   抓到的远程图按本地插图的竖向框缩（宽不超过阅读范围宽；以前按横竖选框，横幅能宽到阅读范围的长边）。
-pub const OPTIMIZE_VERSION: &str = "51";
+/// - v52（2026-10-08，用户定）：章节只按目录层级判，纯数字不再当节的依据（撤掉数字章名当节、独占一段的「１」「２」当节号、
+///   和章同级的数字标题降成节、自动目录把「第一章 1」拆两级）。Kindle、掌阅的文字书只修复（profile `text_repair_only`）：
+///   EPUB 3 规范整理与目录到节，文字、图片、样式一概不动。
+pub const OPTIMIZE_VERSION: &str = "52";
+
+/// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
+/// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
+/// 从 52 起算（和当时的 `OPTIMIZE_VERSION` 相同，已有的漫画产物逐字节不变）。
+///
+/// 历史：
+/// - c52（2026-10-08）：从 `OPTIMIZE_VERSION` 分出来，行为不变。
+pub const COMIC_VERSION: &str = "52";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -196,6 +208,9 @@ pub struct OptimizeOpts {
     /// 正文 `<img>`/SVG `<image>` 用到的带透明像素的图合成到白底（profile `image_alpha = false`，Kindle），见 [`crate::imgalpha`]。
     /// 只管文字书（漫画页本来就合成白底）。
     pub flatten_alpha: bool,
+    /// 文字书只做修复（profile `text_repair_only`，Kindle、掌阅）：清洗层只走 EPUB 3 修复和目录（[`crate::wash::WashOpts::repair_only`]），
+    /// 文字、图片、样式一概不动——不解锁字体、不排版、不搬注释、不缩图。漫画不受影响（按漫画规则照常处理）。
+    pub text_repair_only: bool,
     /// 图片处理的资源上限（缺省 [`Limits::default`]）。
     pub limits: Limits,
     /// 改书名：`Some` 时 OPF 的 `dc:title` 换成它（`opfmeta::apply_fields`，原来的书名连同挂在上面的 `refines` 一起换掉）；
@@ -204,9 +219,28 @@ pub struct OptimizeOpts {
 }
 
 impl OptimizeOpts {
+    /// 文字书只做修复时实际用的选项（[`OptimizeOpts::text_repair_only`]）：清洗层只修复，注释、背景图、图注、透明图的处理都关掉。
+    fn repair_only(&self) -> Self {
+        OptimizeOpts {
+            wash: Some(crate::wash::WashOpts { repair_only: true, ..Default::default() }),
+            number_note_icons: false,
+            drop_note_backlinks: false,
+            fit_backgrounds: false,
+            caption_fit: false,
+            flatten_alpha: false,
+            ..self.clone()
+        }
+    }
+
+    /// 清洗层只修复：书里的文字、图片、样式一概不动（见 [`OptimizeOpts::text_repair_only`]）。
+    fn keeps_content(&self) -> bool {
+        self.wash.as_ref().is_some_and(|w| w.repair_only)
+    }
+
+
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, limits: Limits::default(), title: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, text_repair_only: false, limits: Limits::default(), title: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -236,6 +270,7 @@ impl OptimizeOpts {
             fit_backgrounds: p.background_images && !p.background_sizing,
             caption_fit: p.caption_fit,
             flatten_alpha: !p.image_alpha,
+            text_repair_only: p.text_repair_only,
             ..OptimizeOpts::new(p.output_readable())
         }
     }
@@ -368,6 +403,11 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
                 return Scan { ish, text: false, notes: None };
             }
         };
+        // 只修复：字体锁不剥、注释不搬（清洗层修过的文字原样往下传）
+        if opts.keeps_content() {
+            e.data = text.into_bytes();
+            return Scan { ish, text: true, notes: None };
+        }
         let stripped = first_pass_html(&text, &e.name, &keep_fonts);
         drop(text);
         let notes = (!skip_notes.contains(&e.name)).then(|| {
@@ -540,6 +580,8 @@ struct EntryXform<'a> {
     caption_ctx: Option<crate::capfit::Ctx>,
     /// 新书名（`OptimizeOpts::title`，去掉了空白串）。
     title: Option<&'a str>,
+    /// 只修复（[`OptimizeOpts::keeps_content`]）：章节不再变换；远程图按原图收进书里、抓不到的留着。
+    keep_content: bool,
 }
 
 impl<'a> EntryXform<'a> {
@@ -566,6 +608,7 @@ impl<'a> EntryXform<'a> {
             remote_counter: 0,
             fetched_imgs: Vec::new(),
             content_props: opts.wash.as_ref().map(|_| HashMap::new()),
+            keep_content: opts.keeps_content(),
             caption_ctx: None,
             title: opts.title.as_deref().map(str::trim).filter(|t| !t.is_empty()),
         }
@@ -576,7 +619,8 @@ impl<'a> EntryXform<'a> {
     fn transform_html_chapter(&mut self, text: &str, name: &str, prefix: Option<String>) -> Vec<u8> {
         let t = prefix.unwrap_or_else(|| self.html_prefix(text, name));
         let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
-        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, remote_img_fetcher(&self.img_agent, self.screen));
+        let screen = (!self.keep_content).then_some(self.screen);
+        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, !self.keep_content, remote_img_fetcher(&self.img_agent, screen));
         self.fetched_imgs.extend(imgs);
         crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes()
     }
@@ -584,6 +628,9 @@ impl<'a> EntryXform<'a> {
     /// [`transform_html_chapter`](Self::transform_html_chapter) 的前几步（到写图注宽度为止）：只看本章和第一遍的全书索引，
     /// 各章互不相干，可以同时做（`streaming` 先多线程算好一批，再按顺序做后面两步）。远程图内联、全书 id 去重要跨章累计，留在后面。
     fn html_prefix(&self, text: &str, name: &str) -> String {
+        if self.keep_content {
+            return text.to_string();
+        }
         // 前两步 `collect_notes` 可能已经做过（`pre_done`）
         let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };
         let t = fix_cover_aspect(&t);
