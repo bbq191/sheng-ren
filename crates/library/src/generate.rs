@@ -226,7 +226,7 @@ impl Library {
         } else {
             // 带图注的竖长图写宽度（`k`，caption_fit）、正文图片透明处合成白底（`a`，image_alpha = false）、只修复（`t`，text_repair_only）
             let mut seg = format!("{}x{}{shared}", area.width, area.height);
-            for (on, c) in [(device.caption_fit, 'k'), (!device.image_alpha, 'a'), (device.text_repair_only, 't')] {
+            for (on, c) in [(device.caption_fit, 'k'), (!device.image_alpha, 'a'), (device.text_repair_only, 't'), (device.text_repair_only && device.repair_note_links, 'n')] {
                 if on {
                     seg.push(c);
                 }

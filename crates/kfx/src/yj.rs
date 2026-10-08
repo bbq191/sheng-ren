@@ -201,6 +201,14 @@ pub const ALIGN_JUSTIFY: u32 = 321;
 /// 2026-10-05 对照改正：以前写反了（ABC 的 `.contents-chapter{font-weight:bold}` 是 `$361`，`.bodycontent-title{font-weight:normal}` 是 `$350`；
 /// 《绍宋》字体片段 `$262` 的字形、字重、宽度都写 `$350`＝normal）。
 pub const WEIGHT_BOLD: u32 = 361;
+/// 颜色「透明」（Send to Kindle 写在全透明的边框颜色上）。
+pub const COLOR_TRANSPARENT: u32 = 349;
+/// 整页背景的范围（节点上的字段，`{$58: 0%, $59: 0%, $60: 100%, $61: 100%}`）：Send to Kindle 写在 `background-size: cover` 的
+/// 页面背景容器上，背景铺满一页（2026-10-08《绍宋》卷首语，6 处）。四个分量照样本写。
+pub const BG_PAGE_BOUNDS: u32 = 645;
+pub const BG_PAGE_BOUNDS_KEYS: [u32; 4] = [58, 59, 60, 61];
+/// `white-space: nowrap`（值是 true）。
+pub const P_NOWRAP: u32 = 45;
 pub const WEIGHT_NORMAL: u32 = 350;
 /// 字形、宽度的 normal（和字重的 normal 同一个符号）。
 pub const FONT_NORMAL: u32 = 350;

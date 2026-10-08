@@ -211,6 +211,9 @@ pub struct OptimizeOpts {
     /// 文字书只做修复（profile `text_repair_only`，Kindle、掌阅）：清洗层只走 EPUB 3 修复和目录（[`crate::wash::WashOpts::repair_only`]），
     /// 文字、图片、样式一概不动——不解锁字体、不排版、不搬注释、不缩图。漫画不受影响（按漫画规则照常处理）。
     pub text_repair_only: bool,
+    /// 只修复时仍处理注释链接，保证注释能点（profile `repair_note_links`，xochitl）：注释搬进引用它的那一章、改同文件锚点，
+    /// 按 `drop_note_backlinks` 去回链、按 `number_note_icons` 把图标标号换数字。别的照只修复，一概不动。
+    pub repair_note_links: bool,
     /// 图片处理的资源上限（缺省 [`Limits::default`]）。
     pub limits: Limits,
     /// 改书名：`Some` 时 OPF 的 `dc:title` 换成它（`opfmeta::apply_fields`，原来的书名连同挂在上面的 `refines` 一起换掉）；
@@ -223,8 +226,8 @@ impl OptimizeOpts {
     fn repair_only(&self) -> Self {
         OptimizeOpts {
             wash: Some(crate::wash::WashOpts { repair_only: true, ..Default::default() }),
-            number_note_icons: false,
-            drop_note_backlinks: false,
+            number_note_icons: self.repair_note_links && self.number_note_icons,
+            drop_note_backlinks: self.repair_note_links && self.drop_note_backlinks,
             fit_backgrounds: false,
             caption_fit: false,
             flatten_alpha: false,
@@ -240,7 +243,7 @@ impl OptimizeOpts {
 
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, text_repair_only: false, limits: Limits::default(), title: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, text_repair_only: false, repair_note_links: false, limits: Limits::default(), title: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -271,6 +274,7 @@ impl OptimizeOpts {
             caption_fit: p.caption_fit,
             flatten_alpha: !p.image_alpha,
             text_repair_only: p.text_repair_only,
+            repair_note_links: p.repair_note_links,
             ..OptimizeOpts::new(p.output_readable())
         }
     }
@@ -403,12 +407,12 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
                 return Scan { ish, text: false, notes: None };
             }
         };
-        // 只修复：字体锁不剥、注释不搬（清洗层修过的文字原样往下传）
-        if opts.keeps_content() {
+        // 只修复：字体锁不剥；注释也不搬（清洗层修过的文字原样往下传），要保证注释能点的（xochitl）只把同文件链接规整成裸锚点再找注释
+        if opts.keeps_content() && !opts.repair_note_links {
             e.data = text.into_bytes();
             return Scan { ish, text: true, notes: None };
         }
-        let stripped = first_pass_html(&text, &e.name, &keep_fonts);
+        let stripped = if opts.keeps_content() { crate::htmlproc::normalize_self_hrefs(&text, &e.name) } else { first_pass_html(&text, &e.name, &keep_fonts) };
         drop(text);
         let notes = (!skip_notes.contains(&e.name)).then(|| {
             let refs = crate::htmlproc::referenced_note_keys(&stripped, &e.name);
@@ -582,6 +586,8 @@ struct EntryXform<'a> {
     title: Option<&'a str>,
     /// 只修复（[`OptimizeOpts::keeps_content`]）：章节不再变换；远程图按原图收进书里、抓不到的留着。
     keep_content: bool,
+    /// 只修复、但保证注释能点（[`OptimizeOpts::repair_note_links`]）：章节只做注释搬移和改链。
+    repair_note_links: bool,
 }
 
 impl<'a> EntryXform<'a> {
@@ -609,6 +615,7 @@ impl<'a> EntryXform<'a> {
             fetched_imgs: Vec::new(),
             content_props: opts.wash.as_ref().map(|_| HashMap::new()),
             keep_content: opts.keeps_content(),
+            repair_note_links: opts.keeps_content() && opts.repair_note_links,
             caption_ctx: None,
             title: opts.title.as_deref().map(str::trim).filter(|t| !t.is_empty()),
         }
@@ -629,7 +636,13 @@ impl<'a> EntryXform<'a> {
     /// 各章互不相干，可以同时做（`streaming` 先多线程算好一批，再按顺序做后面两步）。远程图内联、全书 id 去重要跨章累计，留在后面。
     fn html_prefix(&self, text: &str, name: &str) -> String {
         if self.keep_content {
-            return text.to_string();
+            if !self.repair_note_links {
+                return text.to_string();
+            }
+            // 只保证注释能点：拆互指环（去回链）、注释搬进本章改同文件锚点、图标标号换数字；别的（封面、图注……）不动
+            let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };
+            let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
+            return if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
         }
         // 前两步 `collect_notes` 可能已经做过（`pre_done`）
         let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };

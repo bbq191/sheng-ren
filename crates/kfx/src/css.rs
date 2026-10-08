@@ -763,6 +763,16 @@ pub fn parse_len(v: &str) -> Option<Len> {
     }
 }
 
+/// 外边距、内边距的长度：同 [`parse_len`]，但 px 按 1px＝0.45pt 换算（Send to Kindle 的口径，和边框宽度一样：《绍宋》
+/// `margin:-10px` 写成 -0.3125lh、`margin-top:-12.5px` 在半号字上写成 -1.172lh；以前按 CSS 的 1px＝0.75pt，大了 2/3）。字号不走这里。
+pub fn parse_box_len(v: &str) -> Option<Len> {
+    let t = v.trim().to_ascii_lowercase();
+    match t.strip_suffix("px").and_then(|n| n.trim().parse::<f64>().ok()) {
+        Some(n) => Some(Len::Pt(n * 0.45)),
+        None => parse_len(&t),
+    }
+}
+
 /// `#rgb`、`#rgba`、`#rrggbb`、`#rrggbbaa`、`rgb()`/`rgba()`、常见色名 → ARGB（透明度和 `rgba()` 一样写进最高字节）。
 pub fn parse_color(v: &str) -> Option<u32> {
     let v = v.trim().to_ascii_lowercase();
@@ -835,6 +845,8 @@ pub struct Computed {
     pub letter_spacing: Option<f64>,
     /// `white-space: pre`（`<pre>`）：空格、换行原样保留。
     pub pre: bool,
+    /// `white-space: nowrap`：不自动换行（Amazon 写成 `$45: true`，《绍宋》卷首语、信件里居中的诗句）。
+    pub nowrap: bool,
     /// `list-style-type`（`None`＝按标签缺省）、`list-style-position: inside`。
     pub list_style: Option<String>,
     pub list_inside: bool,
@@ -859,6 +871,8 @@ pub struct Computed {
     pub bg_fixed: bool,
     pub bg_position: [Option<Len>; 2],
     pub bg_size: [Option<Len>; 2],
+    /// `background-size: cover`（`bg_size` 里和 `100% 100%` 写法一样，这里另记）：页面一级的背景，Send to Kindle 让它铺满一页。
+    pub bg_cover: bool,
 }
 
 /// 一条边：样式（`solid` 等，不含 none）、宽度、颜色（没写＝当前颜色）。
@@ -918,6 +932,7 @@ impl Computed {
             small_caps: false,
             letter_spacing: None,
             pre: false,
+            nowrap: false,
             list_style: None,
             list_inside: false,
             border_collapse: false,
@@ -935,6 +950,7 @@ impl Computed {
             bg_fixed: false,
             bg_position: [None; 2],
             bg_size: [None; 2],
+            bg_cover: false,
         }
     }
 
@@ -953,6 +969,7 @@ impl Computed {
             bg_fixed: false,
             bg_position: [None; 2],
             bg_size: [None; 2],
+            bg_cover: false,
             ..self.clone()
         }
     }
@@ -973,7 +990,32 @@ impl Computed {
                 c.text_align = Some("center".into());
             }
             "caption" => c.text_align = Some("center".into()),
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => c.bold = true,
+            // 标题：粗体、字号、上下外边距（HTML 规范的 UA 样式表；Send to Kindle 同样照它排，2026-10-08 对照《绍宋》）。
+            // 以前只给粗体：没写样式的 `<h2>1</h2>` 在 Kindle 上和正文一样大（《绝叫》的数字章名）。
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                c.bold = true;
+                let (size, margin) = match tag {
+                    "h1" => (2.0, 0.67),
+                    "h2" => (1.5, 0.83),
+                    "h3" => (1.17, 1.0),
+                    "h4" => (1.0, 1.33),
+                    "h5" => (0.83, 1.67),
+                    _ => (0.67, 2.33),
+                };
+                c.font_size = parent.font_size * size;
+                c.margin[0] = Some(Len::Em(margin));
+                c.margin[2] = Some(Len::Em(margin));
+            }
+            // 段落、引文、图、预排版的上下外边距（UA 样式表）：Send to Kindle 给没写外边距的 `<p>` 上下各 1em
+            // （相邻的折叠成一个，《绍宋》正文段与段之间 0.8333lh）；以前不给，段落挤在一起。
+            "p" | "dl" => {
+                c.margin[0] = Some(Len::Em(1.0));
+                c.margin[2] = Some(Len::Em(1.0));
+            }
+            "blockquote" | "figure" => {
+                // 左右 40px，同样按 1px＝0.45pt（＝1.5em，和列表缩进一样）
+                c.margin = [Some(Len::Em(1.0)), Some(Len::Pt(18.0)), Some(Len::Em(1.0)), Some(Len::Pt(18.0))];
+            }
             "i" | "em" | "cite" | "var" | "dfn" => c.italic = true,
             "sup" => c.superscript = true,
             "sub" => c.subscript = true,
@@ -981,6 +1023,8 @@ impl Computed {
             "s" | "strike" | "del" => c.decoration[1] = true,
             "pre" => {
                 c.pre = true;
+                c.margin[0] = Some(Len::Em(1.0));
+                c.margin[2] = Some(Len::Em(1.0));
                 if c.font_family.is_none() {
                     c.font_family = Some("monospace".into());
                 }
@@ -1086,7 +1130,9 @@ impl Computed {
             };
         }
         if let Some(v) = get("white-space") {
-            c.pre = matches!(v.trim(), "pre" | "pre-wrap" | "break-spaces");
+            let v = v.trim().to_ascii_lowercase();
+            c.pre = matches!(v.as_str(), "pre" | "pre-wrap" | "break-spaces");
+            c.nowrap = matches!(v.as_str(), "nowrap" | "pre");
         }
         if let Some(v) = get("list-style-type") {
             c.list_style = Some(v.trim().to_ascii_lowercase());
@@ -1116,7 +1162,9 @@ impl Computed {
                 Some(st) if st != "none" && st != "hidden" && BORDER_STYLES.contains(&st.as_str()) => Some(Border {
                     style: st,
                     width: get(width).and_then(parse_border_width).unwrap_or(BorderWidth::Pt(1.35)),
-                    color: get(color).and_then(parse_color).map(|c| c | 0xFF00_0000),
+                    // 全透明的照原样（写出时写「透明」：《绍宋》信件框是 `border: 35px solid rgba(0,0,0,0)` 加 border-image，
+                    // 以前强制不透明，Kindle 上画成 15.75pt 的黑框）；半透明的照旧按不透明写。
+                    color: get(color).and_then(parse_color).map(|c| if c >> 24 == 0 { c } else { c | 0xFF00_0000 }),
                 }),
                 _ => None,
             };
@@ -1127,8 +1175,11 @@ impl Computed {
         c.width = get("width").and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
         c.display = get("display").map(|v| v.trim().to_ascii_lowercase());
         for i in 0..4 {
-            c.margin[i] = get(MARGIN[i]).and_then(parse_len);
-            c.padding[i] = get(PADDING[i]).and_then(parse_len);
+            // 写了的才覆盖标签的缺省外边距（上面的 UA 样式）；`auto` 这类算不出长度的当 0
+            if let Some(v) = get(MARGIN[i]) {
+                c.margin[i] = parse_box_len(v);
+            }
+            c.padding[i] = get(PADDING[i]).and_then(parse_box_len);
         }
         c.background = get("background-color").and_then(parse_color).filter(|c| c >> 24 != 0);
         c.bg_image = get("background-image").filter(|v| v.to_ascii_lowercase().starts_with("url(")).map(|v| v[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']).to_string());
@@ -1136,6 +1187,7 @@ impl Computed {
         c.bg_fixed = get("background-attachment").is_some_and(|v| v.trim() == "fixed");
         c.bg_position = get("background-position").map(|v| parse_bg_position(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
         c.bg_size = get("background-size").map(|v| parse_bg_size(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
+        c.bg_cover = get("background-size").is_some_and(|v| v.trim().eq_ignore_ascii_case("cover"));
         c
     }
 }
