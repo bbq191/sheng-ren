@@ -1185,7 +1185,8 @@
         let opts = OptimizeOpts::for_profile(profile::get("ireader").unwrap());
         assert!(opts.text_repair_only);
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
-        assert_eq!(text_of(&out, "OEBPS/style.css"), css, "样式表一个字不改");
+        // 样式表只按 Send to Kindle 的规则改（profile `kindle_rules`）：正文字体「宋体」整条去掉、body 的左右外边距不要；别的一个字不改
+        assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:2em;margin-bottom:2em;}p{text-indent:0;margin:0.5em 0}");
         assert_eq!(entry_bytes(&out, "OEBPS/big.jpg"), jpg, "图片原样");
         let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
         assert!(!names.iter().any(|n| n.ends_with("eink-wash.css")), "不加排版样式表: {names:?}");
@@ -1200,6 +1201,17 @@
         let flat = crate::ncx::parse_ncx_flat(&text_of(&out, "OEBPS/toc.ncx"));
         let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
         assert_eq!(labels, [(1, "第一章"), (2, "一节"), (1, "注释")], "目录补到节");
+        // 标签缺省样式（profile `kindle_rules`，2026-10-08 用户定照 Send to Kindle 统一）：挂在书自带样式之前，书里写了的盖过它
+        assert_eq!(text_of(&out, "OEBPS/eink-ua.css"), crate::uastyle::ua_css());
+        let (ua, own) = (x.find("eink-ua.css").unwrap(), x.find("style.css").unwrap());
+        assert!(ua < own, "缺省样式在书自带样式之前: {x}");
+        assert!(opf_out.contains(r#"href="eink-ua.css""#), "manifest 补上: {opf_out}");
+        assert!(!text_of(&out, "OEBPS/nav.xhtml").contains("eink-ua.css"), "目录页不挂");
+        // Kindle 不写（KFX 写出器自己按同一张表排）
+        let (k, _) = optimize_epub_with(&buf, &OptimizeOpts::for_profile(profile::get("kindle").unwrap())).unwrap();
+        let knames: Vec<String> = ZipArchive::new(Cursor::new(&k)).unwrap().file_names().map(String::from).collect();
+        assert!(!knames.iter().any(|n| n.ends_with("eink-ua.css")), "{knames:?}");
+        assert_eq!(text_of(&k, "OEBPS/style.css"), css, "Kindle 的 EPUB 样式表一个字不改（规则由 KFX 写出器照做）");
     }
 
     /// xochitl 只修复、另保证注释能点（profile `repair_note_links`，2026-10-08 用户定）：注释搬进引用它的那一章、改同文件锚点（和原来的完整优化同一套），
@@ -1228,7 +1240,7 @@
         let opts = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
         assert!(opts.text_repair_only && opts.repair_note_links);
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
-        assert_eq!(text_of(&out, "OEBPS/s.css"), css, "样式表一个字不改");
+        assert_eq!(text_of(&out, "OEBPS/s.css"), "p{line-height:1.8}", "样式表只按 Send to Kindle 的规则改：正文字体整条去掉");
         let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
         assert!(!names.iter().any(|n| n.ends_with("eink-wash.css")), "不加排版样式表: {names:?}");
         let x = text_of(&out, "OEBPS/c1.xhtml");

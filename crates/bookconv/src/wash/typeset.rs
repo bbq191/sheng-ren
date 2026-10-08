@@ -271,6 +271,24 @@ pub(super) fn inject_css_link(html: &str, href: &str) -> String {
     }
 }
 
+/// 给 `<head>` 注入指向 `href` 的 `<link>`，放在 `<head>` 里最前面（书自带的样式表、`<style>` 之前：源序在前，书里写了的盖过它）。
+/// 幂等；无 `<head>` 时同 [`inject_css_link`]。
+pub(super) fn inject_css_link_first(html: &str, href: &str) -> String {
+    let has = html::tags(html).any(|t| t.is_start() && t.is("link") && html::attr_value(&html[t.start..t.end], "href") == Some(href));
+    if has {
+        return html.to_string();
+    }
+    let link = format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{href}\"/>");
+    // 书的样式表写在 `<head>` 前面的（《金庸》有的文件 `<link>` 在 `<head>` 外）：插到它前面，免得按文档顺序排到书的样式后面、盖掉书里写的
+    let head = html::tags(html).find(|t| t.kind == html::TagKind::Open && t.is("head"));
+    let early = html::tags(html).find(|t| t.is_start() && (t.is("style") || t.is("link") && html::attr_value(&html[t.start..t.end], "rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet"))));
+    match (head, early) {
+        (Some(h), Some(e)) if e.start < h.start => format!("{}{link}{}", &html[..e.start], &html[e.start..]),
+        (Some(h), _) => format!("{}{link}{}", &html[..h.end], &html[h.end..]),
+        _ => inject_css_link(html, href),
+    }
+}
+
 /// 外链 wash css 的内容。按 `opts.lang` 注中/英首行缩进习惯 + 段落上下边距归零（除非 keep_para_spacing）。
 /// ⚠ 两条 xochitl css 解析器的脆弱性（真机坐实）：
 /// ① **只用裸元素选择器 `p{}`**——一条类/相邻/at-rule 选择器就让整表失效（《缩进诊断5》带 `.big` 时连 `p{}` 都不生效）。

@@ -152,8 +152,10 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
         }
     };
     for e in entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".css")) {
-        if let Ok(t) = std::str::from_utf8(&e.data) {
-            take(t, dir_of(&e.name), &mut plan);
+        match std::str::from_utf8(&e.data) {
+            Ok(t) => take(t, dir_of(&e.name), &mut plan),
+            // 不是 UTF-8 的样式表（Big5 之类）按单字节读：选择器、ASCII 的字体名照样认得（《啸风山庄》的 CSS.css）
+            Err(_) => take(&e.data.iter().map(|&b| char::from(b)).collect::<String>(), dir_of(&e.name), &mut plan),
         }
     }
     // 正文字体：段落按字数投票。各文件的 `<style>` 按文件顺序陆续加进 `plan`，后面文件的段落按加过的规则认字体，所以分两步：
@@ -211,6 +213,62 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
     .collect();
     plan.keep = embedded.into_iter().filter(|f| Some(f) != plan.body.as_ref() && used_elsewhere.contains(f)).collect();
     plan
+}
+
+/// 正文字体，按继承算：每个元素的字体是它自己（行内 style、类规则、裸标签规则）指定的，没有就跟着父元素，全书文字按字数投票，
+/// 取最多的（和 KFX 写出器的口径一样：字数最多的计算字体）。[`analyze`] 的 [`FontPlan::body`] 只看段落自己和 `p`/`body` 规则，
+/// 字体写在 `<body class="…">` 上、段落继承的书认不出（《平凡的世界》的 FZLanTingSong）；Send to Kindle 规则（`kindle_rules`）用这个。
+pub(crate) fn body_font_by_text(entries: &[Entry], plan: &FontPlan) -> Option<String> {
+    const VOID: [&str; 14] = ["br", "img", "hr", "meta", "link", "input", "area", "base", "col", "embed", "source", "track", "wbr", "param"];
+    const INLINE: [&str; 17] = ["span", "a", "b", "i", "em", "strong", "font", "small", "big", "sup", "sub", "u", "s", "cite", "code", "ruby", "rt"];
+    let html_files: Vec<&Entry> = entries.iter().filter(|e| is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name)).collect();
+    let counts = crate::util::par_map(&html_files, |e| {
+        let mut votes: HashMap<Option<String>, usize> = HashMap::new();
+        let Ok(h) = std::str::from_utf8(&e.data) else { return votes };
+        // (标签名, 字体)；跳过 head/style/script 里的字
+        let mut stack: Vec<(String, Option<String>)> = Vec::new();
+        let mut last = 0;
+        let mut skip = 0usize;
+        for t in html::tags(h) {
+            if skip == 0 {
+                let n = html::plain_text(&h[last..t.start]).chars().filter(|c| !c.is_whitespace()).count();
+                if n > 0 {
+                    *votes.entry(stack.last().and_then(|s| s.1.clone())).or_default() += n;
+                }
+            }
+            last = t.end;
+            let name = t.name.to_ascii_lowercase();
+            match t.kind {
+                html::TagKind::Open if !VOID.contains(&name.as_str()) => {
+                    if matches!(name.as_str(), "head" | "style" | "script" | "title") {
+                        skip += 1;
+                    }
+                    let raw = &h[t.start..t.end];
+                    let parent = stack.last().and_then(|s| s.1.clone());
+                    // 行内元素不改计数用的字体：字算给所在的块（KFX 写出器按段落的字体数，行内的另写成区间）
+                    let fam = if INLINE.contains(&name.as_str()) { parent } else { plan.own_family(raw).or_else(|| plan.tag_family.get(&name).cloned()).or(parent) };
+                    stack.push((name, fam));
+                }
+                html::TagKind::Close => {
+                    if let Some(i) = stack.iter().rposition(|s| s.0 == name) {
+                        stack.truncate(i);
+                        if matches!(name.as_str(), "head" | "style" | "script" | "title") {
+                            skip = skip.saturating_sub(1);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        votes
+    });
+    let mut total: HashMap<Option<String>, usize> = HashMap::new();
+    for v in counts {
+        for (k, n) in v {
+            *total.entry(k).or_default() += n;
+        }
+    }
+    total.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).and_then(|(f, _)| f)
 }
 
 /// 文字像批注（以「注：」「注1：」「按:」「批注」这类开头，见 [`note_prefix`]）。

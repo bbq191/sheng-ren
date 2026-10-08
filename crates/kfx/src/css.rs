@@ -773,67 +773,30 @@ pub fn parse_box_len(v: &str) -> Option<Len> {
     }
 }
 
-/// `#rgb`、`#rgba`、`#rrggbb`、`#rrggbbaa`、`rgb()`/`rgba()`、常见色名 → ARGB（透明度和 `rgba()` 一样写进最高字节）。
-pub fn parse_color(v: &str) -> Option<u32> {
-    let v = v.trim().to_ascii_lowercase();
-    if let Some(h) = v.strip_prefix('#') {
-        if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        let n = u32::from_str_radix(h, 16).ok()?;
-        let nib = |k: u32| ((n >> (4 * k)) & 0xF) * 17;
-        return match h.len() {
-            3 => Some(0xFF00_0000 | nib(2) << 16 | nib(1) << 8 | nib(0)),
-            4 => Some(nib(0) << 24 | nib(3) << 16 | nib(2) << 8 | nib(1)),
-            6 => Some(0xFF00_0000 | n),
-            8 => Some(n.rotate_right(8)),
-            _ => None,
-        };
-    }
-    if let Some(inner) = v.strip_prefix("rgba(").or_else(|| v.strip_prefix("rgb(")).and_then(|s| s.strip_suffix(')')) {
-        // 每一项可以是数（颜色 0–255、透明度 0–1）或百分比（100% = 255 / 1）。以前把 `%` 直接去掉，
-        // `rgb(100%, 0%, 0%)` 成了 (100, 0, 0)，`rgba(…, 50%)` 成了不透明。
-        let p: Vec<(f64, bool)> = inner
-            .split(',')
-            .map(|x| {
-                let x = x.trim();
-                let pct = x.ends_with('%');
-                (x.trim_end_matches('%').trim().parse().unwrap_or(0.0), pct)
-            })
-            .collect();
-        if p.len() < 3 {
-            return None;
-        }
-        let a = p.get(3).map(|&(a, pct)| ((if pct { a / 100.0 } else { a }).clamp(0.0, 1.0) * 255.0).round() as u32).unwrap_or(255);
-        let c = |(x, pct): (f64, bool)| (if pct { x / 100.0 * 255.0 } else { x }).clamp(0.0, 255.0).round() as u32;
-        return Some(a << 24 | c(p[0]) << 16 | c(p[1]) << 8 | c(p[2]));
-    }
-    let named = match v.as_str() {
-        "black" => 0x000000,
-        "white" => 0xFFFFFF,
-        "red" => 0xFF0000,
-        "green" => 0x008000,
-        "blue" => 0x0000FF,
-        "gray" | "grey" => 0x808080,
-        "silver" => 0xC0C0C0,
-        "maroon" => 0x800000,
-        "navy" => 0x000080,
-        _ => return None,
-    };
-    Some(0xFF00_0000 | named)
-}
+pub use bookconv::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
 /// 元素的计算值（只留 KFX 用得上的）。字号 `font_size` 是相对根字号的倍数。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Computed {
     pub font_family: Option<String>,
+    /// `font-family` 第一个以外的备选（小写、逗号连接，Send to Kindle 照写整串：`default,st,宋体,zw,sans-serif`）。
+    pub font_fallbacks: Option<String>,
     pub font_size: f64,
     pub bold: bool,
+    /// 字重 600（Send to Kindle 写成半粗 `$360`，《绍宋》`p.ganyan1`）。`bold` 同时为真（挑字体文件时当粗体）。
+    pub semibold: bool,
+    /// `<b>`/`<strong>` 自己、样式表没写字重：HTML 缺省的 `bolder`（Send to Kindle 写 `$362`，不继承）。
+    pub bolder: bool,
+    /// 自己或祖先的样式表写了 `font-weight`（Send to Kindle 照写，normal 也写 `$350`：《罗杰疑案》`font-weight:normal` 的 h1）。
+    pub weight_declared: bool,
     pub italic: bool,
     pub text_align: Option<String>,
     pub text_indent: Option<Len>,
     /// 行高，单位：元素字号的倍数；`None`＝normal。
     pub line_height: Option<f64>,
+    /// 写成长度（`%`、em、px、pt）的行高按 CSS 算成绝对值往下继承（根 em）；没有数字倍数那样跟着子元素字号变
+    /// （《疯探》body `line-height:130%`、作者行 `font-size:1.2em`，Send to Kindle 写 0.833lh）。
+    pub line_height_abs: Option<f64>,
     pub color: Option<u32>,
     pub lang: Option<String>,
     pub superscript: bool,
@@ -847,6 +810,14 @@ pub struct Computed {
     pub pre: bool,
     /// `white-space: nowrap`：不自动换行（Amazon 写成 `$45: true`，《绍宋》卷首语、信件里居中的诗句）。
     pub nowrap: bool,
+    /// `word-break: break-all`（Send to Kindle 写成 `$569: $570`，《绍宋》全书 `p{word-break:break-all}`）。
+    pub break_all: bool,
+    /// 自己或祖先有背景色、背景图（Send to Kindle 只在没有背景时省掉近黑的文字颜色，见 `write.rs` 的 `text_props`）。
+    pub on_background: bool,
+    /// 自己或祖先有背景图：只有背景图、没有背景色的地方不按对比度调文字颜色（Send to Kindle 同样：《雪国》扉页背景图上的白字照写）。
+    pub on_image: bool,
+    /// 自己或祖先（含 body）有左右外边距、内边距或边框：Send to Kindle 把首行缩进写成百分比（见 `write.rs` 的 `block_props`）。
+    pub in_hbox: bool,
     /// `list-style-type`（`None`＝按标签缺省）、`list-style-position: inside`。
     pub list_style: Option<String>,
     pub list_inside: bool,
@@ -856,13 +827,22 @@ pub struct Computed {
     // 不继承的
     pub display: Option<String>,
     pub margin: [Option<Len>; 4],
+    /// 外边距写的是 `auto`（上、右、下、左）：有宽度的块按左右 auto 对齐（Send to Kindle 写 `$580`）。
+    pub margin_auto: [bool; 4],
     pub padding: [Option<Len>; 4],
     pub background: Option<u32>,
+    /// 文字底下实际的背景色（自己或最近的祖先的，不透明；`None`＝白页面）：Send to Kindle 按它保证文字对比度。
+    pub backdrop: Option<u32>,
+    /// `box-shadow`、`text-shadow`（第一个；x、y、模糊、颜色）。Send to Kindle 写 `$496`、`$497`。
+    pub box_shadow: Option<Shadow>,
+    pub text_shadow: Option<Shadow>,
     /// 四边边框（上、右、下、左）。
     pub border: [Option<Border>; 4],
     /// 圆角：左上、右上、右下、左下。
     pub radius: [Option<Len>; 4],
     pub width: Option<Len>,
+    /// `min-height`（Send to Kindle 写 `$62`，《恶女的告白》`min-height:2em`）。
+    pub min_height: Option<Len>,
     /// 单元格的 `vertical-align`。
     pub valign: Option<String>,
     /// 背景图（书内路径）、不重复、固定、位置 (x, y)、尺寸 (宽, 高)。
@@ -873,6 +853,32 @@ pub struct Computed {
     pub bg_size: [Option<Len>; 2],
     /// `background-size: cover`（`bg_size` 里和 `100% 100%` 写法一样，这里另记）：页面一级的背景，Send to Kindle 让它铺满一页。
     pub bg_cover: bool,
+}
+
+/// 阴影：x、y 偏移，模糊半径，颜色（没写＝`None`）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shadow {
+    pub x: Len,
+    pub y: Len,
+    pub blur: Len,
+    pub color: Option<u32>,
+}
+
+/// `box-shadow`/`text-shadow` 的第一个阴影（`inset`、`none` 不收）。长度的 px 按 1px＝0.45pt。
+pub fn parse_shadow(v: &str) -> Option<Shadow> {
+    let first = split_top(v, ',').into_iter().next()?.trim().to_ascii_lowercase();
+    if first.is_empty() || first == "none" || first.contains("inset") {
+        return None;
+    }
+    let mut lens = Vec::new();
+    let mut color = None;
+    for tok in split_top(&first, ' ').into_iter().map(str::trim).filter(|s| !s.is_empty()) {
+        match parse_box_len(tok) {
+            Some(l) if tok.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.' || c == '+') => lens.push(l),
+            _ => color = parse_color(tok).or(color),
+        }
+    }
+    (lens.len() >= 2).then(|| Shadow { x: lens[0], y: lens[1], blur: lens.get(2).copied().unwrap_or(Len::Pt(0.0)), color })
 }
 
 /// 一条边：样式（`solid` 等，不含 none）、宽度、颜色（没写＝当前颜色）。
@@ -918,12 +924,17 @@ impl Computed {
     pub fn root() -> Self {
         Computed {
             font_family: None,
+            font_fallbacks: None,
             font_size: 1.0,
             bold: false,
+            semibold: false,
+            bolder: false,
+            weight_declared: false,
             italic: false,
             text_align: None,
             text_indent: None,
             line_height: None,
+            line_height_abs: None,
             color: None,
             lang: None,
             superscript: false,
@@ -933,17 +944,26 @@ impl Computed {
             letter_spacing: None,
             pre: false,
             nowrap: false,
+            break_all: false,
+            on_background: false,
+            on_image: false,
+            in_hbox: false,
             list_style: None,
             list_inside: false,
             border_collapse: false,
             border_spacing: None,
             display: None,
             margin: [None; 4],
+            margin_auto: [false; 4],
             padding: [None; 4],
             background: None,
+            backdrop: None,
+            box_shadow: None,
+            text_shadow: None,
             border: [None, None, None, None],
             radius: [None; 4],
             width: None,
+            min_height: None,
             valign: None,
             bg_image: None,
             bg_no_repeat: false,
@@ -958,11 +978,14 @@ impl Computed {
         Computed {
             display: None,
             margin: [None; 4],
+            margin_auto: [false; 4],
             padding: [None; 4],
             background: None,
+            box_shadow: None,
             border: [None, None, None, None],
             radius: [None; 4],
             width: None,
+            min_height: None,
             valign: None,
             bg_image: None,
             bg_no_repeat: false,
@@ -970,6 +993,7 @@ impl Computed {
             bg_position: [None; 2],
             bg_size: [None; 2],
             bg_cover: false,
+            bolder: false,
             ..self.clone()
         }
     }
@@ -982,11 +1006,18 @@ impl Computed {
     /// 由父元素的计算值和本元素的声明算出本元素的计算值。
     pub fn derive(parent: &Computed, decls: &HashMap<String, String>, tag: &str) -> Computed {
         let mut c = parent.reset_box();
+        c.on_background = parent.on_background || parent.background.is_some() || parent.bg_image.is_some();
+        c.on_image = parent.on_image || parent.bg_image.is_some();
         // 标签的缺省样式（阅读器的 UA 样式表里有的）。
         match tag {
-            "b" | "strong" => c.bold = true,
+            "b" | "strong" => {
+                c.bold = true;
+                c.semibold = false;
+                c.bolder = true;
+            }
             "th" => {
                 c.bold = true;
+                c.semibold = false;
                 c.text_align = Some("center".into());
             }
             "caption" => c.text_align = Some("center".into()),
@@ -994,20 +1025,15 @@ impl Computed {
             // 以前只给粗体：没写样式的 `<h2>1</h2>` 在 Kindle 上和正文一样大（《绝叫》的数字章名）。
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 c.bold = true;
-                let (size, margin) = match tag {
-                    "h1" => (2.0, 0.67),
-                    "h2" => (1.5, 0.83),
-                    "h3" => (1.17, 1.0),
-                    "h4" => (1.0, 1.33),
-                    "h5" => (0.83, 1.67),
-                    _ => (0.67, 2.33),
-                };
+                c.semibold = false;
+                // 字号、外边距和只修复的文字书写进书里的 `eink-ua.css` 是同一张表
+                let (_, size, margin) = bookconv::uastyle::HEADINGS.into_iter().find(|h| h.0 == tag).unwrap_or(bookconv::uastyle::HEADINGS[5]);
                 c.font_size = parent.font_size * size;
                 c.margin[0] = Some(Len::Em(margin));
                 c.margin[2] = Some(Len::Em(margin));
             }
             // 段落、引文、图、预排版的上下外边距（UA 样式表）：Send to Kindle 给没写外边距的 `<p>` 上下各 1em
-            // （相邻的折叠成一个，《绍宋》正文段与段之间 0.8333lh）；以前不给，段落挤在一起。
+            // （相邻的折叠成一个，《绍宋》正文段与段之间 0.8333lh）；以前不给，段落挤在一起。哪些标签、多少和 `bookconv::uastyle` 的表一致。
             "p" | "dl" => {
                 c.margin[0] = Some(Len::Em(1.0));
                 c.margin[2] = Some(Len::Em(1.0));
@@ -1056,9 +1082,10 @@ impl Computed {
             }
         }
         if let Some(v) = get("font-family") {
-            let first = split_top(v, ',').into_iter().next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string();
-            if !first.is_empty() && first != "inherit" {
-                c.font_family = Some(first);
+            let names: Vec<String> = split_top(v, ',').into_iter().map(|n| n.trim().trim_matches(['"', '\'']).trim().to_string()).filter(|n| !n.is_empty()).collect();
+            if names.first().is_some_and(|f| f != "inherit") {
+                c.font_family = Some(names[0].clone());
+                c.font_fallbacks = (names.len() > 1).then(|| names[1..].join(",").to_lowercase());
             }
         }
         if let Some(v) = get("font-weight") {
@@ -1068,6 +1095,9 @@ impl Computed {
                 "normal" | "lighter" => false,
                 n => n.parse::<u32>().map(|n| n >= 600).unwrap_or(c.bold),
             };
+            c.semibold = v == "600";
+            c.bolder = false;
+            c.weight_declared = true;
         }
         if let Some(v) = get("font-style") {
             c.italic = matches!(v.trim().to_ascii_lowercase().as_str(), "italic" | "oblique");
@@ -1083,6 +1113,7 @@ impl Computed {
         }
         if let Some(v) = get("line-height") {
             let v = v.trim().to_ascii_lowercase();
+            let unitless = v.parse::<f64>().is_ok();
             c.line_height = if v == "normal" {
                 None
             } else {
@@ -1094,6 +1125,10 @@ impl Computed {
                     None => c.line_height,
                 }
             };
+            // 数字倍数照倍数继承，长度（%、em、px、pt）算成绝对值继承（CSS 的规矩）
+            c.line_height_abs = if unitless || v == "normal" { None } else { c.line_height.map(|l| l * c.font_size) };
+        } else if let Some(a) = parent.line_height_abs {
+            c.line_height = Some(a / c.font_size);
         }
         if let Some(v) = get("color") {
             if let Some(col) = parse_color(v) {
@@ -1134,6 +1169,9 @@ impl Computed {
             c.pre = matches!(v.as_str(), "pre" | "pre-wrap" | "break-spaces");
             c.nowrap = matches!(v.as_str(), "nowrap" | "pre");
         }
+        if let Some(v) = get("word-break") {
+            c.break_all = v.trim().eq_ignore_ascii_case("break-all");
+        }
         if let Some(v) = get("list-style-type") {
             c.list_style = Some(v.trim().to_ascii_lowercase());
         }
@@ -1173,15 +1211,26 @@ impl Computed {
             c.radius[i] = get(corner).and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
         }
         c.width = get("width").and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
+        // `height` 也算（Send to Kindle 同样写成 `$62`：《消失的爱人》扉页 `div.shuming{height:6em}`），写了 `min-height` 的以它为准
+        c.min_height = get("min-height").or_else(|| get("height")).and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if *n == 0.0));
         c.display = get("display").map(|v| v.trim().to_ascii_lowercase());
         for i in 0..4 {
             // 写了的才覆盖标签的缺省外边距（上面的 UA 样式）；`auto` 这类算不出长度的当 0
             if let Some(v) = get(MARGIN[i]) {
                 c.margin[i] = parse_box_len(v);
+                c.margin_auto[i] = v.trim().eq_ignore_ascii_case("auto");
             }
             c.padding[i] = get(PADDING[i]).and_then(parse_box_len);
         }
-        c.background = get("background-color").and_then(parse_color).filter(|c| c >> 24 != 0);
+        let nonzero = |l: &Option<Len>| l.is_some_and(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if n == 0.0));
+        c.in_hbox = parent.in_hbox || [1, 3].iter().any(|&i| nonzero(&c.margin[i]) || nonzero(&c.padding[i]) || c.border[i].is_some());
+        // 不透明的纯白背景不算（Send to Kindle 同样：《疯探》`background-color:#ffffff` 的简介、目录页不出容器）
+        c.background = get("background-color").and_then(parse_color).filter(|c| c >> 24 != 0 && *c != 0xFFFF_FFFF);
+        c.backdrop = c.background.map(over_white).or(parent.backdrop);
+        c.box_shadow = get("box-shadow").and_then(parse_shadow);
+        if let Some(v) = get("text-shadow") {
+            c.text_shadow = parse_shadow(v);
+        }
         c.bg_image = get("background-image").filter(|v| v.to_ascii_lowercase().starts_with("url(")).map(|v| v[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']).to_string());
         c.bg_no_repeat = get("background-repeat").is_some_and(|v| v.trim() == "no-repeat");
         c.bg_fixed = get("background-attachment").is_some_and(|v| v.trim() == "fixed");
@@ -1320,9 +1369,12 @@ mod tests {
         assert_eq!(parse_color("#01a0ea80"), Some(0x8001A0EA));
         assert_eq!(parse_color("#12345"), None);
         assert_eq!(parse_color("#+12"), None);
-        assert_eq!(parse_color("rgba(128, 0, 0, 0.7)"), Some(0xB3800000));
+        // 透明度舍去小数（同 Send to Kindle：0.7 → 0xB2、0.5 → 0x7F）；0.6 × 255 的浮点误差不能舍成 152
+        assert_eq!(parse_color("rgba(128, 0, 0, 0.7)"), Some(0xB2800000));
+        assert_eq!(parse_color("rgba(245, 245, 220, 0.5)"), Some(0x7FF5F5DC));
+        assert_eq!(parse_color("rgba(0, 0, 0, 0.6)"), Some(0x99000000));
         assert_eq!(parse_color("rgb(100%, 0%, 50%)"), Some(0xFFFF0080));
-        assert_eq!(parse_color("rgba(0, 0, 0, 50%)"), Some(0x80000000));
+        assert_eq!(parse_color("rgba(0, 0, 0, 50%)"), Some(0x7F000000));
         assert_eq!(parse_len("1.5em"), Some(Len::Em(1.5)));
         assert_eq!(parse_len("30%"), Some(Len::Percent(30.0)));
         assert_eq!(parse_len("4px"), Some(Len::Pt(3.0)));

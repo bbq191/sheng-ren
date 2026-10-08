@@ -32,7 +32,14 @@ use std::collections::{HashMap, HashSet};
 ///   行高按全书正文行高归一（`base_line_height`，正文用阅读器的行距设置），竖直长度按本元素行高换算；左右百分比内边距照写百分比；
 ///   外边距、内边距的 px 按 1px＝0.45pt；`white-space:nowrap` 写 `$45: true`；`cover` 的页面背景写整页范围 `$645`（照 Amazon）；
 ///   SVG 包着的封面图（`<image xlink:href>`）不再丢。21 本测试书文字池逐字相同，漫画、全图书逐字节不变。
-pub const WRITER_VERSION: &str = "10";
+/// - 11（2026-10-08）：照 Send to Kindle 的规则（逐属性对照《绍宋》《绝叫》，见 docs/kfx.md#send-to-kindle-的样式规则）：normal 字重不写、
+///   600 写半粗 `$360`；没有背景处的近黑文字颜色不写；透明度舍去小数；`word-break:break-all` 写 `$569: $570`；标题样式带 `$761: [$760]`；
+///   缺字体文件的字体、没嵌入的正文字体写 `default`（以前不写）；左右外边距、内边距写包含块宽度的百分比，窄容器里的首行缩进写百分比；
+///   折叠后的外边距在后一块没有上边距时留在前一块；边框的黑色不写。同日第二轮（21 本 Send to Kindle 样本逐属性对照）：字号按正文归一、
+///   相对根；行高写成长度的按绝对值继承、下限 0.6；body 左右边距不写（负外边距那侧照加）；百分比按 CSS 实际宽度；`align`、`<font>`；
+///   整段的行内样式并进段落；正文字体 `default`、备选整串；声明了的字重照写、`<b>` bolder；对比度 4.5；块宽度；`min-height`、阴影；
+///   链接颜色 `$576`/`$577`；修掉 `<div><p style margin:0>` 的样式被外层盖掉。21 本测试书文字池逐字相同，漫画逐字节不变；未真机验证。
+pub const WRITER_VERSION: &str = "11";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -63,6 +70,20 @@ pub struct Opts {
     pub media: Option<crate::css::MediaEnv>,
 }
 
+/// 按 CSS 原样算出的每个文字块的样式（[`epub_text_styles`]），一行一块，制表符分隔：
+/// 文字（去空白，前 60 字）、字号（根 em）、行高（根 em，绝对值）、字体、粗细（normal/bold/semibold/bolder）、斜体、颜色（ARGB 十六进制，`-` 没写）、
+/// 对齐、首行缩进（`em:`/`pt:`/`%:` 加数值，`-` 没写）、上边距、下边距（根 em）、左边距、右边距（`em+pct`）。第一行是 `#base` 和全书正文的字号、行高（根 em）。
+/// 给 `tools/kfx/s2kdev.py` 比较掌阅、Move 的 EPUB 交给阅读器的样式和 Send to Kindle 的是否一致：不做 Kindle 专有的变换（body 左右边距照算，
+/// 不换 `default` 字体、不调对比度、不归一字号、没有行高下限）。
+pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) -> Result<String, String> {
+    let mut warnings = Vec::new();
+    let book = epubbook::load_from(epub, &mut warnings)?;
+    let mut b = Builder::new(HashMap::new(), warnings, opts);
+    b.css_faithful = true;
+    build(&book, &mut b, 0)?;
+    Ok(b.dump.take().unwrap_or_default())
+}
+
 // ---------------------------------------------------------------- 中间结构
 
 /// 竖直方向长度，单位：根字号的 em。
@@ -75,6 +96,25 @@ struct Horiz {
     pct: f64,
 }
 
+/// 写一个节点的样式时 KFX 父节点的情况（Send to Kindle 只写和父节点不同的字重、颜色；水平长度按包含块宽度写成百分比）。
+#[derive(Clone, Copy, Debug)]
+struct Parent {
+    /// 实际显示的字重（`WEIGHT_*`）。
+    weight: u32,
+    /// 实际显示的文字颜色（写进样式的；`None`＝阅读器缺省）。
+    color: Option<u32>,
+    /// 包含块宽度（根 em，整页 [`PAGE_WIDTH_EM`]）。
+    avail: f64,
+    /// 全书正文字号（根 em，见 [`base_font_size`]）：字号写成它的倍数。
+    base_fs: f64,
+}
+
+impl Parent {
+    fn root(base_fs: f64) -> Parent {
+        Parent { weight: WEIGHT_NORMAL, color: None, avail: PAGE_WIDTH_EM, base_fs }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Run {
     start: usize,
@@ -85,6 +125,8 @@ struct Run {
     link: Option<(String, String)>,
     /// 注释引用（点了弹窗）：见 [`mark_notes`]。
     note_ref: bool,
+    /// 是 `<a>`（有没有 href 都算）：颜色写成链接的颜色（`$576`/`$577`），见 [`Builder::node`]。
+    anchor: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +159,12 @@ struct Block {
     attrs: Vec<(u32, Value)>,
     /// 额外的样式属性（单元格跨行跨列、竖直对齐，表格宽度等）。
     extra: Vec<(u32, Value)>,
+    /// 容器（带背景、边框的块，列表项、单元格）里只有本元素文字的匿名文字块：样式只写对齐，别的从容器继承
+    /// （Send to Kindle 同样：《罗杰疑案》带背景的章标题，字体、字号、颜色都写在容器上，里面的文字只有 `text-align`）。
+    bare: bool,
+    /// 直接由行内内容合成的文字块（[`Doc::flush`]），不是哪个块级元素自己：包着它的元素可以把它当成自己的文字。
+    /// 以前只看有没有边距，`<li><p class="footnote">` 这种没写边距的 `<p>` 也被当成匿名的，样式被 `<li>` 的盖掉（《春雪》注释的字号、缩进、行高）。
+    inline: bool,
 }
 
 const BLOCK_TAGS: &[&str] = &[
@@ -215,6 +263,46 @@ impl Inline {
     }
 }
 
+/// HTML 的表现属性当成优先级最低的样式（样式表写了的不动）：块的 `align`、`<center>`、`<font size/color/face>`
+/// （Send to Kindle 同样：《福尔摩斯》`<p align="justify">` 两端对齐、`<font size="1">` 字号 0.625、`size="7"` 3.0）。
+fn presentational_hints(el: &ElementRef, decls: &mut HashMap<String, String>) {
+    let e = el.value();
+    let mut hint = |k: &str, v: String| {
+        decls.entry(k.to_string()).or_insert(v);
+    };
+    match e.name() {
+        "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "tr" | "caption" | "blockquote" => {
+            if let Some(a) = e.attr("align").map(|a| a.trim().to_ascii_lowercase()).filter(|a| ["left", "right", "center", "justify"].contains(&a.as_str())) {
+                hint("text-align", a);
+            }
+        }
+        "center" => hint("text-align", "center".into()),
+        "font" => {
+            // HTML 字号 1–7（同浏览器：10、13、16、18、24、32、48px，绝对字号），`+n`/`-n` 相对 3
+            if let Some(s) = e.attr("size").map(str::trim) {
+                let n = match s.strip_prefix('+') {
+                    Some(r) => r.parse::<i32>().ok().map(|r| 3 + r),
+                    None => match s.strip_prefix('-') {
+                        Some(r) => r.parse::<i32>().ok().map(|r| 3 - r),
+                        None => s.parse::<i32>().ok(),
+                    },
+                };
+                if let Some(n) = n {
+                    let em = [0.625, 0.8125, 1.0, 1.125, 1.5, 2.0, 3.0][(n.clamp(1, 7) - 1) as usize];
+                    hint("font-size", format!("{em}rem"));
+                }
+            }
+            if let Some(c) = e.attr("color") {
+                hint("color", c.trim().to_string());
+            }
+            if let Some(f) = e.attr("face") {
+                hint("font-family", f.trim().to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 文档末尾没落到内容上的锚点（`…</p><span id="x"></span></body>`）挂到最后一个块的末尾。
 fn attach_trailing(blocks: &mut [Block], ids: Vec<String>) {
     let Some(last) = blocks.last_mut() else { return };
@@ -240,7 +328,8 @@ impl Doc<'_> {
     }
 
     fn comp(&self, el: &ElementRef, parent: &Computed) -> Computed {
-        let decls = self.sheet.cascade(el);
+        let mut decls = self.sheet.cascade(el);
+        presentational_hints(el, &mut decls);
         let mut c = Computed::derive(parent, &decls, el.value().name());
         if let Some(l) = el.value().attr("xml:lang").or_else(|| el.value().attr("lang")) {
             c.lang = Some(l.to_string());
@@ -325,11 +414,42 @@ impl Doc<'_> {
         // 自己只包着一个文字块（普通段落）：本元素就是这个块。
         // 有背景或内边距的块写成容器套文字（样本里带背景色的 h1 就是这样；背景、内边距、负外边距直接放在文字段落上，
         // Kindle 上长标题会溢出屏幕，2026-10-05 真机）。
-        let boxed = comp.background.is_some() || comp.bg_image.is_some() || padding.iter().any(|p| *p != 0.0) || comp.has_border();
-        let own = !boxed && children.len() == 1 && matches!(children[0].kind, Kind::Text { .. }) && children[0].is_anonymous();
+        let boxed = comp.background.is_some() || comp.bg_image.is_some() || padding.iter().any(|p| *p != 0.0) || comp.has_border() || comp.box_shadow.is_some();
+        let own = !boxed && children.len() == 1 && matches!(children[0].kind, Kind::Text { .. }) && children[0].is_anonymous() && children[0].inline;
+        // 有宽度的包裹层也写成容器，宽度写在容器上；只有自己文字的块宽度写在文字上（Send to Kindle 同样：《金庸》60% 宽的 div、
+        // 《平凡的世界》`width:100%` 的章标题）
+        let boxed = boxed || (!own && comp.width.is_some());
         if own {
             let mut b = children.pop().unwrap_or_else(|| unreachable!());
+            // 整段只有一个带样式的行内元素（`<p><span class="大字">版权信息</span></p>`、`<p><b>注：…</b></p>`）：它的文字样式并进段落
+            // （Send to Kindle 同样：《人生海海》字号 1.833 写在段落上、行高按它算；《金庸》整段的 `<b>` 是段落的 bolder）
+            let mut comp = comp;
+            if let Kind::Text { text, runs } = &mut b.kind {
+                // 几层都覆盖整段时（`<span class="大字"><span class="bold">目录</span></span>`）取最里层，它的计算值已经含外层；链接照留
+                let n = text.chars().count();
+                let whole = !runs.is_empty() && runs.iter().all(|r| r.start == 0 && r.len == n && !r.note_ref);
+                let inner = runs.iter().rev().find_map(|r| r.comp.as_ref()).cloned();
+                if let (true, Some(rc)) = (whole, inner) {
+                    if !rc.superscript && !rc.subscript && !rc.has_border() && rc.background.is_none() {
+                        // `<a>` 的颜色是链接颜色，留在链接区间上（Send to Kindle 写成 `$576`/`$577`），不并进段落
+                        let anchor = runs.iter().any(|r| r.anchor);
+                        let color = comp.color;
+                        comp = merge_text_style(&comp, &rc);
+                        if anchor {
+                            comp.color = color;
+                        }
+                        runs.retain_mut(|r| {
+                            if !(r.anchor && r.comp.as_ref().is_some_and(|c| c.color != color)) {
+                                r.comp = None;
+                            }
+                            r.link.is_some() || r.comp.is_some()
+                        });
+                    }
+                }
+            }
             b.comp = comp;
+            // 现在它是本元素自己的块了，外层元素不能再把它当成自己的文字
+            b.inline = false;
             b.heading = heading;
             b.margin_top = margin_top;
             b.margin_bottom = margin_bottom;
@@ -351,6 +471,8 @@ impl Doc<'_> {
             } else {
                 Vec::new()
             };
+            let mut children = children;
+            mark_bare(&mut children, &comp);
             out.push(Block {
                 kind: Kind::Container(children),
                 comp,
@@ -366,6 +488,8 @@ impl Doc<'_> {
                 ty: None,
                 attrs,
                 extra: Vec::new(),
+            bare: false,
+            inline: false,
             });
             return;
         }
@@ -411,12 +535,17 @@ impl Doc<'_> {
         let id = el.value().attr("id");
         if ty.is_some() && kids.len() == 1 && matches!(kids[0].kind, Kind::Text { .. }) && kids[0].is_anonymous() {
             if let Some(k) = kids.pop() {
+                // 文字的样式用里面那个块的（`<li><p class="footnote">` 的字号、缩进、行高、字体，以前丢了，用的是 `<li>` 的），
+                // 盒子（边距、内边距、背景、边框）用本元素的
+                let text_comp = with_box(&k.comp, &comp);
                 let mut b = self.boxed(k.kind, comp, id);
+                b.comp = text_comp;
                 b.ids.extend(k.ids);
                 b.ty = ty;
                 return b;
             }
         }
+        mark_bare(&mut kids, &comp);
         let mut b = self.boxed(Kind::Container(kids), comp, id);
         b.ty = ty;
         b
@@ -586,7 +715,9 @@ impl Doc<'_> {
             .collect();
         let mut ids = taken.ids.into_iter().map(|(i, o)| (i, o.min(chars))).collect();
         prepend_ids(&mut ids, self.take_pending());
-        out.push(Block::anonymous(Kind::Text { text, runs }, comp.inherited(), ids));
+        let mut b = Block::anonymous(Kind::Text { text, runs }, comp.inherited(), ids);
+        b.inline = true;
+        out.push(b);
     }
 
     fn inline_or_block(&self, node: NodeRef<Node>, block_comp: &Computed, parent: &Computed, inl: &mut Inline, out: &mut Vec<Block>) {
@@ -636,7 +767,7 @@ impl Doc<'_> {
                     });
                 let styled = run_differs(&comp, block_comp);
                 if inl.chars > start && (styled || link.is_some()) {
-                    inl.runs.insert(run_at, Run { start, len: inl.chars - start, comp: styled.then_some(comp), link, note_ref: false });
+                    inl.runs.insert(run_at, Run { start, len: inl.chars - start, comp: styled.then_some(comp), link, note_ref: false, anchor: name == "a" });
                 }
             }
             _ => {}
@@ -661,6 +792,8 @@ impl Block {
             ty: None,
             attrs: Vec::new(),
             extra: Vec::new(),
+            bare: false,
+            inline: false,
         }
     }
 
@@ -683,6 +816,8 @@ fn image_src(el: &ElementRef) -> Option<String> {
 
 fn run_differs(a: &Computed, b: &Computed) -> bool {
     a.bold != b.bold
+        || a.semibold != b.semibold
+        || a.bolder != b.bolder
         || a.italic != b.italic
         || a.color != b.color
         || (a.font_size - b.font_size).abs() > 1e-6
@@ -798,17 +933,45 @@ fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
 /// 正文字体（字数最多的那个）没有嵌入时不写进样式：Kindle 遇到不认识的字体名会换成别的字体，和没写字体的表格、
 /// 阅读器设置里选的字体都对不上（《啸风山庄》正文写着没嵌入的「AR MingU30 DemiBold」，2026-10-05 真机）。
 /// 正文本来就该用阅读器的字体（用户定的字体规矩，见 typesetting.md）。
-fn body_font_to_drop(docs: &mut [ParsedDoc], book: &Loaded) -> Option<String> {
+/// 写出器 11 起嵌入了的也一样（Send to Kindle：《绍宋》新版嵌入的 NotoSerifSCLight、《平凡的世界》的 FZLanTingSong 都写 `default`，2026-10-08）。
+fn body_font_to_drop(docs: &mut [ParsedDoc]) -> Option<String> {
     let mut count: HashMap<Option<String>, usize> = HashMap::new();
     each_text_block(docs, |_, _, b| {
         if let Kind::Text { text, .. } = &b.kind {
             *count.entry(b.comp.font_family.as_ref().map(|f| f.to_lowercase())).or_default() += text.chars().count();
         }
     });
-    let body = count.into_iter().max_by_key(|(_, n)| *n)?.0?;
+    count.into_iter().max_by_key(|(_, n)| *n)?.0
+}
+
+/// 书里有字体文件的 `@font-face` 字体（小写）。
+fn embedded_font_faces(book: &Loaded) -> HashSet<String> {
     let files: HashSet<&str> = book.fonts.iter().map(|(p, _)| p.as_str()).collect();
-    let embedded = book.css.iter().flat_map(|(p, t)| crate::css::font_faces(t, p)).any(|f| f.family.to_lowercase() == body && files.contains(f.path.as_str()));
-    (!embedded).then_some(body)
+    book.css.iter().flat_map(|(p, t)| crate::css::font_faces(t, p)).filter(|f| files.contains(f.path.as_str())).map(|f| f.family.to_lowercase()).collect()
+}
+
+
+/// 全书正文的字号（根 em）：所有文字块按字数加权，最多的那个。Send to Kindle 把它当成阅读器字号设置的 1.0，别的字号按比例
+/// （《啸风山庄》正文 `font-size:1.167em` 不写字号、1.083em 的写 0.928；《疯探》正文 1.25em，没写字号的容器写 0.8，2026-10-08）。
+/// 算出来不在 0.5–3 之间的不信，用 1。
+fn base_font_size(docs: &[ParsedDoc]) -> f64 {
+    fn walk(blocks: &[Block], count: &mut HashMap<i64, usize>) {
+        for b in blocks {
+            match &b.kind {
+                Kind::Text { text, .. } => {
+                    *count.entry((b.comp.font_size * 1000.0).round() as i64).or_default() += text.chars().filter(|c| !c.is_whitespace()).count();
+                }
+                Kind::Container(c) => walk(c, count),
+                Kind::Image { .. } => {}
+            }
+        }
+    }
+    let mut count = HashMap::new();
+    for (_, _, _, blocks) in docs {
+        walk(blocks, &mut count);
+    }
+    let best = count.into_iter().max_by_key(|&(k, n)| (n, std::cmp::Reverse(k))).map(|(k, _)| k as f64 / 1000.0);
+    best.filter(|v| (0.5..=3.0).contains(v)).unwrap_or(1.0)
 }
 
 /// 全书正文的行高（元素字号的倍数）：所有文字块按字数加权，最多的那个行高；没写行高的按 normal（1.2）。
@@ -835,10 +998,35 @@ fn base_line_height(docs: &[ParsedDoc]) -> f64 {
     best.filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
 }
 
-/// 相邻块的外边距折叠（同一层）。
+/// 有没有块（含容器里的）的左（`left`）或右外边距是负的。
+fn has_negative(blocks: &[Block], left: bool) -> bool {
+    blocks.iter().any(|b| {
+        let h = if left { b.margin_left } else { b.margin_right };
+        h.em + h.pct / 100.0 * PAGE_WIDTH_EM < -1e-9 || matches!(&b.kind, Kind::Container(c) if has_negative(c, left))
+    })
+}
+
+/// 顶层块的左右百分比长度（书里相对 body 内容宽度）折算成相对整页：乘 `s`。
+fn scale_percent(blocks: &mut [Block], s: f64) {
+    for b in blocks {
+        let [p0, p1] = &mut b.padding_h;
+        for h in [&mut b.margin_left, &mut b.margin_right, p0, p1] {
+            h.pct *= s;
+        }
+        if let Some(Len::Percent(p)) = &mut b.comp.text_indent {
+            *p *= s;
+        }
+    }
+}
+
+/// 相邻块的外边距折叠（同一层）。合成的边距放在后一块的上边距；后一块没有上边距时留在前一块的下边距
+/// （Send to Kindle 同样：段距写在每段的上边距，「目录」标题的下边距、《绍宋》章号 `p.j11` 的 `margin-bottom:2px` 留在自己身上，2026-10-08）。
 fn collapse_siblings(blocks: &mut [Block]) {
     for i in 1..blocks.len() {
         let prev_bottom = blocks[i - 1].margin_bottom;
+        if blocks[i].margin_top == 0.0 {
+            continue;
+        }
         blocks[i].margin_top = collapse(prev_bottom, blocks[i].margin_top);
         blocks[i - 1].margin_bottom = 0.0;
     }
@@ -886,12 +1074,19 @@ struct Builder {
     headings: Vec<(u8, i64)>,
     /// 样式里用到的字体名（嵌入字体只嵌这些）。
     used_fonts: std::collections::BTreeSet<String>,
-    /// 不写进样式的字体名：没嵌入的正文字体（见 [`body_font_to_drop`]）。
-    drop_font: Option<String>,
+    /// 写成 `default` 的字体名（小写）：正文字体（见 [`body_font_to_drop`]）。
+    default_fonts: HashSet<String>,
+    /// 书里嵌入了字体文件的字体名（小写）。
+    embedded_fonts: HashSet<String>,
     /// 求值 `@media` 用（见 [`Opts::media`]）。
     media: Option<crate::css::MediaEnv>,
     /// 全书正文的行高（元素字号的倍数，见 [`base_line_height`]）：KFX 的行高按它归一。
     base_lh: f64,
+    /// 全书正文的字号（根 em，见 [`base_font_size`]）。
+    base_fs: f64,
+    /// 按 CSS 原样算样式、只导出不写 KFX（[`epub_text_styles`]）。
+    css_faithful: bool,
+    dump: Option<String>,
 }
 
 impl Builder {
@@ -924,12 +1119,31 @@ impl Builder {
     /// 样式去重：属性一样的共用一个样式片段。
     fn style(&mut self, mut props: Vec<(u32, Value)>) -> u32 {
         props.sort_by_key(|(k, _)| *k);
-        if let Some(d) = &self.drop_font {
-            props.retain(|(k, v)| !(*k == P_FONT_FAMILY && matches!(v, Value::String(f) if f.eq_ignore_ascii_case(d))));
+        // 没嵌入的正文字体、`@font-face` 声明了却没有字体文件的字体写成 `default`（Send to Kindle 同样，《绍宋》的「宋体」）：
+        // 阅读器用自己的字体；以前不写，嵌入了字体的父节点下面会继承父节点的字体
+        // 备选照写小写；第一个是嵌入字体时照原样（字体片段按这个名字找）
+        for (k, v) in props.iter_mut() {
+            if let (P_FONT_FAMILY, Value::String(f)) = (*k, &*v) {
+                let (first, rest) = f.split_once(',').map_or((f.as_str(), None), |(a, b)| (a, Some(b)));
+                let first = if self.default_fonts.contains(&first.to_lowercase()) {
+                    FONT_DEFAULT.to_string()
+                } else if self.embedded_fonts.contains(&first.to_lowercase()) {
+                    first.to_string()
+                } else {
+                    first.to_lowercase()
+                };
+                *v = Value::String(match rest {
+                    Some(r) => format!("{first},{r}"),
+                    None => first,
+                });
+            }
         }
         for (k, v) in &props {
             if let (P_FONT_FAMILY, Value::String(f)) = (*k, v) {
-                self.used_fonts.insert(f.clone());
+                let first = f.split(',').next().unwrap_or_default();
+                if first != FONT_DEFAULT && self.embedded_fonts.contains(&first.to_lowercase()) {
+                    self.used_fonts.insert(first.to_string());
+                }
             }
         }
         // 键：每个属性的编号 + 值的 Ion 编码（Ion 值自带长度，拼起来不会混淆）。
@@ -980,36 +1194,60 @@ impl Builder {
         Some(i)
     }
 
-    /// 块的样式属性。`parent_fs`：KFX 里父节点的字号（根 em），字号写成相对它的倍数。
-    fn block_props(&mut self, b: &Block, parent_fs: f64, doc_lang: &Option<String>) -> Vec<(u32, Value)> {
+    /// 块的样式属性。`parent`：KFX 里的父节点（字号写成相对它的倍数，字重、颜色只在需要时写，水平长度按它的宽度换算）。
+    fn block_props(&mut self, b: &Block, parent: &Parent, doc_lang: &Option<String>) -> Vec<(u32, Value)> {
         let c = &b.comp;
         let fs = c.font_size;
-        let mut p = text_props(c, parent_fs);
+        if b.bare {
+            return c.text_align.as_deref().map(|a| vec![(P_TEXT_ALIGN, Value::Symbol(align_symbol(a)))]).unwrap_or_default();
+        }
+        let mut p = text_props(c, parent);
+        // 标题自己的样式带「标题」提示（Send to Kindle 同样）
+        if b.heading.is_some() {
+            p.push((P_LAYOUT_HINTS, Value::List(vec![Value::Symbol(HINT_HEADING)])));
+        }
         if let Some(l) = c.lang.as_ref().or(doc_lang.as_ref()) {
             p.push((P_LANG, Value::String(l.to_ascii_lowercase())));
         }
-        if let Some(a) = c.text_align.as_deref() {
-            let v = match a {
-                "center" => ALIGN_CENTER,
-                "right" | "end" => ALIGN_RIGHT,
-                "justify" => ALIGN_JUSTIFY,
-                _ => ALIGN_LEFT,
-            };
-            p.push((P_TEXT_ALIGN, Value::Symbol(v)));
+        // 容器不写对齐（Send to Kindle 同样，对齐写在里面的文字上）
+        if let (Some(a), false) = (c.text_align.as_deref(), matches!(b.kind, Kind::Container(_))) {
+            p.push((P_TEXT_ALIGN, Value::Symbol(align_symbol(a))));
         }
-        match c.text_indent {
-            Some(Len::Em(n)) => p.push((P_TEXT_INDENT, num(n, U_EM))),
-            Some(Len::Pt(n)) => p.push((P_TEXT_INDENT, num(n / 12.0 / fs, U_EM))),
-            Some(Len::Percent(n)) => p.push((P_TEXT_INDENT, num(n, U_PERCENT))),
-            None => {}
+        // 首行缩进：包含块是整页宽时照写 em，比整页窄（在有左右边距、内边距、边框的容器里）时写成包含块宽度的百分比
+        // （Send to Kindle：正文 `text-indent:2em` 写 2em；《绍宋》信件框里的 2em 写 6.809%＝2/29.375，小注框里 6.78%，2026-10-08）
+        let avail = parent.avail;
+        // 自己或祖先（含 body，body 的左右边距本身不写）有左右边距、内边距、边框时写百分比（《人生海海》body `margin:0 5pt`、
+        // 《揭露人性》`p.kindle-cn-ref{margin:0 1em 0 2em}` 里的 2em 都写 6.25%；没有的照写 em）
+        let narrowed = avail < PAGE_WIDTH_EM - 1e-6 || c.in_hbox;
+        let indent_rem = match c.text_indent {
+            Some(Len::Em(n)) => Some(n * fs),
+            Some(Len::Pt(n)) => Some(n / 12.0),
+            Some(Len::Percent(n)) => {
+                p.push((P_TEXT_INDENT, num(n, U_PERCENT)));
+                None
+            }
+            None => None,
+        };
+        if let Some(r) = indent_rem {
+            p.push((P_TEXT_INDENT, if narrowed { num(r / avail * 100.0, U_PERCENT) } else { num(r / fs, U_EM) }));
         }
         // 行高按全书正文的行高归一（Send to Kindle 的做法，2026-10-08 对照《绍宋》：正文 `line-height:1.5em` 写成 1.0，
         // 行高 1em 的标题写成 0.667，没写行高的容器 0.8）：正文用的就是阅读器的行距设置，别的按比例。以前一律除以 1.2，
         // 正文行距比 Send to Kindle 的大 25%。
-        let lh = c.line_height.unwrap_or(LH_EM) / self.base_lh;
+        // 下限 0.6（Send to Kindle 同样：《揭露人性》body `line-height:1.618em` 继承到 2.5 倍字号的卷号上只剩 0.4，写 0.6；
+        // 《疯探》《克莱因壶》《占星术》的小字、目录同样落在 0.6）
+        let lh = (c.line_height.unwrap_or(LH_EM) / self.base_lh).max(0.6);
         p.push((P_LINE_HEIGHT, num(lh, U_LH)));
         if c.nowrap {
             p.push((P_NOWRAP, Value::Bool(true)));
+        }
+        if c.break_all {
+            p.push((P_WORD_BREAK, Value::Symbol(WORD_BREAK_ALL)));
+        }
+        match c.min_height.filter(|_| !matches!(b.kind, Kind::Image { .. })) {
+            Some(Len::Em(n)) => p.push((P_MIN_HEIGHT, num(n, U_EM))),
+            Some(Len::Pt(n)) => p.push((P_MIN_HEIGHT, num(n / 12.0 / fs, U_EM))),
+            _ => {}
         }
         // `lh` 是本元素行高的倍数（Send to Kindle：没写行高的容器行高 0.8，同样 7% 的上边距写成 2.333 而不是 1.867；
         // 0.5em 的内边距在行高 0.667 的标题上写成 0.625）。以前按固定 1.2em 换算，行高不是 1 的块边距都偏了。
@@ -1020,7 +1258,9 @@ impl Builder {
         if b.margin_bottom != 0.0 {
             p.push((P_MARGIN_BOTTOM, vert(b.margin_bottom)));
         }
-        let horiz = |h: Horiz| if h.em == 0.0 { num(h.pct, U_PERCENT) } else { num((h.em + h.pct / 100.0 * PAGE_WIDTH_EM) / fs, U_EM) };
+        // 左右外边距、内边距一律写成包含块宽度的百分比（Send to Kindle 同样：body 的 5pt → 1.302%、`list-style:none` 的 1.5em → 4.688%、
+        // 《绍宋》`p.ganyan1` 的 0.5em → 1.484%、表格单元格的 0.2em → 0.375%；包含块按整页 32em 减去外层容器的左右边距、内边距、边框）
+        let horiz = |h: Horiz| num(if h.em == 0.0 { h.pct } else { (h.em + h.pct / 100.0 * avail) / avail * 100.0 }, U_PERCENT);
         if b.margin_left != Horiz::default() {
             p.push((P_MARGIN_LEFT, horiz(b.margin_left)));
         }
@@ -1047,14 +1287,40 @@ impl Builder {
             if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
                 p.push((P_WIDTH, v));
             }
+        } else if b.ty.is_none() && !matches!(b.kind, Kind::Image { .. }) {
+            // 有宽度的块（Send to Kindle 同样：宽度照写、带 `$546: $377`，em 宽度另加最大宽度 100%，左右外边距 auto 的按它对齐：
+            // 《阿加莎》`h2{width:3em;margin:2.5em auto 1.8em -2em}` 靠左的小色块、《金庸》60% 宽的图注框）
+            if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
+                p.push((P_WIDTH, v));
+                p.push((P_SIZING, Value::Symbol(SIZING_VALUE)));
+                if !matches!(c.width, Some(Len::Percent(_))) {
+                    p.push((P_MAX_WIDTH, num(100.0, U_PERCENT)));
+                }
+                let align = match (c.margin_auto[3], c.margin_auto[1]) {
+                    (true, true) => Some(ALIGN_CENTER),
+                    (false, true) => Some(ALIGN_LEFT),
+                    (true, false) => Some(ALIGN_RIGHT),
+                    _ => None,
+                };
+                if let Some(a) = align {
+                    p.push((P_BOX_ALIGN, Value::Symbol(a)));
+                }
+            }
+        }
+        for (s, k) in [(c.box_shadow, P_BOX_SHADOW), (c.text_shadow, P_TEXT_SHADOW)] {
+            if let Some(s) = s {
+                p.push((k, shadow_value(&s, c.color)));
+            }
         }
         p.extend(b.extra.iter().cloned());
         p
     }
 
     /// 生成一个块的节点（递归），同时登记位置、id。
-    fn node(&mut self, b: &Block, parent_fs: f64, ctx: &mut SectionCtx) -> Option<Value> {
-        let props = self.block_props(b, parent_fs, &ctx.lang);
+    fn node(&mut self, b: &Block, parent: &Parent, ctx: &mut SectionCtx) -> Option<Value> {
+        let props = self.block_props(b, parent, &ctx.lang);
+        // 本节点给子节点（行内区间、容器里的块）的「父节点」
+        let me = Parent { weight: weight_of(&b.comp), color: shown_color(&b.comp, parent), avail: inner_width(b, parent.avail), base_fs: parent.base_fs };
         match &b.kind {
             Kind::Text { text, runs } => {
                 let eid = self.eid();
@@ -1088,13 +1354,22 @@ impl Builder {
                             f.push((LINK_TO, Value::Symbol(self.anchor(key.clone()))));
                         }
                         if let Some(rc) = &r.comp {
-                            let mut rp = text_props(rc, b.comp.font_size);
+                            let mut rp = text_props(rc, &me);
                             if rc.superscript && !b.comp.superscript {
                                 rp.push((P_VERTICAL_ALIGN, Value::Symbol(VALIGN_SUPER)));
                             } else if rc.subscript && !b.comp.subscript {
                                 rp.push((P_VERTICAL_ALIGN, Value::Symbol(VALIGN_SUB)));
                             }
                             rp.extend(border_props(rc));
+                            // `<a>` 的颜色写成链接（未访问、已访问）的颜色（Send to Kindle 同样：《人生海海》目录 `color:#00C`）
+                            if r.anchor {
+                                if let Some(i) = rp.iter().position(|(k, _)| *k == P_COLOR) {
+                                    let (_, col) = rp.remove(i);
+                                    for k in [P_LINK_UNVISITED, P_LINK_VISITED] {
+                                        rp.push((k, Value::Struct(vec![(P_COLOR, col.clone())])));
+                                    }
+                                }
+                            }
                             if let Some(bg) = rc.background {
                                 rp.push((P_INLINE_BACKGROUND, Value::Int(i64::from(bg))));
                             }
@@ -1161,7 +1436,7 @@ impl Builder {
                 // 表体、行这些结构层没有样式（同样本）。
                 let styled = !matches!(ty, NODE_THEAD | NODE_TBODY | NODE_TFOOT | NODE_ROW);
                 let style = styled.then(|| self.style(props));
-                let kids: Vec<Value> = children.iter().filter_map(|c| self.node(c, b.comp.font_size, ctx)).collect();
+                let kids: Vec<Value> = children.iter().filter_map(|c| self.node(c, &me, ctx)).collect();
                 let mut f = vec![(EID, Value::Int(eid))];
                 if ty == NODE_CONTAINER {
                     f.push((TMPL_FIT, Value::Symbol(CONTAINER_LAYOUT)));
@@ -1181,6 +1456,18 @@ impl Builder {
             }
         }
     }
+}
+
+/// 阴影：`{颜色, x, y, 模糊}`，长度 pt 或 em（Send to Kindle：`box-shadow:0 0 0.5em #aaa` → `$501: 0.5em`，`text-shadow` 的 3px → 1.35pt）。
+fn shadow_value(s: &crate::css::Shadow, text: Option<u32>) -> Value {
+    let len = |l: Len| match l {
+        Len::Em(n) if n != 0.0 => num(n, U_EM),
+        Len::Em(_) => num(0.0, U_PT),
+        Len::Pt(n) => num(n, U_PT),
+        Len::Percent(n) => num(n, U_PERCENT),
+    };
+    let col = s.color.or(text).unwrap_or(0xFF00_0000);
+    Value::Struct(vec![(SHADOW_COLOR, Value::Int(i64::from(col))), (SHADOW_X, len(s.x)), (SHADOW_Y, len(s.y)), (SHADOW_BLUR, len(s.blur))])
 }
 
 /// 宽度：百分比照写，em/pt 换成 em。
@@ -1215,7 +1502,9 @@ fn border_props(c: &Computed) -> Vec<(u32, Value)> {
     let mut emit = |slot: usize, b: &Border| {
         p.push((P_BORDER_STYLE[slot], Value::Symbol(style(b))));
         p.push((P_BORDER_WIDTH[slot], bw(b.width)));
-        if let Some(col) = b.color {
+        // 黑色不写（Send to Kindle 同样；文字也是黑色或缺省时边框本来就画成黑色）
+        let black_text = c.color.is_none_or(|t| t & 0xFF_FFFF == 0);
+        if let Some(col) = b.color.filter(|&col| !(col == 0xFF00_0000 && black_text)) {
             // 全透明的写「透明」（Send to Kindle 同样写 `$349`）
             p.push((P_BORDER_COLOR[slot], if col >> 24 == 0 { Value::Symbol(COLOR_TRANSPARENT) } else { Value::Int(i64::from(col)) }));
         }
@@ -1245,19 +1534,157 @@ fn border_props(c: &Computed) -> Vec<(u32, Value)> {
     p
 }
 
-/// 字体、字号、粗体、斜体、颜色（块和行内区间共用）。
-fn text_props(c: &Computed, parent_fs: f64) -> Vec<(u32, Value)> {
+/// 段落的计算值换上行内元素的文字样式（字体、字号、字重、斜体、颜色、行高、装饰、字间距）；盒子（边距、背景、边框）照段落的。
+fn merge_text_style(block: &Computed, run: &Computed) -> Computed {
+    Computed {
+        font_family: run.font_family.clone(),
+        font_fallbacks: run.font_fallbacks.clone(),
+        font_size: run.font_size,
+        bold: run.bold,
+        semibold: run.semibold,
+        bolder: run.bolder,
+        weight_declared: run.weight_declared,
+        italic: run.italic,
+        line_height: run.line_height,
+        line_height_abs: run.line_height_abs,
+        color: run.color,
+        decoration: run.decoration,
+        small_caps: run.small_caps,
+        letter_spacing: run.letter_spacing,
+        ..block.clone()
+    }
+}
+
+fn align_symbol(a: &str) -> u32 {
+    match a {
+        "center" => ALIGN_CENTER,
+        "right" | "end" => ALIGN_RIGHT,
+        "justify" => ALIGN_JUSTIFY,
+        _ => ALIGN_LEFT,
+    }
+}
+
+/// 标出容器里只有本元素文字的匿名文字块（见 [`Block::bare`]）。
+fn mark_bare(children: &mut [Block], comp: &Computed) {
+    let inherited = comp.inherited();
+    for c in children {
+        // 行内区间的样式相对段落写，段落样式空着照样成立
+        if matches!(c.kind, Kind::Text { .. }) && c.is_anonymous() && c.inline && c.comp == inherited {
+            c.bare = true;
+        }
+    }
+}
+
+/// `text` 的计算值换上 `boxc` 的盒子属性（外边距、内边距、背景、边框、宽高、显示方式、单元格竖直对齐）。
+fn with_box(text: &Computed, boxc: &Computed) -> Computed {
+    Computed {
+        display: boxc.display.clone(),
+        margin: boxc.margin,
+        padding: boxc.padding,
+        background: boxc.background,
+        border: boxc.border.clone(),
+        radius: boxc.radius,
+        width: boxc.width,
+        min_height: boxc.min_height,
+        valign: boxc.valign.clone(),
+        bg_image: boxc.bg_image.clone(),
+        bg_no_repeat: boxc.bg_no_repeat,
+        bg_fixed: boxc.bg_fixed,
+        bg_position: boxc.bg_position,
+        bg_size: boxc.bg_size,
+        bg_cover: boxc.bg_cover,
+        ..text.clone()
+    }
+}
+
+/// 显示的字重：`<b>`/`<strong>` 的 bolder、600 半粗、粗体、正常。
+fn weight_of(c: &Computed) -> u32 {
+    if c.bolder {
+        WEIGHT_BOLDER
+    } else if c.semibold {
+        WEIGHT_SEMIBOLD
+    } else if c.bold {
+        WEIGHT_BOLD
+    } else {
+        WEIGHT_NORMAL
+    }
+}
+
+/// 近黑：三个分量都不超过 0x11（样本里见过的是纯黑和 `#111111`）。
+fn near_black(col: u32) -> bool {
+    col >> 24 == 0xFF && (col >> 16 & 0xFF) <= 0x11 && (col >> 8 & 0xFF) <= 0x11 && (col & 0xFF) <= 0x11
+}
+
+/// 这个节点实际显示的文字颜色（写进样式的，`None`＝阅读器缺省）。Send to Kindle 在没有背景的地方省掉近黑的文字颜色
+/// （《绍宋》正文的黑、章号的 `#111111` 都不写；同样的颜色在有背景色的小注框、卷首语里照写，2026-10-08），
+/// 父节点写了别的颜色时照写，免得继承父节点的颜色。
+fn shown_color(c: &Computed, parent: &Parent) -> Option<u32> {
+    match text_color(c) {
+        Some(col) if near_black(col) && !c.on_background && c.background.is_none() && c.bg_image.is_none() && parent.color.is_none() => None,
+        Some(col) => Some(col),
+        None => parent.color,
+    }
+}
+
+/// 按对比度调过的文字颜色（[`crate::css::ensure_contrast`]，背景是自己或祖先的背景色，没有按白页面）；没写颜色、缺省的黑字
+/// 和背景对比度不够时也给一个颜色（深蓝底上的黑字写 `#e4e4e4`）。
+fn text_color(c: &Computed) -> Option<u32> {
+    // 底下只有背景图、没有背景色：看不出对比度，照写
+    if c.backdrop.is_none() && (c.on_image || c.bg_image.is_some()) {
+        return c.color;
+    }
+    let bg = c.backdrop.unwrap_or(0xFFFF_FFFF);
+    match c.color {
+        Some(col) => Some(crate::css::ensure_contrast(col, bg)),
+        None => (crate::css::contrast(0xFF00_0000, bg) < 4.5).then(|| crate::css::ensure_contrast(0xFF00_0000, bg)),
+    }
+}
+
+/// 容器给子节点的包含块宽度（根 em）：减去自己的左右外边距、内边距、边框（百分比按外面的包含块算）。
+/// 表格按表格宽度算，不减边框（Send to Kindle：《绍宋》表格 `width:100%` 带 0.5px 边框，单元格的 0.2em 内边距写 0.375%＝0.12/32）。
+fn inner_width(b: &Block, avail: f64) -> f64 {
+    let rem = |h: Horiz| h.em + h.pct / 100.0 * avail;
+    if b.ty == Some(NODE_TABLE) {
+        let w = match b.comp.width {
+            Some(Len::Percent(p)) => p / 100.0 * avail,
+            Some(Len::Em(n)) => n * b.comp.font_size,
+            Some(Len::Pt(n)) => n / 12.0,
+            None => avail - rem(b.margin_left) - rem(b.margin_right),
+        };
+        return if w.is_finite() && w > 1.0 { w } else { avail };
+    }
+    let border = |s: usize| match b.comp.border[s].as_ref().map(|x| x.width) {
+        Some(BorderWidth::Pt(n)) => n / 12.0,
+        Some(BorderWidth::Em(n)) => n * b.comp.font_size,
+        None => 0.0,
+    };
+    let w = avail - rem(b.margin_left) - rem(b.margin_right) - rem(b.padding_h[0]) - rem(b.padding_h[1]) - border(1) - border(3);
+    if w.is_finite() && w > 1.0 { w } else { avail }
+}
+
+/// 字体、字号、粗体、斜体、颜色（块和行内区间共用）。字重、颜色只在和父节点显示的不一样时写（Send to Kindle 不写 normal 字重、
+/// 不写没有背景处的近黑颜色，见 [`shown_color`]）。
+fn text_props(c: &Computed, parent: &Parent) -> Vec<(u32, Value)> {
     let mut p = Vec::new();
     if let Some(f) = &c.font_family {
-        p.push((P_FONT_FAMILY, Value::String(f.clone())));
+        // 整串备选照写（Send to Kindle 同样，小写、逗号连接）；第一个在 `Builder::style` 里换成 `default` 或嵌入字体名
+        let v = match &c.font_fallbacks {
+            Some(rest) => format!("{f},{rest}"),
+            None => f.clone(),
+        };
+        p.push((P_FONT_FAMILY, Value::String(v)));
     }
-    let rel = if parent_fs > 0.0 { c.font_size / parent_fs } else { c.font_size };
+    // 字号是全书正文字号的倍数，相对根而不是父节点（Send to Kindle：《疯探》0.8 的容器里 1.2em 的作者行写 0.96＝1.2/1.25）
+    let rel = if parent.base_fs > 0.0 { c.font_size / parent.base_fs } else { c.font_size };
     p.push((P_FONT_SIZE, num(rel, U_FONT_EM)));
-    p.push((P_FONT_WEIGHT, Value::Symbol(if c.bold { WEIGHT_BOLD } else { WEIGHT_NORMAL })));
+    let w = weight_of(c);
+    if w != WEIGHT_NORMAL || parent.weight != WEIGHT_NORMAL || c.weight_declared {
+        p.push((P_FONT_WEIGHT, Value::Symbol(w)));
+    }
     if c.italic {
         p.push((P_FONT_STYLE, Value::Symbol(STYLE_ITALIC)));
     }
-    if let Some(col) = c.color {
+    if let (Some(col), Some(_)) = (text_color(c), shown_color(c, parent)) {
         p.push((P_COLOR, Value::Int(i64::from(col))));
     }
     for (on, k) in c.decoration.iter().zip([P_UNDERLINE, P_LINE_THROUGH, P_OVERLINE]) {
@@ -1291,6 +1718,83 @@ struct SectionOut {
     pid_map: Vec<Value>,
     resources: Vec<usize>,
     first_eid: i64,
+}
+
+impl Builder {
+    fn new(images: HashMap<String, (Vec<u8>, &'static str)>, warnings: Vec<String>, opts: &Opts) -> Builder {
+        Builder {
+            locals: Vec::new(),
+            local_index: HashMap::new(),
+            next_eid: 1,
+            styles: HashMap::new(),
+            style_entities: Vec::new(),
+            resources: Vec::new(),
+            res_by_path: HashMap::new(),
+            images,
+            warnings,
+            anchors: Vec::new(),
+            anchor_index: HashMap::new(),
+            headings: Vec::new(),
+            used_fonts: Default::default(),
+            default_fonts: HashSet::new(),
+            embedded_fonts: HashSet::new(),
+            base_lh: LH_EM,
+            base_fs: 1.0,
+            media: opts.media,
+            css_faithful: false,
+            dump: None,
+        }
+    }
+}
+
+/// 一个文字块一行（见 [`epub_text_styles`]）。
+/// 容器里只有本元素文字的块（[`Block::bare`]）用容器的边距（和 KFX 那边一样：边距在容器上）。
+fn dump_blocks(blocks: &[Block], out: &mut String) {
+    dump_blocks_in(blocks, None, out)
+}
+
+fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, out: &mut String) {
+    use std::fmt::Write;
+    for b in blocks {
+        match &b.kind {
+            Kind::Container(c) => dump_blocks_in(c, Some(b), out),
+            Kind::Text { text, .. } => {
+                let c = &b.comp;
+                let key: String = text.chars().filter(|ch| !ch.is_whitespace()).take(60).collect();
+                if key.is_empty() {
+                    continue;
+                }
+                let lh = c.line_height.unwrap_or(LH_EM) * c.font_size;
+                let weight = if c.bolder { "bolder" } else if c.semibold { "semibold" } else if c.bold { "bold" } else { "normal" };
+                let indent = match c.text_indent {
+                    Some(Len::Em(n)) => format!("em:{n}"),
+                    Some(Len::Pt(n)) => format!("pt:{n}"),
+                    Some(Len::Percent(n)) => format!("%:{n}"),
+                    None => "-".into(),
+                };
+                let m = match parent {
+                    Some(p) if b.bare => p,
+                    _ => b,
+                };
+                let _ = writeln!(
+                    out,
+                    "{key}\t{}\t{lh}\t{}\t{weight}\t{}\t{}\t{}\t{indent}\t{}\t{}\t{}+{}\t{}+{}",
+                    c.font_size,
+                    c.font_family.as_deref().unwrap_or("-"),
+                    c.italic,
+                    c.color.map_or("-".into(), |x| format!("{x:08x}")),
+                    c.text_align.as_deref().unwrap_or("-"),
+                    m.margin_top,
+                    m.margin_bottom,
+                    m.margin_left.em,
+                    m.margin_left.pct,
+                    m.margin_right.em,
+                    m.margin_right.pct,
+                );
+            }
+            Kind::Image { .. } => {}
+        }
+    }
 }
 
 /// 32 进制大写（容器 id、book_id 用）。
@@ -1368,24 +1872,7 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
     let mut book = epubbook::load_from(epub, &mut warnings)?;
     // 图片字节从书里搬出来（写出器只在这里用到它们），不复制。
     let images = std::mem::take(&mut book.images).into_iter().map(|i| (i.path, (i.bytes, i.mime))).collect();
-    let mut b = Builder {
-        locals: Vec::new(),
-        local_index: HashMap::new(),
-        next_eid: 1,
-        styles: HashMap::new(),
-        style_entities: Vec::new(),
-        resources: Vec::new(),
-        res_by_path: HashMap::new(),
-        images,
-        warnings,
-        anchors: Vec::new(),
-        anchor_index: HashMap::new(),
-        headings: Vec::new(),
-        used_fonts: Default::default(),
-        drop_font: None,
-        base_lh: LH_EM,
-        media: opts.media,
-    };
+    let mut b = Builder::new(images, warnings, opts);
     // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字：元数据 `cover_image` 也是按「这个名字的符号编号 − 9」
     // 找封面资源的（6 本样本的 `e6` 减 9 都正好是封面 JPEG 的 `$164`；书架缩略图靠它，2026-10-05 真机）。
     if let Some(i) = book.cover.as_deref().and_then(|c| b.resource(c)) {
@@ -1428,6 +1915,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     // 外部样式表按路径只解析一次（大合集几百个文档共用一份样式表），各线程共用。
     let sheets: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::css::Rules>>> = Default::default();
     let media = b.media;
+    let faithful = b.css_faithful;
     let docs: Vec<(usize, &bookconv::epubbook::Doc)> = book.docs.iter().enumerate().collect();
     let parse_doc = |&(si, doc): &(usize, &bookconv::epubbook::Doc)| -> (usize, Option<String>, Vec<Block>) {
         let html = Html::parse_document(&doc.html);
@@ -1461,8 +1949,45 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let mut blocks = Vec::new();
         let root_comp = d.comp(&root, &Computed::root());
         if let Some(body) = root.children().filter_map(ElementRef::wrap).find(|e| e.value().name() == "body") {
-            // body 也当一层包裹：它的水平外边距加到每个块上（样本里 body 的 5pt 边距出现在每个段落上）。
-            d.block(body, d.comp(&body, &root_comp), &mut blocks);
+            // body 的左右外边距、内边距不写（Send to Kindle 同样：《人生海海》《ABC谋杀案》body `margin:0 5pt`、《绍宋》新版
+            // `padding:1em` 都没有出现在段落上，2026-10-08；更早的《ABC谋杀案》样本加到了每段上，那是另一版 EPUB）。
+            // 书里按 body 内容宽度算的百分比折算成整页的（《雪国》body 左右 1%，段落的 1% 写 0.98%）。
+            // 例外：文件里有块的左（右）外边距是负的，这一侧 body 的边距照旧加到每个块上（《罗杰疑案》《ABC谋杀案》章标题
+            // `margin:-2em` 两侧都留；《平凡的世界》只有左边 `-1em` 的那几个文件只留左边）。
+            let mut bc = d.comp(&body, &root_comp);
+            if faithful {
+                d.block(body, bc, &mut blocks);
+                attach_trailing(&mut blocks, d.take_pending());
+                collapse_siblings(&mut blocks);
+                return (si, d.lang.clone(), blocks);
+            }
+            let fs = bc.font_size;
+            let side = |i: usize| {
+                let (m, p) = (to_horiz(bc.margin[i], fs), to_horiz(bc.padding[i], fs));
+                Horiz { em: m.em + p.em, pct: m.pct + p.pct }
+            };
+            let (left, right) = (side(3), side(1));
+            for i in [1, 3] {
+                bc.margin[i] = None;
+                bc.padding[i] = None;
+            }
+            d.block(body, bc, &mut blocks);
+            let (neg_l, neg_r) = (has_negative(&blocks, true), has_negative(&blocks, false));
+            let rem = |h: Horiz| h.em + h.pct / 100.0 * PAGE_WIDTH_EM;
+            let width = PAGE_WIDTH_EM - if neg_l { 0.0 } else { rem(left) } - if neg_r { 0.0 } else { rem(right) };
+            if width > 1.0 && width < PAGE_WIDTH_EM {
+                scale_percent(&mut blocks, width / PAGE_WIDTH_EM);
+            }
+            for b in &mut blocks {
+                if neg_l {
+                    b.margin_left.em += left.em;
+                    b.margin_left.pct += left.pct;
+                }
+                if neg_r {
+                    b.margin_right.em += right.em;
+                    b.margin_right.pct += right.pct;
+                }
+            }
         }
         attach_trailing(&mut blocks, d.take_pending());
         collapse_siblings(&mut blocks);
@@ -1477,8 +2002,19 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         parsed.extend(got.iter().map(|(si, l, b)| (*si, book.docs[*si].path.as_str(), l.clone(), b.clone())));
     }
     mark_notes(&mut parsed);
-    b.drop_font = body_font_to_drop(&mut parsed, book);
+    // 缺字体文件的字体照写原名（Send to Kindle：《春雪》注释的 `ZY-KAITI` 照写；《绍宋》旧版的「宋体」写 `default` 是因为它是正文字体）
+    b.embedded_fonts = embedded_font_faces(book);
+    b.default_fonts = body_font_to_drop(&mut parsed).into_iter().collect();
     b.base_lh = base_line_height(&parsed);
+    b.base_fs = base_font_size(&parsed);
+    if b.css_faithful {
+        let mut out = format!("#base\t{}\t{}\n", b.base_fs, b.base_lh * b.base_fs);
+        for (_, _, _, blocks) in &parsed {
+            dump_blocks(blocks, &mut out);
+        }
+        b.dump = Some(out);
+        return Ok(Vec::new());
+    }
     for (si, path, lang, blocks) in parsed {
         if blocks.is_empty() {
             empty_docs.push(path.to_string());
@@ -1530,7 +2066,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
                 vec![Value::Struct(vec![(EID, Value::Int(iid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(NODE_IMAGE)), (RESOURCE_REF, Value::Symbol(res))])]
             }
         } else {
-            blocks.iter().filter_map(|bl| b.node(bl, 1.0, &mut ctx)).collect()
+            blocks.iter().filter_map(|bl| b.node(bl, &Parent::root(b.base_fs), &mut ctx)).collect()
         };
         if nodes.is_empty() {
             empty_docs.push(path.to_string());
@@ -2151,6 +2687,76 @@ mod tests {
         assert!(has(P_MARGIN_TOP, &n(-0.3125, U_LH)) && has(P_NOWRAP, "Bool(true)"), "{all}");
     }
 
+    /// 写出器 11 照 Send to Kindle（2026-10-08 对照《绍宋》《绝叫》）：不写 normal 字重、没有背景处不写近黑颜色、600 半粗、
+    /// `word-break:break-all`、标题提示、左右边距写包含块的百分比、窄容器里的首行缩进写百分比、缺字体文件的字体写 `default`、
+    /// 折叠后的外边距在后一块没有上边距时留在前一块。
+    #[test]
+    fn styles_rules_of_send_to_kindle() {
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>@font-face{font-family:"宋体";src:url(none.ttf)}
+            p{font-family:"宋体";color:#111;word-break:break-all;text-indent:2em;margin:0}
+            p.g{font-weight:600;margin-left:0.5em} div.box{background-color:#eee;padding:1em} div.t{margin-bottom:1em}</style></head><body>
+            <h2>标题</h2><p>正文一正文一</p><p class="g">半粗半粗</p><div class="box"><p>框里的字</p></div><div class="t">目录</div><p>下一段</p></body></html>"#.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let styles: Vec<Value> = c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect();
+        let all = format!("{styles:?}");
+        let n = |v: f64, u: u32| format!("{:?}", num(v, u));
+        let has = |k: u32, v: &str| all.contains(&format!("({k}, {v})"));
+        assert!(!has(P_FONT_WEIGHT, &format!("Symbol({WEIGHT_NORMAL})")), "normal 字重不写: {all}");
+        assert!(has(P_FONT_WEIGHT, &format!("Symbol({WEIGHT_SEMIBOLD})")) && has(P_FONT_WEIGHT, &format!("Symbol({WEIGHT_BOLD})")), "{all}");
+        // #111 只在有背景色的框里写
+        assert_eq!(all.matches(&format!("({P_COLOR}, Int({}))", 0xFF11_1111u32)).count(), 1, "{all}");
+        assert!(has(P_WORD_BREAK, &format!("Symbol({WORD_BREAK_ALL})")) && has(P_LAYOUT_HINTS, &format!("List([Symbol({HINT_HEADING})])")), "{all}");
+        assert!(has(P_FONT_FAMILY, "String(\"default\")") && !all.contains("宋体"), "{all}");
+        // 0.5em 左边距 → 1.5625%；正文缩进 2em；框（左右各 1em 内边距）里的缩进 2/30 → 6.666667%
+        assert!(has(P_MARGIN_LEFT, &n(1.5625, U_PERCENT)) && has(P_TEXT_INDENT, &n(2.0, U_EM)) && has(P_TEXT_INDENT, &n(6.666667, U_PERCENT)), "{all}");
+        // 「目录」的下边距 1em（0.833333lh）留在自己身上：下一段没有上边距
+        assert!(has(P_MARGIN_BOTTOM, &n(0.833333, U_LH)), "{all}");
+    }
+
+    /// 写出器 11 第二轮（2026-10-08，逐属性对照 21 本 Send to Kindle 的书）：字号按正文归一、相对根；行高写成长度的按绝对值继承、
+    /// 下限 0.6；body 左右边距不写（这一侧有负外边距时照加）；表现属性（`align`、`<font size>`）；整段的行内样式并进段落；
+    /// 正文字体写 `default`、备选整串照写；声明了的 normal 字重照写、`<b>` 写 bolder；对比度不到 4.5 的文字颜色调深；块宽度；
+    /// `min-height`；链接颜色写 `$576`/`$577`；`<li><p>` 里 `<p>` 自己的样式不丢。
+    #[test]
+    fn send_to_kindle_rules_round_two() {
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>
+            body{margin:0 5pt;line-height:130%;font-family:"Body Font",serif} p{font-size:1.25em;margin:0}
+            p.big{font-size:1.5em} h2{font-weight:normal;color:#fff;background-color:#f0a200;width:3em;margin:1em auto 1em -2em}
+            p.min{min-height:2em} p.pale{color:#f5ac00} a{color:#00c} li p.note{font-size:0.95em;text-indent:-1em}</style></head><body>
+            <p>正文正文正文正文正文正文正文正文正文正文正文正文正文正文正文正文正文正文</p><p>正文正文正文正文正文正文正文正文正文正文正文正文</p>
+            <p class="big">大字</p><h2>小标题</h2><p align="center"><font size="1">小字</font></p><p><span class="big"><b>整段</b></span></p>
+            <p class="min">最小高度</p><p class="pale">浅色字</p><p><a href="c1.xhtml">链接链接</a>后面</p>
+            <ul style="list-style:none;margin:0;padding:0"><li><p class="note">注释</p></li></ul></body></html>"#.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let styles: Vec<Value> = c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect();
+        let all = format!("{styles:?}");
+        let n = |v: f64, u: u32| format!("{:?}", num(v, u));
+        let has = |k: u32, v: &str| all.contains(&format!("({k}, {v})"));
+        // 正文 1.25em 归一成 1.0；1.5em → 1.2；`<font size="1">` 0.625em → 0.5；整段的 span 并进段落（字号 1.2、bolder）
+        assert!(has(P_FONT_SIZE, &n(1.2, U_FONT_EM)) && has(P_FONT_SIZE, &n(0.5, U_FONT_EM)) && has(P_FONT_WEIGHT, &format!("Symbol({WEIGHT_BOLDER})")), "{all}");
+        // body 的 5pt 不写：没有 1.302% 的边距；h2 的 -2em（负的）让左边照加 → 左边距 (-2em*1.5 + 5pt)/32
+        assert!(!has(P_MARGIN_RIGHT, &n(1.302083, U_PERCENT)), "{all}");
+        assert!(has(P_MARGIN_LEFT, &n((-3.0 + 5.0 / 12.0) / 32.0 * 100.0, U_PERCENT)), "{all}");
+        // 正文字体写 default + 备选；h2：normal 照写、白字在橙底上调成 #454545、宽度 3em + 靠左
+        assert!(has(P_FONT_FAMILY, "String(\"default,serif\")") && has(P_FONT_WEIGHT, &format!("Symbol({WEIGHT_NORMAL})")), "{all}");
+        assert!(has(P_COLOR, &format!("Int({})", 0xFF45_4545u32)) && has(P_WIDTH, &n(3.0, U_EM)) && has(P_BOX_ALIGN, &format!("Symbol({ALIGN_LEFT})")), "{all}");
+        assert!(has(P_TEXT_ALIGN, &format!("Symbol({ALIGN_CENTER})")) && has(P_MIN_HEIGHT, &n(2.0, U_EM)), "{all}");
+        // 浅色字压暗到 4.5:1；链接颜色写成链接的颜色
+        assert!(has(P_COLOR, &format!("Int({})", 0xFF9D_6E00u32)) && has(P_LINK_UNVISITED, &format!("Struct([({P_COLOR}, Int({}))])", 0xFF00_00CCu32)), "{all}");
+        // `<li><p class="note">`：p 自己的字号、缩进没丢（0.95/1.25 = 0.76）
+        assert!(has(P_FONT_SIZE, &n(0.76, U_FONT_EM)), "{all}");
+    }
+
     /// 固定版式（漫画）：照 Amazon 转的测试漫画写元数据、文档数据和每页的画布版面；从右往左翻写 `$559`。
     #[test]
     fn fixed_layout_odd_shaped_images_keep_aspect() {
@@ -2193,7 +2799,7 @@ mod tests {
         assert!(max_ent < max_loc, "最大实体 id {max_ent} 不能排在资源路径符号 {max_loc} 后面");
     }
 
-    /// 没嵌入的正文字体不写进样式（Kindle 会换成别的字体，和表格、阅读器设置都对不上）；嵌入的装饰字体照写。
+    /// 没嵌入的正文字体不写原名（Kindle 会换成别的字体，和表格、阅读器设置都对不上），写 `default`（写出器 11）；嵌入的装饰字体照写。
     #[test]
     fn unembedded_body_font_dropped() {
         let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();

@@ -164,6 +164,11 @@ pub const POSITION_RELATIVE: u32 = 488;
 pub const P_CLIP: u32 = 476;
 /// 推测：排版提示（标题样式上是 `[$760]`，表格标题上是 `[$453]`）。
 pub const P_LAYOUT_HINTS: u32 = 761;
+/// 排版提示「标题」：Send to Kindle 写在每个 `<h1>`–`<h6>` 自己的样式上（《绝叫》45 个 h2/h4 全有，2026-10-08）。
+pub const HINT_HEADING: u32 = 760;
+/// `word-break: break-all` → `$569: $570`（2026-10-08《绍宋》：全书 `p{word-break:break-all}`，没继承它的 `h1.juan` 就没有）。
+pub const P_WORD_BREAK: u32 = 569;
+pub const WORD_BREAK_ALL: u32 = 570;
 /// 单元格：跨列、跨行、竖直对齐（`$58` top、`$320` middle、`$60` bottom）。
 pub const P_COLSPAN: u32 = 148;
 pub const P_ROWSPAN: u32 = 149;
@@ -201,6 +206,27 @@ pub const ALIGN_JUSTIFY: u32 = 321;
 /// 2026-10-05 对照改正：以前写反了（ABC 的 `.contents-chapter{font-weight:bold}` 是 `$361`，`.bodycontent-title{font-weight:normal}` 是 `$350`；
 /// 《绍宋》字体片段 `$262` 的字形、字重、宽度都写 `$350`＝normal）。
 pub const WEIGHT_BOLD: u32 = 361;
+/// 半粗：Send to Kindle 把 `font-weight:600` 写成它（《绍宋》`p.ganyan1`）。
+pub const WEIGHT_SEMIBOLD: u32 = 360;
+/// `bolder`：Send to Kindle 写在 `<b>`/`<strong>` 上（HTML 缺省样式就是 `font-weight: bolder`；《金庸》《克莱因壶》《福尔摩斯》）。
+pub const WEIGHT_BOLDER: u32 = 362;
+/// `min-height`，`height` 也写它（《恶女的告白》`min-height:2em`、《消失的爱人》`height:6em` → `$62`）。
+pub const P_MIN_HEIGHT: u32 = 62;
+/// 链接的颜色：`{$19: 颜色}`，两个一起写（推测是未访问、已访问；《人生海海》目录 `<a style="color:#00C">`）。
+/// 有宽度的块：最大宽度（em 宽度时写 100%）、块的左右对齐（左右外边距 auto：`$320` 居中、`$59` 靠左、`$61` 靠右）。
+pub const P_MAX_WIDTH: u32 = 65;
+pub const P_BOX_ALIGN: u32 = 580;
+/// `box-shadow`、`text-shadow`：`{$498 颜色, $499 x, $500 y, $501 模糊}`（《雪国》注释框、《阿加莎》卷号）。
+pub const P_BOX_SHADOW: u32 = 496;
+pub const P_TEXT_SHADOW: u32 = 497;
+pub const SHADOW_COLOR: u32 = 498;
+pub const SHADOW_X: u32 = 499;
+pub const SHADOW_Y: u32 = 500;
+pub const SHADOW_BLUR: u32 = 501;
+pub const P_LINK_UNVISITED: u32 = 576;
+pub const P_LINK_VISITED: u32 = 577;
+/// 字体名 `default`：阅读器自己的字体（Send to Kindle 写在 `@font-face` 声明了却没有字体文件的字体上，《绍宋》的「宋体」）。
+pub const FONT_DEFAULT: &str = "default";
 /// 颜色「透明」（Send to Kindle 写在全透明的边框颜色上）。
 pub const COLOR_TRANSPARENT: u32 = 349;
 /// 整页背景的范围（节点上的字段，`{$58: 0%, $59: 0%, $60: 100%, $61: 100%}`）：Send to Kindle 写在 `background-size: cover` 的

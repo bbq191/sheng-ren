@@ -120,7 +120,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v52（2026-10-08，用户定）：章节只按目录层级判，纯数字不再当节的依据（撤掉数字章名当节、独占一段的「１」「２」当节号、
 ///   和章同级的数字标题降成节、自动目录把「第一章 1」拆两级）。Kindle、掌阅的文字书只修复（profile `text_repair_only`）：
 ///   EPUB 3 规范整理与目录到节，文字、图片、样式一概不动。
-pub const OPTIMIZE_VERSION: &str = "52";
+/// - v53（2026-10-08）：规范整理在 `</body>`/`</html>` 前补上里面没关的元素（补完能配平才补；《狼厅》版权页 `<section><div>` 没关）。
+///   同日的掌阅、Move「照 Send to Kindle 的规则统一」（profile `kindle_rules`，指纹另有 `u`）也在这一版。漫画不加版本：漫画页是生成的，
+///   不会有没关的元素，加了反而让产物里的标记变了、掌阅上的漫画全部重传。
+pub const OPTIMIZE_VERSION: &str = "53";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -214,6 +217,8 @@ pub struct OptimizeOpts {
     /// 只修复时仍处理注释链接，保证注释能点（profile `repair_note_links`，xochitl）：注释搬进引用它的那一章、改同文件锚点，
     /// 按 `drop_note_backlinks` 去回链、按 `number_note_icons` 把图标标号换数字。别的照只修复，一概不动。
     pub repair_note_links: bool,
+    /// 只修复时照 Send to Kindle 的规则统一（profile `kindle_rules`，掌阅、Move；[`crate::wash::WashOpts::kindle_rules`]）。
+    pub kindle_rules: bool,
     /// 图片处理的资源上限（缺省 [`Limits::default`]）。
     pub limits: Limits,
     /// 改书名：`Some` 时 OPF 的 `dc:title` 换成它（`opfmeta::apply_fields`，原来的书名连同挂在上面的 `refines` 一起换掉）；
@@ -225,7 +230,7 @@ impl OptimizeOpts {
     /// 文字书只做修复时实际用的选项（[`OptimizeOpts::text_repair_only`]）：清洗层只修复，注释、背景图、图注、透明图的处理都关掉。
     fn repair_only(&self) -> Self {
         OptimizeOpts {
-            wash: Some(crate::wash::WashOpts { repair_only: true, ..Default::default() }),
+            wash: Some(crate::wash::WashOpts { repair_only: true, kindle_rules: self.kindle_rules, ..Default::default() }),
             number_note_icons: self.repair_note_links && self.number_note_icons,
             drop_note_backlinks: self.repair_note_links && self.drop_note_backlinks,
             fit_backgrounds: false,
@@ -243,7 +248,7 @@ impl OptimizeOpts {
 
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, text_repair_only: false, repair_note_links: false, limits: Limits::default(), title: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, text_repair_only: false, repair_note_links: false, kindle_rules: false, limits: Limits::default(), title: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -275,6 +280,7 @@ impl OptimizeOpts {
             flatten_alpha: !p.image_alpha,
             text_repair_only: p.text_repair_only,
             repair_note_links: p.repair_note_links,
+            kindle_rules: p.kindle_rules,
             ..OptimizeOpts::new(p.output_readable())
         }
     }

@@ -155,6 +155,10 @@ pub struct Profile {
     /// 只修复时仍处理注释链接，保证注释能点（TOML 里不写是 `false`）：注释搬进引用它的那一章、链接改成同文件锚点，按 `note_backlinks`
     /// 去掉回链，按 `note_icons` 把只有图标的标号换成数字。xochitl 写 `true`（2026-10-08 用户定：xochitl 只保障注释可跳）。
     pub repair_note_links: bool,
+    /// 只修复的文字书照 Send to Kindle 的规则统一（TOML 里不写是 `false`）：标签缺省样式（`<p>` 上下 1em、标题字号……，
+    /// `bookconv::uastyle`）、正文字体用阅读器字体、body 左右边距不要、文字对比度 4.5（`bookconv::wash::kindle_rules`）。
+    /// ireader、xochitl 写 `true`（2026-10-08 用户定三台一套规则）。Kindle 不用：KFX 写出器照这套规则写。
+    pub kindle_rules: bool,
     /// 产物送到哪台设备、怎么送；`None` 时产物留在电脑上。不影响产物内容（不进指纹）。
     pub deliver: Option<Deliver>,
 }
@@ -195,6 +199,8 @@ struct ProfileFile {
     text_repair_only: bool,
     #[serde(default)]
     repair_note_links: bool,
+    #[serde(default)]
+    kindle_rules: bool,
     deliver: Option<Deliver>,
 }
 
@@ -206,7 +212,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
@@ -426,6 +432,7 @@ mod tests {
         assert!(!k.image_alpha && get("ireader").unwrap().image_alpha && get("xochitl").unwrap().image_alpha, "透明图合成白底：只有 kindle");
         assert!(k.text_repair_only && get("ireader").unwrap().text_repair_only && get("xochitl").unwrap().text_repair_only, "文字书只修复：三个模式都是");
         assert!(!k.repair_note_links && !get("ireader").unwrap().repair_note_links && get("xochitl").unwrap().repair_note_links, "只修复时仍保证注释可跳：xochitl");
+        assert!(!k.kindle_rules && get("ireader").unwrap().kindle_rules && get("xochitl").unwrap().kindle_rules, "标签缺省样式：掌阅、Move 写进书里，Kindle 由写出器排");
         let i = get("ireader").unwrap();
         assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);

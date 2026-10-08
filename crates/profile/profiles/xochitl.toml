@@ -20,6 +20,8 @@ comic_margin = 0
 # 别的排版（缩进、字号解锁、外链 eink-wash.css 等）都不做了。漫画照旧。
 text_repair_only = true
 repair_note_links = true
+# 照 Send to Kindle 的规则统一（2026-10-08 用户定三台一套规则，同 ireader；Move 上还没真机看）。
+kindle_rules = true
 comic_reader_margins = 1
 
 [screen]

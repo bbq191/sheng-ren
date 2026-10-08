@@ -7,8 +7,9 @@
 //!    - 裸 `&` → `&amp;`，不是标签开头的 `<`（`a < b`）→ `&lt;`（标签之间的文字）；属性值里的 `<` 一律 → `&lt;`；
 //!    - XML 1.0 不允许的控制字符（原书损坏留下的 U+0010 之类）去掉：它们不是看得见的字；
 //!    - 空元素没闭合（`<br>`、`<img …>`）补成自闭合，无引号/无值属性补引号（`nowrap` → `nowrap="nowrap"`）；
-//!    - 没有对应开标签的闭合标签（《绝叫》`<head>` 里多出来的 `</div>`）去掉——**只在去掉后整份标签配对完全平衡时**才去，
-//!      否则一个都不去（交叉嵌套之类拿不准的留给质量门报）；
+//!    - 没有对应开标签的闭合标签（《绝叫》`<head>` 里多出来的 `</div>`）去掉，`</body>`/`</html>` 前补上里面没关的元素
+//!      （《狼厅》版权页 `<section><div>` 没关，2026-10-08）——**只在改完整份标签配对完全平衡时**才改，
+//!      否则一个都不动（交叉嵌套之类拿不准的留给质量门报）；
 //!    - 根元素 `<html>` 补 `xmlns`（XHTML）和 `xmlns:epub`（以后写 `epub:type` 才是合法 XML）。
 //!    - OPF、NCX 只做字符层面的那几条（实体、裸 `&`/`<`、控制字符），不碰结构。
 //! 2. **OPF 升级到 3.0**（[`upgrade_opf`]）：`version="3.0"`；`unique-identifier` 指向一个真的 `<dc:identifier id>`（没有就补）；
@@ -52,6 +53,8 @@ pub struct XmlFixes {
     pub attrs_quoted: usize,
     /// 去掉的多余闭合标签。
     pub stray_close_tags: usize,
+    /// `</body>`、`</html>` 前补上的闭合标签（里面有元素没关）。
+    pub unclosed_tags_closed: usize,
     /// 根元素补上或改正的命名空间声明（`xmlns`、`xmlns:epub`；《金庸全集》原书有 `xmlns="http：//…"` 写成全角冒号的）。
     pub namespaces_fixed: usize,
 }
@@ -67,6 +70,7 @@ impl XmlFixes {
         self.void_tags_closed += o.void_tags_closed;
         self.attrs_quoted += o.attrs_quoted;
         self.stray_close_tags += o.stray_close_tags;
+        self.unclosed_tags_closed += o.unclosed_tags_closed;
         self.namespaces_fixed += o.namespaces_fixed;
     }
 }
@@ -313,8 +317,8 @@ pub(crate) fn normalize_markup<'a>(text: &'a str, xhtml: bool, fx: &mut XmlFixes
     };
     let mut trial = fx.clone();
     let mut out = markup_pass(&cleaned, xhtml, true, &mut trial);
-    if trial.stray_close_tags > 0 && !tags_balanced(&out) {
-        // 去掉多余闭合标签也没能让标签配平：拿不准，一个都不去。
+    if (trial.stray_close_tags > 0 || trial.unclosed_tags_closed > 0) && !tags_balanced(&out) {
+        // 去掉多余闭合标签、补上没关的也没能让标签配平：拿不准，一个都不动。
         trial = fx.clone();
         out = markup_pass(&cleaned, xhtml, false, &mut trial);
     }
@@ -326,7 +330,9 @@ pub(crate) fn normalize_markup<'a>(text: &'a str, xhtml: bool, fx: &mut XmlFixes
     }
 }
 
-fn markup_pass(text: &str, xhtml: bool, drop_stray: bool, fx: &mut XmlFixes) -> String {
+/// `fix_nesting`：去掉多余的闭合标签、在 `</body>`/`</html>` 前补上里面没关的元素（《狼厅》版权页 `<section><div>` 都没关就 `</body>`）。
+fn markup_pass(text: &str, xhtml: bool, fix_nesting: bool, fx: &mut XmlFixes) -> String {
+    let drop_stray = fix_nesting;
     let tags: Vec<html::Tag> = html::tags(text).collect();
     let mut out = String::with_capacity(text.len() + 256);
     let mut stack: Vec<&str> = Vec::new();
@@ -355,6 +361,12 @@ fn markup_pass(text: &str, xhtml: bool, drop_stray: bool, fx: &mut XmlFixes) -> 
                 }
                 match stack.iter().rposition(|n| n.eq_ignore_ascii_case(t.name)) {
                     Some(p) => {
+                        if fix_nesting && (t.is("body") || t.is("html")) {
+                            for name in stack[p + 1..].iter().rev() {
+                                out.push_str(&format!("</{name}>"));
+                                fx.unclosed_tags_closed += 1;
+                            }
+                        }
                         stack.truncate(p);
                         out.push_str(raw);
                     }
@@ -906,6 +918,18 @@ mod tests {
         let (out, fx) = fix("<html><body><p><i>甲</p></i></b></body></html>");
         assert_eq!(fx.stray_close_tags, 0);
         assert!(out.contains("</p></i></b>"), "{out}");
+    }
+
+    /// 《狼厅》版权页：`<section><div>` 都没关就 `</body>`，在 `</body>` 前补上（补完要能配平，不然不动）。
+    #[test]
+    fn unclosed_before_body_end_closed() {
+        let (out, fx) = fix("<html><head><title>t</title></head><body><section><div><p>甲</p>\n<script src=\"a.js\"></script></body></html>");
+        assert_eq!(fx.unclosed_tags_closed, 2);
+        assert!(out.contains("</script></div></section></body>") && tags_balanced(&out), "{out}");
+        // 中间交叉嵌套的照样拿不准，一个都不动
+        let (out, fx) = fix("<html><body><div><p><i>甲</p></i></body></html>");
+        assert_eq!(fx.unclosed_tags_closed, 0);
+        assert!(out.contains("</p></i></body>"), "{out}");
     }
 
     #[test]
