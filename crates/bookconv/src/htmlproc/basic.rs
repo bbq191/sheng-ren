@@ -1,9 +1,12 @@
 //! 基础 HTML 规整：同章内链规整、单标签重复 id 折叠、全书 id 去重。属性一律走 `crate::html`（完整属性名、两种引号）。
 use super::*;
 
-/// 规整脚注类内链：目标锚点就在本章内 → href 规整成裸 `#锚点`（xochitl 唯一会跳的类别）。
+/// 规整脚注类内链：链接指向本文件、目标锚点就在本章内 → href 规整成裸 `#锚点`（xochitl 唯一会跳的类别）。
+/// `self_file` 是本文件的 zip 路径：给了就要求链接的路径部分解析出来正是它（2026-10-08 审计：此前只比 id 不比路径，
+/// 别的文件里碰巧同名的锚点也被改成指向本章）；`None` = 不知道本章原来的文件名（`epub::assemble` 组装转换器的章节：
+/// 正文是从一个来源页面抽出来的，链接里的文件名是来源页面的旧名，和组装后的章节文件名对不上），只比 id。
 /// 跨文件/外链不动。对齐 epub._fix_internal_links。
-pub fn fix_internal_links(html: &str) -> String {
+pub fn fix_internal_links(html: &str, self_file: Option<&str>) -> String {
     if !html.contains("href") {
         return html.to_string();
     }
@@ -14,7 +17,7 @@ pub fn fix_internal_links(html: &str) -> String {
         }
         let (path, frag) = html::split_href(a.value);
         match frag {
-            Some(f) if !path.is_empty() && !html::is_external(path) && ids.contains(html::frag_id(f).as_ref()) => Edit::Set(format!("#{f}")),
+            Some(f) if !path.is_empty() && !html::is_external(path) && ids.contains(html::frag_id(f).as_ref()) && self_file.is_none_or(|me| crate::epubzip::resolve_link(me, a.value).0 == me) => Edit::Set(format!("#{f}")),
             _ => Edit::Keep,
         }
     })
@@ -139,4 +142,20 @@ pub(crate) fn rename_ids(html: &str, rename: &HashMap<String, String>) -> String
         }
     })
     .into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 给了本文件名：只有指向本文件的链接改成裸锚点，别的文件里同名锚点的链接不动；不给（`epub::assemble`）照旧只比 id。
+    #[test]
+    fn fix_internal_links_checks_own_file() {
+        let html = r#"<p id="n1"><a href="c1.xhtml#n1">a</a><a href="c2.xhtml#n1">b</a><a href="../Text/c1.xhtml#n1">c</a></p>"#;
+        assert_eq!(
+            fix_internal_links(html, Some("OEBPS/Text/c1.xhtml")),
+            r##"<p id="n1"><a href="#n1">a</a><a href="c2.xhtml#n1">b</a><a href="#n1">c</a></p>"##
+        );
+        assert_eq!(fix_internal_links(html, None), r##"<p id="n1"><a href="#n1">a</a><a href="#n1">b</a><a href="#n1">c</a></p>"##);
+    }
 }

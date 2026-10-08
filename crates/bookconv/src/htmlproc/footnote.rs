@@ -119,32 +119,40 @@ pub struct ListItem {
 }
 
 /// `<li>`（`spans[li]`）在它的父 `<ol>` 里显示的编号与 `<ol>` 开标签；父元素不是 `<ol>`（`<ul>` 没有编号）→ `None`。
-fn list_item(html_text: &str, spans: &[html::Span], li: usize) -> Option<ListItem> {
+/// `cache` 按 `<ol>` 存它全部直属 `<li>` 的编号（[`ol_items`]，每个 `<ol>` 只算一次；以前每个 `<li>` 都重扫整个列表，长注释表是平方级）。
+fn list_item(html_text: &str, spans: &[html::Span], li: usize, cache: &mut HashMap<usize, Vec<(usize, ListItem)>>) -> Option<ListItem> {
     let pi = spans[li].parent?;
-    let ol = &spans[pi];
-    if ol.name != "ol" {
+    if spans[pi].name != "ol" {
         return None;
     }
+    let items = cache.entry(pi).or_insert_with(|| ol_items(html_text, spans, pi));
+    // 下标按文档序递增
+    items.binary_search_by_key(&li, |(k, _)| *k).ok().map(|i| items[i].1.clone())
+}
+
+/// `<ol>`（`spans[pi]`）的全部直属 `<li>`：(下标, 编号等)，编号按 `<ol>` 的 `start`/`reversed` 与各项的 `value` 算。
+fn ol_items(html_text: &str, spans: &[html::Span], pi: usize) -> Vec<(usize, ListItem)> {
+    let ol = &spans[pi];
     let ol_open = &html_text[ol.open_start..ol.open_end];
     let reversed = html::attr(ol_open, "reversed").is_some();
     let int = |tag: &str, name: &str| html::attr_value(tag, name).and_then(|v| v.trim().parse::<i64>().ok());
     let items: Vec<usize> = (pi + 1..spans.len()).take_while(|&k| spans[k].open_start < ol.close_start).filter(|&k| spans[k].parent == Some(pi) && spans[k].name == "li").collect();
     let start = int(ol_open, "start").unwrap_or(if reversed { items.len() as i64 } else { 1 });
     let step = if reversed { -1 } else { 1 };
+    let mut ol_tag = ol_open.to_string();
+    for a in ["id", "start", "reversed"] {
+        ol_tag = html::remove_attr(&ol_tag, a);
+    }
     let mut number = start;
+    let mut out = Vec::with_capacity(items.len());
     for (k, &it) in items.iter().enumerate() {
         let open = &html_text[spans[it].open_start..spans[it].open_end];
         number = int(open, "value").unwrap_or(if k == 0 { start } else { number + step });
-        if it == li {
-            let mut ol_tag = ol_open.to_string();
-            for a in ["id", "start", "reversed"] {
-                ol_tag = html::remove_attr(&ol_tag, a);
-            }
-            return Some(ListItem { ol_open: ol_tag, li_open: open.to_string(), number });
-        }
+        out.push((it, ListItem { ol_open: ol_tag.clone(), li_open: open.to_string(), number }));
     }
-    None
+    out
 }
+
 /// 微读 **duokan 图片脚注**标记：`<sup..><a href="#frag">&lt;img ... class="duokan-footnote.." ../&gt;</a></sup>`。
 /// 与 qqreader 版不同：注释块**已在同文件** `<p id="frag">`（前向锚有效），且标记里的 `<img>` 被
 /// **实体转义**成字面文本、又是微读 CDN 远程图 → 设备离线渲染成一坨死文本、点不动。故只需把标记
@@ -529,6 +537,7 @@ pub fn collect_footnote_notes_with(
     // 已收的 id：同一章里两条注释用了同一个 id（《绝叫》两条不同的注释都叫 `footnote-3-15`），后一条留在原处——
     // 注释按 (文件, id) 进索引，两条都搬走只放得回一条，另一条就丢了（2026-10-06 审计：真书回归《绝叫》少了「专业漫画用纸……」）。
     let mut ids_taken: HashSet<String> = HashSet::new();
+    let mut ol_cache: HashMap<usize, Vec<(usize, ListItem)>> = HashMap::new();
     for (si, sp) in spans.iter().enumerate() {
         if sp.open_start < taken_until || !sp.closed() || !matches!(sp.name.as_str(), "aside" | "p" | "li" | "div") {
             continue;
@@ -551,7 +560,7 @@ pub fn collect_footnote_notes_with(
         let paired = || backrefs.get(id.as_ref()).is_some_and(|m| starts_with_backlink(inner, m));
         if referenced.contains(id.as_ref()) && !ids_taken.contains(id.as_ref()) && (!require_semantic || note_semantic(open) || paired()) {
             ids_taken.insert(id.to_string());
-            let list = if sp.name == "li" { list_item(html_text, &spans, si) } else { None };
+            let list = if sp.name == "li" { list_item(html_text, &spans, si, &mut ol_cache) } else { None };
             index.push((id.into_owned(), Note { inner: inner.to_string(), list }));
             taken.push(si);
             taken_until = sp.close_end;

@@ -51,12 +51,6 @@ pub(super) fn is_positive_indent(val: &str) -> bool {
     num.parse::<f64>().map(|n| n > 0.0).unwrap_or(false)
 }
 
-/// 同 `filter_decls`，另把书里**非零** `text-indent` 统一改成 `indent`（Some 时）。
-/// 为什么：书自带的类规则（calibre 转 AZW3 常见 `.calibre_ {text-indent:2em}`）xochitl 不认（只认裸 `p{}`），
-/// 按标准 CSS 渲染的阅读器认、且类规则特异性高于我们的 `p{}`——不统一就同一本书在 xochitl 上 1.2em、别的阅读器上 2em
-/// （2026-09-06 Phase E 英文书对照发现）。`text-indent:0`（诗歌/引文/列表明示不缩进）与负值保留。
-/// `filter` 里的属性按 [`crate::cssunlock::unlock`] 解锁（字体去掉、相对字号保留、`font`/`background` 简写只留样式和颜色……）；
-/// `base_text` = 这条规则作用在正文整体那一层（见 [`is_base_text_selector`]）。
 /// 阅读器不认 `rgba()` 时（`WashOpts::css_rgba = false`）把清洗后的声明里的 `rgba()` 换成不透明写法。
 fn colors_for(opts: &WashOpts, decls: String) -> String {
     if opts.css_rgba {
@@ -68,6 +62,12 @@ fn colors_for(opts: &WashOpts, decls: String) -> String {
     }
 }
 
+/// 同 `filter_decls`，另把书里**非零** `text-indent` 统一改成 `indent`（Some 时）。
+/// 为什么：书自带的类规则（calibre 转 AZW3 常见 `.calibre_ {text-indent:2em}`）xochitl 不认（只认裸 `p{}`），
+/// 按标准 CSS 渲染的阅读器认、且类规则特异性高于我们的 `p{}`——不统一就同一本书在 xochitl 上 1.2em、别的阅读器上 2em
+/// （2026-09-06 Phase E 英文书对照发现）。`text-indent:0`（诗歌/引文/列表明示不缩进）与负值保留。
+/// `filter` 里的属性按 [`crate::cssunlock::unlock`] 解锁（字体去掉、相对字号保留、`font`/`background` 简写只留样式和颜色……）；
+/// `base_text` = 这条规则作用在正文整体那一层（见 [`is_base_text_selector`]）。
 pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing, base_text: bool, indent: Option<&str>, keep_fonts: &HashSet<String>) -> String {
     use crate::cssunlock::{unlock, Unlock};
     let mut out: Vec<String> = Vec::new();
@@ -183,15 +183,26 @@ pub(super) fn selector_spacing(selector: &str) -> Spacing {
     }
 }
 
+/// 选择器（一个逗号分项）的最后一个复合选择器：`div.a > p.b:first-child` → `p.b:first-child`。按空白和组合符 `>`、`+`、`~` 切。
+/// 字体分析、Send to Kindle 规则、正文层判断、章尾容器类共用。
+pub(super) fn last_compound(sel: &str) -> &str {
+    sel.trim().rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~')).next().unwrap_or("")
+}
+
+/// 复合选择器的标签名（小写，没写是空串）和类名：伪类、属性选择器（`:`、`[` 起）不算，`p.a.b` → ("p", ["a", "b"])。
+pub(super) fn compound_tag_classes(compound: &str) -> (String, Vec<&str>) {
+    let c = compound.split([':', '[']).next().unwrap_or("");
+    let mut parts = c.split('.');
+    let tag = parts.next().unwrap_or("").to_ascii_lowercase();
+    (tag, parts.filter(|p| !p.is_empty()).collect())
+}
+
 /// 选择器是不是作用在"正文整体那一层"：每个逗号分项的最后一个复合选择器都是不带类、id、属性的 `body`/`html`/`p`/`div`
 /// （`body`、`div.chapter p`、`html, body` 算；`p.small`、`.note`、`h1` 不算）。这一层上的相对字号也去掉（[`crate::cssunlock`]）。
 pub(super) fn is_base_text_selector(selector: &str) -> bool {
     let parts: Vec<&str> = selector.split(',').map(str::trim).filter(|p| !p.is_empty()).collect();
     !parts.is_empty()
-        && parts.iter().all(|p| {
-            let last = p.rsplit(|c: char| c.is_whitespace() || c == '>' || c == '+' || c == '~').next().unwrap_or("");
-            matches!(last.to_ascii_lowercase().as_str(), "body" | "html" | "p" | "div" | ":root")
-        })
+        && parts.iter().all(|p| matches!(last_compound(p).to_ascii_lowercase().as_str(), "body" | "html" | "p" | "div" | ":root"))
 }
 
 /// 选择器是不是"注释容器类"：书自带的 `duokan-footnote-item`/`duokan-footnote-content` 这类，以及我们
@@ -287,8 +298,9 @@ pub(super) fn indent_for(opts: &WashOpts) -> &'static str {
     if opts.lang == LangMode::Latin { "1.2em" } else { "2em" }
 }
 
-/// (x)html：`style=""`（按标签名定边距策略）+ `<style>` 块剥锁；注入清洗样式块；折叠重复 id。
-pub fn wash_html(html: &str, opts: &WashOpts) -> (String, usize) {
+/// (x)html：`style=""`（按标签名定边距策略）+ `<style>` 块剥锁；注入清洗样式块；折叠重复 id。只有测试用（清洗层走 [`wash_html_with`]）。
+#[cfg(test)]
+pub(super) fn wash_html(html: &str, opts: &WashOpts) -> (String, usize) {
     wash_html_with(html, opts, &HashSet::new())
 }
 
@@ -296,7 +308,8 @@ pub fn wash_html(html: &str, opts: &WashOpts) -> (String, usize) {
 /// 本文件 `<style>` 里的另外算上）。
 pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashSet<String>) -> (String, usize) {
     let before_dup = count_dup_id_tags(html);
-    let s = collapse_dup_id_attrs(html);
+    // 没有重复 id 的标签（绝大多数文件）不必再扫一遍
+    let s: Cow<str> = if before_dup == 0 { Cow::Borrowed(html) } else { Cow::Owned(collapse_dup_id_attrs(html)) };
     // 只认名字正好是 `style` 的属性（`data-style`、SVG `font-style` 不算），就地改值、保留原引号。
     let s = html::edit_attrs(&s, &["style"], |t, a| {
         let spacing = match t.name.to_ascii_lowercase().as_str() {

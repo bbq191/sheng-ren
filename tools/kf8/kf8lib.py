@@ -1,5 +1,8 @@
 # KF8/AZW3 黑盒分析小库：PDB 记录、PalmDOC 解压、尾随字节、INDX/TAGX 解析。只读文件，不改任何东西。
 import struct
+import os as _os, sys
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from toollib import cli_args, cli_opts  # noqa: E402,F401  各脚本从这里拿
 class F:
     def __init__(s, p):
         d = s.d = open(p, 'rb').read()
@@ -74,13 +77,3 @@ def parse_indx(f, first):
             entries.append((key, vals, e.hex() if len(e) < 40 else e[:40].hex()))
     return dict(hl=hl, typ=typ, nrec=nrec, enc=enc, total=total, cb=cb, tags=tags, ncncx=ncncx, header_hex=h[:hl].hex()), entries
 
-def cli_args(n, usage):
-    """命令行位置参数（不含 `--` 开头的开关）；`-h`/`--help` 打印用法退出 0，少于 `n` 个打印用法退出 1。"""
-    import sys
-    a = sys.argv[1:]
-    if any(x in ('-h', '--help') for x in a):
-        print(usage); sys.exit(0)
-    pos = [x for x in a if not x.startswith('--')]
-    if len(pos) < n:
-        print(usage, file=sys.stderr); sys.exit(1)
-    return pos

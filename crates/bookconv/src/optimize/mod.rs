@@ -118,7 +118,7 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v51（2026-10-07，审计）：有 `<body>` 没 `</body>` 的截断页（和没有 body 的片段）不再当空页整页删掉（拿不准就不删）；
 ///   抓到的远程图按本地插图的竖向框缩（宽不超过阅读范围宽；以前按横竖选框，横幅能宽到阅读范围的长边）。
 /// - v52（2026-10-08，用户定）：章节只按目录层级判，纯数字不再当节的依据（撤掉数字章名当节、独占一段的「１」「２」当节号、
-///   和章同级的数字标题降成节、自动目录把「第一章 1」拆两级）。Kindle、掌阅的文字书只修复（profile `text_repair_only`）：
+///   和章同级的数字标题降成节、自动目录把「第一章 1」拆两级）。Kindle、掌阅的文字书只修复（profile `text_repair_only`；同日 Move 也改成只修复）：
 ///   EPUB 3 规范整理与目录到节，文字、图片、样式一概不动。
 /// - v53（2026-10-08）：规范整理在 `</body>`/`</html>` 前补上里面没关的元素（补完能配平才补；《狼厅》版权页 `<section><div>` 没关）。
 ///   同日的掌阅、Move「照 Send to Kindle 的规则统一」（profile `kindle_rules`，指纹另有 `u`）也在这一版。漫画不加版本：漫画页是生成的，
@@ -211,7 +211,7 @@ pub struct OptimizeOpts {
     /// 正文 `<img>`/SVG `<image>` 用到的带透明像素的图合成到白底（profile `image_alpha = false`，Kindle），见 [`crate::imgalpha`]。
     /// 只管文字书（漫画页本来就合成白底）。
     pub flatten_alpha: bool,
-    /// 文字书只做修复（profile `text_repair_only`，Kindle、掌阅）：清洗层只走 EPUB 3 修复和目录（[`crate::wash::WashOpts::repair_only`]），
+    /// 文字书只做修复（profile `text_repair_only`，三台都开：Kindle、掌阅、Move）：清洗层只走 EPUB 3 修复和目录（[`crate::wash::WashOpts::repair_only`]），
     /// 文字、图片、样式一概不动——不解锁字体、不排版、不搬注释、不缩图。漫画不受影响（按漫画规则照常处理）。
     pub text_repair_only: bool,
     /// 只修复时仍处理注释链接，保证注释能点（profile `repair_note_links`，xochitl）：注释搬进引用它的那一章、改同文件锚点，
@@ -334,20 +334,18 @@ struct Prepared {
     rep: Report,
 }
 
-/// 阶段一：`raw` → 封面声明 → 清洗 → 排序（mimetype 置首、旧标记剔除）→ 漫画识别 → 第一遍 html → 注释块搬出。
+/// 阶段一：`raw` → 封面声明 → 清洗 → 排序（mimetype 置首、旧标记剔除）→ 第一遍 html → 注释块搬出。
 /// 图片条目是空占位——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
-fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize) -> Result<Prepared, String> {
+/// `is_comic_book`：调用方按原书判好的漫画识别结果（`comic_detect::is_comic`，全程只判这一次）。
+fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize, is_comic_book: bool) -> Result<Prepared, String> {
     // 保证 OPF 声明了有效封面（见 `wash::ensure_cover_declared`）。
     // 必须在清洗之前：清洗会把只含 SVG 封面的 titlepage 当空页删掉。
     crate::wash::ensure_cover_declared(&mut raw);
     // 整页背景图的尺寸意图要在清洗前读（清洗会去掉 `background-size`）
     let mut bg_fits = if opts.fit_backgrounds { crate::bgfit::plan(&raw) } else { HashMap::new() };
-    let (wash_rep, washed_comic) = match &opts.wash {
-        Some(w) => {
-            let (r, c) = crate::wash::wash_entries_detect(&mut raw, w)?;
-            (Some(r), Some(c))
-        }
-        None => (None, None),
+    let wash_rep = match &opts.wash {
+        Some(w) => Some(crate::wash::wash_entries_as(&mut raw, w, is_comic_book)?),
+        None => None,
     };
     // 清洗层定下的保留字体（嵌了文件、又不是正文字体的）：第一遍剥行内字体锁时也留着。
     let keep_fonts: HashSet<String> = wash_rep.as_ref().map(|r| r.kept_fonts.iter().cloned().collect()).unwrap_or_default();
@@ -357,9 +355,6 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: crate::epubzip::MIMETYPE.to_vec() });
     ordered.extend(raw.into_iter().filter(|e| e.name != "mimetype" && e.name != OPTIMIZE_MARKER && e.name != READER_MARGINS_MARKER));
 
-    // 漫画识别（图 ≥20 张且平均每张图配的文字 <40 字）：决定图片走漫画单趟处理还是普通降采样。清洗过的书用清洗层判好的
-    // （清洗层已把空页清理、目录归一，判定更准；不再判第二遍）。
-    let is_comic_book = washed_comic.unwrap_or_else(|| crate::comic_detect::is_comic(&ordered));
     if is_comic_book {
         bg_fits.clear();
     } else if let Some(w) = &wash_rep {

@@ -111,7 +111,7 @@ mod footnote_tests {
     fn real_footnote_normalizes() {
         // chap_0005 真实脚注：marker(id=zw1)→text00004.html#zhu1；注释(id=zhu1)→text00004.html#zw1，两者同章。
         let html = r#"<p><a href="text00004.html#zhu1" id="zw1">[1]</a>正文</p><p><a href="text00004.html#zw1" id="zhu1">[1]</a>注释文字</p>"#;
-        let out = fix_internal_links(html);
+        let out = fix_internal_links(html, None);
         eprintln!("IN : {html}");
         eprintln!("OUT: {out}");
         assert!(out.contains(r##"href="#zhu1""##), "marker 未规整成裸锚点");

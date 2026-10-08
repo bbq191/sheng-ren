@@ -59,36 +59,42 @@ pub fn candidates(text: &str) -> Vec<Cand> {
     }
     let (lo, hi) = html::body_range(text).unwrap_or((0, text.len()));
     let spans = html::parse_spans(text, lo, hi);
+    let ends = subtree_ends(&spans);
     let mut out = Vec::new();
     for (i, s) in spans.iter().enumerate().filter(|(_, s)| s.name == "img") {
         let Some(src) = html::attr_value(&text[s.open_start..s.open_end], "src").filter(|v| !v.trim().is_empty()) else { continue };
-        if has_caption(text, &spans, i) {
+        if has_caption(text, &spans, &ends, i) {
             out.push(Cand { start: s.open_start, end: s.open_end, src: src.to_string() });
         }
     }
     out
 }
 
-/// `spans[j]` 在 `spans[a]` 里面（后代）。
-fn inside(spans: &[html::Span], j: usize, a: usize) -> bool {
-    let mut p = spans[j].parent;
-    while let Some(k) = p {
-        if k == a {
-            return true;
+/// 每个元素子树的终点（不含）：`parse_spans` 按开标签的先后排，`spans[a]` 的后代正好是 `a + 1 .. ends[a]` 这一段
+/// （以前每问一次"j 在不在 a 里面"都顺着 parent 往上走、每数一次都扫全部元素，图多的页是平方级）。
+fn subtree_ends(spans: &[html::Span]) -> Vec<usize> {
+    let mut ends: Vec<usize> = (1..=spans.len()).collect();
+    for j in (0..spans.len()).rev() {
+        if let Some(p) = spans[j].parent {
+            ends[p] = ends[p].max(ends[j]);
         }
-        p = spans[k].parent;
     }
-    false
+    ends
+}
+
+/// `spans[a]` 的全部后代的下标。
+fn descendants(ends: &[usize], a: usize) -> std::ops::Range<usize> {
+    a + 1..ends[a]
 }
 
 /// 元素里的 `<img>` 个数。
-fn img_count(spans: &[html::Span], a: usize) -> usize {
-    (0..spans.len()).filter(|&j| spans[j].name == "img" && inside(spans, j, a)).count()
+fn img_count(spans: &[html::Span], ends: &[usize], a: usize) -> usize {
+    descendants(ends, a).filter(|&j| spans[j].name == "img").count()
 }
 
 /// 元素里的媒体元素（图片、svg、表格……）个数，口径同 [`html::MEDIA_ELEMENTS`]。
-fn media_count(spans: &[html::Span], a: usize) -> usize {
-    (0..spans.len()).filter(|&j| html::MEDIA_ELEMENTS.contains(&spans[j].name.as_str()) && inside(spans, j, a)).count()
+fn media_count(spans: &[html::Span], ends: &[usize], a: usize) -> usize {
+    descendants(ends, a).filter(|&j| html::MEDIA_ELEMENTS.contains(&spans[j].name.as_str())).count()
 }
 
 /// 元素内部、除去 `caps` 这些元素以外，没有可见文字。
@@ -109,9 +115,8 @@ fn text_only_in(text: &str, spans: &[html::Span], a: usize, caps: &[usize]) -> b
 }
 
 /// 带这几个类之一的后代元素。
-fn with_class(text: &str, spans: &[html::Span], a: usize, classes: &[&str]) -> Vec<usize> {
-    (0..spans.len())
-        .filter(|&j| inside(spans, j, a))
+fn with_class(text: &str, spans: &[html::Span], ends: &[usize], a: usize, classes: &[&str]) -> Vec<usize> {
+    descendants(ends, a)
         .filter(|&j| {
             let tag = &text[spans[j].open_start..spans[j].open_end];
             classes.iter().any(|c| html::has_class(tag, c))
@@ -119,18 +124,18 @@ fn with_class(text: &str, spans: &[html::Span], a: usize, classes: &[&str]) -> V
         .collect()
 }
 
-fn has_caption(text: &str, spans: &[html::Span], img: usize) -> bool {
+fn has_caption(text: &str, spans: &[html::Span], ends: &[usize], img: usize) -> bool {
     // 最近的 figure / 图集格子：在里面就只按它判，不再看后面那一种
     let mut p = spans[img].parent;
     while let Some(k) = p {
         let tag = &text[spans[k].open_start..spans[k].open_end];
         if spans[k].name == "figure" {
-            let caps: Vec<usize> = (0..spans.len()).filter(|&j| spans[j].name == "figcaption" && inside(spans, j, k)).collect();
-            return spans[k].closed() && img_count(spans, k) == 1 && media_count(spans, k) == 1 && caps_visible(text, spans, &caps) && text_only_in(text, spans, k, &caps);
+            let caps: Vec<usize> = descendants(ends, k).filter(|&j| spans[j].name == "figcaption").collect();
+            return spans[k].closed() && img_count(spans, ends, k) == 1 && media_count(spans, ends, k) == 1 && caps_visible(text, spans, &caps) && text_only_in(text, spans, k, &caps);
         }
         if html::has_class(tag, "duokan-image-gallery-cell") {
-            let caps = with_class(text, spans, k, &["duokan-image-maintitle", "duokan-image-subtitle"]);
-            return spans[k].closed() && img_count(spans, k) == 1 && media_count(spans, k) == 1 && caps_visible(text, spans, &caps) && text_only_in(text, spans, k, &caps);
+            let caps = with_class(text, spans, ends, k, &["duokan-image-maintitle", "duokan-image-subtitle"]);
+            return spans[k].closed() && img_count(spans, ends, k) == 1 && media_count(spans, ends, k) == 1 && caps_visible(text, spans, &caps) && text_only_in(text, spans, k, &caps);
         }
         p = spans[k].parent;
     }
@@ -140,7 +145,7 @@ fn has_caption(text: &str, spans: &[html::Span], img: usize) -> bool {
         if !spans[k].closed() || !matches!(spans[k].name.as_str(), "div" | "p" | "span" | "a" | "center") {
             break;
         }
-        if media_count(spans, k) != 1 || !html::plain_text(&text[spans[k].open_end..spans[k].close_start]).is_empty() {
+        if media_count(spans, ends, k) != 1 || !html::plain_text(&text[spans[k].open_end..spans[k].close_start]).is_empty() {
             break;
         }
         unit = k;
@@ -148,12 +153,13 @@ fn has_caption(text: &str, spans: &[html::Span], img: usize) -> bool {
     // 紧跟的兄弟元素：中间没有可见内容
     let parent = spans[unit].parent;
     let after = spans[unit].close_end;
-    let Some(next) = (0..spans.len()).find(|&j| spans[j].parent == parent && spans[j].open_start >= after) else { return false };
+    // 兄弟只可能在 unit 的子树之后（之前的元素都开在 unit 前面，子树里的父元素都不是 `parent`）
+    let Some(next) = (ends[unit]..spans.len()).find(|&j| spans[j].parent == parent && spans[j].open_start >= after) else { return false };
     if html::has_visible(&text[after..spans[next].open_start]) {
         return false;
     }
     let s = &spans[next];
-    if !s.closed() || !matches!(s.name.as_str(), "p" | "div") || media_count(spans, next) != 0 {
+    if !s.closed() || !matches!(s.name.as_str(), "p" | "div") || media_count(spans, ends, next) != 0 {
         return false;
     }
     let cap = html::plain_text(&text[s.open_end..s.close_start]);
@@ -324,6 +330,29 @@ fn with_width(tag: &str, p: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 子树区间和顺着 parent 往上找的结果一致（含没闭合、多余闭合标签的容错情形）。
+    #[test]
+    fn subtree_ends_match_parent_chain() {
+        let h = "<div><p>a<img/></p><div><span>b</div><figure><img/><figcaption>c</figcaption></figure></p><p>d</p></div><p>e";
+        let spans = html::parse_spans(h, 0, h.len());
+        let ends = subtree_ends(&spans);
+        let inside = |j: usize, a: usize| {
+            let mut p = spans[j].parent;
+            while let Some(k) = p {
+                if k == a {
+                    return true;
+                }
+                p = spans[k].parent;
+            }
+            false
+        };
+        for a in 0..spans.len() {
+            for j in 0..spans.len() {
+                assert_eq!(descendants(&ends, a).contains(&j), inside(j, a), "a={a} j={j}");
+            }
+        }
+    }
 
     fn area() -> crate::imgopt::Screen {
         crate::imgopt::Screen { width: 1264, height: 1680 }

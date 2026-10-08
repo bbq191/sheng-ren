@@ -59,18 +59,20 @@ fn optimize_inner(
 
     // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）。
     let raw = crate::epubzip::read_skeleton_par(input_path, &mut archive)?.entries;
+    // 漫画识别只在这里判一次（按原书），清洗层和图片处理都用这个结果（以前清洗层清洗完又判一次，两次可能不一致）。
+    let is_comic_book = crate::comic_detect::is_comic(&raw);
     // 文字书只做修复（漫画照常）：换成只修复的选项
     let repair;
-    let opts = if opts.text_repair_only && !crate::comic_detect::is_comic(&raw) {
+    let opts = if opts.text_repair_only && !is_comic_book {
         repair = opts.repair_only();
         &repair
     } else {
         opts
     };
     let keep_images = opts.keeps_content();
-    let prep = prepare_entries(raw, opts, bytes_before)?;
+    let prep = prepare_entries(raw, opts, bytes_before, is_comic_book)?;
     check_cancel(cancel)?;
-    let (comic_margin, grayscale, is_comic_book) = (opts.comic_margin, opts.grayscale, prep.is_comic_book);
+    let (comic_margin, grayscale) = (opts.comic_margin, opts.grayscale);
     // 漫画页按漫画的阅读范围排（xochitl 设成页边距 1 后更宽），其它图按 EPUB 的阅读范围缩
     let screen = if is_comic_book { opts.comic_screen.unwrap_or(opts.screen) } else { opts.screen };
     let entries = &prep.entries;
@@ -305,7 +307,7 @@ fn caption_ctx<R: std::io::Read + std::io::Seek>(entries: &[(String, Vec<u8>, bo
     for (name, data, ish) in entries {
         let Ok(text) = std::str::from_utf8(data) else { continue };
         if !*ish {
-            if name.to_ascii_lowercase().ends_with(".css") {
+            if crate::wash::is_css_name(name) {
                 ctx.add_css(text);
             }
             continue;

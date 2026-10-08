@@ -9,9 +9,9 @@
 数值相差 3% 以内或 0.02 以内算一致。"""
 import collections, os, re, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kfx import cli_args
+from kfx import cli_args, cli_opts
 import s2kcmp
-from s2kbatch import norm, opf_title
+from s2kbatch import book_index, find_source
 
 PAGE = 32.0
 FEATURES = ['size', 'lh', 'mt', 'mb', 'indent', 'ml', 'mr', 'color', 'font', 'weight', 'italic', 'align']
@@ -92,18 +92,11 @@ def same(f, a, b):
 
 def main():
     amz_dir, books, work = cli_args(3, __doc__)[:3]
-    opt = dict(a.split('=', 1) for a in sys.argv[1:] if a.startswith('--') and '=' in a)
+    opt = cli_opts()
     bindir = opt.get('--bin', 'target/release')
     top = int(opt.get('--top', 12))
     os.makedirs(work, exist_ok=True)
-    index = {}
-    for root, _, files in os.walk(books):
-        for f in files:
-            if f.endswith('.epub') and '漫画' not in root:
-                p = os.path.join(root, f)
-                for k in {norm(opf_title(p)), norm(os.path.splitext(f)[0])}:
-                    if k:
-                        index.setdefault(k, p)
+    index = book_index(books)
     devices = ['kindle', 'ireader', 'xochitl']
     agree = {d: collections.Counter() for d in devices}
     total = collections.Counter()
@@ -116,7 +109,7 @@ def main():
             continue
         amz = os.path.join(amz_dir, f)
         title = s2kcmp.title_of(amz) or f
-        src = index.get(norm(title)) or index.get(norm(re.sub(r'_[0-9A-F]{32}$', '', os.path.splitext(f)[0])))
+        src = find_source(index, title, f)
         if not src:
             continue
         stem = os.path.join(work, re.sub(r'[/\\\\]', '_', title))

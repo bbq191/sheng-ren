@@ -1,7 +1,6 @@
 # Kindle Paperwhite 12 代签名版（2024）上的自带阅读器。7" Carta 1300，2026-09-27 核实。
 # USB 传书不认 EPUB（用户 2026-09-27 真机实测）：先按和别的模式同一套规则优化出 EPUB，再转成 KFX（文字书流式、漫画固定版式）。
 name = "Kindle 自带阅读器（Paperwhite 12 代签名版）"
-ppi = 300
 color = false
 # 2026-10-05 起出 KFX（clean-room 写出器，见 docs/kfx.md）：文字书注释弹窗、段间距字间距可调；漫画固定版式真机铺满整屏（《哆啦A夢》《死亡筆記》）。
 # AZW3 写出器还在（epub-to-azw3），书库不再用。

@@ -1,9 +1,11 @@
 """EPUB ↔ KFX 对照：按文字把 KFX 的文字节点配回 EPUB 元素，汇总 (标签+类) → KFX 样式/类型。
 用法：python3 pair.py 书.kfx 原书.epub"""
-import sys, zipfile, re, posixpath, collections
+import os, sys, zipfile, re, collections
 from html.parser import HTMLParser
 from kfx import load, cli_args
 from ion import short
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'regress'))
+from regresslib import spine_paths  # noqa: E402  读 container.xml、href 还原字符引用和百分号解码
 
 kfx_path, epub_path = cli_args(2, "用法：python3 pair.py 书.kfx 原书.epub [--unmatched]")[:2]
 r,ci,ents=load(kfx_path)
@@ -29,11 +31,6 @@ for sname in order:
         for n in sl.get('$146',[]): walk(n,[])
 
 z=zipfile.ZipFile(epub_path)
-opf=[n for n in z.namelist() if n.endswith('.opf')][0]
-o=z.read(opf).decode()
-man={m.group(1):m.group(2) for m in re.finditer(r'<item[^>]*?id="([^"]+)"[^>]*?href="([^"]+)"',o)}
-man.update({m.group(2):m.group(1) for m in re.finditer(r'<item[^>]*?href="([^"]+)"[^>]*?id="([^"]+)"',o)})
-spine=[m.group(1) for m in re.finditer(r'<itemref[^>]*idref="([^"]+)"',o)]
 BLOCK={'p','h1','h2','h3','h4','h5','h6','div','li','td','th','dt','dd','blockquote','pre','caption','figcaption'}
 class P(HTMLParser):
     def __init__(s): super().__init__(); s.stack=[]; s.out=[]; s.buf=None
@@ -52,9 +49,9 @@ class P(HTMLParser):
         if s.buf and norm(''.join(s.buf[1])): s.out.append((norm(''.join(s.buf[1])), s.buf[0]))
         s.buf=None if not s.stack else [list(s.stack),[]]
 eblocks=[]
-base=posixpath.dirname(opf)
-for idref in spine:
-    href=posixpath.normpath(posixpath.join(base,man[idref]))
+names=set(z.namelist())
+for href in spine_paths(z):
+    if href not in names: continue
     p=P(); p.feed(z.read(href).decode('utf-8','replace')); p.flush()
     eblocks+=p.out
 

@@ -96,15 +96,6 @@ fn src_embedded(src: &str, base_dir: &str, names: &HashSet<&str>) -> bool {
     false
 }
 
-/// 选择器最后一段的标签和类：`div.a p.b` → ("p", ["b"])。
-fn last_compound(sel: &str) -> (String, Vec<String>) {
-    let last = sel.rsplit(|c: char| c.is_whitespace() || c == '>' || c == '+' || c == '~').next().unwrap_or("");
-    let last = last.split([':', '[']).next().unwrap_or("");
-    let mut parts = last.split('.');
-    let tag = parts.next().unwrap_or("").to_ascii_lowercase();
-    (tag, parts.filter(|p| !p.is_empty()).map(str::to_string).collect())
-}
-
 impl FontPlan {
     /// 元素自己（行内 style、类规则、裸标签规则）指定的字体。
     fn own_family(&self, tag: &str) -> Option<String> {
@@ -120,23 +111,29 @@ impl FontPlan {
     }
 }
 
-/// 分析全书：嵌入的字体、正文字体、类和标签的字体。
-pub fn analyze(entries: &[Entry]) -> FontPlan {
-    let names: HashSet<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    let mut plan = FontPlan::default();
-    let mut embedded: HashSet<String> = HashSet::new();
-    let mut take = |css: &str, base_dir: &str, plan: &mut FontPlan| {
+/// 读样式规则：`@font-face` 嵌了文件的字体记进 `embedded`，类、裸标签规则里的字体记进 `plan`（后面的覆盖前面的）。
+struct RuleCollector<'a> {
+    names: HashSet<&'a str>,
+    embedded: HashSet<String>,
+}
+
+impl<'a> RuleCollector<'a> {
+    fn new(entries: &'a [Entry]) -> Self {
+        RuleCollector { names: entries.iter().map(|e| e.name.as_str()).collect(), embedded: HashSet::new() }
+    }
+
+    fn take(&mut self, css: &str, base_dir: &str, plan: &mut FontPlan) {
         let (rules, faces) = css_rules(css);
         for (fam, src) in faces {
-            if src_embedded(&src, base_dir, &names) {
-                embedded.insert(fam);
+            if src_embedded(&src, base_dir, &self.names) {
+                self.embedded.insert(fam);
             }
         }
         for (sel, decls) in rules {
             let Some(fam) = family_of(&decls) else { continue };
             for part in sel.split(',') {
                 let part = part.trim();
-                let (tag, classes) = last_compound(part);
+                let (tag, classes) = super::css::compound_tag_classes(super::css::last_compound(part));
                 if classes.is_empty() {
                     // 裸标签只认整个选择器就是这个标签（`p{}`）：`blockquote.bq p{}` 只管引文块里的段落，
                     // 不能当成全书段落的字体（《绍宋》正文因此被认成 letter）。
@@ -145,28 +142,63 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
                     }
                 } else {
                     for c in classes {
-                        plan.class_family.insert(c, fam.clone());
+                        plan.class_family.insert(c.to_string(), fam.clone());
                     }
                 }
             }
         }
-    };
-    for e in entries.iter().filter(|e| e.name.to_ascii_lowercase().ends_with(".css")) {
-        match std::str::from_utf8(&e.data) {
-            Ok(t) => take(t, dir_of(&e.name), &mut plan),
-            // 不是 UTF-8 的样式表（Big5 之类）按单字节读：选择器、ASCII 的字体名照样认得（《啸风山庄》的 CSS.css）
-            Err(_) => take(&e.data.iter().map(|&b| char::from(b)).collect::<String>(), dir_of(&e.name), &mut plan),
+    }
+
+    /// 书的独立样式表（按条目顺序）。不是 UTF-8 的（Big5 之类）按单字节读：选择器、ASCII 的字体名照样认得（《啸风山庄》的 CSS.css）。
+    fn take_css_files(&mut self, entries: &[Entry], plan: &mut FontPlan) {
+        for e in entries.iter().filter(|e| super::is_css_name(&e.name)) {
+            match std::str::from_utf8(&e.data) {
+                Ok(t) => self.take(t, dir_of(&e.name), plan),
+                Err(_) => self.take(&crate::util::latin1_decode(&e.data), dir_of(&e.name), plan),
+            }
         }
     }
+}
+
+/// 要找字体的 html（正文章节：不含目录文件）。
+fn font_html_files(entries: &[Entry]) -> Vec<&Entry> {
+    entries.iter().filter(|e| super::is_chapter_entry(e)).collect()
+}
+
+/// 文件里 `<style>` 块的内容（按出现顺序）。
+fn style_blocks(h: &str) -> Vec<&str> {
+    html::tags(h)
+        .filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("style"))
+        .filter_map(|t| html::find_close(h, t.end, "style").map(|close| &h[t.end..close.start]))
+        .collect()
+}
+
+/// 全书的类、标签字体表和嵌入字体（[`analyze`] 读完全部规则后的同一份；不投票、不找批注）。给只用字体表的地方（`kindle_rules`）。
+pub(crate) fn collect_rules(entries: &[Entry]) -> FontPlan {
+    let mut plan = FontPlan::default();
+    let mut rc = RuleCollector::new(entries);
+    rc.take_css_files(entries, &mut plan);
+    for e in font_html_files(entries) {
+        let Ok(h) = std::str::from_utf8(&e.data) else { continue };
+        for css in style_blocks(h) {
+            rc.take(css, dir_of(&e.name), &mut plan);
+        }
+    }
+    plan.embedded = rc.embedded;
+    plan
+}
+
+/// 分析全书：嵌入的字体、正文字体、类和标签的字体。
+pub fn analyze(entries: &[Entry]) -> FontPlan {
+    let mut plan = FontPlan::default();
+    let mut rc = RuleCollector::new(entries);
+    rc.take_css_files(entries, &mut plan);
     // 正文字体：段落按字数投票。各文件的 `<style>` 按文件顺序陆续加进 `plan`，后面文件的段落按加过的规则认字体，所以分两步：
     // 先多线程把每个文件的 `<style>` 和段落（开标签、字数）扫出来（最花时间的是数字数），再按文件顺序逐个加规则、投票。
-    let html_files: Vec<&Entry> = entries.iter().filter(|e| is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name)).collect();
+    let html_files = font_html_files(entries);
     let scanned = crate::util::par_map(&html_files, |e| {
         let Ok(h) = std::str::from_utf8(&e.data) else { return (Vec::new(), Vec::new()) };
-        let styles: Vec<&str> = html::tags(h)
-            .filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("style"))
-            .filter_map(|t| html::find_close(h, t.end, "style").map(|close| &h[t.end..close.start]))
-            .collect();
+        let styles = style_blocks(h);
         let paras: Vec<(&str, usize)> = html::tags(h)
             .filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("p"))
             .filter_map(|t| {
@@ -179,7 +211,7 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
     let mut votes: HashMap<String, usize> = HashMap::new();
     for (e, (styles, paras)) in html_files.iter().zip(scanned) {
         for css in styles {
-            take(css, dir_of(&e.name), &mut plan);
+            rc.take(css, dir_of(&e.name), &mut plan);
         }
         let fallback = plan.tag_family.get("p").or_else(|| plan.tag_family.get("body")).or_else(|| plan.tag_family.get("html")).cloned();
         for (tag, n) in paras {
@@ -190,6 +222,7 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
     }
     plan.body = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).map(|(f, _)| f);
     // 只被批注用到的字体不留：看每个嵌入字体有没有用在批注以外的元素上。
+    let embedded = rc.embedded;
     plan.embedded = embedded.clone();
     // 各文件独立找（多线程），再并起来
     let used_elsewhere: HashSet<String> = crate::util::par_map(&html_files, |e| {
@@ -215,54 +248,60 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
     plan
 }
 
-/// 正文字体，按继承算：每个元素的字体是它自己（行内 style、类规则、裸标签规则）指定的，没有就跟着父元素，全书文字按字数投票，
-/// 取最多的（和 KFX 写出器的口径一样：字数最多的计算字体）。[`analyze`] 的 [`FontPlan::body`] 只看段落自己和 `p`/`body` 规则，
-/// 字体写在 `<body class="…">` 上、段落继承的书认不出（《平凡的世界》的 FZLanTingSong）；Send to Kindle 规则（`kindle_rules`）用这个。
-pub(crate) fn body_font_by_text(entries: &[Entry], plan: &FontPlan) -> Option<String> {
+/// 一个文件里按继承算的字体 → 字数（`None` 是没指定字体的字）。
+pub(crate) type FontVotes = HashMap<Option<String>, usize>;
+
+/// 一个文件的字体投票；各文件的票交给 [`pick_body_font`] 定正文字体。
+pub(crate) fn font_votes(h: &str, plan: &FontPlan) -> FontVotes {
     const VOID: [&str; 14] = ["br", "img", "hr", "meta", "link", "input", "area", "base", "col", "embed", "source", "track", "wbr", "param"];
     const INLINE: [&str; 17] = ["span", "a", "b", "i", "em", "strong", "font", "small", "big", "sup", "sub", "u", "s", "cite", "code", "ruby", "rt"];
-    let html_files: Vec<&Entry> = entries.iter().filter(|e| is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name)).collect();
-    let counts = crate::util::par_map(&html_files, |e| {
-        let mut votes: HashMap<Option<String>, usize> = HashMap::new();
-        let Ok(h) = std::str::from_utf8(&e.data) else { return votes };
-        // (标签名, 字体)；跳过 head/style/script 里的字
-        let mut stack: Vec<(String, Option<String>)> = Vec::new();
-        let mut last = 0;
-        let mut skip = 0usize;
-        for t in html::tags(h) {
-            if skip == 0 {
-                let n = html::plain_text(&h[last..t.start]).chars().filter(|c| !c.is_whitespace()).count();
-                if n > 0 {
-                    *votes.entry(stack.last().and_then(|s| s.1.clone())).or_default() += n;
-                }
-            }
-            last = t.end;
-            let name = t.name.to_ascii_lowercase();
-            match t.kind {
-                html::TagKind::Open if !VOID.contains(&name.as_str()) => {
-                    if matches!(name.as_str(), "head" | "style" | "script" | "title") {
-                        skip += 1;
-                    }
-                    let raw = &h[t.start..t.end];
-                    let parent = stack.last().and_then(|s| s.1.clone());
-                    // 行内元素不改计数用的字体：字算给所在的块（KFX 写出器按段落的字体数，行内的另写成区间）
-                    let fam = if INLINE.contains(&name.as_str()) { parent } else { plan.own_family(raw).or_else(|| plan.tag_family.get(&name).cloned()).or(parent) };
-                    stack.push((name, fam));
-                }
-                html::TagKind::Close => {
-                    if let Some(i) = stack.iter().rposition(|s| s.0 == name) {
-                        stack.truncate(i);
-                        if matches!(name.as_str(), "head" | "style" | "script" | "title") {
-                            skip = skip.saturating_sub(1);
-                        }
-                    }
-                }
-                _ => {}
+    let mut votes: FontVotes = HashMap::new();
+    // (标签名, 字体)；跳过 head/style/script 里的字
+    let mut stack: Vec<(String, Option<String>)> = Vec::new();
+    let mut last = 0;
+    let mut skip = 0usize;
+    for t in html::tags(h) {
+        if skip == 0 {
+            let n = html::plain_text(&h[last..t.start]).chars().filter(|c| !c.is_whitespace()).count();
+            if n > 0 {
+                *votes.entry(stack.last().and_then(|s| s.1.clone())).or_default() += n;
             }
         }
-        votes
-    });
-    let mut total: HashMap<Option<String>, usize> = HashMap::new();
+        last = t.end;
+        let name = t.name.to_ascii_lowercase();
+        match t.kind {
+            html::TagKind::Open if !VOID.contains(&name.as_str()) => {
+                if matches!(name.as_str(), "head" | "style" | "script" | "title") {
+                    skip += 1;
+                }
+                let raw = &h[t.start..t.end];
+                let parent = stack.last().and_then(|s| s.1.clone());
+                // 行内元素不改计数用的字体：字算给所在的块（KFX 写出器按段落的字体数，行内的另写成区间）
+                let fam = if INLINE.contains(&name.as_str()) { parent } else { plan.own_family(raw).or_else(|| plan.tag_family.get(&name).cloned()).or(parent) };
+                stack.push((name, fam));
+            }
+            html::TagKind::Close => {
+                if let Some(i) = stack.iter().rposition(|s| s.0 == name) {
+                    stack.truncate(i);
+                    if matches!(name.as_str(), "head" | "style" | "script" | "title") {
+                        skip = skip.saturating_sub(1);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    votes
+}
+
+/// 正文字体，按继承算：每个元素的字体是它自己（行内 style、类规则、裸标签规则）指定的，没有就跟着父元素，全书文字按字数投票
+/// （每个文件 [`font_votes`]），取最多的（和 KFX 写出器的口径一样：字数最多的计算字体）。[`analyze`] 的 [`FontPlan::body`] 只看
+/// 段落自己和 `p`/`body` 规则，字体写在 `<body class="…">` 上、段落继承的书认不出（《平凡的世界》的 FZLanTingSong）；
+/// Send to Kindle 规则（`kindle_rules`）用这个。
+///
+/// 各文件的投票合起来，取字数最多的字体（同票按名字定，结果确定）。
+pub(crate) fn pick_body_font(counts: impl IntoIterator<Item = FontVotes>) -> Option<String> {
+    let mut total: FontVotes = HashMap::new();
     for v in counts {
         for (k, n) in v {
             *total.entry(k).or_default() += n;
@@ -301,6 +340,9 @@ fn is_annotation(h: &str, t: &html::Tag, plan: &FontPlan) -> bool {
     let inner_of = |close: &html::Tag| &h[t.end..close.start];
     match name.as_str() {
         "p" | "div" => {
+            if !may_start_with_note(&h[t.end..]) {
+                return false;
+            }
             let Some(close) = html::find_close(h, t.end, &name) else { return false };
             let inner = inner_of(&close);
             let text = html::plain_text(inner);
@@ -323,6 +365,19 @@ fn is_annotation(h: &str, t: &html::Tag, plan: &FontPlan) -> bool {
             !text.is_empty() && (inside || (before && after))
         }
         _ => false,
+    }
+}
+
+/// 便宜的预检：`rest`（开标签后面）开头的可见文字可能以「注」「按」「批注」开头。只看开头一小段（截在一个 `<` 前，不截断标签和
+/// 字符引用）；看不出来的（这一段没有文字、以字符引用开头）算可能，交给完整的判断。判为不可能的，完整判断（找闭合标签、整段转纯文本）
+/// 一定也是否：这一段的纯文本是整段纯文本的开头。
+fn may_start_with_note(rest: &str) -> bool {
+    const WINDOW: usize = 256;
+    let end = if rest.len() <= WINDOW { rest.len() } else { rest.as_bytes()[WINDOW..].iter().position(|&b| b == b'<').map_or(rest.len(), |i| WINDOW + i) };
+    let text = html::plain_text(&rest[..end]);
+    match text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{3000}').chars().next() {
+        None => true,
+        Some(c) => matches!(c, '注' | '按' | '批' | '&' | '<'),
     }
 }
 

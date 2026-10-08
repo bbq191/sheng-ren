@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-08：519 个）
+cargo test --workspace                      # 全部测试，要求全部通过
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -45,7 +45,14 @@ tools/regress/compare.py 旧 新
 | 任何改动 | 输出的 XHTML、OPF、NCX 都是合法 XML（现在是 0 个不合法） |
 | 改了漫画处理 | 拿一卷漫画比图片字节 |
 
-**跑哪些模式**：缺省只跑 `ireader`。`kindle` 的文字书和它差在阅读范围、注释写法（`jump` 对 `popup`）、背景图尺寸（kindle 保留 `background-size`/`fixed`），而且最后还要转一步 KFX（见下面 [KFX](#kfx)）；漫画还有固定版式（`comic_fixed_layout`）和翻页方向（`comic_page_direction`）的不同。`xochitl` 还有彩色、去掉回链和背景图、页边距 1 的不同。改了注释、背景、漫画、彩色、阅读范围相关的处理，对应的模式也跑一遍。
+**跑哪些模式**：缺省只跑 `ireader`。三个模式的文字书都只修复，差别在：
+
+| 模式 | 文字书和 `ireader` 差在 | 漫画和 `ireader` 差在 |
+|---|---|---|
+| `kindle` | 不加 `kindle_rules`（规则在 KFX 写出器里），最后还要转一步 KFX（见下面 [KFX](#kfx)） | 阅读范围、固定版式（`comic_fixed_layout`）、不改翻页方向、背景图保留尺寸 |
+| `xochitl` | 另加 `repair_note_links`（注释搬进本章、去回链、图标号换数字） | 彩色、页边距 1（`comic_reader_margins`）、去掉背景图和回链、不改翻页方向 |
+
+注释方式（`notes`）、背景图、`rgba()`、图注、透明图这些字段现在只影响漫画；阅读范围对文字书只影响 KFX 的 `@media` 求值。改了 `kindle_rules`、注释、漫画、彩色、阅读范围相关的处理，对应的模式也跑一遍。
 
 ### KFX
 
@@ -87,7 +94,7 @@ done
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 5 | 只有补过东西的 |
 | EPUB → AZW3 | `azw3::WRITER_VERSION` | 4 | 书库已不出 AZW3（`epub-to-azw3` 还在） |
-| EPUB → KFX | `kfx::write::WRITER_VERSION` | 11 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
+| EPUB → KFX | `kfx::write::WRITER_VERSION` | 12 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。
@@ -111,6 +118,12 @@ done
   | install / uninstall 共用的包列表和路径 | `tools/cargo-pkgs.sh` |
   | 逐文件独立的步骤多线程做（结果按原顺序；`f` 必须是纯的） | `util::par_map`（只读）/ `par_map_mut`（就地改） |
   | 在别的线程先压好一个 zip 条目，再按顺序写 | `epubzip::Precompressed` + `EpubWriter::put_precompressed` |
+  | 选择器最后一段（标签、类、有没有 id/伪类） | `wash::css::last_compound`（2026-10-08 审计从 5 处收拢） |
+  | 非 UTF-8 的 CSS 按单字节读写 | `util::latin1_decode` / `latin1_encode` |
+  | 颜色解析、对比度、半透明叠色（优化器和 KFX 写出器共用） | `bookconv::color`（`ensure_contrast`、`over`） |
+  | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | `bookconv::uastyle` |
+  | KFX 写出器里跳引号、配括号（CSS 字符串遇换行结束） | `kfx::css` 的 `scan_css` |
+  | Python 工具：命令行参数；回归目录配对、OPF/spine 解析 | `tools/toollib.py`；`tools/regress/regresslib.py`（compare、tocchk、pair 共用） |
 - **不可信输入不能让进程崩溃**：书的字节全是外来数据，数值相加用 `checked_add`、切片用 `get`；图片解码器 panic 由 `imgopt::guard` 兜住。**读外来数据设上限，超过就报错、不截断照用**（读用 `util::read_capped`）：
   - zip 条目解压 `epubzip::MAX_ENTRY_BYTES`（256MB，EPUB 与 CBZ 共用）；
   - 远程图下载 `netimg::MAX_IMAGE_BYTES`（20MB，超过算抓不到）；

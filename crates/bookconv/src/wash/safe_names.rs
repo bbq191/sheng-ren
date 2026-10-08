@@ -123,7 +123,7 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport)
         }
     }
     for e in entries.iter_mut() {
-        let is_css = e.name.to_ascii_lowercase().ends_with(".css");
+        let is_css = is_css_name(&e.name);
         if !(is_css || is_html_entry(&e.name, &e.data)) {
             continue;
         }

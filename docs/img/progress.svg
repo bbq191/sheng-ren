@@ -20,7 +20,7 @@
   <!-- Kindle -->
   <rect class="dev" x="20" y="16" width="300" height="54" rx="8"/>
   <text x="170" y="40" text-anchor="middle" class="h">Kindle 自带阅读器</text>
-  <text x="170" y="60" text-anchor="middle" class="s">覆盖 kindle/ 里的 .kfx</text>
+  <text x="170" y="60" text-anchor="middle" class="s">sync 覆盖 documents/ 里的 .kfx</text>
   <path class="l" d="M170 70 L170 92" marker-end="url(#a)"/>
   <rect class="q" x="60" y="94" width="220" height="40" rx="20"/>
   <text x="170" y="119" text-anchor="middle">新旧文件逐字节相同？</text>
@@ -38,7 +38,7 @@
   <!-- 掌阅 -->
   <rect class="dev" x="340" y="16" width="300" height="54" rx="8"/>
   <text x="490" y="40" text-anchor="middle" class="h">掌阅自带阅读器</text>
-  <text x="490" y="60" text-anchor="middle" class="s">覆盖 ireader/ 里的 .epub</text>
+  <text x="490" y="60" text-anchor="middle" class="s">sync 覆盖 documents/ 里的 .epub</text>
   <path class="l" d="M490 70 L490 166" marker-end="url(#a)"/>
   <text x="500" y="122" class="s">字节变了也一样</text>
   <rect class="ok" x="400" y="168" width="180" height="62" rx="8"/>
@@ -48,11 +48,11 @@
   <!-- Move -->
   <rect class="dev" x="660" y="16" width="300" height="54" rx="8"/>
   <text x="810" y="40" text-anchor="middle" class="h">Move 自带阅读器（xochitl）</text>
-  <text x="810" y="60" text-anchor="middle" class="s">xochitl/ 里的 .epub 经它自己的上传</text>
+  <text x="810" y="60" text-anchor="middle" class="s">sync 经书架服务按 uuid 原地替换</text>
   <path class="l" d="M810 70 L810 166" marker-end="url(#a)"/>
   <rect class="na" x="720" y="168" width="180" height="62" rx="8"/>
   <text x="810" y="194" text-anchor="middle" class="h" fill="#666">没测</text>
-  <text x="810" y="216" text-anchor="middle" class="s">按 UUID 存书</text>
+  <text x="810" y="216" text-anchor="middle" class="s">原地替换有反例</text>
 
   <!-- 我们怎么配合 -->
   <rect class="q" x="20" y="256" width="940" height="128" rx="10"/>
@@ -60,5 +60,5 @@
   <text x="36" y="308" class="s">· KFX 里不写写出器版本（创建器版本固定写 1），唯一 ID 重建不变：只升了版本号、内容没变的书，重建出来逐字节相同，Kindle 进度保住。</text>
   <text x="36" y="330" class="s">· 内容真变了（规则改了正文、换了封面）的书，覆盖到 Kindle 上进度清零，躲不开。</text>
   <text x="36" y="352" class="s">· EPUB 照旧在 META-INF/eink-optimized 里记优化器版本（掌阅不受影响）。</text>
-  <text x="36" y="374" class="s">· 产物文件名不变（除非书名变了），设备上靠覆盖同名文件更新。</text>
+  <text x="36" y="374" class="s">· 产物文件名不变（除非书名变了），设备上靠覆盖同名文件更新；sync 生成出来和设备上那份逐字节相同就不再传。</text>
 </svg>

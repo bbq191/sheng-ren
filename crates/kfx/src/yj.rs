@@ -212,7 +212,6 @@ pub const WEIGHT_SEMIBOLD: u32 = 360;
 pub const WEIGHT_BOLDER: u32 = 362;
 /// `min-height`，`height` 也写它（《恶女的告白》`min-height:2em`、《消失的爱人》`height:6em` → `$62`）。
 pub const P_MIN_HEIGHT: u32 = 62;
-/// 链接的颜色：`{$19: 颜色}`，两个一起写（推测是未访问、已访问；《人生海海》目录 `<a style="color:#00C">`）。
 /// 有宽度的块：最大宽度（em 宽度时写 100%）、块的左右对齐（左右外边距 auto：`$320` 居中、`$59` 靠左、`$61` 靠右）。
 pub const P_MAX_WIDTH: u32 = 65;
 pub const P_BOX_ALIGN: u32 = 580;
@@ -223,6 +222,7 @@ pub const SHADOW_COLOR: u32 = 498;
 pub const SHADOW_X: u32 = 499;
 pub const SHADOW_Y: u32 = 500;
 pub const SHADOW_BLUR: u32 = 501;
+/// 链接的颜色：`{$19: 颜色}`，两个一起写（推测是未访问、已访问；《人生海海》目录 `<a style="color:#00C">`）。
 pub const P_LINK_UNVISITED: u32 = 576;
 pub const P_LINK_VISITED: u32 = 577;
 /// 字体名 `default`：阅读器自己的字体（Send to Kindle 写在 `@font-face` 声明了却没有字体文件的字体上，《绍宋》的「宋体」）。

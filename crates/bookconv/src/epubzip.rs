@@ -167,20 +167,27 @@ pub struct Skeleton {
 pub fn read_entries_from<R: Read + Seek>(zip: &mut ZipArchive<R>, keep_bytes: impl Fn(&str) -> bool) -> Result<Vec<Entry>, String> {
     let mut entries = Vec::with_capacity(zip.len());
     for i in 0..zip.len() {
-        let mut f = zip.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
-        if f.is_dir() {
-            continue;
+        if let Some(e) = read_entry(zip, i, &keep_bytes)? {
+            entries.push(e);
         }
-        let name = f.name().to_string();
-        let data = if keep_bytes(&name) {
-            let size = f.size();
-            read_all(&mut f, size, &name)?
-        } else {
-            Vec::new()
-        };
-        entries.push(Entry { name, data });
     }
     Ok(entries)
+}
+
+/// 读第 `i` 个 zip 条目（`keep_bytes` 见 [`read_entries_from`]）；目录项 → `Ok(None)`。
+fn read_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, i: usize, keep_bytes: &impl Fn(&str) -> bool) -> Result<Option<Entry>, String> {
+    let mut f = zip.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
+    if f.is_dir() {
+        return Ok(None);
+    }
+    let name = f.name().to_string();
+    let data = if keep_bytes(&name) {
+        let size = f.size();
+        read_all(&mut f, size, &name)?
+    } else {
+        Vec::new()
+    };
+    Ok(Some(Entry { name, data }))
 }
 
 /// 读"骨架"：非图片条目整份读，图片条目只记名字、`data` 留空（真实字节留到阶段二按需读回）。
@@ -200,20 +207,7 @@ pub(crate) fn read_skeleton_par<R: Read + Seek>(path: &std::path::Path, zip: &mu
     let keep = |name: &str| !crate::imgopt::is_page_image(name);
     // 第 i 个条目：`Ok(None)` 是目录项
     type Read1 = Result<Option<Entry>, String>;
-    let read_one = |z: &mut FileZip, i: usize| -> Read1 {
-        let mut f = z.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
-        if f.is_dir() {
-            return Ok(None);
-        }
-        let name = f.name().to_string();
-        let data = if keep(&name) {
-            let size = f.size();
-            read_all(&mut f, size, &name)?
-        } else {
-            Vec::new()
-        };
-        Ok(Some(Entry { name, data }))
-    };
+    let read_one = |z: &mut FileZip, i: usize| -> Read1 { read_entry(z, i, &keep) };
     const CHUNK: usize = 16;
     let next = std::sync::atomic::AtomicUsize::new(0);
     let parts: Vec<Option<Vec<(usize, Read1)>>> = std::thread::scope(|s| {
@@ -296,8 +290,7 @@ pub fn open_file_zip(path: &std::path::Path) -> Result<FileZip, String> {
 
 /// 打开 EPUB 并读出 OPF：`(zip, OPF 在 zip 里的路径, OPF 文本)`。只读 container.xml 和 OPF 两个条目，不解压整本。
 pub fn open_opf(epub: &std::path::Path) -> Result<(FileZip, String, String), String> {
-    let file = std::fs::File::open(epub).map_err(|e| format!("打开 {} 失败: {e}", epub.display()))?;
-    let mut zip = ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB 失败: {e}"))?;
+    let mut zip = open_file_zip(epub)?;
     let container = read_text_opt(&mut zip, "META-INF/container.xml").ok_or("缺 META-INF/container.xml")?;
     let opf_path = crate::wash::tag_attr(&container, "full-path").ok_or("container.xml 里没有 full-path")?.to_string();
     let opf = read_text_opt(&mut zip, &opf_path).ok_or("读不到 OPF")?;

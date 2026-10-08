@@ -74,8 +74,7 @@ pub fn check_epub_file(path: &std::path::Path) -> Result<CheckReport, String> {
 
 /// [`check_epub_file`]，`require_toc` 为真时"无目录"算硬失败（`epub-optimize --check --require-toc`）。
 pub fn check_epub_file_with(path: &std::path::Path, require_toc: bool) -> Result<CheckReport, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("打开待校验文件失败: {e}"))?;
-    let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
+    let mut zip = crate::epubzip::open_file_zip(path)?;
     let sk = crate::epubzip::read_skeleton(&mut zip)?;
     let mut rep = check_entries(&sk.entries, require_toc);
     add_mimetype_problem(&mut rep, &mut zip);
@@ -171,21 +170,16 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
         rep.warnings.push(format!("目录锚点丢失 {}/{}（xochitl 退化到文件级跳转）", rep.frag_total - rep.frag_hit, rep.frag_total));
     }
 
-    // 3. 双 id
-    for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data)) {
-        rep.html_files += 1;
-        rep.dup_id_tags += count_dup_id_tags(&String::from_utf8_lossy(&e.data));
-    }
-    if rep.dup_id_tags > 0 {
-        rep.errors.push(format!("{} 个标签带双 id 属性（非法 XHTML，xochitl 整章白屏）", rep.dup_id_tags));
-    }
-
-    // 4. 正文资源引用（img src / link href 等，和目录那节同一个 [`internal_links`]，区别只是扫的是每章正文）：
+    // 3. 双 id、4. 正文资源引用、5. 正文 XML 合法性：每个 html 条目只解码、扫一遍，三条的结论在后面按原顺序报。
+    // 4：img src / link href 等，和目录那节同一个 [`internal_links`]，区别只是扫的是每章正文；
     // 书外链接、data: 内联、纯同文件锚点不算。命中率阈值跟目录那节一致，同一份"该拦还是该忍"的标准。
     let mut res_examples: Vec<String> = Vec::new();
     let mut dead_examples: Vec<String> = Vec::new();
+    let mut bad_chapters: Vec<String> = Vec::new();
     for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data)) {
+        rep.html_files += 1;
         let t = String::from_utf8_lossy(&e.data);
+        rep.dup_id_tags += count_dup_id_tags(&t);
         for (target, frag, same_file) in internal_links(&e.name, &t) {
             // 正文链接的锚点（同文件 `#x` 也查）：目标文件在、锚点却找不到的算死链
             if !frag.is_empty() {
@@ -208,6 +202,12 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
                 res_examples.push(format!("{}→{target}", e.name));
             }
         }
+        if let Some(why) = xml_problem(&e.data) {
+            bad_chapters.push(format!("{}（{why}）", e.name));
+        }
+    }
+    if rep.dup_id_tags > 0 {
+        rep.errors.push(format!("{} 个标签带双 id 属性（非法 XHTML，xochitl 整章白屏）", rep.dup_id_tags));
     }
     if rep.dead_anchor_links > 0 {
         rep.warnings.push(format!("正文链接锚点不存在 {} 处（如 {}），点了跳不到", rep.dead_anchor_links, dead_examples.join("、")));
@@ -229,7 +229,6 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
             rep.errors.push(format!("{} 不是合法 XML（{why}），xochitl 会整本读不出来", e.name));
         }
     }
-    let bad_chapters: Vec<String> = entries.iter().filter(|e| is_html_entry(&e.name, &e.data)).filter_map(|e| xml_problem(&e.data).map(|why| format!("{}（{why}）", e.name))).collect();
     if !bad_chapters.is_empty() {
         rep.warnings.push(format!("{} 个正文文件不是合法 XML，xochitl 可能整章不显示：{}", bad_chapters.len(), bad_chapters.iter().take(3).cloned().collect::<Vec<_>>().join("、")));
     }

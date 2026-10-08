@@ -6,7 +6,7 @@
   输出：每本的配上率；全部书合起来的差异（属性, Amazon, 我们）：节点数、书数、例子。"""
 import collections, os, re, subprocess, sys, zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kfx import cli_args
+from kfx import cli_args, cli_opts
 import s2kcmp
 
 
@@ -27,13 +27,8 @@ def opf_title(path):
         return None
 
 
-def main():
-    amz_dir, books, work = cli_args(3, __doc__)[:3]
-    opt = dict(a.split('=', 1) for a in sys.argv[1:] if a.startswith('--') and '=' in a)
-    bindir = opt.get('--bin', 'target/release')
-    device = opt.get('--device', 'kindle')
-    optimizer = opt.get('--opt', f'{bindir}/epub-optimize')
-    os.makedirs(work, exist_ok=True)
+def book_index(books):
+    """书目录里的文字书：规整后的书名（OPF 的 dc:title 和文件名各一个键）→ 路径。"""
     index = {}
     for root, _, files in os.walk(books):
         for f in files:
@@ -42,6 +37,22 @@ def main():
                 for k in {norm(opf_title(p)), norm(os.path.splitext(f)[0])}:
                     if k:
                         index.setdefault(k, p)
+    return index
+
+
+def find_source(index, title, kfx_name):
+    """Amazon KFX 对应的原书：先按元数据书名，再按去掉 `_<32 位散列>` 的文件名。"""
+    return index.get(norm(title)) or index.get(norm(re.sub(r'_[0-9A-F]{32}$', '', os.path.splitext(kfx_name)[0])))
+
+
+def main():
+    amz_dir, books, work = cli_args(3, __doc__)[:3]
+    opt = cli_opts()
+    bindir = opt.get('--bin', 'target/release')
+    device = opt.get('--device', 'kindle')
+    optimizer = opt.get('--opt', f'{bindir}/epub-optimize')
+    os.makedirs(work, exist_ok=True)
+    index = book_index(books)
     leaf, chain = collections.Counter(), collections.Counter()
     books_of, ex = collections.defaultdict(set), {}
     rows = []
@@ -50,7 +61,7 @@ def main():
             continue
         amz = os.path.join(amz_dir, f)
         title = s2kcmp.title_of(amz) or os.path.splitext(f)[0]
-        src = index.get(norm(title)) or index.get(norm(re.sub(r'_[0-9A-F]{32}$', '', os.path.splitext(f)[0])))
+        src = find_source(index, title, f)
         if not src:
             rows.append((title, '没找到原书'))
             continue

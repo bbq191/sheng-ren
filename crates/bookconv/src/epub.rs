@@ -262,7 +262,7 @@ pub fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u8>, Str
         return Err("EPUB 至少要有一章".into());
     }
     for ch in book.chapters.iter_mut() {
-        ch.html_body = fix_internal_links(&ch.html_body);
+        ch.html_body = fix_internal_links(&ch.html_body, None);
         ch.html_body = crate::htmlproc::break_footnote_cycles(&ch.html_body);
     }
     let opf = content_opf(book, &opts);

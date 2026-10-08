@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>注释处理前后对比</title>
+  <title>Move（xochitl）的注释处理前后对比：只修复时只有 Move 做这一步</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f6fd0"/></marker>
@@ -21,7 +21,7 @@
   <rect width="960" height="620" fill="#ffffff"/>
 
   <text x="20" y="30" class="h">原书：注释在另一个文件</text>
-  <text x="520" y="30" class="h">处理后：注释搬到同一文件的章末</text>
+  <text x="520" y="30" class="h">处理后（Move）：注释搬到同一文件的章末</text>
 
   <!-- 原书 -->
   <rect class="pg" x="20" y="46" width="200" height="220" rx="6"/>
@@ -51,24 +51,23 @@
   <text x="534" y="150">……正文</text><text x="590" y="143" class="sup">2</text>
   <line x1="534" y1="172" x2="736" y2="172" stroke="#ccc" stroke-dasharray="3 3"/>
   <rect class="nb" x="532" y="180" width="206" height="34" rx="4"/>
-  <text x="540" y="202" font-size="12.5">1. 注释内容（0.85em） ↩</text>
+  <text x="540" y="202" font-size="12.5">1. 注释内容（回链去掉）</text>
   <rect class="nb" x="532" y="220" width="206" height="34" rx="4"/>
-  <text x="540" y="242" font-size="12.5">2. 注释内容（0.85em） ↩</text>
+  <text x="540" y="242" font-size="12.5">2. 注释内容</text>
   <path class="fw" d="M626 88 C700 90 760 140 740 192" marker-end="url(#b)"/>
-  <path class="bk" d="M700 196 C800 170 790 70 628 92" marker-end="url(#g)"/>
   <text x="520" y="290" class="m">&lt;a href="#n1" id="r1"&gt;&lt;sup&gt;1&lt;/sup&gt;&lt;/a&gt;</text>
 
   <g class="s">
     <text x="770" y="70">· 只改 href</text>
     <text x="784" y="90">id、class、&lt;sup&gt; 都保留</text>
     <text x="770" y="112">· 标号前后一个字不加</text>
-    <text x="770" y="134">· 回链 ↩：</text>
-    <text x="784" y="154">kindle、ireader 保留</text>
-    <text x="784" y="174">xochitl 去掉</text>
-    <text x="770" y="196">· 每条注释不拆到两页</text>
-    <text x="770" y="218">· ireader 弹窗：标号加 noteref</text>
-    <text x="784" y="238">注释写成 &lt;aside&gt;（footnote）</text>
-    <text x="784" y="258">kindle 弹窗由 KFX 写出器配</text>
+    <text x="770" y="134">· 回链 ↩ 去掉：xochitl</text>
+    <text x="784" y="154">遇到互链的一对整对丢掉；</text>
+    <text x="784" y="174">返回靠它自己的"返回"</text>
+    <text x="770" y="196">· 字号不变（不加样式表）</text>
+    <text x="770" y="218">· Kindle、掌阅原样不动：</text>
+    <text x="784" y="238">Kindle 弹窗由 KFX 写出器配</text>
+    <text x="784" y="258">掌阅就是普通跳转</text>
   </g>
 
   <!-- 特例 -->

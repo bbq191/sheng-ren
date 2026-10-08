@@ -279,16 +279,18 @@ impl Library {
         let mut replaced: Vec<(PathBuf, String)> = src.stale.iter().map(|id| (self.entry_dir(id), id.clone())).collect();
         let mut bad_now: HashSet<PathBuf> = HashSet::new();
         let mut unreadable_now: HashSet<PathBuf> = HashSet::new();
+        // 这个目录下登记过的文件原样当作还在（不新增、不删除、记录不变）
+        let keep_under = |present: &mut BTreeMap<PathBuf, Seen>, dir: &Path| present.extend(src.files.iter().filter(|(p, _)| p.starts_with(dir)).map(|(p, s)| (p.clone(), s.clone())));
         for dir in &src.dirs {
             if !dir.is_dir() {
                 // 目录整个不见了（U 盘没插等）：里面的文件既不算新增也不算删除，原样保留记录
-                present.extend(src.files.iter().filter(|(p, _)| p.starts_with(dir)).map(|(p, s)| (p.clone(), s.clone())));
+                keep_under(&mut present, dir);
                 continue;
             }
             let scan = scan_books(dir);
             for (u, why) in &scan.unreadable {
                 // 读不了的目录（权限不够等）：和目录整个不见了一样，里面的记录原样保留——不能当成书都删了（原件不在的会连同产物从书库删掉）
-                present.extend(src.files.iter().filter(|(p, _)| p.starts_with(u)).map(|(p, s)| (p.clone(), s.clone())));
+                keep_under(&mut present, u);
                 unreadable_now.insert(u.clone());
                 if memo.unreadable.insert(u.clone()) {
                     on(SyncEvent::Unreadable(u, why));

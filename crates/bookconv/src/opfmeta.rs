@@ -187,13 +187,27 @@ pub fn apply_fields(opf: &str, set: &[(DcField, Vec<String>)]) -> Result<String,
     Ok(html::apply_edits(opf, ops))
 }
 
-/// NCX 的 `<docTitle><text>` 换成新书名（阅读器目录顶上显示的书名）。没有 docTitle 原样返回。
+/// NCX 的 `<docTitle><text>` 换成新书名（阅读器目录顶上显示的书名）。只在 `docTitle` 里面找 `<text>`（2026-10-08 审计：此前
+/// 从 docTitle 开标签往后找第一个 `<text>`，`<docTitle></docTitle>` 是空的时改掉的是第一条目录的 navLabel）；docTitle 里没有
+/// `<text>` 就补一个，整个没有 docTitle 就补在 `docAuthor`/`navMap` 前（NCX DTD 的顺序）；那也找不到就原样返回。
 fn set_ncx_title(ncx: &str, title: &str) -> String {
-    let Some(dt) = html::tags(ncx).find(|t| t.kind == TagKind::Open && t.is("docTitle")) else { return ncx.to_string() };
-    let Some(open) = html::tags(&ncx[dt.end..]).find(|t| t.kind == TagKind::Open && t.is("text")) else { return ncx.to_string() };
-    let (s, e) = (dt.end + open.end, dt.end + open.end);
-    let Some(close) = html::find_close(ncx, e, "text") else { return ncx.to_string() };
-    format!("{}{}{}", &ncx[..s], xml_escape(title), &ncx[close.start..])
+    let spans = html::parse_spans(ncx, 0, ncx.len());
+    let text_elem = format!("<text>{}</text>", xml_escape(title));
+    let Some(dt) = spans.iter().find(|s| s.name == "doctitle") else {
+        let Some(at) = spans.iter().find(|s| s.name == "docauthor" || s.name == "navmap").map(|s| s.open_start) else { return ncx.to_string() };
+        return format!("{}<docTitle>{text_elem}</docTitle>{}", &ncx[..at], &ncx[at..]);
+    };
+    if dt.void {
+        // `<docTitle/>`：换成带 `<text>` 的完整元素（元素名照原文大小写、前缀）
+        let name = html::tags_in(ncx, dt.open_start, dt.open_end).next().map_or("docTitle", |t| t.name);
+        return format!("{}<{name}>{text_elem}</{name}>{}", &ncx[..dt.open_start], &ncx[dt.open_end..]);
+    }
+    let inner = spans.iter().find(|s| s.name == "text" && s.open_start >= dt.open_end && s.close_end <= dt.close_start);
+    match inner {
+        Some(t) if t.closed() => format!("{}{}{}", &ncx[..t.open_end], xml_escape(title), &ncx[t.close_start..]),
+        Some(_) => ncx.to_string(),
+        None => format!("{}{text_elem}{}", &ncx[..dt.open_end], &ncx[dt.open_end..]),
+    }
 }
 
 /// 书里声明的封面图：(zip 路径, 扩展名)。判定见 `wash::opf::declared_cover`（与优化器、`cover_image_of` 同一套）。
@@ -327,52 +341,48 @@ pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Opti
     (opf, gone, rewritten)
 }
 
-/// 去掉 `elem` 元素（NCX 的 `navPoint`、nav 的 `li`）里第一个链接指向 `pages` 之一的那些（整个元素连同里面的子项）。
+/// 去掉 `elem` 元素（NCX 的 `navPoint`、nav 的 `li`）里**直属**链接指向 `pages` 之一的那些（整个元素连同里面的子项）。
+/// 直属：链接元素（NCX 是 `<content src>`，nav 是 `<a href>`）往上最近的 `elem` 就是这个元素——子项里的链接不算
+/// （2026-10-08 审计：此前从开标签往后找第一个链接，不限在元素范围内、也不管是不是子项的，
+/// `<li><span>第一部</span><ol><li><a href="cover.xhtml">` 去封面时把整个「部」连子章节删了）。
 fn drop_entries_pointing_to(text: &str, file: &str, elem: &str, pages: &[&str]) -> String {
-    let tags: Vec<html::Tag> = html::tags(text).collect();
-    let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    let mut skip_until = 0;
-    for (k, t) in tags.iter().enumerate() {
-        if t.start < skip_until || !(t.kind == TagKind::Open && crate::wash::opf::is_local(t.name, elem)) {
+    use crate::wash::opf::is_local;
+    let spans = html::parse_spans(text, 0, text.len());
+    // 每个元素自己的第一个直属链接
+    let mut own_link: Vec<Option<&str>> = vec![None; spans.len()];
+    for s in &spans {
+        if !(is_local(&s.name, "content") || s.name == "a") {
             continue;
         }
-        // 这个元素自己的第一个链接（NCX 是 <content src>，nav 是 <a href>）
-        let link = tags[k + 1..].iter().find(|x| x.is_start() && (crate::wash::opf::is_local(x.name, "content") || x.is("a"))).and_then(|x| {
-            let tag = &text[x.start..x.end];
-            html::attr_value(tag, "src").or_else(|| html::attr_value(tag, "href"))
-        });
-        let Some(link) = link else { continue };
+        let mut up = s.parent;
+        while let Some(p) = up {
+            if is_local(&spans[p].name, elem) {
+                break;
+            }
+            up = spans[p].parent;
+        }
+        let Some(owner) = up else { continue };
+        if own_link[owner].is_none() {
+            let tag = &text[s.open_start..s.open_end];
+            own_link[owner] = html::attr_value(tag, "src").or_else(|| html::attr_value(tag, "href"));
+        }
+    }
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut skip_until = 0;
+    for (k, s) in spans.iter().enumerate() {
+        if s.open_start < skip_until || !is_local(&s.name, elem) || !s.closed() {
+            continue;
+        }
+        let Some(link) = own_link[k] else { continue };
         if !pages.contains(&crate::epubzip::resolve_link(file, link).0.as_str()) {
             continue;
         }
-        let Some(close) = find_matching_close(text, &tags, k) else { continue };
+        let close = s.close_end;
         let ws = text[close..].len() - text[close..].trim_start().len();
-        edits.push((t.start, close + ws, String::new()));
+        edits.push((s.open_start, close + ws, String::new()));
         skip_until = close;
     }
     if edits.is_empty() { text.to_string() } else { html::apply_edits(text, edits) }
-}
-
-/// `tags[k]`（开标签）对应的闭合标签终点：按同名元素的嵌套层数配对。
-fn find_matching_close(text: &str, tags: &[html::Tag], k: usize) -> Option<usize> {
-    let name = tags[k].name;
-    let mut depth = 0usize;
-    for t in &tags[k..] {
-        if !t.name.eq_ignore_ascii_case(name) {
-            continue;
-        }
-        match t.kind {
-            TagKind::Open => depth += 1,
-            TagKind::Close => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(t.end.min(text.len()));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// 改完之后的摘要（给命令行打印）。
@@ -401,15 +411,22 @@ pub fn read_epub(path: &Path) -> Result<Vec<(DcField, Vec<String>)>, String> {
 pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, String> {
     let (mut zip, opf_path, opf_text) = crate::epubzip::open_opf(src)?;
     let mut entries = crate::epubzip::read_skeleton(&mut zip)?.entries;
-    // 读进来时的样子（图片是空占位）：写出时内容没变的条目原样拷贝
-    let before: std::collections::HashMap<String, Vec<u8>> = entries.iter().map(|e| (e.name.clone(), e.data.clone())).collect();
+    // 内容变了的条目（写出时重写，其余原样拷贝压缩数据）。以前先把全部文字条目复制一份留着比，大书白占一整份内存
+    let mut changed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let opf_dir = crate::epubzip::dir_of(&opf_path).to_string();
     let mut opf = apply_fields(&opf_text, &edits.set)?;
     let mut report = EditReport { fields: edits.set.iter().map(|(f, _)| *f).collect(), cover_replaced: None, cover_removed: None };
     let text_of = |entries: &[crate::epubzip::Entry], n: &str| entries.iter().find(|e| e.name == n).map(|e| String::from_utf8_lossy(&e.data).into_owned());
-    let set_entry = |entries: &mut Vec<crate::epubzip::Entry>, n: String, data: Vec<u8>| match entries.iter_mut().find(|e| e.name == n) {
-        Some(e) => e.data = data,
-        None => entries.push(crate::epubzip::Entry { name: n, data }),
+    let set_entry = |entries: &mut Vec<crate::epubzip::Entry>, changed: &mut std::collections::HashSet<String>, n: String, data: Vec<u8>| match entries.iter_mut().find(|e| e.name == n) {
+        Some(e) if e.data == data => {}
+        Some(e) => {
+            e.data = data;
+            changed.insert(n);
+        }
+        None => {
+            changed.insert(n.clone());
+            entries.push(crate::epubzip::Entry { name: n, data });
+        }
     };
 
     // 换了书名：NCX 的 docTitle 一起换
@@ -417,7 +434,7 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
         let ncx = crate::wash::manifest_items(&opf).iter().find(|i| i.media_type.contains("dtbncx")).map(|i| i.path(&opf_dir));
         if let Some(ncx) = ncx {
             if let Some(text) = text_of(&entries, &ncx) {
-                set_entry(&mut entries, ncx, set_ncx_title(&text, t).into_bytes());
+                set_entry(&mut entries, &mut changed, ncx, set_ncx_title(&text, t).into_bytes());
             }
         }
     }
@@ -428,7 +445,7 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
             let (new_opf, gone, rewritten) = remove_cover(&opf, &opf_dir, |n| text_of(&entries, n));
             opf = new_opf;
             for (n, data) in rewritten {
-                set_entry(&mut entries, n, data);
+                set_entry(&mut entries, &mut changed, n, data);
             }
             entries.retain(|e| !gone.contains(&e.name));
             report.cover_removed = Some(gone);
@@ -439,7 +456,7 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
                 if let Some(mt) = retype {
                     opf = set_media_type(&opf, &opf_dir, &path, mt);
                 }
-                set_entry(&mut entries, path, bytes);
+                set_entry(&mut entries, &mut changed, path, bytes);
                 report.cover_replaced = Some(true);
             }
             None => {
@@ -451,24 +468,32 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
                 let old: Vec<(usize, usize, String)> = o::cover_meta_tags(&opf).into_iter().map(|(s, e, _)| (s, e, String::new())).collect();
                 opf = html::apply_edits(&opf, old);
                 opf = o::insert_metadata(&opf, r#"<meta name="cover" content="eink-cover"/>"#).ok_or("OPF 里没有 </metadata>")?;
-                set_entry(&mut entries, if opf_dir.is_empty() { name } else { format!("{opf_dir}/{name}") }, image.clone());
+                set_entry(&mut entries, &mut changed, if opf_dir.is_empty() { name } else { format!("{opf_dir}/{name}") }, image.clone());
                 report.cover_replaced = Some(false);
             }
         },
     }
-    set_entry(&mut entries, opf_path.clone(), opf.into_bytes());
+    set_entry(&mut entries, &mut changed, opf_path.clone(), opf.into_bytes());
 
     if edits.normalize {
+        // 规范整理可能改任何条目：整理前后按（长度, FNV-1a 64 位哈希）比，不留副本
+        let sig = |e: &crate::epubzip::Entry| (e.data.len(), crate::util::fnv64(&e.data));
+        let pre: std::collections::HashMap<String, (usize, u64)> = entries.iter().filter(|e| !changed.contains(&e.name)).map(|e| (e.name.clone(), sig(e))).collect();
         crate::wash::normalize_epub3(&mut entries);
+        changed.extend(entries.iter().filter(|e| pre.get(&e.name).is_none_or(|p| *p != sig(e))).map(|e| e.name.clone()));
     }
     if let (Some(when), Some(e)) = (&edits.modified, entries.iter_mut().find(|e| e.name == opf_path)) {
-        e.data = set_modified(&String::from_utf8_lossy(&e.data), when).into_bytes();
+        let new = set_modified(&String::from_utf8_lossy(&e.data), when).into_bytes();
+        if new != e.data {
+            e.data = new;
+            changed.insert(opf_path.clone());
+        }
     }
 
     // mimetype 第一个、不压缩（`EpubWriter` 管）；变了的条目重写（图片不压缩，其余压缩），没变的原样拷贝
     let mut w = crate::epubzip::EpubWriter::create(dst)?;
     for e in entries.iter().filter(|e| e.name != "mimetype") {
-        if before.get(&e.name) == Some(&e.data) {
+        if !changed.contains(&e.name) {
             w.raw_copy(zip.by_name(&e.name).map_err(|err| format!("{}: {err}", e.name))?)?;
         } else {
             w.put(&e.name, &e.data)?;
@@ -480,9 +505,15 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
 
 /// 把 `<meta property="dcterms:modified">` 的值换成 `when`；没有就在 `</metadata>` 前补一条（EPUB 3 必需）。
 fn set_modified(opf: &str, when: &str) -> String {
-    for t in html::tags(opf).filter(|t| t.kind == TagKind::Open && crate::wash::opf::is_local(t.name, "meta")) {
-        if html::attr_value(&opf[t.start..t.end], "property") != Some("dcterms:modified") {
+    for t in html::tags(opf).filter(|t| t.is_start() && crate::wash::opf::is_local(t.name, "meta")) {
+        let tag = &opf[t.start..t.end];
+        if html::attr_value(tag, "property") != Some("dcterms:modified") {
             continue;
+        }
+        // 自闭合的 `<meta property="dcterms:modified"/>`（没有值）：换成带值的元素（2026-10-08 审计：此前不认，另补一条，写出两条）
+        if t.kind == TagKind::SelfClosing {
+            let open = tag.trim_end_matches('>').trim_end_matches('/').trim_end();
+            return format!("{}{open}>{when}</{}>{}", &opf[..t.start], t.name, &opf[t.end..]);
         }
         if let Some(close) = html::tags_in(opf, t.end, opf.len()).find(|c| c.kind == TagKind::Close && crate::wash::opf::is_local(c.name, "meta")) {
             return format!("{}{when}{}", &opf[..t.end], &opf[close.start..]);
@@ -679,5 +710,38 @@ mod tests {
     fn ncx_title_replaced() {
         let ncx = "<ncx><docTitle><text>旧</text></docTitle><navMap/></ncx>";
         assert_eq!(set_ncx_title(ncx, "新 <书>"), "<ncx><docTitle><text>新 &lt;书&gt;</text></docTitle><navMap/></ncx>");
+    }
+
+    /// 空 `<docTitle>` 不改到第一条目录的 navLabel；没有 `<text>`、没有 docTitle 时补上。
+    #[test]
+    fn ncx_title_only_inside_doc_title() {
+        let ncx = "<ncx><docTitle></docTitle><navMap><navPoint><navLabel><text>第一章</text></navLabel></navPoint></navMap></ncx>";
+        assert_eq!(set_ncx_title(ncx, "新"), "<ncx><docTitle><text>新</text></docTitle><navMap><navPoint><navLabel><text>第一章</text></navLabel></navPoint></navMap></ncx>");
+        assert_eq!(set_ncx_title("<ncx><docTitle/><navMap/></ncx>", "新"), "<ncx><docTitle><text>新</text></docTitle><navMap/></ncx>");
+        assert_eq!(set_ncx_title("<ncx><head/><navMap/></ncx>", "新"), "<ncx><head/><docTitle><text>新</text></docTitle><navMap/></ncx>");
+        assert_eq!(set_ncx_title("<x/>", "新"), "<x/>");
+    }
+
+    /// 只认直属链接：「部」自己没有链接、子项第一条指向封面时，只删那条子项，「部」和别的子项留着。
+    #[test]
+    fn drop_entries_only_by_own_link() {
+        let nav = r#"<nav><ol><li><span>第一部</span><ol><li><a href="cover.xhtml">封面</a></li><li><a href="c.xhtml">第一章</a></li></ol></li></ol></nav>"#;
+        let out = drop_entries_pointing_to(nav, "OEBPS/nav.xhtml", "li", &["OEBPS/cover.xhtml"]);
+        assert_eq!(out, r#"<nav><ol><li><span>第一部</span><ol><li><a href="c.xhtml">第一章</a></li></ol></li></ol></nav>"#);
+        // 自己指向封面的整条连子项删掉
+        let nav = r#"<ol><li><a href="cover.xhtml">封面</a><ol><li><a href="c.xhtml">x</a></li></ol></li> <li><a href="d.xhtml">y</a></li></ol>"#;
+        assert_eq!(drop_entries_pointing_to(nav, "nav.xhtml", "li", &["cover.xhtml"]), r#"<ol><li><a href="d.xhtml">y</a></li></ol>"#);
+        // NCX：父 navPoint 指向别处，子 navPoint 指向封面
+        let ncx = r#"<navMap><navPoint id="a"><navLabel><text>部</text></navLabel><content src="p.xhtml"/><navPoint id="b"><content src="cover.xhtml"/></navPoint></navPoint></navMap>"#;
+        assert_eq!(drop_entries_pointing_to(ncx, "toc.ncx", "navPoint", &["cover.xhtml"]), r#"<navMap><navPoint id="a"><navLabel><text>部</text></navLabel><content src="p.xhtml"/></navPoint></navMap>"#);
+    }
+
+    #[test]
+    fn set_modified_replaces_self_closing() {
+        let opf = r#"<package><metadata><meta property="dcterms:modified" /></metadata></package>"#;
+        let out = set_modified(opf, "2026-10-08T00:00:00Z");
+        assert_eq!(out, r#"<package><metadata><meta property="dcterms:modified">2026-10-08T00:00:00Z</meta></metadata></package>"#);
+        let opf = r#"<package><metadata><meta property="dcterms:modified">old</meta></metadata></package>"#;
+        assert_eq!(set_modified(opf, "new").matches("dcterms:modified").count(), 1);
     }
 }

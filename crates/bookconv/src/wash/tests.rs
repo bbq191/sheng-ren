@@ -1655,3 +1655,111 @@
         let nav = toc::build_nav(&items, "OEBPS", "目录");
         assert_eq!(nav.matches("<ol>").count(), nav.matches("</ol>").count());
     }
+
+    // ───────── 2026-10-08 清洗层审计（`audit_*` 复现用例搬过来，改成断言） ─────────
+
+    const AUDIT_OPF: &str = r#"<?xml version="1.0"?><package version="2.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
+
+    /// 锚点在最后一个 `</body>` 后面：以前切片越界 panic，整本失败。
+    #[test]
+    fn audit_anchor_after_body_no_panic() {
+        let ncx = r#"<ncx><navMap><navPoint id="a"><navLabel><text>第一章</text></navLabel><content src="c1.xhtml#x"/></navPoint><navPoint id="b"><navLabel><text>第二章</text></navLabel><content src="c1.xhtml"/></navPoint></navMap></ncx>"#;
+        let c1 = r#"<html><head></head><body><p>正文</p></body><p id="x">尾巴</p></html>"#;
+        let mut v = vec![e("content.opf", AUDIT_OPF), e("toc.ncx", ncx), e("c1.xhtml", c1)];
+        let mut rep = WashReport::default();
+        toc::repair_ncx_targets(&mut v, &mut rep);
+        let mut v = vec![e("content.opf", AUDIT_OPF), e("toc.ncx", ncx), e("c1.xhtml", c1)];
+        assert!(wash_entries(&mut v, &WashOpts { repair_only: true, kindle_rules: true, ..Default::default() }).is_ok());
+    }
+
+    /// `@charset` 开头的样式表：第一条规则以前被当成选择器的一部分，没去掉下边距。
+    #[test]
+    fn audit_tail_spacing_after_charset() {
+        let cls: HashSet<String> = ["chap".to_string()].into_iter().collect();
+        let out = layout::strip_tail_spacing("@charset \"utf-8\";\n.chap{margin-bottom:2em;color:red}", &cls);
+        assert_eq!(out, "@charset \"utf-8\";\n.chap{color:red;}");
+    }
+
+    /// 前导零任意多的数字引用都合法（以前只认 8 位，`&#000000065;` 被转义成字面文字）；有效位太多的算非法字符。
+    #[test]
+    fn audit_long_numeric_ref() {
+        let mut fx = normalize::XmlFixes::default();
+        assert_eq!(normalize::normalize_markup("<p>&#000000065;&#x00000000041;</p>", true, &mut fx), "<p>&#000000065;&#x00000000041;</p>");
+        assert_eq!(normalize::normalize_markup("<p>a&#99999999999;b</p>", true, &mut fx), "<p>ab</p>");
+    }
+
+    /// `src="a&amp;b.jpg"` 指的是 `a&b.jpg`：以前不还原字符引用，图被当成死引用删了。
+    #[test]
+    fn audit_dead_img_with_escaped_ampersand() {
+        let opf = r#"<?xml version="1.0"?><package version="2.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="i" href="a&amp;b.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+        let c1 = r#"<html><head></head><body><p>正文</p><img src="a&amp;b.jpg"/><img src="gone.jpg"/></body></html>"#;
+        let mut v = vec![e("content.opf", opf), e("c1.xhtml", c1), e("a&b.jpg", "x")];
+        let rep = wash_entries(&mut v, &WashOpts { repair_only: true, ..Default::default() }).unwrap();
+        let out = s(&v, "c1.xhtml");
+        assert!(out.contains(r#"<img src="a&amp;b.jpg"/>"#) && !out.contains("gone.jpg"), "{out}");
+        assert_eq!(rep.dead_refs_removed, 1);
+    }
+
+    /// 注入的 `<link href>`：百分号编码（目录名有空格）、XML 转义，重复注入不叠加。
+    #[test]
+    fn audit_injected_link_href_encoded() {
+        let h = "<html><head><title>x</title></head><body></body></html>";
+        let once = typeset::inject_css_link_first(h, "a&b.css");
+        assert!(once.contains(r#"href="a&amp;b.css""#), "{once}");
+        assert_eq!(typeset::inject_css_link_first(&once, "a&b.css"), once);
+        assert_eq!(typeset::inject_css_link(&once, "a&b.css"), once);
+        let opf = r#"<?xml version="1.0"?><package version="2.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="../A%26B/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+        let mut v = vec![e("O P/content.opf", opf), e("A&B/c1.xhtml", "<html><head><title>x</title></head><body><p>正文</p></body></html>")];
+        wash_entries(&mut v, &WashOpts { repair_only: true, kindle_rules: true, ..Default::default() }).unwrap();
+        let out = s(&v, "A&B/c1.xhtml");
+        assert!(out.contains(r#"href="../O%20P/eink-ua.css""#), "{out}");
+    }
+
+    /// 不是 UTF-8 的 html：自动目录只收已有 id 的标题，不补 id、不写回（以前按 lossy 转出的文字写回，原字节被改坏）。
+    #[test]
+    fn audit_non_utf8_html_not_rewritten() {
+        let raw: &[u8] = b"<html><body><h1>\xb5\xda\xd2\xbb</h1><h2 id=\"a\">x</h2></body></html>";
+        let mut v = vec![Entry { name: "c1.xhtml".into(), data: raw.to_vec() }];
+        let items = toc::collect_toc_headings(&mut v, &["c1.xhtml".to_string()], None);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].frag, "a");
+        assert_eq!(v[0].data, raw);
+    }
+
+    /// 补节进目录：节插在所属的章后面、深一级；按位置排好的走二分（和逐条插入的结果相同）。
+    #[test]
+    fn merge_sections_places_each_under_its_chapter() {
+        let opf = r#"<?xml version="1.0"?><package version="2.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#;
+        let ncx = r#"<ncx><navMap><navPoint id="a"><navLabel><text>第一章</text></navLabel><content src="c1.xhtml"/></navPoint><navPoint id="b"><navLabel><text>第二章</text></navLabel><content src="c2.xhtml"/></navPoint></navMap></ncx>"#;
+        let c1 = r#"<html><body><h1>第一章</h1><h2 id="s1">一</h2><p>甲</p><h2 id="s2">二</h2><p>乙</p></body></html>"#;
+        let c2 = r#"<html><body><h1>第二章</h1><h2 id="s3">三</h2><p>丙</p></body></html>"#;
+        let sec = |p: &str, id: &str, l: &str| toc::SectionRef { path: p.into(), id: id.into(), label: l.into() };
+        let book = || vec![e("content.opf", opf), e("toc.ncx", ncx), e("c1.xhtml", c1), e("c2.xhtml", c2)];
+        let want = [(1, "第一章"), (2, "一"), (2, "二"), (1, "第二章"), (2, "三")];
+        let got = |v: &[Entry]| crate::ncx::parse_nav_points(&s(v, "toc.ncx")).into_iter().map(|p| (p.depth, p.label)).collect::<Vec<_>>();
+        let mut v = book();
+        assert_eq!(toc::merge_sections_into_toc(&mut v, &[sec("c1.xhtml", "s1", "一"), sec("c1.xhtml", "s2", "二"), sec("c2.xhtml", "s3", "三")], "目录"), 3);
+        assert_eq!(got(&v), want.iter().map(|(d, l)| (*d, l.to_string())).collect::<Vec<_>>());
+        // 位置没排好（逐条插入的老办法）：结果一样
+        let mut v = book();
+        toc::merge_sections_into_toc(&mut v, &[sec("c2.xhtml", "s3", "三"), sec("c1.xhtml", "s1", "一"), sec("c1.xhtml", "s2", "二")], "目录");
+        assert_eq!(got(&v), want.iter().map(|(d, l)| (*d, l.to_string())).collect::<Vec<_>>());
+    }
+
+    /// 选择器最后一段：按空白和 `>`、`+`、`~` 切；标签、类按 `.` 拆，伪类和属性选择器不算。
+    #[test]
+    fn last_compound_of_selectors() {
+        assert_eq!(css::last_compound(" div.a > p.b:first-child "), "p.b:first-child");
+        assert_eq!(css::last_compound("h1+p.x"), "p.x");
+        assert_eq!(css::compound_tag_classes("P.a.b[title]"), ("p".to_string(), vec!["a", "b"]));
+        assert_eq!(css::compound_tag_classes(".x"), (String::new(), vec!["x"]));
+    }
+
+    /// 分部前缀认全角数字、「零」「两」和「编」（以前只有定章节那套认，目录重建这套不认）。
+    #[test]
+    fn part_prefix_shares_chapter_numbers() {
+        for t in ["第１部　雪人", "第两卷", "第一编 总论", "第一〇部"] {
+            assert!(toc::part_prefix_re().is_match(t), "{t}");
+        }
+        assert!(!toc::part_prefix_re().is_match("第一章"));
+    }

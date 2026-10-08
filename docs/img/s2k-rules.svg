@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 526" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>Send to Kindle 的样式规则怎么落到三台：Kindle 由 KFX 写出器做全套，掌阅、Move 由 kindle_rules 改书里的样式</title>
+  <style>
+    .hd{font-weight:bold;font-size:14px}
+    .s{font-size:12.5px;fill:#333}
+    .n{font-size:12px;fill:#555}
+    .y{fill:#2e7d4a}
+    .x{fill:#b03030}
+    .k{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.2}
+    .i{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.2}
+    .m{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.2}
+    .r{fill:#f3eefa;stroke:#8a63c9;stroke-width:1.2}
+  </style>
+  <rect width="960" height="526" fill="#ffffff"/>
+  <text x="20" y="28" class="hd">Send to Kindle 的规则表（24 本样本逐属性对出来）→ 三台各由谁来做</text>
+  <rect class="r" x="20" y="44" width="380" height="40" rx="6"/>
+  <text x="210" y="62" text-anchor="middle" class="hd">规则</text><text x="210" y="78" text-anchor="middle" class="n">docs/kfx.md#send-to-kindle-的样式规则</text>
+  <rect class="k" x="410" y="44" width="170" height="40" rx="6"/>
+  <text x="495" y="62" text-anchor="middle" class="hd">Kindle</text><text x="495" y="78" text-anchor="middle" class="n">KFX 写出器</text>
+  <rect class="i" x="590" y="44" width="170" height="40" rx="6"/>
+  <text x="675" y="62" text-anchor="middle" class="hd">掌阅</text><text x="675" y="78" text-anchor="middle" class="n">kindle_rules（改 EPUB）</text>
+  <rect class="m" x="770" y="44" width="170" height="40" rx="6"/>
+  <text x="855" y="62" text-anchor="middle" class="hd">Move</text><text x="855" y="78" text-anchor="middle" class="n">kindle_rules（改 EPUB）</text>
+  <rect x="20" y="96" width="920" height="40" fill="#f7f7f7"/>
+  <text x="32" y="121" class="s">标签缺省样式（&lt;p&gt; 上下 1em、标题粗体和字号）</text>
+  <text x="420" y="121" class="s y">✓ 写出器按 uastyle</text>
+  <text x="600" y="121" class="s y">✓ 写 eink-ua.css</text>
+  <text x="780" y="121" class="s y">✓ 同掌阅</text>
+  <text x="32" y="161" class="s">正文字体用阅读器的字体</text>
+  <text x="420" y="161" class="s y">✓ 写 default</text>
+  <text x="600" y="161" class="s y">✓ 去掉 font-family</text>
+  <text x="780" y="161" class="s y">✓ 同掌阅</text>
+  <rect x="20" y="176" width="920" height="40" fill="#f7f7f7"/>
+  <text x="32" y="201" class="s">body 左右边距不要（负外边距那侧照留）</text>
+  <text x="420" y="201" class="s y">✓</text>
+  <text x="600" y="201" class="s y">✓ 删声明</text>
+  <text x="780" y="201" class="s y">✓ 同掌阅</text>
+  <text x="32" y="241" class="s">文字和背景对比度至少 4.5:1</text>
+  <text x="420" y="241" class="s y">✓</text>
+  <text x="600" y="241" class="s y">✓ 调深/调浅</text>
+  <text x="780" y="241" class="s y">✓ 同掌阅</text>
+  <rect x="20" y="256" width="920" height="40" fill="#f7f7f7"/>
+  <text x="32" y="281" class="s">CSS → KFX 的写法换算（百分比、align、链接色……）</text>
+  <text x="420" y="281" class="s y">✓</text>
+  <text x="600" y="281" class="s n">— 按 CSS 排本来如此</text>
+  <text x="780" y="281" class="s n">— 同左</text>
+  <text x="32" y="321" class="s">字号、行高按正文归一</text>
+  <text x="420" y="321" class="s y">✓</text>
+  <text x="600" y="321" class="s x">✗ 阅读器设置能调</text>
+  <text x="780" y="321" class="s x">✗ 同左</text>
+  <rect x="20" y="336" width="920" height="40" fill="#f7f7f7"/>
+  <text x="32" y="361" class="s">首行缩进写百分比</text>
+  <text x="420" y="361" class="s y">✓</text>
+  <text x="600" y="361" class="s x">✗</text>
+  <text x="780" y="361" class="s x">✗</text>
+  <text x="32" y="401" class="s">空段折成下一段的上边距</text>
+  <text x="420" y="401" class="s y">✓ 0.6 × 空段行高</text>
+  <text x="600" y="401" class="s x">✗ 按 CSS 排空行</text>
+  <text x="780" y="401" class="s x">✗</text>
+  <line x1="20" y1="416" x2="940" y2="416" stroke="#ccc"/>
+  <text x="20" y="444" class="n">· 前四条是会让 Kindle 和按 CSS 排的阅读器看起来不一样的；掌阅、Move 只改值、删声明，文字一个不动（2026-10-08 用户定）。</text>
+  <text x="20" y="466" class="n">· 三台对 24 本 Amazon 样本逐项比，一致率 98.7%–100%（tools/kfx/s2kdev.py；掌阅、Move 量的是 EPUB 交给阅读器的样式，不含阅读器自己的怪癖）。</text>
+  <text x="20" y="488" class="n">· 真机：掌阅看过五本 ✓；Kindle、Move 还没看。</text>
+</svg>

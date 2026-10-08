@@ -26,25 +26,11 @@ import re
 import sys
 import zipfile
 import xml.parsers.expat
-from urllib.parse import unquote
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from regresslib import index, pairs, spine_paths  # noqa: E402
 
 MARKER = re.compile(r'<a\b[^>]*\bhref=["\']#[^"\']*["\'][^>]*>\s*\[\d+\]\s*</a>')
-
-
-def spine_paths(z):
-    """spine 顺序的条目路径（manifest 里找不到的 idref 跳过）。"""
-    opf_path = re.search(r'full-path=["\']([^"\']+)', z.read('META-INF/container.xml').decode()).group(1)
-    opf = z.read(opf_path).decode('utf-8', 'replace')
-    base = os.path.dirname(opf_path)
-    items = {}
-    for m in re.finditer(r'<item\b[^>]*>', opf):
-        t = m.group(0)
-        i = re.search(r'\bid=["\']([^"\']+)', t)
-        h = re.search(r'\bhref=["\']([^"\']+)', t)
-        if i and h:
-            items[i.group(1)] = h.group(1)
-    return [os.path.normpath(os.path.join(base, unquote(html.unescape(items[i])))).replace('\\', '/')
-            for i in re.findall(r'<itemref\b[^>]*\bidref=["\']([^"\']+)', opf) if i in items]
 
 
 def spine_text(z, strip_markers=False):
@@ -126,29 +112,10 @@ def main():
         sys.exit(__doc__)
     old, new = args
 
-    def index(d):
-        """编号 → 原书路径（没有 index.txt 时空）。"""
-        p = os.path.join(d, 'index.txt')
-        if not os.path.exists(p):
-            return {}
-        return dict(line.rstrip('\n').split('\t', 1) for line in open(p, encoding='utf-8') if '\t' in line)
-
-    def epubs(d):
-        return sorted(f[:-5] for f in os.listdir(d) if f.endswith('.epub'))
-
     io_, in_ = index(old), index(new)
-    # 配对：两边都有 index.txt 就按原书路径配（两次回归之间增删、改名了书，编号会错位），否则按编号
-    if io_ and in_:
-        by_src = {v: k for k, v in in_.items()}
-        pairs = [(n, by_src.get(io_.get(n))) for n in epubs(old)]
-        paired = {b for _, b in pairs if b}
-        pairs += [(None, n) for n in epubs(new) if n not in paired]
-    else:
-        have = set(epubs(new))
-        pairs = [(n, n if n in have else None) for n in epubs(old)] + [(None, n) for n in epubs(new) if n not in set(epubs(old))]
     bad = 0
     inv_old = inv_new = 0
-    for na, nb in pairs:
+    for na, nb in pairs(old, new):
         if nb is None:
             print('MISSING', na, io_.get(na, ''))
             bad += 1
@@ -196,12 +163,18 @@ def main():
         elif not notes:
             # 没核对就不能算通过（计为问题）
             notes.append(f'未核对：原书不在（{src}）' if src else '未核对：原书不在（index.txt 里没有这本的原书路径）')
+        try:
+            same = za is not None and same_entries(za, zb)
+            ta = None if za is None or same else spine_text(za, strip)
+        except Exception as e:  # 旧产物坏了：照样报这本，不让整轮崩
+            print('BROKEN-OLD', na, f'{type(e).__name__}: {e}')
+            bad += 1
+            continue
         if za is None:
             status = 'NEW'
-        elif same_entries(za, zb):
+        elif same:
             status = 'SAME'
         else:
-            ta = spine_text(za, strip)
             if ta == tb:
                 status = 'TEXT-SAME'
             else:

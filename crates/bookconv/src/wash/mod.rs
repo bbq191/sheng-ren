@@ -56,7 +56,9 @@ mod typeset;
 // 对外（优化器、质量门、书库、统计）用到的项；其余只在清洗层内部用。
 pub use self::cover::ensure_cover_declared;
 pub use self::dead_refs::font_face_re;
-pub use self::css::{filter_css, wash_html};
+pub use self::css::filter_css;
+#[cfg(test)]
+use self::css::wash_html;
 pub use self::drm::{encrypted_targets, real_drm_items, PSEUDO_DRM_SAFE_EXTS};
 pub use self::opf::{manifest_items, opf_dc, parse_opf, tag_attr, ManifestItem, Opf, OpfDc};
 pub use self::toc::{is_toc_file, toc_entry_count, TocItem};
@@ -203,7 +205,7 @@ pub struct WashReport {
 /// 全书 CJK vs 拉丁字符占比 → 主语言（Han 字数 ≥ 拉丁字母数 = Cjk）。扫全部 html 正文，早停够量即定。
 fn detect_dominant_script(entries: &[Entry]) -> LangMode {
     let (mut han, mut latin) = (0u64, 0u64);
-    for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name)) {
+    for e in entries.iter().filter(|e| is_chapter_entry(e)) {
         let Ok(t) = std::str::from_utf8(&e.data) else { continue };
         for ch in plain_text(t).chars() {
             if matches!(ch, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}') {
@@ -223,21 +225,24 @@ fn detect_dominant_script(entries: &[Entry]) -> LangMode {
     }
 }
 
-/// 对条目表就地清洗。真 DRM 返回 Err（调用方应整体失败、原样不动）。
+/// 对条目表就地清洗。真 DRM 返回 Err（调用方应整体失败、原样不动）。漫画识别（`comic_detect::is_comic`）在定章节前按清洗到那一步的条目判。
 pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashReport, String> {
-    wash_entries_detect(entries, opts).map(|(rep, _)| rep)
+    wash_with(entries, opts, None)
 }
 
-/// 同 [`wash_entries`]，另返回漫画识别结果（`comic_detect::is_comic`，定章节前判一次；优化器直接用，不再判第二遍——
-/// 后面各步只补 id、改目录、清章尾空白，不改图片数和字数，判定结果不变）。
-pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<(WashReport, bool), String> {
+/// 同 [`wash_entries`]，漫画识别用调用方判好的结果（优化器按原书判一次，清洗层和图片处理用同一个结果，不再判第二遍）。
+pub(crate) fn wash_entries_as(entries: &mut Vec<Entry>, opts: &WashOpts, comic: bool) -> Result<WashReport, String> {
+    wash_with(entries, opts, Some(comic))
+}
+
+fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> Result<WashReport, String> {
     let mut rep = WashReport::default();
     strip_pseudo_drm(entries, &mut rep)?;
     // 文件名有安卓存储不能用的字符的先改名：后面各步按条目名找文件
     safe_names::rename_unsafe_entries(entries, &mut rep);
     if opts.repair_only {
         repair_entries(entries, opts, &mut rep);
-        return Ok((rep, false));
+        return Ok(rep);
     }
     remove_empty_pages(entries, &mut rep);
     drop_dead_refs(entries, &mut rep);
@@ -270,7 +275,7 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     };
     // 书的样式表里写了首行缩进的类（英文首段顶格时不留在 eink-flush 上，见 `typeset::flush_first_para_after_heading`）
     let mut indent_classes: HashSet<String> = HashSet::new();
-    for e in entries.iter_mut().filter(|e| e.name.to_ascii_lowercase().ends_with(".css")) {
+    for e in entries.iter_mut().filter(|e| is_css_name(&e.name)) {
         if let Ok(t) = std::str::from_utf8(&e.data) {
             let css = filter_css(t, opts);
             if opts.lang == LangMode::Latin {
@@ -282,13 +287,13 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     }
     // 逐文件独立，多线程做（`util::par_map_mut`，结果与逐个做相同）
     let counts = crate::util::par_map_mut(entries, |e| {
-        if !is_html_entry(&e.name, &e.data) || is_toc_file(&e.name) {
+        if !is_chapter_entry(e) {
             return None;
         }
         let t = std::str::from_utf8(&e.data).ok()?;
         let (marked, n) = fonts::mark_annotations(t, &font_plan);
         let (out, dups) = wash_html_with(&marked, opts, &indent_classes);
-        let href = relative_to(dir_of(&e.name), &css_path);
+        let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
         let out = inject_css_link(&out, &href);
         let out = ensure_html_lang(&align_classes(&out), &lang_tag);
         e.data = out.into_bytes();
@@ -308,7 +313,7 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     auto_toc(entries, opts.auto_toc, heading, &mut rep);
     // 定章节、补节进目录放在自动目录之后：自动目录给标题补的 id 已经在，改目录链接时能对上。漫画不做。
     // 不拆文件（2026-10-06 用户定：章节不强制分页，原书的文件结构原样保留）。
-    let comic = crate::comic_detect::is_comic(entries);
+    let comic = comic.unwrap_or_else(|| crate::comic_detect::is_comic(entries));
     if !comic {
         chapters_into_toc(entries, heading, &mut rep);
     }
@@ -320,17 +325,17 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     // 升级可能补了标识符，NCX 的 dtb:uid 在它之后对齐。
     normalize::normalize_book(entries, &lang_tag, heading, &mut rep);
     fix_ncx_uid(entries, &mut rep);
-    Ok((rep, comic))
+    Ok(rep)
 }
 
-/// 只修复（[`WashOpts::repair_only`]，文字书；2026-10-08 用户定 Kindle、掌阅这样做）：书里的文字、图片、样式一概不动，只做
+/// 只修复（[`WashOpts::repair_only`]，文字书；2026-10-08 用户定三台（Kindle、掌阅、Move）都这样做）：书里的文字、图片、样式一概不动，只做
 /// - 合规：指向不存在文件的引用去掉（`drop_dead_refs`）、一个标签上重复的 `id` 合并、跨文件重复的 id 改名（链接跟着改）、
 ///   NCX 的 DOCTYPE 和 manifest id、`dtb:uid` 对齐，最后规范整理成 EPUB 3（`normalize.rs`：合法 XML、OPF 3.0、nav 与 NCX 互补）；
 /// - 目录：指错位置的改指、分部重建、没有目录的按标题生成、按目录层级定章节并把漏掉的节补进目录（补的 id 不改显示）；
 /// - 照 Send to Kindle 的规则统一（[`WashOpts::kindle_rules`]，掌阅、Move）：标签缺省样式表挂在书自带样式之前，正文字体、
 ///   body 左右边距、文字对比度改进书的样式表（`kindle_rules.rs`）。
 ///
-/// 伪 DRM 剥离、文件名改安全字符在调用方（[`wash_entries_detect`]）已经做了。
+/// 伪 DRM 剥离、文件名改安全字符在调用方（[`wash_with`]）已经做了。
 fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashReport) {
     let auto_toc_mode = opts.auto_toc;
     drop_dead_refs(entries, rep);
@@ -338,7 +343,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     let lang_tag = book_lang_tag(entries, find_opf(entries), lang);
     let heading = toc_title(lang);
     let dups = crate::util::par_map_mut(entries, |e| {
-        if !is_html_entry(&e.name, &e.data) || is_toc_file(&e.name) {
+        if !is_chapter_entry(e) {
             return 0;
         }
         let Ok(t) = std::str::from_utf8(&e.data) else { return 0 };
@@ -403,11 +408,11 @@ fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport) {
         _ => name.to_string(),
     };
     let linked = crate::util::par_map_mut(entries, |e| {
-        if !is_html_entry(&e.name, &e.data) || is_toc_file(&e.name) {
+        if !is_chapter_entry(e) {
             return false;
         }
         let Ok(t) = std::str::from_utf8(&e.data) else { return false };
-        let out = typeset::inject_css_link_first(t, &relative_to(dir_of(&e.name), &css_path));
+        let out = typeset::inject_css_link_first(t, &crate::epubzip::href_to(dir_of(&e.name), &css_path, ""));
         let changed = out != t;
         e.data = out.into_bytes();
         changed
@@ -434,6 +439,16 @@ fn add_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path: &st
             entries[oi].data = t.into_bytes();
         }
     }
+}
+
+/// 条目名是不是样式表（`.css`，不分大小写）。
+pub(crate) fn is_css_name(name: &str) -> bool {
+    name.len() >= 4 && name.as_bytes()[name.len() - 4..].eq_ignore_ascii_case(b".css")
+}
+
+/// 正文章节：是 html、又不是目录文件（[`is_toc_file`]）。
+pub(crate) fn is_chapter_entry(e: &Entry) -> bool {
+    is_html_entry(&e.name, &e.data) && !is_toc_file(&e.name)
 }
 
 /// 比较标题文字用：去掉所有空白（含全角空格）。

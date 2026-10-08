@@ -83,16 +83,17 @@ impl Rules {
     /// `@media` 块按 `media` 求值（见 [`media_ok`]）。
     pub fn parse(css: &str, base: &str, media: Option<&MediaEnv>) -> Arc<Rules> {
         let mut r = Rules::default();
-        r.add(css, base, media);
+        r.add(&strip_comments(css), base, media);
         Arc::new(r)
     }
 
+    /// `css` 已去掉注释（嵌套的 `@media` 块直接递归，不再每层重去一遍）。
     fn add(&mut self, css: &str, base: &str, media: Option<&MediaEnv>) {
-        let css = strip_comments(css);
-        let mut rest: &str = &css;
+        let mut rest: &str = css;
         while let Some(open) = rest.find('{') {
             let head = rest[..open].trim();
-            let Some(close) = matching_brace(rest, open) else { break };
+            // 到文末还没配上的块按 CSS 规范在文末收尾（以前整块连同后面的都丢掉）
+            let close = matching_brace(rest, open).unwrap_or(rest.len());
             let body = &rest[open + 1..close];
             // 前面可能残留 `@charset …;` 之类以分号结束的 at 规则。
             let head = head.rsplit(';').next().unwrap_or("").trim();
@@ -105,12 +106,7 @@ impl Rules {
                 }
             } else if !head.is_empty() {
                 let mut decls = parse_decls(body);
-                if !base.is_empty() {
-                    for d in decls.iter_mut().filter(|d| d.value.to_ascii_lowercase().starts_with("url(")) {
-                        let inner = d.value[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']);
-                        d.value = format!("url({})", bookconv::epubzip::resolve_link(base, inner).0);
-                    }
-                }
+                resolve_urls(&mut decls, base);
                 if !decls.is_empty() {
                     for one in split_top(head, ',') {
                         let one = one.trim();
@@ -120,8 +116,19 @@ impl Rules {
                     }
                 }
             }
-            rest = &rest[close + 1..];
+            rest = rest.get(close + 1..).unwrap_or("");
         }
+    }
+}
+
+/// 声明里的 `url(…)` 按 `base`（样式表或行内 `style` 所在文件的书内路径）换成书内路径；`base` 空时不换。
+fn resolve_urls(decls: &mut [Decl], base: &str) {
+    if base.is_empty() {
+        return;
+    }
+    for d in decls.iter_mut().filter(|d| d.value.to_ascii_lowercase().starts_with("url(")) {
+        let inner = d.value[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']);
+        d.value = format!("url({})", bookconv::epubzip::resolve_link(base, inner).0);
     }
 }
 
@@ -145,26 +152,52 @@ fn strip_comments(css: &str) -> String {
     out
 }
 
-/// 找和 `open`（`{` 的位置）配对的 `}`。
-fn matching_brace(s: &str, open: usize) -> Option<usize> {
-    let mut depth = 0usize;
+/// 逐字符扫 CSS 文本（`it` 给出 (位置, 字符)），字符串里的、反斜杠转义的字符不交给 `f`，别的依次交给它；`f` 返回 `Some` 就停下返回它。
+/// 按 CSS Syntax 规范：反斜杠转义下一个字符，字符串遇到没转义的换行就结束（坏字符串）。以前落单的引号一直吞到下一个同样的引号，
+/// `{}` 配不上、后面的规则全废。找配对的括号、按分隔符拆（选择器列表、媒体查询、属性值）、算优先级都用它。
+fn scan_css<R>(it: impl Iterator<Item = (usize, char)>, mut f: impl FnMut(usize, char) -> Option<R>) -> Option<R> {
     let mut quote: Option<char> = None;
-    for (i, c) in s[open..].char_indices() {
+    let mut escaped = false;
+    for (i, c) in it {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         match (quote, c) {
+            (_, '\\') => escaped = true,
+            (Some(_), '\n' | '\r' | '\x0c') => quote = None,
             (Some(q), c) if c == q => quote = None,
             (Some(_), _) => {}
             (None, '"' | '\'') => quote = Some(c),
-            (None, '{') => depth += 1,
-            (None, '}') => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(open + i);
+            (None, c) => {
+                if let Some(r) = f(i, c) {
+                    return Some(r);
                 }
             }
-            _ => {}
         }
     }
     None
+}
+
+/// 找和 `it` 第一个字符（左括号 `l`）配对的右括号 `r` 的位置，引号里的不算。
+fn matching_close(it: impl Iterator<Item = (usize, char)>, l: char, r: char) -> Option<usize> {
+    let mut depth = 0usize;
+    scan_css(it, |i, c| {
+        if c == l {
+            depth += 1;
+        } else if c == r {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+        None
+    })
+}
+
+/// 找和 `open`（`{` 的位置）配对的 `}`。
+fn matching_brace(s: &str, open: usize) -> Option<usize> {
+    matching_close(s[open..].char_indices().map(|(i, c)| (open + i, c)), '{', '}')
 }
 
 /// 解析 `a: b; c: d !important`。切声明用 [`bookconv::html::css_decls`]（和优化器同一个：引号、括号里的 `;` 不切，
@@ -196,36 +229,40 @@ pub fn parse_decls(s: &str) -> Vec<Decl> {
 /// 按分隔符拆，括号和引号里的不拆。
 fn split_top(s: &str, sep: char) -> Vec<&str> {
     let mut out = Vec::new();
-    let (mut depth, mut quote, mut start) = (0i32, None::<char>, 0);
-    for (i, c) in s.char_indices() {
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'') => quote = Some(c),
-            (None, '(') => depth += 1,
-            (None, ')') => depth -= 1,
-            (None, c) if c == sep && depth == 0 => {
+    let (mut depth, mut start) = (0i32, 0);
+    scan_css(s.char_indices(), |i, c| {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if c == sep && depth == 0 => {
                 out.push(&s[start..i]);
                 start = i + c.len_utf8();
             }
             _ => {}
         }
-    }
+        None::<()>
+    });
     out.push(&s[start..]);
     out
 }
 
+/// 四值简写（`margin`、`padding`、`border-*`、`border-radius`）按 CSS 展开成四项：1 个值四边一样，2 个是上下、左右，
+/// 3 个是上、左右、下，4 个依次（多出来的不管）。没有值返回 `None`。
+fn four_values(value: &str) -> Option<[&str; 4]> {
+    let v: Vec<&str> = value.split_whitespace().collect();
+    Some(match v.as_slice() {
+        [a] => [*a, *a, *a, *a],
+        [a, b] => [*a, *b, *a, *b],
+        [a, b, c] => [*a, *b, *c, *b],
+        [a, b, c, d, ..] => [*a, *b, *c, *d],
+        [] => return None,
+    })
+}
+
 fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
     let four = |base: &str| -> Vec<(String, String)> {
-        let v: Vec<&str> = value.split_whitespace().collect();
-        let (t, r, b, l) = match v.as_slice() {
-            [a] => (*a, *a, *a, *a),
-            [a, b] => (*a, *b, *a, *b),
-            [a, b, c] => (*a, *b, *c, *b),
-            [a, b, c, d, ..] => (*a, *b, *c, *d),
-            [] => return Vec::new(),
-        };
-        ["top", "right", "bottom", "left"].iter().zip([t, r, b, l]).map(|(side, v)| (format!("{base}-{side}"), v.to_string())).collect()
+        let Some(v) = four_values(value) else { return Vec::new() };
+        ["top", "right", "bottom", "left"].iter().zip(v).map(|(side, v)| (format!("{base}-{side}"), v.to_string())).collect()
     };
     // `border-top: 1px solid red` 这类：拆成样式、宽度、颜色（没写的按 CSS 缺省：无、medium、当前颜色）。
     let border_side = |side: &str| -> Vec<(String, String)> {
@@ -256,16 +293,8 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
         }
         "border-radius" => {
             // 只取「/」前面的（水平半径）；顺序是左上、右上、右下、左下。
-            let h = value.split('/').next().unwrap_or("");
-            let v: Vec<&str> = h.split_whitespace().collect();
-            let (tl, tr, br, bl) = match v.as_slice() {
-                [a] => (*a, *a, *a, *a),
-                [a, b] => (*a, *b, *a, *b),
-                [a, b, c] => (*a, *b, *c, *b),
-                [a, b, c, d, ..] => (*a, *b, *c, *d),
-                [] => return Vec::new(),
-            };
-            ["top-left", "top-right", "bottom-right", "bottom-left"].iter().zip([tl, tr, br, bl]).map(|(c, v)| (format!("border-{c}-radius"), v.to_string())).collect()
+            let Some(v) = four_values(value.split('/').next().unwrap_or("")) else { return Vec::new() };
+            ["top-left", "top-right", "bottom-right", "bottom-left"].iter().zip(v).map(|(c, v)| (format!("border-{c}-radius"), v.to_string())).collect()
         }
         "list-style" => {
             let mut out = Vec::new();
@@ -281,14 +310,21 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
         }
         // `text-decoration: underline solid red` 只留线的种类。
         "text-decoration" | "text-decoration-line" => vec![("text-decoration".to_string(), value.to_ascii_lowercase())],
-        // background 简写只取颜色。
         "background" => background_shorthand(value),
         _ => vec![(prop.to_string(), value.to_string())],
     }
 }
 
-/// `background: url(…) bottom / 100% no-repeat fixed rgba(…)` 拆成各项（没写的不出现，不重置）。
+/// `background` 简写里没写的位置、尺寸记成这个值：按初始值算（不写出来）。
+const BG_INITIAL: &str = "initial";
+
+/// `background: url(…) bottom / 100% no-repeat fixed rgba(…)` 拆成各项。没写的项按 CSS 回到初始值（无图、重复、滚动、透明、
+/// 位置尺寸不写）：`background:none`、只写颜色的简写会盖掉前面规则的背景图（以前没写的不出现、不重置，背景图还留着）。
+/// `inherit`/`initial`/`unset` 这类整个值是全局关键字的不展开（不认）。
 fn background_shorthand(value: &str) -> Vec<(String, String)> {
+    if matches!(value.trim().to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer") {
+        return Vec::new();
+    }
     let spaced = {
         // 把括号外的 `/` 隔开当单独的词
         let mut out = String::new();
@@ -311,7 +347,7 @@ fn background_shorthand(value: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for t in split_top(&spaced, ' ').into_iter().map(str::trim).filter(|t| !t.is_empty()) {
         let l = t.to_ascii_lowercase();
-        if l.starts_with("url(") {
+        if l.starts_with("url(") || l == "none" {
             out.push(("background-image".to_string(), t.to_string()));
         } else if l == "/" {
             after_slash = true;
@@ -327,11 +363,13 @@ fn background_shorthand(value: &str) -> Vec<(String, String)> {
             pos.push(l);
         }
     }
-    if !pos.is_empty() {
-        out.push(("background-position".to_string(), pos.join(" ")));
+    for (k, v) in [("background-position", pos), ("background-size", size)] {
+        out.push((k.to_string(), if v.is_empty() { BG_INITIAL.to_string() } else { v.join(" ") }));
     }
-    if !size.is_empty() {
-        out.push(("background-size".to_string(), size.join(" ")));
+    for (k, init) in [("background-image", "none"), ("background-repeat", "repeat"), ("background-attachment", "scroll"), ("background-color", "transparent")] {
+        if !out.iter().any(|(p, _)| p == k) {
+            out.push((k.to_string(), init.to_string()));
+        }
     }
     out
 }
@@ -346,6 +384,7 @@ pub fn parse_bg_position(v: &str) -> [Option<Len>; 2] {
     };
     let t: Vec<&str> = v.split_whitespace().collect();
     match t.as_slice() {
+        [a] if *a == BG_INITIAL => [None, None],
         [a] if matches!(*a, "top" | "bottom") => [Some(Len::Percent(50.0)), kw(a)],
         [a] => [kw(a), Some(Len::Percent(50.0))],
         [a, b] if matches!(*a, "top" | "bottom") || matches!(*b, "left" | "right") => [kw(b), kw(a)],
@@ -390,27 +429,7 @@ fn specificity(sel: &str) -> (u32, u32, u32) {
         i.min(ch.len())
     };
     // 从 open（`(` 或 `[`）起找配对的右括号，引号里的不算；返回右括号位置（没配上返回末尾）
-    let close_of = |open: usize, l: char, r: char| -> usize {
-        let (mut depth, mut quote, mut i) = (0i32, None::<char>, open);
-        while i < ch.len() {
-            let x = ch[i];
-            match quote {
-                Some(q) if x == q => quote = None,
-                Some(_) => {}
-                None if x == '"' || x == '\'' => quote = Some(x),
-                None if x == l => depth += 1,
-                None if x == r => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return i;
-                    }
-                }
-                None => {}
-            }
-            i += 1;
-        }
-        ch.len()
-    };
+    let close_of = |open: usize, l: char, r: char| -> usize { matching_close(ch.iter().copied().enumerate().skip(open), l, r).unwrap_or(ch.len()) };
     let mut i = 0;
     while i < ch.len() {
         match ch[i] {
@@ -503,24 +522,8 @@ fn media_query(q: &str, env: Option<&MediaEnv>) -> Option<bool> {
         if b[i].is_ascii_whitespace() {
             i += 1;
         } else if b[i] == b'(' {
-            let mut depth = 0;
             let start = i;
-            while i < b.len() {
-                match b[i] {
-                    b'(' => depth += 1,
-                    b')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                i += 1;
-            }
-            if i >= b.len() {
-                return None;
-            }
+            i = matching_close(q[start..].char_indices().map(|(k, c)| (start + k, c)), '(', ')')?;
             toks.push(&q[start..=i]);
             i += 1;
         } else {
@@ -637,10 +640,8 @@ fn media_feature(f: &str, env: &MediaEnv) -> Option<bool> {
 
 /// 媒体查询里的长度 → 像素：`px` 和绝对单位（1in = 96px）；`em`/`rem`/`vw` 等相对单位求值不了。
 fn media_px(v: &str) -> Option<f64> {
-    let v = v.trim();
-    let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
-    let n: f64 = v[..end].parse().ok()?;
-    let per = match &v[end..] {
+    let (n, unit) = split_number(v.trim())?;
+    let per = match unit {
         "px" => 1.0,
         "" if n == 0.0 => 1.0,
         "in" => 96.0,
@@ -673,7 +674,8 @@ impl Sheet {
     }
 
     /// 一个元素上生效的声明（按层叠排好，后面的覆盖前面的），含行内 `style`。
-    pub fn cascade(&self, el: &ElementRef) -> HashMap<String, String> {
+    /// 行内 `style` 里的 `url(…)` 按文档路径 `base` 解析（同样式表按自己的路径；以前不解析，子目录里文档的行内背景图找不到）。
+    pub fn cascade(&self, el: &ElementRef, base: &str) -> HashMap<String, String> {
         // (!important, 优先级, 出现顺序, 声明)
         type Hit<'a> = (bool, (u32, u32, u32), usize, &'a Decl);
         let mut hits: Vec<Hit> = Vec::new();
@@ -686,7 +688,8 @@ impl Sheet {
                 }
             }
         }
-        let inline: Vec<Decl> = el.value().attr("style").map(parse_decls).unwrap_or_default();
+        let mut inline: Vec<Decl> = el.value().attr("style").map(parse_decls).unwrap_or_default();
+        resolve_urls(&mut inline, base);
         for d in &inline {
             hits.push((d.important, (1000, 0, 0), usize::MAX, d));
         }
@@ -745,14 +748,19 @@ pub enum Len {
     Pt(f64),
 }
 
+/// 切出开头的数字和后面的单位（`1.5em` → (1.5, "em")）；数字解析不了返回 `None`。
+fn split_number(v: &str) -> Option<(f64, &str)> {
+    let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
+    Some((v[..end].parse().ok()?, &v[end..]))
+}
+
 pub fn parse_len(v: &str) -> Option<Len> {
     let v = v.trim().to_ascii_lowercase();
     if v == "0" || v == "auto" {
         return Some(Len::Em(0.0));
     }
-    let num_end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
-    let n: f64 = v[..num_end].parse().ok()?;
-    match &v[num_end..] {
+    let (n, unit) = split_number(&v)?;
+    match unit {
         "em" | "rem" => Some(Len::Em(n)),
         "%" => Some(Len::Percent(n)),
         "pt" => Some(Len::Pt(n)),
@@ -763,12 +771,15 @@ pub fn parse_len(v: &str) -> Option<Len> {
     }
 }
 
+/// 外边距、内边距、边框的 1px 折合多少 pt（Send to Kindle 的口径，见 [`parse_box_len`]）。
+const PT_PER_BOX_PX: f64 = 0.45;
+
 /// 外边距、内边距的长度：同 [`parse_len`]，但 px 按 1px＝0.45pt 换算（Send to Kindle 的口径，和边框宽度一样：《绍宋》
 /// `margin:-10px` 写成 -0.3125lh、`margin-top:-12.5px` 在半号字上写成 -1.172lh；以前按 CSS 的 1px＝0.75pt，大了 2/3）。字号不走这里。
 pub fn parse_box_len(v: &str) -> Option<Len> {
     let t = v.trim().to_ascii_lowercase();
     match t.strip_suffix("px").and_then(|n| n.trim().parse::<f64>().ok()) {
-        Some(n) => Some(Len::Pt(n * 0.45)),
+        Some(n) => Some(Len::Pt(n * PT_PER_BOX_PX)),
         None => parse_len(&t),
     }
 }
@@ -905,7 +916,7 @@ pub fn parse_border_width(v: &str) -> Option<BorderWidth> {
         _ => {}
     }
     if let Some(n) = v.strip_suffix("px") {
-        return n.trim().parse::<f64>().ok().map(|n| BorderWidth::Pt(n * 0.45));
+        return n.trim().parse::<f64>().ok().map(|n| BorderWidth::Pt(n * PT_PER_BOX_PX));
     }
     match parse_len(&v)? {
         Len::Em(n) => Some(BorderWidth::Em(n)),
@@ -1032,16 +1043,6 @@ impl Computed {
                 c.margin[0] = Some(Len::Em(margin));
                 c.margin[2] = Some(Len::Em(margin));
             }
-            // 段落、引文、图、预排版的上下外边距（UA 样式表）：Send to Kindle 给没写外边距的 `<p>` 上下各 1em
-            // （相邻的折叠成一个，《绍宋》正文段与段之间 0.8333lh）；以前不给，段落挤在一起。哪些标签、多少和 `bookconv::uastyle` 的表一致。
-            "p" | "dl" => {
-                c.margin[0] = Some(Len::Em(1.0));
-                c.margin[2] = Some(Len::Em(1.0));
-            }
-            "blockquote" | "figure" => {
-                // 左右 40px，同样按 1px＝0.45pt（＝1.5em，和列表缩进一样）
-                c.margin = [Some(Len::Em(1.0)), Some(Len::Pt(18.0)), Some(Len::Em(1.0)), Some(Len::Pt(18.0))];
-            }
             "i" | "em" | "cite" | "var" | "dfn" => c.italic = true,
             "sup" => c.superscript = true,
             "sub" => c.subscript = true,
@@ -1049,13 +1050,26 @@ impl Computed {
             "s" | "strike" | "del" => c.decoration[1] = true,
             "pre" => {
                 c.pre = true;
-                c.margin[0] = Some(Len::Em(1.0));
-                c.margin[2] = Some(Len::Em(1.0));
                 if c.font_family.is_none() {
                     c.font_family = Some("monospace".into());
                 }
             }
             _ => {}
+        }
+        // 段落、引文、图、预排版的上下外边距（UA 样式表）：Send to Kindle 给没写外边距的 `<p>` 上下各 1em
+        // （相邻的折叠成一个，《绍宋》正文段与段之间 0.8333lh）；以前不给，段落挤在一起。哪些标签、多少用 `bookconv::uastyle` 的表
+        // （只修复的文字书写进书里的 `eink-ua.css` 是同一张）。
+        use bookconv::uastyle::{BLOCK_MARGIN_TAGS, INDENTED_BLOCK_TAGS, INDENT_PX};
+        let indented = INDENTED_BLOCK_TAGS.contains(&tag);
+        if indented || BLOCK_MARGIN_TAGS.contains(&tag) {
+            c.margin[0] = Some(Len::Em(1.0));
+            c.margin[2] = Some(Len::Em(1.0));
+        }
+        if indented {
+            // 左右 40px，同样按 1px＝0.45pt（＝1.5em，和列表缩进一样）
+            let side = Some(Len::Pt(f64::from(INDENT_PX) * PT_PER_BOX_PX));
+            c.margin[1] = side;
+            c.margin[3] = side;
         }
         let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("font-size") {
@@ -1284,7 +1298,7 @@ mod tests {
         }
         let mut n = 0;
         for el in html.root_element().descendants().filter_map(ElementRef::wrap) {
-            assert_eq!(with.cascade(&el), without.cascade(&el), "{}", el.html());
+            assert_eq!(with.cascade(&el, ""), without.cascade(&el, ""), "{}", el.html());
             n += 1;
         }
         assert!(n > 8);
@@ -1315,7 +1329,7 @@ mod tests {
         s.add("@charset \"utf-8\"; p { color: red } .a { color: blue } p { color: green } @media amzn-mobi { p.a { color: black } } @font-face { font-family: x }", 0);
         let html = scraper::Html::parse_document("<html><body><p class=\"a\" style=\"text-indent:2em\">x</p></body></html>");
         let p = html.select(&Selector::parse("p").unwrap()).next().unwrap();
-        let d = s.cascade(&p);
+        let d = s.cascade(&p, "");
         assert_eq!(d.get("color").map(String::as_str), Some("blue"));
         assert_eq!(d.get("text-indent").map(String::as_str), Some("2em"));
     }
@@ -1348,8 +1362,47 @@ mod tests {
         with.add_rules(Rules::parse("p{color:red} @media screen and (max-width: 480px){p{color:blue}} @media (min-width: 600px){p{text-indent:2em}}", "", Some(&env)), 0);
         let html = scraper::Html::parse_document("<p>x</p>");
         let p = html.select(&Selector::parse("p").unwrap()).next().unwrap();
-        let d = with.cascade(&p);
+        let d = with.cascade(&p, "");
         assert_eq!((d.get("color").map(String::as_str), d.get("text-indent").map(String::as_str)), (Some("red"), Some("2em")));
+    }
+
+    /// 落单的引号按 CSS 规范在换行处结束（坏字符串），后面的规则照收；以前 `{}` 配不上、后面全废。到文末没配上的块在文末收尾。
+    #[test]
+    fn lone_quote_ends_at_newline() {
+        let css = "p { font-family: \"Georgia;\n color: gray }\nh1 { color: red }\n.a { text-indent: 2em }\n.b { content: 'x\\'}'; color: blue }\n.c { color: green";
+        let mut s = Sheet::default();
+        s.add(css, 0);
+        let html = scraper::Html::parse_document(r#"<html><body><h1 class="a">t</h1><p class="b c">x</p></body></html>"#);
+        let get = |sel: &str, k: &str| {
+            let el = html.select(&Selector::parse(sel).unwrap()).next().unwrap();
+            s.cascade(&el, "").get(k).cloned()
+        };
+        assert_eq!(get("h1", "color").as_deref(), Some("red"));
+        assert_eq!(get("h1", "text-indent").as_deref(), Some("2em"));
+        // 引号里转义的引号、`}` 不算；没收尾的最后一块照收（后出现的 green 盖过 blue）
+        assert_eq!(get("p", "color").as_deref(), Some("green"));
+        // 拆分、配括号、优先级共用一个扫描器：引号里的逗号、括号不算
+        assert_eq!(split_top(r#"a, "b,c", d(e,f), 'g\',h'"#, ','), ["a", r#" "b,c""#, " d(e,f)", r#" 'g\',h'"#]);
+        assert_eq!(matching_brace("{a{b}\"}\"c}x", 0), Some(9));
+        assert_eq!(specificity(r#"a[title=")"]:not(.x)"#), (0, 2, 1));
+        assert!(media_ok("screen and (min-width: 1px)", Some(&MediaEnv { width: 10.0, height: 10.0, device_width: 10.0, device_height: 10.0, color: false })));
+    }
+
+    /// `background:none`、只写颜色的 `background` 简写按 CSS 把没写的项（背景图等）重置成初始值；位置、尺寸回到不写。
+    #[test]
+    fn background_shorthand_resets_unset_parts() {
+        let mut s = Sheet::default();
+        s.add("div { background-image: url(a.png); background-repeat: no-repeat; background-position: center } div.n { background: none } div.c { background: #eee } div.u { background: url(b.png) }", 0);
+        let html = scraper::Html::parse_document(r#"<html><body><div>0</div><div class="n">1</div><div class="c">2</div><div class="u">3</div></body></html>"#);
+        let comps: Vec<Computed> = html
+            .select(&Selector::parse("div").unwrap())
+            .map(|el| Computed::derive(&Computed::root(), &s.cascade(&el, ""), "div"))
+            .collect();
+        assert_eq!(comps[0].bg_image.as_deref(), Some("a.png"));
+        assert!(comps[0].bg_no_repeat && comps[0].bg_position[0].is_some());
+        assert_eq!((comps[1].bg_image.as_deref(), comps[1].bg_no_repeat, comps[1].bg_position), (None, false, [None, None]));
+        assert_eq!((comps[2].bg_image.as_deref(), comps[2].background), (None, Some(0xFFEE_EEEE)));
+        assert_eq!((comps[3].bg_image.as_deref(), comps[3].bg_no_repeat, comps[3].bg_position), (Some("b.png"), false, [None, None]));
     }
 
     #[test]

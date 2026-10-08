@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 470" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>总体流程：入库 → 书库（索引）→ 按阅读模式生成（文字书、漫画分开处理）→ 自己拷到设备</title>
+  <title>总体流程：入库 → 书库（索引）→ 按阅读模式生成（文字书只修复、漫画完整处理）→ sync 直接传到接着的设备</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M0 0L10 5L0 10z" fill="#555"/>
@@ -21,7 +21,7 @@
   <text x="100" y="30" text-anchor="middle" class="h">① 入库 add / sync</text>
   <text x="340" y="30" text-anchor="middle" class="h">② 书库（索引）</text>
   <text x="630" y="30" text-anchor="middle" class="h">③ 按阅读模式生成</text>
-  <text x="935" y="30" text-anchor="middle" class="h">④ 自己拷到设备</text>
+  <text x="935" y="30" text-anchor="middle" class="h">④ sync 直接传到设备</text>
 
   <!-- 来源 -->
   <rect class="box src" x="20" y="60" width="160" height="40" rx="6"/><text x="100" y="85" text-anchor="middle">EPUB</text>
@@ -45,7 +45,7 @@
   <line x1="250" y1="262" x2="430" y2="262" stroke="#e3c68c"/>
   <text x="340" y="290" text-anchor="middle">meta --fetch 联网补</text>
   <text x="340" y="312" text-anchor="middle">简介、标签、封面</text>
-  <text x="340" y="336" text-anchor="middle" class="s">豆瓣 → Wikidata → 生成封面</text>
+  <text x="340" y="336" text-anchor="middle" class="s">豆瓣 → QQ 阅读 → Wikidata → 生成封面</text>
 
   <path class="l" d="M180 80 C205 80 205 150 228 150" marker-end="url(#a)"/>
   <path class="l" d="M180 138 C205 138 205 165 228 165" marker-end="url(#a)"/>
@@ -63,10 +63,10 @@
   <text x="560" y="156" text-anchor="end" class="s">否</text>
   <text x="700" y="156" class="s">是</text>
   <rect class="box" x="512" y="164" width="118" height="78" rx="6"/>
-  <text x="571" y="185" text-anchor="middle">文字书</text>
-  <text x="571" y="204" text-anchor="middle" class="s">解锁字体字号</text>
-  <text x="571" y="220" text-anchor="middle" class="s">排版 · 注释</text>
-  <text x="571" y="236" text-anchor="middle" class="s">章节目录</text>
+  <text x="571" y="185" text-anchor="middle">文字书：只修复</text>
+  <text x="571" y="204" text-anchor="middle" class="s">EPUB 3 · 目录到节</text>
+  <text x="571" y="220" text-anchor="middle" class="s">文字图片样式不动</text>
+  <text x="571" y="236" text-anchor="middle" class="s">各台另加（见右）</text>
   <rect class="box" x="640" y="164" width="108" height="78" rx="6"/>
   <text x="694" y="185" text-anchor="middle">漫画</text>
   <text x="694" y="204" text-anchor="middle" class="s">裁边 · 缩放</text>
@@ -77,30 +77,31 @@
   <rect class="box" x="560" y="264" width="140" height="32" rx="6"/>
   <text x="630" y="285" text-anchor="middle">质量门（只警告）</text>
   <text x="630" y="318" text-anchor="middle" class="s">产物是 EPUB；kindle 模式再转 KFX</text>
-  <text x="630" y="338" text-anchor="middle" class="s">放在书目录旁的 kindle/ ireader/ xochitl/</text>
-  <text x="630" y="356" text-anchor="middle" class="s">（add 的书在书库 output/&lt;模式&gt;/）</text>
+  <text x="630" y="338" text-anchor="middle" class="s">生成在书库临时目录，传完就删</text>
+  <text x="630" y="356" text-anchor="middle" class="s">只为接着的设备生成；电脑上不留</text>
 
   <path class="l" d="M450 208 L498 208" marker-end="url(#a)"/>
 
   <!-- 设备 -->
   <rect class="box dev" x="810" y="50" width="250" height="100" rx="8"/>
-  <text x="935" y="74" text-anchor="middle" class="h">kindle/（KFX）</text>
+  <text x="935" y="74" text-anchor="middle" class="h">kindle（KFX）</text>
   <text x="935" y="98" text-anchor="middle">Kindle 自带阅读器</text>
-  <text x="935" y="120" text-anchor="middle" class="s">文字书流式 · 漫画固定版式</text>
-  <text x="935" y="138" text-anchor="middle" class="s">USB 拷进 documents/</text>
+  <text x="935" y="120" text-anchor="middle" class="s">KFX 写出器照 Send to Kindle 规则表</text>
+  <text x="935" y="138" text-anchor="middle" class="s">USB（jmtpfs）放 documents/</text>
   <rect class="box dev" x="810" y="162" width="250" height="102" rx="8"/>
-  <text x="935" y="186" text-anchor="middle" class="h">ireader/（EPUB）</text>
+  <text x="935" y="186" text-anchor="middle" class="h">ireader（EPUB）</text>
   <text x="935" y="210" text-anchor="middle">掌阅自带阅读器</text>
-  <text x="935" y="232" text-anchor="middle" class="s">注释弹窗 · 漫画往左翻</text>
-  <text x="935" y="250" text-anchor="middle" class="s">USB 导入</text>
+  <text x="935" y="232" text-anchor="middle" class="s">+ kindle_rules · 漫画往左翻</text>
+  <text x="935" y="250" text-anchor="middle" class="s">USB（jmtpfs）放 documents/</text>
   <rect class="box dev" x="810" y="276" width="250" height="90" rx="8"/>
-  <text x="935" y="298" text-anchor="middle" class="h">xochitl/（EPUB，彩色）</text>
+  <text x="935" y="298" text-anchor="middle" class="h">xochitl（EPUB，彩色）</text>
   <text x="935" y="320" text-anchor="middle">Move 自带阅读器</text>
-  <text x="935" y="340" text-anchor="middle" class="s">网页上传；漫画要登记页边距</text>
+  <text x="935" y="340" text-anchor="middle" class="s">+ kindle_rules + 注释可跳</text>
+  <text x="935" y="358" text-anchor="middle" class="s">SSH 调书架服务导入，按子目录建文件夹</text>
   <path class="d" d="M760 180 C786 180 786 100 808 100" marker-end="url(#a)"/>
   <path class="d" d="M760 208 L808 208" marker-end="url(#a)"/>
   <path class="d" d="M760 236 C786 236 786 320 808 320" marker-end="url(#a)"/>
 
-  <text x="540" y="410" text-anchor="middle" class="s">booklib sync 同步后按全部阅读模式生成（--device=kindle 只生成一个）；拷到设备上由你自己来（文件管理器或同步工具）</text>
-  <text x="540" y="434" text-anchor="middle" class="s">三个模式用同一套规则，差别都写在模式的配置里；Kindle 的产物是同一份优化结果再转 KFX；三台都用自带阅读器，不装 KOReader</text>
+  <text x="540" y="410" text-anchor="middle" class="s">booklib sync 同步后为接着的设备生成并传上去（只传有变化的；没接上的下次再传；原件删了设备上也删）</text>
+  <text x="540" y="434" text-anchor="middle" class="s">三个模式用同一套代码，差别都写在模式的配置里；文字书三台都只修复（2026-10-08），漫画照旧完整处理；三台都用自带阅读器</text>
 </svg>

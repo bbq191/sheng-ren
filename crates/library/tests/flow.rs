@@ -747,6 +747,26 @@ fn fetched_description_already_in_the_book_does_not_change_the_fingerprint() {
     assert_ne!(fp3, fp0);
     let m4 = set_info(serde_json::json!({"source": "t", "description": "又一份", "subjects": ["推理"]}));
     assert_eq!(lib.fingerprint(&m4, dev).unwrap(), fp3);
+    // 书里有没有简介、标签入库时就存进了 meta.json：原件暂时不在（换个进程，没有缓存）指纹也照旧，不显示过期
+    let mp = base.join(format!("lib/masters/{}/meta.json", m.id));
+    let j: serde_json::Value = serde_json::from_slice(&std::fs::read(&mp).unwrap()).unwrap();
+    assert_eq!(j["own_dc"], serde_json::json!({"description": true, "subjects": false}));
+    let away = base.join("挪走了.epub");
+    std::fs::rename(&src, &away).unwrap();
+    let fresh = common::open(&base.join("lib"));
+    assert_eq!(fresh.fingerprint(&fresh.list().remove(0), dev).unwrap(), fp3);
+    // 早期条目（meta.json 里没有这一项）：原件在时照旧读 OPF，结果一样；持锁时顺带存下
+    std::fs::rename(&away, &src).unwrap();
+    let mut j = j;
+    j.as_object_mut().unwrap().remove("own_dc");
+    std::fs::write(&mp, j.to_string()).unwrap();
+    let old = common::open(&base.join("lib"));
+    assert_eq!(old.fingerprint(&old.list().remove(0), dev).unwrap(), fp3);
+    assert!(!std::fs::read_to_string(&mp).unwrap().contains("own_dc"), "不持锁不写书库");
+    let locked = common::open(&base.join("lib"));
+    let _guard = locked.lock().unwrap();
+    assert_eq!(locked.fingerprint(&locked.list().remove(0), dev).unwrap(), fp3);
+    assert!(std::fs::read_to_string(&mp).unwrap().contains("own_dc"), "持锁时存下");
 }
 
 #[test]
@@ -1240,4 +1260,85 @@ fn pipeline_transfers_in_background_and_records_when_done() {
     assert!(std::fs::read_dir(&lib_dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".tmp-")), "临时目录传完就删");
     let second = run();
     assert!(second.iter().all(|b| matches!(b, Built::UpToDate(_))), "{second:?}");
+}
+
+/// 中间文件（CBZ 转出的 EPUB）按书留着：接着做别的书时不丢，这本书做完（release_prepared_of）才删。
+#[test]
+fn prepared_inputs_are_kept_per_book_until_released() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let mut ms = Vec::new();
+    for (t, w) in [("甲", 600), ("乙", 610)] {
+        let cbz = dir.path().join(format!("{t}.cbz"));
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&cbz).unwrap());
+        for i in 1..=2 {
+            z.start_file(format!("p{i}.jpg"), zip::write::SimpleFileOptions::default()).unwrap();
+            z.write_all(&jpeg(w, 900)).unwrap();
+        }
+        z.finish().unwrap();
+        let Added::New(m) = lib.add_file(&cbz).unwrap() else { panic!() };
+        ms.push(m);
+    }
+    let src_dir = |m: &library::Meta| lib_dir.join(format!(".tmp-{}-src", m.id));
+    let ireader = profile::get("ireader").unwrap();
+    lib.build(&ms[0], ireader, false).unwrap();
+    let kept = std::fs::read_dir(src_dir(&ms[0])).unwrap().map(|e| e.unwrap().path()).collect::<Vec<_>>();
+    assert_eq!(kept.len(), 1, "甲转出来的 EPUB 留着");
+    let ino = |p: &std::path::Path| std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(p).unwrap());
+    let before = ino(&kept[0]);
+    lib.build(&ms[1], ireader, false).unwrap();
+    assert!(src_dir(&ms[0]).is_dir() && src_dir(&ms[1]).is_dir(), "做乙时甲的不丢");
+    // 甲留到后面再给别的模式做：用的还是那份（没重新转）
+    lib.build(&ms[0], profile::get("kindle").unwrap(), false).unwrap();
+    assert_eq!(ino(&kept[0]), before, "没有重新转换");
+    lib.release_prepared_of(&ms[0].id);
+    assert!(!src_dir(&ms[0]).exists() && src_dir(&ms[1]).is_dir(), "甲做完就删，乙的还在");
+    lib.release_prepared();
+    assert!(!src_dir(&ms[1]).exists());
+}
+
+/// 同一轮里两本同名的新书放进同一个目录：前一本还在传（没记进生成记录）时，后一本也不会选同一个文件名。
+#[test]
+fn same_titled_new_books_in_flight_do_not_collide() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let mut ms = Vec::new();
+    for (f, marker) in [("一.epub", "甲"), ("二.epub", "乙")] {
+        let p = dir.path().join(f);
+        std::fs::write(&p, sample_epub_with("同名", marker)).unwrap();
+        let Added::New(m) = lib.add_file(&p).unwrap() else { panic!() };
+        ms.push(m);
+    }
+    let ireader = profile::get("ireader").unwrap();
+    // 两本都先 prepare（都还没传），再一起传完
+    let ts: Vec<_> = ms
+        .iter()
+        .map(|m| match lib.prepare(m, ireader, false).unwrap() {
+            library::Step::Transfer(t) => t,
+            library::Step::Done(b) => panic!("新书应要传：{b:?}"),
+        })
+        .collect();
+    assert!(!lib_dir.join("output-state/ireader.json").exists(), "新书不预登记");
+    let mut paths: Vec<std::path::PathBuf> = ts
+        .into_iter()
+        .map(|t| {
+            let r = t.run();
+            match lib.complete(*t, r).unwrap() {
+                Built::Written { path, .. } => path,
+                b => panic!("{b:?}"),
+            }
+        })
+        .collect();
+    paths.sort();
+    let docs = common::documents(&lib_dir, "ireader");
+    let mut want = vec![docs.join("同名.epub"), docs.join(format!("同名 [{}].epub", &ms[1].id[..6]))];
+    want.sort();
+    assert_eq!(paths, want);
+    assert!(paths.iter().all(|p| p.is_file()));
+    // 第二轮都已是最新
+    for m in &ms {
+        assert!(matches!(lib.build(m, ireader, false).unwrap(), Built::UpToDate(_)));
+    }
 }
