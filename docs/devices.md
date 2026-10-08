@@ -33,7 +33,8 @@
 | `css_rgba`（`true`） | 阅读器认 CSS 的 `rgba()` 颜色；`false` 时换成 `#rrggbb`（不透明的颜色不变，半透明按白底混合，全透明写 `transparent`；v49） | 认 | 不认 | 认 | 掌阅把 `rgba()` 那条声明整条作废（《绍宋》深红底色显示成白底），`rgb()`、`#rrggbb` 认（2026-10-06 真机测试书） |
 | `caption_fit`（`false`） | 带图注、按满宽显示会超出一页的图给 `<img>` 写行内宽度百分比，图和图注同页（v50，见[排版 · 插图](typesetting.md#8-插图)） | 开 | 开 | — | 掌阅、Kindle 不认多看图集，竖长的人物图撑满一页、图注掉到下一页；掌阅不认 `max-height`、`page-break-inside`，宽度百分比认（2026-10-06 真机 adb 截屏）；KFX 写出器只认图片宽度。xochitl 没测过（也不认行内样式） |
 | `image_alpha`（`true`） | 阅读器能正确显示图片的透明通道；`false` 时正文 `<img>`/SVG `<image>` 用到的、有透明像素的 PNG 先合成到白底（CSS 背景图不动；v50） | 不能 | 能 | 能 | Kindle（KFX）把透明处显示成黑色（《绍宋》章标题图，2026-10-06 真机），掌阅显示正确 |
-| `text_repair_only`（`false`） | 文字书只修复：EPUB 3 规范整理和目录到节，文字、图片、样式一概不动；上面 `notes` 到 `image_alpha` 这些文字书的规则都不生效（见[排版 · 只修复](typesetting.md#只修复kindle掌阅的文字书)） | `true` | `true` | — | 用户 2026-10-08 定：不动书里任何文字、图片、格式。漫画不受影响 |
+| `text_repair_only`（`false`） | 文字书只修复：EPUB 3 规范整理和目录到节，文字、图片、样式一概不动；上面 `background_images` 到 `image_alpha` 这些文字书的规则都不生效，注释的规则只在开了 `repair_note_links` 时生效（见[排版 · 只修复](typesetting.md#只修复三个模式的文字书)） | `true` | `true` | `true` | 用户 2026-10-08 定：不动书里任何文字、图片、格式、样式。漫画不受影响 |
+| `repair_note_links`（`false`） | 只修复时仍保证注释能点：注释搬进本章、改同文件锚点，按 `note_backlinks`、`note_icons` 处理 | — | — | `true` | xochitl 只认同文件 `#锚点`、只有图的链接点不了（用户 2026-10-08：xochitl 只保障注释可跳） |
 | `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"` | — | `"ltr"` | — | 掌阅遇到往右翻的书，整页图四周留左右 92、上下 124px |
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记给登记脚本、文字页补回留白 | — | — | 1 | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |

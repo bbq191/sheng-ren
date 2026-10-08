@@ -26,7 +26,13 @@ use std::collections::{HashMap, HashSet};
 ///   `bookconv::html::css_decls` 切。同一份优化后 EPUB、同一个 `--id`，20 本测试书和一卷漫画新旧写出器逐字节相同（书里都没用到这些写法）。
 /// - 9（2026-10-06）：图片节点写 CSS 的百分比宽度（`$56`，单位 `$314`，同表格宽度的写法；没有图片宽度的样本，按表格样本推的）。
 ///   以前图片一律不写宽度，Kindle 按图自身大小显示；优化器 v50 起给带图注的竖长图写 `width:P%`，图和图注排在同一页。
-pub const WRITER_VERSION: &str = "9";
+/// - 10（2026-10-08）：照 Send to Kindle 排同一本《绍宋》的结果对齐样式（逐个样式对照，置信度高的才改）：全透明的边框颜色写「透明」
+///   `$349`（以前强制不透明，信件、诗词框画成 15.75pt 的黑框）；`<p>`、`<pre>`、`<dl>` 上下 1em，`<blockquote>`、`<figure>`
+///   1em/1.5em，`<h1>`–`<h6>` 的 UA 字号和外边距（以前没有：段落挤在一起，没写样式的 `<h2>` 和正文一样大，《绝叫》）；
+///   行高按全书正文行高归一（`base_line_height`，正文用阅读器的行距设置），竖直长度按本元素行高换算；左右百分比内边距照写百分比；
+///   外边距、内边距的 px 按 1px＝0.45pt；`white-space:nowrap` 写 `$45: true`；`cover` 的页面背景写整页范围 `$645`（照 Amazon）；
+///   SVG 包着的封面图（`<image xlink:href>`）不再丢。21 本测试书文字池逐字相同，漫画、全图书逐字节不变。
+pub const WRITER_VERSION: &str = "10";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -98,6 +104,9 @@ struct Block {
     margin_left: Horiz,
     margin_right: Horiz,
     padding: [Vert; 4],
+    /// 左右内边距（右、左）：百分比照写成百分比（Send to Kindle 同样；以前按页宽 32em 换成 em，字号调大以后
+    /// 《绍宋》章名横幅 `padding: 0.3em 33%` 的两边内边距跟着变宽，挤掉文字）。上面 `padding` 的左右两项只用来判断有没有内边距。
+    padding_h: [Horiz; 2],
     /// 本块里元素的 id → 字符偏移（目录、锚点用）。
     ids: Vec<(String, usize)>,
     /// 注释正文（弹窗里显示的内容）：见 [`mark_notes`]。
@@ -308,6 +317,7 @@ impl Doc<'_> {
         let mut ml = to_horiz(comp.margin[3], fs);
         let mr = to_horiz(comp.margin[1], fs);
         let padding = [0, 1, 2, 3].map(|i| to_vert(comp.padding[i], fs));
+        let padding_h = [to_horiz(comp.padding[1], fs), to_horiz(comp.padding[3], fs)];
         // 不显示符号的列表（`list-style:none`）当普通块，照 Amazon 缩进 1.5em（测试书 L04：`$48` 4.688%）。
         if matches!(name, "ul" | "ol") && comp.margin[3].is_none() && comp.padding[3].is_none() {
             ml.em += 1.5;
@@ -326,11 +336,21 @@ impl Doc<'_> {
             b.margin_left = ml;
             b.margin_right = mr;
             b.padding = padding;
+            b.padding_h = padding_h;
             prepend_ids(&mut b.ids, lead);
             out.push(b);
             return;
         }
         if boxed {
+            // 页面一级的 `cover` 背景：照 Send to Kindle 写整页范围（`$645`），背景铺满一页而不是只在内容范围里画（《绍宋》卷首语，真机 ✓）。
+            // 2026-10-08 试过也给 `fixed` 写了尺寸的写（制作说明），真机没有效果，用户说不改了，撤回。只认 body：别的块上没见过样本。
+            let page_bg = comp.bg_cover;
+            let attrs = if name == "body" && page_bg && comp.bg_image.is_some() {
+                let b = BG_PAGE_BOUNDS_KEYS.iter().zip([0.0, 0.0, 100.0, 100.0]).map(|(&k, v)| (k, num(v, U_PERCENT))).collect();
+                vec![(BG_PAGE_BOUNDS, Value::Struct(b))]
+            } else {
+                Vec::new()
+            };
             out.push(Block {
                 kind: Kind::Container(children),
                 comp,
@@ -340,10 +360,11 @@ impl Doc<'_> {
                 margin_left: ml,
                 margin_right: mr,
                 padding,
+                padding_h,
                 ids: lead.into_iter().map(|i| (i, 0)).collect(),
                 note: false,
                 ty: None,
-                attrs: Vec::new(),
+                attrs,
                 extra: Vec::new(),
             });
             return;
@@ -379,6 +400,7 @@ impl Doc<'_> {
         b.margin_left = to_horiz(b.comp.margin[3], fs);
         b.margin_right = to_horiz(b.comp.margin[1], fs);
         b.padding = [0, 1, 2, 3].map(|i| to_vert(b.comp.padding[i], fs));
+        b.padding_h = [to_horiz(b.comp.padding[1], fs), to_horiz(b.comp.padding[3], fs)];
         b
     }
 
@@ -633,6 +655,7 @@ impl Block {
             margin_left: Horiz::default(),
             margin_right: Horiz::default(),
             padding: [0.0; 4],
+            padding_h: [Horiz::default(); 2],
             ids,
             note: false,
             ty: None,
@@ -650,7 +673,10 @@ fn image_src(el: &ElementRef) -> Option<String> {
     let v = el.value();
     match v.name() {
         "img" => v.attr("src").map(str::to_string),
-        "image" => v.attr("xlink:href").or_else(|| v.attr("href")).map(str::to_string),
+        // SVG 的 `<image xlink:href>`：属性在 xlink 命名空间里，`attr()` 只认无命名空间的，按本地名找（《绍宋》封面页
+        // `<svg><image xlink:href="../Images/cover.png"/></svg>`；以前找不到、封面页整页丢掉——优化器以前把 SVG 封面换成 `<img>`，
+        // 只修复模式不换了才露出来，2026-10-08 真机：封面没了）。
+        "image" => v.attrs().find(|(k, _)| *k == "href").map(|(_, val)| val.to_string()),
         _ => None,
     }
 }
@@ -785,6 +811,30 @@ fn body_font_to_drop(docs: &mut [ParsedDoc], book: &Loaded) -> Option<String> {
     (!embedded).then_some(body)
 }
 
+/// 全书正文的行高（元素字号的倍数）：所有文字块按字数加权，最多的那个行高；没写行高的按 normal（1.2）。
+/// Send to Kindle 把它当成阅读器行距设置的 1.0（《绍宋》正文 `line-height:1.5em`）。算出来不在 1–3 之间的不信，用 1.2。
+fn base_line_height(docs: &[ParsedDoc]) -> f64 {
+    fn walk(blocks: &[Block], count: &mut HashMap<i64, usize>) {
+        for b in blocks {
+            match &b.kind {
+                Kind::Text { text, .. } => {
+                    let key = (b.comp.line_height.unwrap_or(LH_EM) * 1000.0).round() as i64;
+                    *count.entry(key).or_default() += text.chars().filter(|c| !c.is_whitespace()).count();
+                }
+                Kind::Container(c) => walk(c, count),
+                Kind::Image { .. } => {}
+            }
+        }
+    }
+    let mut count = HashMap::new();
+    for (_, _, _, blocks) in docs {
+        walk(blocks, &mut count);
+    }
+    // 字数一样多的取小的（结果和遍历顺序无关）
+    let best = count.into_iter().max_by_key(|&(k, n)| (n, std::cmp::Reverse(k))).map(|(k, _)| k as f64 / 1000.0);
+    best.filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
+}
+
 /// 相邻块的外边距折叠（同一层）。
 fn collapse_siblings(blocks: &mut [Block]) {
     for i in 1..blocks.len() {
@@ -840,6 +890,8 @@ struct Builder {
     drop_font: Option<String>,
     /// 求值 `@media` 用（见 [`Opts::media`]）。
     media: Option<crate::css::MediaEnv>,
+    /// 全书正文的行高（元素字号的倍数，见 [`base_line_height`]）：KFX 的行高按它归一。
+    base_lh: f64,
 }
 
 impl Builder {
@@ -951,9 +1003,17 @@ impl Builder {
             Some(Len::Percent(n)) => p.push((P_TEXT_INDENT, num(n, U_PERCENT))),
             None => {}
         }
-        let lh = c.line_height.unwrap_or(LH_EM) / LH_EM;
+        // 行高按全书正文的行高归一（Send to Kindle 的做法，2026-10-08 对照《绍宋》：正文 `line-height:1.5em` 写成 1.0，
+        // 行高 1em 的标题写成 0.667，没写行高的容器 0.8）：正文用的就是阅读器的行距设置，别的按比例。以前一律除以 1.2，
+        // 正文行距比 Send to Kindle 的大 25%。
+        let lh = c.line_height.unwrap_or(LH_EM) / self.base_lh;
         p.push((P_LINE_HEIGHT, num(lh, U_LH)));
-        let vert = |v: Vert| num(v / fs / LH_EM, U_LH);
+        if c.nowrap {
+            p.push((P_NOWRAP, Value::Bool(true)));
+        }
+        // `lh` 是本元素行高的倍数（Send to Kindle：没写行高的容器行高 0.8，同样 7% 的上边距写成 2.333 而不是 1.867；
+        // 0.5em 的内边距在行高 0.667 的标题上写成 0.625）。以前按固定 1.2em 换算，行高不是 1 的块边距都偏了。
+        let vert = |v: Vert| num(v / fs / (LH_EM * lh), U_LH);
         if b.margin_top != 0.0 {
             p.push((P_MARGIN_TOP, vert(b.margin_top)));
         }
@@ -968,8 +1028,12 @@ impl Builder {
             p.push((P_MARGIN_RIGHT, horiz(b.margin_right)));
         }
         for (i, k) in [P_PADDING_TOP, P_PADDING_RIGHT, P_PADDING_BOTTOM, P_PADDING_LEFT].into_iter().enumerate() {
-            if b.padding[i] != 0.0 {
-                p.push((k, if i % 2 == 0 { vert(b.padding[i]) } else { num(b.padding[i] / fs, U_EM) }));
+            if i % 2 == 0 {
+                if b.padding[i] != 0.0 {
+                    p.push((k, vert(b.padding[i])));
+                }
+            } else if b.padding_h[i / 2] != Horiz::default() {
+                p.push((k, horiz(b.padding_h[i / 2])));
             }
         }
         if let Some(bg) = c.background {
@@ -1152,7 +1216,8 @@ fn border_props(c: &Computed) -> Vec<(u32, Value)> {
         p.push((P_BORDER_STYLE[slot], Value::Symbol(style(b))));
         p.push((P_BORDER_WIDTH[slot], bw(b.width)));
         if let Some(col) = b.color {
-            p.push((P_BORDER_COLOR[slot], Value::Int(i64::from(col))));
+            // 全透明的写「透明」（Send to Kindle 同样写 `$349`）
+            p.push((P_BORDER_COLOR[slot], if col >> 24 == 0 { Value::Symbol(COLOR_TRANSPARENT) } else { Value::Int(i64::from(col)) }));
         }
     };
     if let (Some(first), true) = (sides[0], sides.iter().all(|s| *s == sides[0])) {
@@ -1318,6 +1383,7 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
         headings: Vec::new(),
         used_fonts: Default::default(),
         drop_font: None,
+        base_lh: LH_EM,
         media: opts.media,
     };
     // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字：元数据 `cover_image` 也是按「这个名字的符号编号 − 9」
@@ -1412,6 +1478,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     }
     mark_notes(&mut parsed);
     b.drop_font = body_font_to_drop(&mut parsed, book);
+    b.base_lh = base_line_height(&parsed);
     for (si, path, lang, blocks) in parsed {
         if blocks.is_empty() {
             empty_docs.push(path.to_string());
@@ -2051,6 +2118,39 @@ mod tests {
         assert_eq!(texts.concat(), "甲乙丙丁戊己表题庚辛壬前癸");
     }
 
+    /// 照 Send to Kindle 排《绍宋》的口径（2026-10-08 对照）：行高按正文行高归一、边距按本元素行高换算、`<p>` 和标题的 UA 外边距、
+    /// 标题 UA 字号、全透明边框写「透明」、左右百分比内边距照写、px 外边距按 0.45pt、`white-space:nowrap`。
+    #[test]
+    fn styles_like_send_to_kindle() {
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>p{line-height:1.5em;text-indent:2em}
+            h1.j{line-height:1em;padding:0.5em 33%;background-color:#700}
+            blockquote.l{margin:7% 0;border:35px solid rgba(0,0,0,0)} p.c{margin:-10px;white-space:nowrap}</style></head><body>
+            <h2>一</h2><p>甲甲甲甲甲甲甲甲</p><p>乙乙乙乙乙乙乙乙</p><h1 class="j">章</h1>
+            <blockquote class="l"><p class="c">诗</p></blockquote></body></html>"#.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let styles: Vec<Value> = c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect();
+        let all = format!("{styles:?}");
+        let n = |v: f64, u: u32| format!("{:?}", num(v, u));
+        let has = |k: u32, v: &str| all.contains(&format!("({k}, {v})"));
+        // 正文 `line-height:1.5em` 是全书最多的行高 → 1.0；段间 UA 外边距 1em → 0.833333lh（相邻的折叠成一个）
+        assert!(has(P_LINE_HEIGHT, &n(1.0, U_LH)) && has(P_MARGIN_TOP, &n(0.833333, U_LH)), "{all}");
+        // 标题 UA：h2 1.5 倍字号
+        assert!(has(P_FONT_SIZE, &n(1.5, U_FONT_EM)), "{all}");
+        // 行高 1em 的 h1 → 0.666667；它的 0.5em 内边距 → 0.625lh；左右 33% 照写百分比
+        assert!(has(P_LINE_HEIGHT, &n(0.666667, U_LH)) && has(P_PADDING_TOP, &n(0.625, U_LH)) && has(P_PADDING_LEFT, &n(33.0, U_PERCENT)), "{all}");
+        // 没写行高的引文容器 1.2/1.5 = 0.8；7% 上边距（2.24em）→ 2.333333lh；35px 透明边框 → 15.75pt、颜色写「透明」
+        assert!(has(P_LINE_HEIGHT, &n(0.8, U_LH)) && has(P_MARGIN_TOP, &n(2.333333, U_LH)), "{all}");
+        assert!(has(P_BORDER_COLOR[0], &format!("Symbol({COLOR_TRANSPARENT})")) && has(P_BORDER_WIDTH[0], &n(15.75, U_PT)), "{all}");
+        // px 外边距按 1px＝0.45pt：-10px → -0.3125lh；不换行
+        assert!(has(P_MARGIN_TOP, &n(-0.3125, U_LH)) && has(P_NOWRAP, "Bool(true)"), "{all}");
+    }
+
     /// 固定版式（漫画）：照 Amazon 转的测试漫画写元数据、文档数据和每页的画布版面；从右往左翻写 `$559`。
     #[test]
     fn fixed_layout_odd_shaped_images_keep_aspect() {
@@ -2126,6 +2226,29 @@ mod tests {
         assert!(styles.contains(&format!("({P_BG_IMAGE}, Symbol(")) && styles.contains(&format!("({P_BG_REPEAT}, Symbol({BG_NO_REPEAT}))")) && styles.contains(&format!("({P_BG_ATTACHMENT}, Symbol({BG_FIXED}))")), "{styles}");
         assert!(styles.contains(&format!("({P_BG_SIZE_H}, ")) && styles.contains(&format!("({P_BACKGROUND}, Int({}))", 0xFF750000u32)), "{styles}");
         assert!(c.entities.iter().any(|e| e.ty == T_RESOURCE), "背景图登记成资源");
+        // `cover` 的页面背景：容器节点写整页范围 `$645`（同 Send to Kindle《绍宋》卷首语）
+        let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(story.contains(&format!("({BG_PAGE_BOUNDS}, Struct(")), "{story}");
+    }
+
+    /// SVG 包着的封面图（`<svg><image xlink:href>`，属性在 xlink 命名空间）写成整页图片版面（2026-10-08：以前找不到属性，封面页丢掉）。
+    #[test]
+    fn svg_wrapped_cover_kept() {
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(4, 4, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="O/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("O/c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="b" href="I/c.png" media-type="image/png" properties="cover-image"/><item id="c0" href="T/cover.xhtml" media-type="application/xhtml+xml"/><item id="c1" href="T/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c0"/><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("O/I/c.png", &png).unwrap();
+        w.put("O/T/cover.xhtml", br#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Cover</title></head><body><div style="text-align:center"><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 4 4" width="100%" height="100%"><image width="4" height="4" xlink:href="../I/c.png"/></svg></div></body></html>"#).unwrap();
+        w.put("O/T/c1.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>x</p></body></html>"#).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(story.contains(&format!("({NODE_TYPE}, Symbol({NODE_IMAGE}))")), "封面页的图片节点: {story}");
+        assert_eq!(c.entities.iter().filter(|e| e.ty == T_SECTION).count(), 2, "封面页成了一个版面");
     }
 
     /// 图片的百分比宽度写进样式（`$56`，单位百分比，同表格宽度）；别的单位不写（写出器 9）。

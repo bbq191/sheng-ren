@@ -15,6 +15,11 @@ note_backlinks = false
 # Move 上装的页边距代理在第一次开书时替我们设（xochitl/comic-margins.sh 登记）。设成 1 后 xochitl 自己就在左右各留 1px，
 # 所以画布里不再留白边（comic_margin = 0）。上 112px、下 127px 是 xochitl 固定留的，改不了。
 comic_margin = 0
+# 文字书只修复，另保证注释能点（2026-10-08 用户定：不动书里任何文字、图片、格式、样式；xochitl 只保障注释可跳）：
+# 注释搬进引用它的那一章、链接改同文件锚点（xochitl 只认同文件 #锚点），去掉回链（上面 note_backlinks），只有图标的标号换数字（上面 note_icons）。
+# 别的排版（缩进、字号解锁、外链 eink-wash.css 等）都不做了。漫画照旧。
+text_repair_only = true
+repair_note_links = true
 comic_reader_margins = 1
 
 [screen]

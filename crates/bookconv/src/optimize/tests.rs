@@ -1085,7 +1085,7 @@
     #[test]
     fn title_option_rewrites_dc_title_only_when_given() {
         let (epub, _) = bg_book();
-        let base = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        let base = OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
         let (plain, _) = optimize_epub_with(&epub, &base).unwrap();
         let (blank, _) = optimize_epub_with(&epub, &OptimizeOpts { title: Some("  ".into()), ..base.clone() }).unwrap();
         assert_eq!(plain, blank, "空白书名当没给");
@@ -1132,7 +1132,7 @@
     fn limits_default_matches_constants_and_smaller_limit_keeps_images() {
         assert_eq!(Limits::default(), Limits { max_decode_pixels: 64_000_000, pool_pixel_budget: 36_000_000 });
         let (epub, imgs) = bg_book();
-        let base = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        let base = OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
         assert_eq!(base.limits, Limits::default());
         let small = OptimizeOpts { limits: Limits { max_decode_pixels: 1_000_000, pool_pixel_budget: 0 }, ..base.clone() };
         let (out, _) = optimize_epub_with(&epub, &small).unwrap();
@@ -1200,4 +1200,38 @@
         let flat = crate::ncx::parse_ncx_flat(&text_of(&out, "OEBPS/toc.ncx"));
         let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
         assert_eq!(labels, [(1, "第一章"), (2, "一节"), (1, "注释")], "目录补到节");
+    }
+
+    /// xochitl 只修复、另保证注释能点（profile `repair_note_links`，2026-10-08 用户定）：注释搬进引用它的那一章、改同文件锚点（和原来的完整优化同一套），
+    /// 别的（样式表、行内样式、段首空格、空白页）一概不动，也不加排版样式表。
+    #[test]
+    fn xochitl_repair_keeps_content_but_notes_jump() {
+        let css = "p{font-family:\"宋体\";line-height:1.8}";
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="u"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="u">x</dc:identifier><dc:title>书</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="css" href="s.css" media-type="text/css"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="n" href="notes.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="n"/></spine></package>"#;
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>t</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">第一章</a></li></ol></nav></body></html>"#;
+        let c1 = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body><h1>第一章</h1><p style="font-size:14px">　　正文<a id="r1" href="notes.xhtml#n1">[1]</a>结束</p></body></html>"#;
+        let notes = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p class="footnote" id="n1"><a href="c1.xhtml#r1">[1]</a>注释正文</p></body></html>"#;
+        let mut buf = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zw.start_file("mimetype", stored).unwrap();
+            zw.write_all(b"application/epub+zip").unwrap();
+            zw.start_file("META-INF/container.xml", stored).unwrap();
+            zw.write_all(br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+            for (n, d) in [("OEBPS/content.opf", opf), ("OEBPS/nav.xhtml", nav), ("OEBPS/s.css", css), ("OEBPS/c1.xhtml", c1), ("OEBPS/notes.xhtml", notes)] {
+                zw.start_file(n, stored).unwrap();
+                zw.write_all(d.as_bytes()).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let opts = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        assert!(opts.text_repair_only && opts.repair_note_links);
+        let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
+        assert_eq!(text_of(&out, "OEBPS/s.css"), css, "样式表一个字不改");
+        let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
+        assert!(!names.iter().any(|n| n.ends_with("eink-wash.css")), "不加排版样式表: {names:?}");
+        let x = text_of(&out, "OEBPS/c1.xhtml");
+        assert!(x.contains(r#"style="font-size:14px""#) && x.contains("　　正文"), "行内样式、段首空格原样: {x}");
+        assert!(x.contains(r##"href="#n1""##) && x.contains("注释正文"), "注释搬进本章、链接改同文件锚点: {x}");
     }
