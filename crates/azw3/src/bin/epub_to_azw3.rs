@@ -1,4 +1,4 @@
-//! EPUB → AZW3（KF8），给 Kindle 用 USB 侧载。输入应是已按设备优化过的 EPUB（`epub-optimize --device=kindle`；书库 `booklib sync` 生成时自动转）。
+//! EPUB → AZW3（KF8），给 Kindle 用 USB 侧载。输入应是已按设备优化过的 EPUB（`epub-optimize --device=kindle`）。书库已不出 AZW3（2026-10-05 起 Kindle 出 KFX），这个命令留着单独用。
 //!
 //! 用法: epub-to-azw3 [--ebok] 输入.epub 输出.azw3
 //!   --ebok   归到 Kindle 的"书籍"（缺省"文档"PDOC：侧载书的封面显示最稳）
@@ -22,7 +22,10 @@ fn main() {
     }
     let epub = cli::open_or_die(files[0]);
     let opts = azw3::Opts { cdetype: if flags.contains(&"--ebok") { azw3::CdeType::Ebok } else { azw3::CdeType::Pdoc }, ..Default::default() };
-    let out = azw3::epub_to_azw3_from(epub, &opts).map(|(b, _)| b).unwrap_or_else(|e| die(cli::FAILED, format!("转换失败: {e}")));
+    let (out, warnings) = azw3::epub_to_azw3_from(epub, &opts).unwrap_or_else(|e| die(cli::FAILED, format!("转换失败: {e}")));
+    for w in &warnings {
+        eprintln!("警告：{w}");
+    }
     cli::write_or_die(files[1], &out);
     println!("epub-to-azw3: {} → {}（{} 字节）", files[0], files[1], out.len());
 }

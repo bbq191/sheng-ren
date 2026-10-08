@@ -59,15 +59,12 @@ class Reader:
 
     def load_symtab(self, st):
         if not isinstance(st, dict): return
-        if st.get("imports") == "$ion_symbol_table":
-            pass
-        else:
+        if st.get("imports") != "$ion_symbol_table":  # 追加到现有表；否则从系统表重来，导入的共享表按 max_id 占位
             self.symbols = list(SYS)
             for imp in st.get("imports") or []:
                 n = imp.get("max_id", 0)
                 base = len(self.symbols)
                 self.symbols += [f"${base + k}" for k in range(n)]
-                self.imported = imp
         self.symbols += [str(s) for s in st.get("symbols") or []]
 
     def value(self, b, i):

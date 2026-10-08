@@ -102,7 +102,6 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     pub screen: Screen,
-    pub ppi: u32,
     pub color: bool,
     /// 首选产物格式在前。
     pub formats: Vec<Format>,
@@ -168,7 +167,9 @@ pub struct Profile {
 struct ProfileFile {
     name: String,
     screen: Screen,
-    ppi: u32,
+    /// 以前的字段（屏幕像素密度），没有地方用，已去掉；写了也照收，旧的自定义 profile 不会因此报错。
+    #[serde(default, rename = "ppi")]
+    _ppi: Option<serde::de::IgnoredAny>,
     color: bool,
     formats: Vec<Format>,
     notes: Notes,
@@ -212,7 +213,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
@@ -245,9 +246,6 @@ impl Profile {
         }
         if width == 0 || height == 0 || width > height {
             return Err(format!("profile {}: screen 须为竖屏且非零（width <= height），实际 {width}x{height}", self.id));
-        }
-        if self.ppi == 0 {
-            return Err(format!("profile {}: ppi 为 0", self.id));
         }
         if self.formats.is_empty() {
             return Err(format!("profile {}: formats 为空", self.id));
@@ -311,32 +309,6 @@ impl Profile {
     /// 漫画页排版用的阅读范围：`comic_readable`，没写就是产物格式的阅读范围。
     pub fn comic_readable(&self) -> Screen {
         self.comic_readable.unwrap_or_else(|| self.output_readable())
-    }
-
-    /// 运行时改 `format` 的阅读范围（比如设备上量出来的值）。公开字段直接改，这两个私有字段走这里和 [`Profile::set_comic_readable`]。
-    pub fn set_readable(&mut self, format: Format, area: Screen) -> &mut Self {
-        self.readable.insert(format, area);
-        self
-    }
-
-    /// 运行时改漫画的阅读范围；`None` = 和产物格式的阅读范围一样。
-    pub fn set_comic_readable(&mut self, area: Option<Screen>) -> &mut Self {
-        self.comic_readable = area;
-        self
-    }
-
-    /// 关掉漫画的页边距模式（xochitl 的 `comic_reader_margins` + `comic_readable`）：漫画按产物格式的阅读范围排、不写
-    /// `META-INF/eink-reader-margins`、各页不做 `comicpad` 处理。`comic_margin` 不动（xochitl 是 0），要白边的调用方自己设。
-    /// 用法：`let mut p = profile::get("xochitl").unwrap().clone(); p.without_comic_reader_margins();`
-    pub fn without_comic_reader_margins(&mut self) -> &mut Self {
-        self.comic_reader_margins = None;
-        self.comic_readable = None;
-        self
-    }
-
-    /// `format` 的阅读范围是不是实测内置的（`false` = 退回了标称屏幕）。
-    pub fn has_measured_readable(&self, format: Format) -> bool {
-        self.readable.contains_key(&format)
     }
 }
 
@@ -405,17 +377,27 @@ pub fn device_from_args<S: AsRef<str>>(args: &[S]) -> Result<&'static Profile, S
 mod tests {
     use super::*;
 
-    /// 运行时从内置模式起步改字段：关掉漫画页边距模式后漫画按 EPUB 的阅读范围排；改阅读范围立刻生效。内置的不受影响。
+    /// 漫画阅读范围没写时和产物格式的一样；改了的克隆不影响内置的。
     #[test]
-    fn runtime_overrides_from_builtin() {
+    fn comic_readable_falls_back_to_output_readable() {
         let mut p = get("xochitl").unwrap().clone();
         assert_eq!((p.comic_reader_margins, p.comic_readable()), (Some(1), Screen { width: 952, height: 1457 }));
-        p.without_comic_reader_margins();
-        assert_eq!(p.comic_reader_margins, None);
+        p.comic_reader_margins = None;
+        p.comic_readable = None;
         assert_eq!(p.comic_readable(), Screen { width: 842, height: 1455 });
-        p.set_readable(Format::Epub, Screen { width: 800, height: 1400 }).set_comic_readable(Some(Screen { width: 900, height: 1450 }));
-        assert_eq!((p.output_readable(), p.comic_readable()), (Screen { width: 800, height: 1400 }, Screen { width: 900, height: 1450 }));
+        p.readable.insert(Format::Epub, Screen { width: 800, height: 1400 });
+        assert_eq!((p.output_readable(), p.comic_readable()), (Screen { width: 800, height: 1400 }, Screen { width: 800, height: 1400 }));
         assert_eq!(get("xochitl").unwrap().comic_reader_margins, Some(1));
+    }
+
+    /// 去掉了的 `ppi` 键：写了照收（不论值），不写也行。
+    #[test]
+    fn dropped_ppi_key_is_still_accepted() {
+        let rest = "name = \"x\"\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n[screen]\nwidth = 1000\nheight = 1500\n";
+        assert!(Profile::parse("x", rest).is_ok());
+        assert!(Profile::parse("x", &format!("ppi = 300\n{rest}")).is_ok());
+        assert!(Profile::parse("x", &format!("ppi = 0\n{rest}")).is_ok());
+        assert!(Profile::parse("x", &format!("dpi = 300\n{rest}")).is_err(), "别的不认识的键照样报错");
     }
 
     #[test]

@@ -235,8 +235,7 @@ pub fn downscale_background(bytes: &[u8], fit: crate::bgfit::BgFit, area: Screen
 /// 带透明（或 16 位等）的 PNG 缩放后写回 PNG。透明的按预乘 alpha 缩（`fast_image_resize` 缺省如此），透明像素的颜色
 /// 不会渗进边缘（`image` 自带的缩放不预乘，调色板图透明处常是黑色，边上会出黑边）。16 位的降成 8 位。
 fn resize_alpha_png(img: image::DynamicImage, nw: u32, nh: u32) -> Option<Vec<u8>> {
-    use fast_image_resize::images::{Image, ImageRef};
-    use fast_image_resize::{FilterType as FirFilter, PixelType, ResizeAlg, ResizeOptions, Resizer};
+    use fast_image_resize::PixelType;
     use image::{ExtendedColorType, ImageEncoder};
     let (w, h) = (img.width(), img.height());
     let (raw, pt, ct) = match img {
@@ -246,13 +245,22 @@ fn resize_alpha_png(img: image::DynamicImage, nw: u32, nh: u32) -> Option<Vec<u8
         i if !i.color().has_color() => (i.into_luma_alpha8().into_raw(), PixelType::U8x2, ExtendedColorType::La8),
         i => (i.into_rgba8().into_raw(), PixelType::U8x4, ExtendedColorType::Rgba8),
     };
-    let src = ImageRef::new(w, h, &raw, pt).ok()?;
-    let mut dst = Image::new(nw, nh, pt);
+    let dst = fir_lanczos3(&raw, w, h, pt, nw, nh)?;
+    let mut out = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut out).write_image(&dst, nw, nh, ct).ok()?;
+    Some(out)
+}
+
+/// `fast_image_resize` 的 Lanczos3 卷积缩放（[`resize_alpha_png`]、[`Page8::resize_lanczos3`] 共用同一套配置）：
+/// `raw` 是 `w × h`、像素类型 `pt` 的原始像素，返回 `dw × dh` 的像素；库报错 → `None`。
+fn fir_lanczos3(raw: &[u8], w: u32, h: u32, pt: fast_image_resize::PixelType, dw: u32, dh: u32) -> Option<Vec<u8>> {
+    use fast_image_resize::images::{Image, ImageRef};
+    use fast_image_resize::{FilterType as FirFilter, ResizeAlg, ResizeOptions, Resizer};
+    let src = ImageRef::new(w, h, raw, pt).ok()?;
+    let mut dst = Image::new(dw, dh, pt);
     let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FirFilter::Lanczos3));
     Resizer::new().resize(&src, &mut dst, &opts).ok()?;
-    let mut out = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut out).write_image(dst.buffer(), nw, nh, ct).ok()?;
-    Some(out)
+    Some(dst.into_vec())
 }
 
 /// 裁边判定容差：一行/列里像素两两 RGB 通道极差都 ≤ 这个值才算"纯色留白"。留够松（8）容 JPEG 压缩
@@ -755,21 +763,13 @@ impl Page8 {
     /// 浮点参照（PIL）都是 53–55dB——远低于随后 JPEG q95 编码本身的误差（约 45dB），没有可见差别。
     /// 库报错时退回 `image` 自带实现（类型不变）。
     pub fn resize_lanczos3(self, dw: u32, dh: u32) -> Page8 {
-        use fast_image_resize::images::{Image, ImageRef};
-        use fast_image_resize::{FilterType as FirFilter, PixelType, ResizeAlg, ResizeOptions, Resizer};
-        let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FirFilter::Lanczos3));
+        use fast_image_resize::PixelType;
         let (w, h) = self.dimensions();
         let (raw, pt) = match &self {
             Page8::Gray(g) => (g.as_raw(), PixelType::U8),
             Page8::Rgb(c) => (c.as_raw(), PixelType::U8x3),
         };
-        let fast = || -> Option<Vec<u8>> {
-            let src = ImageRef::new(w, h, raw, pt).ok()?;
-            let mut dst = Image::new(dw, dh, pt);
-            Resizer::new().resize(&src, &mut dst, &opts).ok()?;
-            Some(dst.into_vec())
-        };
-        let out = fast().and_then(|v| match self {
+        let out = fir_lanczos3(raw, w, h, pt, dw, dh).and_then(|v| match self {
             Page8::Gray(_) => image::GrayImage::from_raw(dw, dh, v).map(Page8::Gray),
             Page8::Rgb(_) => image::RgbImage::from_raw(dw, dh, v).map(Page8::Rgb),
         });

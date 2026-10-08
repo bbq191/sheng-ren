@@ -1,6 +1,5 @@
 # reMarkable Paper Pro Move 上的原生阅读器 xochitl。7.3" Gallery 3，2026-09-27 核实。
 name = "xochitl（reMarkable Paper Pro Move 原生阅读器）"
-ppi = 264
 color = true
 formats = ["epub"]
 # 注释：点标号跳到章末、用阅读器的"返回"回来（xochitl 没有弹窗，只认同文件 #锚点）

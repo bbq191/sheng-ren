@@ -1,6 +1,9 @@
 """读 KFX 容器：load(路径) → (符号表 Reader, 容器信息, [(片段名, 类型, 内容)])。分析用。"""
 import struct, sys
 from ion import *
+import os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from toollib import cli_args, cli_opts  # noqa: E402,F401  各脚本从这里拿
 def load(path):
     b=open(path,'rb').read()
     ver,hl,ci_off,ci_len=struct.unpack_from('<HIII',b,4)
@@ -16,13 +19,3 @@ def load(path):
         ents.append((str(r.sym(eid)),f'${t}',body))
     return r,ci,ents
 
-def cli_args(n, usage):
-    """命令行位置参数（不含 `--` 开头的开关）；`-h`/`--help` 打印用法退出 0，少于 `n` 个打印用法退出 1。"""
-    import sys
-    a = sys.argv[1:]
-    if any(x in ('-h', '--help') for x in a):
-        print(usage); sys.exit(0)
-    pos = [x for x in a if not x.startswith('--')]
-    if len(pos) < n:
-        print(usage, file=sys.stderr); sys.exit(1)
-    return pos

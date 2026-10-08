@@ -154,14 +154,16 @@ fn parse_ref(s: &str) -> Ref<'_> {
     let b = s.as_bytes();
     if b.get(1) == Some(&b'#') {
         let (hex, start) = if matches!(b.get(2), Some(b'x' | b'X')) { (true, 3) } else { (false, 2) };
+        // 前导零任意多都合法（`&#000000065;` 就是 `A`）：位数不设上限，去掉前导零后再换算；有效位太多（超出 u32）算非法字符
         let mut i = start;
-        while i < b.len() && i < start + 8 && (if hex { b[i].is_ascii_hexdigit() } else { b[i].is_ascii_digit() }) {
+        while i < b.len() && (if hex { b[i].is_ascii_hexdigit() } else { b[i].is_ascii_digit() }) {
             i += 1;
         }
         if i == start || b.get(i) != Some(&b';') {
             return Ref::Bare;
         }
-        let n = u32::from_str_radix(&s[start..i], if hex { 16 } else { 10 }).ok();
+        let digits = s[start..i].trim_start_matches('0');
+        let n = if digits.is_empty() { Some(0) } else if digits.len() > 8 { None } else { u32::from_str_radix(digits, if hex { 16 } else { 10 }).ok() };
         return match n.and_then(char::from_u32) {
             Some(c) if crate::util::is_xml_char(c) => Ref::Keep(i + 1),
             _ => Ref::Illegal(i + 1),

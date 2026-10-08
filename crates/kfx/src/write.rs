@@ -39,7 +39,12 @@ use std::collections::{HashMap, HashSet};
 ///   相对根；行高写成长度的按绝对值继承、下限 0.6；body 左右边距不写（负外边距那侧照加）；百分比按 CSS 实际宽度；`align`、`<font>`；
 ///   整段的行内样式并进段落；正文字体 `default`、备选整串；声明了的字重照写、`<b>` bolder；对比度 4.5；块宽度；`min-height`、阴影；
 ///   链接颜色 `$576`/`$577`；修掉 `<div><p style margin:0>` 的样式被外层盖掉。21 本测试书文字池逐字相同，漫画逐字节不变；未真机验证。
-pub const WRITER_VERSION: &str = "11";
+/// - 12（2026-10-08，审计修复）：OPF 日期只写到年、月的 `issue_date` 补成 `YYYY-01-01`/`YYYY-MM-01`（以前整个换成 2000-01-01）；
+///   行内元素中途遇到块或图片时区间在切开处截断、到新块接着（以前 panic 或区间错位）；`<ul>`/`<ol>` 里直接放的文字、图片不再丢；
+///   CSS 落单引号在换行处结束、没收尾的块在文末收尾；行内 `style` 的 `url()` 按文档路径解析；`background:none`/只写颜色的简写重置背景图；
+///   `<font size="+很大">` 不溢出；固定版式取不到图的页登记成空页；正文字体字数打平时取名字小的（确定）。
+///   24 本测试书和一卷漫画只有《风起陇西》（2011）、《绍宋》（2024-12）因日期变了，别的逐字节不变。
+pub const WRITER_VERSION: &str = "12";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -79,9 +84,13 @@ pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
     let mut warnings = Vec::new();
     let book = epubbook::load_from(epub, &mut warnings)?;
     let mut b = Builder::new(HashMap::new(), warnings, opts);
-    b.css_faithful = true;
-    build(&book, &mut b, 0)?;
-    Ok(b.dump.take().unwrap_or_default())
+    let mut parsed = parse_docs(&book, b.media, true);
+    analyze(&book, &mut b, &mut parsed);
+    let mut out = format!("#base\t{}\t{}\n", b.base_fs, b.base_lh * b.base_fs);
+    for (_, _, _, blocks) in &parsed {
+        dump_blocks(blocks, &mut out);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------- 中间结构
@@ -165,7 +174,14 @@ struct Block {
     /// 直接由行内内容合成的文字块（[`Doc::flush`]），不是哪个块级元素自己：包着它的元素可以把它当成自己的文字。
     /// 以前只看有没有边距，`<li><p class="footnote">` 这种没写边距的 `<p>` 也被当成匿名的，样式被 `<li>` 的盖掉（《春雪》注释的字号、缩进、行高）。
     inline: bool,
+    /// 前面折掉的空段（[`Doc::gap`]）：外边距折叠之后加到上边距上（[`apply_gaps`]）。
+    gap_before: Vert,
 }
+
+/// 只有空白的段落（`<p>&nbsp;</p>`、`<p>　</p>`、`<p><br/></p>`、段落之间单独的 `<br/>`）不出节点，折成下一块上边距多出的
+/// 本元素行高的这么多倍（Send to Kindle 同样，2026-10-08 量的：《绝叫》空段 0.594 行高、《金庸》`<p><br/></p>` 0.595 × 1.7em、
+/// 段落间单独的 `<br/>` 0.72em ＝ 0.6 × 缺省行高 1.2em）。以前整段丢掉、不折，场景空行在 Kindle 上没了。
+const BLANK_LINE_FOLD: f64 = 0.6;
 
 const BLOCK_TAGS: &[&str] = &[
     "address", "article", "aside", "blockquote", "body", "center", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
@@ -199,6 +215,30 @@ fn to_horiz(l: Option<Len>, fs: f64) -> Horiz {
     }
 }
 
+/// 块的外边距、内边距换算成根 em（竖直）和根 em + 百分比（水平），字段同 [`Block`]。
+struct BoxLens {
+    margin_top: Vert,
+    margin_bottom: Vert,
+    margin_left: Horiz,
+    margin_right: Horiz,
+    padding: [Vert; 4],
+    padding_h: [Horiz; 2],
+}
+
+impl BoxLens {
+    fn of(c: &Computed) -> BoxLens {
+        let fs = c.font_size;
+        BoxLens {
+            margin_top: to_vert(c.margin[0], fs),
+            margin_bottom: to_vert(c.margin[2], fs),
+            margin_left: to_horiz(c.margin[3], fs),
+            margin_right: to_horiz(c.margin[1], fs),
+            padding: [0, 1, 2, 3].map(|i| to_vert(c.padding[i], fs)),
+            padding_h: [to_horiz(c.padding[1], fs), to_horiz(c.padding[3], fs)],
+        }
+    }
+}
+
 /// CSS 外边距折叠：两个相邻外边距合成一个。
 fn collapse(a: Vert, b: Vert) -> Vert {
     match (a >= 0.0, b >= 0.0) {
@@ -216,6 +256,8 @@ struct Doc<'a> {
     /// 下一个生成的块的开头（[`Doc::take_pending`]）。以前直接丢掉，指向它们的链接、目录项退回到文件开头
     /// （《福尔摩斯探案全集》目录页「第一册」指向页末插图前的空锚点，点了停在目录页开头；全书 1102 处）。
     pending: std::cell::RefCell<Vec<String>>,
+    /// 还没落到块上的空段折出来的高度（根 em，见 [`BLANK_LINE_FOLD`]）：和 `pending` 一样给下一个生成的块。
+    gap: std::cell::Cell<Vert>,
 }
 
 /// 收集行内内容：文字（空白按 CSS 折叠）、`<br>`、行内元素的样式区间、遇到图片就切开。
@@ -225,11 +267,30 @@ struct Inline {
     runs: Vec<Run>,
     ids: Vec<(String, usize)>,
     pending_space: bool,
+    /// 还没走完的行内元素的区间（外层在前）：起点、插到 `runs` 的哪个下标（外层的区间排在里层的前面）、区间本身（长度待定）。
+    /// 走到一半遇到块或图片要切开（[`Doc::flush`]）时，区间在切开处截断，到新缓冲从 0 接着开（见 [`Inline::cut_open`]）。
+    open: Vec<(usize, usize, Run)>,
 }
 
 impl Inline {
     fn new() -> Self {
-        Inline { text: String::new(), chars: 0, runs: Vec::new(), ids: Vec::new(), pending_space: false }
+        Inline { text: String::new(), chars: 0, runs: Vec::new(), ids: Vec::new(), pending_space: false, open: Vec::new() }
+    }
+
+    /// 一个行内元素走完（或在切开处截断）：有字的话把区间插进 `runs`。
+    fn close_run(&mut self, start: usize, run_at: usize, run: Run) {
+        if self.chars > start {
+            self.runs.insert(run_at, Run { start, len: self.chars - start, ..run });
+        }
+    }
+
+    /// 切开之前：还开着的区间（从里层到外层，外层插在前面）截断在这里；返回给新缓冲用的、从 0 重新开始的区间。
+    fn cut_open(&mut self) -> Vec<(usize, usize, Run)> {
+        let open = std::mem::take(&mut self.open);
+        for (start, run_at, run) in open.iter().rev() {
+            self.close_run(*start, *run_at, run.clone());
+        }
+        open.into_iter().map(|(_, _, run)| (0, 0, run)).collect()
     }
 
     fn push_text(&mut self, s: &str, pre: bool) {
@@ -278,12 +339,12 @@ fn presentational_hints(el: &ElementRef, decls: &mut HashMap<String, String>) {
         }
         "center" => hint("text-align", "center".into()),
         "font" => {
-            // HTML 字号 1–7（同浏览器：10、13、16、18、24、32、48px，绝对字号），`+n`/`-n` 相对 3
+            // HTML 字号 1–7（同浏览器：10、13、16、18、24、32、48px，绝对字号），`+n`/`-n` 相对 3（饱和加减：`+2147483647` 以前溢出）
             if let Some(s) = e.attr("size").map(str::trim) {
                 let n = match s.strip_prefix('+') {
-                    Some(r) => r.parse::<i32>().ok().map(|r| 3 + r),
+                    Some(r) => r.parse::<i32>().ok().map(|r| 3i32.saturating_add(r)),
                     None => match s.strip_prefix('-') {
-                        Some(r) => r.parse::<i32>().ok().map(|r| 3 - r),
+                        Some(r) => r.parse::<i32>().ok().map(|r| 3i32.saturating_sub(r)),
                         None => s.parse::<i32>().ok(),
                     },
                 };
@@ -328,7 +389,7 @@ impl Doc<'_> {
     }
 
     fn comp(&self, el: &ElementRef, parent: &Computed) -> Computed {
-        let mut decls = self.sheet.cascade(el);
+        let mut decls = self.sheet.cascade(el, self.path);
         presentational_hints(el, &mut decls);
         let mut c = Computed::derive(parent, &decls, el.value().name());
         if let Some(l) = el.value().attr("xml:lang").or_else(|| el.value().attr("lang")) {
@@ -348,6 +409,7 @@ impl Doc<'_> {
         }
         // 本元素之前攒下的锚点落在本元素的开头。
         let pre = self.take_pending();
+        let pre_gap = self.gap.take();
         match name {
             "ul" | "ol" => {
                 // 列表符号看列表项（`li` 上写的优先，《雪国》把 `cjk-ideographic` 写在 `li` 上）；列表项写成
@@ -361,14 +423,16 @@ impl Doc<'_> {
                 }
                 let marker = first.as_ref().is_none_or(|li| li.display.as_deref().is_none_or(|d| d == "list-item"));
                 if marker && comp.list_style.as_deref() != Some("none") {
-                    let mut b = self.list(el, comp);
+                    let mut b = self.list(el, comp, first);
                     prepend_ids(&mut b.ids, pre);
+                    b.gap_before += pre_gap;
                     return out.push(b);
                 }
             }
             "table" => {
                 let mut b = self.table(el, comp);
                 prepend_ids(&mut b.ids, pre);
+                b.gap_before += pre_gap;
                 return out.push(b);
             }
             "hr" => {
@@ -382,11 +446,11 @@ impl Doc<'_> {
                     b.margin_bottom = 0.5 * b.comp.font_size;
                 }
                 prepend_ids(&mut b.ids, pre);
+                b.gap_before += pre_gap;
                 return out.push(b);
             }
             _ => {}
         }
-        let fs = comp.font_size;
         let heading = bookconv::html::heading_level_of(name);
         let mut children = Vec::new();
         self.children(el, &comp, &mut children);
@@ -399,14 +463,10 @@ impl Doc<'_> {
             let inner = self.take_pending();
             lead.extend(inner);
             *self.pending.borrow_mut() = lead;
+            self.gap.set(self.gap.get() + pre_gap);
             return;
         }
-        let margin_top = to_vert(comp.margin[0], fs);
-        let margin_bottom = to_vert(comp.margin[2], fs);
-        let mut ml = to_horiz(comp.margin[3], fs);
-        let mr = to_horiz(comp.margin[1], fs);
-        let padding = [0, 1, 2, 3].map(|i| to_vert(comp.padding[i], fs));
-        let padding_h = [to_horiz(comp.padding[1], fs), to_horiz(comp.padding[3], fs)];
+        let BoxLens { margin_top, margin_bottom, margin_left: mut ml, margin_right: mr, padding, padding_h } = BoxLens::of(&comp);
         // 不显示符号的列表（`list-style:none`）当普通块，照 Amazon 缩进 1.5em（测试书 L04：`$48` 4.688%）。
         if matches!(name, "ul" | "ol") && comp.margin[3].is_none() && comp.padding[3].is_none() {
             ml.em += 1.5;
@@ -458,6 +518,7 @@ impl Doc<'_> {
             b.padding = padding;
             b.padding_h = padding_h;
             prepend_ids(&mut b.ids, lead);
+            b.gap_before += pre_gap;
             out.push(b);
             return;
         }
@@ -490,6 +551,7 @@ impl Doc<'_> {
                 extra: Vec::new(),
             bare: false,
             inline: false,
+            gap_before: pre_gap,
             });
             return;
         }
@@ -499,6 +561,7 @@ impl Doc<'_> {
         for (i, mut c) in children.into_iter().enumerate() {
             if i == 0 {
                 c.margin_top = collapse(margin_top + padding[0], c.margin_top);
+                c.gap_before += pre_gap;
                 prepend_ids(&mut c.ids, lead.take().unwrap_or_default());
                 if c.heading.is_none() {
                     c.heading = heading;
@@ -517,14 +580,10 @@ impl Doc<'_> {
 
     /// 自己的外边距、内边距照计算值的块（列表、表格、单元格、水平线用；不摊平、不并进子块）。
     fn boxed(&self, kind: Kind, comp: Computed, id: Option<&str>) -> Block {
-        let fs = comp.font_size;
+        let l = BoxLens::of(&comp);
         let mut b = Block::anonymous(kind, comp, id.map(|i| vec![(i.to_string(), 0)]).unwrap_or_default());
-        b.margin_top = to_vert(b.comp.margin[0], fs);
-        b.margin_bottom = to_vert(b.comp.margin[2], fs);
-        b.margin_left = to_horiz(b.comp.margin[3], fs);
-        b.margin_right = to_horiz(b.comp.margin[1], fs);
-        b.padding = [0, 1, 2, 3].map(|i| to_vert(b.comp.padding[i], fs));
-        b.padding_h = [to_horiz(b.comp.padding[1], fs), to_horiz(b.comp.padding[3], fs)];
+        (b.margin_top, b.margin_bottom, b.margin_left, b.margin_right, b.padding, b.padding_h) =
+            (l.margin_top, l.margin_bottom, l.margin_left, l.margin_right, l.padding, l.padding_h);
         b
     }
 
@@ -553,7 +612,10 @@ impl Doc<'_> {
 
     /// `<ul>`/`<ol>` → `$276` 列表，`<li>` → `$277` 列表项（只有文字的列表项本身就是文字节点）。
     /// 列表符号的缺省按标签和嵌套层数（同浏览器：圆点 → 空心圆 → 方块），Amazon 转出来也是这样（2026-10-05 测试书）。
-    fn list(&self, el: ElementRef, comp: Computed) -> Block {
+    /// `first_li`：第一个 `<li>` 的计算值（调用方判断要不要当列表时已经层叠过，不再算一遍；父元素只差列表符号，
+    /// 而 `<li>` 的列表符号本来就继承或自己写，结果一样）。
+    /// 直接放在 `<ul>`/`<ol>` 里的文字、行内元素、图片（不在 `<li>` 里）照浏览器当匿名块排在列表里、不带符号（以前丢掉）。
+    fn list(&self, el: ElementRef, comp: Computed, mut first_li: Option<Computed>) -> Block {
         let ordered = el.value().name() == "ol";
         let depth = el.ancestors().filter_map(ElementRef::wrap).filter(|a| a.value().name() == "ul").count();
         let style = match comp.list_style.as_deref() {
@@ -572,8 +634,18 @@ impl Doc<'_> {
             _ => [LIST_DISC, LIST_CIRCLE, LIST_SQUARE][depth.min(2)],
         };
         let mut items = Vec::new();
-        for child in el.children().filter_map(ElementRef::wrap) {
-            let c = self.comp(&child, &comp);
+        let mut inl = Inline::new();
+        for node in el.children() {
+            // 文字和图片走行内收集（连续的合成一个匿名文字块，图片单独成块）；别的元素照旧当列表项
+            let Some(child) = ElementRef::wrap(node).filter(|e| image_src(e).is_none()) else {
+                self.inline_or_block(node, &comp, &comp, &mut inl, &mut items);
+                continue;
+            };
+            self.flush(&mut inl, &comp, &mut items);
+            let c = match first_li.take_if(|_| child.value().name() == "li") {
+                Some(c) => c,
+                None => self.comp(&child, &comp),
+            };
             if c.display.as_deref() == Some("none") {
                 continue;
             }
@@ -583,6 +655,7 @@ impl Doc<'_> {
             }
             items.push(item);
         }
+        self.flush(&mut inl, &comp, &mut items);
         let inside = comp.list_inside;
         let mut b = self.boxed(Kind::Container(items), comp, el.value().attr("id"));
         b.ty = Some(NODE_LIST);
@@ -693,9 +766,15 @@ impl Doc<'_> {
     }
 
     fn flush(&self, inl: &mut Inline, comp: &Computed, out: &mut Vec<Block>) {
+        let reopened = inl.cut_open();
         let taken = inl.take();
+        inl.open = reopened;
         if taken.is_empty() {
-            // 没有文字：里面的锚点留给后面的内容。
+            // 没有文字：里面的锚点留给后面的内容。只有 `&nbsp;`、全角空格、`<br/>` 的（按 CSS 排出一个空行；只有
+            // 普通空白的排不出行，不算）折成下一块的上边距。
+            if !taken.text.is_empty() {
+                self.gap.set(self.gap.get() + BLANK_LINE_FOLD * comp.line_height.unwrap_or(LH_EM) * comp.font_size);
+            }
             self.pending.borrow_mut().extend(taken.ids.into_iter().map(|(i, _)| i));
             return;
         }
@@ -717,6 +796,7 @@ impl Doc<'_> {
         prepend_ids(&mut ids, self.take_pending());
         let mut b = Block::anonymous(Kind::Text { text, runs }, comp.inherited(), ids);
         b.inline = true;
+        b.gap_before = self.gap.take();
         out.push(b);
     }
 
@@ -737,7 +817,9 @@ impl Doc<'_> {
                     let mut lead = self.take_pending();
                     lead.extend(el.value().attr("id").map(str::to_string));
                     let ids = lead.into_iter().map(|i| (i, 0)).collect();
-                    out.push(Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0 }, comp, ids));
+                    let mut b = Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0 }, comp, ids);
+                    b.gap_before = self.gap.take();
+                    out.push(b);
                     return;
                 }
                 let comp = self.comp(&el, parent);
@@ -752,11 +834,6 @@ impl Doc<'_> {
                 if let Some(id) = el.value().attr("id") {
                     inl.ids.push((id.to_string(), inl.chars));
                 }
-                let start = inl.chars;
-                let run_at = inl.runs.len();
-                for c in el.children() {
-                    self.inline_or_block(c, block_comp, &comp, inl, out);
-                }
                 let link = (name == "a")
                     .then(|| el.value().attr("href"))
                     .flatten()
@@ -766,8 +843,19 @@ impl Doc<'_> {
                         (if path.is_empty() { self.path.to_string() } else { path }, frag.unwrap_or_default())
                     });
                 let styled = run_differs(&comp, block_comp);
-                if inl.chars > start && (styled || link.is_some()) {
-                    inl.runs.insert(run_at, Run { start, len: inl.chars - start, comp: styled.then_some(comp), link, note_ref: false, anchor: name == "a" });
+                // 区间先登记成「开着的」：子节点里遇到块或图片切开时，`flush` 在切开处截断它、到新缓冲从 0 接着开
+                // （以前事后按进来时的下标插，切开过的话缓冲已经换了：下标越界 panic，或区间错位到别的字上）
+                let opened = styled || link.is_some();
+                if opened {
+                    let run = Run { start: 0, len: 0, comp: styled.then(|| comp.clone()), link, note_ref: false, anchor: name == "a" };
+                    inl.open.push((inl.chars, inl.runs.len(), run));
+                }
+                for c in el.children() {
+                    self.inline_or_block(c, block_comp, &comp, inl, out);
+                }
+                // 子节点进出成对、切开时开着的个数不变，弹出来的就是本元素的
+                if let Some((start, run_at, run)) = opened.then(|| inl.open.pop()).flatten() {
+                    inl.close_run(start, run_at, run);
                 }
             }
             _ => {}
@@ -794,6 +882,7 @@ impl Block {
             extra: Vec::new(),
             bare: false,
             inline: false,
+            gap_before: 0.0,
         }
     }
 
@@ -941,7 +1030,10 @@ fn body_font_to_drop(docs: &mut [ParsedDoc]) -> Option<String> {
             *count.entry(b.comp.font_family.as_ref().map(|f| f.to_lowercase())).or_default() += text.chars().count();
         }
     });
-    count.into_iter().max_by_key(|(_, n)| *n)?.0
+    // 字数打平时取字体名小的（没写字体的排最前），结果和 HashMap 的遍历顺序无关（以前 `max_by_key` 打平时随遍历顺序，同一本书
+    // 两次生成的 KFX 可能不一样，覆盖到 Kindle 上进度清零）。打破平局的口径同优化器的 `wash::fonts::pick_body_font`
+    // （那个按原始 HTML 数、只给清洗层用，这里按解析好的块数，复用不了）。
+    count.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))?.0
 }
 
 /// 书里有字体文件的 `@font-face` 字体（小写）。
@@ -951,51 +1043,37 @@ fn embedded_font_faces(book: &Loaded) -> HashSet<String> {
 }
 
 
-/// 全书正文的字号（根 em）：所有文字块按字数加权，最多的那个。Send to Kindle 把它当成阅读器字号设置的 1.0，别的字号按比例
-/// （《啸风山庄》正文 `font-size:1.167em` 不写字号、1.083em 的写 0.928；《疯探》正文 1.25em，没写字号的容器写 0.8，2026-10-08）。
-/// 算出来不在 0.5–3 之间的不信，用 1。
-fn base_font_size(docs: &[ParsedDoc]) -> f64 {
-    fn walk(blocks: &[Block], count: &mut HashMap<i64, usize>) {
+/// 全书文字块按字数（不算空白）加权的众数：`key` 取块的计算值（按千分之一取整归类）。字数一样多的取小的（结果和遍历顺序无关）。
+fn weighted_mode(docs: &[ParsedDoc], key: impl Fn(&Computed) -> f64) -> Option<f64> {
+    fn walk(blocks: &[Block], key: &dyn Fn(&Computed) -> f64, count: &mut HashMap<i64, usize>) {
         for b in blocks {
             match &b.kind {
                 Kind::Text { text, .. } => {
-                    *count.entry((b.comp.font_size * 1000.0).round() as i64).or_default() += text.chars().filter(|c| !c.is_whitespace()).count();
+                    *count.entry((key(&b.comp) * 1000.0).round() as i64).or_default() += text.chars().filter(|c| !c.is_whitespace()).count();
                 }
-                Kind::Container(c) => walk(c, count),
+                Kind::Container(c) => walk(c, key, count),
                 Kind::Image { .. } => {}
             }
         }
     }
     let mut count = HashMap::new();
     for (_, _, _, blocks) in docs {
-        walk(blocks, &mut count);
+        walk(blocks, &key, &mut count);
     }
-    let best = count.into_iter().max_by_key(|&(k, n)| (n, std::cmp::Reverse(k))).map(|(k, _)| k as f64 / 1000.0);
-    best.filter(|v| (0.5..=3.0).contains(v)).unwrap_or(1.0)
+    count.into_iter().max_by_key(|&(k, n)| (n, std::cmp::Reverse(k))).map(|(k, _)| k as f64 / 1000.0)
+}
+
+/// 全书正文的字号（根 em）：所有文字块按字数加权，最多的那个。Send to Kindle 把它当成阅读器字号设置的 1.0，别的字号按比例
+/// （《啸风山庄》正文 `font-size:1.167em` 不写字号、1.083em 的写 0.928；《疯探》正文 1.25em，没写字号的容器写 0.8，2026-10-08）。
+/// 算出来不在 0.5–3 之间的不信，用 1。
+fn base_font_size(docs: &[ParsedDoc]) -> f64 {
+    weighted_mode(docs, |c| c.font_size).filter(|v| (0.5..=3.0).contains(v)).unwrap_or(1.0)
 }
 
 /// 全书正文的行高（元素字号的倍数）：所有文字块按字数加权，最多的那个行高；没写行高的按 normal（1.2）。
 /// Send to Kindle 把它当成阅读器行距设置的 1.0（《绍宋》正文 `line-height:1.5em`）。算出来不在 1–3 之间的不信，用 1.2。
 fn base_line_height(docs: &[ParsedDoc]) -> f64 {
-    fn walk(blocks: &[Block], count: &mut HashMap<i64, usize>) {
-        for b in blocks {
-            match &b.kind {
-                Kind::Text { text, .. } => {
-                    let key = (b.comp.line_height.unwrap_or(LH_EM) * 1000.0).round() as i64;
-                    *count.entry(key).or_default() += text.chars().filter(|c| !c.is_whitespace()).count();
-                }
-                Kind::Container(c) => walk(c, count),
-                Kind::Image { .. } => {}
-            }
-        }
-    }
-    let mut count = HashMap::new();
-    for (_, _, _, blocks) in docs {
-        walk(blocks, &mut count);
-    }
-    // 字数一样多的取小的（结果和遍历顺序无关）
-    let best = count.into_iter().max_by_key(|&(k, n)| (n, std::cmp::Reverse(k))).map(|(k, _)| k as f64 / 1000.0);
-    best.filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
+    weighted_mode(docs, |c| c.line_height.unwrap_or(LH_EM)).filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
 }
 
 /// 有没有块（含容器里的）的左（`left`）或右外边距是负的。
@@ -1021,6 +1099,17 @@ fn scale_percent(blocks: &mut [Block], s: f64) {
 
 /// 相邻块的外边距折叠（同一层）。合成的边距放在后一块的上边距；后一块没有上边距时留在前一块的下边距
 /// （Send to Kindle 同样：段距写在每段的上边距，「目录」标题的下边距、《绍宋》章号 `p.j11` 的 `margin-bottom:2px` 留在自己身上，2026-10-08）。
+/// 折掉的空段加到下一块的上边距上（外边距折叠之后：多出的高度不参与折叠）。文件末尾的空段没有下一块，不折。
+fn apply_gaps(blocks: &mut [Block]) {
+    for b in blocks.iter_mut() {
+        b.margin_top += b.gap_before;
+        b.gap_before = 0.0;
+        if let Kind::Container(c) = &mut b.kind {
+            apply_gaps(c);
+        }
+    }
+}
+
 fn collapse_siblings(blocks: &mut [Block]) {
     for i in 1..blocks.len() {
         let prev_bottom = blocks[i - 1].margin_bottom;
@@ -1084,9 +1173,6 @@ struct Builder {
     base_lh: f64,
     /// 全书正文的字号（根 em，见 [`base_font_size`]）。
     base_fs: f64,
-    /// 按 CSS 原样算样式、只导出不写 KFX（[`epub_text_styles`]）。
-    css_faithful: bool,
-    dump: Option<String>,
 }
 
 impl Builder {
@@ -1195,13 +1281,14 @@ impl Builder {
     }
 
     /// 块的样式属性。`parent`：KFX 里的父节点（字号写成相对它的倍数，字重、颜色只在需要时写，水平长度按它的宽度换算）。
-    fn block_props(&mut self, b: &Block, parent: &Parent, doc_lang: &Option<String>) -> Vec<(u32, Value)> {
+    /// `col`：本块的文字颜色（[`text_color`]，调用方算好）。
+    fn block_props(&mut self, b: &Block, parent: &Parent, doc_lang: &Option<String>, col: Option<u32>) -> Vec<(u32, Value)> {
         let c = &b.comp;
         let fs = c.font_size;
         if b.bare {
             return c.text_align.as_deref().map(|a| vec![(P_TEXT_ALIGN, Value::Symbol(align_symbol(a)))]).unwrap_or_default();
         }
-        let mut p = text_props(c, parent);
+        let mut p = text_props_with(c, parent, col);
         // 标题自己的样式带「标题」提示（Send to Kindle 同样）
         if b.heading.is_some() {
             p.push((P_LAYOUT_HINTS, Value::List(vec![Value::Symbol(HINT_HEADING)])));
@@ -1318,9 +1405,10 @@ impl Builder {
 
     /// 生成一个块的节点（递归），同时登记位置、id。
     fn node(&mut self, b: &Block, parent: &Parent, ctx: &mut SectionCtx) -> Option<Value> {
-        let props = self.block_props(b, parent, &ctx.lang);
+        let col = text_color(&b.comp);
+        let props = self.block_props(b, parent, &ctx.lang, col);
         // 本节点给子节点（行内区间、容器里的块）的「父节点」
-        let me = Parent { weight: weight_of(&b.comp), color: shown_color(&b.comp, parent), avail: inner_width(b, parent.avail), base_fs: parent.base_fs };
+        let me = Parent { weight: weight_of(&b.comp), color: shown_color(col, &b.comp, parent), avail: inner_width(b, parent.avail), base_fs: parent.base_fs };
         match &b.kind {
             Kind::Text { text, runs } => {
                 let eid = self.eid();
@@ -1618,8 +1706,9 @@ fn near_black(col: u32) -> bool {
 /// 这个节点实际显示的文字颜色（写进样式的，`None`＝阅读器缺省）。Send to Kindle 在没有背景的地方省掉近黑的文字颜色
 /// （《绍宋》正文的黑、章号的 `#111111` 都不写；同样的颜色在有背景色的小注框、卷首语里照写，2026-10-08），
 /// 父节点写了别的颜色时照写，免得继承父节点的颜色。
-fn shown_color(c: &Computed, parent: &Parent) -> Option<u32> {
-    match text_color(c) {
+/// `col` 是 [`text_color`] 算好的（别再算一遍）。
+fn shown_color(col: Option<u32>, c: &Computed, parent: &Parent) -> Option<u32> {
+    match col {
         Some(col) if near_black(col) && !c.on_background && c.background.is_none() && c.bg_image.is_none() && parent.color.is_none() => None,
         Some(col) => Some(col),
         None => parent.color,
@@ -1665,6 +1754,11 @@ fn inner_width(b: &Block, avail: f64) -> f64 {
 /// 字体、字号、粗体、斜体、颜色（块和行内区间共用）。字重、颜色只在和父节点显示的不一样时写（Send to Kindle 不写 normal 字重、
 /// 不写没有背景处的近黑颜色，见 [`shown_color`]）。
 fn text_props(c: &Computed, parent: &Parent) -> Vec<(u32, Value)> {
+    text_props_with(c, parent, text_color(c))
+}
+
+/// 同 [`text_props`]，文字颜色 `col`（[`text_color`]）由调用方算好。
+fn text_props_with(c: &Computed, parent: &Parent, col: Option<u32>) -> Vec<(u32, Value)> {
     let mut p = Vec::new();
     if let Some(f) = &c.font_family {
         // 整串备选照写（Send to Kindle 同样，小写、逗号连接）；第一个在 `Builder::style` 里换成 `default` 或嵌入字体名
@@ -1684,7 +1778,7 @@ fn text_props(c: &Computed, parent: &Parent) -> Vec<(u32, Value)> {
     if c.italic {
         p.push((P_FONT_STYLE, Value::Symbol(STYLE_ITALIC)));
     }
-    if let (Some(col), Some(_)) = (text_color(c), shown_color(c, parent)) {
+    if let (Some(col), Some(_)) = (col, shown_color(col, c, parent)) {
         p.push((P_COLOR, Value::Int(i64::from(col))));
     }
     for (on, k) in c.decoration.iter().zip([P_UNDERLINE, P_LINE_THROUGH, P_OVERLINE]) {
@@ -1741,8 +1835,6 @@ impl Builder {
             base_lh: LH_EM,
             base_fs: 1.0,
             media: opts.media,
-            css_faithful: false,
-            dump: None,
         }
     }
 }
@@ -1885,15 +1977,33 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
         debug_assert_eq!(cover_ref, res + SID_GAP);
     }
     let id = opts.fixed_id.unwrap_or(book.meta.stable_id);
-    let out = build(&book, &mut b, id)?;
+    let out = build(&mut book, &mut b, id)?;
     Ok((out, b.warnings))
 }
 
-fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
-    let css: HashMap<&str, &str> = book.css.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
-    let book_lang = (!book.meta.language.is_empty()).then(|| book.meta.language.clone());
-    // 固定版式（漫画，优化器 `comicfxl` 写的 `fixed-layout`/`original-resolution`）：画布宽高。见 docs/kfx.md#固定版式。
-    let fixed_canvas: Option<(i64, i64)> = (!book.meta.fixed_layout.is_empty()).then(|| {
+/// 整本书写成 KFX：解析文档 → 全书分析 → 版面 → 样式 → 位置映射 → 目录、锚点、导航 → 元数据 → 资源 → 清单与容器。
+/// 各阶段按这个顺序分配本地符号，换顺序会改产物字节（资源的符号必须最后分配，见 [`resource_entities`]）。
+fn build(book: &mut Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
+    let mut parsed = parse_docs(book, b.media, false);
+    analyze(book, b, &mut parsed);
+    let fixed_canvas = fixed_canvas(book);
+    // 翻页方向：`$557` 从左往右、`$559` 从右往左（2026-10-05 测试漫画 LTR/RTL 两本只差这一处）。
+    let direction = if book.meta.rtl { DIR_RTL } else { DIR_LTR };
+    let Layout { mut sections, mut entities, id_map, cover_tmpl } = lay_out(book, b, parsed, fixed_canvas, direction)?;
+    // 封面图即使没出现在正文里也要带上（书架缩略图）。
+    let cover_res = book.cover.as_deref().and_then(|c| b.resource(c));
+    style_entities(b, &mut entities);
+    let fonts = take_fonts(book, b);
+    position_entities(&mut sections, &mut entities);
+    navigation_entities(book, b, &sections, &id_map, cover_tmpl, &mut entities);
+    metadata_entities(book, b, id, &sections, fixed_canvas, direction, cover_res, &mut entities);
+    resource_entities(b, fonts, cover_res, &mut entities);
+    Ok(finish(b, &sections, entities, cover_res, id))
+}
+
+/// 固定版式（漫画，优化器 `comicfxl` 写的 `fixed-layout`/`original-resolution`）：画布宽高（取不到写 0）。见 docs/kfx.md#固定版式。
+fn fixed_canvas(book: &Loaded) -> Option<(i64, i64)> {
+    (!book.meta.fixed_layout.is_empty()).then(|| {
         book.meta
             .fixed_layout
             .iter()
@@ -1901,21 +2011,21 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             .and_then(|(_, v)| v.split_once('x'))
             .and_then(|(w, h)| Some((w.trim().parse().ok()?, h.trim().parse().ok()?)))
             .unwrap_or((0, 0))
-    });
-    // 翻页方向：`$557` 从左往右、`$559` 从右往左（2026-10-05 测试漫画 LTR/RTL 两本只差这一处）。
-    let direction = if book.meta.rtl { DIR_RTL } else { DIR_LTR };
-    let mut sections: Vec<SectionOut> = Vec::new();
-    let mut entities: Vec<Entity> = Vec::new();
-    let mut id_map: HashMap<(String, String), (i64, usize)> = HashMap::new();
-    let mut cover_tmpl: Option<i64> = None;
-    // 没有可见内容的文件（只有隐藏标题之类）：目录项、链接改指到下一个版面的开头。
-    let mut empty_docs: Vec<String> = Vec::new();
+    })
+}
 
-    // 先把所有文档解析成块（注释配对要看全书），再逐个生成版面。各文档独立，多线程解析（`bookconv::util::par_map`，按原顺序收回）。
-    // 外部样式表按路径只解析一次（大合集几百个文档共用一份样式表），各线程共用。
+/// 书的语言（OPF 里的；空的算没写）。
+fn book_language(book: &Loaded) -> Option<String> {
+    (!book.meta.language.is_empty()).then(|| book.meta.language.clone())
+}
+
+/// 先把所有文档解析成块（注释配对要看全书），再逐个生成版面。各文档独立，多线程解析（`bookconv::util::par_map`，按原顺序收回）。
+/// 外部样式表按路径只解析一次（大合集几百个文档共用一份样式表），各线程共用。`faithful`：按 CSS 原样算（[`epub_text_styles`]），
+/// body 的左右边距照算。
+fn parse_docs(book: &Loaded, media: Option<crate::css::MediaEnv>, faithful: bool) -> Vec<ParsedDoc<'_>> {
+    let css: HashMap<&str, &str> = book.css.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    let book_lang = book_language(book);
     let sheets: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::css::Rules>>> = Default::default();
-    let media = b.media;
-    let faithful = b.css_faithful;
     let docs: Vec<(usize, &bookconv::epubbook::Doc)> = book.docs.iter().enumerate().collect();
     let parse_doc = |&(si, doc): &(usize, &bookconv::epubbook::Doc)| -> (usize, Option<String>, Vec<Block>) {
         let html = Html::parse_document(&doc.html);
@@ -1945,7 +2055,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         }
         let root = html.root_element();
         let lang = root.value().attr("xml:lang").or_else(|| root.value().attr("lang")).map(str::to_string).or_else(|| book_lang.clone());
-        let d = Doc { path: &doc.path, sheet, lang: lang.clone(), pending: Default::default() };
+        let d = Doc { path: &doc.path, sheet, lang: lang.clone(), pending: Default::default(), gap: Default::default() };
         let mut blocks = Vec::new();
         let root_comp = d.comp(&root, &Computed::root());
         if let Some(body) = root.children().filter_map(ElementRef::wrap).find(|e| e.value().name() == "body") {
@@ -1991,6 +2101,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         }
         attach_trailing(&mut blocks, d.take_pending());
         collapse_siblings(&mut blocks);
+        apply_gaps(&mut blocks);
         (si, d.lang.clone(), blocks)
     };
     // 一批批解析，每批的结果在本线程复制一份、工作线程分配的那份随即释放：块是在工作线程里边解析 DOM 边分配的，和已经释放的 DOM
@@ -2001,20 +2112,39 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let got = bookconv::util::par_map(batch, parse_doc);
         parsed.extend(got.iter().map(|(si, l, b)| (*si, book.docs[*si].path.as_str(), l.clone(), b.clone())));
     }
-    mark_notes(&mut parsed);
+    parsed
+}
+
+/// 全书范围的分析（版面要用）：注释配对、嵌入字体、写成 `default` 的正文字体、正文字号和行高。
+fn analyze(book: &Loaded, b: &mut Builder, parsed: &mut [ParsedDoc]) {
+    mark_notes(parsed);
     // 缺字体文件的字体照写原名（Send to Kindle：《春雪》注释的 `ZY-KAITI` 照写；《绍宋》旧版的「宋体」写 `default` 是因为它是正文字体）
     b.embedded_fonts = embedded_font_faces(book);
-    b.default_fonts = body_font_to_drop(&mut parsed).into_iter().collect();
-    b.base_lh = base_line_height(&parsed);
-    b.base_fs = base_font_size(&parsed);
-    if b.css_faithful {
-        let mut out = format!("#base\t{}\t{}\n", b.base_fs, b.base_lh * b.base_fs);
-        for (_, _, _, blocks) in &parsed {
-            dump_blocks(blocks, &mut out);
-        }
-        b.dump = Some(out);
-        return Ok(Vec::new());
-    }
+    b.default_fonts = body_font_to_drop(parsed).into_iter().collect();
+    b.base_lh = base_line_height(parsed);
+    b.base_fs = base_font_size(parsed);
+}
+
+/// 版面阶段的结果。
+struct Layout {
+    sections: Vec<SectionOut>,
+    /// 版面、故事线、文字池实体。
+    entities: Vec<Entity>,
+    /// (文件, 锚点) → (节点 id, 字符偏移)；锚点空的是文件开头。
+    id_map: HashMap<(String, String), (i64, usize)>,
+    /// 封面图那一页的版面模板节点 id（导航的封面地标指向它）。
+    cover_tmpl: Option<i64>,
+}
+
+/// 逐个文档生成版面（`$260`）、故事线（`$259`）、文字池（`$145`），登记每个 id 的位置。
+fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fixed_canvas: Option<(i64, i64)>, direction: u32) -> Result<Layout, String> {
+    let mut sections: Vec<SectionOut> = Vec::new();
+    let mut entities: Vec<Entity> = Vec::new();
+    let mut id_map: HashMap<(String, String), (i64, usize)> = HashMap::new();
+    let mut cover_tmpl: Option<i64> = None;
+    // 没有可见内容的文件（只有隐藏标题之类）：目录项、链接改指到下一个版面的开头。
+    let mut empty_docs: Vec<String> = Vec::new();
+    let is_cover = |b: &Builder, r: usize| book.cover.as_deref().is_some_and(|c| b.res_by_path.get(c) == Some(&r));
     for (si, path, lang, blocks) in parsed {
         if blocks.is_empty() {
             empty_docs.push(path.to_string());
@@ -2030,7 +2160,11 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src }) = (single_image, fixed_canvas, &blocks[0].kind) {
             // 固定版式的一页，照 Amazon 转的异形页样本：整页容器（画布宽高、`$476`、position relative）里放一个绝对定位的
             // 图片节点（宽高、上、左）。比画布小的图有的页整页空白是资源符号顺序造成的，不是这里（见下面分配资源符号处）。
-            let Some(r) = b.resource(src) else { continue };
+            // 图片取不到的这一页同没有内容的文件：目录项、链接改指到下一个版面（以前没登记，指到它的退回书的开头）。
+            let Some(r) = b.resource(src) else {
+                empty_docs.push(path.to_string());
+                continue;
+            };
             let (cid, iid) = (b.eid(), b.eid());
             ctx.order.push((cid, 1));
             ctx.order.push((iid, 1));
@@ -2083,7 +2217,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             tmpl.push((TMPL_FIT, Value::Symbol(TMPL_FIT_VALUE)));
             tmpl.push((TMPL_ALIGN, Value::Symbol(ALIGN_CENTER)));
             tmpl.push((NODE_TYPE, Value::Symbol(NODE_CONTAINER)));
-            if book.cover.as_deref() == b.res_by_path.iter().find(|(_, &i)| i == ctx.resources[0]).map(|(p, _)| p.as_str()) {
+            if is_cover(b, ctx.resources[0]) {
                 cover_tmpl.get_or_insert(tmpl_eid);
             }
         } else if single_image {
@@ -2093,7 +2227,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             tmpl.push((TMPL_FIT, Value::Symbol(TMPL_FIT_VALUE)));
             tmpl.push((TMPL_ALIGN, Value::Symbol(ALIGN_CENTER)));
             tmpl.push((NODE_TYPE, Value::Symbol(NODE_CONTAINER)));
-            if book.cover.as_deref() == b.res_by_path.iter().find(|(_, &i)| i == ctx.resources[0]).map(|(p, _)| p.as_str()) {
+            if is_cover(b, ctx.resources[0]) {
                 cover_tmpl.get_or_insert(tmpl_eid);
             }
         } else {
@@ -2109,8 +2243,8 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         for p in empty_docs.drain(..) {
             id_map.insert((p, String::new()), (first_eid, 0));
         }
-        for (i, e, o) in &ctx.ids {
-            id_map.entry((path.to_string(), i.clone())).or_insert((*e, *o));
+        for (i, e, o) in ctx.ids {
+            id_map.entry((path.to_string(), i)).or_insert((e, o));
         }
         let length = ctx.order.iter().map(|o| o.1).sum();
         sections.push(SectionOut {
@@ -2118,7 +2252,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             length,
             eids: ctx.order.iter().map(|o| o.0).collect(),
             pid_map: pid_map(&ctx.order),
-            resources: std::mem::take(&mut ctx.resources),
+            resources: ctx.resources,
             first_eid,
         });
     }
@@ -2130,60 +2264,81 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             id_map.insert((p, String::new()), (last.first_eid, 0));
         }
     }
-    // 封面图即使没出现在正文里也要带上（书架缩略图）。
-    let cover_res = book.cover.as_deref().and_then(|c| b.resource(c));
-    // 图片字节的实体名。封面的要叫「文档数据 `$538.$597.$614` 的名字 + `-ad`」：Kindle 书架缩略图按这个找
-    // （样本里元数据的 `cover_image` 一律写 `e6`，常常指到别的插图甚至锚点，缩略图照样对；
-    // 把这个实体改名缩略图就没了，2026-10-05 真机）。
-    let raw_name = |i: usize, name: &str| if Some(i) == cover_res { format!("{COVER_AUX}-ad") } else { format!("{name}-ad") };
+    Ok(Layout { sections, entities, id_map, cover_tmpl })
+}
 
-    // 样式、资源。
+/// 样式实体（`$157`），按第一次用到的顺序。
+fn style_entities(b: &mut Builder, entities: &mut Vec<Entity>) {
     for (name, props) in std::mem::take(&mut b.style_entities) {
         let s = b.sym(&name);
         let mut f = props;
         f.push((STYLE_NAME, Value::Symbol(s)));
         entities.push(ent(s, T_STYLE, Value::Struct(f)));
     }
-    let res_list: Vec<(String, String, u32, &'static str, u32, u32)> =
-        b.resources.iter().map(|r| (r.name.clone(), r.location.clone(), r.format, r.mime, r.width, r.height)).collect();
-    // 嵌入字体：样式里用到、书里有 `@font-face` 和字体文件的（正文、批注的字体优化器已经去掉，不会出现在这里）。
+}
+
+/// 要嵌入的字体：样式里用到、书里有 `@font-face` 和字体文件的（正文、批注的字体优化器已经去掉，不会出现在这里）。
+/// 字体字节从书里搬出来（写出器只在这里用到），同一个文件给了几个字体名的，前面的复制、最后一个搬走。
+fn take_fonts(book: &mut Loaded, b: &Builder) -> Vec<(String, crate::css::FontFace, Vec<u8>)> {
     let mut faces: HashMap<String, crate::css::FontFace> = HashMap::new();
     for (path, text) in &book.css {
         for f in crate::css::font_faces(text, path) {
             faces.entry(f.family.to_lowercase()).or_insert(f);
         }
     }
-    let font_files: HashMap<&str, &Vec<u8>> = book.fonts.iter().map(|(p, b)| (p.as_str(), b)).collect();
-    let fonts: Vec<(String, crate::css::FontFace, Vec<u8>)> = b
+    let wanted: Vec<(String, crate::css::FontFace)> = b
         .used_fonts
         .iter()
         .filter_map(|f| {
             let face = faces.get(&f.to_lowercase())?;
-            let bytes = font_files.get(face.path.as_str())?;
-            Some((f.clone(), face.clone(), (*bytes).clone()))
+            book.fonts.iter().any(|(p, _)| *p == face.path).then(|| (f.clone(), face.clone()))
         })
         .collect();
-    // 阅读顺序、位置映射。
+    let mut files: HashMap<String, Vec<u8>> = std::mem::take(&mut book.fonts).into_iter().collect();
+    let mut out = Vec::with_capacity(wanted.len());
+    for (i, (family, face)) in wanted.iter().enumerate() {
+        let used_later = wanted[i + 1..].iter().any(|(_, f)| f.path == face.path);
+        let bytes = if used_later { files.get(&face.path).cloned() } else { files.remove(&face.path) };
+        out.push((family.clone(), face.clone(), bytes.unwrap_or_default()));
+    }
+    out
+}
+
+/// 阅读顺序（`$169`）：全部版面按书的顺序。阅读顺序实体和文档数据里各写一份。
+fn reading_orders(sections: &[SectionOut]) -> Value {
     let order_list = Value::List(sections.iter().map(|s| Value::Symbol(s.name)).collect());
-    let reading_orders =
-        Value::List(vec![Value::Struct(vec![(READING_ORDER_NAME, Value::Symbol(DEFAULT_READING_ORDER)), (SECTIONS, order_list)])]);
-    entities.push(ent(NO_NAME, T_READING_ORDERS, Value::Struct(vec![(READING_ORDERS, reading_orders.clone())])));
+    Value::List(vec![Value::Struct(vec![(READING_ORDER_NAME, Value::Symbol(DEFAULT_READING_ORDER)), (SECTIONS, order_list)])])
+}
+
+/// 阅读顺序、各版面的节点、位置范围、位置映射（`$609`）。
+fn position_entities(sections: &mut [SectionOut], entities: &mut Vec<Entity>) {
+    entities.push(ent(NO_NAME, T_READING_ORDERS, Value::Struct(vec![(READING_ORDERS, reading_orders(sections))])));
     entities.push(ent(
         NO_NAME,
         T_SECTION_EIDS,
-        Value::List(sections.iter().map(|s| Value::Struct(vec![(SECTION_REF, Value::Symbol(s.name)), (LIST, compress_ids(s.eids.clone()))])).collect()),
+        Value::List(sections.iter_mut().map(|s| Value::Struct(vec![(SECTION_REF, Value::Symbol(s.name)), (LIST, compress_ids(std::mem::take(&mut s.eids)))])).collect()),
     ));
     let mut pos = 0usize;
     let mut ranges = Vec::new();
-    for s in &sections {
+    for s in sections.iter() {
         ranges.push(Value::Struct(vec![(SECTION_REF, Value::Symbol(s.name)), (START, Value::Int(pos as i64)), (LENGTH, Value::Int(s.length as i64))]));
         pos += s.length;
     }
     entities.push(ent(NO_NAME, T_SECTION_RANGES, Value::Struct(vec![(LIST, Value::List(ranges))])));
-    for s in &sections {
-        entities.push(ent(s.name, T_SECTION_PID_MAP, Value::Struct(vec![(SECTION_REF, Value::Symbol(s.name)), (LIST, Value::List(s.pid_map.clone()))])));
+    for s in sections.iter_mut() {
+        entities.push(ent(s.name, T_SECTION_PID_MAP, Value::Struct(vec![(SECTION_REF, Value::Symbol(s.name)), (LIST, Value::List(std::mem::take(&mut s.pid_map)))])));
     }
+}
 
+/// 目录、锚点（链接和目录的目标）、标题导航、封面地标。
+fn navigation_entities(
+    book: &Loaded,
+    b: &mut Builder,
+    sections: &[SectionOut],
+    id_map: &HashMap<(String, String), (i64, usize)>,
+    cover_tmpl: Option<i64>,
+    entities: &mut Vec<Entity>,
+) {
     // 目录：锚点 + 导航。
     let mut toc_stack: Vec<(u32, Vec<Value>)> = vec![(0, Vec::new())];
     for t in &book.toc {
@@ -2220,9 +2375,9 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
             })
             .collect();
     }
-    // 锚点（链接、目录的目标）。找不到目标的指向目标文件开头，文件也找不到就指向书的开头。
+    // 锚点（链接、目录的目标）。找不到目标的指向目标文件开头，文件也找不到就指向书的开头。之后不再登记锚点。
     let book_start = (sections[0].first_eid, 0usize);
-    for (key, an) in b.anchors.clone() {
+    for (key, an) in std::mem::take(&mut b.anchors) {
         let pos = id_map.get(&key).or_else(|| id_map.get(&(key.0.clone(), String::new()))).copied().unwrap_or_else(|| {
             b.warnings.push(format!("链接目标找不到：{}#{}", key.0, key.1));
             book_start
@@ -2292,11 +2447,29 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         Value::List(vec![Value::Struct(vec![(READING_ORDER_NAME, Value::Symbol(DEFAULT_READING_ORDER)), (NAV_CONTAINERS, Value::List(nav_names))])]),
     ));
     entities.push(ent(NO_NAME, T_NAV_EMPTY, Value::Struct(vec![(NAV_ENTRIES, Value::List(Vec::new()))])));
+}
 
-    // 元数据。
-    let content_id = format!("{:016X}{:016X}", id, fnv64(&id.to_le_bytes()));
+/// 唯一 ID 派生的 content_id（也当 ASIN 写）。
+fn content_id(id: u64) -> String {
+    format!("{:016X}{:016X}", id, fnv64(&id.to_le_bytes()))
+}
+
+/// 元数据（`$490`）和文档数据（`$538`）。
+#[allow(clippy::too_many_arguments)]
+fn metadata_entities(
+    book: &Loaded,
+    b: &mut Builder,
+    id: u64,
+    sections: &[SectionOut],
+    fixed_canvas: Option<(i64, i64)>,
+    direction: u32,
+    cover_res: Option<usize>,
+    entities: &mut Vec<Entity>,
+) {
+    let content_id = content_id(id);
     let container_id = container_id(id);
     let book_id = base32(id.rotate_left(17), 23);
+    let book_lang = book_language(book);
     let kv = |k: &str, v: Value| Value::Struct(vec![(META_KEY, Value::String(k.into())), (META_VALUE, v)]);
     let s = |v: &str| Value::String(v.to_string());
     let mut title_meta = vec![
@@ -2304,7 +2477,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         kv("title", s(&book.meta.title)),
         kv("publisher", s(&book.meta.publisher)),
         kv("language", s(&meta_language(book_lang.as_deref()))),
-        kv("issue_date", s(book.meta.date.get(..10).unwrap_or("2000-01-01"))),
+        kv("issue_date", s(&issue_date(&book.meta.date))),
         kv("content_id", s(&content_id)),
         kv("cde_content_type", s("PDOC")),
         kv("ASIN", s(&content_id)),
@@ -2323,20 +2496,22 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         T_METADATA,
         Value::Struct(vec![(
             META_GROUPS,
-            Value::List(vec![
-                if fixed_canvas.is_some() {
-                    // 固定版式（同 Amazon 转的测试漫画）：锁竖屏、声明固定版式
-                    let lock = book.meta.fixed_layout.iter().find(|(n, _)| *n == 124).map_or("portrait", |(_, v)| v.as_str());
-                    group("kindle_ebook_metadata", vec![kv("book_orientation_lock", s(lock))])
-                } else {
-                    group("kindle_ebook_metadata", vec![kv("nested_span", s("enabled")), kv("selection", s("enabled"))])
-                },
-                group("kindle_title_metadata", title_meta),
-                group("kindle_audit_metadata", vec![kv("creator_version", s(FILE_CREATOR_VERSION)), kv("file_creator", s("epub-to-kfx"))]),
-            ]
-            .into_iter()
-            .chain(fixed_canvas.map(|_| group("kindle_capability_metadata", vec![kv("yj_fixed_layout", Value::Int(1)), kv("continuous_popup_progression", Value::Int(0))])))
-            .collect()),
+            Value::List(
+                vec![
+                    if fixed_canvas.is_some() {
+                        // 固定版式（同 Amazon 转的测试漫画）：锁竖屏、声明固定版式
+                        let lock = book.meta.fixed_layout.iter().find(|(n, _)| *n == 124).map_or("portrait", |(_, v)| v.as_str());
+                        group("kindle_ebook_metadata", vec![kv("book_orientation_lock", s(lock))])
+                    } else {
+                        group("kindle_ebook_metadata", vec![kv("nested_span", s("enabled")), kv("selection", s("enabled"))])
+                    },
+                    group("kindle_title_metadata", title_meta),
+                    group("kindle_audit_metadata", vec![kv("creator_version", s(FILE_CREATOR_VERSION)), kv("file_creator", s("epub-to-kfx"))]),
+                ]
+                .into_iter()
+                .chain(fixed_canvas.map(|_| group("kindle_capability_metadata", vec![kv("yj_fixed_layout", Value::Int(1)), kv("continuous_popup_progression", Value::Int(0))])))
+                .collect(),
+            ),
         )]),
     ));
 
@@ -2360,14 +2535,37 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     if fixed_canvas.is_none() {
         doc_data.push((P_LINE_HEIGHT, num(LH_EM, U_EM)));
     }
-    doc_data.extend([(477, Value::Symbol(56)), (READING_ORDERS, reading_orders)]);
+    doc_data.extend([(477, Value::Symbol(56)), (READING_ORDERS, reading_orders(sections))]);
     entities.push(ent(NO_NAME, T_DOCUMENT_DATA, Value::Struct(doc_data)));
+}
 
+/// 元数据的 `issue_date`（`YYYY-MM-DD`）：OPF 日期取前面能用的部分，只写到年、月的补成当年 1 月 1 日、当月 1 日
+/// （`2019` → `2019-01-01`，`2019-05` → `2019-05-01`；以前不足 10 个字符的整个换成 2000-01-01）。认不出年份的写 2000-01-01。
+fn issue_date(date: &str) -> String {
+    let d = date.trim();
+    fn digits(s: Option<&str>) -> Option<&str> {
+        s.filter(|s| s.bytes().all(|c| c.is_ascii_digit()))
+    }
+    let (Some(y), m, day) = (digits(d.get(..4)), digits(d.get(5..7)), digits(d.get(8..10))) else {
+        return "2000-01-01".to_string();
+    };
+    let sep = |i: usize| d.as_bytes().get(i) == Some(&b'-');
+    match (m.filter(|_| sep(4)), day.filter(|_| sep(7))) {
+        (Some(m), Some(day)) => format!("{y}-{m}-{day}"),
+        (Some(m), None) => format!("{y}-{m}-01"),
+        _ => format!("{y}-01-01"),
+    }
+}
+
+/// 图片、字体的字节实体（`$417`/`$418`）、资源（`$164`）、字体（`$262`）。
+fn resource_entities(b: &mut Builder, fonts: Vec<(String, crate::css::FontFace, Vec<u8>)>, cover_res: Option<usize>, entities: &mut Vec<Entity>) {
+    let res_list: Vec<(String, String, u32, &'static str, u32, u32)> =
+        b.resources.iter().map(|r| (r.name.clone(), r.location.clone(), r.format, r.mime, r.width, r.height)).collect();
     // 资源（字节实体名、资源路径）的符号最后分配：书里不能有实体的 id 排在资源路径的符号后面。以前资源先分配、目录锚点和
     // 导航后分配，固定版式里比画布小的图有的页整页空白（哪几页随实体集合变）；Amazon 转的书从来不这样排，给它加上排在后面的
     // 锚点也出空白页（2026-10-06 真机，42 本测试书对照，见 docs/kfx.md）。
     // 字节实体名、资源路径：图片在前、字体在后，一起按组分配符号。
-    let mut raws: Vec<(String, String)> = res_list.iter().enumerate().map(|(i, (name, loc, ..))| (raw_name(i, name), loc.clone())).collect();
+    let mut raws: Vec<(String, String)> = res_list.iter().enumerate().map(|(i, (name, loc, ..))| (raw_name(i, name, cover_res), loc.clone())).collect();
     raws.extend((0..fonts.len()).map(|i| (format!("font{i}-ad"), format!("resource/font{i}"))));
     // 图片字节实体和资源路径的符号要隔 9 个：Kindle 按「`$165` 资源路径的符号编号 − 9」找图片字节
     // （6 本样本 443 个资源全是这样；只改资源路径或只给字节实体改名，书架缩略图就没了，2026-10-05 真机）。
@@ -2420,11 +2618,23 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         let bytes = std::mem::take(&mut b.resources[i].bytes);
         entities.push(Entity { id: l, ty: T_RAW_MEDIA, version: 1, header: entity_header(), body: Body::Raw(bytes) });
     }
+}
 
+/// 图片字节的实体名。封面的要叫「文档数据 `$538.$597.$614` 的名字 + `-ad`」：Kindle 书架缩略图按这个找
+/// （样本里元数据的 `cover_image` 一律写 `e6`，常常指到别的插图甚至锚点，缩略图照样对；
+/// 把这个实体改名缩略图就没了，2026-10-05 真机）。
+fn raw_name(i: usize, name: &str, cover_res: Option<usize>) -> String {
+    if Some(i) == cover_res { format!("{COVER_AUX}-ad") } else { format!("{name}-ad") }
+}
+
+/// 实体按类型排序、加上清单（`$419`），连同符号表、能力表写成容器。
+fn finish(b: &Builder, sections: &[SectionOut], mut entities: Vec<Entity>, cover_res: Option<usize>, id: u64) -> Vec<u8> {
+    let container_id = container_id(id);
+    let s = |v: &str| Value::String(v.to_string());
     // 按类型排序（和样本一样），清单放最后。
     entities.sort_by_key(|e| e.ty);
     let mut deps = Vec::new();
-    for s in &sections {
+    for s in sections {
         if !s.resources.is_empty() {
             // 样本里每个资源列两次（含义不明，照抄）。
             let mut names: Vec<Value> = Vec::new();
@@ -2441,7 +2651,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     for (i, r) in b.resources.iter().enumerate() {
         deps.push(Value::Struct(vec![
             (EID, Value::Symbol(b.local_index[&r.name])),
-            (MANIFEST_DEP_LIST, Value::List(vec![Value::Symbol(b.local_index[&raw_name(i, &r.name)])])),
+            (MANIFEST_DEP_LIST, Value::List(vec![Value::Symbol(b.local_index[&raw_name(i, &r.name, cover_res)])])),
         ]));
     }
     let all_ids = Value::List(entities.iter().map(|e| Value::Symbol(e.id)).collect());
@@ -2500,7 +2710,7 @@ fn build(book: &Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
         "0".repeat(40)
     );
     let c = Container { version: 2, info, symtab, capabilities: caps, kfxgen: kfxgen.into_bytes(), entities };
-    Ok(c.into_bytes())
+    c.into_bytes()
 }
 
 /// 元数据里写的语言。中文书写 `en`：Kindle 只看元数据语言决定开不开「Aa → 间距」里的段间距、字间距、字符间距，
@@ -2945,6 +3155,166 @@ let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><h
         assert_eq!(target("anchor1"), (img, 0), "空 div → 下一块（图片）");
         assert_eq!(target("anchor2"), (img, 0), "图片自己的 id");
         assert_eq!(target("anchor3"), (eid_of_text("丙丁"), 2), "文末的 → 最后一块末尾");
+    }
+
+    /// 一个文档的 body 子节点解析成块（不走整本书）。
+    fn body_blocks(body: &str) -> Vec<Block> {
+        let html = Html::parse_document(&format!("<html><body>{body}</body></html>"));
+        let d = Doc { path: "c.xhtml", sheet: Sheet::default(), lang: None, pending: Default::default(), gap: Default::default() };
+        let body = html.select(&scraper::Selector::parse("body").unwrap()).next().unwrap();
+        let comp = d.comp(&body, &Computed::root());
+        let mut out = Vec::new();
+        d.children(body, &comp, &mut out);
+        out
+    }
+
+    /// 只有空白的段落不出节点，折成下一块上边距多出 0.6 × 本元素行高（Send to Kindle 同样）；只有普通空格的排不出行，不折。
+    #[test]
+    fn blank_paragraphs_fold_into_next_margin() {
+        let mut blocks = body_blocks("<p>甲</p><p>&#160;</p><p>乙</p><p>　</p><p><br/></p><p>丙</p><p> </p><p>丁</p><p style=\"line-height:2\">&#160;</p><p>戊</p><p>&#160;</p>");
+        collapse_siblings(&mut blocks);
+        apply_gaps(&mut blocks);
+        let tops: Vec<(String, f64)> = blocks
+            .iter()
+            .map(|b| match &b.kind {
+                Kind::Text { text, .. } => (text.clone(), (b.margin_top * 1000.0).round() / 1000.0),
+                _ => unreachable!(),
+            })
+            .collect();
+        // <p> 上下 1em 折叠成 1em，再加折掉的空段：一个 0.72em（缺省行高 1.2），两个 1.44em，行高 2 的 1.2em；文末的不折
+        assert_eq!(tops, [("甲".into(), 1.0), ("乙".into(), 1.72), ("丙".into(), 2.44), ("丁".into(), 1.0), ("戊".into(), 2.2)]);
+    }
+
+    type TextRuns = Vec<(String, Vec<(usize, usize, bool)>)>;
+
+    /// 文字块（深度优先）的 (文字, [(起点, 长度, 有没有链接)])；图片记成 `<img>`。
+    fn texts_and_runs(blocks: &[Block]) -> TextRuns {
+        let mut out = Vec::new();
+        for b in blocks {
+            match &b.kind {
+                Kind::Text { text, runs } => out.push((text.clone(), runs.iter().map(|r| (r.start, r.len, r.link.is_some())).collect())),
+                Kind::Image { .. } => out.push(("<img>".to_string(), Vec::new())),
+                Kind::Container(c) => out.extend(texts_and_runs(c)),
+            }
+        }
+        out
+    }
+
+    /// 行内元素走到一半遇到块或图片（切开文字块）：区间在切开处截断，到新块从 0 接着开（以前按进来时的下标插进新缓冲：越界 panic、或区间错位）。
+    #[test]
+    fn inline_run_split_by_block_or_image() {
+        let got = texts_and_runs(&body_blocks(r##"<div><b>x</b><a href="#n">y<div>z</div>wwwww</a></div>"##));
+        assert_eq!(got, [("xy".into(), vec![(0, 1, false), (1, 1, true)]), ("z".into(), vec![]), ("wwwww".into(), vec![(0, 5, true)])]);
+        let got = texts_and_runs(&body_blocks(r##"<p><b>x</b>t<a href="#n"><img src="i.png"/>see note one</a></p>"##));
+        assert_eq!(got, [("xt".into(), vec![(0, 1, false)]), ("<img>".into(), vec![]), ("see note one".into(), vec![(0, 12, true)])]);
+        // 不 panic 时以前区间错位到「www」上
+        let got = texts_and_runs(&body_blocks(r##"<div>xx<a href="#n">y<div>z</div>wwwww</a></div>"##));
+        assert_eq!(got, [("xxy".into(), vec![(2, 1, true)]), ("z".into(), vec![]), ("wwwww".into(), vec![(0, 5, true)])]);
+        // 套着的两层都截断、都接着开，外层排在里层前面
+        let got = texts_and_runs(&body_blocks(r##"<div>a<a href="#n">b<b>c<div>d</div>e</b>f</a></div>"##));
+        assert_eq!(got, [("abc".into(), vec![(1, 2, true), (2, 1, false)]), ("d".into(), vec![]), ("ef".into(), vec![(0, 2, true), (0, 1, false)])]);
+    }
+
+    /// `<ul>`/`<ol>` 里直接放的文字、图片不丢（排成列表里的匿名块，不带符号）。
+    #[test]
+    fn list_direct_text_and_images_kept() {
+        let blocks = body_blocks(r#"<ul>前言<li>甲</li>中间<li>乙</li><img src="i.png"/></ul>"#);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].ty, Some(NODE_LIST));
+        let got: Vec<String> = texts_and_runs(&blocks).into_iter().map(|t| t.0).collect();
+        assert_eq!(got, ["前言", "甲", "中间", "乙", "<img>"]);
+        let Kind::Container(items) = &blocks[0].kind else { panic!() };
+        let types: Vec<Option<u32>> = items.iter().map(|i| i.ty).collect();
+        assert_eq!(types, [None, Some(NODE_LIST_ITEM), None, Some(NODE_LIST_ITEM), None]);
+    }
+
+    /// `<font size>` 的 `+n`/`-n` 饱和加减，不溢出（以前 `+2147483647` debug 下 panic、release 下回绕成最小字号）。
+    #[test]
+    fn font_size_attribute_saturates() {
+        for (size, want) in [("+2147483647", "3rem"), ("-2147483647", "0.625rem"), ("+1", "1.125rem"), ("7", "3rem")] {
+            let html = Html::parse_fragment(&format!(r#"<font size="{size}">x</font>"#));
+            let el = html.select(&scraper::Selector::parse("font").unwrap()).next().unwrap();
+            let mut decls = HashMap::new();
+            presentational_hints(&el, &mut decls);
+            assert_eq!(decls.get("font-size").map(String::as_str), Some(want), "{size}");
+        }
+    }
+
+    /// 行内 `style` 的 `url()` 按文档路径解析：子目录里文档的行内背景图找得到。
+    #[test]
+    fn inline_style_url_resolved_against_document() {
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(4, 4, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="O/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("O/c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language><dc:date>2019</dc:date></metadata><manifest><item id="b" href="I/bg.png" media-type="image/png"/><item id="c1" href="T/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("O/I/bg.png", &png).unwrap();
+        w.put("O/T/c1.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div style="background-image:url('../I/bg.png')"><p>x</p></div></body></html>"#).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(styles.contains(&format!("({P_BG_IMAGE}, Symbol(")) && c.entities.iter().any(|e| e.ty == T_RESOURCE), "{styles}");
+        // 只写到年份的日期补成 1 月 1 日
+        let meta = format!("{:?}", c.entities.iter().find(|e| e.ty == T_METADATA).unwrap().value().unwrap());
+        assert!(meta.contains(r#"String("issue_date")), (307, String("2019-01-01"))"#), "{meta}");
+    }
+
+    /// 元数据 `issue_date`：能用的部分留下、按 `YYYY-MM-DD` 补齐（以前不足 10 个字符的整个换成 2000-01-01）。
+    #[test]
+    fn issue_date_keeps_usable_part() {
+        for (d, want) in [
+            ("2019-05-03T08:00:00Z", "2019-05-03"),
+            ("2019-05-03", "2019-05-03"),
+            ("2019-05", "2019-05-01"),
+            ("2019", "2019-01-01"),
+            (" 2019 ", "2019-01-01"),
+            ("2019-5-3", "2019-01-01"),
+            ("", "2000-01-01"),
+            ("May 2019", "2000-01-01"),
+            ("二〇一九年", "2000-01-01"),
+        ] {
+            assert_eq!(issue_date(d), want, "{d:?}");
+        }
+    }
+
+    /// 固定版式的页图片取不到：同没有内容的文件，目录项改指下一页（以前没登记，目录项找不到位置）。
+    #[test]
+    fn fixed_layout_missing_image_page_registered_as_empty() {
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg).encode_image(&image::GrayImage::from_pixel(8, 8, image::Luma([128]))).unwrap();
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language><meta name="fixed-layout" content="true"/><meta name="original-resolution" content="8x8"/></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="i" href="i.jpg" media-type="image/jpeg"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="p2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="p1"/><itemref idref="p2"/></spine></package>"#).unwrap();
+        w.put("nav.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="p1.xhtml">1</a></li><li><a href="p2.xhtml">2</a></li></ol></nav></body></html>"#).unwrap();
+        w.put("i.jpg", &jpeg).unwrap();
+        w.put("p1.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div><img src="missing.jpg"/></div></body></html>"#).unwrap();
+        w.put("p2.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div><img src="i.jpg"/></div></body></html>"#).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("目录项找不到位置")), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let toc = c.entities.iter().find(|e| e.ty == T_NAV_CONTAINER && e.value().unwrap().field(NAV_TYPE) == Some(&Value::Symbol(NAV_TYPE_TOC))).unwrap();
+        let targets: Vec<Value> = toc.value().unwrap().field(NAV_ENTRIES).unwrap().as_list().unwrap().iter().map(|e| e.field(NAV_TARGET).unwrap().clone()).collect();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0], targets[1], "取不到图的第 1 页指到第 2 页");
+    }
+
+    /// 正文字体字数打平时结果确定（取字体名小的，没写字体的排最前），和 HashMap 的遍历顺序无关。
+    #[test]
+    fn body_font_tie_is_deterministic() {
+        let block = |font: Option<&str>, text: &str| {
+            let mut c = Computed::root();
+            c.font_family = font.map(str::to_string);
+            Block::anonymous(Kind::Text { text: text.into(), runs: Vec::new() }, c, Vec::new())
+        };
+        for _ in 0..20 {
+            let mut docs: Vec<ParsedDoc> = vec![(0, "a", None, vec![block(Some("Zed"), "甲乙"), block(Some("Alpha"), "丙丁"), block(Some("Mid"), "戊")])];
+            assert_eq!(body_font_to_drop(&mut docs), Some("alpha".to_string()));
+            let mut docs: Vec<ParsedDoc> = vec![(0, "a", None, vec![block(Some("Zed"), "甲乙"), block(None, "丙丁")])];
+            assert_eq!(body_font_to_drop(&mut docs), None);
+        }
     }
 
     #[test]

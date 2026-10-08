@@ -100,9 +100,9 @@ def title_of(path):
 
 
 if __name__ == '__main__':
-    import sys
-    a_path, b_path = cli_args(2, __doc__)[:2]
-    top = int(sys.argv[3]) if len(sys.argv) > 3 and not sys.argv[3].startswith('--') else 60
+    pos = cli_args(2, __doc__)
+    a_path, b_path = pos[:2]
+    top = int(pos[2]) if len(pos) > 2 else 60
     matched, unmatched, na, nb, leaf, chain, runs, ex = compare(a_path, b_path)
     print(f'配上 {matched}，没配上 {unmatched}；Amazon {na} 个文字节点，我们 {nb} 个')
     print('== 文字节点的样式 (属性, Amazon, 我们): 个数 «例子»')

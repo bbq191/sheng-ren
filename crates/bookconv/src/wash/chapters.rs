@@ -29,11 +29,15 @@ enum Role {
     Other,
 }
 
-const CN_NUM: &str = "0-9０-９〇零一二三四五六七八九十百千两";
+/// 章节标题里「第X部」「第X章」的 X 能用的字（正则字符类的内容）：阿拉伯数字（半角、全角）和中文数字。定章节和目录重建
+/// （`toc.rs` 的分部前缀、合集目录）共用这一份。
+pub(super) const CN_NUM: &str = "0-9０-９〇零一二三四五六七八九十百千两";
+/// 「第X部」这一级的量词（正则字符类的内容）。
+pub(super) const PART_KINDS: &str = "部卷篇辑编";
 
 fn part_like(t: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(&format!(r#"(?i)^\s*(第[{CN_NUM}]+\s*[部卷篇辑编]|(part|book|volume)\b)"#)).unwrap()).is_match(t)
+    RE.get_or_init(|| Regex::new(&format!(r#"(?i)^\s*(第[{CN_NUM}]+\s*[{PART_KINDS}]|(part|book|volume)\b)"#)).unwrap()).is_match(t)
 }
 
 /// 「第X册」「上册」——合集的装订分册。
@@ -129,8 +133,9 @@ impl FileInfo {
 fn retarget_ncx_to_ids(entries: &mut [Entry], opf: &Opf, targets: &[(String, String, String)]) {
     let Some(ncx) = opf.ncx.clone() else { return };
     let Some(e) = entries.iter_mut().find(|e| e.name == ncx) else { return };
-    let text = String::from_utf8_lossy(&e.data).into_owned();
-    let new = crate::ncx::rewrite_content_srcs(&text, |label, src| {
+    // 不是 UTF-8 的 NCX 不改（按 lossy 转出的文字写回会把原字节改坏）
+    let Ok(text) = std::str::from_utf8(&e.data) else { return };
+    let new = crate::ncx::rewrite_content_srcs(text, |label, src| {
         // src 是属性原文（`resolve_link` 解析时还原字符引用）；拼新值时原文照用。
         let (path, frag) = crate::epubzip::resolve_link(&ncx, src);
         if frag.is_some() {

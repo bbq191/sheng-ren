@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 540" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
-  <title>书库只存索引：目录结构、原件与产物的位置</title>
+  <title>书库只存索引：目录结构、原件与产物的位置（产物在设备上，电脑上不留）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f7bd6"/></marker>
     <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f9a5b"/></marker>
@@ -25,43 +25,45 @@
     <text x="52" y="206">5e77a0c3b1d9/</text><text x="200" y="206" class="s">← 网址入库（没有原件）</text>
     <text x="68" y="228" fill="#1d4fa8">meta.json</text><text x="200" y="228" class="s">source 记着网址</text>
     <text x="68" y="250">master.epub</text><text x="200" y="250" class="s">抓下来的正文，只有这种存内容</text>
-    <text x="36" y="280">output/</text><text x="200" y="280" class="s">只放 add 的书、网址书的产物</text>
-    <text x="52" y="302">kindle/  ireader/  xochitl/</text>
+    <text x="36" y="280">.tmp-&lt;id&gt;-&lt;模式&gt;/</text><text x="200" y="280" class="s">生成时的临时目录，传上设备就删</text>
+    <text x="36" y="302">output/</text><text x="200" y="302" class="s">只给没写 [deliver] 的自定义模式用</text>
     <text x="36" y="328">output-state/</text><text x="200" y="328" class="s">每个模式的生成记录：</text>
-    <text x="52" y="350">kindle.json …</text><text x="200" y="350" class="s">产物路径、指纹（只删这里记着的文件）</text>
+    <text x="52" y="350">kindle.json …</text><text x="200" y="350" class="s">设备上的位置、指纹、哈希（只删记着的）</text>
     <text x="36" y="376">sources.json</text><text x="200" y="376" class="s">track 的目录与其中文件的大小、时间</text>
     <text x="36" y="398">profiles/</text><text x="200" y="398" class="s">可选：自定义阅读模式 *.toml</text>
     <text x="36" y="420">.lock</text><text x="200" y="420" class="s">同时只允许一个 booklib 改书库</text>
   </g>
 
-  <text x="560" y="30" class="h">~/Documents/ereader/</text>
-  <rect x="556" y="40" width="364" height="190" rx="8" fill="#fff" stroke="#ccc"/>
-  <text x="572" y="66" class="m">books/</text><text x="700" y="66" class="s">← track 的目录（你的原件）</text>
-  <text x="588" y="88" class="m" fill="#1d4fa8">小说/三体.epub</text>
-  <text x="588" y="110" class="m" fill="#1d4fa8">漫画/乱马01.cbz</text>
-  <text x="572" y="140" class="m" fill="#2e7d4a">kindle/<tspan x="652">小说/三体.kfx</tspan><tspan x="780">漫画/…</tspan></text>
-  <text x="572" y="164" class="m" fill="#2e7d4a">ireader/<tspan x="652">小说/三体.epub</tspan><tspan x="780">漫画/…</tspan></text>
-  <text x="572" y="188" class="m" fill="#2e7d4a">xochitl/<tspan x="652">小说/三体.epub</tspan><tspan x="780">漫画/…</tspan></text>
-  <text x="572" y="214" class="s">↑ 产物：每个阅读模式一个文件夹，镜像 books/ 的子目录</text>
+  <text x="560" y="30" class="h">~/Documents/ereader/books/</text>
+  <rect x="556" y="40" width="364" height="86" rx="8" fill="#fff" stroke="#ccc"/>
+  <text x="572" y="62" class="s">track 的目录（你的原件，booklib 只读）</text>
+  <text x="588" y="86" class="m" fill="#1d4fa8">小说/三体.epub</text>
+  <text x="588" y="108" class="m" fill="#1d4fa8">漫画/乱马01.cbz</text>
 
-  <path class="l" d="M492 110 C520 110 540 84 584 84" marker-end="url(#a)"/>
-  <path class="l" d="M492 180 C530 180 540 106 584 106" marker-end="url(#a)"/>
+  <rect x="556" y="136" width="364" height="100" rx="8" fill="#fff" stroke="#3f9a5b"/>
+  <text x="572" y="158" class="s" fill="#2e7d4a">设备上（sync 直接传，电脑上不留）</text>
+  <text x="572" y="182" class="m" fill="#2e7d4a">Kindle<tspan x="640">documents/小说/三体.kfx</tspan></text>
+  <text x="572" y="204" class="m" fill="#2e7d4a">掌阅<tspan x="640">documents/小说/三体.epub</tspan></text>
+  <text x="572" y="226" class="m" fill="#2e7d4a">Move<tspan x="640">文件夹「小说」里的《三体》</tspan></text>
+
+<path class="l" d="M492 110 C520 110 540 82 584 82" marker-end="url(#a)"/>
+  <path class="l" d="M492 180 C530 180 540 104 584 104" marker-end="url(#a)"/>
   <line x1="478" y1="110" x2="490" y2="110" stroke="#3f7bd6" stroke-dasharray="2 3"/>
   <line x1="420" y1="180" x2="490" y2="180" stroke="#3f7bd6" stroke-dasharray="2 3"/>
-  <path class="o" d="M470 350 C530 350 530 150 568 142" marker-end="url(#g)"/>
+  <path class="o" d="M470 350 C530 350 530 200 554 196" marker-end="url(#g)"/>
 
-  <rect x="556" y="246" width="364" height="120" rx="8" fill="#eef4ff" stroke="#5b7fd6"/>
+  <rect x="556" y="246" width="364" height="124" rx="8" fill="#eef4ff" stroke="#5b7fd6"/>
   <text x="572" y="270" class="h">蓝色虚线 = 索引指向原件</text>
   <text x="572" y="294" class="s">生成前先核对原件：大小和修改时间没变直接用；</text>
   <text x="572" y="314" class="s">变了就重算哈希，内容不一样就停下，提示先 sync。</text>
-  <text x="572" y="334" class="s">原件移动了：按内容认出来、更新路径，产物跟着挪。</text>
-  <text x="572" y="354" class="s">绿色虚线 = 生成记录指向产物（书库外）</text>
+  <text x="572" y="334" class="s">原件移动了：按内容认出来、更新路径，设备上的跟着挪。</text>
+  <text x="572" y="354" class="s">绿色虚线 = 生成记录指向设备上的产物</text>
 
   <rect x="556" y="380" width="364" height="140" rx="8" fill="#eaf7ee" stroke="#3f9a5b"/>
   <text x="572" y="404" class="h">指纹：什么变了就重新生成</text>
   <text x="572" y="428" class="s">原件哈希 · 找来的封面 · 补进去的简介标签</text>
   <text x="572" y="448" class="s">流程版本（CBZ 来源加格式转换版本）· 优化器版本</text>
   <text x="572" y="468" class="s">注释方式 · 模式 id · 阅读范围与漫画排法 · 黑白/彩色</text>
-  <text x="572" y="488" class="s">格式（KFX 再加写出器版本）</text>
+  <text x="572" y="488" class="s">格式（KFX 再加写出器版本）；文字书、漫画分开算</text>
   <text x="572" y="510" class="s">都没变 → sync 生成时直接跳过；list 显示 ✓ 最新 / ⚠ 过期</text>
 </svg>

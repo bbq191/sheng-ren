@@ -87,6 +87,17 @@ pub struct Meta {
     /// 早期条目没有，第一次用到时判、持锁的命令顺带存下。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comic: Option<bool>,
+    /// 书里自己有没有简介、标签（EPUB 的 OPF）：书里已有的那项生成时不补、也不进指纹。入库时看一次存下，原件暂时不在也算得出指纹。
+    /// 早期条目没有，第一次用到时看、持锁的命令顺带存下；看不了（原件不在）时指纹按两项都补算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub own_dc: Option<OwnDc>,
+}
+
+/// 书里自己有没有简介（`dc:description`）、标签（`dc:subject`），见 [`Meta::own_dc`]。
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OwnDc {
+    pub description: bool,
+    pub subjects: bool,
 }
 
 impl Meta {
@@ -155,12 +166,14 @@ pub struct Library {
     verified: RefCell<HashMap<String, Verified>>,
     /// 联网查书目用的 HTTP（节流、离线状态跨书共用）。
     net: OnceCell<net::Net>,
-    /// 上一本书与模式无关的中间文件（见 [`generate::PreparedInput`]）：同一本书接着给别的模式生成时直接用。
-    prepared: RefCell<Option<generate::PreparedInput>>,
-    /// 内容哈希 → 书里有没有简介、标签（生成指纹用，见 `generate::injected_info_sig`）。
-    own_dc: RefCell<HashMap<String, (bool, bool)>>,
-    /// 内容哈希 → 是不是漫画（决定 kindle 出 KFX 还是 AZW3；生成计划每次都要用，按内容缓存）。
+    /// 与模式无关的中间文件（见 [`generate::PreparedInput`]），按书留着：同一本书接着给别的模式生成时直接用。
+    prepared: RefCell<Vec<generate::PreparedInput>>,
+    /// 内容哈希 → 书里有没有简介、标签（早期条目 meta.json 里没存的，见 `Library::own_dc_of`）。
+    own_dc: RefCell<HashMap<String, OwnDc>>,
+    /// 内容哈希 → 是不是漫画（早期条目 meta.json 里没存的；指纹分文字书、漫画，profile 给漫画另配格式时也要用）。
     comic: RefCell<HashMap<String, bool>>,
+    /// 正在传、还没记进生成记录的新产物：设备上的路径 → 书 id（同一轮里别的书不选这个文件名，见 `Library::prepare_file`）。
+    reserved: RefCell<HashMap<PathBuf, String>>,
     /// 设备在哪找（见 [`deliver::DeviceEnv`]）。
     device_env: DeviceEnv,
     /// 这一轮连上的设备：模式 id → 送到哪，或没接上的原因（见 [`Library::refresh_devices`]）。
@@ -293,9 +306,10 @@ impl Library {
             sources_json: JsonCache::new(),
             verified: RefCell::new(HashMap::new()),
             net: OnceCell::new(),
-            prepared: RefCell::new(None),
+            prepared: RefCell::default(),
             own_dc: RefCell::new(HashMap::new()),
             comic: RefCell::new(HashMap::new()),
+            reserved: RefCell::default(),
             device_env: DeviceEnv::from_env(),
             targets: RefCell::default(),
         })
@@ -308,9 +322,20 @@ impl Library {
     }
 
     /// 重新看设备接没接上（`sync --watch` 每轮调一次）：MTP 设备、没接上的下次用到时重新看；到 Move 的 SSH 隧道还通就接着用
-    /// （不每轮重连），断了才重连。
-    pub fn refresh_devices(&self) {
-        self.targets.borrow_mut().retain(|_, t| matches!(&**t, Ok(deliver::Target::Xochitl(x)) if x.alive()));
+    /// （不每轮重连），断了才重连。返回连着、这次发现断了的 Move（模式 id）：上一轮跟它打交道出的错多半是掉线，可以重试。
+    pub fn refresh_devices(&self) -> Vec<String> {
+        let mut dropped = Vec::new();
+        self.targets.borrow_mut().retain(|id, t| match &**t {
+            Ok(deliver::Target::Xochitl(x)) => {
+                let alive = x.alive();
+                if !alive {
+                    dropped.push(id.clone());
+                }
+                alive
+            }
+            _ => false,
+        });
+        dropped
     }
 
     /// 这个模式的产物送到哪：设备接上了（或产物放电脑上）`Ok`，没接上 `Err(原因)`。一轮里只连一次。
@@ -548,6 +573,8 @@ impl Library {
             return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
         }
         let (title, authors, comic) = (info.title, info.authors, info.comic);
+        // 书里有没有简介、标签（指纹要用，见 `Meta::own_dc`）：只读 OPF
+        let own_dc = if ext == "epub" { metadata::own_description_subjects(&path).ok().map(|(description, subjects)| OwnDc { description, subjects }) } else { None };
         unchanged()?;
         let meta = Meta {
             id,
@@ -561,6 +588,7 @@ impl Library {
             source_size: size,
             source_mtime_ns: mtime_ns,
             comic: Some(comic),
+            own_dc,
             ..Default::default()
         };
         self.store(&meta, &[])?;
@@ -668,7 +696,6 @@ impl Library {
         Ok(path)
     }
 
-    /// 生成时读的内容：书库里存着的母版，或核对过的原件。
     /// 是不是漫画：CBZ 一律算；EPUB 按优化器同一套判定（`bookconv::comic_detect::is_comic`：图 ≥ 20 张、平均每张图配的字少于 40），
     /// 只读文字部分（图片条目不读内容）。
     pub fn is_comic(&self, m: &Meta) -> Result<bool, String> {
@@ -681,10 +708,19 @@ impl Library {
         Ok(bookconv::comic_detect::is_comic(&entries))
     }
 
+    /// 生成时读的内容：书库里存着的母版，或核对过的原件。
     pub(crate) fn content_path(&self, m: &Meta) -> Result<PathBuf, String> {
         match m.source() {
-            Source::Stored => Ok(self.entry_dir(&m.id).join(&m.master)),
+            Source::Stored => Ok(self.content_location(m)),
             Source::Original => self.verified_original(m),
+        }
+    }
+
+    /// 内容在哪（不核对原件）：书库里存着的母版，或原件记着的路径。
+    pub(crate) fn content_location(&self, m: &Meta) -> PathBuf {
+        match m.source() {
+            Source::Stored => self.entry_dir(&m.id).join(&m.master),
+            Source::Original => PathBuf::from(&m.source_path),
         }
     }
 

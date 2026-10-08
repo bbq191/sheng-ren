@@ -16,21 +16,27 @@ pub(super) fn is_non_file_ref(r: &str) -> bool {
     l.is_empty() || l.starts_with('#') || l.starts_with("data:") || l.starts_with("http:") || l.starts_with("https:") || l.starts_with("//")
 }
 
-/// `rel`（相对 `base_dir`）指向的书内文件是否存在。大小写不同也算存在（别的阅读器可能容错，宁可留着）。
-pub(super) fn ref_exists(exact: &HashSet<String>, lower: &HashSet<String>, base_dir: &str, rel: &str) -> bool {
-    let rel = rel.split(['#', '?']).next().unwrap_or("");
-    let target = resolve(base_dir, &percent_decode(rel));
+/// 文件 `base_file` 里的引用 `rel` 指向的书内文件是否存在。大小写不同也算存在（别的阅读器可能容错，宁可留着）。
+/// `xml`：引用是 XHTML 的属性值，先还原字符引用（`a&amp;b.jpg` 指的是 `a&b.jpg`；按 [`crate::epubzip::resolve_link`] 解析）；
+/// 样式表里的 `url()` 不还原。`?` 后面的查询串不算路径（书里的文件名不会有 `?`：改安全文件名时已换掉）。
+pub(super) fn ref_exists(exact: &HashSet<String>, lower: &HashSet<String>, base_file: &str, rel: &str, xml: bool) -> bool {
+    let rel = rel.split('?').next().unwrap_or("");
+    let target = if xml {
+        crate::epubzip::resolve_link(base_file, rel).0
+    } else {
+        resolve(dir_of(base_file), &percent_decode(rel.split('#').next().unwrap_or("")))
+    };
     exact.contains(&target) || lower.contains(&target.to_ascii_lowercase())
 }
 
 /// 去掉 `<img>` 里 src 指向书内不存在文件的标签。alt 有实际内容（非空且不是我们自己封面转换写的 "cover"）的留着，
 /// 这类图坏了阅读器还可能显示替代文字，不冒丢内容的风险。返回 (新文本, 去掉个数)。
-pub(super) fn drop_dead_imgs(html: &str, base_dir: &str, exact: &HashSet<String>, lower: &HashSet<String>) -> (String, usize) {
+pub(super) fn drop_dead_imgs(html: &str, base_file: &str, exact: &HashSet<String>, lower: &HashSet<String>) -> (String, usize) {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for t in html::tags(html).filter(|t| t.is_start() && t.is("img")) {
         let tag = &html[t.start..t.end];
         let Some(r) = html::attr_value(tag, "src") else { continue };
-        if is_non_file_ref(r) || ref_exists(exact, lower, base_dir, r) {
+        if is_non_file_ref(r) || ref_exists(exact, lower, base_file, r, true) {
             continue;
         }
         let alt_text = html::attr_value(tag, "alt").map(str::trim).unwrap_or_default();
@@ -52,7 +58,7 @@ pub(super) fn drop_dead_imgs(html: &str, base_dir: &str, exact: &HashSet<String>
 /// - 有 `local()` 候选或还有活的 `url()` → 只剔除死 `url()`（连同后面的 `format()` 和一个逗号），其余保留。
 ///
 /// 外部（http/data）来源视为活。返回 (新 css, 改动的规则数)。
-pub(super) fn drop_dead_font_faces(css: &str, base_dir: &str, exact: &HashSet<String>, lower: &HashSet<String>) -> (String, usize) {
+pub(super) fn drop_dead_font_faces(css: &str, base_file: &str, exact: &HashSet<String>, lower: &HashSet<String>) -> (String, usize) {
     static URL: OnceLock<Regex> = OnceLock::new();
     let face = font_face_re();
     let url = URL.get_or_init(|| Regex::new(r#"(?is)url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)(?:\s*format\([^)]*\))?"#).unwrap());
@@ -66,7 +72,7 @@ pub(super) fn drop_dead_font_faces(css: &str, base_dir: &str, exact: &HashSet<St
             total += 1;
             let r = u.get(1).or_else(|| u.get(2)).or_else(|| u.get(3)).map(|m| m.as_str()).unwrap_or("");
             let device_path = r.trim().to_ascii_lowercase().starts_with("res:");
-            if device_path || !(is_non_file_ref(r) || ref_exists(exact, lower, base_dir, r)) {
+            if device_path || !(is_non_file_ref(r) || ref_exists(exact, lower, base_file, r, false)) {
                 let m = u.get(0).unwrap();
                 dead.push((m.start(), m.end()));
             }
@@ -104,19 +110,20 @@ pub(super) fn drop_dead_refs(entries: &mut [Entry], rep: &mut WashReport) {
     let lower: HashSet<String> = exact.iter().map(|n| n.to_ascii_lowercase()).collect();
     // 各文件独立，多线程做（`util::par_map_mut`）
     let removed = crate::util::par_map_mut(entries, |e| {
-        let is_css = e.name.to_ascii_lowercase().ends_with(".css");
+        let is_css = is_css_name(&e.name);
         if !is_css && !is_html_entry(&e.name, &e.data) {
             return 0;
         }
         let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
-        let base = dir_of(&e.name).to_string();
+        let base = e.name.as_str();
         let (new, n) = if is_css {
-            drop_dead_font_faces(text, &base, &exact, &lower)
+            drop_dead_font_faces(text, base, &exact, &lower)
         } else {
-            let (t, a) = drop_dead_imgs(text, &base, &exact, &lower);
+            let (t, a) = drop_dead_imgs(text, base, &exact, &lower);
             let mut b = 0;
+            // `<style>` 里的 `url()` 不还原字符引用（同以前；HTML 解析时 `<style>` 的内容是原样文字）
             let t = html::style_block_re().replace_all(&t, |c: &regex::Captures| {
-                let (css, k) = drop_dead_font_faces(&c[2], &base, &exact, &lower);
+                let (css, k) = drop_dead_font_faces(&c[2], base, &exact, &lower);
                 b += k;
                 format!("{}{}{}", &c[1], css, &c[3])
             });

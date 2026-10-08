@@ -1,4 +1,4 @@
-//! EPUB → AZW3（KF8）写出器：Kindle USB 侧载的唯一可用格式（EPUB 不认，2026-09-27 真机实测）。
+//! EPUB → AZW3（KF8）写出器：Kindle USB 侧载认的格式之一（EPUB 不认，2026-09-27 真机实测）。书库 2026-10-05 起给 Kindle 出 KFX，AZW3 只留 `epub-to-azw3` 单独用。
 //!
 //! clean-room：依 MobileRead 的 MOBI 容器文档，加上对 KF8 样本文件的**黑盒数据分析**（只看文件字节，不看任何
 //! 工具的代码）实现，不参考 GPL 的 KindleUnpack / Calibre 代码；读取侧 [`read`]（`palm`、`kf8`）做往返校验。
@@ -34,7 +34,7 @@ pub enum CdeType {
 #[derive(Clone, Debug)]
 pub struct Opts {
     pub cdetype: CdeType,
-    /// 固定唯一 ID 与时间戳（书库用书的 id 和入库时间，重建后 Kindle 仍认作同一本书）；`None` 按书自己派生：
+    /// 固定唯一 ID 与时间戳（调用方给定，比如书的 id 和入库时间，重建后 Kindle 仍认作同一本书）；`None` 按书自己派生：
     /// ID 取 OPF 唯一标识符的哈希（没有就取 OPF 原文的哈希），时间取 `dcterms:modified`（没有就 2000-01-01）。
     pub fixed_id: Option<(u32, u32)>,
 }

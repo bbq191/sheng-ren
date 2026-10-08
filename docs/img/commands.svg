@@ -53,9 +53,9 @@
   <text x="290" y="276" text-anchor="middle" class="s">生成时读原件（先核对还是入库时那本书）</text>
 
   <!-- 网络 → 书库 -->
-  <rect class="box" x="395" y="320" width="170" height="54" rx="8" fill="#f3eefa" stroke="#8a63c9"/>
+  <rect class="box" x="340" y="320" width="280" height="54" rx="8" fill="#f3eefa" stroke="#8a63c9"/>
   <text x="480" y="342" text-anchor="middle" class="h">网络</text>
-  <text x="480" y="361" text-anchor="middle" class="s">豆瓣 · Wikidata · Open Library</text>
+  <text x="480" y="361" text-anchor="middle" class="s">豆瓣 · QQ 阅读 · Wikidata · Open Library</text>
   <path class="l" d="M480 320 L480 224" marker-end="url(#a)"/>
   <text x="490" y="306" class="cmd">meta --fetch</text>
 
@@ -67,11 +67,11 @@
 
   <!-- meta edit -->
   <rect class="box" x="30" y="405" width="230" height="70" rx="10" fill="#ffffff" stroke="#888"/>
-  <text x="145" y="431" text-anchor="middle" class="h">任意一个 EPUB 文件</text>
+  <text x="145" y="431" text-anchor="middle" class="h">一个 EPUB 文件</text>
   <text x="145" y="453" text-anchor="middle" class="s">改的是文件本身，不备份</text>
   <path class="l" d="M290 440 L262 440" marker-end="url(#a)"/>
-  <text x="300" y="435" class="cmd">meta --edit 书.epub</text>
-  <text x="300" y="455" class="s">查看、改写书名作者简介标签封面；和书库无关</text>
+  <text x="300" y="435" class="cmd">meta --edit 书.epub | 书库 id | 书名</text>
+  <text x="300" y="455" class="s">查看、改写书名作者简介标签封面；给 id、书名时改那本的原件</text>
   <text x="300" y="473" class="s">改了跟踪目录里的原件，下次 sync 当新版本入库</text>
 
   <!-- 只读 -->

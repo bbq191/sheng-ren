@@ -368,9 +368,27 @@ pub fn fnv64(b: &[u8]) -> u64 {
     b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
 }
 
+/// 字节按单字节（Latin-1）读成文字：每个字节是一个 U+0000–U+00FF 的字符。不是 UTF-8 的样式表（Big5 之类）这样读：CSS 的语法都是
+/// ASCII，选择器、ASCII 的值照样认得，别的字节原样留着，用 [`latin1_encode`] 写回逐字节不变。
+pub(crate) fn latin1_decode(b: &[u8]) -> String {
+    b.iter().map(|&c| char::from(c)).collect()
+}
+
+/// [`latin1_decode`] 的反向：U+00FF 以内的字符写回一个字节，以外的（只可能是改写时新写进去的）写成 `?`。
+pub(crate) fn latin1_encode(s: &str) -> Vec<u8> {
+    s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latin1_round_trip() {
+        let b: Vec<u8> = (0..=255u8).collect();
+        assert_eq!(latin1_encode(&latin1_decode(&b)), b);
+        assert_eq!(latin1_encode("a中"), b"a?");
+    }
 
     #[test]
     fn produce_then_replace_swaps_on_success_and_cleans_tmp_on_failure() {

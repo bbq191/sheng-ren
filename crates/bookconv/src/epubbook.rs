@@ -1,6 +1,6 @@
 //! 读 EPUB：元数据、spine 里的 XHTML、CSS、图片、封面、目录（AZW3、KFX 写出器共用）。
 
-use crate::epubzip::{dir_of, percent_decode, posix_norm, read_entries_from, resolve};
+use crate::epubzip::{percent_decode, read_entries_from, resolve_href};
 use crate::convert::common::{image_ext_mime, is_webp};
 use crate::html;
 use crate::util::fnv64;
@@ -170,7 +170,8 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
     let mut fonts = Vec::new();
     let mut unsupported = Vec::new();
     for it in manifest_items(&opf_text) {
-        let path = posix_norm(&resolve(&opf.dir, &percent_decode(it.href)));
+        // 2026-10-08 审计：此前自己解码、不还原字符引用，`href="a&amp;b.xhtml"` 的 media 键对不上 spine，这一章被静默跳过
+        let path = it.path(&opf.dir);
         media.insert(path.clone(), it.media_type.to_string());
         if it.properties.split_whitespace().any(|p| p == "cover-image") {
             cover = Some(path.clone());
@@ -214,8 +215,9 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
     let mut toc = Vec::new();
     if let Some(ncx) = opf.ncx.as_ref().and_then(|p| get(p).map(|e| (p, e))) {
         for (depth, label, target) in crate::ncx::parse_ncx_flat(&String::from_utf8_lossy(&ncx.1.data)) {
-            let (p, f) = target.split_once('#').unwrap_or((target.as_str(), ""));
-            toc.push(TocItem { label, level: depth.saturating_sub(1) as u32, path: posix_norm(&resolve(dir_of(ncx.0), &percent_decode(p))), frag: percent_decode(f) });
+            // `target` 的字符引用解析器已还原过，这里只拆锚点、百分号解码、解析路径（别再还原一次）
+            let (path, f) = resolve_href(ncx.0, &target);
+            toc.push(TocItem { label, level: depth.saturating_sub(1) as u32, path, frag: f.map(percent_decode).unwrap_or_default() });
         }
     }
     if toc.is_empty() {
@@ -284,5 +286,20 @@ mod tests {
         let mut toc = vec![item(1), item(3), item(1), item(0), item(2)];
         clamp_levels(&mut toc);
         assert_eq!(toc.iter().map(|t| t.level).collect::<Vec<_>>(), [0, 1, 1, 0, 1]);
+    }
+
+    #[test]
+    fn manifest_href_with_char_ref_matches_spine_and_toc() {
+        let mut w = crate::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#).unwrap();
+        w.put("OEBPS/content.opf", br#"<package><metadata><dc:title>t</dc:title></metadata><manifest>
+<item id="c1" href="Text/a&amp;b.xhtml" media-type="application/xhtml+xml"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+</manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("OEBPS/Text/a&b.xhtml", b"<html><body><p id='s 1'>x</p></body></html>").unwrap();
+        w.put("OEBPS/toc.ncx", br#"<ncx><navMap><navPoint><navLabel><text>One</text></navLabel><content src="Text/a&amp;b.xhtml#s%201"/></navPoint></navMap></ncx>"#).unwrap();
+        let bytes = w.finish().unwrap().into_inner();
+        let got = load(&bytes, &mut Vec::new()).unwrap();
+        assert_eq!(got.docs.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(), ["OEBPS/Text/a&b.xhtml"]);
+        assert_eq!(got.toc.iter().map(|t| (t.path.as_str(), t.frag.as_str())).collect::<Vec<_>>(), [("OEBPS/Text/a&b.xhtml", "s 1")]);
     }
 }

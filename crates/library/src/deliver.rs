@@ -7,7 +7,8 @@
 //!   删除走它的回收站队列 `POST /trash/add {uuid, name}`（进 xochitl 回收站，能恢复）。
 //! - 没写 `[deliver]` 的模式（书库 `profiles/` 里的自定义模式）：产物照旧放在电脑上。
 //!
-//! 一轮 `sync` 里每台设备只连一次（[`crate::Library::refresh_devices`] 清掉重连，`--watch` 每轮清一次）。
+//! 一轮 `sync` 里每台设备只连一次。`--watch` 每轮开头调 [`crate::Library::refresh_devices`]：MTP 设备、没接上的下次用到时
+//! 重新看；到 Move 的连接还通就接着用，断了才重连。
 
 use crate::generate::{Done, Transfer, Work};
 use profile::{Deliver, Profile};
@@ -106,9 +107,24 @@ fn mtp_storage(point: &Path) -> Option<PathBuf> {
 /// 把文件 `src` 放到 `dest`（目录没有就建；同一文件系统直接改名；`keep_src` 时或跨文件系统时复制）。`compare` 时 `dest` 已经是逐字节相同的
 /// 文件就不动它（Kindle 覆盖成不同字节会清掉阅读进度，相同的不会；也省得在 MTP 上白拷）——要把 `dest` 读回来，调用方能用记录的
 /// 哈希判断时传 `false`。复制先写旁边的临时文件再换上去：MTP 上改名不能覆盖已有文件，先删旧的再改名。返回有没有真的写。
+///
+/// 目录刚建好、文件还没放进去时，主线程可能正好把它当成"变空的目录"删掉（删别的书的旧位置时顺带删空目录，
+/// `generate::State::delete_placements`）：碰到目录不在了就重建再放，试几次。
 pub(crate) fn put_file(src: &Path, dest: &Path, keep_src: bool, compare: bool) -> Result<bool, String> {
+    let mut tries = 0;
+    loop {
+        match put_file_once(src, dest, keep_src, compare) {
+            Err((_, true)) if tries < 3 && dest.parent().is_some_and(|d| !d.is_dir()) && src.is_file() => tries += 1,
+            r => return r.map_err(|(e, _)| e),
+        }
+    }
+}
+
+/// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
+fn put_file_once(src: &Path, dest: &Path, keep_src: bool, compare: bool) -> Result<bool, (String, bool)> {
+    let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir).map_err(|e| (format!("{}: {e}", dir.display()), missing(&e)))?;
     }
     if compare && same_bytes(src, dest) {
         if !keep_src {
@@ -130,12 +146,12 @@ pub(crate) fn put_file(src: &Path, dest: &Path, keep_src: bool, compare: bool) -
     };
     if let Err(e) = copy() {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("写 {}: {e}", dest.display()));
+        return Err((format!("写 {}: {e}", dest.display()), missing(&e)));
     }
     let _ = std::fs::remove_file(dest);
     if let Err(e) = std::fs::rename(&tmp, dest) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("改名成 {}: {e}", dest.display()));
+        return Err((format!("改名成 {}: {e}", dest.display()), missing(&e)));
     }
     let _ = crate::fsutil::sync_parent(dest);
     if !keep_src {
@@ -436,6 +452,9 @@ fn enc(s: &str) -> String {
 /// 每台在传（含排队）的最多 [`LANE_DEPTH`] 本（[`Pipeline::has_room`]；满了调用方先去做别的设备），书库临时目录里堆不起大漫画。
 /// 传完的结果由主线程取回（[`Pipeline::next`]）、调 [`crate::Library::complete`] 记下来：书库的记录只在主线程里改。
 /// Move 上一本做得久的，中途还交回进度（[`Event::Progress`]）。
+///
+/// 传输线程里出了 panic 的那件算传失败（不连累同一台后面的）；线程还是意外死了的话，主线程等结果时会发现
+/// （[`Event::Lost`]），不会一直等下去。
 pub struct Pipeline {
     lanes: std::collections::HashMap<String, (std::sync::mpsc::Sender<Transfer>, std::thread::JoinHandle<()>)>,
     done_tx: std::sync::mpsc::Sender<Event>,
@@ -450,7 +469,12 @@ pub enum Event {
     Done(Box<Transfer>, Result<Done, String>),
     /// 还在做的一件的进度（给人看的一行）。
     Progress(String),
+    /// 这台设备的传输线程意外退出了：手上还没交回的 `count` 件没传成（记录没改，下次再传）。
+    Lost { device: String, count: usize },
 }
+
+/// 等传输线程交回结果时，隔多久看一眼线程还在不在。
+const LANE_CHECK: Duration = Duration::from_millis(500);
 
 /// Move 上一本做了多久以后开始报进度、阶段没变时隔多久再报一次。
 const PROGRESS_AFTER: Duration = Duration::from_secs(30);
@@ -481,21 +505,54 @@ impl Pipeline {
             let h = if t.is_move() { std::thread::spawn(move || move_lane(rx, done)) } else { std::thread::spawn(move || file_lane(rx, done)) };
             (tx, h)
         });
-        tx.send(t).expect("传输线程不会先退出");
+        if let Err(std::sync::mpsc::SendError(_t)) = tx.send(t) {
+            // 线程已经退出：这件交不出去，等结果时按线程死了报（`next`）
+        }
     }
 
     /// 取一件传输线程交回的（传完的、进度）：`wait` 时没有就等到有；没有在传的了返回 `None`。
     pub fn next(&mut self, wait: bool) -> Option<Event> {
-        if self.in_flight() == 0 {
-            return None;
-        }
-        let r = if wait { self.done_rx.recv().ok() } else { self.done_rx.try_recv().ok() };
-        if let Some(Event::Done(t, _)) = &r {
-            if let Some(n) = self.busy.get_mut(&t.device) {
-                *n -= 1;
+        loop {
+            if self.in_flight() == 0 {
+                return None;
+            }
+            let r = if wait { self.done_rx.recv_timeout(LANE_CHECK).ok() } else { self.done_rx.try_recv().ok() };
+            if let Some(ev) = r {
+                if let Event::Done(t, _) = &ev {
+                    if let Some(n) = self.busy.get_mut(&t.device) {
+                        *n -= 1;
+                    }
+                }
+                return Some(ev);
+            }
+            // 没有结果：看看有没有手上还有活、线程却已经退出的（panic 在单件之外）——它交不回来了，别一直等
+            if let Some(lost) = self.dead_lane() {
+                return Some(lost);
+            }
+            if !wait {
+                return None;
             }
         }
-        r
+    }
+
+    /// 手上还有活、线程却已经退出的设备：去掉这条（下次交给它时重新起），返回 [`Event::Lost`]。
+    /// 线程退出前交回的结果都已经在队列里（先看队列、空了才来这里），所以剩下的件数就是丢了的。
+    fn dead_lane(&mut self) -> Option<Event> {
+        let device = self.lanes.iter().find(|(d, (_, h))| h.is_finished() && self.busy.get(*d).is_some_and(|n| *n > 0)).map(|(d, _)| d.clone())?;
+        // 线程退出和它最后交回的结果之间没有先后保证：队列里还有的话先交那个
+        if let Ok(ev) = self.done_rx.try_recv() {
+            if let Event::Done(t, _) = &ev {
+                if let Some(n) = self.busy.get_mut(&t.device) {
+                    *n -= 1;
+                }
+            }
+            return Some(ev);
+        }
+        if let Some((_, h)) = self.lanes.remove(&device) {
+            let _ = h.join();
+        }
+        let count = self.busy.remove(&device).unwrap_or(0);
+        Some(Event::Lost { device, count })
     }
 
     /// 还在传（含排队）的件数。
@@ -514,10 +571,18 @@ impl Drop for Pipeline {
     }
 }
 
+/// 跑 `f`，panic 了变成错误（传输线程里一件出了 panic 只算这件传失败，线程接着做下一件）。
+fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| {
+        let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+        Err(format!("{what}时出了内部错误（panic：{msg}）"))
+    })
+}
+
 /// Kindle、掌阅（文件）：一件一件放。
 fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<Event>) {
     for t in rx {
-        let r = t.run();
+        let r = guarded("传到设备", || t.run());
         if done.send(Event::Done(Box::new(t), r)).is_err() {
             return;
         }
@@ -535,7 +600,7 @@ fn move_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sen
         let got = next.is_some();
         if let Some(t) = next {
             let at = Instant::now();
-            match t.submit() {
+            match guarded("交给 Move", || t.submit()) {
                 Ok(Submitted::Done(d)) => {
                     let _ = done.send(Event::Done(Box::new(t), Ok(Done::Move(d))));
                 }
@@ -555,8 +620,8 @@ fn move_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sen
         let mut still = Vec::new();
         for (t, job, at, last_stage, last_emit) in pending.drain(..) {
             let state = match &t.work {
-                Work::Move { client, .. } => client.poll(&job),
-                Work::File { .. } => unreachable!(),
+                Work::Move { client, .. } => guarded("查 Move 上的导入任务", || client.poll(&job)),
+                Work::File { .. } => Err("内部错误：文件交给了 Move 的传输线程".into()),
             };
             match state {
                 Ok(JobState::Running(stage)) => {
@@ -614,6 +679,29 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"abd");
         assert!(!src.exists(), "不留来源时挪走");
         assert!(!same_bytes(&dest, &d.path().join("x")));
+    }
+
+    /// 传输线程死了（手上还有活）：主线程等结果时报出来，不一直卡着。
+    #[test]
+    fn dead_lane_is_reported_not_waited_on_forever() {
+        let mut pipe = Pipeline::default();
+        let (tx, _rx) = std::sync::mpsc::channel::<Transfer>();
+        let h = std::thread::spawn(|| panic!("传输线程意外退出（测试）"));
+        pipe.lanes.insert("kindle".into(), (tx, h));
+        pipe.busy.insert("kindle".into(), 2);
+        match pipe.next(true) {
+            Some(Event::Lost { device, count }) => assert_eq!((device.as_str(), count), ("kindle", 2)),
+            _ => panic!("应报线程丢了"),
+        }
+        assert_eq!(pipe.in_flight(), 0);
+        assert!(pipe.next(true).is_none());
+        assert!(pipe.has_room("kindle"));
+    }
+
+    #[test]
+    fn panics_become_errors() {
+        let r: Result<(), String> = guarded("传到设备", || panic!("坏了"));
+        assert!(r.unwrap_err().contains("坏了"));
     }
 
     #[test]

@@ -119,6 +119,14 @@ pub fn replace_nav_map(ncx: &str, points: &[NewNavPoint]) -> Option<String> {
     let first_np = html::tags_in(ncx, open.end, close.start).find(|t| t.is_start() && t.is("navPoint")).map_or(close.start, |t| t.start);
     let mut s = String::new();
     let (mut depth, mut max_depth, mut fresh) = (0u8, 0u8, 0usize);
+    // 原 NCX 里已经出现过的 `eink-np-N`（按子串算：`eink-np-12` 也占了 `eink-np-1`）：`eink-np-` 后面数字串的全部前缀。
+    // 以前每补一个 id 都对整份 NCX 做一次子串查找，补的多时是平方级。数字只看前 20 位（`usize` 最多 20 位）。
+    let mut taken: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (pos, _) in ncx.match_indices("eink-np-") {
+        let rest = &ncx[pos + "eink-np-".len()..];
+        let run = rest.bytes().take(20).take_while(u8::is_ascii_digit).count();
+        taken.extend((1..=run).map(|l| &rest[..l]));
+    }
     for (i, p) in points.iter().enumerate() {
         // 层数到 u8 上限就不再深入（不可信的 NCX 嵌套 255 层以上时 `depth + 1` 溢出）
         let d = p.depth.max(1).min(depth.saturating_add(1));
@@ -130,9 +138,9 @@ pub fn replace_nav_map(ncx: &str, points: &[NewNavPoint]) -> Option<String> {
         let order = (i + 1).to_string();
         let mut fresh_id = || loop {
             fresh += 1;
-            let id = format!("eink-np-{fresh}");
-            if !ncx.contains(id.as_str()) {
-                break id;
+            let n = fresh.to_string();
+            if !taken.contains(n.as_str()) {
+                break format!("eink-np-{n}");
             }
         };
         let tag = match p.open_tag.filter(|t| !t.is_empty()) {
@@ -207,5 +215,15 @@ mod tests {
         // src 的字符引用还原一次（百分号编码照留）
         let ncx3 = r#"<navMap><navPoint><navLabel><text>丙</text></navLabel><content src="a&amp;b%20c.html#x&amp;y"/></navPoint></navMap>"#;
         assert_eq!(parse_nav_points(ncx3)[0].src, "a&b%20c.html#x&y");
+    }
+
+    /// 补的 id 避开原 NCX 里出现过的（按子串算，和以前逐个 `contains` 一样）。
+    #[test]
+    fn replace_nav_map_fresh_ids_avoid_existing() {
+        let ncx = r#"<ncx><head></head><navMap><navPoint id="eink-np-12"/><x a="eink-np-3x"/></navMap></ncx>"#;
+        let points: Vec<NewNavPoint> = (0..4).map(|_| NewNavPoint { depth: 1, label: "x", src: "a.html", open_tag: None }).collect();
+        let out = replace_nav_map(ncx, &points).unwrap();
+        let ids: Vec<&str> = out.match_indices("id=\"").map(|(i, _)| &out[i + 4..i + 4 + out[i + 4..].find('"').unwrap()]).collect();
+        assert_eq!(ids, ["eink-np-2", "eink-np-4", "eink-np-5", "eink-np-6"]);
     }
 }

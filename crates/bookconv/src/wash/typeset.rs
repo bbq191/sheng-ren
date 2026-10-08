@@ -254,31 +254,35 @@ pub(super) fn terminal_latin(t: &str) -> bool {
     t.trim_end().chars().last().map(|c| ".!?\"'”’)".contains(c)).unwrap_or(false)
 }
 
-/// 给 `<head>` 注入指向外链 wash css 的 `<link>`（`href`=该 html 相对 css 的路径）。幂等（已有则跳过）。
+/// 指向 `href` 的样式表 `<link>`；书里已经有（属性值还原字符引用后相同）时返回 `None`（幂等）。
+/// `href` 是链接值原文（[`crate::epubzip::href_to`] 算的：相对路径、百分号编码），写进属性时再 XML 转义（目录名里可能有 `&`）。
+fn css_link_tag(html: &str, href: &str) -> Option<String> {
+    let has = html::tags(html).any(|t| t.is_start() && t.is("link") && html::attr_value(&html[t.start..t.end], "href").is_some_and(|v| crate::util::xml_unescape(v) == href));
+    (!has).then(|| format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>", xml_escape(href)))
+}
+
+/// 没有 `<head>` 时插 `<link>`：补一对 head 放在 `<body>` 前面；也没有 `<body` 的不动（异常文件）。
+fn link_without_head(html: &str, link: &str) -> String {
+    match html::tags(html).find(|t| t.is_start() && t.is("body")) {
+        Some(b) => format!("{}<head>{}</head>{}", &html[..b.start], link, &html[b.start..]),
+        None => html.to_string(),
+    }
+}
+
+/// 给 `<head>` 注入指向外链 wash css 的 `<link>`（`href` 见 [`css_link_tag`]），放在 `</head>` 前。幂等（已有则跳过）。
 /// 无 `</head>` 时补一对 head；无 `<body` 也不动（异常文件）。标签按 `crate::html` 扫（不分大小写，注释里的不算）。
 pub(super) fn inject_css_link(html: &str, href: &str) -> String {
-    let has = html::tags(html).any(|t| t.is_start() && t.is("link") && html::attr_value(&html[t.start..t.end], "href") == Some(href));
-    if has {
-        return html.to_string();
-    }
-    let link = format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{href}\"/>");
-    if let Some(h) = html::tags(html).find(|t| t.kind == html::TagKind::Close && t.is("head")) {
-        format!("{}{}{}", &html[..h.start], link, &html[h.start..])
-    } else if let Some(b) = html::tags(html).find(|t| t.is_start() && t.is("body")) {
-        format!("{}<head>{}</head>{}", &html[..b.start], link, &html[b.start..])
-    } else {
-        html.to_string()
+    let Some(link) = css_link_tag(html, href) else { return html.to_string() };
+    match html::tags(html).find(|t| t.kind == html::TagKind::Close && t.is("head")) {
+        Some(h) => format!("{}{}{}", &html[..h.start], link, &html[h.start..]),
+        None => link_without_head(html, &link),
     }
 }
 
 /// 给 `<head>` 注入指向 `href` 的 `<link>`，放在 `<head>` 里最前面（书自带的样式表、`<style>` 之前：源序在前，书里写了的盖过它）。
 /// 幂等；无 `<head>` 时同 [`inject_css_link`]。
 pub(super) fn inject_css_link_first(html: &str, href: &str) -> String {
-    let has = html::tags(html).any(|t| t.is_start() && t.is("link") && html::attr_value(&html[t.start..t.end], "href") == Some(href));
-    if has {
-        return html.to_string();
-    }
-    let link = format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{href}\"/>");
+    let Some(link) = css_link_tag(html, href) else { return html.to_string() };
     // 书的样式表写在 `<head>` 前面的（《金庸》有的文件 `<link>` 在 `<head>` 外）：插到它前面，免得按文档顺序排到书的样式后面、盖掉书里写的
     let head = html::tags(html).find(|t| t.kind == html::TagKind::Open && t.is("head"));
     let early = html::tags(html).find(|t| t.is_start() && (t.is("style") || t.is("link") && html::attr_value(&html[t.start..t.end], "rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet"))));

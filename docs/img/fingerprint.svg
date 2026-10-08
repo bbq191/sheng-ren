@@ -59,7 +59,7 @@
   <text x="726.0" y="180" text-anchor="middle" class="s">—</text>
   <rect x="770" y="72" width="132" height="64" rx="4" fill="#f3eefa" stroke="#8a63c9" stroke-width="1.2"/>
   <text x="836.0" y="98" text-anchor="middle" class="h">阅读范围</text>
-  <text x="836.0" y="122" text-anchor="middle" class="m">1104x1546t</text>
+  <text x="836.0" y="122" text-anchor="middle" class="m">1104x1546bkat</text>
   <path d="M836.0 136 L836.0 156" stroke="#888" stroke-width="1.2"/>
   <rect x="770" y="158" width="132" height="74" rx="6" fill="#eaf7ee" stroke="#3f9a5b" stroke-width="1.2"/>
   <text x="836.0" y="180" text-anchor="middle" class="s">这个模式这一路</text>
@@ -86,7 +86,7 @@
   <text x="558" y="275" class="s">只有这一本</text>
   <text x="20" y="316" class="s" xml:space="preserve">· 简介标签：书里本来就有简介（或标签）的，那一项不补、也不算进指纹；补过东西的再带 i + opfmeta 版本号。</text>
   <text x="20" y="338" class="s" xml:space="preserve">· 流程版本：EPUB 来源只写 PIPELINE_VERSION；CBZ 来源再带 c + CONVERT_VERSION（PcC），所以只改 CBZ 转换不会让 EPUB 书白重建。</text>
-  <text x="20" y="360" class="s" xml:space="preserve">· 文字书、漫画分开算（2026-10-08）：优化器版本文字书写 OPTIMIZE_VERSION、漫画写 c + COMIC_VERSION；阅读范围段文字书带 k/a/t（图注、透明图、只修复），</text>
+  <text x="20" y="360" class="s" xml:space="preserve">· 文字书、漫画分开算（2026-10-08）：优化器版本文字书写 OPTIMIZE_VERSION、漫画写 c + COMIC_VERSION；阅读范围段文字书带 k/a/t/n/u（图注、透明图、只修复、注释可跳、kindle_rules），</text>
   <text x="20" y="382" class="s" xml:space="preserve">  漫画带画布、白边、页边距、翻页方向、固定版式（如 1104x1546c1272x1696+1f）；背景图 b/bn、rgba r 两路都带。注释方式 jump/popup #&lt;；KFX 带写出器版本（kfxW）。</text>
-  <text x="20" y="404" class="s" xml:space="preserve">· 改模式的 TOML（含书库 profiles/ 里的自定义）也会让这个模式的书过期：这些字段都在指纹里。</text>
+  <text x="20" y="404" class="s" xml:space="preserve">· 改模式的 TOML（含书库 profiles/ 里的自定义）也会让这个模式的书过期：影响产物的字段都在指纹里（[deliver]、name 不在）。</text>
 </svg>

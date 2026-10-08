@@ -199,9 +199,7 @@ const NAMED: [(&str, u32); 148] = [
 
 /// 半透明颜色叠在白底上的不透明颜色。
 pub fn over_white(c: u32) -> u32 {
-    let a = f64::from(c >> 24) / 255.0;
-    let ch = |s: u32| ((f64::from((c >> s) & 0xFF) * a + 255.0 * (1.0 - a)).round() as u32).min(255);
-    0xFF00_0000 | ch(16) << 16 | ch(8) << 8 | ch(0)
+    over(c, 0xFFFF_FFFF)
 }
 
 /// WCAG 相对亮度（0–1）。
@@ -222,10 +220,12 @@ pub fn contrast(a: u32, b: u32) -> f64 {
 /// Send to Kindle 的文字对比度规则（2026-10-08 逐个对出来，都是刚到 4.5:1 的那个值）：和背景（没有背景按白页面）的对比度不到 4.5
 /// 时，比背景暗的按比例压暗（`#f5ac00` → `#9d6e00`、`#c87860` → `#a86551`，三个通道乘同一个数），比背景亮的往白里调；这个方向
 /// 到头也不够就反过来（橙底 `#f0a200` 上的白字 → `#454545`、`#0097e0` 上的白字 → `#292929`、深蓝底 `#0168b7` 上的黑字 → `#e4e4e4`）。
+///
+/// `bg` 是不透明的背景。`fg` 半透明时按叠在 `bg` 上显示出来的颜色算（以前按叠在白底上算，深背景上的半透明字算错）；要调的话结果是
+/// 调好的**不透明**颜色（再带原来的透明度，显示出来又会被背景冲淡，不够 4.5）。不用调的原样返回。
 pub fn ensure_contrast(fg: u32, bg: u32) -> u32 {
     const MIN: f64 = 4.5;
-    let alpha = fg & 0xFF00_0000;
-    let solid = over_white(fg) | 0xFF00_0000;
+    let solid = over(fg, bg);
     if contrast(solid, bg) >= MIN {
         return fg;
     }
@@ -235,5 +235,33 @@ pub fn ensure_contrast(fg: u32, bg: u32) -> u32 {
         (0..=1000).map(|k| f64::from(k) / 1000.0).map(|t| if dark { make(&|v| v * (1.0 - t)) } else { make(&|v| v + (255.0 - v) * t) }).find(|&c| contrast(c, bg) >= MIN)
     };
     let darker = luminance(solid) <= luminance(bg);
-    search(darker).or_else(|| search(!darker)).map(|c| (c & 0xFF_FFFF) | alpha).unwrap_or(fg)
+    search(darker).or_else(|| search(!darker)).unwrap_or(fg)
+}
+
+/// 颜色 `c`（可以半透明）叠在不透明的 `bg` 上显示出来的不透明颜色。
+pub fn over(c: u32, bg: u32) -> u32 {
+    let a = f64::from(c >> 24) / 255.0;
+    let ch = |s: u32| ((f64::from((c >> s) & 0xFF) * a + f64::from((bg >> s) & 0xFF) * (1.0 - a)).round() as u32).min(255);
+    0xFF00_0000 | ch(16) << 16 | ch(8) << 8 | ch(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semi_transparent_text_judged_over_its_background() {
+        // 不透明的照旧（Send to Kindle 对出来的值）
+        assert_eq!(ensure_contrast(0xFFF5_AC00, 0xFFFF_FFFF), 0xFF9D_6E00);
+        // 深蓝底上的半透明白字：叠上去是浅蓝、不够 4.5，要调；以前按叠在白底上算（纯白），当成够亮不调
+        let fg = 0x80FF_FFFF;
+        let bg = 0xFF01_68B7;
+        assert!(contrast(over(fg, bg), bg) < 4.5);
+        let adj = ensure_contrast(fg, bg);
+        assert_eq!(adj >> 24, 0xFF, "调出来的是不透明颜色");
+        assert!(contrast(adj, bg) >= 4.5);
+        // 白底上够深的半透明黑字不动
+        assert_eq!(ensure_contrast(0xE600_0000, 0xFFFF_FFFF), 0xE600_0000);
+        assert_eq!(over_white(0x8000_0000), over(0x8000_0000, 0xFFFF_FFFF));
+    }
 }

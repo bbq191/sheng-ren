@@ -101,7 +101,7 @@ impl Drawn {
         // 各条目独立收集（多线程，`util::par_map`），再并起来
         let per_entry = crate::util::par_map(entries, |e| {
             let mut d = Drawn::default();
-            if e.name.to_ascii_lowercase().ends_with(".css") {
+            if is_css_name(&e.name) {
                 add_css(&String::from_utf8_lossy(&e.data), &mut d);
             } else if is_html_entry(&e.name, &e.data) {
                 let t = String::from_utf8_lossy(&e.data);
@@ -203,15 +203,23 @@ fn trim_tail(html: &str, referenced: &HashSet<String>, drawn: &Drawn) -> (String
 
 /// 规则选择器是不是只选了这些类之一（`.x` 或 `元素.x`）。
 fn selects_class(selector: &str, classes: &HashSet<String>) -> bool {
-    static SEL: OnceLock<Regex> = OnceLock::new();
-    let re = SEL.get_or_init(|| Regex::new(r#"^\s*[A-Za-z0-9]*\.([A-Za-z0-9_-]+)\s*$"#).unwrap());
-    re.captures(selector).is_some_and(|c| classes.contains(&c[1]))
+    let sel = selector.trim();
+    let last = last_compound(sel);
+    // 整个选择器就是一个复合选择器，只有标签名（可省）和一个类
+    let Some((tag, class)) = last.split_once('.') else { return false };
+    last.len() == sel.len()
+        && tag.bytes().all(|b| b.is_ascii_alphanumeric())
+        && !class.is_empty()
+        && class.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && classes.contains(class)
 }
 
 /// 从这些类的规则里去掉下边距、下内边距和"之后分页"（简写的 margin/padding 只把下边改成 0）。
 pub(super) fn strip_tail_spacing(css: &str, classes: &HashSet<String>) -> String {
     css_rule_re().replace_all(css, |c: &regex::Captures| {
-        if !selects_class(&strip_css_comments(&c[1]), classes) {
+        // 开头的 `@charset`/`@import` 会被正则算进第一条规则的选择器：拆出来原样留（同 `filter_css`）
+        let (lead, sel) = split_leading_statements(&c[1]);
+        if !selects_class(&strip_css_comments(sel), classes) {
             return c[0].to_string();
         }
         let mut out: Vec<String> = Vec::new();
@@ -233,7 +241,7 @@ pub(super) fn strip_tail_spacing(css: &str, classes: &HashSet<String>) -> String
         if !body.is_empty() {
             body.push(';');
         }
-        format!("{}{{{}}}", &c[1], body)
+        format!("{lead}{sel}{{{body}}}")
     })
     .into_owned()
 }
@@ -271,7 +279,7 @@ pub(super) fn remove_chapter_end_blanks(entries: &mut [Entry], rep: &mut WashRep
     if tail_classes.is_empty() {
         return;
     }
-    for e in entries.iter_mut().filter(|e| e.name.to_ascii_lowercase().ends_with(".css") && !is_wash_css_name(&e.name)) {
+    for e in entries.iter_mut().filter(|e| is_css_name(&e.name) && !is_wash_css_name(&e.name)) {
         let Ok(css) = std::str::from_utf8(&e.data) else { continue };
         let new = strip_tail_spacing(css, &tail_classes);
         if new != css {

@@ -293,7 +293,19 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
 }
 
 /// `sync --watch` 记住的生成失败：(书 id, 模式 id) → 失败时的指纹和原件状态。都没变就不再重试、不再重复报错。
+/// 设备重新接上时这台的全部忘掉（[`forget_reconnected`]）：传输失败、Move 掉线时查书出的错多半是连接的事，接上了要重试。
 type FailMemo = HashMap<(String, String), (String, OriginalState)>;
+
+/// 这一轮重新接上的设备（上一轮没接上、这轮接上了，或 Move 的连接断过、重连了）：忘掉它们记着的失败。
+/// `last_live`、`live` 和 `devices` 一一对应；`dropped` 是这轮开头发现断了的 Move（[`Library::refresh_devices`]）。
+fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Option<&[bool]>, live: &[bool], dropped: &[String]) {
+    for (i, (d, ok)) in devices.iter().zip(live).enumerate() {
+        let was_down = last_live.and_then(|l| l.get(i)).is_some_and(|w| !w);
+        if dropped.contains(&d.id) || (*ok && was_down) {
+            fails.retain(|(_, dev), _| *dev != d.id);
+        }
+    }
+}
 
 /// 按模式 × 书逐本生成并送到设备上（没变化的跳过），每本一行结果。`quiet` 时不打印没变化的（没选书时：只报有变化的）。
 /// 设备没接上的模式跳过，报一行（`absent_reported` 记着报过的，`--watch` 时不重复报）。
@@ -356,6 +368,10 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
         let (t, r) = match ev {
             library::Event::Done(t, r) => (t, r),
             library::Event::Progress(line) => return report(Ok(line)),
+            library::Event::Lost { device, count } => {
+                counts.failed += count;
+                return report(Err(format!("✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）")));
+            }
         };
         let (device, title) = (t.device.clone(), t.title.clone());
         let book = t.book_id().to_string();
@@ -405,7 +421,9 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
     };
     // 书在外层、模式在内层：同一本书与模式无关的中间文件（CBZ 转换、补元数据）只做一次。
     // 哪台设备那边排满了（Move 排版慢），先跳过它做别的设备，留到最后补，不让一台挡住另外几台
+    // 推迟的书的中间文件留着（按书 id，`Library::release_prepared_of`），补的时候不用再转一遍；这本书所有模式做完就删
     let mut later: Vec<(&library::Meta, &Profile)> = Vec::new();
+    let mut deferred: HashMap<&str, usize> = HashMap::new();
     for m in books.iter().filter(|m| m.supported()) {
         for device in &live {
             while let Some(x) = pipe.next(false) {
@@ -415,7 +433,11 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
                 one(m, device, &mut counts, &mut fails, &mut pipe, report);
             } else {
                 later.push((m, device));
+                *deferred.entry(m.id.as_str()).or_default() += 1;
             }
+        }
+        if !deferred.contains_key(m.id.as_str()) {
+            lib.release_prepared_of(&m.id);
         }
     }
     for (m, device) in later {
@@ -424,6 +446,12 @@ fn build_all(lib: &Library, devices: &[&Profile], books: &[library::Meta], force
             landed(lib, &mut counts, &mut fails, report, x);
         }
         one(m, device, &mut counts, &mut fails, &mut pipe, report);
+        if let Some(n) = deferred.get_mut(m.id.as_str()) {
+            *n -= 1;
+            if *n == 0 {
+                lib.release_prepared_of(&m.id);
+            }
+        }
     }
     lib.release_prepared();
     if pipe.in_flight() > 0 {
@@ -714,7 +742,7 @@ fn main() {
             let mut absent_reported = HashSet::new();
             let mut last_live: Option<Vec<bool>> = None;
             loop {
-                lib.refresh_devices();
+                let dropped = lib.refresh_devices();
                 match lib.lock() {
                     Ok(_guard) => {
                         let mut changed = true;
@@ -747,6 +775,7 @@ fn main() {
                                     absent_reported.remove(&d.id);
                                 }
                             }
+                            forget_reconnected(&mut fails, &devices, last_live.as_deref(), &live, &dropped);
                             if changed || last_stamp != Some(stamp()) || last_live.as_ref() != Some(&live) {
                                 last_live = Some(live);
                                 // 没选书：全部书，只报有变化的；选了书：只生成这几本，每本都报
@@ -858,5 +887,32 @@ fn main() {
     }
     if failed.get() > 0 {
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 设备从没接上到接上、Move 连接断过重连：这台记着的失败忘掉（下一轮重试）；别的设备的、一直接着的不动。
+    #[test]
+    fn failures_are_forgotten_when_a_device_comes_back() {
+        let devices = [profile::get("ireader").unwrap(), profile::get("kindle").unwrap(), profile::get("xochitl").unwrap()];
+        let memo = || -> FailMemo { devices.iter().map(|d| (("书".to_string(), d.id.clone()), ("指纹".to_string(), OriginalState::Present))).collect() };
+        let left = |f: &FailMemo| -> Vec<String> {
+            let mut v: Vec<String> = f.keys().map(|(_, d)| d.clone()).collect();
+            v.sort();
+            v
+        };
+        let mut f = memo();
+        forget_reconnected(&mut f, &devices, Some(&[true, true, true]), &[true, true, true], &[]);
+        assert_eq!(left(&f), ["ireader", "kindle", "xochitl"], "一直接着：都记着");
+        forget_reconnected(&mut f, &devices, None, &[true, true, true], &[]);
+        assert_eq!(left(&f).len(), 3, "第一轮：没有上一轮可比");
+        forget_reconnected(&mut f, &devices, Some(&[false, true, true]), &[true, true, true], &[]);
+        assert_eq!(left(&f), ["kindle", "xochitl"], "掌阅重新接上");
+        let mut f = memo();
+        forget_reconnected(&mut f, &devices, Some(&[true, false, true]), &[true, false, true], &["xochitl".to_string()]);
+        assert_eq!(left(&f), ["ireader", "kindle"], "Move 掉过线（重连上了）；Kindle 还没接上，留着");
     }
 }

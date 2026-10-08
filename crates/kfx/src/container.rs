@@ -182,7 +182,7 @@ impl Container {
     /// `$490` 元数据的 `asset_id`）。只换容器信息不换清单，Kindle 找不到图片资源，封面页空白（2026-10-05 真机）。
     pub fn set_container_id(&mut self, new: &str) {
         let Some(old) = self.container_id().map(str::to_string) else {
-            set_string_field(&mut self.info, SID_CONTAINER_ID, new);
+            set_field(&mut self.info, SID_CONTAINER_ID, Value::String(new.to_string()));
             return;
         };
         replace_strings(&mut self.info, &old, new);
@@ -255,13 +255,13 @@ impl Container {
         let info_off = caps_off + caps.len();
 
         let mut info = self.info.clone();
-        set_field(&mut info, SID_INDEX_OFFSET, index_off);
-        set_field(&mut info, SID_INDEX_LENGTH, index.len());
-        set_field(&mut info, SID_SYMTAB_OFFSET, symtab_off);
-        set_field(&mut info, SID_SYMTAB_LENGTH, symtab.len());
+        set_int_field(&mut info, SID_INDEX_OFFSET, index_off);
+        set_int_field(&mut info, SID_INDEX_LENGTH, index.len());
+        set_int_field(&mut info, SID_SYMTAB_OFFSET, symtab_off);
+        set_int_field(&mut info, SID_SYMTAB_LENGTH, symtab.len());
         if !self.capabilities.is_empty() {
-            set_field(&mut info, SID_CAPS_OFFSET, caps_off);
-            set_field(&mut info, SID_CAPS_LENGTH, caps.len());
+            set_int_field(&mut info, SID_CAPS_OFFSET, caps_off);
+            set_int_field(&mut info, SID_CAPS_LENGTH, caps.len());
         }
         let info_bytes = ion::encode_stream(&[Item::Bvm, Item::Value(info)]);
         let kfxgen = update_payload_sha1(&self.kfxgen, &sha.finalize());
@@ -324,24 +324,18 @@ fn entity_parts(e: &Entity) -> (Vec<u8>, &[u8]) {
 }
 
 /// 改结构体里已有字段的值；没有就追加在末尾。
-fn set_field(v: &mut Value, sid: u32, n: usize) {
+fn set_field(v: &mut Value, sid: u32, new: Value) {
     if let Value::Struct(fields) = v {
-        let n = Value::Int(n as i64);
         match fields.iter_mut().find(|(k, _)| *k == sid) {
-            Some((_, slot)) => *slot = n,
-            None => fields.push((sid, n)),
+            Some((_, slot)) => *slot = new,
+            None => fields.push((sid, new)),
         }
     }
 }
 
-fn set_string_field(v: &mut Value, sid: u32, s: &str) {
-    if let Value::Struct(fields) = v {
-        let s = Value::String(s.to_string());
-        match fields.iter_mut().find(|(k, _)| *k == sid) {
-            Some((_, slot)) => *slot = s,
-            None => fields.push((sid, s)),
-        }
-    }
+/// 长度、偏移写成整数字段（见 [`set_field`]）。
+fn set_int_field(v: &mut Value, sid: u32, n: usize) {
+    set_field(v, sid, Value::Int(n as i64));
 }
 
 fn replace_strings(v: &mut Value, old: &str, new: &str) {

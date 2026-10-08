@@ -88,6 +88,8 @@ pub(super) fn collect_toc_headings(entries: &mut [Entry], spine: &[String], nav_
         }
         let Some(i) = i else { continue };
         let e = &mut entries[i];
+        // 不是 UTF-8 的文件不写回（按 lossy 转出的文字写回会把原字节改坏）：只收已经有 id 的标题，不补 id
+        let utf8 = std::str::from_utf8(&e.data).is_ok();
         let html = String::from_utf8_lossy(&e.data).into_owned();
         let mut edits: Vec<(usize, usize, String)> = Vec::new();
         let mut it = html::tags(&html);
@@ -102,6 +104,7 @@ pub(super) fn collect_toc_headings(entries: &mut [Entry], spine: &[String], nav_
             let open = &html[t.start..t.end];
             let frag = match html::attr_value(open, "id").filter(|v| !v.is_empty()) {
                 Some(id) => crate::util::xml_unescape(id).into_owned(),
+                None if !utf8 => continue,
                 None => {
                     counter += 1;
                     let f = format!("eink-toc-{counter}");
@@ -239,11 +242,12 @@ pub(super) fn page_chunk_toc(spine: &[String], nav_doc: Option<&String>) -> Vec<
     crate::ncx::page_chunk_titles(pages.len()).into_iter().map(|(start, title)| TocItem::new(1, title, pages[start].clone(), "")).collect()
 }
 
-/// 分部标题前缀："第X部/卷/篇/辑"（X 为阿拉伯数字或中文数字），后面可能紧跟同一条目剩下的文本
+/// 分部标题前缀："第X部/卷/篇/辑/编"（X 见 `chapters::CN_NUM`：阿拉伯数字、全角数字或中文数字），后面可能紧跟同一条目剩下的文本
 /// （如"第一部　01　雪人"里"01　雪人"是这条目自己的章节标识，不是下一条的）。
 pub(super) fn part_prefix_re() -> &'static Regex {
+    use super::chapters::{CN_NUM, PART_KINDS};
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"^(第[0-9〇一二三四五六七八九十百千]+[部卷篇辑])[ \u{3000}\t]*(.*)$"#).unwrap())
+    RE.get_or_init(|| Regex::new(&format!(r#"^(第[{CN_NUM}]+[{PART_KINDS}])[ \u{{3000}}\t]*(.*)$"#)).unwrap())
 }
 
 /// 把 ncx/nav 按 `items` 重写。ncx 只换 navMap（`ncx::replace_nav_map`：`head`、`pageList` 等原样，原条目的 navPoint id 沿用；
@@ -350,10 +354,10 @@ fn collection_depths(titles: &[&str]) -> Option<Vec<u8>> {
     }
     static RE: OnceLock<[Regex; 4]> = OnceLock::new();
     let [vol, part, chap, front] = RE.get_or_init(|| {
-        const N: &str = "0-9０-９〇零一二三四五六七八九十百千两";
+        use super::chapters::{CN_NUM as N, PART_KINDS};
         [
             Regex::new(&format!(r#"^(第[{N}]+册|[上中下]册)$"#)).unwrap(),
-            Regex::new(&format!(r#"^第[{N}]+[部卷篇辑]"#)).unwrap(),
+            Regex::new(&format!(r#"^第[{N}]+[{PART_KINDS}]"#)).unwrap(),
             Regex::new(&format!(r#"^第[{N}]+[章回]"#)).unwrap(),
             Regex::new(r#"^(题献|献词|献辞|题记|前言|序|序言|序章|引言|引子|楔子|译序|译者序|出版说明|书名页|目录|版权页?)$"#).unwrap(),
         ]
@@ -599,22 +603,58 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
         .collect();
     // 已在目录里的节：(路径, id) 或"指向该份文件本身"。
     let mut present: HashSet<(String, String)> = items.iter().filter(|it| it.is_sec).map(|it| (it.toc.path.clone(), html::frag_id(&it.toc.frag).into_owned())).collect();
-    let mut added = 0;
+    // 要补的节（按阅读顺序）和它的阅读位置
+    let mut pending: Vec<(&SectionRef, String, (usize, usize))> = Vec::new();
     for s in sections {
         let id = sec_id(s);
         if present.contains(&(s.path.clone(), id.clone())) || present.contains(&(s.path.clone(), String::new())) {
             continue;
         }
         let key = key_of(&s.path, &id);
-        let at = items.iter().rposition(|it| it.key <= key).map_or(0, |i| i + 1);
-        let depth = match items[..at].last() {
-            Some(prev) if prev.is_sec => prev.toc.level,
-            Some(prev) => prev.toc.level.saturating_add(1),
-            None => 1,
-        };
-        items.insert(at, Item { toc: TocItem::new(depth, s.label.clone(), s.path.clone(), id.clone()), is_sec: true, key });
-        present.insert((s.path.clone(), id));
-        added += 1;
+        present.insert((s.path.clone(), id.clone()));
+        pending.push((s, id, key));
+    }
+    let added = pending.len();
+    // 每一节插在"位置不超过它的最后一条"后面；层级看插入处的前一条（是节就同级，是章就下一级）
+    let depth_after = |prev: Option<&Item>| match prev {
+        Some(prev) if prev.is_sec => prev.toc.level,
+        Some(prev) => prev.toc.level.saturating_add(1),
+        None => 1,
+    };
+    let new_item = |s: &SectionRef, id: String, depth: u8, key: (usize, usize)| Item { toc: TocItem::new(depth, s.label.clone(), s.path.clone(), id), is_sec: true, key };
+    if pending.windows(2).all(|w| w[0].2 <= w[1].2) {
+        // 节按位置排好（通常如此）：每一节落在原条目之间的哪个空当，二分找；同一空当里按顺序接在前面补的节后面。
+        // 结果和逐条插入（下面）相同，不是平方级（以前每插一节都从头找一遍、插进数组中间）。
+        let mut ord: Vec<((usize, usize), usize)> = items.iter().enumerate().map(|(i, it)| (it.key, i)).collect();
+        ord.sort_unstable();
+        // ord[..k] 里最大的原条目下标
+        let mut prefix_max = Vec::with_capacity(ord.len());
+        let mut m = 0;
+        for &(_, i) in &ord {
+            m = m.max(i);
+            prefix_max.push(m);
+        }
+        let mut gaps: Vec<Vec<Item>> = (0..=items.len()).map(|_| Vec::new()).collect();
+        for (s, id, key) in pending {
+            let k = ord.partition_point(|(x, _)| *x <= key);
+            let g = if k == 0 { 0 } else { prefix_max[k - 1] + 1 };
+            let depth = depth_after(gaps[g].last().or(if g == 0 { None } else { items.get(g - 1) }));
+            gaps[g].push(new_item(s, id, depth, key));
+        }
+        let mut merged = Vec::with_capacity(items.len() + added);
+        let mut gaps = gaps.into_iter();
+        for it in items {
+            merged.extend(gaps.next().into_iter().flatten());
+            merged.push(it);
+        }
+        merged.extend(gaps.flatten());
+        items = merged;
+    } else {
+        for (s, id, key) in pending {
+            let at = items.iter().rposition(|it| it.key <= key).map_or(0, |i| i + 1);
+            let depth = depth_after(items[..at].last());
+            items.insert(at, new_item(s, id, depth, key));
+        }
     }
     // 书自带的节条目缩进到所属章下面、标签去掉首尾空白。
     let mut changed = added > 0;
@@ -724,6 +764,10 @@ impl<'a> TextAt<'a> {
         });
         let (lo, hi) = (*body)?;
         let pos = if frag.is_empty() { lo } else { (*anchors.get(frag)?).max(lo) };
+        // 锚点在正文之后（最后一个 `</body>` 后面还有元素）：正文里它后面没有文字
+        if pos >= hi {
+            return Some(String::new());
+        }
         // 只看锚点后面一小段（大文件里整段转纯文本太慢）；按字符边界截
         let mut end = (pos + 16 * 1024).min(hi);
         while !t.is_char_boundary(end) {
