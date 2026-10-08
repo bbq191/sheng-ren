@@ -156,6 +156,9 @@ impl Drop for PreparedInput {
 /// 生成计划：指纹。
 struct Plan {
     fingerprint: String,
+    /// 同一套规则按 2026-10-08 以前的写法（文字书、漫画不分）算出的指纹：记录里存的是它的，说明规则没变、只是指纹写法改了，
+    /// 记录改成新写法、不重新生成（[`Library::prepare`]）。
+    legacy: String,
     format: Format,
 }
 
@@ -197,64 +200,95 @@ impl Library {
         let notes = if device.note_icons == profile::NoteIcons::Number { format!("{notes}#") } else { notes.to_string() };
         // 保留注释回链（profile 的 note_backlinks，缺省保留）时再带个 `<`
         let notes = if device.note_backlinks { format!("{notes}<") } else { notes };
-        // 阅读范围后面带上漫画白边（`+1`，profile 的 comic_margin，2026-09-29 起），改了白边的书都要重新生成；
-        // 漫画阅读范围和阅读器页边距（comic_readable、comic_reader_margins）
-        // 跟在后面（`c952x1457m1`），和 EPUB 阅读范围一样时不写
-        let comic = device.comic_readable();
-        let comic_seg = match (comic != area, device.comic_reader_margins) {
-            (false, None) => String::new(),
-            (_, m) => format!("c{}x{}{}", comic.width, comic.height, m.map(|m| format!("m{m}")).unwrap_or_default()),
-        };
-        // 漫画翻页方向改写（profile 的 comic_page_direction，如 `dltr`）
-        let comic_seg = match &device.comic_page_direction {
-            Some(d) => format!("{comic_seg}d{d}"),
-            None => comic_seg,
-        };
-        // 漫画写成固定版式（profile 的 comic_fixed_layout）
-        let comic_seg = if device.comic_fixed_layout { format!("{comic_seg}f") } else { comic_seg };
-        // 保留背景图（profile 的 background_images）
-        let comic_seg = match (device.background_images, device.background_sizing) {
-            (true, true) => format!("{comic_seg}b"),
-            (true, false) => format!("{comic_seg}bn"),
-            _ => comic_seg,
+        // 文字书、漫画分开算（2026-10-08）：只影响另一路的版本号、profile 字段变了，这一路不过期。
+        // 文字书：EPUB 阅读范围 + 只管文字书的字段；漫画：EPUB 阅读范围 + 漫画画布 + 白边 + 只管漫画的字段。
+        // 两路都过清洗层：背景图、rgba 两路都带。
+        let comic = self.comic_of(meta)?;
+        let shared = match (device.background_images, device.background_sizing) {
+            (true, true) => "b",
+            (true, false) => "bn",
+            _ => "",
         };
         // 阅读器不认 rgba() 颜色（profile 的 css_rgba = false）
-        let comic_seg = if device.css_rgba { comic_seg } else { format!("{comic_seg}r") };
-        // 带图注的竖长图写宽度（profile 的 caption_fit）
-        let comic_seg = if device.caption_fit { format!("{comic_seg}k") } else { comic_seg };
-        // 正文图片的透明处合成白底（profile 的 image_alpha = false）
-        let comic_seg = if device.image_alpha { comic_seg } else { format!("{comic_seg}a") };
+        let shared = if device.css_rgba { shared.to_string() } else { format!("{shared}r") };
+        let (version, area_seg) = if comic {
+            // 漫画画布和阅读器页边距（comic_readable、comic_reader_margins）、白边（comic_margin）、翻页方向改写（如 `dltr`）、固定版式（`f`）
+            // EPUB 阅读范围也带上：漫画书里别的图（网上的图）按它缩
+            let c = device.comic_readable();
+            let mut seg = format!("{}x{}c{}x{}+{}{}", area.width, area.height, c.width, c.height, device.comic_margin, device.comic_reader_margins.map(|m| format!("m{m}")).unwrap_or_default());
+            if let Some(d) = &device.comic_page_direction {
+                seg.push_str(&format!("d{d}"));
+            }
+            if device.comic_fixed_layout {
+                seg.push('f');
+            }
+            (format!("c{}", bookconv::optimize::COMIC_VERSION), format!("{seg}{shared}"))
+        } else {
+            // 带图注的竖长图写宽度（`k`，caption_fit）、正文图片透明处合成白底（`a`，image_alpha = false）、只修复（`t`，text_repair_only）
+            let mut seg = format!("{}x{}{shared}", area.width, area.height);
+            for (on, c) in [(device.caption_fit, 'k'), (!device.image_alpha, 'a'), (device.text_repair_only, 't')] {
+                if on {
+                    seg.push(c);
+                }
+            }
+            (bookconv::optimize::OPTIMIZE_VERSION.to_string(), seg)
+        };
         let fingerprint = format!(
-            "{}|{cover}|{info}|{pipeline}|{}|{notes}|{}|{}x{}+{}{comic_seg}|{}|{}",
+            "{}|{cover}|{info}|{pipeline}|{version}|{notes}|{}|{area_seg}|{}|{}",
             meta.content_sha(),
-            bookconv::optimize::OPTIMIZE_VERSION,
             device.id,
-            area.width,
-            area.height,
-            device.comic_margin,
             if device.color { "color" } else { "gray" },
             format_seg,
         );
-        Ok(Plan { fingerprint, format })
+        // 以前的写法：一个版本号、profile 的字段全带上。版本号用这一路现在的：这一路的版本变过，就对不上，照常重建
+        let legacy = {
+            let c = device.comic_readable();
+            let mut seg = match (c != area, device.comic_reader_margins) {
+                (false, None) => String::new(),
+                (_, m) => format!("c{}x{}{}", c.width, c.height, m.map(|m| format!("m{m}")).unwrap_or_default()),
+            };
+            if let Some(d) = &device.comic_page_direction {
+                seg.push_str(&format!("d{d}"));
+            }
+            for (on, x) in [(device.comic_fixed_layout, "f"), (device.background_images && device.background_sizing, "b"), (device.background_images && !device.background_sizing, "bn"), (!device.css_rgba, "r"), (device.caption_fit, "k"), (!device.image_alpha, "a"), (device.text_repair_only, "t")] {
+                if on {
+                    seg.push_str(x);
+                }
+            }
+            let v = if comic { bookconv::optimize::COMIC_VERSION } else { bookconv::optimize::OPTIMIZE_VERSION };
+            let gray = if device.color { "color" } else { "gray" };
+            format!("{}|{cover}|{info}|{pipeline}|{v}|{notes}|{}|{}x{}+{}{seg}|{gray}|{format_seg}", meta.content_sha(), device.id, area.width, area.height, device.comic_margin)
+        };
+        Ok(Plan { fingerprint, legacy, format })
     }
 
-    /// 这本书在这个模式下的产物格式：profile 给漫画另配了格式（`comic_format`）时要先判断是不是漫画
-    /// （同优化器的判定，按内容哈希缓存）。
+    /// 这本书在这个模式下的产物格式：profile 给漫画另配了格式（`comic_format`）时要先判断是不是漫画。
     pub(crate) fn output_format(&self, meta: &Meta, device: &Profile) -> Result<Format, String> {
         if device.format_for(true) == device.format_for(false) {
             return Ok(device.format());
         }
+        Ok(device.format_for(self.comic_of(meta)?))
+    }
+
+    /// 这本书是不是漫画（同优化器的判定）：入库时存下的（`Meta::comic`）；早期条目当场判、按内容哈希缓存在这次运行里，
+    /// 持锁时顺带存进 meta.json（只读的命令不写书库）。
+    pub(crate) fn comic_of(&self, meta: &Meta) -> Result<bool, String> {
+        if let Some(c) = meta.comic {
+            return Ok(c);
+        }
         let sha = meta.content_sha().to_string();
-        let cached = self.comic.borrow().get(&sha).copied();
-        let comic = match cached {
-            Some(c) => c,
-            None => {
-                let c = self.is_comic(meta)?;
-                self.comic.borrow_mut().insert(sha, c);
-                c
+        if let Some(c) = self.comic.borrow().get(&sha).copied() {
+            return Ok(c);
+        }
+        let c = self.is_comic(meta)?;
+        self.comic.borrow_mut().insert(sha, c);
+        if self.locked.get() {
+            if let Some(mut m) = self.read_meta(&meta.id).filter(|m| m.content_sha() == meta.content_sha()) {
+                m.comic = Some(c);
+                self.save_meta(&m)?;
             }
-        };
-        Ok(device.format_for(comic))
+        }
+        Ok(c)
     }
 
     /// 生成时真正会补进书里的简介、标签的指纹（书里已有的那项不补、不进指纹：不然书里有简介的书，找来的简介变了也白重建）。
@@ -418,7 +452,7 @@ impl Library {
             let fresh = if entry.uuid.is_empty() && !entry.path.is_file() {
                 None
             } else {
-                self.registry.get(&dev_id).and_then(|p| self.plan(meta, p).ok()).map(|plan| plan.fingerprint == entry.fingerprint)
+                self.registry.get(&dev_id).and_then(|p| self.plan(meta, p).ok()).map(|plan| plan.fingerprint == entry.fingerprint || plan.legacy == entry.fingerprint)
             };
             out.push(OutputStatus { device: dev_id, path: entry.shown(), fresh });
         }
@@ -447,6 +481,13 @@ impl Library {
             self.verified_original(meta)?;
         }
         let plan = self.plan(meta, device)?;
+        // 指纹写法改了（2026-10-08 起文字书、漫画分开算）、规则没变的：记录改成新写法，不重新生成
+        let sp = self.state_path(&device.id);
+        let prev = self.states.get(&sp).books.get(&meta.id).cloned();
+        if let Some(mut p) = prev.filter(|p| !p.fingerprint.is_empty() && p.fingerprint != plan.fingerprint && p.fingerprint == plan.legacy) {
+            p.fingerprint = plan.fingerprint.clone();
+            self.put_entry(&sp, meta, p)?;
+        }
         let t = self.target(device);
         let target = t.as_ref().as_ref().map_err(|e| format!("{} {e}", device.id))?;
         match target {
@@ -473,7 +514,7 @@ impl Library {
 
     /// 产物是文件（电脑上、MTP 设备上）。
     fn prepare_file(&self, meta: &Meta, device: &Profile, target: &Target, plan: Plan, force: bool) -> Result<Step, String> {
-        let Plan { fingerprint, format } = plan;
+        let Plan { fingerprint, format, .. } = plan;
         let (root, dir) = self.output_dir(meta, device, target)?;
         let sp = self.state_path(&device.id);
         let state = self.states.get(&sp);
@@ -548,7 +589,7 @@ impl Library {
     /// 文件夹或书名变了：加入一本新的，旧的进回收站。重新生成出来和上次传的逐字节相同就不再传（不让 xochitl 白重排）。
     fn prepare_xochitl(&self, meta: &Meta, device: &Profile, target: &Target, plan: Plan, force: bool) -> Result<Step, String> {
         let Target::Xochitl(x) = target else { unreachable!("只给 xochitl 调") };
-        let Plan { fingerprint, format } = plan;
+        let Plan { fingerprint, format, .. } = plan;
         if format != Format::Epub {
             return Err(format!("xochitl 只收 EPUB，这个模式出的是 {}", format.ext()));
         }

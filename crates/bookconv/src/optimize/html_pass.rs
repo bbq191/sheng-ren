@@ -13,12 +13,14 @@ fn remote_src(tag: &str) -> Option<(html::Attr<'_>, String)> {
 /// 免相对路径计算），调用方再把它补进 OPF manifest（[`add_manifest_items`]）；抓不到→**删掉这个 `<img>`**（2026-09-30 用户定：
 /// 设备上的阅读器不联网，留着只是一个显示不出来的空框或断图标）。`chap_dir`=本章 zip 内目录；`counter` 跨章递增，`taken`（zip 里已有的条目名，含本次已抓到的）
 /// 保资源名唯一——已经优化过的书再跑时书里已有 `remote_img_0.png`，新抓到的图不能再用这个名字（2026-09-28 审计）。
+/// `drop_failed` 为假（只修复的文字书）时抓不到的 `<img>` 原样留着。
 /// `fetch(src)->Some((字节,ext))|None`（依赖注入便于测试，生产传抓图闭包）。返回（改写后 html, 新增资源 [(zip路径, 字节)]）。
 pub(super) fn inline_remote_images<F>(
     html_text: &str,
     chap_dir: &str,
     counter: &mut usize,
     taken: &mut HashSet<String>,
+    drop_failed: bool,
     fetch: F,
 ) -> (String, Vec<(String, Vec<u8>)>)
 where
@@ -30,6 +32,9 @@ where
     for (k, t) in tags.iter().enumerate().filter(|(_, t)| t.is_start() && t.is("img")) {
         let Some((a, src)) = remote_src(&html_text[t.start..t.end]) else { continue };
         let Some((bytes, ext)) = fetch(&src) else {
+            if !drop_failed {
+                continue;
+            }
             // 抓不到 → 删掉（写成 `<img …></img>` 的连闭合标签一起删）
             let end = match tags.get(k + 1) {
                 Some(c) if t.kind == html::TagKind::Open && c.kind == html::TagKind::Close && c.is("img") => c.end,
@@ -106,10 +111,10 @@ pub(super) fn set_manifest_media_types(opf: &str, opf_path: &str, retyped: &[(St
     html::apply_edits(opf, edits)
 }
 
-/// 生产抓图闭包：`//`→https、Referer=图自身 origin（满足多数 CDN 同源防盗链）、抓取+降采样。
-pub(super) fn remote_img_fetcher(ag: &ureq::Agent, screen: crate::imgopt::Screen) -> impl Fn(&str) -> Option<(Vec<u8>, &'static str)> + '_ {
+/// 生产抓图闭包：`//`→https、Referer=图自身 origin（满足多数 CDN 同源防盗链）、抓取+降采样（`screen` 为 `None` 时不缩，原图）。
+pub(super) fn remote_img_fetcher(ag: &ureq::Agent, screen: Option<crate::imgopt::Screen>) -> impl Fn(&str) -> Option<(Vec<u8>, &'static str)> + '_ {
     move |src: &str| {
-        crate::netimg::fetch_image(ag, src, &crate::netimg::origin_of(src), Some(screen)).map(|(b, ext, _mime)| (b, ext))
+        crate::netimg::fetch_image(ag, src, &crate::netimg::origin_of(src), screen).map(|(b, ext, _mime)| (b, ext))
     }
 }
 

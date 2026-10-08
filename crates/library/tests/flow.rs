@@ -892,6 +892,43 @@ fn comic_fingerprint_follows_the_readable_area_the_optimizer_uses() {
     assert_ne!(fp(800), fp(700));
 }
 
+/// 指纹按文字书、漫画分开（2026-10-08）：只管文字书的 profile 字段变了漫画不过期，只管漫画的变了文字书不过期。
+#[test]
+fn text_and_comic_fingerprints_ignore_the_other_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("lib");
+    std::fs::create_dir_all(root.join("profiles")).unwrap();
+    let cbz = dir.path().join("漫画.cbz");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&cbz).unwrap());
+        for i in 0..3 {
+            z.start_file(format!("{i:02}.jpg"), zip::write::SimpleFileOptions::default()).unwrap();
+            z.write_all(&jpeg(400, 600)).unwrap();
+        }
+        z.finish().unwrap();
+    }
+    let epub = dir.path().join("书.epub");
+    std::fs::write(&epub, sample_epub("书")).unwrap();
+    let fps = |extra: &str| {
+        std::fs::write(root.join("profiles/t.toml"), format!("name = \"t\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n{extra}\n[screen]\nwidth = 1000\nheight = 1500\n")).unwrap();
+        let lib = common::open(&root);
+        let dev = lib.devices().get("t").unwrap().clone();
+        let fp = |p: &std::path::Path| {
+            let m = lib.add_file(p).unwrap().meta().clone();
+            lib.fingerprint(&m, &dev).unwrap()
+        };
+        (fp(&epub), fp(&cbz))
+    };
+    let (text0, comic0) = fps("");
+    let (text1, comic1) = fps("caption_fit = true\ntext_repair_only = true\nimage_alpha = false");
+    assert_ne!(text0, text1, "文字书的规则变了，文字书过期");
+    assert_eq!(comic0, comic1, "只管文字书的字段不影响漫画");
+    let (text2, comic2) = fps("comic_margin = 3\ncomic_fixed_layout = true");
+    assert_eq!(text0, text2, "只管漫画的字段不影响文字书");
+    assert_ne!(comic0, comic2);
+    assert!(text0.contains(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION)) && comic0.contains(&format!("|c{}|", bookconv::optimize::COMIC_VERSION)), "{text0}\n{comic0}");
+}
+
 /// 跑 booklib，要求退出码 0，返回 stdout。
 #[track_caller]
 fn ok(lib: &std::path::Path, args: &[&str]) -> String {

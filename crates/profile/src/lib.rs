@@ -149,6 +149,9 @@ pub struct Profile {
     /// 阅读器能正确显示图片的透明通道（TOML 里不写是 `true`）。Kindle（KFX）把正文图片透明的地方显示成黑色（《绍宋》章标题图，
     /// 2026-10-06 真机），写 `false`：正文 `<img>`/SVG `<image>` 用到的带透明像素的图先合成到白底（格式不变）。
     pub image_alpha: bool,
+    /// 文字书只做修复（TOML 里不写是 `false`）：升级成合规的 EPUB 3、修不规范的写法、目录到节，**书里的文字、图片、样式一概不动**
+    /// （不解锁字体字号、不排版、不搬注释、不删空白页、不缩图）。Kindle、掌阅写 `true`（2026-10-08 用户定）；漫画不归它管。
+    pub text_repair_only: bool,
     /// 产物送到哪台设备、怎么送；`None` 时产物留在电脑上。不影响产物内容（不进指纹）。
     pub deliver: Option<Deliver>,
 }
@@ -185,6 +188,8 @@ struct ProfileFile {
     caption_fit: bool,
     #[serde(default = "yes")]
     image_alpha: bool,
+    #[serde(default)]
+    text_repair_only: bool,
     deliver: Option<Deliver>,
 }
 
@@ -196,7 +201,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, ppi: f.ppi, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
@@ -414,6 +419,7 @@ mod tests {
         assert!(k.css_rgba && !get("ireader").unwrap().css_rgba && get("xochitl").unwrap().css_rgba, "rgba()：只有掌阅不认");
         assert!(k.caption_fit && get("ireader").unwrap().caption_fit && !get("xochitl").unwrap().caption_fit, "图注同页：kindle、ireader 开");
         assert!(!k.image_alpha && get("ireader").unwrap().image_alpha && get("xochitl").unwrap().image_alpha, "透明图合成白底：只有 kindle");
+        assert!(k.text_repair_only && get("ireader").unwrap().text_repair_only && !get("xochitl").unwrap().text_repair_only, "文字书只修复：kindle、ireader");
         let i = get("ireader").unwrap();
         assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);

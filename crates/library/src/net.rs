@@ -50,7 +50,7 @@ impl Net {
         self.transient.borrow_mut().take();
     }
 
-    fn note_transient(&self, e: &str) {
+    pub(crate) fn note_transient(&self, e: &str) {
         self.transient.borrow_mut().get_or_insert_with(|| e.to_string());
     }
 

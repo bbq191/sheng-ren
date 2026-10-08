@@ -650,28 +650,15 @@
     }
 
     #[test]
-    fn split_numbered_title_splits_section_number_not_page_number() {
-        assert_eq!(split_numbered_title("第一章 1"), Some(("第一章".into(), "1".into())));
-        assert_eq!(split_numbered_title("第一章　1"), Some(("第一章".into(), "1".into())), "全角空格分隔也要认");
-        assert_eq!(split_numbered_title("第一章 三"), Some(("第一章".into(), "三".into())), "中文数字编号");
-        assert_eq!(split_numbered_title("第一章 237"), None, "三位数以上大概率是印刷页码残留，不拆");
-        assert_eq!(split_numbered_title("第一章"), None, "没有编号尾巴不拆");
-        assert_eq!(split_numbered_title("1984"), None, "整体是数字不是「标题+编号」结构");
-        assert_eq!(split_numbered_title("第一章 0"), None, "0 不是有效小节编号");
-    }
-
-    #[test]
-    fn auto_toc_splits_numbered_titles_into_nested_entries() {
+    fn auto_toc_keeps_numbered_titles_whole() {
+        // 2026-10-08 用户定：章节只按结构判，标题末尾的数字不拆成节（以前「第一章 1」拆成父子两级）
         let mut v = vec![
             e("content.opf", r#"<package version="3.0"><metadata><dc:title>书</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
             e("c1.xhtml", "<html><body><h1>第一章 1</h1><p>a</p><h1>后记</h1></body></html>"),
         ];
         wash_entries(&mut v, &WashOpts::default()).unwrap();
         let nav = s(&v, "nav.xhtml");
-        assert!(
-            nav.contains(r#"<li><a href="c1.xhtml#eink-toc-1">第一章</a><ol><li><a href="c1.xhtml#eink-toc-1">1</a></li></ol></li><li><a href="c1.xhtml#eink-toc-2">后记</a></li>"#),
-            "「第一章 1」拆成父子两级、都指向同一锚点；「后记」没有编号尾巴不拆: {nav}"
-        );
+        assert!(nav.contains(r#"<li><a href="c1.xhtml#eink-toc-1">第一章 1</a></li><li><a href="c1.xhtml#eink-toc-2">后记</a></li>"#), "{nav}");
     }
 
     #[test]
@@ -1296,36 +1283,22 @@
     }
     const HAODOO_TEXT: &str = "出了近鐵布施站之後，沿著鐵路往西走。已經十月了，天氣仍然悶熱難當，地面卻是乾的。每當卡車疾馳而過，揚起的塵土極可能會飛進眼睛。";
 
+    /// 段落章名指到书名页后面那一段；独占一段的「１」「２」不当节（2026-10-08 用户定：纯数字不能当节的依据）。
     #[test]
-    fn haodoo_paragraph_chapter_and_numbered_sections() {
+    fn haodoo_paragraph_chapter_numbers_not_sections() {
         let t = HAODOO_TEXT;
         let mut v = haodoo_book(
             &format!("<div><h3>《白夜行》東野圭吾</h3><p>《好讀書櫃》典藏版</p><p>第一章</p><p>　　１</p><p>{t}</p><p>　　２</p><p>{t}</p></div>"),
             &format!("<div><h3>第二章</h3><p>１</p><p>{t}</p><p>２</p><p>{t}</p><p>３</p><p>{t}</p></div>"),
         );
         let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
-        assert_eq!(rep.toc_sections_added, 5);
+        assert_eq!(rep.toc_sections_added, 0);
         let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
         let got: Vec<(usize, &str, &str)> = flat.iter().map(|(d, l, t)| (*d, l.as_str(), t.as_str())).collect();
-        assert_eq!(
-            got,
-            [
-                (1, "第一章", "Text/1.xhtml#eink-ch-1"),
-                (2, "１", "Text/1.xhtml#eink-sec-1"),
-                (2, "２", "Text/1.xhtml#eink-sec-2"),
-                (1, "第二章", "Text/2.xhtml"),
-                (2, "１", "Text/2.xhtml#eink-sec-3"),
-                (2, "２", "Text/2.xhtml#eink-sec-4"),
-                (2, "３", "Text/2.xhtml#eink-sec-5"),
-            ],
-            "第一章指到章名段落（不是书名页），节挂在章下面，都是原文件里的锚点"
-        );
+        assert_eq!(got, [(1, "第一章", "Text/1.xhtml#eink-ch-1"), (1, "第二章", "Text/2.xhtml")], "第一章指到章名段落（不是书名页）");
         assert!(s(&v, "OEBPS/Text/1.xhtml").contains(r#"<p id="eink-ch-1">第一章</p>"#));
         assert_toc_targets_exist(&v);
         assert_eq!(spine_files(&v).len(), 2, "不拆文件");
-        // 幂等
-        let rep2 = wash_entries(&mut v, &WashOpts::default()).unwrap();
-        assert_eq!(rep2.toc_sections_added, 0);
     }
 
     #[test]
@@ -1355,40 +1328,23 @@
         v
     }
 
-    /// 《13級階梯》：节标题 `<h3>２</h3>` 跟章标题同级、单独成文件，第 1 节是章标题后面单独一段 `１`，
-    /// 书自带目录是平的（`第一章　出獄　　１`、`　　２`）。降成节：挂到章下面，章标签去掉末尾的节号。
+    /// 和章同级的数字标题（《13級階梯》`<h3>２</h3>` 单独成文件、目录是平的）不降成节，目录原样（2026-10-08 用户定：只按结构判）。
     #[test]
-    fn numbered_headings_at_chapter_level_become_sections() {
+    fn numbered_headings_at_chapter_level_stay_chapters() {
         let t = HAODOO_TEXT;
         let (c1, c1b, c1c) = (format!("<div><h3>第一章　出獄</h3><p>１</p><p>{t}</p></div>"), format!("<div><h3>２</h3><p>{t}</p></div>"), format!("<div><h3>３</h3><p>{t}</p></div>"));
         let (c2, c2b) = (format!("<div><h3>第二章　事件</h3><p>１</p><p>{t}</p></div>"), format!("<div><h3>２</h3><p>{t}</p></div>"));
-        let mut v = flat_ncx_book(
-            &[("c1.xhtml", &c1), ("c1b.xhtml", &c1b), ("c1c.xhtml", &c1c), ("c2.xhtml", &c2), ("c2b.xhtml", &c2b)],
-            &[("第一章　出獄　　１", "c1.xhtml"), ("　　２", "c1b.xhtml"), ("　　３", "c1c.xhtml"), ("第二章　事件　　１", "c2.xhtml"), ("　　２", "c2b.xhtml")],
-        );
+        let toc = [("第一章　出獄　　１", "c1.xhtml"), ("　　２", "c1b.xhtml"), ("　　３", "c1c.xhtml"), ("第二章　事件　　１", "c2.xhtml"), ("　　２", "c2b.xhtml")];
+        let mut v = flat_ncx_book(&[("c1.xhtml", &c1), ("c1b.xhtml", &c1b), ("c1c.xhtml", &c1c), ("c2.xhtml", &c2), ("c2b.xhtml", &c2b)], &toc);
         let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
-        assert_eq!(rep.toc_sections_added, 2, "只补两章的第 1 节，其余书自带");
+        assert_eq!(rep.toc_sections_added, 0);
         let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
-        let got: Vec<(usize, &str, &str)> = flat.iter().map(|(d, l, t)| (*d, l.as_str(), t.as_str())).collect();
-        assert_eq!(
-            got,
-            [
-                (1, "第一章　出獄", "Text/c1.xhtml"),
-                (2, "１", "Text/c1.xhtml#eink-sec-1"),
-                (2, "２", "Text/c1b.xhtml"),
-                (2, "３", "Text/c1c.xhtml"),
-                (1, "第二章　事件", "Text/c2.xhtml"),
-                (2, "１", "Text/c2.xhtml#eink-sec-4"),
-                (2, "２", "Text/c2b.xhtml"),
-            ]
-        );
-        assert_toc_targets_exist(&v);
-        assert_eq!(spine_files(&v).len(), 5, "不拆文件");
-        let rep2 = wash_entries(&mut v, &WashOpts::default()).unwrap();
-        assert_eq!(rep2.toc_sections_added, 0, "幂等");
+        let got: Vec<(usize, &str, String)> = flat.iter().map(|(d, l, t)| (*d, l.as_str(), t.clone())).collect();
+        let want: Vec<(usize, &str, String)> = toc.iter().map(|(l, f)| (1, l.trim(), format!("Text/{f}"))).collect();
+        assert_eq!(got, want);
     }
 
-    /// 反例：全书只有一串同级数字标题（《月亮和六便士》`<h3>二</h3>`… 是章），目录不改成两级。
+    /// 全书只有一串同级数字标题（《月亮和六便士》`<h3>二</h3>`… 是章），目录不改成两级。
     #[test]
     fn single_run_of_numbered_headings_stays_chapters() {
         let t = HAODOO_TEXT;
@@ -1399,17 +1355,41 @@
         assert!(flat.iter().all(|(d, _, _)| *d == 1), "{flat:?}");
     }
 
-    /// 章标签末尾的数字是章自己的编号（《鼠疫》"部　一"，节都是新补的）：不去掉。
+    /// 阿加莎全集：书名下面挂着「1」「2」——书名是书/卷级，数字是章；章里更深一级的 `<hN>` 才是节，补进目录。
+    #[test]
+    fn numbered_chapters_under_book_titles() {
+        let t = HAODOO_TEXT;
+        let ch = |n: &str| format!("<div><h2>{n}</h2><p>{t}</p><h3>小标题{n}</h3><p>{t}</p></div>");
+        let (a1, a2, b1, b2) = (ch("1"), ch("2"), ch("1"), ch("2"));
+        let mut v = paged_book(&[("a1.xhtml", &a1), ("a2.xhtml", &a2), ("b1.xhtml", &b1), ("b2.xhtml", &b2)]);
+        let np = |l: &str, f: &str, kids: &str| format!("<navPoint><navLabel><text>{l}</text></navLabel><content src=\"Text/{f}\"/>{kids}</navPoint>");
+        let ncx = format!(
+            "<ncx><navMap>{}{}</navMap></ncx>",
+            np("ABC谋杀案", "a1.xhtml", &(np("1", "a1.xhtml", "") + &np("2", "a2.xhtml", ""))),
+            np("无人生还", "b1.xhtml", &(np("1", "b1.xhtml", "") + &np("2", "b2.xhtml", "")))
+        );
+        v.push(e("OEBPS/toc.ncx", &ncx));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        assert_eq!(rep.toc_sections_added, 4, "每章的 <h3> 是节");
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
+        assert_eq!(labels, [(1, "ABC谋杀案"), (2, "1"), (3, "小标题1"), (2, "2"), (3, "小标题2"), (1, "无人生还"), (2, "1"), (3, "小标题1"), (2, "2"), (3, "小标题2")]);
+        assert_toc_targets_exist(&v);
+    }
+
+    /// 章标签末尾的数字不动（《鼠疫》"部　一"）；章里独占一段的「一」「二」不当节。
     #[test]
     fn part_number_in_label_is_kept() {
         let t = HAODOO_TEXT;
         let (c1, c2) = (format!("<div><h3>部　一</h3><p>一</p><p>{t}</p><p>二</p><p>{t}</p></div>"), format!("<div><h3>部　二</h3><p>一</p><p>{t}</p><p>二</p><p>{t}</p></div>"));
         let mut v = flat_ncx_book(&[("1.xhtml", &c1), ("2.xhtml", &c2)], &[("部　一", "1.xhtml"), ("部　二", "2.xhtml")]);
         let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
-        assert_eq!(rep.toc_sections_added, 4);
+        assert_eq!(rep.toc_sections_added, 0);
         let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
         let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
-        assert_eq!(labels, [(1, "部　一"), (2, "一"), (2, "二"), (1, "部　二"), (2, "一"), (2, "二")]);
+        assert_eq!(labels, [(1, "部　一"), (1, "部　二")]);
     }
 
     /// MOBI 转来的书（《福尔摩斯探案全集》）：没有 `<hN>`，目录锚点是章名段落前面的空 `<span id>`——取紧跟着的段落当标题。
@@ -1499,10 +1479,6 @@
     /// H4：`Chapter 1`、`Part 2`、`卷 一` 是这一条自己的编号，自动目录里不拆成两级。
     #[test]
     fn audit_h4_chapter_number_not_split() {
-        for t in ["Chapter 1", "Part 2", "卷 一", "BOOK 3", "第 三"] {
-            assert_eq!(split_numbered_title(t), None, "{t}");
-        }
-        assert_eq!(split_numbered_title("第一章 出獄 1"), Some(("第一章 出獄".into(), "1".into())));
         let mut v = paged_book(&[("c1.xhtml", &format!("<h2>Chapter 1</h2><p>{LONG}</p><h2>Chapter 2</h2><p>{LONG}</p>"))]);
         wash_entries(&mut v, &WashOpts::default()).unwrap();
         let nav = s(&v, "OEBPS/nav.xhtml");

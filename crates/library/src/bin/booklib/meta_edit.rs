@@ -1,5 +1,5 @@
-//! `booklib meta --edit`：查看、改写一个 EPUB 文件的元数据（OPF 里的 Dublin Core）和封面。改的是文件本身（不是阅读器的旁路缓存），
-//! 和书库无关（不打开书库、不加锁）。
+//! `booklib meta --edit`：查看、改写一个 EPUB 文件的元数据（OPF 里的 Dublin Core）和封面。改的是文件本身（不是阅读器的旁路缓存）。
+//! 给的不是存在的文件时按书库 id 前缀或书名片段找书（同 `list`），改它的原件（2026-10-08 用户要）；只读书库、不加锁。
 //!
 //! 改 OPF（改书名时连 NCX 里的书名）和封面；写出的书和 booklib 的产物一样过一遍 EPUB 3 规范整理（XHTML 修成合法 XML、
 //! OPF 升到 3.0、补导航文档），`dcterms:modified` 写成现在的时间。可见文字一个不动。
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 pub const USAGE: &str = r#"用法:
   booklib meta --edit 书.epub                                    查看
+  booklib meta --edit 书库id或书名 …                             改书库里那本书的原件（只能对上一本）
   booklib meta --edit 书.epub --title 书名 --author 作者甲 --author 作者乙
   booklib meta --edit 书.epub --language zh --publisher 出版社 --date 2026-09-28 --description 简介…
   booklib meta --edit 书.epub --tag 小说 --tag 科幻               标签整体替换
@@ -23,7 +24,7 @@ pub const USAGE: &str = r#"用法:
       值给空字符串 = 删掉这一项（字段、封面都一样）
       --author/--tag/--identifier 可重复，给出即整体替换（给几个就是最终的几个）；其余是单值
       --identifier 不动 OPF 唯一标识（unique-identifier 指向的那个），只替换其余标识符
-改的是任意一个 EPUB 文件，和书库无关；改了跟踪目录里的原件，下次 sync 会当成新版本重新入库"#;
+给文件路径时改的是任意一个 EPUB 文件；改了跟踪目录里的原件，下次 sync 会当成新版本重新入库"#;
 
 fn usage(msg: &str) -> ! {
     eprintln!("{msg}\n\n{USAGE}");
@@ -48,8 +49,36 @@ fn show(path: &Path) {
     }
 }
 
-/// `args`：`meta` 之后、去掉 `--edit` 的参数（`--library=` 已去掉：改文件用不到书库）。
-pub fn run(args: Vec<OsString>) {
+/// 给的不是文件：按书库 id 前缀或书名片段找书，返回它的原件。对不上、对上几本、没有原件（网址书、存了副本的书）都报错退出。
+fn find_in_library(sel: &Path, root: &Path) -> PathBuf {
+    let sel = sel.to_string_lossy().into_owned();
+    // 书库不在时不新建（`Library::open` 会建）
+    if !root.join("masters").is_dir() {
+        fail(&format!("文件不存在：{sel}"));
+    }
+    let lib = library::Library::open(root).unwrap_or_else(|e| fail(&format!("打开书库失败: {e}")));
+    let books = lib.select(std::slice::from_ref(&sel));
+    let m = match &books[..] {
+        [] => fail(&format!("文件不存在，书库里也没有 id 或书名对得上的书：{sel}")),
+        [m] => m,
+        _ => {
+            let list: Vec<String> = books.iter().map(|m| format!("  {}  {}  {}", &m.id[..m.id.len().min(12)], m.title, m.source_path)).collect();
+            fail(&format!("「{sel}」对上 {} 本书，给更长的 id 或完整书名：\n{}", books.len(), list.join("\n")))
+        }
+    };
+    if m.source() == library::Source::Stored || m.source_path.is_empty() {
+        fail(&format!("《{}》书库里存的是副本（网址入库或找不到原件），没有原件可改", m.title));
+    }
+    let path = PathBuf::from(&m.source_path);
+    if !path.is_file() {
+        fail(&format!("《{}》的原件不在了：{}（改名或移动过就先 sync）", m.title, path.display()));
+    }
+    println!("书库 {} 《{}》→ {}", &m.id[..m.id.len().min(12)], m.title, path.display());
+    path
+}
+
+/// `args`：`meta` 之后、去掉 `--edit` 的参数（`--library=` 已去掉）；`library`：书库目录（给的不是文件时在这里找书）。
+pub fn run(args: Vec<OsString>, library: PathBuf) {
     let mut args = args.into_iter();
     let mut file: Option<PathBuf> = None;
     let mut singles: Vec<(DcField, String)> = Vec::new();
@@ -98,10 +127,8 @@ pub fn run(args: Vec<OsString>) {
             _ => usage("meta --edit 只能给一个文件（路径里有空格时要整个加引号）"),
         }
     }
-    let file = file.unwrap_or_else(|| usage("meta --edit 要给一个 EPUB 文件"));
-    if !file.is_file() {
-        fail(&format!("文件不存在：{}", file.display()));
-    }
+    let file = file.unwrap_or_else(|| usage("meta --edit 要给一个 EPUB 文件（或书库 id、书名）"));
+    let file = if file.is_file() { file } else { find_in_library(&file, &library) };
     if let Some(out) = get_cover {
         let (ext, bytes) = bookconv::epubzip::cover_image_of(&file).unwrap_or_else(|| fail("书里没有封面"));
         bookconv::util::write_atomic(&out, &bytes).unwrap_or_else(|e| fail(&e));

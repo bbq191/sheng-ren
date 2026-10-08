@@ -26,6 +26,7 @@ mod cover;
 mod covergen;
 mod deliver;
 mod douban;
+mod qqread;
 mod fsutil;
 mod generate;
 mod matching;
@@ -82,6 +83,10 @@ pub struct Meta {
     /// 联网找来的元数据（`booklib meta --fetch`）；简介、标签书里没有的，生成产物时补进去。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info: Option<BookInfo>,
+    /// 是不是漫画（优化器同一套判定，CBZ 一律算）：入库时判一次存下，指纹按文字书、漫画分开算要用（原件暂时不在也算得出）。
+    /// 早期条目没有，第一次用到时判、持锁的命令顺带存下。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comic: Option<bool>,
 }
 
 impl Meta {
@@ -203,6 +208,7 @@ struct EpubInfo {
     title: String,
     authors: Vec<String>,
     drm: Option<String>,
+    comic: bool,
 }
 
 /// EPUB 的文字条目（图片条目只记名字、不读内容，大漫画不整本解压）：入库检查和漫画判定共用。
@@ -213,7 +219,7 @@ fn epub_text_entries(file: std::fs::File) -> Result<Vec<bookconv::epubzip::Entry
 
 impl EpubInfo {
     fn read(file: std::fs::File) -> Result<EpubInfo, String> {
-        let mut info = EpubInfo { title: String::new(), authors: Vec::new(), drm: None };
+        let mut info = EpubInfo { title: String::new(), authors: Vec::new(), drm: None, comic: false };
         let bad = |e: String| format!("不是有效的 EPUB（{e}）");
         let entries = &epub_text_entries(file).map_err(bad)?;
         if entries.iter().any(|e| e.name == "META-INF/rights.xml") {
@@ -232,6 +238,7 @@ impl EpubInfo {
         let dc = bookconv::wash::opf_dc(&String::from_utf8_lossy(&entries[opf.index].data));
         info.title = dc.title;
         info.authors = dc.creators;
+        info.comic = bookconv::comic_detect::is_comic(entries);
         Ok(info)
     }
 }
@@ -240,6 +247,7 @@ impl EpubInfo {
 pub fn rule_versions() -> Vec<(&'static str, String)> {
     vec![
         ("优化", bookconv::optimize::OPTIMIZE_VERSION.to_string()),
+        ("漫画优化", bookconv::optimize::COMIC_VERSION.to_string()),
         ("CBZ 转换", bookconv::convert::CONVERT_VERSION.to_string()),
         ("补元数据", bookconv::opfmeta::VERSION.to_string()),
         ("KFX 写出器", kfx::write::WRITER_VERSION.to_string()),
@@ -534,12 +542,12 @@ impl Library {
             EpubInfo::read(file)?
         } else {
             bookconv::convert::cbz::check_cbz(std::io::BufReader::new(file))?;
-            EpubInfo { title: String::new(), authors: Vec::new(), drm: None }
+            EpubInfo { title: String::new(), authors: Vec::new(), drm: None, comic: true }
         };
         if let Some(d) = info.drm {
             return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
         }
-        let (title, authors) = (info.title, info.authors);
+        let (title, authors, comic) = (info.title, info.authors, info.comic);
         unchanged()?;
         let meta = Meta {
             id,
@@ -552,6 +560,7 @@ impl Library {
             source_sha256: sha,
             source_size: size,
             source_mtime_ns: mtime_ns,
+            comic: Some(comic),
             ..Default::default()
         };
         self.store(&meta, &[])?;

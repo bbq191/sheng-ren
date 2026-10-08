@@ -196,51 +196,6 @@ pub(super) fn write_nav(existing: Option<&str>, items: &[TocItem], nav_dir: &str
 }
 
 
-/// 标题文本"标题+编号"拆分启发式（EPUB 线原则①：原书标题跟小节/章节编号拼在一行，如「第一章 1」，
-/// TOC 要显示成两级——父级标题 + 缩进子级编号）。只在编号看起来像"小节序号"而非"印刷页码残留"时拆：
-/// 数字编号要求 ≤99（页码常见三位数以上，且小节编号在同一本书里通常不会突然跳到几十以上）；中文数字编号
-/// （〇一二三四五六七八九十百千，常见于章节内小节"之一/之二"变体的「1」以中文数字呈现）不做位数限制，
-/// 因为原书不会用中文数字写页码。标题与编号之间的分隔允许普通空格与全角空格（U+3000）。
-pub(super) fn split_numbered_title(title: &str) -> Option<(String, String)> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r#"^(.+?)[ \u{3000}\t]+([0-9]+|[〇一二三四五六七八九十百千]+)$"#).unwrap());
-    let c = re.captures(title.trim())?;
-    let head = c[1].trim();
-    let num = &c[2];
-    if head.is_empty() || is_numbering_word(head) {
-        return None;
-    }
-    if let Ok(n) = num.parse::<u32>() {
-        if n == 0 || n > 99 {
-            return None; // 三位数以上大概率是印刷页码残留，不是小节编号，原样保留避免拆错
-        }
-    }
-    Some((head.to_string(), num.to_string()))
-}
-
-/// 标题前半只是"章/部/卷"这类编号用词（`Chapter 1`、`Part 2`、`卷 一`、`第 三`）：后面的数字是这一条自己的编号，不是小节，
-/// 不拆（2026-09-28 审计：此前拆成"Chapter"下挂一个"1"）。
-fn is_numbering_word(head: &str) -> bool {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"(?i)^(chapter|chap\.?|part|book|volume|vol\.?|section|sect\.?|act|scene|canto|episode|letter|卷|部|篇|章|回|节|節|集|册|冊|辑|輯|第|其)$"#).unwrap()).is_match(head)
-}
-
-/// 对已收集的标题条目做"标题+编号"拆分：命中的条目拆成父级(标题) + 子级(编号)两条，子级 level = 父级+1、
-/// 指向同一锚点（不是两个可跳转目标，只是给 TOC 一个视觉分级，跟 `dense_ranks` 的嵌套机制天然兼容）。
-pub(super) fn split_numbered_titles(items: Vec<TocItem>) -> Vec<TocItem> {
-    let mut out = Vec::with_capacity(items.len());
-    for it in items {
-        match split_numbered_title(&it.title) {
-            Some((head, num)) => {
-                out.push(TocItem::new(it.level, head, it.path.clone(), it.frag.clone()));
-                out.push(TocItem::new(it.level.saturating_add(1), num, it.path, it.frag));
-            }
-            None => out.push(it),
-        }
-    }
-    out
-}
-
 /// 无任何 h1–h6 语义标题时的兜底 TOC：退化到按 spine 文件边界逐条生成，条目文本取该文件正文首个非空
 /// 文本片段（截断），纯图片页/取不到文本则用"正文 N"占位——保证"没有目录的书优化后至少有可用目录"这个
 /// 底线，而不是无声放弃。只在**多数** spine 文件确实有可提取文本时才生成，避免给纯图片书（漫画/画册）
@@ -534,7 +489,7 @@ pub(super) fn auto_toc(entries: &mut Vec<Entry>, mode: AutoToc, heading: &str, r
     }
     let Some(opf) = parse_opf(entries) else { return };
     let headings = collect_toc_headings(entries, &opf.spine, opf.nav_doc.as_ref());
-    let headings = if headings.is_empty() { fallback_spine_toc(entries, &opf.spine, opf.nav_doc.as_ref()) } else { split_numbered_titles(headings) };
+    let headings = if headings.is_empty() { fallback_spine_toc(entries, &opf.spine, opf.nav_doc.as_ref()) } else { headings };
     // 纯图片书（漫画/画册）：没有标题也没有可提取文字，`fallback_spine_toc` 故意不生成"正文 N"。但用户要求
     // **所有书都要有目录**（2026-09-20，乱马源书 NCX 是空的，转出来没目录），所以按页分段生成"第 N–M 页"
     // ——如实标注不是章节，只为能按段跳转（同 `ncx::page_chunk_titles`，PDF 路径也是这套）。
@@ -630,8 +585,6 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
         toc: TocItem,
         is_sec: bool,
         key: (usize, usize),
-        /// 这次补进去的（不是书自带目录里的）。
-        inserted: bool,
     }
     let mut items: Vec<Item> = flat
         .into_iter()
@@ -641,7 +594,7 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
             let is_sec = if id.is_empty() { sec_paths.contains(path.as_str()) } else { sec_ids.contains(&(path.as_str(), id.clone())) };
             let key = key_of(&path, &id);
             // 层级到 u8 为止（此前 `as u8` 截断：嵌套 256 层的条目成了 0 层）
-            Item { toc: TocItem { np: Some(open_tag).filter(|t| !t.is_empty()), ..TocItem::new(depth.clamp(1, 255) as u8, label, path, f) }, is_sec, key, inserted: false }
+            Item { toc: TocItem { np: Some(open_tag).filter(|t| !t.is_empty()), ..TocItem::new(depth.clamp(1, 255) as u8, label, path, f) }, is_sec, key }
         })
         .collect();
     // 已在目录里的节：(路径, id) 或"指向该份文件本身"。
@@ -659,11 +612,11 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
             Some(prev) => prev.toc.level.saturating_add(1),
             None => 1,
         };
-        items.insert(at, Item { toc: TocItem::new(depth, s.label.clone(), s.path.clone(), id.clone()), is_sec: true, key, inserted: true });
+        items.insert(at, Item { toc: TocItem::new(depth, s.label.clone(), s.path.clone(), id.clone()), is_sec: true, key });
         present.insert((s.path.clone(), id));
         added += 1;
     }
-    // 书自带的节条目缩进到所属章下面、标签去掉首尾空白；章标签末尾重复第一节的节号的去掉。
+    // 书自带的节条目缩进到所属章下面、标签去掉首尾空白。
     let mut changed = added > 0;
     let mut chapter: Option<usize> = None;
     for i in 0..items.len() {
@@ -681,20 +634,6 @@ pub(super) fn merge_sections_into_toc(entries: &mut [Entry], sections: &[Section
         if trimmed != items[i].toc.title {
             items[i].toc.title = trimmed;
             changed = true;
-        }
-        // 只在书自带目录本来就列着后面的节（紧接着是书自带的第 n+1 节）时去掉：章标签末尾的数字才确定是第一节的节号，
-        // 不是章自己的编号（《鼠疫》"部　一"后面的节都是补的，"一"是部的编号，不动）。
-        let n = super::chapters::section_number(&items[i].toc.title);
-        let next_listed = n.is_some_and(|n| {
-            items.get(i + 1).is_some_and(|x| x.is_sec && !x.inserted && super::chapters::section_number(&x.toc.title) == Some(n + 1))
-        });
-        if i == c + 1 && items[i].inserted && next_listed {
-            let label = items[i].toc.title.clone();
-            let t = items[c].toc.title.trim_end();
-            if let Some(head) = t.strip_suffix(label.as_str()).filter(|h| h.ends_with(char::is_whitespace) && !h.trim().is_empty()) {
-                items[c].toc.title = head.trim_end().to_string();
-                changed = true;
-            }
         }
     }
     if !changed {

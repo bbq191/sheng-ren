@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 485" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 585" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
   <title>booklib meta --fetch：元数据和封面从哪来、写到哪里</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
@@ -15,14 +15,14 @@
       path.l{stroke:#555;stroke-width:1.4;fill:none}
     </style>
   </defs>
-  <rect width="960" height="485" fill="#fafafa"/>
+  <rect width="960" height="585" fill="#fafafa"/>
 
   <text x="250" y="30" text-anchor="middle" class="h">按顺序找，找到就停</text>
   <text x="760" y="30" text-anchor="middle" class="h">存到哪里</text>
 
   <!-- 输入 -->
   <rect class="box" x="20" y="48" width="460" height="44" rx="6"/>
-  <text x="250" y="68" text-anchor="middle">书名、作者（书里的 + 文件名里的）</text>
+  <text x="250" y="68" text-anchor="middle">书名、作者（书里的元数据，不看文件名）</text>
   <text x="250" y="85" text-anchor="middle" class="s">书里已有封面就只找元数据；每个网络请求间隔 1.2 秒</text>
 
   <!-- 1 豆瓣 -->
@@ -33,24 +33,33 @@
   <text x="40" y="182">内容简介 · 标签 · 原作名 · 出版社 / 出版年 / ISBN / 译者</text>
   <text x="40" y="200" class="s">封面：几个候选里挑分辨率最高的</text>
 
-  <!-- 2 Wikidata -->
+  <!-- 2 QQ 阅读 -->
   <rect class="box src" x="20" y="232" width="460" height="74" rx="8"/>
-  <text x="40" y="256" class="h">② Wikidata</text>
-  <text x="140" y="256" class="s">豆瓣没找到这本书、或没有封面时</text>
-  <text x="40" y="278">原作名 · 首次出版年</text>
-  <text x="40" y="296" class="s">封面：作品的 Open Library / Wikimedia Commons 封面</text>
+  <text x="40" y="256" class="h">② QQ 阅读</text>
+  <text x="140" y="256" class="s">novel.qq.com，网络文学多在这里；豆瓣没找到时</text>
+  <text x="40" y="278">内容简介 · 分类当标签</text>
+  <text x="40" y="296" class="s">封面：搜索结果里的封面（约 500×720）</text>
 
-  <!-- 3 生成 -->
-  <rect class="box gen" x="20" y="330" width="460" height="56" rx="8"/>
-  <text x="40" y="354" class="h">③ 生成封面</text>
-  <text x="150" y="354" class="s">都没有封面时</text>
-  <text x="40" y="375" class="s">书名 + 作者名，能找到的话配作者头像（Wikidata）</text>
+  <!-- 3 Wikidata -->
+  <rect class="box src" x="20" y="330" width="460" height="74" rx="8"/>
+  <text x="40" y="354" class="h">③ Wikidata</text>
+  <text x="140" y="354" class="s">前两个都没找到这本书、或没有封面时</text>
+  <text x="40" y="376">原作名 · 首次出版年</text>
+  <text x="40" y="394" class="s">封面：作品的 Open Library / Wikimedia Commons 封面</text>
+
+  <!-- 4 生成 -->
+  <rect class="box gen" x="20" y="428" width="460" height="56" rx="8"/>
+  <text x="40" y="452" class="h">④ 生成封面</text>
+  <text x="150" y="452" class="s">都没有封面时</text>
+  <text x="40" y="473" class="s">书名 + 作者名，能找到的话配作者头像（Wikidata）</text>
 
   <path class="l" d="M250 92 L250 114" marker-end="url(#a)"/>
   <path class="l" d="M250 208 L250 230" marker-end="url(#a)"/>
   <path class="l" d="M250 306 L250 328" marker-end="url(#a)"/>
+  <path class="l" d="M250 404 L250 426" marker-end="url(#a)"/>
   <text x="258" y="224" class="s">元数据或封面没找到</text>
-  <text x="258" y="322" class="s">没有封面</text>
+  <text x="258" y="322" class="s">还是没找到</text>
+  <text x="258" y="420" class="s">没有封面</text>
 
   <!-- 存放 -->
   <rect class="box lib" x="540" y="48" width="400" height="150" rx="8"/>
@@ -71,9 +80,10 @@
 
   <path class="l" d="M480 162 C510 162 510 123 538 123" marker-end="url(#a)"/>
   <path class="l" d="M480 269 C510 269 510 150 538 150" marker-end="url(#a)"/>
+  <path class="l" d="M480 367 C515 367 515 160 538 160" marker-end="url(#a)"/>
   <path class="l" d="M740 198 L740 220" marker-end="url(#a)"/>
 
-  <text x="480" y="430" text-anchor="middle" class="s">booklib meta --fetch [--force] [书…]：已经找过的不再找（--force 重找）；找错了用 --clear 去掉</text>
-  <text x="480" y="450" text-anchor="middle" class="s">也可以手改文件本身：booklib meta --edit 书.epub --title … --tag … --cover 图（可见文字不变，图片原样）</text>
-  <text x="480" y="470" text-anchor="middle" class="s">漫画跳过（CBZ 一律算；EPUB 按优化器同一套判定）：书里的封面就是第一页，按书名搜漫画多半对不上</text>
+  <text x="480" y="530" text-anchor="middle" class="s">booklib meta --fetch [--force] [书…]：已经找过的不再找（--force 重找）；找错了用 --clear 去掉</text>
+  <text x="480" y="550" text-anchor="middle" class="s">也可以手改文件本身：booklib meta --edit 书.epub --title … --tag … --cover 图（可见文字不变，图片原样）</text>
+  <text x="480" y="570" text-anchor="middle" class="s">漫画跳过（CBZ 一律算；EPUB 按优化器同一套判定）：书里的封面就是第一页，按书名搜漫画多半对不上</text>
 </svg>

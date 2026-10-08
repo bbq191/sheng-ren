@@ -59,6 +59,15 @@ fn optimize_inner(
 
     // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）。
     let raw = crate::epubzip::read_skeleton_par(input_path, &mut archive)?.entries;
+    // 文字书只做修复（漫画照常）：换成只修复的选项
+    let repair;
+    let opts = if opts.text_repair_only && !crate::comic_detect::is_comic(&raw) {
+        repair = opts.repair_only();
+        &repair
+    } else {
+        opts
+    };
+    let keep_images = opts.keeps_content();
     let prep = prepare_entries(raw, opts, bytes_before)?;
     check_cancel(cancel)?;
     let (comic_margin, grayscale, is_comic_book) = (opts.comic_margin, opts.grayscale, prep.is_comic_book);
@@ -132,6 +141,10 @@ fn optimize_inner(
                                 let _ = reply.send(bytes);
                                 continue;
                             };
+                            if keep_images {
+                                let _ = reply.send(Ok(bytes));
+                                continue;
+                            }
                             // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
                             // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
                             let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&bytes))).unwrap_or(1_000_000);
@@ -277,7 +290,7 @@ fn optimize_inner(
     if let (true, Some(m)) = (is_comic_book, opts.comic_reader_margins) {
         zw.put(READER_MARGINS_MARKER, m.to_string().as_bytes())?;
     }
-    zw.put(OPTIMIZE_MARKER, marker_value(opts.wash.is_some()).as_bytes())?;
+    zw.put(OPTIMIZE_MARKER, marker_value(opts.wash.is_some(), is_comic_book).as_bytes())?;
     zw.finish()?;
     let mut rep = prep.rep;
     rep.bytes_after = std::fs::metadata(output_path).map(|m| m.len() as usize).unwrap_or(0);

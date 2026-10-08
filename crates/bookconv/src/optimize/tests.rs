@@ -39,7 +39,7 @@
         let mut n = 0usize;
         // 已经优化过的书再跑：书里已有 remote_img_0.png，新抓的图不能重名
         let mut taken: HashSet<String> = ["OEBPS/remote_img_0.png".to_string()].into_iter().collect();
-        let (out, res) = inline_remote_images(html, "OEBPS", &mut n, &mut taken, |src: &str| {
+        let (out, res) = inline_remote_images(html, "OEBPS", &mut n, &mut taken, true, |src: &str| {
             if src.contains("a.png") || src == "https://x.com/c.png?a=1&b=2" { Some((vec![1, 2, 3], "png")) } else { None } // b 抓不到
         });
         assert!(out.contains(r#"src="local.png""#), "本地图应原样: {out}");
@@ -966,7 +966,7 @@
     fn page_backgrounds_prescaled_by_intent_when_sizes_are_dropped() {
         let (epub, imgs) = bg_book();
         let screen = crate::imgopt::Screen { width: 600, height: 800 };
-        let opts = OptimizeOpts { screen, ..OptimizeOpts::for_profile(profile::get("ireader").unwrap()) };
+        let opts = OptimizeOpts { screen, text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("ireader").unwrap()) };
         assert!(opts.fit_backgrounds, "ireader 去掉 background-size，要预先缩");
         let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
         let img = |n: &str| image::load_from_memory(&entry_bytes(&out, n)).unwrap();
@@ -990,7 +990,7 @@
         // kindle 保留 background-size：背景图照普通插图处理（和以前一样）
         let (epub, imgs) = bg_book();
         let screen = crate::imgopt::Screen { width: 600, height: 800 };
-        let opts = OptimizeOpts { screen, ..OptimizeOpts::for_profile(profile::get("kindle").unwrap()) };
+        let opts = OptimizeOpts { screen, text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("kindle").unwrap()) };
         assert!(!opts.fit_backgrounds);
         let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
         for (n, b) in &imgs {
@@ -1038,7 +1038,7 @@
     #[test]
     fn kindle_flattens_transparent_img_on_white_only() {
         let (epub, imgs) = alpha_book();
-        let opts = OptimizeOpts::for_profile(profile::get("kindle").unwrap());
+        let opts = OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("kindle").unwrap()) };
         assert!(opts.flatten_alpha);
         let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
         let logo = entry_bytes(&out, "OEBPS/i/logo.png");
@@ -1056,7 +1056,7 @@
     #[test]
     fn ireader_keeps_transparency() {
         let (epub, imgs) = alpha_book();
-        let opts = OptimizeOpts::for_profile(profile::get("ireader").unwrap());
+        let opts = OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("ireader").unwrap()) };
         assert!(!opts.flatten_alpha);
         let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
         assert_eq!(entry_bytes(&out, "OEBPS/i/logo.png"), imgs[0].1);
@@ -1066,7 +1066,7 @@
     fn caption_fit_follows_profile_and_readable_area() {
         let (epub, imgs) = alpha_book();
         let html = |p: &str| {
-            let (out, _) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(profile::get(p).unwrap())).unwrap();
+            let (out, _) = optimize_epub_with(&epub, &OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get(p).unwrap()) }).unwrap();
             (text_of(&out, "OEBPS/c1.xhtml"), out)
         };
         // 掌阅 1264×1680：0.8 × 1680 × 900/1650 / 1264 = 0.57998 → 57%；Kindle 1104×1546 → 61%
@@ -1150,4 +1150,54 @@
         let p = t.path().join("x.epub");
         std::fs::write(&p, b"not a zip").unwrap();
         assert_eq!(optimized_version_file(&p), None, "不是 zip");
+    }
+
+    /// 文字书只修复（profile `text_repair_only`，Kindle、掌阅，2026-10-08 用户定）：样式、注释、空白页、图片一概不动，
+    /// 只升级成 EPUB 3、修成合法 XML、目录补到节。
+    #[test]
+    fn text_repair_only_keeps_content() {
+        use image::{codecs::jpeg::JpegEncoder, DynamicImage, RgbImage};
+        let big = DynamicImage::ImageRgb8(RgbImage::from_fn(3000, 2000, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])));
+        let mut jpg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpg, 90).encode_image(&big).unwrap();
+        let css = "body{font-family:\"宋体\";line-height:1.8;margin:2em}p{text-indent:0;margin:0.5em 0}";
+        let c1 = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="style.css"/></head><body><h1>第一章</h1><p style="font-size:14px">　　正文&nbsp;一段<a href="notes.xhtml#n1">[1]</a></p><h2>一节</h2><p>又一段<img src="big.jpg"/></p><p>&nbsp;</p></body></html>"#;
+        let empty = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><div class="mbppagebreak"></div></body></html>"#;
+        let notes = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p class="footnote" id="n1"><a href="c1.xhtml">[1]</a>注释</p></body></html>"#;
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="u"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="u">x</dc:identifier><dc:title>书</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="css" href="style.css" media-type="text/css"/><item id="img" href="big.jpg" media-type="image/jpeg"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="e" href="empty.xhtml" media-type="application/xhtml+xml"/><item id="n" href="notes.xhtml" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/><itemref idref="e"/><itemref idref="n"/></spine></package>"#;
+        let ncx = r#"<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><head><meta name="dtb:uid" content="x"/></head><docTitle><text>书</text></docTitle><navMap><navPoint id="p1" playOrder="1"><navLabel><text>第一章</text></navLabel><content src="c1.xhtml"/></navPoint><navPoint id="p2" playOrder="2"><navLabel><text>注释</text></navLabel><content src="notes.xhtml"/></navPoint></navMap></ncx>"#;
+        let mut buf = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            zw.start_file("mimetype", stored).unwrap();
+            zw.write_all(b"application/epub+zip").unwrap();
+            zw.start_file("META-INF/container.xml", stored).unwrap();
+            zw.write_all(br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+            for (n, d) in [("OEBPS/content.opf", opf), ("OEBPS/toc.ncx", ncx), ("OEBPS/style.css", css), ("OEBPS/c1.xhtml", c1), ("OEBPS/empty.xhtml", empty), ("OEBPS/notes.xhtml", notes)] {
+                zw.start_file(n, stored).unwrap();
+                zw.write_all(d.as_bytes()).unwrap();
+            }
+            zw.start_file("OEBPS/big.jpg", stored).unwrap();
+            zw.write_all(&jpg).unwrap();
+            zw.finish().unwrap();
+        }
+        let opts = OptimizeOpts::for_profile(profile::get("ireader").unwrap());
+        assert!(opts.text_repair_only);
+        let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
+        assert_eq!(text_of(&out, "OEBPS/style.css"), css, "样式表一个字不改");
+        assert_eq!(entry_bytes(&out, "OEBPS/big.jpg"), jpg, "图片原样");
+        let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
+        assert!(!names.iter().any(|n| n.ends_with("eink-wash.css")), "不加排版样式表: {names:?}");
+        let x = text_of(&out, "OEBPS/c1.xhtml");
+        assert!(x.contains(r#"style="font-size:14px""#) && x.contains("　　正文") && x.contains(r#"href="notes.xhtml#n1""#), "行内样式、段首空格、跨文件注释链接原样: {x}");
+        assert!(!x.contains("&nbsp;") && x.contains("&#160;") && x.contains(r#"xmlns:epub="#), "修成合法 XHTML（命名实体换数字引用）: {x}");
+        assert_eq!(crate::html::plain_text(&x), crate::html::plain_text(c1), "可见文字一字不差");
+        assert!(text_of(&out, "OEBPS/notes.xhtml").contains("注释"), "注释留在原处");
+        let opf_out = text_of(&out, "OEBPS/content.opf");
+        assert!(opf_out.contains(r#"version="3.0""#) && opf_out.contains("empty.xhtml"), "升级 EPUB 3；空白页不删: {opf_out}");
+        assert!(names.iter().any(|n| n.ends_with("nav.xhtml")), "补 nav: {names:?}");
+        let flat = crate::ncx::parse_ncx_flat(&text_of(&out, "OEBPS/toc.ncx"));
+        let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
+        assert_eq!(labels, [(1, "第一章"), (2, "一节"), (1, "注释")], "目录补到节");
     }

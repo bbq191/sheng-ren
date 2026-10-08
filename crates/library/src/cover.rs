@@ -94,7 +94,7 @@ pub(crate) fn epub_has_cover(epub: &Path) -> bool {
 impl Library {
     /// 找原作封面：Wikidata 作品 → Open Library / Commons。`work` 是已经找到的作品（没有就返回原因）。
     pub(crate) fn cover_from_work(&self, net: &Net, meta: &Meta, work: Option<&Work>) -> Result<Result<CoverInfo, String>, String> {
-        let Some(work) = work else { return Ok(Err("豆瓣、Wikidata 里都找不到书名、作者对得上的书".into())) };
+        let Some(work) = work else { return Ok(Err("豆瓣、QQ 阅读、Wikidata 里都找不到书名、作者对得上的书".into())) };
         let name = [&work.en, &work.original, &work.ja].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_default();
         let label = format!("{} {name}", work.qid);
         for url in cover_urls(net, work) {
