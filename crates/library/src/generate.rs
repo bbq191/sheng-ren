@@ -224,9 +224,9 @@ impl Library {
             }
             (format!("c{}", bookconv::optimize::COMIC_VERSION), format!("{seg}{shared}"))
         } else {
-            // 带图注的竖长图写宽度（`k`，caption_fit）、正文图片透明处合成白底（`a`，image_alpha = false）、只修复（`t`，text_repair_only）
+            // 带图注的竖长图写宽度（`k`，caption_fit）、正文图片透明处合成白底（`a`，image_alpha = false）、只修复（`t`，text_repair_only）、注释可跳（`n`）、照 Send to Kindle 的规则统一（`u`，kindle_rules）
             let mut seg = format!("{}x{}{shared}", area.width, area.height);
-            for (on, c) in [(device.caption_fit, 'k'), (!device.image_alpha, 'a'), (device.text_repair_only, 't'), (device.text_repair_only && device.repair_note_links, 'n')] {
+            for (on, c) in [(device.caption_fit, 'k'), (!device.image_alpha, 'a'), (device.text_repair_only, 't'), (device.text_repair_only && device.repair_note_links, 'n'), (device.text_repair_only && device.kindle_rules, 'u')] {
                 if on {
                     seg.push(c);
                 }

@@ -44,6 +44,7 @@ mod drm;
 mod empty_pages;
 pub mod fonts;
 mod ids;
+mod kindle_rules;
 mod layout;
 mod ncx_fix;
 pub mod normalize;
@@ -114,11 +115,14 @@ pub struct WashOpts {
     /// 只修复（文字书，profile `text_repair_only`）：只做 EPUB 3 修复和目录（[`repair_entries`]），不解锁、不排版、不删空白页，
     /// 别的选项不看。调用方已判定不是漫画。
     pub repair_only: bool,
+    /// 只修复时照 Send to Kindle 的规则统一（profile `kindle_rules`）：标签缺省样式 `eink-ua.css`（[`crate::uastyle::ua_css`]），
+    /// 正文字体、body 左右边距、文字对比度（`kindle_rules.rs`）。
+    pub kindle_rules: bool,
 }
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, repair_only: false }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, repair_only: false, kindle_rules: false }
     }
 }
 
@@ -156,6 +160,10 @@ pub struct WashReport {
     pub empty_pages_removed: Vec<String>,
     pub toc_generated: usize,
     pub dup_id_tags_collapsed: usize,
+    /// 挂上标签缺省样式表 `eink-ua.css` 的章节数（[`WashOpts::kindle_rules`]）。
+    pub ua_css_linked: usize,
+    /// 照 Send to Kindle 的规则改了的声明数（正文字体、body 左右边距、文字对比度，见 `kindle_rules.rs`）。
+    pub kindle_rule_edits: usize,
     /// `toc.ncx` 的 `dtb:uid` 跟 OPF 标识符不一致、被改到一致（0 或 1——一本书只有一个 ncx）。
     pub ncx_uid_fixed: usize,
     /// 书自带的扁平目录（"第X部　编号　章名"排版惯例）被重建成两级后的条目数；0＝没检测到这种
@@ -228,7 +236,7 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
     // 文件名有安卓存储不能用的字符的先改名：后面各步按条目名找文件
     safe_names::rename_unsafe_entries(entries, &mut rep);
     if opts.repair_only {
-        repair_entries(entries, opts.auto_toc, &mut rep);
+        repair_entries(entries, opts, &mut rep);
         return Ok((rep, false));
     }
     remove_empty_pages(entries, &mut rep);
@@ -318,10 +326,13 @@ pub(crate) fn wash_entries_detect(entries: &mut Vec<Entry>, opts: &WashOpts) -> 
 /// 只修复（[`WashOpts::repair_only`]，文字书；2026-10-08 用户定 Kindle、掌阅这样做）：书里的文字、图片、样式一概不动，只做
 /// - 合规：指向不存在文件的引用去掉（`drop_dead_refs`）、一个标签上重复的 `id` 合并、跨文件重复的 id 改名（链接跟着改）、
 ///   NCX 的 DOCTYPE 和 manifest id、`dtb:uid` 对齐，最后规范整理成 EPUB 3（`normalize.rs`：合法 XML、OPF 3.0、nav 与 NCX 互补）；
-/// - 目录：指错位置的改指、分部重建、没有目录的按标题生成、按目录层级定章节并把漏掉的节补进目录（补的 id 不改显示）。
+/// - 目录：指错位置的改指、分部重建、没有目录的按标题生成、按目录层级定章节并把漏掉的节补进目录（补的 id 不改显示）；
+/// - 照 Send to Kindle 的规则统一（[`WashOpts::kindle_rules`]，掌阅、Move）：标签缺省样式表挂在书自带样式之前，正文字体、
+///   body 左右边距、文字对比度改进书的样式表（`kindle_rules.rs`）。
 ///
 /// 伪 DRM 剥离、文件名改安全字符在调用方（[`wash_entries_detect`]）已经做了。
-fn repair_entries(entries: &mut Vec<Entry>, auto_toc_mode: AutoToc, rep: &mut WashReport) {
+fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashReport) {
+    let auto_toc_mode = opts.auto_toc;
     drop_dead_refs(entries, rep);
     let lang = detect_dominant_script(entries);
     let lang_tag = book_lang_tag(entries, find_opf(entries), lang);
@@ -338,6 +349,10 @@ fn repair_entries(entries: &mut Vec<Entry>, auto_toc_mode: AutoToc, rep: &mut Wa
         n
     });
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
+    if opts.kindle_rules {
+        kindle_rules::apply(entries, rep);
+        add_ua_css(entries, rep);
+    }
     fix_ncx_manifest_id(entries, rep);
     repair_ncx_targets(entries, rep);
     restructure_existing_toc_parts(entries, auto_toc_mode, heading, rep);
@@ -375,6 +390,34 @@ pub fn normalize_epub3(entries: &mut Vec<Entry>) -> WashReport {
 
 /// 新增（或重优化时更新）外链 wash css 文件，并往 OPF manifest 补一条 `<item>`（幂等）。
 fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path: &str, content: &str) {
+    add_css_entry(entries, opf_idx, css_path, content, "eink-wash-css");
+}
+
+/// 只修复时挂上标签的缺省样式（[`WashOpts::kindle_rules`]）：OPF 同目录写 `eink-ua.css`，每章 `<head>` 里**第一个**放指向它的 `<link>`
+/// （在书自带的样式表、`<style>` 之前，书里写了的照样盖过它）。目录页（nav）不挂。
+fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport) {
+    let opf_idx = find_opf(entries);
+    let name = crate::uastyle::UA_CSS_NAME;
+    let css_path = match opf_idx.map(|i| dir_of(&entries[i].name)) {
+        Some(d) if !d.is_empty() => format!("{d}/{name}"),
+        _ => name.to_string(),
+    };
+    let linked = crate::util::par_map_mut(entries, |e| {
+        if !is_html_entry(&e.name, &e.data) || is_toc_file(&e.name) {
+            return false;
+        }
+        let Ok(t) = std::str::from_utf8(&e.data) else { return false };
+        let out = typeset::inject_css_link_first(t, &relative_to(dir_of(&e.name), &css_path));
+        let changed = out != t;
+        e.data = out.into_bytes();
+        changed
+    });
+    rep.ua_css_linked += linked.into_iter().filter(|c| *c).count();
+    add_css_entry(entries, opf_idx, &css_path, &crate::uastyle::ua_css(), "eink-ua-css");
+}
+
+/// 新增（或更新）一份我们写的样式表，并往 OPF manifest 补一条 `<item>`（幂等）。
+fn add_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path: &str, content: &str, id: &str) {
     if let Some(e) = entries.iter_mut().find(|e| e.name == css_path) {
         e.data = content.as_bytes().to_vec();
     } else {
@@ -387,7 +430,7 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
             return;
         }
         let href = crate::epubzip::href_to(&opf_dir, css_path, "");
-        if let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id: "eink-wash-css", href: &href, media_type: "text/css", properties: "" }]) {
+        if let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id, href: &href, media_type: "text/css", properties: "" }]) {
             entries[oi].data = t.into_bytes();
         }
     }

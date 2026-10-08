@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-08：514 个）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-08：519 个）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -66,6 +66,7 @@ done
 | 改动的性质 | 要求 |
 |---|---|
 | 重构、提速写出器 | 同一份优化后 EPUB，新旧写出器的 KFX 逐字节相同（2026-10-06 提速省内存那次：《北斗之拳》卷01 峰值 1.45→0.73GB，金庸全集 0.87→0.56GB、1.7→0.7 秒，阿加莎全集 3.3→1.4 秒，产物逐字节不变） |
+| 照 Send to Kindle 的规则（写出器、掌阅/Move 的 `kindle_rules`） | `tools/kfx/s2kbatch.py`（写出器对 Amazon 样本逐属性）、`tools/kfx/s2kdev.py`（三台对 Amazon 样本逐项一致率），见 [KFX · 三台和 Send to Kindle 的一致性](kfx.md#三台和-send-to-kindle-的一致性)；样本在 Kindle 的 `documents/Downloads/Items01/` |
 | 改了写出器的行为 | 只有该变的书变了，逐本说明（比如写出器 7 只有《福尔摩斯探案全集》变；写出器 8 同一个 `--id` 下全部逐字节不变，书库产物因唯一 ID 改取书 id 全变）；`WRITER_VERSION` 加一；上真机看过再写 ✓ |
 | 改了容器读写（`ion`、`container`） | `kfx-repack` 解开再打包设备上的样本（`target/kfx-samples/` 等）全部逐字节相同 |
 
@@ -81,12 +82,12 @@ done
 
 | 改了什么 | 版本号 | 现值 | 过期的书 |
 |---|---|---|---|
-| 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 52 | 文字书 |
+| 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 53 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 52 | 漫画 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 5 | 只有补过东西的 |
 | EPUB → AZW3 | `azw3::WRITER_VERSION` | 4 | 书库已不出 AZW3（`epub-to-azw3` 还在） |
-| EPUB → KFX | `kfx::write::WRITER_VERSION` | 10 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
+| EPUB → KFX | `kfx::write::WRITER_VERSION` | 11 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。

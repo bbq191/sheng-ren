@@ -10,6 +10,7 @@ pub mod article;
 pub mod bgfit;
 pub mod capfit;
 pub mod check;
+pub mod color;
 pub mod comic_detect;
 pub mod comicfxl;
 pub mod comicpad;
@@ -31,6 +32,7 @@ pub mod naming;
 pub mod probe;
 pub mod opfmeta;
 pub mod optimize;
+pub mod uastyle;
 pub mod util;
 pub mod wash;
 
