@@ -204,7 +204,7 @@ pub(crate) const NOT_UTF8: &str = "文件名不是 UTF-8，请改名";
 /// 入库时文件还在被写（读的前后大小或修改时间变了）。`sync` 认这个前缀：不记下来，下一轮再试。
 pub(crate) const BUSY: &str = "文件正在写入";
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
