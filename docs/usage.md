@@ -284,7 +284,7 @@ xochitl      xochitl（reMarkable Paper Pro Move 原生阅读器）  EPUB  屏�
 
 ### Move 上的漫画：登记页边距
 
-Move 上的漫画按 xochitl 页边距 1 排（左右离屏幕 1px），要登记一下，第一次打开时才会自动设成 1。**`sync` 传上去的不用管**：书架服务的导入接口看到书里的标记（`META-INF/eink-reader-margins`）自己登记（这一步在书架服务里，不在本仓库的代码里）。只有用别的办法传上去的才要手工登记：
+Move 上的漫画按 xochitl 页边距 1 排（左右离屏幕 1px），要登记一下，第一次打开时才会自动设成 1。**`sync` 传上去的不用管**：书架服务的导入接口看到书里的标记（`META-INF/eink-reader-margins`）自己登记（这一步在书架服务里，不在本仓库的代码里；2026-10-09 真机 ✓：sync 传上去的哆啦A夢离屏幕左右 1px）。只有用别的办法传上去的才要手工登记：
 
 ![Move 上的漫画怎么设成页边距 1](img/comic-margins.svg)
 
