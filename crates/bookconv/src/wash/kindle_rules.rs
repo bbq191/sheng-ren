@@ -40,9 +40,9 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport) {
             return 0;
         }
         let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
-        let s = html::edit_attrs(text, &["style"], |t, a| {
+        let s = html::edit_style_attrs(text, |t, value| {
             let body = t.name.eq_ignore_ascii_case("body");
-            let (v, k) = rewrite_decls(a.value, body, &ctx);
+            let (v, k) = rewrite_decls(value, body, &ctx);
             n += k;
             if k == 0 {
                 html::Edit::Keep

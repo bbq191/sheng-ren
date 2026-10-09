@@ -35,8 +35,11 @@ fn declare_utf8(text: &str) -> String {
 
 /// 一个文件转成 UTF-8；已经是、认不出编码、解码出错时 `None`（原样不动）。
 fn to_utf8(data: &[u8]) -> Option<String> {
-    if std::str::from_utf8(data).is_ok() {
-        return None;
+    if let Ok(t) = std::str::from_utf8(data) {
+        // 内容已经是 UTF-8、声明却写着别的（`gb2312`……）：按声明解码的阅读器会显示乱码，只改声明（2026-10-09 审计）。
+        // 全是 ASCII 的两种读法一样，不动
+        let wrong = !t.is_ascii() && declared(data).is_some_and(|e| e != encoding_rs::UTF_8);
+        return wrong.then(|| declare_utf8(t));
     }
     let (enc, body) = match encoding_rs::Encoding::for_bom(data) {
         Some((enc, bom)) => (enc, &data[bom..]),
@@ -49,14 +52,22 @@ fn to_utf8(data: &[u8]) -> Option<String> {
     Some(declare_utf8(&text))
 }
 
-/// 全书的 XHTML、OPF、NCX 里不是 UTF-8 的转成 UTF-8；返回转了几个。
+/// 全书的 XHTML、OPF、NCX 里不是 UTF-8 的转成 UTF-8，记进报告。
 pub(super) fn transcode_to_utf8(entries: &mut [Entry], rep: &mut WashReport) {
+    rep.transcoded_to_utf8 += transcode_entries(entries);
+}
+
+/// 同 [`transcode_to_utf8`]，返回转了几个。优化器在清洗层之前就要按 UTF-8 改 OPF（补封面声明、封面页），所以读完书先转一次
+/// （以前 GBK 的 OPF 先被 `from_utf8_lossy` 读成替换字符再写回，书名作者全坏；2026-10-09 审计）。
+pub fn transcode_entries(entries: &mut [Entry]) -> usize {
+    let mut n = 0;
     for e in entries.iter_mut().filter(|e| is_xml_doc(e)) {
         if let Some(t) = to_utf8(&e.data) {
             e.data = t.into_bytes();
-            rep.transcoded_to_utf8 += 1;
+            n += 1;
         }
     }
+    n
 }
 
 #[cfg(test)]
@@ -74,6 +85,13 @@ mod tests {
             u16.extend(c.to_le_bytes());
         }
         assert_eq!(to_utf8(&u16).as_deref(), Some("<?xml version=\"1.0\" encoding=\"UTF-8\"?><package>书</package>"));
+    }
+
+    #[test]
+    fn utf8_content_declared_gbk_gets_declaration_fixed() {
+        let t = r#"<?xml version="1.0" encoding="gb2312"?><html><body><p>中文</p></body></html>"#;
+        assert_eq!(to_utf8(t.as_bytes()).as_deref(), Some(r#"<?xml version="1.0" encoding="UTF-8"?><html><body><p>中文</p></body></html>"#));
+        assert_eq!(to_utf8(br#"<?xml version="1.0" encoding="gb2312"?><p>abc</p>"#), None, "全 ASCII 不动");
     }
 
     #[test]

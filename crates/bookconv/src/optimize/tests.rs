@@ -646,6 +646,10 @@
 
     /// 只有 mimetype 与给定文件的最小 EPUB（没有 OPF）。
     fn zip_book(files: &[(&str, &str)]) -> Vec<u8> {
+        zip_book_bytes(&files.iter().map(|&(n, d)| (n, d.as_bytes())).collect::<Vec<_>>())
+    }
+
+    fn zip_book_bytes(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut buf = Vec::new();
         {
             let mut zw = ZipWriter::new(Cursor::new(&mut buf));
@@ -654,7 +658,7 @@
             zw.write_all(b"application/epub+zip").unwrap();
             for (n, d) in files {
                 zw.start_file(*n, stored).unwrap();
-                zw.write_all(d.as_bytes()).unwrap();
+                zw.write_all(d).unwrap();
             }
             zw.finish().unwrap();
         }
@@ -779,14 +783,13 @@
         assert!(optimized_version(&raw).is_none(), "原始 EPUB 不该带标记");
         // 默认 optimize_epub 无清洗层 → 只算"核心遍"标记，不能冒充完整优化
         let (out, _) = optimize_epub(&raw, crate::imgopt::test_screen()).unwrap();
-        assert_eq!(optimized_version(&out).as_deref(), Some(format!("{OPTIMIZE_VERSION}-core").as_str()), "无 wash 应标 -core");
-        assert!(optimized_version(&out).as_deref() != Some(OPTIMIZE_VERSION), "有标记但不算当前完整优化");
+        assert_eq!(optimized_version(&out).as_deref(), Some("core"), "无 wash 应标 core");
         // 带清洗层 → 完整标记
         let (full, _) = optimize_epub_with(&raw, &OptimizeOpts { wash: Some(crate::wash::WashOpts::default()), footnote: FootnoteMode::Anchor, ..OptimizeOpts::new(crate::imgopt::test_screen()) }).unwrap();
-        assert_eq!(optimized_version(&full).as_deref(), Some(OPTIMIZE_VERSION), "含 wash 应标完整版本");
+        assert_eq!(optimized_version(&full).as_deref(), Some("full"), "含 wash 应标 full（不写版本号）");
         // 重优化幂等：标记只有一条(不残留旧标记)、版本仍正确
         let (out2, _) = optimize_epub(&out, crate::imgopt::test_screen()).unwrap();
-        assert_eq!(optimized_version(&out2).as_deref(), Some(format!("{OPTIMIZE_VERSION}-core").as_str()));
+        assert_eq!(optimized_version(&out2).as_deref(), Some("core"));
         let mut ar = ZipArchive::new(Cursor::new(&out2)).unwrap();
         let marker_count = (0..ar.len())
             .filter(|&i| ar.by_index(i).unwrap().name() == OPTIMIZE_MARKER)
@@ -1281,4 +1284,72 @@
             assert!(c1.contains("<i>交叉嵌套</i></p>") && c1.contains("&amp;foo;"), "{id}：{c1}");
             assert_eq!(crate::html::plain_text(&text_of(&out, "OEBPS/c2.xhtml")), crate::html::plain_text(C2), "{id}：合法的一章文字不变");
         }
+    }
+
+    /// GBK 编码的 OPF（EPUB 2 写法的封面声明，要补 `cover-image`）：先转 UTF-8 再改，书名不坏（2026-10-09 审计：以前先按
+    /// UTF-8 读成替换字符再写回）。
+    #[test]
+    fn gbk_opf_transcoded_before_cover_fix() {
+        let opf = r#"<?xml version="1.0" encoding="gbk"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">gbk-book</dc:identifier><dc:title>中文书名</dc:title><dc:language>zh</dc:language><meta name="cover" content="cov"/></metadata><manifest><item id="cov" href="cover.jpg" media-type="image/jpeg"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
+        let (opf_gbk, _, _) = encoding_rs::GBK.encode(opf);
+        let mut jpg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 90).encode_image(&image::DynamicImage::ImageRgb8(image::RgbImage::new(60, 80))).unwrap();
+        let c1 = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>一</title></head><body><h1>第一章</h1><p>正文。</p></body></html>"#;
+        let ncx = r#"<?xml version="1.0" encoding="utf-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="gbk-book"/></head><docTitle><text>书</text></docTitle><navMap><navPoint id="n1" playOrder="1"><navLabel><text>第一章</text></navLabel><content src="c1.xhtml"/></navPoint></navMap></ncx>"#;
+        let epub = zip_book_bytes(&[
+            ("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#),
+            ("OEBPS/content.opf", &opf_gbk),
+            ("OEBPS/c1.xhtml", c1.as_bytes()),
+            ("OEBPS/toc.ncx", ncx.as_bytes()),
+            ("OEBPS/cover.jpg", &jpg),
+        ]);
+        for id in ["kindle", "ireader", "xochitl"] {
+            let (out, rep) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(profile::get(id).unwrap())).unwrap();
+            let opf = text_of(&out, "OEBPS/content.opf");
+            assert!(opf.contains("中文书名") && !opf.contains('\u{FFFD}'), "{id}：{opf}");
+            assert!(opf.contains("cover-image"), "{id}：封面声明照补: {opf}");
+            assert_eq!(rep.wash.as_ref().unwrap().transcoded_to_utf8, 1, "{id}");
+        }
+    }
+
+    /// 和原书逐字节相同的大字体原样拷原书的压缩数据（不解压再重压），改过名的（文件名里有 `:`）用新名字（2026-10-09）。
+    #[test]
+    fn unchanged_fonts_copied_raw_under_new_name() {
+        let opf = r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">font-book</dc:identifier><dc:title>字体</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="f" href="Fonts/a:b.ttf" media-type="font/ttf"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
+        let nav = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">一</a></li></ol></nav></body></html>"#;
+        let c1 = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>一</title><style>@font-face{font-family:"甲";src:url("Fonts/a:b.ttf")}</style></head><body><h1>一</h1><p style="font-family:甲">正文。</p></body></html>"#;
+        // 压得动、又不是一串相同字节的"字体"
+        let font: Vec<u8> = (0..200_000u32).map(|i| ((i * 7919) % 251) as u8 ^ (i / 1000) as u8).collect();
+        let mut epub = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut epub));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated).compression_level(Some(9));
+            zw.start_file("mimetype", stored).unwrap();
+            zw.write_all(b"application/epub+zip").unwrap();
+            for (n, d) in [
+                ("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#.as_slice()),
+                ("OEBPS/content.opf", opf.as_bytes()),
+                ("OEBPS/nav.xhtml", nav.as_bytes()),
+                ("OEBPS/c1.xhtml", c1.as_bytes()),
+                ("OEBPS/Fonts/a:b.ttf", font.as_slice()),
+            ] {
+                zw.start_file(n, deflated).unwrap();
+                zw.write_all(d).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let raw_of = |z: &[u8], name: &str| {
+            let mut ar = ZipArchive::new(Cursor::new(z)).unwrap();
+            let i = ar.index_for_name(name).unwrap();
+            let mut v = Vec::new();
+            ar.by_index_raw(i).unwrap().read_to_end(&mut v).unwrap();
+            v
+        };
+        let (out, _) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(profile::get("ireader").unwrap())).unwrap();
+        let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(str::to_string).collect();
+        let new_name = names.iter().find(|n| n.starts_with("OEBPS/Fonts/")).expect("字体还在").clone();
+        assert!(!new_name.contains(':'), "改成安全的名字：{new_name}");
+        assert_eq!(entry_bytes(&out, &new_name), font, "内容不变");
+        assert_eq!(raw_of(&out, &new_name), raw_of(&epub, "OEBPS/Fonts/a:b.ttf"), "压缩数据原样拷过来（原书是 9 级压的，重压的话不一样）");
     }

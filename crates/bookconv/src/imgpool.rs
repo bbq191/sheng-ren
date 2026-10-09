@@ -8,13 +8,16 @@ use std::sync::{Condvar, Mutex};
 
 /// 同时在处理的图片总像素上限：4 张文字书插图解码上限（[`crate::imgopt::MAX_DECODE_PIXELS`]，900 万像素）＝ 3600 万像素。
 /// 实测整页处理约 9–16MB/百万像素（见 `MAX_DECODE_PIXELS` 文档），最坏情况（几张接近上限的超大图同时处理）峰值约
-/// 350–580MB，对电脑端足够安全；典型漫画页 100–200 万像素，[`worker_count`] 个线程可以全部同时开工（8 × 200 万 ＝
-/// 1600 万，远低于上限）。比它还大的漫画页（最大 [`crate::imgopt::MAX_COMIC_DECODE_PIXELS`]）开工时独占全部额度：
+/// 350–580MB，对电脑端足够安全；典型漫画页 100–200 万像素，[`worker_count`] 个线程可以全部同时开工（16 × 200 万 ＝
+/// 3200 万，仍低于上限）。比它还大的漫画页（最大 [`crate::imgopt::MAX_COMIC_DECODE_PIXELS`]）开工时独占全部额度：
 /// 等手上的图都做完才开始，做完之前别的图也不开工——大页一张一张来，峰值内存就是单张大页的量。
 pub const PIXEL_BUDGET: u64 = 4 * crate::imgopt::MAX_DECODE_PIXELS;
 
-/// 并行工作线程数上限。再往上加，写 zip（单线程、按顺序）和读原图会成为瓶颈，只多占内存不再明显加速。
-const MAX_WORKERS: usize = 8;
+/// 并行工作线程数上限。实测（2026-10-09，一卷漫画，按线程数 1/4/8/12/16/24 的墙钟）：5.19/1.53/0.94/0.89/0.75/0.79 秒——
+/// 16 比 8 再快约 20%，24 不再变快（写 zip 是单线程、按顺序，读原图也在争），所以封顶 16。线程多了解码内存不跟着涨：
+/// 每张图开工前都要向 [`PixelBudget`] 申请额度（`optimize::streaming` 的图片 worker），同时解码的总像素仍封顶
+/// [`PIXEL_BUDGET`]；多出来的只是排队等额度的原图压缩字节和待写的结果（各 `worker_count + 2` 份上下）。
+const MAX_WORKERS: usize = 16;
 
 /// 并行工作线程数：取 CPU 核数，封顶 [`MAX_WORKERS`]。
 pub fn worker_count() -> usize {

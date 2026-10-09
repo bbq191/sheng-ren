@@ -15,7 +15,8 @@ pub(super) fn fix_ncx_uid(entries: &mut [Entry], rep: &mut WashReport) {
             match meta("dtb:uid") {
                 Some(t) => {
                     let tag = &text[t.start..t.end];
-                    if tag_attr(tag, "content").is_some_and(|c| c != want) {
+                    // 没有 content 也补（`<meta name="dtb:uid"/>`）
+                    if tag_attr(tag, "content") != Some(want.as_str()) {
                         edits.push((t.start, t.end, html::set_attr(tag, "content", want)));
                     }
                 }

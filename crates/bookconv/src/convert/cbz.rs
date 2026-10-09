@@ -38,16 +38,31 @@ pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
     cbz_to_epub_from(std::io::Cursor::new(data), title)
 }
 
+/// 整本 CBZ 解出来的页面图片合计上限。单页有 [`crate::epubzip::MAX_ENTRY_BYTES`]（256MB），但页数不限：
+/// 几千个各自不超限的条目（或 zip 炸弹）照样能把全部页读进内存撑爆。真书一卷几十到几百 MB、合订本也就一两 GB，
+/// 4 GiB 留足余量；超过报错，不截断成少几页的书。
+pub const MAX_CBZ_TOTAL_BYTES: u64 = 4 << 30;
+
 /// 同 [`cbz_to_epub`]，从可定位的读取器（如打开的文件）读：不用先把整个 CBZ 读进内存，峰值少一份压缩包大小。
 pub fn cbz_to_epub_from<R: Read + std::io::Seek>(reader: R, title: &str) -> Result<Vec<u8>, String> {
+    cbz_to_epub_capped(reader, title, MAX_CBZ_TOTAL_BYTES)
+}
+
+/// 同 [`cbz_to_epub_from`]，页面合计上限由参数给（测试用小上限，不必真造几 GB 的数据）。
+fn cbz_to_epub_capped<R: Read + std::io::Seek>(reader: R, title: &str, total_cap: u64) -> Result<Vec<u8>, String> {
     use crate::epub::{Book, BookMeta, Chapter, Resource};
     let mut zip = ZipArchive::new(reader).map_err(|e| format!("CBZ 打开: {e}"))?;
     let names = page_names(&zip);
     let mut resources: Vec<Resource> = Vec::with_capacity(names.len());
     let mut chapters = Vec::with_capacity(names.len());
+    let mut total: u64 = 0;
     for name in &names {
-        // 解压上限（防 zip 炸弹）与读 EPUB 条目同一个：`epubzip::MAX_ENTRY_BYTES`
+        // 单页解压上限（防 zip 炸弹）与读 EPUB 条目同一个：`epubzip::MAX_ENTRY_BYTES`；合计另有 `total_cap`
         let bytes = crate::epubzip::read_by_name(&mut zip, name)?;
+        total = total.saturating_add(bytes.len() as u64);
+        if total > total_cap {
+            return Err(format!("CBZ 页面图片解压后合计超过上限 {} MB（读到 {name}；损坏或恶意的压缩包？）", total_cap >> 20));
+        }
         let Some(crate::util::ImageKind { ext, mime, .. }) = crate::util::image_kind(&bytes) else {
             eprintln!("警告：{name} 不是可识别的图片，跳过");
             continue;
@@ -238,5 +253,16 @@ mod tests {
             z.finish().unwrap();
         }
         assert!(cbz_to_epub(&buf, "空").is_err());
+    }
+
+    /// 每页都没超单页上限，但合计超过整本上限：报错，不截成少几页的书。正好等于上限的照常转。
+    #[test]
+    fn total_page_bytes_over_the_cap_is_an_error() {
+        let page = jpeg(40, 60);
+        let buf = zip_of(&[("p1.jpg", &page), ("p2.jpg", &page), ("p3.jpg", &page)]);
+        let n = page.len() as u64;
+        assert!(cbz_to_epub_capped(std::io::Cursor::new(&buf), "刚好", 3 * n).is_ok());
+        let err = cbz_to_epub_capped(std::io::Cursor::new(&buf), "超了", 3 * n - 1).unwrap_err();
+        assert!(err.contains("合计超过上限") && err.contains("p3.jpg"), "{err}");
     }
 }

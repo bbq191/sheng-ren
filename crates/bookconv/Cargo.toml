@@ -15,6 +15,8 @@ encoding_rs = "0.8"
 # 只要 flate2 的 deflate（zip 的 "deflate" 特性还会带上用不到的 zopfli；缺省压缩级别本来就走 flate2，产物逐字节不变）
 zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# 判断字体条目和原书那份是不是同一份字节（同一份就原样拷压缩数据，见 optimize::streaming；zip 已间接引入同一版本）
+crc32fast = "1"
 # 图片缩放与重编码：jpeg、png；gif、webp 只解码（漫画里的 GIF/WebP 页转 PNG/JPEG），都是纯 Rust 实现
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 fast_image_resize = "6.1.0"

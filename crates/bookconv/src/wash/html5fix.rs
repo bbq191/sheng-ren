@@ -104,9 +104,44 @@ fn uses_xlink(node: ego_tree::NodeRef<Node>) -> bool {
     })
 }
 
+/// 交给 HTML5 解析前先去掉只有 XML 才认的写法（2026-10-09 审计）：开头的 `<?xml …?>` 声明（HTML5 当成伪注释，写回多出一行
+/// `<!--?xml …?-->`）；CDATA 段（HTML5 正文里当成注释——里面的字会丢；`<style>`、`<script>` 里原样当文字，写回成 `&lt;![CDATA[`，
+/// 第一条样式规则作废）：正文里的换成转义后的文字，`<style>`、`<script>` 里的去掉 CDATA 记号、内容原样。
+fn strip_xml_only(text: &str) -> std::borrow::Cow<'_, str> {
+    let mut t = text.trim_start_matches('\u{feff}').trim_start();
+    if t.starts_with("<?xml") {
+        if let Some(e) = t.find("?>") {
+            t = &t[e + 2..];
+        }
+    }
+    if !t.contains("<![CDATA[") {
+        return std::borrow::Cow::Borrowed(t);
+    }
+    let mut out = String::with_capacity(t.len());
+    let mut rest = t;
+    while let Some(i) = rest.find("<![CDATA[") {
+        out.push_str(&rest[..i]);
+        let body = &rest[i + 9..];
+        let (content, after) = match body.find("]]>") {
+            Some(e) => (&body[..e], &body[e + 3..]),
+            None => (body, ""),
+        };
+        let lower = out.to_ascii_lowercase();
+        let open = |tag: &str| lower.rfind(&format!("<{tag}")).map(|o| lower.rfind(&format!("</{tag}")).is_none_or(|c| c < o)).unwrap_or(false);
+        if open("style") || open("script") {
+            out.push_str(content);
+        } else {
+            escape_text(content, &mut out);
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
 /// 按 HTML5 解析算法重新解析整份 XHTML、写回成合法的 XHTML；写回的不是合法 XML 时 `None`。
 pub(super) fn reparse(text: &str) -> Option<String> {
-    let doc = Html::parse_document(text);
+    let doc = Html::parse_document(&strip_xml_only(text));
     let mut out = String::with_capacity(text.len() + 256);
     out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\n");
     for c in doc.tree.root().children() {
@@ -130,6 +165,15 @@ mod tests {
     fn text_of(s: &str) -> String {
         let doc = Html::parse_document(s);
         doc.root_element().text().collect::<String>().split_whitespace().collect()
+    }
+
+    #[test]
+    fn xml_declaration_and_cdata_survive() {
+        let src = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><style><![CDATA[ div > p { color: red } ]]></style></head><body><p><i>甲</p></i><p><![CDATA[a < b & c]]></p></body></html>";
+        let out = reparse(src).unwrap();
+        assert!(!out.contains("<!--?xml"), "声明不变成注释：{out}");
+        assert!(out.contains("<style> div &gt; p { color: red } </style>"), "样式里去掉 CDATA 记号：{out}");
+        assert!(out.contains("<p>a &lt; b &amp; c</p>"), "正文 CDATA 的字不丢：{out}");
     }
 
     #[test]

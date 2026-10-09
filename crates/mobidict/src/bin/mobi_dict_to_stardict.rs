@@ -31,7 +31,7 @@ fn main() {
 
     let data = cli::read_or_die(src);
     let dict = mobidict::read(&data).unwrap_or_else(|e| die(cli::FAILED, format!("读 {}: {e}", src.display())));
-    let (out, stats) = mobidict::to_stardict(&dict, &name);
+    let (out, stats) = mobidict::to_stardict(&dict, &name).unwrap_or_else(|e| die(cli::FAILED, format!("转 {}: {e}", src.display())));
     let target = files[1].join(&name);
     write_dir(&target, &name, &out).unwrap_or_else(|e| die(cli::FAILED, e));
     println!(

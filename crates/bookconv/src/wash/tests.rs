@@ -322,6 +322,12 @@
         assert!(opf.contains(r#"toc="ncx""#) && opf.contains(r#"properties="nav""#), "{opf}");
         assert!(s(&v, "OEBPS/text/c1.xhtml").contains(r#"<h1 id="eink-toc-1">"#));
         assert_eq!(toc_entry_count(&v), 6, "ncx 3 + nav 3");
+        // 章节文件不是 .xhtml 也算；样式表、图片、书外链接不算
+        let odd = vec![
+            e("OEBPS/content.opf", r#"<package version="3.0"><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine/></package>"#),
+            e("OEBPS/nav.xhtml", r#"<html><head><link href="a.css" rel="stylesheet"/></head><body><nav><ol><li><a href="c1.xml#x">一</a></li><li><a href="https://x.org/">外</a></li><li><img src="i.png"/></li></ol></nav></body></html>"#),
+        ];
+        assert_eq!(toc_entry_count(&odd), 1);
         // 已有目录 → IfMissing 不动
         let mut w = mk();
         w.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><content src="text/c1.xhtml"/></navPoint></navMap></ncx>"#));

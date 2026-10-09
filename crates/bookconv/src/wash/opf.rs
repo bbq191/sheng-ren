@@ -5,12 +5,15 @@
 //! 插入的元素跟着所在容器的前缀走（前缀 OPF 里写 `<opf:item>`，免得落到空命名空间）。
 use super::*;
 
+/// container.xml 里第一个 `<rootfile full-path>`（规范化成 zip 路径：`./OEBPS/content.opf` → `OEBPS/content.opf`）。
+pub fn container_opf_path(container: &str) -> Option<String> {
+    html::tags(container).filter(|g| g.is_start() && g.is("rootfile")).find_map(|g| tag_attr(&container[g.start..g.end], "full-path").map(posix_norm))
+}
+
 pub(super) fn find_opf(entries: &[Entry]) -> Option<usize> {
     // container.xml 指向优先，否则第一个 .opf
     if let Some(c) = entries.iter().find(|e| e.name == "META-INF/container.xml") {
-        let t = String::from_utf8_lossy(&c.data);
-        let full = html::tags(&t).filter(|g| g.is_start() && g.is("rootfile")).find_map(|g| tag_attr(&t[g.start..g.end], "full-path").map(posix_norm));
-        if let Some(p) = full {
+        if let Some(p) = container_opf_path(&String::from_utf8_lossy(&c.data)) {
             if let Some(i) = entries.iter().position(|e| e.name == p) {
                 return Some(i);
             }

@@ -59,6 +59,8 @@ fn optimize_inner(
 
     // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）。
     let mut raw = crate::epubzip::read_skeleton_par(input_path, &mut archive)?.entries;
+    // 清洗的书先把 GBK、Big5、UTF-16 的文件转成 UTF-8：下面补封面声明、封面页按 UTF-8 改 OPF（清洗层开头本来也转，这里提前）
+    let transcoded = if opts.wash.is_some() { crate::wash::transcode_entries(&mut raw) } else { 0 };
     // 漫画识别只在这里判一次（按原书），清洗层和图片处理都用这个结果（以前清洗层清洗完又判一次，两次可能不一致）。
     let is_comic_book = crate::comic_detect::is_comic(&raw);
     // 文字书只做修复（漫画照常）：换成只修复的选项
@@ -78,7 +80,7 @@ fn optimize_inner(
             image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
         });
     }
-    let prep = prepare_entries(raw, opts, bytes_before, is_comic_book)?;
+    let prep = prepare_entries(raw, opts, bytes_before, is_comic_book, transcoded)?;
     check_cancel(cancel)?;
     let (comic_margin, grayscale) = (opts.comic_margin, opts.grayscale);
     // 漫画页按漫画的阅读范围排（xochitl 设成页边距 1 后更宽），其它图按 EPUB 的阅读范围缩
@@ -110,6 +112,14 @@ fn optimize_inner(
     // 已交出去、还没写进 zip 的条目最多这么多（压好的、处理好的结果在这里排队等前面的写完）
     let max_queued = lookahead;
     let image_positions: Vec<usize> = entries.iter().enumerate().filter(|(_, (n, _, ish))| !*ish && crate::imgopt::is_page_image(n)).map(|(i, _)| i).collect();
+    // 字体（只修复的文字书里最大的条目，《绍宋》两个 15MB 的 ttf）和原书那份逐字节相同、原书里是 deflate 压的：原样拷原书的
+    // 压缩数据，不解压再重压（2026-10-09）。用 CRC 和大小认"同一份"（去混淆过的字体不同，照常重压）。原书里的字体：条目名 → (CRC, 大小)
+    let font_src: HashMap<String, (u32, u64)> = (0..archive.len())
+        .filter_map(|i| {
+            let f = archive.by_index_raw(i).ok()?;
+            (f.compression() == zip::CompressionMethod::Deflated && is_font_name(f.name())).then(|| (f.name().to_string(), (f.crc32(), f.size())))
+        })
+        .collect();
     std::thread::scope(|scope| -> Result<(), String> {
         enum Job<'e> {
             /// `src`：原书里的条目名（清洗时改过名的是原名）。
@@ -124,6 +134,8 @@ fn optimize_inner(
             Deflate(std::sync::mpsc::Receiver<Result<crate::epubzip::Precompressed, String>>),
             /// 直接写（STORED 的条目）。
             Direct(&'e str, std::borrow::Cow<'e, [u8]>),
+            /// 和原书那份逐字节相同的大字体：原样拷原书的压缩数据（第二项是原书里的条目名）。
+            Raw(&'e str, &'e str),
             /// 不写（`mimetype` 建 `EpubWriter` 时写过了；推迟的 OPF 最后写），只算进度。
             Skip,
         }
@@ -141,26 +153,31 @@ fn optimize_inner(
                     let Ok(job) = job else { break };
                     match job {
                         Job::Image { src, bg, flatten, reply } => {
-                            let bytes = match &mut source {
-                                Some(z) => Ok(z),
-                                None => crate::epubzip::open_file_zip(input_path).map(|z| source.insert(z)),
-                            }
-                            .and_then(|z| crate::epubzip::read_by_name(z, src))
-                            .map_err(|e| format!("重读图片失败: {e}"));
-                            let Ok(bytes) = bytes else {
-                                let _ = reply.send(bytes);
-                                continue;
-                            };
-                            if keep_images {
-                                let _ = reply.send(Ok(bytes));
-                                continue;
-                            }
-                            // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
-                            // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
-                            let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&bytes))).unwrap_or(1_000_000);
-                            let _permit = budget.acquire(px);
-                            let out = transform_image_bytes(&bytes, is_comic_book, screen, comic_margin, grayscale, bg, flatten, max_px).unwrap_or(bytes);
-                            let _ = reply.send(Ok(out));
+                            // 整件兜住 panic（读 zip、解析图片都是外部输入）：panic 了只这本书报错，不让 `thread::scope` 收尾时把
+                            // panic 抛给调用方、摔掉整个 `booklib sync`（2026-10-09 审计）
+                            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>, String> {
+                                let bytes = match &mut source {
+                                    Some(z) => Ok(z),
+                                    None => crate::epubzip::open_file_zip(input_path).map(|z| source.insert(z)),
+                                }
+                                .and_then(|z| crate::epubzip::read_by_name(z, src))
+                                .map_err(|e| format!("重读图片失败: {e}"));
+                                let bytes = bytes?;
+                                if keep_images {
+                                    return Ok(bytes);
+                                }
+                                // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
+                                // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
+                                let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&bytes))).unwrap_or(1_000_000);
+                                let _permit = budget.acquire(px);
+                                let out = transform_image_bytes(&bytes, is_comic_book, screen, comic_margin, grayscale, bg, flatten, max_px).unwrap_or(bytes);
+                                Ok(out)
+                            }))
+                            .unwrap_or_else(|_| {
+                                source = None;
+                                Err(format!("处理图片时出错（{src}）"))
+                            });
+                            let _ = reply.send(r);
                         }
                         Job::Deflate { name, data, reply } => {
                             let _ = reply.send(crate::epubzip::Precompressed::new(name, &data));
@@ -209,6 +226,10 @@ fn optimize_inner(
                     zw.put_precompressed(z)?;
                 }
                 Out::Direct(name, data) => zw.put(name, data)?,
+                Out::Raw(name, src) => {
+                    let f = archive.by_name(src).map_err(|e| format!("重读 {name}: {e}"))?;
+                    zw.raw_copy_as(f, name)?;
+                }
                 Out::Skip => {}
             }
             queue.pop_front();
@@ -261,6 +282,10 @@ fn optimize_inner(
                         Out::Skip
                     } else if crate::util::is_image_ext(name) {
                         Out::Direct(name, t)
+                    } else if let Some(src) = Some(src_names.get(name.as_str()).copied().unwrap_or(name.as_str()))
+                        .filter(|src| font_src.get(*src).is_some_and(|&(crc, size)| t.len() >= RAW_FONT_MIN && t.len() as u64 == size && crc32fast::hash(&t) == crc))
+                    {
+                        Out::Raw(name, src)
                     } else {
                         let (tx, rx) = std::sync::mpsc::channel();
                         job_tx.send(Job::Deflate { name, data: t, reply: tx }).map_err(|_| "压缩线程已退出".to_string())?;
@@ -300,11 +325,19 @@ fn optimize_inner(
     if let (true, Some(m)) = (is_comic_book, opts.comic_reader_margins) {
         zw.put(READER_MARGINS_MARKER, m.to_string().as_bytes())?;
     }
-    zw.put(OPTIMIZE_MARKER, marker_value(opts.wash.is_some(), is_comic_book).as_bytes())?;
+    zw.put(OPTIMIZE_MARKER, marker_value(opts.wash.is_some()).as_bytes())?;
     zw.finish()?;
     let mut rep = prep.rep;
     rep.bytes_after = std::fs::metadata(output_path).map(|m| m.len() as usize).unwrap_or(0);
     Ok(rep)
+}
+
+/// 原样拷原书压缩数据的字体至少这么大（小字体重压也就几毫秒，不值得多算一遍 CRC）。
+const RAW_FONT_MIN: usize = 64 << 10;
+
+/// 字体文件（按扩展名）。
+fn is_font_name(name: &str) -> bool {
+    matches!(crate::util::image_ext_of(name).as_str(), "ttf" | "otf" | "ttc" | "woff" | "woff2")
 }
 
 /// 写图注宽度（[`crate::capfit`]）要的全书信息：带图注的 `<img>` 引用的图的显示宽高（按原书读回这几张图的字节、只读文件头），

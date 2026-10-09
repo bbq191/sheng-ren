@@ -243,7 +243,8 @@ fn sort_candidates(c: &mut Vec<(usize, u8)>, spans: &[Span]) {
 fn leaf_block(html: &str, sp: &Span) -> bool {
     matches!(sp.name.as_str(), "p" | "div") && sp.closed() && {
         let inner = &html[sp.open_end..sp.close_start];
-        !inner.contains("<p") && !inner.contains("<div")
+        // 按标签名认（`<pre>`、`<param>` 不算，`<P>` 算）
+        !html::tags(inner).any(|t| t.is_start() && (t.is("p") || t.is("div")))
     }
 }
 

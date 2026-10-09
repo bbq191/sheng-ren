@@ -75,7 +75,7 @@ pub fn check_epub_file(path: &std::path::Path) -> Result<CheckReport, String> {
 /// [`check_epub_file`]，`require_toc` 为真时"无目录"算硬失败（`epub-optimize --check --require-toc`）。
 pub fn check_epub_file_with(path: &std::path::Path, require_toc: bool) -> Result<CheckReport, String> {
     let mut zip = crate::epubzip::open_file_zip(path)?;
-    let sk = crate::epubzip::read_skeleton(&mut zip)?;
+    let sk = crate::epubzip::read_skeleton_par(path, &mut zip)?;
     let mut rep = check_entries(&sk.entries, require_toc);
     add_mimetype_problem(&mut rep, &mut zip);
     Ok(rep)
@@ -157,8 +157,20 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     if !targets.is_empty() && (rep.href_file_hit as f64) / (targets.len() as f64) < 0.8 {
         rep.errors.push(format!("目录 href 文件命中率过低 {}/{}", rep.href_file_hit, targets.len()));
     }
-    // 每个目标页只扫一遍收集全部锚点（任何元素的 `id`、`<a name>`；单双引号都认，`data-id` 不算），再按集合判命中。
-    let mut cache: HashMap<&str, HashSet<String>> = HashMap::new();
+    // 每个 html 条目只解码、扫一遍（并行）：双 id、链接、XML 合法性、全部锚点（任何元素的 `id`、`<a name>`；单双引号都认，
+    // `data-id` 不算）。结论在后面按原顺序报，和逐个扫结果相同。质量门每本书生成都跑，以前串行扫三遍占优化总耗时的两三成。
+    struct Scan {
+        dup_ids: usize,
+        links: Vec<(String, String, bool)>,
+        xml: Option<String>,
+        anchors: HashSet<String>,
+    }
+    let html_entries: Vec<&Entry> = entries.iter().filter(|e| is_html_entry(&e.name, &e.data)).collect();
+    let mut scans = crate::util::par_map(&html_entries, |e| {
+        let t = String::from_utf8_lossy(&e.data);
+        Scan { dup_ids: count_dup_id_tags(&t), links: internal_links(&e.name, &t), xml: xml_problem(&e.data), anchors: anchor_set(&e.data) }
+    });
+    let mut cache: HashMap<&str, HashSet<String>> = html_entries.iter().zip(scans.iter_mut()).map(|(e, s)| (e.name.as_str(), std::mem::take(&mut s.anchors))).collect();
     for (t, frag) in targets.iter().filter(|(t, f)| !f.is_empty() && names.contains_key(t.as_str())) {
         rep.frag_total += 1;
         let anchors = cache.entry(t.as_str()).or_insert_with(|| anchor_set(&entries[names[t.as_str()]].data));
@@ -176,11 +188,10 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     let mut res_examples: Vec<String> = Vec::new();
     let mut dead_examples: Vec<String> = Vec::new();
     let mut bad_chapters: Vec<String> = Vec::new();
-    for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data)) {
+    for (e, scan) in html_entries.iter().zip(scans) {
         rep.html_files += 1;
-        let t = String::from_utf8_lossy(&e.data);
-        rep.dup_id_tags += count_dup_id_tags(&t);
-        for (target, frag, same_file) in internal_links(&e.name, &t) {
+        rep.dup_id_tags += scan.dup_ids;
+        for (target, frag, same_file) in scan.links {
             // 正文链接的锚点（同文件 `#x` 也查）：目标文件在、锚点却找不到的算死链
             if !frag.is_empty() {
                 if let Some(target_entry) = names.get(target.as_str()).map(|&i| &entries[i]) {
@@ -202,7 +213,7 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
                 res_examples.push(format!("{}→{target}", e.name));
             }
         }
-        if let Some(why) = xml_problem(&e.data) {
+        if let Some(why) = scan.xml {
             bad_chapters.push(format!("{}（{why}）", e.name));
         }
     }

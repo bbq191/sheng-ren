@@ -186,8 +186,8 @@ pub struct Stats {
     pub articles: usize,
 }
 
-/// 整本词典 → StarDict 的三个文件内容。
-pub fn to_stardict(dict: &Dict, bookname: &str) -> (stardict::Files, Stats) {
+/// 整本词典 → StarDict 的三个文件内容。释义合计超过 StarDict 的 4 GiB 上限时报错。
+pub fn to_stardict(dict: &Dict, bookname: &str) -> Result<(stardict::Files, Stats), String> {
     let lookup = PosLookup::new(&dict.entries);
     let mut w = stardict::Writer::default();
     let mut seen = std::collections::HashMap::new();
@@ -197,7 +197,7 @@ pub fn to_stardict(dict: &Dict, bookname: &str) -> (stardict::Files, Stats) {
             Some(&a) => a,
             None => {
                 let html = String::from_utf8_lossy(&dict.text[e.start..e.start + e.len]);
-                let a = w.add_article(clean_entry_html(&html, &lookup).as_bytes());
+                let a = w.add_article(clean_entry_html(&html, &lookup).as_bytes())?;
                 seen.insert(key, a);
                 a
             }
@@ -206,7 +206,7 @@ pub fn to_stardict(dict: &Dict, bookname: &str) -> (stardict::Files, Stats) {
     }
     let stats = Stats { words: w.word_count(), articles: seen.len() };
     let description = format!("由 MOBI 词典《{bookname}》转换（mobi-dict-to-stardict），只供自己查词用");
-    (w.finish(bookname, &description), stats)
+    Ok((w.finish(bookname, &description), stats))
 }
 
 #[cfg(test)]
@@ -260,7 +260,7 @@ mod tests {
     fn duplicate_slices_are_stored_once() {
         let text = b"<b>one</b><b>two</b>".to_vec();
         let dict = Dict { title: "t".into(), text, entries: vec![entry("a", 0, 10), entry("b", 0, 10), entry("c", 10, 10)] };
-        let (files, stats) = to_stardict(&dict, "t");
+        let (files, stats) = to_stardict(&dict, "t").unwrap();
         assert_eq!(stats, Stats { words: 3, articles: 2 });
         assert_eq!(files.dict, b"<b>one</b><b>two</b>");
         let idx = stardict::parse_idx(&files.idx).unwrap();

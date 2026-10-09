@@ -57,14 +57,15 @@ mod typeset;
 
 // 对外（优化器、质量门、书库、统计）用到的项；其余只在清洗层内部用。
 pub use self::cover::{ensure_cover_declared, prepend_cover_page};
+pub use self::encoding::transcode_entries;
 
 /// 「照 Send to Kindle 的规则统一」（[`WashOpts::kindle_rules`]，掌阅、Move 的文字书）这一路自己的版本，只进书库指纹（`u` 段），
-/// 不写进书里的优化标记：这一路改了只让开了它的书过期，内容没变的书重建出逐字节相同的 EPUB、设备上不重传
-/// （升 `OPTIMIZE_VERSION` 会改标记，掌阅、Move 上全部文字书都得重传）。
+/// 不写进书（书里的优化标记 2026-10-09 起也不写版本号了）：这一路改了只让开了它的书过期。
 /// - 1（2026-10-08）：标签缺省样式、正文字体、body 左右边距、文字对比度（指纹里写 `u`）。
 /// - 2（2026-10-09）：原书没有封面页时补一页（[`prepend_cover_page`]；《绍宋》《狼厅》）。
 /// - 3（2026-10-09）：spine 里标了 `linear="no"` 的目录页拿掉（`drop_nonlinear_nav`；《绍宋》）。
-pub const KINDLE_RULES_VERSION: &str = "3";
+/// - 4（2026-10-09 审计）：行内 `style` 里的字符引用先还原再改（`font-family:&quot;宋体&quot;` 以前认不出是正文字体、声明被 `;` 切碎）。
+pub const KINDLE_RULES_VERSION: &str = "4";
 pub use self::dead_refs::font_face_re;
 pub use self::css::filter_css;
 #[cfg(test)]
