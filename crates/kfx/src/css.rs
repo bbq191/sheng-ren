@@ -78,17 +78,21 @@ impl Need {
 #[derive(Default)]
 pub struct Rules(Vec<Rule>);
 
+/// `@media` 最多套几层（真书里最多两层；更深的整块不收）。
+const MAX_MEDIA_NESTING: usize = 32;
+
 impl Rules {
     /// 解析一份样式表；`url(…)` 按样式表自己的路径 `base`（书内路径）换成书内路径（`base` 空时不换）。
     /// `@media` 块按 `media` 求值（见 [`media_ok`]）。
     pub fn parse(css: &str, base: &str, media: Option<&MediaEnv>) -> Arc<Rules> {
         let mut r = Rules::default();
-        r.add(&strip_comments(css), base, media);
+        r.add(&strip_comments(css), base, media, 0);
         Arc::new(r)
     }
 
-    /// `css` 已去掉注释（嵌套的 `@media` 块直接递归，不再每层重去一遍）。
-    fn add(&mut self, css: &str, base: &str, media: Option<&MediaEnv>) {
+    /// `css` 已去掉注释（嵌套的 `@media` 块直接递归，不再每层重去一遍）。`depth`：外面套了几层 `@media`，
+    /// 超过 [`MAX_MEDIA_NESTING`] 的不收（以前一直递归，套两万层的样式表栈溢出、整个进程中止）。
+    fn add(&mut self, css: &str, base: &str, media: Option<&MediaEnv>, depth: usize) {
         let mut rest: &str = css;
         while let Some(open) = rest.find('{') {
             let head = rest[..open].trim();
@@ -100,8 +104,8 @@ impl Rules {
             if let Some(at) = head.strip_prefix('@') {
                 let lower = at.to_ascii_lowercase();
                 if let Some(q) = lower.strip_prefix("media") {
-                    if media_ok(q, media) {
-                        self.add(body, base, media);
+                    if depth < MAX_MEDIA_NESTING && media_ok(q, media) {
+                        self.add(body, base, media, depth + 1);
                     }
                 }
             } else if !head.is_empty() {
@@ -823,11 +827,11 @@ pub struct Computed {
     pub nowrap: bool,
     /// `word-break: break-all`（Send to Kindle 写成 `$569: $570`，《绍宋》全书 `p{word-break:break-all}`）。
     pub break_all: bool,
-    /// 自己或祖先有背景色、背景图（Send to Kindle 只在没有背景时省掉近黑的文字颜色，见 `write.rs` 的 `text_props`）。
+    /// 自己或祖先有背景色、背景图（Send to Kindle 只在没有背景时省掉近黑的文字颜色，见 `write/style.rs` 的 `text_props`）。
     pub on_background: bool,
     /// 自己或祖先有背景图：只有背景图、没有背景色的地方不按对比度调文字颜色（Send to Kindle 同样：《雪国》扉页背景图上的白字照写）。
     pub on_image: bool,
-    /// 自己或祖先（含 body）有左右外边距、内边距或边框：Send to Kindle 把首行缩进写成百分比（见 `write.rs` 的 `block_props`）。
+    /// 自己或祖先（含 body）有左右外边距、内边距或边框：Send to Kindle 把首行缩进写成百分比（见 `write/style.rs` 的 `block_props`）。
     pub in_hbox: bool,
     /// `list-style-type`（`None`＝按标签缺省）、`list-style-position: inside`。
     pub list_style: Option<String>,
@@ -1258,6 +1262,18 @@ impl Computed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `@media` 套得再深也不栈溢出（以前两万层整个进程中止）；超过上限的那几层不收，浅的照收。
+    #[test]
+    fn deeply_nested_media_does_not_overflow() {
+        let nest = |n: usize| format!("{}p{{color:red}}{}", "@media all{".repeat(n), "}".repeat(n));
+        assert_eq!(Rules::parse(&nest(3), "", None).0.len(), 1);
+        assert_eq!(Rules::parse(&nest(MAX_MEDIA_NESTING), "", None).0.len(), 1);
+        assert_eq!(Rules::parse(&nest(MAX_MEDIA_NESTING + 1), "", None).0.len(), 0);
+        let deep = format!("{}q{{color:red}}", nest(20000));
+        let r = Rules::parse(&deep, "", None);
+        assert_eq!(r.0.len(), 1, "后面的规则照收");
+    }
 
     #[test]
     fn decls_and_shorthand() {

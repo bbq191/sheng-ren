@@ -404,19 +404,25 @@ fn shift(mut e: Error, by: usize) -> Error {
 
 // ---------------------------------------------------------------- 编码
 
-fn put_varuint(out: &mut Vec<u8>, mut v: u64) {
+fn put_varuint(out: &mut Vec<u8>, v: u64) {
+    let (tmp, n) = varuint(v);
+    out.extend_from_slice(&tmp[10 - n..]);
+}
+
+/// VarUInt 的字节（在数组末尾 `n` 个）。
+fn varuint(mut v: u64) -> ([u8; 10], usize) {
     let mut tmp = [0u8; 10];
     let mut n = 0;
     loop {
-        tmp[n] = (v & 0x7F) as u8;
+        tmp[9 - n] = (v & 0x7F) as u8;
         n += 1;
         v >>= 7;
         if v == 0 {
             break;
         }
     }
-    tmp[0] |= 0x80;
-    out.extend(tmp[..n].iter().rev());
+    tmp[9] |= 0x80;
+    (tmp, n)
 }
 
 fn put_varint(out: &mut Vec<u8>, v: i64) {
@@ -442,9 +448,21 @@ fn put_varint(out: &mut Vec<u8>, v: i64) {
 }
 
 fn uint_bytes(v: u64) -> Vec<u8> {
-    let b = v.to_be_bytes();
+    trim_leading_zeros(&v.to_be_bytes()).to_vec()
+}
+
+/// 大端字节去掉前导 0（0 是空的）。
+fn trim_leading_zeros(b: &[u8; 8]) -> &[u8] {
     let skip = b.iter().take_while(|&&x| x == 0).count();
-    b[skip..].to_vec()
+    &b[skip..]
+}
+
+/// 类型 `t`、去掉前导 0 的无符号整数 `v`（Int、Symbol 的写法）。
+fn put_uint_value(out: &mut Vec<u8>, t: u8, v: u64) {
+    let b = v.to_be_bytes();
+    let m = trim_leading_zeros(&b);
+    put_header(out, t, m.len());
+    out.extend_from_slice(m);
 }
 
 fn put_header(out: &mut Vec<u8>, t: u8, len: usize) {
@@ -456,16 +474,24 @@ fn put_header(out: &mut Vec<u8>, t: u8, len: usize) {
     }
 }
 
+/// 容器类值（列表、结构体、注解）：正文已经直接写在 `out[start..]`，在它前面补上类型和长度。
+/// 以前每层先写进单独的缓冲再整块拷过来，每个容器都分配一次。
+fn insert_header(out: &mut Vec<u8>, start: usize, t: u8) {
+    let len = out.len() - start;
+    if len < 14 {
+        out.insert(start, (t << 4) | len as u8);
+        return;
+    }
+    let (v, n) = varuint(len as u64);
+    out.splice(start..start, std::iter::once((t << 4) | 14).chain(v[10 - n..].iter().copied()));
+}
+
 /// 编码一个值，追加到 `out`。
 pub fn encode_value(out: &mut Vec<u8>, v: &Value) {
     match v {
         Value::Null(t) => out.push((t.code() << 4) | 0x0F),
         Value::Bool(b) => out.push(0x10 | u8::from(*b)),
-        Value::Int(n) => {
-            let m = uint_bytes(n.unsigned_abs());
-            put_header(out, if *n < 0 { 3 } else { 2 }, m.len());
-            out.extend(m);
-        }
+        Value::Int(n) => put_uint_value(out, if *n < 0 { 3 } else { 2 }, n.unsigned_abs()),
         Value::F32(f) => {
             out.push(0x44);
             out.extend(f.to_be_bytes());
@@ -502,11 +528,7 @@ pub fn encode_value(out: &mut Vec<u8>, v: &Value) {
             put_header(out, 6, b.len());
             out.extend(b);
         }
-        Value::Symbol(s) => {
-            let m = uint_bytes(u64::from(*s));
-            put_header(out, 7, m.len());
-            out.extend(m);
-        }
+        Value::Symbol(s) => put_uint_value(out, 7, u64::from(*s)),
         Value::String(s) => {
             put_header(out, 8, s.len());
             out.extend(s.as_bytes());
@@ -520,34 +542,31 @@ pub fn encode_value(out: &mut Vec<u8>, v: &Value) {
             out.extend(b);
         }
         Value::List(items) | Value::Sexp(items) => {
-            let mut body = Vec::new();
+            let start = out.len();
             for it in items {
-                encode_value(&mut body, it);
+                encode_value(out, it);
             }
-            put_header(out, if matches!(v, Value::List(_)) { 0xB } else { 0xC }, body.len());
-            out.extend(body);
+            insert_header(out, start, if matches!(v, Value::List(_)) { 0xB } else { 0xC });
         }
         Value::Struct(fields) => {
-            let mut body = Vec::new();
+            let start = out.len();
             for (k, fv) in fields {
-                put_varuint(&mut body, u64::from(*k));
-                encode_value(&mut body, fv);
+                put_varuint(out, u64::from(*k));
+                encode_value(out, fv);
             }
             // L=1 是"已排序"标记，长度 1 的结构体只能用 14 + VarUInt 写（不会出现：字段至少 2 字节）。
-            put_header(out, 0xD, body.len());
-            out.extend(body);
+            insert_header(out, start, 0xD);
         }
         Value::Annotated(anns, inner) => {
             let mut ab = Vec::new();
             for a in anns {
                 put_varuint(&mut ab, u64::from(*a));
             }
-            let mut body = Vec::new();
-            put_varuint(&mut body, ab.len() as u64);
-            body.extend(ab);
-            encode_value(&mut body, inner);
-            put_header(out, 0xE, body.len());
-            out.extend(body);
+            let start = out.len();
+            put_varuint(out, ab.len() as u64);
+            out.extend(ab);
+            encode_value(out, inner);
+            insert_header(out, start, 0xE);
         }
     }
 }
@@ -620,7 +639,9 @@ impl SymbolTable {
         if let Some(i) = SYSTEM_SYMBOLS.iter().position(|s| *s == name) {
             return Some(i as u32 + 1);
         }
-        self.locals.iter().position(|n| n.as_deref() == Some(name)).map(|i| self.shared_end + i as u32)
+        // 导入表的 `max_id` 来自文件，加起来可能超出 u32（以前 debug 下 panic、release 下回绕成别的 SID）
+        let i = self.locals.iter().position(|n| n.as_deref() == Some(name))?;
+        u32::try_from(i).ok().and_then(|i| self.shared_end.checked_add(i))
     }
 
     /// 显示用：有名字给名字，没有给 `$N`。
@@ -628,10 +649,11 @@ impl SymbolTable {
         self.name(sid).map(str::to_string).unwrap_or_else(|| format!("${sid}"))
     }
 
-    /// 追加一个本地符号，返回它的 SID。
-    pub fn push(&mut self, name: &str) -> u32 {
+    /// 追加一个本地符号，返回它的 SID；SID 超出 u32 时不追加，返回 `None`。
+    pub fn push(&mut self, name: &str) -> Option<u32> {
+        let sid = u32::try_from(self.locals.len()).ok().and_then(|i| self.shared_end.checked_add(i))?;
         self.locals.push(Some(name.to_string()));
-        (self.len() - 1) as u32
+        Some(sid)
     }
 
     /// 按 `$ion_symbol_table::{imports, symbols}` 更新：`imports` 是 `$ion_symbol_table` 符号时在现有表后追加，
@@ -788,9 +810,14 @@ mod tests {
         assert_eq!(t.name(1_000_000), None);
         assert_eq!(t.len(), u32::MAX as usize + 1);
         assert_eq!(t.name(u32::MAX), Some("x"), "加起来溢出时封顶，本地符号排在最后");
+        // SID 再往后就超出 u32：查名字、追加都不溢出（以前 debug 下 panic、release 下回绕）
+        assert_eq!(t.sid("x"), Some(u32::MAX));
+        let mut full = t.clone();
+        assert_eq!(full.push("y"), None);
+        assert_eq!(full.sid("y"), None);
         // 追加模式（`imports: $ion_symbol_table`）接着现有的表编号
         let mut t = SymbolTable::system();
-        t.push("a");
+        assert_eq!(t.push("a"), Some(10));
         t.apply(&Value::Struct(vec![(SID_IMPORTS, Value::Symbol(SID_ION_SYMBOL_TABLE)), (SID_SYMBOLS, Value::List(vec![Value::String("b".into())]))]));
         assert_eq!((t.sid("a"), t.sid("b"), t.name(0), t.name(12)), (Some(10), Some(11), None, None));
     }
