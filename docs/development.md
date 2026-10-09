@@ -36,7 +36,7 @@ tools/regress/tocchk.py target/regress/旧 target/regress/新
 ```
 
 - `run.sh` 把全部文字书和第一卷漫画各优化一遍；开跑前核对 `epub-optimize` 是可执行文件、书目录在（`$REGRESS_BOOKS`，缺省 `~/Documents/ereader/books`），清掉输出目录里的旧产物（免得没生成的书拿旧文件去比、悄悄通过），一本书都没找到就报错退出。
-- `compare.py` 按原书路径配对新旧产物，每本报一行：`SAME`（每个 zip 条目逐字节相同；先比条目名、大小、CRC，一样再比字节）、`TEXT-SAME`（有条目变了，可见文字一样）、`TEXT-DIFF`（可见文字变了，打印第一处不同）、`MISSING`/`NEW`（只有一边有）、`BROKEN`（产物读不出来：不是 zip、没有 `container.xml` 等）。优化器版本一变，每本的 `META-INF/eink-optimized` 都会变，所以升版本后全是 `TEXT-SAME`，要逐条目比才看得出哪些书真变了。
+- `compare.py` 按原书路径配对新旧产物，每本报一行：`SAME`（每个 zip 条目逐字节相同；先比条目名、大小、CRC，一样再比字节）、`TEXT-SAME`（有条目变了，可见文字一样）、`TEXT-DIFF`（可见文字变了，打印第一处不同）、`MISSING`/`NEW`（只有一边有）、`BROKEN`（产物读不出来：不是 zip、没有 `container.xml` 等）。书里的优化标记 `META-INF/eink-optimized` 2026-10-09（v54）起只写 `full`/`core`、不写版本号，升版本号本身不再让每本都变成 `TEXT-SAME`，`SAME` 就是真没变。
 - `compare.py` 另外核对几件事，不过就退出码 1：新产物里不合法的 XML 不比旧的多；**正文图片（`<img>`、SVG `<image>`）不比原书少**（字符账只管文字，只有图的页被删了它看不出来；只有图、没有文字的注释号链接里的图不算，它们按规则换成数字）；新产物的可见文字和**原书**逐字符对账（按字符计数、不管顺序——注释会挪到章末——一个不多一个不少）。原书不在了、读不出来都报"未核对"，也算问题。字符账不计空白、U+FEFF 和控制字符（《金庸全集》原书一个损坏的 U+0010 被规范整理去掉，不算少字）。
 - 字符账唯一的例外是用户定的"只有图标的注释号换成数字"：只多出 ASCII 数字、原书里有只含图片的链接、多出的位数不超过按图标个数连续编号的位数时，只注明、不算不平（以前春雪、雪国、飘上下册、绍宋、绝叫 6 本因此一直报不平）。
 
@@ -121,6 +121,8 @@ done
   | install / uninstall 共用的包列表和路径 | `tools/cargo-pkgs.sh` |
   | 逐文件独立的步骤多线程做（结果按原顺序；`f` 必须是纯的） | `util::par_map`（只读）/ `par_map_mut`（就地改） |
   | 在别的线程先压好一个 zip 条目，再按顺序写 | `epubzip::Precompressed` + `EpubWriter::put_precompressed` |
+  | 原样拷原书一个 zip 条目的压缩数据（不解压不重压；改过名的写成新名） | `EpubWriter::raw_copy` / `raw_copy_as` |
+  | 并行线程数（图片 worker、`par_map` 共用；CPU 核数，封顶 `MAX_WORKERS` 16） | `imgpool::worker_count()` |
   | 选择器最后一段（标签、类、有没有 id/伪类） | `wash::css::last_compound`（2026-10-08 审计从 5 处收拢） |
   | 非 UTF-8 的 CSS 按单字节读写 | `util::latin1_decode` / `latin1_encode` |
   | 颜色解析、对比度、半透明叠色（优化器和 KFX 写出器共用） | `bookconv::color`（`ensure_contrast`、`over`） |

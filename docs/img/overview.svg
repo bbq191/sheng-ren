@@ -102,6 +102,6 @@
   <path class="d" d="M760 208 L808 208" marker-end="url(#a)"/>
   <path class="d" d="M760 236 C786 236 786 320 808 320" marker-end="url(#a)"/>
 
-  <text x="540" y="410" text-anchor="middle" class="s">booklib sync 同步后为接着的设备生成并传上去（只传有变化的；没接上的下次再传；原件删了设备上也删）</text>
+  <text x="540" y="410" text-anchor="middle" class="s">booklib sync 同步后为接着的设备生成并传上去（只传有变化的；没接上的下次再传；原件换了内容设备上原地换新，删了设备上也删）</text>
   <text x="540" y="434" text-anchor="middle" class="s">三个模式用同一套代码，差别都写在模式的配置里；文字书三台都只修复（2026-10-08），漫画照旧完整处理；三台都用自带阅读器</text>
 </svg>
