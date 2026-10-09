@@ -16,7 +16,7 @@ shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.
 ./install.sh --tools                        # 装进 PATH 手工试
 ```
 
-**CI**（`.github/workflows/ci.yml`，2026-10-09）：每次推送、PR 在 GitHub Actions 上跑 `cargo test --workspace`、`cargo clippy --workspace --all-targets -D warnings`、全部 `*.sh` 的 shellcheck、全部 `*.py` 的语法检查（工具链是最新稳定版，新版 clippy 加了检查可能突然报警告，照改即可）。公开仓库用 GitHub 托管的标准机器不收费。真书回归、真机验证 CI 做不了，仍在本机。
+**CI**（`.github/workflows/ci.yml`，2026-10-09）：每次推送、PR 在 GitHub Actions 上跑 `cargo test --workspace`、`cargo clippy --workspace --all-targets -D warnings`、全部 `*.sh` 的 shellcheck、全部 `*.py` 的语法检查（CI 用最新稳定版；本机 2026-10-09 起用 nightly，nightly 的 clippy 检查更多，本机 0 警告时 CI 一般也是 0 警告。新版 clippy 加了检查可能突然报警告，照改即可，改完核对产物逐字节不变）。公开仓库用 GitHub 托管的标准机器不收费。真书回归、真机验证 CI 做不了，仍在本机。
 
 书库的集成测试在 `crates/library/tests/`：`flow.rs` 测入库、同步、生成、挪位置、删书、传设备；`cli.rs` 直接运行 `booklib`，测参数、报错和退出码。都不联网、**不碰真设备**：`tests/common` 把 MTP 挂载目录指到 `<书库>-dev/`（下面造 kindle、ireader 的存储目录），Move 不走 SSH（`BOOKLIB_NO_SSH=1`），要测 Move 的用 `FakeMove`（本机起一个只实现导入接口的假书架服务）。
 

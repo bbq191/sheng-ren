@@ -399,11 +399,9 @@ fn parse_with(jpeg: &[u8], mut emit: impl FnMut(Sym) -> Option<()>) -> Option<(V
                         return None;
                     }
                     let mut t = Table::default();
-                    let mut total = 0usize;
-                    for l in 1..=16 {
-                        t.bits[l] = *seg.get(p + l)?;
-                        total += t.bits[l] as usize;
-                    }
+                    let bits = seg.get(p + 1..p + 17)?;
+                    t.bits[1..=16].copy_from_slice(bits);
+                    let total: usize = bits.iter().map(|&n| n as usize).sum();
                     t.vals = seg.get(p + 17..p + 17 + total)?.to_vec();
                     tables[class * 4 + id] = Some(t);
                     p += 17 + total;
