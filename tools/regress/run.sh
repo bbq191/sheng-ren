@@ -11,6 +11,7 @@
 #   tools/regress/run.sh target/regress-base/target/release/epub-optimize target/regress/旧
 #   cargo build --release -p bookconv --bin epub-optimize && tools/regress/run.sh target/release/epub-optimize target/regress/新
 #   tools/regress/compare.py target/regress/旧 target/regress/新
+#   tools/regress/tocchk.py target/regress/旧 target/regress/新     # 不拆文件、目录不变
 set -euo pipefail
 bin=${1:?用法见文件头} out=${2:?用法见文件头}
 shift 2

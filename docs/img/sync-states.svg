@@ -21,7 +21,7 @@
   <text x="34" y="191">内容变了</text>
   <path d="M320 186 L378 186" stroke="#555" stroke-width="1.4" marker-end="url(#a)"/>
   <rect x="380" y="166" width="600" height="58" rx="6" fill="#eaf7ee" stroke="#3f9a5b" stroke-width="1.2"/>
-  <text x="394" y="191">入库新版本，旧条目连同产物删掉</text>
+  <text x="394" y="191">入库新版本，旧条目删掉；设备上那份交给新版本，生成后原地换新</text>
   <text x="394" y="210" class="s">新版本入库失败：旧版本继续保留、继续跟踪；旧版本删不掉：下次再删</text>
   <rect x="20" y="232" width="300" height="40" rx="6" fill="#eef4ff" stroke="#5b7fd6" stroke-width="1.2"/>
   <text x="34" y="257">改名、移动（还在跟踪目录里）</text>
@@ -43,7 +43,7 @@
   <text x="34" y="419">入库失败（DRM、文件坏了）</text>
   <path d="M320 414 L378 414" stroke="#555" stroke-width="1.4" marker-end="url(#a)"/>
   <rect x="380" y="394" width="600" height="40" rx="6" fill="#fdecea" stroke="#b2452d" stroke-width="1.2"/>
-  <text x="394" y="419">报一次错；文件不变就不再重试</text>
+  <text x="394" y="419">报一次错；文件没变就先不重试，升级 booklib 或过一小时再试</text>
   <rect x="20" y="442" width="300" height="40" rx="6" fill="#eef4ff" stroke="#5b7fd6" stroke-width="1.2"/>
   <text x="34" y="467">文件名不是 UTF-8</text>
   <path d="M320 462 L378 462" stroke="#555" stroke-width="1.4" marker-end="url(#a)"/>

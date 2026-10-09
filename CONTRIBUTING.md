@@ -39,10 +39,10 @@
 
 ## 版本号（改了影响产物的代码要加一）
 
-现值只写在 `docs/development.md#版本号` 的表里，别处不写：
+现值只写在 `docs/development.md#版本号` 的表里，别处不写。**一律要加**，不因为"书库里的书都没碰到"省掉（用户定）；版本号只进指纹、不写进书，所以内容没变的书重建出来逐字节相同、不重传。
 
 - `bookconv::optimize::OPTIMIZE_VERSION`（文字书）、`bookconv::optimize::COMIC_VERSION`（漫画；两路共用的代码改了两个都加）；
-- `bookconv::wash::KINDLE_RULES_VERSION`（只进开了 `kindle_rules` 的掌阅、Move，不写进书）；
+- `bookconv::wash::KINDLE_RULES_VERSION`（只进开了 `kindle_rules` 的掌阅、Move 的文字书）；
 - `kfx::write::WRITER_VERSION`（只进 kindle）、`bookconv::convert::CONVERT_VERSION`、`bookconv::opfmeta::VERSION`；
 - `library` 的 `PIPELINE_VERSION`（所有书都过期，慎用）。
 

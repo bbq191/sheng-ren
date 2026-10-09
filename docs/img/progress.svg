@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 400" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>重新生成后覆盖设备上的旧文件，三台阅读器的进度保不保留（2026-10-06 真机）</title>
+  <title>重新生成后覆盖设备上的旧文件，三台阅读器的进度保不保留（2026-10-06、10-09 真机）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
@@ -50,15 +50,18 @@
   <text x="810" y="40" text-anchor="middle" class="h">Move 自带阅读器（xochitl）</text>
   <text x="810" y="60" text-anchor="middle" class="s">sync 经书架服务按 uuid 原地替换</text>
   <path class="l" d="M810 70 L810 166" marker-end="url(#a)"/>
-  <rect class="no" x="720" y="168" width="180" height="62" rx="8"/>
-  <text x="810" y="194" text-anchor="middle" class="h">进度回到开头</text>
-  <text x="810" y="216" text-anchor="middle" class="s">新内容显示正常（《绍宋》）</text>
+  <text x="820" y="106" class="s">xochitl 重新排版，</text>
+  <text x="820" y="124" class="s">进度落回开头</text>
+  <text x="820" y="142" class="s">→ 书架服务拍过快照</text>
+  <rect class="ok" x="700" y="168" width="220" height="62" rx="8"/>
+  <text x="810" y="194" text-anchor="middle" class="h">重开时跳回原位</text>
+  <text x="810" y="216" text-anchor="middle" class="s">《绍宋》跳回第 15 页（10-09）</text>
 
   <!-- 我们怎么配合 -->
   <rect class="q" x="20" y="256" width="940" height="128" rx="10"/>
   <text x="36" y="282" class="h">所以生成时这样做</text>
-  <text x="36" y="308" class="s">· KFX 里不写写出器版本（创建器版本固定写 1），唯一 ID 重建不变：只升了版本号、内容没变的书，重建出来逐字节相同，Kindle 进度保住。</text>
-  <text x="36" y="330" class="s">· 内容真变了（规则改了正文、换了封面）的书，覆盖到 Kindle 上进度清零，躲不开。</text>
-  <text x="36" y="352" class="s">· EPUB 照旧在 META-INF/eink-optimized 里记优化器版本（掌阅不受影响）。</text>
-  <text x="36" y="374" class="s">· 产物文件名不变（除非书名变了），设备上靠覆盖同名文件更新；sync 生成出来和设备上那份逐字节相同就不再传。</text>
+  <text x="36" y="308" class="s">· 书里不写版本号：KFX 创建器版本固定写 1，EPUB 的 META-INF/eink-optimized 只写 full/core；唯一 ID 重建不变。</text>
+  <text x="36" y="330" class="s">· 所以只升了版本号、内容没变的书，重建出来逐字节相同，不再传，Kindle 进度保住。</text>
+  <text x="36" y="352" class="s">· 内容真变了（规则改了正文、换了封面）：Kindle 进度清零躲不开；掌阅保留；Move 由书架服务找回（内容增删多时偏几页）。</text>
+  <text x="36" y="374" class="s">· 产物文件名不变（除非书名变了），设备上靠覆盖同名文件（Move 是同一个 uuid）更新。</text>
 </svg>
