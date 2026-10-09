@@ -53,8 +53,8 @@ fn main() {
         );
         let x = &w.xml_fixes;
         println!(
-            "规范整理: EPUB3 {} / 生成 nav {} 条 / 生成 ncx {} 条 / landmarks {} 条 / DOCTYPE {} / 命名实体 {}（认不出 {}）/ 裸& {} / 裸< {} / 控制字符 {} / 空元素闭合 {} / 属性补引号 {} / 多余闭合标签 {} / 补闭合标签 {} / 命名空间 {}",
-            w.epub3_upgraded, w.nav_generated, w.ncx_generated, w.landmarks_added, x.doctypes, x.named_entities, x.unknown_entities, x.bare_amps, x.bare_lts, x.control_chars, x.void_tags_closed, x.attrs_quoted, x.stray_close_tags, x.unclosed_tags_closed, x.namespaces_fixed
+            "规范整理: EPUB3 {} / 生成 nav {} 条 / 生成 ncx {} 条 / landmarks {} 条 / DOCTYPE {} / 命名实体 {}（认不出 {}）/ 裸& {} / 裸< {} / 控制字符 {} / 空元素闭合 {} / 属性补引号 {} / 多余闭合标签 {} / 补闭合标签 {} / 按 HTML5 重新解析 {} / 命名空间 {}",
+            w.epub3_upgraded, w.nav_generated, w.ncx_generated, w.landmarks_added, x.doctypes, x.named_entities, x.unknown_entities, x.bare_amps, x.bare_lts, x.control_chars, x.void_tags_closed, x.attrs_quoted, x.stray_close_tags, x.unclosed_tags_closed, x.html5_reparsed, x.namespaces_fixed
         );
     }
     if flags.contains(&"--check") {
