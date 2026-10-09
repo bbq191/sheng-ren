@@ -1009,7 +1009,7 @@ fn encode_syms(raw: &[u8], width: u32, height: u32, gray: bool, quality: u8) -> 
                 ys[o..o + w].copy_from_slice(row);
             } else if let [ys, cbs, crs] = strips.as_mut_slice() {
                 let (ys, cbs, crs) = (&mut ys[o..o + w], &mut cbs[o..o + w], &mut crs[o..o + w]);
-                for (((p, yv), cb), cr) in row.chunks_exact(3).zip(ys).zip(cbs).zip(crs) {
+                for (((p, yv), cb), cr) in row.as_chunks::<3>().0.iter().zip(ys).zip(cbs).zip(crs) {
                     let (r, g, b) = (i32::from(p[0]), i32::from(p[1]), i32::from(p[2]));
                     // BT.601 全范围，16 位定点（同 `image` 编码器的 `rgb_to_ycbcr`）
                     const UV: i32 = (128 << 16) + (1 << 15) - 1;

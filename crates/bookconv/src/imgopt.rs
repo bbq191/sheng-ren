@@ -509,7 +509,7 @@ fn rgb8_into_luma8(img: image::RgbImage) -> image::GrayImage {
     let (w, h) = img.dimensions();
     let raw = img.as_raw();
     let mut px = vec![0u8; raw.len() / 3];
-    for (o, p) in px.iter_mut().zip(raw.chunks_exact(3)) {
+    for (o, p) in px.iter_mut().zip(raw.as_chunks::<3>().0) {
         let s = fr[p[0] as usize] + fg[p[1] as usize] + fb[p[2] as usize] + (1 << (SHIFT - 1));
         let t = s & ((1 << SHIFT) - 1);
         *o = if (NEAR..(1 << SHIFT) - NEAR).contains(&t) { (s >> SHIFT).min(255) as u8 } else { exact(p) };
