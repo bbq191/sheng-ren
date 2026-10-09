@@ -305,6 +305,21 @@ fn track_and_sync_mirror_a_directory() {
     std::fs::write(books.join("坏.epub"), b"not a zip").unwrap();
     assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().failed, 1);
     assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().failed, 0, "文件没变就不再重试");
+    // 换了版本的 booklib（可能修好了）、或者过了一小时（偶发的读错误）：再试一次（2026-10-09）
+    let sp = dir.path().join("lib/sources.json");
+    let mut src: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    let key = src["files"].as_object().unwrap().keys().find(|k| k.ends_with("坏.epub")).unwrap().clone();
+    assert!(src["files"][&key]["failed"].as_str().is_some_and(|m| !m.is_empty()), "失败记了记号");
+    for stale in ["旧的提交号 9999999999", &format!("{} 0", env!("BOOKLIB_GIT_COMMIT"))] {
+        src["files"][&key]["failed"] = stale.into();
+        std::fs::write(&sp, src.to_string()).unwrap();
+        assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().failed, 1, "{stale}：重试");
+        assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().failed, 0, "{stale}：试过了，又不再重试");
+    }
+    // 以前的版本记下的失败（没有记号）：再试一次
+    src["files"][&key].as_object_mut().unwrap().remove("failed");
+    std::fs::write(&sp, src.to_string()).unwrap();
+    assert_eq!(lib.sync(Prune::Keep, |_| {}).unwrap().failed, 1);
 
     // 原件删了：--keep 只报告；缺省连同产物删掉
     std::fs::remove_file(books.join("乙（改名）.epub")).unwrap();

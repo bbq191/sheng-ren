@@ -107,9 +107,30 @@ pub(crate) struct Sources {
 pub(crate) struct Seen {
     size: u64,
     mtime_ns: u64,
-    /// 空 = 上次入库失败（DRM、损坏等）：文件没变就不再重试、不再重复报错。
+    /// 空 = 上次入库失败（DRM、损坏等）。
     /// 原来有旧版本、新版本入库失败时，这里仍是旧版本的 id（旧版本继续跟踪），大小和修改时间是新文件的。
     id: String,
+    /// 这个文件（这个大小、修改时间）上次入库失败的记号：`<booklib 的提交号> <时刻（Unix 秒）>`；没失败是空。文件没变时
+    /// 不马上重试、不重复报错，但升级了 booklib（可能修好了）或过了 [`RETRY_FAILED_AFTER`]（偶发的读错误）就再试一次
+    /// （2026-10-09 审计：以前记下就永远不再试）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    failed: String,
+}
+
+/// 入库失败的文件，同一版 booklib 隔多久再试一次。
+const RETRY_FAILED_AFTER: u64 = 3600;
+
+/// 现在这版 booklib 记下的入库失败记号（见 [`Seen::failed`]）。
+fn failed_mark() -> String {
+    format!("{} {}", env!("BOOKLIB_GIT_COMMIT"), crate::now())
+}
+
+/// 入库失败的记号该不该重试了：换了 booklib，或过了 [`RETRY_FAILED_AFTER`]。读不懂的记号算该重试。
+fn retry_due(mark: &str) -> bool {
+    match mark.split_once(' ') {
+        Some((commit, at)) => commit != env!("BOOKLIB_GIT_COMMIT") || at.parse::<u64>().map_or(true, |t| crate::now().saturating_sub(t) >= RETRY_FAILED_AFTER),
+        None => true,
+    }
 }
 
 /// `sync` 过程中每个文件的结果（给命令行逐条打印）。
@@ -171,7 +192,7 @@ impl Sources {
             return false;
         }
         let Some((size, mtime_ns)) = crate::file_stat(path) else { return false };
-        *seen = Seen { size, mtime_ns, id: id.to_string() };
+        *seen = Seen { size, mtime_ns, id: id.to_string(), failed: String::new() };
         true
     }
 }
@@ -317,7 +338,10 @@ impl Library {
                     continue;
                 };
                 let old = src.files.get(&path);
-                if let Some(o) = old.filter(|o| o.size == size && o.mtime_ns == mtime_ns && (o.id.is_empty() || self.entry_dir(&o.id).is_dir())) {
+                // 没变：大小、修改时间都一样，上次没失败（以前的版本记下的失败没有记号、id 是空的：再试一次）或还没到重试的时候
+                let tried = |o: &Seen| if o.failed.is_empty() { !o.id.is_empty() } else { !retry_due(&o.failed) };
+                let settled = |o: &&Seen| o.size == size && o.mtime_ns == mtime_ns && tried(o) && (o.id.is_empty() || self.entry_dir(&o.id).is_dir());
+                if let Some(o) = old.filter(settled) {
                     present.insert(path, o.clone());
                     rep.unchanged += 1;
                     continue;
@@ -342,7 +366,7 @@ impl Library {
                             }
                             None => rep.unchanged += 1, // 已在库里（改名、移动，或之前手动 add 过）
                         }
-                        present.insert(path, Seen { size, mtime_ns, id: m.id });
+                        present.insert(path, Seen { size, mtime_ns, id: m.id, failed: String::new() });
                     }
                     Err(e) => {
                         on(SyncEvent::Failed(&path, &e));
@@ -355,7 +379,7 @@ impl Library {
                         } else {
                             // 记下这次看到的大小和修改时间：文件没变就不再重试。有旧版本的继续跟踪旧版本
                             let id = old.map(|o| o.id.clone()).unwrap_or_default();
-                            present.insert(path, Seen { size, mtime_ns, id });
+                            present.insert(path, Seen { size, mtime_ns, id, failed: failed_mark() });
                         }
                     }
                 }
