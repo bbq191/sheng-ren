@@ -24,6 +24,8 @@ quick-xml = { version = "0.30", features = ["encoding"] }
 readability-rust = "0.1.0"
 # deterministic：属性按原文顺序遍历（缺省是 HashMap，同一页每次输出的属性顺序可能不同）
 scraper = { version = "0.18", features = ["deterministic"] }
+# HTML5 的命名字符引用全表（2231 个；规范整理认 HTML4 以外的实体用，和 scraper 底下的 html5ever 同一版）
+markup5ever = "0.11"
 ego-tree = "0.6"
 profile = { path = "../profile" }
 

@@ -39,7 +39,7 @@ pub struct XmlFixes {
     pub doctypes: usize,
     /// HTML 命名实体换成数字引用的个数。
     pub named_entities: usize,
-    /// 认不出的命名实体（原样留着，按 XML 读仍是错）。
+    /// HTML5 也没有的命名实体：按 HTML 的理解是字面文字（阅读器照原样显示 `&foo;`），写成 `&amp;foo;`。
     pub unknown_entities: usize,
     /// 裸 `&` 转成 `&amp;` 的个数。
     pub bare_amps: usize,
@@ -57,6 +57,11 @@ pub struct XmlFixes {
     pub unclosed_tags_closed: usize,
     /// 根元素补上或改正的命名空间声明（`xmlns`、`xmlns:epub`；《金庸全集》原书有 `xmlns="http：//…"` 写成全角冒号的）。
     pub namespaces_fixed: usize,
+    /// 配对修复没修好（还不是合法 XML，或要在 `</body>` 前补 `</p>`、`</li>` 这类 HTML 里结束标签可省的元素——它们其实早在
+    /// 下一个同级元素前就结束了，补在最后会套成 `<p>` 里套 `<p>`），按 HTML5 解析算法重新解析写回的文件数（`html5fix`）。
+    pub html5_reparsed: usize,
+    /// 配对修复里在 `</body>` 前补的结束标签可省的元素个数（只用来决定要不要按 HTML5 重新解析）。
+    implied_closed: usize,
 }
 
 impl XmlFixes {
@@ -72,6 +77,7 @@ impl XmlFixes {
         self.stray_close_tags += o.stray_close_tags;
         self.unclosed_tags_closed += o.unclosed_tags_closed;
         self.namespaces_fixed += o.namespaces_fixed;
+        self.html5_reparsed += o.html5_reparsed;
     }
 }
 
@@ -215,10 +221,23 @@ fn fix_chars<'a>(s: &'a str, quote_dq: bool, in_attr: bool, fx: &mut XmlFixes) -
                             fx.named_entities += 1;
                             changed = true;
                         }
-                        Err(_) => {
-                            out.push_str(&rest[..n]);
-                            fx.unknown_entities += 1;
-                        }
+                        Err(_) => match markup5ever::data::NAMED_ENTITIES.get(format!("{name};").as_str()).filter(|&&(c1, _)| c1 != 0) {
+                            // HTML4 以外、HTML5 有的（`&rarrw;`、`&NewLine;`…，2231 个）：一样换成数字引用
+                            Some(&(c1, c2)) => {
+                                out.push_str(&format!("&#{c1};"));
+                                if c2 != 0 {
+                                    out.push_str(&format!("&#{c2};"));
+                                }
+                                fx.named_entities += 1;
+                                changed = true;
+                            }
+                            None => {
+                                out.push_str("&amp;");
+                                out.push_str(&rest[1..n]);
+                                fx.unknown_entities += 1;
+                                changed = true;
+                            }
+                        },
                     }
                     i = k + n;
                     continue;
@@ -293,6 +312,24 @@ fn fold_fullwidth(s: &str) -> String {
     s.chars().map(crate::util::to_halfwidth).collect()
 }
 
+/// HTML 里结束标签可省的元素（HTML 规范「可选标签」：遇到下一个同级元素、父元素结束时隐含结束）。
+const OPTIONAL_END: [&str; 15] = ["p", "li", "dt", "dd", "option", "optgroup", "tr", "td", "th", "thead", "tbody", "tfoot", "rb", "rt", "rp"];
+
+/// 合法 XML：quick-xml 查结构 + 标签完全配平 + 没有非法字符 + 字符引用都认得（只有 XML 预定义实体和数字引用）。
+pub(super) fn well_formed_xml(t: &str) -> bool {
+    let mut r = quick_xml::Reader::from_str(t);
+    loop {
+        match r.read_event() {
+            Ok(quick_xml::events::Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    let mut fx = XmlFixes::default();
+    let chars_ok = matches!(fix_chars(t, false, false, &mut fx), Cow::Borrowed(_)) && fx.unknown_entities == 0;
+    tags_balanced(t) && t.chars().all(crate::util::is_xml_char) && chars_ok
+}
+
 /// 标签配对是否完全平衡（按原文大小写严格比较，与 XML 一致）：每个闭合标签都关掉栈顶，结束时栈空。空元素须已自闭合或紧跟闭合标签。
 fn tags_balanced(text: &str) -> bool {
     let mut stack: Vec<&str> = Vec::new();
@@ -319,10 +356,25 @@ pub(crate) fn normalize_markup<'a>(text: &'a str, xhtml: bool, fx: &mut XmlFixes
     };
     let mut trial = fx.clone();
     let mut out = markup_pass(&cleaned, xhtml, true, &mut trial);
+    let mut plain: Option<(String, XmlFixes)> = None;
     if (trial.stray_close_tags > 0 || trial.unclosed_tags_closed > 0) && !tags_balanced(&out) {
-        // 去掉多余闭合标签、补上没关的也没能让标签配平：拿不准，一个都不动。
-        trial = fx.clone();
-        out = markup_pass(&cleaned, xhtml, false, &mut trial);
+        // 去掉多余闭合标签、补上没关的也没能让标签配平：配对修复一个都不做。
+        let mut t = fx.clone();
+        let o = markup_pass(&cleaned, xhtml, false, &mut t);
+        (trial, out) = (t.clone(), o.clone());
+        plain = Some((o, t));
+    }
+    // 还不是合法 XML、或补的是结束标签可省的元素：按 HTML5 解析算法重新解析（不带配对修复的那一遍为底，补在最后的
+    // `</p>` 会被 HTML5 当成多出来的空段落）。写回的不合法就不用，保留上面的结果。
+    if xhtml && (trial.implied_closed > 0 || !well_formed_xml(&out)) {
+        let (base, mut t) = plain.unwrap_or_else(|| {
+            let mut t = fx.clone();
+            (markup_pass(&cleaned, xhtml, false, &mut t), t)
+        });
+        if let Some(r) = super::html5fix::reparse(&base) {
+            t.html5_reparsed += 1;
+            (trial, out) = (t, r);
+        }
     }
     *fx = trial;
     if out == text {
@@ -367,6 +419,9 @@ fn markup_pass(text: &str, xhtml: bool, fix_nesting: bool, fx: &mut XmlFixes) ->
                             for name in stack[p + 1..].iter().rev() {
                                 out.push_str(&format!("</{name}>"));
                                 fx.unclosed_tags_closed += 1;
+                                if OPTIONAL_END.iter().any(|o| name.eq_ignore_ascii_case(o)) {
+                                    fx.implied_closed += 1;
+                                }
                             }
                         }
                         stack.truncate(p);
@@ -863,19 +918,8 @@ mod tests {
         let out = normalize_markup(t, true, &mut fx).into_owned();
         (out, fx)
     }
-    /// 合法 XML（测试用）：quick-xml 查结构 + 标签完全配平 + 只有 XML 预定义实体 + 没有非法字符。
     fn well_formed(t: &str) -> bool {
-        let mut r = quick_xml::Reader::from_str(t);
-        loop {
-            match r.read_event() {
-                Ok(quick_xml::events::Event::Eof) => break,
-                Ok(_) => {}
-                Err(_) => return false,
-            }
-        }
-        let mut fx = XmlFixes::default();
-        let chars_ok = matches!(fix_chars(t, false, false, &mut fx), Cow::Borrowed(_)) && fx.unknown_entities == 0;
-        tags_balanced(t) && t.chars().all(crate::util::is_xml_char) && chars_ok
+        well_formed_xml(t)
     }
 
     #[test]
@@ -883,9 +927,12 @@ mod tests {
         let (out, fx) = fix("<html><body><p title='a&nbsp;b &amp; c&d'>甲&nbsp;乙&hellip;&amp;&#12288;&#x3000;&copy; A&B a < b &foo; &#16;</p></body></html>");
         assert_eq!(
             out,
-            "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><body><p title='a&#160;b &amp; c&amp;d'>甲&#160;乙&#8230;&amp;&#12288;&#x3000;&#169; A&amp;B a &lt; b &foo; </p></body></html>"
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><body><p title='a&#160;b &amp; c&amp;d'>甲&#160;乙&#8230;&amp;&#12288;&#x3000;&#169; A&amp;B a &lt; b &amp;foo; </p></body></html>"
         );
         assert_eq!((fx.named_entities, fx.bare_amps, fx.bare_lts, fx.unknown_entities, fx.control_chars, fx.namespaces_fixed), (4, 2, 1, 1, 1, 2));
+        // HTML4 以外、HTML5 有的命名实体照样换成数字引用（两个码位的写两个）
+        let (out, fx) = fix("<html><body><p>&rarrw;&NewLine;&nGt;</p></body></html>");
+        assert!(out.contains("<p>&#8605;&#10;&#8811;&#8402;</p>") && fx.named_entities == 3 && fx.unknown_entities == 0, "{out}");
     }
 
     #[test]
@@ -916,10 +963,10 @@ mod tests {
         assert_eq!(fx.stray_close_tags, 1);
         assert!(!out.contains("</div>") && out.contains("</svg>*/") && out.contains("<p>正文</p>"), "{out}");
         assert!(tags_balanced(&out));
-        // 交叉嵌套：去掉多余的 `</b>` 也配不平 → 一个都不去
+        // 交叉嵌套：去掉多余的 `</b>` 也配不平 → 配对修复不做，按 HTML5 解析算法重新解析（`html5fix`，2026-10-09）
         let (out, fx) = fix("<html><body><p><i>甲</p></i></b></body></html>");
-        assert_eq!(fx.stray_close_tags, 0);
-        assert!(out.contains("</p></i></b>"), "{out}");
+        assert_eq!((fx.stray_close_tags, fx.html5_reparsed), (0, 1));
+        assert!(out.contains("<p><i>甲</i></p>") && well_formed(&out), "{out}");
     }
 
     /// 《狼厅》版权页：`<section><div>` 都没关就 `</body>`，在 `</body>` 前补上（补完要能配平，不然不动）。
@@ -928,10 +975,14 @@ mod tests {
         let (out, fx) = fix("<html><head><title>t</title></head><body><section><div><p>甲</p>\n<script src=\"a.js\"></script></body></html>");
         assert_eq!(fx.unclosed_tags_closed, 2);
         assert!(out.contains("</script></div></section></body>") && tags_balanced(&out), "{out}");
-        // 中间交叉嵌套的照样拿不准，一个都不动
+        // 中间交叉嵌套的配对修复配不平：按 HTML5 重新解析
         let (out, fx) = fix("<html><body><div><p><i>甲</p></i></body></html>");
-        assert_eq!(fx.unclosed_tags_closed, 0);
-        assert!(out.contains("</p></i></body>"), "{out}");
+        assert_eq!((fx.unclosed_tags_closed, fx.html5_reparsed), (0, 1));
+        assert!(out.contains("<div><p><i>甲</i></p></div>") && well_formed(&out), "{out}");
+        // 没关的 `<p>`：HTML5 里遇到下一个 `<p>` 就结束了，不能补在 `</body>` 前套成 `<p>` 里套 `<p>`
+        let (out, fx) = fix("<html><body><p>甲<p>乙</body></html>");
+        assert_eq!(fx.html5_reparsed, 1);
+        assert!(out.contains("<body><p>甲</p><p>乙</p></body>") && well_formed(&out), "{out}");
     }
 
     #[test]

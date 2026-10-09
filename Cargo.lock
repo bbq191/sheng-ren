@@ -170,6 +170,7 @@ dependencies = [
  "fast_image_resize",
  "flate2",
  "image",
+ "markup5ever",
  "profile",
  "quick-xml",
  "readability-rust",

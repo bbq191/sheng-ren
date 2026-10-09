@@ -44,6 +44,7 @@ mod drm;
 mod empty_pages;
 mod encoding;
 pub mod fonts;
+mod html5fix;
 mod ids;
 mod kindle_rules;
 mod layout;
