@@ -813,7 +813,7 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
         let Some(t) = cache.text(path) else { return (file_links, file_heads) };
         for g in html::tags(t).filter(|g| g.kind == html::TagKind::Open && g.is("a")) {
             let Some(href) = html::attr_value(&t[g.start..g.end], "href") else { continue };
-            if href.contains("://") {
+            if html::is_external(href) {
                 continue;
             }
             let Some(close) = html::find_close(t, g.end, "a") else { continue };

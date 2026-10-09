@@ -329,17 +329,9 @@ pub fn page_images(page: &str, text: &str) -> Vec<String> {
             let tag = &text[t.start..t.end];
             let v = ["src", "xlink:href", "href"].iter().find_map(|a| html::attr_value(tag, a))?;
             let (p, _) = html::split_href(v);
-            (!p.is_empty() && !has_scheme(p) && !p.starts_with("//")).then(|| resolve(dir_of(page), &percent_decode(&crate::util::xml_unescape(p))))
+            (!p.is_empty() && !html::is_external(p)).then(|| resolve(dir_of(page), &percent_decode(&crate::util::xml_unescape(p))))
         })
         .collect()
-}
-
-/// 带 URL 协议（RFC 3986：字母开头、字母数字 `+-.`、然后 `:`）。不用 [`html::is_external`]（见到 `:` 就算）：
-/// 清洗改安全文件名之前，原书文件名里可能有 `:`（《春雪》《飘》的 `../Images/**::**…jpg`）。
-fn has_scheme(p: &str) -> bool {
-    let Some(i) = p.find(':') else { return false };
-    let s = &p[..i];
-    s.starts_with(|c: char| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
 }
 
 /// spine 里导航文档（manifest `properties` 含 `nav`）标了 `linear="no"` 的 itemref 的字节范围（整个元素）。原书把目录页放进 spine
