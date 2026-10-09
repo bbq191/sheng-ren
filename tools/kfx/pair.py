@@ -2,13 +2,13 @@
 用法：python3 pair.py 书.kfx 原书.epub"""
 import os, sys, zipfile, re, collections
 from html.parser import HTMLParser
-from kfx import load, cli_args
-from ion import short
+from kfx import load, cli_args, short
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'regress'))
 from regresslib import spine_paths  # noqa: E402  读 container.xml、href 还原字符引用和百分号解码
 
 kfx_path, epub_path = cli_args(2, "用法：python3 pair.py 书.kfx 原书.epub [--unmatched]")[:2]
-r,ci,ents=load(kfx_path)
+ci,ents=load(kfx_path)
 E={}
 for i,t,b in ents: E.setdefault(t,{})[i]=b[0] if isinstance(b,list) and b else b
 pools={k:v['$146'] for k,v in E.get('$145',{}).items()}

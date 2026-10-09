@@ -17,13 +17,12 @@ include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
 /// profile 没写 `comic_margin` 时漫画页的白边（像素）。
 pub const DEFAULT_COMIC_MARGIN: u32 = 1;
 
-/// 产物格式。AZW3、KFX 都是先按同一套规则优化出 EPUB、再转换（给 Kindle 自带阅读器：AZW3 2026-09-30 恢复，
-/// KFX 2026-10-05 起文字书用，见 docs/kfx.md）；PDF 已删，写了按未知值报错。
+/// 产物格式。KFX 是先按同一套规则优化出 EPUB、再转换（给 Kindle 自带阅读器，2026-10-05 起，见 docs/kfx.md）；
+/// PDF、AZW3 已删（AZW3 2026-10-09 用户定：KFX 取代），写了按未知值报错。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Epub,
-    Azw3,
     Kfx,
 }
 
@@ -32,7 +31,6 @@ impl Format {
     pub fn ext(self) -> &'static str {
         match self {
             Format::Epub => "epub",
-            Format::Azw3 => "azw3",
             Format::Kfx => "kfx",
         }
     }
@@ -130,7 +128,7 @@ pub struct Profile {
     /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
     pub comic_fixed_layout: bool,
     /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。内置模式都不写（kindle 2026-10-05
-    /// 曾经写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式。
+    /// 曾经写 `azw3`，KFX 固定版式真机通过后去掉；AZW3 格式 2026-10-09 删了），留给自定义模式。
     pub comic_format: Option<Format>,
     /// 保留 CSS 背景图（TOML 里不写是 `false`：清洗层去掉背景图，只留背景色——xochitl 不认 `no-repeat`，把背景图
     /// 平铺满页盖住正文）。kindle 写 `true`：KFX 写出器照 Amazon 的写法写背景图（2026-10-05）。
@@ -461,8 +459,8 @@ mod tests {
         assert!(Profile::parse("x", &format!("{base}{wide}[comic_readable]\nwidth = 200\nheight = 150\n")).is_err(), "comic_readable 横的报错");
         assert!(Profile::parse("x", &format!("{base}{wide}[comic_readable]\nwidth = 150\nheight = 200\n")).is_ok());
         assert!(Profile::parse("x", &format!("{base}{scr}[readable.pdf]\nwidth = 90\nheight = 180\n")).is_err(), "不再支持的格式（pdf）报错");
-        assert!(Profile::parse("x", &format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"azw3\"]\nnotes = \"jump\"\n{scr}")).is_ok(), "azw3 可以");
-        for fmt in ["pdf", "mobi"] {
+        assert!(Profile::parse("x", &format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"kfx\"]\nnotes = \"jump\"\n{scr}")).is_ok(), "kfx 可以");
+        for fmt in ["pdf", "mobi", "azw3"] {
             let old = format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"{fmt}\"]\nnotes = \"jump\"\n{scr}");
             assert!(Profile::parse("x", &old).is_err(), "formats 里写 {fmt} 报错");
         }

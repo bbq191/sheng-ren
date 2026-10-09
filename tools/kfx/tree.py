@@ -1,9 +1,9 @@
 """按阅读顺序打印第 N 个版面的节点树：python3 tree.py 书.kfx N"""
 import sys
-from kfx import load, cli_args
-from ion import Annot, short
+from kfx import load, cli_args, short
+
 kfx_path, want = cli_args(2, "用法：python3 tree.py 书.kfx 版面序号")[:2]
-r,ci,ents=load(kfx_path)
+ci,ents=load(kfx_path)
 E={}
 for i,t,b in ents: E.setdefault(t,{})[i]=b[0] if isinstance(b,list) and b else b
 pools={k:v['$146'] for k,v in E['$145'].items()}

@@ -44,7 +44,6 @@ booklib list                                  # 看每本书在各设备上的�
 | [设备与阅读模式](docs/devices.md) | 模式的字段、各阅读器的怪癖、可阅读范围怎么量、重拷书以后进度还在不在、KOReader（历史） |
 | [xochitl 阅读器踩坑](docs/xochitl.md) | Move 自带阅读器认什么、不认什么：CSS、严格 XML、书内跳转、图片、页边距、上传、页数检查、怎么验证 |
 | [KFX](docs/kfx.md) | Kindle 产物怎么从 EPUB 转成 KFX：容器结构、对照样本推出的写法、真机结论 |
-| [AZW3 写出器](docs/azw3.md) | EPUB → AZW3（书库 2026-10-05 起不用，命令还在） |
 | [架构](docs/architecture.md) | 代码怎么分、书库怎么存、生成流程 |
 | [开发](docs/development.md) | 测试、真书回归（含 KFX）、版本号、工程约束、DRM |
 | [决定记录](docs/decisions.md) | 用户定过的事（按日期）和待定的事 |

@@ -29,6 +29,7 @@
 
 代码在 `wash::repair_entries`（清洗层）和 `optimize/streaming.rs`（文字书换成只修复的选项）。做的只有：
 
+- 不是 UTF-8 的 XHTML、OPF、NCX（GBK、Big5、UTF-16）按 BOM 或声明的编码转成 UTF-8，声明跟着改，字一个不变；认不出编码、解码出错的不动（2026-10-09，`wash::encoding`；测试书里没有这种文件，产物不变）；
 - 伪 DRM 剥离；文件名里有安卓存储不能用的字符的改名（链接跟着改，见[其它修复](#其它修复)）；
 - 指向书里不存在的文件的引用去掉（`<img>`、`@font-face` 的 `url()`——文件本来就没有，显示不出来）；
 - 一个标签上重复的 `id` 合并、跨文件重复的 id 改名（指向它的链接跟着改）；NCX 的 DOCTYPE、manifest id、`dtb:uid` 修正；

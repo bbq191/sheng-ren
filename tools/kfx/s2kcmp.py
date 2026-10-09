@@ -3,8 +3,7 @@
 输出三段：文字节点自己的样式差异 (属性, Amazon, 我们): 个数 «例子»；外层容器链的差异；行内区间有无的差异。
 2026-10-08 用它对出写出器 11 的规则（见 docs/kfx.md#send-to-kindle-的样式规则）。"""
 import collections
-from kfx import load, cli_args
-from ion import short
+from kfx import load, cli_args, short
 
 NAMES = {'$11': 'font', '$12': 'style', '$13': 'weight', '$16': 'size', '$19': 'color', '$34': 'align', '$36': 'indent',
          '$42': 'line_h', '$45': 'nowrap', '$47': 'm_top', '$48': 'm_left', '$49': 'm_bottom', '$50': 'm_right',
@@ -23,7 +22,7 @@ def fmt(v):
 
 
 def nodes(path):
-    r, ci, ents = load(path)
+    ci, ents = load(path)
     E = {}
     for i, t, b in ents:
         E.setdefault(t, {})[i] = b[0] if isinstance(b, list) and b else b
@@ -89,7 +88,7 @@ def compare(a_path, b_path):
 
 def title_of(path):
     """KFX 元数据里的书名。"""
-    r, ci, ents = load(path)
+    ci, ents = load(path)
     for i, t, b in ents:
         if t == '$490':
             for cat in (b[0] if isinstance(b, list) else b).get('$491', []):

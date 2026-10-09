@@ -2,7 +2,7 @@
 //! 只用来转换用户自己手上的词典，产物不进仓库。
 //!
 //! clean-room：依 MobileRead 的 MOBI 容器文档、StarDict 的文件格式说明，加上对两本词典样本的黑盒分析实现，
-//! 不看 KindleUnpack / Calibre 的代码。容器读取（PalmDB、PalmDOC 解压、INDX）借 [`azw3::read::palm`]。
+//! 不看 KindleUnpack / Calibre 的代码。容器读取（PalmDB、PalmDOC 解压、INDX）在 [`palm`]。
 //!
 //! MOBI 词典的结构（2026-10-02 对《现代汉语词典》《牛津高阶双解》两本样本核过）：
 //! - 正文是一整份 HTML，每个词条是其中一段；**词头索引**（orth index）的头 INDX 记录号在 MOBI 头 `+0x18`。
@@ -13,9 +13,10 @@
 //! - 词形变化索引（inflection index，MOBI 头 `+0x1C`）是按规则变换词头的，没有直接的"变形 → 词头"表，暂不转：
 //!   查 `ran` 找不到 `run`。
 
+pub mod palm;
 pub mod stardict;
 
-use azw3::read::palm::{self, be_u32};
+use palm::be_u32;
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -71,8 +72,8 @@ pub fn read(data: &[u8]) -> Result<Dict, String> {
     if entries.is_empty() {
         return Err("词头索引里没有可用的词条".into());
     }
-    let exth = palm::parse_exth(h.mobi, h.mobi_hlen);
-    let title = if exth.title.trim().is_empty() { palm::palmdb_name(data) } else { exth.title.trim().to_string() };
+    let title = palm::exth_title(h.mobi, h.mobi_hlen);
+    let title = if title.trim().is_empty() { palm::palmdb_name(data) } else { title.trim().to_string() };
     Ok(Dict { title, text, entries })
 }
 

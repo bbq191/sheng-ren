@@ -19,7 +19,7 @@
 
 | 字段（缺省） | 意思 | `kindle` | `ireader` | `xochitl` | 为什么（实测怪癖） |
 |---|---|---|---|---|---|
-| `formats`（必填） | 产物格式 | `["kfx"]` | `["epub"]` | `["epub"]` | Kindle 自带阅读器 USB 传书不认 EPUB；`kfx` 是先按同样规则优化出 EPUB 再转（`azw3` 写出器还在，书库不用） |
+| `formats`（必填） | 产物格式 | `["kfx"]` | `["epub"]` | `["epub"]` | Kindle 自带阅读器 USB 传书不认 EPUB；`kfx` 是先按同样规则优化出 EPUB 再转（AZW3 写出器 2026-10-09 删了，KFX 取代） |
 | `color`（必填） | 彩色屏 | `false` | `false` | `true` | 黑白屏的漫画转 256 级灰度 |
 | `[screen]`、`[readable.<格式>]` | 屏幕、真实可阅读范围（不写 = 屏幕） | 1272×1696、1104×1546 | 整屏 | 954×1696、842×1455 | 阅读器各自留页边距、页眉页脚，见[可阅读范围](#可阅读范围) |
 | `notes`（必填） | 完整优化时注释怎么写：`"jump"` 普通链接、注释搬到章末；`"popup"` 再标上 `epub:type="noteref"` + `<aside epub:type="footnote">`。**只修复时不生效**（xochitl 只用它的搬移部分） | jump | popup | jump | 掌阅自带阅读器认弹窗（2026-10-05 真机）；xochitl 只认同文件跳转。Kindle 的弹窗由 KFX 写出器自己配（见[排版 · 注释](typesetting.md#3-注释完整优化弹窗小一号)） |
