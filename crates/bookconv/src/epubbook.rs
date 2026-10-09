@@ -200,8 +200,10 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
     }
     cover = cover.filter(|c| images.iter().any(|i| &i.path == c));
 
+    // spine 里标了 `linear="no"` 的目录页不排（见 `wash::opf::nonlinear_nav_itemrefs`）
+    let skip_nav = opf.nav_doc.as_ref().filter(|_| !crate::wash::opf::nonlinear_nav_itemrefs(&opf_text).is_empty());
     let mut docs = Vec::new();
-    for p in &opf.spine {
+    for p in opf.spine.iter().filter(|p| Some(*p) != skip_nav) {
         let is_html = media.get(p).is_some_and(|m| m.contains("html"));
         if let (true, Some(&i)) = (is_html, index.get(p)) {
             docs.push(Doc { path: p.clone(), html: String::from_utf8_lossy(&entries[i].data).into_owned() });

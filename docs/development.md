@@ -53,6 +53,8 @@ tools/regress/compare.py 旧 新
 
 注释方式（`notes`）、背景图、`rgba()`、图注、透明图这些字段现在只影响漫画；阅读范围对文字书只影响 KFX 的 `@media` 求值。改了 `kindle_rules`、注释、漫画、彩色、阅读范围相关的处理，对应的模式也跑一遍。
 
+回归脚本统计 spine 时不算原书标了 `linear="no"` 的目录页（`regresslib.spine_paths`；产物把它拿出了 spine，文件还在），补的封面页 `eink-cover.xhtml` 由 `tocchk.py` 单独注明、不算拆文件。
+
 ### KFX
 
 KFX 没有逐字比文字的工具，靠"新旧写出器的产物逐字节比"（KFX 输出也是确定的：唯一 ID 由 OPF 标识符派生，书里不写写出器版本）：
@@ -86,9 +88,10 @@ done
 |---|---|---|---|
 | 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 53 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 52 | 漫画 |
+| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段，不写进书里的优化标记） | 3 | 只有开了 `kindle_rules` 的模式的文字书（内容没变的重建出逐字节相同的 EPUB，设备上不重传） |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 5 | 只有补过东西的 |
-| EPUB → KFX | `kfx::write::WRITER_VERSION` | 12 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
+| EPUB → KFX | `kfx::write::WRITER_VERSION` | 14 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。

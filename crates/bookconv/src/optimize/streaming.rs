@@ -58,7 +58,7 @@ fn optimize_inner(
     let mut archive = ZipArchive::new(std::io::BufReader::new(in_file)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
 
     // 阶段一：非图片条目整份读；图片条目占位（真实字节留到阶段二按需流式读）。
-    let raw = crate::epubzip::read_skeleton_par(input_path, &mut archive)?.entries;
+    let mut raw = crate::epubzip::read_skeleton_par(input_path, &mut archive)?.entries;
     // 漫画识别只在这里判一次（按原书），清洗层和图片处理都用这个结果（以前清洗层清洗完又判一次，两次可能不一致）。
     let is_comic_book = crate::comic_detect::is_comic(&raw);
     // 文字书只做修复（漫画照常）：换成只修复的选项
@@ -70,6 +70,14 @@ fn optimize_inner(
         opts
     };
     let keep_images = opts.keeps_content();
+    // 照 Send to Kindle 补封面页（掌阅、Move 的文字书）：图的宽高从原书读文件头（这时图片条目是空占位）
+    if opts.wash.as_ref().is_some_and(|w| w.kindle_rules) && !is_comic_book {
+        crate::wash::ensure_cover_declared(&mut raw);
+        crate::wash::prepend_cover_page(&mut raw, |p| {
+            let bytes = crate::epubzip::read_by_name(&mut archive, p).ok()?;
+            image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
+        });
+    }
     let prep = prepare_entries(raw, opts, bytes_before, is_comic_book)?;
     check_cancel(cancel)?;
     let (comic_margin, grayscale) = (opts.comic_margin, opts.grayscale);

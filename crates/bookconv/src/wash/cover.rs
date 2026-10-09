@@ -1,5 +1,5 @@
 //! 封面声明：保证 OPF 声明了有效封面图。
-use super::opf::{cover_meta_tags, declared_cover, first_spine_image, insert_metadata, is_image_item};
+use super::opf::{cover_meta_tags, declared_cover, first_spine_image, insert_manifest_items, insert_metadata, insert_spine_first, is_image_item, NewItem};
 use super::*;
 
 // ───────────────────────── 封面声明 ─────────────────────────
@@ -62,5 +62,59 @@ pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
     let out = html::apply_edits(&text, edits);
     let Some(out) = insert_metadata(&out, &format!(r#"<meta name="cover" content="{}"/>"#, cover.id)) else { return false };
     entries[opf.index].data = out.into_bytes();
+    true
+}
+
+/// 补的封面页的文件名（OPF 同目录）和 manifest id。
+const COVER_PAGE: &str = "eink-cover.xhtml";
+const COVER_PAGE_ID: &str = "eink-cover-page";
+
+/// 原书没有封面页（OPF 声明了封面图，可哪一页都没用到它）时，在 spine 最前面补一页只放封面图的页面——照 Send to Kindle
+/// （Amazon 转的《绍宋》《狼厅》第一页是补出来的整页封面；2026-10-09 用户：掌阅、Move 也补）。写法照真书最常见的封面页
+/// （《人生海海》《罗杰疑案》）：SVG 按图的宽高定 `viewBox`、`preserveAspectRatio` 等比放进一页。不加文字。
+/// `size(图的 zip 路径)` 取图的宽高（流式优化时图片条目是空占位，调用方从原书读文件头）。补了 → `true`。
+pub fn prepend_cover_page(entries: &mut Vec<Entry>, size: impl FnOnce(&str) -> Option<(u32, u32)>) -> bool {
+    let Some(opf) = parse_opf(entries) else { return false };
+    let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
+    let Some(cover) = declared_cover(&text) else { return false };
+    let cover_path = cover.path(&opf.dir);
+    let by_name = name_index(entries);
+    let items = manifest_items(&text);
+    let used = items.iter().filter(|i| i.media_type.contains("html")).any(|it| {
+        let page = it.path(&opf.dir);
+        by_name.get(page.as_str()).and_then(|&i| std::str::from_utf8(&entries[i].data).ok()).is_some_and(|t| super::opf::page_images(&page, t).contains(&cover_path))
+    });
+    let page = if opf.dir.is_empty() { COVER_PAGE.to_string() } else { format!("{}/{COVER_PAGE}", opf.dir) };
+    if used || by_name.contains_key(page.as_str()) || items.iter().any(|i| i.id == COVER_PAGE_ID) {
+        return false;
+    }
+    let Some((w, h)) = size(&cover_path).filter(|&(w, h)| w > 0 && h > 0) else { return false };
+    // 页面和 OPF 同目录，图的相对路径就是 manifest 里 href 的原文（已转义、已百分号编码）
+    let xhtml = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+<title>Cover</title>
+<style type="text/css">
+body {{ margin: 0; padding: 0; text-align: center; }}
+svg {{ margin: 0; padding: 0; }}
+</style>
+</head>
+<body epub:type="cover">
+<div>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="100%" height="100%" viewBox="0 0 {w} {h}" preserveAspectRatio="xMidYMid meet">
+<image width="{w}" height="{h}" xlink:href="{}"/>
+</svg>
+</div>
+</body>
+</html>
+"#,
+        cover.href.replace('"', "&quot;")
+    );
+    let Some(out) = insert_manifest_items(&text, &[NewItem { id: COVER_PAGE_ID, href: COVER_PAGE, media_type: "application/xhtml+xml", properties: "svg" }]) else { return false };
+    let Some(out) = insert_spine_first(&out, COVER_PAGE_ID) else { return false };
+    entries[opf.index].data = out.into_bytes();
+    entries.push(Entry { name: page, data: xhtml.into_bytes() });
     true
 }

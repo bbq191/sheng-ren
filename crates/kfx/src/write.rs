@@ -44,7 +44,9 @@ use std::collections::{HashMap, HashSet};
 ///   CSS 落单引号在换行处结束、没收尾的块在文末收尾；行内 `style` 的 `url()` 按文档路径解析；`background:none`/只写颜色的简写重置背景图；
 ///   `<font size="+很大">` 不溢出；固定版式取不到图的页登记成空页；正文字体字数打平时取名字小的（确定）。
 ///   24 本测试书和一卷漫画只有《风起陇西》（2011）、《绍宋》（2024-12）因日期变了，别的逐字节不变。
-pub const WRITER_VERSION: &str = "12";
+/// - 13（2026-10-09）：正文里没用到封面图（spine 里没有封面页）的书在最前面补一页整页封面，照 Send to Kindle（《绍宋》真机打开没有封面）。
+/// - 14（2026-10-09）：spine 里标了 `linear="no"` 的目录页不排（用户定三台都拿掉；`epubbook::load`）。
+pub const WRITER_VERSION: &str = "14";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -1985,6 +1987,7 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
 /// 各阶段按这个顺序分配本地符号，换顺序会改产物字节（资源的符号必须最后分配，见 [`resource_entities`]）。
 fn build(book: &mut Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
     let mut parsed = parse_docs(book, b.media, false);
+    prepend_cover_page(book, &mut parsed);
     analyze(book, b, &mut parsed);
     let fixed_canvas = fixed_canvas(book);
     // 翻页方向：`$557` 从左往右、`$559` 从右往左（2026-10-05 测试漫画 LTR/RTL 两本只差这一处）。
@@ -2113,6 +2116,25 @@ fn parse_docs(book: &Loaded, media: Option<crate::css::MediaEnv>, faithful: bool
         parsed.extend(got.iter().map(|(si, l, b)| (*si, book.docs[*si].path.as_str(), l.clone(), b.clone())));
     }
     parsed
+}
+
+/// 正文里哪儿都没用到封面图（原书只在 OPF 标了 `cover-image`、spine 里没有封面页）时，在最前面补一个只有封面图的文档，
+/// 排成整页图片版面、封面地标指向它。照 Send to Kindle：《绍宋》原书没有封面页，Amazon 版第一个版面就是整页封面
+/// （2026-10-09 真机：我们的打开没有封面）。正文里用到了的不补，那些书的产物逐字节不变。
+fn prepend_cover_page(book: &Loaded, parsed: &mut Vec<ParsedDoc>) {
+    fn uses(blocks: &[Block], src: &str) -> bool {
+        blocks.iter().any(|bl| match &bl.kind {
+            Kind::Image { src: s } => s == src,
+            Kind::Container(c) => uses(c, src),
+            Kind::Text { .. } => false,
+        })
+    }
+    let Some(cover) = book.cover.as_deref() else { return };
+    if parsed.iter().any(|(_, _, _, blocks)| uses(blocks, cover)) {
+        return;
+    }
+    // 序号只用来起实体名，取一个文档用不到的；路径不是任何文档的，没有链接会指到它。
+    parsed.insert(0, (book.docs.len(), "\0cover", None, vec![Block::anonymous(Kind::Image { src: cover.to_string() }, Computed::root(), Vec::new())]));
 }
 
 /// 全书范围的分析（版面要用）：注释配对、嵌入字体、写成 `default` 的正文字体、正文字号和行高。
@@ -3065,6 +3087,54 @@ mod tests {
         let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
         assert!(story.contains(&format!("({NODE_TYPE}, Symbol({NODE_IMAGE}))")), "封面页的图片节点: {story}");
         assert_eq!(c.entities.iter().filter(|e| e.ty == T_SECTION).count(), 2, "封面页成了一个版面");
+    }
+
+    /// spine 里标了 `linear="no"` 的目录页（导航文档）不排（写出器 14，用户定三台都拿掉）。
+    #[test]
+    fn nonlinear_nav_page_skipped() {
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="nav" linear="no"/><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("nav.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><h1>目录页</h1><ol><li><a href="c1.xhtml">第一章</a></li></ol></nav></body></html>"#.as_bytes()).unwrap();
+        w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第一章</h1><p>正文</p></body></html>"#.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let pools = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_TEXT_POOL).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(!pools.contains("目录页") && pools.contains("正文"), "{pools}");
+        assert_eq!(c.entities.iter().filter(|e| e.ty == T_SECTION).count(), 1);
+        let nav = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_NAV_CONTAINER).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(nav.contains("第一章"), "目录照常：{nav}");
+    }
+
+    /// spine 里没有封面页、正文没用到封面图：最前面补一页整页封面（写出器 13，照 Send to Kindle《绍宋》《狼厅》）。
+    #[test]
+    fn missing_cover_page_prepended() {
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(4, 4, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="O/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("O/c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="b" href="I/c.png" media-type="image/png" properties="cover-image"/><item id="c1" href="T/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("O/I/c.png", &png).unwrap();
+        w.put("O/T/c1.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>x</p></body></html>"#).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let sections: Vec<_> = c.entities.iter().filter(|e| e.ty == T_SECTION).map(|e| format!("{:?}", e.value().unwrap())).collect();
+        assert_eq!(sections.len(), 2, "补了一个封面版面");
+        let cover_sec = c.entities.iter().filter(|e| e.ty == T_SECTION).find(|e| format!("{:?}", e.value().unwrap()).contains(&format!("({TMPL_WIDTH}, Int(4))"))).expect("整页图片版面");
+        // 阅读顺序 `{$169: [{$178, $170: [版面…]}]}` 的第一个版面
+        let order = c.entities.iter().find(|e| e.ty == T_READING_ORDERS).unwrap().value().unwrap().clone();
+        let field = |v: &Value, k: u32| match v {
+            Value::Struct(f) => f.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone()),
+            _ => None,
+        };
+        let Some(Value::List(orders)) = field(&order, READING_ORDERS) else { panic!("{order:?}") };
+        let Some(Value::List(secs)) = field(&orders[0], SECTIONS) else { panic!("{order:?}") };
+        assert!(matches!(secs[0], Value::Symbol(s) if s == cover_sec.id), "封面版面排第一：{order:?}");
+        let nav = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_NAV_CONTAINER).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        assert!(nav.contains("cover-nav-unit"), "封面地标：{nav}");
     }
 
     /// 图片的百分比宽度写进样式（`$56`，单位百分比，同表格宽度）；别的单位不写（写出器 9）。

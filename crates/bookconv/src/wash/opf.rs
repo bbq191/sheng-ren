@@ -313,25 +313,73 @@ pub fn first_spine_image(opf: &str, opf_dir: &str, max_pages: usize, in_manifest
     for it in pages {
         let page = path_of(it);
         let Some(text) = read(&page) else { continue };
-        for t in html::tags(&text).filter(|t| t.is_start() && (is_local(t.name, "img") || is_local(t.name, "image"))) {
-            let tag = &text[t.start..t.end];
-            let Some(v) = ["src", "xlink:href", "href"].iter().find_map(|a| html::attr_value(tag, a)) else { continue };
-            let (p, _) = html::split_href(v);
-            if p.is_empty() || html::is_external(p) {
-                continue;
-            }
-            let path = resolve(dir_of(&page), &percent_decode(&crate::util::xml_unescape(p)));
-            if images.contains(&path) || (!in_manifest && is_image_ext(&path)) {
-                return Some(path);
-            }
+        if let Some(path) = page_images(&page, &text).into_iter().find(|p| images.contains(p) || (!in_manifest && is_image_ext(p))) {
+            return Some(path);
         }
     }
     None
 }
 
+/// 页面里引用的本地图片（`<img src>`、SVG `<image xlink:href|href>`），文档序，zip 路径（属性原文先还原字符引用、再百分号解码，
+/// 相对页面所在目录解析）。`page`：页面的 zip 路径。
+pub fn page_images(page: &str, text: &str) -> Vec<String> {
+    html::tags(text)
+        .filter(|t| t.is_start() && (is_local(t.name, "img") || is_local(t.name, "image")))
+        .filter_map(|t| {
+            let tag = &text[t.start..t.end];
+            let v = ["src", "xlink:href", "href"].iter().find_map(|a| html::attr_value(tag, a))?;
+            let (p, _) = html::split_href(v);
+            (!p.is_empty() && !has_scheme(p) && !p.starts_with("//")).then(|| resolve(dir_of(page), &percent_decode(&crate::util::xml_unescape(p))))
+        })
+        .collect()
+}
+
+/// 带 URL 协议（RFC 3986：字母开头、字母数字 `+-.`、然后 `:`）。不用 [`html::is_external`]（见到 `:` 就算）：
+/// 清洗改安全文件名之前，原书文件名里可能有 `:`（《春雪》《飘》的 `../Images/**::**…jpg`）。
+fn has_scheme(p: &str) -> bool {
+    let Some(i) = p.find(':') else { return false };
+    let s = &p[..i];
+    s.starts_with(|c: char| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+}
+
+/// spine 里导航文档（manifest `properties` 含 `nav`）标了 `linear="no"` 的 itemref 的字节范围（整个元素）。原书把目录页放进 spine
+/// 又标成不进阅读顺序，阅读器却都把它当正文第一页显示（《绍宋》在掌阅上排了 14 页，末尾还露出 `hidden` 的 landmarks）；
+/// 2026-10-09 用户定三台都拿掉（阅读器菜单里的目录读的是 nav/NCX 本身，不受影响）。优化器（`kindle_rules`）和 KFX 写出器共用。
+pub fn nonlinear_nav_itemrefs(opf: &str) -> Vec<(usize, usize)> {
+    let nav_ids: Vec<&str> = manifest_items(opf).into_iter().filter(|i| i.properties.split_whitespace().any(|p| p == "nav")).map(|i| i.id).collect();
+    html::tags(opf)
+        .filter(|t| t.is_start() && is_local(t.name, "itemref"))
+        .filter(|t| {
+            let tag = &opf[t.start..t.end];
+            tag_attr(tag, "idref").is_some_and(|id| nav_ids.contains(&id)) && tag_attr(tag, "linear").is_some_and(|l| l.trim() == "no")
+        })
+        .map(|t| (t.start, element_end(opf, &t)))
+        .collect()
+}
+
+/// 在 spine 最前面插一条 `<itemref idref="…"/>`（元素名跟着 spine 的前缀）。没有 `<spine>` → `None`。
+pub fn insert_spine_first(opf: &str, idref: &str) -> Option<String> {
+    let t = html::tags(opf).find(|t| t.is_start() && is_local(t.name, "spine"))?;
+    let prefix = &t.name[..t.name.len() - "spine".len()];
+    if opf[t.start..t.end].ends_with("/>") {
+        let tag = &opf[t.start..t.end - 2];
+        return Some(format!("{}{tag}><{prefix}itemref idref=\"{}\"/></{prefix}spine>{}", &opf[..t.start], xml_escape(idref), &opf[t.end..]));
+    }
+    Some(format!("{}<{prefix}itemref idref=\"{}\"/>{}", &opf[..t.end], xml_escape(idref), &opf[t.end..]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonlinear_nav_itemrefs_only_nav_with_linear_no() {
+        let opf = r#"<package><manifest><item id="n" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="n" linear='no'/><itemref idref="a" linear="no"/><itemref idref="a"/></spine></package>"#;
+        let spans = nonlinear_nav_itemrefs(opf);
+        assert_eq!(spans.len(), 1, "只有导航文档那条，别的 linear=no 不动");
+        assert_eq!(&opf[spans[0].0..spans[0].1], r#"<itemref idref="n" linear='no'/>"#);
+        assert!(nonlinear_nav_itemrefs(&opf.replace("linear='no'", "")).is_empty(), "没标 linear=no 的目录页照排");
+    }
 
     #[test]
     fn unique_identifier_one_rule() {

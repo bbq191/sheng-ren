@@ -56,7 +56,15 @@ mod toc;
 mod typeset;
 
 // 对外（优化器、质量门、书库、统计）用到的项；其余只在清洗层内部用。
-pub use self::cover::ensure_cover_declared;
+pub use self::cover::{ensure_cover_declared, prepend_cover_page};
+
+/// 「照 Send to Kindle 的规则统一」（[`WashOpts::kindle_rules`]，掌阅、Move 的文字书）这一路自己的版本，只进书库指纹（`u` 段），
+/// 不写进书里的优化标记：这一路改了只让开了它的书过期，内容没变的书重建出逐字节相同的 EPUB、设备上不重传
+/// （升 `OPTIMIZE_VERSION` 会改标记，掌阅、Move 上全部文字书都得重传）。
+/// - 1（2026-10-08）：标签缺省样式、正文字体、body 左右边距、文字对比度（指纹里写 `u`）。
+/// - 2（2026-10-09）：原书没有封面页时补一页（[`prepend_cover_page`]；《绍宋》《狼厅》）。
+/// - 3（2026-10-09）：spine 里标了 `linear="no"` 的目录页拿掉（`drop_nonlinear_nav`；《绍宋》）。
+pub const KINDLE_RULES_VERSION: &str = "3";
 pub use self::dead_refs::font_face_re;
 pub use self::css::filter_css;
 #[cfg(test)]
@@ -363,6 +371,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     if opts.kindle_rules {
         kindle_rules::apply(entries, rep);
         add_ua_css(entries, rep);
+        drop_nonlinear_nav(entries);
     }
     fix_ncx_manifest_id(entries, rep);
     repair_ncx_targets(entries, rep);
@@ -374,6 +383,18 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     strip_ncx_doctype(entries, rep);
     normalize::normalize_book(entries, &lang_tag, heading, rep);
     fix_ncx_uid(entries, rep);
+}
+
+/// spine 里标了 `linear="no"` 的目录页从 spine 拿掉（manifest 里留着，仍是导航文档），见 [`opf::nonlinear_nav_itemrefs`]。
+fn drop_nonlinear_nav(entries: &mut [Entry]) {
+    let Some(i) = find_opf(entries) else { return };
+    let Ok(text) = std::str::from_utf8(&entries[i].data) else { return };
+    let spans = opf::nonlinear_nav_itemrefs(text);
+    if spans.is_empty() {
+        return;
+    }
+    let out = html::apply_edits(text, spans.into_iter().map(|(s, e)| (s, e, String::new())).collect());
+    entries[i].data = out.into_bytes();
 }
 
 /// 书的语言标签：OPF `dc:language` 优先，没有就按主语言（`Latin` → en，其余 zh）。

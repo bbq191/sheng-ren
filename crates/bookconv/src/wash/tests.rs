@@ -186,6 +186,39 @@
         assert!(!ensure_cover_declared(&mut v), "已有有效声明，第二次不该再动（幂等）");
     }
 
+    /// 原书只在 OPF 声明了封面图、哪一页都没用到：spine 最前面补一页（照 Send to Kindle，《绍宋》《狼厅》）；用到了的不补，
+    /// 文件名里有 `:` 的页面引用也认得（《春雪》：清洗改名之前就要判断）。
+    #[test]
+    fn prepend_cover_page_only_when_no_page_uses_cover() {
+        let book = |page: &str| {
+            vec![
+                e("O/content.opf", r#"<package version="3.0"><metadata><dc:title>书</dc:title></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c" href="I/**%3A%3Ac.png" media-type="image/png" properties="cover-image"/><item id="p1" href="T/p1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="nav" linear="no"/><itemref idref="p1"/></spine></package>"#),
+                e("O/T/p1.xhtml", page),
+                e("O/nav.xhtml", "<html><body><nav/></body></html>"),
+                Entry { name: "O/I/**::c.png".into(), data: Vec::new() },
+            ]
+        };
+        let mut v = book("<html><body><p>正文</p></body></html>");
+        let mut asked = None;
+        assert!(prepend_cover_page(&mut v, |p| {
+            asked = Some(p.to_string());
+            Some((600, 800))
+        }));
+        assert_eq!(asked.as_deref(), Some("O/I/**::c.png"));
+        let opf = s(&v, "O/content.opf");
+        assert!(opf.contains(r#"<spine><itemref idref="eink-cover-page"/><itemref idref="nav" linear="no"/>"#), "补在 spine 最前：{opf}");
+        assert!(opf.contains(r#"<item id="eink-cover-page" href="eink-cover.xhtml" media-type="application/xhtml+xml" properties="svg"/>"#), "{opf}");
+        let page = s(&v, "O/eink-cover.xhtml");
+        assert!(page.contains(r#"viewBox="0 0 600 800""#) && page.contains(r#"xlink:href="I/**%3A%3Ac.png""#), "{page}");
+        assert!(normalize::well_formed_xml(&page), "{page}");
+        assert!(!prepend_cover_page(&mut v, |_| Some((1, 1))), "补过了不再补");
+
+        let mut v = book(r#"<html><body><p><img src="../I/**::c.png"/></p></body></html>"#);
+        assert!(!prepend_cover_page(&mut v, |_| Some((600, 800))), "正文用到了封面图（文件名带冒号）不补");
+        let mut v = book("<html><body><p>正文</p></body></html>");
+        assert!(!prepend_cover_page(&mut v, |_| None), "读不出宽高不补");
+    }
+
     #[test]
     fn ensure_cover_repairs_declaration_pointing_to_non_image() {
         // Calibre 产物：<meta name="cover" content="cover.txt"/> 指向 txt——xochitl 取不到封面（真机日志 null cover image）
