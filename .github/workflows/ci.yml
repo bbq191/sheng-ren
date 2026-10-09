@@ -1,0 +1,36 @@
+# 推送、PR 时跑不碰真书和设备的检查：测试、clippy（0 警告）、shell 脚本、Python 工具脚本语法。
+# 真书回归、真机验证只能在用户本机做（见 CONTRIBUTING.md、docs/development.md）。
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: 测试
+        run: cargo test --workspace
+      - name: clippy（0 警告）
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: git ls-files -z '*.sh' | xargs -0 shellcheck -x
+      - name: Python 语法
+        run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
