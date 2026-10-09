@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-09：554 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -28,10 +28,11 @@ shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.
 
 ```sh
 git worktree add target/regress-base HEAD && (cd target/regress-base && cargo build --release -p bookconv --bin epub-optimize)
-tools/regress/run.sh target/regress-base/target/release/epub-optimize 旧   # 缺省 --device=ireader；放 target/ 下，/tmp 是内存盘
+tools/regress/run.sh target/regress-base/target/release/epub-optimize target/regress/旧   # 缺省 --device=ireader；放 target/ 下，/tmp 是内存盘
 cargo build --release -p bookconv --bin epub-optimize
-tools/regress/run.sh target/release/epub-optimize 新
-tools/regress/compare.py 旧 新
+tools/regress/run.sh target/release/epub-optimize target/regress/新
+tools/regress/compare.py target/regress/旧 target/regress/新
+tools/regress/tocchk.py target/regress/旧 target/regress/新
 ```
 
 - `run.sh` 把全部文字书和第一卷漫画各优化一遍；开跑前核对 `epub-optimize` 是可执行文件、书目录在（`$REGRESS_BOOKS`，缺省 `~/Documents/ereader/books`），清掉输出目录里的旧产物（免得没生成的书拿旧文件去比、悄悄通过），一本书都没找到就报错退出。
@@ -53,7 +54,7 @@ tools/regress/compare.py 旧 新
 | `kindle` | 不加 `kindle_rules`（规则在 KFX 写出器里），最后还要转一步 KFX（见下面 [KFX](#kfx)） | 阅读范围、固定版式（`comic_fixed_layout`）、不改翻页方向、背景图保留尺寸 |
 | `xochitl` | 另加 `repair_note_links`（注释搬进本章、去回链、图标号换数字） | 彩色、页边距 1（`comic_reader_margins`）、去掉背景图和回链、不改翻页方向 |
 
-注释方式（`notes`）、背景图、`rgba()`、图注、透明图这些字段现在只影响漫画；阅读范围对文字书只影响 KFX 的 `@media` 求值。改了 `kindle_rules`、注释、漫画、彩色、阅读范围相关的处理，对应的模式也跑一遍。
+背景图、`rgba()`、图注、透明图这几个字段对文字书不起作用（只修复）；背景图、`rgba()` 还管漫画（清洗层两路都过）。注释方式（`notes`）只修复时也不生效，但仍进文字书、漫画两路的指纹，改了照样过期。阅读范围对文字书只影响 KFX 的 `@media` 求值。改了 `kindle_rules`、注释、漫画、彩色、阅读范围相关的处理，对应的模式也跑一遍。
 
 回归脚本统计 spine 时不算原书标了 `linear="no"` 的目录页（`regresslib.spine_paths`；产物把它拿出了 spine，文件还在），补的封面页 `eink-cover.xhtml` 由 `tocchk.py` 单独注明、不算拆文件。
 
@@ -66,7 +67,7 @@ KFX 没有逐字比文字的工具，靠"新旧写出器的产物逐字节比"�
 (cd target/regress-base && cargo build --release -p kfx --bin epub-to-kfx)
 cargo build --release -p kfx --bin epub-to-kfx
 mkdir -p target/kfx-old target/kfx-new
-for f in 新/*.epub; do n=$(basename "$f" .epub)
+for f in target/regress/新/*.epub; do n=$(basename "$f" .epub)
   target/regress-base/target/release/epub-to-kfx "$f" "target/kfx-old/$n.kfx" >/dev/null
   target/release/epub-to-kfx "$f" "target/kfx-new/$n.kfx" >/dev/null
   cmp -s "target/kfx-old/$n.kfx" "target/kfx-new/$n.kfx" || echo "变了：$n"
@@ -88,15 +89,17 @@ done
 
 | 改了什么 | 版本号 | 现值 | 过期的书 |
 |---|---|---|---|
-| 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 53 | 文字书 |
-| 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 52 | 漫画 |
-| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段，不写进书里的优化标记） | 3 | 只有开了 `kindle_rules` 的模式的文字书（内容没变的重建出逐字节相同的 EPUB，设备上不重传） |
+| 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 54 | 文字书 |
+| 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 53 | 漫画 |
+| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 4 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 5 | 只有补过东西的 |
-| EPUB → KFX | `kfx::write::WRITER_VERSION` | 14 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
+| EPUB → KFX | `kfx::write::WRITER_VERSION` | 15 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。
+
+**版本号写进指纹、不写进书**（2026-10-09 用户定）：书里的优化标记 `META-INF/eink-optimized` 只写 `full`/`core`，KFX 里的创建器版本固定写 `1`。所以加了版本号以后书会重新生成，但内容没变的书生成出来逐字节相同，设备上不重传；只有真变了的书才传。改了影响产物的代码一律加版本号，不因为"书库里的书都没碰到"省掉（用户定）。
 
 ## 工程约束
 
@@ -121,13 +124,21 @@ done
   | 选择器最后一段（标签、类、有没有 id/伪类） | `wash::css::last_compound`（2026-10-08 审计从 5 处收拢） |
   | 非 UTF-8 的 CSS 按单字节读写 | `util::latin1_decode` / `latin1_encode` |
   | 颜色解析、对比度、半透明叠色（优化器和 KFX 写出器共用） | `bookconv::color`（`ensure_contrast`、`over`） |
+  | 改 `style` 属性（字符引用先还原、改完再转义） | `html::edit_style_attrs`（别直接拿 `edit_attrs` 的原文去切声明） |
+  | 取看得见的文字（认全部 HTML 命名实体） | `html::plain_text`、`html::has_visible`、`html::unescape_entities` |
+  | container.xml 里的 OPF 路径 | `wash::opf::container_opf_path` |
+  | GBK、Big5、UTF-16 的 XHTML、OPF、NCX 转 UTF-8 | `wash::transcode_entries`（优化器读完书先转，后面一律按 UTF-8） |
+  | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | `bookconv::uastyle` |
   | KFX 写出器里跳引号、配括号（CSS 字符串遇换行结束） | `kfx::css` 的 `scan_css` |
   | Python 工具：命令行参数；回归目录配对、OPF/spine 解析；读 KFX | `tools/toollib.py`；`tools/regress/regresslib.py`（compare、tocchk、pair 共用）；`tools/kfx/kfx.py` 的 `load` 调 `kfx-dump --json`（Python 不再自己解 Ion，2026-10-09） |
 - **不可信输入不能让进程崩溃**：书的字节全是外来数据，数值相加用 `checked_add`、切片用 `get`；图片解码器 panic 由 `imgopt::guard` 兜住。**读外来数据设上限，超过就报错、不截断照用**（读用 `util::read_capped`）：
   - zip 条目解压 `epubzip::MAX_ENTRY_BYTES`（256MB，EPUB 与 CBZ 共用）；
   - 远程图下载 `netimg::MAX_IMAGE_BYTES`（20MB，超过算抓不到）；
-  - 网址入库的网页 20MB（`article.rs`）。
+  - 网址入库的网页 20MB（`article.rs`）；
+  - CBZ 页面图片解压后合计 `convert::cbz::MAX_CBZ_TOTAL_BYTES`（4GiB）。
+
+  图片 worker 每件活整个兜住 panic（读 zip 也是外部输入），panic 了只这本书报错，不摔掉整个 `sync`。
 - `produce_then_replace` 产出途中出错或 panic 都删掉临时文件。
 - **踩到的阅读器怪癖**记进[设备 · 怪癖 → 字段](devices.md#怪癖--字段)；用户定的事记进[决定记录](decisions.md)。
 
@@ -153,6 +164,13 @@ done
 - 文字书：清洗层逐文件步骤多线程、deflate 交给 worker、读骨架多线程、目录驱动定章节去掉了按条目重扫全文件的平方级查找。
 - KFX：各文档多线程解析（解析结果在主线程复制一份，不然 worker 分配区里的空洞让峰值涨三成）；容器写出边拷边放，漫画峰值减半。
 - 内存：多线程时 glibc 每个线程一个分配区，小书峰值多十来 MB（福尔摩斯 26 → 42MB，`MALLOC_ARENA_MAX=1` 时 27MB）；其余持平或更低。
+
+2026-10-09 全系统审计又一轮（EPUB 产物逐字节不变；KFX 只有写出器 15 修的几本变了）：
+
+- 图片 worker、`par_map` 的线程上限 8 → 16（`imgpool::MAX_WORKERS`；漫画 1/4/8/12/16/24 线程墙钟 5.19/1.53/0.94/0.89/0.75/0.79 秒，同时解码的像素仍受额度约束）。
+- 质量门（`check`）每个文件并行扫一遍（以前串行扫三遍）：金庸全集优化加质量门 801 → 569ms。
+- KFX：对比度调整按颜色对缓存、样式去重复用编码缓冲、Ion 编码少分配、分析三遍合一遍：金庸 0.58 → 0.51s，阿加莎 0.98 → 0.73s。
+- 传书：MTP 上直接写正式文件名（jmtpfs 的改名是整份下载再上传，以前经临时文件改名等于每本传三遍），见[架构 · 生成](architecture.md#生成sync-的第二步generaters)。
 
 ## DRM
 

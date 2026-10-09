@@ -20,8 +20,8 @@
   <!-- 起点 -->
   <rect class="q" x="230" y="14" width="520" height="70" rx="10"/>
   <text x="490" y="42" text-anchor="middle" class="h">目录最上一层是一本本书或部、卷吗？</text>
-  <text x="490" y="62" text-anchor="middle" class="s">带子条目的至少两条，且①多数像「第X部/卷」，或②本层不像章、</text>
-  <text x="490" y="76" text-anchor="middle" class="s">下一层多数像「第X章/回/部」，或③本层不像章、第三层分在两本书以上</text>
+  <text x="490" y="62" text-anchor="middle" class="s">带子条目的至少两条（只有一条要像「第X部/卷」），且①多数像「第X部/卷」，</text>
+  <text x="490" y="76" text-anchor="middle" class="s">或②本层多数不像章名（第X章/回、序、后记）；「第X册」这层先去掉再判</text>
 
   <!-- 是 -->
   <path class="l" d="M380 82 L230 130" marker-end="url(#a)"/>
@@ -61,7 +61,7 @@
   <text x="370" y="430" text-anchor="middle" class="s">目录改指到「文件#id」</text>
 
   <rect class="sec" x="500" y="364" width="220" height="92" rx="8"/>
-  <text x="610" y="388" text-anchor="middle" class="h">节、章名只是数字</text>
+  <text x="610" y="388" text-anchor="middle" class="h">节</text>
   <text x="610" y="410" text-anchor="middle" class="s">挂在章下面一层；目录漏了的</text>
   <text x="610" y="430" text-anchor="middle" class="s">补 id、按阅读顺序补进去</text>
 
@@ -69,7 +69,7 @@
   <text x="850" y="388" text-anchor="middle" class="h">更深的</text>
   <text x="850" y="410" text-anchor="middle" class="s">不补进目录</text>
 
-  <text x="490" y="494" text-anchor="middle" class="s">目录里没有的：章后面更深一级、不超过 40 字、不是「注：」开头的 &lt;hN&gt; 补成节；好读的「１」「２」节号段落补成节</text>
+  <text x="490" y="494" text-anchor="middle" class="s">目录里没有的：章后面更深一级、不超过 40 字、不是「注：」开头的 &lt;hN&gt; 补成节（纯数字不作为节的依据）</text>
   <text x="490" y="518" text-anchor="middle" class="s">没有书自带目录、或六成以上的目录条目找不到标题时，退回按 &lt;h1&gt;–&lt;h6&gt; 级别判断（下一张图）</text>
   <text x="490" y="542" text-anchor="middle" class="s">原书的文件一个不拆、不并（2026-10-06 起不再分页）；只改目录和给标题补 id</text>
 </svg>

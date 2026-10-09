@@ -95,10 +95,9 @@ dir = "documents"
 | xochitl | 找 NCX 只认 manifest 里 `id="ncx"` 的项，叫别的原生目录入口不出现 | NCX 的 manifest id 改成 `ncx` | 做 |
 | xochitl | 封面条目 id 带点、又只有 `<meta name="cover">` 时取不到封面 | `<meta name="cover">` 和 `properties="cover-image"` 同时写 | 做（EPUB 3 规范整理） |
 | xochitl | 严格 XML：同一标签两个 `id` 整章空白，OPF 不合法整本只排 1 页 | 合并重复 `id`，XHTML、OPF 一律修成合法 XML | 做 |
-| Kindle（AZW3 时代） | 把 `<head>` 里散落的文字显示在章首 | AZW3 写出器的 `<head>` 只留 title、meta、link、style、base（KFX 不写 `<head>`，不涉及） | — |
 | 三台 | 不支持 CSS 断字 | 规则留着，不插软连字符 | —（只修复不加断字规则） |
 
-其它实测行为（不需要处理）：Kindle 侧载书归"文档"（PDOC）时封面最稳；Kindle 书旁 `.sdr` 里的进度文件只写不读（AZW3 时代的 `.azw3f`；KFX 的 `.yjf` 见[附录](#自带阅读器之间能不能同步进度2026-09-30-真机)）；掌阅用中文字体显示英文时弯引号是全角宽；xochitl 每本书排出的 PDF 最后多一页空白、页边距设置只对单本书、USB 网页上传约 88MB 以上的书回 413。xochitl 的怪癖来由、细节和验证程度集中在 [xochitl 阅读器踩坑](xochitl.md)。
+其它实测行为（不需要处理）：Kindle 侧载书归"文档"（PDOC）时封面最稳；Kindle 书旁 `.sdr` 里的进度文件只写不读（AZW3 时代的 `.azw3f`；KFX 的 `.yjf` 见[附录](#自带阅读器之间能不能同步进度2026-09-30-真机)）；掌阅用中文字体显示英文时弯引号是全角宽；xochitl 每本书排出的 PDF 最后多一页空白、页边距设置只对单本书、USB 网页上传有体积上限（见 [xochitl · 传书与上传](xochitl.md#传书与上传)）。xochitl 的怪癖来由、细节和验证程度集中在 [xochitl 阅读器踩坑](xochitl.md)。
 
 ### 为什么这样分
 
@@ -140,7 +139,7 @@ dir = "documents"
 ```sh
 # 1. 生成测量书（Kindle 还要转成 KFX）
 readable-probe 测量书.epub
-epub-to-kfx 测量书.epub 测量书.kfx
+cargo run --release -p kfx --bin epub-to-kfx -- 测量书.epub 测量书.kfx   # epub-to-kfx 不随 install.sh 装
 
 # 2. 拷到设备上，用要量的阅读软件打开，翻到"竖长图""横宽图"两页各截一张屏
 
@@ -166,7 +165,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 | 设备 | 结果 | 我们怎么配合 |
 |---|---|---|
 | Kindle 自带阅读器（KFX） | **字节有任何不同就清零**（只差写进书里的写出器版本号也一样，《绍宋》），**逐字节相同才保留**（《啸风山庄》）。`.sdr/*.yjf` 里的 `lpr` 是阅读位置，书换了以后从头重新记 | KFX 里不写写出器版本（创建器版本固定写 `1`），容器 id 重建不变；内容没变的书升版本后重建出来逐字节相同。内容真变了（规则改了正文、换了封面）的书覆盖后进度清零，躲不开。见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机) |
-| 掌阅自带阅读器（EPUB） | **字节变了也保留**：同一本《罗杰疑案》只改 `META-INF/eink-optimized` 的版本号、重新打包覆盖，两次都还停在原来的位置 | EPUB 里照旧记优化器版本 |
+| 掌阅自带阅读器（EPUB） | **字节变了也保留**：同一本《罗杰疑案》只改 `META-INF/eink-optimized` 的版本号、重新打包覆盖，两次都还停在原来的位置 | 2026-10-09 起书里不再记版本号（标记只写 `full`/`core`），升版本后内容没变的书逐字节相同、不重传 |
 | Move（xochitl） | **进度回到开头**（2026-10-09《绍宋》两次原地替换）：替换时正开着的书被关掉；再打开整本重新排版，页面表转成新格式（`.content` 的 `formatVersion` 1 → 2、`cPages`，旧排版多出的 435 页标成已删除），进度落回开头附近。新内容显示正常（以前「排过版的书原地换文件仍显示旧内容」的反例这次没出现）。之后退出再打开照常保存进度（《绍宋》《罗杰疑案》实测） | 仍原地替换（保留 uuid）：保住所在文件夹、书架上不多一本；加新删旧进度一样丢。替换后把旧进度写回去要在书架服务里做（不在本仓库） |
 
 - **文件名要稳定**：覆盖靠同名文件。书名变了产物文件名才跟着变：`sync` 传一份新名字的、删掉旧名字的（Move 上进回收站），进度不会跟过去。
@@ -211,7 +210,7 @@ Move 系统版本 20260827；数据目录 `/home/root/.local/share/remarkable/xo
 
 | 设备 | 读进度 | 写进度 |
 |---|---|---|
-| Kindle（未越狱） | ✓（AZW3 时代）书旁 `<书名>.sdr/<书名><哈希>.azw3f` 里的 `lpr`（最后读到）、`fpr`（读到最远），值是 AZW3 解压后正文的**字节偏移**；AZW3 是我们写的，能换算成全书第几个字。只有打开过的书才有。现在出 KFX：进度在 `.sdr/*.yjf` 的 `lpr`（如 `AUQAAAAAAAAA:3184`），怎么换算没研究；真正的进度看来记在系统数据库里（MTP 看不到），见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机) | ✗ 改文件 Kindle 不认、之后还会覆盖掉；删书再拷回也当新书从头开始 |
+| Kindle（未越狱） | ✓ 现在出 KFX：进度在书旁 `.sdr/*.yjf` 的 `lpr`（如 `AUQAAAAAAAAA:3184`），怎么换算成全书位置没研究；真正的进度看来记在系统数据库里（MTP 看不到），见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机)。（AZW3 时代是 `.sdr/*.azw3f` 的 `lpr`、`fpr`，值是 AZW3 解压后正文的字节偏移，能换算成第几个字；只有打开过的书才有） | ✗ 改文件 Kindle 不认、之后还会覆盖掉；删书再拷回也当新书从头开始 |
 | 掌阅（未 root） | ✗ 共享存储里没有进度文件，`iReader/backup/ireader2.db` 是加密的；当时 ADB 没开（后来开发者模式能打开，adb shell 是 root，没再查） | ✗ |
 | Move（xochitl） | ✓ `.metadata` 的 `lastOpenedPage` + `.epubindex` 对照表 | 可能能：像漫画页边距那样让 xochitl 自己设（没试） |
 

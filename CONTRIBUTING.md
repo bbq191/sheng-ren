@@ -41,7 +41,7 @@
 
 现值只写在 `docs/development.md#版本号` 的表里，别处不写：
 
-- `bookconv::optimize::OPTIMIZE_VERSION`（文字书）、`COMIC_VERSION`（漫画；两路共用的代码改了两个都加——但漫画规则不变，所以一般不该碰）；
+- `bookconv::optimize::OPTIMIZE_VERSION`（文字书）、`bookconv::optimize::COMIC_VERSION`（漫画；两路共用的代码改了两个都加）；
 - `bookconv::wash::KINDLE_RULES_VERSION`（只进开了 `kindle_rules` 的掌阅、Move，不写进书）；
 - `kfx::write::WRITER_VERSION`（只进 kindle）、`bookconv::convert::CONVERT_VERSION`、`bookconv::opfmeta::VERSION`；
 - `library` 的 `PIPELINE_VERSION`（所有书都过期，慎用）。
