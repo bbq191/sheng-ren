@@ -97,7 +97,7 @@ impl LabelCodec {
                     return Err(format!("ORDT2 偏移 {off} 处不是 ORDT 表"));
                 }
                 let body = hdr.get(off + 4..off + 4 + count * 2).ok_or("ORDT2 表超出记录")?;
-                Ok(LabelCodec::Ordt(body.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect()))
+                Ok(LabelCodec::Ordt(body.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect()))
             }
             Some(e) => Err(format!("词头编码 {e} 不认识（只认 65001、65002）")),
             None => Err("头 INDX 太短（没有编码字段）".into()),
@@ -108,7 +108,9 @@ impl LabelCodec {
         match self {
             LabelCodec::Utf8 => String::from_utf8_lossy(id).into_owned(),
             LabelCodec::Ordt(table) => id
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| {
                     let v = u16::from_be_bytes([c[0], c[1]]);
                     let cp = table.get(v as usize).copied().unwrap_or(v);

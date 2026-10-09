@@ -158,7 +158,7 @@ impl Container {
             return bad("实体索引长度不是 24 的倍数");
         }
         let mut entities = Vec::with_capacity(index.len() / INDEX_ENTRY);
-        for e in index.chunks_exact(INDEX_ENTRY) {
+        for e in index.as_chunks::<INDEX_ENTRY>().0 {
             let id = u32_at(e, 0)?;
             let ty = u32_at(e, 4)?;
             let off = u64_at(e, 8)?.checked_add(header_len as u64).ok_or_else(|| Error("实体偏移溢出".into()))?;
