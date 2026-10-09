@@ -1247,3 +1247,38 @@
         assert!(x.contains(r#"style="font-size:14px""#) && x.contains("　　正文"), "行内样式、段首空格原样: {x}");
         assert!(x.contains(r##"href="#n1""##) && x.contains("注释正文"), "注释搬进本章、链接改同文件锚点: {x}");
     }
+
+    /// 标签没关这类语法错误的书走完整流程（2026-10-09：html5fix 的样本，测试真书里一本都没触发过）：三个模式产物里每个 XHTML
+    /// 都是合法 XML（xochitl 遇到不合法的整章空白），可见文字一个不差；配对修复修不好的那章按 HTML5 重新解析过。
+    #[test]
+    fn broken_markup_book_repaired_in_all_modes() {
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">broken-markup</dc:identifier><dc:title>标签修复样本</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">第一章</a></li><li><a href="c2.xhtml">第二章</a></li></ol></nav></body></html>"#;
+        // 交叉嵌套、没关的 <p>/<li>、没闭合的空元素、HTML5 才有的实体、谁都没有的实体
+        const C1: &str = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>第一章</title></head><body><h1>第一章</h1><p><i>交叉嵌套</p></i><p>没关的段落一<p>没关的段落二<br>换行<p><b>粗<i>粗斜</b>斜</i>&bigstar;&foo;</p><ul><li>列表一<li>列表二</ul><img src="nope.png"></body></html>"#;
+        const C2: &str = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>第二章</title></head><body><h1>第二章</h1><p>本来就合法的一章。</p></body></html>"#;
+        let epub = zip_book(&[
+            ("META-INF/container.xml", r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#),
+            ("OEBPS/content.opf", OPF),
+            ("OEBPS/nav.xhtml", NAV),
+            ("OEBPS/c1.xhtml", C1),
+            ("OEBPS/c2.xhtml", C2),
+        ]);
+        let want1 = crate::html::plain_text(C1).replace("&bigstar;", "★");
+        for id in ["kindle", "ireader", "xochitl"] {
+            let (out, rep) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(profile::get(id).unwrap())).unwrap();
+            let wash = rep.wash.as_ref().expect("文字书走清洗层");
+            assert!(wash.xml_fixes.html5_reparsed >= 1, "{id}：第一章按 HTML5 重新解析: {:?}", wash.xml_fixes);
+            let mut ar = ZipArchive::new(Cursor::new(&out)).unwrap();
+            let names: Vec<String> = ar.file_names().map(str::to_string).collect();
+            for n in names.iter().filter(|n| n.ends_with(".xhtml")) {
+                let mut t = String::new();
+                ar.by_name(n).unwrap().read_to_string(&mut t).unwrap();
+                assert!(crate::wash::normalize::well_formed_xml(&t), "{id}：{n} 不是合法 XML:\n{t}");
+            }
+            let c1 = text_of(&out, "OEBPS/c1.xhtml");
+            assert_eq!(crate::html::plain_text(&c1), want1, "{id}：可见文字一个不差:\n{c1}");
+            assert!(c1.contains("<i>交叉嵌套</i></p>") && c1.contains("&amp;foo;"), "{id}：{c1}");
+            assert_eq!(crate::html::plain_text(&text_of(&out, "OEBPS/c2.xhtml")), crate::html::plain_text(C2), "{id}：合法的一章文字不变");
+        }
+    }

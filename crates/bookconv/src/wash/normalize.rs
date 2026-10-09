@@ -316,7 +316,7 @@ fn fold_fullwidth(s: &str) -> String {
 const OPTIONAL_END: [&str; 15] = ["p", "li", "dt", "dd", "option", "optgroup", "tr", "td", "th", "thead", "tbody", "tfoot", "rb", "rt", "rp"];
 
 /// 合法 XML：quick-xml 查结构 + 标签完全配平 + 没有非法字符 + 字符引用都认得（只有 XML 预定义实体和数字引用）。
-pub(super) fn well_formed_xml(t: &str) -> bool {
+pub(crate) fn well_formed_xml(t: &str) -> bool {
     let mut r = quick_xml::Reader::from_str(t);
     loop {
         match r.read_event() {
