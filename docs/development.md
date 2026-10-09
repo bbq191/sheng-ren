@@ -109,6 +109,7 @@ done
   | HTML 操作（容错单双引号、注释、不把 `data-id` 当 `id`；别写只认双引号的正则） | `bookconv::html`；加类 `html::add_class`；不分大小写查找 `html::{find_ci, contains_ci}` |
   | 写 EPUB / 读条目 / 读整本（元数据、spine、CSS、图片、目录） | `epubzip::EpubWriter` / `read_entries_from` / `epubbook::load`（KFX 写出器用；从文件读用 `epubbook::load_from`，不整本读进内存） |
   | manifest 路径；书里链接解析（还原字符引用 → 拆锚点 → 百分号解码 → 规整路径） | `ManifestItem::path`；`epubzip::resolve_link` |
+  | 是不是书外链接（`http:`、`mailto:`、`data:`、`//`…；按 RFC 3986 的协议名判断，原书文件名里的 `:` 不算） | `html::is_external`（别再写 `contains("://")`、`contains(':')`） |
   | 原子写文件（书库也用） | `util` 的 `produce_then_replace`、`commit` |
   | DRM 判定；全角转半角；图片格式识别；哈希 | `wash::encrypted_targets`；`util::to_halfwidth`；`util::image_kind`；`util::fnv64` |
   | `@font-face` 规则匹配（清洗层、KFX 写出器共用） | `wash::font_face_re` |

@@ -85,7 +85,7 @@ fn src_embedded(src: &str, base_dir: &str, names: &HashSet<&str>) -> bool {
         let after = &rest[i + 4..];
         let Some(j) = after.find(')') else { break };
         let raw = after[..j].trim().trim_matches(['"', '\'']).trim();
-        if !raw.is_empty() && !raw.contains("://") && !raw.starts_with("data:") {
+        if !raw.is_empty() && !html::is_external(raw) {
             let path = posix_norm(&resolve(base_dir, &crate::epubzip::percent_decode(raw.split(['#', '?']).next().unwrap_or(raw))));
             if names.contains(path.as_str()) {
                 return true;

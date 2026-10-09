@@ -428,9 +428,15 @@ pub fn frag_id(frag: &str) -> Cow<'_, str> {
     }
 }
 
-/// 书外链接（带协议 `http:`/`mailto:`/`data:`…，或 `//` 开头）。
+/// 书外链接（带协议 `http:`/`mailto:`/`data:`…，或 `//` 开头）。协议按 RFC 3986：字母开头、只有字母数字和 `+-.`、然后 `:`。
+/// 以前见到 `:` 就算：清洗改安全文件名之前，原书文件名里的 `:`（《春雪》《飘》的 `../Images/**::**…jpg`）被当成了外链。
 pub fn is_external(path: &str) -> bool {
-    path.contains(':') || path.starts_with("//")
+    if path.starts_with("//") {
+        return true;
+    }
+    let Some(i) = path.find(':') else { return false };
+    let scheme = &path[..i];
+    scheme.starts_with(|c: char| c.is_ascii_alphabetic()) && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
 }
 
 // ───────────────────────── 元素 ─────────────────────────
@@ -721,6 +727,16 @@ pub fn style_block_re() -> &'static Regex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_external_by_scheme() {
+        for ext in ["http://a/b", "https://a", "mailto:x@y", "data:image/png;base64,AA", "javascript:void(0)", "//cdn/x.png", "urn:isbn:1"] {
+            assert!(is_external(ext), "{ext}");
+        }
+        for local in ["../Images/**::**.jpg", "a.xhtml#n:1", "Text/x:y.xhtml", "#frag", "", "1a:b", "*:x"] {
+            assert!(!is_external(local), "{local}");
+        }
+    }
 
     #[test]
     fn tags_skip_comments_and_respect_quoted_gt() {

@@ -727,7 +727,7 @@ pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
             let after = &src[i + 4..];
             let j = after.find(')')?;
             let raw = after[..j].trim().trim_matches(['"', '\'']).trim();
-            (!raw.is_empty() && !raw.contains("://") && !raw.starts_with("data:")).then(|| bookconv::epubzip::resolve_link(base, raw).0)
+            (!raw.is_empty() && !bookconv::html::is_external(raw)).then(|| bookconv::epubzip::resolve_link(base, raw).0)
         });
         if let (Some(family), Some(path)) = (family, url) {
             let bold = get("font-weight").is_some_and(|w| matches!(w.trim(), "bold" | "bolder") || w.trim().parse::<u32>().is_ok_and(|n| n >= 600));

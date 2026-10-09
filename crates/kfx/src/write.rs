@@ -839,7 +839,7 @@ impl Doc<'_> {
                 let link = (name == "a")
                     .then(|| el.value().attr("href"))
                     .flatten()
-                    .filter(|h| !h.contains("://") && !h.starts_with("mailto:"))
+                    .filter(|h| !bookconv::html::is_external(h))
                     .map(|h| {
                         let (path, frag) = resolve_link(self.path, h);
                         (if path.is_empty() { self.path.to_string() } else { path }, frag.unwrap_or_default())
