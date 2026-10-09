@@ -57,6 +57,16 @@ def manifest(z):
 
 
 def spine_paths(z):
-    """spine 顺序的条目路径（manifest 里找不到的 idref 跳过）。"""
+    """spine 顺序的条目路径（manifest 里找不到的 idref 跳过）。标了 `linear="no"` 的导航文档（目录页）不算：原书自己说它不在阅读顺序里，
+    三台的产物都把它拿出 spine（2026-10-09 用户定；文件还在，阅读器的目录照常），新旧、原书一样不计。"""
     _, t, items = manifest(z)
-    return [items[i][0] for i in (attr(m.group(0), 'idref') for m in re.finditer(r'<(?:\w+:)?itemref\b[^>]*>', t)) if i in items]
+    out = []
+    for m in re.finditer(r'<(?:\w+:)?itemref\b[^>]*>', t):
+        i = attr(m.group(0), 'idref')
+        if i not in items:
+            continue
+        nav = 'nav' in (attr(items[i][1], 'properties') or '').split()
+        if nav and (attr(m.group(0), 'linear') or '').strip() == 'no':
+            continue
+        out.append(items[i][0])
+    return out

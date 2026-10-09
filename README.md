@@ -61,7 +61,7 @@ booklib list                                  # 看每本书在各设备上的�
 
 ## 现状
 
-- 漫画三台都在真机上看过；文字书 2026-10-08 改成「只修复」后，掌阅看过五本，Kindle、Move 还没在真机上看。逐条见[验证情况](docs/typesetting.md#验证情况)。
+- 漫画三台都在真机上看过；文字书 2026-10-08 改成「只修复」后，掌阅看过五本，Kindle、Move 2026-10-09 真机看过（Kindle 补封面页的写出器 13 待看）。逐条见[验证情况](docs/typesetting.md#验证情况)。
 - 自带阅读器之间不能同步阅读进度（两台都不装 KOReader，见[设备 · KOReader](docs/devices.md#koreader)）。
 - 带 DRM 的书拒收（解 DRM 暂停，见[开发 · DRM](docs/development.md#drm)）。
 

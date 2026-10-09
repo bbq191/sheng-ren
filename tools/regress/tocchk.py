@@ -6,14 +6,14 @@
 每本文字书一行（漫画跳过）：原书、旧、新的 spine 文件数；新旧目录条数；层级+标签是否逐条一致；只改了目标的条数；
 nav 条数；新产物里目标文件或 #锚点不存在的目录条目（坏链接）。
 算问题（退出码 1）：新 spine 比原书多（文字书不拆文件）、层级或标签变了、有坏链接。
-新 spine 比原书少只注明（旧版本的空白页清理会删掉没有可见内容的文件）。新旧产物按原书路径配对（同 compare.py）；
+新 spine 比原书少只注明（旧版本的空白页清理会删掉没有可见内容的文件）；补的封面页（`eink-cover.xhtml`）不计入 spine、另行注明。新旧产物按原书路径配对（同 compare.py）；
 只有一边有、原书或产物读不出来的报出来算问题，不让整轮崩。"""
 import difflib, os, re, sys, zipfile, posixpath
 from urllib.parse import unquote
 import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from regresslib import attr, index, manifest, pairs  # noqa: E402
+from regresslib import attr, index, manifest, pairs, spine_paths  # noqa: E402
 
 
 def spine_and_ncx(z):
@@ -24,7 +24,7 @@ def spine_and_ncx(z):
             ncx = p
         if 'nav' in (attr(tag, 'properties') or '').split():
             nav = p
-    spine = [items[i][0] for i in (attr(m.group(0), 'idref') for m in re.finditer(r'<(?:\w+:)?itemref\b[^>]*>', t)) if i in items]
+    spine = spine_paths(z)
     return spine, ncx, nav
 
 
@@ -101,6 +101,9 @@ def bad_targets(z, base, hrefs, names):
     return bad
 
 
+COVER_PAGE = 'eink-cover.xhtml'
+
+
 def info(path):
     z = zipfile.ZipFile(path)
     names = set(z.namelist())
@@ -109,7 +112,9 @@ def info(path):
     bad = bad_targets(z, ncx, [s for _, _, s in flat], names) if ncx else []
     navl = nav_links(z, nav) if nav and nav in names else []
     bad += bad_targets(z, nav, navl, names) if nav else []
-    return dict(spine=len(spine), flat=flat, bad=bad, nav=len(navl), z=z)
+    # 照 Send to Kindle 补的封面页（掌阅、Move：`wash::prepend_cover_page`）不算拆文件，单独计
+    added = sum(1 for s in spine if s.rsplit('/', 1)[-1] == COVER_PAGE)
+    return dict(spine=len(spine) - added, cover=added, flat=flat, bad=bad, nav=len(navl), z=z)
 
 
 def orig_spine(path):
@@ -147,6 +152,8 @@ def main():
         tgt_diff = sum(1 for a, b in zip(o['flat'], w['flat']) if a[2] != b[2])
         name = src.rsplit('/', 1)[-1][:28]
         print(f"| {n} | {name} | {os_} | {o['spine']} | {w['spine']} | {len(o['flat'])} | {len(w['flat'])} | {'是' if same_lv else '否'} | {tgt_diff} | {w['nav']} | {len(w['bad'])} |")
+        if w['cover']:
+            print('     注：补了封面页（原书没有封面页，不算拆文件）')
         if w['spine'] > os_ or len(w['bad']) or not same_lv:
             problems += 1
         elif w['spine'] < os_:
