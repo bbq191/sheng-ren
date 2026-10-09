@@ -13,6 +13,16 @@ pub(crate) fn norm(s: &str) -> String {
     s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
 }
 
+/// 搜索结果的一条（书名 `title`、作者 `author`，作者可能是 `甲 / 乙`、`甲、乙` 这样几个人）和书里的书名（`nt`，已 [`norm_s`]）、
+/// 作者（`want`，已 [`norm_author`]）对不对得上：书名相同，或一个是另一个的前缀、长度只差两个字以内；作者有一个像（相似度 ≥ 0.6）。
+/// 书里没写作者时书名要完全相同。豆瓣、QQ 阅读共用一套口径（免得两边调参数时不一致）。
+pub(crate) fn hit_matches(title: &str, author: &str, nt: &str, want: &[String]) -> bool {
+    let dt = norm_s(title);
+    let title_ok = dt == nt || ((nt.starts_with(&dt) || dt.starts_with(nt)) && nt.chars().count().abs_diff(dt.chars().count()) <= 2);
+    let author_ok = if want.is_empty() { dt == nt } else { author.split(['/', '、', ',', '，']).any(|a| want.iter().any(|w| similarity(w, &norm_author(a)) >= 0.6)) };
+    title_ok && author_ok
+}
+
 /// 字重合度：两边共有的字数 / 较长一边的字数（译名用字不同时判断"是不是同一个名字"）。
 pub(crate) fn similarity(a: &str, b: &str) -> f32 {
     let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());

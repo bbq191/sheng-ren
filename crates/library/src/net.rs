@@ -155,8 +155,9 @@ fn host_of(url: &str) -> &str {
     rest.split(['/', '?', '#']).next().unwrap_or(rest)
 }
 
+/// 查询参数编码（百分号编码 UTF-8 字节，只留非保留字符）。联网取元数据、调 Move 书架服务共用。
 pub(crate) fn enc(s: &str) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
             out.push(b as char);

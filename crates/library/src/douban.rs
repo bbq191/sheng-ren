@@ -3,7 +3,7 @@
 //! 豆瓣没有公开 API：找条目用网页的搜索建议接口，元数据从条目页的 HTML 里取（`#info` 信息栏、`#link-report` 内容简介、
 //! 页面里的标签串）。请求要少（全程节流）；图片服务器要带来源页。页面改版了取不到就当没找到，交给下一个源。
 
-use crate::matching::{norm_author, norm_s, similarity};
+use crate::matching::{norm_author, norm_s};
 use crate::net::{enc, Net};
 use bookconv::html::plain_text;
 
@@ -62,14 +62,7 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want_authors: &[String]) -> Ve
         if id.is_empty() || x["type"].as_str().is_some_and(|ty| ty != "b") {
             continue;
         }
-        let dt = norm_s(&title);
-        let title_ok = dt == nt || ((nt.starts_with(&dt) || dt.starts_with(nt)) && nt.chars().count().abs_diff(dt.chars().count()) <= 2);
-        let author_ok = if want_authors.is_empty() {
-            dt == nt
-        } else {
-            author.split(['/', '、', ',', '，']).any(|a| want_authors.iter().any(|w| similarity(w, &norm_author(a)) >= 0.6))
-        };
-        if title_ok && author_ok {
+        if crate::matching::hit_matches(&title, &author, nt, want_authors) {
             let pic = pic.replace("/view/subject/s/", "/view/subject/l/").replace("/view/subject/m/", "/view/subject/l/");
             hits.push(Hit { id, title, author, year: g("year"), pic });
         }

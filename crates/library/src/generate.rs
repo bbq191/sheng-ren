@@ -74,8 +74,9 @@ pub struct Transfer {
 
 /// 传输线程要做的。
 pub(crate) enum Work {
-    /// 放到 `out`（MTP 设备、电脑上）；`compare` 时 `out` 已是逐字节相同的就不动（要把它读回来比）。
-    File { out: PathBuf, compare: bool },
+    /// 放到 `out`（MTP 设备、电脑上）；`compare` 时 `out` 已是逐字节相同的就不动（要把它读回来比）；`direct` 时不经临时文件
+    /// （MTP 设备上，见 [`deliver::put_file`]）。
+    File { out: PathBuf, compare: bool, direct: bool },
     /// 交给 Move 上的书架服务：`replace` 有就原地替换这个 uuid（设备上已经没了就改成新加），否则新加进 `folder`。
     Move { client: deliver::MoveClient, name: String, folder: String, replace: Option<String> },
 }
@@ -102,7 +103,7 @@ impl Transfer {
     /// 放上设备，做完才返回（单本生成用；`sync` 里 Move 的那件由传输线程交了以后轮流查，见 [`crate::Pipeline`]）。
     pub fn run(&self) -> Result<Done, String> {
         match &self.work {
-            Work::File { out, compare } => deliver::put_file(&self.src, out, false, *compare).map(Done::File),
+            Work::File { out, compare, direct } => deliver::put_file(&self.src, out, false, *compare, *direct).map(Done::File),
             Work::Move { client, .. } => {
                 let s = self.submit()?;
                 client.wait(s).map(Done::Move)
@@ -417,6 +418,7 @@ impl Library {
         let Some((d, rel)) = self.tracked_rel(meta) else {
             return Ok((lib_root.clone(), lib_root));
         };
+        let on_device = device_root.is_some();
         let root = match device_root {
             Some(r) => r,
             None => {
@@ -429,7 +431,9 @@ impl Library {
                 root
             }
         };
-        let dir = root.join(rel);
+        // MTP 设备（Kindle 是 FAT 系、掌阅是安卓存储）上目录名不能有 `:?*"<>|`、不能以空格或点结尾：这样的一段换成安全的名字，
+        // 不然每次 sync 都在建目录时失败（2026-10-09 审计）。别的目录名原样，已经在设备上的位置不变
+        let dir = if on_device { root.join(device_safe_rel(&rel)) } else { root.join(rel) };
         Ok((root, dir))
     }
 
@@ -443,6 +447,26 @@ impl Library {
             state.books.remove(id);
             let t = self.target_of(&dev_id);
             state.delete_into_orphans(entry.placements(), t.as_deref().and_then(|r| r.as_ref().ok()), &self.device_env.mtp_base);
+            self.states.put(&sp, state)?;
+        }
+        Ok(())
+    }
+
+    /// 原件换了内容（旧条目 `from` 要删、新条目是 `to`）：各模式下旧条目的产物记录交给新条目（指纹留空＝要重新生成），
+    /// 新版本生成出来照原地覆盖（MTP 同一个文件名）或原地替换（Move 同一个 uuid、同一个文件夹）放上去——以前是先把旧产物删掉
+    /// （Move 上进回收站）、再当新书传，掌阅丢进度、Move 多一本回收站里的、新版本生成失败时设备上这本书就没了（2026-10-09 用户定）。
+    /// 新条目在这个模式下已经有自己的产物（同一内容早就在库里）的不交，旧的照常删（[`Library::remove_outputs`]）。
+    pub(crate) fn hand_over_outputs(&self, from: &str, to: &str) -> Result<(), String> {
+        for (_, sp) in self.state_files() {
+            let state = self.states.get(&sp);
+            if state.books.contains_key(to) || !state.books.contains_key(from) {
+                continue;
+            }
+            let mut state = (*state).clone();
+            if let Some(mut entry) = state.books.remove(from) {
+                entry.fingerprint.clear();
+                state.books.insert(to.to_string(), entry);
+            }
             self.states.put(&sp, state)?;
         }
         Ok(())
@@ -580,6 +604,9 @@ impl Library {
         // 来源：内容没变、只是位置变了的已有产物（挪过去，不重新生成），或者新生成的
         let made = self.made(meta, device, format, done)?;
         let tmp = made.tmp.clone();
+        // MTP 设备上直接写正式文件名（不经临时文件）：写到一半被打断，正式文件名上会留下半截，所以要先登记一条指纹留空的记录，
+        // 下次认得出这个位置没传完、重新传（见 `Work::File`）
+        let direct = matches!(target, Target::Dir { .. });
         let r = (|| {
             // 目录里已有一个不认识的同名文件、和这份逐字节相同（以前手工拷上去的）：认领它，不另起名字
             let out = dir.join(self.states.get(&sp).file_name_for(meta, &dir, format.ext(), Some(&made.src), copied.as_deref(), &taken)?);
@@ -593,6 +620,9 @@ impl Library {
                         entry.fingerprint = p.fingerprint.clone(); // 同一位置重建：记录不用预先改
                         entry.sha = p.sha.clone();
                         same = p.sha == made.sha && std::fs::metadata(&made.src).ok().map(|m| m.len()) == std::fs::metadata(&out).ok().map(|m| m.len());
+                        if direct && !same {
+                            entry.fingerprint.clear(); // 指纹没变（强制重建）时，写到一半被打断的半截会被当成传好了
+                        }
                     }
                     // 换位置：先把记录改成新位置（指纹留空＝没完成），旧位置记进待删——中途被打断的话，下次还认得新位置上的
                     // 文件是这本书的，旧位置也还会删
@@ -600,16 +630,20 @@ impl Library {
                         self.put_entry(&sp, &meta.id, entry.clone())?;
                     }
                 }
-                // 新书不预登记（省一次整份记录的写）：传的过程中这个文件名先在内存里占住，同一轮里同名的别的书不会选它；
-                // 中途被打断的话，下次重新生成出逐字节相同的产物时认领它（`file_name_for` 的 `same_as`）
+                // 新书：传的过程中这个文件名先在内存里占住，同一轮里同名的别的书不会选它。电脑上不预登记（省一次整份记录的写），
+                // 中途被打断的话，下次重新生成出逐字节相同的产物时认领它（`file_name_for` 的 `same_as`）；MTP 设备上直接写正式
+                // 文件名，半截文件认领不了，要预登记
                 None => {
                     self.reserved.borrow_mut().insert(out.clone(), meta.id.clone());
+                    if direct {
+                        self.put_entry(&sp, &meta.id, entry.clone())?;
+                    }
                 }
             }
             // 记录里没有哈希（不是我们传的、或旧记录）时才把设备上的读回来比
             let compare = entry.sha.is_empty();
             entry.fingerprint = fingerprint.clone();
-            let t = self.transfer(meta, device, sp.clone(), made, done.map(|p| p.path.clone()), entry, Work::File { out, compare });
+            let t = self.transfer(meta, device, sp.clone(), made, done.map(|p| p.path.clone()), entry, Work::File { out, compare, direct });
             if same {
                 // 和设备上的一样：不用传
                 return self.complete(t, Ok(Done::File(false))).map(Step::Done);
@@ -622,6 +656,15 @@ impl Library {
             }
         }
         r
+    }
+
+    /// 生成记录 `sp` 里记着的全部 Move 上的书（各本的 uuid 和待删的旧 uuid），一次查它们在不在用（[`deliver::Xochitl::present_cached`]）。
+    fn move_uuids(&self, sp: &Path) -> Vec<String> {
+        let state = self.states.get(sp);
+        let mut v: Vec<String> = state.books.values().flat_map(StateEntry::placements).map(|p| p.uuid).filter(|u| !u.is_empty()).collect();
+        v.sort();
+        v.dedup();
+        v
     }
 
     /// 交给传输线程的一件。
@@ -659,7 +702,7 @@ impl Library {
         // 同一位置、设备上还在的上一份
         let same_loc = prev.as_ref().filter(|p| !p.uuid.is_empty() && p.path == loc);
         let alive = match same_loc {
-            Some(p) => x.present(&p.uuid)?,
+            Some(p) => x.present_cached(&p.uuid, || self.move_uuids(&sp))?,
             None => false,
         };
         let live = same_loc.filter(|_| alive);
@@ -997,6 +1040,17 @@ impl State {
     }
 }
 
+/// 相对目录逐段换成设备上能建的名字（见 [`Library::output_dir`]）：只换有不能用的字符、或以空格或点结尾的那段。
+fn device_safe_rel(rel: &Path) -> PathBuf {
+    rel.components()
+        .map(|c| {
+            let s = c.as_os_str().to_string_lossy();
+            let bad = s.chars().any(|ch| ch.is_control() || "\\:*?\"<>|".contains(ch)) || s.ends_with([' ', '.']);
+            if bad { bookconv::util::sanitize_filename(s.trim_end_matches([' ', '.']), "_") } else { s.into_owned() }
+        })
+        .collect()
+}
+
 /// 删掉一个产物文件：删掉了或本来就不在返回 `true`。删的时候报"不在"不立即当真：jmtpfs 刚挪完文件偶尔 stat 不到，
 /// 重新列一次目录，里面还有这个名字就再删一次（删不掉的算没删，下次再删）。
 fn remove_product(path: &Path) -> bool {
@@ -1041,6 +1095,14 @@ mod remove_tests {
         assert!(!f.exists());
         assert!(super::remove_product(&f), "本来就不在：算删掉了");
         assert!(super::remove_product(&d.path().join("没有的目录/书.epub")), "目录都不在：算删掉了");
+    }
+
+    #[test]
+    fn device_dir_names_made_safe_only_where_needed() {
+        use std::path::{Path, PathBuf};
+        assert_eq!(super::device_safe_rel(Path::new("侦探悬疑/亚洲侦探")), PathBuf::from("侦探悬疑/亚洲侦探"), "能用的原样");
+        assert_eq!(super::device_safe_rel(Path::new("科幻: 合集/上册.")), PathBuf::from("科幻_ 合集/上册"));
+        assert_eq!(super::device_safe_rel(Path::new("")), PathBuf::from(""));
     }
 }
 

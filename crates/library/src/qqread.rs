@@ -6,7 +6,7 @@
 //! 搜索是按关键词模糊匹配：「书名 作者」常常反而搜不到（「疯探 空城」只回别的书），所以先搜书名、搜不到再带上作者。
 //! 条目的详情页是 `https://novel.qq.com/detail/<id>`。
 
-use crate::matching::{norm_author, norm_s, similarity};
+use crate::matching::{hit_matches, norm_author, norm_s};
 use crate::net::{enc, Net};
 
 /// 搜索结果里书名、作者对得上的一本。
@@ -65,10 +65,7 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want: &[String]) -> Vec<Hit> {
         let s = |k: &str| b[k].as_str().unwrap_or("").trim().to_string();
         let (title, author) = (s("title"), s("author"));
         let Some(id) = b["id"].as_u64() else { continue };
-        let dt = norm_s(&title);
-        let title_ok = dt == nt || ((nt.starts_with(&dt) || dt.starts_with(nt)) && nt.chars().count().abs_diff(dt.chars().count()) <= 2);
-        let author_ok = if want.is_empty() { dt == nt } else { author.split(['/', '、', ',', '，']).any(|a| want.iter().any(|w| similarity(w, &norm_author(a)) >= 0.6)) };
-        if !(title_ok && author_ok) {
+        if !hit_matches(&title, &author, nt, want) {
             continue;
         }
         let mut categories: Vec<String> = Vec::new();

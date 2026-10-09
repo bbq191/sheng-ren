@@ -261,6 +261,7 @@ pub fn rule_versions() -> Vec<(&'static str, String)> {
     vec![
         ("优化", bookconv::optimize::OPTIMIZE_VERSION.to_string()),
         ("漫画优化", bookconv::optimize::COMIC_VERSION.to_string()),
+        ("掌阅/Move 统一规则", bookconv::wash::KINDLE_RULES_VERSION.to_string()),
         ("CBZ 转换", bookconv::convert::CONVERT_VERSION.to_string()),
         ("补元数据", bookconv::opfmeta::VERSION.to_string()),
         ("KFX 写出器", kfx::write::WRITER_VERSION.to_string()),
@@ -328,7 +329,9 @@ impl Library {
         self.targets.borrow_mut().retain(|id, t| match &**t {
             Ok(deliver::Target::Xochitl(x)) => {
                 let alive = x.alive();
-                if !alive {
+                if alive {
+                    x.forget_presence();
+                } else {
                     dropped.push(id.clone());
                 }
                 alive
@@ -507,7 +510,7 @@ impl Library {
         let mut sources = self.load_sources();
         let mut retired = Vec::new();
         for o in &olds {
-            match self.retire_old_version(&o.id, &path, &sources.files) {
+            match self.retire_old_version(&o.id, &m.id, &path, &sources.files) {
                 Ok(true) => retired.push(o),
                 Ok(false) => {}
                 Err(e) => return Err(format!("新版本已入库（{} {}），旧版本 {} 删不掉：{e}", m.id, m.title, o.id)),
