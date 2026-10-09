@@ -50,9 +50,9 @@
   <text x="810" y="40" text-anchor="middle" class="h">Move 自带阅读器（xochitl）</text>
   <text x="810" y="60" text-anchor="middle" class="s">sync 经书架服务按 uuid 原地替换</text>
   <path class="l" d="M810 70 L810 166" marker-end="url(#a)"/>
-  <rect class="na" x="720" y="168" width="180" height="62" rx="8"/>
-  <text x="810" y="194" text-anchor="middle" class="h" fill="#666">没测</text>
-  <text x="810" y="216" text-anchor="middle" class="s">原地替换有反例</text>
+  <rect class="no" x="720" y="168" width="180" height="62" rx="8"/>
+  <text x="810" y="194" text-anchor="middle" class="h">进度回到开头</text>
+  <text x="810" y="216" text-anchor="middle" class="s">新内容显示正常（《绍宋》）</text>
 
   <!-- 我们怎么配合 -->
   <rect class="q" x="20" y="256" width="940" height="128" rx="10"/>
