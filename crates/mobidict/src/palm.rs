@@ -297,7 +297,7 @@ pub fn indx_read<'a>(records: &[&'a [u8]], mobi: &[u8], field_off: usize) -> Opt
     let tagx_len = be_u32(hdr, tagx_at + 4)? as usize;
     let ctrl_count = (be_u32(hdr, tagx_at + 8)? as usize).max(1);
     let tagx_end = (tagx_at + tagx_len).min(hdr.len());
-    let tagtable: Vec<(u8, u8, u8, u8)> = hdr[(tagx_at + 12).min(tagx_end)..tagx_end].chunks_exact(4).map(|t| (t[0], t[1], t[2], t[3])).collect();
+    let tagtable: Vec<(u8, u8, u8, u8)> = hdr[(tagx_at + 12).min(tagx_end)..tagx_end].as_chunks::<4>().0.iter().map(|t| (t[0], t[1], t[2], t[3])).collect();
     let mut out = Vec::new();
     for blk in 0..ndata {
         for entry in indx_entries(records[idx + 1 + blk]) {
