@@ -24,14 +24,20 @@ pub(super) fn inline_remote_images<F>(
     fetch: F,
 ) -> (String, Vec<(String, Vec<u8>)>)
 where
-    F: Fn(&str) -> Option<(Vec<u8>, &'static str)>,
+    F: Fn(&str) -> Option<(Vec<u8>, &'static str)> + Sync,
 {
     let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     let tags: Vec<html::Tag> = html::tags(html_text).collect();
+    // 先把这一章的远程图（去重）同时抓回来（每张超时 15 秒，以前一张一张抓，图多的书要几分钟；2026-10-09 审计），
+    // 再按出现顺序起名、改写——结果和逐张抓一样
+    let mut srcs: Vec<String> = tags.iter().filter(|t| t.is_start() && t.is("img")).filter_map(|t| remote_src(&html_text[t.start..t.end]).map(|(_, s)| s)).collect();
+    srcs.sort();
+    srcs.dedup();
+    let fetched: HashMap<&str, Option<(Vec<u8>, &'static str)>> = fetch_all(&srcs, &fetch);
     for (k, t) in tags.iter().enumerate().filter(|(_, t)| t.is_start() && t.is("img")) {
         let Some((a, src)) = remote_src(&html_text[t.start..t.end]) else { continue };
-        let Some((bytes, ext)) = fetch(&src) else {
+        let Some((bytes, ext)) = fetched.get(src.as_str()).cloned().flatten() else {
             if !drop_failed {
                 continue;
             }
@@ -58,6 +64,32 @@ where
         return (html_text.to_string(), resources);
     }
     (html::apply_edits(html_text, edits), resources)
+}
+
+/// 同时抓远程图的路数（对同一个站点不宜太多）。
+const FETCH_LANES: usize = 4;
+
+/// 把 `srcs` 各抓一次（最多 [`FETCH_LANES`] 路同时抓）：地址 → 结果。
+fn fetch_all<'s, F>(srcs: &'s [String], fetch: &F) -> HashMap<&'s str, Option<(Vec<u8>, &'static str)>>
+where
+    F: Fn(&str) -> Option<(Vec<u8>, &'static str)> + Sync,
+{
+    if srcs.len() <= 1 {
+        return srcs.iter().map(|s| (s.as_str(), fetch(s))).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let out = std::sync::Mutex::new(HashMap::new());
+    std::thread::scope(|scope| {
+        for _ in 0..FETCH_LANES.min(srcs.len()) {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(s) = srcs.get(i) else { break };
+                let r = fetch(s);
+                out.lock().unwrap_or_else(|e| e.into_inner()).insert(s.as_str(), r);
+            });
+        }
+    });
+    out.into_inner().unwrap_or_else(|e| e.into_inner())
 }
 
 /// 章节里有没有远程图（与 [`inline_remote_images`] 同一判据的快速预扫，只决定要不要推迟写 OPF）。

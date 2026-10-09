@@ -59,22 +59,23 @@ pub(super) fn drop_dead_imgs(html: &str, base_file: &str, exact: &HashSet<String
 ///
 /// 外部（http/data）来源视为活。返回 (新 css, 改动的规则数)。
 pub(super) fn drop_dead_font_faces(css: &str, base_file: &str, exact: &HashSet<String>, lower: &HashSet<String>) -> (String, usize) {
-    static URL: OnceLock<Regex> = OnceLock::new();
+    static FORMAT: OnceLock<Regex> = OnceLock::new();
     let face = font_face_re();
-    let url = URL.get_or_init(|| Regex::new(r#"(?is)url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)(?:\s*format\([^)]*\))?"#).unwrap());
+    let format = FORMAT.get_or_init(|| Regex::new(r#"^\s*(?i:format)\([^)]*\)"#).unwrap());
     let mut n = 0;
     let out = face.replace_all(css, |c: &regex::Captures| {
         let block = &c[0];
         let has_local = block.to_ascii_lowercase().contains("local(");
         let mut dead: Vec<(usize, usize)> = Vec::new();
         let mut total = 0;
-        for u in url.captures_iter(block) {
+        for u in html::css_urls(block) {
             total += 1;
-            let r = u.get(1).or_else(|| u.get(2)).or_else(|| u.get(3)).map(|m| m.as_str()).unwrap_or("");
+            let r = u.value;
             let device_path = r.trim().to_ascii_lowercase().starts_with("res:");
             if device_path || !(is_non_file_ref(r) || ref_exists(exact, lower, base_file, r, false)) {
-                let m = u.get(0).unwrap();
-                dead.push((m.start(), m.end()));
+                // 连同后面的 `format(…)` 一起删
+                let end = u.end + format.find(&block[u.end..]).map_or(0, |m| m.end());
+                dead.push((u.start, end));
             }
         }
         if dead.is_empty() {

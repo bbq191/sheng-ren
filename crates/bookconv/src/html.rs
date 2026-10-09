@@ -684,6 +684,37 @@ pub fn plain_text(html: &str) -> String {
     unescape_entities(&raw).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+// ───────────────────────── CSS url() ─────────────────────────
+
+/// CSS 里的一个 `url(…)`（样式表、`<style>`、`style` 属性共用；2026-10-09 审计从三份收拢）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CssUrl<'a> {
+    /// `url(` 到 `)` 的字节范围。
+    pub start: usize,
+    pub end: usize,
+    /// 括号里的值（去掉引号和两边空白，原文：字符引用、百分号编码都没还原）。
+    pub value: &'a str,
+    /// 值用的引号（`"`、`'`），没加引号是 `None`。
+    pub quote: Option<char>,
+}
+
+/// 全文的 `url(…)`，按出现顺序。`url` 不分大小写；没加引号的值里不能有空白、引号和 `)`。
+pub fn css_urls(text: &str) -> Vec<CssUrl<'_>> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r#"(?i)url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s'"]*))\s*\)"#).unwrap());
+    re.captures_iter(text)
+        .map(|c| {
+            let m = c.get(0).unwrap();
+            let (v, quote) = match (c.get(1), c.get(2), c.get(3)) {
+                (Some(v), _, _) => (v, Some('"')),
+                (_, Some(v), _) => (v, Some('\'')),
+                (_, _, v) => (v.unwrap(), None),
+            };
+            CssUrl { start: m.start(), end: m.end(), value: v.as_str(), quote }
+        })
+        .collect()
+}
+
 // ───────────────────────── CSS 声明 ─────────────────────────
 
 /// 一条 CSS 声明（`style=""` 属性或规则体里的一段）。
@@ -778,6 +809,13 @@ pub fn style_block_re() -> &'static Regex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn css_urls_quotes_and_case() {
+        let u = css_urls(r#"a{background:URL( "x y.png" )} b{src:url('f.ttf') format("truetype"),url(g.otf)}"#);
+        assert_eq!(u.iter().map(|u| (u.value, u.quote)).collect::<Vec<_>>(), [("x y.png", Some('"')), ("f.ttf", Some('\'')), ("g.otf", None)]);
+        assert_eq!(&r#"a{background:URL( "x y.png" )}"#[u[0].start..u[0].end], r#"URL( "x y.png" )"#);
+    }
 
     #[test]
     fn edit_style_attrs_decodes_char_refs() {

@@ -226,6 +226,9 @@ pub(crate) enum JobState {
     Failed(String),
 }
 
+/// 连 Move 之前探 SSH 端口最多等多久（USB 网卡、局域网里几毫秒就通）。
+const SSH_PROBE: Duration = Duration::from_millis(800);
+
 /// 查导入任务的间隔。
 const POLL: Duration = Duration::from_secs(2);
 /// 要替换的那本书架服务那边正在替换时最多等多久（大漫画排版要几分钟）；旧版书架服务查不到替换做完没有，隔多久重交。
@@ -486,6 +489,13 @@ impl Xochitl {
     }
 
     fn tunnel(host: &str, port: u16) -> Result<Xochitl, String> {
+        // 地址是 IP 的先探一下 22 端口：Move 没接、睡了时不用等 ssh 超时（每个地址最长 8 秒，`sync --watch` 每轮都要等两个地址；
+        // 2026-10-09 审计）。写的是 ssh 配置里的别名（端口、跳板机可能另配）就不探，交给 ssh
+        if let Some(ip) = host.rsplit('@').next().and_then(|h| h.parse::<std::net::IpAddr>().ok()) {
+            if std::net::TcpStream::connect_timeout(&(ip, 22).into(), SSH_PROBE).is_err() {
+                return Err("SSH 端口连不上（设备没接上或睡着了）".into());
+            }
+        }
         // 本地随便挑一个空闲端口（绑 0 再放开；和 ssh 绑上之间被别人占走的话，ssh 因 ExitOnForwardFailure 退出，报连不上）
         let local = std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map_err(|e| e.to_string())?.port();
         let child = Command::new("ssh")

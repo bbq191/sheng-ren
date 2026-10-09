@@ -30,32 +30,24 @@ fn safe_file_name(file: &str, dir: &str, taken: &HashSet<String>) -> String {
 /// 样式表里一律写成 `url("…")`；`in_html` 时照原来的引号写（原来没引号就不加：新路径百分号编码过，不带空格、括号、引号）——
 /// 2026-10-06 审计：此前 html 里也写成双引号，`style="background:url('…')"` 改成 `style="background:url("…")"`，属性被截断、XML 不合法。
 fn rewrite_css_urls(text: &str, base_dir: &str, map: &HashMap<String, String>, in_html: bool) -> Option<String> {
-    static URL: OnceLock<Regex> = OnceLock::new();
-    let url = URL.get_or_init(|| Regex::new(r#"(?i)url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s'"]*))\s*\)"#).unwrap());
-    let mut changed = false;
-    let out = url.replace_all(text, |c: &regex::Captures| {
-        let raw = c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)).map_or("", |m| m.as_str());
-        if dead_refs::is_non_file_ref(raw) {
-            return c[0].to_string();
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for u in html::css_urls(text) {
+        if dead_refs::is_non_file_ref(u.value) {
+            continue;
         }
-        let p = raw.split(['#', '?']).next().unwrap_or("");
+        let p = u.value.split(['#', '?']).next().unwrap_or("");
         let target = resolve(base_dir, &percent_decode(&crate::util::xml_unescape(p)));
-        match map.get(&target) {
-            Some(new) => {
-                changed = true;
-                let q = if !in_html || c.get(1).is_some() {
-                    "\""
-                } else if c.get(2).is_some() {
-                    "'"
-                } else {
-                    ""
-                };
-                format!("url({q}{}{q})", crate::epubzip::href_to(base_dir, new, ""))
-            }
-            None => c[0].to_string(),
+        if let Some(new) = map.get(&target) {
+            let q = match u.quote {
+                _ if !in_html => "\"",
+                Some('"') => "\"",
+                Some(_) => "'",
+                None => "",
+            };
+            edits.push((u.start, u.end, format!("url({q}{}{q})", crate::epubzip::href_to(base_dir, new, ""))));
         }
-    });
-    changed.then(|| out.into_owned())
+    }
+    (!edits.is_empty()).then(|| html::apply_edits(text, edits))
 }
 
 /// 改名，并改写所有引用：OPF 清单的 `href`、全书 `href`/`src`/`xlink:href`（[`rewrite_book_links`]）、CSS 的 `url()`。
