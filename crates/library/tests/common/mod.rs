@@ -58,6 +58,12 @@ pub struct MoveDoc {
 pub struct FakeMove {
     pub url: String,
     pub docs: Arc<Mutex<BTreeMap<String, MoveDoc>>>,
+    /// 查询计数：(一本一本查 `GET /import/<uuid>` 的次数, 一次查一批 `POST /import/states` 的次数)。
+    pub queries: Arc<Mutex<(usize, usize)>>,
+    /// 设成 `true` 就像旧版书架服务：没有 `POST /import/states`（回 404）。
+    pub old_server: Arc<std::sync::atomic::AtomicBool>,
+    /// 大于 0 时假装书都"正在替换"：原地替换回 409，`GET /import/<uuid>` 的 `replacing` 为真；每查一次减一。
+    pub busy: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl FakeMove {
@@ -65,13 +71,16 @@ impl FakeMove {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}", l.local_addr().unwrap());
         let docs: Arc<Mutex<BTreeMap<String, MoveDoc>>> = Arc::default();
-        let d = docs.clone();
+        let queries: Arc<Mutex<(usize, usize)>> = Arc::default();
+        let old_server: Arc<std::sync::atomic::AtomicBool> = Arc::default();
+        let busy: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
+        let (d, q, o, b) = (docs.clone(), queries.clone(), old_server.clone(), busy.clone());
         std::thread::spawn(move || {
             for s in l.incoming().flatten() {
-                let _ = serve(s, &d);
+                let _ = serve(s, &d, &q, &o, &b);
             }
         });
-        FakeMove { url, docs }
+        FakeMove { url, docs, queries, old_server, busy }
     }
 
     /// 没删的书：(文件夹, 显示名)。
@@ -80,7 +89,8 @@ impl FakeMove {
     }
 }
 
-fn serve(s: std::net::TcpStream, docs: &Mutex<BTreeMap<String, MoveDoc>>) -> std::io::Result<()> {
+fn serve(s: std::net::TcpStream, docs: &Mutex<BTreeMap<String, MoveDoc>>, queries: &Mutex<(usize, usize)>, old_server: &std::sync::atomic::AtomicBool, busy: &std::sync::atomic::AtomicUsize) -> std::io::Result<()> {
+    use std::sync::atomic::Ordering::Relaxed;
     let mut r = BufReader::new(s.try_clone()?);
     let mut line = String::new();
     r.read_line(&mut line)?;
@@ -108,6 +118,7 @@ fn serve(s: std::net::TcpStream, docs: &Mutex<BTreeMap<String, MoveDoc>>) -> std
     let (code, out) = match (method.as_str(), path) {
         ("GET", "/status") => reply(200, serde_json::json!({})),
         // 和真的书架服务一样：收下书体立即回任务号（202），结果查 /import/jobs/<号>（这里当场就做完）
+        ("POST", "/import") if q.contains_key("uuid") && busy.load(Relaxed) > 0 => reply(409, serde_json::json!({"message": "这份文档正在替换中，请稍候"})),
         ("POST", "/import") => match q.get("uuid") {
             Some(u) => match docs.get_mut(u).filter(|d| !d.deleted) {
                 Some(d) => {
@@ -136,10 +147,31 @@ fn serve(s: std::net::TcpStream, docs: &Mutex<BTreeMap<String, MoveDoc>>) -> std
             Some(v) => reply(200, v.clone()),
             None => reply(404, serde_json::json!({})),
         },
-        ("GET", p) if p.starts_with("/import/") => match docs.get(&p["/import/".len()..]) {
-            Some(d) => reply(200, serde_json::json!({"deleted": d.deleted, "name": d.name})),
-            None => reply(404, serde_json::json!({})),
-        },
+        ("POST", "/import/states") if !old_server.load(std::sync::atomic::Ordering::Relaxed) => {
+            queries.lock().unwrap().1 += 1;
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let found: serde_json::Map<String, serde_json::Value> = v["uuids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|u| u.as_str())
+                .filter_map(|u| docs.get(u).map(|d| (u.to_string(), serde_json::json!({"name": d.name, "folder": d.folder, "deleted": d.deleted}))))
+                .collect();
+            reply(200, serde_json::json!({"docs": found}))
+        }
+        ("GET", p) if p.starts_with("/import/") => {
+            queries.lock().unwrap().0 += 1;
+            match docs.get(&p["/import/".len()..]) {
+                Some(d) => {
+                    let replacing = busy.load(Relaxed) > 0;
+                    if replacing {
+                        busy.fetch_sub(1, Relaxed);
+                    }
+                    reply(200, serde_json::json!({"deleted": d.deleted, "name": d.name, "replacing": replacing}))
+                }
+                None => reply(404, serde_json::json!({})),
+            }
+        }
         ("POST", "/trash/add") => {
             let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
             match docs.get_mut(v["uuid"].as_str().unwrap_or("")).filter(|d| Some(d.name.as_str()) == v["name"].as_str()) {

@@ -58,8 +58,9 @@ fn add_build_skip_remove() {
     let st = std::fs::read_to_string(&state_path).unwrap().replace(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION), "|0|");
     std::fs::write(&state_path, st).unwrap();
     assert_eq!(lib.outputs(&meta).into_iter().find(|o| o.device == "xochitl").unwrap().fresh, Some(false));
-    // Move 上的那本被用户删了：重新加入一本
+    // Move 上的那本被用户删了：下一轮（新的一次 sync，或 --watch 的下一轮）重新加入一本
     mv.docs.lock().unwrap().values_mut().for_each(|d| d.deleted = true);
+    lib.refresh_devices();
     assert!(matches!(lib.build(&meta, profile::get("xochitl").unwrap(), false).unwrap(), Built::Written { .. }));
     assert_eq!(mv.live(), [(String::new(), "风起".to_string())]);
     // 书库只存索引，不复制原件
@@ -658,13 +659,14 @@ fn changed_added_original_is_caught_by_build_and_re_add_replaces_it() {
     std::fs::write(&src, sample_epub("第二版")).unwrap();
     let e = lib.build(&m, dev, false).unwrap_err();
     assert!(e.contains("改过"), "{e}");
-    // 再 add：换成新版本（和 sync 一样），旧条目连同产物删掉，不留重复条目
+    // 再 add：换成新版本（和 sync 一样），旧条目删掉，不留重复条目；设备上的产物交给新版本，不先删（2026-10-09）
     let Added::Replaced(m2, old) = lib.add_file(&src).unwrap() else { panic!("应换成新版本") };
     assert_eq!((m2.title.as_str(), old.as_str()), ("第二版", "第一版"));
     assert_eq!(lib.list().into_iter().map(|m| m.id).collect::<Vec<_>>(), std::slice::from_ref(&m2.id));
-    assert!(!path.exists(), "旧版本的产物删掉");
+    assert!(path.exists(), "旧产物先留着，等新版本放上去");
     let Built::Written { path: p2, .. } = lib.build(&m2, dev, false).unwrap() else { panic!() };
     assert!(p2.ends_with("第二版.epub"));
+    assert!(!path.exists(), "书名变了：新版本放好以后旧文件删掉");
     assert!(matches!(lib.add_file(&src).unwrap(), Added::Existing(_)));
 
     // 跟踪目录里的文件被 add 换了新版本：sources.json 也记成新版本，下次 sync 不再报"更新"
@@ -1262,6 +1264,20 @@ fn pipeline_transfers_in_background_and_records_when_done() {
     assert!(std::fs::read_dir(&lib_dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".tmp-")), "临时目录传完就删");
     let second = run();
     assert!(second.iter().all(|b| matches!(b, Built::UpToDate(_))), "{second:?}");
+    // Move 上的书在不在：一轮只查一次（一批），不一本一本查
+    assert_eq!(*mv.queries.lock().unwrap(), (0, 1));
+    // 设备上的书架服务太旧、没有批量接口：退回一本一本查，结果一样
+    mv.old_server.store(true, std::sync::atomic::Ordering::Relaxed);
+    let lib = common::open_with(&lib_dir, Some(&mv));
+    let mut pipe = library::Pipeline::default();
+    for m in lib.list() {
+        match lib.prepare(&m, devices[1], false).unwrap() {
+            library::Step::Done(b) => assert!(matches!(b, Built::UpToDate(_)), "{b:?}"),
+            library::Step::Transfer(t) => pipe.submit(*t),
+        }
+    }
+    assert_eq!(pipe.in_flight(), 0);
+    assert_eq!(*mv.queries.lock().unwrap(), (3, 1));
 }
 
 /// 中间文件（CBZ 转出的 EPUB）按书留着：接着做别的书时不丢，这本书做完（release_prepared_of）才删。
@@ -1322,7 +1338,9 @@ fn same_titled_new_books_in_flight_do_not_collide() {
             library::Step::Done(b) => panic!("新书应要传：{b:?}"),
         })
         .collect();
-    assert!(!lib_dir.join("output-state/ireader.json").exists(), "新书不预登记");
+    // MTP 设备上直接写正式文件名：新书先登记（指纹留空），写到一半被打断时下次认得出是没传完的
+    let state = std::fs::read_to_string(lib_dir.join("output-state/ireader.json")).unwrap();
+    assert!(ms.iter().all(|m| state.contains(&m.id)), "新书预登记：{state}");
     let mut paths: Vec<std::path::PathBuf> = ts
         .into_iter()
         .map(|t| {
@@ -1343,4 +1361,67 @@ fn same_titled_new_books_in_flight_do_not_collide() {
     for m in &ms {
         assert!(matches!(lib.build(m, ireader, false).unwrap(), Built::UpToDate(_)));
     }
+    // 新书传到一半被打断（正式文件名上留下半截）：下次认得出没传完，重新传
+    let p = dir.path().join("三.epub");
+    std::fs::write(&p, sample_epub_with("中断", "丙")).unwrap();
+    let Added::New(m) = lib.add_file(&p).unwrap() else { panic!() };
+    let library::Step::Transfer(t) = lib.prepare(&m, ireader, false).unwrap() else { panic!("新书应要传") };
+    drop(t);
+    let out = docs.join("中断.epub");
+    std::fs::write(&out, b"PK half").unwrap();
+    match lib.build(&m, ireader, false).unwrap() {
+        Built::Written { path, .. } => assert_eq!(path, out),
+        b => panic!("半截的要重传：{b:?}"),
+    }
+    assert!(std::fs::metadata(&out).unwrap().len() > 100);
+}
+
+/// 原件换了内容（书名没变）：设备上的产物交给新版本——掌阅原地覆盖同一个文件，Move 原地替换同一本（uuid 不变、不进回收站），
+/// 不先删再当新书传（2026-10-09 用户定）。
+#[test]
+fn changed_original_replaces_device_copies_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let mv = common::FakeMove::start();
+    let lib = common::open_with(&lib_dir, Some(&mv));
+    let books = base.join("books");
+    std::fs::create_dir_all(&books).unwrap();
+    let src = books.join("书.epub");
+    std::fs::write(&src, sample_epub_with("同一本", "第一版")).unwrap();
+    lib.track(&books).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
+    let (ireader, xochitl) = (profile::get("ireader").unwrap(), profile::get("xochitl").unwrap());
+    let m1 = lib.list().pop().unwrap();
+    let Built::Written { path, .. } = lib.build(&m1, ireader, false).unwrap() else { panic!() };
+    assert!(matches!(lib.build(&m1, xochitl, false).unwrap(), Built::Written { .. }));
+    let uuid1: Vec<String> = mv.docs.lock().unwrap().keys().cloned().collect();
+
+    std::fs::write(&src, sample_epub_with("同一本", "第二版")).unwrap();
+    let (r, ev) = events(&lib, Prune::Keep);
+    assert_eq!(r.updated, 1, "{ev:?}");
+    assert!(path.is_file(), "换版本时不先删设备上的");
+    assert_eq!(mv.live().len(), 1, "Move 上的也不先进回收站");
+    let m2 = lib.list().pop().unwrap();
+    assert_ne!(m1.id, m2.id);
+    let Built::Written { path: p2, .. } = lib.build(&m2, ireader, false).unwrap() else { panic!("新版本要传") };
+    assert_eq!(p2, path, "同一个文件原地覆盖");
+    assert!(output_has(&path, "第二版"));
+    assert!(matches!(lib.build(&m2, xochitl, false).unwrap(), Built::Written { .. }));
+    let docs = mv.docs.lock().unwrap().clone();
+    assert_eq!(docs.keys().cloned().collect::<Vec<_>>(), uuid1, "同一个 uuid");
+    let d = docs.values().next().unwrap();
+    assert_eq!((d.replaced, d.deleted), (1, false));
+    assert!(matches!(lib.build(&m2, ireader, false).unwrap(), Built::UpToDate(_)));
+
+    // 书架服务那边这本还在替换（上一次 sync 交的没做完）：等它做完再交，不算失败
+    std::fs::write(&src, sample_epub_with("同一本", "第三版")).unwrap();
+    events(&lib, Prune::Keep);
+    let m3 = lib.list().pop().unwrap();
+    mv.busy.store(2, std::sync::atomic::Ordering::Relaxed);
+    assert!(matches!(lib.build(&m3, xochitl, false).unwrap(), Built::Written { .. }));
+    let docs = mv.docs.lock().unwrap().clone();
+    assert_eq!(docs.keys().cloned().collect::<Vec<_>>(), uuid1);
+    assert_eq!(docs.values().next().unwrap().replaced, 2);
+    assert_eq!(mv.busy.load(std::sync::atomic::Ordering::Relaxed), 0, "等的时候查了 replacing");
 }

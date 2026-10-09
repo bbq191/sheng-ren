@@ -371,7 +371,8 @@ impl Library {
             if stale.contains(old_id) {
                 continue;
             }
-            if let Err(e) = self.retire_old_version(old_id, path, &present) {
+            let new_id = present.get(path).map(|s| s.id.clone()).unwrap_or_default();
+            if let Err(e) = self.retire_old_version(old_id, &new_id, path, &present) {
                 on(SyncEvent::Failed(path, &format!("删旧版本 {old_id} 失败：{e}（下次 sync 再删）")));
                 rep.failed += 1;
                 stale.push(old_id.clone());
@@ -435,13 +436,18 @@ impl Library {
         Ok(rep)
     }
 
-    /// 原件 `path` 换成了新版本（`sync` 看到内容变了，或 `add` 了改过的文件）：旧版本的条目 `old_id` 没人用了就连同产物删掉，
+    /// 原件 `path` 换成了新版本 `new_id`（`sync` 看到内容变了，或 `add` 了改过的文件）：旧版本的条目 `old_id` 没人用了就删掉，
+    /// 设备上的产物交给新版本（[`Library::hand_over_outputs`]），
     /// 返回删了没有。不删的：`present`（这一轮看到的跟踪目录里的文件）里还有别的文件是旧内容、条目记着的原件在别处还在（见
     /// [`Library::original_elsewhere`]）、条目已经没了。
-    pub(crate) fn retire_old_version(&self, old_id: &str, path: &Path, present: &BTreeMap<PathBuf, Seen>) -> Result<bool, String> {
+    pub(crate) fn retire_old_version(&self, old_id: &str, new_id: &str, path: &Path, present: &BTreeMap<PathBuf, Seen>) -> Result<bool, String> {
         let in_use = present.iter().any(|(p, s)| s.id == old_id && p != path);
         if in_use || !self.entry_dir(old_id).is_dir() || self.original_elsewhere(old_id, path, present) {
             return Ok(false);
+        }
+        // 设备上的产物交给新版本（原地覆盖、原地替换），不先删
+        if !new_id.is_empty() {
+            self.hand_over_outputs(old_id, new_id)?;
         }
         self.remove(old_id).map(|_| true)
     }
