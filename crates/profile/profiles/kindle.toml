@@ -3,7 +3,6 @@
 name = "Kindle 自带阅读器（Paperwhite 12 代签名版）"
 color = false
 # 2026-10-05 起出 KFX（clean-room 写出器，见 docs/kfx.md）：文字书注释弹窗、段间距字间距可调；漫画固定版式真机铺满整屏（《哆啦A夢》《死亡筆記》）。
-# AZW3 写出器还在（epub-to-azw3），书库不再用。
 formats = ["kfx"]
 # 注释：点标号跳到章末（2026-09-27 前在这台 Kindle 上真机验证过跳转）
 notes = "jump"

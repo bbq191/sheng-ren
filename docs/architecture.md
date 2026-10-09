@@ -16,13 +16,12 @@
 |---|---|---|
 | `library` | 书库：入库、跟踪同步、按模式生成、产物放哪、指纹、联网补元数据 | `booklib` |
 | `bookconv` | 内容层：CBZ/网页 → EPUB、清洗、优化、图片、质量门。**不管书库**，只按调用方给的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
-| `azw3` | EPUB → AZW3 写出器（clean-room，见 [AZW3 写出器](azw3.md)）；书库 2026-10-05 起不用，命令还在；`azw3::read` 只给回读自检、测试和 `mobidict` 读 MOBI 容器用 | `epub-to-azw3` |
-| `mobidict` | MOBI 词典 → StarDict，当初给 KOReader 查词（clean-room，读 MOBI 容器借 `azw3::read::palm`）。2026-10-06 起两台都不装 KOReader、掌阅自带阅读器直接用 MOBI 词典，这个包暂时保留（用户定：别删） | `mobi-dict-to-stardict` |
+| `mobidict` | MOBI 词典 → StarDict，当初给 KOReader 查词（clean-room，读 MOBI 容器用自己的 `mobidict::palm`：2026-10-09 AZW3 写出器删掉时从它的读取器挪过来，只留词典要的部分）。2026-10-06 起两台都不装 KOReader、掌阅自带阅读器直接用 MOBI 词典，这个包暂时保留（用户定：别删） | `mobi-dict-to-stardict` |
 | `kfx` | KFX：Ion 编解码、容器读写、EPUB → KFX 写出器（clean-room，见 [KFX](kfx.md)）；书库 `kindle` 模式的文字书和漫画都用它 | `epub-to-kfx`、`kfx-dump`、`kfx-repack`（三个都不随 `--tools` 装，用 `cargo run -p kfx --bin …`） |
 | `profile` | 阅读模式的参数，TOML 编译时嵌入；`--device=` 的解析 | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
-依赖单向无环：`library` → `azw3`、`kfx` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`mobidict` → `azw3`、`bookconv`；`drm` 独立。
+依赖单向无环：`library` → `kfx` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`mobidict` → `bookconv`；`drm` 独立。
 
 ### bookconv 模块
 
@@ -31,7 +30,7 @@
 | `convert/` | CBZ → 每页一张原图的 EPUB（第一页就是封面，OPF 标"漫画"）；入库时的轻量检查。有打不开的页（不支持的压缩方式等）时生成报错，不出缺页的书 |
 | `article` | 网页 → EPUB（正文抽取，图片保留原图；编码按 BOM → HTTP 头 → `<meta charset>` 认，没声明又不是合法 UTF-8、或声明 UTF-8 而字节不合法的按 GB18030，解码后去掉 U+FFFD） |
 | `optimize/` | 优化主流程：流式读写、逐文件变换、图片并行处理 |
-| `wash/` | 清洗层。**只修复**（`repair_entries`，内置模式的文字书都走这条）：伪 DRM、坏文件名、坏引用、重复 id、目录、EPUB 3 规范整理；`kindle_rules` 是掌阅、Move 照 Send to Kindle 统一的几条（标签缺省样式、正文字体、body 左右边距、对比度）。**完整清洗**（漫画、没开只修复的自定义模式）：解锁字体字号、按语言排版、定章节（`chapters`：按目录层级定书/卷、章、节，漏掉的节补进目录、目录改指到文件中间的标题；不拆文件）、目录修复与生成（`toc`）、全书 id 去重、章尾空白；`fonts` 定哪些嵌入字体保留、哪些是批注；`safe_names` 给文件名里有安卓存储不能用的字符的条目改名；`normalize` 是最后一步的 EPUB 3 规范整理；`opf` 是 OPF 的读改（清洗、优化、`meta --edit` 共用）；读唯一标识符全书只用 `opf::unique_identifier`：`<package unique-identifier>` 指向的任意前缀 identifier，值去空白、空值算没有，NCX 的 `dtb:uid`、规范整理、`epubbook` 的稳定 ID 都按它） |
+| `wash/` | 清洗层。两条路都先做 `encoding`：不是 UTF-8 的 XHTML、OPF、NCX 转成 UTF-8（后面各步按 UTF-8 读写）。**只修复**（`repair_entries`，内置模式的文字书都走这条）：伪 DRM、坏文件名、坏引用、重复 id、目录、EPUB 3 规范整理；`kindle_rules` 是掌阅、Move 照 Send to Kindle 统一的几条（标签缺省样式、正文字体、body 左右边距、对比度）。**完整清洗**（漫画、没开只修复的自定义模式）：解锁字体字号、按语言排版、定章节（`chapters`：按目录层级定书/卷、章、节，漏掉的节补进目录、目录改指到文件中间的标题；不拆文件）、目录修复与生成（`toc`）、全书 id 去重、章尾空白；`fonts` 定哪些嵌入字体保留、哪些是批注；`safe_names` 给文件名里有安卓存储不能用的字符的条目改名；`normalize` 是最后一步的 EPUB 3 规范整理；`opf` 是 OPF 的读改（清洗、优化、`meta --edit` 共用）；读唯一标识符全书只用 `opf::unique_identifier`：`<package unique-identifier>` 指向的任意前缀 identifier，值去空白、空值算没有，NCX 的 `dtb:uid`、规范整理、`epubbook` 的稳定 ID 都按它） |
 | `html` | 容错的 XHTML 工具：标签扫描、属性读写（单双引号、无引号）、加类、纯文本。全仓库的 HTML 操作都用它 |
 | `htmlproc/` | 注释搬移与编号（只修复时 Move 的 `repair_note_links` 也用它）、字体锁、重复 id |
 | `uastyle` | 标签的缺省样式表（`<p>` 上下 1em、标题字号……）：KFX 写出器按它给缺省值，`kindle_rules` 按它写 `eink-ua.css` |
@@ -45,7 +44,7 @@
 | `comic_detect` / `comicfxl` / `comicpad` | 判断是不是漫画；漫画固定版式（kindle）；页边距 1 时各页的补救（xochitl） |
 | `check` | 质量门 |
 | `epub` / `epubzip` | EPUB 组装与读写（每个 zip 条目解压上限 `MAX_ENTRY_BYTES` 256MB，EPUB、CBZ 共用，超过报错）：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`、zip 内路径工具、书里链接解析 `resolve_link` |
-| `epubbook` | 读整本 EPUB（元数据、spine 里的 XHTML、CSS、图片、封面、目录），AZW3 和 KFX 写出器共用 |
+| `epubbook` | 读整本 EPUB（元数据、spine 里的 XHTML、CSS、图片、封面、目录），KFX 写出器用 |
 | `ncx` | NCX 目录解析与改写 |
 | `netimg` / `direction` / `probe` | 远程图抓取（单张上限 `MAX_IMAGE_BYTES` 20MB；`origin_of` 取网址的站点）；翻页方向（读写 spine `page-progression-direction` 全书只用 `direction::spine_direction`/`set_spine_direction`）；测量书 |
 | `util` / `naming` | 转义、全角转半角、文件名、书名规整；原子写（`produce_then_replace`、`commit`，书库也用；产出途中 panic 也删临时文件）；带上限的读取 `read_capped`（超过报错、不截断）；命令行公共函数 |
@@ -140,7 +139,7 @@
 | 模式 id | `kindle` 等 | — |
 | 阅读范围 | 文字书：优化器用的阅读范围（`output_readable`，如 `1104x1546`），带图注的竖长图写宽度（`k`）、正文图片透明处合成白底（`a`）、只修复（`t`，另保证注释能点再带 `n`、照 Send to Kindle 的规则统一再带 `u`）有的时候再带上（现在三台：kindle `1104x1546bkat`、ireader `1264x1680bnrktu`、xochitl `842x1455tnu`）；漫画：阅读范围 + 漫画画布 + 白边（`1104x1546c1272x1696+1`），阅读器页边距（`m1`）、翻页方向（`dltr`）、固定版式（`f`）有的时候带上；两路都带保留背景图（`b`，去掉尺寸时 `bn`）、不认 `rgba()`（`r`）（清洗层两路都过） | 这个模式这一路的全部 |
 | 黑白彩色 | `gray`/`color` | 这个模式的全部 |
-| 格式 | `epub`；KFX 带写出器版本（写成 `kfx<版本号>`），AZW3 同理（`azw3<版本号>`，书库已不出） | 写出器版本变了只有 `kindle` 的 |
+| 格式 | `epub`；KFX 带写出器版本和写出器求 `@media` 用的屏幕、KFX 阅读范围（写成 `kfx<版本号>@<屏宽>x<屏高>r<宽>x<高>`，2026-10-09 补上屏幕） | 写出器版本、屏幕变了只有 `kindle` 的 |
 
 版本号什么时候加一、现在是多少，见[开发 · 版本号](development.md#版本号)。
 

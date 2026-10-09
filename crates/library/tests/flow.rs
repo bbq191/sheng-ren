@@ -886,13 +886,13 @@ fn removed_entry_leaves_nothing_behind() {
 
 #[test]
 fn comic_fingerprint_follows_the_readable_area_the_optimizer_uses() {
-    // 自定义模式：漫画另配格式（azw3），两种格式的阅读范围不同，漫画阅读范围单写。优化器的阅读范围是 formats 第一个（epub）的，
-    // 它变了漫画产物会变——指纹也要变（以前指纹取的是漫画产物格式 azw3 的阅读范围，epub 的改了不过期）
+    // 自定义模式：漫画另配格式（kfx），两种格式的阅读范围不同，漫画阅读范围单写。优化器的阅读范围是 formats 第一个（epub）的，
+    // 它变了漫画产物会变——指纹也要变（以前指纹取的是漫画产物格式的阅读范围，epub 的改了不过期）
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("lib");
     std::fs::create_dir_all(root.join("profiles")).unwrap();
-    let profile = |w: u32| {
-        format!("name = \"t\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"azw3\"]\ncomic_format = \"azw3\"\nnotes = \"jump\"\n[screen]\nwidth = 1000\nheight = 1500\n[readable.epub]\nwidth = {w}\nheight = 1400\n[readable.azw3]\nwidth = 900\nheight = 1400\n[comic_readable]\nwidth = 1000\nheight = 1500\n")
+    let profile = |w: u32, h: u32| {
+        format!("name = \"t\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"kfx\"]\ncomic_format = \"kfx\"\nnotes = \"jump\"\n[screen]\nwidth = 1000\nheight = {h}\n[readable.epub]\nwidth = {w}\nheight = 1400\n[readable.kfx]\nwidth = 900\nheight = 1400\n[comic_readable]\nwidth = 1000\nheight = 1500\n")
     };
     let cbz = dir.path().join("漫画.cbz");
     {
@@ -903,13 +903,15 @@ fn comic_fingerprint_follows_the_readable_area_the_optimizer_uses() {
         }
         z.finish().unwrap();
     }
-    let fp = |w: u32| {
-        std::fs::write(root.join("profiles/t.toml"), profile(w)).unwrap();
+    let fp = |w: u32, h: u32| {
+        std::fs::write(root.join("profiles/t.toml"), profile(w, h)).unwrap();
         let lib = common::open(&root);
         let m = lib.add_file(&cbz).unwrap().meta().clone();
         lib.fingerprint(&m, lib.devices().get("t").unwrap()).unwrap()
     };
-    assert_ne!(fp(800), fp(700));
+    assert_ne!(fp(800, 1500), fp(700, 1500));
+    // KFX 写出器求 `@media` 用屏幕尺寸（`MediaEnv::for_profile`）：屏幕变了 KFX 产物也要过期（2026-10-09 审计补上）
+    assert_ne!(fp(800, 1500), fp(800, 1600));
 }
 
 /// 指纹按文字书、漫画分开（2026-10-08）：只管文字书的 profile 字段变了漫画不过期，只管漫画的变了文字书不过期。

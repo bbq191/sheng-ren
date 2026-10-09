@@ -42,6 +42,7 @@ mod css;
 mod dead_refs;
 mod drm;
 mod empty_pages;
+mod encoding;
 pub mod fonts;
 mod ids;
 mod kindle_rules;
@@ -197,6 +198,8 @@ pub struct WashReport {
     pub landmarks_added: usize,
     /// 没有 NCX 的书按 nav 生成的 NCX 条目数（xochitl 读目录靠 NCX）。
     pub ncx_generated: usize,
+    /// 不是 UTF-8、转成了 UTF-8 的 XHTML/OPF/NCX 个数。见 `encoding.rs`。
+    pub transcoded_to_utf8: usize,
 }
 
 
@@ -237,6 +240,8 @@ pub(crate) fn wash_entries_as(entries: &mut Vec<Entry>, opts: &WashOpts, comic: 
 
 fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> Result<WashReport, String> {
     let mut rep = WashReport::default();
+    // 先把 GBK、Big5、UTF-16 的文件转成 UTF-8：后面各步都按 UTF-8 读写
+    encoding::transcode_to_utf8(entries, &mut rep);
     strip_pseudo_drm(entries, &mut rep)?;
     // 文件名有安卓存储不能用的字符的先改名：后面各步按条目名找文件
     safe_names::rename_unsafe_entries(entries, &mut rep);

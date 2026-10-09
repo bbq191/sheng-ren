@@ -28,12 +28,6 @@
   <text x="430" y="325" text-anchor="middle" class="n">profile</text>
   <text x="430" y="344" text-anchor="middle" class="s">阅读模式参数（TOML 嵌入）</text>
 
-  <rect class="c" x="630" y="40" width="210" height="96" fill="#eaf7ee" stroke="#3f9a5b"/>
-  <text x="735" y="65" text-anchor="middle" class="n">azw3</text>
-  <text x="735" y="84" text-anchor="middle" class="s">EPUB → AZW3（书库已不用）</text>
-  <text x="735" y="102" text-anchor="middle" class="s">bin: epub-to-azw3</text>
-  <text x="735" y="120" text-anchor="middle" class="s">azw3::read：KF8 读取器，回读自检</text>
-
   <rect class="c" x="618" y="200" width="234" height="76" fill="#fdf0f3" stroke="#c9637d"/>
   <text x="735" y="223" text-anchor="middle" class="n">mobidict</text>
   <text x="735" y="242" text-anchor="middle" class="s">MOBI 词典 → StarDict（暂留）</text>
@@ -55,10 +49,7 @@
   <path class="l" d="M300 90 C245 140 245 300 328 325" marker-end="url(#a)"/>
   <path class="l" d="M290 90 L170 148" marker-end="url(#a)"/>
   <path class="l" d="M220 205 L268 205" marker-end="url(#a)"/>
-  <path class="l" d="M580 70 L628 78" marker-end="url(#a)"/>
-  <path class="l" d="M700 136 C690 170 640 190 592 195" marker-end="url(#a)"/>
-  <path class="l" d="M790 200 L790 138" marker-end="url(#a)"/>
   <path class="l" d="M618 240 L592 232" marker-end="url(#a)"/>
 
-  <text x="430" y="388" text-anchor="middle" class="s">箭头 = 依赖方向，单向无环（library 也直接用 profile、bookconv；kindle 走 kfx；mobidict 借 azw3::read 读 MOBI 容器）</text>
+  <text x="430" y="388" text-anchor="middle" class="s">箭头 = 依赖方向，单向无环（library 也直接用 profile、bookconv；kindle 走 kfx；AZW3 写出器 2026-10-09 删了）</text>
 </svg>

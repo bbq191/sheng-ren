@@ -6,14 +6,14 @@
 
 ```sh
 ./install.sh             # 装 booklib（书库；改 EPUB 元数据的 meta --edit 也在里面）
-./install.sh --tools     # 另装开发、排查用的 epub-optimize、epub-to-azw3、readable-probe、readable-measure，以及转 MOBI 词典的 mobi-dict-to-stardict
+./install.sh --tools     # 另装开发、排查用的 epub-optimize、readable-probe、readable-measure，以及转 MOBI 词典的 mobi-dict-to-stardict
 ./install.sh --no-tools  # 卸掉这些开发工具，只留 booklib
 ./uninstall.sh           # 卸载
 ./install.sh --help      # 打印脚本开头的说明（uninstall.sh 同样）
 ```
 
 - 装到 cargo 的 bin 目录，优先级和 cargo 一致：`$CARGO_INSTALL_ROOT/bin` > cargo 配置里的 `install.root`（仓库目录往上各级 `.cargo/config.toml` 越近越优先，最后是 `$CARGO_HOME/config.toml`）> `$CARGO_HOME/bin` > `~/.cargo/bin`。`CARGO_INSTALL_ROOT` 设成空值按没设处理。
-- `--tools` 装的是 `bookconv`、`azw3`、`mobidict` 三个包里的命令；`kfx` 包的 `epub-to-kfx`、`kfx-dump`、`kfx-repack` 不随它装，用 `cargo run --release -p kfx --bin <命令> --`。
+- `--tools` 装的是 `bookconv`、`mobidict` 两个包里的命令；`kfx` 包的 `epub-to-kfx`、`kfx-dump`、`kfx-repack` 不随它装，用 `cargo run --release -p kfx --bin <命令> --`。
 - 退出码：`0` 装好（卸完）；`1` 没有 cargo、同名命令被别的包占着、编译或卸载失败；`2` 参数不对。
 - **升级**：更新代码后再跑一次 `./install.sh`。不加 `--tools`/`--no-tools` 时沿用上次的选择：装过开发工具就一起升级，免得工具停在旧版本、和 `booklib` 的规则对不上。编译复用仓库的 `target/`，第一次要几分钟。
 - **同名命令被别的包占着**（比如别处装过一个也叫 `booklib` 的）：脚本报出是哪个包、然后停下，不会悄悄抢过来。确认不要了先 `cargo uninstall` 它再装。
@@ -301,14 +301,14 @@ xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书
 
 ## 单独的命令行工具
 
-书库之外，底层每一步也能单独用，开发和排查时有用（`./install.sh --tools` 装 `bookconv`、`azw3`、`mobidict` 三个包的命令；`kfx` 包的不随它装。不装就 `cargo run --release -p <包> --bin <命令> --`）：
+书库之外，底层每一步也能单独用，开发和排查时有用（`./install.sh --tools` 装 `bookconv`、`mobidict` 两个包的命令；`kfx` 包的不随它装。不装就 `cargo run --release -p <包> --bin <命令> --`）：
 
 ```sh
 epub-optimize --device=ireader [选项] 输入.epub 输出.epub
-epub-to-azw3 [--ebok] 优化后.epub 输出.azw3            # 输入应是 --device=kindle 优化过的，见 AZW3 写出器
 epub-to-kfx [--id=N] [--device=kindle] 优化后.epub 输出.kfx   # KFX 写出器（书库 kindle 模式用的就是它），--device 给 @media 求值，见 docs/kfx.md；包 kfx
 epub-to-kfx --styles 书.epub                            # 不写 KFX：按 CSS 原样把每个文字块的样式打到标准输出（tools/kfx/s2kdev.py 用）；包 kfx
 kfx-dump [--type=N] [--full] 书.kfx                    # 看 KFX 结构；包 kfx
+kfx-dump --json 书.kfx                                  # 整本按 JSON 打印（tools/kfx/ 的分析脚本读它，不再自己解 Ion）；包 kfx
 kfx-repack 入.kfx 出.kfx                               # KFX 解开再打包，没改动应逐字节相同；包 kfx
 mobi-dict-to-stardict 词典.mobi 输出目录 [--name=名称]   # MOBI 词典转 StarDict（当初给 KOReader 用；掌阅自带阅读器直接认 MOBI 词典，暂时保留）
 readable-probe 测量书.epub                              # 生成测量书，见设备与阅读模式
@@ -327,8 +327,8 @@ readable-measure [--device=kindle] 竖长.png 横宽.png    # 从截图量出可
 | `--require-toc` | 和 `--check` 一起用：没有目录也算质量门没过 |
 
 - 写文件的工具都先写临时文件、成功才改名，中途失败不留半成品；输入输出可以是同一个文件——**测试用的真书别这样就地改**。
-- `epub-to-azw3`、`epub-to-kfx`、`kfx-dump`、`kfx-repack` 认 `-h`/`--help`。退出码：`0` 成功，`1` 用法错，`2` 读写或处理失败，`3` 质量门没过（只有 `epub-optimize --check` 时）。
-- `epub-to-azw3`、`epub-to-kfx` 不给 `--id` 时唯一 ID 由 OPF 的唯一标识符派生（同一本书每次转出来一样；书库生成 KFX 时用书 id，单独转出来的和书库的不是同一个 ID）。
+- `epub-to-kfx`、`kfx-dump`、`kfx-repack` 认 `-h`/`--help`。退出码：`0` 成功，`1` 用法错，`2` 读写或处理失败，`3` 质量门没过（只有 `epub-optimize --check` 时）。
+- `epub-to-kfx` 不给 `--id` 时唯一 ID 由 OPF 的唯一标识符派生（同一本书每次转出来一样；书库生成 KFX 时用书 id，单独转出来的和书库的不是同一个 ID）。
 - `mobi-dict-to-stardict` 和 `booklib meta --edit` 的路径可以不是 UTF-8。
 
 ## 常见问题

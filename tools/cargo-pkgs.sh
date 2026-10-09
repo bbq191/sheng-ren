@@ -5,7 +5,7 @@
 # 包名 library、bookconv 很普通，别处可能装着同名的包：只认从本仓库路径装的。
 
 # 开发工具所在的包（install.sh --tools 装、--no-tools 卸）
-TOOL_PKGS=(bookconv azw3 mobidict)
+TOOL_PKGS=(bookconv mobidict)
 
 # cargo 把设成空值的 CARGO_INSTALL_ROOT 当成当前目录（装进 ./bin、在当前目录记账）：按没设处理。
 # 空的 CARGO_HOME 它按没设处理（~/.cargo），和下面一致。

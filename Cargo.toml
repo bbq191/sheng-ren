@@ -1,5 +1,5 @@
 # host 端电子书书库与 EPUB 优化工具（见 README.md 与 docs/）。
-# 依赖单向无环：library → azw3、kfx → bookconv → profile；mobidict → azw3、bookconv；drm 独立。
+# 依赖单向无环：library → kfx → bookconv → profile；mobidict → bookconv；drm 独立。
 [workspace]
 resolver = "2"
 members = [
@@ -7,7 +7,6 @@ members = [
     "crates/profile",
     "crates/drm",
     "crates/library",
-    "crates/azw3",
     "crates/mobidict",
     "crates/kfx",
 ]

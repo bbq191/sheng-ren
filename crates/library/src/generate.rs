@@ -10,7 +10,7 @@
 //!
 //! 设备没接上的模式不生成（`sync` 跳过，下次接上再传）。
 //!
-//! 产物格式按模式：EPUB 直接是优化结果；KFX、AZW3（Kindle）是同一份优化结果再转一次（`kfx`、`azw3` crate）。
+//! 产物格式按模式：EPUB 直接是优化结果；KFX（Kindle）是同一份优化结果再转一次（`kfx` crate）。
 //! profile 可以给漫画另配格式（`comic_format`，见 [`Library::output_format`]）；内置模式都不用（kindle 文字书、漫画都出 KFX）。
 //!
 //! 生成记录 `<书库>/output-state/<模式 id>.json`：书 id → 产物绝对路径（Move 上的是 uuid 和 `文件夹/文件名`）、产物根目录、指纹。
@@ -190,11 +190,14 @@ impl Library {
         // 优化器用的阅读范围（`OptimizeOpts::for_profile` 取 `output_readable`，漫画另配格式时也是它），不是这本书产物格式的；
         // 内置模式两者相同
         let area = device.output_readable();
-        // AZW3、KFX 再带上写出器的版本（写出器改了也要重建）
+        // KFX 再带上写出器的版本（写出器改了也要重建）和写出器求 `@media` 用的屏幕、KFX 阅读范围（`kfx::css::MediaEnv::for_profile`；
+        // 书库 profiles/ 里的自定义模式改了屏幕也要重建，2026-10-09 审计补上）
         let format_seg = match format {
             Format::Epub => format.ext().to_string(),
-            Format::Azw3 => format!("{}{}", format.ext(), azw3::WRITER_VERSION),
-            Format::Kfx => format!("{}{}", format.ext(), kfx::write::WRITER_VERSION),
+            Format::Kfx => {
+                let r = device.readable(Format::Kfx);
+                format!("{}{}@{}x{}r{}x{}", format.ext(), kfx::write::WRITER_VERSION, device.screen.width, device.screen.height, r.width, r.height)
+            }
         };
         let cover = meta.cover.as_ref().map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
         let info = self.injected_info_sig(meta).unwrap_or_else(|| "-".into());
@@ -519,7 +522,7 @@ impl Library {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         let src = tmp.join(format!("out.{}", format.ext()));
-        // KFX、AZW3 在内存里就算好了哈希；EPUB 是优化器流式写的，写完再读一遍（刚写的，多半还在页缓存里）
+        // KFX 在内存里就算好了哈希；EPUB 是优化器流式写的，写完再读一遍（刚写的，多半还在页缓存里）
         let made = self.produce(meta, device, format, &src, &tmp).and_then(|(w, sha)| Ok((sha.map_or_else(|| crate::fsutil::sha256_file(&src), Ok)?, w)));
         match made {
             Ok((sha, warnings)) => Ok(Made { tmp: Some(tmp), src, sha, warnings }),
@@ -710,13 +713,13 @@ impl Library {
         })
     }
 
-    /// 生成产物写到 `part`（书库临时目录里）：EPUB 直接是优化结果；KFX、AZW3 是同一份优化结果再转一次（中间文件放 `tmp`）。
+    /// 生成产物写到 `part`（书库临时目录里）：EPUB 直接是优化结果；KFX 是同一份优化结果再转一次（中间文件放 `tmp`）。
     /// 返回质量门警告，和产物的 SHA-256（整份在内存里的时候顺带算好；EPUB 是 `None`，由调用方读文件算）。
     fn produce(&self, meta: &Meta, device: &Profile, format: Format, part: &Path, tmp: &Path) -> Result<(Vec<String>, Option<String>), String> {
         let epub = self.prepared_input(meta)?;
         let mut warnings = Vec::new();
         let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
-        // 要转 AZW3、KFX 的，优化结果先放临时目录
+        // 要转 KFX 的，优化结果先放临时目录
         let optimized = if format == Format::Epub { part.to_path_buf() } else { tmp.join("optimized.epub") };
         bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
         let rep = bookconv::check::check_epub_file(&optimized)?;
@@ -726,14 +729,8 @@ impl Library {
         if format != Format::Epub {
             // 按文件读（不先整本读进内存）；BufReader：zip 按条目小块读
             let open = || std::fs::File::open(&optimized).map(std::io::BufReader::new).map_err(|e| format!("读 {}: {e}", optimized.display()));
-            // 唯一 ID 取自书的 id（AZW3 再加入库时间）：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
-            let (bytes, w) = if format == Format::Kfx {
-                kfx::write::epub_to_kfx_from(open()?, &kfx::write::Opts { fixed_id: kfx_id(&meta.id), media: Some(kfx::css::MediaEnv::for_profile(device)) })?
-            } else {
-                let uid = meta.id.get(..8).and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
-                let aopts = azw3::Opts { fixed_id: Some((uid, meta.added as u32)), ..Default::default() };
-                azw3::epub_to_azw3_from(open()?, &aopts)?
-            };
+            // 唯一 ID 取自书的 id：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
+            let (bytes, w) = kfx::write::epub_to_kfx_from(open()?, &kfx::write::Opts { fixed_id: kfx_id(&meta.id), media: Some(kfx::css::MediaEnv::for_profile(device)) })?;
             warnings.extend(w);
             std::fs::write(part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
             return Ok((warnings, Some(crate::fsutil::sha256_hex(&bytes))));
