@@ -2,8 +2,7 @@
 # 卸载 install.sh 装的命令（booklib 以及 --tools 装的那些）。
 #
 # 用法: ./uninstall.sh
-# 只删命令本身。书库（索引、找来的封面、生成的产物）、书目录旁边生成的 kindle/ ireader/ xochitl/、设备上的东西都不动，
-# 只告诉你书库在哪：不要了就自己删那个目录。
+# 只删命令本身。书库、设备上的书都不动，只告诉你书库在哪：不要了就自己删那个目录。
 # 退出码：0 卸完（或本来就没装）；1 没有 cargo 或卸载失败；2 参数不对。
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd -P)

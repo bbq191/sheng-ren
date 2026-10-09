@@ -60,5 +60,5 @@
   <line x1="20" y1="416" x2="940" y2="416" stroke="#ccc"/>
   <text x="20" y="444" class="n">· 前四条是会让 Kindle 和按 CSS 排的阅读器看起来不一样的；掌阅、Move 只改值、删声明，文字一个不动（2026-10-08 用户定）。</text>
   <text x="20" y="466" class="n">· 三台对 24 本 Amazon 样本逐项比，一致率 98.7%–100%（tools/kfx/s2kdev.py；掌阅、Move 量的是 EPUB 交给阅读器的样式，不含阅读器自己的怪癖）。</text>
-  <text x="20" y="488" class="n">· 真机：掌阅看过五本 ✓；Kindle、Move 还没看。</text>
+  <text x="20" y="488" class="n">· 真机：掌阅看过五本 ✓；Kindle、Move 2026-10-09 ✓。</text>
 </svg>

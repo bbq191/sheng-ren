@@ -8,9 +8,9 @@
 #   device.txt（用的哪个模式）。
 # 典型用法（改动前后各跑一次再比）：
 #   git worktree add target/regress-base HEAD && (cd target/regress-base && cargo build --release -p bookconv --bin epub-optimize)
-#   tools/regress/run.sh target/regress-base/target/release/epub-optimize 旧
-#   cargo build --release -p bookconv --bin epub-optimize && tools/regress/run.sh target/release/epub-optimize 新
-#   tools/regress/compare.py 旧 新
+#   tools/regress/run.sh target/regress-base/target/release/epub-optimize target/regress/旧
+#   cargo build --release -p bookconv --bin epub-optimize && tools/regress/run.sh target/release/epub-optimize target/regress/新
+#   tools/regress/compare.py target/regress/旧 target/regress/新
 set -euo pipefail
 bin=${1:?用法见文件头} out=${2:?用法见文件头}
 shift 2
