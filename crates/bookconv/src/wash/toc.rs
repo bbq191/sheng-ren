@@ -54,11 +54,14 @@ pub fn toc_entry_count(entries: &[Entry]) -> usize {
     let mut n = 0;
     for e in entries.iter().filter(|e| is_toc_file(&e.name) || declared.contains(&e.name)) {
         let t = String::from_utf8_lossy(&e.data);
-        n += html::link_values(&t)
-            .into_iter()
+        // 目录条目是 nav 的 `<a href>`、NCX 的 `<content src>`，指向书内文件的就算（不看扩展名：章节文件叫 `.xml`、没扩展名的书
+        // 以前被当成没有目录，自带目录被自动目录盖掉；2026-10-09 审计）
+        n += html::tags(&t)
+            .filter(|tag| tag.is_start() && (tag.is("a") || tag.is("content")))
+            .filter_map(|tag| html::attr_value(&t[tag.start..tag.end], if tag.is("a") { "href" } else { "src" }))
             .filter(|v| {
-                let l = html::split_href(v).0.to_ascii_lowercase();
-                !l.starts_with("http") && (l.ends_with(".xhtml") || l.ends_with(".html") || l.ends_with(".htm"))
+                let p = html::split_href(v).0;
+                !p.is_empty() && !html::is_external(p)
             })
             .count();
     }

@@ -350,6 +350,20 @@ pub fn edit_attrs<'a>(html: &'a str, names: &[&str], mut f: impl FnMut(&Tag, &At
     Cow::Owned(apply_edits(html, edits))
 }
 
+/// 全文的 `style` 属性逐个交给 `f(标签, 声明)`：声明里的字符引用先还原（`font-family:&quot;宋体&quot;`——不还原的话 `&quot;`
+/// 里的 `;` 把声明切碎，字体名也对不上），改过的值再转义写回；没有字符引用的值原样传、原样写（逐字节同 [`edit_attrs`]）。
+pub fn edit_style_attrs<'a>(html: &'a str, mut f: impl FnMut(&Tag, &str) -> Edit) -> Cow<'a, str> {
+    edit_attrs(html, &["style"], |t, a| {
+        if !a.value.contains('&') {
+            return f(t, a.value);
+        }
+        match f(t, &xml_unescape(a.value)) {
+            Edit::Set(v) => Edit::Set(crate::util::xml_escape(&v)),
+            e => e,
+        }
+    })
+}
+
 /// 按 `(起, 止, 替换)` 重建全文（区间按起点升序、互不重叠）。
 pub fn apply_edits(html: &str, edits: Vec<(usize, usize, String)>) -> String {
     let mut out = String::with_capacity(html.len() + 64);
@@ -504,7 +518,8 @@ pub fn parse_spans(html: &str, lo: usize, hi: usize) -> Vec<Span> {
 /// 第一个 `<body …>` 之后到最后一个 `</body>` 之前的范围（不分大小写）；没有成对的 body → `None`。
 pub fn body_range(html: &str) -> Option<(usize, usize)> {
     let open = tags(html).find(|t| t.is_start() && t.is("body"))?;
-    let close = rfind_ci(html, "</body>")?;
+    // `</body >`（`>` 前有空白）也认
+    let close = rfind_ci(html, "</body").filter(|&c| html[c + 6..].trim_start().starts_with('>'))?;
     (close >= open.end).then_some((open.end, close))
 }
 
@@ -578,13 +593,50 @@ fn walk_text<'a>(html: &'a str, mut f: impl FnMut(Piece<'a>) -> bool) {
     }
 }
 
-/// 一段文字（已去标签）里有没有看得见的字：去掉空白（含 U+00A0、U+3000）和不换行空格实体后还有字符。
-fn text_visible(t: &str) -> bool {
-    if !t.contains('&') {
-        return t.chars().any(|c| !c.is_whitespace());
+/// 还原字符引用：数字引用、XML 的 5 个，加上 HTML 的全部命名实体（`&nbsp;`、`&emsp;`、`&mdash;`……）。认不出的原样保留。
+/// 给"取文字"用（[`plain_text`]、[`has_visible`]）：这些函数也会在规范化（命名实体换成数字引用）之前被调用——以前只认
+/// `&nbsp;`，标题里的 `&emsp;` 进了目录变成字面的 `&amp;emsp;`（2026-10-09 审计）。
+pub fn unescape_entities(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains('&') {
+        return std::borrow::Cow::Borrowed(s);
     }
-    let t = t.replace("&nbsp;", " ");
-    xml_unescape(&t).chars().any(|c| !c.is_whitespace())
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        // 最长的命名实体 `&CounterClockwiseContourIntegral;` 33 字节；只在这个范围里找 `;`（不然裸 `&` 多的长文本是平方级）
+        let decoded = rest.as_bytes().iter().take(40).position(|&b| b == b';').and_then(|j| {
+            let ent = &rest[..=j];
+            if ent.starts_with("&#") {
+                let d = xml_unescape(ent);
+                return (d != ent).then(|| (d.into_owned(), j + 1));
+            }
+            let &(c1, c2) = markup5ever::data::NAMED_ENTITIES.get(&ent[1..]).filter(|&&(c1, _)| c1 != 0)?;
+            let mut t: String = char::from_u32(c1)?.into();
+            if c2 != 0 {
+                t.push(char::from_u32(c2)?);
+            }
+            Some((t, j + 1))
+        });
+        match decoded {
+            Some((t, len)) => {
+                out.push_str(&t);
+                rest = &rest[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
+/// 一段文字（已去标签）里有没有看得见的字：去掉空白（含 U+00A0、U+3000）和只表示空白的字符引用后还有字符。
+fn text_visible(t: &str) -> bool {
+    unescape_entities(t).chars().any(|c| !c.is_whitespace())
 }
 
 /// 片段里有没有读者看得见的内容。全书一套口径（定章节、空页清理、章尾空白共用）：
@@ -629,8 +681,7 @@ pub fn plain_text(html: &str) -> String {
         true
     });
     // 字符引用还原（2026-09-25 审计）：此前不还原，标题里的 `&amp;`/`&#12288;` 被再转义成 `&amp;amp;`，目录显示出字面的 `&amp;`。
-    let raw = raw.replace("&nbsp;", " ");
-    xml_unescape(&raw).split_whitespace().collect::<Vec<_>>().join(" ")
+    unescape_entities(&raw).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 // ───────────────────────── CSS 声明 ─────────────────────────
@@ -727,6 +778,24 @@ pub fn style_block_re() -> &'static Regex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_style_attrs_decodes_char_refs() {
+        let h = r#"<p style="font-family:&quot;宋体&quot;;color:red">a</p><p style='color:red'>b</p>"#;
+        let out = edit_style_attrs(h, |_, v| {
+            assert!(!v.contains("&quot;"), "{v}");
+            Edit::Set(v.replace("color:red", "color:blue"))
+        });
+        assert_eq!(out, r#"<p style="font-family:&quot;宋体&quot;;color:blue">a</p><p style='color:blue'>b</p>"#);
+    }
+
+    #[test]
+    fn unescape_entities_knows_html_names() {
+        assert_eq!(unescape_entities("一&emsp;起&mdash;&#20013;&amp;emsp;&foo;&"), "一\u{2003}起—中&emsp;&foo;&");
+        assert_eq!(plain_text("<h2>一&emsp;起</h2>"), "一 起");
+        assert!(!has_visible("<p>&emsp;&nbsp;&#12288;</p>"));
+        assert!(has_visible("<p>&hellip;</p>"));
+    }
 
     #[test]
     fn is_external_by_scheme() {

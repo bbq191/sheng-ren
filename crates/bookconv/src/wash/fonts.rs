@@ -99,7 +99,7 @@ fn src_embedded(src: &str, base_dir: &str, names: &HashSet<&str>) -> bool {
 impl FontPlan {
     /// 元素自己（行内 style、类规则、裸标签规则）指定的字体。
     fn own_family(&self, tag: &str) -> Option<String> {
-        if let Some(f) = html::attr_value(tag, "style").and_then(family_of) {
+        if let Some(f) = html::attr_value(tag, "style").and_then(|v| family_of(&crate::util::xml_unescape(v))) {
             return Some(f);
         }
         if let Some(cls) = html::attr_value(tag, "class") {

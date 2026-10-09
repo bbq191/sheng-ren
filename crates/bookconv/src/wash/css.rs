@@ -311,17 +311,17 @@ pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashS
     // 没有重复 id 的标签（绝大多数文件）不必再扫一遍
     let s: Cow<str> = if before_dup == 0 { Cow::Borrowed(html) } else { Cow::Owned(collapse_dup_id_attrs(html)) };
     // 只认名字正好是 `style` 的属性（`data-style`、SVG `font-style` 不算），就地改值、保留原引号。
-    let s = html::edit_attrs(&s, &["style"], |t, a| {
+    let s = html::edit_style_attrs(&s, |t, value| {
         let spacing = match t.name.to_ascii_lowercase().as_str() {
             "body" | "html" => Spacing::All,
             "p" | "div" if !opts.keep_para_spacing => Spacing::Vertical,
             _ => Spacing::Keep,
         };
         let base_text = matches!(t.name.to_ascii_lowercase().as_str(), "body" | "html");
-        let cleaned = colors_for(opts, filter_decls_with(a.value, &opts.filter_props, spacing, base_text, Some(indent_for(opts)), &opts.keep_fonts));
+        let cleaned = colors_for(opts, filter_decls_with(value, &opts.filter_props, spacing, base_text, Some(indent_for(opts)), &opts.keep_fonts));
         if cleaned.is_empty() {
             Edit::Remove
-        } else if cleaned == a.value {
+        } else if cleaned == value {
             Edit::Keep
         } else {
             Edit::Set(cleaned)

@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use zip::ZipArchive;
 
-/// 幂等标记：优化器把这个文件埋进产物 EPUB，内容=优化器版本号（见 [`marker_value`]）。放 META-INF/ 下
+/// 幂等标记：优化器把这个文件埋进产物 EPUB，内容是 `full` 或 `core`（见 [`marker_value`]；不写版本号）。放 META-INF/ 下
 /// （EPUB 规范允许该目录放额外文件，阅读器忽略）。重优化时旧标记剔除、结尾重写一条。
 pub const OPTIMIZE_MARKER: &str = "META-INF/eink-optimized";
 /// 漫画要在阅读器里设成的页边距（内容就是数字），只有 profile 开了 `comic_reader_margins` 的漫画才有；`xochitl/comic-margins.sh` 凭它登记。
@@ -123,7 +123,11 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v53（2026-10-08）：规范整理在 `</body>`/`</html>` 前补上里面没关的元素（补完能配平才补；《狼厅》版权页 `<section><div>` 没关）。
 ///   同日的掌阅、Move「照 Send to Kindle 的规则统一」（profile `kindle_rules`，指纹另有 `u`）也在这一版。漫画不加版本：漫画页是生成的，
 ///   不会有没关的元素，加了反而让产物里的标记变了、掌阅上的漫画全部重传。
-pub const OPTIMIZE_VERSION: &str = "53";
+/// - v54（2026-10-09，全系统审计）：书里的优化标记不再写版本号（写 `full`/`core`，以后加版本号内容没变的书不重传）；和原书逐字节
+///   相同的字体原样拷压缩数据（不再解压重压）；GBK 等编码的 OPF 先转 UTF-8 再补封面声明（以前书名作者被写成替换字符）；
+///   取文字认全部 HTML 命名实体（目录里不再出现字面的 `&emsp;`）；目录条数按 nav/NCX 条目算、不看扩展名；按 HTML5 重新解析前去掉
+///   XML 声明和 CDATA；NCX 补空的 `dtb:uid`；内容是 UTF-8、声明是别的编码时改声明；行内 `style` 的字符引用先还原；`<P>`、`</body >`。
+pub const OPTIMIZE_VERSION: &str = "54";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -131,7 +135,8 @@ pub const OPTIMIZE_VERSION: &str = "53";
 ///
 /// 历史：
 /// - c52（2026-10-08）：从 `OPTIMIZE_VERSION` 分出来，行为不变。
-pub const COMIC_VERSION: &str = "52";
+/// - c53（2026-10-09，全系统审计）：优化标记不再写版本号；两路共用的清洗层修复（GBK 的 OPF 先转码等，见 v54）。
+pub const COMIC_VERSION: &str = "53";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -336,15 +341,19 @@ struct Prepared {
 
 /// 阶段一：`raw` → 封面声明 → 清洗 → 排序（mimetype 置首、旧标记剔除）→ 第一遍 html → 注释块搬出。
 /// 图片条目是空占位——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
-/// `is_comic_book`：调用方按原书判好的漫画识别结果（`comic_detect::is_comic`，全程只判这一次）。
-fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize, is_comic_book: bool) -> Result<Prepared, String> {
+/// `is_comic_book`：调用方按原书判好的漫画识别结果（`comic_detect::is_comic`，全程只判这一次）；`transcoded`：调用方读完书已经
+/// 转成 UTF-8 的文件数（`wash::transcode_entries`，记进清洗报告）。
+fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize, is_comic_book: bool, transcoded: usize) -> Result<Prepared, String> {
     // 保证 OPF 声明了有效封面（见 `wash::ensure_cover_declared`）。
     // 必须在清洗之前：清洗会把只含 SVG 封面的 titlepage 当空页删掉。
     crate::wash::ensure_cover_declared(&mut raw);
     // 整页背景图的尺寸意图要在清洗前读（清洗会去掉 `background-size`）
     let mut bg_fits = if opts.fit_backgrounds { crate::bgfit::plan(&raw) } else { HashMap::new() };
     let wash_rep = match &opts.wash {
-        Some(w) => Some(crate::wash::wash_entries_as(&mut raw, w, is_comic_book)?),
+        Some(w) => Some(crate::wash::wash_entries_as(&mut raw, w, is_comic_book).map(|mut r| {
+            r.transcoded_to_utf8 += transcoded;
+            r
+        })?),
         None => None,
     };
     // 清洗层定下的保留字体（嵌了文件、又不是正文字体的）：第一遍剥行内字体锁时也留着。

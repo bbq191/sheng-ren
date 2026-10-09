@@ -21,14 +21,15 @@ pub fn parse_color(v: &str) -> Option<u32> {
     if let Some(inner) = v.strip_prefix("rgba(").or_else(|| v.strip_prefix("rgb(")).and_then(|s| s.strip_suffix(')')) {
         // 每一项可以是数（颜色 0–255、透明度 0–1）或百分比（100% = 255 / 1）。以前把 `%` 直接去掉，
         // `rgb(100%, 0%, 0%)` 成了 (100, 0, 0)，`rgba(…, 50%)` 成了不透明。
+        // 任何一项不是数（`var(--r)`、`calc(…)`、空项）就整条不认：以前按 0 算，`rgb(var(--r), 0, 0)` 成了黑色（拿不准就不处理）。
         let p: Vec<(f64, bool)> = inner
             .split(',')
             .map(|x| {
                 let x = x.trim();
                 let pct = x.ends_with('%');
-                (x.trim_end_matches('%').trim().parse().unwrap_or(0.0), pct)
+                x.trim_end_matches('%').trim().parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| (v, pct))
             })
-            .collect();
+            .collect::<Option<_>>()?;
         if p.len() < 3 {
             return None;
         }
@@ -263,5 +264,18 @@ mod tests {
         // 白底上够深的半透明黑字不动
         assert_eq!(ensure_contrast(0xE600_0000, 0xFFFF_FFFF), 0xE600_0000);
         assert_eq!(over_white(0x8000_0000), over(0x8000_0000, 0xFFFF_FFFF));
+    }
+
+    #[test]
+    fn rgb_with_unparsable_component_is_not_a_color() {
+        assert_eq!(parse_color("rgb(255, 0, 0)"), Some(0xFFFF_0000));
+        assert_eq!(parse_color("rgba(0, 0, 0, 0.5)"), Some(0x7F00_0000));
+        assert_eq!(parse_color("rgb(100%, 0%, 0%)"), Some(0xFFFF_0000));
+        // 以前不认的分量按 0 算：var() 成了黑色、空的透明度成了全透明
+        assert_eq!(parse_color("rgb(var(--r), 0, 0)"), None);
+        assert_eq!(parse_color("rgba(0, 0, 0, var(--a))"), None);
+        assert_eq!(parse_color("rgb(calc(10 + 5), 0, 0)"), None);
+        assert_eq!(parse_color("rgba(1, 2, 3, )"), None);
+        assert_eq!(parse_color("rgb(inf, 0, 0)"), None);
     }
 }

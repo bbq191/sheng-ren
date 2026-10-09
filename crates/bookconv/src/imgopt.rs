@@ -58,7 +58,7 @@ const MAX_UPSCALE: f64 = 3.0;
 fn downscale_into(bytes: &[u8], max_w: u32, max_h: u32, max_px: u64) -> Option<Vec<u8>> {
     let (fmt, (w, h)) = header_dims(bytes)?;
     let orientation = orientation_of(bytes, fmt);
-    let (w, h) = if swaps_axes(orientation) { (h, w) } else { (w, h) };
+    let (w, h) = upright_dims((w, h), orientation);
     if w <= max_w && h <= max_h {
         return None; // 已达标：不解码不重编码（避免无谓的二次有损压缩；2473 页漫画只读头是秒级、全解是分钟级）
     }
@@ -96,17 +96,6 @@ fn fit_within(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
     (((w as f64 * ratio).round() as u32).max(1), ((h as f64 * ratio).round() as u32).max(1))
 }
 
-/// **CBZ/漫画整页**降采样：按朝向选盒（竖 短边×长边 / 横 长边×短边），页整张填屏、横页横读可用长边宽。
-/// 真机探针（2026-09-02，Move，5 张 400–2400px 宽图上机看渲染的 `<uuid>.pdf`）：只卡长边会让方图多留 1.8× 无用像素。
-/// 横竖按**摆正后**（EXIF 方向）的宽高判断：存成横的、靠 EXIF 转 90° 显示的竖图要进竖框。
-pub fn downscale_for_device(bytes: &[u8], screen: Screen) -> Option<Vec<u8>> {
-    let (fmt, (w, h)) = header_dims(bytes)?;
-    let (w, h) = if swaps_axes(orientation_of(bytes, fmt)) { (h, w) } else { (w, h) };
-    let (long, short) = (screen.long_edge(), screen.short_edge());
-    let (max_w, max_h) = if w >= h { (long, short) } else { (short, long) };
-    downscale_into(bytes, max_w, max_h, MAX_COMIC_DECODE_PIXELS)
-}
-
 /// 图片里 EXIF 的方向标签（JPEG、PNG 的 eXIf、WebP 的 EXIF 块）；没有或读不出 → 不用转。只读文件头，不解码像素。
 fn orientation_of(bytes: &[u8], fmt: ImageFormat) -> image::metadata::Orientation {
     use image::ImageDecoder;
@@ -120,6 +109,11 @@ fn orientation_of(bytes: &[u8], fmt: ImageFormat) -> image::metadata::Orientatio
 fn swaps_axes(o: image::metadata::Orientation) -> bool {
     use image::metadata::Orientation::*;
     matches!(o, Rotate90 | Rotate270 | Rotate90FlipH | Rotate270FlipH)
+}
+
+/// 存储的宽高 `(w, h)` 按方向 `o` 摆正后的宽高（转 90°/270° 的互换）。
+fn upright_dims((w, h): (u32, u32), o: image::metadata::Orientation) -> (u32, u32) {
+    if swaps_axes(o) { (h, w) } else { (w, h) }
 }
 
 /// 跑一段处理外来图片的代码，兜住解码器的 panic，按处理失败（`None`）算。书里、网上的图都是外部输入，第三方解码器遇到畸形
@@ -181,7 +175,7 @@ pub fn downscale_for_epub_limited(bytes: &[u8], screen: Screen, max_px: u64) -> 
 /// 图片按 EXIF 方向摆正后的宽高（JPEG/PNG/GIF/WebP，只读文件头）。给按宽高比排版的地方用（[`crate::capfit`]）。
 pub fn display_dims(bytes: &[u8]) -> Option<(u32, u32)> {
     let (fmt, (w, h)) = comic_header_dims(bytes)?;
-    Some(if swaps_axes(orientation_of(bytes, fmt)) { (h, w) } else { (w, h) })
+    Some(upright_dims((w, h), orientation_of(bytes, fmt)))
 }
 
 /// 带透明像素的 PNG 合成到白底，仍写成 PNG（灰度+透明 → 灰度，其余 → RGB；按 EXIF 摆正）。不是 PNG、没有透明通道、
@@ -218,7 +212,7 @@ pub fn flatten_transparent_png(bytes: &[u8], max_px: u64) -> Option<Vec<u8>> {
 pub fn downscale_background(bytes: &[u8], fit: crate::bgfit::BgFit, area: Screen, max_px: u64) -> Option<Vec<u8>> {
     let (fmt, (w, h)) = header_dims(bytes)?;
     let orientation = orientation_of(bytes, fmt);
-    let (w, h) = if swaps_axes(orientation) { (h, w) } else { (w, h) };
+    let (w, h) = upright_dims((w, h), orientation);
     let (nw, nh) = fit.target(w, h, area)?;
     if !within_decode_budget(w, h, max_px) {
         return None;
@@ -1015,25 +1009,11 @@ mod tests {
     }
 
     #[test]
-    fn device_orientation_box_for_comics() {
-        // CBZ/漫画整页：按朝向选盒。横图 3392×1908 → 1696×954（横读可用满宽）
-        let big = jpeg_of(3392, 1908);
-        let (w, h) = image::load_from_memory(&downscale_for_device(&big, test_screen()).unwrap()).unwrap().dimensions();
-        assert_eq!((w, h), (test_screen().height, 954), "横页应到 1696×954");
-        // 方图 → 954×954
-        let sq = jpeg_of(2000, 2000);
-        let (w, h) = image::load_from_memory(&downscale_for_device(&sq, test_screen()).unwrap()).unwrap().dimensions();
-        assert_eq!((w, h), (954, 954));
-    }
-
-    #[test]
     fn frames_follow_the_given_screen() {
         // 非 Move 的屏幕（掌阅 Ocean 5 Pro，1264×1680）：缩放框与漫画页框都按传入的屏幕算，不再是 954×1696。
         let ireader = profile::get("ireader").unwrap().screen;
         let (w, h) = image::load_from_memory(&downscale_for_epub(&jpeg_of(2400, 3200), ireader).unwrap()).unwrap().dimensions();
         assert_eq!((w, h), (1260, 1680), "竖图按 1264×1680 框等比缩");
-        let (w, h) = image::load_from_memory(&downscale_for_device(&jpeg_of(3200, 1600), ireader).unwrap()).unwrap().dimensions();
-        assert_eq!((w, h), (1680, 840), "横页按横向框 1680×1264");
         let out = prep(&gray_jpeg_of(1091, 1592, 0), ireader, false).expect("要补白到屏幕比例");
         assert_eq!(image::load_from_memory(&out).unwrap().dimensions(), (1264, 1680));
     }
@@ -1161,12 +1141,12 @@ mod tests {
     #[test]
     fn skips_already_small_image() {
         let small = jpeg_of(800, 600);
-        assert!(downscale_for_device(&small, test_screen()).is_none(), "已达标图不动（幂等、免二次损失）");
+        assert!(downscale_for_epub(&small, test_screen()).is_none(), "已达标图不动（幂等、免二次损失）");
     }
 
     #[test]
     fn ignores_non_image_bytes() {
-        assert!(downscale_for_device(b"not an image at all", test_screen()).is_none());
+        assert!(downscale_for_epub(b"not an image at all", test_screen()).is_none());
     }
 
     /// 透明 PNG 漫画页：透明区域要合成成白色，不能因为丢掉 alpha 变成黑色（彩色、黑白两条路径都查）。
@@ -1216,7 +1196,6 @@ mod tests {
     #[test]
     fn oversized_image_skipped_by_text_paths_but_comic_pages_are_processed() {
         let huge = gray_jpeg_of(5001, 5000, 0);
-        assert!(downscale_for_device(&huge, test_screen()).is_none(), "文字书插图：超限图应跳过降采样");
         assert!(downscale_for_epub(&huge, test_screen()).is_none(), "文字书插图：超限图应跳过降采样");
         // 漫画页：2500 万像素照常处理（并行时由 imgpool 的像素额度独占，见 MAX_COMIC_DECODE_PIXELS）
         let out = prep(&huge, test_area(), false).expect("900 万像素以上的漫画页也要处理");
@@ -1479,12 +1458,9 @@ mod tests {
         assert_eq!(decode_oriented(&src).unwrap().dimensions(), (2000, 3000));
         // 文字书插图：按摆正后的竖图缩进竖框，像素也摆正（重编码不带 EXIF）
         let out = image::load_from_memory(&downscale_for_epub(&src, test_screen()).unwrap()).unwrap();
-        assert!(out.height() > out.width(), "{:?}", out.dimensions());
+        assert_eq!(out.dimensions(), (954, 1431), "2000×3000 摆正后按竖框缩，而不是按存储的横向宽高");
         let (top, bottom) = top_bottom_luma(&out);
         assert!(top < 30.0 && bottom > 225.0, "上黑下白: {top} {bottom}");
-        // 网络图（按朝向选框）：摆正后是竖图，进竖框 954×1696，而不是按存储的横向宽高进横框
-        let out = image::load_from_memory(&downscale_for_device(&src, test_screen()).unwrap()).unwrap();
-        assert_eq!(out.dimensions(), (954, 1431), "2000×3000 摆正后按竖框缩");
         // 摆正后本来就在框里：不动（原字节连同 EXIF 保留）
         assert!(downscale_for_epub(&exif_rotated_jpeg(1200, 900), test_screen()).is_none());
         // 漫画页：同样先摆正再排版——和直接存成竖图（不带 EXIF）的同一张图结果逐字节相同（PNG 无损，比得了字节）

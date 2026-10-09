@@ -16,19 +16,19 @@ pub fn strip_font_locks(html: &str) -> String {
 /// 同 [`strip_font_locks`]，`keep_fonts` 里的字体保留（嵌了文件、又不是正文字体的，见 `wash::fonts`）。
 pub fn strip_font_locks_keeping(html: &str, keep_fonts: &std::collections::HashSet<String>) -> String {
     use crate::cssunlock::{unlock, Unlock};
-    html::edit_attrs(html, &["style"], |t, a| {
+    html::edit_style_attrs(html, |t, value| {
         let base_text = matches!(t.name.to_ascii_lowercase().as_str(), "body" | "html");
-        let decls = html::css_decls(a.value);
+        let decls = html::css_decls(value);
         let font = |d: &html::CssDecl| ["font", "font-family", "font-size"].iter().any(|p| d.prop.eq_ignore_ascii_case(p));
         let edits: Vec<(&html::CssDecl, Unlock)> =
             decls.iter().filter(|d| font(d)).map(|d| (d, unlock(d.prop, d.value, base_text, keep_fonts))).filter(|(_, u)| *u != Unlock::Keep).collect();
         if edits.is_empty() {
             return Edit::Keep;
         }
-        let mut kept = String::with_capacity(a.value.len());
+        let mut kept = String::with_capacity(value.len());
         let mut last = 0;
         for (d, u) in &edits {
-            kept.push_str(&a.value[last..d.start]);
+            kept.push_str(&value[last..d.start]);
             if let Unlock::Replace(v) = u {
                 kept.push_str(&v.join(";"));
                 if d.raw.trim_end().ends_with(';') {
@@ -37,7 +37,7 @@ pub fn strip_font_locks_keeping(html: &str, keep_fonts: &std::collections::HashS
             }
             last = d.start + d.raw.len();
         }
-        kept.push_str(&a.value[last..]);
+        kept.push_str(&value[last..]);
         let kept = kept.trim().trim_start_matches(';').trim();
         if kept.is_empty() {
             Edit::Remove // 整个 style 属性删掉(连前导空格)

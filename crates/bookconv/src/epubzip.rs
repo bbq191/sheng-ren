@@ -121,6 +121,11 @@ impl<W: Write + Seek> EpubWriter<W> {
         self.zw.raw_copy_file(f).map_err(|e| e.to_string())
     }
 
+    /// 同 [`raw_copy`](EpubWriter::raw_copy)，写成 `name`（清洗时改过名的条目）。
+    pub fn raw_copy_as(&mut self, f: zip::read::ZipFile, name: &str) -> Result<(), String> {
+        self.zw.raw_copy_file_rename(f, name).map_err(|e| e.to_string())
+    }
+
     /// 写一个 [`Precompressed`] 条目：拷它压好的数据，产物和直接 [`put`](EpubWriter::put) 同名同内容的条目逐字节相同。
     pub fn put_precompressed(&mut self, p: Precompressed) -> Result<(), String> {
         let mut z = ZipArchive::new(std::io::Cursor::new(p.0)).map_err(|e| format!("预压缩条目: {e}"))?;
@@ -292,7 +297,7 @@ pub fn open_file_zip(path: &std::path::Path) -> Result<FileZip, String> {
 pub fn open_opf(epub: &std::path::Path) -> Result<(FileZip, String, String), String> {
     let mut zip = open_file_zip(epub)?;
     let container = read_text_opt(&mut zip, "META-INF/container.xml").ok_or("缺 META-INF/container.xml")?;
-    let opf_path = crate::wash::tag_attr(&container, "full-path").ok_or("container.xml 里没有 full-path")?.to_string();
+    let opf_path = crate::wash::opf::container_opf_path(&container).ok_or("container.xml 里没有 full-path")?;
     let opf = read_text_opt(&mut zip, &opf_path).ok_or("读不到 OPF")?;
     Ok((zip, opf_path, opf))
 }
