@@ -80,20 +80,10 @@ fn css_rules(css: &str) -> (Pairs, Pairs) {
 
 /// `src` 里的 `url(...)` 有没有一个指到书里存在的文件。
 fn src_embedded(src: &str, base_dir: &str, names: &HashSet<&str>) -> bool {
-    let mut rest = src;
-    while let Some(i) = html::find_ci(rest, "url(") {
-        let after = &rest[i + 4..];
-        let Some(j) = after.find(')') else { break };
-        let raw = after[..j].trim().trim_matches(['"', '\'']).trim();
-        if !raw.is_empty() && !html::is_external(raw) {
-            let path = posix_norm(&resolve(base_dir, &crate::epubzip::percent_decode(raw.split(['#', '?']).next().unwrap_or(raw))));
-            if names.contains(path.as_str()) {
-                return true;
-            }
-        }
-        rest = &after[j..];
-    }
-    false
+    html::css_urls(src).iter().any(|u| {
+        let raw = u.value.trim();
+        !raw.is_empty() && !html::is_external(raw) && names.contains(posix_norm(&resolve(base_dir, &crate::epubzip::percent_decode(raw.split(['#', '?']).next().unwrap_or(raw)))).as_str())
+    })
 }
 
 impl FontPlan {

@@ -46,7 +46,7 @@
 | `epub` / `epubzip` | EPUB 组装与读写（每个 zip 条目解压上限 `MAX_ENTRY_BYTES` 256MB，EPUB、CBZ 共用，超过报错）：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`、zip 内路径工具、书里链接解析 `resolve_link` |
 | `epubbook` | 读整本 EPUB（元数据、spine 里的 XHTML、CSS、图片、封面、目录），KFX 写出器用 |
 | `ncx` | NCX 目录解析与改写 |
-| `netimg` / `direction` / `probe` | 远程图抓取（单张上限 `MAX_IMAGE_BYTES` 20MB；`origin_of` 取网址的站点）；翻页方向（读写 spine `page-progression-direction` 全书只用 `direction::spine_direction`/`set_spine_direction`）；测量书 |
+| `netimg` / `direction` / `probe` | 远程图抓取（单张上限 `MAX_IMAGE_BYTES` 20MB；一章里的远程图去重后 4 路同时抓，起名照出现顺序；`origin_of` 取网址的站点）；翻页方向（读写 spine `page-progression-direction` 全书只用 `direction::spine_direction`/`set_spine_direction`）；测量书 |
 | `util` / `naming` | 转义、全角转半角、文件名、书名规整；原子写（`produce_then_replace`、`commit`，书库也用；产出途中 panic 也删临时文件）；带上限的读取 `read_capped`（超过报错、不截断）；命令行公共函数 |
 
 ### wash 子模块
@@ -91,7 +91,7 @@
 | `lib.rs` | 条目（`Meta`）、入库、原件核对、`dedupe`、删除 |
 | `sources.rs` | 跟踪目录与同步 |
 | `generate.rs` | 生成计划与指纹、产物放哪、一本书几个模式共用的中间文件、按模式生成、生成记录 |
-| `deliver.rs` | 产物送到设备（2026-10-07）：设备接没接上（MTP 挂载点、SSH 到 Move）、往 MTP 设备上放文件（相同字节不拷）、调 Move 上书架服务的导入接口（新加、原地替换、查、进回收站） |
+| `deliver.rs` | 产物送到设备（2026-10-07）：设备接没接上（MTP 挂载点、SSH 到 Move；地址是 IP 的先探 22 端口，0.8 秒不通就跳过，不等 ssh 超时）、往 MTP 设备上放文件（相同字节不拷）、调 Move 上书架服务的导入接口（新加、原地替换、查、进回收站） |
 | `metadata.rs` | `meta --fetch` 的调度；生成时往书里补缺的封面、简介、标签 |
 | `douban.rs` / `qqread.rs` / `wikidata.rs` / `cover.rs` / `covergen.rs` | 书目源：豆瓣、QQ 阅读、Wikidata；原作封面（Open Library / Commons）；生成封面 |
 | `net.rs` / `matching.rs` | 节流重试的 HTTP；书名人名比对（全半角、繁简、译名用字） |
@@ -139,7 +139,7 @@
 4. 位置变了先登记再生成：记录先改成新位置（指纹留空 = 没完成）、旧位置记进待删，中途打断下次也认得出。新书：同一轮里这个文件名先在内存里占住，别的同名书不会选它；放电脑上的不预登记（省一次整份记录的写），中途打断的话下次重新生成出逐字节相同的产物时认领它；MTP 设备上直接写正式文件名，要预登记（见第 6 步）。
 5. 与模式无关的中间文件（CBZ 转出的 EPUB、补了元数据的 EPUB）放在 `.tmp-<id>-src/`，同一本书的几个模式共用：按书 id 留到这本书所有模式都做完（某台设备排满、这本留到最后补的，不用再转一遍），留着的总量超过 1GB（`PREPARED_BUDGET`）时丢掉最早的，之后用到再做。
 6. `prepare` 到这里为止在主线程（比较、生成）；放上设备是 `Transfer`，`sync` 交给 `deliver::Pipeline` 的传输线程（每台设备一条，在传含排队最多 2 件，满了主线程先做别的设备；Move 那条交一件、`GET /import/jobs/<号>` 查到做完再交下一件；原地替换碰到书架服务那边这本还在替换（上一次 `sync` 交的没做完，回 409），轮询 `GET /import/<uuid>` 的 `replacing` 等它做完再交，最多 30 分钟），传完主线程 `complete` 写记录、删旧位置——记录只在主线程改（图见[使用指南 · 产物放在哪](usage.md#产物放在哪)）。库函数 `build`（单本、不走传输线程；命令行已经没有 `build`）是 prepare + run + complete。
-   流式优化，写进书库的临时目录 `.tmp-<id>-<模式>/`（`product`，Kindle/掌阅、Move 共用）→ 质量门 → 算 SHA-256，和记录里上次传的一样就不再传（`Built::Same`）→ 否则放到设备上（拷贝用 1MB 块）：MTP 设备先删旧的、直接写正式文件名（jmtpfs 的改名是整份下载再上传，经临时文件等于传三遍；所以先在生成记录里登记一条指纹留空的，写到一半被打断时下次认得出、重传）；目标已是逐字节相同的就不拷，Kindle 进度不丢；Move 经导入接口新加或按 uuid 原地替换。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（profile 可以用 `comic_format` 给漫画另配格式，内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。KFX 的唯一 ID 取自书 id（`kfx_id`，见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机)），`@media` 按这个模式的阅读范围、屏幕求值（`kfx::css::MediaEnv::for_profile`）。
+   流式优化，写进书库的临时目录 `.tmp-<id>-<模式>/`（`product`，Kindle/掌阅、Move 共用）→ 质量门 → 算 SHA-256，和记录里上次传的一样就不再传（`Built::Same`）→ 否则放到设备上（拷贝用 1MB 块）：MTP 设备先删旧的、直接写正式文件名（原版 jmtpfs 的改名是整份下载再上传，经临时文件等于传三遍；本机打过补丁的 jmtpfs 2026-10-09 起改成真改名、换目录用 MTP MoveObject，挪位置也不再重传，Kindle、掌阅真机 ✓；所以先在生成记录里登记一条指纹留空的，写到一半被打断时下次认得出、重传）；目标已是逐字节相同的就不拷，Kindle 进度不丢；Move 经导入接口新加或按 uuid 原地替换。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（profile 可以用 `comic_format` 给漫画另配格式，内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。KFX 的唯一 ID 取自书 id（`kfx_id`，见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机)），`@media` 按这个模式的阅读范围、屏幕求值（`kfx::css::MediaEnv::for_profile`）。
 7. 补上指纹，删掉待删的旧位置和变空的目录（只在产物根目录以内；Move 上的进回收站）。MTP 设备没挂上时删不了的留着下次删，不当成已删。
 
 生成记录是 `<书库>/output-state/<模式 id>.json`：书 id → 产物路径（Move 上的是 `uuid`、显示名 `name` 和相对的 `文件夹/文件名`）、指纹、传上去的那份的哈希 `sha`、待删的旧位置；`orphans` 是从书库删了、当时设备没接上没删成的，接上后删（`flush_removed`）。**只删这里记着的**。

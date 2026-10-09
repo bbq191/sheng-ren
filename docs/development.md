@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-09：554 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-09：556 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -127,6 +127,7 @@ done
   | 改 `style` 属性（字符引用先还原、改完再转义） | `html::edit_style_attrs`（别直接拿 `edit_attrs` 的原文去切声明） |
   | 取看得见的文字（认全部 HTML 命名实体） | `html::plain_text`、`html::has_visible`、`html::unescape_entities` |
   | container.xml 里的 OPF 路径 | `wash::opf::container_opf_path` |
+  | CSS 里的 `url(…)`（样式表、`<style>`、`style` 属性；2026-10-09 从三份收拢） | `html::css_urls` |
   | GBK、Big5、UTF-16 的 XHTML、OPF、NCX 转 UTF-8 | `wash::transcode_entries`（优化器读完书先转，后面一律按 UTF-8） |
   | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | `bookconv::uastyle` |

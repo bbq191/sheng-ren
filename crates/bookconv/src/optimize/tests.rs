@@ -53,6 +53,24 @@
         assert!(has_remote_img(r#"<img alt='a>b' src='https://a/b.jpg'/>"#));
     }
 
+    /// 一章的远程图同时抓（同一个地址只抓一次），起名、改写照出现顺序，和逐张抓一样（2026-10-09）。
+    #[test]
+    fn remote_images_fetched_once_each_in_parallel_named_in_order() {
+        let html: String = (0..6).map(|i| format!(r#"<img src="https://x.com/{}.png"/>"#, i % 3)).collect();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let (mut n, mut taken) = (0usize, HashSet::new());
+        let (out, res) = inline_remote_images(&html, "", &mut n, &mut taken, true, |src: &str| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            Some((src.as_bytes().to_vec(), "png"))
+        });
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3, "三个不同地址各抓一次");
+        let names: Vec<&str> = res.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(names, ["remote_img_0.png", "remote_img_1.png", "remote_img_2.png", "remote_img_3.png", "remote_img_4.png", "remote_img_5.png"]);
+        assert_eq!(res[3].1, b"https://x.com/0.png", "第四张和第一张同一地址、内容相同");
+        assert!(out.starts_with(r#"<img src="remote_img_0.png"/><img src="remote_img_1.png"/>"#), "{out}");
+    }
+
     #[test]
     fn noteicon_rule_dropped_only_when_icons_become_numbers() {
         let mut epub = Vec::new();
