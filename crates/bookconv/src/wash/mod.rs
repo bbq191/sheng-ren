@@ -272,16 +272,16 @@ fn detect_dominant_script(entries: &[Entry]) -> LangMode {
 }
 
 /// 对条目表就地清洗。真 DRM 返回 Err（调用方应整体失败、原样不动）。漫画识别（`comic_detect::is_comic`）在定章节前按清洗到那一步的条目判。
-pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashReport, String> {
+pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashReport, crate::BookError> {
     wash_with(entries, opts, None)
 }
 
 /// 同 [`wash_entries`]，漫画识别用调用方判好的结果（优化器按原书判一次，清洗层和图片处理用同一个结果，不再判第二遍）。
-pub(crate) fn wash_entries_as(entries: &mut Vec<Entry>, opts: &WashOpts, comic: bool) -> Result<WashReport, String> {
+pub(crate) fn wash_entries_as(entries: &mut Vec<Entry>, opts: &WashOpts, comic: bool) -> Result<WashReport, crate::BookError> {
     wash_with(entries, opts, Some(comic))
 }
 
-fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> Result<WashReport, String> {
+fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> Result<WashReport, crate::BookError> {
     let mut rep = WashReport::default();
     // 先把 GBK、Big5、UTF-16 的文件转成 UTF-8：后面各步都按 UTF-8 读写
     encoding::transcode_to_utf8(entries, &mut rep);

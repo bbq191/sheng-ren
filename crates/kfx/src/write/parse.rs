@@ -306,6 +306,121 @@ fn prepend_ids(ids: &mut Vec<(String, usize)>, lead: Vec<String>) {
     ids.splice(0..0, lead.into_iter().map(|i| (i, 0)));
 }
 
+/// [`Doc::special_block`] 的结果。只是交接用的返回值（拿到立刻拆开），两个变体大小不同无所谓，不为它装箱。
+#[allow(clippy::large_enum_variant)]
+enum Special {
+    /// 列表、表格、水平线自成的一块。
+    Own(Block),
+    /// 不是这几种：交回计算值，照普通块处理。
+    Normal(Computed),
+}
+
+/// 块级元素只包着一段文字（[`Doc::block`] 判的 `own`）：这段文字就是本元素的块，换上本元素的计算值、标题级别和盒子。
+fn own_text_block(mut b: Block, comp: Computed, heading: Option<u8>, lens: BoxLens) -> Block {
+    b.comp = absorb_whole_span_style(&mut b.kind, comp);
+    // 现在它是本元素自己的块了，外层元素不能再把它当成自己的文字
+    b.inline = false;
+    b.heading = heading;
+    b.margin_top = lens.margin_top;
+    b.margin_bottom = lens.margin_bottom;
+    b.margin_left = lens.margin_left;
+    b.margin_right = lens.margin_right;
+    b.padding = lens.padding;
+    b.padding_h = lens.padding_h;
+    b
+}
+
+/// 整段只有一个带样式的行内元素（`<p><span class="大字">版权信息</span></p>`、`<p><b>注：…</b></p>`）：它的文字样式并进段落
+/// （Send to Kindle 同样：《人生海海》字号 1.833 写在段落上、行高按它算；《金庸》整段的 `<b>` 是段落的 bolder）。
+/// 返回段落的计算值；并进去的区间去掉样式（只剩链接的照留）。不是这种段落的原样返回 `comp`。
+fn absorb_whole_span_style(kind: &mut Kind, comp: Computed) -> Computed {
+    let mut comp = comp;
+    if let Kind::Text { text, runs } = kind {
+        // 几层都覆盖整段时（`<span class="大字"><span class="bold">目录</span></span>`）取最里层，它的计算值已经含外层；链接照留
+        let n = text.chars().count();
+        let whole = !runs.is_empty() && runs.iter().all(|r| r.start == 0 && r.len == n && !r.note_ref);
+        let inner = runs.iter().rev().find_map(|r| r.comp.as_ref()).cloned();
+        if let (true, Some(rc)) = (whole, inner) {
+            if !rc.superscript && !rc.subscript && !rc.has_border() && rc.background.is_none() {
+                // `<a>` 的颜色是链接颜色，留在链接区间上（Send to Kindle 写成 `$576`/`$577`），不并进段落
+                let anchor = runs.iter().any(|r| r.anchor);
+                let color = comp.color;
+                comp = merge_text_style(&comp, &rc);
+                if anchor {
+                    comp.color = color;
+                }
+                runs.retain_mut(|r| {
+                    if !(r.anchor && r.comp.as_ref().is_some_and(|c| c.color != color)) {
+                        r.comp = None;
+                    }
+                    r.link.is_some() || r.comp.is_some()
+                });
+            }
+        }
+    }
+    comp
+}
+
+/// 有背景、边框、内边距或宽度的块级元素（[`Doc::block`] 判的 `boxed`）：写成容器套子块，盒子在容器上。
+fn container_block(name: &str, comp: Computed, children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Vert) -> Block {
+    // 页面一级的 `cover` 背景：照 Send to Kindle 写整页范围（`$645`），背景铺满一页而不是只在内容范围里画（《绍宋》卷首语，真机 ✓）。
+    // 2026-10-08 试过也给 `fixed` 写了尺寸的写（制作说明），真机没有效果，用户说不改了，撤回。只认 body：别的块上没见过样本。
+    let page_bg = comp.bg_cover;
+    let attrs = if name == "body" && page_bg && comp.bg_image.is_some() {
+        let b = BG_PAGE_BOUNDS_KEYS.iter().zip([0.0, 0.0, 100.0, 100.0]).map(|(&k, v)| (k, num(v, U_PERCENT))).collect();
+        vec![(BG_PAGE_BOUNDS, Value::Struct(b))]
+    } else {
+        Vec::new()
+    };
+    let mut children = children;
+    mark_bare(&mut children, &comp);
+    Block {
+        kind: Kind::Container(children),
+        comp,
+        heading,
+        margin_top: lens.margin_top,
+        margin_bottom: lens.margin_bottom,
+        margin_left: lens.margin_left,
+        margin_right: lens.margin_right,
+        padding: lens.padding,
+        padding_h: lens.padding_h,
+        ids: lead.into_iter().map(|i| (i, 0)).collect(),
+        note: false,
+        ty: None,
+        attrs,
+        extra: Vec::new(),
+        bare: false,
+        inline: false,
+        gap_before: pre_gap,
+    }
+}
+
+/// 没有背景的包裹层摊平：竖直外边距、内边距并进首尾子块（开头的锚点、空段留下的间距、标题级别给第一个子块），
+/// 水平外边距加到每个子块上。
+fn flatten_wrapper(children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Vert, out: &mut Vec<Block>) {
+    let BoxLens { margin_top, margin_bottom, margin_left: ml, margin_right: mr, padding, .. } = lens;
+    let n = children.len();
+    let mut lead = Some(lead);
+    for (i, mut c) in children.into_iter().enumerate() {
+        if i == 0 {
+            c.margin_top = collapse(margin_top + padding[0], c.margin_top);
+            c.gap_before += pre_gap;
+            prepend_ids(&mut c.ids, lead.take().unwrap_or_default());
+            if c.heading.is_none() {
+                c.heading = heading;
+            }
+        }
+        if i + 1 == n {
+            c.margin_bottom = collapse(margin_bottom + padding[2], c.margin_bottom);
+        }
+        c.margin_left.em += ml.em;
+        c.margin_left.pct += ml.pct;
+        c.margin_right.em += mr.em;
+        c.margin_right.pct += mr.pct;
+        out.push(c);
+    }
+}
+
 impl Doc<'_> {
     /// 取走还没落到内容上的锚点（见 [`Doc::pending`]）。
     fn take_pending(&self) -> Vec<String> {
@@ -332,6 +447,9 @@ impl Doc<'_> {
     }
 
     /// 把一个块级元素（计算值 `comp` 由调用方算好，层叠不重复做）展开成块序列。
+    ///
+    /// 分四种写法：列表、表格、水平线自成一块（[`Doc::special_block`]）；只包着一段文字的就是这段文字（[`own_text_block`]）；
+    /// 有背景、边框、内边距或宽度的写成容器（[`container_block`]）；其余的包裹层摊平到子块上（[`flatten_wrapper`]）。
     fn block(&self, el: ElementRef, comp: Computed, out: &mut Vec<Block>) {
         if comp.display.as_deref() == Some("none") {
             return;
@@ -343,37 +461,10 @@ impl Doc<'_> {
         // 本元素之前攒下的锚点落在本元素的开头。
         let pre = self.take_pending();
         let pre_gap = self.gap.take();
-        match name {
-            "ul" | "ol" => {
-                // 列表符号看列表项（`li` 上写的优先，《雪国》把 `cjk-ideographic` 写在 `li` 上）；列表项写成
-                // `display:block` 的不显示符号（《啸风山庄》`li {display:block}`），和 `list-style:none` 一样当普通块。
-                let first = el.children().filter_map(ElementRef::wrap).find(|c| c.value().name() == "li").map(|li| self.comp(&li, &comp));
-                let mut comp = comp.clone();
-                if let Some(li) = &first {
-                    if li.list_style.is_some() {
-                        comp.list_style = li.list_style.clone();
-                    }
-                }
-                let marker = first.as_ref().is_none_or(|li| li.display.as_deref().is_none_or(|d| d == "list-item"));
-                if marker && comp.list_style.as_deref() != Some("none") {
-                    return out.push(self.list(el, comp, first).led_by(pre, pre_gap));
-                }
-            }
-            "table" => return out.push(self.table(el, comp).led_by(pre, pre_gap)),
-            "hr" => {
-                let mut b = self.boxed(Kind::Container(Vec::new()), comp, el.value().attr("id"));
-                b.ty = Some(NODE_HR);
-                // UA 样式：上下 0.5em。
-                if b.comp.margin[0].is_none() {
-                    b.margin_top = 0.5 * b.comp.font_size;
-                }
-                if b.comp.margin[2].is_none() {
-                    b.margin_bottom = 0.5 * b.comp.font_size;
-                }
-                return out.push(b.led_by(pre, pre_gap));
-            }
-            _ => {}
-        }
+        let comp = match self.special_block(el, comp) {
+            Special::Own(b) => return out.push(b.led_by(pre, pre_gap)),
+            Special::Normal(comp) => comp,
+        };
         let heading = bookconv::html::heading_level_of(name);
         let mut children = Vec::new();
         self.children(el, &comp, &mut children);
@@ -389,114 +480,67 @@ impl Doc<'_> {
             self.gap.set(self.gap.get() + pre_gap);
             return;
         }
-        let BoxLens { margin_top, margin_bottom, margin_left: mut ml, margin_right: mr, padding, padding_h } = BoxLens::of(&comp);
+        let mut lens = BoxLens::of(&comp);
         // 不显示符号的列表（`list-style:none`）当普通块，照 Amazon 缩进 1.5em（测试书 L04：`$48` 4.688%）。
         if matches!(name, "ul" | "ol") && comp.margin[3].is_none() && comp.padding[3].is_none() {
-            ml.em += 1.5;
+            lens.margin_left.em += 1.5;
         }
         // 自己只包着一个文字块（普通段落）：本元素就是这个块。
         // 有背景或内边距的块写成容器套文字（样本里带背景色的 h1 就是这样；背景、内边距、负外边距直接放在文字段落上，
         // Kindle 上长标题会溢出屏幕，2026-10-05 真机）。
-        let boxed = comp.background.is_some() || comp.bg_image.is_some() || padding.iter().any(|p| *p != 0.0) || comp.has_border() || comp.box_shadow.is_some();
+        let boxed = comp.background.is_some() || comp.bg_image.is_some() || lens.padding.iter().any(|p| *p != 0.0) || comp.has_border() || comp.box_shadow.is_some();
         let own = !boxed && children.len() == 1 && matches!(children[0].kind, Kind::Text { .. }) && children[0].is_anonymous() && children[0].inline;
         // 有宽度的包裹层也写成容器，宽度写在容器上；只有自己文字的块宽度写在文字上（Send to Kindle 同样：《金庸》60% 宽的 div、
         // 《平凡的世界》`width:100%` 的章标题）
         let boxed = boxed || (!own && comp.width.is_some());
         if own {
-            let mut b = children.pop().unwrap_or_else(|| unreachable!());
-            // 整段只有一个带样式的行内元素（`<p><span class="大字">版权信息</span></p>`、`<p><b>注：…</b></p>`）：它的文字样式并进段落
-            // （Send to Kindle 同样：《人生海海》字号 1.833 写在段落上、行高按它算；《金庸》整段的 `<b>` 是段落的 bolder）
-            let mut comp = comp;
-            if let Kind::Text { text, runs } = &mut b.kind {
-                // 几层都覆盖整段时（`<span class="大字"><span class="bold">目录</span></span>`）取最里层，它的计算值已经含外层；链接照留
-                let n = text.chars().count();
-                let whole = !runs.is_empty() && runs.iter().all(|r| r.start == 0 && r.len == n && !r.note_ref);
-                let inner = runs.iter().rev().find_map(|r| r.comp.as_ref()).cloned();
-                if let (true, Some(rc)) = (whole, inner) {
-                    if !rc.superscript && !rc.subscript && !rc.has_border() && rc.background.is_none() {
-                        // `<a>` 的颜色是链接颜色，留在链接区间上（Send to Kindle 写成 `$576`/`$577`），不并进段落
-                        let anchor = runs.iter().any(|r| r.anchor);
-                        let color = comp.color;
-                        comp = merge_text_style(&comp, &rc);
-                        if anchor {
-                            comp.color = color;
-                        }
-                        runs.retain_mut(|r| {
-                            if !(r.anchor && r.comp.as_ref().is_some_and(|c| c.color != color)) {
-                                r.comp = None;
-                            }
-                            r.link.is_some() || r.comp.is_some()
-                        });
-                    }
-                }
-            }
-            b.comp = comp;
-            // 现在它是本元素自己的块了，外层元素不能再把它当成自己的文字
-            b.inline = false;
-            b.heading = heading;
-            b.margin_top = margin_top;
-            b.margin_bottom = margin_bottom;
-            b.margin_left = ml;
-            b.margin_right = mr;
-            b.padding = padding;
-            b.padding_h = padding_h;
-            out.push(b.led_by(lead, pre_gap));
+            let b = children.pop().unwrap_or_else(|| unreachable!());
+            out.push(own_text_block(b, comp, heading, lens).led_by(lead, pre_gap));
             return;
         }
         if boxed {
-            // 页面一级的 `cover` 背景：照 Send to Kindle 写整页范围（`$645`），背景铺满一页而不是只在内容范围里画（《绍宋》卷首语，真机 ✓）。
-            // 2026-10-08 试过也给 `fixed` 写了尺寸的写（制作说明），真机没有效果，用户说不改了，撤回。只认 body：别的块上没见过样本。
-            let page_bg = comp.bg_cover;
-            let attrs = if name == "body" && page_bg && comp.bg_image.is_some() {
-                let b = BG_PAGE_BOUNDS_KEYS.iter().zip([0.0, 0.0, 100.0, 100.0]).map(|(&k, v)| (k, num(v, U_PERCENT))).collect();
-                vec![(BG_PAGE_BOUNDS, Value::Struct(b))]
-            } else {
-                Vec::new()
-            };
-            let mut children = children;
-            mark_bare(&mut children, &comp);
-            out.push(Block {
-                kind: Kind::Container(children),
-                comp,
-                heading,
-                margin_top,
-                margin_bottom,
-                margin_left: ml,
-                margin_right: mr,
-                padding,
-                padding_h,
-                ids: lead.into_iter().map(|i| (i, 0)).collect(),
-                note: false,
-                ty: None,
-                attrs,
-                extra: Vec::new(),
-            bare: false,
-            inline: false,
-            gap_before: pre_gap,
-            });
+            out.push(container_block(name, comp, children, heading, lens, lead, pre_gap));
             return;
         }
-        // 没有背景的包裹层摊平：竖直外边距、内边距并进首尾子块，水平外边距加到每个子块上。
-        let n = children.len();
-        let mut lead = Some(lead);
-        for (i, mut c) in children.into_iter().enumerate() {
-            if i == 0 {
-                c.margin_top = collapse(margin_top + padding[0], c.margin_top);
-                c.gap_before += pre_gap;
-                prepend_ids(&mut c.ids, lead.take().unwrap_or_default());
-                if c.heading.is_none() {
-                    c.heading = heading;
+        flatten_wrapper(children, heading, lens, lead, pre_gap, out);
+    }
+
+    /// 列表、表格、水平线：自成一块（自己的外边距、内边距照计算值，不摊平），开头的锚点由调用方接上。
+    /// 别的元素（以及当普通块处理的列表：不显示符号的）原样交回 [`Special::Normal`]，照普通块往下走。
+    fn special_block(&self, el: ElementRef, comp: Computed) -> Special {
+        match el.value().name() {
+            "ul" | "ol" => {
+                // 列表符号看列表项（`li` 上写的优先，《雪国》把 `cjk-ideographic` 写在 `li` 上）；列表项写成
+                // `display:block` 的不显示符号（《啸风山庄》`li {display:block}`），和 `list-style:none` 一样当普通块。
+                let first = el.children().filter_map(ElementRef::wrap).find(|c| c.value().name() == "li").map(|li| self.comp(&li, &comp));
+                // 列表项上的符号只用来写列表；当普通块往下走时交回的是没改过的计算值
+                let mut comp = comp.clone();
+                if let Some(li) = &first {
+                    if li.list_style.is_some() {
+                        comp.list_style = li.list_style.clone();
+                    }
+                }
+                let marker = first.as_ref().is_none_or(|li| li.display.as_deref().is_none_or(|d| d == "list-item"));
+                if marker && comp.list_style.as_deref() != Some("none") {
+                    return Special::Own(self.list(el, comp, first));
                 }
             }
-            if i + 1 == n {
-                c.margin_bottom = collapse(margin_bottom + padding[2], c.margin_bottom);
+            "table" => return Special::Own(self.table(el, comp)),
+            "hr" => {
+                let mut b = self.boxed(Kind::Container(Vec::new()), comp, el.value().attr("id"));
+                b.ty = Some(NODE_HR);
+                // UA 样式：上下 0.5em。
+                if b.comp.margin[0].is_none() {
+                    b.margin_top = 0.5 * b.comp.font_size;
+                }
+                if b.comp.margin[2].is_none() {
+                    b.margin_bottom = 0.5 * b.comp.font_size;
+                }
+                return Special::Own(b);
             }
-            c.margin_left.em += ml.em;
-            c.margin_left.pct += ml.pct;
-            c.margin_right.em += mr.em;
-            c.margin_right.pct += mr.pct;
-            out.push(c);
+            _ => {}
         }
+        Special::Normal(comp)
     }
 
     /// 自己的外边距、内边距照计算值的块（列表、表格、单元格、水平线用；不摊平、不并进子块）。

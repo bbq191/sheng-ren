@@ -25,11 +25,11 @@ pub fn real_drm_items(targets: &[String]) -> Vec<String> {
     targets.iter().filter(|t| { let l = t.to_ascii_lowercase(); !PSEUDO_DRM_SAFE_EXTS.iter().any(|e| l.ends_with(e)) }).cloned().collect()
 }
 
-pub(super) fn strip_pseudo_drm(entries: &mut Vec<Entry>, rep: &mut WashReport) -> Result<(), String> {
+pub(super) fn strip_pseudo_drm(entries: &mut Vec<Entry>, rep: &mut WashReport) -> Result<(), crate::BookError> {
     let Some(targets) = encrypted_targets(entries) else { return Ok(()) };
     let bad = real_drm_items(&targets);
     if !bad.is_empty() {
-        return Err(format!("加密 EPUB（真 DRM，加密了 {} 等 {} 项），阅读器都读不了", bad.iter().take(3).cloned().collect::<Vec<_>>().join("、"), bad.len()));
+        return Err(crate::BookError::Drm(format!("加密 EPUB（真 DRM，加密了 {} 等 {} 项），阅读器都读不了", bad.iter().take(3).cloned().collect::<Vec<_>>().join("、"), bad.len())));
     }
     let drop: HashSet<String> = targets.iter().cloned().chain(std::iter::once("META-INF/encryption.xml".to_string())).collect();
     if let Some(oi) = find_opf(entries) {

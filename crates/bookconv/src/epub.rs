@@ -329,7 +329,7 @@ fn write_book<W: std::io::Write + std::io::Seek>(book: &mut Book, opts: &Assembl
     if let Some(css) = &opts.shared_css {
         z.put_stored(&format!("OEBPS/{}", css.file), css.content.as_bytes())?;
     }
-    z.finish()
+    Ok(z.finish()?)
 }
 
 #[cfg(test)]
