@@ -202,7 +202,7 @@ fn root_font_size_declared(entries: &[Entry]) -> bool {
         }
         let Ok(t) = std::str::from_utf8(&e.data) else { return false };
         html::style_block_re().captures_iter(t).any(|c| in_css(&c[2]))
-            || html::tags(t).find(|g| g.is_start() && g.is("html")).and_then(|g| html::attr_value(&t[g.start..g.end], "style").map(|v| sizes(v))).unwrap_or(false)
+            || html::tags(t).find(|g| g.is_start() && g.is("html")).and_then(|g| html::attr_value(&t[g.start..g.end], "style").map(sizes)).unwrap_or(false)
     })
 }
 
