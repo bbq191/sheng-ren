@@ -6,7 +6,7 @@
   输出：每本的配上率；全部书合起来的差异（属性, Amazon, 我们）：节点数、书数、例子。"""
 import collections, os, re, subprocess, sys, zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kfx import cli_args, cli_opts
+from kfx import cli_args, cli_opts, opf_path
 import s2kcmp
 
 
@@ -16,11 +16,10 @@ def norm(s):
 
 
 def opf_title(path):
+    """OPF 里 dc:title 的文字；读不出来时 None。OPF 定位用 toollib.opf_path（单双引号都认）。"""
     try:
-        z = zipfile.ZipFile(path)
-        c = z.read('META-INF/container.xml').decode('utf-8', 'replace')
-        opf = re.search(r'full-path="([^"]+)"', c).group(1)
-        o = z.read(opf).decode('utf-8', 'replace')
+        with zipfile.ZipFile(path) as z:
+            o = z.read(opf_path(z)).decode('utf-8', 'replace')
         m = re.search(r'<dc:title[^>]*>(.*?)</dc:title>', o, re.S)
         return re.sub(r'<[^>]+>', '', m.group(1)).strip() if m else None
     except Exception:

@@ -27,8 +27,10 @@ import sys
 import zipfile
 import xml.parsers.expat
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # tools/：toollib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from regresslib import index, pairs, spine_paths  # noqa: E402
+from toollib import cli_args  # noqa: E402
 
 MARKER = re.compile(r'<a\b[^>]*\bhref=["\']#[^"\']*["\'][^>]*>\s*\[\d+\]\s*</a>')
 
@@ -105,7 +107,7 @@ def same_entries(za, zb):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    args = cli_args(2, __doc__)
     flags = [a for a in sys.argv[1:] if a.startswith('--')]
     strip = '--strip-old-markers' in flags
     if len(args) != 2 or any(f != '--strip-old-markers' for f in flags):

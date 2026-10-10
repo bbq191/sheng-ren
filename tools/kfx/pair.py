@@ -1,34 +1,21 @@
 """EPUB ↔ KFX 对照：按文字把 KFX 的文字节点配回 EPUB 元素，汇总 (标签+类) → KFX 样式/类型。
-用法：python3 pair.py 书.kfx 原书.epub"""
+用法：python3 pair.py 书.kfx 原书.epub [--unmatched]
+KFX 一侧走 `kfx-dump --json`（kfx.text_nodes）。EPUB 一侧要的是每块文字所在的标签和 class，`epub-to-kfx --styles` 只给算好的样式、
+不给标签，所以这里仍按 spine 顺序自己切块（只认块级标签，不算样式）。"""
 import os, sys, zipfile, re, collections
 from html.parser import HTMLParser
-from kfx import load, cli_args, short
+from kfx import by_type, cli_args, short, text_nodes
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'regress'))
 from regresslib import spine_paths  # noqa: E402  读 container.xml、href 还原字符引用和百分号解码
 
 kfx_path, epub_path = cli_args(2, "用法：python3 pair.py 书.kfx 原书.epub [--unmatched]")[:2]
-ci,ents=load(kfx_path)
-E={}
-for i,t,b in ents: E.setdefault(t,{})[i]=b[0] if isinstance(b,list) and b else b
-pools={k:v['$146'] for k,v in E.get('$145',{}).items()}
+E=by_type(kfx_path)
 styles=E.get('$157',{})
 def norm(s): return re.sub(r'\s+','',s)
 
-knodes=[]
-def walk(n, path):
-    t=n.get('$145')
-    here=path+[(n.get('$159'), n.get('$157'))]
-    if isinstance(t,dict) and t.get('name') in pools:
-        knodes.append((norm(pools[t['name']][t['$403']]), n, here))
-    for k in n.get('$146',[]) or []:
-        if isinstance(k,dict): walk(k, here)
-order=E['$258'][list(E['$258'])[0]]['$169'][0]['$170']
-for sname in order:
-    for pt in E['$260'][sname]['$141']:
-        sl=E['$259'].get(pt.get('$176'))
-        if not sl: continue
-        for n in sl.get('$146',[]): walk(n,[])
+# KFX 一侧：storyline 怎么走由 kfx.text_nodes 统一（s2kcmp、tree 同一份）；每个节点记 (类型, 样式名)
+knodes=[(norm(t), [(n.get('$159'), n.get('$157')) for n in chain]) for t,chain in text_nodes(E)]
 
 z=zipfile.ZipFile(epub_path)
 BLOCK={'p','h1','h2','h3','h4','h5','h6','div','li','td','th','dt','dd','blockquote','pre','caption','figcaption'}
@@ -60,7 +47,7 @@ queue=collections.defaultdict(collections.deque)
 for txt,st in eblocks: queue[txt].append(st)
 pairs=collections.Counter(); unmatched=0
 examples={}
-for txt,n,path in knodes:
+for txt,path in knodes:
     if queue[txt]:
         st=queue[txt].popleft()
         key=' > '.join(f"{t}.{c}".rstrip('.') for t,c,_ in st if t not in ('html',))
