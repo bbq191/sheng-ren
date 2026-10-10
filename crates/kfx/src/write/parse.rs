@@ -67,16 +67,52 @@ pub(super) struct Block {
     gap_before: Vert,
 }
 
+/// 深度优先（先序）走遍块树，含容器里的块（容器本身先于里面的块）；`f` 返回 `ControlFlow::Break` 时停下。
+/// 各处遍历整棵块树都用它（[`for_each_block`]、[`walk_blocks_mut`]、[`any_block`]），不再各写一份递归。
+/// 递归的：套得深的书在大栈线程里调（见 [`DEEP_NESTING`]）。
+pub(super) fn walk_blocks<'a>(blocks: &'a [Block], f: &mut impl FnMut(&'a Block) -> ControlFlow<()>) -> ControlFlow<()> {
+    for b in blocks {
+        f(b)?;
+        if let Kind::Container(c) = &b.kind {
+            walk_blocks(c, f)?;
+        }
+    }
+    ControlFlow::Continue(())
+}
+
+/// 同 [`walk_blocks`]，走完不停。
+pub(super) fn for_each_block<'a>(blocks: &'a [Block], mut f: impl FnMut(&'a Block)) {
+    let _ = walk_blocks(blocks, &mut |b| {
+        f(b);
+        ControlFlow::Continue(())
+    });
+}
+
+/// 同 [`for_each_block`]，可以改块（先改容器本身，再走它里面的块）。
+pub(super) fn walk_blocks_mut(blocks: &mut [Block], f: &mut impl FnMut(&mut Block)) {
+    for b in blocks {
+        f(b);
+        if let Kind::Container(c) = &mut b.kind {
+            walk_blocks_mut(c, f);
+        }
+    }
+}
+
+/// 块树里（含容器里的）有没有满足 `pred` 的块。
+pub(super) fn any_block(blocks: &[Block], mut pred: impl FnMut(&Block) -> bool) -> bool {
+    walk_blocks(blocks, &mut |b| if pred(b) { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }).is_break()
+}
+
 /// 只有空白的段落（`<p>&nbsp;</p>`、`<p>　</p>`、`<p><br/></p>`、段落之间单独的 `<br/>`）不出节点，折成下一块上边距多出的
 /// 本元素行高的这么多倍（Send to Kindle 同样，2026-10-08 量的：《绝叫》空段 0.594 行高、《金庸》`<p><br/></p>` 0.595 × 1.7em、
 /// 段落间单独的 `<br/>` 0.72em ＝ 0.6 × 缺省行高 1.2em）。以前整段丢掉、不折，场景空行在 Kindle 上没了。
 const BLANK_LINE_FOLD: f64 = 0.6;
 
-/// 绝对长度换成根 em：em 乘本元素字号 `fs`（根 em），pt 按 1em＝12pt；百分比要看包含块，`None`。
+/// 绝对长度换成根 em：em 乘本元素字号 `fs`（根 em），pt 按 1em＝12pt（[`PT_PER_EM`]）；百分比要看包含块，`None`。
 pub(super) fn rem_len(l: Len, fs: f64) -> Option<f64> {
     match l {
         Len::Em(n) => Some(n * fs),
-        Len::Pt(n) => Some(n / 12.0),
+        Len::Pt(n) => Some(n / PT_PER_EM),
         Len::Percent(_) => None,
     }
 }
@@ -560,8 +596,8 @@ impl Doc<'_> {
         let mut parts = Vec::new();
         let mut col_widths: Option<Vec<Len>> = None;
         let spacing = |l: Option<Len>| match l {
-            Some(Len::Pt(n)) => n * 0.6,
-            Some(Len::Em(n)) => n * 12.0 * comp.font_size,
+            Some(Len::Pt(n)) => n * KFX_PT_PER_CSS_PT,
+            Some(Len::Em(n)) => n * PT_PER_EM * comp.font_size,
             _ => 0.9,
         };
         for part in el.children().filter_map(ElementRef::wrap) {
@@ -823,9 +859,9 @@ pub(super) type ParsedDoc<'a> = (usize, &'a str, Option<String>, Vec<Block>);
 
 /// 有没有块（含容器里的）的左（`left`）或右外边距是负的。
 fn has_negative(blocks: &[Block], left: bool) -> bool {
-    blocks.iter().any(|b| {
+    any_block(blocks, |b| {
         let h = if left { b.margin_left } else { b.margin_right };
-        h.em + h.pct / 100.0 * PAGE_WIDTH_EM < -1e-9 || matches!(&b.kind, Kind::Container(c) if has_negative(c, left))
+        h.em + h.pct / 100.0 * PAGE_WIDTH_EM < -1e-9
     })
 }
 
@@ -846,13 +882,10 @@ fn scale_percent(blocks: &mut [Block], s: f64) {
 /// （Send to Kindle 同样：段距写在每段的上边距，「目录」标题的下边距、《绍宋》章号 `p.j11` 的 `margin-bottom:2px` 留在自己身上，2026-10-08）。
 /// 折掉的空段加到下一块的上边距上（外边距折叠之后：多出的高度不参与折叠）。文件末尾的空段没有下一块，不折。
 pub(super) fn apply_gaps(blocks: &mut [Block]) {
-    for b in blocks.iter_mut() {
+    walk_blocks_mut(blocks, &mut |b| {
         b.margin_top += b.gap_before;
         b.gap_before = 0.0;
-        if let Kind::Container(c) = &mut b.kind {
-            apply_gaps(c);
-        }
-    }
+    });
 }
 
 pub(super) fn collapse_siblings(blocks: &mut [Block]) {
@@ -1098,15 +1131,8 @@ fn on_big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, String> {
 /// 排成整页图片版面、封面地标指向它。照 Send to Kindle：《绍宋》原书没有封面页，Amazon 版第一个版面就是整页封面
 /// （2026-10-09 真机：我们的打开没有封面）。正文里用到了的不补，那些书的产物逐字节不变。
 pub(super) fn prepend_cover_page(book: &Loaded, parsed: &mut Vec<ParsedDoc>) {
-    fn uses(blocks: &[Block], src: &str) -> bool {
-        blocks.iter().any(|bl| match &bl.kind {
-            Kind::Image { src: s } => s == src,
-            Kind::Container(c) => uses(c, src),
-            Kind::Text { .. } => false,
-        })
-    }
     let Some(cover) = book.cover.as_deref() else { return };
-    if parsed.iter().any(|(_, _, _, blocks)| uses(blocks, cover)) {
+    if parsed.iter().any(|(_, _, _, blocks)| any_block(blocks, |bl| matches!(&bl.kind, Kind::Image { src } if src == cover))) {
         return;
     }
     // 序号只用来起实体名，取一个文档用不到的；路径不是任何文档的，没有链接会指到它。
