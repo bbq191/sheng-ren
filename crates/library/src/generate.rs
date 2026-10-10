@@ -745,9 +745,8 @@ impl Library {
             "cbz" => {
                 // 按文件读（不先把整个 CBZ 读进内存）
                 let file = std::fs::File::open(input).map(std::io::BufReader::new).map_err(|e| format!("读 {}: {e}", input.display()))?;
-                let bytes = crate::convert_to_epub("cbz", file, &meta.title)?;
                 let p = tmp.join("master.epub");
-                std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+                crate::convert_to_epub("cbz", file, &meta.title, &p)?;
                 Ok(p)
             }
             other => Err(crate::unsupported(other)),

@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-10：544 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-10：546 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -89,7 +89,7 @@ done
 
 | 改了什么 | 版本号 | 现值 | 过期的书 |
 |---|---|---|---|
-| 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 55 | 文字书 |
+| 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 56 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 54 | 漫画 |
 | 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 6 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
@@ -119,6 +119,7 @@ done
   | DRM 判定；全角转半角；图片格式识别；哈希 | `wash::encrypted_targets`；`util::to_halfwidth`；`util::image_kind`；`util::fnv64` |
   | `@font-face` 规则（清洗层剔除死字体、字体分析、KFX 写出器共用） | `cascade::font_face_rules`、`cascade::is_font_face` |
   | install / uninstall 共用的包列表和路径 | `tools/cargo-pkgs.sh` |
+  | 解码外来图片（读头 → EXIF 方向 → 解码上限 → 解码 → 摆正，兜住 panic） | `imgopt` 里的 `ImgHead`；crate 外用 `imgopt::decode_capped` / `decode_oriented`（别再直接 `image::load_from_memory`） |
   | 逐文件独立的步骤多线程做（结果按原顺序；`f` 必须是纯的） | `util::par_map`（只读）/ `par_map_mut`（就地改） |
   | 在别的线程先压好一个 zip 条目，再按顺序写 | `epubzip::Precompressed` + `EpubWriter::put_precompressed` |
   | 原样拷原书一个 zip 条目的压缩数据（不解压不重压；改过名的写成新名） | `EpubWriter::raw_copy` / `raw_copy_as` |

@@ -52,7 +52,18 @@ pub fn collapse_dup_id_attrs(html: &str) -> String {
 /// 清洗层（`wash::dedup_ids_across_book`）已先在全书范围改名并同步改写所有文件的链接，走到这里不会再有跨章重复；
 /// 这里只是不清洗时的兜底。**先折叠单元素重复 id 属性**（非法 XHTML 兜底，见 `collapse_dup_id_attrs`），再把本章里重复的 id
 /// 改开（[`rename_repeated_ids`]），最后做跨章值去重。
+///
+/// 开了清洗时这三步多半什么也不改，但不能整个省掉：清洗层的全书去重之后，规范整理还会新写文件（补的 nav），优化器第二遍又往
+/// 各章搬注释（可能撞上本章原有的 id），这些只有这里看得到。所以先一遍扫出本章的 id（[`chapter_id_scan`]）：没有一个标签带两个
+/// `id`、本章 id 互不相同、也都没在别章出现过时三步都不会改——直接记进 `seen` 返回原文，结果和走完三步相同，只是不再把整章扫三遍。
 pub fn dedup_ids_in_chapter(html: &str, seen: &mut HashSet<String>) -> String {
+    if let Some(ids) = chapter_id_scan(html) {
+        let distinct: HashSet<&str> = ids.iter().copied().collect();
+        if distinct.len() == ids.len() && !ids.iter().any(|id| seen.contains(*id)) {
+            seen.extend(ids.into_iter().map(str::to_string));
+            return html.to_string();
+        }
+    }
     let html = &collapse_dup_id_attrs(html);
     let html = &rename_repeated_ids(html, seen);
     let rename = plan_id_renames(html, seen);
@@ -60,6 +71,24 @@ pub fn dedup_ids_in_chapter(html: &str, seen: &mut HashSet<String>) -> String {
         return html.to_string();
     }
     rename_ids(html, &rename)
+}
+
+/// 本章开标签上的全部非空 id（文档序）；有标签带不止一个 `id` 属性（要先 [`collapse_dup_id_attrs`]）→ `None`。
+fn chapter_id_scan(html: &str) -> Option<Vec<&str>> {
+    let mut ids = Vec::new();
+    for t in html::tags(html).filter(|t| t.is_start()) {
+        let mut n = 0;
+        for a in html::attrs(&html[t.start..t.end]).into_iter().filter(|a| a.is("id")) {
+            n += 1;
+            if n > 1 {
+                return None;
+            }
+            if !a.value.is_empty() {
+                ids.push(a.value);
+            }
+        }
+    }
+    Some(ids)
 }
 
 /// 同一章里同一个 id 出现不止一次（`<p id="a">…<div id="a">`，不合法；不清洗的书、搬进本章的注释撞上本章原有的 id 都会这样）：

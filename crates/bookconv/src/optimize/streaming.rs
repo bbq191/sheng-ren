@@ -48,7 +48,7 @@ fn optimize_inner(
     input_path: &std::path::Path,
     output_path: &std::path::Path,
     opts: &OptimizeOpts,
-    mut on_progress: impl FnMut(usize, usize),
+    on_progress: impl FnMut(usize, usize),
     cancel: &dyn Fn() -> bool,
     created: &mut bool,
 ) -> Result<Report, String> {
@@ -65,193 +65,365 @@ fn optimize_inner(
     let is_comic_book = crate::comic_detect::is_comic(&raw);
     // 文字书只做修复（漫画照常）：换成只修复的选项
     let repair;
-    let opts = if opts.text_repair_only && !is_comic_book {
-        repair = opts.repair_only();
-        &repair
-    } else {
-        opts
+    let opts = match opts.text_mode {
+        TextMode::Repair { .. } if !is_comic_book => {
+            repair = opts.repair_only();
+            &repair
+        }
+        _ => opts,
     };
-    let keep_images = opts.keeps_content();
+    // 保证 OPF 声明了有效封面（见 `wash::ensure_cover_declared`）。必须在清洗之前：清洗会把只含 SVG 封面的 titlepage 当空页删掉；
+    // 也在补封面页之前：补的页放的是声明的封面图。全程只调这一次（以前开 `kindle_rules` 时这里一次、阶段一开头又一次，第二次什么也不改）。
+    crate::wash::ensure_cover_declared(&mut raw);
     // 照 Send to Kindle 补封面页（掌阅、Move 的文字书）：图的宽高从原书读文件头（这时图片条目是空占位）
-    if opts.wash.as_ref().is_some_and(|w| w.kindle_rules) && !is_comic_book {
-        crate::wash::ensure_cover_declared(&mut raw);
+    if opts.wash.as_ref().is_some_and(|w| w.mode.kindle_rules()) && !is_comic_book {
         crate::wash::prepend_cover_page(&mut raw, |p| {
-            let bytes = crate::epubzip::read_by_name(&mut archive, p).ok()?;
-            image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()
+            // 读图片头也是在解析外部输入：兜住解码器的 panic（按读不出宽高算，不补封面页）
+            let dims = |b: &[u8]| crate::imgopt::guard(|| image::ImageReader::new(std::io::Cursor::new(b)).with_guessed_format().ok()?.into_dimensions().ok());
+            read_image_head(&mut archive, p, dims).ok().flatten()
         });
     }
     let prep = prepare_entries(raw, opts, bytes_before, is_comic_book, transcoded)?;
     check_cancel(cancel)?;
-    let (comic_margin, grayscale) = (opts.comic_margin, opts.grayscale);
-    // 漫画页按漫画的阅读范围排（xochitl 设成页边距 1 后更宽），其它图按 EPUB 的阅读范围缩
-    let screen = if is_comic_book { opts.comic_screen.unwrap_or(opts.screen) } else { opts.screen };
-    let entries = &prep.entries;
-    let src_names: HashMap<&str, &str> = prep.rep.wash.iter().flat_map(|w| w.renamed.iter().map(|(old, new)| (new.as_str(), old.as_str()))).collect();
-    // 漫画里可能换格式的页（GIF/WebP）：处理后按实际格式改 manifest 的 media-type。
-    let may_retype = |name: &str| is_comic_book && matches!(crate::util::image_ext_of(name).as_str(), "gif" | "webp");
-    let has_retypable = entries.iter().any(|(n, _, ish)| !*ish && may_retype(n));
-    // 推迟写的 OPF 条目名（见函数文档）：有远程图、有可能换格式的页时；清洗过的书也推迟——manifest 的 `properties` 要按各章最终内容标。
-    let deferred_opf: Option<&str> = prep.opf_name.as_deref().filter(|_| prep.has_remote_imgs || has_retypable || opts.wash.is_some());
-    let mut retyped: Vec<(String, &'static str)> = Vec::new();
-    let mut deferred_opf_bytes: Option<Vec<u8>> = None;
+    let plan = WritePlan::new(&prep, opts, &mut archive);
 
     // 阶段二：流式写出。
     let mut zw = crate::epubzip::EpubWriter::create(output_path)?;
     *created = true;
     let mut xf = EntryXform::new(&prep, opts);
     if opts.caption_fit && !is_comic_book {
-        xf.caption_ctx = Some(caption_ctx(entries, &src_names, &mut archive)?);
+        xf.caption_ctx = Some(caption_ctx(&prep.entries, &plan.src_names, &mut archive)?);
     }
-    let total_entries = entries.len();
-    // 并行（见 `imgpool`）：主线程按条目顺序变换文字条目，把图片处理和 deflate 压缩交给 worker，再按原顺序取回写 zip。
-    // 图片提前提交 `lookahead` 张，worker 自己打开源文件读原图字节（原图在 zip 里是压缩的时，解压整卷漫画在主线程上要近一秒），
-    // 处理与写盘重叠。要 deflate 的条目（文字、样式、字体……）也交给 worker 压（[`crate::epubzip::Precompressed`]：文字多的书
-    // deflate 占主线程两三成），写进 zip 时原样拷压好的数据。结果与逐条顺序处理、直接写逐字节相同。
+    let written = write_entries(input_path, &prep, opts, &plan, &mut xf, &mut zw, &mut archive, on_progress, cancel)?;
+    check_cancel(cancel)?;
+    finalize(&mut zw, &prep, opts, &plan, &xf, written)?;
+    zw.finish()?;
+    let mut rep = prep.rep;
+    rep.bytes_after = std::fs::metadata(output_path).map(|m| m.len() as usize).unwrap_or(0);
+    Ok(rep)
+}
+
+/// 只为读图片文件头：先只解压条目开头 [`HEAD_PREFIX`] 字节交给 `f`，读不出（头比这长，比如 JPEG 前面塞了大块 EXIF、缩略图）再整条
+/// 读一遍。以前补封面页、算图注宽度都整条解压只为看文件头，阶段二 worker 还要再解一遍。WebP 的 EXIF 块在图像数据后面
+/// （方向要整条才读得到），一律整条读。条目不存在、读不出 → `Err`。
+fn read_image_head<R: std::io::Read + std::io::Seek, T>(archive: &mut ZipArchive<R>, name: &str, f: impl Fn(&[u8]) -> Option<T>) -> Result<Option<T>, String> {
+    use std::io::Read;
+    let mut prefix = Vec::new();
+    {
+        let entry = archive.by_name(name).map_err(|e| format!("{name}: {e}"))?;
+        entry.take(HEAD_PREFIX).read_to_end(&mut prefix).map_err(|e| format!("{name}: {e}"))?;
+    }
+    let complete = (prefix.len() as u64) < HEAD_PREFIX;
+    if complete || !prefix.starts_with(b"RIFF") {
+        if let Some(t) = f(&prefix) {
+            return Ok(Some(t));
+        }
+        if complete {
+            return Ok(None);
+        }
+    }
+    let bytes = crate::epubzip::read_by_name(archive, name)?;
+    Ok(f(&bytes))
+}
+
+/// [`read_image_head`] 先读的字节数：够装下 JPEG 的 EXIF（APP1 段最长 64KB）加上 SOF 段，PNG、GIF 的头只要几十字节。
+const HEAD_PREFIX: u64 = 96 << 10;
+
+/// 阶段二按条目写出前定好的东西（只读）。
+struct WritePlan<'p> {
+    is_comic_book: bool,
+    /// 图片处理用的阅读范围：漫画页按漫画的阅读范围排（xochitl 设成页边距 1 后更宽），其它图按 EPUB 的阅读范围缩。
+    screen: crate::imgopt::Screen,
+    /// 清洗时改过名的条目：新名 → 原书里的名字（按原名回原书读字节）。
+    src_names: HashMap<&'p str, &'p str>,
+    /// 推迟写的 OPF 条目名（见 [`optimize_epub_file_streaming`] 文档）：有远程图、有可能换格式的页时；清洗过的书也推迟——manifest 的
+    /// `properties` 要按各章最终内容标。
+    deferred_opf: Option<&'p str>,
+    /// 页面图片在 `entries` 里的位置（按顺序）。
+    image_positions: Vec<usize>,
+    /// 原书里 deflate 压的字体：条目名 → (CRC, 大小)。和原书那份逐字节相同的原样拷压缩数据（[`Out::Raw`]）。
+    font_src: HashMap<String, (u32, u64)>,
+}
+
+impl<'p> WritePlan<'p> {
+    fn new<R: std::io::Read + std::io::Seek>(prep: &'p Prepared, opts: &OptimizeOpts, archive: &mut ZipArchive<R>) -> WritePlan<'p> {
+        let is_comic_book = prep.is_comic_book;
+        let entries = &prep.entries;
+        let has_retypable = entries.iter().any(|(n, _, ish)| !*ish && may_retype(is_comic_book, n));
+        WritePlan {
+            is_comic_book,
+            screen: if is_comic_book { opts.comic_screen.unwrap_or(opts.screen) } else { opts.screen },
+            src_names: prep.rep.wash.iter().flat_map(|w| w.renamed.iter().map(|(old, new)| (new.as_str(), old.as_str()))).collect(),
+            deferred_opf: prep.opf_name.as_deref().filter(|_| prep.has_remote_imgs || has_retypable || opts.wash.is_some()),
+            image_positions: entries.iter().enumerate().filter(|(_, (n, _, ish))| !*ish && crate::imgopt::is_page_image(n)).map(|(i, _)| i).collect(),
+            // 字体（只修复的文字书里最大的条目，《绍宋》两个 15MB 的 ttf）和原书那份逐字节相同、原书里是 deflate 压的：原样拷原书的
+            // 压缩数据，不解压再重压（2026-10-09）。用 CRC 和大小认"同一份"（去混淆过的字体不同，照常重压）。
+            font_src: (0..archive.len())
+                .filter_map(|i| {
+                    let f = archive.by_index_raw(i).ok()?;
+                    (f.compression() == zip::CompressionMethod::Deflated && is_font_name(f.name())).then(|| (f.name().to_string(), (f.crc32(), f.size())))
+                })
+                .collect(),
+        }
+    }
+
+    /// 原书里的条目名（清洗时改过名的是原名）。
+    fn src<'n>(&self, name: &'n str) -> &'n str
+    where
+        'p: 'n,
+    {
+        self.src_names.get(name).copied().unwrap_or(name)
+    }
+}
+
+/// 漫画里可能换格式的页（GIF/WebP）：处理后按实际格式改 manifest 的 media-type。
+fn may_retype(is_comic_book: bool, name: &str) -> bool {
+    is_comic_book && matches!(crate::util::image_ext_of(name).as_str(), "gif" | "webp")
+}
+
+/// 阶段二写完条目后收尾要用的：推迟的 OPF 的内容、换了格式的页（条目名 → 新 media-type）。
+struct Written {
+    deferred_opf_bytes: Option<Vec<u8>>,
+    retyped: Vec<(String, &'static str)>,
+}
+
+/// 交给 worker 的活。
+enum Job<'e> {
+    /// 处理一张图：`src` 是原书里的条目名（清洗时改过名的是原名），worker 自己从源文件读原图字节。
+    Image { src: &'e str, bg: Option<crate::bgfit::BgFit>, flatten: bool, reply: std::sync::mpsc::Sender<Result<Vec<u8>, String>> },
+    /// deflate 压一个条目。
+    Deflate { name: &'e str, data: std::borrow::Cow<'e, [u8]>, reply: std::sync::mpsc::Sender<Result<crate::epubzip::Precompressed, String>> },
+}
+
+/// 图片 worker 处理每张图都一样的参数。
+#[derive(Clone, Copy)]
+struct ImageCtx<'a> {
+    input_path: &'a std::path::Path,
+    /// 只修复：原图原样收进书里，不解码。
+    keep_images: bool,
+    is_comic_book: bool,
+    screen: crate::imgopt::Screen,
+    comic_margin: u32,
+    grayscale: bool,
+    max_px: u64,
+}
+
+/// 图片工作池：`workers` 个线程从同一个队列取活（[`Job`]）——图片处理和 deflate 压缩，结果各自经 `reply` 送回。
+/// 每张图开工前按头部像素数向 `budget` 申请额度（[`crate::imgpool`]）。返回发活的一端；它一关（drop），worker 全部退出。
+/// 接收端只由 worker 持有：万一 worker 全部退出，发活立刻报错而不是在满队列上永远阻塞。
+fn spawn_image_workers<'scope, 'env: 'scope, 'e: 'scope>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    workers: usize,
+    queue_len: usize,
+    ctx: ImageCtx<'env>,
+    budget: std::sync::Arc<crate::imgpool::PixelBudget>,
+) -> std::sync::mpsc::SyncSender<Job<'e>> {
+    let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<Job<'e>>(queue_len);
+    let job_rx = std::sync::Arc::new(std::sync::Mutex::new(job_rx));
+    for _ in 0..workers {
+        let (rx, budget) = (job_rx.clone(), budget.clone());
+        scope.spawn(move || {
+            // 读原图用的源文件（第一次用到时打开，同阶段一读的是同一个文件）
+            let mut source: Option<crate::epubzip::FileZip> = None;
+            loop {
+                let job = { rx.lock().unwrap_or_else(|e| e.into_inner()).recv() };
+                let Ok(job) = job else { break };
+                match job {
+                    Job::Image { src, bg, flatten, reply } => {
+                        let _ = reply.send(process_image(&ctx, &budget, &mut source, src, bg, flatten));
+                    }
+                    Job::Deflate { name, data, reply } => {
+                        let _ = reply.send(crate::epubzip::Precompressed::new(name, &data));
+                    }
+                }
+            }
+        });
+    }
+    job_tx
+}
+
+/// worker 处理一张图：从源文件读原图（`source` 第一次用到时打开），按需处理。
+fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &mut Option<crate::epubzip::FileZip>, src: &str, bg: Option<crate::bgfit::BgFit>, flatten: bool) -> Result<Vec<u8>, String> {
+    // 整件兜住 panic（读 zip、解析图片都是外部输入）：panic 了只这本书报错，不让 `thread::scope` 收尾时把
+    // panic 抛给调用方、摔掉整个 `booklib sync`（2026-10-09 审计）
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>, String> {
+        let bytes = match &mut *source {
+            Some(z) => Ok(z),
+            None => crate::epubzip::open_file_zip(ctx.input_path).map(|z| source.insert(z)),
+        }
+        .and_then(|z| crate::epubzip::read_by_name(z, src))
+        .map_err(|e| format!("重读图片失败: {e}"))?;
+        if ctx.keep_images {
+            return Ok(bytes);
+        }
+        // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
+        // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
+        let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&bytes))).unwrap_or(1_000_000);
+        let _permit = budget.acquire(px);
+        Ok(transform_image_bytes(&bytes, ctx.is_comic_book, ctx.screen, ctx.comic_margin, ctx.grayscale, bg, flatten, ctx.max_px).unwrap_or(bytes))
+    }))
+    .unwrap_or_else(|_| {
+        *source = None;
+        Err(format!("处理图片时出错（{src}）"))
+    })
+}
+
+/// 按条目顺序排队等写进 zip 的东西。
+enum Out<'e> {
+    /// 图片：等 worker 处理完（条目名用来判断换没换格式）。
+    Image(&'e str, std::sync::mpsc::Receiver<Result<Vec<u8>, String>>),
+    /// 等 worker 压好。
+    Deflate(std::sync::mpsc::Receiver<Result<crate::epubzip::Precompressed, String>>),
+    /// 直接写（STORED 的条目）。
+    Direct(&'e str, std::borrow::Cow<'e, [u8]>),
+    /// 和原书那份逐字节相同的大字体：原样拷原书的压缩数据（第二项是原书里的条目名）。
+    Raw(&'e str, &'e str),
+    /// 不写（`mimetype` 建 `EpubWriter` 时写过了；推迟的 OPF 最后写），只算进度。
+    Skip,
+}
+
+/// 写出的 EPUB。
+type OutZip = crate::epubzip::EpubWriter<std::io::BufWriter<std::fs::File>>;
+
+/// 按序写出：交给 worker 的结果先后回来，这里按条目原顺序写进 zip（结果与逐条顺序处理、直接写逐字节相同）。
+struct OrderedSink<'e, 'w, R: std::io::Read + std::io::Seek, P: FnMut(usize, usize)> {
+    queue: std::collections::VecDeque<Out<'e>>,
+    zw: &'w mut OutZip,
+    /// 原书（[`Out::Raw`] 从这里拷压缩数据）。
+    archive: &'w mut ZipArchive<R>,
+    is_comic_book: bool,
+    /// 换了格式的页：(条目名, 新 media-type)。
+    retyped: Vec<(String, &'static str)>,
+    /// 排在 `queue` 里、还没写的图片。
+    queued_images: usize,
+    written: usize,
+    total: usize,
+    on_progress: P,
+}
+
+impl<'e, R: std::io::Read + std::io::Seek, P: FnMut(usize, usize)> OrderedSink<'e, '_, R, P> {
+    fn push(&mut self, out: Out<'e>) {
+        if matches!(out, Out::Image(..)) {
+            self.queued_images += 1;
+        }
+        self.queue.push_back(out);
+    }
+
+    /// 写 `queue` 最前面的：`wait` 为假时只写已经好了的，为真时等它好了再写。返回写没写。
+    fn write_front(&mut self, wait: bool) -> Result<bool, String> {
+        use std::sync::mpsc::TryRecvError;
+        let Some(front) = self.queue.front() else { return Ok(false) };
+        match front {
+            Out::Image(name, rx) => {
+                let out = match if wait { rx.recv().map_err(|_| TryRecvError::Disconnected) } else { rx.try_recv() } {
+                    Ok(out) => out?,
+                    Err(TryRecvError::Empty) => return Ok(false),
+                    Err(TryRecvError::Disconnected) => return Err(format!("图片处理线程异常退出（{name}）")),
+                };
+                if may_retype(self.is_comic_book, name) {
+                    if let Some(mt) = crate::imgopt::converted_media_type(name, &out) {
+                        self.retyped.push((name.to_string(), mt));
+                    }
+                }
+                self.zw.put(name, &out)?;
+                self.queued_images -= 1;
+            }
+            Out::Deflate(rx) => {
+                let z = match if wait { rx.recv().map_err(|_| TryRecvError::Disconnected) } else { rx.try_recv() } {
+                    Ok(z) => z?,
+                    Err(TryRecvError::Empty) => return Ok(false),
+                    Err(TryRecvError::Disconnected) => return Err("压缩线程异常退出".to_string()),
+                };
+                self.zw.put_precompressed(z)?;
+            }
+            Out::Direct(name, data) => self.zw.put(name, data)?,
+            Out::Raw(name, src) => {
+                let f = self.archive.by_name(src).map_err(|e| format!("重读 {name}: {e}"))?;
+                self.zw.raw_copy_as(f, name)?;
+            }
+            Out::Skip => {}
+        }
+        self.queue.pop_front();
+        self.written += 1;
+        (self.on_progress)(self.written, self.total);
+        Ok(true)
+    }
+
+    /// 写掉已经好了的；排队的超过 `max_queued` 时等最前面的好了再写。
+    fn drain_ready(&mut self, max_queued: usize) -> Result<(), String> {
+        loop {
+            let wait = self.queue.len() > max_queued;
+            if !self.write_front(wait)? {
+                return Ok(());
+            }
+        }
+    }
+
+    /// 全部写完（逐个等）。
+    fn flush(&mut self) -> Result<(), String> {
+        while self.write_front(true)? {}
+        Ok(())
+    }
+}
+
+/// 阶段二：按 `entries` 顺序变换、写出全部条目。
+///
+/// 并行（见 `imgpool`）：主线程按条目顺序变换文字条目，把图片处理和 deflate 压缩交给 worker（[`spawn_image_workers`]），再按原顺序
+/// 取回写 zip（[`OrderedSink`]）。图片提前提交 `lookahead` 张，worker 自己打开源文件读原图字节（原图在 zip 里是压缩的时，解压整卷漫画在
+/// 主线程上要近一秒），处理与写盘重叠。要 deflate 的条目（文字、样式、字体……）也交给 worker 压（[`crate::epubzip::Precompressed`]：
+/// 文字多的书 deflate 占主线程两三成），写进 zip 时原样拷压好的数据。结果与逐条顺序处理、直接写逐字节相同。
+#[allow(clippy::too_many_arguments)]
+fn write_entries<R: std::io::Read + std::io::Seek>(
+    input_path: &std::path::Path,
+    prep: &Prepared,
+    opts: &OptimizeOpts,
+    plan: &WritePlan,
+    xf: &mut EntryXform,
+    zw: &mut OutZip,
+    archive: &mut ZipArchive<R>,
+    on_progress: impl FnMut(usize, usize),
+    cancel: &dyn Fn() -> bool,
+) -> Result<Written, String> {
+    let entries = &prep.entries;
     let workers = crate::imgpool::worker_count();
     let lookahead = workers + 2;
     // 已交出去、还没写进 zip 的条目最多这么多（压好的、处理好的结果在这里排队等前面的写完）
     let max_queued = lookahead;
-    let image_positions: Vec<usize> = entries.iter().enumerate().filter(|(_, (n, _, ish))| !*ish && crate::imgopt::is_page_image(n)).map(|(i, _)| i).collect();
-    // 字体（只修复的文字书里最大的条目，《绍宋》两个 15MB 的 ttf）和原书那份逐字节相同、原书里是 deflate 压的：原样拷原书的
-    // 压缩数据，不解压再重压（2026-10-09）。用 CRC 和大小认"同一份"（去混淆过的字体不同，照常重压）。原书里的字体：条目名 → (CRC, 大小)
-    let font_src: HashMap<String, (u32, u64)> = (0..archive.len())
-        .filter_map(|i| {
-            let f = archive.by_index_raw(i).ok()?;
-            (f.compression() == zip::CompressionMethod::Deflated && is_font_name(f.name())).then(|| (f.name().to_string(), (f.crc32(), f.size())))
-        })
-        .collect();
+    let image_positions = &plan.image_positions;
+    let ctx = ImageCtx {
+        input_path,
+        keep_images: opts.keeps_content(),
+        is_comic_book: plan.is_comic_book,
+        screen: plan.screen,
+        comic_margin: opts.comic_margin,
+        grayscale: opts.grayscale,
+        max_px: opts.limits.max_decode_pixels,
+    };
+    let mut deferred_opf_bytes: Option<Vec<u8>> = None;
+    let mut sink = OrderedSink { queue: Default::default(), zw, archive, is_comic_book: plan.is_comic_book, retyped: Vec::new(), queued_images: 0, written: 0, total: entries.len(), on_progress };
     std::thread::scope(|scope| -> Result<(), String> {
-        enum Job<'e> {
-            /// `src`：原书里的条目名（清洗时改过名的是原名）。
-            Image { src: &'e str, bg: Option<crate::bgfit::BgFit>, flatten: bool, reply: std::sync::mpsc::Sender<Result<Vec<u8>, String>> },
-            Deflate { name: &'e str, data: std::borrow::Cow<'e, [u8]>, reply: std::sync::mpsc::Sender<Result<crate::epubzip::Precompressed, String>> },
-        }
-        /// 按条目顺序排队等写进 zip 的东西。
-        enum Out<'e> {
-            /// 图片：等 worker 处理完（条目名用来判断换没换格式）。
-            Image(&'e str, std::sync::mpsc::Receiver<Result<Vec<u8>, String>>),
-            /// 等 worker 压好。
-            Deflate(std::sync::mpsc::Receiver<Result<crate::epubzip::Precompressed, String>>),
-            /// 直接写（STORED 的条目）。
-            Direct(&'e str, std::borrow::Cow<'e, [u8]>),
-            /// 和原书那份逐字节相同的大字体：原样拷原书的压缩数据（第二项是原书里的条目名）。
-            Raw(&'e str, &'e str),
-            /// 不写（`mimetype` 建 `EpubWriter` 时写过了；推迟的 OPF 最后写），只算进度。
-            Skip,
-        }
-        let (job_tx, job_rx) = std::sync::mpsc::sync_channel::<Job>(lookahead);
-        let job_rx = std::sync::Arc::new(std::sync::Mutex::new(job_rx));
         let budget = std::sync::Arc::new(crate::imgpool::PixelBudget::new(opts.limits.pool_pixel_budget));
-        let max_px = opts.limits.max_decode_pixels;
-        for _ in 0..workers {
-            let (rx, budget) = (job_rx.clone(), budget.clone());
-            scope.spawn(move || {
-                // 读原图用的源文件（第一次用到时打开，同阶段一读的是同一个文件）
-                let mut source: Option<crate::epubzip::FileZip> = None;
-                loop {
-                    let job = { rx.lock().unwrap_or_else(|e| e.into_inner()).recv() };
-                    let Ok(job) = job else { break };
-                    match job {
-                        Job::Image { src, bg, flatten, reply } => {
-                            // 整件兜住 panic（读 zip、解析图片都是外部输入）：panic 了只这本书报错，不让 `thread::scope` 收尾时把
-                            // panic 抛给调用方、摔掉整个 `booklib sync`（2026-10-09 审计）
-                            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>, String> {
-                                let bytes = match &mut source {
-                                    Some(z) => Ok(z),
-                                    None => crate::epubzip::open_file_zip(input_path).map(|z| source.insert(z)),
-                                }
-                                .and_then(|z| crate::epubzip::read_by_name(z, src))
-                                .map_err(|e| format!("重读图片失败: {e}"));
-                                let bytes = bytes?;
-                                if keep_images {
-                                    return Ok(bytes);
-                                }
-                                // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
-                                // 主线程要么拿到"线程异常退出"，要么（队列已满时）`send` 永远等不到人收。
-                                let px = crate::imgopt::guard(|| Some(crate::imgopt::pixel_count(&bytes))).unwrap_or(1_000_000);
-                                let _permit = budget.acquire(px);
-                                let out = transform_image_bytes(&bytes, is_comic_book, screen, comic_margin, grayscale, bg, flatten, max_px).unwrap_or(bytes);
-                                Ok(out)
-                            }))
-                            .unwrap_or_else(|_| {
-                                source = None;
-                                Err(format!("处理图片时出错（{src}）"))
-                            });
-                            let _ = reply.send(r);
-                        }
-                        Job::Deflate { name, data, reply } => {
-                            let _ = reply.send(crate::epubzip::Precompressed::new(name, &data));
-                        }
-                    }
-                }
-            });
-        }
-        // 接收端只由 worker 持有：万一 worker 全部退出，`job_tx.send` 立刻报错而不是在满队列上永远阻塞。
-        drop(job_rx);
+        let job_tx = spawn_image_workers(scope, workers, lookahead, ctx, budget);
         let mut pending: std::collections::VecDeque<std::sync::mpsc::Receiver<Result<Vec<u8>, String>>> = std::collections::VecDeque::new();
-        let mut queue: std::collections::VecDeque<Out> = std::collections::VecDeque::new();
         let mut next_submit = 0usize;
         let mut consumed = 0usize; // 已取回的图片数：第 consumed 张图片对应 image_positions[consumed]
-        let mut queued_images = 0usize; // 排在 `queue` 里、还没写的图片
-        let mut written = 0usize;
         // 一批最多这么多个条目、这么多字节的 html
         const PREFIX_BATCH: usize = 32;
         const PREFIX_BATCH_BYTES: usize = 2 << 20;
         let (mut prefix_end, mut prefixes) = (0usize, Vec::new().into_iter());
-        // 按顺序写 `queue` 前面的：`wait` 为假时只写已经好了的，为真时等前面那个好了再写。返回写没写。
-        let mut write_front = |queue: &mut std::collections::VecDeque<Out>, wait: bool, queued_images: &mut usize| -> Result<bool, String> {
-            use std::sync::mpsc::TryRecvError;
-            let Some(front) = queue.front() else { return Ok(false) };
-            match front {
-                Out::Image(name, rx) => {
-                    let out = match if wait { rx.recv().map_err(|_| TryRecvError::Disconnected) } else { rx.try_recv() } {
-                        Ok(out) => out?,
-                        Err(TryRecvError::Empty) => return Ok(false),
-                        Err(TryRecvError::Disconnected) => return Err(format!("图片处理线程异常退出（{name}）")),
-                    };
-                    if may_retype(name) {
-                        if let Some(mt) = crate::imgopt::converted_media_type(name, &out) {
-                            retyped.push((name.to_string(), mt));
-                        }
-                    }
-                    zw.put(name, &out)?;
-                    *queued_images -= 1;
-                }
-                Out::Deflate(rx) => {
-                    let z = match if wait { rx.recv().map_err(|_| TryRecvError::Disconnected) } else { rx.try_recv() } {
-                        Ok(z) => z?,
-                        Err(TryRecvError::Empty) => return Ok(false),
-                        Err(TryRecvError::Disconnected) => return Err("压缩线程异常退出".to_string()),
-                    };
-                    zw.put_precompressed(z)?;
-                }
-                Out::Direct(name, data) => zw.put(name, data)?,
-                Out::Raw(name, src) => {
-                    let f = archive.by_name(src).map_err(|e| format!("重读 {name}: {e}"))?;
-                    zw.raw_copy_as(f, name)?;
-                }
-                Out::Skip => {}
-            }
-            queue.pop_front();
-            written += 1;
-            on_progress(written, total_entries);
-            Ok(true)
-        };
         for (i, (name, data, ish)) in entries.iter().enumerate() {
             check_cancel(cancel)?;
             // 交出去还没写的图片已经有 `lookahead` 张：先等前面的写掉，腾出位置（至少能交这一张）
-            while queued_images >= lookahead {
-                write_front(&mut queue, true, &mut queued_images)?;
+            while sink.queued_images >= lookahead {
+                sink.write_front(true)?;
             }
             // 补满提前量（原图字节由 worker 自己从源文件读）
-            while pending.len() + queued_images < lookahead && next_submit < image_positions.len() {
+            while pending.len() + sink.queued_images < lookahead && next_submit < image_positions.len() {
                 let img_name = &entries[image_positions[next_submit]].0;
-                // 清洗时改过名的（文件名有安卓存储不能用的字符）按原名回原书读
-                let src = src_names.get(img_name.as_str()).copied().unwrap_or(img_name.as_str());
                 let (tx, rx) = std::sync::mpsc::channel();
-                job_tx
-                    .send(Job::Image { src, bg: prep.bg_fits.get(img_name.as_str()).copied(), flatten: prep.alpha_imgs.contains(img_name.as_str()), reply: tx })
-                    .map_err(|_| "图片处理线程已退出".to_string())?;
+                // 清洗时改过名的（文件名有安卓存储不能用的字符）按原名回原书读
+                let job = Job::Image { src: plan.src(img_name), bg: prep.bg_fits.get(img_name.as_str()).copied(), flatten: prep.alpha_imgs.contains(img_name.as_str()), reply: tx };
+                job_tx.send(job).map_err(|_| "图片处理线程已退出".to_string())?;
                 pending.push_back(rx);
                 next_submit += 1;
             }
@@ -270,21 +442,18 @@ fn optimize_inner(
             let out = match xf.transform_text(name, data, *ish, prefix) {
                 None if is_image => {
                     consumed += 1;
-                    queued_images += 1;
                     Out::Image(name, pending.pop_front().ok_or("图片队列意外为空")?)
                 }
                 // `mimetype`（阶段一放在第一个）建 `EpubWriter` 时已经写了
                 _ if name == "mimetype" => Out::Skip,
                 t => {
                     let t = t.unwrap_or(std::borrow::Cow::Borrowed(data.as_slice()));
-                    if deferred_opf == Some(name.as_str()) {
+                    if plan.deferred_opf == Some(name.as_str()) {
                         deferred_opf_bytes = Some(t.into_owned());
                         Out::Skip
                     } else if crate::util::is_image_ext(name) {
                         Out::Direct(name, t)
-                    } else if let Some(src) = Some(src_names.get(name.as_str()).copied().unwrap_or(name.as_str()))
-                        .filter(|src| font_src.get(*src).is_some_and(|&(crc, size)| t.len() >= RAW_FONT_MIN && t.len() as u64 == size && crc32fast::hash(&t) == crc))
-                    {
+                    } else if let Some(src) = Some(plan.src(name)).filter(|src| plan.font_src.get(*src).is_some_and(|&(crc, size)| t.len() >= RAW_FONT_MIN && t.len() as u64 == size && crc32fast::hash(&t) == crc)) {
                         Out::Raw(name, src)
                     } else {
                         let (tx, rx) = std::sync::mpsc::channel();
@@ -293,43 +462,42 @@ fn optimize_inner(
                     }
                 }
             };
-            queue.push_back(out);
-            loop {
-                let wait = queue.len() > max_queued;
-                if !write_front(&mut queue, wait, &mut queued_images)? {
-                    break;
-                }
-            }
+            sink.push(out);
+            sink.drain_ready(max_queued)?;
         }
-        while write_front(&mut queue, true, &mut queued_images)? {}
+        sink.flush()?;
         drop(job_tx); // 关闭队列，worker 退出，scope 才能 join
         Ok(())
     })?;
-    check_cancel(cancel)?;
-    // 收尾：抓到的远程图（与引用它的章同目录、src 已改本地名）→ 推迟的 OPF（补上这些图的 manifest 项）→ 幂等标记。
+    Ok(Written { deferred_opf_bytes, retyped: sink.retyped })
+}
+
+/// 收尾：抓到的远程图（与引用它的章同目录、src 已改本地名）→ 推迟的 OPF（[`finalize_opf`]）→ 漫画的页边距标记 → 幂等标记。
+fn finalize(zw: &mut OutZip, prep: &Prepared, opts: &OptimizeOpts, plan: &WritePlan, xf: &EntryXform, written: Written) -> Result<(), String> {
     for (path, bytes) in &xf.fetched_imgs {
         zw.put(path, bytes)?;
     }
-    if let (Some(name), Some(bytes)) = (deferred_opf, deferred_opf_bytes) {
-        let bytes = match String::from_utf8(bytes) {
-            Ok(text) => {
-                let text = if xf.fetched_imgs.is_empty() { text } else { add_manifest_items(&text, name, &xf.fetched_imgs) };
-                let text = if retyped.is_empty() { text } else { set_manifest_media_types(&text, name, &retyped) };
-                let props = xf.content_props.as_ref().and_then(|p| crate::wash::normalize::apply_content_properties(&text, crate::epubzip::dir_of(name), p));
-                props.unwrap_or(text).into_bytes()
-            }
-            Err(e) => e.into_bytes(),
-        };
-        zw.put(name, &bytes)?;
+    if let (Some(name), Some(bytes)) = (plan.deferred_opf, written.deferred_opf_bytes) {
+        zw.put(name, &finalize_opf(name, bytes, xf, &written.retyped))?;
     }
-    if let (true, Some(m)) = (is_comic_book, opts.comic_reader_margins) {
+    if let (true, Some(m)) = (prep.is_comic_book, opts.comic_reader_margins) {
         zw.put(READER_MARGINS_MARKER, m.to_string().as_bytes())?;
     }
-    zw.put(OPTIMIZE_MARKER, marker_value(opts.wash.is_some()).as_bytes())?;
-    zw.finish()?;
-    let mut rep = prep.rep;
-    rep.bytes_after = std::fs::metadata(output_path).map(|m| m.len() as usize).unwrap_or(0);
-    Ok(rep)
+    zw.put(OPTIMIZE_MARKER, marker_value(opts.wash.is_some()).as_bytes())
+}
+
+/// 推迟写的 OPF 的最终内容：补上抓到的远程图的 manifest 项、换了格式的页改 media-type、按各章最终内容标 manifest 的 `properties`。
+/// 不是 UTF-8 的原样写。
+fn finalize_opf(name: &str, bytes: Vec<u8>, xf: &EntryXform, retyped: &[(String, &'static str)]) -> Vec<u8> {
+    match String::from_utf8(bytes) {
+        Ok(text) => {
+            let text = if xf.fetched_imgs.is_empty() { text } else { add_manifest_items(&text, name, &xf.fetched_imgs) };
+            let text = if retyped.is_empty() { text } else { set_manifest_media_types(&text, name, retyped) };
+            let props = xf.content_props.as_ref().and_then(|p| crate::wash::normalize::apply_content_properties(&text, crate::epubzip::dir_of(name), p));
+            props.unwrap_or(text).into_bytes()
+        }
+        Err(e) => e.into_bytes(),
+    }
 }
 
 /// 原样拷原书压缩数据的字体至少这么大（小字体重压也就几毫秒，不值得多算一遍 CRC）。
@@ -340,7 +508,7 @@ fn is_font_name(name: &str) -> bool {
     matches!(crate::util::image_ext_of(name).as_str(), "ttf" | "otf" | "ttc" | "woff" | "woff2")
 }
 
-/// 写图注宽度（[`crate::capfit`]）要的全书信息：带图注的 `<img>` 引用的图的显示宽高（按原书读回这几张图的字节、只读文件头），
+/// 写图注宽度（[`crate::capfit`]）要的全书信息：带图注的 `<img>` 引用的图的显示宽高（按原书只读这几张图的文件头），
 /// 全书样式表和 `<style>` 里给图片定的宽高。
 fn caption_ctx<R: std::io::Read + std::io::Seek>(entries: &[(String, Vec<u8>, bool)], src_names: &HashMap<&str, &str>, archive: &mut ZipArchive<R>) -> Result<crate::capfit::Ctx, String> {
     let images: HashSet<&str> = entries.iter().filter(|(_, _, ish)| !*ish).map(|(n, _, _)| n.as_str()).collect();
@@ -363,8 +531,8 @@ fn caption_ctx<R: std::io::Read + std::io::Seek>(entries: &[(String, Vec<u8>, bo
                 continue;
             }
             let src = src_names.get(path.as_str()).copied().unwrap_or(path.as_str());
-            let bytes = crate::epubzip::read_by_name(archive, src).map_err(|e| format!("重读图片失败: {e}"))?;
-            if let Some(d) = crate::imgopt::guard(|| crate::imgopt::display_dims(&bytes)) {
+            // 只读文件头（[`read_image_head`]），不为它整张解压
+            if let Some(d) = read_image_head(archive, src, |b| crate::imgopt::guard(|| crate::imgopt::display_dims(b))).map_err(|e| format!("重读图片失败: {e}"))? {
                 dims.insert(path, d);
             }
         }

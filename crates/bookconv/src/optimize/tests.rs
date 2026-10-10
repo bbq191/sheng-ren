@@ -987,7 +987,7 @@
     fn page_backgrounds_prescaled_by_intent_when_sizes_are_dropped() {
         let (epub, imgs) = bg_book();
         let screen = crate::imgopt::Screen { width: 600, height: 800 };
-        let opts = OptimizeOpts { screen, text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("ireader").unwrap()) };
+        let opts = OptimizeOpts { screen, text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("ireader").unwrap()) };
         assert!(opts.fit_backgrounds, "ireader 去掉 background-size，要预先缩");
         let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
         let img = |n: &str| image::load_from_memory(&entry_bytes(&out, n)).unwrap();
@@ -1011,7 +1011,7 @@
         // kindle 保留 background-size：背景图照普通插图处理（和以前一样）
         let (epub, imgs) = bg_book();
         let screen = crate::imgopt::Screen { width: 600, height: 800 };
-        let opts = OptimizeOpts { screen, text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("kindle").unwrap()) };
+        let opts = OptimizeOpts { screen, text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("kindle").unwrap()) };
         assert!(!opts.fit_backgrounds);
         let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
         for (n, b) in &imgs {
@@ -1059,7 +1059,7 @@
     #[test]
     fn kindle_flattens_transparent_img_on_white_only() {
         let (epub, imgs) = alpha_book();
-        let opts = OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("kindle").unwrap()) };
+        let opts = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("kindle").unwrap()) };
         assert!(opts.flatten_alpha);
         let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
         let logo = entry_bytes(&out, "OEBPS/i/logo.png");
@@ -1077,7 +1077,7 @@
     #[test]
     fn ireader_keeps_transparency() {
         let (epub, imgs) = alpha_book();
-        let opts = OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("ireader").unwrap()) };
+        let opts = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("ireader").unwrap()) };
         assert!(!opts.flatten_alpha);
         let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
         assert_eq!(entry_bytes(&out, "OEBPS/i/logo.png"), imgs[0].1);
@@ -1087,7 +1087,7 @@
     fn caption_fit_follows_profile_and_readable_area() {
         let (epub, imgs) = alpha_book();
         let html = |p: &str| {
-            let (out, _) = optimize_epub_with(&epub, &OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get(p).unwrap()) }).unwrap();
+            let (out, _) = optimize_epub_with(&epub, &OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get(p).unwrap()) }).unwrap();
             (text_of(&out, "OEBPS/c1.xhtml"), out)
         };
         // 掌阅 1264×1680：0.8 × 1680 × 900/1650 / 1264 = 0.57998 → 57%；Kindle 1104×1546 → 61%
@@ -1106,7 +1106,7 @@
     #[test]
     fn title_option_rewrites_dc_title_only_when_given() {
         let (epub, _) = bg_book();
-        let base = OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
+        let base = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
         let (plain, _) = optimize_epub_with(&epub, &base).unwrap();
         let (blank, _) = optimize_epub_with(&epub, &OptimizeOpts { title: Some("  ".into()), ..base.clone() }).unwrap();
         assert_eq!(plain, blank, "空白书名当没给");
@@ -1153,7 +1153,7 @@
     fn limits_default_matches_constants_and_smaller_limit_keeps_images() {
         assert_eq!(Limits::default(), Limits { max_decode_pixels: 64_000_000, pool_pixel_budget: 36_000_000 });
         let (epub, imgs) = bg_book();
-        let base = OptimizeOpts { text_repair_only: false, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
+        let base = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
         assert_eq!(base.limits, Limits::default());
         let small = OptimizeOpts { limits: Limits { max_decode_pixels: 1_000_000, pool_pixel_budget: 0 }, ..base.clone() };
         let (out, _) = optimize_epub_with(&epub, &small).unwrap();
@@ -1204,7 +1204,7 @@
             zw.finish().unwrap();
         }
         let opts = OptimizeOpts::for_profile(profile::get("ireader").unwrap());
-        assert!(opts.text_repair_only);
+        assert!(matches!(opts.text_mode, TextMode::Repair { .. }));
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
         // 样式表只按 Send to Kindle 的规则改（profile `kindle_rules`）：正文字体「宋体」整条去掉、body 的左右外边距不要；别的一个字不改
         assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:2em;margin-bottom:2em;}p{text-indent:0;margin:0.5em 0}");
@@ -1259,7 +1259,7 @@
             zw.finish().unwrap();
         }
         let opts = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
-        assert!(opts.text_repair_only && opts.repair_note_links);
+        assert!(matches!(opts.text_mode, TextMode::Repair { note_links: true, .. }));
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
         assert_eq!(text_of(&out, "OEBPS/s.css"), "p{line-height:1.8}", "样式表只按 Send to Kindle 的规则改：正文字体整条去掉");
         let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
