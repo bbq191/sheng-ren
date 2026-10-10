@@ -3,7 +3,7 @@
 输出三段：文字节点自己的样式差异 (属性, Amazon, 我们): 个数 «例子»；外层容器链的差异；行内区间有无的差异。
 2026-10-08 用它对出写出器 11 的规则（见 docs/kfx.md#send-to-kindle-的样式规则）。"""
 import collections
-from kfx import load, cli_args, short
+from kfx import by_type, cli_args, load, short, text_nodes
 
 NAMES = {'$11': 'font', '$12': 'style', '$13': 'weight', '$16': 'size', '$19': 'color', '$34': 'align', '$36': 'indent',
          '$42': 'line_h', '$45': 'nowrap', '$47': 'm_top', '$48': 'm_left', '$49': 'm_bottom', '$50': 'm_right',
@@ -22,34 +22,16 @@ def fmt(v):
 
 
 def nodes(path):
-    ci, ents = load(path)
-    E = {}
-    for i, t, b in ents:
-        E.setdefault(t, {})[i] = b[0] if isinstance(b, list) and b else b
-    pools = {k: v['$146'] for k, v in E['$145'].items()}
+    """[(文字, 样式链, 行内区间数)]：样式链是从版面顶层到文字节点每一层的样式（没有样式的层是 {}），按阅读顺序。"""
+    E = by_type(path)
     styles = E.get('$157', {})
 
-    def style(name):
-        return {NAMES.get(k, k): fmt(v) for k, v in styles.get(str(name), {}).items() if k not in SKIP}
+    def style(n):
+        if '$157' not in n:
+            return {}
+        return {NAMES.get(k, k): fmt(v) for k, v in styles.get(str(n['$157']), {}).items() if k not in SKIP}
 
-    out = []
-
-    def walk(n, chain):
-        ch = chain + [style(n['$157'])] if '$157' in n else chain + [{}]
-        t = n.get('$145')
-        if isinstance(t, dict) and t.get('name') in pools:
-            out.append((pools[t['name']][t['$403']], ch, len(n.get('$142', []) or [])))
-        for k in n.get('$146', []) or []:
-            if isinstance(k, dict):
-                walk(k, ch)
-
-    order = E['$258'][list(E['$258'])[0]]['$169'][0]['$170']
-    for s in order:
-        for pt in E['$260'][s]['$141']:
-            sl = E['$259'].get(pt.get('$176'))
-            for n in (sl or {}).get('$146', []):
-                walk(n, [])
-    return out
+    return [(t, [style(n) for n in chain], len(chain[-1].get('$142', []) or [])) for t, chain in text_nodes(E)]
 
 
 def compare(a_path, b_path):

@@ -12,8 +12,10 @@ import difflib, os, re, sys, zipfile, posixpath
 from urllib.parse import unquote
 import xml.etree.ElementTree as ET
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # tools/：toollib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from regresslib import attr, index, manifest, pairs, spine_paths  # noqa: E402
+from toollib import cli_args  # noqa: E402
 
 
 def spine_and_ncx(z):
@@ -123,10 +125,10 @@ def orig_spine(path):
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] in ('-h', '--help'):
-        print(__doc__)
-        sys.exit(0 if sys.argv[1:2] in (['-h'], ['--help']) else 2)
-    old, new = sys.argv[1], sys.argv[2]
+    args = cli_args(2, __doc__)
+    if len(args) != 2 or len(sys.argv) != 3:  # 不收开关、不收多余的参数
+        sys.exit(__doc__)
+    old, new = args
     srcs = index(new)
     print('| # | 书 | 原 spine | 旧 spine | 新 spine | 旧目录条数 | 新目录条数 | 层级+标签一致 | 只改目标 | nav 条数 | 坏链接 |')
     print('|---|---|---|---|---|---|---|---|---|---|---|')

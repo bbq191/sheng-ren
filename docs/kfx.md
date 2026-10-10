@@ -362,7 +362,7 @@ python3 tools/kfx/s2kbatch.py <Amazon KFX 目录> <书目录> <工作目录>   #
 python3 tools/kfx/s2kdev.py <Amazon KFX 目录> <书目录> <工作目录>     # 三台（kindle 的 KFX、掌阅和 Move 的 EPUB 样式）对 Amazon 逐项一致率
 ```
 
-三个命令都认 `-h`/`--help`；退出码 `0` 成功、`1` 用法错、`2` 读写或转换失败（`kfx-repack` 相同与否看输出的那行字）。`tools/kfx/` 的 Python 脚本只做分析（也认 `-h`）：读 KFX 一律调 `kfx-dump --json`（按环境变量 `KFX_DUMP` → 本仓库的 `target/release/kfx-dump` → `PATH` 里的顺序找，都没有就先 `cargo build --release -p kfx`），不自己解 Ion。改了写出器怎么回归见[开发 · KFX](development.md#kfx)。
+三个命令都认 `-h`/`--help`；退出码 `0` 成功、`1` 用法错、`2` 读写或转换失败（`kfx-repack` 相同与否看输出的那行字）。`tools/kfx/` 的 Python 脚本只做分析（也认 `-h`）：读 KFX 一律调 `kfx-dump --json`（按环境变量 `KFX_DUMP` → 本仓库的 `target/release/kfx-dump` → `PATH` 里的顺序找，都没有就先 `cargo build --release -p kfx`），不自己解 Ion；按阅读顺序走 storyline 的代码只有 `kfx.py` 的 `text_nodes` 一份（pair、s2kcmp、tree 共用）。`pair.py` 的 EPUB 一侧要每块文字的标签和 class，`epub-to-kfx --styles` 只给算好的样式、不给标签，所以它仍按 spine 自己切块（只认块级标签、不算 CSS）。改了写出器怎么回归见[开发 · KFX](development.md#kfx)。
 
 ## 下一步
 
