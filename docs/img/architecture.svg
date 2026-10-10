@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 640" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>核心架构：四个 crate 分层，每层里的关键模块</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <style>
+      .b{fill:#fff;stroke:#999;stroke-width:1.1}
+      .lib{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.4}
+      .kfx{fill:#eaf6f4;stroke:#3a8f86;stroke-width:1.4}
+      .bc{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.4}
+      .pf{fill:#f3eefb;stroke:#8a63c9;stroke-width:1.4}
+      .dev{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.2}
+      .in{fill:#fff;stroke:#c9c9c9;stroke-width:1}
+      .key{fill:#fff;stroke:#5b7fd6;stroke-width:1.6}
+      .off{fill:#fafafa;stroke:#bbb;stroke-width:1.1;stroke-dasharray:5 4}
+      .t{font-weight:bold;font-size:15px}
+      .h{font-weight:bold;font-size:13px}
+      .m{font-family:'Noto Sans Mono','DejaVu Sans Mono',monospace;font-weight:bold;font-size:13px}
+      .s{font-size:11.5px;fill:#444}
+      .n{font-size:12px;fill:#555}
+      .l{stroke:#555;stroke-width:1.3;fill:none}
+      .d{stroke:#5b7fd6;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+    </style>
+  </defs>
+  <rect width="960" height="640" fill="#fafafa"/>
+
+  <!-- 命令行 -->
+  <rect class="b" x="300" y="14" width="360" height="44" rx="8"/>
+  <text x="480" y="33" text-anchor="middle" class="h">booklib 命令行（用户只和它打交道）</text>
+  <text x="480" y="50" text-anchor="middle" class="s">一张命令表：track · add · sync · list · meta · remove · dedupe · devices</text>
+  <path class="l" d="M480 58 L480 76" marker-end="url(#a)"/>
+
+  <!-- library -->
+  <rect class="lib" x="20" y="78" width="800" height="160" rx="10"/>
+  <text x="36" y="100" class="m">library</text>
+  <text x="104" y="100" class="s">书库：只存索引（原件在哪、内容哈希、书名作者），决定哪本书要生成、传到哪</text>
+  <rect class="in" x="36" y="112" width="250" height="52" rx="6"/>
+  <text x="161" y="132" text-anchor="middle" class="m">sources</text>
+  <text x="161" y="152" text-anchor="middle" class="s">跟踪书目录、入库、原件改删跟着走</text>
+  <rect class="in" x="298" y="112" width="250" height="52" rx="6"/>
+  <text x="423" y="132" text-anchor="middle" class="m">generate</text>
+  <text x="423" y="152" text-anchor="middle" class="s">算指纹、比生成记录、调内容层生成</text>
+  <rect class="in" x="560" y="112" width="244" height="52" rx="6"/>
+  <text x="682" y="132" text-anchor="middle" class="m">metadata</text>
+  <text x="682" y="152" text-anchor="middle" class="s">豆瓣 → QQ 阅读 → Wikidata（依次试）</text>
+  <rect class="in" x="36" y="174" width="250" height="52" rx="6"/>
+  <text x="161" y="194" text-anchor="middle" class="m">session</text>
+  <text x="161" y="214" text-anchor="middle" class="s">缓存按生命周期分组（进程、一轮）</text>
+  <rect class="in" x="298" y="174" width="250" height="52" rx="6"/>
+  <text x="423" y="194" text-anchor="middle" class="m">transfer</text>
+  <text x="423" y="214" text-anchor="middle" class="s">每台设备一条传输线程，边生成边传</text>
+  <rect class="in" x="560" y="174" width="244" height="52" rx="6"/>
+  <text x="682" y="194" text-anchor="middle" class="m">deliver</text>
+  <text x="682" y="214" text-anchor="middle" class="s">写到 MTP 挂载点 / 交给 Move 书架服务</text>
+
+  <!-- 设备 -->
+  <rect class="dev" x="840" y="140" width="100" height="98" rx="8"/>
+  <text x="890" y="162" text-anchor="middle" class="h">三台设备</text>
+  <text x="890" y="184" text-anchor="middle" class="s">Kindle（KFX）</text>
+  <text x="890" y="202" text-anchor="middle" class="s">掌阅（EPUB）</text>
+  <text x="890" y="220" text-anchor="middle" class="s">Move（EPUB）</text>
+  <path class="l" d="M804 200 L838 200" marker-end="url(#a)"/>
+
+  <!-- 依赖箭头 library → kfx / bookconv -->
+  <path class="l" d="M175 238 L175 276" marker-end="url(#a)"/>
+  <text x="183" y="262" class="n">kindle 模式再转 KFX</text>
+  <path class="l" d="M470 238 L470 276" marker-end="url(#a)"/>
+  <text x="478" y="262" class="n">优化、转换、读写 EPUB</text>
+
+  <!-- kfx -->
+  <rect class="kfx" x="20" y="278" width="310" height="212" rx="10"/>
+  <text x="36" y="300" class="m">kfx</text>
+  <text x="70" y="300" class="s">EPUB → KFX（clean-room）</text>
+  <rect class="in" x="36" y="312" width="278" height="112" rx="6"/>
+  <text x="175" y="332" text-anchor="middle" class="m">write/ 写出器</text>
+  <text x="175" y="352" text-anchor="middle" class="s">parse 读成块树 → analyze 全书统计</text>
+  <text x="175" y="370" text-anchor="middle" class="s">style 样式去重 · layout 版面</text>
+  <text x="175" y="388" text-anchor="middle" class="s">symbols 符号两阶段（资源最后分配）</text>
+  <text x="175" y="406" text-anchor="middle" class="s">entities 目录、元数据 · resources 图片</text>
+  <rect class="in" x="36" y="434" width="278" height="42" rx="6"/>
+  <text x="175" y="452" text-anchor="middle" class="m">ion · container · yj</text>
+  <text x="175" y="468" text-anchor="middle" class="s">Ion 编解码、KFX 容器读写、符号表</text>
+
+  <!-- kfx → bookconv -->
+  <path class="l" d="M330 368 L358 368" marker-end="url(#a)"/>
+
+  <!-- bookconv -->
+  <rect class="bc" x="360" y="278" width="580" height="234" rx="10"/>
+  <text x="376" y="300" class="m">bookconv</text>
+  <text x="446" y="300" class="s">内容层：不管书库，只按调用方给的阅读范围和选项处理一本书</text>
+  <rect class="in" x="376" y="312" width="176" height="56" rx="6"/>
+  <text x="464" y="332" text-anchor="middle" class="m">optimize/</text>
+  <text x="464" y="350" text-anchor="middle" class="s">主流程：流式读写</text>
+  <text x="464" y="364" text-anchor="middle" class="s">图片并行处理</text>
+  <rect class="in" x="564" y="312" width="176" height="56" rx="6"/>
+  <text x="652" y="332" text-anchor="middle" class="m">wash/</text>
+  <text x="652" y="350" text-anchor="middle" class="s">清洗：只修复 / 完整</text>
+  <text x="652" y="364" text-anchor="middle" class="s">kindle_rules（掌阅、Move）</text>
+  <rect class="key" x="752" y="312" width="172" height="56" rx="6"/>
+  <text x="838" y="332" text-anchor="middle" class="m">cascade</text>
+  <text x="838" y="350" text-anchor="middle" class="s">CSS 层叠（KFX 写出器和</text>
+  <text x="838" y="364" text-anchor="middle" class="s">kindle_rules 共用一份）</text>
+  <rect class="in" x="376" y="378" width="176" height="56" rx="6"/>
+  <text x="464" y="398" text-anchor="middle" class="m">imgopt · imgpool</text>
+  <text x="464" y="416" text-anchor="middle" class="s">图片解码、缩放、灰度</text>
+  <text x="464" y="430" text-anchor="middle" class="s">按像素额度限内存</text>
+  <rect class="in" x="564" y="378" width="176" height="56" rx="6"/>
+  <text x="652" y="398" text-anchor="middle" class="m">convert/ · article</text>
+  <text x="652" y="416" text-anchor="middle" class="s">CBZ、网页 → EPUB</text>
+  <text x="652" y="430" text-anchor="middle" class="s">（CBZ 逐页流式）</text>
+  <rect class="in" x="752" y="378" width="172" height="56" rx="6"/>
+  <text x="838" y="398" text-anchor="middle" class="m">epubzip · epubbook</text>
+  <text x="838" y="416" text-anchor="middle" class="s">读写 EPUB（条目有上限）</text>
+  <text x="838" y="430" text-anchor="middle" class="s">读整本给 KFX 用</text>
+  <rect class="in" x="376" y="444" width="548" height="54" rx="6"/>
+  <text x="650" y="464" text-anchor="middle" class="m">html · util · check · error · color · uastyle</text>
+  <text x="650" y="484" text-anchor="middle" class="s">容错的 HTML 工具 · 原子写 · 质量门 · 错误类型 BookError · 颜色对比度 · 标签缺省样式</text>
+
+  <!-- 共用层叠 -->
+  <path class="d" d="M314 340 C 345 250, 800 250, 838 310" marker-end="url(#a)"/>
+  <text x="884" y="266" text-anchor="middle" class="n" fill="#5b7fd6">共用同一套层叠</text>
+
+  <!-- bookconv → profile -->
+  <path class="l" d="M650 512 L650 540" marker-end="url(#a)"/>
+
+  <!-- profile -->
+  <rect class="pf" x="360" y="542" width="420" height="52" rx="10"/>
+  <text x="376" y="564" class="m">profile</text>
+  <text x="440" y="564" class="s">阅读模式：kindle · ireader · xochitl（TOML 编译时嵌入）</text>
+  <text x="376" y="584" class="s">屏幕、可阅读范围、黑白彩色、阅读器怪癖、怎么传——算法里不写死设备</text>
+
+  <rect class="off" x="800" y="542" width="140" height="52" rx="10"/>
+  <text x="870" y="564" text-anchor="middle" class="m" fill="#888">drm</text>
+  <text x="870" y="584" text-anchor="middle" class="s">空壳（解 DRM 暂停）</text>
+
+  <text x="480" y="624" text-anchor="middle" class="n">实线箭头 = 依赖方向，单向无环：library → kfx → bookconv → profile（library 也直接用 bookconv、profile）</text>
+</svg>

@@ -28,12 +28,21 @@
 
 三个模式是同一套代码，区别（屏幕、阅读范围、阅读器的怪癖、各台另加的规则、怎么传）都写在模式的配置里，见[设备与阅读模式](docs/devices.md)。
 
-## 快速开始
+## 安装
 
-需要 Rust 工具链（`cargo`）。
+需要 Linux 和 Rust 工具链（`cargo`）。用自己的账号运行，别加 `sudo`：
 
 ```sh
-./install.sh                                  # 装 booklib（升级也是再跑一次）
+./install.sh            # 装 booklib；升级也是再跑一次
+./install.sh --tools    # 另装开发、排查问题用的 epub-optimize 等
+./uninstall.sh          # 卸载命令（书库、设备上的书都不动）
+```
+
+脚本先把命令全部编译好才动安装目录：编译失败什么都不改；装到一半失败或按了 Ctrl-C，会退回到装之前的样子。流程图和细节见[使用指南 · 安装与卸载](docs/usage.md#安装与卸载)。
+
+## 快速开始
+
+```sh
 booklib track ~/Documents/ereader/books       # 登记书目录（只需一次，可以登记多个）
 booklib sync                                  # 同步进书库，为接着的设备生成并传上去
 booklib list                                  # 看每本书在各设备上的产物、是不是最新
@@ -51,18 +60,16 @@ booklib --help                        # 全部命令；booklib sync --help 看�
 
 详细用法、输出怎么看、常见问题见[使用指南](docs/usage.md)。
 
-## 文档
+## 文档怎么读
 
-| 文档 | 讲什么 |
+按你想做的事挑一条路线读，不用从头读到尾：
+
+| 我想…… | 读这些 |
 |---|---|
-| [使用指南](docs/usage.md) | 安装、各命令、产物放在哪（直接传设备）、常见问题 |
-| [排版与优化规则](docs/typesetting.md) | 文字书（只修复 + 各台另加的）、漫画各做了什么、为什么；**真机验证情况** |
-| [设备与阅读模式](docs/devices.md) | 模式的字段、各阅读器的怪癖、可阅读范围怎么量、重拷书以后进度还在不在 |
-| [xochitl 阅读器踩坑](docs/xochitl.md) | Move 自带阅读器认什么、不认什么、怎么验证 |
-| [KFX](docs/kfx.md) | Kindle 产物怎么从 EPUB 转成 KFX：容器结构、对照样本推出的写法、真机结论 |
-| [架构](docs/architecture.md) | 代码怎么分、书库怎么存、生成流程、指纹 |
-| [开发](docs/development.md) | 测试、真书回归、版本号、工程约束、DRM |
-| [决定记录](docs/decisions.md) | 用户定过的事（按日期）和待定的事 |
+| **把书传到设备上** | [使用指南](docs/usage.md)：安装、每个命令、产物放在哪、常见问题 |
+| **知道它对书做了什么** | [排版与优化规则](docs/typesetting.md)（文字书只修复、漫画怎么处理、真机验证情况）→ [设备与阅读模式](docs/devices.md)（三台的参数和怪癖）→ [Move 阅读器踩坑](docs/xochitl.md) |
+| **看懂代码怎么分** | [架构](docs/architecture.md)：先看开头的核心架构图和模块交互图，再看各模块表、书库和生成流程；Kindle 那条路另见 [KFX](docs/kfx.md) |
+| **改代码** | [贡献说明](CONTRIBUTING.md)（硬约束、没有测试书时能做什么）→ [开发](docs/development.md)（测试、真书回归、版本号、共用轮子对照表）→ [决定记录](docs/decisions.md)（用户定过的事，别推翻） |
 
 ## 几个词
 

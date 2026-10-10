@@ -68,7 +68,7 @@ shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.
 | 要改的 | 先读 |
 |---|---|
 | 命令、使用方式 | `docs/usage.md` |
-| crate、模块、书库、生成流程、指纹 | `docs/architecture.md` |
+| crate、模块、书库、生成流程、指纹 | `docs/architecture.md`（先看开头的核心架构图、模块交互图） |
 | 排版与优化规则、验证情况 | `docs/typesetting.md` |
 | profile 字段、阅读器怪癖、可阅读范围 | `docs/devices.md`、`docs/xochitl.md` |
 | KFX 容器、写出器、Send to Kindle 规则表 | `docs/kfx.md` |
