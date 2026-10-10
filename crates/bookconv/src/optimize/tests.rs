@@ -1372,3 +1372,16 @@
         assert_eq!(entry_bytes(&out, &new_name), font, "内容不变");
         assert_eq!(raw_of(&out, &new_name), raw_of(&epub, "OEBPS/Fonts/a:b.ttf"), "压缩数据原样拷过来（原书是 9 级压的，重压的话不一样）");
     }
+
+/// 只修复时清洗层的选项换成只修复的那套，但 `kindle_rules` 求 `@media` 的环境要从 `for_profile` 带过去
+/// （以前整个换成缺省值，掌阅、Move 统计正文字号时特性条件一律不成立）。
+#[test]
+fn repair_only_keeps_media_env() {
+    for id in ["ireader", "xochitl"] {
+        let p = profile::Registry::builtin().get(id).unwrap();
+        let opts = OptimizeOpts::for_profile(p);
+        let media = opts.wash.as_ref().and_then(|w| w.media);
+        assert_eq!(media, Some(crate::cascade::MediaEnv::for_format(p, p.format())), "{id}");
+        assert_eq!(opts.repair_only().wash.and_then(|w| w.media), media, "{id}");
+    }
+}

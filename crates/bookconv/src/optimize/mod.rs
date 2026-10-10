@@ -129,6 +129,8 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   XML 声明和 CDATA；NCX 补空的 `dtb:uid`；内容是 UTF-8、声明是别的编码时改声明；行内 `style` 的字符引用先还原；`<P>`、`</body >`。
 /// - 55（2026-10-10 审计）：清洗层判断选择器前一律去掉开头的 `@charset`/`@import` 语句（`wash::rule_selector`）——样式表开头有
 ///   `@charset` 时，图注宽度（`capfit`）、整页背景（`bgfit`）、章尾去边距、首段顶格的类以前漏看第一条规则；只修复的内置模式不走这些。
+///   CSS 文本工具收成一份（`cascade` 的扫描器）带来的边角变化：注释在值里起分隔作用、`<!-- -->` 里的 `<style>` 不再处理、字符串和
+///   注释里的花括号不再切错规则、到文末没闭合的规则在文末收尾。测试书逐字节不变。
 /// - 56（2026-10-10 审计）：带透明（或 16 位）的 PNG 插图缩小时按预乘 alpha 缩（`imgopt::resize_alpha_png`，和整页背景图同一条路），
 ///   透明处存的颜色不再渗进图边（以前 `image` 自带的缩放不预乘，透明处存黑色的图边上出黑边）。只有完整清洗的文字书会缩插图，
 ///   内置三个模式的文字书只修复、漫画页另走一套，产物都不变。
@@ -141,7 +143,7 @@ pub const OPTIMIZE_VERSION: &str = "56";
 /// 历史：
 /// - c52（2026-10-08）：从 `OPTIMIZE_VERSION` 分出来，行为不变。
 /// - c53（2026-10-09，全系统审计）：优化标记不再写版本号；两路共用的清洗层修复（GBK 的 OPF 先转码等，见 v54）。
-/// - c54（2026-10-10 审计）：两路共用的清洗层修复（样式表开头的 `@charset`，见 v55）。
+/// - c54（2026-10-10 审计）：两路共用的清洗层修复（样式表开头的 `@charset`、CSS 文本工具收成一份的边角变化，见 v55）。
 pub const COMIC_VERSION: &str = "54";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
@@ -266,7 +268,13 @@ impl OptimizeOpts {
     fn repair_only(&self) -> Self {
         let TextMode::Repair { kindle_rules, note_links } = self.text_mode else { return self.clone() };
         OptimizeOpts {
-            wash: Some(crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, ..Default::default() }),
+            // 只修复不看清洗层的其他选项，但 `media`（`kindle_rules` 统计正文字号求 `@media` 用）要带过去：以前整个换成缺省值，
+            // `for_profile` 填的阅读范围丢了，特性条件一律不成立（KINDLE_RULES 7 修）
+            wash: Some(crate::wash::WashOpts {
+                mode: crate::wash::WashMode::Repair { kindle_rules },
+                media: self.wash.as_ref().and_then(|w| w.media),
+                ..Default::default()
+            }),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
             fit_backgrounds: false,

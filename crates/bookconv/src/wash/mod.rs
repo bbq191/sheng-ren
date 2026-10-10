@@ -67,7 +67,8 @@ pub use self::encoding::transcode_entries;
 /// - 4（2026-10-09 审计）：行内 `style` 里的字符引用先还原再改（`font-family:&quot;宋体&quot;` 以前认不出是正文字体、声明被 `;` 切碎）。
 /// - 5（2026-10-10）：字号按全书正文字号归一（`kindle_rules::font_scale`；《消失的爱人》《啸风山庄》《疯探》，别的书逐字节不变）。
 /// - 6（2026-10-10 审计）：统计正文字号时 `@media`、`<link media>` 按阅读模式的阅读范围、屏幕求（`WashOpts::media`，同 KFX 写出器；
-///   以前特性条件一律不成立），`font` 简写里的字号也算（层叠展开简写）；指纹 `u` 段带上屏幕。测试书掌阅、Move 逐字节不变。
+///   以前特性条件一律不成立；只修复时 `OptimizeOpts::repair_only` 要把 `media` 带过去，否则还是不成立），`font` 简写里的字号也算
+///   （层叠展开简写）；指纹 `u` 段带上屏幕；CSS 文本工具收成一份的边角变化（见 `OPTIMIZE_VERSION` 55）。测试书掌阅、Move 逐字节不变。
 pub const KINDLE_RULES_VERSION: &str = "6";
 pub use self::css::filter_css;
 #[cfg(test)]
