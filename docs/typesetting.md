@@ -50,7 +50,7 @@ profile `kindle_rules`（`wash::kindle_rules`、`bookconv::uastyle`、`bookconv:
 | 规则 | 怎么做 | 起因 |
 |---|---|---|
 | 标签的缺省样式 | `<p>`、`<dl>`、`<pre>` 上下 1em；`<blockquote>`、`<figure>` 上下 1em、左右 40px；`<h1>`–`<h6>` 粗体、字号 2/1.5/1.17/1/0.83/0.67em。写成 `eink-ua.css`，每章 `<head>` 里第一个挂，书里写了的照样盖过它（`uastyle`，和 KFX 写出器同一张表） | 丢了样式表的《绝叫》在掌阅上段与段挤在一起（掌阅给 `<p>` 的缺省外边距是 0），Send to Kindle 版有段距 |
-| 正文字体用阅读器的字体 | 正文字体（按继承逐元素算、按块统计字数最多的，`fonts::pick_body_font`，和 KFX 写出器同口径）的 `font-family` 整条去掉 | Kindle 写 `default`，用阅读器设置的字体 |
+| 正文字体用阅读器的字体 | 正文字体（全书层叠、按块统计字数最多的计算字体，`kindle_rules::book_facts`，和 KFX 写出器同口径）的 `font-family` 整条去掉 | Kindle 写 `default`，用阅读器设置的字体 |
 | 字号按正文归一 | 全书正文字号（按块、按字数最多的计算字号，`kindle_rules::base_font_size`，层叠和 KFX 写出器同一套 `bookconv::cascade`）不是 1em 时，所有字号乘 1/正文字号：相对字号（em、%）乘在 `body` 上（书里 `body` 的字号直接乘，没写的 `eink-ua.css` 补一条 `body{font-size:…%}`），绝对字号（pt、rem 这些）按 CSS 换算折成 `px` 再乘（正文已经是 1em 的也折）；`html` 上写了字号的书不动，关键字、`calc()` 不动（KINDLE_RULES 5，2026-10-10） | Kindle 拿阅读器的字号设置当正文；掌阅、Move 按书里写的，正文 1.25em 的《疯探》比别的书大。掌阅真机（2026-10-10 测试书）：认 `body` 上的字号、不认 `html` 上的；`px` 是 16px＝阅读器字号、跟着字号设置变、不受 `body` 和父元素影响；`pt` 按 px 的数算（12pt 只有 0.75 倍，《疯探》的 15pt 原来只有 0.94 倍）；`rem` 跟着 `body` 缩——只有 `px` 靠得住 |
 | body 左右边距不要 | 只选 `<body>` 的规则里的左右外边距、内边距去掉；用到负的左/右外边距的文件字数占多数时，那一侧照留 | Kindle 不写 body 左右边距（负外边距那侧按文件定） |
 | 文字对比度至少 4.5:1 | 规则里写了背景色的按它算；没写的按白页面，只调亮度 ≤ 0.5 的颜色；深背景没写文字颜色的补一条（`color::ensure_contrast`） | Kindle 照这个阈值调深/调浅 |

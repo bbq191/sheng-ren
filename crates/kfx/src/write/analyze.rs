@@ -134,8 +134,8 @@ impl TextCounts {
             *count.entry(f.as_ref().map(|f| f.to_lowercase())).or_default() += n;
         }
         // 字数打平时取字体名小的（没写字体的排最前），结果和 HashMap 的遍历顺序无关（以前 `max_by_key` 打平时随遍历顺序，同一本书
-        // 两次生成的 KFX 可能不一样，覆盖到 Kindle 上进度清零）。打破平局的口径同优化器的 `wash::fonts::pick_body_font`
-        // （那个按原始 HTML 数、只给清洗层用，这里按解析好的块数，复用不了）。
+        // 两次生成的 KFX 可能不一样，覆盖到 Kindle 上进度清零）。打破平局的口径同掌阅、Move 的 `kindle_rules`
+        // （`book_facts`：那边按 DOM 文字数，这里按解析好的块数，计数的对象不同，只共用规则）。
         count.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))?.0
     }
 }
