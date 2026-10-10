@@ -72,15 +72,15 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
     let mut cover_tmpl: Option<i64> = None;
     // 没有可见内容的文件（只有隐藏标题之类）：目录项、链接改指到下一个版面的开头。
     let mut empty_docs: Vec<String> = Vec::new();
-    let is_cover = |b: &Builder, r: usize| book.cover.as_deref().is_some_and(|c| b.res_by_path.get(c) == Some(&r));
+    let is_cover = |b: &Builder, r: usize| book.cover.as_deref().is_some_and(|c| b.res.index_of(c) == Some(r));
     for (si, path, lang, blocks) in parsed {
         if blocks.is_empty() {
             empty_docs.push(path.to_string());
             continue;
         }
-        let sec_name = b.sym(&format!("sec{si}"));
-        let story_name = b.sym(&format!("story{si}"));
-        let pool = b.sym(&format!("text{si}"));
+        let sec_name = b.syms.sym(&format!("sec{si}"));
+        let story_name = b.syms.sym(&format!("story{si}"));
+        let pool = b.syms.sym(&format!("text{si}"));
         let tmpl_eid = b.eid();
         let mut ctx = SectionCtx { pool, texts: Vec::new(), order: vec![(tmpl_eid, 1)], ids: Vec::new(), resources: Vec::new(), lang, pending: Vec::new(), last_end: None };
         // 只有一张图的文档写成整页图片版面（封面、插图页），和样本一样。
@@ -97,24 +97,26 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
             ctx.order.push((cid, 1));
             ctx.order.push((iid, 1));
             ctx.resources.push(r);
-            let (w, h) = fixed_image_size((i64::from(b.resources[r].width), i64::from(b.resources[r].height)), (cw, ch));
-            let res = b.sym(&b.resources[r].name.clone());
+            let (w, h) = fixed_image_size((i64::from(b.res[r].width), i64::from(b.res[r].height)), (cw, ch));
+            let res = b.res_sym(r);
+            // 宽高照写像素数（不带单位，同样本）
+            let sized = |w: i64, h: i64| {
+                let mut p = StyleProps::new();
+                p.float(P_WIDTH, w as f64);
+                p.float(P_HEIGHT, h as f64);
+                p.symbol(P_SIZING, SIZING_VALUE);
+                p
+            };
             if cw > 0 {
-                let cstyle = b.style(vec![
-                    (P_WIDTH, Value::F64(cw as f64)),
-                    (P_HEIGHT, Value::F64(ch as f64)),
-                    (P_SIZING, Value::Symbol(SIZING_VALUE)),
-                    (P_CLIP, Value::Bool(true)),
-                    (P_POSITION, Value::Symbol(POSITION_RELATIVE)),
-                ]);
-                let istyle = b.style(vec![
-                    (P_WIDTH, Value::F64(w as f64)),
-                    (P_HEIGHT, Value::F64(h as f64)),
-                    (P_SIZING, Value::Symbol(SIZING_VALUE)),
-                    (P_TOP, Value::F64(((ch - h) / 2) as f64)),
-                    (P_LEFT, Value::F64(((cw - w) / 2) as f64)),
-                    (P_POSITION, Value::Symbol(POSITION_ABSOLUTE)),
-                ]);
+                let mut cp = sized(cw, ch);
+                cp.flag(P_CLIP, true);
+                cp.symbol(P_POSITION, POSITION_RELATIVE);
+                let cstyle = b.style(cp);
+                let mut ip = sized(w, h);
+                ip.float(P_TOP, ((ch - h) / 2) as f64);
+                ip.float(P_LEFT, ((cw - w) / 2) as f64);
+                ip.symbol(P_POSITION, POSITION_ABSOLUTE);
+                let istyle = b.style(ip);
                 let img = image_node(iid, istyle, res);
                 vec![Value::Struct(vec![
                     (EID, Value::Int(cid)),
@@ -124,11 +126,11 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
                     (CHILDREN, Value::List(vec![img])),
                 ])]
             } else {
-                let style = b.style(vec![(P_WIDTH, Value::F64(w as f64)), (P_HEIGHT, Value::F64(h as f64)), (P_SIZING, Value::Symbol(SIZING_VALUE))]);
+                let style = b.style(sized(w, h));
                 vec![image_node(iid, style, res)]
             }
         } else {
-            let nodes = blocks.iter().filter_map(|bl| b.node(bl, &Parent::root(b.base_fs), &mut ctx)).collect();
+            let nodes = blocks.iter().filter_map(|bl| b.node(bl, &Parent::root(b.stats.base_fs), &mut ctx)).collect();
             // 文档末尾取不到的图片上的锚点挂到最后一个节点末尾
             if let Some((eid, end)) = ctx.last_end {
                 for id in std::mem::take(&mut ctx.pending) {
@@ -156,7 +158,7 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
                 cover_tmpl.get_or_insert(tmpl_eid);
             }
         } else if single_image {
-            let r = &b.resources[ctx.resources[0]];
+            let r = &b.res[ctx.resources[0]];
             tmpl.push((TMPL_WIDTH, Value::Int(i64::from(r.width))));
             tmpl.push((TMPL_HEIGHT, Value::Int(i64::from(r.height))));
             tmpl.push((TMPL_FIT, Value::Symbol(TMPL_FIT_VALUE)));
@@ -220,7 +222,7 @@ pub(super) fn fixed_image_size((iw, ih): (i64, i64), (cw, ch): (i64, i64)) -> (i
 impl Builder {
     /// 生成一个块的节点（递归），同时登记位置、id。
     fn node(&mut self, b: &Block, parent: &Parent, ctx: &mut SectionCtx) -> Option<Value> {
-        let col = text_color(self, &b.comp);
+        let col = self.styles.text_color(&b.comp);
         let props = self.block_props(b, parent, &ctx.lang, col);
         // 本节点给子节点（行内区间、容器里的块）的「父节点」
         let me = Parent { weight: weight_of(&b.comp), color: shown_color(col, &b.comp, parent), avail: inner_width(b, parent.avail), base_fs: parent.base_fs };
@@ -254,24 +256,23 @@ impl Builder {
                             f.push((LINK_TO, Value::Symbol(self.anchor(key.clone()))));
                         }
                         if let Some(rc) = &r.comp {
-                            let mut rp = text_props(self, rc, &me);
+                            let mut rp = text_props(&mut self.styles, rc, &me);
                             if rc.superscript && !b.comp.superscript {
-                                rp.push((P_VERTICAL_ALIGN, Value::Symbol(VALIGN_SUPER)));
+                                rp.symbol(P_VERTICAL_ALIGN, VALIGN_SUPER);
                             } else if rc.subscript && !b.comp.subscript {
-                                rp.push((P_VERTICAL_ALIGN, Value::Symbol(VALIGN_SUB)));
+                                rp.symbol(P_VERTICAL_ALIGN, VALIGN_SUB);
                             }
                             rp.extend(border_props(rc));
                             // `<a>` 的颜色写成链接（未访问、已访问）的颜色（Send to Kindle 同样：《人生海海》目录 `color:#00C`）
                             if r.anchor {
-                                if let Some(i) = rp.iter().position(|(k, _)| *k == P_COLOR) {
-                                    let (_, col) = rp.remove(i);
+                                if let Some(col) = rp.take(P_COLOR) {
                                     for k in [P_LINK_UNVISITED, P_LINK_VISITED] {
-                                        rp.push((k, Value::Struct(vec![(P_COLOR, col.clone())])));
+                                        rp.set(k, Value::Struct(vec![(P_COLOR, col.clone())]));
                                     }
                                 }
                             }
                             if let Some(bg) = rc.background {
-                                rp.push((P_INLINE_BACKGROUND, Value::Int(i64::from(bg))));
+                                rp.color(P_INLINE_BACKGROUND, bg);
                             }
                             f.push((STYLE_REF, Value::Symbol(self.style(rp))));
                         }
@@ -293,7 +294,7 @@ impl Builder {
                 ctx.place(eid, 1, &b.ids, false);
                 ctx.resources.push(r);
                 let style = self.style(props);
-                let res = self.sym(&self.resources[r].name.clone());
+                let res = self.res_sym(r);
                 Some(image_node(eid, style, res))
             }
             Kind::Container(children) => {
@@ -307,12 +308,12 @@ impl Builder {
                 // 背景图：样式里指向图片资源（`$479`），同《绍宋》样本 `body.juan` 等
                 if let Some(r) = b.comp.bg_image.as_deref().and_then(|src| self.resource(src)) {
                     ctx.resources.push(r);
-                    props.push((P_BG_IMAGE, Value::Symbol(self.sym(&self.resources[r].name.clone()))));
+                    props.symbol(P_BG_IMAGE, self.res_sym(r));
                     if b.comp.bg_no_repeat {
-                        props.push((P_BG_REPEAT, Value::Symbol(BG_NO_REPEAT)));
+                        props.symbol(P_BG_REPEAT, BG_NO_REPEAT);
                     }
                     if b.comp.bg_fixed {
-                        props.push((P_BG_ATTACHMENT, Value::Symbol(BG_FIXED)));
+                        props.symbol(P_BG_ATTACHMENT, BG_FIXED);
                     }
                     let len = |l: Len| match l {
                         Len::Percent(p) => num(p, U_PERCENT),
@@ -321,7 +322,7 @@ impl Builder {
                     };
                     for (v, k) in b.comp.bg_position.iter().zip([P_BG_POS_X, P_BG_POS_Y]).chain(b.comp.bg_size.iter().zip([P_BG_SIZE_W, P_BG_SIZE_H])) {
                         if let Some(l) = v {
-                            props.push((k, len(*l)));
+                            props.set(k, len(*l));
                         }
                     }
                 }
