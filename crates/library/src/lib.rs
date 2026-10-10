@@ -264,10 +264,10 @@ pub fn unsupported(format: &str) -> String {
     format!(".{format} 不再支持（只支持 EPUB 和 CBZ，或网址）")
 }
 
-/// 要转换才能用的原件格式（CBZ）→ EPUB 字节（与设备无关）。EPUB 不走这里。
-pub(crate) fn convert_to_epub(format: &str, data: impl std::io::Read + std::io::Seek, title: &str) -> Result<Vec<u8>, String> {
+/// 要转换才能用的原件格式（CBZ）→ EPUB（与设备无关），写进文件 `out`（逐页流式写，不把整本读进内存）。EPUB 不走这里。
+pub(crate) fn convert_to_epub(format: &str, data: impl std::io::Read + std::io::Seek, title: &str, out: &std::path::Path) -> Result<(), String> {
     match format {
-        "cbz" => bookconv::convert::cbz::cbz_to_epub_from(data, title),
+        "cbz" => bookconv::convert::cbz::cbz_to_epub_file(data, title, out),
         _ => Err(unsupported(format)),
     }
 }

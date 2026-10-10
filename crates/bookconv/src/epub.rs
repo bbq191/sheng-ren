@@ -261,37 +261,15 @@ pub fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u8>, Str
     if book.chapters.is_empty() {
         return Err("EPUB 至少要有一章".into());
     }
-    for ch in book.chapters.iter_mut() {
-        ch.html_body = fix_internal_links(&ch.html_body, None);
-        ch.html_body = crate::htmlproc::break_footnote_cycles(&ch.html_body);
-    }
-    let opf = content_opf(book, &opts);
     // 预留足够容量：全部 STORED，产物 ≈ 资源 + 章节文本 + 少量固定条目。Vec 倍增扩容会在峰值瞬间同时持有新旧两块。
     let cap = book.resources.iter().map(|r| r.bytes.len()).sum::<usize>()
         + book.chapters.iter().map(|c| c.html_body.len() + 512).sum::<usize>()
-        + opf.len()
         + opts.shared_css.as_ref().map_or(0, |c| c.content.len())
-        + 16 * 1024;
+        + 32 * 1024;
     let mut buf: Vec<u8> = Vec::with_capacity(cap);
-    {
-        // mimetype 首个、STORED（`EpubWriter::new` 写），其余也全部 STORED
-        let mut z = crate::epubzip::EpubWriter::new(std::io::Cursor::new(&mut buf))?;
-        z.put_stored("META-INF/container.xml", container_xml().as_bytes())?;
-        z.put_stored(OPF_PATH, opf.as_bytes())?;
-        z.put_stored("OEBPS/nav.xhtml", nav_xhtml(book).as_bytes())?;
-        if let Some(cover) = &book.meta.cover {
-            z.put_stored(&format!("OEBPS/cover.{}", book.meta.cover_ext), cover)?;
-            z.put_stored("OEBPS/cover.xhtml", cover_xhtml(&book.meta).as_bytes())?;
-        }
-        let css_link = opts.shared_css.as_ref().map(|c| (format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>", xesc(&c.file)), c.link_if));
-        for (i, ch) in book.chapters.iter().enumerate() {
-            let head_extra = match &css_link {
-                Some((link, cond)) if cond.is_none_or(|f| f(&ch.html_body)) => link.as_str(),
-                _ => "",
-            };
-            z.put_stored(&format!("OEBPS/{}", chapter_filename(i)), chapter_doc(ch, &book.meta.language, head_extra).as_bytes())?;
-        }
-        if opts.consume_resources {
+    let consume = opts.consume_resources;
+    write_book(book, &opts, std::io::Cursor::new(&mut buf), |z, book| {
+        if consume {
             for r in std::mem::take(&mut book.resources) {
                 z.put_stored(&format!("OEBPS/{}", r.path), &r.bytes)?; // r 在本次迭代结束即释放
             }
@@ -300,12 +278,58 @@ pub fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u8>, Str
                 z.put_stored(&format!("OEBPS/{}", r.path), &r.bytes)?;
             }
         }
-        if let Some(css) = &opts.shared_css {
-            z.put_stored(&format!("OEBPS/{}", css.file), css.content.as_bytes())?;
-        }
-        z.finish()?;
-    }
+        Ok(())
+    })?;
     Ok(buf)
+}
+
+/// 同 [`assemble_master`]，但资源的字节不在 `book.resources` 里（`bytes` 留空，只用 `path`、`media_type` 写 manifest）：写到资源那一步时
+/// 按顺序调 `load(第几个资源)` 取一份、写完就丢，写进 `w`（如打开的文件）。产物与把字节放进 `resources` 再 [`assemble_master`] 逐字节相同，
+/// 峰值内存只有一份资源（CBZ 整本转母版用，见 `convert::cbz`）。
+pub(crate) fn assemble_master_streaming<W: std::io::Write + std::io::Seek>(book: &mut Book, w: W, mut load: impl FnMut(usize) -> Result<Vec<u8>, String>) -> Result<W, String> {
+    if book.chapters.is_empty() {
+        return Err("EPUB 至少要有一章".into());
+    }
+    let opts = AssembleOpts { consume_resources: true, ..Default::default() };
+    write_book(book, &opts, w, |z, book| {
+        for (i, r) in book.resources.iter().enumerate() {
+            z.put_stored(&format!("OEBPS/{}", r.path), &load(i)?)?;
+        }
+        Ok(())
+    })
+}
+
+/// 组装的共同部分：每章规整链接、拆脚注互指环 → OPF → 按固定顺序写条目（container、OPF、nav、封面、各章、资源、共用样式表）。
+/// 资源由 `put_resources` 写（字节在内存里还是逐个读进来由调用方定）。章节不能为空（调用方查）。
+fn write_book<W: std::io::Write + std::io::Seek>(book: &mut Book, opts: &AssembleOpts, w: W, put_resources: impl FnOnce(&mut crate::epubzip::EpubWriter<W>, &mut Book) -> Result<(), String>) -> Result<W, String> {
+    for ch in book.chapters.iter_mut() {
+        ch.html_body = fix_internal_links(&ch.html_body, None);
+        ch.html_body = crate::htmlproc::break_footnote_cycles(&ch.html_body);
+    }
+    let opf = content_opf(book, opts);
+    // mimetype 首个、STORED（`EpubWriter::new` 写），其余也全部 STORED
+    let mut z = crate::epubzip::EpubWriter::new(w)?;
+    z.put_stored("META-INF/container.xml", container_xml().as_bytes())?;
+    z.put_stored(OPF_PATH, opf.as_bytes())?;
+    drop(opf);
+    z.put_stored("OEBPS/nav.xhtml", nav_xhtml(book).as_bytes())?;
+    if let Some(cover) = &book.meta.cover {
+        z.put_stored(&format!("OEBPS/cover.{}", book.meta.cover_ext), cover)?;
+        z.put_stored("OEBPS/cover.xhtml", cover_xhtml(&book.meta).as_bytes())?;
+    }
+    let css_link = opts.shared_css.as_ref().map(|c| (format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>", xesc(&c.file)), c.link_if));
+    for (i, ch) in book.chapters.iter().enumerate() {
+        let head_extra = match &css_link {
+            Some((link, cond)) if cond.is_none_or(|f| f(&ch.html_body)) => link.as_str(),
+            _ => "",
+        };
+        z.put_stored(&format!("OEBPS/{}", chapter_filename(i)), chapter_doc(ch, &book.meta.language, head_extra).as_bytes())?;
+    }
+    put_resources(&mut z, book)?;
+    if let Some(css) = &opts.shared_css {
+        z.put_stored(&format!("OEBPS/{}", css.file), css.content.as_bytes())?;
+    }
+    z.finish()
 }
 
 #[cfg(test)]

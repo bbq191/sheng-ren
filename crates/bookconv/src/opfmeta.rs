@@ -232,7 +232,9 @@ fn to_format(image: &[u8], ext: &str) -> Result<(Vec<u8>, Option<&'static str>),
     if have == want {
         return Ok((image.to_vec(), None));
     }
-    let img = crate::imgopt::guard(|| Some(image::load_from_memory(image))).ok_or("封面图解不开")?.map_err(|e| format!("封面图解不开：{e}"))?;
+    // 解码前按文件头核对像素上限（防几 KB 声明几亿像素的图把内存顶爆），兜住解码器 panic。不按 EXIF 方向摆正：
+    // 以前就不摆正，补了会改产物（要加 `VERSION`），等真遇到带方向的封面再定。
+    let img = crate::imgopt::decode_capped(image, crate::imgopt::MAX_COMIC_DECODE_PIXELS, false).ok_or("封面图解不开（或超过 6400 万像素）")?;
     let mut out = Vec::new();
     let fmt = if want == "png" { image::ImageFormat::Png } else { image::ImageFormat::Jpeg };
     let img = if fmt == image::ImageFormat::Jpeg { image::DynamicImage::ImageRgb8(img.to_rgb8()) } else { img };

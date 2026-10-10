@@ -26,9 +26,9 @@
 
 | 模块 | 职责 |
 |---|---|
-| `convert/` | CBZ → 每页一张原图的 EPUB（第一页就是封面，OPF 标"漫画"）；入库时的轻量检查。有打不开的页（不支持的压缩方式等）时生成报错，不出缺页的书 |
+| `convert/` | CBZ → 每页一张原图的 EPUB（第一页就是封面，OPF 标"漫画"）；入库时的轻量检查。有打不开的页（不支持的压缩方式等）时生成报错，不出缺页的书。书库生成时逐页流式写进文件（`cbz_to_epub_file`：先只读每页开头认格式，写到资源时一页一页解压，峰值内存一页） |
 | `article` | 网页 → EPUB（正文抽取，图片保留原图；编码按 BOM → HTTP 头 → `<meta charset>` 认，没声明又不是合法 UTF-8、或声明 UTF-8 而字节不合法的按 GB18030，解码后去掉 U+FFFD） |
-| `optimize/` | 优化主流程：流式读写、逐文件变换、图片并行处理 |
+| `optimize/` | 优化主流程：流式读写、逐文件变换、图片并行处理。文字书走完整处理还是只修复由 `OptimizeOpts::text_mode`（`TextMode::Full` / `Repair { kindle_rules, note_links }`）定，清洗层对应 `WashOpts::mode`（`WashMode::Full` / `Repair { kindle_rules }`） |
 | `wash/` | 清洗层：只修复（内置模式的文字书）和完整清洗（漫画、没开只修复的自定义模式）两条路，各文件见下表 |
 | `html` | 容错的 XHTML 工具：标签扫描、属性读写（单双引号、无引号）、加类、纯文本。全仓库的 HTML 操作都用它 |
 | `htmlproc/` | 注释搬移与编号（只修复时 Move 的 `repair_note_links` 也用它）、字体锁、重复 id |
@@ -39,7 +39,7 @@
 | `bgfit` | 整页背景图的尺寸意图（`cover`、`contain`、宽 100%、没写尺寸），去掉 `background-size` 的模式按它预先缩图（只修复时不做；漫画不处理，所以内置模式现在都用不到） |
 | `capfit` | 带图注、会超页的竖长图给 `<img>` 写宽度百分比，图和图注同页（profile `caption_fit`；只修复时不做，内置模式现在用不到） |
 | `imgalpha` | 正文 `<img>`/SVG `<image>` 用到、CSS 没用到的图：不认透明的阅读器（profile `image_alpha = false`）把它们合成白底（只修复时不做，内置模式现在用不到；漫画另有自己的铺白底） |
-| `imgopt` / `imgpool` / `jpegopt` | 图片处理（摆正、裁边、缩放、灰度；`guard` 把解码器的 panic 变成"这张不处理"）；按像素额度限内存的并发池；JPEG 哈夫曼表无损重做 |
+| `imgopt` / `imgpool` / `jpegopt` | 图片处理（摆正、裁边、缩放、灰度；`guard` 把解码器的 panic 变成"这张不处理"；"读头 → EXIF 方向 → 解码上限 → 解码 → 摆正"统一走 `ImgHead`，对外是 `decode_capped`/`decode_oriented`；带透明的 PNG 插图、背景图缩放都按预乘 alpha，不出黑边）；按像素额度限内存的并发池；JPEG 哈夫曼表无损重做 |
 | `opfmeta` | EPUB 元数据与封面的读改：只重写文字条目，图片原样拷；`meta --edit` 和生成时补元数据共用 |
 | `comic_detect` / `comicfxl` / `comicpad` | 判断是不是漫画；漫画固定版式（kindle）；页边距 1 时各页的补救（xochitl） |
 | `check` | 质量门 |
@@ -198,7 +198,9 @@
 `optimize::optimize_epub_file_streaming` 分两个阶段：
 
 1. **阶段一**：非图片条目整份读进来（几个线程各自打开源文件同时解压，`epubzip::read_skeleton_par`），图片只记名字和大小。清洗、HTML 变换、注释搬移都在这里完成。
-2. **阶段二**：按条目顺序写出。图片这时才交给 `imgpool` 的 worker（worker 自己打开源文件读原图），并行处理，按原顺序写进 zip，处理完立刻丢掉。同时处理的图总像素有上限（3600 万），超过上限的大页独占额度、一张一张来。要 deflate 的条目也交给 worker 先压好（`epubzip::Precompressed`），主线程按顺序原样拷进 zip。和原书逐字节相同（大小、CRC 都对得上）、64KB 以上的字体不解压再重压，直接拷原书的压缩数据（`EpubWriter::raw_copy_as`，清洗时改过名的按新名写；v54，《绍宋》590 → 233ms）。有远程图、或漫画里有 GIF/WebP 页时，OPF 推迟到最后写。
+阶段一开头（清洗前）补封面声明 `ensure_cover_declared`（全程只调一次），掌阅、Move 的文字书接着补封面页（封面图的宽高只解压条目开头读文件头，`read_image_head`）。
+
+2. **阶段二**：按条目顺序写出（`write_entries`：图片工作池 `spawn_image_workers`、按序写出 `OrderedSink`，收尾 `finalize`/`finalize_opf`）。图片这时才交给 `imgpool` 的 worker（worker 自己打开源文件读原图），并行处理，按原顺序写进 zip，处理完立刻丢掉。同时处理的图总像素有上限（3600 万），超过上限的大页独占额度、一张一张来。要 deflate 的条目也交给 worker 先压好（`epubzip::Precompressed`），主线程按顺序原样拷进 zip。和原书逐字节相同（大小、CRC 都对得上）、64KB 以上的字体不解压再重压，直接拷原书的压缩数据（`EpubWriter::raw_copy_as`，清洗时改过名的按新名写；v54，《绍宋》590 → 233ms）。有远程图、或漫画里有 GIF/WebP 页时，OPF 推迟到最后写。
 
 峰值内存约为"全书文字 + 同时在处理的几张图"，不随漫画页数增长。并行处理的结果和逐张处理逐字节相同。
 
