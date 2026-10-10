@@ -70,7 +70,11 @@ pub use entities::container_id;
 ///   文字池逐字相同、注释配对不变；未真机验证。
 /// - 16（2026-10-10 审计）：层叠认 `font` 简写（`bookconv::cascade` 展开成分项，没写的项重置成 `normal`；以前整条不认）。
 ///   测试书没有用简写的：24 本文字书 + 1 卷漫画 KFX 逐字节不变。
-pub const WRITER_VERSION: &str = "16";
+/// - 17（2026-10-10 审计，CSS 小工具收拢）：层叠找规则改用 `bookconv::cascade::rule_spans`（和清洗层同一套），选择器前面的语句按
+///   引号外的 `;` 切——以前不认引号，`[style="text-align: center;"]{text-indent:0}` 这种属性选择器被 `;` 切坏、整条丢掉，
+///   现在照 CSS 生效（《消失的爱人》居中段的首行缩进写 0，24 本里只有它变）；注释换成空格（`1px/**/solid` 是两个词）、四值简写
+///   拆不清（多于 4 个值、`calc()` 里有空格）的整条不认、`url()` 按 `html::css_urls` 认、`@font-face` 按规则解析找，测试书没碰到。
+pub const WRITER_VERSION: &str = "17";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。

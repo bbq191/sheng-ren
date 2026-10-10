@@ -69,8 +69,8 @@ pub fn plan(entries: &[crate::epubzip::Entry]) -> HashMap<String, BgFit> {
         if e.name.to_ascii_lowercase().ends_with(".css") {
             scan_css(text, &e.name, &mut notes);
         } else if crate::epubzip::is_html_entry(&e.name, &e.data) {
-            for c in crate::html::style_block_re().captures_iter(text) {
-                scan_css(&c[2], &e.name, &mut notes);
+            for b in crate::html::style_blocks(text) {
+                scan_css(&text[b.content_start..b.content_end], &e.name, &mut notes);
             }
             // `<img src>`、SVG `<image xlink:href>`、链接：都算别的用法
             for v in crate::html::link_values(text) {
@@ -81,8 +81,8 @@ pub fn plan(entries: &[crate::epubzip::Entry]) -> HashMap<String, BgFit> {
             // 内联样式里的 `url()`：不处理
             for t in crate::html::tags(text).filter(|t| t.is_start()) {
                 if let Some(s) = crate::html::attr_value(&text[t.start..t.end], "style") {
-                    for u in urls(s) {
-                        notes.push((crate::epubzip::resolve_link(&e.name, &u).0, None));
+                    for u in crate::html::css_urls(s).into_iter().filter(|u| !u.value.is_empty()) {
+                        notes.push((crate::epubzip::resolve_link(&e.name, u.value).0, None));
                     }
                 }
             }
@@ -102,18 +102,18 @@ pub fn plan(entries: &[crate::epubzip::Entry]) -> HashMap<String, BgFit> {
 
 /// 样式表里每条规则的 `url()`：整页背景的记下意图，别的（`@font-face` 里的字体也在内，反正不是图）记成拿不准。
 fn scan_css(css: &str, base: &str, notes: &mut Vec<(String, Option<BgFit>)>) {
-    for c in crate::wash::css_rule_re().captures_iter(css) {
-        let sel = crate::wash::rule_selector(&c[1]);
-        let decls = crate::html::css_decls(&c[2]);
+    for c in crate::cascade::rule_spans(css) {
+        let sel = crate::cascade::rule_selector(c.prelude);
+        let decls = crate::html::css_decls(c.body);
         let fit = rule_fit(&sel, &decls);
         for d in &decls {
             let p = d.prop.to_ascii_lowercase();
             let is_bg = p == "background" || p == "background-image";
-            for u in urls(d.value) {
-                if crate::html::is_external(&u) {
+            for u in crate::html::css_urls(d.value).into_iter().map(|u| u.value).filter(|u| !u.is_empty()) {
+                if crate::html::is_external(u) {
                     continue;
                 }
-                notes.push((crate::epubzip::resolve_link(base, &u).0, if is_bg { fit } else { None }));
+                notes.push((crate::epubzip::resolve_link(base, u).0, if is_bg { fit } else { None }));
             }
         }
     }
@@ -161,25 +161,8 @@ fn rule_fit(selector: &str, decls: &[crate::html::CssDecl]) -> Option<BgFit> {
 
 /// 选择器（逗号分开的一支）最后一段是 `body`/`html` 本身（可带 `.类`、`#id`、属性、伪类）。
 fn is_page_selector(sel: &str) -> bool {
-    let last = sel.trim().rsplit(|c: char| c.is_whitespace() || c == '>' || c == '+' || c == '~').next().unwrap_or("").to_ascii_lowercase();
+    let last = crate::cascade::last_compound(sel).to_ascii_lowercase();
     ["body", "html"].iter().any(|t| last.strip_prefix(t).is_some_and(|r| r.is_empty() || r.starts_with(['.', '#', '[', ':'])))
-}
-
-/// 值里每个 `url(…)` 的地址（去掉引号）。
-pub(crate) fn urls(value: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let lower = value.to_ascii_lowercase();
-    let mut from = 0;
-    while let Some(i) = lower[from..].find("url(") {
-        let s = from + i + 4;
-        let Some(j) = value[s..].find(')') else { break };
-        let u = value[s..s + j].trim().trim_matches(|c| c == '"' || c == '\'').trim();
-        if !u.is_empty() {
-            out.push(u.to_string());
-        }
-        from = s + j + 1;
-    }
-    out
 }
 
 #[cfg(test)]

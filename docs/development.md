@@ -94,7 +94,7 @@ done
 | 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 6 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 5 | 只有补过东西的 |
-| EPUB → KFX | `kfx::write::WRITER_VERSION` | 16 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
+| EPUB → KFX | `kfx::write::WRITER_VERSION` | 17 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。
@@ -117,13 +117,13 @@ done
   | 是不是书外链接（`http:`、`mailto:`、`data:`、`//`…；按 RFC 3986 的协议名判断，原书文件名里的 `:` 不算） | `html::is_external`（别再写 `contains("://")`、`contains(':')`） |
   | 原子写文件（书库也用） | `util` 的 `produce_then_replace`、`commit` |
   | DRM 判定；全角转半角；图片格式识别；哈希 | `wash::encrypted_targets`；`util::to_halfwidth`；`util::image_kind`；`util::fnv64` |
-  | `@font-face` 规则匹配（清洗层、KFX 写出器共用） | `wash::font_face_re` |
+  | `@font-face` 规则（清洗层剔除死字体、字体分析、KFX 写出器共用） | `cascade::font_face_rules`、`cascade::is_font_face` |
   | install / uninstall 共用的包列表和路径 | `tools/cargo-pkgs.sh` |
   | 逐文件独立的步骤多线程做（结果按原顺序；`f` 必须是纯的） | `util::par_map`（只读）/ `par_map_mut`（就地改） |
   | 在别的线程先压好一个 zip 条目，再按顺序写 | `epubzip::Precompressed` + `EpubWriter::put_precompressed` |
   | 原样拷原书一个 zip 条目的压缩数据（不解压不重压；改过名的写成新名） | `EpubWriter::raw_copy` / `raw_copy_as` |
   | 并行线程数（图片 worker、`par_map` 共用；CPU 核数，封顶 `MAX_WORKERS` 16） | `imgpool::worker_count()` |
-  | 选择器最后一段（标签、类、有没有 id/伪类） | `wash::css::last_compound`（2026-10-08 审计从 5 处收拢） |
+  | 选择器最后一段（标签、类、有没有 id/伪类） | `cascade::last_compound`、`cascade::compound_tag_classes`（2026-10-08 审计从 5 处收拢，2026-10-10 挪进 `cascade`） |
   | 非 UTF-8 的 CSS 按单字节读写 | `util::latin1_decode` / `latin1_encode` |
   | 颜色解析、对比度、半透明叠色（优化器和 KFX 写出器共用） | `bookconv::color`（`ensure_contrast`、`over`） |
   | 改 `style` 属性（字符引用先还原、改完再转义） | `html::edit_style_attrs`（别直接拿 `edit_attrs` 的原文去切声明） |
@@ -133,7 +133,9 @@ done
   | GBK、Big5、UTF-16 的 XHTML、OPF、NCX 转 UTF-8 | `wash::transcode_entries`（优化器读完书先转，后面一律按 UTF-8） |
   | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | `bookconv::uastyle` |
-  | KFX 写出器里跳引号、配括号（CSS 字符串遇换行结束） | `bookconv::cascade`（`kfx::css`）的 `scan_css` |
+  | 读写样式表的规则（层叠、清洗层、优化器共用一套解析：引号、注释、转义按 CSS 规范，`@media` 里的也给出、条件由调用方定，位置是原文的，改写只换规则体） | `cascade::rule_spans`；判断选择器先过 `cascade::rule_selector`（去注释和开头的 `@charset`/`@import` 语句）；只剩 `kindle_rules::rewrite_css` 还用旧正则 `wash::css_rule_re` |
+  | CSS 文本：去注释、按分隔符拆、按顶层空白切词、四值简写、`background` 简写切词（2026-10-10 审计从成对重复收成一份） | `cascade::{strip_comments, split_top, tokens, box_sides, background_tokens}`（底下是同一个扫描器，CSS 字符串遇换行结束） |
+  | `<style>` 块（开标签按标签扫、内容按原样文字到 `</style` 为止） | `html::style_blocks`、改写用 `html::edit_style_blocks`（`html::style_block_re` 只剩 `optimize::streaming` 在用） |
   | Python 工具：命令行参数；EPUB 属性（单双引号）、OPF 定位；回归目录配对、spine 解析；读 KFX、走 storyline；EPUB 文字块的样式 | `tools/toollib.py`（`cli_args`/`cli_opts`、`attr`、`opf_path`，全部脚本共用）；`tools/regress/regresslib.py`（compare、tocchk、pair 共用）；`tools/kfx/kfx.py` 的 `load` 调 `kfx-dump --json`（Python 不再自己解 Ion，2026-10-09），`by_type`/`pools`/`reading_order`/`text_nodes` 按阅读顺序走 storyline（pair、s2kcmp、tree 共用，2026-10-10）；样式用 `epub-to-kfx --styles`（s2kdev），不在 Python 里算 CSS |
 - **不可信输入不能让进程崩溃**：书的字节全是外来数据，数值相加用 `checked_add`、切片用 `get`；图片解码器 panic 由 `imgopt::guard` 兜住。**读外来数据设上限，超过就报错、不截断照用**（读用 `util::read_capped`）：
   - zip 条目解压 `epubzip::MAX_ENTRY_BYTES`（256MB，EPUB 与 CBZ 共用）；
