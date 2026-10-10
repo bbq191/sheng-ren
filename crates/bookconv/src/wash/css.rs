@@ -3,13 +3,6 @@ use super::*;
 
 // ───────────────────────── 2–4. CSS 声明处理 ─────────────────────────
 
-/// CSS 规则 `选择器{声明}`（只匹配最内层；字符串、注释里的花括号会切错）。新代码用 [`crate::cascade::rule_spans`]（和层叠同一套
-/// 解析、位置是原文的）；这里只留给还没改过来的 `kindle_rules::rewrite_css`。
-pub(crate) fn css_rule_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"(?s)([^{}]+)\{([^{}]*)\}"#).unwrap())
-}
-
 // CSS 文本小工具都在 `cascade`（层叠和清洗层共用一份），清洗层各模块经 `use self::css::*` 用到它们。
 pub(super) use crate::cascade::{box_sides, compound_tag_classes, last_compound, rule_selector, BoxSides};
 

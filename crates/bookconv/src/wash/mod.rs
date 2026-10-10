@@ -69,7 +69,8 @@ pub use self::encoding::transcode_entries;
 /// - 6（2026-10-10 审计）：统计正文字号时 `@media`、`<link media>` 按阅读模式的阅读范围、屏幕求（`WashOpts::media`，同 KFX 写出器；
 ///   以前特性条件一律不成立；只修复时 `OptimizeOpts::repair_only` 要把 `media` 带过去，否则还是不成立），`font` 简写里的字号也算
 ///   （层叠展开简写）；正文字体、负外边距、body 上的类改在同一趟全书层叠里算（`kindle_rules::book_facts`，同 KFX 写出器的口径：
-///   以前另按原始 HTML 和只认类、裸标签的字体表算）；指纹 `u` 段带上屏幕；CSS 文本工具收成一份的边角变化（见 `OPTIMIZE_VERSION` 55）。测试书掌阅、Move 逐字节不变。
+///   以前另按原始 HTML 和只认类、裸标签的字体表算）；改写样式表按 `cascade::rule_spans` 逐条规则（以前是只认最内层花括号的正则，
+///   字符串、注释里的花括号会切错）；指纹 `u` 段带上屏幕；CSS 文本工具收成一份的边角变化（见 `OPTIMIZE_VERSION` 55）。测试书掌阅、Move 逐字节不变。
 pub const KINDLE_RULES_VERSION: &str = "6";
 pub use self::css::filter_css;
 #[cfg(test)]
