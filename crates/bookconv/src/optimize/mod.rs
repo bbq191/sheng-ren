@@ -168,8 +168,9 @@ impl From<profile::Notes> for FootnoteMode {
     }
 }
 
-/// 取消优化（[`optimize_epub_file_streaming_with_cancel`]）时返回的错误串以它开头。
-pub const CANCELLED_MSG: &str = "已取消";
+/// 取消优化（[`optimize_epub_file_streaming_with_cancel`]）时返回 [`BookError::Cancelled`]，它的文字。
+pub use crate::error::CANCELLED_MSG;
+pub use crate::BookError;
 
 /// 图片处理的资源上限。缺省值就是电脑上一直用的常量；内存小的设备可以调小（比如解码 900 万、并行额度 600 万像素）。
 /// 只影响哪些图处理、哪些原样保留和并行度，不影响别的；缺省值下产物逐字节不变。
@@ -384,7 +385,7 @@ struct Prepared {
 /// 图片条目是空占位——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
 /// `is_comic_book`：调用方按原书判好的漫画识别结果（`comic_detect::is_comic`，全程只判这一次）；`transcoded`：调用方读完书已经
 /// 转成 UTF-8 的文件数（`wash::transcode_entries`，记进清洗报告）。
-fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize, is_comic_book: bool, transcoded: usize) -> Result<Prepared, String> {
+fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize, is_comic_book: bool, transcoded: usize) -> Result<Prepared, BookError> {
     // 整页背景图的尺寸意图要在清洗前读（清洗会去掉 `background-size`）
     let mut bg_fits = if opts.fit_backgrounds { crate::bgfit::plan(&raw) } else { HashMap::new() };
     let wash_rep = match &opts.wash {

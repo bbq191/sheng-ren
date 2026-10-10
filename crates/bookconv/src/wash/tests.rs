@@ -109,7 +109,8 @@
         assert!(!s(&v, "content.opf").contains("dkagent.css"), "manifest 项删除");
         let mut real = vec![e("META-INF/encryption.xml", r#"<CipherReference URI="OEBPS/c1.xhtml"/><CipherReference URI="a.ttf"/>"#), e("OEBPS/c1.xhtml", "")];
         let err = wash_entries(&mut real, &WashOpts::default()).unwrap_err();
-        assert!(err.contains("真 DRM") && err.contains("OEBPS/c1.xhtml"), "{err}");
+        assert!(matches!(err, crate::BookError::Drm(_)), "{err:?}");
+        assert_eq!(err.to_string(), "加密 EPUB（真 DRM，加密了 OEBPS/c1.xhtml 等 1 项），阅读器都读不了");
     }
 
     #[test]

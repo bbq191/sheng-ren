@@ -43,7 +43,7 @@ fn main() {
     let target = std::path::Path::new(files[1]);
     let opts = OptimizeOpts { wash, ..OptimizeOpts::for_profile(device) };
     let opts = OptimizeOpts { grayscale: opts.grayscale && !flags.contains(&"--keep-color"), ..opts };
-    let rep = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(target, "optimizing"), target, |t| optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), t, &opts, |_, _| {}))
+    let rep = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(target, "optimizing"), target, |t| optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), t, &opts, |_, _| {}).map_err(String::from))
         .unwrap_or_else(|e| die(cli::FAILED, format!("优化失败: {e}")));
     println!("epub-optimize v{}: {} 文件/{} 章, {} → {} 字节", optimize::OPTIMIZE_VERSION, rep.total_files, rep.html_files, rep.bytes_before, rep.bytes_after);
     if let Some(w) = &rep.wash {
