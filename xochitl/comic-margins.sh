@@ -2,8 +2,11 @@
 # 把 Move 书库里我们生成的漫画登记给 Move 上的页边距代理：第一次打开这本书时，由 xochitl 自己把页边距设成
 # profile 的 comic_reader_margins（1），整页图左右离屏幕边缘 1px。
 #
-# 用法: xochitl/comic-margins.sh [--host=root@10.11.99.1] [--write]
+# 用法: xochitl/comic-margins.sh [--host=root@<地址>] [--profile=<xochitl.toml>] [--write]
 #   不加 --write 只列出要登记的书。
+#   连哪台：--host=，否则环境变量 MOVE_HOST，否则按 profile 的 [deliver] hosts 依次试，用第一个连得上的
+#   （和 booklib sync 传书同一份：书库 profiles/xochitl.toml 覆盖了就用它，否则内置的 crates/profile/profiles/xochitl.toml；
+#   现在是 USB 的 root@10.11.99.1 先、Wi-Fi 后）。--profile= 指定别的 profile 文件。
 #
 # 认书：书里有 META-INF/eink-reader-margins（优化器只给 xochitl 模式的漫画写，内容是要设的页边距），
 #       页边距（.content 的 margins）还不是这个值，而且以前没登记过。
@@ -12,10 +15,11 @@
 # 依赖 Move 上已经装好的书架服务（book-serve 的队列 comic-margins.json）和注入 xochitl 的页边距代理（shelf-comic-margins.qmd）。
 # 书架服务 2026-10-07 起没有「漫画页边距」开关了，登记的书一律生效；更早的版本要在网页「管理→实验室」打开这个开关。
 set -euo pipefail
-host=root@10.11.99.1 write=0
+host=${MOVE_HOST:-} profile='' write=0
 for a in "$@"; do
   case $a in
     --host=*) host=${a#--host=} ;;
+    --profile=*) profile=${a#--profile=} ;;
     --write) write=1 ;;
     -h | --help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
     *) echo "不认识的参数 $a" >&2; exit 2 ;;
@@ -27,7 +31,32 @@ queue=/home/root/.local/state/shelf/books/comic-margins.json
 done_file=/home/root/.local/state/eink/comic-margins.done
 ssh_() { ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "$@"; }
 
-ssh_ true || { echo "✗ 连不上 $host（USB 连着是 root@10.11.99.1，Wi-Fi 是 root@<Move 的 IP>）" >&2; exit 1; }
+# profile 的 [deliver] hosts，一行一个（同 booklib：书库的 profiles/ 里有 xochitl.toml 就整份用它，见 profile::Registry::with_dir）
+profile_hosts() {
+  if [[ -z $profile ]]; then
+    local lib=${BOOKLIB_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/booklib}
+    profile=$lib/profiles/xochitl.toml
+    [[ -f $profile ]] || profile=$(dirname "${BASH_SOURCE[0]}")/../crates/profile/profiles/xochitl.toml
+  fi
+  python3 -c '
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    hosts = tomllib.load(f).get("deliver", {}).get("hosts", [])
+print("\n".join(h for h in hosts if isinstance(h, str) and h))
+' "$profile"
+}
+
+if [[ -n $host ]]; then
+  ssh_ true || { echo "✗ 连不上 $host" >&2; exit 1; }
+else
+  hosts=$(profile_hosts) || { echo "✗ 读不了 profile $profile（用 --host= 指定 Move）" >&2; exit 1; }
+  [[ -n $hosts ]] || { echo "✗ profile $profile 里没有 [deliver] hosts（用 --host= 指定 Move）" >&2; exit 1; }
+  ok=0
+  while IFS= read -r host; do
+    if ssh_ true </dev/null; then ok=1; break; fi
+  done <<<"$hosts"
+  [[ $ok -eq 1 ]] || { echo "✗ 连不上 Move（试过 profile 里的 $(echo "$hosts" | paste -sd' ')；别的地址用 --host=root@<Move 的 IP>）" >&2; exit 1; }
+fi
 
 # 前提：代理装了、队列目录在
 ssh_ "ls /home/root/xovi/exthome/qt-resource-rebuilder/shelf-comic-margins.qmd >/dev/null 2>&1" \
