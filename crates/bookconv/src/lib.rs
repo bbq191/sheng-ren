@@ -3,6 +3,7 @@
 //! - `convert`：CBZ → EPUB 母版；`article`：网页 → EPUB。
 //! - `optimize`：按设备优化 EPUB（图片缩放、漫画单趟处理、灰度），内含清洗层 `wash`（字体字号解锁、排版、章节与目录）。
 //! - `htmlproc`：XHTML 处理规则（注释、对比度、重复 id）；`imgopt`/`imgpool`：图片处理与并发。
+//! - `error`：错误类型 [`BookError`]（epubzip、epubbook、optimize 的公开入口用它）。
 //! - `check`：EPUB 质量门；`epub`/`epubzip`：EPUB 组装与读取；`probe`：量可阅读范围用的测量书。
 //!
 //! 使用方：`library`（书库 `booklib`）和本 crate 的命令行工具。
@@ -22,6 +23,7 @@ pub mod direction;
 pub mod epub;
 pub mod epubbook;
 pub mod epubzip;
+pub mod error;
 pub mod html;
 pub mod htmlproc;
 pub mod imgalpha;
@@ -36,6 +38,8 @@ pub mod optimize;
 pub mod uastyle;
 pub mod util;
 pub mod wash;
+
+pub use error::BookError;
 
 /// 调用方（书库）读 zip 时用同一个版本。
 pub use zip;

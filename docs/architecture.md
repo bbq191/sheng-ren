@@ -44,6 +44,7 @@
 | `comic_detect` / `comicfxl` / `comicpad` | 判断是不是漫画；漫画固定版式（kindle）；页边距 1 时各页的补救（xochitl） |
 | `check` | 质量门 |
 | `epub` / `epubzip` | EPUB 组装与读写（每个 zip 条目解压上限 `MAX_ENTRY_BYTES` 256MB，EPUB、CBZ 共用，超过报错）：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`、zip 内路径工具、书里链接解析 `resolve_link` |
+| `error` | 错误类型 `BookError`（取消、IO、zip、文件损坏、单条目超上限、不支持、DRM、其它）：`epubzip`、`epubbook`、`optimize` 的公开入口和清洗层返回它，调用方按变体判断（取消看 `is_cancelled()`，不看错误串开头）；`Display` 就是给用户看的中文文字（和以前的错误串逐字相同），还用 `String` 往上传的代码照旧 `?` |
 | `epubbook` | 读整本 EPUB（元数据、spine 里的 XHTML、CSS、图片、封面、目录），KFX 写出器用 |
 | `ncx` | NCX 目录解析与改写 |
 | `netimg` / `direction` / `probe` | 远程图抓取（单张上限 `MAX_IMAGE_BYTES` 20MB；一章里的远程图去重后 4 路同时抓，起名照出现顺序；`origin_of` 取网址的站点）；翻页方向（读写 spine `page-progression-direction` 全书只用 `direction::spine_direction`/`set_spine_direction`）；测量书 |
@@ -210,7 +211,7 @@
 
 - `OptimizeOpts::limits`（`Limits { max_decode_pixels, pool_pixel_budget }`）：单张解码上限（缺省 6400 万，漫画页直接用、插图另外不超过 900 万）和并行像素额度（缺省 3600 万）。内存小的设备调小，超过的图原样保留、不删。
 - `OptimizeOpts::title: Option<String>`：改 OPF 的 `dc:title`（`opfmeta::apply_fields`）。
-- `optimize_epub_file_streaming_with_cancel(…, cancel: &dyn Fn() -> bool)`：逐条目问一次，取消时返回以 `CANCELLED_MSG` 开头的错误，这次建出的输出文件删掉。
+- `optimize_epub_file_streaming_with_cancel(…, cancel: &dyn Fn() -> bool)`：逐条目问一次，取消时返回 `BookError::Cancelled`（文字是 `CANCELLED_MSG`），这次建出的输出文件删掉。
 - `optimized_version_file(路径)`：读书里 `META-INF/eink-optimized` 的内容（`full`/`core`；2026-10-09 起不写版本号，以前的产物里是版本号）。
 - 模式运行时可改：`profile::get(id).clone()` 后改公开字段（如 `comic_reader_margins = None` 关掉 xochitl 的漫画页边距模式）。阅读范围、漫画画布是私有字段，只能读（`readable`、`output_readable`、`comic_readable`）；要换就用 `Profile::parse(id, toml)` 解析一份改过的 TOML（书库里则放 `profiles/<id>.toml` 覆盖）。
 - 组装器 `epub::assemble_with(book, AssembleOpts)`：`id_scheme`（OPF `dc:identifier` 前缀，缺省 `urn:bookconv:`）、`shared_css`（`SharedCss`：一份章节共用的外链样式表，`link_if` 按章节正文决定挂不挂）；`AssembleOpts::default()` 和 `assemble` 逐字节相同。
