@@ -4,21 +4,14 @@ use super::*;
 
 /// 全书的文字块按深度优先编号（含容器里的），`f` 拿到 (文档下标, 编号, 块)。
 fn each_text_block(docs: &mut [ParsedDoc], mut f: impl FnMut(usize, usize, &mut Block)) {
-    fn walk(blocks: &mut [Block], di: usize, n: &mut usize, f: &mut dyn FnMut(usize, usize, &mut Block)) {
-        for b in blocks {
-            match &mut b.kind {
-                Kind::Container(c) => walk(c, di, n, f),
-                Kind::Text { .. } => {
-                    f(di, *n, b);
-                    *n += 1;
-                }
-                Kind::Image { .. } => {}
-            }
-        }
-    }
     let mut n = 0;
     for (di, d) in docs.iter_mut().enumerate() {
-        walk(&mut d.3, di, &mut n, &mut f);
+        walk_blocks_mut(&mut d.3, &mut |b| {
+            if matches!(b.kind, Kind::Text { .. }) {
+                f(di, n, b);
+                n += 1;
+            }
+        });
     }
 }
 
@@ -38,36 +31,29 @@ fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
         /// 区间起点处（含区间内、起点前紧挨着的空格处）的 id
         src: Vec<&'a str>,
     }
-    fn walk<'a>(blocks: &'a [Block], di: usize, path: &'a str, n: &mut usize, id_block: &mut HashMap<(&'a str, &'a str), usize>, links: &mut Vec<Link<'a>>) {
-        for b in blocks {
-            match &b.kind {
-                Kind::Container(c) => walk(c, di, path, n, id_block, links),
-                Kind::Text { text, runs } => {
-                    for (id, _) in &b.ids {
-                        id_block.entry((path, id.as_str())).or_insert(*n);
-                    }
-                    let mut chars: Option<Vec<char>> = None;
-                    for (ri, r) in runs.iter().enumerate() {
-                        if let Some(target) = &r.link {
-                            // 区间起点前紧挨着的空格也算（`<sup><span id="r"></span> <a href>…`：回链指向 span，空格写出器 15 起不算进区间）
-                            let chars = chars.get_or_insert_with(|| text.chars().collect());
-                            let from = if r.start > 0 && chars.get(r.start - 1) == Some(&' ') { r.start - 1 } else { r.start };
-                            let src = b.ids.iter().filter(|(_, o)| *o >= from && *o <= r.start + r.len).map(|(i, _)| i.as_str()).collect();
-                            links.push(Link { n: *n, di, ri, start: r.start, target, src });
-                        }
-                    }
-                    *n += 1;
-                }
-                Kind::Image { .. } => {}
-            }
-        }
-    }
     let (refs, notes) = {
         let mut id_block: HashMap<(&str, &str), usize> = HashMap::new();
         let mut links: Vec<Link> = Vec::new();
         let mut n = 0;
         for (di, d) in docs.iter().enumerate() {
-            walk(&d.3, di, d.1, &mut n, &mut id_block, &mut links);
+            let path = d.1;
+            for_each_block(&d.3, |b| {
+                let Kind::Text { text, runs } = &b.kind else { return };
+                for (id, _) in &b.ids {
+                    id_block.entry((path, id.as_str())).or_insert(n);
+                }
+                let mut chars: Option<Vec<char>> = None;
+                for (ri, r) in runs.iter().enumerate() {
+                    if let Some(target) = &r.link {
+                        // 区间起点前紧挨着的空格也算（`<sup><span id="r"></span> <a href>…`：回链指向 span，空格写出器 15 起不算进区间）
+                        let chars = chars.get_or_insert_with(|| text.chars().collect());
+                        let from = if r.start > 0 && chars.get(r.start - 1) == Some(&' ') { r.start - 1 } else { r.start };
+                        let src = b.ids.iter().filter(|(_, o)| *o >= from && *o <= r.start + r.len).map(|(i, _)| i.as_str()).collect();
+                        links.push(Link { n, di, ri, start: r.start, target, src });
+                    }
+                }
+                n += 1;
+            });
         }
         // 每个块开头（第一个字起）的链接链回到哪里：注释正文的回链在段首（「[1]Queen of Sheba…」）
         let mut back: HashMap<usize, Vec<&(String, String)>> = HashMap::new();
@@ -118,30 +104,22 @@ pub(super) struct TextCounts {
 
 impl TextCounts {
     pub(super) fn of(docs: &[ParsedDoc]) -> TextCounts {
-        fn walk(blocks: &[Block], t: &mut TextCounts) {
-            for b in blocks {
-                match &b.kind {
-                    Kind::Text { text, .. } => {
-                        let (all, solid) = text.chars().fold((0, 0), |(a, s), c| (a + 1, s + usize::from(!c.is_whitespace())));
-                        // 同一个字体名的块多半挨着，按原样的名字计（不每块分配小写），取的时候再按小写合并
-                        match t.fonts.get_mut(&b.comp.font_family) {
-                            Some(n) => *n += all,
-                            None => {
-                                t.fonts.insert(b.comp.font_family.clone(), all);
-                            }
-                        }
-                        let key = |v: f64| (v * 1000.0).round() as i64;
-                        *t.font_size.entry(key(b.comp.font_size)).or_default() += solid;
-                        *t.line_height.entry(key(b.comp.line_height.unwrap_or(LH_EM))).or_default() += solid;
-                    }
-                    Kind::Container(c) => walk(c, t),
-                    Kind::Image { .. } => {}
-                }
-            }
-        }
         let mut t = TextCounts { fonts: HashMap::new(), font_size: HashMap::new(), line_height: HashMap::new() };
         for (_, _, _, blocks) in docs {
-            walk(blocks, &mut t);
+            for_each_block(blocks, |b| {
+                let Kind::Text { text, .. } = &b.kind else { return };
+                let (all, solid) = text.chars().fold((0, 0), |(a, s), c| (a + 1, s + usize::from(!c.is_whitespace())));
+                // 同一个字体名的块多半挨着，按原样的名字计（不每块分配小写），取的时候再按小写合并
+                match t.fonts.get_mut(&b.comp.font_family) {
+                    Some(n) => *n += all,
+                    None => {
+                        t.fonts.insert(b.comp.font_family.clone(), all);
+                    }
+                }
+                let key = |v: f64| (v * 1000.0).round() as i64;
+                *t.font_size.entry(key(b.comp.font_size)).or_default() += solid;
+                *t.line_height.entry(key(b.comp.line_height.unwrap_or(LH_EM))).or_default() += solid;
+            });
         }
         t
     }
@@ -231,13 +209,27 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, out: &mut String) {
     }
 }
 
-/// 全书范围的分析（版面要用）：注释配对、嵌入字体、写成 `default` 的正文字体、正文字号和行高。
-pub(super) fn analyze(book: &Loaded, b: &mut Builder, parsed: &mut [ParsedDoc]) {
+/// 全书统计（[`analyze`] 算出来，之后各阶段只读）。
+pub(super) struct BookStats {
+    /// 写成 `default` 的字体名（小写）：正文字体（见 [`TextCounts::body_font`]）。
+    pub(super) default_fonts: HashSet<String>,
+    /// 书里嵌入了字体文件的字体名（小写）。
+    pub(super) embedded_fonts: HashSet<String>,
+    /// 全书正文的行高（元素字号的倍数，见 [`base_line_height`]）：KFX 的行高按它归一。
+    pub(super) base_lh: f64,
+    /// 全书正文的字号（根 em，见 [`base_font_size`]）。
+    pub(super) base_fs: f64,
+}
+
+/// 全书范围的分析（版面要用）：注释配对（标在块上）、嵌入字体、写成 `default` 的正文字体、正文字号和行高。
+pub(super) fn analyze(book: &Loaded, parsed: &mut [ParsedDoc]) -> BookStats {
     mark_notes(parsed);
-    // 缺字体文件的字体照写原名（Send to Kindle：《春雪》注释的 `ZY-KAITI` 照写；《绍宋》旧版的「宋体」写 `default` 是因为它是正文字体）
-    b.embedded_fonts = embedded_font_faces(book);
     let counts = TextCounts::of(parsed);
-    b.default_fonts = counts.body_font().into_iter().collect();
-    b.base_lh = base_line_height(&counts);
-    b.base_fs = base_font_size(&counts);
+    BookStats {
+        // 缺字体文件的字体照写原名（Send to Kindle：《春雪》注释的 `ZY-KAITI` 照写；《绍宋》旧版的「宋体」写 `default` 是因为它是正文字体）
+        embedded_fonts: embedded_font_faces(book),
+        default_fonts: counts.body_font().into_iter().collect(),
+        base_lh: base_line_height(&counts),
+        base_fs: base_font_size(&counts),
+    }
 }

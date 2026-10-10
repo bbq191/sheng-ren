@@ -736,3 +736,38 @@ fn margin_collapse() {
     assert_eq!(collapse(-1.0, 2.0), 1.0);
     assert_eq!(collapse(-1.0, -2.0), -2.0);
 }
+
+/// 符号表两个阶段：封面资源和 `cover_image` 隔 9 个；资源路径＝字节实体 + 9（跨组也是）；名字撞了报错，不悄悄错位。
+#[test]
+fn symbol_phases_keep_gap() {
+    let mut s = SymbolAlloc::new();
+    let cover = s.reserve_cover("img0").unwrap();
+    assert_eq!(cover, FIRST_LOCAL_SID);
+    assert_eq!(s.get(COVER_REF), Some(cover + SID_GAP));
+    assert_eq!(s.sym("img0"), cover, "登记过的照旧");
+    s.sym("style0");
+    let mut r = s.into_resources();
+    let pairs: Vec<(String, String)> = (0..11).map(|i| (format!("img{i}-ad"), format!("resource/img{i}"))).collect();
+    let raws = r.alloc_resources(&pairs).unwrap();
+    for (i, raw) in raws.iter().enumerate() {
+        assert_eq!(r.require(&pairs[i].1).unwrap(), raw + SID_GAP);
+    }
+    assert!(r.require("没有这个").is_err());
+    assert!(r.alloc_resources(&[("style0".into(), "resource/x".into())]).is_err());
+}
+
+/// 样式属性：同一属性后设覆盖先设，按编号升序写出、样式名在最后。
+#[test]
+fn style_props_dedup_and_order() {
+    let mut p = StyleProps::new();
+    p.symbol(P_TEXT_ALIGN, ALIGN_LEFT);
+    p.len(P_FONT_SIZE, 1.0, U_FONT_EM);
+    p.symbol(P_TEXT_ALIGN, ALIGN_CENTER);
+    let f = p.clone().into_fields(1000);
+    assert_eq!(f.len(), 3);
+    assert!(f[0].0 < f[1].0);
+    assert_eq!(f.iter().find(|(k, _)| *k == P_TEXT_ALIGN).unwrap().1, Value::Symbol(ALIGN_CENTER));
+    assert_eq!(f.last().unwrap(), &(STYLE_NAME, Value::Symbol(1000)));
+    assert_eq!(p.take(P_TEXT_ALIGN), Some(Value::Symbol(ALIGN_CENTER)));
+    assert_eq!(p.take(P_TEXT_ALIGN), None);
+}
