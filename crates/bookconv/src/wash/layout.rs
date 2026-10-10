@@ -84,10 +84,10 @@ impl Drawn {
         let class_re = CLASS.get_or_init(|| Regex::new(r#"\.([A-Za-z0-9_-]+)"#).unwrap());
         let elem_re = ELEM.get_or_init(|| Regex::new(r#"(?:^|[\s,>+~])([A-Za-z][A-Za-z0-9]*)"#).unwrap());
         let add_css = |css: &str, d: &mut Drawn| {
-            for c in css_rule_re().captures_iter(css) {
-                let sel = rule_selector(&c[1]);
+            for c in crate::cascade::rule_spans(css) {
+                let sel = rule_selector(c.prelude);
                 let pseudo = sel.contains(":before") || sel.contains(":after");
-                if !html::css_decls(&c[2]).iter().any(|x| decl_draws(x.prop, x.value, pseudo)) {
+                if !html::css_decls(c.body).iter().any(|x| decl_draws(x.prop, x.value, pseudo)) {
                     continue;
                 }
                 for part in sel.split(',') {
@@ -105,8 +105,8 @@ impl Drawn {
                 add_css(&String::from_utf8_lossy(&e.data), &mut d);
             } else if is_html_entry(&e.name, &e.data) {
                 let t = String::from_utf8_lossy(&e.data);
-                for c in html::style_block_re().captures_iter(&t) {
-                    add_css(&c[2], &mut d);
+                for b in html::style_blocks(&t) {
+                    add_css(&t[b.content_start..b.content_end], &mut d);
                 }
             }
             d
@@ -216,14 +216,14 @@ fn selects_class(selector: &str, classes: &HashSet<String>) -> bool {
 
 /// 从这些类的规则里去掉下边距、下内边距和"之后分页"（简写的 margin/padding 只把下边改成 0）。
 pub(super) fn strip_tail_spacing(css: &str, classes: &HashSet<String>) -> String {
-    css_rule_re().replace_all(css, |c: &regex::Captures| {
-        // 开头的 `@charset`/`@import` 会被正则算进第一条规则的选择器：拆出来原样留（同 `filter_css`）
-        let (lead, sel) = split_leading_statements(&c[1]);
-        if !selects_class(&strip_css_comments(sel), classes) {
-            return c[0].to_string();
+    // 只换规则体，选择器（连同前面的注释、`@charset`/`@import` 语句）原样留（同 `filter_css`）
+    let mut edits = Vec::new();
+    for c in crate::cascade::rule_spans(css) {
+        if !selects_class(&rule_selector(c.prelude), classes) {
+            continue;
         }
         let mut out: Vec<String> = Vec::new();
-        for d in html::css_decls(&c[2]) {
+        for d in html::css_decls(c.body) {
             let prop = d.prop.to_ascii_lowercase();
             let val = d.value;
             match prop.as_str() {
@@ -241,9 +241,9 @@ pub(super) fn strip_tail_spacing(css: &str, classes: &HashSet<String>) -> String
         if !body.is_empty() {
             body.push(';');
         }
-        format!("{lead}{sel}{{{body}}}")
-    })
-    .into_owned()
+        edits.push((c.body_start, c.body_start + c.body.len(), body));
+    }
+    html::apply_edits(css, edits)
 }
 
 /// 章尾空白页：逐个 spine 文件删末尾空元素，再把包住结尾的容器类的下边距/之后分页从样式表里去掉。

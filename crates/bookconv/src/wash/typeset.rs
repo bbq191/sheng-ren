@@ -241,9 +241,9 @@ pub(super) fn indent_classes_of(css: &str) -> HashSet<String> {
     static CLASS: OnceLock<Regex> = OnceLock::new();
     let class = CLASS.get_or_init(|| Regex::new(r#"\.(-?[A-Za-z_][\w-]*)"#).unwrap());
     let mut out = HashSet::new();
-    for c in css_rule_re().captures_iter(css) {
-        if html::css_decls(&c[2]).iter().any(|d| d.prop.eq_ignore_ascii_case("text-indent")) {
-            out.extend(class.captures_iter(&rule_selector(&c[1])).map(|m| m[1].to_string()));
+    for c in crate::cascade::rule_spans(css) {
+        if html::css_decls(c.body).iter().any(|d| d.prop.eq_ignore_ascii_case("text-indent")) {
+            out.extend(class.captures_iter(&rule_selector(c.prelude)).map(|m| m[1].to_string()));
         }
     }
     out

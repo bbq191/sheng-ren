@@ -800,10 +800,71 @@ fn css_decls_with<'a>(text: &'a str, nest: bool) -> Option<Vec<CssDecl<'a>>> {
     Some(out)
 }
 
-/// `<style>…</style>` 块（三段捕获：开标签 / 内容 / 闭标签）。
+/// `<style>…</style>` 块（三段捕获：开标签 / 内容 / 闭标签）。新代码用 [`style_blocks`]/[`edit_style_blocks`]
+/// （开标签里引号中的 `>`、注释里的 `<style>` 这里会认错）；还留着给没改过来的调用方。
 pub fn style_block_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r#"(?is)(<style\b[^>]*>)(.*?)(</style>)"#).unwrap())
+}
+
+/// 文档里的一个 `<style>` 块（字节偏移）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StyleBlock {
+    /// 开标签起点。
+    pub start: usize,
+    /// 内容（样式表原文）的起止：开标签之后到闭标签之前。
+    pub content_start: usize,
+    pub content_end: usize,
+    /// 闭标签之后。
+    pub end: usize,
+}
+
+/// 文档里的 `<style>` 块，按出现顺序（清洗层、优化器、字体分析读写 `<style>` 共用；2026-10-10 审计以前有正则、按标签扫两种写法）。
+/// 开标签按 [`tags`] 认（引号里的 `>`、HTML 注释里的 `<style>` 不算）；内容按 HTML 规范是原样文字，到第一个 `</style`
+/// （不分大小写）为止，里面的 `<`、`<!--` 都不当标签。自闭合的 `<style/>`、到文末都没有闭标签的不收。
+pub fn style_blocks(html: &str) -> Vec<StyleBlock> {
+    let mut out = Vec::new();
+    let mut pos = 0;
+    while let Some(t) = tags_in(html, pos, html.len()).find(|t| t.kind == TagKind::Open && t.is("style")) {
+        let content_start = t.end;
+        let mut from = content_start;
+        // 闭标签：`</style` 后面紧跟 `>`、`/` 或空白（`</styles>` 不算）
+        let close = loop {
+            let Some(k) = find_ci(&html[from..], "</style") else { break None };
+            let at = from + k;
+            match html.as_bytes().get(at + 7) {
+                Some(b'>' | b'/') | None => break Some(at),
+                Some(c) if c.is_ascii_whitespace() => break Some(at),
+                _ => from = at + 7,
+            }
+        };
+        let Some(content_end) = close else { break };
+        let Some(gt) = html[content_end..].find('>') else { break };
+        let end = content_end + gt + 1;
+        out.push(StyleBlock { start: t.start, content_start, content_end, end });
+        pos = end;
+    }
+    out
+}
+
+/// 全文的 `<style>` 块逐个交给 `f(开标签, 样式表)`：`Edit::Set` 换掉内容（开、闭标签原样留），`Edit::Remove` 连标签整块删掉。
+/// 没有改动时原样借用返回。
+pub fn edit_style_blocks<'a>(html: &'a str, mut f: impl FnMut(&str, &str) -> Edit) -> Cow<'a, str> {
+    let mut edits = Vec::new();
+    for b in style_blocks(html) {
+        let css = &html[b.content_start..b.content_end];
+        match f(&html[b.start..b.content_start], css) {
+            Edit::Keep => {}
+            Edit::Set(v) if v == css => {}
+            Edit::Set(v) => edits.push((b.content_start, b.content_end, v)),
+            Edit::Remove => edits.push((b.start, b.end, String::new())),
+        }
+    }
+    if edits.is_empty() {
+        Cow::Borrowed(html)
+    } else {
+        Cow::Owned(apply_edits(html, edits))
+    }
 }
 
 #[cfg(test)]
@@ -815,6 +876,17 @@ mod tests {
         let u = css_urls(r#"a{background:URL( "x y.png" )} b{src:url('f.ttf') format("truetype"),url(g.otf)}"#);
         assert_eq!(u.iter().map(|u| (u.value, u.quote)).collect::<Vec<_>>(), [("x y.png", Some('"')), ("f.ttf", Some('\'')), ("g.otf", None)]);
         assert_eq!(&r#"a{background:URL( "x y.png" )}"#[u[0].start..u[0].end], r#"URL( "x y.png" )"#);
+    }
+
+    /// `<style>` 块：开标签引号里的 `>`、HTML 注释里的 `<style>` 不算；内容是原样文字（`<!--`、`<b>` 不当标签）；自闭合、没闭合的不收。
+    #[test]
+    fn style_blocks_raw_text() {
+        let h = r#"<!-- <style>x{}</style> --><style title="a>b"><!-- p{} <b> --></style ><STYLE/><style>q{}</STYLE><style>r{}"#;
+        let got: Vec<&str> = style_blocks(h).iter().map(|b| &h[b.content_start..b.content_end]).collect();
+        assert_eq!(got, ["<!-- p{} <b> -->", "q{}"]);
+        let out = edit_style_blocks(h, |open, css| if open.contains("title") { Edit::Remove } else { Edit::Set(css.to_uppercase()) });
+        assert_eq!(out, r#"<!-- <style>x{}</style> --><STYLE/><style>Q{}</STYLE><style>r{}"#);
+        assert!(matches!(edit_style_blocks("<p/>", |_, _| Edit::Remove), Cow::Borrowed(_)));
     }
 
     #[test]

@@ -17,9 +17,9 @@ use crate::html;
 /// (条目名, 字节, 是否 html)，路径都是清洗改名后的。
 pub fn plan(entries: &[(String, Vec<u8>, bool)]) -> HashSet<String> {
     let css_urls = |text: &str, base: &str, css: &mut Vec<String>| {
-        for u in crate::bgfit::urls(text) {
-            if !html::is_external(&u) {
-                css.push(crate::epubzip::resolve_link(base, &u).0);
+        for u in html::css_urls(text) {
+            if !u.value.is_empty() && !html::is_external(u.value) {
+                css.push(crate::epubzip::resolve_link(base, u.value).0);
             }
         }
     };
@@ -30,8 +30,8 @@ pub fn plan(entries: &[(String, Vec<u8>, bool)]) -> HashSet<String> {
         if name.to_ascii_lowercase().ends_with(".css") {
             css_urls(text, name, &mut css);
         } else if *ish {
-            for c in html::style_block_re().captures_iter(text) {
-                css_urls(&c[2], name, &mut css);
+            for b in html::style_blocks(text) {
+                css_urls(&text[b.content_start..b.content_end], name, &mut css);
             }
             for t in html::tags(text).filter(|t| t.is_start()) {
                 let tag = &text[t.start..t.end];
