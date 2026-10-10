@@ -39,38 +39,48 @@ pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
 }
 
 /// 整本 CBZ 解出来的页面图片合计上限。单页有 [`crate::epubzip::MAX_ENTRY_BYTES`]（256MB），但页数不限：
-/// 几千个各自不超限的条目（或 zip 炸弹）照样能把全部页读进内存撑爆。真书一卷几十到几百 MB、合订本也就一两 GB，
+/// 几千个各自不超限的条目（或 zip 炸弹）照样能写出几十 GB 的母版。真书一卷几十到几百 MB、合订本也就一两 GB，
 /// 4 GiB 留足余量；超过报错，不截断成少几页的书。
 pub const MAX_CBZ_TOTAL_BYTES: u64 = 4 << 30;
 
 /// 同 [`cbz_to_epub`]，从可定位的读取器（如打开的文件）读：不用先把整个 CBZ 读进内存，峰值少一份压缩包大小。
 pub fn cbz_to_epub_from<R: Read + std::io::Seek>(reader: R, title: &str) -> Result<Vec<u8>, String> {
-    cbz_to_epub_capped(reader, title, MAX_CBZ_TOTAL_BYTES)
+    let mut buf = Vec::new();
+    cbz_to_epub_into(reader, title, MAX_CBZ_TOTAL_BYTES, std::io::Cursor::new(&mut buf))?;
+    Ok(buf)
 }
 
-/// 同 [`cbz_to_epub_from`]，页面合计上限由参数给（测试用小上限，不必真造几 GB 的数据）。
-fn cbz_to_epub_capped<R: Read + std::io::Seek>(reader: R, title: &str, total_cap: u64) -> Result<Vec<u8>, String> {
+/// 同 [`cbz_to_epub_from`]，母版直接写进文件 `out`（书库生成用）：一页一页从 CBZ 读、写完就丢，峰值内存只有一页，不随整本体积涨
+/// （以前整本页面先读进内存再组装，再整份写盘）。出错时 `out` 可能是半截，调用方负责清掉（书库写在临时目录里）。
+pub fn cbz_to_epub_file<R: Read + std::io::Seek>(reader: R, title: &str, out: &std::path::Path) -> Result<(), String> {
+    let f = std::fs::File::create(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    cbz_to_epub_into(reader, title, MAX_CBZ_TOTAL_BYTES, std::io::BufWriter::new(f))?;
+    Ok(())
+}
+
+/// 流式转换（页面合计上限由参数给，测试用小上限，不必真造几 GB 的数据）：两遍——第一遍每页只解压开头几个字节认格式
+/// （认不出的跳过并警告），定下页面清单和 OPF；第二遍写到资源时逐页解压写进 `w`（[`crate::epub::assemble_master_streaming`]）。
+/// 产物与整本读进内存再 [`crate::epub::assemble_master`] 逐字节相同。
+fn cbz_to_epub_into<R: Read + std::io::Seek, W: std::io::Write + std::io::Seek>(reader: R, title: &str, total_cap: u64, w: W) -> Result<W, String> {
     use crate::epub::{Book, BookMeta, Chapter, Resource};
     let mut zip = ZipArchive::new(reader).map_err(|e| format!("CBZ 打开: {e}"))?;
     let names = page_names(&zip);
     let mut resources: Vec<Resource> = Vec::with_capacity(names.len());
+    let mut sources: Vec<&str> = Vec::with_capacity(names.len());
     let mut chapters = Vec::with_capacity(names.len());
-    let mut total: u64 = 0;
     for name in &names {
-        // 单页解压上限（防 zip 炸弹）与读 EPUB 条目同一个：`epubzip::MAX_ENTRY_BYTES`；合计另有 `total_cap`
-        let bytes = crate::epubzip::read_by_name(&mut zip, name)?;
-        total = total.saturating_add(bytes.len() as u64);
-        if total > total_cap {
-            return Err(format!("CBZ 页面图片解压后合计超过上限 {} MB（读到 {name}；损坏或恶意的压缩包？）", total_cap >> 20));
-        }
-        let Some(crate::util::ImageKind { ext, mime, .. }) = crate::util::image_kind(&bytes) else {
+        // 认格式只要魔数（`util::image_kind` 最多看 12 字节）
+        let mut head = Vec::with_capacity(16);
+        zip.by_name(name).map_err(|e| format!("{name}: {e}"))?.take(16).read_to_end(&mut head).map_err(|e| format!("{name}: {e}"))?;
+        let Some(crate::util::ImageKind { ext, mime, .. }) = crate::util::image_kind(&head) else {
             eprintln!("警告：{name} 不是可识别的图片，跳过");
             continue;
         };
         let n = resources.len() + 1;
         let path = format!("images/p{n:04}.{ext}");
         chapters.push(Chapter { title: format!("第 {n} 页"), html_body: format!(r#"<div><img src="{path}" alt=""/></div>"#), level: 1 });
-        resources.push(Resource { path, media_type: mime.to_string(), bytes });
+        resources.push(Resource { path, media_type: mime.to_string(), bytes: Vec::new() });
+        sources.push(name);
     }
     if resources.is_empty() {
         return Err("CBZ 内无图片（jpg/jpeg/png/gif/webp）".into());
@@ -92,7 +102,17 @@ fn cbz_to_epub_capped<R: Read + std::io::Seek>(reader: R, title: &str, total_cap
         resources,
         nav: Vec::new(),
     };
-    crate::epub::assemble_master(&mut book)
+    let mut total: u64 = 0;
+    crate::epub::assemble_master_streaming(&mut book, w, |i| {
+        let name = sources[i];
+        // 单页解压上限（防 zip 炸弹）与读 EPUB 条目同一个：`epubzip::MAX_ENTRY_BYTES`；合计另有 `total_cap`
+        let bytes = crate::epubzip::read_by_name(&mut zip, name)?;
+        total = total.saturating_add(bytes.len() as u64);
+        if total > total_cap {
+            return Err(format!("CBZ 页面图片解压后合计超过上限 {} MB（读到 {name}；损坏或恶意的压缩包？）", total_cap >> 20));
+        }
+        Ok(bytes)
+    })
 }
 
 /// 自然排序：连续数字段按数值比较（去前导零后先比位数再逐位），其余按字节。
@@ -261,8 +281,41 @@ mod tests {
         let page = jpeg(40, 60);
         let buf = zip_of(&[("p1.jpg", &page), ("p2.jpg", &page), ("p3.jpg", &page)]);
         let n = page.len() as u64;
-        assert!(cbz_to_epub_capped(std::io::Cursor::new(&buf), "刚好", 3 * n).is_ok());
-        let err = cbz_to_epub_capped(std::io::Cursor::new(&buf), "超了", 3 * n - 1).unwrap_err();
+        assert!(cbz_to_epub_into(std::io::Cursor::new(&buf), "刚好", 3 * n, std::io::Cursor::new(Vec::new())).is_ok());
+        let err = cbz_to_epub_into(std::io::Cursor::new(&buf), "超了", 3 * n - 1, std::io::Cursor::new(Vec::new())).unwrap_err();
         assert!(err.contains("合计超过上限") && err.contains("p3.jpg"), "{err}");
+    }
+
+    /// 逐页流式写出的母版和以前"整本页面读进内存再 `assemble_master`"逐字节相同；写进文件的和返回字节的也相同。
+    #[test]
+    fn streaming_master_matches_in_memory_assembly() {
+        use crate::epub::{Book, BookMeta, Chapter, Resource};
+        let (p1, p2) = (jpeg(40, 60), jpeg(50, 70));
+        let buf = zip_of(&[("v/p2.jpg", &p2), ("v/bad.jpg", b"not an image"), ("v/p1.jpg", &p1)]);
+        let streamed = cbz_to_epub(&buf, "流式").unwrap();
+        let pages = [&p1, &p2];
+        let mut book = Book {
+            meta: BookMeta {
+                book_id: format!("cbz:{}", super::super::common::sanitize_id("流式")),
+                title: "流式".into(),
+                author: String::new(),
+                language: "zh".into(),
+                publisher: String::new(),
+                cover: None,
+                cover_ext: String::new(),
+                cover_media_type: String::new(),
+                subjects: vec![crate::comic_detect::COMIC_SUBJECT.to_string()],
+            },
+            chapters: (1..=2).map(|n| Chapter { title: format!("第 {n} 页"), html_body: format!(r#"<div><img src="images/p{n:04}.jpg" alt=""/></div>"#), level: 1 }).collect(),
+            resources: pages.iter().enumerate().map(|(i, b)| Resource { path: format!("images/p{:04}.jpg", i + 1), media_type: "image/jpeg".into(), bytes: b.to_vec() }).collect(),
+            nav: Vec::new(),
+        };
+        assert_eq!(streamed, crate::epub::assemble_master(&mut book).unwrap());
+        let dir = std::env::temp_dir().join(format!("cbz-stream-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("m.epub");
+        cbz_to_epub_file(std::io::Cursor::new(&buf), "流式", &out).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), streamed);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

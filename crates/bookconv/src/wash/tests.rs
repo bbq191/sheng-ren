@@ -1708,7 +1708,7 @@
         let mut rep = WashReport::default();
         toc::repair_ncx_targets(&mut v, &mut rep);
         let mut v = vec![e("content.opf", AUDIT_OPF), e("toc.ncx", ncx), e("c1.xhtml", c1)];
-        assert!(wash_entries(&mut v, &WashOpts { repair_only: true, kindle_rules: true, ..Default::default() }).is_ok());
+        assert!(wash_entries(&mut v, &WashOpts { mode: WashMode::Repair { kindle_rules: true }, ..Default::default() }).is_ok());
     }
 
     /// `@charset` 开头的样式表：第一条规则以前被当成选择器的一部分，没去掉下边距。
@@ -1733,7 +1733,7 @@
         let opf = r#"<?xml version="1.0"?><package version="2.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="i" href="a&amp;b.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
         let c1 = r#"<html><head></head><body><p>正文</p><img src="a&amp;b.jpg"/><img src="gone.jpg"/></body></html>"#;
         let mut v = vec![e("content.opf", opf), e("c1.xhtml", c1), e("a&b.jpg", "x")];
-        let rep = wash_entries(&mut v, &WashOpts { repair_only: true, ..Default::default() }).unwrap();
+        let rep = wash_entries(&mut v, &WashOpts { mode: WashMode::Repair { kindle_rules: false }, ..Default::default() }).unwrap();
         let out = s(&v, "c1.xhtml");
         assert!(out.contains(r#"<img src="a&amp;b.jpg"/>"#) && !out.contains("gone.jpg"), "{out}");
         assert_eq!(rep.dead_refs_removed, 1);
@@ -1749,7 +1749,7 @@
         assert_eq!(typeset::inject_css_link(&once, "a&b.css"), once);
         let opf = r#"<?xml version="1.0"?><package version="2.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="../A%26B/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#;
         let mut v = vec![e("O P/content.opf", opf), e("A&B/c1.xhtml", "<html><head><title>x</title></head><body><p>正文</p></body></html>")];
-        wash_entries(&mut v, &WashOpts { repair_only: true, kindle_rules: true, ..Default::default() }).unwrap();
+        wash_entries(&mut v, &WashOpts { mode: WashMode::Repair { kindle_rules: true }, ..Default::default() }).unwrap();
         let out = s(&v, "A&B/c1.xhtml");
         assert!(out.contains(r#"href="../O%20P/eink-ua.css""#), "{out}");
     }
