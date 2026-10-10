@@ -28,14 +28,10 @@
   <text x="430" y="325" text-anchor="middle" class="n">profile</text>
   <text x="430" y="344" text-anchor="middle" class="s">阅读模式参数（TOML 嵌入）</text>
 
-  <rect class="c" x="618" y="200" width="234" height="76" fill="#fdf0f3" stroke="#c9637d"/>
-  <text x="735" y="223" text-anchor="middle" class="n">mobidict</text>
-  <text x="735" y="242" text-anchor="middle" class="s">MOBI 词典 → StarDict（暂留）</text>
-  <text x="735" y="262" text-anchor="middle" class="s">bin: mobi-dict-to-stardict</text>
 
-  <rect class="c" x="640" y="306" width="180" height="60" fill="#fff" stroke="#bbb" stroke-dasharray="5 4"/>
-  <text x="730" y="331" text-anchor="middle" class="n" fill="#888">drm</text>
-  <text x="730" y="350" text-anchor="middle" class="s">空壳（暂停，独立）</text>
+  <rect class="c" x="640" y="170" width="180" height="60" fill="#fff" stroke="#bbb" stroke-dasharray="5 4"/>
+  <text x="730" y="195" text-anchor="middle" class="n" fill="#888">drm</text>
+  <text x="730" y="214" text-anchor="middle" class="s">空壳（暂停，独立）</text>
 
   <rect class="c" x="20" y="150" width="200" height="96" fill="#f0f7f7" stroke="#3c8f8f"/>
   <text x="120" y="172" text-anchor="middle" class="n">kfx</text>
@@ -49,7 +45,6 @@
   <path class="l" d="M300 90 C245 140 245 300 328 325" marker-end="url(#a)"/>
   <path class="l" d="M290 90 L170 148" marker-end="url(#a)"/>
   <path class="l" d="M220 205 L268 205" marker-end="url(#a)"/>
-  <path class="l" d="M618 240 L592 232" marker-end="url(#a)"/>
 
-  <text x="430" y="388" text-anchor="middle" class="s">箭头 = 依赖方向，单向无环（library 也直接用 profile、bookconv；kindle 走 kfx；AZW3 写出器 2026-10-09 删了）</text>
+  <text x="430" y="388" text-anchor="middle" class="s">箭头 = 依赖方向，单向无环（library 也直接用 profile、bookconv；kindle 走 kfx；AZW3 写出器 2026-10-09、mobidict 2026-10-10 删了）</text>
 </svg>

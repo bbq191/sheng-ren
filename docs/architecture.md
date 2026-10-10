@@ -16,12 +16,11 @@
 |---|---|---|
 | `library` | 书库：入库、跟踪同步、按模式生成、产物放哪、指纹、联网补元数据 | `booklib` |
 | `bookconv` | 内容层：CBZ/网页 → EPUB、清洗、优化、图片、质量门。**不管书库**，只按调用方给的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
-| `mobidict` | MOBI 词典 → StarDict，当初给 KOReader 查词（clean-room，读 MOBI 容器用自己的 `mobidict::palm`：2026-10-09 AZW3 写出器删掉时从它的读取器挪过来，只留词典要的部分）。2026-10-06 起两台都不装 KOReader、掌阅自带阅读器直接用 MOBI 词典，这个包暂时保留（用户定：别删） | `mobi-dict-to-stardict` |
 | `kfx` | KFX：Ion 编解码、容器读写、EPUB → KFX 写出器（clean-room，见 [KFX](kfx.md)）；书库 `kindle` 模式的文字书和漫画都用它 | `epub-to-kfx`、`kfx-dump`、`kfx-repack` |
 | `profile` | 阅读模式的参数，TOML 编译时嵌入；`--device=` 的解析 | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
-依赖单向无环：`library` → `kfx` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`mobidict` → `bookconv`；`drm` 独立。
+依赖单向无环：`library` → `kfx` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`drm` 独立。
 
 ### bookconv 模块
 
