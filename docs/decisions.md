@@ -162,6 +162,7 @@
 
 | 定了什么 | 为什么 |
 |---|---|
+| **掌阅、Move 的字号按正文归一**（`kindle_rules`，KINDLE_RULES 5）：正文字号不是 1em 的书，所有字号乘 1/正文字号（相对的乘在 body 上，绝对的折成 px 再乘）；绝对字号一律折成 px | 用户定做「三台统一」里没做的字号行高归一。掌阅不认 `html` 上的字号、`pt` 按 px 的数算、`rem` 跟着 body 缩，只有 px 可靠（真机）；掌阅不理书里的行高，行高不用改 |
 | **删掉 `mobidict`**（`crates/mobidict`、`mobi-dict-to-stardict`；要找回看 git 历史） | 用户定。两台都不装 KOReader，掌阅自带阅读器直接认 MOBI 词典，Kindle 也不用转，没人用了 |
 
 ## 待定

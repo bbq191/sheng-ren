@@ -65,7 +65,8 @@ pub use self::encoding::transcode_entries;
 /// - 2（2026-10-09）：原书没有封面页时补一页（[`prepend_cover_page`]；《绍宋》《狼厅》）。
 /// - 3（2026-10-09）：spine 里标了 `linear="no"` 的目录页拿掉（`drop_nonlinear_nav`；《绍宋》）。
 /// - 4（2026-10-09 审计）：行内 `style` 里的字符引用先还原再改（`font-family:&quot;宋体&quot;` 以前认不出是正文字体、声明被 `;` 切碎）。
-pub const KINDLE_RULES_VERSION: &str = "4";
+/// - 5（2026-10-10）：字号按全书正文字号归一（`kindle_rules::font_scale`；《消失的爱人》《啸风山庄》《疯探》，别的书逐字节不变）。
+pub const KINDLE_RULES_VERSION: &str = "5";
 pub use self::dead_refs::font_face_re;
 pub use self::css::filter_css;
 #[cfg(test)]
@@ -88,6 +89,7 @@ use self::chapters::chapters_into_toc;
 pub(crate) use self::chapters::is_toc_like_page;
 pub(crate) use self::css::{css_rule_re, strip_css_comments};
 pub(crate) use self::toc::name_index;
+pub(crate) use self::kindle_rules::fmt_num;
 use self::toc::*;
 use self::typeset::*;
 
@@ -370,8 +372,8 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     });
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
     if opts.kindle_rules {
-        kindle_rules::apply(entries, rep);
-        add_ua_css(entries, rep);
+        let font_scale = kindle_rules::apply(entries, rep);
+        add_ua_css(entries, rep, font_scale);
         drop_nonlinear_nav(entries);
     }
     fix_ncx_manifest_id(entries, rep);
@@ -428,7 +430,7 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
 
 /// 只修复时挂上标签的缺省样式（[`WashOpts::kindle_rules`]）：OPF 同目录写 `eink-ua.css`，每章 `<head>` 里**第一个**放指向它的 `<link>`
 /// （在书自带的样式表、`<style>` 之前，书里写了的照样盖过它）。目录页（nav）不挂。
-fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport) {
+fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option<f64>) {
     let opf_idx = find_opf(entries);
     let name = crate::uastyle::UA_CSS_NAME;
     let css_path = match opf_idx.map(|i| dir_of(&entries[i].name)) {
@@ -446,7 +448,7 @@ fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport) {
         changed
     });
     rep.ua_css_linked += linked.into_iter().filter(|c| *c).count();
-    add_css_entry(entries, opf_idx, &css_path, &crate::uastyle::ua_css(), "eink-ua-css");
+    add_css_entry(entries, opf_idx, &css_path, &crate::uastyle::ua_css(font_scale), "eink-ua-css");
 }
 
 /// 新增（或更新）一份我们写的样式表，并往 OPF manifest 补一条 `<item>`（幂等）。
