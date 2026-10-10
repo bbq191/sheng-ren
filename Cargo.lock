@@ -988,14 +988,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mobidict"
-version = "0.1.0"
-dependencies = [
- "bookconv",
- "regex",
-]
-
-[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

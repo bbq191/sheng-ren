@@ -3,8 +3,7 @@
 #
 # 用法: ./install.sh [--tools | --no-tools]
 #   缺省装：booklib（书库；查看/改写 EPUB 元数据也在里面：booklib meta --edit）
-#   --tools     另装开发和排查问题用的：epub-optimize、readable-probe、readable-measure，
-#               以及转 MOBI 词典的 mobi-dict-to-stardict
+#   --tools     另装开发和排查问题用的：epub-optimize、readable-probe、readable-measure
 #   --no-tools  卸掉上面这些开发工具，只留 booklib
 #   kfx 包的 epub-to-kfx、kfx-dump、kfx-repack 不随 --tools 装，用 cargo run --release -p kfx --bin <命令> --
 #   都不加：沿用上次的选择（装过开发工具就一起升级，免得工具停在旧版本、和 booklib 的规则对不上）
