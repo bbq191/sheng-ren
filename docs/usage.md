@@ -2,7 +2,7 @@
 
 ## 安装与卸载
 
-需要 Rust 工具链（`cargo`）。在仓库目录里：
+需要 Linux 和 Rust 工具链（`cargo`）。在仓库目录里，用仓库主人的账号直接运行（别加 `sudo`，也别 `source`）：
 
 ```sh
 ./install.sh             # 装 booklib（书库；改 EPUB 元数据的 meta --edit 也在里面）
@@ -12,14 +12,23 @@
 ./install.sh --help      # 打印脚本开头的说明（uninstall.sh 同样）
 ```
 
-- 装到 cargo 的 bin 目录，优先级和 cargo 一致：`$CARGO_INSTALL_ROOT/bin` > cargo 配置里的 `install.root`（仓库目录往上各级 `.cargo/config.toml` 越近越优先，最后是 `$CARGO_HOME/config.toml`）> `$CARGO_HOME/bin` > `~/.cargo/bin`。`CARGO_INSTALL_ROOT` 设成空值按没设处理。
-- `--tools` 装的是 `bookconv` 包里的命令；`kfx` 包的 `epub-to-kfx`、`kfx-dump`、`kfx-repack` 不随它装，用 `cargo run --release -p kfx --bin <命令> --`。
-- 退出码：`0` 装好（卸完）；`1` 没有 cargo、同名命令被别的包占着、编译或卸载失败；`2` 参数不对。
-- **升级**：更新代码后再跑一次 `./install.sh`。不加 `--tools`/`--no-tools` 时沿用上次的选择：装过开发工具就一起升级，免得工具停在旧版本、和 `booklib` 的规则对不上。编译复用仓库的 `target/`，第一次要几分钟。
-- **同名命令被别的包占着**（比如别处装过一个也叫 `booklib` 的）：脚本报出是哪个包、然后停下，不会悄悄抢过来。确认不要了先 `cargo uninstall` 它再装。
-- 装完会核对 `PATH` 里先找到的 `booklib` 是不是刚装的那个；不在 `PATH` 里会告诉你怎么加（fish 给 `fish_add_path`）。
-- **卸载只删命令**：按本仓库的路径找出装过的包全部卸掉（仓库经符号链接装的也认）；别处装的同名命令只提示、不删。书库、设备上的书都不动，脚本只告诉你书库在哪。
-- 不想安装也可以直接跑：`cargo run --release -p library --bin booklib -- <命令>`。
+![安装与卸载流程](img/install.svg)
+
+**装到哪**：cargo 的 bin 目录，优先级和 cargo 一致——`$CARGO_INSTALL_ROOT/bin` > cargo 配置里的 `install.root`（仓库目录往上各级 `.cargo/config.toml` 越近越优先，最后是 `$CARGO_HOME/config.toml`）> `$CARGO_HOME/bin` > `~/.cargo/bin`。`CARGO_INSTALL_ROOT` 设成空值按没设处理。装完会核对 `PATH` 里先找到的 `booklib` 是不是刚装的那个；不在 `PATH` 里会告诉你怎么加（fish 给 `fish_add_path`）。
+
+**升级**：更新代码后再跑一次 `./install.sh`。不加 `--tools`/`--no-tools` 时沿用上次的选择：装过开发工具就一起升级，免得工具停在旧版本、和 `booklib` 的规则对不上。编译复用仓库的 `target/`，第一次要几分钟。`--tools` 装的是 `bookconv` 包里的命令；`kfx` 包的 `epub-to-kfx`、`kfx-dump`、`kfx-repack` 不随它装，用 `cargo run --release -p kfx --bin <命令> --`。
+
+**出错时**：
+
+- 编译失败：什么都不改，安装目录一点没动。
+- 安装那一步中途失败或按了 Ctrl-C：命令文件和 cargo 的记账文件（`.crates.toml`、`.crates2.json`）退回装之前的样子，不会剩下 `booklib` 是新的、开发工具还是旧的。被 `kill -9` 这种来不及退回的，再跑一次 `./install.sh` 就装成完整的新版本（残留的备份 `bin/.sheng-ren-install-backup` 自动清掉）。
+- 同名命令被别的包占着（比如别处装过一个也叫 `booklib` 的）：报出是哪个包、然后停下，不会悄悄抢过来。确认不要了先 `cargo uninstall` 它再装。
+- `sudo ./install.sh` 会拒绝：命令会装进 root 的目录，仓库的 `target/` 也会变成 root 的，之后你自己编译会报权限错。
+- 退出码：`0` 装好（卸完）；`1` 没有 cargo、用 root 运行、同名命令被别的包占着、编译或安装失败（已回滚）、卸载失败；`2` 参数不对。
+
+**卸载只删命令**：按本仓库的路径找出装过的包，一次卸掉（仓库经符号链接装的也认）；别处装的同名命令只提示、不删。书库、设备上的书都不动，脚本只告诉你书库在哪。两个脚本都能重复运行。
+
+不想安装也可以直接跑：`cargo run --release -p library --bin booklib -- <命令>`。
 
 ## 书库在哪
 

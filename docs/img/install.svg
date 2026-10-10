@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 772" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>安装与卸载流程：install.sh 先编译、再备份、再安装，失败回滚；uninstall.sh 只删命令</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <style>
+      .b{fill:#fff;stroke:#999;stroke-width:1.1}
+      .q{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.2}
+      .w{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.2}
+      .g{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.2}
+      .e{fill:#fdecea;stroke:#b2452d;stroke-width:1.2}
+      .u{fill:#f3eefb;stroke:#8a63c9;stroke-width:1.2}
+      .lh{font-weight:bold;font-size:15px}
+      .h{font-weight:bold;font-size:13.5px}
+      .c{font-family:'Noto Sans Mono','DejaVu Sans Mono',monospace;font-size:11.5px;fill:#333}
+      .s{font-size:11.5px;fill:#444}
+      .n{font-size:11.5px;fill:#555}
+      .l{stroke:#555;stroke-width:1.3;fill:none}
+    </style>
+  </defs>
+  <rect width="960" height="772" fill="#fafafa"/>
+
+  <text x="250" y="28" text-anchor="middle" class="lh">./install.sh [--tools | --no-tools]</text>
+  <text x="800" y="28" text-anchor="middle" class="lh">./uninstall.sh</text>
+
+  <!-- 1 检查 -->
+  <rect class="q" x="40" y="44" width="420" height="58" rx="8"/>
+  <text x="250" y="65" text-anchor="middle" class="h">先检查</text>
+  <text x="250" y="84" text-anchor="middle" class="s">参数认得 · 有 cargo · 不是被 source · 不是 root 跑别人的仓库</text>
+  <path class="l" d="M460 73 L490 73" marker-end="url(#a)"/>
+  <rect class="e" x="492" y="50" width="170" height="46" rx="8"/>
+  <text x="577" y="69" text-anchor="middle" class="h">不过：停下</text>
+  <text x="577" y="86" text-anchor="middle" class="s">参数错退出 2，其它退出 1</text>
+  <path class="l" d="M250 102 L250 124" marker-end="url(#a)"/>
+
+  <!-- 2 装哪些 -->
+  <rect class="b" x="40" y="126" width="420" height="72" rx="8"/>
+  <text x="250" y="147" text-anchor="middle" class="h">定这次装哪些</text>
+  <text x="250" y="166" text-anchor="middle" class="s">总是装 booklib；--tools 另装 epub-optimize 等开发工具</text>
+  <text x="250" y="184" text-anchor="middle" class="s">都不加：装过开发工具就一起升级（免得和 booklib 规则对不上）</text>
+  <path class="l" d="M250 198 L250 220" marker-end="url(#a)"/>
+
+  <!-- 3 冲突 -->
+  <rect class="q" x="40" y="222" width="420" height="52" rx="8"/>
+  <text x="250" y="243" text-anchor="middle" class="h">同名命令被别的包占着吗</text>
+  <text x="250" y="261" text-anchor="middle" class="s">只认从本仓库路径装的；不用 --force 抢别人的</text>
+  <path class="l" d="M460 248 L490 248" marker-end="url(#a)"/>
+  <rect class="e" x="492" y="225" width="170" height="46" rx="8"/>
+  <text x="577" y="244" text-anchor="middle" class="h">占着：停下</text>
+  <text x="577" y="261" text-anchor="middle" class="s">告诉你是哪个包，退出 1</text>
+  <path class="l" d="M250 274 L250 296" marker-end="url(#a)"/>
+
+  <!-- 4 编译 -->
+  <rect class="w" x="40" y="298" width="420" height="64" rx="8"/>
+  <text x="250" y="319" text-anchor="middle" class="h">① 一次编译全部要装的命令</text>
+  <text x="250" y="337" text-anchor="middle" class="c">cargo build --release --locked -p … --bin …</text>
+  <text x="250" y="354" text-anchor="middle" class="s">几个包并行编；复用仓库的 target/，第一次要几分钟</text>
+  <path class="l" d="M460 330 L490 330" marker-end="url(#a)"/>
+  <rect class="e" x="492" y="307" width="170" height="46" rx="8"/>
+  <text x="577" y="326" text-anchor="middle" class="h">编译失败：停下</text>
+  <text x="577" y="343" text-anchor="middle" class="s">安装目录一点没动</text>
+  <path class="l" d="M250 362 L250 384" marker-end="url(#a)"/>
+
+  <!-- 5 备份 -->
+  <rect class="w" x="40" y="386" width="420" height="64" rx="8"/>
+  <text x="250" y="407" text-anchor="middle" class="h">② 留一份现状</text>
+  <text x="250" y="425" text-anchor="middle" class="s">这次要装的命令文件、cargo 记账文件（.crates.toml、.crates2.json）</text>
+  <text x="250" y="442" text-anchor="middle" class="s">放在 bin/.sheng-ren-install-backup，装完删掉</text>
+  <path class="l" d="M250 450 L250 472" marker-end="url(#a)"/>
+
+  <!-- 6 安装 -->
+  <rect class="w" x="40" y="474" width="420" height="64" rx="8"/>
+  <text x="250" y="495" text-anchor="middle" class="h">③ 逐个包安装</text>
+  <text x="250" y="513" text-anchor="middle" class="c">cargo install --locked --path crates/&lt;包&gt;</text>
+  <text x="250" y="530" text-anchor="middle" class="s">上一步编好了，这里只拷贝，约 1 秒</text>
+  <path class="l" d="M460 506 L490 506" marker-end="url(#a)"/>
+  <rect class="e" x="492" y="474" width="170" height="64" rx="8"/>
+  <text x="577" y="493" text-anchor="middle" class="h">失败或 Ctrl-C：回滚</text>
+  <text x="577" y="511" text-anchor="middle" class="s">命令、记账文件退回</text>
+  <text x="577" y="527" text-anchor="middle" class="s">装之前的样子，退出 1</text>
+  <path class="l" d="M250 538 L250 560" marker-end="url(#a)"/>
+
+  <!-- 7 no-tools -->
+  <rect class="b" x="40" y="562" width="420" height="46" rx="8"/>
+  <text x="250" y="582" text-anchor="middle" class="h">--no-tools：卸掉开发工具</text>
+  <text x="250" y="599" text-anchor="middle" class="s">没装过就什么都不做</text>
+  <path class="l" d="M250 608 L250 630" marker-end="url(#a)"/>
+
+  <!-- 8 PATH -->
+  <rect class="g" x="40" y="632" width="420" height="64" rx="8"/>
+  <text x="250" y="653" text-anchor="middle" class="h">✓ 装好（退出 0）</text>
+  <text x="250" y="671" text-anchor="middle" class="s">核对 PATH 里先找到的 booklib 是不是刚装的那个</text>
+  <text x="250" y="688" text-anchor="middle" class="s">不在 PATH 里就告诉你怎么加（fish 给 fish_add_path）</text>
+
+  <text x="480" y="732" text-anchor="middle" class="n">装到哪：$CARGO_INSTALL_ROOT/bin &gt; cargo 配置的 install.root &gt; $CARGO_HOME/bin &gt; ~/.cargo/bin</text>
+  <text x="480" y="752" text-anchor="middle" class="n">重复运行 = 升级；被 kill -9 打断的，再跑一次就装成完整的新版本</text>
+
+  <!-- uninstall -->
+  <rect class="u" x="700" y="44" width="240" height="58" rx="8"/>
+  <text x="820" y="65" text-anchor="middle" class="h">先检查</text>
+  <text x="820" y="84" text-anchor="middle" class="s">同左：参数、cargo、source、root</text>
+  <path class="l" d="M820 102 L820 124" marker-end="url(#a)"/>
+  <rect class="u" x="700" y="126" width="240" height="72" rx="8"/>
+  <text x="820" y="147" text-anchor="middle" class="h">找本仓库装的包</text>
+  <text x="820" y="166" text-anchor="middle" class="s">按仓库路径认（经符号链接装的也认）</text>
+  <text x="820" y="184" text-anchor="middle" class="s">一个都没有：提示后退出 0</text>
+  <path class="l" d="M820 198 L820 220" marker-end="url(#a)"/>
+  <rect class="u" x="700" y="222" width="240" height="52" rx="8"/>
+  <text x="820" y="243" text-anchor="middle" class="h">一次卸掉</text>
+  <text x="820" y="261" text-anchor="middle" class="c">cargo uninstall 包1 包2 …</text>
+  <path class="l" d="M820 274 L820 296" marker-end="url(#a)"/>
+  <rect class="g" x="700" y="298" width="240" height="98" rx="8"/>
+  <text x="820" y="319" text-anchor="middle" class="h">✓ 卸完（退出 0）</text>
+  <text x="820" y="339" text-anchor="middle" class="s">别处装的同名命令：只提示，不删</text>
+  <text x="820" y="357" text-anchor="middle" class="s">书库、设备上的书：一概不动</text>
+  <text x="820" y="375" text-anchor="middle" class="s">只告诉你书库在哪</text>
+  <text x="820" y="426" text-anchor="middle" class="n">重复运行无害</text>
+</svg>

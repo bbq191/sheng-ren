@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1060" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>模块交互：一本书在 booklib sync 里经过哪些模块</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
+    <marker id="u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#5b7fd6"/></marker>
+    <style>
+      .lane{stroke:none}
+      .lib{fill:#fff6e5;stroke:#d69a2b;stroke-width:1.2}
+      .bc{fill:#eef4ff;stroke:#5b7fd6;stroke-width:1.2}
+      .kfx{fill:#eaf6f4;stroke:#3a8f86;stroke-width:1.2}
+      .key{fill:#fff;stroke:#5b7fd6;stroke-width:1.8}
+      .g{fill:#eaf7ee;stroke:#3f9a5b;stroke-width:1.2}
+      .lh{font-weight:bold;font-size:15px}
+      .m{font-family:'Noto Sans Mono','DejaVu Sans Mono',monospace;font-weight:bold;font-size:12.5px}
+      .s{font-size:11.5px;fill:#444}
+      .n{font-size:11.5px;fill:#555}
+      .l{stroke:#555;stroke-width:1.3;fill:none}
+      .d{stroke:#5b7fd6;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+    </style>
+  </defs>
+  <rect width="960" height="1060" fill="#fafafa"/>
+
+  <!-- 泳道 -->
+  <rect class="lane" x="16" y="40" width="278" height="1004" rx="8" fill="#fffaf0"/>
+  <rect class="lane" x="306" y="40" width="330" height="1004" rx="8" fill="#f5f8ff"/>
+  <rect class="lane" x="648" y="40" width="296" height="1004" rx="8" fill="#f2faf8"/>
+  <text x="155" y="28" text-anchor="middle" class="lh">library（书库）</text>
+  <text x="471" y="28" text-anchor="middle" class="lh">bookconv（内容层）</text>
+  <text x="796" y="28" text-anchor="middle" class="lh">kfx（只有 kindle 模式）</text>
+
+  <!-- A sources -->
+  <rect class="lib" x="30" y="60" width="250" height="54" rx="8"/>
+  <text x="155" y="80" text-anchor="middle" class="m">sources</text>
+  <text x="155" y="100" text-anchor="middle" class="s">扫跟踪目录：新书入库，改了删了的跟着走</text>
+  <path class="l" d="M155 114 L155 138" marker-end="url(#a)"/>
+
+  <!-- B generate -->
+  <rect class="lib" x="30" y="140" width="250" height="64" rx="8"/>
+  <text x="155" y="160" text-anchor="middle" class="m">generate</text>
+  <text x="155" y="179" text-anchor="middle" class="s">每本书 × 每台接上的设备：算指纹、比记录</text>
+  <text x="155" y="196" text-anchor="middle" class="s">没变 → 跳过；变了 → 往下生成</text>
+  <path class="l" d="M280 172 L470 172 L470 218" marker-end="url(#a)"/>
+  <text x="378" y="165" text-anchor="middle" class="n">原件 + 这台的 profile</text>
+
+  <!-- C 准备输入 -->
+  <rect class="bc" x="320" y="220" width="300" height="54" rx="8"/>
+  <text x="470" y="240" text-anchor="middle" class="m">convert/ · opfmeta</text>
+  <text x="470" y="260" text-anchor="middle" class="s">CBZ 转成 EPUB；书里缺的封面、简介、标签补进去</text>
+  <path class="l" d="M410 274 L410 298" marker-end="url(#a)"/>
+
+  <!-- D optimize + wash -->
+  <rect class="bc" x="320" y="300" width="300" height="54" rx="8"/>
+  <text x="470" y="320" text-anchor="middle" class="m">optimize/ → wash::repair_entries</text>
+  <text x="470" y="340" text-anchor="middle" class="s">按 profile 选路；文字书只修复：EPUB 3、目录到节</text>
+  <path class="l" d="M410 354 L410 378" marker-end="url(#a)"/>
+
+  <!-- E kindle_rules -->
+  <rect class="bc" x="320" y="380" width="300" height="54" rx="8"/>
+  <text x="470" y="400" text-anchor="middle" class="m">wash::kindle_rules（掌阅、Move）</text>
+  <text x="470" y="420" text-anchor="middle" class="s">book_facts 一趟 DOM 算正文字号字体 → 改样式表</text>
+  <path class="l" d="M410 434 L410 458" marker-end="url(#a)"/>
+
+  <!-- F check -->
+  <rect class="bc" x="320" y="460" width="180" height="54" rx="8"/>
+  <text x="410" y="480" text-anchor="middle" class="m">check 质量门</text>
+  <text x="410" y="500" text-anchor="middle" class="s">→ 优化后的 EPUB</text>
+
+  <!-- G kfx load + parse -->
+  <rect class="kfx" x="666" y="460" width="264" height="54" rx="8"/>
+  <text x="798" y="480" text-anchor="middle" class="m">epubbook::load → write::parse</text>
+  <text x="798" y="500" text-anchor="middle" class="s">读整本，XHTML 读成块树</text>
+  <path class="l" d="M500 482 L664 482" marker-end="url(#a)"/>
+  <text x="600" y="475" text-anchor="middle" class="n">kindle</text>
+
+  <!-- cascade 共用 -->
+  <rect class="key" x="486" y="562" width="308" height="56" rx="8"/>
+  <text x="640" y="582" text-anchor="middle" class="m">cascade（共用的 CSS 层叠）</text>
+  <text x="640" y="602" text-anchor="middle" class="s">Sheet::for_doc · Computed · body_font_size</text>
+  <path class="d" d="M560 434 L560 560" marker-end="url(#u)"/>
+  <path class="d" d="M700 514 L700 560" marker-end="url(#u)"/>
+  <text x="504" y="545" text-anchor="end" class="n" fill="#5b7fd6" style="fill:#5b7fd6">两边算正文字号、字体的口径因此一样</text>
+
+  <!-- H analyze/style/layout -->
+  <rect class="kfx" x="666" y="650" width="264" height="54" rx="8"/>
+  <text x="798" y="670" text-anchor="middle" class="m">analyze → style · layout</text>
+  <text x="798" y="690" text-anchor="middle" class="s">全书统计（只读）→ 样式去重、版面</text>
+  <path class="l" d="M930 487 L946 487 L946 677 L932 677" marker-end="url(#a)"/>
+  <path class="l" d="M798 704 L798 728" marker-end="url(#a)"/>
+
+  <!-- I symbols/entities -->
+  <rect class="kfx" x="666" y="730" width="264" height="54" rx="8"/>
+  <text x="798" y="750" text-anchor="middle" class="m">symbols · entities · resources</text>
+  <text x="798" y="770" text-anchor="middle" class="s">分配符号（资源最后）→ 打包成 .kfx</text>
+
+  <!-- 产物 → transfer -->
+  <path class="l" d="M320 494 L120 494 L120 818" marker-end="url(#a)"/>
+  <text x="130" y="520" class="n">掌阅、Move：EPUB</text>
+  <path class="l" d="M666 757 L230 757 L230 818" marker-end="url(#a)"/>
+  <text x="448" y="750" text-anchor="middle" class="n">Kindle：KFX</text>
+
+  <!-- J transfer -->
+  <rect class="lib" x="30" y="820" width="250" height="54" rx="8"/>
+  <text x="155" y="840" text-anchor="middle" class="m">transfer</text>
+  <text x="155" y="860" text-anchor="middle" class="s">交给这台的传输线程，主线程接着做下一本</text>
+  <path class="l" d="M155 874 L155 898" marker-end="url(#a)"/>
+
+  <!-- K deliver -->
+  <rect class="lib" x="30" y="900" width="250" height="54" rx="8"/>
+  <text x="155" y="920" text-anchor="middle" class="m">deliver</text>
+  <text x="155" y="940" text-anchor="middle" class="s">MTP 写文件 / Move 书架服务导入</text>
+  <path class="l" d="M155 954 L155 978" marker-end="url(#a)"/>
+  <path class="l" d="M280 927 L660 927" marker-end="url(#a)"/>
+  <rect class="g" x="662" y="900" width="268" height="54" rx="8"/>
+  <text x="796" y="920" text-anchor="middle" class="m">设备</text>
+  <text x="796" y="940" text-anchor="middle" class="s">Kindle、掌阅 documents/ · Move 文件夹</text>
+
+  <!-- L 记录 -->
+  <rect class="lib" x="30" y="980" width="250" height="54" rx="8"/>
+  <text x="155" y="1000" text-anchor="middle" class="m">generate（收尾）</text>
+  <text x="155" y="1020" text-anchor="middle" class="s">传完才写生成记录：指纹、位置</text>
+
+  <text x="471" y="1000" text-anchor="middle" class="n">实线 = 数据往下走　虚线 = 调用</text>
+  <text x="471" y="1020" text-anchor="middle" class="n">漫画不走 kindle_rules，走图片处理（imgopt）</text>
+</svg>

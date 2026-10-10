@@ -1,6 +1,6 @@
 # 架构
 
-![总体流程](img/overview.svg)
+这篇讲代码怎么分、一本书怎么流过各个模块、书库怎么存。第一次读：先看下面的三条原则和两张图（[核心架构](#核心架构)、[一本书怎么流过各模块](#一本书怎么流过各模块)），后面的模块表、书库、指纹按需查。用户看到的总体流程见 [README](../README.md) 开头的图。
 
 ## 三条原则
 
@@ -8,9 +8,11 @@
 - **书库只存索引，原件是唯一内容**：产物都从原件派生，随时能重建；生成前核对原件还是入库时那本书。产物直接传到设备，电脑上不留（2026-10-07）。
 - **质量门**：产物生成后检查 XHTML 合法、引用完整、没有 DRM；没过只警告。
 
-## Crate 与依赖
+## 核心架构
 
-![crate 依赖](img/crates.svg)
+![核心架构](img/architecture.svg)
+
+四个 crate 分层，上层用下层，下层不知道上层：
 
 | crate | 职责 | 命令 |
 |---|---|---|
@@ -21,6 +23,21 @@
 | `drm` | 空壳，解 DRM 暂停 | |
 
 依赖单向无环：`library` → `kfx` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`drm` 独立。
+
+## 一本书怎么流过各模块
+
+![模块交互](img/modules.svg)
+
+以 `booklib sync` 里的一本书、一台设备为例：
+
+1. **`library::sources`** 扫跟踪目录，把新书登记进书库、原件改了删了的跟着更新。
+2. **`library::generate`** 对每本书、每台接上的设备算指纹，和生成记录比；没变就跳过（细节见[生成](#生成sync-的第二步generaters)、[指纹](#指纹)）。
+3. 要生成的交给 **bookconv**：`convert` 把 CBZ 转成 EPUB、`opfmeta` 补书里缺的封面简介；`optimize` 按阅读模式选路，文字书走 `wash::repair_entries` 只修复，掌阅、Move 再过 `wash::kindle_rules`；`check` 质量门把关，得到优化后的 EPUB。
+4. Kindle 再交给 **kfx 写出器**：`epubbook::load` 读整本 → `parse` 读成块树 → `analyze` 算全书统计 → `style`、`layout` → `symbols`、`entities` 打包成 KFX。
+5. **`cascade`（CSS 层叠）是两边共用的**：`kindle_rules` 用它算掌阅、Move 的正文字号字体，KFX 写出器用它算每个元素的样式，所以三台认出的"正文"是同一个。
+6. 产物交给 **`library::transfer`** 这台设备的传输线程（主线程不等，接着做下一本），由 **`deliver`** 写到 MTP 挂载点或交给 Move 的书架服务；传完 `generate` 才写生成记录。线程怎么配合见[使用指南 · 产物放在哪](usage.md#产物放在哪)里的"边生成边传"图。
+
+## 模块一览
 
 ### bookconv 模块
 
