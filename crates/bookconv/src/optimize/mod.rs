@@ -129,7 +129,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   XML 声明和 CDATA；NCX 补空的 `dtb:uid`；内容是 UTF-8、声明是别的编码时改声明；行内 `style` 的字符引用先还原；`<P>`、`</body >`。
 /// - 55（2026-10-10 审计）：清洗层判断选择器前一律去掉开头的 `@charset`/`@import` 语句（`wash::rule_selector`）——样式表开头有
 ///   `@charset` 时，图注宽度（`capfit`）、整页背景（`bgfit`）、章尾去边距、首段顶格的类以前漏看第一条规则；只修复的内置模式不走这些。
-pub const OPTIMIZE_VERSION: &str = "55";
+/// - 56（2026-10-10 审计）：带透明（或 16 位）的 PNG 插图缩小时按预乘 alpha 缩（`imgopt::resize_alpha_png`，和整页背景图同一条路），
+///   透明处存的颜色不再渗进图边（以前 `image` 自带的缩放不预乘，透明处存黑色的图边上出黑边）。只有完整清洗的文字书会缩插图，
+///   内置三个模式的文字书只修复、漫画页另走一套，产物都不变。
+pub const OPTIMIZE_VERSION: &str = "56";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -219,14 +222,8 @@ pub struct OptimizeOpts {
     /// 正文 `<img>`/SVG `<image>` 用到的带透明像素的图合成到白底（profile `image_alpha = false`，Kindle），见 [`crate::imgalpha`]。
     /// 只管文字书（漫画页本来就合成白底）。
     pub flatten_alpha: bool,
-    /// 文字书只做修复（profile `text_repair_only`，三台都开：Kindle、掌阅、Move）：清洗层只走 EPUB 3 修复和目录（[`crate::wash::WashOpts::repair_only`]），
-    /// 文字、图片、样式一概不动——不解锁字体、不排版、不搬注释、不缩图。漫画不受影响（按漫画规则照常处理）。
-    pub text_repair_only: bool,
-    /// 只修复时仍处理注释链接，保证注释能点（profile `repair_note_links`，xochitl）：注释搬进引用它的那一章、改同文件锚点，
-    /// 按 `drop_note_backlinks` 去回链、按 `number_note_icons` 把图标标号换数字。别的照只修复，一概不动。
-    pub repair_note_links: bool,
-    /// 只修复时照 Send to Kindle 的规则统一（profile `kindle_rules`，掌阅、Move；[`crate::wash::WashOpts::kindle_rules`]）。
-    pub kindle_rules: bool,
+    /// 文字书怎么处理（[`TextMode`]）：完整处理，还是只修复（profile `text_repair_only`，三台都是）。漫画不受影响（按漫画规则照常处理）。
+    pub text_mode: TextMode,
     /// 图片处理的资源上限（缺省 [`Limits::default`]）。
     pub limits: Limits,
     /// 改书名：`Some` 时 OPF 的 `dc:title` 换成它（`opfmeta::apply_fields`，原来的书名连同挂在上面的 `refines` 一起换掉）；
@@ -234,13 +231,44 @@ pub struct OptimizeOpts {
     pub title: Option<String>,
 }
 
+/// 文字书的处理方式（[`OptimizeOpts::text_mode`]）。以前是三个布尔开关（`text_repair_only`、`kindle_rules`、`repair_note_links`），
+/// 后两个只在第一个为真时才看——这个约定写成枚举，只修复才有的两个开关挂在 `Repair` 下面。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextMode {
+    /// 完整处理：清洗层按 [`OptimizeOpts::wash`] 的选项清洗排版，注释重排、图片缩放、背景图、图注、透明图按各自的开关做。
+    #[default]
+    Full,
+    /// 只做修复（profile `text_repair_only`，2026-10-08 用户定三台都这样）：清洗层只走 EPUB 3 修复和目录
+    /// （[`crate::wash::WashMode::Repair`]），文字、图片、样式一概不动——不解锁字体、不排版、不缩图；注释、背景图、图注、透明图都不处理。
+    Repair {
+        /// 照 Send to Kindle 的规则统一（profile `kindle_rules`，掌阅、Move；[`crate::wash::WashMode::Repair`] 的同名字段）。
+        kindle_rules: bool,
+        /// 仍处理注释链接，保证注释能点（profile `repair_note_links`，xochitl）：注释搬进引用它的那一章、改同文件锚点，
+        /// 按 `drop_note_backlinks` 去回链、按 `number_note_icons` 把图标标号换数字。别的照只修复，一概不动。
+        note_links: bool,
+    },
+}
+
+impl TextMode {
+    /// 按 profile 的 `text_repair_only`、`kindle_rules`、`repair_note_links` 定。
+    pub fn for_profile(p: &profile::Profile) -> Self {
+        if p.text_repair_only {
+            TextMode::Repair { kindle_rules: p.kindle_rules, note_links: p.repair_note_links }
+        } else {
+            TextMode::Full
+        }
+    }
+}
+
 impl OptimizeOpts {
-    /// 文字书只做修复时实际用的选项（[`OptimizeOpts::text_repair_only`]）：清洗层只修复，注释、背景图、图注、透明图的处理都关掉。
+    /// 文字书只做修复时实际用的选项（[`TextMode::Repair`]）：清洗层只修复，注释（除非 `note_links`）、背景图、图注、透明图的处理都关掉。
+    /// 不是 `Repair` 时原样克隆。
     fn repair_only(&self) -> Self {
+        let TextMode::Repair { kindle_rules, note_links } = self.text_mode else { return self.clone() };
         OptimizeOpts {
-            wash: Some(crate::wash::WashOpts { repair_only: true, kindle_rules: self.kindle_rules, ..Default::default() }),
-            number_note_icons: self.repair_note_links && self.number_note_icons,
-            drop_note_backlinks: self.repair_note_links && self.drop_note_backlinks,
+            wash: Some(crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, ..Default::default() }),
+            number_note_icons: note_links && self.number_note_icons,
+            drop_note_backlinks: note_links && self.drop_note_backlinks,
             fit_backgrounds: false,
             caption_fit: false,
             flatten_alpha: false,
@@ -248,15 +276,19 @@ impl OptimizeOpts {
         }
     }
 
-    /// 清洗层只修复：书里的文字、图片、样式一概不动（见 [`OptimizeOpts::text_repair_only`]）。
+    /// 清洗层只修复：书里的文字、图片、样式一概不动（见 [`TextMode::Repair`]）。
     fn keeps_content(&self) -> bool {
-        self.wash.as_ref().is_some_and(|w| w.repair_only)
+        self.wash.as_ref().is_some_and(|w| w.mode.is_repair())
     }
 
+    /// 只修复、但保证注释能点（[`TextMode::Repair`] 的 `note_links`）。
+    fn repair_note_links(&self) -> bool {
+        matches!(self.text_mode, TextMode::Repair { note_links: true, .. })
+    }
 
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, text_repair_only: false, repair_note_links: false, kindle_rules: false, limits: Limits::default(), title: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, text_mode: TextMode::Full, limits: Limits::default(), title: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -286,9 +318,7 @@ impl OptimizeOpts {
             fit_backgrounds: p.background_images && !p.background_sizing,
             caption_fit: p.caption_fit,
             flatten_alpha: !p.image_alpha,
-            text_repair_only: p.text_repair_only,
-            repair_note_links: p.repair_note_links,
-            kindle_rules: p.kindle_rules,
+            text_mode: TextMode::for_profile(p),
             ..OptimizeOpts::new(p.output_readable())
         }
     }
@@ -342,14 +372,11 @@ struct Prepared {
     rep: Report,
 }
 
-/// 阶段一：`raw` → 封面声明 → 清洗 → 排序（mimetype 置首、旧标记剔除）→ 第一遍 html → 注释块搬出。
+/// 阶段一：`raw`（调用方已补好封面声明，见 `streaming`）→ 清洗 → 排序（mimetype 置首、旧标记剔除）→ 第一遍 html → 注释块搬出。
 /// 图片条目是空占位——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
 /// `is_comic_book`：调用方按原书判好的漫画识别结果（`comic_detect::is_comic`，全程只判这一次）；`transcoded`：调用方读完书已经
 /// 转成 UTF-8 的文件数（`wash::transcode_entries`，记进清洗报告）。
 fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize, is_comic_book: bool, transcoded: usize) -> Result<Prepared, String> {
-    // 保证 OPF 声明了有效封面（见 `wash::ensure_cover_declared`）。
-    // 必须在清洗之前：清洗会把只含 SVG 封面的 titlepage 当空页删掉。
-    crate::wash::ensure_cover_declared(&mut raw);
     // 整页背景图的尺寸意图要在清洗前读（清洗会去掉 `background-size`）
     let mut bg_fits = if opts.fit_backgrounds { crate::bgfit::plan(&raw) } else { HashMap::new() };
     let wash_rep = match &opts.wash {
@@ -421,7 +448,7 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
             }
         };
         // 只修复：字体锁不剥；注释也不搬（清洗层修过的文字原样往下传），要保证注释能点的（xochitl）只把同文件链接规整成裸锚点再找注释
-        if opts.keeps_content() && !opts.repair_note_links {
+        if opts.keeps_content() && !opts.repair_note_links() {
             e.data = text.into_bytes();
             return Scan { ish, text: true, notes: None };
         }
@@ -599,7 +626,7 @@ struct EntryXform<'a> {
     title: Option<&'a str>,
     /// 只修复（[`OptimizeOpts::keeps_content`]）：章节不再变换；远程图按原图收进书里、抓不到的留着。
     keep_content: bool,
-    /// 只修复、但保证注释能点（[`OptimizeOpts::repair_note_links`]）：章节只做注释搬移和改链。
+    /// 只修复、但保证注释能点（[`TextMode::Repair`] 的 `note_links`）：章节只做注释搬移和改链。
     repair_note_links: bool,
 }
 
@@ -628,7 +655,7 @@ impl<'a> EntryXform<'a> {
             fetched_imgs: Vec::new(),
             content_props: opts.wash.as_ref().map(|_| HashMap::new()),
             keep_content: opts.keeps_content(),
-            repair_note_links: opts.keeps_content() && opts.repair_note_links,
+            repair_note_links: opts.keeps_content() && opts.repair_note_links(),
             caption_ctx: None,
             title: opts.title.as_deref().map(str::trim).filter(|t| !t.is_empty()),
         }

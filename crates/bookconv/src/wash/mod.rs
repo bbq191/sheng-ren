@@ -59,7 +59,7 @@ mod typeset;
 pub use self::cover::{ensure_cover_declared, prepend_cover_page};
 pub use self::encoding::transcode_entries;
 
-/// 「照 Send to Kindle 的规则统一」（[`WashOpts::kindle_rules`]，掌阅、Move 的文字书）这一路自己的版本，只进书库指纹（`u` 段），
+/// 「照 Send to Kindle 的规则统一」（[`WashMode::Repair`] 的 `kindle_rules`，掌阅、Move 的文字书）这一路自己的版本，只进书库指纹（`u` 段），
 /// 不写进书（书里的优化标记 2026-10-09 起也不写版本号了）：这一路改了只让开了它的书过期。
 /// - 1（2026-10-08）：标签缺省样式、正文字体、body 左右边距、文字对比度（指纹里写 `u`）。
 /// - 2（2026-10-09）：原书没有封面页时补一页（[`prepend_cover_page`]；《绍宋》《狼厅》）。
@@ -114,8 +114,39 @@ pub enum LangMode {
     Latin,
 }
 
+/// 清洗层走哪一路（[`WashOpts::mode`]）。以前是两个布尔开关 `repair_only`、`kindle_rules`，后一个只在前一个为真时才看，
+/// `repair_only` 为真时别的排版选项也都不看——这个约定写成枚举。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WashMode {
+    /// 完整清洗（缺省）：解锁、排版、删空白页、目录……[`WashOpts`] 的排版选项（`keep_para_spacing`、`filter_props`、`lang`、
+    /// `keep_fonts`、`css_rgba`）只有这一路看。
+    #[default]
+    Full,
+    /// 只修复（文字书，profile `text_repair_only`）：只做 EPUB 3 修复和目录（[`repair_entries`]），不解锁、不排版、不删空白页，
+    /// 排版选项不看（`auto_toc` 照看）。调用方已判定不是漫画。
+    Repair {
+        /// 照 Send to Kindle 的规则统一（profile `kindle_rules`）：标签缺省样式 `eink-ua.css`（[`crate::uastyle::ua_css`]），
+        /// 正文字体、body 左右边距、文字对比度（`kindle_rules.rs`）。统计正文字号时按 [`WashOpts::media`] 求 `@media`。
+        kindle_rules: bool,
+    },
+}
+
+impl WashMode {
+    /// 只修复（[`WashMode::Repair`]）。
+    pub fn is_repair(self) -> bool {
+        matches!(self, WashMode::Repair { .. })
+    }
+
+    /// 只修复且照 Send to Kindle 的规则统一。
+    pub fn kindle_rules(self) -> bool {
+        matches!(self, WashMode::Repair { kindle_rules: true })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct WashOpts {
+    /// 完整清洗还是只修复（[`WashMode`]）。
+    pub mode: WashMode,
     /// 保留原书段间距（诗集/剧本靠空行分节）。
     pub keep_para_spacing: bool,
     pub auto_toc: AutoToc,
@@ -127,12 +158,6 @@ pub struct WashOpts {
     pub keep_fonts: HashSet<String>,
     /// 阅读器认 `rgba()` 颜色（profile 的 `css_rgba`，缺省 `true`）；`false` 时换成不透明写法（见 `cssunlock::rgba_to_opaque`）。
     pub css_rgba: bool,
-    /// 只修复（文字书，profile `text_repair_only`）：只做 EPUB 3 修复和目录（[`repair_entries`]），不解锁、不排版、不删空白页，
-    /// 别的选项不看。调用方已判定不是漫画。
-    pub repair_only: bool,
-    /// 只修复时照 Send to Kindle 的规则统一（profile `kindle_rules`）：标签缺省样式 `eink-ua.css`（[`crate::uastyle::ua_css`]），
-    /// 正文字体、body 左右边距、文字对比度（`kindle_rules.rs`）。
-    pub kindle_rules: bool,
     /// `kindle_rules` 统计正文字号时求 `@media`、`<link media>` 用的环境（阅读模式的产物阅读范围、屏幕、黑白彩色，
     /// [`crate::cascade::MediaEnv::for_format`]）；`None`＝求值不了的特性条件一律不成立。
     pub media: Option<crate::cascade::MediaEnv>,
@@ -140,7 +165,7 @@ pub struct WashOpts {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, repair_only: false, kindle_rules: false, media: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, mode: WashMode::Full, media: None }
     }
 }
 
@@ -178,7 +203,7 @@ pub struct WashReport {
     pub empty_pages_removed: Vec<String>,
     pub toc_generated: usize,
     pub dup_id_tags_collapsed: usize,
-    /// 挂上标签缺省样式表 `eink-ua.css` 的章节数（[`WashOpts::kindle_rules`]）。
+    /// 挂上标签缺省样式表 `eink-ua.css` 的章节数（[`WashMode::Repair`] 的 `kindle_rules`）。
     pub ua_css_linked: usize,
     /// 照 Send to Kindle 的规则改了的声明数（正文字体、body 左右边距、文字对比度，见 `kindle_rules.rs`）。
     pub kindle_rule_edits: usize,
@@ -260,7 +285,7 @@ fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> 
     strip_pseudo_drm(entries, &mut rep)?;
     // 文件名有安卓存储不能用的字符的先改名：后面各步按条目名找文件
     safe_names::rename_unsafe_entries(entries, &mut rep);
-    if opts.repair_only {
+    if opts.mode.is_repair() {
         repair_entries(entries, opts, &mut rep);
         return Ok(rep);
     }
@@ -348,11 +373,11 @@ fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> 
     Ok(rep)
 }
 
-/// 只修复（[`WashOpts::repair_only`]，文字书；2026-10-08 用户定三台（Kindle、掌阅、Move）都这样做）：书里的文字、图片、样式一概不动，只做
+/// 只修复（[`WashMode::Repair`]，文字书；2026-10-08 用户定三台（Kindle、掌阅、Move）都这样做）：书里的文字、图片、样式一概不动，只做
 /// - 合规：指向不存在文件的引用去掉（`drop_dead_refs`）、一个标签上重复的 `id` 合并、跨文件重复的 id 改名（链接跟着改）、
 ///   NCX 的 DOCTYPE 和 manifest id、`dtb:uid` 对齐，最后规范整理成 EPUB 3（`normalize.rs`：合法 XML、OPF 3.0、nav 与 NCX 互补）；
 /// - 目录：指错位置的改指、分部重建、没有目录的按标题生成、按目录层级定章节并把漏掉的节补进目录（补的 id 不改显示）；
-/// - 照 Send to Kindle 的规则统一（[`WashOpts::kindle_rules`]，掌阅、Move）：标签缺省样式表挂在书自带样式之前，正文字体、
+/// - 照 Send to Kindle 的规则统一（[`WashMode::Repair`] 的 `kindle_rules`，掌阅、Move）：标签缺省样式表挂在书自带样式之前，正文字体、
 ///   body 左右边距、文字对比度改进书的样式表（`kindle_rules.rs`）。
 ///
 /// 伪 DRM 剥离、文件名改安全字符在调用方（[`wash_with`]）已经做了。
@@ -374,7 +399,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         n
     });
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
-    if opts.kindle_rules {
+    if opts.mode.kindle_rules() {
         let font_scale = kindle_rules::apply(entries, rep, opts.media.as_ref());
         add_ua_css(entries, rep, font_scale);
         drop_nonlinear_nav(entries);
@@ -431,7 +456,7 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
     add_css_entry(entries, opf_idx, css_path, content, "eink-wash-css");
 }
 
-/// 只修复时挂上标签的缺省样式（[`WashOpts::kindle_rules`]）：OPF 同目录写 `eink-ua.css`，每章 `<head>` 里**第一个**放指向它的 `<link>`
+/// 只修复时挂上标签的缺省样式（[`WashMode::Repair`] 的 `kindle_rules`）：OPF 同目录写 `eink-ua.css`，每章 `<head>` 里**第一个**放指向它的 `<link>`
 /// （在书自带的样式表、`<style>` 之前，书里写了的照样盖过它）。目录页（nav）不挂。
 fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option<f64>) {
     let opf_idx = find_opf(entries);
