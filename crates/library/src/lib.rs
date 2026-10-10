@@ -26,28 +26,32 @@ mod cover;
 mod covergen;
 mod deliver;
 mod douban;
-mod qqread;
 mod fsutil;
 mod generate;
 mod matching;
 mod metadata;
 mod net;
+mod qqread;
+mod session;
 mod sources;
+mod transfer;
 mod wikidata;
 
-use fsutil::{sha256_file, sha256_hex, JsonCache};
+use fsutil::{sha256_file, sha256_hex};
 use serde::{Deserialize, Serialize};
-use std::cell::{Cell, OnceCell, RefCell};
+use session::{BuildCtx, ContentFacts, Devices, Records};
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub use cover::{CoverInfo, CoverResult};
-pub use deliver::{DeviceEnv, Doc, Event, Pipeline};
+pub use deliver::{DeviceEnv, Doc};
 pub use fsutil::Lock;
-pub use generate::{Built, Done, OutputStatus, Step, Transfer};
+pub use generate::{Built, OutputStatus, Step};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
 pub use sources::{book_files, Prune, SyncEvent, SyncMemo, SyncReport, SUPPORTED_EXTS};
+pub use transfer::{Done, Event, Pipeline, Transfer};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Meta {
@@ -152,36 +156,22 @@ pub struct DedupeReport {
     pub kept: Vec<Meta>,
 }
 
+/// 书库。缓存和运行状态按活多久分组（见 `session` 模块）：记录文件与锁、按内容记住的事实整个进程有效，
+/// 设备连接跨轮保留，生成过程中的临时状态一轮生成（或一件传输）结束就清。
 pub struct Library {
     root: PathBuf,
     registry: Registry,
-    /// 本进程现在持有书库的锁（[`Library::lock`]）。不持锁时（`list`）不往书库写补算的字段。
-    locked: Cell<bool>,
-    /// 残留临时文件清理过了（每个进程第一次拿到锁时清一次）。
-    cleaned: Cell<bool>,
-    /// 各模式的生成记录 `output-state/<模式>.json`、`sources.json`：一次生成、list 里每本书都要查，读一次缓存起来。
-    states: JsonCache<generate::State>,
-    sources_json: JsonCache<sources::Sources>,
-    /// 本进程里核对过哈希的原件：id → (路径, 大小与修改时间)。多台设备生成同一本书时不重算哈希。
-    verified: RefCell<HashMap<String, Verified>>,
-    /// 联网查书目用的 HTTP（节流、离线状态跨书共用）。
+    /// 记录文件的读缓存、锁的状态（整个进程）。
+    records: Records,
+    /// 按内容记住的事实：核对过的原件、书里有没有简介标签、是不是漫画（整个进程）。
+    facts: ContentFacts,
+    /// 设备在哪找、连上的设备（跨轮保留，[`Library::refresh_devices`] 每轮核一次）。
+    devices: Devices,
+    /// 生成过程中的临时状态：中间文件、传输中占着的文件名（一轮生成 / 一件传输）。
+    build: BuildCtx,
+    /// 联网查书目用的 HTTP（节流、离线状态跨书共用；整个进程，第一次用时建）。
     net: OnceCell<net::Net>,
-    /// 与模式无关的中间文件（见 [`generate::PreparedInput`]），按书留着：同一本书接着给别的模式生成时直接用。
-    prepared: RefCell<Vec<generate::PreparedInput>>,
-    /// 内容哈希 → 书里有没有简介、标签（早期条目 meta.json 里没存的，见 `Library::own_dc_of`）。
-    own_dc: RefCell<HashMap<String, OwnDc>>,
-    /// 内容哈希 → 是不是漫画（早期条目 meta.json 里没存的；指纹分文字书、漫画，profile 给漫画另配格式时也要用）。
-    comic: RefCell<HashMap<String, bool>>,
-    /// 正在传、还没记进生成记录的新产物：设备上的路径 → 书 id（同一轮里别的书不选这个文件名，见 `Library::prepare_file`）。
-    reserved: RefCell<HashMap<PathBuf, String>>,
-    /// 设备在哪找（见 [`deliver::DeviceEnv`]）。
-    device_env: DeviceEnv,
-    /// 这一轮连上的设备：模式 id → 送到哪，或没接上的原因（见 [`Library::refresh_devices`]）。
-    targets: RefCell<HashMap<String, std::rc::Rc<Result<deliver::Target, String>>>>,
 }
-
-/// 核对过的原件：路径，和核对时的大小、修改时间。
-type Verified = (String, (u64, u64));
 
 pub enum Added {
     New(Meta),
@@ -301,62 +291,34 @@ impl Library {
         Ok(Library {
             root,
             registry,
-            locked: Cell::new(false),
-            cleaned: Cell::new(false),
-            states: JsonCache::new(),
-            sources_json: JsonCache::new(),
-            verified: RefCell::new(HashMap::new()),
+            records: Records::new(),
+            facts: ContentFacts::default(),
+            devices: Devices::new(DeviceEnv::from_env()),
+            build: BuildCtx::default(),
             net: OnceCell::new(),
-            prepared: RefCell::default(),
-            own_dc: RefCell::new(HashMap::new()),
-            comic: RefCell::new(HashMap::new()),
-            reserved: RefCell::default(),
-            device_env: DeviceEnv::from_env(),
-            targets: RefCell::default(),
         })
     }
 
     /// 改设备在哪找（测试、特殊环境；缺省从环境变量读，见 [`DeviceEnv::from_env`]）。
     pub fn set_device_env(&mut self, env: DeviceEnv) {
-        self.device_env = env;
-        self.targets.borrow_mut().clear();
+        self.devices.set_env(env);
     }
 
     /// 重新看设备接没接上（`sync --watch` 每轮调一次）：MTP 设备、没接上的下次用到时重新看；到 Move 的 SSH 隧道还通就接着用
     /// （不每轮重连），断了才重连。返回连着、这次发现断了的 Move（模式 id）：上一轮跟它打交道出的错多半是掉线，可以重试。
     pub fn refresh_devices(&self) -> Vec<String> {
-        let mut dropped = Vec::new();
-        self.targets.borrow_mut().retain(|id, t| match &**t {
-            Ok(deliver::Target::Xochitl(x)) => {
-                let alive = x.alive();
-                if alive {
-                    x.forget_presence();
-                } else {
-                    dropped.push(id.clone());
-                }
-                alive
-            }
-            _ => false,
-        });
-        dropped
+        self.devices.refresh()
     }
 
     /// 这个模式的产物送到哪：设备接上了（或产物放电脑上）`Ok`，没接上 `Err(原因)`。一轮里只连一次。
-    pub(crate) fn target(&self, p: &Profile) -> std::rc::Rc<Result<deliver::Target, String>> {
-        if let Some(t) = self.targets.borrow().get(&p.id) {
-            return t.clone();
-        }
-        let t = std::rc::Rc::new(deliver::connect(&self.device_env, p));
-        self.targets.borrow_mut().insert(p.id.clone(), t.clone());
-        t
+    pub(crate) fn target(&self, p: &Profile) -> session::Connection {
+        self.devices.target(p)
     }
 
     /// 设备接没接上（`sync` 开头报一次）：`Ok(Some(说明))` 接上了，`Ok(None)` 产物放电脑上，`Err(原因)` 没接上。
     pub fn device_status(&self, p: &Profile) -> Result<Option<String>, String> {
         match &*self.target(p) {
-            Ok(deliver::Target::Local) => Ok(None),
-            Ok(deliver::Target::Dir { root }) => Ok(Some(root.display().to_string())),
-            Ok(deliver::Target::Xochitl(x)) => Ok(Some(format!("xochitl（经 {}）", x.host))),
+            Ok(t) => Ok(t.describe()),
             Err(e) => Err(e.clone()),
         }
     }
@@ -395,9 +357,9 @@ impl Library {
     /// 本进程第一次拿到锁时，顺带清理进程被杀时留下的临时文件和目录（`.tmp-*`）。
     /// 书库的记录文件读不出来时拒绝加锁（见 [`fsutil::check_json`]）。
     pub fn lock(&self) -> Result<Lock<'_>, String> {
-        let l = fsutil::lock(&self.root, &self.locked)?;
+        let l = fsutil::lock(&self.root, &self.records.locked)?;
         self.check_records()?;
-        if !self.cleaned.replace(true) {
+        if !self.records.cleaned.replace(true) {
             self.clean_leftovers();
         }
         Ok(l)
@@ -466,7 +428,7 @@ impl Library {
                 changed = true;
             }
         }
-        if changed && self.locked.get() {
+        if changed && self.records.locked.get() {
             let _ = self.save_meta(&m); // 写不回也不影响这次使用，下次再补
         }
         Some(m)
@@ -481,7 +443,7 @@ impl Library {
         let result = (|| {
             // 各文件落盘后再改名（断电后不会出现 0 字节的 meta.json）
             for (name, data) in files {
-                fsutil::write_atomic(&tmp.join(name), data)?;
+                fsutil::write_atomic_cleanable(&tmp.join(name), data)?;
             }
             fsutil::write_json(&tmp.join("meta.json"), meta)?;
             // 同 id 的目录还在但 meta 读不出来（写坏了）：内容由 id 决定，用这次的新条目替换
@@ -679,15 +641,15 @@ impl Library {
     pub(crate) fn verified_original(&self, m: &Meta) -> Result<PathBuf, String> {
         let path = PathBuf::from(&m.source_path);
         let st = file_stat(&path).ok_or_else(|| format!("原件不在了：{}（移动过的话 booklib sync 或重新 add 新位置；不要了就 remove）", path.display()))?;
-        if st == (m.source_size, m.source_mtime_ns) || self.verified.borrow().get(&m.id).is_some_and(|(p, s)| *p == m.source_path && *s == st) {
+        if st == (m.source_size, m.source_mtime_ns) || self.facts.verified(&m.id, &m.source_path, st) {
             return Ok(path);
         }
         if sha256_file(&path)? != m.source_sha256 {
             return Err(format!("原件改过了：{}（内容和入库时不同。booklib sync 或重新 add 入库新版本）", path.display()));
         }
-        self.verified.borrow_mut().insert(m.id.clone(), (m.source_path.clone(), st));
+        self.facts.note_verified(&m.id, &m.source_path, st);
         // 不持锁（`list` 经 `is_comic` 走到这里）时只记在本进程里，不写书库
-        if !self.locked.get() {
+        if !self.records.locked.get() {
             return Ok(path);
         }
         // 从书库重读再改：调用方手里的 `m` 可能是旧的（比如之后 meta 找来了封面）
@@ -812,7 +774,7 @@ impl Library {
         std::fs::rename(&dir, &doomed).map_err(|e| format!("删 {}: {e}", dir.display()))?;
         let _ = fsutil::sync_parent(&dir);
         let _ = std::fs::remove_dir_all(&doomed);
-        self.verified.borrow_mut().remove(id);
+        self.facts.forget(id);
         Ok(title)
     }
 }
