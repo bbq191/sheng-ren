@@ -1,9 +1,12 @@
-"""compare.py、tocchk.py 共用：回归目录的配对、OPF 与 spine 解析。"""
-import html
+"""compare.py、tocchk.py、kfx/pair.py 共用：回归目录的配对、OPF 与 spine 解析。"""
 import os
 import posixpath
 import re
+import sys
 from urllib.parse import unquote
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from toollib import attr, opf_path  # noqa: E402,F401  tocchk 从这里拿 attr；OPF 定位和 kfx/ 的脚本共用一份
 
 
 def index(d):
@@ -29,17 +32,6 @@ def pairs(old, new):
         return out + [(None, n) for n in epubs(new) if n not in paired]
     have, had = set(epubs(new)), set(epubs(old))
     return [(n, n if n in have else None) for n in epubs(old)] + [(None, n) for n in epubs(new) if n not in had]
-
-
-def attr(tag, name):
-    """标签里某个属性的值（单双引号都认，还原字符引用）；没有时 None。"""
-    m = re.search(r'(?:^|\s)' + name + r'\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', tag)
-    return None if not m else html.unescape(m.group(1) if m.group(1) is not None else m.group(2))
-
-
-def opf_path(z):
-    c = z.read('META-INF/container.xml').decode('utf-8', 'replace')
-    return re.search(r'full-path\s*=\s*["\']([^"\']+)', c).group(1)
 
 
 def manifest(z):

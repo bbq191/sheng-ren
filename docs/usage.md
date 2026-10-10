@@ -304,7 +304,7 @@ Move 上的漫画是按页边距 1 排的（左右离屏幕 1px），但 xochitl
 ![Move 上的漫画怎么设成页边距 1](img/comic-margins.svg)
 
 ```sh
-xochitl/comic-margins.sh            # 列出要登记的漫画（USB 连着；Wi-Fi 用 --host=root@<Move 的 IP>）
+xochitl/comic-margins.sh            # 列出要登记的漫画（按 profile [deliver] 的 hosts 依次试：USB 先、Wi-Fi 后；别的地址用 --host=root@<Move 的 IP> 或环境变量 MOVE_HOST）
 xochitl/comic-margins.sh --write    # 登记；然后在 Move 上打开这些书，约 2 秒后页边距变成 1
 ```
 

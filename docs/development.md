@@ -134,7 +134,7 @@ done
   | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | `bookconv::uastyle` |
   | KFX 写出器里跳引号、配括号（CSS 字符串遇换行结束） | `bookconv::cascade`（`kfx::css`）的 `scan_css` |
-  | Python 工具：命令行参数；回归目录配对、OPF/spine 解析；读 KFX | `tools/toollib.py`；`tools/regress/regresslib.py`（compare、tocchk、pair 共用）；`tools/kfx/kfx.py` 的 `load` 调 `kfx-dump --json`（Python 不再自己解 Ion，2026-10-09） |
+  | Python 工具：命令行参数；EPUB 属性（单双引号）、OPF 定位；回归目录配对、spine 解析；读 KFX、走 storyline；EPUB 文字块的样式 | `tools/toollib.py`（`cli_args`/`cli_opts`、`attr`、`opf_path`，全部脚本共用）；`tools/regress/regresslib.py`（compare、tocchk、pair 共用）；`tools/kfx/kfx.py` 的 `load` 调 `kfx-dump --json`（Python 不再自己解 Ion，2026-10-09），`by_type`/`pools`/`reading_order`/`text_nodes` 按阅读顺序走 storyline（pair、s2kcmp、tree 共用，2026-10-10）；样式用 `epub-to-kfx --styles`（s2kdev），不在 Python 里算 CSS |
 - **不可信输入不能让进程崩溃**：书的字节全是外来数据，数值相加用 `checked_add`、切片用 `get`；图片解码器 panic 由 `imgopt::guard` 兜住。**读外来数据设上限，超过就报错、不截断照用**（读用 `util::read_capped`）：
   - zip 条目解压 `epubzip::MAX_ENTRY_BYTES`（256MB，EPUB 与 CBZ 共用）；
   - 远程图下载 `netimg::MAX_IMAGE_BYTES`（20MB，超过算抓不到）；
