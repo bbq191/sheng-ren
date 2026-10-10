@@ -127,7 +127,9 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   相同的字体原样拷压缩数据（不再解压重压）；GBK 等编码的 OPF 先转 UTF-8 再补封面声明（以前书名作者被写成替换字符）；
 ///   取文字认全部 HTML 命名实体（目录里不再出现字面的 `&emsp;`）；目录条数按 nav/NCX 条目算、不看扩展名；按 HTML5 重新解析前去掉
 ///   XML 声明和 CDATA；NCX 补空的 `dtb:uid`；内容是 UTF-8、声明是别的编码时改声明；行内 `style` 的字符引用先还原；`<P>`、`</body >`。
-pub const OPTIMIZE_VERSION: &str = "54";
+/// - 55（2026-10-10 审计）：清洗层判断选择器前一律去掉开头的 `@charset`/`@import` 语句（`wash::rule_selector`）——样式表开头有
+///   `@charset` 时，图注宽度（`capfit`）、整页背景（`bgfit`）、章尾去边距、首段顶格的类以前漏看第一条规则；只修复的内置模式不走这些。
+pub const OPTIMIZE_VERSION: &str = "55";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -136,7 +138,8 @@ pub const OPTIMIZE_VERSION: &str = "54";
 /// 历史：
 /// - c52（2026-10-08）：从 `OPTIMIZE_VERSION` 分出来，行为不变。
 /// - c53（2026-10-09，全系统审计）：优化标记不再写版本号；两路共用的清洗层修复（GBK 的 OPF 先转码等，见 v54）。
-pub const COMIC_VERSION: &str = "53";
+/// - c54（2026-10-10 审计）：两路共用的清洗层修复（样式表开头的 `@charset`，见 v55）。
+pub const COMIC_VERSION: &str = "54";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -261,7 +264,7 @@ impl OptimizeOpts {
         OptimizeOpts {
             grayscale: !p.color,
             wash: Some({
-                let mut w = crate::wash::WashOpts { css_rgba: p.css_rgba, ..Default::default() };
+                let mut w = crate::wash::WashOpts { css_rgba: p.css_rgba, media: Some(crate::cascade::MediaEnv::for_format(p, p.format())), ..Default::default() };
                 if p.background_images {
                     // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
                     // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`

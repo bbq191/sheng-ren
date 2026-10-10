@@ -146,11 +146,6 @@ impl TextCounts {
         t
     }
 
-    /// 按字数（不算空白）加权的众数，字数一样多的取小的（结果和遍历顺序无关）。
-    fn mode(count: &HashMap<i64, usize>) -> Option<f64> {
-        count.iter().max_by_key(|&(&k, &n)| (n, std::cmp::Reverse(k))).map(|(&k, _)| k as f64 / 1000.0)
-    }
-
     /// 正文字体（字数最多的那个，小写），写成 `default`：没有嵌入时 Kindle 遇到不认识的字体名会换成别的字体，和没写字体的表格、
     /// 阅读器设置里选的字体都对不上（《啸风山庄》正文写着没嵌入的「AR MingU30 DemiBold」，2026-10-05 真机）。
     /// 正文本来就该用阅读器的字体（用户定的字体规矩，见 typesetting.md）。
@@ -177,13 +172,13 @@ fn embedded_font_faces(book: &Loaded) -> HashSet<String> {
 /// （《啸风山庄》正文 `font-size:1.167em` 不写字号、1.083em 的写 0.928；《疯探》正文 1.25em，没写字号的容器写 0.8，2026-10-08）。
 /// 算出来不在 0.5–3 之间的不信，用 1。
 fn base_font_size(t: &TextCounts) -> f64 {
-    TextCounts::mode(&t.font_size).filter(|v| (0.5..=3.0).contains(v)).unwrap_or(1.0)
+    crate::css::body_font_size(&t.font_size)
 }
 
 /// 全书正文的行高（元素字号的倍数）：所有文字块按字数加权，最多的那个行高；没写行高的按 normal（1.2）。
 /// Send to Kindle 把它当成阅读器行距设置的 1.0（《绍宋》正文 `line-height:1.5em`）。算出来不在 1–3 之间的不信，用 1.2。
 fn base_line_height(t: &TextCounts) -> f64 {
-    TextCounts::mode(&t.line_height).filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
+    crate::css::weighted_mode(&t.line_height).filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
 }
 
 /// 一个文字块一行（见 [`epub_text_styles`]）。

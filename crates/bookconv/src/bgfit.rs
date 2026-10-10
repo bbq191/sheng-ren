@@ -103,7 +103,7 @@ pub fn plan(entries: &[crate::epubzip::Entry]) -> HashMap<String, BgFit> {
 /// 样式表里每条规则的 `url()`：整页背景的记下意图，别的（`@font-face` 里的字体也在内，反正不是图）记成拿不准。
 fn scan_css(css: &str, base: &str, notes: &mut Vec<(String, Option<BgFit>)>) {
     for c in crate::wash::css_rule_re().captures_iter(css) {
-        let sel = crate::wash::strip_css_comments(&c[1]);
+        let sel = crate::wash::rule_selector(&c[1]);
         let decls = crate::html::css_decls(&c[2]);
         let fit = rule_fit(&sel, &decls);
         for d in &decls {

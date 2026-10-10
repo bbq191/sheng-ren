@@ -956,30 +956,15 @@ pub(super) fn parse_docs(book: &Loaded, media: Option<crate::css::MediaEnv>, fai
     let sheets: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::css::Rules>>> = Default::default();
     let docs: Vec<(usize, &bookconv::epubbook::Doc)> = book.docs.iter().enumerate().collect();
     let parse_blocks = |html: &Html, doc: &bookconv::epubbook::Doc| -> (Option<String>, Vec<Block>) {
-        let mut sheet = Sheet::default();
-        let mut order = 0;
-        for el in html.select(&scraper::Selector::parse("link, style").unwrap_or_else(|_| unreachable!())) {
-            // `<link>`/`<style>` 的 `media` 属性和 `@media` 同一口径
-            if el.value().attr("media").is_some_and(|m| !crate::css::media_ok(m, media.as_ref())) {
-                continue;
-            }
-            if el.value().name() == "style" {
-                order = sheet.add_at(&el.text().collect::<String>(), order, &doc.path, media.as_ref());
-            } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
-                if let Some(h) = el.value().attr("href") {
-                    let path = resolve_link(&doc.path, h).0;
-                    if let Some(c) = css.get(path.as_str()) {
-                        let cached = sheets.lock().unwrap_or_else(|e| e.into_inner()).get(&path).cloned();
-                        // 没解析过的在锁外解析（几个线程同时碰上同一份时各解析一次，结果一样，留先放进去的那份）
-                        let rules = cached.unwrap_or_else(|| {
-                            let r = crate::css::Rules::parse(c, &path, media.as_ref());
-                            sheets.lock().unwrap_or_else(|e| e.into_inner()).entry(path).or_insert(r).clone()
-                        });
-                        order = sheet.add_rules(rules, order);
-                    }
-                }
-            }
-        }
+        let sheet = Sheet::for_doc(html, &doc.path, media.as_ref(), |path| {
+            let c = css.get(path)?;
+            let cached = sheets.lock().unwrap_or_else(|e| e.into_inner()).get(path).cloned();
+            // 没解析过的在锁外解析（几个线程同时碰上同一份时各解析一次，结果一样，留先放进去的那份）
+            Some(cached.unwrap_or_else(|| {
+                let r = crate::css::Rules::parse(c, path, media.as_ref());
+                sheets.lock().unwrap_or_else(|e| e.into_inner()).entry(path.to_string()).or_insert(r).clone()
+            }))
+        });
         let root = html.root_element();
         let lang = lang_attr(&root).map(str::to_string).or_else(|| book_lang.clone());
         let d = Doc { path: &doc.path, sheet, lang: lang.clone(), pending: Default::default(), gap: Default::default(), links: Default::default() };

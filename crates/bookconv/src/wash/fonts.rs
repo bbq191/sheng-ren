@@ -62,8 +62,7 @@ type Pairs = Vec<(String, String)>;
 fn css_rules(css: &str) -> (Pairs, Pairs) {
     let (mut rules, mut faces) = (Vec::new(), Vec::new());
     for c in css_rule_re().captures_iter(css) {
-        let (_, sel) = split_leading_statements(&c[1]);
-        let sel = strip_css_comments(sel);
+        let sel = rule_selector(&c[1]);
         let sel = sel.trim();
         if sel.starts_with("@font-face") {
             let fam = html::css_decls(&c[2]).iter().find(|d| d.prop.eq_ignore_ascii_case("font-family")).and_then(|d| norm_family(d.value));

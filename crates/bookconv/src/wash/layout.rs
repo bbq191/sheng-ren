@@ -85,7 +85,7 @@ impl Drawn {
         let elem_re = ELEM.get_or_init(|| Regex::new(r#"(?:^|[\s,>+~])([A-Za-z][A-Za-z0-9]*)"#).unwrap());
         let add_css = |css: &str, d: &mut Drawn| {
             for c in css_rule_re().captures_iter(css) {
-                let sel = strip_css_comments(&c[1]);
+                let sel = rule_selector(&c[1]);
                 let pseudo = sel.contains(":before") || sel.contains(":after");
                 if !html::css_decls(&c[2]).iter().any(|x| decl_draws(x.prop, x.value, pseudo)) {
                     continue;

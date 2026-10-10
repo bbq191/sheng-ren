@@ -66,7 +66,9 @@ pub use self::encoding::transcode_entries;
 /// - 3（2026-10-09）：spine 里标了 `linear="no"` 的目录页拿掉（`drop_nonlinear_nav`；《绍宋》）。
 /// - 4（2026-10-09 审计）：行内 `style` 里的字符引用先还原再改（`font-family:&quot;宋体&quot;` 以前认不出是正文字体、声明被 `;` 切碎）。
 /// - 5（2026-10-10）：字号按全书正文字号归一（`kindle_rules::font_scale`；《消失的爱人》《啸风山庄》《疯探》，别的书逐字节不变）。
-pub const KINDLE_RULES_VERSION: &str = "5";
+/// - 6（2026-10-10 审计）：统计正文字号时 `@media`、`<link media>` 按阅读模式的阅读范围、屏幕求（`WashOpts::media`，同 KFX 写出器；
+///   以前特性条件一律不成立），`font` 简写里的字号也算（层叠展开简写）；指纹 `u` 段带上屏幕。测试书掌阅、Move 逐字节不变。
+pub const KINDLE_RULES_VERSION: &str = "6";
 pub use self::dead_refs::font_face_re;
 pub use self::css::filter_css;
 #[cfg(test)]
@@ -87,7 +89,7 @@ use self::ncx_fix::*;
 use self::opf::{find_opf, opf_book_title, opf_unique_identifier};
 use self::chapters::chapters_into_toc;
 pub(crate) use self::chapters::is_toc_like_page;
-pub(crate) use self::css::{css_rule_re, strip_css_comments};
+pub(crate) use self::css::{css_rule_re, rule_selector, strip_css_comments};
 pub(crate) use self::toc::name_index;
 pub(crate) use self::kindle_rules::fmt_num;
 use self::toc::*;
@@ -133,11 +135,14 @@ pub struct WashOpts {
     /// 只修复时照 Send to Kindle 的规则统一（profile `kindle_rules`）：标签缺省样式 `eink-ua.css`（[`crate::uastyle::ua_css`]），
     /// 正文字体、body 左右边距、文字对比度（`kindle_rules.rs`）。
     pub kindle_rules: bool,
+    /// `kindle_rules` 统计正文字号时求 `@media`、`<link media>` 用的环境（阅读模式的产物阅读范围、屏幕、黑白彩色，
+    /// [`crate::cascade::MediaEnv::for_format`]）；`None`＝求值不了的特性条件一律不成立。
+    pub media: Option<crate::cascade::MediaEnv>,
 }
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, repair_only: false, kindle_rules: false }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, repair_only: false, kindle_rules: false, media: None }
     }
 }
 
@@ -372,7 +377,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     });
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
     if opts.kindle_rules {
-        let font_scale = kindle_rules::apply(entries, rep);
+        let font_scale = kindle_rules::apply(entries, rep, opts.media.as_ref());
         add_ua_css(entries, rep, font_scale);
         drop_nonlinear_nav(entries);
     }

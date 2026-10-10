@@ -194,7 +194,7 @@ impl Ctx {
     /// 收一份样式表（或 `<style>` 的内容）里写了宽度、高度的规则。
     pub fn add_css(&mut self, css: &str) {
         for c in crate::wash::css_rule_re().captures_iter(css) {
-            let sel = crate::wash::strip_css_comments(&c[1]);
+            let sel = crate::wash::rule_selector(&c[1]);
             if sel.trim_start().starts_with('@') {
                 continue;
             }
@@ -468,6 +468,8 @@ mod tests {
         assert!(run(&fig(r#"<img src="../Images/tall.jpg" width="95%"/>"#)).expect("改了").contains(r#"width="95%" style="width:57%""#));
         assert!(run(&fig(r#"<img src="../Images/tall.jpg" width="600"/>"#)).is_none());
         assert!(run(&fig(r#"<img src="../Images/tall.jpg" height="900"/>"#)).is_none());
+        // 样式表开头的 `@charset` 和第一条规则被正则抓在一起：第一条规则照样收（以前被当成 at 规则跳过）
+        assert!(run_css(&fig(r#"<img class="alone40" src="../Images/tall.jpg"/>"#), "@charset \"utf-8\";\n.alone40{width:40%}").is_none());
     }
 
     #[test]
