@@ -1486,6 +1486,20 @@ impl Computed {
         let mut c = parent.reset_box();
         c.on_background = parent.on_background || parent.background.is_some() || parent.bg_image.is_some();
         c.on_image = parent.on_image || parent.bg_image.is_some();
+        // 各组属性按固定顺序算（后面的组要用前面算好的值：字号先于行高、字间距的换算，外边距在标签缺省值之后覆盖）。
+        Computed::tag_defaults(&mut c, parent, tag);
+        Computed::font_props(&mut c, parent, decls);
+        Computed::text_layout_props(&mut c, parent, decls);
+        Computed::text_style_props(&mut c, decls, tag);
+        Computed::list_table_props(&mut c, decls);
+        Computed::box_props(&mut c, parent, decls);
+        Computed::background_props(&mut c, parent, decls);
+        c
+    }
+
+    /// 标签的缺省样式（UA 样式表）：粗体、斜体、标题字号与外边距、段落等块的上下外边距、引文的左右缩进。
+    /// 要在读声明之前：写了的声明覆盖这些缺省值。
+    fn tag_defaults(c: &mut Computed, parent: &Computed, tag: &str) {
         // 标签的缺省样式（阅读器的 UA 样式表里有的）。
         match tag {
             "b" | "strong" => {
@@ -1538,6 +1552,10 @@ impl Computed {
             c.margin[1] = side;
             c.margin[3] = side;
         }
+    }
+
+    /// 字体：字号、字体族、字重、斜体。字号最先算——后面行高、字间距的长度换算都按本元素字号。
+    fn font_props(c: &mut Computed, parent: &Computed, decls: &HashMap<String, String>) {
         let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("font-size") {
             let v = v.trim().to_ascii_lowercase();
@@ -1583,6 +1601,11 @@ impl Computed {
         if let Some(v) = get("font-style") {
             c.italic = matches!(v.trim().to_ascii_lowercase().as_str(), "italic" | "oblique");
         }
+    }
+
+    /// 段落排版：对齐、首行缩进、行高（长度按上面算好的本元素字号换算；没写行高的继承父元素的绝对行高）。
+    fn text_layout_props(c: &mut Computed, parent: &Computed, decls: &HashMap<String, String>) {
+        let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("text-align") {
             let v = v.trim().to_ascii_lowercase();
             if ["left", "right", "center", "justify", "start", "end"].contains(&v.as_str()) {
@@ -1611,6 +1634,11 @@ impl Computed {
         } else if let Some(a) = parent.line_height_abs {
             c.line_height = Some(a / c.font_size);
         }
+    }
+
+    /// 文字修饰：颜色、上下标（表格单元格里是纵向对齐）、装饰线、小型大写、字间距、空白与断行。
+    fn text_style_props(c: &mut Computed, decls: &HashMap<String, String>, tag: &str) {
+        let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("color") {
             if let Some(col) = parse_color(v) {
                 c.color = Some(col);
@@ -1653,6 +1681,11 @@ impl Computed {
         if let Some(v) = get("word-break") {
             c.break_all = v.trim().eq_ignore_ascii_case("break-all");
         }
+    }
+
+    /// 列表与表格：列表符号与位置、边框合并与间距。
+    fn list_table_props(c: &mut Computed, decls: &HashMap<String, String>) {
+        let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("list-style-type") {
             c.list_style = Some(v.trim().to_ascii_lowercase());
         }
@@ -1665,6 +1698,11 @@ impl Computed {
         if let Some(v) = get("border-spacing") {
             c.border_spacing = v.split_whitespace().next().and_then(parse_len);
         }
+    }
+
+    /// 盒模型：边框、圆角、宽高、display、外边距（写了的覆盖标签缺省值）、内边距，以及是否在左右有框的盒子里（`in_hbox`）。
+    fn box_props(c: &mut Computed, parent: &Computed, decls: &HashMap<String, String>) {
+        let get = |k: &str| decls.get(k).map(String::as_str);
         // 属性名写成常量（每个元素都要查，逐个 format! 很费）；四边顺序：上、右、下、左。
         const BORDER: [[&str; 3]; 4] = [
             ["border-top-style", "border-top-width", "border-top-color"],
@@ -1705,6 +1743,11 @@ impl Computed {
         }
         let nonzero = |l: &Option<Len>| l.is_some_and(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if n == 0.0));
         c.in_hbox = parent.in_hbox || [1, 3].iter().any(|&i| nonzero(&c.margin[i]) || nonzero(&c.padding[i]) || c.border[i].is_some());
+    }
+
+    /// 背景与阴影：背景色（及它垫在白底上的颜色 `backdrop`，往下继承）、阴影、背景图及其各项属性。
+    fn background_props(c: &mut Computed, parent: &Computed, decls: &HashMap<String, String>) {
+        let get = |k: &str| decls.get(k).map(String::as_str);
         // 不透明的纯白背景不算（Send to Kindle 同样：《疯探》`background-color:#ffffff` 的简介、目录页不出容器）
         c.background = get("background-color").and_then(parse_color).filter(|c| c >> 24 != 0 && *c != 0xFFFF_FFFF);
         c.backdrop = c.background.map(over_white).or(parent.backdrop);
@@ -1718,7 +1761,6 @@ impl Computed {
         c.bg_position = get("background-position").map(|v| parse_bg_position(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
         c.bg_size = get("background-size").map(|v| parse_bg_size(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
         c.bg_cover = get("background-size").is_some_and(|v| v.trim().eq_ignore_ascii_case("cover"));
-        c
     }
 }
 
