@@ -410,7 +410,8 @@
         let t = tempfile::tempdir().unwrap();
         let output_path = t.path().join("out.epub");
         let err = optimize_epub_file_streaming(&t.path().join("does-not-exist.epub"), &output_path, &OptimizeOpts::new(crate::imgopt::test_screen()), |_, _| {}).unwrap_err();
-        assert!(err.contains("打开输入失败"), "{err}");
+        assert!(matches!(err, BookError::Io { .. }), "{err:?}");
+        assert!(err.to_string().starts_with("打开输入失败: "), "{err}");
         assert!(!output_path.exists(), "输入都打不开，不该产生任何输出文件");
     }
 
@@ -1124,7 +1125,7 @@
         }
     }
 
-    /// 取消：`cancel()` 为真时返回以 `CANCELLED_MSG` 开头的错误，已建出的输出文件删掉；第几次问到时取消都一样。
+    /// 取消：`cancel()` 为真时返回 `BookError::Cancelled`（文字就是 `CANCELLED_MSG`），已建出的输出文件删掉；第几次问到时取消都一样。
     #[test]
     fn cancel_stops_and_leaves_no_output() {
         let (epub, _) = bg_book();
@@ -1136,7 +1137,8 @@
             let n = std::cell::Cell::new(0);
             let cancel = || { n.set(n.get() + 1); n.get() > after };
             let err = optimize_epub_file_streaming_with_cancel(&input, &output, &opts, |_, _| {}, &cancel).unwrap_err();
-            assert!(err.starts_with(CANCELLED_MSG), "{err}");
+            assert!(err.is_cancelled(), "{err:?}");
+            assert_eq!(err.to_string(), CANCELLED_MSG);
             assert!(!output.exists(), "第 {after} 次之后取消：不留半成品");
         }
         // 还没开始写就取消：不碰调用方原有的文件

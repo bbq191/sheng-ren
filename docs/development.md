@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-10：554 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-10：556 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -126,6 +126,7 @@ done
   | 并行线程数（图片 worker、`par_map` 共用；CPU 核数，封顶 `MAX_WORKERS` 16） | `imgpool::worker_count()` |
   | 选择器最后一段（标签、类、有没有 id/伪类） | `cascade::last_compound`、`cascade::compound_tag_classes`（2026-10-08 审计从 5 处收拢，2026-10-10 挪进 `cascade`） |
   | 非 UTF-8 的 CSS 按单字节读写 | `util::latin1_decode` / `latin1_encode` |
+  | 内容层报错（要分清取消、超上限、损坏、IO、DRM 的；别再拿错误串开头判断） | `bookconv::BookError`（`BookError::io`/`zip` 带说明，`context` 加前缀不改变体；文字和以前的错误串逐字相同） |
   | 颜色解析、对比度、半透明叠色（优化器和 KFX 写出器共用） | `bookconv::color`（`ensure_contrast`、`over`） |
   | 改 `style` 属性（字符引用先还原、改完再转义） | `html::edit_style_attrs`（别直接拿 `edit_attrs` 的原文去切声明） |
   | 取看得见的文字（认全部 HTML 命名实体） | `html::plain_text`、`html::has_visible`、`html::unescape_entities` |

@@ -510,32 +510,87 @@ fn is_w3c_utc(v: &str) -> bool {
 }
 
 /// OPF 升级到 EPUB 3（见模块说明）。什么都不用改 → `None`。
+///
+/// 分步（顺序不能换：新起的 id 按先后避让，`add_meta` 按先后拼接）：① EPUB 2 的 `opf:` 属性改 refines、多余的 dc:date
+/// （[`OpfEdit::opf2_attrs_to_refines`]）→ ② unique-identifier（[`OpfEdit::fix_unique_identifier`]）→ ③ 补 dc:language →
+/// ④ dcterms:modified（[`OpfEdit::fix_modified`]）→ 元素的改动写成替换（[`OpfEdit::edit_elements`]）→ ⑤ package 开标签
+/// （[`upgraded_package_tag`]）→ 应用（[`apply_opf_edits`]）。
 pub(crate) fn upgrade_opf(opf: &str, lang_tag: &str) -> Option<String> {
     let pkg = html::tags(opf).find(|t| t.is_start() && opf::is_local(t.name, "package"))?;
     let pkg_tag = &opf[pkg.start..pkg.end];
     let was3 = html::attr_value(pkg_tag, "version").is_some_and(|v| v.trim().starts_with('3'));
-    let els = metadata_elements(opf);
-    // OPF 里已有的全部 id（新起的 id 不能撞）
-    let mut ids: HashSet<String> = html::tags(opf).filter(|t| t.is_start()).filter_map(|t| html::attr_value(&opf[t.start..t.end], "id").map(str::to_string)).collect();
-    let mut new_id = |base: &str| -> String {
-        let mut n = 1;
-        let mut id = base.to_string();
-        while ids.contains(&id) {
-            n += 1;
-            id = format!("{base}-{n}");
-        }
-        ids.insert(id.clone());
-        id
-    };
-    let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    let mut add_meta = String::new(); // 插到 </metadata> 前
-    let is_dc = |e: &MetaEl, local: &str| e.name.eq_ignore_ascii_case(&format!("dc:{local}"));
-
+    let mut st = OpfEdit::new(opf);
     // 1. EPUB 2 的 opf: 属性 → <meta refines>；多余的 dc:date → dcterms:date。已经是 3.x 的不动。
-    // 每个元素最终的开标签（后面补 id 时在它上面改）
-    let mut opens: Vec<String> = els.iter().map(|e| opf[e.start..e.open_end].to_string()).collect();
-    let mut dropped: HashSet<usize> = HashSet::new();
     if !was3 {
+        st.opf2_attrs_to_refines();
+    }
+    // 2. unique-identifier 指向一个非空的标识符元素。
+    let new_uid = st.fix_unique_identifier();
+    // 3. 缺 dc:language 就补。
+    if !st.els.iter().any(|e| is_dc(e, "language") && !opf[e.open_end..e.close_start].trim().is_empty()) {
+        st.add_meta.push_str(&format!("<dc:language>{}</dc:language>", xml_escape(lang_tag)));
+    }
+    // 4. dcterms:modified：原书有格式正确的就沿用，格式不对的改成固定值，没有就补。
+    st.fix_modified();
+    st.edit_elements();
+    // 5. package：version、unique-identifier、默认命名空间。
+    let new_pkg = upgraded_package_tag(pkg_tag, pkg.name, was3, new_uid.as_deref());
+    if new_pkg != pkg_tag {
+        st.edits.push((pkg.start, pkg.end, new_pkg));
+    }
+    let OpfEdit { edits, add_meta, .. } = st;
+    if edits.is_empty() && add_meta.is_empty() {
+        return None;
+    }
+    Some(apply_opf_edits(opf, edits, &add_meta))
+}
+
+/// 元素是不是 `dc:{local}`（不分大小写）。
+fn is_dc(e: &MetaEl, local: &str) -> bool {
+    e.name.eq_ignore_ascii_case(&format!("dc:{local}"))
+}
+
+/// [`upgrade_opf`] 各步共用的东西：OPF 原文、metadata 里的元素，以及各步攒下的改动。
+struct OpfEdit<'a> {
+    opf: &'a str,
+    els: Vec<MetaEl<'a>>,
+    /// OPF 里已有的全部 id，连同新起的（新起的 id 不能撞，见 [`new_unique_id`]）。
+    ids: HashSet<String>,
+    /// 每个元素最终的开标签（后面补 id 时在它上面改）。
+    opens: Vec<String>,
+    /// 要删掉的元素（多余的 dc:date）。
+    dropped: HashSet<usize>,
+    /// 对原文的替换：(起, 止, 新文字)。
+    edits: Vec<(usize, usize, String)>,
+    /// 插到 `</metadata>` 前的新元素。
+    add_meta: String,
+}
+
+/// 以 `base` 起一个 `ids` 里没有的 id（`base`、`base-2`、`base-3`……）并登记进 `ids`。
+fn new_unique_id(ids: &mut HashSet<String>, base: &str) -> String {
+    let mut n = 1;
+    let mut id = base.to_string();
+    while ids.contains(&id) {
+        n += 1;
+        id = format!("{base}-{n}");
+    }
+    ids.insert(id.clone());
+    id
+}
+
+impl<'a> OpfEdit<'a> {
+    fn new(opf: &'a str) -> Self {
+        let els = metadata_elements(opf);
+        let ids: HashSet<String> = html::tags(opf).filter(|t| t.is_start()).filter_map(|t| html::attr_value(&opf[t.start..t.end], "id").map(str::to_string)).collect();
+        let opens: Vec<String> = els.iter().map(|e| opf[e.start..e.open_end].to_string()).collect();
+        OpfEdit { opf, els, ids, opens, dropped: HashSet::new(), edits: Vec::new(), add_meta: String::new() }
+    }
+
+    /// 第 1 步（只对 EPUB 2）：dc:date 只留一个（`opf:event="publication"` 的，其次第一个），其余写成 `dcterms:date` 后删掉；
+    /// dc 元素上的 `opf:role`/`opf:file-as`/`opf:scheme` 改写成 `<meta refines>`（元素没有 id 的补一个），`opf:event` 去掉。
+    fn opf2_attrs_to_refines(&mut self) {
+        let opf = self.opf;
+        let OpfEdit { els, ids, opens, dropped, add_meta, .. } = self;
         let dates: Vec<usize> = (0..els.len()).filter(|&i| is_dc(&els[i], "date")).collect();
         let keep_date = dates.iter().copied().find(|&i| html::attr_value(&opens[i], "opf:event").is_some_and(|v| v.eq_ignore_ascii_case("publication"))).or(dates.first().copied());
         for &i in dates.iter().filter(|&&i| Some(i) != keep_date) {
@@ -568,7 +623,7 @@ pub(crate) fn upgrade_opf(opf: &str, lang_tag: &str) -> Option<String> {
                 let id = match html::attr_value(&t, "id").filter(|v| !v.is_empty()) {
                     Some(id) => id.to_string(),
                     None => {
-                        let id = new_id("eink-meta");
+                        let id = new_unique_id(ids, "eink-meta");
                         t = html::set_attr(&t, "id", &id);
                         id
                     }
@@ -581,74 +636,88 @@ pub(crate) fn upgrade_opf(opf: &str, lang_tag: &str) -> Option<String> {
         }
     }
 
-    // 2. unique-identifier 指向一个非空的标识符元素。口径同 `opf::unique_identifier`（NCX 的 dtb:uid 按它对齐）：
-    //    任意命名空间前缀的 `identifier`，id 去空白比，文本字符引用还原、去空白后非空。
-    let idents: Vec<usize> = (0..els.len()).filter(|&i| opf::is_local(els[i].name, "identifier") && !dropped.contains(&i)).collect();
-    let has_text = |i: usize| opf::identifier_text(&opf[els[i].open_end..els[i].close_start]).is_some();
-    let uid_attr = opf::package_unique_identifier(opf);
-    let uid_ok = uid_attr.is_some_and(|u| idents.iter().any(|&i| html::attr_value(&opens[i], "id").map(str::trim) == Some(u) && has_text(i)));
-    let mut new_uid: Option<String> = None;
-    if !uid_ok {
-        match idents.iter().copied().find(|&i| has_text(i)) {
-            Some(i) => {
-                let id = match html::attr_value(&opens[i], "id").map(str::trim).filter(|v| !v.is_empty()) {
-                    Some(id) => id.to_string(),
-                    None => {
-                        let id = new_id("eink-uid");
-                        opens[i] = html::set_attr(&opens[i], "id", &id);
-                        id
-                    }
-                };
-                new_uid = Some(id);
+    /// 第 2 步：unique-identifier 指向一个非空的标识符元素。口径同 `opf::unique_identifier`（NCX 的 dtb:uid 按它对齐）：
+    /// 任意命名空间前缀的 `identifier`，id 去空白比，文本字符引用还原、去空白后非空。已经对的返回 `None`；否则指向第一个
+    /// 非空的标识符（没有 id 的补一个），一个都没有就新写一个，返回 package 要改成的 unique-identifier。
+    fn fix_unique_identifier(&mut self) -> Option<String> {
+        let opf = self.opf;
+        let OpfEdit { els, ids, opens, dropped, add_meta, .. } = self;
+        let idents: Vec<usize> = (0..els.len()).filter(|&i| opf::is_local(els[i].name, "identifier") && !dropped.contains(&i)).collect();
+        let has_text = |i: usize| opf::identifier_text(&opf[els[i].open_end..els[i].close_start]).is_some();
+        let uid_attr = opf::package_unique_identifier(opf);
+        let uid_ok = uid_attr.is_some_and(|u| idents.iter().any(|&i| html::attr_value(&opens[i], "id").map(str::trim) == Some(u) && has_text(i)));
+        let mut new_uid: Option<String> = None;
+        if !uid_ok {
+            match idents.iter().copied().find(|&i| has_text(i)) {
+                Some(i) => {
+                    let id = match html::attr_value(&opens[i], "id").map(str::trim).filter(|v| !v.is_empty()) {
+                        Some(id) => id.to_string(),
+                        None => {
+                            let id = new_unique_id(ids, "eink-uid");
+                            opens[i] = html::set_attr(&opens[i], "id", &id);
+                            id
+                        }
+                    };
+                    new_uid = Some(id);
+                }
+                None => {
+                    let id = new_unique_id(ids, "eink-uid");
+                    add_meta.push_str(&format!(r#"<dc:identifier id="{id}">urn:eink:{:016x}</dc:identifier>"#, crate::util::fnv64(opf.as_bytes())));
+                    new_uid = Some(id);
+                }
             }
-            None => {
-                let id = new_id("eink-uid");
-                add_meta.push_str(&format!(r#"<dc:identifier id="{id}">urn:eink:{:016x}</dc:identifier>"#, crate::util::fnv64(opf.as_bytes())));
-                new_uid = Some(id);
+        }
+        new_uid
+    }
+
+    /// 第 4 步：dcterms:modified——原书有格式正确的就沿用，格式不对的改成固定值，没有就补（只看第一个）。
+    fn fix_modified(&mut self) {
+        let opf = self.opf;
+        let modified: Vec<&MetaEl> = self.els.iter().filter(|e| opf::is_local(e.name, "meta") && html::attr_value(&opf[e.start..e.open_end], "property") == Some("dcterms:modified")).collect();
+        match modified.first() {
+            Some(m) if is_w3c_utc(opf[m.open_end..m.close_start].trim()) => {}
+            Some(m) if m.end > m.open_end => self.edits.push((m.open_end, m.close_start, EPUB3_MODIFIED.to_string())),
+            Some(m) => {
+                // 自闭合的 `<meta property="dcterms:modified"/>`：没有内容，整个换掉。
+                let open = opf[m.start..m.open_end].trim_end_matches('>').trim_end_matches('/').trim_end();
+                self.edits.push((m.start, m.end, format!("{open}>{EPUB3_MODIFIED}</{}>", m.name)));
+            }
+            _ => self.add_meta.push_str(&format!(r#"<meta property="dcterms:modified">{EPUB3_MODIFIED}</meta>"#)),
+        }
+    }
+
+    /// 元素上攒下的改动写成替换：删掉的元素连同后面的空白去掉，开标签改过的换成新的。
+    fn edit_elements(&mut self) {
+        let opf = self.opf;
+        for (i, e) in self.els.iter().enumerate() {
+            if self.dropped.contains(&i) {
+                let ws = opf[e.end..].len() - opf[e.end..].trim_start().len();
+                self.edits.push((e.start, e.end + ws, String::new()));
+            } else if self.opens[i] != opf[e.start..e.open_end] {
+                self.edits.push((e.start, e.open_end, self.opens[i].clone()));
             }
         }
     }
-    // 3. 缺 dc:language 就补。
-    if !els.iter().any(|e| is_dc(e, "language") && !opf[e.open_end..e.close_start].trim().is_empty()) {
-        add_meta.push_str(&format!("<dc:language>{}</dc:language>", xml_escape(lang_tag)));
-    }
-    // 4. dcterms:modified：原书有格式正确的就沿用，格式不对的改成固定值，没有就补。
-    let modified: Vec<&MetaEl> = els.iter().filter(|e| opf::is_local(e.name, "meta") && html::attr_value(&opf[e.start..e.open_end], "property") == Some("dcterms:modified")).collect();
-    match modified.first() {
-        Some(m) if is_w3c_utc(opf[m.open_end..m.close_start].trim()) => {}
-        Some(m) if m.end > m.open_end => edits.push((m.open_end, m.close_start, EPUB3_MODIFIED.to_string())),
-        Some(m) => {
-            // 自闭合的 `<meta property="dcterms:modified"/>`：没有内容，整个换掉。
-            let open = opf[m.start..m.open_end].trim_end_matches('>').trim_end_matches('/').trim_end();
-            edits.push((m.start, m.end, format!("{open}>{EPUB3_MODIFIED}</{}>", m.name)));
-        }
-        _ => add_meta.push_str(&format!(r#"<meta property="dcterms:modified">{EPUB3_MODIFIED}</meta>"#)),
-    }
-    for (i, e) in els.iter().enumerate() {
-        if dropped.contains(&i) {
-            let ws = opf[e.end..].len() - opf[e.end..].trim_start().len();
-            edits.push((e.start, e.end + ws, String::new()));
-        } else if opens[i] != opf[e.start..e.open_end] {
-            edits.push((e.start, e.open_end, opens[i].clone()));
-        }
-    }
-    // 5. package：version、unique-identifier、默认命名空间。
+}
+
+/// 第 5 步：升级后的 package 开标签——EPUB 2 的 version 改 3.0、unique-identifier 换成 `new_uid`（有的话）、
+/// 不带前缀的 `<package>` 补默认命名空间。没改动时和 `pkg_tag` 相同。
+fn upgraded_package_tag(pkg_tag: &str, pkg_name: &str, was3: bool, new_uid: Option<&str>) -> String {
     let mut new_pkg = pkg_tag.to_string();
     if !was3 {
         new_pkg = html::set_attr(&new_pkg, "version", "3.0");
     }
-    if let Some(u) = &new_uid {
+    if let Some(u) = new_uid {
         new_pkg = html::set_attr(&new_pkg, "unique-identifier", u);
     }
-    if pkg.name.eq_ignore_ascii_case("package") && html::attr(&new_pkg, "xmlns").is_none() {
+    if pkg_name.eq_ignore_ascii_case("package") && html::attr(&new_pkg, "xmlns").is_none() {
         new_pkg = html::set_attr(&new_pkg, "xmlns", OPF_NS);
     }
-    if new_pkg != pkg_tag {
-        edits.push((pkg.start, pkg.end, new_pkg));
-    }
-    if edits.is_empty() && add_meta.is_empty() {
-        return None;
-    }
+    new_pkg
+}
+
+/// 把替换应用到 OPF 原文，再把 `add_meta` 插到 `</metadata>` 前。
+fn apply_opf_edits(opf: &str, mut edits: Vec<(usize, usize, String)>, add_meta: &str) -> String {
     edits.sort_by_key(|e| e.0);
     let mut out = html::apply_edits(opf, edits);
     if !add_meta.is_empty() {
@@ -659,9 +728,9 @@ pub(crate) fn upgrade_opf(opf: &str, lang_tag: &str) -> Option<String> {
                 out = format!("{}{tag}{}", &out[..m.start], &out[m.end..]);
             }
         }
-        out = opf::insert_metadata(&out, &add_meta).unwrap_or(out);
+        out = opf::insert_metadata(&out, add_meta).unwrap_or(out);
     }
-    Some(out)
+    out
 }
 
 // ───────────────────────── 导航文档 ─────────────────────────

@@ -11,6 +11,8 @@ use std::io::{Read, Seek, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::BookError;
+
 /// zip 条目（目录项已剔除）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
@@ -56,14 +58,14 @@ pub const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 
 /// 读完一个 zip 条目的全部字节（`declared` = 目录里声明的解压大小，只用来预分配，封顶 `PREALLOC_CAP`）；
 /// 解出来超过 [`MAX_ENTRY_BYTES`] 报错。本模块各读取入口和 CBZ 收页共用。
-pub fn read_all(r: impl Read, declared: u64, name: &str) -> Result<Vec<u8>, String> {
+pub fn read_all(r: impl Read, declared: u64, name: &str) -> Result<Vec<u8>, BookError> {
     read_all_capped(r, declared, name, MAX_ENTRY_BYTES)
 }
 
-fn read_all_capped(r: impl Read, declared: u64, name: &str, cap: u64) -> Result<Vec<u8>, String> {
+fn read_all_capped(r: impl Read, declared: u64, name: &str, cap: u64) -> Result<Vec<u8>, BookError> {
     crate::util::read_capped(r, cap, declared.min(PREALLOC_CAP))
-        .map_err(|e| format!("{name}: {e}"))?
-        .ok_or_else(|| format!("{name}: 解压后超过单个条目上限 {} MB（损坏或恶意的压缩包？）", cap >> 20))
+        .map_err(|e| BookError::io(name, e))?
+        .ok_or_else(|| BookError::LimitExceeded { name: name.to_string(), cap_mb: cap >> 20 })
 }
 
 /// 不压缩的条目选项。
@@ -86,58 +88,58 @@ pub struct EpubWriter<W: Write + Seek> {
 
 impl EpubWriter<std::io::BufWriter<std::fs::File>> {
     /// 建输出文件（带缓冲）并写好 `mimetype`。
-    pub fn create(path: &std::path::Path) -> Result<Self, String> {
-        let f = std::fs::File::create(path).map_err(|e| format!("建输出文件 {} 失败: {e}", path.display()))?;
+    pub fn create(path: &std::path::Path) -> Result<Self, BookError> {
+        let f = std::fs::File::create(path).map_err(|e| BookError::io(format!("建输出文件 {} 失败", path.display()), e))?;
         EpubWriter::new(std::io::BufWriter::new(f))
     }
 }
 
 impl<W: Write + Seek> EpubWriter<W> {
     /// 在 `w` 上开一个 EPUB 并写好 `mimetype`。
-    pub fn new(w: W) -> Result<Self, String> {
+    pub fn new(w: W) -> Result<Self, BookError> {
         let mut me = EpubWriter { zw: ZipWriter::new(w) };
         me.put_with("mimetype", stored(), MIMETYPE)?;
         Ok(me)
     }
 
     /// 写一个条目：图片 STORED，其余 deflate（见类型文档）。不要再写 `mimetype`（建的时候写过了）。
-    pub fn put(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
+    pub fn put(&mut self, name: &str, data: &[u8]) -> Result<(), BookError> {
         let opts = if crate::util::is_image_ext(name) { stored() } else { deflated() };
         self.put_with(name, opts, data)
     }
 
     /// 写一个 STORED 条目（`epub::assemble` 的母版全部不压缩）。
-    pub fn put_stored(&mut self, name: &str, data: &[u8]) -> Result<(), String> {
+    pub fn put_stored(&mut self, name: &str, data: &[u8]) -> Result<(), BookError> {
         self.put_with(name, stored(), data)
     }
 
-    fn put_with(&mut self, name: &str, opts: SimpleFileOptions, data: &[u8]) -> Result<(), String> {
-        self.zw.start_file(name, opts).map_err(|e| e.to_string())?;
-        self.zw.write_all(data).map_err(|e| e.to_string())
+    fn put_with(&mut self, name: &str, opts: SimpleFileOptions, data: &[u8]) -> Result<(), BookError> {
+        self.zw.start_file(name, opts)?;
+        Ok(self.zw.write_all(data)?)
     }
 
     /// 原样拷贝源 zip 的一个条目（压缩数据一个字节不动，不解压不重压）。
-    pub fn raw_copy(&mut self, f: zip::read::ZipFile) -> Result<(), String> {
-        self.zw.raw_copy_file(f).map_err(|e| e.to_string())
+    pub fn raw_copy(&mut self, f: zip::read::ZipFile) -> Result<(), BookError> {
+        Ok(self.zw.raw_copy_file(f)?)
     }
 
     /// 同 [`raw_copy`](EpubWriter::raw_copy)，写成 `name`（清洗时改过名的条目）。
-    pub fn raw_copy_as(&mut self, f: zip::read::ZipFile, name: &str) -> Result<(), String> {
-        self.zw.raw_copy_file_rename(f, name).map_err(|e| e.to_string())
+    pub fn raw_copy_as(&mut self, f: zip::read::ZipFile, name: &str) -> Result<(), BookError> {
+        Ok(self.zw.raw_copy_file_rename(f, name)?)
     }
 
     /// 写一个 [`Precompressed`] 条目：拷它压好的数据，产物和直接 [`put`](EpubWriter::put) 同名同内容的条目逐字节相同。
-    pub fn put_precompressed(&mut self, p: Precompressed) -> Result<(), String> {
-        let mut z = ZipArchive::new(std::io::Cursor::new(p.0)).map_err(|e| format!("预压缩条目: {e}"))?;
-        let f = z.by_index(0).map_err(|e| format!("预压缩条目: {e}"))?;
-        self.zw.raw_copy_file(f).map_err(|e| e.to_string())
+    pub fn put_precompressed(&mut self, p: Precompressed) -> Result<(), BookError> {
+        let mut z = ZipArchive::new(std::io::Cursor::new(p.0)).map_err(|e| BookError::zip("预压缩条目", e))?;
+        let f = z.by_index(0).map_err(|e| BookError::zip("预压缩条目", e))?;
+        Ok(self.zw.raw_copy_file(f)?)
     }
 
     /// 写中央目录并 flush（`finish()` 只保证写完中央目录，底下 `BufWriter` 的缓冲不一定落盘——显式 flush，
     /// 不指望 Drop 的静默兜底，出错会被吞掉）。
-    pub fn finish(self) -> Result<W, String> {
-        let mut w = self.zw.finish().map_err(|e| e.to_string())?;
-        w.flush().map_err(|e| e.to_string())?;
+    pub fn finish(self) -> Result<W, BookError> {
+        let mut w = self.zw.finish()?;
+        w.flush()?;
         Ok(w)
     }
 }
@@ -149,12 +151,12 @@ pub struct Precompressed(Vec<u8>);
 impl Precompressed {
     /// 按 [`EpubWriter::put`] 的选项（按条目名选 STORED 或 deflate）把这一个条目写进内存里的 zip。写进 EPUB 时 zip 库原样拷压好的数据和
     /// CRC、大小，本地头、中央目录的各字段（时间、权限、版本、标志）都和直接写一样，所以产物逐字节相同（测试和真书回归核对过）。
-    pub fn new(name: &str, data: &[u8]) -> Result<Precompressed, String> {
+    pub fn new(name: &str, data: &[u8]) -> Result<Precompressed, BookError> {
         let mut zw = ZipWriter::new(std::io::Cursor::new(Vec::with_capacity(data.len() / 3 + 256)));
         let opts = if crate::util::is_image_ext(name) { stored() } else { deflated() };
-        zw.start_file(name, opts).map_err(|e| e.to_string())?;
-        zw.write_all(data).map_err(|e| e.to_string())?;
-        Ok(Precompressed(zw.finish().map_err(|e| e.to_string())?.into_inner()))
+        zw.start_file(name, opts)?;
+        zw.write_all(data)?;
+        Ok(Precompressed(zw.finish()?.into_inner()))
     }
 }
 
@@ -169,7 +171,7 @@ pub struct Skeleton {
 
 /// 逐个读 zip 条目（目录项剔除，zip 里的顺序）：`keep_bytes(条目名)` 为假的只记名字、`data` 留空占位。
 /// 任一条目读失败整体报错（绝不能静默跳过条目产出残缺 EPUB）。[`read_skeleton`]、[`read_entries`]、质量门共用。
-pub fn read_entries_from<R: Read + Seek>(zip: &mut ZipArchive<R>, keep_bytes: impl Fn(&str) -> bool) -> Result<Vec<Entry>, String> {
+pub fn read_entries_from<R: Read + Seek>(zip: &mut ZipArchive<R>, keep_bytes: impl Fn(&str) -> bool) -> Result<Vec<Entry>, BookError> {
     let mut entries = Vec::with_capacity(zip.len());
     for i in 0..zip.len() {
         if let Some(e) = read_entry(zip, i, &keep_bytes)? {
@@ -180,8 +182,8 @@ pub fn read_entries_from<R: Read + Seek>(zip: &mut ZipArchive<R>, keep_bytes: im
 }
 
 /// 读第 `i` 个 zip 条目（`keep_bytes` 见 [`read_entries_from`]）；目录项 → `Ok(None)`。
-fn read_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, i: usize, keep_bytes: &impl Fn(&str) -> bool) -> Result<Option<Entry>, String> {
-    let mut f = zip.by_index(i).map_err(|e| format!("读 EPUB 条目 {i}: {e}"))?;
+fn read_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, i: usize, keep_bytes: &impl Fn(&str) -> bool) -> Result<Option<Entry>, BookError> {
+    let mut f = zip.by_index(i).map_err(|e| BookError::zip(format!("读 EPUB 条目 {i}"), e))?;
     if f.is_dir() {
         return Ok(None);
     }
@@ -197,13 +199,13 @@ fn read_entry<R: Read + Seek>(zip: &mut ZipArchive<R>, i: usize, keep_bytes: &im
 
 /// 读"骨架"：非图片条目整份读，图片条目只记名字、`data` 留空（真实字节留到阶段二按需读回）。
 /// 流式路径的峰值内存因此是"全书文字 + 一张图"而不是"全书图片"。
-pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton, String> {
+pub fn read_skeleton<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Skeleton, BookError> {
     Ok(Skeleton { entries: read_entries_from(zip, |n| !crate::imgopt::is_page_image(n))? })
 }
 
 /// 同 [`read_skeleton`]（`zip` 是 `path` 打开的），几个线程各自打开 `path` 同时解压：文字多的书读骨架时 inflate 是大头。
 /// 结果（条目、顺序、出错时报哪个条目的错）和 [`read_skeleton`] 相同；打不开第二个句柄时就在本线程逐个读。
-pub(crate) fn read_skeleton_par<R: Read + Seek>(path: &std::path::Path, zip: &mut ZipArchive<R>) -> Result<Skeleton, String> {
+pub(crate) fn read_skeleton_par<R: Read + Seek>(path: &std::path::Path, zip: &mut ZipArchive<R>) -> Result<Skeleton, BookError> {
     let n = zip.len();
     let workers = crate::imgpool::worker_count().min(n / 16);
     if workers <= 1 {
@@ -211,7 +213,7 @@ pub(crate) fn read_skeleton_par<R: Read + Seek>(path: &std::path::Path, zip: &mu
     }
     let keep = |name: &str| !crate::imgopt::is_page_image(name);
     // 第 i 个条目：`Ok(None)` 是目录项
-    type Read1 = Result<Option<Entry>, String>;
+    type Read1 = Result<Option<Entry>, BookError>;
     let read_one = |z: &mut FileZip, i: usize| -> Read1 { read_entry(z, i, &keep) };
     const CHUNK: usize = 16;
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -256,24 +258,24 @@ pub(crate) fn read_skeleton_par<R: Read + Seek>(path: &std::path::Path, zip: &mu
 
 /// 按名字读一个 zip 条目的全部字节；条目不存在 → `Ok(None)`，其它（损坏/IO）错误 → `Err`。
 /// 流式路径"图片按需从源 zip 读回"的统一入口。
-pub fn read_by_name_opt<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Option<Vec<u8>>, String> {
+pub fn read_by_name_opt<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Option<Vec<u8>>, BookError> {
     let mut f = match zip.by_name(name) {
         Ok(f) => f,
         Err(zip::result::ZipError::FileNotFound) => return Ok(None),
-        Err(e) => return Err(format!("{name}: {e}")),
+        Err(e) => return Err(BookError::zip(name, e)),
     };
     let size = f.size();
     read_all(&mut f, size, name).map(Some)
 }
 
 /// 同 [`read_by_name_opt`]，条目不存在也算错误。
-pub fn read_by_name<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, String> {
-    read_by_name_opt(zip, name)?.ok_or_else(|| format!("zip 里没有条目 {name}"))
+pub fn read_by_name<R: Read + Seek>(zip: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>, BookError> {
+    read_by_name_opt(zip, name)?.ok_or_else(|| BookError::Corrupt(format!("zip 里没有条目 {name}")))
 }
 
 /// 从 zip 字节读条目表（目录项剔除，图片也整份读）。
-pub fn read_entries(epub: &[u8]) -> Result<Vec<Entry>, String> {
-    let mut archive = ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
+pub fn read_entries(epub: &[u8]) -> Result<Vec<Entry>, BookError> {
+    let mut archive = ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| BookError::zip("解 EPUB(非 zip?)", e))?;
     read_entries_from(&mut archive, |_| true)
 }
 
@@ -288,17 +290,18 @@ fn read_text_opt(zip: &mut FileZip, name: &str) -> Option<String> {
 }
 
 /// 打开一个 zip 文件（带缓冲）。
-pub fn open_file_zip(path: &std::path::Path) -> Result<FileZip, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("打开 {} 失败: {e}", path.display()))?;
-    ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| format!("解 EPUB 失败: {e}"))
+pub fn open_file_zip(path: &std::path::Path) -> Result<FileZip, BookError> {
+    let file = std::fs::File::open(path).map_err(|e| BookError::io(format!("打开 {} 失败", path.display()), e))?;
+    ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| BookError::zip("解 EPUB 失败", e))
 }
 
 /// 打开 EPUB 并读出 OPF：`(zip, OPF 在 zip 里的路径, OPF 文本)`。只读 container.xml 和 OPF 两个条目，不解压整本。
-pub fn open_opf(epub: &std::path::Path) -> Result<(FileZip, String, String), String> {
+pub fn open_opf(epub: &std::path::Path) -> Result<(FileZip, String, String), BookError> {
+    let corrupt = |s: &str| BookError::Corrupt(s.to_string());
     let mut zip = open_file_zip(epub)?;
-    let container = read_text_opt(&mut zip, "META-INF/container.xml").ok_or("缺 META-INF/container.xml")?;
-    let opf_path = crate::wash::opf::container_opf_path(&container).ok_or("container.xml 里没有 full-path")?;
-    let opf = read_text_opt(&mut zip, &opf_path).ok_or("读不到 OPF")?;
+    let container = read_text_opt(&mut zip, "META-INF/container.xml").ok_or_else(|| corrupt("缺 META-INF/container.xml"))?;
+    let opf_path = crate::wash::opf::container_opf_path(&container).ok_or_else(|| corrupt("container.xml 里没有 full-path"))?;
+    let opf = read_text_opt(&mut zip, &opf_path).ok_or_else(|| corrupt("读不到 OPF"))?;
     Ok((zip, opf_path, opf))
 }
 
@@ -575,7 +578,8 @@ mod tests {
             read_all_capped(&mut f, size, n, cap)
         };
         let err = read(&mut z, "a.xhtml", 4096).unwrap_err();
-        assert!(err.contains("a.xhtml") && err.contains("上限"), "{err}");
+        assert!(matches!(err, BookError::LimitExceeded { cap_mb: 0, .. }), "{err:?}");
+        assert_eq!(err.to_string(), "a.xhtml: 解压后超过单个条目上限 0 MB（损坏或恶意的压缩包？）");
         assert_eq!(read(&mut z, "a.xhtml", 5000).unwrap().len(), 5000, "正好等于上限的照常读");
         assert_eq!(read(&mut z, "b.xhtml", 4096).unwrap(), vec![b'y'; 100]);
         // 谎报很小的声明大小也拦得住（上限按实际解出的字节数算）
@@ -593,7 +597,8 @@ mod tests {
         let mut z = ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
         assert_eq!(read_by_name_opt(&mut z, "a.txt").unwrap(), Some(b"hello".to_vec()));
         assert_eq!(read_by_name_opt(&mut z, "nope").unwrap(), None, "条目不存在不是错误");
-        assert!(read_by_name(&mut z, "nope").unwrap_err().contains("nope"));
+        let err = read_by_name(&mut z, "nope").unwrap_err();
+        assert!(matches!(err, BookError::Corrupt(_)) && err.to_string() == "zip 里没有条目 nope", "{err:?}");
         assert_eq!(read_by_name(&mut z, "a.txt").unwrap(), b"hello");
     }
 
@@ -602,7 +607,9 @@ mod tests {
         let bytes = zip_of(&[("a.xhtml", b"x"), ("i.png", &[1u8; 5])]);
         let e = read_entries(&bytes).unwrap();
         assert_eq!(e, vec![Entry { name: "a.xhtml".into(), data: b"x".to_vec() }, Entry { name: "i.png".into(), data: vec![1u8; 5] }]);
-        assert!(read_entries(b"definitely not a zip").unwrap_err().contains("非 zip"));
+        let err = read_entries(b"definitely not a zip").unwrap_err();
+        assert!(matches!(err, BookError::Zip { .. }), "{err:?}");
+        assert!(err.to_string().starts_with("解 EPUB(非 zip?): invalid Zip archive: "), "{err}");
     }
 
     /// 先在别处压好再写（`Precompressed` + `put_precompressed`）和直接 `put` 写出的 EPUB 逐字节相同：文字、图片（STORED）、空条目、
