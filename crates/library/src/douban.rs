@@ -3,7 +3,7 @@
 //! 豆瓣没有公开 API：找条目用网页的搜索建议接口，元数据从条目页的 HTML 里取（`#info` 信息栏、`#link-report` 内容简介、
 //! 页面里的标签串）。请求要少（全程节流）；图片服务器要带来源页。页面改版了取不到就当没找到，交给下一个源。
 
-use crate::matching::{norm_author, norm_s};
+use crate::metadata::{tags_without_authors, BookInfo, BookSource, Edition};
 use crate::net::{enc, Net};
 use bookconv::html::plain_text;
 
@@ -29,31 +29,68 @@ impl Hit {
     }
 }
 
-/// 按书里元数据的书名、作者找（2026-10-08 用户定）：搜「书名 作者」，搜不到再只搜书名（书里没写作者时只搜书名）；
-/// 书名（简体化后）相同、或只差卷次后缀（≤2 字），且作者对得上的条目（没有作者信息时书名要完全相同），保持豆瓣给的顺序。
-/// 书名同时是人名的（《张居正》）光搜书名回空列表，带上作者才有书（2026-10-08 实测）。
-pub(crate) fn search(net: &Net, title: &str, authors: &[String]) -> Vec<Hit> {
-    let nt = norm_s(title);
-    if nt.is_empty() {
-        return Vec::new();
+/// 豆瓣（[`BookSource`]）：封面挑前几个条目里分辨率最高的，元数据取条目页（封面那个条目先试，再试一个）。
+pub(crate) struct Douban;
+
+impl BookSource for Douban {
+    type Hit = Hit;
+
+    /// 搜「书名 作者」，搜不到再只搜书名（书里没写作者时只搜书名）。书名同时是人名的（《张居正》）光搜书名回空列表，
+    /// 带上作者才有书（2026-10-08 实测）。
+    fn queries(&self, title: &str, authors: &[String]) -> Vec<String> {
+        crate::matching::author_for_query(authors).map(|a| format!("{title} {a}")).into_iter().chain(std::iter::once(title.to_string())).collect()
     }
-    let want_authors: Vec<String> = authors.iter().map(|a| norm_author(a)).filter(|a| !a.is_empty()).collect();
-    let author_q = crate::matching::author_for_query(authors);
-    let title = title.trim();
-    let queries = author_q.map(|a| format!("{title} {a}")).into_iter().chain(std::iter::once(title.to_string()));
-    for q in queries {
-        // 出错（被拦、回来的不是 JSON、网络问题）已记成临时错误（`Net::transient_error`），调用方不会当成"没这本书"；
-        // 别的搜索词也不用再试了
-        let Ok(v) = net.json_strict(&format!("https://book.douban.com/j/subject_suggest?q={}", enc(&q))) else { break };
-        let hits = matching_hits(&v, &nt, &want_authors);
-        if !hits.is_empty() {
-            return hits;
+
+    fn search_url(&self, q: &str) -> String {
+        format!("https://book.douban.com/j/subject_suggest?q={}", enc(q))
+    }
+
+    fn matching_hits(&self, v: &serde_json::Value, nt: &str, want: &[String]) -> Result<Vec<Hit>, String> {
+        Ok(matching_hits(v, nt, want))
+    }
+
+    fn cover(&self, net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'static str)> {
+        best_cover(net, hits)
+    }
+
+    fn cover_origin(&self, hit: &Hit) -> (String, String) {
+        (hit.pic.clone(), hit.label())
+    }
+
+    fn info(&self, net: &Net, hits: &[Hit], chosen: usize, authors: &[String]) -> Option<BookInfo> {
+        let order = std::iter::once(chosen).chain((0..hits.len()).filter(|&i| i != chosen)).take(2);
+        for i in order.filter(|&i| i < hits.len()) {
+            if let Ok(s) = subject(net, &hits[i].id) {
+                return Some(info_of(&hits[i], s, authors));
+            }
         }
+        None
     }
-    Vec::new()
 }
 
-/// 搜索建议返回的条目里书名、作者对得上的（见 [`search`]）。
+/// 条目页 → 元数据：作品层面的（简介、标签、原作名）和这个版本的（只供参考，不写进书）。
+fn info_of(hit: &Hit, s: Subject, authors: &[String]) -> BookInfo {
+    // 标签里去掉纯数字（年份）和作者名（豆瓣标签常带作者）
+    let subjects = tags_without_authors(s.tags.iter().filter(|t| !t.chars().all(|c| c.is_ascii_digit())), authors.iter().chain(s.authors.iter()));
+    BookInfo {
+        source: format!("豆瓣 {}", hit.url()),
+        original_title: s.original_title,
+        first_published: String::new(),
+        description: s.description,
+        subjects,
+        edition: Some(Edition {
+            title: if s.subtitle.is_empty() { s.title } else { format!("{}：{}", s.title, s.subtitle) },
+            authors: s.authors,
+            translators: s.translators,
+            publisher: s.publisher,
+            pubdate: s.pubdate,
+            isbn: s.isbn,
+        }),
+    }
+}
+
+/// 搜索建议返回的条目里书名（简体化后）相同、或只差卷次后缀（≤2 字），且作者对得上的条目（没有作者信息时书名要完全相同），
+/// 保持豆瓣给的顺序。
 fn matching_hits(v: &serde_json::Value, nt: &str, want_authors: &[String]) -> Vec<Hit> {
     let mut hits = Vec::new();
     for x in v.as_array().into_iter().flatten() {
@@ -71,7 +108,7 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want_authors: &[String]) -> Ve
 }
 
 /// 前几个条目里挑分辨率最高、像封面的封面图（老条目只有 200 多像素宽的小图）。返回（条目下标, 图片, 扩展名）。
-pub(crate) fn best_cover(net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'static str)> {
+fn best_cover(net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'static str)> {
     let mut best: Option<(u64, usize, Vec<u8>, &'static str)> = None;
     for (i, h) in hits.iter().enumerate().take(4).filter(|(_, h)| !h.pic.is_empty()) {
         let Ok(bytes) = net.fetch_ref(&h.pic, Some(REFERER)) else { continue };
@@ -103,7 +140,7 @@ pub(crate) struct Subject {
     pub(crate) tags: Vec<String>,
 }
 
-pub(crate) fn subject(net: &Net, id: &str) -> Result<Subject, String> {
+fn subject(net: &Net, id: &str) -> Result<Subject, String> {
     let url = format!("https://book.douban.com/subject/{}/", enc(id));
     let html = String::from_utf8_lossy(&net.fetch_ref(&url, Some(REFERER))?).into_owned();
     let s = parse_subject(&html);
@@ -201,6 +238,7 @@ fn parse_subject(html: &str) -> Subject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::matching::{norm_author, norm_s};
 
     #[test]
     fn parses_subject_page() {

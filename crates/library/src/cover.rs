@@ -127,7 +127,7 @@ impl Library {
     pub(crate) fn store_cover(&self, meta: &Meta, bytes: &[u8], ext: &str, source_url: String, work: String) -> Result<CoverInfo, String> {
         let info = CoverInfo { file: format!("cover.{ext}"), sha256: sha256_hex(bytes), source_url, work };
         let dir = self.entry_dir(&meta.id);
-        crate::fsutil::write_atomic(&dir.join(&info.file), bytes)?;
+        crate::fsutil::write_atomic_cleanable(&dir.join(&info.file), bytes)?;
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
         let old = m.cover.replace(info.clone()).filter(|o| o.file != info.file);
         self.save_meta(&m)?;

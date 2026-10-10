@@ -44,8 +44,12 @@ pub(crate) fn tmp_sibling(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// 原子写：临时文件 → 落盘 → 改名 → 落盘目录（[`bookconv::util::produce_then_replace`]）。
-pub fn write_atomic(path: &Path, data: &[u8]) -> Result<(), String> {
+/// 书库里的原子写：临时文件 → 落盘 → 改名 → 落盘目录（[`bookconv::util::produce_then_replace`]）。
+///
+/// 和 `bookconv::util::write_atomic` 做的事一样，只是临时文件的名字不同：这里是 [`tmp_sibling`] 的
+/// `.tmp-<进程号>-<计数>-<名>`——带 [`TMP_PREFIX`]，进程被杀时留下的下次拿到锁时会被 [`clean_tmp`] 清掉；带进程号和计数，
+/// 同时写同一个目标也不撞名。`bookconv` 那个是 `<名>.writing.tmp`（命令行工具用，不归书库清理）。书库里的文件一律用这个。
+pub(crate) fn write_atomic_cleanable(path: &Path, data: &[u8]) -> Result<(), String> {
     bookconv::util::produce_then_replace(&tmp_sibling(path), path, |t| std::fs::write(t, data).map_err(|e| format!("写 {}: {e}", path.display())))
 }
 
@@ -73,7 +77,7 @@ pub(crate) fn check_json<T: DeserializeOwned>(path: &Path) -> Result<(), String>
 /// 原子写 JSON（缩进格式）。序列化失败（比如路径不是 UTF-8）返回错误，不 panic。
 pub(crate) fn write_json<T: Serialize + ?Sized>(path: &Path, v: &T) -> Result<(), String> {
     let s = serde_json::to_string_pretty(v).map_err(|e| format!("写 {}: {e}", path.display()))?;
-    write_atomic(path, s.as_bytes())
+    write_atomic_cleanable(path, s.as_bytes())
 }
 
 /// 文件的身份：设备号 + inode + 大小 + 修改时间。原子写（改名）总会换 inode，所以别的进程写过一定能看出来。
