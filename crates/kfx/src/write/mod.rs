@@ -14,12 +14,16 @@ use bookconv::util::fnv64;
 use ego_tree::NodeRef;
 use scraper::{ElementRef, Html, Node};
 use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 
 mod analyze;
 mod entities;
 mod layout;
 mod parse;
+mod props;
+mod resources;
 mod style;
+mod symbols;
 #[cfg(test)]
 mod tests;
 
@@ -27,7 +31,10 @@ use analyze::*;
 use entities::*;
 use layout::*;
 use parse::*;
+use props::*;
+use resources::*;
 use style::*;
+use symbols::*;
 
 pub use entities::container_id;
 
@@ -77,10 +84,13 @@ pub const WRITER_VERSION: &str = "16";
 /// 写出器升版本后内容没变的书要生成逐字节相同的文件，所以这里不跟 [`WRITER_VERSION`] 走。
 const FILE_CREATOR_VERSION: &str = "1";
 
-/// 第一个本地符号的编号：系统表 9 个 + `YJ_symbols` v10 的 859 个。
-const FIRST_LOCAL_SID: u32 = 10 + 859;
+/// 导入的共享符号表 `YJ_symbols` 的版本和最大编号（样本都是 v10、859 个）。
+const YJ_SYMBOLS_VERSION: i64 = 10;
+const YJ_SYMBOLS_MAX_ID: u32 = 859;
 
-const YJ_SYMBOLS_MAX_ID: i64 = 859;
+/// 第一个本地符号的编号：Ion 系统符号 9 个（1–9）+ `YJ_symbols` 的 859 个（10–868）之后。
+const FIRST_LOCAL_SID: u32 = ion::SYSTEM_SYMBOLS.len() as u32 + YJ_SYMBOLS_MAX_ID + 1;
+const _: () = assert!(FIRST_LOCAL_SID == 869);
 
 /// KFX 的 `lh` 单位折合多少个 em（样本里文档缺省行高 1.2em，长度都按它换算）。
 const LH_EM: f64 = 1.2;
@@ -88,7 +98,24 @@ const LH_EM: f64 = 1.2;
 /// 百分比换算成 em 时假定的页宽（样本里 `margin-top:30%` → 9.6em）。
 const PAGE_WIDTH_EM: f64 = 32.0;
 
-/// 资源路径符号和图片字节实体符号的编号差（正好是 Ion 系统符号的个数）。
+/// CSS 的 pt 换成 em：1em＝12pt（同 `bookconv::cascade` 的层叠）。
+const PT_PER_EM: f64 = 12.0;
+
+/// 层叠给出的 pt（px 按 1px＝0.75pt）换成 Send to Kindle 写的 pt（px 按 1px＝0.45pt，同边框宽度、外边距的口径）：
+/// 圆角、表格的 `border-spacing`。
+const KFX_PT_PER_CSS_PT: f64 = 0.6;
+
+/// 行高（正文行高的倍数）的下限（Send to Kindle 同样，见 [`Builder::block_props`]）。
+const MIN_LINE_HEIGHT: f64 = 0.6;
+
+/// 文字和背景的最低对比度（Send to Kindle 同样，见 [`crate::css::ensure_contrast`]）。
+const MIN_CONTRAST: f64 = 4.5;
+
+/// 不透明的黑、白（ARGB）。
+const BLACK: u32 = 0xFF00_0000;
+const WHITE: u32 = 0xFFFF_FFFF;
+
+/// 资源路径符号和图片字节实体符号的编号差（正好是 Ion 系统符号的个数）。分配见 [`symbols`]。
 const SID_GAP: u32 = 9;
 
 /// 元数据 `cover_image` 写的名字，符号编号＝封面资源 + [`SID_GAP`]。
@@ -114,14 +141,13 @@ pub struct Opts {
 pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) -> Result<String, String> {
     let mut warnings = Vec::new();
     let book = epubbook::load_from(epub, &mut warnings)?;
-    let mut b = Builder::new(HashMap::new(), warnings, opts);
-    let mut parsed = parse_docs(&book, b.media, true)?;
+    let mut parsed = parse_docs(&book, opts.media, true)?;
     let deep = parsed.iter().map(|d| block_depth(&d.3)).max().unwrap_or(0) > DEEP_NESTING;
     let book = &book;
     // 块要在闭包里释放（`move`）：释放也是递归的
     maybe_big_stack(deep, move || {
-        analyze(book, &mut b, &mut parsed);
-        let mut out = format!("#base\t{}\t{}\n", b.base_fs, b.base_lh * b.base_fs);
+        let stats = analyze(book, &mut parsed);
+        let mut out = format!("#base\t{}\t{}\n", stats.base_fs, stats.base_lh * stats.base_fs);
         for (_, _, _, blocks) in &parsed {
             dump_blocks(blocks, &mut out);
         }
@@ -136,52 +162,20 @@ fn num(v: f64, unit: u32) -> Value {
     Value::Struct(vec![(VALUE, Value::F64(if r == 0.0 { 0.0 } else { r })), (UNIT, Value::Symbol(unit))])
 }
 
-struct Res {
-    name: String,
-    location: String,
-    format: u32,
-    mime: &'static str,
-    width: u32,
-    height: u32,
-    bytes: Vec<u8>,
-}
-
+/// 版面、样式、导航、元数据各阶段共用的状态（正文阶段）。资源阶段由 [`build`] 拆开它，只带走符号表、资源和警告。
 struct Builder {
-    locals: Vec<String>,
-    local_index: HashMap<String, u32>,
+    syms: SymbolAlloc,
     next_eid: i64,
-    /// 样式去重：属性编码 → 样式名的符号。
-    styles: HashMap<Vec<u8>, u32>,
-    /// 算样式去重键用的缓冲（每次清空复用，只在新样式时复制一份当键）。
-    style_key: Vec<u8>,
-    /// 对比度调整的结果（[`crate::css::ensure_contrast`] 要逐级试，全书反复是那几对颜色）：(前景, 背景) → 调过的前景。
-    contrast_fix: HashMap<(u32, u32), u32>,
-    /// 没写颜色时缺省黑字在这个背景上要不要换颜色（[`text_color`]）：背景 → 换成的颜色。
-    contrast_default: HashMap<u32, Option<u32>>,
-    style_entities: Vec<(String, Vec<(u32, Value)>)>,
-    resources: Vec<Res>,
-    res_by_path: HashMap<String, usize>,
-    /// 取不到的图片（找不到或格式不支持）：只警告一次，以后直接跳过（以前每引用一次警告一次）。
-    missing: HashSet<String>,
-    images: HashMap<String, (Vec<u8>, &'static str)>,
+    styles: StyleTable,
+    res: ResourceStore,
     warnings: Vec<String>,
     /// 链接、目录用到的锚点：(文件, 锚点) → 锚点名，按出现顺序。
     anchors: Vec<((String, String), u32)>,
     anchor_index: HashMap<(String, String), u32>,
     /// 标题（级别, 节点 id），按书里的顺序。
     headings: Vec<(u8, i64)>,
-    /// 样式里用到的字体名（嵌入字体只嵌这些）。
-    used_fonts: std::collections::BTreeSet<String>,
-    /// 写成 `default` 的字体名（小写）：正文字体（见 [`TextCounts::body_font`]）。
-    default_fonts: HashSet<String>,
-    /// 书里嵌入了字体文件的字体名（小写）。
-    embedded_fonts: HashSet<String>,
-    /// 求值 `@media` 用（见 [`Opts::media`]）。
-    media: Option<crate::css::MediaEnv>,
-    /// 全书正文的行高（元素字号的倍数，见 [`base_line_height`]）：KFX 的行高按它归一。
-    base_lh: f64,
-    /// 全书正文的字号（根 em，见 [`base_font_size`]）。
-    base_fs: f64,
+    /// 全书统计（[`analyze`] 算好的，之后只读）。
+    stats: BookStats,
 }
 
 /// EPUB → KFX。返回 KFX 字节和警告。
@@ -196,67 +190,70 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
     let book = &mut book;
     // 图片字节从书里搬出来（写出器只在这里用到它们），不复制。
     let images = std::mem::take(&mut book.images).into_iter().map(|i| (i.path, (i.bytes, i.mime))).collect();
-    let mut b = Builder::new(images, warnings, opts);
-    // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字：元数据 `cover_image` 也是按「这个名字的符号编号 − 9」
-    // 找封面资源的（6 本样本的 `e6` 减 9 都正好是封面 JPEG 的 `$164`；书架缩略图靠它，2026-10-05 真机）。
-    if let Some(i) = book.cover.as_deref().and_then(|c| b.resource(c)) {
-        let name = b.resources[i].name.clone();
-        let res = b.sym(&name);
-        for k in 1..SID_GAP {
-            b.sym(&format!("pad-cover-{k}"));
-        }
-        let cover_ref = b.sym(COVER_REF);
-        debug_assert_eq!(cover_ref, res + SID_GAP);
+    let mut res = ResourceStore::new(images);
+    let mut syms = SymbolAlloc::new();
+    // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字（见 [`SymbolAlloc::reserve_cover`]）。
+    if let Some(i) = book.cover.as_deref().and_then(|c| res.register(c, &mut warnings)) {
+        syms.reserve_cover(&res[i].name)?;
     }
     let id = opts.fixed_id.unwrap_or(book.meta.stable_id);
-    let out = build(book, &mut b, id)?;
-    Ok((out, b.warnings))
+    build(book, syms, res, warnings, id, opts.media)
 }
 
 /// 整本书写成 KFX：解析文档 → 全书分析 → 版面 → 样式 → 位置映射 → 目录、锚点、导航 → 元数据 → 资源 → 清单与容器。
-/// 各阶段按这个顺序分配本地符号，换顺序会改产物字节（资源的符号必须最后分配，见 [`resource_entities`]）。
+/// 各阶段按这个顺序分配本地符号，换顺序会改产物字节；资源的符号必须最后分配（见 [`symbols`]），由符号表换阶段保证。
 /// 元素套得深的书（见 [`MAX_NESTING`]）解析以后的部分在大栈线程里跑：版面、编码、释放块都是递归的。
-fn build(book: &mut Loaded, b: &mut Builder, id: u64) -> Result<Vec<u8>, String> {
-    let mut parsed = parse_docs(book, b.media, false)?;
+fn build(book: &mut Loaded, syms: SymbolAlloc, res: ResourceStore, warnings: Vec<String>, id: u64, media: Option<crate::css::MediaEnv>) -> Result<(Vec<u8>, Vec<String>), String> {
+    let mut parsed = parse_docs(book, media, false)?;
     let deep = parsed.iter().map(|d| block_depth(&d.3)).max().unwrap_or(0) > DEEP_NESTING;
     let fixed_canvas = fixed_canvas(book);
     // 翻页方向：`$557` 从左往右、`$559` 从右往左（2026-10-05 测试漫画 LTR/RTL 两本只差这一处）。
     let direction = if book.meta.rtl { DIR_RTL } else { DIR_LTR };
-    let Layout { mut sections, mut entities, id_map, cover_tmpl } = {
+    let (mut b, Layout { mut sections, mut entities, id_map, cover_tmpl }) = {
         let book = &*book;
-        maybe_big_stack(deep, || {
+        maybe_big_stack(deep, move || {
             prepend_cover_page(book, &mut parsed);
-            analyze(book, b, &mut parsed);
-            lay_out(book, b, parsed, fixed_canvas, direction)
+            let stats = analyze(book, &mut parsed);
+            let mut b = Builder::new(syms, res, warnings, stats);
+            let layout = lay_out(book, &mut b, parsed, fixed_canvas, direction)?;
+            Ok::<_, String>((b, layout))
         })??
     };
     // 封面图即使没出现在正文里也要带上（书架缩略图）。
     let cover_res = book.cover.as_deref().and_then(|c| b.resource(c));
-    style_entities(b, &mut entities);
-    let fonts = take_fonts(book, b);
+    style_entities(&mut b, &mut entities);
+    let fonts = take_fonts(book, &b);
     position_entities(&mut sections, &mut entities);
-    navigation_entities(book, b, &sections, &id_map, cover_tmpl, &mut entities);
-    metadata_entities(book, b, id, &sections, fixed_canvas, direction, cover_res, &mut entities);
-    resource_entities(b, fonts, cover_res, &mut entities);
-    maybe_big_stack(deep, || finish(b, &sections, entities, cover_res, id))
+    navigation_entities(book, &mut b, &sections, &id_map, cover_tmpl, &mut entities);
+    metadata_entities(book, &mut b, id, &sections, fixed_canvas, direction, cover_res, &mut entities);
+    // 正文阶段到此为止：符号表换成资源阶段，以后只能分配资源符号
+    let Builder { syms, mut res, warnings, .. } = b;
+    let mut syms = syms.into_resources();
+    resource_entities(&mut syms, &mut res, fonts, cover_res, &mut entities)?;
+    let out = maybe_big_stack(deep, || finish(&syms, &res, &sections, entities, cover_res, id))??;
+    Ok((out, warnings))
 }
 
 impl Builder {
-    fn sym(&mut self, name: &str) -> u32 {
-        if let Some(&s) = self.local_index.get(name) {
-            return s;
+    fn new(syms: SymbolAlloc, res: ResourceStore, warnings: Vec<String>, stats: BookStats) -> Builder {
+        Builder {
+            syms,
+            next_eid: 1,
+            styles: StyleTable::new(),
+            res,
+            warnings,
+            anchors: Vec::new(),
+            anchor_index: HashMap::new(),
+            headings: Vec::new(),
+            stats,
         }
-        let s = FIRST_LOCAL_SID + self.locals.len() as u32;
-        self.locals.push(name.to_string());
-        self.local_index.insert(name.to_string(), s);
-        s
     }
 
     fn anchor(&mut self, key: (String, String)) -> u32 {
         if let Some(&a) = self.anchor_index.get(&key) {
             return a;
         }
-        let a = self.sym(&format!("anchor{}", self.anchors.len()));
+        let a = self.syms.sym(&format!("anchor{}", self.anchors.len()));
         self.anchor_index.insert(key.clone(), a);
         self.anchors.push((key, a));
         a
@@ -268,114 +265,18 @@ impl Builder {
         e
     }
 
-    /// 样式去重：属性一样的共用一个样式片段。
-    fn style(&mut self, mut props: Vec<(u32, Value)>) -> u32 {
-        props.sort_by_key(|(k, _)| *k);
-        // 没嵌入的正文字体、`@font-face` 声明了却没有字体文件的字体写成 `default`（Send to Kindle 同样，《绍宋》的「宋体」）：
-        // 阅读器用自己的字体；以前不写，嵌入了字体的父节点下面会继承父节点的字体
-        // 备选照写小写；第一个是嵌入字体时照原样（字体片段按这个名字找）
-        for (k, v) in props.iter_mut() {
-            if let (P_FONT_FAMILY, Value::String(f)) = (*k, &*v) {
-                let (first, rest) = f.split_once(',').map_or((f.as_str(), None), |(a, b)| (a, Some(b)));
-                let first = if self.default_fonts.contains(&first.to_lowercase()) {
-                    FONT_DEFAULT.to_string()
-                } else if self.embedded_fonts.contains(&first.to_lowercase()) {
-                    first.to_string()
-                } else {
-                    first.to_lowercase()
-                };
-                *v = Value::String(match rest {
-                    Some(r) => format!("{first},{r}"),
-                    None => first,
-                });
-            }
-        }
-        for (k, v) in &props {
-            if let (P_FONT_FAMILY, Value::String(f)) = (*k, v) {
-                let first = f.split(',').next().unwrap_or_default();
-                if first != FONT_DEFAULT && self.embedded_fonts.contains(&first.to_lowercase()) {
-                    self.used_fonts.insert(first.to_string());
-                }
-            }
-        }
-        // 键：每个属性的编号 + 值的 Ion 编码（Ion 值自带长度，拼起来不会混淆）。缓冲复用，查到了就不分配。
-        let mut key = std::mem::take(&mut self.style_key);
-        key.clear();
-        for (k, v) in &props {
-            key.extend(k.to_le_bytes());
-            ion::encode_value(&mut key, v);
-        }
-        if let Some(&s) = self.styles.get(key.as_slice()) {
-            self.style_key = key;
-            return s;
-        }
-        let name = format!("style{}", self.style_entities.len());
-        let s = self.sym(&name);
-        self.styles.insert(key.clone(), s);
-        self.style_key = key;
-        self.style_entities.push((name, props));
-        s
+    /// 样式去重：属性一样的共用一个样式片段（[`StyleTable::intern`]）。
+    fn style(&mut self, props: StyleProps) -> u32 {
+        self.styles.intern(props, &self.stats, &mut self.syms)
     }
 
+    /// 登记图片资源（[`ResourceStore::register`]，取不到的记警告）。
     fn resource(&mut self, path: &str) -> Option<usize> {
-        if let Some(&i) = self.res_by_path.get(path) {
-            return Some(i);
-        }
-        if self.missing.contains(path) {
-            return None;
-        }
-        let (format, mime) = match self.images.get(path).map(|(_, m)| *m) {
-            Some("image/jpeg") => (FORMAT_JPG, "image/jpg"),
-            Some("image/png") => (FORMAT_PNG, "image/png"),
-            Some("image/gif") => (FORMAT_GIF, "image/gif"),
-            other => {
-                self.warnings.push(match other {
-                    Some(other) => format!("图片格式 {other} 不支持：{path}"),
-                    None => format!("图片找不到或格式不支持：{path}"),
-                });
-                self.missing.insert(path.to_string());
-                return None;
-            }
-        };
-        // 字节搬进资源，不复制（大漫画几百 MB）；同一路径以后走上面的 `res_by_path`，不会再来取。
-        let (bytes, _) = self.images.remove(path)?;
-        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
-            .with_guessed_format()
-            .ok()
-            .and_then(|r| r.into_dimensions().ok())
-            .unwrap_or((0, 0));
-        let i = self.resources.len();
-        self.resources.push(Res { name: format!("img{i}"), location: format!("resource/img{i}"), format, mime, width, height, bytes });
-        // 图片字节的实体名另起（样本里是 `…-ad`，和 `$165` 的资源路径不同名；用 `resource/…` 当实体名时
-        // Kindle 不显示图片，2026-10-05 真机）。
-        self.res_by_path.insert(path.to_string(), i);
-        Some(i)
+        self.res.register(path, &mut self.warnings)
     }
 
-    fn new(images: HashMap<String, (Vec<u8>, &'static str)>, warnings: Vec<String>, opts: &Opts) -> Builder {
-        Builder {
-            locals: Vec::new(),
-            local_index: HashMap::new(),
-            next_eid: 1,
-            styles: HashMap::new(),
-            style_key: Vec::new(),
-            contrast_fix: HashMap::new(),
-            contrast_default: HashMap::new(),
-            style_entities: Vec::new(),
-            resources: Vec::new(),
-            res_by_path: HashMap::new(),
-            missing: HashSet::new(),
-            images,
-            warnings,
-            anchors: Vec::new(),
-            anchor_index: HashMap::new(),
-            headings: Vec::new(),
-            used_fonts: Default::default(),
-            default_fonts: HashSet::new(),
-            embedded_fonts: HashSet::new(),
-            base_lh: LH_EM,
-            base_fs: 1.0,
-            media: opts.media,
-        }
+    /// 资源实体（`$164`）名字的符号。
+    fn res_sym(&mut self, r: usize) -> u32 {
+        self.syms.sym(&self.res[r].name)
     }
 }
