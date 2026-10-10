@@ -1,4 +1,4 @@
-# shellcheck shell=bash disable=SC2034,SC2154  # 被 source：TOOL_PKGS、bindir 给调用方用，here 由调用方设
+# shellcheck shell=bash disable=SC2034,SC2154  # 被 source：TOOL_PKGS、rootdir、bindir 给调用方用，here 由调用方设
 # install.sh、uninstall.sh 共用（source 进来用，不单独运行）。调用方先设好 here（仓库根，pwd -P）。
 #
 # cargo install --list 的格式：「包名 v版本 (路径):」一行，下面每个二进制缩进 4 格一行。
@@ -12,6 +12,13 @@ TOOL_PKGS=(bookconv)
 [[ -n ${CARGO_INSTALL_ROOT-} ]] || unset CARGO_INSTALL_ROOT
 # cargo 的配置（install.root 等）按当前目录逐级往上找：固定在仓库根运行，从哪个目录调用脚本结果都一样
 cd "$here" || exit 1
+
+# 不用 root 跑别人的仓库：sudo ./install.sh 会把仓库的 target/ 写成 root 的（之后自己 cargo build 报权限错），
+# 命令也装进 /root/.cargo/bin 而不是自己的。仓库本来就属于 root 的（容器里）照常。
+if [[ $EUID -eq 0 && $(stat -c %u "$here") -ne 0 ]]; then
+  echo "✗ 别用 root（sudo）运行：命令会装进 root 的目录、仓库的 target/ 会变成 root 的；用仓库主人的账号直接运行" >&2
+  exit 1
+fi
 
 # 配置文件 $1 里的 install.root（`[install]` 下的 `root = "…"`，或顶层的 `install.root = "…"`）；没有就不打印
 _config_install_root() {
@@ -47,7 +54,8 @@ install_root() {
   done
   printf '%s\n' "${root:-$home}"
 }
-bindir=$(install_root)/bin
+rootdir=$(install_root)
+bindir=$rootdir/bin
 
 # 读一次缓存起来：在主 shell 里先调一次 cargo_list >/dev/null（$(…) 里调用是子 shell，存不住）
 _cargo_list="" _cargo_listed=0
@@ -74,7 +82,7 @@ ours_installed() {
   while IFS= read -r line; do
     [[ $line =~ ^$pkg\ v([^ ]+)\ \((.+)\):$ ]] || continue
     ver=${BASH_REMATCH[1]} path=${BASH_REMATCH[2]}
-    [[ -d $path && $(cd "$path" && pwd -P) == "$here/crates/$pkg" ]] || continue
+    [[ -d $path && $(cd "$path" 2>/dev/null && pwd -P) == "$here/crates/$pkg" ]] || continue
     printf 'path+file://%s#%s@%s\n' "$path" "$pkg" "$ver"
     return 0
   done < <(cargo_list)
@@ -89,7 +97,7 @@ foreign_owner() {
     # 二进制那一行缩进 4 格：去掉全部前导空格再比
     [[ ${line#"${line%%[! ]*}"} == "$bin" ]] || continue
     path=${head##*(}; path=${path%)}
-    [[ -d $path && $(cd "$path" && pwd -P) == "$here/crates/"* ]] && return 1
+    [[ -d $path && $(cd "$path" 2>/dev/null && pwd -P) == "$here/crates/"* ]] && return 1
     printf '%s\n' "$head"
     return 0
   done < <(cargo_list)

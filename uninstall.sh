@@ -3,7 +3,10 @@
 #
 # 用法: ./uninstall.sh
 # 只删命令本身。书库、设备上的书都不动，只告诉你书库在哪：不要了就自己删那个目录。
-# 退出码：0 卸完（或本来就没装）；1 没有 cargo 或卸载失败；2 参数不对。
+# 重复运行无害：已经卸了的再运行只是提示没找到。
+# 退出码：0 卸完（或本来就没装）；1 没有 cargo、用 root 运行或卸载失败；2 参数不对。
+# 直接运行，别 source（set -e、cd 会留在你的 shell 里，出错时连 shell 一起退出）
+(return 0 2>/dev/null) && { echo "✗ 直接运行 ./uninstall.sh，别 source" >&2; return 2; }
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd -P)
 # shellcheck source=tools/cargo-pkgs.sh
@@ -18,16 +21,21 @@ esac
 command -v cargo >/dev/null || { echo "✗ 没有 cargo：命令是用 cargo install 装的，卸载也要用它" >&2; exit 1; }
 cargo_list >/dev/null
 
-removed=0
+# 本仓库装的包一次卸掉（一次 cargo uninstall，不是每个包起一次 cargo）
+specs=() names=()
 for d in "$here"/crates/*/; do
   p=$(basename "$d")
   if spec=$(ours_installed "$p"); then
-    cargo uninstall --quiet "$spec"
-    echo "✓ 已卸载 $(pkg_bins "$p")"
-    removed=1
+    specs+=("$spec")
+    names+=("$(pkg_bins "$p")")
   fi
 done
-[[ $removed -eq 1 ]] || echo "= 没有找到从本仓库装的命令"
+if [[ ${#specs[@]} -gt 0 ]]; then
+  cargo uninstall --quiet "${specs[@]}"
+  echo "✓ 已卸载 ${names[*]}"
+else
+  echo "= 没有找到从本仓库装的命令"
+fi
 
 # 同名命令由别的地方装着（比如仓库挪过位置、或者别的项目）：只提示，不替你删
 for d in "$here"/crates/*/; do
