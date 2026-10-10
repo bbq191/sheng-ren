@@ -13,8 +13,7 @@
 //!
 //! 文字一个不动；行内 `style` 同样处理（xochitl 不认行内样式，掌阅认）。
 use crate::cascade::{parse_font_shorthand, FontShorthand, MediaEnv};
-use super::css::css_rule_re;
-use crate::cascade::{box_sides, compound_tag_classes, last_compound, rule_selector, rule_spans, split_leading_statements, strip_comments, BoxSides};
+use crate::cascade::{box_sides, compound_tag_classes, last_compound, rule_selector, rule_spans, BoxSides};
 use super::*;
 use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
@@ -246,21 +245,24 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     }
 }
 
+/// 改一份样式表：按 [`rule_spans`] 逐条规则（`@media` 里的也改，不看条件——阅读器求不求、怎么求说不准），只替换规则体，
+/// 选择器连同前面的注释、`@charset …;` 原样留。`@font-face`、`@page` 这类 at 规则不动；到文末没闭合的规则不动（拿不准）。
 fn rewrite_css(css: &str, ctx: &Ctx, n: &mut usize) -> String {
-    css_rule_re()
-        .replace_all(css, |c: &regex::Captures| {
-            let (lead, sel) = split_leading_statements(&c[1]);
-            let clean = strip_comments(sel);
-            let trimmed = clean.trim();
-            if trimmed.starts_with('@') {
-                return c[0].to_string();
-            }
-            let body = trimmed.split(',').all(|s| is_body_selector(s, &ctx.body_classes));
-            let (decls, k) = rewrite_decls(&c[2], body, ctx);
-            *n += k;
-            if k == 0 { c[0].to_string() } else { format!("{lead}{sel}{{{decls}}}") }
-        })
-        .into_owned()
+    let mut edits = Vec::new();
+    for r in rule_spans(css) {
+        let clean = rule_selector(r.prelude);
+        let trimmed = clean.trim();
+        if !r.closed || trimmed.starts_with('@') {
+            continue;
+        }
+        let body = trimmed.split(',').all(|s| is_body_selector(s, &ctx.body_classes));
+        let (decls, k) = rewrite_decls(r.body, body, ctx);
+        *n += k;
+        if k > 0 {
+            edits.push((r.body_start, r.body_start + r.body.len(), decls));
+        }
+    }
+    html::apply_edits(css, edits)
 }
 
 /// 选择器是不是只选 `<body>`：`body`、`body.x`、`html body`、只用在 body 上的 `.x`。

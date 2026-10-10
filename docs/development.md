@@ -134,7 +134,7 @@ done
   | GBK、Big5、UTF-16 的 XHTML、OPF、NCX 转 UTF-8 | `wash::transcode_entries`（优化器读完书先转，后面一律按 UTF-8） |
   | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | `bookconv::uastyle` |
-  | 读写样式表的规则（层叠、清洗层、优化器共用一套解析：引号、注释、转义按 CSS 规范，`@media` 里的也给出、条件由调用方定，位置是原文的，改写只换规则体） | `cascade::rule_spans`；判断选择器先过 `cascade::rule_selector`（去注释和开头的 `@charset`/`@import` 语句）；只剩 `kindle_rules::rewrite_css` 还用旧正则 `wash::css_rule_re` |
+  | 读写样式表的规则（层叠、清洗层、优化器共用一套解析：引号、注释、转义按 CSS 规范，`@media` 里的也给出、条件由调用方定，位置是原文的，改写只换规则体） | `cascade::rule_spans`；判断选择器先过 `cascade::rule_selector`（去注释和开头的 `@charset`/`@import` 语句）（旧正则 `wash::css_rule_re` 2026-10-10 删了） |
   | CSS 文本：去注释、按分隔符拆、按顶层空白切词、四值简写、`background` 简写切词（2026-10-10 审计从成对重复收成一份） | `cascade::{strip_comments, split_top, tokens, box_sides, background_tokens}`（底下是同一个扫描器，CSS 字符串遇换行结束） |
   | `<style>` 块（开标签按标签扫、内容按原样文字到 `</style` 为止） | `html::style_blocks`、改写用 `html::edit_style_blocks`（`html::style_block_re` 只剩 `optimize::streaming` 在用） |
   | Python 工具：命令行参数；EPUB 属性（单双引号）、OPF 定位；回归目录配对、spine 解析；读 KFX、走 storyline；EPUB 文字块的样式 | `tools/toollib.py`（`cli_args`/`cli_opts`、`attr`、`opf_path`，全部脚本共用）；`tools/regress/regresslib.py`（compare、tocchk、pair 共用）；`tools/kfx/kfx.py` 的 `load` 调 `kfx-dump --json`（Python 不再自己解 Ion，2026-10-09），`by_type`/`pools`/`reading_order`/`text_nodes` 按阅读顺序走 storyline（pair、s2kcmp、tree 共用，2026-10-10）；样式用 `epub-to-kfx --styles`（s2kdev），不在 Python 里算 CSS |
