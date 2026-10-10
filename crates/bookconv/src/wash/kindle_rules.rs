@@ -3,7 +3,7 @@
 //! Kindle 和按 CSS 排的阅读器看起来不一样的几条，就地改进书自己的样式表（只改值、删声明，不加选择器——xochitl 的 CSS 解析器很脆）：
 //!
 //! - 标签的缺省样式（`<p>` 上下 1em 等）：`eink-ua.css`，见 [`crate::uastyle`]（`repair_entries` 里挂）；
-//! - **正文字体用阅读器的字体**：`font-family` 第一个是正文字体（按继承逐元素算，[`super::fonts::pick_body_font`]）的整条去掉
+//! - **正文字体用阅读器的字体**：`font-family` 第一个是正文字体（全书层叠按块算字数最多的计算字体，同 KFX 写出器，见 `book_facts`）的整条去掉
 //!   （Kindle 写 `default,…`，`default` 排第一、后面的备选不起作用；EPUB 里留着备选，阅读器会去找「宋体」这些系统字体）；
 //!   写在 `font` 简写里的拆成分项、不写字体族（字号、行高、粗斜体照原值；拆不清的不动）；
 //! - **body 的左右外边距、内边距不要**（Kindle 不写）；用到负的左（右）外边距的文件的字数占多数时，这一侧照留（Kindle 按文件定）；
@@ -20,11 +20,9 @@ use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color
 
 /// 照 Send to Kindle 的规则改书的样式表（独立的 `.css`、`<style>`）和行内 `style`；改了的声明数记进 `rep.kindle_rule_edits`。
 pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>) -> Option<f64> {
-    // 只用到类、标签的字体表（不投票、不找批注，见 `fonts::collect_rules`）
-    let plan = super::fonts::collect_rules(entries);
-    let (body_font, body_classes, neg) = scan(entries, &plan);
-    let font_scale = font_scale(entries, media);
-    let ctx = Ctx { body_font, body_classes, neg_left: neg.0, neg_right: neg.1, font_scale };
+    let facts = book_facts(entries, media);
+    let font_scale = font_scale(entries, facts.base_font_size);
+    let ctx = Ctx { body_font: facts.body_font, body_classes: facts.body_classes, neg_left: facts.neg[0], neg_right: facts.neg[1], font_scale };
     let edits = crate::util::par_map_mut(entries, |e| {
         let mut n = 0;
         if is_css_name(&e.name) {
@@ -77,109 +75,12 @@ struct Ctx {
     font_scale: Option<f64>,
 }
 
-/// 正文字体（[`super::fonts::pick_body_font`] 的口径）；只用在 `<body>` 上的类；body 的左、右边距要不要照留。每个文件只扫一趟。
-///
-/// Kindle 按文件定（文件里有块的左/右外边距是负的，这一侧 body 的边距照加）；样式表是全书共用的，这里按字数取多数：
-/// 用到负外边距的文件的字数多过没用到的，这一侧才留（《平凡的世界》183 个文件里 5 个用了负的左边距，丢掉；《罗杰疑案》每章都用，留）。
-fn scan(entries: &[Entry], plan: &super::fonts::FontPlan) -> (Option<String>, HashSet<String>, (bool, bool)) {
-    // 写了负的左、右外边距的规则：选择器最后一段的类名和裸标签名
-    let (mut neg_cls, mut neg_tag): ([HashSet<String>; 2], [HashSet<String>; 2]) = Default::default();
-    let mut take = |css: &str| {
-        for c in rule_spans(css) {
-            let (l, r) = html::css_decls(c.body).iter().fold((false, false), |(l, r), d| {
-                let (a, b) = negative_sides(d.prop, d.value);
-                (l || a, r || b)
-            });
-            if !(l || r) {
-                continue;
-            }
-            for part in rule_selector(c.prelude).split(',') {
-                let (tag, classes) = compound_tag_classes(last_compound(part));
-                for (side, on) in [(0, l), (1, r)] {
-                    if on {
-                        if classes.is_empty() {
-                            if !tag.is_empty() {
-                                neg_tag[side].insert(tag.clone());
-                            }
-                        } else {
-                            neg_cls[side].extend(classes.iter().map(|c| c.to_string()));
-                        }
-                    }
-                }
-            }
-        }
-    };
-    for e in entries.iter().filter(|e| is_css_name(&e.name)) {
-        if let Ok(t) = std::str::from_utf8(&e.data) {
-            take(t);
-        }
-    }
-    for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data)) {
-        if let Ok(t) = std::str::from_utf8(&e.data) {
-            for b in html::style_blocks(t) {
-                take(&t[b.content_start..b.content_end]);
-            }
-        }
-    }
-    struct FileScan {
-        votes: super::fonts::FontVotes,
-        on_body: Vec<String>,
-        elsewhere: Vec<String>,
-        used: [bool; 2],
-        chars: usize,
-    }
-    let files: Vec<&Entry> = entries.iter().filter(|e| is_chapter_entry(e)).collect();
-    let scans = crate::util::par_map(&files, |e| {
-        let Ok(t) = std::str::from_utf8(&e.data) else { return None };
-        let (mut on_body, mut elsewhere) = (Vec::new(), Vec::new());
-        let mut used = [false; 2];
-        for tag in html::tags(t).filter(|g| g.is_start()) {
-            let raw = &t[tag.start..tag.end];
-            let name = tag.name.to_ascii_lowercase();
-            let cls: Vec<&str> = html::attr_value(raw, "class").map(|c| c.split_whitespace().collect()).unwrap_or_default();
-            let set = if tag.is("body") { &mut on_body } else { &mut elsewhere };
-            set.extend(cls.iter().map(|c| c.to_string()));
-            for side in 0..2 {
-                used[side] |= neg_tag[side].contains(&name) || cls.iter().any(|c| neg_cls[side].contains(*c));
-            }
-            if let Some(st) = html::attr_value(raw, "style") {
-                for d in html::css_decls(st) {
-                    let (a, b) = negative_sides(d.prop, d.value);
-                    used[0] |= a;
-                    used[1] |= b;
-                }
-            }
-        }
-        let chars = html::plain_text(t).chars().filter(|c| !c.is_whitespace()).count();
-        Some(FileScan { votes: super::fonts::font_votes(t, plan), on_body, elsewhere, used, chars })
-    });
-    let (mut on_body, mut elsewhere) = (HashSet::new(), HashSet::new());
-    // 每一侧：(用到负外边距的文件的字数, 没用到的)
-    let mut chars = [(0usize, 0usize); 2];
-    let mut votes = Vec::with_capacity(scans.len());
-    for f in scans.into_iter().flatten() {
-        on_body.extend(f.on_body);
-        elsewhere.extend(f.elsewhere);
-        for (c, used) in chars.iter_mut().zip(f.used) {
-            if used {
-                c.0 += f.chars;
-            } else {
-                c.1 += f.chars;
-            }
-        }
-        votes.push(f.votes);
-    }
-    let keep = |s: usize| chars[s].0 > chars[s].1;
-    (super::fonts::pick_body_font(votes), on_body.difference(&elsewhere).cloned().collect(), (keep(0), keep(1)))
-}
-
-/// 字号归一要乘的系数：1 / 全书正文字号（[`base_font_size`]；正文已经是 1em 的是 1）。
+/// 字号归一要乘的系数：1 / 全书正文字号 `base`（[`BookFacts::base_font_size`]；正文已经是 1em 的是 1）。
 /// `html`、`:root` 上写了字号的书不动（`None`：掌阅不认 `html` 上的字号，2026-10-10 真机；Kindle 认，正文实际多大两边就对不上，拿不准就不处理）。
-fn font_scale(entries: &[Entry], media: Option<&MediaEnv>) -> Option<f64> {
+fn font_scale(entries: &[Entry], base: f64) -> Option<f64> {
     if root_font_size_declared(entries) {
         return None;
     }
-    let base = base_font_size(entries, media);
     Some(if (base - 1.0).abs() < 0.005 { 1.0 } else { 1.0 / base })
 }
 
@@ -208,13 +109,45 @@ fn root_font_size_declared(entries: &[Entry]) -> bool {
     })
 }
 
-/// 全书正文字号（根 em）：每段文字按所在块（[`crate::cascade::is_block`]）的计算字号、按字数（不算空白）计，取最多的；
-/// 字数一样多的取小的。层叠用 KFX 写出器同一套（[`crate::cascade`]），口径同写出器的 `base_font_size`
-/// （行内元素改字号的字算给所在的块；`@media`、`<link media>` 按阅读模式的 `media` 求，写出器按 KFX 阅读范围求）。
-/// 算出来不在 0.5–3 之间的不信，用 1。
-pub(super) fn base_font_size(entries: &[Entry], media: Option<&MediaEnv>) -> f64 {
-    use crate::cascade::{Computed, Rules, Sheet};
+/// 按全书层叠算出来的、`kindle_rules` 要的事实（[`book_facts`]）。
+struct BookFacts {
+    /// 正文字号（根 em）：每段文字按所在块（[`crate::cascade::is_block`]）的计算字号、按字数（不算空白）计，取最多的
+    /// （[`crate::cascade::body_font_size`]，同 KFX 写出器；算出来不在 0.5–3 之间的用 1）。
+    base_font_size: f64,
+    /// 正文字体（小写）：每段文字按所在块的计算字体计字数，取最多的，字数一样多的取名字小的、没写字体的排最前（同 KFX 写出器的
+    /// `TextCounts::body_font`）；`None`＝正文没写字体。
+    body_font: Option<String>,
+    /// 只用在 `<body>` 上的类（别的元素也用的不算：改它的边距会连带改别处）。
+    body_classes: HashSet<String>,
+    /// body 的左、右边距要不要照留：用到负的左（右）外边距的文件的字数多过没用到的（Kindle 按文件定：文件里有块的这一侧外边距
+    /// 是负的，body 这一侧的边距照加，KFX 写出器 `has_negative`；样式表全书共用，这里按字数取多数——《平凡的世界》183 个文件
+    /// 里 5 个用了负的左边距，丢掉；《罗杰疑案》每章都用，留）。
+    neg: [bool; 2],
+}
+
+/// 一个文件的统计（[`book_facts`] 按文件并行算，再合起来）。
+#[derive(Default)]
+struct FileFacts {
+    /// 所在块的字号（千分之一取整）→ 字数（不算空白）。
+    sizes: HashMap<i64, usize>,
+    /// 所在块的字体（小写，没写的 `None`）→ 字数（不算空白）。
+    fonts: HashMap<Option<String>, usize>,
+    on_body: HashSet<String>,
+    elsewhere: HashSet<String>,
+    /// 有没有块的左、右外边距是负的。
+    neg: [bool; 2],
+    /// 可见文字的字数（不算空白）。
+    chars: usize,
+}
+
+/// 全书只走一趟 DOM，层叠用 KFX 写出器同一套（[`crate::cascade`]：每篇文档的样式表 [`crate::cascade::Sheet::for_doc`]，
+/// `@media`、`<link media>` 按阅读模式的 `media` 求，写出器按 KFX 阅读范围求），几样统计挂在同一趟遍历上：正文字号、正文字体、
+/// body 上的类、负外边距。2026-10-10 审计以前正文字体、负外边距由另一套正则加粗糙层叠（只认类和裸标签）按原始 HTML 扫，
+/// 和 KFX 写出器认出的正文字体可能不是同一个；每个章节还要多扫好几遍。
+fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
+    use crate::cascade::{Computed, Len, Rules, Sheet};
     use scraper::{ElementRef, Html, Node};
+    use std::rc::Rc;
     let css: HashMap<&str, std::sync::Arc<Rules>> = entries
         .iter()
         .filter(|e| is_css_name(&e.name))
@@ -226,10 +159,14 @@ pub(super) fn base_font_size(entries: &[Entry], media: Option<&MediaEnv>) -> f64
             (e.name.as_str(), Rules::parse(&text, &e.name, media))
         })
         .collect();
+    let negative = |l: &Option<Len>| match l {
+        Some(Len::Em(v) | Len::Percent(v) | Len::Pt(v)) => *v < -1e-9,
+        None => false,
+    };
     let files: Vec<&Entry> = entries.iter().filter(|e| is_chapter_entry(e)).collect();
-    let counts = crate::util::par_map(&files, |e| {
-        let mut count: HashMap<i64, usize> = HashMap::new();
-        let Ok(text) = std::str::from_utf8(&e.data) else { return count };
+    let per_file = crate::util::par_map(&files, |e| {
+        let mut f = FileFacts::default();
+        let Ok(text) = std::str::from_utf8(&e.data) else { return f };
         let html = Html::parse_document(text);
         let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
         let comp = |el: &ElementRef, parent: &Computed| {
@@ -237,20 +174,18 @@ pub(super) fn base_font_size(entries: &[Entry], media: Option<&MediaEnv>) -> f64
             crate::cascade::presentational_hints(el, &mut decls);
             Computed::derive(parent, &decls, el.value().name())
         };
-        // 不递归（没关的标签能套上千层）：(节点, 父元素的计算值, 所在块的字号)
+        // 不递归（没关的标签能套上千层）：(节点, 父元素的计算值, 所在块的计算值)。行内元素改字号、字体的字算给所在的块（同写出器）
         let root = html.root_element();
-        let root_comp = comp(&root, &Computed::root());
-        let mut stack: Vec<(ego_tree::NodeRef<Node>, std::rc::Rc<Computed>, f64)> = Vec::new();
-        let rc = std::rc::Rc::new(root_comp);
-        for ch in root.children().rev() {
-            stack.push((ch, rc.clone(), rc.font_size));
-        }
-        while let Some((node, parent, block_fs)) = stack.pop() {
+        let rc = Rc::new(comp(&root, &Computed::root()));
+        let mut stack: Vec<(ego_tree::NodeRef<Node>, Rc<Computed>, Rc<Computed>)> = root.children().rev().map(|ch| (ch, rc.clone(), rc.clone())).collect();
+        while let Some((node, parent, block)) = stack.pop() {
             match node.value() {
                 Node::Text(t) => {
                     let n = t.chars().filter(|c| !c.is_whitespace()).count();
                     if n > 0 {
-                        *count.entry((block_fs * 1000.0).round() as i64).or_default() += n;
+                        f.chars += n;
+                        *f.sizes.entry((block.font_size * 1000.0).round() as i64).or_default() += n;
+                        *f.fonts.entry(block.font_family.as_ref().map(|s| s.to_ascii_lowercase())).or_default() += n;
                     }
                 }
                 Node::Element(v) => {
@@ -258,41 +193,56 @@ pub(super) fn base_font_size(entries: &[Entry], media: Option<&MediaEnv>) -> f64
                         continue;
                     }
                     let Some(el) = ElementRef::wrap(node) else { continue };
+                    // body 上的类收在显示不显示之前：`display:none` 的元素上的类照样算"别处用到"
+                    let set = if v.name() == "body" { &mut f.on_body } else { &mut f.elsewhere };
+                    set.extend(v.classes().map(str::to_string));
                     let c = comp(&el, &parent);
                     if c.display.as_deref() == Some("none") {
                         continue;
                     }
-                    let fs = if crate::cascade::is_block(&el, &c) { c.font_size } else { block_fs };
-                    let c = std::rc::Rc::new(c);
+                    let c = Rc::new(c);
+                    let block = if crate::cascade::is_block(&el, &c) {
+                        f.neg[0] |= negative(&c.margin[3]);
+                        f.neg[1] |= negative(&c.margin[1]);
+                        c.clone()
+                    } else {
+                        block
+                    };
                     for ch in node.children().rev() {
-                        stack.push((ch, c.clone(), fs));
+                        stack.push((ch, c.clone(), block.clone()));
                     }
                 }
                 _ => {}
             }
         }
-        count
+        f
     });
-    let mut total: HashMap<i64, usize> = HashMap::new();
-    for c in counts {
-        for (k, n) in c {
-            *total.entry(k).or_default() += n;
+    let (mut sizes, mut fonts) = (HashMap::new(), HashMap::<Option<String>, usize>::new());
+    let (mut on_body, mut elsewhere) = (HashSet::new(), HashSet::new());
+    // 每一侧：(用到负外边距的文件的字数, 没用到的)
+    let mut chars = [(0usize, 0usize); 2];
+    for f in per_file {
+        for (k, n) in f.sizes {
+            *sizes.entry(k).or_default() += n;
+        }
+        for (k, n) in f.fonts {
+            *fonts.entry(k).or_default() += n;
+        }
+        on_body.extend(f.on_body);
+        elsewhere.extend(f.elsewhere);
+        for (c, used) in chars.iter_mut().zip(f.neg) {
+            if used {
+                c.0 += f.chars;
+            } else {
+                c.1 += f.chars;
+            }
         }
     }
-    crate::cascade::body_font_size(&total)
-}
-
-/// 一条声明里左、右外边距有没有负值。
-fn negative_sides(prop: &str, value: &str) -> (bool, bool) {
-    let neg = |v: &str| v.trim_start().starts_with('-');
-    match prop.trim().to_ascii_lowercase().as_str() {
-        "margin-left" => (neg(value), false),
-        "margin-right" => (false, neg(value)),
-        "margin" => match box_sides(value) {
-            BoxSides::Sides([_, r, _, l], _) => (neg(l), neg(r)),
-            _ => (false, false),
-        },
-        _ => (false, false),
+    BookFacts {
+        base_font_size: crate::cascade::body_font_size(&sizes),
+        body_font: fonts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).and_then(|(f, _)| f),
+        body_classes: on_body.difference(&elsewhere).cloned().collect(),
+        neg: [chars[0].0 > chars[0].1, chars[1].0 > chars[1].1],
     }
 }
 
@@ -529,8 +479,6 @@ mod tests {
         let c2 = Ctx { neg_left: true, ..ctx() };
         let out2 = rewrite_css("body{margin:0 5pt}", &c2, &mut n);
         assert_eq!(out2, "body{margin-top:0;margin-bottom:0;margin-left:5pt;}");
-        assert_eq!(negative_sides("margin", "-2em -2em 1.5em"), (true, true));
-        assert_eq!(negative_sides("margin", "0 1em 0 -1em"), (true, false));
     }
 
     /// 负外边距那一侧：分项、简写的 margin 和 padding 都照留（以前简写的 padding 左右照删，和分项的 `padding-left` 不一致）。
@@ -551,8 +499,6 @@ mod tests {
         assert_eq!(rewrite_css("body{margin:0 calc(1em + 2px)}", &c, &mut n), "body{margin-top:0;margin-bottom:0;}");
         let c2 = Ctx { neg_left: true, ..ctx() };
         assert_eq!(rewrite_css("body{margin:0 calc(1em + 2px) !important}", &c2, &mut n), "body{margin-top:0 !important;margin-bottom:0 !important;margin-left:calc(1em + 2px) !important;}");
-        assert_eq!(negative_sides("margin", "0 calc(-1em + 2px)"), (false, false));
-        assert_eq!(negative_sides("margin", "0 -1em !important"), (true, true));
     }
 
     /// `font` 简写里的正文字体：拆成分项、不写字体族；别的字体、拆不清的不动。
@@ -594,16 +540,39 @@ mod tests {
         let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#);
         let long = "正文".repeat(50);
         let book = |css: &str| vec![e("OEBPS/s.css", css), e("OEBPS/c1.xhtml", &page(&format!(r#"<h1>标题</h1><p>{long}<span class="big">大字大字</span></p><p class="note">注释</p>"#)))];
-        assert_eq!(base_font_size(&book("p{font-size:15pt} .big{font-size:3em} .note{font-size:0.5em}"), None), 1.25);
-        assert_eq!(font_scale(&book("p{font-size:15pt}"), None), Some(0.8));
-        assert_eq!(font_scale(&book("p{font-size:1em}"), None), Some(1.0));
-        assert_eq!(font_scale(&book("html{font-size:80%} p{font-size:15pt}"), None), None, "html 上写了字号");
+        let base = |b: &[Entry], m: Option<&MediaEnv>| book_facts(b, m).base_font_size;
+        let scale = |b: &[Entry]| font_scale(b, base(b, None));
+        assert_eq!(base(&book("p{font-size:15pt} .big{font-size:3em} .note{font-size:0.5em}"), None), 1.25);
+        assert_eq!(scale(&book("p{font-size:15pt}")), Some(0.8));
+        assert_eq!(scale(&book("p{font-size:1em}")), Some(1.0));
+        assert_eq!(scale(&book("html{font-size:80%} p{font-size:15pt}")), None, "html 上写了字号");
         // `@media` 按阅读模式的阅读范围求（同 KFX 写出器）：掌阅 1264 宽，`min-width:1200px` 成立、`min-width:2000px` 不成立；
         // 没给环境时特性条件一律不成立
         let ireader = MediaEnv { width: 1264.0, height: 1680.0, device_width: 1264.0, device_height: 1680.0, color: false };
         let css = "p{font-size:1em} @media (min-width:1200px){p{font-size:15pt}} @media (min-width:2000px){p{font-size:2em}}";
-        assert_eq!(base_font_size(&book(css), Some(&ireader)), 1.25);
-        assert_eq!(base_font_size(&book(css), None), 1.0);
+        assert_eq!(base(&book(css), Some(&ireader)), 1.25);
+        assert_eq!(base(&book(css), None), 1.0);
+    }
+
+    /// 正文字体按全书层叠算（写在 `<body class>` 上、段落继承的也认；行内元素的字体算给所在的块），负外边距按块的计算值、
+    /// 按文件字数取多数，body 上的类别处也用到的不算。
+    #[test]
+    fn book_facts_font_negative_margin_and_body_classes() {
+        let e = |name: &str, data: &str| Entry { name: name.into(), data: data.as_bytes().to_vec() };
+        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head>{body}</html>"#);
+        let css = r#".song{font-family:"FZLanTingSong", serif} .kai{font-family:楷体} .hang{margin:0 1em 0 -2em} .wrap{margin-right:-5%}"#;
+        let long = "正文".repeat(60);
+        let book = vec![
+            e("OEBPS/s.css", css),
+            // 字体写在 body 的类上、段落继承；行内的楷体算给段落；用了负的左外边距
+            e("OEBPS/c1.xhtml", &page(&format!(r#"<body class="song main"><p>{long}<span class="kai">楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体</span></p><p class="hang">悬挂</p></body>"#))),
+            // 字少的文件用了负的右外边距：字数不占多数，不留；`main` 在这里不在 body 上
+            e("OEBPS/c2.xhtml", &page(r#"<body class="song"><div class="wrap main"><p class="kai">短短的楷体</p></div></body>"#)),
+        ];
+        let f = book_facts(&book, None);
+        assert_eq!(f.body_font.as_deref(), Some("fzlantingsong"));
+        assert_eq!(f.neg, [true, false]);
+        assert_eq!(f.body_classes, HashSet::from(["song".to_string()]));
     }
 
     #[test]

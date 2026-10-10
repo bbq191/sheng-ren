@@ -1243,7 +1243,8 @@
         let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="u"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="u">x</dc:identifier><dc:title>书</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="css" href="s.css" media-type="text/css"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="n" href="notes.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="n"/></spine></package>"#;
         let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>t</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">第一章</a></li></ol></nav></body></html>"#;
         let c1 = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body><h1>第一章</h1><p style="font-size:14px">　　正文<a id="r1" href="notes.xhtml#n1">[1]</a>结束</p></body></html>"#;
-        let notes = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p class="footnote" id="n1"><a href="c1.xhtml#r1">[1]</a>注释正文</p></body></html>"#;
+        // 注释文件也链接样式表：正文字体按全书层叠算（没链接的文件里的字按层叠就没有字体，同 KFX 写出器）
+        let notes = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body><p class="footnote" id="n1"><a href="c1.xhtml#r1">[1]</a>注释正文</p></body></html>"#;
         let mut buf = Vec::new();
         {
             let mut zw = ZipWriter::new(Cursor::new(&mut buf));
