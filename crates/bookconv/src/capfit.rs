@@ -193,13 +193,13 @@ enum Size {
 impl Ctx {
     /// 收一份样式表（或 `<style>` 的内容）里写了宽度、高度的规则。
     pub fn add_css(&mut self, css: &str) {
-        for c in crate::wash::css_rule_re().captures_iter(css) {
-            let sel = crate::wash::rule_selector(&c[1]);
+        for c in crate::cascade::rule_spans(css) {
+            let sel = crate::cascade::rule_selector(c.prelude);
             if sel.trim_start().starts_with('@') {
                 continue;
             }
             let mut size = None;
-            for d in html::css_decls(&c[2]) {
+            for d in html::css_decls(c.body) {
                 let v = crate::cssunlock::split_important(d.value).0.trim().to_ascii_lowercase();
                 match d.prop.to_ascii_lowercase().as_str() {
                     "width" if v == "auto" => {}

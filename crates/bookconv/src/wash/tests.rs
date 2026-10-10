@@ -1551,7 +1551,7 @@
         let out = filter_css("@charset \"utf-8\";\n@import url(a.css);\np{font-size:12pt;color:red}\nh1{font-size:2em}", &WashOpts::default());
         assert!(out.starts_with("@charset \"utf-8\";\n@import url(a.css);\np{"), "{out}");
         assert!(!out.contains("font-size:12pt") && out.contains("color:red;"), "{out}");
-        assert_eq!(split_leading_statements("@import url('a;b.css');\n.x"), ("@import url('a;b.css');", "\n.x"));
+        assert_eq!(crate::cascade::split_leading_statements("@import url('a;b.css');\n.x"), ("@import url('a;b.css');", "\n.x"));
     }
 
     /// L：`margin:inherit` 不再写成非法的 `margin:0 inherit`；`!important` 与括号里的空格都认。
@@ -1788,10 +1788,10 @@
     /// 选择器最后一段：按空白和 `>`、`+`、`~` 切；标签、类按 `.` 拆，伪类和属性选择器不算。
     #[test]
     fn last_compound_of_selectors() {
-        assert_eq!(css::last_compound(" div.a > p.b:first-child "), "p.b:first-child");
-        assert_eq!(css::last_compound("h1+p.x"), "p.x");
-        assert_eq!(css::compound_tag_classes("P.a.b[title]"), ("p".to_string(), vec!["a", "b"]));
-        assert_eq!(css::compound_tag_classes(".x"), (String::new(), vec!["x"]));
+        assert_eq!(crate::cascade::last_compound(" div.a > p.b:first-child "), "p.b:first-child");
+        assert_eq!(crate::cascade::last_compound("h1+p.x"), "p.x");
+        assert_eq!(crate::cascade::compound_tag_classes("P.a.b[title]"), ("p".to_string(), vec!["a", "b"]));
+        assert_eq!(crate::cascade::compound_tag_classes(".x"), (String::new(), vec!["x"]));
     }
 
     /// 分部前缀认全角数字、「零」「两」和「编」（以前只有定章节那套认，目录重建这套不认）。
