@@ -9,6 +9,7 @@
 pub mod article;
 pub mod bgfit;
 pub mod capfit;
+pub mod cascade;
 pub mod check;
 pub mod color;
 pub mod comic_detect;

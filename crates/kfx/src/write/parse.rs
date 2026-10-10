@@ -72,20 +72,6 @@ pub(super) struct Block {
 /// 段落间单独的 `<br/>` 0.72em ＝ 0.6 × 缺省行高 1.2em）。以前整段丢掉、不折，场景空行在 Kindle 上没了。
 const BLANK_LINE_FOLD: f64 = 0.6;
 
-const BLOCK_TAGS: &[&str] = &[
-    "address", "article", "aside", "blockquote", "body", "center", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
-    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "li", "main", "menu", "nav", "ol", "p", "pre",
-    "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul", "caption",
-];
-
-fn is_block_el(el: &ElementRef, comp: &Computed) -> bool {
-    match comp.display.as_deref() {
-        Some("block" | "list-item" | "table" | "table-row" | "table-cell" | "flex") => true,
-        Some("inline" | "inline-block") => false,
-        _ => BLOCK_TAGS.contains(&el.value().name()),
-    }
-}
-
 /// 绝对长度换成根 em：em 乘本元素字号 `fs`（根 em），pt 按 1em＝12pt；百分比要看包含块，`None`。
 pub(super) fn rem_len(l: Len, fs: f64) -> Option<f64> {
     match l {
@@ -266,46 +252,6 @@ impl Inline {
     }
 }
 
-/// HTML 的表现属性当成优先级最低的样式（样式表写了的不动）：块的 `align`、`<center>`、`<font size/color/face>`
-/// （Send to Kindle 同样：《福尔摩斯》`<p align="justify">` 两端对齐、`<font size="1">` 字号 0.625、`size="7"` 3.0）。
-pub(super) fn presentational_hints(el: &ElementRef, decls: &mut HashMap<String, String>) {
-    let e = el.value();
-    let mut hint = |k: &str, v: String| {
-        decls.entry(k.to_string()).or_insert(v);
-    };
-    match e.name() {
-        "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "tr" | "caption" | "blockquote" => {
-            if let Some(a) = e.attr("align").map(|a| a.trim().to_ascii_lowercase()).filter(|a| ["left", "right", "center", "justify"].contains(&a.as_str())) {
-                hint("text-align", a);
-            }
-        }
-        "center" => hint("text-align", "center".into()),
-        "font" => {
-            // HTML 字号 1–7（同浏览器：10、13、16、18、24、32、48px，绝对字号），`+n`/`-n` 相对 3（饱和加减：`+2147483647` 以前溢出）
-            if let Some(s) = e.attr("size").map(str::trim) {
-                let n = match s.strip_prefix('+') {
-                    Some(r) => r.parse::<i32>().ok().map(|r| 3i32.saturating_add(r)),
-                    None => match s.strip_prefix('-') {
-                        Some(r) => r.parse::<i32>().ok().map(|r| 3i32.saturating_sub(r)),
-                        None => s.parse::<i32>().ok(),
-                    },
-                };
-                if let Some(n) = n {
-                    let em = [0.625, 0.8125, 1.0, 1.125, 1.5, 2.0, 3.0][(n.clamp(1, 7) - 1) as usize];
-                    hint("font-size", format!("{em}rem"));
-                }
-            }
-            if let Some(c) = e.attr("color") {
-                hint("color", c.trim().to_string());
-            }
-            if let Some(f) = e.attr("face") {
-                hint("font-family", f.trim().to_string());
-            }
-        }
-        _ => {}
-    }
-}
-
 /// 文档末尾没落到内容上的锚点（`…</p><span id="x"></span></body>`）挂到最后一个块的末尾。
 fn attach_trailing(blocks: &mut [Block], ids: Vec<String>) {
     let Some(last) = blocks.last_mut() else { return };
@@ -341,7 +287,7 @@ impl Doc<'_> {
 
     pub(super) fn comp(&self, el: &ElementRef, parent: &Computed) -> Computed {
         let mut decls = self.sheet.cascade(el, self.path);
-        presentational_hints(el, &mut decls);
+        crate::css::presentational_hints(el, &mut decls);
         let mut c = Computed::derive(parent, &decls, el.value().name());
         if let Some(l) = lang_attr(el) {
             c.lang = Some(l.to_string());
@@ -765,7 +711,7 @@ impl Doc<'_> {
                 if comp.display.as_deref() == Some("none") || matches!(name, "script" | "style" | "head") {
                     return;
                 }
-                if is_block_el(&el, &comp) {
+                if crate::css::is_block(&el, &comp) {
                     self.flush(inl, block_comp, out);
                     self.block(el, comp, out);
                     return;

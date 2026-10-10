@@ -1,4 +1,5 @@
-//! 够写 KFX 用的 CSS：解析样式表、按选择器优先级层叠、算出每个元素的计算值。
+//! 够写 KFX 用的 CSS：解析样式表、按选择器优先级层叠、算出每个元素的计算值。KFX 写出器（`kfx::css` 就是这个模块）和
+//! 掌阅、Move 的 `kindle_rules`（算全书正文字号，[`crate::wash`]）共用，两边的口径一样。
 //!
 //! 只认 KFX 能表达的属性（字体、字号、字重、斜体、对齐、缩进、行高、边距、内边距、颜色、背景色、上下标、边框、
 //! 列表符号、表格边框合并与间距、文字装饰、字间距、`pre`）；
@@ -132,7 +133,7 @@ fn resolve_urls(decls: &mut [Decl], base: &str) {
     }
     for d in decls.iter_mut().filter(|d| d.value.to_ascii_lowercase().starts_with("url(")) {
         let inner = d.value[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']);
-        d.value = format!("url({})", bookconv::epubzip::resolve_link(base, inner).0);
+        d.value = format!("url({})", crate::epubzip::resolve_link(base, inner).0);
     }
 }
 
@@ -204,11 +205,11 @@ fn matching_brace(s: &str, open: usize) -> Option<usize> {
     matching_close(s[open..].char_indices().map(|(i, c)| (open + i, c)), '{', '}')
 }
 
-/// 解析 `a: b; c: d !important`。切声明用 [`bookconv::html::css_decls`]（和优化器同一个：引号、括号里的 `;` 不切，
+/// 解析 `a: b; c: d !important`。切声明用 [`crate::html::css_decls`]（和优化器同一个：引号、括号里的 `;` 不切，
 /// 引号里的转义、坏引号退回按 `;` 切），这里只管 `!important` 和展开简写。
 pub fn parse_decls(s: &str) -> Vec<Decl> {
     let mut out = Vec::new();
-    for d in bookconv::html::css_decls(s) {
+    for d in crate::html::css_decls(s) {
         // `css_decls` 会跳过属性名前面的杂字符（`*zoom` → `zoom`）；IE 的 `*color:red` 这类在浏览器里是无效声明，照旧不收。
         let lead = (d.prop.as_ptr() as usize).saturating_sub(d.raw.as_ptr() as usize);
         if !d.raw.get(..lead).unwrap_or("").trim().is_empty() {
@@ -706,6 +707,62 @@ impl Sheet {
     }
 }
 
+/// 缺省是块级的标签（`display` 没写时）。
+pub const BLOCK_TAGS: &[&str] = &[
+    "address", "article", "aside", "blockquote", "body", "center", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
+    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "li", "main", "menu", "nav", "ol", "p", "pre",
+    "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul", "caption",
+];
+
+/// 元素是不是块级：先看 `display`，没写按标签。
+pub fn is_block(el: &ElementRef, comp: &Computed) -> bool {
+    match comp.display.as_deref() {
+        Some("block" | "list-item" | "table" | "table-row" | "table-cell" | "flex") => true,
+        Some("inline" | "inline-block") => false,
+        _ => BLOCK_TAGS.contains(&el.value().name()),
+    }
+}
+
+/// HTML 的表现属性当成优先级最低的样式（样式表写了的不动）：块的 `align`、`<center>`、`<font size/color/face>`
+/// （Send to Kindle 同样：《福尔摩斯》`<p align="justify">` 两端对齐、`<font size="1">` 字号 0.625、`size="7"` 3.0）。
+pub fn presentational_hints(el: &ElementRef, decls: &mut HashMap<String, String>) {
+    let e = el.value();
+    let mut hint = |k: &str, v: String| {
+        decls.entry(k.to_string()).or_insert(v);
+    };
+    match e.name() {
+        "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "tr" | "caption" | "blockquote" => {
+            if let Some(a) = e.attr("align").map(|a| a.trim().to_ascii_lowercase()).filter(|a| ["left", "right", "center", "justify"].contains(&a.as_str())) {
+                hint("text-align", a);
+            }
+        }
+        "center" => hint("text-align", "center".into()),
+        "font" => {
+            // HTML 字号 1–7（同浏览器：10、13、16、18、24、32、48px，绝对字号），`+n`/`-n` 相对 3（饱和加减：`+2147483647` 以前溢出）
+            if let Some(s) = e.attr("size").map(str::trim) {
+                let n = match s.strip_prefix('+') {
+                    Some(r) => r.parse::<i32>().ok().map(|r| 3i32.saturating_add(r)),
+                    None => match s.strip_prefix('-') {
+                        Some(r) => r.parse::<i32>().ok().map(|r| 3i32.saturating_sub(r)),
+                        None => s.parse::<i32>().ok(),
+                    },
+                };
+                if let Some(n) = n {
+                    let em = [0.625, 0.8125, 1.0, 1.125, 1.5, 2.0, 3.0][(n.clamp(1, 7) - 1) as usize];
+                    hint("font-size", format!("{em}rem"));
+                }
+            }
+            if let Some(c) = e.attr("color") {
+                hint("color", c.trim().to_string());
+            }
+            if let Some(f) = e.attr("face") {
+                hint("font-family", f.trim().to_string());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 一条 `@font-face`：字体名、字体文件（相对书根的路径）、是不是粗体、斜体。
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontFace {
@@ -719,8 +776,8 @@ pub struct FontFace {
 pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
     let css = strip_comments(css);
     let mut out = Vec::new();
-    // 找 `@font-face {…}` 块用优化器同一个正则（`bookconv::wash::font_face_re`）。
-    for m in bookconv::wash::font_face_re().find_iter(&css) {
+    // 找 `@font-face {…}` 块用优化器同一个正则（`crate::wash::font_face_re`）。
+    for m in crate::wash::font_face_re().find_iter(&css) {
         let block = m.as_str();
         let Some(open) = block.find('{') else { continue };
         let decls = parse_decls(&block[open + 1..block.len() - 1]);
@@ -731,7 +788,7 @@ pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
             let after = &src[i + 4..];
             let j = after.find(')')?;
             let raw = after[..j].trim().trim_matches(['"', '\'']).trim();
-            (!raw.is_empty() && !bookconv::html::is_external(raw)).then(|| bookconv::epubzip::resolve_link(base, raw).0)
+            (!raw.is_empty() && !crate::html::is_external(raw)).then(|| crate::epubzip::resolve_link(base, raw).0)
         });
         if let (Some(family), Some(path)) = (family, url) {
             let bold = get("font-weight").is_some_and(|w| matches!(w.trim(), "bold" | "bolder") || w.trim().parse::<u32>().is_ok_and(|n| n >= 600));
@@ -788,7 +845,7 @@ pub fn parse_box_len(v: &str) -> Option<Len> {
     }
 }
 
-pub use bookconv::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
+pub use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
 /// 元素的计算值（只留 KFX 用得上的）。字号 `font_size` 是相对根字号的倍数。
 #[derive(Clone, Debug, PartialEq)]
@@ -1042,7 +1099,7 @@ impl Computed {
                 c.bold = true;
                 c.semibold = false;
                 // 字号、外边距和只修复的文字书写进书里的 `eink-ua.css` 是同一张表
-                let (_, size, margin) = bookconv::uastyle::HEADINGS.into_iter().find(|h| h.0 == tag).unwrap_or(bookconv::uastyle::HEADINGS[5]);
+                let (_, size, margin) = crate::uastyle::HEADINGS.into_iter().find(|h| h.0 == tag).unwrap_or(crate::uastyle::HEADINGS[5]);
                 c.font_size = parent.font_size * size;
                 c.margin[0] = Some(Len::Em(margin));
                 c.margin[2] = Some(Len::Em(margin));
@@ -1061,9 +1118,9 @@ impl Computed {
             _ => {}
         }
         // 段落、引文、图、预排版的上下外边距（UA 样式表）：Send to Kindle 给没写外边距的 `<p>` 上下各 1em
-        // （相邻的折叠成一个，《绍宋》正文段与段之间 0.8333lh）；以前不给，段落挤在一起。哪些标签、多少用 `bookconv::uastyle` 的表
+        // （相邻的折叠成一个，《绍宋》正文段与段之间 0.8333lh）；以前不给，段落挤在一起。哪些标签、多少用 `crate::uastyle` 的表
         // （只修复的文字书写进书里的 `eink-ua.css` 是同一张）。
-        use bookconv::uastyle::{BLOCK_MARGIN_TAGS, INDENTED_BLOCK_TAGS, INDENT_PX};
+        use crate::uastyle::{BLOCK_MARGIN_TAGS, INDENTED_BLOCK_TAGS, INDENT_PX};
         let indented = INDENTED_BLOCK_TAGS.contains(&tag);
         if indented || BLOCK_MARGIN_TAGS.contains(&tag) {
             c.margin[0] = Some(Len::Em(1.0));

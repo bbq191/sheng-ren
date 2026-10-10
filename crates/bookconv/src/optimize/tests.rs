@@ -1223,7 +1223,7 @@
         let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
         assert_eq!(labels, [(1, "第一章"), (2, "一节"), (1, "注释")], "目录补到节");
         // 标签缺省样式（profile `kindle_rules`，2026-10-08 用户定照 Send to Kindle 统一）：挂在书自带样式之前，书里写了的盖过它
-        assert_eq!(text_of(&out, "OEBPS/eink-ua.css"), crate::uastyle::ua_css());
+        assert_eq!(text_of(&out, "OEBPS/eink-ua.css"), crate::uastyle::ua_css(None));
         let (ua, own) = (x.find("eink-ua.css").unwrap(), x.find("style.css").unwrap());
         assert!(ua < own, "缺省样式在书自带样式之前: {x}");
         assert!(opf_out.contains(r#"href="eink-ua.css""#), "manifest 补上: {opf_out}");
@@ -1265,7 +1265,8 @@
         let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
         assert!(!names.iter().any(|n| n.ends_with("eink-wash.css")), "不加排版样式表: {names:?}");
         let x = text_of(&out, "OEBPS/c1.xhtml");
-        assert!(x.contains(r#"style="font-size:14px""#) && x.contains("　　正文"), "行内样式、段首空格原样: {x}");
+        // 正文是行内的 14px：字号按正文归一成 16px（阅读器的字号），段首空格原样
+        assert!(x.contains(r#"style="font-size:16px;""#) && x.contains("　　正文"), "字号归一、段首空格原样: {x}");
         assert!(x.contains(r##"href="#n1""##) && x.contains("注释正文"), "注释搬进本章、链接改同文件锚点: {x}");
     }
 

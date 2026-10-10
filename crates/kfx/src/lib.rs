@@ -5,10 +5,11 @@
 //! 现状和推出来的结构见 `docs/kfx.md`。[`write`] 是 EPUB → KFX 写出器（最小版，见模块文档）。
 
 pub mod container;
-pub mod css;
 pub mod ion;
 pub mod write;
 pub mod yj;
 
+/// CSS 层叠（2026-10-10 挪到 bookconv，掌阅、Move 的 `kindle_rules` 算正文字号时用同一套）。
+pub use bookconv::cascade as css;
 pub use container::{Body, Container, Entity};
 pub use write::{epub_text_styles, epub_to_kfx, epub_to_kfx_from, Opts, WRITER_VERSION};

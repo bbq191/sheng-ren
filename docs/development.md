@@ -91,7 +91,7 @@ done
 |---|---|---|---|
 | 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 54 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 53 | 漫画 |
-| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 4 | 只有开了 `kindle_rules` 的模式的文字书 |
+| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 5 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签 | `bookconv::opfmeta::VERSION` | 5 | 只有补过东西的 |
 | EPUB → KFX | `kfx::write::WRITER_VERSION` | 15 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
@@ -133,7 +133,7 @@ done
   | GBK、Big5、UTF-16 的 XHTML、OPF、NCX 转 UTF-8 | `wash::transcode_entries`（优化器读完书先转，后面一律按 UTF-8） |
   | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | `bookconv::uastyle` |
-  | KFX 写出器里跳引号、配括号（CSS 字符串遇换行结束） | `kfx::css` 的 `scan_css` |
+  | KFX 写出器里跳引号、配括号（CSS 字符串遇换行结束） | `bookconv::cascade`（`kfx::css`）的 `scan_css` |
   | Python 工具：命令行参数；回归目录配对、OPF/spine 解析；读 KFX | `tools/toollib.py`；`tools/regress/regresslib.py`（compare、tocchk、pair 共用）；`tools/kfx/kfx.py` 的 `load` 调 `kfx-dump --json`（Python 不再自己解 Ion，2026-10-09） |
 - **不可信输入不能让进程崩溃**：书的字节全是外来数据，数值相加用 `checked_add`、切片用 `get`；图片解码器 panic 由 `imgopt::guard` 兜住。**读外来数据设上限，超过就报错、不截断照用**（读用 `util::read_capped`）：
   - zip 条目解压 `epubzip::MAX_ENTRY_BYTES`（256MB，EPUB 与 CBZ 共用）；
