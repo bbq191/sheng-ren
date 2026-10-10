@@ -69,7 +69,6 @@ pub use self::encoding::transcode_entries;
 /// - 6（2026-10-10 审计）：统计正文字号时 `@media`、`<link media>` 按阅读模式的阅读范围、屏幕求（`WashOpts::media`，同 KFX 写出器；
 ///   以前特性条件一律不成立），`font` 简写里的字号也算（层叠展开简写）；指纹 `u` 段带上屏幕。测试书掌阅、Move 逐字节不变。
 pub const KINDLE_RULES_VERSION: &str = "6";
-pub use self::dead_refs::font_face_re;
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -89,7 +88,6 @@ use self::ncx_fix::*;
 use self::opf::{find_opf, opf_book_title, opf_unique_identifier};
 use self::chapters::chapters_into_toc;
 pub(crate) use self::chapters::is_toc_like_page;
-pub(crate) use self::css::{css_rule_re, rule_selector, strip_css_comments};
 pub(crate) use self::toc::name_index;
 pub(crate) use self::kindle_rules::fmt_num;
 use self::toc::*;

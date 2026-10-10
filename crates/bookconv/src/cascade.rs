@@ -87,41 +87,36 @@ impl Rules {
     /// `@media` 块按 `media` 求值（见 [`media_ok`]）。
     pub fn parse(css: &str, base: &str, media: Option<&MediaEnv>) -> Arc<Rules> {
         let mut r = Rules::default();
-        r.add(&strip_comments(css), base, media, 0);
+        r.add(&strip_comments(css), base, media);
         Arc::new(r)
     }
 
-    /// `css` 已去掉注释（嵌套的 `@media` 块直接递归，不再每层重去一遍）。`depth`：外面套了几层 `@media`，
-    /// 超过 [`MAX_MEDIA_NESTING`] 的不收（以前一直递归，套两万层的样式表栈溢出、整个进程中止）。
-    fn add(&mut self, css: &str, base: &str, media: Option<&MediaEnv>, depth: usize) {
-        let mut rest: &str = css;
-        while let Some(open) = rest.find('{') {
-            let head = rest[..open].trim();
-            // 到文末还没配上的块按 CSS 规范在文末收尾（以前整块连同后面的都丢掉）
-            let close = matching_brace(rest, open).unwrap_or(rest.len());
-            let body = &rest[open + 1..close];
-            // 前面可能残留 `@charset …;` 之类以分号结束的 at 规则。
-            let head = head.rsplit(';').next().unwrap_or("").trim();
-            if let Some(at) = head.strip_prefix('@') {
-                let lower = at.to_ascii_lowercase();
-                if let Some(q) = lower.strip_prefix("media") {
-                    if depth < MAX_MEDIA_NESTING && media_ok(q, media) {
-                        self.add(body, base, media, depth + 1);
-                    }
-                }
-            } else if !head.is_empty() {
-                let mut decls = parse_decls(body);
-                resolve_urls(&mut decls, base);
-                if !decls.is_empty() {
-                    for one in split_top(head, ',') {
-                        let one = one.trim();
-                        if let Ok(sel) = Selector::parse(one) {
-                            self.0.push(Rule { sel, need: Need::of(one), spec: specificity(one), decls: decls.clone() });
-                        }
-                    }
+    /// `css` 已去掉注释。规则按 [`rule_spans`] 找：外面套的 at 规则都得是条件成立的 `@media`（别的 at 规则里面的不收），
+    /// 套超过 [`MAX_MEDIA_NESTING`] 层的不收。
+    fn add(&mut self, css: &str, base: &str, media: Option<&MediaEnv>) {
+        let media_block_ok = |prelude: &str| {
+            let head = rule_head(prelude).to_ascii_lowercase();
+            head.strip_prefix("@media").is_some_and(|q| media_ok(q, media))
+        };
+        for r in rule_spans(css) {
+            if r.depth > MAX_MEDIA_NESTING || !r.parents.iter().all(|p| media_block_ok(p)) {
+                continue;
+            }
+            let head = rule_head(r.prelude);
+            if head.is_empty() || head.starts_with('@') {
+                continue;
+            }
+            let mut decls = parse_decls(r.body);
+            resolve_urls(&mut decls, base);
+            if decls.is_empty() {
+                continue;
+            }
+            for one in split_top(&head, ',') {
+                let one = one.trim();
+                if let Ok(sel) = Selector::parse(one) {
+                    self.0.push(Rule { sel, need: Need::of(one), spec: specificity(one), decls: decls.clone() });
                 }
             }
-            rest = rest.get(close + 1..).unwrap_or("");
         }
     }
 }
@@ -131,10 +126,16 @@ fn resolve_urls(decls: &mut [Decl], base: &str) {
     if base.is_empty() {
         return;
     }
-    for d in decls.iter_mut().filter(|d| d.value.to_ascii_lowercase().starts_with("url(")) {
-        let inner = d.value[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']);
-        d.value = format!("url({})", crate::epubzip::resolve_link(base, inner).0);
+    for d in decls.iter_mut() {
+        if let Some(inner) = leading_url(&d.value) {
+            d.value = format!("url({})", crate::epubzip::resolve_link(base, inner).0);
+        }
     }
+}
+
+/// 值是 `url(…)` 开头时括号里的地址（去掉引号；按 [`crate::html::css_urls`] 认）。
+fn leading_url(value: &str) -> Option<&str> {
+    crate::html::css_urls(value).into_iter().next().filter(|u| u.start == 0).map(|u| u.value)
 }
 
 /// 一个文档用到的样式表：各份 [`Rules`] 和它们第一条规则的全局序号（后出现的规则优先）。
@@ -143,45 +144,269 @@ pub struct Sheet {
     parts: Vec<(Arc<Rules>, usize)>,
 }
 
-fn strip_comments(css: &str) -> String {
-    let mut out = String::with_capacity(css.len());
-    let mut rest = css;
-    while let Some(p) = rest.find("/*") {
-        out.push_str(&rest[..p]);
-        match rest[p + 2..].find("*/") {
-            Some(e) => rest = &rest[p + 2 + e + 2..],
-            None => return out,
-        }
-    }
-    out.push_str(rest);
-    out
+// ---------------------------------------------------------------- CSS 文本：扫描、拆分、规则位置
+//
+// 层叠（上面的 `Rules`）和清洗层、优化器（`wash::css`、`cssunlock`、`bgfit`、`capfit`、`wash::fonts`……）共用的 CSS 文本小工具，
+// 每样只有这一份（2026-10-10 审计以前成对重复、健壮程度不一：有的认引号有的不认，有的会切坏 `calc()`）。
+
+/// [`lex`] 给出的一个字符。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Lex {
+    /// 字符串、注释之外、没被转义的字符：括号、分隔符这些结构只看它。
+    Code(usize, char),
+    /// 字符串里的字符（含两边的引号）、反斜杠和被它转义的字符：算词的一部分，但不当结构。
+    Quoted(usize),
+    /// 一段注释 `/* … */`：(起点, 最后一个字符的位置)；没闭合的到末尾。
+    Comment(usize, usize),
 }
 
-/// 逐字符扫 CSS 文本（`it` 给出 (位置, 字符)），字符串里的、反斜杠转义的字符不交给 `f`，别的依次交给它；`f` 返回 `Some` 就停下返回它。
-/// 按 CSS Syntax 规范：反斜杠转义下一个字符，字符串遇到没转义的换行就结束（坏字符串）。以前落单的引号一直吞到下一个同样的引号，
-/// `{}` 配不上、后面的规则全废。找配对的括号、按分隔符拆（选择器列表、媒体查询、属性值）、算优先级都用它。
-fn scan_css<R>(it: impl Iterator<Item = (usize, char)>, mut f: impl FnMut(usize, char) -> Option<R>) -> Option<R> {
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    for (i, c) in it {
-        if escaped {
-            escaped = false;
-            continue;
+/// 逐字符扫 CSS 文本（`it` 给出 (位置, 字符)），按 CSS Syntax 规范分出字符串、注释、转义：反斜杠转义下一个字符，字符串遇到
+/// 没转义的换行就结束（坏字符串），注释只在字符串外面算。以前落单的引号一直吞到下一个同样的引号，`{}` 配不上、后面的规则全废。
+/// 找配对的括号、按分隔符拆（选择器列表、媒体查询、属性值）、切词、去注释、找规则、算优先级都用它。
+fn lex<I: Iterator<Item = (usize, char)>>(it: I) -> Lexer<I> {
+    Lexer { it: it.peekable(), quote: None }
+}
+
+struct Lexer<I: Iterator<Item = (usize, char)>> {
+    it: std::iter::Peekable<I>,
+    quote: Option<char>,
+}
+
+impl<I: Iterator<Item = (usize, char)>> Iterator for Lexer<I> {
+    type Item = Lex;
+
+    fn next(&mut self) -> Option<Lex> {
+        let (i, c) = self.it.next()?;
+        if c == '\\' {
+            self.it.next();
+            return Some(Lex::Quoted(i));
         }
-        match (quote, c) {
-            (_, '\\') => escaped = true,
-            (Some(_), '\n' | '\r' | '\x0c') => quote = None,
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"' | '\'') => quote = Some(c),
-            (None, c) => {
-                if let Some(r) = f(i, c) {
-                    return Some(r);
+        match self.quote {
+            Some(q) => {
+                if c == q || matches!(c, '\n' | '\r' | '\x0c') {
+                    self.quote = None;
                 }
+                Some(Lex::Quoted(i))
+            }
+            None if c == '"' || c == '\'' => {
+                self.quote = Some(c);
+                Some(Lex::Quoted(i))
+            }
+            None if c == '/' && self.it.peek().is_some_and(|&(_, n)| n == '*') => {
+                let (mut last, _) = self.it.next().unwrap_or((i, '*'));
+                let mut prev = '\0';
+                for (j, ch) in self.it.by_ref() {
+                    last = j;
+                    if prev == '*' && ch == '/' {
+                        break;
+                    }
+                    prev = ch;
+                }
+                Some(Lex::Comment(i, last))
+            }
+            None => Some(Lex::Code(i, c)),
+        }
+    }
+}
+
+/// 字符串、注释之外的字符依次交给 `f`；`f` 返回 `Some` 就停下返回它。
+fn scan_css<R>(it: impl Iterator<Item = (usize, char)>, mut f: impl FnMut(usize, char) -> Option<R>) -> Option<R> {
+    for l in lex(it) {
+        if let Lex::Code(i, c) = l {
+            if let Some(r) = f(i, c) {
+                return Some(r);
             }
         }
     }
     None
+}
+
+/// 去掉 `/* … */` 注释，每段换成一个空格（注释在 CSS 里起分隔作用：`1px/**/solid` 是两个词）；字符串里的 `/*` 不算，
+/// 没闭合的注释去到末尾。没有注释时原样借用。层叠解析样式表、清洗层判断选择器（[`rule_selector`]）共用
+/// （2026-09-30 审计：`/* p 的边距 */ .note{…}` 被当成 p 规则改了边距，`/* fonts */ @font-face{…}` 没认出是 @font-face）。
+pub fn strip_comments(css: &str) -> std::borrow::Cow<'_, str> {
+    if !css.contains("/*") {
+        return std::borrow::Cow::Borrowed(css);
+    }
+    let mut out = String::with_capacity(css.len());
+    let mut from = 0;
+    for l in lex(css.char_indices()) {
+        if let Lex::Comment(s, last) = l {
+            out.push_str(&css[from..s]);
+            out.push(' ');
+            from = last + css[last..].chars().next().map_or(0, char::len_utf8);
+        }
+    }
+    out.push_str(&css[from..]);
+    std::borrow::Cow::Owned(out)
+}
+
+/// 样式表里的一条规则在原文里的位置（[`rule_spans`]）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct RuleSpan<'a> {
+    /// `{` 前面的原文：从上一个 `{`/`}`（或开头）之后起，可能带着前面的注释和 `@charset …;`/`@import …;` 这类语句——
+    /// 判断选择器时过 [`rule_selector`]，写回照原文。
+    pub prelude: &'a str,
+    /// `prelude` 的起点。
+    pub start: usize,
+    /// `{` 和 `}` 之间的原文（嵌套的花括号也在里面）。
+    pub body: &'a str,
+    /// `body` 的起点。
+    pub body_start: usize,
+    /// 规则结束处（`}` 之后）；到文末还没配上 `}` 的是文末（`closed` 为假）。
+    pub end: usize,
+    pub closed: bool,
+    /// 外面套着的 at 规则（`@media …`、`@supports …`）的 `prelude`，由外向内；最多记 [`MAX_MEDIA_NESTING`] 层，实际层数看 `depth`。
+    pub parents: Vec<&'a str>,
+    pub depth: usize,
+}
+
+/// 样式表里的规则，按出现顺序，位置都是原文的（改写时只替换 `body`，别的原样留）。层叠（[`Rules`]）、清洗层和优化器读写
+/// 样式表都用它（2026-10-10 审计以前清洗层用一条只认最内层 `{…}` 的正则，字符串、注释里的花括号会切错，和层叠是两套解析）：
+/// - 引号、注释、转义按 CSS 规范认（[`lex`]），里面的 `{`、`}`、`;` 不算；
+/// - `{` 前面（去掉注释和 `@charset …;` 这类语句以后）以 `@` 开头的是 at 规则：里面有块的（`@media`、`@supports`、`@page`
+///   的页边距框……）往里找、自己不给，没有块的（`@font-face`、`@page`）当一条规则给出；外面的 at 规则记进 `parents`，
+///   要不要（`@media` 条件成不成立）由调用方定；
+/// - 别的是普通规则，整个 `{…}` 给出（CSS 嵌套写法里面的块不再拆）；
+/// - `{` 前面一个字都没有的块不给（同以前的正则）；到文末没配上 `}` 的块按 CSS 规范在文末收尾；多余的 `}` 跳过。
+///
+/// 不递归（套几万层的 `@media` 也不会栈溢出）。
+pub fn rule_spans(css: &str) -> Vec<RuleSpan<'_>> {
+    struct At<'a> {
+        prelude: &'a str,
+        start: usize,
+        open: usize,
+        has_child: bool,
+    }
+    fn push<'a>(out: &mut Vec<RuleSpan<'a>>, css: &'a str, start: usize, open: usize, close: Option<usize>, ats: &[At<'a>]) {
+        if start == open {
+            return;
+        }
+        let end = close.unwrap_or(css.len());
+        out.push(RuleSpan {
+            prelude: &css[start..open],
+            start,
+            body: &css[open + 1..end],
+            body_start: open + 1,
+            end: close.map_or(end, |c| c + 1),
+            closed: close.is_some(),
+            parents: ats.iter().take(MAX_MEDIA_NESTING).map(|a| a.prelude).collect(),
+            depth: ats.len(),
+        });
+    }
+    let mut out = Vec::new();
+    let mut ats: Vec<At> = Vec::new();
+    // 正在读的普通规则：(prelude 起点, `{` 的位置, 花括号层数)
+    let mut qual: Option<(usize, usize, usize)> = None;
+    let mut last = 0;
+    for l in lex(css.char_indices()) {
+        let Lex::Code(i, c) = l else { continue };
+        match (c, qual.as_mut()) {
+            ('{', Some(q)) => q.2 += 1,
+            ('}', Some(q)) => {
+                q.2 -= 1;
+                if q.2 == 0 {
+                    push(&mut out, css, q.0, q.1, Some(i), &ats);
+                    qual = None;
+                    last = i + 1;
+                }
+            }
+            ('{', None) => {
+                if let Some(a) = ats.last_mut() {
+                    a.has_child = true;
+                }
+                let prelude = &css[last..i];
+                if rule_head(prelude).starts_with('@') {
+                    ats.push(At { prelude, start: last, open: i, has_child: false });
+                } else {
+                    qual = Some((last, i, 1));
+                }
+                last = i + 1;
+            }
+            ('}', None) => {
+                if let Some(a) = ats.pop() {
+                    if !a.has_child {
+                        push(&mut out, css, a.start, a.open, Some(i), &ats);
+                    }
+                }
+                last = i + 1;
+            }
+            _ => {}
+        }
+    }
+    // 到文末没收尾的：最里面那一块（普通规则，或里面没有块的 at 规则）照收，外面的 at 规则里都有块、本来就不给
+    if let Some((start, open, _)) = qual {
+        push(&mut out, css, start, open, None, &ats);
+    } else if let Some((a, outer)) = ats.split_last() {
+        if !a.has_child {
+            push(&mut out, css, a.start, a.open, None, outer);
+        }
+    }
+    out
+}
+
+/// `{` 前面那段去掉注释、取最后一个顶层 `;` 之后的部分（前面的是 `@charset …;` 这类以分号结束的语句），去掉两边空白。
+/// 层叠拿它当选择器、[`rule_spans`] 拿它判断是不是 at 规则。
+fn rule_head(prelude: &str) -> String {
+    let stmt = split_top(prelude, ';').pop().unwrap_or("");
+    strip_comments(stmt).trim().to_string()
+}
+
+/// [`RuleSpan::prelude`] 拿来**判断**时的样子：去掉开头的语句式 at 规则（`@charset "utf-8";`、`@import …;`）和注释。清洗层、
+/// 优化器判断选择器的地方一律用它，写回仍用原文——以前有的地方只去注释，样式表开头有 `@charset` 时第一条规则被当成 at 规则
+/// 跳过（2026-10-10 审计，`capfit`、`bgfit` 等）。
+pub fn rule_selector(raw: &str) -> std::borrow::Cow<'_, str> {
+    strip_comments(split_leading_statements(raw).1)
+}
+
+/// 选择器文本开头的语句式 at 规则（以 `@` 开头、到括号、引号和注释之外的 `;` 为止，可以有好几条，前后可以夹注释）
+/// 拆成 (这些语句, 其余)。没有就是 `("", 原文)`。
+pub fn split_leading_statements(sel: &str) -> (&str, &str) {
+    let mut cut = 0;
+    while strip_comments(&sel[cut..]).trim_start().starts_with('@') {
+        let rest = &sel[cut..];
+        let mut depth = 0usize;
+        let end = scan_css(rest.char_indices(), |i, c| {
+            match c {
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                ';' if depth == 0 => return Some(i + 1),
+                _ => {}
+            }
+            None
+        });
+        match end {
+            Some(e) => cut += e,
+            None => break,
+        }
+    }
+    (&sel[..cut], &sel[cut..])
+}
+
+/// 选择器（一个逗号分项）的最后一个复合选择器：`div.a > p.b:first-child` → `p.b:first-child`。按空白和组合符 `>`、`+`、`~` 切。
+/// 字体分析、Send to Kindle 规则、正文层判断、章尾容器类、整页背景共用。
+pub fn last_compound(sel: &str) -> &str {
+    sel.trim().rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~')).next().unwrap_or("")
+}
+
+/// 复合选择器的标签名（小写，没写是空串）和类名：伪类、属性选择器（`:`、`[` 起）不算，空的类名不算，`p.a.b` → ("p", ["a", "b"])。
+pub fn compound_tag_classes(compound: &str) -> (String, Vec<&str>) {
+    let c = compound.split([':', '[']).next().unwrap_or("");
+    let mut parts = c.split('.');
+    let tag = parts.next().unwrap_or("").to_ascii_lowercase();
+    (tag, parts.filter(|p| !p.is_empty()).collect())
+}
+
+/// 样式表里的 `@font-face` 规则（[`rule_spans`] 里选择器正好是 `@font-face` 的，不分大小写；`@media` 里的也算）。
+/// 层叠读嵌入字体（[`font_faces`]）、清洗层剔除死字体（`wash::dead_refs`）、字体分析（`wash::fonts`）共用
+/// （以前三处各找各的：两处用一条遇到字符串里的 `}` 就截断的正则）。
+pub fn font_face_rules(css: &str) -> impl Iterator<Item = RuleSpan<'_>> {
+    rule_spans(css).into_iter().filter(|r| is_font_face(&rule_selector(r.prelude)))
+}
+
+/// 选择器（已过 [`rule_selector`]）是不是 `@font-face`。
+pub fn is_font_face(sel: &str) -> bool {
+    sel.trim().eq_ignore_ascii_case("@font-face")
 }
 
 /// 找和 `it` 第一个字符（左括号 `l`）配对的右括号 `r` 的位置，引号里的不算。
@@ -198,11 +423,6 @@ fn matching_close(it: impl Iterator<Item = (usize, char)>, l: char, r: char) -> 
         }
         None
     })
-}
-
-/// 找和 `open`（`{` 的位置）配对的 `}`。
-fn matching_brace(s: &str, open: usize) -> Option<usize> {
-    matching_close(s[open..].char_indices().map(|(i, c)| (open + i, c)), '{', '}')
 }
 
 /// 解析 `a: b; c: d !important`。切声明用 [`crate::html::css_decls`]（和优化器同一个：引号、括号里的 `;` 不切，
@@ -231,8 +451,8 @@ pub fn parse_decls(s: &str) -> Vec<Decl> {
     out
 }
 
-/// 按分隔符拆，括号和引号里的不拆。
-fn split_top(s: &str, sep: char) -> Vec<&str> {
+/// 按分隔符拆，括号、引号、注释里的不拆。
+pub fn split_top(s: &str, sep: char) -> Vec<&str> {
     let mut out = Vec::new();
     let (mut depth, mut start) = (0i32, 0);
     scan_css(s.char_indices(), |i, c| {
@@ -251,17 +471,90 @@ fn split_top(s: &str, sep: char) -> Vec<&str> {
     out
 }
 
-/// 四值简写（`margin`、`padding`、`border-*`、`border-radius`）按 CSS 展开成四项：1 个值四边一样，2 个是上下、左右，
-/// 3 个是上、左右、下，4 个依次（多出来的不管）。没有值返回 `None`。
+/// 按顶层空白切词：括号、字符串里的空白不算（`rgb(0, 0, 0)`、`url(a b.png)`、`"A B"`），顶层的注释也算分隔、不进词。
+/// 另返回括号配不配对。`margin`/`padding` 等四值简写（[`box_sides`]）、`background` 简写（[`background_tokens`]）、阴影、边框共用。
+pub fn tokens(v: &str) -> (Vec<&str>, bool) {
+    tokens_with(v, false)
+}
+
+/// 同 [`tokens`]，另把括号外的 `/`（`background` 简写的「位置 / 尺寸」）切成单独的词。层叠（`background` 展开）和清洗层
+/// （[`crate::cssunlock::background_longhands`]）共用。
+pub fn background_tokens(v: &str) -> Vec<&str> {
+    tokens_with(v, true).0
+}
+
+fn tokens_with(v: &str, slash: bool) -> (Vec<&str>, bool) {
+    fn end_at<'a>(v: &'a str, toks: &mut Vec<&'a str>, start: &mut Option<usize>, at: usize) {
+        if let Some(s) = start.take() {
+            toks.push(&v[s..at]);
+        }
+    }
+    let (mut toks, mut depth, mut start) = (Vec::new(), 0i32, None::<usize>);
+    for l in lex(v.char_indices()) {
+        match l {
+            Lex::Comment(i, _) if depth == 0 => end_at(v, &mut toks, &mut start, i),
+            Lex::Comment(i, _) | Lex::Quoted(i) => {
+                start.get_or_insert(i);
+            }
+            Lex::Code(i, c) if c.is_whitespace() && depth == 0 => end_at(v, &mut toks, &mut start, i),
+            Lex::Code(i, '/') if slash && depth == 0 => {
+                end_at(v, &mut toks, &mut start, i);
+                toks.push(&v[i..i + 1]);
+            }
+            Lex::Code(i, c) => {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ => {}
+                }
+                start.get_or_insert(i);
+            }
+        }
+    }
+    end_at(v, &mut toks, &mut start, v.len());
+    (toks, depth == 0)
+}
+
+/// `margin`/`padding` 这类四值简写拆成的四边。
+#[derive(Debug, PartialEq, Eq)]
+pub enum BoxSides<'a> {
+    /// 上、右、下、左，和 `" !important"`（没有就是空串）。
+    Sides([&'a str; 4], &'static str),
+    /// 整体一个全局关键字（`inherit`/`initial`/`unset`/`revert`），不能跟别的边混写在一个简写里。
+    Keyword(&'a str, &'static str),
+    /// 拆不清（超过 4 个值、括号不配对、关键字混在别的值里）。
+    Unknown,
+}
+
+/// 拆四值简写（`margin`、`padding`、`border-style`/`-width`/`-color`、`border-radius`）的值：1–4 个值按 CSS 规则展开成四边
+/// （1 个四边一样，2 个是上下、左右，3 个是上、左右、下）；括号里的空格不算分隔（`calc(1em + 2px)`）。层叠、清洗层段距归零
+/// （`wash::css`）、章尾去下边距（`wash::layout`）、`kindle_rules` 共用（以前层叠另有一份按空白切的，会把 `calc()` 切坏、
+/// 超过 4 个值也照取前 4 个）。
+pub fn box_sides(val: &str) -> BoxSides<'_> {
+    let (v, important) = crate::cssunlock::split_important(val);
+    let (parts, balanced) = tokens(v);
+    if !balanced {
+        return BoxSides::Unknown;
+    }
+    let keyword = |p: &str| matches!(p.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer");
+    match parts[..] {
+        [k] if keyword(k) => BoxSides::Keyword(k, important),
+        _ if parts.iter().any(|p| keyword(p)) => BoxSides::Unknown,
+        [a] => BoxSides::Sides([a, a, a, a], important),
+        [a, b] => BoxSides::Sides([a, b, a, b], important),
+        [a, b, c] => BoxSides::Sides([a, b, c, b], important),
+        [a, b, c, d] => BoxSides::Sides([a, b, c, d], important),
+        _ => BoxSides::Unknown,
+    }
+}
+
+/// 层叠用：四值简写展开成上、右、下、左（全局关键字四边都是它）；拆不清的整条不认（`None`）。
 fn four_values(value: &str) -> Option<[&str; 4]> {
-    let v: Vec<&str> = value.split_whitespace().collect();
-    Some(match v.as_slice() {
-        [a] => [*a, *a, *a, *a],
-        [a, b] => [*a, *b, *a, *b],
-        [a, b, c] => [*a, *b, *c, *b],
-        [a, b, c, d, ..] => [*a, *b, *c, *d],
-        [] => return None,
-    })
+    match box_sides(value) {
+        BoxSides::Sides(v, _) => Some(v),
+        BoxSides::Keyword(k, _) => Some([k; 4]),
+        BoxSides::Unknown => None,
+    }
 }
 
 fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
@@ -272,7 +565,7 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
     // `border-top: 1px solid red` 这类：拆成样式、宽度、颜色（没写的按 CSS 缺省：无、medium、当前颜色）。
     let border_side = |side: &str| -> Vec<(String, String)> {
         let (mut style, mut width, mut color) = ("none".to_string(), "medium".to_string(), String::new());
-        for t in split_top(value, ' ').into_iter().map(str::trim).filter(|t| !t.is_empty()) {
+        for t in tokens(value).0 {
             let l = t.to_ascii_lowercase();
             if BORDER_STYLES.contains(&l.as_str()) {
                 style = l;
@@ -423,27 +716,9 @@ fn background_shorthand(value: &str) -> Vec<(String, String)> {
     if matches!(value.trim().to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer") {
         return Vec::new();
     }
-    let spaced = {
-        // 把括号外的 `/` 隔开当单独的词
-        let mut out = String::new();
-        let mut depth = 0i32;
-        for c in value.chars() {
-            match c {
-                '(' => depth += 1,
-                ')' => depth -= 1,
-                _ => {}
-            }
-            if c == '/' && depth == 0 {
-                out.push_str(" / ");
-            } else {
-                out.push(c);
-            }
-        }
-        out
-    };
     let (mut pos, mut size, mut after_slash) = (Vec::new(), Vec::new(), false);
     let mut out = Vec::new();
-    for t in split_top(&spaced, ' ').into_iter().map(str::trim).filter(|t| !t.is_empty()) {
+    for t in background_tokens(value) {
         let l = t.to_ascii_lowercase();
         if l.starts_with("url(") || l == "none" {
             out.push(("background-image".to_string(), t.to_string()));
@@ -910,18 +1185,12 @@ pub struct FontFace {
 pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
     let css = strip_comments(css);
     let mut out = Vec::new();
-    // 找 `@font-face {…}` 块用优化器同一个正则（`crate::wash::font_face_re`）。
-    for m in crate::wash::font_face_re().find_iter(&css) {
-        let block = m.as_str();
-        let Some(open) = block.find('{') else { continue };
-        let decls = parse_decls(&block[open + 1..block.len() - 1]);
+    for r in font_face_rules(&css) {
+        let decls = parse_decls(r.body);
         let get = |k: &str| decls.iter().rev().find(|d| d.prop == k).map(|d| d.value.as_str());
         let family = get("font-family").map(|f| f.trim().trim_matches(['"', '\'']).to_string()).filter(|f| !f.is_empty());
         let url = get("src").and_then(|src| {
-            let i = src.to_ascii_lowercase().find("url(")?;
-            let after = &src[i + 4..];
-            let j = after.find(')')?;
-            let raw = after[..j].trim().trim_matches(['"', '\'']).trim();
+            let raw = crate::html::css_urls(src).into_iter().next()?.value.trim();
             (!raw.is_empty() && !crate::html::is_external(raw)).then(|| crate::epubzip::resolve_link(base, raw).0)
         });
         if let (Some(family), Some(path)) = (family, url) {
@@ -965,6 +1234,9 @@ pub fn parse_len(v: &str) -> Option<Len> {
         _ => None,
     }
 }
+
+/// 1em 折合多少 pt（根字号按 12pt 算：pt 写的字号、行高、字间距换成 em 用）。
+pub const PT_PER_EM: f64 = 12.0;
 
 /// 外边距、内边距、边框的 1px 折合多少 pt（Send to Kindle 的口径，见 [`parse_box_len`]）。
 const PT_PER_BOX_PX: f64 = 0.45;
@@ -1018,11 +1290,11 @@ pub struct Computed {
     pub nowrap: bool,
     /// `word-break: break-all`（Send to Kindle 写成 `$569: $570`，《绍宋》全书 `p{word-break:break-all}`）。
     pub break_all: bool,
-    /// 自己或祖先有背景色、背景图（Send to Kindle 只在没有背景时省掉近黑的文字颜色，见 `write/style.rs` 的 `text_props`）。
+    /// 自己或祖先有背景色、背景图（Send to Kindle 只在没有背景时省掉近黑的文字颜色，见 KFX 写出器 `crates/kfx/src/write/style.rs` 的 `text_props`）。
     pub on_background: bool,
     /// 自己或祖先有背景图：只有背景图、没有背景色的地方不按对比度调文字颜色（Send to Kindle 同样：《雪国》扉页背景图上的白字照写）。
     pub on_image: bool,
-    /// 自己或祖先（含 body）有左右外边距、内边距或边框：Send to Kindle 把首行缩进写成百分比（见 `write/style.rs` 的 `block_props`）。
+    /// 自己或祖先（含 body）有左右外边距、内边距或边框：Send to Kindle 把首行缩进写成百分比（见 KFX 写出器 `crates/kfx/src/write/style.rs` 的 `block_props`）。
     pub in_hbox: bool,
     /// `list-style-type`（`None`＝按标签缺省）、`list-style-position: inside`。
     pub list_style: Option<String>,
@@ -1078,7 +1350,7 @@ pub fn parse_shadow(v: &str) -> Option<Shadow> {
     }
     let mut lens = Vec::new();
     let mut color = None;
-    for tok in split_top(&first, ' ').into_iter().map(str::trim).filter(|s| !s.is_empty()) {
+    for tok in tokens(&first).0 {
         match parse_box_len(tok) {
             Some(l) if tok.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.' || c == '+') => lens.push(l),
             _ => color = parse_color(tok).or(color),
@@ -1281,7 +1553,7 @@ impl Computed {
                     Some(Len::Em(n)) if v.ends_with("rem") => n,
                     Some(Len::Em(n)) => parent.font_size * n,
                     Some(Len::Percent(n)) => parent.font_size * n / 100.0,
-                    Some(Len::Pt(n)) => n / 12.0,
+                    Some(Len::Pt(n)) => n / PT_PER_EM,
                     None => parent.font_size,
                 },
             };
@@ -1330,7 +1602,7 @@ impl Computed {
                     // 无单位的数字是倍数；em 相对本元素字号。
                     Some(Len::Em(n)) => Some(n),
                     Some(Len::Percent(n)) => Some(n / 100.0),
-                    Some(Len::Pt(n)) => Some(n / 12.0 / c.font_size),
+                    Some(Len::Pt(n)) => Some(n / PT_PER_EM / c.font_size),
                     None => c.line_height,
                 }
             };
@@ -1369,7 +1641,7 @@ impl Computed {
         if let Some(v) = get("letter-spacing") {
             c.letter_spacing = match parse_len(v) {
                 Some(Len::Em(n)) if v.trim() != "normal" => Some(n),
-                Some(Len::Pt(n)) => Some(n / 12.0 / c.font_size),
+                Some(Len::Pt(n)) => Some(n / PT_PER_EM / c.font_size),
                 _ => None,
             };
         }
@@ -1440,7 +1712,7 @@ impl Computed {
         if let Some(v) = get("text-shadow") {
             c.text_shadow = parse_shadow(v);
         }
-        c.bg_image = get("background-image").filter(|v| v.to_ascii_lowercase().starts_with("url(")).map(|v| v[4..].trim_end_matches(')').trim().trim_matches(['"', '\'']).to_string());
+        c.bg_image = get("background-image").and_then(leading_url).map(str::to_string);
         c.bg_no_repeat = get("background-repeat").is_some_and(|v| v.trim() == "no-repeat");
         c.bg_fixed = get("background-attachment").is_some_and(|v| v.trim() == "fixed");
         c.bg_position = get("background-position").map(|v| parse_bg_position(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
@@ -1609,9 +1881,52 @@ mod tests {
         assert_eq!(get("p", "color").as_deref(), Some("green"));
         // 拆分、配括号、优先级共用一个扫描器：引号里的逗号、括号不算
         assert_eq!(split_top(r#"a, "b,c", d(e,f), 'g\',h'"#, ','), ["a", r#" "b,c""#, " d(e,f)", r#" 'g\',h'"#]);
-        assert_eq!(matching_brace("{a{b}\"}\"c}x", 0), Some(9));
+        assert_eq!(rule_spans("p{a{b}\"}\"c}x").iter().map(|r| (r.body, r.end)).collect::<Vec<_>>(), [("a{b}\"}\"c", 11)]);
         assert_eq!(specificity(r#"a[title=")"]:not(.x)"#), (0, 2, 1));
         assert!(media_ok("screen and (min-width: 1px)", Some(&MediaEnv { width: 10.0, height: 10.0, device_width: 10.0, device_height: 10.0, color: false })));
+    }
+
+    /// 规则位置：字符串、注释里的花括号不算；`@media` 里的给出并带上条件；开头的语句和注释留在 prelude 里（判断时 `rule_selector` 去掉）；
+    /// `@font-face` 这类没有块的 at 规则照给；空 prelude 的块不给；到文末没收尾的在文末收尾。
+    #[test]
+    fn rule_spans_positions_and_parents() {
+        let css = "@charset \"utf-8\"; /* { */ p { content: '}'; color: red }\n@media screen { .a { x: 1 } @supports (y) { .b { z: 2 } } }\n@font-face { font-family: f }\n}{orphan} .c { q: 1";
+        let r = rule_spans(css);
+        let got: Vec<(String, &str, Vec<&str>, bool)> = r.iter().map(|r| (rule_selector(r.prelude).trim().to_string(), r.body.trim(), r.parents.iter().map(|p| p.trim()).collect(), r.closed)).collect();
+        assert_eq!(
+            got,
+            [
+                ("p".to_string(), "content: '}'; color: red", vec![], true),
+                (".a".to_string(), "x: 1", vec!["@media screen"], true),
+                (".b".to_string(), "z: 2", vec!["@media screen", "@supports (y)"], true),
+                ("@font-face".to_string(), "font-family: f", vec![], true),
+                (".c".to_string(), "q: 1", vec![], false),
+            ]
+        );
+        assert_eq!(&css[r[0].body_start..r[0].end], " content: '}'; color: red }");
+        assert!(r[0].prelude.starts_with("@charset"));
+        // 层叠只收条件成立的 `@media` 里的，`@supports` 里的不收；属性选择器里引号中的 `;` 不切选择器
+        let mut s = Sheet::default();
+        s.add("@media print { p { color: blue } } @supports (x) { p { text-indent: 3em } } [title=\"a;b\"] { text-indent: 1em }", 0);
+        let html = scraper::Html::parse_document(r#"<p title="a;b">x</p>"#);
+        let p = html.select(&Selector::parse("p").unwrap()).next().unwrap();
+        let d = s.cascade(&p, "");
+        assert_eq!((d.get("color"), d.get("text-indent").map(String::as_str)), (None, Some("1em")));
+    }
+
+    /// 去注释换成空格、字符串里的不算；切词认引号、注释当分隔；四值简写拆不清的不认。
+    #[test]
+    fn text_tools() {
+        assert_eq!(strip_comments("a/* x */b 'c/*d*/' /* 没闭合"), "a b 'c/*d*/'  ");
+        assert!(matches!(strip_comments("p{}"), std::borrow::Cow::Borrowed(_)));
+        assert_eq!(tokens("1px/**/solid  \"A B\"\trgb(0, 0, 0)").0, ["1px", "solid", "\"A B\"", "rgb(0, 0, 0)"]);
+        assert!(!tokens("calc(1px").1);
+        assert_eq!(background_tokens("url(a/b.png) center/cover"), ["url(a/b.png)", "center", "/", "cover"]);
+        assert_eq!(box_sides("calc(1em + 2px) 0"), BoxSides::Sides(["calc(1em + 2px)", "0", "calc(1em + 2px)", "0"], ""));
+        assert_eq!(four_values("1px 2px 3px 4px 5px"), None);
+        assert_eq!(four_values("inherit"), Some(["inherit"; 4]));
+        assert_eq!(split_leading_statements("@import url('a;b.css'); /* c */ @charset \"x\";\n.x"), ("@import url('a;b.css'); /* c */ @charset \"x\";", "\n.x"));
+        assert_eq!(compound_tag_classes("body..x"), ("body".to_string(), vec!["x"]));
     }
 
     /// `background:none`、只写颜色的 `background` 简写按 CSS 把没写的项（背景图等）重置成初始值；位置、尺寸回到不写。

@@ -3,12 +3,6 @@ use super::*;
 
 // ───────────────────────── 无效引用清理 ─────────────────────────
 
-/// 一条 `@font-face { … }` 规则（不跨嵌套花括号）。清洗层剔除死字体引用和 AZW3 写出器去掉字体声明共用。
-pub fn font_face_re() -> &'static Regex {
-    static FACE: OnceLock<Regex> = OnceLock::new();
-    FACE.get_or_init(|| Regex::new(r#"(?is)@font-face\s*\{[^}]*\}"#).unwrap())
-}
-
 /// 引用指的不是书内文件（空值、纯锚点 `#x`、`data:`、`http(s):`、`//` 开头）——谈不上"书内缺文件"，一律不判无效。
 /// 和 [`crate::html::is_external`]（"带协议的书外链接"，全书改链接时用）口径不同：这里空值和纯锚点也算，别的协议（`res:` 等）不算。
 pub(super) fn is_non_file_ref(r: &str) -> bool {
@@ -60,11 +54,14 @@ pub(super) fn drop_dead_imgs(html: &str, base_file: &str, exact: &HashSet<String
 /// 外部（http/data）来源视为活。返回 (新 css, 改动的规则数)。
 pub(super) fn drop_dead_font_faces(css: &str, base_file: &str, exact: &HashSet<String>, lower: &HashSet<String>) -> (String, usize) {
     static FORMAT: OnceLock<Regex> = OnceLock::new();
-    let face = font_face_re();
     let format = FORMAT.get_or_init(|| Regex::new(r#"^\s*(?i:format)\([^)]*\)"#).unwrap());
     let mut n = 0;
-    let out = face.replace_all(css, |c: &regex::Captures| {
-        let block = &c[0];
+    let mut edits = Vec::new();
+    // `@font-face` 规则按层叠同一套解析找（`cascade::font_face_rules`；以前一条正则遇到字符串里的 `}` 就截断）；
+    // 改的是从 `@font-face` 起到 `}` 的这一段，前面的注释、`@import …;` 语句不动
+    for r in crate::cascade::font_face_rules(css) {
+        let start = r.start + html::rfind_ci(r.prelude, "@font-face").unwrap_or(0);
+        let block = &css[start..r.end];
         let has_local = block.to_ascii_lowercase().contains("local(");
         let mut dead: Vec<(usize, usize)> = Vec::new();
         let mut total = 0;
@@ -79,11 +76,12 @@ pub(super) fn drop_dead_font_faces(css: &str, base_file: &str, exact: &HashSet<S
             }
         }
         if dead.is_empty() {
-            return block.to_string();
+            continue;
         }
         n += 1;
         if !has_local && dead.len() == total {
-            return String::new();
+            edits.push((start, r.end, String::new()));
+            continue;
         }
         let mut out = block.to_string();
         for (st, en) in dead.into_iter().rev() {
@@ -98,9 +96,9 @@ pub(super) fn drop_dead_font_faces(css: &str, base_file: &str, exact: &HashSet<S
                 out.replace_range(st..skip, "");
             }
         }
-        out
-    });
-    (out.into_owned(), n)
+        edits.push((start, r.end, out));
+    }
+    (html::apply_edits(css, edits), n)
 }
 
 /// 清掉书里指向不存在文件的 `<img>` 和字体全缺的 `@font-face`。xochitl 遇到会逐次报 `Unable to find file`/
@@ -123,10 +121,10 @@ pub(super) fn drop_dead_refs(entries: &mut [Entry], rep: &mut WashReport) {
             let (t, a) = drop_dead_imgs(text, base, &exact, &lower);
             let mut b = 0;
             // `<style>` 里的 `url()` 不还原字符引用（同以前；HTML 解析时 `<style>` 的内容是原样文字）
-            let t = html::style_block_re().replace_all(&t, |c: &regex::Captures| {
-                let (css, k) = drop_dead_font_faces(&c[2], base, &exact, &lower);
+            let t = html::edit_style_blocks(&t, |_, css| {
+                let (css, k) = drop_dead_font_faces(css, base, &exact, &lower);
                 b += k;
-                format!("{}{}{}", &c[1], css, &c[3])
+                Edit::Set(css)
             });
             (t.into_owned(), a + b)
         };

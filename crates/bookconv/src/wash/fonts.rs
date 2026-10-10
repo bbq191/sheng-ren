@@ -61,17 +61,18 @@ type Pairs = Vec<(String, String)>;
 /// 一段 CSS 里的 (选择器, 声明) 和 `@font-face`（字体名, src）。
 fn css_rules(css: &str) -> (Pairs, Pairs) {
     let (mut rules, mut faces) = (Vec::new(), Vec::new());
-    for c in css_rule_re().captures_iter(css) {
-        let sel = rule_selector(&c[1]);
+    // 规则按层叠同一套解析找（`cascade::rule_spans`），`@font-face` 的判断和层叠、剔除死字体共用（`cascade::is_font_face`）
+    for c in crate::cascade::rule_spans(css) {
+        let sel = rule_selector(c.prelude);
         let sel = sel.trim();
-        if sel.starts_with("@font-face") {
-            let fam = html::css_decls(&c[2]).iter().find(|d| d.prop.eq_ignore_ascii_case("font-family")).and_then(|d| norm_family(d.value));
-            let src: String = html::css_decls(&c[2]).iter().filter(|d| d.prop.eq_ignore_ascii_case("src")).map(|d| d.value.to_string()).collect::<Vec<_>>().join(",");
+        if crate::cascade::is_font_face(sel) {
+            let fam = html::css_decls(c.body).iter().find(|d| d.prop.eq_ignore_ascii_case("font-family")).and_then(|d| norm_family(d.value));
+            let src: String = html::css_decls(c.body).iter().filter(|d| d.prop.eq_ignore_ascii_case("src")).map(|d| d.value.to_string()).collect::<Vec<_>>().join(",");
             if let Some(f) = fam {
                 faces.push((f, src));
             }
         } else if !sel.starts_with('@') {
-            rules.push((sel.to_string(), c[2].to_string()));
+            rules.push((sel.to_string(), c.body.to_string()));
         }
     }
     (rules, faces)
@@ -154,12 +155,9 @@ fn font_html_files(entries: &[Entry]) -> Vec<&Entry> {
     entries.iter().filter(|e| super::is_chapter_entry(e)).collect()
 }
 
-/// 文件里 `<style>` 块的内容（按出现顺序）。
+/// 文件里 `<style>` 块的内容（按出现顺序，[`html::style_blocks`]）。
 fn style_blocks(h: &str) -> Vec<&str> {
-    html::tags(h)
-        .filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("style"))
-        .filter_map(|t| html::find_close(h, t.end, "style").map(|close| &h[t.end..close.start]))
-        .collect()
+    html::style_blocks(h).into_iter().map(|b| &h[b.content_start..b.content_end]).collect()
 }
 
 /// 全书的类、标签字体表和嵌入字体（[`analyze`] 读完全部规则后的同一份；不投票、不找批注）。给只用字体表的地方（`kindle_rules`）。

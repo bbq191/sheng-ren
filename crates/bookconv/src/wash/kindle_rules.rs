@@ -13,7 +13,8 @@
 //!
 //! 文字一个不动；行内 `style` 同样处理（xochitl 不认行内样式，掌阅认）。
 use crate::cascade::{parse_font_shorthand, FontShorthand, MediaEnv};
-use super::css::{box_sides, compound_tag_classes, css_rule_re, last_compound, split_leading_statements, strip_css_comments, BoxSides};
+use super::css::css_rule_re;
+use crate::cascade::{box_sides, compound_tag_classes, last_compound, rule_selector, rule_spans, split_leading_statements, strip_comments, BoxSides};
 use super::*;
 use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
@@ -55,7 +56,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
             }
         })
         .into_owned();
-        let s = html::style_block_re().replace_all(&s, |c: &regex::Captures| format!("{}{}{}", &c[1], rewrite_css(&c[2], &ctx, &mut n), &c[3])).into_owned();
+        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(rewrite_css(css, &ctx, &mut n))).into_owned();
         if n > 0 {
             e.data = s.into_bytes();
         }
@@ -84,15 +85,15 @@ fn scan(entries: &[Entry], plan: &super::fonts::FontPlan) -> (Option<String>, Ha
     // 写了负的左、右外边距的规则：选择器最后一段的类名和裸标签名
     let (mut neg_cls, mut neg_tag): ([HashSet<String>; 2], [HashSet<String>; 2]) = Default::default();
     let mut take = |css: &str| {
-        for c in css_rule_re().captures_iter(css) {
-            let (l, r) = html::css_decls(&c[2]).iter().fold((false, false), |(l, r), d| {
+        for c in rule_spans(css) {
+            let (l, r) = html::css_decls(c.body).iter().fold((false, false), |(l, r), d| {
                 let (a, b) = negative_sides(d.prop, d.value);
                 (l || a, r || b)
             });
             if !(l || r) {
                 continue;
             }
-            for part in rule_selector(&c[1]).split(',') {
+            for part in rule_selector(c.prelude).split(',') {
                 let (tag, classes) = compound_tag_classes(last_compound(part));
                 for (side, on) in [(0, l), (1, r)] {
                     if on {
@@ -115,8 +116,8 @@ fn scan(entries: &[Entry], plan: &super::fonts::FontPlan) -> (Option<String>, Ha
     }
     for e in entries.iter().filter(|e| is_html_entry(&e.name, &e.data)) {
         if let Ok(t) = std::str::from_utf8(&e.data) {
-            for c in html::style_block_re().captures_iter(t) {
-                take(&c[2]);
+            for b in html::style_blocks(t) {
+                take(&t[b.content_start..b.content_end]);
             }
         }
     }
@@ -186,9 +187,9 @@ fn font_scale(entries: &[Entry], media: Option<&MediaEnv>) -> Option<f64> {
 fn root_font_size_declared(entries: &[Entry]) -> bool {
     let sizes = |decls: &str| html::css_decls(decls).iter().any(|d| d.prop.eq_ignore_ascii_case("font-size") || d.prop.eq_ignore_ascii_case("font"));
     let in_css = |css: &str| {
-        css_rule_re().captures_iter(css).any(|c| {
-            sizes(&c[2])
-                && rule_selector(&c[1]).split(',').any(|part| {
+        rule_spans(css).into_iter().any(|c| {
+            sizes(c.body)
+                && rule_selector(c.prelude).split(',').any(|part| {
                     let last = last_compound(part).to_ascii_lowercase();
                     last == ":root" || compound_tag_classes(&last).0 == "html"
                 })
@@ -202,7 +203,7 @@ fn root_font_size_declared(entries: &[Entry]) -> bool {
             return false;
         }
         let Ok(t) = std::str::from_utf8(&e.data) else { return false };
-        html::style_block_re().captures_iter(t).any(|c| in_css(&c[2]))
+        html::style_blocks(t).into_iter().any(|b| in_css(&t[b.content_start..b.content_end]))
             || html::tags(t).find(|g| g.is_start() && g.is("html")).and_then(|g| html::attr_value(&t[g.start..g.end], "style").map(sizes)).unwrap_or(false)
     })
 }
@@ -299,7 +300,7 @@ fn rewrite_css(css: &str, ctx: &Ctx, n: &mut usize) -> String {
     css_rule_re()
         .replace_all(css, |c: &regex::Captures| {
             let (lead, sel) = split_leading_statements(&c[1]);
-            let clean = strip_css_comments(sel);
+            let clean = strip_comments(sel);
             let trimmed = clean.trim();
             if trimmed.starts_with('@') {
                 return c[0].to_string();
@@ -318,9 +319,7 @@ fn is_body_selector(sel: &str, body_classes: &HashSet<String>) -> bool {
     if last.contains([':', '[', '#']) {
         return false;
     }
-    let mut parts = last.split('.');
-    let tag = parts.next().unwrap_or("").to_ascii_lowercase();
-    let classes: Vec<&str> = parts.collect();
+    let (tag, classes) = compound_tag_classes(last);
     match tag.as_str() {
         "body" => true,
         "" => !classes.is_empty() && classes.iter().all(|c| body_classes.contains(*c)),
@@ -337,7 +336,7 @@ fn rewrite_decls(text: &str, body: bool, ctx: &Ctx) -> (String, usize) {
     // 同一条规则里的背景色
     let bg = decls.iter().rev().find_map(|d| match d.prop.to_ascii_lowercase().as_str() {
         "background-color" => parse_color(strip_important(d.value).0),
-        "background" => crate::cssunlock::top_level_tokens(strip_important(d.value).0).0.into_iter().find_map(parse_color),
+        "background" => crate::cascade::tokens(strip_important(d.value).0).0.into_iter().find_map(parse_color),
         _ => None,
     });
     let bg = bg.filter(|c| c >> 24 != 0).map(over_white).filter(|&c| c != 0xFFFF_FFFF);

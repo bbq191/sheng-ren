@@ -33,7 +33,7 @@
 | `html` | 容错的 XHTML 工具：标签扫描、属性读写（单双引号、无引号）、加类、纯文本。全仓库的 HTML 操作都用它 |
 | `htmlproc/` | 注释搬移与编号（只修复时 Move 的 `repair_note_links` 也用它）、字体锁、重复 id |
 | `uastyle` | 标签的缺省样式表（`<p>` 上下 1em、标题字号……）：KFX 写出器按它给缺省值，`kindle_rules` 按它写 `eink-ua.css` |
-| `cascade` | CSS 层叠：解析样式表、按选择器优先级层叠、算出每个元素的计算值（2026-10-10 从 `kfx` 挪来）：KFX 写出器（`kfx::css` 就是它）和 `kindle_rules` 算全书正文字号共用，口径一样：每篇文档的样式表 `Sheet::for_doc`（`<link>`/`<style>` 的 `media` 和 `@media` 都按阅读模式的 `MediaEnv` 求）、正文字号 `body_font_size`（按字数加权的众数）、`font` 简写展开成分项 |
+| `cascade` | CSS 层叠：解析样式表、按选择器优先级层叠、算出每个元素的计算值（2026-10-10 从 `kfx` 挪来）：KFX 写出器（`kfx::css` 就是它）和 `kindle_rules` 算全书正文字号共用，口径一样：每篇文档的样式表 `Sheet::for_doc`（`<link>`/`<style>` 的 `media` 和 `@media` 都按阅读模式的 `MediaEnv` 求）、正文字号 `body_font_size`（按字数加权的众数）、`font` 简写展开成分项。另有全仓库共用的 CSS 文本小工具：规则位置 `rule_spans`（层叠、清洗层、优化器同一套解析）、`rule_selector`、去注释、拆分切词、四值简写 `box_sides`、`@font-face` 规则、选择器最后一段 |
 | `color` | CSS 颜色解析、WCAG 对比度、Send to Kindle 的对比度规则（KFX 写出器和 `kindle_rules` 共用） |
 | `cssunlock` | 解开字体、字号、行高的锁（内置模式的文字书不用，只有漫画和没开只修复的模式走） |
 | `bgfit` | 整页背景图的尺寸意图（`cover`、`contain`、宽 100%、没写尺寸），去掉 `background-size` 的模式按它预先缩图（只修复时不做；漫画不处理，所以内置模式现在都用不到） |

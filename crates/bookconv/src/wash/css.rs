@@ -3,30 +3,15 @@ use super::*;
 
 // ───────────────────────── 2–4. CSS 声明处理 ─────────────────────────
 
-/// CSS 规则 `选择器{声明}`（只匹配最内层：`@media{}` 里的规则由"从内向外"匹配到）。`filter_css`、章尾容器
-/// 去下边距（`layout::strip_tail_spacing`）、`layout::Drawn`、`typeset::indent_classes_of` 共用。
-/// ⚠ 选择器（第 1 组）会带上前面的 `/* … */` 注释：拿它判断之前先过 [`strip_css_comments`]，写回仍用原文。
+/// CSS 规则 `选择器{声明}`（只匹配最内层；字符串、注释里的花括号会切错）。新代码用 [`crate::cascade::rule_spans`]（和层叠同一套
+/// 解析、位置是原文的）；这里只留给还没改过来的 `kindle_rules::rewrite_css`。
 pub(crate) fn css_rule_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r#"(?s)([^{}]+)\{([^{}]*)\}"#).unwrap())
 }
 
-/// 去掉 `/* … */` 注释（换成一个空格；没闭合的去到末尾）。只用来判断选择器（2026-09-30 审计：`/* p 的边距 */ .note{…}`
-/// 被当成 p 规则改了边距，`/* footnote */` 让普通规则被当成注释容器，`/* fonts */ @font-face{…}` 没认出是 @font-face、字体名被剥）。
-pub(crate) fn strip_css_comments(s: &str) -> Cow<'_, str> {
-    if !s.contains("/*") {
-        return Cow::Borrowed(s);
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find("/*") {
-        out.push_str(&rest[..i]);
-        out.push(' ');
-        rest = rest[i + 2..].find("*/").map_or("", |j| &rest[i + 2 + j + 2..]);
-    }
-    out.push_str(rest);
-    Cow::Owned(out)
-}
+// CSS 文本小工具都在 `cascade`（层叠和清洗层共用一份），清洗层各模块经 `use self::css::*` 用到它们。
+pub(super) use crate::cascade::{box_sides, compound_tag_classes, last_compound, rule_selector, BoxSides};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Spacing {
@@ -137,37 +122,6 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
     joined
 }
 
-/// `margin`/`padding` 简写拆成的四边。
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum BoxSides<'a> {
-    /// 上、右、下、左，和 `" !important"`（没有就是空串）。
-    Sides([&'a str; 4], &'static str),
-    /// 整体一个全局关键字（`inherit`/`initial`/`unset`/`revert`），不能跟别的边混写在一个简写里。
-    Keyword(&'a str, &'static str),
-    /// 拆不清（超过 4 个值、括号不配对）。
-    Unknown,
-}
-
-/// 拆 `margin`/`padding` 简写的值（`css.rs` 段距归零与 `layout.rs` 章尾去下边距共用）：1–4 个值按 CSS 规则展开成四边；
-/// 括号里的空格不算分隔（`calc(1em + 2px)`）。
-pub(super) fn box_sides(val: &str) -> BoxSides<'_> {
-    let (v, important) = crate::cssunlock::split_important(val);
-    let (parts, balanced) = crate::cssunlock::top_level_tokens(v);
-    if !balanced {
-        return BoxSides::Unknown;
-    }
-    let keyword = |p: &str| matches!(p.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer");
-    match parts[..] {
-        [k] if keyword(k) => BoxSides::Keyword(k, important),
-        _ if parts.iter().any(|p| keyword(p)) => BoxSides::Unknown,
-        [a] => BoxSides::Sides([a, a, a, a], important),
-        [a, b] => BoxSides::Sides([a, b, a, b], important),
-        [a, b, c] => BoxSides::Sides([a, b, c, b], important),
-        [a, b, c, d] => BoxSides::Sides([a, b, c, d], important),
-        _ => BoxSides::Unknown,
-    }
-}
-
 pub(super) fn selector_spacing(selector: &str) -> Spacing {
     static ELEM_P: OnceLock<Regex> = OnceLock::new();
     static ELEM_BODY: OnceLock<Regex> = OnceLock::new();
@@ -181,20 +135,6 @@ pub(super) fn selector_spacing(selector: &str) -> Spacing {
     } else {
         Spacing::Keep
     }
-}
-
-/// 选择器（一个逗号分项）的最后一个复合选择器：`div.a > p.b:first-child` → `p.b:first-child`。按空白和组合符 `>`、`+`、`~` 切。
-/// 字体分析、Send to Kindle 规则、正文层判断、章尾容器类共用。
-pub(super) fn last_compound(sel: &str) -> &str {
-    sel.trim().rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~')).next().unwrap_or("")
-}
-
-/// 复合选择器的标签名（小写，没写是空串）和类名：伪类、属性选择器（`:`、`[` 起）不算，`p.a.b` → ("p", ["a", "b"])。
-pub(super) fn compound_tag_classes(compound: &str) -> (String, Vec<&str>) {
-    let c = compound.split([':', '[']).next().unwrap_or("");
-    let mut parts = c.split('.');
-    let tag = parts.next().unwrap_or("").to_ascii_lowercase();
-    (tag, parts.filter(|p| !p.is_empty()).collect())
 }
 
 /// 选择器是不是作用在"正文整体那一层"：每个逗号分项的最后一个复合选择器都是不带类、id、属性的 `body`/`html`/`p`/`div`
@@ -223,81 +163,37 @@ pub(super) const FOOTNOTE_FONT_SIZE: &str = "0.85em";
 /// "跳转注释后字体不对"，追下去发现其实是加粗不是字体），用户拍板"只剥注释容器类的字重，不碰正文；
 /// 注释字号固定比正文小一档"。
 pub fn filter_css(css: &str, opts: &WashOpts) -> String {
-    css_rule_re().replace_all(css, |c: &regex::Captures| {
-        // 规则前面的语句式 at-rule（`@import url(a.css);`、`@charset "utf-8";`）会被正则算进选择器里：拆出来原样保留，
-        // 后面的才是真正的选择器（2026-09-28 审计：样式表开头的 `@import` 让紧跟的第一条规则整条跳过，字体锁没剥）。
-        let (lead, sel) = split_leading_statements(&c[1]);
-        // 判断用去掉注释的选择器；写回用原文（注释照留）。
-        let clean = strip_css_comments(sel);
+    // 只换规则体，选择器（连同前面的注释、`@import …;` 这类语句）原样留
+    let mut edits = Vec::new();
+    for r in crate::cascade::rule_spans(css) {
+        // 判断用去掉注释和开头语句的选择器（2026-09-28 审计：样式表开头的 `@import` 让紧跟的第一条规则整条跳过，字体锁没剥）
+        let clean = crate::cascade::rule_selector(r.prelude);
         let trimmed = clean.trim_start();
         if trimmed.starts_with("@font-face") || trimmed.starts_with("@import") {
-            return c[0].to_string();
+            continue;
         }
         let spacing = match selector_spacing(&clean) {
             Spacing::Vertical if opts.keep_para_spacing => Spacing::Keep,
             s => s,
         };
-        if is_footnote_container_selector(&clean) {
+        let decls = if is_footnote_container_selector(&clean) {
             let mut filter = opts.filter_props.clone();
             if !filter.iter().any(|p| p == "font-weight") {
                 filter.push("font-weight".to_string());
             }
             // base_text=true：书自己的字号（哪怕是相对的）一律去掉，换成下面统一的注释字号
             // 注释容器的字体一律去掉（批注不用嵌入字体，用户 2026-10-05）。
-            let mut decls = colors_for(opts, filter_decls_with(&c[2], &filter, spacing, true, Some(indent_for(opts)), &HashSet::new()));
+            let mut decls = colors_for(opts, filter_decls_with(r.body, &filter, spacing, true, Some(indent_for(opts)), &HashSet::new()));
             decls.push_str(&format!("font-size:{FOOTNOTE_FONT_SIZE};"));
-            return format!("{lead}{sel}{{{decls}}}");
-        }
-        format!("{lead}{}{{{}}}", sel, colors_for(opts, filter_decls_with(&c[2], &opts.filter_props, spacing, is_base_text_selector(&clean), Some(indent_for(opts)), &opts.keep_fonts)))
-    }).into_owned()
-}
-
-/// [`css_rule_re`] 第 1 组（选择器原文）拿来**判断**时的样子：去掉开头的语句式 at 规则（`@charset "utf-8";`、`@import …;`，
-/// 正则把它们和第一条规则的选择器连在一起抓进来）和注释。判断选择器的地方一律用它，写回仍用原文——
-/// 以前有的地方只去注释，样式表开头有 `@charset` 时第一条规则被当成 at 规则跳过（2026-10-10 审计，`capfit`、`bgfit` 等）。
-pub(crate) fn rule_selector(raw: &str) -> Cow<'_, str> {
-    strip_css_comments(split_leading_statements(raw).1)
-}
-
-/// 选择器文本开头的语句式 at-rule（以 `@` 开头、到括号、引号和注释之外的 `;` 为止，可以有好几条，前后可以夹注释）
-/// 拆成 (这些语句, 其余)。没有就是 `("", 原文)`。
-pub(super) fn split_leading_statements(sel: &str) -> (&str, &str) {
-    let mut cut = 0;
-    loop {
-        let rest = &sel[cut..];
-        if !strip_css_comments(rest).trim_start().starts_with('@') {
-            break;
-        }
-        let (mut depth, mut quote) = (0usize, None::<char>);
-        let mut end = None;
-        let mut skip_to = 0; // 注释结束处
-        for (i, ch) in rest.char_indices() {
-            if i < skip_to {
-                continue;
-            }
-            if quote.is_none() && rest[i..].starts_with("/*") {
-                skip_to = rest[i + 2..].find("*/").map_or(rest.len(), |j| i + 2 + j + 2);
-                continue;
-            }
-            match (quote, ch) {
-                (Some(q), c) if c == q => quote = None,
-                (Some(_), _) => {}
-                (None, '"' | '\'') => quote = Some(ch),
-                (None, '(') => depth += 1,
-                (None, ')') => depth = depth.saturating_sub(1),
-                (None, ';') if depth == 0 => {
-                    end = Some(i + 1);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        match end {
-            Some(e) => cut += e,
-            None => break,
+            decls
+        } else {
+            colors_for(opts, filter_decls_with(r.body, &opts.filter_props, spacing, is_base_text_selector(&clean), Some(indent_for(opts)), &opts.keep_fonts))
+        };
+        if decls != r.body {
+            edits.push((r.body_start, r.body_start + r.body.len(), decls));
         }
     }
-    (&sel[..cut], &sel[cut..])
+    html::apply_edits(css, edits)
 }
 
 /// 本书的首行缩进值（拉丁 1.2em / 中文 2em；Auto 兜底中文）。`wash_css` 与书 css 统一改写共用。
@@ -335,20 +231,21 @@ pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashS
         }
     })
     .into_owned();
-    let s = html::style_block_re().replace_all(&s, |c: &regex::Captures| {
-        if c[1].contains(WASH_MARK) {
+    let s = html::edit_style_blocks(&s, |open, css| {
+        if open.contains(WASH_MARK) {
             // 旧版（v9 及以前）注入的内联 <style class="eink-wash"> 块：xochitl 本就无视它，重洗时清掉（已改外链 css）。
-            String::new()
+            Edit::Remove
         } else {
-            format!("{}{}{}", &c[1], filter_css(&c[2], opts), &c[3])
+            Edit::Set(filter_css(css, opts))
         }
-    }).into_owned();
+    })
+    .into_owned();
     // 不再注入内联 <style>（xochitl 无视内联）；排版规则由 wash_entries 写成外链 css + 逐 html 加 <link>。
     let s = match opts.lang {
         LangMode::Latin => {
             let mut classes = indent_classes.clone();
-            for c in html::style_block_re().captures_iter(&s) {
-                classes.extend(indent_classes_of(&c[2]));
+            for b in html::style_blocks(&s) {
+                classes.extend(indent_classes_of(&s[b.content_start..b.content_end]));
             }
             flush_first_para_after_heading(&s, &classes)
         }
