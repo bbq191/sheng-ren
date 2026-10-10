@@ -178,6 +178,31 @@ pub struct SyncMemo {
     unreadable: HashSet<PathBuf>,
 }
 
+/// 一次 [`Library::sync_with`] 的中间结果，几步之间传递。
+struct SyncRound<'s> {
+    /// 上次的 `sources.json`。
+    src: &'s Sources,
+    rep: SyncReport,
+    /// 这一轮看到的（或原样当作还在的）跟踪目录里的文件。
+    present: BTreeMap<PathBuf, Seen>,
+    /// (原件, 旧 id)：内容变了的旧版本，加上以前没删掉的。
+    replaced: Vec<(PathBuf, String)>,
+    /// 这一轮文件名不是 UTF-8 的、读不了的目录（`SyncMemo` 据此忘掉已经好了的）。
+    bad_now: HashSet<PathBuf>,
+    unreadable_now: HashSet<PathBuf>,
+}
+
+impl<'s> SyncRound<'s> {
+    fn new(src: &'s Sources, replaced: Vec<(PathBuf, String)>) -> SyncRound<'s> {
+        SyncRound { src, rep: SyncReport::default(), present: BTreeMap::new(), replaced, bad_now: HashSet::new(), unreadable_now: HashSet::new() }
+    }
+
+    /// 这个目录下登记过的文件原样当作还在（不新增、不删除、记录不变）。
+    fn keep_under(&mut self, dir: &Path) {
+        self.present.extend(self.src.files.iter().filter(|(p, _)| p.starts_with(dir)).map(|(p, s)| (p.clone(), s.clone())));
+    }
+}
+
 impl Sources {
     /// 跟踪的目录（`track` 时已规范化成绝对路径）。
     pub(crate) fn dirs(&self) -> &[PathBuf] {
@@ -200,11 +225,11 @@ impl Sources {
 impl Library {
     /// `sources.json`（经缓存读：一次生成里每本书都要查跟踪目录）。
     pub(crate) fn load_sources(&self) -> Sources {
-        (*self.sources_json.get(&self.sources_path())).clone()
+        (*self.records.sources.get(&self.sources_path())).clone()
     }
 
     pub(crate) fn save_sources(&self, s: &Sources) -> Result<(), String> {
-        self.sources_json.put(&self.sources_path(), s.clone())
+        self.records.sources.put(&self.sources_path(), s.clone())
     }
 
     pub(crate) fn sources_path(&self) -> PathBuf {
@@ -213,7 +238,7 @@ impl Library {
 
     /// 跟踪的原件目录。
     pub fn tracked(&self) -> Vec<PathBuf> {
-        self.sources_json.get(&self.sources_path()).dirs.clone()
+        self.records.sources.get(&self.sources_path()).dirs.clone()
     }
 
     /// 这本书的原件在跟踪目录里、还在的话，返回它（`remove` 提示用：下次 `sync` 会把它再入库）。
@@ -294,116 +319,145 @@ impl Library {
     /// `memo` 跨轮次记住已经报过的问题（`--watch`），只在新出现时报一次。没有变化时不写 `sources.json`。
     pub fn sync_with(&self, prune: Prune, memo: &mut SyncMemo, mut on: impl FnMut(SyncEvent)) -> Result<SyncReport, String> {
         let src = self.load_sources();
-        let mut rep = SyncReport::default();
-        let mut present: BTreeMap<PathBuf, Seen> = BTreeMap::new();
-        // (原件, 旧 id)：内容变了的旧版本，加上以前没删掉的
-        let mut replaced: Vec<(PathBuf, String)> = src.stale.iter().map(|id| (self.entry_dir(id), id.clone())).collect();
-        let mut bad_now: HashSet<PathBuf> = HashSet::new();
-        let mut unreadable_now: HashSet<PathBuf> = HashSet::new();
-        // 这个目录下登记过的文件原样当作还在（不新增、不删除、记录不变）
-        let keep_under = |present: &mut BTreeMap<PathBuf, Seen>, dir: &Path| present.extend(src.files.iter().filter(|(p, _)| p.starts_with(dir)).map(|(p, s)| (p.clone(), s.clone())));
+        // 以前没删掉的旧版本也再删一次（"原件"记成条目目录：不会和跟踪目录里的文件相同）
+        let leftover = src.stale.iter().map(|id| (self.entry_dir(id), id.clone())).collect();
+        let mut round = SyncRound::new(&src, leftover);
+        // ① 遍历跟踪目录：新的、改过的入库，没变的照旧
         for dir in &src.dirs {
-            if !dir.is_dir() {
-                // 目录整个不见了（U 盘没插等）：里面的文件既不算新增也不算删除，原样保留记录
-                keep_under(&mut present, dir);
+            self.scan_dir(dir, &mut round, memo, &mut on);
+        }
+        memo.bad_names.retain(|p| round.bad_now.contains(p));
+        memo.unreadable.retain(|p| round.unreadable_now.contains(p));
+        // ② 内容变了的：删旧版本
+        let stale = self.retire_replaced(&mut round, &mut on);
+        // ③ 原件不在了的
+        let kept_missing = self.handle_missing(prune, &mut round, memo, &mut on);
+        let SyncRound { mut present, rep, .. } = round;
+        present.extend(kept_missing);
+        let new = Sources { dirs: src.dirs.clone(), files: present, stale };
+        if new != src {
+            self.save_sources(&new)?;
+        }
+        Ok(rep)
+    }
+
+    /// 遍历一个跟踪目录（[`Library::sync_with`] 第一步）：读不了的子目录、整个不在的目录里登记过的文件原样当作还在；
+    /// 每个能入库的文件交给 [`Library::sync_file`]。
+    fn scan_dir(&self, dir: &Path, round: &mut SyncRound, memo: &mut SyncMemo, on: &mut dyn FnMut(SyncEvent)) {
+        if !dir.is_dir() {
+            // 目录整个不见了（U 盘没插等）：里面的文件既不算新增也不算删除，原样保留记录
+            round.keep_under(dir);
+            return;
+        }
+        let scan = scan_books(dir);
+        for (u, why) in &scan.unreadable {
+            // 读不了的目录（权限不够等）：和目录整个不见了一样，里面的记录原样保留——不能当成书都删了（原件不在的会连同产物从书库删掉）
+            round.keep_under(u);
+            round.unreadable_now.insert(u.clone());
+            if memo.unreadable.insert(u.clone()) {
+                on(SyncEvent::Unreadable(u, why));
+                round.rep.unreadable += 1;
+            }
+        }
+        for path in scan.files {
+            if round.present.contains_key(&path) || round.bad_now.contains(&path) {
+                continue; // 早期版本允许过互相包含的跟踪目录：同一个文件只处理一次
+            }
+            if path.to_str().is_none() {
+                if memo.bad_names.insert(path.clone()) {
+                    on(SyncEvent::Failed(&path, NOT_UTF8));
+                    round.rep.failed += 1;
+                }
+                round.bad_now.insert(path);
                 continue;
             }
-            let scan = scan_books(dir);
-            for (u, why) in &scan.unreadable {
-                // 读不了的目录（权限不够等）：和目录整个不见了一样，里面的记录原样保留——不能当成书都删了（原件不在的会连同产物从书库删掉）
-                keep_under(&mut present, u);
-                unreadable_now.insert(u.clone());
-                if memo.unreadable.insert(u.clone()) {
-                    on(SyncEvent::Unreadable(u, why));
-                    rep.unreadable += 1;
-                }
+            self.sync_file(path, round, on);
+        }
+    }
+
+    /// 跟踪目录里的一个文件：大小、修改时间没变（上次也没失败，或还没到重试的时候）就照旧；否则入库，内容变了的记下旧版本待删。
+    fn sync_file(&self, path: PathBuf, round: &mut SyncRound, on: &mut dyn FnMut(SyncEvent)) {
+        let src = round.src;
+        let Some((size, mtime_ns)) = crate::file_stat(&path) else {
+            // 列出来以后取不到属性（刚被删、刚改了权限）：这一轮状态未知，旧记录照旧，下一轮再看
+            if let Some(o) = src.files.get(&path) {
+                round.present.insert(path, o.clone());
             }
-            for path in scan.files {
-                if present.contains_key(&path) || bad_now.contains(&path) {
-                    continue; // 早期版本允许过互相包含的跟踪目录：同一个文件只处理一次
-                }
-                if path.to_str().is_none() {
-                    if memo.bad_names.insert(path.clone()) {
-                        on(SyncEvent::Failed(&path, NOT_UTF8));
-                        rep.failed += 1;
-                    }
-                    bad_now.insert(path);
-                    continue;
-                }
-                let Some((size, mtime_ns)) = crate::file_stat(&path) else {
-                    // 列出来以后取不到属性（刚被删、刚改了权限）：这一轮状态未知，旧记录照旧，下一轮再看
-                    if let Some(o) = src.files.get(&path) {
-                        present.insert(path, o.clone());
-                    }
-                    continue;
+            return;
+        };
+        let old = src.files.get(&path);
+        // 没变：大小、修改时间都一样，上次没失败（以前的版本记下的失败没有记号、id 是空的：再试一次）或还没到重试的时候
+        let tried = |o: &Seen| if o.failed.is_empty() { !o.id.is_empty() } else { !retry_due(&o.failed) };
+        let settled = |o: &&Seen| o.size == size && o.mtime_ns == mtime_ns && tried(o) && (o.id.is_empty() || self.entry_dir(&o.id).is_dir());
+        if let Some(o) = old.filter(settled) {
+            round.present.insert(path, o.clone());
+            round.rep.unchanged += 1;
+            return;
+        }
+        let old = old.filter(|o| !o.id.is_empty());
+        match self.add_file_only(&path) {
+            Ok(added) => {
+                let (m, is_new) = match added {
+                    Added::New(m) | Added::Replaced(m, _) => (m, true),
+                    Added::Existing(m) => (m, false),
                 };
-                let old = src.files.get(&path);
-                // 没变：大小、修改时间都一样，上次没失败（以前的版本记下的失败没有记号、id 是空的：再试一次）或还没到重试的时候
-                let tried = |o: &Seen| if o.failed.is_empty() { !o.id.is_empty() } else { !retry_due(&o.failed) };
-                let settled = |o: &&Seen| o.size == size && o.mtime_ns == mtime_ns && tried(o) && (o.id.is_empty() || self.entry_dir(&o.id).is_dir());
-                if let Some(o) = old.filter(settled) {
-                    present.insert(path, o.clone());
-                    rep.unchanged += 1;
-                    continue;
+                match old.filter(|o| o.id != m.id) {
+                    Some(o) => {
+                        round.replaced.push((path.clone(), o.id.clone()));
+                        let old_title = self.read_meta(&o.id).map(|x| x.title).unwrap_or_default();
+                        on(SyncEvent::Updated(&path, &m, &old_title));
+                        round.rep.updated += 1;
+                    }
+                    None if is_new => {
+                        on(SyncEvent::Added(&path, &m));
+                        round.rep.added += 1;
+                    }
+                    None => round.rep.unchanged += 1, // 已在库里（改名、移动，或之前手动 add 过）
                 }
-                let old = old.filter(|o| !o.id.is_empty());
-                match self.add_file_only(&path) {
-                    Ok(added) => {
-                        let (m, is_new) = match added {
-                            Added::New(m) | Added::Replaced(m, _) => (m, true),
-                            Added::Existing(m) => (m, false),
-                        };
-                        match old.filter(|o| o.id != m.id) {
-                            Some(o) => {
-                                replaced.push((path.clone(), o.id.clone()));
-                                let old_title = self.read_meta(&o.id).map(|x| x.title).unwrap_or_default();
-                                on(SyncEvent::Updated(&path, &m, &old_title));
-                                rep.updated += 1;
-                            }
-                            None if is_new => {
-                                on(SyncEvent::Added(&path, &m));
-                                rep.added += 1;
-                            }
-                            None => rep.unchanged += 1, // 已在库里（改名、移动，或之前手动 add 过）
-                        }
-                        present.insert(path, Seen { size, mtime_ns, id: m.id, failed: String::new() });
+                round.present.insert(path, Seen { size, mtime_ns, id: m.id, failed: String::new() });
+            }
+            Err(e) => {
+                on(SyncEvent::Failed(&path, &e));
+                round.rep.failed += 1;
+                if e.starts_with(BUSY) {
+                    // 正在写入：这次看到的不算数，旧记录照旧（没有就不记），下一轮再试
+                    if let Some(o) = src.files.get(&path) {
+                        round.present.insert(path, o.clone());
                     }
-                    Err(e) => {
-                        on(SyncEvent::Failed(&path, &e));
-                        rep.failed += 1;
-                        if e.starts_with(BUSY) {
-                            // 正在写入：这次看到的不算数，旧记录照旧（没有就不记），下一轮再试
-                            if let Some(o) = src.files.get(&path) {
-                                present.insert(path, o.clone());
-                            }
-                        } else {
-                            // 记下这次看到的大小和修改时间：文件没变就不再重试。有旧版本的继续跟踪旧版本
-                            let id = old.map(|o| o.id.clone()).unwrap_or_default();
-                            present.insert(path, Seen { size, mtime_ns, id, failed: failed_mark() });
-                        }
-                    }
+                } else {
+                    // 记下这次看到的大小和修改时间：文件没变就不再重试。有旧版本的继续跟踪旧版本
+                    let id = old.map(|o| o.id.clone()).unwrap_or_default();
+                    round.present.insert(path, Seen { size, mtime_ns, id, failed: failed_mark() });
                 }
             }
         }
-        memo.bad_names.retain(|p| bad_now.contains(p));
-        memo.unreadable.retain(|p| unreadable_now.contains(p));
-        let live: HashMap<String, PathBuf> = present.iter().filter(|(_, s)| !s.id.is_empty()).map(|(p, s)| (s.id.clone(), p.clone())).collect();
+    }
 
-        // 内容变了的：旧版本没有别的原件在用、条目记着的原件也不在别处，就删掉；删不掉的下次再删
+    /// 内容变了的（[`Library::sync_with`] 第二步）：旧版本没有别的原件在用、条目记着的原件也不在别处，就删掉。
+    /// 返回删不掉的（记进 `stale`，下次再删）。
+    fn retire_replaced(&self, round: &mut SyncRound, on: &mut dyn FnMut(SyncEvent)) -> Vec<String> {
         let mut stale: Vec<String> = Vec::new();
-        for (path, old_id) in &replaced {
+        for (path, old_id) in &round.replaced {
             if stale.contains(old_id) {
                 continue;
             }
-            let new_id = present.get(path).map(|s| s.id.clone()).unwrap_or_default();
-            if let Err(e) = self.retire_old_version(old_id, &new_id, path, &present) {
+            let new_id = round.present.get(path).map(|s| s.id.clone()).unwrap_or_default();
+            if let Err(e) = self.retire_old_version(old_id, &new_id, path, &round.present) {
                 on(SyncEvent::Failed(path, &format!("删旧版本 {old_id} 失败：{e}（下次 sync 再删）")));
-                rep.failed += 1;
+                round.rep.failed += 1;
                 stale.push(old_id.clone());
             }
         }
+        stale
+    }
 
-        // 原件不在了的
+    /// 上次登记过、这一轮没看到的文件（[`Library::sync_with`] 第三步）：挪了的改记新位置，删了的按 `prune` 从书库删掉或继续记着。
+    /// 返回要继续记着的（并进 `sources.json`）。
+    fn handle_missing(&self, prune: Prune, round: &mut SyncRound, memo: &mut SyncMemo, on: &mut dyn FnMut(SyncEvent)) -> BTreeMap<PathBuf, Seen> {
+        let src = round.src;
+        let present = &round.present;
+        let rep = &mut round.rep;
+        let live: HashMap<String, PathBuf> = present.iter().filter(|(_, s)| !s.id.is_empty()).map(|(p, s)| (s.id.clone(), p.clone())).collect();
         let mut kept_missing = BTreeMap::new();
         let mut missing_now: HashSet<PathBuf> = HashSet::new();
         for (path, seen) in &src.files {
@@ -423,7 +477,7 @@ impl Library {
                 }
                 continue;
             }
-            if self.original_elsewhere(&seen.id, path, &present) {
+            if self.original_elsewhere(&seen.id, path, present) {
                 continue; // 条目记着的原件在跟踪目录以外（add 进来的），还在：这本书没丢
             }
             let title = self.read_meta(&seen.id).map(|m| m.title).unwrap_or_default();
@@ -452,12 +506,7 @@ impl Library {
             }
         }
         memo.missing.retain(|p| missing_now.contains(p));
-        present.extend(kept_missing);
-        let new = Sources { dirs: src.dirs.clone(), files: present, stale };
-        if new != src {
-            self.save_sources(&new)?;
-        }
-        Ok(rep)
+        kept_missing
     }
 
     /// 原件 `path` 换成了新版本 `new_id`（`sync` 看到内容变了，或 `add` 了改过的文件）：旧版本的条目 `old_id` 没人用了就删掉，

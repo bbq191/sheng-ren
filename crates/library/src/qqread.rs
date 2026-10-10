@@ -6,7 +6,8 @@
 //! 搜索是按关键词模糊匹配：「书名 作者」常常反而搜不到（「疯探 空城」只回别的书），所以先搜书名、搜不到再带上作者。
 //! 条目的详情页是 `https://novel.qq.com/detail/<id>`。
 
-use crate::matching::{hit_matches, norm_author, norm_s};
+use crate::matching::hit_matches;
+use crate::metadata::{tags_without_authors, BookInfo, BookSource};
 use crate::net::{enc, Net};
 
 /// 搜索结果里书名、作者对得上的一本。
@@ -33,32 +34,46 @@ impl Hit {
 /// 不算标签的分类：频道名，不说明书的内容。
 const NOT_TAGS: &[&str] = &["出版", "男生", "女生"];
 
-/// 按书里元数据的书名、作者找：先搜书名，搜不到再搜「书名 作者」。书名（简体化后）相同、或只差卷次后缀（≤2 字），
-/// 且作者对得上（书里没写作者时书名要完全相同）。保持网站给的顺序。
-pub(crate) fn search(net: &Net, title: &str, authors: &[String]) -> Vec<Hit> {
-    let nt = norm_s(title);
-    if nt.is_empty() {
-        return Vec::new();
+/// QQ 阅读（[`BookSource`]）：书名、作者、简介、分类、封面都在搜索结果里，不用再取详情页。
+pub(crate) struct QqRead;
+
+impl BookSource for QqRead {
+    type Hit = Hit;
+
+    /// 先搜书名，搜不到再搜「书名 作者」（关键词模糊匹配，带上作者常常反而搜不到）。
+    fn queries(&self, title: &str, authors: &[String]) -> Vec<String> {
+        std::iter::once(title.to_string()).chain(crate::matching::author_for_query(authors).map(|a| format!("{title} {a}"))).collect()
     }
-    let want: Vec<String> = authors.iter().map(|a| norm_author(a)).filter(|a| !a.is_empty()).collect();
-    let title = title.trim();
-    let queries = std::iter::once(title.to_string()).chain(crate::matching::author_for_query(authors).map(|a| format!("{title} {a}")));
-    for q in queries {
-        let url = format!("https://novel.qq.com/api/search?keywords={}&pageIndex=1&pageSize=10", enc(&q));
-        // 出错（被拦、回来的不是 JSON、网络问题）已记成临时错误，调用方不会当成"没这本书"
-        let Ok(v) = net.json_strict(&url) else { break };
+
+    fn search_url(&self, q: &str) -> String {
+        format!("https://novel.qq.com/api/search?keywords={}&pageIndex=1&pageSize=10", enc(q))
+    }
+
+    /// `code` 不是 0 算出错（被拦等）。
+    fn matching_hits(&self, v: &serde_json::Value, nt: &str, want: &[String]) -> Result<Vec<Hit>, String> {
         if v["code"].as_i64() != Some(0) {
-            net.note_transient(&format!("{url}: QQ 阅读回 code {}（{}）", v["code"], v["msg"].as_str().unwrap_or("")));
-            break;
+            return Err(format!("QQ 阅读回 code {}（{}）", v["code"], v["msg"].as_str().unwrap_or("")));
         }
-        let hits = matching_hits(&v, &nt, &want);
-        if !hits.is_empty() {
-            return hits;
-        }
+        Ok(matching_hits(v, nt, want))
     }
-    Vec::new()
+
+    fn cover(&self, net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'static str)> {
+        first_cover(net, hits)
+    }
+
+    fn cover_origin(&self, hit: &Hit) -> (String, String) {
+        (hit.cover.clone(), hit.label())
+    }
+
+    /// 封面用的那个条目的简介、分类（当标签，去掉作者名）。
+    fn info(&self, _net: &Net, hits: &[Hit], chosen: usize, authors: &[String]) -> Option<BookInfo> {
+        let h = hits.get(chosen)?;
+        let subjects = tags_without_authors(h.categories.iter(), authors.iter());
+        Some(BookInfo { source: format!("QQ阅读 {}", h.url()), description: h.intro.clone(), subjects, ..Default::default() })
+    }
 }
 
+/// 搜索结果里书名（简体化后）相同、或只差卷次后缀（≤2 字），且作者对得上（书里没写作者时书名要完全相同）的，保持网站给的顺序。
 fn matching_hits(v: &serde_json::Value, nt: &str, want: &[String]) -> Vec<Hit> {
     let mut out = Vec::new();
     for b in v["data"]["books"].as_array().into_iter().flatten() {
@@ -85,7 +100,7 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want: &[String]) -> Vec<Hit> {
 }
 
 /// 头几个对得上的条目里第一张像封面的图。返回（条目下标, 图片, 扩展名）。
-pub(crate) fn first_cover(net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'static str)> {
+fn first_cover(net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'static str)> {
     hits.iter().enumerate().take(3).filter(|(_, h)| !h.cover.is_empty()).find_map(|(i, h)| {
         let bytes = net.fetch(&h.cover).ok()?;
         crate::cover::plausible_cover(&bytes).map(|ext| (i, bytes, ext))
@@ -95,6 +110,7 @@ pub(crate) fn first_cover(net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::matching::{norm_author, norm_s};
 
     #[test]
     fn hits_need_title_and_author_and_categories_become_tags() {

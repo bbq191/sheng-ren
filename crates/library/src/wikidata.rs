@@ -1,7 +1,48 @@
 //! Wikidata：按书名、作者找原作（原文名、Open Library ID、作品图片、首次出版时间），以及作者照片。
 
 use crate::matching::{norm, similarity};
+use crate::metadata::{BookInfo, Lookup, Step};
 use crate::net::{enc, Net};
+
+/// 责任链的最后一环（[`Step`]）：豆瓣、QQ 阅读都没找全时找原作——原作名、首次出版年当元数据，作品留给找封面的后备
+/// （Open Library / Commons，见 `cover`）。Wikidata 出错（有些网络里单独连不上）不能连累网站上已经找到的：
+/// 网站上什么都没找到时才整本报错，否则记下错误，封面那一步再报。
+pub(crate) struct Wikidata;
+
+impl Step for Wikidata {
+    fn run(&self, l: &mut Lookup<'_>) -> Result<(), String> {
+        // 网站上找到的（元数据、已存下的封面）
+        let from_site = l.info.is_some();
+        let cover_stored = l.cover.is_some();
+        match find_work(l.net, l.title, &l.meta.authors) {
+            Ok(w) => l.work = w,
+            Err(e) => l.work_err = Some(e),
+        }
+        if !from_site && !cover_stored {
+            if let Some(e) = &l.work_err {
+                return Err(e.clone());
+            }
+        }
+        if l.wants_info() {
+            l.info = l.work.as_ref().map(info_of);
+        }
+        // 网络出过错（豆瓣可能只是没查成）：不拿 Wikidata 的元数据凑数——存下了下次就不再查
+        if !from_site && l.net.transient_error().is_some() {
+            l.info = None;
+        }
+        Ok(())
+    }
+}
+
+/// 原作 → 元数据：原作名（原文名，没有就英文名）、首次出版年。
+fn info_of(w: &Work) -> BookInfo {
+    BookInfo {
+        source: format!("Wikidata {}", w.qid),
+        original_title: [&w.original, &w.en].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_default(),
+        first_published: w.published.get(..4).unwrap_or("").to_string(),
+        ..Default::default()
+    }
+}
 
 /// 候选作品。
 #[derive(Default, Debug)]

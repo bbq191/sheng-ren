@@ -10,7 +10,9 @@
 //! 只记在 `meta.json` 里给人参考，不写进书。书名、作者一律用书自己的，不改。正文不动。
 
 use crate::cover::{epub_has_cover, incomplete, CoverInfo, CoverResult};
-use crate::{douban, qqread, wikidata, Library, Meta};
+use crate::net::Net;
+use crate::wikidata::Work;
+use crate::{Library, Meta};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -80,40 +82,119 @@ pub enum InfoResult {
     Failed(String),
 }
 
-fn from_douban(hit: &douban::Hit, s: douban::Subject, authors: &[String]) -> BookInfo {
-    // 标签里去掉作者名（豆瓣标签常带作者）
-    let author_keys: Vec<String> = authors.iter().chain(s.authors.iter()).map(|a| crate::matching::norm_author(a)).collect();
-    let subjects: Vec<String> = s.tags.iter().filter(|t| !t.chars().all(|c| c.is_ascii_digit()) && !author_keys.contains(&crate::matching::norm_author(t))).take(8).cloned().collect();
-    BookInfo {
-        source: format!("豆瓣 {}", hit.url()),
-        original_title: s.original_title,
-        first_published: String::new(),
-        description: s.description,
-        subjects,
-        edition: Some(Edition {
-            title: if s.subtitle.is_empty() { s.title } else { format!("{}：{}", s.title, s.subtitle) },
-            authors: s.authors,
-            translators: s.translators,
-            publisher: s.publisher,
-            pubdate: s.pubdate,
-            isbn: s.isbn,
-        }),
+/// 一个书目网站（豆瓣、QQ 阅读）：按书名作者搜条目、从条目里挑封面、取元数据。搜索的骨架（书名规整、作者规整、
+/// 依次试搜索词、出错就停、第一批对得上的就用）是 [`BookSource::search`] 的缺省实现，各网站只给搜索词、网址和怎么认条目。
+/// 排进 [`CHAIN`] 的先后就是查找的先后。
+pub(crate) trait BookSource {
+    /// 搜索结果里书名、作者对得上的一条。
+    type Hit;
+
+    /// 搜索词，按先后试（`title` 已去掉首尾空白）。
+    fn queries(&self, title: &str, authors: &[String]) -> Vec<String>;
+
+    /// 一次搜索的网址（回 JSON）。
+    fn search_url(&self, q: &str) -> String;
+
+    /// 回执里书名（规整后 `nt`）、作者（规整后 `want`）对得上的条目，保持网站给的顺序；回执本身说出错了返回 `Err`
+    /// （记成临时错误，别的搜索词也不再试）。
+    fn matching_hits(&self, v: &serde_json::Value, nt: &str, want: &[String]) -> Result<Vec<Self::Hit>, String>;
+
+    /// 按书里元数据的书名、作者找（2026-10-08 用户定）：依次试 [`BookSource::queries`]，第一批对得上的就用。
+    fn search(&self, net: &Net, title: &str, authors: &[String]) -> Vec<Self::Hit> {
+        let nt = crate::matching::norm_s(title);
+        if nt.is_empty() {
+            return Vec::new();
+        }
+        let want: Vec<String> = authors.iter().map(|a| crate::matching::norm_author(a)).filter(|a| !a.is_empty()).collect();
+        for q in self.queries(title.trim(), authors) {
+            let url = self.search_url(&q);
+            // 出错（被拦、回来的不是 JSON、网络问题）已记成临时错误（`Net::transient_error`），调用方不会当成"没这本书"；
+            // 别的搜索词也不用再试了
+            let Ok(v) = net.json_strict(&url) else { break };
+            match self.matching_hits(&v, &nt, &want) {
+                Ok(hits) if !hits.is_empty() => return hits,
+                Ok(_) => {}
+                Err(e) => {
+                    net.note_transient(&format!("{url}: {e}"));
+                    break;
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    /// 从对得上的条目里挑一张像封面的图：(条目下标, 图片, 扩展名)。
+    fn cover(&self, net: &Net, hits: &[Self::Hit]) -> Option<(usize, Vec<u8>, &'static str)>;
+
+    /// 封面图从哪下载的、给人核对的条目说明（记进 `meta.json`）。
+    fn cover_origin(&self, hit: &Self::Hit) -> (String, String);
+
+    /// 元数据：先看 `chosen`（封面用了哪个条目就取哪个），网站自己决定还看不看别的条目。`authors` 用来从标签里去掉作者名。
+    fn info(&self, net: &Net, hits: &[Self::Hit], chosen: usize, authors: &[String]) -> Option<BookInfo>;
+}
+
+/// 查找过程中的进度：责任链上各环依次往里填。
+pub(crate) struct Lookup<'a> {
+    pub(crate) lib: &'a Library,
+    pub(crate) net: &'a Net,
+    pub(crate) meta: &'a Meta,
+    /// 书里元数据的书名（去掉首尾空白）。
+    pub(crate) title: &'a str,
+    pub(crate) need_info: bool,
+    pub(crate) need_cover: bool,
+    pub(crate) info: Option<BookInfo>,
+    /// 网站上找到、已经存下的封面。
+    pub(crate) cover: Option<CoverResult>,
+    /// Wikidata 找到的原作（找封面的后备：Open Library / Commons），和查它时出的错。
+    pub(crate) work: Option<Work>,
+    pub(crate) work_err: Option<String>,
+}
+
+impl Lookup<'_> {
+    pub(crate) fn wants_info(&self) -> bool {
+        self.need_info && self.info.is_none()
+    }
+
+    pub(crate) fn wants_cover(&self) -> bool {
+        self.need_cover && self.cover.is_none()
     }
 }
 
-fn from_qqread(hit: &qqread::Hit, authors: &[String]) -> BookInfo {
-    let author_keys: Vec<String> = authors.iter().map(|a| crate::matching::norm_author(a)).collect();
-    let subjects = hit.categories.iter().filter(|t| !author_keys.contains(&crate::matching::norm_author(t))).take(8).cloned().collect();
-    BookInfo { source: format!("QQ阅读 {}", hit.url()), description: hit.intro.clone(), subjects, ..Default::default() }
+/// 责任链上的一环：还缺东西时才轮到它（[`Library::fetch_metadata_inner`]）。
+pub(crate) trait Step {
+    fn run(&self, l: &mut Lookup<'_>) -> Result<(), String>;
 }
 
-fn from_wikidata(w: &wikidata::Work) -> BookInfo {
-    BookInfo {
-        source: format!("Wikidata {}", w.qid),
-        original_title: [&w.original, &w.en].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_default(),
-        first_published: w.published.get(..4).unwrap_or("").to_string(),
-        ..Default::default()
+/// 书目网站这一环：搜、封面（先存下）、元数据。
+impl<S: BookSource> Step for S {
+    fn run(&self, l: &mut Lookup<'_>) -> Result<(), String> {
+        // 前面的网站出错没查成时不查：这个网站的结果存下了，以后就不会再去前面的网站找
+        if l.net.transient_error().is_some() {
+            return Ok(());
+        }
+        let hits = self.search(l.net, l.title, &l.meta.authors);
+        let mut chosen = 0; // 元数据取哪个条目：封面用了哪个就取哪个
+        if l.wants_cover() {
+            if let Some((i, bytes, ext)) = self.cover(l.net, &hits) {
+                chosen = i;
+                let (url, label) = self.cover_origin(&hits[i]);
+                l.cover = Some(CoverResult::Found(l.lib.store_cover(l.meta, &bytes, ext, url, label)?));
+            }
+        }
+        if l.wants_info() {
+            l.info = self.info(l.net, &hits, chosen, &l.meta.authors);
+        }
+        Ok(())
     }
+}
+
+/// 查找的先后：① 豆瓣（中文版）② QQ 阅读（豆瓣没有的，网络文学多是这样）③ Wikidata（原作）。
+const CHAIN: &[&dyn Step] = &[&crate::douban::Douban, &crate::qqread::QqRead, &crate::wikidata::Wikidata];
+
+/// 从标签里去掉作者名（豆瓣标签常带作者），最多 8 个。
+pub(crate) fn tags_without_authors<'a>(tags: impl Iterator<Item = &'a String>, authors: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let author_keys: Vec<String> = authors.map(|a| crate::matching::norm_author(a)).collect();
+    tags.filter(|t| !author_keys.contains(&crate::matching::norm_author(t))).take(8).cloned().collect()
 }
 
 impl Library {
@@ -148,70 +229,15 @@ impl Library {
         }
         net.clear_transient();
         // 找书只用书里的元数据：书名 + 作者（2026-10-08 用户定，不再从文件名里取书名）
-        let title = meta.title.trim();
-        let mut info: Option<BookInfo> = None;
-        let mut cover: Option<CoverResult> = None;
-
-        // ① 豆瓣
-        let hits = douban::search(net, title, &meta.authors);
-        let mut chosen = 0; // 元数据取哪个条目：封面用了哪个就取哪个
-        if need_cover {
-            if let Some((i, bytes, ext)) = douban::best_cover(net, &hits) {
-                chosen = i;
-                cover = Some(CoverResult::Found(self.store_cover(meta, &bytes, ext, hits[i].pic.clone(), hits[i].label())?));
+        let mut l = Lookup { lib: self, net, meta, title: meta.title.trim(), need_info, need_cover, info: None, cover: None, work: None, work_err: None };
+        for step in CHAIN {
+            if l.wants_info() || l.wants_cover() {
+                step.run(&mut l)?;
             }
         }
-        if need_info {
-            let order = std::iter::once(chosen).chain((0..hits.len()).filter(|&i| i != chosen)).take(2);
-            for i in order.filter(|&i| i < hits.len()) {
-                if let Ok(s) = douban::subject(net, &hits[i].id) {
-                    info = Some(from_douban(&hits[i], s, &meta.authors));
-                    break;
-                }
-            }
-        }
-
-        // ② QQ 阅读：豆瓣没有的（网络文学多是这样）。豆瓣是出错没查成时不查：QQ 阅读的结果存下了，以后就不会再去豆瓣找
-        if net.transient_error().is_none() && ((need_info && info.is_none()) || (need_cover && cover.is_none())) {
-            let hits = qqread::search(net, title, &meta.authors);
-            let mut chosen = 0;
-            if need_cover && cover.is_none() {
-                if let Some((i, bytes, ext)) = qqread::first_cover(net, &hits) {
-                    chosen = i;
-                    cover = Some(CoverResult::Found(self.store_cover(meta, &bytes, ext, hits[i].cover.clone(), hits[i].label())?));
-                }
-            }
-            if need_info && info.is_none() {
-                info = hits.get(chosen).map(|h| from_qqread(h, &meta.authors));
-            }
-        }
-
-        let from_site = info.is_some();
-        // 豆瓣、QQ 阅读的封面已经存下了：后面出错也不整本报错，如实报"封面已存、元数据没查成"
+        let Lookup { info, mut cover, work, work_err, .. } = l;
+        // 网站上的封面已经存下了：后面出错也不整本报错，如实报"封面已存、元数据没查成"
         let cover_stored = cover.is_some();
-
-        // ③ Wikidata：原作（元数据没找到、或封面还没有时）
-        // Wikidata 出错（有些网络里单独连不上）不能连累豆瓣已经找到的元数据：先存元数据，封面这一步再报错
-        let mut work = None;
-        let mut work_err = None;
-        if (need_info && info.is_none()) || (need_cover && cover.is_none()) {
-            match wikidata::find_work(net, title, &meta.authors) {
-                Ok(w) => work = w,
-                Err(e) => work_err = Some(e),
-            }
-            if !from_site && !cover_stored {
-                if let Some(e) = &work_err {
-                    return Err(e.clone());
-                }
-            }
-            if need_info && info.is_none() {
-                info = work.as_ref().map(from_wikidata);
-            }
-        }
-        // 网络出过错（豆瓣可能只是没查成）：不拿 Wikidata 的元数据凑数——存下了下次就不再查
-        if !from_site && net.transient_error().is_some() {
-            info = None;
-        }
 
         let info_result = if !need_info {
             existing_info()
@@ -325,7 +351,66 @@ pub(crate) fn with_additions(lib: &Library, meta: &Meta, epub: &Path, tmp: &Path
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::io::Write;
+
+    /// 不联网的假网站：搜到一条，给出元数据；记下被搜了几次。
+    struct Fake {
+        searched: Cell<usize>,
+        found: &'static str,
+    }
+
+    impl BookSource for Fake {
+        type Hit = ();
+        fn queries(&self, _: &str, _: &[String]) -> Vec<String> {
+            Vec::new()
+        }
+        fn search_url(&self, _: &str) -> String {
+            String::new()
+        }
+        fn matching_hits(&self, _: &serde_json::Value, _: &str, _: &[String]) -> Result<Vec<()>, String> {
+            Ok(Vec::new())
+        }
+        fn search(&self, _: &Net, _: &str, _: &[String]) -> Vec<()> {
+            self.searched.set(self.searched.get() + 1);
+            vec![()]
+        }
+        fn cover(&self, _: &Net, _: &[()]) -> Option<(usize, Vec<u8>, &'static str)> {
+            None
+        }
+        fn cover_origin(&self, _: &()) -> (String, String) {
+            (String::new(), String::new())
+        }
+        fn info(&self, _: &Net, _: &[()], _: usize, _: &[String]) -> Option<BookInfo> {
+            (!self.found.is_empty()).then(|| BookInfo { source: self.found.into(), ..Default::default() })
+        }
+    }
+
+    /// 责任链：前一个网站找到了就不再问后面的；前面出过临时错误时后面的网站不查（结果存下了就不会再去前面找）。
+    #[test]
+    fn chain_stops_when_found_and_skips_sites_after_transient_errors() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = Library::open(d.path()).unwrap();
+        let net = Net::new();
+        let meta = Meta { title: "书".into(), ..Default::default() };
+        let lookup = || Lookup { lib: &lib, net: &net, meta: &meta, title: "书", need_info: true, need_cover: false, info: None, cover: None, work: None, work_err: None };
+        let (a, b) = (Fake { searched: Cell::new(0), found: "" }, Fake { searched: Cell::new(0), found: "乙" });
+        let c = Fake { searched: Cell::new(0), found: "丙" };
+        let mut l = lookup();
+        for s in [&a as &dyn Step, &b, &c] {
+            if l.wants_info() || l.wants_cover() {
+                s.run(&mut l).unwrap();
+            }
+        }
+        assert_eq!(l.info.map(|i| i.source).as_deref(), Some("乙"));
+        assert_eq!((a.searched.get(), b.searched.get(), c.searched.get()), (1, 1, 0), "找到了就不再问后面的");
+
+        net.note_transient("豆瓣被拦了");
+        let mut l = lookup();
+        b.run(&mut l).unwrap();
+        assert!(l.info.is_none());
+        assert_eq!(b.searched.get(), 1, "出过临时错误：不查");
+    }
 
     fn sample(dir: &Path, description: &str) -> std::path::PathBuf {
         use bookconv::epub::{assemble, Book, BookMeta, Chapter};
