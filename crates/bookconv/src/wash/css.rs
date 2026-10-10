@@ -252,6 +252,13 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
     }).into_owned()
 }
 
+/// [`css_rule_re`] 第 1 组（选择器原文）拿来**判断**时的样子：去掉开头的语句式 at 规则（`@charset "utf-8";`、`@import …;`，
+/// 正则把它们和第一条规则的选择器连在一起抓进来）和注释。判断选择器的地方一律用它，写回仍用原文——
+/// 以前有的地方只去注释，样式表开头有 `@charset` 时第一条规则被当成 at 规则跳过（2026-10-10 审计，`capfit`、`bgfit` 等）。
+pub(crate) fn rule_selector(raw: &str) -> Cow<'_, str> {
+    strip_css_comments(split_leading_statements(raw).1)
+}
+
 /// 选择器文本开头的语句式 at-rule（以 `@` 开头、到括号、引号和注释之外的 `;` 为止，可以有好几条，前后可以夹注释）
 /// 拆成 (这些语句, 其余)。没有就是 `("", 原文)`。
 pub(super) fn split_leading_statements(sel: &str) -> (&str, &str) {

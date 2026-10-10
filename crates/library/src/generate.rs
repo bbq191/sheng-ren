@@ -255,6 +255,10 @@ impl Library {
             if device.text_repair_only && device.kindle_rules && bookconv::wash::KINDLE_RULES_VERSION != "1" {
                 seg.push_str(bookconv::wash::KINDLE_RULES_VERSION);
             }
+            // 统计正文字号时 `@media` 的 `device-width` 等按屏幕求（`MediaEnv::for_format`，第 6 版起）：自定义模式改了屏幕也要重建
+            if device.text_repair_only && device.kindle_rules {
+                seg.push_str(&format!("@{}x{}", device.screen.width, device.screen.height));
+            }
             (bookconv::optimize::OPTIMIZE_VERSION.to_string(), seg)
         };
         let fingerprint = format!(

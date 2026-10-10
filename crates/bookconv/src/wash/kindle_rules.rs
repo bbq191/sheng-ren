@@ -12,16 +12,17 @@
 //!   缺省的黑字不够看清时补一条文字颜色。按规则算（Kindle 按元素算，背景来自祖先时这里看不到）。
 //!
 //! 文字一个不动；行内 `style` 同样处理（xochitl 不认行内样式，掌阅认）。
+use crate::cascade::{parse_font_shorthand, FontShorthand, MediaEnv};
 use super::css::{box_sides, compound_tag_classes, css_rule_re, last_compound, split_leading_statements, strip_css_comments, BoxSides};
 use super::*;
 use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
 /// 照 Send to Kindle 的规则改书的样式表（独立的 `.css`、`<style>`）和行内 `style`；改了的声明数记进 `rep.kindle_rule_edits`。
-pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport) -> Option<f64> {
+pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>) -> Option<f64> {
     // 只用到类、标签的字体表（不投票、不找批注，见 `fonts::collect_rules`）
     let plan = super::fonts::collect_rules(entries);
     let (body_font, body_classes, neg) = scan(entries, &plan);
-    let font_scale = font_scale(entries);
+    let font_scale = font_scale(entries, media);
     let ctx = Ctx { body_font, body_classes, neg_left: neg.0, neg_right: neg.1, font_scale };
     let edits = crate::util::par_map_mut(entries, |e| {
         let mut n = 0;
@@ -91,7 +92,7 @@ fn scan(entries: &[Entry], plan: &super::fonts::FontPlan) -> (Option<String>, Ha
             if !(l || r) {
                 continue;
             }
-            for part in strip_css_comments(split_leading_statements(&c[1]).1).split(',') {
+            for part in rule_selector(&c[1]).split(',') {
                 let (tag, classes) = compound_tag_classes(last_compound(part));
                 for (side, on) in [(0, l), (1, r)] {
                     if on {
@@ -173,11 +174,11 @@ fn scan(entries: &[Entry], plan: &super::fonts::FontPlan) -> (Option<String>, Ha
 
 /// 字号归一要乘的系数：1 / 全书正文字号（[`base_font_size`]；正文已经是 1em 的是 1）。
 /// `html`、`:root` 上写了字号的书不动（`None`：掌阅不认 `html` 上的字号，2026-10-10 真机；Kindle 认，正文实际多大两边就对不上，拿不准就不处理）。
-fn font_scale(entries: &[Entry]) -> Option<f64> {
+fn font_scale(entries: &[Entry], media: Option<&MediaEnv>) -> Option<f64> {
     if root_font_size_declared(entries) {
         return None;
     }
-    let base = base_font_size(entries);
+    let base = base_font_size(entries, media);
     Some(if (base - 1.0).abs() < 0.005 { 1.0 } else { 1.0 / base })
 }
 
@@ -187,7 +188,7 @@ fn root_font_size_declared(entries: &[Entry]) -> bool {
     let in_css = |css: &str| {
         css_rule_re().captures_iter(css).any(|c| {
             sizes(&c[2])
-                && strip_css_comments(split_leading_statements(&c[1]).1).split(',').any(|part| {
+                && rule_selector(&c[1]).split(',').any(|part| {
                     let last = last_compound(part).to_ascii_lowercase();
                     last == ":root" || compound_tag_classes(&last).0 == "html"
                 })
@@ -208,8 +209,9 @@ fn root_font_size_declared(entries: &[Entry]) -> bool {
 
 /// 全书正文字号（根 em）：每段文字按所在块（[`crate::cascade::is_block`]）的计算字号、按字数（不算空白）计，取最多的；
 /// 字数一样多的取小的。层叠用 KFX 写出器同一套（[`crate::cascade`]），口径同写出器的 `base_font_size`
-/// （行内元素改字号的字算给所在的块）。算出来不在 0.5–3 之间的不信，用 1。
-pub(super) fn base_font_size(entries: &[Entry]) -> f64 {
+/// （行内元素改字号的字算给所在的块；`@media`、`<link media>` 按阅读模式的 `media` 求，写出器按 KFX 阅读范围求）。
+/// 算出来不在 0.5–3 之间的不信，用 1。
+pub(super) fn base_font_size(entries: &[Entry], media: Option<&MediaEnv>) -> f64 {
     use crate::cascade::{Computed, Rules, Sheet};
     use scraper::{ElementRef, Html, Node};
     let css: HashMap<&str, std::sync::Arc<Rules>> = entries
@@ -220,7 +222,7 @@ pub(super) fn base_font_size(entries: &[Entry]) -> f64 {
                 Ok(t) => Cow::Borrowed(t),
                 Err(_) => Cow::Owned(crate::util::latin1_decode(&e.data)),
             };
-            (e.name.as_str(), Rules::parse(&text, &e.name, None))
+            (e.name.as_str(), Rules::parse(&text, &e.name, media))
         })
         .collect();
     let files: Vec<&Entry> = entries.iter().filter(|e| is_chapter_entry(e)).collect();
@@ -228,20 +230,7 @@ pub(super) fn base_font_size(entries: &[Entry]) -> f64 {
         let mut count: HashMap<i64, usize> = HashMap::new();
         let Ok(text) = std::str::from_utf8(&e.data) else { return count };
         let html = Html::parse_document(text);
-        let mut sheet = Sheet::default();
-        let mut order = 0;
-        for el in html.select(&scraper::Selector::parse("link, style").unwrap_or_else(|_| unreachable!())) {
-            if el.value().attr("media").is_some_and(|m| !crate::cascade::media_ok(m, None)) {
-                continue;
-            }
-            if el.value().name() == "style" {
-                order = sheet.add_at(&el.text().collect::<String>(), order, &e.name, None);
-            } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
-                if let Some(rules) = el.value().attr("href").and_then(|h| css.get(crate::epubzip::resolve_link(&e.name, h).0.as_str())) {
-                    order = sheet.add_rules(rules.clone(), order);
-                }
-            }
-        }
+        let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
         let comp = |el: &ElementRef, parent: &Computed| {
             let mut decls = sheet.cascade(el, &e.name);
             crate::cascade::presentational_hints(el, &mut decls);
@@ -289,7 +278,7 @@ pub(super) fn base_font_size(entries: &[Entry]) -> f64 {
             *total.entry(k).or_default() += n;
         }
     }
-    total.iter().max_by_key(|&(&k, &n)| (n, std::cmp::Reverse(k))).map(|(&k, _)| k as f64 / 1000.0).filter(|v| (0.5..=3.0).contains(v)).unwrap_or(1.0)
+    crate::cascade::body_font_size(&total)
 }
 
 /// 一条声明里左、右外边距有没有负值。
@@ -416,81 +405,6 @@ fn body_font_removed(value: &str, body: Option<&str>) -> Option<String> {
     let names: Vec<&str> = value.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
     let first = super::fonts::norm_family(names.first()?)?;
     (first == body).then(|| names[1..].join(","))
-}
-
-/// `font` 简写拆开的样子（CSS 2.1 / CSS Fonts 3 的语法：`[style || variant || weight || stretch]? size[/line-height]? family`）。
-#[derive(Debug, PartialEq)]
-struct FontShorthand<'a> {
-    style: Option<&'a str>,
-    variant: Option<&'a str>,
-    weight: Option<&'a str>,
-    stretch: Option<&'a str>,
-    size: &'a str,
-    line_height: Option<&'a str>,
-    family: &'a str,
-}
-
-/// 按 CSS 规范拆 `font` 简写（值里已去掉 `!important`）。拿不准的（系统字体关键字 `caption`、全局关键字 `inherit`、
-/// 字号前的词认不出、字号或行高是 `calc()` 之类带空格的写法、没有字体族）返回 `None`，不处理。
-fn parse_font_shorthand(v: &str) -> Option<FontShorthand<'_>> {
-    fn is_size(t: &str) -> bool {
-        let l = t.to_ascii_lowercase();
-        matches!(l.as_str(), "xx-small" | "x-small" | "small" | "medium" | "large" | "x-large" | "xx-large" | "xxx-large" | "larger" | "smaller")
-            || (l.starts_with(|c: char| c.is_ascii_digit() || c == '.') && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'%'))
-    }
-    fn is_line_height(t: &str) -> bool {
-        t.eq_ignore_ascii_case("normal") || is_size(t)
-    }
-    const STRETCH: [&str; 8] = ["ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "semi-expanded", "expanded", "extra-expanded", "ultra-expanded"];
-    let mut f = FontShorthand { style: None, variant: None, weight: None, stretch: None, size: "", line_height: None, family: "" };
-    let mut rest = v.trim();
-    // 字号之前的词：各最多一个，`normal` 可以出现几次（分不清是哪一项，都等于缺省）
-    let mut normals = 0;
-    loop {
-        let end = rest.find(char::is_whitespace)?;
-        let tok = &rest[..end];
-        let l = tok.to_ascii_lowercase();
-        let slot = match l.as_str() {
-            "normal" => {
-                normals += 1;
-                None
-            }
-            "italic" | "oblique" => Some(&mut f.style),
-            "small-caps" => Some(&mut f.variant),
-            "bold" | "bolder" | "lighter" => Some(&mut f.weight),
-            _ if l.len() == 3 && l.ends_with("00") && (b'1'..=b'9').contains(&l.as_bytes()[0]) => Some(&mut f.weight),
-            _ if STRETCH.contains(&l.as_str()) => Some(&mut f.stretch),
-            _ => break,
-        };
-        if let Some(slot) = slot {
-            if slot.is_some() {
-                return None;
-            }
-            *slot = Some(tok);
-        }
-        if normals + [f.style, f.variant, f.weight, f.stretch].iter().filter(|x| x.is_some()).count() > 4 {
-            return None;
-        }
-        rest = rest[end..].trim_start();
-    }
-    let end = rest.find(|c: char| c.is_whitespace() || c == '/')?;
-    f.size = &rest[..end];
-    if !is_size(f.size) {
-        return None;
-    }
-    rest = rest[end..].trim_start();
-    if let Some(r) = rest.strip_prefix('/') {
-        let r = r.trim_start();
-        let end = r.find(char::is_whitespace)?;
-        let lh = &r[..end];
-        if !is_line_height(lh) {
-            return None;
-        }
-        f.line_height = Some(lh);
-        rest = r[end..].trim_start();
-    }
-    f.family = rest.trim();
-    (!f.family.is_empty()).then_some(f)
 }
 
 /// `font` 简写里的字体族第一个是正文字体：换成分项，不写字体族（交给阅读器的字体），别的照简写的意思写全——简写会把没写的项
@@ -655,11 +569,6 @@ mod tests {
         for keep in [r#"p{font:1em "楷体"}"#, "p{font:caption}", "p{font:calc(1em + 1px) 宋体}", "p{font:inherit}", "p{font:bold 宋体}"] {
             assert_eq!(rewrite_css(keep, &c, &mut n), keep);
         }
-        assert_eq!(
-            parse_font_shorthand("normal small-caps 700 condensed larger / 2em  'A B', serif"),
-            Some(FontShorthand { style: None, variant: Some("small-caps"), weight: Some("700"), stretch: Some("condensed"), size: "larger", line_height: Some("2em"), family: "'A B', serif" })
-        );
-        assert_eq!(parse_font_shorthand("bold bold 1em x"), None);
     }
 
     /// 字号归一：body 上的相对、绝对字号和别处的绝对字号乘系数，别处的相对字号、关键字不动；`font` 简写里的字号同样。
@@ -686,10 +595,16 @@ mod tests {
         let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#);
         let long = "正文".repeat(50);
         let book = |css: &str| vec![e("OEBPS/s.css", css), e("OEBPS/c1.xhtml", &page(&format!(r#"<h1>标题</h1><p>{long}<span class="big">大字大字</span></p><p class="note">注释</p>"#)))];
-        assert_eq!(base_font_size(&book("p{font-size:15pt} .big{font-size:3em} .note{font-size:0.5em}")), 1.25);
-        assert_eq!(font_scale(&book("p{font-size:15pt}")), Some(0.8));
-        assert_eq!(font_scale(&book("p{font-size:1em}")), Some(1.0));
-        assert_eq!(font_scale(&book("html{font-size:80%} p{font-size:15pt}")), None, "html 上写了字号");
+        assert_eq!(base_font_size(&book("p{font-size:15pt} .big{font-size:3em} .note{font-size:0.5em}"), None), 1.25);
+        assert_eq!(font_scale(&book("p{font-size:15pt}"), None), Some(0.8));
+        assert_eq!(font_scale(&book("p{font-size:1em}"), None), Some(1.0));
+        assert_eq!(font_scale(&book("html{font-size:80%} p{font-size:15pt}"), None), None, "html 上写了字号");
+        // `@media` 按阅读模式的阅读范围求（同 KFX 写出器）：掌阅 1264 宽，`min-width:1200px` 成立、`min-width:2000px` 不成立；
+        // 没给环境时特性条件一律不成立
+        let ireader = MediaEnv { width: 1264.0, height: 1680.0, device_width: 1264.0, device_height: 1680.0, color: false };
+        let css = "p{font-size:1em} @media (min-width:1200px){p{font-size:15pt}} @media (min-width:2000px){p{font-size:2em}}";
+        assert_eq!(base_font_size(&book(css), Some(&ireader)), 1.25);
+        assert_eq!(base_font_size(&book(css), None), 1.0);
     }
 
     #[test]

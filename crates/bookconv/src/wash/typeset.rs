@@ -243,7 +243,7 @@ pub(super) fn indent_classes_of(css: &str) -> HashSet<String> {
     let mut out = HashSet::new();
     for c in css_rule_re().captures_iter(css) {
         if html::css_decls(&c[2]).iter().any(|d| d.prop.eq_ignore_ascii_case("text-indent")) {
-            out.extend(class.captures_iter(&strip_css_comments(&c[1])).map(|m| m[1].to_string()));
+            out.extend(class.captures_iter(&rule_selector(&c[1])).map(|m| m[1].to_string()));
         }
     }
     out
