@@ -1339,6 +1339,10 @@ pub struct Computed {
     pub bg_size: [Option<Len>; 2],
     /// `background-size: cover`（`bg_size` 里和 `100% 100%` 写法一样，这里另记）：页面一级的背景，Send to Kindle 让它铺满一页。
     pub bg_cover: bool,
+    /// 强制分页：`page-break-before`/`break-before` 写了 `always`、`page`、`left`、`right`（Send to Kindle 在这里另起一节，
+    /// 2026-10-12《飘》版权页后的二维码页）；`after` 同样。不继承。
+    pub break_before: bool,
+    pub break_after: bool,
 }
 
 /// 阴影：x、y 偏移，模糊半径，颜色（没写＝`None`）。
@@ -1457,6 +1461,8 @@ impl Computed {
             bg_position: [None; 2],
             bg_size: [None; 2],
             bg_cover: false,
+            break_before: false,
+            break_after: false,
         }
     }
 
@@ -1478,6 +1484,8 @@ impl Computed {
             bg_fixed: false,
             bg_position: [None; 2],
             bg_size: [None; 2],
+            break_before: false,
+            break_after: false,
             bg_cover: false,
             bolder: false,
             ..self.clone()
@@ -1742,6 +1750,9 @@ impl Computed {
         // `height` 也算（Send to Kindle 同样写成 `$62`：《消失的爱人》扉页 `div.shuming{height:6em}`），写了 `min-height` 的以它为准
         c.min_height = get("min-height").or_else(|| get("height")).and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if *n == 0.0));
         c.display = get("display").map(|v| v.trim().to_ascii_lowercase());
+        let forced = |k: &str| get(&format!("page-break-{k}")).or_else(|| get(&format!("break-{k}"))).is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "always" | "page" | "left" | "right" | "recto" | "verso"));
+        c.break_before = forced("before");
+        c.break_after = forced("after");
         for i in 0..4 {
             // 写了的才覆盖标签的缺省外边距（上面的 UA 样式）；`auto` 这类算不出长度的当 0
             if let Some(v) = get(MARGIN[i]) {

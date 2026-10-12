@@ -523,6 +523,18 @@ impl Doc<'_> {
         if comp.display.as_deref() == Some("none") {
             return;
         }
+        // 强制分页：记号像锚点一样落在下一个生成的块开头，解析完在那里另起一节（[`split_at_breaks`]）
+        let after = comp.break_after;
+        if comp.break_before {
+            self.pending.borrow_mut().insert(0, BREAK_MARK.to_string());
+        }
+        self.block_inner(el, comp, out);
+        if after {
+            self.pending.borrow_mut().push(BREAK_MARK.to_string());
+        }
+    }
+
+    fn block_inner(&self, el: ElementRef, comp: Computed, out: &mut Vec<Block>) {
         let name = el.value().name();
         if matches!(name, "head" | "script" | "style" | "title") {
             return;
@@ -1014,6 +1026,77 @@ fn run_differs(a: &Computed, b: &Computed) -> bool {
 /// 解析好的一个文档：(spine 下标, 路径, 语言, 块)。
 pub(super) type ParsedDoc<'a> = (usize, &'a str, Option<String>, Vec<Block>);
 
+/// 强制分页的记号：当成锚点 id 落在分页后第一个块的开头（真的 id 里不会有 NUL）。
+pub(super) const BREAK_MARK: &str = "\0break";
+
+/// 块（或它最前面的子孙）开头有分页记号。
+fn starts_with_break(b: &Block) -> bool {
+    b.ids.iter().any(|(i, o)| i == BREAK_MARK && *o == 0) || matches!(&b.kind, Kind::Container(c) if c.first().is_some_and(starts_with_break))
+}
+
+/// 去掉块树里的分页记号。
+fn strip_breaks(blocks: &mut [Block]) {
+    for b in blocks {
+        b.ids.retain(|(i, _)| i != BREAK_MARK);
+        if let Kind::Container(c) = &mut b.kind {
+            strip_breaks(c);
+        }
+    }
+}
+
+/// 一个文件的块在强制分页处切成几节（Send to Kindle：`page-break-before` 处另起一节，2026-10-12《飘》版权页后的二维码页）。
+/// 切在顶层；顶层只有一个容器（带背景的 body）时切它的子块，每节一份容器（背景照带，上外边距留在第一节、下外边距留在最后一节，
+/// 同 Amazon）。文件开头的分页不用切。
+pub(super) fn split_at_breaks(mut blocks: Vec<Block>) -> Vec<Vec<Block>> {
+    let cut = |v: &[Block]| -> Vec<usize> { (1..v.len()).filter(|&i| starts_with_break(&v[i])).collect() };
+    let mut parts: Vec<Vec<Block>> = Vec::new();
+    let top = cut(&blocks);
+    if !top.is_empty() {
+        let mut rest = std::mem::take(&mut blocks);
+        for &i in top.iter().rev() {
+            parts.push(rest.split_off(i));
+        }
+        parts.push(rest);
+        parts.reverse();
+    } else if let [only] = blocks.as_mut_slice() {
+        let inner = match &only.kind {
+            Kind::Container(c) => cut(c),
+            _ => Vec::new(),
+        };
+        if !inner.is_empty() {
+            let shell = only.clone();
+            let Kind::Container(mut rest) = std::mem::replace(&mut only.kind, Kind::Container(Vec::new())) else { unreachable!() };
+            let mut chunks = Vec::new();
+            for &i in inner.iter().rev() {
+                chunks.push(rest.split_off(i));
+            }
+            chunks.push(rest);
+            chunks.reverse();
+            let n = chunks.len();
+            for (k, c) in chunks.into_iter().enumerate() {
+                let mut b = shell.clone();
+                b.kind = Kind::Container(c);
+                if k > 0 {
+                    b.margin_top = Vert::default();
+                    b.ids.clear();
+                    b.gap_before = Vert::default();
+                }
+                if k + 1 < n {
+                    b.margin_bottom = Vert::default();
+                }
+                parts.push(vec![b]);
+            }
+        }
+    }
+    if parts.is_empty() {
+        parts.push(blocks);
+    }
+    for p in &mut parts {
+        strip_breaks(p);
+    }
+    parts
+}
+
 /// 有没有块（含容器里的）的左（`left`）或右外边距是负的。
 fn has_negative(blocks: &[Block], left: bool) -> bool {
     any_block(blocks, |b| {
@@ -1241,7 +1324,21 @@ pub(super) fn parse_docs(book: &Loaded, media: Option<crate::css::MediaEnv>, fai
         }
         Ok::<_, String>(())
     })?;
-    Ok(parsed)
+    // 强制分页处另起一节：切出来的节编号接在封面页（`docs.len()`，见 `prepend_cover_page`）后面，名字不重
+    let mut next = book.docs.len() + 1;
+    let mut out: Vec<ParsedDoc> = Vec::with_capacity(parsed.len());
+    for (si, path, lang, blocks) in parsed {
+        for (k, part) in split_at_breaks(blocks).into_iter().enumerate() {
+            let id = if k == 0 {
+                si
+            } else {
+                next += 1;
+                next - 1
+            };
+            out.push((id, path, lang.clone(), part));
+        }
+    }
+    Ok(out)
 }
 
 /// 元素最多套几层：超过的书报错不转换（真书十几层；几百上千层的是没关的标签一路套下去，解析、生成版面都是递归的，

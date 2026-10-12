@@ -327,8 +327,9 @@ impl Builder {
         if let Some(l) = c.lang.as_ref().or(doc_lang.as_ref()) {
             p.string(P_LANG, l.to_ascii_lowercase());
         }
-        // 容器不写对齐（Send to Kindle 同样，对齐写在里面的文字上）
-        if let (Some(a), false) = (c.text_align.as_deref(), matches!(b.kind, Kind::Container(_))) {
+        // 容器不写对齐（Send to Kindle 同样，对齐写在里面的文字上）；写了宽度的图片写成块的对齐 `$580`（见下面图片宽度）
+        let sized_image = matches!(b.kind, Kind::Image { .. }) && c.width.is_some();
+        if let (Some(a), false, false) = (c.text_align.as_deref(), matches!(b.kind, Kind::Container(_)), sized_image) {
             p.symbol(P_TEXT_ALIGN, align_symbol(a));
         }
         // 首行缩进：包含块是整页宽时照写 em，比整页窄（在有左右边距、内边距、边框的容器里）时写成包含块宽度的百分比
@@ -410,6 +411,16 @@ impl Builder {
                 p.set(P_WIDTH, v);
                 if image_width && !matches!(c.width, Some(Len::Percent(_))) {
                     p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
+                }
+                // 写了宽度的图片：`$546: $377`，居中、居右写块的对齐 `$580`，不写文字对齐（Send to Kindle 同样：《飘》二维码
+                // `<div class="image"><img width="50%"/>` 写 `$580: $320`；以前写 `$34`，Kindle 上图靠左，2026-10-12 截图）
+                if image_width {
+                    p.symbol(P_SIZING, SIZING_VALUE);
+                    match c.text_align.as_deref() {
+                        Some("center") => p.symbol(P_BOX_ALIGN, ALIGN_CENTER),
+                        Some("right" | "end") => p.symbol(P_BOX_ALIGN, ALIGN_RIGHT),
+                        _ => {}
+                    }
                 }
             }
         } else if b.ty.is_none() && !matches!(b.kind, Kind::Image { .. }) {
