@@ -174,7 +174,8 @@ impl<'p> WritePlan<'p> {
             screen: if is_comic_book { opts.comic_screen.unwrap_or(opts.screen) } else { opts.screen },
             src_names: prep.rep.wash.iter().flat_map(|w| w.renamed.iter().map(|(old, new)| (new.as_str(), old.as_str()))).collect(),
             deferred_opf: prep.opf_name.as_deref().filter(|_| prep.has_remote_imgs || has_retypable || opts.wash.is_some()),
-            image_positions: entries.iter().enumerate().filter(|(_, (n, _, ish))| !*ish && crate::imgopt::is_page_image(n)).map(|(i, _)| i).collect(),
+            // 清洗层自己加的图（Move 的垫图 `eink-spacer.png`）有字节、原书里没有：不回原书读，照写
+            image_positions: entries.iter().enumerate().filter(|(_, (n, d, ish))| !*ish && d.is_empty() && crate::imgopt::is_page_image(n)).map(|(i, _)| i).collect(),
             // 字体（只修复的文字书里最大的条目，《绍宋》两个 15MB 的 ttf）和原书那份逐字节相同、原书里是 deflate 压的：原样拷原书的
             // 压缩数据，不解压再重压（2026-10-09）。用 CRC 和大小认"同一份"（去混淆过的字体不同，照常重压）。
             font_src: (0..archive.len())
