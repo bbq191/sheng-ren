@@ -2,6 +2,8 @@
 name = "掌阅自带阅读器（iReader Ocean 5 Pro）"
 color = false
 formats = ["epub"]
+# 背景尺寸的高写 auto 会把图拉长到整页高（2026-10-12 测试书「测试-掌阅背景」）：整页背景图照 Kindle 上的大小、位置写成屏幕像素
+background_auto_height = false
 # 注释：弹窗（2026-10-05 真机：掌阅自带阅读器认 epub:type="noteref" + <aside epub:type="footnote">，点标号弹出小窗，章末注释照常显示）
 notes = "popup"
 # 保留 CSS 背景图（分卷页、卷首语的背景），和 kindle 同一套（用户 2026-10-05）；xochitl 仍去掉（平铺满页盖住正文）。

@@ -91,7 +91,10 @@ pub use self::encoding::transcode_entries;
 /// - 12（2026-10-12）：Kindle 的竖直距离按行距算（profile kindle `line_px` 63，一 rem ≈ 52.5px，以前按 1em = 39px，「第一卷」
 ///   在 Move 上偏高）；只有一个块的页面（卷首、标题页）背景图相对 body 盒子定位（Kindle 上 body 只到标题的下外边距，`bottom` 的
 ///   插图贴着它、和标题叠在一起，以前按内容区底边画）。三台截图对过。
-pub const KINDLE_RULES_VERSION: &str = "12";
+/// - 13（2026-10-12）：掌阅背景尺寸的高写 `auto` 会把图拉长到整页高（测试书「测试-掌阅背景」）：整页背景图照 Kindle 上的大小、
+///   位置写成屏幕像素的 `background-size`、`background-position`，接在规则末尾（profile `background_auto_height = false`；
+///   《飘》「第一卷」插图、版权页底纹，掌阅真机 ✓）。
+pub const KINDLE_RULES_VERSION: &str = "13";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -198,6 +201,9 @@ pub struct WashOpts {
     /// 不认 `margin-top` 的阅读器（Move，profile `margin_top = false`）：每章开头写了上边距的，在 `<body>` 开头垫空白图推到
     /// Kindle 上同样的位置（`top_spacer.rs`）。`None` 不垫。
     pub top_spacer: Option<SpacerGeometry>,
+    /// 背景尺寸的高写 `auto` 会拉长图的阅读器（掌阅，profile `background_auto_height = false`）：整页背景图照 Kindle 上的大小、
+    /// 位置写成屏幕像素（`kindle_rules`）。整屏和阅读范围（[`crate::bgfit::TileGeometry`]）；`None` 不改。
+    pub bg_place: Option<crate::bgfit::TileGeometry>,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -214,7 +220,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None }
     }
 }
 
@@ -555,6 +561,26 @@ fn add_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path: &st
             entries[oi].data = t.into_bytes();
         }
     }
+}
+
+/// 图片的原始宽高（清洗后的 zip 路径 → 像素）：调用方读好的（流式优化时图片条目是空占位；清洗层改过名的按改名记录换过来），
+/// 没有的从条目字节读。
+pub(crate) fn image_dims_of<'e>(entries: &'e [Entry], rep: &WashReport, known: Option<&HashMap<String, (u32, u32)>>) -> HashMap<&'e str, (u32, u32)> {
+    let mut dims: HashMap<&str, (u32, u32)> = HashMap::new();
+    if let Some(k) = known {
+        let back: HashMap<&str, &str> = rep.renamed.iter().map(|(old, new)| (new.as_str(), old.as_str())).collect();
+        for e in entries.iter().filter(|e| crate::util::is_image_ext(&e.name)) {
+            if let Some(d) = k.get(back.get(e.name.as_str()).copied().unwrap_or(&e.name)) {
+                dims.insert(e.name.as_str(), *d);
+            }
+        }
+    }
+    for e in entries.iter().filter(|e| crate::util::is_image_ext(&e.name) && !e.data.is_empty()) {
+        if let Some(d) = crate::imgopt::guard(|| image::ImageReader::new(std::io::Cursor::new(&e.data)).with_guessed_format().ok()?.into_dimensions().ok()) {
+            dims.entry(e.name.as_str()).or_insert(d);
+        }
+    }
+    dims
 }
 
 /// 条目名是不是样式表（`.css`，不分大小写）。

@@ -31,6 +31,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts
         opaque_rgba: !opts.css_rgba,
         drop_single_backgrounds: !opts.background_no_repeat,
         tiled: HashSet::new(),
+        bg_fixes: HashMap::new(),
     };
     // 平铺背景的阅读器：整页背景图做成整页一块（`bgfit::plan_tiles`），这些规则照留，图由优化器改（`rep.page_tiles`）
     if let Some(g) = opts.page_tiles.filter(|_| ctx.drop_single_backgrounds) {
@@ -38,18 +39,21 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts
         ctx.tiled = rep.page_tiles.keys().cloned().collect();
         // 背景图的位置相对 body 盒子（Kindle：body 只到最后一块的下外边距为止，`bottom` 的图贴着它，2026-10-12《飘》截图）。
         // 用这张图的页都只有一个块、body 底差不多时，图块里的定位范围就到那里（按内容区高折过来）；`cover` 写出器按整页画，不动
-        if let Some(sg) = opts.top_spacer {
-            let boxes = super::top_spacer::page_boxes(entries, media, sg);
-            for (path, tile) in rep.page_tiles.iter_mut().filter(|(_, t)| t.fit != crate::bgfit::TileFit::Cover) {
-                let bottoms: Vec<Option<f64>> = boxes.values().filter(|b| b.bg.as_deref() == Some(path.as_str()) && !b.bg_cover).map(|b| b.body_bottom).collect();
-                let Some(lo) = bottoms.iter().copied().collect::<Option<Vec<f64>>>().filter(|v| !v.is_empty()) else { continue };
-                let (min, max) = lo.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
-                if max - min > 0.03 * sg.kindle.content_h {
-                    continue;
-                }
-                let h = ((min + max) / 2.0 * f64::from(tile.area.1) / sg.kindle.content_h).round() as u32;
-                tile.area.1 = h.clamp(1, tile.area.1);
-            }
+        if let Some((_, k)) = opts.image_sizing {
+            body_box_areas(entries, media, k, &mut rep.page_tiles);
+        }
+    }
+    // 背景尺寸的高写 `auto` 会把图拉长到整页高的阅读器（掌阅，profile `background_auto_height = false`）：整页背景图照 Kindle 上
+    // 的大小、位置（同 Move 的图块，`bgfit::plan_tiles`）写成屏幕像素的 `background-size`、`background-position`，接在规则末尾
+    if let (Some(g), Some((_, k))) = (opts.bg_place, opts.image_sizing) {
+        let mut plans = crate::bgfit::plan_tiles(entries, &ctx.body_classes, g);
+        body_box_areas(entries, media, k, &mut plans);
+        let dims = super::image_dims_of(entries, rep, opts.image_dims.as_deref());
+        for (path, t) in plans {
+            let Some(&(w, h)) = dims.get(path.as_str()) else { continue };
+            let (x, y, dw, dh) = t.placement(w, h);
+            let n = |v: f64| fmt_num(v.round());
+            ctx.bg_fixes.insert(path, format!("background-size:{}px {}px;background-position:{}px {}px;", n(dw), n(dh), n(x), n(y)));
         }
     }
     ctx.body_fonts.extend(exposed_fonts(entries, media, &ctx, &facts.fonts));
@@ -68,7 +72,7 @@ fn exposed_fonts(entries: &[Entry], media: Option<&MediaEnv>, ctx: &Ctx, before:
         return found;
     }
     let total: usize = before.values().sum();
-    let mut trial = Ctx { body_fonts: ctx.body_fonts.clone(), body_classes: ctx.body_classes.clone(), tiled: ctx.tiled.clone(), font_scale: None, ..*ctx };
+    let mut trial = Ctx { body_fonts: ctx.body_fonts.clone(), body_classes: ctx.body_classes.clone(), tiled: ctx.tiled.clone(), bg_fixes: ctx.bg_fixes.clone(), font_scale: None, ..*ctx };
     for _ in 0..3 {
         let mut copy: Vec<Entry> = entries.iter().filter(|e| is_css_name(&e.name) || is_chapter_entry(e)).cloned().collect();
         rewrite_entries(&mut copy, &trial);
@@ -152,6 +156,28 @@ struct Ctx {
     drop_single_backgrounds: bool,
     /// 做成整页图块的背景图（zip 路径，`bgfit::plan_tiles`）：用它们的规则不去掉。
     tiled: HashSet<String>,
+    /// 背景图（zip 路径）→ 接在用它的规则末尾的尺寸、位置（掌阅，`background_auto_height = false`）。
+    bg_fixes: HashMap<String, String>,
+}
+
+/// 背景图的定位范围相对 body 盒子（Kindle：body 只到最后一块的下外边距为止，`bottom` 的图贴着它，2026-10-12《飘》截图）。
+/// 用这张图的页都只有一个块、body 底差不多时，定位范围的高就到那里（按内容区高折到这个阅读器）；`cover` 写出器按整页画，不动。
+fn body_box_areas(entries: &[Entry], media: Option<&MediaEnv>, k: KindleImageRef, plans: &mut HashMap<String, crate::bgfit::PageTile>) {
+    if plans.is_empty() {
+        return;
+    }
+    let area = plans.values().next().map(|t| t.area).unwrap_or_default();
+    let boxes = super::top_spacer::page_boxes(entries, media, super::SpacerGeometry { kindle: k, area });
+    for (path, tile) in plans.iter_mut().filter(|(_, t)| t.fit != crate::bgfit::TileFit::Cover) {
+        let bottoms: Vec<Option<f64>> = boxes.values().filter(|b| b.bg.as_deref() == Some(path.as_str()) && !b.bg_cover).map(|b| b.body_bottom).collect();
+        let Some(lo) = bottoms.iter().copied().collect::<Option<Vec<f64>>>().filter(|v| !v.is_empty()) else { continue };
+        let (min, max) = lo.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        if max - min > 0.03 * k.content_h {
+            continue;
+        }
+        let h = ((min + max) / 2.0 * f64::from(tile.area.1) / k.content_h).round() as u32;
+        tile.area.1 = h.clamp(1, tile.area.1);
+    }
 }
 
 /// 字号归一要乘的系数：1 / 全书正文字号 `base`（[`BookFacts::base_font_size`]；正文已经是 1em 的是 1）。
@@ -388,6 +414,8 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
     // 背景图做成了整页图块的规则照留（xochitl 本来就平铺、不管尺寸位置，图块做成整页一份）
     let tiled = !ctx.tiled.is_empty()
         && decls.iter().any(|d| html::css_urls(d.value).iter().any(|u| ctx.tiled.contains(&crate::epubzip::resolve_link(base, u.value).0)));
+    // 照 Kindle 写成像素的背景图（掌阅）：规则末尾接上尺寸、位置
+    let fix = decls.iter().find_map(|d| html::css_urls(d.value).iter().find_map(|u| ctx.bg_fixes.get(&crate::epubzip::resolve_link(base, u.value).0)));
     let single_bg = ctx.drop_single_backgrounds
         && !tiled
         && decls.iter().any(|d| {
@@ -455,6 +483,13 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
             out.push(';');
         }
         out.push_str(&format!("color:{};", css_color(adj)));
+        changed += 1;
+    }
+    if let Some(f) = fix {
+        if !out.trim_end().is_empty() && !out.trim_end().ends_with(';') {
+            out.push(';');
+        }
+        out.push_str(f);
         changed += 1;
     }
     (out, changed)
@@ -574,7 +609,7 @@ mod tests {
     use super::*;
 
     fn ctx() -> Ctx {
-        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false, tiled: HashSet::new() }
+        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false, tiled: HashSet::new(), bg_fixes: HashMap::new() }
     }
 
     #[test]
@@ -741,6 +776,9 @@ mod tests {
         let fen = r#"body.fen{background:url('../Images/a.jpg') no-repeat bottom center;background-size:100% auto}"#;
         assert_eq!(rewrite_css_in(fen, "OEBPS/Styles/s.css", &t, &mut n), fen);
         assert_eq!(rewrite_css_in(fen, "s.css", &t, &mut n), "body.fen{background-size:100% auto}", "别的图照旧去掉");
+        // 掌阅：照 Kindle 算好的像素尺寸、位置接在规则末尾（规则本身不动）
+        let f = Ctx { bg_fixes: [("OEBPS/Images/a.jpg".to_string(), "background-size:1264px 932px;background-position:0px 263px;".to_string())].into_iter().collect(), ..ctx() };
+        assert_eq!(rewrite_css_in(fen, "OEBPS/Styles/s.css", &f, &mut n), "body.fen{background:url('../Images/a.jpg') no-repeat bottom center;background-size:100% auto;background-size:1264px 932px;background-position:0px 263px;}");
     }
 
     #[test]
