@@ -106,7 +106,9 @@ pub use self::encoding::transcode_entries;
 ///   按自己的字号（≈ 37.5px），同样 1em 在 Kindle 上占页高多一半；上下外边距、内边距（含 `eink-ua.css`）改写成占内容区高的比例和
 ///   Kindle 一样（`kindle_rules::VScale`，profile `em_px`）。`%`、`px`、`pt` 折成屏幕像素，顺带修了掌阅把 `pt` 当 px、Move 的 `%`
 ///   只有十来像素。测试书三台量过，掌阅、Move 每种写法差 1–4px。
-pub const KINDLE_RULES_VERSION: &str = "14";
+/// - 15（2026-10-12）：竖直间距换算挪到最后（`kindle_rules::scale_vertical_entries`）：14 先换算再算页首垫图，垫图读到放大过的
+///   边距、垫高了，《飘》「第一卷」在 Move 上标题挤到下一页（真机）。
+pub const KINDLE_RULES_VERSION: &str = "15";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -473,12 +475,16 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
     if opts.mode.kindle_rules() {
         let font_scale = kindle_rules::apply(entries, rep, opts);
-        add_ua_css(entries, rep, font_scale, opts.v_scale);
+        add_ua_css(entries, rep, font_scale);
         if let Some((sizing, kref)) = opts.image_sizing {
             kindle_images::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), sizing, kref);
         }
         if let Some(g) = opts.top_spacer {
             top_spacer::apply(entries, rep, opts.media.as_ref(), g);
+        }
+        // 竖直间距照 Kindle 换算放在最后：上面几步都按原来的 CSS 算 Kindle 上的样子
+        if let Some(vs) = opts.v_scale {
+            rep.kindle_rule_edits += kindle_rules::scale_vertical_entries(entries, &vs);
         }
         drop_nonlinear_nav(entries);
     }
@@ -536,7 +542,7 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
 
 /// 只修复时挂上标签的缺省样式（[`WashMode::Repair`] 的 `kindle_rules`）：OPF 同目录写 `eink-ua.css`，每章 `<head>` 里**第一个**放指向它的 `<link>`
 /// （在书自带的样式表、`<style>` 之前，书里写了的照样盖过它）。目录页（nav）不挂。
-fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option<f64>, v_scale: Option<VScale>) {
+fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option<f64>) {
     let opf_idx = find_opf(entries);
     let name = crate::uastyle::UA_CSS_NAME;
     let css_path = match opf_idx.map(|i| dir_of(&entries[i].name)) {
@@ -554,12 +560,7 @@ fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option
         changed
     });
     rep.ua_css_linked += linked.into_iter().filter(|c| *c).count();
-    let css = crate::uastyle::ua_css(font_scale);
-    let css = match v_scale {
-        Some(vs) => kindle_rules::scale_vertical_css(&css, &vs),
-        None => css,
-    };
-    add_css_entry(entries, opf_idx, &css_path, &css, "eink-ua-css");
+    add_css_entry(entries, opf_idx, &css_path, &crate::uastyle::ua_css(font_scale), "eink-ua-css");
 }
 
 /// 新增（或更新）一份我们写的样式表，并往 OPF manifest 补一条 `<item>`（幂等）。

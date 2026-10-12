@@ -32,7 +32,6 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts
         drop_single_backgrounds: !opts.background_no_repeat,
         tiled: HashSet::new(),
         bg_fixes: HashMap::new(),
-        v_scale: opts.v_scale,
     };
     // 平铺背景的阅读器：整页背景图做成整页一块（`bgfit::plan_tiles`），这些规则照留，图由优化器改（`rep.page_tiles`）
     if let Some(g) = opts.page_tiles.filter(|_| ctx.drop_single_backgrounds) {
@@ -159,8 +158,6 @@ struct Ctx {
     tiled: HashSet<String>,
     /// 背景图（zip 路径）→ 接在用它的规则末尾的尺寸、位置（掌阅，`background_auto_height = false`）。
     bg_fixes: HashMap<String, String>,
-    /// 竖直方向的边距照 Kindle 换算（[`VScale`]）。
-    v_scale: Option<VScale>,
 }
 
 /// 竖直间距照 Kindle 换算（2026-10-12 用户定，「测试-竖直间距」三台量的）：Kindle 的上下外边距、内边距按行距换像素（一 rem ≈
@@ -227,7 +224,42 @@ pub(super) fn scale_vertical(text: &str, vs: &VScale) -> (String, usize) {
     (html::apply_edits(text, edits), n)
 }
 
-/// 整份样式表的规则体照 [`scale_vertical`] 换算（我们写的 `eink-ua.css` 用）。
+/// 全书的样式表、`<style>`、行内 `style` 照 [`VScale`] 换算，返回改了的声明数。**最后做**：页首垫图、背景图位置、图片大小都按
+/// 原来的 CSS 算 Kindle 上的样子（先换算的话它们读到的是放大过的边距，《飘》「第一卷」垫图垫高了、标题挤到下一页）。
+pub(super) fn scale_vertical_entries(entries: &mut [Entry], vs: &VScale) -> usize {
+    crate::util::par_map_mut(entries, |e| {
+        let mut n = 0;
+        if is_css_name(&e.name) {
+            let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+            let out = scale_vertical_css(text, vs);
+            if out != text {
+                n = 1;
+                e.data = out.into_bytes();
+            }
+            return n;
+        }
+        if !is_chapter_entry(e) {
+            return 0;
+        }
+        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+        let s = html::edit_style_attrs(text, |_, value| {
+            let (v, k) = scale_vertical(value, vs);
+            n += k;
+            if k == 0 { html::Edit::Keep } else { html::Edit::Set(v) }
+        })
+        .into_owned();
+        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(scale_vertical_css(css, vs))).into_owned();
+        if s != text {
+            n = n.max(1);
+            e.data = s.into_bytes();
+        }
+        n
+    })
+    .into_iter()
+    .sum()
+}
+
+/// 整份样式表的规则体照 [`scale_vertical`] 换算。
 pub(super) fn scale_vertical_css(css: &str, vs: &VScale) -> String {
     let edits: Vec<(usize, usize, String)> = rule_spans(css)
         .into_iter()
@@ -565,11 +597,6 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
         out.push_str(&format!("color:{};", css_color(adj)));
         changed += 1;
     }
-    if let Some(vs) = &ctx.v_scale {
-        let (t, k) = scale_vertical(&out, vs);
-        out = t;
-        changed += k;
-    }
     if let Some(f) = fix {
         if !out.trim_end().is_empty() && !out.trim_end().ends_with(';') {
             out.push(';');
@@ -694,7 +721,7 @@ mod tests {
     use super::*;
 
     fn ctx() -> Ctx {
-        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false, tiled: HashSet::new(), bg_fixes: HashMap::new(), v_scale: None }
+        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false, tiled: HashSet::new(), bg_fixes: HashMap::new() }
     }
 
     #[test]
