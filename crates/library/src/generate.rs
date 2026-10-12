@@ -592,7 +592,7 @@ impl Library {
         // 放进哪个文件夹：原件所在目录相对跟踪目录的路径（`a/b`：书架服务按层建，先「a」、再它里面的「b」，2026-10-07 用户定）；
         // 跟踪目录顶层的书、add 进来的书、网址书放书库根（空）
         let folder = self.tracked_rel(meta).map(|(_, rel)| rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_default();
-        let name = format!("{}.{}", bookconv::util::sanitize_filename(&meta.title, &meta.id), format.ext());
+        let name = format!("{}.{}", bookconv::util::sanitize_filename(&crate::metadata::corrected_title(meta), &meta.id), format.ext());
         let loc = if folder.is_empty() { PathBuf::from(&name) } else { Path::new(&folder).join(&name) };
         let sp = self.state_path(&device.id);
         let prev = self.records.states.get(&sp).books.get(&meta.id).cloned();
@@ -914,7 +914,8 @@ impl State {
     /// `copied` 是本书以前放在电脑上的产物的文件名：设备上叫这个名字的文件是用户拷上去的那份，也算本书的。
     /// `taken` 是同一轮里别的书正在传、还没记进来的文件名（小写），也算别人的。
     fn file_name_for(&self, meta: &Meta, dir: &Path, ext: &str, same_as: Option<&Path>, copied: Option<&str>, taken: &BTreeSet<String>) -> Result<String, String> {
-        let base = bookconv::util::sanitize_filename(&meta.title, &meta.id);
+        // 文件名跟修正后的书名（网站书名 + 卷次，2026-10-12 用户定）
+        let base = bookconv::util::sanitize_filename(&crate::metadata::corrected_title(meta), &meta.id);
         let plain = format!("{base}.{ext}");
         let suffixed = format!("{base} [{}].{ext}", meta.id.get(..6).unwrap_or(&meta.id));
         if let Some(e) = self.books.get(&meta.id).filter(|e| e.path.parent() == Some(dir)) {

@@ -22,6 +22,10 @@ use std::path::Path;
 pub struct BookInfo {
     /// 从哪来的："豆瓣 <网址>"、"QQ阅读 <网址>" 或 "Wikidata Q…"。
     pub source: String,
+    /// 网站上这部作品的书名（豆瓣条目名不含副标题、Bangumi 中文名、QQ 阅读书名；Wikidata 不填）：生成时书名改用它
+    /// 加上书里的卷次（[`corrected_title`]，2026-10-12 用户定）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
     /// 网站上的作者署名（豆瓣带国籍：「[美] 玛格丽特·米切尔」）：书里的作者没写国籍时照它补。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<String>,
@@ -214,7 +218,8 @@ impl<S: BookSource> Step for S {
 
 /// 找书的匹配规则版本：改了搜索词、比对口径就加一，以前没找到的书 `sync` 会再找一次（[`crate::Meta::info_checked`]）。
 /// 2：署名拆开（「某某 著，某某 译」）、书名去卷次再搜、书名用字重合 80% 也算、按译者挑版本（2026-10-12）。
-pub const LOOKUP_VERSION: &str = "2";
+/// 3：记下网站书名（书名改用它，2026-10-12）；以前找到过、没记书名的再找一次。
+pub const LOOKUP_VERSION: &str = "3";
 
 /// 一套书的认法：书名去掉卷次、版本字样（[`crate::matching::base_title`]）规整后加上作者（[`crate::matching::author_keys`]）。
 pub(crate) fn series_key(meta: &Meta) -> String {
@@ -299,6 +304,7 @@ impl Library {
         } else if let Some(i) = info {
             let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
             m.info = Some(i.clone());
+            m.info_checked = LOOKUP_VERSION.to_string();
             self.save_meta(&m)?;
             InfoResult::Found(i)
         } else if let Some(e) = net.transient_error().or_else(|| work_err.clone()) {
@@ -351,6 +357,7 @@ impl Library {
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
         if let Some((info, from)) = found {
             m.info = Some(info.clone());
+            m.info_checked = LOOKUP_VERSION.to_string();
             self.save_meta(&m)?;
             return Ok(Some(InfoResult::Shared(info, from)));
         }
@@ -362,9 +369,9 @@ impl Library {
         Ok(None)
     }
 
-    /// `sync` 要不要给这本书联网找元数据：还没找到过，也没在这一版匹配规则下找过（[`crate::Meta::info_checked`]）。
+    /// `sync` 要不要给这本书联网找元数据：还没找到过（或者找到的是早先没记网站书名的），也没在这一版匹配规则下找过（[`crate::Meta::info_checked`]）。
     pub fn needs_metadata(&self, meta: &Meta) -> bool {
-        meta.info.is_none() && meta.info_checked != LOOKUP_VERSION
+        meta.info_checked != LOOKUP_VERSION && meta.info.as_ref().is_none_or(|i| i.title.is_empty() && !i.source.starts_with("Wikidata"))
     }
 
     /// 去掉联网找来的元数据和封面（找错了的时候）。返回有没有东西被去掉。
@@ -424,6 +431,7 @@ fn norm_date(d: &str) -> Option<String> {
 
 /// 生成时往书里补的（[`inject`]）：(字段, 值)，`Identifier` 的值是要**加上**的 ISBN，别的字段整个换成这些值。
 /// 书里有什么看 `own`（入库时记下的；没有记录时按书里只有 `meta.authors` 这些作者算）：
+/// - 书名：换成 [`corrected_title`]（网站书名 + 书里的卷次）；
 /// - 简介、标签：书里没有才补；
 /// - 作者：书里的署名拆开（「[美] 某某 著，某某 译」拆成作者和译者），没写国籍的照找来的作者署名补上（同一个人：名字像）；
 ///   和书里原样相同就不动；
@@ -442,6 +450,10 @@ pub(crate) fn plan(meta: &Meta, own: Option<&crate::OwnDc>) -> Vec<(bookconv::op
         None => (false, false, &[][..], false, false, false),
     };
     let mut out = Vec::new();
+    let title = corrected_title(meta);
+    if title != meta.title {
+        out.push((DcField::Title, vec![title]));
+    }
     if let Some(i) = info {
         if !has_desc && !i.description.is_empty() {
             out.push((DcField::Description, vec![i.description.clone()]));
@@ -500,6 +512,32 @@ pub(crate) fn plan(meta: &Meta, own: Option<&crate::OwnDc>) -> Vec<(bookconv::op
         }
     }
     out
+}
+
+/// 书里书名末尾的卷次，统一写法：上中下册写成「（上册）」，第几卷写成「 第01卷」（数字照书里的）；没有、认不出（「（共3册）」这类说明）是空。
+fn volume_suffix(title: &str) -> String {
+    let base = crate::matching::base_title(title).unwrap_or_else(|| title.to_string());
+    let tail: String = title.trim().strip_prefix(base.as_str()).unwrap_or("").to_string();
+    for part in ["上", "中", "下"] {
+        if tail.contains(&format!("{part}册")) || tail.contains(&format!("{part}冊")) {
+            return format!("（{part}册）");
+        }
+    }
+    if tail.contains('共') || tail.contains('全') && !tail.contains("全彩") {
+        return String::new();
+    }
+    // 最后一串数字：卷01、第3卷、Vol.2、- 05
+    let digits: String = tail.chars().rev().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect();
+    if digits.is_empty() { String::new() } else { format!(" 第{digits}卷") }
+}
+
+/// 修正后的书名（2026-10-12 用户定：书名用匹配到的网站书名，卷次照书里的补上；没找到的照书里的）：网站书名去掉「（共45册）」
+/// 这类说明和卷次，加上书里的卷次（[`volume_suffix`]）。生成时写进书（`dc:title`），设备上的文件名也用它。
+pub(crate) fn corrected_title(meta: &Meta) -> String {
+    let Some(web) = meta.info.as_ref().map(|i| i.title.trim()).filter(|t| !t.is_empty()) else { return meta.title.clone() };
+    let base = crate::matching::base_title(web).unwrap_or_else(|| web.to_string());
+    let t = format!("{}{}", base.trim(), volume_suffix(&meta.title));
+    if t.trim().is_empty() { meta.title.clone() } else { t }
 }
 
 /// [`plan`] 的指纹（进生成指纹：补的东西变了产物就过期）；什么都不补时 `None`。
@@ -701,6 +739,20 @@ mod tests {
         // 靠去掉卷次才对上的条目（漫画「第0卷」）：版本信息不补，作品层面的照补
         let meta = Meta { title: "飘 第2卷".into(), ..meta };
         assert!(!plan(&meta, Some(&own(&["[美] 玛格丽特·米切尔 著，梅静 译"]))).iter().any(|(f, _)| matches!(f, DcField::Publisher | DcField::Identifier)));
+    }
+
+    /// 书名：网站书名去掉说明、加上书里的卷次（用户 2026-10-12 选的）；没找到的照书里的。
+    #[test]
+    fn title_uses_web_name_plus_book_volume() {
+        let t = |book: &str, web: &str| corrected_title(&Meta { title: book.into(), info: Some(BookInfo { source: "豆瓣".into(), title: web.into(), ..Default::default() }), ..Default::default() });
+        assert_eq!(t("飘 - 上册", "飘"), "飘（上册）");
+        assert_eq!(t("飘（下册）", "飘"), "飘（下册）");
+        assert_eq!(t("哆啦A夢全彩版 - 卷01", "哆啦A梦"), "哆啦A梦 第01卷");
+        assert_eq!(t("波洛系列04：罗杰疑案", "罗杰疑案"), "罗杰疑案");
+        assert_eq!(t("三体（共3册）", "三体"), "三体");
+        assert_eq!(t("浪客行 - 卷01", "浪客行"), "浪客行 第01卷");
+        assert_eq!(t("哆啦A夢全彩版 - 卷02", "机器猫哆啦A梦（共45册）"), "机器猫哆啦A梦 第02卷", "网站书名的说明去掉");
+        assert_eq!(corrected_title(&Meta { title: "嘯風山莊".into(), ..Default::default() }), "嘯風山莊", "没找到：照书里的");
     }
 
     /// 版本的译者和书里的对不上（豆瓣第一个条目是李美华译本）：出版社、日期、ISBN 不补；书里的署名照样拆。
