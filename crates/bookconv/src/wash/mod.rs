@@ -49,6 +49,14 @@ mod ids;
 mod kindle_images;
 mod kindle_rules;
 mod top_spacer;
+pub use self::kindle_rules::VScale;
+
+/// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
+#[cfg(test)]
+pub(crate) fn kindle_rules_scale_ua_for_test(vs: Option<VScale>) -> String {
+    let css = crate::uastyle::ua_css(None);
+    vs.map_or(css.clone(), |vs| kindle_rules::scale_vertical_css(&css, &vs))
+}
 pub use self::top_spacer::SpacerGeometry;
 mod layout;
 mod ncx_fix;
@@ -94,7 +102,11 @@ pub use self::encoding::transcode_entries;
 /// - 13（2026-10-12）：掌阅背景尺寸的高写 `auto` 会把图拉长到整页高（测试书「测试-掌阅背景」）：整页背景图照 Kindle 上的大小、
 ///   位置写成屏幕像素的 `background-size`、`background-position`，接在规则末尾（profile `background_auto_height = false`；
 ///   《飘》「第一卷」插图、版权页底纹，掌阅真机 ✓）。
-pub const KINDLE_RULES_VERSION: &str = "13";
+/// - 14（2026-10-12）：竖直间距照 Kindle 换算（用户定，方案 B）：Kindle 按行距排上下外边距、内边距（一 rem ≈ 52.5px），掌阅、Move
+///   按自己的字号（≈ 37.5px），同样 1em 在 Kindle 上占页高多一半；上下外边距、内边距（含 `eink-ua.css`）改写成占内容区高的比例和
+///   Kindle 一样（`kindle_rules::VScale`，profile `em_px`）。`%`、`px`、`pt` 折成屏幕像素，顺带修了掌阅把 `pt` 当 px、Move 的 `%`
+///   只有十来像素。测试书三台量过，掌阅、Move 每种写法差 1–4px。
+pub const KINDLE_RULES_VERSION: &str = "14";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -204,6 +216,8 @@ pub struct WashOpts {
     /// 背景尺寸的高写 `auto` 会拉长图的阅读器（掌阅，profile `background_auto_height = false`）：整页背景图照 Kindle 上的大小、
     /// 位置写成屏幕像素（`kindle_rules`）。整屏和阅读范围（[`crate::bgfit::TileGeometry`]）；`None` 不改。
     pub bg_place: Option<crate::bgfit::TileGeometry>,
+    /// 竖直间距照 Kindle 换算（掌阅、Move，profile `em_px`；`kindle_rules::VScale`）。`None` 不换。
+    pub v_scale: Option<VScale>,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -220,7 +234,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None }
     }
 }
 
@@ -459,7 +473,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
     if opts.mode.kindle_rules() {
         let font_scale = kindle_rules::apply(entries, rep, opts);
-        add_ua_css(entries, rep, font_scale);
+        add_ua_css(entries, rep, font_scale, opts.v_scale);
         if let Some((sizing, kref)) = opts.image_sizing {
             kindle_images::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), sizing, kref);
         }
@@ -522,7 +536,7 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
 
 /// 只修复时挂上标签的缺省样式（[`WashMode::Repair`] 的 `kindle_rules`）：OPF 同目录写 `eink-ua.css`，每章 `<head>` 里**第一个**放指向它的 `<link>`
 /// （在书自带的样式表、`<style>` 之前，书里写了的照样盖过它）。目录页（nav）不挂。
-fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option<f64>) {
+fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option<f64>, v_scale: Option<VScale>) {
     let opf_idx = find_opf(entries);
     let name = crate::uastyle::UA_CSS_NAME;
     let css_path = match opf_idx.map(|i| dir_of(&entries[i].name)) {
@@ -540,7 +554,12 @@ fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option
         changed
     });
     rep.ua_css_linked += linked.into_iter().filter(|c| *c).count();
-    add_css_entry(entries, opf_idx, &css_path, &crate::uastyle::ua_css(font_scale), "eink-ua-css");
+    let css = crate::uastyle::ua_css(font_scale);
+    let css = match v_scale {
+        Some(vs) => kindle_rules::scale_vertical_css(&css, &vs),
+        None => css,
+    };
+    add_css_entry(entries, opf_idx, &css_path, &css, "eink-ua-css");
 }
 
 /// 新增（或更新）一份我们写的样式表，并往 OPF manifest 补一条 `<item>`（幂等）。

@@ -1208,8 +1208,9 @@
         let opts = OptimizeOpts::for_profile(profile::get("ireader").unwrap());
         assert!(matches!(opts.text_mode, TextMode::Repair { .. }));
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
-        // 样式表只按 Send to Kindle 的规则改（profile `kindle_rules`）：正文字体「宋体」整条去掉、body 的左右外边距不要；别的一个字不改
-        assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:2em;margin-bottom:2em;}p{text-indent:0;margin:0.5em 0}");
+        // 样式表只按 Send to Kindle 的规则改（profile `kindle_rules`）：正文字体「宋体」整条去掉、body 的左右外边距不要、上下边距照 Kindle
+        // 换算（掌阅 × 1.52，KINDLE_RULES 14）；别的一个字不改
+        assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:3.0427em;margin-bottom:3.0427em;}p{text-indent:0;margin:0.7607em 0 0.7607em 0}");
         assert_eq!(entry_bytes(&out, "OEBPS/big.jpg"), jpg, "图片原样");
         let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
         assert!(!names.iter().any(|n| n.ends_with("eink-wash.css")), "不加排版样式表: {names:?}");
@@ -1225,7 +1226,7 @@
         let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
         assert_eq!(labels, [(1, "第一章"), (2, "一节"), (1, "注释")], "目录补到节");
         // 标签缺省样式（profile `kindle_rules`，2026-10-08 用户定照 Send to Kindle 统一）：挂在书自带样式之前，书里写了的盖过它
-        assert_eq!(text_of(&out, "OEBPS/eink-ua.css"), crate::uastyle::ua_css(None));
+        assert_eq!(text_of(&out, "OEBPS/eink-ua.css"), crate::wash::kindle_rules_scale_ua_for_test(opts.wash.as_ref().and_then(|w| w.v_scale)));
         let (ua, own) = (x.find("eink-ua.css").unwrap(), x.find("style.css").unwrap());
         assert!(ua < own, "缺省样式在书自带样式之前: {x}");
         assert!(opf_out.contains(r#"href="eink-ua.css""#), "manifest 补上: {opf_out}");
