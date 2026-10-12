@@ -116,9 +116,10 @@ fn devices_lists_the_three_modes() {
     }
 }
 
-/// `meta --fetch` 不联网的两条路：`--clear`（去掉找来的）、漫画（跳过）。
+/// `meta --fetch` 不联网（`BOOKLIB_NO_NET`）时：`--clear`（去掉找来的）照常；漫画也去找（2026-10-12 起不再跳过），断网如实报、
+/// 退出码 2；`sync` 的补元数据一步断网时跳过、照常往下走。
 #[test]
-fn meta_fetch_clear_and_comic_skip_work_offline() {
+fn meta_fetch_clear_and_comics_offline() {
     let dir = tempfile::tempdir().unwrap();
     let lib = dir.path().join("lib");
     let lib = Some(lib.as_path());
@@ -138,8 +139,8 @@ fn meta_fetch_clear_and_comic_skip_work_offline() {
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     assert!(stdout(&o).contains("本来就没有找来的元数据  风起"), "{}", stdout(&o));
     let o = booklib(lib, &["meta", "--fetch", "漫画"]);
-    assert_eq!(code(&o), Some(0), "{}", stderr(&o));
-    assert!(stdout(&o).contains("漫画不找元数据"), "{}", stdout(&o));
+    assert_eq!(code(&o), Some(2), "{}", stdout(&o));
+    assert!(!stdout(&o).contains("漫画不找元数据") && stderr(&o).contains("连不上网"), "{}{}", stdout(&o), stderr(&o));
 }
 
 /// 目录里除了 `keep` 以外没有别的文件（不留备份、不留临时文件）。

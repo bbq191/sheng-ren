@@ -15,7 +15,8 @@ use std::path::Path;
 /// - 4（2026-09-30）：书库补元数据不再做规范整理（[`Edits::normalize`]，优化器的清洗层反正要做），和没补过东西的书走同一条路。
 /// - 5（2026-10-07）：`<opf:package>`、`<opf:metadata>` 这类带前缀的 OPF 也认（以前插入点找得到，EPUB2 判定和挂在旧元素上的
 ///   `<opf:meta refines>` 认不出：EPUB2 作者少了 `opf:role`、旧的 refines 留着成了悬空引用）。
-pub const VERSION: &str = "5";
+/// - 6（2026-10-12）：补的东西多了带国籍的作者、译者、出版社、出版日期、ISBN（`library::metadata::plan`），ISBN 追加（[`Edits::append`]）。
+pub const VERSION: &str = "6";
 
 /// 支持读写的 Dublin Core 字段。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -28,11 +29,14 @@ pub enum DcField {
     Subject,
     Identifier,
     Date,
+    /// 译者：读的是角色为译者（`trl`）的 `dc:contributor`、`dc:creator`（[`read`]），写成带译者角色的 `dc:contributor`（[`apply_fields`]：
+    /// EPUB 2 写 `opf:role="trl"`，EPUB 3 写 `refines` 的 `role`；书库补元数据用，2026-10-12）。别的角色的 `dc:contributor` 不动。
+    Translator,
 }
 
 impl DcField {
-    pub const ALL: [DcField; 8] =
-        [DcField::Title, DcField::Creator, DcField::Language, DcField::Publisher, DcField::Description, DcField::Subject, DcField::Identifier, DcField::Date];
+    pub const ALL: [DcField; 9] =
+        [DcField::Title, DcField::Creator, DcField::Language, DcField::Publisher, DcField::Description, DcField::Subject, DcField::Identifier, DcField::Date, DcField::Translator];
 
     /// 元素名（不带 `dc:` 前缀）。
     pub fn name(self) -> &'static str {
@@ -45,6 +49,7 @@ impl DcField {
             DcField::Subject => "subject",
             DcField::Identifier => "identifier",
             DcField::Date => "date",
+            DcField::Translator => "contributor",
         }
     }
 
@@ -58,6 +63,7 @@ impl DcField {
             DcField::Subject => "标签",
             DcField::Identifier => "标识符",
             DcField::Date => "日期",
+            DcField::Translator => "译者",
         }
     }
 }
@@ -72,13 +78,35 @@ struct DcElem {
 }
 
 /// OPF 里 `<metadata>` 范围内的全部 Dublin Core 元素（文档序）。
+/// 角色是译者：`opf:role="trl"`，或者 `<meta refines="#id" property="role">trl</meta>`。
+fn is_translator(opf: &str, tag: &str, id: Option<&str>) -> bool {
+    if html::attr_value(tag, "opf:role").or_else(|| html::attr_value(tag, "role")).is_some_and(|r| r.trim().eq_ignore_ascii_case("trl")) {
+        return true;
+    }
+    let Some(id) = id else { return false };
+    html::tags(opf).filter(|t| t.is_start() && crate::wash::opf::is_local(t.name, "meta")).any(|t| {
+        let m = &opf[t.start..t.end];
+        html::attr_value(m, "refines").and_then(|r| r.strip_prefix('#')) == Some(id)
+            && html::attr_value(m, "property") == Some("role")
+            && html::find_close(opf, t.end, t.name).is_some_and(|c| opf[t.end..c.start].trim().eq_ignore_ascii_case("trl"))
+    })
+}
+
 fn dc_elements(opf: &str) -> Vec<DcElem> {
     let mut out = Vec::new();
     for t in html::tags(opf).filter(|t| t.is_start()) {
         let Some(local) = t.name.strip_prefix("dc:").or_else(|| t.name.strip_prefix("DC:")) else { continue };
-        let Some(field) = DcField::ALL.into_iter().find(|f| f.name().eq_ignore_ascii_case(local)) else { continue };
         let tag = &opf[t.start..t.end];
         let id = html::attr_value(tag, "id").map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+        // 译者：角色是 trl 的 contributor、creator；别的 contributor 不认（不读、不删）
+        let field = if (local.eq_ignore_ascii_case("contributor") || local.eq_ignore_ascii_case("creator")) && is_translator(opf, tag, id.as_deref()) {
+            DcField::Translator
+        } else {
+            match DcField::ALL.into_iter().find(|f| *f != DcField::Translator && f.name().eq_ignore_ascii_case(local)) {
+                Some(f) => f,
+                None => continue,
+            }
+        };
         let (end, value) = if t.kind == TagKind::SelfClosing {
             (t.end, String::new())
         } else {
@@ -103,6 +131,8 @@ pub fn read(opf: &str) -> Vec<(DcField, Vec<String>)> {
 pub struct Edits {
     /// 整体替换这些字段（给几个值就是最终的几个；空列表 = 删掉这个字段）。
     pub set: Vec<(DcField, Vec<String>)>,
+    /// 加上这些值（原有的不动）：书库补 ISBN 用（标识符不能整组替换，`unique-identifier` 指的那个要留着、别的也留着）。
+    pub append: Vec<(DcField, Vec<String>)>,
     /// 封面：`None` 不动。
     pub cover: Option<CoverEdit>,
     /// 写进 `dcterms:modified` 的时间（`booklib meta --edit` 命令给现在的时间）；`None` 不改（booklib 生成产物前补元数据时用：
@@ -124,7 +154,7 @@ pub enum CoverEdit {
 
 impl Edits {
     pub fn is_empty(&self) -> bool {
-        self.set.is_empty() && self.cover.is_none()
+        self.set.is_empty() && self.append.iter().all(|(_, v)| v.is_empty()) && self.cover.is_none()
     }
 }
 
@@ -153,9 +183,24 @@ pub fn apply_fields(opf: &str, set: &[(DcField, Vec<String>)]) -> Result<String,
             removed_ids.extend(e.id.clone());
         }
         let name = field.name();
-        // EPUB2 的作者带上角色（opf:role="aut"，阅读器据此区分作者和译者等）；EPUB3 用 refines 写角色，不写也是作者
-        let attrs = if *field == DcField::Creator && epub2 { r#" opf:role="aut""# } else { "" };
-        let text: String = values.iter().filter(|v| !v.trim().is_empty()).map(|v| format!("<dc:{name}{attrs}>{}</dc:{name}>", xml_escape(v.trim()))).collect();
+        // EPUB2 的作者带上角色（opf:role="aut"，阅读器据此区分作者和译者等）；EPUB3 用 refines 写角色，不写也是作者。
+        // 译者 EPUB2 写 opf:role="trl"，EPUB3 写 id + refines 的 role
+        let attrs = match (*field, epub2) {
+            (DcField::Creator, true) => r#" opf:role="aut""#,
+            (DcField::Translator, true) => r#" opf:role="trl""#,
+            _ => "",
+        };
+        let text: String = values
+            .iter()
+            .filter(|v| !v.trim().is_empty())
+            .enumerate()
+            .map(|(i, v)| match (*field, epub2) {
+                (DcField::Translator, false) => {
+                    format!(r##"<dc:{name} id="eink-trl{n}">{v}</dc:{name}><meta refines="#eink-trl{n}" property="role" scheme="marc:relators">trl</meta>"##, n = i + 1, v = xml_escape(v.trim()))
+                }
+                _ => format!("<dc:{name}{attrs}>{}</dc:{name}>", xml_escape(v.trim())),
+            })
+            .collect();
         if !text.is_empty() {
             inserts.push((at, text));
         }
@@ -184,6 +229,32 @@ pub fn apply_fields(opf: &str, set: &[(DcField, Vec<String>)]) -> Result<String,
     let mut ops: Vec<(usize, usize, String)> = inserts.into_iter().map(|(at, text)| (at, at, text)).collect();
     ops.extend(removals.into_iter().map(|(s, e)| (s, e, String::new())));
     ops.sort_by_key(|&(s, e, _)| (s, e > s));
+    Ok(html::apply_edits(opf, ops))
+}
+
+/// 加上字段值（[`Edits::append`]）：插在同一字段最后一个元素后面，没有就插在 `</metadata>` 前；已经有一样的值不重复加。
+pub fn append_fields(opf: &str, add: &[(DcField, Vec<String>)]) -> Result<String, String> {
+    use crate::wash::opf::is_local;
+    if add.iter().all(|(_, v)| v.is_empty()) {
+        return Ok(opf.to_string());
+    }
+    let meta_close = html::tags(opf).find(|t| t.kind == TagKind::Close && is_local(t.name, "metadata")).ok_or("OPF 里没有 </metadata>")?.start;
+    let elems = dc_elements(opf);
+    let mut ops: Vec<(usize, usize, String)> = Vec::new();
+    for (field, values) in add {
+        let at = elems.iter().filter(|e| e.field == *field).map(|e| e.end).max().unwrap_or(meta_close);
+        let name = field.name();
+        let text: String = values
+            .iter()
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty() && !elems.iter().any(|e| e.field == *field && e.value.trim() == *v))
+            .map(|v| format!("<dc:{name}>{}</dc:{name}>", xml_escape(v)))
+            .collect();
+        if !text.is_empty() {
+            ops.push((at, at, text));
+        }
+    }
+    ops.sort_by_key(|o| o.0);
     Ok(html::apply_edits(opf, ops))
 }
 
@@ -408,6 +479,7 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
     let mut changed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let opf_dir = crate::epubzip::dir_of(&opf_path).to_string();
     let mut opf = apply_fields(&opf_text, &edits.set)?;
+    opf = append_fields(&opf, &edits.append)?;
     let mut report = EditReport { fields: edits.set.iter().map(|(f, _)| *f).collect(), cover_replaced: None, cover_removed: None };
     let text_of = |entries: &[crate::epubzip::Entry], n: &str| entries.iter().find(|e| e.name == n).map(|e| String::from_utf8_lossy(&e.data).into_owned());
     let set_entry = |entries: &mut Vec<crate::epubzip::Entry>, changed: &mut std::collections::HashSet<String>, n: String, data: Vec<u8>| match entries.iter_mut().find(|e| e.name == n) {

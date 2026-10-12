@@ -767,7 +767,7 @@ fn fetched_description_already_in_the_book_does_not_change_the_fingerprint() {
     // 书里有没有简介、标签入库时就存进了 meta.json：原件暂时不在（换个进程，没有缓存）指纹也照旧，不显示过期
     let mp = base.join(format!("lib/masters/{}/meta.json", m.id));
     let j: serde_json::Value = serde_json::from_slice(&std::fs::read(&mp).unwrap()).unwrap();
-    assert_eq!(j["own_dc"], serde_json::json!({"description": true, "subjects": false}));
+    assert_eq!(j["own_dc"], serde_json::json!({"description": true, "subjects": false, "v": 2, "creators": ["作者"]}));
     let away = base.join("挪走了.epub");
     std::fs::rename(&src, &away).unwrap();
     let fresh = common::open(&base.join("lib"));

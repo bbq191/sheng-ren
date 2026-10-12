@@ -32,8 +32,10 @@ pub(crate) struct Net {
 }
 
 impl Net {
+    /// `$BOOKLIB_NO_NET=1` 时一开始就当断网（测试里 `sync` 不去连豆瓣，同 `BOOKLIB_NO_SSH`）。
     pub(crate) fn new() -> Net {
-        Net { agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).user_agent(UA).build(), last: Cell::new(None), down: RefCell::default(), down_since_ok: Cell::new(0), transient: RefCell::new(None) }
+        let no_net = std::env::var_os("BOOKLIB_NO_NET").is_some_and(|v| v != "0");
+        Net { agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).user_agent(UA).build(), last: Cell::new(None), down: RefCell::default(), down_since_ok: Cell::new(if no_net { 2 } else { 0 }), transient: RefCell::new(None) }
     }
 
     /// 看起来整个断网了：接连两个不同的网站连不上，其间没有请求成功。
@@ -60,6 +62,21 @@ impl Net {
 
     /// `referer`：豆瓣图片服务器不带来源页会拒绝（HTTP 418）。
     pub(crate) fn fetch_ref(&self, url: &str, referer: Option<&str>) -> Result<Vec<u8>, String> {
+        self.request(url, referer, None)
+    }
+
+    /// POST 一个 JSON 请求体、取回 JSON（Bangumi 的搜索接口）；回来的不是 JSON 同 [`Net::json_strict`] 算临时错误。
+    pub(crate) fn post_json(&self, url: &str, body: &Value) -> Result<Value, String> {
+        let body = self.request(url, None, Some(body))?;
+        serde_json::from_slice(&body).map_err(|e| {
+            let e = format!("{url}: 回来的不是 JSON（{e}，可能被网站拦了）");
+            self.note_transient(&e);
+            e
+        })
+    }
+
+    /// 一次请求（节流、重试、断网判定同上）：`body` 给了就 POST 这个 JSON，否则 GET。
+    fn request(&self, url: &str, referer: Option<&str>, body: Option<&Value>) -> Result<Vec<u8>, String> {
         let host = host_of(url);
         if self.down.borrow().contains(host) {
             let e = format!("{url}: 连不上 {host}，跳过");
@@ -76,11 +93,14 @@ impl Net {
                 }
             }
             self.last.set(Some(Instant::now()));
-            let mut req = self.agent.get(url);
+            let mut req = if body.is_some() { self.agent.post(url) } else { self.agent.get(url) };
             if let Some(r) = referer {
                 req = req.set("Referer", r);
             }
-            let res = req.call();
+            let res = match body {
+                Some(b) => req.set("Content-Type", "application/json").send_string(&b.to_string()),
+                None => req.call(),
+            };
             // 网站回了 HTTP 状态（哪怕是 404、403、5xx），说明网是通的：断网的判定（接连两个网站连不上）从头算
             if matches!(res, Ok(_) | Err(ureq::Error::Status(..))) {
                 self.down_since_ok.set(0);

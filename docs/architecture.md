@@ -113,14 +113,14 @@
 | `generate.rs` | 生成计划与指纹、产物放哪、一本书几个模式共用的中间文件、按模式生成（`prepare`）、传完记下来（`complete`）、生成记录 |
 | `transfer.rs` | 要传的一件（`Transfer`）、它要做的（`Work`：写文件，或交给 Move，Move 专属的数据在 `MoveWork`）、结果（`Done`）；`sync` 的传输线程（`Pipeline`）。依赖方向 `generate` → `transfer` → `deliver`，不成环 |
 | `deliver.rs` | 产物送到设备（2026-10-07）：设备接没接上（MTP 挂载点、SSH 到 Move；地址是 IP 的先探 22 端口，0.8 秒不通就跳过，不等 ssh 超时）、往 MTP 设备上放文件（相同字节不拷）、调 Move 上书架服务的导入接口（新加、原地替换、查、进回收站）；不认识生成记录和传输线程 |
-| `metadata.rs` | `meta --fetch` 的调度：责任链 `CHAIN`（豆瓣 → QQ 阅读 → Wikidata），书目网站实现 `BookSource`（搜索骨架是它的缺省方法，各网站只给搜索词、网址、怎么认条目、挑封面、取元数据），Wikidata 是链尾单独的一环（原作留给找封面的后备）；生成时往书里补缺的封面、简介、标签 |
-| `douban.rs` / `qqread.rs` / `wikidata.rs` / `cover.rs` / `covergen.rs` | 书目源：豆瓣、QQ 阅读、Wikidata；原作封面（Open Library / Commons）；生成封面 |
-| `net.rs` / `matching.rs` | 节流重试的 HTTP；书名人名比对（全半角、繁简、译名用字） |
+| `metadata.rs` | `meta --fetch` 和 `sync` 补元数据的调度：责任链 `CHAIN`（Bangumi〔只查漫画〕→ 豆瓣 → QQ 阅读 → Wikidata），书目网站实现 `BookSource`（搜索骨架是它的缺省方法：原书名搜不到再用去卷次的书名、都搜不到用网站的另一种搜法；各网站只给搜索词、怎么搜、怎么认条目、挑封面、取元数据），Wikidata 是链尾单独的一环（原作留给找封面的后备）；同一套漫画只查一次（`series_lookup`）；生成时往书里补什么由 `plan` 定（简介、标签、带国籍的作者、译者、出版社、日期、ISBN；指纹和写入共用这一份），`inject` 写 |
+| `bangumi.rs` / `douban.rs` / `qqread.rs` / `wikidata.rs` / `cover.rs` / `covergen.rs` | 书目源：Bangumi（漫画，公开 API，POST 搜索）、豆瓣（搜索建议 + 书籍搜索页 `window.__DATA__`）、QQ 阅读、Wikidata；原作封面（Open Library / Commons）；生成封面 |
+| `net.rs` / `matching.rs` | 节流重试的 HTTP（GET、POST JSON）；书名人名比对（全半角、繁简、译名用字）、署名拆开（`parse_credits`：作者、国籍、译者）、书名去卷次（`base_title`） |
 | `fsutil.rs` | 临时文件命名、书库里的原子写（`write_atomic_cleanable`：临时名带 `.tmp-` 前缀，持锁时清残留；和 `bookconv::util::write_atomic` 只差临时名）、JSON 读写与缓存、记录文件核对、流式哈希、进程锁、残留临时文件清理 |
 
-**联网策略**（`net.rs`，一次运行里各本书共用）：请求间隔 1.2 秒；429 按 `Retry-After` 等，5xx、超时重试几次；其它 4xx 当"没有"、不重试；**403 和"豆瓣搜索回 200 但不是 JSON"算临时出错**（多半是被反爬拦了），不当"没有"。连不上的网站记下来，之后发给它的请求立即失败；接连两个网站连不上、其间没有请求成功，算断网，整轮中止——网站回了任何 HTTP 状态（含 404、403、5xx）都说明网是通的，断网的判定从头算。Wikidata 的 id 只收 `Q<数字>`（要拼进 SPARQL 查询）。临时出错的书不存不完整的结果、不生成封面，下次再查。用户看到的流程见[使用指南 · meta --fetch](usage.md#meta---fetch联网补简介标签封面)。
+**联网策略**（`net.rs`，一次运行里各本书共用）：请求间隔 1.2 秒；429 按 `Retry-After` 等，5xx、超时重试几次；其它 4xx 当"没有"、不重试；**403 和"豆瓣搜索回 200 但不是 JSON"算临时出错**（多半是被反爬拦了），不当"没有"。连不上的网站记下来，之后发给它的请求立即失败；接连两个网站连不上、其间没有请求成功，算断网，整轮中止——网站回了任何 HTTP 状态（含 404、403、5xx）都说明网是通的，断网的判定从头算。Wikidata 的 id 只收 `Q<数字>`（要拼进 SPARQL 查询）。临时出错的书不存不完整的结果、不生成封面，下次再查。用户看到的流程见[使用指南 · meta --fetch](usage.md#meta---fetch联网补元数据和封面)。
 
-**找书只用书里元数据的书名、作者**（2026-10-08 用户定，不看文件名）。**豆瓣找条目**用搜索建议接口：先搜「书名 作者」，搜不到再只搜书名（书名同时是人名的《张居正》光搜书名回空列表，带上作者才有书）；书名（简体化后）相同或只差 ≤2 字的卷次后缀、作者字重合度 ≥0.6 才算对上。用户看到的顺序和输出见[使用指南 · meta --fetch](usage.md#meta---fetch联网补简介标签封面)。豆瓣没有时找 **QQ 阅读**（`qqread.rs`，2026-10-08）：网页自己的搜索接口 `novel.qq.com/api/search?keywords=…&pageIndex=1&pageSize=10` 回 JSON（`code` 为 0 才算；书名、作者、简介、分类、封面都在搜索结果里，不用再取详情页），不要登录和来源页；关键词模糊搜索，先搜书名、再搜「书名 作者」，对上的规则同豆瓣。豆瓣出过临时错误时不查 QQ 阅读。
+**找书只用书里元数据的书名、作者**（2026-10-08 用户定，不看文件名）。署名先拆开（`matching::parse_credits`：「[美] 某某 著，某某 译」→ 作者、国籍、译者），只拿作者名搜、比。**豆瓣找条目**用搜索建议接口：先搜「书名 作者」，搜不到再只搜书名（书名同时是人名的《张居正》光搜书名回空列表，带上作者才有书），再用去掉卷次、版本说明的书名（`base_title`）搜一遍，都搜不到用书籍搜索页（`search.douban.com/book/subject_search` 页面里的 `window.__DATA__`；搜索建议不收漫画）；书名（简体化后）相同、只差 ≤2 字的卷次后缀、条目名去掉卷次后相同，或作者对得上时书名用字重合 ≥0.8，作者字重合度 ≥0.6 才算对上；书里写了译者时在前 5 个条目里挑译者对得上的版本。**Bangumi**（`bangumi.rs`，2026-10-12，只查漫画）：`POST api.bgm.tv/v0/search/subjects`，繁体书名先搜简体，书名正好对上的整部作品排在单卷前面。没找到的记下匹配规则版本（`Meta::info_checked` = `metadata::LOOKUP_VERSION`），`sync` 不再自动找，版本变了再找一次。用户看到的顺序和输出见[使用指南 · meta --fetch](usage.md#meta---fetch联网补元数据和封面)。豆瓣没有时找 **QQ 阅读**（`qqread.rs`，2026-10-08）：网页自己的搜索接口 `novel.qq.com/api/search?keywords=…&pageIndex=1&pageSize=10` 回 JSON（`code` 为 0 才算；书名、作者、简介、分类、封面都在搜索结果里，不用再取详情页），不要登录和来源页；关键词模糊搜索，先搜书名、再搜「书名 作者」，对上的规则同豆瓣。豆瓣出过临时错误时不查 QQ 阅读。
 
 ## 书库
 

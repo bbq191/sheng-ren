@@ -22,6 +22,7 @@
 //! 原件不在了或者内容变了（大小、修改时间变了就重算哈希核对），生成会停下来提示先 `sync` 或重新入库，
 //! 不会拿改过的内容冒充原来那本书。带 DRM 的书现在拒收（解 DRM 还没做）。
 
+mod bangumi;
 mod cover;
 mod covergen;
 mod deliver;
@@ -95,13 +96,41 @@ pub struct Meta {
     /// 早期条目没有，第一次用到时看、持锁的命令顺带存下；看不了（原件不在）时指纹按两项都补算。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub own_dc: Option<OwnDc>,
+    /// 联网找过元数据、没找到时的匹配规则版本（[`metadata::LOOKUP_VERSION`]）：`sync` 不再自动去找；匹配规则改了（版本变了）再找一次。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub info_checked: String,
 }
 
-/// 书里自己有没有简介（`dc:description`）、标签（`dc:subject`），见 [`Meta::own_dc`]。
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// 书里自己的元数据（EPUB 的 OPF），见 [`Meta::own_dc`]：生成时补什么由它和找来的元数据定（[`metadata::plan`]），原件暂时不在也算得出指纹。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OwnDc {
     pub description: bool,
     pub subjects: bool,
+    /// 记录的版本：[`OwnDc::VERSION`] 以前的只有上面两项，用到时重新读（`Library::own_dc_of`）。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub v: u8,
+    /// 作者（`dc:creator`，角色是译者的不算），原样。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub creators: Vec<String>,
+    /// 译者（角色是译者的 `dc:contributor`、`dc:creator`）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translators: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub publisher: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub date: bool,
+    /// 有 ISBN（标识符里写了 isbn，或者就是 10、13 位的书号）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub isbn: bool,
+}
+
+impl OwnDc {
+    /// 2026-10-12：多记作者、译者、出版社、日期、ISBN（补全国籍、译者、ISBN 用）。
+    pub const VERSION: u8 = 2;
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
 }
 
 impl Meta {
@@ -539,7 +568,7 @@ impl Library {
         }
         let (title, authors, comic) = (info.title, info.authors, info.comic);
         // 书里有没有简介、标签（指纹要用，见 `Meta::own_dc`）：只读 OPF
-        let own_dc = if ext == "epub" { metadata::own_description_subjects(&path).ok().map(|(description, subjects)| OwnDc { description, subjects }) } else { None };
+        let own_dc = if ext == "epub" { metadata::read_own(&path).ok() } else { None };
         unchanged()?;
         let meta = Meta {
             id,

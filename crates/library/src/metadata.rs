@@ -1,13 +1,14 @@
-//! 联网补元数据：`booklib meta --fetch`。
+//! 联网补元数据：`booklib meta --fetch`，`sync` 生成前也会给还没找过的书找一次（2026-10-12 用户定：跟踪 → 补元数据 → 传设备）。
 //!
 //! 按书名、作者找到这本书，存下元数据（`Meta::info`），书里没有封面的顺带找封面（见 `cover`）：
-//! 1. **豆瓣**条目（中文版）：内容简介、标签、原作名，以及条目对应版本的出版社、出版年、ISBN、译者；
+//! 1. **豆瓣**条目（中文版）：内容简介、标签、原作名、带国籍的作者，以及条目对应版本的出版社、出版年、ISBN、译者；
 //! 2. 豆瓣没有时 **QQ 阅读**（`qqread`，网络文学多在这里）：内容简介、分类当标签、封面；
 //! 3. 都没有时 **Wikidata** 作品：原作名、首次出版年。
 //!
-//! **写进书里的只有"作品"层面的信息，而且只补书里没有的**：内容简介（`dc:description`）、标签（`dc:subject`）。
-//! 出版社、ISBN、译者这些是豆瓣那个**版本**的，不一定是你手上这本（好读的书多是台湾译本，豆瓣条目多是大陆版），
-//! 只记在 `meta.json` 里给人参考，不写进书。书名、作者一律用书自己的，不改。正文不动。
+//! **生成时补进书里的**（[`plan`]，只补书里没有的，正文不动）：内容简介、标签；作者拆成一个人一条、补上国籍（`[美] 玛格丽特·米切尔`，
+//! 书里整串写成「某某 著，某某 译」的也拆开）；译者（`dc:contributor`，角色 trl）；出版社、出版日期、ISBN——这三项和译者一样是
+//! 豆瓣那个**版本**的，书里写了译者而那个版本的译者对不上时不补（好读的书多是台湾译本，豆瓣条目多是大陆版）。
+//! 2026-10-12 用户定（以前版本信息只记在 `meta.json`）。书名一律用书自己的。
 
 use crate::cover::{epub_has_cover, incomplete, CoverInfo, CoverResult};
 use crate::net::Net;
@@ -21,6 +22,9 @@ use std::path::Path;
 pub struct BookInfo {
     /// 从哪来的："豆瓣 <网址>"、"QQ阅读 <网址>" 或 "Wikidata Q…"。
     pub source: String,
+    /// 网站上的作者署名（豆瓣带国籍：「[美] 玛格丽特·米切尔」）：书里的作者没写国籍时照它补。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub original_title: String,
     /// 首次出版年（原作）。
@@ -52,28 +56,11 @@ pub struct Edition {
     pub isbn: String,
 }
 
-impl BookInfo {
-    /// 可能写进书里的部分（简介、标签）的指纹。没有要写的返回 `None`。
-    pub(crate) fn injected_sig(&self) -> Option<String> {
-        self.injected_sig_for(false, false)
-    }
-
-    /// 真正会写进书里的部分的指纹（变了产物就过期）：书里已有简介（`has_description`）、标签（`has_subjects`）的，
-    /// 那一项不补（与 [`inject`] 的判定一致），也不进指纹。没有要写的返回 `None`。两项都缺时和 [`BookInfo::injected_sig`] 相同。
-    pub(crate) fn injected_sig_for(&self, has_description: bool, has_subjects: bool) -> Option<String> {
-        let description = if has_description { "" } else { self.description.as_str() };
-        let subjects: &[String] = if has_subjects { &[] } else { &self.subjects };
-        if description.is_empty() && subjects.is_empty() {
-            return None;
-        }
-        let s = format!("{description}\u{0}{}", subjects.join("\u{0}"));
-        Some(crate::fsutil::sha256_hex(s.as_bytes())[..12].to_string())
-    }
-}
-
 /// 一次 `meta` 的结果。
 pub enum InfoResult {
     Found(BookInfo),
+    /// 同一套漫画别的卷找过的，直接用（不联网）：(元数据, 那一卷的书名)。
+    Shared(BookInfo, String),
     /// 已经找过（`force` 才重找）。
     Existing(BookInfo),
     /// 没找到（原因）。
@@ -95,31 +82,65 @@ pub(crate) trait BookSource {
     /// 一次搜索的网址（回 JSON）。
     fn search_url(&self, q: &str) -> String;
 
+    /// 搜一次、取回 JSON：缺省 GET [`BookSource::search_url`]（Bangumi 是 POST）。出错已记成临时错误。
+    fn fetch_hits(&self, net: &Net, q: &str) -> Result<serde_json::Value, String> {
+        net.json_strict(&self.search_url(q))
+    }
+
+    /// 这一本要不要问这个网站（缺省都问；Bangumi 只问漫画）。
+    fn applies(&self, _l: &Lookup<'_>) -> bool {
+        true
+    }
+
     /// 回执里书名（规整后 `nt`）、作者（规整后 `want`）对得上的条目，保持网站给的顺序；回执本身说出错了返回 `Err`
     /// （记成临时错误，别的搜索词也不再试）。
     fn matching_hits(&self, v: &serde_json::Value, nt: &str, want: &[String]) -> Result<Vec<Self::Hit>, String>;
 
     /// 按书里元数据的书名、作者找（2026-10-08 用户定）：依次试 [`BookSource::queries`]，第一批对得上的就用。
     fn search(&self, net: &Net, title: &str, authors: &[String]) -> Vec<Self::Hit> {
-        let nt = crate::matching::norm_s(title);
-        if nt.is_empty() {
+        if crate::matching::norm_s(title).is_empty() {
             return Vec::new();
         }
-        let want: Vec<String> = authors.iter().map(|a| crate::matching::norm_author(a)).filter(|a| !a.is_empty()).collect();
-        for q in self.queries(title.trim(), authors) {
+        // 署名拆开后的作者（书里整串写成「[美] 某某 著，某某 译」的也认得出）
+        let want = crate::matching::author_keys(authors);
+        // 先按书名，搜不到再按去掉卷次、版本说明的书名（「飘（上册）」豆瓣搜不到，「飘」搜得到），比对也按这个书名
+        let mut tries: Vec<(String, String)> = self.queries(title.trim(), authors).into_iter().map(|q| (q, crate::matching::norm_s(title))).collect();
+        if let Some(base) = crate::matching::base_title(title) {
+            let nb = crate::matching::norm_s(&base);
+            for q in self.queries(&base, authors) {
+                if !tries.iter().any(|(t, _)| *t == q) {
+                    tries.push((q, nb.clone()));
+                }
+            }
+        }
+        for (q, nt) in &tries {
+            let (q, nt) = (q.clone(), nt.clone());
             let url = self.search_url(&q);
             // 出错（被拦、回来的不是 JSON、网络问题）已记成临时错误（`Net::transient_error`），调用方不会当成"没这本书"；
             // 别的搜索词也不用再试了
-            let Ok(v) = net.json_strict(&url) else { break };
+            let Ok(v) = self.fetch_hits(net, &q) else { break };
             match self.matching_hits(&v, &nt, &want) {
                 Ok(hits) if !hits.is_empty() => return hits,
                 Ok(_) => {}
                 Err(e) => {
                     net.note_transient(&format!("{url}: {e}"));
-                    break;
+                    return Vec::new();
                 }
             }
         }
+        // 都搜不到：网站另有的搜法（豆瓣的搜索建议不收漫画，书籍搜索页收）
+        if net.transient_error().is_none() {
+            let (title, nt) = match crate::matching::base_title(title) {
+                Some(b) => (b.clone(), crate::matching::norm_s(&b)),
+                None => (title.trim().to_string(), crate::matching::norm_s(title)),
+            };
+            return self.fallback_search(net, &title, &nt, &want);
+        }
+        Vec::new()
+    }
+
+    /// 上面的搜索词都搜不到时的另一种搜法（`title` 已去掉卷次）；缺省没有。出错记成临时错误、返回空。
+    fn fallback_search(&self, _net: &Net, _title: &str, _nt: &str, _want: &[String]) -> Vec<Self::Hit> {
         Vec::new()
     }
 
@@ -130,7 +151,8 @@ pub(crate) trait BookSource {
     fn cover_origin(&self, hit: &Self::Hit) -> (String, String);
 
     /// 元数据：先看 `chosen`（封面用了哪个条目就取哪个），网站自己决定还看不看别的条目。`authors` 用来从标签里去掉作者名。
-    fn info(&self, net: &Net, hits: &[Self::Hit], chosen: usize, authors: &[String]) -> Option<BookInfo>;
+    /// `translators` 是书里的译者（署名拆出来的、`dc:contributor` 里的），网站有几个版本时挑译者对得上的。
+    fn info(&self, net: &Net, hits: &[Self::Hit], chosen: usize, authors: &[String], translators: &[String]) -> Option<BookInfo>;
 }
 
 /// 查找过程中的进度：责任链上各环依次往里填。
@@ -142,6 +164,8 @@ pub(crate) struct Lookup<'a> {
     pub(crate) title: &'a str,
     pub(crate) need_info: bool,
     pub(crate) need_cover: bool,
+    /// 是漫画（Bangumi 只给漫画查）。
+    pub(crate) comic: bool,
     pub(crate) info: Option<BookInfo>,
     /// 网站上找到、已经存下的封面。
     pub(crate) cover: Option<CoverResult>,
@@ -169,7 +193,7 @@ pub(crate) trait Step {
 impl<S: BookSource> Step for S {
     fn run(&self, l: &mut Lookup<'_>) -> Result<(), String> {
         // 前面的网站出错没查成时不查：这个网站的结果存下了，以后就不会再去前面的网站找
-        if l.net.transient_error().is_some() {
+        if l.net.transient_error().is_some() || !self.applies(l) {
             return Ok(());
         }
         let hits = self.search(l.net, l.title, &l.meta.authors);
@@ -182,18 +206,42 @@ impl<S: BookSource> Step for S {
             }
         }
         if l.wants_info() {
-            l.info = self.info(l.net, &hits, chosen, &l.meta.authors);
+            l.info = self.info(l.net, &hits, chosen, &l.meta.authors, &crate::metadata::book_translators(l.meta));
         }
         Ok(())
     }
 }
 
-/// 查找的先后：① 豆瓣（中文版）② QQ 阅读（豆瓣没有的，网络文学多是这样）③ Wikidata（原作）。
-const CHAIN: &[&dyn Step] = &[&crate::douban::Douban, &crate::qqread::QqRead, &crate::wikidata::Wikidata];
+/// 找书的匹配规则版本：改了搜索词、比对口径就加一，以前没找到的书 `sync` 会再找一次（[`crate::Meta::info_checked`]）。
+/// 2：署名拆开（「某某 著，某某 译」）、书名去卷次再搜、书名用字重合 80% 也算、按译者挑版本（2026-10-12）。
+pub const LOOKUP_VERSION: &str = "2";
+
+/// 一套书的认法：书名去掉卷次、版本字样（[`crate::matching::base_title`]）规整后加上作者（[`crate::matching::author_keys`]）。
+pub(crate) fn series_key(meta: &Meta) -> String {
+    let t = crate::matching::base_title(&meta.title).unwrap_or_else(|| meta.title.clone());
+    let mut a = crate::matching::author_keys(&meta.authors);
+    a.sort();
+    format!("{}|{}", crate::matching::norm_s(&t), a.join("/"))
+}
+
+/// 书里的译者：署名里写的（「某某 著，梅静 译」）加上 `dc:contributor` 里角色是译者的（入库时存下的 [`crate::OwnDc::translators`]）。
+pub(crate) fn book_translators(meta: &Meta) -> Vec<String> {
+    let mut t = crate::matching::parse_credits(&meta.authors).translators;
+    for x in meta.own_dc.as_ref().map(|o| o.translators.as_slice()).unwrap_or_default() {
+        if !t.contains(x) {
+            t.push(x.clone());
+        }
+    }
+    t
+}
+
+/// 查找的先后：⓪ Bangumi（只查漫画：正式公开的 API，漫画条目全、简介标签好）① 豆瓣（中文版）② QQ 阅读（豆瓣没有的，网络文学多是这样）
+/// ③ Wikidata（原作）。
+const CHAIN: &[&dyn Step] = &[&crate::bangumi::Bangumi, &crate::douban::Douban, &crate::qqread::QqRead, &crate::wikidata::Wikidata];
 
 /// 从标签里去掉作者名（豆瓣标签常带作者），最多 8 个。
 pub(crate) fn tags_without_authors<'a>(tags: impl Iterator<Item = &'a String>, authors: impl Iterator<Item = &'a String>) -> Vec<String> {
-    let author_keys: Vec<String> = authors.map(|a| crate::matching::norm_author(a)).collect();
+    let author_keys: Vec<String> = authors.flat_map(|a| crate::matching::author_keys(std::slice::from_ref(a))).collect();
     tags.filter(|t| !author_keys.contains(&crate::matching::norm_author(t))).take(8).cloned().collect()
 }
 
@@ -223,13 +271,20 @@ impl Library {
         if !need_info && !need_cover {
             return Ok((existing_info(), existing_cover()));
         }
+        // 同一套漫画只查一次（2026-10-12 用户要：漫画本数多、元数据一样）：别的卷找到过就照用，这一版规则下没找到过就不再找
+        if need_info && !force && !need_cover {
+            if let Some(r) = self.series_lookup(meta)? {
+                return Ok((r, existing_cover()));
+            }
+        }
         let net = self.net();
         if net.offline() {
             return Err("连不上网".into());
         }
         net.clear_transient();
         // 找书只用书里的元数据：书名 + 作者（2026-10-08 用户定，不再从文件名里取书名）
-        let mut l = Lookup { lib: self, net, meta, title: meta.title.trim(), need_info, need_cover, info: None, cover: None, work: None, work_err: None };
+        let comic = self.is_comic(meta).unwrap_or(false);
+        let mut l = Lookup { lib: self, net, meta, title: meta.title.trim(), need_info, need_cover, comic, info: None, cover: None, work: None, work_err: None };
         for step in CHAIN {
             if l.wants_info() || l.wants_cover() {
                 step.run(&mut l)?;
@@ -253,6 +308,11 @@ impl Library {
             }
             InfoResult::Failed(e)
         } else {
+            // 记下这一版规则找过了：`sync` 不再每次都去找
+            if let Some(mut m) = self.read_meta(&meta.id).filter(|m| m.info_checked != LOOKUP_VERSION) {
+                m.info_checked = LOOKUP_VERSION.to_string();
+                self.save_meta(&m)?;
+            }
             InfoResult::NotFound("豆瓣、QQ 阅读、Wikidata 里都找不到书名、作者对得上的书".into())
         };
         if need_cover && cover.is_none() {
@@ -278,12 +338,44 @@ impl Library {
         Ok((info_result, cover.unwrap_or_else(existing_cover)))
     }
 
+    /// 同一套漫画（作者相同、书名去掉卷次和版本字样后相同，[`series_key`]）别的卷的结果：找到过的复制过来存下（[`InfoResult::Shared`]），
+    /// 这一版规则下没找到过的记成找过（[`InfoResult::NotFound`]）；都没有返回 `None`（照常联网找）。只管漫画：文字书的上下册
+    /// 版本信息（ISBN）各不相同。
+    fn series_lookup(&self, meta: &Meta) -> Result<Option<InfoResult>, String> {
+        if !self.is_comic(meta).unwrap_or(false) {
+            return Ok(None);
+        }
+        let key = series_key(meta);
+        let others: Vec<Meta> = self.list().into_iter().filter(|m| m.id != meta.id && series_key(m) == key).collect();
+        let found = others.iter().find_map(|m| m.info.as_ref().map(|i| (i.clone(), m.title.clone())));
+        let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
+        if let Some((info, from)) = found {
+            m.info = Some(info.clone());
+            self.save_meta(&m)?;
+            return Ok(Some(InfoResult::Shared(info, from)));
+        }
+        if let Some(o) = others.iter().find(|o| o.info_checked == LOOKUP_VERSION) {
+            m.info_checked = LOOKUP_VERSION.to_string();
+            self.save_meta(&m)?;
+            return Ok(Some(InfoResult::NotFound(format!("同一套的《{}》找过，没找到", o.title))));
+        }
+        Ok(None)
+    }
+
+    /// `sync` 要不要给这本书联网找元数据：还没找到过，也没在这一版匹配规则下找过（[`crate::Meta::info_checked`]）。
+    pub fn needs_metadata(&self, meta: &Meta) -> bool {
+        meta.info.is_none() && meta.info_checked != LOOKUP_VERSION
+    }
+
     /// 去掉联网找来的元数据和封面（找错了的时候）。返回有没有东西被去掉。
     pub fn clear_metadata(&self, meta: &Meta) -> Result<bool, String> {
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
         let had = m.info.take().is_some();
         let cover: Option<CoverInfo> = m.cover.take();
-        if had || cover.is_some() {
+        // 找错了才去掉：记成这一版规则找过了，`sync` 不会自动再找回来（要重找用 `meta --fetch --force`）
+        let mark = m.info_checked != LOOKUP_VERSION;
+        m.info_checked = LOOKUP_VERSION.to_string();
+        if had || cover.is_some() || mark {
             self.save_meta(&m)?;
         }
         // meta 存好了才删图：存失败时 meta 还指着它
@@ -294,34 +386,142 @@ impl Library {
     }
 }
 
-/// 生成产物时往书里补的东西。
-pub(crate) struct Additions<'a> {
-    /// 封面图和扩展名（书里没封面时才给）。
-    pub cover: Option<(Vec<u8>, &'a str)>,
-    pub info: Option<&'a BookInfo>,
-}
-
-/// 书里已有（非空的）简介、标签：(有简介, 有标签)。[`inject`] 和生成指纹共用这一个判定。
-pub(crate) fn own_description_subjects(epub: &Path) -> Result<(bool, bool), String> {
+/// 读书里自己的元数据（入库时存进 [`crate::Meta::own_dc`]，生成时据此定补什么）。
+pub(crate) fn read_own(epub: &Path) -> Result<crate::OwnDc, String> {
     use bookconv::opfmeta::{self, DcField};
     let current = opfmeta::read_epub(epub)?;
-    let has = |f: DcField| current.iter().any(|(x, v)| *x == f && !v.is_empty());
-    Ok((has(DcField::Description), has(DcField::Subject)))
+    let vals = |f: DcField| current.iter().find(|(x, _)| *x == f).map(|(_, v)| v.clone()).unwrap_or_default();
+    let has = |f: DcField| !vals(f).iter().all(|v| v.trim().is_empty());
+    Ok(crate::OwnDc {
+        description: has(DcField::Description),
+        subjects: has(DcField::Subject),
+        v: crate::OwnDc::VERSION,
+        creators: vals(DcField::Creator).into_iter().filter(|v| !v.trim().is_empty()).collect(),
+        translators: vals(DcField::Translator),
+        publisher: has(DcField::Publisher),
+        date: has(DcField::Date),
+        isbn: vals(DcField::Identifier).iter().any(|v| is_isbn(v)),
+    })
 }
 
-/// 复制 `src` 到 `dst`，补上书里没有的：封面、`dc:description`、`dc:subject`。书里已有的不动。
+/// 标识符是不是 ISBN：写了 isbn（`urn:isbn:…`、`ISBN 978…`），或者去掉连字符就是 10、13 位书号。
+fn is_isbn(v: &str) -> bool {
+    let l = v.to_ascii_lowercase();
+    let digits: String = v.chars().filter(|c| !matches!(c, '-' | ' ')).collect();
+    l.contains("isbn") || ((digits.len() == 13 && digits.starts_with("97")) || digits.len() == 10) && digits.chars().all(|c| c.is_ascii_digit() || c == 'X' || c == 'x')
+}
+
+/// 出版日期写成 `YYYY-MM-DD`/`YYYY-MM`/`YYYY`（豆瓣写 `2013-6-3`、`2000-9`、`2013年6月`）；认不出的 `None`。
+fn norm_date(d: &str) -> Option<String> {
+    let parts: Vec<u32> = d.split(|c: char| !c.is_ascii_digit()).filter(|p| !p.is_empty()).filter_map(|p| p.parse().ok()).collect();
+    match parts.as_slice() {
+        [y, m, day, ..] if (1000..3000).contains(y) && (1..=12).contains(m) && (1..=31).contains(day) => Some(format!("{y:04}-{m:02}-{day:02}")),
+        [y, m, ..] if (1000..3000).contains(y) && (1..=12).contains(m) => Some(format!("{y:04}-{m:02}")),
+        [y, ..] if (1000..3000).contains(y) => Some(format!("{y:04}")),
+        _ => None,
+    }
+}
+
+/// 生成时往书里补的（[`inject`]）：(字段, 值)，`Identifier` 的值是要**加上**的 ISBN，别的字段整个换成这些值。
+/// 书里有什么看 `own`（入库时记下的；没有记录时按书里只有 `meta.authors` 这些作者算）：
+/// - 简介、标签：书里没有才补；
+/// - 作者：书里的署名拆开（「[美] 某某 著，某某 译」拆成作者和译者），没写国籍的照找来的作者署名补上（同一个人：名字像）；
+///   和书里原样相同就不动；
+/// - 译者：署名里拆出来的；书里一个都没写时用找来的版本的；
+/// - 出版社、出版日期、ISBN：书里没有、找来的版本就是这本（条目名和书名一致，书里写了译者时译者也对得上）才补。
+pub(crate) fn plan(meta: &Meta, own: Option<&crate::OwnDc>) -> Vec<(bookconv::opfmeta::DcField, Vec<String>)> {
+    use crate::matching::{norm_s, parse_credits, same_person_any, similarity};
+    use bookconv::opfmeta::DcField;
+    let info = meta.info.as_ref();
+    let creators: &[String] = match own {
+        Some(o) if o.v >= crate::OwnDc::VERSION => &o.creators,
+        _ => &meta.authors,
+    };
+    let (has_desc, has_subj, own_trl, has_pub, has_date, has_isbn) = match own {
+        Some(o) => (o.description, o.subjects, o.translators.as_slice(), o.publisher, o.date, o.isbn),
+        None => (false, false, &[][..], false, false, false),
+    };
+    let mut out = Vec::new();
+    if let Some(i) = info {
+        if !has_desc && !i.description.is_empty() {
+            out.push((DcField::Description, vec![i.description.clone()]));
+        }
+        if !has_subj && !i.subjects.is_empty() {
+            out.push((DcField::Subject, i.subjects.clone()));
+        }
+    }
+    let credits = parse_credits(creators);
+    let web = info.map(|i| parse_credits(&i.authors).authors).unwrap_or_default();
+    let authors: Vec<String> = credits
+        .authors
+        .iter()
+        .map(|p| {
+            let mut p = p.clone();
+            if p.nationality.is_empty() {
+                if let Some(w) = web.iter().find(|w| !w.nationality.is_empty() && similarity(&norm_s(&w.name), &norm_s(&p.name)) >= 0.6) {
+                    p.nationality = w.nationality.clone();
+                }
+            }
+            p.display()
+        })
+        .collect();
+    if !authors.is_empty() && authors.as_slice() != creators {
+        out.push((DcField::Creator, authors));
+    }
+    let mut translators: Vec<String> = credits.translators.clone();
+    for t in own_trl {
+        if !translators.contains(t) {
+            translators.push(t.clone());
+        }
+    }
+    let edition = info.and_then(|i| i.edition.as_ref());
+    // 版本可用：条目名和书名一致（规整后；靠去掉卷次、版本字样才对上的不算——「哆啦A梦 第0卷」的 ISBN 不是「全彩版 卷01」的），
+    // 书里写了译者时那个版本的译者要对得上
+    let same_title = |e: &&Edition| norm_s(e.title.split(['：', ':']).next().unwrap_or("")) == norm_s(&meta.title);
+    let edition_ok = edition.filter(same_title).filter(|e| translators.is_empty() || same_person_any(&e.translators, &translators));
+    if translators.is_empty() {
+        if let Some(e) = edition_ok.filter(|e| !e.translators.is_empty()) {
+            translators = e.translators.clone();
+        }
+    }
+    if !translators.is_empty() && translators.as_slice() != own_trl {
+        out.push((DcField::Translator, translators));
+    }
+    if let Some(e) = edition_ok {
+        if !has_pub && !e.publisher.trim().is_empty() {
+            out.push((DcField::Publisher, vec![e.publisher.trim().to_string()]));
+        }
+        if let Some(d) = norm_date(&e.pubdate).filter(|_| !has_date) {
+            out.push((DcField::Date, vec![d]));
+        }
+        let isbn: String = e.isbn.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        if !has_isbn && !isbn.is_empty() {
+            out.push((DcField::Identifier, vec![format!("urn:isbn:{isbn}")]));
+        }
+    }
+    out
+}
+
+/// [`plan`] 的指纹（进生成指纹：补的东西变了产物就过期）；什么都不补时 `None`。
+pub(crate) fn plan_sig(plan: &[(bookconv::opfmeta::DcField, Vec<String>)]) -> Option<String> {
+    if plan.is_empty() {
+        return None;
+    }
+    let s: String = plan.iter().map(|(f, v)| format!("{}\u{1}{}\u{2}", f.name(), v.join("\u{0}"))).collect();
+    Some(crate::fsutil::sha256_hex(s.as_bytes())[..12].to_string())
+}
+
+/// 复制 `src` 到 `dst`，补上 [`plan`] 定的元数据和（书里没有时）封面。
 /// 改写用 `bookconv::opfmeta`（与 `booklib meta --edit` 同一份实现；不做 EPUB 3 规范整理——优化器的清洗层会做；不改 `dcterms:modified`，产物逐字节可重现）。
 /// 什么都不用补时不写 `dst`，返回 `false`。
-pub(crate) fn inject(src: &Path, dst: &Path, add: &Additions) -> Result<bool, String> {
+pub(crate) fn inject(src: &Path, dst: &Path, cover: Option<Vec<u8>>, plan: &[(bookconv::opfmeta::DcField, Vec<String>)]) -> Result<bool, String> {
     use bookconv::opfmeta::{self, DcField, Edits};
-    let (has_description, has_subjects) = own_description_subjects(src)?;
-    let mut edits = Edits { cover: add.cover.as_ref().map(|(b, _)| bookconv::opfmeta::CoverEdit::Set(b.clone())), ..Default::default() };
-    if let Some(info) = add.info {
-        if !has_description && !info.description.is_empty() {
-            edits.set.push((DcField::Description, vec![info.description.clone()]));
-        }
-        if !has_subjects && !info.subjects.is_empty() {
-            edits.set.push((DcField::Subject, info.subjects.clone()));
+    let mut edits = Edits { cover: cover.map(opfmeta::CoverEdit::Set), ..Default::default() };
+    for (f, v) in plan {
+        if *f == DcField::Identifier {
+            edits.append.push((*f, v.clone()));
+        } else {
+            edits.set.push((*f, v.clone()));
         }
     }
     if edits.is_empty() {
@@ -331,21 +531,19 @@ pub(crate) fn inject(src: &Path, dst: &Path, add: &Additions) -> Result<bool, St
     Ok(true)
 }
 
-/// 生成产物前：书里缺的封面、简介、标签补进去。补了返回新文件，没补返回原文件。
-pub(crate) fn with_additions(lib: &Library, meta: &Meta, epub: &Path, tmp: &Path) -> Result<std::path::PathBuf, String> {
+/// 生成产物前：书里缺的封面、[`plan`] 定的元数据补进去。补了返回新文件，没补返回原文件。`own` 是书里自己的元数据
+/// （同生成指纹用的那份，见 `Library::own_dc_of`）。
+pub(crate) fn with_additions(lib: &Library, meta: &Meta, own: Option<&crate::OwnDc>, epub: &Path, tmp: &Path) -> Result<std::path::PathBuf, String> {
     let cover = match &meta.cover {
-        Some(c) if !epub_has_cover(epub) => {
-            let img = std::fs::read(lib.entry_dir(&meta.id).join(&c.file)).map_err(|e| format!("读封面: {e}"))?;
-            Some((img, if c.file.ends_with(".png") { "png" } else { "jpg" }))
-        }
+        Some(c) if !epub_has_cover(epub) => Some(std::fs::read(lib.entry_dir(&meta.id).join(&c.file)).map_err(|e| format!("读封面: {e}"))?),
         _ => None,
     };
-    let add = Additions { cover, info: meta.info.as_ref() };
-    if add.cover.is_none() && add.info.and_then(BookInfo::injected_sig).is_none() {
+    let plan = plan(meta, own);
+    if cover.is_none() && plan.is_empty() {
         return Ok(epub.to_path_buf());
     }
     let with = tmp.join("with-metadata.epub");
-    Ok(if inject(epub, &with, &add)? { with } else { epub.to_path_buf() })
+    Ok(if inject(epub, &with, cover, &plan)? { with } else { epub.to_path_buf() })
 }
 
 #[cfg(test)]
@@ -381,7 +579,7 @@ mod tests {
         fn cover_origin(&self, _: &()) -> (String, String) {
             (String::new(), String::new())
         }
-        fn info(&self, _: &Net, _: &[()], _: usize, _: &[String]) -> Option<BookInfo> {
+        fn info(&self, _: &Net, _: &[()], _: usize, _: &[String], _: &[String]) -> Option<BookInfo> {
             (!self.found.is_empty()).then(|| BookInfo { source: self.found.into(), ..Default::default() })
         }
     }
@@ -393,7 +591,7 @@ mod tests {
         let lib = Library::open(d.path()).unwrap();
         let net = Net::new();
         let meta = Meta { title: "书".into(), ..Default::default() };
-        let lookup = || Lookup { lib: &lib, net: &net, meta: &meta, title: "书", need_info: true, need_cover: false, info: None, cover: None, work: None, work_err: None };
+        let lookup = || Lookup { lib: &lib, net: &net, meta: &meta, title: "书", need_info: true, need_cover: false, comic: false, info: None, cover: None, work: None, work_err: None };
         let (a, b) = (Fake { searched: Cell::new(0), found: "" }, Fake { searched: Cell::new(0), found: "乙" });
         let c = Fake { searched: Cell::new(0), found: "丙" };
         let mut l = lookup();
@@ -448,7 +646,9 @@ mod tests {
         image::RgbImage::new(400, 600).write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
         assert_eq!(crate::cover::plausible_cover(&jpg), Some("jpg"));
         let info = BookInfo { source: "t".into(), description: "简介 & <引号>\n第二段".into(), subjects: vec!["推理".into(), "日本".into()], ..Default::default() };
-        assert!(inject(&src, &dst, &Additions { cover: Some((jpg, "jpg")), info: Some(&info) }).unwrap());
+        let meta = Meta { authors: vec!["作者".into()], info: Some(info), ..Default::default() };
+        let own = read_own(&src).unwrap();
+        assert!(inject(&src, &dst, Some(jpg), &plan(&meta, Some(&own))).unwrap());
         assert!(epub_has_cover(&dst));
         let (a, b) = (bookconv::epubzip::read_entries(&std::fs::read(&src).unwrap()).unwrap(), bookconv::epubzip::read_entries(&std::fs::read(&dst).unwrap()).unwrap());
         // 只新加了封面图、改了 OPF；不做规范整理（优化器的清洗层会做），别的条目逐字节原样
@@ -465,8 +665,82 @@ mod tests {
         // 书里已有简介：不覆盖；什么都不用补时不写
         let src2 = sample(d.path(), "原书简介");
         let dst2 = d.path().join("c.epub");
-        let only_desc = BookInfo { source: "t".into(), description: "新简介".into(), ..Default::default() };
-        assert!(!inject(&src2, &dst2, &Additions { cover: None, info: Some(&only_desc) }).unwrap());
+        let meta2 = Meta { authors: vec!["作者".into()], info: Some(BookInfo { source: "t".into(), description: "新简介".into(), ..Default::default() }), ..Default::default() };
+        let own2 = read_own(&src2).unwrap();
+        assert!(!inject(&src2, &dst2, None, &plan(&meta2, Some(&own2))).unwrap());
         assert!(!dst2.exists());
+    }
+
+    fn own(creators: &[&str]) -> crate::OwnDc {
+        crate::OwnDc { v: crate::OwnDc::VERSION, creators: creators.iter().map(|c| c.to_string()).collect(), ..Default::default() }
+    }
+
+    fn edition(translators: &[&str]) -> Edition {
+        Edition { title: "飘".into(), translators: translators.iter().map(|t| t.to_string()).collect(), publisher: "江苏凤凰文艺出版社".into(), pubdate: "2023-6-1".into(), isbn: "978-7-5594-7000-1".into(), ..Default::default() }
+    }
+
+    /// 《飘》：署名整串写在一个 dc:creator 里（「[美] 玛格丽特·米切尔 著，梅静 译」），豆瓣挑中的梅静译本：作者拆出来带国籍、
+    /// 译者单列、出版社、日期、ISBN 补上（2026-10-12 用户要）。
+    #[test]
+    fn plan_splits_credits_and_fills_edition_when_translator_agrees() {
+        use bookconv::opfmeta::DcField;
+        let info = BookInfo { source: "豆瓣".into(), authors: vec!["[美] 玛格丽特·米切尔".into()], edition: Some(edition(&["梅静"])), ..Default::default() };
+        let meta = Meta { title: "飘（上册）".into(), info: Some(info), ..Default::default() };
+        let p = plan(&meta, Some(&own(&["[美] 玛格丽特·米切尔 著，梅静 译"])));
+        assert_eq!(
+            p,
+            vec![
+                (DcField::Creator, vec!["[美] 玛格丽特·米切尔".to_string()]),
+                (DcField::Translator, vec!["梅静".to_string()]),
+                (DcField::Publisher, vec!["江苏凤凰文艺出版社".to_string()]),
+                (DcField::Date, vec!["2023-06-01".to_string()]),
+                (DcField::Identifier, vec!["urn:isbn:9787559470001".to_string()]),
+            ]
+        );
+        assert!(plan_sig(&p).is_some());
+        // 靠去掉卷次才对上的条目（漫画「第0卷」）：版本信息不补，作品层面的照补
+        let meta = Meta { title: "飘 第2卷".into(), ..meta };
+        assert!(!plan(&meta, Some(&own(&["[美] 玛格丽特·米切尔 著，梅静 译"]))).iter().any(|(f, _)| matches!(f, DcField::Publisher | DcField::Identifier)));
+    }
+
+    /// 版本的译者和书里的对不上（豆瓣第一个条目是李美华译本）：出版社、日期、ISBN 不补；书里的署名照样拆。
+    #[test]
+    fn plan_skips_edition_fields_on_translator_conflict() {
+        use bookconv::opfmeta::DcField;
+        let meta = Meta { info: Some(BookInfo { source: "豆瓣".into(), edition: Some(edition(&["李美华"])), ..Default::default() }), ..Default::default() };
+        let p = plan(&meta, Some(&own(&["[美] 玛格丽特·米切尔 著，梅静 译"])));
+        assert_eq!(p.iter().map(|(f, _)| *f).collect::<Vec<_>>(), [DcField::Creator, DcField::Translator]);
+    }
+
+    /// 作者没写国籍：照豆瓣的署名补；书里已经是这个样子、又没找到元数据的什么都不补。
+    #[test]
+    fn plan_adds_nationality_from_web_and_leaves_clean_books_alone() {
+        use bookconv::opfmeta::DcField;
+        let meta = Meta { info: Some(BookInfo { source: "豆瓣".into(), authors: vec!["[日] 东野圭吾".into()], ..Default::default() }), ..Default::default() };
+        assert_eq!(plan(&meta, Some(&own(&["東野圭吾"]))), vec![(DcField::Creator, vec!["[日] 東野圭吾".to_string()])]);
+        assert!(plan(&Meta::default(), Some(&own(&["金庸"]))).is_empty());
+        // 书里没写译者：用版本的
+        let meta = Meta { title: "飘".into(), info: Some(BookInfo { source: "豆瓣".into(), edition: Some(edition(&["刘姿君"])), ..Default::default() }), ..Default::default() };
+        assert!(plan(&meta, Some(&own(&["东野圭吾"]))).contains(&(DcField::Translator, vec!["刘姿君".to_string()])));
+    }
+
+    /// 写进书：译者是带 trl 角色的 dc:contributor，ISBN 加在原有标识符旁边（unique-identifier 那个留着）。
+    #[test]
+    fn inject_writes_translator_role_and_appends_isbn() {
+        let d = tempfile::tempdir().unwrap();
+        let src = sample(d.path(), "");
+        let dst = d.path().join("t.epub");
+        let info = BookInfo { source: "豆瓣".into(), authors: vec!["[美] 玛格丽特·米切尔".into()], edition: Some(edition(&["梅静"])), ..Default::default() };
+        let meta = Meta { title: "飘".into(), info: Some(info), ..Default::default() };
+        let p = plan(&meta, Some(&own(&["[美] 玛格丽特·米切尔 著，梅静 译"])));
+        assert!(inject(&src, &dst, None, &p).unwrap());
+        let es = bookconv::epubzip::read_entries(&std::fs::read(&dst).unwrap()).unwrap();
+        let opf = String::from_utf8(es.iter().find(|e| e.name.ends_with(".opf")).unwrap().data.clone()).unwrap();
+        assert!(opf.contains("<dc:creator>[美] 玛格丽特·米切尔</dc:creator>") || opf.contains(r#"<dc:creator opf:role="aut">[美] 玛格丽特·米切尔</dc:creator>"#), "{opf}");
+        assert!(opf.contains("梅静</dc:contributor>") && opf.contains(">trl<") || opf.contains(r#"opf:role="trl""#), "{opf}");
+        assert!(opf.contains("<dc:identifier>urn:isbn:9787559470001</dc:identifier>"), "{opf}");
+        let own2 = read_own(&dst).unwrap();
+        assert_eq!((own2.translators.clone(), own2.isbn, own2.publisher), (vec!["梅静".to_string()], true, true));
+        assert!(bookconv::opfmeta::read_epub(&dst).unwrap().iter().any(|(f, v)| *f == bookconv::opfmeta::DcField::Identifier && v.len() >= 2), "原来的标识符还在");
     }
 }

@@ -228,23 +228,17 @@ impl Library {
         Ok(c)
     }
 
-    /// 生成时真正会补进书里的简介、标签的指纹（书里已有的那项不补、不进指纹：不然书里有简介的书，找来的简介变了也白重建）。
-    /// 书里有没有见 [`Library::own_dc_of`]；不知道（早期条目、原件暂时不在）、CBZ（当场转换，补进的是转换结果）时
-    /// 按两项都补算（与以前的指纹相同）。
+    /// 生成时真正会补进书里的东西（[`crate::metadata::plan`]：简介、标签、带国籍的作者、译者、出版社、日期、ISBN）的指纹；
+    /// 什么都不补时 `None`。书里已有什么见 [`Library::own_dc_of`]；不知道（原件暂时不在）、CBZ（当场转换）时按书里只有作者算。
     fn injected_info_sig(&self, meta: &Meta) -> Option<String> {
-        let info = meta.info.as_ref()?;
-        info.injected_sig()?;
-        match self.own_dc_of(meta) {
-            Some(o) => info.injected_sig_for(o.description, o.subjects),
-            None => info.injected_sig(),
-        }
+        crate::metadata::plan_sig(&crate::metadata::plan(meta, self.own_dc_of(meta).as_ref()))
     }
 
-    /// 书里自己有没有简介、标签：入库时存进 meta.json 的（`Meta::own_dc`，原件暂时不在也知道）。早期条目没存：EPUB 当场读 OPF
+    /// 书里自己的元数据：入库时存进 meta.json 的（`Meta::own_dc`，原件暂时不在也知道）。早期条目没存或是旧版记录：EPUB 当场读 OPF
     /// （按内容哈希缓存），持锁时顺带存进 meta.json（只读的命令不写书库）；读不出来（原件不在了）、不是 EPUB 返回 `None`。
     pub(crate) fn own_dc_of(&self, meta: &Meta) -> Option<crate::OwnDc> {
-        if let Some(o) = meta.own_dc {
-            return Some(o);
+        if let Some(o) = meta.own_dc.as_ref().filter(|o| o.v >= crate::OwnDc::VERSION) {
+            return Some(o.clone());
         }
         if meta.content_format() != "epub" {
             return None;
@@ -253,14 +247,14 @@ impl Library {
         if let Some(o) = self.facts.own_dc(sha) {
             return Some(o);
         }
-        let (description, subjects) = crate::metadata::own_description_subjects(&self.content_location(meta)).ok()?;
-        let own = crate::OwnDc { description, subjects };
+        // 读不出来（原件暂时不在）：旧版记录里的简介、标签照用，别的按不知道
+        let Ok(own) = crate::metadata::read_own(&self.content_location(meta)) else { return meta.own_dc.clone() };
         // 原件动过（可能不是这个内容了）的不记：生成前会核对，核对过再算
         if self.original_state(meta) != crate::OriginalState::Touched {
-            self.facts.note_own_dc(sha, own);
+            self.facts.note_own_dc(sha, own.clone());
             if self.records.locked.get() {
-                if let Some(mut m) = self.read_meta(&meta.id).filter(|m| m.content_sha() == sha && m.own_dc.is_none()) {
-                    m.own_dc = Some(own);
+                if let Some(mut m) = self.read_meta(&meta.id).filter(|m| m.content_sha() == sha && m.own_dc.as_ref().is_none_or(|o| o.v < crate::OwnDc::VERSION)) {
+                    m.own_dc = Some(own.clone());
                     let _ = self.save_meta(&m); // 写不回也不影响这次，下次再存
                 }
             }
@@ -686,7 +680,7 @@ impl Library {
     fn prepared_input(&self, meta: &Meta) -> Result<PathBuf, String> {
         let input = self.content_path(meta)?;
         let cover = meta.cover.as_ref().map_or("", |c| c.sha256.as_str());
-        let info = meta.info.as_ref().and_then(|i| i.injected_sig()).unwrap_or_default();
+        let info = self.injected_info_sig(meta).unwrap_or_default();
         let key = format!("{}|{cover}|{info}", meta.content_sha());
         if let Some(epub) = self.build.prepared(&meta.id, &key) {
             return Ok(epub);
@@ -697,7 +691,8 @@ impl Library {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let mut prepared = PreparedInput { book: meta.id.clone(), key, dir, epub: PathBuf::new(), bytes: 0 };
-        prepared.epub = self.epub_input(meta, &input, &prepared.dir).and_then(|e| crate::metadata::with_additions(self, meta, &e, &prepared.dir))?;
+        let own = self.own_dc_of(meta);
+        prepared.epub = self.epub_input(meta, &input, &prepared.dir).and_then(|e| crate::metadata::with_additions(self, meta, own.as_ref(), &e, &prepared.dir))?;
         if prepared.epub == input {
             return Ok(input); // 原件直接用：`prepared` 丢掉时删空目录
         }
