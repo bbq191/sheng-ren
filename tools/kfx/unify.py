@@ -43,14 +43,15 @@ def profile_value(device, key):
 
 
 def kfx_images(path, base_fs):
-    """Kindle KFX 里的图片：([(原始宽, 高, 宽度写法, 对齐)] 按阅读顺序, 正文图片里带透明的个数, 背景图个数)。
-    宽度写法：样式里写了百分比宽度是 `%:数`，没写是 `-`（按原尺寸，大过页宽缩到页宽）。"""
+    """Kindle KFX 里的图片：([(原始宽, 高, 宽度写法, 对齐, 行内)] 按阅读顺序, 正文图片里带透明的个数, 背景图个数)。
+    宽度写法：样式里写了百分比宽度是 `%:数`，em 折成根 em `em:数`，没写是 `-`（按原尺寸，大过页宽缩到页宽）。
+    行内图片（嵌在字里）的 em 相对所在段落的字号，节点链上最近的字号就是段落的，同样折成根 em。"""
     E = kfx.by_type(path)
     styles = E.get('$157', {})
     res = {v['$175']: v for v in E.get('$164', {}).values() if isinstance(v, dict) and '$175' in v}
     raw = {k: v for k, v in E.get('$417', {}).items() if isinstance(v, dict)}
     out, alpha = [], set()
-    for r, chain, alone in kfx.image_nodes(E):
+    for r, chain, alone, inline in kfx.image_nodes(E):
         st = [styles.get(str(n.get('$157')), {}) for n in chain]
         w = st[-1].get('$56')
         unit = {'$314': '%', '$308': 'em'}.get(w.get('$306')) if isinstance(w, dict) else None
@@ -61,7 +62,7 @@ def kfx_images(path, base_fs):
         # 整页单图（封面这类）由版面居中，不比对齐
         align = '-' if alone else next((ALIGN.get(f"'{d['$34']}'", 'left') for d in reversed(st) if '$34' in d), 'left')
         meta = res.get(r, {})
-        out.append((meta.get('$422', 0), meta.get('$423', 0), width, align))
+        out.append((meta.get('$422', 0), meta.get('$423', 0), width, align, inline))
         if raw.get(f'{r}-ad', {}).get('$alpha'):
             alpha.add(r)
     bgs = {v['$479'] for v in styles.values() if isinstance(v, dict) and '$479' in v}
@@ -69,13 +70,14 @@ def kfx_images(path, base_fs):
 
 
 def epub_images(path, bindir, device):
-    """掌阅、Move 的 EPUB 交给阅读器的图片：([(原始宽, 高, CSS 宽度, 对齐, 在不在链接里)], [(背景图, 不平铺)])（`epub-to-kfx --styles` 的 `#img`、`#bg` 行）。"""
+    """掌阅、Move 的 EPUB 交给阅读器的图片：([(原始宽, 高, CSS 宽度, 对齐, 在不在链接里, 行内)], [(背景图, 不平铺)])
+    （`epub-to-kfx --styles` 的 `#img`、`#bg` 行；行内图片的宽度是显示宽度，根 em）。"""
     out = subprocess.run([f'{bindir}/epub-to-kfx', '--styles', f'--device={device}', path], check=True, capture_output=True, text=True).stdout.splitlines()
     imgs, bgs = [], []
     for line in out:
         f = line.split('\t')
-        if f[0] == '#img' and len(f) == 7:
-            imgs.append((int(f[2]), int(f[3]), f[4], {'center': 'center', 'right': 'right', 'end': 'right'}.get(f[5], 'left'), f[6] == 'true'))
+        if f[0] == '#img' and len(f) == 8:
+            imgs.append((int(f[2]), int(f[3]), f[4], {'center': 'center', 'right': 'right', 'end': 'right'}.get(f[5], 'left'), f[6] == 'true', f[7] == 'inline'))
         elif f[0] == '#bg' and len(f) == 3:
             bgs.append((f[1], f[2] == 'true'))
     return imgs, bgs
@@ -182,7 +184,7 @@ def main():
         rq = collections.defaultdict(collections.deque)
         for im in ref_imgs:
             rq[(im[0], im[1])].append(im[4])
-        k_linked = [rq[(w, h)].popleft() if rq[(w, h)] else False for w, h, _, _ in k_imgs]
+        k_linked = [rq[(w, h)].popleft() if rq[(w, h)] else False for w, h, *_ in k_imgs]
         if k_alpha:
             quirks.append(f'{title}：Kindle 正文图片里还有 {k_alpha} 张带透明的 PNG（Kindle 画成黑色）')
         for d in DEVICES:
@@ -192,7 +194,7 @@ def main():
             for im in imgs:
                 q[(im[0], im[1])].append(im)
             ok = total = 0
-            for (w, h, width, align), linked in zip(k_imgs, k_linked):
+            for (w, h, width, align, inline), linked in zip(k_imgs, k_linked):
                 total += 1
                 if not q[(w, h)] and icons_to_numbers and linked:
                     ok += 1  # 只有图标的注释号换成了数字（profile note_icons = "number"，Move 里纯图链接点不动），设计如此
@@ -201,10 +203,13 @@ def main():
                     img_miss[d][('不见了', f'{w}×{h}')] += 1
                     ex.setdefault((d, ('不见了', f'{w}×{h}')), title)
                     continue
-                _, _, ew, ea, _ = q[(w, h)].popleft()
-                bad = [k for k, good in (('宽度', same_width(width, ew, w)), ('对齐', align in ('-', ea))) if not good]
+                _, _, ew, ea, _, ei = q[(w, h)].popleft()
+                # 行内图片在段落里排，对齐跟着段落，不比
+                checks = (('宽度', same_width(width, ew, w)), ('对齐', inline or align in ('-', ea)), ('行内/成块', inline == ei))
+                bad = [k for k, good in checks if not good]
                 if bad:
-                    kk = ('、'.join(bad), f'Kindle {width}/{align} {d} {ew}/{ea}')
+                    how = lambda x: '行内' if x else '成块'
+                    kk = ('、'.join(bad), f'Kindle {width}/{align}/{how(inline)} {d} {ew}/{ea}/{how(ei)}')
                     img_miss[d][kk] += 1
                     ex.setdefault((d, kk), title)
                 else:

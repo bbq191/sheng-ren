@@ -5,8 +5,8 @@ use super::*;
 pub(super) struct SectionCtx {
     pool: u32,
     texts: Vec<Value>,
-    /// 节点顺序与各自占的位置数。
-    order: Vec<(i64, usize)>,
+    /// 节点顺序与各自占的位置数、从节点里的第几个字起（行内图片把文字节点切成几段，见 [`pid_map`]）。
+    order: Vec<(i64, usize, usize)>,
     ids: Vec<(String, i64, usize)>,
     resources: Vec<usize>,
     lang: Option<String>,
@@ -26,8 +26,27 @@ impl SectionCtx {
         for (id, off) in ids {
             self.ids.push((id.clone(), eid, if text { *off } else { 0 }));
         }
-        self.order.push((eid, len));
+        self.order.push((eid, len, 0));
         self.last_end = Some((eid, if text { len } else { 0 }));
+    }
+
+    /// 文字节点里夹着行内图片（字符偏移 `at`、图片节点 id）：位置照 Send to Kindle 切段——图片前的字、图片处一个空段、
+    /// 图片节点占一个位置、图片后的字接着从文字节点的偏移数（测试书 `[12, 8, 12], 0, [1, 8, 13]`）。
+    fn split_at_images(&mut self, eid: i64, len: usize, images: &[(usize, i64)]) {
+        let Some(first) = self.order.pop() else { return };
+        debug_assert_eq!(first.0, eid);
+        let mut cur = 0;
+        for &(at, img) in images {
+            if at > cur {
+                self.order.push((eid, at - cur, cur));
+            }
+            self.order.push((eid, 0, at));
+            self.order.push((img, 1, 0));
+            cur = at + 1;
+        }
+        if cur < len {
+            self.order.push((eid, len - cur, cur));
+        }
     }
 }
 
@@ -82,7 +101,7 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
         let story_name = b.syms.sym(&format!("story{si}"));
         let pool = b.syms.sym(&format!("text{si}"));
         let tmpl_eid = b.eid();
-        let mut ctx = SectionCtx { pool, texts: Vec::new(), order: vec![(tmpl_eid, 1)], ids: Vec::new(), resources: Vec::new(), lang, pending: Vec::new(), last_end: None };
+        let mut ctx = SectionCtx { pool, texts: Vec::new(), order: vec![(tmpl_eid, 1, 0)], ids: Vec::new(), resources: Vec::new(), lang, pending: Vec::new(), last_end: None };
         // 只有一张图的文档写成整页图片版面（封面、插图页），和样本一样。
         let single_image = blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. });
         let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src, .. }) = (single_image, fixed_canvas, &blocks[0].kind) {
@@ -94,8 +113,8 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
                 continue;
             };
             let (cid, iid) = (b.eid(), b.eid());
-            ctx.order.push((cid, 1));
-            ctx.order.push((iid, 1));
+            ctx.order.push((cid, 1, 0));
+            ctx.order.push((iid, 1, 0));
             ctx.resources.push(r);
             let (w, h) = fixed_image_size((i64::from(b.res[r].width), i64::from(b.res[r].height)), (cw, ch));
             let res = b.res_sym(r);
@@ -227,13 +246,19 @@ impl Builder {
         // 本节点给子节点（行内区间、容器里的块）的「父节点」
         let me = Parent { weight: weight_of(&b.comp), color: shown_color(col, &b.comp, parent), avail: inner_width(b, parent.avail), base_fs: parent.base_fs };
         match &b.kind {
-            Kind::Text { text, runs } => {
+            Kind::Text { text, runs, images } => {
                 let eid = self.eid();
                 let chars = text.chars().count();
                 ctx.place(eid, chars, &b.ids, true);
-                let idx = ctx.texts.len();
-                ctx.texts.push(Value::String(text.clone()));
                 let style = self.style(props);
+                // 夹着行内图片的：文字和图片节点直接放在节点内容里（同 Send to Kindle），不进文字池
+                let content = if images.is_empty() {
+                    let idx = ctx.texts.len();
+                    ctx.texts.push(Value::String(text.clone()));
+                    (TEXT_REF, Value::Struct(vec![(NAME, Value::Symbol(ctx.pool)), (TEXT_INDEX, Value::Int(idx as i64))]))
+                } else {
+                    (CHILDREN, Value::List(self.inline_content(text, images, b, eid, chars, ctx)))
+                };
                 let mut f = vec![(EID, Value::Int(eid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(b.ty.unwrap_or(NODE_TEXT)))];
                 f.extend(b.attrs.iter().cloned());
                 if let Some(h) = b.heading {
@@ -282,7 +307,7 @@ impl Builder {
                 if !run_values.is_empty() {
                     f.push((RUNS, Value::List(run_values)));
                 }
-                f.push((TEXT_REF, Value::Struct(vec![(NAME, Value::Symbol(ctx.pool)), (TEXT_INDEX, Value::Int(idx as i64))])));
+                f.push(content);
                 Some(Value::Struct(f))
             }
             Kind::Image { src, .. } => {
@@ -348,6 +373,92 @@ impl Builder {
                 Some(Value::Struct(f))
             }
         }
+    }
+}
+
+impl Builder {
+    /// 夹着行内图片的文字节点的内容：文字在图片处切开，图片写成行内图片节点；位置按段登记（[`SectionCtx::split_at_images`]）。
+    /// 取不到的图片在文字里换成一个空格（字符偏移不变，区间、锚点照旧对得上）。
+    fn inline_content(&mut self, text: &str, images: &[InlineImage], b: &Block, eid: i64, chars: usize, ctx: &mut SectionCtx) -> Vec<Value> {
+        let mut out = Vec::new();
+        let mut placed = Vec::new();
+        let mut piece = String::new();
+        let mut images = images.iter().peekable();
+        for (i, ch) in text.chars().enumerate() {
+            let Some(img) = images.next_if(|im| im.at == i) else {
+                piece.push(ch);
+                continue;
+            };
+            let Some(r) = self.resource(&img.src, ImageUse::Content) else {
+                piece.push(' ');
+                continue;
+            };
+            if !piece.is_empty() {
+                out.push(Value::String(std::mem::take(&mut piece)));
+            }
+            let iid = self.eid();
+            placed.push((i, iid));
+            ctx.resources.push(r);
+            let props = self.inline_image_props(img, r, b.comp.font_size);
+            let style = self.style(props);
+            let res = self.res_sym(r);
+            let Value::Struct(mut f) = image_node(iid, style, res) else { unreachable!() };
+            f.push((ALT_TEXT, Value::String(img.alt.clone())));
+            f.push((RENDER, Value::Symbol(RENDER_INLINE)));
+            out.push(Value::Struct(f));
+        }
+        if !piece.is_empty() {
+            out.push(Value::String(piece));
+        }
+        if !placed.is_empty() {
+            ctx.split_at_images(eid, chars, &placed);
+        }
+        out
+    }
+
+    /// 行内图片的样式（照 Send to Kindle，2026-10-12 测试书）：宽、高都写 em（相对所在段落的字号），只写了一边的另一边按图的比例；
+    /// 都没写的按图的像素（1px＝1/16em）。写了尺寸的加 `$546: $377`，宽度用 em 写的另加最大宽度 100%；`vertical-align` 照写。
+    fn inline_image_props(&self, img: &InlineImage, r: usize, block_fs: f64) -> StyleProps {
+        let (w, h) = inline_size(img, (self.res[r].width, self.res[r].height));
+        let fs = if block_fs > 0.0 { block_fs } else { 1.0 };
+        let mut p = StyleProps::new();
+        p.set(P_WIDTH, num(w / fs, U_EM));
+        p.set(P_HEIGHT, num(h / fs, U_EM));
+        if img.width.is_some() || img.height.is_some() {
+            p.symbol(P_SIZING, SIZING_VALUE);
+        }
+        if matches!(img.width, Some(Len::Em(_))) {
+            p.set(P_MAX_WIDTH, num(100.0, U_PERCENT));
+        }
+        let va = match img.comp.valign.as_deref() {
+            Some("baseline") => Some(VALIGN_BASELINE),
+            Some("super") => Some(VALIGN_SUPER),
+            Some("sub") => Some(VALIGN_SUB),
+            Some("middle") => Some(ALIGN_CENTER),
+            Some("top") => Some(VALIGN_TOP),
+            Some("text-bottom") => Some(VALIGN_TEXT_BOTTOM),
+            _ => None,
+        };
+        if let Some(v) = va {
+            p.symbol(P_VERTICAL_ALIGN, v);
+        }
+        p
+    }
+}
+
+/// 行内图片显示的宽、高（根 em，见 [`Builder::inline_image_props`]）：只写了一边的另一边按图的比例，都没写的按像素（1px＝1/16em）。
+/// `--styles` 导出（`analyze::dump_blocks`）也用它，`tools/kfx/unify.py` 拿掌阅、Move 的 EPUB 算出来的和 KFX 比。
+pub(super) fn inline_size(img: &InlineImage, (iw, ih): (u32, u32)) -> (f64, f64) {
+    let (iw, ih) = (f64::from(iw.max(1)), f64::from(ih.max(1)));
+    let rem = |l: Len| match l {
+        Len::Percent(p) => p / 100.0 * PAGE_WIDTH_EM,
+        l => rem_len(l, img.comp.font_size).unwrap_or_default(),
+    };
+    match (img.width.map(rem), img.height.map(rem)) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => (w, w * ih / iw),
+        (None, Some(h)) => (h * iw / ih, h),
+        (None, None) => (iw / 16.0, ih / 16.0),
     }
 }
 

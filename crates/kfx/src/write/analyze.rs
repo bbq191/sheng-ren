@@ -38,7 +38,7 @@ fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
         for (di, d) in docs.iter().enumerate() {
             let path = d.1;
             for_each_block(&d.3, |b| {
-                let Kind::Text { text, runs } = &b.kind else { return };
+                let Kind::Text { text, runs, .. } = &b.kind else { return };
                 for (id, _) in &b.ids {
                     id_block.entry((path, id.as_str())).or_insert(n);
                 }
@@ -166,7 +166,8 @@ pub(super) fn dump_blocks(blocks: &[Block], dims: &HashMap<String, (u32, u32)>, 
     dump_blocks_in(blocks, None, dims, out)
 }
 
-/// 每个文字块一行样式（13 列）；图片另起一行 `#img\t路径\t宽\t高\tCSS 宽度\t对齐\t在不在链接里`，背景图 `#bg\t路径\t不平铺`
+/// 每个文字块一行样式（13 列）；图片另起一行 `#img\t路径\t宽\t高\tCSS 宽度\t对齐\t在不在链接里\t行内还是成块`（行内图片跟在所在文字块那行后面），
+/// 背景图 `#bg\t路径\t不平铺`
 /// （`tools/kfx/unify.py` 比图片用；只认 13 列文字行的脚本不受影响）。
 fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<String, (u32, u32)>, out: &mut String) {
     use std::fmt::Write;
@@ -176,9 +177,9 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
         }
         match &b.kind {
             Kind::Container(c) => dump_blocks_in(c, Some(b), dims, out),
-            Kind::Text { text, .. } => {
+            Kind::Text { text, images, .. } => {
                 let c = &b.comp;
-                let key: String = text.chars().filter(|ch| !ch.is_whitespace()).take(60).collect();
+                let key: String = text.chars().filter(|ch| !ch.is_whitespace() && *ch != OBJ).take(60).collect();
                 if key.is_empty() {
                     continue;
                 }
@@ -209,19 +210,27 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
                     m.margin_right.em,
                     m.margin_right.pct,
                 );
+                // 行内图片的宽度写显示宽度（根 em，同写出器的算法）：只写了高、什么都没写的也有宽度可比
+                for i in images {
+                    let d = dims.get(&i.src).copied().unwrap_or((0, 0));
+                    dump_image(&i.src, Some(Len::Em(super::layout::inline_size(i, d).0)), c.text_align.as_deref(), i.linked, "inline", dims, out);
+                }
             }
-            Kind::Image { src, linked } => {
-                let (w, h) = dims.get(src).copied().unwrap_or((0, 0));
-                let width = match b.comp.width {
-                    Some(Len::Em(n)) => format!("em:{n}"),
-                    Some(Len::Pt(n)) => format!("pt:{n}"),
-                    Some(Len::Percent(n)) => format!("%:{n}"),
-                    None => "-".into(),
-                };
-                let _ = writeln!(out, "#img\t{src}\t{w}\t{h}\t{width}\t{}\t{linked}", b.comp.text_align.as_deref().unwrap_or("-"));
-            }
+            Kind::Image { src, linked } => dump_image(src, b.comp.width, b.comp.text_align.as_deref(), *linked, "block", dims, out),
         }
     }
+}
+
+fn dump_image(src: &str, width: Option<Len>, align: Option<&str>, linked: bool, how: &str, dims: &HashMap<String, (u32, u32)>, out: &mut String) {
+    use std::fmt::Write;
+    let (w, h) = dims.get(src).copied().unwrap_or((0, 0));
+    let width = match width {
+        Some(Len::Em(n)) => format!("em:{n}"),
+        Some(Len::Pt(n)) => format!("pt:{n}"),
+        Some(Len::Percent(n)) => format!("%:{n}"),
+        None => "-".into(),
+    };
+    let _ = writeln!(out, "#img\t{src}\t{w}\t{h}\t{width}\t{}\t{linked}\t{how}", align.unwrap_or("-"));
 }
 
 /// 全书统计（[`analyze`] 算出来，之后各阶段只读）。

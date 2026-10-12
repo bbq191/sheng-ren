@@ -441,7 +441,7 @@ let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><h
 #[test]
 fn pid_map_matches_sample_shape() {
     // 样本《ABC谋杀案》第 2 个版面：[[0,3090],[1,325],[1,40],[4,333],9,14,6,9,15,[22,0]]
-    let order = [(3090, 1), (325, 1), (40, 4), (333, 9), (334, 14), (335, 6), (336, 9), (337, 15), (338, 22)];
+    let order = [(3090, 1, 0), (325, 1, 0), (40, 4, 0), (333, 9, 0), (334, 14, 0), (335, 6, 0), (336, 9, 0), (337, 15, 0), (338, 22, 0)];
     let m = pid_map(&order);
     let expect = Value::List(vec![
         Value::List(vec![Value::Int(0), Value::Int(3090)]),
@@ -566,7 +566,7 @@ fn texts_and_runs(blocks: &[Block]) -> TextRuns {
     let mut out = Vec::new();
     for b in blocks {
         match &b.kind {
-            Kind::Text { text, runs } => out.push((text.clone(), runs.iter().map(|r| (r.start, r.len, r.link.is_some())).collect())),
+            Kind::Text { text, runs, .. } => out.push((text.clone(), runs.iter().map(|r| (r.start, r.len, r.link.is_some())).collect())),
             Kind::Image { .. } => out.push(("<img>".to_string(), Vec::new())),
             Kind::Container(c) => out.extend(texts_and_runs(c)),
         }
@@ -580,7 +580,8 @@ fn texts_and_runs(blocks: &[Block]) -> TextRuns {
 fn inline_run_split_by_block_or_image() {
     let got = texts_and_runs(&body_blocks(r##"<div><b>x</b><a href="#n">y<div>z</div>wwwww</a></div>"##));
     assert_eq!(got, [("xy".into(), vec![(0, 1, false), (1, 1, true)]), ("z".into(), vec![(0, 1, true)]), ("wwwww".into(), vec![(0, 5, true)])]);
-    let got = texts_and_runs(&body_blocks(r##"<p><b>x</b>t<a href="#n"><img src="i.png"/>see note one</a></p>"##));
+    // 有字的段落里图片是行内的、不切开（见 `inline_image_*`）；`display:block` 的图才切开
+    let got = texts_and_runs(&body_blocks(r##"<p><b>x</b>t<a href="#n"><img style="display:block" src="i.png"/>see note one</a></p>"##));
     assert_eq!(got, [("xt".into(), vec![(0, 1, false)]), ("<img>".into(), vec![]), ("see note one".into(), vec![(0, 12, true)])]);
     // 不 panic 时以前区间错位到「www」上
     let got = texts_and_runs(&body_blocks(r##"<div>xx<a href="#n">y<div>z</div>wwwww</a></div>"##));
@@ -708,7 +709,7 @@ fn body_font_tie_is_deterministic() {
     let block = |font: Option<&str>, text: &str| {
         let mut c = Computed::root();
         c.font_family = font.map(str::to_string);
-        Block::anonymous(Kind::Text { text: text.into(), runs: Vec::new() }, c, Vec::new())
+        Block::anonymous(Kind::Text { text: text.into(), runs: Vec::new(), images: Vec::new() }, c, Vec::new())
     };
     for _ in 0..20 {
         let docs: Vec<ParsedDoc> = vec![(0, "a", None, vec![block(Some("Zed"), "甲乙"), block(Some("Alpha"), "丙丁"), block(Some("Mid"), "戊")])];
@@ -803,4 +804,35 @@ fn style_props_dedup_and_order() {
     assert_eq!(f.last().unwrap(), &(STYLE_NAME, Value::Symbol(1000)));
     assert_eq!(p.take(P_TEXT_ALIGN), Some(Value::Symbol(ALIGN_CENTER)));
     assert_eq!(p.take(P_TEXT_ALIGN), None);
+}
+
+/// 有字的段落里的图片是行内的：文字里占一个 `OBJ`、不切开（2026-10-12 Send to Kindle 测试书）；整段只有图、
+/// 图后换行接图注的独立成块；「文字<br/>小图」段末单独一行的照样行内。
+#[test]
+fn inline_image_kept_in_text() {
+    let kinds = |body: &str| -> Vec<String> {
+        body_blocks(body)
+            .iter()
+            .map(|b| match &b.kind {
+                Kind::Text { text, images, .. } => format!("{}|{}", text.replace(super::parse::OBJ, "□"), images.iter().map(|i| i.at.to_string()).collect::<Vec<_>>().join(",")),
+                Kind::Image { .. } => "<img>".into(),
+                Kind::Container(_) => "<div>".into(),
+            })
+            .collect()
+    };
+    assert_eq!(kinds(r#"<p>甲<img src="a.png"/>乙</p>"#), ["甲□乙|1"]);
+    assert_eq!(kinds(r#"<p>甲 <img src="a.png"/> 乙<img src="b.png"/></p>"#), ["甲 □ 乙□|2,5"]);
+    assert_eq!(kinds(r#"<p><img src="a.png"/></p>"#), ["<img>"]);
+    assert_eq!(kinds(r#"<p><img src="a.png"/> <br/>图注</p>"#), ["<img>", "\n图注|"]);
+    assert_eq!(kinds(r#"<p>第一行<br/><img src="a.png"/></p>"#), ["第一行\n□|4"]);
+    assert_eq!(kinds(r#"<p>甲<img style="display:block" src="a.png"/>乙</p>"#), ["甲|", "<img>", "乙|"]);
+}
+
+/// 行内图片切开的文字节点：位置映射照样本写 `[前进, id, 偏移]`（测试书 `[12, 8, 12], 0, [1, 8, 13], [24, 10]`）。
+#[test]
+fn pid_map_with_inline_image_offsets() {
+    let order = [(8, 12, 0), (8, 0, 12), (9, 1, 0), (8, 24, 13), (10, 9, 0)];
+    let m = pid_map(&order);
+    let l = |v: &[i64]| Value::List(v.iter().map(|&n| Value::Int(n)).collect());
+    assert_eq!(m, vec![l(&[0, 8]), l(&[12, 8, 12]), Value::Int(0), l(&[1, 8, 13]), l(&[24, 10]), l(&[9, 0])]);
 }

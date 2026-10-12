@@ -241,6 +241,14 @@ pub const FONT_NORMAL: u32 = 350;
 /// 推测：italic。
 pub const STYLE_ITALIC: u32 = 382;
 pub const VALIGN_SUPER: u32 = 370;
+/// 竖直对齐 baseline、text-bottom（2026-10-12 行内图片测试书：`vertical-align` 六种各一）。
+pub const VALIGN_BASELINE: u32 = 350;
+pub const VALIGN_TEXT_BOTTOM: u32 = 449;
+/// 图片的替代文字（`alt`）。
+pub const ALT_TEXT: u32 = 584;
+/// 推测：排法；`$283`＝行内（嵌在文字节点内容里的图片节点，2026-10-12 测试书）。
+pub const RENDER: u32 = 601;
+pub const RENDER_INLINE: u32 = 283;
 pub const VALIGN_SUB: u32 = 371;
 
 // ---- 阅读顺序、导航
