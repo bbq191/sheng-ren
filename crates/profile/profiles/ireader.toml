@@ -32,6 +32,9 @@ comic_page_direction = "ltr"
 
 # 图片尺寸的 px 是屏幕像素（300px 的图占四分之一页宽，Kindle 把 px 换成 em 占三分之二）：kindle_rules 改写成 Kindle 的大小（2026-10-12 测试书）
 image_sizing = "device-px"
+# 缺省字号下 CSS 1em 的屏幕像素（2026-10-12 测试书「测试-竖直间距」掌阅量的）：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
+# 同样 1em 占页高多一半；用户定）。阅读器里改了字号、Kindle 改了行距要重量
+em_px = 37.5
 [screen]
 width = 1264
 height = 1680

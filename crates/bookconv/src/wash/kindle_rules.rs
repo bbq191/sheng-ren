@@ -32,6 +32,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts
         drop_single_backgrounds: !opts.background_no_repeat,
         tiled: HashSet::new(),
         bg_fixes: HashMap::new(),
+        v_scale: opts.v_scale,
     };
     // 平铺背景的阅读器：整页背景图做成整页一块（`bgfit::plan_tiles`），这些规则照留，图由优化器改（`rep.page_tiles`）
     if let Some(g) = opts.page_tiles.filter(|_| ctx.drop_single_backgrounds) {
@@ -158,6 +159,85 @@ struct Ctx {
     tiled: HashSet<String>,
     /// 背景图（zip 路径）→ 接在用它的规则末尾的尺寸、位置（掌阅，`background_auto_height = false`）。
     bg_fixes: HashMap<String, String>,
+    /// 竖直方向的边距照 Kindle 换算（[`VScale`]）。
+    v_scale: Option<VScale>,
+}
+
+/// 竖直间距照 Kindle 换算（2026-10-12 用户定，「测试-竖直间距」三台量的）：Kindle 的上下外边距、内边距按行距换像素（一 rem ≈
+/// 正文一行 / 1.2 ≈ 52.5px），掌阅、Move 按自己的字号（≈ 37.5px），同样写 1em，Kindle 上占页高多一半。这里把上下外边距、内边距
+/// 改写成在这个阅读器上占内容区高的比例和 Kindle 一样：
+///
+/// - `em`、`rem` 乘 `em`（跟着字号走，阅读器里调字号照样变）；
+/// - `%`、`px`、`pt` 先照 KFX 写出器折成 Kindle 上的像素（`%` 按 32em 页宽、px 按 0.45pt、12pt 一 em），再按两台内容区的高折成
+///   这个阅读器的屏幕像素写 `px`（掌阅、Move 的 px 是屏幕像素；顺带修了掌阅把 `pt` 当 px、Move 的 `%` 只有十来像素）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VScale {
+    /// `em` 要乘的系数（Kindle 一 rem 的像素 × 内容区高之比 / 这个阅读器一 em 的像素）。
+    pub em: f64,
+    /// Kindle 竖直一 rem 的像素。
+    pub kindle_rem_px: f64,
+    /// 这个阅读器内容区高 / Kindle 内容区高。
+    pub ratio: f64,
+}
+
+impl VScale {
+    /// 一个长度换算后的写法；不用换的（0、`auto`、`calc()`、认不出的单位）`None`。
+    fn length(&self, v: &str) -> Option<String> {
+        let v = v.trim();
+        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))?;
+        let n: f64 = v[..end].parse().ok()?;
+        if n == 0.0 {
+            return None;
+        }
+        let px = |kindle_rem: f64| format!("{}px", fmt_num((kindle_rem * self.kindle_rem_px * self.ratio * 10.0).round() / 10.0));
+        Some(match v[end..].to_ascii_lowercase().as_str() {
+            "em" | "rem" => format!("{}{}", fmt_num(n * self.em), &v[end..]),
+            "%" => px(n / 100.0 * 32.0),
+            "px" => px(n * 0.45 / crate::cascade::PT_PER_EM),
+            "pt" => px(n / crate::cascade::PT_PER_EM),
+            _ => return None,
+        })
+    }
+}
+
+/// 一段声明里的上下外边距、内边距照 [`VScale`] 换算（分项、简写一样；简写只换上下两个值）。返回 (新文本, 改了几条)。
+pub(super) fn scale_vertical(text: &str, vs: &VScale) -> (String, usize) {
+    let decls = html::css_decls(text);
+    let mut edits = Vec::new();
+    for d in &decls {
+        let prop = d.prop.to_ascii_lowercase();
+        let (value, imp) = strip_important(d.value);
+        let new = match prop.as_str() {
+            "margin-top" | "margin-bottom" | "padding-top" | "padding-bottom" => vs.length(value).map(|v| format!("{v}{imp}")),
+            "margin" | "padding" => match box_sides(d.value) {
+                BoxSides::Sides([t, r, b, l], imp) => {
+                    let (nt, nb) = (vs.length(t), vs.length(b));
+                    (nt.is_some() || nb.is_some()).then(|| format!("{} {r} {} {l}{imp}", nt.unwrap_or_else(|| t.to_string()), nb.unwrap_or_else(|| b.to_string())))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(v) = new {
+            let start = d.start + d.raw.find(d.value).unwrap_or(0);
+            edits.push((start, start + d.value.len(), v));
+        }
+    }
+    let n = edits.len();
+    (html::apply_edits(text, edits), n)
+}
+
+/// 整份样式表的规则体照 [`scale_vertical`] 换算（我们写的 `eink-ua.css` 用）。
+pub(super) fn scale_vertical_css(css: &str, vs: &VScale) -> String {
+    let edits: Vec<(usize, usize, String)> = rule_spans(css)
+        .into_iter()
+        .filter(|r| r.closed && !rule_selector(r.prelude).trim().starts_with('@'))
+        .filter_map(|r| {
+            let (t, k) = scale_vertical(r.body, vs);
+            (k > 0).then(|| (r.body_start, r.body_start + r.body.len(), t))
+        })
+        .collect();
+    html::apply_edits(css, edits)
 }
 
 /// 背景图的定位范围相对 body 盒子（Kindle：body 只到最后一块的下外边距为止，`bottom` 的图贴着它，2026-10-12《飘》截图）。
@@ -485,6 +565,11 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
         out.push_str(&format!("color:{};", css_color(adj)));
         changed += 1;
     }
+    if let Some(vs) = &ctx.v_scale {
+        let (t, k) = scale_vertical(&out, vs);
+        out = t;
+        changed += k;
+    }
     if let Some(f) = fix {
         if !out.trim_end().is_empty() && !out.trim_end().ends_with(';') {
             out.push(';');
@@ -609,7 +694,7 @@ mod tests {
     use super::*;
 
     fn ctx() -> Ctx {
-        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false, tiled: HashSet::new(), bg_fixes: HashMap::new() }
+        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false, tiled: HashSet::new(), bg_fixes: HashMap::new(), v_scale: None }
     }
 
     #[test]
@@ -789,5 +874,19 @@ mod tests {
         let mut n = 0;
         let out = rewrite_css(".x{color:rgba(0,0,0,0.4)}", &c, &mut n);
         assert!(out.starts_with(".x{color:#") && !out.contains("rgba"), "{out}");
+    }
+
+    /// 竖直间距照 Kindle 换算（掌阅的系数，「测试-竖直间距」量的）：em 乘系数，%、px、pt 折成像素，简写只换上下，别的不动。
+    #[test]
+    fn vertical_lengths_scaled_like_kindle() {
+        let vs = VScale { em: 52.5 * (1680.0 / 1546.0) / 37.5, kindle_rem_px: 52.5, ratio: 1680.0 / 1546.0 };
+        let (t, n) = scale_vertical("margin-top:1em;margin-bottom:10%;padding-top:30px;padding-bottom:24pt !important;margin-left:2em;", &vs);
+        assert_eq!(t, "margin-top:1.5213em;margin-bottom:182.6px;padding-top:64.2px;padding-bottom:114.1px !important;margin-left:2em;");
+        assert_eq!(n, 4);
+        assert_eq!(scale_vertical("margin:1em 2em", &vs).0, "margin:1.5213em 2em 1.5213em 2em");
+        for keep in ["margin:0", "margin-top:auto", "margin-top:calc(1em + 2px)", "padding:0 1em", "line-height:2em"] {
+            assert_eq!(scale_vertical(keep, &vs), (keep.to_string(), 0), "{keep}");
+        }
+        assert!(scale_vertical_css("p{margin-top:1em;margin-bottom:1em;}\n", &vs).starts_with("p{margin-top:1.5213em;margin-bottom:1.5213em;}"));
     }
 }

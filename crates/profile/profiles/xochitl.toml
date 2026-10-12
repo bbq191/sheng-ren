@@ -31,6 +31,9 @@ comic_reader_margins = 1
 
 # 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比
 image_sizing = "percent"
+# 缺省字号下 CSS 1em 的屏幕像素（2026-10-12 测试书「测试-竖直间距」Move量的）：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
+# 同样 1em 占页高多一半；用户定）。阅读器里改了字号、Kindle 改了行距要重量
+em_px = 37.8
 [screen]
 width = 954
 height = 1696
