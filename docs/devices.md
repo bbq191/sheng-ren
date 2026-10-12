@@ -43,7 +43,7 @@
 | 值写 `0` | — | — | **当没写**（写 0.01em） |
 | `rgba()` | 写出器合成 | **整条作废**（换成不透明色） | 认 |
 | `display:none` | 认 | 认（`linear="no"` 的页露出过「里程碑」，那是 spine 不是这个） | **不认**（行内、外链都不认）→ 去掉元素 |
-| `page-break-before/after: always` | Send to Kindle 另起一节（写出器 21 照做） | 认 | 认（含行内）；`break-before:page` 不认 |
+| `page-break-before/after: always` | Send to Kindle 另起一节（写出器 21 照做，真机 ✓） | 认 | 认（含行内）；`break-before:page` 不认 |
 | 放不下时的大段上外边距 | **挪到下一页页首、丢掉边距** | 照加（推到页底） | 照加 → 我们按 Kindle 估算先分页（KINDLE_RULES 18） |
 | `hyphens:auto` | 不认 | 不认 | 不认 |
 

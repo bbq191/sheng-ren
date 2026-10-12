@@ -95,7 +95,7 @@ pub use entities::container_id;
 /// - 21（2026-10-12）：强制分页（`page-break-before/after: always|left|right`、`break-*: page`）另起一节，照 Send to Kindle（《飘》
 ///   推下来的样本：版权页后 `<div style="page-break-before:always">` 另起一节，带背景的 body 每节一份容器，上外边距留第一节、
 ///   下外边距留最后一节）——以前不处理分页，二维码页少了一页；写了宽度的图片写 `$546: $377`，居中、居右写块的对齐 `$580`、
-///   不写文字对齐（Amazon 同样；以前写 `$34`，Kindle 上二维码靠左）。25 本文字书文字池逐字相同，《飘》上下册、《春雪》《三体》各多一节。
+///   不写文字对齐（Amazon 同样；以前写 `$34`，Kindle 上二维码靠左）。25 本文字书文字池逐字相同，《飘》上下册、《春雪》《三体》各多一节。Kindle 真机 ✓（《飘》二维码页同 Amazon）。
 pub const WRITER_VERSION: &str = "21";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
