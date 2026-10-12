@@ -76,6 +76,10 @@ impl BookSource for Bangumi {
         })
     }
 
+    fn hit_author<'h>(&self, hit: &'h Hit) -> &'h str {
+        &hit.author
+    }
+
     fn cover_origin(&self, hit: &Hit) -> (String, String) {
         (hit.cover.clone(), hit.label())
     }
