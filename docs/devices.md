@@ -32,7 +32,7 @@
 | `background_sizing`（`true`） | 保留背景图时也留 `background-size`、`background-attachment`；去掉时整页背景图（`body`/`html` 上的）按原书的尺寸意图预先缩好、一律不超出阅读范围（整张图看得见；v48、v49，见[排版 · 背景图](typesetting.md#1-解开字体字号行高的锁别的样式不动)） | 留 | 去掉 | — | 掌阅写了尺寸会把图挤变形、不写又按图自身像素显示（大图只露出一角），所以去掉尺寸、图预先缩好；Kindle 留着（和 Amazon 写法一致） |
 | `css_rgba`（`true`） | 阅读器认 CSS 的 `rgba()` 颜色；`false` 时换成 `#rrggbb`（不透明的颜色不变，半透明按白底混合，全透明写 `transparent`；v49） | 认 | 不认 | 认 | 掌阅把 `rgba()` 那条声明整条作废（《绍宋》深红底色显示成白底），`rgb()`、`#rrggbb` 认（2026-10-06 真机测试书）。只修复的文字书里由 `kindle_rules` 照这个字段换（KINDLE_RULES 8：《飘》「第一卷」标题的半透明白条作废后字压在插图上看不见，2026-10-12） |
 | `caption_fit`（`false`） | 带图注、按满宽显示会超出一页的图给 `<img>` 写行内宽度百分比，图和图注同页（v50，见[排版 · 插图](typesetting.md#8-插图)） | 开 | 开 | — | 掌阅、Kindle 不认多看图集，竖长的人物图撑满一页、图注掉到下一页；掌阅不认 `max-height`、`page-break-inside`，宽度百分比认（2026-10-06 真机 adb 截屏）；KFX 写出器只认图片宽度。xochitl 没测过（也不认行内样式） |
-| `background_no_repeat`（`true`） | 阅读器认背景图的 `no-repeat`；`false` 时只修复的文字书（`kindle_rules`）里写了不平铺（`no-repeat`、`repeat-x`、`repeat-y`……）的背景图去掉，背景色照留，本来就平铺的照留（KINDLE_RULES 8） | 认 | 认 | 不认 | xochitl 背景图一律从某个原点按原始像素平铺，`no-repeat`、`background-size`、`background-position` 都不管：大图一块超出整页、显得偏到一边被裁掉（《飘》「第一卷」），小图铺满一页（2026-10-12 测试书 12+8 种写法）。掌阅认 `background-size`（同一测试书） |
+| `background_no_repeat`（`true`） | 阅读器认背景图的 `no-repeat`；`false` 时（阅读器从内容区左上角按原始像素平铺、铺满整页）只修复的文字书（`kindle_rules`）里整页背景图做成整屏大小的一块（内容区照 Kindle 画、其余白色，KINDLE_RULES 10），别的写了不平铺（`no-repeat`、`repeat-x`、`repeat-y`……）的背景图去掉，背景色照留，本来就平铺的照留（KINDLE_RULES 8） | 认 | 认 | 不认 | xochitl 背景图一律从某个原点按原始像素平铺，`no-repeat`、`background-size`、`background-position` 都不管：大图一块超出整页、显得偏到一边被裁掉（《飘》「第一卷」），小图铺满一页（2026-10-12 测试书 12+8 种写法）。掌阅认 `background-size`（同一测试书） |
 | `image_sizing`（`css`） | 阅读器怎么定图片尺寸：`device-px`＝照 CSS 但 px 是屏幕像素，`percent`＝只认百分比宽度。只修复的文字书（`kindle_rules`）按它把图片宽度改写成显示出来和 Kindle 一样大（`wash/kindle_images.rs`，KINDLE_RULES 9） | （KFX 写出器） | `device-px` | `percent` | 2026-10-12 测试书「测试-插图」三台量：不写宽度的 300px 小图 Kindle 27%、掌阅 25%、Move **98%**；宽 300px 的 Kindle 66%（px 折成 em 跟着字号）、掌阅 **26%**、Move **100%**；宽 10em、只写高的 Move 都拉满一行；比一页还高的都缩到一页高。改写后 Move 逐张和 Kindle 一致，掌阅 em 写的按自己的字号（1em≈37.4px，Kindle 39px） |
 | `font_px`（不写） | 缺省字号下 1em 的屏幕像素：掌阅、Move 照它把 em 写的图片宽度折成 Kindle 上的大小 | 39 | — | — | 测试书宽 10em 的图在 Kindle 上 392px |
 | `image_alpha`（`true`） | 阅读器能正确显示图片的透明通道；`false` 时正文 `<img>`/SVG `<image>` 用到的、有透明像素的 PNG 先合成到白底（CSS 背景图不动；v50） | 不能 | 能 | 能 | Kindle（KFX）把透明处显示成黑色（《绍宋》章标题图，2026-10-06 真机；《飘》章头图整块黑，2026-10-12），掌阅显示正确。只修复以后优化器不再合成；KFX 写出器 18 起写进 KFX 时合成（只对 Kindle，书里的 EPUB 不动，2026-10-12 用户定，真机 ✓） |
@@ -93,7 +93,7 @@ dir = "documents"
 | xochitl | 正文链接只认同一文件里的 `#锚点` | 注释搬到同一文件的章末 | 只有 Move（`repair_note_links`，[排版 · Move：保证注释能点](typesetting.md#move保证注释能点)） |
 | xochitl | 不认行内样式；`padding` 不认 | 居中、居右换成类；补留白用 `margin` | 不做 |
 | xochitl | NCX 的 `dtb:uid` 和 OPF 不一致时不显示目录 | 对齐成一致 | 做 |
-| xochitl | 背景图会平铺满页、盖住正文 | 去掉背景图 | 不做 |
+| xochitl | 背景图会平铺满页、盖住正文 | 去掉背景图 | 整页背景图做成整屏一块（KINDLE_RULES 10），别的去掉 |
 | xochitl | 页边距 1 时，带类的 `<body>` 里图会被吃掉约 20pt 宽 | 漫画图页去掉 body 的类 | —（只管漫画） |
 | xochitl | 找 NCX 只认 manifest 里 `id="ncx"` 的项，叫别的原生目录入口不出现 | NCX 的 manifest id 改成 `ncx` | 做 |
 | xochitl | 封面条目 id 带点、又只有 `<meta name="cover">` 时取不到封面 | `<meta name="cover">` 和 `properties="cover-image"` 同时写 | 做（EPUB 3 规范整理） |

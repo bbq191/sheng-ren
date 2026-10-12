@@ -81,7 +81,10 @@ pub use self::encoding::transcode_entries;
 /// - 9（2026-10-12）：图片照 Kindle 上的大小显示（`kindle_images.rs`，profile `image_sizing`）：Move 只认百分比宽度、不写宽度和
 ///   px/em 写的图一律拉满一行，折成 Kindle 上占内容区的百分比；掌阅的 px 是屏幕像素，px 写的、没写尺寸的折成 Kindle 的大小。
 ///   规则写在 `eink-img.css`，`<img>` 上加类（2026-10-12 三台测试书「测试-插图」量的）。
-pub const KINDLE_RULES_VERSION: &str = "9";
+/// - 10（2026-10-12）：Move 上整页背景图不再去掉，做成整屏大小的一块（`bgfit::plan_tiles`、`imgopt::page_tile`）：xochitl 从内容区
+///   左上角起按原始像素平铺、铺满整页，图块左上角内容区那么大的地方照 Kindle 画（尺寸、位置相对内容区），其余白色，每页正好一份
+///   （《飘》「第一卷」的插图、版权页底纹，《雪国》标题页）。
+pub const KINDLE_RULES_VERSION: &str = "10";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -182,6 +185,9 @@ pub struct WashOpts {
     pub image_sizing: Option<(profile::ImageSizing, KindleImageRef)>,
     /// 图片的原始宽高（路径 → 像素）：流式优化时清洗层拿到的图片条目是空占位，由调用方读文件头填上（`kindle_images` 用）。
     pub image_dims: Option<std::sync::Arc<HashMap<String, (u32, u32)>>>,
+    /// 平铺背景的阅读器（`background_no_repeat = false`）上整页背景图做成整页一块用的尺寸（[`crate::bgfit::plan_tiles`]）；
+    /// `None` 时这类背景图照旧去掉。
+    pub page_tiles: Option<crate::bgfit::TileGeometry>,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -196,7 +202,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None }
     }
 }
 
@@ -225,6 +231,9 @@ pub struct WashReport {
     pub pseudo_drm_stripped: Vec<String>,
     /// 文件名里有安卓存储不能用的字符（`*:?` 等）而改了名的条目：(原名, 新名)。流式优化器按原名回原书读图片字节。
     pub renamed: Vec<(String, String)>,
+    /// 要做成整页图块的背景图（清洗后的 zip 路径 → 画法），由优化器改图（[`crate::imgopt::page_tile`]）。
+    #[serde(skip)]
+    pub page_tiles: HashMap<String, crate::bgfit::PageTile>,
     pub css_files: usize,
     /// 保留下来的嵌入字体（规范化的名字，排好序）。
     pub kept_fonts: Vec<String>,
