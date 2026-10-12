@@ -88,7 +88,10 @@ pub use self::encoding::transcode_entries;
 ///   （《飘》「第一卷」的插图、版权页底纹，《雪国》标题页）。
 /// - 11（2026-10-12）：Move 不认 `margin-top`、页首的空元素不占地方：每章开头写了上边距的，在 `<body>` 开头垫一张透明空白图，
 ///   推到 Kindle 上同样的位置（`top_spacer.rs`，profile `margin_top = false`；《飘》「第一卷」`margin-top:47%`，差不到内容区高 5% 的不垫）。
-pub const KINDLE_RULES_VERSION: &str = "11";
+/// - 12（2026-10-12）：Kindle 的竖直距离按行距算（profile kindle `line_px` 63，一 rem ≈ 52.5px，以前按 1em = 39px，「第一卷」
+///   在 Move 上偏高）；只有一个块的页面（卷首、标题页）背景图相对 body 盒子定位（Kindle 上 body 只到标题的下外边距，`bottom` 的
+///   插图贴着它、和标题叠在一起，以前按内容区底边画）。三台截图对过。
+pub const KINDLE_RULES_VERSION: &str = "12";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -205,6 +208,8 @@ pub struct KindleImageRef {
     pub content_h: f64,
     /// 1em（正文字号）的屏幕像素。
     pub em_px: f64,
+    /// 竖直方向一 rem 的屏幕像素（Kindle 正文一行的像素 / 1.2，profile `line_px`；没写时同 `em_px`）。
+    pub v_rem_px: f64,
 }
 
 impl Default for WashOpts {

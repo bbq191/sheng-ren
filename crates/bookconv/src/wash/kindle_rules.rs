@@ -36,6 +36,21 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts
     if let Some(g) = opts.page_tiles.filter(|_| ctx.drop_single_backgrounds) {
         rep.page_tiles = crate::bgfit::plan_tiles(entries, &ctx.body_classes, g);
         ctx.tiled = rep.page_tiles.keys().cloned().collect();
+        // 背景图的位置相对 body 盒子（Kindle：body 只到最后一块的下外边距为止，`bottom` 的图贴着它，2026-10-12《飘》截图）。
+        // 用这张图的页都只有一个块、body 底差不多时，图块里的定位范围就到那里（按内容区高折过来）；`cover` 写出器按整页画，不动
+        if let Some(sg) = opts.top_spacer {
+            let boxes = super::top_spacer::page_boxes(entries, media, sg);
+            for (path, tile) in rep.page_tiles.iter_mut().filter(|(_, t)| t.fit != crate::bgfit::TileFit::Cover) {
+                let bottoms: Vec<Option<f64>> = boxes.values().filter(|b| b.bg.as_deref() == Some(path.as_str()) && !b.bg_cover).map(|b| b.body_bottom).collect();
+                let Some(lo) = bottoms.iter().copied().collect::<Option<Vec<f64>>>().filter(|v| !v.is_empty()) else { continue };
+                let (min, max) = lo.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+                if max - min > 0.03 * sg.kindle.content_h {
+                    continue;
+                }
+                let h = ((min + max) / 2.0 * f64::from(tile.area.1) / sg.kindle.content_h).round() as u32;
+                tile.area.1 = h.clamp(1, tile.area.1);
+            }
+        }
     }
     ctx.body_fonts.extend(exposed_fonts(entries, media, &ctx, &facts.fonts));
     rep.kindle_rule_edits += rewrite_entries(entries, &ctx);

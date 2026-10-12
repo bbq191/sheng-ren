@@ -309,7 +309,7 @@ impl OptimizeOpts {
                 if p.image_sizing != profile::ImageSizing::Css {
                     if let Some(k) = profile::get("kindle").filter(|k| k.font_px.is_some()) {
                         let r = k.readable(profile::Format::Kfx);
-                        let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)) };
+                        let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)), v_rem_px: k.line_px.map_or(f64::from(k.font_px.unwrap_or(16)), |l| f64::from(l) / 1.2) };
                         w.image_sizing = Some((p.image_sizing, kref));
                     }
                 }
