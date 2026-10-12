@@ -273,7 +273,7 @@ impl OptimizeOpts {
             // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
             wash: Some({
                 let w = self.wash.clone().unwrap_or_default();
-                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, ..Default::default() }
+                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, top_spacer: w.top_spacer, ..Default::default() }
             }),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
@@ -319,6 +319,13 @@ impl OptimizeOpts {
                     let area = p.output_readable();
                     let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
                     w.page_tiles = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
+                }
+                // 不认 `margin-top` 的阅读器（Move）：页首的上边距垫成空白图，照 Kindle 的位置
+                if !p.margin_top {
+                    if let Some((_, k)) = w.image_sizing {
+                        let area = p.output_readable();
+                        w.top_spacer = Some(crate::wash::SpacerGeometry { kindle: k, area: (area.width, area.height) });
+                    }
                 }
                 if p.background_images {
                     // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；

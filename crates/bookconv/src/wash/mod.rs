@@ -48,6 +48,8 @@ mod html5fix;
 mod ids;
 mod kindle_images;
 mod kindle_rules;
+mod top_spacer;
+pub use self::top_spacer::SpacerGeometry;
 mod layout;
 mod ncx_fix;
 pub mod normalize;
@@ -84,7 +86,9 @@ pub use self::encoding::transcode_entries;
 /// - 10（2026-10-12）：Move 上整页背景图不再去掉，做成整屏大小的一块（`bgfit::plan_tiles`、`imgopt::page_tile`）：xochitl 从内容区
 ///   左上角起按原始像素平铺、铺满整页，图块左上角内容区那么大的地方照 Kindle 画（尺寸、位置相对内容区），其余白色，每页正好一份
 ///   （《飘》「第一卷」的插图、版权页底纹，《雪国》标题页）。
-pub const KINDLE_RULES_VERSION: &str = "10";
+/// - 11（2026-10-12）：Move 不认 `margin-top`、页首的空元素不占地方：每章开头写了上边距的，在 `<body>` 开头垫一张透明空白图，
+///   推到 Kindle 上同样的位置（`top_spacer.rs`，profile `margin_top = false`；《飘》「第一卷」`margin-top:47%`，差不到内容区高 5% 的不垫）。
+pub const KINDLE_RULES_VERSION: &str = "11";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -188,6 +192,9 @@ pub struct WashOpts {
     /// 平铺背景的阅读器（`background_no_repeat = false`）上整页背景图做成整页一块用的尺寸（[`crate::bgfit::plan_tiles`]）；
     /// `None` 时这类背景图照旧去掉。
     pub page_tiles: Option<crate::bgfit::TileGeometry>,
+    /// 不认 `margin-top` 的阅读器（Move，profile `margin_top = false`）：每章开头写了上边距的，在 `<body>` 开头垫空白图推到
+    /// Kindle 上同样的位置（`top_spacer.rs`）。`None` 不垫。
+    pub top_spacer: Option<SpacerGeometry>,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -202,7 +209,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None }
     }
 }
 
@@ -444,6 +451,9 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         add_ua_css(entries, rep, font_scale);
         if let Some((sizing, kref)) = opts.image_sizing {
             kindle_images::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), sizing, kref);
+        }
+        if let Some(g) = opts.top_spacer {
+            top_spacer::apply(entries, rep, opts.media.as_ref(), g);
         }
         drop_nonlinear_nav(entries);
     }

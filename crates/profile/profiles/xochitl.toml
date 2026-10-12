@@ -24,6 +24,9 @@ kindle_rules = true
 # 不认背景图的 no-repeat（也不管 background-size、background-position），一律平铺：只修复的文字书里写了不平铺的背景图去掉
 # （2026-10-12 用户定，Move 测试书真机：大图偏到一边被裁、小图铺满一页）
 background_no_repeat = false
+# 不认 margin-top（padding-top 也不认），页首的空元素不占地方：每章开头写了上边距的垫一张透明空白图，推到 Kindle 上同样的位置
+# （2026-10-12 测试书「测试-标题位置」；《飘》「第一卷」margin-top:47% 在 Move 上顶在页首）
+margin_top = false
 comic_reader_margins = 1
 
 # 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比
