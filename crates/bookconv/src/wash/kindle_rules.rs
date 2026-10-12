@@ -230,11 +230,15 @@ pub(super) fn scale_vertical_entries(entries: &mut [Entry], vs: &VScale) -> usiz
     crate::util::par_map_mut(entries, |e| {
         let mut n = 0;
         if is_css_name(&e.name) {
-            let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
-            let out = scale_vertical_css(text, vs);
+            // 不是 UTF-8 的样式表（《嘯風山莊》的 CSS.css 是 Big5）按单字节原样读写，同 `rewrite_entries`
+            let (text, latin1) = match std::str::from_utf8(&e.data) {
+                Ok(t) => (Cow::Borrowed(t), false),
+                Err(_) => (Cow::Owned(crate::util::latin1_decode(&e.data)), true),
+            };
+            let out = scale_vertical_css(&text, vs);
             if out != text {
                 n = 1;
-                e.data = out.into_bytes();
+                e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
             }
             return n;
         }
