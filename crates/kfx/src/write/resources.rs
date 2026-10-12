@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// 图片在书里怎么用。Kindle 把正文图片的透明处画成黑色（《绍宋》章标题图、《飘》章头图整块黑，2026-10-05、10-12 真机），
+/// 所以正文图片带透明的 PNG 写进 KFX 时合成白底——透明处本来就该露出白纸，合成以后看到的就是原意；书里的 EPUB 不动
+/// （文字书只修复，2026-10-08 起优化器不再合成白底，`image_alpha` 只剩这里一处生效）。背景图不合成：Kindle 的 PNG 背景
+/// 透明处照常露出背景色（`$284` 真机 ✓）。同一张图第一次按哪种用法登记就按哪种处理（同一个文件又当正文图又当背景的书没见过）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ImageUse {
+    /// `<img>`、SVG `<image>`、整页图、封面。
+    Content,
+    /// CSS 背景图。
+    Background,
+}
+
 pub(super) struct Res {
     /// 资源实体（`$164`）的名字。
     pub(super) name: String,
@@ -30,7 +42,8 @@ impl ResourceStore {
     }
 
     /// 登记一张图片，返回资源编号；取不到（找不到、格式不支持）的往 `warnings` 记一条、返回 `None`。
-    pub(super) fn register(&mut self, path: &str, warnings: &mut Vec<String>) -> Option<usize> {
+    /// `use_` 是第一次用到它的地方：正文图片（`<img>`、整页图、封面）带透明的 PNG 合成白底，背景图原样（见 [`ImageUse`]）。
+    pub(super) fn register(&mut self, path: &str, use_: ImageUse, warnings: &mut Vec<String>) -> Option<usize> {
         if let Some(&i) = self.by_path.get(path) {
             return Some(i);
         }
@@ -51,7 +64,12 @@ impl ResourceStore {
             }
         };
         // 字节搬进资源，不复制（大漫画几百 MB）；同一路径以后走上面的 `by_path`，不会再来取。
-        let (bytes, _) = self.images.remove(path)?;
+        let (mut bytes, _) = self.images.remove(path)?;
+        if use_ == ImageUse::Content && format == FORMAT_PNG {
+            if let Some(flat) = bookconv::imgopt::flatten_transparent_png(&bytes, bookconv::imgopt::MAX_COMIC_DECODE_PIXELS) {
+                bytes = flat;
+            }
+        }
         let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
             .with_guessed_format()
             .ok()

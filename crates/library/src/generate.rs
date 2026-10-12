@@ -154,6 +154,10 @@ impl Library {
             if device.text_repair_only && device.kindle_rules && bookconv::wash::KINDLE_RULES_VERSION != "1" {
                 seg.push_str(bookconv::wash::KINDLE_RULES_VERSION);
             }
+            // 阅读器不认背景图的 no-repeat（profile 的 background_no_repeat = false）：`kindle_rules` 去掉不平铺的背景图，带个 `g`
+            if device.text_repair_only && device.kindle_rules && !device.background_no_repeat {
+                seg.push('g');
+            }
             // 统计正文字号时 `@media` 的 `device-width` 等按屏幕求（`MediaEnv::for_format`，第 6 版起）：自定义模式改了屏幕也要重建
             if device.text_repair_only && device.kindle_rules {
                 seg.push_str(&format!("@{}x{}", device.screen.width, device.screen.height));

@@ -400,12 +400,17 @@ impl Builder {
             p.color(P_BACKGROUND, bg);
         }
         p.extend(border_props(c));
-        // 图片只认百分比宽度（写出器 9）：优化器给带图注的竖长图写的 `width:P%`（`bookconv::capfit`）、书里样式表的 `width:40%`；
-        // 别的单位（em、px）没对过样本，不写
-        let image_pct = matches!(b.kind, Kind::Image { .. }) && matches!(c.width, Some(Len::Percent(_)));
-        if matches!(b.ty, Some(NODE_TABLE | NODE_HR)) || image_pct {
+        // 图片的宽度：百分比（写出器 9：优化器给带图注的竖长图写的 `width:P%`、书里样式表的 `width:40%`），写出器 19 起 em、pt
+        // 也照写（换算成 em，另加最大宽度 100%，同有宽度的块）——不写的话 Kindle 按原图像素显示，和掌阅、Move 不一样：
+        // 《飘》图标注释号 `width:0.65em` 的 70×95 小图在 Kindle 上比字大好几倍，《绍宋》`width:7.5pt` 的图标同样
+        // （2026-10-12 `tools/kfx/unify.py` 比图片查出来）
+        let image_width = matches!(b.kind, Kind::Image { .. }) && c.width.is_some();
+        if matches!(b.ty, Some(NODE_TABLE | NODE_HR)) || image_width {
             if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
                 p.set(P_WIDTH, v);
+                if image_width && !matches!(c.width, Some(Len::Percent(_))) {
+                    p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
+                }
             }
         } else if b.ty.is_none() && !matches!(b.kind, Kind::Image { .. }) {
             // 有宽度的块（Send to Kindle 同样：宽度照写、带 `$546: $377`，em 宽度另加最大宽度 100%，左右外边距 auto 的按它对齐：

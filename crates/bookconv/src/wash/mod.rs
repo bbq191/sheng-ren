@@ -71,7 +71,13 @@ pub use self::encoding::transcode_entries;
 ///   （层叠展开简写）；正文字体、负外边距、body 上的类改在同一趟全书层叠里算（`kindle_rules::book_facts`，同 KFX 写出器的口径：
 ///   以前另按原始 HTML 和只认类、裸标签的字体表算）；改写样式表按 `cascade::rule_spans` 逐条规则（以前是只认最内层花括号的正则，
 ///   字符串、注释里的花括号会切错）；指纹 `u` 段带上屏幕；CSS 文本工具收成一份的边角变化（见 `OPTIMIZE_VERSION` 55）。测试书掌阅、Move 逐字节不变。
-pub const KINDLE_RULES_VERSION: &str = "6";
+/// - 7（2026-10-12）：改完自查正文字体（`kindle_rules::exposed_fonts`）：删掉胜出的正文字体声明后，层叠里被它盖住的字体会露出来，
+///   接管的字数比它本来就生效的多就一并去掉（《嘯風山莊》两份样式表都给正文写了字体，21.9 万字的正文以前显示成先链的那一种）。
+///   测试书只有《嘯風山莊》变，可见文字不变。
+/// - 8（2026-10-12）：阅读器的两个怪癖（用户定）：不认 `rgba()` 的（掌阅）把规则里的 `rgba()` 换成按白底合成的不透明色
+///   （《飘》「第一卷」标题的半透明白条作废后字看不见）；不认背景图 `no-repeat` 的（Move，profile `background_no_repeat`）
+///   去掉写了不平铺的背景图、背景色照留（大图偏到一边被裁、小图平铺满页）。
+pub const KINDLE_RULES_VERSION: &str = "8";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -161,6 +167,9 @@ pub struct WashOpts {
     pub keep_fonts: HashSet<String>,
     /// 阅读器认 `rgba()` 颜色（profile 的 `css_rgba`，缺省 `true`）；`false` 时换成不透明写法（见 `cssunlock::rgba_to_opaque`）。
     pub css_rgba: bool,
+    /// 阅读器认背景图的 `no-repeat`（profile 的 `background_no_repeat`，缺省 `true`）；`false` 时 `kindle_rules` 把写了不平铺的
+    /// 背景图去掉（`kindle_rules::rewrite_decls`）。
+    pub background_no_repeat: bool,
     /// `kindle_rules` 统计正文字号时求 `@media`、`<link media>` 用的环境（阅读模式的产物阅读范围、屏幕、黑白彩色，
     /// [`crate::cascade::MediaEnv::for_format`]）；`None`＝求值不了的特性条件一律不成立。
     pub media: Option<crate::cascade::MediaEnv>,
@@ -168,7 +177,7 @@ pub struct WashOpts {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, mode: WashMode::Full, media: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None }
     }
 }
 
@@ -403,7 +412,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     });
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
     if opts.mode.kindle_rules() {
-        let font_scale = kindle_rules::apply(entries, rep, opts.media.as_ref());
+        let font_scale = kindle_rules::apply(entries, rep, opts);
         add_ua_css(entries, rep, font_scale);
         drop_nonlinear_nav(entries);
     }

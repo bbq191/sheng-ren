@@ -65,6 +65,29 @@ def text_nodes(E):
                 yield from walk(n, [])
 
 
+def image_nodes(E):
+    """按阅读顺序走遍各版面的 storyline，产出 (资源名, 节点链, 整页单图)：图片节点（`$159: $271`）引用的资源（`$175`）。
+    节点链同 [`text_nodes`]（从版面顶层到这个图片节点）；整页单图是这个 storyline 里只有它一个节点（只有一张图的文档，写出器
+    写成整页图片版面，版面本身居中，图片节点不写对齐）。"""
+    alone = False
+
+    def walk(n, chain):
+        chain = chain + [n]
+        if n.get('$159') == '$271' and isinstance(n.get('$175'), str):
+            yield n['$175'], chain, alone
+        for k in n.get('$146', []) or []:
+            if isinstance(k, dict):
+                yield from walk(k, chain)
+
+    for s in reading_order(E):
+        for pt in E['$260'][s]['$141']:
+            sl = E['$259'].get(pt.get('$176'))
+            top = (sl or {}).get('$146', [])
+            alone = len(top) == 1 and isinstance(top[0], dict) and top[0].get('$159') == '$271'
+            for n in top:
+                yield from walk(n, [])
+
+
 def short(v, depth=0, maxlen=200):
     """值的简短写法（长字符串、长列表截断；blob/资源写字节数）。"""
     if isinstance(v, dict) and ('$blob' in v or '$raw' in v or '$clob' in v):

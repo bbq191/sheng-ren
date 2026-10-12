@@ -312,6 +312,37 @@ fn background_image_like_amazon() {
     assert!(story.contains(&format!("({BG_PAGE_BOUNDS}, Struct(")), "{story}");
 }
 
+/// 正文图片带透明的 PNG 合成白底再写进 KFX（Kindle 把透明处画成黑色：《飘》章头图整块黑，2026-10-12），背景图原样。
+#[test]
+fn transparent_content_png_flattened_background_kept() {
+    let rgba = |a: u8| {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, a])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        png
+    };
+    let (fg, bg) = (rgba(0), rgba(10));
+    let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="O/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+    w.put("O/c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="s" href="S/a.css" media-type="text/css"/><item id="f" href="I/fg.png" media-type="image/png"/><item id="b" href="I/bg.png" media-type="image/png"/><item id="c1" href="T/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+    w.put("O/S/a.css", br#"body{background-image:url("../I/bg.png")}"#).unwrap();
+    w.put("O/I/fg.png", &fg).unwrap();
+    w.put("O/I/bg.png", &bg).unwrap();
+    w.put("O/T/c1.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="../S/a.css"/></head><body><p>x</p><div><img src="../I/fg.png"/></div><p>y</p></body></html>"#).unwrap();
+    let epub = w.finish().unwrap().into_inner();
+    let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let c = crate::container::Container::parse(&kfx).unwrap();
+    let media: Vec<image::DynamicImage> = c
+        .entities
+        .iter()
+        .filter(|e| e.ty == T_RAW_MEDIA)
+        .filter_map(|e| if let crate::container::Body::Raw(b) = &e.body { image::load_from_memory(b).ok() } else { None })
+        .collect();
+    assert_eq!(media.len(), 2, "两张图都登记了");
+    assert!(media.iter().any(|m| !m.color().has_alpha() && m.to_rgb8().pixels().all(|p| p.0 == [255, 255, 255])), "正文图片：全透明的黑合成白");
+    assert!(media.iter().any(|m| m.color().has_alpha()), "背景图原样带透明");
+}
+
 /// SVG 包着的封面图（`<svg><image xlink:href>`，属性在 xlink 命名空间）写成整页图片版面（2026-10-08：以前找不到属性，封面页丢掉）。
 #[test]
 fn svg_wrapped_cover_kept() {
@@ -401,7 +432,9 @@ let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><h
     let want = |p: f64| format!("({P_WIDTH}, {:?})", num(p, U_PERCENT));
     assert!(styles_of(r#"<div><img src="i.png" style="width:61%"/></div>"#).contains(&want(61.0)), "行内百分比");
     assert!(styles_of(r#"<div><img class="l" src="i.png"/></div>"#).contains(&want(40.0)), "样式表百分比");
-    assert!(!styles_of(r#"<div><img class="e" src="i.png"/></div>"#).contains(&format!("({P_WIDTH}, ")), "em 宽度不写");
+    // em 宽度照写、加最大宽度 100%（写出器 19：以前不写，Kindle 按原图像素显示，《飘》图标注释号比字大好几倍）
+    let em = styles_of(r#"<div><img class="e" src="i.png"/></div>"#);
+    assert!(em.contains(&format!("({P_WIDTH}, {:?})", num(10.0, U_EM))) && em.contains(&format!("({P_MAX_WIDTH}, {:?})", num(100.0, U_PERCENT))), "em 宽度照写：{em}");
     assert!(!styles_of(r#"<div><img src="i.png"/></div>"#).contains(&format!("({P_WIDTH}, ")), "没写宽度");
 }
 

@@ -269,12 +269,11 @@ impl OptimizeOpts {
     fn repair_only(&self) -> Self {
         let TextMode::Repair { kindle_rules, note_links } = self.text_mode else { return self.clone() };
         OptimizeOpts {
-            // 只修复不看清洗层的其他选项，但 `media`（`kindle_rules` 统计正文字号求 `@media` 用）要带过去：以前整个换成缺省值，
-            // `for_profile` 填的阅读范围丢了，特性条件一律不成立（KINDLE_RULES 7 修）
-            wash: Some(crate::wash::WashOpts {
-                mode: crate::wash::WashMode::Repair { kindle_rules },
-                media: self.wash.as_ref().and_then(|w| w.media),
-                ..Default::default()
+            // 只修复不看清洗层的其他选项，但 `kindle_rules` 要的阅读器怪癖带过去：`media`（统计正文字号求 `@media`；以前整个
+            // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
+            wash: Some({
+                let w = self.wash.clone().unwrap_or_default();
+                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, ..Default::default() }
             }),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
@@ -305,7 +304,7 @@ impl OptimizeOpts {
         OptimizeOpts {
             grayscale: !p.color,
             wash: Some({
-                let mut w = crate::wash::WashOpts { css_rgba: p.css_rgba, media: Some(crate::cascade::MediaEnv::for_format(p, p.format())), ..Default::default() };
+                let mut w = crate::wash::WashOpts { css_rgba: p.css_rgba, background_no_repeat: p.background_no_repeat, media: Some(crate::cascade::MediaEnv::for_format(p, p.format())), ..Default::default() };
                 if p.background_images {
                     // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
                     // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`

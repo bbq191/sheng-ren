@@ -18,18 +18,69 @@ use super::*;
 use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
 /// 照 Send to Kindle 的规则改书的样式表（独立的 `.css`、`<style>`）和行内 `style`；改了的声明数记进 `rep.kindle_rule_edits`。
-pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>) -> Option<f64> {
+pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts) -> Option<f64> {
+    let media = opts.media.as_ref();
     let facts = book_facts(entries, media);
     let font_scale = font_scale(entries, facts.base_font_size);
-    let ctx = Ctx { body_font: facts.body_font, body_classes: facts.body_classes, neg_left: facts.neg[0], neg_right: facts.neg[1], font_scale };
-    let edits = crate::util::par_map_mut(entries, |e| {
+    let mut ctx = Ctx {
+        body_fonts: facts.body_font.iter().cloned().collect(),
+        body_classes: facts.body_classes,
+        neg_left: facts.neg[0],
+        neg_right: facts.neg[1],
+        font_scale,
+        opaque_rgba: !opts.css_rgba,
+        drop_single_backgrounds: !opts.background_no_repeat,
+    };
+    ctx.body_fonts.extend(exposed_fonts(entries, media, &ctx, &facts.fonts));
+    rep.kindle_rule_edits += rewrite_entries(entries, &ctx);
+    ctx.font_scale.filter(|&k| k != 1.0)
+}
+
+/// 改完自查（正文字体）：Kindle 把正文字体写成 `default`，盖过书里所有的字体声明；这里只能删声明，删掉胜出的那条，层叠里被它
+/// 盖住的另一条就露出来了（《嘯風山莊》每章先链 `idstyles.css` 的 `p.p{AR MingU30 Light}`、后链 `CSS.css` 的
+/// `p.p{AR MingU30 DemiBold}`：删了 DemiBold，21.9 万字的正文显示成 Light，2026-10-12）。所以在样式表、章节的副本上照改一遍，
+/// 用同一套层叠（[`book_facts`]）重数各字体的字数：哪个字体接管的字数比它本来就生效的还多，就是露出来的，一并当正文字体去掉，
+/// 再查一轮（最多 3 轮）。代价：露出来的字体本来就生效的那些字（《嘯風山莊》2575 字）也换成阅读器字体，Kindle 上它们仍是原字体。
+fn exposed_fonts(entries: &[Entry], media: Option<&MediaEnv>, ctx: &Ctx, before: &HashMap<Option<String>, usize>) -> HashSet<String> {
+    let mut found = HashSet::new();
+    if ctx.body_fonts.is_empty() {
+        return found;
+    }
+    let total: usize = before.values().sum();
+    let mut trial = Ctx { body_fonts: ctx.body_fonts.clone(), body_classes: ctx.body_classes.clone(), font_scale: None, ..*ctx };
+    for _ in 0..3 {
+        let mut copy: Vec<Entry> = entries.iter().filter(|e| is_css_name(&e.name) || is_chapter_entry(e)).cloned().collect();
+        rewrite_entries(&mut copy, &trial);
+        let after = book_facts(&copy, media).fonts;
+        let new: Vec<String> = after
+            .iter()
+            .filter_map(|(f, &n)| {
+                let f = f.as_ref()?;
+                let had = before.get(&Some(f.clone())).copied().unwrap_or(0);
+                // 接管的字数多过本来就有的、也不是零星几个字（全书的千分之一以上）
+                let gained = n.saturating_sub(had);
+                (!trial.body_fonts.contains(f) && gained > had && gained * 1000 > total).then(|| f.clone())
+            })
+            .collect();
+        if new.is_empty() {
+            break;
+        }
+        found.extend(new.iter().cloned());
+        trial.body_fonts.extend(new);
+    }
+    found
+}
+
+/// 照 `ctx` 改全书的样式表（独立的 `.css`、`<style>`）和行内 `style`，返回改了的声明数。
+fn rewrite_entries(entries: &mut [Entry], ctx: &Ctx) -> usize {
+    crate::util::par_map_mut(entries, |e| {
         let mut n = 0;
         if is_css_name(&e.name) {
             let out = match std::str::from_utf8(&e.data) {
-                Ok(text) => rewrite_css(text, &ctx, &mut n).into_bytes(),
+                Ok(text) => rewrite_css(text, ctx, &mut n).into_bytes(),
                 // 不是 UTF-8 的样式表（《啸风山庄》的 CSS.css 是 Big5）：按单字节原样读写。CSS 的语法都是 ASCII，要改的值（颜色、边距）
                 // 也是，别的字节（Big5 写的字体名）原样留着
-                Err(_) => crate::util::latin1_encode(&rewrite_css(&crate::util::latin1_decode(&e.data), &ctx, &mut n)),
+                Err(_) => crate::util::latin1_encode(&rewrite_css(&crate::util::latin1_decode(&e.data), ctx, &mut n)),
             };
             if n > 0 {
                 e.data = out;
@@ -42,7 +93,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
         let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
         let s = html::edit_style_attrs(text, |t, value| {
             let body = t.name.eq_ignore_ascii_case("body");
-            let (v, k) = rewrite_decls(value, body, &ctx);
+            let (v, k) = rewrite_decls(value, body, ctx);
             n += k;
             if k == 0 {
                 html::Edit::Keep
@@ -53,25 +104,31 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
             }
         })
         .into_owned();
-        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(rewrite_css(css, &ctx, &mut n))).into_owned();
+        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(rewrite_css(css, ctx, &mut n))).into_owned();
         if n > 0 {
             e.data = s.into_bytes();
         }
         n
-    });
-    rep.kindle_rule_edits += edits.into_iter().sum::<usize>();
-    ctx.font_scale.filter(|&k| k != 1.0)
+    })
+    .into_iter()
+    .sum()
 }
 
 struct Ctx {
-    /// 正文字体（规范化：去引号、小写）。
-    body_font: Option<String>,
+    /// 正文字体（规范化：去引号、小写）：全书正文的计算字体，加上去掉它以后露出来的（[`exposed_fonts`]）。空＝正文没写字体。
+    body_fonts: HashSet<String>,
     /// 只用在 `<body>` 上的类（别的元素也用的不算：改它的边距会连带改别处）。
     body_classes: HashSet<String>,
     neg_left: bool,
     neg_right: bool,
     /// 字号要乘的系数（1 / 全书正文字号，[`font_scale`]），不动字号的 `None`。
     font_scale: Option<f64>,
+    /// 阅读器不认 `rgba()`（profile `css_rgba = false`，掌阅）：规则、行内样式里的 `rgba()` 按白底合成不透明色
+    /// （[`crate::cssunlock::rgba_to_opaque`]）。《飘》「第一卷」标题底下的 `rgba(255,255,255,0.8)` 白条在掌阅上整条作废，
+    /// 深色小字压在插图最密处看不见（2026-10-12 测试书：只有改成 `#fff` 的看得见）。
+    opaque_rgba: bool,
+    /// 阅读器不认背景图的 `no-repeat`（profile `background_no_repeat = false`，xochitl）：写了不平铺的背景图去掉，背景色照留。
+    drop_single_backgrounds: bool,
 }
 
 /// 字号归一要乘的系数：1 / 全书正文字号 `base`（[`BookFacts::base_font_size`]；正文已经是 1em 的是 1）。
@@ -116,6 +173,8 @@ struct BookFacts {
     /// 正文字体（小写）：每段文字按所在块的计算字体计字数，取最多的，字数一样多的取名字小的、没写字体的排最前（同 KFX 写出器的
     /// `TextCounts::body_font`）；`None`＝正文没写字体。
     body_font: Option<String>,
+    /// 所在块的字体（小写，没写的 `None`）→ 字数（不算空白），全书合计：自查时比去掉正文字体前后的变化（[`exposed_fonts`]）。
+    fonts: HashMap<Option<String>, usize>,
     /// 只用在 `<body>` 上的类（别的元素也用的不算：改它的边距会连带改别处）。
     body_classes: HashSet<String>,
     /// body 的左、右边距要不要照留：用到负的左（右）外边距的文件的字数多过没用到的（Kindle 按文件定：文件里有块的这一侧外边距
@@ -239,7 +298,8 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     }
     BookFacts {
         base_font_size: crate::cascade::body_font_size(&sizes),
-        body_font: fonts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).and_then(|(f, _)| f),
+        body_font: fonts.iter().max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0))).and_then(|(f, _)| f.clone()),
+        fonts,
         body_classes: on_body.difference(&elsewhere).cloned().collect(),
         neg: [chars[0].0 > chars[0].1, chars[1].0 > chars[1].1],
     }
@@ -295,6 +355,16 @@ fn rewrite_decls(text: &str, body: bool, ctx: &Ctx) -> (String, usize) {
     let has_bg = bg.is_some();
     let bg = bg.unwrap_or(0xFFFF_FFFF);
     let mut has_color = false;
+    // 这条规则写了不平铺（`no-repeat`、`repeat-x`、`repeat-y`、`space`、`round`）：不认 `no-repeat` 的阅读器会平铺它，去掉背景图
+    let single_bg = ctx.drop_single_backgrounds
+        && decls.iter().any(|d| {
+            let v = strip_important(d.value).0.to_ascii_lowercase();
+            match d.prop.to_ascii_lowercase().as_str() {
+                "background-repeat" => v.split(|c: char| c.is_whitespace() || c == ',').any(|t| !t.is_empty() && t != "repeat"),
+                "background" => crate::cascade::tokens(&v).0.iter().any(|t| matches!(*t, "no-repeat" | "repeat-x" | "repeat-y" | "space" | "round")),
+                _ => false,
+            }
+        });
     for d in &decls {
         out.push_str(&text[last..d.start]);
         last = d.start + d.raw.len();
@@ -303,7 +373,7 @@ fn rewrite_decls(text: &str, body: bool, ctx: &Ctx) -> (String, usize) {
         let lead = &d.raw[..d.raw.find(|c: char| !c.is_whitespace()).unwrap_or(0)];
         let replaced: Option<String> = match prop.as_str() {
             // 整条去掉：留下备选（「st」「宋体」）的话阅读器会去找这些系统字体，就不是阅读器自己的字体了（Kindle 写 `default` 排第一）
-            "font-family" => body_font_removed(value, ctx.body_font.as_deref()).map(|_| String::new()),
+            "font-family" => body_font_removed(value, &ctx.body_fonts).map(|_| String::new()),
             // `font` 简写里的字体族是正文字体：拆成分项、不写字体族（字号、行高、粗斜体照原值）
             "font" => rewrite_font_shorthand(value, imp, lead, body, ctx),
             "font-size" => ctx.font_scale.and_then(|k| scaled_font_size(value, body, k)).map(|v| format!("{lead}font-size:{v}{imp};")),
@@ -323,6 +393,11 @@ fn rewrite_decls(text: &str, body: bool, ctx: &Ctx) -> (String, usize) {
             "margin-left" | "padding-left" if body && !ctx.neg_left => Some(String::new()),
             "margin-right" | "padding-right" if body && !ctx.neg_right => Some(String::new()),
             "margin" | "padding" if body => split_box(&prop, d.value, lead, ctx.neg_left, ctx.neg_right),
+            // 不平铺的背景图在不认 `no-repeat` 的阅读器上去掉；简写里的背景色照留（换成分项）
+            "background-image" if single_bg => Some(String::new()),
+            "background" if single_bg && value.to_ascii_lowercase().contains("url(") => {
+                Some(crate::cssunlock::background_color(value).map(|c| format!("{lead}background-color:{c}{imp};")).unwrap_or_default())
+            }
             _ => None,
         };
         match replaced {
@@ -334,6 +409,12 @@ fn rewrite_decls(text: &str, body: bool, ctx: &Ctx) -> (String, usize) {
         }
     }
     out.push_str(&text[last..]);
+    // 阅读器不认 `rgba()`：整条声明会作废，换成按白底合成的不透明色（掌阅）
+    if ctx.opaque_rgba && out.to_ascii_lowercase().contains("rgba(") {
+        let before = out.clone();
+        out = crate::cssunlock::rgba_to_opaque(&before).into_owned();
+        changed += before.to_ascii_lowercase().matches("rgba(").count() - out.to_ascii_lowercase().matches("rgba(").count();
+    }
     // 写了深背景、没写文字颜色：缺省的黑字看不清时补上
     if !has_color && bg != 0xFFFF_FFFF && contrast(0xFF00_0000, bg) < 4.5 {
         let adj = ensure_contrast(0xFF00_0000, bg);
@@ -351,18 +432,17 @@ fn strip_important(v: &str) -> (&str, &'static str) {
 }
 
 /// `font-family` 的第一个是正文字体时去掉它，返回剩下的备选（可能为空）；不是正文字体返回 `None`。
-fn body_font_removed(value: &str, body: Option<&str>) -> Option<String> {
-    let body = body?;
+fn body_font_removed(value: &str, body: &HashSet<String>) -> Option<String> {
     let names: Vec<&str> = value.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
     let first = super::fonts::norm_family(names.first()?)?;
-    (first == body).then(|| names[1..].join(","))
+    body.contains(&first).then(|| names[1..].join(","))
 }
 
 /// `font` 简写里的字体族第一个是正文字体：换成分项，不写字体族（交给阅读器的字体），别的照简写的意思写全——简写会把没写的项
 /// 重置成缺省值，所以没写的粗细、斜体、小型大写、行高写 `normal`（`font-stretch` 只在写了时写：认它的阅读器少）。
 /// 不是正文字体、拆不清的返回 `None`（不动）。
-fn font_without_body_family(f: &FontShorthand, size: &str, imp: &str, lead: &str, body: Option<&str>) -> Option<String> {
-    if super::fonts::norm_family(f.family)? != body? {
+fn font_without_body_family(f: &FontShorthand, size: &str, imp: &str, lead: &str, body: &HashSet<String>) -> Option<String> {
+    if !body.contains(&super::fonts::norm_family(f.family)?) {
         return None;
     }
     let mut s = String::from(lead);
@@ -384,7 +464,7 @@ fn rewrite_font_shorthand(value: &str, imp: &str, lead: &str, body: bool, ctx: &
     let f = parse_font_shorthand(value)?;
     let scaled = ctx.font_scale.and_then(|k| scaled_font_size(f.size, body, k));
     let size = scaled.as_deref().unwrap_or(f.size);
-    if let Some(s) = font_without_body_family(&f, size, imp, lead, ctx.body_font.as_deref()) {
+    if let Some(s) = font_without_body_family(&f, size, imp, lead, &ctx.body_fonts) {
         return Some(s);
     }
     let new = scaled?;
@@ -461,7 +541,7 @@ mod tests {
     use super::*;
 
     fn ctx() -> Ctx {
-        Ctx { body_font: Some("宋体".into()), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None }
+        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false }
     }
 
     #[test]
@@ -575,6 +655,54 @@ mod tests {
         assert_eq!(f.body_font.as_deref(), Some("fzlantingsong"));
         assert_eq!(f.neg, [true, false]);
         assert_eq!(f.body_classes, HashSet::from(["song".to_string()]));
+    }
+
+    /// 改完自查：两份样式表都给正文写了字体，后链的胜出；删掉胜出的那条，先链的那条不能露出来（《嘯風山莊》）。
+    /// 露出来的字体本来就生效的少数字一起换成阅读器字体；别的字体（标题的黑体）不动。
+    #[test]
+    fn exposed_body_font_removed_too() {
+        let e = |name: &str, data: &str| Entry { name: name.into(), data: data.as_bytes().to_vec() };
+        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="a.css"/><link rel="stylesheet" href="b.css"/></head><body>{body}</body></html>"#);
+        let long = "正文".repeat(200);
+        let mut book = vec![
+            e("OEBPS/a.css", r#"p.p{font-family:"Light", serif} p.t{font-family:"Light"} h1{font-family:"Hei"}"#),
+            e("OEBPS/b.css", r#"p.p{font-family:"DemiBold", serif}"#),
+            e("OEBPS/c1.xhtml", &page(&format!(r#"<h1>标题标题</h1><p class="p">{long}</p><p class="t">年表年表</p>"#))),
+        ];
+        let mut rep = WashReport::default();
+        apply(&mut book, &mut rep, &WashOpts::default());
+        let css = |i: usize| String::from_utf8(book[i].data.clone()).unwrap();
+        assert_eq!(css(1), "p.p{}", "胜出的正文字体去掉");
+        assert_eq!(css(0), r#"p.p{} p.t{} h1{font-family:"Hei"}"#, "露出来的 Light 一并去掉，黑体不动");
+        let after = book_facts(&book, None);
+        assert_eq!(after.body_font, None, "正文按层叠算没有指定字体");
+    }
+
+    /// 不认 `rgba()` 的阅读器（掌阅）：规则、行内样式里的 `rgba()` 按白底合成不透明色（《飘》「第一卷」标题的半透明白条）；
+    /// 认的（Kindle 那边不过 `kindle_rules`，Move 认）不动。
+    #[test]
+    fn rgba_made_opaque_only_when_reader_lacks_it() {
+        let mut n = 0;
+        let c = Ctx { opaque_rgba: true, ..ctx() };
+        assert_eq!(rewrite_css("h1{color:#2e5b60;background-color:rgba(255,255,255,0.8)}", &c, &mut n), "h1{color:#2e5b60;background-color:#ffffff}");
+        assert_eq!(rewrite_css(".x{border-color:rgba(0,0,0,0.5)}", &c, &mut n), ".x{border-color:#808080}");
+        let keep = "h1{background-color:rgba(255,255,255,0.8)}";
+        assert_eq!(rewrite_css(keep, &ctx(), &mut n), keep);
+    }
+
+    /// 不认 `no-repeat` 的阅读器（Move）：写了不平铺的背景图去掉（简写里的背景色照留）；本来就平铺的、认 `no-repeat` 的不动。
+    #[test]
+    fn single_backgrounds_dropped_when_reader_tiles() {
+        let mut n = 0;
+        let c = Ctx { drop_single_backgrounds: true, ..ctx() };
+        assert_eq!(rewrite_css(r#"body.fen{background:url('a.jpg') no-repeat bottom center;background-size:100% auto;background-color:#fff}"#, &c, &mut n), "body.fen{background-size:100% auto;background-color:#fff}");
+        assert_eq!(rewrite_css(r#".a{background:#eee url(a.png) no-repeat}"#, &c, &mut n), ".a{background-color:#eee;}");
+        assert_eq!(rewrite_css(r#".b{background-image:url(b.png);background-repeat:repeat-x}"#, &c, &mut n), ".b{background-repeat:repeat-x}");
+        for keep in [r#".t{background-image:url(paper.jpg)}"#, r#".t{background:url(paper.jpg) repeat}"#] {
+            assert_eq!(rewrite_css(keep, &c, &mut n), keep, "本来就平铺的照留");
+        }
+        let keep = r#".a{background:url(a.png) no-repeat}"#;
+        assert_eq!(rewrite_css(keep, &ctx(), &mut n), keep, "认 no-repeat 的阅读器不动");
     }
 
     #[test]

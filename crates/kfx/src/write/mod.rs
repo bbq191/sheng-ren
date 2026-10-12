@@ -81,7 +81,12 @@ pub use entities::container_id;
 ///   引号外的 `;` 切——以前不认引号，`[style="text-align: center;"]{text-indent:0}` 这种属性选择器被 `;` 切坏、整条丢掉，
 ///   现在照 CSS 生效（《消失的爱人》居中段的首行缩进写 0，24 本里只有它变）；注释换成空格（`1px/**/solid` 是两个词）、四值简写
 ///   拆不清（多于 4 个值、`calc()` 里有空格）的整条不认、`url()` 按 `html::css_urls` 认、`@font-face` 按规则解析找，测试书没碰到。
-pub const WRITER_VERSION: &str = "17";
+/// - 18（2026-10-12）：正文图片（`<img>`、整页图、封面）带透明的 PNG 合成白底再写进去（`ResourceStore::register` 的
+///   `ImageUse::Content`），背景图不动——Kindle 把透明处画成黑色（《飘》章头图整块黑，真机截图）；书里的 EPUB 不动。
+/// - 19（2026-10-12）：图片写成 em、pt 的宽度也照写（换算成 em，加最大宽度 100%）；以前只写百分比，别的按原图像素显示，
+///   《飘》图标注释号、《绍宋》小图标在 Kindle 上比掌阅、Move 大好几倍；`<img width="60%">` 这种百分比的宽度属性当宽度
+///   （`bookconv::cascade::presentational_hints`，《金庸》639 张插图、《飘》《春雪》）。都是 `tools/kfx/unify.py` 比图片查出来的。
+pub const WRITER_VERSION: &str = "19";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -145,6 +150,11 @@ pub struct Opts {
 pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) -> Result<String, String> {
     let mut warnings = Vec::new();
     let book = epubbook::load_from(epub, &mut warnings)?;
+    let dims: HashMap<String, (u32, u32)> = book
+        .images
+        .iter()
+        .filter_map(|i| image::ImageReader::new(std::io::Cursor::new(&i.bytes)).with_guessed_format().ok()?.into_dimensions().ok().map(|d| (i.path.clone(), d)))
+        .collect();
     let mut parsed = parse_docs(&book, opts.media, true)?;
     let deep = parsed.iter().map(|d| block_depth(&d.3)).max().unwrap_or(0) > DEEP_NESTING;
     let book = &book;
@@ -153,7 +163,7 @@ pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
         let stats = analyze(book, &mut parsed);
         let mut out = format!("#base\t{}\t{}\n", stats.base_fs, stats.base_lh * stats.base_fs);
         for (_, _, _, blocks) in &parsed {
-            dump_blocks(blocks, &mut out);
+            dump_blocks(blocks, &dims, &mut out);
         }
         out
     })
@@ -197,7 +207,7 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
     let mut res = ResourceStore::new(images);
     let mut syms = SymbolAlloc::new();
     // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字（见 [`SymbolAlloc::reserve_cover`]）。
-    if let Some(i) = book.cover.as_deref().and_then(|c| res.register(c, &mut warnings)) {
+    if let Some(i) = book.cover.as_deref().and_then(|c| res.register(c, ImageUse::Content, &mut warnings)) {
         syms.reserve_cover(&res[i].name)?;
     }
     let id = opts.fixed_id.unwrap_or(book.meta.stable_id);
@@ -224,7 +234,7 @@ fn build(book: &mut Loaded, syms: SymbolAlloc, res: ResourceStore, warnings: Vec
         })??
     };
     // 封面图即使没出现在正文里也要带上（书架缩略图）。
-    let cover_res = book.cover.as_deref().and_then(|c| b.resource(c));
+    let cover_res = book.cover.as_deref().and_then(|c| b.resource(c, ImageUse::Content));
     style_entities(&mut b, &mut entities);
     let fonts = take_fonts(book, &b);
     position_entities(&mut sections, &mut entities);
@@ -275,8 +285,8 @@ impl Builder {
     }
 
     /// 登记图片资源（[`ResourceStore::register`]，取不到的记警告）。
-    fn resource(&mut self, path: &str) -> Option<usize> {
-        self.res.register(path, &mut self.warnings)
+    fn resource(&mut self, path: &str, use_: ImageUse) -> Option<usize> {
+        self.res.register(path, use_, &mut self.warnings)
     }
 
     /// 资源实体（`$164`）名字的符号。

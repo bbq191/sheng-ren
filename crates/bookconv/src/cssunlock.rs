@@ -182,7 +182,7 @@ pub(crate) fn rgba_to_opaque(decls: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// `background` 简写里的颜色：`#hex`、`rgb()/rgba()/hsl()/hsla()`、`transparent`、命名色。没有就 `None`。
-fn background_color(value: &str) -> Option<String> {
+pub(crate) fn background_color(value: &str) -> Option<String> {
     let (v, important) = split_important(value);
     let (toks, _) = crate::cascade::tokens(v);
     const NOT_COLOR: &[&str] = &[

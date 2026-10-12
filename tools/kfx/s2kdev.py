@@ -59,8 +59,12 @@ def kfx_features(chain, base_fs):
             'align': ALIGN.get(find('align') or '', 'left')}
 
 
-def epub_features(row, base_fs, base_lh):
+def epub_features(row, base_fs, base_lh, ref_fs=None):
+    """EPUB 一行样式 → 特征。左右边距的 em 折成页宽 % 时，整页按 Kindle 那边的 32 个根 em 算（`ref_fs` 是 Kindle 产物的正文字号，
+    缺省同 `base_fs`）：掌阅、Move 的 `kindle_rules` 做过字号归一（body 乘 1/正文字号）时，EPUB 的根 em 不再是原书的根 em，
+    按各自的根 em 折页宽会凭空差出归一的倍数（《消失的爱人》引文 1em：Kindle 3.125%、EPUB 按自己的根算 2.72%，换成正文字数都是 0.87 个）。"""
     key, fs, lh, fam, weight, italic, color, align, indent, mt, mb, ml, mr = row
+    scale = (ref_fs or base_fs) / base_fs
     fs, lh = float(fs), float(lh)
     if indent == '-':
         ind = 0.0
@@ -68,7 +72,7 @@ def epub_features(row, base_fs, base_lh):
         u, v = indent.split(':')
         v = float(v)
         ind = v if u == 'em' else v / 12 / fs if u == 'pt' else v / 100 * PAGE / fs
-    h = lambda s: (float(s.split('+')[0]) / PAGE * 100 + float(s.split('+')[1]))
+    h = lambda s: (float(s.split('+')[0]) * scale / PAGE * 100 + float(s.split('+')[1]))
     font = 'reader' if fam == '-' else fam.lower()
     return {'size': fs / base_fs, 'lh': lh / base_lh, 'mt': float(mt) / base_fs, 'mb': float(mb) / base_fs, 'indent': ind, 'ml': h(ml), 'mr': h(mr),
             'color': '#' + (color if color != '-' else 'ff000000'), 'font': font, 'weight': 'normal' if weight == 'normal' else 'bold',
@@ -120,7 +124,7 @@ def main():
         sides = {'kindle': [(t, kfx_features(ch, base_fs)) for t, ch, _ in s2kcmp.nodes(f'{stem}.kindle.kfx')]}
         for d in ('ireader', 'xochitl'):
             bfs, blh, rows = epub_nodes(f'{stem}.{d}.epub', bindir, d)
-            sides[d] = [(r[0], epub_features(r, bfs, blh)) for r in rows]
+            sides[d] = [(r[0], epub_features(r, bfs, blh, base_fs)) for r in rows]
         queues = {d: collections.defaultdict(collections.deque) for d in devices}
         for d in devices:
             for t, feat in sides[d]:

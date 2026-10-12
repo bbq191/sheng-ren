@@ -1386,5 +1386,8 @@ fn repair_only_keeps_media_env() {
         let media = opts.wash.as_ref().and_then(|w| w.media);
         assert_eq!(media, Some(crate::cascade::MediaEnv::for_format(p, p.format())), "{id}");
         assert_eq!(opts.repair_only().wash.and_then(|w| w.media), media, "{id}");
+        // `kindle_rules` 要的阅读器怪癖也带过去（掌阅不认 rgba()、Move 不认背景图 no-repeat）
+        let w = opts.repair_only().wash.unwrap();
+        assert_eq!((w.css_rgba, w.background_no_repeat), (p.css_rgba, p.background_no_repeat), "{id}");
     }
 }

@@ -6,7 +6,8 @@
 //!   `{"info": 容器信息, "entities": [[片段名, "$类型", [值…]], …]}`。结构体的键是符号名（没有名字的写 `$N`，重复的键第二个起
 //!   加 `#2`、`#3`），符号、字符串都是字符串，十进制数、浮点都是数，null 是 null；其余写成对象：注解 `{"$annot": [...], "$value": 值}`、
 //!   blob/clob `{"$blob"/"$clob": 字节数, "$head": 开头 8 字节的十六进制}`、时间戳 `{"$ts": 十六进制}`、资源（图片、字体）片段整个是
-//!   `{"$raw": 字节数, "$head": …}`。
+//!   `{"$raw": 字节数, "$head": …}`；PNG 图片另有 `"$alpha"`：有没有不透明度小于 255 的像素（Kindle 把透明处画成黑色，
+//!   `tools/kfx/unify.py` 查正文图片还带不带透明）。
 
 use kfx::ion::{SymbolTable, Value};
 use kfx::{Body, Container};
@@ -164,6 +165,7 @@ fn main() {
             .iter()
             .map(|e| {
                 let body = match &e.body {
+                    Body::Raw(b) if b.starts_with(b"\x89PNG") => json!({ "$raw": b.len(), "$head": head_hex(b), "$alpha": png_has_transparency(b) }),
                     Body::Raw(b) => json!({ "$raw": b.len(), "$head": head_hex(b) }),
                     Body::Ion(_) => Json::Array(e.values().map(|v| to_json(&syms, v)).collect()),
                 };
@@ -206,4 +208,9 @@ fn main() {
         println!();
         show_entity(es[0]);
     }
+}
+
+/// PNG 里有没有不透明度小于 255 的像素（解不开的算没有）。
+fn png_has_transparency(b: &[u8]) -> bool {
+    image::load_from_memory_with_format(b, image::ImageFormat::Png).is_ok_and(|img| img.color().has_alpha() && img.to_rgba8().pixels().any(|p| p.0[3] < 255))
 }
