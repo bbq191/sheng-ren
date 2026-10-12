@@ -69,7 +69,7 @@ impl BookSource for QqRead {
     fn info(&self, _net: &Net, hits: &[Hit], chosen: usize, authors: &[String], _translators: &[String]) -> Option<BookInfo> {
         let h = hits.get(chosen)?;
         let subjects = tags_without_authors(h.categories.iter(), authors.iter());
-        Some(BookInfo { source: format!("QQ阅读 {}", h.url()), description: h.intro.clone(), subjects, ..Default::default() })
+        Some(BookInfo { source: format!("QQ阅读 {}", h.url()), title: h.title.clone(), description: h.intro.clone(), subjects, ..Default::default() })
     }
 }
 

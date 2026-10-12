@@ -1056,7 +1056,8 @@ impl SyncState {
         }
         self.meta_offline_reported = false;
         for m in todo {
-            match lib.fetch_metadata(m, false) {
+            // 找到过、但早先没记网站书名的：重找（force）
+            match lib.fetch_metadata(m, m.info.is_some()) {
                 Ok((InfoResult::Found(i), _)) => println!("✓ 元数据 {} ← {}", m.title, info_summary(&i)),
                 Ok((InfoResult::Shared(_, from), _)) => println!("✓ 元数据 {} ← 同一套的《{from}》找过的", m.title),
                 Ok((InfoResult::NotFound(why), _)) => println!("? 元数据 {}：{why}", m.title),

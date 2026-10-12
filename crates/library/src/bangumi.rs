@@ -87,6 +87,7 @@ impl BookSource for Bangumi {
         let subjects = tags_without_authors(h.tags.iter(), authors.iter().chain(author_list.iter()));
         Some(BookInfo {
             source: format!("Bangumi {}", h.url()),
+            title: h.title.clone(),
             authors: h.author.split(['、', '/']).map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect(),
             original_title: h.original.clone(),
             description: h.summary.trim().replace("\r\n", "\n"),
