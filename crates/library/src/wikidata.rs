@@ -14,7 +14,13 @@ impl Step for Wikidata {
         // 网站上找到的（元数据、已存下的封面）
         let from_site = l.info.is_some();
         let cover_stored = l.cover.is_some();
-        match find_work(l.net, l.title, &l.meta.authors) {
+        // 署名拆开后的作者名（书里整串写成「[美] 某某 著，某某 译」的也认得出）；书名找不到再用去掉卷次的
+        let authors: Vec<String> = crate::matching::parse_credits(&l.meta.authors).authors.into_iter().map(|p| p.name).collect();
+        let found = find_work(l.net, l.title, &authors).and_then(|w| match (w, crate::matching::base_title(l.title)) {
+            (None, Some(b)) => find_work(l.net, &b, &authors),
+            (w, _) => Ok(w),
+        });
+        match found {
             Ok(w) => l.work = w,
             Err(e) => l.work_err = Some(e),
         }

@@ -240,7 +240,7 @@ pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
 /// 在 `lib` 书库上跑 `booklib <args>`（`lib` 为 `None` 时不加 `--library=`）。
 pub fn booklib(lib: Option<&Path>, args: &[&str]) -> Output {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"));
-    cmd.env("BOOKLIB_NO_SSH", "1").env_remove("BOOKLIB_XOCHITL_URL");
+    cmd.env("BOOKLIB_NO_SSH", "1").env("BOOKLIB_NO_NET", "1").env_remove("BOOKLIB_XOCHITL_URL");
     if let Some(lib) = lib {
         cmd.arg(format!("--library={}", lib.display()));
         // 书库还没建（命令本身不该建出东西）时不建设备目录

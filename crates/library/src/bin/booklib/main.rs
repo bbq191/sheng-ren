@@ -34,11 +34,13 @@ struct Command {
 const COMMANDS: &[Command] = &[
     Command {
         name: "sync",
-        synopsis: &["sync [--device=<模式>[,<模式>…]] [--force] [--no-build] [--keep] [--watch[=秒]] [书…]"],
+        synopsis: &["sync [--device=<模式>[,<模式>…]] [--force] [--no-build] [--no-meta] [--keep] [--watch[=秒]] [书…]"],
         brief: "同步跟踪目录，按阅读模式生成优化过的书，直接传到接着的设备（日常用这一条）",
         detail: "\
 第一步 同步：书库严格镜像跟踪的目录——新增的入库，改过的换成新版本，挪动、改名的按内容认出来；
   原件删了的连同设备上的那本一起删（Move 上进回收站）。跟踪目录整个不在、读不了的目录里的书不删。
+补元数据：还没找过的书（含漫画）联网找一次简介、标签、带国籍的作者、译者、出版社、ISBN（同 meta --fetch，找过的不再找），
+  生成时补进书里；连不上网就跳过，下次再找。
 第二步 生成并传：只给接着的设备生成，传上去，电脑上不留产物：
   kindle   Kindle（USB）  KFX   存储根目录 documents/<子目录>/
   ireader  掌阅（USB）    EPUB  存储根目录 documents/<子目录>/
@@ -50,6 +52,7 @@ const COMMANDS: &[Command] = &[
   --device=<模式>  只处理这几个模式（可写多次或用逗号分隔；all 或不写 = 全部）
   --force          选中的书（没选就是全部）重新生成；和设备上一样的照样不传
   --no-build       只同步，不生成、不传（不能和 --device、--force、书一起用）
+  --no-meta        这一次不联网补元数据
   --keep           这一次原件不在了的只报告，不从书库删
   --watch[=秒]     一直运行，每隔几秒（缺省 60）看一次，原件有变化或接上设备就处理（不能和书、--force 一起用）
   书…              只处理这几本：书名片段、id，或原件路径（文件，或目录 = 下面所有的书）
@@ -59,7 +62,7 @@ const COMMANDS: &[Command] = &[
   booklib sync --device=kindle 三体     只给 Kindle、只处理书名含「三体」的
   booklib sync --watch=300             挂着，每 5 分钟看一次",
         opts: &["device", "watch"],
-        flags: &["keep", "watch", "no-build", "force"],
+        flags: &["keep", "watch", "no-build", "no-meta", "force"],
         check: check_sync,
         lock: never,
         run: cmd_sync,
@@ -177,6 +180,7 @@ const HELP_TAIL: &str = "\
   BOOKLIB_DIR       书库目录
   BOOKLIB_MTP_DIR   Kindle、掌阅的 jmtpfs 挂载点所在的目录（缺省 $XDG_RUNTIME_DIR/mtp）
   BOOKLIB_NO_SSH=1  不连 Move
+  BOOKLIB_NO_NET=1  不联网（不找元数据、封面）
 
 退出码：0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）";
 
@@ -888,24 +892,14 @@ fn meta_fetch(ctx: &Ctx) {
             ctx.report(lib.clear_metadata(m).map(|had| if had { format!("✓ 去掉找来的元数据和封面  {}", m.title) } else { format!("= 本来就没有找来的元数据  {}", m.title) }));
             continue;
         }
-        // 漫画不联网找元数据（2026-09-30 用户定：豆瓣等按书名搜漫画多半对不上，书里的封面就是第一页）
-        match lib.is_comic(m) {
-            Ok(true) => {
-                println!("- 跳过 {}：漫画不找元数据", m.title);
-                continue;
-            }
-            Ok(false) => {}
-            Err(e) => {
-                ctx.fail_line(&format!("✗ {}: {e}", m.title));
-                continue;
-            }
-        }
+        // 漫画也找（2026-10-12 用户定，推翻 2026-09-30 的「漫画不找」）：书名的卷次去掉再搜（`matching::base_title`）
         match lib.fetch_metadata(m, force) {
             Ok((info, cover)) => {
                 // 一半有结果、一半网络出错没查成：有结果的那半已存下，整本算失败（退出码 2），下次再查没查成的
                 let partial = matches!(info, InfoResult::Failed(_)) || matches!(cover, CoverResult::Failed(_));
                 let info = match info {
                     InfoResult::Found(i) => format!("元数据 ← {}", info_summary(&i)),
+                    InfoResult::Shared(i, from) => format!("元数据 ← 同一套的《{from}》找过的（{}）", info_summary(&i)),
                     InfoResult::Existing(i) => format!("元数据 = 已有 ← {}", info_summary(&i)),
                     InfoResult::NotFound(why) => format!("元数据 ? {why}"),
                     InfoResult::Failed(why) => format!("元数据 ✗ {why}"),
@@ -924,7 +918,7 @@ fn meta_fetch(ctx: &Ctx) {
         }
     }
     if !clear {
-        println!("  简介、标签、封面在生成产物时补进书里（书里已有的不动）：booklib sync 会把这些书判为过期并重建");
+        println!("  简介、标签、作者国籍、译者、出版社、ISBN、封面在生成产物时补进书里（书里已有的不动）：booklib sync 会把这些书判为过期并重建");
     }
 }
 
@@ -939,6 +933,8 @@ struct SyncPlan<'a> {
     prune: library::Prune,
     /// 有跟踪目录（没有时只生成 add 进来的书）。
     tracking: bool,
+    /// 生成前给还没找过元数据的书联网找一次（`--no-meta` 关掉）。
+    meta: bool,
 }
 
 impl<'a> SyncPlan<'a> {
@@ -971,7 +967,7 @@ impl<'a> SyncPlan<'a> {
         if !tracking && (devices.is_empty() || watch.is_some() || (selectors.is_empty() && lib.list().is_empty())) {
             fail("还没有跟踪任何目录。先登记要跟踪的书目录（只需一次），例如：\n  booklib track ~/Documents/ereader/books\n之后 booklib sync 就会把它镜像进书库");
         }
-        SyncPlan { selectors, force, watch, devices, prune, tracking }
+        SyncPlan { selectors, force, watch, devices, prune, tracking, meta: !args.has("no-meta") }
     }
 }
 
@@ -988,6 +984,8 @@ struct SyncState {
     last_live: Option<Vec<bool>>,
     /// 提示过的不再支持的格式的书。
     skipped: HashSet<String>,
+    /// 报过「连不上网，元数据下次再找」（`--watch` 时连上网以前只报一次）。
+    meta_offline_reported: bool,
 }
 
 fn cmd_sync(ctx: &Ctx) {
@@ -1008,6 +1006,9 @@ impl SyncState {
     /// 一轮（持着锁）：先同步跟踪目录，再生成并传。`dropped` 是这轮开头发现断了的 Move。
     fn round(&mut self, ctx: &Ctx, plan: &SyncPlan, dropped: &[String]) {
         let changed = if plan.tracking { self.sync_sources(ctx, plan) } else { true };
+        if plan.meta {
+            self.fill_metadata(ctx, plan);
+        }
         if !plan.devices.is_empty() {
             self.build(ctx, plan, changed, dropped);
         }
@@ -1035,6 +1036,39 @@ impl SyncState {
             Err(e) => ctx.report(Err(e)),
         }
         changed
+    }
+
+    /// 补元数据（2026-10-12 用户定：跟踪 → 补元数据 → 传设备）：还没找过的书联网找一次，找到的生成时补进书里。
+    /// 找过的（找到了、或者这一版匹配规则下没找到）不再找，`--watch` 每轮不重复联网；连不上网整轮跳过，下次再找。
+    fn fill_metadata(&mut self, ctx: &Ctx, plan: &SyncPlan) {
+        let lib = ctx.lib;
+        let books = if plan.selectors.is_empty() { lib.list() } else { lib.select(&plan.selectors) };
+        let todo: Vec<&library::Meta> = books.iter().filter(|m| m.supported() && lib.needs_metadata(m)).collect();
+        if todo.is_empty() {
+            return;
+        }
+        if lib.offline() {
+            if !self.meta_offline_reported {
+                println!("- 连不上网，{} 本书的元数据下次再找", todo.len());
+                self.meta_offline_reported = true;
+            }
+            return;
+        }
+        self.meta_offline_reported = false;
+        for m in todo {
+            match lib.fetch_metadata(m, false) {
+                Ok((InfoResult::Found(i), _)) => println!("✓ 元数据 {} ← {}", m.title, info_summary(&i)),
+                Ok((InfoResult::Shared(_, from), _)) => println!("✓ 元数据 {} ← 同一套的《{from}》找过的", m.title),
+                Ok((InfoResult::NotFound(why), _)) => println!("? 元数据 {}：{why}", m.title),
+                Ok((InfoResult::Failed(why), _)) => println!("⚠ 元数据 {}：{why}", m.title),
+                Ok(_) => {}
+                // 网络出错：这一轮不再找，下次再试（不算失败：生成照常）
+                Err(e) => {
+                    println!("- 元数据没找完（{e}），下次再找");
+                    break;
+                }
+            }
+        }
     }
 
     /// 生成并传：这一轮同步有变化、书库或生成记录变了、接着的设备变了才做。

@@ -49,6 +49,24 @@ impl BookSource for Douban {
         Ok(matching_hits(v, nt, want))
     }
 
+    /// 书籍搜索页 `search.douban.com/book/subject_search`：搜索建议不收漫画（「哆啦」回空列表），这里收（2026-10-12 实测）。
+    /// 结果在页面里的 `window.__DATA__`（明文 JSON：`items[]` 的 `title`、`abstract`「作者 / 译者 / 出版社 / 日期 / 价格」、`id`、
+    /// `cover_url`，`tpl_name` 为 `search_subject` 的才是书）。
+    fn fallback_search(&self, net: &Net, title: &str, nt: &str, want: &[String]) -> Vec<Hit> {
+        let url = format!("https://search.douban.com/book/subject_search?search_text={}&cat=1001", enc(title));
+        let html = match net.fetch_ref(&url, Some(REFERER)) {
+            Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+            Err(_) => return Vec::new(),
+        };
+        match search_page_items(&html) {
+            Some(v) => matching_hits(&v, nt, want),
+            None => {
+                net.note_transient(&format!("{url}：页面里没有 window.__DATA__（可能被拦或改版了）"));
+                Vec::new()
+            }
+        }
+    }
+
     fn cover(&self, net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'static str)> {
         best_cover(net, hits)
     }
@@ -57,9 +75,24 @@ impl BookSource for Douban {
         (hit.pic.clone(), hit.label())
     }
 
-    fn info(&self, net: &Net, hits: &[Hit], chosen: usize, authors: &[String]) -> Option<BookInfo> {
-        let order = std::iter::once(chosen).chain((0..hits.len()).filter(|&i| i != chosen)).take(2);
-        for i in order.filter(|&i| i < hits.len()) {
+    fn info(&self, net: &Net, hits: &[Hit], chosen: usize, authors: &[String], translators: &[String]) -> Option<BookInfo> {
+        // 书里写了译者：挑译者对得上的那个版本（《飘》豆瓣第一个条目是李美华译本，书是梅静译本），最多看 5 个；都对不上用封面那个，
+        // 它的出版社、ISBN 和书冲突，写进书时不用（`metadata::plan`）
+        let order: Vec<usize> = std::iter::once(chosen).chain((0..hits.len()).filter(|&i| i != chosen)).filter(|&i| i < hits.len()).collect();
+        if !translators.is_empty() {
+            let mut first: Option<BookInfo> = None;
+            for &i in order.iter().take(5) {
+                let Ok(s) = subject(net, &hits[i].id) else { continue };
+                let same = crate::matching::same_person_any(&s.translators, translators);
+                let info = info_of(&hits[i], s, authors);
+                if same {
+                    return Some(info);
+                }
+                first.get_or_insert(info);
+            }
+            return first;
+        }
+        for &i in order.iter().take(2) {
             if let Ok(s) = subject(net, &hits[i].id) {
                 return Some(info_of(&hits[i], s, authors));
             }
@@ -74,6 +107,8 @@ fn info_of(hit: &Hit, s: Subject, authors: &[String]) -> BookInfo {
     let subjects = tags_without_authors(s.tags.iter().filter(|t| !t.chars().all(|c| c.is_ascii_digit())), authors.iter().chain(s.authors.iter()));
     BookInfo {
         source: format!("豆瓣 {}", hit.url()),
+        // 带国籍的作者署名（搜索建议的「[美] 玛格丽特·米切尔」，条目页的同样写法）：书里的作者没写国籍时补上
+        authors: if s.authors.is_empty() { hit.author.split(['/', '、']).map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect() } else { s.authors.clone() },
         original_title: s.original_title,
         first_published: String::new(),
         description: s.description,
@@ -105,6 +140,35 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want_authors: &[String]) -> Ve
         }
     }
     hits
+}
+
+/// 书籍搜索页的 `window.__DATA__` → 搜索建议同样的条目列表（`title`、`author_name`、`id`、`pic`、`type`），交给 [`matching_hits`]。
+/// 页面里没有这段数据返回 `None`。
+fn search_page_items(html: &str) -> Option<serde_json::Value> {
+    let start = html.find("window.__DATA__")?;
+    let rest = &html[start..];
+    let brace = rest.find('{')?;
+    // 一个 JSON 值：用流式解析读到它结束为止（后面是 `;` 和别的脚本）
+    let mut de = serde_json::Deserializer::from_str(&rest[brace..]).into_iter::<serde_json::Value>();
+    let data = de.next()?.ok()?;
+    let items = data["items"].as_array()?;
+    Some(serde_json::Value::Array(
+        items
+            .iter()
+            .filter(|it| it["tpl_name"].as_str() == Some("search_subject"))
+            .map(|it| {
+                let author = it["abstract"].as_str().unwrap_or("").split(" / ").next().unwrap_or("").trim().to_string();
+                serde_json::json!({
+                    "title": it["title"].as_str().unwrap_or(""),
+                    "author_name": author,
+                    "id": it["id"].as_i64().map(|i| i.to_string()).or_else(|| it["id"].as_str().map(str::to_string)).unwrap_or_default(),
+                    "pic": it["cover_url"].as_str().unwrap_or(""),
+                    "year": "",
+                    "type": "b",
+                })
+            })
+            .collect(),
+    ))
 }
 
 /// 前几个条目里挑分辨率最高、像封面的封面图（老条目只有 200 多像素宽的小图）。返回（条目下标, 图片, 扩展名）。

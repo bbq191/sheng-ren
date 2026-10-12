@@ -22,14 +22,14 @@
 
   <!-- 输入 -->
   <rect class="box" x="20" y="48" width="460" height="44" rx="6"/>
-  <text x="250" y="68" text-anchor="middle">书名、作者（书里的元数据，不看文件名）</text>
+  <text x="250" y="68" text-anchor="middle">书名、作者（书里的元数据；署名拆开、书名去卷次再搜）</text>
   <text x="250" y="85" text-anchor="middle" class="s">书里已有封面就只找元数据；每个网络请求间隔 1.2 秒</text>
 
   <!-- 1 豆瓣 -->
   <rect class="box src" x="20" y="116" width="460" height="92" rx="8"/>
   <text x="40" y="140" class="h">① 豆瓣</text>
   <text x="120" y="140" class="s">中文版；没有公开 API，改版会失效</text>
-  <text x="40" y="164" class="s">搜索建议接口找条目（书名、作者对得上才算）→ 条目页取：</text>
+  <text x="40" y="164" class="s">搜索建议找条目，搜不到用书籍搜索页（漫画在这里）→ 条目页取：</text>
   <text x="40" y="182">内容简介 · 标签 · 原作名 · 出版社 / 出版年 / ISBN / 译者</text>
   <text x="40" y="200" class="s">封面：几个候选里挑分辨率最高的</text>
 
@@ -66,15 +66,15 @@
   <text x="560" y="72" class="h">书库 meta.json（全部都记）</text>
   <text x="560" y="96">找来的一切：简介、标签、原作名、首版年、</text>
   <text x="560" y="116">那个版本的出版社、ISBN、译者，来源网址</text>
-  <text x="560" y="140" class="s">出版社、ISBN、译者是豆瓣那个版本的（多是大陆版），</text>
-  <text x="560" y="158" class="s">不一定是你手上这本（好读多是台湾译本），所以只存不写进书</text>
+  <text x="560" y="140" class="s">出版社、ISBN、日期、译者：版本就是这本时才写进书</text>
+  <text x="560" y="158" class="s">（条目名和书名一致，书里写了译者时译者也对得上）</text>
   <text x="560" y="182" class="s">封面图存在书库条目目录（cover.jpg / cover.png）</text>
 
   <rect class="box dev" x="540" y="222" width="400" height="164" rx="8"/>
   <text x="560" y="246" class="h">生成的书（booklib sync 生成时补进去）</text>
   <text x="560" y="272">只补书里没有的：</text>
-  <text x="560" y="294">内容简介（dc:description）· 标签（dc:subject）· 封面</text>
-  <text x="560" y="320" class="s">书名、作者一律用书自己的，不改；正文一个字不动</text>
+  <text x="560" y="294">简介 · 标签 · 封面 · 国籍 · 译者 · 出版社 · 日期 · ISBN</text>
+  <text x="560" y="320" class="s">署名拆成作者（带国籍）和译者；书名用书自己的；正文一个字不动</text>
   <text x="560" y="340" class="s">原件不动：补在生成的副本里</text>
   <text x="560" y="360" class="s">真正补进书的才进指纹：找到新东西，下次 sync 重建这本</text>
 
@@ -83,7 +83,7 @@
   <path class="l" d="M480 367 C515 367 515 160 538 160" marker-end="url(#a)"/>
   <path class="l" d="M740 198 L740 220" marker-end="url(#a)"/>
 
-  <text x="480" y="530" text-anchor="middle" class="s">booklib meta --fetch [--force] [书…]：已经找过的不再找（--force 重找）；找错了用 --clear 去掉</text>
+  <text x="480" y="530" text-anchor="middle" class="s">sync 生成前给没找过的书自动找一次（--no-meta 跳过）；meta --fetch [--force] 手动找；找错了 --clear</text>
   <text x="480" y="550" text-anchor="middle" class="s">也可以手改文件本身：booklib meta --edit 书.epub --title … --tag … --cover 图（可见文字不变，图片原样）</text>
-  <text x="480" y="570" text-anchor="middle" class="s">漫画跳过（CBZ 一律算；EPUB 按优化器同一套判定）：书里的封面就是第一页，按书名搜漫画多半对不上</text>
+  <text x="480" y="570" text-anchor="middle" class="s">漫画先查 Bangumi（bgm.tv 公开 API），再查豆瓣；同一套漫画只查一次，别的卷照用；只写作品层面的，不写某一卷的 ISBN</text>
 </svg>

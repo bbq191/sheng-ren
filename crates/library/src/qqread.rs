@@ -66,7 +66,7 @@ impl BookSource for QqRead {
     }
 
     /// 封面用的那个条目的简介、分类（当标签，去掉作者名）。
-    fn info(&self, _net: &Net, hits: &[Hit], chosen: usize, authors: &[String]) -> Option<BookInfo> {
+    fn info(&self, _net: &Net, hits: &[Hit], chosen: usize, authors: &[String], _translators: &[String]) -> Option<BookInfo> {
         let h = hits.get(chosen)?;
         let subjects = tags_without_authors(h.categories.iter(), authors.iter());
         Some(BookInfo { source: format!("QQ阅读 {}", h.url()), description: h.intro.clone(), subjects, ..Default::default() })

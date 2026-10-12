@@ -66,7 +66,7 @@ impl ContentFacts {
     }
 
     pub(crate) fn own_dc(&self, sha: &str) -> Option<OwnDc> {
-        self.own_dc.borrow().get(sha).copied()
+        self.own_dc.borrow().get(sha).cloned()
     }
 
     pub(crate) fn note_own_dc(&self, sha: &str, o: OwnDc) {
