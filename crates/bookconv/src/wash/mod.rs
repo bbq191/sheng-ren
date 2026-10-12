@@ -111,7 +111,8 @@ pub use self::encoding::transcode_entries;
 ///   边距、垫高了，《飘》「第一卷」在 Move 上标题挤到下一页（真机）。
 /// - 16（2026-10-12）：Move 上去掉 `display:none` 的元素（`hidden.rs`，profile `display_none = false`，用户定）：xochitl 行内、外链的
 ///   `display:none` 都不认，《飘》《春雪》版权页顶上给目录用的「版权信息」标题露出来、把版权页挤成两页。`id` 留成空 `<span>`。
-pub const KINDLE_RULES_VERSION: &str = "16";
+/// - 17（2026-10-12）：15 把竖直换算挪到最后时漏了不是 UTF-8 的样式表（《嘯風山莊》Big5 的 CSS.css 没换算），补上（同 `rewrite_entries` 按单字节读写）。
+pub const KINDLE_RULES_VERSION: &str = "17";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
