@@ -50,6 +50,7 @@ mod kindle_images;
 mod kindle_rules;
 mod top_spacer;
 mod hidden;
+mod break_margin;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
@@ -112,7 +113,10 @@ pub use self::encoding::transcode_entries;
 /// - 16（2026-10-12）：Move 上去掉 `display:none` 的元素（`hidden.rs`，profile `display_none = false`，用户定）：xochitl 行内、外链的
 ///   `display:none` 都不认，《飘》《春雪》版权页顶上给目录用的「版权信息」标题露出来、把版权页挤成两页。`id` 留成空 `<span>`。
 /// - 17（2026-10-12）：15 把竖直换算挪到最后时漏了不是 UTF-8 的样式表（《嘯風山莊》Big5 的 CSS.css 没换算），补上（同 `rewrite_entries` 按单字节读写）。
-pub const KINDLE_RULES_VERSION: &str = "17";
+/// - 18（2026-10-12）：大段上外边距在 Kindle 上排不下时换页、丢掉边距，掌阅、Move 照样做（`break_margin.rs`，用户定）：按 Kindle
+///   的尺寸估算，从文件开头、强制分页起累加，上外边距至少页高 1/4 的块「已排 + 边距 + 自己」超过一页的 90% 就在它前面分页、边距写 0。
+///   《飘》上下册、《春雪》版权页后的二维码换到下一页页首（掌阅以前推到页底、那行字掉到下一页）；25 本只有这 3 本变。
+pub const KINDLE_RULES_VERSION: &str = "18";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -491,6 +495,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         }
         if let Some(g) = opts.top_spacer {
             top_spacer::apply(entries, rep, opts.media.as_ref(), g);
+        }
+        // 大段上外边距在 Kindle 上排不下时换页、丢掉边距（掌阅、Move 都照 Kindle 换算竖直间距时做，按原来的 CSS 估）
+        if let (Some(_), Some((_, k))) = (opts.v_scale, opts.image_sizing) {
+            break_margin::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), k);
         }
         // 竖直间距照 Kindle 换算放在最后：上面几步都按原来的 CSS 算 Kindle 上的样子
         if let Some(vs) = opts.v_scale {
