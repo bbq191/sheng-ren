@@ -380,7 +380,7 @@ fn num(v: f64, d: usize) -> String {
 mod tests {
     use super::*;
 
-    const KREF: KindleImageRef = KindleImageRef { content_px: 1104.0, content_h: 1546.0, em_px: 39.0 };
+    const KREF: KindleImageRef = KindleImageRef { content_px: 1104.0, content_h: 1546.0, em_px: 39.0, v_rem_px: 52.5 };
 
     fn jpeg(w: u32, h: u32) -> Vec<u8> {
         let mut v = Vec::new();

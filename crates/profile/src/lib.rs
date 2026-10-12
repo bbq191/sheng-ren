@@ -185,6 +185,10 @@ pub struct Profile {
     /// 阅读器缺省字号下 1em 是几个屏幕像素（只 kindle 写：掌阅、Move 照它把 em 写的图片宽度折成 Kindle 上的实际大小，
     /// 2026-10-12 测试书宽 10em 的图在 Kindle 上 392px）。
     pub font_px: Option<u32>,
+    /// 阅读器缺省字号、行距下正文一行几个屏幕像素（只 kindle 写）：KFX 的竖直距离写成行高的倍数，Kindle 按行距换成像素，
+    /// 一 rem 的竖直距离＝这个数 / 1.2（写出器按 1.2 倍行高折算）。掌阅、Move 照它把页首的上边距、背景图的位置折成 Kindle 上的
+    /// 位置（2026-10-12 Kindle 截图：《飘》第一章正文行距 63px，「第一卷」上外边距 9.28 lh 落在 779px）。
+    pub line_px: Option<u32>,
     /// 产物送到哪台设备、怎么送；`None` 时产物留在电脑上。不影响产物内容（不进指纹）。
     pub deliver: Option<Deliver>,
 }
@@ -236,6 +240,8 @@ struct ProfileFile {
     #[serde(default)]
     image_sizing: ImageSizing,
     font_px: Option<u32>,
+    #[serde(default)]
+    line_px: Option<u32>,
     deliver: Option<Deliver>,
 }
 
@@ -247,7 +253,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
