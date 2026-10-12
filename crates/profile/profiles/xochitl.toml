@@ -27,6 +27,8 @@ background_no_repeat = false
 # 不认 margin-top（padding-top 也不认），页首的空元素不占地方：每章开头写了上边距的垫一张透明空白图，推到 Kindle 上同样的位置
 # （2026-10-12 测试书「测试-标题位置」；《飘》「第一卷」margin-top:47% 在 Move 上顶在页首）
 margin_top = false
+# 不认 display:none（行内、外链都不认，2026-10-12 测试书「测试-隐藏」）：去掉隐藏的元素（《飘》《春雪》版权页的「版权信息」大标题；用户定）
+display_none = false
 comic_reader_margins = 1
 
 # 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比

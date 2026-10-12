@@ -49,6 +49,7 @@ mod ids;
 mod kindle_images;
 mod kindle_rules;
 mod top_spacer;
+mod hidden;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
@@ -108,7 +109,9 @@ pub use self::encoding::transcode_entries;
 ///   只有十来像素。测试书三台量过，掌阅、Move 每种写法差 1–4px。
 /// - 15（2026-10-12）：竖直间距换算挪到最后（`kindle_rules::scale_vertical_entries`）：14 先换算再算页首垫图，垫图读到放大过的
 ///   边距、垫高了，《飘》「第一卷」在 Move 上标题挤到下一页（真机）。
-pub const KINDLE_RULES_VERSION: &str = "15";
+/// - 16（2026-10-12）：Move 上去掉 `display:none` 的元素（`hidden.rs`，profile `display_none = false`，用户定）：xochitl 行内、外链的
+///   `display:none` 都不认，《飘》《春雪》版权页顶上给目录用的「版权信息」标题露出来、把版权页挤成两页。`id` 留成空 `<span>`。
+pub const KINDLE_RULES_VERSION: &str = "16";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -220,6 +223,8 @@ pub struct WashOpts {
     pub bg_place: Option<crate::bgfit::TileGeometry>,
     /// 竖直间距照 Kindle 换算（掌阅、Move，profile `em_px`；`kindle_rules::VScale`）。`None` 不换。
     pub v_scale: Option<VScale>,
+    /// 不认 `display:none` 的阅读器（Move，profile `display_none = false`）：去掉隐藏的元素（`hidden.rs`）。
+    pub drop_hidden: bool,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -236,7 +241,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, drop_hidden: false }
     }
 }
 
@@ -474,6 +479,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     });
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
     if opts.mode.kindle_rules() {
+        // 先去掉 Move 上会露出来的隐藏元素：后面的页首垫图、背景图位置都按看得见的内容算
+        if opts.drop_hidden {
+            rep.kindle_rule_edits += hidden::apply(entries);
+        }
         let font_scale = kindle_rules::apply(entries, rep, opts);
         add_ua_css(entries, rep, font_scale);
         if let Some((sizing, kref)) = opts.image_sizing {
