@@ -3,7 +3,7 @@
 //! 正式公开的 API，不要账号、不要 key，要求带说明来历的 User-Agent（[`crate::net::UA`]）：
 //! `POST https://api.bgm.tv/v0/search/subjects?limit=10`，请求体 `{"keyword": …, "filter": {"type": [1]}}`（1＝书籍），回
 //! `{"data":[{id, name, name_cn, summary, platform（「漫画」「小说」…）, tags:[{name, count}], infobox:[{key, value}], images:{large}}], "total"}`。
-//! 作者在 `infobox` 的「作者」（字符串，或 `[{v}]` 列表）。条目是作品（整套漫画），没有某一卷的出版社、ISBN，只取作品层面的：
+//! 作者在 `infobox` 的「作者」，漫画多写「原作」「作画」（字符串，或 `[{v}]` 列表），几栏合起来当署名。条目是作品（整套漫画），没有某一卷的出版社、ISBN，只取作品层面的：
 //! 简介、标签、原名（日文名）、作者。条目页是 `https://bgm.tv/subject/<id>`。只给漫画查（[`BookSource::applies`]）。
 
 use crate::matching::{hit_matches, norm_s};
@@ -120,7 +120,8 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want: &[String]) -> Vec<Hit> {
         let Some(id) = x["id"].as_u64() else { continue };
         let s = |k: &str| x[k].as_str().unwrap_or("").trim().to_string();
         let (name, name_cn) = (s("name"), s("name_cn"));
-        let author = infobox(x, "作者");
+        // 漫画多半不写「作者」，写「原作」「作画」（《死亡笔记》原作大場つぐみ、作画小畑健）：几栏合在一起当署名
+        let author = ["作者", "原作", "作画", "脚本"].iter().map(|k| infobox(x, k)).filter(|a| !a.is_empty()).collect::<Vec<_>>().join("、");
         if ![&name_cn, &name].iter().any(|t| !t.is_empty() && hit_matches(t, &author, nt, want)) {
             continue;
         }
@@ -161,5 +162,15 @@ mod tests {
         assert_eq!((info.original_title.as_str(), info.subjects.clone()), ("ドラえもん", vec!["科幻".to_string()]), "标签去掉载体词和作者");
         assert!(info.source.ends_with("bgm.tv/subject/27684"));
         assert!(Bangumi.matching_hits(&serde_json::json!({"title": "Bad Request"}), "x", &[]).is_err());
+    }
+
+    /// 漫画条目写「原作」「作画」不写「作者」（《死亡笔记》，2026-10-12）：照样认得出作者。
+    #[test]
+    fn manga_credits_from_original_and_art() {
+        let v = serde_json::json!({"data": [{"id": 1674, "name": "DEATH NOTE", "name_cn": "死亡笔记", "platform": "漫画", "summary": "", "tags": [], "images": {},
+            "infobox": [{"key": "原作", "value": "大場つぐみ"}, {"key": "作画", "value": "小畑健"}]}]});
+        let hits = Bangumi.matching_hits(&v, &norm_s("死亡筆記"), &author_keys(&["大場鶇,小畑健".into()])).unwrap();
+        assert_eq!(hits.iter().map(|h| h.id).collect::<Vec<_>>(), [1674]);
+        assert_eq!(hits[0].author, "大場つぐみ、小畑健");
     }
 }

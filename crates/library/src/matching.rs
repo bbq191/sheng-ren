@@ -155,6 +155,12 @@ pub(crate) fn form_marker(title: &str) -> Option<String> {
 /// 没有可去的返回 `None`。
 pub(crate) fn base_title(title: &str) -> Option<String> {
     let mut t = title.trim().to_string();
+    // 开头的系列说明：「波洛系列04：罗杰疑案」→ 罗杰疑案
+    if let Some((head, rest)) = t.split_once(['：', ':']) {
+        if head.contains("系列") && !rest.trim().is_empty() {
+            t = rest.trim().to_string();
+        }
+    }
     loop {
         let before = t.clone();
         // 末尾的括号说明
@@ -268,6 +274,7 @@ mod tests {
         assert_eq!(base_title("三十六计"), None, "中文数字不是卷次");
         assert_eq!(base_title("福尔摩斯探案全集"), None, "全集是书名的一部分");
         assert_eq!(base_title("1984"), None, "全是数字的书名不动");
+        assert_eq!(base_title("波洛系列04：罗杰疑案").as_deref(), Some("罗杰疑案"));
         assert_eq!(form_marker("杀死一只知更鸟（漫）").as_deref(), Some("（漫）"));
         assert_eq!(form_marker("飘（上册）"), None);
     }

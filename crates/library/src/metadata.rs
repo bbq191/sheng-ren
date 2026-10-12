@@ -257,7 +257,8 @@ impl<S: BookSource> Step for S {
 /// 找书的匹配规则版本：改了搜索词、比对口径就加一，以前没找到的书 `sync` 会再找一次（[`crate::Meta::info_checked`]）。
 /// 2：署名拆开（「某某 著，某某 译」）、书名去卷次再搜、书名用字重合 80% 也算、按译者挑版本（2026-10-12）。
 /// 3：记下网站书名（书名改用它，2026-10-12）；以前找到过、没记书名的再找一次。
-pub const LOOKUP_VERSION: &str = "3";
+/// 4：Bangumi 的漫画作者读「原作」「作画」、书名开头的「XX系列NN：」去掉再搜、QQ 阅读「不在关键词库中」算没找到（2026-10-12）。
+pub const LOOKUP_VERSION: &str = "4";
 
 /// 一套书的认法：书名去掉卷次、版本字样（[`crate::matching::base_title`]）规整后加上作者（[`crate::matching::author_keys`]）。
 pub(crate) fn series_key(meta: &Meta) -> String {
@@ -282,10 +283,12 @@ pub(crate) fn book_translators(meta: &Meta) -> Vec<String> {
 /// ③ Wikidata（原作）。
 const CHAIN: &[&dyn Step] = &[&crate::bangumi::Bangumi, &crate::douban::Douban, &crate::qqread::QqRead, &crate::wikidata::Wikidata];
 
-/// 从标签里去掉作者名（豆瓣标签常带作者），最多 8 个。
+/// 从标签里去掉作者名（豆瓣标签常带作者）和年份，最多 8 个。
 pub(crate) fn tags_without_authors<'a>(tags: impl Iterator<Item = &'a String>, authors: impl Iterator<Item = &'a String>) -> Vec<String> {
     let author_keys: Vec<String> = authors.flat_map(|a| crate::matching::author_keys(std::slice::from_ref(a))).collect();
-    tags.filter(|t| !author_keys.contains(&crate::matching::norm_author(t))).take(8).cloned().collect()
+    // 年份（「1983」「2023~2026年」）不算标签
+    let year = |t: &str| t.chars().any(|c| c.is_ascii_digit()) && t.chars().all(|c| c.is_ascii_digit() || "~-～年 ".contains(c));
+    tags.filter(|t| !year(t) && !author_keys.contains(&crate::matching::norm_author(t))).take(8).cloned().collect()
 }
 
 impl Library {
