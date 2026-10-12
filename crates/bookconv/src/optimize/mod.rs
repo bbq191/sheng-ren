@@ -273,7 +273,7 @@ impl OptimizeOpts {
             // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
             wash: Some({
                 let w = self.wash.clone().unwrap_or_default();
-                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, ..Default::default() }
+                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, ..Default::default() }
             }),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
@@ -305,6 +305,14 @@ impl OptimizeOpts {
             grayscale: !p.color,
             wash: Some({
                 let mut w = crate::wash::WashOpts { css_rgba: p.css_rgba, background_no_repeat: p.background_no_repeat, media: Some(crate::cascade::MediaEnv::for_format(p, p.format())), ..Default::default() };
+                // 不照 CSS 定图片尺寸的阅读器：照内置 kindle 模式的内容区宽和 1em 像素折算（三台以 Kindle 为准）
+                if p.image_sizing != profile::ImageSizing::Css {
+                    if let Some(k) = profile::get("kindle").filter(|k| k.font_px.is_some()) {
+                        let r = k.readable(profile::Format::Kfx);
+                        let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)) };
+                        w.image_sizing = Some((p.image_sizing, kref));
+                    }
+                }
                 if p.background_images {
                     // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
                     // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`

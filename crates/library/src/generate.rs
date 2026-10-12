@@ -158,6 +158,12 @@ impl Library {
             if device.text_repair_only && device.kindle_rules && !device.background_no_repeat {
                 seg.push('g');
             }
+            // 阅读器不照 CSS 定图片尺寸（profile 的 image_sizing，第 9 版起）：`kindle_images` 按 Kindle 的大小改写，带上方式和
+            // Kindle 的内容区宽、1em 像素（改了 kindle 模式的这两个量，掌阅、Move 的书也要重建）
+            if device.text_repair_only && device.kindle_rules && device.image_sizing != profile::ImageSizing::Css {
+                let k = profile::get("kindle");
+                seg.push_str(&format!("i{:?}{}x{}", device.image_sizing, k.map_or(0, |k| k.readable(profile::Format::Kfx).width), k.and_then(|k| k.font_px).unwrap_or(0)));
+            }
             // 统计正文字号时 `@media` 的 `device-width` 等按屏幕求（`MediaEnv::for_format`，第 6 版起）：自定义模式改了屏幕也要重建
             if device.text_repair_only && device.kindle_rules {
                 seg.push_str(&format!("@{}x{}", device.screen.width, device.screen.height));

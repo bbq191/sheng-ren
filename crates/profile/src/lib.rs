@@ -80,6 +80,20 @@ pub enum NoteIcons {
     Number,
 }
 
+/// 阅读器怎么定图片的显示尺寸（只修复、照 Send to Kindle 统一的文字书用：`kindle_rules` 照它把图片宽度改写成显示出来和
+/// Kindle 一样大的写法，见 `bookconv::wash::kindle_images`）。2026-10-12 三台测试书（`测试-插图`）量的。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ImageSizing {
+    /// 照 CSS（缺省；Kindle 由 KFX 写出器写，不经 `kindle_rules`）。
+    #[default]
+    Css,
+    /// px 是屏幕像素（掌阅：300px 的图只占四分之一页宽，Kindle 把 px 换成 em、跟着字号走，占三分之二）。
+    DevicePx,
+    /// 只认百分比宽度（xochitl：没写宽度、写 px/em、只写高的图一律拉满一行，小图也放大到整行）。
+    Percent,
+}
+
 /// 产物怎么送到设备上（`[deliver]`，2026-10-07 用户定：`booklib sync` 按设备接没接上直接传，不在电脑上留产物）。
 /// 不写这一节的模式（书库 `profiles/` 里的自定义模式）产物照旧放在电脑上（跟踪目录旁的 `<模式 id>/`）。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -162,6 +176,11 @@ pub struct Profile {
     /// `bookconv::uastyle`）、正文字体用阅读器字体、body 左右边距不要、文字对比度 4.5（`bookconv::wash::kindle_rules`）。
     /// ireader、xochitl 写 `true`（2026-10-08 用户定三台一套规则）。Kindle 不用：KFX 写出器照这套规则写。
     pub kindle_rules: bool,
+    /// 阅读器怎么定图片尺寸（TOML 里不写是 `css`），见 [`ImageSizing`]。ireader 写 `device-px`，xochitl 写 `percent`。
+    pub image_sizing: ImageSizing,
+    /// 阅读器缺省字号下 1em 是几个屏幕像素（只 kindle 写：掌阅、Move 照它把 em 写的图片宽度折成 Kindle 上的实际大小，
+    /// 2026-10-12 测试书宽 10em 的图在 Kindle 上 392px）。
+    pub font_px: Option<u32>,
     /// 产物送到哪台设备、怎么送；`None` 时产物留在电脑上。不影响产物内容（不进指纹）。
     pub deliver: Option<Deliver>,
 }
@@ -208,6 +227,9 @@ struct ProfileFile {
     repair_note_links: bool,
     #[serde(default)]
     kindle_rules: bool,
+    #[serde(default)]
+    image_sizing: ImageSizing,
+    font_px: Option<u32>,
     deliver: Option<Deliver>,
 }
 
@@ -219,7 +241,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
@@ -417,6 +439,8 @@ mod tests {
         assert!(k.background_sizing && !get("ireader").unwrap().background_sizing, "背景图尺寸：kindle 保留，ireader 去掉");
         assert!(k.css_rgba && !get("ireader").unwrap().css_rgba && get("xochitl").unwrap().css_rgba, "rgba()：只有掌阅不认");
         assert!(k.background_no_repeat && get("ireader").unwrap().background_no_repeat && !get("xochitl").unwrap().background_no_repeat, "背景图 no-repeat：只有 xochitl 不认");
+        assert_eq!((k.image_sizing, get("ireader").unwrap().image_sizing, get("xochitl").unwrap().image_sizing), (ImageSizing::Css, ImageSizing::DevicePx, ImageSizing::Percent));
+        assert!(k.font_px.is_some(), "掌阅、Move 折算图片宽度要 Kindle 的 1em 像素数");
         assert!(k.caption_fit && get("ireader").unwrap().caption_fit && !get("xochitl").unwrap().caption_fit, "图注同页：kindle、ireader 开");
         assert!(!k.image_alpha && get("ireader").unwrap().image_alpha && get("xochitl").unwrap().image_alpha, "透明图合成白底：只有 kindle");
         assert!(k.text_repair_only && get("ireader").unwrap().text_repair_only && get("xochitl").unwrap().text_repair_only, "文字书只修复：三个模式都是");

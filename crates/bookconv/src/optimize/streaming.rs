@@ -83,6 +83,25 @@ fn optimize_inner(
             read_image_head(&mut archive, p, dims).ok().flatten()
         });
     }
+    // 图片照 Kindle 的大小改写（`kindle_images`）要原图宽高：这时图片条目是空占位，先读文件头
+    let sized;
+    let opts = match opts.wash.as_ref().filter(|w| w.mode.kindle_rules() && w.image_sizing.is_some() && !is_comic_book) {
+        Some(w) => {
+            let dims = |b: &[u8]| crate::imgopt::guard(|| image::ImageReader::new(std::io::Cursor::new(b)).with_guessed_format().ok()?.into_dimensions().ok());
+            let names: Vec<String> = raw.iter().filter(|e| crate::util::is_image_ext(&e.name)).map(|e| e.name.clone()).collect();
+            let mut map = HashMap::new();
+            for n in names {
+                if let Ok(Some(d)) = read_image_head(&mut archive, &n, dims) {
+                    map.insert(n, d);
+                }
+            }
+            let mut o = opts.clone();
+            o.wash = Some(crate::wash::WashOpts { image_dims: Some(std::sync::Arc::new(map)), ..w.clone() });
+            sized = o;
+            &sized
+        }
+        None => opts,
+    };
     let prep = prepare_entries(raw, opts, bytes_before, is_comic_book, transcoded)?;
     check_cancel(cancel)?;
     let plan = WritePlan::new(&prep, opts, &mut archive);
