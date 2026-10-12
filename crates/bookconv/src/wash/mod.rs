@@ -46,6 +46,7 @@ mod encoding;
 pub mod fonts;
 mod html5fix;
 mod ids;
+mod kindle_images;
 mod kindle_rules;
 mod layout;
 mod ncx_fix;
@@ -77,7 +78,10 @@ pub use self::encoding::transcode_entries;
 /// - 8（2026-10-12）：阅读器的两个怪癖（用户定）：不认 `rgba()` 的（掌阅）把规则里的 `rgba()` 换成按白底合成的不透明色
 ///   （《飘》「第一卷」标题的半透明白条作废后字看不见）；不认背景图 `no-repeat` 的（Move，profile `background_no_repeat`）
 ///   去掉写了不平铺的背景图、背景色照留（大图偏到一边被裁、小图平铺满页）。
-pub const KINDLE_RULES_VERSION: &str = "8";
+/// - 9（2026-10-12）：图片照 Kindle 上的大小显示（`kindle_images.rs`，profile `image_sizing`）：Move 只认百分比宽度、不写宽度和
+///   px/em 写的图一律拉满一行，折成 Kindle 上占内容区的百分比；掌阅的 px 是屏幕像素，px 写的、没写尺寸的折成 Kindle 的大小。
+///   规则写在 `eink-img.css`，`<img>` 上加类（2026-10-12 三台测试书「测试-插图」量的）。
+pub const KINDLE_RULES_VERSION: &str = "9";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -173,11 +177,26 @@ pub struct WashOpts {
     /// `kindle_rules` 统计正文字号时求 `@media`、`<link media>` 用的环境（阅读模式的产物阅读范围、屏幕、黑白彩色，
     /// [`crate::cascade::MediaEnv::for_format`]）；`None`＝求值不了的特性条件一律不成立。
     pub media: Option<crate::cascade::MediaEnv>,
+    /// 阅读器怎么定图片尺寸（profile 的 `image_sizing`）和 Kindle 上图片的大小（[`KindleImageRef`]）：不是照 CSS 的阅读器，
+    /// `kindle_rules` 把图片宽度改写成显示出来和 Kindle 一样大的写法（`kindle_images.rs`）。`None` 不改。
+    pub image_sizing: Option<(profile::ImageSizing, KindleImageRef)>,
+    /// 图片的原始宽高（路径 → 像素）：流式优化时清洗层拿到的图片条目是空占位，由调用方读文件头填上（`kindle_images` 用）。
+    pub image_dims: Option<std::sync::Arc<HashMap<String, (u32, u32)>>>,
+}
+
+/// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KindleImageRef {
+    /// 内容区宽、高（屏幕像素）：不写宽度的图按原图像素显示，宽过、高过内容区的保持比例缩进来。
+    pub content_px: f64,
+    pub content_h: f64,
+    /// 1em（正文字号）的屏幕像素。
+    pub em_px: f64,
 }
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None }
     }
 }
 
@@ -414,6 +433,9 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     if opts.mode.kindle_rules() {
         let font_scale = kindle_rules::apply(entries, rep, opts);
         add_ua_css(entries, rep, font_scale);
+        if let Some((sizing, kref)) = opts.image_sizing {
+            kindle_images::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), sizing, kref);
+        }
         drop_nonlinear_nav(entries);
     }
     fix_ncx_manifest_id(entries, rep);

@@ -166,7 +166,8 @@ pub(super) fn dump_blocks(blocks: &[Block], dims: &HashMap<String, (u32, u32)>, 
     dump_blocks_in(blocks, None, dims, out)
 }
 
-/// 每个文字块一行样式（13 列）；图片另起一行 `#img\t路径\t宽\t高\tCSS 宽度\t对齐\t在不在链接里\t行内还是成块`（行内图片跟在所在文字块那行后面），
+/// 每个文字块一行样式（13 列）；图片另起一行 `#img\t路径\t宽\t高\tCSS 宽度\t对齐\t在不在链接里\t行内还是成块`（行内图片跟在所在文字块那行后面；
+/// 宽度照原写法，独立图片 px 按 0.75pt、行内图片 px 按 0.45pt，行内只写了高的写成 `h` 加高度），
 /// 背景图 `#bg\t路径\t不平铺`
 /// （`tools/kfx/unify.py` 比图片用；只认 13 列文字行的脚本不受影响）。
 fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<String, (u32, u32)>, out: &mut String) {
@@ -210,26 +211,32 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
                     m.margin_right.em,
                     m.margin_right.pct,
                 );
-                // 行内图片的宽度写显示宽度（根 em，同写出器的算法）：只写了高、什么都没写的也有宽度可比
+                // 行内图片的宽度照原写法（px 按 0.45pt，见 `InlineImage::width`）：只写了高的写 `h` 加高度，都没写的 `-`
                 for i in images {
-                    let d = dims.get(&i.src).copied().unwrap_or((0, 0));
-                    dump_image(&i.src, Some(Len::Em(super::layout::inline_size(i, d).0)), c.text_align.as_deref(), i.linked, "inline", dims, out);
+                    let width = match (i.width, i.height) {
+                        (Some(w), _) => len_str(w),
+                        (None, Some(h)) => format!("h{}", len_str(h)),
+                        (None, None) => "-".into(),
+                    };
+                    dump_image(&i.src, &width, c.text_align.as_deref(), i.linked, "inline", dims, out);
                 }
             }
-            Kind::Image { src, linked } => dump_image(src, b.comp.width, b.comp.text_align.as_deref(), *linked, "block", dims, out),
+            Kind::Image { src, linked } => dump_image(src, &b.comp.width.map_or("-".into(), len_str), b.comp.text_align.as_deref(), *linked, "block", dims, out),
         }
     }
 }
 
-fn dump_image(src: &str, width: Option<Len>, align: Option<&str>, linked: bool, how: &str, dims: &HashMap<String, (u32, u32)>, out: &mut String) {
+fn len_str(l: Len) -> String {
+    match l {
+        Len::Em(n) => format!("em:{n}"),
+        Len::Pt(n) => format!("pt:{n}"),
+        Len::Percent(n) => format!("%:{n}"),
+    }
+}
+
+fn dump_image(src: &str, width: &str, align: Option<&str>, linked: bool, how: &str, dims: &HashMap<String, (u32, u32)>, out: &mut String) {
     use std::fmt::Write;
     let (w, h) = dims.get(src).copied().unwrap_or((0, 0));
-    let width = match width {
-        Some(Len::Em(n)) => format!("em:{n}"),
-        Some(Len::Pt(n)) => format!("pt:{n}"),
-        Some(Len::Percent(n)) => format!("%:{n}"),
-        None => "-".into(),
-    };
     let _ = writeln!(out, "#img\t{src}\t{w}\t{h}\t{width}\t{}\t{linked}\t{how}", align.unwrap_or("-"));
 }
 

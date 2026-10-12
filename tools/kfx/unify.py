@@ -83,21 +83,51 @@ def epub_images(path, bindir, device):
     return imgs, bgs
 
 
-def same_width(a, b, w):
-    """两种宽度写法显示出来一样宽：都按原尺寸、百分比相差不到 2，或者一边 100% 一边原图本来就宽过页面（都撑满页宽）。"""
-    if a == b:
-        return True
-    # em 和 pt 都折成 em（12pt＝1em，不管元素自己的字号——图片多在正文里）比，相差 5% 以内算一样
-    em = lambda x: float(x[3:]) if x.startswith('em:') else float(x[3:]) / 12 if x.startswith('pt:') else None
-    ea, eb = em(a), em(b)
-    if ea is not None and eb is not None:
-        return abs(ea - eb) <= 0.05 * max(ea, eb)
-    pct = lambda x: float(x.split(':')[1]) if x.startswith('%:') else None
-    pa, pb = pct(a), pct(b)
-    if pa is not None and pb is not None:
-        return abs(pa - pb) < 2
-    full = lambda p: p is not None and p >= 99
-    return w >= 1000 and (full(pa) or full(pb)) and (pa is None or pb is None)
+# 各阅读器显示图片的几何（屏幕像素）：内容区宽、高，缺省字号下 1em。Kindle 取 kindle profile（KFX 阅读范围、font_px）；
+# 掌阅、Move 是 2026-10-12 测试书「测试-插图」量的（掌阅 100% 宽的图 1168px、10em 的 374px；Move 的内容区同 profile 842×1455）
+READER_GEOMETRY = {
+    'ireader': {'content': 1168, 'height': 1560, 'em_px': 37.4},
+    'xochitl': {'content': 842, 'height': 1455, 'em_px': None},
+}
+
+
+def kindle_geometry():
+    text = open(os.path.join(PROFILES, 'kindle.toml'), encoding='utf-8').read()
+    m = re.search(r'\[readable\.kfx\]\s*width\s*=\s*(\d+)\s*height\s*=\s*(\d+)', text)
+    return {'content': int(m.group(1)), 'height': int(m.group(2)), 'em_px': float(profile_value('kindle', 'font_px'))}
+
+
+def shown_width(width, w, h, geo, sizing, inline=False):
+    """一张图在阅读器上显示的宽度，占内容区宽度的比例（0–1）。`width` 是宽度写法（`%:数`、`em:数`、`pt:数`、行内只写高的 `h…`、
+    没写 `-`），`sizing` 是阅读器的规矩（profile `image_sizing`；Kindle 记作 `kindle`）：
+    kindle——百分比照写，em 跟着字号，没写的按原图像素（行内的按 1/16em 一像素）；
+    device-px（掌阅）——照 CSS，px 是屏幕像素（独立图片的 pt 是 px×0.75 来的，行内的是 px×0.45）；
+    percent（Move）——只认百分比，别的一律拉满一行。
+    都保持比例缩进一页（宽、高都不超出内容区）。"""
+    c, em_px = geo['content'], geo['em_px']
+    fit = geo['height'] * w / h / c if w and h else 1.0
+    num = lambda x: float(x.split(':')[1])
+    if width.startswith('%:'):
+        f = num(width) / 100
+    elif sizing == 'percent':
+        f = 1.0
+    elif width.startswith('h') and w and h:
+        # 只写了高：宽按比例
+        f = shown_width(width[1:], w, h, {**geo, 'height': 1e9}, sizing, inline) * w / h if not width[1:].startswith('%') else 1.0
+    elif width.startswith('em:'):
+        f = num(width) * em_px / c
+    elif width.startswith('pt:'):
+        f = num(width) / (0.45 if inline else 0.75) / c if sizing == 'device-px' else num(width) / 12 * em_px / c
+    elif sizing == 'kindle' and inline:
+        f = w / 16 * em_px / c
+    else:
+        f = w / c
+    return min(f, 1.0, fit)
+
+
+def same_shown(a, b):
+    """两台显示的宽度算一样：相差不到内容区的 3%，或相对相差 10% 以内（em 写的图跟着各自的缺省字号走，两台字号不完全一样）。"""
+    return abs(a - b) <= 0.03 or abs(a - b) <= 0.1 * max(a, b)
 
 
 def epub_rgba_count(path):
@@ -138,6 +168,8 @@ def main():
     key = lambda t: ''.join(t.split())[:60]
     miss = {d: collections.Counter() for d in DEVICES}
     img_miss = {d: collections.Counter() for d in DEVICES}
+    kgeo = kindle_geometry()
+    sizing = {d: profile_value(d, 'image_sizing') or 'css' for d in DEVICES}
     quirks = []
     ex = {}
     low = []
@@ -204,12 +236,14 @@ def main():
                     ex.setdefault((d, ('不见了', f'{w}×{h}')), title)
                     continue
                 _, _, ew, ea, _, ei = q[(w, h)].popleft()
-                # 行内图片在段落里排，对齐跟着段落，不比
-                checks = (('宽度', same_width(width, ew, w)), ('对齐', inline or align in ('-', ea)), ('行内/成块', inline == ei))
+                # 宽度比阅读器上实际显示的（按各台的规矩折成占内容区的比例）；行内图片在段落里排，对齐跟着段落，不比
+                ks, ds = shown_width(width, w, h, kgeo, 'kindle', inline), shown_width(ew, w, h, READER_GEOMETRY[d], sizing[d], ei)
+                # 整页单图（Kindle 的对齐记 `-`：封面页、整页插图）各台都缩放到满页，屏幕比例不同，不比宽度
+                checks = (('宽度', align == '-' or same_shown(ks, ds)), ('对齐', inline or align in ('-', ea)), ('行内/成块', inline == ei))
                 bad = [k for k, good in checks if not good]
                 if bad:
                     how = lambda x: '行内' if x else '成块'
-                    kk = ('、'.join(bad), f'Kindle {width}/{align}/{how(inline)} {d} {ew}/{ea}/{how(ei)}')
+                    kk = ('、'.join(bad), f'Kindle {width}→{ks:.0%}/{align}/{how(inline)} {d} {ew}→{ds:.0%}/{ea}/{how(ei)}')
                     img_miss[d][kk] += 1
                     ex.setdefault((d, kk), title)
                 else:

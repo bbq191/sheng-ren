@@ -26,6 +26,8 @@ kindle_rules = true
 background_no_repeat = false
 comic_reader_margins = 1
 
+# 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比
+image_sizing = "percent"
 [screen]
 width = 954
 height = 1696
