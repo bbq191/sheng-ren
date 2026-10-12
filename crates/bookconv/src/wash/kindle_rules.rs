@@ -30,7 +30,13 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts
         font_scale,
         opaque_rgba: !opts.css_rgba,
         drop_single_backgrounds: !opts.background_no_repeat,
+        tiled: HashSet::new(),
     };
+    // 平铺背景的阅读器：整页背景图做成整页一块（`bgfit::plan_tiles`），这些规则照留，图由优化器改（`rep.page_tiles`）
+    if let Some(g) = opts.page_tiles.filter(|_| ctx.drop_single_backgrounds) {
+        rep.page_tiles = crate::bgfit::plan_tiles(entries, &ctx.body_classes, g);
+        ctx.tiled = rep.page_tiles.keys().cloned().collect();
+    }
     ctx.body_fonts.extend(exposed_fonts(entries, media, &ctx, &facts.fonts));
     rep.kindle_rule_edits += rewrite_entries(entries, &ctx);
     ctx.font_scale.filter(|&k| k != 1.0)
@@ -47,7 +53,7 @@ fn exposed_fonts(entries: &[Entry], media: Option<&MediaEnv>, ctx: &Ctx, before:
         return found;
     }
     let total: usize = before.values().sum();
-    let mut trial = Ctx { body_fonts: ctx.body_fonts.clone(), body_classes: ctx.body_classes.clone(), font_scale: None, ..*ctx };
+    let mut trial = Ctx { body_fonts: ctx.body_fonts.clone(), body_classes: ctx.body_classes.clone(), tiled: ctx.tiled.clone(), font_scale: None, ..*ctx };
     for _ in 0..3 {
         let mut copy: Vec<Entry> = entries.iter().filter(|e| is_css_name(&e.name) || is_chapter_entry(e)).cloned().collect();
         rewrite_entries(&mut copy, &trial);
@@ -77,10 +83,10 @@ fn rewrite_entries(entries: &mut [Entry], ctx: &Ctx) -> usize {
         let mut n = 0;
         if is_css_name(&e.name) {
             let out = match std::str::from_utf8(&e.data) {
-                Ok(text) => rewrite_css(text, ctx, &mut n).into_bytes(),
+                Ok(text) => rewrite_css_in(text, &e.name, ctx, &mut n).into_bytes(),
                 // 不是 UTF-8 的样式表（《啸风山庄》的 CSS.css 是 Big5）：按单字节原样读写。CSS 的语法都是 ASCII，要改的值（颜色、边距）
                 // 也是，别的字节（Big5 写的字体名）原样留着
-                Err(_) => crate::util::latin1_encode(&rewrite_css(&crate::util::latin1_decode(&e.data), ctx, &mut n)),
+                Err(_) => crate::util::latin1_encode(&rewrite_css_in(&crate::util::latin1_decode(&e.data), &e.name, ctx, &mut n)),
             };
             if n > 0 {
                 e.data = out;
@@ -93,7 +99,7 @@ fn rewrite_entries(entries: &mut [Entry], ctx: &Ctx) -> usize {
         let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
         let s = html::edit_style_attrs(text, |t, value| {
             let body = t.name.eq_ignore_ascii_case("body");
-            let (v, k) = rewrite_decls(value, body, ctx);
+            let (v, k) = rewrite_decls(value, body, &e.name, ctx);
             n += k;
             if k == 0 {
                 html::Edit::Keep
@@ -104,7 +110,7 @@ fn rewrite_entries(entries: &mut [Entry], ctx: &Ctx) -> usize {
             }
         })
         .into_owned();
-        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(rewrite_css(css, ctx, &mut n))).into_owned();
+        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(rewrite_css_in(css, &e.name, ctx, &mut n))).into_owned();
         if n > 0 {
             e.data = s.into_bytes();
         }
@@ -129,6 +135,8 @@ struct Ctx {
     opaque_rgba: bool,
     /// 阅读器不认背景图的 `no-repeat`（profile `background_no_repeat = false`，xochitl）：写了不平铺的背景图去掉，背景色照留。
     drop_single_backgrounds: bool,
+    /// 做成整页图块的背景图（zip 路径，`bgfit::plan_tiles`）：用它们的规则不去掉。
+    tiled: HashSet<String>,
 }
 
 /// 字号归一要乘的系数：1 / 全书正文字号 `base`（[`BookFacts::base_font_size`]；正文已经是 1em 的是 1）。
@@ -307,7 +315,13 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
 
 /// 改一份样式表：按 [`rule_spans`] 逐条规则（`@media` 里的也改，不看条件——阅读器求不求、怎么求说不准），只替换规则体，
 /// 选择器连同前面的注释、`@charset …;` 原样留。`@font-face`、`@page` 这类 at 规则不动；到文末没闭合的规则不动（拿不准）。
+#[cfg(test)]
 fn rewrite_css(css: &str, ctx: &Ctx, n: &mut usize) -> String {
+    rewrite_css_in(css, "", ctx, n)
+}
+
+/// 同 [`rewrite_css`]，`base` 是样式表所在的条目（解析 `url()` 用）。
+fn rewrite_css_in(css: &str, base: &str, ctx: &Ctx, n: &mut usize) -> String {
     let mut edits = Vec::new();
     for r in rule_spans(css) {
         let clean = rule_selector(r.prelude);
@@ -316,7 +330,7 @@ fn rewrite_css(css: &str, ctx: &Ctx, n: &mut usize) -> String {
             continue;
         }
         let body = trimmed.split(',').all(|s| is_body_selector(s, &ctx.body_classes));
-        let (decls, k) = rewrite_decls(r.body, body, ctx);
+        let (decls, k) = rewrite_decls(r.body, body, base, ctx);
         *n += k;
         if k > 0 {
             edits.push((r.body_start, r.body_start + r.body.len(), decls));
@@ -340,7 +354,7 @@ fn is_body_selector(sel: &str, body_classes: &HashSet<String>) -> bool {
 }
 
 /// 改一段声明（规则体或行内 `style`）。返回 (新文本, 改了几条)。
-fn rewrite_decls(text: &str, body: bool, ctx: &Ctx) -> (String, usize) {
+fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usize) {
     let decls = html::css_decls(text);
     let mut out = String::new();
     let mut changed = 0;
@@ -356,7 +370,11 @@ fn rewrite_decls(text: &str, body: bool, ctx: &Ctx) -> (String, usize) {
     let bg = bg.unwrap_or(0xFFFF_FFFF);
     let mut has_color = false;
     // 这条规则写了不平铺（`no-repeat`、`repeat-x`、`repeat-y`、`space`、`round`）：不认 `no-repeat` 的阅读器会平铺它，去掉背景图
+    // 背景图做成了整页图块的规则照留（xochitl 本来就平铺、不管尺寸位置，图块做成整页一份）
+    let tiled = !ctx.tiled.is_empty()
+        && decls.iter().any(|d| html::css_urls(d.value).iter().any(|u| ctx.tiled.contains(&crate::epubzip::resolve_link(base, u.value).0)));
     let single_bg = ctx.drop_single_backgrounds
+        && !tiled
         && decls.iter().any(|d| {
             let v = strip_important(d.value).0.to_ascii_lowercase();
             match d.prop.to_ascii_lowercase().as_str() {
@@ -541,7 +559,7 @@ mod tests {
     use super::*;
 
     fn ctx() -> Ctx {
-        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false }
+        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false, tiled: HashSet::new() }
     }
 
     #[test]
@@ -703,6 +721,11 @@ mod tests {
         }
         let keep = r#".a{background:url(a.png) no-repeat}"#;
         assert_eq!(rewrite_css(keep, &ctx(), &mut n), keep, "认 no-repeat 的阅读器不动");
+        // 做成整页图块的背景图（`bgfit::plan_tiles`）：规则照留，按样式表所在位置解析 url
+        let t = Ctx { tiled: ["OEBPS/Images/a.jpg".to_string()].into_iter().collect(), ..c };
+        let fen = r#"body.fen{background:url('../Images/a.jpg') no-repeat bottom center;background-size:100% auto}"#;
+        assert_eq!(rewrite_css_in(fen, "OEBPS/Styles/s.css", &t, &mut n), fen);
+        assert_eq!(rewrite_css_in(fen, "s.css", &t, &mut n), "body.fen{background-size:100% auto}", "别的图照旧去掉");
     }
 
     #[test]

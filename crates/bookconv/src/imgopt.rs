@@ -258,6 +258,55 @@ pub fn downscale_background(bytes: &[u8], fit: crate::bgfit::BgFit, area: Screen
     }
 }
 
+/// 整页背景图做成整屏大小的一块（平铺背景的阅读器用，见 [`crate::bgfit::PageTile`]）：左上角内容区那么大的地方铺背景色
+/// （没写是白的），图按尺寸、位置画上去（超出内容区的裁掉，同 Kindle），其余白色。带透明的按透明度叠在背景色上。
+/// `jpeg`：条目是 JPEG（写回 JPEG），否则写成不透明的 PNG。规则在清洗时已经照留了，所以图解不开（格式不对、超过解码上限 `max_px`、
+/// 放得太大）时也写一块只有背景色的（等于以前去掉背景图），不留原图让阅读器乱铺。
+pub fn page_tile(bytes: &[u8], tile: &crate::bgfit::PageTile, max_px: u64, jpeg: bool) -> Option<Vec<u8>> {
+    use image::ImageEncoder;
+    let (pw, ph) = tile.page;
+    let (aw, ah) = (tile.area.0.min(pw), tile.area.1.min(ph));
+    // 一张图只这一份、产物也不大，解码上限按调用方给的（不用正文插图的 900 万：《飘》版权页的底纹 2631×3508）
+    let placed = ImgHead::read(bytes, is_jpeg_or_png, true).and_then(|head| {
+        let img = head.decode(bytes, max_px)?.into_rgba8();
+        let (x, y, dw, dh) = tile.placement(img.width(), img.height());
+        let (dw, dh) = ((dw.round() as u32).max(1), (dh.round() as u32).max(1));
+        // 放得特别大的（窄条图 cover）：缩放的结果太占内存，不做
+        if (dw as u64) * (dh as u64) > 4 * (pw as u64) * (ph as u64) {
+            return None;
+        }
+        let scaled = if (dw, dh) == img.dimensions() { img.into_raw() } else { fir_lanczos3(&img.into_raw(), head.w, head.h, fast_image_resize::PixelType::U8x4, dw, dh)? };
+        Some((x, y, dw, dh, scaled))
+    });
+    let (x, y, dw, dh, scaled) = placed.unwrap_or((0.0, 0.0, 0, 0, Vec::new()));
+    let bg = crate::color::over_white(tile.color.unwrap_or(0xFFFF_FFFF));
+    let bg = [(bg >> 16) as u8, (bg >> 8) as u8, bg as u8];
+    let mut out = vec![255u8; (pw as usize) * (ph as usize) * 3];
+    let (x0, y0) = (x.round() as i64, y.round() as i64);
+    for py in 0..ah as i64 {
+        for px in 0..aw as i64 {
+            let o = ((py as usize) * (pw as usize) + px as usize) * 3;
+            let (sx, sy) = (px - x0, py - y0);
+            let mut c = bg;
+            if sx >= 0 && sy >= 0 && (sx as u32) < dw && (sy as u32) < dh {
+                let i = ((sy as usize) * (dw as usize) + sx as usize) * 4;
+                let a = scaled[i + 3] as u32;
+                for k in 0..3 {
+                    c[k] = ((scaled[i + k] as u32 * a + bg[k] as u32 * (255 - a) + 127) / 255) as u8;
+                }
+            }
+            out[o..o + 3].copy_from_slice(&c);
+        }
+    }
+    let mut enc = Vec::new();
+    if jpeg {
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut enc, JPEG_QUALITY).write_image(&out, pw, ph, image::ExtendedColorType::Rgb8).ok()?;
+    } else {
+        image::codecs::png::PngEncoder::new(&mut enc).write_image(&out, pw, ph, image::ExtendedColorType::Rgb8).ok()?;
+    }
+    Some(enc)
+}
+
 /// 带透明（或 16 位等）的 PNG 缩放后写回 PNG（插图 [`downscale_into`]、背景图 [`downscale_background`] 共用）。透明的按预乘 alpha 缩
 /// （`fast_image_resize` 缺省如此），透明像素的颜色不会渗进边缘（`image` 自带的缩放不预乘，调色板图透明处常是黑色，边上会出黑边）。
 /// 16 位的降成 8 位。

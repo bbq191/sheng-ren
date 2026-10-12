@@ -273,7 +273,7 @@ impl OptimizeOpts {
             // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
             wash: Some({
                 let w = self.wash.clone().unwrap_or_default();
-                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, ..Default::default() }
+                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, ..Default::default() }
             }),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
@@ -312,6 +312,13 @@ impl OptimizeOpts {
                         let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)) };
                         w.image_sizing = Some((p.image_sizing, kref));
                     }
+                }
+                // 平铺背景的阅读器（Move）：整页背景图做成整页一块（`bgfit::PageTile`）。没写尺寸的图 Kindle 按原图像素显示，
+                // 折成这里内容区宽 / Kindle 内容区宽
+                if !p.background_no_repeat {
+                    let area = p.output_readable();
+                    let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
+                    w.page_tiles = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
                 }
                 if p.background_images {
                     // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
@@ -383,6 +390,8 @@ struct Prepared {
     has_remote_imgs: bool,
     /// 要按原书尺寸意图缩的整页背景图（清洗后的 zip 路径 → 意图），见 [`OptimizeOpts::fit_backgrounds`]。
     bg_fits: HashMap<String, crate::bgfit::BgFit>,
+    /// 做成整页图块的背景图（清洗后的 zip 路径 → 画法，清洗层定的，见 [`crate::wash::WashOpts::page_tiles`]）。
+    page_tiles: HashMap<String, crate::bgfit::PageTile>,
     /// 要合成白底的正文图（zip 路径），见 [`OptimizeOpts::flatten_alpha`]。
     alpha_imgs: HashSet<String>,
     rep: Report,
@@ -505,7 +514,8 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     }
     let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &backrefs, &skip_notes, opts.drop_note_backlinks);
     let alpha_imgs = if opts.flatten_alpha && !is_comic_book { crate::imgalpha::plan(&entries) } else { HashSet::new() };
-    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, bg_fits, alpha_imgs, rep })
+    let page_tiles = if is_comic_book { HashMap::new() } else { rep.wash.as_mut().map(|w| std::mem::take(&mut w.page_tiles)).unwrap_or_default() };
+    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, bg_fits, page_tiles, alpha_imgs, rep })
 }
 
 /// 第一遍后半：把**被引用**的注释块（aside/p/li/div 且带注释语义）从各章移除、建全书索引 (文件, id) → 块，交给第二遍
