@@ -315,7 +315,8 @@ impl Library {
             return Ok((existing_info(), existing_cover()));
         }
         // 同一套漫画只查一次（2026-10-12 用户要：漫画本数多、元数据一样）：别的卷找到过就照用，这一版规则下没找到过就不再找
-        if need_info && !force && !need_cover {
+        // `--force` 重找时，这次运行里已经重找过的那一套也照用（全量重找时漫画不必每卷联网）
+        if need_info && !need_cover && (!force || self.facts.series_fetched(&series_key(meta))) {
             if let Some(r) = self.series_lookup(meta)? {
                 return Ok((r, existing_cover()));
             }
@@ -333,6 +334,7 @@ impl Library {
                 step.run(&mut l)?;
             }
         }
+        let l_comic = l.comic;
         let Lookup { info, mut cover, work, work_err, .. } = l;
         // 网站上的封面已经存下了：后面出错也不整本报错，如实报"封面已存、元数据没查成"
         let cover_stored = cover.is_some();
@@ -340,6 +342,9 @@ impl Library {
         let info_result = if !need_info {
             existing_info()
         } else if let Some(i) = info {
+            if l_comic {
+                self.facts.note_series_fetched(&series_key(meta));
+            }
             let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
             m.info = Some(i.clone());
             m.info_checked = LOOKUP_VERSION.to_string();
@@ -391,7 +396,8 @@ impl Library {
         }
         let key = series_key(meta);
         let others: Vec<Meta> = self.list().into_iter().filter(|m| m.id != meta.id && series_key(m) == key).collect();
-        let found = others.iter().find_map(|m| m.info.as_ref().map(|i| (i.clone(), m.title.clone())));
+        // 按这一版规则找到的优先（`--force` 重找时用刚重找过的那一卷，不用别的卷留着的旧结果）
+        let found = others.iter().filter(|m| m.info_checked == LOOKUP_VERSION).chain(others.iter()).find_map(|m| m.info.as_ref().map(|i| (i.clone(), m.title.clone())));
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
         if let Some((info, from)) = found {
             m.info = Some(info.clone());

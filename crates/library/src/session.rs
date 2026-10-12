@@ -48,6 +48,8 @@ pub(crate) struct ContentFacts {
     own_dc: RefCell<HashMap<String, OwnDc>>,
     /// 内容哈希 → 是不是漫画（指纹分文字书、漫画，profile 给漫画另配格式时也要用）。
     comic: RefCell<HashMap<String, bool>>,
+    /// 这次运行里联网找过元数据的整套漫画（`metadata::series_key`）：`meta --fetch --force` 时同一套别的卷照用，不再每卷联网。
+    series_fetched: RefCell<std::collections::HashSet<String>>,
 }
 
 impl ContentFacts {
@@ -71,6 +73,14 @@ impl ContentFacts {
 
     pub(crate) fn note_own_dc(&self, sha: &str, o: OwnDc) {
         self.own_dc.borrow_mut().insert(sha.to_string(), o);
+    }
+
+    pub(crate) fn series_fetched(&self, key: &str) -> bool {
+        self.series_fetched.borrow().contains(key)
+    }
+
+    pub(crate) fn note_series_fetched(&self, key: &str) {
+        self.series_fetched.borrow_mut().insert(key.to_string());
     }
 
     pub(crate) fn comic(&self, sha: &str) -> Option<bool> {
