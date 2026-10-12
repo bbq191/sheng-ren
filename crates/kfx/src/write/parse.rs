@@ -27,9 +27,29 @@ pub(super) struct Run {
     pub(super) anchor: bool,
 }
 
+/// 行内图片在文字里占的那个字符（写出时文字在这里切开、插进图片节点，见 [`InlineImage`]）。
+pub(super) const OBJ: char = '\u{FFFC}';
+
+/// 夹在文字里的图片（图标注释号、文中小图标）：文字里占一个字符（[`OBJ`]），写成文字节点内容里的图片节点，
+/// 不再切开文字另起一块（Send to Kindle 同样，2026-10-12 测试书；以前一律独立成块，《飘》图标注释号缩到一字高以后自己占一行）。
+/// 整段只有图片、没有字的照旧独立成块（[`Doc::flush`]）。
+#[derive(Clone, Debug)]
+pub(super) struct InlineImage {
+    /// 在文字里的字符偏移。
+    pub(super) at: usize,
+    pub(super) src: String,
+    pub(super) alt: String,
+    pub(super) comp: Computed,
+    /// 图片在带 `href` 的 `<a>` 里（同 [`Kind::Image`]）。
+    pub(super) linked: bool,
+    /// CSS 的宽、高（没写的用 HTML 的 `width`/`height` 属性）：px 按 0.45pt（Send to Kindle 的口径：20px 写成 0.75em、`width="16"` 写成 0.6em）。
+    pub(super) width: Option<Len>,
+    pub(super) height: Option<Len>,
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum Kind {
-    Text { text: String, runs: Vec<Run> },
+    Text { text: String, runs: Vec<Run>, images: Vec<InlineImage> },
     /// `linked`：图在带 `href` 的 `<a>` 里（图标注释号之类；只给 `--styles` 输出用，见 `analyze::dump_blocks`）。
     Image { src: String, linked: bool },
     Container(Vec<Block>),
@@ -213,11 +233,12 @@ pub(super) struct Inline {
     /// 还没走完的行内元素的区间（外层在前，长度待定）。
     /// 走到一半遇到块或图片要切开（[`Doc::flush`]）时，区间在切开处截断，到新缓冲从 0 接着开（见 [`Inline::cut_open`]）。
     open: Vec<OpenRun>,
+    images: Vec<InlineImage>,
 }
 
 impl Inline {
     fn new() -> Self {
-        Inline { text: String::new(), chars: 0, runs: Vec::new(), ids: Vec::new(), space_ids: Vec::new(), pending_space: false, open: Vec::new() }
+        Inline { text: String::new(), chars: 0, runs: Vec::new(), ids: Vec::new(), space_ids: Vec::new(), pending_space: false, open: Vec::new(), images: Vec::new() }
     }
 
     /// 行内元素的 id：锚点在它的第一个字上。
@@ -255,22 +276,34 @@ impl Inline {
                 self.pending_space = self.chars > 0 && !self.text.ends_with('\n');
                 continue;
             }
-            if self.pending_space {
-                for o in self.open.iter_mut().filter(|o| o.after_space && o.start == self.chars) {
-                    o.start += 1;
-                }
-                for i in self.space_ids.drain(..) {
-                    if self.ids[i].1 == self.chars {
-                        self.ids[i].1 += 1;
-                    }
-                }
-                self.text.push(' ');
-                self.chars += 1;
-                self.pending_space = false;
-            }
-            self.text.push(c);
-            self.chars += 1;
+            self.push_char(c);
         }
+    }
+
+    /// 行内图片：文字里占一个 [`OBJ`]。
+    fn push_image(&mut self, mut img: InlineImage) {
+        self.push_char(OBJ);
+        img.at = self.chars - 1;
+        self.images.push(img);
+    }
+
+    /// 写出一个非空白字符（前面有待写的空格先写空格）。
+    fn push_char(&mut self, c: char) {
+        if self.pending_space {
+            for o in self.open.iter_mut().filter(|o| o.after_space && o.start == self.chars) {
+                o.start += 1;
+            }
+            for i in self.space_ids.drain(..) {
+                if self.ids[i].1 == self.chars {
+                    self.ids[i].1 += 1;
+                }
+            }
+            self.text.push(' ');
+            self.chars += 1;
+            self.pending_space = false;
+        }
+        self.text.push(c);
+        self.chars += 1;
     }
 
     fn push_break(&mut self) {
@@ -280,12 +313,36 @@ impl Inline {
         self.chars += 1;
     }
 
+    /// 没有字（空白和行内图片不算字）。
     fn is_empty(&self) -> bool {
-        self.text.trim().is_empty()
+        self.text.chars().all(|c| c.is_whitespace() || c == OBJ)
     }
 
     fn take(&mut self) -> Inline {
         std::mem::replace(self, Inline::new())
+    }
+
+    /// 字符 `from..to` 这一段（两头是独立成块的图片，见 [`Doc::flush`]）：区间、锚点、行内图片挪到这一段的偏移。
+    /// 紧挨图片的空格去掉（折叠空白时图片两边补出来的，以前图片切开文字，这两个空格不会写出来）；`to` 处的锚点归这一段（落在末尾）。
+    fn slice(&self, chars: &[char], from: usize, to: usize) -> Inline {
+        let lead = usize::from(from > 0 && chars.get(from) == Some(&' ') && from < to);
+        let trail = usize::from(to < chars.len() && to > from + lead && chars[to - 1] == ' ');
+        let (a, z) = (from + lead, to - trail);
+        let mut out = Inline::new();
+        out.text = chars[a..z].iter().collect();
+        out.chars = z - a;
+        out.runs = self
+            .runs
+            .iter()
+            .filter_map(|r| {
+                let (s, e) = (r.start.max(a), (r.start + r.len).min(z));
+                (e > s).then(|| Run { start: s - a, len: e - s, ..r.clone() })
+            })
+            .collect();
+        let after = |o: usize| if from == 0 { true } else { o >= from };
+        out.ids = self.ids.iter().filter(|(_, o)| after(*o) && *o <= to).map(|(i, o)| (i.clone(), o.saturating_sub(a).min(out.chars))).collect();
+        out.images = self.images.iter().filter(|im| im.at >= a && im.at < z).map(|im| InlineImage { at: im.at - a, ..im.clone() }).collect();
+        out
     }
 }
 
@@ -336,7 +393,7 @@ fn own_text_block(mut b: Block, comp: Computed, heading: Option<u8>, lens: BoxLe
 /// 返回段落的计算值；并进去的区间去掉样式（只剩链接的照留）。不是这种段落的原样返回 `comp`。
 fn absorb_whole_span_style(kind: &mut Kind, comp: Computed) -> Computed {
     let mut comp = comp;
-    if let Kind::Text { text, runs } = kind {
+    if let Kind::Text { text, runs, .. } = kind {
         // 几层都覆盖整段时（`<span class="大字"><span class="bold">目录</span></span>`）取最里层，它的计算值已经含外层；链接照留
         let n = text.chars().count();
         let whole = !runs.is_empty() && runs.iter().all(|r| r.start == 0 && r.len == n && !r.note_ref);
@@ -445,6 +502,17 @@ impl Doc<'_> {
             c.lang = Some(l.to_string());
         }
         c
+    }
+
+    /// 图片的 CSS 宽、高（见 [`InlineImage::width`]）：没写的用 HTML 属性（纯数字的像素；百分比的宽度层叠时已经当 CSS）。
+    fn image_size(&self, el: &ElementRef) -> (Option<Len>, Option<Len>) {
+        let mut decls = self.sheet.cascade(el, self.path);
+        crate::css::presentational_hints(el, &mut decls);
+        let get = |k: &str| {
+            let css = decls.get(k).filter(|v| v.trim() != "auto").and_then(|v| crate::css::parse_box_len(v));
+            css.or_else(|| el.value().attr(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| *n > 0.0).map(|n| Len::Pt(n * 0.45)))
+        };
+        (get("width"), get("height"))
     }
 
     /// 把一个块级元素（计算值 `comp` 由调用方算好，层叠不重复做）展开成块序列。
@@ -735,9 +803,42 @@ impl Doc<'_> {
         let reopened = inl.cut_open();
         let taken = inl.take();
         inl.open = reopened;
+        // 独立成块的图片：整段没有字的（插图段落），或者所在的行（按 `<br/>` 分）没有字、后面跟着换行的（`<p><img/><br/>图注</p>`）；
+        // 别的嵌在字里（见 [`InlineImage`]）。Send to Kindle 同样（2026-10-12 测试书：图后换行接图注的独立成块，
+        // 「文字<br/>小图」段末单独一行的小图照样是行内的）。
+        let chars: Vec<char> = taken.text.chars().collect();
+        let textless = taken.is_empty();
+        let mut alone = Vec::new();
+        let mut line = 0;
+        for i in 0..=chars.len() {
+            if i == chars.len() || chars[i] == '\n' {
+                let seg = &chars[line..i];
+                let broken = i < chars.len();
+                if !seg.iter().any(|c| !c.is_whitespace() && *c != OBJ) && (textless || broken) {
+                    alone.extend(taken.images.iter().filter(|im| im.at >= line && im.at < i).map(|im| im.at));
+                }
+                line = i + 1;
+            }
+        }
+        if alone.is_empty() {
+            return self.flush_piece(taken, comp, out);
+        }
+        let mut cur = 0;
+        for &at in &alone {
+            self.flush_piece(taken.slice(&chars, cur, at), comp, out);
+            let Some(img) = taken.images.iter().find(|im| im.at == at) else { continue };
+            let mut b = Block::anonymous(Kind::Image { src: img.src.clone(), linked: img.linked }, img.comp.clone(), self.take_pending().into_iter().map(|i| (i, 0)).collect());
+            b.gap_before = self.gap.take();
+            out.push(b);
+            cur = at + 1;
+        }
+        self.flush_piece(taken.slice(&chars, cur, chars.len()), comp, out);
+    }
+
+    /// 一段行内内容写成文字块；没有字的不出块：里面的锚点留给后面的内容，只有 `&nbsp;`、全角空格、`<br/>` 的
+    /// （按 CSS 排出一个空行；只有普通空白的排不出行，不算）折成下一块的上边距。
+    fn flush_piece(&self, taken: Inline, comp: &Computed, out: &mut Vec<Block>) {
         if taken.is_empty() {
-            // 没有文字：里面的锚点留给后面的内容。只有 `&nbsp;`、全角空格、`<br/>` 的（按 CSS 排出一个空行；只有
-            // 普通空白的排不出行，不算）折成下一块的上边距。
             if !taken.text.is_empty() {
                 self.gap.set(self.gap.get() + BLANK_LINE_FOLD * comp.line_height.unwrap_or(LH_EM) * comp.font_size);
             }
@@ -760,7 +861,7 @@ impl Doc<'_> {
             .collect();
         let mut ids = taken.ids.into_iter().map(|(i, o)| (i, o.min(chars))).collect();
         prepend_ids(&mut ids, self.take_pending());
-        let mut b = Block::anonymous(Kind::Text { text, runs }, comp.inherited(), ids);
+        let mut b = Block::anonymous(Kind::Text { text, runs, images: taken.images }, comp.inherited(), ids);
         b.inline = true;
         b.gap_before = self.gap.take();
         out.push(b);
@@ -777,16 +878,26 @@ impl Doc<'_> {
                     return;
                 }
                 if let Some(src) = image_src(&el) {
-                    self.flush(inl, block_comp, out);
                     let comp = self.comp(&el, parent);
-                    // 图片自己的 id（`<img id="filepos152">`）也是锚点
-                    let mut lead = self.take_pending();
-                    lead.extend(el.value().attr("id").map(str::to_string));
-                    let ids = lead.into_iter().map(|i| (i, 0)).collect();
                     let linked = el.ancestors().filter_map(ElementRef::wrap).any(|a| a.value().name() == "a" && a.value().attr("href").is_some());
-                    let mut b = Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0, linked }, comp, ids);
-                    b.gap_before = self.gap.take();
-                    out.push(b);
+                    let src = resolve_link(self.path, &src).0;
+                    if comp.display.as_deref() == Some("block") {
+                        self.flush(inl, block_comp, out);
+                        // 图片自己的 id（`<img id="filepos152">`）也是锚点
+                        let mut lead = self.take_pending();
+                        lead.extend(el.value().attr("id").map(str::to_string));
+                        let mut b = Block::anonymous(Kind::Image { src, linked }, comp, lead.into_iter().map(|i| (i, 0)).collect());
+                        b.gap_before = self.gap.take();
+                        out.push(b);
+                        return;
+                    }
+                    // 先当行内图片收着：同一段里有字就嵌在字里，没有字的在 `flush` 里独立成块
+                    if let Some(id) = el.value().attr("id") {
+                        inl.push_id(id);
+                    }
+                    let (width, height) = self.image_size(&el);
+                    let alt = el.value().attr("alt").unwrap_or_default().to_string();
+                    inl.push_image(InlineImage { at: 0, src, alt, comp, linked, width, height });
                     return;
                 }
                 let comp = self.comp(&el, parent);

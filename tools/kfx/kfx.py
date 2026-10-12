@@ -66,15 +66,15 @@ def text_nodes(E):
 
 
 def image_nodes(E):
-    """按阅读顺序走遍各版面的 storyline，产出 (资源名, 节点链, 整页单图)：图片节点（`$159: $271`）引用的资源（`$175`）。
+    """按阅读顺序走遍各版面的 storyline，产出 (资源名, 节点链, 整页单图, 行内)：图片节点（`$159: $271`）引用的资源（`$175`）。
     节点链同 [`text_nodes`]（从版面顶层到这个图片节点）；整页单图是这个 storyline 里只有它一个节点（只有一张图的文档，写出器
-    写成整页图片版面，版面本身居中，图片节点不写对齐）。"""
+    写成整页图片版面，版面本身居中，图片节点不写对齐）；行内是嵌在文字节点内容里的图片节点（`$601: $283`）。"""
     alone = False
 
     def walk(n, chain):
         chain = chain + [n]
         if n.get('$159') == '$271' and isinstance(n.get('$175'), str):
-            yield n['$175'], chain, alone
+            yield n['$175'], chain, alone, n.get('$601') == '$283'
         for k in n.get('$146', []) or []:
             if isinstance(k, dict):
                 yield from walk(k, chain)

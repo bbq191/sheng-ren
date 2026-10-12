@@ -60,14 +60,16 @@ pub(super) fn compress_ids(mut ids: Vec<i64>) -> Value {
     Value::List(out)
 }
 
-/// `$609` 的写法：`[前进, 新 id]`，id 正好加一时只写前进量，最后 `[前进, 0]`。
-pub(super) fn pid_map(order: &[(i64, usize)]) -> Vec<Value> {
+/// `$609` 的写法：`[前进, 新 id]`，id 正好加一时只写前进量，最后 `[前进, 0]`；从节点中间起的段写 `[前进, id, 偏移]`
+/// （行内图片切开的文字节点，见 [`SectionCtx::split_at_images`]）。
+pub(super) fn pid_map(order: &[(i64, usize, usize)]) -> Vec<Value> {
     let mut out = Vec::new();
     let mut prev: Option<(i64, usize)> = None;
-    for &(eid, len) in order {
+    for &(eid, len, off) in order {
         let adv = prev.map_or(0, |p| p.1) as i64;
         match prev {
-            Some((pe, _)) if eid == pe + 1 => out.push(Value::Int(adv)),
+            Some((pe, _)) if eid == pe + 1 && off == 0 => out.push(Value::Int(adv)),
+            _ if off > 0 => out.push(Value::List(vec![Value::Int(adv), Value::Int(eid), Value::Int(off as i64)])),
             _ => out.push(Value::List(vec![Value::Int(adv), Value::Int(eid)])),
         }
         prev = Some((eid, len));

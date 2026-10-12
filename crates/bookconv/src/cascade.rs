@@ -1654,7 +1654,8 @@ impl Computed {
         }
         if let Some(v) = get("vertical-align") {
             let v = v.trim().to_ascii_lowercase();
-            if matches!(tag, "td" | "th" | "tr") {
+            // 图片的竖直对齐照原值留着（行内图片写 `$44`，KFX 写出器 20），不当上下标
+            if matches!(tag, "td" | "th" | "tr" | "img") {
                 c.valign = Some(v);
             } else {
                 c.superscript = matches!(v.as_str(), "super" | "top" | "text-top");
