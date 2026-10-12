@@ -836,3 +836,30 @@ fn pid_map_with_inline_image_offsets() {
     let l = |v: &[i64]| Value::List(v.iter().map(|&n| Value::Int(n)).collect());
     assert_eq!(m, vec![l(&[0, 8]), l(&[12, 8, 12]), Value::Int(0), l(&[1, 8, 13]), l(&[24, 10]), l(&[9, 0])]);
 }
+
+/// 强制分页另起一节、写了宽度的图片写块的对齐（Send to Kindle：《飘》版权页后 `<div style="page-break-before:always">` 另起一节，
+/// 带背景的 body 每节一份容器；二维码 `<div class="image"><img width="50%"/>` 写 `$580: $320`，2026-10-12）。
+#[test]
+fn page_breaks_split_sections_and_sized_images_align() {
+    let mut png = Vec::new();
+    image::GrayImage::from_pixel(4, 4, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let run = |body: &str| {
+        let page = format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>body.c{{background-color:#eee}} .pb{{page-break-before:always}} .pa{{page-break-after:always}} .image{{text-align:center}}</style></head>{body}</html>"#);
+        let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="i" href="i.png" media-type="image/png"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put("i.png", &png).unwrap();
+        w.put("c1.xhtml", page.as_bytes()).unwrap();
+        let epub = w.finish().unwrap().into_inner();
+        let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+        let c = crate::container::Container::parse(&kfx).unwrap();
+        let sections = c.entities.iter().filter(|e| e.ty == T_SECTION).count();
+        let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+        (sections, styles)
+    };
+    assert_eq!(run(r#"<body><p>甲</p><div class="pb"><p>乙</p></div><p class="pa">丙</p><p>丁</p></body>"#).0, 3, "分页前、后各另起一节");
+    assert_eq!(run(r#"<body><div class="pb"><p>甲</p></div><p>乙</p></body>"#).0, 1, "文件开头的分页不用切");
+    let (n, styles) = run(r#"<body class="c"><div><p>甲</p><div style="page-break-before:always"><img src="i.png"/></div><div class="image"><img src="i.png" width="50%"/></div><p>乙</p></div></body>"#);
+    assert_eq!(n, 2, "带背景的 body：容器的子块切开");
+    assert!(styles.contains(&format!("({P_BOX_ALIGN}, Symbol({ALIGN_CENTER}))")) && styles.contains(&format!("({P_SIZING}, Symbol({SIZING_VALUE}))")), "{styles}");
+}

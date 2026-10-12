@@ -183,6 +183,7 @@
 | **掌阅的整页背景图照 Kindle 写成像素尺寸、位置**（KINDLE_RULES 13，profile `background_auto_height = false`） | 掌阅「第一卷」插图竖向拉长、铺满上半页：测试书查出掌阅背景尺寸的高写 `auto` 时拉到整页高，写成像素宽高或 `contain` 才按比例，定位范围是整屏。用户同意先修这一条、并把卷首页的插图位置对到 Kindle（同 Move 的算法）。掌阅真机 ✓。标题位置（掌阅按自己的 em 排 `margin-top`，Kindle 按行距）没动，见待定 |
 | **竖直间距照 Kindle 换算**（方案 B，KINDLE_RULES 14，profile `em_px`）：掌阅、Move 的上下外边距、内边距（书里的和 `eink-ua.css`）改写成占内容区高的比例和 Kindle 一样——`em` 乘系数（掌阅 1.52、Move 1.31），`%`、`px`、`pt` 折成屏幕像素 | 测试书「测试-竖直间距」三台量出：Kindle 按行距排边距（一 rem ≈ 52.5px），掌阅、Move 按字号（≈ 37.5px），同样 1em 在 Kindle 上占页高约是掌阅的 1.5 倍、Move 的 1.3 倍；还查出掌阅把 `pt` 当 px、Move 的 `%` 只有十来像素。用户在「只修错误 / 照 Kindle 换算」里选了换算。代价：系数按三台现在的字号、行距设置量，改了设置要重量；几乎所有文字书在掌阅、Move 上重新生成。换算后测试书每种写法差 1–4px；段落 `line-height` 掌阅、Move 都不认，没法对齐 |
 | **Move 上去掉 `display:none` 的元素**（KINDLE_RULES 16，profile `display_none = false`，`wash/hidden.rs`） | xochitl 行内、外链的 `display:none` 都不认（测试书「测试-隐藏」），《飘》上下册、《春雪》版权页顶上给目录用的「版权信息」标题在 Move 上露出来，竖直间距换算后版权页挤成两页加一页空白。用户在「去掉 / 不处理」里选了去掉（Kindle、掌阅上本来就看不见）；`id` 留成空 `<span>` |
+| **KFX 写出器照 Send to Kindle 处理强制分页**（写出器 21）：`page-break-before/after` 另起一节；写了宽度的图片写块的对齐 `$580` | 用户三台比《飘》二维码页，推了一份 Send to Kindle 的《飘》对照：Amazon 在版权页后强制分页、二维码居中；我们的写出器不处理分页、图片靠左。用户同意改写出器（Kindle 上全部书重传、进度清零）。Move 本来就认分页（行内的也认），和 Amazon 页数一致 |
 
 ## 待定
 

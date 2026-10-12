@@ -92,7 +92,11 @@ pub use entities::container_id;
 ///   没写的按像素 1/16em），`vertical-align` 照写；段落自己的字号按 CSS 算（Amazon 漏算，2em 段落里 1em 的图只有半个字大，
 ///   真机对照过）。两本 Amazon 测试书逐项对照、Kindle 真机 ✓；25 本里 12 本变（《平凡的世界》《张居正》《占星术》《揭露人性》生僻字，
 ///   《飘》《春雪》《雪国》注释图标，《金庸》等少数几处）。
-pub const WRITER_VERSION: &str = "20";
+/// - 21（2026-10-12）：强制分页（`page-break-before/after: always|left|right`、`break-*: page`）另起一节，照 Send to Kindle（《飘》
+///   推下来的样本：版权页后 `<div style="page-break-before:always">` 另起一节，带背景的 body 每节一份容器，上外边距留第一节、
+///   下外边距留最后一节）——以前不处理分页，二维码页少了一页；写了宽度的图片写 `$546: $377`，居中、居右写块的对齐 `$580`、
+///   不写文字对齐（Amazon 同样；以前写 `$34`，Kindle 上二维码靠左）。25 本文字书文字池逐字相同，《飘》上下册、《春雪》《三体》各多一节。
+pub const WRITER_VERSION: &str = "21";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
