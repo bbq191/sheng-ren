@@ -91,6 +91,9 @@ pub(crate) trait BookSource {
         net.json_strict(&self.search_url(q))
     }
 
+    /// 条目的作者署名（几个人用 `/`、`、` 分开）：书里有几位作者时挑作者对上得多的条目（[`BookSource::search`]）。
+    fn hit_author<'h>(&self, hit: &'h Self::Hit) -> &'h str;
+
     /// 这一本要不要问这个网站（缺省都问；Bangumi 只问漫画）。
     fn applies(&self, _l: &Lookup<'_>) -> bool {
         true
@@ -124,7 +127,18 @@ pub(crate) trait BookSource {
             // 别的搜索词也不用再试了
             let Ok(v) = self.fetch_hits(net, &q) else { break };
             match self.matching_hits(&v, &nt, &want) {
-                Ok(hits) if !hits.is_empty() => return hits,
+                Ok(hits) if !hits.is_empty() => {
+                    // 书里有两位以上作者、这里没有条目对得上两位：另一种搜法里可能有（豆瓣搜索建议只给了小说，书籍搜索页里有
+                    // 图像小说），有对得上两位的就用那边的
+                    if want.len() >= 2 && self.author_count(&hits, &want) < 2 {
+                        let base = crate::matching::base_title(title).unwrap_or_else(|| title.trim().to_string());
+                        let more = self.fallback_search(net, &base, &crate::matching::norm_s(&base), &want);
+                        if self.author_count(&more, &want) >= 2 {
+                            return self.most_authors(more, &want);
+                        }
+                    }
+                    return self.most_authors(hits, &want);
+                }
                 Ok(_) => {}
                 Err(e) => {
                     net.note_transient(&format!("{url}: {e}"));
@@ -138,9 +152,33 @@ pub(crate) trait BookSource {
                 Some(b) => (b.clone(), crate::matching::norm_s(&b)),
                 None => (title.trim().to_string(), crate::matching::norm_s(title)),
             };
-            return self.fallback_search(net, &title, &nt, &want);
+            return self.most_authors(self.fallback_search(net, &title, &nt, &want), &want);
         }
         Vec::new()
+    }
+
+    /// 书里有两位以上作者、有条目对上了其中两位以上时，只留对上得最多的（《杀死一只知更鸟》图像小说是哈珀·李、弗雷德·福德姆
+    /// 两位，豆瓣上小说、图像小说条目同名，靠作者分；以前挑中了小说）。别的情况原样。
+    fn most_authors(&self, hits: Vec<Self::Hit>, want: &[String]) -> Vec<Self::Hit> {
+        if want.len() < 2 {
+            return hits;
+        }
+        let best = self.author_count(&hits, want);
+        if best < 2 {
+            return hits;
+        }
+        hits.into_iter().filter(|h| self.authors_matched(h, want) == best).collect()
+    }
+
+    /// 条目对上了书里几位作者。
+    fn authors_matched(&self, h: &Self::Hit, want: &[String]) -> usize {
+        let parts: Vec<String> = self.hit_author(h).split(['/', '、', ',', '，']).map(crate::matching::norm_author).filter(|p| !p.is_empty()).collect();
+        want.iter().filter(|w| parts.iter().any(|p| crate::matching::similarity(w, p) >= 0.6)).count()
+    }
+
+    /// 这些条目里最多对上了书里几位作者。
+    fn author_count(&self, hits: &[Self::Hit], want: &[String]) -> usize {
+        hits.iter().map(|h| self.authors_matched(h, want)).max().unwrap_or(0)
     }
 
     /// 上面的搜索词都搜不到时的另一种搜法（`title` 已去掉卷次）；缺省没有。出错记成临时错误、返回空。
@@ -536,7 +574,9 @@ fn volume_suffix(title: &str) -> String {
 pub(crate) fn corrected_title(meta: &Meta) -> String {
     let Some(web) = meta.info.as_ref().map(|i| i.title.trim()).filter(|t| !t.is_empty()) else { return meta.title.clone() };
     let base = crate::matching::base_title(web).unwrap_or_else(|| web.to_string());
-    let t = format!("{}{}", base.trim(), volume_suffix(&meta.title));
+    // 书里标了作品形式（「（漫）」「（图像小说）」）而网站书名没有的：留着（和同名的小说分开，文件名不撞）
+    let form = crate::matching::form_marker(&meta.title).filter(|_| crate::matching::form_marker(web).is_none()).unwrap_or_default();
+    let t = format!("{}{form}{}", base.trim(), volume_suffix(&meta.title));
     if t.trim().is_empty() { meta.title.clone() } else { t }
 }
 
@@ -606,6 +646,9 @@ mod tests {
         }
         fn matching_hits(&self, _: &serde_json::Value, _: &str, _: &[String]) -> Result<Vec<()>, String> {
             Ok(Vec::new())
+        }
+        fn hit_author<'h>(&self, _: &'h ()) -> &'h str {
+            ""
         }
         fn search(&self, _: &Net, _: &str, _: &[String]) -> Vec<()> {
             self.searched.set(self.searched.get() + 1);
@@ -753,6 +796,7 @@ mod tests {
         assert_eq!(t("浪客行 - 卷01", "浪客行"), "浪客行 第01卷");
         assert_eq!(t("哆啦A夢全彩版 - 卷02", "机器猫哆啦A梦（共45册）"), "机器猫哆啦A梦 第02卷", "网站书名的说明去掉");
         assert_eq!(corrected_title(&Meta { title: "嘯風山莊".into(), ..Default::default() }), "嘯風山莊", "没找到：照书里的");
+        assert_eq!(t("杀死一只知更鸟（漫）", "杀死一只知更鸟"), "杀死一只知更鸟（漫）", "作品形式留着，不和小说撞名");
     }
 
     /// 版本的译者和书里的对不上（豆瓣第一个条目是李美华译本）：出版社、日期、ISBN 不补；书里的署名照样拆。

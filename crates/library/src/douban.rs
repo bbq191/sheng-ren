@@ -71,6 +71,10 @@ impl BookSource for Douban {
         best_cover(net, hits)
     }
 
+    fn hit_author<'h>(&self, hit: &'h Hit) -> &'h str {
+        &hit.author
+    }
+
     fn cover_origin(&self, hit: &Hit) -> (String, String) {
         (hit.pic.clone(), hit.label())
     }
@@ -158,7 +162,9 @@ fn search_page_items(html: &str) -> Option<serde_json::Value> {
             .iter()
             .filter(|it| it["tpl_name"].as_str() == Some("search_subject"))
             .map(|it| {
-                let author = it["abstract"].as_str().unwrap_or("").split(" / ").next().unwrap_or("").trim().to_string();
+                // 「作者 / 作者 / 译者 / 出版社 / 日期 / 价格」分不清哪几段是作者：整串当署名（比作者时出版社、译者对不上作者，不碍事；
+                // 几位作者都要在里面，《杀死一只知更鸟》图像小说靠第二位作者和小说分开）
+                let author = it["abstract"].as_str().unwrap_or("").trim().to_string();
                 serde_json::json!({
                     "title": it["title"].as_str().unwrap_or(""),
                     "author_name": author,
@@ -352,5 +358,16 @@ mod tests {
         for html in [r#"<div id="info""#, r#"<div id="link-report"><div class="intro">"#, "criteria = '7:a", ""] {
             let _ = parse_subject(html);
         }
+    }
+
+    /// 书里有两位作者：同名的小说、图像小说条目里只留两位都对得上的（《杀死一只知更鸟》漫画版，2026-10-12）。
+    #[test]
+    fn two_author_books_pick_entries_with_both_authors() {
+        let hit = |id: &str, author: &str| Hit { id: id.into(), title: "杀死一只知更鸟".into(), author: author.into(), year: String::new(), pic: String::new() };
+        let hits = vec![hit("26879778", "[美] 哈珀·李 / 李育超 / 译林出版社 / 2017-2"), hit("35016096", "[美] 哈珀·李 / [英] 弗雷德·福德姆 / 刘勇军 / 上海文艺出版社 / 2020-5")];
+        let want = crate::matching::author_keys(&["哈珀· 李,弗雷德·福德姆".into()]);
+        assert_eq!(Douban.most_authors(hits.clone(), &want).iter().map(|h| h.id.as_str()).collect::<Vec<_>>(), ["35016096"]);
+        let one = crate::matching::author_keys(&["哈珀· 李".into()]);
+        assert_eq!(Douban.most_authors(hits, &one).len(), 2, "一位作者的书不筛");
     }
 }
