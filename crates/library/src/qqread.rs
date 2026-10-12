@@ -51,6 +51,10 @@ impl BookSource for QqRead {
 
     /// `code` 不是 0 算出错（被拦等）。
     fn matching_hits(&self, v: &serde_json::Value, nt: &str, want: &[String]) -> Result<Vec<Hit>, String> {
+        // 404「不在关键词库中」就是没有这本书，不算出错（《ABC疑案》以前报成网络出错）
+        if v["code"].as_i64() == Some(404) {
+            return Ok(Vec::new());
+        }
         if v["code"].as_i64() != Some(0) {
             return Err(format!("QQ 阅读回 code {}（{}）", v["code"], v["msg"].as_str().unwrap_or("")));
         }
