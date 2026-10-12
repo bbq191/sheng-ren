@@ -165,6 +165,14 @@
 | **掌阅、Move 的字号按正文归一**（`kindle_rules`，KINDLE_RULES 5）：正文字号不是 1em 的书，所有字号乘 1/正文字号（相对的乘在 body 上，绝对的折成 px 再乘）；绝对字号一律折成 px | 用户定做「三台统一」里没做的字号行高归一。掌阅不认 `html` 上的字号、`pt` 按 px 的数算、`rem` 跟着 body 缩，只有 px 可靠（真机）；掌阅不理书里的行高，行高不用改 |
 | **删掉 `mobidict`**（`crates/mobidict`、`mobi-dict-to-stardict`；要找回看 git 历史） | 用户定。两台都不装 KOReader，掌阅自带阅读器直接认 MOBI 词典，Kindle 也不用转，没人用了 |
 
+## 2026-10-12
+
+| 决定 | 理由 |
+|---|---|
+| **三台统一靠回归门槛，不再一本书改一次**：以 Kindle 写出器为准（它照 Send to Kindle 样本对齐过），`tools/kfx/unify.py` 逐段比掌阅、Move 产物的样式，比基线 `tools/kfx/unify-baseline.tsv` 差就不过；`kindle_rules` 改完自查正文字体（删了以后露出来的被盖住的字体一并去掉，KINDLE_RULES 7） | 用户：「如何做到统一规则，不要来一本书就要改一次」。偏差分五类，见 [KFX · 三台统一的回归门槛](kfx.md#三台统一的回归门槛2026-10-12) |
+| **Kindle 正文图片的透明 PNG 在 KFX 写出器里合成白底**（写出器 18；背景图不动，书里的 EPUB 不动） | 《飘》章头图在 Kindle 上整块黑（真机截图）；只修复以后优化器不合成了。透明处本来露白纸，合成后看到的就是原意，同正文字体写 `default`，是适配 Kindle 显示的转换。真机 ✓ |
+| **掌阅的 `rgba()` 换成不透明色、Move 去掉不平铺的背景图**（只修复的文字书，`kindle_rules`，KINDLE_RULES 8；profile `css_rgba`、新字段 `background_no_repeat`） | 图文书三台差别大（《飘》《绍宋》）。查清：掌阅不认 `rgba()`，「第一卷」标题的半透明白条作废，字压在插图最密处看不见；Move 不认 `no-repeat`、尺寸、位置，背景图平铺或偏到一边被裁（测试书真机）。预先缩图救不了 Move（缩小了照样平铺），所以选去掉。掌阅真机 ✓ |
+
 ## 待定
 
 - **解 DRM 重启时走哪条路**：见[开发 · DRM](development.md#drm)。

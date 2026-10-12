@@ -1132,7 +1132,7 @@ pub fn is_block(el: &ElementRef, comp: &Computed) -> bool {
     }
 }
 
-/// HTML 的表现属性当成优先级最低的样式（样式表写了的不动）：块的 `align`、`<center>`、`<font size/color/face>`
+/// HTML 的表现属性当成优先级最低的样式（样式表写了的不动）：块的 `align`、`<center>`、`<font size/color/face>`、`<img width="N%">`
 /// （Send to Kindle 同样：《福尔摩斯》`<p align="justify">` 两端对齐、`<font size="1">` 字号 0.625、`size="7"` 3.0）。
 pub fn presentational_hints(el: &ElementRef, decls: &mut HashMap<String, String>) {
     let e = el.value();
@@ -1146,6 +1146,14 @@ pub fn presentational_hints(el: &ElementRef, decls: &mut HashMap<String, String>
             }
         }
         "center" => hint("text-align", "center".into()),
+        // `<img width="60%">`：百分比的宽度属性当 CSS 宽度（HTML 规范的表现属性；掌阅、Move 照这个显示，KFX 写出器以前不认、
+        // Kindle 按原图像素显示——《金庸》639 张 60% 的插图、《飘》《春雪》，2026-10-12 `tools/kfx/unify.py`）。像素的
+        // `width="566"` 多半就是原图宽度，没对过阅读器怎么算 px，不收
+        "img" => {
+            if let Some(w) = e.attr("width").map(str::trim).filter(|w| w.strip_suffix('%').is_some_and(|n| n.trim().parse::<f64>().is_ok_and(|v| v > 0.0))) {
+                hint("width", w.to_string());
+            }
+        }
         "font" => {
             // HTML 字号 1–7（同浏览器：10、13、16、18、24、32、48px，绝对字号），`+n`/`-n` 相对 3（饱和加减：`+2147483647` 以前溢出）
             if let Some(s) = e.attr("size").map(str::trim) {
@@ -1872,6 +1880,23 @@ mod tests {
         assert_eq!((get("font-style"), get("font-weight"), get("font-size"), get("line-height")), (Some("italic"), Some("normal"), Some("15pt"), Some("1.5")));
         assert_eq!(get("font-family"), Some("楷体"), "后面的分项覆盖简写；认不出的简写（caption）整条不认");
         assert_eq!(Computed::derive(&Computed::root(), &d, "p").font_size, 1.25);
+    }
+
+    /// `<img width="60%">` 当 CSS 宽度（样式表写了的优先）；像素宽度不收。
+    #[test]
+    fn img_width_attribute_percent_is_a_hint() {
+        let html = scraper::Html::parse_document(r#"<html><body><img id="a" width="60%"/><img id="b" width="566"/><img id="c" class="w" width="60%"/></body></html>"#);
+        let mut s = Sheet::default();
+        s.add("img.w{width:30%}", 0);
+        let width = |id: &str| {
+            let el = html.select(&Selector::parse(&format!("#{id}")).unwrap()).next().unwrap();
+            let mut d = s.cascade(&el, "");
+            presentational_hints(&el, &mut d);
+            d.get("width").cloned()
+        };
+        assert_eq!(width("a").as_deref(), Some("60%"));
+        assert_eq!(width("b"), None, "像素宽度不收");
+        assert_eq!(width("c").as_deref(), Some("30%"), "样式表优先");
     }
 
     #[test]

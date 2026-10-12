@@ -30,7 +30,8 @@ pub(super) struct Run {
 #[derive(Clone, Debug)]
 pub(super) enum Kind {
     Text { text: String, runs: Vec<Run> },
-    Image { src: String },
+    /// `linked`：图在带 `href` 的 `<a>` 里（图标注释号之类；只给 `--styles` 输出用，见 `analyze::dump_blocks`）。
+    Image { src: String, linked: bool },
     Container(Vec<Block>),
 }
 
@@ -782,7 +783,8 @@ impl Doc<'_> {
                     let mut lead = self.take_pending();
                     lead.extend(el.value().attr("id").map(str::to_string));
                     let ids = lead.into_iter().map(|i| (i, 0)).collect();
-                    let mut b = Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0 }, comp, ids);
+                    let linked = el.ancestors().filter_map(ElementRef::wrap).any(|a| a.value().name() == "a" && a.value().attr("href").is_some());
+                    let mut b = Block::anonymous(Kind::Image { src: resolve_link(self.path, &src).0, linked }, comp, ids);
                     b.gap_before = self.gap.take();
                     out.push(b);
                     return;
@@ -1176,9 +1178,9 @@ fn on_big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, String> {
 /// （2026-10-09 真机：我们的打开没有封面）。正文里用到了的不补，那些书的产物逐字节不变。
 pub(super) fn prepend_cover_page(book: &Loaded, parsed: &mut Vec<ParsedDoc>) {
     let Some(cover) = book.cover.as_deref() else { return };
-    if parsed.iter().any(|(_, _, _, blocks)| any_block(blocks, |bl| matches!(&bl.kind, Kind::Image { src } if src == cover))) {
+    if parsed.iter().any(|(_, _, _, blocks)| any_block(blocks, |bl| matches!(&bl.kind, Kind::Image { src, .. } if src == cover))) {
         return;
     }
     // 序号只用来起实体名，取一个文档用不到的；路径不是任何文档的，没有链接会指到它。
-    parsed.insert(0, (book.docs.len(), "\0cover", None, vec![Block::anonymous(Kind::Image { src: cover.to_string() }, Computed::root(), Vec::new())]));
+    parsed.insert(0, (book.docs.len(), "\0cover", None, vec![Block::anonymous(Kind::Image { src: cover.to_string(), linked: false }, Computed::root(), Vec::new())]));
 }

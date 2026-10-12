@@ -85,11 +85,11 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
         let mut ctx = SectionCtx { pool, texts: Vec::new(), order: vec![(tmpl_eid, 1)], ids: Vec::new(), resources: Vec::new(), lang, pending: Vec::new(), last_end: None };
         // 只有一张图的文档写成整页图片版面（封面、插图页），和样本一样。
         let single_image = blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. });
-        let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src }) = (single_image, fixed_canvas, &blocks[0].kind) {
+        let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src, .. }) = (single_image, fixed_canvas, &blocks[0].kind) {
             // 固定版式的一页，照 Amazon 转的异形页样本：整页容器（画布宽高、`$476`、position relative）里放一个绝对定位的
             // 图片节点（宽高、上、左）。比画布小的图有的页整页空白是资源符号顺序造成的，不是这里（见下面分配资源符号处）。
             // 图片取不到的这一页同没有内容的文件：目录项、链接改指到下一个版面（以前没登记，指到它的退回书的开头）。
-            let Some(r) = b.resource(src) else {
+            let Some(r) = b.resource(src, ImageUse::Content) else {
                 empty_docs.push(path.to_string());
                 continue;
             };
@@ -285,8 +285,8 @@ impl Builder {
                 f.push((TEXT_REF, Value::Struct(vec![(NAME, Value::Symbol(ctx.pool)), (TEXT_INDEX, Value::Int(idx as i64))])));
                 Some(Value::Struct(f))
             }
-            Kind::Image { src } => {
-                let Some(r) = self.resource(src) else {
+            Kind::Image { src, .. } => {
+                let Some(r) = self.resource(src, ImageUse::Content) else {
                     ctx.pending.extend(b.ids.iter().map(|(id, _)| id.clone()));
                     return None;
                 };
@@ -306,7 +306,7 @@ impl Builder {
                 let ty = b.ty.unwrap_or(NODE_CONTAINER);
                 let mut props = props;
                 // 背景图：样式里指向图片资源（`$479`），同《绍宋》样本 `body.juan` 等
-                if let Some(r) = b.comp.bg_image.as_deref().and_then(|src| self.resource(src)) {
+                if let Some(r) = b.comp.bg_image.as_deref().and_then(|src| self.resource(src, ImageUse::Background)) {
                     ctx.resources.push(r);
                     props.symbol(P_BG_IMAGE, self.res_sym(r));
                     if b.comp.bg_no_repeat {

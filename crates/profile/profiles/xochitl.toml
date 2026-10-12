@@ -21,6 +21,9 @@ text_repair_only = true
 repair_note_links = true
 # 照 Send to Kindle 的规则统一（2026-10-08 用户定三台一套规则，同 ireader；Move 上还没真机看）。
 kindle_rules = true
+# 不认背景图的 no-repeat（也不管 background-size、background-position），一律平铺：只修复的文字书里写了不平铺的背景图去掉
+# （2026-10-12 用户定，Move 测试书真机：大图偏到一边被裁、小图铺满一页）
+background_no_repeat = false
 comic_reader_margins = 1
 
 [screen]

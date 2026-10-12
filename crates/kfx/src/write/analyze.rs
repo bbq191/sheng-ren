@@ -161,15 +161,21 @@ fn base_line_height(t: &TextCounts) -> f64 {
 
 /// 一个文字块一行（见 [`epub_text_styles`]）。
 /// 容器里只有本元素文字的块（[`Block::bare`]）用容器的边距（和 KFX 那边一样：边距在容器上）。
-pub(super) fn dump_blocks(blocks: &[Block], out: &mut String) {
-    dump_blocks_in(blocks, None, out)
+/// `dims`：书里图片的原始像素宽高（书内路径 → (宽, 高)），给图片行用。
+pub(super) fn dump_blocks(blocks: &[Block], dims: &HashMap<String, (u32, u32)>, out: &mut String) {
+    dump_blocks_in(blocks, None, dims, out)
 }
 
-fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, out: &mut String) {
+/// 每个文字块一行样式（13 列）；图片另起一行 `#img\t路径\t宽\t高\tCSS 宽度\t对齐\t在不在链接里`，背景图 `#bg\t路径\t不平铺`
+/// （`tools/kfx/unify.py` 比图片用；只认 13 列文字行的脚本不受影响）。
+fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<String, (u32, u32)>, out: &mut String) {
     use std::fmt::Write;
     for b in blocks {
+        if let Some(src) = &b.comp.bg_image {
+            let _ = writeln!(out, "#bg\t{src}\t{}", b.comp.bg_no_repeat);
+        }
         match &b.kind {
-            Kind::Container(c) => dump_blocks_in(c, Some(b), out),
+            Kind::Container(c) => dump_blocks_in(c, Some(b), dims, out),
             Kind::Text { text, .. } => {
                 let c = &b.comp;
                 let key: String = text.chars().filter(|ch| !ch.is_whitespace()).take(60).collect();
@@ -204,7 +210,16 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, out: &mut String) {
                     m.margin_right.pct,
                 );
             }
-            Kind::Image { .. } => {}
+            Kind::Image { src, linked } => {
+                let (w, h) = dims.get(src).copied().unwrap_or((0, 0));
+                let width = match b.comp.width {
+                    Some(Len::Em(n)) => format!("em:{n}"),
+                    Some(Len::Pt(n)) => format!("pt:{n}"),
+                    Some(Len::Percent(n)) => format!("%:{n}"),
+                    None => "-".into(),
+                };
+                let _ = writeln!(out, "#img\t{src}\t{w}\t{h}\t{width}\t{}\t{linked}", b.comp.text_align.as_deref().unwrap_or("-"));
+            }
         }
     }
 }
