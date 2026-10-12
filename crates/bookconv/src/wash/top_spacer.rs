@@ -120,7 +120,7 @@ pub(crate) fn page_boxes(entries: &[Entry], media: Option<&MediaEnv>, g: SpacerG
     chapters.iter().zip(crate::util::par_map(&chapters, |&i| page_box(&entries[i], media, &css, g))).filter_map(|(&i, b)| b.map(|b| (i, b))).collect()
 }
 
-fn parse_css<'e>(entries: &'e [Entry], media: Option<&MediaEnv>) -> HashMap<&'e str, std::sync::Arc<Rules>> {
+pub(super) fn parse_css<'e>(entries: &'e [Entry], media: Option<&MediaEnv>) -> HashMap<&'e str, std::sync::Arc<Rules>> {
     entries
         .iter()
         .filter(|e| is_css_name(&e.name))
