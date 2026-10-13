@@ -155,7 +155,8 @@ fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync:
             skip_until = None;
         }
         // 我们垫的页首空白图（`top_spacer`，Move）本来就是在模拟 Kindle 上的上外边距，不算内容
-        if el.value().classes().any(|c| c == "eink-sp") {
+        // 藏起来的（`display:none`，含 `blank_fold` 藏的空段）不占地方
+        if el.value().classes().any(|c| c == "eink-sp") || c.display.as_deref() == Some("none") {
             skip_until = Some(el.id());
             continue;
         }

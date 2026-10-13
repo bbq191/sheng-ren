@@ -185,6 +185,7 @@
 | **Move 上去掉 `display:none` 的元素**（KINDLE_RULES 16，profile `display_none = false`，`wash/hidden.rs`） | xochitl 行内、外链的 `display:none` 都不认（测试书「测试-隐藏」），《飘》上下册、《春雪》版权页顶上给目录用的「版权信息」标题在 Move 上露出来，竖直间距换算后版权页挤成两页加一页空白。用户在「去掉 / 不处理」里选了去掉（Kindle、掌阅上本来就看不见）；`id` 留成空 `<span>` |
 | **KFX 写出器照 Send to Kindle 处理强制分页**（写出器 21）：`page-break-before/after` 另起一节；写了宽度的图片写块的对齐 `$580` | 用户三台比《飘》二维码页，推了一份 Send to Kindle 的《飘》对照：Amazon 在版权页后强制分页、二维码居中；我们的写出器不处理分页、图片靠左。用户同意改写出器（Kindle 上全部书重传、进度清零）。Move 本来就认分页（行内的也认），和 Amazon 页数一致。Kindle 真机 ✓（2026-10-12 用户确认：版权页后一页底纹、再一页居中的二维码，同 Send to Kindle） |
 | **大段上外边距在 Kindle 上排不下时换页，掌阅、Move 照样做**（KINDLE_RULES 18） | 用户：「掌阅/move也照 Kindle 处理分页后的边距」。Kindle（同 Amazon）放不下「边距 + 块」时把块挪到下一页、丢掉边距；按 Kindle 尺寸估算，只处理至少页高 1/4 的边距（往下推版面用的），超过一页 90% 就换页。《飘》《春雪》二维码页三台一致（掌阅少了那张 20px 空白小图单独的一页） |
+| **只有空白的段落照 Kindle 折成下一块的上边距，掌阅藏起、Move 去掉**（KINDLE_RULES 19，2026-10-13） | 用户选「先做空段落」（现有能力里收益最大的一项已知差异）。测试书三台对照：Kindle 只空 0.6 行，掌阅、Move 排一整行以上；Move 上 CSS 怎么写都藏不住，用户选「Move 上去掉空段元素」（里面只有看不见的空白、Kindle 上也没有，同 KINDLE_RULES 16 去掉隐藏元素），掌阅用 `display:none` 不删。测试书两台和 Kindle 换算值差 ≤1px |
 
 ## 待定
 
