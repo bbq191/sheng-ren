@@ -4,9 +4,11 @@
 //! xochitl（2026-10-13 怪癖测试书 `tools/quirks/probe.py`）：内边距上下左右都不认（Q06、Q12、Q39），块的背景色照画（Q68）；边框一概
 //! 不画（Q07、Q40），图照画（横线图放在段落后、标题里 `display:block` 的都画满宽，Q69、Q70）；h1–h6 的上下外边距都不认（Q05、Q65、
 //! Q67），标题前后自带一段空，和前一块的下外边距、后一块的上外边距折叠（那两个认，Q66、Q74）；`margin-left` 加负的首行缩进排得出
-//! 悬挂缩进（Q71）。所以（Kindle 上的值按 [`crate::kindle_model`] 从现在的 CSS 算，写成 `eink-box.css` 里 `!important` 的类规则；
+//! 悬挂缩进（Q71）。所以（Kindle 上的值按 [`crate::kindle_model`] 从现在的 CSS 算，写成 `eink-box.css` 里的类规则（`html body 标签.类`，不用 `!important`：掌阅带了反而输；改到的元素行内的外边距删掉、并进类规则，行内的压过样式表）；
 //! 竖直的写 em，之后照竖直间距换算）：
 //!
+//! - **px、% 写的左右外边距**（profile `px_margins`、`percent_margins` 写 `false`：掌阅、Move 的 px 是屏幕像素，Kindle 写出器按
+//!   0.45pt 一 px；Move 的 % 当成 px）折成 em：px 按 0.45pt、12pt 一根 em，% 按这台的内容区宽（KINDLE_RULES 24）；
 //! - **左右内边距**并进同侧的外边距（悬挂缩进 `text-indent:-2em;padding-left:2em` 跟着对了）；带背景色、背景图的块（并了色块就
 //!   缩到字上）、表格、列表、`margin:auto` 那一侧不动；
 //! - **上下边框**（看得见的）：块里最前（上边框）、最后（下边框）插一张横线图 `eink-rule-N.png`（同色、同粗、实线 / 点线 / 虚线照
@@ -107,10 +109,13 @@ type LineKey = (u32, u8, u32, u32, bool);
 struct Plan {
     decls: BTreeMap<usize, Vec<String>>,
     lines: Vec<(usize, Line)>,
+    /// 行内 `style` 里要删掉的属性（前缀：`margin`、`padding`）：行内的压过样式表（Move 连 `!important` 都压过，2026-10-13 探针
+    /// Q48 修后），改了外边距的元素把行内的外边距（不认内边距的阅读器连内边距）删掉、值并进类规则。
+    strip: BTreeMap<usize, Vec<&'static str>>,
 }
 
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, reader: &ReaderModel, g: BoxGeometry) {
-    if reader.padding && reader.borders && reader.heading_margins {
+    if reader.padding && reader.borders && reader.heading_margins && reader.px_margins && reader.percent_margins {
         return;
     }
     let css = km::book_css(entries, media);
@@ -140,12 +145,17 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         for (&n, ds) in &p.decls {
             let Some(t) = starts.get(n) else { continue };
             let tag = t.name.to_ascii_lowercase();
-            let body = ds.iter().map(|d| format!("{d} !important;")).collect::<String>();
+            let body = ds.iter().map(|d| format!("{d};")).collect::<String>();
             let k = classes.iter().position(|c| *c == (tag.clone(), body.clone())).unwrap_or_else(|| {
                 classes.push((tag.clone(), body));
                 classes.len() - 1
             });
-            edits.push((t.start, t.end, html::add_class(&text[t.start..t.end], &format!("eink-b{}", k + 1))));
+            let mut raw = text[t.start..t.end].to_string();
+            if let (Some(pre), Some(style)) = (p.strip.get(&n), html::attr_value(&raw, "style").map(|s| crate::util::xml_unescape(s).into_owned())) {
+                let kept: String = html::css_decls(&style).iter().filter(|d| !pre.iter().any(|p| d.prop.to_ascii_lowercase().starts_with(p))).map(|d| d.raw).collect();
+                raw = if kept.trim().is_empty() { html::remove_attr(&raw, "style") } else { html::set_attr(&raw, "style", &crate::util::xml_escape(kept.trim())) };
+            }
+            edits.push((t.start, t.end, html::add_class(&raw, &format!("eink-b{}", k + 1))));
         }
         for &(n, line) in &p.lines {
             let Some(t) = starts.get(n) else { continue };
@@ -170,7 +180,8 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         let href = crate::epubzip::href_to(&dir, &css_path, "");
         e.data = typeset::inject_css_link(&out, &href).into_bytes();
     }
-    let mut sheet = String::from("/* 内边距、边框、标题外边距照 Kindle（sheng-ren kindle_rules，见 wash/box_fix.rs） */\n");
+    // 不写 `!important`（掌阅带了反而输给前面的普通声明）：选择器 `html body 标签.类` 压过书里的规则，这份样式表链在最后
+    let mut sheet = String::from("/* 内边距、边框、标题外边距、左右外边距照 Kindle（sheng-ren kindle_rules，见 wash/box_fix.rs） */\n");
     for (k, (tag, body)) in classes.iter().enumerate() {
         sheet.push_str(&format!("html body {tag}.eink-b{}{{{body}}}\n", k + 1));
     }
@@ -245,24 +256,38 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         })
     };
     let ours = |i: usize| ch.el(i).value().classes().any(|c| c == "eink-sp");
-    // 水平：左右内边距并进外边距（元素 → 改后的左右外边距 em，给横线图算宽度用）
+    // 水平：左右内边距并进外边距；px、% 写的左右外边距折成 em（元素 → 改后的左右外边距 em，给横线图算宽度用）
     let mut h_margin: HashMap<usize, [f64; 2]> = HashMap::new();
-    if !reader.padding {
+    if !(reader.padding && reader.px_margins && reader.percent_margins) {
+        // 声明的单位不对的（这台上 px、% 和 Kindle 不一样大）
+        let wrong_unit = |i: usize, name: &str| {
+            let v = ch.els[i].decls.get(name).map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
+            let nonzero = v.trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '%').trim().parse::<f64>().is_ok_and(|n| n != 0.0);
+            nonzero && ((v.ends_with("px") && !reader.px_margins) || (v.ends_with('%') && !reader.percent_margins))
+        };
         for i in 0..ch.els.len() {
-            if !usable(i) || has_bg(i) {
+            if !usable(i) {
                 continue;
             }
             let c = comp(i);
             let mut m = [to_em(c.margin[3], c.font_size), to_em(c.margin[1], c.font_size)];
+            let mut changed = false;
             for (k, side, name) in [(0, 3, "margin-left"), (1, 1, "margin-right")] {
-                let p = to_em(c.padding[side], c.font_size);
-                if p.abs() < 1e-6 || c.margin_auto[side] {
+                if c.margin_auto[side] {
+                    continue;
+                }
+                // 带背景色的块不并内边距（并了色块就缩到字上）
+                let p = if reader.padding || has_bg(i) { 0.0 } else { to_em(c.padding[side], c.font_size) };
+                if p.abs() < 1e-6 && !wrong_unit(i, name) {
                     continue;
                 }
                 m[k] += p;
+                changed = true;
                 out.decls.entry(i).or_default().push(format!("{name}:{}em", fmt(m[k])));
             }
-            h_margin.insert(i, m);
+            if changed {
+                h_margin.insert(i, m);
+            }
         }
     }
     // 横线图：看得见的上、下边框
@@ -343,6 +368,32 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
         }
     }
+    // 改了外边距、行内又写了外边距（或内边距）的：行内的删掉，没改的那几边照现在的值并进类规则
+    let sides = [("margin-top", 0), ("margin-right", 1), ("margin-bottom", 2), ("margin-left", 3)];
+    for (&i, ds) in out.decls.iter_mut() {
+        let inline = |pre: &str| ch.els[i].origin.iter().any(|(k, (o, _))| *o == crate::cascade::Origin::Inline && k.starts_with(pre));
+        let mut pre = Vec::new();
+        if inline("margin") {
+            pre.push("margin");
+        }
+        if !reader.padding && inline("padding") {
+            pre.push("padding");
+        }
+        if pre.is_empty() {
+            continue;
+        }
+        if pre.contains(&"margin") {
+            let c = comp(i);
+            for (name, side) in sides {
+                if ds.iter().any(|d| d.starts_with(&format!("{name}:"))) || c.margin_auto[side] {
+                    continue;
+                }
+                let v = if side % 2 == 0 { km::vertical_rem(c.margin[side], c.font_size) / c.font_size } else { to_em(c.margin[side], c.font_size) };
+                ds.push(format!("{name}:{}em", fmt(v)));
+            }
+        }
+        out.strip.insert(i, pre);
+    }
     out
 }
 
@@ -372,7 +423,27 @@ mod tests {
     fn horizontal_padding_joins_margin() {
         let (page, sheet, _) = run(r#"<p class="h">注一</p><p class="bg">色块</p><ul><li class="h">项</li></ul>"#, "p.h,li.h{text-indent:-2em;padding-left:2em;margin-left:1em} p.bg{padding-left:1em;background-color:#ccc}");
         assert!(page.contains(r#"<p class="h eink-b1">注一</p><p class="bg">色块</p><ul><li class="h">项</li></ul>"#), "{page}");
-        assert!(sheet.contains("html body p.eink-b1{margin-left:3em !important;}"), "{sheet}");
+        assert!(sheet.contains("html body p.eink-b1{margin-left:3em;}"), "{sheet}");
+    }
+
+    /// px、% 的左右外边距折成 em：px 按 0.45pt、12pt 一根 em（50px → 1.875em），% 按内容区宽（10% of 842 → 84.2px ÷ 37.8 → 2.2275em）；
+    /// 掌阅只折 px；`margin:auto` 那一侧、em 写的不动；带背景色的块也折（不并内边距）。
+    #[test]
+    fn px_and_percent_side_margins_become_em() {
+        let body = r#"<p class="px">甲</p><p class="pc">乙</p><p class="auto">丙</p><p class="em">丁</p><p class="bg">戊</p>"#;
+        let css = "p.px{margin-left:50px} p.pc{margin-right:10%} p.auto{margin:0 auto;width:50%} p.em{margin-left:2em} p.bg{margin-left:50px;padding-left:1em;background-color:#ccc}";
+        let (page, sheet, _) = run(body, css);
+        assert!(page.contains(r#"<p class="px eink-b1">甲</p><p class="pc eink-b2">乙</p><p class="auto">丙</p><p class="em">丁</p><p class="bg eink-b1">戊</p>"#), "{page}");
+        assert!(sheet.contains("html body p.eink-b1{margin-left:1.875em;}") && sheet.contains("html body p.eink-b2{margin-right:2.2275em;}"), "{sheet}");
+        // 行内写了外边距的：行内的删掉（行内的压过样式表），没改的那几边照现在的值并进类规则
+        let (page, sheet, _) = run(r#"<p style="margin:1em 0 0 50px;color:red">己</p>"#, "");
+        assert!(page.contains(r#"<p style="color:red" class="eink-b1">己</p>"#), "{page}");
+        assert!(sheet.contains("html body p.eink-b1{margin-left:1.875em;margin-top:1em;margin-right:0em;margin-bottom:0em;}"), "{sheet}");
+        let mut b = book(body, css);
+        let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4 });
+        let page = String::from_utf8(b[2].data.clone()).unwrap();
+        assert!(page.contains(r#"<p class="px eink-b1">甲</p><p class="pc">乙</p>"#), "掌阅的 % 照 CSS：{page}");
     }
 
     /// 上下内边距折进相邻块的间距：后一块不是标题写它的上外边距，是标题写前一块的下外边距；标题的外边距也照 Kindle 写到相邻的块上。
@@ -386,7 +457,7 @@ mod tests {
         // h2 字号 1.5em：上外边距 2em＝3 根 em、下 1.5em＝2.25。甲→乙：collapse(1,1)+0.5+1 = 2.5 写在乙上；乙→标题：collapse(1,3) = 3
         // 写在乙的下外边距；标题→丙：collapse(2.25,1) = 2.25 写在丙上
         assert!(page.contains(r#"<p class="a">甲</p><p class="b eink-b1">乙</p><h2 class="t">标题</h2><p class="eink-b2">丙</p>"#), "{page}");
-        assert!(sheet.contains("html body p.eink-b1{margin-top:2.5em !important;margin-bottom:3em !important;}") && sheet.contains("html body p.eink-b2{margin-top:2.25em !important;}"), "{sheet}");
+        assert!(sheet.contains("html body p.eink-b1{margin-top:2.5em;margin-bottom:3em;}") && sheet.contains("html body p.eink-b2{margin-top:2.25em;}"), "{sheet}");
     }
 
     /// 上下边框插横线图（块里最前、最后），连着的内边距画进图里、不再算进间距；文件开头的块不插上边框；左右边框不管。

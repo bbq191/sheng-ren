@@ -92,18 +92,27 @@ src = "2026-10-13 测试-怪癖 Q12、Q14、Q59、Q71；修后优化过的测试
 
 [[rule]]
 prop = ["margin-left", "margin-right"]
-value = ["pct"]
+on = ["inline", "img", "cell", "list"]
+value = ["px", "pct"]
 xochitl = "broken"
-note = "Move 的 % 左右外边距当 px（10% 是 10px）；Kindle 按包含块宽的百分比"
-src = "2026-10-13 测试-怪癖 Q11、Q54"
+ireader = "broken"
+note = "px 两台是屏幕像素、Move 的 % 当 px；行内元素、图、表格、列表上的没处理"
+src = "2026-10-13 测试-怪癖 Q10、Q11、Q48、Q54"
+
+[[rule]]
+prop = ["margin-left", "margin-right"]
+value = ["pct"]
+xochitl = "fixed"
+note = "Move 的 % 左右外边距当 px（10% 是 10px）；Kindle 按包含块宽的百分比：块上的按内容区宽折成 em（KINDLE_RULES 24）"
+src = "2026-10-13 测试-怪癖 Q11、Q54；修后优化过的测试书真机"
 
 [[rule]]
 prop = ["margin-left", "margin-right"]
 value = ["px"]
-xochitl = "broken"
-ireader = "broken"
-note = "px 两台是屏幕像素（Move 50px 挪 50）；Kindle 写出器按 0.45pt，约 1.46 个屏幕像素"
-src = "2026-10-13 测试-怪癖 Q10、Q48；docs/kfx.md 边距 px 按 0.45pt"
+xochitl = "fixed"
+ireader = "fixed"
+note = "px 两台是屏幕像素（Move 50px 挪 50）；Kindle 写出器按 0.45pt，约 1.46 个屏幕像素：块上的按 0.45pt 折成 em（KINDLE_RULES 24）"
+src = "2026-10-13 测试-怪癖 Q10、Q48；docs/kfx.md 边距 px 按 0.45pt；修后两台真机"
 
 [[rule]]
 prop = ["margin-left", "margin-right"]

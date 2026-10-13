@@ -327,7 +327,7 @@ impl OptimizeOpts {
                     let ratio = f64::from(p.output_readable().height) / k.content_h;
                     w.v_scale = Some(crate::wash::VScale { em: k.v_rem_px * ratio / em, kindle_rem_px: k.v_rem_px, ratio });
                     // 不认内边距、不画边框、不认标题外边距的阅读器（Move）：照 Kindle 改写要的尺寸
-                    if !(p.padding && p.borders && p.heading_margins) {
+                    if !(p.padding && p.borders && p.heading_margins && p.px_margins && p.percent_margins) {
                         w.box_geometry = Some(crate::wash::BoxGeometry { area_w: f64::from(p.output_readable().width), em_px: em, v_rem_px: k.v_rem_px * ratio });
                     }
                 }

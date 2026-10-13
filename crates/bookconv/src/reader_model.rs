@@ -25,11 +25,15 @@ pub struct ReaderModel {
     pub borders: bool,
     /// 认标题的上下外边距（`false`：写到相邻的块上）。
     pub heading_margins: bool,
+    /// 左右外边距的 px 和 Kindle 一样大（`false`：折成 em）。
+    pub px_margins: bool,
+    /// 左右外边距的 % 按包含块宽（`false`：折成 em）。
+    pub percent_margins: bool,
 }
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true }
     }
 }
 
@@ -45,6 +49,8 @@ impl ReaderModel {
             padding: p.padding,
             borders: p.borders,
             heading_margins: p.heading_margins,
+            px_margins: p.px_margins,
+            percent_margins: p.percent_margins,
         }
     }
 
@@ -66,7 +72,7 @@ impl ReaderModel {
         if !self.inline_css_lengths {
             s.push_str("i0");
         }
-        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm')] {
+        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%')] {
             if !on {
                 s.push(c);
                 s.push('0');
@@ -150,11 +156,11 @@ mod tests {
         assert_eq!(m.font_size("h2", Some("2em"), 2.0), 1.514);
         assert_eq!(m.font_size("div", None, 2.0), 2.0);
         assert_eq!((m.line_height("p", Some(2.0)), m.line_height("h1", Some(2.0)), m.line_height("div", None)), (1.0, 2.0, 1.0));
-        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { display_none: true, ..ReaderModel::default() });
+        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, ..ReaderModel::default() });
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),
-            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0"
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0"
         );
     }
 }

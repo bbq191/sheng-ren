@@ -35,6 +35,8 @@ image_sizing = "device-px"
 # 缺省字号下 CSS 1em 的屏幕像素（2026-10-12 测试书「测试-竖直间距」掌阅量的）：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
 # 同样 1em 占页高多一半；用户定）。阅读器里改了字号、Kindle 改了行距要重量
 em_px = 37.5
+# 左右外边距的 px 是屏幕像素（Kindle 写出器按 0.45pt 一 px，大约 1.46 倍）：块上的折成 em（2026-10-13，KINDLE_RULES 24）
+px_margins = false
 [screen]
 width = 1264
 height = 1680

@@ -225,6 +225,13 @@ pub struct Profile {
     /// 和相邻块的外边距折叠（前一块的下外边距、后一块的上外边距认，Q66、Q74）：写 `false` 时标题前后的间距照 Kindle 写到相邻的块上
     /// （`bookconv::wash::box_fix`）。
     pub heading_margins: bool,
+    /// 左右外边距写 px 时和 Kindle 一样大（TOML 里不写是 `true`）。掌阅、xochitl 的 px 是屏幕像素（Move 50px 挪 50，探针 Q10、Q48），
+    /// Kindle 写出器按 1px＝0.45pt（约 1.46 个 Kindle 屏幕像素）：写 `false` 时只修复、照 Send to Kindle 统一的文字书里块上 px 的左右
+    /// 外边距折成 em（`bookconv::wash::box_fix`）。
+    pub px_margins: bool,
+    /// 左右外边距写 % 时按包含块宽（TOML 里不写是 `true`）。xochitl 当成 px（10% 挪 10px，Q11、Q54）：写 `false` 时块上 % 的左右外边距按
+    /// 内容区宽折成 em（`bookconv::wash::box_fix`）。
+    pub percent_margins: bool,
     /// 带图注、按满宽显示会超出一页的图（竖长的人物图之类）给 `<img>` 写行内宽度百分比，图和图注排在同一页（TOML 里不写是
     /// `false`）。掌阅、Kindle 不认多看图集，图一张张排开撑满一页、图注掉到下一页；限高的写法掌阅都不认（`max-height`、
     /// `page-break-inside`），宽度百分比认（2026-10-06 掌阅真机 adb 截屏），KFX 写出器也只认宽度。见 `bookconv::capfit`。
@@ -312,6 +319,10 @@ struct ProfileFile {
     borders: bool,
     #[serde(default = "yes")]
     heading_margins: bool,
+    #[serde(default = "yes")]
+    px_margins: bool,
+    #[serde(default = "yes")]
+    percent_margins: bool,
     #[serde(default)]
     caption_fit: bool,
     #[serde(default = "yes")]
@@ -340,7 +351,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
