@@ -48,6 +48,10 @@ heading_margins = false
 # 左右外边距：px 是屏幕像素（Kindle 按 0.45pt 一 px）、% 当成 px（10% 挪 10px）（2026-10-13 怪癖测试书 Q10、Q11、Q48、Q54）：块上的折成 em
 px_margins = false
 percent_margins = false
+# 块的 width 不认（Q30，一律满宽），左右外边距认：照 Kindle 折成左右外边距（KINDLE_RULES 28）
+block_width = false
+# 负的外边距不认（Q08、Q75–Q79）：页中间相邻两块之间的照 Kindle 写成非负的间距（KINDLE_RULES 28；左右的不管，用户定）
+negative_margins = false
 comic_reader_margins = 1
 
 # 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比

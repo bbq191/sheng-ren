@@ -29,6 +29,10 @@ pub struct ReaderModel {
     pub px_margins: bool,
     /// 左右外边距的 % 按包含块宽（`false`：折成 em）。
     pub percent_margins: bool,
+    /// 认块的 `width`（`false`：折成左右外边距）。
+    pub block_width: bool,
+    /// 认负的外边距（`false`：页中间相邻两块的间距照 Kindle 写成非负的）。
+    pub negative_margins: bool,
     /// 认 `rem`（`false`：改成 em，字号的折成 px）。
     pub rem: bool,
     /// 认 `!important`（`false`：带它的声明不起作用，要去掉、胜出的值写进行内）。
@@ -39,7 +43,7 @@ pub struct ReaderModel {
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, rem: true, important: true, line_em: None }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, rem: true, important: true, line_em: None }
     }
 }
 
@@ -57,6 +61,8 @@ impl ReaderModel {
             heading_margins: p.heading_margins,
             px_margins: p.px_margins,
             percent_margins: p.percent_margins,
+            block_width: p.block_width,
+            negative_margins: p.negative_margins,
             rem: p.rem,
             important: p.important,
             line_em: (!p.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
@@ -81,7 +87,7 @@ impl ReaderModel {
         if !self.inline_css_lengths {
             s.push_str("i0");
         }
-        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%'), (self.rem, 'q'), (self.important, 'k')] {
+        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%'), (self.block_width, 'w'), (self.negative_margins, 'g'), (self.rem, 'q'), (self.important, 'k')] {
             if !on {
                 s.push(c);
                 s.push('0');
@@ -172,7 +178,7 @@ mod tests {
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),
-            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0"
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0"
         );
     }
 }
