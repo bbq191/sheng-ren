@@ -37,6 +37,14 @@ image_sizing = "device-px"
 em_px = 37.5
 # 左右外边距的 px 是屏幕像素（Kindle 写出器按 0.45pt 一 px，大约 1.46 倍）：块上的折成 em（2026-10-13，KINDLE_RULES 24）
 px_margins = false
+# 不认 rem（整条声明当没写，2026-10-13 怪癖测试书 Q53）：字号以外的改成 em，字号的折成 px（KINDLE_RULES 25）
+rem = false
+# 带 !important 的声明一概不起作用（Q28、Q85、Q86，《克莱因壶》标题不居中、《春雪》下划线没了）：去掉 !important，靠它胜出的值写进行内 style
+important = false
+# 不带单位的 line-height 不认（Q80–Q83），长度认（Q84 3em 一行 114px）：行距和 Kindle 不一样的块照 Kindle 写成 em
+line_height_numbers = false
+# 缺省字号、行距下正文一行的屏幕像素（2026-10-13 怪癖测试书对照页：一段里相邻两行隔 58px），上面的行距按它算阅读器的缺省行距
+line_px = 58
 [screen]
 width = 1264
 height = 1680

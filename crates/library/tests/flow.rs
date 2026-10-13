@@ -132,19 +132,19 @@ fn kfx_container_id_comes_from_book_id() {
 }
 
 /// 体检（`bookconv::audit`）：生成时把这台上和 Kindle 不一样又没处理的写法记进生成记录，`list` 看得到；不改书。
-/// 掌阅不认标题的 line-height（怪癖表 broken）；样本书的正文段落有两段，标题插了两次。
+/// 掌阅不认字距（怪癖表 broken）；样本书的正文段落有两段，标题插了两次。
 #[test]
 fn audit_findings_are_kept_in_the_generation_record() {
     let dir = tempfile::tempdir().unwrap();
     let lib = common::open(&dir.path().join("lib"));
     let epub = dir.path().join("体检.epub");
-    std::fs::write(&epub, sample_epub_with("体检", r#"</p><h3 style="line-height:2">小节</h3><p>"#)).unwrap();
+    std::fs::write(&epub, sample_epub_with("体检", r#"</p><h3 style="letter-spacing:0.2em">小节</h3><p>"#)).unwrap();
     let Added::New(m) = lib.add_file(&epub).unwrap() else { panic!() };
     let Built::Written { warnings, .. } = lib.build(&m, lib.devices().get("ireader").unwrap(), false).unwrap() else { panic!() };
-    assert!(warnings.iter().any(|w| w.starts_with("体检：ireader 上和 Kindle 不一样、没处理：行内 line-height（number，heading）×2")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.starts_with("体检：ireader 上和 Kindle 不一样、没处理：行内 letter-spacing（em，heading）×2")), "{warnings:?}");
     let out = lib.outputs(&m);
     let audit = &out.iter().find(|o| o.device == "ireader").unwrap().audit;
-    assert!(audit.iter().any(|l| l.starts_with("✗ 行内 style line-height（number，heading）×2：")), "{audit:?}");
+    assert!(audit.iter().any(|l| l.starts_with("✗ 行内 style letter-spacing（em，heading）×2：")), "{audit:?}");
     // 重开书库还在（存进了生成记录）
     let again = common::open(&dir.path().join("lib"));
     assert_eq!(&again.outputs(&m).iter().find(|o| o.device == "ireader").unwrap().audit, audit);

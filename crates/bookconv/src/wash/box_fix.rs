@@ -8,7 +8,8 @@
 //! 竖直的写 em，之后照竖直间距换算）：
 //!
 //! - **px、% 写的左右外边距**（profile `px_margins`、`percent_margins` 写 `false`：掌阅、Move 的 px 是屏幕像素，Kindle 写出器按
-//!   0.45pt 一 px；Move 的 % 当成 px）折成 em：px 按 0.45pt、12pt 一根 em，% 按这台的内容区宽（KINDLE_RULES 24）；
+//!   0.45pt 一 px；Move 的 % 当成 px）折成 em：px 按 0.45pt、12pt 一根 em，% 按这台的内容区宽（KINDLE_RULES 24）；认内边距的（掌阅）
+//!   px 写的左右内边距（0.45pt）、首行缩进（同写出器 0.75pt）也折成 em（KINDLE_RULES 25；Move 首行缩进的 px 没量过，不动）；
 //! - **左右内边距**并进同侧的外边距（悬挂缩进 `text-indent:-2em;padding-left:2em` 跟着对了）；带背景色、背景图的块（并了色块就
 //!   缩到字上）、表格、列表、`margin:auto` 那一侧不动；
 //! - **上下边框**（看得见的）：块里最前（上边框）、最后（下边框）插一张横线图 `eink-rule-N.png`（同色、同粗、实线 / 点线 / 虚线照
@@ -288,6 +289,18 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             if changed {
                 h_margin.insert(i, m);
             }
+            // 认内边距、px 又是屏幕像素的（掌阅）：px 写的左右内边距、首行缩进也照 Kindle 折成 em（Move 的内边距上面并进了外边距；
+            // 首行缩进的 px Move 上没量过，不动）
+            if reader.padding && !reader.px_margins {
+                for (side, name) in [(3, "padding-left"), (1, "padding-right")] {
+                    if wrong_unit(i, name) {
+                        out.decls.entry(i).or_default().push(format!("{name}:{}em", fmt(to_em(c.padding[side], c.font_size))));
+                    }
+                }
+                if wrong_unit(i, "text-indent") {
+                    out.decls.entry(i).or_default().push(format!("text-indent:{}em", fmt(to_em(c.text_indent, c.font_size))));
+                }
+            }
         }
     }
     // 横线图：看得见的上、下边框
@@ -376,8 +389,11 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         if inline("margin") {
             pre.push("margin");
         }
-        if !reader.padding && inline("padding") {
+        if (!reader.padding || ds.iter().any(|d| d.starts_with("padding-"))) && inline("padding") {
             pre.push("padding");
+        }
+        if ds.iter().any(|d| d.starts_with("text-indent:")) && inline("text-indent") {
+            pre.push("text-indent");
         }
         if pre.is_empty() {
             continue;
@@ -389,6 +405,17 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                     continue;
                 }
                 let v = if side % 2 == 0 { km::vertical_rem(c.margin[side], c.font_size) / c.font_size } else { to_em(c.margin[side], c.font_size) };
+                ds.push(format!("{name}:{}em", fmt(v)));
+            }
+        }
+        // 认内边距的阅读器上删了行内的内边距：没改的那几边照现在的值并进类规则
+        if reader.padding && pre.contains(&"padding") {
+            let c = comp(i);
+            for (name, side) in [("padding-top", 0), ("padding-right", 1), ("padding-bottom", 2), ("padding-left", 3)] {
+                if ds.iter().any(|d| d.starts_with(&format!("{name}:"))) {
+                    continue;
+                }
+                let v = if side % 2 == 0 { km::vertical_rem(c.padding[side], c.font_size) / c.font_size } else { to_em(c.padding[side], c.font_size) };
                 ds.push(format!("{name}:{}em", fmt(v)));
             }
         }
@@ -419,6 +446,20 @@ mod tests {
     }
 
     /// 悬挂缩进：左内边距并进左外边距；带背景色的、列表不动。
+    /// 认内边距、px 是屏幕像素的阅读器（掌阅）：px 的左右内边距（0.45pt 一 px）、首行缩进（0.75pt 一 px）折成 em，em 写的不动；
+    /// 行内写的删掉、没改的那几边并进类规则。
+    #[test]
+    fn px_padding_and_indent_on_padding_reader() {
+        let reader = ReaderModel { px_margins: false, ..ReaderModel::default() };
+        let mut b = book(r#"<p class="a">一</p><p class="e">二</p><p style="padding:8px 16px;text-indent:32px">三</p>"#, "p.a{padding-left:20px;text-indent:24px} p.e{padding-left:2em;text-indent:2em}");
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4 });
+        let page = String::from_utf8(b[2].data.clone()).unwrap();
+        let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
+        assert!(page.contains(r#"<p class="a eink-b1">一</p><p class="e">二</p><p class="eink-b2">三</p>"#), "{page}");
+        assert!(sheet.contains("p.eink-b1{padding-left:0.75em;text-indent:1.5em;}"), "{sheet}");
+        assert!(sheet.contains("p.eink-b2{padding-left:0.6em;padding-right:0.6em;text-indent:2em;padding-top:0.3em;padding-bottom:0.3em;}"), "{sheet}");
+    }
+
     #[test]
     fn horizontal_padding_joins_margin() {
         let (page, sheet, _) = run(r#"<p class="h">注一</p><p class="bg">色块</p><ul><li class="h">项</li></ul>"#, "p.h,li.h{text-indent:-2em;padding-left:2em;margin-left:1em} p.bg{padding-left:1em;background-color:#ccc}");

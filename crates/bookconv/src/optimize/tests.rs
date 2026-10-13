@@ -1209,7 +1209,7 @@
         assert!(matches!(opts.text_mode, TextMode::Repair { .. }));
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
         // 样式表只按 Send to Kindle 的规则改（profile `kindle_rules`）：正文字体「宋体」整条去掉、body 的左右外边距不要、上下边距照 Kindle
-        // 换算（掌阅 × 1.52，KINDLE_RULES 14）；别的一个字不改
+        // 换算（掌阅 × 1.52，KINDLE_RULES 14）（正文行距 1.8 掌阅不认，就是缺省行距，Kindle 也是行距设置，不改）；别的一个字不改
         assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:3.0427em;margin-bottom:3.0427em;}p{text-indent:0;margin:0.7607em 0 0.7607em 0}");
         assert_eq!(entry_bytes(&out, "OEBPS/big.jpg"), jpg, "图片原样");
         let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();

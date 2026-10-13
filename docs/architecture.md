@@ -84,7 +84,7 @@
 | `toc` | 目录：判定目录文件、没有目录时生成（NCX + nav）、扁平目录按"第X部"重建成两级、定章节后补节 |
 | `chapters` | 定章节：按目录层级定书/卷、章、节，漏掉的节补进目录、目录改指到文件中间的标题；不拆文件 |
 | `kindle_rules` | 照 Send to Kindle 的规则改书自己的样式表（正文字体、字号按正文归一、body 左右边距、文字对比度；只改值、删声明）：掌阅、Move 的文字书用。要改什么由 `book_facts` 全书走一趟 DOM、按 `cascade` 层叠算出（正文字号、正文字体、body 上的类、各文件有没有负外边距），口径同 KFX 写出器 |
-| `hidden` / `kindle_images` / `blank_fold` / `block_style` / `top_spacer` / `break_margin` | `kindle_rules` 之后照 Kindle 改写的几步（掌阅、Move，按顺序）：不认 `display:none` 的去掉隐藏元素；图片尺寸改写成和 Kindle 一样大；空段折成下一块的上边距、块末尾多排一行的 `<br/>` 去掉；块的行距、标题字号；页首上边距垫图；排不下的大段上外边距换页。最后竖直间距照 Kindle 换算（`kindle_rules::scale_vertical_entries`）。Kindle 上的值走 `kindle_model`（一章一个 `Chapter`），阅读器的差别走 `reader_model`，见 [`typesetting.md`](typesetting.md) |
+| `css_compat` / `hidden` / `kindle_images` / `blank_fold` / `block_style` / `top_spacer` / `break_margin` | `kindle_rules` 之后照 Kindle 改写的几步（掌阅、Move，按顺序）：不认 rem、`!important` 的（掌阅）rem 改 em、去掉 `!important`、靠它胜出的值写进行内；不认 `display:none` 的去掉隐藏元素；图片尺寸改写成和 Kindle 一样大；空段折成下一块的上边距、块末尾多排一行的 `<br/>` 去掉；块的行距（Move 的倍数、掌阅写成 em）、标题字号；页首上边距垫图；排不下的大段上外边距换页。最后竖直间距照 Kindle 换算（`kindle_rules::scale_vertical_entries`）。Kindle 上的值走 `kindle_model`（一章一个 `Chapter`），阅读器的差别走 `reader_model`，见 [`typesetting.md`](typesetting.md) |
 | `cover` | `ensure_cover_declared` 保证 OPF 声明了有效的封面图；`prepend_cover_page` 给 spine 里没有封面页、正文也没用到封面图的书在最前面补一页 `eink-cover.xhtml`（掌阅、Move 的文字书，优化器在清洗前调） |
 | `normalize` | 最后一步的 EPUB 3 规范整理：XHTML 修成合法 XML、OPF 升到 3.0、nav 与 NCX 互补 |
 | `html5fix` | 规范整理配不平的 XHTML（交叉嵌套、没关的 `<p>`/`<li>`、认不出的实体）按 HTML5 解析算法重新解析、写回 XHTML（2026-10-09） |

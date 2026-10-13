@@ -55,6 +55,7 @@ mod blank_fold;
 mod block_style;
 mod box_fix;
 mod inline_css;
+mod css_compat;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
@@ -137,7 +138,11 @@ pub use self::encoding::transcode_entries;
 ///   `heading_margins`，边框用户选横线图）。
 /// - 24（2026-10-13）：块上 px 写的左右外边距照 Kindle 折成 em（掌阅、Move 的 px 是屏幕像素，Kindle 按 0.45pt），Move 上 % 写的按
 ///   内容区宽折成 em（Move 当成 px；`box_fix.rs`，profile `px_margins`、`percent_margins`）。
-pub const KINDLE_RULES_VERSION: &str = "24";
+/// - 25（2026-10-13）：掌阅上 rem 改成 em（字号的折成 px）、去掉 `!important`（靠它胜出的值写进行内 `style`）、行距和 Kindle 差 5% 以上的
+///   块写成 em（掌阅不认 rem、带 `!important` 的声明、不带单位的行距；`css_compat.rs`、`block_style.rs`，profile `rem`、`important`、
+///   `line_height_numbers`、`line_px`），块上 px 写的左右内边距、首行缩进照 Kindle 折成 em（掌阅的 px 是屏幕像素；`box_fix.rs`，profile
+///   `px_margins`）。
+pub const KINDLE_RULES_VERSION: &str = "25";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -525,6 +530,8 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         }
         let font_scale = kindle_rules::apply(entries, rep, opts);
         add_ua_css(entries, rep, font_scale);
+        // 不认 rem、`!important` 的阅读器（掌阅）：换成认的写法。别的 pass 之前：它们按 Kindle 的层叠算，换完算出来一样
+        css_compat::apply(entries, rep, opts.media.as_ref(), opts.reader.rem, opts.reader.important);
         if let Some((sizing, kref)) = opts.image_sizing {
             kindle_images::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), sizing, kref);
         }
