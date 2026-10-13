@@ -64,6 +64,17 @@ pub fn vertical_rem(l: Option<Len>, fs: f64) -> f64 {
     }
 }
 
+/// 相邻的上下外边距折叠（同 CSS：两个都正取大，都负取小，一正一负相加）。
+pub fn collapse(a: f64, b: f64) -> f64 {
+    if a >= 0.0 && b >= 0.0 {
+        a.max(b)
+    } else if a < 0.0 && b < 0.0 {
+        a.min(b)
+    } else {
+        a + b
+    }
+}
+
 /// 全书的样式表按阅读模式的 `media` 解析好（书内路径 → 规则）；不是 UTF-8 的按 Latin-1 读。
 pub fn book_css<'e>(entries: &'e [Entry], media: Option<&MediaEnv>) -> HashMap<&'e str, Arc<Rules>> {
     entries
@@ -182,6 +193,35 @@ impl Chapter {
             return Some(&self.body_comp);
         }
         self.index_of(id).map(|i| &self.els[i].comp)
+    }
+
+    /// 第 `i` 个元素的子元素里是块的（下标，文档序）。
+    pub fn block_children(&self, i: usize) -> Vec<usize> {
+        self.el(i).children().filter_map(ElementRef::wrap).filter_map(|c| self.index_of(c.id())).filter(|&j| self.els[j].is_block).collect()
+    }
+
+    /// 块 `i` 在 Kindle 上的上（`top`）/ 下外边距（根 em）：连同第一个（最后一个）子块，中间没有内边距、边框隔着的，相邻的折叠
+    /// （[`collapse`]）。有负的 `None`（拿不准）。
+    pub fn margin_edge(&self, i: usize, top: bool) -> Option<f64> {
+        let (m, p) = if top { (0, 0) } else { (2, 2) };
+        let mut cur = i;
+        let mut acc = 0.0f64;
+        loop {
+            let c = &self.els[cur].comp;
+            let v = vertical_rem(c.margin[m], c.font_size);
+            if v < 0.0 {
+                return None;
+            }
+            acc = collapse(acc, v);
+            if vertical_rem(c.padding[p], c.font_size) > 0.0 || c.border[p].is_some() {
+                return Some(acc);
+            }
+            let kids = self.block_children(cur);
+            match if top { kids.first() } else { kids.last() } {
+                Some(&k) => cur = k,
+                None => return Some(acc),
+            }
+        }
     }
 
     /// 元素直接含的字数（不算空白）：只数自己的文字子节点。

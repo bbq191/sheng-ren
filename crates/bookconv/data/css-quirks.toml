@@ -3,8 +3,8 @@
 # 只收验证过的（真机、测试书）；没有的就是"没验证过"，体检照报。
 #
 # 每条 [[rule]]：
-#   prop   属性（简写展开以后的分项名，边框的分项都算 "border"；末尾 * 通配，如 "margin-*"）
-#   on     元素：p、heading（h1–h6）、block（别的块：div、li、blockquote、td……）、inline（span、a、b……）、img；不写＝都算
+#   prop   属性（简写展开以后的分项名，边框的分项按边算 "border-top" 等、圆角算 "border-radius"；末尾 * 通配，如 "margin-*"）
+#   on     元素：p、heading（h1–h6）、cell（td、th）、list（li）、block（别的块：div、blockquote……）、inline（span、a、b……）、img；不写＝都算
 #   value  值：em（em、rem、ex）、px、pt（pt 和别的绝对单位）、pct（%）、number（不带单位）、zero（0）、neg（负数）、keyword（别的）；不写＝都算
 #   via    写法：sheet（外链样式表）、style（文档里的 <style>）、inline（style 属性）、important（带 !important，不论在哪）；不写＝都算
 #   ireader / xochitl  这台上的表现：
@@ -42,21 +42,29 @@ src = "2026-10-13 测试-怪癖 Q27、Q49、Q51、Q52；修后优化过的测试
 # ---------------------------------------------------------------- 竖直间距
 
 [[rule]]
-prop = ["margin-top"]
+prop = ["margin-top", "margin-bottom"]
 on = ["heading"]
 value = ["em", "px", "pt", "pct"]
 ireader = "fixed"
+xochitl = "fixed"
+note = "Move 上标题的上下外边距不认：页首的垫图推到 Kindle 的位置（KINDLE_RULES 11、20），页中间的写到前一块的下外边距、后一块的上外边距（KINDLE_RULES 23）"
+src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q05、Q65–Q67、Q74"
+
+[[rule]]
+prop = ["padding-*"]
+on = ["cell", "list", "inline", "img"]
+value = ["em", "px", "pt", "pct"]
 xochitl = "broken"
-note = "Move 上标题的上外边距不认：页首的垫图推到 Kindle 的位置（KINDLE_RULES 11、20），页中间的没处理"
-src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q05"
+note = "Move 不认内边距；表格单元格、列表项、行内元素、图上的没处理"
+src = "2026-10-13 测试-怪癖 Q06、Q12"
 
 [[rule]]
 prop = ["padding-top", "padding-bottom"]
 value = ["em", "px", "pt", "pct"]
 ireader = "fixed"
-xochitl = "broken"
-note = "Move 上下内边距不认（页首的上内边距算进垫图）；掌阅照 Kindle 换算（KINDLE_RULES 14）"
-src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q06、Q39"
+xochitl = "fixed"
+note = "Move 上下内边距不认：折进和相邻块之间的间距、连着边框的画进横线图（KINDLE_RULES 23；页首的算进垫图）；有子块的块上的没处理。掌阅照 Kindle 换算（KINDLE_RULES 14）"
+src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q06、Q39；修后优化过的测试书真机同 Kindle 换算"
 
 [[rule]]
 prop = ["margin-top", "margin-bottom"]
@@ -78,9 +86,9 @@ src = "2026-10-12 测试-竖直间距；2026-10-13 测试-怪癖 Q04、Q35–Q37
 [[rule]]
 prop = ["padding-left", "padding-right"]
 value = ["em", "px", "pt", "pct"]
-xochitl = "broken"
-note = "Move 左右内边距不认（悬挂缩进 text-indent 负数 + padding-left 的首行伸到页边距里）"
-src = "2026-10-13 测试-怪癖 Q12、Q14、Q59"
+xochitl = "fixed"
+note = "Move 左右内边距不认：并进同侧的外边距（KINDLE_RULES 23，悬挂缩进跟着对了）；带背景色的块不动（色块会缩到字上）"
+src = "2026-10-13 测试-怪癖 Q12、Q14、Q59、Q71；修后优化过的测试书真机同外边距"
 
 [[rule]]
 prop = ["margin-left", "margin-right"]
@@ -129,9 +137,9 @@ src = "2026-10-13 测试-怪癖 Q15"
 [[rule]]
 prop = ["text-indent"]
 value = ["neg"]
-xochitl = "broken"
-note = "负的首行缩进（悬挂缩进）在 Move 上伸到页边距里：配套的 padding-left 不认"
-src = "2026-10-13 测试-怪癖 Q14"
+xochitl = "fixed"
+note = "负的首行缩进（悬挂缩进）：配套的 padding-left 并进外边距以后 Move 上排对（KINDLE_RULES 23）"
+src = "2026-10-13 测试-怪癖 Q14、Q71"
 
 [[rule]]
 prop = ["text-align"]
@@ -177,10 +185,30 @@ src = "2026-10-13 测试-行距；三台速查"
 # ---------------------------------------------------------------- 边框、宽度
 
 [[rule]]
-prop = ["border"]
+prop = ["border-top", "border-bottom"]
+on = ["cell", "list", "img", "inline"]
 xochitl = "broken"
-note = "Move 不画边框"
+note = "Move 不画边框；表格、列表、图、行内元素上的没处理"
 src = "2026-10-13 测试-怪癖 Q07、Q40"
+
+[[rule]]
+prop = ["border-top", "border-bottom"]
+xochitl = "fixed"
+note = "Move 不画边框：上下边框在块里插同色同粗的横线图（KINDLE_RULES 23，用户定）；文件开头的块不插上边框"
+src = "2026-10-13 测试-怪癖 Q07、Q40、Q69、Q70；修后优化过的测试书真机画出来"
+
+[[rule]]
+prop = ["border-left", "border-right"]
+xochitl = "broken"
+note = "Move 不画边框；左右竖线做不了"
+src = "2026-10-13 测试-怪癖 Q07、Q40"
+
+[[rule]]
+prop = ["border-radius"]
+ireader = "accept"
+xochitl = "accept"
+note = "圆角：边框、背景的角，不影响位置"
+src = "约定"
 
 [[rule]]
 prop = ["width", "height", "max-width", "max-height", "min-width", "min-height"]

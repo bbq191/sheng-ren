@@ -273,7 +273,7 @@ impl OptimizeOpts {
             // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
             wash: Some({
                 let w = self.wash.clone().unwrap_or_default();
-                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, top_spacer: w.top_spacer, bg_place: w.bg_place, v_scale: w.v_scale, reader: w.reader.clone(), audit: w.audit.clone(), ..Default::default() }
+                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, top_spacer: w.top_spacer, bg_place: w.bg_place, v_scale: w.v_scale, reader: w.reader.clone(), audit: w.audit.clone(), box_geometry: w.box_geometry, ..Default::default() }
             }),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
@@ -326,6 +326,10 @@ impl OptimizeOpts {
                 if let (Some(em), Some((_, k))) = (p.em_px, w.image_sizing) {
                     let ratio = f64::from(p.output_readable().height) / k.content_h;
                     w.v_scale = Some(crate::wash::VScale { em: k.v_rem_px * ratio / em, kindle_rem_px: k.v_rem_px, ratio });
+                    // 不认内边距、不画边框、不认标题外边距的阅读器（Move）：照 Kindle 改写要的尺寸
+                    if !(p.padding && p.borders && p.heading_margins) {
+                        w.box_geometry = Some(crate::wash::BoxGeometry { area_w: f64::from(p.output_readable().width), em_px: em, v_rem_px: k.v_rem_px * ratio });
+                    }
                 }
                 // 背景尺寸的高写 `auto` 会拉长图的阅读器（掌阅）：整页背景图照 Kindle 的大小、位置写成像素
                 if !p.background_auto_height {
