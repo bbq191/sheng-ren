@@ -788,6 +788,14 @@ fn cmd_list(ctx: &Ctx) {
             };
             let shown = o.path.strip_prefix(lib.root()).map(|p| p.to_path_buf()).unwrap_or(o.path.clone());
             println!("      {:<20} {state}  {}", o.device, shown.display());
+            // 体检（生成时记下的）：和 Kindle 不一样又没处理的逐条列出，没验证过的合成一行
+            for line in o.audit.iter().filter(|l| l.starts_with('✗')) {
+                println!("        体检 {line}");
+            }
+            let unknown: Vec<&str> = o.audit.iter().filter_map(|l| l.strip_prefix("? ")).collect();
+            if !unknown.is_empty() {
+                println!("        体检 ? 没验证过 {} 种：{}", unknown.len(), unknown.join("；"));
+            }
         }
     }
     for id in lib.broken() {

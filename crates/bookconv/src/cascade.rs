@@ -138,10 +138,21 @@ fn leading_url(value: &str) -> Option<&str> {
     crate::html::css_urls(value).into_iter().next().filter(|u| u.start == 0).map(|u| u.value)
 }
 
-/// 一个文档用到的样式表：各份 [`Rules`] 和它们第一条规则的全局序号（后出现的规则优先）。
+/// 一个文档用到的样式表：各份 [`Rules`]、它们第一条规则的全局序号（后出现的规则优先）、从哪来。
 #[derive(Default)]
 pub struct Sheet {
-    parts: Vec<(Arc<Rules>, usize)>,
+    parts: Vec<(Arc<Rules>, usize, Origin)>,
+}
+
+/// 一条声明从哪来（有的阅读器按来源区别对待：xochitl 行内 `style`、`<style>` 里的 em 只按 23px 排，见 docs/xochitl.md）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Origin {
+    /// 外链样式表（`<link rel="stylesheet">`）。
+    Sheet,
+    /// 文档里的 `<style>`。
+    Style,
+    /// 元素的 `style` 属性。
+    Inline,
 }
 
 // ---------------------------------------------------------------- CSS 文本：扫描、拆分、规则位置
@@ -1058,8 +1069,12 @@ impl Sheet {
 
     /// 追加一份解析好的样式表（见 [`Rules::parse`]），返回下一个序号。
     pub fn add_rules(&mut self, rules: Arc<Rules>, order: usize) -> usize {
+        self.add_rules_from(rules, order, Origin::Sheet)
+    }
+
+    fn add_rules_from(&mut self, rules: Arc<Rules>, order: usize, origin: Origin) -> usize {
         let next = order + rules.0.len();
-        self.parts.push((rules, order));
+        self.parts.push((rules, order, origin));
         next
     }
 
@@ -1077,7 +1092,7 @@ impl Sheet {
                 continue;
             }
             if el.value().name() == "style" {
-                order = sheet.add_at(&el.text().collect::<String>(), order, doc_path, media);
+                order = sheet.add_rules_from(Rules::parse(&el.text().collect::<String>(), doc_path, media), order, Origin::Style);
             } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
                 if let Some(rules) = el.value().attr("href").and_then(|h| rules_for(&crate::epubzip::resolve_link(doc_path, h).0)) {
                     order = sheet.add_rules(rules, order);
@@ -1090,14 +1105,32 @@ impl Sheet {
     /// 一个元素上生效的声明（按层叠排好，后面的覆盖前面的），含行内 `style`。
     /// 行内 `style` 里的 `url(…)` 按文档路径 `base` 解析（同样式表按自己的路径；以前不解析，子目录里文档的行内背景图找不到）。
     pub fn cascade(&self, el: &ElementRef, base: &str) -> HashMap<String, String> {
-        // (!important, 优先级, 出现顺序, 声明)
-        type Hit<'a> = (bool, (u32, u32, u32), usize, &'a Decl);
+        let mut out = HashMap::new();
+        self.cascade_each(el, base, |d, _| {
+            out.insert(d.prop.clone(), d.value.clone());
+        });
+        out
+    }
+
+    /// 同 [`Sheet::cascade`]，另给出生效的那条声明从哪来、带没带 `!important`。
+    pub fn cascade_with_origin(&self, el: &ElementRef, base: &str) -> HashMap<String, (String, Origin, bool)> {
+        let mut out = HashMap::new();
+        self.cascade_each(el, base, |d, origin| {
+            out.insert(d.prop.clone(), (d.value.clone(), origin, d.important));
+        });
+        out
+    }
+
+    /// 按层叠顺序（优先级低的先）把元素上匹配的声明依次交给 `f`：同一属性后给的覆盖先给的。
+    fn cascade_each(&self, el: &ElementRef, base: &str, mut f: impl FnMut(&Decl, Origin)) {
+        // (!important, 优先级, 出现顺序, 声明, 来源)
+        type Hit<'a> = (bool, (u32, u32, u32), usize, &'a Decl, Origin);
         let mut hits: Vec<Hit> = Vec::new();
-        for (rules, base) in &self.parts {
+        for (rules, base, origin) in &self.parts {
             for (i, r) in rules.0.iter().enumerate() {
                 if r.need.as_ref().is_none_or(|n| n.may_match(el)) && r.sel.matches(el) {
                     for d in &r.decls {
-                        hits.push((d.important, r.spec, base + i, d));
+                        hits.push((d.important, r.spec, base + i, d, *origin));
                     }
                 }
             }
@@ -1105,14 +1138,12 @@ impl Sheet {
         let mut inline: Vec<Decl> = el.value().attr("style").map(parse_decls).unwrap_or_default();
         resolve_urls(&mut inline, base);
         for d in &inline {
-            hits.push((d.important, (1000, 0, 0), usize::MAX, d));
+            hits.push((d.important, (1000, 0, 0), usize::MAX, d, Origin::Inline));
         }
         hits.sort_by_key(|h| (h.0, h.1, h.2));
-        let mut out = HashMap::new();
-        for (_, _, _, d) in hits {
-            out.insert(d.prop.clone(), d.value.clone());
+        for (_, _, _, d, origin) in hits {
+            f(d, origin);
         }
-        out
     }
 }
 

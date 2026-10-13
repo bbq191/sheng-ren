@@ -7,7 +7,7 @@
 //!   开始标签一一对应（对得上才知道改源码里的哪个标签）。
 //!
 //! 2026-10-13 收拢：以前写出器和清洗层的 7 个 pass 各写一份常量、各自解析样式表、各走一遍 DOM，写出器改了规则两边会悄悄对不上。
-use crate::cascade::{Computed, Len, MediaEnv, Rules, Sheet};
+use crate::cascade::{Computed, Len, MediaEnv, Origin, Rules, Sheet};
 use crate::epubzip::Entry;
 use ego_tree::NodeId;
 use scraper::{ElementRef, Html, Node};
@@ -88,6 +88,8 @@ pub struct El {
     pub comp: Rc<Computed>,
     /// 层叠出来的声明（含 `style`、表现属性），给要看"写没写""写的什么"的用。
     pub decls: HashMap<String, String>,
+    /// 生效的声明不是外链样式表里的普通声明的：属性 → (来源, 带没带 `!important`)。表现属性（`align` 之类）不在里面。
+    pub origin: HashMap<String, (Origin, bool)>,
     /// 块级（[`crate::cascade::is_block`]）。
     pub is_block: bool,
     /// 最近的块（自己是块就是自己；外面没有块、直接在 `<body>` 里的 `None`）。
@@ -117,6 +119,21 @@ impl Chapter {
             crate::cascade::presentational_hints(el, &mut d);
             d
         };
+        let with_origin = |el: &ElementRef| {
+            let mut origin = HashMap::new();
+            let mut d: HashMap<String, String> = sheet
+                .cascade_with_origin(el, name)
+                .into_iter()
+                .map(|(k, (v, o, imp))| {
+                    if o != Origin::Sheet || imp {
+                        origin.insert(k.clone(), (o, imp));
+                    }
+                    (k, v)
+                })
+                .collect();
+            crate::cascade::presentational_hints(el, &mut d);
+            (d, origin)
+        };
         let root = html.root_element();
         let body = root.children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body")?;
         let rc = Computed::derive(&Computed::root(), &decls_of(&root), root.value().name());
@@ -127,13 +144,13 @@ impl Chapter {
         let mut stack: Vec<Frame> = body.children().rev().map(|c| (c, bc.clone(), None, None, false)).collect();
         while let Some((n, parent, pi, block, hidden)) = stack.pop() {
             let Some(el) = ElementRef::wrap(n) else { continue };
-            let decls = decls_of(&el);
+            let (decls, origin) = with_origin(&el);
             let c = Rc::new(Computed::derive(&parent, &decls, el.value().name()));
             let hidden = hidden || c.display.as_deref() == Some("none");
             let is_block = crate::cascade::is_block(&el, &c);
             let me = els.len();
             let block = if is_block { Some(me) } else { block };
-            els.push(El { node: n.id(), parent: pi, comp: c.clone(), decls, is_block, block, hidden });
+            els.push(El { node: n.id(), parent: pi, comp: c.clone(), decls, origin, is_block, block, hidden });
             for ch in n.children().rev() {
                 stack.push((ch, c.clone(), Some(me), block, hidden));
             }
@@ -194,6 +211,7 @@ mod tests {
         assert_eq!(c.els[2].block, Some(1));
         assert!(c.els[2].hidden && !c.els[3].hidden);
         assert_eq!(c.els[3].decls.get("line-height").map(String::as_str), Some("2"));
+        assert_eq!((c.els[3].origin.get("line-height"), c.els[0].origin.get("display")), (Some(&(Origin::Inline, false)), None));
         assert_eq!(c.own_chars(1), 1);
         assert!(c.matches_tags);
         assert!(!chapter("<table><tr><td>x</td></tr></table>", "").matches_tags);

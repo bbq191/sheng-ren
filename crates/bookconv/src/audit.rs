@@ -1,0 +1,305 @@
+//! 体检：一本书用到的 CSS 写法里，哪些在这台阅读器上和 Kindle 不一样又没处理（broken）、哪些没验证过（怪癖表里没有）。
+//!
+//! 怪癖表是 `data/css-quirks.toml`（真机、测试书验证过的结论，`tools/quirks/probe.py` 量的写回那里）。按 [`crate::kindle_model::Chapter`]
+//! 层叠，每个看得见的元素上生效的每条声明归成「属性 · 元素 · 值 · 写法」查表，同样的合起来计元素数。只报告、不改书
+//! （2026-10-13 用户定：sync 时顺带提示，清单记进生成记录，`booklib list` 看）。
+use crate::cascade::{MediaEnv, Origin};
+use crate::epubzip::Entry;
+use crate::kindle_model::{book_css, Chapter};
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
+/// 一种写法在这台上的结论。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Verdict {
+    /// 和 Kindle 不一样、没处理。
+    Broken,
+    /// 怪癖表里没有。
+    Unknown,
+}
+
+/// 一种写法（同样的合在一起）。
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Finding {
+    pub verdict: Verdict,
+    /// 属性。
+    pub prop: String,
+    /// 元素：`p`、`heading`、`block`、`inline`、`img`。
+    pub on: &'static str,
+    /// 值：`em`、`px`、`pt`、`pct`、`number`、`zero`、`neg`、`keyword`。
+    pub value: &'static str,
+    /// 写法：`sheet`、`style`、`inline`（带 `!important` 的另加 `!`）。
+    pub via: String,
+    /// 用到它的元素数。
+    pub count: usize,
+    /// 怪癖表的说明（没验证过的空）。
+    pub note: String,
+}
+
+impl Finding {
+    /// 一行：`✗ <style> 里 text-indent（em，p）×504：说明` / `? letter-spacing（em，p）×3`。
+    pub fn line(&self) -> String {
+        let via = match self.via.trim_end_matches('!') {
+            "style" => "<style> 里 ",
+            "inline" => "行内 style ",
+            _ => "",
+        };
+        let imp = if self.via.ends_with('!') { " !important" } else { "" };
+        let mark = if self.verdict == Verdict::Broken { '✗' } else { '?' };
+        let note = if self.note.is_empty() { String::new() } else { format!("：{}", self.note) };
+        format!("{mark} {via}{}{imp}（{}，{}）×{}{note}", self.prop, self.value, self.on, self.count)
+    }
+}
+
+#[derive(Deserialize)]
+struct Table {
+    rule: Vec<Row>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Row {
+    prop: Vec<String>,
+    #[serde(default)]
+    on: Vec<String>,
+    #[serde(default)]
+    value: Vec<String>,
+    #[serde(default)]
+    via: Vec<String>,
+    ireader: Option<String>,
+    xochitl: Option<String>,
+    #[serde(default)]
+    note: String,
+    #[allow(dead_code)]
+    src: String,
+}
+
+impl Row {
+    fn status(&self, reader: &str) -> Option<&str> {
+        match reader {
+            "ireader" => self.ireader.as_deref(),
+            "xochitl" => self.xochitl.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn matches(&self, prop: &str, on: &str, value: &str, via: Origin, important: bool) -> bool {
+        let any = |list: &[String], v: &str| list.is_empty() || list.iter().any(|x| x == v);
+        let via_ok = self.via.is_empty() || self.via.iter().any(|v| v == via_name(via) || (v == "important" && important));
+        self.prop.iter().any(|p| match p.strip_suffix('*') {
+            Some(pre) => prop.starts_with(pre),
+            None => p == prop,
+        }) && any(&self.on, on)
+            && any(&self.value, value)
+            && via_ok
+    }
+}
+
+fn via_name(o: Origin) -> &'static str {
+    match o {
+        Origin::Sheet => "sheet",
+        Origin::Style => "style",
+        Origin::Inline => "inline",
+    }
+}
+
+fn table() -> &'static Table {
+    static T: OnceLock<Table> = OnceLock::new();
+    T.get_or_init(|| toml::from_str(include_str!("../data/css-quirks.toml")).expect("css-quirks.toml 格式不对（单测会先报）"))
+}
+
+/// 怪癖表里有这台的一栏（内置的 `ireader`、`xochitl`；别的模式不体检）。
+pub fn covers(reader: &str) -> bool {
+    matches!(reader, "ireader" | "xochitl")
+}
+
+/// 元素归类。
+fn element_kind(tag: &str, is_block: bool) -> &'static str {
+    match tag {
+        "p" => "p",
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "heading",
+        "img" | "svg" | "image" => "img",
+        _ if is_block => "block",
+        _ => "inline",
+    }
+}
+
+/// 报告用的属性名；不起作用的不报（`None`）：行内元素上的 `text-indent`、`text-align`（只对块起作用），等于没写的
+/// `font-size:1em`/`100%`。边框的分项（`border-top-width`、`border-*-radius`……）合成 `border`。
+fn reported_prop(prop: &str, on: &str, v: &str) -> Option<String> {
+    if on == "inline" && matches!(prop, "text-indent" | "text-align") {
+        return None;
+    }
+    if prop == "font-size" && matches!(v.trim().to_ascii_lowercase().as_str(), "1em" | "100%") {
+        return None;
+    }
+    Some(if prop.starts_with("border") { "border".to_string() } else { prop.to_string() })
+}
+
+/// 值归类：看第一个词。
+fn value_kind(v: &str) -> &'static str {
+    let t = v.trim().to_ascii_lowercase();
+    let tok = t.split_whitespace().next().unwrap_or("");
+    let end = tok.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(tok.len());
+    let Ok(n) = tok[..end].parse::<f64>() else { return "keyword" };
+    let unit = &tok[end..];
+    if n == 0.0 {
+        return "zero";
+    }
+    if n < 0.0 && !unit.is_empty() {
+        return "neg";
+    }
+    match unit {
+        "em" | "rem" | "ex" | "ch" => "em",
+        "px" => "px",
+        "%" => "pct",
+        "pt" | "pc" | "in" | "cm" | "mm" | "q" => "pt",
+        "" => "number",
+        _ => "keyword",
+    }
+}
+
+/// 给 `reader` 这台体检一本书（`entries` 是要优化的那份，`kindle_rules` 改写之前）：没处理的不一样、没验证过的写法，
+/// 不一样的在前、同一类里用得多的在前。
+pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<Finding> {
+    if !covers(reader) {
+        return Vec::new();
+    }
+    let css = book_css(entries, media);
+    let chapters: Vec<&Entry> = entries.iter().filter(|e| crate::wash::is_chapter_entry(e)).collect();
+    // (属性, 元素, 值, 来源, !important) → 元素数
+    type Key = (String, &'static str, &'static str, Origin, bool);
+    let counts: Vec<BTreeMap<Key, usize>> = crate::util::par_map(&chapters, |e| {
+        let mut m = BTreeMap::new();
+        let Ok(text) = std::str::from_utf8(&e.data) else { return m };
+        let Some(ch) = Chapter::parse(&e.name, text, media, &css) else { return m };
+        for (i, el) in ch.els.iter().enumerate() {
+            if el.hidden {
+                continue;
+            }
+            let on = element_kind(ch.el(i).value().name(), el.is_block);
+            // 同一个元素上同一种写法只计一次（边框的分项合成了一个）
+            let mut keys: std::collections::BTreeSet<Key> = std::collections::BTreeSet::new();
+            for (prop, v) in &el.decls {
+                let Some(name) = reported_prop(prop, on, v) else { continue };
+                let (origin, imp) = el.origin.get(prop).copied().unwrap_or((Origin::Sheet, false));
+                keys.insert((name, on, value_kind(v), origin, imp));
+            }
+            for k in keys {
+                *m.entry(k).or_default() += 1;
+            }
+        }
+        m
+    });
+    let mut all: BTreeMap<Key, usize> = BTreeMap::new();
+    for m in counts {
+        for (k, n) in m {
+            *all.entry(k).or_default() += n;
+        }
+    }
+    let t = table();
+    let mut out: Vec<Finding> = all
+        .into_iter()
+        .filter_map(|((prop, on, value, origin, imp), count)| {
+            let row = t.rule.iter().find(|r| r.matches(&prop, on, value, origin, imp));
+            let verdict = match row.and_then(|r| r.status(reader)) {
+                Some("broken") => Verdict::Broken,
+                Some(_) => return None,
+                None => Verdict::Unknown,
+            };
+            let note = match (verdict, row) {
+                (Verdict::Broken, Some(r)) => r.note.clone(),
+                _ => String::new(),
+            };
+            let via = format!("{}{}", via_name(origin), if imp { "!" } else { "" });
+            Some(Finding { verdict, prop, on, value, via, count, note })
+        })
+        .collect();
+    out.sort_by(|a, b| a.verdict.cmp(&b.verdict).then(b.count.cmp(&a.count)).then_with(|| a.cmp(b)));
+    out
+}
+
+/// sync 时打的摘要（最多两行）：不一样又没处理的前几种、没验证过的有几种。没有就空。
+pub fn summary(findings: &[Finding], reader: &str) -> Vec<String> {
+    const SHOW: usize = 4;
+    let mut out = Vec::new();
+    let broken: Vec<&Finding> = findings.iter().filter(|f| f.verdict == Verdict::Broken).collect();
+    if !broken.is_empty() {
+        let shown: Vec<String> = broken.iter().take(SHOW).map(|f| short(f)).collect();
+        let more = if broken.len() > SHOW { format!(" 等 {} 种", broken.len()) } else { String::new() };
+        out.push(format!("体检：{reader} 上和 Kindle 不一样、没处理：{}{more}（booklib list 看全部）", shown.join("；")));
+    }
+    let unknown: Vec<&Finding> = findings.iter().filter(|f| f.verdict == Verdict::Unknown).collect();
+    if !unknown.is_empty() {
+        let shown: Vec<String> = unknown.iter().take(3).map(|f| short(f)).collect();
+        out.push(format!("体检：{reader} 上没验证过的写法 {} 种（最多的：{}）", unknown.len(), shown.join("；")));
+    }
+    out
+}
+
+fn short(f: &Finding) -> String {
+    let via = match f.via.trim_end_matches('!') {
+        "style" => "<style> ",
+        "inline" => "行内 ",
+        _ => "",
+    };
+    format!("{via}{}（{}，{}）×{}", f.prop, f.value, f.on, f.count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_parses_and_statuses_are_known() {
+        for r in &table().rule {
+            for s in [&r.ireader, &r.xochitl].into_iter().flatten() {
+                assert!(["same", "fixed", "accept", "broken"].contains(&s.as_str()), "怪癖表状态 {s}");
+            }
+            for v in &r.value {
+                assert!(["em", "px", "pt", "pct", "number", "zero", "neg", "keyword"].contains(&v.as_str()), "值 {v}");
+            }
+            for v in &r.via {
+                assert!(["sheet", "style", "inline", "important"].contains(&v.as_str()), "写法 {v}");
+            }
+            for v in &r.on {
+                assert!(["p", "heading", "block", "inline", "img"].contains(&v.as_str()), "元素 {v}");
+            }
+            assert!(!r.src.is_empty());
+        }
+    }
+
+    #[test]
+    fn value_kinds() {
+        let k: Vec<&str> = ["2em", "1.5rem", "10px", "12pt", "50%", "1.2", "0", "-1em", "bold", "#000", "0.01em", "-2"].iter().map(|v| value_kind(v)).collect();
+        assert_eq!(k, ["em", "em", "px", "pt", "pct", "number", "zero", "neg", "keyword", "keyword", "em", "number"]);
+    }
+
+    fn book(chapter: &str, css: &str) -> Vec<Entry> {
+        vec![
+            Entry { name: "O/content.opf".into(), data: br#"<package><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#.to_vec() },
+            Entry { name: "O/s.css".into(), data: css.as_bytes().to_vec() },
+            Entry { name: "O/c.xhtml".into(), data: chapter.as_bytes().to_vec() },
+        ]
+    }
+
+    /// Move：`<style>` 里的首行缩进 em、行内的上外边距 em 不对；外链的首行缩进 em 对；没验证过的另算；隐藏的不算。掌阅没有这两条。
+    #[test]
+    fn move_flags_style_and_inline_em() {
+        let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/><style>p.a{text-indent:2em;}</style></head>
+<body><p class="a">一</p><p class="a">二</p><div style="margin-top:1.5em">三</div><p class="b">四</p><p class="h" style="margin-top:1em">五</p></body></html>"#;
+        let b = book(ch, "p.b{text-indent:2em;letter-spacing:0.1em;} .h{display:none;}");
+        let f = audit(&b, None, "xochitl");
+        let lines: Vec<String> = f.iter().map(Finding::line).collect();
+        assert_eq!(lines[0], "✗ <style> 里 text-indent（em，p）×2：Move 上行内 style、<style> 里 em、% 写的首行缩进、字号不认（px 认）", "{lines:?}");
+        assert!(lines[1].starts_with("✗ 行内 style margin-top（em，block）×1："), "{lines:?}");
+        assert_eq!(lines[2], "? letter-spacing（em，p）×1", "{lines:?}");
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(audit(&b, None, "ireader").iter().all(|f| f.verdict == Verdict::Unknown));
+        assert!(audit(&b, None, "kindle").is_empty());
+        let s = summary(&f, "Move");
+        assert_eq!(s.len(), 2);
+        assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：<style> text-indent（em，p）×2；行内 margin-top（em，block）×1"), "{s:?}");
+    }
+}

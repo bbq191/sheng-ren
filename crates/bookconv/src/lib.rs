@@ -8,6 +8,7 @@
 //!
 //! 使用方：`library`（书库 `booklib`）和本 crate 的命令行工具。
 pub mod article;
+pub mod audit;
 pub mod bgfit;
 pub mod capfit;
 pub mod cascade;

@@ -243,6 +243,8 @@ pub struct WashOpts {
     /// 而不是藏起来、块末尾多排一行的 `<br/>` 去掉（`blank_fold.rs`）；块的行距、标题字号照 Kindle 改写（`block_style.rs`）；页首垫图
     /// 的尺寸（`top_spacer.rs`）。缺省是完全照 CSS 排的阅读器，什么都不改。
     pub reader: ReaderModel,
+    /// 按怪癖表体检哪台（profile id，[`crate::audit::covers`] 的才有）；`None` 不体检。只报告、不改书。
+    pub audit: Option<String>,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -259,7 +261,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, reader: ReaderModel::default() }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, reader: ReaderModel::default(), audit: None }
     }
 }
 
@@ -286,6 +288,9 @@ const WASH_MARK: &str = "eink-wash";
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct WashReport {
     pub pseudo_drm_stripped: Vec<String>,
+    /// 体检（[`crate::audit`]，`kindle_rules` 改写之前的书）：这台上和 Kindle 不一样又没处理的、没验证过的写法。
+    #[serde(skip)]
+    pub audit: Vec<crate::audit::Finding>,
     /// 文件名里有安卓存储不能用的字符（`*:?` 等）而改了名的条目：(原名, 新名)。流式优化器按原名回原书读图片字节。
     pub renamed: Vec<(String, String)>,
     /// 要做成整页图块的背景图（清洗后的 zip 路径 → 画法），由优化器改图（[`crate::imgopt::page_tile`]）。
@@ -497,6 +502,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     });
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
     if opts.mode.kindle_rules() {
+        // 体检看书本来的写法：先于下面所有改写
+        if let Some(reader) = &opts.audit {
+            rep.audit = crate::audit::audit(entries, opts.media.as_ref(), reader);
+        }
         // 先去掉 Move 上会露出来的隐藏元素：后面的页首垫图、背景图位置都按看得见的内容算
         if !opts.reader.display_none {
             rep.kindle_rule_edits += hidden::apply(entries);

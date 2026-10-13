@@ -9,6 +9,7 @@ license.workspace = true
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "1.1.6"
 ureq = "2"
 # 文字编码：网页的 GBK 等非 UTF-8 页面（quick-xml "encoding" 已间接引入同一版本）
 encoding_rs = "0.8"
