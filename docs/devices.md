@@ -44,6 +44,8 @@
 | `rgba()` | 写出器合成 | **整条作废**（换成不透明色） | 认 |
 | `display:none` | 认 | 认（`linear="no"` 的页露出过「里程碑」，那是 spine 不是这个） | **不认**（行内、外链都不认）→ 去掉元素 |
 | `page-break-before/after: always` | Send to Kindle 另起一节（写出器 21 照做，真机 ✓） | 认 | 认（含行内）；`break-before:page` 不认 |
+| 只有空白的段落（`<p>&nbsp;</p>`、`<p><br/></p>`、块间 `<br/>`） | **不出节点**，下一块上外边距折叠后加 0.6 × 空段行高 | 排一整行（`<p><br/></p>` 更高）；`height`/`font-size` 不认，`display:none` 认 | 排一整行，`<p><br/></p>` 两行；全角空格的空段吞掉；CSS 都藏不住 → 掌阅藏、Move 去掉，下一块照 Kindle（KINDLE_RULES 19） |
+| 外边距折叠 | 照 CSS（写出器） | 折叠 | 折叠 |
 | 放不下时的大段上外边距 | **挪到下一页页首、丢掉边距** | 照加（推到页底） | 照加 → 我们按 Kindle 估算先分页（KINDLE_RULES 18） |
 | `hyphens:auto` | 不认 | 不认 | 不认 |
 

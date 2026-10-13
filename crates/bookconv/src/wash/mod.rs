@@ -51,6 +51,7 @@ mod kindle_rules;
 mod top_spacer;
 mod hidden;
 mod break_margin;
+mod blank_fold;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
@@ -116,7 +117,10 @@ pub use self::encoding::transcode_entries;
 /// - 18（2026-10-12）：大段上外边距在 Kindle 上排不下时换页、丢掉边距，掌阅、Move 照样做（`break_margin.rs`，用户定）：按 Kindle
 ///   的尺寸估算，从文件开头、强制分页起累加，上外边距至少页高 1/4 的块「已排 + 边距 + 自己」超过一页的 90% 就在它前面分页、边距写 0。
 ///   《飘》上下册、《春雪》版权页后的二维码换到下一页页首（掌阅以前推到页底、那行字掉到下一页）；25 本只有这 3 本变。
-pub const KINDLE_RULES_VERSION: &str = "18";
+/// - 19（2026-10-13，用户定）：只有空白的段落（`<p>&nbsp;</p>`、`<p>　</p>`、`<p><br/></p>`、块之间单独的 `<br/>`）照 Kindle 折成下一块的
+///   上外边距（`wash/blank_fold.rs`）：空段掌阅 `display:none` 藏起、Move 去掉（不认 `display:none`，用户定），下一块上外边距写成 Kindle 上
+///   折叠后 + 0.6 × 空段行高。《三体》585 处，掌阅、Move 每个空段以前比 Kindle 多空 0.6–2 行。
+pub const KINDLE_RULES_VERSION: &str = "19";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -492,6 +496,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         add_ua_css(entries, rep, font_scale);
         if let Some((sizing, kref)) = opts.image_sizing {
             kindle_images::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), sizing, kref);
+        }
+        // 只有空白的段落照 Kindle 折成下一块的上边距（照 Kindle 换算竖直间距的两台都做；按原来的 CSS 算，垫图、分页估算之前）
+        if opts.v_scale.is_some() {
+            blank_fold::apply(entries, rep, opts.media.as_ref(), opts.drop_hidden);
         }
         if let Some(g) = opts.top_spacer {
             top_spacer::apply(entries, rep, opts.media.as_ref(), g);
