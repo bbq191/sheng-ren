@@ -357,7 +357,7 @@ impl Builder {
         // 正文行距比 Send to Kindle 的大 25%。
         // 下限 0.6（Send to Kindle 同样：《揭露人性》body `line-height:1.618em` 继承到 2.5 倍字号的卷号上只剩 0.4，写 0.6；
         // 《疯探》《克莱因壶》《占星术》的小字、目录同样落在 0.6）
-        let lh = (c.line_height.unwrap_or(LH_EM) / self.stats.base_lh).max(MIN_LINE_HEIGHT);
+        let lh = bookconv::kindle_model::line_height_ratio(c.line_height, self.stats.base_lh);
         p.len(P_LINE_HEIGHT, lh, U_LH);
         if c.nowrap {
             p.flag(P_NOWRAP, true);

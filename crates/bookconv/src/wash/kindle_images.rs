@@ -24,8 +24,8 @@ use std::rc::Rc;
 /// 写图片尺寸规则的样式表（OPF 同目录）。
 const IMG_CSS_NAME: &str = "eink-img.css";
 
-/// 百分比折页宽按 32em（同 KFX 写出器 `PAGE_WIDTH_EM`：行内图片的百分比宽度写成这么多 em）。
-const PAGE_WIDTH_EM: f64 = 32.0;
+/// 百分比折页宽按 32em（同 KFX 写出器：行内图片的百分比宽度写成这么多 em）。
+use crate::kindle_model::PAGE_WIDTH_EM;
 
 /// 一张 `<img>` 在 Kindle 上怎么排（DOM 顺序，每张都有一项）。
 #[derive(Clone, Debug)]
@@ -73,17 +73,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     if sizing == ImageSizing::Css {
         return;
     }
-    let css: HashMap<&str, std::sync::Arc<Rules>> = entries
-        .iter()
-        .filter(|e| is_css_name(&e.name))
-        .map(|e| {
-            let text = match std::str::from_utf8(&e.data) {
-                Ok(t) => Cow::Borrowed(t),
-                Err(_) => Cow::Owned(crate::util::latin1_decode(&e.data)),
-            };
-            (e.name.as_str(), Rules::parse(&text, &e.name, media))
-        })
-        .collect();
+    let css: HashMap<&str, std::sync::Arc<Rules>> = crate::kindle_model::book_css(entries, media);
     // 原始宽高：调用方读好的（流式优化时图片条目是空占位），没有的从条目字节读
     // 调用方按原书的名字读的；清洗层改过名的（《飘》`*::**.png` 这种名字规范成下划线）按改名记录换过来
     let mut dims: HashMap<&str, (u32, u32)> = HashMap::new();

@@ -1,6 +1,6 @@
 //! 只有空白的段落照 Kindle 折成下一块的上边距，掌阅、Move 照样做（只修复、照 Send to Kindle 统一的文字书；2026-10-13 用户定）。
 //!
-//! Kindle（Send to Kindle 同样，KFX 写出器 12 照做，见 `kfx::write::parse` 的 `BLANK_LINE_FOLD`）：`<p>&nbsp;</p>`、`<p>　</p>`、
+//! Kindle（Send to Kindle 同样，KFX 写出器 12 照做，见 `kindle_model::BLANK_LINE_FOLD`）：`<p>&nbsp;</p>`、`<p>　</p>`、
 //! `<p><br/></p>`、块之间单独的 `<br/>` 不出节点，自己的上下外边距跟着没了；下一块的上外边距照常和前一块的下外边距折叠以后，再加
 //! 0.6 × 空段自己的行高（`line-height` 倍数 × 字号，没写按 1.2）。掌阅、Move 照 CSS 排出一整行（2026-10-13 测试书「测试-空段」：
 //! 上下 1em 的两段之间夹一个 `&nbsp;` 空段，掌阅多 38px、Move 多 88px；`<p><br/></p>` 掌阅多 97px、Move 排成两行多 138px；
@@ -16,18 +16,12 @@
 //! 获奖感言标题下三台对过），Move 每个多排一行（2026-10-13 测试书「测试-末尾br」：段落多 50px、1.5em 标题多 75px，套在 `<span>`
 //! 里的一样）：Move 上一并去掉。
 use super::*;
-use crate::cascade::{Computed, Len, MediaEnv, Rules, Sheet};
-use scraper::{ElementRef, Html, Node};
-use std::rc::Rc;
+use crate::cascade::{Len, MediaEnv, Rules};
+use crate::kindle_model::{self as km, Chapter, BLANK_LINE_FOLD, LH_EM};
+use scraper::{ElementRef, Node};
 
 const CSS_NAME: &str = "eink-blank.css";
 const BLANK: &str = "eink-blank";
-/// 写出器的折叠系数（同 `kfx::write::parse::BLANK_LINE_FOLD`）。
-const FOLD: f64 = 0.6;
-/// 没写 `line-height` 时的行高倍数（同写出器的 `LH_EM`）。
-const LH_EM: f64 = 1.2;
-/// 写出器把百分比折成多少 em 的页宽（同 `kfx::write` 的 `PAGE_WIDTH_EM`）。
-const PAGE_WIDTH_EM: f64 = 32.0;
 /// 藏起空段的写法（掌阅认；Move 不认，元素直接去掉）。
 const HIDE: &str = "display:none;";
 
@@ -42,7 +36,7 @@ struct Plan {
 
 /// `remove`：阅读器不认 `display:none`（profile `display_none = false`），空段元素去掉。
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, remove: bool) {
-    let css = super::top_spacer::parse_css(entries, media);
+    let css = km::book_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let plans: Vec<Plan> = crate::util::par_map(&chapters, |&i| plan(&entries[i], media, &css));
     drop(css);
@@ -159,43 +153,16 @@ fn blank_text(el: &ElementRef) -> bool {
 
 fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<Rules>>) -> Plan {
     let Ok(text) = std::str::from_utf8(&e.data) else { return Plan::default() };
-    let Some((bs, be)) = html::body_range(text) else { return Plan::default() };
-    let tag_count = html::tags_in(text, bs, be).filter(|t| t.is_start()).count();
-    let html = Html::parse_document(text);
-    let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
-    let comp = |el: &ElementRef, parent: &Computed| {
-        let mut d = sheet.cascade(el, &e.name);
-        crate::cascade::presentational_hints(el, &mut d);
-        Computed::derive(parent, &d, el.value().name())
-    };
-    let root = html.root_element();
-    let Some(body) = root.children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body") else { return Plan::default() };
-    let rc = Rc::new(comp(&root, &Computed::root()));
-    let bc = Rc::new(comp(&body, &rc));
-    // body 里的元素按文档序编号（和标签扫描一致才知道改哪个标签），记下计算值
-    let mut idx: HashMap<ego_tree::NodeId, (usize, Rc<Computed>)> = HashMap::new();
-    let mut stack: Vec<(ego_tree::NodeRef<Node>, Rc<Computed>)> = body.children().rev().map(|c| (c, bc.clone())).collect();
-    while let Some((n, parent)) = stack.pop() {
-        let Some(el) = ElementRef::wrap(n) else { continue };
-        let c = Rc::new(comp(&el, &parent));
-        idx.insert(el.id(), (idx.len(), c.clone()));
-        for ch in n.children().rev() {
-            stack.push((ch, c.clone()));
-        }
-    }
-    if idx.len() != tag_count {
-        return Plan::default();
-    }
-    let c_of = |el: &ElementRef| idx.get(&el.id()).map(|(_, c)| c.clone());
-    let is_blockish = |el: &ElementRef| c_of(el).is_some_and(|c| crate::cascade::is_block(el, &c));
+    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return Plan::default() };
+    let body = ch.body();
+    let bc = ch.body_comp.clone();
+    // body 里的元素按文档序编号（和标签扫描一致才知道改哪个标签）；`<body>` 自己不在里面
+    let n_of = |el: &ElementRef| ch.index_of(el.id());
+    let c_of = |el: &ElementRef| n_of(el).map(|i| ch.els[i].comp.clone());
+    let is_blockish = |el: &ElementRef| n_of(el).is_some_and(|i| ch.els[i].is_block);
     let has_block_child = |el: &ElementRef| el.children().filter_map(ElementRef::wrap).any(|ch| is_blockish(&ch));
-    // 竖直长度换成根 em：em 乘字号，pt 按 12pt 一 em，% 按 32em 页宽
-    let rem = |l: &Option<Len>, fs: f64| match l {
-        Some(Len::Em(n)) => *n * fs,
-        Some(Len::Pt(n)) => *n / crate::cascade::PT_PER_EM,
-        Some(Len::Percent(n)) => *n / 100.0 * PAGE_WIDTH_EM,
-        None => 0.0,
-    };
+    // 竖直长度换成根 em
+    let rem = |l: &Option<Len>, fs: f64| km::vertical_rem(*l, fs);
     let collapse = |a: f64, b: f64| if a >= 0.0 && b >= 0.0 { a.max(b) } else if a < 0.0 && b < 0.0 { a.min(b) } else { a + b };
     // 一块（连同第一个、最后一个子块，中间没有内边距、边框隔着的）在 Kindle 上的上 / 下外边距
     let edge = |el: &ElementRef, top: bool| -> Option<f64> {
@@ -257,7 +224,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 // 单独的 `<br/>` 是匿名块，行高字号照父元素
                 let c = if el.value().name() == "br" { pc.clone() } else { c_of(el).unwrap_or_else(|| pc.clone()) };
                 ok &= (0..4).step_by(2).all(|s| rem(&c.margin[s], c.font_size) >= 0.0);
-                gap += FOLD * c.line_height.unwrap_or(LH_EM) * c.font_size;
+                gap += BLANK_LINE_FOLD * c.line_height.unwrap_or(LH_EM) * c.font_size;
                 i += 1;
             }
             let run = &kids[start..i];
@@ -265,7 +232,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             if !ok {
                 continue;
             }
-            let ids: Vec<usize> = run.iter().filter_map(|el| idx.get(&el.id()).map(|(n, _)| *n)).collect();
+            let ids: Vec<usize> = run.iter().filter_map(n_of).collect();
             match kids.get(i) {
                 Some(next) => {
                     let (Some(nt), prev_b) = (edge(next, true), if start > 0 { edge(&kids[start - 1], false) } else { Some(0.0) }) else { continue };
@@ -278,7 +245,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                     // Kindle：后一块没有上外边距时不折叠，前一块的下外边距留着，空段的高另加
                     let total = if nt == 0.0 { pb + gap } else { collapse(pb, nt) + gap };
                     out.blanks.extend(ids);
-                    out.gaps.push((idx[&next.id()].0, total / nc.font_size));
+                    out.gaps.push((n_of(next).unwrap(), total / nc.font_size));
                 }
                 None => {
                     // 同一层后面没有块：文件后面也没有内容（文件末尾的空段，Kindle 上没有）才只藏起来
@@ -305,7 +272,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     };
     for br in body.descendants().filter_map(ElementRef::wrap).filter(|el| el.value().name() == "br" && el.value().attr("id").is_none()) {
         let Some(block) = br.ancestors().filter_map(ElementRef::wrap).find(|a| a.id() == body.id() || is_blockish(a)) else { continue };
-        if block.id() == body.id() || has_block_child(&block) || out.blanks.contains(&idx[&block.id()].0) || c_of(&block).is_some_and(|c| c.pre) {
+        if block.id() == body.id() || has_block_child(&block) || n_of(&block).is_some_and(|n| out.blanks.contains(&n)) || c_of(&block).is_some_and(|c| c.pre) {
             continue;
         }
         let mut before = false;
@@ -323,7 +290,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
         }
         if before && !after {
-            out.trailing.push(idx[&br.id()].0);
+            out.trailing.extend(n_of(&br));
         }
     }
     out.blanks.sort_unstable();

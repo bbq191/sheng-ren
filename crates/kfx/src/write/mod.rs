@@ -111,21 +111,14 @@ const YJ_SYMBOLS_MAX_ID: u32 = 859;
 const FIRST_LOCAL_SID: u32 = ion::SYSTEM_SYMBOLS.len() as u32 + YJ_SYMBOLS_MAX_ID + 1;
 const _: () = assert!(FIRST_LOCAL_SID == 869);
 
-/// KFX 的 `lh` 单位折合多少个 em（样本里文档缺省行高 1.2em，长度都按它换算）。
-const LH_EM: f64 = 1.2;
-
-/// 百分比换算成 em 时假定的页宽（样本里 `margin-top:30%` → 9.6em）。
-const PAGE_WIDTH_EM: f64 = 32.0;
-
-/// CSS 的 pt 换成 em：1em＝12pt（同 `bookconv::cascade` 的层叠）。
-const PT_PER_EM: f64 = 12.0;
+/// KFX 的 `lh` 单位折合多少个 em（样本里文档缺省行高 1.2em，长度都按它换算）、百分比换算成 em 时假定的页宽（样本里
+/// `margin-top:30%` → 9.6em）、CSS 的 pt 换成 em（1em＝12pt）、行高下限：和掌阅、Move 的 `kindle_rules` 共用一份
+/// （`bookconv::kindle_model`）。
+use bookconv::kindle_model::{LH_EM, PAGE_WIDTH_EM, PT_PER_EM};
 
 /// 层叠给出的 pt（px 按 1px＝0.75pt）换成 Send to Kindle 写的 pt（px 按 1px＝0.45pt，同边框宽度、外边距的口径）：
 /// 圆角、表格的 `border-spacing`。
 const KFX_PT_PER_CSS_PT: f64 = 0.6;
-
-/// 行高（正文行高的倍数）的下限（Send to Kindle 同样，见 [`Builder::block_props`]）。
-const MIN_LINE_HEIGHT: f64 = 0.6;
 
 /// 文字和背景的最低对比度（Send to Kindle 同样，见 [`crate::css::ensure_contrast`]）。
 const MIN_CONTRAST: f64 = 4.5;

@@ -136,7 +136,7 @@ impl TextCounts {
         // 字数打平时取字体名小的（没写字体的排最前），结果和 HashMap 的遍历顺序无关（以前 `max_by_key` 打平时随遍历顺序，同一本书
         // 两次生成的 KFX 可能不一样，覆盖到 Kindle 上进度清零）。打破平局的口径同掌阅、Move 的 `kindle_rules`
         // （`book_facts`：那边按 DOM 文字数，这里按解析好的块数，计数的对象不同，只共用规则）。
-        count.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))?.0
+        bookconv::kindle_model::body_font(&count)
     }
 }
 
@@ -156,7 +156,7 @@ fn base_font_size(t: &TextCounts) -> f64 {
 /// 全书正文的行高（元素字号的倍数）：所有文字块按字数加权，最多的那个行高；没写行高的按 normal（1.2）。
 /// Send to Kindle 把它当成阅读器行距设置的 1.0（《绍宋》正文 `line-height:1.5em`）。算出来不在 1–3 之间的不信，用 1.2。
 fn base_line_height(t: &TextCounts) -> f64 {
-    crate::css::weighted_mode(&t.line_height).filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
+    bookconv::kindle_model::base_line_height(&t.line_height)
 }
 
 /// 一个文字块一行（见 [`epub_text_styles`]）。

@@ -34,7 +34,7 @@
 2. **`library::generate`** 对每本书、每台接上的设备算指纹，和生成记录比；没变就跳过（细节见[生成](#生成sync-的第二步generaters)、[指纹](#指纹)）。
 3. 要生成的交给 **bookconv**：`convert` 把 CBZ 转成 EPUB、`opfmeta` 补书里缺的封面简介；`optimize` 按阅读模式选路，文字书走 `wash::repair_entries` 只修复，掌阅、Move 再过 `wash::kindle_rules`；`check` 质量门把关，得到优化后的 EPUB。
 4. Kindle 再交给 **kfx 写出器**：`epubbook::load` 读整本 → `parse` 读成块树 → `analyze` 算全书统计 → `style`、`layout` → `symbols`、`entities` 打包成 KFX。
-5. **`cascade`（CSS 层叠）是两边共用的**：`kindle_rules` 用它算掌阅、Move 的正文字号字体，KFX 写出器用它算每个元素的样式，所以三台认出的"正文"是同一个。
+5. **`cascade`（CSS 层叠）和 `kindle_model`（Kindle 上的样子）是两边共用的**：`kindle_rules` 系列用它们算掌阅、Move 的正文字号字体、行距、竖直距离，KFX 写出器用它们算每个元素的样式，所以三台认出的"正文"和换算口径是同一个。
 6. 产物交给 **`library::transfer`** 这台设备的传输线程（主线程不等，接着做下一本），由 **`deliver`** 写到 MTP 挂载点或交给 Move 的书架服务；传完 `generate` 才写生成记录。线程怎么配合见[使用指南 · 产物放在哪](usage.md#产物放在哪)里的"边生成边传"图。
 
 ## 模块一览
@@ -51,6 +51,7 @@
 | `htmlproc/` | 注释搬移与编号（只修复时 Move 的 `repair_note_links` 也用它）、字体锁、重复 id |
 | `uastyle` | 标签的缺省样式表（`<p>` 上下 1em、标题字号……）：KFX 写出器按它给缺省值，`kindle_rules` 按它写 `eink-ua.css` |
 | `cascade` | CSS 层叠：解析样式表、按选择器优先级层叠、算出每个元素的计算值（2026-10-10 从 `kfx` 挪来）：KFX 写出器（`kfx::css` 就是它）和 `kindle_rules` 算全书正文字号共用，口径一样：每篇文档的样式表 `Sheet::for_doc`（`<link>`/`<style>` 的 `media` 和 `@media` 都按阅读模式的 `MediaEnv` 求）、正文字号 `body_font_size`（按字数加权的众数）、`font` 简写展开成分项。另有全仓库共用的 CSS 文本小工具：规则位置 `rule_spans`（层叠、清洗层、优化器同一套解析）、`rule_selector`、去注释、拆分切词、四值简写 `box_sides`、`@font-face` 规则、选择器最后一段 |
+| `kindle_model` | Kindle 上的样子（Send to Kindle 的规则）：常量（`LH_EM`、行高下限、32em 页宽、空段折叠系数）、全书正文行距和字体的取法、行高归一、竖直长度换根 em、全书样式表 `book_css`、一章的元素表 `Chapter`（层叠一遍、`<body>` 里的元素按文档序、对不对得上标签扫描）。KFX 写出器和 `wash` 的 `line_height`、`heading_size`、`blank_fold`、`top_spacer`、`break_margin`、`kindle_images`、`kindle_rules` 共用（2026-10-13 收拢） |
 | `color` | CSS 颜色解析、WCAG 对比度、Send to Kindle 的对比度规则（KFX 写出器和 `kindle_rules` 共用） |
 | `cssunlock` | 解开字体、字号、行高的锁（内置模式的文字书不用，只有漫画和没开只修复的模式走） |
 | `bgfit` | 整页背景图的尺寸意图（`cover`、`contain`、宽 100%、没写尺寸），去掉 `background-size` 的模式按它预先缩图（只修复时不做；漫画不处理，所以内置模式现在都用不到） |

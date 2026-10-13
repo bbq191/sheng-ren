@@ -124,10 +124,9 @@ pub(super) fn any_block(blocks: &[Block], mut pred: impl FnMut(&Block) -> bool) 
     walk_blocks(blocks, &mut |b| if pred(b) { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }).is_break()
 }
 
-/// 只有空白的段落（`<p>&nbsp;</p>`、`<p>　</p>`、`<p><br/></p>`、段落之间单独的 `<br/>`）不出节点，折成下一块上边距多出的
-/// 本元素行高的这么多倍（Send to Kindle 同样，2026-10-08 量的：《绝叫》空段 0.594 行高、《金庸》`<p><br/></p>` 0.595 × 1.7em、
-/// 段落间单独的 `<br/>` 0.72em ＝ 0.6 × 缺省行高 1.2em）。以前整段丢掉、不折，场景空行在 Kindle 上没了。
-const BLANK_LINE_FOLD: f64 = 0.6;
+/// 只有空白的段落不出节点，折成下一块上边距（系数见 [`BLANK_LINE_FOLD`]，和掌阅、Move 的 `blank_fold` 共用）。以前整段丢掉、
+/// 不折，场景空行在 Kindle 上没了。
+use bookconv::kindle_model::BLANK_LINE_FOLD;
 
 /// 绝对长度换成根 em：em 乘本元素字号 `fs`（根 em），pt 按 1em＝12pt（[`PT_PER_EM`]）；百分比要看包含块，`None`。
 pub(super) fn rem_len(l: Len, fs: f64) -> Option<f64> {
@@ -138,13 +137,9 @@ pub(super) fn rem_len(l: Len, fs: f64) -> Option<f64> {
     }
 }
 
-/// 竖直长度：百分比按页宽 [`PAGE_WIDTH_EM`]。
+/// 竖直长度：百分比按页宽 [`PAGE_WIDTH_EM`]（同掌阅、Move，`bookconv::kindle_model::vertical_rem`）。
 fn to_vert(l: Option<Len>, fs: f64) -> Vert {
-    match l {
-        Some(Len::Percent(p)) => p / 100.0 * PAGE_WIDTH_EM,
-        Some(l) => rem_len(l, fs).unwrap_or_default(),
-        None => 0.0,
-    }
+    bookconv::kindle_model::vertical_rem(l, fs)
 }
 
 /// 水平长度：百分比照留百分比。

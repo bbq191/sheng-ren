@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-13：590 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-13：592 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -135,6 +135,7 @@ done
   | GBK、Big5、UTF-16 的 XHTML、OPF、NCX 转 UTF-8 | `wash::transcode_entries`（优化器读完书先转，后面一律按 UTF-8） |
   | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | `bookconv::uastyle` |
+  | Kindle 上的样子：没写行高的倍数 `LH_EM`、行高下限、百分比折页宽 32em、空段折叠系数；全书正文行距 `base_line_height`、行高归一 `line_height_ratio`、正文字体 `body_font`；竖直长度换根 em `vertical_rem`；全书样式表 `book_css`；一章的元素表 `Chapter`（层叠只写一遍，`<body>` 里的元素按文档序编号，`matches_tags` 对上标签扫描才改源码）。KFX 写出器和掌阅、Move 的 `kindle_rules` 系列 pass 共用（2026-10-13 从写出器和 7 个 pass 收拢，产物逐字节不变） | `bookconv::kindle_model`（新的照 Kindle 改写的 pass 一律从 `Chapter` 起步，别再自己走 DOM、抄常量） |
   | 读写样式表的规则（层叠、清洗层、优化器共用一套解析：引号、注释、转义按 CSS 规范，`@media` 里的也给出、条件由调用方定，位置是原文的，改写只换规则体） | `cascade::rule_spans`；判断选择器先过 `cascade::rule_selector`（去注释和开头的 `@charset`/`@import` 语句）（旧正则 `wash::css_rule_re` 2026-10-10 删了） |
   | CSS 文本：去注释、按分隔符拆、按顶层空白切词、四值简写、`background` 简写切词（2026-10-10 审计从成对重复收成一份） | `cascade::{strip_comments, split_top, tokens, box_sides, background_tokens}`（底下是同一个扫描器，CSS 字符串遇换行结束） |
   | `<style>` 块（开标签按标签扫、内容按原样文字到 `</style` 为止） | `html::style_blocks`、改写用 `html::edit_style_blocks`（`html::style_block_re` 只剩 `optimize::streaming` 在用） |

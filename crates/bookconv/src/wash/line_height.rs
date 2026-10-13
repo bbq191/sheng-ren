@@ -11,27 +11,21 @@
 //! 倍数照 Kindle 算，和 Move 上本来的（自己写的照写的、继承的照继承来的，`normal` 是 1）差不到 0.01 的不写。
 //! 全书正文行距和写出器一样：每段字按所在块的行高（没写 1.2）计字数，取最多的，不在 1–3 之间的用 1.2。
 use super::*;
-use crate::cascade::{Computed, MediaEnv, Sheet};
-use scraper::{ElementRef, Html, Node};
-use std::rc::Rc;
-
-/// 没写 `line-height` 时 Kindle 当作的倍数（同写出器的 `LH_EM`）。
-const LH_EM: f64 = 1.2;
-/// 归一后的下限（同写出器的 `MIN_LINE_HEIGHT`）。
-const MIN_LH: f64 = 0.6;
+use crate::cascade::MediaEnv;
+use crate::kindle_model::{self as km, Chapter, LH_EM};
 
 pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>) {
-    let css = super::top_spacer::parse_css(entries, media);
+    let css = km::book_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let docs: Vec<Vec<Item>> = crate::util::par_map(&chapters, |&i| items(&entries[i], media, &css));
     drop(css);
     let mut count: HashMap<i64, usize> = HashMap::new();
     for it in docs.iter().flatten() {
         if it.chars > 0 {
-            *count.entry((it.lh.unwrap_or(LH_EM) * 1000.0).round() as i64).or_default() += it.chars;
+            *count.entry(km::key(it.lh.unwrap_or(LH_EM))).or_default() += it.chars;
         }
     }
-    let base = crate::cascade::weighted_mode(&count).filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM);
+    let base = km::base_line_height(&count);
     for (&i, items) in chapters.iter().zip(&docs) {
         let plan = plan(items, base);
         if plan.is_empty() {
@@ -78,50 +72,18 @@ struct Item {
 /// 一章的元素表；元素数和标签扫描对不上（解析器补了标签）的整章不管，也不计字数。
 fn items(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>) -> Vec<Item> {
     let Ok(text) = std::str::from_utf8(&e.data) else { return Vec::new() };
-    let Some((bs, be)) = html::body_range(text) else { return Vec::new() };
-    let tag_count = html::tags_in(text, bs, be).filter(|t| t.is_start()).count();
-    let html = Html::parse_document(text);
-    let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
-    let root = html.root_element();
-    let Some(body) = root.children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body") else { return Vec::new() };
-    let derive = |el: &ElementRef, parent: &Computed| {
-        let mut d = sheet.cascade(el, &e.name);
-        crate::cascade::presentational_hints(el, &mut d);
-        let own = d.contains_key("line-height");
-        (Computed::derive(parent, &d, el.value().name()), own)
-    };
-    let rc = Rc::new(derive(&root, &Computed::root()).0);
-    let bc = Rc::new(derive(&body, &rc).0);
-    let mut out: Vec<Item> = Vec::new();
-    // (节点, 父元素的计算值, 父元素下标, 所在块的下标, 在不在隐藏的元素里)
-    type Frame<'a> = (ego_tree::NodeRef<'a, Node>, Rc<Computed>, Option<usize>, Option<usize>, bool);
-    let mut stack: Vec<Frame> = body.children().rev().map(|c| (c, bc.clone(), None, None, false)).collect();
-    while let Some((n, parent, pi, block, hidden)) = stack.pop() {
-        match n.value() {
-            Node::Text(t) => {
-                let k = t.chars().filter(|c| !c.is_whitespace()).count();
-                if let (Some(b), false) = (block, hidden || k == 0) {
-                    out[b].chars += k;
-                }
-            }
-            Node::Element(v) => {
-                let Some(el) = ElementRef::wrap(n) else { continue };
-                let (c, own) = derive(&el, &parent);
-                let hidden = hidden || c.display.as_deref() == Some("none");
-                let is_block = crate::cascade::is_block(&el, &c);
-                let me = out.len();
-                out.push(Item { parent: pi, lh: c.line_height, own, target: is_block && v.name() != "p", chars: 0 });
-                let block = if is_block { Some(me) } else { block };
-                let c = Rc::new(c);
-                for ch in n.children().rev() {
-                    stack.push((ch, c.clone(), Some(me), block, hidden));
-                }
-            }
-            _ => {}
+    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return Vec::new() };
+    let mut out: Vec<Item> = (0..ch.els.len())
+        .map(|i| {
+            let el = &ch.els[i];
+            Item { parent: el.parent, lh: el.comp.line_height, own: el.decls.contains_key("line-height"), target: el.is_block && ch.el(i).value().name() != "p", chars: 0 }
+        })
+        .collect();
+    // 字算给所在的块；直接在 `<body>` 里的、隐藏的不算
+    for (i, el) in ch.els.iter().enumerate() {
+        if let (Some(b), false) = (el.block, el.hidden) {
+            out[b].chars += ch.own_chars(i);
         }
-    }
-    if out.len() != tag_count {
-        return Vec::new();
     }
     out
 }
@@ -138,7 +100,7 @@ fn plan(items: &[Item], base: f64) -> Vec<(usize, f64)> {
             _ => it.lh.unwrap_or(1.0),
         };
         if it.target && it.chars > 0 {
-            let want = (it.lh.unwrap_or(LH_EM) / base).max(MIN_LH);
+            let want = km::line_height_ratio(it.lh, base);
             let want = (want * 10000.0).round() / 10000.0;
             if (want - cur).abs() > 0.01 {
                 out.push((i, want));
