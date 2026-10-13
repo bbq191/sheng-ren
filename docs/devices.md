@@ -24,7 +24,7 @@
 | `px` | 写出器按 0.45pt/px | 屏幕像素 | 屏幕像素 |
 | 左右外边距 `px` | 0.45pt/px（50px 约 73 个屏幕像素） | 屏幕像素 → 块上的折成 em（KINDLE_RULES 24，真机 50px 挪 71；左右内边距、首行缩进的 px 同样，KINDLE_RULES 25） | 屏幕像素 → 同掌阅（真机 50px 挪 71） |
 | `pt` | 12pt = 1em | **当成 px（坏的）** | 真的点（1pt ≈ 3.15px） |
-| 段落 `line-height` | 认（按全书正文行高归一） | 不带单位的不认（`2`），**长度认**（`3em`，2026-10-13 探针 Q80、Q84）；缺省一行 58px → 照 Kindle 写成 em（KINDLE_RULES 25，《飘》正文 1.8em 一行 69 → 58–60px 真机 ✓） | 外链的不认，**行内 `style` 的认**（2026-10-13 探针 Q83） |
+| 段落 `line-height` | 认（按全书正文行高归一） | 不带单位的不认（`2`），**长度认**（`3em`，2026-10-13 探针 Q80、Q84）；缺省一行 58px → 照 Kindle 写成 em（KINDLE_RULES 25，《飘》正文 1.8em 一行 69 → 58–60px 真机 ✓） | 外链的不认，**行内 `style` 的认**（按缺省行距的倍数，2026-10-13 探针 Q83）→ 照 Kindle 归一写进行内（KINDLE_RULES 26，测试书真机：外链 1 → 0.618 倍、行内 2 → 1.236 倍） |
 | 别的块（标题、div、li、td）的 `line-height` | 认（同上） | 同段落：不带单位的不认（行内也不认），长度认（Q81–Q83）→ 同上（KINDLE_RULES 25） | **认，乘在阅读器缺省行距上** → 照 Kindle 归一（KINDLE_RULES 20） |
 | 标题（h1–h6）的 `font-size` | 认（按正文归一） | 认 | **只认关键字**（small…xx-large 五档，绝对大小；没写按标签固定）→ 取最接近的关键字（KINDLE_RULES 21） |
 | 块末尾的 `<br/>` | 不排 | 不排 | **多排一行** → 去掉（KINDLE_RULES 20） |
@@ -139,7 +139,7 @@
 | `margin_top`（`true`）＋ `[page_top]` | 阅读器认 `margin-top`；`false` 时只修复的文字书（`kindle_rules`）每章开头写了上边距的垫透明空白图或行内窄图推到 Kindle 的位置（`wash/top_spacer.rs`，KINDLE_RULES 11、20）。`[page_top]` 是垫图要的这台尺寸（屏幕像素）：垫图后阅读器自己加的空 `gap_heading_per_em`、`gap_other`，行内窄图的基数 `strut_base_per_em`；`margin_top = false` 时必须写 | 认 | 认 | 不认（91、46、44） | xochitl 不认 `margin-top`、`padding-top`，页首的空元素不占地方（2026-10-12「测试-标题位置」、10-13「测试-行内垫图」） |
 | `display_none`（`true`） | 阅读器认 `display:none`；`false` 时去掉隐藏的元素（`wash/hidden.rs`）、空段去掉而不是加类藏起来（`wash/blank_fold.rs`） | 认 | 认 | 不认 | 2026-10-12「测试-隐藏」：xochitl 行内、外链的 `display:none` 都不认，《飘》《春雪》版权页露出「版权信息」大标题 |
 | `trailing_br_line`（`false`） | 块末尾的 `<br/>` 多排一行；`true` 时去掉（`wash/blank_fold.rs`，KINDLE_RULES 20） | 不排 | 不排 | 多排 | 2026-10-13「测试-末尾br」：Move 段落多 50px、1.5em 标题多 75px |
-| `line_height_except_p`（`false`） | 只有 `<p>` 不认 `line-height`、别的块按阅读器缺省行距的倍数认；`true` 时 `<p>` 以外的块行距照 Kindle 归一（`wash/block_style.rs`，KINDLE_RULES 20） | — | — | `true` | 2026-10-13「测试-行距」：《三体》标题两行 Move 179px、Kindle 约 123 |
+| `line_height_except_p`（`false`） | `<p>` 不认外链、`<style>` 里的 `line-height`（行内的认），别的块按阅读器缺省行距的倍数认；`true` 时块的行距照 Kindle 归一、写进行内（`wash/block_style.rs`，KINDLE_RULES 20；`<p>` 是 26） | — | — | `true` | 2026-10-13「测试-行距」：《三体》标题两行 Move 179px、Kindle 约 123 |
 | `heading_font_keywords`（`false`）＋ `[heading_sizes]` | 标题的 `font-size` 只认关键字；`true` 时标题字号照 Kindle 写成最接近的关键字（`wash/block_style.rs`，KINDLE_RULES 21）。`[heading_sizes]` 是量出来的大小（正文 1em＝1）：`keywords`（关键字 → 大小）、`tags`（h1–h6 按标签固定的），这时必须写 | — | — | `true`（small 0.784 … xx-large 2.018；h1–h6 2.018/1.514/1.216/1/0.784/1） | 2026-10-13「测试-标题字号」1–4：em、px、pt、% 一概不认 |
 | `inline_css_lengths`（`true`） | 行内 `style`、`<style>`、最后一条不带分号又紧挨 `}` 的声明里的 em 照 CSS 排；`false` 时只修复的文字书里写 em 的挪进外链样式表（`wash/inline_css.rs`，KINDLE_RULES 22） | — | — | `false` | 2026-10-13「测试-怪癖」：xochitl 这几种写法 em 按 23px，字号、首行缩进的 em 不认 |
 | `padding`、`borders`、`heading_margins`（都是 `true`） | 认内边距、画边框、认 h1–h6 的上下外边距；`false` 时只修复的文字书里左右内边距并进外边距、上下内边距和标题外边距照 Kindle 写到相邻块认的一侧、上下边框插横线图（`wash/box_fix.rs`，KINDLE_RULES 23） | — | — | 都是 `false` | 2026-10-13「测试-怪癖」Q05–Q07、Q12、Q39、Q40、Q65–Q74：xochitl 内边距不认（背景色画）、边框不画、标题外边距不认（前后自带空），图能画 |

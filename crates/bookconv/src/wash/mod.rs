@@ -142,7 +142,9 @@ pub use self::encoding::transcode_entries;
 ///   块写成 em（掌阅不认 rem、带 `!important` 的声明、不带单位的行距；`css_compat.rs`、`block_style.rs`，profile `rem`、`important`、
 ///   `line_height_numbers`、`line_px`），块上 px 写的左右内边距、首行缩进照 Kindle 折成 em（掌阅的 px 是屏幕像素；`box_fix.rs`，profile
 ///   `px_margins`）。
-pub const KINDLE_RULES_VERSION: &str = "25";
+/// - 26（2026-10-13）：Move 上 `<p>` 的行距也照 Kindle 归一，写在行内 `style`（xochitl 的 `<p>` 只认行内写的行距，按缺省行距的倍数；
+///   `block_style.rs`）。
+pub const KINDLE_RULES_VERSION: &str = "26";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;

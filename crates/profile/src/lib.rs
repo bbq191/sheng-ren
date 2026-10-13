@@ -192,7 +192,8 @@ pub struct Profile {
     /// 阅读器认 `display:none`（TOML 里不写是 `true`）。xochitl 不认（行内、外链都不认，2026-10-12 测试书「测试-隐藏」）：写 `false`
     /// 时只修复、照 Send to Kindle 统一的文字书里去掉 `display:none` 的元素（在 Kindle 上本来就看不见；用户定），`id` 留成空 `<span>`。
     pub display_none: bool,
-    /// 只有 `<p>` 不认 `line-height`、别的块（标题、div、li、blockquote、td）按阅读器自己的缺省行距的倍数认（TOML 里不写是
+    /// `<p>` 不认外链、`<style>` 里的 `line-height`（行内 `style` 的认，2026-10-13 怪癖测试书 Q83）、别的块（标题、div、li、blockquote、td）
+    /// 按阅读器自己的缺省行距的倍数认（TOML 里不写是
     /// `false`）。xochitl 是这样（2026-10-13 测试书「测试-行距」：body `line-height:1.618` 时 `<p>` 一行 56px、div 90px、2em 标题
     /// 179px；行内 `style` 也认）：写 `true` 时只修复、照 Send to Kindle 统一的文字书里，这些块的行距照 Kindle 按全书正文行距归一
     /// （`bookconv::wash::block_style`）。

@@ -245,8 +245,9 @@ fn page_box(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::
         Node::Element(v) if matches!(v.name(), "img" | "svg" | "br") => Some(false),
         _ => None,
     }) == Some(true);
-    // 块在这台上的行距（Move 上 `<p>` 不认行距，算 1；别的块认）：xochitl 把行距倍数也乘到撑高的那一行上
-    let lh = reader.line_height(tag, last.line_height);
+    // 块在这台上的行距（Move 上 `<p>` 只认行内写的，没写算 1；别的块认）：xochitl 把行距倍数也乘到撑高的那一行上
+    let inline_lh = ch.index_of(last_node.id()).and_then(|n| ch.els[n].origin.get("line-height")).is_some_and(|(o, _)| *o == crate::cascade::Origin::Inline);
+    let lh = reader.line_height(tag, last.line_height, inline_lh);
     // 解析出的元素和标签扫描数得一样（没有补出来的 `tbody` 之类）才知道放在哪个标签后面
     let strut_at = (starts_with_text && ch.matches_tags).then(|| ch.index_of(last_node.id())).flatten().map(|n| {
         // 标题只认关键字的阅读器上标题按它的字号（profile `[heading_sizes]`），别的块照算出来的

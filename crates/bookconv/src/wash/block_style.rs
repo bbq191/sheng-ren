@@ -4,11 +4,13 @@
 //!
 //! **行距**（只有 `<p>` 不认 `line-height` 的阅读器：Move，profile `line_height_except_p`）。Kindle（KFX 写出器同 Send to Kindle，
 //! `kfx::write::style` 的行高）：行高写成「本元素行高 ÷ 全书正文行高」（没写按 1.2，下限 0.6），正文就是阅读器的行距设置。
-//! xochitl：`<p>` 的 `line-height` 一概不认（总是阅读器的行距），别的块（标题、div、li、blockquote、td，行内 `style` 也算）按
+//! xochitl：`<p>` 外链、`<style>` 里的 `line-height` 不认（总是阅读器的行距），行内 `style` 写的认（同别的块，按缺省行距的倍数，
+//! 2026-10-13 怪癖测试书 Q83：`line-height:2` 一行多 56px），别的块（标题、div、li、blockquote、td，行内 `style` 也算）按
 //! 「阅读器缺省行距 × 倍数」排（2026-10-13 测试书「测试-行距」：body `line-height:1.618` 时 `<p>` 一行 56px、div 90px、2em 标题
 //! 179px；`line-height:2`、`2em` 的 2em 标题 222px，`normal` 111px）。所以正文行距写了 1.618 的书，Move 上标题、div 的行距比 Kindle
-//! 大六成（《三体》标题两行隔 179px，Kindle 上约 123）。这里给 `<p>` 以外、自己排字的块（直接有字，或者字在行内元素里）接
-//! `line-height:倍数`：倍数照 Kindle 算，和这台上本来的（自己写的照写的、继承的照继承来的，`normal` 是 1）差不到 0.01 的不写。
+//! 大六成（《三体》标题两行隔 179px，Kindle 上约 123）；单独写了别的行距的段落（诗、引文）Move 上是阅读器行距，书里行内写了的又
+//! 没按正文归一。这里给自己排字的块（直接有字，或者字在行内元素里；`<p>` 也算，KINDLE_RULES 26）接 `line-height:倍数`：倍数照
+//! Kindle 算，和这台上本来的（自己写的照写的、继承的照继承来的，`normal` 是 1；`<p>` 只算行内写的，没写是 1）差不到 0.01 的不写。
 //! 全书正文行距和写出器一样（[`km::base_line_height`]）。
 //!
 //! **标题字号**（标题的 `font-size` 只认关键字的阅读器：Move，profile `heading_font_keywords` + `[heading_sizes]`）。xochitl 的
@@ -128,8 +130,12 @@ struct Item {
     own_decl: Option<String>,
     /// 计算出的字号（根 em）。
     fs: f64,
-    /// 行距要管的块：块级、不是 `<p>`、自己排字。
+    /// 行距要管的块：块级、自己排字（`<p>` 也算）。
     target: bool,
+    /// `<p>`：Move 上只认行内 `style` 写的行距，外链、`<style>` 里的不认（总是阅读器的行距）。
+    p: bool,
+    /// 生效的 `line-height` 写在行内 `style` 里。
+    inline_lh: bool,
     /// 块级（`<p>` 也算）。
     is_block: bool,
     /// 自己排的字数（不算空白；行内元素里的算给所在的块），统计正文行距用。
@@ -150,7 +156,9 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 own: decl.is_some(),
                 own_decl: decl.cloned(),
                 fs: el.comp.font_size,
-                target: el.is_block && ch.el(i).value().name() != "p",
+                target: el.is_block,
+                p: ch.el(i).value().name() == "p",
+                inline_lh: el.origin.get("line-height").is_some_and(|(o, _)| *o == crate::cascade::Origin::Inline),
                 is_block: el.is_block,
                 chars: 0,
             }
@@ -175,6 +183,8 @@ fn line_heights(items: &[Item], base: f64) -> Vec<(usize, f64)> {
         // 没自己写的跟父元素：父元素改过就是改后的值，没改过就是原来算出的（数字倍数照继承、长度按绝对值继承，同 CSS）
         let inherited = it.parent.map(|p| (on_reader[p], items[p].lh));
         let mut cur = match inherited {
+            // `<p>` 只认行内写的
+            _ if it.p => if it.inline_lh { it.lh.unwrap_or(1.0) } else { 1.0 },
             Some((pm, plh)) if !it.own && (pm - plh.unwrap_or(1.0)).abs() > 1e-9 => pm,
             _ => it.lh.unwrap_or(1.0),
         };
@@ -416,6 +426,14 @@ mod tests {
         let out = run(&format!(r#"<h1><span>标题</span></h1>{p}<div>说明</div><h2 class="t" style="color:red">小标题</h2><div class="w"><h3>节</h3><p>正文</p></div>"#), "body{line-height:1.618} h2.t{line-height:1em}");
         assert!(out.contains(r#"<h1 style="line-height:1;"><span>标题</span></h1>"#), "{out}");
         assert!(out.contains(r#"<p>正文正文正文正文正文正文</p><div style="line-height:1;">说明</div><h2 class="t" style="color:red;line-height:0.618;">小标题</h2><div class="w"><h3 style="line-height:1;">节</h3><p>正文</p></div>"#), "{out}");
+    }
+
+    /// `<p>`：外链写的 Move 不认（是 1），和 Kindle 不一样的接行内；行内写了的 Move 认，照 Kindle 归一；正文段落不动。
+    #[test]
+    fn paragraphs_get_inline_line_height() {
+        let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
+        let out = run(&format!(r#"{p}<p class="poem">诗</p><p style="line-height:2">行内</p><p style="line-height:1.618">同正文</p>"#), "body{line-height:1.618} p.poem{line-height:1}");
+        assert!(out.contains(r#"<p>正文正文正文正文正文正文</p><p class="poem" style="line-height:0.618;">诗</p><p style="line-height:2;line-height:1.2361;">行内</p><p style="line-height:1.618;line-height:1;">同正文</p>"#), "{out}");
     }
 
     /// 没写行距的书（正文按 1.2）：Move 上本来就是 1，不改；正文 1.5em、div 没写：Kindle 1.2/1.5 = 0.8；写成 1.5em 的 div 是 1。
