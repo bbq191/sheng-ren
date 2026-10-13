@@ -175,6 +175,10 @@ pub struct Profile {
     /// 179px；行内 `style` 也认）：写 `true` 时只修复、照 Send to Kindle 统一的文字书里，这些块的行距照 Kindle 按全书正文行距归一
     /// （`bookconv::wash::line_height`）。
     pub line_height_except_p: bool,
+    /// 标题（h1–h6）的 `font-size` 只认关键字（TOML 里不写是 `false`）。xochitl 是这样：em、px、pt、% 一概不认，固定按标签排，只认
+    /// `small`/`medium`/`large`/`x-large`/`xx-large`（绝对大小；2026-10-13 测试书「测试-标题字号」）：写 `true` 时只修复、照 Send to
+    /// Kindle 统一的文字书里，标题字号照 Kindle 写成最接近的关键字（`bookconv::wash::heading_size`）。
+    pub heading_font_keywords: bool,
     /// 带图注、按满宽显示会超出一页的图（竖长的人物图之类）给 `<img>` 写行内宽度百分比，图和图注排在同一页（TOML 里不写是
     /// `false`）。掌阅、Kindle 不认多看图集，图一张张排开撑满一页、图注掉到下一页；限高的写法掌阅都不认（`max-height`、
     /// `page-break-inside`），宽度百分比认（2026-10-06 掌阅真机 adb 截屏），KFX 写出器也只认宽度。见 `bookconv::capfit`。
@@ -249,6 +253,8 @@ struct ProfileFile {
     #[serde(default)]
     line_height_except_p: bool,
     #[serde(default)]
+    heading_font_keywords: bool,
+    #[serde(default)]
     caption_fit: bool,
     #[serde(default = "yes")]
     image_alpha: bool,
@@ -276,7 +282,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }

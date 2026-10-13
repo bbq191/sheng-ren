@@ -25,7 +25,7 @@
 | `pt` | 12pt = 1em | **当成 px（坏的）** | 真的点（1pt ≈ 3.15px） |
 | 段落 `line-height` | 认（按全书正文行高归一） | 不认 | 不认 |
 | 别的块（标题、div、li、td）的 `line-height` | 认（同上） | 不认 | **认，乘在阅读器缺省行距上** → 照 Kindle 归一（KINDLE_RULES 20） |
-| 标题（h1–h6）的 `font-size` | 认（按正文归一） | 认 | **不认**（固定 2/1.5/1.17/1em；还没处理） |
+| 标题（h1–h6）的 `font-size` | 认（按正文归一） | 认 | **只认关键字**（small…xx-large 五档，绝对大小；没写按标签固定）→ 取最接近的关键字（KINDLE_RULES 21） |
 | 块末尾的 `<br/>` | 不排 | 不排 | **多排一行** → 去掉（KINDLE_RULES 20） |
 | `margin-top` | 认 | 认 | 段落在页中间认；**标题上的、页首的不认** |
 | `padding-top`、`border-top`、`position:relative;top` | 认 | 认 | **不认** |

@@ -280,25 +280,20 @@ fn page_box(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::
     let same_count = html::body_range(text).is_some_and(|(bs, be)| html::tags_in(text, bs, be).filter(|t| t.is_start()).count() == body.descendants().skip(1).filter(|d| d.value().is_element()).count());
     // 块在这台上的行距（Move 上 `<p>` 不认行距，算 1；别的块认）：xochitl 把行距倍数也乘到撑高的那一行上
     let lh = if tag == "p" { 1.0 } else { last.line_height.unwrap_or(1.0) };
-    let strut_at = (starts_with_text && same_count).then(|| body.descendants().skip(1).filter(|d| d.value().is_element()).position(|d| d.id() == last_node.id())).flatten().map(|n| (n, move_font_size(tag, &chain, &body_comp), lh));
+    let strut_at = (starts_with_text && same_count).then(|| body.descendants().skip(1).filter(|d| d.value().is_element()).position(|d| d.id() == last_node.id())).flatten().map(|n| {
+        let kw = ElementRef::wrap(last_node).and_then(|el| sheet.cascade(&el, &e.name).get("font-size").and_then(|v| super::heading_size::keyword_size(v)));
+        (n, move_font_size(tag, kw, last), lh)
+    });
     Some(PageBox { text_top: offset, heading_fs: heading, body_bottom, bg: body_comp.bg_image.clone(), bg_cover: body_comp.bg_cover, strut_at })
 }
 
-/// 第一块在 Move 上的字号（根 em）：标题的字号 xochitl 一概不认（类、行内、`!important`、标题里的 `<span>` 都不认），按固定的
-/// h1 2em、h2 1.5em、h3 1.17em、h4 1em（h5、h6 照浏览器缺省 0.83、0.67）排（2026-10-13 测试书「测试-标题字号」），乘外面一层的字号；
-/// 别的块照算出来的。
-fn move_font_size(tag: &str, chain: &[(String, Rc<Computed>)], body: &Computed) -> f64 {
-    let ua = match tag {
-        "h1" => 2.0,
-        "h2" => 1.5,
-        "h3" => 1.17,
-        "h4" => 1.0,
-        "h5" => 0.83,
-        "h6" => 0.67,
-        _ => return chain.last().map_or(1.0, |(_, c)| c.font_size),
-    };
-    let outer = if chain.len() >= 2 { chain[chain.len() - 2].1.font_size } else { body.font_size };
-    ua * outer
+/// 第一块在 Move 上的字号（根 em）：标题的字号 xochitl 只认关键字（`kw`），没写按标签固定的，都是绝对大小（`heading_size.rs`，
+/// 2026-10-13 测试书「测试-标题字号」）；别的块照算出来的。
+fn move_font_size(tag: &str, kw: Option<f64>, last: &Computed) -> f64 {
+    match super::heading_size::tag_size(tag) {
+        Some(def) => kw.unwrap_or(def),
+        None => last.font_size,
+    }
 }
 
 #[cfg(test)]
@@ -341,21 +336,21 @@ mod tests {
     }
 
     /// 要垫的比 xochitl 标题前自己加的空还少：标题里最前面放行内窄图。Kindle 2.5rem × 52.5 = 131.25 → Move 123.52，
-    /// 加 44 × 2 = 211.52；宽 211.52 / (842 × 400) = 0.0628%
+    /// 加 44 × 2.018（Move 上 h1 的固定字号）= 212.31；宽 212.31 / (842 × 400) = 0.06304%
     #[test]
     fn small_heading_margin_uses_inline_strut() {
         let mut b = book(r#"<body><h1 class="t"><span>标题</span></h1><p>正文</p></body>"#, "h1.t{font-size:2em;margin-top:1.25em}");
         apply(&mut b, &mut WashReport::default(), None, geom());
         let c = String::from_utf8(b.iter().find(|e| e.name == "O/c.xhtml").unwrap().data.clone()).unwrap();
-        assert!(c.contains(r#"<body><h1 class="t"><img class="eink-sp eink-st-0_0628" src="eink-strut.png" alt=""/><span>标题</span></h1>"#), "{c}");
+        assert!(c.contains(r#"<body><h1 class="t"><img class="eink-sp eink-st-0_06304" src="eink-strut.png" alt=""/><span>标题</span></h1>"#), "{c}");
         let sheet = String::from_utf8(b.iter().find(|e| e.name == "O/eink-spacer.css").unwrap().data.clone()).unwrap();
-        assert!(sheet.contains("html body img.eink-st-0_0628{width:0.0628%;height:auto;}"), "{sheet}");
+        assert!(sheet.contains("html body img.eink-st-0_06304{width:0.06304%;height:auto;}"), "{sheet}");
         assert!(b.iter().any(|e| e.name == "O/eink-strut.png") && !b.iter().any(|e| e.name == "O/eink-spacer.png"));
-        // 标题在 Move 上的行距是 2：字挪 Δ、后面挪 2Δ，Δ = 2 × 123.52 / 3 = 82.35，加 88 → 170.35，宽 0.05058%
+        // 标题在 Move 上的行距是 2：字挪 Δ、后面挪 2Δ，Δ = 2 × 123.52 / 3 = 82.35，加 88.79 → 171.14，宽 0.05081%
         let mut b = book(r#"<body><h1 class="t">标题</h1></body>"#, "h1.t{font-size:2em;margin-top:1.25em;line-height:2}");
         apply(&mut b, &mut WashReport::default(), None, geom());
         let c = String::from_utf8(b.iter().find(|e| e.name == "O/c.xhtml").unwrap().data.clone()).unwrap();
-        assert!(c.contains(r#"<h1 class="t"><img class="eink-sp eink-st-0_05058" "#), "{c}");
+        assert!(c.contains(r#"<h1 class="t"><img class="eink-sp eink-st-0_05081" "#), "{c}");
         // 第一块开头是图的不放
         let mut b = book(r#"<body><h1 class="t"><img src="i.png" alt=""/>标题</h1></body>"#, "h1.t{font-size:2em;margin-top:1.25em}");
         let before = b.clone();
