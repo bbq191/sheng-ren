@@ -108,6 +108,28 @@ pub enum Deliver {
     Xochitl { hosts: Vec<String>, port: u16 },
 }
 
+/// 标题在阅读器上的字号（`heading_font_keywords` 的阅读器要写，测试书量的；正文 1em＝1）。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HeadingSizes {
+    /// 认的关键字 → 大小（绝对大小，不随外层字号变）。
+    pub keywords: BTreeMap<String, f64>,
+    /// h1–h6 没写字号（或写了不认的）时按标签固定的大小。
+    pub tags: [f64; 6],
+}
+
+/// 页首垫图要的阅读器尺寸（`margin_top = false` 的阅读器要写，屏幕像素，测试书量的）。
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageTop {
+    /// 垫图后面阅读器自己加的空：标题每 em 字号多少。
+    pub gap_heading_per_em: f64,
+    /// 同上，别的块（和字号无关）。
+    pub gap_other: f64,
+    /// 第一块里最前面放行内窄图撑高第一行时，图高要比想挪的多出多少（每 em 字号）字才开始挪。
+    pub strut_base_per_em: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Profile {
     /// 文件名（不含 `.toml`），命令行与配置里用的标识。
@@ -173,12 +195,20 @@ pub struct Profile {
     /// 只有 `<p>` 不认 `line-height`、别的块（标题、div、li、blockquote、td）按阅读器自己的缺省行距的倍数认（TOML 里不写是
     /// `false`）。xochitl 是这样（2026-10-13 测试书「测试-行距」：body `line-height:1.618` 时 `<p>` 一行 56px、div 90px、2em 标题
     /// 179px；行内 `style` 也认）：写 `true` 时只修复、照 Send to Kindle 统一的文字书里，这些块的行距照 Kindle 按全书正文行距归一
-    /// （`bookconv::wash::line_height`）。
+    /// （`bookconv::wash::block_style`）。
     pub line_height_except_p: bool,
     /// 标题（h1–h6）的 `font-size` 只认关键字（TOML 里不写是 `false`）。xochitl 是这样：em、px、pt、% 一概不认，固定按标签排，只认
     /// `small`/`medium`/`large`/`x-large`/`xx-large`（绝对大小；2026-10-13 测试书「测试-标题字号」）：写 `true` 时只修复、照 Send to
-    /// Kindle 统一的文字书里，标题字号照 Kindle 写成最接近的关键字（`bookconv::wash::heading_size`）。
+    /// Kindle 统一的文字书里，标题字号照 Kindle 写成最接近的关键字（`bookconv::wash::block_style`）。
     pub heading_font_keywords: bool,
+    /// 标题在这台上的字号（`heading_font_keywords` 时必须写，见 [`HeadingSizes`]；TOML 表 `[heading_sizes]`）。
+    pub heading_sizes: Option<HeadingSizes>,
+    /// 页首垫图要的尺寸（`margin_top = false` 时必须写，见 [`PageTop`]；TOML 表 `[page_top]`）。
+    pub page_top: Option<PageTop>,
+    /// 块末尾的 `<br/>`（`<h1>标题<br/></h1>`）多排一行（TOML 里不写是 `false`）。Kindle、掌阅不排，xochitl 多排一行
+    /// （2026-10-13 测试书「测试-末尾br」：段落多 50px、1.5em 标题多 75px）：写 `true` 时只修复、照 Send to Kindle 统一的文字书里
+    /// 去掉（`bookconv::wash::blank_fold`）。
+    pub trailing_br_line: bool,
     /// 带图注、按满宽显示会超出一页的图（竖长的人物图之类）给 `<img>` 写行内宽度百分比，图和图注排在同一页（TOML 里不写是
     /// `false`）。掌阅、Kindle 不认多看图集，图一张张排开撑满一页、图注掉到下一页；限高的写法掌阅都不认（`max-height`、
     /// `page-break-inside`），宽度百分比认（2026-10-06 掌阅真机 adb 截屏），KFX 写出器也只认宽度。见 `bookconv::capfit`。
@@ -254,6 +284,10 @@ struct ProfileFile {
     line_height_except_p: bool,
     #[serde(default)]
     heading_font_keywords: bool,
+    heading_sizes: Option<HeadingSizes>,
+    page_top: Option<PageTop>,
+    #[serde(default)]
+    trailing_br_line: bool,
     #[serde(default)]
     caption_fit: bool,
     #[serde(default = "yes")]
@@ -282,12 +316,27 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
 
     fn validate(&self) -> Result<(), String> {
+        let positive = |v: f64| v.is_finite() && v > 0.0;
+        match &self.heading_sizes {
+            None if self.heading_font_keywords => return Err(format!("profile {}: heading_font_keywords = true 要写 [heading_sizes]", self.id)),
+            Some(h) if h.keywords.is_empty() || !h.keywords.values().chain(&h.tags).all(|&v| positive(v)) => {
+                return Err(format!("profile {}: [heading_sizes] 的 keywords 须非空，大小都须是正数", self.id));
+            }
+            _ => {}
+        }
+        match &self.page_top {
+            None if !self.margin_top => return Err(format!("profile {}: margin_top = false 要写 [page_top]", self.id)),
+            Some(t) if !(positive(t.gap_heading_per_em) && t.gap_other >= 0.0 && t.gap_other.is_finite() && positive(t.strut_base_per_em)) => {
+                return Err(format!("profile {}: [page_top] 的尺寸须是正数", self.id));
+            }
+            _ => {}
+        }
         if let Some(d) = self.comic_page_direction.as_deref().filter(|d| !matches!(*d, "ltr" | "rtl")) {
             return Err(format!("profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}", self.id));
         }

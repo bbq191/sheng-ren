@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-13：592 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-13：594 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -98,6 +98,7 @@ done
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。
+内置 profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`、`[heading_sizes]`、`margin_top`、`[page_top]`，`bookconv::reader_model`）和 `em_px` 不进指纹，改了它们（比如重量了 Move 的标题字号）同改代码一样给 `KINDLE_RULES_VERSION` 加一。
 
 **版本号写进指纹、不写进书**（2026-10-09 用户定）：书里的优化标记 `META-INF/eink-optimized` 只写 `full`/`core`，KFX 里的创建器版本固定写 `1`。所以加了版本号以后书会重新生成，但内容没变的书生成出来逐字节相同，设备上不重传；只有真变了的书才传。改了影响产物的代码一律加版本号，不因为"书库里的书都没碰到"省掉（用户定）。
 

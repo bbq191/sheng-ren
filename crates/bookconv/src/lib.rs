@@ -34,6 +34,7 @@ pub mod netimg;
 pub mod imgpool;
 pub mod naming;
 pub mod probe;
+pub mod reader_model;
 pub mod opfmeta;
 pub mod optimize;
 pub mod uastyle;

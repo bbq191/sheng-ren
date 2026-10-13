@@ -273,7 +273,7 @@ impl OptimizeOpts {
             // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
             wash: Some({
                 let w = self.wash.clone().unwrap_or_default();
-                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, top_spacer: w.top_spacer, bg_place: w.bg_place, v_scale: w.v_scale, drop_hidden: w.drop_hidden, normalize_lh: w.normalize_lh, heading_keywords: w.heading_keywords, ..Default::default() }
+                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, top_spacer: w.top_spacer, bg_place: w.bg_place, v_scale: w.v_scale, reader: w.reader.clone(), ..Default::default() }
             }),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
@@ -320,9 +320,7 @@ impl OptimizeOpts {
                     let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
                     w.page_tiles = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
                 }
-                w.drop_hidden = !p.display_none;
-                w.normalize_lh = p.line_height_except_p;
-                w.heading_keywords = p.heading_font_keywords;
+                w.reader = crate::wash::ReaderModel::for_profile(p);
                 // 竖直间距照 Kindle 换算（掌阅、Move：两台按自己的字号排边距，Kindle 按行距，2026-10-12 用户定）
                 if let (Some(em), Some((_, k))) = (p.em_px, w.image_sizing) {
                     let ratio = f64::from(p.output_readable().height) / k.content_h;

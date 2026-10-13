@@ -52,8 +52,7 @@ mod top_spacer;
 mod hidden;
 mod break_margin;
 mod blank_fold;
-mod line_height;
-mod heading_size;
+mod block_style;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
@@ -136,6 +135,7 @@ pub use self::opf::{manifest_items, opf_dc, parse_opf, tag_attr, ManifestItem, O
 pub use self::toc::{is_toc_file, toc_entry_count, TocItem};
 pub use self::typeset::{count_dup_id_tags, wash_css, NOTEICON_RULE};
 pub use crate::html::plain_text;
+pub use crate::reader_model::ReaderModel;
 
 use self::css::*;
 use self::dead_refs::*;
@@ -239,12 +239,10 @@ pub struct WashOpts {
     pub bg_place: Option<crate::bgfit::TileGeometry>,
     /// 竖直间距照 Kindle 换算（掌阅、Move，profile `em_px`；`kindle_rules::VScale`）。`None` 不换。
     pub v_scale: Option<VScale>,
-    /// 不认 `display:none` 的阅读器（Move，profile `display_none = false`）：去掉隐藏的元素（`hidden.rs`）。
-    pub drop_hidden: bool,
-    /// 只有 `<p>` 不认 `line-height` 的阅读器（Move，profile `line_height_except_p`）：别的块的行距照 Kindle 归一（`line_height.rs`）。
-    pub normalize_lh: bool,
-    /// 标题的 `font-size` 只认关键字的阅读器（Move，profile `heading_font_keywords`）：标题字号照 Kindle 写成最接近的关键字（`heading_size.rs`）。
-    pub heading_keywords: bool,
+    /// 阅读器和 CSS 不一样的地方（[`ReaderModel`]，从 profile 来）：不认 `display:none` 的去掉隐藏的元素（`hidden.rs`）、空段去掉
+    /// 而不是藏起来、块末尾多排一行的 `<br/>` 去掉（`blank_fold.rs`）；块的行距、标题字号照 Kindle 改写（`block_style.rs`）；页首垫图
+    /// 的尺寸（`top_spacer.rs`）。缺省是完全照 CSS 排的阅读器，什么都不改。
+    pub reader: ReaderModel,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -261,7 +259,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, drop_hidden: false, normalize_lh: false, heading_keywords: false }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, reader: ReaderModel::default() }
     }
 }
 
@@ -500,7 +498,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     rep.dup_id_tags_collapsed += dups.into_iter().sum::<usize>();
     if opts.mode.kindle_rules() {
         // 先去掉 Move 上会露出来的隐藏元素：后面的页首垫图、背景图位置都按看得见的内容算
-        if opts.drop_hidden {
+        if !opts.reader.display_none {
             rep.kindle_rule_edits += hidden::apply(entries);
         }
         let font_scale = kindle_rules::apply(entries, rep, opts);
@@ -510,18 +508,12 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         }
         // 只有空白的段落照 Kindle 折成下一块的上边距（照 Kindle 换算竖直间距的两台都做；按原来的 CSS 算，垫图、分页估算之前）
         if opts.v_scale.is_some() {
-            blank_fold::apply(entries, rep, opts.media.as_ref(), opts.drop_hidden);
+            blank_fold::apply(entries, rep, opts.media.as_ref(), !opts.reader.display_none, opts.reader.trailing_br_line);
         }
-        // 行距照 Kindle 归一在垫图之前：行内垫图要看块在这台上的行距
-        if opts.normalize_lh {
-            line_height::apply(entries, rep, opts.media.as_ref());
-        }
-        // 标题字号也在垫图之前：行内垫图按标题在这台上的字号算
-        if opts.heading_keywords {
-            heading_size::apply(entries, rep, opts.media.as_ref());
-        }
+        // 行距、标题字号照 Kindle 在垫图之前：行内垫图要看块在这台上的行距、字号
+        block_style::apply(entries, rep, opts.media.as_ref(), &opts.reader);
         if let Some(g) = opts.top_spacer {
-            top_spacer::apply(entries, rep, opts.media.as_ref(), g);
+            top_spacer::apply(entries, rep, opts.media.as_ref(), g, &opts.reader);
         }
         // 大段上外边距在 Kindle 上排不下时换页、丢掉边距（掌阅、Move 都照 Kindle 换算竖直间距时做，按原来的 CSS 估）
         if let (Some(_), Some((_, k))) = (opts.v_scale, opts.image_sizing) {

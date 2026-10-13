@@ -35,6 +35,8 @@ line_height_except_p = true
 # 标题（h1–h6）的 font-size 只认关键字（small/medium/large/x-large/xx-large，绝对大小），em、px、pt、% 都不认、固定按标签排
 # （2026-10-13 测试书「测试-标题字号」）：标题字号照 Kindle 写成最接近的关键字（《平凡的世界》章名 2em 的 h2 在 Move 上只有 1.5em）
 heading_font_keywords = true
+# 块末尾的 <br/> 多排一行（Kindle、掌阅不排；2026-10-13 测试书「测试-末尾br」：段落多 50px、1.5em 标题多 75px）：去掉
+trailing_br_line = true
 comic_reader_margins = 1
 
 # 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比
@@ -42,6 +44,20 @@ image_sizing = "percent"
 # 缺省字号下 CSS 1em 的屏幕像素（2026-10-12 测试书「测试-竖直间距」Move量的）：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
 # 同样 1em 占页高多一半；用户定）。阅读器里改了字号、Kindle 改了行距要重量
 em_px = 37.8
+
+# 标题的字号（正文 1em＝1；2026-10-13 测试书「测试-标题字号」1–4 量的）：认的关键字（xx-small、x-small、xxx-large、smaller、
+# larger 不认，退回标签的），和没写（或写了不认的）时按标签固定的 h1–h6
+[heading_sizes]
+keywords = { small = 0.784, medium = 1.0, large = 1.216, x-large = 1.514, xx-large = 2.018 }
+tags = [2.018, 1.514, 1.216, 1.0, 0.784, 1.0]
+
+# 页首垫图（屏幕像素）：垫图后面 xochitl 自己加的空，标题每 em 字号 91、别的块 46（2026-10-12 测试书：h1 字号 1/1.35/2em 时
+# 91/122/181，段落、div 46）；行内窄图的高要比想挪的多出 44px × 字号 em 字才开始挪（2026-10-13 测试书「测试-行内垫图」：2em 标题 88、段落 44）
+[page_top]
+gap_heading_per_em = 91.0
+gap_other = 46.0
+strut_base_per_em = 44.0
+
 [screen]
 width = 954
 height = 1696
