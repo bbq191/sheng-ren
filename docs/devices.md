@@ -24,11 +24,14 @@
 | `px` | 写出器按 0.45pt/px | 屏幕像素 | 屏幕像素 |
 | `pt` | 12pt = 1em | **当成 px（坏的）** | 真的点（1pt ≈ 3.15px） |
 | 段落 `line-height` | 认（按全书正文行高归一） | 不认 | 不认 |
+| 别的块（标题、div、li、td）的 `line-height` | 认（同上） | 不认 | **认，乘在阅读器缺省行距上** → 照 Kindle 归一（KINDLE_RULES 20） |
+| 标题（h1–h6）的 `font-size` | 认（按正文归一） | 认 | **不认**（固定 2/1.5/1.17/1em；还没处理） |
+| 块末尾的 `<br/>` | 不排 | 不排 | **多排一行** → 去掉（KINDLE_RULES 20） |
 | `margin-top` | 认 | 认 | 段落在页中间认；**标题上的、页首的不认** |
 | `padding-top`、`border-top`、`position:relative;top` | 认 | 认 | **不认** |
 | 页首的空元素（空 div/p、body 上内边距） | — | — | **不占地方**；只有真内容（字、图，含透明空白图）能推下去 |
 
-→ 掌阅、Move 的上下外边距、内边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14，掌阅 em×1.52、Move ×1.31，%/px/pt 折成屏幕像素）；Move 页首的上边距垫透明空白图（`top_spacer`，标题后面 xochitl 自带约 91px×字号 em、别的块约 46px 的空）。
+→ 掌阅、Move 的上下外边距、内边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14，掌阅 em×1.52、Move ×1.31，%/px/pt 折成屏幕像素）；Move 页首的上边距垫透明空白图（`top_spacer`，标题后面 xochitl 自带约 91px×字号 em、别的块约 46px 的空）；要垫的比这段空还小的，在第一块里放行内窄图撑高第一行（KINDLE_RULES 20）。
 
 ### CSS 认不认
 

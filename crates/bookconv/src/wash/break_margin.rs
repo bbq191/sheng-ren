@@ -137,7 +137,7 @@ fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync:
     let height_of = |idx: usize| -> f64 {
         let (el, c) = &els[idx];
         let mut h = px(&c.padding[0], c.font_size) + px(&c.padding[2], c.font_size);
-        let imgs: f64 = el.descendants().filter_map(ElementRef::wrap).filter(|d| d.value().name() == "img").map(|d| {
+        let imgs: f64 = el.descendants().filter_map(ElementRef::wrap).filter(|d| d.value().name() == "img" && !d.value().classes().any(|c| c == "eink-sp")).map(|d| {
             let dc = els.iter().find(|(x, _)| x.id() == d.id()).map(|(_, c)| c.clone());
             dc.map_or(0.0, |dc| img_h(&d, &dc))
         }).sum();
