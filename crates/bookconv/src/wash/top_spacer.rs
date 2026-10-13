@@ -12,6 +12,12 @@
 //!   别的约 46px；测试书量的），就是垫图的高；不到内容区高 5% 的不垫（那段空是约数）；
 //! - 图是一张 100×200 的透明 PNG（`eink-spacer.png`），宽度写百分比（Move 只认百分比宽度），高按比例出来；规则写在
 //!   `eink-spacer.css`（选择器 `html body img.类`，同 `kindle_images`）。
+//! - 要垫的比 xochitl 自己加的那段空还小（《三体》获奖感言 2em 标题只要 130px，那段空约 182px）、或者差不到 5% 垫不了的：
+//!   第一块开头是字时，改在**这一块里面的最前面**放一张极窄的透明图（`eink-strut.png`，1×400），把第一行撑高，字就往下挪
+//!   「图高 − 44px × 字号 em」（2026-10-13 测试书「测试-行内垫图」：2em 标题图高 130/300 挪 42/212，段落 130 挪 86；图高不到这个数
+//!   不挪；横向挪不到 1px；标题前不会再多那段空）。只有一行内起作用，不加字。块在 Move 上的行距 L 不是 1 时（`<p>` 不认行距，
+//!   别的块认；行距先由 `line_height.rs` 照 Kindle 归一过），字照样挪 Δ、后面的内容挪 L × Δ（测试书「测试-行内垫图5」：L 为 0.74、
+//!   1.618 都是），取 Δ = 2 × 要挪的 / (1 + L)，字和后面的内容差得一样多。
 use super::*;
 use crate::cascade::{Computed, Len, MediaEnv, Rules, Sheet};
 use scraper::{ElementRef, Html, Node};
@@ -32,6 +38,18 @@ const GAP_OTHER: f64 = 46.0;
 /// 垫图至少占内容区高的多少才垫：上面那段空是量出来的约数（误差几十像素），差得不多的（阿加莎、《春雪》每章标题上方 2%–4%）
 /// 垫了未必更准，不垫。
 const MIN_SHARE: f64 = 0.05;
+/// 行内垫图：图高要比想挪的多出多少（屏幕像素，每 em 字号）才开始挪字（2026-10-13 测试书：2em 标题 88、段落 44）。
+const STRUT_BASE_PER_EM: f64 = 44.0;
+const STRUT_NAME: &str = "eink-strut.png";
+const STRUT_W: u32 = 1;
+const STRUT_H: u32 = 400;
+
+/// 一章怎么垫：`<body>` 开头一块空白图（高），或者第一块里面最前面一张行内的窄图（高、第一块是 `<body>` 里第几个开始标签）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pad {
+    Block(f64),
+    Strut(f64, usize),
+}
 
 /// 垫图要的尺寸：Kindle 内容区宽、高、一 em 的像素（[`KindleImageRef`]），这个阅读器内容区的宽、高（像素）。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,27 +61,46 @@ pub struct SpacerGeometry {
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, g: SpacerGeometry) {
     let css = parse_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    let heights: Vec<Option<f64>> = crate::util::par_map(&chapters, |&i| page_box(&entries[i], media, &css, g).filter(|b| b.text_top > 0.0).map(|b| spacer_height(b.text_top, b.heading_fs, g)).filter(|&h| h >= MIN_SHARE * f64::from(g.area.1)));
-    if heights.iter().all(Option::is_none) {
+    let pads: Vec<Option<Pad>> = crate::util::par_map(&chapters, |&i| page_box(&entries[i], media, &css, g).and_then(|b| choose(&b, g)));
+    if pads.iter().all(Option::is_none) {
         return;
     }
     let opf_idx = find_opf(entries);
     let dir = opf_idx.map(|i| dir_of(&entries[i].name).to_string()).unwrap_or_default();
     let at = |n: &str| if dir.is_empty() { n.to_string() } else { format!("{dir}/{n}") };
-    let (css_path, img_path) = (at(CSS_NAME), at(IMG_NAME));
+    let (css_path, img_path, strut_path) = (at(CSS_NAME), at(IMG_NAME), at(STRUT_NAME));
     let mut rules: BTreeMap<String, String> = BTreeMap::new();
-    for (&i, h) in chapters.iter().zip(&heights) {
-        let Some(h) = *h else { continue };
-        // 宽度百分比：高 = 内容区宽 × 百分比 × 高宽比
-        let pct = h / (f64::from(g.area.0) * f64::from(IMG_H) / f64::from(IMG_W)) * 100.0;
-        let pct = super::kindle_rules::fmt_num((pct * 100.0).round() / 100.0);
-        let class = format!("eink-sp-{}", pct.replace('.', "_"));
-        rules.entry(class.clone()).or_insert_with(|| format!("html body img.{class}{{width:{pct}%;height:auto;}}"));
+    let mut used = (false, false);
+    for (&i, pad) in chapters.iter().zip(&pads) {
+        let Some(pad) = *pad else { continue };
         let e = &mut entries[i];
         let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let Some((bs, be)) = html::body_range(text) else { continue };
         let Some(body) = html::tags(text).find(|t| t.is_start() && t.is("body")) else { continue };
-        let src = crate::epubzip::href_to(dir_of(&e.name), &img_path, "");
-        let out = format!(r#"{}<div class="eink-sp"><img class="{class}" src="{src}" alt=""/></div>{}"#, &text[..body.end], &text[body.end..]);
+        let out = match pad {
+            Pad::Block(h) => {
+                // 宽度百分比：高 = 内容区宽 × 百分比 × 高宽比
+                let pct = h / (f64::from(g.area.0) * f64::from(IMG_H) / f64::from(IMG_W)) * 100.0;
+                let pct = super::kindle_rules::fmt_num((pct * 100.0).round() / 100.0);
+                let class = format!("eink-sp-{}", pct.replace('.', "_"));
+                rules.entry(class.clone()).or_insert_with(|| format!("html body img.{class}{{width:{pct}%;height:auto;}}"));
+                used.0 = true;
+                let src = crate::epubzip::href_to(dir_of(&e.name), &img_path, "");
+                format!(r#"{}<div class="eink-sp"><img class="{class}" src="{src}" alt=""/></div>{}"#, &text[..body.end], &text[body.end..])
+            }
+            Pad::Strut(h, n) => {
+                let Some(t) = html::tags_in(text, bs, be).filter(|t| t.is_start()).nth(n) else { continue };
+                // 宽度百分比写到万分之一（图宽不到一像素，四舍五入差的高也不到一像素）
+                let pct = h / (f64::from(g.area.0) * f64::from(STRUT_H) / f64::from(STRUT_W)) * 100.0;
+                let pct = format!("{:.5}", (pct * 1e5).round() / 1e5);
+                let pct = pct.trim_end_matches('0').trim_end_matches('.').to_string();
+                let class = format!("eink-st-{}", pct.replace('.', "_"));
+                rules.entry(class.clone()).or_insert_with(|| format!("html body img.{class}{{width:{pct}%;height:auto;}}"));
+                used.1 = true;
+                let src = crate::epubzip::href_to(dir_of(&e.name), &strut_path, "");
+                format!(r#"{}<img class="eink-sp {class}" src="{src}" alt=""/>{}"#, &text[..t.end], &text[t.end..])
+            }
+        };
         let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
         e.data = typeset::inject_css_link(&out, &href).into_bytes();
         rep.kindle_rule_edits += 1;
@@ -74,16 +111,35 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         sheet.push('\n');
     }
     add_css_entry(entries, opf_idx, &css_path, &sheet, "eink-spacer-css");
-    if !entries.iter().any(|e| e.name == img_path) {
-        entries.push(Entry { name: img_path.clone(), data: spacer_png() });
+    for (on, path, id, w, h) in [(used.0, &img_path, "eink-spacer-png", IMG_W, IMG_H), (used.1, &strut_path, "eink-strut-png", STRUT_W, STRUT_H)] {
+        if !on || entries.iter().any(|e| e.name == *path) {
+            continue;
+        }
+        entries.push(Entry { name: path.clone(), data: clear_png(w, h) });
         if let Some(oi) = opf_idx {
             let text = String::from_utf8_lossy(&entries[oi].data);
-            let href = crate::epubzip::href_to(&dir, &img_path, "");
-            if let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id: "eink-spacer-png", href: &href, media_type: "image/png", properties: "" }]) {
+            let href = crate::epubzip::href_to(&dir, path, "");
+            if let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id, href: &href, media_type: "image/png", properties: "" }]) {
                 entries[oi].data = t.into_bytes();
             }
         }
     }
+}
+
+/// 一章怎么垫（不垫的 `None`）：Kindle 上不到内容区高 5% 的不垫；`<body>` 开头垫一块够 5% 的照旧这样垫（《飘》真机对过）；
+/// 垫不了的（要的比 xochitl 在垫图后自己加的空还少、或者多得不到 5%），第一块开头是字的改在块里放行内窄图，图高＝要挪的 + 44px × 字号。
+fn choose(b: &PageBox, g: SpacerGeometry) -> Option<Pad> {
+    let min = MIN_SHARE * f64::from(g.area.1);
+    let target = b.text_top * f64::from(g.area.1) / g.kindle.content_h;
+    if target < min {
+        return None;
+    }
+    let h = spacer_height(b.text_top, b.heading_fs, g);
+    if h >= min {
+        return Some(Pad::Block(h));
+    }
+    // 字挪 Δ、后面的内容挪 行距 × Δ：两边差得一样多，Δ = 2 × 要挪的 / (1 + 行距)
+    b.strut_at.map(|(n, fs, lh)| Pad::Strut(2.0 * target / (1.0 + lh) + STRUT_BASE_PER_EM * fs, n))
 }
 
 /// 垫图的高（这个阅读器的屏幕像素）：Kindle 上的距离按内容区高的比例折过来，减去 xochitl 在图后面自己加的空。
@@ -92,12 +148,12 @@ fn spacer_height(kindle_px: f64, heading_fs: Option<f64>, g: SpacerGeometry) -> 
     target - heading_fs.map_or(GAP_OTHER, |fs| GAP_HEADING_PER_EM * fs)
 }
 
-/// 透明的 100×200 PNG。
-fn spacer_png() -> Vec<u8> {
+/// 透明的 PNG。
+fn clear_png(w: u32, h: u32) -> Vec<u8> {
     use image::ImageEncoder;
     let mut out = Vec::new();
-    let px = vec![0u8; (IMG_W * IMG_H * 2) as usize];
-    image::codecs::png::PngEncoder::new(&mut out).write_image(&px, IMG_W, IMG_H, image::ExtendedColorType::La8).expect("PNG 编码");
+    let px = vec![0u8; (w * h * 2) as usize];
+    image::codecs::png::PngEncoder::new(&mut out).write_image(&px, w, h, image::ExtendedColorType::La8).expect("PNG 编码");
     out
 }
 
@@ -111,6 +167,8 @@ pub(crate) struct PageBox {
     pub body_bottom: Option<f64>,
     pub bg: Option<String>,
     pub bg_cover: bool,
+    /// 第一个有内容的块开头是字：它是 `<body>` 里第几个开始标签、字号（根 em）、在这台上的行距倍数；放行内垫图用。
+    pub strut_at: Option<(usize, f64, f64)>,
 }
 
 /// 全书各章的 [`PageBox`]（条目下标 → 排法；拿不准的章没有）。
@@ -213,7 +271,34 @@ fn page_box(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::
         bottom + pending
     });
     let heading = matches!(tag.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6").then_some(last.font_size);
-    Some(PageBox { text_top: offset, heading_fs: heading, body_bottom, bg: body_comp.bg_image.clone(), bg_cover: body_comp.bg_cover })
+    let starts_with_text = last_node.descendants().find_map(|d| match d.value() {
+        Node::Text(t) if !t.trim().is_empty() => Some(true),
+        Node::Element(v) if matches!(v.name(), "img" | "svg" | "br") => Some(false),
+        _ => None,
+    }) == Some(true);
+    // 解析出的元素和标签扫描数得一样（没有补出来的 `tbody` 之类）才知道放在哪个标签后面
+    let same_count = html::body_range(text).is_some_and(|(bs, be)| html::tags_in(text, bs, be).filter(|t| t.is_start()).count() == body.descendants().skip(1).filter(|d| d.value().is_element()).count());
+    // 块在这台上的行距（Move 上 `<p>` 不认行距，算 1；别的块认）：xochitl 把行距倍数也乘到撑高的那一行上
+    let lh = if tag == "p" { 1.0 } else { last.line_height.unwrap_or(1.0) };
+    let strut_at = (starts_with_text && same_count).then(|| body.descendants().skip(1).filter(|d| d.value().is_element()).position(|d| d.id() == last_node.id())).flatten().map(|n| (n, move_font_size(tag, &chain, &body_comp), lh));
+    Some(PageBox { text_top: offset, heading_fs: heading, body_bottom, bg: body_comp.bg_image.clone(), bg_cover: body_comp.bg_cover, strut_at })
+}
+
+/// 第一块在 Move 上的字号（根 em）：标题的字号 xochitl 一概不认（类、行内、`!important`、标题里的 `<span>` 都不认），按固定的
+/// h1 2em、h2 1.5em、h3 1.17em、h4 1em（h5、h6 照浏览器缺省 0.83、0.67）排（2026-10-13 测试书「测试-标题字号」），乘外面一层的字号；
+/// 别的块照算出来的。
+fn move_font_size(tag: &str, chain: &[(String, Rc<Computed>)], body: &Computed) -> f64 {
+    let ua = match tag {
+        "h1" => 2.0,
+        "h2" => 1.5,
+        "h3" => 1.17,
+        "h4" => 1.0,
+        "h5" => 0.83,
+        "h6" => 0.67,
+        _ => return chain.last().map_or(1.0, |(_, c)| c.font_size),
+    };
+    let outer = if chain.len() >= 2 { chain[chain.len() - 2].1.font_size } else { body.font_size };
+    ua * outer
 }
 
 #[cfg(test)]
@@ -253,6 +338,29 @@ mod tests {
         assert!(sheet.contains("html body img.eink-sp-41_59{width:41.59%;height:auto;}"), "{sheet}");
         assert!(b.iter().any(|e| e.name == "O/eink-spacer.png" && !e.data.is_empty()));
         assert!(String::from_utf8_lossy(&b[0].data).contains("eink-spacer.png"));
+    }
+
+    /// 要垫的比 xochitl 标题前自己加的空还少：标题里最前面放行内窄图。Kindle 2.5rem × 52.5 = 131.25 → Move 123.52，
+    /// 加 44 × 2 = 211.52；宽 211.52 / (842 × 400) = 0.0628%
+    #[test]
+    fn small_heading_margin_uses_inline_strut() {
+        let mut b = book(r#"<body><h1 class="t"><span>标题</span></h1><p>正文</p></body>"#, "h1.t{font-size:2em;margin-top:1.25em}");
+        apply(&mut b, &mut WashReport::default(), None, geom());
+        let c = String::from_utf8(b.iter().find(|e| e.name == "O/c.xhtml").unwrap().data.clone()).unwrap();
+        assert!(c.contains(r#"<body><h1 class="t"><img class="eink-sp eink-st-0_0628" src="eink-strut.png" alt=""/><span>标题</span></h1>"#), "{c}");
+        let sheet = String::from_utf8(b.iter().find(|e| e.name == "O/eink-spacer.css").unwrap().data.clone()).unwrap();
+        assert!(sheet.contains("html body img.eink-st-0_0628{width:0.0628%;height:auto;}"), "{sheet}");
+        assert!(b.iter().any(|e| e.name == "O/eink-strut.png") && !b.iter().any(|e| e.name == "O/eink-spacer.png"));
+        // 标题在 Move 上的行距是 2：字挪 Δ、后面挪 2Δ，Δ = 2 × 123.52 / 3 = 82.35，加 88 → 170.35，宽 0.05058%
+        let mut b = book(r#"<body><h1 class="t">标题</h1></body>"#, "h1.t{font-size:2em;margin-top:1.25em;line-height:2}");
+        apply(&mut b, &mut WashReport::default(), None, geom());
+        let c = String::from_utf8(b.iter().find(|e| e.name == "O/c.xhtml").unwrap().data.clone()).unwrap();
+        assert!(c.contains(r#"<h1 class="t"><img class="eink-sp eink-st-0_05058" "#), "{c}");
+        // 第一块开头是图的不放
+        let mut b = book(r#"<body><h1 class="t"><img src="i.png" alt=""/>标题</h1></body>"#, "h1.t{font-size:2em;margin-top:1.25em}");
+        let before = b.clone();
+        apply(&mut b, &mut WashReport::default(), None, geom());
+        assert_eq!(b, before);
     }
 
     #[test]

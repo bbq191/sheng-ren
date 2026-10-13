@@ -11,6 +11,10 @@
 //! Kindle 上折叠后的总距离（`em`，之后照竖直间距换算）；两台都折叠外边距（实测），总距离不小于前一块的下外边距，折叠后就是它。
 //! 文件末尾的空段 Kindle 上没有下一块（不折），只藏起来。拿不准的不动：空段里有 `id`、负外边距、接住的块有上内边距或上边框又
 //! 套着块、空段后面同一层没有块而文件后面还有内容。
+//!
+//! 块末尾的 `<br/>`（`<h1>标题<br/></h1>`，后面只剩空格、换行）Kindle 也不排（写出器去掉块文字末尾的换行），掌阅不排（《三体》
+//! 获奖感言标题下三台对过），Move 每个多排一行（2026-10-13 测试书「测试-末尾br」：段落多 50px、1.5em 标题多 75px，套在 `<span>`
+//! 里的一样）：Move 上一并去掉。
 use super::*;
 use crate::cascade::{Computed, Len, MediaEnv, Rules, Sheet};
 use scraper::{ElementRef, Html, Node};
@@ -32,6 +36,8 @@ const HIDE: &str = "display:none;";
 struct Plan {
     blanks: Vec<usize>,
     gaps: Vec<(usize, f64)>,
+    /// 块末尾的 `<br/>`（只在去掉空段的阅读器上去掉）。
+    trailing: Vec<usize>,
 }
 
 /// `remove`：阅读器不认 `display:none`（profile `display_none = false`），空段元素去掉。
@@ -40,7 +46,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let plans: Vec<Plan> = crate::util::par_map(&chapters, |&i| plan(&entries[i], media, &css));
     drop(css);
-    if plans.iter().all(|p| p.blanks.is_empty()) {
+    if plans.iter().all(|p| p.blanks.is_empty() && (!remove || p.trailing.is_empty())) {
         return;
     }
     let opf_idx = find_opf(entries);
@@ -52,7 +58,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     let mut classes: Vec<(String, String)> = Vec::new();
     let mut blank_tags: std::collections::BTreeSet<String> = Default::default();
     for (&i, p) in chapters.iter().zip(&plans) {
-        if p.blanks.is_empty() {
+        if p.blanks.is_empty() && (!remove || p.trailing.is_empty()) {
             continue;
         }
         let e = &mut entries[i];
@@ -79,6 +85,13 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             }
             blank_tags.insert(t.name.to_ascii_lowercase());
             edits.push((t.start, t.end, tag));
+        }
+        for &n in p.trailing.iter().filter(|_| remove) {
+            let Some(t) = starts.get(n) else { continue };
+            let end = if text[t.start..t.end].ends_with("/>") { Some(t.end) } else { html::find_close(text, t.end, "br").map(|c| c.end).or(Some(t.end)) };
+            if let Some(end) = end {
+                edits.push((t.start, end, String::new()));
+            }
         }
         for &(n, em) in &p.gaps {
             let Some(t) = starts.get(n) else { continue };
@@ -284,6 +297,35 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
         }
     }
+    // 块末尾的 `<br/>`：最近的块里没有子块、`<br/>` 前面有字或图，后面到块结束只有空格换行、`<br/>` 和空的行内元素
+    let content = |n: ego_tree::NodeRef<Node>| match n.value() {
+        Node::Text(t) => t.chars().any(|c| !matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c')),
+        Node::Element(v) => matches!(v.name(), "img" | "svg" | "image" | "hr" | "table" | "input" | "object" | "video" | "audio" | "math"),
+        _ => false,
+    };
+    for br in body.descendants().filter_map(ElementRef::wrap).filter(|el| el.value().name() == "br" && el.value().attr("id").is_none()) {
+        let Some(block) = br.ancestors().filter_map(ElementRef::wrap).find(|a| a.id() == body.id() || is_blockish(a)) else { continue };
+        if block.id() == body.id() || has_block_child(&block) || out.blanks.contains(&idx[&block.id()].0) || c_of(&block).is_some_and(|c| c.pre) {
+            continue;
+        }
+        let mut before = false;
+        let mut after = false;
+        let mut seen = false;
+        for d in block.descendants() {
+            if d.id() == br.id() {
+                seen = true;
+            } else if content(d) {
+                if seen {
+                    after = true;
+                    break;
+                }
+                before = true;
+            }
+        }
+        if before && !after {
+            out.trailing.push(idx[&br.id()].0);
+        }
+    }
     out.blanks.sort_unstable();
     out.gaps.sort_by_key(|g| g.0);
     out
@@ -335,5 +377,20 @@ mod tests {
         apply(&mut b, &mut WashReport::default(), None, false);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(out.contains(r#"<p class="eink-blank">&#160;</p><h2 style="margin-top:0;margin-top:1.1467em;" class="eink-g1">乙</h2><div><p>丙</p><p>&#160;</p></div>"#), "{out}");
+    }
+
+    /// 块末尾的 `<br/>`：Move 上去掉（套在行内元素里的、连着两个的也去），中间的、开头的、有 id 的、块里套着块的不动；掌阅不动。
+    #[test]
+    fn trailing_br_removed_only_where_blanks_are_removed() {
+        let body = r#"<h2>甲<br/></h2><p><span>乙<br/></span> <br/>
+</p><p>丙<br/>丁</p><p><br/>戊</p><p>己<br id="x"/></p><div>庚<br/><p>辛</p></div>"#;
+        let mut b = book(&page(body));
+        let before = b[2].data.clone();
+        apply(&mut b, &mut WashReport::default(), None, false);
+        assert_eq!(b[2].data, before);
+        apply(&mut b, &mut WashReport::default(), None, true);
+        let out = String::from_utf8(b[2].data.clone()).unwrap();
+        assert!(out.contains(r#"<h2>甲</h2><p><span>乙</span> 
+</p><p>丙<br/>丁</p><p><br/>戊</p><p>己<br id="x"/></p><div>庚<br/><p>辛</p></div>"#), "{out}");
     }
 }
