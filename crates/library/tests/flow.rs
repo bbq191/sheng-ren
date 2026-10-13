@@ -968,6 +968,36 @@ fn text_and_comic_fingerprints_ignore_the_other_line() {
     assert!(text0.contains(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION)) && comic0.contains(&format!("|c{}|", bookconv::optimize::COMIC_VERSION)), "{text0}\n{comic0}");
 }
 
+/// 设备模型（`bookconv::reader_model`）和 `em_px` 进指纹（2026-10-13 用户定）：改了量出来的标题字号、页首垫图尺寸、认不认的字段，
+/// 照 Send to Kindle 统一的文字书过期；漫画不受影响。
+#[test]
+fn reader_model_fields_are_in_the_text_fingerprint() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("lib");
+    std::fs::create_dir_all(root.join("profiles")).unwrap();
+    let epub = dir.path().join("书.epub");
+    std::fs::write(&epub, sample_epub("书")).unwrap();
+    let heading = |h1: f64| format!("[heading_sizes]\nkeywords = {{ small = 0.784, large = 1.216 }}\ntags = [{h1}, 1.5, 1.2, 1.0, 0.8, 1.0]\n");
+    let fp = |extra: &str, tables: &str| {
+        std::fs::write(
+            root.join("profiles/t.toml"),
+            format!("name = \"t\"\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\ntext_repair_only = true\nkindle_rules = true\n{extra}\n{tables}[screen]\nwidth = 1000\nheight = 1500\n"),
+        )
+        .unwrap();
+        let lib = common::open(&root);
+        let m = lib.add_file(&epub).unwrap().meta().clone();
+        lib.fingerprint(&m, lib.devices().get("t").unwrap()).unwrap()
+    };
+    let plain = fp("", "");
+    let kw = fp("heading_font_keywords = true", &heading(2.0));
+    assert_ne!(plain, kw, "标题只认关键字的阅读器");
+    assert_ne!(kw, fp("heading_font_keywords = true", &heading(2.1)), "重量了标题字号");
+    assert_eq!(kw, fp("heading_font_keywords = true", &heading(2.0)));
+    assert_ne!(plain, fp("trailing_br_line = true", ""));
+    assert_ne!(plain, fp("em_px = 37.8", ""));
+    assert_ne!(fp("em_px = 37.8", ""), fp("em_px = 38", ""));
+}
+
 /// 跑 booklib，要求退出码 0，返回 stdout。
 #[track_caller]
 fn ok(lib: &std::path::Path, args: &[&str]) -> String {
