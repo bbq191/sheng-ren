@@ -29,7 +29,7 @@
 | 标题（h1–h6）的 `font-size` | 认（按正文归一） | 认 | **只认关键字**（small…xx-large 五档，绝对大小；没写按标签固定）→ 取最接近的关键字（KINDLE_RULES 21） |
 | 块末尾的 `<br/>` | 不排 | 不排 | **多排一行** → 去掉（KINDLE_RULES 20） |
 | `margin-top` | 认 | 认 | 段落、div 在页中间认；**标题（h1–h6）的上下外边距都不认**（前面自带约 1em 标题字号的空、后面约半个，和相邻块的外边距折叠），页首的不认 → 页首垫图（KINDLE_RULES 11、20），页中间标题前后的间距写到相邻块上（KINDLE_RULES 23） |
-| `padding-top`、`border-top`、`position:relative;top` | 认 | 认 | **不认**；左右、下内边距也不认（背景色照画），**边框根本不画**，负外边距（上下左右）不认（2026-10-13 探针；左右的不处理，用户定）→ 左右内边距并进外边距、上下内边距折进相邻块的间距、上下边框插横线图（KINDLE_RULES 23，用户定）；左右竖线、表格线、单元格和列表的内边距做不了 |
+| `padding-top`、`border-top`、`position:relative;top` | 认 | 认 | **不认**；左右、下内边距也不认（背景色照画），**边框根本不画**，负外边距（上下左右）不认（2026-10-13 探针；左右的不处理，用户定）→ 左右内边距并进外边距、上下内边距折进相邻块的间距、上下边框插横线图（KINDLE_RULES 23，用户定）；普通块上的边框外链、行内都不画，**表格、单元格行内写的边框画**（分边、点线、颜色照写，2026-10-13「测试-竖线」1–10）→ 左右有框的块包进单格表格、框写在单元格行内，书里表格的单元格边框写进行内（KINDLE_RULES 27，用户选）；单元格和列表的内边距做不了 |
 | 页首的空元素（空 div/p、body 上内边距） | — | — | **不占地方**；只有真内容（字、图，含透明空白图）能推下去 |
 
 → 掌阅、Move 的上下外边距、内边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14，掌阅 em×1.52、Move ×1.31，%/px/pt 折成屏幕像素）；Move 页首的上边距垫透明空白图（`top_spacer`，标题后面 xochitl 自带约 91px×字号 em、别的块约 46px 的空）；要垫的比这段空还小的，在第一块里放行内窄图撑高第一行（KINDLE_RULES 20）。
@@ -53,9 +53,13 @@
 | 放不下时的大段上外边距 | **挪到下一页页首、丢掉边距** | 照加（推到页底） | 照加 → 我们按 Kindle 估算先分页（KINDLE_RULES 18） |
 | `hyphens:auto` | 不认 | 不认 | 不认 |
 | `rem` | 认 | **不认**（整条声明当没写，Q53）→ 字号以外的改成 em、字号的折成 px（KINDLE_RULES 25，《克莱因壶》首行缩进真机 ✓；《福尔摩斯》行内字号本来就由字号归一折成 px） | 认（同 em，Q53） |
-| `letter-spacing` | 写出器照写（没真机核） | **不认**（Q19） | 认（Q19） |
+| `letter-spacing` | 写出器照写（没真机核） | **不认**（Q19）→ 没有别的写法，补字距只能往书里加字，不处理 | 认（Q19） |
 | 字号的 `px`、`pt` | px 按 0.75pt（16px＝1em），12pt＝1em | px 是 CSS 像素（同 Kindle，Q21），**pt 当 px**（18pt 只有 1.125em，Q23）→ 字号归一时折成 px（KINDLE_RULES 5；`html` 上写了字号的书除外） | **px 是屏幕像素**（24px 比正文小，Q21），pt 认（Q23） |
-| 负的外边距 | 照写 | 认（伸到屏幕边为止，Q75–Q79） | 不认（左右的不处理，用户定） |
+| 负的外边距 | 照写 | 认（伸到屏幕边为止，Q75–Q79） | 不认（左右的不处理，用户定）→ 页中间相邻两块之间照 Kindle 折叠后的间距写成两边非负的（KINDLE_RULES 28，profile `negative_margins`） |
+| 块的 `width` | 照写 | 认（Q30） | **不认**（一律满宽，Q30）→ 照 Kindle 折成左右外边距，居中的两边各一半（KINDLE_RULES 28，profile `block_width`） |
+| 行内元素、行内图的左右内外边距 | 照写（px 按 0.45pt） | 认，px 是屏幕像素（Q88–Q94）→ px 的折成 em（KINDLE_RULES 28；优化后的测试书真机 30px 挪 43，换算 42） | **一概不认**（Q88–Q94）→ 补只能往书里加字，不处理 |
+| 列表项的上下内边距、外边距 | 照写 | 都认（Q95、Q96） | 内边距不认、外边距认 → 内边距并进外边距（KINDLE_RULES 28；优化后的测试书真机 2em 都挪 99） |
+| 单元格的内边距 | 照写（px 按 0.45pt） | 认（类规则、行内），px 是屏幕像素（Q97–Q99） | 同掌阅 → 两台 px 的折成 em（KINDLE_RULES 28；《嘯風山莊》年表真机） |
 
 ### 背景图
 
@@ -145,6 +149,7 @@
 | `padding`、`borders`、`heading_margins`（都是 `true`） | 认内边距、画边框、认 h1–h6 的上下外边距；`false` 时只修复的文字书里左右内边距并进外边距、上下内边距和标题外边距照 Kindle 写到相邻块认的一侧、上下边框插横线图（`wash/box_fix.rs`，KINDLE_RULES 23） | — | — | 都是 `false` | 2026-10-13「测试-怪癖」Q05–Q07、Q12、Q39、Q40、Q65–Q74：xochitl 内边距不认（背景色画）、边框不画、标题外边距不认（前后自带空），图能画 |
 | `px_margins`、`percent_margins`（都是 `true`） | 左右外边距写 px 时和 Kindle 一样大、写 % 时按包含块宽；`false` 时只修复的文字书里块上的折成 em（px 按 0.45pt、% 按内容区宽；`wash/box_fix.rs`，KINDLE_RULES 24） | — | `px_margins = false` | 都是 `false` | 2026-10-13：两台 px 是屏幕像素（Kindle 按 0.45pt），Move 的 % 当 px；修后掌阅、Move 真机 50px 都挪 71（Kindle 换算 1.875em） |
 | `rem`、`important`、`line_height_numbers`（都是 `true`） | 认 `rem`、认 `!important`、认不带单位的 `line-height`；`false` 时只修复的文字书里 rem 改成 em（字号的折成 px）、去掉 `!important`（靠它胜出的值写进行内）、行距照 Kindle 写成 em（`wash/css_compat.rs`、`wash/block_style.rs`，KINDLE_RULES 25；`line_height_numbers = false` 要写 `line_px`、`em_px`） | — | 都是 `false` | — | 2026-10-13「测试-怪癖-掌阅」Q28、Q53、Q80–Q86 |
+| `block_width`、`negative_margins`（都是 `true`） | 认块的宽度、认负的外边距；`false` 时只修复的文字书里块的宽度折成左右外边距、页中间相邻两块的负外边距照 Kindle 写成非负的间距（`wash/box_fix.rs`，KINDLE_RULES 28） | — | — | 都是 `false` | 2026-10-13 探针 Q08、Q30、Q75–Q79 |
 | `em_px`、`line_px`（不写） | `em_px`：这台缺省字号下 CSS 1em 的屏幕像素，竖直间距照 Kindle 换算用（KINDLE_RULES 14）；`line_px`：正文一行的像素（kindle：一 rem 竖直 = 它 / 1.2；掌阅：缺省行距，行距照 Kindle 写成 em 用） | `line_px` 63 | `em_px` 37.5、`line_px` 58 | `em_px` 37.8 | 2026-10-12「测试-竖直间距」：Kindle 按行距排边距，同样 1em 占页高多一半 |
 | `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"` | — | `"ltr"` | — | 掌阅遇到往右翻的书，整页图四周留左右 92、上下 124px |

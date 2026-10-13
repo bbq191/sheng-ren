@@ -5,6 +5,7 @@
   probe.py make 输出.epub                 生成测试书（探针见 PROBES；书名「测试-怪癖」）
   probe.py measure 排出来的.pdf [--json]  量 xochitl 排出的 PDF（每页按标记 Q??A/Q??B 认）
   probe.py move [--host=root@10.11.99.1]  生成 → 经书架服务导入 Move → 等它排好 → 拉回 PDF → measure（测试书留在 Move 上，用户自己删）
+  （都可加 --only=88-99 或 --only=13,28：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
   probe.py ireader                        生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
                                           （测试书留在掌阅上，用户自己删；掌阅要开着 adb、亮屏解锁）
 
@@ -124,10 +125,25 @@ PROBES = [
     ("85", "span text-decoration:underline !important（行内）", "markup", "", '<p><span>{text}</span></p>|<p><span style="text-decoration:underline !important">{text}</span></p>'),
     ("86", "p text-align:center !important", "sheet", "text-align:center !important", P),
     ("87", "span text-decoration:underline（行内，对照没有）", "markup", "", '<p><span>{text}</span></p>|<p><span style="text-decoration:underline">{text}</span></p>'),
+    # 行内元素、图、列表项、单元格的内外边距（2026-10-13）：短行，Δ右 就是挪了多少
+    ("88", "span margin-left:2em（短行，看 Δ右）", "markup", "", '<p>甲<span>乙乙</span></p>|<p>甲<span class="sml2">乙乙</span></p>'),
+    ("89", "span margin-left:30px（短行）", "markup", "", '<p>甲<span>乙乙</span></p>|<p>甲<span class="sml30">乙乙</span></p>'),
+    ("90", "span padding-left:2em（短行）", "markup", "", '<p>甲<span>乙乙</span></p>|<p>甲<span class="spl2">乙乙</span></p>'),
+    ("91", "span padding-left:30px（短行）", "markup", "", '<p>甲<span>乙乙</span></p>|<p>甲<span class="spl30">乙乙</span></p>'),
+    ("92", "span 行内 style margin-left:30px（短行）", "markup", "", '<p>甲<span>乙乙</span></p>|<p>甲<span style="margin-left:30px">乙乙</span></p>'),
+    ("93", "行内图 margin-left:2em（短行）", "markup", "", '<p>甲<img class="ri" src="rule.png" alt=""/>乙</p>|<p>甲<img class="ri im2" src="rule.png" alt=""/>乙</p>'),
+    ("94", "行内图 margin-left:30px（短行）", "markup", "", '<p>甲<img class="ri" src="rule.png" alt=""/>乙</p>|<p>甲<img class="ri im30" src="rule.png" alt=""/>乙</p>'),
+    ("95", "li padding-top:2em（第二项）", "markup", "", '<ul><li>{text}</li><li>{text}</li></ul>|<ul><li>{text}</li><li class="lpt2">{text}</li></ul>'),
+    ("96", "li margin-top:2em（第二项）", "markup", "", '<ul><li>{text}</li><li>{text}</li></ul>|<ul><li>{text}</li><li class="lmt2">{text}</li></ul>'),
+    ("97", "td padding-left:2em（类规则）", "markup", "", '<table><tbody><tr><td>{text}</td></tr></tbody></table>|<table><tbody><tr><td class="tpl2">{text}</td></tr></tbody></table>'),
+    ("98", "td 行内 padding-left:30px", "markup", "", '<table><tbody><tr><td>{text}</td></tr></tbody></table>|<table><tbody><tr><td style="padding-left:30px">{text}</td></tr></tbody></table>'),
+    ("99", "td 行内 padding-top:30px", "markup", "", '<table><tbody><tr><td>{text}</td></tr></tbody></table>|<table><tbody><tr><td style="padding-top:30px">{text}</td></tr></tbody></table>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）
-BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:0.01em;}", ".ml2{margin-left:2em;}", ".mt2{margin-top:2em;}", ".mb2{margin-bottom:2em;}", ".mt1{margin-top:1em;}", "img.rule{width:100%;}", "img.ruleb{display:block;width:100%;}", ".bgd{background-color:#444444;color:#ffffff;margin-left:0;margin-right:0;}", ".nm{margin-left:-2em;margin-right:-2em;}", ".nl30{margin-left:-30px;}", ".nr{margin-right:-2em;}"]
+BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:0.01em;}", ".ml2{margin-left:2em;}", ".mt2{margin-top:2em;}", ".mb2{margin-bottom:2em;}", ".mt1{margin-top:1em;}", "img.rule{width:100%;}", "img.ruleb{display:block;width:100%;}", ".bgd{background-color:#444444;color:#ffffff;margin-left:0;margin-right:0;}", ".nm{margin-left:-2em;margin-right:-2em;}", ".nl30{margin-left:-30px;}", ".nr{margin-right:-2em;}",
+            ".sml2{margin-left:2em;}", ".sml30{margin-left:30px;}", ".spl2{padding-left:2em;}", ".spl30{padding-left:30px;}", "img.ri{width:3em;height:0.5em;}", ".im2{margin-left:2em;}", ".im30{margin-left:30px;}",
+            ".lpt2{padding-top:2em;}", ".lmt2{margin-top:2em;}", ".tpl2{padding-left:2em;}"]
 
 
 def page(code, cid, body, head_style="", barcode=None):
@@ -193,10 +209,21 @@ def chapters(barcode=False):
         ca, cb = (f"code-{n}-a.png", f"code-{n}-b.png") if barcode else (None, None)
         out.append((f"q{code}a", f"Q{code}A", page(f"Q{code}A", f"q{code}a", a_tpl.format(cls="", text=TEXT), "", ca)))
         out.append((f"q{code}b", f"Q{code}B", page(f"Q{code}B", f"q{code}b", b_tpl.format(cls=cls_b, text=TEXT), head, cb)))
+    # 带条码图的每章一张图、字又少，优化器会当成漫画（≥20 张图、平均每张不到 40 字）：末尾加一章长文字（不是探针，放最后不影响认页）
+    if barcode:
+        out.append(("filler", "filler", page("filler", "filler", "<p>" + "补字" * 1000 + "</p>")))
     return out, rules
 
 
-def make(path, title="测试-怪癖", barcode=False):
+OPTIMIZE = None  # --optimize=<epub-optimize>：测试书先按这台的模式优化再推（看修过以后的样子）
+
+
+def make(path, title="测试-怪癖", barcode=False, device=None):
+    if OPTIMIZE and device:
+        raw = path + ".raw.epub"
+        make(raw, title, barcode)
+        subprocess.run([OPTIMIZE, f"--device={device}", raw, path], check=True, capture_output=True)
+        return
     chs, rules = chapters(barcode)
     css = "\n".join(rules) + "\n"
     bid = "urn:uuid:" + str(uuid.uuid4())
@@ -307,7 +334,7 @@ def report(m):
 def move_run(host):
     work = tempfile.mkdtemp(prefix="quirks-")
     book = os.path.join(work, "quirks.epub")
-    make(book)
+    make(book, device="xochitl")
     tunnel = subprocess.Popen(["ssh", "-o", "ControlMaster=no", "-o", "ExitOnForwardFailure=yes", "-N", "-L", "8790:127.0.0.1:8790", host])
     try:
         time.sleep(2)
@@ -362,15 +389,20 @@ def ireader_run():
     # 每次换个文件名：同名的书掌阅记着上次读到哪，会从那里接着翻
     name = f"quirks-ir-{time.strftime('%m%d%H%M%S')}"
     book = os.path.join(work, f"{name}.epub")
-    make(book, "测试-怪癖-掌阅", barcode=True)
+    make(book, "测试-怪癖-掌阅", barcode=True, device="ireader")
     adb("shell", "mkdir", "-p", "/sdcard/documents/测试")
     adb("push", book, f"/sdcard/documents/测试/{name}.epub")
     adb("shell", "am", "start", "-n", "com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity")
     time.sleep(3)
-    if not tap_text(name):
-        for step in ("存储空间", "documents", "测试", name):
-            if not tap_text(step):
-                sys.exit(f"文件管理器里没找到「{step}」")
+    # 文件管理器停在「测试」里时列表不刷新：点面包屑回 documents 再进来；在哪一层都试几次
+    for _ in range(6):
+        if tap_text(name):
+            break
+        if not tap_text("测试") and not tap_text("documents"):
+            tap_text("存储空间")
+        time.sleep(2)
+    else:
+        sys.exit(f"文件管理器里没找到「{name}」")
     time.sleep(8)
     codes = {i: c for i, (c, *_) in enumerate(PROBES, 1)}
     out, seen, misses = {}, set(), 0
@@ -403,8 +435,17 @@ def ireader_run():
 
 
 def main():
+    global PROBES, OPTIMIZE
     args, opts = cli_args(1, __doc__), cli_opts()
     cmd = args[0]
+    # --only=88-99 或 --only=13,28：只跑这几个探针（掌阅全跑一遍要 10 分钟）
+    if "--only" in opts:
+        want = set()
+        for part in opts["--only"].split(","):
+            lo, _, hi = part.partition("-")
+            want.update(range(int(lo), int(hi or lo) + 1))
+        PROBES = [p for p in PROBES if int(p[0]) in want]
+    OPTIMIZE = opts.get("--optimize")
     if cmd == "make" and len(args) == 2:
         make(args[1])
     elif cmd in ("measure", "move", "ireader") and (cmd != "measure" or len(args) == 2):

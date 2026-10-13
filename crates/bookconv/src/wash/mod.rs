@@ -144,7 +144,12 @@ pub use self::encoding::transcode_entries;
 ///   `px_margins`）。
 /// - 26（2026-10-13）：Move 上 `<p>` 的行距也照 Kindle 归一，写在行内 `style`（xochitl 的 `<p>` 只认行内写的行距，按缺省行距的倍数；
 ///   `block_style.rs`）。
-pub const KINDLE_RULES_VERSION: &str = "26";
+/// - 27（2026-10-13）：Move 上左右有框的块（全框、单边）包进单格表格，框写成单元格行内的边框（颜色、粗细、点线照书），块的左外边距
+///   挪到表格、内边距写到单元格；书里表格、单元格的边框写进行内、加 `cellspacing="0"`（xochitl 普通块的边框不画，只画表格、单元格
+///   行内写的；`box_fix.rs`，用户选）。
+/// - 28（2026-10-13）：Move 上块的宽度折成左右外边距、页中间负的上下外边距照 Kindle 写成非负的、列表项上下内边距并进外边距；两台单元格上
+///   px 的内边距、掌阅行内元素和图上 px 的左右内外边距照 Kindle 折成 em（探针 Q88–Q99；`box_fix.rs`，profile `block_width`、`negative_margins`）。
+pub const KINDLE_RULES_VERSION: &str = "28";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;

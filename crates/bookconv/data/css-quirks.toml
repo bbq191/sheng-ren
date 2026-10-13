@@ -32,9 +32,9 @@ src = "2026-10-13 测试-怪癖-掌阅 Q28；2026-10-12 测试-插图"
 
 [[rule]]
 prop = ["letter-spacing"]
-ireader = "broken"
+ireader = "accept"
 xochitl = "same"
-note = "掌阅不认字距（Move 认；Kindle 写出器照写字距，没真机核）"
+note = "掌阅不认字距（Move 认；Kindle 写出器照写字距，没真机核）：没有别的写法，补字距只能往书里加字，不处理"
 src = "2026-10-13 测试-怪癖 Q19、测试-怪癖-掌阅 Q19"
 
 [[rule]]
@@ -136,10 +136,51 @@ src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q05、Q65–Q67
 
 [[rule]]
 prop = ["padding-*"]
-on = ["cell", "list", "inline", "img"]
+on = ["cell"]
+value = ["px"]
+ireader = "fixed"
+xochitl = "fixed"
+note = "单元格的内边距两台都认（类规则、行内），px 是屏幕像素：照 Kindle 折成 em（KINDLE_RULES 28）"
+src = "2026-10-13 测试-怪癖 Q97–Q99（两台）"
+
+[[rule]]
+prop = ["padding-*"]
+on = ["cell"]
+xochitl = "same"
+ireader = "same"
+note = "单元格的内边距 em、% 两台照 CSS"
+src = "2026-10-13 测试-怪癖 Q97"
+
+[[rule]]
+prop = ["padding-top", "padding-bottom"]
+on = ["list"]
+xochitl = "fixed"
+note = "Move 列表项的上下内边距不认、上下外边距认：并进外边距（KINDLE_RULES 28）"
+src = "2026-10-13 测试-怪癖 Q95、Q96"
+
+[[rule]]
+prop = ["padding-*"]
+on = ["inline", "img"]
+value = ["px"]
+ireader = "fixed"
+xochitl = "accept"
+note = "行内元素、图的内边距：掌阅认（px 是屏幕像素，照 Kindle 折成 em，KINDLE_RULES 28）；Move 一概不认，补只能往书里加字，不处理"
+src = "2026-10-13 测试-怪癖 Q90、Q91（两台）"
+
+[[rule]]
+prop = ["padding-*"]
+on = ["inline", "img"]
+ireader = "same"
+xochitl = "accept"
+note = "行内元素、图的内边距：掌阅照 CSS；Move 一概不认，不处理"
+src = "2026-10-13 测试-怪癖 Q90、Q91（两台）"
+
+[[rule]]
+prop = ["padding-*"]
+on = ["list"]
 value = ["em", "rem", "px", "pt", "pct"]
 xochitl = "broken"
-note = "Move 不认内边距；表格单元格、列表项、行内元素、图上的没处理"
+note = "Move 列表项的左右内边距不认，没处理（项目符号的位置跟着变，并进外边距会挪动符号）"
 src = "2026-10-13 测试-怪癖 Q06、Q12"
 
 [[rule]]
@@ -153,8 +194,8 @@ src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q06、Q39；修
 [[rule]]
 prop = ["margin-top", "margin-bottom"]
 value = ["neg"]
-xochitl = "broken"
-note = "Move 不认负的上下外边距"
+xochitl = "fixed"
+note = "Move 不认负的上下外边距：页中间相邻两块照 Kindle 折叠后的间距写成两边非负的（叠在一起的写 0；KINDLE_RULES 28）；页首的由垫图按 Kindle 的位置算"
 src = "2026-10-13 测试-怪癖 Q08"
 
 [[rule]]
@@ -176,11 +217,20 @@ src = "2026-10-13 测试-怪癖 Q12、Q14、Q59、Q71；修后优化过的测试
 
 [[rule]]
 prop = ["margin-left", "margin-right"]
+on = ["inline", "img"]
+value = ["px"]
+xochitl = "accept"
+ireader = "fixed"
+note = "行内元素、图的左右外边距：掌阅认、px 是屏幕像素，照 Kindle 折成 em（KINDLE_RULES 28）；Move 一概不认（Q88、Q89、Q92–Q94），补只能往书里加字，不处理"
+src = "2026-10-13 测试-怪癖 Q88–Q94（两台）"
+
+[[rule]]
+prop = ["margin-left", "margin-right"]
 on = ["inline", "img", "cell", "list"]
 value = ["px", "pct"]
 xochitl = "broken"
 ireader = "broken"
-note = "px 两台是屏幕像素、Move 的 % 当 px；行内元素、图、表格、列表上的没处理"
+note = "px 两台是屏幕像素、Move 的 % 当 px；表格、列表上的没处理"
 src = "2026-10-13 测试-怪癖 Q10、Q11、Q48、Q54"
 
 [[rule]]
@@ -284,10 +334,17 @@ src = "2026-10-13 测试-行距；三台速查"
 # ---------------------------------------------------------------- 边框、宽度
 
 [[rule]]
+prop = ["border-top", "border-bottom", "border-left", "border-right"]
+on = ["cell"]
+xochitl = "fixed"
+note = "Move 只画表格、单元格行内 style 写的边框（外链、类规则里的不认）：单元格看得见的边框照写进行内、表格加 cellspacing=0（KINDLE_RULES 27）"
+src = "2026-10-13 测试-竖线 1–10"
+
+[[rule]]
 prop = ["border-top", "border-bottom"]
-on = ["cell", "list", "img", "inline"]
+on = ["list", "img", "inline"]
 xochitl = "broken"
-note = "Move 不画边框；表格、列表、图、行内元素上的没处理"
+note = "Move 不画边框；列表、图、行内元素上的没处理"
 src = "2026-10-13 测试-怪癖 Q07、Q40"
 
 [[rule]]
@@ -298,8 +355,15 @@ src = "2026-10-13 测试-怪癖 Q07、Q40、Q69、Q70；修后优化过的测试
 
 [[rule]]
 prop = ["border-left", "border-right"]
+on = ["p", "block", "heading"]
+xochitl = "fixed"
+note = "Move 普通块的边框不画、表格单元格行内的画：左右有框的块包进单格表格、框写在单元格行内（KINDLE_RULES 27，用户选）；定了宽度、居中、有背景图的块不包（只有上下横线图）"
+src = "2026-10-13 测试-竖线 1–10；《雪国》《风起陇西》《恶女的告白》《嘯風山莊》真机"
+
+[[rule]]
+prop = ["border-left", "border-right"]
 xochitl = "broken"
-note = "Move 不画边框；左右竖线做不了"
+note = "Move 不画边框；列表、图、行内元素上的左右竖线没处理"
 src = "2026-10-13 测试-怪癖 Q07、Q40"
 
 [[rule]]
@@ -320,8 +384,16 @@ src = "2026-10-12 测试-插图"
 [[rule]]
 prop = ["width"]
 on = ["p", "block", "heading"]
-xochitl = "broken"
-note = "Move 不认块的宽度"
+value = ["keyword"]
+xochitl = "same"
+note = "auto 这类关键字：本来就是满宽"
+src = "2026-10-13 测试-怪癖 Q30"
+
+[[rule]]
+prop = ["width"]
+on = ["p", "block", "heading"]
+xochitl = "fixed"
+note = "Move 不认块的宽度、认左右外边距：照 Kindle 折成左右外边距（居中的两边各一半，KINDLE_RULES 28）"
 src = "2026-10-13 测试-怪癖 Q30"
 
 # ---------------------------------------------------------------- 显示、分页、颜色、背景、字体

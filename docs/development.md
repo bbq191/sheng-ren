@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-13：612 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-13：614 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -12,6 +12,7 @@ tools/regress/run.sh <epub-optimize> 目录 [--device=…]   # 真书回归（�
 tools/regress/compare.py 旧目录 新目录                    # 比较两次回归
 tools/quirks/probe.py move                               # 怪癖测试书：生成、导入 Move、拉回排出的 PDF 逐行量（make 只生成、measure 量现成的 PDF）；结论写进 crates/bookconv/data/css-quirks.toml
 tools/quirks/probe.py ireader                            # 同上，掌阅：adb 推进 documents/测试/、点开、逐页截屏（标记是条码图）逐行量
+#   两个都可加 --only=88-99（只跑这几个探针）、--optimize=target/release/epub-optimize（先按那台的模式优化，看修过以后的样子）
 tools/regress/tocchk.py 旧目录 新目录                     # 核对 spine 文件数（不拆文件）和目录（层级、标签、锚点都在）
 shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.sh tools/regress/run.sh
 
@@ -93,7 +94,7 @@ done
 |---|---|---|---|
 | 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 56 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 54 | 漫画 |
-| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 26 | 只有开了 `kindle_rules` 的模式的文字书 |
+| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 28 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签、作者国籍、译者、出版社、日期、ISBN，书名换成网站书名 | `bookconv::opfmeta::VERSION` | 6 | 只有补过东西的 |
 | EPUB → KFX | `kfx::write::WRITER_VERSION` | 21 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
