@@ -371,17 +371,7 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     use crate::cascade::{Computed, Len, Rules, Sheet};
     use scraper::{ElementRef, Html, Node};
     use std::rc::Rc;
-    let css: HashMap<&str, std::sync::Arc<Rules>> = entries
-        .iter()
-        .filter(|e| is_css_name(&e.name))
-        .map(|e| {
-            let text = match std::str::from_utf8(&e.data) {
-                Ok(t) => Cow::Borrowed(t),
-                Err(_) => Cow::Owned(crate::util::latin1_decode(&e.data)),
-            };
-            (e.name.as_str(), Rules::parse(&text, &e.name, media))
-        })
-        .collect();
+    let css: HashMap<&str, std::sync::Arc<Rules>> = crate::kindle_model::book_css(entries, media);
     let negative = |l: &Option<Len>| match l {
         Some(Len::Em(v) | Len::Percent(v) | Len::Pt(v)) => *v < -1e-9,
         None => false,
@@ -463,7 +453,7 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     }
     BookFacts {
         base_font_size: crate::cascade::body_font_size(&sizes),
-        body_font: fonts.iter().max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0))).and_then(|(f, _)| f.clone()),
+        body_font: crate::kindle_model::body_font(&fonts),
         fonts,
         body_classes: on_body.difference(&elsewhere).cloned().collect(),
         neg: [chars[0].0 > chars[0].1, chars[1].0 > chars[1].1],

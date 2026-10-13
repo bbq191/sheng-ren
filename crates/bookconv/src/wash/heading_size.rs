@@ -11,9 +11,8 @@
 //! 阅读器的正文字号），挑比例最接近的关键字，和 Move 上本来的（写了认的关键字照写的，没写照标签的）不同时，在行内 `style` 末尾接
 //! `font-size:关键字`（行内的压过类规则，Move 认）。
 use super::*;
-use crate::cascade::{Computed, MediaEnv, Sheet};
-use scraper::{ElementRef, Html, Node};
-use std::rc::Rc;
+use crate::cascade::MediaEnv;
+use crate::kindle_model::{self as km, Chapter};
 
 /// 标题认的关键字和量出来的大小（正文 1em＝1）。
 const KEYWORDS: &[(&str, f64)] = &[("small", 0.784), ("medium", 1.0), ("large", 1.216), ("x-large", 1.514), ("xx-large", 2.018)];
@@ -42,7 +41,7 @@ fn nearest(want: f64) -> (&'static str, f64) {
 }
 
 pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>) {
-    let css = super::top_spacer::parse_css(entries, media);
+    let css = km::book_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let plans: Vec<Vec<(usize, &'static str)>> = crate::util::par_map(&chapters, |&i| plan(&entries[i], media, &css));
     drop(css);
@@ -72,20 +71,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
 /// 一章里要改的标题：(`<body>` 里第几个开始标签, 关键字)。元素数和标签扫描对不上的整章不管。
 fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>) -> Vec<(usize, &'static str)> {
     let Ok(text) = std::str::from_utf8(&e.data) else { return Vec::new() };
-    let Some((bs, be)) = html::body_range(text) else { return Vec::new() };
-    let tag_count = html::tags_in(text, bs, be).filter(|t| t.is_start()).count();
-    let html = Html::parse_document(text);
-    let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
-    let root = html.root_element();
-    let Some(body) = root.children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body") else { return Vec::new() };
-    let derive = |el: &ElementRef, parent: &Computed| {
-        let mut d = sheet.cascade(el, &e.name);
-        crate::cascade::presentational_hints(el, &mut d);
-        let kw = d.get("font-size").and_then(|v| keyword_size(v));
-        (Computed::derive(parent, &d, el.value().name()), kw)
-    };
-    let rc = Rc::new(derive(&root, &Computed::root()).0);
-    let bc = Rc::new(derive(&body, &rc).0);
+    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return Vec::new() };
     // 标题：(第几个开始标签, Move 上本来的大小, 字号 → 字数)
     struct Heading {
         n: usize,
@@ -93,47 +79,31 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         sizes: HashMap<i64, usize>,
     }
     let mut heads: Vec<Heading> = Vec::new();
-    let mut count = 0usize;
-    // (节点, 父元素的计算值, 所在标题在 heads 里的下标, 在不在隐藏的元素里)
-    type Frame<'a> = (ego_tree::NodeRef<'a, Node>, Rc<Computed>, Option<usize>, bool);
-    let mut stack: Vec<Frame> = body.children().rev().map(|c| (c, bc.clone(), None, false)).collect();
-    while let Some((n, parent, head, hidden)) = stack.pop() {
-        match n.value() {
-            Node::Text(t) => {
-                let k = t.chars().filter(|c| !c.is_whitespace()).count();
-                if let (Some(h), false) = (head, hidden || k == 0) {
-                    *heads[h].sizes.entry((parent.font_size * 1000.0).round() as i64).or_default() += k;
-                }
+    // 每个元素所在的标题（在 heads 里的下标）
+    let mut head_of: Vec<Option<usize>> = Vec::with_capacity(ch.els.len());
+    for (i, el) in ch.els.iter().enumerate() {
+        // 标题里再套标题（不合法）按外面的算
+        let head = match (el.parent.and_then(|p| head_of[p]), tag_size(ch.el(i).value().name())) {
+            (None, Some(def)) => {
+                let kw = el.decls.get("font-size").and_then(|v| keyword_size(v));
+                heads.push(Heading { n: i, on_move: kw.unwrap_or(def), sizes: HashMap::new() });
+                Some(heads.len() - 1)
             }
-            Node::Element(v) => {
-                let Some(el) = ElementRef::wrap(n) else { continue };
-                let me = count;
-                count += 1;
-                let (c, kw) = derive(&el, &parent);
-                let hidden = hidden || c.display.as_deref() == Some("none");
-                // 标题里再套标题（不合法）按外面的算
-                let head = match (head, tag_size(v.name())) {
-                    (None, Some(def)) => {
-                        heads.push(Heading { n: me, on_move: kw.unwrap_or(def), sizes: HashMap::new() });
-                        Some(heads.len() - 1)
-                    }
-                    (h, _) => h,
-                };
-                let c = Rc::new(c);
-                for ch in n.children().rev() {
-                    stack.push((ch, c.clone(), head, hidden));
-                }
+            (h, _) => h,
+        };
+        head_of.push(head);
+        // 标题里的字按所在元素的计算字号计
+        if let (Some(h), false) = (head, el.hidden) {
+            let k = ch.own_chars(i);
+            if k > 0 {
+                *heads[h].sizes.entry(km::key(el.comp.font_size)).or_default() += k;
             }
-            _ => {}
         }
-    }
-    if count != tag_count {
-        return Vec::new();
     }
     heads
         .into_iter()
         .filter_map(|h| {
-            let want = crate::cascade::weighted_mode(&h.sizes)?;
+            let want = km::weighted_mode(&h.sizes)?;
             let (kw, size) = nearest(want);
             ((size - h.on_move).abs() > 1e-6).then_some((h.n, kw))
         })

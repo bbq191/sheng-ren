@@ -9,21 +9,20 @@
 //! 上外边距写成 0（类 `eink-pb`，规则在 `eink-pb.css`，选择器 `html body 标签.eink-pb` 压过书里的；行内 `style` 里另接一份，
 //! 掌阅认行内的）。只看上外边距至少页高 1/4 的块（往下推版面用的），估算误差顾不到的小边距不动。
 use super::*;
-use crate::cascade::{Computed, Len, MediaEnv, Rules, Sheet};
-use scraper::{ElementRef, Html, Node};
+use crate::cascade::{Computed, Len, MediaEnv, Rules};
+use crate::kindle_model::{self as km, Chapter};
+use scraper::ElementRef;
 use std::rc::Rc;
 
 const CSS_NAME: &str = "eink-pb.css";
 const CLASS: &str = "eink-pb";
-/// 写出器把百分比折成多少 em 的页宽（同 `kfx::write` 的 `PAGE_WIDTH_EM`）。
-const PAGE_WIDTH_EM: f64 = 32.0;
 /// 上外边距至少占 Kindle 内容区高的多少才看。
 const MIN_SHARE: f64 = 0.25;
 /// 估出来的高超过内容区高的这么多就算放不下：估算没算图片行框、行距的零头（《飘》二维码页估 1496px，Kindle 上实际放不下 1546）。
 const FIT_SHARE: f64 = 0.9;
 
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, known: Option<&HashMap<String, (u32, u32)>>, k: KindleImageRef) {
-    let css = super::top_spacer::parse_css(entries, media);
+    let css = km::book_css(entries, media);
     let dims = super::image_dims_of(entries, rep, known);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let marks: Vec<Vec<usize>> = crate::util::par_map(&chapters, |&i| breaks_in(&entries[i], media, &css, &dims, k));
@@ -76,41 +75,12 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
 /// 一章里要在前面分页的元素：`<body>` 里第几个开始标签（和 [`html::tags_in`] 数的一致；对不上的章不动）。
 fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<Rules>>, dims: &HashMap<&str, (u32, u32)>, k: KindleImageRef) -> Vec<usize> {
     let Ok(text) = std::str::from_utf8(&e.data) else { return Vec::new() };
-    let Some((bs, be)) = html::body_range(text) else { return Vec::new() };
-    let tag_count = html::tags_in(text, bs, be).filter(|t| t.is_start()).count();
-    let html = Html::parse_document(text);
-    let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
-    let comp = |el: &ElementRef, parent: &Computed| {
-        let mut d = sheet.cascade(el, &e.name);
-        crate::cascade::presentational_hints(el, &mut d);
-        Computed::derive(parent, &d, el.value().name())
-    };
-    let root = html.root_element();
-    let Some(body) = root.children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body") else { return Vec::new() };
-    let rc = Rc::new(comp(&root, &Computed::root()));
-    let bc = Rc::new(comp(&body, &rc));
-    // body 里的元素按文档序：(元素, 计算值)；数目要和标签扫描一致才知道改哪个标签
-    let mut els: Vec<(ElementRef, Rc<Computed>)> = Vec::new();
-    let mut stack: Vec<(ego_tree::NodeRef<Node>, Rc<Computed>)> = body.children().rev().map(|c| (c, bc.clone())).collect();
-    while let Some((n, parent)) = stack.pop() {
-        let Some(el) = ElementRef::wrap(n) else { continue };
-        let c = Rc::new(comp(&el, &parent));
-        els.push((el, c.clone()));
-        for ch in n.children().rev() {
-            stack.push((ch, c.clone()));
-        }
-    }
-    if els.len() != tag_count {
-        return Vec::new();
-    }
+    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return Vec::new() };
+    // body 里的元素按文档序：(元素, 计算值)；数目和标签扫描一致才知道改哪个标签
+    let els: Vec<(ElementRef, Rc<Computed>)> = (0..ch.els.len()).map(|i| (ch.el(i), ch.els[i].comp.clone())).collect();
     let rem = k.v_rem_px;
-    let line = rem * 1.2;
-    let px = |l: &Option<Len>, fs: f64| match l {
-        Some(Len::Em(n)) => n * fs * rem,
-        Some(Len::Percent(n)) => n / 100.0 * PAGE_WIDTH_EM * rem,
-        Some(Len::Pt(n)) => n / crate::cascade::PT_PER_EM * rem,
-        None => 0.0,
-    };
+    let line = rem * km::LH_EM;
+    let px = |l: &Option<Len>, fs: f64| km::vertical_rem(*l, fs) * rem;
     // 图片在 Kindle 上的高：写了百分比宽的按内容区宽，em 的按字号，没写的按原图像素（宽过内容区的缩进来）
     let img_h = |el: &ElementRef, c: &Computed| -> f64 {
         let Some(src) = el.value().attr("src").or_else(|| el.value().attr("xlink:href")) else { return 0.0 };
@@ -138,8 +108,7 @@ fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync:
         let (el, c) = &els[idx];
         let mut h = px(&c.padding[0], c.font_size) + px(&c.padding[2], c.font_size);
         let imgs: f64 = el.descendants().filter_map(ElementRef::wrap).filter(|d| d.value().name() == "img" && !d.value().classes().any(|c| c == "eink-sp")).map(|d| {
-            let dc = els.iter().find(|(x, _)| x.id() == d.id()).map(|(_, c)| c.clone());
-            dc.map_or(0.0, |dc| img_h(&d, &dc))
+            ch.index_of(d.id()).map_or(0.0, |i| img_h(&d, &els[i].1))
         }).sum();
         h += imgs + leaf_text(el, c);
         h
@@ -166,7 +135,7 @@ fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync:
         if !is_blockish(el, c) {
             continue;
         }
-        let has_block_child = el.children().filter_map(ElementRef::wrap).any(|ch| els.iter().find(|(x, _)| x.id() == ch.id()).is_some_and(|(x, cc)| is_blockish(x, cc)));
+        let has_block_child = el.children().filter_map(ElementRef::wrap).any(|c| ch.index_of(c.id()).is_some_and(|j| is_blockish(&els[j].0, &els[j].1)));
         let m = px(&c.margin[0], c.font_size);
         if m >= MIN_SHARE * k.content_h {
             let h = height_of(i);

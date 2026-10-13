@@ -6,7 +6,7 @@
 //! 在 `<body>` 一开头垫一张透明的空白图（不加任何字）：
 //!
 //! - **Kindle 上的距离**照 KFX 写出器算：从 `<body>` 往里，第一个有内容（字、图）的元素和它外面套的块，上外边距相邻的合并取大、
-//!   上内边距照加；`%` 按 32em 页宽（写出器 `PAGE_WIDTH_EM`）、`pt` 按 12pt 一 em。写出器把竖直距离写成行高的倍数，Kindle 按行距
+//!   上内边距照加；`%` 按 32em 页宽（`kindle_model::PAGE_WIDTH_EM`）、`pt` 按 12pt 一 em。写出器把竖直距离写成行高的倍数，Kindle 按行距
 //!   换成像素，所以一 rem 是 Kindle 正文一行的像素 / 1.2（profile `line_px`，63 → 52.5；2026-10-12 截图「第一卷」上外边距落在 779px）；
 //! - 按两台内容区的高折到 Move（同样占页高的比例），减去 xochitl 在图后面自己加的一段空（标题约 91px × 字号 em，
 //!   别的约 46px；测试书量的），就是垫图的高；不到内容区高 5% 的不垫（那段空是约数）；
@@ -19,8 +19,9 @@
 //!   别的块认；行距先由 `line_height.rs` 照 Kindle 归一过），字照样挪 Δ、后面的内容挪 L × Δ（测试书「测试-行内垫图5」：L 为 0.74、
 //!   1.618 都是），取 Δ = 2 × 要挪的 / (1 + L)，字和后面的内容差得一样多。
 use super::*;
-use crate::cascade::{Computed, Len, MediaEnv, Rules, Sheet};
-use scraper::{ElementRef, Html, Node};
+use crate::cascade::{Computed, Len, MediaEnv, Rules};
+use crate::kindle_model::{self as km, Chapter};
+use scraper::Node;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -29,8 +30,6 @@ const IMG_NAME: &str = "eink-spacer.png";
 /// 垫图的原始宽高：高是宽的 2 倍，宽 100% 时高是内容区宽的 2 倍，够垫满一页。
 const IMG_W: u32 = 100;
 const IMG_H: u32 = 200;
-/// 写出器把百分比折成多少 em 的页宽（同 `kfx::write` 的 `PAGE_WIDTH_EM`）。
-const PAGE_WIDTH_EM: f64 = 32.0;
 /// xochitl 在垫图后面自己加的空（屏幕像素）：标题每 em 字号多少、别的块多少（2026-10-12 测试书：h1 字号 1/1.35/2em 时
 /// 91/122/181，段落、div 46，和字号无关）。
 const GAP_HEADING_PER_EM: f64 = 91.0;
@@ -59,7 +58,7 @@ pub struct SpacerGeometry {
 }
 
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, g: SpacerGeometry) {
-    let css = parse_css(entries, media);
+    let css = km::book_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let pads: Vec<Option<Pad>> = crate::util::par_map(&chapters, |&i| page_box(&entries[i], media, &css, g).and_then(|b| choose(&b, g)));
     if pads.iter().all(Option::is_none) {
@@ -173,39 +172,16 @@ pub(crate) struct PageBox {
 
 /// 全书各章的 [`PageBox`]（条目下标 → 排法；拿不准的章没有）。
 pub(crate) fn page_boxes(entries: &[Entry], media: Option<&MediaEnv>, g: SpacerGeometry) -> HashMap<usize, PageBox> {
-    let css = parse_css(entries, media);
+    let css = km::book_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     chapters.iter().zip(crate::util::par_map(&chapters, |&i| page_box(&entries[i], media, &css, g))).filter_map(|(&i, b)| b.map(|b| (i, b))).collect()
 }
 
-pub(super) fn parse_css<'e>(entries: &'e [Entry], media: Option<&MediaEnv>) -> HashMap<&'e str, std::sync::Arc<Rules>> {
-    entries
-        .iter()
-        .filter(|e| is_css_name(&e.name))
-        .map(|e| {
-            let text = match std::str::from_utf8(&e.data) {
-                Ok(t) => Cow::Borrowed(t),
-                Err(_) => Cow::Owned(crate::util::latin1_decode(&e.data)),
-            };
-            (e.name.as_str(), Rules::parse(&text, &e.name, media))
-        })
-        .collect()
-}
-
 fn page_box(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<Rules>>, g: SpacerGeometry) -> Option<PageBox> {
     let text = std::str::from_utf8(&e.data).ok()?;
-    let html = Html::parse_document(text);
-    let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
-    let comp = |el: &ElementRef, parent: &Computed| {
-        let mut d = sheet.cascade(el, &e.name);
-        crate::cascade::presentational_hints(el, &mut d);
-        Computed::derive(parent, &d, el.value().name())
-    };
-    let root = html.root_element();
-    let body = root.children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body")?;
-    let mut parent = Rc::new(comp(&root, &Computed::root()));
-    parent = Rc::new(comp(&body, &parent));
-    let body_comp = parent.clone();
+    let ch = Chapter::parse(&e.name, text, media, css)?;
+    let body = ch.body();
+    let body_comp = ch.body_comp.clone();
     // 从 body 往里一路走第一个有内容的孩子，记下沿途的块
     let has_content = |n: ego_tree::NodeRef<Node>| {
         n.descendants().any(|d| match d.value() {
@@ -223,26 +199,20 @@ fn page_box(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::
         if node.children().take_while(|c| c.id() != next.id()).any(|c| matches!(c.value(), Node::Element(_))) {
             return None;
         }
-        let Some(el) = ElementRef::wrap(next) else { break };
-        let c = Rc::new(comp(&el, &parent));
-        if !crate::cascade::is_block(&el, &c) {
+        let Some(i) = ch.index_of(next.id()) else { break };
+        if !ch.els[i].is_block {
             break;
         }
+        let c = ch.els[i].comp.clone();
         single &= node.children().filter(|c| has_content(*c)).count() == 1;
-        chain.push((el.value().name().to_ascii_lowercase(), c.clone()));
-        parent = c;
+        chain.push((ch.el(i).value().name().to_ascii_lowercase(), c));
         node = next;
         last_node = next;
     }
     let (tag, last) = chain.last()?;
     // Kindle 的竖直距离：写出器折成行高的倍数，Kindle 按行距换成像素（一 rem ≈ 正文一行 / 1.2）；`%` 按 32em 页宽
     let rem = g.kindle.v_rem_px;
-    let px = |l: &Option<Len>, fs: f64| match l {
-        Some(Len::Em(n)) => n * fs * rem,
-        Some(Len::Percent(n)) => n / 100.0 * PAGE_WIDTH_EM * rem,
-        Some(Len::Pt(n)) => n / crate::cascade::PT_PER_EM * rem,
-        None => 0.0,
-    };
+    let px = |l: &Option<Len>, fs: f64| km::vertical_rem(*l, fs) * rem;
     // 上外边距相邻的合并（中间隔着上内边距、上边框的不合并），上内边距照加
     let (mut offset, mut pending) = (0.0f64, 0.0f64);
     for (_, c) in &chain {
@@ -258,7 +228,7 @@ fn page_box(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::
     let body_bottom = (single && !last_node.descendants().any(|d| matches!(d.value(), Node::Element(v) if v.name() == "img" || v.name() == "svg"))).then(|| {
         let chars: usize = last_node.descendants().filter_map(|d| if let Node::Text(t) = d.value() { Some(t.chars().filter(|c| !c.is_whitespace()).count()) } else { None }).sum();
         let lines = ((chars as f64 * last.font_size * g.kindle.em_px) / g.kindle.content_px).ceil().max(1.0);
-        let mut bottom = offset + lines * last.font_size * rem * 1.2;
+        let mut bottom = offset + lines * last.font_size * rem * km::LH_EM;
         let mut pending = 0.0f64;
         for (_, c) in chain.iter().rev() {
             let pad = px(&c.padding[2], c.font_size);
@@ -276,12 +246,11 @@ fn page_box(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::
         Node::Element(v) if matches!(v.name(), "img" | "svg" | "br") => Some(false),
         _ => None,
     }) == Some(true);
-    // 解析出的元素和标签扫描数得一样（没有补出来的 `tbody` 之类）才知道放在哪个标签后面
-    let same_count = html::body_range(text).is_some_and(|(bs, be)| html::tags_in(text, bs, be).filter(|t| t.is_start()).count() == body.descendants().skip(1).filter(|d| d.value().is_element()).count());
     // 块在这台上的行距（Move 上 `<p>` 不认行距，算 1；别的块认）：xochitl 把行距倍数也乘到撑高的那一行上
     let lh = if tag == "p" { 1.0 } else { last.line_height.unwrap_or(1.0) };
-    let strut_at = (starts_with_text && same_count).then(|| body.descendants().skip(1).filter(|d| d.value().is_element()).position(|d| d.id() == last_node.id())).flatten().map(|n| {
-        let kw = ElementRef::wrap(last_node).and_then(|el| sheet.cascade(&el, &e.name).get("font-size").and_then(|v| super::heading_size::keyword_size(v)));
+    // 解析出的元素和标签扫描数得一样（没有补出来的 `tbody` 之类）才知道放在哪个标签后面
+    let strut_at = (starts_with_text && ch.matches_tags).then(|| ch.index_of(last_node.id())).flatten().map(|n| {
+        let kw = ch.els[n].decls.get("font-size").and_then(|v| super::heading_size::keyword_size(v));
         (n, move_font_size(tag, kw, last), lh)
     });
     Some(PageBox { text_top: offset, heading_fs: heading, body_bottom, bg: body_comp.bg_image.clone(), bg_cover: body_comp.bg_cover, strut_at })
