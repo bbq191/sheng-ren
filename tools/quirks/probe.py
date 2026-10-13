@@ -96,10 +96,20 @@ PROBES = [
     ("62", "p 最后一条不带分号、后面空格再 }", "sheet2", ".t{color:#000;margin-left:2em }", P),
     ("63", "p 只有一条 text-indent:2em、紧挨着 }", "sheet2", ".t{text-indent:2em}", P),
     ("64", "p 只有一条 text-indent:2em、空格再 }", "sheet2", ".t{text-indent:2em }", P),
+    ("65", "h3 margin-bottom:2em（页中间）", "sheet", "margin-bottom:2em", '<h3{cls}>{text}</h3>'),
+    ("66", "p margin-bottom:2em、后面是 h3", "markup", "", '<p>{text}</p><h3>小标题</h3>|<p class="mb2">{text}</p><h3>小标题</h3>'),
+    ("67", "p margin-bottom:2em、后面 h3 margin-top:1em（对照 h3 没写）", "markup", "", '<p class="mb2">{text}</p><h3 class="mt0">小标题</h3>|<p class="mb2">{text}</p><h3 class="mt1">小标题</h3>'),
+    ("68", "p background-color:#888", "sheet", "background-color:#888888", P),
+    ("69", "段落后面一张 100% 宽的横线图（rule.png 1000×6）", "markup", "", '<p>{text}</p>|<p>{text}</p><img class="rule" src="rule.png" alt=""/>'),
+    ("70", "h3 里末尾一张 display:block 的横线图", "markup", "", '<h3>{text}</h3>|<h3>{text}<img class="ruleb" src="rule.png" alt=""/></h3>'),
+    ("71", "p margin-left:2em 套着 padding 写法的对照：padding-left 换成 margin-left", "sheet", "margin-left:2em;text-indent:-2em", P),
+    ("72", "p margin-bottom:2em（页中间）", "sheet", "margin-bottom:2em", P),
+    ("73", "div margin-top:2em（页中间）", "sheet", "margin-top:2em", '<div{cls}>{text}</div>'),
+    ("74", "h3 后面 p margin-top:2em（对照 p 没写）", "markup", "", '<h3>小标题</h3><p>{text}</p>|<h3>小标题</h3><p class="mt2">{text}</p>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）
-BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:0.01em;}", ".ml2{margin-left:2em;}", ".mt2{margin-top:2em;}"]
+BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:0.01em;}", ".ml2{margin-left:2em;}", ".mt2{margin-top:2em;}", ".mb2{margin-bottom:2em;}", ".mt1{margin-top:1em;}", "img.rule{width:100%;}", "img.ruleb{display:block;width:100%;}"]
 
 
 def page(code, cid, body, head_style=""):
@@ -149,7 +159,7 @@ def make(path, title="测试-怪癖"):
     opf = f'''<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bid" xml:lang="zh">
 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bid">{bid}</dc:identifier><dc:title>{title}</dc:title><dc:creator>测试</dc:creator><dc:language>zh</dc:language><meta property="dcterms:modified">2026-10-13T00:00:00Z</meta></metadata>
-<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="css" href="s.css" media-type="text/css"/>{manifest}</manifest>
+<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="css" href="s.css" media-type="text/css"/><item id="rule" href="rule.png" media-type="image/png"/>{manifest}</manifest>
 <spine>{spine}</spine></package>'''
     container = '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
     with zipfile.ZipFile(path, "w") as z:
@@ -160,6 +170,16 @@ def make(path, title="测试-怪癖"):
         z.writestr("OEBPS/s.css", css, compress_type=zipfile.ZIP_DEFLATED)
         for c, _, x in chs:
             z.writestr(f"OEBPS/{c}.xhtml", x, compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/rule.png", rule_png(), compress_type=zipfile.ZIP_STORED)
+
+
+def rule_png(w=1000, h=6):
+    """一条黑色横线（PNG，灰度）：试图片能不能当边框画。"""
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + b"\x00" * w for _ in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
 
 
 def lines_of(png):

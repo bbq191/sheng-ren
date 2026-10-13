@@ -40,6 +40,11 @@ trailing_br_line = true
 # 行内 style、<style>、规则最后一条不带分号又紧挨 } 的声明走另一套解析：em 按 23px（外链 37.8px），字号、首行缩进的 em、% 不认
 # （2026-10-13 怪癖测试书；《狼厅》每章 <style> 里的 text-indent:2em 没有首行缩进）：<style> 挪进外链、行内 em 搬进类规则、补分号
 inline_css_lengths = false
+# 内边距一概不认（背景色照画）、边框一概不画、h1–h6 的上下外边距不认（前后自带一段空，和相邻块的外边距折叠）（2026-10-13 怪癖测试书）：
+# 左右内边距并进外边距，上下内边距、标题前后的间距照 Kindle 写到相邻的块上，上下边框插横线图（用户定）
+padding = false
+borders = false
+heading_margins = false
 comic_reader_margins = 1
 
 # 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比

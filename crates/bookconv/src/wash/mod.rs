@@ -53,6 +53,7 @@ mod hidden;
 mod break_margin;
 mod blank_fold;
 mod block_style;
+mod box_fix;
 mod inline_css;
 pub use self::kindle_rules::VScale;
 
@@ -62,6 +63,7 @@ pub(crate) fn kindle_rules_scale_ua_for_test(vs: Option<VScale>) -> String {
     let css = crate::uastyle::ua_css(None);
     vs.map_or(css.clone(), |vs| kindle_rules::scale_vertical_css(&css, &vs))
 }
+pub use self::box_fix::BoxGeometry;
 pub use self::top_spacer::SpacerGeometry;
 mod layout;
 mod ncx_fix;
@@ -130,7 +132,10 @@ pub use self::encoding::transcode_entries;
 /// - 22（2026-10-13）：Move 上写了 em 的 `<style>` 挪进外链样式表、行内 `style` 里写 em 的长度搬进类规则、外链规则最后一条紧挨 `}` 的 em 声明补分号
 ///   （xochitl 的行内 style、`<style>`、不带分号又紧挨 `}` 的声明 em 按 23px、字号和首行缩进的 em 不认；`inline_css.rs`，profile
 ///   `inline_css_lengths`）。
-pub const KINDLE_RULES_VERSION: &str = "22";
+/// - 23（2026-10-13）：Move 上左右内边距并进外边距（悬挂缩进排对）、上下内边距和标题的上下外边距照 Kindle 写到相邻块认的一侧、
+///   上下边框插同色同粗的横线图（xochitl 不认内边距、不画边框、不认标题外边距；`box_fix.rs`，profile `padding`、`borders`、
+///   `heading_margins`，边框用户选横线图）。
+pub const KINDLE_RULES_VERSION: &str = "23";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -249,6 +254,8 @@ pub struct WashOpts {
     pub reader: ReaderModel,
     /// 按怪癖表体检哪台（profile id，[`crate::audit::covers`] 的才有）；`None` 不体检。只报告、不改书。
     pub audit: Option<String>,
+    /// 内边距、边框、标题外边距照 Kindle 改写要的这台尺寸（`box_fix.rs`；不认内边距、不画边框、不认标题外边距的阅读器才有）。
+    pub box_geometry: Option<BoxGeometry>,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -265,7 +272,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, reader: ReaderModel::default(), audit: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None }
     }
 }
 
@@ -532,6 +539,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         if let (Some(_), Some((_, k))) = (opts.v_scale, opts.image_sizing) {
             break_margin::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), k);
         }
+        // 内边距、边框、标题外边距：垫图、分页估算之后（它们按原来的 CSS 算 Kindle 上的样子），竖直换算之前（写的 em 跟着换算）
+        if let Some(g) = opts.box_geometry {
+            box_fix::apply(entries, rep, opts.media.as_ref(), &opts.reader, g);
+        }
         // 竖直间距照 Kindle 换算放在最后：上面几步都按原来的 CSS 算 Kindle 上的样子
         if let Some(vs) = opts.v_scale {
             rep.kindle_rule_edits += kindle_rules::scale_vertical_entries(entries, &vs);
@@ -619,19 +630,24 @@ fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option
 
 /// 新增（或更新）一份我们写的样式表，并往 OPF manifest 补一条 `<item>`（幂等）。
 fn add_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path: &str, content: &str, id: &str) {
-    if let Some(e) = entries.iter_mut().find(|e| e.name == css_path) {
-        e.data = content.as_bytes().to_vec();
+    add_entry(entries, opf_idx, css_path, content.as_bytes().to_vec(), id, "text/css");
+}
+
+/// 新增（或更新）一个我们写的文件（样式表、图），并往 OPF manifest 补一条 `<item>`（幂等）。
+fn add_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, path: &str, data: Vec<u8>, id: &str, media_type: &str) {
+    if let Some(e) = entries.iter_mut().find(|e| e.name == path) {
+        e.data = data;
     } else {
-        entries.push(Entry { name: css_path.to_string(), data: content.as_bytes().to_vec() });
+        entries.push(Entry { name: path.to_string(), data });
     }
     if let Some(oi) = opf_idx {
         let opf_dir = dir_of(&entries[oi].name).to_string();
         let text = String::from_utf8_lossy(&entries[oi].data);
-        if manifest_items(&text).iter().any(|it| it.path(&opf_dir) == css_path) {
+        if manifest_items(&text).iter().any(|it| it.path(&opf_dir) == path) {
             return;
         }
-        let href = crate::epubzip::href_to(&opf_dir, css_path, "");
-        if let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id, href: &href, media_type: "text/css", properties: "" }]) {
+        let href = crate::epubzip::href_to(&opf_dir, path, "");
+        if let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id, href: &href, media_type, properties: "" }]) {
             entries[oi].data = t.into_bytes();
         }
     }

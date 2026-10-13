@@ -214,6 +214,17 @@ pub struct Profile {
     /// `false` 时只修复、照 Send to Kindle 统一的文字书里 `<style>` 挪进外链样式表、行内写 em 的长度搬进类规则、外链规则末尾紧挨 `}` 的 em 声明补分号
     /// （`bookconv::wash::inline_css`）。
     pub inline_css_lengths: bool,
+    /// 阅读器认内边距（TOML 里不写是 `true`）。xochitl 不认（上下左右都不认，2026-10-13 怪癖测试书 Q06、Q12、Q39），但块的背景色照画
+    /// （Q68）：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，左右内边距并进左右外边距，上下内边距折进和相邻块之间的间距
+    /// （`bookconv::wash::box_fix`）；带背景色的块、表格、列表不动。
+    pub padding: bool,
+    /// 阅读器画边框（TOML 里不写是 `true`）。xochitl 一概不画（Q07、Q40），能画图（Q69、Q70）：写 `false` 时上、下边框在块里最前、最后
+    /// 插一张同色同粗的横线图（连着这一侧的内边距），左右边框、表格线做不了（`bookconv::wash::box_fix`，用户定）。
+    pub borders: bool,
+    /// 阅读器认 h1–h6 的上下外边距（TOML 里不写是 `true`）。xochitl 都不认（页中间的也不认，Q05、Q65、Q67），标题前后自带一段空、
+    /// 和相邻块的外边距折叠（前一块的下外边距、后一块的上外边距认，Q66、Q74）：写 `false` 时标题前后的间距照 Kindle 写到相邻的块上
+    /// （`bookconv::wash::box_fix`）。
+    pub heading_margins: bool,
     /// 带图注、按满宽显示会超出一页的图（竖长的人物图之类）给 `<img>` 写行内宽度百分比，图和图注排在同一页（TOML 里不写是
     /// `false`）。掌阅、Kindle 不认多看图集，图一张张排开撑满一页、图注掉到下一页；限高的写法掌阅都不认（`max-height`、
     /// `page-break-inside`），宽度百分比认（2026-10-06 掌阅真机 adb 截屏），KFX 写出器也只认宽度。见 `bookconv::capfit`。
@@ -295,6 +306,12 @@ struct ProfileFile {
     trailing_br_line: bool,
     #[serde(default = "yes")]
     inline_css_lengths: bool,
+    #[serde(default = "yes")]
+    padding: bool,
+    #[serde(default = "yes")]
+    borders: bool,
+    #[serde(default = "yes")]
+    heading_margins: bool,
     #[serde(default)]
     caption_fit: bool,
     #[serde(default = "yes")]
@@ -323,7 +340,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }

@@ -25,7 +25,7 @@ pub struct Finding {
     pub verdict: Verdict,
     /// 属性。
     pub prop: String,
-    /// 元素：`p`、`heading`、`block`、`inline`、`img`。
+    /// 元素：`p`、`heading`、`block`、`inline`、`img`、`cell`（表格单元格）、`list`（列表项）。
     pub on: &'static str,
     /// 值：`em`、`px`、`pt`、`pct`、`number`、`zero`、`neg`、`keyword`；边框不分（`-`）。
     pub value: &'static str,
@@ -120,13 +120,16 @@ fn element_kind(tag: &str, is_block: bool) -> &'static str {
         "p" => "p",
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "heading",
         "img" | "svg" | "image" => "img",
+        "td" | "th" => "cell",
+        "li" => "list",
         _ if is_block => "block",
         _ => "inline",
     }
 }
 
 /// 报告用的属性名；不起作用的不报（`None`）：行内元素上的 `text-indent`、`text-align`（只对块起作用），等于没写的
-/// `font-size:1em`/`100%`。边框的分项（`border-top-width`、`border-*-radius`……）合成 `border`。
+/// `font-size:1em`/`100%`。边框的分项按边合成 `border-top`/`border-right`/`border-bottom`/`border-left`（宽度、样式、颜色），
+/// 圆角合成 `border-radius`。
 fn reported_prop(prop: &str, on: &str, v: &str) -> Option<String> {
     if on == "inline" && matches!(prop, "text-indent" | "text-align") {
         return None;
@@ -134,7 +137,15 @@ fn reported_prop(prop: &str, on: &str, v: &str) -> Option<String> {
     if prop == "font-size" && matches!(v.trim().to_ascii_lowercase().as_str(), "1em" | "100%") {
         return None;
     }
-    Some(if prop.starts_with("border") { "border".to_string() } else { prop.to_string() })
+    if prop.ends_with("-radius") {
+        return Some("border-radius".to_string());
+    }
+    for side in ["top", "right", "bottom", "left"] {
+        if prop.starts_with(&format!("border-{side}")) {
+            return Some(format!("border-{side}"));
+        }
+    }
+    Some(prop.to_string())
 }
 
 /// 值归类：看第一个词。
@@ -179,13 +190,21 @@ pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<F
                 continue;
             }
             let on = element_kind(ch.el(i).value().name(), el.is_block);
+            // 看得见的边框（有宽度、样式不是 none/hidden、不是全透明）才算：`border:0`、`border-width:0` 不报
+            let visible = |side: usize| {
+                el.comp.border[side].as_ref().is_some_and(|b| b.width != crate::cascade::BorderWidth::Pt(0.0) && b.width != crate::cascade::BorderWidth::Em(0.0) && b.color.is_none_or(|c| c >> 24 != 0))
+            };
             // 同一个元素上同一种写法只计一次（边框的分项合成了一个）
             let mut keys: std::collections::BTreeSet<Key> = std::collections::BTreeSet::new();
             for (prop, v) in &el.decls {
                 let Some(name) = reported_prop(prop, on, v) else { continue };
+                let side = ["border-top", "border-right", "border-bottom", "border-left"].iter().position(|s| *s == name);
+                if side.is_some_and(|s| !visible(s)) || (name == "border-radius" && !(0..4).any(visible)) {
+                    continue;
+                }
                 let (origin, imp) = el.origin.get(prop).copied().unwrap_or((Origin::Sheet, false));
                 // 边框的分项有宽度、样式、颜色，不分值的种类
-                let kind = if name == "border" { "-" } else { value_kind(v) };
+                let kind = if name.starts_with("border") { "-" } else { value_kind(v) };
                 keys.insert((name, on, kind, origin, imp));
             }
             for k in keys {
@@ -271,7 +290,7 @@ mod tests {
                 assert!(["sheet", "style", "inline", "important"].contains(&v.as_str()), "写法 {v}");
             }
             for v in &r.on {
-                assert!(["p", "heading", "block", "inline", "img"].contains(&v.as_str()), "元素 {v}");
+                assert!(["p", "heading", "block", "inline", "img", "cell", "list"].contains(&v.as_str()), "元素 {v}");
             }
             assert!(!r.src.is_empty());
         }
@@ -291,8 +310,8 @@ mod tests {
         ]
     }
 
-    /// Move：左内边距、边框不对（没处理）；`<style>`、行内写 em 的已经处理（KINDLE_RULES 22）不报；外链的首行缩进 em 对；没验证过的另算；
-    /// 隐藏的不算。掌阅只有没验证过的。
+    /// Move：左右边框不对（没处理）；上下边框、左内边距、`<style>`、行内写 em 的已经处理（KINDLE_RULES 22、23）不报；外链的首行缩进 em
+    /// 对；没验证过的另算；隐藏的不算。掌阅只有没验证过的。
     #[test]
     fn move_flags_unhandled_and_skips_fixed() {
         let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/><style>p.a{text-indent:2em;padding-left:1em;}</style></head>
@@ -300,14 +319,14 @@ mod tests {
         let b = book(ch, "p.b{text-indent:2em;letter-spacing:0.1em;} .h{display:none;}");
         let f = audit(&b, None, "xochitl");
         let lines: Vec<String> = f.iter().map(Finding::line).collect();
-        assert_eq!(lines[0], "✗ <style> 里 padding-left（em，p）×2：Move 左右内边距不认（悬挂缩进 text-indent 负数 + padding-left 的首行伸到页边距里）", "{lines:?}");
-        assert_eq!(lines[1], "✗ 行内 style border（block）×1：Move 不画边框", "{lines:?}");
+        assert_eq!(lines[0], "✗ 行内 style border-left（block）×1：Move 不画边框；左右竖线做不了", "{lines:?}");
+        assert_eq!(lines[1], "✗ 行内 style border-right（block）×1：Move 不画边框；左右竖线做不了", "{lines:?}");
         assert_eq!(lines[2], "? letter-spacing（em，p）×1", "{lines:?}");
         assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(audit(&b, None, "ireader").iter().all(|f| f.verdict == Verdict::Unknown));
         assert!(audit(&b, None, "kindle").is_empty());
         let s = summary(&f, "Move");
         assert_eq!(s.len(), 2);
-        assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：<style> padding-left（em，p）×2；行内 border（block）×1"), "{s:?}");
+        assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：行内 border-left（block）×1；行内 border-right（block）×1"), "{s:?}");
     }
 }

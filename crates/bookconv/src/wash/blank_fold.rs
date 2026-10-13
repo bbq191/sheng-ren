@@ -164,30 +164,9 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     let has_block_child = |el: &ElementRef| el.children().filter_map(ElementRef::wrap).any(|ch| is_blockish(&ch));
     // 竖直长度换成根 em
     let rem = |l: &Option<Len>, fs: f64| km::vertical_rem(*l, fs);
-    let collapse = |a: f64, b: f64| if a >= 0.0 && b >= 0.0 { a.max(b) } else if a < 0.0 && b < 0.0 { a.min(b) } else { a + b };
+    let collapse = km::collapse;
     // 一块（连同第一个、最后一个子块，中间没有内边距、边框隔着的）在 Kindle 上的上 / 下外边距
-    let edge = |el: &ElementRef, top: bool| -> Option<f64> {
-        let (m, p) = if top { (0, 0) } else { (2, 2) };
-        let mut cur = *el;
-        let mut acc = 0.0f64;
-        loop {
-            let c = c_of(&cur)?;
-            let v = rem(&c.margin[m], c.font_size);
-            if v < 0.0 {
-                return None;
-            }
-            acc = collapse(acc, v);
-            if rem(&c.padding[p], c.font_size) > 0.0 || c.border[p].is_some() {
-                return Some(acc);
-            }
-            let kids: Vec<ElementRef> = cur.children().filter_map(ElementRef::wrap).filter(|k| is_blockish(k)).collect();
-            let next = if top { kids.first() } else { kids.last() };
-            match next {
-                Some(k) => cur = *k,
-                None => return Some(acc),
-            }
-        }
-    };
+    let edge = |el: &ElementRef, top: bool| -> Option<f64> { ch.margin_edge(n_of(el)?, top) };
     let blank_el = |el: &ElementRef| -> bool {
         if el.value().name() == "br" {
             return true;

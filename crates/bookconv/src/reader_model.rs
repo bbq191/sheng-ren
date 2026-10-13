@@ -19,11 +19,17 @@ pub struct ReaderModel {
     pub page_top: Option<profile::PageTop>,
     /// 行内 `style`、`<style>`、规则最后一条不带分号又紧挨 `}` 的声明里 em 照 CSS 排（`false`：要挪进外链样式表）。
     pub inline_css_lengths: bool,
+    /// 认内边距（`false`：并进外边距、折进相邻块的间距）。
+    pub padding: bool,
+    /// 画边框（`false`：上下边框插横线图）。
+    pub borders: bool,
+    /// 认标题的上下外边距（`false`：写到相邻的块上）。
+    pub heading_margins: bool,
 }
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true }
     }
 }
 
@@ -36,6 +42,9 @@ impl ReaderModel {
             heading_sizes: p.heading_sizes.as_ref().filter(|_| p.heading_font_keywords).map(HeadingSizes::from_profile),
             page_top: p.page_top.filter(|_| !p.margin_top),
             inline_css_lengths: p.inline_css_lengths,
+            padding: p.padding,
+            borders: p.borders,
+            heading_margins: p.heading_margins,
         }
     }
 
@@ -56,6 +65,12 @@ impl ReaderModel {
         }
         if !self.inline_css_lengths {
             s.push_str("i0");
+        }
+        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm')] {
+            if !on {
+                s.push(c);
+                s.push('0');
+            }
         }
         s
     }
@@ -139,7 +154,7 @@ mod tests {
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),
-            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0"
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0"
         );
     }
 }
