@@ -164,6 +164,16 @@ impl Library {
                 let k = profile::get("kindle");
                 seg.push_str(&format!("i{:?}{}x{}", device.image_sizing, k.map_or(0, |k| k.readable(profile::Format::Kfx).width), k.and_then(|k| k.font_px).unwrap_or(0)));
             }
+            // 阅读器和 CSS 不一样的地方（设备模型 `bookconv::reader_model`：认不认 display:none、块末尾 <br/>、<p> 的行距、标题字号
+            // 只认的关键字和大小、页首垫图的尺寸）和竖直间距换算用的 em_px：改了 profile 里这些（重量了 Move 的标题字号之类）书要重建，
+            // 带个 `m` 加它们的哈希（2026-10-13 用户定进指纹；以前只能手动加 KINDLE_RULES_VERSION）
+            if device.text_repair_only && device.kindle_rules {
+                let sig = bookconv::reader_model::ReaderModel::for_profile(device).signature();
+                if !sig.is_empty() || device.em_px.is_some() {
+                    let em = device.em_px.map_or_else(String::new, |e| format!("e{e}"));
+                    seg.push_str(&format!("m{:016x}", bookconv::util::fnv64(format!("{sig}{em}").as_bytes())));
+                }
+            }
             // 统计正文字号时 `@media` 的 `device-width` 等按屏幕求（`MediaEnv::for_format`，第 6 版起）：自定义模式改了屏幕也要重建
             if device.text_repair_only && device.kindle_rules {
                 seg.push_str(&format!("@{}x{}", device.screen.width, device.screen.height));

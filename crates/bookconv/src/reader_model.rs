@@ -36,6 +36,24 @@ impl ReaderModel {
         }
     }
 
+    /// 进指纹用的写法（字段和量出来的数都在里面，同样的模型同样的字）；完全照 CSS 排的（[`ReaderModel::default`]）是空串。
+    pub fn signature(&self) -> String {
+        if *self == ReaderModel::default() {
+            return String::new();
+        }
+        let b = |v: bool| u8::from(v);
+        let mut s = format!("d{}b{}l{}", b(self.display_none), b(self.trailing_br_line), b(self.line_height_except_p));
+        if let Some(h) = &self.heading_sizes {
+            let kws: Vec<String> = h.keywords.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            let tags: Vec<String> = h.tags.iter().map(f64::to_string).collect();
+            s.push_str(&format!("h{};{}", kws.join(","), tags.join(",")));
+        }
+        if let Some(t) = &self.page_top {
+            s.push_str(&format!("t{},{},{}", t.gap_heading_per_em, t.gap_other, t.strut_base_per_em));
+        }
+        s
+    }
+
     /// 块在这台上的行距（阅读器缺省行距的倍数）：`lh` 是层叠出来的行高（元素字号的倍数，`None`＝没写或 `normal`，算 1）。
     /// [`ReaderModel::line_height_except_p`] 的阅读器上 `<p>` 不认（总是 1）。
     pub fn line_height(&self, tag: &str, lh: Option<f64>) -> f64 {
@@ -112,5 +130,10 @@ mod tests {
         assert_eq!(m.font_size("div", None, 2.0), 2.0);
         assert_eq!((m.line_height("p", Some(2.0)), m.line_height("h1", Some(2.0)), m.line_height("div", None)), (1.0, 2.0, 1.0));
         assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { display_none: true, ..ReaderModel::default() });
+        assert_eq!(ReaderModel::default().signature(), "");
+        assert_eq!(
+            m.signature(),
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44"
+        );
     }
 }
