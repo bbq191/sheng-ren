@@ -34,13 +34,14 @@ struct Plan {
     trailing: Vec<usize>,
 }
 
-/// `remove`：阅读器不认 `display:none`（profile `display_none = false`），空段元素去掉。
-pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, remove: bool) {
+/// `remove`：阅读器不认 `display:none`（profile `display_none = false`），空段元素去掉；`trailing`：阅读器把块末尾的 `<br/>`
+/// 多排一行（profile `trailing_br_line`），去掉。
+pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, remove: bool, trailing: bool) {
     let css = km::book_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let plans: Vec<Plan> = crate::util::par_map(&chapters, |&i| plan(&entries[i], media, &css));
     drop(css);
-    if plans.iter().all(|p| p.blanks.is_empty() && (!remove || p.trailing.is_empty())) {
+    if plans.iter().all(|p| p.blanks.is_empty() && (!trailing || p.trailing.is_empty())) {
         return;
     }
     let opf_idx = find_opf(entries);
@@ -52,7 +53,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     let mut classes: Vec<(String, String)> = Vec::new();
     let mut blank_tags: std::collections::BTreeSet<String> = Default::default();
     for (&i, p) in chapters.iter().zip(&plans) {
-        if p.blanks.is_empty() && (!remove || p.trailing.is_empty()) {
+        if p.blanks.is_empty() && (!trailing || p.trailing.is_empty()) {
             continue;
         }
         let e = &mut entries[i];
@@ -80,7 +81,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             blank_tags.insert(t.name.to_ascii_lowercase());
             edits.push((t.start, t.end, tag));
         }
-        for &n in p.trailing.iter().filter(|_| remove) {
+        for &n in p.trailing.iter().filter(|_| trailing) {
             let Some(t) = starts.get(n) else { continue };
             let end = if text[t.start..t.end].ends_with("/>") { Some(t.end) } else { html::find_close(text, t.end, "br").map(|c| c.end).or(Some(t.end)) };
             if let Some(end) = end {
@@ -320,7 +321,7 @@ mod tests {
     fn blank_paragraphs_fold_into_next_margin_like_kindle() {
         let mut b = book(&page(r#"<p>甲</p><p>&#160;</p><p>乙</p><p><br/></p><p>　</p><p class="big">丙</p><p class="lh2">&#160;</p><p>丁</p><br/><p>戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p><p><br/></p>"#));
         let mut moved = b.clone();
-        apply(&mut b, &mut WashReport::default(), None, false);
+        apply(&mut b, &mut WashReport::default(), None, false, false);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(out.contains(r#"<p>甲</p><p class="eink-blank">&#160;</p><p class="eink-g1">乙</p><p class="eink-blank"><br/></p><p class="eink-blank">　</p><p class="big eink-g1">丙</p><p class="lh2 eink-blank">&#160;</p><p class="eink-g2">丁</p><br class="eink-blank"/><p class="eink-g1">戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p><p class="eink-blank"><br/></p>"#), "{out}");
         assert!(out.contains("eink-blank.css"));
@@ -330,7 +331,7 @@ mod tests {
         assert!(sheet.contains("html body p.eink-g2{margin-top:3.2em;}") && !sheet.contains("eink-g3"), "{sheet}");
         assert!(sheet.contains("html body p.eink-blank{display:none;}") && sheet.contains("html body br.eink-blank{display:none;}"), "{sheet}");
         // 不认 display:none 的（Move）：空段去掉，接住的块一样
-        apply(&mut moved, &mut WashReport::default(), None, true);
+        apply(&mut moved, &mut WashReport::default(), None, true, true);
         let out = String::from_utf8(moved[2].data.clone()).unwrap();
         assert!(out.contains(r#"<body><p>甲</p><p class="eink-g1">乙</p><p class="big eink-g1">丙</p><p class="eink-g2">丁</p><p class="eink-g1">戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p></body>"#), "{out}");
         let sheet = String::from_utf8(moved.iter().find(|e| e.name == "O/eink-blank.css").unwrap().data.clone()).unwrap();
@@ -341,21 +342,22 @@ mod tests {
     #[test]
     fn no_top_margin_and_unsure_cases() {
         let mut b = book(&page(r#"<p>甲</p><p>&#160;</p><h2 style="margin-top:0">乙</h2><div><p>丙</p><p>&#160;</p></div><p>丁</p>"#));
-        apply(&mut b, &mut WashReport::default(), None, false);
+        apply(&mut b, &mut WashReport::default(), None, false, false);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(out.contains(r#"<p class="eink-blank">&#160;</p><h2 style="margin-top:0;margin-top:1.1467em;" class="eink-g1">乙</h2><div><p>丙</p><p>&#160;</p></div>"#), "{out}");
     }
 
-    /// 块末尾的 `<br/>`：Move 上去掉（套在行内元素里的、连着两个的也去），中间的、开头的、有 id 的、块里套着块的不动；掌阅不动。
+    /// 块末尾的 `<br/>`：多排一行的阅读器（Move）上去掉（套在行内元素里的、连着两个的也去），中间的、开头的、有 id 的、块里套着块的
+    /// 不动；不排的（掌阅）不动。和认不认 `display:none` 无关。
     #[test]
-    fn trailing_br_removed_only_where_blanks_are_removed() {
+    fn trailing_br_removed_only_where_reader_draws_it() {
         let body = r#"<h2>甲<br/></h2><p><span>乙<br/></span> <br/>
 </p><p>丙<br/>丁</p><p><br/>戊</p><p>己<br id="x"/></p><div>庚<br/><p>辛</p></div>"#;
         let mut b = book(&page(body));
         let before = b[2].data.clone();
-        apply(&mut b, &mut WashReport::default(), None, false);
+        apply(&mut b, &mut WashReport::default(), None, false, false);
         assert_eq!(b[2].data, before);
-        apply(&mut b, &mut WashReport::default(), None, true);
+        apply(&mut b, &mut WashReport::default(), None, false, true);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(out.contains(r#"<h2>甲</h2><p><span>乙</span> 
 </p><p>丙<br/>丁</p><p><br/>戊</p><p>己<br id="x"/></p><div>庚<br/><p>辛</p></div>"#), "{out}");
