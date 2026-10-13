@@ -53,6 +53,7 @@ mod hidden;
 mod break_margin;
 mod blank_fold;
 mod line_height;
+mod heading_size;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
@@ -124,7 +125,9 @@ pub use self::encoding::transcode_entries;
 /// - 20（2026-10-13）：Move 上块末尾的 `<br/>` 去掉（Kindle、掌阅不排，Move 多排一行；`blank_fold.rs`）；页首要垫的比 xochitl 标题前自己加的
 ///   空还少、或者多得不到 5% 的，第一块开头是字、块在 Move 上行距是 1 时改在块里最前面放行内窄图撑高第一行（`top_spacer.rs`，
 ///   `eink-strut.png`）；Move 上 `<p>` 以外的块行距照 Kindle 按全书正文行距归一（`line_height.rs`，profile `line_height_except_p`，用户定）。
-pub const KINDLE_RULES_VERSION: &str = "20";
+/// - 21（2026-10-13）：Move 上标题字号照 Kindle 写成最接近的关键字（xochitl 的 h1–h6 只认 `small`…`xx-large`，`heading_size.rs`，
+///   profile `heading_font_keywords`）；行内垫图按标题在 Move 上的字号算。
+pub const KINDLE_RULES_VERSION: &str = "21";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -240,6 +243,8 @@ pub struct WashOpts {
     pub drop_hidden: bool,
     /// 只有 `<p>` 不认 `line-height` 的阅读器（Move，profile `line_height_except_p`）：别的块的行距照 Kindle 归一（`line_height.rs`）。
     pub normalize_lh: bool,
+    /// 标题的 `font-size` 只认关键字的阅读器（Move，profile `heading_font_keywords`）：标题字号照 Kindle 写成最接近的关键字（`heading_size.rs`）。
+    pub heading_keywords: bool,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -256,7 +261,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, drop_hidden: false, normalize_lh: false }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, drop_hidden: false, normalize_lh: false, heading_keywords: false }
     }
 }
 
@@ -510,6 +515,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         // 行距照 Kindle 归一在垫图之前：行内垫图要看块在这台上的行距
         if opts.normalize_lh {
             line_height::apply(entries, rep, opts.media.as_ref());
+        }
+        // 标题字号也在垫图之前：行内垫图按标题在这台上的字号算
+        if opts.heading_keywords {
+            heading_size::apply(entries, rep, opts.media.as_ref());
         }
         if let Some(g) = opts.top_spacer {
             top_spacer::apply(entries, rep, opts.media.as_ref(), g);
