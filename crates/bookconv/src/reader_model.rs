@@ -17,11 +17,13 @@ pub struct ReaderModel {
     pub heading_sizes: Option<HeadingSizes>,
     /// 不认 `margin-top`，页首要垫图（`None`＝认）。
     pub page_top: Option<profile::PageTop>,
+    /// 行内 `style`、`<style>`、规则最后一条不带分号又紧挨 `}` 的声明里 em 照 CSS 排（`false`：要挪进外链样式表）。
+    pub inline_css_lengths: bool,
 }
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true }
     }
 }
 
@@ -33,6 +35,7 @@ impl ReaderModel {
             line_height_except_p: p.line_height_except_p,
             heading_sizes: p.heading_sizes.as_ref().filter(|_| p.heading_font_keywords).map(HeadingSizes::from_profile),
             page_top: p.page_top.filter(|_| !p.margin_top),
+            inline_css_lengths: p.inline_css_lengths,
         }
     }
 
@@ -50,6 +53,9 @@ impl ReaderModel {
         }
         if let Some(t) = &self.page_top {
             s.push_str(&format!("t{},{},{}", t.gap_heading_per_em, t.gap_other, t.strut_base_per_em));
+        }
+        if !self.inline_css_lengths {
+            s.push_str("i0");
         }
         s
     }
@@ -133,7 +139,7 @@ mod tests {
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),
-            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44"
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0"
         );
     }
 }

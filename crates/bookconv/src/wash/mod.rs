@@ -53,6 +53,7 @@ mod hidden;
 mod break_margin;
 mod blank_fold;
 mod block_style;
+mod inline_css;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
@@ -126,7 +127,10 @@ pub use self::encoding::transcode_entries;
 ///   `eink-strut.png`）；Move 上 `<p>` 以外的块行距照 Kindle 按全书正文行距归一（`line_height.rs`，profile `line_height_except_p`，用户定）。
 /// - 21（2026-10-13）：Move 上标题字号照 Kindle 写成最接近的关键字（xochitl 的 h1–h6 只认 `small`…`xx-large`，`heading_size.rs`，
 ///   profile `heading_font_keywords`）；行内垫图按标题在 Move 上的字号算。
-pub const KINDLE_RULES_VERSION: &str = "21";
+/// - 22（2026-10-13）：Move 上写了 em 的 `<style>` 挪进外链样式表、行内 `style` 里写 em 的长度搬进类规则、外链规则最后一条紧挨 `}` 的 em 声明补分号
+///   （xochitl 的行内 style、`<style>`、不带分号又紧挨 `}` 的声明 em 按 23px、字号和首行缩进的 em 不认；`inline_css.rs`，profile
+///   `inline_css_lengths`）。
+pub const KINDLE_RULES_VERSION: &str = "22";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -531,6 +535,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         // 竖直间距照 Kindle 换算放在最后：上面几步都按原来的 CSS 算 Kindle 上的样子
         if let Some(vs) = opts.v_scale {
             rep.kindle_rule_edits += kindle_rules::scale_vertical_entries(entries, &vs);
+        }
+        // 行内 style、<style>、不带分号又紧挨 } 的声明里 em 不照 CSS 排的阅读器（Move）：挪进外链样式表。最后做：上面几步写进行内的、换算过的值一起挪
+        if !opts.reader.inline_css_lengths {
+            inline_css::apply(entries, rep);
         }
         drop_nonlinear_nav(entries);
     }
