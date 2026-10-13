@@ -29,11 +29,17 @@ pub struct ReaderModel {
     pub px_margins: bool,
     /// 左右外边距的 % 按包含块宽（`false`：折成 em）。
     pub percent_margins: bool,
+    /// 认 `rem`（`false`：改成 em，字号的折成 px）。
+    pub rem: bool,
+    /// 认 `!important`（`false`：带它的声明不起作用，要去掉、胜出的值写进行内）。
+    pub important: bool,
+    /// 不认不带单位的 `line-height`、只认长度的阅读器上，缺省行距是 em 的几倍（`None`＝照 CSS；见 [`ReaderModel::line_height_len`]）。
+    pub line_em: Option<f64>,
 }
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, rem: true, important: true, line_em: None }
     }
 }
 
@@ -51,6 +57,9 @@ impl ReaderModel {
             heading_margins: p.heading_margins,
             px_margins: p.px_margins,
             percent_margins: p.percent_margins,
+            rem: p.rem,
+            important: p.important,
+            line_em: (!p.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
         }
     }
 
@@ -72,11 +81,14 @@ impl ReaderModel {
         if !self.inline_css_lengths {
             s.push_str("i0");
         }
-        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%')] {
+        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%'), (self.rem, 'q'), (self.important, 'k')] {
             if !on {
                 s.push(c);
                 s.push('0');
             }
+        }
+        if let Some(l) = self.line_em {
+            s.push_str(&format!("n{}", (l * 10000.0).round() / 10000.0));
         }
         s
     }
@@ -156,7 +168,7 @@ mod tests {
         assert_eq!(m.font_size("h2", Some("2em"), 2.0), 1.514);
         assert_eq!(m.font_size("div", None, 2.0), 2.0);
         assert_eq!((m.line_height("p", Some(2.0)), m.line_height("h1", Some(2.0)), m.line_height("div", None)), (1.0, 2.0, 1.0));
-        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, ..ReaderModel::default() });
+        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, rem: false, important: false, line_em: Some(58.0 / 37.5), ..ReaderModel::default() });
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),

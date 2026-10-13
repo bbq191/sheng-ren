@@ -487,7 +487,7 @@ fn rewrite_css_in(css: &str, base: &str, ctx: &Ctx, n: &mut usize) -> String {
 }
 
 /// 选择器是不是只选 `<body>`：`body`、`body.x`、`html body`、只用在 body 上的 `.x`。
-fn is_body_selector(sel: &str, body_classes: &HashSet<String>) -> bool {
+pub(super) fn is_body_selector(sel: &str, body_classes: &HashSet<String>) -> bool {
     let last = last_compound(sel);
     if last.contains([':', '[', '#']) {
         return false;

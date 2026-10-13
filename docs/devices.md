@@ -22,10 +22,10 @@
 | 竖直 1em/1rem 的边距 | **52.5**（写出器写行高倍数，按行距换算 = 一行/1.2） | 37.5 | 37.8 |
 | `%` 边距 | 按 32em 页宽（左右按包含块宽） | 按内容区宽 | **当 px**（10% 是 10px；2026-10-13 探针）→ 竖直的折成 px（KINDLE_RULES 14），块上左右的按内容区宽折成 em（KINDLE_RULES 24） |
 | `px` | 写出器按 0.45pt/px | 屏幕像素 | 屏幕像素 |
-| 左右外边距 `px` | 0.45pt/px（50px 约 73 个屏幕像素） | 屏幕像素 → 块上的折成 em（KINDLE_RULES 24，真机 50px 挪 71） | 屏幕像素 → 同掌阅（真机 50px 挪 71） |
+| 左右外边距 `px` | 0.45pt/px（50px 约 73 个屏幕像素） | 屏幕像素 → 块上的折成 em（KINDLE_RULES 24，真机 50px 挪 71；左右内边距、首行缩进的 px 同样，KINDLE_RULES 25） | 屏幕像素 → 同掌阅（真机 50px 挪 71） |
 | `pt` | 12pt = 1em | **当成 px（坏的）** | 真的点（1pt ≈ 3.15px） |
-| 段落 `line-height` | 认（按全书正文行高归一） | 不认 | 不认 |
-| 别的块（标题、div、li、td）的 `line-height` | 认（同上） | 不认 | **认，乘在阅读器缺省行距上** → 照 Kindle 归一（KINDLE_RULES 20） |
+| 段落 `line-height` | 认（按全书正文行高归一） | 不带单位的不认（`2`），**长度认**（`3em`，2026-10-13 探针 Q80、Q84）；缺省一行 58px → 照 Kindle 写成 em（KINDLE_RULES 25，《飘》正文 1.8em 一行 69 → 58–60px 真机 ✓） | 外链的不认，**行内 `style` 的认**（2026-10-13 探针 Q83） |
+| 别的块（标题、div、li、td）的 `line-height` | 认（同上） | 同段落：不带单位的不认（行内也不认），长度认（Q81–Q83）→ 同上（KINDLE_RULES 25） | **认，乘在阅读器缺省行距上** → 照 Kindle 归一（KINDLE_RULES 20） |
 | 标题（h1–h6）的 `font-size` | 认（按正文归一） | 认 | **只认关键字**（small…xx-large 五档，绝对大小；没写按标签固定）→ 取最接近的关键字（KINDLE_RULES 21） |
 | 块末尾的 `<br/>` | 不排 | 不排 | **多排一行** → 去掉（KINDLE_RULES 20） |
 | `margin-top` | 认 | 认 | 段落、div 在页中间认；**标题（h1–h6）的上下外边距都不认**（前面自带约 1em 标题字号的空、后面约半个，和相邻块的外边距折叠），页首的不认 → 页首垫图（KINDLE_RULES 11、20），页中间标题前后的间距写到相邻块上（KINDLE_RULES 23） |
@@ -41,7 +41,7 @@
 | 外链样式表 | 认 | 认 | 认（最可靠） |
 | `<style>` | 认 | 认 | 认，但**走另一套解析**：em 长度按 1em＝23px（约 0.61 倍），`font-size`、`text-indent` 的 em、% 不认（2026-10-13 探针）→ 写了 em 的挪进外链（KINDLE_RULES 22） |
 | 行内 `style` | 认 | 认 | 认（压过类规则），同 `<style>` **走另一套解析**（em 23px，字号、缩进的 em 不认；px、行距倍数、关键字、对齐认）；以前"不认"的结论被 2026-10-13 两次复测推翻 → 写 em 的长度搬进外链的 `!important` 类规则（KINDLE_RULES 22） |
-| `!important` | 照层叠 | **不提优先级，带了反而输** | 认（2026-10-13 探针；以前"作废"的结论没复现），但**输给行内 `style`**（同一属性行内写了，外链的 `!important` 不起作用，KINDLE_RULES 24 的探针 Q48） |
+| `!important` | 照层叠 | **带它的声明不起作用**（只有这一条、没有冲突的也不起作用：`margin-left:2em !important` 不挪、`text-align:center !important` 不居中、行内 `text-decoration:underline !important` 不画，2026-10-13 探针 Q28、Q85、Q86）→ 去掉 `!important`，靠它胜出的值写进行内（KINDLE_RULES 25，《克莱因壶》引文署名靠右真机 ✓） | 认（2026-10-13 探针；以前"作废"的结论没复现），但**输给行内 `style`**（同一属性行内写了，外链的 `!important` 不起作用，KINDLE_RULES 24 的探针 Q48） |
 | 优先级相同 | 后者胜 | 后者胜 | 后者胜（2026-10-13 探针；以前"先出现的胜"没复现） |
 | 规则最后一条声明不带分号 | — | — | 值**紧挨着 `}`** 时走另一套解析（同行内 style：em 23px，字号、缩进的 em 不认），看着像丢了；中间有空白就正常 → 写 em 的补分号（KINDLE_RULES 22） |
 | 值写 `0` | — | — | 认（2026-10-13 探针；以前"当没写"多半是不带分号）；我们照旧写 0.01em |
@@ -52,6 +52,10 @@
 | 外边距折叠 | 照 CSS（写出器） | 折叠 | 折叠 |
 | 放不下时的大段上外边距 | **挪到下一页页首、丢掉边距** | 照加（推到页底） | 照加 → 我们按 Kindle 估算先分页（KINDLE_RULES 18） |
 | `hyphens:auto` | 不认 | 不认 | 不认 |
+| `rem` | 认 | **不认**（整条声明当没写，Q53）→ 字号以外的改成 em、字号的折成 px（KINDLE_RULES 25，《克莱因壶》首行缩进真机 ✓；《福尔摩斯》行内字号本来就由字号归一折成 px） | 认（同 em，Q53） |
+| `letter-spacing` | 写出器照写（没真机核） | **不认**（Q19） | 认（Q19） |
+| 字号的 `px`、`pt` | px 按 0.75pt（16px＝1em），12pt＝1em | px 是 CSS 像素（同 Kindle，Q21），**pt 当 px**（18pt 只有 1.125em，Q23）→ 字号归一时折成 px（KINDLE_RULES 5；`html` 上写了字号的书除外） | **px 是屏幕像素**（24px 比正文小，Q21），pt 认（Q23） |
+| 负的外边距 | 照写 | 认（伸到屏幕边为止，Q75–Q79） | 不认（左右的不处理，用户定） |
 
 ### 背景图
 
@@ -88,8 +92,8 @@
 ### 怎么验证（不靠肉眼猜）
 
 - **Kindle**：用户同时点左上、右下角截屏（**要先拔 USB**），文件在 `Internal Storage/screenshots/`；Send to Kindle 的样本在 `documents/Downloads/Items01/`（用户会清掉，要用时请用户推一份），`kfx-dump --json` 看结构。
-- **掌阅**：`adb exec-out screencap -p`；打开书走文件管理器 `com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity` + `uiautomator dump`；翻页在空白处横向 swipe。
-- **Move**：书架服务 `POST /import?name=X.epub&folder=`（端口转发 8790，`ControlMaster=no`；USB `root@10.11.99.1`、Wi-Fi `root@10.42.0.224`，睡着了连不上）导入后 xochitl 立刻排出 `<uuid>.pdf`，scp 回来 `pdftoppm -scale-to-x 954 -scale-to-y 1696` 量；原地替换（`?uuid=`）不会立刻重排。
+- **掌阅**：`adb exec-out screencap -p`；打开书走文件管理器 `com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity` + `uiautomator dump`；翻页在空白处横向 swipe。**怪癖测试书 `tools/quirks/probe.py ireader`** 一条命令全自动：每章标记换成条码图、推进 `documents/测试/`（每次换文件名，同名的书掌阅记着读到哪）、点开、逐页截屏认条码、逐行量（2026-10-13，87 个探针 174 页约 10 分钟）。
+- **Move**：`tools/quirks/probe.py move` 一条命令跑怪癖测试书。书架服务 `POST /import?name=X.epub&folder=`（端口转发 8790，`ControlMaster=no`；USB `root@10.11.99.1`、Wi-Fi `root@10.42.0.224`，睡着了连不上）导入后 xochitl 立刻排出 `<uuid>.pdf`，scp 回来 `pdftoppm -scale-to-x 954 -scale-to-y 1696` 量；原地替换（`?uuid=`）不会立刻重排。
 - 量位置：按文字行的墨迹（灰度 < 140 的行）找行顶，三台换算成占内容区高的比例再比。测试书放 scratchpad，导入设备的测试书用完请用户删。
 
 ## 阅读模式和它的字段
@@ -140,7 +144,8 @@
 | `inline_css_lengths`（`true`） | 行内 `style`、`<style>`、最后一条不带分号又紧挨 `}` 的声明里的 em 照 CSS 排；`false` 时只修复的文字书里写 em 的挪进外链样式表（`wash/inline_css.rs`，KINDLE_RULES 22） | — | — | `false` | 2026-10-13「测试-怪癖」：xochitl 这几种写法 em 按 23px，字号、首行缩进的 em 不认 |
 | `padding`、`borders`、`heading_margins`（都是 `true`） | 认内边距、画边框、认 h1–h6 的上下外边距；`false` 时只修复的文字书里左右内边距并进外边距、上下内边距和标题外边距照 Kindle 写到相邻块认的一侧、上下边框插横线图（`wash/box_fix.rs`，KINDLE_RULES 23） | — | — | 都是 `false` | 2026-10-13「测试-怪癖」Q05–Q07、Q12、Q39、Q40、Q65–Q74：xochitl 内边距不认（背景色画）、边框不画、标题外边距不认（前后自带空），图能画 |
 | `px_margins`、`percent_margins`（都是 `true`） | 左右外边距写 px 时和 Kindle 一样大、写 % 时按包含块宽；`false` 时只修复的文字书里块上的折成 em（px 按 0.45pt、% 按内容区宽；`wash/box_fix.rs`，KINDLE_RULES 24） | — | `px_margins = false` | 都是 `false` | 2026-10-13：两台 px 是屏幕像素（Kindle 按 0.45pt），Move 的 % 当 px；修后掌阅、Move 真机 50px 都挪 71（Kindle 换算 1.875em） |
-| `em_px`、`line_px`（不写） | `em_px`：这台缺省字号下 CSS 1em 的屏幕像素，竖直间距照 Kindle 换算用（KINDLE_RULES 14）；`line_px`：Kindle 正文一行的像素（只 kindle 写，一 rem 竖直 = 它 / 1.2） | `line_px` 63 | `em_px` 37.5 | `em_px` 37.8 | 2026-10-12「测试-竖直间距」：Kindle 按行距排边距，同样 1em 占页高多一半 |
+| `rem`、`important`、`line_height_numbers`（都是 `true`） | 认 `rem`、认 `!important`、认不带单位的 `line-height`；`false` 时只修复的文字书里 rem 改成 em（字号的折成 px）、去掉 `!important`（靠它胜出的值写进行内）、行距照 Kindle 写成 em（`wash/css_compat.rs`、`wash/block_style.rs`，KINDLE_RULES 25；`line_height_numbers = false` 要写 `line_px`、`em_px`） | — | 都是 `false` | — | 2026-10-13「测试-怪癖-掌阅」Q28、Q53、Q80–Q86 |
+| `em_px`、`line_px`（不写） | `em_px`：这台缺省字号下 CSS 1em 的屏幕像素，竖直间距照 Kindle 换算用（KINDLE_RULES 14）；`line_px`：正文一行的像素（kindle：一 rem 竖直 = 它 / 1.2；掌阅：缺省行距，行距照 Kindle 写成 em 用） | `line_px` 63 | `em_px` 37.5、`line_px` 58 | `em_px` 37.8 | 2026-10-12「测试-竖直间距」：Kindle 按行距排边距，同样 1em 占页高多一半 |
 | `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"` | — | `"ltr"` | — | 掌阅遇到往右翻的书，整页图四周留左右 92、上下 124px |
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记给登记脚本、文字页补回留白 | — | — | 1 | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |

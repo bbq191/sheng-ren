@@ -27,7 +27,7 @@ pub struct Finding {
     pub prop: String,
     /// 元素：`p`、`heading`、`block`、`inline`、`img`、`cell`（表格单元格）、`list`（列表项）。
     pub on: &'static str,
-    /// 值：`em`、`px`、`pt`、`pct`、`number`、`zero`、`neg`、`keyword`；边框不分（`-`）。
+    /// 值：`em`、`rem`、`px`、`pt`、`pct`、`number`、`zero`、`neg`、`keyword`；边框不分（`-`）。
     pub value: &'static str,
     /// 写法：`sheet`、`style`、`inline`（带 `!important` 的另加 `!`）。
     pub via: String,
@@ -162,7 +162,8 @@ fn value_kind(v: &str) -> &'static str {
         return "neg";
     }
     match unit {
-        "em" | "rem" | "ex" | "ch" => "em",
+        "em" | "ex" | "ch" => "em",
+        "rem" => "rem",
         "px" => "px",
         "%" => "pct",
         "pt" | "pc" | "in" | "cm" | "mm" | "q" => "pt",
@@ -223,7 +224,8 @@ pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<F
     let mut out: Vec<Finding> = all
         .into_iter()
         .filter_map(|((prop, on, value, origin, imp), count)| {
-            let row = t.rule.iter().find(|r| r.matches(&prop, on, value, origin, imp));
+            // 第一条对得上、而且这台有结论的（某台专有的条目可以写在前面，不挡别的台）
+            let row = t.rule.iter().find(|r| r.matches(&prop, on, value, origin, imp) && r.status(reader).is_some());
             let verdict = match row.and_then(|r| r.status(reader)) {
                 Some("broken") => Verdict::Broken,
                 Some(_) => return None,
@@ -284,7 +286,7 @@ mod tests {
                 assert!(["same", "fixed", "accept", "broken"].contains(&s.as_str()), "怪癖表状态 {s}");
             }
             for v in &r.value {
-                assert!(["em", "px", "pt", "pct", "number", "zero", "neg", "keyword"].contains(&v.as_str()), "值 {v}");
+                assert!(["em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword"].contains(&v.as_str()), "值 {v}");
             }
             for v in &r.via {
                 assert!(["sheet", "style", "inline", "important"].contains(&v.as_str()), "写法 {v}");
@@ -299,7 +301,7 @@ mod tests {
     #[test]
     fn value_kinds() {
         let k: Vec<&str> = ["2em", "1.5rem", "10px", "12pt", "50%", "1.2", "0", "-1em", "bold", "#000", "0.01em", "-2"].iter().map(|v| value_kind(v)).collect();
-        assert_eq!(k, ["em", "em", "px", "pt", "pct", "number", "zero", "neg", "keyword", "keyword", "em", "number"]);
+        assert_eq!(k, ["em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword", "keyword", "em", "number"]);
     }
 
     fn book(chapter: &str, css: &str) -> Vec<Entry> {
@@ -316,12 +318,12 @@ mod tests {
     fn move_flags_unhandled_and_skips_fixed() {
         let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/><style>p.a{text-indent:2em;padding-left:1em;}</style></head>
 <body><p class="a">一</p><p class="a">二</p><div style="margin-top:1.5em;border:1px solid #000">三</div><p class="b">四</p><p class="h" style="padding-left:1em">五</p></body></html>"#;
-        let b = book(ch, "p.b{text-indent:2em;letter-spacing:0.1em;} .h{display:none;}");
+        let b = book(ch, "p.b{text-indent:2em;word-spacing:0.1em;} .h{display:none;}");
         let f = audit(&b, None, "xochitl");
         let lines: Vec<String> = f.iter().map(Finding::line).collect();
         assert_eq!(lines[0], "✗ 行内 style border-left（block）×1：Move 不画边框；左右竖线做不了", "{lines:?}");
         assert_eq!(lines[1], "✗ 行内 style border-right（block）×1：Move 不画边框；左右竖线做不了", "{lines:?}");
-        assert_eq!(lines[2], "? letter-spacing（em，p）×1", "{lines:?}");
+        assert_eq!(lines[2], "? word-spacing（em，p）×1", "{lines:?}");
         assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(audit(&b, None, "ireader").iter().all(|f| f.verdict == Verdict::Unknown));
         assert!(audit(&b, None, "kindle").is_empty());

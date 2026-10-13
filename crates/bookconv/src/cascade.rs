@@ -1106,7 +1106,16 @@ impl Sheet {
     /// 行内 `style` 里的 `url(…)` 按文档路径 `base` 解析（同样式表按自己的路径；以前不解析，子目录里文档的行内背景图找不到）。
     pub fn cascade(&self, el: &ElementRef, base: &str) -> HashMap<String, String> {
         let mut out = HashMap::new();
-        self.cascade_each(el, base, |d, _| {
+        self.cascade_each(el, base, true, |d, _| {
+            out.insert(d.prop.clone(), d.value.clone());
+        });
+        out
+    }
+
+    /// 同 [`Sheet::cascade`]，但 `!important` 当没写（带它的声明照普通声明排）：去掉 `!important` 以后会怎么层叠。
+    pub fn cascade_flat(&self, el: &ElementRef, base: &str) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        self.cascade_each(el, base, false, |d, _| {
             out.insert(d.prop.clone(), d.value.clone());
         });
         out
@@ -1115,14 +1124,14 @@ impl Sheet {
     /// 同 [`Sheet::cascade`]，另给出生效的那条声明从哪来、带没带 `!important`。
     pub fn cascade_with_origin(&self, el: &ElementRef, base: &str) -> HashMap<String, (String, Origin, bool)> {
         let mut out = HashMap::new();
-        self.cascade_each(el, base, |d, origin| {
+        self.cascade_each(el, base, true, |d, origin| {
             out.insert(d.prop.clone(), (d.value.clone(), origin, d.important));
         });
         out
     }
 
-    /// 按层叠顺序（优先级低的先）把元素上匹配的声明依次交给 `f`：同一属性后给的覆盖先给的。
-    fn cascade_each(&self, el: &ElementRef, base: &str, mut f: impl FnMut(&Decl, Origin)) {
+    /// 按层叠顺序（优先级低的先）把元素上匹配的声明依次交给 `f`：同一属性后给的覆盖先给的。`important` 为假时 `!important` 不提优先级。
+    fn cascade_each(&self, el: &ElementRef, base: &str, important: bool, mut f: impl FnMut(&Decl, Origin)) {
         // (!important, 优先级, 出现顺序, 声明, 来源)
         type Hit<'a> = (bool, (u32, u32, u32), usize, &'a Decl, Origin);
         let mut hits: Vec<Hit> = Vec::new();
@@ -1130,7 +1139,7 @@ impl Sheet {
             for (i, r) in rules.0.iter().enumerate() {
                 if r.need.as_ref().is_none_or(|n| n.may_match(el)) && r.sel.matches(el) {
                     for d in &r.decls {
-                        hits.push((d.important, r.spec, base + i, d, *origin));
+                        hits.push((important && d.important, r.spec, base + i, d, *origin));
                     }
                 }
             }
@@ -1138,7 +1147,7 @@ impl Sheet {
         let mut inline: Vec<Decl> = el.value().attr("style").map(parse_decls).unwrap_or_default();
         resolve_urls(&mut inline, base);
         for d in &inline {
-            hits.push((d.important, (1000, 0, 0), usize::MAX, d, Origin::Inline));
+            hits.push((important && d.important, (1000, 0, 0), usize::MAX, d, Origin::Inline));
         }
         hits.sort_by_key(|h| (h.0, h.1, h.2));
         for (_, _, _, d, origin) in hits {

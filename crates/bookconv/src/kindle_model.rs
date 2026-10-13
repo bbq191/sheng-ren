@@ -114,6 +114,8 @@ pub struct Chapter {
     html: Html,
     body_id: NodeId,
     pub body_comp: Rc<Computed>,
+    /// `<body>` 上层叠出来的声明。
+    pub body_decls: HashMap<String, String>,
     pub els: Vec<El>,
     index: HashMap<NodeId, usize>,
     /// 元素数和源码 `<body>` 里开始标签的扫描一致（解析器没补出 `tbody` 之类）：第 n 个元素就是第 n 个开始标签，改源码要先看这个。
@@ -148,7 +150,8 @@ impl Chapter {
         let root = html.root_element();
         let body = root.children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body")?;
         let rc = Computed::derive(&Computed::root(), &decls_of(&root), root.value().name());
-        let bc = Rc::new(Computed::derive(&rc, &decls_of(&body), "body"));
+        let body_decls = decls_of(&body);
+        let bc = Rc::new(Computed::derive(&rc, &body_decls, "body"));
         let mut els: Vec<El> = Vec::new();
         // 不递归（没关的标签能套上千层）：(节点, 父元素的计算值, 父元素下标, 父元素所在的块, 在不在隐藏的元素里)
         type Frame<'a> = (ego_tree::NodeRef<'a, Node>, Rc<Computed>, Option<usize>, Option<usize>, bool);
@@ -170,7 +173,7 @@ impl Chapter {
         let index = els.iter().enumerate().map(|(i, e)| (e.node, i)).collect();
         let body_id = body.id();
         drop(sheet);
-        Some(Chapter { html, body_id, body_comp: bc, els, index, matches_tags })
+        Some(Chapter { html, body_id, body_comp: bc, body_decls, els, index, matches_tags })
     }
 
     /// 第 `i` 个元素。

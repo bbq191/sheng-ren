@@ -18,6 +18,21 @@
 //! （标题里的字按所在元素的计算字号计字数，取最多的；`kindle_rules` 已经照正文归一过，根是阅读器的正文字号），挑比例最接近的
 //! 关键字，和这台上本来的（写了认的关键字照写的，没写照标签的）不同时接 `font-size:关键字`。
 //!
+//! **行距（只认长度的阅读器）**：掌阅（profile `line_height_numbers = false`）不认不带单位的 `line-height`（`normal` 也算），整条当没写，
+//! 写成长度的（em、%）照 CSS 排（2026-10-13 怪癖测试书 Q80–Q84：`line-height:2` 在 p、div、标题、行内都没变化，`3em` 一行 114px；
+//! 缺省一行 58px，profile `line_px`）。所以正文行距写 1.84 的书，Kindle 上标题、小字的块按 1.2/1.84 收紧，掌阅上全是缺省行距；正文写
+//! `1.8em`、`130%` 的书，Kindle 上正文是阅读器的行距设置，掌阅上照写的排。照 Kindle 改成 em（D＝缺省行距是 em 的几倍）：
+//!
+//! - 样式表、`<style>`、行内 `style` 里的 `line-height`：em、%，和倍数（÷ 全书正文行距，不低于 0.6）不是 1 的数、`normal`（1.2）改成
+//!   「Kindle 的倍数 × D」em，写了这条的元素就和 Kindle 一样了。`<body>` 上（选择器、只用在 `<body>` 上的类、行内）倍数是 1 的数
+//!   不改：掌阅当没写，就是缺省行距，而且和数一样随字号缩放（改成长度的话按绝对值往下继承，字号不一样的块全要补）；别的元素上的
+//!   照改（祖先改成了长度时，掌阅上当没写就继承了祖先的）；px 这类不动。
+//! - 剩下的是没自己写、从祖先继承的：长度按绝对值继承，字号和祖先不一样的块（套在写了行距的 div 里的大标题）和 Kindle 不一样；
+//!   没写、祖先也没写的块是阅读器缺省行距，Kindle 按 1.2 ÷ 正文行距。逐个块（`<p>` 也算）算出掌阅上的一行和 Kindle 上的一行，
+//!   差 5% 以上的接 `line-height:Nem`。
+//!
+//! 写成长度以后，阅读器里改行距设置这些块不跟着变（写了长度的书本来就不跟着变）。
+//!
 //! 同一个标签两样都要改时先接行距、再接字号。
 use super::*;
 use crate::cascade::MediaEnv;
@@ -27,7 +42,7 @@ use std::collections::BTreeMap;
 
 pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>, reader: &ReaderModel) {
     let heads = reader.heading_sizes.as_ref();
-    if !reader.line_height_except_p && heads.is_none() {
+    if !reader.line_height_except_p && reader.line_em.is_none() && heads.is_none() {
         return;
     }
     let css = km::book_css(entries, media);
@@ -43,10 +58,17 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
         }
         km::base_line_height(&count)
     };
+    if let Some(d) = reader.line_em {
+        rep.kindle_rule_edits += scale_line_heights(entries, base, d, &body_only_classes(entries));
+    }
     for (&i, doc) in chapters.iter().zip(&docs) {
         // 第几个开始标签 → 要接的声明（先行距、后字号）
         let mut decls: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-        if reader.line_height_except_p {
+        if let Some(d) = reader.line_em {
+            for (n, v) in length_line_heights(&doc.items, &doc.body, base, d) {
+                decls.entry(n).or_default().push(format!("line-height:{}em", fmt(v)));
+            }
+        } else if reader.line_height_except_p {
             for (n, v) in line_heights(&doc.items, base) {
                 decls.entry(n).or_default().push(format!("line-height:{}", fmt(v)));
             }
@@ -88,6 +110,8 @@ fn fmt(v: f64) -> String {
 #[derive(Default)]
 struct Doc {
     items: Vec<Item>,
+    /// `<body>` 的 (写的 `line-height`, 计算出的行高, 字号)：只认长度的阅读器上往下继承。
+    body: (Option<String>, Option<f64>, f64),
     /// (第几个开始标签, 关键字)。
     heading_sizes: Vec<(usize, String)>,
 }
@@ -100,8 +124,14 @@ struct Item {
     lh: Option<f64>,
     /// 自己（含行内 `style`）写了 `line-height`。
     own: bool,
+    /// 自己写的 `line-height`（层叠出来的值）。
+    own_decl: Option<String>,
+    /// 计算出的字号（根 em）。
+    fs: f64,
     /// 行距要管的块：块级、不是 `<p>`、自己排字。
     target: bool,
+    /// 块级（`<p>` 也算）。
+    is_block: bool,
     /// 自己排的字数（不算空白；行内元素里的算给所在的块），统计正文行距用。
     chars: usize,
 }
@@ -113,7 +143,17 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     let mut items: Vec<Item> = (0..ch.els.len())
         .map(|i| {
             let el = &ch.els[i];
-            Item { parent: el.parent, lh: el.comp.line_height, own: el.decls.contains_key("line-height"), target: el.is_block && ch.el(i).value().name() != "p", chars: 0 }
+            let decl = el.decls.get("line-height");
+            Item {
+                parent: el.parent,
+                lh: el.comp.line_height,
+                own: decl.is_some(),
+                own_decl: decl.cloned(),
+                fs: el.comp.font_size,
+                target: el.is_block && ch.el(i).value().name() != "p",
+                is_block: el.is_block,
+                chars: 0,
+            }
         })
         .collect();
     // 字算给所在的块；直接在 `<body>` 里的、隐藏的不算
@@ -123,7 +163,8 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         }
     }
     let heading_sizes = heads.map(|h| heading_sizes(&ch, h)).unwrap_or_default();
-    Doc { items, heading_sizes }
+    let bc = &ch.body_comp;
+    Doc { items, body: (ch.body_decls.get("line-height").cloned(), bc.line_height, bc.font_size), heading_sizes }
 }
 
 /// 要改行距的：(第几个开始标签, 行距倍数)。文档序走一遍，记下每个元素在这台上的行距（改过的往下继承改后的值）。
@@ -146,6 +187,155 @@ fn line_heights(items: &[Item], base: f64) -> Vec<(usize, f64)> {
             }
         }
         on_reader.push(cur);
+    }
+    out
+}
+
+/// 只认长度的阅读器上一条 `line-height` 怎么算。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LhKind {
+    /// 没写、`inherit` 这类，或者阅读器不认、改了也一样的（倍数和正文差不到 5% 的数、`normal`）：跟父元素。
+    Inherit,
+    /// [`scale_line_heights`] 改成照 Kindle 的 em：em、%，倍数不是正文的数、`normal`。
+    Scaled,
+    /// 别的长度（px、pt……）：照写的排。
+    Fixed,
+}
+
+/// `body` 是不是写在 `<body>` 上（选择器、行内）：`<body>` 上倍数是 1 的数不改。
+fn lh_kind(v: Option<&str>, base: f64, body: bool) -> LhKind {
+    let Some(v) = v else { return LhKind::Inherit };
+    let v = crate::cssunlock::split_important(v).0.to_ascii_lowercase();
+    match scaled_factor(&v) {
+        // `<body>` 上不带单位的：掌阅当没写，排成缺省行距（随字号缩放，同数的继承）；Kindle 的倍数也是 1 就不用改，改成长度反而按
+        // 绝对值往下继承给每个块。别的元素上的照改：祖先改成了长度时，掌阅上当没写就继承了祖先的
+        Some((f, false)) if body && (km::line_height_ratio(Some(f), base) - 1.0).abs() <= 0.05 => LhKind::Inherit,
+        Some(_) => LhKind::Scaled,
+        None if v.starts_with(|c: char| c.is_ascii_digit() || c == '.') => LhKind::Fixed,
+        None => LhKind::Inherit,
+    }
+}
+
+/// 数、`normal`、em、% 写的行高折成本元素字号的倍数，和是不是长度（em、%）；别的 `None`。
+fn scaled_factor(v: &str) -> Option<(f64, bool)> {
+    if v == "normal" {
+        return Some((LH_EM, false));
+    }
+    let (num, k, len) = if let Some(n) = v.strip_suffix('%') {
+        (n, 0.01, true)
+    } else if let Some(n) = v.strip_suffix("em").filter(|n| !n.ends_with('r')) {
+        (n, 1.0, true)
+    } else {
+        (v, 1.0, false)
+    };
+    num.trim().parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0).map(|n| (n * k, len))
+}
+
+/// 照 Kindle 的一行（本元素字号的倍数 × D，D＝缺省行距是 em 的几倍）。
+fn kindle_line(lh: Option<f64>, base: f64, d: f64) -> f64 {
+    km::line_height_ratio(lh, base) * d
+}
+
+/// 全书样式表、`<style>`、行内 `style` 里 [`LhKind::Scaled`] 的 `line-height` 改成 [`kindle_line`] 的 em。返回改了几条。
+fn scale_line_heights(entries: &mut [Entry], base: f64, d: f64, body_classes: &HashSet<String>) -> usize {
+    fn decls(text: &str, base: f64, d: f64, body: bool, n: &mut usize) -> Option<String> {
+        let mut edits = Vec::new();
+        for c in html::css_decls(text) {
+            if !c.prop.eq_ignore_ascii_case("line-height") {
+                continue;
+            }
+            let (v, imp) = crate::cssunlock::split_important(c.value);
+            if lh_kind(Some(v), base, body) != LhKind::Scaled {
+                continue;
+            }
+            let Some((f, _)) = scaled_factor(&v.to_ascii_lowercase()) else { continue };
+            let start = c.start + c.raw.find(c.value).unwrap_or(0);
+            edits.push((start, start + c.value.len(), format!("{}em{imp}", fmt(kindle_line(Some(f), base, d)))));
+        }
+        *n += edits.len();
+        (!edits.is_empty()).then(|| html::apply_edits(text, edits))
+    }
+    let css = |text: &str, n: &mut usize| -> String {
+        let edits: Vec<(usize, usize, String)> = crate::cascade::rule_spans(text)
+            .into_iter()
+            .filter(|r| r.closed && !crate::cascade::rule_selector(r.prelude).trim().starts_with('@'))
+            .filter_map(|r| {
+                let sel = crate::cascade::rule_selector(r.prelude);
+                // 选择器列表里有一项选的是 `<body>` 就算
+                let body = crate::cascade::split_top(&sel, ',').iter().any(|s| super::kindle_rules::is_body_selector(s.trim(), body_classes));
+                decls(r.body, base, d, body, n).map(|t| (r.body_start, r.body_start + r.body.len(), t))
+            })
+            .collect();
+        html::apply_edits(text, edits)
+    };
+    crate::util::par_map_mut(entries, |e| {
+        let mut n = 0;
+        if is_css_name(&e.name) {
+            let (text, latin1) = match std::str::from_utf8(&e.data) {
+                Ok(t) => (std::borrow::Cow::Borrowed(t), false),
+                Err(_) => (std::borrow::Cow::Owned(crate::util::latin1_decode(&e.data)), true),
+            };
+            let out = css(&text, &mut n);
+            if n > 0 {
+                e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
+            }
+            return n;
+        }
+        if !is_chapter_entry(e) {
+            return 0;
+        }
+        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+        let s = html::edit_style_attrs(text, |t, v| decls(v, base, d, t.is("body"), &mut n).map_or(html::Edit::Keep, html::Edit::Set)).into_owned();
+        let s = html::edit_style_blocks(&s, |_, c| html::Edit::Set(css(c, &mut n))).into_owned();
+        if n > 0 {
+            e.data = s.into_bytes();
+        }
+        n
+    })
+    .into_iter()
+    .sum()
+}
+
+/// 只用在 `<body>` 上的类（别的元素也用的不算）。
+fn body_only_classes(entries: &[Entry]) -> HashSet<String> {
+    let (mut body, mut other) = (HashSet::new(), HashSet::new());
+    for e in entries.iter().filter(|e| is_chapter_entry(e)) {
+        let Ok(t) = std::str::from_utf8(&e.data) else { continue };
+        for g in html::tags(t).filter(|g| g.is_start()) {
+            let Some(c) = html::attr_value(&t[g.start..g.end], "class") else { continue };
+            let set = if g.is("body") { &mut body } else { &mut other };
+            set.extend(c.split_whitespace().map(str::to_string));
+        }
+    }
+    body.retain(|c| !other.contains(c));
+    body
+}
+
+/// 只认长度的阅读器上、[`scale_line_heights`] 改过以后还要接行距的：(第几个开始标签, 写多少 em)。`d` 是缺省行距是 em 的几倍。
+/// 一行的高按根 em 算：自己写了的照算（改过的是 Kindle 的一行，px 这类照写的），没写的跟父元素（长度照绝对值继承；直接在
+/// `<body>` 里的跟 `<body>`），到顶是缺省行距 × 字号。
+fn length_line_heights(items: &[Item], body: &(Option<String>, Option<f64>, f64), base: f64, d: f64) -> Vec<(usize, f64)> {
+    let own_line = |decl: Option<&String>, lh: Option<f64>, fs: f64, body: bool| match lh_kind(decl.map(String::as_str), base, body) {
+        LhKind::Scaled => Some(kindle_line(lh, base, d) * fs),
+        LhKind::Fixed => Some(lh.unwrap_or(1.0) * fs),
+        LhKind::Inherit => None,
+    };
+    let body_line = own_line(body.0.as_ref(), body.1, body.2, true);
+    // 每个元素在这台上定下的一行（根 em），`None`＝缺省行距（随字号）
+    let mut fixed: Vec<Option<f64>> = Vec::with_capacity(items.len());
+    let mut out = Vec::new();
+    for (i, it) in items.iter().enumerate() {
+        let mut cur = own_line(it.own_decl.as_ref(), it.lh, it.fs, false).or_else(|| it.parent.map_or(body_line, |p| fixed[p]));
+        if it.chars > 0 && it.is_block {
+            let want = kindle_line(it.lh, base, d);
+            let have = cur.map_or(d, |l| l / it.fs);
+            if (have / want - 1.0).abs() > 0.05 {
+                let want = (want * 10000.0).round() / 10000.0;
+                out.push((i, want));
+                cur = Some(want * it.fs);
+            }
+        }
+        fixed.push(cur);
     }
     out
 }
@@ -254,6 +444,23 @@ mod tests {
         assert!(out.contains(r#"<h2 class="big" style="font-size:xx-large;">章</h2><h2>节</h2><h3 class="one" style="color:red;font-size:medium;">小节</h3>"#), "{out}");
         // span 0.6em × 2em = 1.2em → large
         assert!(out.contains(r#"<h1 style="font-size:large;"><span class="s">标题</span></h1><h4 class="kw">四</h4><h6 style="font-size:small;">六</h6><p class="big">正文</p>"#), "{out}");
+    }
+
+    /// 只认长度的阅读器（缺省行距 1.5em）：样式表里的行距照 Kindle 改成 em（body 上倍数是 1 的不改，`<p>` 上的 1.84 → 1.5em；标题 1.2 → 1.2/1.84 × 1.5，3em → 3/1.84 × 1.5，
+    /// `normal` 同 1.2，px 不动）；没写的 div 继承 body 的 1.84，两边都是缺省行距，不接；套在写了 150% 的 div 里、字号大一倍的 h2
+    /// 继承绝对的行高（Kindle 上是自己字号的 0.75 倍，÷ 1.84 低于下限 0.6），掌阅上是改过的 div 的一行，接行内 0.6 × 1.5。
+    #[test]
+    fn length_only_reader() {
+        let reader = ReaderModel { line_em: Some(1.5), ..ReaderModel::default() };
+        let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
+        let css = "body{line-height:1.84} p{line-height:1.84} h1{line-height:1.2 !important} p.w{line-height:3em} .n{line-height:normal} .x{line-height:20px} div.b{line-height:150%} h2{font-size:2em}";
+        let mut b = book(&format!(r#"<h1>标题</h1>{p}<div>说明</div><p class="w">宽</p><div class="b"><h2>大</h2></div>"#), css);
+        apply(&mut b, &mut WashReport::default(), None, &reader);
+        let out_css = String::from_utf8(b[1].data.clone()).unwrap();
+        assert_eq!(out_css, "body{line-height:1.84} p{line-height:1.5em} h1{line-height:0.9783em !important} p.w{line-height:2.4457em} .n{line-height:0.9783em} .x{line-height:20px} div.b{line-height:1.2228em} h2{font-size:2em}");
+        let out = String::from_utf8(b[2].data.clone()).unwrap();
+        assert!(out.contains(r#"<h1>标题</h1><p>正文"#), "{out}");
+        assert!(out.contains(r#"<div>说明</div><p class="w">宽</p><div class="b"><h2 style="line-height:0.9em;">大</h2></div>"#), "{out}");
     }
 
     /// 两样都要改的标签：先行距、后字号；照 CSS 排的阅读器什么都不改。
