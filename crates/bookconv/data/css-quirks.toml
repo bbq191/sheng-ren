@@ -125,9 +125,9 @@ src = "2026-10-13 测试-怪癖 Q09、Q28、Q33、Q53、Q57"
 [[rule]]
 prop = ["margin-left", "margin-right"]
 value = ["neg"]
-xochitl = "broken"
-note = "Move 不认负外边距（同上下）"
-src = "2026-10-13 测试-怪癖 Q08（上外边距；左右的按同样处理没单测）"
+xochitl = "accept"
+note = "Move 不认负的左右外边距（字不挪、背景色块也不往外伸），没法模拟（只能把其余内容都往里推）；真书里多是章名色条、分隔线往页边距里伸，字的位置影响很小，Kindle 上伸不伸出内容区也没核实（用户定不管）"
+src = "2026-10-13 测试-怪癖 Q75–Q79"
 
 [[rule]]
 prop = ["text-indent"]

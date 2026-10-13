@@ -106,10 +106,15 @@ PROBES = [
     ("72", "p margin-bottom:2em（页中间）", "sheet", "margin-bottom:2em", P),
     ("73", "div margin-top:2em（页中间）", "sheet", "margin-top:2em", '<div{cls}>{text}</div>'),
     ("74", "h3 后面 p margin-top:2em（对照 p 没写）", "markup", "", '<h3>小标题</h3><p>{text}</p>|<h3>小标题</h3><p class="mt2">{text}</p>'),
+    ("75", "p margin-left:-2em", "sheet", "margin-left:-2em", P),
+    ("76", "div 背景色、两侧 margin -2em（对照两侧 0）", "markup", "", '<div class="bgd">{text}</div>|<div class="bgd nm">{text}</div>'),
+    ("77", "h3 背景色、两侧 margin -2em（对照两侧 0）", "markup", "", '<h3 class="bgd">{text}</h3>|<h3 class="bgd nm">{text}</h3>'),
+    ("78", "div 背景色、margin-left:-30px（对照 0）", "markup", "", '<div class="bgd">{text}</div>|<div class="bgd nl30">{text}</div>'),
+    ("79", "div 背景色、margin-right:-2em（对照 0）", "markup", "", '<div class="bgd">{text}</div>|<div class="bgd nr">{text}</div>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）
-BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:0.01em;}", ".ml2{margin-left:2em;}", ".mt2{margin-top:2em;}", ".mb2{margin-bottom:2em;}", ".mt1{margin-top:1em;}", "img.rule{width:100%;}", "img.ruleb{display:block;width:100%;}"]
+BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:0.01em;}", ".ml2{margin-left:2em;}", ".mt2{margin-top:2em;}", ".mb2{margin-bottom:2em;}", ".mt1{margin-top:1em;}", "img.rule{width:100%;}", "img.ruleb{display:block;width:100%;}", ".bgd{background-color:#444444;color:#ffffff;margin-left:0;margin-right:0;}", ".nm{margin-left:-2em;margin-right:-2em;}", ".nl30{margin-left:-30px;}", ".nr{margin-right:-2em;}"]
 
 
 def page(code, cid, body, head_style=""):
