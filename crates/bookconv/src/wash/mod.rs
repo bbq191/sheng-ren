@@ -135,7 +135,9 @@ pub use self::encoding::transcode_entries;
 /// - 23（2026-10-13）：Move 上左右内边距并进外边距（悬挂缩进排对）、上下内边距和标题的上下外边距照 Kindle 写到相邻块认的一侧、
 ///   上下边框插同色同粗的横线图（xochitl 不认内边距、不画边框、不认标题外边距；`box_fix.rs`，profile `padding`、`borders`、
 ///   `heading_margins`，边框用户选横线图）。
-pub const KINDLE_RULES_VERSION: &str = "23";
+/// - 24（2026-10-13）：块上 px 写的左右外边距照 Kindle 折成 em（掌阅、Move 的 px 是屏幕像素，Kindle 按 0.45pt），Move 上 % 写的按
+///   内容区宽折成 em（Move 当成 px；`box_fix.rs`，profile `px_margins`、`percent_margins`）。
+pub const KINDLE_RULES_VERSION: &str = "24";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;

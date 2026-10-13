@@ -20,8 +20,9 @@
 | 正文一行 | 63（`line_px`） | 54.5 | 56 |
 | 字号 1em | 39（`font_px`，图片宽度用） | 37.5（`em_px`） | 37.8（`em_px`） |
 | 竖直 1em/1rem 的边距 | **52.5**（写出器写行高倍数，按行距换算 = 一行/1.2） | 37.5 | 37.8 |
-| `%` 边距 | 按 32em 页宽 | 按内容区宽 | **当 px**（10% 是 10px；2026-10-13 探针） |
+| `%` 边距 | 按 32em 页宽（左右按包含块宽） | 按内容区宽 | **当 px**（10% 是 10px；2026-10-13 探针）→ 竖直的折成 px（KINDLE_RULES 14），块上左右的按内容区宽折成 em（KINDLE_RULES 24） |
 | `px` | 写出器按 0.45pt/px | 屏幕像素 | 屏幕像素 |
+| 左右外边距 `px` | 0.45pt/px（50px 约 73 个屏幕像素） | 屏幕像素 → 块上的折成 em（KINDLE_RULES 24，真机 50px 挪 71） | 屏幕像素 → 同掌阅（真机 50px 挪 71） |
 | `pt` | 12pt = 1em | **当成 px（坏的）** | 真的点（1pt ≈ 3.15px） |
 | 段落 `line-height` | 认（按全书正文行高归一） | 不认 | 不认 |
 | 别的块（标题、div、li、td）的 `line-height` | 认（同上） | 不认 | **认，乘在阅读器缺省行距上** → 照 Kindle 归一（KINDLE_RULES 20） |
@@ -40,7 +41,7 @@
 | 外链样式表 | 认 | 认 | 认（最可靠） |
 | `<style>` | 认 | 认 | 认，但**走另一套解析**：em 长度按 1em＝23px（约 0.61 倍），`font-size`、`text-indent` 的 em、% 不认（2026-10-13 探针）→ 写了 em 的挪进外链（KINDLE_RULES 22） |
 | 行内 `style` | 认 | 认 | 认（压过类规则），同 `<style>` **走另一套解析**（em 23px，字号、缩进的 em 不认；px、行距倍数、关键字、对齐认）；以前"不认"的结论被 2026-10-13 两次复测推翻 → 写 em 的长度搬进外链的 `!important` 类规则（KINDLE_RULES 22） |
-| `!important` | 照层叠 | **不提优先级，带了反而输** | 认（2026-10-13 探针；以前"作废"的结论没复现） |
+| `!important` | 照层叠 | **不提优先级，带了反而输** | 认（2026-10-13 探针；以前"作废"的结论没复现），但**输给行内 `style`**（同一属性行内写了，外链的 `!important` 不起作用，KINDLE_RULES 24 的探针 Q48） |
 | 优先级相同 | 后者胜 | 后者胜 | 后者胜（2026-10-13 探针；以前"先出现的胜"没复现） |
 | 规则最后一条声明不带分号 | — | — | 值**紧挨着 `}`** 时走另一套解析（同行内 style：em 23px，字号、缩进的 em 不认），看着像丢了；中间有空白就正常 → 写 em 的补分号（KINDLE_RULES 22） |
 | 值写 `0` | — | — | 认（2026-10-13 探针；以前"当没写"多半是不带分号）；我们照旧写 0.01em |
@@ -138,13 +139,14 @@
 | `heading_font_keywords`（`false`）＋ `[heading_sizes]` | 标题的 `font-size` 只认关键字；`true` 时标题字号照 Kindle 写成最接近的关键字（`wash/block_style.rs`，KINDLE_RULES 21）。`[heading_sizes]` 是量出来的大小（正文 1em＝1）：`keywords`（关键字 → 大小）、`tags`（h1–h6 按标签固定的），这时必须写 | — | — | `true`（small 0.784 … xx-large 2.018；h1–h6 2.018/1.514/1.216/1/0.784/1） | 2026-10-13「测试-标题字号」1–4：em、px、pt、% 一概不认 |
 | `inline_css_lengths`（`true`） | 行内 `style`、`<style>`、最后一条不带分号又紧挨 `}` 的声明里的 em 照 CSS 排；`false` 时只修复的文字书里写 em 的挪进外链样式表（`wash/inline_css.rs`，KINDLE_RULES 22） | — | — | `false` | 2026-10-13「测试-怪癖」：xochitl 这几种写法 em 按 23px，字号、首行缩进的 em 不认 |
 | `padding`、`borders`、`heading_margins`（都是 `true`） | 认内边距、画边框、认 h1–h6 的上下外边距；`false` 时只修复的文字书里左右内边距并进外边距、上下内边距和标题外边距照 Kindle 写到相邻块认的一侧、上下边框插横线图（`wash/box_fix.rs`，KINDLE_RULES 23） | — | — | 都是 `false` | 2026-10-13「测试-怪癖」Q05–Q07、Q12、Q39、Q40、Q65–Q74：xochitl 内边距不认（背景色画）、边框不画、标题外边距不认（前后自带空），图能画 |
+| `px_margins`、`percent_margins`（都是 `true`） | 左右外边距写 px 时和 Kindle 一样大、写 % 时按包含块宽；`false` 时只修复的文字书里块上的折成 em（px 按 0.45pt、% 按内容区宽；`wash/box_fix.rs`，KINDLE_RULES 24） | — | `px_margins = false` | 都是 `false` | 2026-10-13：两台 px 是屏幕像素（Kindle 按 0.45pt），Move 的 % 当 px；修后掌阅、Move 真机 50px 都挪 71（Kindle 换算 1.875em） |
 | `em_px`、`line_px`（不写） | `em_px`：这台缺省字号下 CSS 1em 的屏幕像素，竖直间距照 Kindle 换算用（KINDLE_RULES 14）；`line_px`：Kindle 正文一行的像素（只 kindle 写，一 rem 竖直 = 它 / 1.2） | `line_px` 63 | `em_px` 37.5 | `em_px` 37.8 | 2026-10-12「测试-竖直间距」：Kindle 按行距排边距，同样 1em 占页高多一半 |
 | `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"` | — | `"ltr"` | — | 掌阅遇到往右翻的书，整页图四周留左右 92、上下 124px |
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记给登记脚本、文字页补回留白 | — | — | 1 | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |
 | `[deliver]`（不写 = 产物放电脑上） | 产物怎么送到设备（2026-10-07，见[使用指南 · 产物放在哪](usage.md#产物放在哪)）：`kind = "mtp"` + `mount`（jmtpfs 挂载点名）+ `dir`（存储根目录下的目录）；`kind = "xochitl"` + `hosts`（依次试的 `用户@地址`）+ `port`（Move 上书架服务的本机端口） | mtp：`kindle`、`documents` | mtp：`ireader`、`documents` | xochitl：`root@10.11.99.1`、`root@10.42.0.224`，8790 | 不影响产物内容，不进指纹 |
 
-- `display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`＋`[heading_sizes]`、`margin_top`＋`[page_top]`、`inline_css_lengths`、`padding`、`borders`、`heading_margins` 由 `bookconv::reader_model::ReaderModel` 汇成"这台阅读器拿到 CSS 会排成什么样"的设备模型，照 Kindle 改写的 pass 只认它（2026-10-13 收拢，量出来的数从代码挪进 profile）。这几个字段和 `em_px` 以哈希进指纹（`m` 段，2026-10-13 用户定）：重量了数改 profile 就行，书自动重建。
+- `display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`＋`[heading_sizes]`、`margin_top`＋`[page_top]`、`inline_css_lengths`、`padding`、`borders`、`heading_margins`、`px_margins`、`percent_margins` 由 `bookconv::reader_model::ReaderModel` 汇成"这台阅读器拿到 CSS 会排成什么样"的设备模型，照 Kindle 改写的 pass 只认它（2026-10-13 收拢，量出来的数从代码挪进 profile）。这几个字段和 `em_px` 以哈希进指纹（`m` 段，2026-10-13 用户定）：重量了数改 profile 就行，书自动重建。
 - 影响产物的字段都进指纹，改了哪个，受影响的书都算过期、下次重建；文字书、漫画分开算，只管一路的字段只进那一路（见[架构 · 指纹](architecture.md#指纹)）。不进指纹的：`name`、`[deliver]`（只管怎么传，不影响产物）。
 - **怪癖表**（2026-10-13）：上面这些结论里能按「属性 · 元素 · 值 · 写法」说清楚的，机器可读地记在 `crates/bookconv/data/css-quirks.toml`（掌阅、Move 两栏：same / fixed / accept / broken，每条有出处）。`sync` 生成掌阅、Move 的文字书时按它体检（`bookconv::audit`），和 Kindle 不一样又没处理的、表里没有的写法打在 `sync` 输出里、记进生成记录，`booklib list` 看全部。新量出来的结论两边都写。怪癖测试书 `tools/quirks/probe.py`：`move` 一条命令生成、导入 Move、拉回排出的 PDF、逐行量（掌阅、Kindle 还要手动截图）。
 - 表里 `background_images` 到 `image_alpha` 这几个字段是文字书完整优化时的规则，内置三个模式的文字书都只修复（`text_repair_only = true`），它们只对漫画（清洗层两路都过）和没开只修复的自定义模式起作用。

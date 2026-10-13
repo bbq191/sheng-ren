@@ -45,6 +45,9 @@ inline_css_lengths = false
 padding = false
 borders = false
 heading_margins = false
+# 左右外边距：px 是屏幕像素（Kindle 按 0.45pt 一 px）、% 当成 px（10% 挪 10px）（2026-10-13 怪癖测试书 Q10、Q11、Q48、Q54）：块上的折成 em
+px_margins = false
+percent_margins = false
 comic_reader_margins = 1
 
 # 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比
