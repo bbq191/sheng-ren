@@ -92,6 +92,10 @@ PROBES = [
     ("58", "p margin-top:2em 行内 style 对照外链（A 外链 B 行内）", "markup", "", '<p class="mt2">{text}</p>|<p style="margin-top:2em;">{text}</p>'),
     ("59", "p 行内 style padding-left:2em", "inline", "padding-left:2em", P),
     ("60", "p 行内 style text-indent:30px", "inline", "text-indent:30px", P),
+    ("61", "p 最后一条不带分号、后面换行再 }", "sheet2", ".t{color:#000;margin-left:2em\n}", P),
+    ("62", "p 最后一条不带分号、后面空格再 }", "sheet2", ".t{color:#000;margin-left:2em }", P),
+    ("63", "p 只有一条 text-indent:2em、紧挨着 }", "sheet2", ".t{text-indent:2em}", P),
+    ("64", "p 只有一条 text-indent:2em、空格再 }", "sheet2", ".t{text-indent:2em }", P),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）

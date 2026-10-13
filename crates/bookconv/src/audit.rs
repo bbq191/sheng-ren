@@ -27,7 +27,7 @@ pub struct Finding {
     pub prop: String,
     /// 元素：`p`、`heading`、`block`、`inline`、`img`。
     pub on: &'static str,
-    /// 值：`em`、`px`、`pt`、`pct`、`number`、`zero`、`neg`、`keyword`。
+    /// 值：`em`、`px`、`pt`、`pct`、`number`、`zero`、`neg`、`keyword`；边框不分（`-`）。
     pub value: &'static str,
     /// 写法：`sheet`、`style`、`inline`（带 `!important` 的另加 `!`）。
     pub via: String,
@@ -48,7 +48,7 @@ impl Finding {
         let imp = if self.via.ends_with('!') { " !important" } else { "" };
         let mark = if self.verdict == Verdict::Broken { '✗' } else { '?' };
         let note = if self.note.is_empty() { String::new() } else { format!("：{}", self.note) };
-        format!("{mark} {via}{}{imp}（{}，{}）×{}{note}", self.prop, self.value, self.on, self.count)
+        format!("{mark} {via}{}{imp}（{}）×{}{note}", self.prop, kind_on(self.value, self.on), self.count)
     }
 }
 
@@ -184,7 +184,9 @@ pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<F
             for (prop, v) in &el.decls {
                 let Some(name) = reported_prop(prop, on, v) else { continue };
                 let (origin, imp) = el.origin.get(prop).copied().unwrap_or((Origin::Sheet, false));
-                keys.insert((name, on, value_kind(v), origin, imp));
+                // 边框的分项有宽度、样式、颜色，不分值的种类
+                let kind = if name == "border" { "-" } else { value_kind(v) };
+                keys.insert((name, on, kind, origin, imp));
             }
             for k in keys {
                 *m.entry(k).or_default() += 1;
@@ -244,7 +246,12 @@ fn short(f: &Finding) -> String {
         "inline" => "行内 ",
         _ => "",
     };
-    format!("{via}{}（{}，{}）×{}", f.prop, f.value, f.on, f.count)
+    format!("{via}{}（{}）×{}", f.prop, kind_on(f.value, f.on), f.count)
+}
+
+/// `值，元素`；不分值的（边框）只写元素。
+fn kind_on(value: &str, on: &str) -> String {
+    if value == "-" { on.to_string() } else { format!("{value}，{on}") }
 }
 
 #[cfg(test)]
@@ -284,22 +291,23 @@ mod tests {
         ]
     }
 
-    /// Move：`<style>` 里的首行缩进 em、行内的上外边距 em 不对；外链的首行缩进 em 对；没验证过的另算；隐藏的不算。掌阅没有这两条。
+    /// Move：左内边距、边框不对（没处理）；`<style>`、行内写 em 的已经处理（KINDLE_RULES 22）不报；外链的首行缩进 em 对；没验证过的另算；
+    /// 隐藏的不算。掌阅只有没验证过的。
     #[test]
-    fn move_flags_style_and_inline_em() {
-        let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/><style>p.a{text-indent:2em;}</style></head>
-<body><p class="a">一</p><p class="a">二</p><div style="margin-top:1.5em">三</div><p class="b">四</p><p class="h" style="margin-top:1em">五</p></body></html>"#;
+    fn move_flags_unhandled_and_skips_fixed() {
+        let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/><style>p.a{text-indent:2em;padding-left:1em;}</style></head>
+<body><p class="a">一</p><p class="a">二</p><div style="margin-top:1.5em;border:1px solid #000">三</div><p class="b">四</p><p class="h" style="padding-left:1em">五</p></body></html>"#;
         let b = book(ch, "p.b{text-indent:2em;letter-spacing:0.1em;} .h{display:none;}");
         let f = audit(&b, None, "xochitl");
         let lines: Vec<String> = f.iter().map(Finding::line).collect();
-        assert_eq!(lines[0], "✗ <style> 里 text-indent（em，p）×2：Move 上行内 style、<style> 里 em、% 写的首行缩进、字号不认（px 认）", "{lines:?}");
-        assert!(lines[1].starts_with("✗ 行内 style margin-top（em，block）×1："), "{lines:?}");
+        assert_eq!(lines[0], "✗ <style> 里 padding-left（em，p）×2：Move 左右内边距不认（悬挂缩进 text-indent 负数 + padding-left 的首行伸到页边距里）", "{lines:?}");
+        assert_eq!(lines[1], "✗ 行内 style border（block）×1：Move 不画边框", "{lines:?}");
         assert_eq!(lines[2], "? letter-spacing（em，p）×1", "{lines:?}");
         assert_eq!(lines.len(), 3, "{lines:?}");
         assert!(audit(&b, None, "ireader").iter().all(|f| f.verdict == Verdict::Unknown));
         assert!(audit(&b, None, "kindle").is_empty());
         let s = summary(&f, "Move");
         assert_eq!(s.len(), 2);
-        assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：<style> text-indent（em，p）×2；行内 margin-top（em，block）×1"), "{s:?}");
+        assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：<style> padding-left（em，p）×2；行内 border（block）×1"), "{s:?}");
     }
 }

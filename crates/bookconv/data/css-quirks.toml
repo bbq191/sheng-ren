@@ -24,20 +24,20 @@ src = "2026-10-13 测试-怪癖 Q55、Q57"
 # ---------------------------------------------------------------- Move 上行内 style、<style> 的 em（2026-10-13 探针）
 
 [[rule]]
-prop = ["margin-*", "padding-*"]
+prop = ["margin-*"]
 value = ["em"]
 via = ["style", "inline"]
-xochitl = "broken"
-note = "Move 上行内 style、<style> 里的 em 按 1em＝23px 排（外链样式表 37.8px），约 0.61 倍"
-src = "2026-10-13 测试-怪癖 Q26、Q29、Q46、Q47、Q58"
+xochitl = "fixed"
+note = "Move 上行内 style、<style> 里的 em 按 1em＝23px 排（外链样式表 37.8px），约 0.61 倍：<style> 挪进外链、行内的搬进类规则（KINDLE_RULES 22）"
+src = "2026-10-13 测试-怪癖 Q26、Q29、Q46、Q47、Q58；修后优化过的测试书真机同外链"
 
 [[rule]]
 prop = ["text-indent", "font-size"]
 value = ["em", "pct"]
 via = ["style", "inline"]
-xochitl = "broken"
-note = "Move 上行内 style、<style> 里 em、% 写的首行缩进、字号不认（px 认）"
-src = "2026-10-13 测试-怪癖 Q27、Q49、Q51、Q52"
+xochitl = "fixed"
+note = "Move 上行内 style、<style> 里 em、% 写的首行缩进、字号不认（px 认）：挪进外链（KINDLE_RULES 22）"
+src = "2026-10-13 测试-怪癖 Q27、Q49、Q51、Q52；修后优化过的测试书真机同外链"
 
 # ---------------------------------------------------------------- 竖直间距
 
