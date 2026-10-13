@@ -11,7 +11,7 @@ pub struct ReaderModel {
     pub display_none: bool,
     /// 块末尾的 `<br/>` 多排一行（Kindle 不排）。
     pub trailing_br_line: bool,
-    /// 只有 `<p>` 不认 `line-height`，别的块按阅读器缺省行距的倍数认（[`ReaderModel::line_height`]）。
+    /// `<p>` 不认外链、`<style>` 里的 `line-height`（行内的认），别的块按阅读器缺省行距的倍数认（[`ReaderModel::line_height`]）。
     pub line_height_except_p: bool,
     /// 标题（h1–h6）的 `font-size` 只认关键字（`None`＝照 CSS）。
     pub heading_sizes: Option<HeadingSizes>,
@@ -94,9 +94,9 @@ impl ReaderModel {
     }
 
     /// 块在这台上的行距（阅读器缺省行距的倍数）：`lh` 是层叠出来的行高（元素字号的倍数，`None`＝没写或 `normal`，算 1）。
-    /// [`ReaderModel::line_height_except_p`] 的阅读器上 `<p>` 不认（总是 1）。
-    pub fn line_height(&self, tag: &str, lh: Option<f64>) -> f64 {
-        if self.line_height_except_p && tag == "p" {
+    /// [`ReaderModel::line_height_except_p`] 的阅读器上 `<p>` 只认行内 `style` 写的（`inline`：生效的那条写在行内），别的是 1。
+    pub fn line_height(&self, tag: &str, lh: Option<f64>, inline: bool) -> f64 {
+        if self.line_height_except_p && tag == "p" && !inline {
             1.0
         } else {
             lh.unwrap_or(1.0)
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(h.nearest(2.0).0, "xx-large");
         assert_eq!(m.font_size("h2", Some("2em"), 2.0), 1.514);
         assert_eq!(m.font_size("div", None, 2.0), 2.0);
-        assert_eq!((m.line_height("p", Some(2.0)), m.line_height("h1", Some(2.0)), m.line_height("div", None)), (1.0, 2.0, 1.0));
+        assert_eq!((m.line_height("p", Some(2.0), false), m.line_height("p", Some(2.0), true), m.line_height("h1", Some(2.0), false), m.line_height("div", None, false)), (1.0, 2.0, 2.0, 1.0));
         assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, rem: false, important: false, line_em: Some(58.0 / 37.5), ..ReaderModel::default() });
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
