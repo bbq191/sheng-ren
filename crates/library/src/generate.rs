@@ -59,7 +59,12 @@ struct Made {
     src: PathBuf,
     sha: String,
     warnings: Vec<String>,
+    /// 体检清单（[`bookconv::audit`]，一行一种写法），记进生成记录。
+    audit: Vec<String>,
 }
+
+/// [`Library::produce`] 的结果：(警告, 产物的 SHA-256（算好了的话）, 体检清单)。
+type Produced = (Vec<String>, Option<String>, Vec<String>);
 
 /// 一本书在某模式下的产物状态（`list` 用）。
 pub struct OutputStatus {
@@ -67,6 +72,8 @@ pub struct OutputStatus {
     pub path: PathBuf,
     /// `Some(true)` 最新；`Some(false)` 过期（原件或处理规则变了，或上次生成没完成）；`None` 判断不了（模式 profile 已删、文件不在）。
     pub fresh: Option<bool>,
+    /// 生成时的体检清单（[`bookconv::audit::Finding::line`]）：这台上和 Kindle 不一样又没处理的（`✗`）、没验证过的（`?`）写法。
+    pub audit: Vec<String>,
 }
 
 /// 生成计划：指纹。
@@ -419,7 +426,7 @@ impl Library {
             } else {
                 self.registry.get(&dev_id).and_then(|p| self.plan(meta, p).ok()).map(|plan| plan.fingerprint == entry.fingerprint || plan.legacy == entry.fingerprint)
             };
-            out.push(OutputStatus { device: dev_id, path: entry.shown(), fresh });
+            out.push(OutputStatus { device: dev_id, path: entry.shown(), fresh, audit: entry.audit.clone() });
         }
         out
     }
@@ -468,9 +475,9 @@ impl Library {
         std::fs::create_dir_all(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
         let src = tmp.join(format!("out.{}", format.ext()));
         // KFX 在内存里就算好了哈希；EPUB 是优化器流式写的，写完再读一遍（刚写的，多半还在页缓存里）
-        let made = self.produce(meta, device, format, &src, &tmp).and_then(|(w, sha)| Ok((sha.map_or_else(|| crate::fsutil::sha256_file(&src), Ok)?, w)));
+        let made = self.produce(meta, device, format, &src, &tmp).and_then(|(w, sha, a)| Ok((sha.map_or_else(|| crate::fsutil::sha256_file(&src), Ok)?, w, a)));
         match made {
-            Ok((sha, warnings)) => Ok(Made { tmp: Some(tmp), src, sha, warnings }),
+            Ok((sha, warnings, audit)) => Ok(Made { tmp: Some(tmp), src, sha, warnings, audit }),
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&tmp);
                 Err(e)
@@ -482,7 +489,7 @@ impl Library {
     /// （记录里有哈希就用，没有就算）；没有就新生成（[`Library::product`]）。
     fn made(&self, meta: &Meta, device: &Profile, format: Format, reuse: Option<&StateEntry>) -> Result<Made, String> {
         match reuse {
-            Some(p) => Ok(Made { tmp: None, src: p.path.clone(), sha: if p.sha.is_empty() { crate::fsutil::sha256_file(&p.path)? } else { p.sha.clone() }, warnings: Vec::new() }),
+            Some(p) => Ok(Made { tmp: None, src: p.path.clone(), sha: if p.sha.is_empty() { crate::fsutil::sha256_file(&p.path)? } else { p.sha.clone() }, warnings: Vec::new(), audit: p.audit.clone() }),
             None => self.product(meta, device, format),
         }
     }
@@ -587,7 +594,9 @@ impl Library {
     /// 交给传输线程的一件。
     #[allow(clippy::too_many_arguments)]
     fn transfer(&self, meta: &Meta, device: &Profile, sp: PathBuf, made: Made, from: Option<PathBuf>, entry: StateEntry, work: Work) -> Transfer {
-        let Made { tmp, src, sha, warnings } = made;
+        let Made { tmp, src, sha, warnings, audit } = made;
+        let mut entry = entry;
+        entry.audit = audit;
         Transfer { device: device.id.clone(), title: meta.title.clone(), book: meta.id.clone(), sp, tmp, src, sha, warnings, from, entry, work }
     }
 
@@ -662,14 +671,17 @@ impl Library {
     }
 
     /// 生成产物写到 `part`（书库临时目录里）：EPUB 直接是优化结果；KFX 是同一份优化结果再转一次（中间文件放 `tmp`）。
-    /// 返回质量门警告，和产物的 SHA-256（整份在内存里的时候顺带算好；EPUB 是 `None`，由调用方读文件算）。
-    fn produce(&self, meta: &Meta, device: &Profile, format: Format, part: &Path, tmp: &Path) -> Result<(Vec<String>, Option<String>), String> {
+    /// 返回警告（质量门、体检摘要）、产物的 SHA-256（整份在内存里的时候顺带算好；EPUB 是 `None`，由调用方读文件算）和体检清单。
+    fn produce(&self, meta: &Meta, device: &Profile, format: Format, part: &Path, tmp: &Path) -> Result<Produced, String> {
         let epub = self.prepared_input(meta)?;
         let mut warnings = Vec::new();
         let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
         // 要转 KFX 的，优化结果先放临时目录
         let optimized = if format == Format::Epub { part.to_path_buf() } else { tmp.join("optimized.epub") };
-        bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
+        let optimized_rep = bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
+        // 体检（怪癖表，只报告）：sync 打摘要，清单记进生成记录
+        let findings = optimized_rep.wash.map(|w| w.audit).unwrap_or_default();
+        let audit: Vec<String> = findings.iter().map(bookconv::audit::Finding::line).collect();
         let rep = bookconv::check::check_epub_file(&optimized)?;
         if !rep.ok {
             warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
@@ -681,9 +693,10 @@ impl Library {
             let (bytes, w) = kfx::write::epub_to_kfx_from(open()?, &kfx::write::Opts { fixed_id: kfx_id(&meta.id), media: Some(kfx::css::MediaEnv::for_profile(device)) })?;
             warnings.extend(w);
             std::fs::write(part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
-            return Ok((warnings, Some(crate::fsutil::sha256_hex(&bytes))));
+            return Ok((warnings, Some(crate::fsutil::sha256_hex(&bytes)), audit));
         }
-        Ok((warnings, None))
+        warnings.extend(bookconv::audit::summary(&findings, &device.id));
+        Ok((warnings, None, audit))
     }
     /// 要优化的 EPUB：原件（EPUB）或当场转换的（CBZ），再补上书里没有、书库里有找来的封面、简介、标签。
     /// 和上一次是同一本书、同样的补充时，直接用上次的中间文件。
@@ -807,6 +820,9 @@ pub(crate) struct StateEntry {
     /// 以前的位置、还没删掉的产物。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     old: Vec<Placement>,
+    /// 生成时的体检清单（[`bookconv::audit`]）：`booklib list` 显示。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    audit: Vec<String>,
 }
 
 /// 一个产物文件和它的根目录；或者 Move 上的一本（`uuid`、`name`）。
@@ -823,12 +839,12 @@ struct Placement {
 impl StateEntry {
     /// 文件产物（电脑上、MTP 设备上）的记录。
     fn file(path: PathBuf, root: PathBuf, fingerprint: String, old: Vec<Placement>) -> StateEntry {
-        StateEntry { path, root, fingerprint, sha: String::new(), uuid: String::new(), name: String::new(), old }
+        StateEntry { path, root, fingerprint, sha: String::new(), uuid: String::new(), name: String::new(), old, audit: Vec::new() }
     }
 
     /// Move 上的一本的记录：`loc` 是相对的 `文件夹/文件名`，uuid、显示名传完才知道（[`StateEntry::placed_on_xochitl`]）。
     fn on_xochitl(loc: PathBuf, fingerprint: String, old: Vec<Placement>) -> StateEntry {
-        StateEntry { path: loc, root: PathBuf::new(), fingerprint, sha: String::new(), uuid: String::new(), name: String::new(), old }
+        StateEntry { path: loc, root: PathBuf::new(), fingerprint, sha: String::new(), uuid: String::new(), name: String::new(), old, audit: Vec::new() }
     }
 
     /// 在 Move 上（记着 uuid），不是文件。

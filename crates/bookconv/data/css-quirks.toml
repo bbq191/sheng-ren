@@ -1,0 +1,263 @@
+# 怪癖表：一种 CSS 写法在掌阅、Move 上排出来和 Kindle 比怎么样（以 Kindle 为准，Kindle 由 KFX 写出器照 Send to Kindle 写）。
+# 体检（`bookconv::audit`，sync 时给每本新生成的书报）按它查书里用到的写法；怪癖测试书 tools/quirks/probe.py 量出来的结论写回这里。
+# 只收验证过的（真机、测试书）；没有的就是"没验证过"，体检照报。
+#
+# 每条 [[rule]]：
+#   prop   属性（简写展开以后的分项名，边框的分项都算 "border"；末尾 * 通配，如 "margin-*"）
+#   on     元素：p、heading（h1–h6）、block（别的块：div、li、blockquote、td……）、inline（span、a、b……）、img；不写＝都算
+#   value  值：em（em、rem、ex）、px、pt（pt 和别的绝对单位）、pct（%）、number（不带单位）、zero（0）、neg（负数）、keyword（别的）；不写＝都算
+#   via    写法：sheet（外链样式表）、style（文档里的 <style>）、inline（style 属性）、important（带 !important，不论在哪）；不写＝都算
+#   ireader / xochitl  这台上的表现：
+#          same＝和 Kindle 一样；fixed＝不一样，kindle_rules 改写了；accept＝不一样或不管，但不影响验收（note 说为什么）；
+#          broken＝不一样、没处理（体检报出来）；不写＝没验证过（体检报"没验证过"）
+#   note   说明；src 出处
+# 一条写法按文件顺序找第一条对得上的（所以具体的写在前面）。
+
+[[rule]]
+prop = ["margin-*", "padding-*", "text-indent"]
+value = ["zero"]
+ireader = "same"
+xochitl = "same"
+note = "写 0 两台都认（行内的也认）"
+src = "2026-10-13 测试-怪癖 Q55、Q57"
+
+# ---------------------------------------------------------------- Move 上行内 style、<style> 的 em（2026-10-13 探针）
+
+[[rule]]
+prop = ["margin-*", "padding-*"]
+value = ["em"]
+via = ["style", "inline"]
+xochitl = "broken"
+note = "Move 上行内 style、<style> 里的 em 按 1em＝23px 排（外链样式表 37.8px），约 0.61 倍"
+src = "2026-10-13 测试-怪癖 Q26、Q29、Q46、Q47、Q58"
+
+[[rule]]
+prop = ["text-indent", "font-size"]
+value = ["em", "pct"]
+via = ["style", "inline"]
+xochitl = "broken"
+note = "Move 上行内 style、<style> 里 em、% 写的首行缩进、字号不认（px 认）"
+src = "2026-10-13 测试-怪癖 Q27、Q49、Q51、Q52"
+
+# ---------------------------------------------------------------- 竖直间距
+
+[[rule]]
+prop = ["margin-top"]
+on = ["heading"]
+value = ["em", "px", "pt", "pct"]
+ireader = "fixed"
+xochitl = "broken"
+note = "Move 上标题的上外边距不认：页首的垫图推到 Kindle 的位置（KINDLE_RULES 11、20），页中间的没处理"
+src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q05"
+
+[[rule]]
+prop = ["padding-top", "padding-bottom"]
+value = ["em", "px", "pt", "pct"]
+ireader = "fixed"
+xochitl = "broken"
+note = "Move 上下内边距不认（页首的上内边距算进垫图）；掌阅照 Kindle 换算（KINDLE_RULES 14）"
+src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q06、Q39"
+
+[[rule]]
+prop = ["margin-top", "margin-bottom"]
+value = ["neg"]
+xochitl = "broken"
+note = "Move 不认负的上下外边距"
+src = "2026-10-13 测试-怪癖 Q08"
+
+[[rule]]
+prop = ["margin-top", "margin-bottom"]
+value = ["em", "px", "pt", "pct", "zero"]
+ireader = "fixed"
+xochitl = "fixed"
+note = "上下外边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14；Move 的 % 当 px、pt 是真的点，一并折成 px）；0 两台都认"
+src = "2026-10-12 测试-竖直间距；2026-10-13 测试-怪癖 Q04、Q35–Q37、Q55"
+
+# ---------------------------------------------------------------- 水平间距
+
+[[rule]]
+prop = ["padding-left", "padding-right"]
+value = ["em", "px", "pt", "pct"]
+xochitl = "broken"
+note = "Move 左右内边距不认（悬挂缩进 text-indent 负数 + padding-left 的首行伸到页边距里）"
+src = "2026-10-13 测试-怪癖 Q12、Q14、Q59"
+
+[[rule]]
+prop = ["margin-left", "margin-right"]
+value = ["pct"]
+xochitl = "broken"
+note = "Move 的 % 左右外边距当 px（10% 是 10px）；Kindle 按包含块宽的百分比"
+src = "2026-10-13 测试-怪癖 Q11、Q54"
+
+[[rule]]
+prop = ["margin-left", "margin-right"]
+value = ["px"]
+xochitl = "broken"
+ireader = "broken"
+note = "px 两台是屏幕像素（Move 50px 挪 50）；Kindle 写出器按 0.45pt，约 1.46 个屏幕像素"
+src = "2026-10-13 测试-怪癖 Q10、Q48；docs/kfx.md 边距 px 按 0.45pt"
+
+[[rule]]
+prop = ["margin-left", "margin-right"]
+value = ["em", "zero"]
+via = ["sheet", "important"]
+xochitl = "same"
+note = "Move 外链样式表里 1em 37.8px（Kindle 39，差不到 4%）"
+src = "2026-10-13 测试-怪癖 Q09、Q28、Q33、Q53、Q57"
+
+[[rule]]
+prop = ["margin-left", "margin-right"]
+value = ["neg"]
+xochitl = "broken"
+note = "Move 不认负外边距（同上下）"
+src = "2026-10-13 测试-怪癖 Q08（上外边距；左右的按同样处理没单测）"
+
+[[rule]]
+prop = ["text-indent"]
+value = ["em", "zero"]
+via = ["sheet", "important"]
+xochitl = "same"
+src = "2026-10-13 测试-怪癖 Q13、Q34"
+
+[[rule]]
+prop = ["text-indent"]
+value = ["pct"]
+xochitl = "broken"
+note = "Move 不认 % 的首行缩进"
+src = "2026-10-13 测试-怪癖 Q15"
+
+[[rule]]
+prop = ["text-indent"]
+value = ["neg"]
+xochitl = "broken"
+note = "负的首行缩进（悬挂缩进）在 Move 上伸到页边距里：配套的 padding-left 不认"
+src = "2026-10-13 测试-怪癖 Q14"
+
+[[rule]]
+prop = ["text-align"]
+ireader = "same"
+xochitl = "same"
+note = "居中、居右三台都认（Move 行内 style 也认）"
+src = "2026-10-06 掌阅真机；2026-10-13 测试-怪癖 Q17、Q18、Q42"
+
+# ---------------------------------------------------------------- 字号、行距
+
+[[rule]]
+prop = ["font-size"]
+on = ["heading"]
+ireader = "same"
+xochitl = "fixed"
+note = "Move 的 h1–h6 只认关键字，照 Kindle 取最接近的关键字（KINDLE_RULES 21）"
+src = "2026-10-13 测试-标题字号"
+
+[[rule]]
+prop = ["font-size"]
+value = ["em", "pct", "pt", "keyword", "zero"]
+via = ["sheet", "important"]
+ireader = "same"
+xochitl = "same"
+note = "字号照 Kindle 按正文归一（kindle_rules）；Move 外链样式表里 em、%、pt、关键字都认"
+src = "2026-10-08 kindle_rules；2026-10-13 测试-怪癖 Q20、Q22–Q25"
+
+[[rule]]
+prop = ["line-height"]
+on = ["p"]
+ireader = "accept"
+xochitl = "accept"
+note = "段落行距两台都不认，排成阅读器的行距设置；Kindle 按全书正文行距归一，正文段落一样，单独写了别的行距的段落对不上（没法改）"
+src = "2026-10-12 三台速查"
+
+[[rule]]
+prop = ["line-height"]
+ireader = "broken"
+xochitl = "fixed"
+note = "标题、div 等别的块的行距：Move 照 Kindle 归一（KINDLE_RULES 20）；掌阅不认，没处理"
+src = "2026-10-13 测试-行距；三台速查"
+
+# ---------------------------------------------------------------- 边框、宽度
+
+[[rule]]
+prop = ["border"]
+xochitl = "broken"
+note = "Move 不画边框"
+src = "2026-10-13 测试-怪癖 Q07、Q40"
+
+[[rule]]
+prop = ["width", "height", "max-width", "max-height", "min-width", "min-height"]
+on = ["img"]
+ireader = "fixed"
+xochitl = "fixed"
+note = "插图改写成和 Kindle 一样大（KINDLE_RULES 9）"
+src = "2026-10-12 测试-插图"
+
+[[rule]]
+prop = ["width"]
+on = ["p", "block", "heading"]
+xochitl = "broken"
+note = "Move 不认块的宽度"
+src = "2026-10-13 测试-怪癖 Q30"
+
+# ---------------------------------------------------------------- 显示、分页、颜色、背景、字体
+
+[[rule]]
+prop = ["display"]
+value = ["keyword"]
+via = ["sheet", "style", "inline", "important"]
+ireader = "same"
+xochitl = "fixed"
+note = "display:none Move 不认，隐藏的元素去掉（hidden.rs）；别的 display 值没单测，按块级、行内算"
+src = "2026-10-12 测试-隐藏"
+
+[[rule]]
+prop = ["page-break-before", "page-break-after"]
+ireader = "same"
+xochitl = "same"
+src = "2026-10-12 三台速查（写出器 21 真机 ✓）"
+
+[[rule]]
+prop = ["break-before", "break-after"]
+xochitl = "broken"
+note = "Move 不认 break-before:page（page-break-* 认）"
+src = "2026-10-12 三台速查"
+
+[[rule]]
+prop = ["color"]
+ireader = "fixed"
+xochitl = "same"
+note = "掌阅不认 rgba()，换成不透明色（KINDLE_RULES 8）；对比度照 Kindle 提到 4.5"
+src = "2026-10-06 掌阅真机；kindle_rules"
+
+[[rule]]
+prop = ["background*"]
+ireader = "fixed"
+xochitl = "fixed"
+note = "背景图、背景色照 Kindle 改写（KINDLE_RULES 8、10、12、13）"
+src = "2026-10-12 测试-背景图、测试-掌阅背景"
+
+[[rule]]
+prop = ["font-family"]
+ireader = "accept"
+xochitl = "accept"
+note = "正文字体用阅读器的字体（kindle_rules，正文字体不算验收）；别的字体三台按各自装的字体"
+src = "2026-10-08 用户定"
+
+[[rule]]
+prop = ["font-weight", "font-style"]
+ireader = "same"
+xochitl = "same"
+note = "粗体、斜体真书里看过（没逐项测）"
+src = "2026-10-09 三台真机看书"
+
+[[rule]]
+prop = ["hyphens", "-webkit-hyphens", "-epub-hyphens", "adobe-hyphenate"]
+ireader = "accept"
+xochitl = "accept"
+note = "三台都不认自动断字（不插软连字符）"
+src = "2026-10-01 英文排版真机"
+
+[[rule]]
+prop = ["-webkit-*", "-epub-*", "-moz-*", "-ms-*", "-o-*", "adobe-*", "orphans", "widows", "word-wrap", "overflow-wrap"]
+ireader = "accept"
+xochitl = "accept"
+note = "阅读器私有属性、分页孤行控制：不影响排出来的位置"
+src = "约定"
