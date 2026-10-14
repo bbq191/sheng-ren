@@ -1260,6 +1260,22 @@ pub enum Len {
     Pt(f64),
 }
 
+impl Len {
+    /// 数值是 0。
+    pub fn is_zero(&self) -> bool {
+        matches!(self, Len::Em(n) | Len::Percent(n) | Len::Pt(n) if *n == 0.0)
+    }
+
+    /// 数值乘 `k`（单位不变）。
+    pub fn scaled(self, k: f64) -> Len {
+        match self {
+            Len::Em(n) => Len::Em(n * k),
+            Len::Percent(n) => Len::Percent(n * k),
+            Len::Pt(n) => Len::Pt(n * k),
+        }
+    }
+}
+
 /// 切出开头的数字和后面的单位（`1.5em` → (1.5, "em")）；数字解析不了返回 `None`。
 fn split_number(v: &str) -> Option<(f64, &str)> {
     let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
@@ -1289,12 +1305,29 @@ pub const PT_PER_EM: f64 = 12.0;
 /// 外边距、内边距、边框的 1px 折合多少 pt（Send to Kindle 的口径，见 [`parse_box_len`]）。
 const PT_PER_BOX_PX: f64 = 0.45;
 
+/// 按阅读器排出来的样子算（`epub-to-kfx --styles --device=掌阅或 Move`，`tools/kfx/unify.py` 用）时，这台 1em 的屏幕像素：
+/// 掌阅、Move 上盒子长度的 px 是屏幕像素（怪癖测试书 Q10、Q48），[`parse_box_len`] 按它折。`None`（缺省）照 Send to Kindle 的
+/// 0.45pt 一 px。进程级的开关，只给分析命令用。
+static DEVICE_PX_EM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn set_device_px_em(em_px: Option<f64>) {
+    DEVICE_PX_EM.store(em_px.map_or(0, f64::to_bits), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn device_px_em() -> Option<f64> {
+    let b = DEVICE_PX_EM.load(std::sync::atomic::Ordering::Relaxed);
+    (b != 0).then(|| f64::from_bits(b))
+}
+
 /// 外边距、内边距的长度：同 [`parse_len`]，但 px 按 1px＝0.45pt 换算（Send to Kindle 的口径，和边框宽度一样：《绍宋》
 /// `margin:-10px` 写成 -0.3125lh、`margin-top:-12.5px` 在半号字上写成 -1.172lh；以前按 CSS 的 1px＝0.75pt，大了 2/3）。字号不走这里。
 pub fn parse_box_len(v: &str) -> Option<Len> {
     let t = v.trim().to_ascii_lowercase();
     match t.strip_suffix("px").and_then(|n| n.trim().parse::<f64>().ok()) {
-        Some(n) => Some(Len::Pt(n * PT_PER_BOX_PX)),
+        Some(n) => Some(match device_px_em() {
+            Some(em) => Len::Pt(n / em * PT_PER_EM),
+            None => Len::Pt(n * PT_PER_BOX_PX),
+        }),
         None => parse_len(&t),
     }
 }
@@ -1326,6 +1359,10 @@ pub struct Computed {
     pub color: Option<u32>,
     pub lang: Option<String>,
     pub superscript: bool,
+    /// 行内元素的基线偏移（往上为正，本元素字号的长度）：`vertical-align` 写的长度、`position:relative` 的 `top`（取负）/`bottom`
+    /// （Send to Kindle 写成 `$31`：2026-10-14 怪癖测试书 Q122 `vertical-align:0.5em`、Q123 `position:relative;top:-0.5em` 都写 0.5em）。
+    /// 不继承。
+    pub baseline_shift: Option<Len>,
     pub subscript: bool,
     /// 下划线、删除线、上划线（CSS 里不继承，但画在子元素上，按继承处理）。
     pub decoration: [bool; 3],
@@ -1468,6 +1505,7 @@ impl Computed {
             color: None,
             lang: None,
             superscript: false,
+            baseline_shift: None,
             subscript: false,
             decoration: [false; 3],
             small_caps: false,
@@ -1528,6 +1566,7 @@ impl Computed {
             break_after: false,
             bg_cover: false,
             bolder: false,
+            baseline_shift: None,
             ..self.clone()
         }
     }
@@ -1620,7 +1659,9 @@ impl Computed {
                 "x-small" => 0.75,
                 "small" | "smaller" => 0.89 * if v == "smaller" { parent.font_size } else { 1.0 },
                 "medium" => 1.0,
-                "large" | "larger" => 1.2 * if v == "larger" { parent.font_size } else { 1.0 },
+                // large 照 Send to Kindle 写 1.125（浏览器的 18px；2026-10-14 怪癖测试书 Q25，Amazon 写 1.125rem）；larger 没核过
+                "large" => 1.125,
+                "larger" => 1.2 * parent.font_size,
                 "x-large" => 1.5,
                 "xx-large" => 2.0,
                 _ => match parse_len(&v) {
@@ -1668,8 +1709,9 @@ impl Computed {
                 c.text_align = Some(v);
             }
         }
+        // px 按 0.45pt 一 px（Send to Kindle 同边距：2026-10-14 怪癖测试书 Q16、Q60，`text-indent:30px` 写 1.125em；以前按 0.75pt）
         if let Some(v) = get("text-indent") {
-            c.text_indent = parse_len(v);
+            c.text_indent = parse_box_len(v);
         }
         if let Some(v) = get("line-height") {
             let v = v.trim().to_ascii_lowercase();
@@ -1708,6 +1750,15 @@ impl Computed {
             } else {
                 c.superscript = matches!(v.as_str(), "super" | "top" | "text-top");
                 c.subscript = v == "sub";
+                if v.starts_with(|ch: char| ch.is_ascii_digit() || ch == '-' || ch == '.') {
+                    c.baseline_shift = parse_len(&v).filter(|l| !l.is_zero());
+                }
+            }
+        }
+        if !matches!(tag, "td" | "th" | "tr" | "img") && get("position").is_some_and(|v| v.trim().eq_ignore_ascii_case("relative")) {
+            let shift = get("top").and_then(parse_len).map(|l| l.scaled(-1.0)).or_else(|| get("bottom").and_then(parse_len));
+            if let Some(l) = shift.filter(|l| !l.is_zero()) {
+                c.baseline_shift = Some(l);
             }
         }
         if let Some(v) = get("text-decoration") {

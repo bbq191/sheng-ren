@@ -90,6 +90,39 @@ pub fn book_css<'e>(entries: &'e [Entry], media: Option<&MediaEnv>) -> HashMap<&
         .collect()
 }
 
+/// 单元格内容的自然宽度（CSS 像素，1em＝16px）：一行排开的字宽（中日韩、全角 1em，别的半个），加 10px（Send to Kindle 的列宽
+/// 照这个算出来对得上：「右格」两个字 42px，2026-10-14 怪癖测试书 Q127–Q129）。
+pub fn natural_px(td: &ElementRef, fs: f64) -> f64 {
+    let em: f64 = td.text().flat_map(str::chars).filter(|c| !c.is_whitespace()).map(|c| if (c as u32) >= 0x2E80 { 1.0 } else { 0.5 }).sum();
+    em * 16.0 * fs + 10.0
+}
+
+/// 表格的列宽（百分比，从第一列起、到第一个没写宽度的列为止）：第一行单元格写了的宽度换成 CSS 像素，除以写了的宽度加上没写的
+/// 单元格的自然宽度（Send to Kindle 同样：`td{width:1em}` 配一格「右格」写 27.5862%＝16/(16+42)、`width="30"` 写 41.6667%＝30/(30+42)，
+/// Q127–Q129；以前照写 em，Kindle 上那一格窄到一个字、字竖着排，Amazon 版横排）。写了百分比的照写。
+pub fn column_percents(widths: &[Option<Len>], naturals: &[f64]) -> Vec<f64> {
+    let px = |w: &Len, i: usize| match *w {
+        Len::Em(n) => n * 16.0,
+        Len::Pt(n) => n / 0.75,
+        Len::Percent(_) => naturals.get(i).copied().unwrap_or(0.0),
+    };
+    let total: f64 = widths.iter().enumerate().map(|(i, w)| w.as_ref().map_or(naturals.get(i).copied().unwrap_or(0.0), |w| px(w, i))).sum();
+    widths
+        .iter()
+        .enumerate()
+        .map_while(|(i, w)| w.as_ref().map(|w| (i, *w)))
+        .map(|(i, w)| match w {
+            Len::Percent(p) => p,
+            w if total > 0.0 => (px(&w, i) / total * 100.0 * 10000.0).round() / 10000.0,
+            _ => 0.0,
+        })
+        .collect()
+}
+
+/// 标题的字号按阅读器改写成关键字时（Move 只认关键字，`wash/block_style.rs`），原来在 Kindle 上的字号（根 em）记在这个属性里：
+/// 后面照 Kindle 算位置的 pass 按它算，不按关键字的 CSS 字号。
+pub const KINDLE_FS_ATTR: &str = "data-eink-fs";
+
 /// `<body>` 里的一个元素。
 pub struct El {
     pub node: NodeId,
@@ -159,7 +192,12 @@ impl Chapter {
         while let Some((n, parent, pi, block, hidden)) = stack.pop() {
             let Some(el) = ElementRef::wrap(n) else { continue };
             let (decls, origin) = with_origin(&el);
-            let c = Rc::new(Computed::derive(&parent, &decls, el.value().name()));
+            let mut c = Computed::derive(&parent, &decls, el.value().name());
+            // 照这台改过字号的标题：Kindle 上的字号（见 [`KINDLE_FS_ATTR`]）
+            if let Some(fs) = el.value().attr(KINDLE_FS_ATTR).and_then(|v| v.parse::<f64>().ok()) {
+                c.font_size = fs;
+            }
+            let c = Rc::new(c);
             let hidden = hidden || c.display.as_deref() == Some("none");
             let is_block = crate::cascade::is_block(&el, &c);
             let me = els.len();

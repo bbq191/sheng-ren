@@ -393,7 +393,7 @@ src = "2026-10-13 测试-怪癖 Q30"
 prop = ["width"]
 on = ["p", "block", "heading"]
 xochitl = "fixed"
-note = "Move 不认块的宽度、认左右外边距：照 Kindle 折成左右外边距（居中的两边各一半，KINDLE_RULES 28）"
+note = "Move 不认块的宽度、认左右外边距：照 Kindle 折成左右外边距（KINDLE_RULES 28；Kindle 不按 margin:auto 居中，多出来的都放右边，KINDLE_RULES 31）"
 src = "2026-10-13 测试-怪癖 Q30"
 
 # ---------------------------------------------------------------- 显示、分页、颜色、背景、字体
@@ -495,10 +495,10 @@ src = "2026-10-14 测试书取值（《风起陇西》《绍宋》《人生复�
 prop = ["margin-left", "margin-right"]
 on = ["p", "block", "heading"]
 value = ["keyword"]
-ireader = "same"
-xochitl = "same"
-note = "左右外边距 auto：没定宽度的块本来就满宽，没效果；定了宽度的掌阅照 CSS 居中（Q124），Move 由上面 width 那条照 Kindle 折成外边距"
-src = "2026-10-13 测试-怪癖 Q30；2026-10-14 测试-怪癖-掌阅 Q124、测试书取值（只有 auto）"
+ireader = "fixed"
+xochitl = "fixed"
+note = "左右外边距 auto：没定宽度的块本来就满宽，没效果。定了宽度的 Kindle 不居中、不靠右（Send to Kindle 写了块对齐，Kindle 照样靠左）：掌阅照 CSS 居中 → 左边的 auto 写成 0（KINDLE_RULES 31，profile margin_auto）；Move 由 width 那条折外边距时多出来的都放右边"
+src = "2026-10-13 测试-怪癖 Q30；2026-10-14 测试-怪癖 Q124（两台）、测试-怪癖-Kindle 真机截图"
 
 # ---------------------------------------------------------------- 竖直对齐、列表符号、块高、flex、定位（2026-10-14 探针 Q100–Q119）
 
@@ -568,10 +568,18 @@ note = "掌阅认；Move 不认 min-height（Kindle 写出器照写）；测试�
 src = "2026-10-14 测试-怪癖 Q112（两台）"
 
 [[rule]]
+prop = ["position", "top", "bottom", "left", "right", "vertical-align"]
+on = ["inline"]
+ireader = "accept"
+xochitl = "accept"
+note = "行内元素的 position:relative 的 top/bottom、vertical-align 写的长度：Kindle 写成基线偏移、真机抬高（Send to Kindle、写出器 22），两台都不认；没有别的写法，测试书里也没用到"
+src = "2026-10-14 测试-怪癖 Q122、Q123（两台）、测试-怪癖-Kindle 真机截图"
+
+[[rule]]
 prop = ["justify-content", "align-items", "flex-direction", "position", "top", "bottom", "left", "right"]
 ireader = "same"
 xochitl = "same"
-note = "flex 布局、定位两台都不认（照普通块排、text-align 照认），Kindle 写出器也不写"
+note = "flex 布局、块的定位两台都不认（照普通块排、text-align 照认），Kindle 写出器也不写"
 src = "2026-10-14 测试-怪癖 Q115、Q116（两台）"
 
 [[rule]]
@@ -599,18 +607,18 @@ src = "2026-10-14 测试-怪癖-掌阅 Q49–Q51"
 [[rule]]
 prop = ["width"]
 on = ["cell"]
-ireader = "same"
+ireader = "fixed"
 xochitl = "fixed"
-note = "单元格的宽度：掌阅照 CSS（同 Kindle 写出器）；Move CSS 写的（类规则、行内）不认、HTML width 属性认：照 Kindle 写成属性（长度折成屏幕像素，百分比照写；KINDLE_RULES 29，profile cell_width；《雪国》译者竖排格）"
-src = "2026-10-14 测试-怪癖 Q127–Q129（两台）"
+note = "单元格的宽度：Kindle 不把格子压窄（Send to Kindle 写成表格列宽的百分比，td{width:1em} 的字照样横排）；两台照 Kindle 的算法写成列宽百分比：掌阅（CSS、属性都认，width:auto 不认）写行内 width:P%，Move（只认 width 属性）写属性（KINDLE_RULES 31，profile cell_width；优化后的测试书两台真机横排，第一格变宽同 Kindle；《雪国》译者页）"
+src = "2026-10-14 测试-怪癖 Q127–Q129（两台）、测试-怪癖-Kindle Send to Kindle 版真机截图"
 
 [[rule]]
 prop = ["width", "height"]
 on = ["inline"]
-ireader = "same"
-xochitl = "same"
-note = "行内元素（inline-block）的宽高：测试书里只有《狼厅》空的注释图标 span（19px 黑底圆、注释文字在 data 属性里），两台都不画，Kindle 写出器也不出节点"
-src = "2026-10-14 测试-怪癖 Q125、Q126（两台）"
+ireader = "accept"
+xochitl = "accept"
+note = "行内元素（inline-block）的宽高：测试书里只有《狼厅》空的注释图标 span（19px 黑底圆、注释文字在 data 属性里）。Kindle 画出黑圆点（Send to Kindle 插零宽空格，写出器 22 照做），两台都不画；图标点不开，没有它不影响阅读（用户定不管）"
+src = "2026-10-14 测试-怪癖 Q125、Q126（两台）、测试-怪癖-Kindle 真机截图"
 
 [[rule]]
 prop = ["padding-*", "margin-*"]

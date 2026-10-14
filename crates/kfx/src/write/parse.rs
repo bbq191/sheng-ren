@@ -714,7 +714,7 @@ impl Doc<'_> {
     /// 跨列、跨行、竖直对齐写在单元格的样式里；`<caption>` 是 `$269` 节点（`$615: $453`）套文字。
     fn table(&self, el: ElementRef, comp: Computed) -> Block {
         let mut parts = Vec::new();
-        let mut col_widths: Option<Vec<Len>> = None;
+        let mut col_widths: Option<Vec<f64>> = None;
         let spacing = |l: Option<Len>| match l {
             Some(Len::Pt(n)) => n * KFX_PT_PER_CSS_PT,
             Some(Len::Em(n)) => n * PT_PER_EM * comp.font_size,
@@ -744,16 +744,24 @@ impl Doc<'_> {
                         let rc = self.comp(&tr, &pc);
                         let mut cells = Vec::new();
                         let mut widths = Vec::new();
+                        let mut naturals = Vec::new();
                         for td in tr.children().filter_map(ElementRef::wrap).filter(|e| matches!(e.value().name(), "td" | "th")) {
                             let mut cc = self.comp(&td, &rc);
                             if cc.width.is_none() {
-                                cc.width = td.value().attr("width").and_then(crate::css::parse_len);
+                                // HTML 属性不带单位的是像素（`width="30"`，Send to Kindle 按 30px 算列宽，Q129）
+                                cc.width = td.value().attr("width").and_then(|w| match w.trim().parse::<f64>() {
+                                    Ok(n) => Some(Len::Pt(n * 0.75)),
+                                    Err(_) => crate::css::parse_len(w),
+                                });
                             }
-                            // UA 样式：单元格内边距 1px。
+                            // UA 样式：单元格内边距 1px（按 0.45pt，Send to Kindle 写 0.031lh、0.117%，2026-10-14 怪癖测试书 Q97）。
                             for p in cc.padding.iter_mut() {
-                                p.get_or_insert(Len::Pt(0.75));
+                                p.get_or_insert(Len::Pt(0.45));
                             }
                             widths.push(cc.width);
+                            naturals.push(bookconv::kindle_model::natural_px(&td, cc.font_size));
+                            // 单元格自己不写宽度、只写 `$546: $377`，宽度写成表格的列宽（Send to Kindle 同样，Q127–Q129）
+                            let sized = cc.width.take().is_some();
                             let valign = match cc.valign.as_deref() {
                                 Some("top" | "text-top") => VALIGN_TOP,
                                 Some("bottom" | "text-bottom") => VALIGN_BOTTOM,
@@ -761,6 +769,9 @@ impl Doc<'_> {
                             };
                             let mut cell = self.wrap_children(td, cc, None);
                             cell.extra.push((P_CELL_VALIGN, Value::Symbol(valign)));
+                            if sized {
+                                cell.extra.push((P_SIZING, Value::Symbol(SIZING_VALUE)));
+                            }
                             for (attr, key) in [("colspan", P_COLSPAN), ("rowspan", P_ROWSPAN)] {
                                 if let Some(n) = td.value().attr(attr).and_then(|v| v.trim().parse::<i64>().ok()).filter(|n| *n > 1) {
                                     cell.extra.push((key, Value::Int(n)));
@@ -769,7 +780,7 @@ impl Doc<'_> {
                             cells.push(cell);
                         }
                         if col_widths.is_none() {
-                            col_widths = Some(widths.into_iter().map_while(|w| w).collect());
+                            col_widths = Some(bookconv::kindle_model::column_percents(&widths, &naturals));
                         }
                         let mut row = Block::anonymous(Kind::Container(cells), rc.inherited(), Vec::new());
                         row.ty = Some(NODE_ROW);
@@ -787,7 +798,7 @@ impl Doc<'_> {
             (TABLE_SPACING_H, num(spacing(comp.border_spacing), U_PT)),
             (TABLE_SPACING_V, num(spacing(comp.border_spacing), U_PT)),
         ];
-        let cols: Vec<Value> = col_widths.unwrap_or_default().into_iter().filter_map(|w| width_value(w, comp.font_size)).map(|v| Value::Struct(vec![(P_WIDTH, v)])).collect();
+        let cols: Vec<Value> = col_widths.unwrap_or_default().into_iter().map(|p| Value::Struct(vec![(P_WIDTH, num(p, U_PERCENT))])).collect();
         if !cols.is_empty() {
             attrs.push((TABLE_COLUMNS, Value::List(cols)));
         }
@@ -919,6 +930,33 @@ impl Doc<'_> {
                 if let Some(id) = el.value().attr("id") {
                     inl.push_id(id);
                 }
+                // 空的 inline-block 小方块（《狼厅》微信读书注释图标：19px 黑底圆，注释文字只在属性里）：Send to Kindle 插一个零宽空格，
+                // 区间写背景、圆角、竖直对齐，外边距和宽度（写成右内边距）按 0.75pt 一 px、高度按 0.45pt 写成最小高度，Kindle 上画出
+                // 黑圆点（2026-10-14 怪癖测试书 Q125 真机）
+                if comp.display.as_deref() == Some("inline-block") && el.text().all(|t| t.trim().is_empty()) && el.children().all(|c| !c.value().is_element()) && (comp.background.is_some() || comp.width.is_some()) {
+                    let fs = comp.font_size;
+                    let mut rc = comp.clone();
+                    for side in [1, 3] {
+                        rc.margin[side] = comp.margin[side].map(|l| match l {
+                            Len::Pt(n) => Len::Em(n / 0.45 * 0.75 / bookconv::cascade::PT_PER_EM / fs),
+                            l => l,
+                        });
+                    }
+                    rc.padding[1] = comp.width.map(|l| match l {
+                        Len::Pt(n) => Len::Em(n / bookconv::cascade::PT_PER_EM / fs),
+                        l => l,
+                    });
+                    rc.min_height = comp.min_height.map(|l| match l {
+                        Len::Pt(n) => Len::Pt(n * 0.6),
+                        l => l,
+                    });
+                    inl.open_run(Run { start: 0, len: 0, comp: Some(rc), link: None, note_ref: false, anchor: false });
+                    inl.push_char('\u{200B}');
+                    if let Some(o) = inl.open.pop() {
+                        inl.close_run(o);
+                    }
+                    return;
+                }
                 let link = (name == "a")
                     .then(|| el.value().attr("href"))
                     .flatten()
@@ -1016,6 +1054,14 @@ fn run_differs(a: &Computed, b: &Computed) -> bool {
         || a.letter_spacing != b.letter_spacing
         || a.background.is_some()
         || a.has_border()
+        || inline_box(a)
+        || a.baseline_shift.is_some()
+}
+
+/// 行内元素有左右外边距或内边距（Send to Kindle 写在行内区间上：2026-10-14 怪癖测试书 Q88–Q92，`margin-left:2em` 写 2em、`30px` 写
+/// 13.5pt；以前丢了）。
+pub(super) fn inline_box(c: &Computed) -> bool {
+    [c.margin[1], c.margin[3], c.padding[1], c.padding[3]].iter().any(|l| l.is_some_and(|l| !l.is_zero()))
 }
 
 /// 解析好的一个文档：(spine 下标, 路径, 语言, 块)。

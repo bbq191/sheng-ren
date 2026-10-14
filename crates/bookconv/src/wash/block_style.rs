@@ -75,7 +75,10 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
                 decls.entry(n).or_default().push(format!("line-height:{}", fmt(v)));
             }
         }
-        for (n, kw) in &doc.heading_sizes {
+        // 关键字是按这台的字号挑的：标题在 Kindle 上的字号记在 `data-eink-fs`，后面照 Kindle 算的 pass（垫图、内边距和间距）按它算
+        // （[`crate::kindle_model::Chapter::parse`]；以前按关键字的 CSS 字号算，large 从 1.2 改成 Send to Kindle 的 1.125 后标题前后的间距跟着偏）
+        let kindle_fs: HashMap<usize, f64> = doc.heading_sizes.iter().map(|(n, _, fs)| (*n, *fs)).collect();
+        for (n, kw, _) in &doc.heading_sizes {
             decls.entry(*n).or_default().push(format!("font-size:{kw}"));
         }
         if decls.is_empty() {
@@ -96,6 +99,9 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
                 };
                 tag = html::set_attr(&tag, "style", &style);
             }
+            if let Some(fs) = kindle_fs.get(&n) {
+                tag = html::set_attr(&tag, km::KINDLE_FS_ATTR, &fmt(*fs));
+            }
             rep.kindle_rule_edits += ds.len();
             edits.push((t.start, t.end, tag));
         }
@@ -114,8 +120,8 @@ struct Doc {
     items: Vec<Item>,
     /// `<body>` 的 (写的 `line-height`, 计算出的行高, 字号)：只认长度的阅读器上往下继承。
     body: (Option<String>, Option<f64>, f64),
-    /// (第几个开始标签, 关键字)。
-    heading_sizes: Vec<(usize, String)>,
+    /// (第几个开始标签, 关键字, 标题在 Kindle 上的字号)。
+    heading_sizes: Vec<(usize, String, f64)>,
 }
 
 /// `<body>` 里的一个元素（文档序，和标签扫描的开始标签一一对应）。
@@ -351,12 +357,14 @@ fn length_line_heights(items: &[Item], body: &(Option<String>, Option<f64>, f64)
 }
 
 /// 要改字号的标题：(第几个开始标签, 关键字)。
-fn heading_sizes(ch: &Chapter, h: &HeadingSizes) -> Vec<(usize, String)> {
+fn heading_sizes(ch: &Chapter, h: &HeadingSizes) -> Vec<(usize, String, f64)> {
     // 标题：(第几个开始标签, 这台上本来的大小, Kindle 上的字号 → 字数)
     struct Heading {
         n: usize,
         on_reader: f64,
         sizes: HashMap<i64, usize>,
+        /// 标题元素在 Kindle 上的字号（根 em）。
+        kindle: f64,
     }
     let mut heads: Vec<Heading> = Vec::new();
     // 每个元素所在的标题（在 heads 里的下标）
@@ -367,7 +375,7 @@ fn heading_sizes(ch: &Chapter, h: &HeadingSizes) -> Vec<(usize, String)> {
         let head = match el.parent.and_then(|p| head_of[p]) {
             None if h.tag_size(tag).is_some() => {
                 let on_reader = h.on_reader(tag, el.decls.get("font-size").map(String::as_str)).expect("是标题");
-                heads.push(Heading { n: i, on_reader, sizes: HashMap::new() });
+                heads.push(Heading { n: i, on_reader, sizes: HashMap::new(), kindle: el.comp.font_size });
                 Some(heads.len() - 1)
             }
             other => other,
@@ -386,7 +394,7 @@ fn heading_sizes(ch: &Chapter, h: &HeadingSizes) -> Vec<(usize, String)> {
         .filter_map(|hd| {
             let want = km::weighted_mode(&hd.sizes)?;
             let (kw, size) = h.nearest(want);
-            ((size - hd.on_reader).abs() > 1e-6).then(|| (hd.n, kw.to_string()))
+            ((size - hd.on_reader).abs() > 1e-6).then(|| (hd.n, kw.to_string(), hd.kindle))
         })
         .collect()
 }
@@ -459,9 +467,10 @@ mod tests {
             "h1{font-size:2em} h2{font-size:1.5em} h3{font-size:1.17em} h4{font-size:1em} h6{font-size:0.67em} .big{font-size:2em} h3.one{font-size:1em} span.s{font-size:0.6em} h4.kw{font-size:large}",
             &reader,
         );
-        assert!(out.contains(r#"<h2 class="big" style="font-size:xx-large;">章</h2><h2>节</h2><h3 class="one" style="color:red;font-size:medium;">小节</h3>"#), "{out}");
+        assert!(out.contains(r#"<h2 class="big" style="font-size:xx-large;" data-eink-fs="2">章</h2><h2>节</h2><h3 class="one" style="color:red;font-size:medium;" data-eink-fs="1">小节</h3>"#), "{out}");
         // span 0.6em × 2em = 1.2em → large
-        assert!(out.contains(r#"<h1 style="font-size:large;"><span class="s">标题</span></h1><h4 class="kw">四</h4><h6 style="font-size:small;">六</h6><p class="big">正文</p>"#), "{out}");
+        // Kindle 上的字号记在 data-eink-fs（后面照 Kindle 算的 pass 用）
+        assert!(out.contains(r#"<h1 style="font-size:large;" data-eink-fs="2"><span class="s">标题</span></h1><h4 class="kw">四</h4><h6 style="font-size:small;" data-eink-fs="0.67">六</h6><p class="big">正文</p>"#), "{out}");
     }
 
     /// 只认长度的阅读器（缺省行距 1.5em）：样式表里的行距照 Kindle 改成 em（body 上倍数是 1 的不改，`<p>` 上的 1.84 → 1.5em；标题 1.2 → 1.2/1.84 × 1.5，3em → 3/1.84 × 1.5，
@@ -487,7 +496,7 @@ mod tests {
         let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
         let page = format!(r#"<h2 style="color:red">章</h2>{p}"#);
         let css = "body{line-height:1.618} h2{font-size:2em}";
-        assert!(run_with(&page, css, &move_reader()).contains(r#"<h2 style="color:red;line-height:1;font-size:xx-large;">章</h2>"#));
+        assert!(run_with(&page, css, &move_reader()).contains(r#"<h2 style="color:red;line-height:1;font-size:xx-large;" data-eink-fs="2">章</h2>"#));
         assert_eq!(run_with(&page, css, &ReaderModel::default()), String::from_utf8(book(&page, css)[2].data.clone()).unwrap());
     }
 }

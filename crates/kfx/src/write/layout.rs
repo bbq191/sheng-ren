@@ -282,12 +282,22 @@ impl Builder {
                         }
                         if let Some(rc) = &r.comp {
                             let mut rp = text_props(&mut self.styles, rc, &me);
+                            // 字号和段落一样的不写（Send to Kindle 同样；写了的话 Kindle 按区间的字号另算行高，基线偏移、空的
+                            // inline-block 把整行撑高，2026-10-14 怪癖测试书 Q122、Q125 真机对照）
+                            if (rc.font_size - b.comp.font_size).abs() < 1e-6 {
+                                rp.take(P_FONT_SIZE);
+                            }
+                            // 空的 inline-block 插的零宽空格：没有字，不写文字颜色（Send to Kindle 同样）
+                            if text.chars().skip(r.start).take(r.len).all(|c| c == '\u{200B}') {
+                                rp.take(P_COLOR);
+                            }
                             if rc.superscript && !b.comp.superscript {
                                 rp.symbol(P_VERTICAL_ALIGN, VALIGN_SUPER);
                             } else if rc.subscript && !b.comp.subscript {
                                 rp.symbol(P_VERTICAL_ALIGN, VALIGN_SUB);
                             }
                             rp.extend(border_props(rc));
+                            rp.extend(inline_box_props(rc));
                             // `<a>` 的颜色写成链接（未访问、已访问）的颜色（Send to Kindle 同样：《人生海海》目录 `color:#00C`）
                             if r.anchor {
                                 if let Some(col) = rp.take(P_COLOR) {

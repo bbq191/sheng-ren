@@ -248,10 +248,20 @@ pub struct Profile {
     /// `<sup>`/`<sub>` 标签认（Q120、Q121）：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，写了 super/sub 的行内元素里面包一层
     /// `<sup>`/`<sub>`（Kindle 写出器两种写法写成同一个值；`bookconv::wash::sup_sub`）。
     pub inline_valign: bool,
-    /// 阅读器认单元格 CSS 写的宽度（TOML 里不写是 `true`）。xochitl 不认（类规则、行内都不认），HTML 的 `width` 属性认（2026-10-14 探针
-    /// Q127–Q129）：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，CSS 定了宽度、没写 `width` 属性的单元格照 Kindle 写成属性
-    /// （长度折成这台的屏幕像素，百分比照写；`bookconv::wash::box_fix`）。
+    /// 阅读器按单元格的宽度（CSS、`width` 属性）把格子压窄（TOML 里不写是 `true`，同 CSS）。Kindle 不压：Send to Kindle 把宽度写成
+    /// 表格列宽的百分比，`td{width:1em}` 的字照样横排（2026-10-14 怪癖测试书 Q127–Q129 真机）。掌阅压窄（字竖着排）。只修复、照
+    /// Send to Kindle 统一的文字书里单元格的宽度照 Kindle 写成列宽百分比：`true` 写行内 `width:P%`（掌阅 `width:auto` 不认）、
+    /// `false`（xochitl：CSS 写的不认、属性认）写 `width` 属性（`bookconv::wash::box_fix`）。
     pub cell_width: bool,
+    /// 阅读器按左右外边距 `auto` 让定了宽度的块居中、靠右（TOML 里不写是 `true`，同 CSS）。Kindle 不（Send to Kindle 写了块对齐
+    /// `$580`，Kindle 照样靠左，2026-10-14 怪癖测试书 Q124 真机）：只修复、照 Send to Kindle 统一的文字书里定了宽度的块上 auto 的
+    /// 外边距写成 0（认块宽度的阅读器；不认的在宽度折成外边距时多出来的都放右边，`bookconv::wash::box_fix`）。
+    pub margin_auto: bool,
+    /// 左右外边距、内边距的 `em` 照 Kindle 按页宽换算（TOML 里不写是 `false`）。Kindle 的左右长度一律按页宽的百分比显示（em 按一页
+    /// 32 个 em 折，写出器同 Send to Kindle），xochitl 一行只有约 22 个 em（842px ÷ 37.8），同样的 em 宽出约 1.4 倍：写 `true` 时只修复、
+    /// 照 Send to Kindle 统一的文字书里左右外边距、内边距的 em、pt 乘「这台一行的 em 数 ÷ 32」（`bookconv::wash::kindle_rules`，用户
+    /// 2026-10-14 选；正的首行缩进不动，Kindle 在整页宽的块里也按 em；负的悬挂缩进跟着乘）。
+    pub horizontal_scale: bool,
     /// 阅读器认 `rem`（TOML 里不写是 `true`）。掌阅不认，整条声明当没写（2026-10-13 怪癖测试书 Q53：`margin-left:2rem` 不挪）：写 `false`
     /// 时只修复、照 Send to Kindle 统一的文字书里字号以外的 rem 改成 em（Kindle 写出器同样按本元素的 em 算），字号的 rem 折成 px
     /// （`bookconv::wash::css_compat`）。
@@ -366,6 +376,10 @@ struct ProfileFile {
     #[serde(default = "yes")]
     cell_width: bool,
     #[serde(default = "yes")]
+    margin_auto: bool,
+    #[serde(default)]
+    horizontal_scale: bool,
+    #[serde(default = "yes")]
     rem: bool,
     #[serde(default = "yes")]
     important: bool,
@@ -399,7 +413,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }

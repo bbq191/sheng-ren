@@ -513,12 +513,14 @@ pub(super) fn finish(syms: &ResourceSymbols, res: &ResourceStore, sections: &[Se
     Ok(c.into_bytes())
 }
 
-/// 元数据里写的语言。中文书写 `en`：Kindle 只看元数据语言决定开不开「Aa → 间距」里的段间距、字间距、字符间距，
-/// 中文书不开；正文样式里的 `$10` 仍是书本身的语言，中文排版（字体、避头尾、标点挤压）不受影响。代价是长按查词
-/// 默认弹英文词典，要在右下角手动切到中文词典（用户 2026-10-05 选的，真机「封面结构63」）。
+/// 元数据里写的语言：照书本身的（Send to Kindle 同样，中文书写 `zh`）。2026-10-05 起中文书写过 `en`（用户选的：Kindle 只看
+/// 元数据语言决定开不开「Aa → 间距」里的段间距、字间距），2026-10-14 怪癖测试书真机对照查出写 `en` 时 Kindle 按英文排中文：
+/// 全书各行差 2–3px，上标、基线偏移、行内小块把整行往下推约 20px；写 `zh` 后和 Send to Kindle 版逐像素一样。用户改选 `zh`
+/// （间距不能调，同 Amazon 自己的中文书；长按查词默认中文词典）。`zh-CN` 这类一律写 `zh`（真机逐像素核过的是 `zh`；Amazon 对
+/// `zh-CN` 的书写什么没有样本）。没有语言的写 `en`。
 fn meta_language(book_lang: Option<&str>) -> String {
     match book_lang {
-        Some(l) if l.to_ascii_lowercase().starts_with("zh") => "en".to_string(),
+        Some(l) if l.to_ascii_lowercase().starts_with("zh") => "zh".to_string(),
         Some(l) => l.to_string(),
         None => "en".to_string(),
     }

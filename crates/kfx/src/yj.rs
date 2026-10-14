@@ -121,6 +121,8 @@ pub const P_TEXT_ALIGN: u32 = 34;
 pub const P_TEXT_INDENT: u32 = 36;
 pub const P_LINE_HEIGHT: u32 = 42;
 pub const P_VERTICAL_ALIGN: u32 = 44;
+/// 基线偏移（往上为正）：行内元素 `vertical-align` 写的长度、`position:relative` 的 `top`/`bottom`。
+pub const P_BASELINE_SHIFT: u32 = 31;
 pub const P_MARGIN_TOP: u32 = 47;
 pub const P_MARGIN_LEFT: u32 = 48;
 pub const P_MARGIN_BOTTOM: u32 = 49;

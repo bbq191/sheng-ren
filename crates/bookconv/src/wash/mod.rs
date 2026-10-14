@@ -154,7 +154,13 @@ pub use self::encoding::transcode_entries;
 ///   写 `vertical-align:middle`（探针 Q105、Q106；`box_fix.rs`，profile `cell_middle`；掌阅同样）；掌阅上写了 `vertical-align:super/sub`
 ///   的行内元素里面包 `<sup>`/`<sub>`（Q100–Q123；`sup_sub.rs`，profile `inline_valign`）。
 /// - 30（2026-10-14）：Move 上单元格 CSS 写的宽度照 Kindle 写成 `width` 属性（探针 Q127–Q129；`box_fix.rs`，profile `cell_width`）。
-pub const KINDLE_RULES_VERSION: &str = "30";
+/// - 31（2026-10-14，Kindle 对照）：撤掉 30 的 Move 单元格 `width` 属性（Kindle 不按单元格宽度压窄，Move 不认 CSS 宽度本来就同
+///   Kindle）；单元格的宽度两台照 Send to Kindle 写成列宽百分比（掌阅行内 `width:P%`、Move 属性，profile `cell_width`）；定宽块 `margin:auto` 不居中（Kindle 不认）：Move 折外边距时多出来的
+///   都放右边、掌阅左边的 auto 写成 0（profile `margin_auto`）；首行缩进 px 按 0.45pt（掌阅折 em 跟着对）；`font-size:large` 1.125。
+///   Move 上左右外边距、内边距的 em 照 Kindle 按页宽换算（乘一行的 em 数 ÷ 32，约 0.70；profile `horizontal_scale`，用户选）；
+///   body 的左右边距逐文件照 Kindle（和全书多数不一样的文件 body 加类，`eink-body.css`，用户选）；图片加了按 Kindle 折的类时
+///   `<img>` 行内 style 里的宽高去掉（两台认行内样式、压过类规则：《克莱因壶》Move、《狼厅》掌阅的图和 Kindle 不一样大）。
+pub const KINDLE_RULES_VERSION: &str = "31";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -267,6 +273,8 @@ pub struct WashOpts {
     pub bg_place: Option<crate::bgfit::TileGeometry>,
     /// 竖直间距照 Kindle 换算（掌阅、Move，profile `em_px`；`kindle_rules::VScale`）。`None` 不换。
     pub v_scale: Option<VScale>,
+    /// 左右边距的 em 照 Kindle 按页宽换算的系数（Move，profile `horizontal_scale`；`kindle_rules::scale_horizontal_entries`）。`None` 不换。
+    pub h_scale: Option<f64>,
     /// 阅读器和 CSS 不一样的地方（[`ReaderModel`]，从 profile 来）：不认 `display:none` 的去掉隐藏的元素（`hidden.rs`）、空段去掉
     /// 而不是藏起来、块末尾多排一行的 `<br/>` 去掉（`blank_fold.rs`）；块的行距、标题字号照 Kindle 改写（`block_style.rs`）；页首垫图
     /// 的尺寸（`top_spacer.rs`）。缺省是完全照 CSS 排的阅读器，什么都不改。
@@ -291,7 +299,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, h_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None }
     }
 }
 
@@ -569,6 +577,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         // 竖直间距照 Kindle 换算放在最后：上面几步都按原来的 CSS 算 Kindle 上的样子
         if let Some(vs) = opts.v_scale {
             rep.kindle_rule_edits += kindle_rules::scale_vertical_entries(entries, &vs);
+        }
+        // 左右边距的 em 照 Kindle 按页宽换算（Move）：同样最后做，box_fix 写的按 Kindle 的口径，一起乘
+        if let Some(h) = opts.h_scale {
+            rep.kindle_rule_edits += kindle_rules::scale_horizontal_entries(entries, h);
         }
         // 行内 style、<style>、不带分号又紧挨 } 的声明里 em 不照 CSS 排的阅读器（Move）：挪进外链样式表。最后做：上面几步写进行内的、换算过的值一起挪
         if !opts.reader.inline_css_lengths {

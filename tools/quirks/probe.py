@@ -169,6 +169,8 @@ PROBES = [
     ("127", "td width:1em（《雪国》译者竖排格，对照没写）", "markup", "", '<table><tbody><tr><td>林少华译</td><td>右格</td></tr></tbody></table>|<table><tbody><tr><td class="tw1">林少华译</td><td>右格</td></tr></tbody></table>'),
     ("128", "td 行内 style width:1em", "markup", "", '<table><tbody><tr><td>林少华译</td><td>右格</td></tr></tbody></table>|<table><tbody><tr><td style="width:1em">林少华译</td><td>右格</td></tr></tbody></table>'),
     ("129", "td width=\"30\" 属性", "markup", "", '<table><tbody><tr><td>林少华译</td><td>右格</td></tr></tbody></table>|<table><tbody><tr><td width="30">林少华译</td><td>右格</td></tr></tbody></table>'),
+    ("130", "图（rule.png 1000×6）行内 style width:12em（《克莱因壶》，Kindle 占 42%）", "markup", "", '<div><img class="ruleb" src="rule.png" alt=""/></div>|<div><img style="width:12em" src="rule.png" alt=""/></div>'),
+    ("131", "图行内 style width:769px;max-width:428px（《狼厅》，Kindle 满宽）", "markup", "", '<div><img class="ruleb" src="rule.png" alt=""/></div>|<div><img style="max-width:428px;width:769px" src="rule.png" alt=""/></div>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）

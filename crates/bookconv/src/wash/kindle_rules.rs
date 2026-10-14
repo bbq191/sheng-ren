@@ -18,13 +18,13 @@ use super::*;
 use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
 /// 照 Send to Kindle 的规则改书的样式表（独立的 `.css`、`<style>`）和行内 `style`；改了的声明数记进 `rep.kindle_rule_edits`。
-pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts) -> Option<f64> {
+pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, opts: &WashOpts) -> Option<f64> {
     let media = opts.media.as_ref();
     let facts = book_facts(entries, media);
     let font_scale = font_scale(entries, facts.base_font_size);
     let mut ctx = Ctx {
         body_fonts: facts.body_font.iter().cloned().collect(),
-        body_classes: facts.body_classes,
+        body_classes: facts.body_classes.clone(),
         neg_left: facts.neg[0],
         neg_right: facts.neg[1],
         font_scale,
@@ -58,6 +58,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, opts: &WashOpts
     }
     ctx.body_fonts.extend(exposed_fonts(entries, media, &ctx, &facts.fonts));
     rep.kindle_rule_edits += rewrite_entries(entries, &ctx);
+    rep.kindle_rule_edits += per_file_body_margins(entries, &facts);
     ctx.font_scale.filter(|&k| k != 1.0)
 }
 
@@ -263,6 +264,93 @@ pub(super) fn scale_vertical_entries(entries: &mut [Entry], vs: &VScale) -> usiz
     .sum()
 }
 
+/// 一段声明里的左右外边距、内边距的 em、pt 乘 `h`（分项、简写一样；简写只换左右两个值）。返回 (新文本, 改了几条)。正的首行缩进
+/// 不动、负的跟着乘；
+/// px 不动（xochitl 的 px 是屏幕像素，本来就按页宽算），% 不动（xochitl 当 px，box_fix 已折成 em）。
+pub(super) fn scale_horizontal(text: &str, h: f64) -> (String, usize) {
+    let em = |v: &str| -> Option<String> {
+        let v = v.trim();
+        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))?;
+        let n: f64 = v[..end].parse().ok()?;
+        let unit = v[end..].to_ascii_lowercase();
+        (n != 0.0 && matches!(unit.as_str(), "em" | "rem" | "pt")).then(|| format!("{}{}", fmt_num((n * h * 10000.0).round() / 10000.0), &v[end..]))
+    };
+    let decls = html::css_decls(text);
+    let mut edits = Vec::new();
+    for d in &decls {
+        let prop = d.prop.to_ascii_lowercase();
+        let (value, imp) = strip_important(d.value);
+        let new = match prop.as_str() {
+            "margin-left" | "margin-right" | "padding-left" | "padding-right" => em(value).map(|v| format!("{v}{imp}")),
+            // 负的首行缩进（悬挂缩进，配着左边距）跟着乘：Kindle 在有左右边距的块里也把首行缩进写成百分比，同页宽口径（不乘的话
+            // 第一行伸出内容区，Move 测试书 Q14 伸出 24px）；正的不动（整页宽的块里 Kindle 按 em 写）
+            "text-indent" if value.trim_start().starts_with('-') => em(value).map(|v| format!("{v}{imp}")),
+            "margin" | "padding" => match box_sides(d.value) {
+                BoxSides::Sides([t, r, b, l], imp) => {
+                    let (nr, nl) = (em(r), em(l));
+                    (nr.is_some() || nl.is_some()).then(|| format!("{t} {} {b} {}{imp}", nr.unwrap_or_else(|| r.to_string()), nl.unwrap_or_else(|| l.to_string())))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(v) = new {
+            let start = d.start + d.raw.find(d.value).unwrap_or(0);
+            edits.push((start, start + d.value.len(), v));
+        }
+    }
+    let n = edits.len();
+    (html::apply_edits(text, edits), n)
+}
+
+/// 全书的样式表、`<style>`、行内 `style` 里左右边距的 em 照 [`scale_horizontal`] 换算，返回改了的声明数。同竖直换算最后做。
+pub(super) fn scale_horizontal_entries(entries: &mut [Entry], h: f64) -> usize {
+    let css_scaled = |css: &str| -> String {
+        let edits: Vec<(usize, usize, String)> = rule_spans(css)
+            .into_iter()
+            .filter(|r| r.closed && !rule_selector(r.prelude).trim().starts_with('@'))
+            .filter_map(|r| {
+                let (t, k) = scale_horizontal(r.body, h);
+                (k > 0).then(|| (r.body_start, r.body_start + r.body.len(), t))
+            })
+            .collect();
+        html::apply_edits(css, edits)
+    };
+    crate::util::par_map_mut(entries, |e| {
+        let mut n = 0;
+        if is_css_name(&e.name) {
+            let (text, latin1) = match std::str::from_utf8(&e.data) {
+                Ok(t) => (Cow::Borrowed(t), false),
+                Err(_) => (Cow::Owned(crate::util::latin1_decode(&e.data)), true),
+            };
+            let out = css_scaled(&text);
+            if out != text {
+                n = 1;
+                e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
+            }
+            return n;
+        }
+        if !is_chapter_entry(e) {
+            return 0;
+        }
+        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+        let s = html::edit_style_attrs(text, |_, value| {
+            let (v, k) = scale_horizontal(value, h);
+            n += k;
+            if k == 0 { html::Edit::Keep } else { html::Edit::Set(v) }
+        })
+        .into_owned();
+        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(css_scaled(css))).into_owned();
+        if s != text {
+            n = n.max(1);
+            e.data = s.into_bytes();
+        }
+        n
+    })
+    .into_iter()
+    .sum()
+}
+
 /// 整份样式表的规则体照 [`scale_vertical`] 换算。
 pub(super) fn scale_vertical_css(css: &str, vs: &VScale) -> String {
     let edits: Vec<(usize, usize, String)> = rule_spans(css)
@@ -346,6 +434,9 @@ struct BookFacts {
     /// 是负的，body 这一侧的边距照加，KFX 写出器 `has_negative`；样式表全书共用，这里按字数取多数——《平凡的世界》183 个文件
     /// 里 5 个用了负的左边距，丢掉；《罗杰疑案》每章都用，留）。
     neg: [bool; 2],
+    /// 每个文件：(书内路径, 这一侧用没用到负外边距, body 的 [左外边距, 左内边距, 右外边距, 右内边距])，和 `neg` 不一样的文件逐个改
+    /// （[`per_file_body_margins`]）。
+    files: Vec<(String, [bool; 2], [Option<crate::cascade::Len>; 4])>,
 }
 
 /// 一个文件的统计（[`book_facts`] 按文件并行算，再合起来）。
@@ -361,6 +452,8 @@ struct FileFacts {
     neg: [bool; 2],
     /// 可见文字的字数（不算空白）。
     chars: usize,
+    /// body 的 [左外边距, 左内边距, 右外边距, 右内边距]。
+    body_box: [Option<crate::cascade::Len>; 4],
 }
 
 /// 全书只走一趟 DOM，层叠用 KFX 写出器同一套（[`crate::cascade`]：每篇文档的样式表 [`crate::cascade::Sheet::for_doc`]，
@@ -410,6 +503,9 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
                     let set = if v.name() == "body" { &mut f.on_body } else { &mut f.elsewhere };
                     set.extend(v.classes().map(str::to_string));
                     let c = comp(&el, &parent);
+                    if v.name() == "body" {
+                        f.body_box = [c.margin[3], c.padding[3], c.margin[1], c.padding[1]];
+                    }
                     if c.display.as_deref() == Some("none") {
                         continue;
                     }
@@ -434,7 +530,9 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     let (mut on_body, mut elsewhere) = (HashSet::new(), HashSet::new());
     // 每一侧：(用到负外边距的文件的字数, 没用到的)
     let mut chars = [(0usize, 0usize); 2];
-    for f in per_file {
+    let mut file_list = Vec::new();
+    for (e, f) in files.iter().zip(per_file) {
+        file_list.push((e.name.clone(), f.neg, f.body_box));
         for (k, n) in f.sizes {
             *sizes.entry(k).or_default() += n;
         }
@@ -457,7 +555,65 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
         fonts,
         body_classes: on_body.difference(&elsewhere).cloned().collect(),
         neg: [chars[0].0 > chars[0].1, chars[1].0 > chars[1].1],
+        files: file_list,
     }
+}
+
+/// body 的左右边距逐文件照 Kindle（用户 2026-10-14 选）：Kindle 按文件定（这个文件里有块这一侧的外边距是负的，body 这一侧的外边距、
+/// 内边距照加，KFX 写出器 `has_negative`），样式表全书共用只能按字数取多数（[`BookFacts::neg`]）。和多数不一样的文件给 `<body>`
+/// 加一个类，类规则写这个文件该有的：多数留、这个文件不该有的写 0，多数去掉、这个文件该有的写回原值（`eink-body.css`）。
+/// 《帷幕》一半正文所在的文件只用了不带负外边距的章名，Kindle 不加 body 的 5pt，两台以前照多数加了。返回改了的文件数。
+fn per_file_body_margins(entries: &mut Vec<Entry>, facts: &BookFacts) -> usize {
+    use crate::cascade::Len;
+    let len = |l: Option<Len>| match l {
+        Some(Len::Em(n)) => format!("{}em", fmt_num(n)),
+        Some(Len::Pt(n)) => format!("{}pt", fmt_num(n)),
+        Some(Len::Percent(n)) => format!("{}%", fmt_num(n)),
+        None => "0".to_string(),
+    };
+    let mut classes: Vec<String> = Vec::new();
+    let mut edits: Vec<(String, usize)> = Vec::new();
+    for (name, neg, bx) in &facts.files {
+        let mut body = String::new();
+        for (side, (m, p, names)) in [(bx[0], bx[1], ("margin-left", "padding-left")), (bx[2], bx[3], ("margin-right", "padding-right"))].into_iter().enumerate() {
+            if neg[side] == facts.neg[side] {
+                continue;
+            }
+            let (mv, pv) = if neg[side] { (len(m), len(p)) } else { ("0".to_string(), "0".to_string()) };
+            body.push_str(&format!("{}:{mv};{}:{pv};", names.0, names.1));
+        }
+        if body.is_empty() {
+            continue;
+        }
+        let k = classes.iter().position(|c| *c == body).unwrap_or_else(|| {
+            classes.push(body);
+            classes.len() - 1
+        });
+        edits.push((name.clone(), k));
+    }
+    if edits.is_empty() {
+        return 0;
+    }
+    let opf_idx = find_opf(entries);
+    let opf_dir = opf_idx.map(|i| dir_of(&entries[i].name).to_string()).unwrap_or_default();
+    let css_path = if opf_dir.is_empty() { "eink-body.css".to_string() } else { format!("{opf_dir}/eink-body.css") };
+    let mut n = 0;
+    for (name, k) in &edits {
+        let Some(e) = entries.iter_mut().find(|e| &e.name == name) else { continue };
+        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let Some(t) = html::tags(text).find(|g| g.is_start() && g.is("body")) else { continue };
+        let tag = html::add_class(&text[t.start..t.end], &format!("eink-bm{}", k + 1));
+        let out = format!("{}{tag}{}", &text[..t.start], &text[t.end..]);
+        let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
+        e.data = super::typeset::inject_css_link(&out, &href).into_bytes();
+        n += 1;
+    }
+    let mut sheet = String::from("/* body 的左右边距逐文件照 Kindle（sheng-ren kindle_rules，见 wash/kindle_rules.rs） */\n");
+    for (k, body) in classes.iter().enumerate() {
+        sheet.push_str(&format!("html body.eink-bm{}{{{body}}}\n", k + 1));
+    }
+    super::add_css_entry(entries, opf_idx, &css_path, &sheet, "eink-body-css");
+    n
 }
 
 /// 改一份样式表：按 [`rule_spans`] 逐条规则（`@media` 里的也改，不看条件——阅读器求不求、怎么求说不准），只替换规则体，
@@ -898,6 +1054,35 @@ mod tests {
     }
 
     /// 竖直间距照 Kindle 换算（掌阅的系数，「测试-竖直间距」量的）：em 乘系数，%、px、pt 折成像素，简写只换上下，别的不动。
+    /// 左右边距的 em 乘系数（分项、简写的左右两个值），px、首行缩进、上下的不动。
+    #[test]
+    fn horizontal_em_scaled() {
+        let (t, n) = scale_horizontal("margin-left:2em;padding-right:1em !important;margin:1em 2em 3em 4pt;padding-left:10px;text-indent:2em", 0.5);
+        assert_eq!(n, 3);
+        assert_eq!(t, "margin-left:1em;padding-right:0.5em !important;margin:1em 1em 3em 2pt;padding-left:10px;text-indent:2em");
+        assert_eq!(scale_horizontal("text-indent:-2em;padding-left:2em", 0.5).0, "text-indent:-1em;padding-left:1em");
+    }
+
+    /// body 左右边距逐文件：多数文件（按字数）用了负的左外边距、body 左边距照留；没用的文件 body 加类、左边距写 0；右边两个文件都没用，不动。
+    #[test]
+    fn body_margin_per_file() {
+        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body class="b">{body}</body></html>"#).into_bytes();
+        let mut entries = vec![
+            Entry { name: "O/content.opf".into(), data: br#"<package><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="c"/></spine></package>"#.to_vec() },
+            Entry { name: "O/s.css".into(), data: b"body.b{margin:0 5pt} .t{margin-left:-2em}".to_vec() },
+            Entry { name: "O/a.xhtml".into(), data: page(&format!(r#"<p class="t">题</p><p>{}</p>"#, "字".repeat(50))) },
+            Entry { name: "O/c.xhtml".into(), data: page("<p>短</p>") },
+        ];
+        let facts = book_facts(&entries, None);
+        assert_eq!(facts.neg, [true, false]);
+        assert_eq!(per_file_body_margins(&mut entries, &facts), 1);
+        let c = String::from_utf8(entries[3].data.clone()).unwrap();
+        assert!(c.contains(r#"<body class="b eink-bm1">"#) && c.contains("eink-body.css"), "{c}");
+        assert!(!String::from_utf8(entries[2].data.clone()).unwrap().contains("eink-bm"));
+        let css = entries.iter().find(|e| e.name == "O/eink-body.css").map(|e| String::from_utf8(e.data.clone()).unwrap()).unwrap();
+        assert!(css.contains("html body.eink-bm1{margin-left:0;padding-left:0;}"), "{css}");
+    }
+
     #[test]
     fn vertical_lengths_scaled_like_kindle() {
         let vs = VScale { em: 52.5 * (1680.0 / 1546.0) / 37.5, kindle_rem_px: 52.5, ratio: 1680.0 / 1546.0 };

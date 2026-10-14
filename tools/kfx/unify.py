@@ -60,7 +60,8 @@ def kfx_images(path, base_fs):
         size = next((d['$16']['$307'] for d in reversed(st) if isinstance(d.get('$16'), dict)), 1.0)
         width = f"%:{w['$307']}" if unit == '%' else f"em:{w['$307'] * size * base_fs}" if unit == 'em' else '-'
         # 整页单图（封面这类）由版面居中，不比对齐
-        align = '-' if alone else next((ALIGN.get(f"'{d['$34']}'", 'left') for d in reversed(st) if '$34' in d), 'left')
+        # 写了宽度的图片写块对齐 `$580`（写出器 21 起，同 Send to Kindle），别的写文字对齐 `$34`
+        align = '-' if alone else next((ALIGN.get(f"'{d.get('$580', d.get('$34'))}'", 'left') for d in reversed(st) if '$580' in d or '$34' in d), 'left')
         meta = res.get(r, {})
         out.append((meta.get('$422', 0), meta.get('$423', 0), width, align, inline))
         if raw.get(f'{r}-ad', {}).get('$alpha'):
@@ -89,6 +90,36 @@ READER_GEOMETRY = {
     'ireader': {'content': 1168, 'height': 1560, 'em_px': 37.4},
     'xochitl': {'content': 842, 'height': 1455, 'em_px': None},
 }
+
+
+def vertical_scale(device):
+    """这台的竖直间距换算系数（同优化器 `VScale.em`，KINDLE_RULES 14）：Kindle 一 rem 的像素（line_px / 1.2）× 两台内容区高之比
+    ÷ 这台的 em_px。`kindle_rules` 把上下外边距、内边距的 em 乘了它，比之前除回去（不除的话从 14 版起掌阅、Move 的上下边距
+    一律差 1.52、1.31 倍）。profile 没写 em_px 的是 1。"""
+    em = profile_value(device, 'em_px')
+    if not em:
+        return 1.0
+    ktext = open(os.path.join(PROFILES, 'kindle.toml'), encoding='utf-8').read()
+    kh = int(re.search(r'\[readable\.kfx\]\s*width\s*=\s*\d+\s*height\s*=\s*(\d+)', ktext).group(1))
+    text = open(os.path.join(PROFILES, f'{device}.toml'), encoding='utf-8').read()
+    h = int(re.search(r'\[readable(?:\.epub)?\]\s*width\s*=\s*\d+\s*height\s*=\s*(\d+)', text).group(1))
+    return float(profile_value('kindle', 'line_px')) / 1.2 * h / kh / float(em)
+
+
+def page_tile(epub, src, device):
+    """背景图是整页图块（尺寸同这台的屏幕，KINDLE_RULES 10 原地换成的）或书里没有这张图：平铺也只铺一份 / 本来就显示不出，不算没处理。"""
+    import io, zipfile
+    from PIL import Image
+    try:
+        data = zipfile.ZipFile(epub).read(src)
+    except KeyError:
+        return True
+    text = open(os.path.join(PROFILES, f'{device}.toml'), encoding='utf-8').read()
+    m = re.search(r'\[screen\]\s*width\s*=\s*(\d+)\s*height\s*=\s*(\d+)', text)
+    try:
+        return m is not None and Image.open(io.BytesIO(data)).size == (int(m.group(1)), int(m.group(2)))
+    except Exception:
+        return False
 
 
 def kindle_geometry():
@@ -169,6 +200,9 @@ def main():
     miss = {d: collections.Counter() for d in DEVICES}
     img_miss = {d: collections.Counter() for d in DEVICES}
     kgeo = kindle_geometry()
+    vscale = {d: vertical_scale(d) for d in DEVICES}
+    # 各台一行的 em 数（内容区宽 ÷ 缺省 1em 的像素）
+    page_em = {d: READER_GEOMETRY[d]['content'] / (READER_GEOMETRY[d]['em_px'] or float(profile_value(d, 'em_px'))) for d in DEVICES}
     sizing = {d: profile_value(d, 'image_sizing') or 'css' for d in DEVICES}
     quirks = []
     ex = {}
@@ -185,8 +219,17 @@ def main():
         for d in DEVICES:
             bfs, blh, rows = epub_nodes(f'{stem}.{d}.epub', bindir, d)
             q = collections.defaultdict(collections.deque)
+            vs = vscale[d]
             for r in rows:
-                q[key(r[0])].append(epub_features(r, bfs, blh, base_fs))
+                f = epub_features(r, bfs, blh, base_fs)
+                f['mt'] /= vs
+                f['mb'] /= vs
+                # 左右边距的 em 按这台自己一行有几个 em 折成页宽 %（Move 842px ÷ 37.8 ≈ 22 个，不是 Kindle 的 32 个；KINDLE_RULES 24
+                # 照这台的内容区把 px、% 折成了 em）
+                for side, col in (('ml', 11), ('mr', 12)):
+                    em, pct = (float(x) for x in r[col].split('+'))
+                    f[side] = em * (base_fs / bfs) / page_em[d] * 100 + pct
+                q[key(r[0])].append(f)
             queues[d] = q
         n = 0
         agree = collections.Counter()
@@ -251,7 +294,7 @@ def main():
             img_agree[d] = ok / total * 100 if total else 100.0
             if not profile_flag(d, 'css_rgba') and (c := epub_rgba_count(f'{stem}.{d}.epub')):
                 quirks.append(f'{title}：{d} 不认 rgba()，产物里还有 {c} 处')
-            if not profile_flag(d, 'background_no_repeat') and (c := sum(1 for _, nr in bgs if nr)):
+            if not profile_flag(d, 'background_no_repeat') and (c := sum(1 for src, nr in bgs if nr and not page_tile(f'{stem}.{d}.epub', src, d))):
                 quirks.append(f'{title}：{d} 不认背景图 no-repeat，产物里还有 {c} 个不平铺的背景图')
         rate = {d: agree[d] / (n * len(FEATURES)) * 100 for d in DEVICES}
         rate.update({f'img:{d}': img_agree[d] for d in DEVICES})
