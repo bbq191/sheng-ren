@@ -45,6 +45,10 @@ important = false
 line_height_numbers = false
 # 缺省字号、行距下正文一行的屏幕像素（2026-10-13 怪癖测试书对照页：一段里相邻两行隔 58px），上面的行距按它算阅读器的缺省行距
 line_px = 58
+# 单元格缺省顶端对齐（Kindle 居中），vertical-align:middle 认（2026-10-14 探针 Q105、Q106）：Kindle 上居中的单元格写进行内
+cell_middle = false
+# span 上 vertical-align:super/sub 不认、<sup>/<sub> 标签认（Q100、Q101、Q120–Q123）：写了上标下标的行内元素里面包 <sup>/<sub>
+inline_valign = false
 [screen]
 width = 1264
 height = 1680

@@ -203,10 +203,13 @@ pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<F
             let visible = |side: usize| {
                 el.comp.border[side].as_ref().is_some_and(|b| b.width != crate::cascade::BorderWidth::Pt(0.0) && b.width != crate::cascade::BorderWidth::Em(0.0) && b.color.is_none_or(|c| c >> 24 != 0))
             };
+            let marker = el.comp.list_style.as_deref() != Some("none") && el.comp.display.as_deref().is_none_or(|v| v.eq_ignore_ascii_case("list-item"));
             // 同一个元素上同一种写法只计一次（边框的分项合成了一个）
             let mut keys: std::collections::BTreeSet<Key> = std::collections::BTreeSet::new();
             for (prop, v) in &el.decls {
                 let Some(name) = reported_prop(prop, on, v) else { continue };
+                // 没有项目符号的列表项（`list-style-type:none`、`display` 不是 list-item）：左右内边距同普通块（并进外边距，box_fix）
+                let on = if on == "list" && !marker && matches!(name.as_str(), "padding-left" | "padding-right") { "block" } else { on };
                 let side = ["border-top", "border-right", "border-bottom", "border-left"].iter().position(|s| *s == name);
                 if side.is_some_and(|s| !visible(s)) || (name == "border-radius" && !(0..4).any(visible)) {
                     continue;
@@ -337,5 +340,15 @@ mod tests {
         let s = summary(&f, "Move");
         assert_eq!(s.len(), 2);
         assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：行内 font-size（px，block）×1"), "{s:?}");
+    }
+
+    /// Move：有项目符号的列表项左内边距没处理；没有符号的同普通块（已处理）不报。
+    #[test]
+    fn move_list_padding_depends_on_marker() {
+        let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body><ul><li>甲</li><li class="n">乙</li></ul></body></html>"#;
+        let f = audit(&book(ch, "li{padding-left:2em} li.n{list-style-type:none}"), None, "xochitl");
+        let lines: Vec<String> = f.iter().filter(|f| f.prop == "padding-left").map(Finding::line).collect();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("✗ padding-left（em，list）×1"), "{lines:?}");
     }
 }

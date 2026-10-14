@@ -455,8 +455,143 @@ note = "三台都不认自动断字（不插软连字符）"
 src = "2026-10-01 英文排版真机"
 
 [[rule]]
-prop = ["-webkit-*", "-epub-*", "-moz-*", "-ms-*", "-o-*", "adobe-*", "orphans", "widows", "word-wrap", "overflow-wrap"]
+prop = ["-webkit-*", "-epub-*", "-moz-*", "-ms-*", "-o-*", "adobe-*", "duokan-*", "qrfullpage", "orphans", "widows", "word-wrap", "overflow-wrap"]
 ireader = "accept"
 xochitl = "accept"
-note = "阅读器私有属性、分页孤行控制：不影响排出来的位置"
+note = "阅读器私有属性（多看的 duokan-*、QQ 阅读的 qrfullpage 这两台、Kindle 都不认）、分页孤行控制：不影响排出来的位置"
 src = "约定"
+
+[[rule]]
+prop = ["text-justify", "word-break"]
+ireader = "accept"
+xochitl = "accept"
+note = "inter-ideograph、break-all：中文本来就按字两端对齐、任意处断行，只影响夹在中文里的英文单词断不断（Kindle 上没核）"
+src = "2026-10-14 测试书取值（text-justify 只有 inter-ideograph，word-break 只有 break-all）"
+
+[[rule]]
+prop = ["cursor", "src", "font-variant", "overflow", "object-fit", "clear"]
+ireader = "accept"
+xochitl = "accept"
+note = "不影响排版：鼠标指针；src 是 @font-face 的、写在普通规则里无效；font-variant 测试书只有 normal；overflow:hidden、object-fit:contain 不裁内容；clear 只在有浮动时起作用"
+src = "2026-10-14 测试书取值"
+
+[[rule]]
+prop = ["text-shadow", "box-shadow"]
+value = ["zero", "keyword"]
+ireader = "same"
+xochitl = "same"
+note = "写 0、none 等于没写"
+src = "2026-10-14 测试书取值"
+
+[[rule]]
+prop = ["margin-top", "margin-bottom"]
+value = ["keyword"]
+ireader = "same"
+xochitl = "same"
+note = "块的上下外边距 auto 就是 0（测试书只有 auto）"
+src = "2026-10-14 测试书取值（《风起陇西》《绍宋》《人生复本》）"
+
+[[rule]]
+prop = ["margin-left", "margin-right"]
+on = ["p", "block", "heading"]
+value = ["keyword"]
+ireader = "same"
+xochitl = "same"
+note = "左右外边距 auto：没定宽度的块本来就满宽，没效果；定了宽度的掌阅照 CSS 居中（Q124），Move 由上面 width 那条照 Kindle 折成外边距"
+src = "2026-10-13 测试-怪癖 Q30；2026-10-14 测试-怪癖-掌阅 Q124、测试书取值（只有 auto）"
+
+# ---------------------------------------------------------------- 竖直对齐、列表符号、块高、flex、定位（2026-10-14 探针 Q100–Q119）
+
+[[rule]]
+prop = ["vertical-align"]
+on = ["cell"]
+ireader = "fixed"
+xochitl = "fixed"
+note = "两台单元格缺省都是顶端对齐（Kindle 居中），middle 认：一行两格以上、Kindle 上居中的单元格行内写 vertical-align:middle（KINDLE_RULES 29，profile cell_middle）"
+src = "2026-10-14 测试-怪癖 Q105、Q106（两台；优化后的测试书两台真机同 middle）"
+
+[[rule]]
+prop = ["vertical-align"]
+on = ["inline"]
+value = ["keyword"]
+ireader = "fixed"
+xochitl = "same"
+note = "super、sub：Move 抬高或压低、字缩小，Kindle 写出器照写上标下标（Kindle 上没逐像素核）；掌阅 span 上的不认、<sup>/<sub> 标签认：里面包一层标签（KINDLE_RULES 29，profile inline_valign）"
+src = "2026-10-14 测试-怪癖 Q100、Q101、Q120–Q123（两台；优化后的测试书掌阅真机同 <sup>）"
+
+[[rule]]
+prop = ["vertical-align"]
+on = ["img"]
+value = ["neg", "em", "rem", "px", "pt", "pct", "number"]
+ireader = "accept"
+xochitl = "same"
+note = "图上数值写的竖直对齐：Move 不认，Kindle 写出器也不写（照 Send to Kindle）"
+src = "2026-10-14 测试-怪癖 Q104"
+
+[[rule]]
+prop = ["vertical-align"]
+on = ["img"]
+xochitl = "accept"
+ireader = "accept"
+note = "行内图：middle Move 认、同 Kindle；top 当成 middle（Kindle 顶端对齐）。真书里写 top 的是一行高的小图标，差不到半行，没有别的写法。掌阅把行内图压到一行高，竖直对齐看不出（Q102–Q104 换成宽 10% 的图也一样）"
+src = "2026-10-14 测试-怪癖 Q102–Q104（两台）"
+
+[[rule]]
+prop = ["list-style-type"]
+ireader = "accept"
+xochitl = "accept"
+note = "decimal、none、ol 缺省数字两台都认；cjk-ideographic 不认（Move 画成圆点、掌阅不画符号，Kindle 写一、二），补只能往书里加字，不处理（《雪国》注释列表）；circle、square、罗马数字、字母没测"
+src = "2026-10-14 测试-怪癖 Q107–Q110"
+
+[[rule]]
+prop = ["list-style-position"]
+value = ["keyword"]
+ireader = "same"
+xochitl = "same"
+note = "测试书只有 outside（缺省）"
+src = "2026-10-14 测试书取值"
+
+[[rule]]
+prop = ["height"]
+on = ["p", "block", "heading"]
+ireader = "accept"
+xochitl = "accept"
+note = "块的高度：Kindle（Send to Kindle、写出器）当 min-height 写；掌阅当固定高（内容超出才和 Kindle 不一样），Move 不认。测试书里是《消失的爱人》空段（三台照 Kindle 去掉了，不起作用）、《罗杰疑案》2px 水平线、《雪国》一页上 80×280px 的装饰框，影响小"
+src = "2026-10-14 测试-怪癖 Q111（两台）；docs/kfx.md Send to Kindle 规则表"
+
+[[rule]]
+prop = ["min-height"]
+on = ["p", "block", "heading"]
+ireader = "same"
+xochitl = "accept"
+note = "掌阅认；Move 不认 min-height（Kindle 写出器照写）；测试书里写了的（《恶女的告白》2em）都比本身一行矮，没有效果"
+src = "2026-10-14 测试-怪癖 Q112（两台）"
+
+[[rule]]
+prop = ["justify-content", "align-items", "flex-direction", "position", "top", "bottom", "left", "right"]
+ireader = "same"
+xochitl = "same"
+note = "flex 布局、定位两台都不认（照普通块排、text-align 照认），Kindle 写出器也不写"
+src = "2026-10-14 测试-怪癖 Q115、Q116（两台）"
+
+[[rule]]
+prop = ["border-collapse"]
+ireader = "same"
+xochitl = "same"
+note = "Move 认边框合并（相邻单元格的边框并成一条），Kindle 写出器照写；掌阅不管写没写都并成一条（书里写 separate 的《克莱因壶》没有单元格边框，看不出）"
+src = "2026-10-14 测试-怪癖 Q117（两台）"
+
+[[rule]]
+prop = ["border-top", "border-right", "border-bottom", "border-left"]
+on = ["p", "block", "heading", "cell"]
+ireader = "same"
+note = "掌阅照 CSS 画边框：块的左边线、全框、内边距（Q118、Q119），单元格类规则写的边框（Q117）"
+src = "2026-10-14 测试-怪癖-掌阅 Q117–Q119"
+
+[[rule]]
+prop = ["font-size"]
+value = ["em", "rem", "pct", "px"]
+via = ["style", "inline"]
+ireader = "same"
+note = "掌阅 <style>、行内 style 里的字号 em、px 照 CSS（同外链）"
+src = "2026-10-14 测试-怪癖-掌阅 Q49–Q51"

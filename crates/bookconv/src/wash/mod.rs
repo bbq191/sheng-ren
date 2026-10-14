@@ -56,6 +56,7 @@ mod block_style;
 mod box_fix;
 mod inline_css;
 mod css_compat;
+mod sup_sub;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
@@ -149,7 +150,10 @@ pub use self::encoding::transcode_entries;
 ///   行内写的；`box_fix.rs`，用户选）。
 /// - 28（2026-10-13）：Move 上块的宽度折成左右外边距、页中间负的上下外边距照 Kindle 写成非负的、列表项上下内边距并进外边距；两台单元格上
 ///   px 的内边距、掌阅行内元素和图上 px 的左右内外边距照 Kindle 折成 em（探针 Q88–Q99；`box_fix.rs`，profile `block_width`、`negative_margins`）。
-pub const KINDLE_RULES_VERSION: &str = "28";
+/// - 29（2026-10-14）：Move 上没有项目符号的列表项左右内边距并进外边距（《海葵》目录页）；单元格缺省顶端对齐，一行两格以上、Kindle 上居中的
+///   写 `vertical-align:middle`（探针 Q105、Q106；`box_fix.rs`，profile `cell_middle`；掌阅同样）；掌阅上写了 `vertical-align:super/sub`
+///   的行内元素里面包 `<sup>`/`<sub>`（Q100–Q123；`sup_sub.rs`，profile `inline_valign`）。
+pub const KINDLE_RULES_VERSION: &str = "29";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -539,6 +543,8 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         add_ua_css(entries, rep, font_scale);
         // 不认 rem、`!important` 的阅读器（掌阅）：换成认的写法。别的 pass 之前：它们按 Kindle 的层叠算，换完算出来一样
         css_compat::apply(entries, rep, opts.media.as_ref(), opts.reader.rem, opts.reader.important);
+        // 不认行内元素上 vertical-align 上标下标的阅读器（掌阅）：里面包 <sup>/<sub>
+        sup_sub::apply(entries, rep, opts.media.as_ref(), opts.reader.inline_valign);
         if let Some((sizing, kref)) = opts.image_sizing {
             kindle_images::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), sizing, kref);
         }

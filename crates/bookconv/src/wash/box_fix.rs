@@ -131,7 +131,7 @@ fn frame_open(class: usize, td_style: &str) -> String {
 const FRAME_CLOSE: &str = "</td></tr></tbody></table></div>";
 
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, reader: &ReaderModel, g: BoxGeometry) {
-    if reader.padding && reader.borders && reader.heading_margins && reader.px_margins && reader.percent_margins {
+    if reader.padding && reader.borders && reader.heading_margins && reader.px_margins && reader.percent_margins && reader.cell_middle {
         return;
     }
     let css = km::book_css(entries, media);
@@ -185,14 +185,14 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
                 t.end
             } else {
                 let name = t.name.to_ascii_lowercase();
-                let Some(close) = html::find_close(text, t.end, &name) else { continue };
+                let Some(close) = html::find_matching_close(text, t.end, &name) else { continue };
                 close.start
             };
             edits.push((pos, pos, img));
         }
         for (n, body, ds) in &p.frames {
             let Some(t) = starts.get(*n) else { continue };
-            let Some(close) = html::find_close(text, t.end, &t.name.to_ascii_lowercase()) else { continue };
+            let Some(close) = html::find_matching_close(text, t.end, &t.name.to_ascii_lowercase()) else { continue };
             let key = ("div".to_string(), body.clone());
             let k = classes.iter().position(|c| *c == key).unwrap_or_else(|| {
                 classes.push(key);
@@ -454,20 +454,32 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
         }
     }
-    // 列表项的上下内边距（不认内边距的阅读器，Move：Q95 不认、Q96 上外边距认）：并进同侧的外边距；带背景色、上下边框的不动
+    // 列表项的内边距（不认内边距的阅读器，Move：Q95 不认、Q96 上外边距认）：上下的并进同侧的外边距；左右的只在没有项目符号时并
+    // （`list-style-type:none`、`display` 不是 list-item：有符号的并了会连符号一起挪）；带背景色的不动，有上下边框的上下不动
     if !reader.padding {
         for (i, el) in ch.els.iter().enumerate() {
-            if tag(i) != "li" || el.hidden || has_bg(i) || visible(i, 0).is_some() || visible(i, 2).is_some() {
+            if tag(i) != "li" || el.hidden || has_bg(i) {
                 continue;
             }
             let c = comp(i);
+            let mut d = Vec::new();
             let (pt, pb) = (pad_rem(i, 0), pad_rem(i, 2));
-            if pt + pb < 1e-6 {
-                continue;
+            if pt + pb > 1e-6 && visible(i, 0).is_none() && visible(i, 2).is_none() {
+                d.push(format!("margin-top:{}em", fmt((km::vertical_rem(c.margin[0], c.font_size) + pt) / c.font_size)));
+                d.push(format!("margin-bottom:{}em", fmt((km::vertical_rem(c.margin[2], c.font_size) + pb) / c.font_size)));
             }
-            let d = out.decls.entry(i).or_default();
-            d.push(format!("margin-top:{}em", fmt((km::vertical_rem(c.margin[0], c.font_size) + pt) / c.font_size)));
-            d.push(format!("margin-bottom:{}em", fmt((km::vertical_rem(c.margin[2], c.font_size) + pb) / c.font_size)));
+            let marker = c.list_style.as_deref() != Some("none") && c.display.as_deref().is_none_or(|v| v.eq_ignore_ascii_case("list-item"));
+            if !marker {
+                for (side, name) in [(3, "margin-left"), (1, "margin-right")] {
+                    let p = to_em(c.padding[side], c.font_size);
+                    if p.abs() > 1e-6 && !c.margin_auto[side] {
+                        d.push(format!("{name}:{}em", fmt(to_em(c.margin[side], c.font_size) + p)));
+                    }
+                }
+            }
+            if !d.is_empty() {
+                out.decls.entry(i).or_default().extend(d);
+            }
         }
     }
     // 横线图：看得见的上、下边框
@@ -510,6 +522,28 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 let color = b.color.or(c.color).unwrap_or(0xFF00_0000) | 0xFF00_0000;
                 out.lines.push((i, Line { color, style, border_px: (border_rem * g.v_rem_px).max(1.0), pad_px, width_px, top }));
                 drawn[i][k] = true;
+            }
+        }
+    }
+    // 单元格缺省不居中的阅读器（Move 顶端对齐，Q105、Q106）：Kindle 只看单元格自己的 `vertical-align`（top/text-top 顶、bottom/text-bottom
+    // 底、别的和没写的居中，同 KFX 写出器），一行两格以上、Kindle 上居中而自己没写 middle 的写进行内（行内的压过书里 `tr`、类规则的）
+    if !reader.cell_middle {
+        for i in 0..ch.els.len() {
+            if !matches!(tag(i).as_str(), "td" | "th") || ch.els[i].hidden {
+                continue;
+            }
+            let v = comp(i).valign.as_deref().unwrap_or("");
+            if matches!(v, "middle" | "top" | "text-top" | "bottom" | "text-bottom") {
+                continue;
+            }
+            let row = ch.el(i).parent().and_then(ElementRef::wrap);
+            if row.is_none_or(|r| r.children().filter_map(ElementRef::wrap).filter(|c| matches!(c.value().name(), "td" | "th")).count() < 2) {
+                continue;
+            }
+            const MIDDLE: &str = "vertical-align:middle;";
+            match out.cells.iter_mut().find(|(j, _)| *j == i) {
+                Some((_, add)) => add.push_str(MIDDLE),
+                None => out.cells.push((i, MIDDLE.to_string())),
             }
         }
     }
@@ -688,11 +722,35 @@ mod tests {
         assert!(page.contains(r#"<span class="s eink-b"#) && page.contains(r#"<td class="eink-b1">格</td>"#), "{page}");
     }
 
+    /// Move 单元格缺省顶端对齐：一行两格以上、Kindle 上居中的（没写、写了 baseline、只写在 tr 上的）行内补 middle；写了 top 的、单格的不动。
+    #[test]
+    fn cells_get_kindle_vertical_middle() {
+        let (page, _, _) = run(
+            r#"<table><tbody><tr class="t"><td>甲</td><td class="b">乙</td><td class="p">丙</td></tr><tr><td>丁</td></tr></tbody></table>"#,
+            "tr.t{vertical-align:top} td.b{vertical-align:baseline} td.p{vertical-align:top}",
+        );
+        assert!(page.contains(r#"<td style="vertical-align:middle;">甲</td><td class="b" style="vertical-align:middle;">乙</td><td class="p">丙</td></tr><tr><td>丁</td>"#), "{page}");
+    }
+
+    /// 包框、下边框横线图找的是配对的闭合标签：框里套着 div 的不插错位置。
+    #[test]
+    fn frame_around_nested_div() {
+        let (page, _, _) = run(r#"<p>前</p><div class="f"><div>甲</div><div>乙</div></div><p>后</p>"#, "div.f{border:1px solid #000}");
+        assert!(page.contains(r#"vertical-align:top;"><div class="f"><div>甲</div><div>乙</div></div></td></tr></tbody></table></div><p class="eink-b2">后</p>"#), "{page}");
+    }
+
     #[test]
     fn horizontal_padding_joins_margin() {
         let (page, sheet, _) = run(r#"<p class="h">注一</p><p class="bg">色块</p><ul><li class="h">项</li></ul>"#, "p.h,li.h{text-indent:-2em;padding-left:2em;margin-left:1em} p.bg{padding-left:1em;background-color:#ccc}");
         assert!(page.contains(r#"<p class="h eink-b1">注一</p><p class="bg">色块</p><ul><li class="h">项</li></ul>"#), "{page}");
         assert!(sheet.contains("html body p.eink-b1{margin-left:3em;}"), "{sheet}");
+        // 没有项目符号的列表项（自己写的、从 ul 继承的、display:block 的）左内边距并进外边距（《海葵》目录页）
+        let (page, sheet, _) = run(
+            r#"<ul><li class="n">甲</li></ul><ul class="u"><li>乙</li></ul><ul><li class="d">丙</li><li class="m">丁</li></ul>"#,
+            "li{padding-left:2em;margin-left:0} li.n{list-style-type:none} ul.u{list-style:none} li.d{display:block}",
+        );
+        assert!(page.contains(r#"<li class="n eink-b1">甲</li>"#) && page.contains(r#"<li class="eink-b1">乙</li>"#) && page.contains(r#"<li class="d eink-b1">丙</li><li class="m">丁</li>"#), "{page}");
+        assert!(sheet.contains("html body li.eink-b1{margin-left:2em;}"), "{sheet}");
     }
 
     /// px、% 的左右外边距折成 em：px 按 0.45pt、12pt 一根 em（50px → 1.875em），% 按内容区宽（10% of 842 → 84.2px ÷ 37.8 → 2.2275em）；
