@@ -595,3 +595,28 @@ via = ["style", "inline"]
 ireader = "same"
 note = "掌阅 <style>、行内 style 里的字号 em、px 照 CSS（同外链）"
 src = "2026-10-14 测试-怪癖-掌阅 Q49–Q51"
+
+[[rule]]
+prop = ["width"]
+on = ["cell"]
+ireader = "same"
+xochitl = "fixed"
+note = "单元格的宽度：掌阅照 CSS（同 Kindle 写出器）；Move CSS 写的（类规则、行内）不认、HTML width 属性认：照 Kindle 写成属性（长度折成屏幕像素，百分比照写；KINDLE_RULES 29，profile cell_width；《雪国》译者竖排格）"
+src = "2026-10-14 测试-怪癖 Q127–Q129（两台）"
+
+[[rule]]
+prop = ["width", "height"]
+on = ["inline"]
+ireader = "same"
+xochitl = "same"
+note = "行内元素（inline-block）的宽高：测试书里只有《狼厅》空的注释图标 span（19px 黑底圆、注释文字在 data 属性里），两台都不画，Kindle 写出器也不出节点"
+src = "2026-10-14 测试-怪癖 Q125、Q126（两台）"
+
+[[rule]]
+prop = ["padding-*", "margin-*"]
+value = ["keyword"]
+on = ["p", "block", "heading"]
+ireader = "same"
+xochitl = "same"
+note = "padding:auto 这类无效值：哪台都整条不认（Kindle 写出器的层叠也不收），等于没写（《雪国》）"
+src = "2026-10-14 测试书取值"

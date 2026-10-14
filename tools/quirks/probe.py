@@ -164,6 +164,11 @@ PROBES = [
     ("122", "span vertical-align:0.5em（短行）", "markup", "", '<p>甲乙<span>丙丁</span></p>|<p>甲乙<span class="vlen">丙丁</span></p>'),
     ("123", "span position:relative;top:-0.5em（短行）", "markup", "", '<p>甲乙<span>丙丁</span></p>|<p>甲乙<span class="vrel">丙丁</span></p>'),
     ("124", "p width:50%;margin:0 auto（对照只写宽度）", "markup", "", '<p class="w50">{text}</p>|<p class="w50 mauto">{text}</p>'),
+    ("125", "空 span inline-block 19px 黑底圆（《狼厅》注释图标，对照没有）", "markup", "", '<p>甲乙丙丁戊</p>|<p>甲乙丙<span class="fnote"></span>丁戊</p>'),
+    ("126", "同上、另加 display:inline、宽高 auto、背景和外边距清掉", "markup", "", '<p>甲乙丙丁戊</p>|<p>甲乙丙<span class="fnote fnoff"></span>丁戊</p>'),
+    ("127", "td width:1em（《雪国》译者竖排格，对照没写）", "markup", "", '<table><tbody><tr><td>林少华译</td><td>右格</td></tr></tbody></table>|<table><tbody><tr><td class="tw1">林少华译</td><td>右格</td></tr></tbody></table>'),
+    ("128", "td 行内 style width:1em", "markup", "", '<table><tbody><tr><td>林少华译</td><td>右格</td></tr></tbody></table>|<table><tbody><tr><td style="width:1em">林少华译</td><td>右格</td></tr></tbody></table>'),
+    ("129", "td width=\"30\" 属性", "markup", "", '<table><tbody><tr><td>林少华译</td><td>右格</td></tr></tbody></table>|<table><tbody><tr><td width="30">林少华译</td><td>右格</td></tr></tbody></table>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）
@@ -173,7 +178,9 @@ BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:
             ".vsup{vertical-align:super;}", ".vsub{vertical-align:sub;}", "img.rt{width:10%;}", ".vmid{vertical-align:middle;}", ".vtop{vertical-align:top;}", ".vneg{vertical-align:-0.5em;}",
             ".lsd{list-style-type:decimal;}", ".lsc{list-style-type:cjk-ideographic;}", ".lsn{list-style-type:none;}", ".h6e{height:6em;}", ".mh4{min-height:4em;}",
             "hr.hrd{width:100%;height:1px;border-style:none;border-top:1px dotted gray;}", ".flc{display:flex;justify-content:center;align-items:center;}",
-            ".abs{position:absolute;bottom:12%;left:0;width:100%;text-align:center;}", "td.tb{border:2px solid #000;}", "table.bc{border-collapse:collapse;}", ".vlen{vertical-align:0.5em;}", ".vrel{position:relative;top:-0.5em;}", ".w50{width:50%;}", ".mauto{margin-left:auto;margin-right:auto;}"]
+            ".abs{position:absolute;bottom:12%;left:0;width:100%;text-align:center;}", "td.tb{border:2px solid #000;}", "table.bc{border-collapse:collapse;}", ".vlen{vertical-align:0.5em;}", ".vrel{position:relative;top:-0.5em;}", ".w50{width:50%;}", ".mauto{margin-left:auto;margin-right:auto;}",
+            "span.fnote{position:relative;display:inline-block;width:19px;height:19px;background-color:black;vertical-align:sub;border-radius:50%;margin:0 3px;}",
+            "html body span.fnoff{display:inline;width:auto;height:auto;background-color:transparent;background-image:none;margin:0;}", "td.tw1{width:1em;}"]
 
 
 def page(code, cid, body, head_style="", barcode=None):
