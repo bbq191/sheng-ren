@@ -240,6 +240,14 @@ pub struct Profile {
     /// 阅读器认负的外边距（TOML 里不写是 `true`）。xochitl 不认（Q08、Q75–Q79，上下左右都不认）：写 `false` 时只修复、照 Send to Kindle
     /// 统一的文字书里，页中间相邻两块之间带负外边距的照 Kindle 折叠后的间距写成两边的非负外边距（`bookconv::wash::box_fix`；左右的不管，用户定）。
     pub negative_margins: bool,
+    /// 阅读器单元格缺省竖直居中（TOML 里不写是 `true`，同 Kindle：Send to Kindle 没写 `vertical-align` 的单元格居中）。xochitl 缺省顶端对齐
+    /// （2026-10-14 探针 Q105、Q106，`middle` 写了认）：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，一行两格以上、Kindle 上居中的
+    /// 单元格行内写 `vertical-align:middle`（`bookconv::wash::box_fix`）。
+    pub cell_middle: bool,
+    /// 阅读器认行内元素上 `vertical-align` 写的上标、下标（TOML 里不写是 `true`）。掌阅不认（2026-10-14 探针 Q100、Q101、Q122、Q123），
+    /// `<sup>`/`<sub>` 标签认（Q120、Q121）：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，写了 super/sub 的行内元素里面包一层
+    /// `<sup>`/`<sub>`（Kindle 写出器两种写法写成同一个值；`bookconv::wash::sup_sub`）。
+    pub inline_valign: bool,
     /// 阅读器认 `rem`（TOML 里不写是 `true`）。掌阅不认，整条声明当没写（2026-10-13 怪癖测试书 Q53：`margin-left:2rem` 不挪）：写 `false`
     /// 时只修复、照 Send to Kindle 统一的文字书里字号以外的 rem 改成 em（Kindle 写出器同样按本元素的 em 算），字号的 rem 折成 px
     /// （`bookconv::wash::css_compat`）。
@@ -348,6 +356,10 @@ struct ProfileFile {
     #[serde(default = "yes")]
     negative_margins: bool,
     #[serde(default = "yes")]
+    cell_middle: bool,
+    #[serde(default = "yes")]
+    inline_valign: bool,
+    #[serde(default = "yes")]
     rem: bool,
     #[serde(default = "yes")]
     important: bool,
@@ -381,7 +393,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }

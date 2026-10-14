@@ -223,6 +223,20 @@ pub fn find_close<'a>(html: &'a str, from: usize, name: &str) -> Option<Tag<'a>>
     tags_in(html, from, html.len()).find(|t| t.kind == TagKind::Close && t.is(name))
 }
 
+/// `from`（一个 `name` 开始标签的末尾）起和它配对的闭合标签：中间同名的开始、闭合标签成对跳过（`<div>` 里套 `<div>`）。
+pub fn find_matching_close<'a>(html: &'a str, from: usize, name: &str) -> Option<Tag<'a>> {
+    let mut depth = 0usize;
+    for t in tags_in(html, from, html.len()).filter(|t| t.is(name)) {
+        match t.kind {
+            TagKind::Open => depth += 1,
+            TagKind::Close if depth == 0 => return Some(t),
+            TagKind::Close => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
 // ───────────────────────── 属性 ─────────────────────────
 
 /// 一个属性。偏移相对传给 [`attrs`] 的字符串。无值属性（`<td nowrap>`）`value` 为空、`quote` 为 `None`。

@@ -5,7 +5,7 @@
   probe.py make 输出.epub                 生成测试书（探针见 PROBES；书名「测试-怪癖」）
   probe.py measure 排出来的.pdf [--json]  量 xochitl 排出的 PDF（每页按标记 Q??A/Q??B 认）
   probe.py move [--host=root@10.11.99.1]  生成 → 经书架服务导入 Move → 等它排好 → 拉回 PDF → measure（测试书留在 Move 上，用户自己删）
-  （都可加 --only=88-99 或 --only=13,28：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
+  （都可加 --only=88-99 或 --only=13,28,100-119：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
   probe.py ireader                        生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
                                           （测试书留在掌阅上，用户自己删；掌阅要开着 adb、亮屏解锁）
 
@@ -138,12 +138,42 @@ PROBES = [
     ("97", "td padding-left:2em（类规则）", "markup", "", '<table><tbody><tr><td>{text}</td></tr></tbody></table>|<table><tbody><tr><td class="tpl2">{text}</td></tr></tbody></table>'),
     ("98", "td 行内 padding-left:30px", "markup", "", '<table><tbody><tr><td>{text}</td></tr></tbody></table>|<table><tbody><tr><td style="padding-left:30px">{text}</td></tr></tbody></table>'),
     ("99", "td 行内 padding-top:30px", "markup", "", '<table><tbody><tr><td>{text}</td></tr></tbody></table>|<table><tbody><tr><td style="padding-top:30px">{text}</td></tr></tbody></table>'),
+    # 体检里「没验证过」的写法（2026-10-14）：竖直对齐、列表符号、块高、水平线、flex、绝对定位、单元格和块的边框
+    ("100", "span vertical-align:super（短行）", "markup", "", '<p>甲乙<span>丙丁</span></p>|<p>甲乙<span class="vsup">丙丁</span></p>'),
+    ("101", "span vertical-align:sub（短行）", "markup", "", '<p>甲乙<span>丙丁</span></p>|<p>甲乙<span class="vsub">丙丁</span></p>'),
+    ("102", "行内竖长图（宽 10%，比一行高） vertical-align:middle（对照没写）", "markup", "", '<p>甲<img class="rt" src="tall.png" alt=""/>乙</p>|<p>甲<img class="rt vmid" src="tall.png" alt=""/>乙</p>'),
+    ("103", "行内竖长图（宽 10%，比一行高） vertical-align:top", "markup", "", '<p>甲<img class="rt" src="tall.png" alt=""/>乙</p>|<p>甲<img class="rt vtop" src="tall.png" alt=""/>乙</p>'),
+    ("104", "行内竖长图（宽 10%，比一行高） vertical-align:-0.5em", "markup", "", '<p>甲<img class="rt" src="tall.png" alt=""/>乙</p>|<p>甲<img class="rt vneg" src="tall.png" alt=""/>乙</p>'),
+    ("105", "td vertical-align:top（左格两行、右格一行，对照没写）", "markup", "", '<table><tbody><tr><td>{text}</td><td>短</td></tr></tbody></table>|<table><tbody><tr><td>{text}</td><td class="vtop">短</td></tr></tbody></table>'),
+    ("106", "td vertical-align:middle（对照 top）", "markup", "", '<table><tbody><tr><td>{text}</td><td class="vtop">短</td></tr></tbody></table>|<table><tbody><tr><td>{text}</td><td class="vmid">短</td></tr></tbody></table>'),
+    ("107", "ul list-style-type:decimal（对照没写，圆点）", "markup", "", '<ul><li>{text}</li></ul>|<ul class="lsd"><li>{text}</li></ul>'),
+    ("108", "li list-style-type:cjk-ideographic", "markup", "", '<ul><li>{text}</li></ul>|<ul><li class="lsc">{text}</li></ul>'),
+    ("109", "li list-style-type:none", "markup", "", '<ul><li>{text}</li></ul>|<ul><li class="lsn">{text}</li></ul>'),
+    ("110", "ol（对照 ul）", "markup", "", '<ul><li>{text}</li></ul>|<ol><li>{text}</li></ol>'),
+    ("111", "div height:6em（一行字，看后面那段）", "markup", "", '<div>短字</div>|<div class="h6e">短字</div>'),
+    ("112", "p min-height:4em（一行字）", "markup", "", '<p>短字</p>|<p class="mh4">短字</p>'),
+    ("113", "hr 缺省（对照没有）", "markup", "", '<p>短字</p>|<p>短字</p><hr/>'),
+    ("114", "hr 1px 点线（《春雪》height:1px;border-style:none;border-top:1px dotted，对照缺省 hr）", "markup", "", '<p>短字</p><hr/>|<p>短字</p><hr class="hrd"/>'),
+    ("115", "div display:flex;justify-content:center（里面一个 span）", "markup", "", '<div><span>短字</span></div>|<div class="flc"><span>短字</span></div>'),
+    ("116", "p position:absolute;bottom:12%（《人生复本》出版社那行）", "markup", "", '<p>短字</p>|<p class="abs">短字</p>'),
+    ("117", "td border:2px solid（类规则）、border-collapse:collapse（对照不合并）", "markup", "", '<table><tbody><tr><td class="tb">甲</td><td class="tb">乙</td></tr></tbody></table>|<table class="bc"><tbody><tr><td class="tb">甲</td><td class="tb">乙</td></tr></tbody></table>'),
+    ("118", "div border-left:6px solid;padding-left:1em", "sheet", "border-left:6px solid #000;padding-left:1em", '<div{cls}>{text}</div>'),
+    ("119", "div border:6px solid（全框）", "sheet", "border:6px solid #000", '<div{cls}>{text}</div>'),
+    ("120", "<sup> 标签（短行）", "markup", "", '<p>甲乙丙丁</p>|<p>甲乙<sup>丙丁</sup></p>'),
+    ("121", "<sub> 标签（短行）", "markup", "", '<p>甲乙丙丁</p>|<p>甲乙<sub>丙丁</sub></p>'),
+    ("122", "span vertical-align:0.5em（短行）", "markup", "", '<p>甲乙<span>丙丁</span></p>|<p>甲乙<span class="vlen">丙丁</span></p>'),
+    ("123", "span position:relative;top:-0.5em（短行）", "markup", "", '<p>甲乙<span>丙丁</span></p>|<p>甲乙<span class="vrel">丙丁</span></p>'),
+    ("124", "p width:50%;margin:0 auto（对照只写宽度）", "markup", "", '<p class="w50">{text}</p>|<p class="w50 mauto">{text}</p>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）
 BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:0.01em;}", ".ml2{margin-left:2em;}", ".mt2{margin-top:2em;}", ".mb2{margin-bottom:2em;}", ".mt1{margin-top:1em;}", "img.rule{width:100%;}", "img.ruleb{display:block;width:100%;}", ".bgd{background-color:#444444;color:#ffffff;margin-left:0;margin-right:0;}", ".nm{margin-left:-2em;margin-right:-2em;}", ".nl30{margin-left:-30px;}", ".nr{margin-right:-2em;}",
             ".sml2{margin-left:2em;}", ".sml30{margin-left:30px;}", ".spl2{padding-left:2em;}", ".spl30{padding-left:30px;}", "img.ri{width:3em;height:0.5em;}", ".im2{margin-left:2em;}", ".im30{margin-left:30px;}",
-            ".lpt2{padding-top:2em;}", ".lmt2{margin-top:2em;}", ".tpl2{padding-left:2em;}"]
+            ".lpt2{padding-top:2em;}", ".lmt2{margin-top:2em;}", ".tpl2{padding-left:2em;}",
+            ".vsup{vertical-align:super;}", ".vsub{vertical-align:sub;}", "img.rt{width:10%;}", ".vmid{vertical-align:middle;}", ".vtop{vertical-align:top;}", ".vneg{vertical-align:-0.5em;}",
+            ".lsd{list-style-type:decimal;}", ".lsc{list-style-type:cjk-ideographic;}", ".lsn{list-style-type:none;}", ".h6e{height:6em;}", ".mh4{min-height:4em;}",
+            "hr.hrd{width:100%;height:1px;border-style:none;border-top:1px dotted gray;}", ".flc{display:flex;justify-content:center;align-items:center;}",
+            ".abs{position:absolute;bottom:12%;left:0;width:100%;text-align:center;}", "td.tb{border:2px solid #000;}", "table.bc{border-collapse:collapse;}", ".vlen{vertical-align:0.5em;}", ".vrel{position:relative;top:-0.5em;}", ".w50{width:50%;}", ".mauto{margin-left:auto;margin-right:auto;}"]
 
 
 def page(code, cid, body, head_style="", barcode=None):
@@ -239,7 +269,7 @@ def make(path, title="测试-怪癖", barcode=False, device=None):
     opf = f'''<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bid" xml:lang="zh">
 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bid">{bid}</dc:identifier><dc:title>{title}</dc:title><dc:creator>测试</dc:creator><dc:language>zh</dc:language><meta property="dcterms:modified">2026-10-13T00:00:00Z</meta></metadata>
-<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="css" href="s.css" media-type="text/css"/><item id="rule" href="rule.png" media-type="image/png"/>{codes}{manifest}</manifest>
+<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="css" href="s.css" media-type="text/css"/><item id="rule" href="rule.png" media-type="image/png"/><item id="tall" href="tall.png" media-type="image/png"/>{codes}{manifest}</manifest>
 <spine>{spine}</spine></package>'''
     container = '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>'
     with zipfile.ZipFile(path, "w") as z:
@@ -251,6 +281,7 @@ def make(path, title="测试-怪癖", barcode=False, device=None):
         for c, _, x in chs:
             z.writestr(f"OEBPS/{c}.xhtml", x, compress_type=zipfile.ZIP_DEFLATED)
         z.writestr("OEBPS/rule.png", rule_png(), compress_type=zipfile.ZIP_STORED)
+        z.writestr("OEBPS/tall.png", rule_png(20, 40), compress_type=zipfile.ZIP_STORED)  # 竖长的黑块：看行内图的竖直对齐（Move 只认图的百分比宽度）
         for f, data in code_files:
             z.writestr(f"OEBPS/{f}", data, compress_type=zipfile.ZIP_STORED)
 
@@ -299,14 +330,14 @@ def measure(pdf):
             t = unicodedata.normalize("NFKC", t)
             for line in t.splitlines():
                 s = line.strip()
-                if len(s) == 4 and s.startswith("Q") and s[3] in "AB" and s[1:3].isdigit():
+                if len(s) in (4, 5) and s.startswith("Q") and s[-1] in "AB" and s[1:-1].isdigit():
                     pages.setdefault(s, i)
                     break
         out = {}
         for mark, i in sorted(pages.items()):
             base = os.path.join(d, f"p{i}")
             subprocess.run(["pdftoppm", "-gray", "-png", "-f", str(i), "-l", str(i), "-scale-to-x", "954", "-scale-to-y", "1696", "-singlefile", pdf, base], check=True)
-            out.setdefault(mark[1:3], {})[mark[3]] = lines_of(base + ".png")
+            out.setdefault(mark[1:-1], {})[mark[-1]] = lines_of(base + ".png")
         return out
 
 
