@@ -347,16 +347,44 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             if w_px <= 0.0 || extra <= 1.0 {
                 continue;
             }
-            // 多出来的都放右边：Kindle 不按 margin:auto 居中、靠右（Q124 真机，Send to Kindle 写的块对齐不起作用）
-            width_margins.insert(i, [side(3) / unit, (side(1) + extra) / unit]);
+            // 多出来的放右边：Kindle 不按 margin:auto 居中（Q124 真机，Send to Kindle 写的块对齐不起作用）；只有左边 auto 的靠右
+            // （写出器写成块的对齐 `$580` 靠右，Kindle 照排：《梁羽生》卷名 bigtitle 2026-10-14 真机），多出来的放左边
+            let m = if c.margin_auto[3] && !c.margin_auto[1] { [(side(3) + extra) / unit, side(1) / unit] } else { [side(3) / unit, (side(1) + extra) / unit] };
+            width_margins.insert(i, m);
         }
     }
-    // 认块宽度、按 margin:auto 居中的阅读器（掌阅，Q124）：Kindle 不居中、不靠右，定了宽度的块左边的 auto 写成 0
+    // 认块宽度、按 margin:auto 居中的阅读器（掌阅，Q124）：Kindle 不居中，定了宽度、两边都是 auto 的块左边的 auto 写成 0（只有左边
+    // auto 的 Kindle 靠右，同掌阅，不动）
     if reader.margin_auto && reader.block_width {
         for i in 0..ch.els.len() {
-            if usable(i) && comp(i).width.is_some_and(|w| !w.is_zero()) && comp(i).margin_auto[3] {
+            if usable(i) && comp(i).width.is_some_and(|w| !w.is_zero()) && comp(i).margin_auto[3] && comp(i).margin_auto[1] {
                 out.decls.entry(i).or_default().push("margin-left:0".into());
             }
+        }
+    }
+    // 认 float 的阅读器（掌阅）：Kindle 不浮动（Q133、Q134 真机），标题上的写成 none（别的元素上的没量过，不动）
+    if reader.float {
+        for (i, el) in ch.els.iter().enumerate() {
+            let f = el.decls.get("float").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
+            if usable(i) && heading(&tag(i)) && matches!(f.as_str(), "left" | "right") {
+                out.decls.entry(i).or_default().push("float:none".into());
+            }
+        }
+    }
+    // 页首（文件里前面还没有内容）的块，负的上外边距配上内边距（《梁羽生》卷名 `padding-top:6em;margin-top:-6em`）：Kindle 把盒子往上
+    // 推出页面、看不见的那截不占地方，认负外边距的掌阅却按整个盒子分页，竖排的卷名拆到三页（2026-10-14 真机）。照 Kindle 能看见的写：
+    // 上外边距 0，上内边距减去推出去的
+    if reader.negative_margins && reader.padding {
+        for (i, &before) in content_before.iter().enumerate() {
+            let c = comp(i);
+            let m = km::vertical_rem(c.margin[0], c.font_size);
+            if !usable(i) || before || m >= 0.0 || c.margin_auto[0] {
+                continue;
+            }
+            let p = (pad_rem(i, 0) + m).max(0.0);
+            let d = out.decls.entry(i).or_default();
+            d.push("margin-top:0".into());
+            d.push(format!("padding-top:{}em", fmt(p / c.font_size)));
         }
     }
     // 左右有框的块（不画边框的阅读器）：包进单格表格；没背景图、宽度和居中不是 Kindle 的（折成外边距了的算）
@@ -376,7 +404,10 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             let pem = |v: f64| fmt((v * c.font_size / parent_fs).max(0.0));
             let wrap = format!("margin-left:{}em;margin-right:{}em;margin-top:0;margin-bottom:0;", pem(m[0]), pem(m[1]));
             let mut td: Vec<String> = (0..4).filter_map(|s| border_css(i, s)).collect();
-            let pad = |side: usize| if side.is_multiple_of(2) { pad_rem(i, side) * g.v_rem_px } else { px(c.padding[side]) };
+            // 负的上外边距（不认负外边距的阅读器上没有）：Kindle 把框往上拉、上内边距再把字推下来，字还在原处（《梁羽生》卷名
+            // `padding-top:6em;margin-top:-6em`，2026-10-14 探针 Q134），单元格的上内边距减去它
+            let pull = if reader.negative_margins { 0.0 } else { km::vertical_rem(c.margin[0], c.font_size).min(0.0) };
+            let pad = |side: usize| if side == 0 { (pad_rem(i, 0) + pull).max(0.0) * g.v_rem_px } else if side == 2 { pad_rem(i, 2) * g.v_rem_px } else { px(c.padding[side]) };
             td.push(format!("padding:{}px {}px {}px {}px", fmt(pad(0).round()), fmt(pad(1).round()), fmt(pad(2).round()), fmt(pad(3).round())));
             // 单元格里块的背景色 xochitl 不画，写到单元格上
             if let Some(bg) = c.background.filter(|b| b >> 24 != 0) {
@@ -704,6 +735,23 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         }
         out.strip.insert(i, pre);
     }
+    // em 按根字号算的阅读器（Move）：上面写的 em 都是本元素的；`root_em` 换算别的元素，标题不管（见那里），标题上的这里换成根 em
+    // （《梁羽生》卷名 3 倍字号，按本元素写的左外边距在 Move 上只挪三分之一，竖条没挤出来，2026-10-14 真机）
+    if reader.em_root {
+        for (&i, ds) in out.decls.iter_mut() {
+            let fs = comp(i).font_size;
+            if !heading(&tag(i)) || (fs - 1.0).abs() < 1e-6 {
+                continue;
+            }
+            for d in ds.iter_mut() {
+                if let Some((name, v)) = d.split_once(':') {
+                    if let Some(n) = v.strip_suffix("em").and_then(|n| n.parse::<f64>().ok()) {
+                        *d = format!("{name}:{}em", fmt(n * fs));
+                    }
+                }
+            }
+        }
+    }
     out
 }
 
@@ -779,6 +827,26 @@ mod tests {
         apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
         let page = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(page.contains(r#"<span class="s eink-b"#) && page.contains(r#"<td class="eink-b1">格</td>"#), "{page}");
+    }
+
+    /// 《梁羽生》卷名（`float:right`、定宽、只有左边 auto、页首负上外边距配上内边距）：Kindle 不浮动、只有左边 auto 的靠右、推出页面的
+    /// 那截不占地方。掌阅标题的 float 写成 none、页首的上外边距 0、上内边距减去推出去的，左边的 auto 留着；Move 多出来的宽放左边。
+    #[test]
+    fn floated_title_follows_kindle() {
+        let body = r#"<h1 class="bt">卷名</h1><p>正文</p><h2 class="fl">节</h2>"#;
+        let css = "h1.bt{width:1.2em;float:right;padding:6em 0 0 0;margin:-6em 10px auto auto} h2.fl{float:left}";
+        let mut b = book(body, css);
+        let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
+        let page = String::from_utf8(b[2].data.clone()).unwrap();
+        let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
+        assert!(page.contains(r#"<h1 class="bt eink-b1">卷名</h1><p>正文</p><h2 class="fl eink-b2">节</h2>"#), "{page}");
+        assert!(sheet.contains("h1.eink-b1{float:none;margin-top:0;padding-top:0em;") && !sheet.contains("margin-left:0;") && sheet.contains("h2.eink-b2{float:none;}"), "{sheet}");
+        let (_, sheet, _) = run(body, css);
+        assert!(!sheet.contains("float") && sheet.contains("h1.eink-b1{margin-left:"), "{sheet}");
+        let ml: f64 = sheet.split("h1.eink-b1{margin-left:").nth(1).unwrap().split("em").next().unwrap().parse().unwrap();
+        // Move 的 em 按根字号：h1 2 倍字号，按本元素的数乘 2
+        assert!(ml > 10.0 && sheet.contains("margin-right:0.375em"), "多出来的宽放左边：{sheet}");
     }
 
     /// Move 单元格缺省顶端对齐：一行两格以上、Kindle 上居中的（没写、写了 baseline、只写在 tr 上的）行内补 middle；写了 top 的、单格的不动。

@@ -171,6 +171,10 @@ PROBES = [
     ("129", "td width=\"30\" 属性", "markup", "", '<table><tbody><tr><td>林少华译</td><td>右格</td></tr></tbody></table>|<table><tbody><tr><td width="30">林少华译</td><td>右格</td></tr></tbody></table>'),
     ("130", "图（rule.png 1000×6）行内 style width:12em（《克莱因壶》，Kindle 占 42%）", "markup", "", '<div><img class="ruleb" src="rule.png" alt=""/></div>|<div><img style="width:12em" src="rule.png" alt=""/></div>'),
     ("131", "图行内 style width:769px;max-width:428px（《狼厅》，Kindle 满宽）", "markup", "", '<div><img class="ruleb" src="rule.png" alt=""/></div>|<div><img style="max-width:428px;width:769px" src="rule.png" alt=""/></div>'),
+    # 2026-10-14 三本武侠全集体检报的（《梁羽生》诗句每半句包 span.nw 1549 处、卷名 h1.bigtitle 34 处）
+    ("132", "span white-space:nowrap（7 字一块，行尾放不下时整块挪到下一行？）", "markup", "", "<p>" + "<span>甲乙丙丁戊己，</span>" * 9 + "</p>|<p>" + '<span class="nw">甲乙丙丁戊己，</span>' * 9 + "</p>"),
+    ("133", "h1 float:right（标题后接一段）", "sheet", "float:right", '<h1{cls}>女帝奇英传</h1>'),
+    ("134", "h1 照《梁羽生》卷名 bigtitle（float:right、width:1.2em、上内边距 6em 配负上外边距、底色边框；对照是缺省 h1）", "markup", "", '<h1>女帝奇英传</h1>|<h1 class="bt">女帝奇英传</h1>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）
@@ -182,7 +186,8 @@ BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:
             "hr.hrd{width:100%;height:1px;border-style:none;border-top:1px dotted gray;}", ".flc{display:flex;justify-content:center;align-items:center;}",
             ".abs{position:absolute;bottom:12%;left:0;width:100%;text-align:center;}", "td.tb{border:2px solid #000;}", "table.bc{border-collapse:collapse;}", ".vlen{vertical-align:0.5em;}", ".vrel{position:relative;top:-0.5em;}", ".w50{width:50%;}", ".mauto{margin-left:auto;margin-right:auto;}",
             "span.fnote{position:relative;display:inline-block;width:19px;height:19px;background-color:black;vertical-align:sub;border-radius:50%;margin:0 3px;}",
-            "html body span.fnoff{display:inline;width:auto;height:auto;background-color:transparent;background-image:none;margin:0;}", "td.tw1{width:1em;}"]
+            "html body span.fnoff{display:inline;width:auto;height:auto;background-color:transparent;background-image:none;margin:0;}", "td.tw1{width:1em;}", ".nw{white-space:nowrap;}",
+            "h1.bt{font-size:300%;font-weight:normal;color:#1B272E;text-align:center;width:1.2em;line-height:120%;background:#E5E2D3;border:solid #DFDBCA 5px;float:right;padding:6em 12px 12px 12px;margin:-6em 10px auto auto;}"]
 
 
 def page(code, cid, body, head_style="", barcode=None):

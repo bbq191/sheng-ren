@@ -504,8 +504,8 @@ on = ["p", "block", "heading"]
 value = ["keyword"]
 ireader = "fixed"
 xochitl = "fixed"
-note = "左右外边距 auto：没定宽度的块本来就满宽，没效果。定了宽度的 Kindle 不居中、不靠右（Send to Kindle 写了块对齐，Kindle 照样靠左）：掌阅照 CSS 居中 → 左边的 auto 写成 0（KINDLE_RULES 31，profile margin_auto）；Move 由 width 那条折外边距时多出来的都放右边"
-src = "2026-10-13 测试-怪癖 Q30；2026-10-14 测试-怪癖 Q124（两台）、测试-怪癖-Kindle 真机截图"
+note = "左右外边距 auto：没定宽度的块本来就满宽，没效果。定了宽度、两边都是 auto 的 Kindle 不居中（Send to Kindle 写了块对齐，Kindle 照样靠左）：掌阅照 CSS 居中 → 左边的 auto 写成 0（KINDLE_RULES 31，profile margin_auto）；Move 由 width 那条折外边距时多出来的放右边。只有左边 auto 的 Kindle 靠右（写出器写块的对齐靠右，《梁羽生》卷名真机）：掌阅照 CSS 也靠右、不动，Move 多出来的放左边（KINDLE_RULES 33）"
+src = "2026-10-13 测试-怪癖 Q30；2026-10-14 测试-怪癖 Q124（两台）、测试-怪癖-Kindle 真机截图；2026-10-14《梁羽生武侠全集》卷名三台真机"
 
 # ---------------------------------------------------------------- 竖直对齐、列表符号、块高、flex、定位（2026-10-14 探针 Q100–Q119）
 
@@ -635,3 +635,22 @@ ireader = "same"
 xochitl = "same"
 note = "padding:auto 这类无效值：哪台都整条不认（Kindle 写出器的层叠也不收），等于没写（《雪国》）"
 src = "2026-10-14 测试书取值"
+
+# ---------------------------------------------------------------- 三本武侠全集体检报的（2026-10-14 探针 Q132–Q134，三台真机）
+
+[[rule]]
+prop = ["white-space"]
+on = ["inline"]
+value = ["keyword"]
+ireader = "same"
+xochitl = "same"
+note = "行内元素的 nowrap（《梁羽生》诗句每半句一个 span）：三台都照样在 span 中间断行（Kindle 看的是我们写出器的版本，没写行内的 nowrap；Amazon 版在整段写了 $45，没真机看）。真书诗句一行 12 字，三台都放得下"
+src = "2026-10-14 测试-怪癖-武侠（Kindle）、测试-怪癖 Q132（两台）"
+
+[[rule]]
+prop = ["float"]
+on = ["heading"]
+ireader = "fixed"
+xochitl = "same"
+note = "标题的 float：Kindle 不浮动（写出器不写 float），只写 float 的标题照旧自己占一行；Move 同样不认；掌阅认，标题浮到一边、后面的字排在旁边 → 写成 none（KINDLE_RULES 33，profile float）。《梁羽生》卷名（float:right、宽 1.2em、只有左边 auto、页首负上外边距配上内边距）Kindle 是靠右的竖排窄条、一页放下：掌阅以前拆到三页（页首的负外边距不往上拉、整个盒子分页），改成上外边距 0、上内边距减去推出去的；Move 以前横排（宽度不认、标题上的 em 按根字号读），宽度折成左外边距、标题的 em 换成按根的"
+src = "2026-10-14 测试-怪癖-武侠（Kindle）、测试-怪癖 Q133、Q134（两台）、《梁羽生武侠全集》卷名三台真机"

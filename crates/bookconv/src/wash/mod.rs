@@ -169,7 +169,11 @@ pub use self::encoding::transcode_entries;
 ///   是屏幕像素：字号、边距、缩进换成按根的 em（`root_em.rs`，profile `em_root`，用户定）；字号 `1em` 也挪出行内；空段自己的
 ///   上下外边距照 Kindle 留着、逐对折叠（`blank_fold.rs`，同写出器 23）；掌阅上标题自己没写对齐的照 Kindle 继承来的写明（掌阅
 ///   缺省居中、`inherit` 不认；`block_style.rs`，profile `heading_center`）。
-pub const KINDLE_RULES_VERSION: &str = "32";
+/// - 33（2026-10-14，三本武侠全集体检、探针 Q132–Q134 三台真机）：Kindle 不浮动——掌阅标题上的 `float` 写成 `none`（profile
+///   `float`）；定宽块只有左边是 auto 的 Kindle 靠右（写出器写块的对齐）：掌阅不再把这种 auto 写成 0，Move 折外边距时多出来的放
+///   左边；页首块的负上外边距配上内边距，掌阅上照 Kindle 能看见的写（上外边距 0、上内边距减去推出去的）。《梁羽生》卷名竖排窄条
+///   靠右、一页放下（掌阅以前拆到三页、Move 以前横排）。
+pub const KINDLE_RULES_VERSION: &str = "33";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
