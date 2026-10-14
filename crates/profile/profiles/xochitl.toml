@@ -54,6 +54,8 @@ block_width = false
 negative_margins = false
 # 单元格缺省顶端对齐（Kindle 居中），vertical-align:middle 认（2026-10-14 探针 Q105、Q106）：Kindle 上居中的单元格写进行内
 cell_middle = false
+# 单元格 CSS 写的宽度不认（类规则、行内都不认），HTML 的 width 属性认（2026-10-14 探针 Q127–Q129）：照 Kindle 写成属性
+cell_width = false
 comic_reader_margins = 1
 
 # 只认百分比宽度：没写宽度、写 px/em、只写高的图一律拉满一行（2026-10-12 测试书）；kindle_rules 折成 Kindle 上的百分比

@@ -119,6 +119,8 @@ struct Plan {
     frames: Vec<(usize, String, String)>,
     /// 表格、单元格：(元素, 行内 `style` 末尾接的边框)；表格另加 `cellspacing="0"`。
     cells: Vec<(usize, String)>,
+    /// 单元格：(元素, 要写的 `width` 属性)，见 [`ReaderModel::cell_width`]。
+    cell_widths: Vec<(usize, String)>,
 }
 
 /// 框住块的单格表格。xochitl 普通块上的边框不画（外链、行内都不画），表格、单元格**行内** `style` 写的边框画（分边、点线虚线、颜色
@@ -131,14 +133,14 @@ fn frame_open(class: usize, td_style: &str) -> String {
 const FRAME_CLOSE: &str = "</td></tr></tbody></table></div>";
 
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, reader: &ReaderModel, g: BoxGeometry) {
-    if reader.padding && reader.borders && reader.heading_margins && reader.px_margins && reader.percent_margins && reader.cell_middle {
+    if reader.padding && reader.borders && reader.heading_margins && reader.px_margins && reader.percent_margins && reader.cell_middle && reader.cell_width {
         return;
     }
     let css = km::book_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let plans: Vec<Plan> = crate::util::par_map(&chapters, |&i| plan(&entries[i], media, &css, reader, g));
     drop(css);
-    if plans.iter().all(|p| p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty()) {
+    if plans.iter().all(|p| p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty() && p.cell_widths.is_empty()) {
         return;
     }
     let opf_idx = find_opf(entries);
@@ -149,7 +151,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     let mut classes: Vec<(String, String)> = Vec::new();
     let mut images: Vec<(LineKey, Line)> = Vec::new();
     for (&i, p) in chapters.iter().zip(&plans) {
-        if p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty() {
+        if p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty() && p.cell_widths.is_empty() {
             continue;
         }
         let e = &mut entries[i];
@@ -204,6 +206,9 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         for (n, add) in &p.cells {
             let Some(t) = starts.get(*n) else { continue };
             let mut raw = text[t.start..t.end].to_string();
+            if let Some((_, w)) = p.cell_widths.iter().find(|(j, _)| j == n) {
+                raw = html::set_attr(&raw, "width", w);
+            }
             if t.name.eq_ignore_ascii_case("table") {
                 raw = html::set_attr(&raw, "cellspacing", "0");
             }
@@ -547,6 +552,24 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
         }
     }
+    // 不认单元格 CSS 宽度的阅读器（Move，Q127–Q129）：CSS 定了宽度、没写 `width` 属性的照 Kindle 写成属性（长度折成屏幕像素，百分比照写）
+    if !reader.cell_width {
+        for i in 0..ch.els.len() {
+            if !matches!(tag(i).as_str(), "td" | "th") || ch.els[i].hidden || ch.el(i).value().attr("width").is_some() {
+                continue;
+            }
+            let c = comp(i);
+            let w = match c.width {
+                Some(Len::Percent(p)) => format!("{}%", fmt(p)),
+                Some(l) => fmt((to_em(Some(l), c.font_size) * c.font_size * g.em_px).round().max(1.0)),
+                None => continue,
+            };
+            out.cell_widths.push((i, w));
+            if !out.cells.iter().any(|(j, _)| *j == i) {
+                out.cells.push((i, String::new()));
+            }
+        }
+    }
     // 包进表格的块：单元格里块的外边距不认，同标题一样把前后的间距写到框外相邻的块上（框里的内边距写在单元格上，不算）
     // 竖直：同一层相邻两块之间的距离
     let body = ch.body();
@@ -730,6 +753,16 @@ mod tests {
             "tr.t{vertical-align:top} td.b{vertical-align:baseline} td.p{vertical-align:top}",
         );
         assert!(page.contains(r#"<td style="vertical-align:middle;">甲</td><td class="b" style="vertical-align:middle;">乙</td><td class="p">丙</td></tr><tr><td>丁</td>"#), "{page}");
+    }
+
+    /// Move 单元格的 CSS 宽度照 Kindle 写成 `width` 属性：em 折成屏幕像素（字号 0.6em、宽 1em → 0.6 × 37.8 ≈ 23），百分比照写，已有属性的不动。
+    #[test]
+    fn cell_css_width_becomes_attribute() {
+        let (page, _, _) = run(
+            r#"<table><tbody><tr><td class="a">甲</td><td class="b">乙</td><td class="a" width="9">丙</td></tr></tbody></table>"#,
+            "td{vertical-align:top} td.a{width:1em;font-size:0.6em} td.b{width:40%}",
+        );
+        assert!(page.contains(r#"<td class="a" width="23">甲</td><td class="b" width="40%">乙</td><td class="a" width="9">丙</td>"#), "{page}");
     }
 
     /// 包框、下边框横线图找的是配对的闭合标签：框里套着 div 的不插错位置。

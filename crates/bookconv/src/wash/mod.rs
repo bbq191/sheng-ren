@@ -153,7 +153,8 @@ pub use self::encoding::transcode_entries;
 /// - 29（2026-10-14）：Move 上没有项目符号的列表项左右内边距并进外边距（《海葵》目录页）；单元格缺省顶端对齐，一行两格以上、Kindle 上居中的
 ///   写 `vertical-align:middle`（探针 Q105、Q106；`box_fix.rs`，profile `cell_middle`；掌阅同样）；掌阅上写了 `vertical-align:super/sub`
 ///   的行内元素里面包 `<sup>`/`<sub>`（Q100–Q123；`sup_sub.rs`，profile `inline_valign`）。
-pub const KINDLE_RULES_VERSION: &str = "29";
+/// - 30（2026-10-14）：Move 上单元格 CSS 写的宽度照 Kindle 写成 `width` 属性（探针 Q127–Q129；`box_fix.rs`，profile `cell_width`）。
+pub const KINDLE_RULES_VERSION: &str = "30";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
