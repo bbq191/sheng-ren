@@ -41,6 +41,9 @@ pub struct BoxGeometry {
     pub em_px: f64,
     /// Kindle 上竖直一 rem 在这台上的屏幕像素（同竖直间距换算：Kindle 一 rem 的像素 × 两台内容区高之比）。
     pub v_rem_px: f64,
+    /// 左右边距的 em 最后要乘的系数（profile `horizontal_scale`：这台一行的 em 数 ÷ 32，Move 约 0.7；不换算的 1）。这里折出来的左右
+    /// 长度先按 Kindle 的口径写（一 em 在页宽里占 1/32），乘完正好是这台上占页宽的比例。
+    pub h_scale: f64,
 }
 
 /// 横线怎么画。
@@ -119,8 +122,8 @@ struct Plan {
     frames: Vec<(usize, String, String)>,
     /// 表格、单元格：(元素, 行内 `style` 末尾接的边框)；表格另加 `cellspacing="0"`。
     cells: Vec<(usize, String)>,
-    /// 单元格：(元素, 要写的 `width` 属性)，见 [`ReaderModel::cell_width`]。
-    cell_widths: Vec<(usize, String)>,
+    /// 单元格的 `width` 属性：(元素, 新值；`None`＝删掉)，见 [`ReaderModel::cell_width`]。
+    cell_widths: Vec<(usize, Option<String>)>,
 }
 
 /// 框住块的单格表格。xochitl 普通块上的边框不画（外链、行内都不画），表格、单元格**行内** `style` 写的边框画（分边、点线虚线、颜色
@@ -133,9 +136,6 @@ fn frame_open(class: usize, td_style: &str) -> String {
 const FRAME_CLOSE: &str = "</td></tr></tbody></table></div>";
 
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, reader: &ReaderModel, g: BoxGeometry) {
-    if reader.padding && reader.borders && reader.heading_margins && reader.px_margins && reader.percent_margins && reader.cell_middle && reader.cell_width {
-        return;
-    }
     let css = km::book_css(entries, media);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let plans: Vec<Plan> = crate::util::par_map(&chapters, |&i| plan(&entries[i], media, &css, reader, g));
@@ -206,8 +206,10 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         for (n, add) in &p.cells {
             let Some(t) = starts.get(*n) else { continue };
             let mut raw = text[t.start..t.end].to_string();
-            if let Some((_, w)) = p.cell_widths.iter().find(|(j, _)| j == n) {
-                raw = html::set_attr(&raw, "width", w);
+            match p.cell_widths.iter().find(|(j, _)| j == n) {
+                Some((_, Some(v))) => raw = html::set_attr(&raw, "width", v),
+                Some((_, None)) => raw = html::remove_attr(&raw, "width"),
+                None => {}
             }
             if t.name.eq_ignore_ascii_case("table") {
                 raw = html::set_attr(&raw, "cellspacing", "0");
@@ -267,7 +269,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     let to_em = |l: Option<Len>, fs: f64| match l {
         Some(Len::Em(n)) => n,
         Some(Len::Pt(n)) => n / km::PT_PER_EM / fs,
-        Some(Len::Percent(p)) => p / 100.0 * g.area_w / (g.em_px * fs),
+        Some(Len::Percent(p)) => p / 100.0 * g.area_w / (g.em_px * g.h_scale * fs),
         None => 0.0,
     };
     let pad_rem = |i: usize, side: usize| km::vertical_rem(comp(i).padding[side], comp(i).font_size).max(0.0);
@@ -322,18 +324,18 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         let mut p = ch.els[i].parent;
         while let Some(a) = p {
             let c = comp(a);
-            w -= (to_em(c.margin[3], c.font_size) + to_em(c.margin[1], c.font_size) + to_em(c.padding[3], c.font_size) + to_em(c.padding[1], c.font_size)).max(0.0) * c.font_size * g.em_px;
+            w -= (to_em(c.margin[3], c.font_size) + to_em(c.margin[1], c.font_size) + to_em(c.padding[3], c.font_size) + to_em(c.padding[1], c.font_size)).max(0.0) * c.font_size * g.em_px * g.h_scale;
             p = ch.els[a].parent;
         }
         w.max(g.area_w * 0.1)
     };
-    // 不认块宽度的阅读器（Move）：定了宽度的块照 Kindle 折成左右外边距（本元素的 em）；居中的两边各一半，只有左边 auto 的放左边，别的放右边
+    // 不认块宽度的阅读器（Move）：定了宽度的块照 Kindle 折成左右外边距（本元素的 em），多出来的放右边（Kindle 不按 auto 居中）
     let mut width_margins: HashMap<usize, [f64; 2]> = HashMap::new();
     if !reader.block_width {
         for i in 0..ch.els.len() {
             let c = comp(i);
             let Some(w) = c.width.filter(|_| usable(i)) else { continue };
-            let unit = c.font_size * g.em_px;
+            let unit = c.font_size * g.em_px * g.h_scale;
             let avail = avail_px(i);
             let w_px = match w {
                 Len::Percent(p) => p / 100.0 * avail,
@@ -345,12 +347,16 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             if w_px <= 0.0 || extra <= 1.0 {
                 continue;
             }
-            let (l, r) = match (c.margin_auto[3], c.margin_auto[1]) {
-                (true, true) => (extra / 2.0, extra / 2.0),
-                (true, false) => (extra, 0.0),
-                _ => (0.0, extra),
-            };
-            width_margins.insert(i, [(side(3) + l) / unit, (side(1) + r) / unit]);
+            // 多出来的都放右边：Kindle 不按 margin:auto 居中、靠右（Q124 真机，Send to Kindle 写的块对齐不起作用）
+            width_margins.insert(i, [side(3) / unit, (side(1) + extra) / unit]);
+        }
+    }
+    // 认块宽度、按 margin:auto 居中的阅读器（掌阅，Q124）：Kindle 不居中、不靠右，定了宽度的块左边的 auto 写成 0
+    if reader.margin_auto && reader.block_width {
+        for i in 0..ch.els.len() {
+            if usable(i) && comp(i).width.is_some_and(|w| !w.is_zero()) && comp(i).margin_auto[3] {
+                out.decls.entry(i).or_default().push("margin-left:0".into());
+            }
         }
     }
     // 左右有框的块（不画边框的阅读器）：包进单格表格；没背景图、宽度和居中不是 Kindle 的（折成外边距了的算）
@@ -363,7 +369,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 continue;
             }
             *f = true;
-            let px = |l: Option<Len>| (to_em(l, c.font_size) * c.font_size * g.em_px).max(0.0);
+            let px = |l: Option<Len>| (to_em(l, c.font_size) * c.font_size * g.em_px * g.h_scale).max(0.0);
             // 外层 div 的左右外边距：块的外边距换成外层（父元素字号）的 em
             let parent_fs = ch.els[i].parent.map_or(ch.body_comp.font_size, |p| comp(p).font_size);
             let m = width_margins.get(&i).copied().unwrap_or([to_em(c.margin[3], c.font_size), to_em(c.margin[1], c.font_size)]);
@@ -523,7 +529,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 };
                 let pad_px = if reader.padding { 0.0 } else { pad_rem(i, side) * g.v_rem_px };
                 let m = h_margin.get(&i).copied().unwrap_or([to_em(c.margin[3], c.font_size), to_em(c.margin[1], c.font_size)]);
-                let width_px = (g.area_w - (m[0] + m[1]).max(0.0) * c.font_size * g.em_px).clamp(g.area_w * 0.1, g.area_w);
+                let width_px = (g.area_w - (m[0] + m[1]).max(0.0) * c.font_size * g.em_px * g.h_scale).clamp(g.area_w * 0.1, g.area_w);
                 let color = b.color.or(c.color).unwrap_or(0xFF00_0000) | 0xFF00_0000;
                 out.lines.push((i, Line { color, style, border_px: (border_rem * g.v_rem_px).max(1.0), pad_px, width_px, top }));
                 drawn[i][k] = true;
@@ -552,21 +558,51 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
         }
     }
-    // 不认单元格 CSS 宽度的阅读器（Move，Q127–Q129）：CSS 定了宽度、没写 `width` 属性的照 Kindle 写成属性（长度折成屏幕像素，百分比照写）
-    if !reader.cell_width {
-        for i in 0..ch.els.len() {
-            if !matches!(tag(i).as_str(), "td" | "th") || ch.els[i].hidden || ch.el(i).value().attr("width").is_some() {
-                continue;
-            }
-            let c = comp(i);
-            let w = match c.width {
-                Some(Len::Percent(p)) => format!("{}%", fmt(p)),
-                Some(l) => fmt((to_em(Some(l), c.font_size) * c.font_size * g.em_px).round().max(1.0)),
-                None => continue,
+    // 单元格的宽度照 Kindle：Send to Kindle 把它写成表格列宽的百分比（写了的宽度 ÷（写了的 + 没写的单元格的自然宽度），
+    // [`km::column_percents`]），Kindle 上字照样横排（Q127–Q129 真机）。按宽度压窄格子的阅读器（掌阅：CSS、属性都认，`width:auto`
+    // 不认）写成行内 `width:P%`、属性删掉；只认 `width` 属性的（Move）写成属性 `P%`
+    for i in 0..ch.els.len() {
+        if tag(i) != "tr" || ch.els[i].hidden {
+            continue;
+        }
+        let cells: Vec<usize> = ch.el(i).children().filter_map(|c| ch.index_of(c.id())).filter(|&j| matches!(tag(j).as_str(), "td" | "th")).collect();
+        let width_of = |j: usize| {
+            comp(j).width.or_else(|| ch.el(j).value().attr("width").and_then(|w| match w.trim().parse::<f64>() {
+                Ok(n) => Some(Len::Pt(n * 0.75)),
+                Err(_) => crate::cascade::parse_len(w),
+            }))
+        };
+        let widths: Vec<Option<Len>> = cells.iter().map(|&j| width_of(j)).collect();
+        if widths.iter().all(Option::is_none) {
+            continue;
+        }
+        let naturals: Vec<f64> = cells.iter().map(|&j| km::natural_px(&ch.el(j), comp(j).font_size)).collect();
+        // 每一格各算（列宽只看第一行的是写出器的写法；这里每行一样的书居多）
+        let total: f64 = widths.iter().zip(&naturals).map(|(w, n)| match w {
+            Some(Len::Em(e)) => e * 16.0,
+            Some(Len::Pt(p)) => p / 0.75,
+            _ => *n,
+        }).sum();
+        for (k, &j) in cells.iter().enumerate() {
+            let pct = match widths[k] {
+                Some(Len::Percent(p)) => p,
+                Some(Len::Em(e)) if total > 0.0 => e * 16.0 / total * 100.0,
+                Some(Len::Pt(p)) if total > 0.0 => p / 0.75 / total * 100.0,
+                _ => continue,
             };
-            out.cell_widths.push((i, w));
-            if !out.cells.iter().any(|(j, _)| *j == i) {
-                out.cells.push((i, String::new()));
+            let v = format!("{}%", fmt((pct * 100.0).round() / 100.0));
+            if reader.cell_width {
+                out.cell_widths.push((j, None));
+                let add = format!("width:{v};");
+                match out.cells.iter_mut().find(|(x, _)| *x == j) {
+                    Some((_, a)) => a.push_str(&add),
+                    None => out.cells.push((j, add)),
+                }
+            } else {
+                out.cell_widths.push((j, Some(v)));
+                if !out.cells.iter().any(|(x, _)| *x == j) {
+                    out.cells.push((j, String::new()));
+                }
             }
         }
     }
@@ -686,25 +722,25 @@ mod tests {
     fn run(body: &str, css: &str) -> (String, String, Vec<Entry>) {
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::get("xochitl").unwrap());
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 842.0, em_px: 37.8, v_rem_px: 49.4 });
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 842.0, em_px: 37.8, v_rem_px: 49.4, h_scale: 1.0 });
         let page = String::from_utf8(b[2].data.clone()).unwrap();
         let sheet = b.iter().find(|e| e.name == "O/eink-box.css").map(|e| String::from_utf8(e.data.clone()).unwrap()).unwrap_or_default();
         (page, sheet, b)
     }
 
     /// 悬挂缩进：左内边距并进左外边距；带背景色的、列表不动。
-    /// 认内边距、px 是屏幕像素的阅读器（掌阅）：px 的左右内边距（0.45pt 一 px）、首行缩进（0.75pt 一 px）折成 em，em 写的不动；
+    /// 认内边距、px 是屏幕像素的阅读器（掌阅）：px 的左右内边距、首行缩进（都是 0.45pt 一 px）折成 em，em 写的不动；
     /// 行内写的删掉、没改的那几边并进类规则。
     #[test]
     fn px_padding_and_indent_on_padding_reader() {
         let reader = ReaderModel { px_margins: false, ..ReaderModel::default() };
         let mut b = book(r#"<p class="a">一</p><p class="e">二</p><p style="padding:8px 16px;text-indent:32px">三</p>"#, "p.a{padding-left:20px;text-indent:24px} p.e{padding-left:2em;text-indent:2em}");
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4 });
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
         let page = String::from_utf8(b[2].data.clone()).unwrap();
         let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
         assert!(page.contains(r#"<p class="a eink-b1">一</p><p class="e">二</p><p class="eink-b2">三</p>"#), "{page}");
-        assert!(sheet.contains("p.eink-b1{padding-left:0.75em;text-indent:1.5em;}"), "{sheet}");
-        assert!(sheet.contains("p.eink-b2{padding-left:0.6em;padding-right:0.6em;text-indent:2em;padding-top:0.3em;padding-bottom:0.3em;}"), "{sheet}");
+        assert!(sheet.contains("p.eink-b1{padding-left:0.75em;text-indent:0.9em;}"), "{sheet}");
+        assert!(sheet.contains("p.eink-b2{padding-left:0.6em;padding-right:0.6em;text-indent:1.2em;padding-top:0.3em;padding-bottom:0.3em;}"), "{sheet}");
     }
 
     /// 左右有框的块包进单格表格，框写在单元格行内（全框四边、单边只有那一边），块的左外边距挪到表格（屏幕像素）、内边距写成单元格的，
@@ -740,7 +776,7 @@ mod tests {
         assert!(sheet.contains("p.eink-b3{margin-bottom:1.5em;}") && sheet.contains("p.eink-b4{margin-top:1.5em;}"), "{sheet}");
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4 });
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
         let page = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(page.contains(r#"<span class="s eink-b"#) && page.contains(r#"<td class="eink-b1">格</td>"#), "{page}");
     }
@@ -755,14 +791,21 @@ mod tests {
         assert!(page.contains(r#"<td style="vertical-align:middle;">甲</td><td class="b" style="vertical-align:middle;">乙</td><td class="p">丙</td></tr><tr><td>丁</td>"#), "{page}");
     }
 
-    /// Move 单元格的 CSS 宽度照 Kindle 写成 `width` 属性：em 折成屏幕像素（字号 0.6em、宽 1em → 0.6 × 37.8 ≈ 23），百分比照写，已有属性的不动。
+    /// 单元格的宽度照 Send to Kindle 写成列宽百分比（1em＝16px、`width="30"`＝30px，÷（16 + 30 + 「丙」的自然宽度 26））：掌阅写行内
+    /// `width:P%`、属性删掉，Move 写成属性；掌阅定宽块左边的 auto 写成 0。
     #[test]
-    fn cell_css_width_becomes_attribute() {
-        let (page, _, _) = run(
-            r#"<table><tbody><tr><td class="a">甲</td><td class="b">乙</td><td class="a" width="9">丙</td></tr></tbody></table>"#,
-            "td{vertical-align:top} td.a{width:1em;font-size:0.6em} td.b{width:40%}",
-        );
-        assert!(page.contains(r#"<td class="a" width="23">甲</td><td class="b" width="40%">乙</td><td class="a" width="9">丙</td>"#), "{page}");
+    fn cell_width_dropped_and_auto_margin_zeroed() {
+        let body = r#"<table><tbody><tr><td class="a">甲</td><td width="30">乙</td><td>丙</td></tr></tbody></table><p class="c">丁</p>"#;
+        let css = "td{vertical-align:top} td.a{width:1em} p.c{width:50%;margin:0 auto}";
+        let mut b = book(body, css);
+        let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
+        let page = String::from_utf8(b[2].data.clone()).unwrap();
+        let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
+        assert!(page.contains(r#"<td class="a" style="width:22.22%;">甲</td><td style="width:41.67%;">乙</td><td>丙</td>"#), "{page}");
+        assert!(page.contains(r#"<p class="c eink-b1">丁</p>"#) && sheet.contains("p.eink-b1{margin-left:0;}"), "{sheet}");
+        let (page, _, _) = run(body, css);
+        assert!(page.contains(r#"<td class="a" width="22.22%">甲</td><td width="41.67%">乙</td><td>丙</td>"#), "{page}");
     }
 
     /// 包框、下边框横线图找的是配对的闭合标签：框里套着 div 的不插错位置。
@@ -795,15 +838,15 @@ mod tests {
         let (page, sheet, _) = run(body, css);
         assert!(page.contains(r#"<p class="px eink-b1">甲</p><p class="pc eink-b2">乙</p><p class="auto eink-b3">丙</p><p class="em">丁</p><p class="bg eink-b1">戊</p>"#), "{page}");
         assert!(sheet.contains("html body p.eink-b1{margin-left:1.875em;}") && sheet.contains("html body p.eink-b2{margin-right:2.2275em;}"), "{sheet}");
-        // Move 不认块宽度：50% 居中折成两边各 (842 − 421) / 2 ÷ 37.8
-        assert!(sheet.contains("html body p.eink-b3{margin-left:5.5688em;margin-right:5.5688em;}"), "{sheet}");
+        // Move 不认块宽度：50% 折成右边 (842 − 421) ÷ 37.8（Kindle 不按 margin:auto 居中）
+        assert!(sheet.contains("html body p.eink-b3{margin-left:0em;margin-right:11.1376em;}"), "{sheet}");
         // 行内写了外边距的：行内的删掉（行内的压过样式表），没改的那几边照现在的值并进类规则
         let (page, sheet, _) = run(r#"<p style="margin:1em 0 0 50px;color:red">己</p>"#, "");
         assert!(page.contains(r#"<p style="color:red" class="eink-b1">己</p>"#), "{page}");
         assert!(sheet.contains("html body p.eink-b1{margin-left:1.875em;margin-top:1em;margin-right:0em;margin-bottom:0em;}"), "{sheet}");
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4 });
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
         let page = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(page.contains(r#"<p class="px eink-b1">甲</p><p class="pc">乙</p>"#), "掌阅的 % 照 CSS：{page}");
     }

@@ -37,8 +37,12 @@ pub struct ReaderModel {
     pub cell_middle: bool,
     /// 认行内元素上 `vertical-align` 的上标、下标（`false`：里面包 `<sup>`/`<sub>`）。
     pub inline_valign: bool,
-    /// 认单元格 CSS 写的宽度（`false`：照 Kindle 写成 `width` 属性）。
+    /// 按单元格的 CSS 宽度把格子压窄（`true`：列宽百分比写进行内 `style`；`false`：写成 `width` 属性）。
     pub cell_width: bool,
+    /// 按 `margin:auto` 让定宽块居中（`true`：Kindle 不，auto 写成 0）。
+    pub margin_auto: bool,
+    /// 左右边距的 em 照 Kindle 按页宽换算（`true`：乘这台一行的 em 数 ÷ 32）。
+    pub horizontal_scale: bool,
     /// 认 `rem`（`false`：改成 em，字号的折成 px）。
     pub rem: bool,
     /// 认 `!important`（`false`：带它的声明不起作用，要去掉、胜出的值写进行内）。
@@ -49,7 +53,7 @@ pub struct ReaderModel {
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, rem: true, important: true, line_em: None }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, margin_auto: true, horizontal_scale: false, rem: true, important: true, line_em: None }
     }
 }
 
@@ -72,6 +76,8 @@ impl ReaderModel {
             cell_middle: p.cell_middle,
             inline_valign: p.inline_valign,
             cell_width: p.cell_width,
+            margin_auto: p.margin_auto,
+            horizontal_scale: p.horizontal_scale,
             rem: p.rem,
             important: p.important,
             line_em: (!p.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
@@ -96,11 +102,14 @@ impl ReaderModel {
         if !self.inline_css_lengths {
             s.push_str("i0");
         }
-        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%'), (self.block_width, 'w'), (self.negative_margins, 'g'), (self.cell_middle, 'v'), (self.inline_valign, 'u'), (self.cell_width, 'c'), (self.rem, 'q'), (self.important, 'k')] {
+        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%'), (self.block_width, 'w'), (self.negative_margins, 'g'), (self.cell_middle, 'v'), (self.inline_valign, 'u'), (self.cell_width, 'c'), (self.margin_auto, 'a'), (self.rem, 'q'), (self.important, 'k')] {
             if !on {
                 s.push(c);
                 s.push('0');
             }
+        }
+        if self.horizontal_scale {
+            s.push_str("h1");
         }
         if let Some(l) = self.line_em {
             s.push_str(&format!("n{}", (l * 10000.0).round() / 10000.0));
@@ -187,7 +196,7 @@ mod tests {
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),
-            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0v0c0"
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0v0c0h1"
         );
     }
 }

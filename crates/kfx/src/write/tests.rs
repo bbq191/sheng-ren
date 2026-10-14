@@ -33,8 +33,8 @@ fn end_to_end_rules() {
     // 封面：`cover_image` 的符号编号 − 9 = 封面资源；字节实体叫 `$538.$597.$614` + `-ad`。
     let meta = format!("{:?}", of(T_METADATA).next().unwrap().value().unwrap());
     assert!(meta.contains(&format!("String({COVER_REF:?})")), "{meta}");
-    // 中文书的元数据语言写 en（开间距设置），正文样式里仍是 zh。
-    assert!(meta.contains(r#"String("language")), (307, String("en"))"#), "{meta}");
+    // 元数据语言照书本身的写（同 Send to Kindle；写 en 时 Kindle 按英文排中文，2026-10-14 真机）。
+    assert!(meta.contains(r#"String("language")), (307, String("zh"))"#), "{meta}");
     let styles = format!("{:?}", of(T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
     assert!(styles.contains(r#"(10, String("zh"))"#), "{styles}");
     assert_eq!(syms.sid(COVER_REF).unwrap() - SID_GAP, res.field(RESOURCE_REF).unwrap().as_symbol().unwrap());
@@ -862,4 +862,36 @@ fn page_breaks_split_sections_and_sized_images_align() {
     let (n, styles) = run(r#"<body class="c"><div><p>甲</p><div style="page-break-before:always"><img src="i.png"/></div><div class="image"><img src="i.png" width="50%"/></div><p>乙</p></div></body>"#);
     assert_eq!(n, 2, "带背景的 body：容器的子块切开");
     assert!(styles.contains(&format!("({P_BOX_ALIGN}, Symbol({ALIGN_CENTER}))")) && styles.contains(&format!("({P_SIZING}, Symbol({SIZING_VALUE}))")), "{styles}");
+}
+
+/// 2026-10-14 怪癖测试书对 Send to Kindle：行内元素的左右边距、长度写的竖直对齐和相对定位（基线偏移）、空的 inline-block（零宽空格）、
+/// 单元格宽度写成列宽百分比、首行缩进 px 按 0.45pt 和 % 按页宽、`font-size:large` 1.125。
+#[test]
+fn quirks_probe_like_send_to_kindle() {
+    let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+    w.put("c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+    w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>.m{margin-left:30px} .v{vertical-align:0.5em} .r{position:relative;top:-0.5em} .f{display:inline-block;width:19px;height:19px;background-color:black;margin:0 3px} .i{text-indent:30px} .p{text-indent:10%} .l{font-size:large} td.w{width:1em}</style></head><body>
+        <p>甲<span class="m">乙</span>丙<span class="v">丁</span>戊<span class="r">己</span>庚<span class="f"></span>辛</p>
+        <p class="i">壬</p><p class="p">癸</p><p class="l">子</p>
+        <table><tr><td class="w">丑丑</td><td>寅寅</td></tr></table><table><tr><td width="30">卯</td><td>寅寅</td></tr></table></body></html>"#.as_bytes()).unwrap();
+    let epub = w.finish().unwrap().into_inner();
+    let (kfx, warnings) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let c = crate::container::Container::parse(&kfx).unwrap();
+    let story = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STORYLINE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+    let styles = format!("{:?}", c.entities.iter().filter(|e| e.ty == T_STYLE).map(|e| e.value().unwrap().clone()).collect::<Vec<_>>());
+    let len = |k: u32, n: f64, u: u32| format!("({k}, Struct([(307, F64({n:?})), (306, Symbol({u}))]))");
+    // 行内：30px 外边距 13.5pt、基线偏移 0.5em（两种写法）
+    assert!(styles.contains(&len(P_MARGIN_LEFT, 13.5, U_PT)), "{styles}");
+    assert_eq!(styles.matches(&len(P_BASELINE_SHIFT, 0.5, U_EM)).count(), 1, "{styles}");
+    // 空的 inline-block：零宽空格 + 黑底、宽度写成右内边距（19px × 0.75pt ÷ 12）、高度写成最小高度（19 × 0.45pt）
+    assert!(styles.contains(&format!("({P_INLINE_BACKGROUND}, Int({}))", 0xFF00_0000u32)) && styles.contains(&len(P_PADDING_RIGHT, 1.1875, U_EM)) && styles.contains(&len(P_MIN_HEIGHT, 8.55, U_PT)), "{styles}");
+    let texts: Vec<String> = c.entities.iter().filter(|e| e.ty == T_TEXT_POOL).flat_map(|e| e.value().unwrap().field(CHILDREN).unwrap().as_list().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect::<Vec<_>>()).collect();
+    assert_eq!(texts.concat(), "甲乙丙丁戊己庚\u{200B}辛壬癸子丑丑寅寅卯寅寅");
+    // 首行缩进 30px → 1.125em、10% → 3.2em；large → 1.125
+    assert!(styles.contains(&len(P_TEXT_INDENT, 1.125, U_EM)) && styles.contains(&len(P_TEXT_INDENT, 3.2, U_EM)) && styles.contains("F64(1.125)"), "{styles}");
+    // 列宽：1em（16px）÷（16 + 两个字 32 + 10）、30px ÷（30 + 42）；单元格自己不写宽度
+    assert!(story.contains(&len(P_WIDTH, 27.5862, U_PERCENT)) && story.contains(&len(P_WIDTH, 41.6667, U_PERCENT)), "{story}");
+    assert!(!styles.contains(&format!("({P_WIDTH}, ")), "{styles}");
 }

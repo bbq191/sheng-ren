@@ -10,7 +10,7 @@
 //!   写成百分比；本来就照 CSS 一样大的（em 写的、百分比写的）不动。
 //!
 //! 写法：给 `<img>` 加类 `eink-iw-…`，规则写在单独的 `eink-img.css`（挂在每章最后，选择器 `html body img.类`；不用 `!important`：
-//! 掌阅不按它提优先级，带了反而输）——Move 不认行内样式；
+//! 掌阅不按它提优先级，带了反而输），`<img>` 行内 style 里的宽高去掉（两台都认行内样式、压过类规则，见 [`strip_inline_size`]）；
 //! 它的 CSS 解析器遇到类选择器可能整张表作废（2026-09-04 诊断书），所以不往别的样式表里加。高写成 `auto`（Kindle 独立图片
 //! 不管高，宽度定了按比例）。行内还是独立成块照写出器的判断（`kfx::write::parse` 的 `Doc::flush`）：段落里有字的嵌在字里；
 //! 整段没有字的、所在那行（按 `<br/>` 分）没有字而且后面跟着换行的、`display:block` 的独立成块。
@@ -134,7 +134,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         if tags.len() != cls.len() {
             continue;
         }
-        let edits: Vec<(usize, usize, String)> = tags.iter().zip(cls).filter_map(|(&(s, t), c)| Some((s, t, html::add_class(&text[s..t], c.as_deref()?)))).collect();
+        let edits: Vec<(usize, usize, String)> = tags.iter().zip(cls).filter_map(|(&(s, t), c)| Some((s, t, html::add_class(&strip_inline_size(&text[s..t]), c.as_deref()?)))).collect();
         edited += edits.len();
         let out = html::apply_edits(text, edits);
         let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
@@ -359,6 +359,25 @@ fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64) -> Optio
     Some((class, rule))
 }
 
+/// `<img>` 行内 `style` 里的宽高（`width`、`height`、`max-*`、`min-*`）去掉：两台都认行内样式、压过类规则（Move 2026-10-13 探针，
+/// 以前以为 Move 不认），留着的话类规则写的 Kindle 尺寸不起作用（《克莱因壶》`style="width:12em"` 的图 Move 拉满一行、Kindle 42%；
+/// 《狼厅》`style="width:769px;max-width:428px…"` 掌阅按屏幕像素显示 66%、Kindle 满宽，2026-10-14 `unify.py`）。尺寸照 Kindle 算时已经
+/// 按层叠算进了行内的值。
+fn strip_inline_size(tag: &str) -> String {
+    let Some(style) = html::attr_value(tag, "style").map(|s| crate::util::xml_unescape(s).into_owned()) else { return tag.to_string() };
+    let sized = |p: &str| matches!(p, "width" | "height" | "max-width" | "max-height" | "min-width" | "min-height");
+    let decls = html::css_decls(&style);
+    if !decls.iter().any(|d| sized(&d.prop.to_ascii_lowercase())) {
+        return tag.to_string();
+    }
+    let kept: String = decls.iter().filter(|d| !sized(&d.prop.to_ascii_lowercase())).map(|d| d.raw).collect();
+    if kept.trim().is_empty() {
+        html::remove_attr(tag, "style")
+    } else {
+        html::set_attr(tag, "style", &crate::util::xml_escape(kept.trim()))
+    }
+}
+
 /// 数字写法：保留 `d` 位小数，去掉末尾的 0。
 fn num(v: f64, d: usize) -> String {
     let s = format!("{v:.d$}");
@@ -399,6 +418,23 @@ mod tests {
 
     const BODY: &str = r#"<div><img src="s.jpg"/></div><div><img class="w50" src="m.jpg"/></div><div><img class="px" src="m.jpg"/></div><div><img class="em" src="m.jpg"/></div><p>字<img class="ic" src="s.jpg"/>字</p><p>字<img src="s.jpg"/>字</p>"#;
     const CSS: &str = "img.w50{width:50%} img.px{width:300px} img.em{width:10em} img.ic{width:1em}";
+
+    /// 加了类的图，行内 style 里的宽高去掉（两台都认行内样式、压过类规则），别的行内声明留着；没加类的不动。
+    #[test]
+    fn inline_size_dropped_when_classed() {
+        let page = format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{}</body></html>"#,
+            r#"<div><img style="width:12em;border:0" src="m.jpg"/></div><div><img style="max-width:428px;width:769px;height:1106px" src="m.jpg"/></div>"#);
+        let mut entries = vec![
+            Entry { name: "O/c.opf".into(), data: br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="t" href="t.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="t"/></spine></package>"#.to_vec() },
+            Entry { name: "O/t.xhtml".into(), data: page.into_bytes() },
+            Entry { name: "O/s.css".into(), data: Vec::new() },
+            Entry { name: "O/m.jpg".into(), data: jpeg(800, 400) },
+        ];
+        apply(&mut entries, &mut WashReport::default(), None, None, ImageSizing::Percent, KREF);
+        let t = String::from_utf8(entries[1].data.clone()).unwrap();
+        assert!(t.contains(r#"<img style="border:0" src="m.jpg" class="eink-iw-"#), "{t}");
+        assert!(t.contains(r#"<div><img src="m.jpg" class="eink-iw-"#), "{t}");
+    }
 
     /// Move 只认百分比：独立图片按 Kindle 的大小（原图 300px＝27.2%；300px＝18.75em＝66.2%；10em＝35.3%）、行内的同样折成百分比；
     /// 本来就写百分比的不动。

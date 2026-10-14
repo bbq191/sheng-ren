@@ -133,6 +133,9 @@ fn shadow_value(s: &crate::css::Shadow, text: Option<u32>) -> Value {
     Value::Struct(vec![(SHADOW_COLOR, Value::Int(i64::from(col))), (SHADOW_X, len(s.x)), (SHADOW_Y, len(s.y)), (SHADOW_BLUR, len(s.blur))])
 }
 
+/// 表格的缺省边框色（`#808080`，不透明）。
+const TABLE_BORDER_GRAY: u32 = 0xFF80_8080;
+
 /// 宽度：百分比照写，em/pt 换成 em。
 pub(super) fn width_value(l: Len, fs: f64) -> Option<Value> {
     match l {
@@ -196,6 +199,32 @@ pub(super) fn border_props(c: &Computed) -> StyleProps {
                 None => num(0.0, U_PT),
             };
             p.set(P_BORDER_RADIUS[slot], v);
+        }
+    }
+    p
+}
+
+/// 行内区间的左右外边距、内边距、基线偏移（Send to Kindle 照写：怪癖测试书 Q88–Q92、Q122、Q123）。长度按本元素：em 照写，pt 照写
+/// （px 已按 0.45pt），百分比照写。
+pub(super) fn inline_box_props(c: &Computed) -> StyleProps {
+    let mut p = StyleProps::new();
+    let v = |l: Len| match l {
+        Len::Em(n) => num(n, U_EM),
+        Len::Pt(n) => num(n, U_PT),
+        Len::Percent(n) => num(n, U_PERCENT),
+    };
+    for (l, k) in [(c.margin[3], P_MARGIN_LEFT), (c.margin[1], P_MARGIN_RIGHT), (c.padding[3], P_PADDING_LEFT), (c.padding[1], P_PADDING_RIGHT)] {
+        if let Some(l) = l.filter(|l| !l.is_zero()) {
+            p.set(k, v(l));
+        }
+    }
+    if let Some(l) = c.baseline_shift {
+        p.set(P_BASELINE_SHIFT, v(l));
+    }
+    // 空的 inline-block 的高度写成最小高度（见 `parse.rs` 里插零宽空格那段）
+    if c.display.as_deref() == Some("inline-block") {
+        if let Some(l) = c.min_height.filter(|l| !l.is_zero()) {
+            p.set(P_MIN_HEIGHT, v(l));
         }
     }
     p
@@ -338,7 +367,9 @@ impl Builder {
         // 自己或祖先（含 body，body 的左右边距本身不写）有左右边距、内边距、边框时写百分比（《人生海海》body `margin:0 5pt`、
         // 《揭露人性》`p.kindle-cn-ref{margin:0 1em 0 2em}` 里的 2em 都写 6.25%；没有的照写 em）
         let narrowed = avail < PAGE_WIDTH_EM - 1e-6 || c.in_hbox;
+        // 百分比：在整页宽的块里按页宽折成 em（Send to Kindle：`text-indent:10%` 写 3.2em，2026-10-14 怪癖测试书 Q15），缩窄的照写百分比
         let indent_rem = match c.text_indent {
+            Some(Len::Percent(n)) if !narrowed => Some(n / 100.0 * PAGE_WIDTH_EM),
             Some(Len::Percent(n)) => {
                 p.len(P_TEXT_INDENT, n, U_PERCENT);
                 None
@@ -405,6 +436,15 @@ impl Builder {
         // 也照写（换算成 em，另加最大宽度 100%，同有宽度的块）——不写的话 Kindle 按原图像素显示，和掌阅、Move 不一样：
         // 《飘》图标注释号 `width:0.65em` 的 70×95 小图在 Kindle 上比字大好几倍，《绍宋》`width:7.5pt` 的图标同样
         // （2026-10-12 `tools/kfx/unify.py` 比图片查出来）
+        // 表格：最大宽度 100%、缺省边框色灰（Send to Kindle 每张表都这样写，2026-10-14 怪癖测试书；书里写了边框的照边框）
+        if b.ty == Some(NODE_TABLE) {
+            if c.width.is_none() {
+                p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
+            }
+            if c.border.iter().all(Option::is_none) {
+                p.color(P_BORDER_COLOR[0], TABLE_BORDER_GRAY);
+            }
+        }
         let image_width = matches!(b.kind, Kind::Image { .. }) && c.width.is_some();
         if matches!(b.ty, Some(NODE_TABLE | NODE_HR)) || image_width {
             if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
