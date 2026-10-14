@@ -69,7 +69,9 @@
 | 行内元素的左右边距、长度写的竖直对齐、`position:relative` | 都认（Q88–Q92、Q122、Q123 真机） | 边距认（px 折 em）；竖直对齐、定位不认 | 都不认 |
 | 左右边距的 em、pt | 按页宽百分比显示（一页按 32 个 em 折） | 一行约 31 个 em，差 2–3%，不改 | 一行约 22 个 em，宽出 1.4 倍 → 乘 0.70（KINDLE_RULES 31，profile `horizontal_scale`；负的首行缩进跟着乘；测试书真机 2em 挪 52，换算 52.6） |
 | body 的左右边距 | 按文件：文件里有负外边距的那一侧才加 | 样式表全书共用 → 和多数不一样的文件 body 加类单独写（KINDLE_RULES 31，`eink-body.css`） | 同掌阅 |
-| 定宽块的 `margin:auto` | **不居中**（Q124 真机） | 居中 → auto 写成 0（KINDLE_RULES 31，profile `margin_auto`） | 不认宽度 → 折外边距时多出来的放右边 |
+| 定宽块的 `margin:auto` | 两边 auto **不居中**（Q124 真机）；只有左边 auto 的**靠右**（《梁羽生》卷名真机） | 居中 → 两边 auto 的左边写成 0（KINDLE_RULES 31，profile `margin_auto`）；只有左边 auto 的照 CSS 靠右、不动 | 不认宽度 → 折外边距时多出来的放右边（只有左边 auto 的放左边，KINDLE_RULES 33） |
+| `float` | **不浮动**（写出器不写；Q133、Q134 真机） | 认：标题浮到一边 → 标题上的写成 `none`（KINDLE_RULES 33，profile `float`） | 不认，同 Kindle |
+| 页首块的负上外边距配上内边距 | 盒子往上推出页面、看不见的那截不占地方（《梁羽生》卷名真机） | 页首的负外边距不往上拉、整个盒子分页（卷名拆到三页）→ 上外边距 0、上内边距减去推出去的（KINDLE_RULES 33） | 负外边距、标题内边距不认；包成单格表格画框时单元格的上内边距减去它 |
 | 块、单元格的边框；`<style>`、行内的字号 em | 照写 | 照 CSS 画（左边线、全框、单元格类规则；相邻单元格的边框不管写没写 `collapse` 都并成一条）；字号 em、px 照 CSS（Q49–Q51、Q117–Q119） | 见上（只画表格、单元格行内写的） |
 
 ### 背景图
@@ -163,7 +165,7 @@
 | `px_margins`、`percent_margins`（都是 `true`） | 左右外边距写 px 时和 Kindle 一样大、写 % 时按包含块宽；`false` 时只修复的文字书里块上的折成 em（px 按 0.45pt、% 按内容区宽；`wash/box_fix.rs`，KINDLE_RULES 24） | — | `px_margins = false` | 都是 `false` | 2026-10-13：两台 px 是屏幕像素（Kindle 按 0.45pt），Move 的 % 当 px；修后掌阅、Move 真机 50px 都挪 71（Kindle 换算 1.875em） |
 | `rem`、`important`、`line_height_numbers`（都是 `true`） | 认 `rem`、认 `!important`、认不带单位的 `line-height`；`false` 时只修复的文字书里 rem 改成 em（字号的折成 px）、去掉 `!important`（靠它胜出的值写进行内）、行距照 Kindle 写成 em（`wash/css_compat.rs`、`wash/block_style.rs`，KINDLE_RULES 25；`line_height_numbers = false` 要写 `line_px`、`em_px`） | — | 都是 `false` | — | 2026-10-13「测试-怪癖-掌阅」Q28、Q53、Q80–Q86 |
 | `block_width`、`negative_margins`（都是 `true`） | 认块的宽度、认负的外边距；`false` 时只修复的文字书里块的宽度折成左右外边距、页中间相邻两块的负外边距照 Kindle 写成非负的间距（`wash/box_fix.rs`，KINDLE_RULES 28） | — | — | 都是 `false` | 2026-10-13 探针 Q08、Q30、Q75–Q79 |
-| `cell_width`、`margin_auto`（都是 `true`，同 CSS） | 按单元格的 CSS 宽度压窄格子、按 `margin:auto` 让定宽块居中；Kindle 都不（真机）。单元格的宽度两台都照 Kindle 写成列宽百分比（`true` 写行内 `width:P%`，`false` 写 `width` 属性），`margin_auto = true` 时定宽块左边的 auto 写成 0（`wash/box_fix.rs`，KINDLE_RULES 31） | — | 都是 `true` | `cell_width = false`（不认 CSS 宽度） | 2026-10-14 探针 Q124、Q127–Q129，Kindle 截图 |
+| `cell_width`、`margin_auto`（都是 `true`，同 CSS） | 按单元格的 CSS 宽度压窄格子、按 `margin:auto` 让定宽块居中；Kindle 都不（真机）。单元格的宽度两台都照 Kindle 写成列宽百分比（`true` 写行内 `width:P%`，`false` 写 `width` 属性），`margin_auto = true` 时两边 auto 的定宽块左边的 auto 写成 0（`wash/box_fix.rs`，KINDLE_RULES 31；只有左边 auto 的 Kindle 靠右，不动，33）。`float`（缺省 `true`）：认浮动，标题上的写成 `none`（Kindle 不浮动，KINDLE_RULES 33） | — | 都是 `true` | `cell_width = false`（不认 CSS 宽度）、`float = false` | 2026-10-14 探针 Q124、Q127–Q129、Q133、Q134，Kindle 截图 |
 | `cell_middle`、`inline_valign`（都是 `true`） | 单元格缺省竖直居中（同 Kindle）、认行内元素上 `vertical-align` 的上标下标；`false` 时只修复的文字书里一行两格以上、Kindle 上居中的单元格行内写 `vertical-align:middle`（`wash/box_fix.rs`），写了 super/sub 的行内元素里面包 `<sup>`/`<sub>`（`wash/sup_sub.rs`；KINDLE_RULES 29） | — | 都是 `false` | `cell_middle = false` | 2026-10-14 探针 Q100–Q106、Q120–Q123 |
 | `em_px`、`line_px`（不写） | `em_px`：这台缺省字号下 CSS 1em 的屏幕像素，竖直间距照 Kindle 换算用（KINDLE_RULES 14）；`line_px`：正文一行的像素（kindle：一 rem 竖直 = 它 / 1.2；掌阅：缺省行距，行距照 Kindle 写成 em 用） | `line_px` 63 | `em_px` 37.5、`line_px` 58 | `em_px` 37.8 | 2026-10-12「测试-竖直间距」：Kindle 按行距排边距，同样 1em 占页高多一半 |
 | `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |

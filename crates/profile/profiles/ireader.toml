@@ -52,6 +52,8 @@ inline_valign = false
 # 标题（h1–h6）自己没写 text-align 时居中（inherit 也不认，left 认；2026-10-14 探针「测试-标题对齐」，《人生海海》「第一章」Kindle 靠左、掌阅居中）：
 # 照 Kindle 继承来的对齐写明
 heading_center = true
+# float 认（2026-10-14 探针 Q133：标题浮到右边、后一段排在旁边；Kindle 不浮动）：标题上的写成 none。写 true 是缺省，这里写明
+float = true
 
 [screen]
 width = 1264

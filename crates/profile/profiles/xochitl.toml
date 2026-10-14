@@ -55,6 +55,8 @@ percent_margins = false
 block_width = false
 # 负的外边距不认（Q08、Q75–Q79）：页中间相邻两块之间的照 Kindle 写成非负的间距（KINDLE_RULES 28；左右的不管，用户定）
 negative_margins = false
+# float 不认（2026-10-14 探针 Q133、Q134：标题照旧自己占一行），同 Kindle
+float = false
 # 单元格缺省顶端对齐（Kindle 居中），vertical-align:middle 认（2026-10-14 探针 Q105、Q106）：Kindle 上居中的单元格写进行内
 cell_middle = false
 # 单元格 CSS 写的宽度不认（类规则、行内都不认），width 属性认（2026-10-14 探针 Q127–Q129）：照 Kindle 的列宽百分比写成属性

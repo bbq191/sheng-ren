@@ -41,6 +41,8 @@ pub struct ReaderModel {
     pub cell_width: bool,
     /// 按 `margin:auto` 让定宽块居中（`true`：Kindle 不，auto 写成 0）。
     pub margin_auto: bool,
+    /// 认 `float`（`true`：Kindle 不浮动，标题上的写成 `none`）。
+    pub float: bool,
     /// 左右边距的 em 照 Kindle 按页宽换算（`true`：乘这台一行的 em 数 ÷ 32）。
     pub horizontal_scale: bool,
     /// em 一律按根字号算（`true`：字号、边距、缩进的 em 换成按根的值，`wash/root_em.rs`）。
@@ -59,7 +61,7 @@ pub struct ReaderModel {
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, margin_auto: true, horizontal_scale: false, em_root: false, em_root_px: None, heading_center: false, rem: true, important: true, line_em: None }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, margin_auto: true, float: true, horizontal_scale: false, em_root: false, em_root_px: None, heading_center: false, rem: true, important: true, line_em: None }
     }
 }
 
@@ -83,6 +85,7 @@ impl ReaderModel {
             inline_valign: p.inline_valign,
             cell_width: p.cell_width,
             margin_auto: p.margin_auto,
+            float: p.float,
             horizontal_scale: p.horizontal_scale,
             em_root: p.em_root,
             em_root_px: p.em_px.filter(|_| p.em_root),
@@ -111,7 +114,7 @@ impl ReaderModel {
         if !self.inline_css_lengths {
             s.push_str("i0");
         }
-        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%'), (self.block_width, 'w'), (self.negative_margins, 'g'), (self.cell_middle, 'v'), (self.inline_valign, 'u'), (self.cell_width, 'c'), (self.margin_auto, 'a'), (self.rem, 'q'), (self.important, 'k')] {
+        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%'), (self.block_width, 'w'), (self.negative_margins, 'g'), (self.cell_middle, 'v'), (self.inline_valign, 'u'), (self.cell_width, 'c'), (self.margin_auto, 'a'), (self.float, 'o'), (self.rem, 'q'), (self.important, 'k')] {
             if !on {
                 s.push(c);
                 s.push('0');
@@ -211,7 +214,7 @@ mod tests {
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),
-            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0v0c0h1e37.8"
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0v0c0o0h1e37.8"
         );
     }
 }
