@@ -323,23 +323,23 @@ mod tests {
         ]
     }
 
-    /// Move：行内字号的 px 不对（没处理）；边框、左内边距、`<style>`、行内写 em 的已经处理（KINDLE_RULES 22、23）不报；外链的首行缩进 em
+    /// Move：`break-before:page` 不认（没处理）；边框、左内边距、`<style>`、行内写 em 的已经处理（KINDLE_RULES 22、23）不报；外链的首行缩进 em
     /// 对；没验证过的另算；隐藏的不算。掌阅只有没验证过的。
     #[test]
     fn move_flags_unhandled_and_skips_fixed() {
         let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/><style>p.a{text-indent:2em;padding-left:1em;}</style></head>
-<body><p class="a">一</p><p class="a">二</p><div style="margin-top:1.5em;border:1px solid #000;font-size:24px">三</div><p class="b">四</p><p class="h" style="padding-left:1em">五</p></body></html>"#;
+<body><p class="a">一</p><p class="a">二</p><div style="margin-top:1.5em;border:1px solid #000;break-before:page">三</div><p class="b">四</p><p class="h" style="padding-left:1em">五</p></body></html>"#;
         let b = book(ch, "p.b{text-indent:2em;word-spacing:0.1em;} .h{display:none;}");
         let f = audit(&b, None, "xochitl");
         let lines: Vec<String> = f.iter().map(Finding::line).collect();
-        assert!(lines[0].starts_with("✗ 行内 style font-size（px，block）×1："), "{lines:?}");
+        assert!(lines[0].starts_with("✗ 行内 style break-before（keyword，block）×1："), "{lines:?}");
         assert_eq!(lines[1], "? word-spacing（em，p）×1", "{lines:?}");
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(audit(&b, None, "ireader").iter().all(|f| f.verdict == Verdict::Unknown));
         assert!(audit(&b, None, "kindle").is_empty());
         let s = summary(&f, "Move");
         assert_eq!(s.len(), 2);
-        assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：行内 font-size（px，block）×1"), "{s:?}");
+        assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：行内 break-before（keyword，block）×1"), "{s:?}");
     }
 
     /// Move：有项目符号的列表项左内边距没处理；没有符号的同普通块（已处理）不报。

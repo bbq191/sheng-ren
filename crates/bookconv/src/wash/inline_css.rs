@@ -53,10 +53,13 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport) {
         }
         let mut used = false;
         if let Some((bs, be)) = html::body_range(text) {
-            for t in html::tags_in(text, bs, be).filter(|t| t.is_start()) {
+            // `<body>` 自己也算（`root_em` 给写 px 字号的 `<body>` 接的 em：《狼厅》）
+            let body = html::tags(text).find(|t| t.is_start() && t.is("body"));
+            for t in body.into_iter().chain(html::tags_in(text, bs, be).filter(|t| t.is_start())) {
                 let raw = &text[t.start..t.end];
                 let Some(style) = html::attr_value(raw, "style") else { continue };
-                let tag = t.name.to_ascii_lowercase();
+                // 要改成 `div` 的标题（`kindle_model::DIV_ATTR`）按 `div` 搬：字号也搬
+                let tag = crate::kindle_model::reader_tag_raw(t.name, raw);
                 let Some((kept, moved)) = split_inline(&xml_unescape(style), &tag) else { continue };
                 let k = classes.iter().position(|c| *c == (tag.clone(), moved.clone())).unwrap_or_else(|| {
                     classes.push((tag.clone(), moved.clone()));
@@ -85,7 +88,8 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport) {
     if !classes.is_empty() {
         let mut sheet = String::from("/* 行内 style 里写 em 的长度（sheng-ren kindle_rules，见 wash/inline_css.rs） */\n");
         for (k, (tag, decls)) in classes.iter().enumerate() {
-            sheet.push_str(&format!("html body {tag}.{CLASS}{}{{{decls}}}\n", k + 1));
+            let sel = if tag == "body" { format!("html body.{CLASS}{}", k + 1) } else { format!("html body {tag}.{CLASS}{}", k + 1) };
+            sheet.push_str(&format!("{sel}{{{decls}}}\n"));
         }
         add_css_entry(entries, opf_idx, &inline_path, &sheet, "eink-inline-css");
     }
@@ -132,9 +136,10 @@ fn has_em(prop: &str, v: &str) -> bool {
 fn split_inline(style: &str, tag: &str) -> Option<(String, String)> {
     let decls = html::css_decls(style);
     let heading = matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
-    // 行内元素上的首行缩进不起作用；`font-size:1em`/`100%` 等于没写：都不搬，少动书
+    // 行内元素上的首行缩进不起作用：不搬，少动书。（`font-size:1em` 以前也当没写不搬；Move 的 em 按根字号算，`root_em` 接的
+    // `font-size:1em` 要压过 px 写的字号（《狼厅》），2026-10-14 起照搬）
     let inline = matches!(tag, "span" | "a" | "b" | "i" | "em" | "strong" | "sup" | "sub" | "font" | "small" | "big" | "u" | "s" | "code" | "cite" | "q" | "abbr");
-    let noop = |p: &str, v: &str| (inline && p == "text-indent") || (p == "font-size" && matches!(v.trim().to_ascii_lowercase().as_str(), "1em" | "100%"));
+    let noop = |p: &str, _: &str| inline && p == "text-indent";
     // 每个属性最后一次写的值
     let mut last: BTreeMap<String, &str> = BTreeMap::new();
     for d in &decls {
@@ -203,8 +208,8 @@ mod tests {
         assert_eq!(split_inline("font-size:2em;font-size:xx-large;margin-bottom:1em", "h2"), Some(("font-size:2em;font-size:xx-large;".into(), "margin-bottom:1em !important;".into())));
         assert_eq!(split_inline("text-indent:2em;text-indent:30px", "p"), None);
         assert_eq!(split_inline("font-size:120%;margin:0 0 1em", "span"), Some(("".into(), "font-size:120% !important;margin:0 0 1em !important;".into())));
-        // 行内元素上的首行缩进、等于没写的 1em 字号不搬（《三体》`<span style="font-size:1em;text-indent:2em">`）
-        assert_eq!(split_inline("font-size: 1em; text-indent: 2em", "span"), None);
+        // 行内元素上的首行缩进不搬；1em 字号 2026-10-14 起照搬（Move 的 em 按根字号算，见 split_inline）
+        assert_eq!(split_inline("font-size: 1em; text-indent: 2em", "span"), Some(("text-indent: 2em".into(), "font-size:1em !important;".into())));
         assert_eq!(split_inline("text-indent:0em", "p"), Some(("".into(), "text-indent:0em !important;".into())));
     }
 

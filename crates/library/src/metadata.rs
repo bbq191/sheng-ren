@@ -574,7 +574,15 @@ fn volume_suffix(title: &str) -> String {
         return String::new();
     }
     // 最后一串数字：卷01、第3卷、Vol.2、- 05
-    let digits: String = tail.chars().rev().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect();
+    let rev: Vec<char> = tail.chars().rev().collect();
+    let after = rev.iter().take_while(|c| !c.is_ascii_digit()).count();
+    let digits: String = rev[after..].iter().take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect();
+    // 「（精装72册）」「72本」是套书的册数，不是卷次（前面没有「第」）
+    let unit = after.checked_sub(1).map(|i| rev[i]);
+    let before = rev.get(after + digits.chars().count()).copied();
+    if matches!(unit, Some('册' | '冊' | '本')) && before != Some('第') {
+        return String::new();
+    }
     if digits.is_empty() { String::new() } else { format!(" 第{digits}卷") }
 }
 
@@ -802,6 +810,8 @@ mod tests {
         assert_eq!(t("哆啦A夢全彩版 - 卷01", "哆啦A梦"), "哆啦A梦 第01卷");
         assert_eq!(t("波洛系列04：罗杰疑案", "罗杰疑案"), "罗杰疑案");
         assert_eq!(t("三体（共3册）", "三体"), "三体");
+        assert_eq!(t("古龙作品全集（大陆唯一合法授权华丽新版）（精装72册）", "古龙作品全集"), "古龙作品全集", "套书的册数不是卷次");
+        assert_eq!(t("某书（第3册）", "某书"), "某书 第3卷");
         assert_eq!(t("浪客行 - 卷01", "浪客行"), "浪客行 第01卷");
         assert_eq!(t("哆啦A夢全彩版 - 卷02", "机器猫哆啦A梦（共45册）"), "机器猫哆啦A梦 第02卷", "网站书名的说明去掉");
         assert_eq!(corrected_title(&Meta { title: "嘯風山莊".into(), ..Default::default() }), "嘯風山莊", "没找到：照书里的");

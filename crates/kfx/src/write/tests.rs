@@ -542,7 +542,7 @@ fn body_blocks(body: &str) -> Vec<Block> {
     out
 }
 
-/// 只有空白的段落不出节点，折成下一块上边距多出 0.6 × 本元素行高（Send to Kindle 同样）；只有普通空格的排不出行，不折。
+/// 只有空白的段落不出节点，折成下一块上边距：0.6 × 本元素行高，加上空段自己的外边距逐对折叠（Send to Kindle 同样）；只有普通空格的排不出行，不折。
 #[test]
 fn blank_paragraphs_fold_into_next_margin() {
     let mut blocks = body_blocks("<p>甲</p><p>&#160;</p><p>乙</p><p>　</p><p><br/></p><p>丙</p><p> </p><p>丁</p><p style=\"line-height:2\">&#160;</p><p>戊</p><p>&#160;</p>");
@@ -555,8 +555,9 @@ fn blank_paragraphs_fold_into_next_margin() {
             _ => unreachable!(),
         })
         .collect();
-    // <p> 上下 1em 折叠成 1em，再加折掉的空段：一个 0.72em（缺省行高 1.2），两个 1.44em，行高 2 的 1.2em；文末的不折
-    assert_eq!(tops, [("甲".into(), 1.0), ("乙".into(), 1.72), ("丙".into(), 2.44), ("丁".into(), 1.0), ("戊".into(), 2.2)]);
+    // 空段排成高 0.6 行的空块、自己的上下外边距（<p> 1em）照留、逐对折叠（2026-10-14 重推的样本，见 `Gap`）：一个空段 1 + 0.72 + 1，
+    // 两个 1 + 0.72 + 1 + 0.72 + 1，行高 2 的 1 + 1.2 + 1；只有普通空格的不折（丁 1）；文末的不折
+    assert_eq!(tops, [("甲".into(), 1.0), ("乙".into(), 2.72), ("丙".into(), 4.44), ("丁".into(), 1.0), ("戊".into(), 3.2)]);
 }
 
 type TextRuns = Vec<(String, Vec<(usize, usize, bool)>)>;

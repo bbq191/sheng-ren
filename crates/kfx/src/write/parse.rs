@@ -55,6 +55,39 @@ pub(super) enum Kind {
     Container(Vec<Block>),
 }
 
+/// 折掉的空段（[`BLANK_LINE_FOLD`]）：高度和每个空段自己的上下外边距（根 em）。Send to Kindle 把空段排成一个高 0.6 行的空块，
+/// 自己的外边距照留、照常和前后折叠（2026-10-14 重推的样本：《三体》`<p><br/></p>` 上下 1em、行高 1.618，下一段的上边距
+/// 1 + 0.97 + 1 ≈ 2.94；《古龙》两个 `p.calibre10{margin:1em 0}` 4.47。以前丢了外边距，只加高度，差约 1 行）。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Gap {
+    /// 空段的高度合计。
+    pub(super) h: Vert,
+    /// 每个空段的 (上外边距, 下外边距)，按出现顺序。
+    pub(super) margins: Vec<(Vert, Vert)>,
+}
+
+impl Gap {
+    /// 前面再接一段（`before` 在本段之前）。
+    fn prepend(&mut self, before: Gap) {
+        let mut g = before;
+        g.h += self.h;
+        g.margins.append(&mut self.margins);
+        *self = g;
+    }
+
+    /// `prev_bottom`（前一块的下外边距）到 `top`（本块的上外边距）之间夹着这些空段的外边距逐对折叠的总距离；没有空段的 `None`。
+    pub(super) fn chain(&self, prev_bottom: Vert, top: Vert) -> Option<Vert> {
+        let (first, rest) = self.margins.split_first()?;
+        let mut total = collapse(prev_bottom, first.0);
+        let mut bottom = first.1;
+        for &(t, b) in rest {
+            total += collapse(bottom, t);
+            bottom = b;
+        }
+        Some(total + collapse(bottom, top))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Block {
     pub(super) kind: Kind,
@@ -85,7 +118,7 @@ pub(super) struct Block {
     /// 以前只看有没有边距，`<li><p class="footnote">` 这种没写边距的 `<p>` 也被当成匿名的，样式被 `<li>` 的盖掉（《春雪》注释的字号、缩进、行高）。
     inline: bool,
     /// 前面折掉的空段（[`Doc::gap`]）：外边距折叠之后加到上边距上（[`apply_gaps`]）。
-    gap_before: Vert,
+    gap_before: Gap,
 }
 
 /// 深度优先（先序）走遍块树，含容器里的块（容器本身先于里面的块）；`f` 返回 `ControlFlow::Break` 时停下。
@@ -198,7 +231,7 @@ pub(super) struct Doc<'a> {
     /// （《福尔摩斯探案全集》目录页「第一册」指向页末插图前的空锚点，点了停在目录页开头；全书 1102 处）。
     pub(super) pending: std::cell::RefCell<Vec<String>>,
     /// 还没落到块上的空段折出来的高度（根 em，见 [`BLANK_LINE_FOLD`]）：和 `pending` 一样给下一个生成的块。
-    pub(super) gap: std::cell::Cell<Vert>,
+    pub(super) gap: std::cell::RefCell<Gap>,
     /// 包着当前位置、还没走完的行内链接（`<a href>`）的目标，外层在前：里面的块级元素（`<a href><p>…</p></a>`）另起行内缓冲时
     /// 接着开（[`Doc::inline`]）。以前链接只在 `<a>` 自己的缓冲里，里面块的文字没有链接（写出器 15）。
     pub(super) links: std::cell::RefCell<Vec<(String, String)>>,
@@ -369,6 +402,75 @@ enum Special {
 }
 
 /// 块级元素只包着一段文字（[`Doc::block`] 判的 `own`）：这段文字就是本元素的块，换上本元素的计算值、标题级别和盒子。
+/// 按这台阅读器的排法（[`crate::css::DeviceLine`]）改层叠出来的 `line-height`、em。只给 `--styles --device=` 的分析用。
+fn device_line_height(el: &ElementRef, decls: &mut HashMap<String, String>, line: crate::css::DeviceLine) {
+    let name = el.value().name();
+    let v = decls.get("line-height").map(|v| v.trim().to_ascii_lowercase());
+    let number = v.as_deref().is_some_and(|v| v == "normal" || v.parse::<f64>().is_ok());
+    if let Some(d) = line.length_em {
+        // 不带单位的数、`normal` 当没写；全书缺省是 d 倍（随字号，写成数字往下继承）
+        if number {
+            decls.remove("line-height");
+        }
+        if name == "html" && !decls.contains_key("line-height") {
+            decls.insert("line-height".into(), d.to_string());
+        }
+    }
+    // 标题和标题里的不换：Move 的标题只认字号关键字、不认上下外边距（`block_style`、`box_fix` 管，`wash/root_em.rs` 同样跳过）
+    let in_heading = el.ancestors().filter_map(ElementRef::wrap).chain(std::iter::once(*el)).any(|a| bookconv::html::heading_level_of(a.value().name()).is_some());
+    if line.em_root && !in_heading {
+        root_em(decls);
+    }
+    if line.except_p && line.length_em.is_none() {
+        let inline = el.value().attr("style").is_some_and(|s| s.to_ascii_lowercase().contains("line-height"));
+        if (name == "p" && !inline) || v.as_deref() == Some("normal") || (name == "html" && v.is_none()) {
+            decls.insert("line-height".into(), "1".into());
+        }
+    }
+}
+
+/// em 一律按根字号算的阅读器（[`crate::css::DeviceLine::em_root`]）：字号的 em、% 写成 rem（px 按屏幕像素折成 rem），外边距、
+/// 内边距、首行缩进的 em 写成 pt（12pt＝根 em）。只给 `--styles --device=` 的分析用。
+fn root_em(decls: &mut HashMap<String, String>) {
+    let conv = |v: &str, font: bool| -> Option<String> {
+        let mut changed = false;
+        let out: Vec<String> = v
+            .split_whitespace()
+            .map(|t| {
+                let lower = t.to_ascii_lowercase();
+                let num = |suffix: &str| lower.strip_suffix(suffix).and_then(|n| n.parse::<f64>().ok());
+                match (num("rem"), num("em"), num("%")) {
+                    (Some(_), _, _) => t.to_string(),
+                    // 字号的 px 是屏幕像素（同盒子长度，[`crate::css::device_px_em`]）
+                    _ if font && num("px").is_some() && crate::css::device_px_em().is_some() => {
+                        changed = true;
+                        format!("{}rem", num("px").unwrap_or(0.0) / crate::css::device_px_em().unwrap_or(1.0))
+                    }
+                    (None, Some(n), _) => {
+                        changed = true;
+                        if font { format!("{n}rem") } else { format!("{}pt", n * crate::css::PT_PER_EM) }
+                    }
+                    (None, None, Some(n)) if font => {
+                        changed = true;
+                        format!("{}rem", n / 100.0)
+                    }
+                    _ => t.to_string(),
+                }
+            })
+            .collect();
+        changed.then(|| out.join(" "))
+    };
+    for (k, v) in decls.iter_mut() {
+        let font = k == "font-size";
+        let boxy = k == "text-indent" || k.starts_with("margin") || k.starts_with("padding");
+        if font || boxy {
+            if let Some(n) = conv(v, font) {
+                *v = n;
+            }
+        }
+    }
+}
+
 fn own_text_block(mut b: Block, comp: Computed, heading: Option<u8>, lens: BoxLens) -> Block {
     b.comp = absorb_whole_span_style(&mut b.kind, comp);
     // 现在它是本元素自己的块了，外层元素不能再把它当成自己的文字
@@ -398,7 +500,19 @@ fn absorb_whole_span_style(kind: &mut Kind, comp: Computed) -> Computed {
                 // `<a>` 的颜色是链接颜色，留在链接区间上（Send to Kindle 写成 `$576`/`$577`），不并进段落
                 let anchor = runs.iter().any(|r| r.anchor);
                 let color = comp.color;
+                let (old_fs, old_lh) = (comp.font_size, comp.line_height.map(|l| l * comp.font_size));
                 comp = merge_text_style(&comp, &rc);
+                // 段落的首行缩进按段落自己的字号（em 换成并进来的字号的）；段落的行高是明确的值（自己写的、继承来的）时取段落和行内
+                // 元素两者大的（《人生海海》大字 span 按 span，《消失的爱人》整段 0.75em 的 span 照段落继承的 1.2），`normal` 的照行内
+                // 元素的（《福尔摩斯》整段 `<font size>` 的小字行高跟着小）；2026-10-14 重推的样本
+                if let Some(Len::Em(n)) = comp.text_indent {
+                    comp.text_indent = Some(Len::Em(n * old_fs / comp.font_size));
+                }
+                let run_lh = comp.line_height.unwrap_or(LH_EM) * comp.font_size;
+                if let Some(old_lh) = old_lh.filter(|&l| l > run_lh + 1e-9) {
+                    comp.line_height = Some(old_lh / comp.font_size);
+                    comp.line_height_abs = None;
+                }
                 if anchor {
                     comp.color = color;
                 }
@@ -415,7 +529,7 @@ fn absorb_whole_span_style(kind: &mut Kind, comp: Computed) -> Computed {
 }
 
 /// 有背景、边框、内边距或宽度的块级元素（[`Doc::block`] 判的 `boxed`）：写成容器套子块，盒子在容器上。
-fn container_block(name: &str, comp: Computed, children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Vert) -> Block {
+fn container_block(name: &str, comp: Computed, children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Gap) -> Block {
     // 页面一级的 `cover` 背景：照 Send to Kindle 写整页范围（`$645`），背景铺满一页而不是只在内容范围里画（《绍宋》卷首语，真机 ✓）。
     // 2026-10-08 试过也给 `fixed` 写了尺寸的写（制作说明），真机没有效果，用户说不改了，撤回。只认 body：别的块上没见过样本。
     let page_bg = comp.bg_cover;
@@ -450,14 +564,15 @@ fn container_block(name: &str, comp: Computed, children: Vec<Block>, heading: Op
 
 /// 没有背景的包裹层摊平：竖直外边距、内边距并进首尾子块（开头的锚点、空段留下的间距、标题级别给第一个子块），
 /// 水平外边距加到每个子块上。
-fn flatten_wrapper(children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Vert, out: &mut Vec<Block>) {
+fn flatten_wrapper(children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Gap, out: &mut Vec<Block>) {
     let BoxLens { margin_top, margin_bottom, margin_left: ml, margin_right: mr, padding, .. } = lens;
     let n = children.len();
     let mut lead = Some(lead);
+    let mut pre_gap = Some(pre_gap);
     for (i, mut c) in children.into_iter().enumerate() {
         if i == 0 {
             c.margin_top = collapse(margin_top + padding[0], c.margin_top);
-            c.gap_before += pre_gap;
+            c.gap_before.prepend(pre_gap.take().unwrap_or_default());
             prepend_ids(&mut c.ids, lead.take().unwrap_or_default());
             if c.heading.is_none() {
                 c.heading = heading;
@@ -492,6 +607,10 @@ impl Doc<'_> {
     pub(super) fn comp(&self, el: &ElementRef, parent: &Computed) -> Computed {
         let mut decls = self.sheet.cascade(el, self.path);
         crate::css::presentational_hints(el, &mut decls);
+        let line = crate::css::device_line();
+        if line != Default::default() {
+            device_line_height(el, &mut decls, line);
+        }
         let mut c = Computed::derive(parent, &decls, el.value().name());
         if let Some(l) = lang_attr(el) {
             c.lang = Some(l.to_string());
@@ -537,6 +656,7 @@ impl Doc<'_> {
         // 本元素之前攒下的锚点落在本元素的开头。
         let pre = self.take_pending();
         let pre_gap = self.gap.take();
+        let inner_from = self.gap.borrow().h;
         let comp = match self.special_block(el, comp) {
             Special::Own(b) => return out.push(b.led_by(pre, pre_gap)),
             Special::Normal(comp) => comp,
@@ -553,13 +673,27 @@ impl Doc<'_> {
             let inner = self.take_pending();
             lead.extend(inner);
             *self.pending.borrow_mut() = lead;
-            self.gap.set(self.gap.get() + pre_gap);
+            // 里面折出了空段（`<p><br/></p>`）：本元素的上下外边距照留（Send to Kindle 同样，见 [`Gap`]）
+            if self.gap.borrow().h > inner_from {
+                let l = BoxLens::of(&comp);
+                self.gap.borrow_mut().margins.push((l.margin_top, l.margin_bottom));
+            }
+            self.gap.borrow_mut().prepend(pre_gap);
             return;
         }
         let mut lens = BoxLens::of(&comp);
         // 不显示符号的列表（`list-style:none`）当普通块，照 Amazon 缩进 1.5em（测试书 L04：`$48` 4.688%）。
         if matches!(name, "ul" | "ol") && comp.margin[3].is_none() && comp.padding[3].is_none() {
             lens.margin_left.em += 1.5;
+        }
+        // 没有背景、边框、阴影的块：左右内边距并进外边距，不为它包容器（Send to Kindle 同样：《绍宋》章名 `margin:0 auto;padding:0 4px`
+        // 写成文字块的左右外边距 0.469%，2026-10-14 重推的样本；显示一样）
+        if comp.background.is_none() && comp.bg_image.is_none() && !comp.has_border() && comp.box_shadow.is_none() {
+            lens.margin_left = Horiz { em: lens.margin_left.em + lens.padding_h[1].em, pct: lens.margin_left.pct + lens.padding_h[1].pct };
+            lens.margin_right = Horiz { em: lens.margin_right.em + lens.padding_h[0].em, pct: lens.margin_right.pct + lens.padding_h[0].pct };
+            lens.padding_h = [Horiz::default(); 2];
+            lens.padding[1] = 0.0;
+            lens.padding[3] = 0.0;
         }
         // 自己只包着一个文字块（普通段落）：本元素就是这个块。
         // 有背景或内边距的块写成容器套文字（样本里带背景色的 h1 就是这样；背景、内边距、负外边距直接放在文字段落上，
@@ -858,7 +992,7 @@ impl Doc<'_> {
     fn flush_piece(&self, taken: Inline, comp: &Computed, out: &mut Vec<Block>) {
         if taken.is_empty() {
             if !taken.text.is_empty() {
-                self.gap.set(self.gap.get() + BLANK_LINE_FOLD * comp.line_height.unwrap_or(LH_EM) * comp.font_size);
+                self.gap.borrow_mut().h += BLANK_LINE_FOLD * comp.line_height.unwrap_or(LH_EM) * comp.font_size;
             }
             self.pending.borrow_mut().extend(taken.ids.into_iter().map(|(i, _)| i));
             return;
@@ -1011,14 +1145,14 @@ impl Block {
             extra: Vec::new(),
             bare: false,
             inline: false,
-            gap_before: 0.0,
+            gap_before: Gap::default(),
         }
     }
 
     /// 前面攒下的锚点 `lead` 放到块开头、折掉的空段高度 `gap` 加到上边距（[`Doc::block`] 里本元素整个成一块时）。
-    fn led_by(mut self, lead: Vec<String>, gap: Vert) -> Block {
+    fn led_by(mut self, lead: Vec<String>, gap: Gap) -> Block {
         prepend_ids(&mut self.ids, lead);
-        self.gap_before += gap;
+        self.gap_before.prepend(gap);
         self
     }
 
@@ -1120,7 +1254,7 @@ pub(super) fn split_at_breaks(mut blocks: Vec<Block>) -> Vec<Vec<Block>> {
                 if k > 0 {
                     b.margin_top = Vert::default();
                     b.ids.clear();
-                    b.gap_before = Vert::default();
+                    b.gap_before = Gap::default();
                 }
                 if k + 1 < n {
                     b.margin_bottom = Vert::default();
@@ -1164,15 +1298,24 @@ fn scale_percent(blocks: &mut [Block], s: f64) {
 /// 折掉的空段加到下一块的上边距上（外边距折叠之后：多出的高度不参与折叠）。文件末尾的空段没有下一块，不折。
 pub(super) fn apply_gaps(blocks: &mut [Block]) {
     walk_blocks_mut(blocks, &mut |b| {
-        b.margin_top += b.gap_before;
-        b.gap_before = 0.0;
+        b.margin_top += b.gap_before.h;
+        b.gap_before = Gap::default();
     });
 }
 
 pub(super) fn collapse_siblings(blocks: &mut [Block]) {
-    for i in 1..blocks.len() {
-        let prev_bottom = blocks[i - 1].margin_bottom;
-        if blocks[i].margin_top == 0.0 {
+    for i in 0..blocks.len() {
+        let prev_bottom = if i > 0 { blocks[i - 1].margin_bottom } else { 0.0 };
+        // 夹着空段的：外边距连同空段的逐对折叠（[`Gap::chain`]），合成的放在后一块的上边距
+        if let Some(total) = blocks[i].gap_before.chain(prev_bottom, blocks[i].margin_top) {
+            blocks[i].margin_top = total;
+            blocks[i].gap_before.margins.clear();
+            if i > 0 {
+                blocks[i - 1].margin_bottom = 0.0;
+            }
+            continue;
+        }
+        if i == 0 || blocks[i].margin_top == 0.0 {
             continue;
         }
         blocks[i].margin_top = collapse(prev_bottom, blocks[i].margin_top);

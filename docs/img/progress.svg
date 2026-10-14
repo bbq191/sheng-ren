@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 400" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>重新生成后覆盖设备上的旧文件，三台阅读器的进度保不保留（2026-10-06、10-09 真机）</title>
+  <title>重新生成后覆盖设备上的旧文件，三台阅读器的进度保不保留（2026-10-06、10-09、10-14 真机）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
@@ -21,19 +21,13 @@
   <rect class="dev" x="20" y="16" width="300" height="54" rx="8"/>
   <text x="170" y="40" text-anchor="middle" class="h">Kindle 自带阅读器</text>
   <text x="170" y="60" text-anchor="middle" class="s">sync 覆盖 documents/ 里的 .kfx</text>
-  <path class="l" d="M170 70 L170 92" marker-end="url(#a)"/>
-  <rect class="q" x="60" y="94" width="220" height="40" rx="20"/>
-  <text x="170" y="119" text-anchor="middle">新旧文件逐字节相同？</text>
-  <path class="l" d="M120 134 C110 150 90 150 90 166" marker-end="url(#a)"/>
-  <path class="l" d="M220 134 C230 150 250 150 250 166" marker-end="url(#a)"/>
-  <text x="96" y="154" text-anchor="end" class="y">是</text>
-  <text x="246" y="154" class="n">否</text>
-  <rect class="ok" x="24" y="168" width="134" height="62" rx="8"/>
-  <text x="91" y="194" text-anchor="middle" class="h">进度保留</text>
-  <text x="91" y="216" text-anchor="middle" class="s">《啸风山庄》</text>
-  <rect class="no" x="182" y="168" width="134" height="62" rx="8"/>
-  <text x="249" y="194" text-anchor="middle" class="h">进度清零</text>
-  <text x="249" y="216" text-anchor="middle" class="s">只差一个版本号也是</text>
+  <path class="l" d="M170 70 L170 166" marker-end="url(#a)"/>
+  <text x="180" y="106" class="s">字节变了也一样（10-14）</text>
+  <text x="180" y="124" class="s">打开前书架显示 0%，</text>
+  <text x="180" y="142" class="s">打开后回到原位</text>
+  <rect class="ok" x="60" y="168" width="220" height="62" rx="8"/>
+  <text x="170" y="194" text-anchor="middle" class="h">进度保留</text>
+  <text x="170" y="216" text-anchor="middle" class="s">10-06 测的是清零，见正文</text>
 
   <!-- 掌阅 -->
   <rect class="dev" x="340" y="16" width="300" height="54" rx="8"/>
@@ -61,7 +55,7 @@
   <rect class="q" x="20" y="256" width="940" height="128" rx="10"/>
   <text x="36" y="282" class="h">所以生成时这样做</text>
   <text x="36" y="308" class="s">· 书里不写版本号：KFX 创建器版本固定写 1，EPUB 的 META-INF/eink-optimized 只写 full/core；唯一 ID 重建不变。</text>
-  <text x="36" y="330" class="s">· 所以只升了版本号、内容没变的书，重建出来逐字节相同，不再传，Kindle 进度保住。</text>
-  <text x="36" y="352" class="s">· 内容真变了（规则改了正文、换了封面）：Kindle 进度清零躲不开；掌阅保留；Move 由书架服务找回（内容增删多时偏几页）。</text>
+  <text x="36" y="330" class="s">· 所以只升了版本号、内容没变的书，重建出来逐字节相同，不再传（省得重传；10-06 时 Kindle 字节一变进度就清零）。</text>
+  <text x="36" y="352" class="s">· 内容真变了（规则改了正文、换了封面）：Kindle、掌阅都保留（10-14 实测）；Move 由书架服务找回（内容增删多时偏几页）。</text>
   <text x="36" y="374" class="s">· 产物文件名不变（除非书名变了），设备上靠覆盖同名文件（Move 是同一个 uuid）更新。</text>
 </svg>

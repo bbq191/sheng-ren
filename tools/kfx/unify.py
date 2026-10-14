@@ -17,7 +17,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kfx import cli_args, cli_opts
 import s2kcmp
 import kfx
-from s2kdev import FEATURES, epub_features, epub_nodes, kfx_features, same
+from s2kdev import FEATURES as S2K_FEATURES, epub_features, epub_nodes, kfx_features, same
+
+# 上下边距比相邻两块之间折叠后的距离（`gap`：前一块的下边距和这一块的上边距按 CSS 折叠，正的取大、负的取小、相加），不分开比
+# mt、mb：Move 不认标题的上下外边距，box_fix 把距离写到相邻的块上（标题下边距挪成下一段的上边距），屏幕上一样、逐个节点比却
+# 两项都不一样（2026-10-14，《人生海海》《克莱因壶》《疯探》）
+FEATURES = [f for f in S2K_FEATURES if f not in ('mt', 'mb')] + ['gap']
+
+
+def collapse(a, b):
+    """相邻的下边距 a 和上边距 b 折叠以后的距离（CSS：正的取大，负的取最负的，两者相加）。"""
+    return max(0.0, a, b) + min(0.0, a, b)
 
 DEVICES = ['ireader', 'xochitl']
 PROFILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'crates', 'profile', 'profiles')
@@ -220,6 +230,7 @@ def main():
             bfs, blh, rows = epub_nodes(f'{stem}.{d}.epub', bindir, d)
             q = collections.defaultdict(collections.deque)
             vs = vscale[d]
+            prev_mb = 0.0
             for r in rows:
                 f = epub_features(r, bfs, blh, base_fs)
                 f['mt'] /= vs
@@ -229,15 +240,20 @@ def main():
                 for side, col in (('ml', 11), ('mr', 12)):
                     em, pct = (float(x) for x in r[col].split('+'))
                     f[side] = em * (base_fs / bfs) / page_em[d] * 100 + pct
+                f['gap'] = collapse(prev_mb, f['mt'])
+                prev_mb = f['mb']
                 q[key(r[0])].append(f)
             queues[d] = q
         n = 0
         agree = collections.Counter()
+        prev_mb = 0.0
         for t, ch, _ in s2kcmp.nodes(f'{stem}.kindle.kfx'):
             k = key(t)
+            ref = kfx_features(ch, base_fs)
+            ref['gap'] = collapse(prev_mb, ref['mt'])
+            prev_mb = ref['mb']
             if not k or not all(queues[d][k] for d in DEVICES):
                 continue
-            ref = kfx_features(ch, base_fs)
             n += 1
             for d in DEVICES:
                 feat = queues[d][k].popleft()

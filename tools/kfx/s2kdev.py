@@ -51,7 +51,8 @@ def kfx_features(chain, base_fs):
     else:
         indent = num(ind)
     font = (find('font') or '-').strip("'").split(',')[0]
-    font = 'reader' if font in ('default', '-') else re.sub(r'^(j\d+-\d+-|v\d+-|section\d+-)', '', font.lower())
+    # Send to Kindle 给内嵌字体加的前缀（来源文件名、混淆过的路径：`part0000-heiti`、`text_001-hyyankaiw`、`**::**:*-zhuht`）不算
+    font = 'embedded' if font.endswith('…') and re.match(r"^'?[*:]+", font) else 'reader' if font in ('default', '-') else re.sub(r'^(j\d+-\d+-|v\d+-|section\d+-|part\d+-|text_\d+-|[*:]+-)', '', font.lower())
     color = find('color') or '#ff000000'
     w = find('weight') or "'$350'"
     return {'size': size, 'lh': lh * size, 'mt': vert('m_top'), 'mb': vert('m_bottom'), 'indent': indent, 'ml': horiz('m_left'), 'mr': horiz('m_right'),
@@ -91,6 +92,12 @@ def same(f, a, b):
         return abs(a - b) <= max(0.02, 0.03 * max(abs(a), abs(b)))
     if f == 'align' and {a, b} <= {'left', 'justify'}:
         return True  # 左对齐和两端对齐的差别看不出来（中文没有词间空格）
+    if f == 'font' and a == 'embedded':
+        return b != 'reader'  # Amazon 改了名的内嵌字体（导出时名字被截断，看不到后缀）：我们这边也写了字体就算一样
+    if f == 'color' and a != b and len(a) == len(b) == 9:
+        # 每个通道差 3 以内算一样：墨水屏只有 16 级灰，看不出来。Send to Kindle 提对比度时有的颜色比我们多压一档（《嘯風山莊》
+        # #649056 → Amazon #587f4c、我们 #59804d），规律没摸清（2026-10-14 试过按 3% 一档、HSL、Lab，都对不全）
+        return all(abs(int(a[i:i + 2], 16) - int(b[i:i + 2], 16)) <= 3 for i in (1, 3, 5, 7))
     return a == b
 
 
