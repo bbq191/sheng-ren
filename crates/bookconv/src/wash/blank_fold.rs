@@ -161,7 +161,8 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     let n_of = |el: &ElementRef| ch.index_of(el.id());
     let c_of = |el: &ElementRef| n_of(el).map(|i| ch.els[i].comp.clone());
     let is_blockish = |el: &ElementRef| n_of(el).is_some_and(|i| ch.els[i].is_block);
-    let has_block_child = |el: &ElementRef| el.children().filter_map(ElementRef::wrap).any(|ch| is_blockish(&ch));
+    // `<br>` 不算块（`br{display:block}` 的书：《人生复本》的空段 `<p><br class="calibre3"/></p>`，Kindle 照样折掉）
+    let has_block_child = |el: &ElementRef| el.children().filter_map(ElementRef::wrap).any(|ch| ch.value().name() != "br" && is_blockish(&ch));
     // 竖直长度换成根 em
     let rem = |l: &Option<Len>, fs: f64| km::vertical_rem(*l, fs);
     let collapse = km::collapse;
@@ -198,6 +199,8 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
             let start = i;
             let mut gap = 0.0;
+            // 空段自己的 (上, 下) 外边距（单独的 `<br/>` 没有）：Kindle 照留、逐对折叠（同写出器的 `Gap`，2026-10-14）
+            let mut margins: Vec<(f64, f64)> = Vec::new();
             let mut ok = true;
             while i < kids.len() && blank_el(&kids[i]) {
                 let el = &kids[i];
@@ -205,6 +208,9 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 let c = if el.value().name() == "br" { pc.clone() } else { c_of(el).unwrap_or_else(|| pc.clone()) };
                 ok &= (0..4).step_by(2).all(|s| rem(&c.margin[s], c.font_size) >= 0.0);
                 gap += BLANK_LINE_FOLD * c.line_height.unwrap_or(LH_EM) * c.font_size;
+                if el.value().name() != "br" {
+                    margins.push((rem(&c.margin[0], c.font_size), rem(&c.margin[2], c.font_size)));
+                }
                 i += 1;
             }
             let run = &kids[start..i];
@@ -222,8 +228,21 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                     if (rem(&nc.padding[0], nc.font_size) > 0.0 || nc.border[0].is_some()) && has_block_child(next) {
                         continue;
                     }
-                    // Kindle：后一块没有上外边距时不折叠，前一块的下外边距留着，空段的高另加
-                    let total = if nt == 0.0 { pb + gap } else { collapse(pb, nt) + gap };
+                    // Kindle：前一块的下外边距、各空段的上下外边距、后一块的上外边距逐对折叠，空段的高另加；没有空段外边距的（单独的
+                    // `<br/>`）后一块没有上外边距时不折叠，前一块的下外边距留着
+                    let total = match margins.split_first() {
+                        Some((first, rest)) => {
+                            let mut t = collapse(pb, first.0);
+                            let mut bottom = first.1;
+                            for &(top, b) in rest {
+                                t += collapse(bottom, top);
+                                bottom = b;
+                            }
+                            t + collapse(bottom, nt) + gap
+                        }
+                        None if nt == 0.0 => pb + gap,
+                        None => collapse(pb, nt) + gap,
+                    };
                     out.blanks.extend(ids);
                     out.gaps.push((n_of(next).unwrap(), total / nc.font_size));
                 }
@@ -302,28 +321,40 @@ mod tests {
         let mut moved = b.clone();
         apply(&mut b, &mut WashReport::default(), None, false, false);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
-        assert!(out.contains(r#"<p>甲</p><p class="eink-blank">&#160;</p><p class="eink-g1">乙</p><p class="eink-blank"><br/></p><p class="eink-blank">　</p><p class="big eink-g1">丙</p><p class="lh2 eink-blank">&#160;</p><p class="eink-g2">丁</p><br class="eink-blank"/><p class="eink-g1">戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p><p class="eink-blank"><br/></p>"#), "{out}");
+        assert!(out.contains(r#"<p>甲</p><p class="eink-blank">&#160;</p><p class="eink-g1">乙</p><p class="eink-blank"><br/></p><p class="eink-blank">　</p><p class="big eink-g1">丙</p><p class="lh2 eink-blank">&#160;</p><p class="eink-g2">丁</p><br class="eink-blank"/><p class="eink-g3">戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p><p class="eink-blank"><br/></p>"#), "{out}");
         assert!(out.contains("eink-blank.css"));
         let sheet = String::from_utf8(b.iter().find(|e| e.name == "O/eink-blank.css").unwrap().data.clone()).unwrap();
-        // 乙：1 + 0.72；丙（字号 2em，上外边距 2rem）：折叠后 2rem + 1.44rem = 3.44rem = 1.72em；丁：前一段（丙）下外边距 2rem 折叠后 + 1.2 = 3.2；戊：1 + 0.72（`<br/>` 按 body）；同标签同值共用一个类
-        assert!(sheet.contains("html body p.eink-g1{margin-top:1.72em;}"), "{sheet}");
-        assert!(sheet.contains("html body p.eink-g2{margin-top:3.2em;}") && !sheet.contains("eink-g3"), "{sheet}");
+        // 空段自己的上下外边距（1em）照留、逐对折叠（2026-10-14，同写出器的 `Gap`）：乙 1 + 1 + 0.72 = 2.72；丙（字号 2em，上外边距 2rem）：
+        // 1 + 1 + 2 + 1.44 = 5.44rem = 2.72em；丁：前一段（丙）下外边距 2rem 和空段 1em 折成 2，再 1 + 1.2 = 4.2；戊：单独的 `<br/>` 没有外边距，
+        // 1 + 0.72（按 body）；同标签同值共用一个类
+        assert!(sheet.contains("html body p.eink-g1{margin-top:2.72em;}"), "{sheet}");
+        assert!(sheet.contains("html body p.eink-g2{margin-top:4.2em;}") && sheet.contains("html body p.eink-g3{margin-top:1.72em;}"), "{sheet}");
         assert!(sheet.contains("html body p.eink-blank{display:none;}") && sheet.contains("html body br.eink-blank{display:none;}"), "{sheet}");
         // 不认 display:none 的（Move）：空段去掉，接住的块一样
         apply(&mut moved, &mut WashReport::default(), None, true, true);
         let out = String::from_utf8(moved[2].data.clone()).unwrap();
-        assert!(out.contains(r#"<body><p>甲</p><p class="eink-g1">乙</p><p class="big eink-g1">丙</p><p class="eink-g2">丁</p><p class="eink-g1">戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p></body>"#), "{out}");
+        assert!(out.contains(r#"<body><p>甲</p><p class="eink-g1">乙</p><p class="big eink-g1">丙</p><p class="eink-g2">丁</p><p class="eink-g3">戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p></body>"#), "{out}");
         let sheet = String::from_utf8(moved.iter().find(|e| e.name == "O/eink-blank.css").unwrap().data.clone()).unwrap();
         assert!(!sheet.contains("eink-blank{"), "{sheet}");
     }
 
-    /// 后一块没有上外边距：前一块的下外边距留着、空段的高另加（1 + 0.72 = 1.72rem，h2 字号 1.5em）；空段后面同一层没块、文件后面还有字的不动。
+    /// `br{display:block}` 的书：`<p><br class="b"/></p>` 照样是空段（《人生复本》）。
+    #[test]
+    fn block_br_still_blank() {
+        let mut b = book(&page(r#"<p>甲</p><p><br class="b"/></p><p>乙</p>"#));
+        b[1].data.extend_from_slice(b" .b{display:block}");
+        apply(&mut b, &mut WashReport::default(), None, false, false);
+        let out = String::from_utf8(b[2].data.clone()).unwrap();
+        assert!(out.contains(r#"<p class="eink-blank"><br class="b"/></p><p class="eink-g1">乙</p>"#), "{out}");
+    }
+
+    /// 后一块没有上外边距：前一块的下外边距和空段的外边距折叠、空段的下外边距留着、空段的高另加（1 + 1 + 0.72 = 2.72rem，h2 字号 1.5em）；空段后面同一层没块、文件后面还有字的不动。
     #[test]
     fn no_top_margin_and_unsure_cases() {
         let mut b = book(&page(r#"<p>甲</p><p>&#160;</p><h2 style="margin-top:0">乙</h2><div><p>丙</p><p>&#160;</p></div><p>丁</p>"#));
         apply(&mut b, &mut WashReport::default(), None, false, false);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
-        assert!(out.contains(r#"<p class="eink-blank">&#160;</p><h2 style="margin-top:0;margin-top:1.1467em;" class="eink-g1">乙</h2><div><p>丙</p><p>&#160;</p></div>"#), "{out}");
+        assert!(out.contains(r#"<p class="eink-blank">&#160;</p><h2 style="margin-top:0;margin-top:1.8133em;" class="eink-g1">乙</h2><div><p>丙</p><p>&#160;</p></div>"#), "{out}");
     }
 
     /// 块末尾的 `<br/>`：多排一行的阅读器（Move）上去掉（套在行内元素里的、连着两个的也去），中间的、开头的、有 id 的、块里套着块的

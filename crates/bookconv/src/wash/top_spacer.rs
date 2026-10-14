@@ -204,7 +204,7 @@ fn page_box(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::
         }
         let c = ch.els[i].comp.clone();
         single &= node.children().filter(|c| has_content(*c)).count() == 1;
-        chain.push((ch.el(i).value().name().to_ascii_lowercase(), c));
+        chain.push((km::reader_tag(&ch.el(i)), c));
         node = next;
         last_node = next;
     }

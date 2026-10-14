@@ -49,6 +49,10 @@ line_px = 58
 cell_middle = false
 # span 上 vertical-align:super/sub 不认、<sup>/<sub> 标签认（Q100、Q101、Q120–Q123）：写了上标下标的行内元素里面包 <sup>/<sub>
 inline_valign = false
+# 标题（h1–h6）自己没写 text-align 时居中（inherit 也不认，left 认；2026-10-14 探针「测试-标题对齐」，《人生海海》「第一章」Kindle 靠左、掌阅居中）：
+# 照 Kindle 继承来的对齐写明
+heading_center = true
+
 [screen]
 width = 1264
 height = 1680

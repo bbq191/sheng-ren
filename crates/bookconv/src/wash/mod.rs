@@ -54,6 +54,8 @@ mod break_margin;
 mod blank_fold;
 mod block_style;
 mod box_fix;
+mod heading_div;
+mod root_em;
 mod inline_css;
 mod css_compat;
 mod sup_sub;
@@ -160,7 +162,14 @@ pub use self::encoding::transcode_entries;
 ///   Move 上左右外边距、内边距的 em 照 Kindle 按页宽换算（乘一行的 em 数 ÷ 32，约 0.70；profile `horizontal_scale`，用户选）；
 ///   body 的左右边距逐文件照 Kindle（和全书多数不一样的文件 body 加类，`eink-body.css`，用户选）；图片加了按 Kindle 折的类时
 ///   `<img>` 行内 style 里的宽高去掉（两台认行内样式、压过类规则：《克莱因壶》Move、《狼厅》掌阅的图和 Kindle 不一样大）。
-pub const KINDLE_RULES_VERSION: &str = "31";
+/// - 32（2026-10-14，P0 验收核查）：字号归一时外边距、内边距、首行缩进、行高里的 px、pt 这些绝对长度也乘系数（Kindle 写出器按
+///   本元素原来的字号换算，等于跟着归一缩放；《嘯風山莊》段间距掌阅、Move 大 16.7%）；掌阅行距差 3% 以上就接（以前 5%）；
+///   `br{display:block}` 的空段 `<p><br/></p>` 照样折掉（《人生复本》112 处）；Move 上字号和最近的关键字差 3% 以上的标题改成
+///   `<div>`（`heading_div.rs`，用户定：《人生海海》小节标题 1.75em，xx-large 是 2.018）；Move 上 em 一律按根字号算、字号的 px
+///   是屏幕像素：字号、边距、缩进换成按根的 em（`root_em.rs`，profile `em_root`，用户定）；字号 `1em` 也挪出行内；空段自己的
+///   上下外边距照 Kindle 留着、逐对折叠（`blank_fold.rs`，同写出器 23）；掌阅上标题自己没写对齐的照 Kindle 继承来的写明（掌阅
+///   缺省居中、`inherit` 不认；`block_style.rs`，profile `heading_center`）。
+pub const KINDLE_RULES_VERSION: &str = "32";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -582,6 +591,8 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         if let Some(h) = opts.h_scale {
             rep.kindle_rule_edits += kindle_rules::scale_horizontal_entries(entries, h);
         }
+        // em 一律按根字号算的阅读器（Move）：字号、边距、缩进的 em 换成按根的值写进行内。上面几步写完、换算完以后，挪行内样式之前
+        root_em::apply(entries, rep, opts.media.as_ref(), opts.reader.em_root, opts.reader.em_root_px);
         // 行内 style、<style>、不带分号又紧挨 } 的声明里 em 不照 CSS 排的阅读器（Move）：挪进外链样式表。最后做：上面几步写进行内的、换算过的值一起挪
         if !opts.reader.inline_css_lengths {
             inline_css::apply(entries, rep);
@@ -598,6 +609,10 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     strip_ncx_doctype(entries, rep);
     normalize::normalize_book(entries, &lang_tag, heading, rep);
     fix_ncx_uid(entries, rep);
+    // Move 上字号对不上关键字的标题改成 div：目录（补节、改指、生成 nav）都按 h1–h6 认标题，放在最后
+    if opts.mode.kindle_rules() {
+        rep.kindle_rule_edits += heading_div::finish(entries);
+    }
 }
 
 /// spine 里标了 `linear="no"` 的目录页从 spine 拿掉（manifest 里留着，仍是导航文档），见 [`opf::nonlinear_nav_itemrefs`]。

@@ -299,9 +299,17 @@ fn parse_subject(html: &str) -> Subject {
     // 标签：页面脚本里的 `criteria = '7:标签|7:标签|…|3:/subject/…'`（常用标签在页面上是异步加载的）
     if let Some(i) = html.find("criteria = '") {
         let rest = &html[i + "criteria = '".len()..];
-        if let Some(e) = rest.find('\'') {
-            s.tags = rest[..e].split('|').filter_map(|x| x.strip_prefix("7:")).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect();
+        // 是 JS 字符串字面量：用户标签里的 `:` 写成 `\:`（《古龙作品全集》「古龙作品全集\:全53册(精装)」），按 JS 去掉转义
+        let mut raw = String::new();
+        let mut cs = rest.chars();
+        while let Some(c) = cs.next() {
+            match c {
+                '\'' => break,
+                '\\' => raw.extend(cs.next()),
+                _ => raw.push(c),
+            }
         }
+        s.tags = raw.split('|').filter_map(|x| x.strip_prefix("7:")).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect();
     }
     s
 }
@@ -325,7 +333,7 @@ mod tests {
 <div class="indent" id="link-report"><span class="short"><div class="intro"><p>短的……</p></div></span>
 <span class="all hidden"><div class="intro"><p>第一段 &amp; 引号</p><p>第二段</p></div></span></div>
 <span>作者简介</span><div class="intro"><p>作者的简介不要</p></div>
-<script>criteria = '7:东野圭吾|7:推理|7:日本文学|3:/subject/10554308/',</script>"#;
+<script>criteria = '7:东野圭吾|7:推理|7:日本文学|7:全集\:全53册\'精装|3:/subject/10554308/',</script>"#;
         let s = parse_subject(html);
         assert_eq!(s.title, "白夜行");
         assert_eq!(s.authors, ["[日] 东野圭吾"]);
@@ -335,7 +343,7 @@ mod tests {
         assert_eq!(s.isbn, "9787544258609");
         assert_eq!(s.original_title, "白夜行");
         assert_eq!(s.description, "第一段 & 引号\n第二段");
-        assert_eq!(s.tags, ["东野圭吾", "推理", "日本文学"]);
+        assert_eq!(s.tags, ["东野圭吾", "推理", "日本文学", "全集:全53册'精装"]);
     }
 
     #[test]

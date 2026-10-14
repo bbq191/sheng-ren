@@ -41,6 +41,12 @@ fn main() {
         if !p.px_margins {
             kfx::css::set_device_px_em(p.em_px);
         }
+        // 行距按这台排的算：Move 的 `<p>` 不认外链行距，掌阅只认长度（正文是阅读器的行距，别的块按它换算）
+        kfx::css::set_device_line(kfx::css::DeviceLine {
+            except_p: p.line_height_except_p,
+            length_em: (!p.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
+            em_root: p.em_root,
+        });
         let s = kfx::epub_text_styles(cli::open_or_die(input), &opts).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
         print!("{s}");
         return;

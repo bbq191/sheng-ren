@@ -43,6 +43,12 @@ pub struct ReaderModel {
     pub margin_auto: bool,
     /// 左右边距的 em 照 Kindle 按页宽换算（`true`：乘这台一行的 em 数 ÷ 32）。
     pub horizontal_scale: bool,
+    /// em 一律按根字号算（`true`：字号、边距、缩进的 em 换成按根的值，`wash/root_em.rs`）。
+    pub em_root: bool,
+    /// [`ReaderModel::em_root`] 的阅读器上 1em 是几个屏幕像素（字号写的 px 是屏幕像素，`wash/root_em.rs` 按它折）。
+    pub em_root_px: Option<f64>,
+    /// 标题自己没写对齐时居中（`true`：照 Kindle 继承来的写明，`wash/block_style.rs`）。
+    pub heading_center: bool,
     /// 认 `rem`（`false`：改成 em，字号的折成 px）。
     pub rem: bool,
     /// 认 `!important`（`false`：带它的声明不起作用，要去掉、胜出的值写进行内）。
@@ -53,7 +59,7 @@ pub struct ReaderModel {
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, margin_auto: true, horizontal_scale: false, rem: true, important: true, line_em: None }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, margin_auto: true, horizontal_scale: false, em_root: false, em_root_px: None, heading_center: false, rem: true, important: true, line_em: None }
     }
 }
 
@@ -78,6 +84,9 @@ impl ReaderModel {
             cell_width: p.cell_width,
             margin_auto: p.margin_auto,
             horizontal_scale: p.horizontal_scale,
+            em_root: p.em_root,
+            em_root_px: p.em_px.filter(|_| p.em_root),
+            heading_center: p.heading_center,
             rem: p.rem,
             important: p.important,
             line_em: (!p.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
@@ -110,6 +119,12 @@ impl ReaderModel {
         }
         if self.horizontal_scale {
             s.push_str("h1");
+        }
+        if self.heading_center {
+            s.push_str("j1");
+        }
+        if self.em_root {
+            s.push_str(&format!("e{}", self.em_root_px.unwrap_or(0.0)));
         }
         if let Some(l) = self.line_em {
             s.push_str(&format!("n{}", (l * 10000.0).round() / 10000.0));
@@ -192,11 +207,11 @@ mod tests {
         assert_eq!(m.font_size("h2", Some("2em"), 2.0), 1.514);
         assert_eq!(m.font_size("div", None, 2.0), 2.0);
         assert_eq!((m.line_height("p", Some(2.0), false), m.line_height("p", Some(2.0), true), m.line_height("h1", Some(2.0), false), m.line_height("div", None, false)), (1.0, 2.0, 2.0, 1.0));
-        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, rem: false, important: false, cell_middle: false, inline_valign: false, line_em: Some(58.0 / 37.5), ..ReaderModel::default() });
+        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, rem: false, important: false, cell_middle: false, inline_valign: false, heading_center: true, line_em: Some(58.0 / 37.5), ..ReaderModel::default() });
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),
-            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0v0c0h1"
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0v0c0h1e37.8"
         );
     }
 }

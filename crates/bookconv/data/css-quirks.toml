@@ -42,8 +42,8 @@ prop = ["font-size"]
 on = ["p", "block", "inline"]
 value = ["px"]
 ireader = "same"
-xochitl = "broken"
-note = "字号的 px：掌阅按 CSS 像素（16px＝1em，24px 同 1.5em），同 Kindle 写出器（px 按 0.75pt）；Move 按屏幕像素（24px 比正文小）"
+xochitl = "fixed"
+note = "字号的 px：掌阅按 CSS 像素（16px＝1em，24px 同 1.5em），同 Kindle 写出器（px 按 0.75pt）；Move 按屏幕像素（24px 比正文小），root_em 换成按根的 em（KINDLE_RULES 32）"
 src = "2026-10-13 测试-怪癖 Q21、测试-怪癖-掌阅 Q21"
 
 [[rule]]
@@ -286,6 +286,13 @@ src = "2026-10-13 测试-怪癖 Q14、Q71"
 
 [[rule]]
 prop = ["text-align"]
+on = ["heading"]
+ireader = "fixed"
+note = "掌阅的标题自己没写对齐时居中（`inherit` 也不认），Kindle 继承外层的：照 Kindle 继承来的写明（KINDLE_RULES 32，profile heading_center）"
+src = "2026-10-14 探针「测试-标题对齐」；《人生海海》「第一章」"
+
+[[rule]]
+prop = ["text-align"]
 ireader = "same"
 xochitl = "same"
 note = "居中、居右三台都认（Move 行内 style 也认）"
@@ -307,7 +314,7 @@ value = ["em", "rem", "pct", "pt", "keyword", "zero"]
 via = ["sheet", "important"]
 ireader = "same"
 xochitl = "same"
-note = "字号照 Kindle 按正文归一（kindle_rules）；Move 外链样式表里 em、%、pt、关键字都认"
+note = "字号照 Kindle 按正文归一（kindle_rules）；Move 外链样式表里 em、%、pt、关键字都认，但 em、% 按根字号算、不按父元素（2026-10-14 探针，root_em 换成按根的值）"
 src = "2026-10-08 kindle_rules；2026-10-13 测试-怪癖 Q20、Q22–Q25"
 
 [[rule]]

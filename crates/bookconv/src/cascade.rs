@@ -1314,7 +1314,30 @@ pub fn set_device_px_em(em_px: Option<f64>) {
     DEVICE_PX_EM.store(em_px.map_or(0, f64::to_bits), std::sync::atomic::Ordering::Relaxed);
 }
 
-fn device_px_em() -> Option<f64> {
+/// 按阅读器排出来的样子算时，这台的行距怎么排（进程级的开关，只给分析命令用；写出器按 Send to Kindle，不看它）：
+/// - `except_p`：`<p>` 不认外链、`<style>` 里的 `line-height` 的阅读器（Move，profile `line_height_except_p`）：`<p>` 只认行内
+///   `style` 写的、没写是阅读器缺省行距，别的块按「缺省行距 × 倍数」排，`normal` 和没写都是 1 倍（怪癖测试书 Q83、「测试-行距」）；
+/// - `length_em`：只认长度的阅读器（掌阅，profile `line_height_numbers = false`）缺省行距是 em 的几倍：不带单位的数、`normal`
+///   整条当没写（跟父元素），全书缺省是这个倍数、随字号（怪癖测试书 Q80–Q84，同 `wash::block_style` 的模型）。
+/// - `em_root`：em 一律按根字号算的阅读器（Move，profile `em_root`）：字号的 em、% 当 rem，边距、首行缩进的 em 当根 em。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DeviceLine {
+    pub except_p: bool,
+    pub length_em: Option<f64>,
+    pub em_root: bool,
+}
+
+static DEVICE_LINE: std::sync::Mutex<DeviceLine> = std::sync::Mutex::new(DeviceLine { except_p: false, length_em: None, em_root: false });
+
+pub fn set_device_line(m: DeviceLine) {
+    *DEVICE_LINE.lock().unwrap_or_else(|e| e.into_inner()) = m;
+}
+
+pub fn device_line() -> DeviceLine {
+    *DEVICE_LINE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+pub fn device_px_em() -> Option<f64> {
     let b = DEVICE_PX_EM.load(std::sync::atomic::Ordering::Relaxed);
     (b != 0).then(|| f64::from_bits(b))
 }

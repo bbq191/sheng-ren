@@ -262,7 +262,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     let mut out = Plan::default();
     let Ok(text) = std::str::from_utf8(&e.data) else { return out };
     let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return out };
-    let tag = |i: usize| ch.el(i).value().name().to_ascii_lowercase();
+    let tag = |i: usize| km::reader_tag(&ch.el(i));
     let comp = |i: usize| &ch.els[i].comp;
     let has_bg = |i: usize| comp(i).background.is_some_and(|c| c >> 24 != 0) || comp(i).bg_image.is_some();
     // 水平长度换成本元素的 em：pt 按 12pt 一根 em，% 按这台的内容区宽（Move 的 % 外边距是坏的，折成 em 写）

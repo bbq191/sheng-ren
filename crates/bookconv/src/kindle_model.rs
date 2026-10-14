@@ -123,6 +123,28 @@ pub fn column_percents(widths: &[Option<Len>], naturals: &[f64]) -> Vec<f64> {
 /// 后面照 Kindle 算位置的 pass 按它算，不按关键字的 CSS 字号。
 pub const KINDLE_FS_ATTR: &str = "data-eink-fs";
 
+/// 标题要在这台上改成 `<div>` 的记号（Move 的标题只认几个字号关键字，Kindle 上的字号和最近的关键字差得多的改成 `div`，
+/// `wash/heading_div.rs`，2026-10-14 用户定）：目录处理完以后才真改标签，之前按这台排的 pass 见到它就当 `div` 算（[`reader_tag`]）。
+pub const DIV_ATTR: &str = "data-eink-div";
+
+/// 元素在这台阅读器上的标签名（小写）：带 [`DIV_ATTR`] 的标题是 `div`。
+pub fn reader_tag(el: &ElementRef) -> String {
+    if el.value().attr(DIV_ATTR).is_some() {
+        "div".into()
+    } else {
+        el.value().name().to_ascii_lowercase()
+    }
+}
+
+/// 同 [`reader_tag`]，看标签原文（`raw` 是整个开始标签，`name` 是元素名）。
+pub fn reader_tag_raw(name: &str, raw: &str) -> String {
+    if crate::html::attr_value(raw, DIV_ATTR).is_some() {
+        "div".into()
+    } else {
+        name.to_ascii_lowercase()
+    }
+}
+
 /// `<body>` 里的一个元素。
 pub struct El {
     pub node: NodeId,

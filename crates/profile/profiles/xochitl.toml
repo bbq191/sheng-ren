@@ -32,6 +32,9 @@ display_none = false
 # 只有 <p> 不认 line-height，标题、div、li、blockquote、td 按阅读器缺省行距的倍数认（行内 style 也认；2026-10-13 测试书「测试-行距」）：
 # 这些块的行距照 Kindle 按全书正文行距归一（《三体》body line-height:1.618，标题两行隔 179px，Kindle 上约 123）
 line_height_except_p = true
+# em 一律按根字号（阅读器字号）算：字号（% 也是）、外边距、首行缩进都不按父元素、自己的字号（2026-10-14 探针「测试-div探针」4–6）：
+# 照 Kindle 换算成按根的值
+em_root = true
 # 标题（h1–h6）的 font-size 只认关键字（small/medium/large/x-large/xx-large，绝对大小），em、px、pt、% 都不认、固定按标签排
 # （2026-10-13 测试书「测试-标题字号」）：标题字号照 Kindle 写成最接近的关键字（《平凡的世界》章名 2em 的 h2 在 Move 上只有 1.5em）
 heading_font_keywords = true

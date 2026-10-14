@@ -753,6 +753,11 @@ impl Library {
     fn finish(&self, sp: &Path, id: &str, mut entry: StateEntry, target: Option<&Target>) -> Result<(), String> {
         let mut state = (*self.records.states.get(sp)).clone();
         let prev = state.books.remove(id);
+        if !entry.on_move() {
+            for o in entry.old.iter().filter(|o| !o.on_move() && !state.claimed(o)) {
+                carry_sidecar(&o.path, &entry.path);
+            }
+        }
         entry.old = state.delete_placements(std::mem::take(&mut entry.old), target, self.devices.mtp_base());
         if prev.as_ref() == Some(&entry) {
             return Ok(());
@@ -991,6 +996,19 @@ fn device_safe_rel(rel: &Path) -> PathBuf {
         .collect()
 }
 
+/// 产物换了目录（文件名没变）：阅读器放在书旁边的同名 `.sdr` 文件夹（Kindle 的阅读进度、书签，`docs/kfx.md#阅读进度2026-10-06-真机`）
+/// 跟着挪过去，免得进度留在旧目录（2026-10-14 用户定：原件目录改名后《哆啦A梦》的进度丢在旧目录）。文件名变了的不挪
+/// （`.sdr` 里的文件按书名起名，改了名阅读器认不认没验证过），新位置已经有 `.sdr` 的不动，挪不了的不管（旧目录里留着）。
+fn carry_sidecar(old: &Path, new: &Path) {
+    if old == new || old.file_name() != new.file_name() {
+        return;
+    }
+    let (from, to) = (old.with_extension("sdr"), new.with_extension("sdr"));
+    if from.is_dir() && !to.exists() && std::fs::rename(&from, &to).is_ok() {
+        let _ = crate::fsutil::sync_parent(&to);
+    }
+}
+
 /// 删掉一个产物文件：删掉了或本来就不在返回 `true`。删的时候报"不在"不立即当真：jmtpfs 刚挪完文件偶尔 stat 不到，
 /// 重新列一次目录，里面还有这个名字就再删一次（删不掉的算没删，下次再删）。
 fn remove_product(path: &Path) -> bool {
@@ -1035,6 +1053,26 @@ mod remove_tests {
         assert!(!f.exists());
         assert!(super::remove_product(&f), "本来就不在：算删掉了");
         assert!(super::remove_product(&d.path().join("没有的目录/书.epub")), "目录都不在：算删掉了");
+    }
+
+    #[test]
+    fn sidecar_follows_a_moved_product() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("漫画"), d.path().join("优秀漫画"));
+        std::fs::create_dir_all(a.join("书 第01卷.sdr")).unwrap();
+        std::fs::write(a.join("书 第01卷.sdr/进度.yjf"), b"p").unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        super::carry_sidecar(&a.join("书 第01卷.kfx"), &b.join("书 第01卷.kfx"));
+        assert_eq!(std::fs::read(b.join("书 第01卷.sdr/进度.yjf")).unwrap(), b"p");
+        assert!(!a.join("书 第01卷.sdr").exists());
+        // 改了名的不挪；新位置已有的不动
+        std::fs::create_dir_all(a.join("甲.sdr")).unwrap();
+        super::carry_sidecar(&a.join("甲.kfx"), &b.join("乙.kfx"));
+        assert!(a.join("甲.sdr").is_dir() && !b.join("乙.sdr").exists());
+        std::fs::create_dir_all(b.join("甲.sdr")).unwrap();
+        std::fs::write(a.join("甲.sdr/x"), b"old").unwrap();
+        super::carry_sidecar(&a.join("甲.kfx"), &b.join("甲.kfx"));
+        assert!(a.join("甲.sdr/x").exists() && !b.join("甲.sdr/x").exists());
     }
 
     #[test]

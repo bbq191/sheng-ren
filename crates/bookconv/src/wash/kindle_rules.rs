@@ -700,6 +700,9 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
             // `font` 简写里的字体族是正文字体：拆成分项、不写字体族（字号、行高、粗斜体照原值）
             "font" => rewrite_font_shorthand(value, imp, lead, body, ctx),
             "font-size" => ctx.font_scale.and_then(|k| scaled_font_size(value, body, k)).map(|v| format!("{lead}font-size:{v}{imp};")),
+            p if ABS_SCALED.contains(&p) && !(body && matches!(p, "margin" | "padding" | "margin-left" | "margin-right" | "padding-left" | "padding-right")) => {
+                ctx.font_scale.and_then(|k| scaled_abs_lengths(value, k)).map(|v| format!("{lead}{prop}:{v}{imp};"))
+            }
             "color" => {
                 has_color = true;
                 parse_color(value).and_then(|col| {
@@ -830,6 +833,40 @@ fn scaled_font_size(value: &str, body: bool, k: f64) -> Option<String> {
     (out != v).then_some(out)
 }
 
+/// 绝对长度跟着字号归一缩放的属性：Kindle 写出器（同 Send to Kindle）把外边距、内边距、首行缩进、宽高、行高里的 px、pt 这些
+/// 换成「÷ 本元素原来的字号」的 em、lh，阅读器按归一以后的字号排，等于乘了 `k`（1 / 正文字号；《嘯風山莊》正文 1.167em，
+/// `margin-bottom:20px` 在 Kindle 上是 0.536 行，不乘的话掌阅、Move 上大 16.7%，2026-10-14 unify.py 查出来）。边框宽度写出器照绝对值写，不在里面；
+/// 宽高也不在里面：图片尺寸由 `kindle_images` 按 Kindle 算好（已经含这个系数），块宽度很少写 px。
+const ABS_SCALED: &[&str] = &[
+    "margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
+    "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
+    "text-indent", "line-height",
+];
+
+/// 值里的绝对长度（px、pt、pc、in、cm、mm、q）乘 `k`，单位不变（px 照旧按 Kindle 的口径给后面的换算）；`k` 是 1、没有绝对长度、
+/// 带括号（`calc()`）的返回 `None`。
+fn scaled_abs_lengths(value: &str, k: f64) -> Option<String> {
+    if (k - 1.0).abs() < 1e-9 || value.contains('(') {
+        return None;
+    }
+    let mut changed = false;
+    let parts: Vec<String> = value
+        .split_whitespace()
+        .map(|t| {
+            let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(t.len());
+            let (num, unit) = t.split_at(split);
+            match (num.parse::<f64>(), unit.to_ascii_lowercase().as_str()) {
+                (Ok(n), "px" | "pt" | "pc" | "in" | "cm" | "mm" | "q") if n != 0.0 => {
+                    changed = true;
+                    format!("{}{unit}", fmt_num(n * k))
+                }
+                _ => t.to_string(),
+            }
+        })
+        .collect();
+    changed.then(|| parts.join(" "))
+}
+
 /// 写进 CSS 的数：最多 4 位小数，去掉末尾的 0。
 pub(crate) fn fmt_num(x: f64) -> String {
     let s = format!("{x:.4}");
@@ -941,6 +978,11 @@ mod tests {
         // 正文已经是 1em：相对字号不动，绝对字号照样折成 px（掌阅的 pt 按 px 的数算）
         let one = Ctx { font_scale: Some(1.0), ..ctx() };
         assert_eq!(rewrite_css("body{font-size:90%} p{font-size:12pt} .a{font-size:16px} .b{font-size:0.75rem}", &one, &mut n), "body{font-size:90%} p{font-size:16px;} .a{font-size:16px} .b{font-size:12px;}");
+        // 外边距、内边距、首行缩进、行高里的绝对长度跟着乘；边框、宽高、相对单位、calc 不动；body 的左右照删
+        assert_eq!(
+            rewrite_css("p{margin:9px 0 20px;text-indent:15pt;line-height:20px;padding-top:1em;border-width:2px;width:300px;margin-left:calc(2px + 1em)} body{margin:10px 5px}", &c, &mut n),
+            "p{margin:7.2px 0 16px;text-indent:12pt;line-height:16px;padding-top:1em;border-width:2px;width:300px;margin-left:calc(2px + 1em)} body{margin-top:10px;margin-bottom:10px;}"
+        );
         assert_eq!(fmt_num(100.0 / 1.15), "86.9565");
         assert_eq!(fmt_num(12.0), "12");
     }
