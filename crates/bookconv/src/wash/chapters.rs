@@ -724,6 +724,29 @@ pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &
     .into_iter()
     .flatten()
     .collect();
+    // 书里自带的目录页（链接文字占大半的页）列出的标题：文件 → 链接文字（去空白）。NCX 只列了卷、章写成单独文件的书
+    // （《三体全集》NCX 只有三卷，章名是 `<h2 class="sigil_not_in_toc">`、每章一个文件，书里的目录页逐章链接），这些章也补进目录
+    let listed: HashMap<String, HashSet<String>> = {
+        let mut m: HashMap<String, HashSet<String>> = HashMap::new();
+        for path in &opf.spine {
+            let Some(&idx) = index.get(path.as_str()) else { continue };
+            let Ok(html) = std::str::from_utf8(&entries[idx].data) else { continue };
+            let Some((lo, hi)) = html::body_range(html) else { continue };
+            let spans = parse_spans(html, lo, hi);
+            if !looks_like_toc_page(html, lo, hi, &spans) {
+                continue;
+            }
+            for sp in spans.iter().filter(|s| s.name == "a" && s.closed()) {
+                let Some(href) = html::attr(&html[sp.open_start..sp.open_end], "href") else { continue };
+                let (target, _) = crate::epubzip::resolve_link(path, href.value);
+                let text: String = plain_text(&html[sp.open_end..sp.close_start]).chars().filter(|c| !c.is_whitespace()).collect();
+                if !text.is_empty() {
+                    m.entry(target).or_default().insert(text);
+                }
+            }
+        }
+        m
+    };
     // 只信书自带的目录：本次清洗自动生成的目录（`toc_generated > 0`）是按文件/页数凑的，不代表章节结构。
     // 书自带目录用得上时按目录层级定标题和角色（用户 2026-10-05），否则按 `<hN>` 级别判断（下面这一大段）。
     let (toc_roles, mut label_paragraphs, in_toc) = match (rep.toc_generated == 0).then(|| toc_driven(&mut files, entries, &opf)).flatten() {
@@ -804,17 +827,21 @@ pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &
     if !retarget.is_empty() {
         retarget_ncx_to_ids(entries, &opf, &retarget);
     }
+    // 书里目录页列了、NCX 没指到这个文件的标题（见上面 `listed`）
+    let ncx_files: HashSet<String> = toc_targets(entries, &opf).into_keys().collect();
     for (fi, f) in files.iter_mut().enumerate() {
         let first_title = f.heads.iter().position(|h| roles[h.level as usize] == Role::Title);
+        let on_toc_page = |h: &Heading| {
+            !ncx_files.contains(&f.path) && listed.get(&f.path).is_some_and(|t| t.contains(&h.text.chars().filter(|c| !c.is_whitespace()).collect::<String>()))
+        };
         let secs: Vec<usize> = f
             .heads
             .iter()
             .enumerate()
             // 目录驱动时节都来自书自带的目录（或跟在同文件的章标题后面）。
             .filter(|&(hi, h)| {
-                roles[h.level as usize] == Role::Section
-                    && !in_toc.contains(&(fi, h.span))
-                    && (toc_roles.is_some() || first_title.is_some_and(|t| t < hi))
+                !in_toc.contains(&(fi, h.span))
+                    && ((roles[h.level as usize] == Role::Section && (toc_roles.is_some() || first_title.is_some_and(|t| t < hi))) || (roles[h.level as usize] != Role::Other && on_toc_page(h)))
             })
             .map(|(hi, _)| hi)
             .collect();

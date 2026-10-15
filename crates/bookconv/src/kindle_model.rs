@@ -43,7 +43,19 @@ pub fn base_line_height(count: &HashMap<i64, usize>) -> f64 {
     weighted_mode(count).filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
 }
 
-/// 元素在 Kindle 上的行高（正文行高的倍数）：本元素行高 ÷ 正文行高 `base`，不低于 [`MIN_LINE_HEIGHT`]。
+/// Kindle **排出来**的行高的下限（正文行高的倍数）：KFX 里写 0.6、0.667 的行（写出器照 Send to Kindle，下限 0.6）Kindle 都排成
+/// 正常行高的 0.744 倍，写 0.833 的照排；字号 1–3em、标题和段落都一样（2026-10-15 怪癖测试书 Q138–Q142 Kindle 真机：正常 78px
+/// 的行压到 58px，1.5em 117 → 86、2em 156 → 115、3em 233 → 173）。
+pub const SHOWN_MIN_LINE_HEIGHT: f64 = 0.744;
+
+/// 元素在 Kindle 上**显示**的行高（正文行高的倍数）：[`line_height_ratio`]（KFX 里写的），不低于 [`SHOWN_MIN_LINE_HEIGHT`]。
+/// 掌阅、Move 照 Kindle 的样子写行高时用这个（以前照写的 0.6 写，《人生海海》标题前后在 Move 上紧了三成）。
+pub fn shown_line_height_ratio(lh: Option<f64>, base: f64) -> f64 {
+    line_height_ratio(lh, base).max(SHOWN_MIN_LINE_HEIGHT)
+}
+
+/// 元素在 Kindle 上的行高（正文行高的倍数）：本元素行高 ÷ 正文行高 `base`，不低于 [`MIN_LINE_HEIGHT`]。KFX 里写的值；Kindle
+/// 显示时另有下限，见 [`shown_line_height_ratio`]。
 pub fn line_height_ratio(lh: Option<f64>, base: f64) -> f64 {
     (lh.unwrap_or(LH_EM) / base).max(MIN_LINE_HEIGHT)
 }
@@ -326,6 +338,9 @@ mod tests {
         assert_eq!(vertical_rem(Some(Len::Em(2.0)), 1.5), 3.0);
         assert_eq!(vertical_rem(Some(Len::Pt(24.0)), 3.0), 2.0);
         assert_eq!(line_height_ratio(Some(0.5), 1.5), MIN_LINE_HEIGHT);
+        // 显示的下限 0.744：写 0.6 的排成 0.744，写 0.833 的照排
+        assert_eq!(shown_line_height_ratio(Some(0.5), 1.5), SHOWN_MIN_LINE_HEIGHT);
+        assert!((shown_line_height_ratio(Some(1.25), 1.5) - 0.8333).abs() < 1e-3);
         assert_eq!(base_line_height(&HashMap::from([(key(5.0), 9)])), LH_EM);
         let fonts = HashMap::from([(Some("b".to_string()), 3), (None, 3), (Some("a".to_string()), 2)]);
         assert_eq!(body_font(&fonts), None);

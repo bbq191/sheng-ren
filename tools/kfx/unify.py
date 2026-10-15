@@ -250,6 +250,8 @@ def main():
         for t, ch, _ in s2kcmp.nodes(f'{stem}.kindle.kfx'):
             k = key(t)
             ref = kfx_features(ch, base_fs)
+            # Kindle 排出来的行高不低于正常的 0.744 倍（KFX 写 0.6、0.667 的都抬到 0.744，2026-10-15 探针 Q138–Q142 真机）
+            ref['lh'] = max(ref['lh'], 0.744 * ref['size'])
             ref['gap'] = collapse(prev_mb, ref['mt'])
             prev_mb = ref['mb']
             if not k or not all(queues[d][k] for d in DEVICES):

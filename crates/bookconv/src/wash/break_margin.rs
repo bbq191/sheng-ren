@@ -52,7 +52,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             let mut tag = html::add_class(raw, CLASS);
             // 行内写的上外边距（掌阅认行内样式）：后面接一份 0、强制分页
             if let Some(s) = html::attr_value(&tag, "style") {
-                let s = format!("{};margin-top:0;page-break-before:always;", s.trim_end().trim_end_matches(';'));
+                let s = format!("{};margin-top:0;page-break-before:always;", html::style_base(s));
                 tag = html::set_attr(&tag, "style", &s);
             }
             tags_used.insert(t.name.to_ascii_lowercase());

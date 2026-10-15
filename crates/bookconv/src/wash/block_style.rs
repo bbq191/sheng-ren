@@ -105,7 +105,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
             let mut tag = text[t.start..t.end].to_string();
             for d in &ds {
                 let style = match html::attr_value(&tag, "style") {
-                    Some(s) if !s.trim().is_empty() => format!("{};{d};", s.trim_end().trim_end_matches(';')),
+                    Some(s) if !s.trim().is_empty() => format!("{};{d};", html::style_base(s)),
                     _ => format!("{d};"),
                 };
                 tag = html::set_attr(&tag, "style", &style);
@@ -228,7 +228,7 @@ fn line_heights(items: &[Item], base: f64) -> Vec<(usize, f64)> {
             _ => it.lh.unwrap_or(1.0),
         };
         if it.target && it.chars > 0 {
-            let want = km::line_height_ratio(it.lh, base);
+            let want = km::shown_line_height_ratio(it.lh, base);
             let want = (want * 10000.0).round() / 10000.0;
             if (want - cur).abs() > 0.01 {
                 out.push((i, want));
@@ -258,7 +258,7 @@ fn lh_kind(v: Option<&str>, base: f64, body: bool) -> LhKind {
     match scaled_factor(&v) {
         // `<body>` 上不带单位的：掌阅当没写，排成缺省行距（随字号缩放，同数的继承）；Kindle 的倍数也是 1 就不用改，改成长度反而按
         // 绝对值往下继承给每个块。别的元素上的照改：祖先改成了长度时，掌阅上当没写就继承了祖先的
-        Some((f, false)) if body && (km::line_height_ratio(Some(f), base) - 1.0).abs() <= 0.05 => LhKind::Inherit,
+        Some((f, false)) if body && (km::shown_line_height_ratio(Some(f), base) - 1.0).abs() <= 0.05 => LhKind::Inherit,
         Some(_) => LhKind::Scaled,
         None if v.starts_with(|c: char| c.is_ascii_digit() || c == '.') => LhKind::Fixed,
         None => LhKind::Inherit,
@@ -282,7 +282,7 @@ fn scaled_factor(v: &str) -> Option<(f64, bool)> {
 
 /// 照 Kindle 的一行（本元素字号的倍数 × D，D＝缺省行距是 em 的几倍）。
 fn kindle_line(lh: Option<f64>, base: f64, d: f64) -> f64 {
-    km::line_height_ratio(lh, base) * d
+    km::shown_line_height_ratio(lh, base) * d
 }
 
 /// 全书样式表、`<style>`、行内 `style` 里 [`LhKind::Scaled`] 的 `line-height` 改成 [`kindle_line`] 的 em。返回改了几条。
@@ -546,22 +546,23 @@ mod tests {
         run_with(page, css, &ReaderModel { heading_sizes: None, ..move_reader() })
     }
 
-    /// 正文 1.618（body 上写、段落继承）：标题、div 归一成 1（Move 上本来是 1.618），`<p>` 不动；标题自己写了 1em 的 → 1/1.618；
+    /// 正文 1.618（body 上写、段落继承）：标题、div 归一成 1（Move 上本来是 1.618），`<p>` 不动；标题自己写了 1em 的 → 1/1.618，
+    /// 低于 Kindle 显示的下限，写 0.744；
     /// 行内 `style` 后面接；套着块、自己不排字的 div 不动，里面的块照算；隐藏的不算正文。
     #[test]
     fn blocks_other_than_p_follow_kindle() {
         let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
-        let out = run(&format!(r#"<h1><span>标题</span></h1>{p}<div>说明</div><h2 class="t" style="color:red">小标题</h2><div class="w"><h3>节</h3><p>正文</p></div>"#), "body{line-height:1.618} h2.t{line-height:1em}");
+        let out = run(&format!(r#"<h1><span>标题</span></h1>{p}<div>说明</div><h2 class="t" style="color:red;line-height:0.744;">小标题</h2><div class="w"><h3>节</h3><p>正文</p></div>"#), "body{line-height:1.618} h2.t{line-height:1em}");
         assert!(out.contains(r#"<h1 style="line-height:1;"><span>标题</span></h1>"#), "{out}");
-        assert!(out.contains(r#"<p>正文正文正文正文正文正文</p><div style="line-height:1;">说明</div><h2 class="t" style="color:red;line-height:0.618;">小标题</h2><div class="w"><h3 style="line-height:1;">节</h3><p>正文</p></div>"#), "{out}");
+        assert!(out.contains(r#"<p>正文正文正文正文正文正文</p><div style="line-height:1;">说明</div><h2 class="t" style="color:red;line-height:0.744;">小标题</h2><div class="w"><h3 style="line-height:1;">节</h3><p>正文</p></div>"#), "{out}");
     }
 
     /// `<p>`：外链写的 Move 不认（是 1），和 Kindle 不一样的接行内；行内写了的 Move 认，照 Kindle 归一；正文段落不动。
     #[test]
     fn paragraphs_get_inline_line_height() {
         let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
-        let out = run(&format!(r#"{p}<p class="poem">诗</p><p style="line-height:2">行内</p><p style="line-height:1.618">同正文</p>"#), "body{line-height:1.618} p.poem{line-height:1}");
-        assert!(out.contains(r#"<p>正文正文正文正文正文正文</p><p class="poem" style="line-height:0.618;">诗</p><p style="line-height:2;line-height:1.2361;">行内</p><p style="line-height:1.618;line-height:1;">同正文</p>"#), "{out}");
+        let out = run(&format!(r#"{p}<p class="poem" style="line-height:0.744;">诗</p><p style="line-height:2">行内</p><p style="line-height:1.618">同正文</p>"#), "body{line-height:1.618} p.poem{line-height:1}");
+        assert!(out.contains(r#"<p>正文正文正文正文正文正文</p><p class="poem" style="line-height:0.744;">诗</p><p style="line-height:2;line-height:1.2361;">行内</p><p style="line-height:1.618;line-height:1;">同正文</p>"#), "{out}");
     }
 
     /// 没写行距的书（正文按 1.2）：Move 上本来就是 1，不改；正文 1.5em、div 没写：Kindle 1.2/1.5 = 0.8；写成 1.5em 的 div 是 1。
@@ -615,9 +616,10 @@ mod tests {
         assert!(out.contains(r#"<h1 style="font-size:large;" data-eink-fs="2"><span class="s">标题</span></h1><h4 class="kw" style="font-size:1.125em;font-weight:bold;" data-eink-div="1">四</h4><h6 style="font-size:0.67em;font-weight:bold;" data-eink-div="1">六</h6><p class="big">正文</p>"#), "{out}");
     }
 
-    /// 只认长度的阅读器（缺省行距 1.5em）：样式表里的行距照 Kindle 改成 em（body 上倍数是 1 的不改，`<p>` 上的 1.84 → 1.5em；标题 1.2 → 1.2/1.84 × 1.5，3em → 3/1.84 × 1.5，
+    /// 只认长度的阅读器（缺省行距 1.5em）：样式表里的行距照 Kindle 改成 em（body 上倍数是 1 的不改，`<p>` 上的 1.84 → 1.5em；标题 1.2 → 1.2/1.84 低于
+    /// Kindle 显示的下限 0.744，× 1.5，3em → 3/1.84 × 1.5，
     /// `normal` 同 1.2，px 不动）；没写的 div 继承 body 的 1.84，两边都是缺省行距，不接；套在写了 150% 的 div 里、字号大一倍的 h2
-    /// 继承绝对的行高（Kindle 上是自己字号的 0.75 倍，÷ 1.84 低于下限 0.6），掌阅上是改过的 div 的一行，接行内 0.6 × 1.5。
+    /// 继承绝对的行高（Kindle 上是自己字号的 0.75 倍，÷ 1.84 低于显示的下限 0.744），掌阅上是改过的 div 的一行，接行内 0.744 × 1.5。
     #[test]
     fn length_only_reader() {
         let reader = ReaderModel { line_em: Some(1.5), ..ReaderModel::default() };
@@ -626,10 +628,10 @@ mod tests {
         let mut b = book(&format!(r#"<h1>标题</h1>{p}<div>说明</div><p class="w">宽</p><div class="b"><h2>大</h2></div>"#), css);
         apply(&mut b, &mut WashReport::default(), None, &reader);
         let out_css = String::from_utf8(b[1].data.clone()).unwrap();
-        assert_eq!(out_css, "body{line-height:1.84} p{line-height:1.5em} h1{line-height:0.9783em !important} p.w{line-height:2.4457em} .n{line-height:0.9783em} .x{line-height:20px} div.b{line-height:1.2228em} h2{font-size:2em}");
+        assert_eq!(out_css, "body{line-height:1.84} p{line-height:1.5em} h1{line-height:1.116em !important} p.w{line-height:2.4457em} .n{line-height:1.116em} .x{line-height:20px} div.b{line-height:1.2228em} h2{font-size:2em}");
         let out = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(out.contains(r#"<h1>标题</h1><p>正文"#), "{out}");
-        assert!(out.contains(r#"<div>说明</div><p class="w">宽</p><div class="b"><h2 style="line-height:0.9em;">大</h2></div>"#), "{out}");
+        assert!(out.contains(r#"<div>说明</div><p class="w">宽</p><div class="b"><h2 style="line-height:1.116em;">大</h2></div>"#), "{out}");
     }
 
     /// 两样都要改的标签：先行距、后字号；照 CSS 排的阅读器什么都不改。

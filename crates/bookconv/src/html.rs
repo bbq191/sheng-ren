@@ -282,6 +282,22 @@ pub fn attr<'a>(tag: &'a str, name: &str) -> Option<Attr<'a>> {
 }
 
 /// 第一个名为 `name` 的属性值（原文）。
+/// 行内 `style` 原文（[`attr_value`] 取出的，字符引用没还原）去掉末尾的空白和作分隔的分号，好在后面接声明。字符引用自带的分号
+/// 不算（`font-family:&quot;黑体&quot;` 末尾的 `;` 是 `&quot;` 的：以前一律 `trim_end_matches(';')`，去掉以后接上的声明和
+/// 前一条连成一条，Move 上《人生海海》「第一部」的字号丢了，2026-10-15）。
+pub fn style_base(s: &str) -> &str {
+    let mut t = s.trim_end();
+    while let Some(rest) = t.strip_suffix(';') {
+        // `&名字;`、`&#数字;`、`&#x十六进制;`
+        let tail = rest.rsplit('&').next().unwrap_or("");
+        if rest.contains('&') && !tail.is_empty() && tail.len() <= 10 && tail.trim_start_matches('#').chars().all(|c| c.is_ascii_alphanumeric()) {
+            break;
+        }
+        t = rest.trim_end();
+    }
+    t
+}
+
 pub fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     attr(tag, name).map(|a| a.value)
 }
@@ -884,6 +900,14 @@ pub fn edit_style_blocks<'a>(html: &'a str, mut f: impl FnMut(&str, &str) -> Edi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn style_base_keeps_entity_semicolons() {
+        assert_eq!(style_base("color:red; ; "), "color:red");
+        assert_eq!(style_base("font-family:&quot;黑体&quot;"), "font-family:&quot;黑体&quot;");
+        assert_eq!(style_base("font-family:&quot;黑体&quot;;"), "font-family:&quot;黑体&quot;");
+        assert_eq!(style_base("content:&#x4e00;;"), "content:&#x4e00;");
+    }
 
     #[test]
     fn css_urls_quotes_and_case() {

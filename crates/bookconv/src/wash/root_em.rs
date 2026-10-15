@@ -115,7 +115,7 @@ fn fix(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<c
         let tag = &text[t.start..t.end];
         let add: String = ds.iter().map(|d| format!("{d};")).collect();
         let style = match html::attr_value(tag, "style") {
-            Some(s) if !s.trim().is_empty() => format!("{};{add}", s.trim_end().trim_end_matches(';')),
+            Some(s) if !s.trim().is_empty() => format!("{};{add}", html::style_base(s)),
             _ => add,
         };
         n += ds.len();

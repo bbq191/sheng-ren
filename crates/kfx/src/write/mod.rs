@@ -176,7 +176,11 @@ pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
     maybe_big_stack(deep, move || {
         let stats = analyze(book, &mut parsed);
         let mut out = format!("#base\t{}\t{}\n", stats.base_fs, stats.base_lh * stats.base_fs);
-        for (_, _, _, blocks) in &parsed {
+        for (si, path, _, blocks) in &parsed {
+            // 版式检查用：每一节（文件开头、强制分页处）另起一页；文件开头的块上有没有强制分页（Move 上多出一页空白）
+            let first = *si <= book.docs.len();
+            let lead = first && blocks.first().is_some_and(starts_with_break);
+            out.push_str(&format!("#sec\t{path}\t{first}\t{lead}\n"));
             dump_blocks(blocks, &dims, &mut out);
         }
         out

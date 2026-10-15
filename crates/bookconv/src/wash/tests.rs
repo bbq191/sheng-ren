@@ -1007,6 +1007,28 @@
         assert_eq!(crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx")).len(), 4);
     }
 
+    /// 《三体全集》：NCX 只有卷，卷首是书里的目录页（逐章链接），每章一个文件、h2 章名不跟章标题同文件 → 照目录页补进卷下面。
+    #[test]
+    fn chapters_listed_on_book_toc_page_are_added() {
+        let long = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+        let mut v = paged_book(&[
+            ("v1.xhtml", r#"<h1>卷一</h1><div><a href="c1.xhtml">第一章 甲</a></div><div><a href="c2.xhtml">第二章 乙</a></div><div><a href="c3.xhtml">第三章 丙</a></div>"#),
+            ("c1.xhtml", &format!(r#"<h2 class="sigil_not_in_toc">第一章 甲</h2><p>{long}</p>"#)),
+            ("c2.xhtml", &format!(r#"<h2 class="sigil_not_in_toc">第二章 乙</h2><p>{long}</p>"#)),
+            ("c3.xhtml", &format!(r#"<h2 class="sigil_not_in_toc">第三章 丙</h2><p>{long}</p>"#)),
+            ("x.xhtml", &format!(r#"<h2>附页</h2><p>{long}</p>"#)),
+        ]);
+        v.push(e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint><navLabel><text>卷一</text></navLabel><content src="Text/v1.xhtml"/></navPoint></navMap></ncx>"#));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        let got: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
+        assert_eq!(got, [(1, "卷一"), (2, "第一章 甲"), (2, "第二章 乙"), (2, "第三章 丙")], "目录页没列的附页不补");
+        assert_eq!(rep.toc_sections_added, 3);
+        assert_toc_targets_exist(&v);
+    }
+
     /// 嵌套目录的书：[(层级, 标签, 文件)]。
     fn nested_ncx_book(files: &[(&str, &str)], toc: &[(usize, &str, &str)]) -> Vec<Entry> {
         let mut v = paged_book(files);
@@ -1449,6 +1471,25 @@
         assert_toc_targets_exist(&v);
     }
 
+    /// 页首垫的空白图（`eink-sp`）不算内容：目录指到「文件开头」的标题时，标题前垫了图也认（《人生海海》「第二部」，KINDLE_RULES 35）。
+    #[test]
+    fn spacer_images_do_not_hide_heading_at_file_start() {
+        let t = HAODOO_TEXT;
+        let c1 = format!(r#"<h3 id="x1">第一章</h3><p>{t}</p>"#);
+        let c2 = format!(r#"<div class="eink-sp"><img class="eink-sp eink-sp-1_96" src="s.png" alt=""/></div><h3>第二部</h3><p>{t}</p>"#);
+        let mut v = paged_book(&[("c1.xhtml", &c1), ("c2.xhtml", &c2)]);
+        v.push(e(
+            "OEBPS/toc.ncx",
+            r#"<ncx><navMap><navPoint><navLabel><text>第二部</text></navLabel><content src="Text/c1.xhtml#x1"/></navPoint></navMap></ncx>"#,
+        ));
+        let opf = s(&v, "OEBPS/content.opf").replace("</manifest>", r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>"#);
+        v[0].data = opf.into_bytes();
+        let mut rep = WashReport::default();
+        super::toc::repair_ncx_targets(&mut v, &mut rep);
+        let flat = crate::ncx::parse_ncx_flat(&s(&v, "OEBPS/toc.ncx"));
+        assert_eq!(flat[0].2, "Text/c2.xhtml");
+    }
+
     /// 书自带目录指错位置：核实得上的改指（书里同名链接 / 全书唯一同名标题 / 锚点在文件末尾时下一个文件），核实不上、有歧义的不动。
     #[test]
     fn ncx_targets_repaired_only_when_verified() {
@@ -1498,6 +1539,26 @@
     // ───────────────────────── 2026-09-28 审计复现的问题 ─────────────────────────
 
     const LONG: &str = "这是足够长的正文文字，确保标题页之后的内容超过三十个字这条门槛，不被当成书名页的作者行。";
+
+    /// Kindle 上不出页的空页（KINDLE_RULES 35）：刻意留的空白页、只有隐藏元素的页去掉，目录指向下一页；画了背景的空 div 留着
+    /// （写出器写成容器，Kindle 照画）。
+    #[test]
+    fn kindle_empty_pages_removed() {
+        let mut v = vec![
+            e("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+            e("OEBPS/content.opf", r#"<package version="3.0"><metadata><dc:title>B</dc:title></metadata><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="b.xhtml" media-type="application/xhtml+xml"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/><item id="d" href="d.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.css" media-type="text/css"/></manifest><spine><itemref idref="a"/><itemref idref="b"/><itemref idref="c"/><itemref idref="d"/></spine></package>"#),
+            e("OEBPS/s.css", ".bg{background-color:#eee;height:10em} .gone{display:none}"),
+            e("OEBPS/a.xhtml", r#"<html><head><link rel="stylesheet" href="s.css"/></head><body><div class="blank-page"></div><p>&#160;</p></body></html>"#),
+            e("OEBPS/b.xhtml", r#"<html><head><link rel="stylesheet" href="s.css"/></head><body><h1 class="gone">版权信息</h1></body></html>"#),
+            e("OEBPS/c.xhtml", r#"<html><head><link rel="stylesheet" href="s.css"/></head><body><div class="bg"></div></body></html>"#),
+            e("OEBPS/d.xhtml", &format!(r#"<html><body><p><a href="a.xhtml">回</a>{LONG}</p></body></html>"#)),
+        ];
+        let mut rep = WashReport::default();
+        super::empty_pages::remove_kindle_empty_pages(&mut v, &mut rep, None);
+        assert_eq!(rep.empty_pages_removed, ["OEBPS/a.xhtml", "OEBPS/b.xhtml"]);
+        assert_eq!(spine_files(&v), ["OEBPS/c.xhtml", "OEBPS/d.xhtml"]);
+        assert!(s(&v, "OEBPS/d.xhtml").contains(r#"href="c.xhtml""#), "链接改指下一页");
+    }
 
     /// H3：单引号 OPF 里的空页也删得掉，manifest 的 href 不被改成邻页（此前 spine 重复一章）。
     #[test]

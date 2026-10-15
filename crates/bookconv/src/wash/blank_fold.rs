@@ -75,7 +75,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             let mut tag = html::add_class(raw, BLANK);
             // 行内写的高、边距（《消失的爱人》`height:1em`；掌阅认行内样式）：后面接一份
             if let Some(s) = html::attr_value(&tag, "style") {
-                let s = format!("{};{HIDE}", s.trim_end().trim_end_matches(';'));
+                let s = format!("{};{HIDE}", html::style_base(s));
                 tag = html::set_attr(&tag, "style", &s);
             }
             blank_tags.insert(t.name.to_ascii_lowercase());
@@ -100,7 +100,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             let raw = &text[t.start..t.end];
             let mut tag = html::add_class(raw, &format!("eink-g{}", k + 1));
             if let Some(s) = html::attr_value(&tag, "style") {
-                let s = format!("{};margin-top:{value};", s.trim_end().trim_end_matches(';'));
+                let s = format!("{};margin-top:{value};", html::style_base(s));
                 tag = html::set_attr(&tag, "style", &s);
             }
             edits.push((t.start, t.end, tag));

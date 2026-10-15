@@ -1205,7 +1205,7 @@ pub(super) type ParsedDoc<'a> = (usize, &'a str, Option<String>, Vec<Block>);
 pub(super) const BREAK_MARK: &str = "\0break";
 
 /// 块（或它最前面的子孙）开头有分页记号。
-fn starts_with_break(b: &Block) -> bool {
+pub(super) fn starts_with_break(b: &Block) -> bool {
     b.ids.iter().any(|(i, o)| i == BREAK_MARK && *o == 0) || matches!(&b.kind, Kind::Container(c) if c.first().is_some_and(starts_with_break))
 }
 
