@@ -20,13 +20,17 @@ const CLASS: &str = "eink-pb";
 const MIN_SHARE: f64 = 0.25;
 /// 估出来的高超过内容区高的这么多就算放不下：估算没算图片行框、行距的零头（《飘》二维码页估 1496px，Kindle 上实际放不下 1546）。
 const FIT_SHARE: f64 = 0.9;
+/// 一页里的图高不到内容区高的这么多，就是只有一个小点的页（`cand`，见 [`breaks_in`]）。
+const TINY_SHARE: f64 = 0.05;
 
-pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, known: Option<&HashMap<String, (u32, u32)>>, k: KindleImageRef) {
+/// `push`：照 Kindle 估算在放不下的大上边距前分页（掌阅、Move）；不管开不开，Kindle 上不出页的小图页（见 [`breaks_in`]）三台都去掉。
+pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, known: Option<&HashMap<String, (u32, u32)>>, k: KindleImageRef, push: bool) {
     let css = km::book_css(entries, media);
     let dims = super::image_dims_of(entries, rep, known);
     let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    let marks: Vec<Vec<usize>> = crate::util::par_map(&chapters, |&i| breaks_in(&entries[i], media, &css, &dims, k));
-    if marks.iter().all(Vec::is_empty) {
+    let found: Vec<(Vec<usize>, Vec<usize>)> = crate::util::par_map(&chapters, |&i| breaks_in(&entries[i], media, &css, &dims, k));
+    let (marks, drops): (Vec<Vec<usize>>, Vec<Vec<usize>>) = found.into_iter().map(|(m, d)| (if push { m } else { Vec::new() }, d)).unzip();
+    if marks.iter().chain(&drops).all(Vec::is_empty) {
         return;
     }
     drop(css);
@@ -37,8 +41,8 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         _ => CSS_NAME.to_string(),
     };
     let mut tags_used: std::collections::BTreeSet<String> = Default::default();
-    for (&i, m) in chapters.iter().zip(&marks) {
-        if m.is_empty() {
+    for ((&i, m), d) in chapters.iter().zip(&marks).zip(&drops) {
+        if m.is_empty() && d.is_empty() {
             continue;
         }
         let e = &mut entries[i];
@@ -46,6 +50,15 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         let Some((bs, be)) = html::body_range(text) else { continue };
         let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
         let mut edits = Vec::new();
+        // 只有 Kindle 上小到几乎看不见的图的页（《飘》《春雪》版权页后 20×20 的小图）：去掉前面的强制分页，图留在上一页的底部
+        // （行内末尾接 auto，压过类规则、行内写的分页）
+        for &n in d {
+            let Some(t) = starts.get(n) else { continue };
+            let raw = &text[t.start..t.end];
+            let old = html::attr_value(raw, "style").map(|s| html::style_base(s).to_string()).unwrap_or_default();
+            let style = if old.is_empty() { "page-break-before:auto;".to_string() } else { format!("{old};page-break-before:auto;") };
+            edits.push((t.start, t.end, html::set_attr(raw, "style", &style)));
+        }
         for &n in m {
             let Some(t) = starts.get(n) else { continue };
             let raw = &text[t.start..t.end];
@@ -60,9 +73,15 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         }
         let n = edits.len();
         let out = html::apply_edits(text, edits);
-        let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
-        e.data = typeset::inject_css_link(&out, &href).into_bytes();
+        e.data = if m.is_empty() {
+            out.into_bytes()
+        } else {
+            typeset::inject_css_link(&out, &crate::epubzip::href_to(dir_of(&e.name), &css_path, "")).into_bytes()
+        };
         rep.kindle_rule_edits += n;
+    }
+    if tags_used.is_empty() {
+        return;
     }
     // Move 把写 0 的值当没写（xochitl 的毛病），写 0.01em
     let mut sheet = String::from("/* 大段上外边距在 Kindle 上排不下时换页（sheng-ren kindle_rules，见 wash/break_margin.rs） */\n");
@@ -73,9 +92,9 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
 }
 
 /// 一章里要在前面分页的元素：`<body>` 里第几个开始标签（和 [`html::tags_in`] 数的一致；对不上的章不动）。
-fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<Rules>>, dims: &HashMap<&str, (u32, u32)>, k: KindleImageRef) -> Vec<usize> {
-    let Ok(text) = std::str::from_utf8(&e.data) else { return Vec::new() };
-    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return Vec::new() };
+fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<Rules>>, dims: &HashMap<&str, (u32, u32)>, k: KindleImageRef) -> (Vec<usize>, Vec<usize>) {
+    let Ok(text) = std::str::from_utf8(&e.data) else { return (Vec::new(), Vec::new()) };
+    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return (Vec::new(), Vec::new()) };
     // body 里的元素按文档序：(元素, 计算值)；数目和标签扫描一致才知道改哪个标签
     let els: Vec<(ElementRef, Rc<Computed>)> = (0..ch.els.len()).map(|i| (ch.el(i), ch.els[i].comp.clone())).collect();
     let rem = k.v_rem_px;
@@ -114,6 +133,11 @@ fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync:
         h
     };
     let mut out = Vec::new();
+    // 强制分页后的页里只有 Kindle 上小到几乎看不见的图（高不到内容区高的 5%），紧接着的块又被挪到下一页：这一页在 Kindle 上就是只有一个小点的
+    // 空白页（《飘》《春雪》版权页后 `<div style="page-break-before:always"><img 20×20/></div>` 再接 `margin-top:55%` 的二维码）。
+    // 用户 2026-10-15 要去掉（三台一并）：返回要去掉分页的元素，小图并到上一页底部
+    let mut drops: Vec<usize> = Vec::new();
+    let mut cand: Option<usize> = None;
     let mut acc = 0.0f64;
     let mut skip_until: Option<ego_tree::NodeId> = None;
     for (i, (el, c)) in els.iter().enumerate() {
@@ -131,18 +155,30 @@ fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync:
         }
         if c.break_before {
             acc = 0.0;
+            cand = None;
         }
         if !is_blockish(el, c) {
             continue;
         }
         let has_block_child = el.children().filter_map(ElementRef::wrap).any(|c| ch.index_of(c.id()).is_some_and(|j| is_blockish(&els[j].0, &els[j].1)));
         let m = px(&c.margin[0], c.font_size);
+        if c.break_before && !has_block_child && el.text().all(|t| t.trim().is_empty()) {
+            let imgs: f64 = el.descendants().filter_map(ElementRef::wrap).filter(|d| d.value().name() == "img").map(|d| ch.index_of(d.id()).map_or(0.0, |j| img_h(&d, &els[j].1))).sum();
+            if imgs > 0.0 && imgs <= TINY_SHARE * k.content_h && m < MIN_SHARE * k.content_h {
+                cand = Some(i);
+            }
+        } else if cand.is_some() && m < MIN_SHARE * k.content_h {
+            // 小图页里还有别的内容
+            cand = None;
+        }
         if m >= MIN_SHARE * k.content_h {
             let h = height_of(i);
             if acc > 0.0 && acc + m + h > FIT_SHARE * k.content_h {
                 out.push(i);
+                drops.extend(cand.take());
                 acc = h;
             } else {
+                cand = None;
                 acc += m;
                 if !has_block_child {
                     acc += h;
@@ -165,7 +201,7 @@ fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync:
             acc = 0.0;
         }
     }
-    out
+    (out, drops)
 }
 
 #[cfg(test)]
@@ -192,17 +228,32 @@ mod tests {
             Entry { name: "O/q.png".into(), data: png(500, 500) },
             Entry { name: "O/c.xhtml".into(), data: page.as_bytes().to_vec() },
         ];
-        apply(&mut book, &mut WashReport::default(), None, None, kref());
+        apply(&mut book, &mut WashReport::default(), None, None, kref(), true);
         let out = String::from_utf8(book[3].data.clone()).unwrap();
         assert!(out.contains(r#"<div class="image eink-pb" style="margin-top:55%;margin-top:0;page-break-before:always;">"#), "{out}");
         assert!(out.contains("eink-pb.css"));
+        // 小图单独成页（Kindle 上是只有一个小点的空白页）：前面的强制分页去掉，小图并到版权页底部（三台一并，KINDLE_RULES 36）
+        assert!(out.contains(r#"<div style="page-break-before:always;page-break-before:auto;"><img src="s.png"/></div>"#), "{out}");
+        // Kindle（不做分页估算，`push = false`）也去掉小图页的分页，二维码不加类
+        let mut kd = book.clone();
+        kd[3].data = page.as_bytes().to_vec();
+        apply(&mut kd, &mut WashReport::default(), None, None, kref(), false);
+        let kout = String::from_utf8(kd[3].data.clone()).unwrap();
+        assert!(kout.contains("page-break-before:always;page-break-before:auto;") && !kout.contains("eink-pb") && !kout.contains("stylesheet"), "{kout}");
+        // 小图页后面的块放得下（没有被挪走）：小图页就是正常的一页，不动
+        let fits = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>版权</p><div style="page-break-before:always"><img src="s.png"/></div><p>正文</p></body></html>"#;
+        let mut keep = book.clone();
+        keep[3].data = fits.as_bytes().to_vec();
+        let before = keep.clone();
+        apply(&mut keep, &mut WashReport::default(), None, None, kref(), true);
+        assert_eq!(keep, before);
         let sheet = String::from_utf8(book.iter().find(|e| e.name == "O/eink-pb.css").unwrap().data.clone()).unwrap();
         assert!(sheet.contains("html body div.eink-pb{page-break-before:always;margin-top:0.01em;}"), "{sheet}");
         // 放得下的（《飘》「第一卷」：文件开头上外边距 47% 的标题）不动
         let title = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><div><h1 style="margin-top:47%">第一卷</h1></div></body></html>"#;
         let mut b2 = vec![book[0].clone(), Entry { name: "O/c.xhtml".into(), data: title.as_bytes().to_vec() }];
         let before = b2.clone();
-        apply(&mut b2, &mut WashReport::default(), None, None, kref());
+        apply(&mut b2, &mut WashReport::default(), None, None, kref(), true);
         assert_eq!(b2, before);
     }
 }
