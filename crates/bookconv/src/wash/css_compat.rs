@@ -105,7 +105,7 @@ fn pin_important(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::s
         }
         add.sort();
         let raw = &text[t.start..t.end];
-        let mut style = html::attr_value(raw, "style").map(|s| s.trim_end().trim_end_matches(';').to_string()).unwrap_or_default();
+        let mut style = html::attr_value(raw, "style").map(|s| html::style_base(s).to_string()).unwrap_or_default();
         for (p, v) in &add {
             if !style.trim().is_empty() {
                 style.push(';');

@@ -792,6 +792,18 @@ impl<'a> TextAt<'a> {
 /// - 或者条目的锚点在文件末尾（后面没有文字）、下一个 spine 文件的开头以这个标题开头 → 改指下一个文件。
 ///
 /// 标题与正文写法不同（目录写"Chapter 1"、正文写"一"）核实不了的，一律不动。
+/// 去掉我们垫的图（类里有 `eink-sp` 开头的 `<img>`：页首垫图、行内窄图、横线图），剩下的给 [`html::has_visible`] 看。
+fn strip_spacers(fragment: &str) -> std::borrow::Cow<'_, str> {
+    let ours: Vec<(usize, usize)> = html::tags(fragment)
+        .filter(|g| g.is_start() && g.is("img") && html::attr_value(&fragment[g.start..g.end], "class").is_some_and(|c| c.split_whitespace().any(|k| k.starts_with("eink-sp") || k.starts_with("eink-r"))))
+        .map(|g| (g.start, g.end))
+        .collect();
+    if ours.is_empty() {
+        return fragment.into();
+    }
+    html::apply_edits(fragment, ours.into_iter().map(|(a, b)| (a, b, String::new())).collect()).into()
+}
+
 pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
     let Some(opf) = parse_opf(entries) else { return };
     let Some(ncx_path) = opf.ncx.clone() else { return };
@@ -835,7 +847,8 @@ pub(super) fn repair_ncx_targets(entries: &mut [Entry], rep: &mut WashReport) {
             }
             let target = match html::attr_value(&t[g.start..g.end], "id").filter(|id| !id.is_empty()) {
                 Some(id) => Some((path.clone(), crate::util::xml_unescape(id).into_owned())),
-                None => (!html::has_visible(&t[lo..g.start])).then(|| (path.clone(), String::new())),
+                // 我们垫的页首空白图（`eink-sp`，`top_spacer.rs`）不算内容（《人生海海》「第二部」前垫了图，目录没改指过去，KINDLE_RULES 35）
+                None => (!html::has_visible(&strip_spacers(&t[lo..g.start]))).then(|| (path.clone(), String::new())),
             };
             file_heads.push((label, target));
         }

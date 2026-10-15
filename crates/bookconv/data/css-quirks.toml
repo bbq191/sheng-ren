@@ -504,7 +504,7 @@ on = ["p", "block", "heading"]
 value = ["keyword"]
 ireader = "fixed"
 xochitl = "fixed"
-note = "左右外边距 auto：没定宽度的块本来就满宽，没效果。定了宽度、两边都是 auto 的 Kindle 不居中（Send to Kindle 写了块对齐，Kindle 照样靠左）：掌阅照 CSS 居中 → 左边的 auto 写成 0（KINDLE_RULES 31，profile margin_auto）；Move 由 width 那条折外边距时多出来的放右边。只有左边 auto 的 Kindle 靠右（写出器写块的对齐靠右，《梁羽生》卷名真机）：掌阅照 CSS 也靠右、不动，Move 多出来的放左边（KINDLE_RULES 33）"
+note = "左右外边距 auto：没定宽度的块本来就满宽，没效果。定了宽度、两边都是 auto 的 Kindle 不居中（Send to Kindle 写了块对齐，Kindle 照样靠左）：掌阅照 CSS 居中 → 左边的 auto 写成 0（KINDLE_RULES 31，profile margin_auto）；Move 由 width 那条折外边距时多出来的放右边。只有左边 auto 的 Kindle 靠右（写出器写块的对齐靠右，《梁羽生》卷名、《绍宋》「内容简介」真机）：掌阅照 CSS 也靠右、不动，Move 多出来的放左边（KINDLE_RULES 33）"
 src = "2026-10-13 测试-怪癖 Q30；2026-10-14 测试-怪癖 Q124（两台）、测试-怪癖-Kindle 真机截图；2026-10-14《梁羽生武侠全集》卷名三台真机"
 
 # ---------------------------------------------------------------- 竖直对齐、列表符号、块高、flex、定位（2026-10-14 探针 Q100–Q119）

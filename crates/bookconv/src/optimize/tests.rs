@@ -1220,7 +1220,8 @@
         assert_eq!(crate::html::plain_text(&x), crate::html::plain_text(c1), "可见文字一字不差");
         assert!(text_of(&out, "OEBPS/notes.xhtml").contains("注释"), "注释留在原处");
         let opf_out = text_of(&out, "OEBPS/content.opf");
-        assert!(opf_out.contains(r#"version="3.0""#) && opf_out.contains("empty.xhtml"), "升级 EPUB 3；空白页不删: {opf_out}");
+        // 只修复的书不删空白页，但 Kindle 上不出页的空页（写出器不给没有块的文件出版面）照 Kindle 去掉（KINDLE_RULES 35，用户定）
+        assert!(opf_out.contains(r#"version="3.0""#) && !opf_out.contains("empty.xhtml"), "升级 EPUB 3；Kindle 上不出页的空页去掉: {opf_out}");
         assert!(names.iter().any(|n| n.ends_with("nav.xhtml")), "补 nav: {names:?}");
         let flat = crate::ncx::parse_ncx_flat(&text_of(&out, "OEBPS/toc.ncx"));
         let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();

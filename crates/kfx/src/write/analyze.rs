@@ -177,7 +177,12 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
             let _ = writeln!(out, "#bg\t{src}\t{}", b.comp.bg_no_repeat);
         }
         match &b.kind {
-            Kind::Container(c) => dump_blocks_in(c, Some(b), dims, out),
+            Kind::Container(_) if b.ty == Some(NODE_HR) => out.push_str("#hr\n"),
+            Kind::Container(c) => {
+                let _ = writeln!(out, "#open\t{}\t{}", b.ty.unwrap_or(0), box_str(b));
+                dump_blocks_in(c, Some(b), dims, out);
+                out.push_str("#close\n");
+            }
             Kind::Text { text, images, .. } => {
                 let c = &b.comp;
                 let key: String = text.chars().filter(|ch| !ch.is_whitespace() && *ch != OBJ).take(60).collect();
@@ -211,6 +216,11 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
                     m.margin_right.em,
                     m.margin_right.pct,
                 );
+                let _ = writeln!(out, "#box\t{}", box_str(b));
+                // Move 的上下边框是插进块里最前、最后的横线图（`wash/box_fix.rs`）：版式检查当成边框
+                for i in images.iter().filter(|i| i.src.rsplit('/').next().is_some_and(|f| f.starts_with("eink-rule-"))) {
+                    let _ = writeln!(out, "#rule\t{}", if i.at == 0 { "top" } else { "bottom" });
+                }
                 // 行内图片的宽度照原写法（px 按 0.45pt，见 `InlineImage::width`）：只写了高的写 `h` 加高度，都没写的 `-`
                 for i in images {
                     let width = match (i.width, i.height) {
@@ -224,6 +234,30 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
             Kind::Image { src, linked } => dump_image(src, &b.comp.width.map_or("-".into(), len_str), b.comp.text_align.as_deref(), *linked, "block", dims, out),
         }
     }
+}
+
+/// 版式检查（`tools/kfx/layout.py`）用的盒子：左右外边距、左右内边距（`em+百分比`）、宽度、看得见的边框（上右下左，有的写字母）、
+/// 各边边框的颜色（ARGB，没写 `-`）、背景色（同）。
+fn box_str(b: &Block) -> String {
+    let h = |x: &Horiz| format!("{}+{}", x.em, x.pct);
+    let seen = |i: usize| {
+        b.comp.border[i].as_ref().is_some_and(|x| {
+            !matches!(x.width, bookconv::cascade::BorderWidth::Pt(n) | bookconv::cascade::BorderWidth::Em(n) if n <= 0.0) && x.color.is_none_or(|c| c >> 24 != 0)
+        })
+    };
+    let sides: String = ['T', 'R', 'B', 'L'].iter().enumerate().map(|(i, c)| if seen(i) { *c } else { '-' }).collect();
+    let hex = |c: Option<u32>| c.map_or("-".into(), |c| format!("{c:08x}"));
+    let colors: Vec<String> = b.comp.border.iter().map(|x| hex(x.as_ref().and_then(|x| x.color))).collect();
+    format!(
+        "{}\t{}\t{}\t{}\t{}\t{sides}\t{}\t{}",
+        h(&b.margin_left),
+        h(&b.margin_right),
+        h(&b.padding_h[1]),
+        h(&b.padding_h[0]),
+        b.comp.width.map_or("-".into(), len_str),
+        colors.join(","),
+        hex(b.comp.background)
+    )
 }
 
 fn len_str(l: Len) -> String {

@@ -13,6 +13,8 @@ pub struct ReaderModel {
     pub trailing_br_line: bool,
     /// `<p>` 不认外链、`<style>` 里的 `line-height`（行内的认），别的块按阅读器缺省行距的倍数认（[`ReaderModel::line_height`]）。
     pub line_height_except_p: bool,
+    /// 插了下边框横线图的块上行距倍数的下限（低了字伸出行盒、压住横线，见 profile `line_height_floor`）。
+    pub line_height_floor: Option<f64>,
     /// 标题（h1–h6）的 `font-size` 只认关键字（`None`＝照 CSS）。
     pub heading_sizes: Option<HeadingSizes>,
     /// 不认 `margin-top`，页首要垫图（`None`＝认）。
@@ -61,7 +63,7 @@ pub struct ReaderModel {
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, margin_auto: true, float: true, horizontal_scale: false, em_root: false, em_root_px: None, heading_center: false, rem: true, important: true, line_em: None }
+        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, line_height_floor: None, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, margin_auto: true, float: true, horizontal_scale: false, em_root: false, em_root_px: None, heading_center: false, rem: true, important: true, line_em: None }
     }
 }
 
@@ -71,6 +73,7 @@ impl ReaderModel {
             display_none: p.display_none,
             trailing_br_line: p.trailing_br_line,
             line_height_except_p: p.line_height_except_p,
+            line_height_floor: p.line_height_floor.filter(|_| p.line_height_except_p),
             heading_sizes: p.heading_sizes.as_ref().filter(|_| p.heading_font_keywords).map(HeadingSizes::from_profile),
             page_top: p.page_top.filter(|_| !p.margin_top),
             inline_css_lengths: p.inline_css_lengths,
@@ -125,6 +128,9 @@ impl ReaderModel {
         }
         if self.heading_center {
             s.push_str("j1");
+        }
+        if let Some(f) = self.line_height_floor {
+            s.push_str(&format!("f{f}"));
         }
         if self.em_root {
             s.push_str(&format!("e{}", self.em_root_px.unwrap_or(0.0)));
@@ -214,7 +220,7 @@ mod tests {
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),
-            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0v0c0o0h1e37.8"
+            "d0b1l1hsmall=0.784,medium=1,large=1.216,x-large=1.514,xx-large=2.018;2.018,1.514,1.216,1,0.784,1t91,46,44i0p0r0m0x0%0w0g0v0c0o0h1f1e37.8"
         );
     }
 }

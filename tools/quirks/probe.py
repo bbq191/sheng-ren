@@ -175,6 +175,20 @@ PROBES = [
     ("132", "span white-space:nowrap（7 字一块，行尾放不下时整块挪到下一行？）", "markup", "", "<p>" + "<span>甲乙丙丁戊己，</span>" * 9 + "</p>|<p>" + '<span class="nw">甲乙丙丁戊己，</span>' * 9 + "</p>"),
     ("133", "h1 float:right（标题后接一段）", "sheet", "float:right", '<h1{cls}>女帝奇英传</h1>'),
     ("134", "h1 照《梁羽生》卷名 bigtitle（float:right、width:1.2em、上内边距 6em 配负上外边距、底色边框；对照是缺省 h1）", "markup", "", '<h1>女帝奇英传</h1>|<h1 class="bt">女帝奇英传</h1>'),
+    # 2026-10-15 标题前后的距离（《人生海海》外层 line-height 是长度、标题字号大，Kindle 写出器继承成 0.6 行高；Move 照 0.6 排得很紧）
+    ("135", "外层 line-height:1.2em 里 2em 的 h2（继承下来 0.6；对照外层没写）", "markup", "", '<div><h2>第一章</h2><p>{text}</p></div>|<div class="lh12"><h2>第一章</h2><p>{text}</p></div>'),
+    ("136", "外层 line-height:1.2em 里 2em 的 p（对照外层没写）", "markup", "", '<div><p class="f2">第一章</p><p>{text}</p></div>|<div class="lh12"><p class="f2">第一章</p><p>{text}</p></div>'),
+    ("137", "p line-height:0.6（两行字）", "sheet", "line-height:0.6", P),
+    # 2026-10-15 Kindle 行高的下限（Q137 正文 0.6 只压到 0.74、Q135/Q136 大字几乎不压）：各字号 × 行高
+    ("138", "p 1em，行高依次 不写/0.6/0.8/1.0/1.2（每段两行，量段内行距；A、B 一样，只看 Kindle）", "markup", "", '<p class="x1-0">测试文字测试文字测试文字测试文字测试文字测试文字测试文字测试文字</p><p class="x1-0_6">测试文字测试文字测试文字测试文字测试文字测试文字测试文字测试文字</p><p class="x1-0_8">测试文字测试文字测试文字测试文字测试文字测试文字测试文字测试文字</p><p class="x1-1_0">测试文字测试文字测试文字测试文字测试文字测试文字测试文字测试文字</p><p class="x1-1_2">测试文字测试文字测试文字测试文字测试文字测试文字测试文字测试文字</p>'),
+    ("139", "p 1.5em，行高依次 不写/0.6/0.8/1.0/1.2（每段两行，量段内行距；A、B 一样，只看 Kindle）", "markup", "", '<p class="x1_5-0">测试文字测试文字测试文字测试文字测试文字测试</p><p class="x1_5-0_6">测试文字测试文字测试文字测试文字测试文字测试</p><p class="x1_5-0_8">测试文字测试文字测试文字测试文字测试文字测试</p><p class="x1_5-1_0">测试文字测试文字测试文字测试文字测试文字测试</p><p class="x1_5-1_2">测试文字测试文字测试文字测试文字测试文字测试</p>'),
+    ("140", "p 2em，行高依次 不写/0.6/0.8/1.0/1.2（每段两行，量段内行距；A、B 一样，只看 Kindle）", "markup", "", '<p class="x2-0">测试文字测试文字测试文字测试文字</p><p class="x2-0_6">测试文字测试文字测试文字测试文字</p><p class="x2-0_8">测试文字测试文字测试文字测试文字</p><p class="x2-1_0">测试文字测试文字测试文字测试文字</p><p class="x2-1_2">测试文字测试文字测试文字测试文字</p>'),
+    ("141", "p 3em，行高依次 不写/0.6/0.9（每段两行，量段内行距；A、B 一样，只看 Kindle）", "markup", "", '<p class="x3-0">测试文字测试文字测试文</p><p class="x3-0_6">测试文字测试文字测试文</p><p class="x3-0_9">测试文字测试文字测试文</p>'),
+    ("142", "h2 2em，行高依次 不写/0.6/1.0（每段两行，量段内行距；A、B 一样，只看 Kindle）", "markup", "", '<h2 class="x2-0">测试文字测试文字测试文字测试文字</h2><h2 class="x2-0_6">测试文字测试文字测试文字测试文字</h2><h2 class="x2-1_0">测试文字测试文字测试文字测试文字</h2>'),
+    # 2026-10-15 Move 上标题里的下边框横线图压到字上（《人生海海》版权页，标题行高照 Kindle 写 0.744）
+    ("143", "h1 末尾放横线图，行内 line-height:0.744（对照没写）", "markup", "", '<h1>版权信息<img class="ruleb" src="rule.png" alt=""/></h1><p>{text}</p>|<h1 style="line-height:0.744">版权信息<img class="ruleb" src="rule.png" alt=""/></h1><p>{text}</p>'),
+    ("144", "h1 末尾放横线图，行内 line-height:1（对照没写）", "markup", "", '<h1>版权信息<img class="ruleb" src="rule.png" alt=""/></h1><p>{text}</p>|<h1 style="line-height:1">版权信息<img class="ruleb" src="rule.png" alt=""/></h1><p>{text}</p>'),
+    ("145", "div 2em 粗体末尾放横线图，行内 line-height:0.744（对照没写）", "markup", "", '<div class="d2">版权信息<img class="ruleb" src="rule.png" alt=""/></div><p>{text}</p>|<div class="d2" style="line-height:0.744">版权信息<img class="ruleb" src="rule.png" alt=""/></div><p>{text}</p>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）
@@ -186,7 +200,7 @@ BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:
             "hr.hrd{width:100%;height:1px;border-style:none;border-top:1px dotted gray;}", ".flc{display:flex;justify-content:center;align-items:center;}",
             ".abs{position:absolute;bottom:12%;left:0;width:100%;text-align:center;}", "td.tb{border:2px solid #000;}", "table.bc{border-collapse:collapse;}", ".vlen{vertical-align:0.5em;}", ".vrel{position:relative;top:-0.5em;}", ".w50{width:50%;}", ".mauto{margin-left:auto;margin-right:auto;}",
             "span.fnote{position:relative;display:inline-block;width:19px;height:19px;background-color:black;vertical-align:sub;border-radius:50%;margin:0 3px;}",
-            "html body span.fnoff{display:inline;width:auto;height:auto;background-color:transparent;background-image:none;margin:0;}", "td.tw1{width:1em;}", ".nw{white-space:nowrap;}",
+            "html body span.fnoff{display:inline;width:auto;height:auto;background-color:transparent;background-image:none;margin:0;}", "td.tw1{width:1em;}", ".nw{white-space:nowrap;}", ".lh12{line-height:1.2em;}", "div.d2{font-size:2em;font-weight:bold;}", "p.f2{font-size:2em;}", "p.x1-0{font-size:1em;}", "p.x1-0_6{font-size:1em;line-height:0.6;}", "p.x1-0_8{font-size:1em;line-height:0.8;}", "p.x1-1_0{font-size:1em;line-height:1.0;}", "p.x1-1_2{font-size:1em;line-height:1.2;}", "p.x1_5-0{font-size:1.5em;}", "p.x1_5-0_6{font-size:1.5em;line-height:0.6;}", "p.x1_5-0_8{font-size:1.5em;line-height:0.8;}", "p.x1_5-1_0{font-size:1.5em;line-height:1.0;}", "p.x1_5-1_2{font-size:1.5em;line-height:1.2;}", "p.x2-0{font-size:2em;}", "p.x2-0_6{font-size:2em;line-height:0.6;}", "p.x2-0_8{font-size:2em;line-height:0.8;}", "p.x2-1_0{font-size:2em;line-height:1.0;}", "p.x2-1_2{font-size:2em;line-height:1.2;}", "p.x3-0{font-size:3em;}", "p.x3-0_6{font-size:3em;line-height:0.6;}", "p.x3-0_9{font-size:3em;line-height:0.9;}", "h2.x2-0{font-size:2em;}", "h2.x2-0_6{font-size:2em;line-height:0.6;}", "h2.x2-1_0{font-size:2em;line-height:1.0;}",
             "h1.bt{font-size:300%;font-weight:normal;color:#1B272E;text-align:center;width:1.2em;line-height:120%;background:#E5E2D3;border:solid #DFDBCA 5px;float:right;padding:6em 12px 12px 12px;margin:-6em 10px auto auto;}"]
 
 

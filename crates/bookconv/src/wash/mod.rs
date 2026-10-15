@@ -173,7 +173,18 @@ pub use self::encoding::transcode_entries;
 ///   `float`）；定宽块只有左边是 auto 的 Kindle 靠右（写出器写块的对齐）：掌阅不再把这种 auto 写成 0，Move 折外边距时多出来的放
 ///   左边；页首块的负上外边距配上内边距，掌阅上照 Kindle 能看见的写（上外边距 0、上内边距减去推出去的）。《梁羽生》卷名竖排窄条
 ///   靠右、一页放下（掌阅以前拆到三页、Move 以前横排）。
-pub const KINDLE_RULES_VERSION: &str = "33";
+/// - 34（2026-10-15，标题前后的距离三台抽样 + 探针 Q135–Q142 Kindle 真机）：行高照 Kindle **显示**的值写——KFX 里 0.6、0.667
+///   的行 Kindle 排成正常行高的 0.744 倍（`kindle_model::SHOWN_MIN_LINE_HEIGHT`），以前照写的 0.6 写给两台，《人生海海》标题前后
+///   在 Move 上紧了三成（掌阅不认这种倍数，多半没变化）。同时修《人生海海》版权页、目录、「第一部」在 Move 上的问题：
+///   插了下边框横线图的块行距不低于 1、接在行内（Move 行距少的从行下面扣，横线压字，profile `line_height_floor`；外链里写不带
+///   单位的 `line-height` 会让后面的规则失效）；文件开头的块上的强制分页行内接 `page-break-before:auto`（Move 多出一张空白页）；
+///   往行内 `style` 接声明时末尾的 `&quot;` 不再被当成分号去掉（`html::style_base`，「第一部」的字号、居中丢了）。
+/// - 35（2026-10-15，三台版式检查 `tools/kfx/layout.py` 查出来、用户定修）：Kindle 上不出页的空页（刻意留的空白页、只有隐藏元素的页，
+///   写出器不出版面）两台也去掉、链接改指下一页（`empty_pages::remove_kindle_empty_pages`，《疯探》`blank.html`）；Move 上左右有框的
+///   列表也包进单格表格（《雪国》注释列表的虚线框）；页首的块也插上横线图，垫图让出它的高（`box_fix::page_top_rule_px`，《人生海海》
+///   「第一部」、《平凡的世界》卷名）；页首垫图前面什么都没有的空元素照 Kindle 不算（写出器不出节点；以前整章不垫，「第一部」
+///   在 Move 上偏上一截）；包框的列表单元格左内边距补到 Kindle 的缩进（`box_fix::list_indent_extra_px`，《雪国》注释框序号紧贴框线）；包框的单元格照外层写回字号、行距、对齐、字体（书里 `td{font-size:0.6em}` 落在我们的表格上）。
+pub const KINDLE_RULES_VERSION: &str = "35";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -561,6 +572,8 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         if !opts.reader.display_none {
             rep.kindle_rule_edits += hidden::apply(entries);
         }
+        // Kindle 上不出页的空页（刻意留的空白页、只有隐藏元素的页）去掉：后面各步不用再管它们
+        remove_kindle_empty_pages(entries, rep, opts.media.as_ref());
         let font_scale = kindle_rules::apply(entries, rep, opts);
         add_ua_css(entries, rep, font_scale);
         // 不认 rem、`!important` 的阅读器（掌阅）：换成认的写法。别的 pass 之前：它们按 Kindle 的层叠算，换完算出来一样
