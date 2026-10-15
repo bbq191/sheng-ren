@@ -678,7 +678,7 @@ mod tests {
         assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1272, height: 1696 }, Screen { width: 952, height: 1457 }), "Kindle 漫画固定版式整屏");
         assert!(k.comic_fixed_layout && !i.comic_fixed_layout && !x.comic_fixed_layout);
         assert_eq!((k.note_backlinks, i.note_backlinks, x.note_backlinks), (true, true, false), "只有 xochitl 去注释回链");
-        assert_eq!((k.comic_page_direction.as_deref(), i.comic_page_direction.as_deref(), x.comic_page_direction.as_deref()), (None, Some("ltr"), None), "掌阅漫画从左往右翻才铺满");
+        assert_eq!((k.comic_page_direction.as_deref(), i.comic_page_direction.as_deref(), x.comic_page_direction.as_deref()), (None, None, None), "三台漫画都照书的翻页方向（掌阅往右翻的书要在阅读器里选「漫画」排版才铺满，2026-10-15）");
         assert!(get("nope").is_none());
     }
 
