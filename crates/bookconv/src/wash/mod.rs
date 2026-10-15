@@ -188,7 +188,8 @@ pub use self::encoding::transcode_entries;
 ///   上横线图只画线、不连着内边距，距离只由垫图出（以前算两遍，垫图 + 标题前自带的空 + 横线图的透明段超过一页，卷名被推到下一页，
 ///   前面多出一页空背景，33 版就有）；Move 上 HTML 属性 `width="80%"` 的图写成 CSS 类（Move 不认属性、拉满一行，《梁羽生》作者介绍页的
 ///   文字被挤到下一页；`kindle_images` 的 `attr_percent`）。
-pub const KINDLE_RULES_VERSION: &str = "36";
+/// - 37（2026-10-15，同上，OPTIMIZE 58）：只有小图的页去掉强制分页，小图并到上一页底部（`break_margin.rs`，掌阅、Move 这一份）。
+pub const KINDLE_RULES_VERSION: &str = "37";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
@@ -290,6 +291,9 @@ pub struct WashOpts {
     pub image_sizing: Option<(profile::ImageSizing, KindleImageRef)>,
     /// 图片的原始宽高（路径 → 像素）：流式优化时清洗层拿到的图片条目是空占位，由调用方读文件头填上（`kindle_images` 用）。
     pub image_dims: Option<std::sync::Arc<HashMap<String, (u32, u32)>>>,
+    /// Kindle 的内容区和字号：只有小图的页（版权页后 20×20 的小图）去掉前面的强制分页（`break_margin.rs`，三台一并，2026-10-15 用户定）。
+    /// 掌阅、Move 在 `kindle_rules` 里连同分页估算一起做，这里只给不走 `kindle_rules` 的（Kindle）用。`None` 不做。
+    pub tiny_page: Option<KindleImageRef>,
     /// 平铺背景的阅读器（`background_no_repeat = false`）上整页背景图做成整页一块用的尺寸（[`crate::bgfit::plan_tiles`]）；
     /// `None` 时这类背景图照旧去掉。
     pub page_tiles: Option<crate::bgfit::TileGeometry>,
@@ -327,7 +331,7 @@ pub struct KindleImageRef {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, h_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, tiny_page: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, h_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None }
     }
 }
 
@@ -598,7 +602,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         }
         // 大段上外边距在 Kindle 上排不下时换页、丢掉边距（掌阅、Move 都照 Kindle 换算竖直间距时做，按原来的 CSS 估）
         if let (Some(_), Some((_, k))) = (opts.v_scale, opts.image_sizing) {
-            break_margin::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), k);
+            break_margin::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), k, true);
         }
         // 内边距、边框、标题外边距：垫图、分页估算之后（它们按原来的 CSS 算 Kindle 上的样子），竖直换算之前（写的 em 跟着换算）
         if let Some(g) = opts.box_geometry {
@@ -619,6 +623,9 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
             inline_css::apply(entries, rep);
         }
         drop_nonlinear_nav(entries);
+    } else if let Some(k) = opts.tiny_page {
+        // Kindle：只去掉小图页的强制分页（写出器照原书的分页分节）
+        break_margin::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), k, false);
     }
     fix_ncx_manifest_id(entries, rep);
     repair_ncx_targets(entries, rep);

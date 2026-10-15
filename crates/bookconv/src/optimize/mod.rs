@@ -137,7 +137,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - 57（2026-10-15，用户报《三体全集》Kindle 目录没有章）：书里自带的目录页（链接文字占大半的页）列了、NCX 没指到那个文件的
 ///   标题也补进目录（`wash/chapters.rs`）。《三体全集》NCX 只有三卷、章名是 `sigil_not_in_toc` 的 h2、每章一个文件，以前「节要
 ///   跟所属章标题在同一个文件里」（《疯探》附页那条）挡住了，现在 4 条 → 56 条。
-pub const OPTIMIZE_VERSION: &str = "57";
+/// - 58（2026-10-15，用户在三台看《飘》版权页后多一页空白）：强制分页后只有 Kindle 上小到几乎看不见的图（高不到内容区高的 5%）、
+///   紧接着的块又被挪到下一页的页，去掉前面的强制分页，小图并到上一页底部（`wash/break_margin.rs`；三台一并：Kindle 在 `repair_entries`
+///   里只做这一项，掌阅、Move 连同分页估算一起做）。《飘》上下册、《春雪》变。
+pub const OPTIMIZE_VERSION: &str = "58";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -276,7 +279,7 @@ impl OptimizeOpts {
             // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
             wash: Some({
                 let w = self.wash.clone().unwrap_or_default();
-                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, top_spacer: w.top_spacer, bg_place: w.bg_place, v_scale: w.v_scale, h_scale: w.h_scale, reader: w.reader.clone(), audit: w.audit.clone(), box_geometry: w.box_geometry, ..Default::default() }
+                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, top_spacer: w.top_spacer, bg_place: w.bg_place, v_scale: w.v_scale, h_scale: w.h_scale, reader: w.reader.clone(), audit: w.audit.clone(), box_geometry: w.box_geometry, tiny_page: w.tiny_page, ..Default::default() }
             }),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
@@ -309,12 +312,14 @@ impl OptimizeOpts {
             wash: Some({
                 let mut w = crate::wash::WashOpts { css_rgba: p.css_rgba, background_no_repeat: p.background_no_repeat, media: Some(crate::cascade::MediaEnv::for_format(p, p.format())), ..Default::default() };
                 // 不照 CSS 定图片尺寸的阅读器：照内置 kindle 模式的内容区宽和 1em 像素折算（三台以 Kindle 为准）
-                if p.image_sizing != profile::ImageSizing::Css {
-                    if let Some(k) = profile::get("kindle").filter(|k| k.font_px.is_some()) {
-                        let r = k.readable(profile::Format::Kfx);
-                        let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)), v_rem_px: k.line_px.map_or(f64::from(k.font_px.unwrap_or(16)), |l| f64::from(l) / 1.2) };
+                if let Some(k) = profile::get("kindle").filter(|k| k.font_px.is_some()) {
+                    let r = k.readable(profile::Format::Kfx);
+                    let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)), v_rem_px: k.line_px.map_or(f64::from(k.font_px.unwrap_or(16)), |l| f64::from(l) / 1.2) };
+                    if p.image_sizing != profile::ImageSizing::Css {
                         w.image_sizing = Some((p.image_sizing, kref));
                     }
+                    // 只有小图的页去掉强制分页：三台一并（Kindle 走这里，掌阅、Move 在 `kindle_rules` 里）
+                    w.tiny_page = Some(kref);
                 }
                 // 平铺背景的阅读器（Move）：整页背景图做成整页一块（`bgfit::PageTile`）。没写尺寸的图 Kindle 按原图像素显示，
                 // 折成这里内容区宽 / Kindle 内容区宽

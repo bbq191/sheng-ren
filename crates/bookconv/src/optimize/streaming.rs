@@ -85,7 +85,7 @@ fn optimize_inner(
     }
     // 图片照 Kindle 的大小改写（`kindle_images`）要原图宽高：这时图片条目是空占位，先读文件头
     let sized;
-    let opts = match opts.wash.as_ref().filter(|w| w.mode.kindle_rules() && w.image_sizing.is_some() && !is_comic_book) {
+    let opts = match opts.wash.as_ref().filter(|w| ((w.mode.kindle_rules() && w.image_sizing.is_some()) || w.tiny_page.is_some()) && !is_comic_book) {
         Some(w) => {
             let dims = |b: &[u8]| crate::imgopt::guard(|| image::ImageReader::new(std::io::Cursor::new(b)).with_guessed_format().ok()?.into_dimensions().ok());
             let names: Vec<String> = raw.iter().filter(|e| crate::util::is_image_ext(&e.name)).map(|e| e.name.clone()).collect();
