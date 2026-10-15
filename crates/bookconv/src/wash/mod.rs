@@ -189,7 +189,10 @@ pub use self::encoding::transcode_entries;
 ///   前面多出一页空背景，33 版就有）；Move 上 HTML 属性 `width="80%"` 的图写成 CSS 类（Move 不认属性、拉满一行，《梁羽生》作者介绍页的
 ///   文字被挤到下一页；`kindle_images` 的 `attr_percent`）。
 /// - 37（2026-10-15，同上，OPTIMIZE 58）：只有小图的页去掉强制分页，小图并到上一页底部（`break_margin.rs`，掌阅、Move 这一份）。
-pub const KINDLE_RULES_VERSION: &str = "37";
+/// - 38（2026-10-15，用户在 Move 上把阅读字号调到 0.8 后《梁羽生》卷名不再竖排）：Move 上窄的定宽块（占能用宽 30% 以内，卷名竖排这类）
+///   不再折成 em 外边距（跟着阅读字号变），包进单格表格、表格宽写占外层的百分比、靠哪边写 `align`（`box_fix.rs` 的 `narrow`）；表格不会窄过
+///   里面最宽的一个字，一字宽的竖条和字号无关（真机字号 1.0、0.8 都竖排）。
+pub const KINDLE_RULES_VERSION: &str = "38";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
