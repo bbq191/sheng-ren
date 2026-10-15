@@ -184,7 +184,11 @@ pub use self::encoding::transcode_entries;
 ///   列表也包进单格表格（《雪国》注释列表的虚线框）；页首的块也插上横线图，垫图让出它的高（`box_fix::page_top_rule_px`，《人生海海》
 ///   「第一部」、《平凡的世界》卷名）；页首垫图前面什么都没有的空元素照 Kindle 不算（写出器不出节点；以前整章不垫，「第一部」
 ///   在 Move 上偏上一截）；包框的列表单元格左内边距补到 Kindle 的缩进（`box_fix::list_indent_extra_px`，《雪国》注释框序号紧贴框线）；包框的单元格照外层写回字号、行距、对齐、字体（书里 `td{font-size:0.6em}` 落在我们的表格上）。
-pub const KINDLE_RULES_VERSION: &str = "35";
+/// - 36（2026-10-15，用户在 Move 上看《梁羽生》）：页首块上内边距很大（拿来推字的，卷名 `padding-top:6em` 配 3 倍字号，18 rem）时，
+///   上横线图只画线、不连着内边距，距离只由垫图出（以前算两遍，垫图 + 标题前自带的空 + 横线图的透明段超过一页，卷名被推到下一页，
+///   前面多出一页空背景，33 版就有）；Move 上 HTML 属性 `width="80%"` 的图写成 CSS 类（Move 不认属性、拉满一行，《梁羽生》作者介绍页的
+///   文字被挤到下一页；`kindle_images` 的 `attr_percent`）。
+pub const KINDLE_RULES_VERSION: &str = "36";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;

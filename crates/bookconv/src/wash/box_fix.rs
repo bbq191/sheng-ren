@@ -267,6 +267,14 @@ fn list_indent_extra_px(area_w: f64) -> f64 {
     (0.103 * area_w - 25.0).max(0.0).round()
 }
 
+/// 页首的块上内边距超过这么多 rem（Kindle 正文一行 1.2 rem）的，上横线图不插（见 [`page_top_rule_px`]）。
+const MAX_TOP_PAD_REM: f64 = 3.0;
+
+/// 上内边距大到是拿来推字的（[`MAX_TOP_PAD_REM`]）：页首的块上横线图照插、不从垫图里扣。
+fn big_top_pad(c: &crate::cascade::Computed, reader: &ReaderModel) -> bool {
+    !reader.padding && km::vertical_rem(c.padding[0], c.font_size) > MAX_TOP_PAD_REM
+}
+
 /// 页首（文件里前面还没有内容）的块插的上横线图有多高（这台的屏幕像素：线粗，加上不认内边距时连着画的上内边距）；不插的 `None`。
 /// 页首的块由页首垫图（`top_spacer.rs`）推到 Kindle 上字的位置，垫图要减去它，两边共用这一个判断（KINDLE_RULES 35：以前页首一律
 /// 不插上横线，《人生海海》「第一部」、《平凡的世界》卷名上的线 Move 上没有，用户要修）。包进单格表格画框的块（左右有框）不在这里。
@@ -284,8 +292,12 @@ pub(super) fn page_top_rule_px(c: &crate::cascade::Computed, tag: &str, reader: 
         BorderWidth::Pt(n) => n / km::PT_PER_EM,
         BorderWidth::Em(n) => n * c.font_size,
     };
-    let pad = if reader.padding { 0.0 } else { km::vertical_rem(c.padding[0], c.font_size).max(0.0) * v_rem_px };
-    Some((border_rem * v_rem_px).max(1.0) + pad)
+    let pad_rem = if reader.padding { 0.0 } else { km::vertical_rem(c.padding[0], c.font_size).max(0.0) };
+    // 上内边距大到像是拿来把页首的字往下推的（《梁羽生》卷名 `padding-top:6em` 配 3 倍字号、负上外边距，18 rem）：这段距离已经算在垫图里
+    // （垫图照 Kindle 字顶的位置），横线图只画线、不连着内边距，不然距离算两遍，垫图 + xochitl 标题前自带的空 + 横线图的透明段超过
+    // 一页，卷名被推到下一页、前面多出一页空背景（2026-10-15 用户发现，33 版就有）
+    let pad_rem = if pad_rem > MAX_TOP_PAD_REM { 0.0 } else { pad_rem };
+    Some((border_rem * v_rem_px).max(1.0) + pad_rem * v_rem_px)
 }
 
 /// 表格、列表、分隔线、图这些不动（外边距、内边距的意思不一样，横线也画不对）。
@@ -632,7 +644,8 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                     BorderWidth::Pt(n) => n / km::PT_PER_EM,
                     BorderWidth::Em(n) => n * c.font_size,
                 };
-                let pad_px = if reader.padding { 0.0 } else { pad_rem(i, side) * g.v_rem_px };
+                // 页首的块上内边距大到是拿来推字的：线只画线（见 [`page_top_rule_px`]）
+                let pad_px = if reader.padding || (top && !content_before[i] && big_top_pad(c, reader)) { 0.0 } else { pad_rem(i, side) * g.v_rem_px };
                 let m = h_margin.get(&i).copied().unwrap_or([to_em(c.margin[3], c.font_size), to_em(c.margin[1], c.font_size)]);
                 let width_px = (g.area_w - (m[0] + m[1]).max(0.0) * c.font_size * g.em_px * g.h_scale).clamp(g.area_w * 0.1, g.area_w);
                 let color = b.color.or(c.color).unwrap_or(0xFF00_0000) | 0xFF00_0000;
@@ -1062,6 +1075,14 @@ mod tests {
         assert!(td.contains("font-size:1em;line-height:normal;text-align:left;"), "{page}");
     }
 
+    /// 页首的块上内边距很大（《梁羽生》卷名 `padding-top:6em`，字号 3 倍）：上横线图照插（连着透明的一截），垫图不扣它（扣了垫图就
+    /// 没了，卷名竖排页被推到页底）。这里只看横线图在（垫图的高在 `top_spacer` 的测试里）。
+    #[test]
+    fn big_top_padding_at_page_top_keeps_rule() {
+        let (page, _, _) = run(r#"<div class="eink-sp"><img class="eink-sp eink-sp-36_6" src="s.png" alt=""/></div><h1 class="t">卷名</h1><p>正文</p>"#, "h1.t{font-size:3em;border-top:5px solid #ddd;padding-top:6em}");
+        assert!(page.contains(r#"<h1 class="t"><img class="eink-sp eink-r"#), "{page}");
+    }
+
     /// 页首块的上横线图有多高（垫图要让出来）：线粗 + 不认内边距时的上内边距；左右有框（包进表格）的、认边框的阅读器不算。
     #[test]
     fn page_top_rule_height() {
@@ -1077,6 +1098,9 @@ mod tests {
         // 2px = 0.9pt = 0.075 rem → 3.75px；上内边距 1em（h1 字号 2em）= 2 rem → 100px
         assert!((h - 103.75).abs() < 0.01, "{h}");
         assert_eq!(page_top_rule_px(&comp("h1.t{border:2px solid #000}"), "h1", &reader, 50.0), None);
+        // 上内边距大到拿来推字的（《梁羽生》卷名）：只画线（2px＝0.075 rem → 3.75px），距离在垫图里
+        let h = page_top_rule_px(&comp("h1.t{border-top:2px solid #000;padding-top:3em}"), "h1", &reader, 50.0).unwrap();
+        assert!((h - 3.75).abs() < 0.01, "{h}");
         assert_eq!(page_top_rule_px(&comp("h1.t{border-bottom:2px solid #000}"), "h1", &reader, 50.0), None);
         let ir = ReaderModel::for_profile(profile::get("ireader").unwrap());
         assert_eq!(page_top_rule_px(&comp("h1.t{border-top:2px solid #000}"), "h1", &ir, 50.0), None);
