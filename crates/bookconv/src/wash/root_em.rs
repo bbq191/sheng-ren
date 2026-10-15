@@ -21,10 +21,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
     if !em_root {
         return;
     }
-    let css = km::book_css(entries, media);
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    let fixed: Vec<Option<(Vec<u8>, usize)>> = crate::util::par_map(&chapters, |&i| fix(&entries[i], media, &css, em_px));
-    drop(css);
+    let (chapters, fixed) = super::scan_chapters(entries, media, |e, css| fix(e, media, css, em_px));
     for (i, f) in chapters.into_iter().zip(fixed) {
         if let Some((data, n)) = f {
             entries[i].data = data;

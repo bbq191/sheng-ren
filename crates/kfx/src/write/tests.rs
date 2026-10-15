@@ -637,7 +637,7 @@ fn font_size_attribute_saturates() {
     for (size, want) in [("+2147483647", "3rem"), ("-2147483647", "0.625rem"), ("+1", "1.125rem"), ("7", "3rem")] {
         let html = Html::parse_fragment(&format!(r#"<font size="{size}">x</font>"#));
         let el = html.select(&scraper::Selector::parse("font").unwrap()).next().unwrap();
-        let mut decls = HashMap::new();
+        let mut decls = crate::css::Decls::default();
         crate::css::presentational_hints(&el, &mut decls);
         assert_eq!(decls.get("font-size").map(String::as_str), Some(want), "{size}");
     }

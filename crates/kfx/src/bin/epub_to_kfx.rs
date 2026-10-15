@@ -38,14 +38,14 @@ fn main() {
     if styles {
         let [input] = args.as_slice() else { die(cli::USAGE, USAGE) };
         // 盒子长度的 px 是屏幕像素的阅读器（掌阅、Move）：按这台的 1em 像素折，同阅读器排出来的（unify.py 比竖直间距用）
-        if !p.px_margins {
+        if !p.css.px_margins {
             kfx::css::set_device_px_em(p.em_px);
         }
         // 行距按这台排的算：Move 的 `<p>` 不认外链行距，掌阅只认长度（正文是阅读器的行距，别的块按它换算）
         kfx::css::set_device_line(kfx::css::DeviceLine {
-            except_p: p.line_height_except_p,
-            length_em: (!p.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
-            em_root: p.em_root,
+            except_p: p.css.line_height_except_p,
+            length_em: (!p.css.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
+            em_root: p.css.em_root,
         });
         let s = kfx::epub_text_styles(cli::open_or_die(input), &opts).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
         print!("{s}");

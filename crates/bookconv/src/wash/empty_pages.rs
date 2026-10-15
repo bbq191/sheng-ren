@@ -20,8 +20,21 @@ pub(super) fn remove_empty_pages(entries: &mut Vec<Entry>, rep: &mut WashReport)
 /// （[`html::MEDIA_ELEMENTS`]），以及带背景色、背景图的元素（写出器写成容器，Kindle 照画）；拿不准（解析不了）的不删。
 pub(super) fn remove_kindle_empty_pages(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&crate::cascade::MediaEnv>) {
     let css = crate::kindle_model::book_css(entries, media);
+    // 捷径（2026-10-15）：判空页原来每章都要完整层叠（层叠占 `Chapter::parse` 七成），可空页极少。元素只会因为一条 `display:none`
+    // 声明被藏起来（[`crate::cascade::Computed`] 的 `display` 只从声明来）：全书样式表里没有这样的声明、这一章原文里连 `display`
+    // 都没出现（`<style>`、行内 `style` 也就写不了）时，没有元素是隐藏的，DOM 的正文里只要有不是空白的文字就一定不是空页——
+    // 和下面完整判断的结论一样，只是不用层叠。DOM 照样用 html5ever 解析（和 `Chapter::parse` 同一棵树），没找到字的照旧完整判断。
+    let book_may_hide = css.values().any(|r| r.any_decl(|d| d.prop == "display" && d.value.trim().eq_ignore_ascii_case("none")));
     let blank = |e: &Entry| {
         let Ok(text) = std::str::from_utf8(&e.data) else { return false };
+        if !book_may_hide && !text.as_bytes().windows(7).any(|w| w.eq_ignore_ascii_case(b"display")) {
+            let html = scraper::Html::parse_document(text);
+            let body = html.root_element().children().filter_map(scraper::ElementRef::wrap).find(|el| el.value().name() == "body");
+            let has_text = |b: scraper::ElementRef| b.descendants().any(|d| matches!(d.value(), scraper::Node::Text(t) if t.chars().any(|c| !c.is_whitespace())));
+            if body.is_some_and(has_text) {
+                return false;
+            }
+        }
         let Some(ch) = crate::kindle_model::Chapter::parse(&e.name, text, media, &css) else { return false };
         let painted = |c: &crate::cascade::Computed| c.bg_image.is_some() || c.background.is_some_and(|b| b >> 24 != 0);
         if painted(&ch.body_comp) {

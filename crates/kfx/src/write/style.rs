@@ -367,22 +367,7 @@ impl Builder {
         // 自己或祖先（含 body，body 的左右边距本身不写）有左右边距、内边距、边框时写百分比（《人生海海》body `margin:0 5pt`、
         // 《揭露人性》`p.kindle-cn-ref{margin:0 1em 0 2em}` 里的 2em 都写 6.25%；没有的照写 em）
         let narrowed = avail < PAGE_WIDTH_EM - 1e-6 || c.in_hbox;
-        // 百分比：在整页宽的块里按页宽折成 em（Send to Kindle：`text-indent:10%` 写 3.2em，2026-10-14 怪癖测试书 Q15），缩窄的照写百分比
-        let indent_rem = match c.text_indent {
-            Some(Len::Percent(n)) if !narrowed => Some(n / 100.0 * PAGE_WIDTH_EM),
-            Some(Len::Percent(n)) => {
-                p.len(P_TEXT_INDENT, n, U_PERCENT);
-                None
-            }
-            l => l.and_then(|l| rem_len(l, fs)),
-        };
-        if let Some(r) = indent_rem {
-            if narrowed {
-                p.len(P_TEXT_INDENT, r / avail * 100.0, U_PERCENT);
-            } else {
-                p.len(P_TEXT_INDENT, r / fs, U_EM);
-            }
-        }
+        text_indent_props(&mut p, c, fs, avail, narrowed);
         // 行高按全书正文的行高归一（Send to Kindle 的做法，2026-10-08 对照《绍宋》：正文 `line-height:1.5em` 写成 1.0，
         // 行高 1em 的标题写成 0.667，没写行高的容器 0.8）：正文用的就是阅读器的行距设置，别的按比例。以前一律除以 1.2，
         // 正文行距比 Send to Kindle 的大 25%。
@@ -432,57 +417,7 @@ impl Builder {
             p.color(P_BACKGROUND, bg);
         }
         p.extend(border_props(c));
-        // 图片的宽度：百分比（写出器 9：优化器给带图注的竖长图写的 `width:P%`、书里样式表的 `width:40%`），写出器 19 起 em、pt
-        // 也照写（换算成 em，另加最大宽度 100%，同有宽度的块）——不写的话 Kindle 按原图像素显示，和掌阅、Move 不一样：
-        // 《飘》图标注释号 `width:0.65em` 的 70×95 小图在 Kindle 上比字大好几倍，《绍宋》`width:7.5pt` 的图标同样
-        // （2026-10-12 `tools/kfx/unify.py` 比图片查出来）
-        // 表格：最大宽度 100%、缺省边框色灰（Send to Kindle 每张表都这样写，2026-10-14 怪癖测试书；书里写了边框的照边框）
-        if b.ty == Some(NODE_TABLE) {
-            if c.width.is_none() {
-                p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
-            }
-            if c.border.iter().all(Option::is_none) {
-                p.color(P_BORDER_COLOR[0], TABLE_BORDER_GRAY);
-            }
-        }
-        let image_width = matches!(b.kind, Kind::Image { .. }) && c.width.is_some();
-        if matches!(b.ty, Some(NODE_TABLE | NODE_HR)) || image_width {
-            if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
-                p.set(P_WIDTH, v);
-                if image_width && !matches!(c.width, Some(Len::Percent(_))) {
-                    p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
-                }
-                // 写了宽度的图片：`$546: $377`，居中、居右写块的对齐 `$580`，不写文字对齐（Send to Kindle 同样：《飘》二维码
-                // `<div class="image"><img width="50%"/>` 写 `$580: $320`；以前写 `$34`，Kindle 上图靠左，2026-10-12 截图）
-                if image_width {
-                    p.symbol(P_SIZING, SIZING_VALUE);
-                    match c.text_align.as_deref() {
-                        Some("center") => p.symbol(P_BOX_ALIGN, ALIGN_CENTER),
-                        Some("right" | "end") => p.symbol(P_BOX_ALIGN, ALIGN_RIGHT),
-                        _ => {}
-                    }
-                }
-            }
-        } else if b.ty.is_none() && !matches!(b.kind, Kind::Image { .. }) {
-            // 有宽度的块（Send to Kindle 同样：宽度照写、带 `$546: $377`，em 宽度另加最大宽度 100%，左右外边距 auto 的按它对齐：
-            // 《阿加莎》`h2{width:3em;margin:2.5em auto 1.8em -2em}` 靠左的小色块、《金庸》60% 宽的图注框）
-            if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
-                p.set(P_WIDTH, v);
-                p.symbol(P_SIZING, SIZING_VALUE);
-                if !matches!(c.width, Some(Len::Percent(_))) {
-                    p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
-                }
-                let align = match (c.margin_auto[3], c.margin_auto[1]) {
-                    (true, true) => Some(ALIGN_CENTER),
-                    (false, true) => Some(ALIGN_LEFT),
-                    (true, false) => Some(ALIGN_RIGHT),
-                    _ => None,
-                };
-                if let Some(a) = align {
-                    p.symbol(P_BOX_ALIGN, a);
-                }
-            }
-        }
+        width_props(&mut p, b, c, fs);
         for (s, k) in [(c.box_shadow, P_BOX_SHADOW), (c.text_shadow, P_TEXT_SHADOW)] {
             if let Some(s) = s {
                 p.set(k, shadow_value(&s, c.color));
@@ -492,3 +427,79 @@ impl Builder {
         p
     }
 }
+
+/// 首行缩进（[`StyleProps::block_props`]）：整页宽的块照写 em（百分比按页宽折成 em），比整页窄的写成包含块宽度的百分比。
+fn text_indent_props(p: &mut StyleProps, c: &Computed, fs: f64, avail: f64, narrowed: bool) {
+    // 百分比：在整页宽的块里按页宽折成 em（Send to Kindle：`text-indent:10%` 写 3.2em，2026-10-14 怪癖测试书 Q15），缩窄的照写百分比
+    let indent_rem = match c.text_indent {
+        Some(Len::Percent(n)) if !narrowed => Some(n / 100.0 * PAGE_WIDTH_EM),
+        Some(Len::Percent(n)) => {
+            p.len(P_TEXT_INDENT, n, U_PERCENT);
+            None
+        }
+        l => l.and_then(|l| rem_len(l, fs)),
+    };
+    if let Some(r) = indent_rem {
+        if narrowed {
+            p.len(P_TEXT_INDENT, r / avail * 100.0, U_PERCENT);
+        } else {
+            p.len(P_TEXT_INDENT, r / fs, U_EM);
+        }
+    }
+}
+
+/// 宽度（[`StyleProps::block_props`]）：表格、横线、写了宽度的图片和块。
+fn width_props(p: &mut StyleProps, b: &Block, c: &Computed, fs: f64) {
+    // 图片的宽度：百分比（写出器 9：优化器给带图注的竖长图写的 `width:P%`、书里样式表的 `width:40%`），写出器 19 起 em、pt
+    // 也照写（换算成 em，另加最大宽度 100%，同有宽度的块）——不写的话 Kindle 按原图像素显示，和掌阅、Move 不一样：
+    // 《飘》图标注释号 `width:0.65em` 的 70×95 小图在 Kindle 上比字大好几倍，《绍宋》`width:7.5pt` 的图标同样
+    // （2026-10-12 `tools/kfx/unify.py` 比图片查出来）
+    // 表格：最大宽度 100%、缺省边框色灰（Send to Kindle 每张表都这样写，2026-10-14 怪癖测试书；书里写了边框的照边框）
+    if b.ty == Some(NODE_TABLE) {
+        if c.width.is_none() {
+            p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
+        }
+        if c.border.iter().all(Option::is_none) {
+            p.color(P_BORDER_COLOR[0], TABLE_BORDER_GRAY);
+        }
+    }
+    let image_width = matches!(b.kind, Kind::Image { .. }) && c.width.is_some();
+    if matches!(b.ty, Some(NODE_TABLE | NODE_HR)) || image_width {
+        if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
+            p.set(P_WIDTH, v);
+            if image_width && !matches!(c.width, Some(Len::Percent(_))) {
+                p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
+            }
+            // 写了宽度的图片：`$546: $377`，居中、居右写块的对齐 `$580`，不写文字对齐（Send to Kindle 同样：《飘》二维码
+            // `<div class="image"><img width="50%"/>` 写 `$580: $320`；以前写 `$34`，Kindle 上图靠左，2026-10-12 截图）
+            if image_width {
+                p.symbol(P_SIZING, SIZING_VALUE);
+                match c.text_align.as_deref() {
+                    Some("center") => p.symbol(P_BOX_ALIGN, ALIGN_CENTER),
+                    Some("right" | "end") => p.symbol(P_BOX_ALIGN, ALIGN_RIGHT),
+                    _ => {}
+                }
+            }
+        }
+    } else if b.ty.is_none() && !matches!(b.kind, Kind::Image { .. }) {
+        // 有宽度的块（Send to Kindle 同样：宽度照写、带 `$546: $377`，em 宽度另加最大宽度 100%，左右外边距 auto 的按它对齐：
+        // 《阿加莎》`h2{width:3em;margin:2.5em auto 1.8em -2em}` 靠左的小色块、《金庸》60% 宽的图注框）
+        if let Some(v) = c.width.and_then(|w| width_value(w, fs)) {
+            p.set(P_WIDTH, v);
+            p.symbol(P_SIZING, SIZING_VALUE);
+            if !matches!(c.width, Some(Len::Percent(_))) {
+                p.len(P_MAX_WIDTH, 100.0, U_PERCENT);
+            }
+            let align = match (c.margin_auto[3], c.margin_auto[1]) {
+                (true, true) => Some(ALIGN_CENTER),
+                (false, true) => Some(ALIGN_LEFT),
+                (true, false) => Some(ALIGN_RIGHT),
+                _ => None,
+            };
+            if let Some(a) = align {
+                p.symbol(P_BOX_ALIGN, a);
+            }
+        }
+    }
+}
+

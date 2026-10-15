@@ -1150,10 +1150,10 @@
         assert_eq!(std::fs::read(&output).unwrap(), optimize_epub_with(&epub, &opts).unwrap().0);
     }
 
-    /// `limits`：缺省值和以前的常量一样（产物不变）；调小解码上限后超过的图原样保留（不删图），并行额度给 0 也不卡死。
+    /// `limits`：缺省值钉住（并行额度 2026-10-15 从 3600 万调成 7200 万，只影响速度，产物不变）；调小解码上限后超过的图原样保留（不删图），并行额度给 0 也不卡死。
     #[test]
     fn limits_default_matches_constants_and_smaller_limit_keeps_images() {
-        assert_eq!(Limits::default(), Limits { max_decode_pixels: 64_000_000, pool_pixel_budget: 36_000_000 });
+        assert_eq!(Limits::default(), Limits { max_decode_pixels: 64_000_000, pool_pixel_budget: 72_000_000 });
         let (epub, imgs) = bg_book();
         let base = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
         assert_eq!(base.limits, Limits::default());
@@ -1392,6 +1392,6 @@ fn repair_only_keeps_media_env() {
         assert_eq!(opts.repair_only().wash.and_then(|w| w.media), media, "{id}");
         // `kindle_rules` 要的阅读器怪癖也带过去（掌阅不认 rgba()、Move 不认背景图 no-repeat）
         let w = opts.repair_only().wash.unwrap();
-        assert_eq!((w.css_rgba, w.background_no_repeat), (p.css_rgba, p.background_no_repeat), "{id}");
+        assert_eq!((w.css_rgba, w.background_no_repeat), (p.css.css_rgba, p.css.background_no_repeat), "{id}");
     }
 }

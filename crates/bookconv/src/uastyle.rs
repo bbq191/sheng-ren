@@ -5,17 +5,8 @@
 //! 两处共用这一张表：KFX 写出器按它给标签缺省值（`kfx::css`），只修复的文字书按它写一份 `eink-ua.css` 挂在书自带样式之前
 //! （profile `kindle_rules`，掌阅、Move；[`ua_css`]），书里写了的照样盖过它——三台按同一套缺省排（2026-10-08 用户定：照 Send to Kindle 统一）。
 
-/// 标题：(标签, 字号倍数, 上下外边距 em)。都是粗体。
-pub const HEADINGS: [(&str, f64, f64); 6] = [("h1", 2.0, 0.67), ("h2", 1.5, 0.83), ("h3", 1.17, 1.0), ("h4", 1.0, 1.33), ("h5", 0.83, 1.67), ("h6", 0.67, 2.33)];
-
-/// 上下外边距 1em 的块。
-pub const BLOCK_MARGIN_TAGS: [&str; 3] = ["p", "dl", "pre"];
-
-/// 上下 1em、左右 40px 的块。
-pub const INDENTED_BLOCK_TAGS: [&str; 2] = ["blockquote", "figure"];
-
-/// UA 样式表左右缩进的 px 数（`blockquote`、`figure`）。
-pub const INDENT_PX: u32 = 40;
+// 标签缺省值的表在 `csscascade::ua`（层叠引擎要用，2026-10-15 挪过去），这里照旧能用
+pub use csscascade::ua::{BLOCK_MARGIN_TAGS, HEADINGS, INDENTED_BLOCK_TAGS, INDENT_PX};
 
 /// 样式表的文件名（放 OPF 同目录）。
 pub const UA_CSS_NAME: &str = "eink-ua.css";

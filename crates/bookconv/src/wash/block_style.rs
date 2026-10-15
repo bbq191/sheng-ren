@@ -47,11 +47,8 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
     if !reader.line_height_except_p && reader.line_em.is_none() && heads.is_none() && !reader.heading_center {
         return;
     }
-    let css = km::book_css(entries, media);
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let guard = DivGuard::of(entries);
-    let docs: Vec<Doc> = crate::util::par_map(&chapters, |&i| scan(&entries[i], media, &css, heads, &guard, reader.heading_center));
-    drop(css);
+    let (chapters, docs) = super::scan_chapters(entries, media, |e, css| scan(e, media, css, heads, &guard, reader.heading_center));
     let base = {
         let mut count: HashMap<i64, usize> = HashMap::new();
         for it in docs.iter().flat_map(|d| &d.items) {
@@ -64,6 +61,9 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
     if let Some(d) = reader.line_em {
         rep.kindle_rule_edits += scale_line_heights(entries, base, d, &body_only_classes(entries));
     }
+    // 先按章定好要改什么（快，串行），再各章并行改写：各章互不相干，只有改动计数要加总（和顺序无关），产物和逐章串行做一样。
+    // 以前整段串行，《古龙作品全集》1506 章光写回就占这一步的六成（2026-10-15）。
+    let mut jobs: HashMap<usize, Job> = HashMap::new();
     for (&i, doc) in chapters.iter().zip(&docs) {
         // 第几个开始标签 → 要接的声明（先行距、后字号）
         let mut decls: BTreeMap<usize, Vec<String>> = BTreeMap::new();
@@ -92,36 +92,51 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
         for (n, d) in &doc.aligns {
             decls.entry(*n).or_default().push(d.clone());
         }
-        if decls.is_empty() {
-            continue;
+        if !decls.is_empty() {
+            jobs.insert(i, Job { decls, kindle_fs, divs });
         }
-        let e = &mut entries[i];
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let Some((bs, be)) = html::body_range(text) else { continue };
-        let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
-        let mut edits = Vec::new();
-        for (n, ds) in decls {
-            let Some(t) = starts.get(n) else { continue };
-            let mut tag = text[t.start..t.end].to_string();
-            for d in &ds {
-                let style = match html::attr_value(&tag, "style") {
-                    Some(s) if !s.trim().is_empty() => format!("{};{d};", html::style_base(s)),
-                    _ => format!("{d};"),
-                };
-                tag = html::set_attr(&tag, "style", &style);
-            }
-            if let Some(fs) = kindle_fs.get(&n) {
-                tag = html::set_attr(&tag, km::KINDLE_FS_ATTR, &fmt(*fs));
-            }
-            if divs.contains(&n) {
-                tag = html::set_attr(&tag, km::DIV_ATTR, "1");
-                rep.kindle_rule_edits += 1;
-            }
-            rep.kindle_rule_edits += ds.len();
-            edits.push((t.start, t.end, tag));
-        }
-        e.data = html::apply_edits(text, edits).into_bytes();
     }
+    let mut work: Vec<(&mut Entry, Job)> = entries.iter_mut().enumerate().filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j))).collect();
+    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, job)| rewrite_tags(e, job)).into_iter().sum::<usize>();
+}
+
+/// 一章要接的声明（[`apply`]）：第几个开始标签 → 声明；标题在 Kindle 上的字号；要改成 `div` 的标题。
+struct Job {
+    decls: BTreeMap<usize, Vec<String>>,
+    kindle_fs: HashMap<usize, f64>,
+    divs: HashSet<usize>,
+}
+
+/// 照 `job` 改写一章的开始标签，返回改动数。
+fn rewrite_tags(e: &mut Entry, job: &Job) -> usize {
+    let Job { decls, kindle_fs, divs } = job;
+    let mut edited = 0;
+    let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+    let Some((bs, be)) = html::body_range(text) else { return 0 };
+    let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
+    let mut edits = Vec::new();
+    for (&n, ds) in decls {
+        let Some(t) = starts.get(n) else { continue };
+        let mut tag = text[t.start..t.end].to_string();
+        for d in ds {
+            let style = match html::attr_value(&tag, "style") {
+                Some(s) if !s.trim().is_empty() => format!("{};{d};", html::style_base(s)),
+                _ => format!("{d};"),
+            };
+            tag = html::set_attr(&tag, "style", &style);
+        }
+        if let Some(fs) = kindle_fs.get(&n) {
+            tag = html::set_attr(&tag, km::KINDLE_FS_ATTR, &fmt(*fs));
+        }
+        if divs.contains(&n) {
+            tag = html::set_attr(&tag, km::DIV_ATTR, "1");
+            edited += 1;
+        }
+        edited += ds.len();
+        edits.push((t.start, t.end, tag));
+    }
+    e.data = html::apply_edits(text, edits).into_bytes();
+    edited
 }
 
 fn fmt(v: f64) -> String {
@@ -347,14 +362,21 @@ fn scale_line_heights(entries: &mut [Entry], base: f64, d: f64, body_classes: &H
 
 /// 只用在 `<body>` 上的类（别的元素也用的不算）。
 fn body_only_classes(entries: &[Entry]) -> HashSet<String> {
-    let (mut body, mut other) = (HashSet::new(), HashSet::new());
-    for e in entries.iter().filter(|e| is_chapter_entry(e)) {
-        let Ok(t) = std::str::from_utf8(&e.data) else { continue };
+    // 各章并行扫（结果是集合，合并和顺序无关）
+    let per_file = crate::util::par_map(entries, |e| {
+        let (mut body, mut other) = (HashSet::new(), HashSet::new());
+        let Some(t) = is_chapter_entry(e).then(|| std::str::from_utf8(&e.data).ok()).flatten() else { return (body, other) };
         for g in html::tags(t).filter(|g| g.is_start()) {
             let Some(c) = html::attr_value(&t[g.start..g.end], "class") else { continue };
             let set = if g.is("body") { &mut body } else { &mut other };
             set.extend(c.split_whitespace().map(str::to_string));
         }
+        (body, other)
+    });
+    let (mut body, mut other) = (HashSet::new(), HashSet::new());
+    for (b, o) in per_file {
+        body.extend(b);
+        other.extend(o);
     }
     body.retain(|c| !other.contains(c));
     body
@@ -401,16 +423,28 @@ pub(super) struct DivGuard {
 }
 
 impl DivGuard {
+    /// 全书的样式表和各章的 `<style>`：逐条目并行算（[`DivGuard::of_entry`]），再合起来（都是集合、一个「有没有」，和顺序无关）。
     pub(super) fn of(entries: &[Entry]) -> DivGuard {
         let mut g = DivGuard::default();
-        for e in entries {
-            let text = String::from_utf8_lossy(&e.data);
+        for one in crate::util::par_map(entries, DivGuard::of_entry) {
+            g.bare |= one.bare;
+            g.classes.extend(one.classes);
+            g.levels.extend(one.levels);
+        }
+        g
+    }
+
+    /// 一个条目（样式表，或章节里的 `<style>`）里的规则；别的条目是空的。先看是不是样式表、章节再解码（图片不白解码一遍）。
+    fn of_entry(e: &Entry) -> DivGuard {
+        let mut g = DivGuard::default();
+        {
             let sheets: Vec<String> = if is_css_name(&e.name) {
-                vec![text.into_owned()]
+                vec![String::from_utf8_lossy(&e.data).into_owned()]
             } else if is_chapter_entry(e) {
+                let text = String::from_utf8_lossy(&e.data);
                 html::style_blocks(&text).into_iter().map(|b| text[b.content_start..b.content_end].to_string()).collect()
             } else {
-                continue;
+                return g;
             };
             for css in &sheets {
                 for r in crate::cascade::rule_spans(css) {

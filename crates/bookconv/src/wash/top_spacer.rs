@@ -56,9 +56,7 @@ pub struct SpacerGeometry {
 /// `reader` 是阅读器模型：垫图后面阅读器自己加的空、行内垫图的基数（`page_top`，没有就不垫）、第一块在这台上的字号。
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, g: SpacerGeometry, reader: &ReaderModel) {
     let Some(t) = reader.page_top else { return };
-    let css = km::book_css(entries, media);
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    let pads: Vec<Option<Pad>> = crate::util::par_map(&chapters, |&i| page_box(&entries[i], media, &css, g, reader).and_then(|b| choose(&b, g, t)));
+    let (chapters, pads) = super::scan_chapters(entries, media, |e, css| page_box(e, media, css, g, reader).and_then(|b| choose(&b, g, t)));
     if pads.iter().all(Option::is_none) {
         return;
     }
@@ -66,41 +64,19 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     let dir = opf_idx.map(|i| dir_of(&entries[i].name).to_string()).unwrap_or_default();
     let at = |n: &str| if dir.is_empty() { n.to_string() } else { format!("{dir}/{n}") };
     let (css_path, img_path, strut_path) = (at(CSS_NAME), at(IMG_NAME), at(STRUT_NAME));
+    // 各章互不相干（类名由高算出来，同名的规则一样；样式表按类名排序），并行改写再合起来，产物和逐章串行做一样（2026-10-15 改）
+    let pad_of: HashMap<usize, Pad> = chapters.iter().zip(&pads).filter_map(|(&i, p)| p.map(|p| (i, p))).collect();
+    let mut work: Vec<(&mut Entry, Pad)> = entries.iter_mut().enumerate().filter_map(|(i, e)| pad_of.get(&i).map(|&p| (e, p))).collect();
+    let done = crate::util::par_map_mut(&mut work, |(e, pad)| pad_chapter(e, *pad, g, &css_path, &img_path, &strut_path));
     let mut rules: BTreeMap<String, String> = BTreeMap::new();
     let mut used = (false, false);
-    for (&i, pad) in chapters.iter().zip(&pads) {
-        let Some(pad) = *pad else { continue };
-        let e = &mut entries[i];
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let Some((bs, be)) = html::body_range(text) else { continue };
-        let Some(body) = html::tags(text).find(|t| t.is_start() && t.is("body")) else { continue };
-        let out = match pad {
-            Pad::Block(h) => {
-                // 宽度百分比：高 = 内容区宽 × 百分比 × 高宽比
-                let pct = h / (f64::from(g.area.0) * f64::from(IMG_H) / f64::from(IMG_W)) * 100.0;
-                let pct = super::kindle_rules::fmt_num((pct * 100.0).round() / 100.0);
-                let class = format!("eink-sp-{}", pct.replace('.', "_"));
-                rules.entry(class.clone()).or_insert_with(|| format!("html body img.{class}{{width:{pct}%;height:auto;}}"));
-                used.0 = true;
-                let src = crate::epubzip::href_to(dir_of(&e.name), &img_path, "");
-                // 图也带 `eink-sp`：别的 pass 认它不是书里的内容（`box_fix` 页首判断、`break_margin` 估高）
-                format!(r#"{}<div class="eink-sp"><img class="eink-sp {class}" src="{src}" alt=""/></div>{}"#, &text[..body.end], &text[body.end..])
-            }
-            Pad::Strut(h, n) => {
-                let Some(t) = html::tags_in(text, bs, be).filter(|t| t.is_start()).nth(n) else { continue };
-                // 宽度百分比写到万分之一（图宽不到一像素，四舍五入差的高也不到一像素）
-                let pct = h / (f64::from(g.area.0) * f64::from(STRUT_H) / f64::from(STRUT_W)) * 100.0;
-                let pct = format!("{:.5}", (pct * 1e5).round() / 1e5);
-                let pct = pct.trim_end_matches('0').trim_end_matches('.').to_string();
-                let class = format!("eink-st-{}", pct.replace('.', "_"));
-                rules.entry(class.clone()).or_insert_with(|| format!("html body img.{class}{{width:{pct}%;height:auto;}}"));
-                used.1 = true;
-                let src = crate::epubzip::href_to(dir_of(&e.name), &strut_path, "");
-                format!(r#"{}<img class="eink-sp {class}" src="{src}" alt=""/>{}"#, &text[..t.end], &text[t.end..])
-            }
-        };
-        let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
-        e.data = typeset::inject_css_link(&out, &href).into_bytes();
+    for (class, rule, block) in done.into_iter().flatten() {
+        rules.entry(class).or_insert(rule);
+        if block {
+            used.0 = true;
+        } else {
+            used.1 = true;
+        }
         rep.kindle_rule_edits += 1;
     }
     let mut sheet = String::from("/* 页首的上边距垫成空白图（sheng-ren kindle_rules，见 wash/top_spacer.rs） */\n");
@@ -108,7 +84,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         sheet.push_str(r);
         sheet.push('\n');
     }
-    add_css_entry(entries, opf_idx, &css_path, &sheet, "eink-spacer-css");
+    add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-spacer-css");
     for (on, path, id, w, h) in [(used.0, &img_path, "eink-spacer-png", IMG_W, IMG_H), (used.1, &strut_path, "eink-strut-png", STRUT_W, STRUT_H)] {
         if !on || entries.iter().any(|e| e.name == *path) {
             continue;
@@ -122,6 +98,40 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             }
         }
     }
+}
+
+/// 给一章垫图（[`apply`]）：改好的章写回 `e`，返回 (类名, 它的规则, 是不是整块的垫图)；不是 UTF-8、找不到 `<body>` 或那个块的不动。
+fn pad_chapter(e: &mut Entry, pad: Pad, g: SpacerGeometry, css_path: &str, img_path: &str, strut_path: &str) -> Option<(String, String, bool)> {
+    let text = std::str::from_utf8(&e.data).ok()?;
+    let (bs, be) = html::body_range(text)?;
+    let body = html::tags(text).find(|t| t.is_start() && t.is("body"))?;
+    let (out, class, pct, block) = match pad {
+        Pad::Block(h) => {
+            // 宽度百分比：高 = 内容区宽 × 百分比 × 高宽比
+            let pct = h / (f64::from(g.area.0) * f64::from(IMG_H) / f64::from(IMG_W)) * 100.0;
+            let pct = super::kindle_rules::fmt_num((pct * 100.0).round() / 100.0);
+            let class = format!("eink-sp-{}", pct.replace('.', "_"));
+            let src = crate::epubzip::href_to(dir_of(&e.name), img_path, "");
+            // 图也带 `eink-sp`：别的 pass 认它不是书里的内容（`box_fix` 页首判断、`break_margin` 估高）
+            let out = format!(r#"{}<div class="eink-sp"><img class="eink-sp {class}" src="{src}" alt=""/></div>{}"#, &text[..body.end], &text[body.end..]);
+            (out, class, pct, true)
+        }
+        Pad::Strut(h, n) => {
+            let t = html::tags_in(text, bs, be).filter(|t| t.is_start()).nth(n)?;
+            // 宽度百分比写到万分之一（图宽不到一像素，四舍五入差的高也不到一像素）
+            let pct = h / (f64::from(g.area.0) * f64::from(STRUT_H) / f64::from(STRUT_W)) * 100.0;
+            let pct = format!("{:.5}", (pct * 1e5).round() / 1e5);
+            let pct = pct.trim_end_matches('0').trim_end_matches('.').to_string();
+            let class = format!("eink-st-{}", pct.replace('.', "_"));
+            let src = crate::epubzip::href_to(dir_of(&e.name), strut_path, "");
+            let out = format!(r#"{}<img class="eink-sp {class}" src="{src}" alt=""/>{}"#, &text[..t.end], &text[t.end..]);
+            (out, class, pct, false)
+        }
+    };
+    let href = crate::epubzip::href_to(dir_of(&e.name), css_path, "");
+    e.data = typeset::inject_css_link(&out, &href).into_bytes();
+    let rule = format!("html body img.{class}{{width:{pct}%;height:auto;}}");
+    Some((class, rule, block))
 }
 
 /// 一章怎么垫（不垫的 `None`）：Kindle 上不到内容区高 5% 的不垫；`<body>` 开头垫一块够 5% 的照旧这样垫（《飘》真机对过）；
@@ -180,10 +190,9 @@ pub(crate) struct PageBox {
 
 /// 全书各章的 [`PageBox`]（条目下标 → 排法；拿不准的章没有）。给背景图定位用，只看 body 的底，行内垫图的字号用不到（按照 CSS 排算）。
 pub(crate) fn page_boxes(entries: &[Entry], media: Option<&MediaEnv>, g: SpacerGeometry) -> HashMap<usize, PageBox> {
-    let css = km::book_css(entries, media);
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
     let reader = ReaderModel::default();
-    chapters.iter().zip(crate::util::par_map(&chapters, |&i| page_box(&entries[i], media, &css, g, &reader))).filter_map(|(&i, b)| b.map(|b| (i, b))).collect()
+    let (chapters, boxes) = super::scan_chapters(entries, media, |e, css| page_box(e, media, css, g, &reader));
+    chapters.into_iter().zip(boxes).filter_map(|(i, b)| b.map(|b| (i, b))).collect()
 }
 
 /// KFX 写出器不出节点的空元素：里面没有字（连 `&nbsp;`、全角空格都没有）、没有 `<br/>` 和图，自己和里面的元素都没有边框、内边距、

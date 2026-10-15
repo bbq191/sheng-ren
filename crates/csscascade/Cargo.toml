@@ -1,0 +1,13 @@
+[package]
+name = "csscascade"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CSS 层叠引擎：按 EPUB 章节的样式表、行内样式、标签缺省值算每个元素的计算值；@media 求值。KFX 写出器和优化器共用"
+
+[dependencies]
+bookbase = { path = "../bookbase" }
+profile = { path = "../profile" }
+# deterministic：属性按原文顺序遍历
+scraper = { version = "0.18", features = ["deterministic"] }
+ego-tree = "0.6"

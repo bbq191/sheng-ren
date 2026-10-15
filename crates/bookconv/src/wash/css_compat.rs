@@ -14,7 +14,6 @@
 //! `!important` 胜出的值在行内），不受影响。
 use super::*;
 use crate::cascade::{MediaEnv, Sheet};
-use crate::kindle_model as km;
 use crate::util::xml_escape;
 use scraper::{ElementRef, Html};
 
@@ -24,10 +23,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
     }
     // 先按改之前的样式表算 Kindle 上的层叠，接好行内的值，再改样式表
     if !important && entries.iter().any(|e| (is_css_name(&e.name) || is_chapter_entry(e)) && has_important(&String::from_utf8_lossy(&e.data))) {
-        let css = km::book_css(entries, media);
-        let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-        let fixed: Vec<Option<(Vec<u8>, usize)>> = crate::util::par_map(&chapters, |&i| pin_important(&entries[i], media, &css));
-        drop(css);
+        let (chapters, fixed) = super::scan_chapters(entries, media, |e, css| pin_important(e, media, css));
         for (i, f) in chapters.into_iter().zip(fixed) {
             if let Some((data, n)) = f {
                 entries[i].data = data;

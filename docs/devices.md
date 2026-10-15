@@ -188,10 +188,11 @@
 - **自定义模式**：放在书库的 `profiles/<id>.toml`，同 id 覆盖内置的；`booklib devices` 会列出来。id 不能以 `.` 开头、不能含逗号或斜杠（`--device=` 用逗号分隔，id 还要当目录名）；`profiles/` 里的隐藏文件跳过。
 
 ```toml
-# crates/profile/profiles/ireader.toml（去掉了注释）
+# crates/profile/profiles/ireader.toml（去掉了注释；每个字段的含义和来由看文件里的注释）
 name = "掌阅自带阅读器（iReader Ocean 5 Pro）"
 color = false
 formats = ["epub"]
+background_auto_height = false
 notes = "popup"
 background_images = true
 background_sizing = false
@@ -201,7 +202,18 @@ caption_fit = true
 text_repair_only = true
 kindle_rules = true
 comic_margin = 1
-comic_page_direction = "ltr"
+
+image_sizing = "device-px"
+em_px = 37.5
+px_margins = false
+rem = false
+important = false
+line_height_numbers = false
+line_px = 58
+cell_middle = false
+inline_valign = false
+heading_center = true
+float = true
 
 [screen]
 width = 1264

@@ -700,14 +700,9 @@ pub(crate) fn is_toc_like_page(html: &str) -> bool {
     looks_like_toc_page(html, lo, hi, &parse_spans(html, lo, hi))
 }
 
-/// 清洗层入口：定章节、给要进目录的标题补 id、目录改指、把漏掉的节补进目录。不拆文件。
-/// `toc_heading`：要新建 nav 时的目录标题（按书的语言）。漫画不做：调用方（`wash_entries`）已判过。
-pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &mut WashReport) {
-    let Some(opf) = parse_opf(entries) else { return };
-    // 1. 收集 spine 各文件的标题（目录页、导航文件不算）。
-    let index = name_index(entries);
-    // 各文件独立，多线程扫（`util::par_map`，按 spine 顺序收回）
-    let mut files: Vec<FileInfo> = crate::util::par_map(&opf.spine, |path| {
+/// spine 里各文件的标题（目录页、导航文件不算）。各文件独立，多线程扫（`util::par_map`，按 spine 顺序收回）。
+fn scan_spine_files(entries: &[Entry], opf: &Opf, index: &HashMap<&str, usize>) -> Vec<FileInfo> {
+    crate::util::par_map(&opf.spine, |path| {
         if Some(path) == opf.nav_doc.as_ref() || is_toc_file(path) {
             return None;
         }
@@ -723,30 +718,60 @@ pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &
     })
     .into_iter()
     .flatten()
-    .collect();
-    // 书里自带的目录页（链接文字占大半的页）列出的标题：文件 → 链接文字（去空白）。NCX 只列了卷、章写成单独文件的书
-    // （《三体全集》NCX 只有三卷，章名是 `<h2 class="sigil_not_in_toc">`、每章一个文件，书里的目录页逐章链接），这些章也补进目录
-    let listed: HashMap<String, HashSet<String>> = {
-        let mut m: HashMap<String, HashSet<String>> = HashMap::new();
-        for path in &opf.spine {
-            let Some(&idx) = index.get(path.as_str()) else { continue };
-            let Ok(html) = std::str::from_utf8(&entries[idx].data) else { continue };
-            let Some((lo, hi)) = html::body_range(html) else { continue };
-            let spans = parse_spans(html, lo, hi);
-            if !looks_like_toc_page(html, lo, hi, &spans) {
-                continue;
-            }
-            for sp in spans.iter().filter(|s| s.name == "a" && s.closed()) {
-                let Some(href) = html::attr(&html[sp.open_start..sp.open_end], "href") else { continue };
-                let (target, _) = crate::epubzip::resolve_link(path, href.value);
-                let text: String = plain_text(&html[sp.open_end..sp.close_start]).chars().filter(|c| !c.is_whitespace()).collect();
-                if !text.is_empty() {
-                    m.entry(target).or_default().insert(text);
-                }
+    .collect()
+}
+
+/// 书里自带的目录页（链接文字占大半的页）列出的标题：文件 → 链接文字（去空白）。NCX 只列了卷、章写成单独文件的书
+/// （《三体全集》NCX 只有三卷，章名是 `<h2 class="sigil_not_in_toc">`、每章一个文件，书里的目录页逐章链接），这些章也补进目录
+fn toc_page_listing(entries: &[Entry], opf: &Opf, index: &HashMap<&str, usize>) -> HashMap<String, HashSet<String>> {
+    let mut m: HashMap<String, HashSet<String>> = HashMap::new();
+    for path in &opf.spine {
+        let Some(&idx) = index.get(path.as_str()) else { continue };
+        let Ok(html) = std::str::from_utf8(&entries[idx].data) else { continue };
+        let Some((lo, hi)) = html::body_range(html) else { continue };
+        let spans = parse_spans(html, lo, hi);
+        if !looks_like_toc_page(html, lo, hi, &spans) {
+            continue;
+        }
+        for sp in spans.iter().filter(|s| s.name == "a" && s.closed()) {
+            let Some(href) = html::attr(&html[sp.open_start..sp.open_end], "href") else { continue };
+            let (target, _) = crate::epubzip::resolve_link(path, href.value);
+            let text: String = plain_text(&html[sp.open_end..sp.close_start]).chars().filter(|c| !c.is_whitespace()).collect();
+            if !text.is_empty() {
+                m.entry(target).or_default().insert(text);
             }
         }
-        m
+    }
+    m
+}
+
+/// 节一级的标题一个也没有跟在同文件的章标题后面（只出现在单独成页的版权页、目录页上，如《ABC谋杀案》的
+/// h2「版权信息」「目录」），它不是节：节换成更深一级里跟在章标题后面的那一级（《ABC谋杀案》的 h3「1」「2」）。
+fn demote_detached_sections(files: &[FileInfo], roles: &mut [Role; 7]) {
+    let follows_title = |level: usize| {
+        files.iter().any(|f| {
+            let first = f.heads.iter().position(|h| roles[h.level as usize] == Role::Title);
+            first.is_some_and(|t| f.heads[t + 1..].iter().any(|h| h.level as usize == level))
+        })
     };
+    if let Some(sl) = (0..roles.len()).find(|&l| roles[l] == Role::Section) {
+        if !follows_title(sl) {
+            if let Some(deeper) = (sl + 1..roles.len()).find(|&l| follows_title(l)) {
+                roles[sl] = Role::Other;
+                roles[deeper] = Role::Section;
+            }
+        }
+    }
+}
+
+/// 清洗层入口：定章节、给要进目录的标题补 id、目录改指、把漏掉的节补进目录。不拆文件。
+/// `toc_heading`：要新建 nav 时的目录标题（按书的语言）。漫画不做：调用方（`wash_entries`）已判过。
+pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &mut WashReport) {
+    let Some(opf) = parse_opf(entries) else { return };
+    // 1. 收集 spine 各文件的标题（目录页、导航文件不算）。
+    let index = name_index(entries);
+    let mut files = scan_spine_files(entries, &opf, &index);
+    let listed = toc_page_listing(entries, &opf, &index);
     // 只信书自带的目录：本次清洗自动生成的目录（`toc_generated > 0`）是按文件/页数凑的，不代表章节结构。
     // 书自带目录用得上时按目录层级定标题和角色（用户 2026-10-05），否则按 `<hN>` 级别判断（下面这一大段）。
     let (toc_roles, mut label_paragraphs, in_toc) = match (rep.toc_generated == 0).then(|| toc_driven(&mut files, entries, &opf)).flatten() {
@@ -779,23 +804,9 @@ pub(super) fn chapters_into_toc(entries: &mut [Entry], toc_heading: &str, rep: &
     if !roles.contains(&Role::Title) {
         return;
     }
-    // 节一级的标题一个也没有跟在同文件的章标题后面（只出现在单独成页的版权页、目录页上，如《ABC谋杀案》的
-    // h2「版权信息」「目录」），它不是节：节换成更深一级里跟在章标题后面的那一级（《ABC谋杀案》的 h3「1」「2」）。
+    // 节一级的标题没有跟在同文件的章标题后面的话换成更深一级（[`demote_detached_sections`]）；目录驱动时角色来自目录，不改
     if toc_roles.is_none() {
-        let follows_title = |level: usize| {
-            files.iter().any(|f| {
-                let first = f.heads.iter().position(|h| roles[h.level as usize] == Role::Title);
-                first.is_some_and(|t| f.heads[t + 1..].iter().any(|h| h.level as usize == level))
-            })
-        };
-        if let Some(sl) = (0..roles.len()).find(|&l| roles[l] == Role::Section) {
-            if !follows_title(sl) {
-                if let Some(deeper) = (sl + 1..roles.len()).find(|&l| follows_title(l)) {
-                    roles[sl] = Role::Other;
-                    roles[deeper] = Role::Section;
-                }
-            }
-        }
+        demote_detached_sections(&files, &mut roles);
     }
     // 节标题要进目录：没有 id 的补一个（插入后该文件重新解析，偏移变了）。记下 (原文件, id, 标题文字)。
     // 只收**跟所属章标题在同一个原文件里**的节：单独成文件、前面没有章标题的"节"多半是附页（内容简介、版权声明），

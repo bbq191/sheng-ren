@@ -5,6 +5,11 @@
 //! 列表符号、表格边框合并与间距、文字装饰、字间距、`pre`）；
 //! 别的属性忽略。选择器匹配用 scraper（html5ever DOM），优先级自己算。
 //! `@media` 按阅读模式的阅读范围、屏幕求值（见 [`media_ok`]），`@font-face`、`@page` 等跳过（嵌入字体另由 [`font_faces`] 读）。
+//!
+//! 2026-10-15 从 `bookconv` 拆成单独的 crate（`bookconv::cascade` 照旧能用）：KFX 写出器和优化器共用这一个层叠引擎。
+
+pub mod decl;
+pub mod ua;
 
 use scraper::{ElementRef, Selector};
 use std::collections::HashMap;
@@ -75,9 +80,67 @@ impl Need {
     }
 }
 
+/// 一个元素层叠出来的声明：属性名（小写）→ 值。用快速哈希（[`bookbase::util::FastHasher`]）：每个元素建一张、换算计算值时
+/// 查几十次，SipHash 是层叠里最大的开销。
+pub type Decls = HashMap<String, String, bookbase::util::FastState>;
+
+/// 生效的声明不是外链样式表里的普通声明的：属性名 → (来源, 带没带 `!important`)（[`Sheet::cascade_split`]）。
+pub type Origins = HashMap<String, (Origin, bool), bookbase::util::FastState>;
+
+/// 元素查规则桶用的键（[`RuleIndex`]）：id、类（去重）、标签名，都 ASCII 小写。一个元素在各份样式表里共用一份。
+struct ElementKeys {
+    id: Option<String>,
+    classes: Vec<String>,
+    tag: String,
+}
+
+impl ElementKeys {
+    fn of(el: &ElementRef) -> ElementKeys {
+        let v = el.value();
+        let mut classes: Vec<String> = v.classes().map(|c| c.to_ascii_lowercase()).collect();
+        classes.sort_unstable();
+        classes.dedup();
+        ElementKeys { id: v.id().map(str::to_ascii_lowercase), classes, tag: v.name().to_ascii_lowercase() }
+    }
+}
+
 /// 解析好的一份样式表（规则按出现顺序）。同一份样式表被很多文档引用时只解析一次，各文档的 [`Sheet`] 共用。
 #[derive(Default)]
-pub struct Rules(Vec<Rule>);
+pub struct Rules {
+    list: Vec<Rule>,
+    index: RuleIndex,
+}
+
+/// 按选择器最右边那一节（[`Need`]）给规则分桶：一条规则只进一个桶（有 id 进 id 桶，否则有类进第一个类的桶，否则有标签名进
+/// 标签桶，都没有的进 `other`），键一律 ASCII 小写。元素只看自己的 id、各个类、标签名对应的桶加 `other`（[`Rules::candidates`]）。
+///
+/// 为什么：以前每个元素把每条规则都拿 `Need` 预筛一遍。2026-10-15《古龙作品全集》Move 模式：433 万次元素层叠测了 2.68 亿条规则
+/// （每个元素 62 条），只有 2.5% 过了预筛——层叠占 `Chapter::parse` 的七成，预筛又是层叠的大头。分桶只是缩小要试的范围：
+/// 进了候选的照旧 `may_match` + 完整匹配，结果和顺序（层叠时按 (important, 优先级, 出现序号) 排，出现序号唯一）都不变。
+/// 不会漏：`may_match` 要求 id / 每个类 / 标签名不分 ASCII 大小写相等，满足时元素对应的那个小写键一定就是规则所在的桶。
+#[derive(Default)]
+struct RuleIndex {
+    by_id: HashMap<String, Vec<u32>>,
+    by_class: HashMap<String, Vec<u32>>,
+    by_tag: HashMap<String, Vec<u32>>,
+    other: Vec<u32>,
+}
+
+impl RuleIndex {
+    fn build(list: &[Rule]) -> RuleIndex {
+        let mut ix = RuleIndex::default();
+        for (i, r) in list.iter().enumerate() {
+            let i = i as u32;
+            match &r.need {
+                Some(n) if !n.ids.is_empty() => ix.by_id.entry(n.ids[0].to_ascii_lowercase()).or_default().push(i),
+                Some(n) if !n.classes.is_empty() => ix.by_class.entry(n.classes[0].to_ascii_lowercase()).or_default().push(i),
+                Some(Need { tag: Some(t), .. }) => ix.by_tag.entry(t.to_ascii_lowercase()).or_default().push(i),
+                _ => ix.other.push(i),
+            }
+        }
+        ix
+    }
+}
 
 /// `@media` 最多套几层（真书里最多两层；更深的整块不收）。
 const MAX_MEDIA_NESTING: usize = 32;
@@ -88,7 +151,42 @@ impl Rules {
     pub fn parse(css: &str, base: &str, media: Option<&MediaEnv>) -> Arc<Rules> {
         let mut r = Rules::default();
         r.add(&strip_comments(css), base, media);
+        r.index = RuleIndex::build(&r.list);
         Arc::new(r)
+    }
+
+    /// 有没有一条声明满足 `f`（只看按 `media` 收下的规则）。
+    pub fn any_decl(&self, f: impl Fn(&Decl) -> bool) -> bool {
+        self.list.iter().any(|r| r.decls.iter().any(&f))
+    }
+
+    /// 规则条数。
+    pub fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    /// 元素可能匹配的规则（下标升序，见 [`RuleIndex`]）：`keys` 是元素的 id、类、标签名（已 ASCII 小写）。
+    fn candidates(&self, keys: &ElementKeys, out: &mut Vec<u32>) {
+        out.clear();
+        let ix = &self.index;
+        if let Some(v) = keys.id.as_ref().and_then(|id| ix.by_id.get(id)) {
+            out.extend_from_slice(v);
+        }
+        for c in &keys.classes {
+            if let Some(v) = ix.by_class.get(c) {
+                out.extend_from_slice(v);
+            }
+        }
+        if let Some(v) = ix.by_tag.get(&keys.tag) {
+            out.extend_from_slice(v);
+        }
+        out.extend_from_slice(&ix.other);
+        // 一条规则只在一个桶里、元素的类已去重：没有重复，排个序按出现顺序试（结果本来就和顺序无关，排了好比对）
+        out.sort_unstable();
     }
 
     /// `css` 已去掉注释。规则按 [`rule_spans`] 找：外面套的 at 规则都得是条件成立的 `@media`（别的 at 规则里面的不收），
@@ -114,7 +212,7 @@ impl Rules {
             for one in split_top(&head, ',') {
                 let one = one.trim();
                 if let Ok(sel) = Selector::parse(one) {
-                    self.0.push(Rule { sel, need: Need::of(one), spec: specificity(one), decls: decls.clone() });
+                    self.list.push(Rule { sel, need: Need::of(one), spec: specificity(one), decls: decls.clone() });
                 }
             }
         }
@@ -128,14 +226,14 @@ fn resolve_urls(decls: &mut [Decl], base: &str) {
     }
     for d in decls.iter_mut() {
         if let Some(inner) = leading_url(&d.value) {
-            d.value = format!("url({})", crate::epubzip::resolve_link(base, inner).0);
+            d.value = format!("url({})", bookbase::epubpath::resolve_link(base, inner).0);
         }
     }
 }
 
-/// 值是 `url(…)` 开头时括号里的地址（去掉引号；按 [`crate::html::css_urls`] 认）。
+/// 值是 `url(…)` 开头时括号里的地址（去掉引号；按 [`bookbase::html::css_urls`] 认）。
 fn leading_url(value: &str) -> Option<&str> {
-    crate::html::css_urls(value).into_iter().next().filter(|u| u.start == 0).map(|u| u.value)
+    bookbase::html::css_urls(value).into_iter().next().filter(|u| u.start == 0).map(|u| u.value)
 }
 
 /// 一个文档用到的样式表：各份 [`Rules`]、它们第一条规则的全局序号（后出现的规则优先）、从哪来。
@@ -436,11 +534,11 @@ fn matching_close(it: impl Iterator<Item = (usize, char)>, l: char, r: char) -> 
     })
 }
 
-/// 解析 `a: b; c: d !important`。切声明用 [`crate::html::css_decls`]（和优化器同一个：引号、括号里的 `;` 不切，
+/// 解析 `a: b; c: d !important`。切声明用 [`bookbase::html::css_decls`]（和优化器同一个：引号、括号里的 `;` 不切，
 /// 引号里的转义、坏引号退回按 `;` 切），这里只管 `!important` 和展开简写。
 pub fn parse_decls(s: &str) -> Vec<Decl> {
     let mut out = Vec::new();
-    for d in crate::html::css_decls(s) {
+    for d in bookbase::html::css_decls(s) {
         // `css_decls` 会跳过属性名前面的杂字符（`*zoom` → `zoom`）；IE 的 `*color:red` 这类在浏览器里是无效声明，照旧不收。
         let lead = (d.prop.as_ptr() as usize).saturating_sub(d.raw.as_ptr() as usize);
         if !d.raw.get(..lead).unwrap_or("").trim().is_empty() {
@@ -489,7 +587,7 @@ pub fn tokens(v: &str) -> (Vec<&str>, bool) {
 }
 
 /// 同 [`tokens`]，另把括号外的 `/`（`background` 简写的「位置 / 尺寸」）切成单独的词。层叠（`background` 展开）和清洗层
-/// （[`crate::cssunlock::background_longhands`]）共用。
+/// （[`crate::decl::background_longhands`]）共用。
 pub fn background_tokens(v: &str) -> Vec<&str> {
     tokens_with(v, true).0
 }
@@ -542,7 +640,7 @@ pub enum BoxSides<'a> {
 /// （`wash::css`）、章尾去下边距（`wash::layout`）、`kindle_rules` 共用（以前层叠另有一份按空白切的，会把 `calc()` 切坏、
 /// 超过 4 个值也照取前 4 个）。
 pub fn box_sides(val: &str) -> BoxSides<'_> {
-    let (v, important) = crate::cssunlock::split_important(val);
+    let (v, important) = crate::decl::split_important(val);
     let (parts, balanced) = tokens(v);
     if !balanced {
         return BoxSides::Unknown;
@@ -627,19 +725,19 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
 
 /// `font` 简写拆开的样子（CSS 2.1 / CSS Fonts 3 的语法：`[style || variant || weight || stretch]? size[/line-height]? family`）。
 #[derive(Debug, PartialEq)]
-pub(crate) struct FontShorthand<'a> {
-    pub(crate) style: Option<&'a str>,
-    pub(crate) variant: Option<&'a str>,
-    pub(crate) weight: Option<&'a str>,
-    pub(crate) stretch: Option<&'a str>,
-    pub(crate) size: &'a str,
-    pub(crate) line_height: Option<&'a str>,
-    pub(crate) family: &'a str,
+pub struct FontShorthand<'a> {
+    pub style: Option<&'a str>,
+    pub variant: Option<&'a str>,
+    pub weight: Option<&'a str>,
+    pub stretch: Option<&'a str>,
+    pub size: &'a str,
+    pub line_height: Option<&'a str>,
+    pub family: &'a str,
 }
 
 /// 按 CSS 规范拆 `font` 简写（值里已去掉 `!important`）。拿不准的（系统字体关键字 `caption`、全局关键字 `inherit`、
 /// 字号前的词认不出、字号或行高是 `calc()` 之类带空格的写法、没有字体族）返回 `None`，不处理。
-pub(crate) fn parse_font_shorthand(v: &str) -> Option<FontShorthand<'_>> {
+pub fn parse_font_shorthand(v: &str) -> Option<FontShorthand<'_>> {
     fn is_size(t: &str) -> bool {
         let l = t.to_ascii_lowercase();
         matches!(l.as_str(), "xx-small" | "x-small" | "small" | "medium" | "large" | "x-large" | "xx-large" | "xxx-large" | "larger" | "smaller")
@@ -1073,7 +1171,7 @@ impl Sheet {
     }
 
     fn add_rules_from(&mut self, rules: Arc<Rules>, order: usize, origin: Origin) -> usize {
-        let next = order + rules.0.len();
+        let next = order + rules.len();
         self.parts.push((rules, order, origin));
         next
     }
@@ -1094,7 +1192,7 @@ impl Sheet {
             if el.value().name() == "style" {
                 order = sheet.add_rules_from(Rules::parse(&el.text().collect::<String>(), doc_path, media), order, Origin::Style);
             } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
-                if let Some(rules) = el.value().attr("href").and_then(|h| rules_for(&crate::epubzip::resolve_link(doc_path, h).0)) {
+                if let Some(rules) = el.value().attr("href").and_then(|h| rules_for(&bookbase::epubpath::resolve_link(doc_path, h).0)) {
                     order = sheet.add_rules(rules, order);
                 }
             }
@@ -1104,8 +1202,8 @@ impl Sheet {
 
     /// 一个元素上生效的声明（按层叠排好，后面的覆盖前面的），含行内 `style`。
     /// 行内 `style` 里的 `url(…)` 按文档路径 `base` 解析（同样式表按自己的路径；以前不解析，子目录里文档的行内背景图找不到）。
-    pub fn cascade(&self, el: &ElementRef, base: &str) -> HashMap<String, String> {
-        let mut out = HashMap::new();
+    pub fn cascade(&self, el: &ElementRef, base: &str) -> Decls {
+        let mut out = Decls::default();
         self.cascade_each(el, base, true, |d, _| {
             out.insert(d.prop.clone(), d.value.clone());
         });
@@ -1113,21 +1211,29 @@ impl Sheet {
     }
 
     /// 同 [`Sheet::cascade`]，但 `!important` 当没写（带它的声明照普通声明排）：去掉 `!important` 以后会怎么层叠。
-    pub fn cascade_flat(&self, el: &ElementRef, base: &str) -> HashMap<String, String> {
-        let mut out = HashMap::new();
+    pub fn cascade_flat(&self, el: &ElementRef, base: &str) -> Decls {
+        let mut out = Decls::default();
         self.cascade_each(el, base, false, |d, _| {
             out.insert(d.prop.clone(), d.value.clone());
         });
         out
     }
 
-    /// 同 [`Sheet::cascade`]，另给出生效的那条声明从哪来、带没带 `!important`。
-    pub fn cascade_with_origin(&self, el: &ElementRef, base: &str) -> HashMap<String, (String, Origin, bool)> {
-        let mut out = HashMap::new();
+    /// 同 [`Sheet::cascade`]，另给出生效的那条声明从哪来、带没带 `!important`：只记不是外链样式表里普通声明的（[`Origins`]）。
+    /// 两张表在层叠时一次填好（以前先建「属性 → (值, 来源, important)」再拆成两张，属性名复制两遍、第二张还用 SipHash）：
+    /// 后来的声明覆盖先来的，来源表跟着改——这一条要记就记，不用记就把前面记的删掉，最后剩下的就是胜出那条的。
+    pub fn cascade_split(&self, el: &ElementRef, base: &str) -> (Decls, Origins) {
+        let mut decls = Decls::default();
+        let mut origins = Origins::default();
         self.cascade_each(el, base, true, |d, origin| {
-            out.insert(d.prop.clone(), (d.value.clone(), origin, d.important));
+            if origin != Origin::Sheet || d.important {
+                origins.insert(d.prop.clone(), (origin, d.important));
+            } else {
+                origins.remove(&d.prop);
+            }
+            decls.insert(d.prop.clone(), d.value.clone());
         });
-        out
+        (decls, origins)
     }
 
     /// 按层叠顺序（优先级低的先）把元素上匹配的声明依次交给 `f`：同一属性后给的覆盖先给的。`important` 为假时 `!important` 不提优先级。
@@ -1135,8 +1241,12 @@ impl Sheet {
         // (!important, 优先级, 出现顺序, 声明, 来源)
         type Hit<'a> = (bool, (u32, u32, u32), usize, &'a Decl, Origin);
         let mut hits: Vec<Hit> = Vec::new();
+        let keys = ElementKeys::of(el);
+        let mut cand = Vec::new();
         for (rules, base, origin) in &self.parts {
-            for (i, r) in rules.0.iter().enumerate() {
+            rules.candidates(&keys, &mut cand);
+            for &i in &cand {
+                let (i, r) = (i as usize, &rules.list[i as usize]);
                 if r.need.as_ref().is_none_or(|n| n.may_match(el)) && r.sel.matches(el) {
                     for d in &r.decls {
                         hits.push((important && d.important, r.spec, base + i, d, *origin));
@@ -1174,7 +1284,7 @@ pub fn is_block(el: &ElementRef, comp: &Computed) -> bool {
 
 /// HTML 的表现属性当成优先级最低的样式（样式表写了的不动）：块的 `align`、`<center>`、`<font size/color/face>`、`<img width="N%">`
 /// （Send to Kindle 同样：《福尔摩斯》`<p align="justify">` 两端对齐、`<font size="1">` 字号 0.625、`size="7"` 3.0）。
-pub fn presentational_hints(el: &ElementRef, decls: &mut HashMap<String, String>) {
+pub fn presentational_hints(el: &ElementRef, decls: &mut Decls) {
     let e = el.value();
     let mut hint = |k: &str, v: String| {
         decls.entry(k.to_string()).or_insert(v);
@@ -1238,8 +1348,8 @@ pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
         let get = |k: &str| decls.iter().rev().find(|d| d.prop == k).map(|d| d.value.as_str());
         let family = get("font-family").map(|f| f.trim().trim_matches(['"', '\'']).to_string()).filter(|f| !f.is_empty());
         let url = get("src").and_then(|src| {
-            let raw = crate::html::css_urls(src).into_iter().next()?.value.trim();
-            (!raw.is_empty() && !crate::html::is_external(raw)).then(|| crate::epubzip::resolve_link(base, raw).0)
+            let raw = bookbase::html::css_urls(src).into_iter().next()?.value.trim();
+            (!raw.is_empty() && !bookbase::html::is_external(raw)).then(|| bookbase::epubpath::resolve_link(base, raw).0)
         });
         if let (Some(family), Some(path)) = (family, url) {
             let bold = get("font-weight").is_some_and(|w| matches!(w.trim(), "bold" | "bolder") || w.trim().parse::<u32>().is_ok_and(|n| n >= 600));
@@ -1355,7 +1465,7 @@ pub fn parse_box_len(v: &str) -> Option<Len> {
     }
 }
 
-pub use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
+pub use bookbase::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
 /// 元素的计算值（只留 KFX 用得上的）。字号 `font_size` 是相对根字号的倍数。
 #[derive(Clone, Debug, PartialEq)]
@@ -1600,7 +1710,7 @@ impl Computed {
     }
 
     /// 由父元素的计算值和本元素的声明算出本元素的计算值。
-    pub fn derive(parent: &Computed, decls: &HashMap<String, String>, tag: &str) -> Computed {
+    pub fn derive(parent: &Computed, decls: &Decls, tag: &str) -> Computed {
         let mut c = parent.reset_box();
         c.on_background = parent.on_background || parent.background.is_some() || parent.bg_image.is_some();
         c.on_image = parent.on_image || parent.bg_image.is_some();
@@ -1637,7 +1747,7 @@ impl Computed {
                 c.bold = true;
                 c.semibold = false;
                 // 字号、外边距和只修复的文字书写进书里的 `eink-ua.css` 是同一张表
-                let (_, size, margin) = crate::uastyle::HEADINGS.into_iter().find(|h| h.0 == tag).unwrap_or(crate::uastyle::HEADINGS[5]);
+                let (_, size, margin) = crate::ua::HEADINGS.into_iter().find(|h| h.0 == tag).unwrap_or(crate::ua::HEADINGS[5]);
                 c.font_size = parent.font_size * size;
                 c.margin[0] = Some(Len::Em(margin));
                 c.margin[2] = Some(Len::Em(margin));
@@ -1658,7 +1768,7 @@ impl Computed {
         // 段落、引文、图、预排版的上下外边距（UA 样式表）：Send to Kindle 给没写外边距的 `<p>` 上下各 1em
         // （相邻的折叠成一个，《绍宋》正文段与段之间 0.8333lh）；以前不给，段落挤在一起。哪些标签、多少用 `crate::uastyle` 的表
         // （只修复的文字书写进书里的 `eink-ua.css` 是同一张）。
-        use crate::uastyle::{BLOCK_MARGIN_TAGS, INDENTED_BLOCK_TAGS, INDENT_PX};
+        use crate::ua::{BLOCK_MARGIN_TAGS, INDENTED_BLOCK_TAGS, INDENT_PX};
         let indented = INDENTED_BLOCK_TAGS.contains(&tag);
         if indented || BLOCK_MARGIN_TAGS.contains(&tag) {
             c.margin[0] = Some(Len::Em(1.0));
@@ -1673,7 +1783,7 @@ impl Computed {
     }
 
     /// 字体：字号、字体族、字重、斜体。字号最先算——后面行高、字间距的长度换算都按本元素字号。
-    fn font_props(c: &mut Computed, parent: &Computed, decls: &HashMap<String, String>) {
+    fn font_props(c: &mut Computed, parent: &Computed, decls: &Decls) {
         let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("font-size") {
             let v = v.trim().to_ascii_lowercase();
@@ -1724,7 +1834,7 @@ impl Computed {
     }
 
     /// 段落排版：对齐、首行缩进、行高（长度按上面算好的本元素字号换算；没写行高的继承父元素的绝对行高）。
-    fn text_layout_props(c: &mut Computed, parent: &Computed, decls: &HashMap<String, String>) {
+    fn text_layout_props(c: &mut Computed, parent: &Computed, decls: &Decls) {
         let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("text-align") {
             let v = v.trim().to_ascii_lowercase();
@@ -1758,7 +1868,7 @@ impl Computed {
     }
 
     /// 文字修饰：颜色、上下标（表格单元格里是纵向对齐）、装饰线、小型大写、字间距、空白与断行。
-    fn text_style_props(c: &mut Computed, decls: &HashMap<String, String>, tag: &str) {
+    fn text_style_props(c: &mut Computed, decls: &Decls, tag: &str) {
         let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("color") {
             if let Some(col) = parse_color(v) {
@@ -1815,7 +1925,7 @@ impl Computed {
     }
 
     /// 列表与表格：列表符号与位置、边框合并与间距。
-    fn list_table_props(c: &mut Computed, decls: &HashMap<String, String>) {
+    fn list_table_props(c: &mut Computed, decls: &Decls) {
         let get = |k: &str| decls.get(k).map(String::as_str);
         if let Some(v) = get("list-style-type") {
             c.list_style = Some(v.trim().to_ascii_lowercase());
@@ -1832,7 +1942,7 @@ impl Computed {
     }
 
     /// 盒模型：边框、圆角、宽高、display、外边距（写了的覆盖标签缺省值）、内边距，以及是否在左右有框的盒子里（`in_hbox`）。
-    fn box_props(c: &mut Computed, parent: &Computed, decls: &HashMap<String, String>) {
+    fn box_props(c: &mut Computed, parent: &Computed, decls: &Decls) {
         let get = |k: &str| decls.get(k).map(String::as_str);
         // 属性名写成常量（每个元素都要查，逐个 format! 很费）；四边顺序：上、右、下、左。
         const BORDER: [[&str; 3]; 4] = [
@@ -1880,7 +1990,7 @@ impl Computed {
     }
 
     /// 背景与阴影：背景色（及它垫在白底上的颜色 `backdrop`，往下继承）、阴影、背景图及其各项属性。
-    fn background_props(c: &mut Computed, parent: &Computed, decls: &HashMap<String, String>) {
+    fn background_props(c: &mut Computed, parent: &Computed, decls: &Decls) {
         let get = |k: &str| decls.get(k).map(String::as_str);
         // 不透明的纯白背景不算（Send to Kindle 同样：《疯探》`background-color:#ffffff` 的简介、目录页不出容器）
         c.background = get("background-color").and_then(parse_color).filter(|c| c >> 24 != 0 && *c != 0xFFFF_FFFF);
@@ -1906,12 +2016,12 @@ mod tests {
     #[test]
     fn deeply_nested_media_does_not_overflow() {
         let nest = |n: usize| format!("{}p{{color:red}}{}", "@media all{".repeat(n), "}".repeat(n));
-        assert_eq!(Rules::parse(&nest(3), "", None).0.len(), 1);
-        assert_eq!(Rules::parse(&nest(MAX_MEDIA_NESTING), "", None).0.len(), 1);
-        assert_eq!(Rules::parse(&nest(MAX_MEDIA_NESTING + 1), "", None).0.len(), 0);
+        assert_eq!(Rules::parse(&nest(3), "", None).len(), 1);
+        assert_eq!(Rules::parse(&nest(MAX_MEDIA_NESTING), "", None).len(), 1);
+        assert_eq!(Rules::parse(&nest(MAX_MEDIA_NESTING + 1), "", None).len(), 0);
         let deep = format!("{}q{{color:red}}", nest(20000));
         let r = Rules::parse(&deep, "", None);
-        assert_eq!(r.0.len(), 1, "后面的规则照收");
+        assert_eq!(r.len(), 1, "后面的规则照收");
     }
 
     #[test]
@@ -1940,16 +2050,22 @@ mod tests {
             assert_eq!(Need::of(s), None, "{s}");
         }
         // 用预筛和不用预筛，每个元素层叠出来的结果一样
-        let css = "p{color:red} p.a{color:blue} .A{text-indent:1em} div p.b{margin-top:1em} #X{font-size:2em} h1+p{color:green} span.c.d{font-weight:bold} li > span{color:gray} p:first-child{margin-left:1em}";
-        let html = scraper::Html::parse_document(r#"<html><body><div><p class="a b" id="x">1</p><h1>t</h1><p class="A">2<span class="d c">3</span></p><ul><li><span>4</span></li></ul></div></body></html>"#);
+        // 大小写混写的类、id、标签名（分桶的键是 ASCII 小写），同一个元素上两个只差大小写的类（去重后不能重复试同一条规则），
+        // 非 ASCII 的类名
+        let css = "p{color:red} p.a{color:blue} .A{text-indent:1em} div p.b{margin-top:1em} #X{font-size:2em} h1+p{color:green} span.c.d{font-weight:bold} li > span{color:gray} p:first-child{margin-left:1em} P.Q{text-align:center} SPAN{font-style:italic} .正文{line-height:2} .q.Q{margin-bottom:1em} *{orphans:2} [title]{widows:2}";
+        let html = scraper::Html::parse_document(r#"<html><body><div><p class="a b" id="x">1</p><h1>t</h1><p class="A q Q">2<span class="d c 正文" title="t">3</span></p><ul><li><span>4</span></li></ul></div></body></html>"#);
         let mut with = Sheet::default();
         with.add(css, 0);
         let mut without = Sheet::default();
         without.add(css, 0);
+        // 不预筛也不分桶：规则全进 `other`，每个元素逐条完整匹配（分桶、预筛都只是缩小范围，结果必须一样）
         for part in &mut without.parts {
-            for r in &mut Arc::get_mut(&mut part.0).unwrap().0 {
+            let rules = Arc::get_mut(&mut part.0).unwrap();
+            for r in &mut rules.list {
                 r.need = None;
             }
+            rules.index = RuleIndex::build(&rules.list);
+            assert!(rules.index.by_id.is_empty() && rules.index.by_class.is_empty() && rules.index.by_tag.is_empty());
         }
         let mut n = 0;
         for el in html.root_element().descendants().filter_map(ElementRef::wrap) {
@@ -2172,14 +2288,14 @@ mod tests {
         let mut d = HashMap::new();
         d.insert("font-size".to_string(), "2em".to_string());
         d.insert("margin-top".to_string(), "1em".to_string());
-        let h = Computed::derive(&Computed::root(), &d, "h1");
+        let h = Computed::derive(&Computed::root(), &d.into_iter().collect(), "h1");
         assert_eq!(h.font_size, 2.0);
         assert!(h.bold);
-        let child = Computed::derive(&h, &HashMap::new(), "span");
+        let child = Computed::derive(&h, &Decls::default(), "span");
         assert_eq!(child.font_size, 2.0);
         assert_eq!(child.margin[0], None);
         // 负字号作废，照父元素
-        let neg = Computed::derive(&h, &HashMap::from([("font-size".to_string(), "-1em".to_string())]), "span");
+        let neg = Computed::derive(&h, &Decls::from_iter([("font-size".to_string(), "-1em".to_string())]), "span");
         assert_eq!(neg.font_size, 2.0);
     }
 }

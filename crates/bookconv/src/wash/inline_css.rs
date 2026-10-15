@@ -31,57 +31,35 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport) {
     let at = |dir: &str, n: &str| if dir.is_empty() { n.to_string() } else { format!("{dir}/{n}") };
     let inline_path = at(&opf_dir, INLINE_CSS);
     // 挪出来的 <style>：书内路径 → 内容；行内搬出来的类：(标签, 声明) → 序号
+    // 三段（2026-10-15 改，以前整步串行）：① 各章并行看要挪哪些 `<style>`、哪些行内 `style` 要拆（[`plan_chapter`]，只读）；
+    // ② 串行按「章的顺序、章里标签的顺序」给搬出来的声明编类号——和以前逐章做时编号的先后一样，产物逐字节不变；
+    // ③ 各章并行改写（[`rewrite_chapter`]）。
+    let chapters = super::chapter_indices(entries);
+    let plans: Vec<ChapterPlan> = crate::util::par_map(&chapters, |&i| plan_chapter(&entries[i], &at));
     let mut extracted: BTreeMap<String, String> = BTreeMap::new();
     let mut classes: Vec<(String, String)> = Vec::new();
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    for i in chapters {
-        let e = &mut entries[i];
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let dir = dir_of(&e.name).to_string();
-        let mut edits: Vec<(usize, usize, String)> = Vec::new();
-        for b in html::style_blocks(text) {
-            let open = &text[b.start..b.content_start];
-            let css = clean_style(&text[b.content_start..b.content_end]);
-            // 没写 em 的不挪（封面页的 `@page{margin:0}` 这类）：Move 上排得一样，少动书
-            if !css_has_em(&css) {
-                continue;
-            }
-            let name = format!("eink-style-{:08x}.css", fnv64(css.as_bytes()) as u32);
-            extracted.insert(at(&dir, &name), css);
-            let media = html::attr_value(open, "media").map(|m| format!(r#" media="{m}""#)).unwrap_or_default();
-            edits.push((b.start, b.end, format!(r#"<link rel="stylesheet" type="text/css" href="{name}"{media}/>"#)));
-        }
-        let mut used = false;
-        if let Some((bs, be)) = html::body_range(text) {
-            // `<body>` 自己也算（`root_em` 给写 px 字号的 `<body>` 接的 em：《狼厅》）
-            let body = html::tags(text).find(|t| t.is_start() && t.is("body"));
-            for t in body.into_iter().chain(html::tags_in(text, bs, be).filter(|t| t.is_start())) {
-                let raw = &text[t.start..t.end];
-                let Some(style) = html::attr_value(raw, "style") else { continue };
-                // 要改成 `div` 的标题（`kindle_model::DIV_ATTR`）按 `div` 搬：字号也搬
-                let tag = crate::kindle_model::reader_tag_raw(t.name, raw);
-                let Some((kept, moved)) = split_inline(&xml_unescape(style), &tag) else { continue };
-                let k = classes.iter().position(|c| *c == (tag.clone(), moved.clone())).unwrap_or_else(|| {
-                    classes.push((tag.clone(), moved.clone()));
-                    classes.len() - 1
-                });
-                let mut new = if kept.trim().is_empty() { html::remove_attr(raw, "style") } else { html::set_attr(raw, "style", &xml_escape(&kept)) };
-                new = html::add_class(&new, &format!("{CLASS}{}", k + 1));
-                edits.push((t.start, t.end, new));
-                used = true;
-            }
-        }
-        if edits.is_empty() {
+    let mut numbered: HashMap<usize, (ChapterPlan, Vec<usize>)> = HashMap::new();
+    for (&i, plan) in chapters.iter().zip(plans) {
+        if plan.styles.is_empty() && plan.inline.is_empty() {
             continue;
         }
-        edits.sort_by_key(|x| x.0);
-        rep.kindle_rule_edits += edits.len();
-        let mut out = html::apply_edits(text, edits);
-        if used {
-            out = typeset::inject_css_link(&out, &crate::epubzip::href_to(&dir, &inline_path, ""));
+        for (_, _, _, path, css) in &plan.styles {
+            extracted.insert(path.clone(), css.clone());
         }
-        e.data = out.into_bytes();
+        let ks: Vec<usize> = plan
+            .inline
+            .iter()
+            .map(|(_, _, tag, _, moved)| {
+                classes.iter().position(|c| c.0 == *tag && c.1 == *moved).unwrap_or_else(|| {
+                    classes.push((tag.clone(), moved.clone()));
+                    classes.len() - 1
+                })
+            })
+            .collect();
+        numbered.insert(i, (plan, ks));
     }
+    let mut work: Vec<(&mut Entry, (ChapterPlan, Vec<usize>))> = entries.iter_mut().enumerate().filter_map(|(i, e)| numbered.remove(&i).map(|p| (e, p))).collect();
+    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, (plan, ks))| rewrite_chapter(e, plan, ks, &inline_path)).into_iter().sum::<usize>();
     for (n, (path, css)) in extracted.iter().enumerate() {
         add_css_entry(entries, opf_idx, path, css, &format!("eink-style-{}", n + 1));
     }
@@ -105,6 +83,67 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport) {
             e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
         }
     }
+}
+
+/// 一章要改的（[`plan_chapter`]）。
+#[derive(Default)]
+struct ChapterPlan {
+    /// 挪出去的 `<style>`：(块的起止, 换成的 `<link>`, 挪成的样式表的书内路径, 内容)。
+    styles: Vec<(usize, usize, String, String, String)>,
+    /// 要拆的行内 `style`（文档序，`<body>` 自己在最前）：(标签的起止, 按哪个标签名搬, 留在行内的, 搬出去的)。
+    inline: Vec<(usize, usize, String, String, String)>,
+}
+
+/// 看一章（只读）：挪哪些 `<style>`、拆哪些行内 `style`。`at(目录, 文件名)` 是书内路径。
+fn plan_chapter(e: &Entry, at: &(impl Fn(&str, &str) -> String + Sync)) -> ChapterPlan {
+    let mut plan = ChapterPlan::default();
+    let Ok(text) = std::str::from_utf8(&e.data) else { return plan };
+    let dir = dir_of(&e.name);
+    for b in html::style_blocks(text) {
+        let open = &text[b.start..b.content_start];
+        let css = clean_style(&text[b.content_start..b.content_end]);
+        // 没写 em 的不挪（封面页的 `@page{margin:0}` 这类）：Move 上排得一样，少动书
+        if !css_has_em(&css) {
+            continue;
+        }
+        let name = format!("eink-style-{:08x}.css", fnv64(css.as_bytes()) as u32);
+        let media = html::attr_value(open, "media").map(|m| format!(r#" media="{m}""#)).unwrap_or_default();
+        let link = format!(r#"<link rel="stylesheet" type="text/css" href="{name}"{media}/>"#);
+        plan.styles.push((b.start, b.end, link, at(dir, &name), css));
+    }
+    if let Some((bs, be)) = html::body_range(text) {
+        // `<body>` 自己也算（`root_em` 给写 px 字号的 `<body>` 接的 em：《狼厅》）
+        let body = html::tags(text).find(|t| t.is_start() && t.is("body"));
+        for t in body.into_iter().chain(html::tags_in(text, bs, be).filter(|t| t.is_start())) {
+            let raw = &text[t.start..t.end];
+            let Some(style) = html::attr_value(raw, "style") else { continue };
+            // 要改成 `div` 的标题（`kindle_model::DIV_ATTR`）按 `div` 搬：字号也搬
+            let tag = crate::kindle_model::reader_tag_raw(t.name, raw);
+            let Some((kept, moved)) = split_inline(&xml_unescape(style), &tag) else { continue };
+            plan.inline.push((t.start, t.end, tag, kept, moved));
+        }
+    }
+    plan
+}
+
+/// 照 `plan` 改写一章（`ks` 是各处行内 `style` 编好的类号，从 0 起），返回改动数。
+fn rewrite_chapter(e: &mut Entry, plan: &ChapterPlan, ks: &[usize], inline_path: &str) -> usize {
+    let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+    let mut edits: Vec<(usize, usize, String)> = plan.styles.iter().map(|(s, t, link, _, _)| (*s, *t, link.clone())).collect();
+    for ((s, t, _, kept, _), k) in plan.inline.iter().zip(ks) {
+        let raw = &text[*s..*t];
+        let mut new = if kept.trim().is_empty() { html::remove_attr(raw, "style") } else { html::set_attr(raw, "style", &xml_escape(kept)) };
+        new = html::add_class(&new, &format!("{CLASS}{}", k + 1));
+        edits.push((*s, *t, new));
+    }
+    edits.sort_by_key(|x| x.0);
+    let n = edits.len();
+    let mut out = html::apply_edits(text, edits);
+    if !plan.inline.is_empty() {
+        out = typeset::inject_css_link(&out, &crate::epubzip::href_to(dir_of(&e.name), inline_path, ""));
+    }
+    e.data = out.into_bytes();
+    n
 }
 
 /// `<style>` 的内容当样式表：去掉包着的 `<![CDATA[ ]]>`、`<!-- -->`，字符引用还原（XHTML 里 `<style>` 的内容按 XML 解析）。

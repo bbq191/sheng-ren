@@ -16,6 +16,7 @@ import collections, os, re, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kfx import cli_args, cli_opts
 import s2kcmp
+import toollib
 import kfx
 from s2kdev import FEATURES as S2K_FEATURES, epub_features, epub_nodes, kfx_features, same
 
@@ -30,26 +31,24 @@ def collapse(a, b):
     return max(0.0, a, b) + min(0.0, a, b)
 
 DEVICES = ['ireader', 'xochitl']
-PROFILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'crates', 'profile', 'profiles')
 ALIGN = {"'$320'": 'center', "'$61'": 'right', "'$59'": 'left', "'$321'": 'left'}
 
 
-def profile_flag(device, key, default=True):
-    """内置 profile 里的布尔字段（`key = true/false`），没写取缺省。"""
-    for line in open(os.path.join(PROFILES, f'{device}.toml'), encoding='utf-8'):
-        k, _, v = line.partition('=')
-        if k.strip() == key:
-            return v.split('#')[0].strip() == 'true'
-    return default
+def profile_flag(device, key):
+    """内置 profile 里的布尔字段（缺省值由 Rust 填好，见 `toollib.profile`）。"""
+    return bool(toollib.profile(device)[key])
 
 
 def profile_value(device, key):
-    """内置 profile 里的字符串字段（`key = "值"`），没写返回 None。"""
-    for line in open(os.path.join(PROFILES, f'{device}.toml'), encoding='utf-8'):
-        k, _, v = line.partition('=')
-        if k.strip() == key:
-            return v.split('#')[0].strip().strip('"')
-    return None
+    """内置 profile 里的字段值，没有（`None`）返回 None。"""
+    return toollib.profile(device).get(key)
+
+
+def readable(device, fmt):
+    """这台产物格式 `fmt` 的阅读范围 (宽, 高)：profile 的 `readable.<格式>`，没写用屏幕（同 Rust 的 `Profile::readable`）。"""
+    p = toollib.profile(device)
+    r = p['readable'].get(fmt) or p['screen']
+    return r['width'], r['height']
 
 
 def kfx_images(path, base_fs):
@@ -109,10 +108,8 @@ def vertical_scale(device):
     em = profile_value(device, 'em_px')
     if not em:
         return 1.0
-    ktext = open(os.path.join(PROFILES, 'kindle.toml'), encoding='utf-8').read()
-    kh = int(re.search(r'\[readable\.kfx\]\s*width\s*=\s*\d+\s*height\s*=\s*(\d+)', ktext).group(1))
-    text = open(os.path.join(PROFILES, f'{device}.toml'), encoding='utf-8').read()
-    h = int(re.search(r'\[readable(?:\.epub)?\]\s*width\s*=\s*\d+\s*height\s*=\s*(\d+)', text).group(1))
+    kh = readable('kindle', 'kfx')[1]
+    h = readable(device, 'epub')[1]
     return float(profile_value('kindle', 'line_px')) / 1.2 * h / kh / float(em)
 
 
@@ -124,18 +121,16 @@ def page_tile(epub, src, device):
         data = zipfile.ZipFile(epub).read(src)
     except KeyError:
         return True
-    text = open(os.path.join(PROFILES, f'{device}.toml'), encoding='utf-8').read()
-    m = re.search(r'\[screen\]\s*width\s*=\s*(\d+)\s*height\s*=\s*(\d+)', text)
+    screen = toollib.profile(device)['screen']
     try:
-        return m is not None and Image.open(io.BytesIO(data)).size == (int(m.group(1)), int(m.group(2)))
+        return Image.open(io.BytesIO(data)).size == (screen['width'], screen['height'])
     except Exception:
         return False
 
 
 def kindle_geometry():
-    text = open(os.path.join(PROFILES, 'kindle.toml'), encoding='utf-8').read()
-    m = re.search(r'\[readable\.kfx\]\s*width\s*=\s*(\d+)\s*height\s*=\s*(\d+)', text)
-    return {'content': int(m.group(1)), 'height': int(m.group(2)), 'em_px': float(profile_value('kindle', 'font_px'))}
+    w, h = readable('kindle', 'kfx')
+    return {'content': w, 'height': h, 'em_px': float(profile_value('kindle', 'font_px'))}
 
 
 def shown_width(width, w, h, geo, sizing, inline=False):
@@ -195,6 +190,7 @@ def main():
     books, work, wanted = args[0], args[1], args[2:]
     opt = cli_opts()
     bindir = opt.get('--bin', 'target/release')
+    toollib.BINDIR = bindir
     floor = float(opt.get('--min', 99.5))
     base_path = opt.get('--baseline', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'unify-baseline.tsv'))
     baseline = {}

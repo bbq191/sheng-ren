@@ -70,7 +70,7 @@ pub(crate) struct Work {
 
 /// SPARQL 查询。
 fn sparql(net: &Net, q: &str) -> Result<serde_json::Value, String> {
-    net.json(&format!("https://query.wikidata.org/sparql?format=json&query={}", enc(q)))
+    Ok(net.json(&format!("https://query.wikidata.org/sparql?format=json&query={}", enc(q)))?)
 }
 
 /// 人名的几种写法：原样、间隔号统一成 `·`（好读用 `．`，Wikidata 用 `·`/`‧`），`letters_only` 时再加上只留字母数字的。

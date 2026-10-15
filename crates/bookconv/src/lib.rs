@@ -11,9 +11,9 @@ pub mod article;
 pub mod audit;
 pub mod bgfit;
 pub mod capfit;
-pub mod cascade;
+// CSS 层叠引擎拆到 `csscascade`（2026-10-15），路径照旧
+pub use csscascade as cascade;
 pub mod check;
-pub mod color;
 pub mod comic_detect;
 pub mod comicfxl;
 pub mod comicpad;
@@ -24,8 +24,9 @@ pub mod direction;
 pub mod epub;
 pub mod epubbook;
 pub mod epubzip;
+// 基础件拆到 `bookbase`（2026-10-15），路径照旧
+pub use bookbase::{color, html, util};
 pub mod error;
-pub mod html;
 pub mod htmlproc;
 pub mod imgalpha;
 pub mod imgopt;
@@ -39,7 +40,6 @@ pub mod reader_model;
 pub mod opfmeta;
 pub mod optimize;
 pub mod uastyle;
-pub mod util;
 pub mod wash;
 
 pub use error::BookError;

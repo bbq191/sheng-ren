@@ -1,5 +1,5 @@
 //! reading 线通用小工具——集中一处，消除各处重复（XML 转义、书名→文件名安全化）。
-//! HTTP Agent 见 `crate::netimg::http_agent`。
+//! HTTP Agent 见 `bookconv::netimg::http_agent`。
 
 /// 现在的 UTC 时间，写成 `2026-09-30T08:05:09Z`（EPUB 3 的 `dcterms:modified` 格式）。
 pub fn utc_now_w3c() -> String {
@@ -110,7 +110,7 @@ pub fn is_image_ext(name: &str) -> bool {
 /// 图片路径的扩展名（小写、不带点）：取**文件名**最后一个 `.` 之后；文件名没有扩展名时当 `jpg`（EPUB 里绝大多数图是
 /// JPEG）。读封面、占位封面、优化器给图片重新落名共用——此前各处直接 `rsplit('.')`，无扩展名的路径会把整段路径连同 `/`
 /// 当扩展名，写出 `cover.images/x`、`images/0001.oebps/images/x` 这种条目名。
-pub(crate) fn image_ext_of(path: &str) -> String {
+pub fn image_ext_of(path: &str) -> String {
     let base = path.rsplit('/').next().unwrap_or(path);
     match base.rsplit_once('.') {
         Some((_, e)) if !e.is_empty() => e.to_ascii_lowercase(),
@@ -308,10 +308,10 @@ pub fn memfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
 const PAR_CHUNK: usize = 8;
 
 /// 对 `items` 的每一项并行调用 `f`（只读共享的东西），结果按原顺序返回。`f` 必须是纯的（同样的输入同样的输出），
-/// 所以结果和顺序执行逐字节相同。线程数同图片处理（[`crate::imgpool::worker_count`]）；项数少时直接在本线程做。
+/// 所以结果和顺序执行逐字节相同。线程数同图片处理（[`worker_count`]）；项数少时直接在本线程做。
 /// 清洗层、优化器里"逐文件独立"的几步（每一步都要扫全书的文字）、KFX 写出器解析各文档用它。
 pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let workers = crate::imgpool::worker_count().min(items.len().div_ceil(PAR_CHUNK));
+    let workers = worker_count().min(items.len().div_ceil(PAR_CHUNK));
     if workers <= 1 {
         return items.iter().map(f).collect();
     }
@@ -337,8 +337,8 @@ pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec
 }
 
 /// 同 [`par_map`]，`f` 可以改它拿到的那一项（各线程拿到的项互不重叠）。每项就地改，不会整本书新旧两份同时在内存里。
-pub(crate) fn par_map_mut<T: Send, R: Send>(items: &mut [T], f: impl Fn(&mut T) -> R + Sync) -> Vec<R> {
-    let workers = crate::imgpool::worker_count().min(items.len().div_ceil(PAR_CHUNK));
+pub fn par_map_mut<T: Send, R: Send>(items: &mut [T], f: impl Fn(&mut T) -> R + Sync) -> Vec<R> {
+    let workers = worker_count().min(items.len().div_ceil(PAR_CHUNK));
     if workers <= 1 {
         return items.iter_mut().map(f).collect();
     }
@@ -370,14 +370,94 @@ pub fn fnv64(b: &[u8]) -> u64 {
 
 /// 字节按单字节（Latin-1）读成文字：每个字节是一个 U+0000–U+00FF 的字符。不是 UTF-8 的样式表（Big5 之类）这样读：CSS 的语法都是
 /// ASCII，选择器、ASCII 的值照样认得，别的字节原样留着，用 [`latin1_encode`] 写回逐字节不变。
-pub(crate) fn latin1_decode(b: &[u8]) -> String {
+pub fn latin1_decode(b: &[u8]) -> String {
     b.iter().map(|&c| char::from(c)).collect()
 }
 
 /// [`latin1_decode`] 的反向：U+00FF 以内的字符写回一个字节，以外的（只可能是改写时新写进去的）写成 `?`。
-pub(crate) fn latin1_encode(s: &str) -> Vec<u8> {
+pub fn latin1_encode(s: &str) -> Vec<u8> {
     s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect()
 }
+
+const MAX_WORKERS: usize = 16;
+
+/// 并行工作线程数：取 CPU 核数，封顶 [`MAX_WORKERS`]。
+pub fn worker_count() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, MAX_WORKERS)
+}
+
+
+/// `%XX` 解码（XX 必须是两位十六进制，否则原样保留）。此前每个 `%` 现拼一个 `String` 再 `from_str_radix`，
+/// 后者还接受 `+` 号前缀，`%+1` 会被误解成字节 0x01。
+pub fn percent_decode(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            if let (Some(h), Some(l)) = (b.get(i + 1).and_then(|&c| hex(c)), b.get(i + 2).and_then(|&c| hex(c))) {
+                out.push(h << 4 | l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 快速哈希（FxHash 的算法：每 8 字节一轮「左旋 5 位、异或、乘常数」）。给键是短字符串、不会被构造碰撞攻击的表用：CSS 属性名 →
+/// 值（层叠结果，见 `csscascade::Decls`）。标准库缺省的 SipHash 防碰撞攻击、对短键慢；2026-10-15 实测层叠和换算计算值里大半
+/// 时间在给属性名算哈希。只影响表内部，不影响结果（标准库 `HashMap` 的遍历顺序本来就每次运行不同，产物不依赖它）。
+#[derive(Default, Clone, Copy)]
+pub struct FastHasher(u64);
+
+const FAST_K: u64 = 0x517c_c1b7_2722_0a95;
+
+impl FastHasher {
+    #[inline]
+    fn add(&mut self, w: u64) {
+        self.0 = (self.0.rotate_left(5) ^ w).wrapping_mul(FAST_K);
+    }
+}
+
+impl std::hash::Hasher for FastHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let (chunks, rest) = bytes.as_chunks::<8>();
+        for c in chunks {
+            self.add(u64::from_le_bytes(*c));
+        }
+        if !rest.is_empty() {
+            let mut b = [0u8; 8];
+            b[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(b));
+        }
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.add(u64::from(i));
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// 用 [`FastHasher`] 的 `HashMap`/`HashSet` 的构造器。
+pub type FastState = std::hash::BuildHasherDefault<FastHasher>;
 
 #[cfg(test)]
 mod tests {

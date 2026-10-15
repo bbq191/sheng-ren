@@ -7,9 +7,9 @@
 
 mod meta_edit;
 
-use library::{Added, Built, CoverResult, InfoResult, Library, OriginalState, Profile, Step, SyncEvent, SyncMemo};
+use library::{Added, BuildCounts, BuildEvent, BuildRun, Built, CoverResult, FailMemo, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo};
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -352,8 +352,6 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
 
 /// `sync --watch` 记住的生成失败：(书 id, 模式 id) → 失败时的指纹和原件状态。都没变就不再重试、不再重复报错。
 /// 设备重新接上时这台的全部忘掉（[`forget_reconnected`]）：传输失败、Move 掉线时查书出的错多半是连接的事，接上了要重试。
-type FailMemo = HashMap<(String, String), (String, OriginalState)>;
-
 /// 这一轮重新接上的设备（上一轮没接上、这轮接上了，或 Move 的连接断过、重连了）：忘掉它们记着的失败。
 /// `last_live`、`live` 和 `devices` 一一对应；`dropped` 是这轮开头发现断了的 Move（[`Library::refresh_devices`]）。
 fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Option<&[bool]>, live: &[bool], dropped: &[String]) {
@@ -365,199 +363,37 @@ fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Opt
     }
 }
 
-/// 一轮生成（[`build_all`]）要的东西。
-struct BuildRun<'a> {
-    lib: &'a Library,
-    devices: &'a [&'a Profile],
-    books: &'a [library::Meta],
-    force: bool,
-    /// 不打印没变化的（没选书时：只报有变化的）。
-    quiet: bool,
-    /// `sync --watch` 跨轮记住的生成失败：上次失败以后指纹和原件状态都没变的书跳过。不是 `--watch` 时 `None`。
-    fails: Option<&'a mut FailMemo>,
-    /// 提示过的不再支持的格式（早期版本收的 MOBI/PDF 等）的书：每本只提示一次。
-    skipped: &'a mut HashSet<String>,
-    /// 报过"没接上"的设备（`--watch` 时不重复报）。
-    absent_reported: &'a mut HashSet<String>,
+/// 一轮生成的汇总一行（用户 2026-09-29 反馈"看不出是否更新过"）。
+fn counts_summary(c: &BuildCounts) -> String {
+    let same = if c.same > 0 { format!("，重新生成但内容没变（没再传）{} 本", c.same) } else { String::new() };
+    let adopted = if c.adopted > 0 { format!("，认领设备上已有的 {} 本", c.adopted) } else { String::new() };
+    format!("生成：重新生成并传上 {} 本{same}{adopted}，挪位置 {} 本，已是最新 {} 本，失败 {} 本", c.written, c.moved, c.up_to_date, c.failed)
 }
 
-/// `build_all` 的结果计数（结尾打一行汇总：用户 2026-09-29 反馈"看不出是否更新过"）。
-#[derive(Default)]
-struct BuildCounts {
-    written: usize,
-    same: usize,
-    adopted: usize,
-    moved: usize,
-    up_to_date: usize,
-    failed: usize,
+/// 一轮生成里的一件事显示成一行（`quiet` 时没变化的不报）；`Err` 的算失败（退出码 2）。
+fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
+    Some(match ev {
+        BuildEvent::Unsupported { id, title, reason } => Ok(format!("- 跳过 {id}  {title}：{reason}")),
+        BuildEvent::RemovedFlushed { device, count } => Ok(format!("✓ [{device}] 删掉了 {count} 本已从书库删除的书")),
+        BuildEvent::RemoveFlushFailed { device, error } => Err(format!("✗ [{device}] 删已从书库删除的书：{error}")),
+        BuildEvent::DeviceAbsent { device, reason } => Ok(format!("- [{device}] {reason}，这次不传")),
+        BuildEvent::Built { device, title, built } => return built_line(&device, &title, built, quiet).map(Ok),
+        BuildEvent::Failed { device, title, error } => Err(format!("✗ [{device}] {title}: {error}")),
+        BuildEvent::Progress(line) => Ok(line),
+        BuildEvent::TransportLost { device, count } => Err(format!("✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）")),
+        BuildEvent::Waiting { in_flight } => Ok(format!("… 都生成好了，等设备那边传完（还有 {in_flight} 本；Move 加入时要排版，大书要几分钟）")),
+    })
 }
 
-impl BuildCounts {
-    fn summary(&self) -> String {
-        let same = if self.same > 0 { format!("，重新生成但内容没变（没再传）{} 本", self.same) } else { String::new() };
-        let adopted = if self.adopted > 0 { format!("，认领设备上已有的 {} 本", self.adopted) } else { String::new() };
-        format!("生成：重新生成并传上 {} 本{same}{adopted}，挪位置 {} 本，已是最新 {} 本，失败 {} 本", self.written, self.moved, self.up_to_date, self.failed)
-    }
-    fn any(&self) -> bool {
-        self.written + self.same + self.adopted + self.moved + self.failed > 0
-    }
-}
-
-/// 按模式 × 书逐本生成并送到设备上（没变化的跳过），每本一行结果（见 [`BuildRun`]）。设备没接上的模式跳过，报一行。
-fn build_all(run: BuildRun, report: &mut impl FnMut(Result<String, String>)) -> BuildCounts {
-    let BuildRun { lib, devices, books, force, quiet, mut fails, skipped, absent_reported } = run;
-    let mut counts = BuildCounts::default();
-    for m in books.iter().filter(|m| !m.supported()) {
-        if skipped.insert(m.id.clone()) {
-            report(Ok(format!("- 跳过 {}  {}：{}", m.id, m.title, library::unsupported(m.content_format()))));
-        }
-    }
-    // 产物直接送设备（profile 的 [deliver]）：没接上的设备这一轮整个跳过（每轮报一次），接上的先删掉以前删书时没删成的
-    let mut live: Vec<&Profile> = Vec::new();
-    for device in devices {
-        match lib.device_status(device) {
-            Ok(_) => {
-                match lib.flush_removed(device) {
-                    Ok(0) => {}
-                    Ok(n) => report(Ok(format!("✓ [{}] 删掉了 {n} 本已从书库删除的书", device.id))),
-                    Err(e) => report(Err(format!("✗ [{}] 删已从书库删除的书：{e}", device.id))),
-                }
-                live.push(device);
-            }
-            Err(e) => {
-                // --watch（给了 fails）时同一台没接上只报一次
-                if fails.is_none() || !absent_reported.contains(&device.id) {
-                    report(Ok(format!("- [{}] {e}，这次不传", device.id)));
-                }
-                absent_reported.insert(device.id.clone());
-            }
-        }
-    }
-    // 先比较、再生成（主线程）；要传的交给各设备的传输线程，和生成同时进行；传完的随时取回来记下、报一行
-    let mut pipe = library::Pipeline::default();
-    let landed = |lib: &Library, counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, report: &mut dyn FnMut(Result<String, String>), ev: library::Event| {
-        let (t, r) = match ev {
-            library::Event::Done(t, r) => (t, r),
-            library::Event::Progress(line) => return report(Ok(line)),
-            library::Event::Lost { device, count } => {
-                counts.failed += count;
-                return report(Err(format!("✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）")));
-            }
-        };
-        let (device, title) = (t.device.clone(), t.title.clone());
-        let book = t.book_id().to_string();
-        match lib.complete(*t, r) {
-            Ok(b) => {
-                if let Some(line) = built_line(&device, &title, b, quiet, counts) {
-                    report(Ok(line));
-                }
-            }
-            Err(e) => {
-                counts.failed += 1;
-                report(Err(format!("✗ [{device}] {title}: {e}")));
-                if let (Some(f), Some(m), Some(p)) = (fails.as_deref_mut(), books.iter().find(|m| m.id == book), lib.devices().get(&device)) {
-                    f.insert((book, device), (lib.fingerprint(m, p).unwrap_or_else(|e| e), lib.original_state(m)));
-                }
-            }
-        }
-    };
-    // 一本书一个模式：比较、生成，要传的交给传输线程
-    let one = |m: &library::Meta, device: &Profile, counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, pipe: &mut library::Pipeline, report: &mut dyn FnMut(Result<String, String>)| {
-        let key = (m.id.clone(), device.id.clone());
-        let now = || (lib.fingerprint(m, device).unwrap_or_else(|e| e), lib.original_state(m));
-        if let Some(f) = fails.as_deref_mut() {
-            match f.get(&key).map(|v| *v == now()) {
-                Some(true) => return,
-                Some(false) => {
-                    f.remove(&key);
-                }
-                None => {}
-            }
-        }
-        match lib.prepare(m, device, force) {
-            Ok(Step::Done(b)) => {
-                if let Some(line) = built_line(&device.id, &m.title, b, quiet, counts) {
-                    report(Ok(line));
-                }
-            }
-            Ok(Step::Transfer(t)) => pipe.submit(*t),
-            Err(e) => {
-                counts.failed += 1;
-                report(Err(format!("✗ [{}] {}: {e}", device.id, m.title)));
-                if let Some(f) = fails.as_deref_mut() {
-                    f.insert(key, now());
-                }
-            }
-        }
-    };
-    // 书在外层、模式在内层：同一本书与模式无关的中间文件（CBZ 转换、补元数据）只做一次。
-    // 哪台设备那边排满了（Move 排版慢），先跳过它做别的设备，留到最后补，不让一台挡住另外几台
-    // 推迟的书的中间文件留着（按书 id，`Library::release_prepared_of`），补的时候不用再转一遍；这本书所有模式做完就删
-    let mut later: Vec<(&library::Meta, &Profile)> = Vec::new();
-    let mut deferred: HashMap<&str, usize> = HashMap::new();
-    for m in books.iter().filter(|m| m.supported()) {
-        for device in &live {
-            while let Some(x) = pipe.next(false) {
-                landed(lib, &mut counts, &mut fails, report, x);
-            }
-            if pipe.has_room(&device.id) {
-                one(m, device, &mut counts, &mut fails, &mut pipe, report);
-            } else {
-                later.push((m, device));
-                *deferred.entry(m.id.as_str()).or_default() += 1;
-            }
-        }
-        if !deferred.contains_key(m.id.as_str()) {
-            lib.release_prepared_of(&m.id);
-        }
-    }
-    for (m, device) in later {
-        while !pipe.has_room(&device.id) {
-            let Some(x) = pipe.next(true) else { break };
-            landed(lib, &mut counts, &mut fails, report, x);
-        }
-        one(m, device, &mut counts, &mut fails, &mut pipe, report);
-        if let Some(n) = deferred.get_mut(m.id.as_str()) {
-            *n -= 1;
-            if *n == 0 {
-                lib.release_prepared_of(&m.id);
-            }
-        }
-    }
-    lib.release_prepared();
-    if pipe.in_flight() > 0 {
-        report(Ok(format!("… 都生成好了，等设备那边传完（还有 {} 本；Move 加入时要排版，大书要几分钟）", pipe.in_flight())));
-    }
-    while let Some(x) = pipe.next(true) {
-        landed(lib, &mut counts, &mut fails, report, x);
-    }
-    counts
-}
-
-/// 一本书一个模式的结果一行（`quiet` 时没变化的不报），顺带计数。
-fn built_line(device: &str, title: &str, b: Built, quiet: bool, counts: &mut BuildCounts) -> Option<String> {
+/// 一本书一个模式的结果一行（`quiet` 时没变化的不报）。
+fn built_line(device: &str, title: &str, b: Built, quiet: bool) -> Option<String> {
     let with_warnings = |head: String, warnings: &[String]| std::iter::once(head).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n");
     match b {
-        Built::Written { path, warnings } => {
-            counts.written += 1;
-            Some(with_warnings(format!("✓ 生成 [{device}] {title} → {}", path.display()), &warnings))
-        }
-        Built::Same { path, warnings } => {
-            counts.same += 1;
-            Some(with_warnings(format!("≡ 重新生成 [{device}] {title}：和设备上的一样，没再传（{}）", path.display()), &warnings))
-        }
-        Built::UpToDate(path) => {
-            counts.up_to_date += 1;
-            (!quiet).then(|| format!("= [{device}] {title} 已是最新（{}）", path.display()))
-        }
-        Built::Adopted(path) => {
-            counts.adopted += 1;
-            Some(format!("= [{device}] {title} 认领设备上已有的那份，没重新生成（{}）", path.display()))
-        }
-        Built::Moved { from, to } => {
-            counts.moved += 1;
-            Some(format!("↪ 挪位置 [{device}] {title} → {}（原来在 {}）", to.display(), from.display()))
-        }
+        Built::Written { path, warnings } => Some(with_warnings(format!("✓ 生成 [{device}] {title} → {}", path.display()), &warnings)),
+        Built::Same { path, warnings } => Some(with_warnings(format!("≡ 重新生成 [{device}] {title}：和设备上的一样，没再传（{}）", path.display()), &warnings)),
+        Built::UpToDate(path) => (!quiet).then(|| format!("= [{device}] {title} 已是最新（{}）", path.display())),
+        Built::Adopted(path) => Some(format!("= [{device}] {title} 认领设备上已有的那份，没重新生成（{}）", path.display())),
+        Built::Moved { from, to } => Some(format!("↪ 挪位置 [{device}] {title} → {}（原来在 {}）", to.display(), from.display())),
     }
 }
 
@@ -738,7 +574,7 @@ fn cmd_devices(ctx: &Ctx) {
     let lib = ctx.lib;
     for p in lib.devices().iter() {
         let r = p.output_readable();
-        println!("{:<12} {}  {}  屏幕 {}×{}  阅读范围 {}×{}  {}", p.id, p.name, match p.comic_format.filter(|f| *f != p.format()) {
+        println!("{:<12} {}  {}  屏幕 {}×{}  阅读范围 {}×{}  {}", p.id, p.name, match p.comic.format.filter(|f| *f != p.format()) {
             Some(c) => format!("{}（漫画 {}）", p.format().ext().to_uppercase(), c.ext().to_uppercase()),
             None => p.format().ext().to_uppercase(),
         }, p.screen.width, p.screen.height, r.width, r.height, if p.color { "彩色" } else { "黑白" });
@@ -1105,15 +941,20 @@ impl SyncState {
             devices: &plan.devices,
             books: &books,
             force: plan.force,
-            quiet: plan.selectors.is_empty(),
             fails: plan.watch.is_some().then_some(&mut self.fails),
             skipped: &mut self.skipped,
             absent_reported: &mut self.absent_reported,
         };
-        let counts = build_all(run, &mut |r| ctx.report(r));
+        // 没选书：只报有变化的
+        let quiet = plan.selectors.is_empty();
+        let counts = library::build_all(run, &mut |ev| {
+            if let Some(r) = event_line(ev, quiet) {
+                ctx.report(r);
+            }
+        });
         // --watch 时没有生成、挪动、失败就不出声
         if plan.watch.is_none() || counts.any() {
-            ctx.report(Ok(counts.summary()));
+            ctx.report(Ok(counts_summary(&counts)));
         }
         self.last_stamp = Some(stamp());
     }

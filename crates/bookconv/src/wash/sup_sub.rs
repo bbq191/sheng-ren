@@ -9,7 +9,7 @@
 //! 外层元素上的、在 `<sup>` 里的）不再包，同写出器只在和外层不一样时写。
 use super::*;
 use crate::cascade::MediaEnv;
-use crate::kindle_model::{self as km, Chapter};
+use crate::kindle_model::Chapter;
 
 pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>, inline_valign: bool) {
     if inline_valign {
@@ -19,10 +19,7 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
     if !entries.iter().any(|e| (is_css_name(&e.name) || is_chapter_entry(e)) && String::from_utf8_lossy(&e.data).to_ascii_lowercase().contains("vertical-align")) {
         return;
     }
-    let css = km::book_css(entries, media);
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    let fixed: Vec<Option<(Vec<u8>, usize)>> = crate::util::par_map(&chapters, |&i| wrap(&entries[i], media, &css));
-    drop(css);
+    let (chapters, fixed) = super::scan_chapters(entries, media, |e, css| wrap(e, media, css));
     for (i, f) in chapters.into_iter().zip(fixed) {
         if let Some((data, n)) = f {
             entries[i].data = data;

@@ -37,80 +37,38 @@ struct Plan {
 /// `remove`：阅读器不认 `display:none`（profile `display_none = false`），空段元素去掉；`trailing`：阅读器把块末尾的 `<br/>`
 /// 多排一行（profile `trailing_br_line`），去掉。
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, remove: bool, trailing: bool) {
-    let css = km::book_css(entries, media);
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    let plans: Vec<Plan> = crate::util::par_map(&chapters, |&i| plan(&entries[i], media, &css));
-    drop(css);
+    let (chapters, plans) = super::scan_chapters(entries, media, |e, css| plan(e, media, css));
     if plans.iter().all(|p| p.blanks.is_empty() && (!trailing || p.trailing.is_empty())) {
         return;
     }
-    let opf_idx = find_opf(entries);
-    let css_path = match opf_idx.map(|i| dir_of(&entries[i].name)) {
-        Some(d) if !d.is_empty() => format!("{d}/{CSS_NAME}"),
-        _ => CSS_NAME.to_string(),
-    };
+    let css_path = super::beside_opf(entries, CSS_NAME);
+    // 三段（2026-10-15 改，以前写回整段串行）：① 各章并行算好编辑（[`resolve`]，只读；折成上边距的那几处等编号）；
+    // ② 串行按「章的顺序、章里的顺序」给 (标签, 上外边距) 编类号——和以前逐章做时的先后一样，产物逐字节不变；③ 各章并行改写。
+    let resolved: Vec<Option<Resolved>> = crate::util::par_map(&chapters.iter().zip(&plans).collect::<Vec<_>>(), |&(&i, p)| {
+        (!(p.blanks.is_empty() && (!trailing || p.trailing.is_empty()))).then(|| resolve(&entries[i], p, remove, trailing)).flatten()
+    });
     // 同样的 (标签, 上外边距) 共用一个类
     let mut classes: Vec<(String, String)> = Vec::new();
     let mut blank_tags: std::collections::BTreeSet<String> = Default::default();
-    for (&i, p) in chapters.iter().zip(&plans) {
-        if p.blanks.is_empty() && (!trailing || p.trailing.is_empty()) {
-            continue;
-        }
-        let e = &mut entries[i];
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let Some((bs, be)) = html::body_range(text) else { continue };
-        let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
-        let mut edits = Vec::new();
-        for &n in &p.blanks {
-            let Some(t) = starts.get(n) else { continue };
-            let raw = &text[t.start..t.end];
-            if remove {
-                let name = t.name.to_ascii_lowercase();
-                let end = if raw.ends_with("/>") || html::is_void(&name) { Some(t.end) } else { html::find_close(text, t.end, &name).map(|c| c.end) };
-                if let Some(end) = end {
-                    edits.push((t.start, end, String::new()));
-                }
-                continue;
-            }
-            let mut tag = html::add_class(raw, BLANK);
-            // 行内写的高、边距（《消失的爱人》`height:1em`；掌阅认行内样式）：后面接一份
-            if let Some(s) = html::attr_value(&tag, "style") {
-                let s = format!("{};{HIDE}", html::style_base(s));
-                tag = html::set_attr(&tag, "style", &s);
-            }
-            blank_tags.insert(t.name.to_ascii_lowercase());
-            edits.push((t.start, t.end, tag));
-        }
-        for &n in p.trailing.iter().filter(|_| trailing) {
-            let Some(t) = starts.get(n) else { continue };
-            let end = if text[t.start..t.end].ends_with("/>") { Some(t.end) } else { html::find_close(text, t.end, "br").map(|c| c.end).or(Some(t.end)) };
-            if let Some(end) = end {
-                edits.push((t.start, end, String::new()));
-            }
-        }
-        for &(n, em) in &p.gaps {
-            let Some(t) = starts.get(n) else { continue };
-            let name = t.name.to_ascii_lowercase();
-            let value = format!("{}em", fmt_em(em));
-            let key = (name.clone(), value.clone());
-            let k = classes.iter().position(|c| *c == key).unwrap_or_else(|| {
-                classes.push(key);
-                classes.len() - 1
-            });
-            let raw = &text[t.start..t.end];
-            let mut tag = html::add_class(raw, &format!("eink-g{}", k + 1));
-            if let Some(s) = html::attr_value(&tag, "style") {
-                let s = format!("{};margin-top:{value};", html::style_base(s));
-                tag = html::set_attr(&tag, "style", &s);
-            }
-            edits.push((t.start, t.end, tag));
-        }
-        edits.sort_by_key(|e| e.0);
-        rep.kindle_rule_edits += edits.len();
-        let out = html::apply_edits(text, edits);
-        let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
-        e.data = typeset::inject_css_link(&out, &href).into_bytes();
+    let mut jobs: HashMap<usize, (Resolved, Vec<usize>)> = HashMap::new();
+    for (&i, r) in chapters.iter().zip(resolved) {
+        let Some(r) = r else { continue };
+        blank_tags.extend(r.blank_tags.iter().cloned());
+        let ks: Vec<usize> = r
+            .edits
+            .iter()
+            .filter_map(|(_, _, ed)| match ed {
+                Pending::Gap(key) => Some(classes.iter().position(|c| c == key).unwrap_or_else(|| {
+                    classes.push(key.clone());
+                    classes.len() - 1
+                })),
+                Pending::Done(_) => None,
+            })
+            .collect();
+        jobs.insert(i, (r, ks));
     }
+    let mut work: Vec<(&mut Entry, (Resolved, Vec<usize>))> = entries.iter_mut().enumerate().filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j))).collect();
+    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, (r, ks))| rewrite(e, r, ks, &css_path)).into_iter().sum::<usize>();
     let mut sheet = String::from("/* 只有空白的段落照 Kindle 折成下一块的上边距（sheng-ren kindle_rules，见 wash/blank_fold.rs） */\n");
     for t in blank_tags.iter().filter(|_| !remove) {
         sheet.push_str(&format!("html body {t}.{BLANK}{{{HIDE}}}\n"));
@@ -118,7 +76,88 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     for (k, (t, v)) in classes.iter().enumerate() {
         sheet.push_str(&format!("html body {t}.eink-g{}{{margin-top:{v};}}\n", k + 1));
     }
-    add_css_entry(entries, opf_idx, &css_path, &sheet, "eink-blank-css");
+    add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-blank-css");
+}
+
+/// 一处编辑的新内容：定好了的，或者折成上边距、要等类号的（键是 (标签, 上外边距)，原标签就是 `text[起..止]`）。
+enum Pending {
+    Done(String),
+    Gap((String, String)),
+}
+
+/// 一章算好的编辑（[`resolve`]）：(起, 止, 新内容)，按以前的先后（空段、块末尾的 `<br/>`、折成的上边距）；用到的空段标签。
+struct Resolved {
+    edits: Vec<(usize, usize, Pending)>,
+    blank_tags: Vec<String>,
+}
+
+/// 照 `p` 算一章的编辑（只读）。不是 UTF-8、没有 `<body>` 的章不动（`None`）。
+fn resolve(e: &Entry, p: &Plan, remove: bool, trailing: bool) -> Option<Resolved> {
+    let text = std::str::from_utf8(&e.data).ok()?;
+    let (bs, be) = html::body_range(text)?;
+    let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
+    let mut edits = Vec::new();
+    let mut blank_tags = Vec::new();
+    for &n in &p.blanks {
+        let Some(t) = starts.get(n) else { continue };
+        let raw = &text[t.start..t.end];
+        if remove {
+            let name = t.name.to_ascii_lowercase();
+            let end = if raw.ends_with("/>") || html::is_void(&name) { Some(t.end) } else { html::find_close(text, t.end, &name).map(|c| c.end) };
+            if let Some(end) = end {
+                edits.push((t.start, end, Pending::Done(String::new())));
+            }
+            continue;
+        }
+        let mut tag = html::add_class(raw, BLANK);
+        // 行内写的高、边距（《消失的爱人》`height:1em`；掌阅认行内样式）：后面接一份
+        if let Some(s) = html::attr_value(&tag, "style") {
+            let s = format!("{};{HIDE}", html::style_base(s));
+            tag = html::set_attr(&tag, "style", &s);
+        }
+        blank_tags.push(t.name.to_ascii_lowercase());
+        edits.push((t.start, t.end, Pending::Done(tag)));
+    }
+    for &n in p.trailing.iter().filter(|_| trailing) {
+        let Some(t) = starts.get(n) else { continue };
+        let end = if text[t.start..t.end].ends_with("/>") { Some(t.end) } else { html::find_close(text, t.end, "br").map(|c| c.end).or(Some(t.end)) };
+        if let Some(end) = end {
+            edits.push((t.start, end, Pending::Done(String::new())));
+        }
+    }
+    for &(n, em) in &p.gaps {
+        let Some(t) = starts.get(n) else { continue };
+        edits.push((t.start, t.end, Pending::Gap((t.name.to_ascii_lowercase(), format!("{}em", fmt_em(em))))));
+    }
+    Some(Resolved { edits, blank_tags })
+}
+
+/// 照算好的编辑改写一章（`ks` 是折成上边距那几处按顺序编好的类号，从 0 起），返回改动数。
+fn rewrite(e: &mut Entry, r: &Resolved, ks: &[usize], css_path: &str) -> usize {
+    let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+    let mut ks = ks.iter();
+    let mut edits: Vec<(usize, usize, String)> = r
+        .edits
+        .iter()
+        .map(|(s, t, ed)| match ed {
+            Pending::Done(new) => (*s, *t, new.clone()),
+            Pending::Gap((_, value)) => {
+                let k = ks.next().expect("每处折成的上边距都编了号");
+                let mut tag = html::add_class(&text[*s..*t], &format!("eink-g{}", k + 1));
+                if let Some(st) = html::attr_value(&tag, "style") {
+                    let st = format!("{};margin-top:{value};", html::style_base(st));
+                    tag = html::set_attr(&tag, "style", &st);
+                }
+                (*s, *t, tag)
+            }
+        })
+        .collect();
+    edits.sort_by_key(|e| e.0);
+    let n = edits.len();
+    let out = html::apply_edits(text, edits);
+    let href = crate::epubzip::href_to(dir_of(&e.name), css_path, "");
+    e.data = typeset::inject_css_link(&out, &href).into_bytes();
+    n
 }
 
 fn fmt_em(v: f64) -> String {
