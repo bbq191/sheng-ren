@@ -47,6 +47,9 @@ struct Img {
     fs: f64,
     /// 层叠出来的宽度（独立图片用，同写出器：px 按 0.75pt）。
     css_width: Option<Len>,
+    /// 宽度是 HTML 属性 `width="80%"` 写的（CSS 里没写）：Move 只认 CSS 的百分比宽度、不认这个属性，要写成类（《梁羽生》作者介绍页的图
+    /// 在 Kindle 上 80%，Move 上拉满一行，文字被挤到下一页，2026-10-15）。
+    attr_percent: bool,
     /// 行内图片的宽、高（同写出器：CSS 的 px 按 0.45pt，没写的用 HTML 属性）。
     box_w: Option<Len>,
     box_h: Option<Len>,
@@ -228,7 +231,8 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             let css = decls.get(k).filter(|v| v.trim() != "auto").and_then(|v| crate::cascade::parse_box_len(v));
             css.or_else(|| el.value().attr(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| *n > 0.0).map(|n| Len::Pt(n * 0.45)))
         };
-        f.imgs.push(Img { kind, fs: c.font_size, css_width: c.width, box_w: len("width"), box_h: len("height"), dims: d });
+        let attr_percent = !sheet.cascade(&el, &e.name).contains_key("width") && el.value().attr("width").is_some_and(|v| v.trim().ends_with('%'));
+        f.imgs.push(Img { kind, fs: c.font_size, css_width: c.width, attr_percent, box_w: len("width"), box_h: len("height"), dims: d });
     }
     // 只有一张图、没有字的文档（封面页、整页插图）：Kindle 写成整页图片版面、缩放到满页（Move 会把小封面拉满一行宽、
     // 掌阅按原图像素显示）。写出器要图外面没有带框的容器才这样排（《疯探》封面套在 `width:100%` 的 div 里，Kindle 按原图像素显示，
@@ -323,7 +327,7 @@ fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64) -> Optio
             // 百分比照写；只有比一页还高、Kindle 按一页高缩小了的（《金庸》竖长插图 100% 宽在 Kindle 上只占 84%–89%）写成缩小后的比例
             Some(Len::Percent(p)) => {
                 let fit = k.content_h * iw / ih / k.content_px;
-                if p / 100.0 <= fit + 0.005 {
+                if p / 100.0 <= fit + 0.005 && !(im.attr_percent && sizing == ImageSizing::Percent) {
                     return None;
                 }
                 (Shown::Frac(p / 100.0), false)
@@ -443,6 +447,16 @@ mod tests {
         let (c, sheet) = run(ImageSizing::Percent, BODY, CSS);
         assert_eq!(c, ["eink-iw-27-2p", "w50", "px eink-iw-66-2p", "em eink-iw-35-3p", "ic eink-iw-3-5p", "eink-iw-66-2p"]);
         assert!(sheet.contains("html body img.eink-iw-27-2p{width:27.2%;height:auto}"), "{sheet}");
+    }
+
+    /// HTML 属性 `width="50%"`（CSS 里没写）：Move 不认属性，写成类；CSS 写的百分比不动。
+    #[test]
+    fn attribute_percent_becomes_class_for_percent_reader() {
+        let (c, sheet) = run(ImageSizing::Percent, r#"<div><img width="50%" src="m.jpg"/></div><div><img class="w50" width="30%" src="m.jpg"/></div>"#, CSS);
+        assert_eq!(c, ["eink-iw-50p", "w50"]);
+        assert!(sheet.contains("html body img.eink-iw-50p{width:50%;height:auto}"), "{sheet}");
+        let (c, _) = run(ImageSizing::DevicePx, r#"<p>字</p><div><img width="50%" src="m.jpg"/></div>"#, CSS);
+        assert_eq!(c, [""], "掌阅的属性认不认没量过，先不动");
     }
 
     /// 掌阅照 CSS、px 是屏幕像素：em 写的不动；px 写的折成 Kindle 的 em；不写宽度的独立图片按原图像素折成百分比；

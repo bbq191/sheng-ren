@@ -8,6 +8,8 @@
 - 竖排：一行只放得下一两个字的窄块（《梁羽生》卷名）另外两台也得窄，反过来也一样；块宽差出页宽 10% 以上的另列一项；
 - 横线：块上下的边框、左右的竖线、`<hr>`，Kindle 画了的两台也要画（Move 不画 CSS 边框：上下边框数 `wash/box_fix.rs` 插的
   横线图，左右的数单元格边框；掌阅照 CSS）；
+- 封面页：只有图的节（封面、合集里每本的分书封面、整页插图）的个数、位置（前面有几个有字的节）和 Kindle 一样，不多翻一页
+  （`break_margin` 照 Kindle 估算插的分页并回前一节，见 `estimated_breaks`）；
 - 分页：哪些块另起一页（文件开头、强制分页）三台一样；Move 文件开头的块上有强制分页会多一页空白（KINDLE_RULES 34 修了，这里
   兜底）；两台有没有内容的节（排成一页空白）；Move 不认 `break-before:page`（只认 `page-break-before`）。
 
@@ -23,7 +25,7 @@ from s2kdev import kfx_features
 from unify import DEVICES, READER_GEOMETRY, books_in, profile_flag, profile_value
 
 PAGE = 32.0  # Kindle 一行的根 em 数（同 s2kdev.py）
-CATS = ['对齐', '竖排', '块宽', '横线', '分页', '空白页', '怪癖']
+CATS = ['对齐', '竖排', '块宽', '横线', '分页', '空白页', '封面', '怪癖']
 KEY = lambda t: ''.join(t.split())[:60]
 # KFX 边框：槽 0 是四边，1–4 是上、左、下、右（`crates/kfx/src/write/style.rs` 的 `border_props`）
 B_STYLE, B_WIDTH, B_COLOR = ['$88', '$89', '$90', '$91', '$92'], ['$93', '$94', '$95', '$96', '$97'], ['$83', '$84', '$85', '$86', '$87']
@@ -157,7 +159,7 @@ def epub_events(path, bindir, device):
     for line in lines[1:]:
         f = line.split('\t')
         if f[0] == '#sec':
-            out.append(('sec', f[3] == 'true'))
+            out.append(('sec', f[3] == 'true', f[2] == 'true'))
         elif f[0] == '#open':
             tbl = depth_table[-1] or int(f[1]) in (278, 151, 454, 455, 279)
             depth_table.append(tbl)
@@ -177,7 +179,7 @@ def epub_events(path, bindir, device):
             if name.startswith('eink-rule-'):
                 out.append(('rule',))
             elif not name.startswith('eink-'):
-                out.append(('img', int(f[2]), int(f[3])))
+                out.append(('img', int(f[2]), int(f[3]), f[1]))
         elif not f[0].startswith('#') and len(f) == 13:
             fs = float(f[1])
             align = {'-': 'left', 'start': 'left', 'end': 'right'}.get(f[7], f[7])
@@ -263,6 +265,79 @@ def layout_of(events, em_frac, honors_padding, honors_width, css_borders_outside
                 s[4] = len(nodes) - 1
             new_page = hr_before = rule_top = False
     return nodes, issues
+
+
+def estimated_breaks(epub):
+    """`wash/break_margin.rs` 照 Kindle 估算插的分页（类 `eink-pb`）开头的内容：(第一段字的前 60 个字, 开头的图路径)。Kindle 上这些地方
+    是版面自己挪页，KFX 里不分节；掌阅、Move 照估算写成强制分页，会多出一节。版式检查把这些节并进前一节。"""
+    import zipfile, html as H
+    keys, imgs = set(), set()
+    z = zipfile.ZipFile(epub)
+    for name in z.namelist():
+        if not name.lower().endswith(('.xhtml', '.html', '.htm')):
+            continue
+        t = z.read(name).decode('utf-8', 'replace')
+        for m in re.finditer(r'<(\w+)\b[^>]*\bclass="[^"]*\beink-pb\b[^"]*"[^>]*>', t):
+            tail = t[m.end():m.end() + 2000]
+            first = re.search(r'<img\b[^>]*\bsrc="([^"]+)"', tail)
+            txt = re.search(r'>([^<]*[^<\s][^<]*)<', '>' + tail) if not tail.lstrip().startswith('<img') else None
+            if first and (not txt or tail.find(first.group(0)) < tail.find(txt.group(1))):
+                imgs.add(posix_name(first.group(1)))
+            elif txt:
+                keys.add(KEY(H.unescape(txt.group(1))))
+            elif first:
+                imgs.add(posix_name(first.group(1)))
+    return keys, imgs
+
+
+def posix_name(src):
+    return src.replace('\\', '/').rsplit('/', 1)[-1]
+
+
+def section_kinds(events, soft=None):
+    """每一节（一页的起点）的种类：`I` 只有图（封面、整页插图），`T` 有字，`E` 什么都没有；按阅读顺序。`soft`＝[`estimated_breaks`]
+    的 (字, 图)：以它们开头的节并进前一节。"""
+    kinds = []
+    first, split = True, False
+    for ev in events:
+        if ev[0] == 'sec':
+            kinds.append([0, 0])
+            first = True
+            split = len(ev) > 2 and not ev[2]  # 文件中间切出来的节（强制分页处）
+            continue
+        if not kinds or ev[0] not in ('text', 'img'):
+            continue
+        if first and soft and split and len(kinds) > 1:
+            key = KEY(ev[1]) if ev[0] == 'text' else None
+            if (ev[0] == 'text' and key in soft[0]) or (ev[0] == 'img' and len(ev) > 3 and posix_name(ev[3]) in soft[1]):
+                prev = kinds.pop()
+                kinds[-1][0] += prev[0]
+                kinds[-1][1] += prev[1]
+        first = False
+        kinds[-1][0 if ev[0] == 'text' else 1] += 1
+    return ['T' if t else 'I' if i else 'E' for t, i in kinds]
+
+
+def cover_issues(k_kinds, d_kinds):
+    """合集分书封面不多页（用户 2026-10-15）：只有图的节（封面、分书封面、整页插图）的个数和位置三台要一样；Kindle 没有的
+    封面页、多出来的整页图都会让阅读器多翻一页。位置比的是「第几个只有图的节前面有几个有字的节」，不看绝对页码。"""
+    def marks(kinds):
+        out, texts = [], 0
+        for k in kinds:
+            if k == 'I':
+                out.append(texts)
+            elif k == 'T':
+                texts += 1
+        return out
+    km, dm = marks(k_kinds), marks(d_kinds)
+    found = []
+    if len(km) != len(dm):
+        found.append(('封面', f'只有图的页 Kindle {len(km)} 页、这台 {len(dm)} 页'))
+    for i, (a, b) in enumerate(zip(km, dm)):
+        if a != b:
+            found.append(('封面', f'第 {i + 1} 个只有图的页：Kindle 前面有 {a} 页有字的、这台 {b} 页'))
+            break
+    return found
 
 
 def per_line(lay, page_em):
@@ -384,6 +459,7 @@ def main():
             if ev[0] == 'text':
                 ev[2]['size_root'] = ev[2]['size'] * base_fs
         k_nodes, _ = layout_of(kev, lambda em, size: em, True, True, True)
+        k_kinds = section_kinds(kev)
         row = []
         for d in DEVICES:
             bfs, dev = epub_events(f'{stem}.{d}.epub', bindir, d)
@@ -393,7 +469,7 @@ def main():
             frac = lambda em, size, d=d: em / page_em[d]
             d_nodes, issues = layout_of(dev, frac, profile_flag(d, 'padding'), profile_flag(d, 'block_width'), profile_flag(d, 'borders'))
             skip = moved_notes(f'{stem}.{d}.epub') if profile_flag(d, 'repair_note_links', False) else frozenset()
-            found = compare(k_nodes, d_nodes, PAGE, page_em[d], skip) + issues
+            found = compare(k_nodes, d_nodes, PAGE, page_em[d], skip) + issues + cover_issues(k_kinds, section_kinds(dev, estimated_breaks(f'{stem}.{d}.epub')))
             if d == 'xochitl' and (c := legacy_break_count(f'{stem}.{d}.epub')):
                 found.append(('怪癖', f'{c} 处 break-before/after:page（Move 只认 page-break-*）'))
             cnt = collections.Counter(c for c, _ in found)

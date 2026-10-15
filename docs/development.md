@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-15：639 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-15：641 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -82,7 +82,7 @@ done
 |---|---|
 | 重构、提速写出器 | 同一份优化后 EPUB，新旧写出器的 KFX 逐字节相同（2026-10-06 提速省内存那次：《北斗之拳》卷01 峰值 1.45→0.73GB，金庸全集 0.87→0.56GB、1.7→0.7 秒，阿加莎全集 3.3→1.4 秒，产物逐字节不变） |
 | 照 Send to Kindle 的规则（写出器、掌阅/Move 的 `kindle_rules`） | **改了 `kindle_rules` 或写出器就跑 `tools/kfx/unify.py ~/Documents/ereader/books target/unify`**（掌阅、Move 对我们的 Kindle KFX 逐项一致率，不要 Amazon 样本；比基线 `tools/kfx/unify-baseline.tsv` 差、或新书低于门槛就退出码 1，有意改了就 `--update` 写回基线一起提交；新出现的偏差按[五类](kfx.md#三台统一的回归门槛2026-10-12)归类，属于漏洞的修掉）；`tools/kfx/s2kbatch.py`（写出器对 Amazon 样本逐属性）、`tools/kfx/s2kdev.py`（三台对 Amazon 样本逐项一致率），见 [KFX · 三台和 Send to Kindle 的一致性](kfx.md#三台和-send-to-kindle-的一致性)；样本在 Kindle 的 `documents/Downloads/Items01/` |
-| 三台版式（2026-10-15 用户定的验收重点：居中、竖排、横线、分页、封面不多页、漫画留边） | **跑 `tools/kfx/layout.py ~/Documents/ereader/books target/layout`**：以 Kindle KFX 为准，逐个文字块查掌阅、Move 的对齐、窄块竖排、块宽、上下横线/竖线/`<hr>`、另起一页、空白页（读 `epub-to-kfx --styles` 的 `#sec`/`#open`/`#box`/`#rule`/`#hr` 行；阅读器怪癖按 profile 的 `padding`、`block_width`、`borders` 折进来；边框颜色和底色灰度差不到 24 的不算；Move 搬进本章的注释、KINDLE_RULES 18 估算的分页不算）。一处不一样就列，不打总分；基线 `tools/kfx/layout-baseline.tsv` 记每本每台各类的处数，多了退出码 1。**漫画跑 `tools/kfx/comics.py ~/Documents/ereader/books target/comics`**：页数、画布和阅读范围同比例（不拉伸）、翻页方向照书（profile `comic_page_direction` 例外）、Kindle KFX 固定版式 1:1 居中算硬性；受限边离屏幕 1–2px、居中按像素量（JPEG 振铃、纸色淡边会差几 px），列出来看图 |
+| 三台版式（2026-10-15 用户定的验收重点：居中、竖排、横线、分页、封面不多页、漫画留边） | **跑 `tools/kfx/layout.py ~/Documents/ereader/books target/layout`**：以 Kindle KFX 为准，逐个文字块查掌阅、Move 的对齐、窄块竖排、块宽、上下横线/竖线/`<hr>`、另起一页、空白页、封面页（只有图的节的个数和位置，合集分书封面不多页；Move/掌阅 `break_margin` 估算插的分页在 Kindle 上是版面自己挪页、KFX 里不分节，并回前一节）（读 `epub-to-kfx --styles` 的 `#sec`/`#open`/`#box`/`#rule`/`#hr` 行；阅读器怪癖按 profile 的 `padding`、`block_width`、`borders` 折进来；边框颜色和底色灰度差不到 24 的不算；Move 搬进本章的注释、KINDLE_RULES 18 估算的分页不算）。一处不一样就列，不打总分；基线 `tools/kfx/layout-baseline.tsv` 记每本每台各类的处数，多了退出码 1。**漫画跑 `tools/kfx/comics.py ~/Documents/ereader/books target/comics`**：页数、画布和阅读范围同比例（不拉伸）、翻页方向照书（profile `comic_page_direction` 例外）、Kindle KFX 固定版式 1:1 居中算硬性；受限边离屏幕 1–2px、居中按像素量（JPEG 振铃、纸色淡边会差几 px），列出来看图 |
 | 改了写出器的行为 | 只有该变的书变了，逐本说明（比如写出器 7 只有《福尔摩斯探案全集》变；写出器 8 同一个 `--id` 下全部逐字节不变，书库产物因唯一 ID 改取书 id 全变）；`WRITER_VERSION` 加一；上真机看过再写 ✓ |
 | 改了容器读写（`ion`、`container`） | `kfx-repack` 解开再打包设备上的样本（`target/kfx-samples/` 等）全部逐字节相同 |
 
@@ -96,7 +96,7 @@ done
 |---|---|---|---|
 | 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 57 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 54 | 漫画 |
-| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 35 | 只有开了 `kindle_rules` 的模式的文字书 |
+| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 36 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签、作者国籍、译者、出版社、日期、ISBN，书名换成网站书名 | `bookconv::opfmeta::VERSION` | 6 | 只有补过东西的 |
 | EPUB → KFX | `kfx::write::WRITER_VERSION` | 23 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
