@@ -104,6 +104,71 @@ foreign_owner() {
   return 1
 }
 
+# 各包要装的命令名（[`pkg_bins`]）读一次缓存起来：install、uninstall 每个包要用好几次，不每次起一个 awk。
+# 和 cargo_list 一样要在主 shell 里先调 load_bins（$(…) 是子 shell，存不住）。
+declare -A _bins=()
+load_bins() {
+  local d
+  for d in "$here"/crates/*/; do
+    d=${d%/}
+    _bins[${d##*/}]=$(pkg_bins "${d##*/}")
+  done
+}
+bins() {
+  printf '%s' "${_bins[$1]-}"
+}
+
+# 装之前看能不能写安装目录：bin 目录和记账文件所在的目录（还没建的看最近一级已有的上级目录）。不能写就在编译之前停下，
+# 别编译好几分钟以后才在备份那一步报 mkdir 的权限错。
+require_writable_root() {
+  local d
+  for d in "$rootdir" "$bindir"; do
+    while [[ ! -e $d ]]; do d=$(dirname "$d"); done
+    if [[ ! -d $d || ! -w $d ]]; then
+      echo "✗ 没有权限写 $d（安装目录 ${rootdir/#"$HOME"/\~}）：换个能写的位置（CARGO_INSTALL_ROOT 或 cargo 配置的 install.root），别用 sudo" >&2
+      exit 1
+    fi
+  done
+}
+
+# 同一个安装目录同时只跑一个 install.sh / uninstall.sh：两个一起跑时共用 bin 下的备份目录，后一个开头清掉前一个的备份、
+# 结束时又删掉对方的，前一个装到一半失败就退不回去了。锁的是安装目录本身（flock 一个只读打开的目录），不另留锁文件；
+# 进程退出锁就放了（kill -9 也一样）。没有 flock（不是 Linux 的 util-linux）就不锁，照旧能用。
+lock_install_root() {
+  command -v flock >/dev/null || return 0
+  mkdir_tracked "$rootdir"
+  exec 9<"$rootdir"
+  if ! flock -n 9; then
+    echo "✗ 另一个 install.sh / uninstall.sh 正在往 ${rootdir/#"$HOME"/\~} 装或卸，等它做完再运行" >&2
+    exit 1
+  fi
+}
+
+# 脚本自己建的目录（上级在前）：没装成（编译失败、中断、回滚）时由 remove_made_dirs 删掉还空着的，不留空目录。原来就有的不记。
+made_dirs=()
+mkdir_tracked() {
+  local d=$1 new=()
+  while [[ ! -e $d ]]; do
+    new=("$d" "${new[@]}")
+    d=$(dirname "$d")
+  done
+  [[ ${#new[@]} -eq 0 ]] && return 0
+  mkdir -p "$1"
+  made_dirs+=("${new[@]}")
+}
+# 从最深的往上删：只删空的（rmdir 删不掉非空目录，装成了的目录里有东西，删不到）。`cargo install --list` 会在新建的安装目录里
+# 写两个空的记账文件（什么都没装）：这次新建的目录里空的记账文件先删掉，原来就有的目录不碰。
+remove_made_dirs() {
+  local i d f
+  for ((i = ${#made_dirs[@]} - 1; i >= 0; i--)); do
+    d=${made_dirs[i]}
+    for f in "$d/.crates.toml" "$d/.crates2.json"; do
+      if [[ -f $f && ! -s $f ]]; then rm -f "$f"; fi
+    done
+    rmdir "$d" 2>/dev/null || true
+  done
+}
+
 # 打印脚本 $1 开头的说明（第 2 行起连续的 # 注释，去掉 `# `）：--help 用，改注释不用跟着改行号
 print_header() {
   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$1"

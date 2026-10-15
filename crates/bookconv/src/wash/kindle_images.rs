@@ -93,7 +93,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             dims.entry(e.name.as_str()).or_insert(d);
         }
     }
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
+    let chapters = super::chapter_indices(entries);
     let per_file: Vec<FileImgs> = crate::util::par_map(&chapters, |&i| scan(&entries[i], media, &css, &dims));
     let mut sizes = HashMap::new();
     for f in &per_file {
@@ -120,11 +120,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     if rules.is_empty() {
         return;
     }
-    let opf_idx = find_opf(entries);
-    let css_path = match opf_idx.map(|i| dir_of(&entries[i].name)) {
-        Some(d) if !d.is_empty() => format!("{d}/{IMG_CSS_NAME}"),
-        _ => IMG_CSS_NAME.to_string(),
-    };
+    let css_path = super::beside_opf(entries, IMG_CSS_NAME);
     let mut edited = 0;
     for (&i, cls) in chapters.iter().zip(&classes) {
         if cls.iter().all(Option::is_none) {
@@ -152,7 +148,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         sheet.push_str(r);
         sheet.push('\n');
     }
-    add_css_entry(entries, opf_idx, &css_path, &sheet, "eink-img-css");
+    add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-img-css");
 }
 
 /// 待走的节点：(节点, 父元素的计算值, 所在块的计算值, 在不显示的元素里)。

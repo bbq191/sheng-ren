@@ -54,7 +54,7 @@ impl BookSource for Bangumi {
     }
 
     fn fetch_hits(&self, net: &Net, q: &str) -> Result<serde_json::Value, String> {
-        net.post_json(&self.search_url(q), &serde_json::json!({ "keyword": q, "filter": { "type": [1] } }))
+        Ok(net.post_json(&self.search_url(q), &serde_json::json!({ "keyword": q, "filter": { "type": [1] } }))?)
     }
 
     fn applies(&self, l: &Lookup<'_>) -> bool {

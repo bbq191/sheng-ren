@@ -13,6 +13,39 @@ pub(crate) const UA: &str = "booklib/0.1 (personal e-book library tool)";
 /// 最多试几次（429、5xx、超时这类临时错误才重试）。
 const TRIES: usize = 4;
 
+/// 一次请求失败的原因。分类决定两件事：要不要记成临时错误（[`Net::transient_error`]，这一轮不落「没有」的结论），
+/// 调用方要不要当成「网站上没有」。调用方多数函数返回 `Result<_, String>`，`?` 时经 `From` 转成说明文字。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NetError {
+    /// 网站明确回了「没有」（4xx，403、429 除外）：重试也没用，也不是网络问题。
+    Status { url: String, code: u16 },
+    /// 临时的：连不上、被拦（403、回来的不是 JSON）、429/5xx 重试完、读到一半断了。会记进 [`Net::transient_error`]。
+    Transient(String),
+    /// 别的（网址不对、响应超过上限、回来的 JSON 坏了）：不重试，也不算网络问题。
+    Other(String),
+}
+
+impl NetError {
+    pub(crate) fn is_transient(&self) -> bool {
+        matches!(self, NetError::Transient(_))
+    }
+}
+
+impl std::fmt::Display for NetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetError::Status { url, code } => write!(f, "{url}: HTTP {code}"),
+            NetError::Transient(e) | NetError::Other(e) => f.write_str(e),
+        }
+    }
+}
+
+impl From<NetError> for String {
+    fn from(e: NetError) -> String {
+        e.to_string()
+    }
+}
+
 /// 带节流和重试的 HTTP：Wikidata 限速严（连续请求会 429），每个请求间隔至少 1.2 秒，429 时按 Retry-After 等。
 ///
 /// - 4xx（除了 429、403）是"没有"，不重试；403 不重试、但算临时错误（多半是被反爬拦了，见下）；
@@ -56,32 +89,42 @@ impl Net {
         self.transient.borrow_mut().get_or_insert_with(|| e.to_string());
     }
 
-    pub(crate) fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
+    /// 请求失败都经这里返回：临时错误顺手记下（以前每个出错分支各记一次）。
+    fn fail<T>(&self, e: NetError) -> Result<T, NetError> {
+        if e.is_transient() {
+            self.note_transient(&e.to_string());
+        }
+        Err(e)
+    }
+
+    pub(crate) fn fetch(&self, url: &str) -> Result<Vec<u8>, NetError> {
         self.fetch_ref(url, None)
     }
 
     /// `referer`：豆瓣图片服务器不带来源页会拒绝（HTTP 418）。
-    pub(crate) fn fetch_ref(&self, url: &str, referer: Option<&str>) -> Result<Vec<u8>, String> {
+    pub(crate) fn fetch_ref(&self, url: &str, referer: Option<&str>) -> Result<Vec<u8>, NetError> {
         self.request(url, referer, None)
     }
 
     /// POST 一个 JSON 请求体、取回 JSON（Bangumi 的搜索接口）；回来的不是 JSON 同 [`Net::json_strict`] 算临时错误。
-    pub(crate) fn post_json(&self, url: &str, body: &Value) -> Result<Value, String> {
+    pub(crate) fn post_json(&self, url: &str, body: &Value) -> Result<Value, NetError> {
         let body = self.request(url, None, Some(body))?;
-        serde_json::from_slice(&body).map_err(|e| {
-            let e = format!("{url}: 回来的不是 JSON（{e}，可能被网站拦了）");
-            self.note_transient(&e);
-            e
-        })
+        self.strict_json(url, &body)
+    }
+
+    /// 回来的不是 JSON 算临时错误（被网站拦了：反爬时照样回 200，内容是验证页）。
+    fn strict_json(&self, url: &str, body: &[u8]) -> Result<Value, NetError> {
+        match serde_json::from_slice(body) {
+            Ok(v) => Ok(v),
+            Err(e) => self.fail(NetError::Transient(format!("{url}: 回来的不是 JSON（{e}，可能被网站拦了）"))),
+        }
     }
 
     /// 一次请求（节流、重试、断网判定同上）：`body` 给了就 POST 这个 JSON，否则 GET。
-    fn request(&self, url: &str, referer: Option<&str>, body: Option<&Value>) -> Result<Vec<u8>, String> {
+    fn request(&self, url: &str, referer: Option<&str>, body: Option<&Value>) -> Result<Vec<u8>, NetError> {
         let host = host_of(url);
         if self.down.borrow().contains(host) {
-            let e = format!("{url}: 连不上 {host}，跳过");
-            self.note_transient(&e);
-            return Err(e);
+            return self.fail(NetError::Transient(format!("{url}: 连不上 {host}，跳过")));
         }
         let mut last_err = String::new();
         for attempt in 1..=TRIES {
@@ -109,7 +152,7 @@ impl Net {
                 Ok(r) => {
                     match bookconv::util::read_capped(r.into_reader(), MAX_BODY, 0) {
                         // 超过上限的不是封面也不是条目页：报错，不能截断了当成功（截断的图读得出尺寸，会被当封面存下）
-                        Ok(None) => return Err(format!("{url}: 响应超过 {} MB", MAX_BODY >> 20)),
+                        Ok(None) => return self.fail(NetError::Other(format!("{url}: 响应超过 {} MB", MAX_BODY >> 20))),
                         Ok(Some(buf)) => return Ok(buf),
                         Err(e) => {
                             last_err = e.to_string();
@@ -122,50 +165,38 @@ impl Net {
                     r.header("Retry-After").and_then(|v| v.parse().ok()).unwrap_or(5u64).min(60)
                 }
                 // 403 多半是被反爬拦了（豆瓣），不是"没有"：记成临时错误，本次不落结论（不当成没这本书、不生成封面存下）
-                Err(ureq::Error::Status(403, _)) => {
-                    let e = format!("{url}: HTTP 403（可能被网站拦了）");
-                    self.note_transient(&e);
-                    return Err(e);
-                }
-                Err(ureq::Error::Status(code, _)) => return Err(format!("{url}: HTTP {code}")),
+                Err(ureq::Error::Status(403, _)) => return self.fail(NetError::Transient(format!("{url}: HTTP 403（可能被网站拦了）"))),
+                Err(ureq::Error::Status(code, _)) => return self.fail(NetError::Status { url: url.to_string(), code }),
                 Err(e @ ureq::Error::Transport(_)) => match e.kind() {
                     ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed => {
                         if self.down.borrow_mut().insert(host.to_string()) {
                             self.down_since_ok.set(self.down_since_ok.get() + 1);
                         }
-                        let e = format!("连不上 {host}（{e}）");
-                        self.note_transient(&e);
-                        return Err(e);
+                        return self.fail(NetError::Transient(format!("连不上 {host}（{e}）")));
                     }
                     ureq::ErrorKind::Io | ureq::ErrorKind::BadStatus | ureq::ErrorKind::BadHeader | ureq::ErrorKind::ProxyConnect => {
                         last_err = e.to_string();
                         2
                     }
-                    _ => return Err(format!("{url}: {e}")), // 网址不对、重定向太多：重试也没用
+                    _ => return self.fail(NetError::Other(format!("{url}: {e}"))), // 网址不对、重定向太多：重试也没用
                 },
             };
             if attempt < TRIES {
                 std::thread::sleep(Duration::from_secs(wait));
             }
         }
-        let e = format!("{url}: {last_err}");
-        self.note_transient(&e);
-        Err(e)
+        self.fail(NetError::Transient(format!("{url}: {last_err}")))
     }
 
-    pub(crate) fn json(&self, url: &str) -> Result<Value, String> {
-        serde_json::from_slice(&self.fetch(url)?).map_err(|e| format!("{url}: {e}"))
+    pub(crate) fn json(&self, url: &str) -> Result<Value, NetError> {
+        serde_json::from_slice(&self.fetch(url)?).map_err(|e| NetError::Other(format!("{url}: {e}")))
     }
 
     /// 同 [`Net::json`]，但回来的不是 JSON 也算临时错误：豆瓣反爬时搜索接口照样回 200，内容是验证页，
     /// 不能当成"没这本书"（那样会生成封面存下来、以后不再找）。
-    pub(crate) fn json_strict(&self, url: &str) -> Result<Value, String> {
+    pub(crate) fn json_strict(&self, url: &str) -> Result<Value, NetError> {
         let body = self.fetch(url)?;
-        serde_json::from_slice(&body).map_err(|e| {
-            let e = format!("{url}: 回来的不是 JSON（{e}，可能被网站拦了）");
-            self.note_transient(&e);
-            e
-        })
+        self.strict_json(url, &body)
     }
 }
 
@@ -213,7 +244,8 @@ mod tests {
         let net = Net::new();
         assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());
         assert!(!net.offline(), "一个网站连不上不算断网");
-        assert!(net.fetch(&format!("http://127.0.0.1:{port}/x")).unwrap_err().contains("404"));
+        assert!(matches!(net.fetch(&format!("http://127.0.0.1:{port}/x")), Err(super::NetError::Status { code: 404, .. })));
+        assert!(net.transient_error().iter().all(|e| !e.contains("404")), "404 是「没有」，不记成临时错误");
         assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());
         assert!(!net.offline(), "两个连不上的网站之间有网站回了 404：网是通的，不算断网");
         assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());

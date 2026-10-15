@@ -12,17 +12,19 @@
 
 ![核心架构](img/architecture.svg)
 
-四个 crate 分层，上层用下层，下层不知道上层：
+七个 crate 分层（`drm` 是空壳），上层用下层，下层不知道上层：
 
 | crate | 职责 | 命令 |
 |---|---|---|
 | `library` | 书库：入库、跟踪同步、按模式生成、产物放哪、指纹、联网补元数据 | `booklib` |
 | `bookconv` | 内容层：CBZ/网页 → EPUB、清洗、优化、图片、质量门。**不管书库**，只按调用方给的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
 | `kfx` | KFX：Ion 编解码、容器读写、EPUB → KFX 写出器（clean-room，见 [KFX](kfx.md)）；书库 `kindle` 模式的文字书和漫画都用它 | `epub-to-kfx`、`kfx-dump`、`kfx-repack` |
-| `profile` | 阅读模式的参数，TOML 编译时嵌入；`--device=` 的解析 | |
+| `csscascade` | CSS 层叠引擎（`@media` 求值、选择器优先级、计算值）、标签缺省样式表；KFX 写出器和优化器共用。2026-10-15 从 `bookconv` 拆出，`bookconv::cascade` 照旧能用 | |
+| `bookbase` | 基础件：`util`（原子写、限量读、并行、图片格式表）、`html`（容错的 HTML/CSS 文本操作）、`color`、`epubpath`（EPUB 里的路径、链接解析）。不依赖本仓库别的 crate；2026-10-15 从 `bookconv` 拆出，`bookconv::util` 等照旧能用 | |
+| `profile` | 阅读模式的参数，TOML 编译时嵌入；`--device=` 的解析。字段按职责分组：`css`（`CssQuirks`，阅读器的 CSS 怪癖）、`comic`（`ComicPolicy`）、`notes`（`NotePolicy`），TOML 里照旧平铺；`epub-optimize --print-profile --device=…` 打印解析好的 JSON（`tools/` 的脚本用） | |
 | `drm` | 空壳，解 DRM 暂停 | |
 
-依赖单向无环：`library` → `kfx` → `bookconv` → `profile`（`library` 也直接用 `bookconv`、`profile`）；`drm` 独立。
+依赖单向无环：`library` → `kfx` → `bookconv` → `csscascade` → `profile`、`bookbase`（上层也直接用下面几层）；`drm` 独立。
 
 ## 一本书怎么流过各模块
 
@@ -47,14 +49,11 @@
 | `article` | 网页 → EPUB（正文抽取，图片保留原图；编码按 BOM → HTTP 头 → `<meta charset>` 认，没声明又不是合法 UTF-8、或声明 UTF-8 而字节不合法的按 GB18030，解码后去掉 U+FFFD） |
 | `optimize/` | 优化主流程：流式读写、逐文件变换、图片并行处理。文字书走完整处理还是只修复由 `OptimizeOpts::text_mode`（`TextMode::Full` / `Repair { kindle_rules, note_links }`）定，清洗层对应 `WashOpts::mode`（`WashMode::Full` / `Repair { kindle_rules }`） |
 | `wash/` | 清洗层：只修复（内置模式的文字书）和完整清洗（漫画、没开只修复的自定义模式）两条路，各文件见下表 |
-| `html` | 容错的 XHTML 工具：标签扫描、属性读写（单双引号、无引号）、加类、纯文本。全仓库的 HTML 操作都用它 |
 | `htmlproc/` | 注释搬移与编号（只修复时 Move 的 `repair_note_links` 也用它）、字体锁、重复 id |
 | `uastyle` | 标签的缺省样式表（`<p>` 上下 1em、标题字号……）：KFX 写出器按它给缺省值，`kindle_rules` 按它写 `eink-ua.css` |
-| `cascade` | CSS 层叠：解析样式表、按选择器优先级层叠、算出每个元素的计算值（2026-10-10 从 `kfx` 挪来）：KFX 写出器（`kfx::css` 就是它）和 `kindle_rules` 算全书正文字号共用，口径一样：每篇文档的样式表 `Sheet::for_doc`（`<link>`/`<style>` 的 `media` 和 `@media` 都按阅读模式的 `MediaEnv` 求）、正文字号 `body_font_size`（按字数加权的众数）、`font` 简写展开成分项。另有全仓库共用的 CSS 文本小工具：规则位置 `rule_spans`（层叠、清洗层、优化器同一套解析）、`rule_selector`、去注释、拆分切词、四值简写 `box_sides`、`@font-face` 规则、选择器最后一段 |
 | `kindle_model` | Kindle 上的样子（Send to Kindle 的规则）：常量（`LH_EM`、行高下限、32em 页宽、空段折叠系数）、全书正文行距和字体的取法、行高归一、竖直长度换根 em、全书样式表 `book_css`、一章的元素表 `Chapter`（层叠一遍、`<body>` 里的元素按文档序、对不对得上标签扫描）。KFX 写出器和 `wash` 的 `block_style`、`blank_fold`、`top_spacer`、`break_margin`、`kindle_images`、`kindle_rules` 共用（2026-10-13 收拢） |
 | `audit` | 体检：按怪癖表 `data/css-quirks.toml`（掌阅、Move 两栏，验证过的结论）查一本书用到的写法（属性 · 元素 · 值 · 外链/`<style>`/行内），给出和 Kindle 不一样又没处理的、没验证过的；`kindle_rules` 改写之前跑，只报告。书库把摘要打在 `sync` 输出、清单记进生成记录（`list` 显示）（2026-10-13） |
 | `reader_model` | 阅读器怎么排（设备模型 `ReaderModel`）：从 profile 汇成认不认 `display:none`、块末尾 `<br/>` 多不多排一行、`<p>` 认不认行距、标题字号只认的关键字和大小（`[heading_sizes]`）、页首垫图的尺寸（`[page_top]`）；给出块在这台上的行距、字号。照 Kindle 改写的 pass 拿 `kindle_model` 的 Kindle 值和它比，不一样的才改写；完全照 CSS 排的阅读器是缺省值、什么都不改（2026-10-13） |
-| `color` | CSS 颜色解析、WCAG 对比度、Send to Kindle 的对比度规则（KFX 写出器和 `kindle_rules` 共用） |
 | `cssunlock` | 解开字体、字号、行高的锁（内置模式的文字书不用，只有漫画和没开只修复的模式走） |
 | `bgfit` | 整页背景图的尺寸意图（`cover`、`contain`、宽 100%、没写尺寸），去掉 `background-size` 的模式按它预先缩图（只修复时不做；漫画不处理，所以内置模式现在都用不到） |
 | `capfit` | 带图注、会超页的竖长图给 `<img>` 写宽度百分比，图和图注同页（profile `caption_fit`；只修复时不做，内置模式现在用不到） |
@@ -63,18 +62,36 @@
 | `opfmeta` | EPUB 元数据与封面的读改：只重写文字条目，图片原样拷；`meta --edit` 和生成时补元数据共用 |
 | `comic_detect` / `comicfxl` / `comicpad` | 判断是不是漫画；漫画固定版式（kindle）；页边距 1 时各页的补救（xochitl） |
 | `check` | 质量门 |
-| `epub` / `epubzip` | EPUB 组装与读写（每个 zip 条目解压上限 `MAX_ENTRY_BYTES` 256MB，EPUB、CBZ 共用，超过报错）：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`、zip 内路径工具、书里链接解析 `resolve_link` |
+| `epub` / `epubzip` | EPUB 组装与读写（每个 zip 条目解压上限 `MAX_ENTRY_BYTES` 256MB，EPUB、CBZ 共用，超过报错）：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`；zip 内路径工具、书里链接解析 `resolve_link` 再导出自 `bookbase::epubpath` |
 | `error` | 错误类型 `BookError`（取消、IO、zip、文件损坏、单条目超上限、不支持、DRM、其它）：`epubzip`、`epubbook`、`optimize` 的公开入口和清洗层返回它，调用方按变体判断（取消看 `is_cancelled()`，不看错误串开头）；`Display` 就是给用户看的中文文字（和以前的错误串逐字相同），还用 `String` 往上传的代码照旧 `?` |
 | `epubbook` | 读整本 EPUB（元数据、spine 里的 XHTML、CSS、图片、封面、目录），KFX 写出器用 |
 | `ncx` | NCX 目录解析与改写 |
 | `netimg` / `direction` / `probe` | 远程图抓取（单张上限 `MAX_IMAGE_BYTES` 20MB；一章里的远程图去重后 4 路同时抓，起名照出现顺序；`origin_of` 取网址的站点）；翻页方向（读写 spine `page-progression-direction` 全书只用 `direction::spine_direction`/`set_spine_direction`）；测量书 |
-| `util` / `naming` | 转义、全角转半角、文件名、书名规整；原子写（`produce_then_replace`、`commit`，书库也用；产出途中 panic 也删临时文件）；带上限的读取 `read_capped`（超过报错、不截断）；命令行公共函数 |
+| `naming` | 书名规整、产物文件名 |
+| `util`、`html`、`color`、`cascade` | 2026-10-15 起是再导出：前三个在 `bookbase`、`cascade` 在 `csscascade`（见下面两张表），`bookconv` 里照旧写 `crate::util::…` |
+
+### bookbase 模块（基础件，不依赖本仓库别的 crate）
+
+| 模块 | 职责 |
+|---|---|
+| `util` | 转义、全角转半角、文件名；原子写（`produce_then_replace`、`commit`，书库也用；产出途中 panic 也删临时文件）；带上限的读取 `read_capped`（超过报错、不截断）；逐项并行 `par_map`/`par_map_mut` 和线程数 `worker_count`；图片格式表；快速哈希 `FastHasher`（短字符串键用）；命令行公共函数 |
+| `html` | 容错的 XHTML 工具：标签扫描、属性读写（单双引号、无引号）、加类、纯文本、`<style>` 块、CSS 声明切分。全仓库的 HTML 操作都用它 |
+| `color` | CSS 颜色解析、WCAG 对比度、Send to Kindle 的对比度规则（KFX 写出器和 `kindle_rules` 共用） |
+| `epubpath` | EPUB（zip）里的路径：规范化、相对/绝对换算、链接属性原文 → (zip 路径, 锚点) 的 `resolve_link`（`bookconv::epubzip` 再导出） |
+
+### csscascade 模块（CSS 层叠引擎）
+
+| 模块 | 职责 |
+|---|---|
+| `lib` | 解析样式表（`Rules::parse`，规则按选择器最右一节分桶）、按选择器优先级层叠（`Sheet::cascade`、`cascade_split`）、算出每个元素的计算值（`Computed::derive`）。KFX 写出器（`kfx::css` 就是它）和 `kindle_rules` 共用，口径一样：每篇文档的样式表 `Sheet::for_doc`（`<link>`/`<style>` 的 `media` 和 `@media` 都按阅读模式的 `MediaEnv` 求）、正文字号 `body_font_size`（按字数加权的众数）、`font` 简写展开成分项 |
+| `decl` | 声明值的小工具：拆 `!important`、`background` 简写拆成分项（`bookconv::cssunlock` 再导出） |
+| `ua` | 标签缺省样式表（HTML 规范 UA 样式表里影响版面的几条：标题字号和外边距、段落上下 1em、引文缩进；`bookconv::uastyle` 写成 `eink-ua.css` 用同一张表） |
 
 ### wash 子模块
 
 | 文件 | 职责 |
 |---|---|
-| `mod.rs` | 入口。两条路都先做 `encoding`。**只修复**（`repair_entries`）：坏引用、重复 id、目录、EPUB 3 规范整理；开了 `kindle_rules` 时再挂 `eink-ua.css`、把 spine 里标了 `linear="no"` 的目录页拿出阅读顺序（`drop_nonlinear_nav`，manifest 里留着，仍是导航文档）。**完整清洗**：另加解锁字体字号、按语言排版、定章节、章尾空白等。`KINDLE_RULES_VERSION` 定义在这里 |
+| `mod.rs` | 入口。两条路都先做 `encoding`。**只修复**（`repair_entries`）：坏引用、重复 id、目录、EPUB 3 规范整理；开了 `kindle_rules` 时按步骤表 `KINDLE_RULE_PASSES` 依次做（每步写明开关条件和必须排在哪些步骤之后，单测 `kindle_rule_passes_are_ordered` 核对顺序；2026-10-15 从一串手写调用改成表）、挂 `eink-ua.css`、把 spine 里标了 `linear="no"` 的目录页拿出阅读顺序（`drop_nonlinear_nav`，manifest 里留着，仍是导航文档）。**完整清洗**：另加解锁字体字号、按语言排版、定章节、章尾空白等。`KINDLE_RULES_VERSION` 定义在这里 |
 | `encoding` | 不是 UTF-8 的 XHTML、OPF、NCX 转成 UTF-8（后面各步按 UTF-8 读写）；认不出编码的不动 |
 | `drm` | 伪 DRM：`encryption.xml` 只加密了字体、样式、脚本的剥掉；真加密报错 |
 | `safe_names` | 文件名里有安卓存储不能用的字符（`*`、`:`、`?` 等）的条目改名，引用跟着改 |
@@ -90,7 +107,7 @@
 | `html5fix` | 规范整理配不平的 XHTML（交叉嵌套、没关的 `<p>`/`<li>`、认不出的实体）按 HTML5 解析算法重新解析、写回 XHTML（2026-10-09） |
 | `opf` | OPF 的读改（清洗、优化、`meta --edit` 共用）；读唯一标识符全书只用 `opf::unique_identifier`：`<package unique-identifier>` 指向的 identifier（任意前缀），值去空白、空值算没有，NCX 的 `dtb:uid`、规范整理、`epubbook` 的稳定 ID 都按它 |
 | `fonts` | 完整清洗：嵌入字体哪些保留、哪些是批注 |
-| `empty_pages` | 完整清洗：删没有可见内容的空白页，指向它的目录、链接、`<guide>` 改指邻页；找不到完整 `<body>` 的页不当空页 |
+| `empty_pages` | 完整清洗：删没有可见内容的空白页，指向它的目录、链接、`<guide>` 改指邻页；找不到完整 `<body>` 的页不当空页。`kindle_rules` 里另删 Kindle 上不出页的空页（`remove_kindle_empty_pages`：全书没有 `display:none` 时只看 DOM 里有没有字，不用层叠） |
 | `css` / `typeset` / `layout` | 完整清洗：CSS 声明按黑名单剥、`text-indent` 归一；CJK 假段落、标题后首段顶格、外链 `eink-wash.css`；补 `lang`、居中居右换成类、章尾空白页 |
 | `tests.rs` | 清洗层的单测（跨子模块，集中放） |
 
@@ -101,7 +118,7 @@
 | `ion` | Amazon Ion 1.0 二进制编解码（只照公开规范），符号按编号存；编码取最短表示，解开再编回逐字节相同 |
 | `container` | KFX 容器（`CONT`）读写：索引表、符号表、实体；没改动的容器写出来和原文件逐字节相同；`set_container_id` 一次换掉容器 id 的 4 处 |
 | `yj` | 用到的 `YJ_symbols` 编号和我们起的名字（含义是对照样本推的） |
-| `css` | 就是 `bookconv::cascade`（再导出）：解析、按选择器优先级层叠、算出每个元素的计算值 |
+| `css` | 就是 `csscascade`（再导出）：解析、按选择器优先级层叠、算出每个元素的计算值 |
 | `write` | EPUB → KFX 写出器（2026-10-09 拆成子模块）：`parse`（读 XHTML 成块树、空段折叠、补封面页）、`analyze`（正文字号行高、注释配对）、`style`（块和文字的样式、颜色对比度）、`layout`（版面、排版流、固定版式）、`entities`（位置映射、目录、元数据、资源实体）、`symbols`（本地符号分两阶段：正文阶段 `SymbolAlloc`、换成资源阶段 `ResourceSymbols` 以后只能成组分配资源符号——「资源符号最后分配、资源路径＝字节实体 + 9」由类型保证，不靠调用顺序）、`props`（一个样式的属性集合 `StyleProps`：同一属性后设覆盖先设，按编号升序写出）、`resources`（图片资源 `ResourceStore`）、`mod`（版本号、入口、各阶段共用的 `Builder`、单位常量）；`analyze` 算出只读的全书统计 `BookStats`，`style` 里是样式去重表 `StyleTable`，整棵块树的遍历统一走 `parse::walk_blocks`（2026-10-10 重构，KFX 逐字节不变）。元素套超过 1000 层的书报错不转（不让栈溢出摔掉进程），较深的放到大栈线程里解析 |
 
 结构见 [KFX · 容器与符号](kfx.md#容器样本-2026-10-05-读出)。
@@ -111,7 +128,10 @@
 | 模块 | 职责 |
 |---|---|
 | `bin/booklib/` | 命令行：`main.rs` 解析参数、打印结果，命令是一张表 `COMMANDS`（帮助、认的选项、要不要持锁、处理函数；新增命令只加一项），`sync` 的跨轮状态（`--watch`）在 `SyncState`；`meta_edit.rs` 是 `meta --edit`（不打开书库） |
-| `lib.rs` | 条目（`Meta`）、入库、原件核对、`dedupe`、删除 |
+| `lib.rs` | 条目（`Meta`）、打开书库、加锁、设备环境 |
+| `catalog.rs` | 入库（文件、网址）、列出、按选择器挑、原件核对、`dedupe`、删除（都是 `Library` 的方法） |
+| `build_run.rs` | 一轮生成的调度（`build_all`：没接上的设备跳过、排满的设备推迟、`--watch` 跨轮记住失败），结果报成 `BuildEvent`，措辞在命令行 |
+| `fingerprint.rs` | 指纹里设备那几段（见[指纹](#指纹)） |
 | `session.rs` | `Library` 的缓存和运行状态按活多久分四组：记录文件与锁（`Records`）、按内容记住的事实（`ContentFacts`）整个进程有效；设备连接（`Devices`）跨轮保留、每轮核一次；生成过程中的临时状态（`BuildCtx`：中间文件、传输中占着的文件名）一轮生成 / 一件传输就清 |
 | `sources.rs` | 跟踪目录与同步（`sync_with` 分三步：遍历入库、删旧版本、处理不在了的） |
 | `generate.rs` | 生成计划与指纹、产物放哪、一本书几个模式共用的中间文件、按模式生成（`prepare`）、传完记下来（`complete`）、生成记录 |
@@ -119,8 +139,8 @@
 | `deliver.rs` | 产物送到设备（2026-10-07）：设备接没接上（MTP 挂载点、SSH 到 Move；地址是 IP 的先探 22 端口，0.8 秒不通就跳过，不等 ssh 超时）、往 MTP 设备上放文件（相同字节不拷）、调 Move 上书架服务的导入接口（新加、原地替换、查、进回收站）；不认识生成记录和传输线程 |
 | `metadata.rs` | `meta --fetch` 和 `sync` 补元数据的调度：责任链 `CHAIN`（Bangumi〔只查漫画〕→ 豆瓣 → QQ 阅读 → Wikidata），书目网站实现 `BookSource`（搜索骨架是它的缺省方法：原书名搜不到再用去卷次的书名、都搜不到用网站的另一种搜法；各网站只给搜索词、怎么搜、怎么认条目、挑封面、取元数据），Wikidata 是链尾单独的一环（原作留给找封面的后备）；同一套漫画只查一次（`series_lookup`）；生成时往书里补什么由 `plan` 定（简介、标签、带国籍的作者、译者、出版社、日期、ISBN；指纹和写入共用这一份），`inject` 写 |
 | `bangumi.rs` / `douban.rs` / `qqread.rs` / `wikidata.rs` / `cover.rs` / `covergen.rs` | 书目源：Bangumi（漫画，公开 API，POST 搜索）、豆瓣（搜索建议 + 书籍搜索页 `window.__DATA__`）、QQ 阅读、Wikidata；原作封面（Open Library / Commons）；生成封面 |
-| `net.rs` / `matching.rs` | 节流重试的 HTTP（GET、POST JSON）；书名人名比对（全半角、繁简、译名用字）、署名拆开（`parse_credits`：作者、国籍、译者）、书名去卷次（`base_title`） |
-| `fsutil.rs` | 临时文件命名、书库里的原子写（`write_atomic_cleanable`：临时名带 `.tmp-` 前缀，持锁时清残留；和 `bookconv::util::write_atomic` 只差临时名）、JSON 读写与缓存、记录文件核对、流式哈希、进程锁、残留临时文件清理 |
+| `net.rs` / `matching.rs` | 节流重试的 HTTP（GET、POST JSON；失败分类成 `NetError`：网站说没有、临时的、别的，临时的记进本轮的 `transient_error`）；书名人名比对（全半角、繁简、译名用字）、署名拆开（`parse_credits`：作者、国籍、译者）、书名去卷次（`base_title`） |
+| `fsutil.rs` | 临时文件命名、书库里的原子写（`write_atomic_cleanable`：临时名带 `.tmp-` 前缀，持锁时清残留；和 `bookbase::util::write_atomic` 只差临时名）、JSON 读写与缓存、记录文件核对、流式哈希、进程锁、残留临时文件清理 |
 
 **联网策略**（`net.rs`，一次运行里各本书共用）：请求间隔 1.2 秒；429 按 `Retry-After` 等，5xx、超时重试几次；其它 4xx 当"没有"、不重试；**403 和"豆瓣搜索回 200 但不是 JSON"算临时出错**（多半是被反爬拦了），不当"没有"。连不上的网站记下来，之后发给它的请求立即失败；接连两个网站连不上、其间没有请求成功，算断网，整轮中止——网站回了任何 HTTP 状态（含 404、403、5xx）都说明网是通的，断网的判定从头算。Wikidata 的 id 只收 `Q<数字>`（要拼进 SPARQL 查询）。临时出错的书不存不完整的结果、不生成封面，下次再查。用户看到的流程见[使用指南 · meta --fetch](usage.md#meta---fetch联网补元数据和封面)。
 
@@ -192,9 +212,12 @@
 | 优化器版本 | 文字书 `OPTIMIZE_VERSION`，漫画 `c` + `COMIC_VERSION` | 这一路的全部 |
 | 注释方式 | `jump`/`popup`，图标换数字带 `#`，保留回链带 `<` | 这个模式的全部 |
 | 模式 id | `kindle` 等 | — |
-| 阅读范围 | 文字书：优化器用的阅读范围（`output_readable`，如 `1104x1546`），带图注的竖长图写宽度（`k`）、正文图片透明处合成白底（`a`）、只修复（`t`，另保证注释能点再带 `n`、照 Send to Kindle 的规则统一再带 `u`，后面跟 `KINDLE_RULES_VERSION`（为 1 时不写）、去掉不平铺的背景图（`g`）、图片尺寸改写（`i` + 方式 + Kindle 的内容区宽和 1em 像素）、设备模型和 `em_px` 的哈希（`m` + 16 位十六进制，`bookconv::reader_model::ReaderModel::signature`，2026-10-13 起）和屏幕 `@宽x高`（统计正文字号时 `@media` 按它求））有的时候再带上；漫画：阅读范围 + 漫画画布 + 白边（`1104x1546c1272x1696+1`），阅读器页边距（`m1`）、翻页方向（`dltr`）、固定版式（`f`）有的时候带上；两路都带保留背景图（`b`，去掉尺寸时 `bn`）、不认 `rgba()`（`r`）（清洗层两路都过） | 这个模式这一路的全部 |
+| 阅读范围 | 文字书：优化器用的阅读范围（`output_readable`，如 `1104x1546`），带图注的竖长图写宽度（`k`）、正文图片透明处合成白底（`a`）、只修复（`t`，另保证注释能点再带 `n`、照 Send to Kindle 的规则统一再带 `u`，后面跟 `KINDLE_RULES_VERSION`（为 1 时不写）、去掉不平铺的背景图（`g`）、背景尺寸 auto 高照 Kindle 写像素（`h`）、页首垫图（`p`）、图片尺寸改写（`i` + 方式 + Kindle 的内容区宽和 1em 像素）、设备模型和 `em_px` 的哈希（`m` + 16 位十六进制，`bookconv::reader_model::ReaderModel::signature`，2026-10-13 起）和屏幕 `@宽x高`（统计正文字号时 `@media` 按它求））有的时候再带上；漫画：阅读范围 + 漫画画布 + 白边（`1104x1546c1272x1696+1`），阅读器页边距（`m1`）、翻页方向（`dltr`）、固定版式（`f`）有的时候带上；两路都带保留背景图（`b`，去掉尺寸时 `bn`）、不认 `rgba()`（`r`）（清洗层两路都过） | 这个模式这一路的全部 |
 | 黑白彩色 | `gray`/`color` | 这个模式的全部 |
 | 格式 | `epub`；KFX 带写出器版本和写出器求 `@media` 用的屏幕、KFX 阅读范围（写成 `kfx<版本号>@<屏宽>x<屏高>r<宽>x<高>`，如 `kfx<N>@1272x1696r1104x1546`，`<N>` 是 `WRITER_VERSION`；2026-10-09 补上屏幕） | 写出器版本、屏幕变了只有 `kindle` 的 |
+
+设备那几段（注释方式、阅读范围段、这一路的版本）由 `library/src/fingerprint.rs` 拼（`device_sig`），旧写法的设备段也在那里（`legacy_device_seg`）。**写法一个字都不能改**：`crates/library/tests/fp_golden.rs` 把内置三个模式逐个改一个 profile 字段，文字书、漫画的指纹和 `fp_golden.txt` 逐行对拍（2026-10-15）。给 profile 加字段时 `profile` 的单测 `every_field_has_a_fingerprint_decision` 编译不过，逼着决定它进不进指纹。
+2026-10-15 对拍发现 `background_auto_height`、`margin_top` 改值时产物会变但指纹不变，补成 `kindle_rules` 段的 `h`、`p`（掌阅、Move 的文字书各重新生成一次，内容没变的不重传）。
 
 版本号什么时候加一、现在是多少，见[开发 · 版本号](development.md#版本号)。
 
@@ -222,7 +245,7 @@
 1. **阶段一**：非图片条目整份读进来（几个线程各自打开源文件同时解压，`epubzip::read_skeleton_par`），图片只记名字和大小。清洗、HTML 变换、注释搬移都在这里完成。
 阶段一开头（清洗前）补封面声明 `ensure_cover_declared`（全程只调一次），掌阅、Move 的文字书接着补封面页（封面图的宽高只解压条目开头读文件头，`read_image_head`）。
 
-2. **阶段二**：按条目顺序写出（`write_entries`：图片工作池 `spawn_image_workers`、按序写出 `OrderedSink`，收尾 `finalize`/`finalize_opf`）。图片这时才交给 `imgpool` 的 worker（worker 自己打开源文件读原图），并行处理，按原顺序写进 zip，处理完立刻丢掉。同时处理的图总像素有上限（3600 万），超过上限的大页独占额度、一张一张来。要 deflate 的条目也交给 worker 先压好（`epubzip::Precompressed`），主线程按顺序原样拷进 zip。和原书逐字节相同（大小、CRC 都对得上）、64KB 以上的字体不解压再重压，直接拷原书的压缩数据（`EpubWriter::raw_copy_as`，清洗时改过名的按新名写；v54，《绍宋》590 → 233ms）。有远程图、或漫画里有 GIF/WebP 页时，OPF 推迟到最后写。
+2. **阶段二**：按条目顺序写出（`write_entries`：图片工作池 `spawn_image_workers`、按序写出 `OrderedSink`，收尾 `finalize`/`finalize_opf`）。图片这时才交给 `imgpool` 的 worker（worker 自己打开源文件读原图），并行处理，按原顺序写进 zip，处理完立刻丢掉。同时处理的图总像素有上限（7200 万），超过上限的大页独占额度、一张一张来。要 deflate 的条目也交给 worker 先压好（`epubzip::Precompressed`），主线程按顺序原样拷进 zip。和原书逐字节相同（大小、CRC 都对得上）、64KB 以上的字体不解压再重压，直接拷原书的压缩数据（`EpubWriter::raw_copy_as`，清洗时改过名的按新名写；v54，《绍宋》590 → 233ms）。有远程图、或漫画里有 GIF/WebP 页时，OPF 推迟到最后写。
 
 峰值内存约为"全书文字 + 同时在处理的几张图"，不随漫画页数增长。并行处理的结果和逐张处理逐字节相同。
 
@@ -230,7 +253,7 @@
 
 给别的程序当库用的接口（2026-10-07 加，缺省值下产物逐字节不变）：
 
-- `OptimizeOpts::limits`（`Limits { max_decode_pixels, pool_pixel_budget }`）：单张解码上限（缺省 6400 万，漫画页直接用、插图另外不超过 900 万）和并行像素额度（缺省 3600 万）。内存小的设备调小，超过的图原样保留、不删。
+- `OptimizeOpts::limits`（`Limits { max_decode_pixels, pool_pixel_budget }`）：单张解码上限（缺省 6400 万，漫画页直接用、插图另外不超过 900 万）和并行像素额度（缺省 7200 万，2026-10-15 从 3600 万调大）。内存小的设备调小，超过的图原样保留、不删。
 - `OptimizeOpts::title: Option<String>`：改 OPF 的 `dc:title`（`opfmeta::apply_fields`）。
 - `optimize_epub_file_streaming_with_cancel(…, cancel: &dyn Fn() -> bool)`：逐条目问一次，取消时返回 `BookError::Cancelled`（文字是 `CANCELLED_MSG`），这次建出的输出文件删掉。
 - `optimized_version_file(路径)`：读书里 `META-INF/eink-optimized` 的内容（`full`/`core`；2026-10-09 起不写版本号，以前的产物里是版本号）。

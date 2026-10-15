@@ -7,7 +7,7 @@
 //! 构建时全部嵌入（见 `build.rs`）——**增删设备 = 增删文件**，不改代码。运行期还可以用
 //! [`Registry::with_dir`] 从外部目录加载，同 id 覆盖内置项。
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -19,7 +19,7 @@ pub const DEFAULT_COMIC_MARGIN: u32 = 1;
 
 /// 产物格式。KFX 是先按同一套规则优化出 EPUB、再转换（给 Kindle 自带阅读器，2026-10-05 起，见 docs/kfx.md）；
 /// PDF、AZW3 已删（AZW3 2026-10-09 用户定：KFX 取代），写了按未知值报错。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Epub,
@@ -37,7 +37,7 @@ impl Format {
 }
 
 /// 竖屏像素尺寸（`width <= height`）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Screen {
     pub width: u32,
@@ -58,7 +58,7 @@ impl Screen {
 }
 
 /// 注释在这个阅读器里怎么看（用户 2026-09-29 定）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Notes {
     /// 点标号弹窗显示：标号标 `epub:type="noteref"`、注释正文是 `<aside epub:type="footnote">`，阅读器据此认出注释。
@@ -69,7 +69,7 @@ pub enum Notes {
 }
 
 /// 注释标号只有一个小图标（多看等书）时怎么办。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteIcons {
     /// 保留原图标，限成一个字高（要阅读器认 CSS 限高、图标链接也能点）。内置的三个模式都换数字（见 `Number`），
@@ -82,7 +82,7 @@ pub enum NoteIcons {
 
 /// 阅读器怎么定图片的显示尺寸（只修复、照 Send to Kindle 统一的文字书用：`kindle_rules` 照它把图片宽度改写成显示出来和
 /// Kindle 一样大的写法，见 `bookconv::wash::kindle_images`）。2026-10-12 三台测试书（`测试-插图`）量的。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ImageSizing {
     /// 照 CSS（缺省；Kindle 由 KFX 写出器写，不经 `kindle_rules`）。
@@ -96,7 +96,7 @@ pub enum ImageSizing {
 
 /// 产物怎么送到设备上（`[deliver]`，2026-10-07 用户定：`booklib sync` 按设备接没接上直接传，不在电脑上留产物）。
 /// 不写这一节的模式（书库 `profiles/` 里的自定义模式）产物照旧放在电脑上（跟踪目录旁的 `<模式 id>/`）。
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Deliver {
     /// MTP 设备（Kindle、掌阅）：jmtpfs 自动挂到 `$XDG_RUNTIME_DIR/mtp/<mount>`，下面是存储（如「Internal Storage」），
@@ -109,7 +109,7 @@ pub enum Deliver {
 }
 
 /// 标题在阅读器上的字号（`heading_font_keywords` 的阅读器要写，测试书量的；正文 1em＝1）。
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HeadingSizes {
     /// 认的关键字 → 大小（绝对大小，不随外层字号变）。
@@ -119,7 +119,7 @@ pub struct HeadingSizes {
 }
 
 /// 页首垫图要的阅读器尺寸（`margin_top = false` 的阅读器要写，屏幕像素，测试书量的）。
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PageTop {
     /// 垫图后面阅读器自己加的空：标题每 em 字号多少。
@@ -130,48 +130,9 @@ pub struct PageTop {
     pub strut_base_per_em: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Profile {
-    /// 文件名（不含 `.toml`），命令行与配置里用的标识。
-    pub id: String,
-    pub name: String,
-    pub screen: Screen,
-    pub color: bool,
-    /// 首选产物格式在前。
-    pub formats: Vec<Format>,
-    /// 注释的呈现方式。
-    pub notes: Notes,
-    /// 只有图标的注释标号怎么办（TOML 里不写是 `keep`）。
-    pub note_icons: NoteIcons,
-    /// 保留原书注释里"跳回正文"的回链（TOML 里不写是 `true`）。xochitl 写 `false`：它遇到标号↔注释互相链接的一对，
-    /// 两条链接都丢掉（正向也点不动），只能去掉回链、返回靠阅读器自己的"返回"。Kindle 自带阅读器没有可靠的"返回"，要靠回链。
-    pub note_backlinks: bool,
-    /// 各格式在阅读器里的真实可阅读范围（像素，竖屏）；没有的格式用 `screen`。
-    readable: BTreeMap<Format, Screen>,
-    /// 漫画页图到可阅读范围四边的白边（像素）：图保比缩放进"阅读范围 − 2×白边"的框，受限的那条边两侧正好是这么宽。
-    /// TOML 里不写是 [`DEFAULT_COMIC_MARGIN`]；须小于阅读范围短边的 1/4。
-    pub comic_margin: u32,
-    /// 漫画在阅读器里要设成的页边距（xochitl 设置里的"页边距"，单位同 `.content` 的 `margins`）。`Some` 时：优化器给漫画写
-    /// `META-INF/eink-reader-margins`（值就是它），`xochitl/comic-margins.sh` 凭它登记、Move 上的页边距代理在第一次开书时设好；
-    /// 漫画的文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（见 `bookconv::comicpad`）。
-    pub comic_reader_margins: Option<u32>,
-    /// 漫画的真实可阅读范围（设成 `comic_reader_margins` 后实测）；没写就和 EPUB 的一样。
-    comic_readable: Option<Screen>,
-    /// 漫画的翻页方向改成这个（`"ltr"` 或 `"rtl"`，写进 OPF 的 `page-progression-direction`）；不写就照原书。
-    /// ireader 写 `"ltr"`：掌阅遇到从右往左翻的书会四周留边、整页图铺不满（2026-09-30 真机），用户选了铺满。
-    pub comic_page_direction: Option<String>,
-    /// 漫画写成固定版式，画布是 `comic_readable`（Kindle：流式版式下阅读器强制留页边距，固定版式才能整页铺满，
-    /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
-    pub comic_fixed_layout: bool,
-    /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。内置模式都不写（kindle 2026-10-05
-    /// 曾经写 `azw3`，KFX 固定版式真机通过后去掉；AZW3 格式 2026-10-09 删了），留给自定义模式。
-    pub comic_format: Option<Format>,
-    /// 保留 CSS 背景图（TOML 里不写是 `false`：清洗层去掉背景图，只留背景色——xochitl 不认 `no-repeat`，把背景图
-    /// 平铺满页盖住正文）。kindle 写 `true`：KFX 写出器照 Amazon 的写法写背景图（2026-10-05）。
-    pub background_images: bool,
-    /// 保留背景图时也保留 `background-size`、`background-attachment`（TOML 里不写是 `true`）。Kindle 要靠 `fixed` 和尺寸
-    /// 按整页铺背景图（去掉后只铺在内容那一块）；掌阅写了尺寸会把图挤变形，ireader 写 `false`（2026-10-05 真机）。
-    pub background_sizing: bool,
+/// 阅读器的 CSS 怪癖（[`Profile::css`]）：同一份书在 Kindle 上怎么显示，这台就要写成什么样才一样。字段名同 TOML 里的键。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CssQuirks {
     /// 阅读器认 CSS 的 `rgba()` 颜色（TOML 里不写是 `true`）。掌阅不认：`rgba()` 写的颜色连同那条声明作废（《绍宋》深红底色
     /// 显示成白底），ireader 写 `false`，优化器换成 `#rrggbb`（2026-10-06 真机测试书）。
     pub css_rgba: bool,
@@ -292,6 +253,78 @@ pub struct Profile {
     /// 写成长度的认（`3em` 一行 114px，Q84），缺省一行 `line_px`：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，行距和
     /// Kindle 不一样的块照 Kindle 写成 em（`bookconv::wash::block_style`；要写 `line_px`、`em_px`）。
     pub line_height_numbers: bool,
+}
+
+/// 注释怎么呈现（[`Profile::notes`]）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NotePolicy {
+    /// 注释的呈现方式。
+    #[serde(rename = "notes")]
+    pub mode: Notes,
+    /// 只有图标的注释标号怎么办（TOML 里不写是 `keep`）。
+    #[serde(rename = "note_icons")]
+    pub icons: NoteIcons,
+    /// 保留原书注释里"跳回正文"的回链（TOML 里不写是 `true`）。xochitl 写 `false`：它遇到标号↔注释互相链接的一对，
+    /// 两条链接都丢掉（正向也点不动），只能去掉回链、返回靠阅读器自己的"返回"。Kindle 自带阅读器没有可靠的"返回"，要靠回链。
+    #[serde(rename = "note_backlinks")]
+    pub backlinks: bool,
+}
+
+/// 漫画怎么排（[`Profile::comic`]）。字段名去掉了 TOML 里的 `comic_` 前缀。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ComicPolicy {
+    /// 漫画页图到可阅读范围四边的白边（像素）：图保比缩放进"阅读范围 − 2×白边"的框，受限的那条边两侧正好是这么宽。
+    /// TOML 里不写是 [`DEFAULT_COMIC_MARGIN`]；须小于阅读范围短边的 1/4。
+    #[serde(rename = "comic_margin")]
+    pub margin: u32,
+    /// 漫画在阅读器里要设成的页边距（xochitl 设置里的"页边距"，单位同 `.content` 的 `margins`）。`Some` 时：优化器给漫画写
+    /// `META-INF/eink-reader-margins`（值就是它），`xochitl/comic-margins.sh` 凭它登记、Move 上的页边距代理在第一次开书时设好；
+    /// 漫画的文字页、混排页的字补回默认留白，有图的页去掉 `<body>` 的类（见 `bookconv::comicpad`）。
+    #[serde(rename = "comic_reader_margins")]
+    pub reader_margins: Option<u32>,
+    /// 漫画的真实可阅读范围（设成 `comic_reader_margins` 后实测）；没写就和 EPUB 的一样。
+    #[serde(rename = "comic_readable")]
+    readable: Option<Screen>,
+    /// 漫画的翻页方向改成这个（`"ltr"` 或 `"rtl"`，写进 OPF 的 `page-progression-direction`）；不写就照原书。
+    /// ireader 写 `"ltr"`：掌阅遇到从右往左翻的书会四周留边、整页图铺不满（2026-09-30 真机），用户选了铺满。
+    #[serde(rename = "comic_page_direction")]
+    pub page_direction: Option<String>,
+    /// 漫画写成固定版式，画布是 `comic_readable`（Kindle：流式版式下阅读器强制留页边距，固定版式才能整页铺满，
+    /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
+    #[serde(rename = "comic_fixed_layout")]
+    pub fixed_layout: bool,
+    /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。内置模式都不写（kindle 2026-10-05
+    /// 曾经写 `azw3`，KFX 固定版式真机通过后去掉；AZW3 格式 2026-10-09 删了），留给自定义模式。
+    #[serde(rename = "comic_format")]
+    pub format: Option<Format>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Profile {
+    /// 文件名（不含 `.toml`），命令行与配置里用的标识。
+    pub id: String,
+    pub name: String,
+    pub screen: Screen,
+    pub color: bool,
+    /// 首选产物格式在前。
+    pub formats: Vec<Format>,
+    /// 注释怎么呈现（[`NotePolicy`]）。TOML 里仍是 `notes`、`note_icons`、`note_backlinks`。
+    #[serde(flatten)]
+    pub notes: NotePolicy,
+    /// 各格式在阅读器里的真实可阅读范围（像素，竖屏）；没有的格式用 `screen`。
+    readable: BTreeMap<Format, Screen>,
+    /// 漫画怎么排（[`ComicPolicy`]）。TOML 里仍是 `comic_` 开头的平铺字段。
+    #[serde(flatten)]
+    pub comic: ComicPolicy,
+    /// 阅读器的 CSS 怪癖（认不认某种写法、怎么折算）：照 Kindle 改写的各项开关，见 [`CssQuirks`]。TOML 里仍是平铺的字段。
+    #[serde(flatten)]
+    pub css: CssQuirks,
+    /// 保留 CSS 背景图（TOML 里不写是 `false`：清洗层去掉背景图，只留背景色——xochitl 不认 `no-repeat`，把背景图
+    /// 平铺满页盖住正文）。kindle 写 `true`：KFX 写出器照 Amazon 的写法写背景图（2026-10-05）。
+    pub background_images: bool,
+    /// 保留背景图时也保留 `background-size`、`background-attachment`（TOML 里不写是 `true`）。Kindle 要靠 `fixed` 和尺寸
+    /// 按整页铺背景图（去掉后只铺在内容那一块）；掌阅写了尺寸会把图挤变形，ireader 写 `false`（2026-10-05 真机）。
+    pub background_sizing: bool,
     /// 带图注、按满宽显示会超出一页的图（竖长的人物图之类）给 `<img>` 写行内宽度百分比，图和图注排在同一页（TOML 里不写是
     /// `false`）。掌阅、Kindle 不认多看图集，图一张张排开撑满一页、图注掉到下一页；限高的写法掌阅都不认（`max-height`、
     /// `page-break-inside`），宽度百分比认（2026-10-06 掌阅真机 adb 截屏），KFX 写出器也只认宽度。见 `bookconv::capfit`。
@@ -439,31 +472,31 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: f.notes, note_icons: f.note_icons, note_backlinks: f.note_backlinks, readable: f.readable, comic_margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), comic_reader_margins: f.comic_reader_margins, comic_readable: f.comic_readable, comic_page_direction: f.comic_page_direction, comic_fixed_layout: f.comic_fixed_layout, comic_format: f.comic_format, background_images: f.background_images, background_sizing: f.background_sizing, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, margin_top: f.margin_top, background_auto_height: f.background_auto_height, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: NotePolicy { mode: f.notes, icons: f.note_icons, backlinks: f.note_backlinks }, readable: f.readable, comic: ComicPolicy { margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), reader_margins: f.comic_reader_margins, readable: f.comic_readable, page_direction: f.comic_page_direction, fixed_layout: f.comic_fixed_layout, format: f.comic_format }, css: CssQuirks { margin_top: f.margin_top, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, background_auto_height: f.background_auto_height }, background_images: f.background_images, background_sizing: f.background_sizing, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
 
     fn validate(&self) -> Result<(), String> {
         let positive = |v: f64| v.is_finite() && v > 0.0;
-        match &self.heading_sizes {
-            None if self.heading_font_keywords => return Err(format!("profile {}: heading_font_keywords = true 要写 [heading_sizes]", self.id)),
+        match &self.css.heading_sizes {
+            None if self.css.heading_font_keywords => return Err(format!("profile {}: heading_font_keywords = true 要写 [heading_sizes]", self.id)),
             Some(h) if h.keywords.is_empty() || !h.keywords.values().chain(&h.tags).all(|&v| positive(v)) => {
                 return Err(format!("profile {}: [heading_sizes] 的 keywords 须非空，大小都须是正数", self.id));
             }
             _ => {}
         }
-        match &self.page_top {
-            None if !self.margin_top => return Err(format!("profile {}: margin_top = false 要写 [page_top]", self.id)),
+        match &self.css.page_top {
+            None if !self.css.margin_top => return Err(format!("profile {}: margin_top = false 要写 [page_top]", self.id)),
             Some(t) if !(positive(t.gap_heading_per_em) && t.gap_other >= 0.0 && t.gap_other.is_finite() && positive(t.strut_base_per_em)) => {
                 return Err(format!("profile {}: [page_top] 的尺寸须是正数", self.id));
             }
             _ => {}
         }
-        if !self.line_height_numbers && !(self.line_px.is_some_and(|l| l > 0) && self.em_px.is_some_and(positive)) {
+        if !self.css.line_height_numbers && !(self.line_px.is_some_and(|l| l > 0) && self.em_px.is_some_and(positive)) {
             return Err(format!("profile {}: line_height_numbers = false 要写 line_px、em_px", self.id));
         }
-        if let Some(d) = self.comic_page_direction.as_deref().filter(|d| !matches!(*d, "ltr" | "rtl")) {
+        if let Some(d) = self.comic.page_direction.as_deref().filter(|d| !matches!(*d, "ltr" | "rtl")) {
             return Err(format!("profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}", self.id));
         }
         match &self.deliver {
@@ -497,7 +530,7 @@ impl Profile {
         if let Some((i, f)) = self.formats.iter().enumerate().find(|(i, f)| self.formats[..*i].contains(f)) {
             return Err(format!("profile {}: formats 第 {} 项 {f:?} 重复", self.id, i + 1));
         }
-        if let Some(f) = self.comic_format.filter(|f| !self.formats.contains(f)) {
+        if let Some(f) = self.comic.format.filter(|f| !self.formats.contains(f)) {
             return Err(format!("profile {}: comic_format {f:?} 不在 formats 里", self.id));
         }
         for (fmt, r) in &self.readable {
@@ -509,19 +542,19 @@ impl Profile {
                 return Err(format!("profile {}: readable {fmt:?} 须为竖屏（宽 ≤ 高）、非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
             }
         }
-        if let Some(r) = self.comic_readable {
+        if let Some(r) = self.comic.readable {
             if r.width == 0 || r.height == 0 || r.width > width || r.height > height || r.width > r.height {
                 return Err(format!("profile {}: comic_readable 须为竖屏（宽 ≤ 高）、非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
             }
-            if self.comic_margin >= r.width.min(r.height) / 4 {
-                return Err(format!("profile {}: comic_margin {} 须小于漫画阅读范围短边的 1/4（{}x{}）", self.id, self.comic_margin, r.width, r.height));
+            if self.comic.margin >= r.width.min(r.height) / 4 {
+                return Err(format!("profile {}: comic_margin {} 须小于漫画阅读范围短边的 1/4（{}x{}）", self.id, self.comic.margin, r.width, r.height));
             }
         }
         // 漫画白边按每种格式的阅读范围（没有实测值的格式用屏幕）都要够小：留给图的框至少是阅读范围的一半
         for fmt in &self.formats {
             let r = self.readable(*fmt);
-            if self.comic_margin >= r.width.min(r.height) / 4 {
-                return Err(format!("profile {}: comic_margin {} 须小于 {fmt:?} 阅读范围短边的 1/4（{}x{}）", self.id, self.comic_margin, r.width, r.height));
+            if self.comic.margin >= r.width.min(r.height) / 4 {
+                return Err(format!("profile {}: comic_margin {} 须小于 {fmt:?} 阅读范围短边的 1/4（{}x{}）", self.id, self.comic.margin, r.width, r.height));
             }
         }
         Ok(())
@@ -539,7 +572,7 @@ impl Profile {
 
     /// 一本书的产物格式：漫画用 `comic_format`（有的话），别的用 [`Profile::format`]。
     pub fn format_for(&self, comic: bool) -> Format {
-        match self.comic_format {
+        match self.comic.format {
             Some(f) if comic => f,
             _ => self.format(),
         }
@@ -552,7 +585,7 @@ impl Profile {
 
     /// 漫画页排版用的阅读范围：`comic_readable`，没写就是产物格式的阅读范围。
     pub fn comic_readable(&self) -> Screen {
-        self.comic_readable.unwrap_or_else(|| self.output_readable())
+        self.comic.readable.unwrap_or_else(|| self.output_readable())
     }
 }
 
@@ -603,6 +636,13 @@ impl Registry {
     }
 }
 
+/// 三台统一照着排的那台设备（内置 kindle，2026-10-12 用户定「三台以 Kindle 为准」）：掌阅、Move 的图片大小、竖直间距按它的
+/// 阅读范围和字号换算。「以谁为准」只在这里定；用到它的地方（`bookconv::optimize::OptimizeOpts::for_profile`、书库的指纹）都从这里取，
+/// 单测、自定义调用可以用 `for_profile_against` 另给。
+pub fn reference() -> Option<&'static Profile> {
+    get("kindle")
+}
+
 /// 内置 profile 按 id 取。
 pub fn get(id: &str) -> Option<&'static Profile> {
     Registry::builtin().get(id)
@@ -619,19 +659,89 @@ pub fn device_from_args<S: AsRef<str>>(args: &[S]) -> Result<&'static Profile, S
 
 #[cfg(test)]
 mod tests {
+    /// 给 `Profile` 加字段会让这里编译不过：逼着决定新字段进不进产物指纹（`library` 的 `fingerprint.rs`）。
+    /// 指纹没变就不重传，所以漏了＝改了规则书不重建，多了＝白白重传全部书。分类：
+    /// - 直接：`library/src/fingerprint.rs` 里有它自己的一段；
+    /// - 阅读器模型：进 `bookconv::reader_model::ReaderModel`，由 `m` 段的签名带上；
+    /// - 否：不影响产物内容。
+    ///
+    /// （2026-10-15 对拍发现 `background_auto_height`、`margin_top` 改值时产物会变但指纹不变，已补进 `kindle_rules` 段的 `h`、`p`。）
+    #[test]
+    fn every_field_has_a_fingerprint_decision() {
+        let p = get("kindle").unwrap();
+        let Profile {
+            // 直接
+            id: _,
+            screen: _,
+            color: _,
+            formats: _,
+            readable: _,
+            notes: NotePolicy { mode: _, icons: _, backlinks: _ },
+            comic: ComicPolicy { margin: _, reader_margins: _, readable: _, page_direction: _, fixed_layout: _, format: _ },
+            background_images: _,
+            background_sizing: _,
+            caption_fit: _,
+            image_alpha: _,
+            text_repair_only: _,
+            repair_note_links: _,
+            kindle_rules: _,
+            image_sizing: _,
+            font_px: _,
+            // 阅读器模型（也有的同时直接进）
+            em_px: _,
+            line_px: _,
+            // 否
+            name: _,
+            deliver: _,
+            css,
+        } = p.clone();
+        let CssQuirks {
+            css_rgba: _,
+            background_no_repeat: _,
+            display_none: _,
+            line_height_except_p: _,
+            line_height_floor: _,
+            line_height_numbers: _,
+            heading_font_keywords: _,
+            heading_sizes: _,
+            heading_center: _,
+            margin_top: _,
+            page_top: _,
+            trailing_br_line: _,
+            inline_css_lengths: _,
+            padding: _,
+            borders: _,
+            heading_margins: _,
+            px_margins: _,
+            percent_margins: _,
+            block_width: _,
+            negative_margins: _,
+            cell_middle: _,
+            inline_valign: _,
+            cell_width: _,
+            margin_auto: _,
+            float: _,
+            horizontal_scale: _,
+            em_root: _,
+            rem: _,
+            important: _,
+            background_auto_height: _,
+        } = css;
+    }
+
     use super::*;
 
     /// 漫画阅读范围没写时和产物格式的一样；改了的克隆不影响内置的。
     #[test]
     fn comic_readable_falls_back_to_output_readable() {
         let mut p = get("xochitl").unwrap().clone();
-        assert_eq!((p.comic_reader_margins, p.comic_readable()), (Some(1), Screen { width: 952, height: 1457 }));
-        p.comic_reader_margins = None;
-        p.comic_readable = None;
+        assert_eq!((p.comic.reader_margins, p.comic_readable()), (Some(1), Screen { width: 952, height: 1457 }));
+        p.comic.reader_margins = None;
+        p.comic.readable = None;
         assert_eq!(p.comic_readable(), Screen { width: 842, height: 1455 });
         p.readable.insert(Format::Epub, Screen { width: 800, height: 1400 });
         assert_eq!((p.output_readable(), p.comic_readable()), (Screen { width: 800, height: 1400 }, Screen { width: 800, height: 1400 }));
-        assert_eq!(get("xochitl").unwrap().comic_reader_margins, Some(1));
+        assert_eq!(get("xochitl").unwrap().comic.reader_margins, Some(1));
     }
 
     /// 去掉了的 `ppi` 键：写了照收（不论值），不写也行。
@@ -653,10 +763,10 @@ mod tests {
         assert_eq!((k.format_for(false), k.format_for(true)), (Format::Kfx, Format::Kfx), "kindle：文字书、漫画都出 KFX");
         assert!(k.background_images && get("ireader").unwrap().background_images && !get("xochitl").unwrap().background_images, "背景图：kindle、ireader 保留，xochitl 去掉");
         assert!(k.background_sizing && !get("ireader").unwrap().background_sizing, "背景图尺寸：kindle 保留，ireader 去掉");
-        assert!(k.css_rgba && !get("ireader").unwrap().css_rgba && get("xochitl").unwrap().css_rgba, "rgba()：只有掌阅不认");
-        assert!(k.background_no_repeat && get("ireader").unwrap().background_no_repeat && !get("xochitl").unwrap().background_no_repeat, "背景图 no-repeat：只有 xochitl 不认");
-        assert!(k.margin_top && get("ireader").unwrap().margin_top && !get("xochitl").unwrap().margin_top, "margin-top：只有 xochitl 不认");
-        assert!(k.background_auto_height && !get("ireader").unwrap().background_auto_height && get("xochitl").unwrap().background_auto_height, "背景尺寸的 auto 高：只有掌阅不认");
+        assert!(k.css.css_rgba && !get("ireader").unwrap().css.css_rgba && get("xochitl").unwrap().css.css_rgba, "rgba()：只有掌阅不认");
+        assert!(k.css.background_no_repeat && get("ireader").unwrap().css.background_no_repeat && !get("xochitl").unwrap().css.background_no_repeat, "背景图 no-repeat：只有 xochitl 不认");
+        assert!(k.css.margin_top && get("ireader").unwrap().css.margin_top && !get("xochitl").unwrap().css.margin_top, "margin-top：只有 xochitl 不认");
+        assert!(k.css.background_auto_height && !get("ireader").unwrap().css.background_auto_height && get("xochitl").unwrap().css.background_auto_height, "背景尺寸的 auto 高：只有掌阅不认");
         assert_eq!((k.image_sizing, get("ireader").unwrap().image_sizing, get("xochitl").unwrap().image_sizing), (ImageSizing::Css, ImageSizing::DevicePx, ImageSizing::Percent));
         assert!(k.font_px.is_some(), "掌阅、Move 折算图片宽度要 Kindle 的 1em 像素数");
         assert!(k.caption_fit && get("ireader").unwrap().caption_fit && !get("xochitl").unwrap().caption_fit, "图注同页：kindle、ireader 开");
@@ -672,13 +782,13 @@ mod tests {
         assert_eq!(x.readable(Format::Epub), Screen { width: 842, height: 1455 }, "EPUB 用实测阅读范围");
         assert!(x.color);
         assert_eq!(x.formats, [Format::Epub]);
-        assert_eq!((k.comic_margin, i.comic_margin, x.comic_margin), (1, 1, 0));
-        assert_eq!(x.note_icons, NoteIcons::Number);
-        assert_eq!((k.comic_reader_margins, x.comic_reader_margins), (None, Some(1)));
+        assert_eq!((k.comic.margin, i.comic.margin, x.comic.margin), (1, 1, 0));
+        assert_eq!(x.notes.icons, NoteIcons::Number);
+        assert_eq!((k.comic.reader_margins, x.comic.reader_margins), (None, Some(1)));
         assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1272, height: 1696 }, Screen { width: 952, height: 1457 }), "Kindle 漫画固定版式整屏");
-        assert!(k.comic_fixed_layout && !i.comic_fixed_layout && !x.comic_fixed_layout);
-        assert_eq!((k.note_backlinks, i.note_backlinks, x.note_backlinks), (true, true, false), "只有 xochitl 去注释回链");
-        assert_eq!((k.comic_page_direction.as_deref(), i.comic_page_direction.as_deref(), x.comic_page_direction.as_deref()), (None, None, None), "三台漫画都照书的翻页方向（掌阅往右翻的书要在阅读器里选「漫画」排版才铺满，2026-10-15）");
+        assert!(k.comic.fixed_layout && !i.comic.fixed_layout && !x.comic.fixed_layout);
+        assert_eq!((k.notes.backlinks, i.notes.backlinks, x.notes.backlinks), (true, true, false), "只有 xochitl 去注释回链");
+        assert_eq!((k.comic.page_direction.as_deref(), i.comic.page_direction.as_deref(), x.comic.page_direction.as_deref()), (None, None, None), "三台漫画都照书的翻页方向（掌阅往右翻的书要在阅读器里选「漫画」排版才铺满，2026-10-15）");
         assert!(get("nope").is_none());
     }
 
@@ -723,9 +833,9 @@ mod tests {
     fn comic_margin_defaults_to_one_and_is_validated() {
         let base = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
         let scr = "[screen]\nwidth = 100\nheight = 200\n";
-        assert_eq!(Profile::parse("x", &format!("{base}{scr}")).unwrap().comic_margin, DEFAULT_COMIC_MARGIN);
-        assert_eq!(Profile::parse("x", &format!("{base}comic_margin = 0\n{scr}")).unwrap().comic_margin, 0);
-        assert_eq!(Profile::parse("x", &format!("{base}comic_margin = 24\n{scr}")).unwrap().comic_margin, 24);
+        assert_eq!(Profile::parse("x", &format!("{base}{scr}")).unwrap().comic.margin, DEFAULT_COMIC_MARGIN);
+        assert_eq!(Profile::parse("x", &format!("{base}comic_margin = 0\n{scr}")).unwrap().comic.margin, 0);
+        assert_eq!(Profile::parse("x", &format!("{base}comic_margin = 24\n{scr}")).unwrap().comic.margin, 24);
         assert!(Profile::parse("x", &format!("{base}comic_margin = 25\n{scr}")).is_err(), "短边 100 的 1/4 = 25，不能等于");
         // 按阅读范围算，不按屏幕：阅读范围 80 宽时上限是 20
         let rd = "[readable.epub]\nwidth = 80\nheight = 180\n";

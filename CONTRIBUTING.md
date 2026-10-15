@@ -46,7 +46,7 @@
 - `kfx::write::WRITER_VERSION`（只进 kindle）、`bookconv::convert::CONVERT_VERSION`、`bookconv::opfmeta::VERSION`；
 - `library` 的 `PIPELINE_VERSION`（所有书都过期，慎用）。
 
-注意：Kindle 上覆盖 KFX 时字节有任何不同阅读进度就清零，所以 KFX 产物会变的改动要在提交说明里写清哪些书变了。**改了指纹构成**（`crates/library/src/generate.rs`）会让用户电脑上全部书重算，先问用户。
+注意：Kindle 上覆盖 KFX 时字节有任何不同阅读进度就清零，所以 KFX 产物会变的改动要在提交说明里写清哪些书变了。**改了指纹构成**（`crates/library/src/fingerprint.rs`、`generate.rs`）会让用户电脑上全部书重算，先问用户；改完跑 `cargo test -p library --test fp_golden`（指纹黄金对拍，一个字不对就红）。
 
 ## 命令
 
@@ -75,6 +75,6 @@ shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.
 | 测试、回归方法、版本号、**共用轮子对照表**、工程约束 | `docs/development.md` |
 | 用户定过的事 | `docs/decisions.md` |
 
-架构要点：依赖单向无环 `library` → `kfx` → `bookconv` → `profile`。HTML 操作一律用 `bookconv::html`（容错单双引号、注释，别写只认双引号的正则）；写文件先写临时文件再改名（`util::produce_then_replace`）；读外来数据设上限（`util::read_capped`），外来数据不能让进程 panic。**共用的轮子别再各写一份**，动手前查 `docs/development.md#工程约束` 的对照表。
+架构要点：依赖单向无环 `library` → `kfx` → `bookconv` → `csscascade` → `profile`、`bookbase`。HTML 操作一律用 `bookbase::html`（`bookconv::html` 是再导出；容错单双引号、注释，别写只认双引号的正则）；写文件先写临时文件再改名（`util::produce_then_replace`）；读外来数据设上限（`util::read_capped`），外来数据不能让进程 panic。**共用的轮子别再各写一份**，动手前查 `docs/development.md#工程约束` 的对照表。
 
 改了行为就同步改 `docs/`；发现的问题、得出的结论写进对应文档。

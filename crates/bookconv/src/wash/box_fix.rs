@@ -148,10 +148,7 @@ fn frame_open(class: usize, td_style: &str, table: &Option<(String, &'static str
 const FRAME_CLOSE: &str = "</td></tr></tbody></table></div>";
 
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, reader: &ReaderModel, g: BoxGeometry) {
-    let css = km::book_css(entries, media);
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    let plans: Vec<Plan> = crate::util::par_map(&chapters, |&i| plan(&entries[i], media, &css, reader, g));
-    drop(css);
+    let (chapters, plans) = super::scan_chapters(entries, media, |e, css| plan(e, media, css, reader, g));
     if plans.iter().all(|p| p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty() && p.cell_widths.is_empty() && p.inline.is_empty()) {
         return;
     }
@@ -159,102 +156,41 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     let opf_dir = opf_idx.map(|i| dir_of(&entries[i].name).to_string()).unwrap_or_default();
     let at = |n: &str| if opf_dir.is_empty() { n.to_string() } else { format!("{opf_dir}/{n}") };
     let css_path = at(CSS_NAME);
+    // 三段（2026-10-15 改，以前写回整段串行）：① 各章并行算好编辑（[`resolve`]，只读），类、横线图先不编号，按以前遇到的先后
+    // 记下要登记的；② 串行按「章的顺序、章里登记的先后」编号——和以前逐章做时的先后一样，产物逐字节不变；③ 各章并行改写（[`rewrite`]）。
+    let busy = |p: &Plan| !(p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty() && p.cell_widths.is_empty() && p.inline.is_empty());
+    let todo: Vec<(usize, &Plan)> = chapters.iter().zip(&plans).filter(|(_, p)| busy(p)).map(|(&i, p)| (i, p)).collect();
+    let resolved: Vec<Option<Resolved>> = crate::util::par_map(&todo, |&(i, p)| resolve(&entries[i], p));
     // (标签, 声明) → 类序号；横线图 → 序号
     let mut classes: Vec<(String, String)> = Vec::new();
     let mut images: Vec<(LineKey, Line)> = Vec::new();
-    for (&i, p) in chapters.iter().zip(&plans) {
-        if p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty() && p.cell_widths.is_empty() && p.inline.is_empty() {
-            continue;
-        }
-        let e = &mut entries[i];
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let Some((bs, be)) = html::body_range(text) else { continue };
-        let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
-        let dir = dir_of(&e.name).to_string();
-        let mut edits: Vec<(usize, usize, String)> = Vec::new();
-        let empty = Vec::new();
-        let tagged: std::collections::BTreeSet<usize> = p.decls.keys().chain(p.inline.keys()).copied().collect();
-        for n in tagged {
-            let ds = p.decls.get(&n).unwrap_or(&empty);
-            let Some(t) = starts.get(n) else { continue };
-            let tag = t.name.to_ascii_lowercase();
-            let mut raw = text[t.start..t.end].to_string();
-            if let (Some(pre), Some(style)) = (p.strip.get(&n), html::attr_value(&raw, "style").map(|s| crate::util::xml_unescape(s).into_owned())) {
-                let kept: String = html::css_decls(&style).iter().filter(|d| !pre.iter().any(|p| d.prop.to_ascii_lowercase().starts_with(p))).map(|d| d.raw).collect();
-                raw = if kept.trim().is_empty() { html::remove_attr(&raw, "style") } else { html::set_attr(&raw, "style", &crate::util::xml_escape(kept.trim())) };
-            }
-            if let Some(adds) = p.inline.get(&n) {
-                let old = html::attr_value(&raw, "style").map(|s| crate::util::xml_unescape(s).into_owned()).unwrap_or_default();
-                let old = old.trim_end();
-                let old = old.strip_suffix(';').unwrap_or(old);
-                let add: String = adds.iter().map(|d| format!("{d};")).collect();
-                let style = if old.trim().is_empty() { add } else { format!("{old};{add}") };
-                raw = html::set_attr(&raw, "style", &crate::util::xml_escape(&style));
-            }
-            if !ds.is_empty() {
-                let body = ds.iter().map(|d| format!("{d};")).collect::<String>();
-                let k = classes.iter().position(|c| *c == (tag.clone(), body.clone())).unwrap_or_else(|| {
-                    classes.push((tag.clone(), body));
+    let mut jobs: HashMap<usize, Job> = HashMap::new();
+    for (&(i, _), r) in todo.iter().zip(resolved) {
+        let Some(r) = r else { continue };
+        let ks: Vec<usize> = r
+            .classes
+            .iter()
+            .map(|key| {
+                classes.iter().position(|c| c == key).unwrap_or_else(|| {
+                    classes.push(key.clone());
                     classes.len() - 1
-                });
-                raw = html::add_class(&raw, &format!("eink-b{}", k + 1));
-            }
-            edits.push((t.start, t.end, raw));
-        }
-        for &(n, line) in &p.lines {
-            let Some(t) = starts.get(n) else { continue };
-            let k = images.iter().position(|(key, _)| *key == line.key()).unwrap_or_else(|| {
-                images.push((line.key(), line));
-                images.len() - 1
-            });
-            let href = crate::epubzip::href_to(&dir, &at(&format!("eink-rule-{}.png", k + 1)), "");
-            let img = format!(r#"<img class="eink-sp eink-r{}" src="{href}" alt=""/>"#, k + 1);
-            let pos = if line.top {
-                t.end
-            } else {
-                let name = t.name.to_ascii_lowercase();
-                let Some(close) = html::find_matching_close(text, t.end, &name) else { continue };
-                close.start
-            };
-            edits.push((pos, pos, img));
-        }
-        for (n, body, ds, table) in &p.frames {
-            let Some(t) = starts.get(*n) else { continue };
-            let Some(close) = html::find_matching_close(text, t.end, &t.name.to_ascii_lowercase()) else { continue };
-            let key = ("div".to_string(), body.clone());
-            let k = classes.iter().position(|c| *c == key).unwrap_or_else(|| {
-                classes.push(key);
-                classes.len() - 1
-            });
-            edits.push((t.start, t.start, frame_open(k + 1, ds, table)));
-            edits.push((close.end, close.end, FRAME_CLOSE.to_string()));
-        }
-        for (n, add) in &p.cells {
-            let Some(t) = starts.get(*n) else { continue };
-            let mut raw = text[t.start..t.end].to_string();
-            match p.cell_widths.iter().find(|(j, _)| j == n) {
-                Some((_, Some(v))) => raw = html::set_attr(&raw, "width", v),
-                Some((_, None)) => raw = html::remove_attr(&raw, "width"),
-                None => {}
-            }
-            if t.name.eq_ignore_ascii_case("table") {
-                raw = html::set_attr(&raw, "cellspacing", "0");
-            }
-            if !add.is_empty() {
-                let style = match html::attr_value(&raw, "style") {
-                    Some(s) if !s.trim().is_empty() => format!("{};{add}", html::style_base(s)),
-                    _ => add.clone(),
-                };
-                raw = html::set_attr(&raw, "style", &style);
-            }
-            edits.push((t.start, t.end, raw));
-        }
-        edits.sort_by_key(|x| (x.0, x.1));
-        rep.kindle_rule_edits += edits.len();
-        let out = html::apply_edits(text, edits);
-        let href = crate::epubzip::href_to(&dir, &css_path, "");
-        e.data = typeset::inject_css_link(&out, &href).into_bytes();
+                })
+            })
+            .collect();
+        let ls: Vec<usize> = r
+            .lines
+            .iter()
+            .map(|line| {
+                images.iter().position(|(key, _)| *key == line.key()).unwrap_or_else(|| {
+                    images.push((line.key(), *line));
+                    images.len() - 1
+                })
+            })
+            .collect();
+        jobs.insert(i, (r, ks, ls));
     }
+    let mut work: Vec<(&mut Entry, Job)> = entries.iter_mut().enumerate().filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j))).collect();
+    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, (r, ks, ls))| rewrite(e, r, ks, ls, &at, &css_path)).into_iter().sum::<usize>();
     // 不写 `!important`（掌阅带了反而输给前面的普通声明）：选择器 `html body 标签.类` 压过书里的规则，这份样式表链在最后
     let mut sheet = String::from("/* 内边距、边框、标题外边距、左右外边距照 Kindle（sheng-ren kindle_rules，见 wash/box_fix.rs） */\n");
     for (k, (tag, body)) in classes.iter().enumerate() {
@@ -263,10 +199,137 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     for k in 0..images.len() {
         sheet.push_str(&format!("html body img.eink-r{}{{display:block;width:100%;height:auto;margin:0;padding:0;}}\n", k + 1));
     }
-    add_css_entry(entries, opf_idx, &css_path, &sheet, "eink-box-css");
+    add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-box-css");
     for (k, (_, line)) in images.iter().enumerate() {
         add_entry(entries, opf_idx, &at(&format!("eink-rule-{}.png", k + 1)), line.png(), &format!("eink-rule-{}", k + 1), "image/png");
     }
+}
+
+/// 一处编辑的新内容（[`resolve`]）：定好了的，或者要等编号的（下标指 [`Resolved`] 里登记的第几个）。
+enum Out {
+    Done(String),
+    /// 原标签改好了、还差加类：`eink-b<类号>`。
+    Class(String, usize),
+    /// 插一张横线图。
+    Line(usize),
+    /// 包框表格的开头（单元格的行内 `style`、窄块的表格宽和靠哪边，见 [`frame_open`]）。
+    Frame(usize, String, Option<(String, &'static str)>),
+}
+
+/// 一章算好的编辑和编好的类号、横线图号（[`apply`] 的第三段）。
+type Job = (Resolved, Vec<usize>, Vec<usize>);
+
+/// 一章算好的编辑：要登记的类、横线图（按以前遇到的先后），编辑 (起, 止, 新内容)（按以前的先后：加声明的标签、横线图、框、单元格）。
+struct Resolved {
+    classes: Vec<(String, String)>,
+    lines: Vec<Line>,
+    edits: Vec<(usize, usize, Out)>,
+}
+
+/// 照 `p` 算一章的编辑（只读）。不是 UTF-8、没有 `<body>` 的章不动（`None`）。登记和编辑的先后、哪些情况跳过都同以前逐章串行时：
+/// 横线图在找闭合标签之前登记（找不到闭合标签的不插图，但占一个编号），框在找到闭合标签之后登记。
+fn resolve(e: &Entry, p: &Plan) -> Option<Resolved> {
+    let text = std::str::from_utf8(&e.data).ok()?;
+    let (bs, be) = html::body_range(text)?;
+    let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
+    let mut r = Resolved { classes: Vec::new(), lines: Vec::new(), edits: Vec::new() };
+    let empty = Vec::new();
+    let tagged: std::collections::BTreeSet<usize> = p.decls.keys().chain(p.inline.keys()).copied().collect();
+    for n in tagged {
+        let ds = p.decls.get(&n).unwrap_or(&empty);
+        let Some(t) = starts.get(n) else { continue };
+        let tag = t.name.to_ascii_lowercase();
+        let mut raw = text[t.start..t.end].to_string();
+        if let (Some(pre), Some(style)) = (p.strip.get(&n), html::attr_value(&raw, "style").map(|s| crate::util::xml_unescape(s).into_owned())) {
+            let kept: String = html::css_decls(&style).iter().filter(|d| !pre.iter().any(|p| d.prop.to_ascii_lowercase().starts_with(p))).map(|d| d.raw).collect();
+            raw = if kept.trim().is_empty() { html::remove_attr(&raw, "style") } else { html::set_attr(&raw, "style", &crate::util::xml_escape(kept.trim())) };
+        }
+        if let Some(adds) = p.inline.get(&n) {
+            let old = html::attr_value(&raw, "style").map(|s| crate::util::xml_unescape(s).into_owned()).unwrap_or_default();
+            let old = old.trim_end();
+            let old = old.strip_suffix(';').unwrap_or(old);
+            let add: String = adds.iter().map(|d| format!("{d};")).collect();
+            let style = if old.trim().is_empty() { add } else { format!("{old};{add}") };
+            raw = html::set_attr(&raw, "style", &crate::util::xml_escape(&style));
+        }
+        let out = if ds.is_empty() {
+            Out::Done(raw)
+        } else {
+            r.classes.push((tag, ds.iter().map(|d| format!("{d};")).collect::<String>()));
+            Out::Class(raw, r.classes.len() - 1)
+        };
+        r.edits.push((t.start, t.end, out));
+    }
+    for &(n, line) in &p.lines {
+        let Some(t) = starts.get(n) else { continue };
+        r.lines.push(line);
+        let pos = if line.top {
+            t.end
+        } else {
+            let name = t.name.to_ascii_lowercase();
+            let Some(close) = html::find_matching_close(text, t.end, &name) else { continue };
+            close.start
+        };
+        r.edits.push((pos, pos, Out::Line(r.lines.len() - 1)));
+    }
+    for (n, body, ds, table) in &p.frames {
+        let Some(t) = starts.get(*n) else { continue };
+        let Some(close) = html::find_matching_close(text, t.end, &t.name.to_ascii_lowercase()) else { continue };
+        r.classes.push(("div".to_string(), body.clone()));
+        r.edits.push((t.start, t.start, Out::Frame(r.classes.len() - 1, ds.clone(), table.clone())));
+        r.edits.push((close.end, close.end, Out::Done(FRAME_CLOSE.to_string())));
+    }
+    for (n, add) in &p.cells {
+        let Some(t) = starts.get(*n) else { continue };
+        let mut raw = text[t.start..t.end].to_string();
+        match p.cell_widths.iter().find(|(j, _)| j == n) {
+            Some((_, Some(v))) => raw = html::set_attr(&raw, "width", v),
+            Some((_, None)) => raw = html::remove_attr(&raw, "width"),
+            None => {}
+        }
+        if t.name.eq_ignore_ascii_case("table") {
+            raw = html::set_attr(&raw, "cellspacing", "0");
+        }
+        if !add.is_empty() {
+            let style = match html::attr_value(&raw, "style") {
+                Some(s) if !s.trim().is_empty() => format!("{};{add}", html::style_base(s)),
+                _ => add.clone(),
+            };
+            raw = html::set_attr(&raw, "style", &style);
+        }
+        r.edits.push((t.start, t.end, Out::Done(raw)));
+    }
+    Some(r)
+}
+
+/// 照算好的编辑改写一章：`ks`、`ls` 是这章登记的类、横线图编好的全书序号（从 0 起），`at` 把文件名换成 OPF 同目录的书内路径。
+/// 返回改动数。
+fn rewrite(e: &mut Entry, r: &Resolved, ks: &[usize], ls: &[usize], at: &(impl Fn(&str) -> String + Sync), css_path: &str) -> usize {
+    let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+    let dir = dir_of(&e.name);
+    let mut edits: Vec<(usize, usize, String)> = r
+        .edits
+        .iter()
+        .map(|(s, t, out)| {
+            let new = match out {
+                Out::Done(v) => v.clone(),
+                Out::Class(raw, c) => html::add_class(raw, &format!("eink-b{}", ks[*c] + 1)),
+                Out::Line(l) => {
+                    let k = ls[*l];
+                    let href = crate::epubzip::href_to(dir, &at(&format!("eink-rule-{}.png", k + 1)), "");
+                    format!(r#"<img class="eink-sp eink-r{}" src="{href}" alt=""/>"#, k + 1)
+                }
+                Out::Frame(c, ds, table) => frame_open(ks[*c] + 1, ds, table),
+            };
+            (*s, *t, new)
+        })
+        .collect();
+    edits.sort_by_key(|x| (x.0, x.1));
+    let n = edits.len();
+    let out = html::apply_edits(text, edits);
+    let href = crate::epubzip::href_to(dir, css_path, "");
+    e.data = typeset::inject_css_link(&out, &href).into_bytes();
+    n
 }
 
 /// 包进单格表格的列表（《雪国》注释列表 `ol{border:1px dashed}`）：Kindle 上文字离框左边约 10.3% 个内容区宽（2026-10-15 Kindle 弹窗

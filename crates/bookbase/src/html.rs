@@ -466,7 +466,7 @@ pub fn split_href(v: &str) -> (&str, Option<&str>) {
 /// 锚点原文 → 拿去对 id 的值（百分号解码：NCX 里常把中文锚点写成 `%E6%B3%A8`）。
 pub fn frag_id(frag: &str) -> Cow<'_, str> {
     if frag.contains('%') {
-        Cow::Owned(crate::epubzip::percent_decode(frag))
+        Cow::Owned(crate::util::percent_decode(frag))
     } else {
         Cow::Borrowed(frag)
     }

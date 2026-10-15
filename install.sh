@@ -9,7 +9,8 @@
 #   都不加：沿用上次的选择（装过开发工具就一起升级，免得工具停在旧版本、和 booklib 的规则对不上）
 # 重复运行 = 用当前代码重新编译安装（升级）。卸载见 ./uninstall.sh。
 # 先把要装的命令全部编译好再动安装目录：编译失败什么都不改；安装中途失败或被中断（Ctrl-C）就退回装之前的样子。
-# 退出码：0 装好；1 没有 cargo、用 root 运行、同名命令被别的包占着或编译安装失败（已回滚）；2 参数不对。
+# 同一个安装目录同时只能跑一个 install.sh / uninstall.sh（另一个在跑就停下）；装不进去（没有写权限）在编译之前就停下。
+# 退出码：0 装好；1 没有 cargo、用 root 运行、安装目录不能写、另一个在跑、同名命令被别的包占着或编译安装失败（已回滚）；2 参数不对。
 # 直接运行，别 source（set -e、cd 会留在你的 shell 里，出错时连 shell 一起退出）
 (return 0 2>/dev/null) && { echo "✗ 直接运行 ./install.sh，别 source" >&2; return 2; }
 set -euo pipefail
@@ -27,9 +28,15 @@ for a in "$@"; do
   esac
 done
 command -v cargo >/dev/null || { echo "✗ 需要 Rust 工具链（cargo）：https://rustup.rs" >&2; exit 1; }
+# 先查能不能写、拿锁，再读已装的列表（拿锁以后别人改不了它）、再编译：哪一样不行都在花时间编译之前停下
+require_writable_root
+lock_install_root
+# 编译失败或被中断（还没到下面的回滚）时，删掉为了加锁新建的空目录
+trap remove_made_dirs EXIT
 # 复用仓库的 target/（和 cargo build --release 共享编译缓存；不设的话 cargo install 每次在临时目录里从头编）
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$here/target}
 cargo_list >/dev/null
+load_bins
 
 if [[ $tools == keep ]]; then
   tools=0
@@ -44,7 +51,7 @@ if [[ $tools -eq 1 ]]; then pkgs+=("${TOOL_PKGS[@]}"); fi
 # 别的包占着同名命令时停下来，不用 --force 抢过来（那会悄悄换掉别人装的东西）
 conflict=0
 for p in "${pkgs[@]}"; do
-  for b in $(pkg_bins "$p"); do
+  for b in $(bins "$p"); do
     if other=$(foreign_owner "$b"); then
       echo "✗ 命令 $b 已经被别的包装过：$other" >&2
       echo "  确认不要了就先 cargo uninstall 它，再运行本脚本" >&2
@@ -58,7 +65,7 @@ done
 declare -A bins_of=()
 build_args=()
 for p in "${pkgs[@]}"; do
-  bins_of[$p]=$(pkg_bins "$p")
+  bins_of[$p]=$(bins "$p")
   [[ -n ${bins_of[$p]} ]] || { echo "✗ crates/$p/Cargo.toml 里没认出 [[bin]]" >&2; exit 1; }
   build_args+=(-p "$p")
   for b in ${bins_of[$p]}; do build_args+=(--bin "$b"); done
@@ -94,12 +101,14 @@ on_exit() {
   local code=$?
   if [[ $installing -eq 1 && $code -ne 0 ]]; then rollback || echo "✗ 退回也失败了：重新运行 ./install.sh 会装成完整的新版本" >&2; fi
   rm -rf "$backup"
+  remove_made_dirs
 }
 trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 rm -rf "$backup"
+mkdir_tracked "$bindir"
 mkdir -p "$backup"
 for f in .crates.toml .crates2.json; do
   if [[ -e $rootdir/$f ]]; then cp -p "$rootdir/$f" "$backup/"; else : >"$backup/$f.absent"; fi
@@ -124,7 +133,7 @@ if [[ $tools -eq 0 ]]; then
   for p in "${TOOL_PKGS[@]}"; do
     if spec=$(ours_installed "$p"); then
       cargo uninstall --quiet "$spec"
-      echo "✓ 卸掉开发工具 $(pkg_bins "$p")"
+      echo "✓ 卸掉开发工具 $(bins "$p")"
     fi
   done
 fi

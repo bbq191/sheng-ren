@@ -1,0 +1,16 @@
+[package]
+name = "bookbase"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "书处理的基础件：通用工具（原子写、限量读、并行、图片格式表）、容错的 HTML/CSS 文本操作、颜色。不依赖本仓库别的 crate"
+
+[dependencies]
+regex = "1"
+# 只用格式枚举（图片格式表）
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+# HTML5 的命名字符引用全表（和 scraper 底下的 html5ever 同一版）
+markup5ever = "0.11"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1560,6 +1560,24 @@
         assert!(s(&v, "OEBPS/d.xhtml").contains(r#"href="c.xhtml""#), "链接改指下一页");
     }
 
+    /// 判空页的捷径（全书样式表没有 `display:none`、这章原文没有 `display` 时只看 DOM 里有没有字）和完整判断结论一样：
+    /// 行内大写的 `DISPLAY: none` 藏起来的字照样算空页（原文有 display，走完整判断），只有 `&#160;` 的页照样删，有字的留着。
+    #[test]
+    fn kindle_empty_pages_shortcut_agrees_with_full_check() {
+        let mut v = vec![
+            e("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+            e("OEBPS/content.opf", r#"<package version="3.0"><metadata><dc:title>B</dc:title></metadata><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="b.xhtml" media-type="application/xhtml+xml"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.css" media-type="text/css"/></manifest><spine><itemref idref="a"/><itemref idref="b"/><itemref idref="c"/></spine></package>"#),
+            e("OEBPS/s.css", "p{text-indent:2em} .x{list-style:none}"),
+            e("OEBPS/a.xhtml", r#"<html><head><link rel="stylesheet" href="s.css"/></head><body><p STYLE="DISPLAY: none">版权信息</p></body></html>"#),
+            e("OEBPS/b.xhtml", r#"<html><head><link rel="stylesheet" href="s.css"/></head><body><p>&#160;</p></body></html>"#),
+            e("OEBPS/c.xhtml", &format!(r#"<html><head><link rel="stylesheet" href="s.css"/></head><body><p class="x">{LONG}</p></body></html>"#)),
+        ];
+        let mut rep = WashReport::default();
+        super::empty_pages::remove_kindle_empty_pages(&mut v, &mut rep, None);
+        assert_eq!(rep.empty_pages_removed, ["OEBPS/a.xhtml", "OEBPS/b.xhtml"]);
+        assert_eq!(spine_files(&v), ["OEBPS/c.xhtml"]);
+    }
+
     /// H3：单引号 OPF 里的空页也删得掉，manifest 的 href 不被改成邻页（此前 spine 重复一章）。
     #[test]
     fn audit_h3_empty_page_in_single_quoted_opf() {
@@ -1864,3 +1882,16 @@
         }
         assert!(!toc::part_prefix_re().is_match("第一章"));
     }
+
+/// `kindle_rules` 各步的顺序满足它们声明的前后依赖，步骤名不重复、`after` 引用的都在表里。
+#[test]
+fn kindle_rule_passes_are_ordered() {
+    let names: Vec<&str> = KINDLE_RULE_PASSES.iter().map(|p| p.name).collect();
+    for (i, p) in KINDLE_RULE_PASSES.iter().enumerate() {
+        assert!(!names[..i].contains(&p.name), "步骤名重复：{}", p.name);
+        for a in p.after {
+            let j = names.iter().position(|n| n == a).unwrap_or_else(|| panic!("{} 的前置 {a} 不在表里", p.name));
+            assert!(j < i, "{} 必须排在 {a} 之后", p.name);
+        }
+    }
+}

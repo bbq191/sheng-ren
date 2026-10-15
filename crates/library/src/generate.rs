@@ -117,76 +117,8 @@ impl Library {
         } else {
             format!("{PIPELINE_VERSION}c{}", bookconv::convert::CONVERT_VERSION)
         };
-        // 注释呈现方式（profile 的 notes：弹窗/跳转；书库 profiles/ 里的自定义模式改了它也要重建）
-        let notes = match device.notes {
-            profile::Notes::Popup => "popup",
-            profile::Notes::Jump => "jump",
-        };
-        // 图标注释号换数字（profile 的 note_icons = "number"）时再带个 `#`
-        let notes = if device.note_icons == profile::NoteIcons::Number { format!("{notes}#") } else { notes.to_string() };
-        // 保留注释回链（profile 的 note_backlinks，缺省保留）时再带个 `<`
-        let notes = if device.note_backlinks { format!("{notes}<") } else { notes };
-        // 文字书、漫画分开算（2026-10-08）：只影响另一路的版本号、profile 字段变了，这一路不过期。
-        // 文字书：EPUB 阅读范围 + 只管文字书的字段；漫画：EPUB 阅读范围 + 漫画画布 + 白边 + 只管漫画的字段。
-        // 两路都过清洗层：背景图、rgba 两路都带。
         let comic = self.comic_of(meta)?;
-        let shared = match (device.background_images, device.background_sizing) {
-            (true, true) => "b",
-            (true, false) => "bn",
-            _ => "",
-        };
-        // 阅读器不认 rgba() 颜色（profile 的 css_rgba = false）
-        let shared = if device.css_rgba { shared.to_string() } else { format!("{shared}r") };
-        let (version, area_seg) = if comic {
-            // 漫画画布和阅读器页边距（comic_readable、comic_reader_margins）、白边（comic_margin）、翻页方向改写（如 `dltr`）、固定版式（`f`）
-            // EPUB 阅读范围也带上：漫画书里别的图（网上的图）按它缩
-            let c = device.comic_readable();
-            let mut seg = format!("{}x{}c{}x{}+{}{}", area.width, area.height, c.width, c.height, device.comic_margin, device.comic_reader_margins.map(|m| format!("m{m}")).unwrap_or_default());
-            if let Some(d) = &device.comic_page_direction {
-                seg.push_str(&format!("d{d}"));
-            }
-            if device.comic_fixed_layout {
-                seg.push('f');
-            }
-            (format!("c{}", bookconv::optimize::COMIC_VERSION), format!("{seg}{shared}"))
-        } else {
-            // 带图注的竖长图写宽度（`k`，caption_fit）、正文图片透明处合成白底（`a`，image_alpha = false）、只修复（`t`，text_repair_only）、注释可跳（`n`）、照 Send to Kindle 的规则统一（`u`，kindle_rules，后面跟 `KINDLE_RULES_VERSION`）
-            let mut seg = format!("{}x{}{shared}", area.width, area.height);
-            for (on, c) in [(device.caption_fit, 'k'), (!device.image_alpha, 'a'), (device.text_repair_only, 't'), (device.text_repair_only && device.repair_note_links, 'n'), (device.text_repair_only && device.kindle_rules, 'u')] {
-                if on {
-                    seg.push(c);
-                }
-            }
-            // `u` 这一路自己的版本（第 1 版只写 `u`）
-            if device.text_repair_only && device.kindle_rules && bookconv::wash::KINDLE_RULES_VERSION != "1" {
-                seg.push_str(bookconv::wash::KINDLE_RULES_VERSION);
-            }
-            // 阅读器不认背景图的 no-repeat（profile 的 background_no_repeat = false）：`kindle_rules` 去掉不平铺的背景图，带个 `g`
-            if device.text_repair_only && device.kindle_rules && !device.background_no_repeat {
-                seg.push('g');
-            }
-            // 阅读器不照 CSS 定图片尺寸（profile 的 image_sizing，第 9 版起）：`kindle_images` 按 Kindle 的大小改写，带上方式和
-            // Kindle 的内容区宽、1em 像素（改了 kindle 模式的这两个量，掌阅、Move 的书也要重建）
-            if device.text_repair_only && device.kindle_rules && device.image_sizing != profile::ImageSizing::Css {
-                let k = profile::get("kindle");
-                seg.push_str(&format!("i{:?}{}x{}", device.image_sizing, k.map_or(0, |k| k.readable(profile::Format::Kfx).width), k.and_then(|k| k.font_px).unwrap_or(0)));
-            }
-            // 阅读器和 CSS 不一样的地方（设备模型 `bookconv::reader_model`：认不认 display:none、块末尾 <br/>、<p> 的行距、标题字号
-            // 只认的关键字和大小、页首垫图的尺寸）和竖直间距换算用的 em_px：改了 profile 里这些（重量了 Move 的标题字号之类）书要重建，
-            // 带个 `m` 加它们的哈希（2026-10-13 用户定进指纹；以前只能手动加 KINDLE_RULES_VERSION）
-            if device.text_repair_only && device.kindle_rules {
-                let sig = bookconv::reader_model::ReaderModel::for_profile(device).signature();
-                if !sig.is_empty() || device.em_px.is_some() {
-                    let em = device.em_px.map_or_else(String::new, |e| format!("e{e}"));
-                    seg.push_str(&format!("m{:016x}", bookconv::util::fnv64(format!("{sig}{em}").as_bytes())));
-                }
-            }
-            // 统计正文字号时 `@media` 的 `device-width` 等按屏幕求（`MediaEnv::for_format`，第 6 版起）：自定义模式改了屏幕也要重建
-            if device.text_repair_only && device.kindle_rules {
-                seg.push_str(&format!("@{}x{}", device.screen.width, device.screen.height));
-            }
-            (bookconv::optimize::OPTIMIZE_VERSION.to_string(), seg)
-        };
+        let crate::fingerprint::DeviceSig { version, area_seg, notes } = crate::fingerprint::device_sig(device, area, comic);
         let fingerprint = format!(
             "{}|{cover}|{info}|{pipeline}|{version}|{notes}|{}|{area_seg}|{}|{}",
             meta.content_sha(),
@@ -196,22 +128,10 @@ impl Library {
         );
         // 以前的写法：一个版本号、profile 的字段全带上。版本号用这一路现在的：这一路的版本变过，就对不上，照常重建
         let legacy = {
-            let c = device.comic_readable();
-            let mut seg = match (c != area, device.comic_reader_margins) {
-                (false, None) => String::new(),
-                (_, m) => format!("c{}x{}{}", c.width, c.height, m.map(|m| format!("m{m}")).unwrap_or_default()),
-            };
-            if let Some(d) = &device.comic_page_direction {
-                seg.push_str(&format!("d{d}"));
-            }
-            for (on, x) in [(device.comic_fixed_layout, "f"), (device.background_images && device.background_sizing, "b"), (device.background_images && !device.background_sizing, "bn"), (!device.css_rgba, "r"), (device.caption_fit, "k"), (!device.image_alpha, "a"), (device.text_repair_only, "t")] {
-                if on {
-                    seg.push_str(x);
-                }
-            }
+            let seg = crate::fingerprint::legacy_device_seg(device, area);
             let v = if comic { bookconv::optimize::COMIC_VERSION } else { bookconv::optimize::OPTIMIZE_VERSION };
             let gray = if device.color { "color" } else { "gray" };
-            format!("{}|{cover}|{info}|{pipeline}|{v}|{notes}|{}|{}x{}+{}{seg}|{gray}|{format_seg}", meta.content_sha(), device.id, area.width, area.height, device.comic_margin)
+            format!("{}|{cover}|{info}|{pipeline}|{v}|{notes}|{}|{}x{}+{}{seg}|{gray}|{format_seg}", meta.content_sha(), device.id, area.width, area.height, device.comic.margin)
         };
         Ok(Plan { fingerprint, legacy, format })
     }

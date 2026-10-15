@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kfx import by_type, cli_args, cli_opts, pools, reading_order
 from s2kcmp import NAMES, fmt
 from s2kdev import kfx_features
+import toollib
 from unify import DEVICES, READER_GEOMETRY, books_in, profile_flag, profile_value
 
 PAGE = 32.0  # Kindle 一行的根 em 数（同 s2kdev.py）
@@ -431,6 +432,7 @@ def main():
     books, work, wanted = args[0], args[1], args[2:]
     opt = cli_opts()
     bindir = opt.get('--bin', 'target/release')
+    toollib.BINDIR = bindir
     top = int(opt.get('--top', 8))
     reuse = '--reuse' in sys.argv
     base_path = opt.get('--baseline', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'layout-baseline.tsv'))
@@ -468,7 +470,7 @@ def main():
                     ev[2]['size_root'] = ev[2]['fs']
             frac = lambda em, size, d=d: em / page_em[d]
             d_nodes, issues = layout_of(dev, frac, profile_flag(d, 'padding'), profile_flag(d, 'block_width'), profile_flag(d, 'borders'))
-            skip = moved_notes(f'{stem}.{d}.epub') if profile_flag(d, 'repair_note_links', False) else frozenset()
+            skip = moved_notes(f'{stem}.{d}.epub') if profile_flag(d, 'repair_note_links') else frozenset()
             found = compare(k_nodes, d_nodes, PAGE, page_em[d], skip) + issues + cover_issues(k_kinds, section_kinds(dev, estimated_breaks(f'{stem}.{d}.epub')))
             if d == 'xochitl' and (c := legacy_break_count(f'{stem}.{d}.epub')):
                 found.append(('怪癖', f'{c} 处 break-before/after:page（Move 只认 page-break-*）'))

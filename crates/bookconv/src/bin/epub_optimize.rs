@@ -13,6 +13,7 @@
 //!   --keep-color     黑白屏设备的漫画页也保留彩色（缺省转 256 级灰度）；用来对比灰度与彩色的体积、画质
 //!   --check          产物过质量门，打印 JSON 报告；不过则退出码 3（产物仍写出）
 //!   --require-toc    质量门把"无目录"升为失败
+//! 另：epub-optimize --print-profile --device=<id> 打印这个模式解析好的 profile（JSON，缺省值都填上；键名同 TOML），给 tools/ 的脚本读。
 //! 退出码: 0 成功；1 用法错；2 优化失败（输入原样不动）；3 质量门未过。
 
 use bookconv::optimize::{self, OptimizeOpts};
@@ -22,6 +23,11 @@ use bookconv::wash::{AutoToc, WashOpts};
 fn main() {
     cli::restore_sigpipe();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--print-profile") {
+        let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
+        println!("{}", serde_json::to_string_pretty(device).unwrap_or_else(|e| die(cli::FAILED, e.to_string())));
+        return;
+    }
     let flags: Vec<&str> = args.iter().filter(|a| a.starts_with("--") && !a.starts_with("--device=")).map(|s| s.as_str()).collect();
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--keep-color", "--check", "--require-toc"].contains(f)) {

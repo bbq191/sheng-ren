@@ -332,6 +332,55 @@ pub struct KindleImageRef {
     pub v_rem_px: f64,
 }
 
+impl WashOpts {
+    /// 文字书只修复（[`WashMode::Repair`]）时实际用的清洗选项：只带 `kindle_rules` 要的阅读器怪癖（统计正文字号求 `@media` 的 `media`、
+    /// `css_rgba`、`background_no_repeat`、图片尺寸、背景图、间距、阅读器模型、体检……），排版类选项（段间距、目录、过滤的属性、语言、字体）
+    /// 一概不看。逐字段解构、不用 `..`：给 `WashOpts` 加字段时这里编译不过，逼着决定它在只修复时带不带——
+    /// 以前手写字段列表，漏带一个就悄悄变成缺省值（KINDLE_RULES 7 修过一次）。
+    pub fn repair_from(&self, kindle_rules: bool) -> WashOpts {
+        let WashOpts {
+            mode: _,
+            keep_para_spacing: _,
+            auto_toc: _,
+            filter_props: _,
+            lang: _,
+            keep_fonts: _,
+            // 流式优化时由调用方读文件头填（见 `image_dims` 的说明），不跟着带
+            image_dims: _,
+            css_rgba,
+            background_no_repeat,
+            media,
+            image_sizing,
+            tiny_page,
+            page_tiles,
+            top_spacer,
+            bg_place,
+            v_scale,
+            h_scale,
+            reader,
+            audit,
+            box_geometry,
+        } = self;
+        WashOpts {
+            mode: WashMode::Repair { kindle_rules },
+            css_rgba: *css_rgba,
+            background_no_repeat: *background_no_repeat,
+            media: *media,
+            image_sizing: *image_sizing,
+            tiny_page: *tiny_page,
+            page_tiles: *page_tiles,
+            top_spacer: *top_spacer,
+            bg_place: *bg_place,
+            v_scale: *v_scale,
+            h_scale: *h_scale,
+            reader: reader.clone(),
+            audit: audit.clone(),
+            box_geometry: *box_geometry,
+            ..Default::default()
+        }
+    }
+}
+
 impl Default for WashOpts {
     fn default() -> Self {
         WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, tiny_page: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, h_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None }
@@ -579,53 +628,7 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         if let Some(reader) = &opts.audit {
             rep.audit = crate::audit::audit(entries, opts.media.as_ref(), reader);
         }
-        // 先去掉 Move 上会露出来的隐藏元素：后面的页首垫图、背景图位置都按看得见的内容算
-        if !opts.reader.display_none {
-            rep.kindle_rule_edits += hidden::apply(entries);
-        }
-        // Kindle 上不出页的空页（刻意留的空白页、只有隐藏元素的页）去掉：后面各步不用再管它们
-        remove_kindle_empty_pages(entries, rep, opts.media.as_ref());
-        let font_scale = kindle_rules::apply(entries, rep, opts);
-        add_ua_css(entries, rep, font_scale);
-        // 不认 rem、`!important` 的阅读器（掌阅）：换成认的写法。别的 pass 之前：它们按 Kindle 的层叠算，换完算出来一样
-        css_compat::apply(entries, rep, opts.media.as_ref(), opts.reader.rem, opts.reader.important);
-        // 不认行内元素上 vertical-align 上标下标的阅读器（掌阅）：里面包 <sup>/<sub>
-        sup_sub::apply(entries, rep, opts.media.as_ref(), opts.reader.inline_valign);
-        if let Some((sizing, kref)) = opts.image_sizing {
-            kindle_images::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), sizing, kref);
-        }
-        // 只有空白的段落照 Kindle 折成下一块的上边距（照 Kindle 换算竖直间距的两台都做；按原来的 CSS 算，垫图、分页估算之前）
-        if opts.v_scale.is_some() {
-            blank_fold::apply(entries, rep, opts.media.as_ref(), !opts.reader.display_none, opts.reader.trailing_br_line);
-        }
-        // 行距、标题字号照 Kindle 在垫图之前：行内垫图要看块在这台上的行距、字号
-        block_style::apply(entries, rep, opts.media.as_ref(), &opts.reader);
-        if let Some(g) = opts.top_spacer {
-            top_spacer::apply(entries, rep, opts.media.as_ref(), g, &opts.reader);
-        }
-        // 大段上外边距在 Kindle 上排不下时换页、丢掉边距（掌阅、Move 都照 Kindle 换算竖直间距时做，按原来的 CSS 估）
-        if let (Some(_), Some((_, k))) = (opts.v_scale, opts.image_sizing) {
-            break_margin::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), k, true);
-        }
-        // 内边距、边框、标题外边距：垫图、分页估算之后（它们按原来的 CSS 算 Kindle 上的样子），竖直换算之前（写的 em 跟着换算）
-        if let Some(g) = opts.box_geometry {
-            box_fix::apply(entries, rep, opts.media.as_ref(), &opts.reader, g);
-        }
-        // 竖直间距照 Kindle 换算放在最后：上面几步都按原来的 CSS 算 Kindle 上的样子
-        if let Some(vs) = opts.v_scale {
-            rep.kindle_rule_edits += kindle_rules::scale_vertical_entries(entries, &vs);
-        }
-        // 左右边距的 em 照 Kindle 按页宽换算（Move）：同样最后做，box_fix 写的按 Kindle 的口径，一起乘
-        if let Some(h) = opts.h_scale {
-            rep.kindle_rule_edits += kindle_rules::scale_horizontal_entries(entries, h);
-        }
-        // em 一律按根字号算的阅读器（Move）：字号、边距、缩进的 em 换成按根的值写进行内。上面几步写完、换算完以后，挪行内样式之前
-        root_em::apply(entries, rep, opts.media.as_ref(), opts.reader.em_root, opts.reader.em_root_px);
-        // 行内 style、<style>、不带分号又紧挨 } 的声明里 em 不照 CSS 排的阅读器（Move）：挪进外链样式表。最后做：上面几步写进行内的、换算过的值一起挪
-        if !opts.reader.inline_css_lengths {
-            inline_css::apply(entries, rep);
-        }
-        drop_nonlinear_nav(entries);
+        run_passes(KINDLE_RULE_PASSES, entries, rep, opts);
     } else if let Some(k) = opts.tiny_page {
         // Kindle：只去掉小图页的强制分页（写出器照原书的分页分节）
         break_margin::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), k, false);
@@ -643,6 +646,158 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     // Move 上字号对不上关键字的标题改成 div：目录（补节、改指、生成 nav）都按 h1–h6 认标题，放在最后
     if opts.mode.kindle_rules() {
         rep.kindle_rule_edits += heading_div::finish(entries);
+    }
+}
+
+/// `kindle_rules` 的一步（只修复的文字书，掌阅、Move）。顺序靠前后依赖定：`after` 写它必须排在哪些步骤之后，
+/// 单测（`kindle_rule_passes_are_ordered`）核对表里的顺序满足全部 `after`——挪动、新增一步时顺序错了测试会报。
+#[allow(dead_code)] // `name`、`after` 只给单测核对顺序
+struct Pass {
+    name: &'static str,
+    /// 必须先做完的步骤（只写有关系的，要求它们在表里时排在这一步前面）。
+    after: &'static [&'static str],
+    /// 这台阅读器要不要做这一步（profile 来的选项决定）。
+    enabled: fn(&WashOpts) -> bool,
+    run: fn(&mut Vec<Entry>, &mut WashReport, &WashOpts),
+}
+
+/// 设了环境变量 `EINK_PASS_TIMING`（值不限）时，每步做完往标准错误打一行 `pass\t步骤名\t秒`（查性能热点用，见 docs/development.md#性能）。
+fn run_passes(passes: &[Pass], entries: &mut Vec<Entry>, rep: &mut WashReport, opts: &WashOpts) {
+    let timing = std::env::var_os("EINK_PASS_TIMING").is_some();
+    for p in passes.iter().filter(|p| (p.enabled)(opts)) {
+        let t = std::time::Instant::now();
+        (p.run)(entries, rep, opts);
+        if timing {
+            eprintln!("pass\t{}\t{:.3}", p.name, t.elapsed().as_secs_f64());
+        }
+    }
+}
+
+/// `kindle_rules` 的全部步骤，按执行顺序。总原则：先把「按 Kindle 的样子算」要看的信息（隐藏元素、空页、原来的 CSS）整理好，
+/// 中间各步都按原来的 CSS 估 Kindle 上的样子，竖直、左右间距换算放在最后（上面几步写的 em 一起乘），挪行内样式最后。
+const KINDLE_RULE_PASSES: &[Pass] = &[
+    // 先去掉 Move 上会露出来的隐藏元素：后面的页首垫图、背景图位置都按看得见的内容算
+    Pass { name: "hidden", after: &[], enabled: |o| !o.reader.display_none, run: |e, r, _| r.kindle_rule_edits += hidden::apply(e) },
+    // Kindle 上不出页的空页（刻意留的空白页、只有隐藏元素的页）去掉：后面各步不用再管它们
+    Pass { name: "empty_pages", after: &["hidden"], enabled: |_| true, run: |e, r, o| remove_kindle_empty_pages(e, r, o.media.as_ref()) },
+    // 规则改写（返回正文字号比，标签缺省样式表按它写）
+    Pass {
+        name: "kindle_rules",
+        after: &["empty_pages"],
+        enabled: |_| true,
+        run: |e, r, o| {
+            let font_scale = kindle_rules::apply(e, r, o);
+            add_ua_css(e, r, font_scale);
+        },
+    },
+    // 不认 rem、`!important` 的阅读器（掌阅）：换成认的写法。别的 pass 之前：它们按 Kindle 的层叠算，换完算出来一样
+    Pass { name: "css_compat", after: &["kindle_rules"], enabled: |_| true, run: |e, r, o| css_compat::apply(e, r, o.media.as_ref(), o.reader.rem, o.reader.important) },
+    // 不认行内元素上 vertical-align 上标下标的阅读器（掌阅）：里面包 <sup>/<sub>
+    Pass { name: "sup_sub", after: &["css_compat"], enabled: |_| true, run: |e, r, o| sup_sub::apply(e, r, o.media.as_ref(), o.reader.inline_valign) },
+    Pass {
+        name: "kindle_images",
+        after: &["css_compat"],
+        enabled: |o| o.image_sizing.is_some(),
+        run: |e, r, o| {
+            if let Some((sizing, kref)) = o.image_sizing {
+                kindle_images::apply(e, r, o.media.as_ref(), o.image_dims.as_deref(), sizing, kref);
+            }
+        },
+    },
+    // 只有空白的段落照 Kindle 折成下一块的上边距（照 Kindle 换算竖直间距的两台都做；按原来的 CSS 算，垫图、分页估算之前）
+    Pass {
+        name: "blank_fold",
+        after: &["kindle_images"],
+        enabled: |o| o.v_scale.is_some(),
+        run: |e, r, o| blank_fold::apply(e, r, o.media.as_ref(), !o.reader.display_none, o.reader.trailing_br_line),
+    },
+    // 行距、标题字号照 Kindle 在垫图之前：行内垫图要看块在这台上的行距、字号
+    Pass { name: "block_style", after: &["blank_fold"], enabled: |_| true, run: |e, r, o| block_style::apply(e, r, o.media.as_ref(), &o.reader) },
+    Pass {
+        name: "top_spacer",
+        after: &["block_style"],
+        enabled: |o| o.top_spacer.is_some(),
+        run: |e, r, o| {
+            if let Some(g) = o.top_spacer {
+                top_spacer::apply(e, r, o.media.as_ref(), g, &o.reader);
+            }
+        },
+    },
+    // 大段上外边距在 Kindle 上排不下时换页、丢掉边距（掌阅、Move 都照 Kindle 换算竖直间距时做，按原来的 CSS 估）
+    Pass {
+        name: "break_margin",
+        after: &["top_spacer"],
+        enabled: |o| o.v_scale.is_some() && o.image_sizing.is_some(),
+        run: |e, r, o| {
+            if let Some((_, k)) = o.image_sizing {
+                break_margin::apply(e, r, o.media.as_ref(), o.image_dims.as_deref(), k, true);
+            }
+        },
+    },
+    // 内边距、边框、标题外边距：垫图、分页估算之后（它们按原来的 CSS 算 Kindle 上的样子），竖直换算之前（写的 em 跟着换算）
+    Pass {
+        name: "box_fix",
+        after: &["top_spacer", "break_margin"],
+        enabled: |o| o.box_geometry.is_some(),
+        run: |e, r, o| {
+            if let Some(g) = o.box_geometry {
+                box_fix::apply(e, r, o.media.as_ref(), &o.reader, g);
+            }
+        },
+    },
+    // 竖直间距照 Kindle 换算放在最后：上面几步都按原来的 CSS 算 Kindle 上的样子
+    Pass {
+        name: "scale_vertical",
+        after: &["box_fix"],
+        enabled: |o| o.v_scale.is_some(),
+        run: |e, r, o| {
+            if let Some(vs) = o.v_scale {
+                r.kindle_rule_edits += kindle_rules::scale_vertical_entries(e, &vs);
+            }
+        },
+    },
+    // 左右边距的 em 照 Kindle 按页宽换算（Move）：同样最后做，box_fix 写的按 Kindle 的口径，一起乘
+    Pass {
+        name: "scale_horizontal",
+        after: &["box_fix"],
+        enabled: |o| o.h_scale.is_some(),
+        run: |e, r, o| {
+            if let Some(h) = o.h_scale {
+                r.kindle_rule_edits += kindle_rules::scale_horizontal_entries(e, h);
+            }
+        },
+    },
+    // em 一律按根字号算的阅读器（Move）：字号、边距、缩进的 em 换成按根的值写进行内。上面几步写完、换算完以后，挪行内样式之前
+    Pass {
+        name: "root_em",
+        after: &["scale_vertical", "scale_horizontal"],
+        enabled: |_| true,
+        run: |e, r, o| root_em::apply(e, r, o.media.as_ref(), o.reader.em_root, o.reader.em_root_px),
+    },
+    // 行内 style、<style>、不带分号又紧挨 } 的声明里 em 不照 CSS 排的阅读器（Move）：挪进外链样式表。最后做：上面几步写进行内的、换算过的值一起挪
+    Pass { name: "inline_css", after: &["root_em"], enabled: |o| !o.reader.inline_css_lengths, run: |e, r, _| inline_css::apply(e, r) },
+    Pass { name: "drop_nonlinear_nav", after: &[], enabled: |_| true, run: |e, _, _| drop_nonlinear_nav(e) },
+];
+
+/// 全书的章节（`is_chapter_entry`）在 `entries` 里的下标。
+pub(super) fn chapter_indices(entries: &[Entry]) -> Vec<usize> {
+    (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect()
+}
+
+/// 按全书样式表（[`crate::kindle_model::book_css`]）逐章并行算一遍：返回章节下标和各章的结果（一一对应）。
+/// 样式表借着 `entries`，返回前就释放，调用方接着可以改 `entries`。`kindle_rules` 的各步大多以它开头。
+pub(super) fn scan_chapters<R: Send>(entries: &[Entry], media: Option<&crate::cascade::MediaEnv>, f: impl Fn(&Entry, &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>) -> R + Sync) -> (Vec<usize>, Vec<R>) {
+    let css = crate::kindle_model::book_css(entries, media);
+    let chapters = chapter_indices(entries);
+    let out = crate::util::par_map(&chapters, |&i| f(&entries[i], &css));
+    (chapters, out)
+}
+
+/// 清洗层新写的文件（样式表、垫图）放 OPF 同目录（没有 OPF 放根）：这个文件名的 zip 路径。
+pub(super) fn beside_opf(entries: &[Entry], name: &str) -> String {
+    match find_opf(entries).map(|i| dir_of(&entries[i].name)) {
+        Some(d) if !d.is_empty() => format!("{d}/{name}"),
+        _ => name.to_string(),
     }
 }
 
@@ -689,12 +844,7 @@ fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path
 /// 只修复时挂上标签的缺省样式（[`WashMode::Repair`] 的 `kindle_rules`）：OPF 同目录写 `eink-ua.css`，每章 `<head>` 里**第一个**放指向它的 `<link>`
 /// （在书自带的样式表、`<style>` 之前，书里写了的照样盖过它）。目录页（nav）不挂。
 fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option<f64>) {
-    let opf_idx = find_opf(entries);
-    let name = crate::uastyle::UA_CSS_NAME;
-    let css_path = match opf_idx.map(|i| dir_of(&entries[i].name)) {
-        Some(d) if !d.is_empty() => format!("{d}/{name}"),
-        _ => name.to_string(),
-    };
+    let css_path = beside_opf(entries, crate::uastyle::UA_CSS_NAME);
     let linked = crate::util::par_map_mut(entries, |e| {
         if !is_chapter_entry(e) {
             return false;
@@ -706,7 +856,7 @@ fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option
         changed
     });
     rep.ua_css_linked += linked.into_iter().filter(|c| *c).count();
-    add_css_entry(entries, opf_idx, &css_path, &crate::uastyle::ua_css(font_scale), "eink-ua-css");
+    add_css_entry(entries, find_opf(entries), &css_path, &crate::uastyle::ua_css(font_scale), "eink-ua-css");
 }
 
 /// 新增（或更新）一份我们写的样式表，并往 OPF manifest 补一条 `<item>`（幂等）。

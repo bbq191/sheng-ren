@@ -1,6 +1,10 @@
-"""tools/ 下各脚本共用的小工具：命令行参数、EPUB 的 OPF 定位（regress/regresslib.py 和 kfx/ 的脚本都用）。"""
+"""tools/ 下各脚本共用的小工具：命令行参数、EPUB 的 OPF 定位、阅读模式 profile（regress/regresslib.py 和 kfx/ 的脚本都用）。"""
+import functools
 import html
+import json
+import os
 import re
+import subprocess
 import sys
 
 
@@ -30,3 +34,15 @@ def opf_path(z):
     """EPUB（打开的 ZipFile）里 OPF 的路径：container.xml 的 full-path（单双引号都认）。"""
     c = z.read('META-INF/container.xml').decode('utf-8', 'replace')
     return re.search(r'full-path\s*=\s*["\']([^"\']+)', c).group(1)
+
+
+# 读 profile 用的 epub-optimize 所在目录：脚本的 --bin=（缺省 target/release，相对仓库根）。main 里拿到 --bin 后改它。
+BINDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'target', 'release')
+
+
+@functools.lru_cache(maxsize=None)
+def profile(device):
+    """内置阅读模式解析好的 profile（`epub-optimize --print-profile`：缺省值都填上，键名同 TOML）。
+    以前各脚本按行扫 TOML 自己填缺省（2026-10-15 改）：缺省值和 Rust 那边各写一份，`[section]` 里的同名键还会认错。"""
+    out = subprocess.run([os.path.join(BINDIR, 'epub-optimize'), '--print-profile', f'--device={device}'], check=True, capture_output=True, text=True).stdout
+    return json.loads(out)

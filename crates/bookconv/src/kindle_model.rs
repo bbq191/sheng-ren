@@ -7,7 +7,7 @@
 //!   开始标签一一对应（对得上才知道改源码里的哪个标签）。
 //!
 //! 2026-10-13 收拢：以前写出器和清洗层的 7 个 pass 各写一份常量、各自解析样式表、各走一遍 DOM，写出器改了规则两边会悄悄对不上。
-use crate::cascade::{Computed, Len, MediaEnv, Origin, Rules, Sheet};
+use crate::cascade::{Computed, Len, MediaEnv, Rules, Sheet};
 use crate::epubzip::Entry;
 use ego_tree::NodeId;
 use scraper::{ElementRef, Html, Node};
@@ -139,9 +139,19 @@ pub const KINDLE_FS_ATTR: &str = "data-eink-fs";
 /// `wash/heading_div.rs`，2026-10-14 用户定）：目录处理完以后才真改标签，之前按这台排的 pass 见到它就当 `div` 算（[`reader_tag`]）。
 pub const DIV_ATTR: &str = "data-eink-div";
 
+/// 元素上属性 `name` 的值，同 `scraper::node::Element::attr`，但不把属性名转成 `LocalName`。
+///
+/// 为什么不直接用 `attr()`：它每次都 `LocalName::from(name)`，不在 html5ever 静态表里的名字（我们自己的 [`DIV_ATTR`]、
+/// [`KINDLE_FS_ATTR`]）要进全局的动态字符串表，那张表一把全局锁。清洗层逐章并行，每个元素查一次，24 个线程全挤在这把锁上：
+/// 2026-10-15 实测《古龙作品全集》`box_fix` 单线程 1.5 秒、24 线程反而 2.9 秒。这里按字符串比较，判定条件和 `attr()` 一样
+/// （无前缀、无命名空间、本地名相等；属性表的键不重复，找到的是同一个）。
+pub fn attr_of<'a>(el: &'a scraper::node::Element, name: &str) -> Option<&'a str> {
+    el.attrs.iter().find(|(q, _)| q.prefix.is_none() && q.ns.is_empty() && &*q.local == name).map(|(_, v)| &**v)
+}
+
 /// 元素在这台阅读器上的标签名（小写）：带 [`DIV_ATTR`] 的标题是 `div`。
 pub fn reader_tag(el: &ElementRef) -> String {
-    if el.value().attr(DIV_ATTR).is_some() {
+    if attr_of(el.value(), DIV_ATTR).is_some() {
         "div".into()
     } else {
         el.value().name().to_ascii_lowercase()
@@ -165,9 +175,9 @@ pub struct El {
     /// 计算值。
     pub comp: Rc<Computed>,
     /// 层叠出来的声明（含 `style`、表现属性），给要看"写没写""写的什么"的用。
-    pub decls: HashMap<String, String>,
+    pub decls: crate::cascade::Decls,
     /// 生效的声明不是外链样式表里的普通声明的：属性 → (来源, 带没带 `!important`)。表现属性（`align` 之类）不在里面。
-    pub origin: HashMap<String, (Origin, bool)>,
+    pub origin: crate::cascade::Origins,
     /// 块级（[`crate::cascade::is_block`]）。
     pub is_block: bool,
     /// 最近的块（自己是块就是自己；外面没有块、直接在 `<body>` 里的 `None`）。
@@ -182,7 +192,7 @@ pub struct Chapter {
     body_id: NodeId,
     pub body_comp: Rc<Computed>,
     /// `<body>` 上层叠出来的声明。
-    pub body_decls: HashMap<String, String>,
+    pub body_decls: crate::cascade::Decls,
     pub els: Vec<El>,
     index: HashMap<NodeId, usize>,
     /// 元素数和源码 `<body>` 里开始标签的扫描一致（解析器没补出 `tbody` 之类）：第 n 个元素就是第 n 个开始标签，改源码要先看这个。
@@ -200,17 +210,7 @@ impl Chapter {
             d
         };
         let with_origin = |el: &ElementRef| {
-            let mut origin = HashMap::new();
-            let mut d: HashMap<String, String> = sheet
-                .cascade_with_origin(el, name)
-                .into_iter()
-                .map(|(k, (v, o, imp))| {
-                    if o != Origin::Sheet || imp {
-                        origin.insert(k.clone(), (o, imp));
-                    }
-                    (k, v)
-                })
-                .collect();
+            let (mut d, origin) = sheet.cascade_split(el, name);
             crate::cascade::presentational_hints(el, &mut d);
             (d, origin)
         };
@@ -228,7 +228,7 @@ impl Chapter {
             let (decls, origin) = with_origin(&el);
             let mut c = Computed::derive(&parent, &decls, el.value().name());
             // 照这台改过字号的标题：Kindle 上的字号（见 [`KINDLE_FS_ATTR`]）
-            if let Some(fs) = el.value().attr(KINDLE_FS_ATTR).and_then(|v| v.parse::<f64>().ok()) {
+            if let Some(fs) = attr_of(el.value(), KINDLE_FS_ATTR).and_then(|v| v.parse::<f64>().ok()) {
                 c.font_size = fs;
             }
             let c = Rc::new(c);
@@ -316,6 +316,19 @@ mod tests {
         Chapter::parse("O/c.xhtml", &text, None, &rules).unwrap()
     }
 
+    /// `attr_of` 和 scraper 的 `attr()` 结果一样（我们的 data- 属性、普通属性、带前缀和命名空间的属性、大小写、没有的）。
+    #[test]
+    fn attr_of_matches_scraper_attr() {
+        let html = scraper::Html::parse_document(&format!(
+            r#"<html><body><h2 {DIV_ATTR}="" {KINDLE_FS_ATTR}="1.5" ID="x" epub:type="noteref"><svg><image xlink:href="a.png" href="b.png"/></svg></h2></body></html>"#
+        ));
+        for el in html.root_element().descendants().filter_map(ElementRef::wrap) {
+            for name in [DIV_ATTR, KINDLE_FS_ATTR, "id", "ID", "epub:type", "href", "xlink:href", "nope"] {
+                assert_eq!(attr_of(el.value(), name), el.value().attr(name), "<{}> {name}", el.value().name());
+            }
+        }
+    }
+
     /// 文档序编号、父元素、最近的块、隐藏、写了的声明；`tbody` 是解析器补的，对不上标签扫描。
     #[test]
     fn elements_in_document_order() {
@@ -326,7 +339,7 @@ mod tests {
         assert_eq!(c.els[2].block, Some(1));
         assert!(c.els[2].hidden && !c.els[3].hidden);
         assert_eq!(c.els[3].decls.get("line-height").map(String::as_str), Some("2"));
-        assert_eq!((c.els[3].origin.get("line-height"), c.els[0].origin.get("display")), (Some(&(Origin::Inline, false)), None));
+        assert_eq!((c.els[3].origin.get("line-height"), c.els[0].origin.get("display")), (Some(&(crate::cascade::Origin::Inline, false)), None));
         assert_eq!(c.own_chars(1), 1);
         assert!(c.matches_tags);
         assert!(!chapter("<table><tr><td>x</td></tr></table>", "").matches_tags);

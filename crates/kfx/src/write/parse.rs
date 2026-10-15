@@ -403,7 +403,7 @@ enum Special {
 
 /// 块级元素只包着一段文字（[`Doc::block`] 判的 `own`）：这段文字就是本元素的块，换上本元素的计算值、标题级别和盒子。
 /// 按这台阅读器的排法（[`crate::css::DeviceLine`]）改层叠出来的 `line-height`、em。只给 `--styles --device=` 的分析用。
-fn device_line_height(el: &ElementRef, decls: &mut HashMap<String, String>, line: crate::css::DeviceLine) {
+fn device_line_height(el: &ElementRef, decls: &mut crate::css::Decls, line: crate::css::DeviceLine) {
     let name = el.value().name();
     let v = decls.get("line-height").map(|v| v.trim().to_ascii_lowercase());
     let number = v.as_deref().is_some_and(|v| v == "normal" || v.parse::<f64>().is_ok());
@@ -431,7 +431,7 @@ fn device_line_height(el: &ElementRef, decls: &mut HashMap<String, String>, line
 
 /// em 一律按根字号算的阅读器（[`crate::css::DeviceLine::em_root`]）：字号的 em、% 写成 rem（px 按屏幕像素折成 rem），外边距、
 /// 内边距、首行缩进的 em 写成 pt（12pt＝根 em）。只给 `--styles --device=` 的分析用。
-fn root_em(decls: &mut HashMap<String, String>) {
+fn root_em(decls: &mut crate::css::Decls) {
     let conv = |v: &str, font: bool| -> Option<String> {
         let mut changed = false;
         let out: Vec<String> = v

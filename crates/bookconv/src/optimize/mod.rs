@@ -185,7 +185,7 @@ pub struct Limits {
     /// 单张图允许解码的像素数（宽×高，按文件头）。超过的图不解码、原样保留（不删图）。漫画页直接用它（缺省 6400 万，
     /// `imgopt::MAX_COMIC_DECODE_PIXELS`）；文字书插图、背景图、透明图合成白底另外不超过 900 万（`imgopt::MAX_DECODE_PIXELS`）。
     pub max_decode_pixels: u64,
-    /// 同时在处理的图片总像素（缺省 3600 万，[`crate::imgpool::PIXEL_BUDGET`]）；比它大的图开工时独占全部额度。
+    /// 同时在处理的图片总像素（缺省 7200 万，[`crate::imgpool::PIXEL_BUDGET`]）；比它大的图开工时独占全部额度。
     pub pool_pixel_budget: u64,
 }
 
@@ -277,10 +277,7 @@ impl OptimizeOpts {
         OptimizeOpts {
             // 只修复不看清洗层的其他选项，但 `kindle_rules` 要的阅读器怪癖带过去：`media`（统计正文字号求 `@media`；以前整个
             // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
-            wash: Some({
-                let w = self.wash.clone().unwrap_or_default();
-                crate::wash::WashOpts { mode: crate::wash::WashMode::Repair { kindle_rules }, media: w.media, css_rgba: w.css_rgba, background_no_repeat: w.background_no_repeat, image_sizing: w.image_sizing, page_tiles: w.page_tiles, top_spacer: w.top_spacer, bg_place: w.bg_place, v_scale: w.v_scale, h_scale: w.h_scale, reader: w.reader.clone(), audit: w.audit.clone(), box_geometry: w.box_geometry, tiny_page: w.tiny_page, ..Default::default() }
-            }),
+            wash: Some(self.wash.clone().unwrap_or_default().repair_from(kindle_rules)),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
             fit_backgrounds: false,
@@ -306,73 +303,24 @@ impl OptimizeOpts {
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
+    /// 图片尺寸、间距照哪台算（三台以 Kindle 为准）用 [`profile::reference`]。
     pub fn for_profile(p: &profile::Profile) -> Self {
+        Self::for_profile_against(p, profile::reference())
+    }
+
+    /// 同 [`OptimizeOpts::for_profile`]，但照哪台设备算图片尺寸、间距由调用方给（`None` 不换算）。
+    pub fn for_profile_against(p: &profile::Profile, reference: Option<&profile::Profile>) -> Self {
         OptimizeOpts {
             grayscale: !p.color,
-            wash: Some({
-                let mut w = crate::wash::WashOpts { css_rgba: p.css_rgba, background_no_repeat: p.background_no_repeat, media: Some(crate::cascade::MediaEnv::for_format(p, p.format())), ..Default::default() };
-                // 不照 CSS 定图片尺寸的阅读器：照内置 kindle 模式的内容区宽和 1em 像素折算（三台以 Kindle 为准）
-                if let Some(k) = profile::get("kindle").filter(|k| k.font_px.is_some()) {
-                    let r = k.readable(profile::Format::Kfx);
-                    let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)), v_rem_px: k.line_px.map_or(f64::from(k.font_px.unwrap_or(16)), |l| f64::from(l) / 1.2) };
-                    if p.image_sizing != profile::ImageSizing::Css {
-                        w.image_sizing = Some((p.image_sizing, kref));
-                    }
-                    // 只有小图的页去掉强制分页：三台一并（Kindle 走这里，掌阅、Move 在 `kindle_rules` 里）
-                    w.tiny_page = Some(kref);
-                }
-                // 平铺背景的阅读器（Move）：整页背景图做成整页一块（`bgfit::PageTile`）。没写尺寸的图 Kindle 按原图像素显示，
-                // 折成这里内容区宽 / Kindle 内容区宽
-                if !p.background_no_repeat {
-                    let area = p.output_readable();
-                    let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
-                    w.page_tiles = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
-                }
-                w.reader = crate::wash::ReaderModel::for_profile(p);
-                w.audit = crate::audit::covers(&p.id).then(|| p.id.clone());
-                // 竖直间距照 Kindle 换算（掌阅、Move：两台按自己的字号排边距，Kindle 按行距，2026-10-12 用户定）
-                if let (Some(em), Some((_, k))) = (p.em_px, w.image_sizing) {
-                    let ratio = f64::from(p.output_readable().height) / k.content_h;
-                    w.v_scale = Some(crate::wash::VScale { em: k.v_rem_px * ratio / em, kindle_rem_px: k.v_rem_px, ratio });
-                    // 左右边距的 em 照 Kindle 按页宽换算（Move，profile `horizontal_scale`）：这台一行的 em 数 ÷ Kindle 的 32
-                    let h_scale = if p.horizontal_scale { f64::from(p.output_readable().width) / em / crate::kindle_model::PAGE_WIDTH_EM } else { 1.0 };
-                    w.h_scale = (h_scale != 1.0).then_some(h_scale);
-                    // 不认内边距、不画边框、不认标题外边距的阅读器（Move）：照 Kindle 改写要的尺寸
-                    if !(p.padding && p.borders && p.heading_margins && p.px_margins && p.percent_margins) {
-                        w.box_geometry = Some(crate::wash::BoxGeometry { area_w: f64::from(p.output_readable().width), em_px: em, v_rem_px: k.v_rem_px * ratio, h_scale });
-                    }
-                }
-                // 背景尺寸的高写 `auto` 会拉长图的阅读器（掌阅）：整页背景图照 Kindle 的大小、位置写成像素
-                if !p.background_auto_height {
-                    let area = p.output_readable();
-                    let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
-                    w.bg_place = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
-                }
-                // 不认 `margin-top` 的阅读器（Move）：页首的上边距垫成空白图，照 Kindle 的位置
-                if !p.margin_top {
-                    if let Some((_, k)) = w.image_sizing {
-                        let area = p.output_readable();
-                        w.top_spacer = Some(crate::wash::SpacerGeometry { kindle: k, area: (area.width, area.height) });
-                    }
-                }
-                if p.background_images {
-                    // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
-                    // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`
-                    w.filter_props.retain(|f| f != "background-image");
-                    if !p.background_sizing {
-                        w.filter_props.extend(["background-size".to_string(), "background-attachment".to_string()]);
-                    }
-                }
-                w
-            }),
-            footnote: p.notes.into(),
-            comic_margin: p.comic_margin,
+            wash: Some(wash_opts_for(p, reference)),
+            footnote: p.notes.mode.into(),
+            comic_margin: p.comic.margin,
             comic_screen: Some(p.comic_readable()),
-            comic_reader_margins: p.comic_reader_margins,
-            number_note_icons: p.note_icons == profile::NoteIcons::Number,
-            drop_note_backlinks: !p.note_backlinks,
-            comic_page_direction: p.comic_page_direction.as_deref().and_then(crate::direction::PageDirection::parse),
-            comic_fixed_layout: p.comic_fixed_layout,
+            comic_reader_margins: p.comic.reader_margins,
+            number_note_icons: p.notes.icons == profile::NoteIcons::Number,
+            drop_note_backlinks: !p.notes.backlinks,
+            comic_page_direction: p.comic.page_direction.as_deref().and_then(crate::direction::PageDirection::parse),
+            comic_fixed_layout: p.comic.fixed_layout,
             fit_backgrounds: p.background_images && !p.background_sizing,
             caption_fit: p.caption_fit,
             flatten_alpha: !p.image_alpha,
@@ -380,6 +328,64 @@ impl OptimizeOpts {
             ..OptimizeOpts::new(p.output_readable())
         }
     }
+}
+
+/// 清洗层选项：阅读器怪癖（profile）转成清洗层要的量。`reference` 是图片尺寸、竖直间距照着算的那台（见 [`OptimizeOpts::for_profile`]）。
+fn wash_opts_for(p: &profile::Profile, reference: Option<&profile::Profile>) -> crate::wash::WashOpts {
+    let mut w = crate::wash::WashOpts { css_rgba: p.css.css_rgba, background_no_repeat: p.css.background_no_repeat, media: Some(crate::cascade::MediaEnv::for_format(p, p.format())), ..Default::default() };
+    // 不照 CSS 定图片尺寸的阅读器：照内置 kindle 模式的内容区宽和 1em 像素折算（三台以 Kindle 为准）
+    if let Some(k) = reference.filter(|k| k.font_px.is_some()) {
+        let r = k.readable(profile::Format::Kfx);
+        let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)), v_rem_px: k.line_px.map_or(f64::from(k.font_px.unwrap_or(16)), |l| f64::from(l) / 1.2) };
+        if p.image_sizing != profile::ImageSizing::Css {
+            w.image_sizing = Some((p.image_sizing, kref));
+        }
+        // 只有小图的页去掉强制分页：三台一并（Kindle 走这里，掌阅、Move 在 `kindle_rules` 里）
+        w.tiny_page = Some(kref);
+    }
+    // 平铺背景的阅读器（Move）：整页背景图做成整页一块（`bgfit::PageTile`）。没写尺寸的图 Kindle 按原图像素显示，
+    // 折成这里内容区宽 / Kindle 内容区宽
+    if !p.css.background_no_repeat {
+        let area = p.output_readable();
+        let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
+        w.page_tiles = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
+    }
+    w.reader = crate::wash::ReaderModel::for_profile(p);
+    w.audit = crate::audit::covers(&p.id).then(|| p.id.clone());
+    // 竖直间距照 Kindle 换算（掌阅、Move：两台按自己的字号排边距，Kindle 按行距，2026-10-12 用户定）
+    if let (Some(em), Some((_, k))) = (p.em_px, w.image_sizing) {
+        let ratio = f64::from(p.output_readable().height) / k.content_h;
+        w.v_scale = Some(crate::wash::VScale { em: k.v_rem_px * ratio / em, kindle_rem_px: k.v_rem_px, ratio });
+        // 左右边距的 em 照 Kindle 按页宽换算（Move，profile `horizontal_scale`）：这台一行的 em 数 ÷ Kindle 的 32
+        let h_scale = if p.css.horizontal_scale { f64::from(p.output_readable().width) / em / crate::kindle_model::PAGE_WIDTH_EM } else { 1.0 };
+        w.h_scale = (h_scale != 1.0).then_some(h_scale);
+        // 不认内边距、不画边框、不认标题外边距的阅读器（Move）：照 Kindle 改写要的尺寸
+        if !(p.css.padding && p.css.borders && p.css.heading_margins && p.css.px_margins && p.css.percent_margins) {
+            w.box_geometry = Some(crate::wash::BoxGeometry { area_w: f64::from(p.output_readable().width), em_px: em, v_rem_px: k.v_rem_px * ratio, h_scale });
+        }
+    }
+    // 背景尺寸的高写 `auto` 会拉长图的阅读器（掌阅）：整页背景图照 Kindle 的大小、位置写成像素
+    if !p.css.background_auto_height {
+        let area = p.output_readable();
+        let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
+        w.bg_place = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
+    }
+    // 不认 `margin-top` 的阅读器（Move）：页首的上边距垫成空白图，照 Kindle 的位置
+    if !p.css.margin_top {
+        if let Some((_, k)) = w.image_sizing {
+            let area = p.output_readable();
+            w.top_spacer = Some(crate::wash::SpacerGeometry { kindle: k, area: (area.width, area.height) });
+        }
+    }
+    if p.background_images {
+        // 保留背景图（kindle、ireader）：`background-image` 不去掉，`background` 简写拆成分项（掌阅不认简写）；
+        // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`
+        w.filter_props.retain(|f| f != "background-image");
+        if !p.background_sizing {
+            w.filter_props.extend(["background-size".to_string(), "background-attachment".to_string()]);
+        }
+    }
+    w
 }
 
 /// 优化统计，供回执。

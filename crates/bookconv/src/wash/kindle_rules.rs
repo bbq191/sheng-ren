@@ -594,9 +594,7 @@ fn per_file_body_margins(entries: &mut Vec<Entry>, facts: &BookFacts) -> usize {
     if edits.is_empty() {
         return 0;
     }
-    let opf_idx = find_opf(entries);
-    let opf_dir = opf_idx.map(|i| dir_of(&entries[i].name).to_string()).unwrap_or_default();
-    let css_path = if opf_dir.is_empty() { "eink-body.css".to_string() } else { format!("{opf_dir}/eink-body.css") };
+    let css_path = super::beside_opf(entries, "eink-body.css");
     let mut n = 0;
     for (name, k) in &edits {
         let Some(e) = entries.iter_mut().find(|e| &e.name == name) else { continue };
@@ -612,7 +610,7 @@ fn per_file_body_margins(entries: &mut Vec<Entry>, facts: &BookFacts) -> usize {
     for (k, body) in classes.iter().enumerate() {
         sheet.push_str(&format!("html body.eink-bm{}{{{body}}}\n", k + 1));
     }
-    super::add_css_entry(entries, opf_idx, &css_path, &sheet, "eink-body-css");
+    super::add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-body-css");
     n
 }
 

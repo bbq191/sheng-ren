@@ -88,7 +88,7 @@ pub(crate) trait BookSource {
 
     /// 搜一次、取回 JSON：缺省 GET [`BookSource::search_url`]（Bangumi 是 POST）。出错已记成临时错误。
     fn fetch_hits(&self, net: &Net, q: &str) -> Result<serde_json::Value, String> {
-        net.json_strict(&self.search_url(q))
+        Ok(net.json_strict(&self.search_url(q))?)
     }
 
     /// 条目的作者署名（几个人用 `/`、`、` 分开）：书里有几位作者时挑作者对上得多的条目（[`BookSource::search`]）。

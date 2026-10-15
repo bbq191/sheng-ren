@@ -162,10 +162,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "bookbase"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "markup5ever",
+ "regex",
+ "tempfile",
+]
+
+[[package]]
 name = "bookconv"
 version = "0.1.0"
 dependencies = [
+ "bookbase",
  "crc32fast",
+ "csscascade",
  "ego-tree",
  "encoding_rs",
  "fast_image_resize",
@@ -340,6 +352,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
  "hybrid-array",
+]
+
+[[package]]
+name = "csscascade"
+version = "0.1.0"
+dependencies = [
+ "bookbase",
+ "ego-tree",
+ "profile",
+ "scraper",
 ]
 
 [[package]]

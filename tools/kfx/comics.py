@@ -14,8 +14,8 @@ import collections, io, os, re, subprocess, sys, zipfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kfx import by_type, cli_args, cli_opts, opf_path, reading_order
 from PIL import Image
+import toollib
 
-PROFILES = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'crates', 'profile', 'profiles')
 DEVICES = ['kindle', 'ireader', 'xochitl']
 # 漫画的阅读范围在屏幕上的左上角（像素）
 AREA_ORIGIN = {'kindle': (0, 0), 'ireader': (0, 0), 'xochitl': (1, 112)}
@@ -23,9 +23,9 @@ HARD = {'页数', '拉伸', '翻页', 'KFX'}
 
 
 def geometry(device):
-    text = open(os.path.join(PROFILES, f'{device}.toml'), encoding='utf-8').read()
-    sec = lambda name: tuple(map(int, re.search(r'\[' + re.escape(name) + r'\]\s*width\s*=\s*(\d+)\s*height\s*=\s*(\d+)', text).groups())) if re.search(r'\[' + re.escape(name) + r'\]', text) else None
-    return {'screen': sec('screen'), 'area': sec('comic_readable') or sec('readable.epub')}
+    p = toollib.profile(device)
+    wh = lambda s: (s['width'], s['height']) if s else None
+    return {'screen': wh(p['screen']), 'area': wh(p['comic_readable'] or p['readable'].get('epub'))}
 
 
 def page_images(path):
@@ -161,11 +161,7 @@ def check_pages(src_pages, out_pages, device, geo):
 
 
 def profile_str(device, key):
-    for line in open(os.path.join(PROFILES, f'{device}.toml'), encoding='utf-8'):
-        k, _, v = line.partition('=')
-        if k.strip() == key:
-            return v.split('#')[0].strip().strip('"')
-    return None
+    return toollib.profile(device).get(key)
 
 
 def comic_books(root, wanted):
@@ -185,6 +181,7 @@ def main():
     books, work, wanted = args[0], args[1], args[2:]
     opt = cli_opts()
     bindir = opt.get('--bin', 'target/release')
+    toollib.BINDIR = bindir
     top = int(opt.get('--top', 8))
     reuse = '--reuse' in sys.argv
     os.makedirs(work, exist_ok=True)

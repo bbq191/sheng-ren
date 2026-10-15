@@ -25,21 +25,14 @@ const TINY_SHARE: f64 = 0.05;
 
 /// `push`：照 Kindle 估算在放不下的大上边距前分页（掌阅、Move）；不管开不开，Kindle 上不出页的小图页（见 [`breaks_in`]）三台都去掉。
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, known: Option<&HashMap<String, (u32, u32)>>, k: KindleImageRef, push: bool) {
-    let css = km::book_css(entries, media);
     let dims = super::image_dims_of(entries, rep, known);
-    let chapters: Vec<usize> = (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect();
-    let found: Vec<(Vec<usize>, Vec<usize>)> = crate::util::par_map(&chapters, |&i| breaks_in(&entries[i], media, &css, &dims, k));
+    let (chapters, found) = super::scan_chapters(entries, media, |e, css| breaks_in(e, media, css, &dims, k));
     let (marks, drops): (Vec<Vec<usize>>, Vec<Vec<usize>>) = found.into_iter().map(|(m, d)| (if push { m } else { Vec::new() }, d)).unzip();
     if marks.iter().chain(&drops).all(Vec::is_empty) {
         return;
     }
-    drop(css);
     drop(dims);
-    let opf_idx = find_opf(entries);
-    let css_path = match opf_idx.map(|i| dir_of(&entries[i].name)) {
-        Some(d) if !d.is_empty() => format!("{d}/{CSS_NAME}"),
-        _ => CSS_NAME.to_string(),
-    };
+    let css_path = super::beside_opf(entries, CSS_NAME);
     let mut tags_used: std::collections::BTreeSet<String> = Default::default();
     for ((&i, m), d) in chapters.iter().zip(&marks).zip(&drops) {
         if m.is_empty() && d.is_empty() {
@@ -88,7 +81,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     for t in &tags_used {
         sheet.push_str(&format!("html body {t}.{CLASS}{{page-break-before:always;margin-top:0.01em;}}\n"));
     }
-    add_css_entry(entries, opf_idx, &css_path, &sheet, "eink-pb-css");
+    add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-pb-css");
 }
 
 /// 一章里要在前面分页的元素：`<body>` 里第几个开始标签（和 [`html::tags_in`] 数的一致；对不上的章不动）。
