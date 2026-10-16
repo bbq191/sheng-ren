@@ -798,6 +798,50 @@ fn magnitude(v: i32) -> (u8, u16) {
     (n, if v < 0 { (v - 1) as u16 & mask } else { v as u16 & mask })
 }
 
+/// 估计一张 JPEG 当初是按什么质量编的：取第 0 号量化表（亮度），按 libjpeg 的质量缩放反推（表的总和 ÷ 标准亮度表的总和
+/// = 缩放比例）。量化表不是标准表缩放出来的（别的编码器自定义的表）也按总和算，只是个近似。读不出 DQT → `None`。
+/// 给需要重编码、又不想让体积涨的图用（`imgopt::darken_gray_image`：原书插图常是 40–55 的质量，按 95 重编码体积大七成）。
+pub(crate) fn estimate_quality(jpeg: &[u8]) -> Option<u8> {
+    if !jpeg.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut i = 2;
+    while i + 4 <= jpeg.len() {
+        if jpeg[i] != 0xFF {
+            return None;
+        }
+        let marker = jpeg[i + 1];
+        if marker == 0xFF {
+            i += 1; // 填充字节
+            continue;
+        }
+        if marker == 0xDA || marker == 0xD9 {
+            return None; // 到了扫描数据还没见到 0 号表
+        }
+        let len = usize::from(u16::from_be_bytes([jpeg[i + 2], jpeg[i + 3]]));
+        let seg = jpeg.get(i + 4..i + 2 + len)?;
+        if marker == 0xDB {
+            // 一个 DQT 段里可能有几张表：每张是 1 字节（高 4 位精度、低 4 位编号）+ 64 个值（精度 0 一字节、1 两字节）
+            let mut t = seg;
+            while let Some((&pq_tq, rest)) = t.split_first() {
+                let wide = pq_tq >> 4 != 0;
+                let n = if wide { 128 } else { 64 };
+                let vals = rest.get(..n)?;
+                if pq_tq & 0x0F == 0 {
+                    let sum: u32 = if wide { vals.as_chunks::<2>().0.iter().map(|&c| u32::from(u16::from_be_bytes(c))).sum() } else { vals.iter().map(|&v| u32::from(v)).sum() };
+                    let std: u32 = STD_QTABLES[0].iter().map(|&v| u32::from(v)).sum();
+                    let scale = f64::from(sum) * 100.0 / f64::from(std);
+                    let q = if scale <= 100.0 { 100.0 - scale / 2.0 } else { 5000.0 / scale };
+                    return Some(q.round().clamp(1.0, 100.0) as u8);
+                }
+                t = &rest[n..];
+            }
+        }
+        i += 2 + len;
+    }
+    None
+}
+
 /// 把 8 位灰度（`gray`）或 RGB 像素编成基线 JPEG（质量 `quality`，1–100），哈夫曼表按这张图重做。
 /// 结果和 `image` 0.25 的 `JpegEncoder::new_with_quality(.., quality).write_image(..)` 编出来再过 [`optimize_verified`] 逐字节相同
 /// （做法见本节开头）。`image` 编码器报错的情形（宽或高为 0、超过 65535）返回 `None`；它会 panic 的情形（量化后系数超出通用
@@ -1070,6 +1114,17 @@ fn encode_syms(raw: &[u8], width: u32, height: u32, gray: bool, quality: u8) -> 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn estimate_quality_reads_back_libjpeg_scaling() {
+        let raw: Vec<u8> = (0..64 * 48).map(|i| (i * 7 % 251) as u8).collect();
+        for q in [30u8, 45, 60, 75, 85, 95] {
+            let j = super::encode_optimized(&raw, 64, 48, true, q).unwrap();
+            assert_eq!(super::estimate_quality(&j).map(|e| e.abs_diff(q) <= 1), Some(true), "质量 {q}");
+        }
+        assert_eq!(super::estimate_quality(b"\xFF\xD8\xFF\xDA"), None);
+        assert_eq!(super::estimate_quality(b"not a jpeg"), None);
+    }
+
     use super::*;
     use image::{codecs::jpeg::JpegEncoder, DynamicImage, GrayImage, RgbImage};
 

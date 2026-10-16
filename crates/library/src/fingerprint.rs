@@ -59,7 +59,8 @@ fn shared_seg(device: &Profile) -> String {
     s
 }
 
-/// 漫画：EPUB 阅读范围（漫画书里别的图按它缩）+ 漫画画布 + 白边 + 页边距（`m`）+ 翻页方向改写（`d`）+ 固定版式（`f`）。
+/// 漫画：EPUB 阅读范围（漫画书里别的图按它缩）+ 漫画画布 + 白边 + 页边距（`m`）+ 翻页方向改写（`d`）+ 固定版式（`f`），
+/// 两路共用的那段之后是中间调加深（`G` + 伽马，[`gamma_seg`]）。
 fn comic_seg(device: &Profile, area: Screen) -> String {
     let c = device.comic_readable();
     let mut seg = format!("{}x{}c{}x{}+{}{}", area.width, area.height, c.width, c.height, device.comic.margin, device.comic.reader_margins.map(|m| format!("m{m}")).unwrap_or_default());
@@ -69,11 +70,18 @@ fn comic_seg(device: &Profile, area: Screen) -> String {
     if device.comic.fixed_layout {
         seg.push('f');
     }
-    format!("{seg}{}", shared_seg(device))
+    format!("{seg}{}{}", shared_seg(device), gamma_seg(device.comic.gamma))
+}
+
+/// 中间调加深（profile `comic_gamma`、`image_gamma`，2026-10-16）：开着、又不是 1 时写 `G` + 伽马，放在这一路的最后（不加深的模式
+/// 不出新字母，指纹和以前一样）。
+fn gamma_seg(gamma: Option<f64>) -> String {
+    gamma.filter(|&g| g != 1.0).map_or_else(String::new, |g| format!("G{g}"))
 }
 
 /// 文字书：EPUB 阅读范围 + 只管文字书的字段：带图注的竖长图写宽度（`k`）、正文图片透明处合成白底（`a`，`image_alpha = false`）、
-/// 只修复（`t`）、注释可跳（`n`）、照 Send to Kindle 的规则统一（`u`）；`u` 之后还有只在 `kindle_rules` 时才有的几段（[`kindle_rules_seg`]）。
+/// 只修复（`t`）、注释可跳（`n`）、照 Send to Kindle 的规则统一（`u`）；`u` 之后还有只在 `kindle_rules` 时才有的几段（[`kindle_rules_seg`]），
+/// 最后是插图中间调加深（[`gamma_seg`]）。
 fn text_seg(device: &Profile, area: Screen) -> String {
     let repair = device.text_repair_only;
     let mut seg = format!("{}x{}{}", area.width, area.height, shared_seg(device));
@@ -85,6 +93,7 @@ fn text_seg(device: &Profile, area: Screen) -> String {
     if repair && device.kindle_rules {
         kindle_rules_seg(device, &mut seg);
     }
+    seg.push_str(&gamma_seg(device.image_gamma));
     seg
 }
 

@@ -739,12 +739,13 @@ fn comic_layout(w: u32, h: u32, area: Screen, margin: u32, may_upscale: bool) ->
 ///   带 EXIF 方向（非"不用转"）的页一律摆正后重编码。
 /// - 超过 [`MAX_COMIC_DECODE_PIXELS`] 的图、解不开的图返回 `None`。
 pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, grayscale: bool) -> Option<Vec<u8>> {
-    prepare_comic_page_limited(bytes, area, margin, grayscale, MAX_COMIC_DECODE_PIXELS)
+    prepare_comic_page_limited(bytes, area, margin, grayscale, None, MAX_COMIC_DECODE_PIXELS)
 }
 
 /// 同 [`prepare_comic_page_for_epub`]，另给解码上限 `max_px`（像素，`OptimizeOpts::limits.max_decode_pixels`）：
-/// 超过的页不解码、原样保留。
-pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, max_px: u64) -> Option<Vec<u8>> {
+/// 超过的页不解码、原样保留。`gamma`（profile `comic_gamma`）：内容是灰度的页（[`Page8::is_gray_content`]；黑白屏上转成灰度的页
+/// 都算）缩放后按 [`gamma_lut`] 加深中间调；装饰小图不加深。`None` 时和以前逐字节相同。
+pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, gamma: Option<f64>, max_px: u64) -> Option<Vec<u8>> {
     let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale, max_px, true)?;
     let orig = img.dimensions();
     let (img, tl, tt) = trim_page(img, TrimMode::WhiteOnly);
@@ -754,13 +755,52 @@ pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grays
         // 装饰小图：只裁边
         return if trimmed || to_gray || rotated { img.encode(out_fmt, JPEG_QUALITY_COMIC) } else { None };
     }
+    let darken = gamma.filter(|_| img.is_gray_content()).map(gamma_lut);
     let lay = comic_layout(cw, ch, area, margin, out_fmt == ImageFormat::Jpeg);
-    if !to_gray && !rotated && lay.matches_original(orig, (tl, tt), (cw, ch), area, effective_margin(margin, area)) {
+    if !to_gray && !rotated && darken.is_none() && lay.matches_original(orig, (tl, tt), (cw, ch), area, effective_margin(margin, area)) {
         return None;
     }
-    let img = if (lay.nw, lay.nh) != (cw, ch) { img.resize_lanczos3(lay.nw, lay.nh) } else { img };
+    let mut img = if (lay.nw, lay.nh) != (cw, ch) { img.resize_lanczos3(lay.nw, lay.nh) } else { img };
+    // 补白之前加深：白底 255 加深后还是 255，先后一样，补白前像素少
+    if let Some(lut) = &darken {
+        img.apply_lut(lut);
+    }
     let page = if (lay.canvas_w, lay.canvas_h) != (lay.nw, lay.nh) { img.paste_on_white(lay.canvas_w, lay.canvas_h, lay.x, lay.y) } else { img };
     page.encode(out_fmt, JPEG_QUALITY_COMIC)
+}
+
+/// 中间调加深的查找表：`v ↦ round(255·(v/255)^γ)`，0 和 255 不动，γ > 1 时中间灰度变深（profile `comic_gamma`、`image_gamma`；
+/// 2026-10-16 Move、掌阅真机比过，黑白漫画、灰度插图上明显更好）。
+pub fn gamma_lut(gamma: f64) -> [u8; 256] {
+    std::array::from_fn(|v| (255.0 * (v as f64 / 255.0).powf(gamma)).round() as u8)
+}
+
+/// [`Page8::is_gray_content`]：三个分量相差超过这么多算"有颜色"的像素。JPEG 存成 RGB 的黑白页分量差一般在个位数。
+const GRAY_SPREAD: u8 = 16;
+/// [`Page8::is_gray_content`]：有颜色的像素不超过总数的这个比例（千分之二）仍算灰度内容（小块彩色水印、扫描的杂点）。
+const GRAY_OUTLIERS_PER_MILLE: usize = 2;
+
+/// 文字书正文插图中间调加深（profile `image_gamma`）：短边不到 [`profile::MIN_GAMMA_IMAGE_SIDE`]、带透明通道、不是 8 位灰度/RGB、
+/// 内容不是灰度（[`Page8::is_gray_content`]）的 → `None`（原样保留）；其余按 [`gamma_lut`] 加深、原格式重编码（灰度保持单分量）。
+/// JPEG 按原图的质量编（[`crate::jpegopt::estimate_quality`]，最高 [`JPEG_QUALITY_COMIC`]）：原书插图常是 40–55 的质量，按 95 编
+/// 《福尔摩斯》《金庸》大 45%–66%；按原质量体积基本不变，和加深后的图比误差 42–45dB（2026-10-16 量的），墨水屏上看不出。
+/// 超过解码上限、解不开 → `None`。带 EXIF 方向的先摆正。
+pub fn darken_gray_image(bytes: &[u8], gamma: f64, max_px: u64) -> Option<Vec<u8>> {
+    let head = ImgHead::read(bytes, is_jpeg_or_png, true)?;
+    if head.w.min(head.h) < profile::MIN_GAMMA_IMAGE_SIDE {
+        return None;
+    }
+    let img = head.decode(bytes, text_decode_limit(max_px))?;
+    if img.color().has_alpha() {
+        return None; // 透明处露出的是页面底色，加深后边缘和底色怎么接拿不准，不动
+    }
+    let mut page = Page8::try_from_dynamic(img).ok()?;
+    if !page.is_gray_content() {
+        return None;
+    }
+    page.apply_lut(&gamma_lut(gamma));
+    let quality = crate::jpegopt::estimate_quality(bytes).map_or(JPEG_QUALITY_COMIC, |q| q.min(JPEG_QUALITY_COMIC));
+    page.encode(head.fmt, quality)
 }
 
 /// 归一后的 8 位整页：单通道灰度或 RGB。漫画页解码时一次归一（[`decode_comic`]），文字书插图解出来正好是这两种时也走它
@@ -793,6 +833,35 @@ impl Page8 {
         match self {
             Page8::Gray(g) => g.dimensions(),
             Page8::Rgb(c) => c.dimensions(),
+        }
+    }
+
+    /// 内容是不是灰度：单通道的一律是；RGB 的看三个分量相差超过 [`GRAY_SPREAD`] 的像素是否不超过千分之 [`GRAY_OUTLIERS_PER_MILLE`]
+    /// （存成 RGB 的黑白漫画、扫描插图算灰度，彩页、彩色插图不算）。
+    pub fn is_gray_content(&self) -> bool {
+        let Page8::Rgb(c) = self else { return true };
+        let px = c.as_raw().as_chunks::<3>().0;
+        let limit = px.len() * GRAY_OUTLIERS_PER_MILLE / 1000;
+        let mut colored = 0usize;
+        for p in px {
+            if p.iter().max().unwrap_or(&0) - p.iter().min().unwrap_or(&0) > GRAY_SPREAD {
+                colored += 1;
+                if colored > limit {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// 每个分量按查找表换值（[`gamma_lut`]）。
+    pub fn apply_lut(&mut self, lut: &[u8; 256]) {
+        let raw: &mut [u8] = match self {
+            Page8::Gray(g) => g,
+            Page8::Rgb(c) => c,
+        };
+        for v in raw {
+            *v = lut[usize::from(*v)];
         }
     }
 
@@ -1049,6 +1118,79 @@ mod tests {
         // 灰色的边不是留白、不裁：整页按 1px 白边重排，白边以内的像素都是中灰
         let (w, h) = g.dimensions();
         assert!((3..w - 3).all(|x| (3..h - 3).all(|y| (120..=136).contains(&g.get_pixel(x, y).0[0]))), "中灰保持中灰，没有抖动成黑白点");
+    }
+
+    fn rgb_jpeg(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        JpegEncoder::new_with_quality(&mut buf, 95).encode_image(&DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, y| image::Rgb(f(x, y))))).unwrap();
+        buf
+    }
+
+    fn mean_luma(bytes: &[u8]) -> f64 {
+        let g = image::load_from_memory(bytes).unwrap().to_luma8();
+        g.as_raw().iter().map(|&v| f64::from(v)).sum::<f64>() / g.as_raw().len() as f64
+    }
+
+    #[test]
+    fn gamma_lut_keeps_black_and_white_and_darkens_midtones() {
+        let l = gamma_lut(1.45);
+        assert_eq!((l[0], l[255]), (0, 255));
+        assert_eq!(l[128], 94, "255·(128/255)^1.45");
+        assert!(l.windows(2).all(|w| w[0] <= w[1]), "单调");
+        assert!((1..255).all(|v| l[v] <= v as u8));
+        assert_eq!(gamma_lut(1.0), std::array::from_fn(|v| v as u8));
+    }
+
+    #[test]
+    fn gray_content_is_judged_by_channel_spread() {
+        let gray = Page8::Rgb(RgbImage::from_fn(100, 100, |x, _| image::Rgb([x as u8, x as u8 + 3, x as u8])));
+        assert!(gray.is_gray_content(), "存成 RGB 的灰度（分量差个位数）");
+        assert!(Page8::Gray(image::GrayImage::new(5, 5)).is_gray_content());
+        let colored = Page8::Rgb(RgbImage::from_fn(100, 100, |x, y| if x < 10 && y < 10 { image::Rgb([255, 0, 0]) } else { image::Rgb([200, 200, 200]) }));
+        assert!(!colored.is_gray_content(), "1% 的像素是红的：算彩色");
+        let speck = Page8::Rgb(RgbImage::from_fn(100, 100, |x, y| if x == 0 && y < 2 { image::Rgb([255, 0, 0]) } else { image::Rgb([200, 200, 200]) }));
+        assert!(speck.is_gray_content(), "千分之二以内的杂色不算");
+    }
+
+    #[test]
+    fn comic_gamma_darkens_gray_pages_only() {
+        let area = test_area();
+        let gray = gray_jpeg_of(1600, 2400, 0);
+        let plain = prepare_comic_page_limited(&gray, area, 1, false, None, MAX_COMIC_DECODE_PIXELS).unwrap();
+        assert_eq!(Some(plain.clone()), prep(&gray, area, false), "不加深时和以前一样");
+        let dark = prepare_comic_page_limited(&gray, area, 1, false, Some(1.45), MAX_COMIC_DECODE_PIXELS).unwrap();
+        assert_eq!(image::load_from_memory(&dark).unwrap().dimensions(), image::load_from_memory(&plain).unwrap().dimensions());
+        assert!(mean_luma(&dark) < mean_luma(&plain) - 10.0, "灰度页加深");
+        // 彩页在彩色屏上原样；本来不用动的灰度页要加深就得重编码
+        let color = jpeg_of(1600, 2400);
+        assert_eq!(prepare_comic_page_limited(&color, area, 1, false, Some(1.45), MAX_COMIC_DECODE_PIXELS), prep(&color, area, false));
+        let fitted = gray_jpeg_of(842, 1455, 0);
+        assert!(prep(&fitted, area, false).is_none());
+        assert!(prepare_comic_page_limited(&fitted, area, 1, false, Some(1.45), MAX_COMIC_DECODE_PIXELS).is_some());
+        // 黑白屏：彩页转成灰度后也算灰度页
+        let on_gray = prepare_comic_page_limited(&color, area, 1, true, Some(1.45), MAX_COMIC_DECODE_PIXELS).unwrap();
+        assert!(mean_luma(&on_gray) < mean_luma(&prep(&color, area, true).unwrap()) - 5.0);
+    }
+
+    #[test]
+    fn darken_gray_image_only_touches_opaque_gray_illustrations() {
+        let gray = gray_jpeg_of(600, 400, 0);
+        let out = darken_gray_image(&gray, 1.3, MAX_DECODE_PIXELS).expect("灰度插图加深");
+        let img = image::load_from_memory(&out).unwrap();
+        assert_eq!((img.color(), img.dimensions()), (image::ColorType::L8, (600, 400)), "尺寸不变、灰度保持单分量");
+        assert!(mean_luma(&out) < mean_luma(&gray) - 5.0);
+        let rgb_gray = rgb_jpeg(600, 400, |x, _| [(x % 200) as u8; 3]);
+        assert!(darken_gray_image(&rgb_gray, 1.3, MAX_DECODE_PIXELS).is_some(), "存成 RGB 的灰度插图也算");
+        assert!(darken_gray_image(&jpeg_of(600, 400), 1.3, MAX_DECODE_PIXELS).is_none(), "彩色插图不动");
+        assert!(darken_gray_image(&gray_jpeg_of(800, 150, 0), 1.3, MAX_DECODE_PIXELS).is_none(), "短边不到 200：分隔线、图标之类不动");
+        let mut png = Vec::new();
+        DynamicImage::ImageLumaA8(image::GrayAlphaImage::from_pixel(300, 300, image::LumaA([100, 128]))).write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+        assert!(darken_gray_image(&png, 1.3, MAX_DECODE_PIXELS).is_none(), "带透明通道的不动");
+        let mut opaque = Vec::new();
+        DynamicImage::ImageLuma8(image::GrayImage::from_pixel(300, 300, image::Luma([128]))).write_to(&mut Cursor::new(&mut opaque), ImageFormat::Png).unwrap();
+        let out = darken_gray_image(&opaque, 1.3, MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(image::guess_format(&out).unwrap(), ImageFormat::Png, "PNG 仍是 PNG");
+        assert_eq!(image::load_from_memory(&out).unwrap().to_luma8().get_pixel(5, 5).0[0], gamma_lut(1.3)[128]);
     }
 
     #[test]
@@ -1311,8 +1453,8 @@ mod tests {
     #[test]
     fn caller_decode_limit_keeps_larger_images() {
         let page = gray_jpeg_of(2000, 3000, 0); // 600 万像素
-        assert!(prepare_comic_page_limited(&page, test_area(), 1, false, 5_000_000).is_none(), "超过调用方上限的漫画页原样保留");
-        assert_eq!(prepare_comic_page_limited(&page, test_area(), 1, false, 6_000_000), prep(&page, test_area(), false), "没超过的和缺省一样");
+        assert!(prepare_comic_page_limited(&page, test_area(), 1, false, None, 5_000_000).is_none(), "超过调用方上限的漫画页原样保留");
+        assert_eq!(prepare_comic_page_limited(&page, test_area(), 1, false, None, 6_000_000), prep(&page, test_area(), false), "没超过的和缺省一样");
         assert!(downscale_for_epub_limited(&page, test_screen(), 5_000_000).is_none(), "插图同理");
         assert_eq!(downscale_for_epub_limited(&page, test_screen(), 9_000_000), downscale_for_epub(&page, test_screen()));
     }

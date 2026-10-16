@@ -210,7 +210,7 @@ struct Written {
 /// 交给 worker 的活。
 enum Job<'e> {
     /// 处理一张图：`src` 是原书里的条目名（清洗时改过名的是原名），worker 自己从源文件读原图字节。
-    Image { src: &'e str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool, reply: std::sync::mpsc::Sender<Result<Vec<u8>, BookError>> },
+    Image { src: &'e str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool, darken: bool, reply: std::sync::mpsc::Sender<Result<Vec<u8>, BookError>> },
     /// deflate 压一个条目。
     Deflate { name: &'e str, data: std::borrow::Cow<'e, [u8]>, reply: std::sync::mpsc::Sender<Result<crate::epubzip::Precompressed, BookError>> },
 }
@@ -225,6 +225,10 @@ struct ImageCtx<'a> {
     screen: crate::imgopt::Screen,
     comic_margin: u32,
     grayscale: bool,
+    /// 漫画页中间调加深（`OptimizeOpts::comic_gamma`）。
+    comic_gamma: Option<f64>,
+    /// 正文插图中间调加深（`OptimizeOpts::image_gamma`）：只用于 `Job::Image` 的 `darken` 标了的图。
+    image_gamma: Option<f64>,
     max_px: u64,
 }
 
@@ -249,8 +253,8 @@ fn spawn_image_workers<'scope, 'env: 'scope, 'e: 'scope>(
                 let job = { rx.lock().unwrap_or_else(|e| e.into_inner()).recv() };
                 let Ok(job) = job else { break };
                 match job {
-                    Job::Image { src, bg, tile, flatten, reply } => {
-                        let _ = reply.send(process_image(&ctx, &budget, &mut source, src, bg, tile, flatten));
+                    Job::Image { src, bg, tile, flatten, darken, reply } => {
+                        let _ = reply.send(process_image(&ctx, &budget, &mut source, src, bg, tile, flatten, darken));
                     }
                     Job::Deflate { name, data, reply } => {
                         let _ = reply.send(crate::epubzip::Precompressed::new(name, &data));
@@ -262,8 +266,10 @@ fn spawn_image_workers<'scope, 'env: 'scope, 'e: 'scope>(
     job_tx
 }
 
-/// worker 处理一张图：从源文件读原图（`source` 第一次用到时打开），按需处理。
-fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &mut Option<crate::epubzip::FileZip>, src: &str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool) -> Result<Vec<u8>, BookError> {
+/// worker 处理一张图：从源文件读原图（`source` 第一次用到时打开），按需处理。`darken`：正文插图，按 `ctx.image_gamma` 加深中间调
+/// （[`crate::imgopt::darken_gray_image`]，只修复的书也做）。
+#[allow(clippy::too_many_arguments)]
+fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &mut Option<crate::epubzip::FileZip>, src: &str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool, darken: bool) -> Result<Vec<u8>, BookError> {
     // 整件兜住 panic（读 zip、解析图片都是外部输入）：panic 了只这本书报错，不让 `thread::scope` 收尾时把
     // panic 抛给调用方、摔掉整个 `booklib sync`（2026-10-09 审计）
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>, BookError> {
@@ -274,7 +280,8 @@ fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &
         .and_then(|z| crate::epubzip::read_by_name(z, src))
         .map_err(|e| e.context("重读图片失败"))?;
         // 整页背景图做成整页一块（平铺背景的阅读器）只修复的书也做：不做的话这张图在阅读器上乱铺，规则就只能去掉、图看不见
-        if ctx.keep_images && tile.is_none() {
+        let darken = ctx.image_gamma.filter(|_| darken);
+        if ctx.keep_images && tile.is_none() && darken.is_none() {
             return Ok(bytes);
         }
         // 读图片头也是在解析外部输入：兜住 panic（按读不出尺寸算），不让一张坏图摔掉 worker——worker 全摔掉时
@@ -284,7 +291,11 @@ fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &
         if let Some(t) = tile {
             return Ok(crate::imgopt::guard(|| crate::imgopt::page_tile(&bytes, &t, ctx.max_px, crate::imgopt::header_dims(&bytes).map_or_else(|| !src.to_ascii_lowercase().ends_with(".png"), |(f, _)| f == image::ImageFormat::Jpeg))).unwrap_or(bytes));
         }
-        Ok(transform_image_bytes(&bytes, ctx.is_comic_book, ctx.screen, ctx.comic_margin, ctx.grayscale, bg, flatten, ctx.max_px).unwrap_or(bytes))
+        let out = if ctx.keep_images { bytes } else { transform_image_bytes(&bytes, ctx.is_comic_book, ctx.screen, ctx.comic_margin, ctx.grayscale, ctx.comic_gamma, bg, flatten, ctx.max_px).unwrap_or(bytes) };
+        Ok(match darken {
+            Some(g) => crate::imgopt::guard(|| crate::imgopt::darken_gray_image(&out, g, ctx.max_px)).unwrap_or(out),
+            None => out,
+        })
     }))
     .unwrap_or_else(|_| {
         *source = None;
@@ -421,6 +432,8 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
         screen: plan.screen,
         comic_margin: opts.comic_margin,
         grayscale: opts.grayscale,
+        comic_gamma: opts.comic_gamma,
+        image_gamma: opts.image_gamma,
         max_px: opts.limits.max_decode_pixels,
     };
     let mut deferred_opf_bytes: Option<Vec<u8>> = None;
@@ -446,7 +459,7 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
                 let img_name = &entries[image_positions[next_submit]].0;
                 let (tx, rx) = std::sync::mpsc::channel();
                 // 清洗时改过名的（文件名有安卓存储不能用的字符）按原名回原书读
-                let job = Job::Image { src: plan.src(img_name), bg: prep.bg_fits.get(img_name.as_str()).copied(), tile: prep.page_tiles.get(img_name.as_str()).copied(), flatten: prep.alpha_imgs.contains(img_name.as_str()), reply: tx };
+                let job = Job::Image { src: plan.src(img_name), bg: prep.bg_fits.get(img_name.as_str()).copied(), tile: prep.page_tiles.get(img_name.as_str()).copied(), flatten: opts.flatten_alpha && prep.body_imgs.contains(img_name.as_str()), darken: prep.body_imgs.contains(img_name.as_str()), reply: tx };
                 job_tx.send(job).map_err(|_| BookError::Other("图片处理线程已退出".to_string()))?;
                 pending.push_back(rx);
                 next_submit += 1;
