@@ -893,7 +893,7 @@ const BORDER_STYLES: &[&str] = &["none", "hidden", "solid", "dashed", "dotted", 
 /// 一个选择器的优先级 (id, 类/属性/伪类, 标签与伪元素)，按 Selectors 规范：`:not()`/`:is()`/`:has()` 取括号里最高的那个，
 /// `:where()` 算 0，别的带括号的伪类（`:nth-child(2n+1)`、`:lang(zh)`）算一个伪类，括号里的字不计（2026-10-06 以前计成标签）。
 /// 单冒号的 `:before`/`:after`/`:first-line`/`:first-letter` 是伪元素。
-fn specificity(sel: &str) -> (u32, u32, u32) {
+pub fn specificity(sel: &str) -> (u32, u32, u32) {
     let ch: Vec<char> = sel.chars().collect();
     let (mut a, mut b, mut c) = (0u32, 0u32, 0u32);
     let is_ident = |x: char| x.is_alphanumeric() || x == '-' || x == '_' || !x.is_ascii();
@@ -1234,6 +1234,34 @@ impl Sheet {
             decls.insert(d.prop.clone(), d.value.clone());
         });
         (decls, origins)
+    }
+
+    /// 照 xochitl 的层叠顺序（2026-10-16 探针「测试-规则顺序」1–5）：`!important` 不提优先级；优先级一样的先比规则在**各自那份
+    /// 样式表里**的序号（靠后的胜），序号也一样才是后链接的那份胜；行内 `style` 照旧压过外链。
+    pub fn cascade_xochitl(&self, el: &ElementRef, base: &str) -> Decls {
+        // (优先级, 在本样式表里的序号, 样式表的起始序号, 声明)
+        type Hit<'a> = ((u32, u32, u32), usize, usize, &'a Decl);
+        let mut hits: Vec<Hit> = Vec::new();
+        let keys = ElementKeys::of(el);
+        let mut cand = Vec::new();
+        for (rules, start, _) in &self.parts {
+            rules.candidates(&keys, &mut cand);
+            for &i in &cand {
+                let (i, r) = (i as usize, &rules.list[i as usize]);
+                if r.need.as_ref().is_none_or(|n| n.may_match(el)) && r.sel.matches(el) {
+                    hits.extend(r.decls.iter().map(|d| (r.spec, i, *start, d)));
+                }
+            }
+        }
+        let mut inline: Vec<Decl> = el.value().attr("style").map(parse_decls).unwrap_or_default();
+        resolve_urls(&mut inline, base);
+        hits.extend(inline.iter().map(|d| ((1000, 0, 0), usize::MAX, usize::MAX, d)));
+        hits.sort_by_key(|h| (h.0, h.1, h.2));
+        let mut out = Decls::default();
+        for (_, _, _, d) in hits {
+            out.insert(d.prop.clone(), d.value.clone());
+        }
+        out
     }
 
     /// 按层叠顺序（优先级低的先）把元素上匹配的声明依次交给 `f`：同一属性后给的覆盖先给的。`important` 为假时 `!important` 不提优先级。
@@ -2122,6 +2150,23 @@ mod tests {
         assert_eq!((get("font-style"), get("font-weight"), get("font-size"), get("line-height")), (Some("italic"), Some("normal"), Some("15pt"), Some("1.5")));
         assert_eq!(get("font-family"), Some("楷体"), "后面的分项覆盖简写；认不出的简写（caption）整条不认");
         assert_eq!(Computed::derive(&Computed::root(), &d, "p").font_size, 1.25);
+    }
+
+    /// xochitl 的层叠顺序（探针「测试-规则顺序」1–5）：`!important` 不算；优先级一样比各自样式表里的序号，再比链接先后；
+    /// 优先级高的照样胜；行内 `style` 最后。
+    #[test]
+    fn xochitl_order_by_index_in_own_sheet() {
+        let mut s = Sheet::default();
+        let n = s.add(".f0{color:red} .f1{color:red} div.x{text-indent:3em} div.y{margin-left:3em} div.z{margin-top:3em}", 0);
+        s.add("div.x{text-indent:1em !important} div.y.y{margin-left:1em} p{color:red} q{color:red} div.z{margin-top:1em}", n);
+        let html = scraper::Html::parse_document(r#"<html><body><div class="x y z" style="margin-right:2em">x</div></body></html>"#);
+        let el = html.select(&Selector::parse("div").unwrap()).next().unwrap();
+        let (css, move_) = (s.cascade(&el, ""), s.cascade_xochitl(&el, ""));
+        let get = |d: &Decls, k: &str| d.get(k).cloned().unwrap_or_default();
+        assert_eq!((get(&css, "text-indent").as_str(), get(&move_, "text-indent").as_str()), ("1em", "3em"));
+        assert_eq!(get(&move_, "margin-left"), "1em");
+        assert_eq!(get(&move_, "margin-top"), "1em", "序号一样（都是第 5 条）后链接的胜");
+        assert_eq!(get(&move_, "margin-right"), "2em");
     }
 
     /// `<img width="60%">` 当 CSS 宽度（样式表写了的优先）；像素宽度不收。

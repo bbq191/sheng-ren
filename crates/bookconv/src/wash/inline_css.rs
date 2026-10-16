@@ -9,7 +9,8 @@
 //! - 写了 em 的 `<style>` 的内容挪进和这一章同目录的外链样式表 `eink-style-<哈希>.css`（内容一样的合用一份），原位置换成 `<link>`，
 //!   层叠顺序不变；`media` 照带；
 //! - 行内 `style` 里写 em（`font-size` 还有 %）的外边距、内边距、首行缩进、字号、字距，搬进 `eink-inline.css` 的类规则
-//!   `html body 标签.eink-iN{… !important}`（行内本来压过样式表，`!important` 保住；Move 认外链里的 `!important`，探针 Q28），
+//!   `html body 标签.eink-iN.eink-iN{… !important}`（行内本来压过样式表；Move 不按 `!important` 提优先级、优先级一样时比规则在各自
+//!   样式表里的序号，所以类名重复到比全书哪个选择器的类都多，见 [`class_repeats`]；KINDLE_RULES 41），
 //!   同一属性行内写了好几次的按最后一次；标题的字号不搬（Move 的标题只认关键字，`block_style` 写的关键字在行内）；
 //! - 全书外链样式表（含上面挪出来的）里最后一条声明写 em、不带分号、值紧挨着 `}` 的补上分号（只有这种走另一套解析，探针 Q45、Q61–Q64）。
 use super::*;
@@ -65,8 +66,10 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport) {
     }
     if !classes.is_empty() {
         let mut sheet = String::from("/* 行内 style 里写 em 的长度（sheng-ren kindle_rules，见 wash/inline_css.rs） */\n");
+        let reps = class_repeats(entries.iter().filter(|e| is_css_name(&e.name)).map(|e| e.data.as_slice()).chain(extracted.values().map(|c| c.as_bytes())));
         for (k, (tag, decls)) in classes.iter().enumerate() {
-            let sel = if tag == "body" { format!("html body.{CLASS}{}", k + 1) } else { format!("html body {tag}.{CLASS}{}", k + 1) };
+            let class = format!(".{CLASS}{}", k + 1).repeat(reps);
+            let sel = if tag == "body" { format!("html body{class}") } else { format!("html body {tag}{class}") };
             sheet.push_str(&format!("{sel}{{{decls}}}\n"));
         }
         add_css_entry(entries, opf_idx, &inline_path, &sheet, "eink-inline-css");
@@ -147,6 +150,30 @@ fn rewrite_chapter(e: &mut Entry, plan: &ChapterPlan, ks: &[usize], inline_path:
 }
 
 /// `<style>` 的内容当样式表：去掉包着的 `<![CDATA[ ]]>`、`<!-- -->`，字符引用还原（XHTML 里 `<style>` 的内容按 XML 解析）。
+/// `eink-inline.css` 的类名要重复几遍：比全书样式表里任何选择器的类（含属性、伪类）都多一个，至少 2（压过 `eink-box.css` 这些
+/// 一个类的规则）。xochitl 不按 `!important` 提优先级，优先级一样时比规则在**各自样式表里**的序号（2026-10-16 探针「测试-规则顺序」：
+/// 《古龙》`eink-box.css` 靠后的 `text-indent:1.08em` 压过 `eink-inline.css` 第 8 条的 `1.8em !important`），只有优先级管用。
+/// 带 id 的选择器类再多也压不过，不管（行内搬出来的属性上碰到的再说）。
+fn class_repeats<'a>(sheets: impl Iterator<Item = &'a [u8]>) -> usize {
+    let mut most = 2;
+    for css in sheets {
+        let css = String::from_utf8_lossy(css);
+        for r in crate::cascade::rule_spans(&crate::cascade::strip_comments(&css)) {
+            let sel = crate::cascade::rule_selector(r.prelude);
+            if sel.trim_start().starts_with('@') {
+                continue;
+            }
+            for one in crate::cascade::split_top(&sel, ',') {
+                let (a, b, _) = crate::cascade::specificity(one.trim());
+                if a == 0 {
+                    most = most.max(b as usize + 1);
+                }
+            }
+        }
+    }
+    most
+}
+
 fn clean_style(s: &str) -> String {
     let mut t = s.trim();
     for (a, b) in [("<![CDATA[", "]]>"), ("<!--", "-->")] {
@@ -252,6 +279,13 @@ mod tests {
         assert_eq!(split_inline("text-indent:0em", "p"), Some(("".into(), "text-indent:0em !important;".into())));
     }
 
+    /// 类名重复的遍数：比全书最多类的选择器多一个、至少 2；带 id 的、at 规则头不算，`@media` 里面的算。
+    #[test]
+    fn class_repeats_beat_every_class_selector() {
+        assert_eq!(class_repeats([b"p{x:1}".as_slice()].into_iter()), 2);
+        assert_eq!(class_repeats([b"p.a{x:1} #i .a.b.c.d{x:1}".as_slice(), b"@media screen{div.a .b[title]{x:1}} /* .a.b.c.d.e{} */".as_slice()].into_iter()), 4);
+    }
+
     fn book(chapter: &str) -> Vec<Entry> {
         vec![
             Entry { name: "O/content.opf".into(), data: br#"<package><manifest><item id="c" href="t/c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#.to_vec() },
@@ -274,7 +308,7 @@ mod tests {
         let css = |n: &str| String::from_utf8(b.iter().find(|e| e.name == n).unwrap().data.clone()).unwrap();
         assert_eq!(css(&css_name), "p.a{text-indent:2em;}\n");
         assert_eq!(css("O/s.css"), "p{text-indent:2em;}");
-        assert!(css("O/eink-inline.css").contains("html body p.eink-i1{margin-top:1em !important;}"));
+        assert!(css("O/eink-inline.css").contains("html body p.eink-i1.eink-i1{margin-top:1em !important;}"), "{}", css("O/eink-inline.css"));
         let opf = String::from_utf8(b[0].data.clone()).unwrap();
         assert!(opf.contains("t/eink-style-") && opf.contains(r#"href="eink-inline.css""#), "{opf}");
     }
