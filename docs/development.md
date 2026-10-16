@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-16：652 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-16：655 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -250,6 +250,8 @@ profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_h
 ## DRM
 
 用途是给用户自己买的书做格式转换和个人备份。现状：入库时识别出 DRM 就拒收。
+
+**2026-10-16 用户定不做了**（不是暂停，以后不重启；识别出 DRM 照旧拒收）。下面是 2026-09-27 暂停时的情况，留作记录。
 
 **2026-09-27 暂停**。用户手上只有 Kindle 旧格式（AZW/AZW3/MOBI）的加密书，但这种 DRM 找不到足够的独立公开资料：
 

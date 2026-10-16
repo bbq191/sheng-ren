@@ -12,7 +12,7 @@
 
 ![核心架构](img/architecture.svg)
 
-七个 crate 分层（`drm` 是空壳），上层用下层，下层不知道上层：
+六个 crate 分层，上层用下层，下层不知道上层：
 
 | crate | 职责 | 命令 |
 |---|---|---|
@@ -22,9 +22,8 @@
 | `csscascade` | CSS 层叠引擎（`@media` 求值、选择器优先级、计算值）、标签缺省样式表；KFX 写出器和优化器共用。2026-10-15 从 `bookconv` 拆出，`bookconv::cascade` 照旧能用 | |
 | `bookbase` | 基础件：`util`（原子写、限量读、并行、图片格式表）、`html`（容错的 HTML/CSS 文本操作）、`color`、`epubpath`（EPUB 里的路径、链接解析）。不依赖本仓库别的 crate；2026-10-15 从 `bookconv` 拆出，`bookconv::util` 等照旧能用 | |
 | `profile` | 阅读模式的参数，TOML 编译时嵌入；`--device=` 的解析。字段按职责分组：`css`（`CssQuirks`，阅读器的 CSS 怪癖）、`comic`（`ComicPolicy`）、`notes`（`NotePolicy`），TOML 里照旧平铺；`epub-optimize --print-profile --device=…` 打印解析好的 JSON（`tools/` 的脚本用） | |
-| `drm` | 空壳，解 DRM 暂停 | |
 
-依赖单向无环：`library` → `kfx` → `bookconv` → `csscascade` → `profile`、`bookbase`（上层也直接用下面几层）；`drm` 独立。
+依赖单向无环：`library` → `kfx` → `bookconv` → `csscascade` → `profile`、`bookbase`（上层也直接用下面几层）。解 DRM 不做（2026-10-16），空壳 `drm` 删了。
 
 ## 一本书怎么流过各模块
 

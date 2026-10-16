@@ -86,7 +86,7 @@ booklib --help                        # 全部命令；booklib sync --help 看�
 
 - 现行规则三台都在真机上看过，逐条见[验证情况](docs/typesetting.md#验证情况)。
 - 自带阅读器之间不能同步阅读进度（见[设备 · 附录](docs/devices.md#自带阅读器之间能不能同步进度2026-09-30-真机)）。
-- 带 DRM 的书拒收（解 DRM 暂停，见[开发 · DRM](docs/development.md#drm)）；MOBI、AZW3、PDF 不收，先转成 EPUB。
+- 带 DRM 的书拒收（解 DRM 不做，见[开发 · DRM](docs/development.md#drm)）；MOBI、AZW3、PDF 不收，先转成 EPUB。
 
 ## 许可证
 
