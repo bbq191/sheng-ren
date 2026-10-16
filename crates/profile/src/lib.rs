@@ -237,7 +237,7 @@ pub struct CssQuirks {
     pub margin_auto: bool,
     /// 认 `float`（TOML 里不写是 `true`，同 CSS）。Kindle 不浮动（KFX 写出器不写 float，Send to Kindle 写的 Kindle 也不按它排：标题只写
     /// `float:right` 的照旧自己占一行，2026-10-14 怪癖测试书 Q133 真机）；掌阅认，标题浮到右边、后面的字排在旁边：写 `true` 时只修复、
-    /// 照 Send to Kindle 统一的文字书里标题上的 float 写成 `none`（`bookconv::wash::box_fix`）。Move 不认，写 `false`。
+    /// 照 Send to Kindle 统一的文字书里标题、段落上的 float 写成 `none`（`bookconv::wash::box_fix`；段落是 2026-10-16 探针 Q148 补的）。Move 不认，写 `false`。
     pub float: bool,
     /// 左右外边距、内边距的 `em` 照 Kindle 按页宽换算（TOML 里不写是 `false`）。Kindle 的左右长度一律按页宽的百分比显示（em 按一页
     /// 32 个 em 折，写出器同 Send to Kindle），xochitl 一行只有约 22 个 em（842px ÷ 37.8），同样的 em 宽出约 1.4 倍：写 `true` 时只修复、

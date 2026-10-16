@@ -519,11 +519,12 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             out.inline.entry(i).or_default().push("page-break-before:auto".into());
         }
     }
-    // 认 float 的阅读器（掌阅）：Kindle 不浮动（Q133、Q134 真机），标题上的写成 none（别的元素上的没量过，不动）
+    // 认 float 的阅读器（掌阅）：Kindle 不浮动（Q133、Q134 真机），标题、段落上的写成 none（段落 Q148：《梁羽生》版本号，KINDLE_RULES 39；
+    // 别的元素上的没量过，不动）
     if reader.float {
         for (i, el) in ch.els.iter().enumerate() {
             let f = el.decls.get("float").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
-            if usable(i) && heading(&tag(i)) && matches!(f.as_str(), "left" | "right") {
+            if usable(i) && (heading(&tag(i)) || tag(i) == "p") && matches!(f.as_str(), "left" | "right") {
                 out.decls.entry(i).or_default().push("float:none".into());
             }
         }
@@ -624,17 +625,18 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             if changed {
                 h_margin.insert(i, m);
             }
-            // 认内边距、px 又是屏幕像素的（掌阅）：px 写的左右内边距、首行缩进也照 Kindle 折成 em（Move 的内边距上面并进了外边距；
-            // 首行缩进的 px Move 上没量过，不动）
+            // 认内边距、px 又是屏幕像素的（掌阅）：px 写的左右内边距也照 Kindle 折成 em（Move 的内边距上面并进了外边距）
             if reader.padding && !reader.px_margins {
                 for (side, name) in [(3, "padding-left"), (1, "padding-right")] {
                     if wrong_unit(i, name) {
                         out.decls.entry(i).or_default().push(format!("{name}:{}em", fmt(to_em(c.padding[side], c.font_size))));
                     }
                 }
-                if wrong_unit(i, "text-indent") {
-                    out.decls.entry(i).or_default().push(format!("text-indent:{}em", fmt(to_em(c.text_indent, c.font_size))));
-                }
+            }
+            // px 写的首行缩进同样是屏幕像素（掌阅 Q16、Q60；Move 2026-10-16 探针 Q151：居中标题 text-indent:48px 字右移 24px，KINDLE_RULES 40）：
+            // 照 Kindle 折成 em
+            if !reader.px_margins && wrong_unit(i, "text-indent") {
+                out.decls.entry(i).or_default().push(format!("text-indent:{}em", fmt(to_em(c.text_indent, c.font_size))));
             }
         }
     }
@@ -976,6 +978,19 @@ mod tests {
         assert!(sheet.contains("p.eink-b2{padding-left:0.6em;padding-right:0.6em;text-indent:1.2em;padding-top:0.3em;padding-bottom:0.3em;}"), "{sheet}");
     }
 
+    /// Move（不认内边距、px 是屏幕像素）：首行缩进的 px 也照 Kindle 折成 em（《古龙》居中标题 `text-indent:48px`，探针 Q151）；内边距照旧并进外边距。
+    #[test]
+    fn px_indent_folded_on_move() {
+        let reader = ReaderModel::for_profile(profile::get("xochitl").unwrap());
+        let mut b = book(r#"<h2 class="c">第一章</h2><p class="e">正文</p>"#, "h2.c{font-size:1.66667em;text-align:center;text-indent:48px} p.e{text-indent:2em}");
+        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 842.0, em_px: 37.8, v_rem_px: 49.4, h_scale: 1.0 });
+        let page = String::from_utf8(b[2].data.clone()).unwrap();
+        let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
+        assert!(page.contains(r#"<h2 class="c eink-b1">第一章</h2>"#), "{page}");
+        // 1.8em：48px 按 Kindle 的换算折成 em（标题后面那段的上外边距是 Move 不认标题外边距那条写的）
+        assert!(sheet.contains("h2.eink-b1{text-indent:1.8em;}"), "{sheet}");
+    }
+
     /// 左右有框的块包进单格表格，框写在单元格行内（全框四边、单边只有那一边），块的左外边距挪到表格（屏幕像素）、内边距写成单元格的，
     /// 前后的间距写到相邻的块；定了宽度的（Move 不认宽度）折成外边距一起框；书里表格、单元格看得见的边框写进行内。
     #[test]
@@ -1034,8 +1049,8 @@ mod tests {
     /// 那截不占地方。掌阅标题的 float 写成 none、页首的上外边距 0、上内边距减去推出去的，左边的 auto 留着；Move 多出来的宽放左边。
     #[test]
     fn floated_title_follows_kindle() {
-        let body = r#"<h1 class="bt">卷名</h1><p>正文</p><h2 class="fl">节</h2>"#;
-        let css = "h1.bt{width:1.2em;float:right;padding:6em 0 0 0;margin:-6em 10px auto auto} h2.fl{float:left}";
+        let body = r#"<h1 class="bt">卷名</h1><p>正文</p><h2 class="fl">节</h2><p class="bver">1</p><p>说明</p><div class="fd">块</div>"#;
+        let css = "h1.bt{width:1.2em;float:right;padding:6em 0 0 0;margin:-6em 10px auto auto} h2.fl{float:left} p.bver{font-size:300%;float:right} div.fd{float:left}";
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
         apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
@@ -1043,6 +1058,8 @@ mod tests {
         let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
         assert!(page.contains(r#"<h1 class="bt eink-b1">卷名</h1><p>正文</p><h2 class="fl eink-b2">节</h2>"#), "{page}");
         assert!(sheet.contains("h1.eink-b1{float:none;margin-top:0;padding-top:0em;") && !sheet.contains("margin-left:0;") && sheet.contains("h2.eink-b2{float:none;}"), "{sheet}");
+        // 段落上的也写成 none（Q148，《梁羽生》版本号）；div 上的没量过，不动
+        assert!(page.contains(r#"<p class="bver eink-b3">1</p>"#) && sheet.contains("p.eink-b3{float:none;}") && page.contains(r#"<div class="fd">块</div>"#), "{page}\n{sheet}");
         // Move：窄的定宽块（1.2em 宽）不折成 em 外边距（跟着字号变），包进单格表格，表格宽写占页宽的百分比、靠右（只有左边 auto）；
         // 外层 div 只留块自己的右外边距，块里的外边距、浮动都去掉（单元格里不认）
         let (page, sheet, _) = run(body, css);

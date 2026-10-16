@@ -189,6 +189,13 @@ PROBES = [
     ("143", "h1 末尾放横线图，行内 line-height:0.744（对照没写）", "markup", "", '<h1>版权信息<img class="ruleb" src="rule.png" alt=""/></h1><p>{text}</p>|<h1 style="line-height:0.744">版权信息<img class="ruleb" src="rule.png" alt=""/></h1><p>{text}</p>'),
     ("144", "h1 末尾放横线图，行内 line-height:1（对照没写）", "markup", "", '<h1>版权信息<img class="ruleb" src="rule.png" alt=""/></h1><p>{text}</p>|<h1 style="line-height:1">版权信息<img class="ruleb" src="rule.png" alt=""/></h1><p>{text}</p>'),
     ("145", "div 2em 粗体末尾放横线图，行内 line-height:0.744（对照没写）", "markup", "", '<div class="d2">版权信息<img class="ruleb" src="rule.png" alt=""/></div><p>{text}</p>|<div class="d2" style="line-height:0.744">版权信息<img class="ruleb" src="rule.png" alt=""/></div><p>{text}</p>'),
+    # 2026-10-16 体检里掌阅「没验证过」的《梁羽生》写法（版本历史页）：<style> 里行内元素逐字加框、p 浮动、块内不分页
+    ("146", "<style> 里 span border:3px dashed、padding 6.4px 5px（《梁羽生》版本历史逐字加框）", "style", "border:3px dashed #000;padding:6.4px 5px", '<p>甲乙<span{cls}>丙</span>丁戊</p>'),
+    ("147", "<style> 里 span border:3px dotted、padding 6.4px 5px（同上，点线）", "style", "border:3px dotted #000;padding:6.4px 5px", '<p>甲乙<span{cls}>丙</span>丁戊</p>'),
+    ("148", "<style> 里 p float:right（《梁羽生》版本号 bver，后接一段）", "style", "float:right", '<p{cls}>壹</p><p>{text}</p>'),
+    ("149", "<style> 里 div page-break-inside:avoid（前面垫 7 段、块 4 段，跨页）", "style", "page-break-inside:avoid", '<p>{text}</p>' * 7 + '<div{cls}>' + '<p>{text}</p>' * 4 + '</div>'),
+    ("150", "外链 page-break-inside:avoid;break-inside:avoid（同上）", "sheet", "page-break-inside:avoid;break-inside:avoid", '<p>{text}</p>' * 7 + '<div{cls}>' + '<p>{text}</p>' * 4 + '</div>'),
+    ("151", "居中的 h2（1.66667em）text-indent:48px（《古龙》calibre13，对照没写）", "markup", "", '<h2 class="hc">第一章</h2>|<h2 class="hc hi48">第一章</h2>'),
 ]
 
 # 测试书全书共用的几条（"markup" 探针用）
@@ -201,6 +208,7 @@ BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:
             ".abs{position:absolute;bottom:12%;left:0;width:100%;text-align:center;}", "td.tb{border:2px solid #000;}", "table.bc{border-collapse:collapse;}", ".vlen{vertical-align:0.5em;}", ".vrel{position:relative;top:-0.5em;}", ".w50{width:50%;}", ".mauto{margin-left:auto;margin-right:auto;}",
             "span.fnote{position:relative;display:inline-block;width:19px;height:19px;background-color:black;vertical-align:sub;border-radius:50%;margin:0 3px;}",
             "html body span.fnoff{display:inline;width:auto;height:auto;background-color:transparent;background-image:none;margin:0;}", "td.tw1{width:1em;}", ".nw{white-space:nowrap;}", ".lh12{line-height:1.2em;}", "div.d2{font-size:2em;font-weight:bold;}", "p.f2{font-size:2em;}", "p.x1-0{font-size:1em;}", "p.x1-0_6{font-size:1em;line-height:0.6;}", "p.x1-0_8{font-size:1em;line-height:0.8;}", "p.x1-1_0{font-size:1em;line-height:1.0;}", "p.x1-1_2{font-size:1em;line-height:1.2;}", "p.x1_5-0{font-size:1.5em;}", "p.x1_5-0_6{font-size:1.5em;line-height:0.6;}", "p.x1_5-0_8{font-size:1.5em;line-height:0.8;}", "p.x1_5-1_0{font-size:1.5em;line-height:1.0;}", "p.x1_5-1_2{font-size:1.5em;line-height:1.2;}", "p.x2-0{font-size:2em;}", "p.x2-0_6{font-size:2em;line-height:0.6;}", "p.x2-0_8{font-size:2em;line-height:0.8;}", "p.x2-1_0{font-size:2em;line-height:1.0;}", "p.x2-1_2{font-size:2em;line-height:1.2;}", "p.x3-0{font-size:3em;}", "p.x3-0_6{font-size:3em;line-height:0.6;}", "p.x3-0_9{font-size:3em;line-height:0.9;}", "h2.x2-0{font-size:2em;}", "h2.x2-0_6{font-size:2em;line-height:0.6;}", "h2.x2-1_0{font-size:2em;line-height:1.0;}",
+            "h2.hc{display:block;font-size:1.66667em;font-weight:bold;line-height:1.2;text-align:center;margin:0.83em 0;}", ".hi48{text-indent:48px;}",
             "h1.bt{font-size:300%;font-weight:normal;color:#1B272E;text-align:center;width:1.2em;line-height:120%;background:#E5E2D3;border:solid #DFDBCA 5px;float:right;padding:6em 12px 12px 12px;margin:-6em 10px auto auto;}"]
 
 
@@ -453,12 +461,13 @@ def ireader_run():
     adb("push", book, f"/sdcard/documents/测试/{name}.epub")
     adb("shell", "am", "start", "-n", "com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity")
     time.sleep(3)
-    # 文件管理器停在「测试」里时列表不刷新：点面包屑回 documents 再进来；在哪一层都试几次
-    for _ in range(6):
+    # 文件管理器停在「测试」里时列表不刷新：点面包屑回 documents 再进来；在哪一层都试几次。停在别的目录（上次看书的「经典名著」）时
+    # 面包屑在 uiautomator 里没有文字，按返回键往上走一层（2026-10-16）
+    for _ in range(8):
         if tap_text(name):
             break
-        if not tap_text("测试") and not tap_text("documents"):
-            tap_text("存储空间")
+        if not tap_text("测试") and not tap_text("documents") and not tap_text("存储空间"):
+            adb("shell", "input", "keyevent", "KEYCODE_BACK")
         time.sleep(2)
     else:
         sys.exit(f"文件管理器里没找到「{name}」")
