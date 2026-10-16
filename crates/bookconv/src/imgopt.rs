@@ -1740,25 +1740,9 @@ mod tests {
         assert_eq!(gif_frame_count(b"GIF89a", 2), None);
     }
 
-    /// 快速 RGB → 灰度和 `image` 的 `into_luma8` 逐像素相同：所有 (R, G) 组合配一组 B（含 0、255 和取整边界附近的值）。
-    /// 全部 2^24 种颜色的对照见下面 `#[ignore]` 的测试（release 下跑：`cargo test --release -p bookconv rgb_to_luma -- --ignored`）。
+    /// 快速 RGB → 灰度和 `image` 的 `into_luma8` 逐像素相同：全部 2^24 种颜色排成 4096×4096 一张图比（debug 下约 2.5 秒；
+    /// 2026-10-16 以前标 `#[ignore]`、平时只跑抽样的 B 取 12 个值的那版）。
     #[test]
-    fn rgb_to_luma_matches_image() {
-        let bs = [0u8, 1, 2, 63, 64, 127, 128, 129, 191, 200, 254, 255];
-        let mut raw = Vec::with_capacity(256 * 256 * bs.len() * 3);
-        for &b in &bs {
-            for g in 0..=255u8 {
-                for r in 0..=255u8 {
-                    raw.extend([r, g, b]);
-                }
-            }
-        }
-        let img = RgbImage::from_raw(256 * 256, bs.len() as u32, raw).unwrap();
-        assert_eq!(rgb8_into_luma8(img.clone()).as_raw(), DynamicImage::ImageRgb8(img).into_luma8().as_raw());
-    }
-
-    #[test]
-    #[ignore]
     fn rgb_to_luma_matches_image_exhaustive() {
         let raw: Vec<u8> = (0..1u32 << 24).flat_map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]).collect();
         let img = RgbImage::from_raw(4096, 4096, raw).unwrap();
