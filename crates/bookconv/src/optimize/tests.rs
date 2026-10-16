@@ -351,7 +351,7 @@
 
         let (stream_out, _) = optimize_epub(&comic_buf, crate::imgopt::test_screen()).unwrap();
         let stream_img = entry_bytes(&stream_out, "p1.jpg");
-        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false, None, false, Limits::default().max_decode_pixels).unwrap();
+        let direct = transform_image_bytes(&jpg, true, crate::imgopt::test_screen(), 1, false, None, None, false, Limits::default().max_decode_pixels).unwrap();
         assert_eq!(stream_img, direct, "流式并行处理结果应与直接处理逐字节一致");
         let mut ar = ZipArchive::new(Cursor::new(&stream_out)).unwrap();
         assert_eq!(ar.by_name("p1.jpg").unwrap().compression(), CompressionMethod::Stored, "已压缩的图片 STORED");
@@ -394,7 +394,7 @@
             let (mut x, mut y) = (Vec::new(), Vec::new());
             a.by_name(&name).unwrap().read_to_end(&mut x).unwrap();
             b.by_name(&name).unwrap().read_to_end(&mut y).unwrap();
-            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false, None, false, Limits::default().max_decode_pixels).unwrap_or(x);
+            let want = transform_image_bytes(&x, true, crate::imgopt::test_screen(), 1, false, None, None, false, Limits::default().max_decode_pixels).unwrap_or(x);
             assert_eq!(want, y, "第 {i} 张图并行结果与顺序结果不一致（乱序或串图）");
         }
         let mut y1 = Vec::new();
@@ -1073,6 +1073,55 @@
         for n in ["OEBPS/i/bg.png", "OEBPS/i/both.png", "OEBPS/i/opaque.png"] {
             assert_eq!(entry_bytes(&out, n), orig(n), "{n}：背景图、两用的、全不透明的都不动");
         }
+    }
+
+    /// 正文灰度插图 `g.jpg`、CSS 背景的灰度图 `bg.jpg`、正文彩色插图 `c.jpg`。
+    fn gamma_book() -> (Vec<u8>, Vec<(&'static str, Vec<u8>)>) {
+        let jpg = |f: &dyn Fn(u32, u32) -> image::Rgb<u8>| {
+            let mut b = Vec::new();
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(500, 400, f)).write_to(&mut Cursor::new(&mut b), image::ImageFormat::Jpeg).unwrap();
+            b
+        };
+        let imgs = vec![("OEBPS/i/g.jpg", jpg(&|x, _| image::Rgb([(x % 250) as u8; 3]))), ("OEBPS/i/bg.jpg", jpg(&|x, _| image::Rgb([(x % 250) as u8; 3]))), ("OEBPS/i/c.jpg", jpg(&|x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])))];
+        let mut epub = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut epub));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let files: Vec<(&str, &[u8])> = vec![
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+                ("OEBPS/content.opf", br#"<package version="3.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.css" media-type="text/css"/><item id="a" href="i/g.jpg" media-type="image/jpeg"/><item id="b" href="i/bg.jpg" media-type="image/jpeg"/><item id="c" href="i/c.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
+                ("OEBPS/s.css", b"div.y{background-image:url(i/bg.jpg)}"),
+                ("OEBPS/c1.xhtml", r#"<html><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body><p>正文</p><div class="y"><img src="i/g.jpg" alt=""/></div><img src="i/c.jpg" alt=""/></body></html>"#.as_bytes()),
+            ];
+            for (name, body) in files.into_iter().chain(imgs.iter().map(|(n, b)| (*n, b.as_slice()))) {
+                zw.start_file(name, stored).unwrap();
+                zw.write_all(body).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        (epub, imgs)
+    }
+
+    #[test]
+    fn image_gamma_darkens_gray_body_images_even_when_only_repairing() {
+        let (epub, imgs) = gamma_book();
+        let orig = |n: &str| imgs.iter().find(|(m, _)| *m == n).unwrap().1.clone();
+        for dev in ["ireader", "xochitl"] {
+            let opts = OptimizeOpts::for_profile(profile::get(dev).unwrap());
+            assert!(opts.image_gamma.is_some() && matches!(opts.text_mode, TextMode::Repair { .. }), "{dev}：只修复也加深");
+            let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
+            let g = entry_bytes(&out, "OEBPS/i/g.jpg");
+            // 原图这一列是 125 的灰（JPEG 误差几级）：加深后在 1.3 伽马的值（101）附近
+            let v = image::load_from_memory(&g).unwrap().to_luma8().get_pixel(125, 9).0[0];
+            assert!(v.abs_diff(crate::imgopt::gamma_lut(1.3)[125]) <= 4, "{dev}：正文灰度插图加深，得 {v}");
+            assert_eq!(entry_bytes(&out, "OEBPS/i/bg.jpg"), orig("OEBPS/i/bg.jpg"), "{dev}：CSS 背景图不动");
+            assert_eq!(entry_bytes(&out, "OEBPS/i/c.jpg"), orig("OEBPS/i/c.jpg"), "{dev}：彩色插图不动");
+        }
+        let opts = OptimizeOpts::for_profile(profile::get("kindle").unwrap());
+        assert!(opts.image_gamma.is_none());
+        let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
+        assert_eq!(entry_bytes(&out, "OEBPS/i/g.jpg"), orig("OEBPS/i/g.jpg"), "Kindle 不开，插图不动");
     }
 
     #[test]

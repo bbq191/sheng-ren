@@ -17,6 +17,9 @@ include!(concat!(env!("OUT_DIR"), "/builtin.rs"));
 /// profile 没写 `comic_margin` 时漫画页的白边（像素）。
 pub const DEFAULT_COMIC_MARGIN: u32 = 1;
 
+/// `image_gamma` 只加深短边至少这么多像素的插图：分隔线、横线图、图标、页首垫的空白图不算插图（拿不准就不处理）。
+pub const MIN_GAMMA_IMAGE_SIDE: u32 = 200;
+
 /// 产物格式。KFX 是先按同一套规则优化出 EPUB、再转换（给 Kindle 自带阅读器，2026-10-05 起，见 docs/kfx.md）；
 /// PDF、AZW3 已删（AZW3 2026-10-09 用户定：KFX 取代），写了按未知值报错。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
@@ -297,6 +300,11 @@ pub struct ComicPolicy {
     /// 曾经写 `azw3`，KFX 固定版式真机通过后去掉；AZW3 格式 2026-10-09 删了），留给自定义模式。
     #[serde(rename = "comic_format")]
     pub format: Option<Format>,
+    /// 漫画页中间调加深的伽马（`255·(v/255)^γ`，黑、白两端不动；TOML 里不写＝不加深）。只加深内容是灰度的页：黑白屏上转成灰度的页
+    /// 全算，彩色屏上只算本来就没有颜色的页（彩页原样）。2026-10-16 用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45，选 1.45
+    /// （第一轮 Move 上对比度、锐化、饱和度都看不出区别）。见 `bookconv::imgopt::prepare_comic_page_limited`。
+    #[serde(rename = "comic_gamma")]
+    pub gamma: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -342,6 +350,10 @@ pub struct Profile {
     /// `bookconv::uastyle`）、正文字体用阅读器字体、body 左右边距不要、文字对比度 4.5（`bookconv::wash::kindle_rules`）。
     /// ireader、xochitl 写 `true`（2026-10-08 用户定三台一套规则）。Kindle 不用：KFX 写出器照这套规则写。
     pub kindle_rules: bool,
+    /// 文字书正文插图中间调加深的伽马（同 `comic_gamma` 的算法；TOML 里不写＝不加深）。只动正文 `<img>`/SVG `<image>` 用到、
+    /// 没在 CSS 里当背景、内容是灰度、短边至少 [`MIN_GAMMA_IMAGE_SIDE`] 像素、没有透明通道的 JPEG/PNG；只修复的书也做（「图片不动」
+    /// 的例外，2026-10-16 用户定）。用户在 Move、掌阅上比过，选 1.3。见 `bookconv::imgopt::darken_gray_image`。
+    pub image_gamma: Option<f64>,
     /// 阅读器怎么定图片尺寸（TOML 里不写是 `css`），见 [`ImageSizing`]。ireader 写 `device-px`，xochitl 写 `percent`。
     pub image_sizing: ImageSizing,
     /// 阅读器缺省字号下 1em 是几个屏幕像素（只 kindle 写：掌阅、Move 照它把 em 写的图片宽度折成 Kindle 上的实际大小，
@@ -382,6 +394,7 @@ struct ProfileFile {
     #[serde(default)]
     comic_fixed_layout: bool,
     comic_format: Option<Format>,
+    comic_gamma: Option<f64>,
     #[serde(default)]
     background_images: bool,
     #[serde(default = "yes")]
@@ -454,6 +467,7 @@ struct ProfileFile {
     repair_note_links: bool,
     #[serde(default)]
     kindle_rules: bool,
+    image_gamma: Option<f64>,
     #[serde(default)]
     image_sizing: ImageSizing,
     font_px: Option<u32>,
@@ -472,7 +486,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: NotePolicy { mode: f.notes, icons: f.note_icons, backlinks: f.note_backlinks }, readable: f.readable, comic: ComicPolicy { margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), reader_margins: f.comic_reader_margins, readable: f.comic_readable, page_direction: f.comic_page_direction, fixed_layout: f.comic_fixed_layout, format: f.comic_format }, css: CssQuirks { margin_top: f.margin_top, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, background_auto_height: f.background_auto_height }, background_images: f.background_images, background_sizing: f.background_sizing, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: NotePolicy { mode: f.notes, icons: f.note_icons, backlinks: f.note_backlinks }, readable: f.readable, comic: ComicPolicy { margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), reader_margins: f.comic_reader_margins, readable: f.comic_readable, page_direction: f.comic_page_direction, fixed_layout: f.comic_fixed_layout, format: f.comic_format, gamma: f.comic_gamma }, css: CssQuirks { margin_top: f.margin_top, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, background_auto_height: f.background_auto_height }, background_images: f.background_images, background_sizing: f.background_sizing, caption_fit: f.caption_fit, image_alpha: f.image_alpha, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_gamma: f.image_gamma, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
@@ -495,6 +509,11 @@ impl Profile {
         }
         if !self.css.line_height_numbers && !(self.line_px.is_some_and(|l| l > 0) && self.em_px.is_some_and(positive)) {
             return Err(format!("profile {}: line_height_numbers = false 要写 line_px、em_px", self.id));
+        }
+        for (key, g) in [("comic_gamma", self.comic.gamma), ("image_gamma", self.image_gamma)] {
+            if g.is_some_and(|g| !(0.2..=5.0).contains(&g)) {
+                return Err(format!("profile {}: {key} 须在 0.2–5 之间（1 是不变，大于 1 加深中间调）", self.id));
+            }
         }
         if let Some(d) = self.comic.page_direction.as_deref().filter(|d| !matches!(*d, "ltr" | "rtl")) {
             return Err(format!("profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}", self.id));
@@ -677,7 +696,7 @@ mod tests {
             formats: _,
             readable: _,
             notes: NotePolicy { mode: _, icons: _, backlinks: _ },
-            comic: ComicPolicy { margin: _, reader_margins: _, readable: _, page_direction: _, fixed_layout: _, format: _ },
+            comic: ComicPolicy { margin: _, reader_margins: _, readable: _, page_direction: _, fixed_layout: _, format: _, gamma: _ },
             background_images: _,
             background_sizing: _,
             caption_fit: _,
@@ -685,6 +704,7 @@ mod tests {
             text_repair_only: _,
             repair_note_links: _,
             kindle_rules: _,
+            image_gamma: _,
             image_sizing: _,
             font_px: _,
             // 阅读器模型（也有的同时直接进）

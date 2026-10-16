@@ -140,7 +140,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - 58（2026-10-15，用户在三台看《飘》版权页后多一页空白）：强制分页后只有 Kindle 上小到几乎看不见的图（高不到内容区高的 5%）、
 ///   紧接着的块又被挪到下一页的页，去掉前面的强制分页，小图并到上一页底部（`wash/break_margin.rs`；三台一并：Kindle 在 `repair_entries`
 ///   里只做这一项，掌阅、Move 连同分页估算一起做）。《飘》上下册、《春雪》变。
-pub const OPTIMIZE_VERSION: &str = "58";
+/// - 59（2026-10-16，用户在 Move、掌阅上比过）：正文插图中间调加深（profile `image_gamma`，掌阅、Move 1.3；只修复的书也做，
+///   「图片不动」的例外）：正文 `<img>`/SVG `<image>` 用到、不在 CSS 里、内容是灰度、短边至少 200 像素、不透明的 JPEG/PNG
+///   （`imgopt::darken_gray_image`）。金庸、福尔摩斯等带灰度插图的书变；Kindle 不开，产物不变。
+pub const OPTIMIZE_VERSION: &str = "59";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -150,7 +153,9 @@ pub const OPTIMIZE_VERSION: &str = "58";
 /// - c52（2026-10-08）：从 `OPTIMIZE_VERSION` 分出来，行为不变。
 /// - c53（2026-10-09，全系统审计）：优化标记不再写版本号；两路共用的清洗层修复（GBK 的 OPF 先转码等，见 v54）。
 /// - c54（2026-10-10 审计）：两路共用的清洗层修复（样式表开头的 `@charset`、CSS 文本工具收成一份的边角变化，见 v55）。
-pub const COMIC_VERSION: &str = "54";
+/// - c55（2026-10-16，用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45）：内容是灰度的漫画页中间调加深（profile `comic_gamma`，
+///   掌阅、Move 1.45；掌阅黑白屏全部页都转成灰度、都加深，Move 彩页原样）。Kindle 不开，产物不变。
+pub const COMIC_VERSION: &str = "55";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
@@ -231,6 +236,11 @@ pub struct OptimizeOpts {
     /// 正文 `<img>`/SVG `<image>` 用到的带透明像素的图合成到白底（profile `image_alpha = false`，Kindle），见 [`crate::imgalpha`]。
     /// 只管文字书（漫画页本来就合成白底）。
     pub flatten_alpha: bool,
+    /// 漫画页中间调加深的伽马（profile `comic_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::prepare_comic_page_limited`]。
+    pub comic_gamma: Option<f64>,
+    /// 文字书正文插图中间调加深的伽马（profile `image_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::darken_gray_image`]。
+    /// 只修复的书也做（「图片不动」的例外，2026-10-16 用户定）。
+    pub image_gamma: Option<f64>,
     /// 文字书怎么处理（[`TextMode`]）：完整处理，还是只修复（profile `text_repair_only`，三台都是）。漫画不受影响（按漫画规则照常处理）。
     pub text_mode: TextMode,
     /// 图片处理的资源上限（缺省 [`Limits::default`]）。
@@ -299,7 +309,7 @@ impl OptimizeOpts {
 
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, text_mode: TextMode::Full, limits: Limits::default(), title: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, comic_gamma: None, image_gamma: None, text_mode: TextMode::Full, limits: Limits::default(), title: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -324,6 +334,8 @@ impl OptimizeOpts {
             fit_backgrounds: p.background_images && !p.background_sizing,
             caption_fit: p.caption_fit,
             flatten_alpha: !p.image_alpha,
+            comic_gamma: p.comic.gamma.filter(|&g| g != 1.0),
+            image_gamma: p.image_gamma.filter(|&g| g != 1.0),
             text_mode: TextMode::for_profile(p),
             ..OptimizeOpts::new(p.output_readable())
         }
@@ -433,8 +445,9 @@ struct Prepared {
     bg_fits: HashMap<String, crate::bgfit::BgFit>,
     /// 做成整页图块的背景图（清洗后的 zip 路径 → 画法，清洗层定的，见 [`crate::wash::WashOpts::page_tiles`]）。
     page_tiles: HashMap<String, crate::bgfit::PageTile>,
-    /// 要合成白底的正文图（zip 路径），见 [`OptimizeOpts::flatten_alpha`]。
-    alpha_imgs: HashSet<String>,
+    /// 正文 `<img>`/SVG `<image>` 用到、没在 CSS 里引用的图（zip 路径，[`crate::imgalpha::plan`]）：要合成白底
+    /// （[`OptimizeOpts::flatten_alpha`]）、加深中间调（[`OptimizeOpts::image_gamma`]）的从这里挑。两样都不做时是空的。
+    body_imgs: HashSet<String>,
     rep: Report,
 }
 
@@ -554,9 +567,9 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         entries.push((name, data, scan.ish));
     }
     let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &backrefs, &skip_notes, opts.drop_note_backlinks);
-    let alpha_imgs = if opts.flatten_alpha && !is_comic_book { crate::imgalpha::plan(&entries) } else { HashSet::new() };
+    let body_imgs = if (opts.flatten_alpha || opts.image_gamma.is_some()) && !is_comic_book { crate::imgalpha::plan(&entries) } else { HashSet::new() };
     let page_tiles = if is_comic_book { HashMap::new() } else { rep.wash.as_mut().map(|w| std::mem::take(&mut w.page_tiles)).unwrap_or_default() };
-    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, bg_fits, page_tiles, alpha_imgs, rep })
+    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, bg_fits, page_tiles, body_imgs, rep })
 }
 
 /// 第一遍后半：把**被引用**的注释块（aside/p/li/div 且带注释语义）从各章移除、建全书索引 (文件, id) → 块，交给第二遍
