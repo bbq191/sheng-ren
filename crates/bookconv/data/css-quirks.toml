@@ -342,6 +342,38 @@ src = "2026-10-13 测试-行距；三台速查"
 
 [[rule]]
 prop = ["border-top", "border-bottom", "border-left", "border-right"]
+on = ["inline"]
+ireader = "same"
+xochitl = "accept"
+note = "掌阅画行内元素的边框（虚线、点线、带内边距，逐字加框照画），同 Kindle（KFX 写出器写行内边框）。Move 不画，只少了装饰框、字都在：不影响验收（2026-10-16 用户定）"
+src = "2026-10-16 测试-怪癖-掌阅 Q146、Q147、Move Q146、Q147（《梁羽生》版本历史 <style> 里的 .tit1/.tit2）"
+
+[[rule]]
+prop = ["page-break-inside", "break-inside"]
+on = ["block"]
+ireader = "same"
+xochitl = "same"
+note = "块内不分页（avoid）掌阅、Move 都不认，块照样跨页拆开（外链、<style> 都一样）；Kindle 写出器不写这个属性，也照样拆：三台一样"
+src = "2026-10-16 测试-怪癖-掌阅 Q149、Q150，测试-怪癖 Q149、Q150（Move，《梁羽生》.subv、.nf）"
+
+[[rule]]
+prop = ["float"]
+on = ["p"]
+ireader = "fixed"
+xochitl = "same"
+note = "Move 不浮动，同 Kindle。掌阅认段落的 float，浮动的段落靠到一边、后面的字排在旁边；Kindle 不浮动（写出器不写 float），自己占一行 → 写成 none（KINDLE_RULES 39，同标题那条，profile float）"
+src = "2026-10-16 测试-怪癖-掌阅 Q148、测试-怪癖 Q148（Move）（《梁羽生》版本号 .bver）"
+
+[[rule]]
+prop = ["text-indent"]
+on = ["p", "block", "heading"]
+value = ["px"]
+xochitl = "fixed"
+note = "Move 上 px 写的首行缩进按屏幕像素（居中标题 text-indent:48px 字右移 24px），Kindle 写出器按 Kindle 的换算：块上的折成 em（KINDLE_RULES 40，同掌阅；优化后 Q151 真机 PDF 右移 34px，同计算）"
+src = "2026-10-16 测试-怪癖 Q151（Move，《古龙》居中章名 calibre13、calibre15）"
+
+[[rule]]
+prop = ["border-top", "border-bottom", "border-left", "border-right"]
 on = ["cell"]
 xochitl = "fixed"
 note = "Move 只画表格、单元格行内 style 写的边框（外链、类规则里的不认）：单元格看得见的边框照写进行内、表格加 cellspacing=0（KINDLE_RULES 27）"
@@ -349,9 +381,9 @@ src = "2026-10-13 测试-竖线 1–10"
 
 [[rule]]
 prop = ["border-top", "border-bottom"]
-on = ["list", "img", "inline"]
+on = ["list", "img"]
 xochitl = "broken"
-note = "Move 不画边框；列表、图、行内元素上的没处理"
+note = "Move 不画边框；列表、图上的没处理（行内元素的见上面，不影响验收）"
 src = "2026-10-13 测试-怪癖 Q07、Q40"
 
 [[rule]]
@@ -370,7 +402,7 @@ src = "2026-10-13 测试-竖线 1–10；《雪国》《风起陇西》《恶女
 [[rule]]
 prop = ["border-left", "border-right"]
 xochitl = "broken"
-note = "Move 不画边框；列表、图、行内元素上的左右竖线没处理"
+note = "Move 不画边框；列表、图上的左右竖线没处理（行内元素的见上面，不影响验收）"
 src = "2026-10-13 测试-怪癖 Q07、Q40"
 
 [[rule]]

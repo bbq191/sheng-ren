@@ -192,7 +192,11 @@ pub use self::encoding::transcode_entries;
 /// - 38（2026-10-15，用户在 Move 上把阅读字号调到 0.8 后《梁羽生》卷名不再竖排）：Move 上窄的定宽块（占能用宽 30% 以内，卷名竖排这类）
 ///   不再折成 em 外边距（跟着阅读字号变），包进单格表格、表格宽写占外层的百分比、靠哪边写 `align`（`box_fix.rs` 的 `narrow`）；表格不会窄过
 ///   里面最宽的一个字，一字宽的竖条和字号无关（真机字号 1.0、0.8 都竖排）。
-pub const KINDLE_RULES_VERSION: &str = "38";
+/// - 39（2026-10-16，掌阅怪癖探针 Q148）：段落上的 `float` 也照 Kindle 写成 none（以前只管标题；`box_fix.rs`，profile `float`）。
+///   《梁羽生》版本历史页的版本号（`p.bver{float:right}`）在掌阅上浮到右边、说明排在旁边，Kindle 上自己占一行。只《梁羽生》变。
+/// - 40（2026-10-16，Move 怪癖探针 Q151）：Move 上 px 写的首行缩进也照 Kindle 折成 em（以前只掌阅折；`box_fix.rs`）。《古龙》居中的
+///   章名 `text-indent:48px`、`32px` 在 Move 上按屏幕像素只挪一点。
+pub const KINDLE_RULES_VERSION: &str = "40";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
