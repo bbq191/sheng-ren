@@ -60,6 +60,8 @@ tools/regress/tocchk.py target/regress/旧 target/regress/新
 
 背景图、`rgba()`、图注、透明图这几个字段对文字书不起作用（只修复）；背景图、`rgba()` 还管漫画（清洗层两路都过）。注释方式（`notes`）只修复时也不生效，但仍进文字书、漫画两路的指纹，改了照样过期。阅读范围对文字书只影响 KFX 的 `@media` 求值。改了 `kindle_rules`、注释、漫画、彩色、阅读范围相关的处理，对应的模式也跑一遍。
 
+Move 的层叠顺序和 CSS 不一样（`!important` 不提优先级；优先级一样先比规则在各自样式表里的序号，见 [xochitl.md](xochitl.md)）：改了往 Move 产物里写样式表的规则，用 `cargo run --release -p bookconv --example xochitl_order -- 回归目录/xochitl/*.epub` 列出照 CSS 和照 Move 层叠不一样的属性（标题的外边距 Move 本来不认，可以不管）。
+
 回归脚本统计 spine 时不算原书标了 `linear="no"` 的目录页（`regresslib.spine_paths`；产物把它拿出了 spine，文件还在），补的封面页 `eink-cover.xhtml` 由 `tocchk.py` 单独注明、不算拆文件。
 
 ### KFX
@@ -96,7 +98,7 @@ done
 |---|---|---|---|
 | 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 59 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 55 | 漫画 |
-| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 40 | 只有开了 `kindle_rules` 的模式的文字书 |
+| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 41 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签、作者国籍、译者、出版社、日期、ISBN，书名换成网站书名 | `bookconv::opfmeta::VERSION` | 6 | 只有补过东西的 |
 | EPUB → KFX | `kfx::write::WRITER_VERSION` | 23 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |

@@ -41,7 +41,7 @@
 | 外链样式表 | 认 | 认 | 认（最可靠） |
 | `<style>` | 认 | 认 | 认，但**走另一套解析**：em 长度按 1em＝23px（约 0.61 倍），`font-size`、`text-indent` 的 em、% 不认（2026-10-13 探针）→ 写了 em 的挪进外链（KINDLE_RULES 22） |
 | 行内 `style` | 认 | 认 | 认（压过类规则），同 `<style>` **走另一套解析**（em 23px，字号、缩进的 em 不认；px、行距倍数、关键字、对齐认）；以前"不认"的结论被 2026-10-13 两次复测推翻 → 写 em 的长度搬进外链的 `!important` 类规则（KINDLE_RULES 22） |
-| `!important` | 照层叠 | **带它的声明不起作用**（只有这一条、没有冲突的也不起作用：`margin-left:2em !important` 不挪、`text-align:center !important` 不居中、行内 `text-decoration:underline !important` 不画，2026-10-13 探针 Q28、Q85、Q86）→ 去掉 `!important`，靠它胜出的值写进行内（KINDLE_RULES 25，《克莱因壶》引文署名靠右真机 ✓） | 认（2026-10-13 探针；以前"作废"的结论没复现），但**输给行内 `style`**（同一属性行内写了，外链的 `!important` 不起作用，KINDLE_RULES 24 的探针 Q48） |
+| `!important` | 照层叠 | **带它的声明不起作用**（只有这一条、没有冲突的也不起作用：`margin-left:2em !important` 不挪、`text-align:center !important` 不居中、行内 `text-decoration:underline !important` 不画，2026-10-13 探针 Q28、Q85、Q86）→ 去掉 `!important`，靠它胜出的值写进行内（KINDLE_RULES 25，《克莱因壶》引文署名靠右真机 ✓） | 认（2026-10-13 探针；以前"作废"的结论没复现），但**不提优先级**：输给行内 `style`（KINDLE_RULES 24 的探针 Q48），优先级一样时也不按链接先后，**先比规则在各自样式表里是第几条**（靠后的胜，2026-10-16「测试-规则顺序」）→ `eink-inline.css` 靠重复类名提优先级（KINDLE_RULES 41） |
 | 优先级相同 | 后者胜 | 后者胜 | 后者胜（2026-10-13 探针；以前"先出现的胜"没复现） |
 | 规则最后一条声明不带分号 | — | — | 值**紧挨着 `}`** 时走另一套解析（同行内 style：em 23px，字号、缩进的 em 不认），看着像丢了；中间有空白就正常 → 写 em 的补分号（KINDLE_RULES 22） |
 | 值写 `0` | — | — | 认（2026-10-13 探针；以前"当没写"多半是不带分号）；我们照旧写 0.01em |

@@ -1322,7 +1322,7 @@
         // 正文是行内的 14px：字号按正文归一成 16px（阅读器的字号），Move 的 px 是屏幕像素、再接按根的 1em（root_em），一起挪进
         // eink-inline.css 的类；段首空格原样
         assert!(x.contains(r#"<p class="eink-i2">　　正文"#), "字号归一、段首空格原样: {x}");
-        assert!(text_of(&out, "OEBPS/eink-inline.css").contains("html body p.eink-i2{font-size:1em !important;}"));
+        assert!(text_of(&out, "OEBPS/eink-inline.css").contains("html body p.eink-i2.eink-i2{font-size:1em !important;}"));
         assert!(x.contains(r##"href="#n1""##) && x.contains("注释正文"), "注释搬进本章、链接改同文件锚点: {x}");
     }
 
