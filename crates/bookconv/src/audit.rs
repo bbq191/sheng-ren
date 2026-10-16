@@ -309,6 +309,62 @@ mod tests {
         }
     }
 
+    /// 体检能查到的所有写法（属性 × 元素 × 值 × 来源 × `!important`）：属性取表里写的，通配的 `margin-*` 另取一个只有它能对上的名字。
+    fn all_keys() -> Vec<(String, &'static str, &'static str, Origin, bool)> {
+        let mut props: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for r in &table().rule {
+            for p in &r.prop {
+                props.insert(p.strip_suffix('*').map_or_else(|| p.clone(), |pre| format!("{pre}~")));
+            }
+        }
+        let ons = ["p", "heading", "block", "inline", "img", "cell", "list"];
+        let values = ["em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword", "-"];
+        let mut out = Vec::new();
+        for p in &props {
+            for on in ons {
+                for value in values {
+                    for origin in [Origin::Sheet, Origin::Style, Origin::Inline] {
+                        for imp in [false, true] {
+                            out.push((p.clone(), on, value, origin, imp));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// 一种写法在这台上由哪一条定（同 [`audit`]：第一条对得上、这台有结论的）。
+    fn deciding(key: &(String, &'static str, &'static str, Origin, bool), reader: &str) -> Option<usize> {
+        let (prop, on, value, origin, imp) = key;
+        table().rule.iter().position(|r| r.matches(prop, on, value, *origin, *imp) && r.status(reader).is_some())
+    }
+
+    /// 怪癖表里没有用不上的条目：每条在它写了结论的每台上，至少有一种写法是由它定的（排在前面更宽的条目整条挡住了它，
+    /// 就是死条目，挪顺序时最容易出）。另外每条都有说明。
+    /// `QUIRKS_SNAPSHOT=文件` 时把每台每种写法的结论写进文件：整理表（挪顺序、合并、改分节）前后各写一份，应该一字不差。
+    #[test]
+    fn no_dead_rows_and_snapshot() {
+        let keys = all_keys();
+        if let Some(path) = std::env::var_os("QUIRKS_SNAPSHOT") {
+            let mut s = String::new();
+            for k in &keys {
+                let v: Vec<&str> = ["ireader", "xochitl"].iter().map(|d| deciding(k, d).and_then(|i| table().rule[i].status(d)).unwrap_or("?")).collect();
+                s.push_str(&format!("{} {} {} {}{} {} {}\n", k.0, k.1, k.2, via_name(k.3), if k.4 { "!" } else { "" }, v[0], v[1]));
+            }
+            std::fs::write(path, s).unwrap();
+        }
+        let decided: Vec<(&str, std::collections::HashSet<usize>)> = ["ireader", "xochitl"].iter().map(|d| (*d, keys.iter().filter_map(|k| deciding(k, d)).collect())).collect();
+        for (i, r) in table().rule.iter().enumerate() {
+            assert!(!r.note.is_empty(), "第 {} 条 {:?} 没写说明", i + 1, r.prop);
+            for (reader, used) in &decided {
+                if r.status(reader).is_some() {
+                    assert!(used.contains(&i), "第 {} 条 {:?} 在 {reader} 上被前面的条目整条挡住", i + 1, r.prop);
+                }
+            }
+        }
+    }
+
     #[test]
     fn value_kinds() {
         let k: Vec<&str> = ["2em", "1.5rem", "10px", "12pt", "50%", "1.2", "0", "-1em", "bold", "#000", "0.01em", "-2"].iter().map(|v| value_kind(v)).collect();

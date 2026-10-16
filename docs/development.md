@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-16：655 个通过、1 个忽略）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-16：656 个通过、1 个忽略）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -153,7 +153,7 @@ profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_h
   | GBK、Big5、UTF-16 的 XHTML、OPF、NCX 转 UTF-8 | `wash::transcode_entries`（优化器读完书先转，后面一律按 UTF-8） |
   | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | 表在 `csscascade::ua`，写成样式表的 `bookconv::uastyle::ua_css` |
-  | 一种 CSS 写法在掌阅、Move 上和 Kindle 比怎么样（验证过的结论，体检、怪癖测试书共用） | `crates/bookconv/data/css-quirks.toml` + `bookconv::audit`（新结论写进表里，别再只写在文档的文字里） |
+  | 一种 CSS 写法在掌阅、Move 上和 Kindle 比怎么样（验证过的结论，体检、怪癖测试书共用） | `crates/bookconv/data/css-quirks.toml` + `bookconv::audit`（新结论写进表里，别再只写在文档的文字里；按属性分节、第一条对上的算，挪顺序后跑 `cargo test -p bookconv no_dead_rows`，前后各用 `QUIRKS_SNAPSHOT=文件` 导出每种写法的结论比对，2026-10-16 整理时 33600 种一字不差） |
   | Kindle 上的样子：没写行高的倍数 `LH_EM`、行高下限、百分比折页宽 32em、空段折叠系数；全书正文行距 `base_line_height`、行高归一 `line_height_ratio`、正文字体 `body_font`；竖直长度换根 em `vertical_rem`；全书样式表 `book_css`；一章的元素表 `Chapter`（层叠只写一遍，`<body>` 里的元素按文档序编号，`matches_tags` 对上标签扫描才改源码）。KFX 写出器和掌阅、Move 的 `kindle_rules` 系列 pass 共用（2026-10-13 从写出器和 7 个 pass 收拢，产物逐字节不变） | `bookconv::kindle_model`（新的照 Kindle 改写的 pass 一律从 `Chapter` 起步，别再自己走 DOM、抄常量） |
   | 元素层叠出来的声明、来源（属性名 → 值；短键用快速哈希） | `csscascade::Decls`、`Origins`，一次算两张用 `Sheet::cascade_split`（2026-10-15） |
   | scraper 元素上查我们自己加的 `data-eink-*` 属性 | `kindle_model::attr_of`（scraper 的 `attr()` 对不在静态表里的名字要拿全局锁，多线程反而变慢） |
