@@ -7,6 +7,7 @@
 #   --no-tools  卸掉上面这些开发工具，只留 booklib
 #   kfx 包的 epub-to-kfx、kfx-dump、kfx-repack 不随 --tools 装，用 cargo run --release -p kfx --bin <命令> --
 #   都不加：沿用上次的选择（装过开发工具就一起升级，免得工具停在旧版本、和 booklib 的规则对不上）
+# 装了 fish 的另装 Tab 补全（${XDG_CONFIG_HOME:-~/.config}/fish/completions/booklib.fish）。
 # 重复运行 = 用当前代码重新编译安装（升级）。卸载见 ./uninstall.sh。
 # 先把要装的命令全部编译好再动安装目录：编译失败什么都不改；安装中途失败或被中断（Ctrl-C）就退回装之前的样子。
 # 同一个安装目录同时只能跑一个 install.sh / uninstall.sh（另一个在跑就停下）；装不进去（没有写权限）在编译之前就停下。
@@ -139,6 +140,19 @@ if [[ $tools -eq 0 ]]; then
 fi
 
 echo "✓ 已装到 ${bindir/#"$HOME"/\~}/"
+# fish 的 Tab 补全（命令、选项、--device= 的值、track 的路径按当前目录和书根目录、untrack 的跟踪条目）：装了 fish 才装，
+# 每次重写；同名文件不是我们写的（第一行不是这个标记）就不动
+if command -v fish >/dev/null; then
+  fish_comp=${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/booklib.fish
+  if [[ -e $fish_comp ]] && ! head -1 "$fish_comp" | grep -q '^# booklib 的 fish 补全'; then
+    echo "  没装 fish 补全：$fish_comp 已经有了、不是本脚本写的"
+  elif mkdir -p "$(dirname "$fish_comp")" && "$bindir/booklib" __complete fish >"$fish_comp.tmp" && mv -f "$fish_comp.tmp" "$fish_comp"; then
+    echo "✓ fish 补全装到 ${fish_comp/#"$HOME"/\~}（新开的 fish 生效）"
+  else
+    rm -f "$fish_comp.tmp"
+    echo "  fish 补全没装上（booklib 本身装好了）"
+  fi
+fi
 # 按 PATH 里实际找到的那个判断
 found=$(command -v booklib || true)
 if [[ -z $found ]]; then

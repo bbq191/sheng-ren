@@ -2,7 +2,7 @@
 # 卸载 install.sh 装的命令（booklib 以及 --tools 装的那些）。
 #
 # 用法: ./uninstall.sh
-# 只删命令本身。书库、设备上的书都不动，只告诉你书库在哪：不要了就自己删那个目录。
+# 只删命令本身（和 install.sh 装的 fish 补全）。书库、设备上的书都不动，只告诉你书库在哪：不要了就自己删那个目录。
 # 重复运行无害：已经卸了的再运行只是提示没找到。
 # 退出码：0 卸完（或本来就没装）；1 没有 cargo、用 root 运行、另一个 install.sh / uninstall.sh 在跑或卸载失败；2 参数不对。
 # 直接运行，别 source（set -e、cd 会留在你的 shell 里，出错时连 shell 一起退出）
@@ -50,6 +50,13 @@ else
       if other=$(foreign_owner "$b"); then echo "  还有一个 $b 不是从这里装的：$other（要删就 cargo uninstall 它）"; fi
     done
   done
+fi
+
+# install.sh 装的 fish 补全（第一行是它的标记才删）
+fish_comp=${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions/booklib.fish
+if [[ -f $fish_comp ]] && head -1 "$fish_comp" | grep -q '^# booklib 的 fish 补全'; then
+  rm -f "$fish_comp"
+  echo "✓ 已删 fish 补全 ${fish_comp/#"$HOME"/\~}"
 fi
 
 # 书库缺省位置和 booklib 一致：$BOOKLIB_DIR，否则 $XDG_DATA_HOME/booklib，否则 ~/.local/share/booklib（空值按没设处理）

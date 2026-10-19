@@ -5,6 +5,7 @@
 //! `meta --edit` 改单个 EPUB 文件、不碰书库，在 `meta_edit` 里（参数规则也不同：值可以是空字符串）。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
+mod complete;
 mod meta_edit;
 
 use library::{Added, BuildCounts, BuildEvent, BuildRun, Built, CoverResult, FailMemo, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo, TrackChange, UntrackChange};
@@ -513,6 +514,12 @@ fn meta_edit_args() -> Option<(Vec<OsString>, Option<PathBuf>)> {
 
 fn main() {
     bookconv::util::restore_sigpipe();
+    // 补全脚本调的，不在帮助里列（见 complete.rs）
+    if std::env::args_os().nth(1).is_some_and(|a| a == "__complete") {
+        let rest: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
+        complete::run(&rest);
+        return;
+    }
     if let Some((rest, library)) = meta_edit_args() {
         meta_edit::run(rest, library.unwrap_or_else(Library::default_root));
         return;
@@ -753,24 +760,47 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
 }
 
 /// `track`/`untrack` 的路径：相对路径先按当前目录找，找不到再按书根目录找（2026-10-19 用户要：`track 优秀漫画/死亡筆記`
-/// 不用每次写全路径）；绝对路径照旧。`track` 两边都没有时报错；`untrack` 的（原件可能已经删了）在书根目录下跟踪着也算。
+/// 不用每次写全路径）；绝对路径照旧。两处都先按原样找，没有再补 `.epub`、`.cbz`（同日用户要：`track 欧美侦探/罗杰疑案`；
+/// 两个都有时报错，要写上扩展名）。`track` 都找不到时报错；`untrack` 的（原件可能已经删了）在书根目录下跟踪着也算。
 fn resolve_track_path(lib: &Library, p: &Path, track: bool) -> Result<PathBuf, String> {
-    if p.is_absolute() || p.exists() {
-        return Ok(p.to_path_buf());
-    }
+    let tracked = if track { Vec::new() } else { lib.tracked() };
     let root = lib.books_root();
-    if let Some(q) = root.as_ref().map(|r| r.join(p)) {
-        if q.exists() || (!track && lib.tracked().contains(&q)) {
-            return Ok(q);
+    let bases: Vec<PathBuf> = if p.is_absolute() { vec![p.to_path_buf()] } else { std::iter::once(p.to_path_buf()).chain(root.as_ref().map(|r| r.join(p))).collect() };
+    for q in &bases {
+        if q.exists() || tracked.contains(q) {
+            return Ok(q.clone());
+        }
+        let found: Vec<PathBuf> = with_book_ext(q).into_iter().filter(|c| c.is_file() || tracked.contains(c)).collect();
+        match found.as_slice() {
+            [] => {}
+            [one] => return Ok(one.clone()),
+            _ => return Err(format!("✗ {} 有 .epub 和 .cbz 两本，写上扩展名", q.display())),
         }
     }
     if !track {
         return Ok(p.to_path_buf());
     }
     Err(match root {
-        Some(r) => format!("✗ 找不到 {}：当前目录和书根目录 {} 里都没有", p.display(), r.display()),
-        None => format!("✗ 找不到 {}", p.display()),
+        Some(r) if !p.is_absolute() => format!("✗ 找不到 {}：当前目录和书根目录 {} 里都没有（也试过补 .epub、.cbz）", p.display(), r.display()),
+        _ => format!("✗ 找不到 {}（也试过补 .epub、.cbz）", p.display()),
     })
+}
+
+/// 补上书的扩展名的两个候选（`罗杰疑案` → `罗杰疑案.epub`、`罗杰疑案.cbz`）；以 `/` 结尾的（写的是目录）不补。
+fn with_book_ext(p: &Path) -> Vec<PathBuf> {
+    let s = p.as_os_str();
+    if s.as_encoded_bytes().ends_with(b"/") {
+        return Vec::new();
+    }
+    ["epub", "cbz"]
+        .iter()
+        .map(|e| {
+            let mut o = s.to_owned();
+            o.push(".");
+            o.push(e);
+            PathBuf::from(o)
+        })
+        .collect()
 }
 
 /// 按设备列出跟踪范围：每台的目录、单本（给全部设备的标出来）。

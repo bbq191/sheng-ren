@@ -328,5 +328,25 @@ fn track_resolves_relative_paths_against_the_books_root() {
     assert!(common::stderr(&o).contains("当前目录和书根目录") , "{}", common::stderr(&o));
     let o = common::booklib(Some(&lib), &["untrack", "优秀漫画/死亡筆記"]);
     assert!(common::stdout(&o).contains("✓ 不再跟踪"), "{}", common::stdout(&o));
+    // 不写扩展名：补 .epub、.cbz；两个都有时要写上
+    let o = common::booklib(Some(&lib), &["track", "优秀漫画/死亡筆記/卷01"]);
+    assert!(common::stdout(&o).contains(&canon.join("优秀漫画/死亡筆記/卷01.epub").display().to_string()), "{}{}", common::stdout(&o), common::stderr(&o));
+    let o = common::booklib(Some(&lib), &["untrack", "优秀漫画/死亡筆記/卷01"]);
+    assert!(common::stdout(&o).contains("✓ 不再跟踪"), "{}", common::stdout(&o));
+    std::fs::write(book.join("优秀漫画/死亡筆記/卷01.cbz"), b"").unwrap();
+    let o = common::booklib(Some(&lib), &["track", "优秀漫画/死亡筆記/卷01"]);
+    assert!(common::stderr(&o).contains("写上扩展名"), "{}", common::stderr(&o));
+}
+
+/// fish 补全：`booklib __complete` 只读、不建书库。
+#[test]
+fn complete_is_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib")).env("BOOKLIB_DIR", &lib).args(["__complete", "tracked", ""]).output().unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert!(!lib.exists());
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib")).args(["__complete", "fish"]).output().unwrap();
+    assert!(common::stdout(&o).starts_with("# booklib 的 fish 补全"));
 }
 
