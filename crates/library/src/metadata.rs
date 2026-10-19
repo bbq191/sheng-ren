@@ -583,7 +583,45 @@ fn volume_suffix(title: &str) -> String {
     if matches!(unit, Some('册' | '冊' | '本')) && before != Some('第') {
         return String::new();
     }
-    if digits.is_empty() { String::new() } else { format!(" 第{digits}卷") }
+    if !digits.is_empty() {
+        return format!(" 第{digits}卷");
+    }
+    // 卷次后面还跟着卷名的（「伊藤潤二愛藏版 - 卷08 呻吟的排水管」）：卷名一起留着，不然一套书都叫一个名字
+    mid_volume(title).map_or_else(String::new, |(n, name)| if name.is_empty() { format!(" 第{n}卷") } else { format!(" 第{n}卷 {name}") })
+}
+
+/// 书名中间的卷次和后面的卷名：「卷08 呻吟的排水管」「第3卷：名字」「Vol.2 名字」→ (卷号, 卷名)。卷次前面得有书名。
+fn mid_volume(title: &str) -> Option<(String, String)> {
+    let c: Vec<char> = title.trim().chars().collect();
+    let digit_run = |i: usize| c[i..].iter().take_while(|d| d.is_ascii_digit()).count();
+    for i in 1..c.len() {
+        let (start, n) = match c[i] {
+            '卷' | '巻' => (i + 1, digit_run(i + 1)),
+            '第' => {
+                let n = digit_run(i + 1);
+                if n == 0 || !matches!(c.get(i + 1 + n), Some('卷' | '巻' | '册' | '冊' | '集' | '部')) {
+                    continue;
+                }
+                (i + 1, n)
+            }
+            'V' | 'v' if c[i..].iter().take(3).collect::<String>().eq_ignore_ascii_case("vol") => {
+                let s = i + 3 + c[i + 3..].iter().take_while(|d| matches!(d, '.' | ' ')).count();
+                (s, digit_run(s))
+            }
+            _ => continue,
+        };
+        if n == 0 {
+            continue;
+        }
+        let mut end = start + n;
+        if c[i] == '第' {
+            end += 1;
+        }
+        let digits: String = c[start..start + n].iter().collect();
+        let name: String = c[end..].iter().collect::<String>().trim_start_matches([' ', '　', '-', '—', '·', '：', ':', '、']).trim().to_string();
+        return Some((digits, name));
+    }
+    None
 }
 
 /// 修正后的书名（2026-10-12 用户定：书名用匹配到的网站书名，卷次照书里的补上；没找到的照书里的）：网站书名去掉「（共45册）」
@@ -816,6 +854,9 @@ mod tests {
         assert_eq!(t("哆啦A夢全彩版 - 卷02", "机器猫哆啦A梦（共45册）"), "机器猫哆啦A梦 第02卷", "网站书名的说明去掉");
         assert_eq!(corrected_title(&Meta { title: "嘯風山莊".into(), ..Default::default() }), "嘯風山莊", "没找到：照书里的");
         assert_eq!(t("杀死一只知更鸟（漫）", "杀死一只知更鸟"), "杀死一只知更鸟（漫）", "作品形式留着，不和小说撞名");
+        assert_eq!(t("伊藤潤二愛藏版 - 卷08 呻吟的排水管", "伊藤潤二愛藏版 08"), "伊藤潤二 第08卷 呻吟的排水管", "卷名留着");
+        assert_eq!(t("某书第3卷：风起", "某书"), "某书 第3卷 风起");
+        assert_eq!(t("Some Book Vol.2 Dawn", "Some Book"), "Some Book 第2卷 Dawn");
     }
 
     /// 版本的译者和书里的对不上（豆瓣第一个条目是李美华译本）：出版社、日期、ISBN 不补；书里的署名照样拆。
