@@ -30,6 +30,7 @@
 代码在 `wash::repair_entries`（清洗层）和 `optimize/streaming.rs`（文字书换成只修复的选项）。做的只有：
 
 - 不是 UTF-8 的 XHTML、OPF、NCX（GBK、Big5、UTF-16）按 BOM 或声明的编码转成 UTF-8，声明跟着改，字一个不变；认不出编码、解码出错的不动（2026-10-09，`wash::encoding`；测试书里没有这种文件，产物不变）；
+- 语言标错的改正（2026-10-19，v60，`wash::lang`）：按正文的字判，OPF `dc:language`、`<html>` 的 `lang`/`xml:lang` 和正文对不上的改成判出来的（《福尔摩斯探案全集》OPF 写的 `en`、《狼厅》正文文件 `lang="en"`），拿不准的不改；缺的照旧在规范整理里补；
 - 伪 DRM 剥离；文件名里有安卓存储不能用的字符的改名（链接跟着改，见[其它修复](#其它修复)）；
 - 指向书里不存在的文件的引用去掉（`<img>`、`@font-face` 的 `url()`——文件本来就没有，显示不出来）；
 - 一个标签上重复的 `id` 合并、跨文件重复的 id 改名（指向它的链接跟着改）；NCX 的 DOCTYPE、manifest id、`dtb:uid` 修正；
@@ -165,7 +166,7 @@ profile `repair_note_links`（只有 `xochitl` 开）。xochitl 只认同一文�
 
 清洗的最后一步（`wash/normalize.rs`），文字书（只修复也做）和漫画都做，只改格式，可见文字不动：
 
-- **OPF**：`version="3.0"`；补 `dcterms:modified`，值固定 `2000-01-01T00:00:00Z`（原书有就用原书的）——不取当前时间，产物逐字节确定；保证唯一标识指向一个有内容的 `<dc:identifier>`；缺 `dc:language` 就补；EPUB 2 的 `opf:role` 等写法改成 `<meta refines>`。
+- **OPF**：`version="3.0"`；补 `dcterms:modified`，值固定 `2000-01-01T00:00:00Z`（原书有就用原书的）——不取当前时间，产物逐字节确定；保证唯一标识指向一个有内容的 `<dc:identifier>`；缺 `dc:language` 就补（标错的在清洗开头已经改正，见上）；EPUB 2 的 `opf:role` 等写法改成 `<meta refines>`。
 - **目录**：`toc.ncx` 保留（xochitl 靠它找目录）；没有 nav 的按 NCX 生成 `nav.xhtml`，只有 nav 的反过来生成 NCX；`<guide>` 同时写成 nav 里隐藏的 `landmarks`。
 - **manifest 的 `properties`**：按最终内容标 `svg`、`mathml`、`scripted`、`remote-resources`。
 - **XHTML 修成合法 XML**（标签未关闭这类语法错误只修复时也修，2026-10-09 用户定）：DOCTYPE 换成 `<!DOCTYPE html>`；命名实体换成数字引用（HTML5 的 2231 个都认；HTML5 也没有的按 HTML 的理解是字面文字，写成 `&amp;foo;`）；裸 `&`、`<` 转义；XML 不允许的控制字符去掉（《金庸全集》原书一处 U+0010）；空元素自闭合、属性补引号、根元素补命名空间；多余的闭合标签去掉、`</body>` 前补上里面没关的元素（《狼厅》版权页，2026-10-08，v53），只在改完整份完全配平时才这样改。

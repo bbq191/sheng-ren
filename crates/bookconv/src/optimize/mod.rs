@@ -143,7 +143,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - 59（2026-10-16，用户在 Move、掌阅上比过）：正文插图中间调加深（profile `image_gamma`，掌阅、Move 1.3；只修复的书也做，
 ///   「图片不动」的例外）：正文 `<img>`/SVG `<image>` 用到、不在 CSS 里、内容是灰度、短边至少 200 像素、不透明的 JPEG/PNG
 ///   （`imgopt::darken_gray_image`）。金庸、福尔摩斯等带灰度插图的书变；Kindle 不开，产物不变。
-pub const OPTIMIZE_VERSION: &str = "59";
+/// - 60（2026-10-19，用户定：缺 `dc:language` 时补，标错了改正）：按正文的字判语言，OPF 的 `dc:language`、`<html>` 的
+///   `lang`/`xml:lang` 和正文对不上的改正（`wash/lang.rs`；三台都做，只修复的书也做）。《狼厅》72 个正文文件写着 `lang="en"`，
+///   Kindle 产物里 33 个样式是 `en`（按英文排中文）。
+pub const OPTIMIZE_VERSION: &str = "60";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -155,7 +158,8 @@ pub const OPTIMIZE_VERSION: &str = "59";
 /// - c54（2026-10-10 审计）：两路共用的清洗层修复（样式表开头的 `@charset`、CSS 文本工具收成一份的边角变化，见 v55）。
 /// - c55（2026-10-16，用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45）：内容是灰度的漫画页中间调加深（profile `comic_gamma`，
 ///   掌阅、Move 1.45；掌阅黑白屏全部页都转成灰度、都加深，Move 彩页原样）。Kindle 不开，产物不变。
-pub const COMIC_VERSION: &str = "55";
+/// - c56（2026-10-19）：两路共用的清洗层改正标错的语言（见 v60）。
+pub const COMIC_VERSION: &str = "56";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，

@@ -48,6 +48,7 @@ mod html5fix;
 mod ids;
 mod kindle_images;
 mod kindle_rules;
+mod lang;
 mod top_spacer;
 mod hidden;
 mod break_margin;
@@ -470,6 +471,8 @@ pub struct WashReport {
     pub ncx_generated: usize,
     /// 不是 UTF-8、转成了 UTF-8 的 XHTML/OPF/NCX 个数。见 `encoding.rs`。
     pub transcoded_to_utf8: usize,
+    /// 标错、改正了的语言（OPF 的 `dc:language`、`<html>` 的 `lang`/`xml:lang`，按处数）。见 `lang.rs`。
+    pub languages_fixed: usize,
 }
 
 
@@ -515,6 +518,8 @@ fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> 
     strip_pseudo_drm(entries, &mut rep)?;
     // 文件名有安卓存储不能用的字符的先改名：后面各步按条目名找文件
     safe_names::rename_unsafe_entries(entries, &mut rep);
+    // 语言标错的先改正：后面补缺的语言、目录标题都按书的语言
+    lang::fix_languages(entries, &mut rep);
     if opts.mode.is_repair() {
         repair_entries(entries, opts, &mut rep);
         return Ok(rep);
@@ -834,6 +839,7 @@ fn book_lang_tag(entries: &[Entry], opf_idx: Option<usize>, lang: LangMode) -> S
 /// `dtb:uid` 对齐 OPF。给 `booklib meta --edit` 用（2026-09-30 用户：改元数据写出的书也要和 booklib 一样符合 EPUB 3）。不做排版、目录等清洗。
 pub fn normalize_epub3(entries: &mut Vec<Entry>) -> WashReport {
     let mut rep = WashReport::default();
+    lang::fix_languages(entries, &mut rep);
     let lang = detect_dominant_script(entries);
     let lang_tag = book_lang_tag(entries, find_opf(entries), lang);
     strip_ncx_doctype(entries, &mut rep);
