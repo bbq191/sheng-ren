@@ -33,7 +33,10 @@ fn usage_errors_exit_1() {
     expect(booklib(lib, &["list", "--device="]), 1, "--device= 后面要写值");
     expect(booklib(lib, &["add"]), 1, "add 要给文件或网址");
     expect(booklib(lib, &["remove"]), 1, "remove 要给 id");
-    expect(booklib(lib, &["track"]), 1, "track 要给目录");
+    expect(booklib(lib, &["untrack"]), 1, "untrack 要给目录或书");
+    expect(booklib(lib, &["untrack", "--root=x", "a"]), 1, "untrack 不认识选项 --root=");
+    expect(booklib(lib, &["track", "--root=x", "a"]), 1, "--root= 单独用");
+    expect(booklib(lib, &["track", "--device=nosuch", "a"]), 1, "没有阅读模式 nosuch");
     // meta 必须选 --fetch 或 --edit；两种模式的选项不能混用
     expect(booklib(lib, &["meta"]), 1, "--fetch");
     expect(booklib(lib, &["meta", "白夜行"]), 1, "--edit");
@@ -70,7 +73,7 @@ fn help_prints_to_stdout_and_exits_0_without_touching_the_library() {
     let out = stdout(&booklib(Some(&lib), &["meta", "--help"]));
     assert!(out.contains("meta --fetch") && out.contains("meta --show") && out.contains("meta --edit") && !out.contains(" sync "), "{out}");
     let out = stdout(&booklib(Some(&lib), &["track", "-h"]));
-    assert!(out.contains(" track <目录>") && !out.contains("untrack"), "{out}");
+    assert!(out.contains(" track [--device=") && out.contains("<目录或书>") && !out.contains("untrack"), "{out}");
     expect(booklib(Some(&lib), &["help", "frobnicate"]), 1, "不认识的命令 frobnicate");
     // build 已并入 sync：看它的帮助也给出这句提示
     for args in [&["help", "build"][..], &["build", "--help"]] {

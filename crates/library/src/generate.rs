@@ -239,16 +239,13 @@ impl Library {
         dirs
     }
 
-    /// 原件在跟踪目录里的话：(跟踪目录, 原件所在目录相对它的路径)。
-    fn tracked_rel(&self, meta: &Meta) -> Option<(PathBuf, PathBuf)> {
+    /// 原件被跟踪着（有给这台设备的条目覆盖它）的话：(子目录以哪个目录为准（书根目录）, 设备上的子目录)，见
+    /// [`crate::sources::Sources::placement`]。
+    fn tracked_rel(&self, meta: &Meta, device: &str) -> Option<(PathBuf, PathBuf)> {
         if meta.source() == crate::Source::Stored || meta.source_path.is_empty() {
             return None;
         }
-        let src = Path::new(&meta.source_path);
-        let sources = self.records.sources.get(&self.sources_path());
-        let d = sources.dirs().iter().find(|d| src.starts_with(d))?.clone();
-        let rel = src.parent().and_then(|p| p.strip_prefix(&d).ok()).unwrap_or(Path::new("")).to_path_buf();
-        Some((d, rel))
+        self.records.sources.get(&self.sources_path()).placement(Path::new(&meta.source_path), device)
     }
 
     /// 这本书在该模式下的产物根目录和产物所在目录（绝对路径），见模块注释。`target` 是 MTP 设备时根目录是设备上的
@@ -259,17 +256,18 @@ impl Library {
             _ => None,
         };
         let lib_root = device_root.clone().unwrap_or_else(|| std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone()).join("output").join(&device.id));
-        let Some((d, rel)) = self.tracked_rel(meta) else {
+        let Some((d, rel)) = self.tracked_rel(meta, &device.id) else {
             return Ok((lib_root.clone(), lib_root));
         };
         let on_device = device_root.is_some();
         let root = match device_root {
             Some(r) => r,
+            // 电脑上：书根目录旁的 `<模式 id>/`
             None => {
                 let Some(parent) = d.parent() else { return Ok((lib_root.clone(), lib_root)) };
                 let root = parent.join(&device.id);
                 let sources = self.records.sources.get(&self.sources_path());
-                if let Some(t) = sources.dirs().iter().find(|t| crate::sources::overlaps(&root, t)) {
+                if let Some(t) = sources.dirs().find(|t| crate::sources::overlaps(&root, t)) {
                     return Err(output_overlap(&root, t));
                 }
                 root
@@ -314,6 +312,25 @@ impl Library {
             self.records.states.put(&sp, state)?;
         }
         Ok(())
+    }
+
+    /// 这本书不再给这台设备（从它的跟踪范围里拿掉了）：删掉它在这台上的产物（Move 上的进回收站），从这台的生成记录里去掉；
+    /// 删不掉的记进 `orphans`，下次接上再删。这台上本来就没有返回 `false`。书库里的书不动。
+    pub fn retract(&self, id: &str, device: &Profile) -> Result<bool, String> {
+        let sp = self.state_path(&device.id);
+        let state = self.records.states.get(&sp);
+        let Some(entry) = state.books.get(id).cloned() else { return Ok(false) };
+        let mut state = (*state).clone();
+        state.books.remove(id);
+        let t = self.target(device);
+        state.delete_into_orphans(entry.placements(), t.as_ref().as_ref().ok(), self.devices.mtp_base());
+        self.records.states.put(&sp, state)?;
+        Ok(true)
+    }
+
+    /// 这台设备的生成记录里有这本书。
+    pub fn has_output(&self, id: &str, device: &str) -> bool {
+        self.records.states.get(&self.state_path(device)).books.contains_key(id)
     }
 
     /// 删了的书留在设备上的产物（当时设备没接上）：设备接上了就删。返回删掉几个。
@@ -530,7 +547,7 @@ impl Library {
         }
         // 放进哪个文件夹：原件所在目录相对跟踪目录的路径（`a/b`：书架服务按层建，先「a」、再它里面的「b」，2026-10-07 用户定）；
         // 跟踪目录顶层的书、add 进来的书、网址书放书库根（空）
-        let folder = self.tracked_rel(meta).map(|(_, rel)| rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_default();
+        let folder = self.tracked_rel(meta, &device.id).map(|(_, rel)| rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_default();
         let name = format!("{}.{}", bookconv::util::sanitize_filename(&crate::metadata::corrected_title(meta), &meta.id), format.ext());
         let loc = if folder.is_empty() { PathBuf::from(&name) } else { Path::new(&folder).join(&name) };
         let sp = self.state_path(&device.id);

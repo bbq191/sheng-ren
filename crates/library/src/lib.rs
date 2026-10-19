@@ -55,7 +55,7 @@ pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus, Step};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
-pub use sources::{book_files, Prune, SyncEvent, SyncMemo, SyncReport, SUPPORTED_EXTS};
+pub use sources::{book_files, Prune, SyncEvent, SyncMemo, SyncReport, TrackChange, Tracked, UntrackChange, SUPPORTED_EXTS};
 pub use transfer::{Done, Event, Pipeline, Transfer};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

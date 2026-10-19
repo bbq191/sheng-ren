@@ -32,6 +32,9 @@ pub enum BuildEvent {
     RemoveFlushFailed { device: String, error: String },
     /// 设备没接上，这一轮不传（`--watch` 时每台只报一次）。
     DeviceAbsent { device: String, reason: String },
+    /// 不再给这台设备的书（从它的跟踪范围里拿掉了）：从设备上删掉了。
+    Retracted { device: String, title: String },
+    RetractFailed { device: String, title: String, error: String },
     /// 一本书一个模式的结果。
     Built { device: String, title: String, built: Built },
     Failed { device: String, title: String, error: String },
@@ -51,13 +54,15 @@ pub struct BuildCounts {
     pub adopted: usize,
     pub moved: usize,
     pub up_to_date: usize,
+    /// 不在跟踪范围、从设备上删掉的。
+    pub retracted: usize,
     pub failed: usize,
 }
 
 impl BuildCounts {
     /// 有没有生成、挪动、失败（`--watch` 时都没有就不出声）。
     pub fn any(&self) -> bool {
-        self.written + self.same + self.adopted + self.moved + self.failed > 0
+        self.written + self.same + self.adopted + self.moved + self.retracted + self.failed > 0
     }
 
     fn count(&mut self, b: &Built) {
@@ -98,6 +103,29 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                     report(BuildEvent::DeviceAbsent { device: device.id.clone(), reason });
                 }
                 absent_reported.insert(device.id.clone());
+            }
+        }
+    }
+    // 不在这台设备的跟踪范围里的书：以前传过的从设备上删掉（2026-10-19 用户定），这一轮也不生成
+    let mut outside: HashSet<(&str, &str)> = HashSet::new();
+    for m in books {
+        for device in &live {
+            if lib.wants(m, &device.id) {
+                continue;
+            }
+            outside.insert((m.id.as_str(), device.id.as_str()));
+            if !lib.has_output(&m.id, &device.id) {
+                continue;
+            }
+            match lib.retract(&m.id, device) {
+                Ok(_) => {
+                    counts.retracted += 1;
+                    report(BuildEvent::Retracted { device: device.id.clone(), title: m.title.clone() });
+                }
+                Err(error) => {
+                    counts.failed += 1;
+                    report(BuildEvent::RetractFailed { device: device.id.clone(), title: m.title.clone(), error });
+                }
             }
         }
     }
@@ -162,7 +190,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
     let mut later: Vec<(&Meta, &Profile)> = Vec::new();
     let mut deferred: HashMap<&str, usize> = HashMap::new();
     for m in books.iter().filter(|m| m.supported()) {
-        for device in &live {
+        for device in live.iter().filter(|d| !outside.contains(&(m.id.as_str(), d.id.as_str()))) {
             while let Some(x) = pipe.next(false) {
                 landed(&mut counts, &mut fails, report, x);
             }

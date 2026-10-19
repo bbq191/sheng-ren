@@ -7,7 +7,7 @@
 
 mod meta_edit;
 
-use library::{Added, BuildCounts, BuildEvent, BuildRun, Built, CoverResult, FailMemo, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo};
+use library::{Added, BuildCounts, BuildEvent, BuildRun, Built, CoverResult, FailMemo, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo, TrackChange, UntrackChange};
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -69,16 +69,40 @@ const COMMANDS: &[Command] = &[
     },
     Command {
         name: "track",
-        synopsis: &["track <目录>…"],
-        brief: "跟踪书目录（递归，收 .epub、.cbz）：之后 sync 把它镜像进书库",
-        detail: "只需登记一次。和已跟踪的目录互相包含（父目录或子目录）的会被拒绝。",
-        opts: &[],
-        flags: &[],
+        synopsis: &["track [--device=模式,…] [--top] <目录或书>…", "track --root=目录", "track"],
+        brief: "跟踪书目录（递归，收 .epub、.cbz）或单本书，可以只给某几台设备：之后 sync 把它镜像进书库",
+        detail: "\
+只需登记一次。目录和单本可以混着写；不写 --device 给全部设备，每台设备的跟踪范围可以不同。
+设备上的放法：缺省照书库结构（相对书根目录：book/漫画/死亡筆記/卷01.epub → 漫画/死亡筆記/卷01）；
+--top 从这一层起（目录 book/漫画/死亡筆記 → 死亡筆記/卷01，单本放根目录），对这条命令里的路径都生效。
+同一本书被一台设备的几个条目覆盖时，用最具体的那个（单本 > 深的目录）的放法。
+书根目录第一次 track 时定下（跟踪的目录；单本是它所在的目录），跟踪的都要在它里面；--root=目录 换书根
+（设备上的书下次 sync 挪到新位置）。已经在跟踪的再 track：设备范围加上新给的，放法改成这次的。
+不写目录、书：按设备列出跟踪范围。
+例子：
+  booklib track ~/books                                               全部设备，照书库结构
+  booklib track --device=xochitl --top ~/books/漫画/死亡筆記 ~/books/文字/飘.epub   Move：「死亡筆記」放最上层、《飘》放根目录
+  booklib track --device=kindle ~/books/文字/科幻/三体.epub                Kindle 只要这一本",
+        opts: &["device", "root"],
+        flags: &["top"],
         check: check_options,
         lock: always,
         run: cmd_track,
     },
-    Command { name: "untrack", synopsis: &["untrack <目录>…"], brief: "不再跟踪这个目录（已入库的书和设备上的产物都保留）", detail: "", opts: &[], flags: &[], check: check_options, lock: always, run: cmd_untrack },
+    Command {
+        name: "untrack",
+        synopsis: &["untrack [--device=模式,…] <目录或书>…"],
+        brief: "不再跟踪：下次 sync 把其中的书连同设备上的产物删掉（原件不动）；给了 --device 只从这几台上删",
+        detail: "\
+不写 --device：整条去掉，里面没被别的跟踪条目覆盖的书下次 sync 从书库删掉（连同设备上的，Move 上进回收站）。
+写了 --device：只从这几台的范围里拿掉，下次 sync 从这几台上删掉，别的设备照旧。
+跟踪目录里的单本不能单独去掉（要么 untrack 整个目录）。删之前想先看看：sync --keep 只报告、不删。",
+        opts: &["device"],
+        flags: &[],
+        check: check_options,
+        lock: always,
+        run: cmd_untrack,
+    },
     Command {
         name: "add",
         synopsis: &["add <文件或网址>…"],
@@ -99,6 +123,7 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层，Move �
         detail: "\
 书：书名片段、id 或原件路径；不写 = 全部。每本一行（id、格式、书名、作者），下面每个模式一行：
   ✓ 最新   ⚠ 过期（下次 sync 会重新生成）   ? 未知（设备没接上，或设备上那本不在了）
+  ✗ 不在这台的跟踪范围（下次 sync 从设备上删）
 Move 上的显示成 xochitl:文件夹/文件名（只看记录，不连 Move）。",
         opts: &[],
         flags: &[],
@@ -367,7 +392,8 @@ fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Opt
 fn counts_summary(c: &BuildCounts) -> String {
     let same = if c.same > 0 { format!("，重新生成但内容没变（没再传）{} 本", c.same) } else { String::new() };
     let adopted = if c.adopted > 0 { format!("，认领设备上已有的 {} 本", c.adopted) } else { String::new() };
-    format!("生成：重新生成并传上 {} 本{same}{adopted}，挪位置 {} 本，已是最新 {} 本，失败 {} 本", c.written, c.moved, c.up_to_date, c.failed)
+    let retracted = if c.retracted > 0 { format!("，不在跟踪范围、从设备上删了 {} 本", c.retracted) } else { String::new() };
+    format!("生成：重新生成并传上 {} 本{same}{adopted}，挪位置 {} 本，已是最新 {} 本{retracted}，失败 {} 本", c.written, c.moved, c.up_to_date, c.failed)
 }
 
 /// 一轮生成里的一件事显示成一行（`quiet` 时没变化的不报）；`Err` 的算失败（退出码 2）。
@@ -377,6 +403,8 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
         BuildEvent::RemovedFlushed { device, count } => Ok(format!("✓ [{device}] 删掉了 {count} 本已从书库删除的书")),
         BuildEvent::RemoveFlushFailed { device, error } => Err(format!("✗ [{device}] 删已从书库删除的书：{error}")),
         BuildEvent::DeviceAbsent { device, reason } => Ok(format!("- [{device}] {reason}，这次不传")),
+        BuildEvent::Retracted { device, title } => Ok(format!("✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删了")),
+        BuildEvent::RetractFailed { device, title, error } => Err(format!("✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删失败：{error}")),
         BuildEvent::Built { device, title, built } => return built_line(&device, &title, built, quiet).map(Ok),
         BuildEvent::Failed { device, title, error } => Err(format!("✗ [{device}] {title}: {error}")),
         BuildEvent::Progress(line) => Ok(line),
@@ -623,6 +651,7 @@ fn cmd_list(ctx: &Ctx) {
                 None => "? 未知",
             };
             let shown = o.path.strip_prefix(lib.root()).map(|p| p.to_path_buf()).unwrap_or(o.path.clone());
+            let state = if lib.wants(&m, &o.device) { state } else { "✗ 不在这台的跟踪范围（下次 sync 从设备上删）" };
             println!("      {:<20} {state}  {}", o.device, shown.display());
             // 体检（生成时记下的）：和 Kindle 不一样又没处理的逐条列出，没验证过的合成一行
             for line in o.audit.iter().filter(|l| l.starts_with('✗')) {
@@ -659,23 +688,93 @@ fn cmd_untrack(ctx: &Ctx) {
     track_or_untrack(ctx, false);
 }
 
+/// `track`/`untrack` 的 `--device=`：模式 id（不写、写了 all 是空＝全部设备）。写了不存在的模式报用法错。
+fn device_ids(args: &Args, lib: &Library) -> Vec<String> {
+    let all = args.opts.iter().filter(|(k, _)| k == "device").flat_map(|(_, v)| v.split(',')).any(|v| v.trim() == "all");
+    if all || !args.opts.iter().any(|(k, _)| k == "device") {
+        return Vec::new();
+    }
+    parse_devices(args, lib).into_iter().map(|p| p.id.clone()).collect()
+}
+
 fn track_or_untrack(ctx: &Ctx, track: bool) {
     let lib = ctx.lib;
-    if ctx.rest().is_empty() {
-        usage_error(&format!("{} 要给目录", ctx.cmd));
+    if let Some(r) = ctx.args.opt("root").filter(|_| track) {
+        if !ctx.rest().is_empty() || ctx.args.opts.iter().any(|(k, _)| k == "device") || ctx.args.has("top") {
+            usage_error("--root= 单独用：booklib track --root=目录");
+        }
+        ctx.report(lib.set_books_root(Path::new(r)).map(|changed| if changed { format!("✓ 书根目录设为 {r}（已传的书下次 sync 挪到按它算的位置）") } else { format!("= 书根目录本来就是 {r}") }).map_err(|e| format!("✗ {e}")));
+        print_tracked(lib);
+        return;
     }
+    if ctx.rest().is_empty() {
+        if track {
+            print_tracked(lib);
+            return;
+        }
+        usage_error(&format!("{} 要给目录或书", ctx.cmd));
+    }
+    let devices = device_ids(ctx.args, lib);
+    let top = ctx.args.has("top");
+    let to = if devices.is_empty() { "全部设备".to_string() } else { devices.join("、") };
     for d in ctx.rest() {
         let d = Path::new(d);
+        let kind = if d.is_file() { "单本" } else { "目录" };
+        let how = match (top, kind) {
+            (false, _) => "，照书库结构",
+            (true, "单本") => "，放根目录",
+            (true, _) => "，从这一层起",
+        };
         ctx.report(if track {
-            lib.track(d).map(|new| if new { format!("✓ 开始跟踪 {}（运行 booklib sync 入库）", d.display()) } else { format!("= 已在跟踪 {}", d.display()) })
+            lib.track_with(d, &devices, top).map(|c| match c {
+                TrackChange::New => format!("✓ 开始跟踪{kind} {}，给 {to}{how}（运行 booklib sync 入库、传）", d.display()),
+                TrackChange::Changed => format!("✓ 已在跟踪{kind} {}，加上 {to}{how}（运行 booklib sync 生效）", d.display()),
+                TrackChange::Same => format!("= 已在跟踪{kind} {}", d.display()),
+            })
         } else {
-            lib.untrack(d).map(|had| if had { format!("✓ 不再跟踪 {}（已入库的书保留）", d.display()) } else { format!("= 本来就没在跟踪 {}", d.display()) })
+            lib.untrack_with(d, &devices).map(|c| match c {
+                UntrackChange::Removed(n) => format!("✓ 不再跟踪 {}：下次 sync 从书库删掉 {n} 本（按上次 sync 看到的算；连同设备上的，还被别的跟踪条目覆盖的照留）", d.display()),
+                UntrackChange::Narrowed(n) => format!("✓ {} 不再给 {to}：下次 sync 从这几台上删掉 {n} 本（按上次 sync 看到的算）", d.display()),
+                UntrackChange::NotTracked => format!("= 本来就没在跟踪 {}{}", d.display(), if devices.is_empty() { String::new() } else { format!("（给 {to} 的）") }),
+            })
         }
         .map_err(|e| format!("✗ {e}")));
     }
-    if track {
-        for d in lib.tracked() {
-            println!("  跟踪中: {}", d.display());
+    print_tracked(lib);
+}
+
+/// 按设备列出跟踪范围：每台的目录、单本（给全部设备的标出来）。
+fn print_tracked(lib: &Library) {
+    let entries = lib.tracked_entries();
+    if entries.is_empty() {
+        println!("  还没有跟踪任何目录或书");
+        return;
+    }
+    if let Some(r) = lib.books_root() {
+        println!("  书根目录：{}（设备上按相对它的路径放）", r.display());
+    }
+    for p in lib.devices().iter() {
+        let mine: Vec<&library::Tracked> = entries.iter().filter(|e| e.for_device(&p.id)).collect();
+        println!("  {}：{}", p.id, if mine.is_empty() { "（没有）" } else { "" });
+        for e in &mine {
+            let kind = if e.file { "单本" } else { "目录" };
+            let how = match (e.top, e.file) {
+                (true, true) => "，放根目录",
+                (true, false) => "，从这一层起",
+                (false, _) => "",
+            };
+            let scope = if e.devices.is_empty() { "（全部设备）" } else { "" };
+            println!("    {kind} {}{how}{scope}", e.path.display());
+        }
+        // 从这一层起的目录在设备上同名：会并进同一个文件夹（书名也一样的，后来的那本带 id 后缀），只提示
+        let mut seen: std::collections::BTreeMap<String, Vec<&Path>> = std::collections::BTreeMap::new();
+        for e in mine.iter().filter(|e| e.top && !e.file) {
+            if let Some(n) = e.path.file_name() {
+                seen.entry(n.to_string_lossy().to_lowercase()).or_default().push(&e.path);
+            }
+        }
+        for (name, paths) in seen.iter().filter(|(_, v)| v.len() > 1) {
+            println!("    ⚠ 设备上会并进同一个文件夹「{name}」：{}", paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("、"));
         }
     }
 }
@@ -865,6 +964,8 @@ impl SyncState {
             SyncEvent::Updated(p, m, old) => println!("↻ 更新 {}  {} ← {old}  ({})", m.id, m.title, p.display()),
             SyncEvent::Missing(p, t, true) => println!("✗ 原件已删，书库里也删了（连同产物）  {t}  ({})", p.display()),
             SyncEvent::Missing(p, t, false) => println!("? 原件不在了（--keep，这次没从书库删）  {t}  ({})", p.display()),
+            SyncEvent::Released(p, t, true) => println!("✗ 不再跟踪，书库里删了（连同产物）  {t}  ({})", p.display()),
+            SyncEvent::Released(p, t, false) => println!("? 不再跟踪（--keep，这次没从书库删）  {t}  ({})", p.display()),
             SyncEvent::Failed(p, e) => ctx.fail_line(&format!("✗ {}: {e}", p.display())),
             // 算失败（退出码 2）：这次同步不完整
             SyncEvent::Unreadable(p, e) => ctx.fail_line(&format!("✗ 目录读不了，里面的书这次没同步（已登记的原样保留，不删）：{}（{e}）", p.display())),
@@ -872,10 +973,11 @@ impl SyncState {
         let changed = r.as_ref().map_or(true, |r| r.added + r.updated + r.pruned > 0);
         match r {
             // --watch 时没变化就不出声
-            Ok(r) if plan.watch.is_some() && r.added + r.updated + r.missing + r.failed + r.unreadable == 0 => {}
+            Ok(r) if plan.watch.is_some() && r.added + r.updated + r.missing + r.released + r.failed + r.unreadable == 0 => {}
             Ok(r) => {
                 let unreadable = if r.unreadable > 0 { format!("，读不了的目录 {}", r.unreadable) } else { String::new() };
-                println!("原件：新增 {}，改过 {}，没变 {}，不在了 {}（从书库删了 {}），出错 {}{unreadable}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed)
+                let released = if r.released > 0 { format!("，不再跟踪 {}", r.released) } else { String::new() };
+                println!("原件：新增 {}，改过 {}，没变 {}，不在了 {}{released}（从书库删了 {}），出错 {}{unreadable}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed)
             }
             Err(e) => ctx.report(Err(e)),
         }
