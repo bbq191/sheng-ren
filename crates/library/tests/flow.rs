@@ -1496,13 +1496,19 @@ fn changed_original_replaces_device_copies_in_place() {
 
 /// 一轮生成（`sync` 的第二步），返回计数和报的事件（一行一件）。
 fn build_round(lib: &Library, devices: &[&profile::Profile]) -> (library::BuildCounts, Vec<String>) {
+    build_round_keep(lib, devices, false)
+}
+
+/// 同 [`build_round`]，`keep` 是 `sync --keep`（不在范围的只报告、不删）。
+fn build_round_keep(lib: &Library, devices: &[&profile::Profile], keep: bool) -> (library::BuildCounts, Vec<String>) {
     let books = lib.list();
     let (mut skipped, mut absent) = (std::collections::HashSet::new(), std::collections::HashSet::new());
-    let run = library::BuildRun { lib, devices, books: &books, force: false, fails: None, skipped: &mut skipped, absent_reported: &mut absent };
+    let run = library::BuildRun { lib, devices, books: &books, force: false, keep, fails: None, skipped: &mut skipped, absent_reported: &mut absent };
     let mut ev = Vec::new();
     let counts = library::build_all(run, &mut |e| {
         ev.push(match e {
             library::BuildEvent::Retracted { device, title } => format!("retracted {device} {title}"),
+            library::BuildEvent::Outside { device, title } => format!("outside {device} {title}"),
             library::BuildEvent::Failed { device, title, error } => format!("failed {device} {title}: {error}"),
             library::BuildEvent::Built { device, title, .. } => format!("built {device} {title}"),
             _ => String::new(),
@@ -1574,6 +1580,9 @@ fn per_device_scope_with_mixed_dirs_and_single_books() {
     build_round(&lib, &devices);
     assert!(kd.join("漫画/死亡筆記/卷01.kfx").is_file());
     assert_eq!(lib.untrack_with(&book.join("漫画/死亡筆記/卷01.epub"), &ids(&["kindle"])).unwrap(), UntrackChange::Removed(0), "还被 --top 的目录覆盖：书库里不删");
+    let (c, ev) = build_round_keep(&lib, &devices, true);
+    assert_eq!(c.retracted, 0, "{ev:?}");
+    assert!(ev.iter().any(|e| e == "outside kindle 卷01") && kd.join("漫画/死亡筆記/卷01.kfx").is_file(), "--keep 只报告: {ev:?}");
     let (c, ev) = build_round(&lib, &devices);
     assert_eq!(c.retracted, 1, "{ev:?}");
     assert!(ev.iter().any(|e| e == "retracted kindle 卷01"), "{ev:?}");

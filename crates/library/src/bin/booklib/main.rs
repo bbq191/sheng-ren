@@ -53,7 +53,7 @@ const COMMANDS: &[Command] = &[
   --force          选中的书（没选就是全部）重新生成；和设备上一样的照样不传
   --no-build       只同步，不生成、不传（不能和 --device、--force、书一起用）
   --no-meta        这一次不联网补元数据
-  --keep           这一次原件不在了的只报告，不从书库删
+  --keep           这一次原件不在了、不再跟踪的只报告，不从书库和设备上删
   --watch[=秒]     一直运行，每隔几秒（缺省 60）看一次，原件有变化或接上设备就处理（不能和书、--force 一起用）
   书…              只处理这几本：书名片段、id，或原件路径（文件，或目录 = 下面所有的书）
 
@@ -403,6 +403,7 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
         BuildEvent::RemovedFlushed { device, count } => Ok(format!("✓ [{device}] 删掉了 {count} 本已从书库删除的书")),
         BuildEvent::RemoveFlushFailed { device, error } => Err(format!("✗ [{device}] 删已从书库删除的书：{error}")),
         BuildEvent::DeviceAbsent { device, reason } => Ok(format!("- [{device}] {reason}，这次不传")),
+        BuildEvent::Outside { device, title } => Ok(format!("? [{device}] {title}：不在这台的跟踪范围了（--keep，这次没从设备上删）")),
         BuildEvent::Retracted { device, title } => Ok(format!("✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删了")),
         BuildEvent::RetractFailed { device, title, error } => Err(format!("✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删失败：{error}")),
         BuildEvent::Built { device, title, built } => return built_line(&device, &title, built, quiet).map(Ok),
@@ -1043,6 +1044,7 @@ impl SyncState {
             devices: &plan.devices,
             books: &books,
             force: plan.force,
+            keep: plan.prune == library::Prune::Keep,
             fails: plan.watch.is_some().then_some(&mut self.fails),
             skipped: &mut self.skipped,
             absent_reported: &mut self.absent_reported,

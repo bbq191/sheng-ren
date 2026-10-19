@@ -15,6 +15,8 @@ pub struct BuildRun<'a> {
     pub devices: &'a [&'a Profile],
     pub books: &'a [Meta],
     pub force: bool,
+    /// `--keep`：不在这台跟踪范围里的书只报告（[`BuildEvent::Outside`]），不从设备上删。
+    pub keep: bool,
     /// 跨轮记住的生成失败（[`FailMemo`]）。不是 `--watch` 时 `None`。
     pub fails: Option<&'a mut FailMemo>,
     /// 报过的不再支持的格式（早期版本收的 MOBI/PDF 等）的书：每本只报一次。
@@ -34,6 +36,8 @@ pub enum BuildEvent {
     DeviceAbsent { device: String, reason: String },
     /// 不再给这台设备的书（从它的跟踪范围里拿掉了）：从设备上删掉了。
     Retracted { device: String, title: String },
+    /// 不在这台设备的跟踪范围里、设备上还有，`--keep` 这一次没删。
+    Outside { device: String, title: String },
     RetractFailed { device: String, title: String, error: String },
     /// 一本书一个模式的结果。
     Built { device: String, title: String, built: Built },
@@ -78,7 +82,7 @@ impl BuildCounts {
 
 /// 按模式 × 书逐本生成并送到设备上（没变化的跳过）。设备没接上的模式跳过。
 pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCounts {
-    let BuildRun { lib, devices, books, force, mut fails, skipped, absent_reported } = run;
+    let BuildRun { lib, devices, books, force, keep, mut fails, skipped, absent_reported } = run;
     let mut counts = BuildCounts::default();
     for m in books.iter().filter(|m| !m.supported()) {
         if skipped.insert(m.id.clone()) {
@@ -115,6 +119,10 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             }
             outside.insert((m.id.as_str(), device.id.as_str()));
             if !lib.has_output(&m.id, &device.id) {
+                continue;
+            }
+            if keep {
+                report(BuildEvent::Outside { device: device.id.clone(), title: m.title.clone() });
                 continue;
             }
             match lib.retract(&m.id, device) {
