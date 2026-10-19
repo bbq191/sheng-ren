@@ -97,6 +97,7 @@
 | 透明 PNG | **透明处画成黑色** → 写出器合成白底 | 正常 | 正常 |
 | 图块在页尾放不下 | 挪页 | 挪页 | 挪页，**剩下的空白不回填**（还可能多出空白页） |
 | 行内小图 | 写出器 20 嵌在字里 | 照 CSS | 按图自身像素、不认 CSS |
+| WebP（2026-10-19 测试书「测试-WebP」：有损、无损、透明、动图、CSS 背景图、行内小图、封面） | KFX 没有 WebP 的格式类型：读书时静态的无损转成 PNG（`imgopt::webp_to_png`），动图丢掉、给警告；真机还没看 | **认**（用户看过：正常） | **一律不显示**（占着位置、一片空白；同样的图存 PNG 正常）→ 文字书里的静态 WebP 无损转成 PNG（profile `webp = false`，v61；真机 ✓ 有损、无损、透明、行内、封面），动图不转、照旧不显示 |
 
 → 掌阅、Move 的图片宽度由 `kindle_images` 改写成和 Kindle 一样大（KINDLE_RULES 9）。
 
@@ -109,7 +110,7 @@
 ### 怎么验证（不靠肉眼猜）
 
 - **Kindle**：用户同时点左上、右下角截屏（**要先拔 USB**），文件在 `Internal Storage/screenshots/`；Send to Kindle 的样本在 `documents/Downloads/Items01/`（用户会清掉，要用时请用户推一份），`kfx-dump --json` 看结构。
-- **掌阅**：`adb exec-out screencap -p`；打开书走文件管理器 `com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity` + `uiautomator dump`；翻页在空白处横向 swipe。**怪癖测试书 `tools/quirks/probe.py ireader`** 一条命令全自动：每章标记换成条码图、推进 `documents/测试/`（每次换文件名，同名的书掌阅记着读到哪）、点开、逐页截屏认条码、逐行量（2026-10-13，87 个探针 174 页约 10 分钟）。
+- **掌阅**：USB 或无线调试（`adb connect <IP>:<端口>`，2026-10-19 起用户改用 Wi-Fi，端口每次打开无线调试会变，问用户要）；`adb exec-out screencap -p`；打开书走文件管理器 `com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity` + `uiautomator dump`；翻页在空白处横向 swipe。**怪癖测试书 `tools/quirks/probe.py ireader`** 一条命令全自动：每章标记换成条码图、推进 `documents/测试/`（每次换文件名，同名的书掌阅记着读到哪）、点开、逐页截屏认条码、逐行量（2026-10-13，87 个探针 174 页约 10 分钟）。
 - **Move**：`tools/quirks/probe.py move` 一条命令跑怪癖测试书。书架服务 `POST /import?name=X.epub&folder=`（端口转发 8790，`ControlMaster=no`；USB `root@10.11.99.1`、Wi-Fi `root@10.42.0.224`，睡着了连不上）导入后 xochitl 立刻排出 `<uuid>.pdf`，scp 回来 `pdftoppm -scale-to-x 954 -scale-to-y 1696` 量；原地替换（`?uuid=`）不会立刻重排。
 - 量位置：按文字行的墨迹（灰度 < 140 的行）找行顶，三台换算成占内容区高的比例再比。测试书放 scratchpad，导入设备的测试书用完请用户删。
 

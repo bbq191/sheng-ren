@@ -4,7 +4,7 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-19：662 个通过、没有忽略的）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-19：664 个通过、没有忽略的）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
@@ -96,7 +96,7 @@ done
 
 | 改了什么 | 版本号 | 现值 | 过期的书 |
 |---|---|---|---|
-| 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 60 | 文字书 |
+| 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 61 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 56 | 漫画 |
 | 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 41 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |

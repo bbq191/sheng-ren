@@ -325,6 +325,9 @@ pub struct WashOpts {
     pub audit: Option<String>,
     /// 内边距、边框、标题外边距照 Kindle 改写要的这台尺寸（`box_fix.rs`；不认内边距、不画边框、不认标题外边距的阅读器才有）。
     pub box_geometry: Option<BoxGeometry>,
+    /// 不认 WebP 的阅读器（Move，profile `webp = false`）上要转成 PNG 的静态 WebP（原书条目名）：流式优化时调用方读文件头挑出来
+    /// （动图不转：只取一帧会丢内容）。清洗层改名成 `.png`、改引用和 `media-type`（`safe_names.rs`），字节在阶段二转。`None` 不转。
+    pub webp_to_png: Option<std::sync::Arc<HashSet<String>>>,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -354,6 +357,8 @@ impl WashOpts {
             keep_fonts: _,
             // 流式优化时由调用方读文件头填（见 `image_dims` 的说明），不跟着带
             image_dims: _,
+            // 同上：流式优化时调用方读文件头填
+            webp_to_png: _,
             css_rgba,
             background_no_repeat,
             media,
@@ -390,7 +395,7 @@ impl WashOpts {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, tiny_page: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, h_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None }
+        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, tiny_page: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, h_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None, webp_to_png: None }
     }
 }
 
@@ -471,6 +476,8 @@ pub struct WashReport {
     pub ncx_generated: usize,
     /// 不是 UTF-8、转成了 UTF-8 的 XHTML/OPF/NCX 个数。见 `encoding.rs`。
     pub transcoded_to_utf8: usize,
+    /// 改名成 `.png`、阶段二转成 PNG 的静态 WebP 个数（不认 WebP 的阅读器，见 `safe_names.rs`）。
+    pub webp_to_png: usize,
     /// 标错、改正了的语言（OPF 的 `dc:language`、`<html>` 的 `lang`/`xml:lang`，按处数）。见 `lang.rs`。
     pub languages_fixed: usize,
 }
@@ -517,7 +524,7 @@ fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> 
     encoding::transcode_to_utf8(entries, &mut rep);
     strip_pseudo_drm(entries, &mut rep)?;
     // 文件名有安卓存储不能用的字符的先改名：后面各步按条目名找文件
-    safe_names::rename_unsafe_entries(entries, &mut rep);
+    safe_names::rename_unsafe_entries(entries, &mut rep, opts.webp_to_png.as_deref());
     // 语言标错的先改正：后面补缺的语言、目录标题都按书的语言
     lang::fix_languages(entries, &mut rep);
     if opts.mode.is_repair() {

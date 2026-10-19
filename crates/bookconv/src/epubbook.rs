@@ -125,25 +125,6 @@ fn nav_toc(html: &str, nav_path: &str) -> Vec<TocItem> {
         .collect()
 }
 
-/// 静态 WebP → PNG（KF8 不认 WebP）：解码后无损编码，像素不变（有损 WebP 的像素就是它解出来的样子）。动画 WebP 只取一帧会丢内容，
-/// 返回 `None`（当作不支持的图片，给出警告）。
-/// 书里的图是外部输入：解码前按文件头的宽高核对解码上限（同漫画页 [`crate::imgopt::MAX_COMIC_DECODE_PIXELS`]，防几 KB 的文件
-/// 声明几亿像素），解码器的 panic 由 [`crate::imgopt::guard`] 兜住——KFX 转换不在 `catch_unwind` 里，不兜的话一张坏图摔掉整个 sync。
-fn webp_to_png(b: &[u8]) -> Option<Vec<u8>> {
-    use image::ImageDecoder;
-    crate::imgopt::guard(|| {
-        let dec = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(b)).ok()?;
-        let (w, h) = dec.dimensions();
-        if dec.has_animation() || u64::from(w) * u64::from(h) > crate::imgopt::MAX_COMIC_DECODE_PIXELS {
-            return None;
-        }
-        let img = image::DynamicImage::from_decoder(dec).ok()?;
-        let mut out = Vec::new();
-        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
-        Some(out)
-    })
-}
-
 /// TrueType / OpenType 字体的文件头。
 fn is_sfnt(b: &[u8]) -> bool {
     matches!(b.get(..4), Some([0, 1, 0, 0] | b"OTTO" | b"true" | b"ttcf"))
@@ -189,7 +170,7 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
         } else if let Some((_, mime)) = image_ext_mime(&entries[i].data) {
             // 图片字节直接移走，不复制（大漫画省一份内存）
             images.push(Image { path, bytes: std::mem::take(&mut entries[i].data), mime });
-        } else if let Some(png) = is_webp(&entries[i].data).then(|| webp_to_png(&entries[i].data)).flatten() {
+        } else if let Some(png) = is_webp(&entries[i].data).then(|| crate::imgopt::webp_to_png(&entries[i].data)).flatten() {
             images.push(Image { path, bytes: png, mime: "image/png" });
         } else if is_sfnt(&entries[i].data) {
             fonts.push((path, std::mem::take(&mut entries[i].data)));
@@ -274,13 +255,13 @@ mod tests {
     fn webp_to_png_converts_small_and_refuses_over_limit() {
         let mut small = Vec::new();
         image::DynamicImage::new_rgb8(3, 2).write_to(&mut std::io::Cursor::new(&mut small), image::ImageFormat::WebP).unwrap();
-        let png = webp_to_png(&small).expect("小图照常转");
+        let png = crate::imgopt::webp_to_png(&small).expect("小图照常转");
         assert_eq!(image::load_from_memory(&png).unwrap().into_rgb8().dimensions(), (3, 2));
         // 头里声明 16000×16000（2.56 亿像素，超 6400 万）：头读得出来，但不解码、不 panic，当作不支持的图片
         let big = vp8l_header(16000, 16000);
         use image::ImageDecoder;
         assert_eq!(image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&big)).unwrap().dimensions(), (16000, 16000));
-        assert_eq!(webp_to_png(&big), None);
+        assert_eq!(crate::imgopt::webp_to_png(&big), None);
     }
 
     #[test]

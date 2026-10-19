@@ -2,6 +2,9 @@
 //!
 //! 2026-10-06 掌阅自带阅读器：《春雪》《飘》的封面图叫 `**::**::…jpg`，OPF 里写成 `%2A%2A%3A%3A…`，书架没有封面缩略图
 //! （名字正常的书都有）。只改文件名部分；目录名里有这类字符的不动（没见过）。
+//!
+//! 同一套也给不认 WebP 的阅读器（Move，profile `webp = false`）用：要转成 PNG 的静态 WebP（[`WashOpts::webp_to_png`]）扩展名改成
+//! `.png`、manifest 的 `media-type` 改成 `image/png`，引用一起改；字节在优化器阶段二按原名读回、转成 PNG（`imgopt::webp_to_png`）。
 use super::*;
 
 /// 安卓存储上不能出现在文件名里的字符。
@@ -51,9 +54,11 @@ fn rewrite_css_urls(text: &str, base_dir: &str, map: &HashMap<String, String>, i
 }
 
 /// 改名，并改写所有引用：OPF 清单的 `href`、全书 `href`/`src`/`xlink:href`（[`rewrite_book_links`]）、CSS 的 `url()`。
-pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport) {
+/// `to_png`：要转成 PNG 的 WebP（原书条目名），扩展名一并改成 `.png`、manifest 的 `media-type` 改成 `image/png`。
+pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport, to_png: Option<&HashSet<String>>) {
     let mut taken: HashSet<String> = entries.iter().map(|e| e.name.clone()).collect();
     let mut map: HashMap<String, String> = HashMap::new();
+    let mut png: HashSet<String> = HashSet::new();
     for e in entries.iter() {
         if e.name == "mimetype" || e.name.starts_with("META-INF/") {
             continue;
@@ -62,17 +67,23 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport)
             Some(i) => (&e.name[..i], &e.name[i + 1..]),
             None => ("", e.name.as_str()),
         };
-        if !file.chars().any(is_bad) || dir.chars().any(is_bad) {
+        let convert = to_png.is_some_and(|s| s.contains(&e.name));
+        if !(convert || file.chars().any(is_bad)) || dir.chars().any(is_bad) {
             continue;
         }
-        let new_file = safe_file_name(file, dir, &taken);
+        let file = if convert { format!("{}.png", file.rsplit_once('.').map_or(file, |(stem, _)| stem)) } else { file.to_string() };
+        let new_file = safe_file_name(&file, dir, &taken);
         let new = if dir.is_empty() { new_file } else { format!("{dir}/{new_file}") };
         taken.insert(new.clone());
+        if convert {
+            png.insert(new.clone());
+        }
         map.insert(e.name.clone(), new);
     }
     if map.is_empty() {
         return;
     }
+    rep.webp_to_png += png.len();
     for e in entries.iter_mut() {
         if let Some(new) = map.get(&e.name) {
             e.name = new.clone();
@@ -108,7 +119,13 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport)
         let text = String::from_utf8_lossy(&entries[oi].data).into_owned();
         let edits: Vec<(usize, usize, String)> = manifest_items(&text)
             .iter()
-            .filter_map(|it| map.get(&it.path(&opf_dir)).map(|new| (it.pos, it.pos + it.tag.len(), html::set_attr(it.tag, "href", &crate::epubzip::href_to(&opf_dir, new, "")))))
+            .filter_map(|it| {
+                map.get(&it.path(&opf_dir)).map(|new| {
+                    let tag = html::set_attr(it.tag, "href", &crate::epubzip::href_to(&opf_dir, new, ""));
+                    let tag = if png.contains(new) { html::set_attr(&tag, "media-type", "image/png") } else { tag };
+                    (it.pos, it.pos + it.tag.len(), tag)
+                })
+            })
             .collect();
         if !edits.is_empty() {
             entries[oi].data = html::apply_edits(&text, edits).into_bytes();
@@ -137,6 +154,26 @@ mod tests {
         Entry { name: name.into(), data: data.as_bytes().to_vec() }
     }
 
+    /// 要转 PNG 的 WebP：扩展名改 `.png`（和已有的撞了加 `-2`）、manifest 的 `media-type` 改成 `image/png`，引用一起改；不在名单里的不动。
+    #[test]
+    fn webp_to_png_renamed_with_media_type() {
+        let mut v = vec![
+            e("OEBPS/content.opf", r#"<package><manifest><item id="a" href="i/a.webp" media-type="image/webp"/><item id="p" href="i/a.png" media-type="image/png"/><item id="m" href="i/m.webp" media-type="image/webp"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#),
+            e("OEBPS/c.xhtml", r#"<html><body><img src="i/a.webp"/><img src="i/a.png"/><img src="i/m.webp"/><p style="background:url('i/a.webp')"></p></body></html>"#),
+            e("OEBPS/i/a.webp", ""),
+            e("OEBPS/i/a.png", ""),
+            e("OEBPS/i/m.webp", ""),
+        ];
+        let mut rep = WashReport::default();
+        let set: HashSet<String> = ["OEBPS/i/a.webp".to_string()].into();
+        rename_unsafe_entries(&mut v, &mut rep, Some(&set));
+        assert_eq!(rep.renamed, [("OEBPS/i/a.webp".to_string(), "OEBPS/i/a-2.png".to_string())]);
+        assert_eq!(rep.webp_to_png, 1);
+        let t = |i: usize| String::from_utf8(v[i].data.clone()).unwrap();
+        assert!(t(0).contains(r#"<item id="a" href="i/a-2.png" media-type="image/png"/>"#) && t(0).contains(r#"href="i/m.webp" media-type="image/webp""#), "{}", t(0));
+        assert_eq!(t(1), r#"<html><body><img src="i/a-2.png"/><img src="i/a.png"/><img src="i/m.webp"/><p style="background:url('i/a-2.png')"></p></body></html>"#);
+    }
+
     /// 《春雪》：封面图名全是 `*` 和 `:`，OPF 里百分号编码；正文、CSS 里也引用它。
     #[test]
     fn unsafe_image_names_renamed_with_references() {
@@ -152,7 +189,7 @@ mod tests {
             e("OEBPS/Images/__--.jpg", "jpg"),
         ];
         let mut rep = WashReport::default();
-        rename_unsafe_entries(&mut v, &mut rep);
+        rename_unsafe_entries(&mut v, &mut rep, None);
         assert_eq!(rep.renamed, [("OEBPS/Images/**::.jpg".to_string(), "OEBPS/Images/____.jpg".to_string()), ("OEBPS/Text/**::x.xhtml".to_string(), "OEBPS/Text/____x.xhtml".to_string())]);
         // 没编码、带 `:` 的书内链接也改；真的网址不动
         let nav = String::from_utf8(v.iter().find(|x| x.name == "OEBPS/nav.xhtml").unwrap().data.clone()).unwrap();

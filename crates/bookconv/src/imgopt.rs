@@ -166,6 +166,36 @@ pub(crate) fn guard<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(None)
 }
 
+/// 静态 WebP → PNG（KFX 不认 WebP；Move 也不认，profile `webp = false`）：解码后无损编码，像素不变（有损 WebP 的像素就是它解出来的样子）。
+/// 动画 WebP 只取一帧会丢内容，返回 `None`（调用方当作不支持的图片）。
+/// 书里的图是外部输入：解码前按文件头的宽高核对解码上限（同漫画页 [`MAX_COMIC_DECODE_PIXELS`]，防几 KB 的文件声明几亿像素），
+/// 解码器的 panic 由 [`guard`] 兜住——KFX 转换不在 `catch_unwind` 里，不兜的话一张坏图摔掉整个 sync。
+pub fn webp_to_png(b: &[u8]) -> Option<Vec<u8>> {
+    use image::ImageDecoder;
+    guard(|| {
+        let dec = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(b)).ok()?;
+        let (w, h) = dec.dimensions();
+        if dec.has_animation() || u64::from(w) * u64::from(h) > MAX_COMIC_DECODE_PIXELS {
+            return None;
+        }
+        let img = image::DynamicImage::from_decoder(dec).ok()?;
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
+        Some(out)
+    })
+}
+
+/// 是能转成 PNG 的静态 WebP（[`webp_to_png`] 会转的：不是动图、像素数不超过上限）。只读文件头，不解码像素。
+pub fn is_static_webp(b: &[u8]) -> bool {
+    use image::ImageDecoder;
+    guard(|| {
+        let dec = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(b)).ok()?;
+        let (w, h) = dec.dimensions();
+        Some(!dec.has_animation() && u64::from(w) * u64::from(h) <= MAX_COMIC_DECODE_PIXELS)
+    })
+    .unwrap_or(false)
+}
+
 /// 解码并按 EXIF 方向摆正（格式按魔数认，见 [`ImgHead`]）。缩略图等只读用途也用它；不设解码上限。
 /// 解不开（含解码器 panic，见 [`guard`]）→ `None`。
 pub fn decode_oriented(bytes: &[u8]) -> Option<image::DynamicImage> {

@@ -1124,6 +1124,68 @@
         assert_eq!(entry_bytes(&out, "OEBPS/i/g.jpg"), orig("OEBPS/i/g.jpg"), "Kindle 不开，插图不动");
     }
 
+    /// 静态 WebP（正文 `<img>` 的 `s.webp`、CSS 背景的 `bg.webp`）、动图 WebP `anim.webp`，都是彩色的（不归插图加深管）。
+    fn webp_book() -> (Vec<u8>, Vec<(&'static str, Vec<u8>)>) {
+        let rgb = |w, h| image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 7 % 256) as u8, (y * 5 % 256) as u8, 90]));
+        let webp = |w, h| {
+            let mut b = Vec::new();
+            image::DynamicImage::ImageRgb8(rgb(w, h)).write_to(&mut Cursor::new(&mut b), image::ImageFormat::WebP).unwrap();
+            b
+        };
+        // 动图：VP8X 头带动画标记（只要文件头能认出是动图；`image` 写不出动画 WebP）
+        let mut anim = b"RIFF\x1e\0\0\0WEBPVP8X\x0a\0\0\0\x02\0\0\0\x09\0\0\x09\0\0ANIM\x06\0\0\0\0\0\0\0\0\0".to_vec();
+        let n = (anim.len() - 8) as u32;
+        anim[4..8].copy_from_slice(&n.to_le_bytes());
+        let imgs = vec![("OEBPS/i/s.webp", webp(300, 220)), ("OEBPS/i/bg.webp", webp(40, 30)), ("OEBPS/i/anim.webp", anim)];
+        let mut epub = Vec::new();
+        {
+            let mut zw = ZipWriter::new(Cursor::new(&mut epub));
+            let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+            let files: Vec<(&str, &[u8])> = vec![
+                ("mimetype", b"application/epub+zip"),
+                ("META-INF/container.xml", br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#),
+                ("OEBPS/content.opf", br#"<package version="3.0"><metadata><dc:title>t</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="st" href="s.css" media-type="text/css"/><item id="a" href="i/s.webp" media-type="image/webp"/><item id="b" href="i/bg.webp" media-type="image/webp"/><item id="m" href="i/anim.webp" media-type="image/webp"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
+                ("OEBPS/s.css", b"div.y{background-image:url(i/bg.webp)}"),
+                ("OEBPS/c1.xhtml", r#"<html><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body><p>正文</p><div class="y"><img src="i/s.webp" alt=""/></div><img src="i/anim.webp" alt=""/></body></html>"#.as_bytes()),
+            ];
+            for (name, body) in files.into_iter().chain(imgs.iter().map(|(n, b)| (*n, b.as_slice()))) {
+                zw.start_file(name, stored).unwrap();
+                zw.write_all(body).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        (epub, imgs)
+    }
+
+    #[test]
+    fn xochitl_converts_static_webp_to_png() {
+        let (epub, imgs) = webp_book();
+        let orig = |n: &str| imgs.iter().find(|(m, _)| *m == n).unwrap().1.clone();
+        let opts = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        assert!(opts.webp_to_png && matches!(opts.text_mode, TextMode::Repair { .. }), "Move 只修复也转");
+        let (out, rep) = optimize_epub_with(&epub, &opts).unwrap();
+        for (old, new) in [("OEBPS/i/s.webp", "OEBPS/i/s.png"), ("OEBPS/i/bg.webp", "OEBPS/i/bg.png")] {
+            let png = entry_bytes(&out, new);
+            assert!(png.starts_with(b"\x89PNG"), "{new} 是 PNG");
+            let want = image::load_from_memory(&orig(old)).unwrap().to_rgb8();
+            assert_eq!(image::load_from_memory(&png).unwrap().to_rgb8(), want, "{new}：像素和原图解出来的一样");
+        }
+        assert_eq!(entry_bytes(&out, "OEBPS/i/anim.webp"), orig("OEBPS/i/anim.webp"), "动图不转");
+        let text = |n: &str| String::from_utf8(entry_bytes(&out, n)).unwrap();
+        let opf = text("OEBPS/content.opf");
+        assert!(opf.contains(r#"href="i/s.png" media-type="image/png""#) && opf.contains(r#"href="i/bg.png" media-type="image/png""#) && opf.contains(r#"href="i/anim.webp" media-type="image/webp""#), "{opf}");
+        let c1 = text("OEBPS/c1.xhtml");
+        assert!(c1.contains(r#"src="i/s.png""#) && c1.contains(r#"src="i/anim.webp""#), "{c1}");
+        assert!(text("OEBPS/s.css").contains(r#"url("i/bg.png")"#));
+        assert_eq!(rep.wash.unwrap().webp_to_png, 2);
+        for dev in ["ireader", "kindle"] {
+            let opts = OptimizeOpts::for_profile(profile::get(dev).unwrap());
+            assert!(!opts.webp_to_png);
+            let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
+            assert_eq!(entry_bytes(&out, "OEBPS/i/s.webp"), orig("OEBPS/i/s.webp"), "{dev}：认 WebP（Kindle 由 KFX 写出器转），原样");
+        }
+    }
+
     #[test]
     fn ireader_keeps_transparency() {
         let (epub, imgs) = alpha_book();

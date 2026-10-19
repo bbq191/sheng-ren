@@ -102,6 +102,24 @@ fn optimize_inner(
         }
         None => opts,
     };
+    // 不认 WebP 的阅读器（`webp_to_png`）：挑出能转成 PNG 的静态 WebP 交给清洗层改名（这时图片条目是空占位，读文件头；动图不转）
+    let webp;
+    let opts = match opts.wash.as_ref().filter(|_| opts.webp_to_png && !is_comic_book) {
+        Some(w) => {
+            let names: Vec<String> = raw.iter().filter(|e| crate::util::image_ext_of(&e.name) == "webp").map(|e| e.name.clone()).collect();
+            let mut set = HashSet::new();
+            for n in names {
+                if let Ok(Some(true)) = read_image_head(&mut archive, &n, |b| Some(crate::imgopt::is_static_webp(b))) {
+                    set.insert(n);
+                }
+            }
+            let mut o = opts.clone();
+            o.wash = Some(crate::wash::WashOpts { webp_to_png: Some(std::sync::Arc::new(set)), ..w.clone() });
+            webp = o;
+            &webp
+        }
+        None => opts,
+    };
     let prep = prepare_entries(raw, opts, bytes_before, is_comic_book, transcoded)?;
     check_cancel(cancel)?;
     let plan = WritePlan::new(&prep, opts, &mut archive);
@@ -210,7 +228,8 @@ struct Written {
 /// 交给 worker 的活。
 enum Job<'e> {
     /// 处理一张图：`src` 是原书里的条目名（清洗时改过名的是原名），worker 自己从源文件读原图字节。
-    Image { src: &'e str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool, darken: bool, reply: std::sync::mpsc::Sender<Result<Vec<u8>, BookError>> },
+    /// `to_png`：清洗层改名成 `.png` 的静态 WebP，读回来先转成 PNG（`webp_to_png`）。
+    Image { src: &'e str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool, darken: bool, to_png: bool, reply: std::sync::mpsc::Sender<Result<Vec<u8>, BookError>> },
     /// deflate 压一个条目。
     Deflate { name: &'e str, data: std::borrow::Cow<'e, [u8]>, reply: std::sync::mpsc::Sender<Result<crate::epubzip::Precompressed, BookError>> },
 }
@@ -253,8 +272,8 @@ fn spawn_image_workers<'scope, 'env: 'scope, 'e: 'scope>(
                 let job = { rx.lock().unwrap_or_else(|e| e.into_inner()).recv() };
                 let Ok(job) = job else { break };
                 match job {
-                    Job::Image { src, bg, tile, flatten, darken, reply } => {
-                        let _ = reply.send(process_image(&ctx, &budget, &mut source, src, bg, tile, flatten, darken));
+                    Job::Image { src, bg, tile, flatten, darken, to_png, reply } => {
+                        let _ = reply.send(process_image(&ctx, &budget, &mut source, src, bg, tile, flatten, darken, to_png));
                     }
                     Job::Deflate { name, data, reply } => {
                         let _ = reply.send(crate::epubzip::Precompressed::new(name, &data));
@@ -269,7 +288,7 @@ fn spawn_image_workers<'scope, 'env: 'scope, 'e: 'scope>(
 /// worker 处理一张图：从源文件读原图（`source` 第一次用到时打开），按需处理。`darken`：正文插图，按 `ctx.image_gamma` 加深中间调
 /// （[`crate::imgopt::darken_gray_image`]，只修复的书也做）。
 #[allow(clippy::too_many_arguments)]
-fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &mut Option<crate::epubzip::FileZip>, src: &str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool, darken: bool) -> Result<Vec<u8>, BookError> {
+fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &mut Option<crate::epubzip::FileZip>, src: &str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool, darken: bool, to_png: bool) -> Result<Vec<u8>, BookError> {
     // 整件兜住 panic（读 zip、解析图片都是外部输入）：panic 了只这本书报错，不让 `thread::scope` 收尾时把
     // panic 抛给调用方、摔掉整个 `booklib sync`（2026-10-09 审计）
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>, BookError> {
@@ -279,6 +298,8 @@ fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &
         }
         .and_then(|z| crate::epubzip::read_by_name(z, src))
         .map_err(|e| e.context("重读图片失败"))?;
+        // 改名成 `.png` 的静态 WebP 先转成 PNG（只修复的书也转：原样留着 Move 上显示不出来）；文件头判过是静态的，转不成（坏图）的原样写
+        let bytes = if to_png { crate::imgopt::webp_to_png(&bytes).unwrap_or(bytes) } else { bytes };
         // 整页背景图做成整页一块（平铺背景的阅读器）只修复的书也做：不做的话这张图在阅读器上乱铺，规则就只能去掉、图看不见
         let darken = ctx.image_gamma.filter(|_| darken);
         if ctx.keep_images && tile.is_none() && darken.is_none() {
@@ -458,8 +479,10 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
             while pending.len() + sink.queued_images < lookahead && next_submit < image_positions.len() {
                 let img_name = &entries[image_positions[next_submit]].0;
                 let (tx, rx) = std::sync::mpsc::channel();
-                // 清洗时改过名的（文件名有安卓存储不能用的字符）按原名回原书读
-                let job = Job::Image { src: plan.src(img_name), bg: prep.bg_fits.get(img_name.as_str()).copied(), tile: prep.page_tiles.get(img_name.as_str()).copied(), flatten: opts.flatten_alpha && prep.body_imgs.contains(img_name.as_str()), darken: prep.body_imgs.contains(img_name.as_str()), reply: tx };
+                // 清洗时改过名的（文件名有安卓存储不能用的字符、转成 PNG 的 WebP）按原名回原书读
+                let src = plan.src(img_name);
+                let to_png = src != img_name.as_str() && crate::util::image_ext_of(src) == "webp" && crate::util::image_ext_of(img_name) == "png";
+                let job = Job::Image { src, bg: prep.bg_fits.get(img_name.as_str()).copied(), tile: prep.page_tiles.get(img_name.as_str()).copied(), flatten: opts.flatten_alpha && prep.body_imgs.contains(img_name.as_str()), darken: prep.body_imgs.contains(img_name.as_str()), to_png, reply: tx };
                 job_tx.send(job).map_err(|_| BookError::Other("图片处理线程已退出".to_string()))?;
                 pending.push_back(rx);
                 next_submit += 1;
