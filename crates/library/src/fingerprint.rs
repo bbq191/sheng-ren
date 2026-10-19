@@ -81,7 +81,7 @@ fn gamma_seg(gamma: Option<f64>) -> String {
 
 /// 文字书：EPUB 阅读范围 + 只管文字书的字段：带图注的竖长图写宽度（`k`）、正文图片透明处合成白底（`a`，`image_alpha = false`）、
 /// 只修复（`t`）、注释可跳（`n`）、照 Send to Kindle 的规则统一（`u`）；`u` 之后还有只在 `kindle_rules` 时才有的几段（[`kindle_rules_seg`]），
-/// 然后是插图中间调加深（[`gamma_seg`]），最后是静态 WebP 转 PNG（`w`，`webp = false`）。
+/// 然后是插图中间调加深（[`gamma_seg`]），最后是 WebP 转 PNG（`w`，`webp = false`）。
 fn text_seg(device: &Profile, area: Screen) -> String {
     let repair = device.text_repair_only;
     let mut seg = format!("{}x{}{}", area.width, area.height, shared_seg(device));
@@ -94,7 +94,7 @@ fn text_seg(device: &Profile, area: Screen) -> String {
         kindle_rules_seg(device, &mut seg);
     }
     seg.push_str(&gamma_seg(device.image_gamma));
-    // 不认 WebP、静态 WebP 转成 PNG（profile `webp = false`，Move）：放在最后，认 WebP 的模式指纹和以前一样
+    // 不认 WebP、WebP 转成 PNG（profile `webp = false`，Move）：放在最后，认 WebP 的模式指纹和以前一样
     if !device.webp {
         seg.push('w');
     }

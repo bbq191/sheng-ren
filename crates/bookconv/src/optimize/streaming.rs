@@ -102,14 +102,14 @@ fn optimize_inner(
         }
         None => opts,
     };
-    // 不认 WebP 的阅读器（`webp_to_png`）：挑出能转成 PNG 的静态 WebP 交给清洗层改名（这时图片条目是空占位，读文件头；动图不转）
+    // 不认 WebP 的阅读器（`webp_to_png`）：挑出能转成 PNG 的 WebP 交给清洗层改名（这时图片条目是空占位，读文件头；动图取第一帧）
     let webp;
     let opts = match opts.wash.as_ref().filter(|_| opts.webp_to_png && !is_comic_book) {
         Some(w) => {
             let names: Vec<String> = raw.iter().filter(|e| crate::util::image_ext_of(&e.name) == "webp").map(|e| e.name.clone()).collect();
             let mut set = HashSet::new();
             for n in names {
-                if let Ok(Some(true)) = read_image_head(&mut archive, &n, |b| Some(crate::imgopt::is_static_webp(b))) {
+                if let Ok(Some(true)) = read_image_head(&mut archive, &n, |b| Some(crate::imgopt::is_convertible_webp(b))) {
                     set.insert(n);
                 }
             }
@@ -228,7 +228,7 @@ struct Written {
 /// 交给 worker 的活。
 enum Job<'e> {
     /// 处理一张图：`src` 是原书里的条目名（清洗时改过名的是原名），worker 自己从源文件读原图字节。
-    /// `to_png`：清洗层改名成 `.png` 的静态 WebP，读回来先转成 PNG（`webp_to_png`）。
+    /// `to_png`：清洗层改名成 `.png` 的 WebP，读回来先转成 PNG（`webp_to_png`）。
     Image { src: &'e str, bg: Option<crate::bgfit::BgFit>, tile: Option<crate::bgfit::PageTile>, flatten: bool, darken: bool, to_png: bool, reply: std::sync::mpsc::Sender<Result<Vec<u8>, BookError>> },
     /// deflate 压一个条目。
     Deflate { name: &'e str, data: std::borrow::Cow<'e, [u8]>, reply: std::sync::mpsc::Sender<Result<crate::epubzip::Precompressed, BookError>> },
@@ -298,7 +298,7 @@ fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &
         }
         .and_then(|z| crate::epubzip::read_by_name(z, src))
         .map_err(|e| e.context("重读图片失败"))?;
-        // 改名成 `.png` 的静态 WebP 先转成 PNG（只修复的书也转：原样留着 Move 上显示不出来）；文件头判过是静态的，转不成（坏图）的原样写
+        // 改名成 `.png` 的 WebP 先转成 PNG（只修复的书也转：原样留着 Move 上显示不出来；动图取第一帧）；文件头判过，转不成（坏图）的原样写
         let bytes = if to_png { crate::imgopt::webp_to_png(&bytes).unwrap_or(bytes) } else { bytes };
         // 整页背景图做成整页一块（平铺背景的阅读器）只修复的书也做：不做的话这张图在阅读器上乱铺，规则就只能去掉、图看不见
         let darken = ctx.image_gamma.filter(|_| darken);

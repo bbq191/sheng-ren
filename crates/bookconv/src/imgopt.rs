@@ -166,8 +166,13 @@ pub(crate) fn guard<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(None)
 }
 
-/// 静态 WebP → PNG（KFX 不认 WebP；Move 也不认，profile `webp = false`）：解码后无损编码，像素不变（有损 WebP 的像素就是它解出来的样子）。
-/// 动画 WebP 只取一帧会丢内容，返回 `None`（调用方当作不支持的图片）。
+/// 测试用的 4×4 两帧动图 WebP（无损，PIL 生成）：第一帧红 (200,30,30)、第二帧蓝。
+#[cfg(test)]
+pub(crate) const TEST_ANIM_WEBP: &[u8] = &[82, 73, 70, 70, 136, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 88, 10, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 3, 0, 0, 65, 78, 73, 77, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65, 78, 77, 70, 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 3, 0, 0, 100, 0, 0, 2, 86, 80, 56, 76, 17, 0, 0, 0, 47, 3, 192, 0, 0, 7, 80, 143, 34, 215, 163, 255, 129, 136, 232, 127, 0, 0, 65, 78, 77, 70, 42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 3, 0, 0, 100, 0, 0, 0, 86, 80, 56, 76, 17, 0, 0, 0, 47, 3, 192, 0, 0, 7, 80, 143, 122, 20, 185, 255, 129, 136, 232, 127, 0, 0];
+
+/// WebP → PNG（KFX 不认 WebP；Move 也不认，profile `webp = false`）：解码后无损编码，像素不变（有损 WebP 的像素就是它解出来的样子）。
+/// 动图取第一帧（2026-10-19 用户定：掌阅自己就显示第一帧，比 Kindle、Move 上整张不显示强）。解出来带透明通道、其实全不透明的
+/// 存成 RGB（动图一律解成 RGBA）：像素不变，插图加深、Kindle 的白底合成照不透明的图算。
 /// 书里的图是外部输入：解码前按文件头的宽高核对解码上限（同漫画页 [`MAX_COMIC_DECODE_PIXELS`]，防几 KB 的文件声明几亿像素），
 /// 解码器的 panic 由 [`guard`] 兜住——KFX 转换不在 `catch_unwind` 里，不兜的话一张坏图摔掉整个 sync。
 pub fn webp_to_png(b: &[u8]) -> Option<Vec<u8>> {
@@ -175,23 +180,27 @@ pub fn webp_to_png(b: &[u8]) -> Option<Vec<u8>> {
     guard(|| {
         let dec = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(b)).ok()?;
         let (w, h) = dec.dimensions();
-        if dec.has_animation() || u64::from(w) * u64::from(h) > MAX_COMIC_DECODE_PIXELS {
+        if u64::from(w) * u64::from(h) > MAX_COMIC_DECODE_PIXELS {
             return None;
         }
         let img = image::DynamicImage::from_decoder(dec).ok()?;
+        let img = match img {
+            image::DynamicImage::ImageRgba8(rgba) if rgba.pixels().all(|p| p.0[3] == 255) => image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(rgba).to_rgb8()),
+            other => other,
+        };
         let mut out = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).ok()?;
         Some(out)
     })
 }
 
-/// 是能转成 PNG 的静态 WebP（[`webp_to_png`] 会转的：不是动图、像素数不超过上限）。只读文件头，不解码像素。
-pub fn is_static_webp(b: &[u8]) -> bool {
+/// 是 [`webp_to_png`] 会转的 WebP（认得出、像素数不超过上限；动图也算）。只读文件头，不解码像素。
+pub fn is_convertible_webp(b: &[u8]) -> bool {
     use image::ImageDecoder;
     guard(|| {
         let dec = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(b)).ok()?;
         let (w, h) = dec.dimensions();
-        Some(!dec.has_animation() && u64::from(w) * u64::from(h) <= MAX_COMIC_DECODE_PIXELS)
+        Some(u64::from(w) * u64::from(h) <= MAX_COMIC_DECODE_PIXELS)
     })
     .unwrap_or(false)
 }
@@ -1070,6 +1079,15 @@ mod tests {
     }
 
     /// 解码器 panic 按处理失败算（抓远程图、解封面以前没兜住，一张坏图摔掉整本书的优化）。
+    #[test]
+    fn webp_to_png_takes_first_frame_of_animation() {
+        assert!(is_convertible_webp(TEST_ANIM_WEBP));
+        let png = webp_to_png(TEST_ANIM_WEBP).expect("动图取第一帧");
+        let img = image::load_from_memory(&png).unwrap();
+        assert!(matches!(img, image::DynamicImage::ImageRgb8(_)), "全不透明的存 RGB");
+        assert_eq!(img.to_rgb8().get_pixel(1, 1).0, [200, 30, 30], "第一帧");
+    }
+
     #[test]
     fn guard_turns_decoder_panic_into_none() {
         assert_eq!(guard(|| -> Option<u8> { panic!("坏图") }), None);

@@ -179,7 +179,7 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
         }
     }
     if !unsupported.is_empty() {
-        warnings.push(format!("{} 张图片格式不支持（只支持 JPEG/PNG/GIF 和静态 WebP），在 Kindle 上不显示：{}", unsupported.len(), unsupported[0]));
+        warnings.push(format!("{} 张图片格式不支持（只支持 JPEG/PNG/GIF 和 WebP），在 Kindle 上不显示：{}", unsupported.len(), unsupported[0]));
     }
     if cover.is_none() {
         if let Some(&(_, _, id)) = crate::wash::opf::cover_meta_tags(&opf_text).first() {

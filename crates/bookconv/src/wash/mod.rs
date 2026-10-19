@@ -325,8 +325,8 @@ pub struct WashOpts {
     pub audit: Option<String>,
     /// 内边距、边框、标题外边距照 Kindle 改写要的这台尺寸（`box_fix.rs`；不认内边距、不画边框、不认标题外边距的阅读器才有）。
     pub box_geometry: Option<BoxGeometry>,
-    /// 不认 WebP 的阅读器（Move，profile `webp = false`）上要转成 PNG 的静态 WebP（原书条目名）：流式优化时调用方读文件头挑出来
-    /// （动图不转：只取一帧会丢内容）。清洗层改名成 `.png`、改引用和 `media-type`（`safe_names.rs`），字节在阶段二转。`None` 不转。
+    /// 不认 WebP 的阅读器（Move，profile `webp = false`）上要转成 PNG 的 WebP（原书条目名）：流式优化时调用方读文件头挑出来
+    /// （动图取第一帧）。清洗层改名成 `.png`、改引用和 `media-type`（`safe_names.rs`），字节在阶段二转。`None` 不转。
     pub webp_to_png: Option<std::sync::Arc<HashSet<String>>>,
 }
 
@@ -476,7 +476,7 @@ pub struct WashReport {
     pub ncx_generated: usize,
     /// 不是 UTF-8、转成了 UTF-8 的 XHTML/OPF/NCX 个数。见 `encoding.rs`。
     pub transcoded_to_utf8: usize,
-    /// 改名成 `.png`、阶段二转成 PNG 的静态 WebP 个数（不认 WebP 的阅读器，见 `safe_names.rs`）。
+    /// 改名成 `.png`、阶段二转成 PNG 的 WebP 个数（不认 WebP 的阅读器，见 `safe_names.rs`）。
     pub webp_to_png: usize,
     /// 标错、改正了的语言（OPF 的 `dc:language`、`<html>` 的 `lang`/`xml:lang`，按处数）。见 `lang.rs`。
     pub languages_fixed: usize,

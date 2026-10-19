@@ -3,7 +3,7 @@
 //! 2026-10-06 掌阅自带阅读器：《春雪》《飘》的封面图叫 `**::**::…jpg`，OPF 里写成 `%2A%2A%3A%3A…`，书架没有封面缩略图
 //! （名字正常的书都有）。只改文件名部分；目录名里有这类字符的不动（没见过）。
 //!
-//! 同一套也给不认 WebP 的阅读器（Move，profile `webp = false`）用：要转成 PNG 的静态 WebP（[`WashOpts::webp_to_png`]）扩展名改成
+//! 同一套也给不认 WebP 的阅读器（Move，profile `webp = false`）用：要转成 PNG 的 WebP（动图取第一帧，[`WashOpts::webp_to_png`]）扩展名改成
 //! `.png`、manifest 的 `media-type` 改成 `image/png`，引用一起改；字节在优化器阶段二按原名读回、转成 PNG（`imgopt::webp_to_png`）。
 use super::*;
 

@@ -149,7 +149,9 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - 61（2026-10-19，测试书「测试-WebP」Move 上 WebP 一律空白、掌阅都认）：不认 WebP 的阅读器（profile `webp = false`，Move）
 ///   文字书里的静态 WebP 无损转成 PNG（改名 `.png`，引用、`media-type` 一起改；`wash/safe_names.rs`、阶段二 `imgopt::webp_to_png`），
 ///   动图不转。测试书里没有 WebP，产物不变。
-pub const OPTIMIZE_VERSION: &str = "61";
+/// - 62（2026-10-19，用户定「动图显示第一帧」）：Move 上的动图 WebP 也转成 PNG，取第一帧（掌阅自己就显示第一帧）；转出来全不透明的
+///   存成 RGB（动图解出来一律带透明通道）。测试书里没有 WebP，产物不变。
+pub const OPTIMIZE_VERSION: &str = "62";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -248,7 +250,7 @@ pub struct OptimizeOpts {
     /// 文字书正文插图中间调加深的伽马（profile `image_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::darken_gray_image`]。
     /// 只修复的书也做（「图片不动」的例外，2026-10-16 用户定）。
     pub image_gamma: Option<f64>,
-    /// 文字书里的静态 WebP 无损转成 PNG（profile `webp = false`，Move 不认 WebP）：流式优化读文件头挑出静态的交给清洗层改名
+    /// 文字书里的 WebP 无损转成 PNG（profile `webp = false`，Move 不认 WebP；动图取第一帧）：流式优化读文件头挑出来交给清洗层改名
     /// （[`crate::wash::WashOpts::webp_to_png`]），阶段二转字节。只修复的书也做（显示不出来的图转成能显示的，像素不变）。漫画不归它管。
     pub webp_to_png: bool,
     /// 文字书怎么处理（[`TextMode`]）：完整处理，还是只修复（profile `text_repair_only`，三台都是）。漫画不受影响（按漫画规则照常处理）。
