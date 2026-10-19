@@ -77,7 +77,7 @@ const COMMANDS: &[Command] = &[
 --top 从这一层起（目录 book/漫画/死亡筆記 → 死亡筆記/卷01，单本放根目录），对这条命令里的路径都生效。
 同一本书被一台设备的几个条目覆盖时，用最具体的那个（单本 > 深的目录）的放法。
 书根目录第一次 track 时定下（跟踪的目录；单本是它所在的目录），跟踪的都要在它里面；--root=目录 换书根
-（设备上的书下次 sync 挪到新位置）。已经在跟踪的再 track：设备范围加上新给的，放法改成这次的。
+（设备上的书下次 sync 挪到新位置）。相对路径先按当前目录找，找不到按书根目录找（track 优秀漫画/死亡筆記）。已经在跟踪的再 track：设备范围加上新给的，放法改成这次的。
 不写目录、书：按设备列出跟踪范围。
 例子：
   booklib track ~/books                                               全部设备，照书库结构
@@ -94,6 +94,7 @@ const COMMANDS: &[Command] = &[
         synopsis: &["untrack [--device=模式,…] <目录或书>…"],
         brief: "不再跟踪：下次 sync 把其中的书连同设备上的产物删掉（原件不动）；给了 --device 只从这几台上删",
         detail: "\
+路径同 track：相对路径先按当前目录、再按书根目录找。
 不写 --device：整条去掉，里面没被别的跟踪条目覆盖的书下次 sync 从书库删掉（连同设备上的，Move 上进回收站）。
 写了 --device：只从这几台的范围里拿掉，下次 sync 从这几台上删掉，别的设备照旧。
 跟踪目录里的单本不能单独去掉（要么 untrack 整个目录）。删之前想先看看：sync --keep 只报告、不删。",
@@ -719,7 +720,14 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
     let top = ctx.args.has("top");
     let to = if devices.is_empty() { "全部设备".to_string() } else { devices.join("、") };
     for d in ctx.rest() {
-        let d = Path::new(d);
+        let d = match resolve_track_path(lib, Path::new(d), track) {
+            Ok(p) => p,
+            Err(e) => {
+                ctx.report(Err(e));
+                continue;
+            }
+        };
+        let d = d.as_path();
         let kind = if d.is_file() { "单本" } else { "目录" };
         let how = match (top, kind) {
             (false, _) => "，照书库结构",
@@ -742,6 +750,27 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
         .map_err(|e| format!("✗ {e}")));
     }
     print_tracked(lib);
+}
+
+/// `track`/`untrack` 的路径：相对路径先按当前目录找，找不到再按书根目录找（2026-10-19 用户要：`track 优秀漫画/死亡筆記`
+/// 不用每次写全路径）；绝对路径照旧。`track` 两边都没有时报错；`untrack` 的（原件可能已经删了）在书根目录下跟踪着也算。
+fn resolve_track_path(lib: &Library, p: &Path, track: bool) -> Result<PathBuf, String> {
+    if p.is_absolute() || p.exists() {
+        return Ok(p.to_path_buf());
+    }
+    let root = lib.books_root();
+    if let Some(q) = root.as_ref().map(|r| r.join(p)) {
+        if q.exists() || (!track && lib.tracked().contains(&q)) {
+            return Ok(q);
+        }
+    }
+    if !track {
+        return Ok(p.to_path_buf());
+    }
+    Err(match root {
+        Some(r) => format!("✗ 找不到 {}：当前目录和书根目录 {} 里都没有", p.display(), r.display()),
+        None => format!("✗ 找不到 {}", p.display()),
+    })
 }
 
 /// 按设备列出跟踪范围：每台的目录、单本（给全部设备的标出来）。

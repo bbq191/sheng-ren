@@ -308,3 +308,25 @@ fn meta_edit_takes_non_utf8_paths_as_they_are() {
     assert_eq!(code(&o), Some(0), "以前文件名转成字符串后找不到文件：{}", stderr(&o));
     assert!(stdout(&o).contains("封面: 有（jpg，300×400"), "{}", stdout(&o));
 }
+
+/// track/untrack 的相对路径：当前目录里没有时按书根目录找（2026-10-19 用户要）。
+#[test]
+fn track_resolves_relative_paths_against_the_books_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    let book = dir.path().join("book");
+    std::fs::create_dir_all(book.join("优秀漫画/死亡筆記")).unwrap();
+    std::fs::write(book.join("优秀漫画/死亡筆記/卷01.epub"), common::sample_epub("卷01")).unwrap();
+    let root = format!("--root={}", book.display());
+    assert_eq!(common::booklib(Some(&lib), &["track", &root]).status.code(), Some(0));
+    // 测试的当前目录（crate 目录）里没有这个路径：按书根目录找
+    let o = common::booklib(Some(&lib), &["track", "--device=kindle", "--top", "优秀漫画/死亡筆記"]);
+    let canon = std::fs::canonicalize(&book).unwrap();
+    assert!(common::stdout(&o).contains("开始跟踪目录") && common::stdout(&o).contains(&canon.join("优秀漫画/死亡筆記").display().to_string()), "{}", common::stdout(&o));
+    let o = common::booklib(Some(&lib), &["track", "没有这个.epub"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(common::stderr(&o).contains("当前目录和书根目录") , "{}", common::stderr(&o));
+    let o = common::booklib(Some(&lib), &["untrack", "优秀漫画/死亡筆記"]);
+    assert!(common::stdout(&o).contains("✓ 不再跟踪"), "{}", common::stdout(&o));
+}
+
