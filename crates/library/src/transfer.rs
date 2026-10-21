@@ -38,7 +38,8 @@ pub struct Transfer {
 pub(crate) enum Work {
     /// 放到 `out`（MTP 设备、电脑上）；`compare` 时 `out` 已是逐字节相同的就不动（要把它读回来比）；`direct` 时不经临时文件
     /// （MTP 设备上，见 [`deliver::put_file`]）。
-    File { out: PathBuf, compare: bool, direct: bool },
+    /// `mount`：MTP 设备的挂载点，每本写之前看它还挂着（传的途中设备断开了，别写进挂载点剩下的空目录）。
+    File { out: PathBuf, compare: bool, direct: bool, mount: Option<PathBuf> },
     /// 交给 Move 上的书架服务。
     Move(MoveWork),
 }
@@ -99,7 +100,12 @@ impl Transfer {
     /// 放上设备，做完才返回（单本生成用；`sync` 里 Move 的那件由传输线程交了以后轮流查，见 [`Pipeline`]）。
     pub fn run(&self) -> Result<Done, String> {
         match &self.work {
-            Work::File { out, compare, direct } => deliver::put_file(&self.src, out, false, *compare, *direct).map(Done::File),
+            Work::File { out, compare, direct, mount } => {
+                if let Some(m) = mount.as_deref().filter(|m| !deliver::mounted(m)) {
+                    return Err(format!("设备断开了（{} 没挂着），没传", m.display()));
+                }
+                deliver::put_file(&self.src, out, false, *compare, *direct).map(Done::File)
+            }
             Work::Move(mv) => {
                 let s = mv.submit(&self.src)?;
                 mv.client.wait(s).map(Done::Move)

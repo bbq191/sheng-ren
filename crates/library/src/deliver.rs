@@ -27,6 +27,10 @@ pub struct DeviceEnv {
     pub xochitl_url: Option<String>,
     /// 不连 Move（`$BOOKLIB_NO_SSH=1`；测试里别碰到插着的真机）。
     pub no_ssh: bool,
+    /// MTP 挂载点要真的挂着才算接上、才往里写（缺省开；`$BOOKLIB_MTP_NO_MOUNT_CHECK=1` 关，测试用普通目录当设备）。
+    /// 2026-10-21：掌阅在 `sync` 中途断开，jmtpfs 卸掉后挂载点剩个空目录，后面的书建目录、写进了 `/run/user/1000`（tmpfs）直到写满，
+    /// 还记成传上了。
+    pub mount_check: bool,
 }
 
 impl DeviceEnv {
@@ -40,6 +44,7 @@ impl DeviceEnv {
             mtp_base,
             xochitl_url: var("BOOKLIB_XOCHITL_URL").map(|v| v.to_string_lossy().trim_end_matches('/').to_string()),
             no_ssh: var("BOOKLIB_NO_SSH").is_some_and(|v| v != "0"),
+            mount_check: !var("BOOKLIB_MTP_NO_MOUNT_CHECK").is_some_and(|v| v != "0"),
         }
     }
 }
@@ -59,8 +64,8 @@ fn uid() -> u32 {
 pub(crate) enum Target {
     /// 放在电脑上（没写 `[deliver]`）。
     Local,
-    /// MTP 设备上的产物根目录（`<存储>/<dir>`）。
-    Dir { root: PathBuf },
+    /// MTP 设备上的产物根目录（`<存储>/<dir>`）；`mount` 是要一直挂着的挂载点（不查挂没挂时 `None`）。
+    Dir { root: PathBuf, mount: Option<PathBuf> },
     Xochitl(Xochitl),
 }
 
@@ -77,7 +82,7 @@ impl Target {
     pub(crate) fn describe(&self) -> Option<String> {
         match self {
             Target::Local => None,
-            Target::Dir { root } => Some(root.display().to_string()),
+            Target::Dir { root, .. } => Some(root.display().to_string()),
             Target::Xochitl(x) => Some(format!("xochitl（经 {}）", x.host)),
         }
     }
@@ -89,9 +94,12 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
         None => Ok(Target::Local),
         Some(Deliver::Mtp { mount, dir }) => {
             let point = env.mtp_base.join(mount);
+            if env.mount_check && !mounted(&point) {
+                return Err(format!("没接上（{} 没挂上）", point.display()));
+            }
             let storage = mtp_storage(&point).ok_or_else(|| format!("没接上（{} 不在或没挂上）", point.display()))?;
             // `dir` 不在（掌阅原来没有 documents/）的话传书时再建：只看接没接上的命令（devices）不往设备上写
-            Ok(Target::Dir { root: storage.join(dir) })
+            Ok(Target::Dir { root: storage.join(dir), mount: env.mount_check.then_some(point) })
         }
         Some(Deliver::Xochitl { hosts, port }) => {
             if let Some(url) = &env.xochitl_url {
@@ -103,6 +111,22 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
             Xochitl::connect(hosts, *port).map(Target::Xochitl)
         }
     }
+}
+
+/// `point` 是不是挂着的挂载点：和上一级目录不在同一个文件系统上。jmtpfs 卸掉后挂载点留成上一级（tmpfs）里的普通目录，
+/// 这时往里写就写进了内存。
+pub(crate) fn mounted(point: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let dev = |p: &Path| std::fs::metadata(p).map(|m| m.dev());
+        match (dev(point), point.parent().map(dev)) {
+            (Ok(a), Some(Ok(b))) => a != b,
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    point.is_dir()
 }
 
 /// 挂载点下的存储目录：只有一个就是它；几个（插了存储卡）时取名字像内部存储的，否则按名字排第一个。
@@ -583,6 +607,21 @@ mod tests {
         assert_eq!(mtp_storage(d.path()).unwrap(), d.path().join("SD 卡"));
         std::fs::create_dir(d.path().join("Internal Storage")).unwrap();
         assert_eq!(mtp_storage(d.path()).unwrap(), d.path().join("Internal Storage"));
+    }
+
+    #[test]
+    fn unmounted_mount_point_is_not_connected() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(!mounted(d.path()), "普通目录不是挂载点");
+        #[cfg(target_os = "linux")]
+        assert!(mounted(Path::new("/proc")));
+        // 设备断开后挂载点剩下的空目录里有存储目录（上次写进去的）也不算接上
+        std::fs::create_dir_all(d.path().join("ireader/内部共享存储空间")).unwrap();
+        let p = profile::get("ireader").unwrap();
+        let env = DeviceEnv { mtp_base: d.path().into(), xochitl_url: None, no_ssh: true, mount_check: true };
+        assert!(connect(&env, p).err().unwrap().contains("没挂上"));
+        let t = connect(&DeviceEnv { mount_check: false, ..env }, p).unwrap();
+        assert!(matches!(t, Target::Dir { mount: None, .. }));
     }
 
     #[test]

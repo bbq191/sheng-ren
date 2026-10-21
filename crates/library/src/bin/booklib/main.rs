@@ -207,6 +207,7 @@ const HELP_TAIL: &str = "\
   BOOKLIB_DIR       书库目录
   BOOKLIB_MTP_DIR   Kindle、掌阅的 jmtpfs 挂载点所在的目录（缺省 $XDG_RUNTIME_DIR/mtp）
   BOOKLIB_NO_SSH=1  不连 Move
+  BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查 MTP 挂载点挂没挂着（测试用普通目录当设备）
   BOOKLIB_NO_NET=1  不联网（不找元数据、封面）
 
 退出码：0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）";

@@ -252,7 +252,7 @@ impl Library {
     /// `<存储>/<dir>`，否则是电脑上跟踪目录旁的 `<模式 id>/`（add 进来的书、网址书在书库 `output/<模式 id>/`）。
     fn output_dir(&self, meta: &Meta, device: &Profile, target: &Target) -> Result<(PathBuf, PathBuf), String> {
         let device_root = match target {
-            Target::Dir { root } => Some(root.clone()),
+            Target::Dir { root, .. } => Some(root.clone()),
             _ => None,
         };
         let lib_root = device_root.clone().unwrap_or_else(|| std::path::absolute(&self.root).unwrap_or_else(|_| self.root.clone()).join("output").join(&device.id));
@@ -468,6 +468,10 @@ impl Library {
         // MTP 设备上直接写正式文件名（不经临时文件）：写到一半被打断，正式文件名上会留下半截，所以要先登记一条指纹留空的记录，
         // 下次认得出这个位置没传完、重新传（见 `Work::File`）
         let direct = matches!(target, Target::Dir { .. });
+        let mount = match target {
+            Target::Dir { mount, .. } => mount.clone(),
+            _ => None,
+        };
         let r = (|| {
             // 目录里已有一个不认识的同名文件、和这份逐字节相同（以前手工拷上去的）：认领它，不另起名字
             let out = dir.join(self.records.states.get(&sp).file_name_for(meta, &dir, format.ext(), Some(&made.src), copied.as_deref(), &taken)?);
@@ -504,7 +508,7 @@ impl Library {
             // 记录里没有哈希（不是我们传的、或旧记录）时才把设备上的读回来比
             let compare = entry.sha.is_empty();
             entry.fingerprint = fingerprint.clone();
-            let t = self.transfer(meta, device, sp.clone(), made, done.map(|p| p.path.clone()), entry, Work::File { out, compare, direct });
+            let t = self.transfer(meta, device, sp.clone(), made, done.map(|p| p.path.clone()), entry, Work::File { out, compare, direct, mount });
             if same {
                 // 和设备上的一样：不用传
                 return self.complete(t, Ok(Done::File(false))).map(Step::Done);
