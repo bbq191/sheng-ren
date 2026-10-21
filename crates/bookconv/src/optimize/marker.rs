@@ -1,7 +1,7 @@
 //! 幂等标记：优化产物内埋的 `META-INF/eink-optimized` 的内容。
 use super::*;
 
-/// 标记值：含清洗层的完整优化写 `full`，只跑核心遍（`wash=None`）写 `core`。**不写版本号**（2026-10-09 用户定）：以前写的是
+/// 标记值：含清洗层的完整优化写 `full`，只跑核心遍（`wash=None`）写 `core`。**不写版本号**（2026-10-09 定）：以前写的是
 /// [`OPTIMIZE_VERSION`]/[`COMIC_VERSION`]，规则版本一加，所有产物的字节都跟着变，掌阅、Move 上的书哪怕内容一个字没变也要全部重传
 /// （Move 进度回到开头）。版本号照旧进书库的指纹（决定要不要重新生成），重新生成出逐字节相同的书就不再传。
 pub fn marker_value(full: bool) -> &'static str {

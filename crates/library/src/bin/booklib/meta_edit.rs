@@ -1,10 +1,10 @@
 //! `booklib meta --edit`：查看、改写一个 EPUB 文件的元数据（OPF 里的 Dublin Core）和封面。改的是文件本身（不是阅读器的旁路缓存）。
-//! 给的不是存在的文件时按书库 id 前缀或书名片段找书（同 `list`），改它的原件（2026-10-08 用户要）；只读书库、不加锁。
+//! 给的不是存在的文件时按书库 id 前缀或书名片段找书（同 `list`），改它的原件（2026-10-08 要）；只读书库、不加锁。
 //!
 //! 改 OPF（改书名时连 NCX 里的书名）和封面；写出的书和 booklib 的产物一样过一遍 EPUB 3 规范整理（XHTML 修成合法 XML、
 //! OPF 升到 3.0、补导航文档），`dcterms:modified` 写成现在的时间。可见文字一个不动。
 //! 参数统一：任何选项给空字符串 = 删掉这一项（`--cover ""` 就是去掉封面）；`--名字 值` 和 `--名字=值` 两种写法都认。
-//! 不备份（2026-10-01 用户定）；写入先写临时文件再改名，中途失败原文件不动。
+//! 不备份（2026-10-01 定）；写入先写临时文件再改名，中途失败原文件不动。
 
 use bookconv::opfmeta::{self, DcField, Edits};
 use std::ffi::OsString;
@@ -159,7 +159,7 @@ pub fn run(args: Vec<OsString>, library: PathBuf) {
     edits.modified = Some(bookconv::util::utc_now_w3c());
     edits.normalize = true;
 
-    // 先写临时文件再改名（不备份：2026-10-01 用户定），中途失败原文件不动。
+    // 先写临时文件再改名（不备份：2026-10-01 定），中途失败原文件不动。
     // 符号链接改它指向的文件（不把链接换成普通文件）；写回的文件保留原来的权限（临时文件新建出来是缺省权限）
     let file = std::fs::canonicalize(&file).unwrap_or_else(|e| fail(&format!("{}: {e}", file.display())));
     let perms = std::fs::metadata(&file).map(|m| m.permissions()).unwrap_or_else(|e| fail(&format!("{}: {e}", file.display())));

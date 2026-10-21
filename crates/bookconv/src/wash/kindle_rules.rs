@@ -1,4 +1,4 @@
-//! 照 Send to Kindle 的规则排（只修复的文字书，profile `kindle_rules`：掌阅、Move；2026-10-08 用户定「三台统一是一套规则」）。
+//! 照 Send to Kindle 的规则排（只修复的文字书，profile `kindle_rules`：掌阅、Move；2026-10-08 定「三台统一是一套规则」）。
 //! Kindle 那边由 KFX 写出器按这些规则写（`kfx::write`，规则表见 docs/kfx.md#send-to-kindle-的样式规则）；这里把其中会让
 //! Kindle 和按 CSS 排的阅读器看起来不一样的几条，就地改进书自己的样式表（只改值、删声明，不加选择器——xochitl 的 CSS 解析器很脆）：
 //!
@@ -161,7 +161,7 @@ struct Ctx {
     bg_fixes: HashMap<String, String>,
 }
 
-/// 竖直间距照 Kindle 换算（2026-10-12 用户定，「测试-竖直间距」三台量的）：Kindle 的上下外边距、内边距按行距换像素（一 rem ≈
+/// 竖直间距照 Kindle 换算（2026-10-12 定，「测试-竖直间距」三台量的）：Kindle 的上下外边距、内边距按行距换像素（一 rem ≈
 /// 正文一行 / 1.2 ≈ 52.5px），掌阅、Move 按自己的字号（≈ 37.5px），同样写 1em，Kindle 上占页高多一半。这里把上下外边距、内边距
 /// 改写成在这个阅读器上占内容区高的比例和 Kindle 一样：
 ///
@@ -559,7 +559,7 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     }
 }
 
-/// body 的左右边距逐文件照 Kindle（用户 2026-10-14 选）：Kindle 按文件定（这个文件里有块这一侧的外边距是负的，body 这一侧的外边距、
+/// body 的左右边距逐文件照 Kindle（2026-10-14 选）：Kindle 按文件定（这个文件里有块这一侧的外边距是负的，body 这一侧的外边距、
 /// 内边距照加，KFX 写出器 `has_negative`），样式表全书共用只能按字数取多数（[`BookFacts::neg`]）。和多数不一样的文件给 `<body>`
 /// 加一个类，类规则写这个文件该有的：多数留、这个文件不该有的写 0，多数去掉、这个文件该有的写回原值（`eink-body.css`）。
 /// 《帷幕》一半正文所在的文件只用了不带负外边距的章名，Kindle 不加 body 的 5pt，两台以前照多数加了。返回改了的文件数。

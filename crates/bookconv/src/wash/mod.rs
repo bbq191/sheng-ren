@@ -6,7 +6,7 @@
 //!    encryption.xml + OPF manifest 项；列了正文/图片/导航 = 真 DRM → **报错停下**。
 //! 2. 字体字号解锁（独立 .css、`<style>`、`style=""` 三处，规则见 `crate::cssunlock`）：`font-family`、`line-height`、
 //!    绝对字号去掉，相对字号保留（正文整体那一层的除外），`font` 简写只留粗斜体，`background` 简写只留颜色
-//!    （背景图去掉：xochitl 把背景图平铺满页盖住正文，真机《飘》）。颜色、对齐等别的样式不动（用户 2026-09-29）。
+//!    （背景图去掉：xochitl 把背景图平铺满页盖住正文，真机《飘》）。颜色、对齐等别的样式不动（2026-09-29）。
 //! 3. 边距归零（= `--margin-* 0`）：body/html/@page 的 margin/padding 删掉（不另注入规则）。
 //! 4. 段距归零 + 首行缩进（= `--remove-paragraph-spacing --remove-paragraph-spacing-indent-size 2`）：p/div 的
 //!    上下 margin/padding 归零（左右保留：blockquote/列表缩进不伤），`p{text-indent:2em}`；`keep_para_spacing` 时
@@ -16,7 +16,7 @@
 //! 6. 自动目录（= `--use-auto-toc --level1-toc //h:h1 --level2-toc //h:h2`）：缺省**仅在书无目录时**从 h1/h2 生成
 //!    `toc.ncx` + `nav.xhtml`（xochitl 两者都认）；`AutoToc::Always` 强制重建（原目录坏掉的书）。
 //!    定章节（`chapters.rs`，文字书）：按目录层级定书/卷、章、节，漏掉的节补进目录、目录改指到文件中间的标题。
-//!    **不拆文件**（2026-10-06 用户定：章节不强制分页，原书的文件结构原样保留）。
+//!    **不拆文件**（2026-10-06 定：章节不强制分页，原书的文件结构原样保留）。
 //! 7. 单标签重复 `id=` 折叠（`collapse_dup_id_attrs`）：非法 XHTML 会让 xochitl 整章白屏，这里先修、质量门再拦。
 //! 8. 全书 id 去重（`ids.rs`）：跨文件重复的 id 改名，全书指向它的链接一起改。
 //! 9. 规范整理（`normalize.rs`，最后一步）：XHTML 修成合法 XML（DOCTYPE、命名实体、裸 `&`/`<`、控制字符、空元素、多余闭合标签），
@@ -97,7 +97,7 @@ pub use self::encoding::transcode_entries;
 /// - 7（2026-10-12）：改完自查正文字体（`kindle_rules::exposed_fonts`）：删掉胜出的正文字体声明后，层叠里被它盖住的字体会露出来，
 ///   接管的字数比它本来就生效的多就一并去掉（《嘯風山莊》两份样式表都给正文写了字体，21.9 万字的正文以前显示成先链的那一种）。
 ///   测试书只有《嘯風山莊》变，可见文字不变。
-/// - 8（2026-10-12）：阅读器的两个怪癖（用户定）：不认 `rgba()` 的（掌阅）把规则里的 `rgba()` 换成按白底合成的不透明色
+/// - 8（2026-10-12）：阅读器的两个怪癖（已定）：不认 `rgba()` 的（掌阅）把规则里的 `rgba()` 换成按白底合成的不透明色
 ///   （《飘》「第一卷」标题的半透明白条作废后字看不见）；不认背景图 `no-repeat` 的（Move，profile `background_no_repeat`）
 ///   去掉写了不平铺的背景图、背景色照留（大图偏到一边被裁、小图平铺满页）。
 /// - 9（2026-10-12）：图片照 Kindle 上的大小显示（`kindle_images.rs`，profile `image_sizing`）：Move 只认百分比宽度、不写宽度和
@@ -114,24 +114,24 @@ pub use self::encoding::transcode_entries;
 /// - 13（2026-10-12）：掌阅背景尺寸的高写 `auto` 会把图拉长到整页高（测试书「测试-掌阅背景」）：整页背景图照 Kindle 上的大小、
 ///   位置写成屏幕像素的 `background-size`、`background-position`，接在规则末尾（profile `background_auto_height = false`；
 ///   《飘》「第一卷」插图、版权页底纹，掌阅真机 ✓）。
-/// - 14（2026-10-12）：竖直间距照 Kindle 换算（用户定，方案 B）：Kindle 按行距排上下外边距、内边距（一 rem ≈ 52.5px），掌阅、Move
+/// - 14（2026-10-12）：竖直间距照 Kindle 换算（维护者定，方案 B）：Kindle 按行距排上下外边距、内边距（一 rem ≈ 52.5px），掌阅、Move
 ///   按自己的字号（≈ 37.5px），同样 1em 在 Kindle 上占页高多一半；上下外边距、内边距（含 `eink-ua.css`）改写成占内容区高的比例和
 ///   Kindle 一样（`kindle_rules::VScale`，profile `em_px`）。`%`、`px`、`pt` 折成屏幕像素，顺带修了掌阅把 `pt` 当 px、Move 的 `%`
 ///   只有十来像素。测试书三台量过，掌阅、Move 每种写法差 1–4px。
 /// - 15（2026-10-12）：竖直间距换算挪到最后（`kindle_rules::scale_vertical_entries`）：14 先换算再算页首垫图，垫图读到放大过的
 ///   边距、垫高了，《飘》「第一卷」在 Move 上标题挤到下一页（真机）。
-/// - 16（2026-10-12）：Move 上去掉 `display:none` 的元素（`hidden.rs`，profile `display_none = false`，用户定）：xochitl 行内、外链的
+/// - 16（2026-10-12）：Move 上去掉 `display:none` 的元素（`hidden.rs`，profile `display_none = false`，已定）：xochitl 行内、外链的
 ///   `display:none` 都不认，《飘》《春雪》版权页顶上给目录用的「版权信息」标题露出来、把版权页挤成两页。`id` 留成空 `<span>`。
 /// - 17（2026-10-12）：15 把竖直换算挪到最后时漏了不是 UTF-8 的样式表（《嘯風山莊》Big5 的 CSS.css 没换算），补上（同 `rewrite_entries` 按单字节读写）。
-/// - 18（2026-10-12）：大段上外边距在 Kindle 上排不下时换页、丢掉边距，掌阅、Move 照样做（`break_margin.rs`，用户定）：按 Kindle
+/// - 18（2026-10-12）：大段上外边距在 Kindle 上排不下时换页、丢掉边距，掌阅、Move 照样做（`break_margin.rs`，已定）：按 Kindle
 ///   的尺寸估算，从文件开头、强制分页起累加，上外边距至少页高 1/4 的块「已排 + 边距 + 自己」超过一页的 90% 就在它前面分页、边距写 0。
 ///   《飘》上下册、《春雪》版权页后的二维码换到下一页页首（掌阅以前推到页底、那行字掉到下一页）；25 本只有这 3 本变。
-/// - 19（2026-10-13，用户定）：只有空白的段落（`<p>&nbsp;</p>`、`<p>　</p>`、`<p><br/></p>`、块之间单独的 `<br/>`）照 Kindle 折成下一块的
-///   上外边距（`wash/blank_fold.rs`）：空段掌阅 `display:none` 藏起、Move 去掉（不认 `display:none`，用户定），下一块上外边距写成 Kindle 上
+/// - 19（2026-10-13，已定）：只有空白的段落（`<p>&nbsp;</p>`、`<p>　</p>`、`<p><br/></p>`、块之间单独的 `<br/>`）照 Kindle 折成下一块的
+///   上外边距（`wash/blank_fold.rs`）：空段掌阅 `display:none` 藏起、Move 去掉（不认 `display:none`，已定），下一块上外边距写成 Kindle 上
 ///   折叠后 + 0.6 × 空段行高。《三体》585 处，掌阅、Move 每个空段以前比 Kindle 多空 0.6–2 行。
 /// - 20（2026-10-13）：Move 上块末尾的 `<br/>` 去掉（Kindle、掌阅不排，Move 多排一行；`blank_fold.rs`）；页首要垫的比 xochitl 标题前自己加的
 ///   空还少、或者多得不到 5% 的，第一块开头是字、块在 Move 上行距是 1 时改在块里最前面放行内窄图撑高第一行（`top_spacer.rs`，
-///   `eink-strut.png`）；Move 上 `<p>` 以外的块行距照 Kindle 按全书正文行距归一（`line_height.rs`，profile `line_height_except_p`，用户定）。
+///   `eink-strut.png`）；Move 上 `<p>` 以外的块行距照 Kindle 按全书正文行距归一（`line_height.rs`，profile `line_height_except_p`，已定）。
 /// - 21（2026-10-13）：Move 上标题字号照 Kindle 写成最接近的关键字（xochitl 的 h1–h6 只认 `small`…`xx-large`，`heading_size.rs`，
 ///   profile `heading_font_keywords`）；行内垫图按标题在 Move 上的字号算。
 /// - 22（2026-10-13）：Move 上写了 em 的 `<style>` 挪进外链样式表、行内 `style` 里写 em 的长度搬进类规则、外链规则最后一条紧挨 `}` 的 em 声明补分号
@@ -139,7 +139,7 @@ pub use self::encoding::transcode_entries;
 ///   `inline_css_lengths`）。
 /// - 23（2026-10-13）：Move 上左右内边距并进外边距（悬挂缩进排对）、上下内边距和标题的上下外边距照 Kindle 写到相邻块认的一侧、
 ///   上下边框插同色同粗的横线图（xochitl 不认内边距、不画边框、不认标题外边距；`box_fix.rs`，profile `padding`、`borders`、
-///   `heading_margins`，边框用户选横线图）。
+///   `heading_margins`，边框维护者选横线图）。
 /// - 24（2026-10-13）：块上 px 写的左右外边距照 Kindle 折成 em（掌阅、Move 的 px 是屏幕像素，Kindle 按 0.45pt），Move 上 % 写的按
 ///   内容区宽折成 em（Move 当成 px；`box_fix.rs`，profile `px_margins`、`percent_margins`）。
 /// - 25（2026-10-13）：掌阅上 rem 改成 em（字号的折成 px）、去掉 `!important`（靠它胜出的值写进行内 `style`）、行距和 Kindle 差 5% 以上的
@@ -150,7 +150,7 @@ pub use self::encoding::transcode_entries;
 ///   `block_style.rs`）。
 /// - 27（2026-10-13）：Move 上左右有框的块（全框、单边）包进单格表格，框写成单元格行内的边框（颜色、粗细、点线照书），块的左外边距
 ///   挪到表格、内边距写到单元格；书里表格、单元格的边框写进行内、加 `cellspacing="0"`（xochitl 普通块的边框不画，只画表格、单元格
-///   行内写的；`box_fix.rs`，用户选）。
+///   行内写的；`box_fix.rs`，维护者选的）。
 /// - 28（2026-10-13）：Move 上块的宽度折成左右外边距、页中间负的上下外边距照 Kindle 写成非负的、列表项上下内边距并进外边距；两台单元格上
 ///   px 的内边距、掌阅行内元素和图上 px 的左右内外边距照 Kindle 折成 em（探针 Q88–Q99；`box_fix.rs`，profile `block_width`、`negative_margins`）。
 /// - 29（2026-10-14）：Move 上没有项目符号的列表项左右内边距并进外边距（《海葵》目录页）；单元格缺省顶端对齐，一行两格以上、Kindle 上居中的
@@ -160,14 +160,14 @@ pub use self::encoding::transcode_entries;
 /// - 31（2026-10-14，Kindle 对照）：撤掉 30 的 Move 单元格 `width` 属性（Kindle 不按单元格宽度压窄，Move 不认 CSS 宽度本来就同
 ///   Kindle）；单元格的宽度两台照 Send to Kindle 写成列宽百分比（掌阅行内 `width:P%`、Move 属性，profile `cell_width`）；定宽块 `margin:auto` 不居中（Kindle 不认）：Move 折外边距时多出来的
 ///   都放右边、掌阅左边的 auto 写成 0（profile `margin_auto`）；首行缩进 px 按 0.45pt（掌阅折 em 跟着对）；`font-size:large` 1.125。
-///   Move 上左右外边距、内边距的 em 照 Kindle 按页宽换算（乘一行的 em 数 ÷ 32，约 0.70；profile `horizontal_scale`，用户选）；
-///   body 的左右边距逐文件照 Kindle（和全书多数不一样的文件 body 加类，`eink-body.css`，用户选）；图片加了按 Kindle 折的类时
+///   Move 上左右外边距、内边距的 em 照 Kindle 按页宽换算（乘一行的 em 数 ÷ 32，约 0.70；profile `horizontal_scale`，维护者选的）；
+///   body 的左右边距逐文件照 Kindle（和全书多数不一样的文件 body 加类，`eink-body.css`，维护者选的）；图片加了按 Kindle 折的类时
 ///   `<img>` 行内 style 里的宽高去掉（两台认行内样式、压过类规则：《克莱因壶》Move、《狼厅》掌阅的图和 Kindle 不一样大）。
 /// - 32（2026-10-14，P0 验收核查）：字号归一时外边距、内边距、首行缩进、行高里的 px、pt 这些绝对长度也乘系数（Kindle 写出器按
 ///   本元素原来的字号换算，等于跟着归一缩放；《嘯風山莊》段间距掌阅、Move 大 16.7%）；掌阅行距差 3% 以上就接（以前 5%）；
 ///   `br{display:block}` 的空段 `<p><br/></p>` 照样折掉（《人生复本》112 处）；Move 上字号和最近的关键字差 3% 以上的标题改成
-///   `<div>`（`heading_div.rs`，用户定：《人生海海》小节标题 1.75em，xx-large 是 2.018）；Move 上 em 一律按根字号算、字号的 px
-///   是屏幕像素：字号、边距、缩进换成按根的 em（`root_em.rs`，profile `em_root`，用户定）；字号 `1em` 也挪出行内；空段自己的
+///   `<div>`（`heading_div.rs`，维护者定：《人生海海》小节标题 1.75em，xx-large 是 2.018）；Move 上 em 一律按根字号算、字号的 px
+///   是屏幕像素：字号、边距、缩进换成按根的 em（`root_em.rs`，profile `em_root`，已定）；字号 `1em` 也挪出行内；空段自己的
 ///   上下外边距照 Kindle 留着、逐对折叠（`blank_fold.rs`，同写出器 23）；掌阅上标题自己没写对齐的照 Kindle 继承来的写明（掌阅
 ///   缺省居中、`inherit` 不认；`block_style.rs`，profile `heading_center`）。
 /// - 33（2026-10-14，三本武侠全集体检、探针 Q132–Q134 三台真机）：Kindle 不浮动——掌阅标题上的 `float` 写成 `none`（profile
@@ -180,17 +180,17 @@ pub use self::encoding::transcode_entries;
 ///   插了下边框横线图的块行距不低于 1、接在行内（Move 行距少的从行下面扣，横线压字，profile `line_height_floor`；外链里写不带
 ///   单位的 `line-height` 会让后面的规则失效）；文件开头的块上的强制分页行内接 `page-break-before:auto`（Move 多出一张空白页）；
 ///   往行内 `style` 接声明时末尾的 `&quot;` 不再被当成分号去掉（`html::style_base`，「第一部」的字号、居中丢了）。
-/// - 35（2026-10-15，三台版式检查 `tools/kfx/layout.py` 查出来、用户定修）：Kindle 上不出页的空页（刻意留的空白页、只有隐藏元素的页，
+/// - 35（2026-10-15，三台版式检查 `tools/kfx/layout.py` 查出来、维护者定修）：Kindle 上不出页的空页（刻意留的空白页、只有隐藏元素的页，
 ///   写出器不出版面）两台也去掉、链接改指下一页（`empty_pages::remove_kindle_empty_pages`，《疯探》`blank.html`）；Move 上左右有框的
 ///   列表也包进单格表格（《雪国》注释列表的虚线框）；页首的块也插上横线图，垫图让出它的高（`box_fix::page_top_rule_px`，《人生海海》
 ///   「第一部」、《平凡的世界》卷名）；页首垫图前面什么都没有的空元素照 Kindle 不算（写出器不出节点；以前整章不垫，「第一部」
 ///   在 Move 上偏上一截）；包框的列表单元格左内边距补到 Kindle 的缩进（`box_fix::list_indent_extra_px`，《雪国》注释框序号紧贴框线）；包框的单元格照外层写回字号、行距、对齐、字体（书里 `td{font-size:0.6em}` 落在我们的表格上）。
-/// - 36（2026-10-15，用户在 Move 上看《梁羽生》）：页首块上内边距很大（拿来推字的，卷名 `padding-top:6em` 配 3 倍字号，18 rem）时，
+/// - 36（2026-10-15，维护者在 Move 上看《梁羽生》）：页首块上内边距很大（拿来推字的，卷名 `padding-top:6em` 配 3 倍字号，18 rem）时，
 ///   上横线图只画线、不连着内边距，距离只由垫图出（以前算两遍，垫图 + 标题前自带的空 + 横线图的透明段超过一页，卷名被推到下一页，
 ///   前面多出一页空背景，33 版就有）；Move 上 HTML 属性 `width="80%"` 的图写成 CSS 类（Move 不认属性、拉满一行，《梁羽生》作者介绍页的
 ///   文字被挤到下一页；`kindle_images` 的 `attr_percent`）。
 /// - 37（2026-10-15，同上，OPTIMIZE 58）：只有小图的页去掉强制分页，小图并到上一页底部（`break_margin.rs`，掌阅、Move 这一份）。
-/// - 38（2026-10-15，用户在 Move 上把阅读字号调到 0.8 后《梁羽生》卷名不再竖排）：Move 上窄的定宽块（占能用宽 30% 以内，卷名竖排这类）
+/// - 38（2026-10-15，维护者在 Move 上把阅读字号调到 0.8 后《梁羽生》卷名不再竖排）：Move 上窄的定宽块（占能用宽 30% 以内，卷名竖排这类）
 ///   不再折成 em 外边距（跟着阅读字号变），包进单格表格、表格宽写占外层的百分比、靠哪边写 `align`（`box_fix.rs` 的 `narrow`）；表格不会窄过
 ///   里面最宽的一个字，一字宽的竖条和字号无关（真机字号 1.0、0.8 都竖排）。
 /// - 39（2026-10-16，掌阅怪癖探针 Q148）：段落上的 `float` 也照 Kindle 写成 none（以前只管标题；`box_fix.rs`，profile `float`）。
@@ -301,7 +301,7 @@ pub struct WashOpts {
     pub image_sizing: Option<(profile::ImageSizing, KindleImageRef)>,
     /// 图片的原始宽高（路径 → 像素）：流式优化时清洗层拿到的图片条目是空占位，由调用方读文件头填上（`kindle_images` 用）。
     pub image_dims: Option<std::sync::Arc<HashMap<String, (u32, u32)>>>,
-    /// Kindle 的内容区和字号：只有小图的页（版权页后 20×20 的小图）去掉前面的强制分页（`break_margin.rs`，三台一并，2026-10-15 用户定）。
+    /// Kindle 的内容区和字号：只有小图的页（版权页后 20×20 的小图）去掉前面的强制分页（`break_margin.rs`，三台一并，2026-10-15 定）。
     /// 掌阅、Move 在 `kindle_rules` 里连同分页估算一起做，这里只给不走 `kindle_rules` 的（Kindle）用。`None` 不做。
     pub tiny_page: Option<KindleImageRef>,
     /// 平铺背景的阅读器（`background_no_repeat = false`）上整页背景图做成整页一块用的尺寸（[`crate::bgfit::plan_tiles`]）；
@@ -415,7 +415,7 @@ pub fn is_wash_css_name(name: &str) -> bool {
 // background / background-image：书常在 body/分卷页用 CSS 背景图（装饰纹样、分卷插画）。xochitl **无视
 // no-repeat / background-size** → 把背景图**平铺**满页盖住正文（真机《飘》body.fen 的 `background:url() no-repeat`
 // 被铺成多幅）；`background` 简写里的颜色保留成 `background-color`。
-// line-height（2026-09-27 用户定）：与字号字体同理，书写死行高会让设备的"行距"设置不起作用。
+// line-height（2026-09-27 定）：与字号字体同理，书写死行高会让设备的"行距"设置不起作用。
 pub const DEFAULT_FILTER_PROPS: &[&str] = &["font-family", "font-size", "font", "line-height", "background-image", "background"];
 const WASH_MARK: &str = "eink-wash";
 
@@ -599,7 +599,7 @@ fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> 
     nest_parts_among_siblings(entries, opts.auto_toc, heading, &mut rep);
     auto_toc(entries, opts.auto_toc, heading, &mut rep);
     // 定章节、补节进目录放在自动目录之后：自动目录给标题补的 id 已经在，改目录链接时能对上。漫画不做。
-    // 不拆文件（2026-10-06 用户定：章节不强制分页，原书的文件结构原样保留）。
+    // 不拆文件（2026-10-06 定：章节不强制分页，原书的文件结构原样保留）。
     let comic = comic.unwrap_or_else(|| crate::comic_detect::is_comic(entries));
     if !comic {
         chapters_into_toc(entries, heading, &mut rep);
@@ -615,7 +615,7 @@ fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> 
     Ok(rep)
 }
 
-/// 只修复（[`WashMode::Repair`]，文字书；2026-10-08 用户定三台（Kindle、掌阅、Move）都这样做）：书里的文字、图片、样式一概不动，只做
+/// 只修复（[`WashMode::Repair`]，文字书；2026-10-08 定三台（Kindle、掌阅、Move）都这样做）：书里的文字、图片、样式一概不动，只做
 /// - 合规：指向不存在文件的引用去掉（`drop_dead_refs`）、一个标签上重复的 `id` 合并、跨文件重复的 id 改名（链接跟着改）、
 ///   NCX 的 DOCTYPE 和 manifest id、`dtb:uid` 对齐，最后规范整理成 EPUB 3（`normalize.rs`：合法 XML、OPF 3.0、nav 与 NCX 互补）；
 /// - 目录：指错位置的改指、分部重建、没有目录的按标题生成、按目录层级定章节并把漏掉的节补进目录（补的 id 不改显示）；
@@ -843,7 +843,7 @@ fn book_lang_tag(entries: &[Entry], opf_idx: Option<usize>, lang: LangMode) -> S
 }
 
 /// **只做规范整理**（EPUB 3），和清洗层最后一步是同一套：NCX 去 DOCTYPE → XML 修复 → OPF 升级 3.0 → 导航文档与 landmarks → NCX
-/// `dtb:uid` 对齐 OPF。给 `booklib meta --edit` 用（2026-09-30 用户：改元数据写出的书也要和 booklib 一样符合 EPUB 3）。不做排版、目录等清洗。
+/// `dtb:uid` 对齐 OPF。给 `booklib meta --edit` 用（2026-09-30 ：改元数据写出的书也要和 booklib 一样符合 EPUB 3）。不做排版、目录等清洗。
 pub fn normalize_epub3(entries: &mut Vec<Entry>) -> WashReport {
     let mut rep = WashReport::default();
     lang::fix_languages(entries, &mut rep);

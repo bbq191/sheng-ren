@@ -1,4 +1,4 @@
-//! 产物送到设备（2026-10-07 用户定：`sync` 按设备接没接上直接传，电脑上不留产物）。怎么送由 profile 的 `[deliver]` 定：
+//! 产物送到设备（2026-10-07 定：`sync` 按设备接没接上直接传，电脑上不留产物）。怎么送由 profile 的 `[deliver]` 定：
 //!
 //! - **MTP**（Kindle、掌阅）：jmtpfs 自动挂载在 `<挂载目录>/<mount>`（缺省 `$XDG_RUNTIME_DIR/mtp`），下面是存储
 //!   （「Internal Storage」之类），产物放进存储根目录的 `<dir>/`，按普通文件写。挂载点在、里面有存储就算接上了。
@@ -493,7 +493,7 @@ impl Xochitl {
         self.client.present(uuid)
     }
 
-    /// 下一轮重新查（`sync --watch` 每轮开头：这期间用户可能在 Move 上删了书）。书架服务太旧的记着，不再试批量接口。
+    /// 下一轮重新查（`sync --watch` 每轮开头：这期间维护者可能在 Move 上删了书）。书架服务太旧的记着，不再试批量接口。
     pub(crate) fn forget_presence(&self) {
         let mut p = self.presence.borrow_mut();
         if matches!(*p, Presence::Known(_)) {

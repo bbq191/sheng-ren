@@ -1,5 +1,5 @@
 """实际显示抽样：同一本书同一处（章首）在 Kindle、掌阅、Move 上排出来的样子，按像素量出每行字的位置再比。
-unify.py 比的是交给阅读器的样式（阅读器自己的怪癖不在其中）；这里比屏幕上真的画出来的（2026-10-14 P0，用户要）。
+unify.py 比的是交给阅读器的样式（阅读器自己的怪癖不在其中）；这里比屏幕上真的画出来的（2026-10-14 P0，维护者要的）。
 
 用法：
   python3 sample.py move    书.epub 输出目录 --title=章名 [--host=root@10.11.99.1] [--pages=2]
@@ -8,7 +8,7 @@ unify.py 比的是交给阅读器的样式（阅读器自己的怪癖不在其�
   python3 sample.py ireader 书.epub 输出目录 --title=章名 [--pages=2] [--serial=…]
       adb 推进掌阅 documents/测试/（用完请删），文件管理器里点开，菜单键 → 目录 →（展开全部）→ 点章名，逐页截屏。
   python3 sample.py kindle  输出目录 [--last=1]
-      从 Kindle（jmtpfs 挂载）的 screenshots/ 拷最新的几张截图（Kindle 没越狱，截图得用户在真机上截）。
+      从 Kindle（jmtpfs 挂载）的 screenshots/ 拷最新的几张截图（Kindle 没越狱，截图得维护者在真机上截）。
   python3 sample.py measure 图...
       量每行字：(上, 下, 左, 右) 像素，正文行距，文字区左右边界。
   python3 sample.py compare 参照图 图...

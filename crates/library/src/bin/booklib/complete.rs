@@ -1,4 +1,4 @@
-//! Tab 补全（2026-10-19 用户要）：`booklib __complete <种类> [当前的词]`，给 shell 的补全脚本调，不在帮助里列。
+//! Tab 补全（2026-10-19 要）：`booklib __complete <种类> [当前的词]`，给 shell 的补全脚本调，不在帮助里列。
 //! - `fish`：打印 fish 的补全脚本（`install.sh` 装到 fish 的 completions 目录；命令、选项从 [`COMMANDS`] 表生成）
 //! - `devices`：阅读模式 id（`--device=` 的值）
 //! - `paths 词`：目录和 `.epub`、`.cbz`，当前目录下的和书根目录下的（`track` 的相对路径两处都认）

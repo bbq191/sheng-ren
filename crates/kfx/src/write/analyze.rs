@@ -126,7 +126,7 @@ impl TextCounts {
 
     /// 正文字体（字数最多的那个，小写），写成 `default`：没有嵌入时 Kindle 遇到不认识的字体名会换成别的字体，和没写字体的表格、
     /// 阅读器设置里选的字体都对不上（《啸风山庄》正文写着没嵌入的「AR MingU30 DemiBold」，2026-10-05 真机）。
-    /// 正文本来就该用阅读器的字体（用户定的字体规矩，见 typesetting.md）。
+    /// 正文本来就该用阅读器的字体（定下的字体规矩，见 typesetting.md）。
     /// 写出器 11 起嵌入了的也一样（Send to Kindle：《绍宋》新版嵌入的 NotoSerifSCLight、《平凡的世界》的 FZLanTingSong 都写 `default`，2026-10-08）。
     pub(super) fn body_font(&self) -> Option<String> {
         let mut count: HashMap<Option<String>, usize> = HashMap::new();

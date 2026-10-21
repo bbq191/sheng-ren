@@ -1,4 +1,4 @@
-//! 阅读器不认的 CSS 写法换成认的、排出来一样的写法（只修复、照 Send to Kindle 统一的文字书；2026-10-13 用户要修）。都是掌阅
+//! 阅读器不认的 CSS 写法换成认的、排出来一样的写法（只修复、照 Send to Kindle 统一的文字书；2026-10-13 要修）。都是掌阅
 //! （2026-10-13 怪癖测试书 `tools/quirks/probe.py ireader`）：
 //!
 //! - **`rem`**（profile `rem = false`）：掌阅不认，整条声明当没写（Q53：`margin-left:2rem` 不挪）。Kindle 写出器的层叠把字号以外的

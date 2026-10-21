@@ -58,7 +58,7 @@ fn add_build_skip_remove() {
     let st = std::fs::read_to_string(&state_path).unwrap().replace(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION), "|0|");
     std::fs::write(&state_path, st).unwrap();
     assert_eq!(lib.outputs(&meta).into_iter().find(|o| o.device == "xochitl").unwrap().fresh, Some(false));
-    // Move 上的那本被用户删了：下一轮（新的一次 sync，或 --watch 的下一轮）重新加入一本
+    // Move 上的那本被维护者删了：下一轮（新的一次 sync，或 --watch 的下一轮）重新加入一本
     mv.docs.lock().unwrap().values_mut().for_each(|d| d.deleted = true);
     lib.refresh_devices();
     assert!(matches!(lib.build(&meta, profile::get("xochitl").unwrap(), false).unwrap(), Built::Written { .. }));
@@ -991,7 +991,7 @@ fn text_and_comic_fingerprints_ignore_the_other_line() {
     assert!(text0.contains(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION)) && comic0.contains(&format!("|c{}|", bookconv::optimize::COMIC_VERSION)), "{text0}\n{comic0}");
 }
 
-/// 设备模型（`bookconv::reader_model`）和 `em_px` 进指纹（2026-10-13 用户定）：改了量出来的标题字号、页首垫图尺寸、认不认的字段，
+/// 设备模型（`bookconv::reader_model`）和 `em_px` 进指纹（2026-10-13 定）：改了量出来的标题字号、页首垫图尺寸、认不认的字段，
 /// 照 Send to Kindle 统一的文字书过期；漫画不受影响。
 #[test]
 fn reader_model_fields_are_in_the_text_fingerprint() {
@@ -1445,7 +1445,7 @@ fn same_titled_new_books_in_flight_do_not_collide() {
 }
 
 /// 原件换了内容（书名没变）：设备上的产物交给新版本——掌阅原地覆盖同一个文件，Move 原地替换同一本（uuid 不变、不进回收站），
-/// 不先删再当新书传（2026-10-09 用户定）。
+/// 不先删再当新书传（2026-10-09 定）。
 #[test]
 fn changed_original_replaces_device_copies_in_place() {
     let dir = tempfile::tempdir().unwrap();
@@ -1517,7 +1517,7 @@ fn build_round_keep(lib: &Library, devices: &[&profile::Profile], keep: bool) ->
     (counts, ev)
 }
 
-/// 每台设备的跟踪范围不同，目录和单本混着跟踪（2026-10-19 用户举的例子）：书根目录 `book` 共用；Kindle 只要一本；掌阅要漫画，
+/// 每台设备的跟踪范围不同，目录和单本混着跟踪（2026-10-19 举的例子）：书根目录 `book` 共用；Kindle 只要一本；掌阅要漫画，
 /// 有的照书库结构、有的从这一层起（`--top`）；Move 要「死亡筆記」（只显示这一层）和几本文字书（有的放根目录、有的照书库结构）。
 /// 从某台的范围里拿掉的书从那台上删掉；整条 untrack 的书下次 sync 连同产物从书库删掉；改放法的书挪位置。
 #[test]

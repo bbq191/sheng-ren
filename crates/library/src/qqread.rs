@@ -1,4 +1,4 @@
-//! QQ 阅读（`novel.qq.com`）：网络文学、出版小说的书目源，豆瓣没有的书在这里找（2026-10-08 用户要，例子《疯探》
+//! QQ 阅读（`novel.qq.com`）：网络文学、出版小说的书目源，豆瓣没有的书在这里找（2026-10-08 要，例子《疯探》
 //! `https://novel.qq.com/detail/1056370737`）。
 //!
 //! 没有公开 API：用网页自己的搜索接口 `GET /api/search?keywords=…&pageIndex=1&pageSize=10`，回 JSON

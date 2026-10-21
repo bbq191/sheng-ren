@@ -518,7 +518,7 @@ pub fn collect_footnote_notes(
 }
 
 /// 同 [`collect_footnote_notes`]；`backrefs`（注释 id → 引用它的标号 id，见 [`marker_backrefs`]）：块没有注释语义、但开头的
-/// 回链指回引用它的标号时，也算注释（2026-10-05 用户定：注释识别和 KFX 统一成"互相链接的一对"）。
+/// 回链指回引用它的标号时，也算注释（2026-10-05 定：注释识别和 KFX 统一成"互相链接的一对"）。
 pub fn collect_footnote_notes_with(
     html_text: &str,
     referenced: &std::collections::HashSet<String>,
@@ -672,7 +672,7 @@ fn fix_duokan_markers_with(html: &str, unlink_backlinks: bool) -> String {
                     let num = duokan_note_num(img_inner).unwrap_or_else(|| local.to_string());
                     format!("<a href=\"#{frag}\"{id_attr}><sup>{}</sup></a>", xml_escape(&num))
                 } else {
-                    // 真图标：原样保留（不再换成上标数字——那是多出来的字，用户 2026-09-29 定），只加 `eink-noteicon` 类限成一个字高
+                    // 真图标：原样保留（不再换成上标数字——那是多出来的字，2026-09-29 定），只加 `eink-noteicon` 类限成一个字高
                     // （没写宽高的 80×80 图标在 xochitl 上撑成一大块，真机《甲午：摇摆的战争》）
                     format!("<sup><a href=\"#{frag}\"{id_attr}>{}</a></sup>", mark_note_icons(&format!("<img{}/>", img_inner.trim_end().trim_end_matches('/'))))
                 }
@@ -702,7 +702,7 @@ fn fix_duokan_markers_with(html: &str, unlink_backlinks: bool) -> String {
 /// - `Popup`（弹窗）：标号标 `epub:type="noteref"`、注释块是 `<aside epub:type="footnote">`，支持的阅读器点标号弹窗显示。
 ///
 /// marker 按元素认（[`a_elems`]，与 [`referenced_note_keys`] 同一口径）：`<sup>` 整个包住的 noteref、其余 noteref、跨文件普通 `<a>`。
-/// 2026-09-29 起不再在标号后追加 `[N]`（用户定：严格说多了字符）。
+/// 2026-09-29 起不再在标号后追加 `[N]`（维护者定：严格说多了字符）。
 ///
 /// 标号原样：`<a>` 只改 `href`（弹窗模式另标 `epub:type`），`id`（注释回链的落点）、`class` 等属性和外面的 `<sup>` 都不动——此前整个
 /// 重写成 `<a href>`，丢了 `id`，注释里指回 `#fnref1` 的回链成了死链（pandoc 的写法）。有序列表来的注释连同编号放成 `<ol start=N>`。
@@ -987,7 +987,7 @@ mod optimizer_footnote_tests {
         assert!(out.contains(r#"<div id="fn1" class="eink-note"><p>注释正文"#), "落点应是 <div id> 包住源块内层 html 原样: {out}");
     }
 
-    /// `<sup>` 包裹的图标 noteref：标号原样保留（不再换成 `[N]`，2026-09-29 用户定），图标加 `eink-noteicon` 类限成一个字高。
+    /// `<sup>` 包裹的图标 noteref：标号原样保留（不再换成 `[N]`，2026-09-29 定），图标加 `eink-noteicon` 类限成一个字高。
     #[test]
     fn sup_wrapped_image_marker_kept_with_icon_class() {
         let mut index: HashMap<NoteKey, Note> = HashMap::new();

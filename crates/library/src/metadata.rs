@@ -1,4 +1,4 @@
-//! 联网补元数据：`booklib meta --fetch`，`sync` 生成前也会给还没找过的书找一次（2026-10-12 用户定：跟踪 → 补元数据 → 传设备）。
+//! 联网补元数据：`booklib meta --fetch`，`sync` 生成前也会给还没找过的书找一次（2026-10-12 定：跟踪 → 补元数据 → 传设备）。
 //!
 //! 按书名、作者找到这本书，存下元数据（`Meta::info`），书里没有封面的顺带找封面（见 `cover`）：
 //! 1. **豆瓣**条目（中文版）：内容简介、标签、原作名、带国籍的作者，以及条目对应版本的出版社、出版年、ISBN、译者；
@@ -8,7 +8,7 @@
 //! **生成时补进书里的**（[`plan`]，只补书里没有的，正文不动）：内容简介、标签；作者拆成一个人一条、补上国籍（`[美] 玛格丽特·米切尔`，
 //! 书里整串写成「某某 著，某某 译」的也拆开）；译者（`dc:contributor`，角色 trl）；出版社、出版日期、ISBN——这三项和译者一样是
 //! 豆瓣那个**版本**的，书里写了译者而那个版本的译者对不上时不补（好读的书多是台湾译本，豆瓣条目多是大陆版）。
-//! 2026-10-12 用户定（以前版本信息只记在 `meta.json`）。书名一律用书自己的。
+//! 2026-10-12 定（以前版本信息只记在 `meta.json`）。书名一律用书自己的。
 
 use crate::cover::{epub_has_cover, incomplete, CoverInfo, CoverResult};
 use crate::net::Net;
@@ -23,7 +23,7 @@ pub struct BookInfo {
     /// 从哪来的："豆瓣 <网址>"、"QQ阅读 <网址>" 或 "Wikidata Q…"。
     pub source: String,
     /// 网站上这部作品的书名（豆瓣条目名不含副标题、Bangumi 中文名、QQ 阅读书名；Wikidata 不填）：生成时书名改用它
-    /// 加上书里的卷次（[`corrected_title`]，2026-10-12 用户定）。
+    /// 加上书里的卷次（[`corrected_title`]，2026-10-12 定）。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     /// 网站上的作者署名（豆瓣带国籍：「[美] 玛格丽特·米切尔」）：书里的作者没写国籍时照它补。
@@ -103,7 +103,7 @@ pub(crate) trait BookSource {
     /// （记成临时错误，别的搜索词也不再试）。
     fn matching_hits(&self, v: &serde_json::Value, nt: &str, want: &[String]) -> Result<Vec<Self::Hit>, String>;
 
-    /// 按书里元数据的书名、作者找（2026-10-08 用户定）：依次试 [`BookSource::queries`]，第一批对得上的就用。
+    /// 按书里元数据的书名、作者找（2026-10-08 定）：依次试 [`BookSource::queries`]，第一批对得上的就用。
     fn search(&self, net: &Net, title: &str, authors: &[String]) -> Vec<Self::Hit> {
         if crate::matching::norm_s(title).is_empty() {
             return Vec::new();
@@ -317,7 +317,7 @@ impl Library {
         if !need_info && !need_cover {
             return Ok((existing_info(), existing_cover()));
         }
-        // 同一套漫画只查一次（2026-10-12 用户要：漫画本数多、元数据一样）：别的卷找到过就照用，这一版规则下没找到过就不再找
+        // 同一套漫画只查一次（2026-10-12 要：漫画本数多、元数据一样）：别的卷找到过就照用，这一版规则下没找到过就不再找
         // `--force` 重找时，这次运行里已经重找过的那一套也照用（全量重找时漫画不必每卷联网）
         if need_info && !need_cover && (!force || self.facts.series_fetched(&series_key(meta))) {
             if let Some(r) = self.series_lookup(meta)? {
@@ -329,7 +329,7 @@ impl Library {
             return Err("连不上网".into());
         }
         net.clear_transient();
-        // 找书只用书里的元数据：书名 + 作者（2026-10-08 用户定，不再从文件名里取书名）
+        // 找书只用书里的元数据：书名 + 作者（2026-10-08 定，不再从文件名里取书名）
         let comic = self.is_comic(meta).unwrap_or(false);
         let mut l = Lookup { lib: self, net, meta, title: meta.title.trim(), need_info, need_cover, comic, info: None, cover: None, work: None, work_err: None };
         for step in CHAIN {
@@ -624,7 +624,7 @@ fn mid_volume(title: &str) -> Option<(String, String)> {
     None
 }
 
-/// 修正后的书名（2026-10-12 用户定：书名用匹配到的网站书名，卷次照书里的补上；没找到的照书里的）：网站书名去掉「（共45册）」
+/// 修正后的书名（2026-10-12 定：书名用匹配到的网站书名，卷次照书里的补上；没找到的照书里的）：网站书名去掉「（共45册）」
 /// 这类说明和卷次，加上书里的卷次（[`volume_suffix`]）。生成时写进书（`dc:title`），设备上的文件名也用它。
 pub(crate) fn corrected_title(meta: &Meta) -> String {
     let Some(web) = meta.info.as_ref().map(|i| i.title.trim()).filter(|t| !t.is_empty()) else { return meta.title.clone() };
@@ -816,7 +816,7 @@ mod tests {
     }
 
     /// 《飘》：署名整串写在一个 dc:creator 里（「[美] 玛格丽特·米切尔 著，梅静 译」），豆瓣挑中的梅静译本：作者拆出来带国籍、
-    /// 译者单列、出版社、日期、ISBN 补上（2026-10-12 用户要）。
+    /// 译者单列、出版社、日期、ISBN 补上（2026-10-12 要）。
     #[test]
     fn plan_splits_credits_and_fills_edition_when_translator_agrees() {
         use bookconv::opfmeta::DcField;
@@ -839,7 +839,7 @@ mod tests {
         assert!(!plan(&meta, Some(&own(&["[美] 玛格丽特·米切尔 著，梅静 译"]))).iter().any(|(f, _)| matches!(f, DcField::Publisher | DcField::Identifier)));
     }
 
-    /// 书名：网站书名去掉说明、加上书里的卷次（用户 2026-10-12 选的）；没找到的照书里的。
+    /// 书名：网站书名去掉说明、加上书里的卷次（2026-10-12 选的）；没找到的照书里的。
     #[test]
     fn title_uses_web_name_plus_book_volume() {
         let t = |book: &str, web: &str| corrected_title(&Meta { title: book.into(), info: Some(BookInfo { source: "豆瓣".into(), title: web.into(), ..Default::default() }), ..Default::default() });

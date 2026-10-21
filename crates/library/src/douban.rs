@@ -299,7 +299,7 @@ fn parse_subject(html: &str) -> Subject {
     // 标签：页面脚本里的 `criteria = '7:标签|7:标签|…|3:/subject/…'`（常用标签在页面上是异步加载的）
     if let Some(i) = html.find("criteria = '") {
         let rest = &html[i + "criteria = '".len()..];
-        // 是 JS 字符串字面量：用户标签里的 `:` 写成 `\:`（《古龙作品全集》「古龙作品全集\:全53册(精装)」），按 JS 去掉转义
+        // 是 JS 字符串字面量：维护者标签里的 `:` 写成 `\:`（《古龙作品全集》「古龙作品全集\:全53册(精装)」），按 JS 去掉转义
         let mut raw = String::new();
         let mut cs = rest.chars();
         while let Some(c) = cs.next() {

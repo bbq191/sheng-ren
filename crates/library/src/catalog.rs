@@ -205,7 +205,7 @@ impl Library {
     }
 
     /// 按 id 前缀、书名片段或原件路径挑书；`selectors` 为空＝全部。存在的文件＝原件就是它的那本，存在的目录＝原件在它下面（递归）的所有书
-    /// （2026-09-30：用户直接给原件路径 `booklib meta --fetch --clear ~/…/书.epub` 时报"没有匹配的书"）。
+    /// （2026-09-30：维护者直接给原件路径 `booklib meta --fetch --clear ~/…/书.epub` 时报"没有匹配的书"）。
     pub fn select(&self, selectors: &[String]) -> Vec<Meta> {
         let all = self.list();
         if selectors.is_empty() {

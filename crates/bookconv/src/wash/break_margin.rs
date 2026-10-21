@@ -1,4 +1,4 @@
-//! 大段上外边距在 Kindle 上排不下时换页、丢掉边距，掌阅、Move 照样做（只修复、照 Send to Kindle 统一的文字书；2026-10-12 用户定）。
+//! 大段上外边距在 Kindle 上排不下时换页、丢掉边距，掌阅、Move 照样做（只修复、照 Send to Kindle 统一的文字书；2026-10-12 定）。
 //!
 //! Kindle（Send to Kindle 同样）：一块内容写了上外边距，本页剩下的地方放不下「边距 + 这块」时，这块挪到下一页的页首，那段边距丢掉。
 //! 掌阅、Move 不丢：《飘》版权页后强制分页，那一页先是一张 20×20 的小图，接着 `<div style="margin-top:55%">` 的二维码——Kindle 上
@@ -128,7 +128,7 @@ fn breaks_in(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync:
     let mut out = Vec::new();
     // 强制分页后的页里只有 Kindle 上小到几乎看不见的图（高不到内容区高的 5%），紧接着的块又被挪到下一页：这一页在 Kindle 上就是只有一个小点的
     // 空白页（《飘》《春雪》版权页后 `<div style="page-break-before:always"><img 20×20/></div>` 再接 `margin-top:55%` 的二维码）。
-    // 用户 2026-10-15 要去掉（三台一并）：返回要去掉分页的元素，小图并到上一页底部
+    // 2026-10-15 要去掉（三台一并）：返回要去掉分页的元素，小图并到上一页底部
     let mut drops: Vec<usize> = Vec::new();
     let mut cand: Option<usize> = None;
     let mut acc = 0.0f64;

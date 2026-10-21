@@ -1,5 +1,5 @@
 # 推送、PR 时跑不碰真书和设备的检查：测试、clippy（0 警告）、shell 脚本、Python 工具脚本语法。
-# 真书回归、真机验证只能在用户本机做（见 CONTRIBUTING.md、docs/development.md）。
+# 真书回归、真机验证只能在维护者本机做（见 CONTRIBUTING.md、docs/development.md）。
 name: CI
 
 on:

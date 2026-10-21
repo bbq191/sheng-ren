@@ -1,4 +1,4 @@
-//! 块的行距、标题字号照 Kindle（只修复、照 Send to Kindle 统一的文字书；2026-10-13 用户定）：Kindle 上的值按
+//! 块的行距、标题字号照 Kindle（只修复、照 Send to Kindle 统一的文字书；2026-10-13 定）：Kindle 上的值按
 //! [`crate::kindle_model`] 算，这台阅读器拿到原来的 CSS 排成多少按 [`ReaderModel`] 算，不一样的在行内 `style` 末尾接上这台认的写法
 //! （行内的优先级最高）。一章只解析一遍，两样一起改。2026-10-13 由 `line_height.rs`、`heading_size.rs` 合成。
 //!

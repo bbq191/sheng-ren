@@ -4,7 +4,7 @@ use super::*;
 
 // ───────────────────────── 封面声明 ─────────────────────────
 
-/// 保证 OPF 声明了一个**有效的封面图**（xochitl 靠它生成书库里的封面缩略图）。2026-09-20 用户要求核查日志时发现：
+/// 保证 OPF 声明了一个**有效的封面图**（xochitl 靠它生成书库里的封面缩略图）。2026-09-20 要求核查日志时发现：
 /// 设备日志 `rm.epub.container Asked for unknown item ""` + `rm.docworker failed extracting cover: got null cover
 /// image`——9 本已投的书里 7 本没有封面。原因有两类：①OPF 根本没有 `<meta name="cover">`（如火影）；②声明了但**指向的不是
 /// 图片条目**（如 Calibre 产物 `<meta name="cover" content="cover.txt"/>`，指向一个 txt）。
@@ -70,7 +70,7 @@ const COVER_PAGE: &str = "eink-cover.xhtml";
 const COVER_PAGE_ID: &str = "eink-cover-page";
 
 /// 原书没有封面页（OPF 声明了封面图，可哪一页都没用到它）时，在 spine 最前面补一页只放封面图的页面——照 Send to Kindle
-/// （Amazon 转的《绍宋》《狼厅》第一页是补出来的整页封面；2026-10-09 用户：掌阅、Move 也补）。写法照真书最常见的封面页
+/// （Amazon 转的《绍宋》《狼厅》第一页是补出来的整页封面；2026-10-09 ：掌阅、Move 也补）。写法照真书最常见的封面页
 /// （《人生海海》《罗杰疑案》）：SVG 按图的宽高定 `viewBox`、`preserveAspectRatio` 等比放进一页。不加文字。
 /// `size(图的 zip 路径)` 取图的宽高（流式优化时图片条目是空占位，调用方从原书读文件头）。补了 → `true`。
 pub fn prepend_cover_page(entries: &mut Vec<Entry>, size: impl FnOnce(&str) -> Option<(u32, u32)>) -> bool {

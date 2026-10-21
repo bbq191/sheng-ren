@@ -10,7 +10,7 @@ fn remote_src(tag: &str) -> Option<(html::Attr<'_>, String)> {
 }
 
 /// HTML 里的远程图（http(s)/协议相对 `//`）→ 抓取降采样内联进 EPUB：抓到→存进 zip（与本章同目录，src 改本地文件名，
-/// 免相对路径计算），调用方再把它补进 OPF manifest（[`add_manifest_items`]）；抓不到→**删掉这个 `<img>`**（2026-09-30 用户定：
+/// 免相对路径计算），调用方再把它补进 OPF manifest（[`add_manifest_items`]）；抓不到→**删掉这个 `<img>`**（2026-09-30 定：
 /// 设备上的阅读器不联网，留着只是一个显示不出来的空框或断图标）。`chap_dir`=本章 zip 内目录；`counter` 跨章递增，`taken`（zip 里已有的条目名，含本次已抓到的）
 /// 保资源名唯一——已经优化过的书再跑时书里已有 `remote_img_0.png`，新抓到的图不能再用这个名字（2026-09-28 审计）。
 /// `drop_failed` 为假（只修复的文字书）时抓不到的 `<img>` 原样留着。

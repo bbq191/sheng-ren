@@ -391,7 +391,7 @@ fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Opt
     }
 }
 
-/// 一轮生成的汇总一行（用户 2026-09-29 反馈"看不出是否更新过"）。
+/// 一轮生成的汇总一行（2026-09-29 反馈"看不出是否更新过"）。
 fn counts_summary(c: &BuildCounts) -> String {
     let same = if c.same > 0 { format!("，重新生成但内容没变（没再传）{} 本", c.same) } else { String::new() };
     let adopted = if c.adopted > 0 { format!("，认领设备上已有的 {} 本", c.adopted) } else { String::new() };
@@ -760,8 +760,8 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
     print_tracked(lib);
 }
 
-/// `track`/`untrack` 的路径：相对路径先按当前目录找，找不到再按书根目录找（2026-10-19 用户要：`track 优秀漫画/死亡筆記`
-/// 不用每次写全路径）；绝对路径照旧。两处都先按原样找，没有再补 `.epub`、`.cbz`（同日用户要：`track 欧美侦探/罗杰疑案`；
+/// `track`/`untrack` 的路径：相对路径先按当前目录找，找不到再按书根目录找（2026-10-19 要：`track 优秀漫画/死亡筆記`
+/// 不用每次写全路径）；绝对路径照旧。两处都先按原样找，没有再补 `.epub`、`.cbz`（同日维护者要：`track 欧美侦探/罗杰疑案`；
 /// 两个都有时报错，要写上扩展名）。`track` 都找不到时报错；`untrack` 的（原件可能已经删了）在书根目录下跟踪着也算。
 fn resolve_track_path(lib: &Library, p: &Path, track: bool) -> Result<PathBuf, String> {
     let tracked = if track { Vec::new() } else { lib.tracked() };
@@ -896,7 +896,7 @@ fn meta_fetch(ctx: &Ctx) {
             ctx.report(lib.clear_metadata(m).map(|had| if had { format!("✓ 去掉找来的元数据和封面  {}", m.title) } else { format!("= 本来就没有找来的元数据  {}", m.title) }));
             continue;
         }
-        // 漫画也找（2026-10-12 用户定，推翻 2026-09-30 的「漫画不找」）：书名的卷次去掉再搜（`matching::base_title`）
+        // 漫画也找（2026-10-12 定，推翻 2026-09-30 的「漫画不找」）：书名的卷次去掉再搜（`matching::base_title`）
         match lib.fetch_metadata(m, force) {
             Ok((info, cover)) => {
                 // 一半有结果、一半网络出错没查成：有结果的那半已存下，整本算失败（退出码 2），下次再查没查成的
@@ -1045,7 +1045,7 @@ impl SyncState {
         changed
     }
 
-    /// 补元数据（2026-10-12 用户定：跟踪 → 补元数据 → 传设备）：还没找过的书联网找一次，找到的生成时补进书里。
+    /// 补元数据（2026-10-12 定：跟踪 → 补元数据 → 传设备）：还没找过的书联网找一次，找到的生成时补进书里。
     /// 找过的（找到了、或者这一版匹配规则下没找到）不再找，`--watch` 每轮不重复联网；连不上网整轮跳过，下次再找。
     fn fill_metadata(&mut self, ctx: &Ctx, plan: &SyncPlan) {
         let lib = ctx.lib;

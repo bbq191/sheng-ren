@@ -363,7 +363,7 @@ fn svg_wrapped_cover_kept() {
     assert_eq!(c.entities.iter().filter(|e| e.ty == T_SECTION).count(), 2, "封面页成了一个版面");
 }
 
-/// spine 里标了 `linear="no"` 的目录页（导航文档）不排（写出器 14，用户定三台都拿掉）。
+/// spine 里标了 `linear="no"` 的目录页（导航文档）不排（写出器 14，维护者定三台都拿掉）。
 #[test]
 fn nonlinear_nav_page_skipped() {
     let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();

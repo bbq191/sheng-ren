@@ -29,7 +29,7 @@
 | 标题（h1–h6）的 `font-size` | 认（按正文归一） | 认 | **只认关键字**（small…xx-large 五档，绝对大小；没写按标签固定）→ 取最接近的关键字（KINDLE_RULES 21） |
 | 块末尾的 `<br/>` | 不排 | 不排 | **多排一行** → 去掉（KINDLE_RULES 20） |
 | `margin-top` | 认 | 认 | 段落、div 在页中间认；**标题（h1–h6）的上下外边距都不认**（前面自带约 1em 标题字号的空、后面约半个，和相邻块的外边距折叠），页首的不认 → 页首垫图（KINDLE_RULES 11、20），页中间标题前后的间距写到相邻块上（KINDLE_RULES 23） |
-| `padding-top`、`border-top`、`position:relative;top` | 认 | 认 | **不认**；左右、下内边距也不认（背景色照画），**边框根本不画**，负外边距（上下左右）不认（2026-10-13 探针；左右的不处理，用户定）→ 左右内边距并进外边距、上下内边距折进相邻块的间距、上下边框插横线图（KINDLE_RULES 23，用户定）；普通块上的边框外链、行内都不画，**表格、单元格行内写的边框画**（分边、点线、颜色照写，2026-10-13「测试-竖线」1–10）→ 左右有框的块包进单格表格、框写在单元格行内，书里表格的单元格边框写进行内（KINDLE_RULES 27，用户选）；单元格和列表的内边距做不了 |
+| `padding-top`、`border-top`、`position:relative;top` | 认 | 认 | **不认**；左右、下内边距也不认（背景色照画），**边框根本不画**，负外边距（上下左右）不认（2026-10-13 探针；左右的不处理，已定）→ 左右内边距并进外边距、上下内边距折进相邻块的间距、上下边框插横线图（KINDLE_RULES 23，已定）；普通块上的边框外链、行内都不画，**表格、单元格行内写的边框画**（分边、点线、颜色照写，2026-10-13「测试-竖线」1–10）→ 左右有框的块包进单格表格、框写在单元格行内，书里表格的单元格边框写进行内（KINDLE_RULES 27，维护者选的）；单元格和列表的内边距做不了 |
 | 页首的空元素（空 div/p、body 上内边距） | — | — | **不占地方**；只有真内容（字、图，含透明空白图）能推下去 |
 
 → 掌阅、Move 的上下外边距、内边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14，掌阅 em×1.52、Move ×1.31，%/px/pt 折成屏幕像素）；Move 页首的上边距垫透明空白图（`top_spacer`，标题后面 xochitl 自带约 91px×字号 em、别的块约 46px 的空）；要垫的比这段空还小的，在第一块里放行内窄图撑高第一行（KINDLE_RULES 20）。
@@ -55,7 +55,7 @@
 | `rem` | 认 | **不认**（整条声明当没写，Q53）→ 字号以外的改成 em、字号的折成 px（KINDLE_RULES 25，《克莱因壶》首行缩进真机 ✓；《福尔摩斯》行内字号本来就由字号归一折成 px） | 认（同 em，Q53） |
 | `letter-spacing` | 写出器照写（没真机核） | **不认**（Q19）→ 没有别的写法，补字距只能往书里加字，不处理 | 认（Q19） |
 | 字号的 `px`、`pt` | px 按 0.75pt（16px＝1em），12pt＝1em | px 是 CSS 像素（同 Kindle，Q21），**pt 当 px**（18pt 只有 1.125em，Q23）→ 字号归一时折成 px（KINDLE_RULES 5；`html` 上写了字号的书除外） | **px 是屏幕像素**（24px 比正文小，Q21），pt 认（Q23） |
-| 负的外边距 | 照写 | 认（伸到屏幕边为止，Q75–Q79） | 不认（左右的不处理，用户定）→ 页中间相邻两块之间照 Kindle 折叠后的间距写成两边非负的（KINDLE_RULES 28，profile `negative_margins`） |
+| 负的外边距 | 照写 | 认（伸到屏幕边为止，Q75–Q79） | 不认（左右的不处理，已定）→ 页中间相邻两块之间照 Kindle 折叠后的间距写成两边非负的（KINDLE_RULES 28，profile `negative_margins`） |
 | 块的 `width` | 照写 | 认（Q30） | **不认**（一律满宽，Q30）→ 照 Kindle 折成左右外边距，居中的两边各一半（KINDLE_RULES 28，profile `block_width`） |
 | 行内元素、行内图的左右内外边距 | 照写（px 按 0.45pt） | 认，px 是屏幕像素（Q88–Q94）→ px 的折成 em（KINDLE_RULES 28；优化后的测试书真机 30px 挪 43，换算 42） | **一概不认**（Q88–Q94）→ 补只能往书里加字，不处理 |
 | 列表项的上下内边距、外边距 | 照写 | 都认（Q95、Q96） | 内边距不认、外边距认 → 内边距并进外边距（KINDLE_RULES 28；优化后的测试书真机 2em 都挪 99） |
@@ -65,7 +65,7 @@
 | 行内 `super`/`sub`、图的 `vertical-align` | 照写（图的数值不写）；`<sup>` 标签和 `vertical-align:super` 写成同一个值 | `span` 上的不认（长度、`position:relative` 也不认），`<sup>`/`<sub>` 标签认（Q100、Q101、Q120–Q123）→ 里面包一层标签（KINDLE_RULES 29，profile `inline_valign`；优化后的测试书真机同 `<sup>`）；行内图压到一行高，竖直对齐看不出 | 上标下标认（抬高、缩小）；图的 `middle` 认、`top` 当成 `middle`、数值不认（Q100–Q104） |
 | 列表符号、块高、`min-height`、flex、定位、`<hr>`、`margin:auto` | 列表符号照写；块的 `height` 当 `min-height` 写（Send to Kindle 同）；flex、定位不写 | `decimal`、`none` 认，`cjk-ideographic` 不画符号；块高当固定高、`min-height` 认；flex、定位不认；`<hr>` 照 CSS（点线照画）；定宽块 `margin:auto` 居中（Q107–Q124） | `decimal`、`none` 认，`cjk-ideographic` 画成圆点；块高、`min-height`、flex、定位都不认；`<hr>` 画细实线、CSS 写的点线不管（Q107–Q116） |
 | 单元格的宽度 | **不压窄**（写成表格列宽百分比，字横排；Q127–Q129 真机） | 照 CSS、属性压窄（字竖排；`width:auto` 不认）→ 照 Kindle 的算法写成行内 `width:P%`（KINDLE_RULES 31，profile `cell_width`；真机横排） | CSS 写的不认、`width` 属性认 → 写成属性 `P%`（真机横排，第一格变宽的比例同 Kindle） |
-| 空的 `inline-block`（《狼厅》注释图标） | **画出黑圆点**（插零宽空格，Q125 真机） | 不画 | 不画（两台用户定不管） |
+| 空的 `inline-block`（《狼厅》注释图标） | **画出黑圆点**（插零宽空格，Q125 真机） | 不画 | 不画（两台维护者定不管） |
 | 行内元素的左右边距、长度写的竖直对齐、`position:relative` | 都认（Q88–Q92、Q122、Q123 真机） | 边距认（px 折 em）；竖直对齐、定位不认 | 都不认 |
 | 左右边距的 em、pt | 按页宽百分比显示（一页按 32 个 em 折） | 一行约 31 个 em，差 2–3%，不改 | 一行约 22 个 em，宽出 1.4 倍 → 乘 0.70（KINDLE_RULES 31，profile `horizontal_scale`；负的首行缩进跟着乘；测试书真机 2em 挪 52，换算 52.6） |
 | body 的左右边距 | 按文件：文件里有负外边距的那一侧才加 | 样式表全书共用 → 和多数不一样的文件 body 加类单独写（KINDLE_RULES 31，`eink-body.css`） | 同掌阅 |
@@ -97,20 +97,20 @@
 | 透明 PNG | **透明处画成黑色** → 写出器合成白底 | 正常 | 正常 |
 | 图块在页尾放不下 | 挪页 | 挪页 | 挪页，**剩下的空白不回填**（还可能多出空白页） |
 | 行内小图 | 写出器 20 嵌在字里 | 照 CSS | 按图自身像素、不认 CSS |
-| WebP（2026-10-19 测试书「测试-WebP」：有损、无损、透明、动图、CSS 背景图、行内小图、封面） | KFX 没有 WebP 的格式类型：读书时无损转成 PNG（`imgopt::webp_to_png`）；真机 ✓（有损、无损、透明、行内、封面）；动图当时丢掉、空着 → 写出器 24 起取第一帧（用户定；真机 ✓） | **都认**（adb 截屏 ✓）：透明处露出纸色、CSS 背景图照画、**动图显示第一帧** | **一律不显示**（占着位置、一片空白；同样的图存 PNG 正常）→ 文字书里的 WebP 无损转成 PNG（profile `webp = false`，v61；真机 ✓ 有损、无损、透明、行内、封面）；动图 v62 起取第一帧（用户定，同掌阅；真机 ✓） |
+| WebP（2026-10-19 测试书「测试-WebP」：有损、无损、透明、动图、CSS 背景图、行内小图、封面） | KFX 没有 WebP 的格式类型：读书时无损转成 PNG（`imgopt::webp_to_png`）；真机 ✓（有损、无损、透明、行内、封面）；动图当时丢掉、空着 → 写出器 24 起取第一帧（维护者定；真机 ✓） | **都认**（adb 截屏 ✓）：透明处露出纸色、CSS 背景图照画、**动图显示第一帧** | **一律不显示**（占着位置、一片空白；同样的图存 PNG 正常）→ 文字书里的 WebP 无损转成 PNG（profile `webp = false`，v61；真机 ✓ 有损、无损、透明、行内、封面）；动图 v62 起取第一帧（维护者定，同掌阅；真机 ✓） |
 
 → 掌阅、Move 的图片宽度由 `kindle_images` 改写成和 Kindle 一样大（KINDLE_RULES 9）。
 
 ### 别的怪癖（细节见各文档）
 
 - **Kindle**：KFX 容器 id 四处一起改；资源符号排最后；固定版式漫画；注释弹窗按回链配对；没嵌入的正文字体写 `default`；进度在 `.sdr/*.yjf`。
-- **掌阅**：整页大图铺满整屏；RTL 书整页图不铺满（漫画改 LTR）；MOBI 词典放 `iReader/dict/`；adb 截屏要从文件管理器点开书（`uiautomator dump` 找坐标）；书架缓存列表要进出一次目录才刷新。书架（2026-10-16 看过）按书所在的那一级文件夹分组（只有一层：「优秀漫画/死亡筆記」成「死亡筆記」组）；**2026-10-19 查书架数据库**（`/data/data/com.zhangyue.iReader.Eink/databases/iReader.db` 的 `booklist`，WAL 模式，读要连 `-wal` 一起拷）：分组是 `type=55` 的行、`folder_full_path` 是对应的文件夹，书和分组的 `ext_int1` 是所在分组的 id（0＝顶层）；新文件夹建的分组挂在上一级文件夹的分组下面（推测，置信度中）：有书直接放进 `documents/` 顶层时建出「documents」分组以后，新的文件夹分组都套在它里面（书架先显示「documents」、点进去才是各个文件夹，这之前建的「科幻神话」等照旧在顶层），同名的分组名字后面加「1」；存储根目录的书在书架顶层。用户看过后说不改（不改数据库、不换放的位置：「不放 documents 根目录太乱了」）。**新书拔掉 USB 时才导入书架**（MTP 写进去、重启掌阅、启动 `UsbImportService` 都不导入）；掌阅的 adb shell 是 root（`uid=0`），能读应用私有数据。展示方式只有六宫格、十六宫格（带书里的封面）和列表模式（只有书名，没有封面和详情）；「应用 → 文件管理」是系统文件管理器，EPUB 只显示通用图标、出不了封面（缩略图由系统媒体服务给，不读 EPUB），列表模式多一行时间、大小。Android 上装的应用写进 `Android/data/*/files/` 的 `.txt` 也会被收进书架（2026-10-16 KOReader 时期的设置探针 `report.txt`，已卸载）。
+- **掌阅**：整页大图铺满整屏；RTL 书整页图不铺满（漫画改 LTR）；MOBI 词典放 `iReader/dict/`；adb 截屏要从文件管理器点开书（`uiautomator dump` 找坐标）；书架缓存列表要进出一次目录才刷新。书架（2026-10-16 看过）按书所在的那一级文件夹分组（只有一层：「优秀漫画/死亡筆記」成「死亡筆記」组）；**2026-10-19 查书架数据库**（`/data/data/com.zhangyue.iReader.Eink/databases/iReader.db` 的 `booklist`，WAL 模式，读要连 `-wal` 一起拷）：分组是 `type=55` 的行、`folder_full_path` 是对应的文件夹，书和分组的 `ext_int1` 是所在分组的 id（0＝顶层）；新文件夹建的分组挂在上一级文件夹的分组下面（推测，置信度中）：有书直接放进 `documents/` 顶层时建出「documents」分组以后，新的文件夹分组都套在它里面（书架先显示「documents」、点进去才是各个文件夹，这之前建的「科幻神话」等照旧在顶层），同名的分组名字后面加「1」；存储根目录的书在书架顶层。维护者看过后说不改（不改数据库、不换放的位置：「不放 documents 根目录太乱了」）。**新书拔掉 USB 时才导入书架**（MTP 写进去、重启掌阅、启动 `UsbImportService` 都不导入）；掌阅的 adb shell 是 root（`uid=0`），能读应用私有数据。展示方式只有六宫格、十六宫格（带书里的封面）和列表模式（只有书名，没有封面和详情）；「应用 → 文件管理」是系统文件管理器，EPUB 只显示通用图标、出不了封面（缩略图由系统媒体服务给，不读 EPUB），列表模式多一行时间、大小。Android 上装的应用写进 `Android/data/*/files/` 的 `.txt` 也会被收进书架（2026-10-16 KOReader 时期的设置探针 `report.txt`，已卸载）。
 - **Move**：只认同文件 `#锚点`（注释搬进本章）；互相链接的一对注释整对丢（去回链）；NCX `dtb:uid` 要和 OPF 一致；纯图链接点不了（图标号换数字）；漫画页边距 1 靠书架服务；EPUB 排成 PDF，`lastOpenedPage` 从 0 起；运行时删文件会被写回。
 
 ### 怎么验证（不靠肉眼猜）
 
-- **Kindle**：用户同时点左上、右下角截屏（**要先拔 USB**），文件在 `Internal Storage/screenshots/`；Send to Kindle 的样本在 `documents/Downloads/Items01/`（用户会清掉，要用时请用户推一份），`kfx-dump --json` 看结构。
-- **掌阅**：USB 或无线调试（`adb connect <IP>:<端口>`，2026-10-19 起用户改用 Wi-Fi，端口每次打开无线调试会变，问用户要）；`adb exec-out screencap -p`；打开书走文件管理器 `com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity` + `uiautomator dump`；翻页在空白处横向 swipe。**怪癖测试书 `tools/quirks/probe.py ireader`** 一条命令全自动：每章标记换成条码图、推进 `documents/测试/`（每次换文件名，同名的书掌阅记着读到哪）、点开、逐页截屏认条码、逐行量（2026-10-13，87 个探针 174 页约 10 分钟）。
+- **Kindle**：维护者同时点左上、右下角截屏（**要先拔 USB**），文件在 `Internal Storage/screenshots/`；Send to Kindle 的样本在 `documents/Downloads/Items01/`（维护者会清掉，要用时请维护者推一份），`kfx-dump --json` 看结构。
+- **掌阅**：USB 或无线调试（`adb connect <IP>:<端口>`，2026-10-19 起维护者改用 Wi-Fi，端口每次打开无线调试会变，问维护者要）；`adb exec-out screencap -p`；打开书走文件管理器 `com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity` + `uiautomator dump`；翻页在空白处横向 swipe。**怪癖测试书 `tools/quirks/probe.py ireader`** 一条命令全自动：每章标记换成条码图、推进 `documents/测试/`（每次换文件名，同名的书掌阅记着读到哪）、点开、逐页截屏认条码、逐行量（2026-10-13，87 个探针 174 页约 10 分钟）。
 - **Move**：`tools/quirks/probe.py move` 一条命令跑怪癖测试书。书架服务 `POST /import?name=X.epub&folder=`（端口转发 8790，`ControlMaster=no`；USB `root@10.11.99.1`、Wi-Fi `root@10.42.0.224`，睡着了连不上）导入后 xochitl 立刻排出 `<uuid>.pdf`，scp 回来 `pdftoppm -scale-to-x 954 -scale-to-y 1696` 量；原地替换（`?uuid=`）不会立刻重排。
 - 量位置：按文字行的墨迹（灰度 < 140 的行）找行顶，三台换算成占内容区高的比例再比。测试书放临时目录，导入设备的测试书用完删掉。
 
@@ -150,15 +150,15 @@
 | `background_auto_height`（`true`） | 阅读器认背景尺寸里的 `auto` 高；`false` 时只修复的文字书（`kindle_rules`）里整页背景图照 Kindle 上的大小、位置写成屏幕像素的 `background-size`、`background-position`（KINDLE_RULES 13） | 认 | 不认 | 认 | 掌阅 `100% auto`、`1264px auto` 都把图拉长到整页高，写成像素宽高、`contain` 才按比例；定位范围是整屏（2026-10-12 测试书「测试-掌阅背景」） |
 | `image_sizing`（`css`） | 阅读器怎么定图片尺寸：`device-px`＝照 CSS 但 px 是屏幕像素，`percent`＝只认百分比宽度。只修复的文字书（`kindle_rules`）按它把图片宽度改写成显示出来和 Kindle 一样大（`wash/kindle_images.rs`，KINDLE_RULES 9） | （KFX 写出器） | `device-px` | `percent` | 2026-10-12 测试书「测试-插图」三台量：不写宽度的 300px 小图 Kindle 27%、掌阅 25%、Move **98%**；宽 300px 的 Kindle 66%（px 折成 em 跟着字号）、掌阅 **26%**、Move **100%**；宽 10em、只写高的 Move 都拉满一行；比一页还高的都缩到一页高。改写后 Move 逐张和 Kindle 一致，掌阅 em 写的按自己的字号（1em≈37.4px，Kindle 39px） |
 | `font_px`（不写） | 缺省字号下 1em 的屏幕像素：掌阅、Move 照它把 em 写的图片宽度折成 Kindle 上的大小 | 39 | — | — | 测试书宽 10em 的图在 Kindle 上 392px |
-| `image_alpha`（`true`） | 阅读器能正确显示图片的透明通道；`false` 时正文 `<img>`/SVG `<image>` 用到的、有透明像素的 PNG 先合成到白底（CSS 背景图不动；v50） | 不能 | 能 | 能 | Kindle（KFX）把透明处显示成黑色（《绍宋》章标题图，2026-10-06 真机；《飘》章头图整块黑，2026-10-12），掌阅显示正确。只修复以后优化器不再合成；KFX 写出器 18 起写进 KFX 时合成（只对 Kindle，书里的 EPUB 不动，2026-10-12 用户定，真机 ✓） |
-| `text_repair_only`（`false`） | 文字书只修复：EPUB 3 规范整理和目录到节，文字、图片、样式一概不动（图片的例外是 `image_gamma`）；上面 `background_images` 到 `image_alpha` 这些文字书的规则都不生效，注释的规则只在开了 `repair_note_links` 时生效（见[排版 · 只修复](typesetting.md#只修复三个模式的文字书)） | `true` | `true` | `true` | 用户 2026-10-08 定：不动书里任何文字、图片、格式、样式。漫画不受影响 |
-| `kindle_rules`（`false`） | 只修复的文字书照 Send to Kindle 的规则统一：标签缺省样式 `eink-ua.css`、正文字体用阅读器字体、body 左右边距不要、文字对比度 4.5（见[排版 · 只修复](typesetting.md#只修复三个模式的文字书)） | — | `true` | `true` | 用户 2026-10-08 定三台统一一套规则；Kindle 由 KFX 写出器照做 |
-| `repair_note_links`（`false`） | 只修复时仍保证注释能点：注释搬进本章、改同文件锚点，按 `note_backlinks`、`note_icons` 处理 | — | — | `true` | xochitl 只认同文件 `#锚点`、只有图的链接点不了（用户 2026-10-08：xochitl 只保障注释可跳） |
+| `image_alpha`（`true`） | 阅读器能正确显示图片的透明通道；`false` 时正文 `<img>`/SVG `<image>` 用到的、有透明像素的 PNG 先合成到白底（CSS 背景图不动；v50） | 不能 | 能 | 能 | Kindle（KFX）把透明处显示成黑色（《绍宋》章标题图，2026-10-06 真机；《飘》章头图整块黑，2026-10-12），掌阅显示正确。只修复以后优化器不再合成；KFX 写出器 18 起写进 KFX 时合成（只对 Kindle，书里的 EPUB 不动，2026-10-12 定，真机 ✓） |
+| `text_repair_only`（`false`） | 文字书只修复：EPUB 3 规范整理和目录到节，文字、图片、样式一概不动（图片的例外是 `image_gamma`）；上面 `background_images` 到 `image_alpha` 这些文字书的规则都不生效，注释的规则只在开了 `repair_note_links` 时生效（见[排版 · 只修复](typesetting.md#只修复三个模式的文字书)） | `true` | `true` | `true` | 2026-10-08 定：不动书里任何文字、图片、格式、样式。漫画不受影响 |
+| `kindle_rules`（`false`） | 只修复的文字书照 Send to Kindle 的规则统一：标签缺省样式 `eink-ua.css`、正文字体用阅读器字体、body 左右边距不要、文字对比度 4.5（见[排版 · 只修复](typesetting.md#只修复三个模式的文字书)） | — | `true` | `true` | 2026-10-08 定三台统一一套规则；Kindle 由 KFX 写出器照做 |
+| `repair_note_links`（`false`） | 只修复时仍保证注释能点：注释搬进本章、改同文件锚点，按 `note_backlinks`、`note_icons` 处理 | — | — | `true` | xochitl 只认同文件 `#锚点`、只有图的链接点不了（2026-10-08：xochitl 只保障注释可跳） |
 | `margin_top`（`true`）＋ `[page_top]` | 阅读器认 `margin-top`；`false` 时只修复的文字书（`kindle_rules`）每章开头写了上边距的垫透明空白图或行内窄图推到 Kindle 的位置（`wash/top_spacer.rs`，KINDLE_RULES 11、20）。`[page_top]` 是垫图要的这台尺寸（屏幕像素）：垫图后阅读器自己加的空 `gap_heading_per_em`、`gap_other`，行内窄图的基数 `strut_base_per_em`；`margin_top = false` 时必须写 | 认 | 认 | 不认（91、46、44） | xochitl 不认 `margin-top`、`padding-top`，页首的空元素不占地方（2026-10-12「测试-标题位置」、10-13「测试-行内垫图」） |
 | `display_none`（`true`） | 阅读器认 `display:none`；`false` 时去掉隐藏的元素（`wash/hidden.rs`）、空段去掉而不是加类藏起来（`wash/blank_fold.rs`） | 认 | 认 | 不认 | 2026-10-12「测试-隐藏」：xochitl 行内、外链的 `display:none` 都不认，《飘》《春雪》版权页露出「版权信息」大标题 |
 | `trailing_br_line`（`false`） | 块末尾的 `<br/>` 多排一行；`true` 时去掉（`wash/blank_fold.rs`，KINDLE_RULES 20） | 不排 | 不排 | 多排 | 2026-10-13「测试-末尾br」：Move 段落多 50px、1.5em 标题多 75px |
 | `line_height_except_p`（`false`） | `<p>` 不认外链、`<style>` 里的 `line-height`（行内的认），别的块按阅读器缺省行距的倍数认；`true` 时块的行距照 Kindle 归一、写进行内（`wash/block_style.rs`，KINDLE_RULES 20；`<p>` 是 26） | — | — | `true` | 2026-10-13「测试-行距」：《三体》标题两行 Move 179px、Kindle 约 123 |
-| `heading_font_keywords`（`false`）＋ `[heading_sizes]` | 标题的 `font-size` 只认关键字；`true` 时标题字号照 Kindle 写成最接近的关键字（`wash/block_style.rs`，KINDLE_RULES 21）；最近的也差 3% 以上的改成 `<div>`（`wash/heading_div.rs`，KINDLE_RULES 32，用户 2026-10-14 定）。
+| `heading_font_keywords`（`false`）＋ `[heading_sizes]` | 标题的 `font-size` 只认关键字；`true` 时标题字号照 Kindle 写成最接近的关键字（`wash/block_style.rs`，KINDLE_RULES 21）；最近的也差 3% 以上的改成 `<div>`（`wash/heading_div.rs`，KINDLE_RULES 32，2026-10-14 定）。
 | `heading_center`（`false`） | 标题自己没写 `text-align` 时居中（`inherit` 也不认）；`true` 时照 Kindle 继承来的对齐写明（`wash/block_style.rs`，KINDLE_RULES 32） | — | `true` | — | 2026-10-14 探针「测试-标题对齐」 |
 | `em_root`（`false`） | em 一律按根字号算（字号的 em、%、边距、缩进的 em），字号的 px 是屏幕像素；`true` 时换成按根的值（`wash/root_em.rs`，KINDLE_RULES 32） | — | — | `true` | 2026-10-14 探针「测试-div探针」4–7 |`[heading_sizes]` 是量出来的大小（正文 1em＝1）：`keywords`（关键字 → 大小）、`tags`（h1–h6 按标签固定的），这时必须写 | — | — | `true`（small 0.784 … xx-large 2.018；h1–h6 2.018/1.514/1.216/1/0.784/1） | 2026-10-13「测试-标题字号」1–4：em、px、pt、% 一概不认 |
 | `inline_css_lengths`（`true`） | 行内 `style`、`<style>`、最后一条不带分号又紧挨 `}` 的声明里的 em 照 CSS 排；`false` 时只修复的文字书里写 em 的挪进外链样式表（`wash/inline_css.rs`，KINDLE_RULES 22） | — | — | `false` | 2026-10-13「测试-怪癖」：xochitl 这几种写法 em 按 23px，字号、首行缩进的 em 不认 |
@@ -170,13 +170,13 @@
 | `cell_middle`、`inline_valign`（都是 `true`） | 单元格缺省竖直居中（同 Kindle）、认行内元素上 `vertical-align` 的上标下标；`false` 时只修复的文字书里一行两格以上、Kindle 上居中的单元格行内写 `vertical-align:middle`（`wash/box_fix.rs`），写了 super/sub 的行内元素里面包 `<sup>`/`<sub>`（`wash/sup_sub.rs`；KINDLE_RULES 29） | — | 都是 `false` | `cell_middle = false` | 2026-10-14 探针 Q100–Q106、Q120–Q123 |
 | `em_px`、`line_px`（不写） | `em_px`：这台缺省字号下 CSS 1em 的屏幕像素，竖直间距照 Kindle 换算用（KINDLE_RULES 14）；`line_px`：正文一行的像素（kindle：一 rem 竖直 = 它 / 1.2；掌阅：缺省行距，行距照 Kindle 写成 em 用） | `line_px` 63 | `em_px` 37.5、`line_px` 58 | `em_px` 37.8 | 2026-10-12「测试-竖直间距」：Kindle 按行距排边距，同样 1em 占页高多一半 |
 | `comic_gamma`（不写＝不加深） | 漫画页中间调加深的伽马（`255·(v/255)^γ`，黑白两端不动）：内容是灰度的页才加深，黑白屏上转成灰度的页都算，彩色屏上彩页原样；装饰小图不动（`imgopt::prepare_comic_page_limited`，c55） | — | 1.1 | 1.1 | 2026-10-16 两台真机比过原样 / 1.2 / 1.3 / 1.45：黑白页加深明显更好，选 1.45；2026-10-21 先改成 1.3，同日掌阅上比过 1.1 / 1.2 / 1.3（《浪客行》卷07）选 1.1；Move 彩页提对比度、锐化、饱和度看不出区别。Kindle 还没比 |
-| `image_gamma`（不写＝不加深） | 文字书正文插图中间调加深的伽马：正文 `<img>`/SVG `<image>` 用到、不在 CSS 里、内容是灰度、短边 ≥ 200、不透明的 JPEG/PNG，只修复也做；JPEG 按原图质量重编码（`imgopt::darken_gray_image`，v59） | — | 1.1 | 1.1 | 同日比过金庸木刻、水墨，福尔摩斯网点图，罗杰疑案线条图，选 1.3；2026-10-21 用户改成 1.1，同漫画（插图没另比）。正文是阅读器画的，不受影响 |
+| `image_gamma`（不写＝不加深） | 文字书正文插图中间调加深的伽马：正文 `<img>`/SVG `<image>` 用到、不在 CSS 里、内容是灰度、短边 ≥ 200、不透明的 JPEG/PNG，只修复也做；JPEG 按原图质量重编码（`imgopt::darken_gray_image`，v59） | — | 1.1 | 1.1 | 同日比过金庸木刻、水墨，福尔摩斯网点图，罗杰疑案线条图，选 1.3；2026-10-21 改成 1.1，同漫画（插图没另比）。正文是阅读器画的，不受影响 |
 | `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"` | — | 不写（照书，2026-10-15 起；以前 `"ltr"`） | — | 掌阅往右翻的书，整页图四周按阅读器「排版」设置留边，选「漫画」排版才铺满（见下面「在真机上测量」） |
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记给登记脚本、文字页补回留白 | — | — | 1 | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |
 | `[deliver]`（不写 = 产物放电脑上） | 产物怎么送到设备（2026-10-07，见[使用指南 · 产物放在哪](usage.md#产物放在哪)）：`kind = "mtp"` + `mount`（jmtpfs 挂载点名）+ `dir`（存储根目录下的目录）；`kind = "xochitl"` + `hosts`（依次试的 `用户@地址`）+ `port`（Move 上书架服务的本机端口） | mtp：`kindle`、`documents` | mtp：`ireader`、`documents` | xochitl：`root@10.11.99.1`、`root@10.42.0.224`，8790 | 不影响产物内容，不进指纹 |
 
-- `display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`＋`[heading_sizes]`、`margin_top`＋`[page_top]`、`inline_css_lengths`、`padding`、`borders`、`heading_margins`、`px_margins`、`percent_margins` 由 `bookconv::reader_model::ReaderModel` 汇成"这台阅读器拿到 CSS 会排成什么样"的设备模型，照 Kindle 改写的 pass 只认它（2026-10-13 收拢，量出来的数从代码挪进 profile）。这几个字段和 `em_px` 以哈希进指纹（`m` 段，2026-10-13 用户定）：重量了数改 profile 就行，书自动重建。
+- `display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`＋`[heading_sizes]`、`margin_top`＋`[page_top]`、`inline_css_lengths`、`padding`、`borders`、`heading_margins`、`px_margins`、`percent_margins` 由 `bookconv::reader_model::ReaderModel` 汇成"这台阅读器拿到 CSS 会排成什么样"的设备模型，照 Kindle 改写的 pass 只认它（2026-10-13 收拢，量出来的数从代码挪进 profile）。这几个字段和 `em_px` 以哈希进指纹（`m` 段，2026-10-13 定）：重量了数改 profile 就行，书自动重建。
 - 影响产物的字段都进指纹，改了哪个，受影响的书都算过期、下次重建；文字书、漫画分开算，只管一路的字段只进那一路（见[架构 · 指纹](architecture.md#指纹)）。不进指纹的：`name`、`[deliver]`（只管怎么传，不影响产物）。
 - **怪癖表**（2026-10-13）：上面这些结论里能按「属性 · 元素 · 值 · 写法」说清楚的，机器可读地记在 `crates/bookconv/data/css-quirks.toml`（掌阅、Move 两栏：same / fixed / accept / broken，每条有出处）。`sync` 生成掌阅、Move 的文字书时按它体检（`bookconv::audit`），和 Kindle 不一样又没处理的、表里没有的写法打在 `sync` 输出里、记进生成记录，`booklib list` 看全部。新量出来的结论两边都写。怪癖测试书 `tools/quirks/probe.py`：`move` 一条命令生成、导入 Move、拉回排出的 PDF、逐行量（掌阅、Kindle 还要手动截图）。
 - 表里 `background_images` 到 `image_alpha` 这几个字段是文字书完整优化时的规则，内置三个模式的文字书都只修复（`text_repair_only = true`），它们只对漫画（清洗层两路都过）和没开只修复的自定义模式起作用。
@@ -275,8 +275,8 @@ dir = "documents"
 **`ireader`：1264×1680（整屏）。**
 - 2026-09-27 截屏实测：只放一张大图的页面，掌阅把图铺满整屏（连页眉页脚区域也盖住），四边留白 0，所以 1px 白边就是离屏幕 1px。图文混排时图受正文页边距限制，不适用。
 - 书声明了往右翻（`page-progression-direction="rtl"`）时不铺满，四周留左右 92、上下 124px（2026-09-30：只差这一个属性的两本测试书，一本铺满、一本留边；固定版式、页面写法都不影响）。所以漫画改成往左翻，之后测试书截图离屏幕 0–1px。
-- **往右翻的书留边的原因找到了（2026-10-15，adb 测试书 + 合成的红框页，`target/tmp/irc` 的实验脚本）**：不是书的属性，是阅读器「排版与设置 → 排版」的设置。往右翻（rtl）的漫画按这个设置留边：**默认**四周约 70/66px、**精品**约 51/41px、**自定义**按「上下间距、左右间距」（用户现在是 11/11，留约 116/49px）；选**漫画**时整页铺满，和往左翻的书逐像素相同（红框贴着屏幕四边，差异 0）。往左翻的书不看这个设置，一直铺满。书里的元数据都改不了：`rendition:spread`、`page-spread-left/right`、`primary-writing-mode`、`kmoe-pagedirect`、`zero-margin`/`zero-gutter`、`rendition:layout`、body 负外边距 CSS，rtl 的八种变体量出来一样的留边。
-- 设置分「通用」（全局）和「本书自定义」（点标签切换，只对这一本，重开保留；点「漫画」时要在「本书自定义」标签下，在「通用」下点会改全局、连文字书一起变）。所以要照书往右翻又铺满：在掌阅里对每本往右翻的漫画选一次「本书自定义 → 排版 → 漫画」。我们这边没法替用户设（掌阅的设置存在应用私有目录，没 root 够不到）。2026-10-15 用户选了照书翻，profile 去掉了 `comic_page_direction = "ltr"`。
+- **往右翻的书留边的原因找到了（2026-10-15，adb 测试书 + 合成的红框页，`target/tmp/irc` 的实验脚本）**：不是书的属性，是阅读器「排版与设置 → 排版」的设置。往右翻（rtl）的漫画按这个设置留边：**默认**四周约 70/66px、**精品**约 51/41px、**自定义**按「上下间距、左右间距」（维护者现在是 11/11，留约 116/49px）；选**漫画**时整页铺满，和往左翻的书逐像素相同（红框贴着屏幕四边，差异 0）。往左翻的书不看这个设置，一直铺满。书里的元数据都改不了：`rendition:spread`、`page-spread-left/right`、`primary-writing-mode`、`kmoe-pagedirect`、`zero-margin`/`zero-gutter`、`rendition:layout`、body 负外边距 CSS，rtl 的八种变体量出来一样的留边。
+- 设置分「通用」（全局）和「本书自定义」（点标签切换，只对这一本，重开保留；点「漫画」时要在「本书自定义」标签下，在「通用」下点会改全局、连文字书一起变）。所以要照书往右翻又铺满：在掌阅里对每本往右翻的漫画选一次「本书自定义 → 排版 → 漫画」。我们这边没法替维护者设（掌阅的设置存在应用私有目录，没 root 够不到）。2026-10-15 选了照书翻，profile 去掉了 `comic_page_direction = "ltr"`。
 
 **`xochitl`：文字书 842×1455，漫画 952×1457。**
 - 默认页边距 56：宽 = 954 − 2×56；高按固定的上下留白换算（2026-09-21 实测）。改成 28 档 → 宽 898。
@@ -317,17 +317,17 @@ readable-measure --device=kindle 竖长.png 横宽.png
 
 | 设备 | 结果 | 我们怎么配合 |
 |---|---|---|
-| Kindle 自带阅读器（KFX） | **2026-10-14 实测保留**（固件 5.20.1，`sync` 覆盖 45 本、内容都变了——写出器 22 元数据语言 en→zh；用户：重传后原阅读记录都不丢，只是没打开前书架列表的百分比显示 0%，打开后回到原位；用户说这个不用处理）。2026-10-06 测的是**字节有任何不同就清零**（只差写进书里的写出器版本号也一样，《绍宋》），逐字节相同才保留（《啸风山庄》）；两次结果为什么不同没查（10-06 当天固件从 5.19.6 自动升到 5.20.1，先后不清楚，可能有关，置信度低）。`.sdr/*.yjf` 里的 `lpr` 是阅读位置 | KFX 里不写写出器版本（创建器版本固定写 `1`），容器 id 重建不变；内容没变的书升版本后重建出来逐字节相同、不重传。容器 id 不变大概是进度能接上的前提（没验证过换 id 的情况），别改它的派生方式。见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机) |
+| Kindle 自带阅读器（KFX） | **2026-10-14 实测保留**（固件 5.20.1，`sync` 覆盖 45 本、内容都变了——写出器 22 元数据语言 en→zh；维护者：重传后原阅读记录都不丢，只是没打开前书架列表的百分比显示 0%，打开后回到原位；维护者说这个不用处理）。2026-10-06 测的是**字节有任何不同就清零**（只差写进书里的写出器版本号也一样，《绍宋》），逐字节相同才保留（《啸风山庄》）；两次结果为什么不同没查（10-06 当天固件从 5.19.6 自动升到 5.20.1，先后不清楚，可能有关，置信度低）。`.sdr/*.yjf` 里的 `lpr` 是阅读位置 | KFX 里不写写出器版本（创建器版本固定写 `1`），容器 id 重建不变；内容没变的书升版本后重建出来逐字节相同、不重传。容器 id 不变大概是进度能接上的前提（没验证过换 id 的情况），别改它的派生方式。见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机) |
 | 掌阅自带阅读器（EPUB） | **字节变了也保留**：同一本《罗杰疑案》只改 `META-INF/eink-optimized` 的版本号、重新打包覆盖，两次都还停在原来的位置；2026-10-14 `sync` 重传 11 本也都保留（未打开前书架百分比显示 0%） | 2026-10-09 起书里不再记版本号（标记只写 `full`/`core`），升版本后内容没变的书逐字节相同、不重传 |
-| Move（xochitl） | **由书架服务找回**（2026-10-14 `sync` 重传 26 本，用户实测进度都在；2026-10-09 起；在书架服务里做，不在本仓库）：xochitl 原地替换后整本重新排版，进度落回开头附近（`.content` 转 `formatVersion` 2、旧页标成已删除；当天《绍宋》两次实测）。书架服务替换前给阅读位置拍快照（所在 spine 文件 + 文件内比例），下次打开时由它的 qmd 补丁让 xochitl 跳回去。真机一次 ✓（《绍宋》跳回第 15 页）；文件里内容增删多时偏几页，新排版约 60 秒没写出 `.epubindex` 就放弃。时序图见[使用指南 · 产物放在哪](usage.md#产物放在哪) | 仍原地替换（保留 uuid）：保住所在文件夹、书架上不多一本；加新删旧进度一样丢 |
+| Move（xochitl） | **由书架服务找回**（2026-10-14 `sync` 重传 26 本，实测进度都在；2026-10-09 起；在书架服务里做，不在本仓库）：xochitl 原地替换后整本重新排版，进度落回开头附近（`.content` 转 `formatVersion` 2、旧页标成已删除；当天《绍宋》两次实测）。书架服务替换前给阅读位置拍快照（所在 spine 文件 + 文件内比例），下次打开时由它的 qmd 补丁让 xochitl 跳回去。真机一次 ✓（《绍宋》跳回第 15 页）；文件里内容增删多时偏几页，新排版约 60 秒没写出 `.epubindex` 就放弃。时序图见[使用指南 · 产物放在哪](usage.md#产物放在哪) | 仍原地替换（保留 uuid）：保住所在文件夹、书架上不多一本；加新删旧进度一样丢 |
 
 - **文件名要稳定**：覆盖靠同名文件。书名变了产物文件名才跟着变：`sync` 传一份新名字的、删掉旧名字的（Move 上进回收站），进度不会跟过去。
-- **换目录（原件目录改名、挪目录）**：文件名不变、目录变了的，`sync` 传到新目录、删掉旧的，同时把书旁边的同名 `.sdr` 文件夹（Kindle 的进度、书签）挪到新目录（新目录已有就不动，`generate::carry_sidecar`；2026-10-14 用户定）。以前不挪，原件目录「漫画」改成「优秀漫画」后《哆啦A梦 第01卷》的进度留在旧目录。jmtpfs 上挪文件夹真机可行，挪过去以后 Kindle 接着原来的进度 ✓（2026-10-14《哆啦A梦 第01卷》）。掌阅换目录（`sync` 挪文件）进度也还在 ✓（同日 18 本漫画从「漫画」挪到「优秀漫画」）。文件名也变了的不挪（`.sdr` 里的文件按书名起名）。
+- **换目录（原件目录改名、挪目录）**：文件名不变、目录变了的，`sync` 传到新目录、删掉旧的，同时把书旁边的同名 `.sdr` 文件夹（Kindle 的进度、书签）挪到新目录（新目录已有就不动，`generate::carry_sidecar`；2026-10-14 定）。以前不挪，原件目录「漫画」改成「优秀漫画」后《哆啦A梦 第01卷》的进度留在旧目录。jmtpfs 上挪文件夹真机可行，挪过去以后 Kindle 接着原来的进度 ✓（2026-10-14《哆啦A梦 第01卷》）。掌阅换目录（`sync` 挪文件）进度也还在 ✓（同日 18 本漫画从「漫画」挪到「优秀漫画」）。文件名也变了的不挪（`.sdr` 里的文件按书名起名）。
 - 几台之间不能同步进度，见下面[附录](#自带阅读器之间能不能同步进度2026-09-30-真机)。
 
 ## KOReader
 
-**现状：两台都不装 KOReader（2026-10-06 用户定）**，三台都用自带阅读器，读 `sync` 直接传上去的产物（Kindle：KFX，掌阅、Move：EPUB）。2026-10-02～10-05 Kindle、掌阅曾日常开机直接进 KOReader（独占）；10-05 Kindle 上 `koreader/` 不在了（像是重置过）。下面是当时的记录，留作参考（当时产物还放在电脑上的 `ireader/` 等目录里）。
+**现状：两台都不装 KOReader（2026-10-06 定）**，三台都用自带阅读器，读 `sync` 直接传上去的产物（Kindle：KFX，掌阅、Move：EPUB）。2026-10-02～10-05 Kindle、掌阅曾日常开机直接进 KOReader（独占）；10-05 Kindle 上 `koreader/` 不在了（像是重置过）。下面是当时的记录，留作参考（当时产物还放在电脑上的 `ireader/` 等目录里）。
 
 - **读哪份产物**：KOReader 读 `ireader/` 的 EPUB（KOReader 不认 AZW3、打不开 KFX），拷到存储根的 `books/`（KOReader 的起始目录）。
 - **没有单独的模式**：`ireader` 的阅读范围是在掌阅自带阅读器上量的，KOReader 里没单独量，漫画离屏幕是不是 1px 没验证。
@@ -356,7 +356,7 @@ Move 系统版本 20260827；数据目录 `/home/root/.local/share/remarkable/xo
 
 - 翻页后马上写 `.metadata`（书没关也写）。
 - 改字号、字体、行距、页边距会整本重排：PDF、总页数、对照表都换新的。
-- 用户没开 reMarkable 云同步。
+- 维护者没开 reMarkable 云同步。
 
 ### 自带阅读器之间能不能同步进度（2026-09-30 真机）
 
@@ -383,5 +383,5 @@ Move 系统版本 20260827；数据目录 `/home/root/.local/share/remarkable/xo
 | `margin-top:24pt` | 105（2em） | **24.5**（当 px） | 76（真的点） |
 | 段落 `line-height:1.5`、`2` | 认（一行约 92、约 100） | 不认（同正文） | 不认（同正文） |
 
-按页高的比例：1em 的边距 Kindle 占内容区高 3.4%、掌阅 2.2%、Move 2.6%；正文一行 4.1%、3.2%、3.85%。Kindle 的竖直间距（边距、段距、标题上下）比掌阅大约 1.5 倍、比 Move 大约 1.3 倍。用户定照 Kindle 换算（KINDLE_RULES 14，profile `em_px`：掌阅 37.5、Move 37.8）：换算后同一本测试书掌阅、Move 每种写法和 Kindle 折算值差 1–4px（掌阅 1em 57.5 对 56.5、10% 182.5 对 182.6；Move 1em 49 对 49、24pt 99 对 98.8）。
+按页高的比例：1em 的边距 Kindle 占内容区高 3.4%、掌阅 2.2%、Move 2.6%；正文一行 4.1%、3.2%、3.85%。Kindle 的竖直间距（边距、段距、标题上下）比掌阅大约 1.5 倍、比 Move 大约 1.3 倍。维护者定照 Kindle 换算（KINDLE_RULES 14，profile `em_px`：掌阅 37.5、Move 37.8）：换算后同一本测试书掌阅、Move 每种写法和 Kindle 折算值差 1–4px（掌阅 1em 57.5 对 56.5、10% 182.5 对 182.6；Move 1em 49 对 49、24pt 99 对 98.8）。
 

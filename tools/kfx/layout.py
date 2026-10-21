@@ -1,7 +1,7 @@
 """三台版式检查：以 Kindle 写出器的 KFX 为准，查掌阅、Move 的 EPUB 有没有排成一样的版式（不比字体、字号、间距的数值）。
 用法：python3 layout.py <书目录> <工作目录> [--bin=target/release] [--reuse] [--top=8] [--baseline=tools/kfx/layout-baseline.tsv] [--update] [书名子串…]
 
-2026-10-15 用户定的重点：「该居中的居中、该竖排的竖排、该有横杠的有横杠、合集分书封面不多页……这就基本能保持三端观感一致」——
+2026-10-15 定的重点：「该居中的居中、该竖排的竖排、该有横杠的有横杠、合集分书封面不多页……这就基本能保持三端观感一致」——
 字体能随手改，字号、间距的数值差一点看不出来（那些归 unify.py）；这里一处不一样就列出来，不打总分。查的是：
 
 - 对齐：同一个文字块在三台是居中、靠右还是靠左（左对齐和两端对齐算一样）；
@@ -320,7 +320,7 @@ def section_kinds(events, soft=None):
 
 
 def cover_issues(k_kinds, d_kinds):
-    """合集分书封面不多页（用户 2026-10-15）：只有图的节（封面、分书封面、整页插图）的个数和位置三台要一样；Kindle 没有的
+    """合集分书封面不多页（2026-10-15）：只有图的节（封面、分书封面、整页插图）的个数和位置三台要一样；Kindle 没有的
     封面页、多出来的整页图都会让阅读器多翻一页。位置比的是「第几个只有图的节前面有几个有字的节」，不看绝对页码。"""
     def marks(kinds):
         out, texts = [], 0
@@ -398,7 +398,7 @@ def compare(k_nodes, d_nodes, k_em, d_em, skip=frozenset()):
 
 
 def moved_notes(epub):
-    """Move 搬进本章的注释（`<div class="footnotes">`，`htmlproc/footnote.rs`；用户定 Move 只认同文件锚点）的文字：Kindle 上注释照原书
+    """Move 搬进本章的注释（`<div class="footnotes">`，`htmlproc/footnote.rs`；维护者定 Move 只认同文件锚点）的文字：Kindle 上注释照原书
     在别的文件，前面没有那条 <hr>、也不跟着章节分页，设计如此，不比。"""
     import zipfile, html
     z = zipfile.ZipFile(epub)

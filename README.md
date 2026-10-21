@@ -69,7 +69,7 @@ booklib --help                        # 全部命令；booklib sync --help 看�
 | **把书传到设备上** | [使用指南](docs/usage.md)：安装、每个命令、产物放在哪、常见问题 |
 | **知道它对书做了什么** | [排版与优化规则](docs/typesetting.md)（文字书只修复、漫画怎么处理、真机验证情况）→ [设备与阅读模式](docs/devices.md)（三台的参数和怪癖）→ [Move 阅读器踩坑](docs/xochitl.md) |
 | **看懂代码怎么分** | [架构](docs/architecture.md)：先看开头的核心架构图和模块交互图，再看各模块表、书库和生成流程；Kindle 那条路另见 [KFX](docs/kfx.md) |
-| **改代码** | [贡献说明](CONTRIBUTING.md)（硬约束、没有测试书时能做什么）→ [开发](docs/development.md)（测试、真书回归、版本号、共用轮子对照表）→ [决定记录](docs/decisions.md)（用户定过的事，别推翻） |
+| **改代码** | [贡献说明](CONTRIBUTING.md)（硬约束、没有测试书时能做什么）→ [开发](docs/development.md)（测试、真书回归、版本号、共用轮子对照表）→ [决定记录](docs/decisions.md)（定过的事，别推翻） |
 
 ## 几个词
 

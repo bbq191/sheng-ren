@@ -42,7 +42,7 @@
     }
 
     /// 真机《甲午：摇摆的战争》坐实：`.duokan-footnote-item{font-weight:bold}` 导致全书注释永远加粗，
-    /// 用户报的是"跳转注释后字体不对"、追下去其实是加粗。2026-09-23 拍板：只剥**注释容器类**的字重
+    /// 维护者报的是"跳转注释后字体不对"、追下去其实是加粗。2026-09-23 拍板：只剥**注释容器类**的字重
     /// （不碰正文语义加粗，§03av 原则②仍然有效），注释字号固定比正文小一档（相对单位）。
     #[test]
     fn footnote_container_selector_loses_bold_gains_smaller_relative_size() {
@@ -691,7 +691,7 @@
 
     #[test]
     fn auto_toc_keeps_numbered_titles_whole() {
-        // 2026-10-08 用户定：章节只按结构判，标题末尾的数字不拆成节（以前「第一章 1」拆成父子两级）
+        // 2026-10-08 定：章节只按结构判，标题末尾的数字不拆成节（以前「第一章 1」拆成父子两级）
         let mut v = vec![
             e("content.opf", r#"<package version="3.0"><metadata><dc:title>书</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
             e("c1.xhtml", "<html><body><h1>第一章 1</h1><p>a</p><h1>后记</h1></body></html>"),
@@ -720,7 +720,7 @@
 
     #[test]
     fn auto_toc_fallback_for_mostly_imageonly_pages_is_page_ranges_not_body_n() {
-        // 多数页是纯图片(无可提取文本)——疑似漫画/画册，不该灌一堆"正文 N"；但所有书都要有目录（2026-09-20 用户要求），
+        // 多数页是纯图片(无可提取文本)——疑似漫画/画册，不该灌一堆"正文 N"；但所有书都要有目录（2026-09-20 要求），
         // 所以改为按页分段的"第 N–M 页"（3 页 → 1 段）。
         let mut v = vec![
             e("content.opf", r#"<package version="3.0"><metadata><dc:title>书</dc:title></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/><item id="c3" href="c3.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/><itemref idref="c3"/></spine></package>"#),
@@ -898,7 +898,7 @@
         }
     }
 
-    /// 2026-10-06 用户定：章节不再分页，原书的文件结构原样保留；目录照样有节（自动目录指到文件里的标题锚点）。
+    /// 2026-10-06 定：章节不再分页，原书的文件结构原样保留；目录照样有节（自动目录指到文件里的标题锚点）。
     #[test]
     fn chapters_not_split_sections_in_toc() {
         let mut v = paged_book(&[
@@ -1345,7 +1345,7 @@
     }
     const HAODOO_TEXT: &str = "出了近鐵布施站之後，沿著鐵路往西走。已經十月了，天氣仍然悶熱難當，地面卻是乾的。每當卡車疾馳而過，揚起的塵土極可能會飛進眼睛。";
 
-    /// 段落章名指到书名页后面那一段；独占一段的「１」「２」不当节（2026-10-08 用户定：纯数字不能当节的依据）。
+    /// 段落章名指到书名页后面那一段；独占一段的「１」「２」不当节（2026-10-08 定：纯数字不能当节的依据）。
     #[test]
     fn haodoo_paragraph_chapter_numbers_not_sections() {
         let t = HAODOO_TEXT;
@@ -1390,7 +1390,7 @@
         v
     }
 
-    /// 和章同级的数字标题（《13級階梯》`<h3>２</h3>` 单独成文件、目录是平的）不降成节，目录原样（2026-10-08 用户定：只按结构判）。
+    /// 和章同级的数字标题（《13級階梯》`<h3>２</h3>` 单独成文件、目录是平的）不降成节，目录原样（2026-10-08 定：只按结构判）。
     #[test]
     fn numbered_headings_at_chapter_level_stay_chapters() {
         let t = HAODOO_TEXT;

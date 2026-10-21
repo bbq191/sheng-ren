@@ -296,7 +296,7 @@ impl Library {
 
     /// 原件换了内容（旧条目 `from` 要删、新条目是 `to`）：各模式下旧条目的产物记录交给新条目（指纹留空＝要重新生成），
     /// 新版本生成出来照原地覆盖（MTP 同一个文件名）或原地替换（Move 同一个 uuid、同一个文件夹）放上去——以前是先把旧产物删掉
-    /// （Move 上进回收站）、再当新书传，掌阅丢进度、Move 多一本回收站里的、新版本生成失败时设备上这本书就没了（2026-10-09 用户定）。
+    /// （Move 上进回收站）、再当新书传，掌阅丢进度、Move 多一本回收站里的、新版本生成失败时设备上这本书就没了（2026-10-09 定）。
     /// 新条目在这个模式下已经有自己的产物（同一内容早就在库里）的不交，旧的照常删（[`Library::remove_outputs`]）。
     pub(crate) fn hand_over_outputs(&self, from: &str, to: &str) -> Result<(), String> {
         for (_, sp) in self.state_files() {
@@ -549,7 +549,7 @@ impl Library {
         if format != Format::Epub {
             return Err(format!("xochitl 只收 EPUB，这个模式出的是 {}", format.ext()));
         }
-        // 放进哪个文件夹：原件所在目录相对跟踪目录的路径（`a/b`：书架服务按层建，先「a」、再它里面的「b」，2026-10-07 用户定）；
+        // 放进哪个文件夹：原件所在目录相对跟踪目录的路径（`a/b`：书架服务按层建，先「a」、再它里面的「b」，2026-10-07 定）；
         // 跟踪目录顶层的书、add 进来的书、网址书放书库根（空）
         let folder = self.tracked_rel(meta, &device.id).map(|(_, rel)| rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_default();
         let name = format!("{}.{}", bookconv::util::sanitize_filename(&crate::metadata::corrected_title(meta), &meta.id), format.ext());
@@ -886,7 +886,7 @@ impl State {
     /// `copied` 是本书以前放在电脑上的产物的文件名：设备上叫这个名字的文件是用户拷上去的那份，也算本书的。
     /// `taken` 是同一轮里别的书正在传、还没记进来的文件名（小写），也算别人的。
     fn file_name_for(&self, meta: &Meta, dir: &Path, ext: &str, same_as: Option<&Path>, copied: Option<&str>, taken: &BTreeSet<String>) -> Result<String, String> {
-        // 文件名跟修正后的书名（网站书名 + 卷次，2026-10-12 用户定）
+        // 文件名跟修正后的书名（网站书名 + 卷次，2026-10-12 定）
         let base = bookconv::util::sanitize_filename(&crate::metadata::corrected_title(meta), &meta.id);
         let plain = format!("{base}.{ext}");
         let suffixed = format!("{base} [{}].{ext}", meta.id.get(..6).unwrap_or(&meta.id));
@@ -938,7 +938,7 @@ fn device_safe_rel(rel: &Path) -> PathBuf {
 }
 
 /// 产物换了目录（文件名没变）：阅读器放在书旁边的同名 `.sdr` 文件夹（Kindle 的阅读进度、书签，`docs/kfx.md#阅读进度2026-10-06-真机`）
-/// 跟着挪过去，免得进度留在旧目录（2026-10-14 用户定：原件目录改名后《哆啦A梦》的进度丢在旧目录）。文件名变了的不挪
+/// 跟着挪过去，免得进度留在旧目录（2026-10-14 定：原件目录改名后《哆啦A梦》的进度丢在旧目录）。文件名变了的不挪
 /// （`.sdr` 里的文件按书名起名，改了名阅读器认不认没验证过），新位置已经有 `.sdr` 的不动，挪不了的不管（旧目录里留着）。
 fn carry_sidecar(old: &Path, new: &Path) {
     if old == new || old.file_name() != new.file_name() {

@@ -146,14 +146,14 @@ pub(super) fn is_footnote_container_selector(sel: &str) -> bool {
     l.contains("footnote") || l.contains("fnote")
 }
 
-/// 注释容器专用的字号：比正文小一号（五号→小五是 0.857，用户 2026-09-29），相对单位（随用户当前字号缩放，不是又一个"锁死"）。
+/// 注释容器专用的字号：比正文小一号（五号→小五是 0.857，2026-09-29），相对单位（随用户当前字号缩放，不是又一个"锁死"）。
 pub(super) const FOOTNOTE_FONT_SIZE: &str = "0.85em";
 
 /// 整段 CSS（文件或 <style> 内容）：逐规则剥锁 + 边距处理。`@media{}` 嵌套靠"从内向外"匹配最内层规则。
 /// 注释容器类是唯一的例外分支：§03av EPUB 线原则②"解锁字号但保留原书颜色/加粗"保护的是**正文语义
 /// 加粗**，注释容器类的 `font-weight:bold` 是原书模板写死的装饰样式，不是语义强调——2026-09-23 真机
-/// 《甲午：摇摆的战争》坐实（`duokan-footnote-item{font-weight:bold}` 导致全书注释永远加粗，用户反馈
-/// "跳转注释后字体不对"，追下去发现其实是加粗不是字体），用户拍板"只剥注释容器类的字重，不碰正文；
+/// 《甲午：摇摆的战争》坐实（`duokan-footnote-item{font-weight:bold}` 导致全书注释永远加粗，维护者反馈
+/// "跳转注释后字体不对"，追下去发现其实是加粗不是字体），维护者拍板"只剥注释容器类的字重，不碰正文；
 /// 注释字号固定比正文小一档"。
 pub fn filter_css(css: &str, opts: &WashOpts) -> String {
     // 只换规则体，选择器（连同前面的注释、`@import …;` 这类语句）原样留
@@ -175,7 +175,7 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
                 filter.push("font-weight".to_string());
             }
             // base_text=true：书自己的字号（哪怕是相对的）一律去掉，换成下面统一的注释字号
-            // 注释容器的字体一律去掉（批注不用嵌入字体，用户 2026-10-05）。
+            // 注释容器的字体一律去掉（批注不用嵌入字体，2026-10-05）。
             let mut decls = colors_for(opts, filter_decls_with(r.body, &filter, spacing, true, Some(indent_for(opts)), &HashSet::new()));
             decls.push_str(&format!("font-size:{FOOTNOTE_FONT_SIZE};"));
             decls

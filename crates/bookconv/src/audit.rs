@@ -2,7 +2,7 @@
 //!
 //! 怪癖表是 `data/css-quirks.toml`（真机、测试书验证过的结论，`tools/quirks/probe.py` 量的写回那里）。按 [`crate::kindle_model::Chapter`]
 //! 层叠，每个看得见的元素上生效的每条声明归成「属性 · 元素 · 值 · 写法」查表，同样的合起来计元素数。只报告、不改书
-//! （2026-10-13 用户定：sync 时顺带提示，清单记进生成记录，`booklib list` 看）。
+//! （2026-10-13 定：sync 时顺带提示，清单记进生成记录，`booklib list` 看）。
 use crate::cascade::{MediaEnv, Origin};
 use crate::epubzip::Entry;
 use crate::kindle_model::{book_css, Chapter};

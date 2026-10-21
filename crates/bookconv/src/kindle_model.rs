@@ -136,7 +136,7 @@ pub fn column_percents(widths: &[Option<Len>], naturals: &[f64]) -> Vec<f64> {
 pub const KINDLE_FS_ATTR: &str = "data-eink-fs";
 
 /// 标题要在这台上改成 `<div>` 的记号（Move 的标题只认几个字号关键字，Kindle 上的字号和最近的关键字差得多的改成 `div`，
-/// `wash/heading_div.rs`，2026-10-14 用户定）：目录处理完以后才真改标签，之前按这台排的 pass 见到它就当 `div` 算（[`reader_tag`]）。
+/// `wash/heading_div.rs`，2026-10-14 定）：目录处理完以后才真改标签，之前按这台排的 pass 见到它就当 `div` 算（[`reader_tag`]）。
 pub const DIV_ATTR: &str = "data-eink-div";
 
 /// 元素上属性 `name` 的值，同 `scraper::node::Element::attr`，但不把属性名转成 `LocalName`。

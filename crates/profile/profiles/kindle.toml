@@ -1,5 +1,5 @@
 # Kindle Paperwhite 12 代签名版（2024）上的自带阅读器。7" Carta 1300，2026-09-27 核实。
-# USB 传书不认 EPUB（用户 2026-09-27 真机实测）：先按和别的模式同一套规则优化出 EPUB，再转成 KFX（文字书流式、漫画固定版式）。
+# USB 传书不认 EPUB（2026-09-27 真机实测）：先按和别的模式同一套规则优化出 EPUB，再转成 KFX（文字书流式、漫画固定版式）。
 name = "Kindle 自带阅读器（Paperwhite 12 代签名版）"
 color = false
 # 2026-10-05 起出 KFX（clean-room 写出器，见 docs/kfx.md）：文字书注释弹窗、段间距字间距可调；漫画固定版式真机铺满整屏（《哆啦A夢》《死亡筆記》）。
@@ -12,7 +12,7 @@ note_icons = "number"
 caption_fit = true
 # 正文图片的透明处 Kindle 显示成黑色（《绍宋》章标题图 logo.png，2026-10-06 真机）：<img> 用到的带透明的图先合成到白底。
 image_alpha = false
-# 文字书只做修复（2026-10-08 用户定）：升级成合规的 EPUB 3、修不规范的写法、目录到节，书里的文字、图片、样式一概不动——
+# 文字书只做修复（2026-10-08 定）：升级成合规的 EPUB 3、修不规范的写法、目录到节，书里的文字、图片、样式一概不动——
 # 上面注释、背景图、rgba、图注、透明图这些文字书规则都不再生效（只留着给漫画和以后改回来）。漫画照旧。
 text_repair_only = true
 comic_margin = 1
@@ -46,7 +46,7 @@ height = 1546
 width = 1272
 height = 1696
 
-# 产物直接传进 Kindle（2026-10-07 用户定）：USB 连上、jmtpfs 挂好就传进存储根目录的 documents/，子目录照跟踪目录。
+# 产物直接传进 Kindle（2026-10-07 定）：USB 连上、jmtpfs 挂好就传进存储根目录的 documents/，子目录照跟踪目录。
 [deliver]
 kind = "mtp"
 mount = "kindle"

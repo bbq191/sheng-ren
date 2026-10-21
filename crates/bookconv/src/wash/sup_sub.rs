@@ -1,5 +1,5 @@
 //! 行内元素上 `vertical-align` 写的上标、下标照 Kindle（不认它的阅读器：掌阅，profile `inline_valign = false`；只修复、照 Send to Kindle
-//! 统一的文字书；2026-10-14 用户要修）。
+//! 统一的文字书；2026-10-14 要修）。
 //!
 //! 掌阅（2026-10-14 怪癖测试书 Q100、Q101、Q120–Q123）：`<span>` 上的 `vertical-align:super/sub` 不认（写长度、`position:relative`
 //! 也不认），`<sup>`/`<sub>` 标签认（抬高或压低、字缩小）。Kindle 写出器的层叠里两种写法一样（[`crate::cascade::Computed`] 的

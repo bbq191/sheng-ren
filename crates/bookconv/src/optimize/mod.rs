@@ -58,7 +58,7 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   质量一律 95；PNG 按自身比例尺补白；已排好的页原样保留；900 万像素以上的页照常处理（只拒文件头超过 6400 万像素的）；
 ///   静态 GIF/WebP 页转 PNG/JPEG（条目名不变、manifest media-type 跟着改）。
 /// - v28（2026-09-29）：JPEG 哈夫曼表按图重做（`jpegopt`，无损：解码逐像素相同，每页还会解码比对，不同就用原来的），漫画同画质小 7%–9%；
-///   多看的图标注释号保留原图标（加 `eink-noteicon` 限一个字高），不再换成上标数字（多出来的字，用户定）。
+///   多看的图标注释号保留原图标（加 `eink-noteicon` 限一个字高），不再换成上标数字（多出来的字，已定）。
 /// - v29（2026-09-29）：漫画纯图页（没有可见文字）的 `<body>` 加 `eink-fullpage` 类（`line-height:0;font-size:0`），只在 profile 开了
 ///   `comic_fullpage` 时（koreader）：KOReader 里图在一行中，行高在下面留 10px、字号在行首多出 2px，去掉后整页图用满整屏，
 ///   `koreader` 阅读范围改成 1264×1680，1px 白边就是到屏幕边缘 1px（本机 KOReader 截图验证）。
@@ -66,7 +66,7 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   写 `META-INF/eink-reader-margins` 供 `xochitl/comic-margins.sh` 登记；文字页、混排页的字补回默认留白，图页去掉 `<body>` 的类（`comicpad`）。
 /// - v31（2026-09-29）：只有图标的注释标号在 xochitl 模式换成上标数字（profile `note_icons = "number"`，`htmlproc::number_icon_note_links`）：
 ///   xochitl 里只有图的链接点不了、CSS 限不住图标大小（Move 真机）。编号取注释开头的 `[N]`，其次图标 alt 里的"注释N"，再次本章顺序。
-/// - v32（2026-09-30）：撤掉 v29 的 `eink-fullpage`（只为 KOReader 加的，用户撤了 KOReader）；样式表少了这条规则。
+/// - v32（2026-09-30）：撤掉 v29 的 `eink-fullpage`（只为 KOReader 加的，维护者撤了 KOReader）；样式表少了这条规则。
 /// - v33（2026-09-30）：抓不到的远程图删掉（原来原样保留，设备不联网只是断图）；图标注释号换成数字的模式里，样式表去掉用不上的 `.eink-noteicon`。
 /// - v34（2026-09-30，全系统审计）：只有空白的段落（`<p>&nbsp;</p>`、场景空行）不再被剥空；CSS 选择器前面的 `/* 注释 */` 不再
 ///   参与判断（以前会把注释里提到 p、footnote 的规则误当正文或注释容器改掉）；属性值里的 `<` 转义（XML 合法）；目录、链接里的
@@ -79,7 +79,7 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   注释块 id 转义；漫画只裁接近白的边（以前黑底、纯色出血也裁掉再补成白边，改了原画）；网上的图先按 EXIF 方向摆正再选横竖框。
 /// - v37（2026-10-05）：节一级的标题一个也没跟在同文件的章标题后面（只在版权页、目录页上）时，节换成更深一级
 ///   （《ABC谋杀案》h2 只用在版权页、目录页，真正的节 h3「1」「2」以前没补进目录）。
-/// - v38（2026-10-05）：写着 `display:none`/`hidden` 的标题不当章标题切页（《绍宋》每章前一页空白）；嵌入字体按用户 2026-10-05
+/// - v38（2026-10-05）：写着 `display:none`/`hidden` 的标题不当章标题切页（《绍宋》每章前一页空白）；嵌入字体按2026-10-05
 ///   的规则：正文、批注不用嵌入字体，其余（章名、书信……）保留书里嵌了文件的字体；批注（「注：」段落、括号里换了字体的
 ///   行内元素）加 `eink-annot`，字号 0.85em；分页按书自带目录的层级定书/卷、章、节（合集和普通书统一，章名写成段落的也认，
 ///   数字章名和正文同页，「部」下面的章深一层），目录里一层平排的「第X部」把后面的条目收到它下面；清章尾空白时自闭合的
@@ -92,7 +92,7 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   重建成册 → 作品 → 部 → 章（福尔摩斯全集；《啸风山庄》「【第一部】」下面挂上章）；最上一层是册时分页去掉这一层再定章。
 /// - v41（2026-10-06）：固定版式（Kindle）的漫画页一律补成整个画布：装饰小图、不放大的页也居中补白（KFX 里比画布小的图片节点
 ///   Kindle 会整页空白，《哆啦A夢》卷04 的 962×1283 两页）。
-/// - v42（2026-10-06）：撤掉 v41 的漫画补白（用户定）：KFX 写出器 6 修好了比画布小的图空白的问题，固定版式漫画页回到和别的模式一样的排版。
+/// - v42（2026-10-06）：撤掉 v41 的漫画补白（已定）：KFX 写出器 6 修好了比画布小的图空白的问题，固定版式漫画页回到和别的模式一样的排版。
 /// - v43（2026-10-06）：文件名里有安卓存储不能用的字符（`*:?"<>|\` 等）的条目改名、引用一起改（掌阅上《春雪》《飘》封面名是 `**::…`，书架没有缩略图）。
 /// - v44（2026-10-06）：清洗层审计：同一章两条注释同 id 时后一条留在原处（此前只放得回一条，《绝叫》丢了一条注释）；改名文件的 html 里
 ///   `url()` 照原引号写（此前 `style="…url("…")"` 截断属性）；章尾空白不再连外层容器的闭合标签一起删（`<p></div>`）；
@@ -100,7 +100,7 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - v45（2026-10-06）：OPF 唯一标识符和翻页方向各统一一个口径（`wash::opf::unique_identifier`、`direction::spine_direction`）：
 ///   唯一标识符认任意前缀的 identifier（`dc11:identifier` 不再被当成没有、另补一个）、id 和值去空白，空值算没有（NCX 的 dtb:uid
 ///   不再被改成空）；spine 方向值去空白、不分大小写（`" RTL "` 已是从右往左，不改写）。20 本测试书和一卷漫画三个模式逐字节不变。
-/// - v46（2026-10-06，用户定）：文字书**不再按章节拆文件**（章标题独立一页、节与节分页都撤了），原书的 XHTML 文件结构原样保留；
+/// - v46（2026-10-06，已定）：文字书**不再按章节拆文件**（章标题独立一页、节与节分页都撤了），原书的 XHTML 文件结构原样保留；
 ///   目录不变：仍按目录层级定书/卷、章、节，漏掉的节补进目录，原来指向拆出文件的条目改指原文件里标题的 `#id`（没有的补 id）。
 ///   拆分时跟着搬的同文件注释留在原处（跳转模式；弹窗模式照旧搬到章末）。`epub-optimize --no-paginate` 删掉。
 /// - v47（2026-10-06）：NCX 缺 `dtb:uid` 的补上（和 OPF 唯一标识符一致），`dtb:depth` 不是正整数的改成 navMap 实际层数。
@@ -117,7 +117,7 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   合成到白底（`imgalpha`；CSS 背景图、两用的不动）——Kindle 把透明处显示成黑色，《绍宋》章标题图 logo.png 成了黑底。
 /// - v51（2026-10-07，审计）：有 `<body>` 没 `</body>` 的截断页（和没有 body 的片段）不再当空页整页删掉（拿不准就不删）；
 ///   抓到的远程图按本地插图的竖向框缩（宽不超过阅读范围宽；以前按横竖选框，横幅能宽到阅读范围的长边）。
-/// - v52（2026-10-08，用户定）：章节只按目录层级判，纯数字不再当节的依据（撤掉数字章名当节、独占一段的「１」「２」当节号、
+/// - v52（2026-10-08，已定）：章节只按目录层级判，纯数字不再当节的依据（撤掉数字章名当节、独占一段的「１」「２」当节号、
 ///   和章同级的数字标题降成节、自动目录把「第一章 1」拆两级）。Kindle、掌阅的文字书只修复（profile `text_repair_only`；同日 Move 也改成只修复）：
 ///   EPUB 3 规范整理与目录到节，文字、图片、样式一概不动。
 /// - v53（2026-10-08）：规范整理在 `</body>`/`</html>` 前补上里面没关的元素（补完能配平才补；《狼厅》版权页 `<section><div>` 没关）。
@@ -134,22 +134,22 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - 56（2026-10-10 审计）：带透明（或 16 位）的 PNG 插图缩小时按预乘 alpha 缩（`imgopt::resize_alpha_png`，和整页背景图同一条路），
 ///   透明处存的颜色不再渗进图边（以前 `image` 自带的缩放不预乘，透明处存黑色的图边上出黑边）。只有完整清洗的文字书会缩插图，
 ///   内置三个模式的文字书只修复、漫画页另走一套，产物都不变。
-/// - 57（2026-10-15，用户报《三体全集》Kindle 目录没有章）：书里自带的目录页（链接文字占大半的页）列了、NCX 没指到那个文件的
+/// - 57（2026-10-15，维护者报《三体全集》Kindle 目录没有章）：书里自带的目录页（链接文字占大半的页）列了、NCX 没指到那个文件的
 ///   标题也补进目录（`wash/chapters.rs`）。《三体全集》NCX 只有三卷、章名是 `sigil_not_in_toc` 的 h2、每章一个文件，以前「节要
 ///   跟所属章标题在同一个文件里」（《疯探》附页那条）挡住了，现在 4 条 → 56 条。
-/// - 58（2026-10-15，用户在三台看《飘》版权页后多一页空白）：强制分页后只有 Kindle 上小到几乎看不见的图（高不到内容区高的 5%）、
+/// - 58（2026-10-15，维护者在三台看《飘》版权页后多一页空白）：强制分页后只有 Kindle 上小到几乎看不见的图（高不到内容区高的 5%）、
 ///   紧接着的块又被挪到下一页的页，去掉前面的强制分页，小图并到上一页底部（`wash/break_margin.rs`；三台一并：Kindle 在 `repair_entries`
 ///   里只做这一项，掌阅、Move 连同分页估算一起做）。《飘》上下册、《春雪》变。
-/// - 59（2026-10-16，用户在 Move、掌阅上比过）：正文插图中间调加深（profile `image_gamma`，掌阅、Move 1.3；只修复的书也做，
+/// - 59（2026-10-16，维护者在 Move、掌阅上比过）：正文插图中间调加深（profile `image_gamma`，掌阅、Move 1.3；只修复的书也做，
 ///   「图片不动」的例外）：正文 `<img>`/SVG `<image>` 用到、不在 CSS 里、内容是灰度、短边至少 200 像素、不透明的 JPEG/PNG
 ///   （`imgopt::darken_gray_image`）。金庸、福尔摩斯等带灰度插图的书变；Kindle 不开，产物不变。
-/// - 60（2026-10-19，用户定：缺 `dc:language` 时补，标错了改正）：按正文的字判语言，OPF 的 `dc:language`、`<html>` 的
+/// - 60（2026-10-19，维护者定：缺 `dc:language` 时补，标错了改正）：按正文的字判语言，OPF 的 `dc:language`、`<html>` 的
 ///   `lang`/`xml:lang` 和正文对不上的改正（`wash/lang.rs`；三台都做，只修复的书也做）。《狼厅》72 个正文文件写着 `lang="en"`，
 ///   Kindle 产物里 33 个样式是 `en`（按英文排中文）。
 /// - 61（2026-10-19，测试书「测试-WebP」Move 上 WebP 一律空白、掌阅都认）：不认 WebP 的阅读器（profile `webp = false`，Move）
 ///   文字书里的静态 WebP 无损转成 PNG（改名 `.png`，引用、`media-type` 一起改；`wash/safe_names.rs`、阶段二 `imgopt::webp_to_png`），
 ///   动图不转。测试书里没有 WebP，产物不变。
-/// - 62（2026-10-19，用户定「动图显示第一帧」）：Move 上的动图 WebP 也转成 PNG，取第一帧（掌阅自己就显示第一帧）；转出来全不透明的
+/// - 62（2026-10-19，维护者定「动图显示第一帧」）：Move 上的动图 WebP 也转成 PNG，取第一帧（掌阅自己就显示第一帧）；转出来全不透明的
 ///   存成 RGB（动图解出来一律带透明通道）。测试书里没有 WebP，产物不变。
 pub const OPTIMIZE_VERSION: &str = "62";
 
@@ -161,13 +161,13 @@ pub const OPTIMIZE_VERSION: &str = "62";
 /// - c52（2026-10-08）：从 `OPTIMIZE_VERSION` 分出来，行为不变。
 /// - c53（2026-10-09，全系统审计）：优化标记不再写版本号；两路共用的清洗层修复（GBK 的 OPF 先转码等，见 v54）。
 /// - c54（2026-10-10 审计）：两路共用的清洗层修复（样式表开头的 `@charset`、CSS 文本工具收成一份的边角变化，见 v55）。
-/// - c55（2026-10-16，用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45）：内容是灰度的漫画页中间调加深（profile `comic_gamma`，
+/// - c55（2026-10-16，维护者在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45）：内容是灰度的漫画页中间调加深（profile `comic_gamma`，
 ///   掌阅、Move 1.45；掌阅黑白屏全部页都转成灰度、都加深，Move 彩页原样）。Kindle 不开，产物不变。
 /// - c56（2026-10-19）：两路共用的清洗层改正标错的语言（见 v60）。
 pub const COMIC_VERSION: &str = "56";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
-/// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——用户真实期望是"翻到哪页注释固定在那页最下面"，
+/// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，
 /// EPUB 流式重排做不到（"页"是阅读器翻页时才算出来的），"跟着段落走"的近似不符合预期。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FootnoteMode {
@@ -248,7 +248,7 @@ pub struct OptimizeOpts {
     /// 漫画页中间调加深的伽马（profile `comic_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::prepare_comic_page_limited`]。
     pub comic_gamma: Option<f64>,
     /// 文字书正文插图中间调加深的伽马（profile `image_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::darken_gray_image`]。
-    /// 只修复的书也做（「图片不动」的例外，2026-10-16 用户定）。
+    /// 只修复的书也做（「图片不动」的例外，2026-10-16 定）。
     pub image_gamma: Option<f64>,
     /// 文字书里的 WebP 无损转成 PNG（profile `webp = false`，Move 不认 WebP；动图取第一帧）：流式优化读文件头挑出来交给清洗层改名
     /// （[`crate::wash::WashOpts::webp_to_png`]），阶段二转字节。只修复的书也做（显示不出来的图转成能显示的，像素不变）。漫画不归它管。
@@ -269,7 +269,7 @@ pub enum TextMode {
     /// 完整处理：清洗层按 [`OptimizeOpts::wash`] 的选项清洗排版，注释重排、图片缩放、背景图、图注、透明图按各自的开关做。
     #[default]
     Full,
-    /// 只做修复（profile `text_repair_only`，2026-10-08 用户定三台都这样）：清洗层只走 EPUB 3 修复和目录
+    /// 只做修复（profile `text_repair_only`，2026-10-08 定三台都这样）：清洗层只走 EPUB 3 修复和目录
     /// （[`crate::wash::WashMode::Repair`]），文字、图片、样式一概不动——不解锁字体、不排版、不缩图；注释、背景图、图注、透明图都不处理。
     Repair {
         /// 照 Send to Kindle 的规则统一（profile `kindle_rules`，掌阅、Move；[`crate::wash::WashMode::Repair`] 的同名字段）。
@@ -377,7 +377,7 @@ fn wash_opts_for(p: &profile::Profile, reference: Option<&profile::Profile>) -> 
     }
     w.reader = crate::wash::ReaderModel::for_profile(p);
     w.audit = crate::audit::covers(&p.id).then(|| p.id.clone());
-    // 竖直间距照 Kindle 换算（掌阅、Move：两台按自己的字号排边距，Kindle 按行距，2026-10-12 用户定）
+    // 竖直间距照 Kindle 换算（掌阅、Move：两台按自己的字号排边距，Kindle 按行距，2026-10-12 定）
     if let (Some(em), Some((_, k))) = (p.em_px, w.image_sizing) {
         let ratio = f64::from(p.output_readable().height) / k.content_h;
         w.v_scale = Some(crate::wash::VScale { em: k.v_rem_px * ratio / em, kindle_rem_px: k.v_rem_px, ratio });
@@ -817,7 +817,7 @@ impl<'a> EntryXform<'a> {
         }
         if (self.reader_margins || self.number_note_icons || self.fixed_layout.is_some()) && crate::wash::is_wash_css_name(name) {
             let mut out = data.to_vec();
-            // 图标注释号都换成数字的模式里，限图标高度的 `.eink-noteicon` 用不上了（2026-09-30 用户：失效样式删掉）
+            // 图标注释号都换成数字的模式里，限图标高度的 `.eink-noteicon` 用不上了（2026-09-30 ：失效样式删掉）
             if self.number_note_icons {
                 // 规则文本取清洗层生成样式表时用的同一个常量（`wash::NOTEICON_RULE`），不在这里另写一份
                 let rule = crate::wash::NOTEICON_RULE.as_bytes();

@@ -110,7 +110,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             }
         }
     }
-    // 不在这台设备的跟踪范围里的书：以前传过的从设备上删掉（2026-10-19 用户定），这一轮也不生成
+    // 不在这台设备的跟踪范围里的书：以前传过的从设备上删掉（2026-10-19 定），这一轮也不生成
     let mut outside: HashSet<(&str, &str)> = HashSet::new();
     for m in books {
         for device in &live {

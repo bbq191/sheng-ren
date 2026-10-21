@@ -309,7 +309,7 @@ fn meta_edit_takes_non_utf8_paths_as_they_are() {
     assert!(stdout(&o).contains("封面: 有（jpg，300×400"), "{}", stdout(&o));
 }
 
-/// track/untrack 的相对路径：当前目录里没有时按书根目录找（2026-10-19 用户要）。
+/// track/untrack 的相对路径：当前目录里没有时按书根目录找（2026-10-19 要）。
 #[test]
 fn track_resolves_relative_paths_against_the_books_root() {
     let dir = tempfile::tempdir().unwrap();

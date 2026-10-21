@@ -302,7 +302,7 @@ pub(super) fn inject_css_link_first(html: &str, href: &str) -> String {
 pub fn wash_css(opts: &WashOpts) -> String {
     // 拉丁 1.2em / 中文 2em（Auto 兜底中文）。
     let indent = indent_for(opts);
-    // 两端对齐（2026-09-27 用户定）：中文按排版规范两端对齐；英文两端对齐时配断字与孤行寡行控制（单独一条规则，
+    // 两端对齐（2026-09-27 定）：中文按排版规范两端对齐；英文两端对齐时配断字与孤行寡行控制（单独一条规则，
     // 阅读器不认这几个属性时只丢这一条）。书里用类写明的居中/居右（含 `align=`/行内样式换成的 eink-center/right）
     // 是类选择器，优先级高于 `p{}`，不受影响。
     let mut decl = format!("text-indent:{indent};text-align:justify;");
@@ -328,7 +328,7 @@ pub fn wash_css(opts: &WashOpts) -> String {
     // `filter_css` 就地改；这两条是给"书压根没给注释块写过 CSS"（纯靠我们自己生成的 `.footnotes`
     // 章末块 / `.eink-fnote` Inline 内联注释）兜底，不然那些书的注释永远跟正文同号，不满足这条通用
     // 要求。跟 `.eink-flush` 一样是单个裸类选择器，不逗号连写。
-    // `.eink-note`：章末的每条注释（`htmlproc::footnote`）不拆到两页（用户 2026-09-29：注释内容要在同一页内；长过一页的阅读器照常断开）。
+    // `.eink-note`：章末的每条注释（`htmlproc::footnote`）不拆到两页（2026-09-29：注释内容要在同一页内；长过一页的阅读器照常断开）。
     // `.eink-noteicon`：图标标号限成一个字高（没写宽高的 <img> 阅读器按图片像素画，80×80 的图标撑成一大块）；
     //   profile 的 note_icons = "number"（图标换成数字）时优化器第二遍按同一个常量 [`NOTEICON_RULE`] 把这条删掉。
     let latin = if opts.lang == LangMode::Latin { "p{hyphens:auto;-webkit-hyphens:auto;orphans:2;widows:2;}\n" } else { "" };

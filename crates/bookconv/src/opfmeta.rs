@@ -329,7 +329,7 @@ fn set_media_type(opf: &str, opf_dir: &str, path: &str, mt: &str) -> String {
 /// 要改写的 zip 条目：(路径, 新内容)。
 pub type Rewritten = (String, Vec<u8>);
 
-/// 去掉书里的封面（2026-09-30 用户要）：封面声明（`<meta name="cover">`、`cover-image`）、**只放封面图的页面**（没有可见文字、
+/// 去掉书里的封面（2026-09-30 要）：封面声明（`<meta name="cover">`、`cover-image`）、**只放封面图的页面**（没有可见文字、
 /// 只有这一张图；连同 spine、guide、NCX、nav 里指向它的条目），以及封面图本身——正文别的页也用着这张图时图留着，只去掉声明。
 /// `read(zip 路径)` 取文本。返回 (新 OPF, 要从 zip 删掉的条目, 要改写的条目 (路径, 新内容))。书里没有声明封面图 → 原样。
 pub fn remove_cover(opf: &str, opf_dir: &str, mut read: impl FnMut(&str) -> Option<String>) -> (String, Vec<String>, Vec<Rewritten>) {
@@ -469,7 +469,7 @@ pub fn read_epub(path: &Path) -> Result<Vec<(DcField, Vec<String>)>, String> {
 ///
 /// 只把文字条目读进内存（`epubzip::read_skeleton`，图片不解压）；写出时内容变了的条目重写，其余条目原样拷贝压缩数据。
 /// [`Edits::normalize`] 时再过一遍清洗层的规范整理（[`crate::wash::normalize_epub3`]：XHTML 修成合法 XML、OPF 升到 3.0、
-/// 补导航文档和 landmarks、NCX 标识对齐；2026-09-30 用户定：`booklib meta --edit` 写出的书和 booklib 的产物一样符合 EPUB 3），
+/// 补导航文档和 landmarks、NCX 标识对齐；2026-09-30 定：`booklib meta --edit` 写出的书和 booklib 的产物一样符合 EPUB 3），
 /// 给了 [`Edits::modified`] 就把 `dcterms:modified` 写成它（`booklib meta --edit` 给现在的时间：书确实改了）。
 /// 可见文字一个不动；XHTML 的变化只限规范整理那几条（DOCTYPE、命名实体、命名空间等）。
 pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, String> {

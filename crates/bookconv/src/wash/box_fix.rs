@@ -1,5 +1,5 @@
 //! 内边距、边框、标题的上下外边距照 Kindle（不认内边距、不画边框、不认标题外边距的阅读器：Move，profile `padding`、`borders`、
-//! `heading_margins` 写 `false`；只修复、照 Send to Kindle 统一的文字书；2026-10-13 用户要修，边框用户选「上/下边框插横线图」）。
+//! `heading_margins` 写 `false`；只修复、照 Send to Kindle 统一的文字书；2026-10-13 要修，边框维护者选「上/下边框插横线图」）。
 //!
 //! xochitl（2026-10-13 怪癖测试书 `tools/quirks/probe.py`）：内边距上下左右都不认（Q06、Q12、Q39），块的背景色照画（Q68）；边框一概
 //! 不画（Q07、Q40），图照画（横线图放在段落后、标题里 `display:block` 的都画满宽，Q69、Q70）；h1–h6 的上下外边距都不认（Q05、Q65、
@@ -16,7 +16,7 @@
 //!   画，连着这一侧的内边距画成透明的一截，宽 100%、高按比例）；文件里前面还没有内容的块不插上边框（页首的位置由垫图管，再插会多
 //!   出来）；
 //! - **左右有框的块**（全框、单边竖线）包进单格表格，框写成单元格行内的边框（xochitl 只画表格、单元格行内写的边框，见
-//!   [`frame_open`]；KINDLE_RULES 27，用户选）；定了宽度、居中、有背景图的照插横线图；**书里的表格**单元格的边框写进行内；
+//!   [`frame_open`]；KINDLE_RULES 27，维护者选的）；定了宽度、居中、有背景图的照插横线图；**书里的表格**单元格的边框写进行内；
 //! - **上下内边距、标题的上下外边距**：同一层相邻的两块，Kindle 上两块之间的距离 = 外边距折叠 + 前一块的下内边距 + 后一块的上内
 //!   边距（横线图里画了的不算），写到 Move 认的那一侧：后一块不是标题就写它的上外边距（不小于前一块的下外边距，折叠以后就是它），
 //!   后一块是标题就写前一块的下外边距；两块都是标题的、有子块又有内边距的、空块（只有 id 的分页 div）、我们垫的页首空白图、
@@ -352,7 +352,7 @@ fn big_top_pad(c: &crate::cascade::Computed, reader: &ReaderModel) -> bool {
 
 /// 页首（文件里前面还没有内容）的块插的上横线图有多高（这台的屏幕像素：线粗，加上不认内边距时连着画的上内边距）；不插的 `None`。
 /// 页首的块由页首垫图（`top_spacer.rs`）推到 Kindle 上字的位置，垫图要减去它，两边共用这一个判断（KINDLE_RULES 35：以前页首一律
-/// 不插上横线，《人生海海》「第一部」、《平凡的世界》卷名上的线 Move 上没有，用户要修）。包进单格表格画框的块（左右有框）不在这里。
+/// 不插上横线，《人生海海》「第一部」、《平凡的世界》卷名上的线 Move 上没有，维护者要修）。包进单格表格画框的块（左右有框）不在这里。
 pub(super) fn page_top_rule_px(c: &crate::cascade::Computed, tag: &str, reader: &ReaderModel, v_rem_px: f64) -> Option<f64> {
     if reader.borders || skipped(tag) {
         return None;
@@ -377,7 +377,7 @@ pub(super) fn page_top_rule_px(c: &crate::cascade::Computed, tag: &str, reader: 
     let pad_rem = if reader.padding { 0.0 } else { km::vertical_rem(c.padding[0], c.font_size).max(0.0) };
     // 上内边距大到像是拿来把页首的字往下推的（《梁羽生》卷名 `padding-top:6em` 配 3 倍字号、负上外边距，18 rem）：这段距离已经算在垫图里
     // （垫图照 Kindle 字顶的位置），横线图只画线、不连着内边距，不然距离算两遍，垫图 + xochitl 标题前自带的空 + 横线图的透明段超过
-    // 一页，卷名被推到下一页、前面多出一页空背景（2026-10-15 用户发现，33 版就有）
+    // 一页，卷名被推到下一页、前面多出一页空背景（2026-10-15 发现，33 版就有）
     let pad_rem = if pad_rem > MAX_TOP_PAD_REM { 0.0 } else { pad_rem };
     Some((border_rem * v_rem_px).max(1.0) + pad_rem * v_rem_px)
 }
@@ -546,7 +546,7 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         }
     }
     // 左右有框的块（不画边框的阅读器）：包进单格表格；没背景图、宽度和居中不是 Kindle 的（折成外边距了的算）。列表（`ol`、`ul`）
-    // 也包（《雪国》注释列表 `ol{border:1px dashed #366}`，Kindle 画框、Move 没有；KINDLE_RULES 35，用户要修）：列表自己的左右内边距
+    // 也包（《雪国》注释列表 `ol{border:1px dashed #366}`，Kindle 画框、Move 没有；KINDLE_RULES 35，维护者要修）：列表自己的左右内边距
     // 是放项目符号的，留给列表，单元格左右不加
     let mut framed = vec![false; ch.els.len()];
     if !reader.borders {

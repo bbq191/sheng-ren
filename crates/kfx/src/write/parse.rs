@@ -531,7 +531,7 @@ fn absorb_whole_span_style(kind: &mut Kind, comp: Computed) -> Computed {
 /// 有背景、边框、内边距或宽度的块级元素（[`Doc::block`] 判的 `boxed`）：写成容器套子块，盒子在容器上。
 fn container_block(name: &str, comp: Computed, children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Gap) -> Block {
     // 页面一级的 `cover` 背景：照 Send to Kindle 写整页范围（`$645`），背景铺满一页而不是只在内容范围里画（《绍宋》卷首语，真机 ✓）。
-    // 2026-10-08 试过也给 `fixed` 写了尺寸的写（制作说明），真机没有效果，用户说不改了，撤回。只认 body：别的块上没见过样本。
+    // 2026-10-08 试过也给 `fixed` 写了尺寸的写（制作说明），真机没有效果，维护者说不改了，撤回。只认 body：别的块上没见过样本。
     let page_bg = comp.bg_cover;
     let attrs = if name == "body" && page_bg && comp.bg_image.is_some() {
         let b = BG_PAGE_BOUNDS_KEYS.iter().zip([0.0, 0.0, 100.0, 100.0]).map(|(&k, v)| (k, num(v, U_PERCENT))).collect();

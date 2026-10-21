@@ -3,7 +3,7 @@
 //! 《绝叫》在掌阅上段与段挤在一起（2026-10-08 真机截屏），Kindle 上有段距。
 //!
 //! 两处共用这一张表：KFX 写出器按它给标签缺省值（`kfx::css`），只修复的文字书按它写一份 `eink-ua.css` 挂在书自带样式之前
-//! （profile `kindle_rules`，掌阅、Move；[`ua_css`]），书里写了的照样盖过它——三台按同一套缺省排（2026-10-08 用户定：照 Send to Kindle 统一）。
+//! （profile `kindle_rules`，掌阅、Move；[`ua_css`]），书里写了的照样盖过它——三台按同一套缺省排（2026-10-08 定：照 Send to Kindle 统一）。
 
 // 标签缺省值的表在 `csscascade::ua`（层叠引擎要用，2026-10-15 挪过去），这里照旧能用
 pub use csscascade::ua::{BLOCK_MARGIN_TAGS, HEADINGS, INDENTED_BLOCK_TAGS, INDENT_PX};

@@ -339,7 +339,7 @@ pub fn page_images(page: &str, text: &str) -> Vec<String> {
 
 /// spine 里导航文档（manifest `properties` 含 `nav`）标了 `linear="no"` 的 itemref 的字节范围（整个元素）。原书把目录页放进 spine
 /// 又标成不进阅读顺序，阅读器却都把它当正文第一页显示（《绍宋》在掌阅上排了 14 页，末尾还露出 `hidden` 的 landmarks）；
-/// 2026-10-09 用户定三台都拿掉（阅读器菜单里的目录读的是 nav/NCX 本身，不受影响）。优化器（`kindle_rules`）和 KFX 写出器共用。
+/// 2026-10-09 定三台都拿掉（阅读器菜单里的目录读的是 nav/NCX 本身，不受影响）。优化器（`kindle_rules`）和 KFX 写出器共用。
 pub fn nonlinear_nav_itemrefs(opf: &str) -> Vec<(usize, usize)> {
     let nav_ids: Vec<&str> = manifest_items(opf).into_iter().filter(|i| i.properties.split_whitespace().any(|p| p == "nav")).map(|i| i.id).collect();
     html::tags(opf)

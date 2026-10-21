@@ -1,4 +1,4 @@
-//! Bangumi（`bgm.tv`）：漫画的书目源（2026-10-12 用户定：漫画也要补元数据；豆瓣的搜索建议不收漫画，Bangumi 漫画条目全）。
+//! Bangumi（`bgm.tv`）：漫画的书目源（2026-10-12 定：漫画也要补元数据；豆瓣的搜索建议不收漫画，Bangumi 漫画条目全）。
 //!
 //! 正式公开的 API，不要账号、不要 key，要求带说明来历的 User-Agent（[`crate::net::UA`]）：
 //! `POST https://api.bgm.tv/v0/search/subjects?limit=10`，请求体 `{"keyword": …, "filter": {"type": [1]}}`（1＝书籍），回

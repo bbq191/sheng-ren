@@ -1,7 +1,7 @@
 """三台漫画版式检查：每一整页图在屏幕上是不是不拉伸、居中、受限的那条边离屏幕边 1–2px，页数和原书一样。
 用法：python3 comics.py <书目录或书> <工作目录> [--bin=target/release] [--reuse] [--top=8] [书名子串…]
 
-2026-10-15 用户定的重点之一（「漫画能不拉伸贴边居中留 1-2px」）。只看产物本身（黑盒），不调优化器的排版函数：
+2026-10-15 定的重点之一（「漫画能不拉伸贴边居中留 1-2px」）。只看产物本身（黑盒），不调优化器的排版函数：
 - 原书、产物按阅读顺序各取每页的第一张图配对；页数（有图的页）不一样直接报；
 - 整页图（产物短边不小于阅读范围的 1/3；装饰小图、纯文字页不看）按阅读器的显示方式放到屏幕上：图按比例缩进漫画的阅读范围
   （profile `[comic_readable]`，没有的用 `[readable.epub]`），范围在屏幕上的位置——Kindle、掌阅是整屏，Move 页边距设成 1 以后
@@ -208,7 +208,7 @@ def main():
                 if not (reuse and os.path.exists(kfx)):
                     subprocess.run([f'{bindir}/epub-to-kfx', out, kfx], check=True, capture_output=True)
                 found += [('KFX', m) for m in kfx_fixed_pages(kfx, geo[d]['screen'])]
-            # 翻页方向照书（2026-10-15 用户）：profile 写了 `comic_page_direction` 的（掌阅 ltr，2026-09-30 用户为铺满整屏定的）照写的算
+            # 翻页方向照书（2026-10-15 ）：profile 写了 `comic_page_direction` 的（掌阅 ltr，2026-09-30 为铺满整屏定的）照写的算
             want = profile_str(d, 'comic_page_direction') or spine_direction(src)
             got = kfx_direction(f'{stem}.kindle.kfx') if d == 'kindle' else spine_direction(out)
             if want != 'default' and got != want:

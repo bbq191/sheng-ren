@@ -104,7 +104,7 @@ fn text_seg(device: &Profile, area: Screen) -> String {
 /// `kindle_rules` 的文字书才有的几段（按顺序）：规则版本（第 1 版只写 `u`）、`g`（阅读器不认背景图的 `no-repeat`）、
 /// `h`（背景尺寸的 auto 高会拉长图）、`p`（不认页首的 margin-top）、
 /// `i`（不照 CSS 定图片尺寸：带方式和参照设备的内容区宽、1em 像素，改了参照设备这两个量，掌阅、Move 的书也要重建）、
-/// `m`（阅读器模型 [`bookconv::reader_model::ReaderModel`] 的签名加 `em_px` 的哈希，2026-10-13 用户定进指纹）、
+/// `m`（阅读器模型 [`bookconv::reader_model::ReaderModel`] 的签名加 `em_px` 的哈希，2026-10-13 定进指纹）、
 /// `@`（统计正文字号求 `@media` 用的屏幕，自定义模式改了屏幕也要重建）。
 fn kindle_rules_seg(device: &Profile, seg: &mut String) {
     if bookconv::wash::KINDLE_RULES_VERSION != "1" {

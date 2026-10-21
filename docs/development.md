@@ -26,7 +26,7 @@ shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.
 
 ## 真书回归
 
-测试用真书在 `~/Documents/ereader/books/`（路径里带"漫画"的是漫画，其余是文字书）。**只读，绝不改动**：产物一律写到别处，别用 `epub-optimize` 的"输入输出同路径"。用户会自己整理这个目录，别假设书还在上次的位置。
+测试用真书在 `~/Documents/ereader/books/`（路径里带"漫画"的是漫画，其余是文字书）。**只读，绝不改动**：产物一律写到别处，别用 `epub-optimize` 的"输入输出同路径"。维护者会自己整理这个目录，别假设书还在上次的位置。
 
 改动前的提交构建一份 `epub-optimize`，和改动后的各跑一遍，然后比较：
 
@@ -42,7 +42,7 @@ tools/regress/tocchk.py target/regress/旧 target/regress/新
 - `run.sh` 把全部文字书和第一卷漫画各优化一遍；开跑前核对 `epub-optimize` 是可执行文件、书目录在（`$REGRESS_BOOKS`，缺省 `~/Documents/ereader/books`），清掉输出目录里的旧产物（免得没生成的书拿旧文件去比、悄悄通过），一本书都没找到就报错退出。
 - `compare.py` 按原书路径配对新旧产物，每本报一行：`SAME`（每个 zip 条目逐字节相同；先比条目名、大小、CRC，一样再比字节）、`TEXT-SAME`（有条目变了，可见文字一样）、`TEXT-DIFF`（可见文字变了，打印第一处不同）、`MISSING`/`NEW`（只有一边有）、`BROKEN`（产物读不出来：不是 zip、没有 `container.xml` 等）。书里的优化标记 `META-INF/eink-optimized` 2026-10-09（v54）起只写 `full`/`core`、不写版本号，升版本号本身不再让每本都变成 `TEXT-SAME`，`SAME` 就是真没变。
 - `compare.py` 另外核对几件事，不过就退出码 1：新产物里不合法的 XML 不比旧的多；**正文图片（`<img>`、SVG `<image>`）不比原书少**（字符账只管文字，只有图的页被删了它看不出来；只有图、没有文字的注释号链接里的图不算，它们按规则换成数字）；新产物的可见文字和**原书**逐字符对账（按字符计数、不管顺序——注释会挪到章末——一个不多一个不少）。原书不在了、读不出来都报"未核对"，也算问题。字符账不计空白、U+FEFF 和控制字符（《金庸全集》原书一个损坏的 U+0010 被规范整理去掉，不算少字）。
-- 字符账唯一的例外是用户定的"只有图标的注释号换成数字"：只多出 ASCII 数字、原书里有只含图片的链接、多出的位数不超过按图标个数连续编号的位数时，只注明、不算不平（以前春雪、雪国、飘上下册、绍宋、绝叫 6 本因此一直报不平）。
+- 字符账唯一的例外是定下的"只有图标的注释号换成数字"：只多出 ASCII 数字、原书里有只含图片的链接、多出的位数不超过按图标个数连续编号的位数时，只注明、不算不平（以前春雪、雪国、飘上下册、绍宋、绝叫 6 本因此一直报不平）。
 
 | 改动的性质 | 要求 |
 |---|---|
@@ -84,7 +84,7 @@ done
 |---|---|
 | 重构、提速写出器 | 同一份优化后 EPUB，新旧写出器的 KFX 逐字节相同（2026-10-06 提速省内存那次：《北斗之拳》卷01 峰值 1.45→0.73GB，金庸全集 0.87→0.56GB、1.7→0.7 秒，阿加莎全集 3.3→1.4 秒，产物逐字节不变） |
 | 照 Send to Kindle 的规则（写出器、掌阅/Move 的 `kindle_rules`） | **改了 `kindle_rules` 或写出器就跑 `tools/kfx/unify.py ~/Documents/ereader/books target/unify`**（掌阅、Move 对我们的 Kindle KFX 逐项一致率，不要 Amazon 样本；比基线 `tools/kfx/unify-baseline.tsv` 差、或新书低于门槛就退出码 1，有意改了就 `--update` 写回基线一起提交；新出现的偏差按[五类](kfx.md#三台统一的回归门槛2026-10-12)归类，属于漏洞的修掉）；`tools/kfx/s2kbatch.py`（写出器对 Amazon 样本逐属性）、`tools/kfx/s2kdev.py`（三台对 Amazon 样本逐项一致率），见 [KFX · 三台和 Send to Kindle 的一致性](kfx.md#三台和-send-to-kindle-的一致性)；样本在 Kindle 的 `documents/Downloads/Items01/` |
-| 三台版式（2026-10-15 用户定的验收重点：居中、竖排、横线、分页、封面不多页、漫画留边） | **跑 `tools/kfx/layout.py ~/Documents/ereader/books target/layout`**：以 Kindle KFX 为准，逐个文字块查掌阅、Move 的对齐、窄块竖排、块宽、上下横线/竖线/`<hr>`、另起一页、空白页、封面页（只有图的节的个数和位置，合集分书封面不多页；Move/掌阅 `break_margin` 估算插的分页在 Kindle 上是版面自己挪页、KFX 里不分节，并回前一节）（读 `epub-to-kfx --styles` 的 `#sec`/`#open`/`#box`/`#rule`/`#hr` 行；阅读器怪癖按 profile 的 `padding`、`block_width`、`borders` 折进来；边框颜色和底色灰度差不到 24 的不算；Move 搬进本章的注释、KINDLE_RULES 18 估算的分页不算）。一处不一样就列，不打总分；基线 `tools/kfx/layout-baseline.tsv` 记每本每台各类的处数，多了退出码 1。**漫画跑 `tools/kfx/comics.py ~/Documents/ereader/books target/comics`**：页数、画布和阅读范围同比例（不拉伸）、翻页方向照书（profile `comic_page_direction` 例外）、Kindle KFX 固定版式 1:1 居中算硬性；受限边离屏幕 1–2px、居中按像素量（JPEG 振铃、纸色淡边会差几 px），列出来看图 |
+| 三台版式（2026-10-15 定的验收重点：居中、竖排、横线、分页、封面不多页、漫画留边） | **跑 `tools/kfx/layout.py ~/Documents/ereader/books target/layout`**：以 Kindle KFX 为准，逐个文字块查掌阅、Move 的对齐、窄块竖排、块宽、上下横线/竖线/`<hr>`、另起一页、空白页、封面页（只有图的节的个数和位置，合集分书封面不多页；Move/掌阅 `break_margin` 估算插的分页在 Kindle 上是版面自己挪页、KFX 里不分节，并回前一节）（读 `epub-to-kfx --styles` 的 `#sec`/`#open`/`#box`/`#rule`/`#hr` 行；阅读器怪癖按 profile 的 `padding`、`block_width`、`borders` 折进来；边框颜色和底色灰度差不到 24 的不算；Move 搬进本章的注释、KINDLE_RULES 18 估算的分页不算）。一处不一样就列，不打总分；基线 `tools/kfx/layout-baseline.tsv` 记每本每台各类的处数，多了退出码 1。**漫画跑 `tools/kfx/comics.py ~/Documents/ereader/books target/comics`**：页数、画布和阅读范围同比例（不拉伸）、翻页方向照书（profile `comic_page_direction` 例外）、Kindle KFX 固定版式 1:1 居中算硬性；受限边离屏幕 1–2px、居中按像素量（JPEG 振铃、纸色淡边会差几 px），列出来看图 |
 | 改了写出器的行为 | 只有该变的书变了，逐本说明（比如写出器 7 只有《福尔摩斯探案全集》变；写出器 8 同一个 `--id` 下全部逐字节不变，书库产物因唯一 ID 改取书 id 全变）；`WRITER_VERSION` 加一；上真机看过再写 ✓ |
 | 改了容器读写（`ion`、`container`） | `kfx-repack` 解开再打包设备上的样本（`target/kfx-samples/` 等）全部逐字节相同 |
 
@@ -107,7 +107,7 @@ done
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。
 profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`、`[heading_sizes]`、`margin_top`、`[page_top]`，`bookconv::reader_model`）和 `em_px` 以哈希进指纹（`m` 段），改了它们（比如重量了 Move 的标题字号）不用加版本号。
 
-**版本号写进指纹、不写进书**（2026-10-09 用户定）：书里的优化标记 `META-INF/eink-optimized` 只写 `full`/`core`，KFX 里的创建器版本固定写 `1`。所以加了版本号以后书会重新生成，但内容没变的书生成出来逐字节相同，设备上不重传；只有真变了的书才传。改了影响产物的代码一律加版本号，不因为"书库里的书都没碰到"省掉（用户定）。
+**版本号写进指纹、不写进书**（2026-10-09 定）：书里的优化标记 `META-INF/eink-optimized` 只写 `full`/`core`，KFX 里的创建器版本固定写 `1`。所以加了版本号以后书会重新生成，但内容没变的书生成出来逐字节相同，设备上不重传；只有真变了的书才传。改了影响产物的代码一律加版本号，不因为"书库里的书都没碰到"省掉（已定）。
 
 ## 工程约束
 
@@ -119,7 +119,7 @@ profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_h
 - `kindle_rules` 各步的开头用 `wash::scan_chapters`（全书样式表 + 逐章并行），新写的文件放 `wash::beside_opf`；别再各写一份。
 - `tools/` 的脚本读 profile 用 `toollib.profile(模式)`（`epub-optimize --print-profile`），别再按行扫 TOML 自己填缺省。
 
-用户定的硬约束（只用 Rust、不用 Calibre，clean-room，命名，内容一字不改……）见[决定记录 · 一直有效的约束](decisions.md#一直有效的约束)。写代码时另外要守的：
+定下的硬约束（只用 Rust、不用 Calibre，clean-room，命名，内容一字不改……）见[决定记录 · 一直有效的约束](decisions.md#一直有效的约束)。写代码时另外要守的：
 
 - **不写死屏幕数字**：一律从模式读。优化选项用 `OptimizeOpts::for_profile(模式)` 创建（书库和 `epub-optimize` 同一个起点）；测试里才用 `OptimizeOpts::new(阅读范围)`。不按设备名写分支，阅读器的怪癖做成模式字段。
 - **真机验证后才能说完成**：改变阅读效果的规则，没在目标设备上看过就不写"✓"；一台验证过不能推到别的；电脑上的检查不能代替真机。结果写进[验证情况](typesetting.md#验证情况)。
@@ -173,7 +173,7 @@ profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_h
 
   图片 worker 每件活整个兜住 panic（读 zip 也是外部输入），panic 了只这本书报错，不摔掉整个 `sync`。
 - `produce_then_replace` 产出途中出错或 panic 都删掉临时文件。
-- **踩到的阅读器怪癖**记进[设备 · 怪癖 → 字段](devices.md#怪癖--字段)；用户定的事记进[决定记录](decisions.md)。
+- **踩到的阅读器怪癖**记进[设备 · 怪癖 → 字段](devices.md#怪癖--字段)；定下的事记进[决定记录](decisions.md)。
 
 ## 性能
 
@@ -249,17 +249,17 @@ profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_h
 
 ## DRM
 
-用途是给用户自己买的书做格式转换和个人备份。现状：入库时识别出 DRM 就拒收。
+用途是给维护者自己买的书做格式转换和个人备份。现状：入库时识别出 DRM 就拒收。
 
-**2026-10-16 用户定不做了**（不是暂停，以后不重启；识别出 DRM 照旧拒收）。下面是 2026-09-27 暂停时的情况，留作记录。
+**2026-10-16 定不做了**（不是暂停，以后不重启；识别出 DRM 照旧拒收）。下面是 2026-09-27 暂停时的情况，留作记录。
 
-**2026-09-27 暂停**。用户手上只有 Kindle 旧格式（AZW/AZW3/MOBI）的加密书，但这种 DRM 找不到足够的独立公开资料：
+**2026-09-27 暂停**。维护者手上只有 Kindle 旧格式（AZW/AZW3/MOBI）的加密书，但这种 DRM 找不到足够的独立公开资料：
 
 - 维基百科只有 PC1 密码本身；
 - 一篇 2008 年的博客只讲了流程，没有密钥常量、从序列号算 PID 的方法和凭证结构；
 - 细节齐全的只有一份照 DeDRM 的 GPL 代码写的讲解，照它实现等于间接移植 GPL 代码。
 
-而且入库只收 EPUB、CBZ，解了 DRM 也还得先转成 EPUB。重启前要用户在几条路里选一条：先确认手上的文件是旧格式还是 KFX（KFX 的 DRM 不考虑；DRM-free 的 KFX 写出器见 [KFX](kfx.md)）；把 DRM 单独做成 GPL 模块；或交给外部工具解完、转成 EPUB 再入库。
+而且入库只收 EPUB、CBZ，解了 DRM 也还得先转成 EPUB。重启前要维护者在几条路里选一条：先确认手上的文件是旧格式还是 KFX（KFX 的 DRM 不考虑；DRM-free 的 KFX 写出器见 [KFX](kfx.md)）；把 DRM 单独做成 GPL 模块；或交给外部工具解完、转成 EPUB 再入库。
 
 ## 参考资料
 

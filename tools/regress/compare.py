@@ -13,7 +13,7 @@
 另外两项核对，任何一本不过都算失败：
   - 新产物里 XHTML/OPF/NCX 不是合法 XML 的数量（不能比旧的多）；
   - 对原书的"字符账"：新产物可见文字的字符计数，和 index.txt 里记的原书 spine 可见文字逐字符相等
-    （顺序不管：注释会从原处挪到章末，但一个字不多一个字不少）；正文图片（<img>、SVG <image>）不比原书少。唯一的例外是只有图标的注释号换成数字（用户定的规则）：
+    （顺序不管：注释会从原处挪到章末，但一个字不多一个字不少）；正文图片（<img>、SVG <image>）不比原书少。唯一的例外是只有图标的注释号换成数字（定下的规则）：
     只多出 ASCII 数字、原书里有只含图片的链接、多出的位数不超过按图标个数连续编号的位数时，只注明、不算不平。
 
 --strip-old-markers：旧产物里优化器自己加的注释标号 `<a href="#…">[N]</a>` 不算正文（v27 起不再加），比较前从旧的里去掉。
@@ -156,7 +156,7 @@ def main():
             if collections.Counter(ts) != collections.Counter(tb):
                 d_more = collections.Counter(tb) - collections.Counter(ts)
                 d_less = collections.Counter(ts) - collections.Counter(tb)
-                # 只有图标的注释标号换成了数字（用户定的规则）：只多出 ASCII 数字、且原书有这种图标链接时不算不平，只报个数
+                # 只有图标的注释标号换成了数字（定下的规则）：只多出 ASCII 数字、且原书有这种图标链接时不算不平，只报个数
                 icons = icon_note_links(src) if not d_less and set(d_more) <= set('0123456789') else 0
                 if icons and sum(d_more.values()) <= icon_digit_budget(icons):
                     info.append(f'注：多出 {sum(d_more.values())} 个数字（原书 {icons} 个图标注释号换成了数字，不算不平）')

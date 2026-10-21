@@ -229,7 +229,7 @@
         ZipArchive::new(Cursor::new(&text_out)).unwrap().by_name("p1.jpg").unwrap().read_to_end(&mut text_img).unwrap();
 
         // 2026-09-19 起两边不再要求尺寸完全一致：漫画路径多了 `pad_to_device_aspect` 这一步
-        // （真机反馈"底部留白太多"，CSS 治不了；用户明确目标是"上下留白尽量等比、左右留白尽可能
+        // （真机反馈"底部留白太多"，CSS 治不了；维护者明确目标是"上下留白尽量等比、左右留白尽可能
         // 接近 0"，见该函数文档），文字书路径的内嵌图不是整页漫画，不需要补白。这里只保留还站得
         // 住脚的部分：两边都应该被缩进屏幕框内（不超限），漫画路径的高度应该补到刚好等于设备
         // 页面长宽比对应的高度（宽度不变，左右留白全程是 0）。
@@ -455,7 +455,7 @@
     }
 
     /// 真机《甲午：摇摆的战争》坐实的真实形态：章节文件**没有扩展名**（`Chapter_2`/`Chapter_7_1`
-    /// 这种命名），只按扩展名判断的 `is_html` 会把它整个漏过、字体锁/脚注图标全都没清洗——用户反馈
+    /// 这种命名），只按扩展名判断的 `is_html` 会把它整个漏过、字体锁/脚注图标全都没清洗——维护者反馈
     /// "字体锁死改不了"。这条端到端跑一遍优化器，断言无扩展名的章节也真的被处理了。
     #[test]
     fn strips_font_lock_on_extensionless_chapter_file() {
@@ -1288,7 +1288,7 @@
         assert_eq!(optimized_version_file(&p), None, "不是 zip");
     }
 
-    /// 文字书只修复（profile `text_repair_only`，Kindle、掌阅，2026-10-08 用户定）：样式、注释、空白页、图片一概不动，
+    /// 文字书只修复（profile `text_repair_only`，Kindle、掌阅，2026-10-08 定）：样式、注释、空白页、图片一概不动，
     /// 只升级成 EPUB 3、修成合法 XML、目录补到节。
     #[test]
     fn text_repair_only_keeps_content() {
@@ -1333,13 +1333,13 @@
         assert_eq!(crate::html::plain_text(&x), crate::html::plain_text(c1), "可见文字一字不差");
         assert!(text_of(&out, "OEBPS/notes.xhtml").contains("注释"), "注释留在原处");
         let opf_out = text_of(&out, "OEBPS/content.opf");
-        // 只修复的书不删空白页，但 Kindle 上不出页的空页（写出器不给没有块的文件出版面）照 Kindle 去掉（KINDLE_RULES 35，用户定）
+        // 只修复的书不删空白页，但 Kindle 上不出页的空页（写出器不给没有块的文件出版面）照 Kindle 去掉（KINDLE_RULES 35，已定）
         assert!(opf_out.contains(r#"version="3.0""#) && !opf_out.contains("empty.xhtml"), "升级 EPUB 3；Kindle 上不出页的空页去掉: {opf_out}");
         assert!(names.iter().any(|n| n.ends_with("nav.xhtml")), "补 nav: {names:?}");
         let flat = crate::ncx::parse_ncx_flat(&text_of(&out, "OEBPS/toc.ncx"));
         let labels: Vec<(usize, &str)> = flat.iter().map(|(d, l, _)| (*d, l.as_str())).collect();
         assert_eq!(labels, [(1, "第一章"), (2, "一节"), (1, "注释")], "目录补到节");
-        // 标签缺省样式（profile `kindle_rules`，2026-10-08 用户定照 Send to Kindle 统一）：挂在书自带样式之前，书里写了的盖过它
+        // 标签缺省样式（profile `kindle_rules`，2026-10-08 定照 Send to Kindle 统一）：挂在书自带样式之前，书里写了的盖过它
         assert_eq!(text_of(&out, "OEBPS/eink-ua.css"), crate::wash::kindle_rules_scale_ua_for_test(opts.wash.as_ref().and_then(|w| w.v_scale)));
         let (ua, own) = (x.find("eink-ua.css").unwrap(), x.find("style.css").unwrap());
         assert!(ua < own, "缺省样式在书自带样式之前: {x}");
@@ -1352,7 +1352,7 @@
         assert_eq!(text_of(&k, "OEBPS/style.css"), css, "Kindle 的 EPUB 样式表一个字不改（规则由 KFX 写出器照做）");
     }
 
-    /// xochitl 只修复、另保证注释能点（profile `repair_note_links`，2026-10-08 用户定）：注释搬进引用它的那一章、改同文件锚点（和原来的完整优化同一套），
+    /// xochitl 只修复、另保证注释能点（profile `repair_note_links`，2026-10-08 定）：注释搬进引用它的那一章、改同文件锚点（和原来的完整优化同一套），
     /// 别的（样式表、行内样式、段首空格、空白页）一概不动，也不加排版样式表。
     #[test]
     fn xochitl_repair_keeps_content_but_notes_jump() {

@@ -4,10 +4,10 @@
 用法:
   probe.py make 输出.epub                 生成测试书（探针见 PROBES；书名「测试-怪癖」）
   probe.py measure 排出来的.pdf [--json]  量 xochitl 排出的 PDF（每页按标记 Q??A/Q??B 认）
-  probe.py move [--host=root@10.11.99.1]  生成 → 经书架服务导入 Move → 等它排好 → 拉回 PDF → measure（测试书留在 Move 上，用户自己删）
+  probe.py move [--host=root@10.11.99.1]  生成 → 经书架服务导入 Move → 等它排好 → 拉回 PDF → measure（测试书留在 Move 上，维护者自己删）
   （都可加 --only=88-99 或 --only=13,28,100-119：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
   probe.py ireader                        生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
-                                          （测试书留在掌阅上，用户自己删；掌阅要开着 adb、亮屏解锁）
+                                          （测试书留在掌阅上，维护者自己删；掌阅要开着 adb、亮屏解锁）
 
 掌阅没有排好的 PDF，只能逐页截屏：每章第一行的标记换成一张条码图（两端各一格黑，中间 7 位探针序号、1 位 A/B，宽 50%），截屏后
 按格取样认出是哪一页；翻页在页底空白处横向滑（碰到字会弹查词）。

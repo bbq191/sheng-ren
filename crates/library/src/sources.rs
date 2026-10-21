@@ -1,9 +1,9 @@
 //! 跟踪原件（`track`）并把它镜像进书库（`sync`）。
 //!
-//! 跟踪的是一组**条目**（2026-10-19 用户定：每台设备的跟踪库可以不同，既可以是目录、也可以是单本或多本书，混着来）：
+//! 跟踪的是一组**条目**（2026-10-19 定：每台设备的跟踪库可以不同，既可以是目录、也可以是单本或多本书，混着来）：
 //! 每个条目是一个目录（递归）或一个文件，带着它给哪几台设备（空＝全部）。一本书传给哪些设备，取覆盖它的条目的并集；
 //! 不再被任何条目覆盖的书（untrack 了）下次 `sync` 连同产物从书库删掉，从某台的范围里拿掉的书下次 `sync` 从那台上删掉
-//! （用户定：删）。设备上的子目录一律是原件所在目录相对**书根目录**的路径（用户定：原目录结构是什么就是什么，跟踪
+//! （维护者定：删）。设备上的子目录一律是原件所在目录相对**书根目录**的路径（维护者定：原目录结构是什么就是什么，跟踪
 //! `books/漫画/死亡筆記/卷01.epub` 放进设备的 `漫画/死亡筆記/`），见 [`Sources::placement`]。
 
 use crate::{Added, Library, Meta, BUSY, NOT_UTF8};
@@ -266,7 +266,7 @@ pub enum SyncEvent<'a> {
 /// 原件不在了（不是挪动）的书怎么处理。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Prune {
-    /// 缺省：书库严格镜像跟踪目录，跟踪目录里登记过的书原件不在了就连同产物从书库删掉（2026-10-06 用户定）。
+    /// 缺省：书库严格镜像跟踪目录，跟踪目录里登记过的书原件不在了就连同产物从书库删掉（2026-10-06 定）。
     /// 删的只是索引和能重建的产物，原件不动；删错了（比如文件只是暂时挪开）放回去再 `sync` 就回来。
     #[default]
     Auto,
@@ -753,7 +753,7 @@ impl Library {
                 continue; // 条目记着的原件在跟踪目录以外（add 进来的），还在：这本书没丢
             }
             let title = self.read_meta(&seen.id).map(|m| m.title).unwrap_or_default();
-            // 不再被任何条目覆盖的（untrack 了）：同原件删了，连同产物从书库删掉（2026-10-19 用户定）
+            // 不再被任何条目覆盖的（untrack 了）：同原件删了，连同产物从书库删掉（2026-10-19 定）
             let released = !src.covered(path);
             let event = |removed| if released { SyncEvent::Released(path, &title, removed) } else { SyncEvent::Missing(path, &title, removed) };
             if prune == Prune::Auto {

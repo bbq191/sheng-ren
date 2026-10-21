@@ -21,7 +21,7 @@ pub const DEFAULT_COMIC_MARGIN: u32 = 1;
 pub const MIN_GAMMA_IMAGE_SIDE: u32 = 200;
 
 /// 产物格式。KFX 是先按同一套规则优化出 EPUB、再转换（给 Kindle 自带阅读器，2026-10-05 起，见 docs/kfx.md）；
-/// PDF、AZW3 已删（AZW3 2026-10-09 用户定：KFX 取代），写了按未知值报错。
+/// PDF、AZW3 已删（AZW3 2026-10-09 定：KFX 取代），写了按未知值报错。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
@@ -60,7 +60,7 @@ impl Screen {
     }
 }
 
-/// 注释在这个阅读器里怎么看（用户 2026-09-29 定）。
+/// 注释在这个阅读器里怎么看（2026-09-29 定）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Notes {
@@ -97,7 +97,7 @@ pub enum ImageSizing {
     Percent,
 }
 
-/// 产物怎么送到设备上（`[deliver]`，2026-10-07 用户定：`booklib sync` 按设备接没接上直接传，不在电脑上留产物）。
+/// 产物怎么送到设备上（`[deliver]`，2026-10-07 定：`booklib sync` 按设备接没接上直接传，不在电脑上留产物）。
 /// 不写这一节的模式（书库 `profiles/` 里的自定义模式）产物照旧放在电脑上（跟踪目录旁的 `<模式 id>/`）。
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
@@ -154,7 +154,7 @@ pub struct CssQuirks {
     /// Send to Kindle 统一的文字书里，整页背景图照 Kindle 上的大小、位置写成屏幕像素（`bookconv::wash::kindle_rules`）。
     pub background_auto_height: bool,
     /// 阅读器认 `display:none`（TOML 里不写是 `true`）。xochitl 不认（行内、外链都不认，2026-10-12 测试书「测试-隐藏」）：写 `false`
-    /// 时只修复、照 Send to Kindle 统一的文字书里去掉 `display:none` 的元素（在 Kindle 上本来就看不见；用户定），`id` 留成空 `<span>`。
+    /// 时只修复、照 Send to Kindle 统一的文字书里去掉 `display:none` 的元素（在 Kindle 上本来就看不见；已定），`id` 留成空 `<span>`。
     pub display_none: bool,
     /// `<p>` 不认外链、`<style>` 里的 `line-height`（行内 `style` 的认，2026-10-13 怪癖测试书 Q83）、别的块（标题、div、li、blockquote、td）
     /// 按阅读器自己的缺省行距的倍数认（TOML 里不写是
@@ -198,7 +198,7 @@ pub struct CssQuirks {
     /// （`bookconv::wash::box_fix`）；带背景色的块、表格、列表不动。
     pub padding: bool,
     /// 阅读器画边框（TOML 里不写是 `true`）。xochitl 一概不画（Q07、Q40），能画图（Q69、Q70）：写 `false` 时上、下边框在块里最前、最后
-    /// 插一张同色同粗的横线图（连着这一侧的内边距），左右边框、表格线做不了（`bookconv::wash::box_fix`，用户定）。
+    /// 插一张同色同粗的横线图（连着这一侧的内边距），左右边框、表格线做不了（`bookconv::wash::box_fix`，已定）。
     pub borders: bool,
     /// 阅读器认 h1–h6 的上下外边距（TOML 里不写是 `true`）。xochitl 都不认（页中间的也不认，Q05、Q65、Q67），标题前后自带一段空、
     /// 和相邻块的外边距折叠（前一块的下外边距、后一块的上外边距认，Q66、Q74）：写 `false` 时标题前后的间距照 Kindle 写到相邻的块上
@@ -216,7 +216,7 @@ pub struct CssQuirks {
     /// 统一的文字书里块的宽度照 Kindle 折成左右外边距（`margin:auto` 居中的两边各一半；`bookconv::wash::box_fix`）。
     pub block_width: bool,
     /// 阅读器认负的外边距（TOML 里不写是 `true`）。xochitl 不认（Q08、Q75–Q79，上下左右都不认）：写 `false` 时只修复、照 Send to Kindle
-    /// 统一的文字书里，页中间相邻两块之间带负外边距的照 Kindle 折叠后的间距写成两边的非负外边距（`bookconv::wash::box_fix`；左右的不管，用户定）。
+    /// 统一的文字书里，页中间相邻两块之间带负外边距的照 Kindle 折叠后的间距写成两边的非负外边距（`bookconv::wash::box_fix`；左右的不管，已定）。
     pub negative_margins: bool,
     /// 阅读器单元格缺省竖直居中（TOML 里不写是 `true`，同 Kindle：Send to Kindle 没写 `vertical-align` 的单元格居中）。xochitl 缺省顶端对齐
     /// （2026-10-14 探针 Q105、Q106，`middle` 写了认）：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，一行两格以上、Kindle 上居中的
@@ -241,7 +241,7 @@ pub struct CssQuirks {
     pub float: bool,
     /// 左右外边距、内边距的 `em` 照 Kindle 按页宽换算（TOML 里不写是 `false`）。Kindle 的左右长度一律按页宽的百分比显示（em 按一页
     /// 32 个 em 折，写出器同 Send to Kindle），xochitl 一行只有约 22 个 em（842px ÷ 37.8），同样的 em 宽出约 1.4 倍：写 `true` 时只修复、
-    /// 照 Send to Kindle 统一的文字书里左右外边距、内边距的 em、pt 乘「这台一行的 em 数 ÷ 32」（`bookconv::wash::kindle_rules`，用户
+    /// 照 Send to Kindle 统一的文字书里左右外边距、内边距的 em、pt 乘「这台一行的 em 数 ÷ 32」（`bookconv::wash::kindle_rules`，维护者
     /// 2026-10-14 选；正的首行缩进不动，Kindle 在整页宽的块里也按 em；负的悬挂缩进跟着乘）。
     pub horizontal_scale: bool,
     /// 阅读器认 `rem`（TOML 里不写是 `true`）。掌阅不认，整条声明当没写（2026-10-13 怪癖测试书 Q53：`margin-left:2rem` 不挪）：写 `false`
@@ -289,7 +289,7 @@ pub struct ComicPolicy {
     #[serde(rename = "comic_readable")]
     readable: Option<Screen>,
     /// 漫画的翻页方向改成这个（`"ltr"` 或 `"rtl"`，写进 OPF 的 `page-progression-direction`）；不写就照原书。
-    /// ireader 写 `"ltr"`：掌阅遇到从右往左翻的书会四周留边、整页图铺不满（2026-09-30 真机），用户选了铺满。
+    /// ireader 写 `"ltr"`：掌阅遇到从右往左翻的书会四周留边、整页图铺不满（2026-09-30 真机），维护者选了铺满。
     #[serde(rename = "comic_page_direction")]
     pub page_direction: Option<String>,
     /// 漫画写成固定版式，画布是 `comic_readable`（Kindle：流式版式下阅读器强制留页边距，固定版式才能整页铺满，
@@ -301,7 +301,7 @@ pub struct ComicPolicy {
     #[serde(rename = "comic_format")]
     pub format: Option<Format>,
     /// 漫画页中间调加深的伽马（`255·(v/255)^γ`，黑、白两端不动；TOML 里不写＝不加深）。只加深内容是灰度的页：黑白屏上转成灰度的页
-    /// 全算，彩色屏上只算本来就没有颜色的页（彩页原样）。2026-10-16 用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45，选 1.45；2026-10-21 先改成 1.3，同日掌阅上比过 1.1 / 1.2 / 1.3 选 1.1
+    /// 全算，彩色屏上只算本来就没有颜色的页（彩页原样）。2026-10-16 在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45，选 1.45；2026-10-21 先改成 1.3，同日掌阅上比过 1.1 / 1.2 / 1.3 选 1.1
     /// （第一轮 Move 上对比度、锐化、饱和度都看不出区别）。见 `bookconv::imgopt::prepare_comic_page_limited`。
     #[serde(rename = "comic_gamma")]
     pub gamma: Option<f64>,
@@ -342,21 +342,21 @@ pub struct Profile {
     pub image_alpha: bool,
     /// 阅读器认 WebP 图片（TOML 里不写是 `true`）。Move 不认（2026-10-19 测试书「测试-WebP」：有损、无损、透明、动图、CSS 背景图、
     /// 行内小图、封面一律空白，同样的图存 PNG 正常；掌阅都认），写 `false`：文字书里的 WebP 无损转成 PNG（改名 `.png`、引用和
-    /// `media-type` 一起改），动图取第一帧（用户定，同掌阅）。Kindle 不用：KFX 写出器读书时本来就把 WebP 转成 PNG。
+    /// `media-type` 一起改），动图取第一帧（维护者定，同掌阅）。Kindle 不用：KFX 写出器读书时本来就把 WebP 转成 PNG。
     pub webp: bool,
     /// 文字书只做修复（TOML 里不写是 `false`）：升级成合规的 EPUB 3、修不规范的写法、目录到节，**书里的文字、图片、样式一概不动**
-    /// （不解锁字体字号、不排版、不搬注释、不删空白页、不缩图）。Kindle、掌阅写 `true`（2026-10-08 用户定）；漫画不归它管。
+    /// （不解锁字体字号、不排版、不搬注释、不删空白页、不缩图）。Kindle、掌阅写 `true`（2026-10-08 定）；漫画不归它管。
     pub text_repair_only: bool,
     /// 只修复时仍处理注释链接，保证注释能点（TOML 里不写是 `false`）：注释搬进引用它的那一章、链接改成同文件锚点，按 `note_backlinks`
-    /// 去掉回链，按 `note_icons` 把只有图标的标号换成数字。xochitl 写 `true`（2026-10-08 用户定：xochitl 只保障注释可跳）。
+    /// 去掉回链，按 `note_icons` 把只有图标的标号换成数字。xochitl 写 `true`（2026-10-08 定：xochitl 只保障注释可跳）。
     pub repair_note_links: bool,
     /// 只修复的文字书照 Send to Kindle 的规则统一（TOML 里不写是 `false`）：标签缺省样式（`<p>` 上下 1em、标题字号……，
     /// `bookconv::uastyle`）、正文字体用阅读器字体、body 左右边距不要、文字对比度 4.5（`bookconv::wash::kindle_rules`）。
-    /// ireader、xochitl 写 `true`（2026-10-08 用户定三台一套规则）。Kindle 不用：KFX 写出器照这套规则写。
+    /// ireader、xochitl 写 `true`（2026-10-08 定三台一套规则）。Kindle 不用：KFX 写出器照这套规则写。
     pub kindle_rules: bool,
     /// 文字书正文插图中间调加深的伽马（同 `comic_gamma` 的算法；TOML 里不写＝不加深）。只动正文 `<img>`/SVG `<image>` 用到、
     /// 没在 CSS 里当背景、内容是灰度、短边至少 [`MIN_GAMMA_IMAGE_SIDE`] 像素、没有透明通道的 JPEG/PNG；只修复的书也做（「图片不动」
-    /// 的例外，2026-10-16 用户定）。用户在 Move、掌阅上比过，选 1.3；2026-10-21 用户改成 1.1（同漫画）。见 `bookconv::imgopt::darken_gray_image`。
+    /// 的例外，2026-10-16 定）。维护者在 Move、掌阅上比过，选 1.3；2026-10-21 改成 1.1（同漫画）。见 `bookconv::imgopt::darken_gray_image`。
     pub image_gamma: Option<f64>,
     /// 阅读器怎么定图片尺寸（TOML 里不写是 `css`），见 [`ImageSizing`]。ireader 写 `device-px`，xochitl 写 `percent`。
     pub image_sizing: ImageSizing,
@@ -661,7 +661,7 @@ impl Registry {
     }
 }
 
-/// 三台统一照着排的那台设备（内置 kindle，2026-10-12 用户定「三台以 Kindle 为准」）：掌阅、Move 的图片大小、竖直间距按它的
+/// 三台统一照着排的那台设备（内置 kindle，2026-10-12 定「三台以 Kindle 为准」）：掌阅、Move 的图片大小、竖直间距按它的
 /// 阅读范围和字号换算。「以谁为准」只在这里定；用到它的地方（`bookconv::optimize::OptimizeOpts::for_profile`、书库的指纹）都从这里取，
 /// 单测、自定义调用可以用 `for_profile_against` 另给。
 pub fn reference() -> Option<&'static Profile> {

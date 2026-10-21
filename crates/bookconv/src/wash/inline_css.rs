@@ -1,5 +1,5 @@
 //! 行内 `style`、`<style>` 和规则最后一条不带分号又紧挨 `}` 的声明里的 em 照 CSS 排（不这样排的阅读器：Move，profile
-//! `inline_css_lengths = false`；只修复、照 Send to Kindle 统一的文字书；2026-10-13 用户要修）。
+//! `inline_css_lengths = false`；只修复、照 Send to Kindle 统一的文字书；2026-10-13 要修）。
 //!
 //! xochitl 有两套 CSS 解析（2026-10-13 怪癖测试书 `tools/quirks/probe.py`）：外链样式表里带分号的声明照 CSS 排（1em 37.8px）；
 //! 行内 `style`、`<style>` 里的、规则最后一条不带分号且紧挨着 `}` 的声明走另一套——em、rem 的长度按 1em＝23px（约 0.61 倍），`font-size`、

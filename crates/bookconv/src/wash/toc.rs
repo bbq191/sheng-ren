@@ -430,7 +430,7 @@ fn collection_depths(titles: &[&str]) -> Option<Vec<u8>> {
 /// 目录里任意一层的兄弟条目中有「第X部/卷/篇」、而它自己下面没有子条目时，把它后面到下一个「部」之前的兄弟条目
 /// 缩进到它下面（福尔摩斯全集里《恐怖谷》：书下面「第一部 伯尔斯通惨剧」「第一章 警讯」…「第二部」「第一章」…平排）。
 /// 第一个「部」前面的条目（书名页、前言）不动。全书一层平排的目录由 [`restructure_existing_toc_parts`] 处理（还要拆标签）。
-/// 用户 2026-10-05：目录按书/卷 → 章 → 节嵌套。返回缩进了几条。
+/// 2026-10-05：目录按书/卷 → 章 → 节嵌套。返回缩进了几条。
 pub(super) fn nest_parts_among_siblings(entries: &mut [Entry], mode: AutoToc, heading: &str, rep: &mut WashReport) {
     if mode == AutoToc::Off {
         return;
@@ -497,7 +497,7 @@ pub(super) fn auto_toc(entries: &mut Vec<Entry>, mode: AutoToc, heading: &str, r
     let Some(opf) = parse_opf(entries) else { return };
     let headings = collect_toc_headings(entries, &opf.spine, opf.nav_doc.as_ref());
     let headings = if headings.is_empty() { fallback_spine_toc(entries, &opf.spine, opf.nav_doc.as_ref()) } else { headings };
-    // 纯图片书（漫画/画册）：没有标题也没有可提取文字，`fallback_spine_toc` 故意不生成"正文 N"。但用户要求
+    // 纯图片书（漫画/画册）：没有标题也没有可提取文字，`fallback_spine_toc` 故意不生成"正文 N"。但维护者要求
     // **所有书都要有目录**（2026-09-20，乱马源书 NCX 是空的，转出来没目录），所以按页分段生成"第 N–M 页"
     // ——如实标注不是章节，只为能按段跳转（同 `ncx::page_chunk_titles`，PDF 路径也是这套）。
     let headings = if headings.is_empty() { page_chunk_toc(&opf.spine, opf.nav_doc.as_ref()) } else { headings };
@@ -549,7 +549,7 @@ pub(super) struct SectionRef {
     pub label: String,
 }
 
-/// 定完章节后把书自带目录里**漏掉的节**补进去（用户 2026-09-27：节要缩进出现在目录里）。`sections` 按阅读顺序。
+/// 定完章节后把书自带目录里**漏掉的节**补进去（2026-09-27：节要缩进出现在目录里）。`sections` 按阅读顺序。
 /// 书自带的条目原样保留、顺序不动；缺的节插在阅读顺序上它之前的最后一条后面，
 /// 层级 = 往前找到的第一条"章"（非节条目）的下一级，前一条本身就是节时同级。没有 NCX 的书不动（自动目录已含全部标题）。
 /// 书自带目录里**已有**的节条目（和章平排的，如《13級階梯》`第一章　出獄　　１`、`　　２`、`　　３`）缩进到所属章下面、

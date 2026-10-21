@@ -14,7 +14,7 @@ pub(super) fn remove_empty_pages(entries: &mut Vec<Entry>, rep: &mut WashReport)
     remove_pages(entries, rep, |e| is_empty_page(&String::from_utf8_lossy(&e.data)));
 }
 
-/// Kindle 上不出页的空页（照 Send to Kindle 统一的掌阅、Move：`kindle_rules`，KINDLE_RULES 35，2026-10-15 用户定）：KFX 写出器
+/// Kindle 上不出页的空页（照 Send to Kindle 统一的掌阅、Move：`kindle_rules`，KINDLE_RULES 35，2026-10-15 定）：KFX 写出器
 /// 不给没有块的文件出版面（`write/layout.rs` 的 `empty_docs`），书里刻意留的空白页（《疯探》`blank.html` 只有一个空 div）、只有
 /// 隐藏元素的页 Kindle 上直接跳过，掌阅、Move 照排成一页空白。看得见的口径照写出器：不隐藏的非空白文字、图片这类媒体
 /// （[`html::MEDIA_ELEMENTS`]），以及带背景色、背景图的元素（写出器写成容器，Kindle 照画）；拿不准（解析不了）的不删。
