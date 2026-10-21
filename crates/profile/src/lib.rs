@@ -301,7 +301,7 @@ pub struct ComicPolicy {
     #[serde(rename = "comic_format")]
     pub format: Option<Format>,
     /// 漫画页中间调加深的伽马（`255·(v/255)^γ`，黑、白两端不动；TOML 里不写＝不加深）。只加深内容是灰度的页：黑白屏上转成灰度的页
-    /// 全算，彩色屏上只算本来就没有颜色的页（彩页原样）。2026-10-16 用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45，选 1.45
+    /// 全算，彩色屏上只算本来就没有颜色的页（彩页原样）。2026-10-16 用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45，选 1.45；2026-10-21 用户改成 1.3（同插图）
     /// （第一轮 Move 上对比度、锐化、饱和度都看不出区别）。见 `bookconv::imgopt::prepare_comic_page_limited`。
     #[serde(rename = "comic_gamma")]
     pub gamma: Option<f64>,
