@@ -301,7 +301,7 @@ pub struct ComicPolicy {
     #[serde(rename = "comic_format")]
     pub format: Option<Format>,
     /// 漫画页中间调加深的伽马（`255·(v/255)^γ`，黑、白两端不动；TOML 里不写＝不加深）。只加深内容是灰度的页：黑白屏上转成灰度的页
-    /// 全算，彩色屏上只算本来就没有颜色的页（彩页原样）。2026-10-16 用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45，选 1.45；2026-10-21 用户改成 1.3（同插图）
+    /// 全算，彩色屏上只算本来就没有颜色的页（彩页原样）。2026-10-16 用户在 Move、掌阅上比过原样 / 1.2 / 1.3 / 1.45，选 1.45；2026-10-21 先改成 1.3，同日掌阅上比过 1.1 / 1.2 / 1.3 选 1.1
     /// （第一轮 Move 上对比度、锐化、饱和度都看不出区别）。见 `bookconv::imgopt::prepare_comic_page_limited`。
     #[serde(rename = "comic_gamma")]
     pub gamma: Option<f64>,
@@ -356,7 +356,7 @@ pub struct Profile {
     pub kindle_rules: bool,
     /// 文字书正文插图中间调加深的伽马（同 `comic_gamma` 的算法；TOML 里不写＝不加深）。只动正文 `<img>`/SVG `<image>` 用到、
     /// 没在 CSS 里当背景、内容是灰度、短边至少 [`MIN_GAMMA_IMAGE_SIDE`] 像素、没有透明通道的 JPEG/PNG；只修复的书也做（「图片不动」
-    /// 的例外，2026-10-16 用户定）。用户在 Move、掌阅上比过，选 1.3。见 `bookconv::imgopt::darken_gray_image`。
+    /// 的例外，2026-10-16 用户定）。用户在 Move、掌阅上比过，选 1.3；2026-10-21 用户改成 1.1（同漫画）。见 `bookconv::imgopt::darken_gray_image`。
     pub image_gamma: Option<f64>,
     /// 阅读器怎么定图片尺寸（TOML 里不写是 `css`），见 [`ImageSizing`]。ireader 写 `device-px`，xochitl 写 `percent`。
     pub image_sizing: ImageSizing,

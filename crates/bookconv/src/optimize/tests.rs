@@ -1112,9 +1112,10 @@
             assert!(opts.image_gamma.is_some() && matches!(opts.text_mode, TextMode::Repair { .. }), "{dev}：只修复也加深");
             let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
             let g = entry_bytes(&out, "OEBPS/i/g.jpg");
-            // 原图这一列是 125 的灰（JPEG 误差几级）：加深后在 1.3 伽马的值（101）附近
+            // 原图这一列是 125 的灰（JPEG 误差几级）：加深后在 profile 伽马的值附近（1.1 是 116）
             let v = image::load_from_memory(&g).unwrap().to_luma8().get_pixel(125, 9).0[0];
-            assert!(v.abs_diff(crate::imgopt::gamma_lut(1.3)[125]) <= 4, "{dev}：正文灰度插图加深，得 {v}");
+            let want = crate::imgopt::gamma_lut(opts.image_gamma.unwrap())[125];
+            assert!(want < 125 && v.abs_diff(want) <= 4, "{dev}：正文灰度插图加深，得 {v}、应 {want}");
             assert_eq!(entry_bytes(&out, "OEBPS/i/bg.jpg"), orig("OEBPS/i/bg.jpg"), "{dev}：CSS 背景图不动");
             assert_eq!(entry_bytes(&out, "OEBPS/i/c.jpg"), orig("OEBPS/i/c.jpg"), "{dev}：彩色插图不动");
         }
