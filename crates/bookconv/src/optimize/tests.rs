@@ -1107,7 +1107,8 @@
     fn image_gamma_darkens_gray_body_images_even_when_only_repairing() {
         let (epub, imgs) = gamma_book();
         let orig = |n: &str| imgs.iter().find(|(m, _)| *m == n).unwrap().1.clone();
-        for dev in ["ireader", "xochitl"] {
+        // Kindle 2026-10-26 起也开（同 1.1）；以后哪台不开时，这里改成断言那台插图不动
+        for dev in ["kindle", "ireader", "xochitl"] {
             let opts = OptimizeOpts::for_profile(profile::get(dev).unwrap());
             assert!(opts.image_gamma.is_some() && matches!(opts.text_mode, TextMode::Repair { .. }), "{dev}：只修复也加深");
             let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
@@ -1119,10 +1120,6 @@
             assert_eq!(entry_bytes(&out, "OEBPS/i/bg.jpg"), orig("OEBPS/i/bg.jpg"), "{dev}：CSS 背景图不动");
             assert_eq!(entry_bytes(&out, "OEBPS/i/c.jpg"), orig("OEBPS/i/c.jpg"), "{dev}：彩色插图不动");
         }
-        let opts = OptimizeOpts::for_profile(profile::get("kindle").unwrap());
-        assert!(opts.image_gamma.is_none());
-        let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
-        assert_eq!(entry_bytes(&out, "OEBPS/i/g.jpg"), orig("OEBPS/i/g.jpg"), "Kindle 不开，插图不动");
     }
 
     /// 静态 WebP（正文 `<img>` 的 `s.webp`、CSS 背景的 `bg.webp`）、动图 WebP `anim.webp`、解不开的 `bad.webp`，都是彩色的（不归插图加深管）。
