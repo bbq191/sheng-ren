@@ -460,6 +460,25 @@ struct FileFacts {
 /// `@media`、`<link media>` 按阅读模式的 `media` 求，写出器按 KFX 阅读范围求），几样统计挂在同一趟遍历上：正文字号、正文字体、
 /// body 上的类、负外边距。2026-10-10 审计以前正文字体、负外边距由另一套正则加粗糙层叠（只认类和裸标签）按原始 HTML 扫，
 /// 和 KFX 写出器认出的正文字体可能不是同一个；每个章节还要多扫好几遍。
+/// 行内元素 `node` 是不是盖住了所在块（`block`）的全部内容：从它往上到块，每一层的兄弟只有空白文字、注释（同写出器整段的行内
+/// 样式并进段落的条件；`<br/>`、别的元素、有字的兄弟都不算）。
+fn covers_block(node: ego_tree::NodeRef<scraper::Node>, block: ego_tree::NodeId) -> bool {
+    use scraper::Node;
+    let mut n = node;
+    loop {
+        let alone = n.prev_siblings().chain(n.next_siblings()).all(|s| match s.value() {
+            Node::Text(t) => t.trim().is_empty(),
+            Node::Comment(_) => true,
+            _ => false,
+        });
+        let Some(p) = n.parent().filter(|_| alone) else { return false };
+        if p.id() == block {
+            return true;
+        }
+        n = p;
+    }
+}
+
 fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     use crate::cascade::{Computed, Len, Rules, Sheet};
     use scraper::{ElementRef, Html, Node};
@@ -480,18 +499,21 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
             crate::cascade::presentational_hints(el, &mut decls);
             Computed::derive(parent, &decls, el.value().name())
         };
-        // 不递归（没关的标签能套上千层）：(节点, 父元素的计算值, 所在块的计算值)。行内元素改字号、字体的字算给所在的块（同写出器）
+        // 不递归（没关的标签能套上千层）：(节点, 父元素的计算值, 所在块的计算值, 字体算给谁, 所在块的节点)。行内元素改字号、字体的字
+        // 算给所在的块（同写出器）；整段只有一个行内元素时它的字体并进段落（同写出器的 `absorb_whole_span_style`：《柏林谍影》每段
+        // `<span style="font-family:'PingFang SC'">`，Kindle 当正文字体写 `default`，这里以前算成段落没写字体、苹方留着，2026-10-27）
         let root = html.root_element();
         let rc = Rc::new(comp(&root, &Computed::root()));
-        let mut stack: Vec<(ego_tree::NodeRef<Node>, Rc<Computed>, Rc<Computed>)> = root.children().rev().map(|ch| (ch, rc.clone(), rc.clone())).collect();
-        while let Some((node, parent, block)) = stack.pop() {
+        type Item<'a> = (ego_tree::NodeRef<'a, Node>, Rc<Computed>, Rc<Computed>, Rc<Computed>, ego_tree::NodeId);
+        let mut stack: Vec<Item> = root.children().rev().map(|ch| (ch, rc.clone(), rc.clone(), rc.clone(), root.id())).collect();
+        while let Some((node, parent, block, font_of, block_id)) = stack.pop() {
             match node.value() {
                 Node::Text(t) => {
                     let n = t.chars().filter(|c| !c.is_whitespace()).count();
                     if n > 0 {
                         f.chars += n;
                         *f.sizes.entry((block.font_size * 1000.0).round() as i64).or_default() += n;
-                        *f.fonts.entry(block.font_family.as_ref().map(|s| s.to_ascii_lowercase())).or_default() += n;
+                        *f.fonts.entry(font_of.font_family.as_ref().map(|s| s.to_ascii_lowercase())).or_default() += n;
                     }
                 }
                 Node::Element(v) => {
@@ -510,15 +532,17 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
                         continue;
                     }
                     let c = Rc::new(c);
-                    let block = if crate::cascade::is_block(&el, &c) {
+                    let (block, font_of, block_id) = if crate::cascade::is_block(&el, &c) {
                         f.neg[0] |= negative(&c.margin[3]);
                         f.neg[1] |= negative(&c.margin[1]);
-                        c.clone()
+                        (c.clone(), c.clone(), node.id())
+                    } else if !matches!(v.name(), "sup" | "sub") && covers_block(node, block_id) {
+                        (block, c.clone(), block_id)
                     } else {
-                        block
+                        (block, font_of, block_id)
                     };
                     for ch in node.children().rev() {
-                        stack.push((ch, c.clone(), block.clone()));
+                        stack.push((ch, c.clone(), block.clone(), font_of.clone(), block_id));
                     }
                 }
                 _ => {}
@@ -983,6 +1007,21 @@ mod tests {
         );
         assert_eq!(fmt_num(100.0 / 1.15), "86.9565");
         assert_eq!(fmt_num(12.0), "12");
+    }
+
+    /// 整段只有一个行内元素时它的字体算成段落的（同写出器）：《柏林谍影》每段 `<span style="font-family:'PingFang SC'">`。
+    /// 段落里只有一部分字的 span、`<sup>`、隔着 `<br/>` 的不算。
+    #[test]
+    fn whole_paragraph_span_font_counts_as_paragraph_font() {
+        let e = |name: &str, data: &str| Entry { name: name.into(), data: data.as_bytes().to_vec() };
+        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head></head><body>{body}</body></html>"#);
+        let long = "正文".repeat(50);
+        let facts = |body: String| book_facts(&[e("OEBPS/c1.xhtml", &page(&body))], None).body_font;
+        let span = |t: &str| format!(r#"<span style="font-family:'PingFang SC';">{t}</span>"#);
+        assert_eq!(facts(format!("<p>{}</p><p> <b>{}</b> </p>", span(&long), span(&long))).as_deref(), Some("pingfang sc"), "整段一个 span、套在 <b> 里也算");
+        assert_eq!(facts(format!("<p>{long}{}</p>", span("几个字"))), None, "只盖住段落一部分：字算给段落");
+        assert_eq!(facts(format!("<p>{}<br/>{long}</p>", span(&long))), None, "隔着 <br/> 不是整段");
+        assert_eq!(facts(format!(r#"<p><sup style="font-family:'PingFang SC';">{long}</sup></p>"#)), None, "上标不并进段落");
     }
 
     /// 全书正文字号按块、按字数算（行内元素改字号的字算给块），`html` 上写了字号的不归一。

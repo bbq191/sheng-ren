@@ -199,7 +199,10 @@ pub use self::encoding::transcode_entries;
 ///   章名 `text-indent:48px`、`32px` 在 Move 上按屏幕像素只挪一点。
 /// - 41（2026-10-16，《古龙》40 版真机没挪到位，探针「测试-规则顺序」1–5）：xochitl 不按 `!important` 提优先级，优先级一样时比规则在
 ///   各自样式表里的序号——`eink-inline.css` 的规则输给 `eink-box.css` 里靠后的。类名重复到比全书哪个选择器的类都多（`inline_css.rs`）。
-pub const KINDLE_RULES_VERSION: &str = "41";
+/// - 42（2026-10-27，《柏林谍影》三台统一门槛 91.3%）：正文字体照写出器把「整段只有一个行内元素」的字体算成段落的（`book_facts` 的
+///   `covers_block`）。《柏林谍影》每段 `<span style="font-family:'PingFang SC'">`，Kindle 当正文字体写 `default`，掌阅、Move 以前
+///   算成段落没写字体、苹方留着（阅读器没这个字体时换成别的）。
+pub const KINDLE_RULES_VERSION: &str = "42";
 pub use self::css::filter_css;
 #[cfg(test)]
 use self::css::wash_html;
