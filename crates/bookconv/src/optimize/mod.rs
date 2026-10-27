@@ -151,7 +151,9 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   动图不转。测试书里没有 WebP，产物不变。
 /// - 62（2026-10-19，维护者定「动图显示第一帧」）：Move 上的动图 WebP 也转成 PNG，取第一帧（掌阅自己就显示第一帧）；转出来全不透明的
 ///   存成 RGB（动图解出来一律带透明通道）。测试书里没有 WebP，产物不变。
-pub const OPTIMIZE_VERSION: &str = "62";
+/// - 63（2026-10-27）：图标注释号换数字时，图的 `alt` 整个是标号（「注释12」「note 3」「12」）才取里面的数字；`alt` 里放整条注释的
+///   （《柏林谍影》）以前取了注释里第一串数字，Move 上标号成了「1940」「1869」，现在按本章顺序编号（`htmlproc::footnote::duokan_note_num`）。
+pub const OPTIMIZE_VERSION: &str = "63";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。

@@ -15,12 +15,14 @@
   - 对原书的"字符账"：新产物可见文字的字符计数，和 index.txt 里记的原书 spine 可见文字逐字符相等
     （顺序不管：注释会从原处挪到章末，但一个字不多一个字不少）；正文图片（<img>、SVG <image>）不比原书少。唯一的例外是只有图标的注释号换成数字（定下的规则）：
     只多出 ASCII 数字、原书里有只含图片的链接、多出的位数不超过按图标个数连续编号的位数时，只注明、不算不平。
+    另一个例外是原书 `display:none` 的元素（Move 不认，优化器去掉，`wash/hidden.rs`，2026-10-12 定）：少的字都在这些元素里时只注明。
 
 --strip-old-markers：旧产物里优化器自己加的注释标号 `<a href="#…">[N]</a>` 不算正文（v27 起不再加），比较前从旧的里去掉。
 退出码：全部通过 0，否则 1。
 """
 import collections
 import html
+import html.parser
 import os
 import re
 import sys
@@ -71,15 +73,91 @@ def body_images(z):
 
 
 def icon_note_links(src):
-    """原书里只有图、没有文字的链接个数（图标注释号；优化器会把它换成数字）。"""
+    """原书 spine 里只有图、没有文字的链接个数（图标注释号；优化器会把它换成数字）。按 spine 找，不看扩展名（《柏林谍影》的章节文件没有扩展名）。"""
     n = 0
     with zipfile.ZipFile(src) as z:
-        for name in z.namelist():
-            if re.search(r'\.x?html?$', name, re.I):
-                for inner in LINK.findall(z.read(name).decode('utf-8', 'replace')):
+        names = set(z.namelist())
+        for p in spine_paths(z):
+            if p in names:
+                for inner in LINK.findall(z.read(p).decode('utf-8', 'replace')):
                     if re.search(r'(?i)<img\b', inner) and not re.sub(r'(?s)<[^>]+>|\s', '', inner):
                         n += 1
     return n
+
+
+NONE = re.compile(r'(?i)(?:^|;)\s*display\s*:\s*none\s*(?:!\s*important\s*)?(?:;|$)')
+
+
+def hidden_classes(z):
+    """样式表、`<style>` 里写了 `display:none` 的简单选择器 (标签名或空, 类)：同 `wash/hidden.rs`，后代、伪类、属性、id 选择器不算。"""
+    out = set()
+    for name in z.namelist():
+        t = z.read(name).decode('utf-8', 'replace')
+        if name.lower().endswith('.css'):
+            sheets = [t]
+        elif re.search(r'(?i)<style\b', t[:1 << 20]) and not name.lower().endswith(('.opf', '.ncx')):
+            sheets = re.findall(r'(?is)<style\b[^>]*>(.*?)</style>', t)
+        else:
+            continue
+        for css in sheets:
+            css = re.sub(r'(?s)/\*.*?\*/', '', css)
+            for sel, body in re.findall(r'([^{}]+)\{([^{}]*)\}', css):
+                if not NONE.search(body):
+                    continue
+                for one in sel.split(','):
+                    m = re.fullmatch(r'\s*([A-Za-z][\w-]*)?\.([\w-]+)\s*', one)
+                    if m:
+                        out.add(((m.group(1) or '').lower(), m.group(2)))
+    return out
+
+
+class _Hidden(html.parser.HTMLParser):
+    """收集 body 里 `display:none` 元素（行内 style，或类命中 `hidden_classes`）里的文字。"""
+    VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'}
+
+    def __init__(self, classes):
+        super().__init__(convert_charrefs=True)
+        self.classes, self.stack, self.depth, self.text = classes, [], 0, []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.VOID:
+            return
+        a = dict(attrs)
+        cls = (a.get('class') or '').split()
+        hide = bool(NONE.search(a.get('style') or '')) or any((t in ('', tag)) and c in cls for t, c in self.classes)
+        self.stack.append((tag, hide))
+        self.depth += hide
+
+    def handle_startendtag(self, tag, attrs):
+        pass
+
+    def handle_endtag(self, tag):
+        # 找最近的同名开标签（容错：中间没闭合的一并弹掉）
+        for i in range(len(self.stack) - 1, -1, -1):
+            if self.stack[i][0] == tag:
+                self.depth -= sum(h for _, h in self.stack[i:])
+                del self.stack[i:]
+                return
+
+    def handle_data(self, data):
+        if self.depth:
+            self.text.append(data)
+
+
+def hidden_text(src):
+    """原书 spine 里 `display:none` 元素里的字（去空白，同 `spine_text`）的计数。"""
+    out = collections.Counter()
+    with zipfile.ZipFile(src) as z:
+        classes = hidden_classes(z)
+        names = set(z.namelist())
+        for p in spine_paths(z):
+            if p not in names:
+                continue
+            t = re.sub(r'(?is)^.*?<body\b[^>]*>|</body>.*$', '', z.read(p).decode('utf-8', 'replace'))
+            h = _Hidden(classes)
+            h.feed(t)
+            out.update(re.sub(r'[\s\x00-\x1f]+', '', ''.join(h.text)).replace('\ufeff', ''))
+    return out
 
 
 def icon_digit_budget(n):
@@ -156,9 +234,15 @@ def main():
             if collections.Counter(ts) != collections.Counter(tb):
                 d_more = collections.Counter(tb) - collections.Counter(ts)
                 d_less = collections.Counter(ts) - collections.Counter(tb)
+                # 原书 display:none 的元素去掉了（Move，定下的规则）：少的字都在这些元素里时只注明
+                if d_less and not d_less - hidden_text(src):
+                    info.append(f'注：少 {sum(d_less.values())} 个字，都在原书 display:none 的元素里（不认 display:none 的阅读器上去掉，不算不平）')
+                    d_less = collections.Counter()
                 # 只有图标的注释标号换成了数字（定下的规则）：只多出 ASCII 数字、且原书有这种图标链接时不算不平，只报个数
                 icons = icon_note_links(src) if not d_less and set(d_more) <= set('0123456789') else 0
-                if icons and sum(d_more.values()) <= icon_digit_budget(icons):
+                if not d_more and not d_less:
+                    pass
+                elif icons and sum(d_more.values()) <= icon_digit_budget(icons):
                     info.append(f'注：多出 {sum(d_more.values())} 个数字（原书 {icons} 个图标注释号换成了数字，不算不平）')
                 else:
                     notes.append(f'对原书字符账不平：多 {dict(d_more.most_common(8))} 少 {dict(d_less.most_common(8))}')
