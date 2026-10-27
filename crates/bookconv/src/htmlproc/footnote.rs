@@ -199,12 +199,15 @@ pub fn normalize_self_hrefs(html: &str, own: &str) -> String {
     })
     .into_owned()
 }
-/// 从 img 标签（或转义 img 的内层）抽注释序号：`alt` 属性（任意引号）里的第一串数字，`alt="注释12"` → `12`。
+/// 从 img 标签（或转义 img 的内层）抽注释序号：`alt` 属性（任意引号）整个是个标号时取里面的数字，`alt="注释12"` → `12`。
+/// 只认「注释12」「注12」「note 3」「[12]」「12」这类短标号：有的书 `alt` 里放的是整条注释（掌阅、QQ 阅读的写法，
+/// 《柏林谍影》`alt="1940年5月，纳粹空军轰炸鹿特丹……"`），以前取第一串数字，Move 上标号成了「1940」（2026-10-27 回归查到）。
 /// 取不到返回 None（调用方用章内计数兜底）。按属性名完整匹配，`data-alt` 不算。
 pub(super) fn duokan_note_num(img_inner: &str) -> Option<String> {
     static R: OnceLock<Regex> = OnceLock::new();
     let alt = html::attr_value(img_inner, "alt")?;
-    R.get_or_init(|| Regex::new(r"\d+").unwrap()).find(alt).map(|m| m.as_str().to_string())
+    let r = R.get_or_init(|| Regex::new(r"(?i)^\s*(?:注释?|註釋?|(?:foot)?note)?\s*[\[［【(（]?\s*(\d{1,4})\s*[\]］】)）]?\s*$").unwrap());
+    r.captures(alt).map(|c| c[1].to_string())
 }
 
 /// `前缀数字_数字`（多看的回链落点 `c_3_1`、注释块 id `a_3_1`）。
@@ -1223,6 +1226,9 @@ mod optimizer_footnote_tests {
     fn duokan_patterns_use_attribute_parsing() {
         assert_eq!(duokan_note_num(r#"<img data-alt="注释9" alt='注释12' src="x"/>"#), Some("12".to_string()));
         assert_eq!(duokan_note_num(r#"<img data-alt="注释9"/>"#), None);
+        for (alt, num) in [("注12", Some("12")), ("note 3", Some("3")), ("[7]", Some("7")), ("5", Some("5")), ("note", None), ("1940年5月，纳粹空军轰炸鹿特丹。", None), ("恩奈弗（1869—1947）", None)] {
+            assert_eq!(duokan_note_num(&format!(r#"<img alt="{alt}"/>"#)).as_deref(), num, "{alt}");
+        }
         let blocks = r#"<p id='a_1_2'><p class="t">注</p></p><p data-id="a_1_3"><p class="t">别</p></p>"#;
         assert_eq!(flatten_duokan_note_blocks(blocks), r#"<p id="a_1_2" class="t">注</p><p data-id="a_1_3"><p class="t">别</p></p>"#);
         let back = r##"<a class='x' href='#c_1_2'>回</a><a data-href="#c_1_3" href="#y">留</a><a href="#c_1_x">留</a>"##;
