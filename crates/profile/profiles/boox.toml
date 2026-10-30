@@ -1,0 +1,37 @@
+# 文石 BOOX Poke7 上的自带阅读器（NeoReader，com.onyx.kreader 39252）。6" 黑白，安卓 11，2026-10-30 到手、adb 实测。
+# 怪癖探针还没跑：下面没写的 CSS 怪癖字段都按缺省（照 CSS 规范）；跑完 tools/quirks/probe.py 再照结论补（见 docs/devices.md）。
+name = "文石自带阅读器（BOOX Poke7）"
+color = false
+formats = ["epub"]
+# 注释：弹窗（还没验证——探针跑完按真机改）
+notes = "popup"
+# 只有小图标的注释标号换成上标数字（同另外几台：图标能不能点没验证，数字最稳）
+note_icons = "number"
+# 文字书只修复（2026-10-08 定）、照 Send to Kindle 的规则统一（三台一套规则），同掌阅
+text_repair_only = true
+kindle_rules = true
+# 中间调加深：先同另外几台 1.1（2026-10-30 定，以后在 Poke7 上比 1.0 / 1.1 / 1.2 再定）。阅读器自己的「深色增强」（缺省 30，
+# 约伽马 1.18）和「图片平滑」（抖动）由 [deliver] 的 reader_display 关掉，不然会叠在这上面
+comic_gamma = 1.1
+image_gamma = 1.1
+# 漫画页图到可阅读范围四边留 1px；阅读范围就是整屏，所以离屏幕边缘也是 1px（同掌阅）
+comic_margin = 1
+
+[screen]
+width = 1072
+height = 1448
+
+# 真实可阅读范围（像素，竖屏），2026-10-30 用测量书在真机上截屏实测（readable-measure，adb 截屏）：
+# 阅读器设置关了「阅读状态栏」（全局设置）、「悬浮主菜单」、「书签标记」，页边距等是缺省。只放一张大图的页面，图铺满整屏，
+# 四边留白都是 0（开着状态栏时底下让出 47px，量出来 1072×1401）。这是整页图（漫画）的情况；图文混排时图受正文页边距限制。
+[readable.epub]
+width = 1072
+height = 1448
+
+# 产物直接传进文石（2026-10-30）：MTP 挂到 boox，放存储根目录的 Books/（出厂就有，自带阅读器的书库收录整个存储）。
+# 经 adb 拷进去的书不进书库，要走 MTP。传完给还没打开过的书写阅读器的显示设置（深色增强 0、图片平滑关），见 ReaderDisplay::Onyx
+[deliver]
+kind = "mtp"
+mount = "boox"
+dir = "Books"
+reader_display = "onyx"
