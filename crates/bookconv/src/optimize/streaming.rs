@@ -246,6 +246,8 @@ struct ImageCtx<'a> {
     grayscale: bool,
     /// 漫画页中间调加深（`OptimizeOpts::comic_gamma`）。
     comic_gamma: Option<f64>,
+    /// 漫画页拉满对比度（`OptimizeOpts::comic_autocontrast`）。
+    comic_autocontrast: bool,
     /// 正文插图中间调加深（`OptimizeOpts::image_gamma`）：只用于 `Job::Image` 的 `darken` 标了的图。
     image_gamma: Option<f64>,
     max_px: u64,
@@ -312,7 +314,7 @@ fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &
         if let Some(t) = tile {
             return Ok(crate::imgopt::guard(|| crate::imgopt::page_tile(&bytes, &t, ctx.max_px, crate::imgopt::header_dims(&bytes).map_or_else(|| !src.to_ascii_lowercase().ends_with(".png"), |(f, _)| f == image::ImageFormat::Jpeg))).unwrap_or(bytes));
         }
-        let out = if ctx.keep_images { bytes } else { transform_image_bytes(&bytes, ctx.is_comic_book, ctx.screen, ctx.comic_margin, ctx.grayscale, ctx.comic_gamma, bg, flatten, ctx.max_px).unwrap_or(bytes) };
+        let out = if ctx.keep_images { bytes } else { transform_image_bytes(&bytes, ctx.is_comic_book, ctx.screen, ctx.comic_margin, ctx.grayscale, ctx.comic_gamma, ctx.comic_autocontrast, bg, flatten, ctx.max_px).unwrap_or(bytes) };
         Ok(match darken {
             Some(g) => crate::imgopt::guard(|| crate::imgopt::darken_gray_image(&out, g, ctx.max_px)).unwrap_or(out),
             None => out,
@@ -454,6 +456,7 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
         comic_margin: opts.comic_margin,
         grayscale: opts.grayscale,
         comic_gamma: opts.comic_gamma,
+        comic_autocontrast: opts.comic_autocontrast,
         image_gamma: opts.image_gamma,
         max_px: opts.limits.max_decode_pixels,
     };
