@@ -217,7 +217,7 @@
 
 设备那几段（注释方式、阅读范围段、这一路的版本）由 `library/src/fingerprint.rs` 拼（`device_sig`），旧写法的设备段也在那里（`legacy_device_seg`）。**写法一个字都不能改**：`crates/library/tests/fp_golden.rs` 把内置三个模式逐个改一个 profile 字段，文字书、漫画的指纹和 `fp_golden.txt` 逐行对拍（2026-10-15）。给 profile 加字段时 `profile` 的单测 `every_field_has_a_fingerprint_decision` 编译不过，逼着决定它进不进指纹。
 2026-10-15 对拍发现 `background_auto_height`、`margin_top` 改值时产物会变但指纹不变，补成 `kindle_rules` 段的 `h`、`p`（掌阅、Move 的文字书各重新生成一次，内容没变的不重传）。
-2026-10-16 加的中间调加深（`comic_gamma`、`image_gamma`）开着时在这一路阅读范围段的最后写 `G` + 伽马（如 `G1.1`）；不开的模式不出新字母，指纹不变（Kindle 2026-10-26 开了以后三台都带 `G1.1`）。
+2026-10-16 加的中间调加深（`comic_gamma`、`image_gamma`）开着时在这一路阅读范围段的最后写 `G` + 伽马（如 `G1.1`）；不开的模式不出新字母，指纹不变（Kindle 2026-10-26 开了以后三台都带 `G1.1`）。漫画的 `G` 段后面再有拉满对比度的 `A`（`comic_autocontrast`，2026-10-30，只 Kindle 开：Kindle 漫画是 `G1.1A`）。
 
 版本号什么时候加一、现在是多少，见[开发 · 版本号](development.md#版本号)。
 
