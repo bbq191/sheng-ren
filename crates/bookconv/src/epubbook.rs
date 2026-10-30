@@ -113,6 +113,9 @@ pub struct Loaded {
     /// 嵌入的字体文件（TrueType/OpenType，按文件头认；WOFF 不收）：(路径, 字节)。KFX 写出器用，AZW3 不嵌字体。
     pub fonts: Vec<(String, Vec<u8>)>,
     pub cover: Option<String>,
+    /// 只给书架用的缩略图（优化器加的 `eink-thumb`，OPF 里 `<meta name="eink-thumbnail">` 指着，[`crate::wash::add_cover_thumbnail`]）：
+    /// KFX 写出器拿它当 `cover_image`，书里的封面页照旧用 `cover`。
+    pub thumbnail: Option<String>,
     pub toc: Vec<TocItem>,
 }
 
@@ -187,6 +190,7 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
         }
     }
     cover = cover.filter(|c| images.iter().any(|i| &i.path == c));
+    let thumbnail = crate::wash::opf::meta_content(&opf_text, crate::wash::THUMB_META).and_then(|id| opf.items.get(id).cloned()).filter(|t| images.iter().any(|i| &i.path == t));
 
     // spine 里标了 `linear="no"` 的目录页不排（见 `wash::opf::nonlinear_nav_itemrefs`）
     let skip_nav = opf.nav_doc.as_ref().filter(|_| !crate::wash::opf::nonlinear_nav_itemrefs(&opf_text).is_empty());
@@ -218,7 +222,7 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
     let doc_paths: std::collections::HashSet<&str> = docs.iter().map(|d| d.path.as_str()).collect();
     toc.retain(|t| !t.label.trim().is_empty() && doc_paths.contains(t.path.as_str()));
     clamp_levels(&mut toc);
-    Ok(Loaded { meta, docs, css, images, fonts, cover, toc })
+    Ok(Loaded { meta, docs, css, images, fonts, cover, thumbnail, toc })
 }
 
 /// 去掉目录项后层级可能断档（0 → 2）：每一项最多比前一项深一级。KF8 目录索引的父子区间依赖这一点。

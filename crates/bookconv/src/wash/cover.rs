@@ -67,6 +67,11 @@ pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
 
 /// 补的封面页的文件名（OPF 同目录）和 manifest id。
 const COVER_PAGE: &str = "eink-cover.xhtml";
+/// 书架缩略图（[`add_cover_thumbnail`]）的文件名、manifest id；OPF 里 `<meta name="eink-thumbnail" content="eink-thumb"/>` 指着它。
+const THUMB_FILE: &str = "eink-thumb.jpg";
+pub const THUMB_ID: &str = "eink-thumb";
+/// 指明书架缩略图的 `<meta>` 名字（KFX 写出器认它：有就拿它当 `cover_image`，书里的封面页照旧用 `cover-image` 那张）。
+pub const THUMB_META: &str = "eink-thumbnail";
 const COVER_PAGE_ID: &str = "eink-cover-page";
 
 /// 原书没有封面页（OPF 声明了封面图，可哪一页都没用到它）时，在 spine 最前面补一页只放封面图的页面——照 Send to Kindle
@@ -116,5 +121,26 @@ svg {{ margin: 0; padding: 0; }}
     let Some(out) = insert_spine_first(&out, COVER_PAGE_ID) else { return false };
     entries[opf.index].data = out.into_bytes();
     entries.push(Entry { name: page, data: xhtml.into_bytes() });
+    true
+}
+
+/// 加一张书架缩略图（profile `cover_thumb_aspect`）：`make(封面在 zip 里的路径)` 给出缩略图字节（[`crate::imgopt::cover_thumbnail`]），
+/// 放在 OPF 同目录叫 [`THUMB_FILE`]，manifest 加一项（不进 spine，正文不引用），`<metadata>` 里加 `<meta name="eink-thumbnail">` 指着它。
+/// 书里的封面页、`cover-image` 都不动：只给书架用（2026-10-30 维护者定「只裁书架缩略图」）。没有声明封面、已经有了、
+/// `make` 不给（比例本来就对、解不开）→ 不加，返回 `false`。
+pub fn add_cover_thumbnail(entries: &mut Vec<Entry>, make: impl FnOnce(&str) -> Option<Vec<u8>>) -> bool {
+    let Some(opf) = parse_opf(entries) else { return false };
+    let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
+    let Some(cover) = declared_cover(&text) else { return false };
+    let cover_path = cover.path(&opf.dir);
+    let file = if opf.dir.is_empty() { THUMB_FILE.to_string() } else { format!("{}/{THUMB_FILE}", opf.dir) };
+    if manifest_items(&text).iter().any(|i| i.id == THUMB_ID) || name_index(entries).contains_key(file.as_str()) {
+        return false;
+    }
+    let Some(bytes) = make(&cover_path) else { return false };
+    let Some(out) = insert_manifest_items(&text, &[NewItem { id: THUMB_ID, href: THUMB_FILE, media_type: "image/jpeg", properties: "" }]) else { return false };
+    let Some(out) = insert_metadata(&out, &format!(r#"<meta name="{THUMB_META}" content="{THUMB_ID}"/>"#)) else { return false };
+    entries[opf.index].data = out.into_bytes();
+    entries.push(Entry { name: file, data: bytes });
     true
 }

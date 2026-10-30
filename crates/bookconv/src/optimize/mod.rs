@@ -153,7 +153,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   存成 RGB（动图解出来一律带透明通道）。测试书里没有 WebP，产物不变。
 /// - 63（2026-10-27）：图标注释号换数字时，图的 `alt` 整个是标号（「注释12」「note 3」「12」）才取里面的数字；`alt` 里放整条注释的
 ///   （《柏林谍影》）以前取了注释里第一串数字，Move 上标号成了「1940」「1869」，现在按本章顺序编号（`htmlproc::footnote::duokan_note_num`）。
-pub const OPTIMIZE_VERSION: &str = "63";
+/// - 64（2026-10-30，维护者定「只裁书架缩略图，漫画和文字书都裁」）：profile 写了 `cover_thumb_aspect` 的模式另做一张书架缩略图
+///   （封面居中裁成书架框的比例，`eink-thumb.jpg`，OPF `<meta name="eink-thumbnail">`；`wash::add_cover_thumbnail`），书里的封面页不动。
+///   Kindle 0.65；掌阅、Move 不写，产物不变。
+pub const OPTIMIZE_VERSION: &str = "64";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -172,7 +175,9 @@ pub const OPTIMIZE_VERSION: &str = "63";
 /// - c58（2026-10-30，维护者在 Kindle 上看过《迷宮飯》卷01 测试书：裁了页码「字更清晰」、没有裁错）：漫画页裁白边不让扫描杂点挡住
 ///   （profile `comic_trim_specks`）、裁掉页码（`comic_page_numbers`，整卷投票定位置，推翻 2026-10-06「不删原书任何内容」里的这一项），
 ///   见 `comiccrop`。只 Kindle 开；掌阅、Move 不开，产物不变。
-pub const COMIC_VERSION: &str = "58";
+/// - c59（2026-10-30）：书架缩略图（同 v64，两路共用）；profile 加 `comic_upscale`（缺省开，产物不变；同日 Kindle 上比过《竹光侍》卷01
+///   预先放大 / 不放大，维护者选预先放大）。
+pub const COMIC_VERSION: &str = "59";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，
@@ -261,6 +266,10 @@ pub struct OptimizeOpts {
     pub comic_trim_specks: bool,
     /// 漫画页裁掉页码（profile `comic_page_numbers`，整卷投票定位置），见 [`crate::comiccrop`]。
     pub comic_page_numbers: bool,
+    /// 比框小的 JPEG 漫画页放大到框（profile `comic_upscale`，缺省开），见 [`crate::imgopt::ComicPage::no_upscale`]。
+    pub comic_upscale: bool,
+    /// 书架缩略图裁成这个宽高比（profile `cover_thumb_aspect`），见 [`crate::wash::add_cover_thumbnail`]。文字书、漫画都做。
+    pub cover_thumb_aspect: Option<f32>,
     /// 文字书正文插图中间调加深的伽马（profile `image_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::darken_gray_image`]。
     /// 只修复的书也做（「图片不动」的例外，2026-10-16 定）。
     pub image_gamma: Option<f64>,
@@ -335,7 +344,7 @@ impl OptimizeOpts {
 
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, comic_gamma: None, comic_autocontrast: false, comic_trim_specks: false, comic_page_numbers: false, image_gamma: None, webp_to_png: false, text_mode: TextMode::Full, limits: Limits::default(), title: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, comic_gamma: None, comic_autocontrast: false, comic_trim_specks: false, comic_page_numbers: false, comic_upscale: true, cover_thumb_aspect: None, image_gamma: None, webp_to_png: false, text_mode: TextMode::Full, limits: Limits::default(), title: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -364,6 +373,8 @@ impl OptimizeOpts {
             comic_autocontrast: p.comic.autocontrast,
             comic_trim_specks: p.comic.trim_specks,
             comic_page_numbers: p.comic.page_numbers,
+            comic_upscale: p.comic.upscale,
+            cover_thumb_aspect: p.cover_thumb_aspect,
             image_gamma: p.image_gamma.filter(|&g| g != 1.0),
             webp_to_png: !p.webp,
             text_mode: TextMode::for_profile(p),
