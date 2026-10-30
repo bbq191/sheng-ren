@@ -156,7 +156,9 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - 64（2026-10-30，维护者定「只裁书架缩略图，漫画和文字书都裁」）：profile 写了 `cover_thumb_aspect` 的模式另做一张书架缩略图
 ///   （封面居中裁成书架框的比例，`eink-thumb.jpg`，OPF `<meta name="eink-thumbnail">`；`wash::add_cover_thumbnail`），书里的封面页不动。
 ///   Kindle 0.65；掌阅、Move 不写，产物不变。
-pub const OPTIMIZE_VERSION: &str = "64";
+/// - 65（2026-10-30，维护者问「竹光侍书架缩略图为什么有白边」）：书架缩略图先去掉扫描留下的窄白边（每边 ≤5%，最外 3 行灰线不算；
+///   超过 5% 的一边当封面本身的白底不动，`imgopt::thumb_scan_margins`），再居中裁。
+pub const OPTIMIZE_VERSION: &str = "65";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -177,7 +179,8 @@ pub const OPTIMIZE_VERSION: &str = "64";
 ///   见 `comiccrop`。只 Kindle 开；掌阅、Move 不开，产物不变。
 /// - c59（2026-10-30）：书架缩略图（同 v64，两路共用）；profile 加 `comic_upscale`（缺省开，产物不变；同日 Kindle 上比过《竹光侍》卷01
 ///   预先放大 / 不放大，维护者选预先放大）。
-pub const COMIC_VERSION: &str = "59";
+/// - c60（2026-10-30）：书架缩略图先去扫描窄白边（同 v65，两路共用）。
+pub const COMIC_VERSION: &str = "60";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，

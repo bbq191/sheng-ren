@@ -796,15 +796,18 @@ pub struct ComicPage {
     pub cut_bottom: Option<u32>,
 }
 
-/// 书架缩略图（profile `cover_thumb_aspect`）：封面居中裁成宽高比 `aspect`（宽的裁左右、窄的裁上下），长边超过
-/// [`THUMB_MAX_SIDE`] 的缩下来，JPEG 质量 [`THUMB_QUALITY`]（黑白屏转灰度）。和要的比例只差 [`THUMB_TOLERANCE`] 以内、解不开、超过解码上限 → `None`。
-/// 只给书架用，书里的封面页照旧用原图（2026-10-30 维护者定：只裁书架缩略图，Kindle 书架的框是 0.65）。不先裁白边：试过
-/// 《三体全集》（立体书效果图、上下有白）先去白再裁，左边的书脊、封面边被切掉，维护者看了「不好看」。
+/// 书架缩略图（profile `cover_thumb_aspect`）：先去掉扫描留下的窄白边（[`thumb_scan_margins`]），再居中裁成宽高比 `aspect`
+/// （宽的裁左右、窄的裁上下），长边超过 [`THUMB_MAX_SIDE`] 的缩下来，JPEG 质量 [`THUMB_QUALITY`]（黑白屏转灰度）。没有窄白边、
+/// 比例只差 [`THUMB_TOLERANCE`] 以内、解不开、超过解码上限 → `None`。只给书架用，书里的封面页照旧用原图（2026-10-30 维护者定：
+/// 只裁书架缩略图，Kindle 书架的框是 0.65）。
 pub fn cover_thumbnail(bytes: &[u8], aspect: f32, grayscale: bool, max_px: u64) -> Option<Vec<u8>> {
     let (img, _) = decode_page(bytes, PageDecode { grayscale, max_px, apply_exif: true })?;
+    let (w0, h0) = img.dimensions();
+    let (l, t, r, b) = thumb_scan_margins(&darkness_plane(&img), w0, h0);
+    let img = if (l, t, r, b) != (0, 0, 0, 0) { img.crop(l, t, w0 - l - r, h0 - t - b) } else { img };
     let (w, h) = img.dimensions();
     let have = w as f32 / h as f32;
-    if (have - aspect).abs() <= THUMB_TOLERANCE {
+    if (w, h) == (w0, h0) && (have - aspect).abs() <= THUMB_TOLERANCE {
         return None;
     }
     let (cw, ch) = if have > aspect { (((h as f32 * aspect).round() as u32).clamp(1, w), h) } else { (w, ((w as f32 / aspect).round() as u32).clamp(1, h)) };
@@ -813,6 +816,45 @@ pub fn cover_thumbnail(bytes: &[u8], aspect: f32, grayscale: bool, max_px: u64) 
     let img = if scale < 1.0 { img.resize_lanczos3(((cw as f32 * scale).round() as u32).max(1), ((ch as f32 * scale).round() as u32).max(1)) } else { img };
     img.encode(ImageFormat::Jpeg, THUMB_QUALITY)
 }
+
+/// 封面四边扫描留下的窄白边 `(左, 上, 右, 下)`：由外向内一行（列）里至少 99% 的像素比 [`THUMB_WHITE`] 亮算白，最外面
+/// [`THUMB_EDGE_LINE`] 行以内不白的（扫描的一道灰线）跳过不算；一边的白超过边长的 [`THUMB_MAX_MARGIN`] 就当作封面本身的白底、那一边
+/// 不动（《三体全集》立体书效果图上下的白占 11%、8%：先去掉再裁，书脊、封面边被切，维护者看了「不好看」）。
+/// 《竹光侍》卷01 的封面上 17、下 32、右 20 像素（右边最外一列灰线），书架上看得出一圈白（2026-10-30 维护者问）。
+fn thumb_scan_margins(px: &[u8], w: u32, h: u32) -> (u32, u32, u32, u32) {
+    let white_row = |y: u32| {
+        let row = &px[(y * w) as usize..((y + 1) * w) as usize];
+        row.iter().filter(|&&v| v >= THUMB_WHITE).count() * 100 >= row.len() * 99
+    };
+    let white_col = |x: u32| (0..h).filter(|&y| px[(y * w + x) as usize] >= THUMB_WHITE).count() * 100 >= h as usize * 99;
+    // 由外向内：最外 THUMB_EDGE_LINE 行里不白的跳过，之后碰到不白的就停；返回白到哪（不含）
+    let side = |len: u32, white: &dyn Fn(u32) -> bool| {
+        let mut end = 0;
+        for i in 0..len {
+            if white(i) {
+                end = i + 1;
+            } else if i >= THUMB_EDGE_LINE {
+                break;
+            }
+        }
+        if end as f32 > len as f32 * THUMB_MAX_MARGIN { 0 } else { end }
+    };
+    let top = side(h, &|i| white_row(i));
+    let bottom = side(h, &|i| white_row(h - 1 - i));
+    let left = side(w, &|i| white_col(i));
+    let right = side(w, &|i| white_col(w - 1 - i));
+    if left + right >= w || top + bottom >= h {
+        return (0, 0, 0, 0);
+    }
+    (left, top, right, bottom)
+}
+
+/// [`thumb_scan_margins`]：比这个亮算白（扫描纸白，JPEG 噪点在 240 以上）。
+const THUMB_WHITE: u8 = 240;
+/// [`thumb_scan_margins`]：最外面这么多行（列）里不白的不算（扫描边上的一道灰线）。
+const THUMB_EDGE_LINE: u32 = 3;
+/// [`thumb_scan_margins`]：一边的白超过边长的这个比例就不动（当作封面本身的白底）。
+const THUMB_MAX_MARGIN: f32 = 0.05;
 
 /// [`cover_thumbnail`]：长边最多这么多像素（Kindle 书架网格里封面框 344×531，留足余量）。
 const THUMB_MAX_SIDE: u32 = 1200;
@@ -1352,6 +1394,17 @@ mod tests {
         assert_eq!(image::load_from_memory(&g).unwrap().color(), image::ColorType::L8);
         // 比例差不到 0.005：不做
         assert_eq!(cover_thumbnail(&jpg(652, 1000), 0.65, false, MAX_DECODE_PIXELS), None);
+        // 扫描的窄白边（上 20、下 30、右 20，右边最外一列灰线）去掉再裁；白超过 5% 的那一边不动（封面本身的白底）
+        let png = |w: u32, h: u32, f: &dyn Fn(u32, u32) -> u8| {
+            let mut b = Vec::new();
+            image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(w, h, |x, y| image::Luma([f(x, y)]))).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+            b
+        };
+        let scan = png(700, 1000, &|x, y| if x == 699 { 200 } else if !(20..970).contains(&y) || x >= 680 { 255 } else { 60 });
+        assert_eq!(thumb_scan_margins(image::load_from_memory(&scan).unwrap().to_luma8().as_raw(), 700, 1000), (0, 20, 20, 30));
+        assert_eq!(dims(cover_thumbnail(&scan, 0.65, true, MAX_DECODE_PIXELS).unwrap()), (618, 950));
+        let poster = png(600, 1000, &|_, y| if (110..900).contains(&y) { 60 } else { 255 });
+        assert_eq!(thumb_scan_margins(image::load_from_memory(&poster).unwrap().to_luma8().as_raw(), 600, 1000), (0, 0, 0, 0), "白占 11%、10%：不动");
     }
 
     #[test]
