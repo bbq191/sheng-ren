@@ -136,6 +136,7 @@
 | `generate.rs` | 生成计划与指纹、产物放哪、一本书几个模式共用的中间文件、按模式生成（`prepare`）、传完记下来（`complete`）、生成记录 |
 | `transfer.rs` | 要传的一件（`Transfer`）、它要做的（`Work`：写文件，或交给 Move，Move 专属的数据在 `MoveWork`）、结果（`Done`）；`sync` 的传输线程（`Pipeline`）。依赖方向 `generate` → `transfer` → `deliver`，不成环 |
 | `deliver.rs` | 产物送到设备（2026-10-07）：设备接没接上（MTP 挂载点要真挂着：和上一级不在同一文件系统，每本写之前再看一次，2026-10-21；SSH 到 Move；地址是 IP 的先探 22 端口，0.8 秒不通就跳过，不等 ssh 超时）、往 MTP 设备上放文件（相同字节不拷）、调 Move 上书架服务的导入接口（新加、原地替换、查、进回收站）；不认识生成记录和传输线程 |
+| `onyx.rs` | 文石自带阅读器的按书显示设置（2026-10-30，profile `[deliver]` 的 `reader_display = "onyx"`）：sync 传完后经 adb 的 `content` 命令往阅读器书库数据库里还没打开过的书写深色增强 0、图片平滑关，读回核对；见 [devices](devices.md#文石的显示设置深色增强图片平滑) |
 | `metadata.rs` | `meta --fetch` 和 `sync` 补元数据的调度：责任链 `CHAIN`（Bangumi〔只查漫画〕→ 豆瓣 → QQ 阅读 → Wikidata），书目网站实现 `BookSource`（搜索骨架是它的缺省方法：原书名搜不到再用去卷次的书名、都搜不到用网站的另一种搜法；各网站只给搜索词、怎么搜、怎么认条目、挑封面、取元数据），Wikidata 是链尾单独的一环（原作留给找封面的后备）；同一套漫画只查一次（`series_lookup`）；生成时往书里补什么由 `plan` 定（简介、标签、带国籍的作者、译者、出版社、日期、ISBN；指纹和写入共用这一份），`inject` 写 |
 | `bangumi.rs` / `douban.rs` / `qqread.rs` / `wikidata.rs` / `cover.rs` / `covergen.rs` | 书目源：Bangumi（漫画，公开 API，POST 搜索）、豆瓣（搜索建议 + 书籍搜索页 `window.__DATA__`）、QQ 阅读、Wikidata；原作封面（Open Library / Commons）；生成封面 |
 | `net.rs` / `matching.rs` | 节流重试的 HTTP（GET、POST JSON；失败分类成 `NetError`：网站说没有、临时的、别的，临时的记进本轮的 `transient_error`）；书名人名比对（全半角、繁简、译名用字）、署名拆开（`parse_credits`：作者、国籍、译者）、书名去卷次（`base_title`） |

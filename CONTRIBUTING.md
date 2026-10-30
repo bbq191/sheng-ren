@@ -4,7 +4,7 @@
 
 ## 项目一句话
 
-电脑端电子书书库：书入库（只存索引，收 EPUB、CBZ）→ 按阅读模式生成优化过的书 → `booklib sync` 直接传到接着的设备。三个模式：`kindle`（Kindle 自带阅读器，出 KFX）、`ireader`（掌阅自带阅读器，EPUB）、`xochitl`（reMarkable Move 自带阅读器，EPUB）。文字书三台都"只修复"（profile `text_repair_only`），掌阅、Move 另加 `kindle_rules`（照 Send to Kindle 统一），Kindle 由 KFX 写出器照 Send to Kindle 的规则表做；漫画照旧完整处理。总体见 `README.md`。
+电脑端电子书书库：书入库（只存索引，收 EPUB、CBZ）→ 按阅读模式生成优化过的书 → `booklib sync` 直接传到接着的设备。四个模式：`kindle`（Kindle 自带阅读器，出 KFX）、`ireader`（掌阅自带阅读器，EPUB）、`xochitl`（reMarkable Move 自带阅读器，EPUB）、`boox`（文石自带阅读器，EPUB；2026-10-30 加）。文字书都"只修复"（profile `text_repair_only`），掌阅、Move 另加 `kindle_rules`（照 Send to Kindle 统一），Kindle 由 KFX 写出器照 Send to Kindle 的规则表做；漫画照旧完整处理。总体见 `README.md`。
 
 ## 没有测试书和设备时能做什么、不能做什么
 
@@ -20,7 +20,7 @@
 - **推到新分支，不要直接改 `master`**，由维护者在本机跑完回归、上真机看过再合。
 - 改了**会影响产物**的代码（清洗、优化、漫画、KFX 写出器、书库生成流程），在提交说明里写清"**没跑真书回归、没上真机**"，并列出预计哪些书、哪类写法会变。不要声称回归通过。
 - 只是重构时，要求产物逐字节不变——别的机器上没法验证这一点，所以写明"待本机回归确认逐字节不变"。
-- 测试一律不碰真设备（`crates/library/tests/common` 已经把设备目录指到临时目录、`BOOKLIB_NO_SSH=1`、Move 用 `FakeMove`），别加会连真设备或网络的测试。
+- 测试一律不碰真设备（`crates/library/tests/common` 已经把设备目录指到临时目录、`BOOKLIB_NO_SSH=1`、`BOOKLIB_NO_ADB=1`、Move 用 `FakeMove`），别加会连真设备或网络的测试。
 
 ## 硬约束（定下的，不许推翻）
 

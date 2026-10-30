@@ -301,6 +301,8 @@ booklib dedupe ~/Documents/ereader
 ### devices：列出阅读模式
 
 ```text
+boox         文石自带阅读器（BOOX Poke7）  EPUB  屏幕 1072×1448  阅读范围 1072×1448  黑白
+             ✓ 接上了：/run/user/1000/mtp/boox/内部共享存储空间/Books
 ireader      掌阅自带阅读器（iReader Ocean 5 Pro）  EPUB  屏幕 1264×1680  阅读范围 1264×1680  黑白
              ✓ 接上了：/run/user/1000/mtp/ireader/内部共享存储空间/documents
 kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  KFX  屏幕 1272×1696  阅读范围 1104×1546  黑白
@@ -321,10 +323,11 @@ xochitl      xochitl（reMarkable Paper Pro Move 原生阅读器）  EPUB  屏�
 |---|---|---|
 | Kindle（`kindle`，`.kfx`） | USB，jmtpfs 自动挂到 `/run/user/1000/mtp/kindle` | 存储根目录的 `documents/<子目录>/<书名>.kfx` |
 | 掌阅（`ireader`，`.epub`） | USB，挂到 `/run/user/1000/mtp/ireader` | 存储根目录的 `documents/<子目录>/<书名>.epub`（没有 `documents/` 就建） |
+| 文石（`boox`，`.epub`） | USB，挂到 `/run/user/1000/mtp/boox`（udev 认厂商号 18d1 加厂商字符串 ONYX） | 存储根目录的 `Books/<子目录>/<书名>.epub`；传完经 adb 给阅读器还没打开过的书关掉深色增强、图片平滑（要开 USB 调试，见 [devices](devices.md#文石的显示设置深色增强图片平滑)） |
 | Move（`xochitl`，`.epub`） | SSH（USB `root@10.11.99.1`，不通再试 Wi-Fi `root@10.42.0.224`），调 Move 上书架服务的导入接口 | 直接加入 xochitl 书库（不进书架的母版库），放进文件夹 `<子目录>` |
 
 - `<子目录>`：原件相对书根目录所在的子目录（`--top` 的条目从它自己这一层起，见[跟踪范围](#track--sync跟踪书目录生成)），例：原件 `~/Documents/ereader/books/好读/x.epub` → Kindle 上 `documents/好读/<书名>.kfx`、Move 上文件夹「好读」。多级子目录在 Move 上也按层建：`漫画/死亡筆記` 是「漫画」文件夹里的「死亡筆記」文件夹（书架服务逐级找，没有就建）。跟踪目录顶层的书、`add` 进来的书、网址书放 `documents/` 顶层（Move 上放书库根）。
-- `booklib devices` 列出各设备接没接上。挂载目录可以用 `BOOKLIB_MTP_DIR` 改，`BOOKLIB_NO_SSH=1` 不连 Move。
+- `booklib devices` 列出各设备接没接上。挂载目录可以用 `BOOKLIB_MTP_DIR` 改，`BOOKLIB_NO_SSH=1` 不连 Move，`BOOKLIB_NO_ADB=1` 不用 adb（不给文石阅读器写显示设置）。
 - **先比较、再生成、边生成边传**（下图）：
   - **比较与认领**：每本书每台设备先比指纹，没变就跳过。没变、但记录里的位置是空的（以前产物放电脑上、你自己挪上了设备），而设备上对应位置正好有那份，就直接认领（`= … 认领设备上已有的那份`），不重新生成。只有变了的才生成。
   - **边生成边传**：主线程一本接一本地生成，生成好的交给这台设备自己的传输线程，不等它传完就接着做下一件。Kindle、掌阅的线程一本一本拷文件。每台手上（在传加排队）最多 2 本；某台满了（Move 排大书要几分钟）就先做别的设备，那台的留到最后补。全部生成完还有没传完的，打一行 `… 都生成好了，等设备那边传完`。

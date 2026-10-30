@@ -112,6 +112,7 @@
 - **Kindle**：维护者同时点左上、右下角截屏（**要先拔 USB**），文件在 `Internal Storage/screenshots/`；Send to Kindle 的样本在 `documents/Downloads/Items01/`（维护者会清掉，要用时请维护者推一份），`kfx-dump --json` 看结构。
 - **掌阅**：USB 或无线调试（`adb connect <IP>:<端口>`，2026-10-19 起维护者改用 Wi-Fi，端口每次打开无线调试会变，问维护者要）；`adb exec-out screencap -p`；打开书走文件管理器 `com.android.documentsui/com.szzy.ireader.ink.fileexplorer.ui.activity.MainActivity` + `uiautomator dump`；翻页在空白处横向 swipe。**怪癖测试书 `tools/quirks/probe.py ireader`** 一条命令全自动：每章标记换成条码图、推进 `documents/测试/`（每次换文件名，同名的书掌阅记着读到哪）、点开、逐页截屏认条码、逐行量（2026-10-13，87 个探针 174 页约 10 分钟）。
 - **Move**：`tools/quirks/probe.py move` 一条命令跑怪癖测试书。书架服务 `POST /import?name=X.epub&folder=`（端口转发 8790，`ControlMaster=no`；USB `root@10.11.99.1`、Wi-Fi `root@10.42.0.224`，睡着了连不上）导入后 xochitl 立刻排出 `<uuid>.pdf`，scp 回来 `pdftoppm -scale-to-x 954 -scale-to-y 1696` 量；原地替换（`?uuid=`）不会立刻重排。
+- **文石**：USB 调试（adb，不 root）；`adb exec-out screencap` 输出前面多一行字，要 `screencap -p /sdcard/s.png` 再 pull；打开书 `am start -a android.intent.action.VIEW -d 'file:///storage/emulated/0/Books/书.epub' -t application/epub+zip -p com.onyx.kreader`（路径有空格要加引号），翻页 `input keyevent KEYCODE_PAGE_DOWN`；新书第一次打开可能弹「文档间距优化提醒」，点「知道了」。
 - 量位置：按文字行的墨迹（灰度 < 140 的行）找行顶，三台换算成占内容区高的比例再比。测试书放临时目录，导入设备的测试书用完删掉。
 
 ## 阅读模式和它的字段
@@ -124,6 +125,9 @@
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画固定版式） | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
 | `ireader` | 掌阅 Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白 |
 | `xochitl` | reMarkable Paper Pro Move 自带阅读器 | EPUB | 954×1696，264ppi | 842×1455 | 952×1457（页边距 1） | 彩色 |
+| `boox` | 文石 BOOX Poke7 自带阅读器（NeoReader） | EPUB | 1072×1448，300ppi | 1072×1448（整页图） | 1072×1448（整屏） | 黑白 |
+
+2026-10-29 Move、掌阅 Ocean 5 Pro 已出售，换成掌阅 Air3 Pro、文石 Poke7；`xochitl`、`ireader` 的数字是旧设备上量的，代码先留着。`boox` 2026-10-30 加，怪癖探针还没跑（没写的 CSS 怪癖字段按缺省）。
 
 ### 怪癖 → 字段
 
@@ -287,6 +291,22 @@ dir = "documents"
 - 默认页边距 56：宽 = 954 − 2×56；高按固定的上下留白换算（2026-09-21 实测）。改成 28 档 → 宽 898。
 - 读 xochitl 排出的 PDF 核实（2026-09-29）：整页图原像素放在 (56, 112)，离屏幕左右 56、上 112、下 129px；`@page{margin:0}`、负外边距、去行高都不起作用，只有页边距设置能缩左右。
 - 页边距设成 1 时图框左上角在 (1, 112)、宽 952、高 1457：952×1457 的页原样显示，离屏幕左右各 1px、上 112、下 127px（上下是 xochitl 固定留的）；文字页的字离边约 58px。
+
+**`boox`：1072×1448（整屏）。**
+- 2026-10-30 测量书 adb 截屏实测（NeoReader 39252，固件 4.2.3）：阅读器设置关了「全局设置 → 启用阅读状态栏」「悬浮菜单设置 → 启用悬浮主菜单」「全局设置 → 显示书签标记」（维护者定），页边距缺省。只放一张大图的页面图铺满整屏，四边留白 0；开着状态栏时底下让出 47px（1072×1401）。
+- 《浪客行》卷01 产物真机截屏和书里的页图（1072×1448）逐像素相同：阅读器按原像素 1:1 显示，不缩放、不改灰度（深色增强 0、图片平滑关时，见下面「文石的显示设置」）。
+
+#### 文石的显示设置（深色增强、图片平滑）
+
+阅读器菜单「显示」里有**深色增强（缺省 30）**和**图片平滑（缺省开）**，2026-10-30 灰阶测试书（32 级灰，截屏逐级量）：
+- 深色增强 30 ≈ 再加伽马 1.18（滑块内部名就叫 `seek_bar_gamma`）；0 时截屏和原图逐值相同。
+- 图片平滑开＝**抖动**：每级灰被打成 0/29/58/92/129/167/209/255 八级的网点；关了是平的。和「漫画不抖动」冲突。
+- 两项都**按书存、没有全局缺省**（新书打开就是 30、开），全局设置、主题里都没有；书里的元数据它不读。
+
+所以 `boox` 的 `[deliver]` 写 `reader_display = "onyx"`（`library::onyx`）：sync 传完后经 adb 往阅读器书库数据库（`content://com.onyx.content.database.ContentProvider/Metadata`，adb 的 `content` 命令能读写，不用 root）里**这一轮传进去、还没打开过的书**（维护者自己放进 `Books/` 的不碰）（`extraAttributes` 为空）写深色增强 0（`page_refresh_setting.imageGamma` 100；30 存的是 130）、图片平滑关（`ditherEnable` false）。第一次打开就照它显示（灰阶测试书逐值相同；《浪客行》卷01 面板 0 / 关，截屏 207 级灰）。打开过的书不碰。
+- MTP 拷进去几秒内阅读器就收录（一行，`extraAttributes` 空）；**经 adb push 的不收录**。jmtpfs 写文件会先建一个空文件再传，所以一本书有两行（一行 size 0）：等到大小对得上的那行出来（最多 30 秒，没等到的报出来、要手动调）再按路径写，两行一起写；书库界面里只显示一本。从设备上删了书，数据库里的行还在（书库界面不显示）。
+- `content` 的 `--bind` 值里冒号要写 `\:`、反斜杠写 `\\`，不然报 Binding not well formed，或者把 JSON 里的 `\"` 吃成 `"`（写坏那一行）。
+- 要开 USB 调试（设置入口小应用能开，见 `~/Projects/ireader-settings`）。这一轮没传书时不调 adb；没连上 adb 时书照样传，sync 报一行提示手动调（不算失败）；每次 adb 调用限 20 秒；阅读器升级换了数据库格式时，读回来还是空的就报出来。
 
 怎么用这些数字做到离屏幕 1px，见[排版 · 离屏幕边缘 1px](typesetting.md#离屏幕边缘-1px三种做法)。
 
