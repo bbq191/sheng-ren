@@ -190,6 +190,30 @@
     /// 原书只在 OPF 声明了封面图、哪一页都没用到：spine 最前面补一页（照 Send to Kindle，《绍宋》《狼厅》）；用到了的不补，
     /// 文件名里有 `:` 的页面引用也认得（《春雪》：清洗改名之前就要判断）。
     #[test]
+    fn cover_thumbnail_added_beside_cover_once() {
+        let mut v = vec![
+            e("O/content.opf", r#"<package version="3.0"><metadata><dc:title>书</dc:title></metadata><manifest><item id="c" href="I/c.jpg" media-type="image/jpeg" properties="cover-image"/><item id="p1" href="T/p1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="p1"/></spine></package>"#),
+            e("O/T/p1.xhtml", "<html><body><p>正文</p></body></html>"),
+            Entry { name: "O/I/c.jpg".into(), data: Vec::new() },
+        ];
+        let mut asked = None;
+        assert!(add_cover_thumbnail(&mut v, |p| {
+            asked = Some(p.to_string());
+            Some(b"jpg".to_vec())
+        }));
+        assert_eq!(asked.as_deref(), Some("O/I/c.jpg"));
+        let opf = s(&v, "O/content.opf");
+        assert!(opf.contains(r#"<item id="eink-thumb" href="eink-thumb.jpg" media-type="image/jpeg"/>"#), "{opf}");
+        assert!(opf.contains(r#"<meta name="eink-thumbnail" content="eink-thumb"/>"#), "{opf}");
+        assert!(opf.contains(r#"properties="cover-image""#) && opf.contains("<spine><itemref idref=\"p1\"/></spine>"), "封面、spine 不动：{opf}");
+        assert_eq!(s(&v, "O/eink-thumb.jpg"), "jpg");
+        assert!(!add_cover_thumbnail(&mut v, |_| Some(Vec::new())), "已经有了不再加");
+        // 比例本来就对（不给字节）：不加
+        let mut w = vec![e("content.opf", r#"<package><metadata/><manifest><item id="c" href="c.jpg" media-type="image/jpeg" properties="cover-image"/></manifest><spine/></package>"#)];
+        assert!(!add_cover_thumbnail(&mut w, |_| None));
+    }
+
+    #[test]
     fn prepend_cover_page_only_when_no_page_uses_cover() {
         let book = |page: &str| {
             vec![

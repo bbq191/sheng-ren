@@ -109,7 +109,9 @@ pub use entities::container_id;
 ///   ≥ 99.8%。
 /// - 24（2026-10-19，维护者定「动图显示第一帧」）：书里的动图 WebP 取第一帧转成 PNG 写进去（以前丢掉、给警告；`imgopt::webp_to_png`），
 ///   转出来全不透明的存成 RGB。测试书里没有 WebP，产物不变。
-pub const WRITER_VERSION: &str = "24";
+/// - 25（2026-10-30，维护者定「只裁书架缩略图」）：书里有优化器另做的书架缩略图（OPF `<meta name="eink-thumbnail">`）时，元数据
+///   `cover_image` 和封面字节实体用它，书里的封面页、要不要补封面页照旧按 `cover-image`。没有缩略图的书产物不变。
+pub const WRITER_VERSION: &str = "25";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -226,8 +228,9 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
     let images = std::mem::take(&mut book.images).into_iter().map(|i| (i.path, (i.bytes, i.mime))).collect();
     let mut res = ResourceStore::new(images);
     let mut syms = SymbolAlloc::new();
-    // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字（见 [`SymbolAlloc::reserve_cover`]）。
-    if let Some(i) = book.cover.as_deref().and_then(|c| res.register(c, ImageUse::Content, &mut warnings)) {
+    // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字（见 [`SymbolAlloc::reserve_cover`]）。优化器另做了书架缩略图的
+    // （`eink-thumbnail`）登记它：书架用它，书里的封面页照旧用 `cover`。
+    if let Some(i) = book.thumbnail.as_deref().or(book.cover.as_deref()).and_then(|c| res.register(c, ImageUse::Content, &mut warnings)) {
         syms.reserve_cover(&res[i].name)?;
     }
     let id = opts.fixed_id.unwrap_or(book.meta.stable_id);
@@ -253,8 +256,8 @@ fn build(book: &mut Loaded, syms: SymbolAlloc, res: ResourceStore, warnings: Vec
             Ok::<_, String>((b, layout))
         })??
     };
-    // 封面图即使没出现在正文里也要带上（书架缩略图）。
-    let cover_res = book.cover.as_deref().and_then(|c| b.resource(c, ImageUse::Content));
+    // 封面图即使没出现在正文里也要带上（书架缩略图）；有另做的缩略图时书架用它。
+    let cover_res = book.thumbnail.as_deref().or(book.cover.as_deref()).and_then(|c| b.resource(c, ImageUse::Content));
     style_entities(&mut b, &mut entities);
     let fonts = take_fonts(book, &b);
     position_entities(&mut sections, &mut entities);

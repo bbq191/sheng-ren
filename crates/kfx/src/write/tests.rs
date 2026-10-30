@@ -381,6 +381,34 @@ fn nonlinear_nav_page_skipped() {
     assert!(nav.contains("第一章"), "目录照常：{nav}");
 }
 
+/// 优化器另做了书架缩略图（`<meta name="eink-thumbnail">`，写出器 25）：书架封面（`cover_image` 指的资源）用缩略图，正文里的
+/// 封面页照旧是原封面，不因为「正文没用到缩略图」补封面页。
+#[test]
+fn thumbnail_feeds_bookshelf_cover_only() {
+    let png = |w: u32, h: u32| {
+        let mut b = Vec::new();
+        image::GrayImage::from_pixel(w, h, image::Luma([0])).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        b
+    };
+    let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="O/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+    w.put("O/c.opf", br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language><meta name="eink-thumbnail" content="eink-thumb"/></metadata><manifest><item id="b" href="I/c.png" media-type="image/png" properties="cover-image"/><item id="eink-thumb" href="eink-thumb.jpg" media-type="image/jpeg"/><item id="c0" href="T/c0.xhtml" media-type="application/xhtml+xml"/><item id="c1" href="T/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c0"/><itemref idref="c1"/></spine></package>"#).unwrap();
+    w.put("O/I/c.png", &png(30, 40)).unwrap();
+    w.put("O/eink-thumb.jpg", &png(26, 40)).unwrap();
+    w.put("O/T/c0.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><img src="../I/c.png"/></body></html>"#).unwrap();
+    w.put("O/T/c1.xhtml", br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>x</p></body></html>"#).unwrap();
+    let epub = w.finish().unwrap().into_inner();
+    let (kfx, _) = epub_to_kfx(&epub, &Opts { fixed_id: Some(1), ..Default::default() }).unwrap();
+    let c = crate::container::Container::parse(&kfx).unwrap();
+    assert_eq!(c.entities.iter().filter(|e| e.ty == T_SECTION).count(), 2, "没补封面页");
+    let res: Vec<_> = c.entities.iter().filter(|e| e.ty == T_RESOURCE).map(|e| (e.id, e.value().unwrap().clone())).collect();
+    assert_eq!(res.len(), 2, "原封面、缩略图都在");
+    let width = |v: &Value| v.field(RES_WIDTH).and_then(|x| x.as_int());
+    let syms = c.symbols();
+    let cover = res.iter().find(|(id, _)| syms.sid(COVER_REF).unwrap() - SID_GAP == *id).expect("cover_image 指的资源");
+    assert_eq!(width(&cover.1), Some(26), "书架用缩略图");
+}
+
 /// spine 里没有封面页、正文没用到封面图：最前面补一页整页封面（写出器 13，照 Send to Kindle《绍宋》《狼厅》）。
 #[test]
 fn missing_cover_page_prepended() {

@@ -286,6 +286,14 @@ pub fn cover_meta_tags(opf: &str) -> Vec<(usize, usize, &str)> {
         .collect()
 }
 
+/// `<meta name="名字" content="…">`（OPF 2 写法）第一个的 `content`。
+pub fn meta_content<'a>(opf: &'a str, name: &str) -> Option<&'a str> {
+    html::tags(opf).filter(|t| t.is_start() && is_local(t.name, "meta")).find_map(|t| {
+        let tag = &opf[t.start..t.end];
+        (html::attr_value(tag, "name")? == name).then(|| html::attr_value(tag, "content")).flatten()
+    })
+}
+
 /// manifest 项是不是图片：`media-type` 是 `image/…`，或 href 是常见位图扩展名。
 pub fn is_image_item(it: &ManifestItem) -> bool {
     it.media_type.starts_with("image/") || is_image_ext(html::split_href(it.href).0)

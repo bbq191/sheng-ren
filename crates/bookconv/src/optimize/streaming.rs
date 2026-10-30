@@ -83,6 +83,13 @@ fn optimize_inner(
             read_image_head(&mut archive, p, dims).ok().flatten()
         });
     }
+    // 书架缩略图（文字书、漫画都做）：封面居中裁成书架框的比例另存一张，书里的封面页不动
+    if let Some(aspect) = opts.cover_thumb_aspect {
+        crate::wash::add_cover_thumbnail(&mut raw, |p| {
+            let bytes = crate::epubzip::read_by_name(&mut archive, p).ok()?;
+            crate::imgopt::guard(|| crate::imgopt::cover_thumbnail(&bytes, aspect, opts.grayscale, opts.limits.max_decode_pixels))
+        });
+    }
     // 图片照 Kindle 的大小改写（`kindle_images`）要原图宽高：这时图片条目是空占位，先读文件头
     let sized;
     let opts = match opts.wash.as_ref().filter(|w| ((w.mode.kindle_rules() && w.image_sizing.is_some()) || w.tiny_page.is_some()) && !is_comic_book) {
@@ -504,7 +511,7 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
         screen: plan.screen,
         comic_margin: opts.comic_margin,
         grayscale: opts.grayscale,
-        comic: crate::imgopt::ComicPage { gamma: opts.comic_gamma, autocontrast: opts.comic_autocontrast, trim_specks: opts.comic_trim_specks, cut_bottom: None },
+        comic: crate::imgopt::ComicPage { gamma: opts.comic_gamma, autocontrast: opts.comic_autocontrast, trim_specks: opts.comic_trim_specks, no_upscale: !opts.comic_upscale, cut_bottom: None },
         page_cuts: &page_cuts,
         image_gamma: opts.image_gamma,
         max_px: opts.limits.max_decode_pixels,

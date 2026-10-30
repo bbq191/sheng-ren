@@ -79,7 +79,7 @@ mod toc;
 mod typeset;
 
 // 对外（优化器、质量门、书库、统计）用到的项；其余只在清洗层内部用。
-pub use self::cover::{ensure_cover_declared, prepend_cover_page};
+pub use self::cover::{add_cover_thumbnail, ensure_cover_declared, prepend_cover_page, THUMB_ID, THUMB_META};
 pub use self::encoding::transcode_entries;
 
 /// 「照 Send to Kindle 的规则统一」（[`WashMode::Repair`] 的 `kindle_rules`，掌阅、Move 的文字书）这一路自己的版本，只进书库指纹（`u` 段），

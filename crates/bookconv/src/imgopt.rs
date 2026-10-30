@@ -790,9 +790,36 @@ pub struct ComicPage {
     pub autocontrast: bool,
     /// 裁白边不让杂点挡住（`comic_trim_specks`，[`crate::comiccrop`]）。
     pub trim_specks: bool,
+    /// 比框小的 JPEG 页不放大（profile `comic_upscale = false`）：和 PNG 一样保持原尺寸、按比例补白，交给阅读器放大到屏幕。
+    pub no_upscale: bool,
     /// 页码：从这一行（解码后整页的坐标）往下切掉（`comic_page_numbers`，整卷投票定的，见 [`crate::comiccrop::page_number_cuts`]）。
     pub cut_bottom: Option<u32>,
 }
+
+/// 书架缩略图（profile `cover_thumb_aspect`）：封面居中裁成宽高比 `aspect`（宽的裁左右、窄的裁上下），长边超过
+/// [`THUMB_MAX_SIDE`] 的缩下来，JPEG 质量 [`THUMB_QUALITY`]（黑白屏转灰度）。和要的比例只差 [`THUMB_TOLERANCE`] 以内、解不开、超过解码上限 → `None`。
+/// 只给书架用，书里的封面页照旧用原图（2026-10-30 维护者定：只裁书架缩略图，Kindle 书架的框是 0.65）。不先裁白边：试过
+/// 《三体全集》（立体书效果图、上下有白）先去白再裁，左边的书脊、封面边被切掉，维护者看了「不好看」。
+pub fn cover_thumbnail(bytes: &[u8], aspect: f32, grayscale: bool, max_px: u64) -> Option<Vec<u8>> {
+    let (img, _) = decode_page(bytes, PageDecode { grayscale, max_px, apply_exif: true })?;
+    let (w, h) = img.dimensions();
+    let have = w as f32 / h as f32;
+    if (have - aspect).abs() <= THUMB_TOLERANCE {
+        return None;
+    }
+    let (cw, ch) = if have > aspect { (((h as f32 * aspect).round() as u32).clamp(1, w), h) } else { (w, ((w as f32 / aspect).round() as u32).clamp(1, h)) };
+    let img = img.crop((w - cw) / 2, (h - ch) / 2, cw, ch);
+    let scale = (THUMB_MAX_SIDE as f32 / cw.max(ch) as f32).min(1.0);
+    let img = if scale < 1.0 { img.resize_lanczos3(((cw as f32 * scale).round() as u32).max(1), ((ch as f32 * scale).round() as u32).max(1)) } else { img };
+    img.encode(ImageFormat::Jpeg, THUMB_QUALITY)
+}
+
+/// [`cover_thumbnail`]：长边最多这么多像素（Kindle 书架网格里封面框 344×531，留足余量）。
+const THUMB_MAX_SIDE: u32 = 1200;
+/// [`cover_thumbnail`]：JPEG 质量。
+const THUMB_QUALITY: u8 = 90;
+/// [`cover_thumbnail`]：和要的宽高比差这么多以内不裁（裁掉不到一个像素宽的边没意义）。
+const THUMB_TOLERANCE: f32 = 0.005;
 
 /// 灰度整页的像素（RGB 的按三个分量里最暗的取：比 [`crate::comiccrop`] 的门槛暗的分量就算内容）。
 fn darkness_plane(img: &Page8) -> std::borrow::Cow<'_, [u8]> {
@@ -835,7 +862,7 @@ pub fn comic_page_number(bytes: &[u8], area: Screen, specks: bool, max_px: u64) 
 /// 拉满对比度（[`autocontrast_lut`]），和伽马合成一张表、缩放后查一次。装饰小图都不动。`page` 里另有页码裁切、杂点（[`ComicPage`]）。
 /// 都不开时和以前逐字节相同。
 pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, page: ComicPage, max_px: u64) -> Option<Vec<u8>> {
-    let ComicPage { gamma, autocontrast, trim_specks, cut_bottom } = page;
+    let ComicPage { gamma, autocontrast, trim_specks, no_upscale, cut_bottom } = page;
     let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale, max_px, true)?;
     let orig = img.dimensions();
     // 页码：从页码块的上沿往下切掉，再照常裁白边（切口上方的留白一起裁掉）
@@ -861,7 +888,7 @@ pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grays
     } else {
         None
     };
-    let lay = comic_layout(cw, ch, area, margin, out_fmt == ImageFormat::Jpeg);
+    let lay = comic_layout(cw, ch, area, margin, out_fmt == ImageFormat::Jpeg && !no_upscale);
     if !to_gray && !rotated && darken.is_none() && lay.matches_original(orig, (tl, tt), (cw, ch), area, effective_margin(margin, area)) {
         return None;
     }
@@ -1307,6 +1334,24 @@ mod tests {
         // 黑白屏：彩页转成灰度后也算灰度页
         let on_gray = prepare_comic_page_limited(&color, area, 1, true, ComicPage { gamma: Some(1.45), ..Default::default() }, MAX_COMIC_DECODE_PIXELS).unwrap();
         assert!(mean_luma(&on_gray) < mean_luma(&prep(&color, area, true).unwrap()) - 5.0);
+    }
+
+    #[test]
+    fn cover_thumbnail_center_crops_to_aspect() {
+        let jpg = |w: u32, h: u32| {
+            let mut b = Vec::new();
+            image::DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, _| image::Rgb([(x % 256) as u8, 0, 0]))).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Jpeg).unwrap();
+            b
+        };
+        let dims = |b: Vec<u8>| image::load_from_memory(&b).unwrap().dimensions();
+        // 宽的裁左右、窄的裁上下；长边超过 1200 的缩下来；黑白屏转灰度
+        assert_eq!(dims(cover_thumbnail(&jpg(750, 1000), 0.65, false, MAX_DECODE_PIXELS).unwrap()), (650, 1000));
+        assert_eq!(dims(cover_thumbnail(&jpg(610, 1000), 0.65, false, MAX_DECODE_PIXELS).unwrap()), (610, 938));
+        assert_eq!(dims(cover_thumbnail(&jpg(1800, 2400), 0.65, false, MAX_DECODE_PIXELS).unwrap()), (780, 1200));
+        let g = cover_thumbnail(&jpg(750, 1000), 0.65, true, MAX_DECODE_PIXELS).unwrap();
+        assert_eq!(image::load_from_memory(&g).unwrap().color(), image::ColorType::L8);
+        // 比例差不到 0.005：不做
+        assert_eq!(cover_thumbnail(&jpg(652, 1000), 0.65, false, MAX_DECODE_PIXELS), None);
     }
 
     #[test]
