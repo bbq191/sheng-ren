@@ -217,9 +217,9 @@ pub(super) fn first_pass_html(text: &str, name: &str, keep_fonts: &HashSet<Strin
 /// 返回 `None` = 无需改动、沿用原字节（调用方自己决定借用还是移走，不为"没变"整张图克隆一份）。
 /// 解码器遇到畸形图片偶发 panic：兜住、按"失败原样保留"处理（[`crate::imgopt::guard`]）。
 /// `flatten`：正文图合成白底（[`crate::imgalpha`]）——先合成再缩（带透明的图缩放时透明处的颜色会渗进边缘）。
-/// `max_px`：解码上限（`OptimizeOpts::limits.max_decode_pixels`），超过的图原样保留。`comic_gamma`：漫画页中间调加深（`OptimizeOpts::comic_gamma`）；`comic_autocontrast`：漫画页拉满对比度（`OptimizeOpts::comic_autocontrast`）。
+/// `max_px`：解码上限（`OptimizeOpts::limits.max_decode_pixels`），超过的图原样保留。`comic`：漫画页排版以外的处理（伽马、拉满对比度、杂点、页码，[`crate::imgopt::ComicPage`]）。
 #[allow(clippy::too_many_arguments)]
-pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool, comic_gamma: Option<f64>, comic_autocontrast: bool, bg: Option<crate::bgfit::BgFit>, flatten: bool, max_px: u64) -> Option<Vec<u8>> {
+pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool, comic: crate::imgopt::ComicPage, bg: Option<crate::bgfit::BgFit>, flatten: bool, max_px: u64) -> Option<Vec<u8>> {
     crate::imgopt::guard(|| {
         if let Some(flat) = flatten.then(|| crate::imgopt::flatten_transparent_png(bytes, max_px)).flatten() {
             return Some(crate::imgopt::downscale_for_epub_limited(&flat, screen, max_px).unwrap_or(flat));
@@ -229,7 +229,7 @@ pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: c
             crate::imgopt::downscale_background(bytes, fit, screen, max_px)
         } else if is_comic_book {
             // 单趟（解码/编码各一次、灰度保持、缩放走 SIMD），见 `prepare_comic_page_for_epub`。
-            crate::imgopt::prepare_comic_page_limited(bytes, screen, comic_margin, grayscale, comic_gamma, comic_autocontrast, max_px)
+            crate::imgopt::prepare_comic_page_limited(bytes, screen, comic_margin, grayscale, comic, max_px)
         } else {
             crate::imgopt::downscale_for_epub_limited(bytes, screen, max_px)
         }

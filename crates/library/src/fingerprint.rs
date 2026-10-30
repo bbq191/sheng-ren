@@ -60,8 +60,8 @@ fn shared_seg(device: &Profile) -> String {
 }
 
 /// 漫画：EPUB 阅读范围（漫画书里别的图按它缩）+ 漫画画布 + 白边 + 页边距（`m`）+ 翻页方向改写（`d`）+ 固定版式（`f`），
-/// 两路共用的那段之后是中间调加深（`G` + 伽马，[`gamma_seg`]），再后是拉满对比度（`A`，profile `comic_autocontrast`；不开的模式不出
-/// 新字母，指纹和以前一样）。
+/// 两路共用的那段之后是中间调加深（`G` + 伽马，[`gamma_seg`]），再后是拉满对比度（`A`，profile `comic_autocontrast`）、裁白边不让
+/// 杂点挡住（`S`，`comic_trim_specks`）、裁页码（`P`，`comic_page_numbers`）；不开的模式不出新字母，指纹和以前一样。
 fn comic_seg(device: &Profile, area: Screen) -> String {
     let c = device.comic_readable();
     let mut seg = format!("{}x{}c{}x{}+{}{}", area.width, area.height, c.width, c.height, device.comic.margin, device.comic.reader_margins.map(|m| format!("m{m}")).unwrap_or_default());
@@ -71,7 +71,14 @@ fn comic_seg(device: &Profile, area: Screen) -> String {
     if device.comic.fixed_layout {
         seg.push('f');
     }
-    format!("{seg}{}{}{}", shared_seg(device), gamma_seg(device.comic.gamma), if device.comic.autocontrast { "A" } else { "" })
+    seg.push_str(&shared_seg(device));
+    seg.push_str(&gamma_seg(device.comic.gamma));
+    for (on, c) in [(device.comic.autocontrast, 'A'), (device.comic.trim_specks, 'S'), (device.comic.page_numbers, 'P')] {
+        if on {
+            seg.push(c);
+        }
+    }
+    seg
 }
 
 /// 中间调加深（profile `comic_gamma`、`image_gamma`，2026-10-16）：开着、又不是 1 时写 `G` + 伽马，放在这一路的最后（不加深的模式
