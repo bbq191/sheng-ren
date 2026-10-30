@@ -306,10 +306,18 @@ pub struct ComicPolicy {
     #[serde(rename = "comic_gamma")]
     pub gamma: Option<f64>,
     /// 漫画页拉满对比度（照 KCC 的自动对比度）：内容是灰度的页按裁边后、缩放前整页最黑、最白的值线性拉到 0、255，再做上面的伽马；
-    /// 灰度范围不到 160 的页（有意的低对比度）不拉。原书扫描的黑多是深灰（《死亡筆記》卷07 每页最黑的中位数 22），
+    /// 灰度范围不到 159 的页（有意的低对比度）不拉。原书扫描的黑多是深灰（《死亡筆記》卷07 每页最黑的中位数 22），
     /// 拉满后黑更实。2026-10-30 Kindle 真机比过现状 / 拉满 + 伽马 1.1 / 只拉满，选拉满 + 伽马。见 `bookconv::imgopt::prepare_comic_page_limited`。
     #[serde(rename = "comic_autocontrast")]
     pub autocontrast: bool,
+    /// 漫画页裁白边不让扫描杂点挡住：裁过白边后，面积很小、离主体内容远的暗点不算内容，再收一次边（白的标准不变）。
+    /// 2026-10-30 维护者定（《哆啦A夢》卷01 挡住裁白边的多是灰尘）。见 `bookconv::comiccrop`。
+    #[serde(rename = "comic_trim_specks")]
+    pub trim_specks: bool,
+    /// 漫画页裁掉页码：内容最底下像页码的小块、上方有空白，整卷同一位置出现够多页才裁（推翻 2026-10-06「不删原书任何内容」里的
+    /// 这一项，2026-10-30 维护者定：Kindle 上裁了「字更清晰」）。见 `bookconv::comiccrop`。
+    #[serde(rename = "comic_page_numbers")]
+    pub page_numbers: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -407,6 +415,10 @@ struct ProfileFile {
     #[serde(default)]
     comic_autocontrast: bool,
     #[serde(default)]
+    comic_trim_specks: bool,
+    #[serde(default)]
+    comic_page_numbers: bool,
+    #[serde(default)]
     background_images: bool,
     #[serde(default = "yes")]
     background_sizing: bool,
@@ -499,7 +511,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: NotePolicy { mode: f.notes, icons: f.note_icons, backlinks: f.note_backlinks }, readable: f.readable, comic: ComicPolicy { margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), reader_margins: f.comic_reader_margins, readable: f.comic_readable, page_direction: f.comic_page_direction, fixed_layout: f.comic_fixed_layout, format: f.comic_format, gamma: f.comic_gamma, autocontrast: f.comic_autocontrast }, css: CssQuirks { margin_top: f.margin_top, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, background_auto_height: f.background_auto_height }, background_images: f.background_images, background_sizing: f.background_sizing, caption_fit: f.caption_fit, image_alpha: f.image_alpha, webp: f.webp, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_gamma: f.image_gamma, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: NotePolicy { mode: f.notes, icons: f.note_icons, backlinks: f.note_backlinks }, readable: f.readable, comic: ComicPolicy { margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), reader_margins: f.comic_reader_margins, readable: f.comic_readable, page_direction: f.comic_page_direction, fixed_layout: f.comic_fixed_layout, format: f.comic_format, gamma: f.comic_gamma, autocontrast: f.comic_autocontrast, trim_specks: f.comic_trim_specks, page_numbers: f.comic_page_numbers }, css: CssQuirks { margin_top: f.margin_top, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, background_auto_height: f.background_auto_height }, background_images: f.background_images, background_sizing: f.background_sizing, caption_fit: f.caption_fit, image_alpha: f.image_alpha, webp: f.webp, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_gamma: f.image_gamma, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
@@ -709,7 +721,7 @@ mod tests {
             formats: _,
             readable: _,
             notes: NotePolicy { mode: _, icons: _, backlinks: _ },
-            comic: ComicPolicy { margin: _, reader_margins: _, readable: _, page_direction: _, fixed_layout: _, format: _, gamma: _, autocontrast: _ },
+            comic: ComicPolicy { margin: _, reader_margins: _, readable: _, page_direction: _, fixed_layout: _, format: _, gamma: _, autocontrast: _, trim_specks: _, page_numbers: _ },
             background_images: _,
             background_sizing: _,
             caption_fit: _,

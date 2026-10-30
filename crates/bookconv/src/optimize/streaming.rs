@@ -244,10 +244,10 @@ struct ImageCtx<'a> {
     screen: crate::imgopt::Screen,
     comic_margin: u32,
     grayscale: bool,
-    /// 漫画页中间调加深（`OptimizeOpts::comic_gamma`）。
-    comic_gamma: Option<f64>,
-    /// 漫画页拉满对比度（`OptimizeOpts::comic_autocontrast`）。
-    comic_autocontrast: bool,
+    /// 漫画页排版以外的处理（伽马、拉满对比度、杂点；页码按 `page_cuts` 逐页填）。
+    comic: crate::imgopt::ComicPage,
+    /// 漫画页码要裁到哪里（原书里的条目名 → 整页坐标的行，[`scan_page_numbers`]）。
+    page_cuts: &'a HashMap<String, u32>,
     /// 正文插图中间调加深（`OptimizeOpts::image_gamma`）：只用于 `Job::Image` 的 `darken` 标了的图。
     image_gamma: Option<f64>,
     max_px: u64,
@@ -314,7 +314,7 @@ fn process_image(ctx: &ImageCtx, budget: &crate::imgpool::PixelBudget, source: &
         if let Some(t) = tile {
             return Ok(crate::imgopt::guard(|| crate::imgopt::page_tile(&bytes, &t, ctx.max_px, crate::imgopt::header_dims(&bytes).map_or_else(|| !src.to_ascii_lowercase().ends_with(".png"), |(f, _)| f == image::ImageFormat::Jpeg))).unwrap_or(bytes));
         }
-        let out = if ctx.keep_images { bytes } else { transform_image_bytes(&bytes, ctx.is_comic_book, ctx.screen, ctx.comic_margin, ctx.grayscale, ctx.comic_gamma, ctx.comic_autocontrast, bg, flatten, ctx.max_px).unwrap_or(bytes) };
+        let out = if ctx.keep_images { bytes } else { transform_image_bytes(&bytes, ctx.is_comic_book, ctx.screen, ctx.comic_margin, ctx.grayscale, crate::imgopt::ComicPage { cut_bottom: ctx.page_cuts.get(src).copied(), ..ctx.comic }, bg, flatten, ctx.max_px).unwrap_or(bytes) };
         Ok(match darken {
             Some(g) => crate::imgopt::guard(|| crate::imgopt::darken_gray_image(&out, g, ctx.max_px)).unwrap_or(out),
             None => out,
@@ -427,6 +427,44 @@ impl<'e, R: std::io::Read + std::io::Seek, P: FnMut(usize, usize)> OrderedSink<'
 /// 阶段二：按 `entries` 顺序变换、写出全部条目。
 ///
 /// 并行（见 `imgpool`）：主线程按条目顺序变换文字条目，把图片处理和 deflate 压缩交给 worker（[`spawn_image_workers`]），再按原顺序
+/// 找页码时扫完的一页：(第几张, 候选)。
+type Scanned = (usize, Option<crate::comiccrop::PageNumber>);
+
+/// 漫画页码（`comic_page_numbers`）：整卷每张页图找像页码的块（[`crate::imgopt::comic_page_number`]），整卷投票
+/// （[`crate::comiccrop::page_number_cuts`]）定下要裁的页。分批读（一批 worker 数的两倍张）、批内多线程，不把整卷图同时放在内存里。
+/// 返回原书条目名 → 裁到哪一行。
+fn scan_page_numbers(input_path: &std::path::Path, names: &[&str], area: crate::imgopt::Screen, opts: &OptimizeOpts) -> Result<HashMap<String, u32>, BookError> {
+    // 每个线程自己开一份源文件、从同一个计数器领页（同阶段二的图片 worker），一张图读完就处理、处理完就丢
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let workers = crate::imgpool::worker_count().clamp(1, names.len().max(1));
+    let parts: Vec<Result<Vec<Scanned>, BookError>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                s.spawn(|| -> Result<Vec<Scanned>, BookError> {
+                    let mut zip = crate::epubzip::open_file_zip(input_path)?;
+                    let mut got = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(name) = names.get(i) else { break };
+                        let bytes = crate::epubzip::read_by_name(&mut zip, name)?;
+                        got.push((i, crate::imgopt::guard(|| crate::imgopt::comic_page_number(&bytes, area, opts.comic_trim_specks, opts.limits.max_decode_pixels))));
+                    }
+                    Ok(got)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(BookError::Other("找页码的线程异常退出".to_string())))).collect()
+    });
+    let mut cands = vec![None; names.len()];
+    for part in parts {
+        for (i, c) in part? {
+            cands[i] = c;
+        }
+    }
+    let cuts = crate::comiccrop::page_number_cuts(&cands);
+    Ok(names.iter().zip(cuts).filter_map(|(n, c)| c.map(|c| (n.to_string(), c))).collect())
+}
+
 /// 取回写 zip（[`OrderedSink`]）。图片提前提交 `lookahead` 张，worker 自己打开源文件读原图字节（原图在 zip 里是压缩的时，解压整卷漫画在
 /// 主线程上要近一秒），处理与写盘重叠。要 deflate 的条目（文字、样式、字体……）也交给 worker 压（[`crate::epubzip::Precompressed`]：
 /// 文字多的书 deflate 占主线程两三成），写进 zip 时原样拷压好的数据。结果与逐条顺序处理、直接写逐字节相同。
@@ -448,6 +486,17 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
     // 已交出去、还没写进 zip 的条目最多这么多（压好的、处理好的结果在这里排队等前面的写完）
     let max_queued = lookahead;
     let image_positions = &plan.image_positions;
+    // 页码按整卷投票定位置：写出前先把整卷页图扫一遍（只读不改）
+    let page_cuts = if plan.is_comic_book && opts.comic_page_numbers && !opts.keeps_content() {
+        let names: Vec<&str> = image_positions.iter().map(|&i| plan.src(&entries[i].0)).collect();
+        // 取消只在主线程查（回调不能跨线程）：扫之前、扫完各查一次
+        check_cancel(cancel)?;
+        let cuts = scan_page_numbers(input_path, &names, plan.screen, opts)?;
+        check_cancel(cancel)?;
+        cuts
+    } else {
+        HashMap::new()
+    };
     let ctx = ImageCtx {
         input_path,
         keep_images: opts.keeps_content(),
@@ -455,8 +504,8 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
         screen: plan.screen,
         comic_margin: opts.comic_margin,
         grayscale: opts.grayscale,
-        comic_gamma: opts.comic_gamma,
-        comic_autocontrast: opts.comic_autocontrast,
+        comic: crate::imgopt::ComicPage { gamma: opts.comic_gamma, autocontrast: opts.comic_autocontrast, trim_specks: opts.comic_trim_specks, cut_bottom: None },
+        page_cuts: &page_cuts,
         image_gamma: opts.image_gamma,
         max_px: opts.limits.max_decode_pixels,
     };

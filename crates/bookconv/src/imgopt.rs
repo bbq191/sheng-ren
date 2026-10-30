@@ -778,17 +778,72 @@ fn comic_layout(w: u32, h: u32, area: Screen, margin: u32, may_upscale: bool) ->
 ///   带 EXIF 方向（非"不用转"）的页一律摆正后重编码。
 /// - 超过 [`MAX_COMIC_DECODE_PIXELS`] 的图、解不开的图返回 `None`。
 pub fn prepare_comic_page_for_epub(bytes: &[u8], area: Screen, margin: u32, grayscale: bool) -> Option<Vec<u8>> {
-    prepare_comic_page_limited(bytes, area, margin, grayscale, None, false, MAX_COMIC_DECODE_PIXELS)
+    prepare_comic_page_limited(bytes, area, margin, grayscale, ComicPage::default(), MAX_COMIC_DECODE_PIXELS)
+}
+
+/// 漫画页除了排版以外的处理（profile 里 `comic_` 开头的几项；都不开时和以前逐字节相同）。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ComicPage {
+    /// 中间调加深的伽马（`comic_gamma`）。
+    pub gamma: Option<f64>,
+    /// 拉满对比度（`comic_autocontrast`）。
+    pub autocontrast: bool,
+    /// 裁白边不让杂点挡住（`comic_trim_specks`，[`crate::comiccrop`]）。
+    pub trim_specks: bool,
+    /// 页码：从这一行（解码后整页的坐标）往下切掉（`comic_page_numbers`，整卷投票定的，见 [`crate::comiccrop::page_number_cuts`]）。
+    pub cut_bottom: Option<u32>,
+}
+
+/// 灰度整页的像素（RGB 的按三个分量里最暗的取：比 [`crate::comiccrop`] 的门槛暗的分量就算内容）。
+fn darkness_plane(img: &Page8) -> std::borrow::Cow<'_, [u8]> {
+    match img {
+        Page8::Gray(g) => std::borrow::Cow::Borrowed(g.as_raw()),
+        Page8::Rgb(c) => std::borrow::Cow::Owned(c.as_raw().as_chunks::<3>().0.iter().map(|p| p[0].min(p[1]).min(p[2])).collect()),
+    }
+}
+
+/// 裁白边（[`trim_page`]，`specks` 时再按 [`crate::comiccrop`] 去掉杂点收一次）：返回 (裁后的图, 左偏移, 上偏移)。`full` 是整页宽高。
+fn trim_comic(img: Page8, specks: bool, full: (u32, u32), off0: (u32, u32)) -> (Page8, u32, u32) {
+    let (img, l, t) = trim_page(img, TrimMode::WhiteOnly);
+    if !specks {
+        return (img, l, t);
+    }
+    let (w, h) = img.dimensions();
+    let b = crate::comiccrop::speck_bounds(&darkness_plane(&img), w, h, full, (off0.0 + l, off0.1 + t));
+    match b {
+        Some((x, y, cw, ch)) => (img.crop(x, y, cw, ch), l + x, t + y),
+        None => (img, l, t),
+    }
+}
+
+/// 整卷投票前的一页（`comic_page_numbers`）：解码（同 [`prepare_comic_page_limited`]，摆正 EXIF 方向、灰度），裁白边（`specks` 同处理时），
+/// 在内容最底下找像页码的块（[`crate::comiccrop`]）。装饰小图（短边不到 `area` 宽 1/3）、解不开、超过上限的 → `None`。
+pub fn comic_page_number(bytes: &[u8], area: Screen, specks: bool, max_px: u64) -> Option<crate::comiccrop::PageNumber> {
+    let ComicSrc { img, .. } = decode_comic(bytes, true, max_px, true)?;
+    let full = img.dimensions();
+    let (img, l, t) = trim_comic(img, specks, full, (0, 0));
+    let (w, h) = img.dimensions();
+    if w.min(h) < area.width / 3 {
+        return None;
+    }
+    crate::comiccrop::page_number_candidate(&darkness_plane(&img), w, h, (l, t), full)
 }
 
 /// 同 [`prepare_comic_page_for_epub`]，另给解码上限 `max_px`（像素，`OptimizeOpts::limits.max_decode_pixels`）：
 /// 超过的页不解码、原样保留。`gamma`（profile `comic_gamma`）：内容是灰度的页（[`Page8::is_gray_content`]；黑白屏上转成灰度的页
 /// 都算）缩放后按 [`gamma_lut`] 加深中间调；`autocontrast`（profile `comic_autocontrast`）：同样的页先按裁边后、缩放前整页最黑、最白的值
-/// 拉满对比度（[`autocontrast_lut`]），和伽马合成一张表、缩放后查一次。装饰小图都不动。`None`/`false` 时和以前逐字节相同。
-pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, gamma: Option<f64>, autocontrast: bool, max_px: u64) -> Option<Vec<u8>> {
+/// 拉满对比度（[`autocontrast_lut`]），和伽马合成一张表、缩放后查一次。装饰小图都不动。`page` 里另有页码裁切、杂点（[`ComicPage`]）。
+/// 都不开时和以前逐字节相同。
+pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, page: ComicPage, max_px: u64) -> Option<Vec<u8>> {
+    let ComicPage { gamma, autocontrast, trim_specks, cut_bottom } = page;
     let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale, max_px, true)?;
     let orig = img.dimensions();
-    let (img, tl, tt) = trim_page(img, TrimMode::WhiteOnly);
+    // 页码：从页码块的上沿往下切掉，再照常裁白边（切口上方的留白一起裁掉）
+    let img = match cut_bottom.filter(|&c| c > 0 && c < orig.1) {
+        Some(c) => img.crop(0, 0, orig.0, c),
+        None => img,
+    };
+    let (img, tl, tt) = trim_comic(img, trim_specks, orig, (0, 0));
     let (cw, ch) = img.dimensions();
     let trimmed = (cw, ch) != orig;
     if cw.min(ch) < area.width / 3 {
@@ -1238,19 +1293,19 @@ mod tests {
     fn comic_gamma_darkens_gray_pages_only() {
         let area = test_area();
         let gray = gray_jpeg_of(1600, 2400, 0);
-        let plain = prepare_comic_page_limited(&gray, area, 1, false, None, false, MAX_COMIC_DECODE_PIXELS).unwrap();
+        let plain = prepare_comic_page_limited(&gray, area, 1, false, ComicPage { gamma: None, ..Default::default() }, MAX_COMIC_DECODE_PIXELS).unwrap();
         assert_eq!(Some(plain.clone()), prep(&gray, area, false), "不加深时和以前一样");
-        let dark = prepare_comic_page_limited(&gray, area, 1, false, Some(1.45), false, MAX_COMIC_DECODE_PIXELS).unwrap();
+        let dark = prepare_comic_page_limited(&gray, area, 1, false, ComicPage { gamma: Some(1.45), ..Default::default() }, MAX_COMIC_DECODE_PIXELS).unwrap();
         assert_eq!(image::load_from_memory(&dark).unwrap().dimensions(), image::load_from_memory(&plain).unwrap().dimensions());
         assert!(mean_luma(&dark) < mean_luma(&plain) - 10.0, "灰度页加深");
         // 彩页在彩色屏上原样；本来不用动的灰度页要加深就得重编码
         let color = jpeg_of(1600, 2400);
-        assert_eq!(prepare_comic_page_limited(&color, area, 1, false, Some(1.45), false, MAX_COMIC_DECODE_PIXELS), prep(&color, area, false));
+        assert_eq!(prepare_comic_page_limited(&color, area, 1, false, ComicPage { gamma: Some(1.45), ..Default::default() }, MAX_COMIC_DECODE_PIXELS), prep(&color, area, false));
         let fitted = gray_jpeg_of(842, 1455, 0);
         assert!(prep(&fitted, area, false).is_none());
-        assert!(prepare_comic_page_limited(&fitted, area, 1, false, Some(1.45), false, MAX_COMIC_DECODE_PIXELS).is_some());
+        assert!(prepare_comic_page_limited(&fitted, area, 1, false, ComicPage { gamma: Some(1.45), ..Default::default() }, MAX_COMIC_DECODE_PIXELS).is_some());
         // 黑白屏：彩页转成灰度后也算灰度页
-        let on_gray = prepare_comic_page_limited(&color, area, 1, true, Some(1.45), false, MAX_COMIC_DECODE_PIXELS).unwrap();
+        let on_gray = prepare_comic_page_limited(&color, area, 1, true, ComicPage { gamma: Some(1.45), ..Default::default() }, MAX_COMIC_DECODE_PIXELS).unwrap();
         assert!(mean_luma(&on_gray) < mean_luma(&prep(&color, area, true).unwrap()) - 5.0);
     }
 
@@ -1275,9 +1330,9 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         let luma = |b: &[u8]| image::load_from_memory(b).unwrap().to_luma8();
-        let plain = luma(&prepare_comic_page_limited(&png, area, 1, false, None, false, MAX_COMIC_DECODE_PIXELS).unwrap());
-        let stretched = luma(&prepare_comic_page_limited(&png, area, 1, false, None, true, MAX_COMIC_DECODE_PIXELS).unwrap());
-        let both = luma(&prepare_comic_page_limited(&png, area, 1, false, Some(1.2), true, MAX_COMIC_DECODE_PIXELS).unwrap());
+        let plain = luma(&prepare_comic_page_limited(&png, area, 1, false, ComicPage { gamma: None, ..Default::default() }, MAX_COMIC_DECODE_PIXELS).unwrap());
+        let stretched = luma(&prepare_comic_page_limited(&png, area, 1, false, ComicPage { gamma: None, autocontrast: true, ..Default::default() }, MAX_COMIC_DECODE_PIXELS).unwrap());
+        let both = luma(&prepare_comic_page_limited(&png, area, 1, false, ComicPage { gamma: Some(1.2), autocontrast: true, ..Default::default() }, MAX_COMIC_DECODE_PIXELS).unwrap());
         let s = autocontrast_lut((30, 230)).unwrap();
         let g = gamma_lut(1.2);
         let (x, y) = (plain.width() / 2, plain.height() / 2);
@@ -1568,8 +1623,8 @@ mod tests {
     #[test]
     fn caller_decode_limit_keeps_larger_images() {
         let page = gray_jpeg_of(2000, 3000, 0); // 600 万像素
-        assert!(prepare_comic_page_limited(&page, test_area(), 1, false, None, false, 5_000_000).is_none(), "超过调用方上限的漫画页原样保留");
-        assert_eq!(prepare_comic_page_limited(&page, test_area(), 1, false, None, false, 6_000_000), prep(&page, test_area(), false), "没超过的和缺省一样");
+        assert!(prepare_comic_page_limited(&page, test_area(), 1, false, ComicPage { gamma: None, ..Default::default() }, 5_000_000).is_none(), "超过调用方上限的漫画页原样保留");
+        assert_eq!(prepare_comic_page_limited(&page, test_area(), 1, false, ComicPage { gamma: None, ..Default::default() }, 6_000_000), prep(&page, test_area(), false), "没超过的和缺省一样");
         assert!(downscale_for_epub_limited(&page, test_screen(), 5_000_000).is_none(), "插图同理");
         assert_eq!(downscale_for_epub_limited(&page, test_screen(), 9_000_000), downscale_for_epub(&page, test_screen()));
     }

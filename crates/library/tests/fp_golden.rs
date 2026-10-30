@@ -40,6 +40,8 @@ fn mutations() -> Vec<Mutation> {
     v.push(("screen", Box::new(|p| p.screen = Screen { width: p.screen.width + 2, height: p.screen.height + 4 })));
     v.push(("comic_gamma", Box::new(|p| p.comic.gamma = p.comic.gamma.map_or(Some(1.45), |_| None))));
     v.push(("comic_autocontrast", Box::new(|p| p.comic.autocontrast = !p.comic.autocontrast)));
+    v.push(("comic_trim_specks", Box::new(|p| p.comic.trim_specks = !p.comic.trim_specks)));
+    v.push(("comic_page_numbers", Box::new(|p| p.comic.page_numbers = !p.comic.page_numbers)));
     v.push(("image_gamma", Box::new(|p| p.image_gamma = p.image_gamma.map_or(Some(1.3), |_| None))));
     v
 }

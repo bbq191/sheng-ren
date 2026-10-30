@@ -15,6 +15,7 @@ pub mod capfit;
 pub use csscascade as cascade;
 pub mod check;
 pub mod comic_detect;
+pub mod comiccrop;
 pub mod comicfxl;
 pub mod comicpad;
 pub mod ncx;
