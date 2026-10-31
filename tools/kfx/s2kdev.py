@@ -108,7 +108,7 @@ def main():
     top = int(opt.get('--top', 12))
     os.makedirs(work, exist_ok=True)
     index = book_index(books)
-    devices = ['kindle', 'ireader', 'xochitl']
+    devices = ['kindle', 'ireader']  # 2026-10-31 以前还有 xochitl（Move 卖了，模式删了）
     agree = {d: collections.Counter() for d in devices}
     total = collections.Counter()
     miss = {d: collections.Counter() for d in devices}
@@ -129,7 +129,7 @@ def main():
         subprocess.run([f'{bindir}/epub-to-kfx', f'{stem}.kindle.epub', f'{stem}.kindle.kfx'], check=True, capture_output=True)
         base_fs, _, _ = epub_nodes(f'{stem}.kindle.epub', bindir, 'kindle')
         sides = {'kindle': [(t, kfx_features(ch, base_fs)) for t, ch, _ in s2kcmp.nodes(f'{stem}.kindle.kfx')]}
-        for d in ('ireader', 'xochitl'):
+        for d in ('ireader',):
             bfs, blh, rows = epub_nodes(f'{stem}.{d}.epub', bindir, d)
             sides[d] = [(r[0], epub_features(r, bfs, blh, base_fs)) for r in rows]
         queues = {d: collections.defaultdict(collections.deque) for d in devices}

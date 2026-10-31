@@ -65,7 +65,7 @@ pub(crate) struct Net {
 }
 
 impl Net {
-    /// `$BOOKLIB_NO_NET=1` 时一开始就当断网（测试里 `sync` 不去连豆瓣，同 `BOOKLIB_NO_SSH`）。
+    /// `$BOOKLIB_NO_NET=1` 时一开始就当断网（测试里 `sync` 不去连豆瓣）。
     pub(crate) fn new() -> Net {
         let no_net = std::env::var_os("BOOKLIB_NO_NET").is_some_and(|v| v != "0");
         Net { agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).user_agent(UA).build(), last: Cell::new(None), down: RefCell::default(), down_since_ok: Cell::new(if no_net { 2 } else { 0 }), transient: RefCell::new(None) }
@@ -206,7 +206,7 @@ fn host_of(url: &str) -> &str {
     rest.split(['/', '?', '#']).next().unwrap_or(rest)
 }
 
-/// 查询参数编码（百分号编码 UTF-8 字节，只留非保留字符）。联网取元数据、调 Move 书架服务共用。
+/// 查询参数编码（百分号编码 UTF-8 字节，只留非保留字符）。联网取元数据用。
 pub(crate) fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {

@@ -42,8 +42,6 @@ pub enum BuildEvent {
     /// 一本书一个模式的结果。
     Built { device: String, title: String, built: Built },
     Failed { device: String, title: String, error: String },
-    /// 传输线程报的进度（已经是一行字）。
-    Progress(String),
     /// 传输线程意外退出，这么多本没传成。
     TransportLost { device: String, count: usize },
     /// 都生成好了，还在等设备那边传完。
@@ -142,7 +140,6 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
     let landed = |counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, report: &mut dyn FnMut(BuildEvent), ev: Event| {
         let (t, r) = match ev {
             Event::Done(t, r) => (t, r),
-            Event::Progress(line) => return report(BuildEvent::Progress(line)),
             Event::Lost { device, count } => {
                 counts.failed += count;
                 return report(BuildEvent::TransportLost { device, count });
@@ -193,7 +190,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
         }
     };
     // 书在外层、模式在内层：同一本书与模式无关的中间文件（CBZ 转换、补元数据）只做一次。
-    // 哪台设备那边排满了（Move 排版慢），先跳过它做别的设备，留到最后补，不让一台挡住另外几台
+    // 哪台设备那边排满了（拷大漫画慢），先跳过它做别的设备，留到最后补，不让一台挡住另外几台
     // 推迟的书的中间文件留着（按书 id，`Library::release_prepared_of`），补的时候不用再转一遍；这本书所有模式做完就删
     let mut later: Vec<(&Meta, &Profile)> = Vec::new();
     let mut deferred: HashMap<&str, usize> = HashMap::new();

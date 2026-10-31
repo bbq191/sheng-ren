@@ -1,10 +1,10 @@
 # 贡献说明
 
-测试用真书和三台设备只在维护者本机。**在别的机器上改代码前先读这份**，再按任务读 `docs/` 里对应的一篇。
+测试用真书和设备只在维护者本机。**在别的机器上改代码前先读这份**，再按任务读 `docs/` 里对应的一篇。
 
 ## 项目一句话
 
-电脑端电子书书库：书入库（只存索引，收 EPUB、CBZ）→ 按阅读模式生成优化过的书 → `booklib sync` 直接传到接着的设备。三个模式：`kindle`（Kindle 自带阅读器，出 KFX）、`ireader`（掌阅自带阅读器，EPUB）、`xochitl`（reMarkable Move 自带阅读器，EPUB）。文字书三台都"只修复"（profile `text_repair_only`），掌阅、Move 另加 `kindle_rules`（照 Send to Kindle 统一），Kindle 由 KFX 写出器照 Send to Kindle 的规则表做；漫画照旧完整处理。总体见 `README.md`。
+电脑端电子书书库：书入库（只存索引，收 EPUB、CBZ）→ 按阅读模式生成优化过的书 → `booklib sync` 直接传到接着的设备。两个模式：`kindle`（Kindle 自带阅读器，出 KFX）、`ireader`（掌阅自带阅读器，EPUB）（`xochitl` 2026-10-31 删了：Move 卖了）。文字书都"只修复"（profile `text_repair_only`），掌阅另加 `kindle_rules`（照 Send to Kindle 统一），Kindle 由 KFX 写出器照 Send to Kindle 的规则表做；漫画照旧完整处理。总体见 `README.md`。
 
 ## 没有测试书和设备时能做什么、不能做什么
 
@@ -20,7 +20,7 @@
 - **推到新分支，不要直接改 `master`**，由维护者在本机跑完回归、上真机看过再合。
 - 改了**会影响产物**的代码（清洗、优化、漫画、KFX 写出器、书库生成流程），在提交说明里写清"**没跑真书回归、没上真机**"，并列出预计哪些书、哪类写法会变。不要声称回归通过。
 - 只是重构时，要求产物逐字节不变——别的机器上没法验证这一点，所以写明"待本机回归确认逐字节不变"。
-- 测试一律不碰真设备（`crates/library/tests/common` 已经把设备目录指到临时目录、`BOOKLIB_NO_SSH=1`、Move 用 `FakeMove`），别加会连真设备或网络的测试。
+- 测试一律不碰真设备（`crates/library/tests/common` 已经把设备目录指到临时目录），别加会连真设备或网络的测试。
 
 ## 硬约束（定下的，不许推翻）
 
@@ -42,7 +42,7 @@
 现值只写在 `docs/development.md#版本号` 的表里，别处不写。**一律要加**，不因为"书库里的书都没碰到"省掉（已定）；版本号只进指纹、不写进书，所以内容没变的书重建出来逐字节相同、不重传。
 
 - `bookconv::optimize::OPTIMIZE_VERSION`（文字书）、`bookconv::optimize::COMIC_VERSION`（漫画；两路共用的代码改了两个都加）；
-- `bookconv::wash::KINDLE_RULES_VERSION`（只进开了 `kindle_rules` 的掌阅、Move 的文字书）；
+- `bookconv::wash::KINDLE_RULES_VERSION`（只进开了 `kindle_rules` 的模式（掌阅）的文字书）；
 - `kfx::write::WRITER_VERSION`（只进 kindle）、`bookconv::convert::CONVERT_VERSION`、`bookconv::opfmeta::VERSION`；
 - `library` 的 `PIPELINE_VERSION`（所有书都过期，慎用）。
 
@@ -55,10 +55,10 @@ cargo build --workspace
 cargo test --workspace                      # 要求全部通过
 cargo clippy --workspace --all-targets      # 要求 0 警告
 cargo test -p bookconv <测试名子串>
-cargo run -p bookconv --bin epub-optimize -- --device=kindle|ireader|xochitl 输入.epub 输出.epub
+cargo run -p bookconv --bin epub-optimize -- --device=kindle|ireader 输入.epub 输出.epub
 cargo run --release -p kfx --bin epub-to-kfx -- 优化过的.epub 输出.kfx     # --styles 打印按 CSS 原样算的样式
 cargo run --release -p kfx --bin kfx-dump -- [--type=N] [--full] 书.kfx
-shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.sh tools/regress/run.sh
+shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh tools/regress/run.sh
 ```
 
 代码风格：本仓库**不用 rustfmt 的默认宽度**（行很宽），别对整个仓库跑 `cargo fmt`；照周围代码的写法、注释密度和中文注释风格写。
@@ -70,7 +70,7 @@ shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.
 | 命令、使用方式 | `docs/usage.md` |
 | crate、模块、书库、生成流程、指纹 | `docs/architecture.md`（先看开头的核心架构图、模块交互图） |
 | 排版与优化规则、验证情况 | `docs/typesetting.md` |
-| profile 字段、阅读器怪癖、可阅读范围 | `docs/devices.md`、`docs/xochitl.md` |
+| profile 字段、阅读器怪癖、可阅读范围 | `docs/devices.md` |
 | KFX 容器、写出器、Send to Kindle 规则表 | `docs/kfx.md` |
 | 测试、回归方法、版本号、**共用轮子对照表**、工程约束 | `docs/development.md` |
 | 定过的事 | `docs/decisions.md` |

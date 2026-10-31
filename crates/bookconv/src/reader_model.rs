@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn move_profile_model() {
-        let m = ReaderModel::for_profile(profile::get("xochitl").unwrap());
+        let m = ReaderModel::for_profile(profile::fixture("xochitl").unwrap());
         assert!(!m.display_none && m.trailing_br_line && m.line_height_except_p && m.page_top.is_some());
         let h = m.heading_sizes.as_ref().unwrap();
         assert_eq!((h.keyword_size("x-large !important"), h.keyword_size("smaller")), (Some(1.514), None));

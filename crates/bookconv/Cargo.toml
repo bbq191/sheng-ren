@@ -36,6 +36,8 @@ csscascade = { path = "../csscascade" }
 
 [dev-dependencies]
 tempfile = "3"
+# 单测用 profile::fixture("xochitl")（Move 的怪癖，内置模式删了以后测只有它开的改写规则）
+profile = { path = "../profile", features = ["fixtures"] }
 
 # 按设备优化一本 EPUB（书库生成用的同一套优化器）。
 [[bin]]

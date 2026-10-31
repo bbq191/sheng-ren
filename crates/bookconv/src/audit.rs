@@ -68,7 +68,6 @@ struct Row {
     #[serde(default)]
     via: Vec<String>,
     ireader: Option<String>,
-    xochitl: Option<String>,
     #[serde(default)]
     note: String,
     #[allow(dead_code)]
@@ -79,7 +78,6 @@ impl Row {
     fn status(&self, reader: &str) -> Option<&str> {
         match reader {
             "ireader" => self.ireader.as_deref(),
-            "xochitl" => self.xochitl.as_deref(),
             _ => None,
         }
     }
@@ -109,9 +107,9 @@ fn table() -> &'static Table {
     T.get_or_init(|| toml::from_str(include_str!("../data/css-quirks.toml")).expect("css-quirks.toml 格式不对（单测会先报）"))
 }
 
-/// 怪癖表里有这台的一栏（内置的 `ireader`、`xochitl`；别的模式不体检）。
+/// 怪癖表里有这台的一栏（内置的 `ireader`；别的模式不体检）。
 pub fn covers(reader: &str) -> bool {
-    matches!(reader, "ireader" | "xochitl")
+    reader == "ireader"
 }
 
 /// 元素归类。
@@ -293,7 +291,7 @@ mod tests {
     #[test]
     fn table_parses_and_statuses_are_known() {
         for r in &table().rule {
-            for s in [&r.ireader, &r.xochitl].into_iter().flatten() {
+            if let Some(s) = &r.ireader {
                 assert!(["same", "fixed", "accept", "broken"].contains(&s.as_str()), "怪癖表状态 {s}");
             }
             for v in &r.value {
@@ -349,12 +347,12 @@ mod tests {
         if let Some(path) = std::env::var_os("QUIRKS_SNAPSHOT") {
             let mut s = String::new();
             for k in &keys {
-                let v: Vec<&str> = ["ireader", "xochitl"].iter().map(|d| deciding(k, d).and_then(|i| table().rule[i].status(d)).unwrap_or("?")).collect();
-                s.push_str(&format!("{} {} {} {}{} {} {}\n", k.0, k.1, k.2, via_name(k.3), if k.4 { "!" } else { "" }, v[0], v[1]));
+                let v = deciding(k, "ireader").and_then(|i| table().rule[i].status("ireader")).unwrap_or("?");
+                s.push_str(&format!("{} {} {} {}{} {v}\n", k.0, k.1, k.2, via_name(k.3), if k.4 { "!" } else { "" }));
             }
             std::fs::write(path, s).unwrap();
         }
-        let decided: Vec<(&str, std::collections::HashSet<usize>)> = ["ireader", "xochitl"].iter().map(|d| (*d, keys.iter().filter_map(|k| deciding(k, d)).collect())).collect();
+        let decided: Vec<(&str, std::collections::HashSet<usize>)> = ["ireader"].iter().map(|d| (*d, keys.iter().filter_map(|k| deciding(k, d)).collect())).collect();
         for (i, r) in table().rule.iter().enumerate() {
             assert!(!r.note.is_empty(), "第 {} 条 {:?} 没写说明", i + 1, r.prop);
             for (reader, used) in &decided {
@@ -379,32 +377,20 @@ mod tests {
         ]
     }
 
-    /// Move：`break-before:page` 不认（没处理）；边框、左内边距、`<style>`、行内写 em 的已经处理（KINDLE_RULES 22、23）不报；外链的首行缩进 em
-    /// 对；没验证过的另算；隐藏的不算。掌阅只有没验证过的。
+    /// 掌阅：列表项上 px 写的左右外边距没处理（报 ✗）；没验证过的另算（报 ?）；`!important`（已处理）、隐藏的不报。
     #[test]
-    fn move_flags_unhandled_and_skips_fixed() {
-        let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/><style>p.a{text-indent:2em;padding-left:1em;}</style></head>
-<body><p class="a">一</p><p class="a">二</p><div style="margin-top:1.5em;border:1px solid #000;break-before:page">三</div><p class="b">四</p><p class="h" style="padding-left:1em">五</p></body></html>"#;
-        let b = book(ch, "p.b{text-indent:2em;word-spacing:0.1em;} .h{display:none;}");
-        let f = audit(&b, None, "xochitl");
+    fn flags_unhandled_and_skips_fixed() {
+        let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head>
+<body><ul><li style="margin-left:10px">一</li><li style="margin-left:10px">二</li></ul><p class="b">三</p><p class="i">四</p><ul class="h"><li style="margin-left:10px">五</li></ul></body></html>"#;
+        let b = book(ch, "p.b{word-spacing:0.1em;} p.i{text-align:center !important;} .h{display:none;}");
+        let f = audit(&b, None, "ireader");
         let lines: Vec<String> = f.iter().map(Finding::line).collect();
-        assert!(lines[0].starts_with("✗ 行内 style break-before（keyword，block）×1："), "{lines:?}");
+        assert!(lines[0].starts_with("✗ 行内 style margin-left（px，list）×2："), "隐藏的那项不算：{lines:?}");
         assert_eq!(lines[1], "? word-spacing（em，p）×1", "{lines:?}");
-        assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(audit(&b, None, "ireader").iter().all(|f| f.verdict == Verdict::Unknown));
+        assert_eq!(lines.len(), 2, "!important 已处理、不报：{lines:?}");
         assert!(audit(&b, None, "kindle").is_empty());
-        let s = summary(&f, "Move");
+        let s = summary(&f, "ireader");
         assert_eq!(s.len(), 2);
-        assert!(s[0].starts_with("体检：Move 上和 Kindle 不一样、没处理：行内 break-before（keyword，block）×1"), "{s:?}");
-    }
-
-    /// Move：有项目符号的列表项左内边距没处理；没有符号的同普通块（已处理）不报。
-    #[test]
-    fn move_list_padding_depends_on_marker() {
-        let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body><ul><li>甲</li><li class="n">乙</li></ul></body></html>"#;
-        let f = audit(&book(ch, "li{padding-left:2em} li.n{list-style-type:none}"), None, "xochitl");
-        let lines: Vec<String> = f.iter().filter(|f| f.prop == "padding-left").map(Finding::line).collect();
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines[0].starts_with("✗ padding-left（em，list）×1"), "{lines:?}");
+        assert!(s[0].starts_with("体检：ireader 上和 Kindle 不一样、没处理：行内 margin-left（px，list）×2"), "{s:?}");
     }
 }

@@ -415,18 +415,6 @@ def moved_notes(epub):
     return keys
 
 
-def legacy_break_count(epub):
-    """`break-before:page` 这类只有新写法、没有 `page-break-before` 的声明数（Move 不认）。"""
-    import zipfile
-    z = zipfile.ZipFile(epub)
-    n = 0
-    for name in z.namelist():
-        if name.lower().endswith(('.css', '.xhtml', '.html', '.htm')):
-            s = z.read(name).decode('utf-8', 'replace')
-            n += len(re.findall(r'(?<![-\w])break-(?:before|after)\s*:\s*(?:page|always|left|right)', s))
-    return n
-
-
 def main():
     args = cli_args(2, __doc__)
     books, work, wanted = args[0], args[1], args[2:]
@@ -472,8 +460,6 @@ def main():
             d_nodes, issues = layout_of(dev, frac, profile_flag(d, 'padding'), profile_flag(d, 'block_width'), profile_flag(d, 'borders'))
             skip = moved_notes(f'{stem}.{d}.epub') if profile_flag(d, 'repair_note_links') else frozenset()
             found = compare(k_nodes, d_nodes, PAGE, page_em[d], skip) + issues + cover_issues(k_kinds, section_kinds(dev, estimated_breaks(f'{stem}.{d}.epub')))
-            if d == 'xochitl' and (c := legacy_break_count(f'{stem}.{d}.epub')):
-                found.append(('怪癖', f'{c} 处 break-before/after:page（Move 只认 page-break-*）'))
             cnt = collections.Counter(c for c, _ in found)
             for c, msg in found:
                 if len(examples[d][c]) < top * 4:

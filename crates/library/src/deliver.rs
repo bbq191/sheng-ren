@@ -2,31 +2,20 @@
 //!
 //! - **MTP**（Kindle、掌阅）：jmtpfs 自动挂载在 `<挂载目录>/<mount>`（缺省 `$XDG_RUNTIME_DIR/mtp`），下面是存储
 //!   （「Internal Storage」之类），产物放进存储根目录的 `<dir>/`，按普通文件写。挂载点在、里面有存储就算接上了。
-//! - **xochitl**（Move）：经 SSH 端口转发调设备上书架服务的导入接口：`POST /import?name=&folder=` 新加入（回 uuid），
-//!   `POST /import?uuid=&name=` 原地替换（保留 uuid、阅读进度、所在文件夹；uuid 不在了回 404），`GET /import/<uuid>` 查还在不在，
-//!   删除走它的回收站队列 `POST /trash/add {uuid, name}`（进 xochitl 回收站，能恢复）。
 //! - 没写 `[deliver]` 的模式（书库 `profiles/` 里的自定义模式）：产物照旧放在电脑上。
 //!
-//! 一轮 `sync` 里每台设备只连一次。`--watch` 每轮开头调 [`crate::Library::refresh_devices`]：MTP 设备、没接上的下次用到时
-//! 重新看；到 Move 的连接还通就接着用，断了才重连。
+//! 一轮 `sync` 里每台设备只连一次。`--watch` 每轮开头调 [`crate::Library::refresh_devices`]：没接上的下次用到时重新看。
+//! （2026-10-31 以前还有 Move：经 SSH 调设备上书架服务的导入接口，Move 卖了以后删了，要找回看 git 历史。）
 
-use crate::net::enc;
 use profile::{Deliver, Profile};
-use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
 
 /// 设备在哪找（测试、特殊环境可改）。
 #[derive(Clone, Debug)]
 pub struct DeviceEnv {
     /// MTP 挂载点的上级目录（`<它>/<mount>`）。缺省 `$BOOKLIB_MTP_DIR`，没设就是 `$XDG_RUNTIME_DIR/mtp`。
     pub mtp_base: PathBuf,
-    /// 直接用这个地址调 xochitl 的导入接口、不走 SSH（`$BOOKLIB_XOCHITL_URL`，测试用）。
-    pub xochitl_url: Option<String>,
-    /// 不连 Move（`$BOOKLIB_NO_SSH=1`；测试里别碰到插着的真机）。
-    pub no_ssh: bool,
     /// MTP 挂载点要真的挂着才算接上、才往里写（缺省开；`$BOOKLIB_MTP_NO_MOUNT_CHECK=1` 关，测试用普通目录当设备）。
     /// 2026-10-21：掌阅在 `sync` 中途断开，jmtpfs 卸掉后挂载点剩个空目录，后面的书建目录、写进了 `/run/user/1000`（tmpfs）直到写满，
     /// 还记成传上了。
@@ -42,8 +31,6 @@ impl DeviceEnv {
         });
         DeviceEnv {
             mtp_base,
-            xochitl_url: var("BOOKLIB_XOCHITL_URL").map(|v| v.to_string_lossy().trim_end_matches('/').to_string()),
-            no_ssh: var("BOOKLIB_NO_SSH").is_some_and(|v| v != "0"),
             mount_check: !var("BOOKLIB_MTP_NO_MOUNT_CHECK").is_some_and(|v| v != "0"),
         }
     }
@@ -66,24 +53,14 @@ pub(crate) enum Target {
     Local,
     /// MTP 设备上的产物根目录（`<存储>/<dir>`）；`mount` 是要一直挂着的挂载点（不查挂没挂时 `None`）。
     Dir { root: PathBuf, mount: Option<PathBuf> },
-    Xochitl(Xochitl),
 }
 
 impl Target {
-    /// Move 的话，它的连接。
-    pub(crate) fn xochitl(&self) -> Option<&Xochitl> {
-        match self {
-            Target::Xochitl(x) => Some(x),
-            _ => None,
-        }
-    }
-
-    /// 给人看的"送到哪"（`booklib devices`、`sync` 开头）：MTP 设备上的产物根目录、经哪台连的 Move；放电脑上是 `None`。
+    /// 给人看的"送到哪"（`booklib devices`、`sync` 开头）：MTP 设备上的产物根目录；放电脑上是 `None`。
     pub(crate) fn describe(&self) -> Option<String> {
         match self {
             Target::Local => None,
             Target::Dir { root, .. } => Some(root.display().to_string()),
-            Target::Xochitl(x) => Some(format!("xochitl（经 {}）", x.host)),
         }
     }
 }
@@ -100,15 +77,6 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
             let storage = mtp_storage(&point).ok_or_else(|| format!("没接上（{} 不在或没挂上）", point.display()))?;
             // `dir` 不在（掌阅原来没有 documents/）的话传书时再建：只看接没接上的命令（devices）不往设备上写
             Ok(Target::Dir { root: storage.join(dir), mount: env.mount_check.then_some(point) })
-        }
-        Some(Deliver::Xochitl { hosts, port }) => {
-            if let Some(url) = &env.xochitl_url {
-                return Xochitl::direct(url).map(Target::Xochitl);
-            }
-            if env.no_ssh {
-                return Err("没接上（BOOKLIB_NO_SSH）".into());
-            }
-            Xochitl::connect(hosts, *port).map(Target::Xochitl)
         }
     }
 }
@@ -213,7 +181,7 @@ fn put_file_once(src: &Path, dest: &Path, keep_src: bool, compare: bool, direct:
     Ok(true)
 }
 
-/// 往设备上拷文件、传给 Move 的读写块大小。
+/// 往设备上拷文件的读写块大小。
 const COPY_BUF: usize = 1 << 20;
 
 /// 两个文件逐字节相同（`b` 不在算不同）。先比大小，一样才读。
@@ -236,361 +204,6 @@ pub(crate) fn same_bytes(a: &Path, b: &Path) -> bool {
         if rb.read_exact(&mut bb[..n]).is_err() || ba[..n] != bb[..n] {
             return false;
         }
-    }
-}
-
-/// xochitl 里的一本书（导入接口的回执）。
-#[derive(Debug, Clone)]
-pub struct Doc {
-    pub uuid: String,
-    /// xochitl 书库里显示的名字（`.metadata` 的 `visibleName`；回收站接口要核对它）。
-    pub name: String,
-}
-
-/// 交了导入（或替换）以后：书架服务给的任务号（它在后台加入 xochitl、等排版，之后查 [`MoveClient::poll`]），
-/// 或旧版书架服务当场给的结果。
-pub(crate) enum Submitted {
-    Job(String),
-    Done(Doc),
-}
-
-/// 导入任务现在怎样。
-pub(crate) enum JobState {
-    /// 还在做：书架服务说的当前阶段（排队、建文件夹、等 xochitl 排版……）。
-    Running(String),
-    Done(Doc),
-    Failed(String),
-}
-
-/// 连 Move 之前探 SSH 端口最多等多久（USB 网卡、局域网里几毫秒就通）。
-const SSH_PROBE: Duration = Duration::from_millis(800);
-
-/// 查导入任务的间隔。
-pub(crate) const POLL: Duration = Duration::from_secs(2);
-/// 要替换的那本书架服务那边正在替换时最多等多久（大漫画排版要几分钟）；旧版书架服务查不到替换做完没有，隔多久重交。
-const BUSY_RETRY: Duration = Duration::from_secs(5);
-const BUSY_WAIT: Duration = Duration::from_secs(30 * 60);
-
-/// 交书没交成：这本正在替换（等一会儿再交），或别的错。
-enum Sent {
-    Busy(String),
-    Failed(String),
-}
-
-impl Sent {
-    fn into_message(self) -> String {
-        match self {
-            Sent::Busy(m) => format!("传到 Move 失败：{m}（等了 {} 分钟还在替换）", BUSY_WAIT.as_secs() / 60),
-            Sent::Failed(m) => m,
-        }
-    }
-}
-
-/// 调 Move 上书架服务的接口：只有地址和 HTTP 客户端，能复制、能交给传输线程用（SSH 隧道留在 [`Xochitl`] 里）。
-#[derive(Clone)]
-pub(crate) struct MoveClient {
-    base: String,
-    agent: ureq::Agent,
-}
-
-impl MoveClient {
-    fn new(base: String) -> MoveClient {
-        // 读写超时只管一次请求（传书体、查任务）；等 xochitl 排版是查任务，不挂着连接
-        MoveClient { base, agent: ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(5)).timeout_read(IO_TIMEOUT).timeout_write(IO_TIMEOUT).build() }
-    }
-
-    fn status(&self) -> Result<(), String> {
-        self.agent.get(&format!("{}/status", self.base)).timeout(Duration::from_secs(5)).call().map(|_| ()).map_err(|e| format!("书架服务没答话（{}）", http_err(e)))
-    }
-
-    /// 交一本新书：放进文件夹 `folder`（`a/b` 多级，书架服务逐级找、没有就建；空 = 书库根）。
-    pub(crate) fn submit_import(&self, file: &Path, name: &str, folder: &str) -> Result<Submitted, String> {
-        let url = format!("{}/import?name={}&folder={}", self.base, enc(name), enc(folder));
-        self.send(&url, file).map_err(Sent::into_message)?.ok_or_else(|| "导入接口回 404（设备上的书架服务太旧，没有导入接口）".into())
-    }
-
-    /// 交一份新内容原地替换 `uuid`（保留 uuid、进度、文件夹）。这本在设备上已经不在了（删了、进了回收站）返回 `None`。
-    /// 书架服务那边这本正在替换（上一次 `sync` 交的还没做完，比如被 Ctrl+C 打断以后它还在后台排版大漫画；回 409，旧版回 400）：
-    /// 等它做完再交（[`MoveClient::wait_replaced`]），最多等 [`BUSY_WAIT`]（2026-10-09 真机：第二次 `sync` 交《哆啦A夢》卷03 时回"正在替换中"，算成了失败）。
-    pub(crate) fn submit_replace(&self, uuid: &str, file: &Path, name: &str) -> Result<Option<Submitted>, String> {
-        let url = format!("{}/import?uuid={}&name={}", self.base, enc(uuid), enc(name));
-        let start = Instant::now();
-        loop {
-            match self.send(&url, file) {
-                Err(Sent::Busy(_)) if start.elapsed() < BUSY_WAIT => self.wait_replaced(uuid, start),
-                r => return r.map_err(Sent::into_message),
-            }
-        }
-    }
-
-    /// 等书架服务把这本上一次的替换做完：轮询 `GET /import/<uuid>` 的 `replacing`（轻，不用一遍遍重传整本书）。书架服务太旧、
-    /// 回执里没有这个字段的，等 [`BUSY_RETRY`] 就回去重交；查不了的也回去重交（重交时再见分晓）。
-    fn wait_replaced(&self, uuid: &str, start: Instant) {
-        loop {
-            std::thread::sleep(POLL);
-            let replacing = self.agent.get(&format!("{}/import/{}", self.base, enc(uuid))).call().ok().and_then(|r| json_of(r).ok()).and_then(|v| v["replacing"].as_bool());
-            match replacing {
-                Some(true) if start.elapsed() < BUSY_WAIT => {}
-                Some(_) => return,
-                None => {
-                    std::thread::sleep(BUSY_RETRY);
-                    return;
-                }
-            }
-        }
-    }
-
-    fn send(&self, url: &str, file: &Path) -> Result<Option<Submitted>, Sent> {
-        let f = std::fs::File::open(file).map_err(|e| Sent::Failed(format!("读 {}: {e}", file.display())))?;
-        let len = f.metadata().map_err(|e| Sent::Failed(e.to_string()))?.len();
-        let r = self.agent.post(url).set("Content-Type", "application/epub+zip").set("Content-Length", &len.to_string()).send(std::io::BufReader::with_capacity(COPY_BUF, f));
-        match r {
-            Ok(resp) => {
-                let v = json_of(resp).map_err(Sent::Failed)?;
-                Ok(Some(match v["job"].as_str() {
-                    Some(job) => Submitted::Job(job.to_string()),
-                    None => Submitted::Done(doc_of(&v).map_err(Sent::Failed)?),
-                }))
-            }
-            Err(ureq::Error::Status(404, _)) => Ok(None),
-            Err(e) => {
-                let busy = matches!(&e, ureq::Error::Status(409, _));
-                let msg = http_err(e);
-                // 旧版书架服务回 400 + "正在替换中"，新版回 409
-                if busy || msg.contains("正在替换") { Err(Sent::Busy(msg)) } else { Err(Sent::Failed(format!("传到 Move 失败：{msg}"))) }
-            }
-        }
-    }
-
-    /// 查导入任务。书架服务不认识这个任务（重启过）算失败：书可能已经加进去了，下次 sync 交同样的内容时它会认回来，不重复加。
-    pub(crate) fn poll(&self, job: &str) -> Result<JobState, String> {
-        match self.agent.get(&format!("{}/import/jobs/{}", self.base, enc(job))).call() {
-            Ok(resp) => {
-                let v = json_of(resp)?;
-                Ok(match v["state"].as_str() {
-                    Some("done") => JobState::Done(doc_of(&v)?),
-                    Some("failed") => JobState::Failed(v["message"].as_str().unwrap_or("书架服务没说原因").to_string()),
-                    _ => JobState::Running(v["stage"].as_str().unwrap_or_default().to_string()),
-                })
-            }
-            Err(ureq::Error::Status(404, _)) => Ok(JobState::Failed("书架服务那边没有这个导入任务了（重启过？）".into())),
-            Err(e) => Err(format!("查 Move 上的导入任务失败：{}", http_err(e))),
-        }
-    }
-
-    /// 等交出去的这件做完（单本生成、测试用；`sync` 的传输线程自己轮流查，见 [`crate::Pipeline`]）。
-    pub(crate) fn wait(&self, s: Submitted) -> Result<Doc, String> {
-        let job = match s {
-            Submitted::Done(d) => return Ok(d),
-            Submitted::Job(j) => j,
-        };
-        loop {
-            match self.poll(&job)? {
-                JobState::Done(d) => return Ok(d),
-                JobState::Failed(m) => return Err(format!("Move 上加入失败：{m}")),
-                JobState::Running(_) => std::thread::sleep(POLL),
-            }
-        }
-    }
-
-    /// 一批文档还在不在 xochitl 书库里（`POST /import/states`，一次请求）：uuid → 在（没删、没进回收站）。设备上的书架服务太旧、
-    /// 没有这个接口时 `None`（调用方改成一本一本查）。
-    pub(crate) fn states(&self, uuids: &[String]) -> Result<Option<HashMap<String, bool>>, String> {
-        let r = self.agent.post(&format!("{}/import/states", self.base)).set("Content-Type", "application/json").send_string(&serde_json::json!({ "uuids": uuids }).to_string());
-        match r {
-            Ok(resp) => {
-                let v = json_of(resp)?;
-                let docs = v["docs"].as_object().ok_or("书架服务的回执里没有 docs")?;
-                Ok(Some(uuids.iter().map(|u| (u.clone(), docs.get(u).is_some_and(|d| !d["deleted"].as_bool().unwrap_or(false)))).collect()))
-            }
-            Err(ureq::Error::Status(404 | 405, _)) => Ok(None),
-            Err(e) => Err(format!("查 Move 上的书失败：{}", http_err(e))),
-        }
-    }
-
-    /// 这本还在 xochitl 书库里（没删、没进回收站）。
-    pub(crate) fn present(&self, uuid: &str) -> Result<bool, String> {
-        match self.agent.get(&format!("{}/import/{}", self.base, enc(uuid))).call() {
-            Ok(resp) => {
-                let v = json_of(resp)?;
-                Ok(!v["deleted"].as_bool().unwrap_or(false))
-            }
-            Err(ureq::Error::Status(404, _)) => Ok(false),
-            Err(e) => Err(format!("查 Move 上的书失败：{}", http_err(e))),
-        }
-    }
-
-    /// 移进 xochitl 回收站（已经不在了算成功）。
-    pub(crate) fn trash(&self, uuid: &str, name: &str) -> Result<(), String> {
-        if !self.present(uuid)? {
-            return Ok(());
-        }
-        self.agent
-            .post(&format!("{}/trash/add", self.base))
-            .set("Content-Type", "application/json")
-            .send_string(&serde_json::json!({"uuid": uuid, "name": name}).to_string())
-            .map(|_| ())
-            .map_err(|e| format!("删 Move 上的《{name}》失败：{}", http_err(e)))
-    }
-}
-
-/// 到 Move 上书架服务的连接：SSH 端口转发（[`Xochitl::connect`]）或直接给的地址（测试）。接口调用见 [`MoveClient`]（`Deref`）。
-pub(crate) struct Xochitl {
-    client: MoveClient,
-    tunnel: std::cell::RefCell<Option<Child>>,
-    /// 连的是哪台（提示用）。
-    pub host: String,
-    /// 这一轮查回来的书还在不在（[`Xochitl::present_cached`]）。
-    presence: std::cell::RefCell<Presence>,
-}
-
-/// Move 上的书在不在，这一轮查过没有。
-enum Presence {
-    /// 还没查（每轮 `sync` 开头、`--watch` 每轮重新查）。
-    Unknown,
-    /// 一次查回来的一批：uuid → 在不在。
-    Known(HashMap<String, bool>),
-    /// 书架服务太旧、没有批量接口：一本一本查。
-    Unsupported,
-}
-
-impl std::ops::Deref for Xochitl {
-    type Target = MoveClient;
-    fn deref(&self) -> &MoveClient {
-        &self.client
-    }
-}
-
-impl Drop for Xochitl {
-    fn drop(&mut self) {
-        if let Some(c) = self.tunnel.get_mut().as_mut() {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-    }
-}
-
-/// 传书体（大漫画经 USB 也要一阵）、查一次的读写超时。等排版不靠它（查任务）。
-const IO_TIMEOUT: Duration = Duration::from_secs(600);
-
-impl Xochitl {
-    /// 这本还在不在：这一轮第一次问的时候把 `all()`（生成记录里这台 Move 上的全部 uuid）一次查回来，之后查表——以前每本书各开
-    /// 一次请求，几百本经 Wi-Fi 和 SSH 隧道要好几秒（2026-10-09）。表里没有的（这一轮新加的）、书架服务太旧没有批量接口的，一本一本查。
-    pub(crate) fn present_cached(&self, uuid: &str, all: impl FnOnce() -> Vec<String>) -> Result<bool, String> {
-        let mut p = self.presence.borrow_mut();
-        if matches!(*p, Presence::Unknown) {
-            *p = match self.client.states(&all())? {
-                Some(m) => Presence::Known(m),
-                None => Presence::Unsupported,
-            };
-        }
-        if let Presence::Known(m) = &*p {
-            if let Some(&alive) = m.get(uuid) {
-                return Ok(alive);
-            }
-        }
-        drop(p);
-        self.client.present(uuid)
-    }
-
-    /// 下一轮重新查（`sync --watch` 每轮开头：这期间维护者可能在 Move 上删了书）。书架服务太旧的记着，不再试批量接口。
-    pub(crate) fn forget_presence(&self) {
-        let mut p = self.presence.borrow_mut();
-        if matches!(*p, Presence::Known(_)) {
-            *p = Presence::Unknown;
-        }
-    }
-
-    fn direct(url: &str) -> Result<Xochitl, String> {
-        let x = Xochitl { client: MoveClient::new(url.to_string()), tunnel: Default::default(), host: url.to_string(), presence: std::cell::RefCell::new(Presence::Unknown) };
-        x.status()?;
-        Ok(x)
-    }
-
-    /// 给传输线程用的一份客户端。
-    pub(crate) fn client(&self) -> MoveClient {
-        self.client.clone()
-    }
-
-    /// 依次试 `hosts`：SSH 连得上、端口转发建得起来、书架服务答话的第一个。
-    fn connect(hosts: &[String], port: u16) -> Result<Xochitl, String> {
-        let mut why = Vec::new();
-        for host in hosts {
-            match Self::tunnel(host, port) {
-                Ok(x) => return Ok(x),
-                Err(e) => why.push(format!("{host}：{e}")),
-            }
-        }
-        Err(format!("没接上（{}）", why.join("；")))
-    }
-
-    fn tunnel(host: &str, port: u16) -> Result<Xochitl, String> {
-        // 地址是 IP 的先探一下 22 端口：Move 没接、睡了时不用等 ssh 超时（每个地址最长 8 秒，`sync --watch` 每轮都要等两个地址；
-        // 2026-10-09 审计）。写的是 ssh 配置里的别名（端口、跳板机可能另配）就不探，交给 ssh
-        if let Some(ip) = host.rsplit('@').next().and_then(|h| h.parse::<std::net::IpAddr>().ok()) {
-            if std::net::TcpStream::connect_timeout(&(ip, 22).into(), SSH_PROBE).is_err() {
-                return Err("SSH 端口连不上（设备没接上或睡着了）".into());
-            }
-        }
-        // 本地随便挑一个空闲端口（绑 0 再放开；和 ssh 绑上之间被别人占走的话，ssh 因 ExitOnForwardFailure 退出，报连不上）
-        let local = std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map_err(|e| e.to_string())?.port();
-        let child = Command::new("ssh")
-            // 不复用 ssh 配置里的 ControlMaster：复用时转发交给已有的主连接、ssh 本身立刻退出，转发也不随本进程结束
-            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=4", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-N", "-L"])
-            .arg(format!("127.0.0.1:{local}:127.0.0.1:{port}"))
-            .arg(host)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("起不了 ssh：{e}"))?;
-        let x = Xochitl { client: MoveClient::new(format!("http://127.0.0.1:{local}")), tunnel: std::cell::RefCell::new(Some(child)), host: host.to_string(), presence: std::cell::RefCell::new(Presence::Unknown) };
-        let deadline = Instant::now() + Duration::from_secs(8);
-        loop {
-            if let Some(st) = x.tunnel.borrow_mut().as_mut().and_then(|c| c.try_wait().ok().flatten()) {
-                return Err(format!("SSH 连不上（{st}）"));
-            }
-            if std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], local).into(), Duration::from_millis(300)).is_ok() {
-                // 转发通了还要书架服务答话（服务没起时连接会被设备那头断掉）
-                match x.status() {
-                    Ok(()) => return Ok(x),
-                    Err(e) if Instant::now() > deadline => return Err(e),
-                    Err(_) => {}
-                }
-            } else if Instant::now() > deadline {
-                return Err("端口转发没建起来".into());
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-    }
-
-    /// 隧道还在、书架服务还答话（Move 拔了、睡了、服务停了都算断了）。
-    pub(crate) fn alive(&self) -> bool {
-        let tunnel_up = self.tunnel.borrow_mut().as_mut().is_none_or(|c| matches!(c.try_wait(), Ok(None)));
-        tunnel_up && self.status().is_ok()
-    }
-
-}
-
-fn json_of(resp: ureq::Response) -> Result<serde_json::Value, String> {
-    let body = resp.into_string().map_err(|e| format!("回执读不出来：{e}"))?;
-    serde_json::from_str(&body).map_err(|e| format!("回执不是 JSON：{e}"))
-}
-
-fn doc_of(v: &serde_json::Value) -> Result<Doc, String> {
-    let uuid = v["uuid"].as_str().filter(|u| !u.is_empty()).ok_or("导入接口回执里没有 uuid")?.to_string();
-    Ok(Doc { uuid, name: v["name"].as_str().unwrap_or_default().to_string() })
-}
-
-/// 出错时尽量带上服务端给的说明（回执 `{"message": …}` 或正文）。
-fn http_err(e: ureq::Error) -> String {
-    match e {
-        ureq::Error::Status(code, resp) => {
-            let body = resp.into_string().unwrap_or_default();
-            let msg = serde_json::from_str::<serde_json::Value>(&body).ok().and_then(|v| v["message"].as_str().or(v["error"].as_str()).map(str::to_string)).unwrap_or(body);
-            format!("HTTP {code} {}", msg.trim())
-        }
-        ureq::Error::Transport(t) => t.to_string(),
     }
 }
 
@@ -618,7 +231,7 @@ mod tests {
         // 设备断开后挂载点剩下的空目录里有存储目录（上次写进去的）也不算接上
         std::fs::create_dir_all(d.path().join("ireader/内部共享存储空间")).unwrap();
         let p = profile::get("ireader").unwrap();
-        let env = DeviceEnv { mtp_base: d.path().into(), xochitl_url: None, no_ssh: true, mount_check: true };
+        let env = DeviceEnv { mtp_base: d.path().into(), mount_check: true };
         assert!(connect(&env, p).err().unwrap().contains("没挂上"));
         let t = connect(&DeviceEnv { mount_check: false, ..env }, p).unwrap();
         assert!(matches!(t, Target::Dir { mount: None, .. }));
@@ -642,10 +255,5 @@ mod tests {
         assert!(put_file(&src, &dest, true, false, true).unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"xyz1");
         assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 2, "只有 src、dest");
-    }
-
-    #[test]
-    fn query_encoding() {
-        assert_eq!(enc("a b/书.epub"), "a%20b%2F%E4%B9%A6.epub");
     }
 }

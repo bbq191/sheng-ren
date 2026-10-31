@@ -7,9 +7,8 @@ use std::io::Write;
 #[test]
 fn add_build_skip_remove() {
     let dir = tempfile::tempdir().unwrap();
-    let mv = common::FakeMove::start();
     let lib_dir = dir.path().join("lib");
-    let lib = common::open_with(&lib_dir, Some(&mv));
+    let lib = common::open(&lib_dir);
     let src = dir.path().join("风起.epub");
     std::fs::write(&src, sample_epub("风起")).unwrap();
     let Added::New(meta) = lib.add_file(&src).unwrap() else { panic!("应是新书") };
@@ -19,12 +18,8 @@ fn add_build_skip_remove() {
     assert!(!lib.is_comic(&meta).unwrap(), "文字书不算漫画");
     assert_eq!(lib.list().len(), 1);
 
-    // 产物直接送设备：Kindle、掌阅放存储根目录的 documents/（add 进来的书在顶层），Move 经导入接口加入 xochitl 书库根
-    for (dev, want) in [
-        ("ireader", common::documents(&lib_dir, "ireader").join("风起.epub")),
-        ("kindle", common::documents(&lib_dir, "kindle").join("风起.kfx")),
-        ("xochitl", std::path::PathBuf::from("xochitl:风起.epub")),
-    ] {
+    // 产物直接送设备：Kindle、掌阅放存储根目录的 documents/（add 进来的书在顶层）
+    for (dev, want) in [("ireader", common::documents(&lib_dir, "ireader").join("风起.epub")), ("kindle", common::documents(&lib_dir, "kindle").join("风起.kfx"))] {
         let p = profile::get(dev).unwrap();
         let Built::Written { path, warnings } = lib.build(&meta, p, false).unwrap() else { panic!("{dev} 第一次应生成") };
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -33,36 +28,17 @@ fn add_build_skip_remove() {
         assert!(matches!(lib.build(&meta, p, true).unwrap(), Built::Same { .. }), "{dev} --force 重建：和设备上的一样，不再传");
     }
     assert!(!std::path::absolute(lib.root()).unwrap().join("output").exists(), "电脑上不留产物");
-    // Move：--force 重建出来一样的不再传；内容变了（这里改记录里的哈希来模拟）是原地替换同一本（uuid 不变），不另加一本
-    assert_eq!(mv.docs.lock().unwrap().values().next().unwrap().replaced, 0);
-    let xp = lib.root().join("output-state/xochitl.json");
-    let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&xp).unwrap()).unwrap();
-    st["books"][&meta.id]["sha"] = "旧的".into();
-    std::fs::write(&xp, st.to_string()).unwrap();
-    let lib = common::open_with(&lib_dir, Some(&mv));
-    assert!(matches!(lib.build(&meta, profile::get("xochitl").unwrap(), true).unwrap(), Built::Written { .. }));
-    let docs = mv.docs.lock().unwrap().clone();
-    assert_eq!(docs.len(), 1);
-    let doc = docs.values().next().unwrap();
-    assert_eq!((doc.name.as_str(), doc.folder.as_str(), doc.replaced), ("风起", "", 1));
-    let names: Vec<String> = bookconv::epubzip::read_entries(&doc.bytes).unwrap().into_iter().map(|e| e.name).collect();
-    assert!(names.iter().any(|n| n == "META-INF/eink-optimized"), "{names:?}");
     let status: Vec<(String, Option<bool>)> = lib.outputs(&meta).into_iter().map(|o| (o.device, o.fresh)).collect();
-    assert_eq!(status, [("ireader".to_string(), Some(true)), ("kindle".to_string(), Some(true)), ("xochitl".to_string(), Some(true))], "list 能看到三个模式的产物且都最新");
+    assert_eq!(status, [("ireader".to_string(), Some(true)), ("kindle".to_string(), Some(true))], "list 能看到两个模式的产物且都最新");
     // Kindle 文字书的产物是 KFX（`CONT` 容器，读得回来）
     let kfx = std::fs::read(common::documents(&lib_dir, "kindle").join("风起.kfx")).unwrap();
     assert_eq!(&kfx[..4], b"CONT");
     assert!(kfx::Container::parse(&kfx).is_ok());
     // 产物指纹被改（模拟母版或规则变化）→ 过期
-    let state_path = lib.root().join("output-state/xochitl.json");
+    let state_path = lib.root().join("output-state/ireader.json");
     let st = std::fs::read_to_string(&state_path).unwrap().replace(&format!("|{}|", bookconv::optimize::OPTIMIZE_VERSION), "|0|");
     std::fs::write(&state_path, st).unwrap();
-    assert_eq!(lib.outputs(&meta).into_iter().find(|o| o.device == "xochitl").unwrap().fresh, Some(false));
-    // Move 上的那本被维护者删了：下一轮（新的一次 sync，或 --watch 的下一轮）重新加入一本
-    mv.docs.lock().unwrap().values_mut().for_each(|d| d.deleted = true);
-    lib.refresh_devices();
-    assert!(matches!(lib.build(&meta, profile::get("xochitl").unwrap(), false).unwrap(), Built::Written { .. }));
-    assert_eq!(mv.live(), [(String::new(), "风起".to_string())]);
+    assert_eq!(lib.outputs(&meta).into_iter().find(|o| o.device == "ireader").unwrap().fresh, Some(false));
     // 书库只存索引，不复制原件
     let files: Vec<String> = std::fs::read_dir(dir.path().join(format!("lib/masters/{}", meta.id))).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert_eq!(files, ["meta.json"]);
@@ -70,7 +46,6 @@ fn add_build_skip_remove() {
     lib.remove(&meta.id).unwrap();
     assert!(lib.list().is_empty());
     assert!(!common::documents(&lib_dir, "ireader").join("风起.epub").exists() && !common::documents(&lib_dir, "kindle").join("风起.kfx").exists(), "删书连设备上的产物一起删");
-    assert!(mv.live().is_empty(), "Move 上的进回收站");
 }
 
 /// 设备没接上：生成报没接上；删书时删不了的记着，接上后删（flush_removed）。手工拷上去、逐字节相同的同名文件认领，不另起名字。
@@ -366,6 +341,7 @@ fn events(lib: &Library, prune: Prune) -> (library::SyncReport, Vec<String>) {
                 library::SyncEvent::Released(p, _, removed) => format!("released {} {removed}", p.display()),
                 library::SyncEvent::Failed(p, e) => format!("failed {}: {e}", p.display()),
                 library::SyncEvent::Unreadable(p, e) => format!("unreadable {}: {e}", p.display()),
+                library::SyncEvent::ForgotDevices(p, gone, whole) => format!("forgot {} {gone:?} {whole}", p.display()),
             })
         })
         .unwrap();
@@ -511,8 +487,7 @@ fn sync_failures_set_exit_code() {
 fn outputs_mirror_tracked_dirs_beside_them() {
     let dir = tempfile::tempdir().unwrap();
     let base = std::fs::canonicalize(dir.path()).unwrap();
-    let mv = common::FakeMove::start();
-    let lib = common::open_with(&base.join("lib"), Some(&mv));
+    let lib = common::open(&base.join("lib"));
     let (ir, kd) = (common::documents(&base.join("lib"), "ireader"), common::documents(&base.join("lib"), "kindle"));
     let books = base.join("ereader/books");
     std::fs::create_dir_all(books.join("haodoo")).unwrap();
@@ -521,21 +496,18 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     lib.track(&books).unwrap();
     lib.sync(Prune::Keep, |_| {}).unwrap();
     let find = |t: &str| lib.list().into_iter().find(|m| m.title == t).unwrap();
-    let (ireader, kindle, xochitl) = (profile::get("ireader").unwrap(), profile::get("kindle").unwrap(), profile::get("xochitl").unwrap());
+    let (ireader, kindle) = (profile::get("ireader").unwrap(), profile::get("kindle").unwrap());
     // 用原件路径挑书：文件＝那一本，目录＝下面所有的；路径可以是相对的、不规范的
     let titles = |sel: &str| lib.select(&[sel.to_string()]).into_iter().map(|m| m.title).collect::<Vec<_>>();
     assert_eq!(titles(books.join("haodoo/x.epub").to_str().unwrap()), ["甲"]);
     assert_eq!(titles(books.join("haodoo/../haodoo").to_str().unwrap()), ["甲"]);
     assert_eq!(titles(books.to_str().unwrap()).len(), 2);
 
-    // 跟踪目录 D 里的书：设备上 documents/<子目录>/<书名>.<扩展名>；Move 上放进同名文件夹
+    // 跟踪目录 D 里的书：设备上 documents/<子目录>/<书名>.<扩展名>
     let Built::Written { path, .. } = lib.build(&find("甲"), ireader, false).unwrap() else { panic!() };
     assert_eq!(path, ir.join("haodoo/甲.epub"));
     let Built::Written { path, .. } = lib.build(&find("甲"), kindle, false).unwrap() else { panic!() };
     assert_eq!(path, kd.join("haodoo/甲.kfx"));
-    let Built::Written { path, .. } = lib.build(&find("甲"), xochitl, false).unwrap() else { panic!() };
-    assert_eq!(path, std::path::PathBuf::from("xochitl:haodoo/甲.epub"));
-    assert_eq!(mv.live(), [("haodoo".to_string(), "甲".to_string())]);
     let Built::Written { path, .. } = lib.build(&find("根"), ireader, false).unwrap() else { panic!() };
     assert_eq!(path, ir.join("根.epub"), "跟踪目录顶层的书放在 documents 顶层");
     // add 进来的书（不在跟踪目录里）：documents 顶层
@@ -555,9 +527,6 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     assert!(!ir.join("haodoo").exists(), "变空的旧目录删掉");
     assert!(ir.is_dir(), "documents 不删");
     assert!(matches!(lib.build(&find("甲"), ireader, false).unwrap(), Built::UpToDate(_)));
-    // Move：文件夹变了，加入新文件夹里的一本，旧的进回收站
-    assert!(matches!(lib.build(&find("甲"), xochitl, false).unwrap(), Built::Written { .. }));
-    assert_eq!(mv.live(), [("收藏".to_string(), "甲".to_string())]);
 
     // 目录里不认识的文件：不覆盖（撞名加 id 后缀），也从来不删（目录因此不空，也不删目录）
     let other = kd.join("收藏");
@@ -588,7 +557,6 @@ fn outputs_mirror_tracked_dirs_beside_them() {
     lib.remove(&m.id).unwrap();
     assert!(!path.exists() && !to.exists());
     assert!(ir.join("收藏/别的.epub").exists(), "不认识的文件不删");
-    assert!(mv.live().is_empty(), "Move 上的进回收站");
 }
 
 #[test]
@@ -855,7 +823,6 @@ fn legacy_entries_of_dropped_formats_are_kept_and_skipped() {
     assert!(o.status.success(), "{stdout}{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(stdout.matches("跳过").count(), 1, "每本只提示一次：{stdout}");
     assert!(common::documents(&lib_dir, "ireader").join("新书.epub").is_file() && common::documents(&lib_dir, "kindle").join("新书.kfx").is_file(), "不写 --device = 全部模式：{stdout}");
-    assert!(stdout.contains("[xochitl] 没接上"), "没接上的设备报一行、不算失败：{stdout}");
 }
 
 #[test]
@@ -1208,44 +1175,34 @@ fn book_updates_replace_outputs_without_deleting_the_new_one() {
     assert!(output_has(&plain, "另一份") && count() == 1);
 }
 
-/// 改成直接送设备以前留在电脑上的产物（`D/../ireader/…`、`D/../xochitl/…`）：内容没变就直接挪到设备上（不重新生成），电脑上的删掉。
+/// 改成直接送设备以前留在电脑上的产物（`D/../ireader/…`）：内容没变就直接挪到设备上（不重新生成），电脑上的删掉。
 #[test]
 fn local_outputs_from_before_move_onto_devices() {
     let dir = tempfile::tempdir().unwrap();
     let base = std::fs::canonicalize(dir.path()).unwrap();
     let lib_dir = base.join("lib");
-    let mv = common::FakeMove::start();
-    let lib = common::open_with(&lib_dir, Some(&mv));
+    let lib = common::open(&lib_dir);
     let src = base.join("书.epub");
     std::fs::write(&src, sample_epub("书")).unwrap();
     let Added::New(m) = lib.add_file(&src).unwrap() else { panic!() };
-    for dev in ["ireader", "xochitl"] {
-        lib.build(&m, profile::get(dev).unwrap(), false).unwrap();
-        // 把记录改回"产物在电脑上"的样子
-        let local_root = base.join(dev);
-        std::fs::create_dir_all(&local_root).unwrap();
-        let local = local_root.join("书.epub");
-        let sp = lib_dir.join(format!("output-state/{dev}.json"));
-        let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
-        let e = &mut st["books"][&m.id];
-        if dev == "ireader" {
-            std::fs::rename(e["path"].as_str().unwrap(), &local).unwrap();
-        } else {
-            std::fs::write(&local, &mv.docs.lock().unwrap().values().next().unwrap().bytes).unwrap();
-            mv.docs.lock().unwrap().clear();
-            e.as_object_mut().unwrap().remove("uuid");
-            e.as_object_mut().unwrap().remove("name");
-        }
-        e["path"] = serde_json::json!(local);
-        e["root"] = serde_json::json!(local_root);
-        std::fs::write(&sp, st.to_string()).unwrap();
-        let lib = common::open_with(&lib_dir, Some(&mv));
-        let Built::Moved { from, .. } = lib.build(&m, profile::get(dev).unwrap(), false).unwrap() else { panic!("{dev} 应直接挪过去") };
-        assert_eq!(from, local);
-        assert!(!local.exists(), "{dev}：电脑上的删掉");
-    }
+    let ireader = profile::get("ireader").unwrap();
+    lib.build(&m, ireader, false).unwrap();
+    // 把记录改回"产物在电脑上"的样子
+    let local_root = base.join("ireader");
+    std::fs::create_dir_all(&local_root).unwrap();
+    let local = local_root.join("书.epub");
+    let sp = lib_dir.join("output-state/ireader.json");
+    let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    let e = &mut st["books"][&m.id];
+    std::fs::rename(e["path"].as_str().unwrap(), &local).unwrap();
+    e["path"] = serde_json::json!(local);
+    e["root"] = serde_json::json!(local_root);
+    std::fs::write(&sp, st.to_string()).unwrap();
+    let lib = common::open(&lib_dir);
+    let Built::Moved { from, .. } = lib.build(&m, ireader, false).unwrap() else { panic!("应直接挪过去") };
+    assert_eq!(from, local);
+    assert!(!local.exists(), "电脑上的删掉");
     assert!(common::documents(&lib_dir, "ireader").join("书.epub").is_file());
-    assert_eq!(mv.live(), [(String::new(), "书".to_string())]);
 }
 
 /// 以前在电脑上生成、用户自己拷上设备（电脑上的已经挪走）的产物：先比较——指纹没变，设备上同子目录同名的那份直接认领、
@@ -1289,19 +1246,18 @@ fn manual_copies_on_device_are_taken_over() {
 }
 
 /// sync 的做法：先比较、生成（prepare），传设备交给各设备的传输线程（Pipeline），传完记下来（complete）。
-/// 几本书、Kindle 和 Move 同时在传；第二轮全都已是最新。
+/// 几本书、Kindle 和掌阅同时在传；第二轮全都已是最新。
 #[test]
 fn pipeline_transfers_in_background_and_records_when_done() {
     let dir = tempfile::tempdir().unwrap();
     let lib_dir = dir.path().join("lib");
-    let mv = common::FakeMove::start();
-    let lib = common::open_with(&lib_dir, Some(&mv));
+    let lib = common::open(&lib_dir);
     for t in ["甲", "乙", "丙"] {
         let p = dir.path().join(format!("{t}.epub"));
         std::fs::write(&p, sample_epub(t)).unwrap();
         lib.add_file(&p).unwrap();
     }
-    let devices = [profile::get("ireader").unwrap(), profile::get("xochitl").unwrap()];
+    let devices = [profile::get("ireader").unwrap(), profile::get("kindle").unwrap()];
     let run = || {
         let mut pipe = library::Pipeline::default();
         let mut results = Vec::new();
@@ -1327,25 +1283,11 @@ fn pipeline_transfers_in_background_and_records_when_done() {
     };
     let first = run();
     assert_eq!(first.iter().filter(|b| matches!(b, Built::Written { .. })).count(), 6, "{first:?}");
-    assert_eq!(mv.live().len(), 3);
     assert_eq!(common::documents(&lib_dir, "ireader").read_dir().unwrap().count(), 3);
+    assert_eq!(common::documents(&lib_dir, "kindle").read_dir().unwrap().count(), 3);
     assert!(std::fs::read_dir(&lib_dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".tmp-")), "临时目录传完就删");
     let second = run();
     assert!(second.iter().all(|b| matches!(b, Built::UpToDate(_))), "{second:?}");
-    // Move 上的书在不在：一轮只查一次（一批），不一本一本查
-    assert_eq!(*mv.queries.lock().unwrap(), (0, 1));
-    // 设备上的书架服务太旧、没有批量接口：退回一本一本查，结果一样
-    mv.old_server.store(true, std::sync::atomic::Ordering::Relaxed);
-    let lib = common::open_with(&lib_dir, Some(&mv));
-    let mut pipe = library::Pipeline::default();
-    for m in lib.list() {
-        match lib.prepare(&m, devices[1], false).unwrap() {
-            library::Step::Done(b) => assert!(matches!(b, Built::UpToDate(_)), "{b:?}"),
-            library::Step::Transfer(t) => pipe.submit(*t),
-        }
-    }
-    assert_eq!(pipe.in_flight(), 0);
-    assert_eq!(*mv.queries.lock().unwrap(), (3, 1));
 }
 
 /// 中间文件（CBZ 转出的 EPUB）按书留着：接着做别的书时不丢，这本书做完（release_prepared_of）才删。
@@ -1444,54 +1386,33 @@ fn same_titled_new_books_in_flight_do_not_collide() {
     assert!(std::fs::metadata(&out).unwrap().len() > 100);
 }
 
-/// 原件换了内容（书名没变）：设备上的产物交给新版本——掌阅原地覆盖同一个文件，Move 原地替换同一本（uuid 不变、不进回收站），
-/// 不先删再当新书传（2026-10-09 定）。
+/// 原件换了内容（书名没变）：设备上的产物交给新版本——掌阅原地覆盖同一个文件，不先删再当新书传（2026-10-09 定）。
 #[test]
 fn changed_original_replaces_device_copies_in_place() {
     let dir = tempfile::tempdir().unwrap();
     let base = std::fs::canonicalize(dir.path()).unwrap();
     let lib_dir = base.join("lib");
-    let mv = common::FakeMove::start();
-    let lib = common::open_with(&lib_dir, Some(&mv));
+    let lib = common::open(&lib_dir);
     let books = base.join("books");
     std::fs::create_dir_all(&books).unwrap();
     let src = books.join("书.epub");
     std::fs::write(&src, sample_epub_with("同一本", "第一版")).unwrap();
     lib.track(&books).unwrap();
     lib.sync(Prune::Keep, |_| {}).unwrap();
-    let (ireader, xochitl) = (profile::get("ireader").unwrap(), profile::get("xochitl").unwrap());
+    let ireader = profile::get("ireader").unwrap();
     let m1 = lib.list().pop().unwrap();
     let Built::Written { path, .. } = lib.build(&m1, ireader, false).unwrap() else { panic!() };
-    assert!(matches!(lib.build(&m1, xochitl, false).unwrap(), Built::Written { .. }));
-    let uuid1: Vec<String> = mv.docs.lock().unwrap().keys().cloned().collect();
 
     std::fs::write(&src, sample_epub_with("同一本", "第二版")).unwrap();
     let (r, ev) = events(&lib, Prune::Keep);
     assert_eq!(r.updated, 1, "{ev:?}");
     assert!(path.is_file(), "换版本时不先删设备上的");
-    assert_eq!(mv.live().len(), 1, "Move 上的也不先进回收站");
     let m2 = lib.list().pop().unwrap();
     assert_ne!(m1.id, m2.id);
     let Built::Written { path: p2, .. } = lib.build(&m2, ireader, false).unwrap() else { panic!("新版本要传") };
     assert_eq!(p2, path, "同一个文件原地覆盖");
     assert!(output_has(&path, "第二版"));
-    assert!(matches!(lib.build(&m2, xochitl, false).unwrap(), Built::Written { .. }));
-    let docs = mv.docs.lock().unwrap().clone();
-    assert_eq!(docs.keys().cloned().collect::<Vec<_>>(), uuid1, "同一个 uuid");
-    let d = docs.values().next().unwrap();
-    assert_eq!((d.replaced, d.deleted), (1, false));
     assert!(matches!(lib.build(&m2, ireader, false).unwrap(), Built::UpToDate(_)));
-
-    // 书架服务那边这本还在替换（上一次 sync 交的没做完）：等它做完再交，不算失败
-    std::fs::write(&src, sample_epub_with("同一本", "第三版")).unwrap();
-    events(&lib, Prune::Keep);
-    let m3 = lib.list().pop().unwrap();
-    mv.busy.store(2, std::sync::atomic::Ordering::Relaxed);
-    assert!(matches!(lib.build(&m3, xochitl, false).unwrap(), Built::Written { .. }));
-    let docs = mv.docs.lock().unwrap().clone();
-    assert_eq!(docs.keys().cloned().collect::<Vec<_>>(), uuid1);
-    assert_eq!(docs.values().next().unwrap().replaced, 2);
-    assert_eq!(mv.busy.load(std::sync::atomic::Ordering::Relaxed), 0, "等的时候查了 replacing");
 }
 
 /// 一轮生成（`sync` 的第二步），返回计数和报的事件（一行一件）。
@@ -1518,17 +1439,16 @@ fn build_round_keep(lib: &Library, devices: &[&profile::Profile], keep: bool) ->
 }
 
 /// 每台设备的跟踪范围不同，目录和单本混着跟踪（2026-10-19 举的例子）：书根目录 `book` 共用；Kindle 只要一本；掌阅要漫画，
-/// 有的照书库结构、有的从这一层起（`--top`）；Move 要「死亡筆記」（只显示这一层）和几本文字书（有的放根目录、有的照书库结构）。
+/// 有的照书库结构、有的从这一层起（`--top`），还要几本文字书（有的放根目录、有的和 Kindle 共用一条）。
 /// 从某台的范围里拿掉的书从那台上删掉；整条 untrack 的书下次 sync 连同产物从书库删掉；改放法的书挪位置。
 #[test]
 fn per_device_scope_with_mixed_dirs_and_single_books() {
     use library::{TrackChange, UntrackChange};
     let dir = tempfile::tempdir().unwrap();
     let lib_dir = dir.path().join("lib");
-    let mv = common::FakeMove::start();
-    let lib = common::open_with(&lib_dir, Some(&mv));
-    let (ireader, kindle, xochitl) = (profile::get("ireader").unwrap(), profile::get("kindle").unwrap(), profile::get("xochitl").unwrap());
-    let devices = [ireader, kindle, xochitl];
+    let lib = common::open(&lib_dir);
+    let (ireader, kindle) = (profile::get("ireader").unwrap(), profile::get("kindle").unwrap());
+    let devices = [ireader, kindle];
     let book = dir.path().join("book");
     for (p, t) in [("文字/科幻/三体.epub", "三体"), ("文字/飘.epub", "飘"), ("漫画/死亡筆記/卷01.epub", "卷01"), ("漫画/死亡筆記/卷02.epub", "卷02"), ("漫画/哆啦/哆啦01.epub", "哆啦01")] {
         std::fs::create_dir_all(book.join(p).parent().unwrap()).unwrap();
@@ -1538,10 +1458,10 @@ fn per_device_scope_with_mixed_dirs_and_single_books() {
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     assert_eq!(lib.track_with(&book.join("文字/科幻/三体.epub"), &ids(&["kindle"]), false).unwrap(), TrackChange::New);
     assert_eq!(lib.track_with(&book.join("漫画/哆啦"), &ids(&["ireader"]), false).unwrap(), TrackChange::New);
-    assert_eq!(lib.track_with(&book.join("漫画/死亡筆記"), &ids(&["ireader", "xochitl"]), true).unwrap(), TrackChange::New);
-    assert_eq!(lib.track_with(&book.join("文字/飘.epub"), &ids(&["xochitl"]), true).unwrap(), TrackChange::New);
-    assert_eq!(lib.track_with(&book.join("文字/科幻/三体.epub"), &ids(&["xochitl"]), false).unwrap(), TrackChange::Changed, "设备范围取并集");
-    assert_eq!(lib.track_with(&book.join("文字/飘.epub"), &ids(&["xochitl"]), true).unwrap(), TrackChange::Same);
+    assert_eq!(lib.track_with(&book.join("漫画/死亡筆記"), &ids(&["ireader"]), true).unwrap(), TrackChange::New);
+    assert_eq!(lib.track_with(&book.join("文字/飘.epub"), &ids(&["ireader"]), true).unwrap(), TrackChange::New);
+    assert_eq!(lib.track_with(&book.join("文字/科幻/三体.epub"), &ids(&["ireader"]), false).unwrap(), TrackChange::Changed, "设备范围取并集");
+    assert_eq!(lib.track_with(&book.join("文字/飘.epub"), &ids(&["ireader"]), true).unwrap(), TrackChange::Same);
     let outside = dir.path().join("外/x.epub");
     std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
     std::fs::write(&outside, sample_epub("x")).unwrap();
@@ -1556,11 +1476,7 @@ fn per_device_scope_with_mixed_dirs_and_single_books() {
     assert_eq!(kfiles, [kd.join("文字/科幻/三体.kfx").display().to_string()], "Kindle 只有这一本，照书库结构");
     assert!(ir.join("漫画/哆啦/哆啦01.epub").is_file(), "掌阅：照书库结构 {:?}", walk(&ir));
     assert!(ir.join("死亡筆記/卷01.epub").is_file() && ir.join("死亡筆記/卷02.epub").is_file(), "掌阅：--top 从这一层起 {:?}", walk(&ir));
-    assert!(!ir.join("文字").exists());
-    let mut live = mv.live();
-    live.sort();
-    let want: Vec<(String, String)> = [("", "飘"), ("文字/科幻", "三体"), ("死亡筆記", "卷01"), ("死亡筆記", "卷02")].iter().map(|(f, n)| (f.to_string(), n.to_string())).collect();
-    assert_eq!(live.iter().map(|(f, n)| (f.clone(), n.trim_end_matches(".epub").to_string())).collect::<Vec<_>>(), want, "Move：死亡筆記只显示这一层、《飘》放根目录、《三体》照书库结构");
+    assert!(ir.join("飘.epub").is_file() && ir.join("文字/科幻/三体.epub").is_file(), "掌阅：《飘》--top 放根目录、《三体》照书库结构 {:?}", walk(&ir));
     // 同一路径每台各自的放法：Kindle 也要「哆啦」、从这一层起，掌阅照旧照书库结构
     assert_eq!(lib.track_with(&book.join("漫画/哆啦"), &ids(&["kindle"]), true).unwrap(), TrackChange::Changed);
     let (c, ev) = build_round(&lib, &devices);
@@ -1589,10 +1505,10 @@ fn per_device_scope_with_mixed_dirs_and_single_books() {
     assert!(!kd.join("漫画").exists() && ir.join("死亡筆記/卷01.epub").is_file());
     assert_eq!(build_round(&lib, &devices).0.retracted, 0, "删过就不再删");
     // 从多台的条目里拿掉一台：只从这台上删
-    assert_eq!(lib.untrack_with(&book.join("文字/科幻/三体.epub"), &ids(&["xochitl"])).unwrap(), UntrackChange::Narrowed(1));
+    assert_eq!(lib.untrack_with(&book.join("文字/科幻/三体.epub"), &ids(&["ireader"])).unwrap(), UntrackChange::Narrowed(1));
     let (c, ev) = build_round(&lib, &devices);
     assert_eq!(c.retracted, 1, "{ev:?}");
-    assert!(!mv.live().iter().any(|(_, n)| n.starts_with("三体")) && kd.join("文字/科幻/三体.kfx").is_file());
+    assert!(!ir.join("文字").exists() && kd.join("文字/科幻/三体.kfx").is_file(), "{:?}", walk(&ir));
     // 跟踪目录里的单本没有自己的条目，不能单独去掉
     assert!(lib.untrack(&book.join("漫画/死亡筆記/卷02.epub")).unwrap_err().contains("不能单独去掉"));
     // 整条 untrack：下次 sync 连同产物从书库删掉（--keep 只报告）
@@ -1644,26 +1560,54 @@ fn walk(d: &std::path::Path) -> Vec<String> {
     v
 }
 
-/// Move：从它的范围里拿掉的书进回收站（书架服务的删除），别的设备照旧。
+/// 模式删了以后的旧书库（2026-10-31 删了 `xochitl`）：跟踪条目里的那台去掉（一台不剩的整条去掉、里面的书按不再跟踪处理），
+/// 生成记录里 Move 的旧记录（相对路径 + uuid）删书时不碰任何文件、也不留在 `orphans` 里，`list` 不拿当前目录去查。
 #[test]
-fn retract_from_move_goes_to_trash() {
+fn removed_mode_leftovers_are_cleaned_up() {
     let dir = tempfile::tempdir().unwrap();
-    let lib_dir = dir.path().join("lib");
-    let mv = common::FakeMove::start();
-    let lib = common::open_with(&lib_dir, Some(&mv));
-    let (ireader, xochitl) = (profile::get("ireader").unwrap(), profile::get("xochitl").unwrap());
-    let book = dir.path().join("书/乙.epub");
-    std::fs::create_dir_all(book.parent().unwrap()).unwrap();
-    std::fs::write(&book, sample_epub("乙")).unwrap();
-    lib.track_with(&book, &[], false).unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let lib = common::open(&lib_dir);
+    let book = base.join("book");
+    std::fs::create_dir_all(book.join("甲")).unwrap();
+    std::fs::create_dir_all(book.join("乙")).unwrap();
+    std::fs::write(book.join("甲/a.epub"), sample_epub("甲")).unwrap();
+    std::fs::write(book.join("乙/b.epub"), sample_epub("乙")).unwrap();
+    assert!(lib.set_books_root(&book).unwrap());
+    let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    lib.track_with(&book.join("甲"), &ids(&["kindle"]), false).unwrap();
+    lib.track_with(&book.join("乙"), &ids(&["ireader"]), false).unwrap();
     lib.sync(Prune::Auto, |_| {}).unwrap();
-    let (c, ev) = build_round(&lib, &[ireader, xochitl]);
-    assert_eq!((c.written, c.failed), (2, 0), "{ev:?}");
-    assert_eq!(mv.live().len(), 1);
-    assert_eq!(mv.live()[0].0, "", "第一次跟踪单本：书根目录是它所在的目录，放根目录");
-    lib.untrack_with(&book, &["xochitl".to_string()]).unwrap();
-    let (c, ev) = build_round(&lib, &[ireader, xochitl]);
-    assert_eq!(c.retracted, 1, "{ev:?}");
-    assert!(mv.live().is_empty(), "Move 上进回收站");
-    assert!(common::documents(&lib_dir, "ireader").join("乙.epub").is_file(), "掌阅照旧");
+    assert_eq!(lib.list().len(), 2);
+    // 改成旧书库的样子：「甲」还给过 xochitl，「乙」只给过 xochitl
+    let sp = lib_dir.join("sources.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    for e in v["entries"].as_array_mut().unwrap() {
+        let p = e["path"].as_str().unwrap().to_string();
+        e["devices"] = if p.ends_with("甲") { serde_json::json!(["kindle", "xochitl"]) } else { serde_json::json!(["xochitl"]) };
+    }
+    std::fs::write(&sp, v.to_string()).unwrap();
+    let lib = common::open(&lib_dir);
+    let (r, ev) = events(&lib, Prune::Auto);
+    assert!(ev.contains(&format!("forgot {} [\"xochitl\"] false", book.join("甲").display())), "{ev:?}");
+    assert!(ev.contains(&format!("forgot {} [\"xochitl\"] true", book.join("乙").display())), "{ev:?}");
+    assert_eq!((r.released, r.pruned), (1, 1), "只给过 xochitl 的条目整条去掉，里面的书不再跟踪：{ev:?}");
+    let saved = std::fs::read_to_string(&sp).unwrap();
+    assert!(!saved.contains("xochitl"), "{saved}");
+    let (_, ev) = events(&lib, Prune::Auto);
+    assert!(!ev.iter().any(|e| e.starts_with("forgot")), "清过一次就不再报：{ev:?}");
+    // Move 的旧生成记录：相对路径 + uuid（当前目录下放一个同名文件，确认不会被当成产物删掉）
+    let m = lib.list().remove(0);
+    let xs = lib_dir.join("output-state/xochitl.json");
+    std::fs::create_dir_all(xs.parent().unwrap()).unwrap();
+    std::fs::write(&xs, serde_json::json!({"books": {&m.id: {"path": "甲/甲.epub", "root": "", "fingerprint": "旧", "uuid": "u-1", "name": "甲"}}}).to_string()).unwrap();
+    let cwd_file = std::env::current_dir().unwrap().join("甲/甲.epub");
+    assert!(!cwd_file.exists(), "测试的前提：当前目录下没有这个文件");
+    let lib = common::open(&lib_dir);
+    let o = lib.outputs(&m).into_iter().find(|o| o.device == "xochitl").expect("旧记录照旧列出");
+    assert_eq!(o.fresh, None);
+    lib.remove(&m.id).unwrap();
+    let st: serde_json::Value = serde_json::from_slice(&std::fs::read(&xs).unwrap()).unwrap();
+    assert!(st["books"].as_object().unwrap().is_empty(), "{st}");
+    assert!(st.get("orphans").is_none(), "相对路径的旧记录不留在 orphans 里：{st}");
 }

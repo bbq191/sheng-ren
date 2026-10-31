@@ -566,7 +566,7 @@ mod tests {
     }
 
     fn move_reader() -> ReaderModel {
-        ReaderModel::for_profile(profile::get("xochitl").unwrap())
+        ReaderModel::for_profile(profile::fixture("xochitl").unwrap())
     }
 
     fn run_with(page: &str, css: &str, reader: &ReaderModel) -> String {

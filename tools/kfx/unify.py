@@ -30,7 +30,7 @@ def collapse(a, b):
     """相邻的下边距 a 和上边距 b 折叠以后的距离（CSS：正的取大，负的取最负的，两者相加）。"""
     return max(0.0, a, b) + min(0.0, a, b)
 
-DEVICES = ['ireader', 'xochitl']
+DEVICES = ['ireader']  # 2026-10-31 以前还有 xochitl（Move 卖了，模式删了）
 ALIGN = {"'$320'": 'center', "'$61'": 'right', "'$59'": 'left', "'$321'": 'left'}
 
 
@@ -97,7 +97,6 @@ def epub_images(path, bindir, device):
 # 掌阅、Move 是 2026-10-12 测试书「测试-插图」量的（掌阅 100% 宽的图 1168px、10em 的 374px；Move 的内容区同 profile 842×1455）
 READER_GEOMETRY = {
     'ireader': {'content': 1168, 'height': 1560, 'em_px': 37.4},
-    'xochitl': {'content': 842, 'height': 1455, 'em_px': None},
 }
 
 
@@ -198,7 +197,7 @@ def main():
         for line in open(base_path, encoding='utf-8'):
             if line.strip() and not line.startswith('#'):
                 t, *v = line.rstrip('\n').split('\t')
-                baseline[t] = dict(zip(['ireader', 'xochitl', 'img:ireader', 'img:xochitl'], map(float, v)))  # 后两列（图片）2026-10-12 起有
+                baseline[t] = dict(zip(['ireader', 'img:ireader'], map(float, v)))  # 第二列（图片）2026-10-12 起有
     seen = {}
     top = int(opt.get('--top', 12))
     os.makedirs(work, exist_ok=True)
@@ -341,9 +340,9 @@ def main():
     if '--update' in sys.argv:
         baseline.update(seen)
         with open(base_path, 'w', encoding='utf-8') as f:
-            f.write('# tools/kfx/unify.py 的基线：书名\t掌阅文字一致率\tMove 文字一致率\t掌阅图片一致率\tMove 图片一致率（%）。--update 写回；低于门槛的是已知差异，见 docs/kfx.md\n')
+            f.write('# tools/kfx/unify.py 的基线：书名\t掌阅文字一致率\t掌阅图片一致率（%）。--update 写回；低于门槛的是已知差异，见 docs/kfx.md\n')
             for t in sorted(baseline):
-                f.write(t + '\t' + '\t'.join(f'{baseline[t][k]:.2f}' for k in ['ireader', 'xochitl', 'img:ireader', 'img:xochitl'] if k in baseline[t]) + '\n')
+                f.write(t + '\t' + '\t'.join(f'{baseline[t][k]:.2f}' for k in ['ireader', 'img:ireader'] if k in baseline[t]) + '\n')
         print(f'已写回基线 {base_path}（{len(seen)} 本）')
         return
     if low or quirks:

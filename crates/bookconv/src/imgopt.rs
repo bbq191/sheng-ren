@@ -17,7 +17,7 @@ pub use profile::Screen;
 /// 单测用的设备屏幕：rMPP Move（954×1696）。历史用例与真机数据都是在 Move 上量的，断言里的数字以它为准。
 #[cfg(test)]
 pub(crate) fn test_screen() -> Screen {
-    profile::get("xochitl").expect("内置 xochitl profile").screen
+    profile::fixture("xochitl").expect("内置 xochitl profile").screen
 }
 
 /// 单张图片允许解码的像素数上限（w×h，跟格式/用途无关）——防极端高分辨率原图解码成未压缩位图把内存顶爆。
@@ -1197,7 +1197,7 @@ mod tests {
 
     /// Move 在 xochitl 默认页边距下的 EPUB 真实可阅读范围（profile 里的 `readable.epub`，842×1455）。
     fn test_area() -> Screen {
-        profile::get("xochitl").unwrap().readable(profile::Format::Epub)
+        profile::fixture("xochitl").unwrap().readable(profile::Format::Epub)
     }
 
     /// 生产入口，白边取缺省 1px。

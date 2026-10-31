@@ -242,7 +242,7 @@ pub struct Sheet {
     parts: Vec<(Arc<Rules>, usize, Origin)>,
 }
 
-/// 一条声明从哪来（有的阅读器按来源区别对待：xochitl 行内 `style`、`<style>` 里的 em 只按 23px 排，见 docs/xochitl.md）。
+/// 一条声明从哪来（有的阅读器按来源区别对待：xochitl 行内 `style`、`<style>` 里的 em 只按 23px 排，见 git 历史里 `5fd0897` 的 docs/xochitl.md）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Origin {
     /// 外链样式表（`<link rel="stylesheet">`）。

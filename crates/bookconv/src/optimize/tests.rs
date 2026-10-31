@@ -239,7 +239,7 @@
         assert!(tw <= crate::imgopt::test_screen().width && th <= crate::imgopt::test_screen().height, "文字书内嵌图也应该缩进屏幕框: {tw}x{th}");
         assert_eq!((cw, ch), (crate::imgopt::test_screen().width, crate::imgopt::test_screen().height), "缺省（开关关）漫画整页补白到屏幕比例 954×1696: {cw}x{ch}");
         // 传真实可阅读范围（Move EPUB 842×1455）：漫画页补白到阅读范围，文字书内嵌图只缩不补白
-        let area = OptimizeOpts::new(profile::get("xochitl").unwrap().readable(profile::Format::Epub));
+        let area = OptimizeOpts::new(profile::fixture("xochitl").unwrap().readable(profile::Format::Epub));
         let (a_out, _) = optimize_epub_with(&comic_buf, &area).unwrap();
         let mut a_img = Vec::new();
         ZipArchive::new(Cursor::new(&a_out)).unwrap().by_name("p1.jpg").unwrap().read_to_end(&mut a_img).unwrap();
@@ -1109,7 +1109,7 @@
         let orig = |n: &str| imgs.iter().find(|(m, _)| *m == n).unwrap().1.clone();
         // Kindle 2026-10-26 起也开（同 1.1）；以后哪台不开时，这里改成断言那台插图不动
         for dev in ["kindle", "ireader", "xochitl"] {
-            let opts = OptimizeOpts::for_profile(profile::get(dev).unwrap());
+            let opts = OptimizeOpts::for_profile(crate::test_profile(dev));
             assert!(opts.image_gamma.is_some() && matches!(opts.text_mode, TextMode::Repair { .. }), "{dev}：只修复也加深");
             let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
             let g = entry_bytes(&out, "OEBPS/i/g.jpg");
@@ -1159,7 +1159,7 @@
     fn xochitl_converts_webp_to_png() {
         let (epub, imgs) = webp_book();
         let orig = |n: &str| imgs.iter().find(|(m, _)| *m == n).unwrap().1.clone();
-        let opts = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        let opts = OptimizeOpts::for_profile(profile::fixture("xochitl").unwrap());
         assert!(opts.webp_to_png && matches!(opts.text_mode, TextMode::Repair { .. }), "Move 只修复也转");
         let (out, rep) = optimize_epub_with(&epub, &opts).unwrap();
         for (old, new) in [("OEBPS/i/s.webp", "OEBPS/i/s.png"), ("OEBPS/i/bg.webp", "OEBPS/i/bg.png")] {
@@ -1178,7 +1178,7 @@
         assert!(text("OEBPS/s.css").contains(r#"url("i/bg.png")"#));
         assert_eq!(rep.wash.unwrap().webp_to_png, 3);
         for dev in ["ireader", "kindle"] {
-            let opts = OptimizeOpts::for_profile(profile::get(dev).unwrap());
+            let opts = OptimizeOpts::for_profile(crate::test_profile(dev));
             assert!(!opts.webp_to_png);
             let (out, _) = optimize_epub_with(&epub, &opts).unwrap();
             assert_eq!(entry_bytes(&out, "OEBPS/i/s.webp"), orig("OEBPS/i/s.webp"), "{dev}：认 WebP（Kindle 由 KFX 写出器转），原样");
@@ -1198,7 +1198,7 @@
     fn caption_fit_follows_profile_and_readable_area() {
         let (epub, imgs) = alpha_book();
         let html = |p: &str| {
-            let (out, _) = optimize_epub_with(&epub, &OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get(p).unwrap()) }).unwrap();
+            let (out, _) = optimize_epub_with(&epub, &OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(crate::test_profile(p)) }).unwrap();
             (text_of(&out, "OEBPS/c1.xhtml"), out)
         };
         // 掌阅 1264×1680：0.8 × 1680 × 900/1650 / 1264 = 0.57998 → 57%；Kindle 1104×1546 → 61%
@@ -1217,7 +1217,7 @@
     #[test]
     fn title_option_rewrites_dc_title_only_when_given() {
         let (epub, _) = bg_book();
-        let base = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
+        let base = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::fixture("xochitl").unwrap()) };
         let (plain, _) = optimize_epub_with(&epub, &base).unwrap();
         let (blank, _) = optimize_epub_with(&epub, &OptimizeOpts { title: Some("  ".into()), ..base.clone() }).unwrap();
         assert_eq!(plain, blank, "空白书名当没给");
@@ -1242,7 +1242,7 @@
         let t = tempfile::tempdir().unwrap();
         let (input, output) = (t.path().join("in.epub"), t.path().join("out.epub"));
         std::fs::write(&input, &epub).unwrap();
-        let opts = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        let opts = OptimizeOpts::for_profile(profile::fixture("xochitl").unwrap());
         for after in 0..8 {
             let n = std::cell::Cell::new(0);
             let cancel = || { n.set(n.get() + 1); n.get() > after };
@@ -1265,7 +1265,7 @@
     fn limits_default_matches_constants_and_smaller_limit_keeps_images() {
         assert_eq!(Limits::default(), Limits { max_decode_pixels: 64_000_000, pool_pixel_budget: 72_000_000 });
         let (epub, imgs) = bg_book();
-        let base = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::get("xochitl").unwrap()) };
+        let base = OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(profile::fixture("xochitl").unwrap()) };
         assert_eq!(base.limits, Limits::default());
         let small = OptimizeOpts { limits: Limits { max_decode_pixels: 1_000_000, pool_pixel_budget: 0 }, ..base.clone() };
         let (out, _) = optimize_epub_with(&epub, &small).unwrap();
@@ -1373,7 +1373,7 @@
             }
             zw.finish().unwrap();
         }
-        let opts = OptimizeOpts::for_profile(profile::get("xochitl").unwrap());
+        let opts = OptimizeOpts::for_profile(profile::fixture("xochitl").unwrap());
         assert!(matches!(opts.text_mode, TextMode::Repair { note_links: true, .. }));
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
         assert_eq!(text_of(&out, "OEBPS/s.css"), "p{line-height:1.8}", "样式表只按 Send to Kindle 的规则改：正文字体整条去掉");
@@ -1405,7 +1405,7 @@
         ]);
         let want1 = crate::html::plain_text(C1).replace("&bigstar;", "★");
         for id in ["kindle", "ireader", "xochitl"] {
-            let (out, rep) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(profile::get(id).unwrap())).unwrap();
+            let (out, rep) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(crate::test_profile(id))).unwrap();
             let wash = rep.wash.as_ref().expect("文字书走清洗层");
             assert!(wash.xml_fixes.html5_reparsed >= 1, "{id}：第一章按 HTML5 重新解析: {:?}", wash.xml_fixes);
             let mut ar = ZipArchive::new(Cursor::new(&out)).unwrap();
@@ -1440,7 +1440,7 @@
             ("OEBPS/cover.jpg", &jpg),
         ]);
         for id in ["kindle", "ireader", "xochitl"] {
-            let (out, rep) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(profile::get(id).unwrap())).unwrap();
+            let (out, rep) = optimize_epub_with(&epub, &OptimizeOpts::for_profile(crate::test_profile(id))).unwrap();
             let opf = text_of(&out, "OEBPS/content.opf");
             assert!(opf.contains("中文书名") && !opf.contains('\u{FFFD}'), "{id}：{opf}");
             assert!(opf.contains("cover-image"), "{id}：封面声明照补: {opf}");
@@ -1495,7 +1495,7 @@
 #[test]
 fn repair_only_keeps_media_env() {
     for id in ["ireader", "xochitl"] {
-        let p = profile::Registry::builtin().get(id).unwrap();
+        let p = crate::test_profile(id);
         let opts = OptimizeOpts::for_profile(p);
         let media = opts.wash.as_ref().and_then(|w| w.media);
         assert_eq!(media, Some(crate::cascade::MediaEnv::for_format(p, p.format())), "{id}");

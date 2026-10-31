@@ -4,8 +4,6 @@
 //! - Kindle、掌阅（profile `[deliver] kind = "mtp"`）：设备存储根目录的 `documents/<原件所在目录相对跟踪目录的路径>/<名>.<扩展名>`；
 //!   `add` 进来的单个文件（不在跟踪目录里）、网址书放 `documents/` 顶层。先在书库的临时目录里生成，再拷上去
 //!   （设备上已有逐字节相同的就不拷：Kindle 覆盖成不同字节会清掉阅读进度）。
-//! - Move（`kind = "xochitl"`）：经书架服务加入 xochitl，文件夹名是原件所在目录相对跟踪目录的路径；同一文件夹同一书名的
-//!   原地替换（保留 uuid、进度）；文件夹或书名变了加入新的、旧的进回收站。
 //! - 没写 `[deliver]` 的自定义模式：电脑上，跟踪目录 `D` 旁的 `D/../<模式 id>/<子目录>/`；add 进来的、网址书在 `<书库>/output/<模式 id>/`。
 //!
 //! 设备没接上的模式不生成（`sync` 跳过，下次接上再传）。
@@ -13,7 +11,8 @@
 //! 产物格式按模式：EPUB 直接是优化结果；KFX（Kindle）是同一份优化结果再转一次（`kfx` crate）。
 //! profile 可以给漫画另配格式（`comic_format`，见 [`Library::output_format`]）；内置模式都不用（kindle 文字书、漫画都出 KFX）。
 //!
-//! 生成记录 `<书库>/output-state/<模式 id>.json`：书 id → 产物绝对路径（Move 上的是 uuid 和 `文件夹/文件名`）、产物根目录、指纹。
+//! 生成记录 `<书库>/output-state/<模式 id>.json`：书 id → 产物绝对路径、产物根目录、指纹
+//! （2026-10-31 以前 Move 上的记的是 uuid 和相对的 `文件夹/文件名`：旧记录里这种相对路径删书时一概不动）。
 //! 产物位置变了（原件移动、改名换了目录，书名改了）时删掉旧位置的——**只删记录里记着的**，不认识的文件一概不动；删完顺带删掉
 //! 产物根目录以内变空的目录。内容没变、只是位置变了的，把已有产物挪过去，不重新生成（改成送设备以前留在电脑上的产物也这样挪上设备）。
 //! 删书时设备没接上、删不掉的记在 `orphans`，接上后删。
@@ -21,9 +20,9 @@
 //! 换位置时先把记录改成新位置（指纹留空＝没完成，旧位置记进 `old` 待删），产物放好再补上指纹、删旧的：
 //! 中途被打断的话，下次生成还认得新位置上的文件是这本书的（不会因为"有个不认识的同名文件"而改名），旧文件也还会删。
 
-use crate::deliver::{self, Doc, Target, Xochitl};
-use crate::session::{Connection, PreparedInput};
-use crate::transfer::{Done, MoveWork, Transfer, Work};
+use crate::deliver::{self, Target};
+use crate::session::PreparedInput;
+use crate::transfer::{Transfer, Work};
 use crate::fsutil::TMP_PREFIX;
 use crate::{Library, Meta};
 use profile::{Format, Profile};
@@ -41,7 +40,7 @@ pub enum Built {
     UpToDate(PathBuf),
     /// 内容没变、只是位置变了（原件移动改名、书名改了）：已有产物挪了过去，没有重新生成。
     Moved { from: PathBuf, to: PathBuf },
-    /// 重新生成了（规则版本变了、`--force`），但和设备上那份逐字节相同：没有再传（Kindle 进度不受影响、Move 不重排）。
+    /// 重新生成了（规则版本变了、`--force`），但和设备上那份逐字节相同：没有再传（Kindle 进度不受影响）。
     Same { path: PathBuf, warnings: Vec<String> },
     /// 没变化、记录里的位置空了（以前放电脑上、用户自己挪上了设备），设备上对应位置的那份认领下来，没有重新生成。
     Adopted(PathBuf),
@@ -234,7 +233,7 @@ impl Library {
         for (_, sp) in self.state_files() {
             let state = self.records.states.get(&sp);
             let files = state.books.values().flat_map(StateEntry::placements).chain(state.orphans.iter().cloned());
-            dirs.extend(files.filter(|p| !p.on_move() && p.path.is_absolute()).filter_map(|p| p.path.parent().map(Path::to_path_buf)));
+            dirs.extend(files.filter(|p| p.path.is_absolute()).filter_map(|p| p.path.parent().map(Path::to_path_buf)));
         }
         dirs
     }
@@ -282,21 +281,20 @@ impl Library {
     /// 删掉一本书在所有模式下的产物（生成记录里记着的，包括还没删掉的旧位置），并从记录里去掉。
     /// 设备没接上、删不掉的记进 `orphans`，下次接上时删（[`Library::flush_removed`]）。
     pub(crate) fn remove_outputs(&self, id: &str) -> Result<(), String> {
-        for (dev_id, sp) in self.state_files() {
+        for (_, sp) in self.state_files() {
             let state = self.records.states.get(&sp);
             let Some(entry) = state.books.get(id).cloned() else { continue };
             let mut state = (*state).clone();
             state.books.remove(id);
-            let t = self.target_of(&dev_id);
-            state.delete_into_orphans(entry.placements(), t.as_deref().and_then(|r| r.as_ref().ok()), self.devices.mtp_base());
+            state.delete_into_orphans(entry.placements(), self.devices.mtp_base());
             self.records.states.put(&sp, state)?;
         }
         Ok(())
     }
 
     /// 原件换了内容（旧条目 `from` 要删、新条目是 `to`）：各模式下旧条目的产物记录交给新条目（指纹留空＝要重新生成），
-    /// 新版本生成出来照原地覆盖（MTP 同一个文件名）或原地替换（Move 同一个 uuid、同一个文件夹）放上去——以前是先把旧产物删掉
-    /// （Move 上进回收站）、再当新书传，掌阅丢进度、Move 多一本回收站里的、新版本生成失败时设备上这本书就没了（2026-10-09 定）。
+    /// 新版本生成出来照原地覆盖（MTP 同一个文件名）放上去——以前是先把旧产物删掉、再当新书传，掌阅丢进度、
+    /// 新版本生成失败时设备上这本书就没了（2026-10-09 定）。
     /// 新条目在这个模式下已经有自己的产物（同一内容早就在库里）的不交，旧的照常删（[`Library::remove_outputs`]）。
     pub(crate) fn hand_over_outputs(&self, from: &str, to: &str) -> Result<(), String> {
         for (_, sp) in self.state_files() {
@@ -314,7 +312,7 @@ impl Library {
         Ok(())
     }
 
-    /// 这本书不再给这台设备（从它的跟踪范围里拿掉了）：删掉它在这台上的产物（Move 上的进回收站），从这台的生成记录里去掉；
+    /// 这本书不再给这台设备（从它的跟踪范围里拿掉了）：删掉它在这台上的产物，从这台的生成记录里去掉；
     /// 删不掉的记进 `orphans`，下次接上再删。这台上本来就没有返回 `false`。书库里的书不动。
     pub fn retract(&self, id: &str, device: &Profile) -> Result<bool, String> {
         let sp = self.state_path(&device.id);
@@ -322,8 +320,7 @@ impl Library {
         let Some(entry) = state.books.get(id).cloned() else { return Ok(false) };
         let mut state = (*state).clone();
         state.books.remove(id);
-        let t = self.target(device);
-        state.delete_into_orphans(entry.placements(), t.as_ref().as_ref().ok(), self.devices.mtp_base());
+        state.delete_into_orphans(entry.placements(), self.devices.mtp_base());
         self.records.states.put(&sp, state)?;
         Ok(true)
     }
@@ -341,11 +338,13 @@ impl Library {
             return Ok(0);
         }
         let t = self.target(device);
-        let Ok(target) = &*t else { return Ok(0) };
+        if t.is_err() {
+            return Ok(0);
+        }
         let mut state = (*state).clone();
         let list = std::mem::take(&mut state.orphans);
         let before = list.len();
-        state.delete_into_orphans(list, Some(target), self.devices.mtp_base());
+        state.delete_into_orphans(list, self.devices.mtp_base());
         let n = before - state.orphans.len();
         if n > 0 {
             self.records.states.put(&sp, state)?;
@@ -353,17 +352,18 @@ impl Library {
         Ok(n)
     }
 
-    /// 这本书在各模式下的产物，以及是否最新。Move 上的书只看记录（不联网查），路径显示成 `xochitl:文件夹/文件名`。
+    /// 这本书在各模式下的产物，以及是否最新。
     pub fn outputs(&self, meta: &Meta) -> Vec<OutputStatus> {
         let mut out = Vec::new();
         for (dev_id, sp) in self.state_files() {
             let Some(entry) = self.records.states.get(&sp).books.get(&meta.id).cloned() else { continue };
-            let fresh = if !entry.on_move() && !entry.path.is_file() {
+            // 相对路径是 2026-10-31 以前 Move 上的旧记录：不拿当前目录去查
+            let fresh = if !entry.path.is_absolute() || !entry.path.is_file() {
                 None
             } else {
                 self.registry.get(&dev_id).and_then(|p| self.plan(meta, p).ok()).map(|plan| plan.fingerprint == entry.fingerprint || plan.legacy == entry.fingerprint)
             };
-            out.push(OutputStatus { device: dev_id, path: entry.shown(), fresh, audit: entry.audit.clone() });
+            out.push(OutputStatus { device: dev_id, path: entry.path.clone(), fresh, audit: entry.audit.clone() });
         }
         out
     }
@@ -399,10 +399,7 @@ impl Library {
         }
         let t = self.target(device);
         let target = t.as_ref().as_ref().map_err(|e| format!("{} {e}", device.id))?;
-        match target {
-            Target::Xochitl(x) => self.prepare_xochitl(meta, device, x, target, plan, force),
-            _ => self.prepare_file(meta, device, target, plan, force),
-        }
+        self.prepare_file(meta, device, target, plan, force)
     }
 
     /// 生成产物，放在书库临时目录 `.tmp-<id>-<模式>/` 里。失败时临时目录删掉。
@@ -440,18 +437,18 @@ impl Library {
         let prev = state.books.get(&meta.id).cloned();
         // 记录里这本书的产物以前放在电脑上、用户自己拷上设备的（2026-10-07 以前的做法）：设备上同一子目录里叫那个名字的文件
         // 就是那份拷贝，当成本书的（覆盖它），不另起名字、不留重复
-        let copied = prev.as_ref().filter(|p| !p.on_move() && !p.root.as_os_str().is_empty() && p.root != root).and_then(|p| {
+        let copied = prev.as_ref().filter(|p| !p.root.as_os_str().is_empty() && p.root != root).and_then(|p| {
             let rel = p.path.strip_prefix(&p.root).ok()?;
             (dir.strip_prefix(&root).ok()? == rel.parent()?).then(|| rel.file_name()?.to_str().map(str::to_string)).flatten()
         });
         let taken = self.build.reserved_names(&dir, &meta.id);
         let out = dir.join(state.file_name_for(meta, &dir, format.ext(), None, copied.as_deref(), &taken)?);
         drop(state);
-        let unchanged = |p: &&StateEntry| !force && p.fingerprint == fingerprint && !p.on_move();
+        let unchanged = |p: &&StateEntry| !force && p.fingerprint == fingerprint;
         let done = prev.as_ref().filter(unchanged).filter(|p| p.path.is_file());
         if let Some(p) = done.filter(|p| p.path == out) {
             if !p.old.is_empty() {
-                self.finish(&sp, &meta.id, p.clone(), Some(target))?; // 上次没删掉的旧位置
+                self.finish(&sp, &meta.id, p.clone())?; // 上次没删掉的旧位置
             }
             return Ok(Step::Done(Built::UpToDate(out)));
         }
@@ -459,14 +456,14 @@ impl Library {
         if let Some(p) = prev.as_ref().filter(unchanged).filter(|_| done.is_none() && copied.is_some() && out.is_file()) {
             let old = p.placements().into_iter().filter(|x| x.path != out).collect();
             let entry = StateEntry::file(out.clone(), root, fingerprint, old);
-            self.finish(&sp, &meta.id, entry, Some(target))?;
+            self.finish(&sp, &meta.id, entry)?;
             return Ok(Step::Done(Built::Adopted(out)));
         }
         // 来源：内容没变、只是位置变了的已有产物（挪过去，不重新生成），或者新生成的
         let made = self.made(meta, device, format, done)?;
         let tmp = made.tmp.clone();
         // MTP 设备上直接写正式文件名（不经临时文件）：写到一半被打断，正式文件名上会留下半截，所以要先登记一条指纹留空的记录，
-        // 下次认得出这个位置没传完、重新传（见 `Work::File`）
+        // 下次认得出这个位置没传完、重新传（见 `Work`）
         let direct = matches!(target, Target::Dir { .. });
         let mount = match target {
             Target::Dir { mount, .. } => mount.clone(),
@@ -480,8 +477,8 @@ impl Library {
             let mut same = false;
             match &prev {
                 Some(p) => {
-                    entry.old = p.placements().into_iter().filter(|x| x.path != out || x.on_move()).collect();
-                    if p.path == out && !p.on_move() {
+                    entry.old = p.placements().into_iter().filter(|x| x.path != out).collect();
+                    if p.path == out {
                         entry.fingerprint = p.fingerprint.clone(); // 同一位置重建：记录不用预先改
                         entry.sha = p.sha.clone();
                         same = p.sha == made.sha && std::fs::metadata(&made.src).ok().map(|m| m.len()) == std::fs::metadata(&out).ok().map(|m| m.len());
@@ -508,10 +505,10 @@ impl Library {
             // 记录里没有哈希（不是我们传的、或旧记录）时才把设备上的读回来比
             let compare = entry.sha.is_empty();
             entry.fingerprint = fingerprint.clone();
-            let t = self.transfer(meta, device, sp.clone(), made, done.map(|p| p.path.clone()), entry, Work::File { out, compare, direct, mount });
+            let t = self.transfer(meta, device, sp.clone(), made, done.map(|p| p.path.clone()), entry, Work { out, compare, direct, mount });
             if same {
                 // 和设备上的一样：不用传
-                return self.complete(t, Ok(Done::File(false))).map(Step::Done);
+                return self.complete(t, Ok(false)).map(Step::Done);
             }
             Ok(Step::Transfer(Box::new(t)))
         })();
@@ -523,15 +520,6 @@ impl Library {
         r
     }
 
-    /// 生成记录 `sp` 里记着的全部 Move 上的书（各本的 uuid 和待删的旧 uuid），一次查它们在不在用（[`deliver::Xochitl::present_cached`]）。
-    fn move_uuids(&self, sp: &Path) -> Vec<String> {
-        let state = self.records.states.get(sp);
-        let mut v: Vec<String> = state.books.values().flat_map(StateEntry::placements).map(|p| p.uuid).filter(|u| !u.is_empty()).collect();
-        v.sort();
-        v.dedup();
-        v
-    }
-
     /// 交给传输线程的一件。
     #[allow(clippy::too_many_arguments)]
     fn transfer(&self, meta: &Meta, device: &Profile, sp: PathBuf, made: Made, from: Option<PathBuf>, entry: StateEntry, work: Work) -> Transfer {
@@ -541,69 +529,20 @@ impl Library {
         Transfer { device: device.id.clone(), title: meta.title.clone(), book: meta.id.clone(), sp, tmp, src, sha, warnings, from, entry, work }
     }
 
-    /// Move（xochitl）：经书架服务的导入接口加入，同一文件夹里的同一本原地替换（保留 uuid 和阅读进度）。
-    /// 文件夹或书名变了：加入一本新的，旧的进回收站。重新生成出来和上次传的逐字节相同就不再传（不让 xochitl 白重排）。
-    /// `x` 是 `target` 里的 Move 连接（分派时拆出来的）。
-    fn prepare_xochitl(&self, meta: &Meta, device: &Profile, x: &Xochitl, target: &Target, plan: Plan, force: bool) -> Result<Step, String> {
-        let Plan { fingerprint, format, .. } = plan;
-        if format != Format::Epub {
-            return Err(format!("xochitl 只收 EPUB，这个模式出的是 {}", format.ext()));
-        }
-        // 放进哪个文件夹：原件所在目录相对跟踪目录的路径（`a/b`：书架服务按层建，先「a」、再它里面的「b」，2026-10-07 定）；
-        // 跟踪目录顶层的书、add 进来的书、网址书放书库根（空）
-        let folder = self.tracked_rel(meta, &device.id).map(|(_, rel)| rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/")).unwrap_or_default();
-        let name = format!("{}.{}", bookconv::util::sanitize_filename(&crate::metadata::corrected_title(meta), &meta.id), format.ext());
-        let loc = if folder.is_empty() { PathBuf::from(&name) } else { Path::new(&folder).join(&name) };
-        let sp = self.state_path(&device.id);
-        let prev = self.records.states.get(&sp).books.get(&meta.id).cloned();
-        // 同一位置、设备上还在的上一份
-        let same_loc = prev.as_ref().filter(|p| p.on_move() && p.path == loc);
-        let alive = match same_loc {
-            Some(p) => x.present_cached(&p.uuid, || self.move_uuids(&sp))?,
-            None => false,
-        };
-        let live = same_loc.filter(|_| alive);
-        if let Some(p) = live.filter(|p| !force && p.fingerprint == fingerprint) {
-            if !p.old.is_empty() {
-                self.finish(&sp, &meta.id, p.clone(), Some(target))?;
-            }
-            return Ok(Step::Done(Built::UpToDate(p.shown())));
-        }
-        // 电脑上以前生成的同一份（改成直接送设备以前的产物）：直接传它，不重新生成
-        let reusable = prev.as_ref().filter(|p| !force && p.fingerprint == fingerprint && !p.on_move() && p.path.is_file());
-        let made = self.made(meta, device, format, reusable)?;
-        let old = prev.as_ref().map_or(Vec::new(), StateEntry::placements);
-        let entry = StateEntry::on_xochitl(loc, fingerprint, old);
-        // 和上次传上去、设备上还在的那份一样：不用再传
-        let same = live.filter(|p| !p.sha.is_empty() && p.sha == made.sha).map(StateEntry::doc);
-        let t = self.transfer(meta, device, sp, made, reusable.map(|p| p.path.clone()), entry, Work::Move(MoveWork { client: x.client(), name, folder, replace: live.map(|p| p.uuid.clone()) }));
-        if let Some(doc) = same {
-            return self.complete(t, Ok(Done::Same(doc))).map(Step::Done);
-        }
-        Ok(Step::Transfer(Box::new(t)))
-    }
-
-    /// 传完了（`r` 是传输线程的结果）：删掉临时目录，写上完成的记录、删掉旧位置（Move 上的进回收站）。传失败的：记录不改
-    /// （Kindle、掌阅那边先登记了新位置、指纹留空，下次重做），返回错误。
-    pub fn complete(&self, t: Transfer, r: Result<Done, String>) -> Result<Built, String> {
+    /// 传完了（`r` 是传输线程的结果：真的写了没有）：删掉临时目录，写上完成的记录、删掉旧位置。传失败的：记录不改
+    /// （先登记了新位置、指纹留空，下次重做），返回错误。
+    pub fn complete(&self, t: Transfer, r: Result<bool, String>) -> Result<Built, String> {
         if let Some(tmp) = &t.tmp {
             let _ = std::fs::remove_dir_all(tmp);
         }
         // 传完（或失败）：占着的文件名放开（成功的接着就记进生成记录）
-        if let Some(out) = t.work.file_out() {
-            self.build.unreserve(out);
-        }
-        let done = r?;
+        self.build.unreserve(&t.work.out);
+        let wrote = r?;
         let meta_id = t.book.clone();
         let mut entry = t.entry;
         entry.sha = t.sha;
-        let (wrote, doc) = done.outcome();
-        if let Some(d) = doc {
-            entry.placed_on_xochitl(d);
-        }
-        let path = entry.shown();
-        let tg = self.target_of(&t.device);
-        self.finish(&t.sp, &meta_id, entry, tg.as_deref().and_then(|r| r.as_ref().ok()))?;
+        let path = entry.path.clone();
+        self.finish(&t.sp, &meta_id, entry)?;
         Ok(match t.from {
             Some(from) => Built::Moved { from, to: path },
             None if wrote => Built::Written { path, warnings: t.warnings },
@@ -691,25 +630,18 @@ impl Library {
 
     /// 产物已经到位：删掉记着的旧位置（删不掉的留着下次再删），写上完成的记录。记录和原来一样（旧位置还是删不掉，
     /// `sync --watch` 每轮都会走到这里）时不写。
-    fn finish(&self, sp: &Path, id: &str, mut entry: StateEntry, target: Option<&Target>) -> Result<(), String> {
+    fn finish(&self, sp: &Path, id: &str, mut entry: StateEntry) -> Result<(), String> {
         let mut state = (*self.records.states.get(sp)).clone();
         let prev = state.books.remove(id);
-        if !entry.on_move() {
-            for o in entry.old.iter().filter(|o| !o.on_move() && !state.claimed(o)) {
-                carry_sidecar(&o.path, &entry.path);
-            }
+        for o in entry.old.iter().filter(|o| !state.claimed(o)) {
+            carry_sidecar(&o.path, &entry.path);
         }
-        entry.old = state.delete_placements(std::mem::take(&mut entry.old), target, self.devices.mtp_base());
+        entry.old = state.delete_placements(std::mem::take(&mut entry.old), self.devices.mtp_base());
         if prev.as_ref() == Some(&entry) {
             return Ok(());
         }
         state.books.insert(id.to_string(), entry);
         self.put_state(sp, state)
-    }
-
-    /// 某模式（按 id，可能是 profile 已经删掉的）现在送到哪；profile 不在了返回 `None`。
-    fn target_of(&self, device_id: &str) -> Option<Connection> {
-        self.registry.get(device_id).map(|p| self.target(p))
     }
 
     /// 要优化的 EPUB：EPUB 直接用；CBZ 当场转换，写进 `tmp`。
@@ -757,12 +689,6 @@ pub(crate) struct StateEntry {
     /// 放上去的产物的 SHA-256：下次重新生成出一样的就不再传（不用把设备上的文件读回来比）。旧记录没有。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     sha: String,
-    /// 在 Move 的 xochitl 书库里：这本的 uuid 和显示名（`.metadata` 的 `visibleName`）。这时 `path` 是相对的
-    /// `文件夹/文件名`（只用来认位置变没变），`root` 为空。
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    uuid: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    name: String,
     /// 以前的位置、还没删掉的产物。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     old: Vec<Placement>,
@@ -771,95 +697,54 @@ pub(crate) struct StateEntry {
     audit: Vec<String>,
 }
 
-/// 一个产物文件和它的根目录；或者 Move 上的一本（`uuid`、`name`）。
+/// 一个产物文件和它的根目录。
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 struct Placement {
     path: PathBuf,
     root: PathBuf,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    uuid: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    name: String,
 }
 
 impl StateEntry {
     /// 文件产物（电脑上、MTP 设备上）的记录。
     fn file(path: PathBuf, root: PathBuf, fingerprint: String, old: Vec<Placement>) -> StateEntry {
-        StateEntry { path, root, fingerprint, sha: String::new(), uuid: String::new(), name: String::new(), old, audit: Vec::new() }
-    }
-
-    /// Move 上的一本的记录：`loc` 是相对的 `文件夹/文件名`，uuid、显示名传完才知道（[`StateEntry::placed_on_xochitl`]）。
-    fn on_xochitl(loc: PathBuf, fingerprint: String, old: Vec<Placement>) -> StateEntry {
-        StateEntry { path: loc, root: PathBuf::new(), fingerprint, sha: String::new(), uuid: String::new(), name: String::new(), old, audit: Vec::new() }
-    }
-
-    /// 在 Move 上（记着 uuid），不是文件。
-    fn on_move(&self) -> bool {
-        !self.uuid.is_empty()
-    }
-
-    /// Move 上的这本（[`StateEntry::on_move`] 时才有意义）。
-    fn doc(&self) -> Doc {
-        Doc { uuid: self.uuid.clone(), name: self.name.clone() }
-    }
-
-    /// 书架服务加入（或替换）好了：记下 uuid、显示名；原地替换的那本不再算待删的旧位置。
-    fn placed_on_xochitl(&mut self, d: Doc) {
-        self.old.retain(|o| o.uuid != d.uuid);
-        self.uuid = d.uuid;
-        self.name = d.name;
+        StateEntry { path, root, fingerprint, sha: String::new(), old, audit: Vec::new() }
     }
 
     /// 这条记录名下的所有产物：现在的位置和待删的旧位置。
     fn placements(&self) -> Vec<Placement> {
-        let mut v = vec![Placement { path: self.path.clone(), root: self.root.clone(), uuid: self.uuid.clone(), name: self.name.clone() }];
+        let mut v = vec![Placement { path: self.path.clone(), root: self.root.clone() }];
         v.extend(self.old.iter().cloned());
         v
     }
 
-    /// 给人看的位置：文件的绝对路径；Move 上的是 `xochitl:文件夹/文件名`。
-    fn shown(&self) -> PathBuf {
-        if self.on_move() { PathBuf::from(format!("xochitl:{}", self.path.display())) } else { self.path.clone() }
-    }
-}
-
-impl Placement {
-    /// 在 Move 上（记着 uuid），不是文件。
-    fn on_move(&self) -> bool {
-        !self.uuid.is_empty()
-    }
 }
 
 impl State {
-    /// 这个产物现在（或待删的旧位置里）是不是记在别的书名下。Move 上的按 uuid 认，文件按路径认。
+    /// 这个产物现在（或待删的旧位置里）是不是记在别的书名下（按路径认）。
     fn claimed(&self, p: &Placement) -> bool {
-        let same = |path: &Path, uuid: &str| if p.on_move() { uuid == p.uuid } else { uuid.is_empty() && path == p.path };
-        self.books.values().any(|e| same(&e.path, &e.uuid) || e.old.iter().any(|o| same(&o.path, &o.uuid)))
+        self.books.values().any(|e| e.path == p.path || e.old.iter().any(|o| o.path == p.path))
     }
 
     /// 删掉这些产物（已经不在记录里的书名下），文件在各自的根目录以内删掉变空的目录。返回删不掉的（下次再删）：
-    /// Move 上的要连着 Move（`target`）才删得了（进 xochitl 回收站）；MTP 设备（`mtp_base` 下）上的文件，设备没挂上时不当成已删。
+    /// MTP 设备（`mtp_base` 下）上的文件，设备没挂上时不当成已删；相对路径（2026-10-31 以前 Move 上的旧记录）不动文件、记录直接丢掉。
     /// 调用前要先把本书的记录从 `self` 里拿掉，别的书还记着的不删。
     /// 删掉这些产物（[`State::delete_placements`]），删不掉的记进 `orphans`（下次接上设备再删）。
-    fn delete_into_orphans(&mut self, list: Vec<Placement>, target: Option<&Target>, mtp_base: &Path) {
-        let left = self.delete_placements(list, target, mtp_base);
+    fn delete_into_orphans(&mut self, list: Vec<Placement>, mtp_base: &Path) {
+        let left = self.delete_placements(list, mtp_base);
         self.orphans.extend(left);
     }
 
-    fn delete_placements(&self, list: Vec<Placement>, target: Option<&Target>, mtp_base: &Path) -> Vec<Placement> {
+    fn delete_placements(&self, list: Vec<Placement>, mtp_base: &Path) -> Vec<Placement> {
         let mut left = Vec::new();
         for p in list {
             if self.claimed(&p) {
                 continue;
             }
-            if p.on_move() {
-                // Move 上的进 xochitl 回收站：要连着 Move
-                if !target.and_then(Target::xochitl).is_some_and(|x| x.trash(&p.uuid, &p.name).is_ok()) {
-                    left.push(p);
-                }
+            // 相对路径：2026-10-31 以前 Move 上的旧记录（`文件夹/文件名`，Move 已经删了），不动、也不再记着
+            if !p.path.is_absolute() {
                 continue;
             }
-            if !p.path.is_absolute() || (p.path.starts_with(mtp_base) && !p.root.is_dir()) {
+            if p.path.starts_with(mtp_base) && !p.root.is_dir() {
                 left.push(p);
                 continue;
             }
@@ -941,7 +826,7 @@ fn device_safe_rel(rel: &Path) -> PathBuf {
 /// 跟着挪过去，免得进度留在旧目录（2026-10-14 定：原件目录改名后《哆啦A梦》的进度丢在旧目录）。文件名变了的不挪
 /// （`.sdr` 里的文件按书名起名，改了名阅读器认不认没验证过），新位置已经有 `.sdr` 的不动，挪不了的不管（旧目录里留着）。
 fn carry_sidecar(old: &Path, new: &Path) {
-    if old == new || old.file_name() != new.file_name() {
+    if old == new || !old.is_absolute() || old.file_name() != new.file_name() {
         return;
     }
     let (from, to) = (old.with_extension("sdr"), new.with_extension("sdr"));

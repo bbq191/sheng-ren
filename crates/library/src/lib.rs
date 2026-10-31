@@ -15,7 +15,7 @@
 //! `<id>` 是原件内容 SHA-256 的前 12 位十六进制：同一本书重复入库会认出来，改名移动了也认得出。
 //!
 //! 产物直接送到接着的设备上（2026-10-07 起，见 `deliver.rs`、`generate.rs`）：跟踪目录 `D` 里的书按原件所在子目录镜像
-//! （`books/haodoo/x.epub` → Kindle 上 `documents/haodoo/<书名>.kfx`、Move 上文件夹 `haodoo`）。
+//! （`books/haodoo/x.epub` → Kindle 上 `documents/haodoo/<书名>.kfx`）。
 //!
 //! 生成时读原件：EPUB 直接用；CBZ 当场转成 EPUB（与设备无关的转换，结果不落书库）。
 //! 早期版本收过的其它格式（MOBI/AZW3/FB2/PDF 等）2026-09-29 起不再支持：条目保留（`list` 标出来），生成时跳过。
@@ -50,13 +50,13 @@ use std::path::{Path, PathBuf};
 
 pub use build_run::{build_all, BuildCounts, BuildEvent, BuildRun, FailMemo};
 pub use cover::{CoverInfo, CoverResult};
-pub use deliver::{DeviceEnv, Doc};
+pub use deliver::DeviceEnv;
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus, Step};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
 pub use sources::{book_files, Prune, SyncEvent, SyncMemo, SyncReport, TrackChange, Tracked, UntrackChange, SUPPORTED_EXTS};
-pub use transfer::{Done, Event, Pipeline, Transfer};
+pub use transfer::{Event, Pipeline, Transfer};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Meta {
@@ -284,7 +284,7 @@ pub fn rule_versions() -> Vec<(&'static str, String)> {
     vec![
         ("优化", bookconv::optimize::OPTIMIZE_VERSION.to_string()),
         ("漫画优化", bookconv::optimize::COMIC_VERSION.to_string()),
-        ("掌阅/Move 统一规则", bookconv::wash::KINDLE_RULES_VERSION.to_string()),
+        ("掌阅统一规则", bookconv::wash::KINDLE_RULES_VERSION.to_string()),
         ("CBZ 转换", bookconv::convert::CONVERT_VERSION.to_string()),
         ("补元数据", bookconv::opfmeta::VERSION.to_string()),
         ("KFX 写出器", kfx::write::WRITER_VERSION.to_string()),
@@ -337,10 +337,9 @@ impl Library {
         self.devices.set_env(env);
     }
 
-    /// 重新看设备接没接上（`sync --watch` 每轮调一次）：MTP 设备、没接上的下次用到时重新看；到 Move 的 SSH 隧道还通就接着用
-    /// （不每轮重连），断了才重连。返回连着、这次发现断了的 Move（模式 id）：上一轮跟它打交道出的错多半是掉线，可以重试。
-    pub fn refresh_devices(&self) -> Vec<String> {
-        self.devices.refresh()
+    /// 重新看设备接没接上（`sync --watch` 每轮调一次）：连过的都作废，下次用到时重新看。
+    pub fn refresh_devices(&self) {
+        self.devices.refresh();
     }
 
     /// 这个模式的产物送到哪：设备接上了（或产物放电脑上）`Ok`，没接上 `Err(原因)`。一轮里只连一次。

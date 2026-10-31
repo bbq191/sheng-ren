@@ -1,4 +1,4 @@
-//! 指纹黄金对拍：对内置三个模式逐个改一个 profile 字段，记下文字书、漫画的指纹，和 `fp_golden.txt` 逐行比。
+//! 指纹黄金对拍：对内置两个模式逐个改一个 profile 字段，记下文字书、漫画的指纹，和 `fp_golden.txt` 逐行比。
 //! 重构指纹的算法（或 profile 的结构）时产物指纹必须一字不差，否则全部书库的书都会白白重建（或该重建的不重建）。
 //! 有意改了指纹写法：`UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden` 重写文件，一起提交。
 mod common;
@@ -66,7 +66,7 @@ fn fingerprints_match_the_golden_file() {
     let text = lib.add_file(&epub).unwrap().meta().clone();
     let comic = lib.add_file(&cbz).unwrap().meta().clone();
     let mut out = String::new();
-    for dev in ["kindle", "ireader", "xochitl"] {
+    for dev in ["kindle", "ireader"] {
         for (name, m) in mutations() {
             let mut p = profile::get(dev).unwrap().clone();
             m(&mut p);
