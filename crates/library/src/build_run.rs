@@ -4,9 +4,7 @@
 //! 怎么显示（措辞、`quiet` 时哪些不报）由命令行决定。
 
 use crate::{Built, Event, Library, Meta, OriginalState, Pipeline, Profile, Step};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 
 /// `sync --watch` 跨轮记住的生成失败：(书 id, 模式 id) → (失败时的指纹, 原件状态)。都没变就不重试。
 pub type FailMemo = HashMap<(String, String), (String, OriginalState)>;
@@ -50,9 +48,6 @@ pub enum BuildEvent {
     TransportLost { device: String, count: usize },
     /// 都生成好了，还在等设备那边传完。
     Waiting { in_flight: usize },
-    /// 给这一轮传上去的书写了阅读器的显示设置（`written` 本）；`pending` 本等了一会儿阅读器还没收录，没写（要手动调）。
-    ReaderDisplay { device: String, written: usize, pending: usize },
-    ReaderDisplayFailed { device: String, error: String },
 }
 
 /// 一轮的结果计数。
@@ -88,15 +83,6 @@ impl BuildCounts {
 /// 按模式 × 书逐本生成并送到设备上（没变化的跳过）。设备没接上的模式跳过。
 pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCounts {
     let BuildRun { lib, devices, books, force, keep, mut fails, skipped, absent_reported } = run;
-    // 这一轮放上各设备的新文件（写阅读器显示设置用，见最后）
-    let fresh: RefCell<HashMap<String, Vec<PathBuf>>> = RefCell::default();
-    let mut tap = |ev: BuildEvent| {
-        if let BuildEvent::Built { device, built: Built::Written { path, .. } | Built::Moved { to: path, .. }, .. } = &ev {
-            fresh.borrow_mut().entry(device.clone()).or_default().push(path.clone());
-        }
-        report(ev)
-    };
-    let report = &mut tap;
     let mut counts = BuildCounts::default();
     for m in books.iter().filter(|m| !m.supported()) {
         if skipped.insert(m.id.clone()) {
@@ -246,15 +232,6 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
     }
     while let Some(x) = pipe.next(true) {
         landed(&mut counts, &mut fails, report, x);
-    }
-    // 都传完了：给这一轮传上去的书写阅读器的显示设置（文石，见 `onyx`）
-    let fresh = fresh.take();
-    for device in &live {
-        match lib.seed_reader_display(device, fresh.get(&device.id).map_or(&[][..], Vec::as_slice)) {
-            None | Some(Ok(crate::onyx::Seeded { written: 0, pending: 0 })) => {}
-            Some(Ok(s)) => report(BuildEvent::ReaderDisplay { device: device.id.clone(), written: s.written, pending: s.pending }),
-            Some(Err(error)) => report(BuildEvent::ReaderDisplayFailed { device: device.id.clone(), error }),
-        }
     }
     counts
 }

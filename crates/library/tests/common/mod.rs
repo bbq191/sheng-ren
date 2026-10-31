@@ -27,7 +27,7 @@ pub fn documents(lib: &Path, mode: &str) -> PathBuf {
 /// 打开书库，设备指向测试目录（见 [`dev_dir`]）；`mv` 给了就把 Move 指向这个假服务。
 pub fn open_with(lib: &Path, mv: Option<&FakeMove>) -> Library {
     let mut l = Library::open(lib).unwrap();
-    l.set_device_env(DeviceEnv { mtp_base: dev_dir(lib), xochitl_url: mv.map(|m| m.url.clone()), no_ssh: true, mount_check: false, no_adb: true });
+    l.set_device_env(DeviceEnv { mtp_base: dev_dir(lib), xochitl_url: mv.map(|m| m.url.clone()), no_ssh: true, mount_check: false });
     l
 }
 
@@ -240,7 +240,7 @@ pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
 /// 在 `lib` 书库上跑 `booklib <args>`（`lib` 为 `None` 时不加 `--library=`）。
 pub fn booklib(lib: Option<&Path>, args: &[&str]) -> Output {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"));
-    cmd.env("BOOKLIB_NO_SSH", "1").env("BOOKLIB_NO_ADB", "1").env("BOOKLIB_MTP_NO_MOUNT_CHECK", "1").env("BOOKLIB_NO_NET", "1").env_remove("BOOKLIB_XOCHITL_URL");
+    cmd.env("BOOKLIB_NO_SSH", "1").env("BOOKLIB_MTP_NO_MOUNT_CHECK", "1").env("BOOKLIB_NO_NET", "1").env_remove("BOOKLIB_XOCHITL_URL");
     if let Some(lib) = lib {
         cmd.arg(format!("--library={}", lib.display()));
         // 书库还没建（命令本身不该建出东西）时不建设备目录

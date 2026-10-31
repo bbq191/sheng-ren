@@ -31,8 +31,6 @@ pub struct DeviceEnv {
     /// 2026-10-21：掌阅在 `sync` 中途断开，jmtpfs 卸掉后挂载点剩个空目录，后面的书建目录、写进了 `/run/user/1000`（tmpfs）直到写满，
     /// 还记成传上了。
     pub mount_check: bool,
-    /// 不用 adb（`$BOOKLIB_NO_ADB=1`；测试里别碰到插着的真机）：不给文石阅读器写显示设置（[`crate::onyx`]）。
-    pub no_adb: bool,
 }
 
 impl DeviceEnv {
@@ -47,7 +45,6 @@ impl DeviceEnv {
             xochitl_url: var("BOOKLIB_XOCHITL_URL").map(|v| v.to_string_lossy().trim_end_matches('/').to_string()),
             no_ssh: var("BOOKLIB_NO_SSH").is_some_and(|v| v != "0"),
             mount_check: !var("BOOKLIB_MTP_NO_MOUNT_CHECK").is_some_and(|v| v != "0"),
-            no_adb: var("BOOKLIB_NO_ADB").is_some_and(|v| v != "0"),
         }
     }
 }
@@ -95,7 +92,7 @@ impl Target {
 pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
     match &p.deliver {
         None => Ok(Target::Local),
-        Some(Deliver::Mtp { mount, dir, .. }) => {
+        Some(Deliver::Mtp { mount, dir }) => {
             let point = env.mtp_base.join(mount);
             if env.mount_check && !mounted(&point) {
                 return Err(format!("没接上（{} 没挂上）", point.display()));
@@ -621,7 +618,7 @@ mod tests {
         // 设备断开后挂载点剩下的空目录里有存储目录（上次写进去的）也不算接上
         std::fs::create_dir_all(d.path().join("ireader/内部共享存储空间")).unwrap();
         let p = profile::get("ireader").unwrap();
-        let env = DeviceEnv { mtp_base: d.path().into(), xochitl_url: None, no_ssh: true, mount_check: true, no_adb: true };
+        let env = DeviceEnv { mtp_base: d.path().into(), xochitl_url: None, no_ssh: true, mount_check: true };
         assert!(connect(&env, p).err().unwrap().contains("没挂上"));
         let t = connect(&DeviceEnv { mount_check: false, ..env }, p).unwrap();
         assert!(matches!(t, Target::Dir { mount: None, .. }));

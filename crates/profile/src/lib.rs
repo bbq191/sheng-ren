@@ -65,7 +65,7 @@ impl Screen {
 #[serde(rename_all = "lowercase")]
 pub enum Notes {
     /// 点标号弹窗显示：标号标 `epub:type="noteref"`、注释正文是 `<aside epub:type="footnote">`，阅读器据此认出注释。
-    /// ireader、boox 用（ireader 真机验证过；boox 还没验证）。
+    /// 内置的三个模式都不用（自带阅读器上没验证过弹窗），留给书库 `profiles/` 里的自定义模式。
     Popup,
     /// 点标号跳到注释、再返回（xochitl：没有弹窗，只认同文件 `#锚点`，不认 `epub:type`）。
     Jump,
@@ -75,7 +75,7 @@ pub enum Notes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteIcons {
-    /// 保留原图标，限成一个字高（要阅读器认 CSS 限高、图标链接也能点）。内置的模式都换数字（见 `Number`），
+    /// 保留原图标，限成一个字高（要阅读器认 CSS 限高、图标链接也能点）。内置的三个模式都换数字（见 `Number`），
     /// 留给自定义模式。
     #[default]
     Keep,
@@ -104,28 +104,11 @@ pub enum ImageSizing {
 pub enum Deliver {
     /// MTP 设备（Kindle、掌阅）：jmtpfs 自动挂到 `$XDG_RUNTIME_DIR/mtp/<mount>`，下面是存储（如「Internal Storage」），
     /// 产物放进存储根目录的 `dir`（如 `documents`），子目录照跟踪目录镜像。挂载点在、里面有存储就算接上了。
-    /// `reader_display`：传完以后还要给阅读器写按书的显示设置（不写＝不用），见 [`ReaderDisplay`]。
-    Mtp {
-        mount: String,
-        dir: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reader_display: Option<ReaderDisplay>,
-    },
+    Mtp { mount: String, dir: String },
     /// Move（xochitl）：经 SSH 端口转发调设备上书架服务的导入接口（`port` 是它在设备本机监听的端口），直接加入 xochitl、
     /// 原地替换保留 UUID。`hosts` 依次试（`用户@地址`，USB、Wi-Fi），第一个连得上的算接上了。文件夹按层建：
     /// 跟踪目录里的子目录路径 `a/b` 是 xochitl 里「a」文件夹里的「b」文件夹（书架服务逐级找、没有就建）。
     Xochitl { hosts: Vec<String>, port: u16 },
-}
-
-/// 传完书以后给阅读器写的按书显示设置（`[deliver]` 的 `reader_display`）。不改产物，只改阅读器自己存的设置。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ReaderDisplay {
-    /// 文石（Onyx）自带阅读器：「显示」里的深色增强（缺省 30，约等于再加伽马 1.18）和图片平滑（缺省开＝抖动成 8 级灰）
-    /// 按书存、没有全局缺省（2026-10-30 Poke7 灰阶测试书量的），产物这边管不到。sync 结束时经 adb 往它的书库数据库里
-    /// 还没打开过的书（设置那一栏是空的）写深色增强 0、图片平滑关：显示的就是产物本身（加深由 `comic_gamma`、`image_gamma` 做）。
-    /// 打开过的书不碰（维护者自己调过的照留）。见 `library::onyx`。
-    Onyx,
 }
 
 /// 标题在阅读器上的字号（`heading_font_keywords` 的阅读器要写，测试书量的；正文 1em＝1）。
@@ -575,7 +558,7 @@ impl Profile {
             return Err(format!("profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}", self.id));
         }
         match &self.deliver {
-            Some(Deliver::Mtp { mount, dir, .. }) => {
+            Some(Deliver::Mtp { mount, dir }) => {
                 let bad = |v: &str| v.is_empty() || v.starts_with('.') || v.contains(['/', '\\']);
                 if bad(mount) || bad(dir) {
                     return Err(format!("profile {}: [deliver] 的 mount、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）", self.id));
@@ -835,11 +818,7 @@ mod tests {
     #[test]
     fn builtin_profiles_parse() {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["boox", "ireader", "kindle", "xochitl"]);
-        let b = get("boox").unwrap();
-        assert_eq!((b.format(), b.output_readable(), b.color), (Format::Epub, Screen { width: 1072, height: 1448 }, false), "文石自带阅读器真机实测：整页图铺满整屏");
-        assert!(matches!(&b.deliver, Some(Deliver::Mtp { dir, reader_display: Some(ReaderDisplay::Onyx), .. }) if dir == "Books"), "文石：传完写阅读器显示设置");
-        assert!(get("ireader").unwrap().deliver.as_ref().is_some_and(|d| matches!(d, Deliver::Mtp { reader_display: None, .. })), "别的 MTP 设备不写");
+        assert_eq!(ids, ["ireader", "kindle", "xochitl"]);
         let k = get("kindle").unwrap();
         assert_eq!((k.format(), k.output_readable()), (Format::Kfx, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
         assert_eq!((k.format_for(false), k.format_for(true)), (Format::Kfx, Format::Kfx), "kindle：文字书、漫画都出 KFX");
@@ -853,7 +832,7 @@ mod tests {
         assert!(k.font_px.is_some(), "掌阅、Move 折算图片宽度要 Kindle 的 1em 像素数");
         assert!(k.caption_fit && get("ireader").unwrap().caption_fit && !get("xochitl").unwrap().caption_fit, "图注同页：kindle、ireader 开");
         assert!(!k.image_alpha && get("ireader").unwrap().image_alpha && get("xochitl").unwrap().image_alpha, "透明图合成白底：只有 kindle");
-        assert!(k.text_repair_only && get("ireader").unwrap().text_repair_only && get("xochitl").unwrap().text_repair_only && get("boox").unwrap().text_repair_only, "文字书只修复：内置模式都是");
+        assert!(k.text_repair_only && get("ireader").unwrap().text_repair_only && get("xochitl").unwrap().text_repair_only, "文字书只修复：三个模式都是");
         assert!(!k.repair_note_links && !get("ireader").unwrap().repair_note_links && get("xochitl").unwrap().repair_note_links, "只修复时仍保证注释可跳：xochitl");
         assert!(!k.kindle_rules && get("ireader").unwrap().kindle_rules && get("xochitl").unwrap().kindle_rules, "标签缺省样式：掌阅、Move 写进书里，Kindle 由写出器排");
         let i = get("ireader").unwrap();
