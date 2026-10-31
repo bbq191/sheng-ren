@@ -4,25 +4,24 @@
 
 ```sh
 cargo build --workspace
-cargo test --workspace                      # 全部测试，要求全部通过（2026-10-30：685 个通过、没有忽略的）
+cargo test --workspace                      # 全部测试，要求全部通过（2026-10-31：682 个通过、没有忽略的）
 cargo test -p bookconv <测试名子串>          # 只跑名字匹配的
 cargo clippy --workspace --all-targets      # 要求 0 警告
 
 tools/regress/run.sh <epub-optimize> 目录 [--device=…]   # 真书回归（见下）
-python3 tools/display/sample.py move|ireader 书.epub 输出目录 --title=章名; sample.py kindle 输出目录; sample.py compare 参照图 图…   # 实际显示抽样：三台同一处章首按像素量每块的位置（见文件说明；Kindle 截图要真机手截）
+python3 tools/display/sample.py ireader 书.epub 输出目录 --title=章名; sample.py kindle 输出目录; sample.py compare 参照图 图…   # 实际显示抽样：两台同一处章首按像素量每块的位置（见文件说明；Kindle 截图要真机手截）
 tools/regress/compare.py 旧目录 新目录                    # 比较两次回归
-tools/quirks/probe.py move                               # 怪癖测试书：生成、导入 Move、拉回排出的 PDF 逐行量（make 只生成、measure 量现成的 PDF）；结论写进 crates/bookconv/data/css-quirks.toml
-tools/quirks/probe.py ireader                            # 同上，掌阅：adb 推进 documents/测试/、点开、逐页截屏（标记是条码图）逐行量
-#   两个都可加 --only=88-99（只跑这几个探针）、--optimize=target/release/epub-optimize（先按那台的模式优化，看修过以后的样子）
+tools/quirks/probe.py ireader                            # 怪癖测试书：生成、adb 推进掌阅 documents/测试/、点开、逐页截屏（标记是条码图）逐行量（make 只生成）；结论写进 crates/bookconv/data/css-quirks.toml
+#   可加 --only=88-99（只跑这几个探针）、--optimize=target/release/epub-optimize（先按那台的模式优化，看修过以后的样子）
 tools/regress/tocchk.py 旧目录 新目录                     # 核对 spine 文件数（不拆文件）和目录（层级、标签、锚点都在）
-shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh xochitl/comic-margins.sh tools/regress/run.sh
+shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh tools/regress/run.sh
 
 ./install.sh --tools                        # 装进 PATH 手工试
 ```
 
 **CI**（`.github/workflows/ci.yml`，2026-10-09）：每次推送、PR 在 GitHub Actions 上跑 `cargo test --workspace`、`cargo clippy --workspace --all-targets -D warnings`、全部 `*.sh` 的 shellcheck、全部 `*.py` 的语法检查（CI 用最新稳定版；本机 2026-10-09 起用 nightly，nightly 的 clippy 检查更多，本机 0 警告时 CI 一般也是 0 警告。新版 clippy 加了检查可能突然报警告，照改即可，改完核对产物逐字节不变）。公开仓库用 GitHub 托管的标准机器不收费。真书回归、真机验证 CI 做不了，仍在本机。
 
-书库的集成测试在 `crates/library/tests/`：`flow.rs` 测入库、同步、生成、挪位置、删书、传设备；`cli.rs` 直接运行 `booklib`，测参数、报错和退出码。都不联网、**不碰真设备**：`tests/common` 把 MTP 挂载目录指到 `<书库>-dev/`（下面造 kindle、ireader 的存储目录），Move 不走 SSH（`BOOKLIB_NO_SSH=1`），要测 Move 的用 `FakeMove`（本机起一个只实现导入接口的假书架服务）。
+书库的集成测试在 `crates/library/tests/`：`flow.rs` 测入库、同步、生成、挪位置、删书、传设备；`cli.rs` 直接运行 `booklib`，测参数、报错和退出码。都不联网、**不碰真设备**：`tests/common` 把 MTP 挂载目录指到 `<书库>-dev/`（下面造 kindle、ireader 的存储目录）。bookconv 测只有 Move 开过的改写规则用 `profile::fixture("xochitl")`（`crates/profile/testdata/`，`fixtures` 特性只在 dev-dependencies 打开）。
 
 ## 真书回归
 
@@ -53,16 +52,14 @@ tools/regress/tocchk.py target/regress/旧 target/regress/新
 | 任何改动 | 输出的 XHTML、OPF、NCX 都是合法 XML（现在是 0 个不合法） |
 | 改了漫画处理 | 拿一卷漫画比图片字节 |
 
-**跑哪些模式**：缺省只跑 `ireader`。三个模式的文字书都只修复，差别在：
+**跑哪些模式**：缺省只跑 `ireader`。两个模式的文字书都只修复，差别在：
 
 | 模式 | 文字书和 `ireader` 差在 | 漫画和 `ireader` 差在 |
 |---|---|---|
 | `kindle` | 不加 `kindle_rules`（规则在 KFX 写出器里），最后还要转一步 KFX（见下面 [KFX](#kfx)） | 阅读范围、固定版式（`comic_fixed_layout`）、不改翻页方向、背景图保留尺寸 |
-| `xochitl` | 另加 `repair_note_links`（注释搬进本章、去回链、图标号换数字） | 彩色、页边距 1（`comic_reader_margins`）、去掉背景图和回链、不改翻页方向 |
 
 背景图、`rgba()`、图注、透明图这几个字段对文字书不起作用（只修复）；背景图、`rgba()` 还管漫画（清洗层两路都过）。注释方式（`notes`）只修复时也不生效，但仍进文字书、漫画两路的指纹，改了照样过期。阅读范围对文字书只影响 KFX 的 `@media` 求值。改了 `kindle_rules`、注释、漫画、彩色、阅读范围相关的处理，对应的模式也跑一遍。
 
-Move 的层叠顺序和 CSS 不一样（`!important` 不提优先级；优先级一样先比规则在各自样式表里的序号，见 [xochitl.md](xochitl.md)）：改了往 Move 产物里写样式表的规则，用 `cargo run --release -p bookconv --example xochitl_order -- 回归目录/xochitl/*.epub` 列出照 CSS 和照 Move 层叠不一样的属性（标题的外边距 Move 本来不认，可以不管）。
 
 回归脚本统计 spine 时不算原书标了 `linear="no"` 的目录页（`regresslib.spine_paths`；产物把它拿出了 spine，文件还在），补的封面页 `eink-cover.xhtml` 由 `tocchk.py` 单独注明、不算拆文件。
 
@@ -85,8 +82,8 @@ done
 | 改动的性质 | 要求 |
 |---|---|
 | 重构、提速写出器 | 同一份优化后 EPUB，新旧写出器的 KFX 逐字节相同（2026-10-06 提速省内存那次：《北斗之拳》卷01 峰值 1.45→0.73GB，金庸全集 0.87→0.56GB、1.7→0.7 秒，阿加莎全集 3.3→1.4 秒，产物逐字节不变） |
-| 照 Send to Kindle 的规则（写出器、掌阅/Move 的 `kindle_rules`） | **改了 `kindle_rules` 或写出器就跑 `tools/kfx/unify.py ~/Documents/ereader/books target/unify`**（掌阅、Move 对我们的 Kindle KFX 逐项一致率，不要 Amazon 样本；比基线 `tools/kfx/unify-baseline.tsv` 差、或新书低于门槛就退出码 1，有意改了就 `--update` 写回基线一起提交；新出现的偏差按[五类](kfx.md#三台统一的回归门槛2026-10-12)归类，属于漏洞的修掉）；`tools/kfx/s2kbatch.py`（写出器对 Amazon 样本逐属性）、`tools/kfx/s2kdev.py`（三台对 Amazon 样本逐项一致率），见 [KFX · 三台和 Send to Kindle 的一致性](kfx.md#三台和-send-to-kindle-的一致性)；样本在 Kindle 的 `documents/Downloads/Items01/` |
-| 三台版式（2026-10-15 定的验收重点：居中、竖排、横线、分页、封面不多页、漫画留边） | **跑 `tools/kfx/layout.py ~/Documents/ereader/books target/layout`**：以 Kindle KFX 为准，逐个文字块查掌阅、Move 的对齐、窄块竖排、块宽、上下横线/竖线/`<hr>`、另起一页、空白页、封面页（只有图的节的个数和位置，合集分书封面不多页；Move/掌阅 `break_margin` 估算插的分页在 Kindle 上是版面自己挪页、KFX 里不分节，并回前一节）（读 `epub-to-kfx --styles` 的 `#sec`/`#open`/`#box`/`#rule`/`#hr` 行；阅读器怪癖按 profile 的 `padding`、`block_width`、`borders` 折进来；边框颜色和底色灰度差不到 24 的不算；Move 搬进本章的注释、KINDLE_RULES 18 估算的分页不算）。一处不一样就列，不打总分；基线 `tools/kfx/layout-baseline.tsv` 记每本每台各类的处数，多了退出码 1（2026-10-27 才第一次生成并提交：33 本文字书两台各类都是 0，没记着的书有一处就不过，所以以前没有这个文件门槛也一样起作用）。**漫画跑 `tools/kfx/comics.py ~/Documents/ereader/books target/comics`**：页数、画布和阅读范围同比例（不拉伸）、翻页方向照书（profile `comic_page_direction` 例外）、Kindle KFX 固定版式 1:1 居中算硬性；受限边离屏幕 1–2px、居中按像素量（JPEG 振铃、纸色淡边会差几 px），列出来看图 |
+| 照 Send to Kindle 的规则（写出器、掌阅的 `kindle_rules`） | **改了 `kindle_rules` 或写出器就跑 `tools/kfx/unify.py ~/Documents/ereader/books target/unify`**（掌阅对我们的 Kindle KFX 逐项一致率，不要 Amazon 样本；比基线 `tools/kfx/unify-baseline.tsv` 差、或新书低于门槛就退出码 1，有意改了就 `--update` 写回基线一起提交；新出现的偏差按[五类](kfx.md#三台统一的回归门槛2026-10-12)归类，属于漏洞的修掉）；`tools/kfx/s2kbatch.py`（写出器对 Amazon 样本逐属性）、`tools/kfx/s2kdev.py`（两台对 Amazon 样本逐项一致率），见 [KFX · 三台和 Send to Kindle 的一致性](kfx.md#三台和-send-to-kindle-的一致性)；样本在 Kindle 的 `documents/Downloads/Items01/` |
+| 三台版式（2026-10-15 定的验收重点：居中、竖排、横线、分页、封面不多页、漫画留边） | **跑 `tools/kfx/layout.py ~/Documents/ereader/books target/layout`**：以 Kindle KFX 为准，逐个文字块查掌阅的对齐、窄块竖排、块宽、上下横线/竖线/`<hr>`、另起一页、空白页、封面页（只有图的节的个数和位置，合集分书封面不多页；掌阅 `break_margin` 估算插的分页在 Kindle 上是版面自己挪页、KFX 里不分节，并回前一节）（读 `epub-to-kfx --styles` 的 `#sec`/`#open`/`#box`/`#rule`/`#hr` 行；阅读器怪癖按 profile 的 `padding`、`block_width`、`borders` 折进来；边框颜色和底色灰度差不到 24 的不算；`repair_note_links` 搬进本章的注释、KINDLE_RULES 18 估算的分页不算）。一处不一样就列，不打总分；基线 `tools/kfx/layout-baseline.tsv` 记每本每台各类的处数，多了退出码 1（2026-10-27 才第一次生成并提交：33 本文字书两台各类都是 0，没记着的书有一处就不过，所以以前没有这个文件门槛也一样起作用）。**漫画跑 `tools/kfx/comics.py ~/Documents/ereader/books target/comics`**：页数、画布和阅读范围同比例（不拉伸）、翻页方向照书（profile `comic_page_direction` 例外）、Kindle KFX 固定版式 1:1 居中算硬性；受限边离屏幕 1–2px、居中按像素量（JPEG 振铃、纸色淡边会差几 px），列出来看图 |
 | 改了写出器的行为 | 只有该变的书变了，逐本说明（比如写出器 7 只有《福尔摩斯探案全集》变；写出器 8 同一个 `--id` 下全部逐字节不变，书库产物因唯一 ID 改取书 id 全变）；`WRITER_VERSION` 加一；上真机看过再写 ✓ |
 | 改了容器读写（`ion`、`container`） | `kfx-repack` 解开再打包设备上的样本（`target/kfx-samples/` 等）全部逐字节相同 |
 
@@ -100,14 +97,14 @@ done
 |---|---|---|---|
 | 文字书的清洗、优化、图片处理 | `bookconv::optimize::OPTIMIZE_VERSION`（附一行变更说明） | 65 | 文字书 |
 | 漫画的处理（裁边、缩放补白、灰度、固定版式……） | `bookconv::optimize::COMIC_VERSION`（附一行变更说明；2026-10-08 从上一行分出来） | 60 | 漫画 |
-| 掌阅、Move 照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 42 | 只有开了 `kindle_rules` 的模式的文字书 |
+| 掌阅照 Send to Kindle 的规则统一（`kindle_rules`） | `bookconv::wash::KINDLE_RULES_VERSION`（附一行变更说明；只进指纹的 `u` 段） | 42 | 只有开了 `kindle_rules` 的模式的文字书 |
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签、作者国籍、译者、出版社、日期、ISBN，书名换成网站书名 | `bookconv::opfmeta::VERSION` | 6 | 只有补过东西的 |
 | EPUB → KFX | `kfx::write::WRITER_VERSION` | 25 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。
-profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`、`[heading_sizes]`、`margin_top`、`[page_top]`，`bookconv::reader_model`）和 `em_px` 以哈希进指纹（`m` 段），改了它们（比如重量了 Move 的标题字号）不用加版本号。
+profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`、`[heading_sizes]`、`margin_top`、`[page_top]`，`bookconv::reader_model`）和 `em_px` 以哈希进指纹（`m` 段），改了它们（比如重量了标题字号）不用加版本号。
 
 **版本号写进指纹、不写进书**（2026-10-09 定）：书里的优化标记 `META-INF/eink-optimized` 只写 `full`/`core`，KFX 里的创建器版本固定写 `1`。所以加了版本号以后书会重新生成，但内容没变的书生成出来逐字节相同，设备上不重传；只有真变了的书才传。改了影响产物的代码一律加版本号，不因为"书库里的书都没碰到"省掉（已定）。
 
@@ -115,8 +112,8 @@ profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_h
 
 **重构的安全网（2026-10-15）**：
 - 指纹：`cargo test -p library --test fp_golden`（见 [架构 · 指纹](architecture.md#指纹)）；有意改了指纹写法才用 `UPDATE_FP_GOLDEN=1` 重写 `fp_golden.txt` 一起提交。
-- 产物：重构前后各跑一次三台的 `tools/regress/run.sh`（`--device=kindle|ireader|xochitl`）和 kindle 产物的 `epub-to-kfx`，EPUB、KFX 逐字节 `cmp`。
-- profile 的 CSS 怪癖字段收在 `Profile::css`（`profile::CssQuirks`，TOML 里照旧平铺）；「三台以哪台为准」只在 `profile::reference()` 定，`OptimizeOpts::for_profile_against` 可另给。
+- 产物：重构前后各跑一次两台的 `tools/regress/run.sh`（`--device=kindle|ireader`）和 kindle 产物的 `epub-to-kfx`，EPUB、KFX 逐字节 `cmp`。
+- profile 的 CSS 怪癖字段收在 `Profile::css`（`profile::CssQuirks`，TOML 里照旧平铺）；「各台以哪台为准」只在 `profile::reference()` 定，`OptimizeOpts::for_profile_against` 可另给。
 - 只修复时清洗选项带哪些，由 `WashOpts::repair_from` 逐字段解构决定：给 `WashOpts` 加字段编译不过，逼着决定带不带（以前手写列表漏带过 `media`，KINDLE_RULES 7）。
 - `kindle_rules` 各步的开头用 `wash::scan_chapters`（全书样式表 + 逐章并行），新写的文件放 `wash::beside_opf`；别再各写一份。
 - `tools/` 的脚本读 profile 用 `toollib.profile(模式)`（`epub-optimize --print-profile`），别再按行扫 TOML 自己填缺省。
@@ -155,8 +152,8 @@ profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_h
   | GBK、Big5、UTF-16 的 XHTML、OPF、NCX 转 UTF-8 | `wash::transcode_entries`（优化器读完书先转，后面一律按 UTF-8） |
   | 搜索结果的书名、作者对不对得上（豆瓣、QQ 阅读共用） | `library::matching::hit_matches` |
   | 标签缺省样式（优化器的 `eink-ua.css`、KFX 写出器共用一张表） | 表在 `csscascade::ua`，写成样式表的 `bookconv::uastyle::ua_css` |
-  | 一种 CSS 写法在掌阅、Move 上和 Kindle 比怎么样（验证过的结论，体检、怪癖测试书共用） | `crates/bookconv/data/css-quirks.toml` + `bookconv::audit`（新结论写进表里，别再只写在文档的文字里；按属性分节、第一条对上的算，挪顺序后跑 `cargo test -p bookconv no_dead_rows`，前后各用 `QUIRKS_SNAPSHOT=文件` 导出每种写法的结论比对，2026-10-16 整理时 33600 种一字不差） |
-  | Kindle 上的样子：没写行高的倍数 `LH_EM`、行高下限、百分比折页宽 32em、空段折叠系数；全书正文行距 `base_line_height`、行高归一 `line_height_ratio`、正文字体 `body_font`；竖直长度换根 em `vertical_rem`；全书样式表 `book_css`；一章的元素表 `Chapter`（层叠只写一遍，`<body>` 里的元素按文档序编号，`matches_tags` 对上标签扫描才改源码）。KFX 写出器和掌阅、Move 的 `kindle_rules` 系列 pass 共用（2026-10-13 从写出器和 7 个 pass 收拢，产物逐字节不变） | `bookconv::kindle_model`（新的照 Kindle 改写的 pass 一律从 `Chapter` 起步，别再自己走 DOM、抄常量） |
+  | 一种 CSS 写法在掌阅上和 Kindle 比怎么样（验证过的结论，体检、怪癖测试书共用） | `crates/bookconv/data/css-quirks.toml` + `bookconv::audit`（新结论写进表里，别再只写在文档的文字里；按属性分节、第一条对上的算，挪顺序后跑 `cargo test -p bookconv no_dead_rows`，前后各用 `QUIRKS_SNAPSHOT=文件` 导出每种写法的结论比对，2026-10-16 整理时 33600 种一字不差） |
+  | Kindle 上的样子：没写行高的倍数 `LH_EM`、行高下限、百分比折页宽 32em、空段折叠系数；全书正文行距 `base_line_height`、行高归一 `line_height_ratio`、正文字体 `body_font`；竖直长度换根 em `vertical_rem`；全书样式表 `book_css`；一章的元素表 `Chapter`（层叠只写一遍，`<body>` 里的元素按文档序编号，`matches_tags` 对上标签扫描才改源码）。KFX 写出器和掌阅的 `kindle_rules` 系列 pass 共用（2026-10-13 从写出器和 7 个 pass 收拢，产物逐字节不变） | `bookconv::kindle_model`（新的照 Kindle 改写的 pass 一律从 `Chapter` 起步，别再自己走 DOM、抄常量） |
   | 元素层叠出来的声明、来源（属性名 → 值；短键用快速哈希） | `csscascade::Decls`、`Origins`，一次算两张用 `Sheet::cascade_split`（2026-10-15） |
   | scraper 元素上查我们自己加的 `data-eink-*` 属性 | `kindle_model::attr_of`（scraper 的 `attr()` 对不在静态表里的名字要拿全局锁，多线程反而变慢） |
   | `kindle_rules` 的一步：全书样式表 + 逐章并行分析；新写的样式表、垫图放哪 | `wash::scan_chapters`；`wash::beside_opf`；新的一步加进步骤表 `KINDLE_RULE_PASSES`（写明开关条件和 `after`） |

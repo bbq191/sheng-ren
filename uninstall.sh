@@ -62,5 +62,5 @@ fi
 # 书库缺省位置和 booklib 一致：$BOOKLIB_DIR，否则 $XDG_DATA_HOME/booklib，否则 ~/.local/share/booklib（空值按没设处理）
 lib=${BOOKLIB_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/booklib}
 if [[ -d $lib ]]; then
-  echo "  书库还在：${lib/#"$HOME"/\~}（$(du -sh "$lib" 2>/dev/null | cut -f1)）。不要了就自己删这个目录；书目录旁边生成的 kindle/ ireader/ xochitl/ 也一样。"
+  echo "  书库还在：${lib/#"$HOME"/\~}（$(du -sh "$lib" 2>/dev/null | cut -f1)）。不要了就自己删这个目录；书目录旁边生成的 kindle/ ireader/ 也一样。"
 fi

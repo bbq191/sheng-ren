@@ -1,10 +1,7 @@
-"""实际显示抽样：同一本书同一处（章首）在 Kindle、掌阅、Move 上排出来的样子，按像素量出每行字的位置再比。
+"""实际显示抽样：同一本书同一处（章首）在 Kindle、掌阅上排出来的样子，按像素量出每行字的位置再比。
 unify.py 比的是交给阅读器的样式（阅读器自己的怪癖不在其中）；这里比屏幕上真的画出来的（2026-10-14 P0，维护者要的）。
 
 用法：
-  python3 sample.py move    书.epub 输出目录 --title=章名 [--host=root@10.11.99.1] [--pages=2]
-      经书架服务导入 Move（进根目录，名字「测试-抽样-…」，用完请删），取回 xochitl 排的 PDF，按文字找到章名所在页，渲染成屏幕像素的 PNG
-      （PDF 的字是康熙部首这类兼容字符，按 NFKC 归一以后找）。
   python3 sample.py ireader 书.epub 输出目录 --title=章名 [--pages=2] [--serial=…]
       adb 推进掌阅 documents/测试/（用完请删），文件管理器里点开，菜单键 → 目录 →（展开全部）→ 点章名，逐页截屏。
   python3 sample.py kindle  输出目录 [--last=1]
@@ -15,62 +12,19 @@ unify.py 比的是交给阅读器的样式（阅读器自己的怪癖不在其�
       都按各自的正文行距、文字区宽度归一，按块（段落、标题、图）比每块开头那一行：和上一块中线的距离（行）、左边缩进（文字区宽的
       %）、字高（正文字高的倍数）。距离差 0.25 行以上、缩进差 1.5% 以上、字高差 10% 以上的标出来。参照一般是 Kindle 的截图。
 
-各台裁掉的状态栏、页码：Kindle 截图上下各 75px（阅读范围 1546 高），掌阅底部 80px；Move 的 PDF 只有正文。
-注意：「行」是各台自己的正文行距。Kindle 的上下边距按行距的倍数存（跟着「Aa → 行距」设置变），掌阅、Move 的按字号算（不跟行距变）；
-三台的「行距 ÷ 字高」不一样时（2026-10-14《人生海海》：Kindle 1.66、Move 1.44、掌阅 1.51），以行算的距离里有一部分是设置的差别，
-不全是排版规则的差别。"""
-import json, os, re, statistics, subprocess, sys, time, unicodedata, urllib.parse, urllib.request
+各台裁掉的状态栏、页码：Kindle 截图上下各 75px（阅读范围 1546 高），掌阅底部 80px。
+注意：「行」是各台自己的正文行距。Kindle 的上下边距按行距的倍数存（跟着「Aa → 行距」设置变），掌阅的按字号算（不跟行距变）；
+两台的「行距 ÷ 字高」不一样时（2026-10-14《人生海海》：Kindle 1.66、掌阅 1.51），以行算的距离里有一部分是设置的差别，
+不全是排版规则的差别。2026-10-31 以前还有 move（Move 上 xochitl 排的 PDF），Move 卖了以后删了。"""
+import json, os, re, statistics, subprocess, sys, time, unicodedata
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from toollib import cli_args, cli_opts
 
 KINDLE_SHOTS = '/run/user/1000/mtp/kindle/Internal Storage/screenshots'
-XOCHITL = '/home/root/.local/share/remarkable/xochitl'
-MOVE_WIDTH = 954  # Move 屏幕宽（PDF 按它渲染，1px＝屏幕 1px）
 
 
 def norm(s):
     return re.sub(r'\s+', '', unicodedata.normalize('NFKC', s))
-
-
-# ---------------------------------------------------------------- Move
-
-def move(book, out, title, host, pages):
-    name = f"测试-抽样-{os.path.splitext(os.path.basename(book))[0]}-{time.strftime('%H%M%S')}.epub"
-    tunnel = subprocess.Popen(['ssh', '-o', 'ControlMaster=no', '-o', 'ExitOnForwardFailure=yes', '-N', '-L', '8790:127.0.0.1:8790', host])
-    try:
-        time.sleep(2)
-        req = urllib.request.Request('http://127.0.0.1:8790/import?name=' + urllib.parse.quote(name) + '&folder=', data=open(book, 'rb').read(),
-                                     headers={'Content-Type': 'application/epub+zip'}, method='POST')
-        v = json.load(urllib.request.urlopen(req, timeout=180))
-        while 'job' in v and v.get('state') != 'done':
-            time.sleep(2)
-            v = json.load(urllib.request.urlopen(f"http://127.0.0.1:8790/import/jobs/{v['job']}", timeout=30))
-            if v.get('state') == 'failed':
-                sys.exit(f'导入失败：{v}')
-        uid = v['uuid']
-    finally:
-        tunnel.terminate()
-    pdf = os.path.join(out, 'move.pdf')
-    for _ in range(90):  # 大书排版要一会儿
-        if subprocess.run(['scp', '-q', f'{host}:{XOCHITL}/{uid}.pdf', pdf]).returncode == 0:
-            break
-        time.sleep(5)
-    else:
-        sys.exit('等不到 Move 排好的 PDF')
-    n = int(re.search(r'Pages:\s+(\d+)', subprocess.run(['pdfinfo', pdf], capture_output=True, text=True).stdout).group(1))
-    want = norm(title)
-    texts = {p: [norm(l) for l in subprocess.run(['pdftotext', '-f', str(p), '-l', str(p), '-layout', pdf, '-'], capture_output=True, text=True).stdout.splitlines() if norm(l)]
-             for p in range(1, n + 1)}
-    # 章首：章名是这一页的第一行（目录页里也有单独成行的章名）；没有的话取第一个单独成行的
-    page = next((p for p, ls in texts.items() if ls[:1] == [want]), None) or next((p for p, ls in texts.items() if want in ls), None)
-    if page is None:
-        sys.exit(f'PDF 里没找到单独成行的「{title}」')
-    shots = []
-    for k in range(pages):
-        base = os.path.join(out, f'move-{k + 1}')
-        subprocess.run(['pdftoppm', '-f', str(page + k), '-l', str(page + k), '-scale-to-x', str(MOVE_WIDTH), '-scale-to-y', '-1', '-gray', '-png', '-singlefile', pdf, base], check=True)
-        shots.append(base + '.png')
-    print(f'Move：「{title}」在第 {page} 页；{" ".join(shots)}；测试书「{name}」在 Move 根目录，用完请删')
 
 
 # ---------------------------------------------------------------- 掌阅
@@ -252,15 +206,12 @@ def main():
     pos = cli_args(1, __doc__)
     opt = cli_opts()
     cmd = pos[0]
-    if cmd in ('move', 'ireader'):
+    if cmd == 'ireader':
         if len(pos) < 3 or '--title' not in opt:
             sys.exit(__doc__)
         os.makedirs(pos[2], exist_ok=True)
         pages = int(opt.get('--pages', 2))
-        if cmd == 'move':
-            move(pos[1], pos[2], opt['--title'], opt.get('--host', 'root@10.11.99.1'), pages)
-        else:
-            ireader(pos[1], pos[2], opt['--title'], pages, opt.get('--serial'))
+        ireader(pos[1], pos[2], opt['--title'], pages, opt.get('--serial'))
     elif cmd == 'kindle' and len(pos) >= 2:
         os.makedirs(pos[1], exist_ok=True)
         kindle(pos[1], int(opt.get('--last', 1)))

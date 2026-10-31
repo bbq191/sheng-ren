@@ -16,9 +16,9 @@ from kfx import by_type, cli_args, cli_opts, opf_path, reading_order
 from PIL import Image
 import toollib
 
-DEVICES = ['kindle', 'ireader', 'xochitl']
+DEVICES = ['kindle', 'ireader']  # 2026-10-31 以前还有 xochitl（Move 卖了，模式删了）
 # 漫画的阅读范围在屏幕上的左上角（像素）
-AREA_ORIGIN = {'kindle': (0, 0), 'ireader': (0, 0), 'xochitl': (1, 112)}
+AREA_ORIGIN = {'kindle': (0, 0), 'ireader': (0, 0)}
 HARD = {'页数', '拉伸', '翻页', 'KFX'}
 
 

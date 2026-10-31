@@ -104,11 +104,8 @@ pub enum ImageSizing {
 pub enum Deliver {
     /// MTP 设备（Kindle、掌阅）：jmtpfs 自动挂到 `$XDG_RUNTIME_DIR/mtp/<mount>`，下面是存储（如「Internal Storage」），
     /// 产物放进存储根目录的 `dir`（如 `documents`），子目录照跟踪目录镜像。挂载点在、里面有存储就算接上了。
+    /// （2026-10-31 以前还有 `xochitl`：经 SSH 调 Move 上书架服务的导入接口，Move 卖了以后删了。）
     Mtp { mount: String, dir: String },
-    /// Move（xochitl）：经 SSH 端口转发调设备上书架服务的导入接口（`port` 是它在设备本机监听的端口），直接加入 xochitl、
-    /// 原地替换保留 UUID。`hosts` 依次试（`用户@地址`，USB、Wi-Fi），第一个连得上的算接上了。文件夹按层建：
-    /// 跟踪目录里的子目录路径 `a/b` 是 xochitl 里「a」文件夹里的「b」文件夹（书架服务逐级找、没有就建）。
-    Xochitl { hosts: Vec<String>, port: u16 },
 }
 
 /// 标题在阅读器上的字号（`heading_font_keywords` 的阅读器要写，测试书量的；正文 1em＝1）。
@@ -564,10 +561,6 @@ impl Profile {
                     return Err(format!("profile {}: [deliver] 的 mount、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）", self.id));
                 }
             }
-            Some(Deliver::Xochitl { hosts, port }) if hosts.is_empty() || hosts.iter().any(|h| h.is_empty() || h.starts_with('-') || h.contains(char::is_whitespace)) || *port == 0 => {
-                return Err(format!("profile {}: [deliver] 的 hosts 须非空（每项是 用户@地址）、port 非零", self.id));
-            }
-            Some(Deliver::Xochitl { .. }) => {}
             None => {}
         }
         let Screen { width, height } = self.screen;
@@ -706,6 +699,17 @@ pub fn get(id: &str) -> Option<&'static Profile> {
     Registry::builtin().get(id)
 }
 
+/// 测试用的 profile（`testdata/<id>.toml`，不是内置模式）：现在只有 `xochitl`（Move 卖了、内置模式删了，只有它开的改写规则还留着，
+/// 单测拿它测）。只在打开 `fixtures` 特性时有。
+#[cfg(any(test, feature = "fixtures"))]
+pub fn fixture(id: &str) -> Option<&'static Profile> {
+    static XOCHITL: OnceLock<Profile> = OnceLock::new();
+    match id {
+        "xochitl" => Some(XOCHITL.get_or_init(|| Profile::parse("xochitl", include_str!("../testdata/xochitl.toml")).unwrap_or_else(|e| panic!("测试用 {e}")))),
+        _ => None,
+    }
+}
+
 /// 命令行参数里的 `--device=<id>`（必填）→ 内置 profile。缺失或未知 id 时 `Err` 带上可选 id 列表，供调用方报用法错。
 pub fn device_from_args<S: AsRef<str>>(args: &[S]) -> Result<&'static Profile, String> {
     let id = args.iter().find_map(|a| a.as_ref().strip_prefix("--device="));
@@ -795,14 +799,14 @@ mod tests {
     /// 漫画阅读范围没写时和产物格式的一样；改了的克隆不影响内置的。
     #[test]
     fn comic_readable_falls_back_to_output_readable() {
-        let mut p = get("xochitl").unwrap().clone();
+        let mut p = fixture("xochitl").unwrap().clone();
         assert_eq!((p.comic.reader_margins, p.comic_readable()), (Some(1), Screen { width: 952, height: 1457 }));
         p.comic.reader_margins = None;
         p.comic.readable = None;
         assert_eq!(p.comic_readable(), Screen { width: 842, height: 1455 });
         p.readable.insert(Format::Epub, Screen { width: 800, height: 1400 });
         assert_eq!((p.output_readable(), p.comic_readable()), (Screen { width: 800, height: 1400 }, Screen { width: 800, height: 1400 }));
-        assert_eq!(get("xochitl").unwrap().comic.reader_margins, Some(1));
+        assert_eq!(fixture("xochitl").unwrap().comic.reader_margins, Some(1));
     }
 
     /// 去掉了的 `ppi` 键：写了照收（不论值），不写也行。
@@ -818,44 +822,39 @@ mod tests {
     #[test]
     fn builtin_profiles_parse() {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["ireader", "kindle", "xochitl"]);
+        assert_eq!(ids, ["ireader", "kindle"]);
         let k = get("kindle").unwrap();
+        let i = get("ireader").unwrap();
         assert_eq!((k.format(), k.output_readable()), (Format::Kfx, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
         assert_eq!((k.format_for(false), k.format_for(true)), (Format::Kfx, Format::Kfx), "kindle：文字书、漫画都出 KFX");
-        assert!(k.background_images && get("ireader").unwrap().background_images && !get("xochitl").unwrap().background_images, "背景图：kindle、ireader 保留，xochitl 去掉");
-        assert!(k.background_sizing && !get("ireader").unwrap().background_sizing, "背景图尺寸：kindle 保留，ireader 去掉");
-        assert!(k.css.css_rgba && !get("ireader").unwrap().css.css_rgba && get("xochitl").unwrap().css.css_rgba, "rgba()：只有掌阅不认");
-        assert!(k.css.background_no_repeat && get("ireader").unwrap().css.background_no_repeat && !get("xochitl").unwrap().css.background_no_repeat, "背景图 no-repeat：只有 xochitl 不认");
-        assert!(k.css.margin_top && get("ireader").unwrap().css.margin_top && !get("xochitl").unwrap().css.margin_top, "margin-top：只有 xochitl 不认");
-        assert!(k.css.background_auto_height && !get("ireader").unwrap().css.background_auto_height && get("xochitl").unwrap().css.background_auto_height, "背景尺寸的 auto 高：只有掌阅不认");
-        assert_eq!((k.image_sizing, get("ireader").unwrap().image_sizing, get("xochitl").unwrap().image_sizing), (ImageSizing::Css, ImageSizing::DevicePx, ImageSizing::Percent));
-        assert!(k.font_px.is_some(), "掌阅、Move 折算图片宽度要 Kindle 的 1em 像素数");
-        assert!(k.caption_fit && get("ireader").unwrap().caption_fit && !get("xochitl").unwrap().caption_fit, "图注同页：kindle、ireader 开");
-        assert!(!k.image_alpha && get("ireader").unwrap().image_alpha && get("xochitl").unwrap().image_alpha, "透明图合成白底：只有 kindle");
-        assert!(k.text_repair_only && get("ireader").unwrap().text_repair_only && get("xochitl").unwrap().text_repair_only, "文字书只修复：三个模式都是");
-        assert!(!k.repair_note_links && !get("ireader").unwrap().repair_note_links && get("xochitl").unwrap().repair_note_links, "只修复时仍保证注释可跳：xochitl");
-        assert!(!k.kindle_rules && get("ireader").unwrap().kindle_rules && get("xochitl").unwrap().kindle_rules, "标签缺省样式：掌阅、Move 写进书里，Kindle 由写出器排");
-        let i = get("ireader").unwrap();
+        assert!(k.background_images && i.background_images, "背景图：kindle、ireader 保留");
+        assert!(k.background_sizing && !i.background_sizing, "背景图尺寸：kindle 保留，ireader 去掉");
+        assert!(k.css.css_rgba && !i.css.css_rgba, "rgba()：只有掌阅不认");
+        assert!(k.css.background_no_repeat && i.css.background_no_repeat);
+        assert!(k.css.margin_top && i.css.margin_top);
+        assert!(k.css.background_auto_height && !i.css.background_auto_height, "背景尺寸的 auto 高：只有掌阅不认");
+        assert_eq!((k.image_sizing, i.image_sizing), (ImageSizing::Css, ImageSizing::DevicePx));
+        assert!(k.font_px.is_some(), "掌阅折算图片宽度要 Kindle 的 1em 像素数");
+        assert!(k.caption_fit && i.caption_fit, "图注同页：kindle、ireader 开");
+        assert!(!k.image_alpha && i.image_alpha, "透明图合成白底：只有 kindle");
+        assert!(k.text_repair_only && i.text_repair_only, "文字书只修复：内置模式都是");
+        assert!(!k.repair_note_links && !i.repair_note_links);
+        assert!(!k.kindle_rules && i.kindle_rules, "标签缺省样式：掌阅写进书里，Kindle 由写出器排");
         assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);
-        let x = get("xochitl").unwrap();
-        assert_eq!(x.screen, Screen { width: 954, height: 1696 });
-        assert_eq!(x.readable(Format::Epub), Screen { width: 842, height: 1455 }, "EPUB 用实测阅读范围");
-        assert!(x.color);
-        assert_eq!(x.formats, [Format::Epub]);
-        assert_eq!((k.comic.margin, i.comic.margin, x.comic.margin), (1, 1, 0));
-        assert_eq!(x.notes.icons, NoteIcons::Number);
-        assert_eq!((k.comic.reader_margins, x.comic.reader_margins), (None, Some(1)));
-        assert_eq!((k.comic_readable(), x.comic_readable()), (Screen { width: 1272, height: 1696 }, Screen { width: 952, height: 1457 }), "Kindle 漫画固定版式整屏");
-        assert!(k.comic.fixed_layout && !i.comic.fixed_layout && !x.comic.fixed_layout);
-        assert_eq!((k.notes.backlinks, i.notes.backlinks, x.notes.backlinks), (true, true, false), "只有 xochitl 去注释回链");
-        assert_eq!((k.comic.page_direction.as_deref(), i.comic.page_direction.as_deref(), x.comic.page_direction.as_deref()), (None, None, None), "三台漫画都照书的翻页方向（掌阅往右翻的书要在阅读器里选「漫画」排版才铺满，2026-10-15）");
+        assert_eq!((k.comic.margin, i.comic.margin), (1, 1));
+        assert_eq!(k.comic.reader_margins, None);
+        assert_eq!(k.comic_readable(), Screen { width: 1272, height: 1696 }, "Kindle 漫画固定版式整屏");
+        assert!(k.comic.fixed_layout && !i.comic.fixed_layout);
+        assert_eq!((k.notes.backlinks, i.notes.backlinks), (true, true));
+        assert_eq!((k.comic.page_direction.as_deref(), i.comic.page_direction.as_deref()), (None, None), "漫画都照书的翻页方向（掌阅往右翻的书要在阅读器里选「漫画」排版才铺满，2026-10-15）");
         assert!(get("nope").is_none());
+        assert!(get("xochitl").is_none(), "Move 卖了，内置模式删了（2026-10-31）");
     }
 
     #[test]
     fn device_from_args_finds_id_or_lists_choices() {
-        assert_eq!(device_from_args(&["a.epub", "--device=xochitl"]).unwrap().id, "xochitl");
+        assert_eq!(device_from_args(&["a.epub", "--device=ireader"]).unwrap().id, "ireader");
         let err = device_from_args(&["--device=nope"]).unwrap_err();
         assert!(err.contains("kindle") && err.contains("--device="), "{err}");
         assert!(device_from_args::<&str>(&[]).is_err());
@@ -910,13 +909,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("profile-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let body = |w: u32| format!("name = \"t\"\nppi = 212\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n[screen]\nwidth = {w}\nheight = 1448\n");
-        std::fs::write(dir.join("xochitl.toml"), body(1072)).unwrap();
+        std::fs::write(dir.join("ireader.toml"), body(1072)).unwrap();
         std::fs::write(dir.join("new-dev.toml"), body(1000)).unwrap();
         std::fs::write(dir.join("README.md"), "ignored").unwrap();
-        std::fs::write(dir.join(".#xochitl.toml"), "编辑器锁文件").unwrap();
+        std::fs::write(dir.join(".#ireader.toml"), "编辑器锁文件").unwrap();
         let r = Registry::with_dir(&dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
-        assert_eq!(r.get("xochitl").unwrap().screen.width, 1072);
+        assert_eq!(r.get("ireader").unwrap().screen.width, 1072);
         assert_eq!(r.get("new-dev").unwrap().screen.width, 1000);
         assert_eq!(r.iter().count(), Registry::builtin().iter().count() + 1, "覆盖同 id、新增一台");
     }

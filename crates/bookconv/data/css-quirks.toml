@@ -1,4 +1,4 @@
-# 怪癖表：一种 CSS 写法在掌阅、Move 上排出来和 Kindle 比怎么样（以 Kindle 为准，Kindle 由 KFX 写出器照 Send to Kindle 写）。
+# 怪癖表：一种 CSS 写法在掌阅上排出来和 Kindle 比怎么样（以 Kindle 为准，Kindle 由 KFX 写出器照 Send to Kindle 写）。
 # 体检（`bookconv::audit`，sync 时给每本新生成的书报）按它查书里用到的写法；怪癖测试书 tools/quirks/probe.py 量出来的结论写回这里。
 # 只收验证过的（真机、测试书）；没有的就是"没验证过"，体检照报。
 #
@@ -7,16 +7,16 @@
 #   on     元素：p、heading（h1–h6）、cell（td、th）、list（li）、block（别的块：div、blockquote……）、inline（span、a、b……）、img；不写＝都算
 #   value  值：em（em、ex）、rem、px、pt（pt 和别的绝对单位）、pct（%）、number（不带单位）、zero（0）、neg（负数）、keyword（别的）；不写＝都算
 #   via    写法：sheet（外链样式表）、style（文档里的 <style>）、inline（style 属性）、important（带 !important，不论在哪）；不写＝都算
-#   ireader / xochitl  这台上的表现：
+#   ireader  这台上的表现：
 #          same＝和 Kindle 一样；fixed＝不一样，kindle_rules 改写了；accept＝不一样或不管，但不影响验收（note 说为什么）；
 #          broken＝不一样、没处理（体检报出来）；不写＝没验证过（体检报"没验证过"）
 #   note   说明；src 出处
 # 一条写法按文件顺序找第一条对得上、而且这台有结论的（所以具体的写在前面；只写一台的条目不挡另一台）。
 # 按属性分节，一节里某台专有的、具体的在前。挪顺序、合并、拆条目后跑 `cargo test -p bookconv no_dead_rows`（没有被整条挡住的条目），
 # 并用 `QUIRKS_SNAPSHOT=文件` 前后各导一份每种写法的结论比对（应该一字不差，除非本来就要改结论）。
-# 说明只写结论、怎么处理、哪个版本号；来龙去脉在 docs/（xochitl.md、devices.md、typesetting.md）。
-# 装不进这张表的（不是哪个属性的事）：Move 的层叠顺序（`!important` 不提优先级，优先级一样先比规则在各自样式表里的序号），见 docs/xochitl.md。
-# 掌阅的结论 2026-10-13 起由 `probe.py ireader`（adb 逐页截屏，探针同 Move）量。
+# 说明只写结论、怎么处理、哪个版本号；来龙去脉在 docs/（devices.md、typesetting.md）。
+# 2026-10-31 以前还有 Move（xochitl）一栏和只有它的条目：Move 卖了、内置模式删了，一起去掉（要找回看 git 历史）。
+# 掌阅的结论 2026-10-13 起由 `probe.py ireader`（adb 逐页截屏）量。
 
 # ---------------------------------------------------------------- 不分属性
 
@@ -34,24 +34,6 @@ ireader = "fixed"
 note = "掌阅带 !important 的声明不起作用（只有这一条规则、没有冲突的也不起作用）：去掉，靠它胜出的值写进行内 style（KINDLE_RULES 25，《克莱因壶》引文署名靠右真机）"
 src = "2026-10-13 测试-怪癖-掌阅 Q28；2026-10-12 测试-插图"
 
-# ---------------------------------------------------------------- Move 上行内 style、<style> 里的长度
-
-[[rule]]
-prop = ["margin-*"]
-value = ["em", "rem"]
-via = ["style", "inline"]
-xochitl = "fixed"
-note = "Move 上行内 style、<style> 里的 em 按 1em＝23px 排（外链样式表 37.8px），约 0.61 倍：<style> 挪进外链、行内的搬进类规则（KINDLE_RULES 22）"
-src = "2026-10-13 测试-怪癖 Q26、Q29、Q46、Q47、Q58；修后优化过的测试书真机同外链"
-
-[[rule]]
-prop = ["text-indent", "font-size"]
-value = ["em", "rem", "pct"]
-via = ["style", "inline"]
-xochitl = "fixed"
-note = "Move 上行内 style、<style> 里 em、% 写的首行缩进、字号不认（px 认）：挪进外链（KINDLE_RULES 22）"
-src = "2026-10-13 测试-怪癖 Q27、Q49、Q51、Q52；修后优化过的测试书真机同外链"
-
 # ---------------------------------------------------------------- 字号
 
 [[rule]]
@@ -59,8 +41,7 @@ prop = ["font-size"]
 on = ["p", "block", "inline"]
 value = ["px"]
 ireader = "same"
-xochitl = "fixed"
-note = "字号的 px：掌阅按 CSS 像素（16px＝1em，24px 同 1.5em），同 Kindle 写出器（px 按 0.75pt）；Move 按屏幕像素（24px 比正文小），root_em 换成按根的 em（KINDLE_RULES 32）"
+note = "字号的 px：掌阅按 CSS 像素（16px＝1em，24px 同 1.5em），同 Kindle 写出器（px 按 0.75pt）"
 src = "2026-10-13 测试-怪癖 Q21、测试-怪癖-掌阅 Q21"
 
 [[rule]]
@@ -75,8 +56,7 @@ src = "2026-10-13 测试-怪癖-掌阅 Q23"
 prop = ["font-size"]
 on = ["heading"]
 ireader = "same"
-xochitl = "fixed"
-note = "Move 的 h1–h6 只认关键字，照 Kindle 取最接近的关键字（KINDLE_RULES 21）"
+note = "标题字号掌阅同 Kindle"
 src = "2026-10-13 测试-标题字号"
 
 [[rule]]
@@ -84,8 +64,7 @@ prop = ["font-size"]
 value = ["em", "rem", "pct", "pt", "keyword", "zero"]
 via = ["sheet", "important"]
 ireader = "same"
-xochitl = "same"
-note = "字号照 Kindle 按正文归一（kindle_rules）；Move 外链样式表里 em、%、pt、关键字都认，但 em、% 按根字号算、不按父元素（2026-10-14 探针，root_em 换成按根的值）"
+note = "字号照 Kindle 按正文归一（kindle_rules）"
 src = "2026-10-08 kindle_rules；2026-10-13 测试-怪癖 Q20、Q22–Q25"
 
 [[rule]]
@@ -103,27 +82,6 @@ prop = ["line-height"]
 ireader = "fixed"
 note = "掌阅不认不带单位的行距（line-height:2 在 p、div、标题、行内 style 上都不认；写成 3em 这种长度认），Kindle 按正文行距归一：照 Kindle 写成 em（KINDLE_RULES 25，《飘》正文行距真机）"
 src = "2026-10-13 测试-怪癖-掌阅 Q80–Q84"
-
-[[rule]]
-prop = ["line-height"]
-on = ["p"]
-via = ["inline"]
-xochitl = "fixed"
-note = "Move 上 <p> 外链写的行距不认，行内 style 写的认（按阅读器缺省行距的倍数）：照 Kindle 按正文行距归一，写在行内（KINDLE_RULES 26）"
-src = "2026-10-13 测试-怪癖 Q80、Q83"
-
-[[rule]]
-prop = ["line-height"]
-on = ["p"]
-xochitl = "fixed"
-note = "Move 段落外链的行距不认，排成阅读器的行距设置；Kindle 按全书正文行距归一：和正文不一样的段落照 Kindle 写进行内（Move 认行内的，KINDLE_RULES 26，测试书真机）。掌阅见上面的专有条目"
-src = "2026-10-12 三台速查"
-
-[[rule]]
-prop = ["line-height"]
-xochitl = "fixed"
-note = "标题、div 等别的块的行距：Move 照 Kindle 归一（KINDLE_RULES 20）；掌阅见上面的专有条目"
-src = "2026-10-13 测试-行距；三台速查"
 
 # ---------------------------------------------------------------- 外边距、内边距、首行缩进（掌阅专有的在前）
 
@@ -160,8 +118,7 @@ src = "2026-10-13 测试-怪癖-掌阅 Q09、Q11、Q33、Q54"
 prop = ["margin-*", "padding-*", "text-indent"]
 value = ["zero"]
 ireader = "same"
-xochitl = "same"
-note = "写 0 两台都认（行内的也认）"
+note = "写 0 掌阅认（行内的也认）"
 src = "2026-10-13 测试-怪癖 Q55、Q57"
 
 [[rule]]
@@ -169,8 +126,7 @@ prop = ["margin-top", "margin-bottom"]
 on = ["heading"]
 value = ["em", "rem", "px", "pt", "pct"]
 ireader = "fixed"
-xochitl = "fixed"
-note = "Move 上标题的上下外边距不认：页首的垫图推到 Kindle 的位置（KINDLE_RULES 11、20），页中间的写到前一块的下外边距、后一块的上外边距（KINDLE_RULES 23）"
+note = "标题的上下外边距照 Kindle 换算（KINDLE_RULES 14，同下面上下外边距那条）"
 src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q05、Q65–Q67、Q74"
 
 [[rule]]
@@ -178,163 +134,72 @@ prop = ["padding-*"]
 on = ["cell"]
 value = ["px"]
 ireader = "fixed"
-xochitl = "fixed"
-note = "单元格的内边距两台都认（类规则、行内），px 是屏幕像素：照 Kindle 折成 em（KINDLE_RULES 28）"
-src = "2026-10-13 测试-怪癖 Q97–Q99（两台）"
+note = "单元格的内边距掌阅认（类规则、行内），px 是屏幕像素：照 Kindle 折成 em（KINDLE_RULES 28）"
+src = "2026-10-13 测试-怪癖 Q97–Q99（掌阅）"
 
 [[rule]]
 prop = ["padding-*"]
 on = ["cell"]
 ireader = "same"
-xochitl = "same"
-note = "单元格的内边距 em、% 两台照 CSS"
+note = "单元格的内边距 em、% 掌阅照 CSS"
 src = "2026-10-13 测试-怪癖 Q97"
-
-[[rule]]
-prop = ["padding-top", "padding-bottom"]
-on = ["list"]
-xochitl = "fixed"
-note = "Move 列表项的上下内边距不认、上下外边距认：并进外边距（KINDLE_RULES 28）"
-src = "2026-10-13 测试-怪癖 Q95、Q96"
 
 [[rule]]
 prop = ["padding-*"]
 on = ["inline", "img"]
 value = ["px"]
 ireader = "fixed"
-xochitl = "accept"
-note = "行内元素、图的内边距：掌阅认（px 是屏幕像素，照 Kindle 折成 em，KINDLE_RULES 28）；Move 一概不认，补只能往书里加字，不处理"
-src = "2026-10-13 测试-怪癖 Q90、Q91（两台）"
+note = "行内元素、图的内边距：掌阅认（px 是屏幕像素，照 Kindle 折成 em，KINDLE_RULES 28）"
+src = "2026-10-13 测试-怪癖 Q90、Q91（掌阅）"
 
 [[rule]]
 prop = ["padding-*"]
 on = ["inline", "img"]
 ireader = "same"
-xochitl = "accept"
-note = "行内元素、图的内边距：掌阅照 CSS；Move 一概不认，不处理"
-src = "2026-10-13 测试-怪癖 Q90、Q91（两台）"
-
-[[rule]]
-prop = ["padding-*"]
-on = ["list"]
-value = ["em", "rem", "px", "pt", "pct"]
-xochitl = "broken"
-note = "Move 列表项的左右内边距不认，没处理（项目符号的位置跟着变，并进外边距会挪动符号）"
-src = "2026-10-13 测试-怪癖 Q06、Q12"
+note = "行内元素、图的内边距：掌阅照 CSS"
+src = "2026-10-13 测试-怪癖 Q90、Q91（掌阅）"
 
 [[rule]]
 prop = ["padding-top", "padding-bottom"]
 value = ["em", "rem", "px", "pt", "pct"]
 ireader = "fixed"
-xochitl = "fixed"
-note = "Move 上下内边距不认：折进和相邻块之间的间距、连着边框的画进横线图（KINDLE_RULES 23；页首的算进垫图）；有子块的块上的没处理。掌阅照 Kindle 换算（KINDLE_RULES 14）"
+note = "上下内边距掌阅照 Kindle 换算（KINDLE_RULES 14）"
 src = "2026-10-12 测试-标题位置；2026-10-13 测试-怪癖 Q06、Q39；修后优化过的测试书真机同 Kindle 换算"
-
-[[rule]]
-prop = ["margin-top", "margin-bottom"]
-value = ["neg"]
-xochitl = "fixed"
-note = "Move 不认负的上下外边距：页中间相邻两块照 Kindle 折叠后的间距写成两边非负的（叠在一起的写 0；KINDLE_RULES 28）；页首的由垫图按 Kindle 的位置算"
-src = "2026-10-13 测试-怪癖 Q08"
 
 [[rule]]
 prop = ["margin-top", "margin-bottom"]
 value = ["em", "rem", "px", "pt", "pct", "zero"]
 ireader = "fixed"
-xochitl = "fixed"
-note = "上下外边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14；Move 的 % 当 px、pt 是真的点，一并折成 px）；0 两台都认"
+note = "上下外边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14）；0 掌阅认"
 src = "2026-10-12 测试-竖直间距；2026-10-13 测试-怪癖 Q04、Q35–Q37、Q55"
-
-[[rule]]
-prop = ["padding-left", "padding-right"]
-value = ["em", "rem", "px", "pt", "pct"]
-xochitl = "fixed"
-note = "Move 左右内边距不认：并进同侧的外边距（KINDLE_RULES 23，悬挂缩进跟着对了）；带背景色的块不动（色块会缩到字上）"
-src = "2026-10-13 测试-怪癖 Q12、Q14、Q59、Q71；修后优化过的测试书真机同外边距"
 
 [[rule]]
 prop = ["margin-left", "margin-right"]
 on = ["inline", "img"]
 value = ["px"]
 ireader = "fixed"
-xochitl = "accept"
-note = "行内元素、图的左右外边距：掌阅认、px 是屏幕像素，照 Kindle 折成 em（KINDLE_RULES 28）；Move 一概不认（Q88、Q89、Q92–Q94），补只能往书里加字，不处理"
-src = "2026-10-13 测试-怪癖 Q88–Q94（两台）"
+note = "行内元素、图的左右外边距：掌阅认、px 是屏幕像素，照 Kindle 折成 em（KINDLE_RULES 28）"
+src = "2026-10-13 测试-怪癖 Q88–Q94（掌阅）"
 
 [[rule]]
 prop = ["margin-left", "margin-right"]
 on = ["inline", "img", "cell", "list"]
 value = ["px", "pct"]
 ireader = "broken"
-xochitl = "broken"
-note = "行内元素、图上 % 写的，单元格、列表项上 px、% 写的左右外边距：两台都没处理（px 是屏幕像素，Move 的 % 当 px）"
+note = "行内元素、图上 % 写的，单元格、列表项上 px、% 写的左右外边距：掌阅没处理（px 是屏幕像素）"
 src = "2026-10-13 测试-怪癖 Q10、Q11、Q48、Q54"
-
-[[rule]]
-prop = ["margin-left", "margin-right"]
-value = ["pct"]
-xochitl = "fixed"
-note = "Move 的 % 左右外边距当 px（10% 是 10px）；Kindle 按包含块宽的百分比：块上的按内容区宽折成 em（KINDLE_RULES 24）"
-src = "2026-10-13 测试-怪癖 Q11、Q54；修后优化过的测试书真机"
 
 [[rule]]
 prop = ["margin-left", "margin-right"]
 value = ["px"]
 ireader = "fixed"
-xochitl = "fixed"
-note = "px 两台是屏幕像素（Move 50px 挪 50）；Kindle 写出器按 0.45pt，约 1.46 个屏幕像素：块上的按 0.45pt 折成 em（KINDLE_RULES 24）"
-src = "2026-10-13 测试-怪癖 Q10、Q48；docs/kfx.md 边距 px 按 0.45pt；修后两台真机"
-
-[[rule]]
-prop = ["margin-left", "margin-right"]
-value = ["em", "rem", "zero"]
-via = ["sheet", "important"]
-xochitl = "same"
-note = "Move 外链样式表里 1em 37.8px（Kindle 39，差不到 4%）"
-src = "2026-10-13 测试-怪癖 Q09、Q28、Q33、Q53、Q57"
-
-[[rule]]
-prop = ["margin-left", "margin-right"]
-value = ["neg"]
-xochitl = "accept"
-note = "Move 不认负的左右外边距（字不挪、背景色块也不往外伸），没法模拟（只能把其余内容都往里推）；真书里多是章名色条、分隔线往页边距里伸，字的位置影响很小，Kindle 上伸不伸出内容区也没核实（维护者定不管）"
-src = "2026-10-13 测试-怪癖 Q75–Q79"
-
-[[rule]]
-prop = ["text-indent"]
-value = ["em", "rem", "zero"]
-via = ["sheet", "important"]
-xochitl = "same"
-note = "Move 外链样式表里 em 写的首行缩进照 CSS（1em 37.8px）"
-src = "2026-10-13 测试-怪癖 Q13、Q34"
-
-[[rule]]
-prop = ["text-indent"]
-value = ["pct"]
-xochitl = "broken"
-note = "Move 不认 % 的首行缩进"
-src = "2026-10-13 测试-怪癖 Q15"
-
-[[rule]]
-prop = ["text-indent"]
-value = ["neg"]
-xochitl = "fixed"
-note = "负的首行缩进（悬挂缩进）：配套的 padding-left 并进外边距以后 Move 上排对（KINDLE_RULES 23）"
-src = "2026-10-13 测试-怪癖 Q14、Q71"
-
-[[rule]]
-prop = ["text-indent"]
-on = ["p", "block", "heading"]
-value = ["px"]
-xochitl = "fixed"
-note = "Move 上 px 写的首行缩进按屏幕像素（居中标题 text-indent:48px 字右移 24px），Kindle 写出器按 Kindle 的换算：块上的折成 em（KINDLE_RULES 40，同掌阅；优化后 Q151 真机 PDF 右移 34px，同计算）"
-src = "2026-10-16 测试-怪癖 Q151（Move，《古龙》居中章名 calibre13、calibre15）"
+note = "px 掌阅是屏幕像素；Kindle 写出器按 0.45pt，约 1.46 个屏幕像素：块上的按 0.45pt 折成 em（KINDLE_RULES 24）"
+src = "2026-10-13 测试-怪癖 Q10、Q48；docs/kfx.md 边距 px 按 0.45pt；修后掌阅真机"
 
 [[rule]]
 prop = ["margin-top", "margin-bottom"]
 value = ["keyword"]
 ireader = "same"
-xochitl = "same"
 note = "块的上下外边距 auto 就是 0（测试书只有 auto）"
 src = "2026-10-14 测试书取值（《风起陇西》《绍宋》《人生复本》）"
 
@@ -343,16 +208,14 @@ prop = ["margin-left", "margin-right"]
 on = ["p", "block", "heading"]
 value = ["keyword"]
 ireader = "fixed"
-xochitl = "fixed"
-note = "左右外边距 auto：没定宽度的块本来就满宽，没效果。定了宽度、两边 auto 的 Kindle 不居中（靠左）：掌阅照 CSS 会居中 → 左边的 auto 写成 0（KINDLE_RULES 31，profile margin_auto），Move 由 width 那条折外边距时多出来的放右边。只有左边 auto 的 Kindle 靠右：掌阅照 CSS 也靠右，Move 多出来的放左边（KINDLE_RULES 33）"
-src = "2026-10-13 测试-怪癖 Q30；2026-10-14 测试-怪癖 Q124（两台）、测试-怪癖-Kindle 真机截图；2026-10-14《梁羽生武侠全集》卷名三台真机"
+note = "左右外边距 auto：没定宽度的块本来就满宽，没效果。定了宽度、两边 auto 的 Kindle 不居中（靠左）：掌阅照 CSS 会居中 → 左边的 auto 写成 0（KINDLE_RULES 31，profile margin_auto）。只有左边 auto 的 Kindle 靠右：掌阅照 CSS 也靠右"
+src = "2026-10-13 测试-怪癖 Q30；2026-10-14 测试-怪癖 Q124（掌阅）、测试-怪癖-Kindle 真机截图；2026-10-14《梁羽生武侠全集》卷名三台真机"
 
 [[rule]]
 prop = ["padding-*", "margin-*"]
 on = ["p", "block", "heading"]
 value = ["keyword"]
 ireader = "same"
-xochitl = "same"
 note = "padding:auto 这类无效值：哪台都整条不认（Kindle 写出器的层叠也不收），等于没写（《雪国》）"
 src = "2026-10-14 测试书取值"
 
@@ -368,43 +231,38 @@ src = "2026-10-14 探针「测试-标题对齐」；《人生海海》「第一�
 [[rule]]
 prop = ["text-align"]
 ireader = "same"
-xochitl = "same"
-note = "居中、居右三台都认（Move 行内 style 也认）"
+note = "居中、居右掌阅、Kindle 都认"
 src = "2026-10-06 掌阅真机；2026-10-13 测试-怪癖 Q17、Q18、Q42"
 
 [[rule]]
 prop = ["vertical-align"]
 on = ["cell"]
 ireader = "fixed"
-xochitl = "fixed"
-note = "两台单元格缺省都是顶端对齐（Kindle 居中），middle 认：一行两格以上、Kindle 上居中的单元格行内写 vertical-align:middle（KINDLE_RULES 29，profile cell_middle）"
-src = "2026-10-14 测试-怪癖 Q105、Q106（两台；优化后的测试书两台真机同 middle）"
+note = "掌阅单元格缺省是顶端对齐（Kindle 居中），middle 认：一行两格以上、Kindle 上居中的单元格行内写 vertical-align:middle（KINDLE_RULES 29，profile cell_middle）"
+src = "2026-10-14 测试-怪癖 Q105、Q106（掌阅；优化后的测试书掌阅真机同 middle）"
 
 [[rule]]
 prop = ["vertical-align"]
 on = ["inline"]
 value = ["keyword"]
 ireader = "fixed"
-xochitl = "same"
-note = "super、sub：Move 抬高或压低、字缩小，Kindle 写出器照写上标下标（Kindle 上没逐像素核）；掌阅 span 上的不认、<sup>/<sub> 标签认：里面包一层标签（KINDLE_RULES 29，profile inline_valign）"
-src = "2026-10-14 测试-怪癖 Q100、Q101、Q120–Q123（两台；优化后的测试书掌阅真机同 <sup>）"
+note = "super、sub：Kindle 写出器照写上标下标（Kindle 上没逐像素核）；掌阅 span 上的不认、<sup>/<sub> 标签认：里面包一层标签（KINDLE_RULES 29，profile inline_valign）"
+src = "2026-10-14 测试-怪癖 Q100、Q101、Q120–Q123（掌阅；优化后的测试书掌阅真机同 <sup>）"
 
 [[rule]]
 prop = ["vertical-align"]
 on = ["img"]
 value = ["neg", "em", "rem", "px", "pt", "pct", "number"]
 ireader = "accept"
-xochitl = "same"
-note = "图上数值写的竖直对齐：Move 不认，Kindle 写出器也不写（照 Send to Kindle）"
+note = "图上数值写的竖直对齐：Kindle 写出器不写（照 Send to Kindle）；掌阅把行内图压到一行高，看不出"
 src = "2026-10-14 测试-怪癖 Q104"
 
 [[rule]]
 prop = ["vertical-align"]
 on = ["img"]
 ireader = "accept"
-xochitl = "accept"
-note = "行内图：middle Move 认、同 Kindle；top 当成 middle（Kindle 顶端对齐）。真书里写 top 的是一行高的小图标，差不到半行，没有别的写法。掌阅把行内图压到一行高，竖直对齐看不出（Q102–Q104 换成宽 10% 的图也一样）"
-src = "2026-10-14 测试-怪癖 Q102–Q104（两台）"
+note = "行内图：掌阅把行内图压到一行高，竖直对齐看不出（Q102–Q104 换成宽 10% 的图也一样）"
+src = "2026-10-14 测试-怪癖 Q102–Q104（掌阅）"
 
 # ---------------------------------------------------------------- 边框、表格
 
@@ -412,9 +270,8 @@ src = "2026-10-14 测试-怪癖 Q102–Q104（两台）"
 prop = ["border-top", "border-bottom", "border-left", "border-right"]
 on = ["inline"]
 ireader = "same"
-xochitl = "accept"
-note = "掌阅画行内元素的边框（虚线、点线、带内边距，逐字加框照画），同 Kindle（KFX 写出器写行内边框）。Move 不画，只少了装饰框、字都在：不影响验收（2026-10-16 定）"
-src = "2026-10-16 测试-怪癖-掌阅 Q146、Q147、Move Q146、Q147（《梁羽生》版本历史 <style> 里的 .tit1/.tit2）"
+note = "掌阅画行内元素的边框（虚线、点线、带内边距，逐字加框照画），同 Kindle（KFX 写出器写行内边框）"
+src = "2026-10-16 测试-怪癖-掌阅 Q146、Q147（《梁羽生》版本历史 <style> 里的 .tit1/.tit2）"
 
 [[rule]]
 prop = ["border-top", "border-right", "border-bottom", "border-left"]
@@ -424,51 +281,16 @@ note = "掌阅照 CSS 画边框：块的上下边框、左边线、全框、内�
 src = "2026-10-13 测试-怪癖-掌阅 Q07、Q40；2026-10-14 测试-怪癖-掌阅 Q117–Q119"
 
 [[rule]]
-prop = ["border-top", "border-bottom", "border-left", "border-right"]
-on = ["cell"]
-xochitl = "fixed"
-note = "Move 只画表格、单元格行内 style 写的边框（外链、类规则里的不认）：单元格看得见的边框照写进行内、表格加 cellspacing=0（KINDLE_RULES 27）"
-src = "2026-10-13 测试-竖线 1–10"
-
-[[rule]]
-prop = ["border-top", "border-bottom"]
-on = ["list", "img"]
-xochitl = "broken"
-note = "Move 不画边框；列表、图上的没处理（行内元素的见上面，不影响验收）"
-src = "2026-10-13 测试-怪癖 Q07、Q40"
-
-[[rule]]
-prop = ["border-top", "border-bottom"]
-xochitl = "fixed"
-note = "Move 不画边框：上下边框在块里插同色同粗的横线图（KINDLE_RULES 23，已定）；文件开头的块不插上边框"
-src = "2026-10-13 测试-怪癖 Q07、Q40、Q69、Q70；修后优化过的测试书真机画出来"
-
-[[rule]]
-prop = ["border-left", "border-right"]
-on = ["p", "block", "heading"]
-xochitl = "fixed"
-note = "Move 普通块的边框不画、表格单元格行内的画：左右有框的块包进单格表格、框写在单元格行内（KINDLE_RULES 27，维护者选的）；定了宽度、居中、有背景图的块不包（只有上下横线图）"
-src = "2026-10-13 测试-竖线 1–10；《雪国》《风起陇西》《恶女的告白》《嘯風山莊》真机"
-
-[[rule]]
-prop = ["border-left", "border-right"]
-xochitl = "broken"
-note = "Move 不画边框；列表、图上的左右竖线没处理（行内元素的见上面，不影响验收）"
-src = "2026-10-13 测试-怪癖 Q07、Q40"
-
-[[rule]]
 prop = ["border-radius"]
 ireader = "accept"
-xochitl = "accept"
 note = "圆角：边框、背景的角，不影响位置"
 src = "约定"
 
 [[rule]]
 prop = ["border-collapse"]
 ireader = "same"
-xochitl = "same"
-note = "Move 认边框合并（相邻单元格的边框并成一条），Kindle 写出器照写；掌阅不管写没写都并成一条（书里写 separate 的《克莱因壶》没有单元格边框，看不出）"
-src = "2026-10-14 测试-怪癖 Q117（两台）"
+note = "边框合并 Kindle 写出器照写；掌阅不管写没写都并成一条（书里写 separate 的《克莱因壶》没有单元格边框，看不出）"
+src = "2026-10-14 测试-怪癖 Q117（掌阅）"
 
 # ---------------------------------------------------------------- 宽高
 
@@ -476,7 +298,6 @@ src = "2026-10-14 测试-怪癖 Q117（两台）"
 prop = ["width", "height", "max-width", "max-height", "min-width", "min-height"]
 on = ["img"]
 ireader = "fixed"
-xochitl = "fixed"
 note = "插图改写成和 Kindle 一样大（KINDLE_RULES 9）"
 src = "2026-10-12 测试-插图"
 
@@ -488,51 +309,32 @@ note = "掌阅照 CSS 认块的宽度"
 src = "2026-10-13 测试-怪癖-掌阅 Q30"
 
 [[rule]]
-prop = ["width"]
-on = ["p", "block", "heading"]
-value = ["keyword"]
-xochitl = "same"
-note = "auto 这类关键字：本来就是满宽"
-src = "2026-10-13 测试-怪癖 Q30"
-
-[[rule]]
-prop = ["width"]
-on = ["p", "block", "heading"]
-xochitl = "fixed"
-note = "Move 不认块的宽度、认左右外边距：照 Kindle 折成左右外边距（KINDLE_RULES 28；Kindle 不按 margin:auto 居中，多出来的都放右边，KINDLE_RULES 31）"
-src = "2026-10-13 测试-怪癖 Q30"
-
-[[rule]]
 prop = ["height"]
 on = ["p", "block", "heading"]
 ireader = "accept"
-xochitl = "accept"
-note = "块的高度：Kindle（Send to Kindle、写出器）当 min-height 写；掌阅当固定高（内容超出才和 Kindle 不一样），Move 不认。测试书里是《消失的爱人》空段（三台照 Kindle 去掉了，不起作用）、《罗杰疑案》2px 水平线、《雪国》一页上 80×280px 的装饰框，影响小"
-src = "2026-10-14 测试-怪癖 Q111（两台）；docs/kfx.md Send to Kindle 规则表"
+note = "块的高度：Kindle（Send to Kindle、写出器）当 min-height 写；掌阅当固定高（内容超出才和 Kindle 不一样）。测试书里是《消失的爱人》空段（照 Kindle 去掉了，不起作用）、《罗杰疑案》2px 水平线、《雪国》一页上 80×280px 的装饰框，影响小"
+src = "2026-10-14 测试-怪癖 Q111（掌阅）；docs/kfx.md Send to Kindle 规则表"
 
 [[rule]]
 prop = ["min-height"]
 on = ["p", "block", "heading"]
 ireader = "same"
-xochitl = "accept"
-note = "掌阅认；Move 不认 min-height（Kindle 写出器照写）；测试书里写了的（《恶女的告白》2em）都比本身一行矮，没有效果"
-src = "2026-10-14 测试-怪癖 Q112（两台）"
+note = "掌阅认（Kindle 写出器照写）；测试书里写了的（《恶女的告白》2em）都比本身一行矮，没有效果"
+src = "2026-10-14 测试-怪癖 Q112（掌阅）"
 
 [[rule]]
 prop = ["width"]
 on = ["cell"]
 ireader = "fixed"
-xochitl = "fixed"
-note = "单元格的宽度：Kindle 不把格子压窄（Send to Kindle 写成表格列宽的百分比，td{width:1em} 的字照样横排）；两台照 Kindle 的算法写成列宽百分比：掌阅（CSS、属性都认，width:auto 不认）写行内 width:P%，Move（只认 width 属性）写属性（KINDLE_RULES 31，profile cell_width；优化后的测试书两台真机横排，第一格变宽同 Kindle；《雪国》译者页）"
-src = "2026-10-14 测试-怪癖 Q127–Q129（两台）、测试-怪癖-Kindle Send to Kindle 版真机截图"
+note = "单元格的宽度：Kindle 不把格子压窄（Send to Kindle 写成表格列宽的百分比，td{width:1em} 的字照样横排）；照 Kindle 的算法写成列宽百分比：掌阅（CSS、属性都认，width:auto 不认）写行内 width:P%（KINDLE_RULES 31，profile cell_width；优化后的测试书真机横排，第一格变宽同 Kindle；《雪国》译者页）"
+src = "2026-10-14 测试-怪癖 Q127–Q129（掌阅）、测试-怪癖-Kindle Send to Kindle 版真机截图"
 
 [[rule]]
 prop = ["width", "height"]
 on = ["inline"]
 ireader = "accept"
-xochitl = "accept"
-note = "行内元素（inline-block）的宽高：测试书里只有《狼厅》空的注释图标 span（19px 黑底圆、注释文字在 data 属性里）。Kindle 画出黑圆点（Send to Kindle 插零宽空格，写出器 22 照做），两台都不画；图标点不开，没有它不影响阅读（维护者定不管）"
-src = "2026-10-14 测试-怪癖 Q125、Q126（两台）、测试-怪癖-Kindle 真机截图"
+note = "行内元素（inline-block）的宽高：测试书里只有《狼厅》空的注释图标 span（19px 黑底圆、注释文字在 data 属性里）。Kindle 画出黑圆点（Send to Kindle 插零宽空格，写出器 22 照做），掌阅不画；图标点不开，没有它不影响阅读（维护者定不管）"
+src = "2026-10-14 测试-怪癖 Q125、Q126（掌阅）、测试-怪癖-Kindle 真机截图"
 
 # ---------------------------------------------------------------- 浮动、分页、隐藏
 
@@ -540,62 +342,49 @@ src = "2026-10-14 测试-怪癖 Q125、Q126（两台）、测试-怪癖-Kindle �
 prop = ["float"]
 on = ["p"]
 ireader = "fixed"
-xochitl = "same"
-note = "Move 不浮动，同 Kindle。掌阅认段落的 float，浮动的段落靠到一边、后面的字排在旁边；Kindle 不浮动（写出器不写 float），自己占一行 → 写成 none（KINDLE_RULES 39，同标题那条，profile float）"
-src = "2026-10-16 测试-怪癖-掌阅 Q148、测试-怪癖 Q148（Move）（《梁羽生》版本号 .bver）"
+note = "掌阅认段落的 float，浮动的段落靠到一边、后面的字排在旁边；Kindle 不浮动（写出器不写 float），自己占一行 → 写成 none（KINDLE_RULES 39，同标题那条，profile float）"
+src = "2026-10-16 测试-怪癖-掌阅 Q148（《梁羽生》版本号 .bver）"
 
 [[rule]]
 prop = ["float"]
 on = ["heading"]
 ireader = "fixed"
-xochitl = "same"
-note = "标题的 float：Kindle 不浮动（写出器不写 float），Move 同样不认；掌阅认，标题浮到一边、后面的字排在旁边 → 写成 none（KINDLE_RULES 33，profile float；《梁羽生》卷名的来龙去脉见 docs/typesetting.md）"
-src = "2026-10-14 测试-怪癖-武侠（Kindle）、测试-怪癖 Q133、Q134（两台）、《梁羽生武侠全集》卷名三台真机"
+note = "标题的 float：Kindle 不浮动（写出器不写 float）；掌阅认，标题浮到一边、后面的字排在旁边 → 写成 none（KINDLE_RULES 33，profile float；《梁羽生》卷名的来龙去脉见 docs/typesetting.md）"
+src = "2026-10-14 测试-怪癖-武侠（Kindle）、测试-怪癖 Q133、Q134（掌阅）、《梁羽生武侠全集》卷名三台真机"
 
 [[rule]]
 prop = ["page-break-inside", "break-inside"]
 on = ["block"]
 ireader = "same"
-xochitl = "same"
-note = "块内不分页（avoid）掌阅、Move 都不认，块照样跨页拆开（外链、<style> 都一样）；Kindle 写出器不写这个属性，也照样拆：三台一样"
-src = "2026-10-16 测试-怪癖-掌阅 Q149、Q150，测试-怪癖 Q149、Q150（Move，《梁羽生》.subv、.nf）"
+note = "块内不分页（avoid）掌阅不认，块照样跨页拆开（外链、<style> 都一样）；Kindle 写出器不写这个属性，也照样拆：一样"
+src = "2026-10-16 测试-怪癖-掌阅 Q149、Q150（《梁羽生》.subv、.nf）"
 
 [[rule]]
 prop = ["display"]
 value = ["keyword"]
 via = ["sheet", "style", "inline", "important"]
 ireader = "same"
-xochitl = "fixed"
-note = "display:none Move 不认，隐藏的元素去掉（hidden.rs）；别的 display 值没单测，按块级、行内算"
+note = "display 掌阅同 Kindle；别的 display 值没单测，按块级、行内算"
 src = "2026-10-12 测试-隐藏"
 
 [[rule]]
 prop = ["page-break-before", "page-break-after"]
 ireader = "same"
-xochitl = "same"
-note = "page-break-before/after 三台都认"
+note = "page-break-before/after 掌阅、Kindle 都认"
 src = "2026-10-12 三台速查（写出器 21 真机 ✓）"
-
-[[rule]]
-prop = ["break-before", "break-after"]
-xochitl = "broken"
-note = "Move 不认 break-before:page（page-break-* 认）"
-src = "2026-10-12 三台速查"
 
 # ---------------------------------------------------------------- 列表
 
 [[rule]]
 prop = ["list-style-type"]
 ireader = "accept"
-xochitl = "accept"
-note = "decimal、none、ol 缺省数字两台都认；cjk-ideographic 不认（Move 画成圆点、掌阅不画符号，Kindle 写一、二），补只能往书里加字，不处理（《雪国》注释列表）；circle、square、罗马数字、字母没测"
+note = "decimal、none、ol 缺省数字掌阅认；cjk-ideographic 不认（掌阅不画符号，Kindle 写一、二），补只能往书里加字，不处理（《雪国》注释列表）；circle、square、罗马数字、字母没测"
 src = "2026-10-14 测试-怪癖 Q107–Q110"
 
 [[rule]]
 prop = ["list-style-position"]
 value = ["keyword"]
 ireader = "same"
-xochitl = "same"
 note = "测试书只有 outside（缺省）"
 src = "2026-10-14 测试书取值"
 
@@ -605,59 +394,51 @@ src = "2026-10-14 测试书取值"
 prop = ["position", "top", "bottom", "left", "right", "vertical-align"]
 on = ["inline"]
 ireader = "accept"
-xochitl = "accept"
-note = "行内元素的 position:relative 的 top/bottom、vertical-align 写的长度：Kindle 写成基线偏移、真机抬高（Send to Kindle、写出器 22），两台都不认；没有别的写法，测试书里也没用到"
-src = "2026-10-14 测试-怪癖 Q122、Q123（两台）、测试-怪癖-Kindle 真机截图"
+note = "行内元素的 position:relative 的 top/bottom、vertical-align 写的长度：Kindle 写成基线偏移、真机抬高（Send to Kindle、写出器 22），掌阅不认；没有别的写法，测试书里也没用到"
+src = "2026-10-14 测试-怪癖 Q122、Q123（掌阅）、测试-怪癖-Kindle 真机截图"
 
 [[rule]]
 prop = ["justify-content", "align-items", "flex-direction", "position", "top", "bottom", "left", "right"]
 ireader = "same"
-xochitl = "same"
-note = "flex 布局、块的定位两台都不认（照普通块排、text-align 照认），Kindle 写出器也不写"
-src = "2026-10-14 测试-怪癖 Q115、Q116（两台）"
+note = "flex 布局、块的定位掌阅不认（照普通块排、text-align 照认），Kindle 写出器也不写"
+src = "2026-10-14 测试-怪癖 Q115、Q116（掌阅）"
 
 # ---------------------------------------------------------------- 文字：颜色、背景、字体、装饰、空白、断字
 
 [[rule]]
 prop = ["color"]
 ireader = "fixed"
-xochitl = "same"
 note = "掌阅不认 rgba()，换成不透明色（KINDLE_RULES 8）；对比度照 Kindle 提到 4.5"
 src = "2026-10-06 掌阅真机；kindle_rules"
 
 [[rule]]
 prop = ["background*"]
 ireader = "fixed"
-xochitl = "fixed"
 note = "背景图、背景色照 Kindle 改写（KINDLE_RULES 8、10、12、13）"
 src = "2026-10-12 测试-背景图、测试-掌阅背景"
 
 [[rule]]
 prop = ["font-family"]
 ireader = "accept"
-xochitl = "accept"
-note = "正文字体用阅读器的字体（kindle_rules，正文字体不算验收）；别的字体三台按各自装的字体"
+note = "正文字体用阅读器的字体（kindle_rules，正文字体不算验收）；别的字体两台按各自装的字体"
 src = "2026-10-08 定"
 
 [[rule]]
 prop = ["font-weight", "font-style"]
 ireader = "same"
-xochitl = "same"
 note = "粗体、斜体真书里看过（没逐项测）"
 src = "2026-10-09 三台真机看书"
 
 [[rule]]
 prop = ["letter-spacing"]
 ireader = "accept"
-xochitl = "same"
-note = "掌阅不认字距（Move 认；Kindle 写出器照写字距，没真机核）：没有别的写法，补字距只能往书里加字，不处理"
+note = "掌阅不认字距（Kindle 写出器照写字距，没真机核）：没有别的写法，补字距只能往书里加字，不处理"
 src = "2026-10-13 测试-怪癖 Q19、测试-怪癖-掌阅 Q19"
 
 [[rule]]
 prop = ["text-decoration"]
 ireader = "same"
-xochitl = "same"
-note = "下划线两台都画（掌阅带 !important 的不画，见上）"
+note = "下划线掌阅画（掌阅带 !important 的不画，见上）"
 src = "2026-10-13 测试-怪癖 Q85、Q87"
 
 [[rule]]
@@ -665,21 +446,18 @@ prop = ["white-space"]
 on = ["inline"]
 value = ["keyword"]
 ireader = "same"
-xochitl = "same"
-note = "行内元素的 nowrap（《梁羽生》诗句每半句一个 span）：三台都照样在 span 中间断行（Kindle 看的是我们写出器的版本，没写行内的 nowrap；Amazon 版在整段写了 $45，没真机看）。真书诗句一行 12 字，三台都放得下"
-src = "2026-10-14 测试-怪癖-武侠（Kindle）、测试-怪癖 Q132（两台）"
+note = "行内元素的 nowrap（《梁羽生》诗句每半句一个 span）：掌阅、Kindle 都照样在 span 中间断行（Kindle 看的是我们写出器的版本，没写行内的 nowrap；Amazon 版在整段写了 $45，没真机看）。真书诗句一行 12 字，两台都放得下"
+src = "2026-10-14 测试-怪癖-武侠（Kindle）、测试-怪癖 Q132（掌阅）"
 
 [[rule]]
 prop = ["hyphens", "-webkit-hyphens", "-epub-hyphens", "adobe-hyphenate"]
 ireader = "accept"
-xochitl = "accept"
-note = "三台都不认自动断字（不插软连字符）"
+note = "掌阅、Kindle 都不认自动断字（不插软连字符）"
 src = "2026-10-01 英文排版真机"
 
 [[rule]]
 prop = ["text-justify", "word-break"]
 ireader = "accept"
-xochitl = "accept"
 note = "inter-ideograph、break-all：中文本来就按字两端对齐、任意处断行，只影响夹在中文里的英文单词断不断（Kindle 上没核）"
 src = "2026-10-14 测试书取值（text-justify 只有 inter-ideograph，word-break 只有 break-all）"
 
@@ -687,7 +465,6 @@ src = "2026-10-14 测试书取值（text-justify 只有 inter-ideograph，word-b
 prop = ["text-shadow", "box-shadow"]
 value = ["zero", "keyword"]
 ireader = "same"
-xochitl = "same"
 note = "写 0、none 等于没写"
 src = "2026-10-14 测试书取值"
 
@@ -696,13 +473,11 @@ src = "2026-10-14 测试书取值"
 [[rule]]
 prop = ["-webkit-*", "-epub-*", "-moz-*", "-ms-*", "-o-*", "adobe-*", "duokan-*", "qrfullpage", "orphans", "widows", "word-wrap", "overflow-wrap"]
 ireader = "accept"
-xochitl = "accept"
-note = "阅读器私有属性（多看的 duokan-*、QQ 阅读的 qrfullpage 这两台、Kindle 都不认）、分页孤行控制：不影响排出来的位置"
+note = "阅读器私有属性（多看的 duokan-*、QQ 阅读的 qrfullpage 掌阅、Kindle 都不认）、分页孤行控制：不影响排出来的位置"
 src = "约定"
 
 [[rule]]
 prop = ["cursor", "src", "font-variant", "overflow", "object-fit", "clear"]
 ireader = "accept"
-xochitl = "accept"
 note = "不影响排版：鼠标指针；src 是 @font-face 的、写在普通规则里无效；font-variant 测试书只有 normal；overflow:hidden、object-fit:contain 不裁内容；clear 只在有浮动时起作用"
 src = "2026-10-14 测试书取值"

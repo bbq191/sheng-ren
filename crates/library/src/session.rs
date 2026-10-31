@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | [`Records`] 记录文件与锁 | 整个进程 | 读缓存按文件身份（inode、大小、修改时间）核对，别的进程改了会重读 |
 //! | [`ContentFacts`] 按内容记住的事实 | 整个进程 | 键里带内容哈希（或原件的路径、大小、修改时间），内容变了就对不上 |
-//! | [`Devices`] 设备连接 | 跨轮（`sync --watch`） | Move 的 SSH 隧道每轮重建太慢；每轮开头 [`Devices::refresh`] 核一次 |
+//! | [`Devices`] 设备连接 | 一轮（`sync --watch` 每轮开头 [`Devices::refresh`] 清掉） | 一轮里每台只连一次 |
 //! | [`BuildCtx`] 生成过程中的临时状态 | 一轮生成 / 一件传输 | 中间文件一轮结束时删（[`crate::Library::release_prepared`]）；占着的文件名那件传完就放开 |
 //!
 //! 联网用的 HTTP 客户端（`net::Net`，节流、离线状态跨书共用）整个进程一个，第一次用时建，不在这里。
@@ -95,7 +95,7 @@ impl ContentFacts {
 /// 一个模式现在送到哪：连上了（[`Target`]），或没接上的原因。同一轮里共用一份（`Rc`）。
 pub(crate) type Connection = Rc<Result<Target, String>>;
 
-/// 设备在哪找，和连上的设备。跨轮保留（`sync --watch` 不每轮重连 Move），每轮开头 [`Devices::refresh`] 核一次。
+/// 设备在哪找，和连上的设备。一轮里每台只连一次，每轮开头 [`Devices::refresh`] 清掉。
 pub(crate) struct Devices {
     /// 设备在哪找（见 [`DeviceEnv`]）。
     env: DeviceEnv,
@@ -129,23 +129,9 @@ impl Devices {
         t
     }
 
-    /// 新一轮开始：MTP 设备、没接上的下次用到时重新看；Move 的连接还通就留着（这一轮重新查书在不在），断了的扔掉。
-    /// 返回这次发现断了的 Move（模式 id）。
-    pub(crate) fn refresh(&self) -> Vec<String> {
-        let mut dropped = Vec::new();
-        self.targets.borrow_mut().retain(|id, t| match t.as_ref().as_ref().ok().and_then(Target::xochitl) {
-            Some(x) => {
-                let alive = x.alive();
-                if alive {
-                    x.forget_presence();
-                } else {
-                    dropped.push(id.clone());
-                }
-                alive
-            }
-            None => false,
-        });
-        dropped
+    /// 新一轮开始：连过的都作废，下次用到时重新看（MTP 挂载点每轮可能变）。
+    pub(crate) fn refresh(&self) {
+        self.targets.borrow_mut().clear();
     }
 }
 

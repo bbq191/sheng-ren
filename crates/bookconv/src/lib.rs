@@ -47,3 +47,9 @@ pub use error::BookError;
 
 /// 调用方（书库）读 zip 时用同一个版本。
 pub use zip;
+
+/// 单测用：内置模式，或测试用的 profile（`profile::fixture`，如 Move 的 `xochitl`）。
+#[cfg(test)]
+pub(crate) fn test_profile(id: &str) -> &'static profile::Profile {
+    profile::get(id).or_else(|| profile::fixture(id)).unwrap_or_else(|| panic!("没有 profile {id}"))
+}

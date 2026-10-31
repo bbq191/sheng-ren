@@ -3,16 +3,16 @@
 
 用法:
   probe.py make 输出.epub                 生成测试书（探针见 PROBES；书名「测试-怪癖」）
-  probe.py measure 排出来的.pdf [--json]  量 xochitl 排出的 PDF（每页按标记 Q??A/Q??B 认）
-  probe.py move [--host=root@10.11.99.1]  生成 → 经书架服务导入 Move → 等它排好 → 拉回 PDF → measure（测试书留在 Move 上，维护者自己删）
   （都可加 --only=88-99 或 --only=13,28,100-119：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
-  probe.py ireader                        生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
+  probe.py ireader [--json]                        生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
                                           （测试书留在掌阅上，维护者自己删；掌阅要开着 adb、亮屏解锁）
 
 掌阅没有排好的 PDF，只能逐页截屏：每章第一行的标记换成一张条码图（两端各一格黑，中间 7 位探针序号、1 位 A/B，宽 50%），截屏后
 按格取样认出是哪一页；翻页在页底空白处横向滑（碰到字会弹查词）。
 
-量法：PDF 按 954×1696 渲染成灰度（同 Move 屏幕像素），每页找出一行一行的字（行投影），记每行上沿、下沿、左右边；
+2026-10-31 以前还有 measure、move（Move 上 xochitl 排出的 PDF），Move 卖了以后删了。
+
+量法：每页截屏转灰度，找出一行一行的字（行投影），记每行上沿、下沿、左右边；
 标记那一行之后的行 A、B 逐行相减。Δ上沿 是竖直方向（外边距、内边距、行距），Δ左/Δ右 是水平（缩进、左右边距、对齐），Δ高 是字号。
 结果只说明阅读器对这条 CSS 的反应；和 Kindle 比要按 `bookconv::kindle_model` 的换算另算，结论写进 crates/bookconv/data/css-quirks.toml。
 """
@@ -22,8 +22,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import unicodedata
-import urllib.request
 import uuid
 import zipfile
 
@@ -356,27 +354,6 @@ def lines_of(png):
     return out
 
 
-def measure(pdf):
-    """{编号: {"A": 行, "B": 行}}，行从标记那一行算起。"""
-    with tempfile.TemporaryDirectory() as d:
-        n = int(subprocess.run(["pdfinfo", pdf], capture_output=True, text=True).stdout.split("Pages:")[1].split()[0])
-        pages = {}
-        for i in range(1, n + 1):
-            t = subprocess.run(["pdftotext", "-f", str(i), "-l", str(i), pdf, "-"], capture_output=True, text=True).stdout
-            t = unicodedata.normalize("NFKC", t)
-            for line in t.splitlines():
-                s = line.strip()
-                if len(s) in (4, 5) and s.startswith("Q") and s[-1] in "AB" and s[1:-1].isdigit():
-                    pages.setdefault(s, i)
-                    break
-        out = {}
-        for mark, i in sorted(pages.items()):
-            base = os.path.join(d, f"p{i}")
-            subprocess.run(["pdftoppm", "-gray", "-png", "-f", str(i), "-l", str(i), "-scale-to-x", "954", "-scale-to-y", "1696", "-singlefile", pdf, base], check=True)
-            out.setdefault(mark[1:-1], {})[mark[-1]] = lines_of(base + ".png")
-        return out
-
-
 def report(m):
     rows = []
     for code, desc, *_ in PROBES:
@@ -396,36 +373,6 @@ def report(m):
                 diffs.append(f"行{i}:上{d[0]:+d} 左{d[1]:+d} 右{d[2]:+d} 高{d[3]:+d}")
         rows.append((code, desc, "；".join(diffs) or "无差别"))
     return rows
-
-
-def move_run(host):
-    work = tempfile.mkdtemp(prefix="quirks-")
-    book = os.path.join(work, "quirks.epub")
-    make(book, device="xochitl")
-    tunnel = subprocess.Popen(["ssh", "-o", "ControlMaster=no", "-o", "ExitOnForwardFailure=yes", "-N", "-L", "8790:127.0.0.1:8790", host])
-    try:
-        time.sleep(2)
-        data = open(book, "rb").read()
-        req = urllib.request.Request("http://127.0.0.1:8790/import?name=quirks.epub&folder=", data=data, headers={"Content-Type": "application/epub+zip"}, method="POST")
-        v = json.load(urllib.request.urlopen(req, timeout=120))
-        while "job" in v and v.get("state") != "done":
-            time.sleep(2)
-            v = json.load(urllib.request.urlopen(f"http://127.0.0.1:8790/import/jobs/{v['job']}", timeout=30))
-            if v.get("state") == "failed":
-                sys.exit(f"导入失败：{v.get('message')}")
-        uid = v["uuid"]
-    finally:
-        tunnel.terminate()
-    pdf = os.path.join(work, "quirks.pdf")
-    src = f"{host}:/home/root/.local/share/remarkable/xochitl/{uid}.pdf"
-    for _ in range(60):
-        if subprocess.run(["scp", "-q", src, pdf]).returncode == 0:
-            break
-        time.sleep(5)
-    else:
-        sys.exit(f"{uid}.pdf 一直没排出来")
-    print(f"Move 上的测试书 uuid {uid}（用完请删）；PDF {pdf}", file=sys.stderr)
-    return pdf
 
 
 def adb(*a, out=None):
@@ -516,12 +463,8 @@ def main():
     OPTIMIZE = opts.get("--optimize")
     if cmd == "make" and len(args) == 2:
         make(args[1])
-    elif cmd in ("measure", "move", "ireader") and (cmd != "measure" or len(args) == 2):
-        if cmd == "ireader":
-            m = ireader_run()
-        else:
-            pdf = args[1] if cmd == "measure" else move_run(opts.get("--host", "root@10.11.99.1"))
-            m = measure(pdf)
+    elif cmd == "ireader":
+        m = ireader_run()
         if "--json" in sys.argv[1:]:
             print(json.dumps(m, ensure_ascii=False))
             return

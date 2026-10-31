@@ -7,3 +7,7 @@ license.workspace = true
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.6"
+
+[features]
+# 测试用的 profile（testdata/，不是内置模式）：别的 crate 在 dev-dependencies 里打开，见 `fixture`
+fixtures = []

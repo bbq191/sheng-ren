@@ -261,6 +261,9 @@ pub enum SyncEvent<'a> {
     Failed(&'a Path, &'a str),
     /// 读不了的目录（权限、读出错）和原因：里面的书状态未知，原样保留（不删、不报"原件不在"、不入库新的）。
     Unreadable(&'a Path, &'a str),
+    /// 跟踪条目里写着已经没有的阅读模式（profile 删了，如 2026-10-31 删的 `xochitl`）：从条目里去掉了这几台；
+    /// `true` 是条目一台不剩、整条去掉了（里面的书接着按"不再跟踪"处理）。
+    ForgotDevices(&'a Path, &'a [String], bool),
 }
 
 /// 原件不在了（不是挪动）的书怎么处理。
@@ -575,7 +578,22 @@ impl Library {
     ///
     /// `memo` 跨轮次记住已经报过的问题（`--watch`），只在新出现时报一次。没有变化时不写 `sources.json`。
     pub fn sync_with(&self, prune: Prune, memo: &mut SyncMemo, mut on: impl FnMut(SyncEvent)) -> Result<SyncReport, String> {
-        let src = self.load_sources();
+        let before = self.load_sources();
+        let mut src = before.clone();
+        // ⓪ 条目里已经没有的阅读模式去掉（不去掉的话 `untrack --device=` 拿不掉、`track` 列表里看不见）
+        let known = self.device_ids();
+        let mut entries = Vec::with_capacity(src.entries.len());
+        for e in std::mem::take(&mut src.entries) {
+            let gone: Vec<String> = e.devices.iter().filter(|d| !known.contains(d)).cloned().collect();
+            if gone.is_empty() {
+                entries.push(e);
+                continue;
+            }
+            let kept = without_devices(e.clone(), &gone, &known);
+            on(SyncEvent::ForgotDevices(&e.path, &gone, kept.is_none()));
+            entries.extend(kept);
+        }
+        let src = Sources { entries, ..src };
         // 以前没删掉的旧版本也再删一次（"原件"记成条目目录：不会和跟踪目录里的文件相同）
         let leftover = src.stale.iter().map(|id| (self.entry_dir(id), id.clone())).collect();
         let mut round = SyncRound::new(&src, leftover);
@@ -596,7 +614,7 @@ impl Library {
         let SyncRound { mut present, rep, .. } = round;
         present.extend(kept_missing);
         let new = Sources { root: src.root.clone(), entries: src.entries.clone(), files: present, stale };
-        if new != src {
+        if new != before {
             self.save_sources(&new)?;
         }
         Ok(rep)
@@ -855,16 +873,16 @@ mod scope_tests {
         let s = Sources {
             root: Some(PathBuf::from("/b")),
             entries: vec![
-                dir("/b/漫画", &["kindle", "ireader", "xochitl"]),
+                dir("/b/漫画", &["kindle", "ireader", "third"]),
                 top(dir("/b/漫画/死亡筆記", &["ireader"])),
-                top(file("/b/漫画/死亡筆記/卷03.epub", &["xochitl"])),
+                top(file("/b/漫画/死亡筆記/卷03.epub", &["third"])),
             ],
             ..Default::default()
         };
         let at = |d: &str| s.placement(p, d).map(|(_, r)| r.display().to_string());
         assert_eq!(at("kindle").as_deref(), Some("漫画/死亡筆記"), "照书库结构（相对书根目录）");
         assert_eq!(at("ireader").as_deref(), Some("死亡筆記"), "--top 的目录：从它这一层起；比浅的目录具体");
-        assert_eq!(at("xochitl").as_deref(), Some(""), "--top 的单本：放根目录；单本比目录具体");
+        assert_eq!(at("third").as_deref(), Some(""), "--top 的单本：放根目录；单本比目录具体");
         assert_eq!(at("other"), None, "没有给这台的条目");
         let keep = Sources { root: Some(PathBuf::from("/b")), entries: vec![file("/b/文字/科幻/三体.epub", &[])], ..Default::default() };
         assert_eq!(keep.placement(Path::new("/b/文字/科幻/三体.epub"), "kindle").unwrap().1, PathBuf::from("文字/科幻"), "单本照书库结构");
@@ -881,12 +899,12 @@ mod scope_tests {
         s.files.insert(PathBuf::from("/b/文字/b.epub"), seen("B"));
         s.files.insert(PathBuf::from("/old/c.epub"), seen("C"));
         let w = |id: &str, p: &str, d: &str| s.wants(id, Some(Path::new(p)), d);
-        assert!(w("A", "/b/文字/a.epub", "ireader") && w("A", "/b/文字/a.epub", "kindle") && !w("A", "/b/文字/a.epub", "xochitl"));
+        assert!(w("A", "/b/文字/a.epub", "ireader") && w("A", "/b/文字/a.epub", "kindle") && !w("A", "/b/文字/a.epub", "other"));
         assert!(w("B", "/b/文字/b.epub", "ireader") && !w("B", "/b/文字/b.epub", "kindle"));
         assert!(!w("C", "/old/c.epub", "ireader"), "不再跟踪了的谁都不给（下次 sync 删）");
-        assert!(w("D", "/别处/d.epub", "xochitl") && s.wants("E", None, "kindle"), "add 进来的、网址书给全部设备");
+        assert!(w("D", "/别处/d.epub", "other") && s.wants("E", None, "kindle"), "add 进来的、网址书给全部设备");
         // 同一内容在跟踪目录里还有一份：按那份的条目算
         s.files.insert(PathBuf::from("/b/文字/a 副本.epub"), seen("D"));
-        assert!(s.wants("D", Some(Path::new("/别处/d.epub")), "ireader") && !s.wants("D", Some(Path::new("/别处/d.epub")), "xochitl"));
+        assert!(s.wants("D", Some(Path::new("/别处/d.epub")), "ireader") && !s.wants("D", Some(Path::new("/别处/d.epub")), "other"));
     }
 }

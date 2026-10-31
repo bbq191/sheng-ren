@@ -3,14 +3,11 @@
 
 use bookconv::epub::{assemble, Book, BookMeta, Chapter};
 use library::{DeviceEnv, Library};
-use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Output;
-use std::sync::{Arc, Mutex};
 
 /// 测试用的"设备"目录（`<书库>-dev`）：MTP 挂载目录，下面 kindle、ireader 各有一个存储（算接上了）。
-/// 测试一律不碰真设备：MTP 指向这里，Move 不走 SSH（要测 Move 的用 [`FakeMove`]）。
+/// 测试一律不碰真设备：MTP 指向这里。
 pub fn dev_dir(lib: &Path) -> PathBuf {
     let d = PathBuf::from(format!("{}-dev", lib.display()));
     for m in ["kindle", "ireader"] {
@@ -24,10 +21,10 @@ pub fn documents(lib: &Path, mode: &str) -> PathBuf {
     dev_dir(lib).join(mode).join("Internal Storage/documents")
 }
 
-/// 打开书库，设备指向测试目录（见 [`dev_dir`]）；`mv` 给了就把 Move 指向这个假服务。
-pub fn open_with(lib: &Path, mv: Option<&FakeMove>) -> Library {
+/// 打开书库，设备指向测试目录（见 [`dev_dir`]）。
+pub fn open(lib: &Path) -> Library {
     let mut l = Library::open(lib).unwrap();
-    l.set_device_env(DeviceEnv { mtp_base: dev_dir(lib), xochitl_url: mv.map(|m| m.url.clone()), no_ssh: true, mount_check: false });
+    l.set_device_env(DeviceEnv { mtp_base: dev_dir(lib), mount_check: false });
     l
 }
 
@@ -38,181 +35,6 @@ pub fn with_pc_profile(lib: &Path) -> PathBuf {
     std::fs::create_dir_all(lib.join("profiles")).unwrap();
     std::fs::write(lib.join("profiles/pc.toml"), toml).unwrap();
     lib.to_path_buf()
-}
-
-pub fn open(lib: &Path) -> Library {
-    open_with(lib, None)
-}
-
-/// 假的 Move 书架服务（只实现 booklib 用到的导入接口）：uuid → 书。
-#[derive(Clone, Debug)]
-pub struct MoveDoc {
-    pub name: String,
-    pub folder: String,
-    pub bytes: Vec<u8>,
-    pub deleted: bool,
-    /// 被原地替换过几次。
-    pub replaced: usize,
-}
-
-pub struct FakeMove {
-    pub url: String,
-    pub docs: Arc<Mutex<BTreeMap<String, MoveDoc>>>,
-    /// 查询计数：(一本一本查 `GET /import/<uuid>` 的次数, 一次查一批 `POST /import/states` 的次数)。
-    pub queries: Arc<Mutex<(usize, usize)>>,
-    /// 设成 `true` 就像旧版书架服务：没有 `POST /import/states`（回 404）。
-    pub old_server: Arc<std::sync::atomic::AtomicBool>,
-    /// 大于 0 时假装书都"正在替换"：原地替换回 409，`GET /import/<uuid>` 的 `replacing` 为真；每查一次减一。
-    pub busy: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl FakeMove {
-    pub fn start() -> FakeMove {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", l.local_addr().unwrap());
-        let docs: Arc<Mutex<BTreeMap<String, MoveDoc>>> = Arc::default();
-        let queries: Arc<Mutex<(usize, usize)>> = Arc::default();
-        let old_server: Arc<std::sync::atomic::AtomicBool> = Arc::default();
-        let busy: Arc<std::sync::atomic::AtomicUsize> = Arc::default();
-        let (d, q, o, b) = (docs.clone(), queries.clone(), old_server.clone(), busy.clone());
-        std::thread::spawn(move || {
-            for s in l.incoming().flatten() {
-                let _ = serve(s, &d, &q, &o, &b);
-            }
-        });
-        FakeMove { url, docs, queries, old_server, busy }
-    }
-
-    /// 没删的书：(文件夹, 显示名)。
-    pub fn live(&self) -> Vec<(String, String)> {
-        self.docs.lock().unwrap().values().filter(|d| !d.deleted).map(|d| (d.folder.clone(), d.name.clone())).collect()
-    }
-}
-
-fn serve(s: std::net::TcpStream, docs: &Mutex<BTreeMap<String, MoveDoc>>, queries: &Mutex<(usize, usize)>, old_server: &std::sync::atomic::AtomicBool, busy: &std::sync::atomic::AtomicUsize) -> std::io::Result<()> {
-    use std::sync::atomic::Ordering::Relaxed;
-    let mut r = BufReader::new(s.try_clone()?);
-    let mut line = String::new();
-    r.read_line(&mut line)?;
-    let mut parts = line.split_whitespace();
-    let (method, target) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("").to_string());
-    let mut len = 0usize;
-    loop {
-        let mut h = String::new();
-        r.read_line(&mut h)?;
-        if h.trim().is_empty() {
-            break;
-        }
-        if let Some((k, v)) = h.split_once(':') {
-            if k.eq_ignore_ascii_case("content-length") {
-                len = v.trim().parse().unwrap_or(0);
-            }
-        }
-    }
-    let mut body = vec![0; len];
-    r.read_exact(&mut body)?;
-    let (path, query) = target.split_once('?').unwrap_or((&target, ""));
-    let q: BTreeMap<String, String> = query.split('&').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), unpct(v))).collect();
-    let mut docs = docs.lock().unwrap();
-    let reply = |code: u16, v: serde_json::Value| (code, v.to_string());
-    let (code, out) = match (method.as_str(), path) {
-        ("GET", "/status") => reply(200, serde_json::json!({})),
-        // 和真的书架服务一样：收下书体立即回任务号（202），结果查 /import/jobs/<号>（这里当场就做完）
-        ("POST", "/import") if q.contains_key("uuid") && busy.load(Relaxed) > 0 => reply(409, serde_json::json!({"message": "这份文档正在替换中，请稍候"})),
-        ("POST", "/import") => match q.get("uuid") {
-            Some(u) => match docs.get_mut(u).filter(|d| !d.deleted) {
-                Some(d) => {
-                    d.bytes = body;
-                    d.replaced += 1;
-                    let done = serde_json::json!({"state": "done", "uuid": u, "name": d.name, "folder": d.folder});
-                    reply(202, serde_json::json!({"job": job(done)}))
-                }
-                None => reply(404, serde_json::json!({"message": "没有这本"})),
-            },
-            None => {
-                let name = q.get("name").cloned().unwrap_or_default().trim_end_matches(".epub").to_string();
-                let folder = q.get("folder").cloned().unwrap_or_default();
-                // 同一文件夹里已有内容一样的：认回那本（幂等）
-                let same = docs.iter().find(|(_, d)| !d.deleted && d.folder == folder && d.bytes == body).map(|(u, _)| u.clone());
-                let uuid = same.unwrap_or_else(|| {
-                    let uuid = format!("00000000-0000-0000-0000-{:012}", docs.len() + 1);
-                    docs.insert(uuid.clone(), MoveDoc { name: name.clone(), folder: folder.clone(), bytes: body, deleted: false, replaced: 0 });
-                    uuid
-                });
-                let done = serde_json::json!({"state": "done", "uuid": uuid, "name": docs[&uuid].name, "folder": folder});
-                reply(202, serde_json::json!({"job": job(done)}))
-            }
-        },
-        ("GET", p) if p.starts_with("/import/jobs/") => match JOBS.lock().unwrap().get(&p["/import/jobs/".len()..]) {
-            Some(v) => reply(200, v.clone()),
-            None => reply(404, serde_json::json!({})),
-        },
-        ("POST", "/import/states") if !old_server.load(std::sync::atomic::Ordering::Relaxed) => {
-            queries.lock().unwrap().1 += 1;
-            let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-            let found: serde_json::Map<String, serde_json::Value> = v["uuids"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|u| u.as_str())
-                .filter_map(|u| docs.get(u).map(|d| (u.to_string(), serde_json::json!({"name": d.name, "folder": d.folder, "deleted": d.deleted}))))
-                .collect();
-            reply(200, serde_json::json!({"docs": found}))
-        }
-        ("GET", p) if p.starts_with("/import/") => {
-            queries.lock().unwrap().0 += 1;
-            match docs.get(&p["/import/".len()..]) {
-                Some(d) => {
-                    let replacing = busy.load(Relaxed) > 0;
-                    if replacing {
-                        busy.fetch_sub(1, Relaxed);
-                    }
-                    reply(200, serde_json::json!({"deleted": d.deleted, "name": d.name, "replacing": replacing}))
-                }
-                None => reply(404, serde_json::json!({})),
-            }
-        }
-        ("POST", "/trash/add") => {
-            let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-            match docs.get_mut(v["uuid"].as_str().unwrap_or("")).filter(|d| Some(d.name.as_str()) == v["name"].as_str()) {
-                Some(d) => {
-                    d.deleted = true;
-                    reply(200, serde_json::json!({"ok": true}))
-                }
-                None => reply(400, serde_json::json!({"message": "名字对不上"})),
-            }
-        }
-        _ => reply(404, serde_json::json!({})),
-    };
-    let mut s = s;
-    write!(s, "HTTP/1.1 {code} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len())?;
-    s.flush()
-}
-
-/// 假书架服务的导入任务：号 → 结果。
-static JOBS: std::sync::LazyLock<Mutex<BTreeMap<String, serde_json::Value>>> = std::sync::LazyLock::new(Default::default);
-
-fn job(result: serde_json::Value) -> String {
-    let mut jobs = JOBS.lock().unwrap();
-    let id = format!("j{}", jobs.len() + 1);
-    jobs.insert(id.clone(), result);
-    id
-}
-
-fn unpct(v: &str) -> String {
-    let b = v.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            out.push(u8::from_str_radix(&v[i + 1..i + 3], 16).unwrap_or(b'?'));
-            i += 3;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 pub fn sample_epub(title: &str) -> Vec<u8> {
@@ -240,7 +62,7 @@ pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
 /// 在 `lib` 书库上跑 `booklib <args>`（`lib` 为 `None` 时不加 `--library=`）。
 pub fn booklib(lib: Option<&Path>, args: &[&str]) -> Output {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"));
-    cmd.env("BOOKLIB_NO_SSH", "1").env("BOOKLIB_MTP_NO_MOUNT_CHECK", "1").env("BOOKLIB_NO_NET", "1").env_remove("BOOKLIB_XOCHITL_URL");
+    cmd.env("BOOKLIB_MTP_NO_MOUNT_CHECK", "1").env("BOOKLIB_NO_NET", "1");
     if let Some(lib) = lib {
         cmd.arg(format!("--library={}", lib.display()));
         // 书库还没建（命令本身不该建出东西）时不建设备目录

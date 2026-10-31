@@ -1,7 +1,7 @@
 //! 书库命令行：入库、跟踪与同步（含按阅读模式生成）、列出、删除、去重。见 `library` crate 头注释。
 //!
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib。产物直接传到接着的设备上（见 `library::generate`、`library::deliver`）：
-//! Kindle、掌阅放 documents/（镜像子目录），Move 加入 xochitl；没写 [deliver] 的自定义模式才放电脑上。
+//! Kindle、掌阅放 documents/（镜像子目录）；没写 [deliver] 的自定义模式才放电脑上。
 //! `meta --edit` 改单个 EPUB 文件、不碰书库，在 `meta_edit` 里（参数规则也不同：值可以是空字符串）。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
@@ -39,15 +39,14 @@ const COMMANDS: &[Command] = &[
         brief: "同步跟踪目录，按阅读模式生成优化过的书，直接传到接着的设备（日常用这一条）",
         detail: "\
 第一步 同步：书库严格镜像跟踪的目录——新增的入库，改过的换成新版本，挪动、改名的按内容认出来；
-  原件删了的连同设备上的那本一起删（Move 上进回收站）。跟踪目录整个不在、读不了的目录里的书不删。
+  原件删了的连同设备上的那本一起删。跟踪目录整个不在、读不了的目录里的书不删。
 补元数据：还没找过的书（含漫画）联网找一次简介、标签、带国籍的作者、译者、出版社、ISBN（同 meta --fetch，找过的不再找），
   生成时补进书里；连不上网就跳过，下次再找。
 第二步 生成并传：只给接着的设备生成，传上去，电脑上不留产物：
   kindle   Kindle（USB）  KFX   存储根目录 documents/<子目录>/
   ireader  掌阅（USB）    EPUB  存储根目录 documents/<子目录>/
-  xochitl  Move（SSH）    EPUB  经 Move 上的书架服务加入 xochitl，放进文件夹 <子目录>；更新时原地替换
   <子目录> 是原件在跟踪目录里所在的子目录。没接上的设备这次跳过，下次接上再传。
-  没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢，Move 不重排）。
+  没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢）。
 
 选项：
   --device=<模式>  只处理这几个模式（可写多次或用逗号分隔；all 或不写 = 全部）
@@ -82,7 +81,7 @@ const COMMANDS: &[Command] = &[
 不写目录、书：按设备列出跟踪范围。
 例子：
   booklib track ~/books                                               全部设备，照书库结构
-  booklib track --device=xochitl --top ~/books/漫画/死亡筆記 ~/books/文字/飘.epub   Move：「死亡筆記」放最上层、《飘》放根目录
+  booklib track --device=ireader --top ~/books/漫画/死亡筆記 ~/books/文字/飘.epub   掌阅：「死亡筆記」放最上层、《飘》放根目录
   booklib track --device=kindle ~/books/文字/科幻/三体.epub                Kindle 只要这一本",
         opts: &["device", "root"],
         flags: &["top"],
@@ -96,7 +95,7 @@ const COMMANDS: &[Command] = &[
         brief: "不再跟踪：下次 sync 把其中的书连同设备上的产物删掉（原件不动）；给了 --device 只从这几台上删",
         detail: "\
 路径同 track：相对路径先按当前目录、再按书根目录找。
-不写 --device：整条去掉，里面没被别的跟踪条目覆盖的书下次 sync 从书库删掉（连同设备上的，Move 上进回收站）。
+不写 --device：整条去掉，里面没被别的跟踪条目覆盖的书下次 sync 从书库删掉（连同设备上的）。
 写了 --device：只从这几台的范围里拿掉，下次 sync 从这几台上删掉，别的设备照旧。
 跟踪目录里的单本不能单独去掉（要么 untrack 整个目录）。删之前想先看看：sync --keep 只报告、不删。",
         opts: &["device"],
@@ -110,7 +109,7 @@ const COMMANDS: &[Command] = &[
         synopsis: &["add <文件或网址>…"],
         brief: "入库单个 EPUB、CBZ 文件或网址（整个目录用 track）",
         detail: "\
-add 进来的书 sync 照样生成、传（放设备 documents/ 顶层，Move 上放书库根）；原件没了也不自动删，不要了用 remove。
+add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原件没了也不自动删，不要了用 remove。
 网址：抓网页正文做成 EPUB，存在书库里。同一路径的文件内容改了，再 add 一次换成新版本。",
         opts: &[],
         flags: &[],
@@ -125,8 +124,7 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层，Move �
         detail: "\
 书：书名片段、id 或原件路径；不写 = 全部。每本一行（id、格式、书名、作者），下面每个模式一行：
   ✓ 最新   ⚠ 过期（下次 sync 会重新生成）   ? 未知（设备没接上，或设备上那本不在了）
-  ✗ 不在这台的跟踪范围（下次 sync 从设备上删）
-Move 上的显示成 xochitl:文件夹/文件名（只看记录，不连 Move）。",
+  ✗ 不在这台的跟踪范围（下次 sync 从设备上删）",
         opts: &[],
         flags: &[],
         check: check_options,
@@ -153,7 +151,7 @@ Move 上的显示成 xochitl:文件夹/文件名（只看记录，不连 Move）
     Command {
         name: "remove",
         synopsis: &["remove <id>…"],
-        brief: "从书库删书，连同设备上的产物（Move 上进回收站；设备没接上的下次接上时删）。原件不动",
+        brief: "从书库删书，连同设备上的产物（设备没接上的下次接上时删）。原件不动",
         detail: "id 用 list 里显示的完整 id（不做模糊匹配）。原件在跟踪目录里的，下次 sync 会再入库：要彻底不要就删掉原件。",
         opts: &[],
         flags: &[],
@@ -187,7 +185,7 @@ Move 上的显示成 xochitl:文件夹/文件名（只看记录，不连 Move）
 
 /// 日常用法、通用选项、环境变量、退出码（`booklib --help` 的头尾）。
 const HELP_HEAD: &str = "\
-booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅、Move 的自带阅读器优化，直接传到接着的设备
+booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅的自带阅读器优化，直接传到接着的设备
 
 用法：booklib [--library=目录] <命令> [参数]
 
@@ -206,7 +204,6 @@ const HELP_TAIL: &str = "\
 环境变量：
   BOOKLIB_DIR       书库目录
   BOOKLIB_MTP_DIR   Kindle、掌阅的 jmtpfs 挂载点所在的目录（缺省 $XDG_RUNTIME_DIR/mtp）
-  BOOKLIB_NO_SSH=1  不连 Move
   BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查 MTP 挂载点挂没挂着（测试用普通目录当设备）
   BOOKLIB_NO_NET=1  不联网（不找元数据、封面）
 
@@ -379,13 +376,12 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
 }
 
 /// `sync --watch` 记住的生成失败：(书 id, 模式 id) → 失败时的指纹和原件状态。都没变就不再重试、不再重复报错。
-/// 设备重新接上时这台的全部忘掉（[`forget_reconnected`]）：传输失败、Move 掉线时查书出的错多半是连接的事，接上了要重试。
-/// 这一轮重新接上的设备（上一轮没接上、这轮接上了，或 Move 的连接断过、重连了）：忘掉它们记着的失败。
-/// `last_live`、`live` 和 `devices` 一一对应；`dropped` 是这轮开头发现断了的 Move（[`Library::refresh_devices`]）。
-fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Option<&[bool]>, live: &[bool], dropped: &[String]) {
+/// 设备重新接上时这台的全部忘掉（[`forget_reconnected`]）：传输失败多半是连接的事，接上了要重试。
+/// 这一轮重新接上的设备（上一轮没接上、这轮接上了）：忘掉它们记着的失败。`last_live`、`live` 和 `devices` 一一对应。
+fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Option<&[bool]>, live: &[bool]) {
     for (i, (d, ok)) in devices.iter().zip(live).enumerate() {
         let was_down = last_live.and_then(|l| l.get(i)).is_some_and(|w| !w);
-        if dropped.contains(&d.id) || (*ok && was_down) {
+        if *ok && was_down {
             fails.retain(|(_, dev), _| *dev != d.id);
         }
     }
@@ -411,9 +407,8 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
         BuildEvent::RetractFailed { device, title, error } => Err(format!("✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删失败：{error}")),
         BuildEvent::Built { device, title, built } => return built_line(&device, &title, built, quiet).map(Ok),
         BuildEvent::Failed { device, title, error } => Err(format!("✗ [{device}] {title}: {error}")),
-        BuildEvent::Progress(line) => Ok(line),
         BuildEvent::TransportLost { device, count } => Err(format!("✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）")),
-        BuildEvent::Waiting { in_flight } => Ok(format!("… 都生成好了，等设备那边传完（还有 {in_flight} 本；Move 加入时要排版，大书要几分钟）")),
+        BuildEvent::Waiting { in_flight } => Ok(format!("… 都生成好了，等设备那边传完（还有 {in_flight} 本）")),
     })
 }
 
@@ -661,7 +656,8 @@ fn cmd_list(ctx: &Ctx) {
                 None => "? 未知",
             };
             let shown = o.path.strip_prefix(lib.root()).map(|p| p.to_path_buf()).unwrap_or(o.path.clone());
-            let state = if lib.wants(&m, &o.device) { state } else { "✗ 不在这台的跟踪范围（下次 sync 从设备上删）" };
+            // 模式已经删了的（生成记录还在）照旧 `? 未知`：sync 不会再管它，别说"下次从设备上删"
+            let state = if lib.devices().get(&o.device).is_none() || lib.wants(&m, &o.device) { state } else { "✗ 不在这台的跟踪范围（下次 sync 从设备上删）" };
             println!("      {:<20} {state}  {}", o.device, shown.display());
             // 体检（生成时记下的）：和 Kindle 不一样又没处理的逐条列出，没验证过的合成一行
             for line in o.audit.iter().filter(|l| l.starts_with('✗')) {
@@ -996,9 +992,9 @@ fn cmd_sync(ctx: &Ctx) {
     let plan = SyncPlan::parse(ctx);
     let mut state = SyncState::default();
     loop {
-        let dropped = ctx.lib.refresh_devices();
+        ctx.lib.refresh_devices();
         match ctx.lib.lock() {
-            Ok(_guard) => state.round(ctx, &plan, &dropped),
+            Ok(_guard) => state.round(ctx, &plan),
             Err(e) => ctx.fail_line(&e), // --watch 时只计数，下一轮再试
         }
         let Some(secs) = plan.watch else { break };
@@ -1007,14 +1003,14 @@ fn cmd_sync(ctx: &Ctx) {
 }
 
 impl SyncState {
-    /// 一轮（持着锁）：先同步跟踪目录，再生成并传。`dropped` 是这轮开头发现断了的 Move。
-    fn round(&mut self, ctx: &Ctx, plan: &SyncPlan, dropped: &[String]) {
+    /// 一轮（持着锁）：先同步跟踪目录，再生成并传。
+    fn round(&mut self, ctx: &Ctx, plan: &SyncPlan) {
         let changed = if plan.tracking { self.sync_sources(ctx, plan) } else { true };
         if plan.meta {
             self.fill_metadata(ctx, plan);
         }
         if !plan.devices.is_empty() {
-            self.build(ctx, plan, changed, dropped);
+            self.build(ctx, plan, changed);
         }
     }
 
@@ -1030,6 +1026,12 @@ impl SyncState {
             SyncEvent::Failed(p, e) => ctx.fail_line(&format!("✗ {}: {e}", p.display())),
             // 算失败（退出码 2）：这次同步不完整
             SyncEvent::Unreadable(p, e) => ctx.fail_line(&format!("✗ 目录读不了，里面的书这次没同步（已登记的原样保留，不删）：{}（{e}）", p.display())),
+            SyncEvent::ForgotDevices(p, gone, whole) => println!(
+                "- 跟踪条目 {}：阅读模式 {} 已经没有了，{}",
+                p.display(),
+                gone.join("、"),
+                if whole { "整条去掉（里面的书按不再跟踪处理）" } else { "从条目里去掉" }
+            ),
         });
         let changed = r.as_ref().map_or(true, |r| r.added + r.updated + r.pruned > 0);
         match r {
@@ -1080,7 +1082,7 @@ impl SyncState {
     }
 
     /// 生成并传：这一轮同步有变化、书库或生成记录变了、接着的设备变了才做。
-    fn build(&mut self, ctx: &Ctx, plan: &SyncPlan, changed: bool, dropped: &[String]) {
+    fn build(&mut self, ctx: &Ctx, plan: &SyncPlan, changed: bool) {
         let lib = ctx.lib;
         let stamp = || lib.change_stamp();
         let live: Vec<bool> = plan.devices.iter().map(|d| lib.device_status(d).is_ok()).collect();
@@ -1089,7 +1091,7 @@ impl SyncState {
                 self.absent_reported.remove(&d.id);
             }
         }
-        forget_reconnected(&mut self.fails, &plan.devices, self.last_live.as_deref(), &live, dropped);
+        forget_reconnected(&mut self.fails, &plan.devices, self.last_live.as_deref(), &live);
         if !(changed || self.last_stamp != Some(stamp()) || self.last_live.as_ref() != Some(&live)) {
             return;
         }
@@ -1128,10 +1130,10 @@ impl SyncState {
 mod tests {
     use super::*;
 
-    /// 设备从没接上到接上、Move 连接断过重连：这台记着的失败忘掉（下一轮重试）；别的设备的、一直接着的不动。
+    /// 设备从没接上到接上：这台记着的失败忘掉（下一轮重试）；别的设备的、一直接着的不动。
     #[test]
     fn failures_are_forgotten_when_a_device_comes_back() {
-        let devices = [profile::get("ireader").unwrap(), profile::get("kindle").unwrap(), profile::get("xochitl").unwrap()];
+        let devices = [profile::get("ireader").unwrap(), profile::get("kindle").unwrap()];
         let memo = || -> FailMemo { devices.iter().map(|d| (("书".to_string(), d.id.clone()), ("指纹".to_string(), OriginalState::Present))).collect() };
         let left = |f: &FailMemo| -> Vec<String> {
             let mut v: Vec<String> = f.keys().map(|(_, d)| d.clone()).collect();
@@ -1139,14 +1141,14 @@ mod tests {
             v
         };
         let mut f = memo();
-        forget_reconnected(&mut f, &devices, Some(&[true, true, true]), &[true, true, true], &[]);
-        assert_eq!(left(&f), ["ireader", "kindle", "xochitl"], "一直接着：都记着");
-        forget_reconnected(&mut f, &devices, None, &[true, true, true], &[]);
-        assert_eq!(left(&f).len(), 3, "第一轮：没有上一轮可比");
-        forget_reconnected(&mut f, &devices, Some(&[false, true, true]), &[true, true, true], &[]);
-        assert_eq!(left(&f), ["kindle", "xochitl"], "掌阅重新接上");
+        forget_reconnected(&mut f, &devices, Some(&[true, true]), &[true, true]);
+        assert_eq!(left(&f), ["ireader", "kindle"], "一直接着：都记着");
+        forget_reconnected(&mut f, &devices, None, &[true, true]);
+        assert_eq!(left(&f).len(), 2, "第一轮：没有上一轮可比");
+        forget_reconnected(&mut f, &devices, Some(&[false, true]), &[true, true]);
+        assert_eq!(left(&f), ["kindle"], "掌阅重新接上");
         let mut f = memo();
-        forget_reconnected(&mut f, &devices, Some(&[true, false, true]), &[true, false, true], &["xochitl".to_string()]);
-        assert_eq!(left(&f), ["ireader", "kindle"], "Move 掉过线（重连上了）；Kindle 还没接上，留着");
+        forget_reconnected(&mut f, &devices, Some(&[true, false]), &[true, false]);
+        assert_eq!(left(&f), ["ireader", "kindle"], "Kindle 还没接上，留着");
     }
 }

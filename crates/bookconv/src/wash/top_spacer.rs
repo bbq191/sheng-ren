@@ -300,7 +300,7 @@ mod tests {
     use super::*;
 
     fn reader() -> ReaderModel {
-        ReaderModel::for_profile(profile::get("xochitl").unwrap())
+        ReaderModel::for_profile(profile::fixture("xochitl").unwrap())
     }
 
     fn geom() -> SpacerGeometry {

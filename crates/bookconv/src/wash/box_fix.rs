@@ -956,7 +956,7 @@ mod tests {
 
     fn run(body: &str, css: &str) -> (String, String, Vec<Entry>) {
         let mut b = book(body, css);
-        let reader = ReaderModel::for_profile(profile::get("xochitl").unwrap());
+        let reader = ReaderModel::for_profile(profile::fixture("xochitl").unwrap());
         apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 842.0, em_px: 37.8, v_rem_px: 49.4, h_scale: 1.0 });
         let page = String::from_utf8(b[2].data.clone()).unwrap();
         let sheet = b.iter().find(|e| e.name == "O/eink-box.css").map(|e| String::from_utf8(e.data.clone()).unwrap()).unwrap_or_default();
@@ -981,7 +981,7 @@ mod tests {
     /// Move（不认内边距、px 是屏幕像素）：首行缩进的 px 也照 Kindle 折成 em（《古龙》居中标题 `text-indent:48px`，探针 Q151）；内边距照旧并进外边距。
     #[test]
     fn px_indent_folded_on_move() {
-        let reader = ReaderModel::for_profile(profile::get("xochitl").unwrap());
+        let reader = ReaderModel::for_profile(profile::fixture("xochitl").unwrap());
         let mut b = book(r#"<h2 class="c">第一章</h2><p class="e">正文</p>"#, "h2.c{font-size:1.66667em;text-align:center;text-indent:48px} p.e{text-indent:2em}");
         apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 842.0, em_px: 37.8, v_rem_px: 49.4, h_scale: 1.0 });
         let page = String::from_utf8(b[2].data.clone()).unwrap();
@@ -1196,7 +1196,7 @@ mod tests {
     /// 页首块的上横线图有多高（垫图要让出来）：线粗 + 不认内边距时的上内边距；左右有框（包进表格）的、认边框的阅读器不算。
     #[test]
     fn page_top_rule_height() {
-        let reader = ReaderModel::for_profile(profile::get("xochitl").unwrap());
+        let reader = ReaderModel::for_profile(profile::fixture("xochitl").unwrap());
         let comp = |css: &str| {
             let b = book(r#"<h1 class="t">第一部</h1>"#, css);
             let text = String::from_utf8(b[2].data.clone()).unwrap();
