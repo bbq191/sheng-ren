@@ -45,7 +45,6 @@ const COMMANDS: &[Command] = &[
 第二步 生成并传：只给接着的设备生成，传上去，电脑上不留产物：
   kindle   Kindle（USB）  KFX   存储根目录 documents/<子目录>/
   ireader  掌阅（USB）    EPUB  存储根目录 documents/<子目录>/
-  boox     文石（USB）    EPUB  存储根目录 Books/<子目录>/；传完经 adb 关掉阅读器的深色增强、图片平滑（新书）
   xochitl  Move（SSH）    EPUB  经 Move 上的书架服务加入 xochitl，放进文件夹 <子目录>；更新时原地替换
   <子目录> 是原件在跟踪目录里所在的子目录。没接上的设备这次跳过，下次接上再传。
   没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢，Move 不重排）。
@@ -208,7 +207,6 @@ const HELP_TAIL: &str = "\
   BOOKLIB_DIR       书库目录
   BOOKLIB_MTP_DIR   Kindle、掌阅的 jmtpfs 挂载点所在的目录（缺省 $XDG_RUNTIME_DIR/mtp）
   BOOKLIB_NO_SSH=1  不连 Move
-  BOOKLIB_NO_ADB=1  不用 adb（不给文石阅读器写显示设置）
   BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查 MTP 挂载点挂没挂着（测试用普通目录当设备）
   BOOKLIB_NO_NET=1  不联网（不找元数据、封面）
 
@@ -415,12 +413,6 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
         BuildEvent::Failed { device, title, error } => Err(format!("✗ [{device}] {title}: {error}")),
         BuildEvent::Progress(line) => Ok(line),
         BuildEvent::TransportLost { device, count } => Err(format!("✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）")),
-        BuildEvent::ReaderDisplay { device, written, pending } => Ok(match pending {
-            0 => format!("✓ [{device}] 给 {written} 本新书写了阅读器显示设置（深色增强 0、图片平滑关）"),
-            _ => format!("? [{device}] 给 {written} 本新书写了阅读器显示设置；{pending} 本阅读器还没收录、没写：打开后在「显示」里把深色增强调 0、图片平滑关掉"),
-        }),
-        // 书已经传好了，只是阅读器设置没写上：报一行，不算失败
-        BuildEvent::ReaderDisplayFailed { device, error } => Ok(format!("? [{device}] 没写上阅读器显示设置：{error}（书照常传了；新书要在阅读器「显示」里手动把深色增强调 0、图片平滑关掉）")),
         BuildEvent::Waiting { in_flight } => Ok(format!("… 都生成好了，等设备那边传完（还有 {in_flight} 本；Move 加入时要排版，大书要几分钟）")),
     })
 }

@@ -109,12 +109,12 @@ fn processing_failures_exit_2() {
 }
 
 #[test]
-fn devices_lists_the_builtin_modes() {
+fn devices_lists_the_three_modes() {
     let dir = tempfile::tempdir().unwrap();
     let o = booklib(Some(&dir.path().join("lib")), &["devices"]);
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     let out = stdout(&o);
-    for (id, fmt) in [("boox", "EPUB"), ("ireader", "EPUB"), ("kindle", "KFX"), ("xochitl", "EPUB")] {
+    for (id, fmt) in [("ireader", "EPUB"), ("kindle", "KFX"), ("xochitl", "EPUB")] {
         assert!(out.lines().any(|l| l.starts_with(id) && l.contains(fmt)), "{id} {fmt}：{out}");
     }
 }

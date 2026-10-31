@@ -35,7 +35,6 @@ mod generate;
 mod matching;
 mod metadata;
 mod net;
-mod onyx;
 mod qqread;
 mod session;
 mod sources;
@@ -55,7 +54,6 @@ pub use deliver::{DeviceEnv, Doc};
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus, Step};
 pub use metadata::{BookInfo, Edition, InfoResult};
-pub use onyx::Seeded;
 pub use profile::{Format, Profile, Registry};
 pub use sources::{book_files, Prune, SyncEvent, SyncMemo, SyncReport, TrackChange, Tracked, UntrackChange, SUPPORTED_EXTS};
 pub use transfer::{Done, Event, Pipeline, Transfer};
@@ -356,28 +354,6 @@ impl Library {
             Ok(t) => Ok(t.describe()),
             Err(e) => Err(e.clone()),
         }
-    }
-
-    /// 给这一轮传上设备的书（`fresh`，设备上的路径）写阅读器的显示设置（profile `[deliver]` 的 `reader_display`，见 [`onyx`]）。
-    /// 不用写（没设、没接上、这一轮没传书、`BOOKLIB_NO_ADB`）是 `None`。
-    pub fn seed_reader_display(&self, p: &Profile, fresh: &[PathBuf]) -> Option<Result<onyx::Seeded, String>> {
-        let Some(profile::Deliver::Mtp { dir, reader_display: Some(profile::ReaderDisplay::Onyx), .. }) = &p.deliver else { return None };
-        if fresh.is_empty() || self.devices.no_adb() {
-            return None;
-        }
-        let root = match &*self.target(p) {
-            Ok(deliver::Target::Dir { root, .. }) => root.clone(),
-            _ => return None,
-        };
-        let files: Vec<(String, u64)> = fresh.iter().filter_map(|f| {
-            let rel = f.strip_prefix(&root).ok()?;
-            let rel = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
-            Some((rel, std::fs::metadata(f).ok()?.len()))
-        }).collect();
-        if files.is_empty() {
-            return None;
-        }
-        Some(onyx::seed(dir, &files))
     }
 
     pub fn root(&self) -> &Path {

@@ -114,11 +114,6 @@ impl Devices {
         self.targets.borrow_mut().clear();
     }
 
-    /// 不用 adb（[`DeviceEnv::no_adb`]）。
-    pub(crate) fn no_adb(&self) -> bool {
-        self.env.no_adb
-    }
-
     /// MTP 挂载点的上级目录（删产物时判断文件在不在 MTP 设备上）。
     pub(crate) fn mtp_base(&self) -> &Path {
         &self.env.mtp_base
