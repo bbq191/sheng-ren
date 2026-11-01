@@ -390,7 +390,7 @@ const TRIM_MAX_FRACTION: f32 = 0.35;
 
 /// 留白的亮度下限：一行/列的首像素 R、G、B 都 ≥ 这个值、其余像素与它的差都在 [`TRIM_TOLERANCE`] 以内，才算留白。
 ///
-/// 只裁接近白的边：裁掉的边最后补的是白边（[`Page8::paste_on_white`]），黑色、灰色、彩色的边（出血到页边的黑底页、
+/// 只裁接近白的边：裁掉的边最后补的是白边（[`Page8::paste_on`] 底色 255；`comic_dark_bg` 的黑底页另按底色裁、补底色，见 [`trim_dark`]），黑色、灰色、彩色的边（出血到页边的黑底页、
 /// 深色满版画面）裁了再补白就改了原画（2026-10-03 审计：此前只看"纯色"，黑底页的黑边被裁掉换成白边）。
 /// 235 的依据：BT.601 有限范围（16–235）里 235 就是标称白，按这个范围出的扫描、视频截图里纸白落在 235 附近。
 /// 只卡首像素、其余仍按容差比：贴着画面的那一两行留白有 JPEG 振铃（实测 q90 纸白 241 的边上有 233），这样判定与以前对
@@ -794,6 +794,8 @@ pub struct ComicPage {
     pub no_upscale: bool,
     /// 页码：从这一行（解码后整页的坐标）往下切掉（`comic_page_numbers`，整卷投票定的，见 [`crate::comiccrop::page_number_cuts`]）。
     pub cut_bottom: Option<u32>,
+    /// 黑底页按底色裁边、补边补底色（`comic_dark_bg`，[`crate::comiccrop::dark_background`]）。
+    pub dark_bg: bool,
 }
 
 /// 书架缩略图（profile `cover_thumb_aspect`）：先去掉扫描留下的窄白边（[`thumb_scan_margins`]），再居中裁成宽高比 `aspect`
@@ -904,7 +906,7 @@ pub fn comic_page_number(bytes: &[u8], area: Screen, specks: bool, max_px: u64) 
 /// 拉满对比度（[`autocontrast_lut`]），和伽马合成一张表、缩放后查一次。装饰小图都不动。`page` 里另有页码裁切、杂点（[`ComicPage`]）。
 /// 都不开时和以前逐字节相同。
 pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grayscale: bool, page: ComicPage, max_px: u64) -> Option<Vec<u8>> {
-    let ComicPage { gamma, autocontrast, trim_specks, no_upscale, cut_bottom } = page;
+    let ComicPage { gamma, autocontrast, trim_specks, no_upscale, cut_bottom, dark_bg } = page;
     let ComicSrc { img, out_fmt, to_gray, rotated } = decode_comic(bytes, grayscale, max_px, true)?;
     let orig = img.dimensions();
     // 页码：从页码块的上沿往下切掉，再照常裁白边（切口上方的留白一起裁掉）
@@ -913,6 +915,7 @@ pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grays
         None => img,
     };
     let (img, tl, tt) = trim_comic(img, trim_specks, orig, (0, 0));
+    let (img, tl, tt, bg) = if dark_bg { trim_dark(img, tl, tt) } else { (img, tl, tt, None) };
     let (cw, ch) = img.dimensions();
     let trimmed = (cw, ch) != orig;
     if cw.min(ch) < area.width / 3 {
@@ -939,8 +942,30 @@ pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grays
     if let Some(lut) = &darken {
         img.apply_lut(lut);
     }
-    let page = if (lay.canvas_w, lay.canvas_h) != (lay.nw, lay.nh) { img.paste_on_white(lay.canvas_w, lay.canvas_h, lay.x, lay.y) } else { img };
+    // 黑底页补底色（和画面里的底色同样过一遍加深表，接得上）；其余补白
+    let fill = bg.map_or(255, |b| darken.as_ref().map_or(b, |lut| lut[b as usize]));
+    let page = if (lay.canvas_w, lay.canvas_h) != (lay.nw, lay.nh) { img.paste_on(lay.canvas_w, lay.canvas_h, lay.x, lay.y, fill) } else { img };
     page.encode(out_fmt, JPEG_QUALITY_COMIC)
+}
+
+/// 黑底页（`comic_dark_bg`）：内容是灰度、四边一圈是均匀的黑 / 深灰（[`crate::comiccrop::dark_background`]）的页按底色再裁一次边
+/// （[`crate::comiccrop::dark_bounds`]）。返回 (图, 左偏移, 上偏移, 底色)；不是黑底页 → 原样、底色 `None`。`(l, t)` 是裁白边的偏移。
+fn trim_dark(img: Page8, l: u32, t: u32) -> (Page8, u32, u32, Option<u8>) {
+    if !img.is_gray_content() {
+        return (img, l, t, None);
+    }
+    let (w, h) = img.dimensions();
+    let plane: std::borrow::Cow<'_, [u8]> = match &img {
+        Page8::Gray(g) => std::borrow::Cow::Borrowed(g.as_raw()),
+        Page8::Rgb(c) => std::borrow::Cow::Owned(c.as_raw().as_chunks::<3>().0.iter().map(|p| p[0].max(p[1]).max(p[2])).collect()),
+    };
+    let Some(bg) = crate::comiccrop::dark_background(&plane, w, h) else {
+        return (img, l, t, None);
+    };
+    match crate::comiccrop::dark_bounds(&plane, w, h, bg) {
+        Some((x, y, cw, ch)) => (img.crop(x, y, cw, ch), l + x, t + y, Some(bg)),
+        None => (img, l, t, Some(bg)),
+    }
 }
 
 /// 中间调加深的查找表：`v ↦ round(255·(v/255)^γ)`，0 和 255 不动，γ > 1 时中间灰度变深（profile `comic_gamma`、`image_gamma`；
@@ -1079,15 +1104,16 @@ impl Page8 {
     }
 
     /// 放到 `cw × ch` 的白底画布上，左上角在 (`x`, `y`)；类型不变。
-    fn paste_on_white(&self, cw: u32, ch: u32, x: u32, y: u32) -> Page8 {
+    /// 放到 `cw × ch`、底色 `fill`（灰度值，彩色三个分量相同）的画布上，左上角在 `(x, y)`。
+    fn paste_on(&self, cw: u32, ch: u32, x: u32, y: u32, fill: u8) -> Page8 {
         match self {
             Page8::Gray(g) => {
-                let mut canvas = image::GrayImage::from_pixel(cw, ch, image::Luma([255]));
+                let mut canvas = image::GrayImage::from_pixel(cw, ch, image::Luma([fill]));
                 image::imageops::overlay(&mut canvas, g, x as i64, y as i64);
                 Page8::Gray(canvas)
             }
             Page8::Rgb(c) => {
-                let mut canvas = image::RgbImage::from_pixel(cw, ch, image::Rgb([255, 255, 255]));
+                let mut canvas = image::RgbImage::from_pixel(cw, ch, image::Rgb([fill; 3]));
                 image::imageops::overlay(&mut canvas, c, x as i64, y as i64);
                 Page8::Rgb(canvas)
             }
@@ -2016,4 +2042,67 @@ mod tests {
         let img = RgbImage::from_raw(4096, 4096, raw).unwrap();
         assert_eq!(rgb8_into_luma8(img.clone()).as_raw(), DynamicImage::ImageRgb8(img).into_luma8().as_raw());
     }
+
+    /// 黑底页测试图：`w × h` 灰度，底色 `bg`，中间 `(x0..x1, y0..y1)` 是亮的画（白底上横竖的细黑线，不均匀、不会被当底色裁掉）。
+    fn framed_png(w: u32, h: u32, bg: u8, inner: (u32, u32, u32, u32)) -> Vec<u8> {
+        let (x0, y0, x1, y1) = inner;
+        let img = image::GrayImage::from_fn(w, h, |x, y| {
+            let v = if (x0..x1).contains(&x) && (y0..y1).contains(&y) { if (x + y) % 9 == 0 { 30 } else { 230 } } else { bg };
+            image::Luma([v])
+        });
+        let mut png = Vec::new();
+        image::DynamicImage::ImageLuma8(img).write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png).unwrap();
+        png
+    }
+
+    fn dark_page(bytes: &[u8], dark_bg: bool) -> Option<Vec<u8>> {
+        prepare_comic_page_limited(bytes, test_area(), 1, true, ComicPage { gamma: Some(1.1), autocontrast: true, dark_bg, ..Default::default() }, MAX_COMIC_DECODE_PIXELS)
+    }
+
+    #[test]
+    fn dark_background_page_is_trimmed_and_padded_with_its_own_black() {
+        // 扫描的黑是深灰 22，四周一圈 150px 黑边
+        let png = framed_png(1200, 1500, 22, (150, 150, 1050, 1350));
+        let out = image::load_from_memory(&dark_page(&png, true).unwrap()).unwrap().to_luma8();
+        let (w, h) = out.dimensions();
+        let corner = out.get_pixel(0, 0).0[0];
+        assert!(corner < 16, "补的是黑边（底色过加深表），不是白边：{corner}");
+        assert_eq!(out.get_pixel(w - 1, h - 1).0[0], corner);
+        // 黑边裁掉了：画面（亮）放大后离边很近
+        let col = |x: u32| (0..h).any(|y| out.get_pixel(x, y).0[0] > 128);
+        let l = (0..w).find(|&x| col(x)).unwrap();
+        assert!(l < 20, "黑边裁掉后按画面放大：左边只剩 {l}px");
+        // 不开的话照旧：黑边不裁、外面补白
+        let off = image::load_from_memory(&dark_page(&png, false).unwrap()).unwrap().to_luma8();
+        let (ow, oh) = off.dimensions();
+        let dark_run = (0..ow).skip_while(|&x| off.get_pixel(x, oh / 2).0[0] > 128).take_while(|&x| off.get_pixel(x, oh / 2).0[0] < 64).count();
+        assert!(dark_run > 60, "关着时黑边不裁：中间一行的黑边 {dark_run}px");
+    }
+
+    #[test]
+    fn white_page_bytes_unchanged_with_dark_bg_on() {
+        let png = framed_png(1200, 1500, 255, (150, 150, 1050, 1350));
+        assert_eq!(dark_page(&png, true), dark_page(&png, false), "白底页开不开逐字节一样");
+        let jpg = gray_jpeg_of(1000, 1400, 255);
+        assert_eq!(dark_page(&jpg, true), dark_page(&jpg, false));
+    }
+
+    #[test]
+    fn bleeding_dark_art_and_dark_corners_are_not_dark_pages() {
+        // 出血画：上、左、右暗，下边是亮的画（三条边暗）
+        let three = framed_png(1200, 1500, 22, (150, 150, 1050, 1500));
+        assert_eq!(dark_page(&three, true), dark_page(&three, false), "三边暗的出血画不判");
+        // 白底页上一个大暗角
+        let corner = {
+            let img = image::GrayImage::from_fn(1200, 1500, |x, y| image::Luma([if x < 500 && y < 600 { 15 } else if (x + y) % 9 == 0 { 30 } else { 250 }]));
+            let mut png = Vec::new();
+            image::DynamicImage::ImageLuma8(img).write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png).unwrap();
+            png
+        };
+        assert_eq!(dark_page(&corner, true), dark_page(&corner, false), "局部暗角不判");
+        // 满版深色画（棋盘格 0/60）：四边暗，但页里没有亮的内容、也不均匀，不当黑底页裁
+        let art = black_jpeg(1200, 1500);
+        assert_eq!(dark_page(&art, true), dark_page(&art, false), "满版深色画不判");
+    }
+
 }

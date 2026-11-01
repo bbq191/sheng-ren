@@ -180,7 +180,9 @@ pub const OPTIMIZE_VERSION: &str = "65";
 /// - c59（2026-10-30）：书架缩略图（同 v64，两路共用）；profile 加 `comic_upscale`（缺省开，产物不变；同日 Kindle 上比过《竹光侍》卷01
 ///   预先放大 / 不放大，维护者选预先放大）。
 /// - c60（2026-10-30）：书架缩略图先去扫描窄白边（同 v65，两路共用）。
-pub const COMIC_VERSION: &str = "60";
+/// - c61（2026-11-01）：黑底页按底色裁边、补边补底色（profile `comic_dark_bg`，`comiccrop::dark_background`：四条边每条都几乎全是
+///   均匀的黑 / 深灰才算，出血画、暗角不算）。只 Kindle 开；掌阅不开，产物不变。没上真机。
+pub const COMIC_VERSION: &str = "61";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，
@@ -271,6 +273,8 @@ pub struct OptimizeOpts {
     pub comic_page_numbers: bool,
     /// 比框小的 JPEG 漫画页放大到框（profile `comic_upscale`，缺省开），见 [`crate::imgopt::ComicPage::no_upscale`]。
     pub comic_upscale: bool,
+    /// 黑底页按底色裁边、补底色（profile `comic_dark_bg`），见 [`crate::comiccrop::dark_background`]。
+    pub comic_dark_bg: bool,
     /// 书架缩略图裁成这个宽高比（profile `cover_thumb_aspect`），见 [`crate::wash::add_cover_thumbnail`]。文字书、漫画都做。
     pub cover_thumb_aspect: Option<f32>,
     /// 文字书正文插图中间调加深的伽马（profile `image_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::darken_gray_image`]。
@@ -347,7 +351,7 @@ impl OptimizeOpts {
 
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, comic_gamma: None, comic_autocontrast: false, comic_trim_specks: false, comic_page_numbers: false, comic_upscale: true, cover_thumb_aspect: None, image_gamma: None, webp_to_png: false, text_mode: TextMode::Full, limits: Limits::default(), title: None }
+        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, comic_gamma: None, comic_autocontrast: false, comic_trim_specks: false, comic_page_numbers: false, comic_upscale: true, comic_dark_bg: false, cover_thumb_aspect: None, image_gamma: None, webp_to_png: false, text_mode: TextMode::Full, limits: Limits::default(), title: None }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -377,6 +381,7 @@ impl OptimizeOpts {
             comic_trim_specks: p.comic.trim_specks,
             comic_page_numbers: p.comic.page_numbers,
             comic_upscale: p.comic.upscale,
+            comic_dark_bg: p.comic.dark_bg,
             cover_thumb_aspect: p.cover_thumb_aspect,
             image_gamma: p.image_gamma.filter(|&g| g != 1.0),
             webp_to_png: !p.webp,
