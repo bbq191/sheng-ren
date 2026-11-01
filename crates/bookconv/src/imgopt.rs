@@ -1098,7 +1098,6 @@ impl Page8 {
         }
     }
 
-    /// 放到 `cw × ch` 的白底画布上，左上角在 (`x`, `y`)；类型不变。
     /// 放到 `cw × ch`、底色 `fill`（灰度值，彩色三个分量相同）的画布上，左上角在 `(x, y)`。
     fn paste_on(&self, cw: u32, ch: u32, x: u32, y: u32, fill: u8) -> Page8 {
         match self {
@@ -2055,6 +2054,23 @@ mod tests {
     }
 
     #[test]
+    fn dark_background_jpeg_with_stray_outer_line_still_gets_dark_fill() {
+        // 黑底 22、最外 1px 一圈浅灰杂边（200，不到白边阈值、裁白边裁不掉），JPEG 编码：c62 每条边一圈 12px 里 1px 亮就判不上
+        let img = image::GrayImage::from_fn(1200, 1300, |x, y| {
+            let d = x.min(y).min(1199 - x).min(1299 - y);
+            let v = if d == 0 { 200 } else if (150..1050).contains(&x) && (150..1150).contains(&y) { if (x + y) % 9 == 0 { 30 } else { 230 } } else { 22 };
+            image::Luma([v])
+        });
+        let mut jpg = Vec::new();
+        image::DynamicImage::ImageLuma8(img).write_to(&mut std::io::Cursor::new(&mut jpg), ImageFormat::Jpeg).unwrap();
+        let on = image::load_from_memory(&dark_page(&jpg, true).unwrap()).unwrap().to_luma8();
+        let (w, h) = on.dimensions();
+        for (x, y) in [(0, 0), (w - 1, h - 1)] {
+            assert!(on.get_pixel(x, y).0[0] < 40, "补的是黑边（JPEG 底色略浮），不是白边：({x},{y})={}", on.get_pixel(x, y).0[0]);
+        }
+    }
+
+    #[test]
     fn dark_background_page_keeps_layout_and_only_fill_changes() {
         // 扫描的黑是深灰 22，四周一圈 150px 黑边；页比屏幕扁，上下要补边
         let png = framed_png(1200, 1300, 22, (150, 150, 1050, 1150));
@@ -2109,7 +2125,7 @@ mod tests {
             png
         };
         assert_eq!(dark_page(&corner, true), dark_page(&corner, false), "局部暗角不判");
-        // 满版深色画（棋盘格 0/60）：四边暗，但页里没有亮的内容、也不均匀，不当黑底页裁
+        // 满版深色画（棋盘格 0/60）：四边暗，但底色中位数落在 60（> 48），JPEG 振铃还有亮于 64 的，不当黑底页
         let art = black_jpeg(1200, 1500);
         assert_eq!(dark_page(&art, true), dark_page(&art, false), "满版深色画不判");
     }
