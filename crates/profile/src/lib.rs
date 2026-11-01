@@ -1,5 +1,5 @@
 //! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在内置三份，都按设备自带的阅读器量（见 docs/devices.md）：
-//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Ocean 5 Pro，EPUB）、`kobo`（Kobo Clara BW，EPUB，2026-11-01 预配置、未上真机）。
+//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Ocean 5 Pro，EPUB）、`kobo`（Kobo Clara BW，KEPUB，2026-11-01 预配置、未上真机）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -21,20 +21,30 @@ pub const DEFAULT_COMIC_MARGIN: u32 = 1;
 pub const MIN_GAMMA_IMAGE_SIDE: u32 = 200;
 
 /// 产物格式。KFX 是先按同一套规则优化出 EPUB、再转换（给 Kindle 自带阅读器，2026-10-05 起，见 docs/kfx.md）；
+/// KEPUB 是同一份优化结果再加 Kobo 的 koboSpan 和两层包装（给 Kobo 自带阅读器的 Kobo WebKit，2026-11-01 起，见 docs/kepub.md）；
 /// PDF、AZW3 已删（AZW3 2026-10-09 定：KFX 取代），写了按未知值报错。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Epub,
     Kfx,
+    Kepub,
 }
 
 impl Format {
-    /// 文件扩展名（也是 TOML 里的写法）。
-    pub fn ext(self) -> &'static str {
+    /// 格式短名（TOML 里的写法，`[readable.<name>]`；大写后给人看）。
+    pub fn name(self) -> &'static str {
         match self {
             Format::Epub => "epub",
             Format::Kfx => "kfx",
+            Format::Kepub => "kepub",
+        }
+    }
+    /// 产物文件扩展名：KEPUB 是 `kepub.epub`（Kobo 按这个双扩展名用 Kobo WebKit 打开，见 docs/kepub.md），其余同 [`Format::name`]。
+    pub fn ext(self) -> &'static str {
+        match self {
+            Format::Kepub => "kepub.epub",
+            f => f.name(),
         }
     }
 }
@@ -944,6 +954,6 @@ mod tests {
         assert!(Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"K\"\ndir = \"b\"\nx = 1\n")).is_err(), "不认识的键报错");
         let k = get("kobo").unwrap();
         assert_eq!(k.deliver, Some(Deliver::Usbms { label: "KOBOeReader".into(), dir: "books".into() }));
-        assert_eq!((k.screen.width, k.screen.height, k.color, k.format()), (1072, 1448, false, Format::Epub));
+        assert_eq!((k.screen.width, k.screen.height, k.color, k.format()), (1072, 1448, false, Format::Kepub));
     }
 }

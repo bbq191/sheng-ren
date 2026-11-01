@@ -100,10 +100,12 @@ impl Library {
         // KFX 再带上写出器的版本（写出器改了也要重建）和写出器求 `@media` 用的屏幕、KFX 阅读范围（`kfx::css::MediaEnv::for_profile`；
         // 书库 profiles/ 里的自定义模式改了屏幕也要重建，2026-10-09 审计补上）
         let format_seg = match format {
-            Format::Epub => format.ext().to_string(),
+            Format::Epub => format.name().to_string(),
+            // KEPUB：写出器版本（`bookconv::kepub::VERSION`）；不按屏幕求值，屏幕变了由优化器那段（阅读范围）管
+            Format::Kepub => format!("{}{}", format.name(), bookconv::kepub::VERSION),
             Format::Kfx => {
                 let r = device.readable(Format::Kfx);
-                format!("{}{}@{}x{}r{}x{}", format.ext(), kfx::write::WRITER_VERSION, device.screen.width, device.screen.height, r.width, r.height)
+                format!("{}{}@{}x{}r{}x{}", format.name(), kfx::write::WRITER_VERSION, device.screen.width, device.screen.height, r.width, r.height)
             }
         };
         let cover = meta.cover.as_ref().map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
@@ -551,7 +553,7 @@ impl Library {
         })
     }
 
-    /// 生成产物写到 `part`（书库临时目录里）：EPUB 直接是优化结果；KFX 是同一份优化结果再转一次（中间文件放 `tmp`）。
+    /// 生成产物写到 `part`（书库临时目录里）：EPUB 直接是优化结果；KFX、KEPUB 是同一份优化结果再转一次（中间文件放 `tmp`）。
     /// 返回警告（质量门、体检摘要）、产物的 SHA-256（整份在内存里的时候顺带算好；EPUB 是 `None`，由调用方读文件算）和体检清单。
     fn produce(&self, meta: &Meta, device: &Profile, format: Format, part: &Path, tmp: &Path) -> Result<Produced, String> {
         let epub = self.prepared_input(meta)?;
@@ -567,7 +569,15 @@ impl Library {
         if !rep.ok {
             warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
         }
-        if format != Format::Epub {
+        if format == Format::Kepub {
+            // 只插 koboSpan 和包装（docs/kepub.md）；产物再过一次质量门（插坏了能看出来）
+            let kp = bookconv::kepub::epub_to_kepub(&optimized, part, &bookconv::kepub::Opts::default()).map_err(|e| e.to_string())?;
+            warnings.extend(kp.warnings);
+            let rep = bookconv::check::check_epub_file(part)?;
+            if !rep.ok {
+                warnings.extend(rep.errors.iter().map(|e| format!("质量门未过（KEPUB）：{e}")));
+            }
+        } else if format == Format::Kfx {
             // 按文件读（不先整本读进内存）；BufReader：zip 按条目小块读
             let open = || std::fs::File::open(&optimized).map(std::io::BufReader::new).map_err(|e| format!("读 {}: {e}", optimized.display()));
             // 唯一 ID 取自书的 id：重建出来还是"同一本书"，Kindle 上的阅读进度不丢
@@ -829,7 +839,11 @@ fn device_safe_rel(rel: &Path) -> PathBuf {
 /// 产物换了目录（文件名没变）：阅读器放在书旁边的同名 `.sdr` 文件夹（Kindle 的阅读进度、书签，`docs/kfx.md#阅读进度2026-10-06-真机`）
 /// 跟着挪过去，免得进度留在旧目录（2026-10-14 定：原件目录改名后《哆啦A梦》的进度丢在旧目录）。文件名变了的不挪
 /// （`.sdr` 里的文件按书名起名，改了名阅读器认不认没验证过），新位置已经有 `.sdr` 的不动，挪不了的不管（旧目录里留着）。
+/// KEPUB（`x.kepub.epub`）不挪：Kobo 的进度在设备数据库里，没有 `.sdr`，`with_extension` 还会算成 `x.kepub.sdr`。
 fn carry_sidecar(old: &Path, new: &Path) {
+    if old.to_string_lossy().ends_with(".kepub.epub") {
+        return;
+    }
     if old == new || !old.is_absolute() || old.file_name() != new.file_name() {
         return;
     }

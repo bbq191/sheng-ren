@@ -117,7 +117,7 @@
 |---|---|---|---|---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画固定版式） | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
 | `ireader` | 掌阅 Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白 |
-| `kobo` | Kobo Clara BW 自带阅读器（Nickel；预配置，未上真机） | EPUB（计划改 KEPUB） | 1072×1448，300ppi（官网） | 1072×1448（未量，按整屏） | 1072×1448（整屏，固定版式） | 黑白 |
+| `kobo` | Kobo Clara BW 自带阅读器（Nickel；预配置，未上真机） | KEPUB（`.kepub.epub`，漫画同） | 1072×1448，300ppi（官网） | 1072×1448（未量，按整屏） | 1072×1448（整屏，固定版式） | 黑白 |
 
 ### 怪癖 → 字段
 
@@ -301,7 +301,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 - **传书**：USB 大容量存储（不是 MTP），卷标 `KOBOeReader`，udisks 挂到 `/run/media/$USER/KOBOeReader`（`[deliver] kind = "usbms"`）。产物放根目录的 `books/`，子目录照跟踪目录镜像。挂载点要真的挂着才算接上（同 MTP）；拔掉后剩下的空目录不写。挂载目录可以用 `BOOKLIB_USBMS_DIR` 改。
 - **不碰阅读器自己的数据**：`.kobo/` 一概不动，尤其书库数据库 `.kobo/KoboReader.sqlite`（Nickel 拔线后自己扫描更新）。Kindle 那种书旁边的 `.sdr` 进度文件夹 Kobo 没有，换目录时不搬。
 - **跳过登录**：`.kobo/Kobo/Kobo eReader.conf` 的 `[ApplicationPreferences]` 下加 `SideloadedMode=true`，不登 Kobo 账号也能看侧载的书（要用户自己改，程序不改）。
-- **格式**：第一阶段出 EPUB（仓库现成）。目标是 KEPUB（`.kepub.epub`，Nickel 打开、翻页更快，维护者以前试过）：第二阶段写 clean-room 的 KEPUB 写出器，真机比过再把 `formats` 改成 `["kepub"]`。
+- **格式**：KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者以前试过），2026-11-01 起 `formats = ["kepub"]`，漫画也是 `.kepub.epub`。写出器是 clean-room 的 `bookconv::kepub`，做法、来源和真机 A/B（固定版式文件名、图片页不包装）见 [KEPUB](kepub.md)。还没上真机。
 - **漫画**：参数照 Kindle（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、固定版式整屏），都待真机比。
 
 ## 加一个阅读模式

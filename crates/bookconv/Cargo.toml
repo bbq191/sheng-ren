@@ -52,3 +52,7 @@ path = "src/bin/readable_probe.rs"
 [[bin]]
 name = "readable-measure"
 path = "src/bin/readable_measure.rs"
+
+[[bin]]
+name = "epub-to-kepub"
+path = "src/bin/epub_to_kepub.rs"

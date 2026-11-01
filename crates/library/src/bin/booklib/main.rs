@@ -609,8 +609,8 @@ fn cmd_devices(ctx: &Ctx) {
     for p in lib.devices().iter() {
         let r = p.output_readable();
         println!("{:<12} {}  {}  屏幕 {}×{}  阅读范围 {}×{}  {}", p.id, p.name, match p.comic.format.filter(|f| *f != p.format()) {
-            Some(c) => format!("{}（漫画 {}）", p.format().ext().to_uppercase(), c.ext().to_uppercase()),
-            None => p.format().ext().to_uppercase(),
+            Some(c) => format!("{}（漫画 {}）", p.format().name().to_uppercase(), c.name().to_uppercase()),
+            None => p.format().name().to_uppercase(),
         }, p.screen.width, p.screen.height, r.width, r.height, if p.color { "彩色" } else { "黑白" });
         match lib.device_status(p) {
             Ok(Some(at)) => println!("{:<12} ✓ 接上了：{at}", ""),

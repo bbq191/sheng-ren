@@ -27,7 +27,7 @@ fn main() {
     for w in &m.warnings {
         println!("⚠ {w}");
     }
-    let ext = format.map_or("epub", |f| f.ext());
+    let ext = format.map_or("epub", |f| f.name());
     if format.is_none() {
         println!("\n（产物是 KFX 的阅读模式（kindle）段名要写 [readable.kfx]；给 --device=<id> 自动按产物格式写）");
     }
