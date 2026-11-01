@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="14">
-  <title>Move（xochitl）的注释处理前后对比：只修复时只有 Move 做这一步</title>
+  <title>repair_note_links 的注释处理前后对比：只修复时只有开了它的模式做这一步（只有 2026-10-31 删掉的 xochitl 开过）</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#3f6fd0"/></marker>
@@ -21,7 +21,7 @@
   <rect width="960" height="620" fill="#ffffff"/>
 
   <text x="20" y="30" class="h">原书：注释在另一个文件</text>
-  <text x="520" y="30" class="h">处理后（Move）：注释搬到同一文件的章末</text>
+  <text x="520" y="30" class="h">处理后（repair_note_links）：注释搬到同一文件的章末</text>
 
   <!-- 原书 -->
   <rect class="pg" x="20" y="46" width="200" height="220" rx="6"/>

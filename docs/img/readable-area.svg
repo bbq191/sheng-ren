@@ -10,19 +10,8 @@
   <text x="450" y="24" text-anchor="middle" class="h">灰色 = 屏幕　绿色 = 阅读器真正用来显示内容的范围（文字书里的插图按绿色缩放）</text>
 
   <!-- 缩放 1/5；原点对齐各自屏幕左上角 -->
-  <!-- Move 954x1696 -> 190.8x339.2 ; readable 842x1455 -> 168.4x291, 水平居中(56px→11.2)，上 35.5pt≈111.8px→22.4 -->
-  <g transform="translate(40,50)">
-    <rect class="scr" width="190.8" height="339.2" rx="6"/>
-    <rect class="rd" x="11.2" y="22.4" width="168.4" height="291"/>
-    <text x="95.4" y="165" text-anchor="middle">842 × 1455</text>
-    <text x="95.4" y="360" text-anchor="middle" class="h">xochitl 模式（Move）</text>
-    <text x="95.4" y="378" text-anchor="middle" class="s">屏幕 954 × 1696，彩色</text>
-    <text x="95.4" y="394" text-anchor="middle" class="s">左右页边距各 56；上下留白固定</text>
-    <text x="95.4" y="410" text-anchor="middle" class="s">来源：在 xochitl 上实测换算</text>
-  </g>
-
   <!-- Kindle 屏幕（实际显示缓冲区）1272x1696 -> 254.4x339.2 ; readable 1104x1546 -> 220.8x309.2，左右 84→16.8，上下 75→15 -->
-  <g transform="translate(290,50)">
+  <g transform="translate(150,50)">
     <rect class="scr" width="254.4" height="339.2" rx="6"/>
     <rect class="rd" x="16.8" y="15" width="220.8" height="309.2"/>
     <text x="127.2" y="165" text-anchor="middle">1104 × 1546</text>
@@ -33,7 +22,7 @@
   </g>
 
   <!-- 1264x1680 -> 252.8x336 ; readable 全屏 -->
-  <g transform="translate(608,50)">
+  <g transform="translate(495,50)">
     <rect class="scr" width="252.8" height="336" rx="6"/>
     <rect class="rd" x="0" y="0" width="252.8" height="336"/>
     <text x="126.4" y="165" text-anchor="middle">1264 × 1680</text>
@@ -44,6 +33,6 @@
   </g>
 
   <text x="450" y="494" text-anchor="middle" class="s">用"测量书"实测：readable-probe 生成 → 设备上截屏 → readable-measure 读出尺寸。阅读器页边距设置改了就要重量。</text>
-  <text x="450" y="515" text-anchor="middle" class="s">三个数都是只放一张大图的页面上量的；漫画另有画布（[comic_readable]），见"漫画页在三台设备上的位置"那张图。</text>
-  <text x="450" y="536" text-anchor="middle" class="s">漫画：Kindle 写成固定版式按整屏排，掌阅整屏，xochitl 按页边距 1 排（952 × 1457）。</text>
+  <text x="450" y="515" text-anchor="middle" class="s">两个数都是只放一张大图的页面上量的；漫画另有画布（[comic_readable]），见"漫画页在设备上的位置"那张图。</text>
+  <text x="450" y="536" text-anchor="middle" class="s">漫画：Kindle 写成固定版式按整屏排，掌阅整屏。</text>
 </svg>

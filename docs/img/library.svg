@@ -40,11 +40,10 @@
   <text x="588" y="86" class="m" fill="#1d4fa8">小说/三体.epub</text>
   <text x="588" y="108" class="m" fill="#1d4fa8">漫画/乱马01.cbz</text>
 
-  <rect x="556" y="136" width="364" height="100" rx="8" fill="#fff" stroke="#3f9a5b"/>
+  <rect x="556" y="136" width="364" height="84" rx="8" fill="#fff" stroke="#3f9a5b"/>
   <text x="572" y="158" class="s" fill="#2e7d4a">设备上（sync 直接传，电脑上不留）</text>
   <text x="572" y="182" class="m" fill="#2e7d4a">Kindle<tspan x="640">documents/小说/三体.kfx</tspan></text>
   <text x="572" y="204" class="m" fill="#2e7d4a">掌阅<tspan x="640">documents/小说/三体.epub</tspan></text>
-  <text x="572" y="226" class="m" fill="#2e7d4a">Move<tspan x="640">文件夹「小说」里的《三体》</tspan></text>
 
 <path class="l" d="M492 110 C520 110 540 82 584 82" marker-end="url(#a)"/>
   <path class="l" d="M492 180 C530 180 540 104 584 104" marker-end="url(#a)"/>

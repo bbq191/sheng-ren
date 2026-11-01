@@ -40,7 +40,7 @@
 
   <rect class="q" x="250" y="236" width="400" height="50" rx="8"/>
   <text x="450" y="256" text-anchor="middle" class="h">和生成记录比</text>
-  <text x="450" y="274" text-anchor="middle" class="s">output-state/&lt;模式&gt;.json：这本书在设备上的位置（Move 上是 uuid）、指纹</text>
+  <text x="450" y="274" text-anchor="middle" class="s">output-state/&lt;模式&gt;.json：这本书在设备上的位置、指纹</text>
 
   <path class="l" d="M290 286 L114 328" marker-end="url(#a)"/>
   <path class="l" d="M390 286 L336 328" marker-end="url(#a)"/>
@@ -60,7 +60,7 @@
   <rect class="g" x="458" y="330" width="200" height="66" rx="8"/>
   <text x="558" y="350" text-anchor="middle" class="h">↪ 挪位置</text>
   <text x="558" y="368" text-anchor="middle" class="s">指纹一样、位置变了</text>
-  <text x="558" y="386" text-anchor="middle" class="s">直接挪（Move 是加新删旧）</text>
+  <text x="558" y="386" text-anchor="middle" class="s">直接在设备上改名、挪目录</text>
 
   <rect class="b" x="680" y="330" width="206" height="66" rx="8"/>
   <text x="783" y="350" text-anchor="middle" class="h">要生成</text>
@@ -89,6 +89,6 @@
 
   <rect class="g" x="100" y="640" width="700" height="66" rx="8"/>
   <text x="450" y="660" text-anchor="middle" class="h">✓ 传上设备，补上指纹，删掉旧位置</text>
-  <text x="450" y="678" text-anchor="middle" class="s">和上次传的一样（看哈希）→ ≡ 不再传；MTP 上相同字节不拷；Move 原地替换（sync 里由这台的传输线程做）</text>
+  <text x="450" y="678" text-anchor="middle" class="s">和上次传的一样（看哈希）→ ≡ 不再传；设备上相同字节不拷，变了的覆盖同名文件（sync 里由这台的传输线程做）</text>
   <text x="450" y="696" text-anchor="middle" class="s">只删生成记录里记着的，设备上别的书一概不动；中途失败：临时文件删掉，上一版产物还在</text>
 </svg>

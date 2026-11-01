@@ -48,9 +48,9 @@
 
 下面标着 Move 的几条按 profile 字段开（`webp`、`background_no_repeat`、`line_height_except_p`、`block_width`、`heading_font_keywords`、`inline_css_lengths`、`padding`/`borders`/`heading_margins`、`margin_top` 等），只有 2026-10-31 删掉的 `xochitl` 模式开过，现在没有内置模式开；代码和单测（`profile::fixture("xochitl")`）都留着，以后新设备有同样的怪癖再开。
 
-profile `kindle_rules`（`wash::kindle_rules`、`bookconv::uastyle`、`bookconv::color`）。2026-10-08 定「三台统一是一套规则」：Kindle 那边由 KFX 写出器按规则表排（[KFX · Send to Kindle 的样式规则](kfx.md#send-to-kindle-的样式规则)），掌阅、Move 的书里只改其中**会让 Kindle 和按 CSS 排的阅读器看起来不一样**的几条。只改值、删声明，不加选择器，文字不动；行内 `style` 同样处理。这是「不动样式」的例外。
+profile `kindle_rules`（`wash::kindle_rules`、`bookconv::uastyle`、`bookconv::color`）。2026-10-08 定「统一是一套规则」：Kindle 那边由 KFX 写出器按规则表排（[KFX · Send to Kindle 的样式规则](kfx.md#send-to-kindle-的样式规则)），掌阅的书里只改其中**会让 Kindle 和按 CSS 排的阅读器看起来不一样**的几条。只改值、删声明，不加选择器，文字不动；行内 `style` 同样处理。这是「不动样式」的例外。
 
-![Send to Kindle 的规则怎么落到三台](img/s2k-rules.svg)
+![Send to Kindle 的规则怎么落到两台](img/s2k-rules.svg)
 
 | 规则 | 怎么做 | 起因 |
 |---|---|---|
@@ -241,9 +241,9 @@ Kindle 的封面框是 **0.65**（网格 344×531、列表约 139×213，宽度�
 
 ### 离屏幕边缘 1px：三种做法
 
-1px 指图到**屏幕边缘**的距离，不是到阅读范围边缘。各台阅读器各有一个怪癖挡着，各用一种办法绕过去（图里还画着 2026-10-31 删掉的 Move）（测得的具体数字见[设备 · 可阅读范围](devices.md#可阅读范围)）：
+1px 指图到**屏幕边缘**的距离，不是到阅读范围边缘。各台阅读器各有一个怪癖挡着，各用一种办法绕过去（测得的具体数字见[设备 · 可阅读范围](devices.md#可阅读范围)）：
 
-![漫画页在三台设备上的位置](img/comic-geometry.svg)
+![漫画页在设备上的位置](img/comic-geometry.svg)
 
 | 模式 | 挡着的怪癖 | 做法 |
 |---|---|---|
