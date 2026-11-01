@@ -390,7 +390,7 @@ const TRIM_MAX_FRACTION: f32 = 0.35;
 
 /// 留白的亮度下限：一行/列的首像素 R、G、B 都 ≥ 这个值、其余像素与它的差都在 [`TRIM_TOLERANCE`] 以内，才算留白。
 ///
-/// 只裁接近白的边：裁掉的边最后补的是白边（[`Page8::paste_on`] 底色 255；`comic_dark_bg` 的黑底页另按底色裁、补底色，见 [`trim_dark`]），黑色、灰色、彩色的边（出血到页边的黑底页、
+/// 只裁接近白的边：裁掉的边最后补的是白边（[`Page8::paste_on`] 底色 255；`comic_dark_bg` 的黑底页不裁、只把补边换成底色，见 [`dark_fill`]），黑色、灰色、彩色的边（出血到页边的黑底页、
 /// 深色满版画面）裁了再补白就改了原画（2026-10-03 审计：此前只看"纯色"，黑底页的黑边被裁掉换成白边）。
 /// 235 的依据：BT.601 有限范围（16–235）里 235 就是标称白，按这个范围出的扫描、视频截图里纸白落在 235 附近。
 /// 只卡首像素、其余仍按容差比：贴着画面的那一两行留白有 JPEG 振铃（实测 q90 纸白 241 的边上有 233），这样判定与以前对
@@ -794,7 +794,7 @@ pub struct ComicPage {
     pub no_upscale: bool,
     /// 页码：从这一行（解码后整页的坐标）往下切掉（`comic_page_numbers`，整卷投票定的，见 [`crate::comiccrop::page_number_cuts`]）。
     pub cut_bottom: Option<u32>,
-    /// 黑底页按底色裁边、补边补底色（`comic_dark_bg`，[`crate::comiccrop::dark_background`]）。
+    /// 黑底页补边补底色、不裁（`comic_dark_bg`，[`crate::comiccrop::dark_background`]）。
     pub dark_bg: bool,
 }
 
@@ -915,7 +915,8 @@ pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grays
         None => img,
     };
     let (img, tl, tt) = trim_comic(img, trim_specks, orig, (0, 0));
-    let (img, tl, tt, bg) = if dark_bg { trim_dark(img, tl, tt) } else { (img, tl, tt, None) };
+    // 黑底页只换补边颜色：不按底色裁、不重新放大，缩放和位置都和不开时一样（2026-11-01 真机看过，裁了的出血画构图坏了）
+    let bg = if dark_bg { dark_fill(&img) } else { None };
     let (cw, ch) = img.dimensions();
     let trimmed = (cw, ch) != orig;
     if cw.min(ch) < area.width / 3 {
@@ -948,24 +949,18 @@ pub fn prepare_comic_page_limited(bytes: &[u8], area: Screen, margin: u32, grays
     page.encode(out_fmt, JPEG_QUALITY_COMIC)
 }
 
-/// 黑底页（`comic_dark_bg`）：内容是灰度、四边一圈是均匀的黑 / 深灰（[`crate::comiccrop::dark_background`]）的页按底色再裁一次边
-/// （[`crate::comiccrop::dark_bounds`]）。返回 (图, 左偏移, 上偏移, 底色)；不是黑底页 → 原样、底色 `None`。`(l, t)` 是裁白边的偏移。
-fn trim_dark(img: Page8, l: u32, t: u32) -> (Page8, u32, u32, Option<u8>) {
+/// 黑底页（`comic_dark_bg`）：内容是灰度、四边一圈是均匀的黑 / 深灰（[`crate::comiccrop::dark_background`]）的页返回底色，
+/// 补边补它（不补白）；不是黑底页 → `None`。只判、不裁：按底色裁过一版（c61），竹光侍的出血画被裁坏了构图、迷宮飯效果也差。
+fn dark_fill(img: &Page8) -> Option<u8> {
     if !img.is_gray_content() {
-        return (img, l, t, None);
+        return None;
     }
     let (w, h) = img.dimensions();
-    let plane: std::borrow::Cow<'_, [u8]> = match &img {
+    let plane: std::borrow::Cow<'_, [u8]> = match img {
         Page8::Gray(g) => std::borrow::Cow::Borrowed(g.as_raw()),
         Page8::Rgb(c) => std::borrow::Cow::Owned(c.as_raw().as_chunks::<3>().0.iter().map(|p| p[0].max(p[1]).max(p[2])).collect()),
     };
-    let Some(bg) = crate::comiccrop::dark_background(&plane, w, h) else {
-        return (img, l, t, None);
-    };
-    match crate::comiccrop::dark_bounds(&plane, w, h, bg) {
-        Some((x, y, cw, ch)) => (img.crop(x, y, cw, ch), l + x, t + y, Some(bg)),
-        None => (img, l, t, Some(bg)),
-    }
+    crate::comiccrop::dark_background(&plane, w, h)
 }
 
 /// 中间调加深的查找表：`v ↦ round(255·(v/255)^γ)`，0 和 255 不动，γ > 1 时中间灰度变深（profile `comic_gamma`、`image_gamma`；
@@ -2060,23 +2055,37 @@ mod tests {
     }
 
     #[test]
-    fn dark_background_page_is_trimmed_and_padded_with_its_own_black() {
-        // 扫描的黑是深灰 22，四周一圈 150px 黑边
-        let png = framed_png(1200, 1500, 22, (150, 150, 1050, 1350));
-        let out = image::load_from_memory(&dark_page(&png, true).unwrap()).unwrap().to_luma8();
-        let (w, h) = out.dimensions();
-        let corner = out.get_pixel(0, 0).0[0];
-        assert!(corner < 16, "补的是黑边（底色过加深表），不是白边：{corner}");
-        assert_eq!(out.get_pixel(w - 1, h - 1).0[0], corner);
-        // 黑边裁掉了：画面（亮）放大后离边很近
-        let col = |x: u32| (0..h).any(|y| out.get_pixel(x, y).0[0] > 128);
-        let l = (0..w).find(|&x| col(x)).unwrap();
-        assert!(l < 20, "黑边裁掉后按画面放大：左边只剩 {l}px");
-        // 不开的话照旧：黑边不裁、外面补白
+    fn dark_background_page_keeps_layout_and_only_fill_changes() {
+        // 扫描的黑是深灰 22，四周一圈 150px 黑边；页比屏幕扁，上下要补边
+        let png = framed_png(1200, 1300, 22, (150, 150, 1050, 1150));
+        let on = image::load_from_memory(&dark_page(&png, true).unwrap()).unwrap().to_luma8();
         let off = image::load_from_memory(&dark_page(&png, false).unwrap()).unwrap().to_luma8();
-        let (ow, oh) = off.dimensions();
-        let dark_run = (0..ow).skip_while(|&x| off.get_pixel(x, oh / 2).0[0] > 128).take_while(|&x| off.get_pixel(x, oh / 2).0[0] < 64).count();
-        assert!(dark_run > 60, "关着时黑边不裁：中间一行的黑边 {dark_run}px");
+        assert_eq!(on.dimensions(), off.dimensions(), "输出尺寸一样");
+        let (w, h) = on.dimensions();
+        // 内容（不是补边的部分）位置一样：关着时补的是白，找第一行 / 最后一行不全白的
+        let off_rows: Vec<u32> = (0..h).filter(|&y| !(0..w).all(|x| off.get_pixel(x, y).0[0] > 250)).collect();
+        let (top, bot) = (off_rows[0], *off_rows.last().unwrap());
+        assert!(top > 0, "上下有补边：{top}");
+        let corner = on.get_pixel(0, 0).0[0];
+        assert!(corner < 16, "补的是黑边（底色过加深表），不是白边：{corner}");
+        assert_eq!(on.get_pixel(w - 1, h - 1).0[0], corner);
+        // 关着时补白的那几行，开着时整行是底色；画面那几行和关着时逐像素接近（JPEG、加深有误差）：位置、缩放都一样，只是补边颜色不同
+        for y in (0..h).step_by(7).chain([top.saturating_sub(3), top, bot, (bot + 3).min(h - 1)]) {
+            if y < top || y > bot {
+                assert!((0..w).all(|x| on.get_pixel(x, y).0[0].abs_diff(corner) <= 4), "第 {y} 行应是补边");
+            } else {
+                // 左右的补边（关着白、开着底色）除外，其余逐像素接近
+                let bad = (0..w).find(|&x| {
+                    let (a, b) = (on.get_pixel(x, y).0[0], off.get_pixel(x, y).0[0]);
+                    a.abs_diff(b) > 24 && !(b > 250 && a.abs_diff(corner) <= 4)
+                });
+                assert!(bad.is_none(), "画面没裁没放大：第 {y} 行 x={bad:?} 对不上");
+            }
+        }
+        let mid = (top + bot) / 2;
+        // 黑边留着：中间一行左边还有 >60px 的黑
+        let dark_run = (0..w).take_while(|&x| on.get_pixel(x, mid).0[0] < 64).count();
+        assert!(dark_run > 60, "黑边不裁：{dark_run}px");
     }
 
     #[test]

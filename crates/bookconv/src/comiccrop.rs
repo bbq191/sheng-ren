@@ -329,13 +329,9 @@ const DARK_SIDE_PER_MILLE: usize = 985;
 const DARK_SIDE_SPREAD: u8 = 16;
 /// 黑底页：底色（四条边合起来的中位数）不亮于这个。比 [`DARK_BG_MAX`] 严：要求的是「黑底」，不是「偏暗的灰底」。
 const DARK_BG_MEDIAN_MAX: u8 = 48;
-/// 黑底页按底色裁边：一行（列）所有像素都在底色 ± 这么多以内才算底色、可以裁。比裁白边的 8 宽：深色区 JPEG 噪声大；
-/// 又只到 24，网点、深色画面的纹理会挡住，不会往画里裁。一个亮的杂点就挡住（拿不准就不裁）。
-const DARK_TRIM_TOLERANCE: u8 = 24;
-
 /// 判黑底页：`px` 是整页（已裁过白边）的亮度平面（每像素最亮的分量），四条边一圈都是均匀的黑 / 深灰时返回底色（中位数），否则
 /// `None`。保守：四条边每条都得几乎全是暗的（[`DARK_SIDE_PER_MILLE`]）、四边底色接近（[`DARK_SIDE_SPREAD`]）、底色够黑
-/// （[`DARK_BG_MEDIAN_MAX`]），且页里得有亮的内容（整页全黑的不算，没什么可裁）。只有一两条边暗的出血画、局部暗角都判不上。
+/// （[`DARK_BG_MEDIAN_MAX`]），且页里得有亮的内容（整页全黑的不算）。只有一两条边暗的出血画、局部暗角都判不上。
 pub fn dark_background(px: &[u8], w: u32, h: u32) -> Option<u8> {
     let band = ((w.min(h) as f32 * DARK_BAND).ceil() as u32).max(2);
     if w <= band * 4 || h <= band * 4 {
@@ -372,20 +368,6 @@ pub fn dark_background(px: &[u8], w: u32, h: u32) -> Option<u8> {
     // 页里要有明显亮的内容（画、字），全黑页不算
     let bright = px.iter().filter(|&&v| v > DARK_BG_MAX.saturating_mul(2)).count();
     (bright * 100 >= px.len()).then_some(bg)
-}
-
-/// 黑底页按底色裁边：从四边往里，整行（列）都在 `bg` ± [`DARK_TRIM_TOLERANCE`] 以内的裁掉，每边最多 [`MAX_TRIM`]。
-/// 返回 (x, y, 宽, 高)；一行都裁不掉 → `None`。
-pub fn dark_bounds(px: &[u8], w: u32, h: u32, bg: u8) -> Option<(u32, u32, u32, u32)> {
-    let ok = |v: u8| v.abs_diff(bg) <= DARK_TRIM_TOLERANCE;
-    let row = |y: u32| px[(y * w) as usize..((y + 1) * w) as usize].iter().all(|&v| ok(v));
-    let col = |x: u32, t: u32, b: u32| (t..b).all(|y| ok(px[(y * w + x) as usize]));
-    let (mw, mh) = ((w as f32 * MAX_TRIM) as u32, (h as f32 * MAX_TRIM) as u32);
-    let t = (0..mh).take_while(|&y| row(y)).count() as u32;
-    let b = h - (0..mh).take_while(|&i| row(h - 1 - i)).count() as u32;
-    let l = (0..mw).take_while(|&x| col(x, t, b)).count() as u32;
-    let r = w - (0..mw).take_while(|&i| col(w - 1 - i, t, b)).count() as u32;
-    ((l, t, r, b) != (0, 0, w, h) && r > l && b > t).then_some((l, t, r - l, b - t))
 }
 
 #[cfg(test)]
@@ -483,7 +465,6 @@ mod tests {
         let inner = |x: u32, y: u32| (100..700).contains(&x) && (100..900).contains(&y);
         let framed = dark_page(800, 1000, |x, y| if inner(x, y) { 220 } else { 22 + ((x * 7 + y * 3) % 9) as u8 });
         assert_eq!(dark_background(&framed, 800, 1000), Some(26), "四边均匀深灰（带噪声）");
-        assert_eq!(dark_bounds(&framed, 800, 1000, 26), Some((100, 100, 600, 800)));
         // 两条边暗（左、上），右、下是画
         let two = dark_page(800, 1000, |x, y| if x >= 100 && y >= 100 { 220 } else { 22 });
         assert_eq!(dark_background(&two, 800, 1000), None);

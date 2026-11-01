@@ -182,7 +182,9 @@ pub const OPTIMIZE_VERSION: &str = "65";
 /// - c60（2026-10-30）：书架缩略图先去扫描窄白边（同 v65，两路共用）。
 /// - c61（2026-11-01）：黑底页按底色裁边、补边补底色（profile `comic_dark_bg`，`comiccrop::dark_background`：四条边每条都几乎全是
 ///   均匀的黑 / 深灰才算，出血画、暗角不算）。只 Kindle 开；掌阅不开，产物不变。没上真机。
-pub const COMIC_VERSION: &str = "61";
+/// - c62（2026-11-01）：黑底页不再按底色裁边、不重新放大，只把补边从白换成底色（竹光侍的出血画裁坏了构图、迷宮飯效果也差；
+///   Kindle 真机上伊藤潤二卷03 效果最好）。只 Kindle 开。
+pub const COMIC_VERSION: &str = "62";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，
@@ -273,7 +275,7 @@ pub struct OptimizeOpts {
     pub comic_page_numbers: bool,
     /// 比框小的 JPEG 漫画页放大到框（profile `comic_upscale`，缺省开），见 [`crate::imgopt::ComicPage::no_upscale`]。
     pub comic_upscale: bool,
-    /// 黑底页按底色裁边、补底色（profile `comic_dark_bg`），见 [`crate::comiccrop::dark_background`]。
+    /// 黑底页补边补底色、不裁（profile `comic_dark_bg`），见 [`crate::comiccrop::dark_background`]。
     pub comic_dark_bg: bool,
     /// 书架缩略图裁成这个宽高比（profile `cover_thumb_aspect`），见 [`crate::wash::add_cover_thumbnail`]。文字书、漫画都做。
     pub cover_thumb_aspect: Option<f32>,
