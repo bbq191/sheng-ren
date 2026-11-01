@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 720" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
-  <title>按阅读模式生成一本书：文字书只修复、各台另加一点；漫画完整处理</title>
+  <title>按阅读模式生成一本书：文字书只修复、各模式另加一点；漫画完整处理</title>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#555"/></marker>
     <style>
@@ -29,7 +29,7 @@
 
   <!-- 文字书：只修复 -->
   <rect class="t" x="20" y="148" width="440" height="200" rx="10"/>
-  <text x="240" y="170" text-anchor="middle" class="h">文字书：只修复（text_repair_only，三台都做）</text>
+  <text x="240" y="170" text-anchor="middle" class="h">文字书：只修复（text_repair_only，两个模式都做）</text>
   <g class="s">
     <text x="36" y="196">· 伪 DRM 剥离（真 DRM 入库时就拒收）· 坏文件名改名</text>
     <text x="36" y="218">· 去掉指向不存在文件的引用 · 重复 id 合并、改名</text>
@@ -40,34 +40,26 @@
     <text x="36" y="334" font-weight="bold" fill="#1d4fa8">书里的文字、图片、格式、样式一概不动</text>
   </g>
 
-  <!-- 各台另加 -->
+  <!-- 各模式另加 -->
   <path class="l" d="M240 348 L240 366" marker-end="url(#a)"/>
-  <text x="250" y="362" class="s">各台另加</text>
-  <rect class="k" x="20" y="368" width="140" height="150" rx="8"/>
-  <text x="90" y="390" text-anchor="middle" class="h">kindle</text>
-  <text x="90" y="414" text-anchor="middle" class="s">EPUB 不再加东西</text>
-  <text x="90" y="438" text-anchor="middle" class="s">KFX 写出器照</text>
-  <text x="90" y="456" text-anchor="middle" class="s">Send to Kindle</text>
-  <text x="90" y="474" text-anchor="middle" class="s">规则表排</text>
-  <text x="90" y="500" text-anchor="middle" class="m">→ KFX</text>
+  <text x="250" y="362" class="s">各模式另加</text>
+  <rect class="k" x="20" y="368" width="215" height="150" rx="8"/>
+  <text x="127" y="390" text-anchor="middle" class="h">kindle</text>
+  <text x="127" y="414" text-anchor="middle" class="s">EPUB 不再加东西</text>
+  <text x="127" y="438" text-anchor="middle" class="s">KFX 写出器照</text>
+  <text x="127" y="456" text-anchor="middle" class="s">Send to Kindle</text>
+  <text x="127" y="474" text-anchor="middle" class="s">规则表排</text>
+  <text x="127" y="500" text-anchor="middle" class="m">→ KFX</text>
 
-  <rect class="k" x="170" y="368" width="140" height="150" rx="8"/>
-  <text x="240" y="390" text-anchor="middle" class="h">ireader</text>
-  <text x="240" y="414" text-anchor="middle" class="m">kindle_rules</text>
-  <text x="240" y="436" text-anchor="middle" class="s">标签缺省样式</text>
-  <text x="240" y="454" text-anchor="middle" class="s">正文用阅读器字体</text>
-  <text x="240" y="472" text-anchor="middle" class="s">body 左右边距不要</text>
-  <text x="240" y="490" text-anchor="middle" class="s">文字对比度 4.5</text>
-  <text x="240" y="510" text-anchor="middle" class="m">→ EPUB</text>
+  <rect class="k" x="245" y="368" width="215" height="150" rx="8"/>
+  <text x="352" y="390" text-anchor="middle" class="h">ireader</text>
+  <text x="352" y="414" text-anchor="middle" class="m">kindle_rules</text>
+  <text x="352" y="436" text-anchor="middle" class="s">标签缺省样式</text>
+  <text x="352" y="454" text-anchor="middle" class="s">正文用阅读器字体</text>
+  <text x="352" y="472" text-anchor="middle" class="s">body 左右边距不要</text>
+  <text x="352" y="490" text-anchor="middle" class="s">文字对比度 4.5</text>
+  <text x="352" y="510" text-anchor="middle" class="m">→ EPUB</text>
 
-  <rect class="k" x="320" y="368" width="140" height="150" rx="8"/>
-  <text x="390" y="390" text-anchor="middle" class="h">xochitl</text>
-  <text x="390" y="414" text-anchor="middle" class="m">kindle_rules</text>
-  <text x="390" y="432" text-anchor="middle" class="s">（同左）</text>
-  <text x="390" y="454" text-anchor="middle" class="m">repair_note_links</text>
-  <text x="390" y="474" text-anchor="middle" class="s">注释搬进本章、</text>
-  <text x="390" y="492" text-anchor="middle" class="s">改同文件锚点</text>
-  <text x="390" y="510" text-anchor="middle" class="m">→ EPUB</text>
 
   <!-- 漫画 -->
   <rect class="c" x="480" y="148" width="440" height="370" rx="10"/>
@@ -87,14 +79,12 @@
   <g class="s">
     <text x="496" y="290">· 每张图只解码一次、只编码一次；已经合适的不重编码</text>
     <text x="496" y="314">· 画布 = comic_readable，图保比放进"画布 − 2×白边"</text>
-    <text x="496" y="338">· 黑白屏（kindle、ireader）转 256 级灰度，<tspan font-weight="bold">不抖动</tspan></text>
-    <text x="496" y="362">· xochitl 保留彩色</text>
-    <text x="496" y="386">· 静态 GIF/WebP 转 PNG/JPEG；动图、解压炸弹原样保留</text>
-    <text x="496" y="410">· 多张图并行处理（按像素额度限内存），结果与逐张相同</text>
-    <text x="496" y="440" font-weight="bold">离屏幕 1px：</text>
-    <text x="496" y="462">· kindle 写成固定版式（整屏画布）→ KFX</text>
-    <text x="496" y="484">· ireader 改成往左翻（整页铺满）</text>
-    <text x="496" y="506">· xochitl 按页边距 1 排，书架服务导入时登记</text>
+    <text x="496" y="338">· 黑白屏转 256 级灰度，<tspan font-weight="bold">不抖动</tspan></text>
+    <text x="496" y="362">· 静态 GIF/WebP 转 PNG/JPEG；动图、解压炸弹原样保留</text>
+    <text x="496" y="386">· 多张图并行处理（按像素额度限内存），结果与逐张相同</text>
+    <text x="496" y="416" font-weight="bold">离屏幕 1px：</text>
+    <text x="496" y="438">· kindle 写成固定版式（整屏画布）→ KFX</text>
+    <text x="496" y="460">· ireader 整屏画布（往右翻的书在阅读器里选「漫画」排版）</text>
   </g>
 
   <path class="l" d="M240 518 C240 560 440 550 450 600" marker-end="url(#a)"/>

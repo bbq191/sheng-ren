@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
-  <title>漫画页在三台设备上的位置（按比例缩小 1/5）</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 590" font-family="'Noto Sans CJK SC','PingFang SC','Microsoft YaHei',sans-serif" font-size="13">
+  <title>漫画页在设备上的位置（按比例缩小 1/5）</title>
   <style>
     .scr{fill:#e9e9e9;stroke:#666;stroke-width:1.2}
     .rd{fill:#d9f0df;stroke:#3f9a5b;stroke-width:1.2;stroke-dasharray:4 3}
@@ -8,11 +8,11 @@
     .s{font-size:12px;fill:#444}
     .ok{font-size:12px;fill:#2f7a45;font-weight:bold}
   </style>
-  <rect width="900" height="600" fill="#fafafa"/>
+  <rect width="900" height="590" fill="#fafafa"/>
   <text x="450" y="24" text-anchor="middle" class="h">灰 = 屏幕　绿虚线 = 漫画画布（优化按它排）　蓝 = 页面上的图（保比放进"画布 − 2×白边"）</text>
 
   <!-- kindle：固定版式，画布 = 整屏 1272x1696 -> 254.4x339.2 -->
-  <g transform="translate(30,50)">
+  <g transform="translate(150,50)">
     <rect class="scr" width="254.4" height="339.2" rx="6"/>
     <rect class="rd" width="254.4" height="339.2"/>
     <rect class="img" x="1" y="30" width="252.4" height="279"/>
@@ -24,36 +24,21 @@
   </g>
 
   <!-- ireader：1264x1680 -> 252.8x336，阅读范围 = 整屏 -->
-  <g transform="translate(325,50)">
+  <g transform="translate(495,50)">
     <rect class="scr" width="252.8" height="336" rx="6"/>
     <rect class="rd" width="252.8" height="336"/>
     <rect class="img" x="1" y="30" width="250.8" height="276"/>
     <text x="126.4" y="172" text-anchor="middle">左右各 1px</text>
     <text x="126.4" y="358" text-anchor="middle" class="h">ireader（掌阅自带）</text>
     <text x="126.4" y="376" text-anchor="middle" class="s">整页图铺满整屏，画布 = 整屏 1264 × 1680</text>
-    <text x="126.4" y="392" text-anchor="middle" class="s">漫画改成往左翻（往右翻的书会四周留边）</text>
+    <text x="126.4" y="392" text-anchor="middle" class="s">往右翻的书在阅读器里选「漫画」排版</text>
     <text x="126.4" y="410" text-anchor="middle" class="ok">✓ 真机离屏幕 1px（2026-09-30）</text>
   </g>
 
-  <!-- xochitl：954x1696 -> 190.8x339.2；页边距 1 时图框 (1,112) 952x1457 -->
-  <g transform="translate(640,50)">
-    <rect class="scr" width="190.8" height="339.2" rx="6"/>
-    <rect class="rd" x="0.2" y="22.4" width="190.4" height="291.4"/>
-    <rect class="img" x="0.2" y="22.4" width="190.4" height="291.4"/>
-    <text x="95.4" y="16" text-anchor="middle" class="s">上 112px</text>
-    <text x="95.4" y="172" text-anchor="middle">左右各 1px</text>
-    <text x="95.4" y="332" text-anchor="middle" class="s">下 127px</text>
-    <text x="95.4" y="358" text-anchor="middle" class="h">xochitl（Move 自带）</text>
-    <text x="95.4" y="376" text-anchor="middle" class="s">页边距设成 1 时画布 952 × 1457，</text>
-    <text x="95.4" y="392" text-anchor="middle" class="s">画布里不留白边（comic_margin = 0）</text>
-    <text x="95.4" y="410" text-anchor="middle" class="ok">✓ 左右 1px（上下是 xochitl 固定留的）</text>
-  </g>
-
   <g class="s">
-    <text x="30" y="478">· 图先裁掉接近白的边（黑底、出血不裁），再保比缩放进框、居中：受限的那条边两侧正好是白边宽，另一条边两侧更多（不拉伸）。</text>
-    <text x="30" y="500">· 黑白屏（kindle、ireader）转 256 级灰度、不抖动；xochitl 保留彩色。</text>
-    <text x="30" y="522">· 三种做法各对付一个阅读器怪癖：Kindle 流式排版强制留边 → 固定版式；掌阅遇到往右翻的书留边 → 改往左翻；</text>
-    <text x="42" y="544">xochitl 的四周留白 CSS 改不动 → 页边距设成 1（sync 传的书由书架服务自动登记；用别的办法传的才手工跑 comic-margins.sh --write）。</text>
-    <text x="30" y="566">· 截图坐标：Kindle 实际显示 1272 × 1696（标称 1264 × 1680），掌阅 1264 × 1680，Move 954 × 1696。</text>
+    <text x="30" y="492">· 图先裁掉接近白的边（黑底、出血不裁），再保比缩放进框、居中：受限的那条边两侧正好是白边宽，另一条边两侧更多（不拉伸）。</text>
+    <text x="30" y="514">· 黑白屏转 256 级灰度、不抖动。</text>
+    <text x="30" y="536">· 各对付一个阅读器怪癖：Kindle 流式排版强制留边 → 固定版式；掌阅往右翻的书留边是阅读器「排版」设置给的 → 选「漫画」排版。</text>
+    <text x="30" y="558">· 截图坐标：Kindle 实际显示 1272 × 1696（标称 1264 × 1680），掌阅 1264 × 1680。</text>
   </g>
 </svg>

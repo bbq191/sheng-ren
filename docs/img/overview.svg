@@ -66,7 +66,7 @@
   <text x="571" y="185" text-anchor="middle">文字书：只修复</text>
   <text x="571" y="204" text-anchor="middle" class="s">EPUB 3 · 目录到节</text>
   <text x="571" y="220" text-anchor="middle" class="s">文字图片样式不动</text>
-  <text x="571" y="236" text-anchor="middle" class="s">各台另加（见右）</text>
+  <text x="571" y="236" text-anchor="middle" class="s">各模式另加（见右）</text>
   <rect class="box" x="640" y="164" width="108" height="78" rx="6"/>
   <text x="694" y="185" text-anchor="middle">漫画</text>
   <text x="694" y="204" text-anchor="middle" class="s">裁边 · 缩放</text>
@@ -83,25 +83,19 @@
   <path class="l" d="M450 208 L498 208" marker-end="url(#a)"/>
 
   <!-- 设备 -->
-  <rect class="box dev" x="810" y="50" width="250" height="100" rx="8"/>
-  <text x="935" y="74" text-anchor="middle" class="h">kindle（KFX）</text>
-  <text x="935" y="98" text-anchor="middle">Kindle 自带阅读器</text>
-  <text x="935" y="120" text-anchor="middle" class="s">KFX 写出器照 Send to Kindle 规则表</text>
-  <text x="935" y="138" text-anchor="middle" class="s">USB（jmtpfs）放 documents/</text>
-  <rect class="box dev" x="810" y="162" width="250" height="102" rx="8"/>
-  <text x="935" y="186" text-anchor="middle" class="h">ireader（EPUB）</text>
-  <text x="935" y="210" text-anchor="middle">掌阅自带阅读器</text>
-  <text x="935" y="232" text-anchor="middle" class="s">+ kindle_rules · 漫画往左翻</text>
-  <text x="935" y="250" text-anchor="middle" class="s">USB（jmtpfs）放 documents/</text>
-  <rect class="box dev" x="810" y="276" width="250" height="90" rx="8"/>
-  <text x="935" y="298" text-anchor="middle" class="h">xochitl（EPUB，彩色）</text>
-  <text x="935" y="320" text-anchor="middle">Move 自带阅读器</text>
-  <text x="935" y="340" text-anchor="middle" class="s">+ kindle_rules + 注释可跳</text>
-  <text x="935" y="358" text-anchor="middle" class="s">SSH 调书架服务导入，按子目录建文件夹</text>
-  <path class="d" d="M760 180 C786 180 786 100 808 100" marker-end="url(#a)"/>
-  <path class="d" d="M760 208 L808 208" marker-end="url(#a)"/>
-  <path class="d" d="M760 236 C786 236 786 320 808 320" marker-end="url(#a)"/>
+  <rect class="box dev" x="810" y="76" width="250" height="100" rx="8"/>
+  <text x="935" y="100" text-anchor="middle" class="h">kindle（KFX）</text>
+  <text x="935" y="124" text-anchor="middle">Kindle 自带阅读器</text>
+  <text x="935" y="146" text-anchor="middle" class="s">KFX 写出器照 Send to Kindle 规则表</text>
+  <text x="935" y="164" text-anchor="middle" class="s">USB（jmtpfs）放 documents/</text>
+  <rect class="box dev" x="810" y="240" width="250" height="100" rx="8"/>
+  <text x="935" y="264" text-anchor="middle" class="h">ireader（EPUB）</text>
+  <text x="935" y="288" text-anchor="middle">掌阅自带阅读器</text>
+  <text x="935" y="310" text-anchor="middle" class="s">+ kindle_rules · 漫画整屏</text>
+  <text x="935" y="328" text-anchor="middle" class="s">USB（jmtpfs）放 documents/</text>
+  <path class="d" d="M760 190 C786 190 786 126 808 126" marker-end="url(#a)"/>
+  <path class="d" d="M760 226 C786 226 786 290 808 290" marker-end="url(#a)"/>
 
   <text x="540" y="410" text-anchor="middle" class="s">booklib sync 同步后为接着的设备生成并传上去（只传有变化的；没接上的下次再传；原件换了内容设备上原地换新，删了设备上也删）</text>
-  <text x="540" y="434" text-anchor="middle" class="s">三个模式用同一套代码，差别都写在模式的配置里；文字书三台都只修复（2026-10-08），漫画照旧完整处理；三台都用自带阅读器</text>
+  <text x="540" y="434" text-anchor="middle" class="s">两个模式用同一套代码，差别都写在模式的配置里；文字书都只修复（2026-10-08），漫画照旧完整处理；都用设备自带的阅读器</text>
 </svg>
