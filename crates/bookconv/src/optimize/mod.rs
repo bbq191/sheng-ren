@@ -186,7 +186,9 @@ pub const OPTIMIZE_VERSION: &str = "65";
 ///   Kindle 真机上伊藤潤二卷03 效果最好）。只 Kindle 开。
 /// - c63（2026-11-01）：黑底页判定放宽（agy 二审）：去掉「页里要有亮内容」的门槛（全黑页、少字黑底扉页也补黑边），判四条边时跳过
 ///   最外 3px 杂边（`comiccrop::DARK_EDGE_SKIP`）。只 Kindle 开。没上真机。
-pub const COMIC_VERSION: &str = "63";
+/// - c64（2026-11-01）：页码块宽度上限改按页高（`comiccrop::PN_MAX_W`，0.035 页高；原来是 KCC 的 0.045 页宽）：《迷宮飯》卷09
+///   三位数页码约 0.050 页宽，整卷只裁中 6 页；同卷页宽不一、页高固定。只 Kindle 开（`comic_page_numbers`）。没上真机。
+pub const COMIC_VERSION: &str = "64";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，

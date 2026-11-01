@@ -29,12 +29,15 @@ const MAX_TRIM: f32 = 0.35;
 /// 在内容最底下这么高（占页高）里找最低的那块（不算太小的）：页码下面还有灰尘、小点时内容的底边在页码下面（《迷宮飯》卷01 好几页），
 /// 像 KCC 只看最底下 2.5% 会找不到。
 const PN_SEARCH: f32 = 0.06;
-/// 相近的块合并：水平、竖直距离不超过页宽、页高的这个比例（同 KCC，一个数字的几笔、几位数字并成一块）。
+/// 相近的块合并（横向按页宽、竖向按页高；只有 [`PN_MAX_W`] 横向也按页高）：水平、竖直距离不超过页宽、页高的这个比例（同 KCC，一个数字的几笔、几位数字并成一块）。
 const PN_MERGE: (f32, f32) = (0.01, 0.002);
-/// 比这个小的块不算（同 KCC）。
+/// 比这个小的块不算（占页宽、页高，同 KCC）。
 const PN_MIN: (f32, f32) = (0.003, 0.006);
-/// 页码块最大（同 KCC：三位数）。
-const PN_MAX: (f32, f32) = (0.045, 0.02);
+/// 页码块最宽（占**页高**，c64）：KCC 用页宽的 0.045，《迷宮飯》卷09 的三位数页码字大、约占页宽 0.050，被这道挡掉、整卷只裁中 6 页；
+/// 而且同一卷扫描裁的页宽不一样（《迷宮飯》卷01 1488–1743px），页高基本固定，按页高算更稳。0.035 页高在常见 0.65 宽高比下约合 0.054 页宽。
+const PN_MAX_W: f32 = 0.035;
+/// 页码块最高（占页高，同 KCC）。
+const PN_MAX_H: f32 = 0.02;
 /// 页码块上方要空出这么高（占页高）、左右各扩三个块宽的范围里没有内容（agy 的意见：竖排字末尾的字上面紧挨着上一个字）。
 const PN_GAP: f32 = 0.004;
 /// 整卷投票按页码在内容里的位置分：中心在内容左边这个比例以内算左、右边以内算右……
@@ -281,7 +284,7 @@ pub(crate) fn page_number_candidate(px: &[u8], w: u32, h: u32, off: (u32, u32), 
     // 和它在同一排（下沿到了它的上沿以下）的只能有它一块（同 KCC：画面一角、别的字都算）
     let same: Vec<&Blob> = boxes.iter().filter(|b| b.y1 >= lowest_top).collect();
     let [b] = same.as_slice() else { return None };
-    if b.w() as f32 > fw * PN_MAX.0 || b.h() as f32 > (fh * PN_MAX.1).max(3.0) {
+    if b.w() as f32 > fh * PN_MAX_W || b.h() as f32 > (fh * PN_MAX_H).max(3.0) {
         return None;
     }
     // 块的上方要空出来：竖排字的末字、画面掉下来的一角，上面紧挨着别的内容
@@ -435,6 +438,17 @@ mod tests {
         assert_eq!(page_number_candidate(&two, w, h, (0, 0), (w, h)), None);
         // 太宽（不像页码）：不算
         let wide = page(w, h, &[(0, 0, 1000, 1400), (300, 1475, 200, 25)]);
+        assert_eq!(page_number_candidate(&wide, w, h, (0, 0), (w, h)), None);
+    }
+
+    #[test]
+    fn page_number_width_cap_follows_page_height() {
+        // 窄长页 1000×1600：三位数页码 50×25（0.05 页宽，超过旧上限 0.045 页宽；0.031 页高 < 0.035）：判中（c64，《迷宮飯》卷09）
+        let (w, h) = (1000, 1600);
+        let px = page(w, h, &[(0, 0, 1000, 1500), (60, 1575, 50, 25)]);
+        assert_eq!(page_number_candidate(&px, w, h, (0, 0), (w, h)), Some(PageNumber { cut: 1575, slot: Slot::Left }));
+        // 宽 60（0.0375 页高 > 0.035）：不判
+        let wide = page(w, h, &[(0, 0, 1000, 1500), (60, 1575, 60, 25)]);
         assert_eq!(page_number_candidate(&wide, w, h, (0, 0), (w, h)), None);
     }
 
