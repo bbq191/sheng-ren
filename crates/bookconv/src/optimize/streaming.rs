@@ -511,7 +511,7 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
         screen: plan.screen,
         comic_margin: opts.comic_margin,
         grayscale: opts.grayscale,
-        comic: crate::imgopt::ComicPage { gamma: opts.comic_gamma, autocontrast: opts.comic_autocontrast, trim_specks: opts.comic_trim_specks, no_upscale: !opts.comic_upscale, cut_bottom: None },
+        comic: crate::imgopt::ComicPage { gamma: opts.comic_gamma, autocontrast: opts.comic_autocontrast, trim_specks: opts.comic_trim_specks, no_upscale: !opts.comic_upscale, cut_bottom: None, dark_bg: opts.comic_dark_bg },
         page_cuts: &page_cuts,
         image_gamma: opts.image_gamma,
         max_px: opts.limits.max_decode_pixels,

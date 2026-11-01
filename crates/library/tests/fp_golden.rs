@@ -44,6 +44,7 @@ fn mutations() -> Vec<Mutation> {
     v.push(("comic_page_numbers", Box::new(|p| p.comic.page_numbers = !p.comic.page_numbers)));
     v.push(("cover_thumb_aspect", Box::new(|p| p.cover_thumb_aspect = p.cover_thumb_aspect.map_or(Some(0.6), |_| None))));
     v.push(("comic_upscale", Box::new(|p| p.comic.upscale = !p.comic.upscale)));
+    v.push(("comic_dark_bg", Box::new(|p| p.comic.dark_bg = !p.comic.dark_bg)));
     v.push(("image_gamma", Box::new(|p| p.image_gamma = p.image_gamma.map_or(Some(1.3), |_| None))));
     v
 }
