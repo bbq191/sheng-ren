@@ -319,9 +319,9 @@ pub struct ComicPolicy {
     /// 关了和 PNG 一样保持原尺寸、按比例补白，交给阅读器放大。见 `bookconv::imgopt::comic_layout`。
     #[serde(rename = "comic_upscale")]
     pub upscale: bool,
-    /// 黑底页按底色裁边、补边补底色（缺省关）：四条边每条都几乎全是均匀的黑 / 深灰（扫描的黑是深灰）、页里有亮的内容才算黑底页，
-    /// 按底色裁掉均匀的黑边、补边补同样的底色，不再补白。只有一两条边暗的出血画、局部暗角不算（拿不准就不判，照旧只裁白边、补白）。
-    /// 2026-11-01 维护者定，没上真机。见 `bookconv::comiccrop::dark_background`。
+    /// 黑底页补边补底色（缺省关）：四条边每条（跳过最外几像素的杂边）都几乎全是均匀的黑 / 深灰（扫描的黑是深灰）才算黑底页，
+    /// 不裁、不重新放大，缩放和位置和普通页一样，只把补边从白换成底色。只有一两条边暗的出血画、局部暗角不算（拿不准就不判，照旧补白）。
+    /// 2026-11-01 维护者定，同日 Kindle 真机看过（c62；c63 放宽判定）。见 `bookconv::comiccrop::dark_background`。
     #[serde(rename = "comic_dark_bg")]
     pub dark_bg: bool,
 }

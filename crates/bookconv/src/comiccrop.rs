@@ -317,7 +317,7 @@ pub fn page_number_cuts(cands: &[Option<PageNumber>]) -> Vec<Option<u32>> {
 }
 
 /// 黑底页（`comic_dark_bg`）：四条边各取这么宽的一圈（短边的比例，至少 2px）判底色。1% 在 1500px 宽的扫描页上是 15px，
-/// 扫描页最外面常有一两像素的杂边，取太窄会被它带偏；取太宽会吃进画面。
+/// 取太窄几个暗以外的像素就占比大，取太宽会吃进画面；最外的杂边另由 [`DARK_EDGE_SKIP`] 跳过。
 const DARK_BAND: f32 = 0.01;
 /// 黑底页：比这亮的不算底色。扫描的黑是深灰（《死亡筆記》卷07 每页最黑的中位数 22），JPEG 噪声在 ±10 上下，64 给足余量，又远低于
 /// 网点印的灰（常在 100 以上）。
@@ -329,21 +329,26 @@ const DARK_SIDE_PER_MILLE: usize = 985;
 const DARK_SIDE_SPREAD: u8 = 16;
 /// 黑底页：底色（四条边合起来的中位数）不亮于这个。比 [`DARK_BG_MAX`] 严：要求的是「黑底」，不是「偏暗的灰底」。
 const DARK_BG_MEDIAN_MAX: u8 = 48;
+/// 黑底页：判四条边时先跳过最外这么多像素，一圈 [`DARK_BAND`] 取在它内侧。扫描页最外常有一两像素的亮杂边 / 过渡行（扫描仪的边、
+/// JPEG 在画布边上的振铃），短边 1000px 的页一圈才 10px，最外 1px 一整行亮就占 10%，整页判不上。跳 3px 和封面缩略图找白边
+/// （`imgopt::THUMB_EDGE_LINE`）一样，比常见杂边宽一点，又只占一圈的零头、吃不进画面。c63（agy 二审）。
+const DARK_EDGE_SKIP: u32 = 3;
 /// 判黑底页：`px` 是整页（已裁过白边）的亮度平面（每像素最亮的分量），四条边一圈都是均匀的黑 / 深灰时返回底色（中位数），否则
 /// `None`。保守：四条边每条都得几乎全是暗的（[`DARK_SIDE_PER_MILLE`]）、四边底色接近（[`DARK_SIDE_SPREAD`]）、底色够黑
-/// （[`DARK_BG_MEDIAN_MAX`]），且页里得有亮的内容（整页全黑的不算）。只有一两条边暗的出血画、局部暗角都判不上。
+/// （[`DARK_BG_MEDIAN_MAX`]）。最外 [`DARK_EDGE_SKIP`] 像素不看（杂边）。全黑页、只有几行字的黑底扉页也算（c63 起；黑底页只换补边
+/// 颜色、不裁，全黑页补黑边正合适）。只有一两条边暗的出血画、局部暗角都判不上。
 pub fn dark_background(px: &[u8], w: u32, h: u32) -> Option<u8> {
     let band = ((w.min(h) as f32 * DARK_BAND).ceil() as u32).max(2);
-    if w <= band * 4 || h <= band * 4 {
+    let e = DARK_EDGE_SKIP;
+    // 跳过杂边后每个方向至少还剩四圈宽，太小的图不判
+    if w <= (band + e) * 4 || h <= (band + e) * 4 {
         return None;
     }
     let at = |x: u32, y: u32| px[(y * w + x) as usize];
-    let sides: [Vec<u8>; 4] = [
-        (0..band).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| at(x, y)).collect(),
-        (h - band..h).flat_map(|y| (0..w).map(move |x| (x, y))).map(|(x, y)| at(x, y)).collect(),
-        (0..h).flat_map(|y| (0..band).map(move |x| (x, y))).map(|(x, y)| at(x, y)).collect(),
-        (0..h).flat_map(|y| (w - band..w).map(move |x| (x, y))).map(|(x, y)| at(x, y)).collect(),
-    ];
+    let (xs, ys) = (e..w - e, e..h - e);
+    let rows = |r: std::ops::Range<u32>| r.flat_map(|y| xs.clone().map(move |x| (x, y))).map(|(x, y)| at(x, y)).collect::<Vec<u8>>();
+    let cols = |c: std::ops::Range<u32>| ys.clone().flat_map(|y| c.clone().map(move |x| (x, y))).map(|(x, y)| at(x, y)).collect::<Vec<u8>>();
+    let sides: [Vec<u8>; 4] = [rows(e..e + band), rows(h - e - band..h - e), cols(e..e + band), cols(w - e - band..w - e)];
     let median = |v: &[u8]| {
         let mut s = v.to_vec();
         s.sort_unstable();
@@ -362,12 +367,7 @@ pub fn dark_background(px: &[u8], w: u32, h: u32) -> Option<u8> {
         return None;
     }
     let bg = median(&sides.concat());
-    if bg > DARK_BG_MEDIAN_MAX {
-        return None;
-    }
-    // 页里要有明显亮的内容（画、字），全黑页不算
-    let bright = px.iter().filter(|&&v| v > DARK_BG_MAX.saturating_mul(2)).count();
-    (bright * 100 >= px.len()).then_some(bg)
+    (bg <= DARK_BG_MEDIAN_MAX).then_some(bg)
 }
 
 #[cfg(test)]
@@ -461,19 +461,37 @@ mod tests {
     }
 
     #[test]
-    fn dark_background_needs_every_side_dark_and_bright_content() {
+    fn dark_background_needs_every_side_dark() {
         let inner = |x: u32, y: u32| (100..700).contains(&x) && (100..900).contains(&y);
         let framed = dark_page(800, 1000, |x, y| if inner(x, y) { 220 } else { 22 + ((x * 7 + y * 3) % 9) as u8 });
         assert_eq!(dark_background(&framed, 800, 1000), Some(26), "四边均匀深灰（带噪声）");
         // 两条边暗（左、上），右、下是画
         let two = dark_page(800, 1000, |x, y| if x >= 100 && y >= 100 { 220 } else { 22 });
         assert_eq!(dark_background(&two, 800, 1000), None);
-        // 全黑页、偏亮的灰底都不算
-        assert_eq!(dark_background(&dark_page(800, 1000, |_, _| 10), 800, 1000), None);
+        // 全黑页、只有一行字的黑底扉页都算（c63），偏亮的灰底不算
+        assert_eq!(dark_background(&dark_page(800, 1000, |_, _| 10), 800, 1000), Some(10));
+        let title = dark_page(800, 1000, |x, y| if (300..500).contains(&x) && (480..490).contains(&y) { 230 } else { 18 });
+        assert_eq!(dark_background(&title, 800, 1000), Some(18));
         assert_eq!(dark_background(&dark_page(800, 1000, |x, y| if inner(x, y) { 220 } else { 60 }), 800, 1000), None);
         // 一条边上 3% 是亮的（出血进边的画）
         let bleed = dark_page(800, 1000, |x, y| if inner(x, y) || (y < 20 && x < 30) { 220 } else { 22 });
         assert_eq!(dark_background(&bleed, 800, 1000), None);
+    }
+
+    #[test]
+    fn dark_background_skips_outer_stray_lines() {
+        let inner = |x: u32, y: u32| (100..700).contains(&x) && (100..900).contains(&y);
+        // 最外 1px 一整圈亮杂边、第 2 行是过渡灰：跳过后判中
+        let stray = dark_page(800, 1000, |x, y| {
+            let d = x.min(y).min(799 - x).min(999 - y);
+            if d == 0 { 240 } else if d == 1 { 120 } else if inner(x, y) { 220 } else { 22 }
+        });
+        assert_eq!(dark_background(&stray, 800, 1000), Some(22));
+        // 亮的不是杂边、是进到一圈里的出血画（第 3–20 行），照旧不算
+        let bleed = dark_page(800, 1000, |x, y| if inner(x, y) || ((3..20).contains(&y) && x < 30) { 220 } else { 22 });
+        assert_eq!(dark_background(&bleed, 800, 1000), None);
+        // 太小的图（跳过杂边后不够四圈）不判
+        assert_eq!(dark_background(&dark_page(18, 18, |_, _| 10), 18, 18), None);
     }
 
 }
