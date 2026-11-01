@@ -13,6 +13,8 @@ python3 tools/display/sample.py ireader 书.epub 输出目录 --title=章名; sa
 tools/regress/compare.py 旧目录 新目录                    # 比较两次回归
 tools/quirks/probe.py ireader                            # 怪癖测试书：生成、adb 推进掌阅 documents/测试/、点开、逐页截屏（标记是条码图）逐行量（make 只生成）；结论写进 crates/bookconv/data/css-quirks.toml
 #   可加 --only=88-99（只跑这几个探针）、--optimize=target/release/epub-optimize（先按那台的模式优化，看修过以后的样子）
+tools/quirks/probe.py kobo generate|push|collect|measure|report   # Kobo 没有 adb，分步：生成 EPUB、KEPUB 两本 → 拷进 <挂载点>/books/测试/ → 手动逐页截屏 → 拷回截屏逐行量（见 devices.md 的 Kobo 一节）
+python3 -m unittest tools/quirks/test_probe.py           # probe.py 的离线单测（合成截屏，不碰设备）
 tools/regress/tocchk.py 旧目录 新目录                     # 核对 spine 文件数（不拆文件）和目录（层级、标签、锚点都在）
 shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh tools/regress/run.sh
 

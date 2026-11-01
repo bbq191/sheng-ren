@@ -38,3 +38,5 @@ $B/epub-to-kepub --no-wrap-image-pages /tmp/x.opt.epub /tmp/x.nowrap.kepub.epub 
 ```
 
 把几份拷到 Kobo 的 `books/` 比：整页图有没有上下边距、翻页速度、能不能正常打开、进度记不记。定了再改缺省。
+
+CSS 怪癖（EPUB 和 KEPUB 在 Nickel 里是两套排版引擎，可能不一样）用 `tools/quirks/probe.py kobo` 量，见[设备 · Kobo](devices.md#kobo-clara-bw2026-11-01-预配置未上真机)。

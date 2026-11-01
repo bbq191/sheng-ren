@@ -6,8 +6,16 @@
   （都可加 --only=88-99 或 --only=13,28,100-119：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
   probe.py ireader [--json]                        生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
                                           （测试书留在掌阅上，维护者自己删；掌阅要开着 adb、亮屏解锁）
+  probe.py kobo generate                  Kobo（没有 adb，分几步、截屏要手动）：生成 EPUB 和 KEPUB 两本（每次换文件名），放进 --run= 目录
+                                          （缺省 target/quirks-kobo/<名字>/）；--bin=<目录> 指 epub-to-kepub 所在（缺省 target/release）
+  probe.py kobo push [--run=目录]          拷进 Kobo 的 <挂载点>/<kobo.toml 的 dir>/测试/（USB 大容量存储，挂载点找法同 booklib）、sync，打印手动步骤
+  probe.py kobo collect --format=epub|kepub [--run=目录] [--pattern=screen_*.png] [--clean]
+                                          重新插上后把设备根目录的截屏拷回 <run>/shots/<格式>/（拷过的不再拷）再量；--clean 才删设备上拷回来的截屏
+  probe.py kobo measure --format=epub|kepub [--run=目录 | --from-dir=目录] [--json]   只量电脑上的截屏（离线）（--from-dir 时 --only 要和生成时一样）
+  probe.py kobo report [--run=目录]         EPUB、KEPUB 两份结果并排，供手填 css-quirks.toml 的 kobo 一栏
+  （kobo 都可加 --max-y=1376：截屏里只看这个高度以上的行，去掉页脚；缺省按 1448 高的 95%，未上真机）
 
-掌阅没有排好的 PDF，只能逐页截屏：每章第一行的标记换成一张条码图（两端各一格黑，中间 7 位探针序号、1 位 A/B，宽 50%），截屏后
+掌阅没有排好的 PDF，只能逐页截屏：每章第一行的标记换成一张条码图（两端各一格黑，中间 8 位探针序号、1 位 A/B，宽 50%），截屏后
 按格取样认出是哪一页；翻页在页底空白处横向滑（碰到字会弹查词）。
 
 2026-10-31 以前还有 measure、move（Move 上 xochitl 排出的 PDF），Move 卖了以后删了。
@@ -196,6 +204,8 @@ PROBES = [
     ("151", "居中的 h2（1.66667em）text-indent:48px（《古龙》calibre13，对照没写）", "markup", "", '<h2 class="hc">第一章</h2>|<h2 class="hc hi48">第一章</h2>'),
 ]
 
+ALL_PROBES = PROBES
+
 # 测试书全书共用的几条（"markup" 探针用）
 BASE_CSS = [".mb0{margin-bottom:0;}", ".mt0{margin-top:0;}", ".mt001{margin-top:0.01em;}", ".ml2{margin-left:2em;}", ".mt2{margin-top:2em;}", ".mb2{margin-bottom:2em;}", ".mt1{margin-top:1em;}", "img.rule{width:100%;}", "img.ruleb{display:block;width:100%;}", ".bgd{background-color:#444444;color:#ffffff;margin-left:0;margin-right:0;}", ".nm{margin-left:-2em;margin-right:-2em;}", ".nl30{margin-left:-30px;}", ".nr{margin-right:-2em;}",
             ".sml2{margin-left:2em;}", ".sml30{margin-left:30px;}", ".spl2{padding-left:2em;}", ".spl30{padding-left:30px;}", "img.ri{width:3em;height:0.5em;}", ".im2{margin-left:2em;}", ".im30{margin-left:30px;}",
@@ -220,14 +230,16 @@ def page(code, cid, body, head_style="", barcode=None):
 <body><p id="{cid}">{mark}</p><p>{BEFORE}</p>{body}<p>{AFTER}</p></body></html>'''
 
 
-CODE_CELLS = 10  # 条码格数：黑、7 位序号、A/B、黑
+CODE_CELLS = 11  # 条码格数：黑、8 位序号、A/B、黑（2026-11-01 以前 7 位，探针过了 127 个，128 以后和前面的重号）
+CODE_BITS = CODE_CELLS - 3
 
 
 def code_png(n, b):
-    """第 n 个探针（从 1 起）的条码：10 格、每格 10×10 像素，黑 = 1。"""
+    """第 n 个探针（从 1 起）的条码：CODE_CELLS 格、每格 10×10 像素，黑 = 1。"""
     import struct
     import zlib
-    bits = [1] + [(n >> (6 - i)) & 1 for i in range(7)] + [int(b), 1]
+    assert 0 < n < 1 << CODE_BITS, n
+    bits = [1] + [(n >> (CODE_BITS - 1 - i)) & 1 for i in range(CODE_BITS)] + [int(b), 1]
     row = b"\x00" + b"".join((b"\x00" if bit else b"\xff") * 10 for bit in bits)
     raw = row * 10
     chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
@@ -237,7 +249,7 @@ def code_png(n, b):
 def decode_code(png):
     """截屏里第一行（条码）认出 (探针序号, 是不是 B)；认不出 None。"""
     from PIL import Image
-    ls = [l for l in lines_of(png) if l[0] < 1600]
+    ls = [l for l in lines_of(png) if l[0] < MAX_Y]
     if not ls:
         return None
     top, bottom, left, right = ls[0]
@@ -247,8 +259,8 @@ def decode_code(png):
     bits = [im.getpixel((int(left + (i + 0.5) * w), y)) < 128 for i in range(CODE_CELLS)]
     if not (bits[0] and bits[-1]) or bottom - top < 10:
         return None
-    n = sum(1 << (6 - i) for i in range(7) if bits[1 + i])
-    return n, bits[8]
+    n = sum(1 << (CODE_BITS - 1 - i) for i in range(CODE_BITS) if bits[1 + i])
+    return n, bits[1 + CODE_BITS]
 
 
 def chapters(barcode=False):
@@ -327,6 +339,9 @@ def rule_png(w=1000, h=6):
     raw = b"".join(b"\x00" + b"\x00" * w for _ in range(h))
     chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
+
+MAX_Y = 1600  # 只看上沿在这以上的行：掌阅 1680 高，下面是页脚（kobo 用 --max-y 改）
 
 
 def lines_of(png):
@@ -440,7 +455,7 @@ def ireader_run():
             seen.add(got)
             n, b = got
             if n in codes:
-                out.setdefault(codes[n], {})["B" if b else "A"] = [l for l in lines_of(png) if l[0] < 1600]
+                out.setdefault(codes[n], {})["B" if b else "A"] = [l for l in lines_of(png) if l[0] < MAX_Y]
             if len(seen) == 2 * len(PROBES):
                 break
         adb("shell", "input", "swipe", "1100", "1580", "150", "1580", "200")
@@ -449,20 +464,288 @@ def ireader_run():
     return out
 
 
+# ---------------------------------------------------------------- Kobo（2026-11-01，未上真机）
+# Kobo 没有 adb：生成、拷进去、手动截屏、拷回来、量，分开几步。截屏的开法和文件名来自社区资料，没在真机上验证：
+# `.kobo/Kobo/Kobo eReader.conf` 的 [FeatureSettings] 加 `Screenshots=true`（维护者自己改，本脚本不碰 .kobo/），按电源键截屏，
+# 存到存储根目录、名字像 screen_001.png（--pattern= 改）。
+KOBO_W, KOBO_H = 1072, 1448
+REPO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+KOBO_TOML = os.path.join(REPO, "crates", "profile", "profiles", "kobo.toml")
+FORMATS = ("epub", "kepub")
+
+
+def kobo_deliver(path=KOBO_TOML):
+    """kobo.toml 的 [deliver]：(卷标, 产物目录)。"""
+    import tomllib
+    with open(path, "rb") as f:
+        d = tomllib.load(f)["deliver"]
+    if d.get("kind") != "usbms":
+        sys.exit(f"{path} 的 [deliver] 不是 usbms")
+    return d["label"], d["dir"]
+
+
+def usbms_base(env=None, exists=os.path.isdir):
+    """同 booklib（library::deliver::DeviceEnv）：$BOOKLIB_USBMS_DIR；没设就是 /run/media/$USER，它不在、/media/$USER 在时用后者。"""
+    env = os.environ if env is None else env
+    if env.get("BOOKLIB_USBMS_DIR"):
+        return env["BOOKLIB_USBMS_DIR"]
+    user = env.get("USER", "")
+    run, media = os.path.join("/run/media", user), os.path.join("/media", user)
+    return media if not exists(run) and user and exists(media) else run
+
+
+def mounted(point):
+    """同 booklib：挂载点和上一级不在同一个文件系统才算挂着（拔掉后剩下的空目录不算）。"""
+    try:
+        return os.stat(point).st_dev != os.stat(os.path.dirname(os.path.abspath(point))).st_dev
+    except OSError:
+        return False
+
+
+def kobo_mount(env=None, mount_check=None):
+    """Kobo 挂载点；没接上退出。只认 <base>/<卷标>（不跟 <卷标>1 这种，同 booklib）。
+    挂载检查同 booklib：$BOOKLIB_MTP_NO_MOUNT_CHECK=1 时关（单测用普通目录当设备）。"""
+    env = os.environ if env is None else env
+    if mount_check is None:
+        mount_check = env.get("BOOKLIB_MTP_NO_MOUNT_CHECK", "0") in ("", "0")
+    label, _ = kobo_deliver()
+    point = os.path.join(usbms_base(env), label)
+    if mount_check and not mounted(point):
+        sys.exit(f"Kobo 没接上（{point} 没挂上）")
+    if not os.path.isdir(point):
+        sys.exit(f"Kobo 没接上（{point} 不在）")
+    return point
+
+
+def kobo_names(stamp):
+    """一次运行的文件名：{格式: 文件名}。每次换名字（同名的书阅读器可能记着读到哪）；KEPUB 要 .kepub.epub 结尾 Nickel 才用 Kobo WebKit 开。"""
+    name = f"quirks-kb-{stamp}"
+    return {"epub": f"{name}.epub", "kepub": f"{name}.kepub.epub"}
+
+
+def safe_dest(mount, rel):
+    """设备上要写的路径；不许落到 .kobo/ 或挂载点外面。"""
+    dest = os.path.normpath(os.path.join(mount, rel))
+    parts = os.path.relpath(dest, mount).split(os.sep)
+    if parts[0] in ("..", ".") or any(x.startswith(".") for x in parts):
+        sys.exit(f"不往 {dest} 写（在挂载点外或隐藏目录里）")
+    return dest
+
+
+def run_dir(opts, latest=True):
+    """--run= 指的目录；没给时用 target/quirks-kobo/ 下最新的一次。"""
+    if opts.get("--run"):
+        return opts["--run"]
+    base = os.path.join(REPO, "target", "quirks-kobo")
+    runs = sorted(d for d in os.listdir(base) if os.path.isfile(os.path.join(base, d, "run.json"))) if os.path.isdir(base) else []
+    if not runs:
+        sys.exit("还没有 kobo generate 过（或用 --run= 指目录）")
+    return os.path.join(base, runs[-1])
+
+
+def load_run(d):
+    with open(os.path.join(d, "run.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_run(d, r):
+    with open(os.path.join(d, "run.json"), "w", encoding="utf-8") as f:
+        json.dump(r, f, ensure_ascii=False, indent=1)
+
+
+def kobo_generate(opts):
+    stamp = time.strftime("%m%d%H%M%S")
+    names = kobo_names(stamp)
+    d = opts.get("--run") or os.path.join(REPO, "target", "quirks-kobo", stamp)
+    if os.path.exists(os.path.join(d, "run.json")):
+        sys.exit(f"{d} 已经生成过（会冲掉拷回截屏的记录），换个 --run= 或等一秒")
+    os.makedirs(d, exist_ok=True)
+    bindir = opts.get("--bin") or os.path.join(REPO, "target", "release")
+    epub = os.path.join(d, names["epub"])
+    make(epub, "测试-怪癖-Kobo-EPUB", barcode=True, device="kobo")
+    # KEPUB 另起一本（书名不同，书架上分得开），和书库一样：先按 kobo 模式优化（给了 --optimize 时），再转
+    src = os.path.join(d, "kepub-src.epub")
+    make(src, "测试-怪癖-Kobo-KEPUB", barcode=True, device="kobo")
+    subprocess.run([os.path.join(bindir, "epub-to-kepub"), src, os.path.join(d, names["kepub"])], check=True)
+    for f in (src, src + ".raw.epub", epub + ".raw.epub"):  # make 先写的没优化版（给了 --optimize 时）
+        if os.path.exists(f):
+            os.remove(f)
+    save_run(d, {"stamp": stamp, "files": names, "optimized": bool(OPTIMIZE), "only": opts.get("--only"), "collected": {}})
+    print(f"生成好了：{d}\n  {names['epub']}\n  {names['kepub']}\n下一步：插上 Kobo，probe.py kobo push --run={d}")
+
+
+def kobo_push(opts):
+    d = run_dir(opts)
+    r = load_run(d)
+    mount = kobo_mount()
+    _, sub = kobo_deliver()
+    dest = safe_dest(mount, os.path.join(sub, "测试"))
+    import shutil
+    os.makedirs(dest, exist_ok=True)
+    for f in r["files"].values():
+        tmp = os.path.join(dest, f + ".part")  # 先写临时名再改名：拷一半拔掉不留半本书（.part Nickel 不认）
+        shutil.copyfile(os.path.join(d, f), tmp)
+        os.replace(tmp, os.path.join(dest, f))
+    os.sync()
+    print(f"""已拷进 {dest}：{', '.join(r['files'].values())}
+接下来手动（截屏要先在 .kobo/Kobo/Kobo eReader.conf 的 [FeatureSettings] 下加 Screenshots=true，自己改；未验证）：
+  1. 弹出：udisksctl unmount -b <设备>（或文件管理器里弹出），拔线，等 Kobo 导入完
+  2. 先开「测试-怪癖-Kobo-EPUB」：从第一页起每页按一下电源键截屏、翻页，到最后一章「filler」为止；字号、边距别动
+  3. 插上，probe.py kobo collect --format=epub --run={d}
+  4. 再开「测试-怪癖-Kobo-KEPUB」照做，然后 probe.py kobo collect --format=kepub --run={d}
+测试书留在 Kobo 上，用完自己删（在 Kobo 上删或删 {dest} 里的文件）""")
+
+
+def kobo_collect(opts, fmt):
+    d = run_dir(opts)
+    r = load_run(d)
+    mount = kobo_mount()
+    import fnmatch
+    import shutil
+    pat = opts.get("--pattern", "screen_*.png")
+    # 只看存储根目录（截屏存在那，未验证），不往下找
+    # fnmatch 的 * 也匹配开头的点：隐藏文件、符号链接一律不要（--clean 会删）
+    shots = sorted(f for f in os.listdir(mount) if fnmatch.fnmatch(f, pat) and not f.startswith(".")
+                   and not os.path.islink(os.path.join(mount, f)) and os.path.isfile(os.path.join(mount, f)))
+    seen = {k for v in r["collected"].values() for k in v}
+    new = [f for f in shots if f"{f}:{os.path.getsize(os.path.join(mount, f))}" not in seen]
+    out = os.path.join(d, "shots", fmt)
+    os.makedirs(out, exist_ok=True)
+    got, names = [], []
+    for f in new:
+        src = os.path.join(mount, f)
+        dst = os.path.join(out, f)
+        shutil.copy2(src, dst)
+        if os.path.getsize(dst) != os.path.getsize(src):
+            sys.exit(f"{f} 拷回来大小不对")
+        got.append(f"{f}:{os.path.getsize(src)}")
+        names.append(f)
+    r["collected"].setdefault(fmt, []).extend(got)
+    save_run(d, r)
+    print(f"拷回 {len(got)} 张截屏（设备根目录共 {len(shots)} 张对得上 {pat}）→ {out}", file=sys.stderr)
+    if "--clean" in sys.argv[1:]:
+        for f in names:
+            os.remove(os.path.join(mount, f))
+        os.sync()
+        print(f"删了设备上拷回来的 {len(got)} 张", file=sys.stderr)
+    return kobo_measure_dir(out, os.path.join(d, f"result-{fmt}.json"))
+
+
+def kobo_measure_dir(src, save=None):
+    """一个目录里的截屏（按文件名排）逐张认条码、量行。返回同 [`ireader_run`]。"""
+    from PIL import Image
+    codes = {i: c for i, (c, *_) in enumerate(PROBES, 1)}
+    out, seen, unknown = {}, set(), 0
+    for f in sorted(os.listdir(src)):
+        if not f.lower().endswith(".png"):
+            continue
+        png = os.path.join(src, f)
+        try:
+            with Image.open(png) as im:
+                size = im.size
+        except (OSError, SyntaxError) as e:
+            print(f"⚠ {f} 读不了（{e}），跳过", file=sys.stderr)
+            unknown += 1
+            continue
+        if size != (KOBO_W, KOBO_H):
+            print(f"⚠ {f} 是 {size[0]}×{size[1]}，不是 {KOBO_W}×{KOBO_H}（横屏？）", file=sys.stderr)
+        got = decode_code(png)
+        if got is None or got[0] not in codes:
+            unknown += 1
+            continue
+        if got in seen:
+            print(f"⚠ {f} 和前面一张是同一页 {got}，用前面那张", file=sys.stderr)
+            continue
+        seen.add(got)
+        out.setdefault(codes[got[0]], {})["B" if got[1] else "A"] = [l for l in lines_of(png) if l[0] < MAX_Y]
+    print(f"认出 {len(seen)} 页（共 {2 * len(PROBES)}），认不出 {unknown} 张", file=sys.stderr)
+    if save:
+        with open(save, "w", encoding="utf-8") as fh:
+            json.dump(out, fh, ensure_ascii=False)
+    return out
+
+
+def kobo_report(d):
+    """两种格式并排。不判 same/fixed：要和 Kindle 比（bookconv::kindle_model），结论人看了以后手写进 css-quirks.toml 的 kobo 一栏。"""
+    res = {}
+    for fmt in FORMATS:
+        p = os.path.join(d, f"result-{fmt}.json")
+        res[fmt] = {}
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                res[fmt] = {c: r for c, _, r in report(json.load(f))}
+    print("编号\t说明\tEPUB\tKEPUB")
+    for code, desc, *_ in PROBES:
+        print(f"Q{code}\t{desc}\t{res['epub'].get(code, '没量')}\t{res['kepub'].get(code, '没量')}")
+
+
+def use_run_probes(d, opts):
+    """条码是探针在这次测试书里的序号：量的时候探针要和 generate 时一样（run.json 记着 --only）。"""
+    global PROBES
+    only = load_run(d).get("only")
+    if "--only" in opts and opts["--only"] != only:
+        sys.exit(f"这次测试书是 --only={only} 生成的，量的时候不能换（条码是序号）")
+    PROBES = select(only) if only else ALL_PROBES
+
+
+def kobo_main(args, opts):
+    global MAX_Y
+    MAX_Y = int(opts.get("--max-y", KOBO_H * 95 // 100))  # 推断：页脚（页码、进度）在最下面 5% 里，未上真机
+    sub = args[1] if len(args) > 1 else ""
+    fmt = opts.get("--format")
+    if sub in ("collect", "measure") and fmt not in FORMATS:
+        sys.exit("要写 --format=epub 或 --format=kepub（两本书的截屏分开拷、分开量）")
+    if sub == "generate":
+        kobo_generate(opts)
+        return
+    if sub == "push":
+        kobo_push(opts)
+        return
+    if sub in ("collect", "report") or (sub == "measure" and not opts.get("--from-dir")):
+        use_run_probes(run_dir(opts), opts)
+    if sub == "report":
+        kobo_report(run_dir(opts))
+        return
+    if sub == "collect":
+        m = kobo_collect(opts, fmt)
+    elif sub == "measure":
+        if opts.get("--from-dir"):
+            if "--only" not in opts:
+                print("⚠ --from-dir 按全部探针认条码；测试书是 --only= 生成的话要带同样的 --only=", file=sys.stderr)
+            m = kobo_measure_dir(opts["--from-dir"])
+        else:
+            d = run_dir(opts)
+            m = kobo_measure_dir(os.path.join(d, "shots", fmt), os.path.join(d, f"result-{fmt}.json"))
+    else:
+        sys.exit(__doc__)
+    if "--json" in sys.argv[1:]:
+        print(json.dumps(m, ensure_ascii=False))
+        return
+    for code, desc, r in report(m):
+        print(f"Q{code}\t{desc}\t{r}")
+
+
+def select(spec, probes=None):
+    """--only=88-99 或 13,28：只留这几个探针。"""
+    want = set()
+    for part in spec.split(","):
+        lo, _, hi = part.partition("-")
+        want.update(range(int(lo), int(hi or lo) + 1))
+    return [p for p in (probes or ALL_PROBES) if int(p[0]) in want]
+
+
 def main():
     global PROBES, OPTIMIZE
     args, opts = cli_args(1, __doc__), cli_opts()
     cmd = args[0]
     # --only=88-99 或 --only=13,28：只跑这几个探针（掌阅全跑一遍要 10 分钟）
     if "--only" in opts:
-        want = set()
-        for part in opts["--only"].split(","):
-            lo, _, hi = part.partition("-")
-            want.update(range(int(lo), int(hi or lo) + 1))
-        PROBES = [p for p in PROBES if int(p[0]) in want]
+        PROBES = select(opts["--only"])
     OPTIMIZE = opts.get("--optimize")
     if cmd == "make" and len(args) == 2:
         make(args[1])
+    elif cmd == "kobo":
+        kobo_main(args, opts)
     elif cmd == "ireader":
         m = ireader_run()
         if "--json" in sys.argv[1:]:

@@ -10,6 +10,8 @@
 #   ireader  这台上的表现：
 #          same＝和 Kindle 一样；fixed＝不一样，kindle_rules 改写了；accept＝不一样或不管，但不影响验收（note 说为什么）；
 #          broken＝不一样、没处理（体检报出来）；不写＝没验证过（体检报"没验证过"）
+#   kobo   Kobo（Nickel）上的表现，取值同 ireader（2026-11-01 加的栏，还没量，都不写；`probe.py kobo` 量。EPUB、KEPUB 结论不同时按 KEPUB 写——
+#          书库给 kobo 出 KEPUB——在 note 里写 EPUB 的差别）。体检暂不查 kobo
 #   note   说明；src 出处
 # 一条写法按文件顺序找第一条对得上、而且这台有结论的（所以具体的写在前面；只写一台的条目不挡另一台）。
 # 按属性分节，一节里某台专有的、具体的在前。挪顺序、合并、拆条目后跑 `cargo test -p bookconv no_dead_rows`（没有被整条挡住的条目），
