@@ -4,6 +4,7 @@
 //! - Kindle、掌阅（profile `[deliver] kind = "mtp"`）：设备存储根目录的 `documents/<原件所在目录相对跟踪目录的路径>/<名>.<扩展名>`；
 //!   `add` 进来的单个文件（不在跟踪目录里）、网址书放 `documents/` 顶层。先在书库的临时目录里生成，再拷上去
 //!   （设备上已有逐字节相同的就不拷：Kindle 覆盖成不同字节会清掉阅读进度）。
+//! - Kobo（`kind = "usbms"`）：同上，放在 USB 存储根目录的 `books/` 下（2026-11-01 加，未上真机）。
 //! - 没写 `[deliver]` 的自定义模式：电脑上，跟踪目录 `D` 旁的 `D/../<模式 id>/<子目录>/`；add 进来的、网址书在 `<书库>/output/<模式 id>/`。
 //!
 //! 设备没接上的模式不生成（`sync` 跳过，下次接上再传）。
@@ -286,7 +287,7 @@ impl Library {
             let Some(entry) = state.books.get(id).cloned() else { continue };
             let mut state = (*state).clone();
             state.books.remove(id);
-            state.delete_into_orphans(entry.placements(), self.devices.mtp_base());
+            state.delete_into_orphans(entry.placements(), &self.devices.bases());
             self.records.states.put(&sp, state)?;
         }
         Ok(())
@@ -320,7 +321,7 @@ impl Library {
         let Some(entry) = state.books.get(id).cloned() else { return Ok(false) };
         let mut state = (*state).clone();
         state.books.remove(id);
-        state.delete_into_orphans(entry.placements(), self.devices.mtp_base());
+        state.delete_into_orphans(entry.placements(), &self.devices.bases());
         self.records.states.put(&sp, state)?;
         Ok(true)
     }
@@ -344,7 +345,7 @@ impl Library {
         let mut state = (*state).clone();
         let list = std::mem::take(&mut state.orphans);
         let before = list.len();
-        state.delete_into_orphans(list, self.devices.mtp_base());
+        state.delete_into_orphans(list, &self.devices.bases());
         let n = before - state.orphans.len();
         if n > 0 {
             self.records.states.put(&sp, state)?;
@@ -633,10 +634,13 @@ impl Library {
     fn finish(&self, sp: &Path, id: &str, mut entry: StateEntry) -> Result<(), String> {
         let mut state = (*self.records.states.get(sp)).clone();
         let prev = state.books.remove(id);
-        for o in entry.old.iter().filter(|o| !state.claimed(o)) {
-            carry_sidecar(&o.path, &entry.path);
+        // `.sdr` 是 Kindle 的（MTP）；USB 大容量存储（Kobo）的进度在阅读器自己的数据库里，产物旁边的东西不动
+        if !entry.path.starts_with(self.devices.usbms_base()) {
+            for o in entry.old.iter().filter(|o| !state.claimed(o)) {
+                carry_sidecar(&o.path, &entry.path);
+            }
         }
-        entry.old = state.delete_placements(std::mem::take(&mut entry.old), self.devices.mtp_base());
+        entry.old = state.delete_placements(std::mem::take(&mut entry.old), &self.devices.bases());
         if prev.as_ref() == Some(&entry) {
             return Ok(());
         }
@@ -726,15 +730,15 @@ impl State {
     }
 
     /// 删掉这些产物（已经不在记录里的书名下），文件在各自的根目录以内删掉变空的目录。返回删不掉的（下次再删）：
-    /// MTP 设备（`mtp_base` 下）上的文件，设备没挂上时不当成已删；相对路径（2026-10-31 以前 Move 上的旧记录）不动文件、记录直接丢掉。
+    /// 可拔下的设备（MTP、USB 大容量存储的挂载目录 `bases` 下）上的文件，设备没挂上时不当成已删；相对路径（2026-10-31 以前 Move 上的旧记录）不动文件、记录直接丢掉。
     /// 调用前要先把本书的记录从 `self` 里拿掉，别的书还记着的不删。
     /// 删掉这些产物（[`State::delete_placements`]），删不掉的记进 `orphans`（下次接上设备再删）。
-    fn delete_into_orphans(&mut self, list: Vec<Placement>, mtp_base: &Path) {
-        let left = self.delete_placements(list, mtp_base);
+    fn delete_into_orphans(&mut self, list: Vec<Placement>, bases: &[&Path]) {
+        let left = self.delete_placements(list, bases);
         self.orphans.extend(left);
     }
 
-    fn delete_placements(&self, list: Vec<Placement>, mtp_base: &Path) -> Vec<Placement> {
+    fn delete_placements(&self, list: Vec<Placement>, bases: &[&Path]) -> Vec<Placement> {
         let mut left = Vec::new();
         for p in list {
             if self.claimed(&p) {
@@ -744,7 +748,7 @@ impl State {
             if !p.path.is_absolute() {
                 continue;
             }
-            if p.path.starts_with(mtp_base) && !p.root.is_dir() {
+            if bases.iter().any(|b| p.path.starts_with(b)) && !p.root.is_dir() {
                 left.push(p);
                 continue;
             }
