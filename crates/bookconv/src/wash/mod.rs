@@ -64,13 +64,23 @@ mod sup_sub;
 mod top_spacer;
 pub use self::kindle_rules::VScale;
 
-/// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
+/// 测试用：照竖直、左右换算后的 `eink-ua.css`（同 `add_ua_css` 加上后面的 `scale_horizontal` pass：列表的 `padding-left` 是 em，
+/// 开了 `horizontal_scale` 的台要跟着乘）。
 #[cfg(test)]
-pub(crate) fn kindle_rules_scale_ua_for_test(vs: Option<VScale>) -> String {
+pub(crate) fn kindle_rules_scale_ua_for_test(vs: Option<VScale>, h: Option<f64>) -> String {
     let css = crate::uastyle::ua_css(None);
-    vs.map_or(css.clone(), |vs| {
+    let css = vs.map_or(css.clone(), |vs| {
         kindle_rules::scale_vertical_css(&css, &vs)
-    })
+    });
+    let Some(h) = h else {
+        return css;
+    };
+    let mut e = [Entry {
+        name: "eink-ua.css".into(),
+        data: css.into_bytes(),
+    }];
+    kindle_rules::scale_horizontal_entries(&mut e, h);
+    String::from_utf8(std::mem::take(&mut e[0].data)).unwrap()
 }
 pub use self::box_fix::BoxGeometry;
 pub use self::top_spacer::SpacerGeometry;

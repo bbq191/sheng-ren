@@ -8,6 +8,10 @@
 // 标签缺省值的表在 `csscascade::ua`（层叠引擎要用，2026-10-15 挪过去），这里照旧能用
 pub use csscascade::ua::{BLOCK_MARGIN_TAGS, HEADINGS, INDENTED_BLOCK_TAGS, INDENT_PX};
 
+/// 缺省左缩进的列表标签和缩进（em，同 Send to Kindle）。
+pub const LIST_TAGS: [&str; 2] = ["ul", "ol"];
+pub const LIST_INDENT_EM: f64 = 1.5;
+
 /// 样式表的文件名（放 OPF 同目录）。
 pub const UA_CSS_NAME: &str = "eink-ua.css";
 
@@ -23,6 +27,12 @@ pub fn ua_css(font_scale: Option<f64>) -> String {
     }
     for t in INDENTED_BLOCK_TAGS {
         s.push_str(&format!("{t}{{margin-top:1em;margin-bottom:1em;margin-left:{INDENT_PX}px;margin-right:{INDENT_PX}px;}}\n"));
+    }
+    // 列表左缩进：Send to Kindle 给没写左外边距、左内边距的 `ul`、`ol` 缩进 1.5em（测试书 L04：4.688%，`kfx::write::parse`），
+    // 掌阅缺省是 `padding-left:2em`（2026-11-02 Air 3 Pro 真机：116px，每层再加 2em）。写成内边距，书里写了的照样盖过它；
+    // 开了 `horizontal_scale` 的台跟着按页宽换算（1.5em → 约 1.05em＝61px＝Kindle 的 4.688%）。
+    for t in LIST_TAGS {
+        s.push_str(&format!("{t}{{padding-left:{LIST_INDENT_EM}em;}}\n"));
     }
     for (t, size, margin) in HEADINGS {
         s.push_str(&format!("{t}{{font-size:{size}em;font-weight:bold;margin-top:{margin}em;margin-bottom:{margin}em;}}\n"));
@@ -57,6 +67,11 @@ mod tests {
             css.contains(
                 "blockquote{margin-top:1em;margin-bottom:1em;margin-left:40px;margin-right:40px;}"
             ),
+            "{css}"
+        );
+        // 列表左缩进照 Send to Kindle 的 1.5em（掌阅缺省 2em，2026-11-02 真机）
+        assert!(
+            css.contains("ul{padding-left:1.5em;}\nol{padding-left:1.5em;}\n"),
             "{css}"
         );
         for line in css.lines() {
