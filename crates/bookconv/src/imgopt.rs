@@ -1520,12 +1520,12 @@ mod tests {
 
     #[test]
     fn frames_follow_the_given_screen() {
-        // 非 Move 的屏幕（掌阅 Ocean 5 Pro，1264×1680）：缩放框与漫画页框都按传入的屏幕算，不再是 954×1696。
+        // 非 Move 的屏幕（掌阅 Air 3 Pro，1440×1920）：缩放框与漫画页框都按传入的屏幕算，不再是 954×1696。
         let ireader = profile::get("ireader").unwrap().screen;
         let (w, h) = image::load_from_memory(&downscale_for_epub(&jpeg_of(2400, 3200), ireader).unwrap()).unwrap().dimensions();
-        assert_eq!((w, h), (1260, 1680), "竖图按 1264×1680 框等比缩");
+        assert_eq!((w, h), (1440, 1920), "竖图按 1440×1920 框等比缩");
         let out = prep(&gray_jpeg_of(1091, 1592, 0), ireader, false).expect("要补白到屏幕比例");
-        assert_eq!(image::load_from_memory(&out).unwrap().dimensions(), (1264, 1680));
+        assert_eq!(image::load_from_memory(&out).unwrap().dimensions(), (1440, 1920));
     }
 
     #[test]

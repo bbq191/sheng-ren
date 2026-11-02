@@ -116,7 +116,7 @@ fn text_seg(device: &Profile, area: Screen) -> String {
 /// `kindle_rules` 的文字书才有的几段（按顺序）：规则版本（第 1 版只写 `u`）、`g`（阅读器不认背景图的 `no-repeat`）、
 /// `h`（背景尺寸的 auto 高会拉长图）、`p`（不认页首的 margin-top）、
 /// `i`（不照 CSS 定图片尺寸：带方式和参照设备的内容区宽、1em 像素，改了参照设备这两个量，掌阅、Move 的书也要重建）、
-/// `m`（阅读器模型 [`bookconv::reader_model::ReaderModel`] 的签名加 `em_px` 的哈希，2026-10-13 定进指纹）、
+/// `m`（阅读器模型 [`bookconv::reader_model::ReaderModel`] 的签名加 `em_px`、开了 `horizontal_scale` 时的 `content_px` 的哈希，2026-10-13 定进指纹）、
 /// `@`（统计正文字号求 `@media` 用的屏幕，自定义模式改了屏幕也要重建）。
 fn kindle_rules_seg(device: &Profile, seg: &mut String) {
     if bookconv::wash::KINDLE_RULES_VERSION != "1" {
@@ -139,7 +139,11 @@ fn kindle_rules_seg(device: &Profile, seg: &mut String) {
     }
     let sig = bookconv::reader_model::ReaderModel::for_profile(device).signature();
     if !sig.is_empty() || device.em_px.is_some() {
-        let em = device.em_px.map_or_else(String::new, |e| format!("e{e}"));
+        let mut em = device.em_px.map_or_else(String::new, |e| format!("e{e}"));
+        // 正文内容区宽（`content_px`，只写了的模式带，别的模式指纹不变）：左右边距换算、em 写的图按它算
+        if let Some(c) = device.content_px.filter(|_| device.css.horizontal_scale) {
+            em.push_str(&format!("c{c}"));
+        }
         seg.push_str(&format!("m{:016x}", bookconv::util::fnv64(format!("{sig}{em}").as_bytes())));
     }
     seg.push_str(&format!("@{}x{}", device.screen.width, device.screen.height));

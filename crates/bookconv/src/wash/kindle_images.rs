@@ -72,7 +72,7 @@ enum Shown {
     Frac(f64),
 }
 
-pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, known: Option<&HashMap<String, (u32, u32)>>, sizing: ImageSizing, kref: KindleImageRef) {
+pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, known: Option<&HashMap<String, (u32, u32)>>, sizing: ImageSizing, kref: KindleImageRef, h_scale: Option<f64>) {
     if sizing == ImageSizing::Css {
         return;
     }
@@ -110,7 +110,7 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             f.imgs
                 .iter()
                 .map(|im| {
-                    let (class, rule) = restyle(im, sizing, kref, base)?;
+                    let (class, rule) = restyle(im, sizing, kref, base, h_scale)?;
                     rules.entry(class.clone()).or_insert(rule);
                     Some(class)
                 })
@@ -297,7 +297,16 @@ fn classify(img: ego_tree::NodeRef<Node>, block: &HashSet<ego_tree::NodeId>, hid
 }
 
 /// 一张图要加的类和它的规则；不用改的 `None`。
-fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64) -> Option<(String, String)> {
+/// `h_scale`：左右边距换算系数（profile `horizontal_scale`，这台一行的 em 数 ÷ 32）。有它时掌阅一 em 占一行的比例和 Kindle 不一样，
+/// em 写的独立图片不再「照写就一样大」：Kindle 上一 em 是 `k.em_px / k.content_px` 行宽，这台是 1 / (32 × h_scale) 行宽，按比例折。
+/// 行内图片不折：行内 em 图多是和字同高的图标、生僻字，保持原 em 才和文字一样高（折了 1em 的图标只剩 0.79em，比字小一圈）。
+fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64, h_scale: Option<f64>) -> Option<(String, String)> {
+    // 这台的 em 折成 Kindle 上同样占行宽比例要乘的数（没换算的、行内图片 1）
+    let em_scale = match (h_scale, &im.kind) {
+        (Some(h), Kind::Block) => h * PAGE_WIDTH_EM * k.em_px / k.content_px,
+        _ => 1.0,
+    };
+    let rescale = (em_scale - 1.0).abs() > 0.005;
     let (iw, ih) = im.dims?;
     let (iw, ih) = (f64::from(iw.max(1)), f64::from(ih.max(1)));
     let em_of = |l: Len| match l {
@@ -340,10 +349,10 @@ fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64) -> Optio
     };
     let (name, value) = match (sizing, &shown) {
         (ImageSizing::Css, _) => return None,
-        (ImageSizing::DevicePx, _) if same => return None,
+        (ImageSizing::DevicePx, _) if same && !rescale => return None,
         (ImageSizing::DevicePx, Shown::Em(e)) => {
             // 写在 `<img>` 上的 em 相对它自己的字号
-            let v = e * base / im.fs.max(1e-3);
+            let v = e * em_scale * base / im.fs.max(1e-3);
             (format!("{}em", num(v, 2)), format!("{}em", num(v, 2)))
         }
         (ImageSizing::Percent, _) | (ImageSizing::DevicePx, Shown::Frac(_)) => {
@@ -399,6 +408,10 @@ mod tests {
 
     /// 测试书 `测试-插图` 的几种写法：返回 (每张图加的类, eink-img.css)。
     fn run(sizing: ImageSizing, body: &str, css: &str) -> (Vec<String>, String) {
+        run_h(sizing, body, css, None)
+    }
+
+    fn run_h(sizing: ImageSizing, body: &str, css: &str, h_scale: Option<f64>) -> (Vec<String>, String) {
         let page = format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#);
         let mut entries = vec![
             Entry { name: "O/c.opf".into(), data: br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="t" href="t.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="t"/></spine></package>"#.to_vec() },
@@ -408,7 +421,7 @@ mod tests {
             Entry { name: "O/m.jpg".into(), data: jpeg(800, 400) },
         ];
         let mut rep = WashReport::default();
-        apply(&mut entries, &mut rep, None, None, sizing, KREF);
+        apply(&mut entries, &mut rep, None, None, sizing, KREF, h_scale);
         let t = String::from_utf8(entries[1].data.clone()).unwrap();
         let classes = html::tags(&t).filter(|g| g.is_start() && g.is("img")).map(|g| html::attr_value(&t[g.start..g.end], "class").unwrap_or("").to_string()).collect();
         let sheet = entries.iter().find(|e| e.name == "O/eink-img.css").map(|e| String::from_utf8(e.data.clone()).unwrap()).unwrap_or_default();
@@ -430,7 +443,7 @@ mod tests {
             Entry { name: "O/s.css".into(), data: Vec::new() },
             Entry { name: "O/m.jpg".into(), data: jpeg(800, 400) },
         ];
-        apply(&mut entries, &mut WashReport::default(), None, None, ImageSizing::Percent, KREF);
+        apply(&mut entries, &mut WashReport::default(), None, None, ImageSizing::Percent, KREF, None);
         let t = String::from_utf8(entries[1].data.clone()).unwrap();
         assert!(t.contains(r#"<img style="border:0" src="m.jpg" class="eink-iw-"#), "{t}");
         assert!(t.contains(r#"<div><img src="m.jpg" class="eink-iw-"#), "{t}");
@@ -461,6 +474,19 @@ mod tests {
     fn device_px_reader_only_fixes_px_and_unsized() {
         let (c, _) = run(ImageSizing::DevicePx, BODY, CSS);
         assert_eq!(c, ["eink-iw-27-2p", "w50", "px eink-iw-18-75em", "em", "ic", "eink-iw-18-75em"]);
+    }
+
+    /// 掌阅开了左右换算（Air 3 Pro 一行 1300 ÷ 58 ≈ 22.4 em，h_scale ≈ 0.70）：em 写的独立图片也折，占行宽同 Kindle
+    /// （10em 在 Kindle 上 390 ÷ 1104 ＝ 35.3%；这台写 10 × 0.7 × 32 × 39 ÷ 1104 ≈ 7.92em，× 58 ÷ 1300 ≈ 35.3%）；百分比的不动；
+    /// 行内的（`ic` 1em 图标、没写尺寸的按 1/16em 一像素）不折，和文字同高。
+    #[test]
+    fn device_px_em_rescaled_with_horizontal_scale() {
+        let h = 1300.0 / 58.0 / PAGE_WIDTH_EM;
+        let (c, sheet) = run_h(ImageSizing::DevicePx, BODY, CSS, Some(h));
+        assert_eq!(c, ["eink-iw-27-2p", "w50", "px eink-iw-14-85em", "em eink-iw-7-92em", "ic", "eink-iw-18-75em"]);
+        assert!(sheet.contains("html body img.eink-iw-7-92em{width:7.92em;height:auto;max-width:100%}"), "{sheet}");
+        let shown: f64 = 7.92 * 58.0 / 1300.0;
+        assert!((shown - 390.0 / 1104.0).abs() < 0.001, "{shown}");
     }
 
     /// 行内还是独立成块同写出器：图后换行接图注的独立成块（按原图像素），段末单独一行的小图嵌在字里。

@@ -1037,9 +1037,9 @@ mod tests {
         assert_eq!(scale(&book("p{font-size:15pt}")), Some(0.8));
         assert_eq!(scale(&book("p{font-size:1em}")), Some(1.0));
         assert_eq!(scale(&book("html{font-size:80%} p{font-size:15pt}")), None, "html 上写了字号");
-        // `@media` 按阅读模式的阅读范围求（同 KFX 写出器）：掌阅 1264 宽，`min-width:1200px` 成立、`min-width:2000px` 不成立；
+        // `@media` 按阅读模式的阅读范围求（同 KFX 写出器）：掌阅 Air 3 Pro 1440 宽，`min-width:1200px` 成立、`min-width:2000px` 不成立；
         // 没给环境时特性条件一律不成立
-        let ireader = MediaEnv { width: 1264.0, height: 1680.0, device_width: 1264.0, device_height: 1680.0, color: false };
+        let ireader = MediaEnv { width: 1440.0, height: 1920.0, device_width: 1440.0, device_height: 1920.0, color: false };
         let css = "p{font-size:1em} @media (min-width:1200px){p{font-size:15pt}} @media (min-width:2000px){p{font-size:2em}}";
         assert_eq!(base(&book(css), Some(&ireader)), 1.25);
         assert_eq!(base(&book(css), None), 1.0);

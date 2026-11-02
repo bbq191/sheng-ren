@@ -300,7 +300,7 @@ booklib dedupe ~/Documents/ereader
 ### devices：列出阅读模式
 
 ```text
-ireader      掌阅自带阅读器（iReader Ocean 5 Pro）  EPUB  屏幕 1264×1680  阅读范围 1264×1680  黑白
+ireader      掌阅自带阅读器（iReader Air 3 Pro）  EPUB  屏幕 1440×1920  阅读范围 1440×1920  黑白
              ✓ 接上了：/run/user/1000/mtp/ireader/内部共享存储空间/documents
 kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  KFX  屏幕 1272×1696  阅读范围 1104×1546  黑白
              ✓ 接上了：/run/user/1000/mtp/kindle/Internal Storage/documents

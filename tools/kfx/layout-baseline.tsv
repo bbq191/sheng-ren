@@ -1,5 +1,6 @@
 # tools/kfx/layout.py 的基线：书名	阅读模式	对齐	竖排	块宽	横线	分页	空白页	封面	怪癖（处数）。--update 写回
 ABC 谋杀案	ireader	0	0	0	0	0	0	0	0
+三体	ireader	0	0	0	0	0	0	0	0
 三体全集（共3册）	ireader	0	0	0	0	0	0	0	0
 人生复本	ireader	0	0	0	0	0	0	0	0
 人生海海	ireader	0	0	0	0	0	0	0	0
@@ -21,12 +22,14 @@ ABC 谋杀案	ireader	0	0	0	0	0	0	0	0
 消失的爱人	ireader	0	0	0	0	0	0	0	0
 燕食记	ireader	0	0	0	0	0	0	0	0
 狼厅	ireader	0	0	0	0	0	0	0	0
+球状闪电	ireader	0	0	0	0	0	0	0	0
 疯探	ireader	0	0	0	0	0	0	0	0
 破绽	ireader	0	0	0	0	0	0	0	0
 福尔摩斯探案全集	ireader	0	0	0	0	0	0	0	0
 绍宋	ireader	0	0	0	0	0	0	0	0
 绝叫	ireader	0	0	0	0	0	0	0	0
 罗杰疑案	ireader	0	0	0	0	0	0	0	0
+超新星纪元	ireader	0	0	0	0	0	0	0	0
 金庸作品全集	ireader	0	0	0	0	0	0	0	0
 雪国	ireader	0	0	0	0	0	0	0	0
 风起陇西	ireader	0	0	0	0	0	0	0	0

@@ -1,5 +1,5 @@
 //! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有三份，都按设备自带的阅读器量（见 docs/devices.md）：
-//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Ocean 5 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
+//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Air 3 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -250,7 +250,7 @@ pub struct CssQuirks {
     /// 行内 `style`（`bookconv::wash::css_compat`）。
     pub important: bool,
     /// 阅读器认不带单位的 `line-height`（TOML 里不写是 `true`）。掌阅不认（`<p>`、`<div>`、标题、行内 `style` 都不认，Q80–Q83），
-    /// 写成长度的认（`3em` 一行 114px，Q84），缺省一行 `line_px`：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，行距和
+    /// 写成长度的认（`3em` 一行 Air 3 Pro 174px、Ocean 5 Pro 114px，Q84），缺省一行 `line_px`：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，行距和
     /// Kindle 不一样的块照 Kindle 写成 em（`bookconv::wash::block_style`；要写 `line_px`、`em_px`）。
     pub line_height_numbers: bool,
 }
@@ -393,6 +393,9 @@ pub struct Profile {
     /// 这个阅读器缺省字号下 CSS 的 1em 是几个屏幕像素（掌阅、Move 写）：`kindle_rules` 照它把竖直方向的边距换算成和 Kindle 上占页高
     /// 一样的比例（Kindle 按行距排边距，一 rem ≈ 52.5px；2026-10-12 测试书「测试-竖直间距」：掌阅 1em 37.5px、Move 37.8px）。
     pub em_px: Option<f64>,
+    /// 正文页内容区宽（屏幕像素，不写＝产物格式阅读范围的宽）。阅读范围是整页图铺得到的范围，图文混排的正文另有页边距时写它：
+    /// `horizontal_scale` 按它算这台一行的 em 数（掌阅 Air 3 Pro 阅读范围 1440、正文 1300，2026-11-02 实测 100% 宽的图 1300px）。
+    pub content_px: Option<u32>,
     /// 产物送到哪台设备、怎么送；`None` 时产物留在电脑上。不影响产物内容（不进指纹）。
     pub deliver: Option<Deliver>,
 }
@@ -515,6 +518,8 @@ struct ProfileFile {
     line_px: Option<u32>,
     #[serde(default)]
     em_px: Option<f64>,
+    #[serde(default)]
+    content_px: Option<u32>,
     deliver: Option<Deliver>,
 }
 
@@ -526,7 +531,7 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: NotePolicy { mode: f.notes, icons: f.note_icons, backlinks: f.note_backlinks }, readable: f.readable, comic: ComicPolicy { margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), reader_margins: f.comic_reader_margins, readable: f.comic_readable, page_direction: f.comic_page_direction, fixed_layout: f.comic_fixed_layout, format: f.comic_format, gamma: f.comic_gamma, autocontrast: f.comic_autocontrast, trim_specks: f.comic_trim_specks, page_numbers: f.comic_page_numbers, upscale: f.comic_upscale, dark_bg: f.comic_dark_bg }, css: CssQuirks { margin_top: f.margin_top, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, background_auto_height: f.background_auto_height }, background_images: f.background_images, background_sizing: f.background_sizing, caption_fit: f.caption_fit, image_alpha: f.image_alpha, webp: f.webp, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_gamma: f.image_gamma, cover_thumb_aspect: f.cover_thumb_aspect, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, deliver: f.deliver };
+        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: NotePolicy { mode: f.notes, icons: f.note_icons, backlinks: f.note_backlinks }, readable: f.readable, comic: ComicPolicy { margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), reader_margins: f.comic_reader_margins, readable: f.comic_readable, page_direction: f.comic_page_direction, fixed_layout: f.comic_fixed_layout, format: f.comic_format, gamma: f.comic_gamma, autocontrast: f.comic_autocontrast, trim_specks: f.comic_trim_specks, page_numbers: f.comic_page_numbers, upscale: f.comic_upscale, dark_bg: f.comic_dark_bg }, css: CssQuirks { margin_top: f.margin_top, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, background_auto_height: f.background_auto_height }, background_images: f.background_images, background_sizing: f.background_sizing, caption_fit: f.caption_fit, image_alpha: f.image_alpha, webp: f.webp, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_gamma: f.image_gamma, cover_thumb_aspect: f.cover_thumb_aspect, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, content_px: f.content_px, deliver: f.deliver };
         p.validate()?;
         Ok(p)
     }
@@ -549,6 +554,9 @@ impl Profile {
         }
         if !self.css.line_height_numbers && !(self.line_px.is_some_and(|l| l > 0) && self.em_px.is_some_and(positive)) {
             return Err(format!("profile {}: line_height_numbers = false 要写 line_px、em_px", self.id));
+        }
+        if self.content_px.is_some_and(|c| c == 0 || c > self.screen.width) {
+            return Err(format!("profile {}: content_px 须在 1 到屏幕宽之间", self.id));
         }
         for (key, g) in [("comic_gamma", self.comic.gamma), ("image_gamma", self.image_gamma)] {
             if g.is_some_and(|g| !(0.2..=5.0).contains(&g)) {
@@ -762,6 +770,7 @@ mod tests {
             // 阅读器模型（也有的同时直接进）
             em_px: _,
             line_px: _,
+            content_px: _,
             // 否
             name: _,
             deliver: _,
@@ -847,7 +856,7 @@ mod tests {
         assert!(k.text_repair_only && i.text_repair_only, "文字书只修复：内置模式都是");
         assert!(!k.repair_note_links && !i.repair_note_links);
         assert!(!k.kindle_rules && i.kindle_rules, "标签缺省样式：掌阅写进书里，Kindle 由写出器排");
-        assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
+        assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1440, height: 1920 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);
         assert_eq!((k.comic.margin, i.comic.margin), (1, 1));
         assert_eq!(k.comic.reader_margins, None);

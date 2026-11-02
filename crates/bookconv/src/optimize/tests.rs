@@ -1201,9 +1201,9 @@
             let (out, _) = optimize_epub_with(&epub, &OptimizeOpts { text_mode: TextMode::Full, ..OptimizeOpts::for_profile(crate::test_profile(p)) }).unwrap();
             (text_of(&out, "OEBPS/c1.xhtml"), out)
         };
-        // 掌阅 1264×1680：0.8 × 1680 × 900/1650 / 1264 = 0.57998 → 57%；Kindle 1104×1546 → 61%
+        // 掌阅 Air 3 Pro 1440×1920：0.8 × 1920 × 900/1650 / 1440 = 0.58182 → 58%；Kindle 1104×1546 → 61%
         let (ir, ir_out) = html("ireader");
-        assert!(ir.contains(r#"<img src="i/tall.jpg" alt="" style="width:57%"/>"#), "{ir}");
+        assert!(ir.contains(r#"<img src="i/tall.jpg" alt="" style="width:58%"/>"#), "{ir}");
         assert_eq!(entry_bytes(&ir_out, "OEBPS/i/tall.jpg"), imgs[4].1, "图片字节不动");
         let (k, _) = html("kindle");
         assert!(k.contains(r#"style="width:61%""#), "{k}");
@@ -1319,8 +1319,8 @@
         assert!(matches!(opts.text_mode, TextMode::Repair { .. }));
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
         // 样式表只按 Send to Kindle 的规则改（profile `kindle_rules`）：正文字体「宋体」整条去掉、body 的左右外边距不要、上下边距照 Kindle
-        // 换算（掌阅 × 1.52，KINDLE_RULES 14）（正文行距 1.8 掌阅不认，就是缺省行距，Kindle 也是行距设置，不改）；别的一个字不改
-        assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:3.0427em;margin-bottom:3.0427em;}p{text-indent:0;margin:0.7607em 0 0.7607em 0}");
+        // 换算（掌阅 Air 3 Pro × 1.124（2026-11-02 探针 em_px 58；Ocean 5 Pro em_px 37.5 时 1.52），KINDLE_RULES 14）（正文行距 1.8 掌阅不认，就是缺省行距，Kindle 也是行距设置，不改）；别的一个字不改
+        assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:2.2483em;margin-bottom:2.2483em;}p{text-indent:0;margin:0.5621em 0 0.5621em 0}");
         assert_eq!(entry_bytes(&out, "OEBPS/big.jpg"), jpg, "图片原样");
         let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
         assert!(!names.iter().any(|n| n.ends_with("eink-wash.css")), "不加排版样式表: {names:?}");
