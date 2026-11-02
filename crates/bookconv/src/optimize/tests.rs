@@ -2277,7 +2277,10 @@ fn text_repair_only_keeps_content() {
     // 标签缺省样式（profile `kindle_rules`，2026-10-08 定照 Send to Kindle 统一）：挂在书自带样式之前，书里写了的盖过它
     assert_eq!(
         text_of(&out, "OEBPS/eink-ua.css"),
-        crate::wash::kindle_rules_scale_ua_for_test(opts.wash.as_ref().and_then(|w| w.v_scale))
+        crate::wash::kindle_rules_scale_ua_for_test(
+            opts.wash.as_ref().and_then(|w| w.v_scale),
+            opts.wash.as_ref().and_then(|w| w.h_scale)
+        )
     );
     let (ua, own) = (x.find("eink-ua.css").unwrap(), x.find("style.css").unwrap());
     assert!(ua < own, "缺省样式在书自带样式之前: {x}");

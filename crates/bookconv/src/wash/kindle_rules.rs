@@ -38,6 +38,7 @@ pub(super) fn apply(
         drop_single_backgrounds: !opts.background_no_repeat,
         tiled: HashSet::new(),
         bg_fixes: HashMap::new(),
+        light_on_page: facts.light_on_page.clone(),
     };
     // 平铺背景的阅读器：整页背景图做成整页一块（`bgfit::plan_tiles`），这些规则照留，图由优化器改（`rep.page_tiles`）
     if let Some(g) = opts.page_tiles.filter(|_| ctx.drop_single_backgrounds) {
@@ -101,6 +102,7 @@ fn exposed_fonts(
         body_classes: ctx.body_classes.clone(),
         tiled: ctx.tiled.clone(),
         bg_fixes: ctx.bg_fixes.clone(),
+        light_on_page: ctx.light_on_page.clone(),
         font_scale: None,
         ..*ctx
     };
@@ -204,6 +206,9 @@ struct Ctx {
     tiled: HashSet<String>,
     /// 背景图（zip 路径）→ 接在用它的规则末尾的尺寸、位置（掌阅，`background_auto_height = false`）。
     bg_fixes: HashMap<String, String>,
+    /// 白页面上照样要调的浅色字（不透明 #AARRGGBB）：全书层叠算出来，用这个颜色的字都不在背景色、背景图上（[`BookFacts::light_on_page`]）。
+    /// 规则里看不到祖先的背景，浅色一律不动会把《海葵》章名的 `#fff` 留成白页白字（Kindle 按元素算，调成 `#767676`）。
+    light_on_page: HashSet<u32>,
 }
 
 /// 竖直间距照 Kindle 换算（2026-10-12 定，「测试-竖直间距」三台量的）：Kindle 的上下外边距、内边距按行距换像素（一 rem ≈
@@ -569,6 +574,8 @@ struct BookFacts {
     /// 每个文件：(书内路径, 这一侧用没用到负外边距, body 的 [左外边距, 左内边距, 右外边距, 右内边距])，和 `neg` 不一样的文件逐个改
     /// （[`per_file_body_margins`]）。
     files: Vec<(String, [bool; 2], [Option<crate::cascade::Len>; 4])>,
+    /// 浅色字（亮度过 0.5）里，只出现在白页面上（自己和祖先都没有背景色、背景图）的颜色；有一处压在背景上的不算（同色字分不开）。
+    light_on_page: HashSet<u32>,
 }
 
 /// 一个文件的统计（[`book_facts`] 按文件并行算，再合起来）。
@@ -586,6 +593,8 @@ struct FileFacts {
     chars: usize,
     /// body 的 [左外边距, 左内边距, 右外边距, 右内边距]。
     body_box: [Option<crate::cascade::Len>; 4],
+    /// 有字的浅色：[白页面上的, 背景色或背景图上的]。
+    light: [HashSet<u32>; 2],
 }
 
 /// 全书只走一趟 DOM，层叠用 KFX 写出器同一套（[`crate::cascade`]：每篇文档的样式表 [`crate::cascade::Sheet::for_doc`]，
@@ -661,6 +670,13 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
                     let n = t.chars().filter(|c| !c.is_whitespace()).count();
                     if n > 0 {
                         f.chars += n;
+                        if let Some(col) = parent.color.filter(|&c| luminance(over_white(c)) > 0.5)
+                        {
+                            let on_bg = parent.backdrop.is_some()
+                                || parent.on_image
+                                || parent.bg_image.is_some();
+                            f.light[usize::from(on_bg)].insert(over_white(col));
+                        }
                         *f.sizes
                             .entry((block.font_size * 1000.0).round() as i64)
                             .or_default() += n;
@@ -714,6 +730,7 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     // 每一侧：(用到负外边距的文件的字数, 没用到的)
     let mut chars = [(0usize, 0usize); 2];
     let mut file_list = Vec::new();
+    let mut light: [HashSet<u32>; 2] = Default::default();
     for (e, f) in files.iter().zip(per_file) {
         file_list.push((e.name.clone(), f.neg, f.body_box));
         for (k, n) in f.sizes {
@@ -721,6 +738,9 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
         }
         for (k, n) in f.fonts {
             *fonts.entry(k).or_default() += n;
+        }
+        for (all, l) in light.iter_mut().zip(f.light) {
+            all.extend(l);
         }
         on_body.extend(f.on_body);
         elsewhere.extend(f.elsewhere);
@@ -739,6 +759,7 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
         body_classes: on_body.difference(&elsewhere).cloned().collect(),
         neg: [chars[0].0 > chars[0].1, chars[1].0 > chars[1].1],
         files: file_list,
+        light_on_page: light[0].difference(&light[1]).copied().collect(),
     }
 }
 
@@ -887,6 +908,13 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
         .filter(|&c| c != 0xFFFF_FFFF);
     let has_bg = bg.is_some();
     let bg = bg.unwrap_or(0xFFFF_FFFF);
+    // 规则自己写了背景图：浅色字压在图上（伪元素、没有文字节点的也算），`light_on_page` 不管
+    let own_image = decls.iter().any(|d| {
+        matches!(
+            d.prop.to_ascii_lowercase().as_str(),
+            "background" | "background-image"
+        ) && d.value.to_ascii_lowercase().contains("url(")
+    });
     let mut has_color = false;
     // 这条规则写了不平铺（`no-repeat`、`repeat-x`、`repeat-y`、`space`、`round`）：不认 `no-repeat` 的阅读器会平铺它，去掉背景图
     // 背景图做成了整页图块的规则照留（xochitl 本来就平铺、不管尺寸位置，图块做成整页一份）
@@ -957,7 +985,10 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
                 parse_color(value).and_then(|col| {
                     // 规则里没写背景色时看不到祖先的背景（背景图、外层的背景色）：只调中等亮度以下的颜色，浅色（白字、浅灰）
                     // 多半压在图或深色块上，不动（Kindle 按元素算，背景图上的白字照写）
-                    if !has_bg && luminance(over_white(col)) > 0.5 {
+                    if !has_bg
+                        && luminance(over_white(col)) > 0.5
+                        && (own_image || !ctx.light_on_page.contains(&over_white(col)))
+                    {
                         return None;
                     }
                     let adj = ensure_contrast(col, bg);
@@ -1224,6 +1255,7 @@ mod tests {
             drop_single_backgrounds: false,
             tiled: HashSet::new(),
             bg_fixes: HashMap::new(),
+            light_on_page: HashSet::new(),
         }
     }
 
@@ -1632,6 +1664,105 @@ mod tests {
             ..ctx()
         };
         assert_eq!(rewrite_css_in(fen, "OEBPS/Styles/s.css", &f, &mut n), "body.fen{background:url('../Images/a.jpg') no-repeat bottom center;background-size:100% auto;background-size:1264px 932px;background-position:0px 263px;}");
+    }
+
+    /// 白页面上的白字（全书层叠里用它的字都不在背景上，`light_on_page`）照 Kindle 调到 4.5:1；不在集合里的（背景图、背景色上的）不动。
+    #[test]
+    fn white_text_on_page_gets_contrast() {
+        let mut n = 0;
+        let on_page = Ctx {
+            light_on_page: [0xFFFF_FFFF].into_iter().collect(),
+            ..ctx()
+        };
+        assert_eq!(
+            rewrite_css(".t{color:#fff}", &on_page, &mut n),
+            ".t{color:#767676;}"
+        );
+        assert_eq!(
+            rewrite_css(".t{color:#fff}", &ctx(), &mut n),
+            ".t{color:#fff}"
+        );
+        assert_eq!(
+            rewrite_css(
+                ".t{color:#fff;background-image:url(a.jpg)}",
+                &on_page,
+                &mut n
+            ),
+            ".t{color:#fff;background-image:url(a.jpg)}",
+            "规则自己有背景图：不调"
+        );
+        // 规则自己写了背景色照按它算（不看集合）
+        assert_eq!(
+            rewrite_css(".t{color:#fff;background-color:#333}", &on_page, &mut n),
+            ".t{color:#fff;background-color:#333}"
+        );
+    }
+
+    /// `book_facts` 按元素分：白页面上的白字进 `light_on_page`，同色字有一处压在背景图、背景色上就不进。
+    #[test]
+    fn light_on_page_from_cascade() {
+        let page = |body: &str, css: &str| {
+            let entries = vec![
+                Entry {
+                    name: "OEBPS/s.css".into(),
+                    data: css.as_bytes().to_vec(),
+                },
+                Entry {
+                    name: "OEBPS/c1.xhtml".into(),
+                    data: format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link href="s.css" rel="stylesheet" type="text/css"/></head><body>{body}</body></html>"#).into_bytes(),
+                },
+            ];
+            book_facts(&entries, None).light_on_page
+        };
+        assert!(
+            page(r#"<p><span class="w">章名</span></p>"#, ".w{color:#fff}").contains(&0xFFFF_FFFF)
+        );
+        let img = r#"<div class="bg"><span class="w">扉页</span></div>"#;
+        assert!(page(img, ".w{color:#fff} .bg{background-image:url(a.jpg)}").is_empty());
+        assert!(page(img, ".w{color:#fff} .bg{background-color:#333}").is_empty());
+        assert!(
+            page(
+                &format!(r#"<p><span class="w">章名</span></p>{img}"#),
+                ".w{color:#fff} .bg{background-color:#333}"
+            )
+            .is_empty(),
+            "同色字有一处在背景上：不调"
+        );
+        // 跨文件：扉页（背景图上白字）和正文（白页面上白字）分在两章，照样不调
+        let two = vec![
+            Entry {
+                name: "OEBPS/s.css".into(),
+                data: b".w{color:#fff} .bg{background-image:url(a.jpg)}".to_vec(),
+            },
+            Entry {
+                name: "OEBPS/c1.xhtml".into(),
+                data: r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link href="s.css" rel="stylesheet" type="text/css"/></head><body><p class="w">章名</p></body></html>"#.as_bytes().to_vec(),
+            },
+            Entry {
+                name: "OEBPS/c0.xhtml".into(),
+                data: format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link href="s.css" rel="stylesheet" type="text/css"/></head><body>{img}</body></html>"#).into_bytes(),
+            },
+        ];
+        assert!(book_facts(&two, None).light_on_page.is_empty());
+    }
+
+    /// 掌阅（h = 1300 ÷ 58 ÷ 32 ≈ 0.70）：`eink-ua.css` 的列表左缩进 1.5em 跟着乘（≈ 1.05em，占页宽同 Kindle）；
+    /// 书自己写的 `padding-left`、`margin-left` 在自己的样式表里照常乘，`eink-ua.css` 排在最前，层叠里书写的胜出（见
+    /// `optimize::tests::text_repair_only_keeps_content` 的 link 顺序）。
+    #[test]
+    fn ua_list_indent_h_scaled() {
+        let h = 1300.0 / 58.0 / 32.0;
+        let ua = crate::wash::kindle_rules_scale_ua_for_test(None, Some(h));
+        assert!(
+            ua.contains("ul{padding-left:1.0") && ua.contains("ol{padding-left:1.0"),
+            "{ua}"
+        );
+        let mut e = [Entry {
+            name: "OEBPS/s.css".into(),
+            data: b"ul{padding-left:0;margin-left:2em}".to_vec(),
+        }];
+        scale_horizontal_entries(&mut e, 0.5);
+        assert_eq!(e[0].data, b"ul{padding-left:0;margin-left:1em}");
     }
 
     #[test]
