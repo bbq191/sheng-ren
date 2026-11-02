@@ -160,7 +160,7 @@ pub use self::encoding::transcode_entries;
 /// - 31（2026-10-14，Kindle 对照）：撤掉 30 的 Move 单元格 `width` 属性（Kindle 不按单元格宽度压窄，Move 不认 CSS 宽度本来就同
 ///   Kindle）；单元格的宽度两台照 Send to Kindle 写成列宽百分比（掌阅行内 `width:P%`、Move 属性，profile `cell_width`）；定宽块 `margin:auto` 不居中（Kindle 不认）：Move 折外边距时多出来的
 ///   都放右边、掌阅左边的 auto 写成 0（profile `margin_auto`）；首行缩进 px 按 0.45pt（掌阅折 em 跟着对）；`font-size:large` 1.125。
-///   Move 上左右外边距、内边距的 em 照 Kindle 按页宽换算（乘一行的 em 数 ÷ 32，约 0.70；profile `horizontal_scale`，维护者选的）；
+///   Move、掌阅上左右外边距、内边距的 em 照 Kindle 按页宽换算（乘一行的 em 数 ÷ 32，约 0.70；profile `horizontal_scale`，维护者选的）；
 ///   body 的左右边距逐文件照 Kindle（和全书多数不一样的文件 body 加类，`eink-body.css`，维护者选的）；图片加了按 Kindle 折的类时
 ///   `<img>` 行内 style 里的宽高去掉（两台认行内样式、压过类规则：《克莱因壶》Move、《狼厅》掌阅的图和 Kindle 不一样大）。
 /// - 32（2026-10-14，P0 验收核查）：字号归一时外边距、内边距、首行缩进、行高里的 px、pt 这些绝对长度也乘系数（Kindle 写出器按
@@ -318,7 +318,7 @@ pub struct WashOpts {
     pub bg_place: Option<crate::bgfit::TileGeometry>,
     /// 竖直间距照 Kindle 换算（掌阅、Move，profile `em_px`；`kindle_rules::VScale`）。`None` 不换。
     pub v_scale: Option<VScale>,
-    /// 左右边距的 em 照 Kindle 按页宽换算的系数（Move，profile `horizontal_scale`；`kindle_rules::scale_horizontal_entries`）。`None` 不换。
+    /// 左右边距的 em 照 Kindle 按页宽换算的系数（Move、掌阅，profile `horizontal_scale`；`kindle_rules::scale_horizontal_entries`）。`None` 不换。
     pub h_scale: Option<f64>,
     /// 阅读器和 CSS 不一样的地方（[`ReaderModel`]，从 profile 来）：不认 `display:none` 的去掉隐藏的元素（`hidden.rs`）、空段去掉
     /// 而不是藏起来、块末尾多排一行的 `<br/>` 去掉（`blank_fold.rs`）；块的行距、标题字号照 Kindle 改写（`block_style.rs`）；页首垫图
@@ -721,7 +721,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
         enabled: |o| o.image_sizing.is_some(),
         run: |e, r, o| {
             if let Some((sizing, kref)) = o.image_sizing {
-                kindle_images::apply(e, r, o.media.as_ref(), o.image_dims.as_deref(), sizing, kref);
+                kindle_images::apply(e, r, o.media.as_ref(), o.image_dims.as_deref(), sizing, kref, o.h_scale);
             }
         },
     },

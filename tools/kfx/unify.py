@@ -18,7 +18,7 @@ from kfx import cli_args, cli_opts
 import s2kcmp
 import toollib
 import kfx
-from s2kdev import FEATURES as S2K_FEATURES, epub_features, epub_nodes, kfx_features, same
+from s2kdev import PAGE as S2K_PAGE, FEATURES as S2K_FEATURES, epub_features, epub_nodes, kfx_features, same
 
 # 上下边距比相邻两块之间折叠后的距离（`gap`：前一块的下边距和这一块的上边距按 CSS 折叠，正的取大、负的取小、相加），不分开比
 # mt、mb：Move 不认标题的上下外边距，box_fix 把距离写到相邻的块上（标题下边距挪成下一段的上边距），屏幕上一样、逐个节点比却
@@ -222,6 +222,7 @@ def main():
     # 各台一行的 em 数（内容区宽 ÷ 缺省 1em 的像素）
     page_em = {d: READER_GEOMETRY[d]['content'] / (READER_GEOMETRY[d]['em_px'] or float(profile_value(d, 'em_px'))) for d in DEVICES}
     sizing = {d: profile_value(d, 'image_sizing') or 'css' for d in DEVICES}
+    hscale = {d: bool(profile_value(d, 'horizontal_scale')) for d in DEVICES}
     quirks = []
     ex = {}
     low = []
@@ -248,6 +249,10 @@ def main():
                 for side, col in (('ml', 11), ('mr', 12)):
                     em, pct = (float(x) for x in r[col].split('+'))
                     f[side] = em * (base_fs / bfs) / page_em[d] * 100 + pct
+                # 负的首行缩进（悬挂缩进）开了 `horizontal_scale` 的台同左右边距按页宽换算过（Kindle 在有左右边距的块里写百分比，
+                # 上面 kfx_features 按 32 个 em 折回 em），这里同口径折回 Kindle 的 em（《春雪》-1em 掌阅写 -0.7em，占页宽一样）
+                if hscale[d] and f['indent'] < 0:
+                    f['indent'] *= S2K_PAGE / page_em[d]
                 f['gap'] = collapse(prev_mb, f['mt'])
                 prev_mb = f['mb']
                 q[key(r[0])].append(f)
@@ -307,6 +312,12 @@ def main():
                 _, _, ew, ea, _, ei = q[(w, h)].popleft()
                 # 宽度比阅读器上实际显示的（按各台的规矩折成占内容区的比例）；行内图片在段落里排，对齐跟着段落，不比
                 ks, ds = shown_width(width, w, h, kgeo, 'kindle', inline), shown_width(ew, w, h, READER_GEOMETRY[d], sizing[d], ei)
+                if hscale[d] and inline and ei and '%' not in width + ew and max(ks, ds) < 1.0:
+                    # 左右换算的台（掌阅）行内图片保持原 em、和文字同高（kindle_images.rs restyle），一行的 em 数和 Kindle 不同，
+                    # 按占行宽比不该一样；改按字高比：这台的显示宽折成 em，再按 Kindle 的 em 折回 Kindle 行宽比。
+                    # 百分比写的两边都按行宽，照旧比；任一边被截到满行（max-width）的也照旧比，截断后的宽不是 em 了
+                    g = READER_GEOMETRY[d]
+                    ds = ds * g['content'] / g['em_px'] * kgeo['em_px'] / kgeo['content']
                 # 整页单图（Kindle 的对齐记 `-`：封面页、整页插图）各台都缩放到满页，屏幕比例不同，不比宽度
                 checks = (('宽度', align == '-' or same_shown(ks, ds)), ('对齐', inline or align in ('-', ea)), ('行内/成块', inline == ei))
                 bad = [k for k, good in checks if not good]

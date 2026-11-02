@@ -423,8 +423,9 @@ fn wash_opts_for(p: &profile::Profile, reference: Option<&profile::Profile>) -> 
     if let (Some(em), Some((_, k))) = (p.em_px, w.image_sizing) {
         let ratio = f64::from(p.output_readable().height) / k.content_h;
         w.v_scale = Some(crate::wash::VScale { em: k.v_rem_px * ratio / em, kindle_rem_px: k.v_rem_px, ratio });
-        // 左右边距的 em 照 Kindle 按页宽换算（Move，profile `horizontal_scale`）：这台一行的 em 数 ÷ Kindle 的 32
-        let h_scale = if p.css.horizontal_scale { f64::from(p.output_readable().width) / em / crate::kindle_model::PAGE_WIDTH_EM } else { 1.0 };
+        // 左右边距的 em 照 Kindle 按页宽换算（Move、掌阅，profile `horizontal_scale`）：这台一行的 em 数 ÷ Kindle 的 32。
+        // 一行按正文内容区宽（`content_px`，掌阅 1300 ÷ 58 ≈ 22.4 em → 0.70；没写的按阅读范围宽，Move 842 ÷ 37.8 → 0.70）
+        let h_scale = if p.css.horizontal_scale { f64::from(p.content_px.unwrap_or(p.output_readable().width)) / em / crate::kindle_model::PAGE_WIDTH_EM } else { 1.0 };
         w.h_scale = (h_scale != 1.0).then_some(h_scale);
         // 不认内边距、不画边框、不认标题外边距的阅读器（Move）：照 Kindle 改写要的尺寸
         if !(p.css.padding && p.css.borders && p.css.heading_margins && p.css.px_margins && p.css.percent_margins) {

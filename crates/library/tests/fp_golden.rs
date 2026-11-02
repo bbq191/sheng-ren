@@ -36,6 +36,7 @@ fn mutations() -> Vec<Mutation> {
     v.push(("line_height_floor", Box::new(|p| p.css.line_height_floor = p.css.line_height_floor.map_or(Some(1.0), |_| None))));
     v.push(("font_px", Box::new(|p| p.font_px = p.font_px.map_or(Some(40), |x| Some(x + 1)))));
     v.push(("line_px", Box::new(|p| p.line_px = p.line_px.map_or(Some(60), |x| Some(x + 1)))));
+    v.push(("content_px", Box::new(|p| p.content_px = p.content_px.map_or(Some(1000), |x| Some(x + 2)))));
     v.push(("em_px", Box::new(|p| p.em_px = p.em_px.map_or(Some(37.0), |x| Some(x + 1.0)))));
     v.push(("screen", Box::new(|p| p.screen = Screen { width: p.screen.width + 2, height: p.screen.height + 4 })));
     v.push(("comic_gamma", Box::new(|p| p.comic.gamma = p.comic.gamma.map_or(Some(1.45), |_| None))));

@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(m.font_size("h2", Some("2em"), 2.0), 1.514);
         assert_eq!(m.font_size("div", None, 2.0), 2.0);
         assert_eq!((m.line_height("p", Some(2.0), false), m.line_height("p", Some(2.0), true), m.line_height("h1", Some(2.0), false), m.line_height("div", None, false)), (1.0, 2.0, 2.0, 1.0));
-        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, rem: false, important: false, cell_middle: false, inline_valign: false, heading_center: true, line_em: Some(99.0 / 58.0), ..ReaderModel::default() });
+        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, rem: false, important: false, cell_middle: false, inline_valign: false, heading_center: true, horizontal_scale: true, line_em: Some(99.0 / 58.0), ..ReaderModel::default() });
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),

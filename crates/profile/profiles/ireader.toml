@@ -44,6 +44,12 @@ image_sizing = "device-px"
 # padding 2em 116（Q06、Q12），line-height:3em 一行 174（Q84））：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
 # 同样 1em 占页高 Ocean 5 Pro 上多一半、Air 3 Pro 上多 12%；已定）。阅读器里改了字号、Kindle 改了行距要重量
 em_px = 58
+# 正文页内容区宽（屏幕像素）：阅读范围是整屏 1440（整页图铺满），正文左右各留 70（2026-11-02 Air 3 Pro 测试书：100% 宽的图 1300px，x 70–1369）
+content_px = 1300
+# 左右边距的 em 照 Kindle 按页宽换算：一行 1300 ÷ 58 ≈ 22.4 个 em，Kindle 按 32 个折（写出器、Send to Kindle 的左右长度一律按页宽百分比），
+# 同样的 em 宽出约 1.43 倍（2026-11-02 unify.py：《ABC》《罗杰疑案》81.9%、《帷幕》90.1%）。系数由 content_px、em_px 算（≈ 0.70），同 Move。
+# Ocean 5 Pro 一行 1168 ÷ 37.4 ≈ 31.2 个，和 32 差不多，以前没开
+horizontal_scale = true
 # 左右外边距的 px 是屏幕像素（Kindle 写出器按 0.45pt 一 px，大约 1.46 倍）：块上的折成 em（2026-10-13，KINDLE_RULES 24）
 px_margins = false
 # rem 不按正文字号算（Ocean 5 Pro 2026-10-13 整条不认；Air 3 Pro 2026-11-02 Q53 margin-left:2rem 只挪 32，按 1rem＝16 屏幕像素）：
