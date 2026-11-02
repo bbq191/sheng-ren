@@ -448,7 +448,8 @@ def ireader_run():
                 out.setdefault(codes[n], {})["B" if b else "A"] = [l for l in lines_of(png) if l[0] < MAX_Y]
             if len(seen) == 2 * len(PROBES):
                 break
-        adb("shell", "input", "swipe", "1100", "1580", "150", "1580", "200")
+        # 右往左滑翻下一页：Ocean 5 Pro 1264×1680 时是 1100→150、y 1580，Air 3 Pro 按比例放大（推断，没上真机试）
+        adb("shell", "input", "swipe", "1250", "1800", "170", "1800", "200")
         time.sleep(2)
     print(f"掌阅：认出 {len(seen)} 页（共 {2 * len(PROBES)}）；截屏在 {work}；测试书 documents/测试/{name}.epub 用完请删", file=sys.stderr)
     return out
