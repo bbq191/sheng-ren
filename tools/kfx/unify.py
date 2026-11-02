@@ -96,9 +96,9 @@ def epub_images(path, bindir, device):
 # 各阅读器显示图片的几何（屏幕像素）：内容区宽、高，缺省字号下 1em。Kindle 取 kindle profile（KFX 阅读范围、font_px）；
 # 掌阅是 2026-11-02 在 Air 3 Pro 上实测（图书排版关、字号中、预设通用）：100% 宽的图 1300px、10em 的 580px、300px 的 300px；
 # height 是正文页内图的上限（1300×1620 留在正文页，1630 起被抽成单独的全屏页、按屏幕 1440×1920 缩放）。
-# 旧值 1168/1560/37.4 是 2026-10-12 在 Ocean 上量的。
+# 旧值 1168/1560/37.4 是 2026-10-12 在 Ocean 上量的。screen_w、screen_h 是全屏页按的屏幕尺寸（见 shown_width）。
 READER_GEOMETRY = {
-    'ireader': {'content': 1300, 'height': 1620, 'em_px': 58},
+    'ireader': {'content': 1300, 'height': 1620, 'em_px': 58, 'screen_w': 1440, 'screen_h': 1920},
 }
 
 
@@ -135,12 +135,19 @@ def kindle_geometry():
 
 
 def shown_width(width, w, h, geo, sizing, inline=False):
-    """一张图在阅读器上显示的宽度，占内容区宽度的比例（0–1）。`width` 是宽度写法（`%:数`、`em:数`、`pt:数`、行内只写高的 `h…`、
+    """一张图在阅读器上显示的宽度，占内容区宽度的比例（0–1；掌阅全屏页可以大于 1）。`width` 是宽度写法（`%:数`、`em:数`、`pt:数`、只写高的 `h…`、
     没写 `-`），`sizing` 是阅读器的规矩（profile `image_sizing`；Kindle 记作 `kindle`）：
     kindle——百分比照写，em 跟着字号，没写的按原图像素（行内的按 1/16em 一像素）；
     device-px（掌阅）——照 CSS，px 是屏幕像素（独立图片的 pt 是 px×0.75 来的，行内的是 px×0.45）；
     percent（Move）——只认百分比，别的一律拉满一行。
-    都保持比例缩进一页（宽、高都不超出内容区）。"""
+    都保持比例缩进一页（宽、高都不超出内容区）。
+    例外：geo 带 screen_w/screen_h（掌阅）的独立图片，按 CSS 宽（或只写的高）算出、再缩到不超过内容区宽以后的显示高超过
+    geo['height'] 时，阅读器把它抽成单独的全屏页，按屏幕等比缩放、四舍五入到像素，返回值可以大于 1（全屏宽比内容区宽）。
+    2026-11-02 Air 3 Pro 实测：不写宽度的 1300×1620 留在正文页、1300×1630–1850 和 600×2000 抽成全屏页；2600×1800、
+    1600×1700 先缩到 1300 宽（高 900、1381）、width:20%/50% 的 1300×2000（高 400、1000）、width:100% 的 2600×3000
+    （高 1500）、height:10em 的 1300×1700（443×580）都留在正文页照 CSS 显示——按的是缩放后的高，不是原图高。
+    没验证过的：写了 CSS 宽或高、缩放后仍超高的图进全屏页时 CSS 还认不认（这里按不认算）；原图比屏幕小（如 600×1630）的
+    图在全屏页上是放大到满屏还是保持原尺寸（这里按放大算）。"""
     c, em_px = geo['content'], geo['em_px']
     fit = geo['height'] * w / h / c if w and h else 1.0
     num = lambda x: float(x.split(':')[1])
@@ -149,8 +156,9 @@ def shown_width(width, w, h, geo, sizing, inline=False):
     elif sizing == 'percent':
         f = 1.0
     elif width.startswith('h') and w and h:
-        # 只写了高：宽按比例
-        f = shown_width(width[1:], w, h, {**geo, 'height': 1e9}, sizing, inline) * w / h if not width[1:].startswith('%') else 1.0
+        # 只写了高：宽按比例。高的长度按一个极宽、极高、不带全屏页的 geo 折算，免得先被截到一行宽或进全屏页分支
+        big = 1e9
+        f = shown_width(width[1:], w, h, {**geo, 'content': big, 'height': big, 'screen_w': 0}, sizing, inline) * big / c * w / h if not width[1:].startswith('%') else 1.0
     elif width.startswith('em:'):
         f = num(width) * em_px / c
     elif width.startswith('pt:'):
@@ -159,6 +167,9 @@ def shown_width(width, w, h, geo, sizing, inline=False):
         f = w / 16 * em_px / c
     else:
         f = w / c
+    # 显示高取整到像素再比（不然 (w/c)*c*h/w 的浮点误差会让正好等于上限的图误判）
+    if not inline and w and h and geo.get('screen_w') and round(min(f, 1.0) * c * h / w) > geo['height']:
+        return round(min(geo['screen_w'], w * geo['screen_h'] / h)) / c
     return min(f, 1.0, fit)
 
 
