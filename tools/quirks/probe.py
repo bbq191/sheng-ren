@@ -4,7 +4,7 @@
 用法:
   probe.py make 输出.epub                 生成测试书（探针见 PROBES；书名「测试-怪癖」）
   （都可加 --only=88-99 或 --only=13,28,100-119：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
-  probe.py ireader [--json] [--max-y=1828]           生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
+  probe.py ireader [--json] [--max-y=1828] [--min-y=90] 生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
                                           （测试书留在掌阅上，维护者自己删；掌阅要开着 adb、亮屏解锁）
 
 掌阅没有排好的 PDF，只能逐页截屏：每章第一行的标记换成一张条码图（两端各一格黑，中间 7 位探针序号、1 位 A/B，宽 50%），截屏后
@@ -235,14 +235,16 @@ def code_png(n, b):
 
 
 # 截屏里只看上沿在这以上的行，下面是页脚（页码、时间；`--max-y` 可改）。Ocean 5 Pro 1680 高时是 1600；Air 3 Pro 1920 高，
-# 按同样的比例推断 1828（2026-11-02，没上真机量页脚）
+# 按同样的比例推断 1828（2026-11-02 真机：页脚一行上沿 1874，1828 够用）
 MAX_Y = 1828
+# 上沿不超过这个数（在屏幕上方）的是页眉，不看（`--min-y` 可改；Air 3 Pro 自带阅读器顶上一行书名、章节名和左上角「>」，下沿 79；正文第一行上沿 98，2026-11-02 截屏量的）
+MIN_Y = 90
 
 
 def decode_code(png):
     """截屏里第一行（条码）认出 (探针序号, 是不是 B)；认不出 None。"""
     from PIL import Image
-    ls = [l for l in lines_of(png) if l[0] < MAX_Y]
+    ls = [l for l in lines_of(png) if MIN_Y < l[0] < MAX_Y]
     if not ls:
         return None
     top, bottom, left, right = ls[0]
@@ -250,7 +252,9 @@ def decode_code(png):
     y = (top + bottom) // 2
     w = (right - left + 1) / CODE_CELLS
     bits = [im.getpixel((int(left + (i + 0.5) * w), y)) < 128 for i in range(CODE_CELLS)]
-    if not (bits[0] and bits[-1]) or bottom - top < 10:
+    # 条码只在章首页顶上（上沿 98）；一章排不下一页时（Air 3 Pro 缺省字号大）续页第一行是大字正文，可能碰巧认成条码（2026-11-02 Q140 续页
+    # 上沿 132、认成 64）。续页首行正好也在 98 附近时拦不住，靠两端黑格、行高再筛
+    if not (bits[0] and bits[-1]) or bottom - top < 10 or (MIN_Y and top > MIN_Y + 40):
         return None
     n = sum(1 << (6 - i) for i in range(7) if bits[1 + i])
     return n, bits[8]
@@ -404,6 +408,9 @@ def tap_text(text):
 
 def ireader_run():
     """推进掌阅、打开、逐页截屏量。返回同 [`measure`] 的 {编号: {"A": 行, "B": 行}}。"""
+    # 条码只有 7 位序号（1–127），再多就绕回 0、1 去，认错页（2026-11-02 全跑 151 个时 Q128 认成 0、Q129 认成 1）：分几次用 --only 跑
+    if len(PROBES) > 127:
+        sys.exit(f"一次最多 127 个探针（现在 {len(PROBES)} 个）：分开跑，如 --only=1-127、--only=128-{int(PROBES[-1][0])}")
     work = tempfile.mkdtemp(prefix="quirks-ir-")
     # 每次换个文件名：同名的书掌阅记着上次读到哪，会从那里接着翻
     name = f"quirks-ir-{time.strftime('%m%d%H%M%S')}"
@@ -423,40 +430,47 @@ def ireader_run():
         time.sleep(2)
     else:
         sys.exit(f"文件管理器里没找到「{name}」")
-    time.sleep(8)
+    # Air 3 Pro 打开 300 多页的书要排版好一阵，这期间的滑动不翻页、截屏也不变（2026-11-02）
+    time.sleep(20)
     codes = {i: c for i, (c, *_) in enumerate(PROBES, 1)}
-    out, seen, misses = {}, set(), 0
-    for k in range(2 * len(PROBES) + 20):
+    out, seen, misses, dups = {}, set(), 0, 0
+    for k in range(2 * len(PROBES) + 60):  # 多留些：Air 3 Pro 字大，有的章排两页
         png = os.path.join(work, f"p{k}.png")
         adb("exec-out", "screencap", "-p", out=png)
         got = decode_code(png)
         if got is None:
+            dups = 0
             misses += 1
             if misses > 5:
                 break
         elif got in seen:
-            # 翻页没翻过去（滑到了字上弹出菜单之类）：退出菜单再滑一次，连着几次就是到头了
-            adb("shell", "input", "keyevent", "KEYCODE_BACK")
+            # 翻页没翻过去：头一回只是再滑一次（2026-11-02 Air 3 Pro 在 Q19B 偶尔一滑没翻，这时按返回键就退出了阅读器）；
+            # 连着第二回才当是滑到字上弹出了菜单，按返回键退出菜单。连着几次就是到头了
+            # 单独数连着重复几回：续页（没条码）记的 misses 不算，免得续页后头一回重复就按返回键
+            # 只在连着第二回重复时按一次返回键关菜单；再按就退出阅读器了
+            if dups == 1:
+                adb("shell", "input", "keyevent", "KEYCODE_BACK")
+            dups += 1
             misses += 1
             if misses > 5:
                 break
         else:
-            misses = 0
+            misses = dups = 0
             seen.add(got)
             n, b = got
             if n in codes:
-                out.setdefault(codes[n], {})["B" if b else "A"] = [l for l in lines_of(png) if l[0] < MAX_Y]
+                out.setdefault(codes[n], {})["B" if b else "A"] = [l for l in lines_of(png) if MIN_Y < l[0] < MAX_Y]
             if len(seen) == 2 * len(PROBES):
                 break
-        # 右往左滑翻下一页：Ocean 5 Pro 1264×1680 时是 1100→150、y 1580，Air 3 Pro 按比例放大（推断，没上真机试）
-        adb("shell", "input", "swipe", "1250", "1800", "170", "1800", "200")
+        # 右往左滑翻下一页：Ocean 5 Pro 1264×1680 时是 1100→150、y 1580；Air 3 Pro 页脚上沿 1874，滑 y 1700（页底空白，2026-11-02 真机试过能翻）
+        adb("shell", "input", "swipe", "1250", "1700", "170", "1700", "200")
         time.sleep(2)
     print(f"掌阅：认出 {len(seen)} 页（共 {2 * len(PROBES)}）；截屏在 {work}；测试书 documents/测试/{name}.epub 用完请删", file=sys.stderr)
     return out
 
 
 def main():
-    global PROBES, OPTIMIZE, MAX_Y
+    global PROBES, OPTIMIZE, MAX_Y, MIN_Y
     args, opts = cli_args(1, __doc__), cli_opts()
     cmd = args[0]
     # --only=88-99 或 --only=13,28：只跑这几个探针（掌阅全跑一遍要 10 分钟）
@@ -468,6 +482,7 @@ def main():
         PROBES = [p for p in PROBES if int(p[0]) in want]
     OPTIMIZE = opts.get("--optimize")
     MAX_Y = int(opts.get("--max-y", MAX_Y))
+    MIN_Y = int(opts.get("--min-y", MIN_Y))
     if cmd == "make" and len(args) == 2:
         make(args[1])
     elif cmd == "ireader":

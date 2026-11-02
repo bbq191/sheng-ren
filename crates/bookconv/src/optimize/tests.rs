@@ -1319,8 +1319,8 @@
         assert!(matches!(opts.text_mode, TextMode::Repair { .. }));
         let (out, _) = optimize_epub_with(&buf, &opts).unwrap();
         // 样式表只按 Send to Kindle 的规则改（profile `kindle_rules`）：正文字体「宋体」整条去掉、body 的左右外边距不要、上下边距照 Kindle
-        // 换算（掌阅 Air 3 Pro × 1.74（Ocean 5 Pro 时 1.52，按屏高 1920/1680 放大），KINDLE_RULES 14）（正文行距 1.8 掌阅不认，就是缺省行距，Kindle 也是行距设置，不改）；别的一个字不改
-        assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:3.4774em;margin-bottom:3.4774em;}p{text-indent:0;margin:0.8693em 0 0.8693em 0}");
+        // 换算（掌阅 Air 3 Pro × 1.124（2026-11-02 探针 em_px 58；Ocean 5 Pro em_px 37.5 时 1.52），KINDLE_RULES 14）（正文行距 1.8 掌阅不认，就是缺省行距，Kindle 也是行距设置，不改）；别的一个字不改
+        assert_eq!(text_of(&out, "OEBPS/style.css"), "body{line-height:1.8;margin-top:2.2483em;margin-bottom:2.2483em;}p{text-indent:0;margin:0.5621em 0 0.5621em 0}");
         assert_eq!(entry_bytes(&out, "OEBPS/big.jpg"), jpg, "图片原样");
         let names: Vec<String> = ZipArchive::new(Cursor::new(&out)).unwrap().file_names().map(String::from).collect();
         assert!(!names.iter().any(|n| n.ends_with("eink-wash.css")), "不加排版样式表: {names:?}");

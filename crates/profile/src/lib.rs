@@ -250,7 +250,7 @@ pub struct CssQuirks {
     /// 行内 `style`（`bookconv::wash::css_compat`）。
     pub important: bool,
     /// 阅读器认不带单位的 `line-height`（TOML 里不写是 `true`）。掌阅不认（`<p>`、`<div>`、标题、行内 `style` 都不认，Q80–Q83），
-    /// 写成长度的认（`3em` 一行 114px，Q84），缺省一行 `line_px`：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，行距和
+    /// 写成长度的认（`3em` 一行 Air 3 Pro 174px、Ocean 5 Pro 114px，Q84），缺省一行 `line_px`：写 `false` 时只修复、照 Send to Kindle 统一的文字书里，行距和
     /// Kindle 不一样的块照 Kindle 写成 em（`bookconv::wash::block_style`；要写 `line_px`、`em_px`）。
     pub line_height_numbers: bool,
 }

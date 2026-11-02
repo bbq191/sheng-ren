@@ -111,8 +111,8 @@ def crop_of(path, w, h):
         return 75, h - 75
     if (w, h) == (1264, 1680):  # 掌阅 Ocean 5 Pro 截屏：底部页码、时间
         return 0, h - 80
-    if (w, h) == (1440, 1920):  # 掌阅 Air 3 Pro 截屏：页脚按 Ocean 的比例推断（80 / 1680），没上真机量
-        return 0, h - 92
+    if (w, h) == (1440, 1920):  # 掌阅 Air 3 Pro 截屏：页脚一行 1874–1903（2026-11-02 怪癖探针截屏），留 92 够
+        return 90, h - 92  # 顶上页眉下沿 79
     return 0, h
 
 

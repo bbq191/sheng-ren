@@ -16,7 +16,8 @@
 # 并用 `QUIRKS_SNAPSHOT=文件` 前后各导一份每种写法的结论比对（应该一字不差，除非本来就要改结论）。
 # 说明只写结论、怎么处理、哪个版本号；来龙去脉在 docs/（devices.md、typesetting.md）。
 # 2026-10-31 以前还有 Move（xochitl）一栏和只有它的条目：Move 卖了、内置模式删了，一起去掉（要找回看 git 历史）。
-# 掌阅的结论 2026-10-13 起由 `probe.py ireader`（adb 逐页截屏）量。
+# 掌阅的结论 2026-10-13 起由 `probe.py ireader`（adb 逐页截屏）量；2026-10-13 是 Ocean 5 Pro，2026-11-02 换 Air 3 Pro 全部 151 个探针重量过，
+# 除 rem（见下）外结论都一样（前提：掌阅「图书排版」「过滤书籍背景」「本地图书指定字体」都关，字号中，见 profiles/ireader.toml）。
 
 # ---------------------------------------------------------------- 不分属性
 
@@ -24,8 +25,8 @@
 prop = ["*"]
 value = ["rem"]
 ireader = "fixed"
-note = "掌阅不认 rem：整条声明当没写（margin-left:2rem 不挪）；字号以外的改成 em、字号的折成 px（KINDLE_RULES 25，《克莱因壶》首行缩进真机）"
-src = "2026-10-13 测试-怪癖-掌阅 Q53"
+note = "掌阅的 rem 不按正文字号算（Ocean 5 Pro 整条不认，margin-left:2rem 不挪；Air 3 Pro 按 1rem＝16 屏幕像素，2rem 挪 32、2em 挪 116）；字号以外的改成 em、字号的折成 px（KINDLE_RULES 25，《克莱因壶》首行缩进真机）"
+src = "2026-10-13 测试-怪癖-掌阅 Q53；2026-11-02 Air 3 Pro 同探针 Q53"
 
 [[rule]]
 prop = ["*"]

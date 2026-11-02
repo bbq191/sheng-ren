@@ -1,5 +1,9 @@
 # 掌阅 iReader Air 3 Pro 上的自带阅读器（2026-11-02 起；以前是 Ocean 5 Pro，2026-10-29 卖了）。默白版、黑白、无前光，安卓 14，
-# 固件 4.1.0.214.0。下面的怪癖、em_px、line_px 都是 Ocean 5 Pro 上量的，**待探针重量**（tools/quirks/probe.py ireader）；屏幕尺寸是 Air 3 Pro 实测。
+# 固件 4.1.0.214.0。下面的怪癖、em_px、line_px 2026-11-02 在 Air 3 Pro 上用 tools/quirks/probe.py ireader 重量过（151 个探针、302 页全认出），
+# 结论除 rem 的细节外和 Ocean 5 Pro 一样；heading_center、background_auto_height 等单独测试书量的没重测，还是 Ocean 的结论。
+# **量的前提是掌阅这样设**（维护者日常的设置，改了要重量）：设置里「图书排版」（自动调整本地书排版）关、「过滤书籍背景」关、
+# 「本地图书指定字体」关；阅读排版里字号「中」、预设「通用」、排版「默认」。「图书排版」开着时块的外边距、首行缩进、行距一概不认
+# （2026-11-02 开着跑过两遍，Q09、Q13、Q84 全无差别）。
 name = "掌阅自带阅读器（iReader Air 3 Pro）"
 color = false
 formats = ["epub"]
@@ -36,19 +40,22 @@ comic_margin = 1
 
 # 图片尺寸的 px 是屏幕像素（300px 的图占四分之一页宽，Kindle 把 px 换成 em 占三分之二）：kindle_rules 改写成 Kindle 的大小（2026-10-12 测试书）
 image_sizing = "device-px"
-# 缺省字号下 CSS 1em 的屏幕像素（2026-10-12 测试书「测试-竖直间距」Ocean 5 Pro 量的；Air 3 Pro 屏幕更大，待探针重量）：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
-# 同样 1em 占页高多一半；已定）。阅读器里改了字号、Kindle 改了行距要重量
-em_px = 37.5
+# 缺省字号下 CSS 1em 的屏幕像素（Ocean 5 Pro 2026-10-12 量的 37.5；Air 3 Pro 2026-11-02 探针：margin-left 1em/2em/4em 挪 58/116/232（Q46、Q09、Q47），
+# padding 2em 116（Q06、Q12），line-height:3em 一行 174（Q84））：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
+# 同样 1em 占页高 Ocean 5 Pro 上多一半、Air 3 Pro 上多 12%；已定）。阅读器里改了字号、Kindle 改了行距要重量
+em_px = 58
 # 左右外边距的 px 是屏幕像素（Kindle 写出器按 0.45pt 一 px，大约 1.46 倍）：块上的折成 em（2026-10-13，KINDLE_RULES 24）
 px_margins = false
-# 不认 rem（整条声明当没写，2026-10-13 怪癖测试书 Q53）：字号以外的改成 em，字号的折成 px（KINDLE_RULES 25）
+# rem 不按正文字号算（Ocean 5 Pro 2026-10-13 整条不认；Air 3 Pro 2026-11-02 Q53 margin-left:2rem 只挪 32，按 1rem＝16 屏幕像素）：
+# 字号以外的改成 em，字号的折成 px（KINDLE_RULES 25）
 rem = false
 # 带 !important 的声明一概不起作用（Q28、Q85、Q86，《克莱因壶》标题不居中、《春雪》下划线没了）：去掉 !important，靠它胜出的值写进行内 style
 important = false
-# 不带单位的 line-height 不认（Q80–Q83），长度认（Q84 3em 一行 114px）：行距和 Kindle 不一样的块照 Kindle 写成 em
+# 不带单位的 line-height 不认（Q80–Q83；Air 3 Pro 2026-11-02 写了的行距一律 83，比缺省 99 还挤，Q137、Q138 0.6–1.2 也是 83），长度认（Q84 3em 一行 174px）：行距和 Kindle 不一样的块照 Kindle 写成 em
 line_height_numbers = false
-# 缺省字号、行距下正文一行的屏幕像素（2026-10-13 怪癖测试书对照页 Ocean 5 Pro：一段里相邻两行隔 58px；Air 3 Pro 待探针重量），上面的行距按它算阅读器的缺省行距
-line_px = 58
+# 缺省字号、行距下正文一行的屏幕像素（Ocean 5 Pro 2026-10-13 量的 58；Air 3 Pro 2026-11-02 探针对照页一段里相邻两行上沿 383→482、
+# Q138 不写行距那段同样隔 99，约 1.71em），上面的行距按它算阅读器的缺省行距
+line_px = 99
 # 单元格缺省顶端对齐（Kindle 居中），vertical-align:middle 认（2026-10-14 探针 Q105、Q106）：Kindle 上居中的单元格写进行内
 cell_middle = false
 # span 上 vertical-align:super/sub 不认、<sup>/<sub> 标签认（Q100、Q101、Q120–Q123）：写了上标下标的行内元素里面包 <sup>/<sub>

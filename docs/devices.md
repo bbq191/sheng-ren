@@ -16,22 +16,22 @@
 
 | | Kindle（KFX） | 掌阅 |
 |---|---|---|
-| 内容区（px） | 1104×1546（屏 1272×1696） | 1440×1920（整屏，Air 3 Pro；下面几行和怪癖表是 Ocean 5 Pro 1264×1680 上量的，待探针重量） |
-| 正文一行 | 63（`line_px`） | 54.5 |
-| 字号 1em | 39（`font_px`，图片宽度用） | 37.5（`em_px`） |
-| 竖直 1em/1rem 的边距 | **52.5**（写出器写行高倍数，按行距换算 = 一行/1.2） | 37.5 |
+| 内容区（px） | 1104×1546（屏 1272×1696） | 1440×1920（整屏，Air 3 Pro；正文 x 70–1370、y 98 起，页眉 28–79、页脚 1874–1903。下面几行 2026-11-02 Air 3 Pro 探针重量，前提：掌阅「图书排版」「过滤书籍背景」「本地图书指定字体」关、字号中；Ocean 5 Pro 1264×1680 时是 54.5/58、37.5） |
+| 正文一行 | 63（`line_px`） | 99（`line_px`，约 1.71em） |
+| 字号 1em | 39（`font_px`，图片宽度用） | 58（`em_px`） |
+| 竖直 1em/1rem 的边距 | **52.5**（写出器写行高倍数，按行距换算 = 一行/1.2） | 58（和段距相邻时按 CSS 折叠：段间缺省 46px，2em 只多出 70） |
 | `%` 边距 | 按 32em 页宽（左右按包含块宽） | 按内容区宽 |
 | `px` | 写出器按 0.45pt/px | 屏幕像素 |
 | 左右外边距 `px` | 0.45pt/px（50px 约 73 个屏幕像素） | 屏幕像素 → 块上的折成 em（KINDLE_RULES 24，真机 50px 挪 71；左右内边距、首行缩进的 px 同样，KINDLE_RULES 25） |
 | `pt` | 12pt = 1em | **当成 px（坏的）** |
-| 段落 `line-height` | 认（按全书正文行高归一） | 不带单位的不认（`2`），**长度认**（`3em`，2026-10-13 探针 Q80、Q84）；缺省一行 58px → 照 Kindle 写成 em（KINDLE_RULES 25，《飘》正文 1.8em 一行 69 → 58–60px 真机 ✓） |
+| 段落 `line-height` | 认（按全书正文行高归一） | 不带单位的不认（`2`），**长度认**（`3em`，2026-10-13 探针 Q80、Q84；Air 3 Pro 写了不带单位的一律排成 83px 一行，比缺省 99 还挤，Q137、Q138）；缺省一行 99px（Ocean 58px）→ 照 Kindle 写成 em（KINDLE_RULES 25，《飘》正文 1.8em 一行 69 → 58–60px Ocean 5 Pro 真机 ✓，Air 3 Pro 没复核） |
 | 别的块（标题、div、li、td）的 `line-height` | 认（同上） | 同段落：不带单位的不认（行内也不认），长度认（Q81–Q83）→ 同上（KINDLE_RULES 25） |
 | 标题（h1–h6）的 `font-size` | 认（按正文归一） | 认 |
 | 块末尾的 `<br/>` | 不排 | 不排 |
 | `margin-top` | 认 | 认 |
 | `padding-top`、`border-top`、`position:relative;top` | 认 | 认 |
 
-→ 掌阅的上下外边距、内边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14，em×1.52，%/px/pt 折成屏幕像素）。
+→ 掌阅的上下外边距、内边距照 Kindle 换算成占内容区高同样的比例（KINDLE_RULES 14，Air 3 Pro em×1.124（em_px 58），Ocean 时 em×1.52，%/px/pt 折成屏幕像素）。
 
 ### CSS 认不认
 
@@ -161,7 +161,7 @@
 | `block_width`、`negative_margins`（都是 `true`） | 认块的宽度、认负的外边距；`false` 时只修复的文字书里块的宽度折成左右外边距、页中间相邻两块的负外边距照 Kindle 写成非负的间距（`wash/box_fix.rs`，KINDLE_RULES 28） | — | — | 2026-10-13 探针 Q08、Q30、Q75–Q79 |
 | `cell_width`、`margin_auto`（都是 `true`，同 CSS） | 按单元格的 CSS 宽度压窄格子、按 `margin:auto` 让定宽块居中；Kindle 都不（真机）。单元格的宽度两台都照 Kindle 写成列宽百分比（`true` 写行内 `width:P%`，`false` 写 `width` 属性），`margin_auto = true` 时两边 auto 的定宽块左边的 auto 写成 0（`wash/box_fix.rs`，KINDLE_RULES 31；只有左边 auto 的 Kindle 靠右，不动，33）。`float`（缺省 `true`）：认浮动，标题上的写成 `none`（Kindle 不浮动，KINDLE_RULES 33） | — | 都是 `true` | 2026-10-14 探针 Q124、Q127–Q129、Q133、Q134，Kindle 截图 |
 | `cell_middle`、`inline_valign`（都是 `true`） | 单元格缺省竖直居中（同 Kindle）、认行内元素上 `vertical-align` 的上标下标；`false` 时只修复的文字书里一行两格以上、Kindle 上居中的单元格行内写 `vertical-align:middle`（`wash/box_fix.rs`），写了 super/sub 的行内元素里面包 `<sup>`/`<sub>`（`wash/sup_sub.rs`；KINDLE_RULES 29） | — | 都是 `false` | 2026-10-14 探针 Q100–Q106、Q120–Q123 |
-| `em_px`、`line_px`（不写） | `em_px`：这台缺省字号下 CSS 1em 的屏幕像素，竖直间距照 Kindle 换算用（KINDLE_RULES 14）；`line_px`：正文一行的像素（kindle：一 rem 竖直 = 它 / 1.2；掌阅：缺省行距，行距照 Kindle 写成 em 用） | `line_px` 63 | `em_px` 37.5、`line_px` 58 | 2026-10-12「测试-竖直间距」：Kindle 按行距排边距，同样 1em 占页高多一半 |
+| `em_px`、`line_px`（不写） | `em_px`：这台缺省字号下 CSS 1em 的屏幕像素，竖直间距照 Kindle 换算用（KINDLE_RULES 14）；`line_px`：正文一行的像素（kindle：一 rem 竖直 = 它 / 1.2；掌阅：缺省行距，行距照 Kindle 写成 em 用） | `line_px` 63 | `em_px` 58、`line_px` 99（Air 3 Pro 2026-11-02；Ocean 37.5、58） | 2026-10-12「测试-竖直间距」：Kindle 按行距排边距，同样 1em 占页高多一半（Ocean 5 Pro；Air 3 Pro 多 12%） |
 | `comic_gamma`（不写＝不加深） | 漫画页中间调加深的伽马（`255·(v/255)^γ`，黑白两端不动）：内容是灰度的页才加深，黑白屏上转成灰度的页都算，彩色屏上彩页原样；装饰小图不动（`imgopt::prepare_comic_page_limited`，c55） | 1.1 | 1.1 | 2026-10-16 两台真机比过原样 / 1.2 / 1.3 / 1.45：黑白页加深明显更好，选 1.45；2026-10-21 先改成 1.3，同日掌阅上比过 1.1 / 1.2 / 1.3（《浪客行》卷07）选 1.1；Move 彩页提对比度、锐化、饱和度看不出区别。Kindle 2026-10-26 跟着开 1.1，10-27 真机比过原样 / 1.1（《浪客行》卷07）选 1.1 |
 | `comic_autocontrast`（`false`） | 漫画页拉满对比度（照 KCC 的自动对比度）：内容是灰度的页按裁边后、缩放前整页最黑 → 0、最白 → 255 线性拉开，再做 `comic_gamma`；灰度范围不到 159 的页不拉（`imgopt::autocontrast_lut`，c57） | `true` | — | 2026-10-30 Kindle 真机比过《死亡筆記》卷07 现状 / 拉满 + 伽马 1.1 / 只拉满（同 KCC 默认），维护者选拉满 + 伽马；同日再比拉满 + 1.1 / 拉满 + 1.2，选 1.1。掌阅、Move 是旧设备，没比过 |
 | `comic_trim_specks`（`false`） | 漫画页裁白边不让扫描杂点挡住：裁过白边后，小块、离主体远、附近没有成堆小块的暗点不算内容，再收一次边（`comiccrop.rs`，c58） | `true` | — | 2026-10-30 维护者定（《哆啦A夢》卷01 挡住裁白边的多是灰尘）。旧设备没开 |
@@ -208,12 +208,12 @@ image_gamma = 1.1
 comic_margin = 1
 
 image_sizing = "device-px"
-em_px = 37.5
+em_px = 58
 px_margins = false
 rem = false
 important = false
 line_height_numbers = false
-line_px = 58
+line_px = 99
 cell_middle = false
 inline_valign = false
 heading_center = true
