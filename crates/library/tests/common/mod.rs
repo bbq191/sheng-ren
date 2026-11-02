@@ -24,13 +24,20 @@ pub fn documents(lib: &Path, mode: &str) -> PathBuf {
 /// 打开书库，设备指向测试目录（见 [`dev_dir`]）。
 pub fn open(lib: &Path) -> Library {
     let mut l = Library::open(lib).unwrap();
-    l.set_device_env(DeviceEnv { mtp_base: dev_dir(lib), mount_check: false, usbms_base: dev_dir(lib).join("usbms") });
+    l.set_device_env(DeviceEnv {
+        mtp_base: dev_dir(lib),
+        mount_check: false,
+        usbms_base: dev_dir(lib).join("usbms"),
+    });
     l
 }
 
 /// 在书库 `profiles/` 里放一个产物留在电脑上的自定义模式 `pc`（掌阅的参数，去掉 `[deliver]`）。返回书库路径。
 pub fn with_pc_profile(lib: &Path) -> PathBuf {
-    let src = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile/profiles/ireader.toml")).unwrap();
+    let src = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../profile/profiles/ireader.toml"),
+    )
+    .unwrap();
     let toml = &src[..src.find("[deliver]").expect("ireader.toml 有 [deliver]")];
     std::fs::create_dir_all(lib.join("profiles")).unwrap();
     std::fs::write(lib.join("profiles/pc.toml"), toml).unwrap();
@@ -43,10 +50,27 @@ pub fn sample_epub(title: &str) -> Vec<u8> {
 
 /// 书名相同、正文不同的书（`marker` 写进第一段开头）：同名同作者的另一个版本。
 pub fn sample_epub_with(title: &str, marker: &str) -> Vec<u8> {
-    let long = format!("{marker}{}", "正文段落，足够长的文字内容，确保标题页之后的内容超过门槛。".repeat(5));
+    let long = format!(
+        "{marker}{}",
+        "正文段落，足够长的文字内容，确保标题页之后的内容超过门槛。".repeat(5)
+    );
     let mut book = Book {
-        meta: BookMeta { book_id: "t".into(), title: title.into(), author: "作者".into(), language: "zh".into(), publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
-        chapters: vec![Chapter { title: "第一章".into(), html_body: format!("<h1>第一章</h1><p>{long}</p><h2>第一节</h2><p>{long}</p>"), level: 1 }],
+        meta: BookMeta {
+            book_id: "t".into(),
+            title: title.into(),
+            author: "作者".into(),
+            language: "zh".into(),
+            publisher: "".into(),
+            cover: None,
+            cover_ext: "jpg".into(),
+            cover_media_type: "image/jpeg".into(),
+            subjects: Vec::new(),
+        },
+        chapters: vec![Chapter {
+            title: "第一章".into(),
+            html_body: format!("<h1>第一章</h1><p>{long}</p><h2>第一节</h2><p>{long}</p>"),
+            level: 1,
+        }],
         resources: vec![],
         nav: vec![],
     };
@@ -55,18 +79,26 @@ pub fn sample_epub_with(title: &str, marker: &str) -> Vec<u8> {
 
 pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new(&mut out).encode_image(&image::RgbImage::from_pixel(w, h, image::Rgb([90, 90, 90]))).unwrap();
+    image::codecs::jpeg::JpegEncoder::new(&mut out)
+        .encode_image(&image::RgbImage::from_pixel(w, h, image::Rgb([90, 90, 90])))
+        .unwrap();
     out
 }
 
 /// 在 `lib` 书库上跑 `booklib <args>`（`lib` 为 `None` 时不加 `--library=`）。
 pub fn booklib(lib: Option<&Path>, args: &[&str]) -> Output {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"));
-    cmd.env("BOOKLIB_MTP_NO_MOUNT_CHECK", "1").env("BOOKLIB_NO_NET", "1").env_remove("BOOKLIB_USBMS_DIR"); // USB 存储在 MTP 目录下的 usbms/（见 `DeviceEnv`）
+    cmd.env("BOOKLIB_MTP_NO_MOUNT_CHECK", "1")
+        .env("BOOKLIB_NO_NET", "1")
+        .env_remove("BOOKLIB_USBMS_DIR"); // USB 存储在 MTP 目录下的 usbms/（见 `DeviceEnv`）
     if let Some(lib) = lib {
         cmd.arg(format!("--library={}", lib.display()));
         // 书库还没建（命令本身不该建出东西）时不建设备目录
-        let dev = if lib.exists() { dev_dir(lib) } else { PathBuf::from(format!("{}-dev", lib.display())) };
+        let dev = if lib.exists() {
+            dev_dir(lib)
+        } else {
+            PathBuf::from(format!("{}-dev", lib.display()))
+        };
         cmd.env("BOOKLIB_MTP_DIR", dev);
     } else {
         cmd.env("BOOKLIB_MTP_DIR", "/nonexistent-booklib-test");

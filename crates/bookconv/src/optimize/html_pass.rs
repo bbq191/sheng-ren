@@ -6,7 +6,8 @@ use crate::html;
 fn remote_src(tag: &str) -> Option<(html::Attr<'_>, String)> {
     let a = html::attr(tag, "src")?;
     let src = crate::util::xml_unescape(a.value).into_owned();
-    (src.starts_with("http://") || src.starts_with("https://") || src.starts_with("//")).then_some((a, src))
+    (src.starts_with("http://") || src.starts_with("https://") || src.starts_with("//"))
+        .then_some((a, src))
 }
 
 /// HTML 里的远程图（http(s)/协议相对 `//`）→ 抓取降采样内联进 EPUB：抓到→存进 zip（与本章同目录，src 改本地文件名，
@@ -31,19 +32,35 @@ where
     let tags: Vec<html::Tag> = html::tags(html_text).collect();
     // 先把这一章的远程图（去重）同时抓回来（每张超时 15 秒，以前一张一张抓，图多的书要几分钟；2026-10-09 审计），
     // 再按出现顺序起名、改写——结果和逐张抓一样
-    let mut srcs: Vec<String> = tags.iter().filter(|t| t.is_start() && t.is("img")).filter_map(|t| remote_src(&html_text[t.start..t.end]).map(|(_, s)| s)).collect();
+    let mut srcs: Vec<String> = tags
+        .iter()
+        .filter(|t| t.is_start() && t.is("img"))
+        .filter_map(|t| remote_src(&html_text[t.start..t.end]).map(|(_, s)| s))
+        .collect();
     srcs.sort();
     srcs.dedup();
     let fetched: HashMap<&str, Option<(Vec<u8>, &'static str)>> = fetch_all(&srcs, &fetch);
-    for (k, t) in tags.iter().enumerate().filter(|(_, t)| t.is_start() && t.is("img")) {
-        let Some((a, src)) = remote_src(&html_text[t.start..t.end]) else { continue };
+    for (k, t) in tags
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.is_start() && t.is("img"))
+    {
+        let Some((a, src)) = remote_src(&html_text[t.start..t.end]) else {
+            continue;
+        };
         let Some((bytes, ext)) = fetched.get(src.as_str()).cloned().flatten() else {
             if !drop_failed {
                 continue;
             }
             // 抓不到 → 删掉（写成 `<img …></img>` 的连闭合标签一起删）
             let end = match tags.get(k + 1) {
-                Some(c) if t.kind == html::TagKind::Open && c.kind == html::TagKind::Close && c.is("img") => c.end,
+                Some(c)
+                    if t.kind == html::TagKind::Open
+                        && c.kind == html::TagKind::Close
+                        && c.is("img") =>
+                {
+                    c.end
+                }
                 _ => t.end,
             };
             edits.push((t.start, end, String::new()));
@@ -52,7 +69,11 @@ where
         let (fname, path) = loop {
             let fname = format!("remote_img_{}.{ext}", *counter);
             *counter += 1;
-            let path = if chap_dir.is_empty() { fname.clone() } else { format!("{chap_dir}/{fname}") };
+            let path = if chap_dir.is_empty() {
+                fname.clone()
+            } else {
+                format!("{chap_dir}/{fname}")
+            };
             if taken.insert(path.clone()) {
                 break (fname, path);
             }
@@ -70,7 +91,10 @@ where
 const FETCH_LANES: usize = 4;
 
 /// 把 `srcs` 各抓一次（最多 [`FETCH_LANES`] 路同时抓）：地址 → 结果。
-fn fetch_all<'s, F>(srcs: &'s [String], fetch: &F) -> HashMap<&'s str, Option<(Vec<u8>, &'static str)>>
+fn fetch_all<'s, F>(
+    srcs: &'s [String],
+    fetch: &F,
+) -> HashMap<&'s str, Option<(Vec<u8>, &'static str)>>
 where
     F: Fn(&str) -> Option<(Vec<u8>, &'static str)> + Sync,
 {
@@ -85,7 +109,9 @@ where
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(s) = srcs.get(i) else { break };
                 let r = fetch(s);
-                out.lock().unwrap_or_else(|e| e.into_inner()).insert(s.as_str(), r);
+                out.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(s.as_str(), r);
             });
         }
     });
@@ -94,7 +120,8 @@ where
 
 /// 章节里有没有远程图（与 [`inline_remote_images`] 同一判据的快速预扫，只决定要不要推迟写 OPF）。
 pub(super) fn has_remote_img(html_text: &str) -> bool {
-    html::tags(html_text).any(|t| t.is_start() && t.is("img") && remote_src(&html_text[t.start..t.end]).is_some())
+    html::tags(html_text)
+        .any(|t| t.is_start() && t.is("img") && remote_src(&html_text[t.start..t.end]).is_some())
 }
 
 /// 把抓到的远程图补进 OPF manifest（`wash::opf::insert_manifest_items`：插在 `</manifest>` 前，跟着 manifest 的命名空间前缀）。
@@ -102,7 +129,10 @@ pub(super) fn has_remote_img(html_text: &str) -> bool {
 /// 没有 `</manifest>` 时原样返回。
 pub(super) fn add_manifest_items(opf: &str, opf_path: &str, imgs: &[(String, Vec<u8>)]) -> String {
     let dir = crate::epubzip::dir_of(opf_path);
-    let existing: HashSet<&str> = crate::wash::manifest_items(opf).iter().map(|i| i.id).collect();
+    let existing: HashSet<&str> = crate::wash::manifest_items(opf)
+        .iter()
+        .map(|i| i.id)
+        .collect();
     let mut n = 0usize;
     let specs: Vec<(String, String, &'static str)> = imgs
         .iter()
@@ -114,10 +144,22 @@ pub(super) fn add_manifest_items(opf: &str, opf_path: &str, imgs: &[(String, Vec
                     break id;
                 }
             };
-            (id, crate::epubzip::href_to(dir, path, ""), crate::util::image_media_type_of_ext(&crate::util::image_ext_of(path)))
+            (
+                id,
+                crate::epubzip::href_to(dir, path, ""),
+                crate::util::image_media_type_of_ext(&crate::util::image_ext_of(path)),
+            )
         })
         .collect();
-    let items: Vec<crate::wash::opf::NewItem> = specs.iter().map(|(id, href, mt)| crate::wash::opf::NewItem { id, href, media_type: mt, properties: "" }).collect();
+    let items: Vec<crate::wash::opf::NewItem> = specs
+        .iter()
+        .map(|(id, href, mt)| crate::wash::opf::NewItem {
+            id,
+            href,
+            media_type: mt,
+            properties: "",
+        })
+        .collect();
     crate::wash::opf::insert_manifest_items(opf, &items).unwrap_or_else(|| opf.to_string())
 }
 
@@ -126,15 +168,27 @@ pub(super) fn add_manifest_items(opf: &str, opf_path: &str, imgs: &[(String, Vec
 ///
 /// 为什么不改名：改名要把全书 xhtml 的 `src`、SVG 的 `href`、CSS 的 `url()`、OPF、NCX 里指向它的链接都改掉，漏一处图就丢；
 /// EPUB 按 manifest 的 media-type 认图片格式，不看扩展名。
-pub(super) fn set_manifest_media_types(opf: &str, opf_path: &str, retyped: &[(String, &'static str)]) -> String {
+pub(super) fn set_manifest_media_types(
+    opf: &str,
+    opf_path: &str,
+    retyped: &[(String, &'static str)],
+) -> String {
     let dir = crate::epubzip::dir_of(opf_path);
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for it in crate::wash::manifest_items(opf) {
         let path = it.path(dir);
-        let Some((_, mt)) = retyped.iter().find(|(p, _)| *p == path) else { continue };
-        let Some(a) = html::attr(it.tag, "media-type") else { continue };
+        let Some((_, mt)) = retyped.iter().find(|(p, _)| *p == path) else {
+            continue;
+        };
+        let Some(a) = html::attr(it.tag, "media-type") else {
+            continue;
+        };
         if a.value != *mt {
-            edits.push((it.pos + a.value_start, it.pos + a.value_end, (*mt).to_string()));
+            edits.push((
+                it.pos + a.value_start,
+                it.pos + a.value_end,
+                (*mt).to_string(),
+            ));
         }
     }
     if edits.is_empty() {
@@ -144,9 +198,13 @@ pub(super) fn set_manifest_media_types(opf: &str, opf_path: &str, retyped: &[(St
 }
 
 /// 生产抓图闭包：`//`→https、Referer=图自身 origin（满足多数 CDN 同源防盗链）、抓取+降采样（`screen` 为 `None` 时不缩，原图）。
-pub(super) fn remote_img_fetcher(ag: &ureq::Agent, screen: Option<crate::imgopt::Screen>) -> impl Fn(&str) -> Option<(Vec<u8>, &'static str)> + '_ {
+pub(super) fn remote_img_fetcher(
+    ag: &ureq::Agent,
+    screen: Option<crate::imgopt::Screen>,
+) -> impl Fn(&str) -> Option<(Vec<u8>, &'static str)> + '_ {
     move |src: &str| {
-        crate::netimg::fetch_image(ag, src, &crate::netimg::origin_of(src), screen).map(|(b, ext, _mime)| (b, ext))
+        crate::netimg::fetch_image(ag, src, &crate::netimg::origin_of(src), screen)
+            .map(|(b, ext, _mime)| (b, ext))
     }
 }
 
@@ -159,8 +217,18 @@ pub(super) fn fix_cover_aspect(html_text: &str) -> String {
     }
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for t in html::tags(html_text).filter(|t| t.is_start()) {
-        for a in html::attrs(&html_text[t.start..t.end]).into_iter().filter(|a| a.is("preserveAspectRatio") && a.value == "none") {
-            edits.push((t.start + a.start, t.start + a.end, format!("preserveAspectRatio={q}xMidYMid meet{q}", q = a.quote.unwrap_or('"'))));
+        for a in html::attrs(&html_text[t.start..t.end])
+            .into_iter()
+            .filter(|a| a.is("preserveAspectRatio") && a.value == "none")
+        {
+            edits.push((
+                t.start + a.start,
+                t.start + a.end,
+                format!(
+                    "preserveAspectRatio={q}xMidYMid meet{q}",
+                    q = a.quote.unwrap_or('"')
+                ),
+            ));
         }
     }
     if edits.is_empty() {
@@ -191,19 +259,47 @@ pub(super) fn svg_cover_to_img(html_text: &str) -> String {
         }
         false
     };
-    let svgs: Vec<usize> = (0..spans.len()).filter(|&i| is_local(&spans[i].name, "svg") && spans[i].closed() && !in_svg(spans[i].parent)).collect();
-    let [si] = svgs[..] else { return html_text.to_string() };
+    let svgs: Vec<usize> = (0..spans.len())
+        .filter(|&i| {
+            is_local(&spans[i].name, "svg") && spans[i].closed() && !in_svg(spans[i].parent)
+        })
+        .collect();
+    let [si] = svgs[..] else {
+        return html_text.to_string();
+    };
     let svg = &spans[si];
-    let images: Vec<&html::Span> = spans.iter().filter(|s| is_local(&s.name, "image") && s.open_start >= svg.open_end && s.open_start < svg.close_start).collect();
-    let [img] = images[..] else { return html_text.to_string() };
-    let visible_outside = html::has_visible(&html_text[lo..svg.open_start]) || html::has_visible(&html_text[svg.close_end..hi]);
+    let images: Vec<&html::Span> = spans
+        .iter()
+        .filter(|s| {
+            is_local(&s.name, "image")
+                && s.open_start >= svg.open_end
+                && s.open_start < svg.close_start
+        })
+        .collect();
+    let [img] = images[..] else {
+        return html_text.to_string();
+    };
+    let visible_outside = html::has_visible(&html_text[lo..svg.open_start])
+        || html::has_visible(&html_text[svg.close_end..hi]);
     if visible_outside || !html::plain_text(&html_text[svg.open_end..svg.close_start]).is_empty() {
         return html_text.to_string();
     }
     let tag = &html_text[img.open_start..img.open_end];
-    let Some(href) = html::attr_value(tag, "xlink:href").or_else(|| html::attr_value(tag, "href")).filter(|v| !v.is_empty()) else { return html_text.to_string() };
-    let new = format!(r#"<img src="{}" alt="cover" style="display:block;margin:0 auto;max-width:100%;height:auto;"/>"#, href.replace('"', "&quot;"));
-    format!("{}{new}{}", &html_text[..svg.open_start], &html_text[svg.close_end..])
+    let Some(href) = html::attr_value(tag, "xlink:href")
+        .or_else(|| html::attr_value(tag, "href"))
+        .filter(|v| !v.is_empty())
+    else {
+        return html_text.to_string();
+    };
+    let new = format!(
+        r#"<img src="{}" alt="cover" style="display:block;margin:0 auto;max-width:100%;height:auto;"/>"#,
+        href.replace('"', "&quot;")
+    );
+    format!(
+        "{}{new}{}",
+        &html_text[..svg.open_start],
+        &html_text[svg.close_end..]
+    )
 }
 
 /// 第一遍 html 处理：归一同文件 href（part0004.html#x 写在 part0004.html 里→改裸锚 #x，否则下面
@@ -219,17 +315,39 @@ pub(super) fn first_pass_html(text: &str, name: &str, keep_fonts: &HashSet<Strin
 /// `flatten`：正文图合成白底（[`crate::imgalpha`]）——先合成再缩（带透明的图缩放时透明处的颜色会渗进边缘）。
 /// `max_px`：解码上限（`OptimizeOpts::limits.max_decode_pixels`），超过的图原样保留。`comic`：漫画页排版以外的处理（伽马、拉满对比度、杂点、页码，[`crate::imgopt::ComicPage`]）。
 #[allow(clippy::too_many_arguments)]
-pub(super) fn transform_image_bytes(bytes: &[u8], is_comic_book: bool, screen: crate::imgopt::Screen, comic_margin: u32, grayscale: bool, comic: crate::imgopt::ComicPage, bg: Option<crate::bgfit::BgFit>, flatten: bool, max_px: u64) -> Option<Vec<u8>> {
+pub(super) fn transform_image_bytes(
+    bytes: &[u8],
+    is_comic_book: bool,
+    screen: crate::imgopt::Screen,
+    comic_margin: u32,
+    grayscale: bool,
+    comic: crate::imgopt::ComicPage,
+    bg: Option<crate::bgfit::BgFit>,
+    flatten: bool,
+    max_px: u64,
+) -> Option<Vec<u8>> {
     crate::imgopt::guard(|| {
-        if let Some(flat) = flatten.then(|| crate::imgopt::flatten_transparent_png(bytes, max_px)).flatten() {
-            return Some(crate::imgopt::downscale_for_epub_limited(&flat, screen, max_px).unwrap_or(flat));
+        if let Some(flat) = flatten
+            .then(|| crate::imgopt::flatten_transparent_png(bytes, max_px))
+            .flatten()
+        {
+            return Some(
+                crate::imgopt::downscale_for_epub_limited(&flat, screen, max_px).unwrap_or(flat),
+            );
         }
         if let Some(fit) = bg {
             // 整页背景图：按原书尺寸意图缩，不再按普通插图缩（见 `bgfit`）
             crate::imgopt::downscale_background(bytes, fit, screen, max_px)
         } else if is_comic_book {
             // 单趟（解码/编码各一次、灰度保持、缩放走 SIMD），见 `prepare_comic_page_for_epub`。
-            crate::imgopt::prepare_comic_page_limited(bytes, screen, comic_margin, grayscale, comic, max_px)
+            crate::imgopt::prepare_comic_page_limited(
+                bytes,
+                screen,
+                comic_margin,
+                grayscale,
+                comic,
+                max_px,
+            )
         } else {
             crate::imgopt::downscale_for_epub_limited(bytes, screen, max_px)
         }

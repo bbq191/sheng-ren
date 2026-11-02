@@ -26,7 +26,9 @@ pub fn plan(entries: &[(String, Vec<u8>, bool)]) -> HashSet<String> {
     // 各条目独立扫（多线程，`util::par_map`）：(正文用到的图, CSS 引用的图)，再并起来
     let per_entry = crate::util::par_map(entries, |(name, data, ish)| {
         let (mut imgs, mut css) = (Vec::new(), Vec::new());
-        let Ok(text) = std::str::from_utf8(data) else { return (imgs, css) };
+        let Ok(text) = std::str::from_utf8(data) else {
+            return (imgs, css);
+        };
         if name.to_ascii_lowercase().ends_with(".css") {
             css_urls(text, name, &mut css);
         } else if *ish {
@@ -40,7 +42,12 @@ pub fn plan(entries: &[(String, Vec<u8>, bool)]) -> HashSet<String> {
                 }
                 let src = if t.is("img") {
                     html::attr_value(tag, "src")
-                } else if t.name.rsplit(':').next().is_some_and(|n| n.eq_ignore_ascii_case("image")) {
+                } else if t
+                    .name
+                    .rsplit(':')
+                    .next()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("image"))
+                {
                     html::attr_value(tag, "xlink:href").or_else(|| html::attr_value(tag, "href"))
                 } else {
                     None
@@ -73,7 +80,11 @@ mod tests {
     #[test]
     fn img_used_only_as_image() {
         let entries = vec![
-            e("OEBPS/Styles/a.css", r#"body.x{background:url("../Images/bg.png")} .y{background-image:url(../Images/both.png)}"#, false),
+            e(
+                "OEBPS/Styles/a.css",
+                r#"body.x{background:url("../Images/bg.png")} .y{background-image:url(../Images/both.png)}"#,
+                false,
+            ),
             e(
                 "OEBPS/Text/c.xhtml",
                 r#"<html><head><style>p{background:url('../Images/st.png')}</style></head><body>
@@ -86,6 +97,13 @@ mod tests {
         let mut got: Vec<String> = plan(&entries).into_iter().collect();
         got.sort();
         // JPEG 也在里面：合成时按文件内容认格式，只处理 PNG
-        assert_eq!(got, ["OEBPS/Images/logo.png", "OEBPS/Images/p.jpg", "OEBPS/Images/svg.png"]);
+        assert_eq!(
+            got,
+            [
+                "OEBPS/Images/logo.png",
+                "OEBPS/Images/p.jpg",
+                "OEBPS/Images/svg.png"
+            ]
+        );
     }
 }

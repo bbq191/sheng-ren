@@ -33,8 +33,20 @@ pub fn run(args: &[String]) {
             let Some(lib) = open() else { return };
             let root = lib.books_root();
             for e in lib.tracked_entries() {
-                let shown = root.as_ref().and_then(|r| e.path.strip_prefix(r).ok()).filter(|r| !r.as_os_str().is_empty()).unwrap_or(&e.path);
-                println!("{}\t{}", shown.display(), if e.file { "跟踪的书" } else { "跟踪的目录" });
+                let shown = root
+                    .as_ref()
+                    .and_then(|r| e.path.strip_prefix(r).ok())
+                    .filter(|r| !r.as_os_str().is_empty())
+                    .unwrap_or(&e.path);
+                println!(
+                    "{}\t{}",
+                    shown.display(),
+                    if e.file {
+                        "跟踪的书"
+                    } else {
+                        "跟踪的目录"
+                    }
+                );
             }
         }
         _ => {}
@@ -61,13 +73,17 @@ fn paths(tok: &str, root: Option<&Path>) -> Vec<(String, &'static str)> {
         _ => PathBuf::from(dir),
     };
     let mut bases = vec![(here, "目录", "书")];
-    if let Some(r) = root.filter(|_| !(tok.starts_with('/') || tok.starts_with('~') || tok.starts_with("./"))) {
+    if let Some(r) =
+        root.filter(|_| !(tok.starts_with('/') || tok.starts_with('~') || tok.starts_with("./")))
+    {
         bases.push((r.join(dir), "书根目录下的目录", "书根目录下的书"));
     }
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for (base, dir_desc, book_desc) in bases {
-        let Ok(rd) = std::fs::read_dir(&base) else { continue };
+        let Ok(rd) = std::fs::read_dir(&base) else {
+            continue;
+        };
         let mut items: Vec<(String, &'static str)> = rd
             .flatten()
             .filter_map(|e| {
@@ -104,7 +120,11 @@ fn fish_script() -> String {
     );
     for c in COMMANDS {
         let when = q(&format!("__fish_seen_subcommand_from {}", c.name));
-        s += &format!("complete -c booklib -n __fish_use_subcommand -a {} -d {}\n", c.name, q(c.brief));
+        s += &format!(
+            "complete -c booklib -n __fish_use_subcommand -a {} -d {}\n",
+            c.name,
+            q(c.brief)
+        );
         for f in c.flags {
             // 既是开关又是选项的（sync --watch[=秒]）按选项写一次
             if !c.opts.contains(f) {
@@ -143,11 +163,20 @@ mod tests {
         std::fs::write(root.join("优秀漫画/说明.txt"), b"").unwrap();
         std::fs::write(root.join("优秀漫画/.隐藏.epub"), b"").unwrap();
         let got = paths("优秀漫画/", Some(&root));
-        assert_eq!(got, vec![("优秀漫画/死亡筆記/".to_string(), "书根目录下的目录"), ("优秀漫画/罗杰疑案.epub".to_string(), "书根目录下的书")]);
+        assert_eq!(
+            got,
+            vec![
+                ("优秀漫画/死亡筆記/".to_string(), "书根目录下的目录"),
+                ("优秀漫画/罗杰疑案.epub".to_string(), "书根目录下的书")
+            ]
+        );
         assert_eq!(paths("优秀漫画/死", Some(&root)).len(), 1);
         // 绝对路径只按它本身找
         let abs = format!("{}/优秀漫画/罗", root.display());
-        assert_eq!(paths(&abs, Some(&root)), vec![(format!("{}/优秀漫画/罗杰疑案.epub", root.display()), "书")]);
+        assert_eq!(
+            paths(&abs, Some(&root)),
+            vec![(format!("{}/优秀漫画/罗杰疑案.epub", root.display()), "书")]
+        );
     }
 
     #[test]
@@ -156,7 +185,11 @@ mod tests {
         for c in COMMANDS {
             assert!(s.contains(&format!("-a {} -d", c.name)), "{}", c.name);
         }
-        assert!(s.contains("__complete paths") && s.contains("__complete tracked") && s.contains("__complete devices"));
+        assert!(
+            s.contains("__complete paths")
+                && s.contains("__complete tracked")
+                && s.contains("__complete devices")
+        );
         assert_eq!(s.matches("-l watch").count(), 1);
     }
 }

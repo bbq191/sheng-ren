@@ -31,7 +31,11 @@ pub enum Unlock {
 /// `keep_fonts`：保留的字体（规范化的名字，见 `wash::fonts::norm_family`）；`font-family` 的第一个字体在里面就保留。
 pub fn unlock(prop: &str, value: &str, base_text: bool, keep_fonts: &HashSet<String>) -> Unlock {
     match prop.to_ascii_lowercase().as_str() {
-        "font-family" if crate::wash::fonts::norm_family(value).is_some_and(|f| keep_fonts.contains(&f)) => Unlock::Keep,
+        "font-family"
+            if crate::wash::fonts::norm_family(value).is_some_and(|f| keep_fonts.contains(&f)) =>
+        {
+            Unlock::Keep
+        }
         "font-family" | "line-height" | "background-image" => Unlock::Drop,
         "font-size" => {
             if !base_text && is_relative_size(value) {
@@ -62,7 +66,10 @@ pub fn unlock(prop: &str, value: &str, base_text: bool, keep_fonts: &HashSet<Str
 pub fn is_relative_size(value: &str) -> bool {
     let (v, _) = split_important(value);
     let l = v.to_ascii_lowercase();
-    if matches!(l.as_str(), "smaller" | "larger" | "inherit" | "initial" | "unset" | "revert") {
+    if matches!(
+        l.as_str(),
+        "smaller" | "larger" | "inherit" | "initial" | "unset" | "revert"
+    ) {
         return true;
     }
     let mut saw_number = false;
@@ -101,7 +108,9 @@ fn font_shorthand_style(value: &str) -> Vec<String> {
             "bold" | "bolder" | "lighter" => ("font-weight", tok),
             "small-caps" => ("font-variant", tok),
             "normal" => continue,
-            _ if t.len() == 3 && t.ends_with("00") && t.as_bytes()[0].is_ascii_digit() => ("font-weight", tok),
+            _ if t.len() == 3 && t.ends_with("00") && t.as_bytes()[0].is_ascii_digit() => {
+                ("font-weight", tok)
+            }
             _ => break, // 到字号（或系统字体关键字）了：后面是字号、行高、字体
         };
         out.push(format!("{}:{}{important}", decl.0, decl.1));
@@ -120,7 +129,9 @@ pub(crate) fn rgba_to_opaque(decls: &str) -> std::borrow::Cow<'_, str> {
     });
     RGBA.replace_all(decls, |c: &regex::Captures| {
         let ch = |k: usize| c[k].parse::<u32>().ok().filter(|v| *v <= 255);
-        let (Some(r), Some(g), Some(b), Ok(a)) = (ch(1), ch(2), ch(3), c[4].parse::<f64>()) else { return c[0].to_string() };
+        let (Some(r), Some(g), Some(b), Ok(a)) = (ch(1), ch(2), ch(3), c[4].parse::<f64>()) else {
+            return c[0].to_string();
+        };
         let a = if c.get(5).is_some() { a / 100.0 } else { a };
         if a <= 0.0 {
             return "transparent".to_string();
@@ -135,15 +146,40 @@ pub(crate) fn background_color(value: &str) -> Option<String> {
     let (v, important) = split_important(value);
     let (toks, _) = crate::cascade::tokens(v);
     const NOT_COLOR: &[&str] = &[
-        "none", "repeat", "no-repeat", "repeat-x", "repeat-y", "space", "round", "left", "right", "top", "bottom", "center", "fixed",
-        "scroll", "local", "cover", "contain", "auto", "border-box", "padding-box", "content-box", "text", "inherit", "initial", "unset",
+        "none",
+        "repeat",
+        "no-repeat",
+        "repeat-x",
+        "repeat-y",
+        "space",
+        "round",
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "center",
+        "fixed",
+        "scroll",
+        "local",
+        "cover",
+        "contain",
+        "auto",
+        "border-box",
+        "padding-box",
+        "content-box",
+        "text",
+        "inherit",
+        "initial",
+        "unset",
         "revert",
     ];
     toks.into_iter()
         .find(|t| {
             let l = t.to_ascii_lowercase();
             l.starts_with('#')
-                || ["rgb(", "rgba(", "hsl(", "hsla("].iter().any(|p| l.starts_with(p))
+                || ["rgb(", "rgba(", "hsl(", "hsla("]
+                    .iter()
+                    .any(|p| l.starts_with(p))
                 || (l.chars().all(|c| c.is_ascii_alphabetic()) && !NOT_COLOR.contains(&l.as_str()))
         })
         .map(|c| format!("{c}{important}"))
@@ -156,79 +192,227 @@ mod tests {
     #[test]
     fn background_shorthand_split_for_readers() {
         assert_eq!(
-            background_longhands(r#"url("../Images/jsy.png") bottom / cover no-repeat fixed rgba(117, 0, 0, 1)"#, false),
-            [r#"background-image:url("../Images/jsy.png")"#, "background-repeat:no-repeat", "background-color:rgba(117, 0, 0, 1)", "background-position:bottom"]
+            background_longhands(
+                r#"url("../Images/jsy.png") bottom / cover no-repeat fixed rgba(117, 0, 0, 1)"#,
+                false
+            ),
+            [
+                r#"background-image:url("../Images/jsy.png")"#,
+                "background-repeat:no-repeat",
+                "background-color:rgba(117, 0, 0, 1)",
+                "background-position:bottom"
+            ]
         );
-        assert_eq!(background_longhands("url(a.png) no-repeat fixed #111", false), ["background-image:url(a.png)", "background-repeat:no-repeat", "background-color:#111"]);
+        assert_eq!(
+            background_longhands("url(a.png) no-repeat fixed #111", false),
+            [
+                "background-image:url(a.png)",
+                "background-repeat:no-repeat",
+                "background-color:#111"
+            ]
+        );
         assert_eq!(
             background_longhands("linear-gradient(to bottom, #fff 0%, #eee 100%) #ddd", false),
-            ["background-image:linear-gradient(to bottom, #fff 0%, #eee 100%)", "background-color:#ddd"],
+            [
+                "background-image:linear-gradient(to bottom, #fff 0%, #eee 100%)",
+                "background-color:#ddd"
+            ],
             "渐变是背景图，不是背景色"
         );
-        assert_eq!(background_longhands("-webkit-repeating-linear-gradient(red, blue)", false), ["background-image:-webkit-repeating-linear-gradient(red, blue)"]);
+        assert_eq!(
+            background_longhands("-webkit-repeating-linear-gradient(red, blue)", false),
+            ["background-image:-webkit-repeating-linear-gradient(red, blue)"]
+        );
         assert_eq!(
             background_longhands("url(a.png) bottom / 100% no-repeat fixed #111", true),
-            ["background-image:url(a.png)", "background-repeat:no-repeat", "background-attachment:fixed", "background-color:#111", "background-position:bottom", "background-size:100%"]
+            [
+                "background-image:url(a.png)",
+                "background-repeat:no-repeat",
+                "background-attachment:fixed",
+                "background-color:#111",
+                "background-position:bottom",
+                "background-size:100%"
+            ]
         );
     }
 
     #[test]
     fn font_size_relative_kept_absolute_dropped() {
-        for v in ["0.8em", "120%", "1.2rem", "smaller", "larger", "calc(1em + 10%)", "0.9em !important"] {
-            assert_eq!(unlock("font-size", v, false, &HashSet::new()), Unlock::Keep, "{v}");
+        for v in [
+            "0.8em",
+            "120%",
+            "1.2rem",
+            "smaller",
+            "larger",
+            "calc(1em + 10%)",
+            "0.9em !important",
+        ] {
+            assert_eq!(
+                unlock("font-size", v, false, &HashSet::new()),
+                Unlock::Keep,
+                "{v}"
+            );
         }
-        for v in ["12px", "10.5pt", "medium", "x-large", "calc(1em + 2px)", "0", "small"] {
-            assert_eq!(unlock("font-size", v, false, &HashSet::new()), Unlock::Drop, "{v}");
+        for v in [
+            "12px",
+            "10.5pt",
+            "medium",
+            "x-large",
+            "calc(1em + 2px)",
+            "0",
+            "small",
+        ] {
+            assert_eq!(
+                unlock("font-size", v, false, &HashSet::new()),
+                Unlock::Drop,
+                "{v}"
+            );
         }
-        assert_eq!(unlock("font-size", "0.9em", true, &HashSet::new()), Unlock::Drop, "正文整体那一层的相对字号也去掉");
+        assert_eq!(
+            unlock("font-size", "0.9em", true, &HashSet::new()),
+            Unlock::Drop,
+            "正文整体那一层的相对字号也去掉"
+        );
     }
 
     #[test]
     fn font_family_kept_only_when_in_keep_set() {
         let keep: HashSet<String> = ["letter".to_string()].into();
-        assert_eq!(unlock("font-family", "\"letter\", serif", false, &keep), Unlock::Keep);
-        assert_eq!(unlock("font-family", "'Letter' !important", false, &keep), Unlock::Keep, "大小写、引号、!important 不影响");
-        assert_eq!(unlock("font-family", "\"宋体\"", false, &keep), Unlock::Drop);
-        assert_eq!(unlock("font-family", "serif, letter", false, &keep), Unlock::Drop, "只看第一个字体");
+        assert_eq!(
+            unlock("font-family", "\"letter\", serif", false, &keep),
+            Unlock::Keep
+        );
+        assert_eq!(
+            unlock("font-family", "'Letter' !important", false, &keep),
+            Unlock::Keep,
+            "大小写、引号、!important 不影响"
+        );
+        assert_eq!(
+            unlock("font-family", "\"宋体\"", false, &keep),
+            Unlock::Drop
+        );
+        assert_eq!(
+            unlock("font-family", "serif, letter", false, &keep),
+            Unlock::Drop,
+            "只看第一个字体"
+        );
     }
 
     #[test]
     fn font_shorthand_keeps_style_and_weight() {
         assert_eq!(
-            unlock("font", "italic bold 12px/30px Georgia, serif", false, &HashSet::new()),
+            unlock(
+                "font",
+                "italic bold 12px/30px Georgia, serif",
+                false,
+                &HashSet::new()
+            ),
             Unlock::Replace(vec!["font-style:italic".into(), "font-weight:bold".into()])
         );
-        assert_eq!(unlock("font", "700 1em \"Foo\" !important", false, &HashSet::new()), Unlock::Replace(vec!["font-weight:700 !important".into()]));
-        assert_eq!(unlock("font", "normal small-caps 10pt serif", false, &HashSet::new()), Unlock::Replace(vec!["font-variant:small-caps".into()]));
-        assert_eq!(unlock("font", "12px serif", false, &HashSet::new()), Unlock::Drop);
-        assert_eq!(unlock("font", "caption", false, &HashSet::new()), Unlock::Drop);
+        assert_eq!(
+            unlock("font", "700 1em \"Foo\" !important", false, &HashSet::new()),
+            Unlock::Replace(vec!["font-weight:700 !important".into()])
+        );
+        assert_eq!(
+            unlock(
+                "font",
+                "normal small-caps 10pt serif",
+                false,
+                &HashSet::new()
+            ),
+            Unlock::Replace(vec!["font-variant:small-caps".into()])
+        );
+        assert_eq!(
+            unlock("font", "12px serif", false, &HashSet::new()),
+            Unlock::Drop
+        );
+        assert_eq!(
+            unlock("font", "caption", false, &HashSet::new()),
+            Unlock::Drop
+        );
     }
 
     #[test]
     fn background_keeps_only_color() {
-        assert_eq!(unlock("background", "url(a.png) no-repeat #eee", false, &HashSet::new()), Unlock::Replace(vec!["background-color:#eee".into()]));
-        assert_eq!(unlock("background", "rgb(0, 0, 0) url(\"x y.png\")", false, &HashSet::new()), Unlock::Replace(vec!["background-color:rgb(0, 0, 0)".into()]));
-        assert_eq!(unlock("background", "LightYellow", false, &HashSet::new()), Unlock::Replace(vec!["background-color:LightYellow".into()]));
-        assert_eq!(unlock("background", "url(a.png) no-repeat center", false, &HashSet::new()), Unlock::Drop);
-        assert_eq!(unlock("background", "none", false, &HashSet::new()), Unlock::Drop);
-        assert_eq!(unlock("background-image", "url(a.png)", false, &HashSet::new()), Unlock::Drop);
+        assert_eq!(
+            unlock(
+                "background",
+                "url(a.png) no-repeat #eee",
+                false,
+                &HashSet::new()
+            ),
+            Unlock::Replace(vec!["background-color:#eee".into()])
+        );
+        assert_eq!(
+            unlock(
+                "background",
+                "rgb(0, 0, 0) url(\"x y.png\")",
+                false,
+                &HashSet::new()
+            ),
+            Unlock::Replace(vec!["background-color:rgb(0, 0, 0)".into()])
+        );
+        assert_eq!(
+            unlock("background", "LightYellow", false, &HashSet::new()),
+            Unlock::Replace(vec!["background-color:LightYellow".into()])
+        );
+        assert_eq!(
+            unlock(
+                "background",
+                "url(a.png) no-repeat center",
+                false,
+                &HashSet::new()
+            ),
+            Unlock::Drop
+        );
+        assert_eq!(
+            unlock("background", "none", false, &HashSet::new()),
+            Unlock::Drop
+        );
+        assert_eq!(
+            unlock("background-image", "url(a.png)", false, &HashSet::new()),
+            Unlock::Drop
+        );
     }
 
     #[test]
     fn other_listed_props_dropped() {
-        assert_eq!(unlock("font-weight", "bold", false, &HashSet::new()), Unlock::Drop, "调用方额外加进清单的属性整条去掉");
-        assert_eq!(unlock("font-family", "Foo", false, &HashSet::new()), Unlock::Drop);
-        assert_eq!(unlock("line-height", "1.5", false, &HashSet::new()), Unlock::Drop);
+        assert_eq!(
+            unlock("font-weight", "bold", false, &HashSet::new()),
+            Unlock::Drop,
+            "调用方额外加进清单的属性整条去掉"
+        );
+        assert_eq!(
+            unlock("font-family", "Foo", false, &HashSet::new()),
+            Unlock::Drop
+        );
+        assert_eq!(
+            unlock("line-height", "1.5", false, &HashSet::new()),
+            Unlock::Drop
+        );
     }
 
     #[test]
     fn rgba_becomes_opaque_hex_for_readers_without_rgba() {
         use super::rgba_to_opaque as f;
-        assert_eq!(f("background-color:rgba(117, 0, 0, 1);color:RGBA(255,255,255,1)"), "background-color:#750000;color:#ffffff");
+        assert_eq!(
+            f("background-color:rgba(117, 0, 0, 1);color:RGBA(255,255,255,1)"),
+            "background-color:#750000;color:#ffffff"
+        );
         assert_eq!(f("color:rgba(0,0,0,0)"), "color:transparent");
-        assert_eq!(f("background-color:rgba(204, 194, 188, 0.8)"), "background-color:#d6cec9", "半透明按白底混合");
+        assert_eq!(
+            f("background-color:rgba(204, 194, 188, 0.8)"),
+            "background-color:#d6cec9",
+            "半透明按白底混合"
+        );
         assert_eq!(f("color:rgba(0,0,0,50%)"), "color:#808080");
-        for keep in ["color:rgba(10%,0,0,1)", "color:rgba(0 0 0 / 1)", "color:rgb(1,2,3)", "color:#123", "color:rgba(300,0,0,1)"] {
+        for keep in [
+            "color:rgba(10%,0,0,1)",
+            "color:rgba(0 0 0 / 1)",
+            "color:rgb(1,2,3)",
+            "color:#123",
+            "color:rgba(300,0,0,1)",
+        ] {
             assert_eq!(f(keep), keep, "认不准的、本来就认的不动");
         }
     }

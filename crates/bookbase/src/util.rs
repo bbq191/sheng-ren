@@ -3,7 +3,10 @@
 
 /// 现在的 UTC 时间，写成 `2026-09-30T08:05:09Z`（EPUB 3 的 `dcterms:modified` 格式）。
 pub fn utc_now_w3c() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     utc_w3c(secs)
 }
 
@@ -19,7 +22,12 @@ pub fn utc_w3c(secs: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 /// XML/XHTML 文本与属性通用转义：`& < > "`（转义 `"` 对文本无害、对属性必需，故一个函数通吃）。
@@ -61,24 +69,29 @@ pub fn xml_unescape(s: &str) -> std::borrow::Cow<'_, str> {
         rest = &rest[i..];
         // 只在 `&` 后面 12 字节内找 `;`（最长的字符引用 `&#x10FFFF;` 也够）：此前 `find` 一路找到文末，裸 `&` 多、`;` 少的
         // 长文本是平方级。
-        let decoded = rest.as_bytes().iter().take(13).position(|&b| b == b';').and_then(|j| {
-            let ent = &rest[1..j];
-            let c = match ent {
-                "amp" => Some('&'),
-                "lt" => Some('<'),
-                "gt" => Some('>'),
-                "quot" => Some('"'),
-                "apos" => Some('\''),
-                _ => ent
-                    .strip_prefix("#x")
-                    .or_else(|| ent.strip_prefix("#X"))
-                    .map(|h| u32::from_str_radix(h, 16))
-                    .or_else(|| ent.strip_prefix('#').map(|d| d.parse::<u32>()))
-                    .and_then(|r| r.ok())
-                    .and_then(char::from_u32),
-            };
-            c.map(|c| (c, j + 1))
-        });
+        let decoded = rest
+            .as_bytes()
+            .iter()
+            .take(13)
+            .position(|&b| b == b';')
+            .and_then(|j| {
+                let ent = &rest[1..j];
+                let c = match ent {
+                    "amp" => Some('&'),
+                    "lt" => Some('<'),
+                    "gt" => Some('>'),
+                    "quot" => Some('"'),
+                    "apos" => Some('\''),
+                    _ => ent
+                        .strip_prefix("#x")
+                        .or_else(|| ent.strip_prefix("#X"))
+                        .map(|h| u32::from_str_radix(h, 16))
+                        .or_else(|| ent.strip_prefix('#').map(|d| d.parse::<u32>()))
+                        .and_then(|r| r.ok())
+                        .and_then(char::from_u32),
+                };
+                c.map(|c| (c, j + 1))
+            });
         match decoded {
             Some((c, len)) => {
                 out.push(c);
@@ -104,7 +117,11 @@ pub fn is_xml_char(c: char) -> bool {
 /// 优化器挑要处理的图（`imgopt::is_page_image`）共用。
 pub fn is_image_ext(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
-    l.ends_with(".jpg") || l.ends_with(".jpeg") || l.ends_with(".png") || l.ends_with(".gif") || l.ends_with(".webp")
+    l.ends_with(".jpg")
+        || l.ends_with(".jpeg")
+        || l.ends_with(".png")
+        || l.ends_with(".gif")
+        || l.ends_with(".webp")
 }
 
 /// 图片路径的扩展名（小写、不带点）：取**文件名**最后一个 `.` 之后；文件名没有扩展名时当 `jpg`（EPUB 里绝大多数图是
@@ -130,10 +147,26 @@ pub struct ImageKind {
 /// （[`image_media_type_of_ext`]）都用这一张表——此前魔数识别有三套（`convert::common`、`imgopt` 里的 `image::guess_format`、
 /// 这里按扩展名的），各写各的。
 const IMAGE_KINDS: [ImageKind; 4] = [
-    ImageKind { format: image::ImageFormat::Jpeg, ext: "jpg", mime: "image/jpeg" },
-    ImageKind { format: image::ImageFormat::Png, ext: "png", mime: "image/png" },
-    ImageKind { format: image::ImageFormat::Gif, ext: "gif", mime: "image/gif" },
-    ImageKind { format: image::ImageFormat::WebP, ext: "webp", mime: "image/webp" },
+    ImageKind {
+        format: image::ImageFormat::Jpeg,
+        ext: "jpg",
+        mime: "image/jpeg",
+    },
+    ImageKind {
+        format: image::ImageFormat::Png,
+        ext: "png",
+        mime: "image/png",
+    },
+    ImageKind {
+        format: image::ImageFormat::Gif,
+        ext: "gif",
+        mime: "image/gif",
+    },
+    ImageKind {
+        format: image::ImageFormat::WebP,
+        ext: "webp",
+        mime: "image/webp",
+    },
 ];
 
 /// 按文件头魔数认图片格式（JPEG `FF D8 FF`、PNG 8 字节签名、`GIF87a`/`GIF89a`、RIFF 容器里标 `WEBP`）；不认得 → `None`。
@@ -155,19 +188,30 @@ pub fn image_kind(b: &[u8]) -> Option<ImageKind> {
 
 /// 图片扩展名（不带点、小写）→ media-type；认不出的当 JPEG（EPUB 里绝大多数图是 JPEG）。
 pub fn image_media_type_of_ext(ext: &str) -> &'static str {
-    IMAGE_KINDS.iter().find(|k| k.ext == ext).map_or("image/jpeg", |k| k.mime)
+    IMAGE_KINDS
+        .iter()
+        .find(|k| k.ext == ext)
+        .map_or("image/jpeg", |k| k.mime)
 }
 
 /// 全角 ASCII（U+FF01–U+FF5E）转成对应的半角字符，其余不变。
 pub fn to_halfwidth(c: char) -> char {
-    if ('\u{FF01}'..='\u{FF5E}').contains(&c) { char::from_u32(c as u32 - 0xFEE0).unwrap_or(c) } else { c }
+    if ('\u{FF01}'..='\u{FF5E}').contains(&c) {
+        char::from_u32(c as u32 - 0xFEE0).unwrap_or(c)
+    } else {
+        c
+    }
 }
 
 /// "先产出到临时文件、成功才落盘改名覆盖目标、失败清掉半成品"的统一外壳（命令行工具和书库写文件都走它）。`produce(tmp)` 负责把产物写到 `tmp` 并返回任意结果（如统计报告）；
 /// 它出错或最后 `rename` 失败，`tmp` 都会被删掉，不在目录里留半成品。`tmp` 应与 `target` 同分区（rename 才原子）。
 /// 输入输出是同一个文件时也安全：产出期间原文件不动，改名那一刻才换掉。`produce` 中途 panic 时 `tmp` 也会删掉
 /// （以前只在返回错误时删，panic 一路展开出去，半成品留在目标旁边）。
-pub fn produce_then_replace<T>(tmp: &std::path::Path, target: &std::path::Path, produce: impl FnOnce(&std::path::Path) -> Result<T, String>) -> Result<T, String> {
+pub fn produce_then_replace<T>(
+    tmp: &std::path::Path,
+    target: &std::path::Path,
+    produce: impl FnOnce(&std::path::Path) -> Result<T, String>,
+) -> Result<T, String> {
     /// 没换到位就删掉临时文件（出错返回、panic 展开都走 `drop`）。
     struct Cleanup<'a>(&'a std::path::Path);
     impl Drop for Cleanup<'_> {
@@ -207,7 +251,9 @@ pub fn tmp_beside(target: &std::path::Path, tag: &str) -> std::path::PathBuf {
 
 /// 整份字节原子地写到 `target`（先写同目录临时文件再改名，失败不留半成品、不截断原文件）。
 pub fn write_atomic(target: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
-    produce_then_replace(&tmp_beside(target, "writing"), target, |t| std::fs::write(t, bytes).map_err(|e| format!("写 {}: {e}", target.display())))
+    produce_then_replace(&tmp_beside(target, "writing"), target, |t| {
+        std::fs::write(t, bytes).map_err(|e| format!("写 {}: {e}", target.display()))
+    })
 }
 
 /// 命令行工具（`bookconv` 的各个 bin）共用的样板：出错退出、读写文件、SIGPIPE。
@@ -236,7 +282,9 @@ pub mod cli {
     /// 打开文件按块读（给按读取器读 EPUB 的入口，不先整本读进内存）；失败以 [`FAILED`] 退出。
     pub fn open_or_die(path: impl AsRef<Path>) -> std::io::BufReader<std::fs::File> {
         let path = path.as_ref();
-        std::fs::File::open(path).map(std::io::BufReader::new).unwrap_or_else(|e| die(FAILED, format!("读 {}: {e}", path.display())))
+        std::fs::File::open(path)
+            .map(std::io::BufReader::new)
+            .unwrap_or_else(|e| die(FAILED, format!("读 {}: {e}", path.display())))
     }
 
     /// 原子地写整个文件（[`super::write_atomic`]）；失败以 [`FAILED`] 退出。
@@ -251,7 +299,13 @@ pub mod cli {
 pub fn sanitize_filename(title: &str, default: &str) -> String {
     let t: String = title
         .chars()
-        .map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || "/\\:*?\"<>|".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let t = t.trim();
     if t.is_empty() {
@@ -289,7 +343,11 @@ pub const MAX_NAME_BYTES: usize = 200;
 
 /// 读完 `r`，最多 `cap` 字节；超过上限返回 `Ok(None)`——不把截断的前半截当完整内容用。`prealloc` 是预分配的字节数
 /// （再封顶到 `cap`，别直接信外来的声明大小）。读 zip 条目（解压上限）、抓网页和远程图（下载上限）共用。
-pub fn read_capped(r: impl std::io::Read, cap: u64, prealloc: u64) -> std::io::Result<Option<Vec<u8>>> {
+pub fn read_capped(
+    r: impl std::io::Read,
+    cap: u64,
+    prealloc: u64,
+) -> std::io::Result<Option<Vec<u8>>> {
     use std::io::Read;
     let mut v = Vec::with_capacity(prealloc.min(cap) as usize);
     r.take(cap.saturating_add(1)).read_to_end(&mut v)?;
@@ -323,14 +381,19 @@ pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec
                     let mut got = Vec::new();
                     loop {
                         let c = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(chunk) = items.get(c * PAR_CHUNK..) else { break };
+                        let Some(chunk) = items.get(c * PAR_CHUNK..) else {
+                            break;
+                        };
                         got.push((c, chunk.iter().take(PAR_CHUNK).map(&f).collect::<Vec<R>>()));
                     }
                     got
                 })
             })
             .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
     });
     parts.sort_unstable_by_key(|p| p.0);
     parts.into_iter().flat_map(|p| p.1).collect()
@@ -357,7 +420,10 @@ pub fn par_map_mut<T: Send, R: Send>(items: &mut [T], f: impl Fn(&mut T) -> R + 
                 })
             })
             .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
     });
     parts.sort_unstable_by_key(|p| p.0);
     parts.into_iter().flat_map(|p| p.1).collect()
@@ -365,7 +431,9 @@ pub fn par_map_mut<T: Send, R: Send>(items: &mut [T], f: impl Fn(&mut T) -> R + 
 
 /// FNV-1a 64 位（稳定的书 ID 用，结果进产物，别改算法）。
 pub fn fnv64(b: &[u8]) -> u64 {
-    b.iter().fold(0xcbf29ce484222325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100000001b3))
+    b.iter().fold(0xcbf29ce484222325u64, |h, &c| {
+        (h ^ c as u64).wrapping_mul(0x100000001b3)
+    })
 }
 
 /// 字节按单字节（Latin-1）读成文字：每个字节是一个 U+0000–U+00FF 的字符。不是 UTF-8 的样式表（Big5 之类）这样读：CSS 的语法都是
@@ -376,16 +444,20 @@ pub fn latin1_decode(b: &[u8]) -> String {
 
 /// [`latin1_decode`] 的反向：U+00FF 以内的字符写回一个字节，以外的（只可能是改写时新写进去的）写成 `?`。
 pub fn latin1_encode(s: &str) -> Vec<u8> {
-    s.chars().map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?')).collect()
+    s.chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect()
 }
 
 const MAX_WORKERS: usize = 16;
 
 /// 并行工作线程数：取 CPU 核数，封顶 [`MAX_WORKERS`]。
 pub fn worker_count() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, MAX_WORKERS)
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_WORKERS)
 }
-
 
 /// `%XX` 解码（XX 必须是两位十六进制，否则原样保留）。此前每个 `%` 现拼一个 `String` 再 `from_str_radix`，
 /// 后者还接受 `+` 号前缀，`%+1` 会被误解成字节 0x01。
@@ -399,7 +471,10 @@ pub fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' {
-            if let (Some(h), Some(l)) = (b.get(i + 1).and_then(|&c| hex(c)), b.get(i + 2).and_then(|&c| hex(c))) {
+            if let (Some(h), Some(l)) = (
+                b.get(i + 1).and_then(|&c| hex(c)),
+                b.get(i + 2).and_then(|&c| hex(c)),
+            ) {
                 out.push(h << 4 | l);
                 i += 3;
                 continue;
@@ -475,7 +550,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (tmp, target) = (d.path().join(".t.tmp"), d.path().join("t.bin"));
         std::fs::write(&target, b"old").unwrap();
-        let n = produce_then_replace(&tmp, &target, |t| std::fs::write(t, b"new").map(|_| 7).map_err(|e| e.to_string())).unwrap();
+        let n = produce_then_replace(&tmp, &target, |t| {
+            std::fs::write(t, b"new")
+                .map(|_| 7)
+                .map_err(|e| e.to_string())
+        })
+        .unwrap();
         assert_eq!(n, 7);
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
         assert!(!tmp.exists(), "rename 后 tmp 不该残留");
@@ -491,7 +571,10 @@ mod tests {
         // rename 失败（目标是个非空目录）：报改名失败并清 tmp
         let dir_target = d.path().join("dir");
         std::fs::create_dir_all(dir_target.join("x")).unwrap();
-        let err = produce_then_replace(&tmp, &dir_target, |t| std::fs::write(t, b"z").map_err(|e| e.to_string())).unwrap_err();
+        let err = produce_then_replace(&tmp, &dir_target, |t| {
+            std::fs::write(t, b"z").map_err(|e| e.to_string())
+        })
+        .unwrap_err();
         assert!(err.contains("改名覆盖"), "{err}");
         assert!(!tmp.exists());
         // 产出途中 panic：半成品也清掉，原文件不动
@@ -514,13 +597,21 @@ mod tests {
         std::fs::write(&target, b"old").unwrap();
         write_atomic(&target, b"new").unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
-        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 1, "不留临时文件");
+        assert_eq!(
+            std::fs::read_dir(d.path()).unwrap().count(),
+            1,
+            "不留临时文件"
+        );
     }
 
     #[test]
     fn image_ext_of_takes_file_extension_only() {
         assert_eq!(image_ext_of("OEBPS/images/Cv.JPG"), "jpg");
-        assert_eq!(image_ext_of("a.b/images/cover"), "jpg", "文件名没扩展名时不能把目录里的点当扩展名");
+        assert_eq!(
+            image_ext_of("a.b/images/cover"),
+            "jpg",
+            "文件名没扩展名时不能把目录里的点当扩展名"
+        );
         assert_eq!(image_ext_of("cover."), "jpg");
         assert_eq!(image_ext_of("x.png"), "png");
     }
@@ -532,7 +623,11 @@ mod tests {
         assert_eq!(image_media_type_of_ext("png"), "image/png");
         assert_eq!(image_media_type_of_ext("gif"), "image/gif");
         assert_eq!(image_media_type_of_ext("jpg"), "image/jpeg");
-        assert_eq!(image_media_type_of_ext("bmp"), "image/jpeg", "认不出当 JPEG");
+        assert_eq!(
+            image_media_type_of_ext("bmp"),
+            "image/jpeg",
+            "认不出当 JPEG"
+        );
         assert_eq!(image_media_type_of_ext("webp"), "image/webp");
         assert_eq!(image_media_type_of_ext("jpeg"), "image/jpeg");
     }
@@ -540,10 +635,23 @@ mod tests {
     /// 超过上限不返回截断的前半截（以前抓远程图截到 20MB 照用，魔数对得上的坏图进了书；网页正文截断后照抽）。
     #[test]
     fn read_capped_rejects_instead_of_truncating() {
-        assert_eq!(read_capped(&b"abcd"[..], 4, 100).unwrap(), Some(b"abcd".to_vec()));
+        assert_eq!(
+            read_capped(&b"abcd"[..], 4, 100).unwrap(),
+            Some(b"abcd".to_vec())
+        );
         assert_eq!(read_capped(&b"abcde"[..], 4, 0).unwrap(), None);
-        assert_eq!(read_capped(&b""[..], 0, u64::MAX).unwrap(), Some(Vec::new()));
-        assert!(read_capped(&b"abc"[..], 10, u64::MAX).unwrap().unwrap().capacity() <= 10, "预分配封顶到上限");
+        assert_eq!(
+            read_capped(&b""[..], 0, u64::MAX).unwrap(),
+            Some(Vec::new())
+        );
+        assert!(
+            read_capped(&b"abc"[..], 10, u64::MAX)
+                .unwrap()
+                .unwrap()
+                .capacity()
+                <= 10,
+            "预分配封顶到上限"
+        );
     }
 
     #[test]
@@ -554,10 +662,14 @@ mod tests {
     }
 
     #[test]
-        fn xml_escape_covers_amp_lt_gt_quote() {
+    fn xml_escape_covers_amp_lt_gt_quote() {
         assert_eq!(xml_escape(r#"a&b<c>d"e"#), "a&amp;b&lt;c&gt;d&quot;e");
         assert_eq!(xml_escape("纯文本"), "纯文本");
-        assert_eq!(xml_escape("a\u{0}b\u{1}c\td\u{FFFE}e"), "abc\tde", "XML 1.0 不允许的字符直接丢弃");
+        assert_eq!(
+            xml_escape("a\u{0}b\u{1}c\td\u{FFFE}e"),
+            "abc\tde",
+            "XML 1.0 不允许的字符直接丢弃"
+        );
     }
 
     #[test]
@@ -565,12 +677,22 @@ mod tests {
         let raw = "A & B <c> \"d\" 中";
         assert_eq!(xml_unescape(&xml_escape(raw)), raw);
         assert_eq!(xml_unescape("&#20013;&#x6587;&apos;"), "中文'");
-        assert_eq!(xml_unescape("a & b &unknown; &#xZZ; &"), "a & b &unknown; &#xZZ; &", "认不出的原样保留");
-        assert!(matches!(xml_unescape("plain"), std::borrow::Cow::Borrowed(_)));
+        assert_eq!(
+            xml_unescape("a & b &unknown; &#xZZ; &"),
+            "a & b &unknown; &#xZZ; &",
+            "认不出的原样保留"
+        );
+        assert!(matches!(
+            xml_unescape("plain"),
+            std::borrow::Cow::Borrowed(_)
+        ));
         // 裸 `&` 很多、`;` 在很远处：只在 `&` 后面 12 字节内找 `;`，结果不变、不再平方级
         let s = format!("{}x;&amp;", "a & ".repeat(20_000));
         assert!(xml_unescape(&s).ends_with("a & x;&"));
-        assert_eq!(xml_unescape("&#x10FFFF;&abcdefghijkl;"), "\u{10FFFF}&abcdefghijkl;");
+        assert_eq!(
+            xml_unescape("&#x10FFFF;&abcdefghijkl;"),
+            "\u{10FFFF}&abcdefghijkl;"
+        );
     }
 
     #[test]
@@ -586,7 +708,10 @@ mod tests {
     fn par_map_keeps_order_and_mutates_each_item() {
         for n in [0usize, 1, 7, 8, 9, 100, 1000] {
             let v: Vec<usize> = (0..n).collect();
-            assert_eq!(par_map(&v, |x| x * 3), v.iter().map(|x| x * 3).collect::<Vec<_>>());
+            assert_eq!(
+                par_map(&v, |x| x * 3),
+                v.iter().map(|x| x * 3).collect::<Vec<_>>()
+            );
             let mut m: Vec<String> = v.iter().map(|x| x.to_string()).collect();
             let lens = par_map_mut(&mut m, |s| {
                 s.push('!');

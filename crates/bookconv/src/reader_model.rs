@@ -63,7 +63,34 @@ pub struct ReaderModel {
 
 impl Default for ReaderModel {
     fn default() -> Self {
-        ReaderModel { display_none: true, trailing_br_line: false, line_height_except_p: false, line_height_floor: None, heading_sizes: None, page_top: None, inline_css_lengths: true, padding: true, borders: true, heading_margins: true, px_margins: true, percent_margins: true, block_width: true, negative_margins: true, cell_middle: true, inline_valign: true, cell_width: true, margin_auto: true, float: true, horizontal_scale: false, em_root: false, em_root_px: None, heading_center: false, rem: true, important: true, line_em: None }
+        ReaderModel {
+            display_none: true,
+            trailing_br_line: false,
+            line_height_except_p: false,
+            line_height_floor: None,
+            heading_sizes: None,
+            page_top: None,
+            inline_css_lengths: true,
+            padding: true,
+            borders: true,
+            heading_margins: true,
+            px_margins: true,
+            percent_margins: true,
+            block_width: true,
+            negative_margins: true,
+            cell_middle: true,
+            inline_valign: true,
+            cell_width: true,
+            margin_auto: true,
+            float: true,
+            horizontal_scale: false,
+            em_root: false,
+            em_root_px: None,
+            heading_center: false,
+            rem: true,
+            important: true,
+            line_em: None,
+        }
     }
 }
 
@@ -73,8 +100,16 @@ impl ReaderModel {
             display_none: p.css.display_none,
             trailing_br_line: p.css.trailing_br_line,
             line_height_except_p: p.css.line_height_except_p,
-            line_height_floor: p.css.line_height_floor.filter(|_| p.css.line_height_except_p),
-            heading_sizes: p.css.heading_sizes.as_ref().filter(|_| p.css.heading_font_keywords).map(HeadingSizes::from_profile),
+            line_height_floor: p
+                .css
+                .line_height_floor
+                .filter(|_| p.css.line_height_except_p),
+            heading_sizes: p
+                .css
+                .heading_sizes
+                .as_ref()
+                .filter(|_| p.css.heading_font_keywords)
+                .map(HeadingSizes::from_profile),
             page_top: p.css.page_top.filter(|_| !p.css.margin_top),
             inline_css_lengths: p.css.inline_css_lengths,
             padding: p.css.padding,
@@ -95,7 +130,8 @@ impl ReaderModel {
             heading_center: p.css.heading_center,
             rem: p.css.rem,
             important: p.css.important,
-            line_em: (!p.css.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
+            line_em: (!p.css.line_height_numbers)
+                .then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
         }
     }
 
@@ -105,19 +141,42 @@ impl ReaderModel {
             return String::new();
         }
         let b = |v: bool| u8::from(v);
-        let mut s = format!("d{}b{}l{}", b(self.display_none), b(self.trailing_br_line), b(self.line_height_except_p));
+        let mut s = format!(
+            "d{}b{}l{}",
+            b(self.display_none),
+            b(self.trailing_br_line),
+            b(self.line_height_except_p)
+        );
         if let Some(h) = &self.heading_sizes {
             let kws: Vec<String> = h.keywords.iter().map(|(k, v)| format!("{k}={v}")).collect();
             let tags: Vec<String> = h.tags.iter().map(f64::to_string).collect();
             s.push_str(&format!("h{};{}", kws.join(","), tags.join(",")));
         }
         if let Some(t) = &self.page_top {
-            s.push_str(&format!("t{},{},{}", t.gap_heading_per_em, t.gap_other, t.strut_base_per_em));
+            s.push_str(&format!(
+                "t{},{},{}",
+                t.gap_heading_per_em, t.gap_other, t.strut_base_per_em
+            ));
         }
         if !self.inline_css_lengths {
             s.push_str("i0");
         }
-        for (on, c) in [(self.padding, 'p'), (self.borders, 'r'), (self.heading_margins, 'm'), (self.px_margins, 'x'), (self.percent_margins, '%'), (self.block_width, 'w'), (self.negative_margins, 'g'), (self.cell_middle, 'v'), (self.inline_valign, 'u'), (self.cell_width, 'c'), (self.margin_auto, 'a'), (self.float, 'o'), (self.rem, 'q'), (self.important, 'k')] {
+        for (on, c) in [
+            (self.padding, 'p'),
+            (self.borders, 'r'),
+            (self.heading_margins, 'm'),
+            (self.px_margins, 'x'),
+            (self.percent_margins, '%'),
+            (self.block_width, 'w'),
+            (self.negative_margins, 'g'),
+            (self.cell_middle, 'v'),
+            (self.inline_valign, 'u'),
+            (self.cell_width, 'c'),
+            (self.margin_auto, 'a'),
+            (self.float, 'o'),
+            (self.rem, 'q'),
+            (self.important, 'k'),
+        ] {
             if !on {
                 s.push(c);
                 s.push('0');
@@ -171,20 +230,33 @@ pub struct HeadingSizes {
 
 impl HeadingSizes {
     fn from_profile(h: &profile::HeadingSizes) -> HeadingSizes {
-        let mut keywords: Vec<(String, f64)> = h.keywords.iter().map(|(k, v)| (k.to_ascii_lowercase(), *v)).collect();
+        let mut keywords: Vec<(String, f64)> = h
+            .keywords
+            .iter()
+            .map(|(k, v)| (k.to_ascii_lowercase(), *v))
+            .collect();
         keywords.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        HeadingSizes { keywords, tags: h.tags }
+        HeadingSizes {
+            keywords,
+            tags: h.tags,
+        }
     }
 
     /// 关键字的大小（不认的 `None`）；`!important` 不管。
     pub fn keyword_size(&self, v: &str) -> Option<f64> {
-        let v = v.trim().trim_end_matches("!important").trim().to_ascii_lowercase();
+        let v = v
+            .trim()
+            .trim_end_matches("!important")
+            .trim()
+            .to_ascii_lowercase();
         self.keywords.iter().find(|(k, _)| *k == v).map(|(_, s)| *s)
     }
 
     /// 标签固定的大小（不是标题的 `None`）。
     pub fn tag_size(&self, tag: &str) -> Option<f64> {
-        let n = ["h1", "h2", "h3", "h4", "h5", "h6"].iter().position(|h| *h == tag)?;
+        let n = ["h1", "h2", "h3", "h4", "h5", "h6"]
+            .iter()
+            .position(|h| *h == tag)?;
         Some(self.tags[n])
     }
 
@@ -196,7 +268,11 @@ impl HeadingSizes {
 
     /// 和 `want` 比例最接近的关键字。
     pub fn nearest(&self, want: f64) -> (&str, f64) {
-        let (k, s) = self.keywords.iter().min_by(|a, b| (a.1 / want).ln().abs().total_cmp(&(b.1 / want).ln().abs())).expect("profile 校验过 keywords 非空");
+        let (k, s) = self
+            .keywords
+            .iter()
+            .min_by(|a, b| (a.1 / want).ln().abs().total_cmp(&(b.1 / want).ln().abs()))
+            .expect("profile 校验过 keywords 非空");
         (k.as_str(), *s)
     }
 }
@@ -208,15 +284,47 @@ mod tests {
     #[test]
     fn move_profile_model() {
         let m = ReaderModel::for_profile(profile::fixture("xochitl").unwrap());
-        assert!(!m.display_none && m.trailing_br_line && m.line_height_except_p && m.page_top.is_some());
+        assert!(
+            !m.display_none && m.trailing_br_line && m.line_height_except_p && m.page_top.is_some()
+        );
         let h = m.heading_sizes.as_ref().unwrap();
-        assert_eq!((h.keyword_size("x-large !important"), h.keyword_size("smaller")), (Some(1.514), None));
-        assert_eq!((h.tag_size("h6"), h.tag_size("h7"), h.tag_size("p")), (Some(1.0), None, None));
+        assert_eq!(
+            (
+                h.keyword_size("x-large !important"),
+                h.keyword_size("smaller")
+            ),
+            (Some(1.514), None)
+        );
+        assert_eq!(
+            (h.tag_size("h6"), h.tag_size("h7"), h.tag_size("p")),
+            (Some(1.0), None, None)
+        );
         assert_eq!(h.nearest(2.0).0, "xx-large");
         assert_eq!(m.font_size("h2", Some("2em"), 2.0), 1.514);
         assert_eq!(m.font_size("div", None, 2.0), 2.0);
-        assert_eq!((m.line_height("p", Some(2.0), false), m.line_height("p", Some(2.0), true), m.line_height("h1", Some(2.0), false), m.line_height("div", None, false)), (1.0, 2.0, 2.0, 1.0));
-        assert_eq!(ReaderModel::for_profile(profile::get("ireader").unwrap()), ReaderModel { px_margins: false, rem: false, important: false, cell_middle: false, inline_valign: false, heading_center: true, horizontal_scale: true, line_em: Some(99.0 / 58.0), ..ReaderModel::default() });
+        assert_eq!(
+            (
+                m.line_height("p", Some(2.0), false),
+                m.line_height("p", Some(2.0), true),
+                m.line_height("h1", Some(2.0), false),
+                m.line_height("div", None, false)
+            ),
+            (1.0, 2.0, 2.0, 1.0)
+        );
+        assert_eq!(
+            ReaderModel::for_profile(profile::get("ireader").unwrap()),
+            ReaderModel {
+                px_margins: false,
+                rem: false,
+                important: false,
+                cell_middle: false,
+                inline_valign: false,
+                heading_center: true,
+                horizontal_scale: true,
+                line_em: Some(99.0 / 58.0),
+                ..ReaderModel::default()
+            }
+        );
         assert_eq!(ReaderModel::default().signature(), "");
         assert_eq!(
             m.signature(),

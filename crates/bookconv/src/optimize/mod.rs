@@ -229,7 +229,10 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_decode_pixels: crate::imgopt::MAX_COMIC_DECODE_PIXELS, pool_pixel_budget: crate::imgpool::PIXEL_BUDGET }
+        Limits {
+            max_decode_pixels: crate::imgopt::MAX_COMIC_DECODE_PIXELS,
+            pool_pixel_budget: crate::imgpool::PIXEL_BUDGET,
+        }
     }
 }
 
@@ -320,7 +323,10 @@ impl TextMode {
     /// 按 profile 的 `text_repair_only`、`kindle_rules`、`repair_note_links` 定。
     pub fn for_profile(p: &profile::Profile) -> Self {
         if p.text_repair_only {
-            TextMode::Repair { kindle_rules: p.kindle_rules, note_links: p.repair_note_links }
+            TextMode::Repair {
+                kindle_rules: p.kindle_rules,
+                note_links: p.repair_note_links,
+            }
         } else {
             TextMode::Full
         }
@@ -331,11 +337,22 @@ impl OptimizeOpts {
     /// 文字书只做修复时实际用的选项（[`TextMode::Repair`]）：清洗层只修复，注释（除非 `note_links`）、背景图、图注、透明图的处理都关掉。
     /// 不是 `Repair` 时原样克隆。
     fn repair_only(&self) -> Self {
-        let TextMode::Repair { kindle_rules, note_links } = self.text_mode else { return self.clone() };
+        let TextMode::Repair {
+            kindle_rules,
+            note_links,
+        } = self.text_mode
+        else {
+            return self.clone();
+        };
         OptimizeOpts {
             // 只修复不看清洗层的其他选项，但 `kindle_rules` 要的阅读器怪癖带过去：`media`（统计正文字号求 `@media`；以前整个
             // 换成缺省值，特性条件一律不成立，KINDLE_RULES 7 修）、`css_rgba`、`background_no_repeat`（KINDLE_RULES 8）
-            wash: Some(self.wash.clone().unwrap_or_default().repair_from(kindle_rules)),
+            wash: Some(
+                self.wash
+                    .clone()
+                    .unwrap_or_default()
+                    .repair_from(kindle_rules),
+            ),
             number_note_icons: note_links && self.number_note_icons,
             drop_note_backlinks: note_links && self.drop_note_backlinks,
             fit_backgrounds: false,
@@ -352,12 +369,46 @@ impl OptimizeOpts {
 
     /// 只修复、但保证注释能点（[`TextMode::Repair`] 的 `note_links`）。
     fn repair_note_links(&self) -> bool {
-        matches!(self.text_mode, TextMode::Repair { note_links: true, .. })
+        matches!(
+            self.text_mode,
+            TextMode::Repair {
+                note_links: true,
+                ..
+            }
+        )
     }
 
     /// 只指定屏幕、其余取缺省（彩色、漫画白边 1px、不清洗、`Anchor` 注释、保留原书翻页方向）。
     pub fn new(screen: crate::imgopt::Screen) -> Self {
-        OptimizeOpts { screen, grayscale: false, comic_margin: profile::DEFAULT_COMIC_MARGIN, comic_screen: None, comic_reader_margins: None, number_note_icons: false, drop_note_backlinks: true, wash: None, footnote: FootnoteMode::default(), page_direction: None, comic_page_direction: None, comic_fixed_layout: false, fit_backgrounds: false, caption_fit: false, flatten_alpha: false, comic_gamma: None, comic_autocontrast: false, comic_trim_specks: false, comic_page_numbers: false, comic_upscale: true, comic_dark_bg: false, cover_thumb_aspect: None, image_gamma: None, webp_to_png: false, text_mode: TextMode::Full, limits: Limits::default(), title: None }
+        OptimizeOpts {
+            screen,
+            grayscale: false,
+            comic_margin: profile::DEFAULT_COMIC_MARGIN,
+            comic_screen: None,
+            comic_reader_margins: None,
+            number_note_icons: false,
+            drop_note_backlinks: true,
+            wash: None,
+            footnote: FootnoteMode::default(),
+            page_direction: None,
+            comic_page_direction: None,
+            comic_fixed_layout: false,
+            fit_backgrounds: false,
+            caption_fit: false,
+            flatten_alpha: false,
+            comic_gamma: None,
+            comic_autocontrast: false,
+            comic_trim_specks: false,
+            comic_page_numbers: false,
+            comic_upscale: true,
+            comic_dark_bg: false,
+            cover_thumb_aspect: None,
+            image_gamma: None,
+            webp_to_png: false,
+            text_mode: TextMode::Full,
+            limits: Limits::default(),
+            title: None,
+        }
     }
 
     /// 按阅读模式（profile）取选项：阅读范围、黑白屏转灰度、注释呈现方式、漫画白边；清洗层开（缺省选项）。书库和 `epub-optimize` 都从这里起步。
@@ -377,7 +428,11 @@ impl OptimizeOpts {
             comic_reader_margins: p.comic.reader_margins,
             number_note_icons: p.notes.icons == profile::NoteIcons::Number,
             drop_note_backlinks: !p.notes.backlinks,
-            comic_page_direction: p.comic.page_direction.as_deref().and_then(crate::direction::PageDirection::parse),
+            comic_page_direction: p
+                .comic
+                .page_direction
+                .as_deref()
+                .and_then(crate::direction::PageDirection::parse),
             comic_fixed_layout: p.comic.fixed_layout,
             fit_backgrounds: p.background_images && !p.background_sizing,
             caption_fit: p.caption_fit,
@@ -398,12 +453,27 @@ impl OptimizeOpts {
 }
 
 /// 清洗层选项：阅读器怪癖（profile）转成清洗层要的量。`reference` 是图片尺寸、竖直间距照着算的那台（见 [`OptimizeOpts::for_profile`]）。
-fn wash_opts_for(p: &profile::Profile, reference: Option<&profile::Profile>) -> crate::wash::WashOpts {
-    let mut w = crate::wash::WashOpts { css_rgba: p.css.css_rgba, background_no_repeat: p.css.background_no_repeat, media: Some(crate::cascade::MediaEnv::for_format(p, p.format())), ..Default::default() };
+fn wash_opts_for(
+    p: &profile::Profile,
+    reference: Option<&profile::Profile>,
+) -> crate::wash::WashOpts {
+    let mut w = crate::wash::WashOpts {
+        css_rgba: p.css.css_rgba,
+        background_no_repeat: p.css.background_no_repeat,
+        media: Some(crate::cascade::MediaEnv::for_format(p, p.format())),
+        ..Default::default()
+    };
     // 不照 CSS 定图片尺寸的阅读器：照内置 kindle 模式的内容区宽和 1em 像素折算（三台以 Kindle 为准）
     if let Some(k) = reference.filter(|k| k.font_px.is_some()) {
         let r = k.readable(profile::Format::Kfx);
-        let kref = crate::wash::KindleImageRef { content_px: f64::from(r.width), content_h: f64::from(r.height), em_px: f64::from(k.font_px.unwrap_or(16)), v_rem_px: k.line_px.map_or(f64::from(k.font_px.unwrap_or(16)), |l| f64::from(l) / 1.2) };
+        let kref = crate::wash::KindleImageRef {
+            content_px: f64::from(r.width),
+            content_h: f64::from(r.height),
+            em_px: f64::from(k.font_px.unwrap_or(16)),
+            v_rem_px: k
+                .line_px
+                .map_or(f64::from(k.font_px.unwrap_or(16)), |l| f64::from(l) / 1.2),
+        };
         if p.image_sizing != profile::ImageSizing::Css {
             w.image_sizing = Some((p.image_sizing, kref));
         }
@@ -414,35 +484,70 @@ fn wash_opts_for(p: &profile::Profile, reference: Option<&profile::Profile>) -> 
     // 折成这里内容区宽 / Kindle 内容区宽
     if !p.css.background_no_repeat {
         let area = p.output_readable();
-        let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
-        w.page_tiles = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
+        let natural = w
+            .image_sizing
+            .map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
+        w.page_tiles = Some(crate::bgfit::TileGeometry {
+            page: (p.screen.width, p.screen.height),
+            area: (area.width, area.height),
+            natural,
+        });
     }
     w.reader = crate::wash::ReaderModel::for_profile(p);
     w.audit = crate::audit::covers(&p.id).then(|| p.id.clone());
     // 竖直间距照 Kindle 换算（掌阅、Move：两台按自己的字号排边距，Kindle 按行距，2026-10-12 定）
     if let (Some(em), Some((_, k))) = (p.em_px, w.image_sizing) {
         let ratio = f64::from(p.output_readable().height) / k.content_h;
-        w.v_scale = Some(crate::wash::VScale { em: k.v_rem_px * ratio / em, kindle_rem_px: k.v_rem_px, ratio });
+        w.v_scale = Some(crate::wash::VScale {
+            em: k.v_rem_px * ratio / em,
+            kindle_rem_px: k.v_rem_px,
+            ratio,
+        });
         // 左右边距的 em 照 Kindle 按页宽换算（Move、掌阅，profile `horizontal_scale`）：这台一行的 em 数 ÷ Kindle 的 32。
         // 一行按正文内容区宽（`content_px`，掌阅 1300 ÷ 58 ≈ 22.4 em → 0.70；没写的按阅读范围宽，Move 842 ÷ 37.8 → 0.70）
-        let h_scale = if p.css.horizontal_scale { f64::from(p.content_px.unwrap_or(p.output_readable().width)) / em / crate::kindle_model::PAGE_WIDTH_EM } else { 1.0 };
+        let h_scale = if p.css.horizontal_scale {
+            f64::from(p.content_px.unwrap_or(p.output_readable().width))
+                / em
+                / crate::kindle_model::PAGE_WIDTH_EM
+        } else {
+            1.0
+        };
         w.h_scale = (h_scale != 1.0).then_some(h_scale);
         // 不认内边距、不画边框、不认标题外边距的阅读器（Move）：照 Kindle 改写要的尺寸
-        if !(p.css.padding && p.css.borders && p.css.heading_margins && p.css.px_margins && p.css.percent_margins) {
-            w.box_geometry = Some(crate::wash::BoxGeometry { area_w: f64::from(p.output_readable().width), em_px: em, v_rem_px: k.v_rem_px * ratio, h_scale });
+        if !(p.css.padding
+            && p.css.borders
+            && p.css.heading_margins
+            && p.css.px_margins
+            && p.css.percent_margins)
+        {
+            w.box_geometry = Some(crate::wash::BoxGeometry {
+                area_w: f64::from(p.output_readable().width),
+                em_px: em,
+                v_rem_px: k.v_rem_px * ratio,
+                h_scale,
+            });
         }
     }
     // 背景尺寸的高写 `auto` 会拉长图的阅读器（掌阅）：整页背景图照 Kindle 的大小、位置写成像素
     if !p.css.background_auto_height {
         let area = p.output_readable();
-        let natural = w.image_sizing.map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
-        w.bg_place = Some(crate::bgfit::TileGeometry { page: (p.screen.width, p.screen.height), area: (area.width, area.height), natural });
+        let natural = w
+            .image_sizing
+            .map_or(1.0, |(_, k)| f64::from(area.width) / k.content_px);
+        w.bg_place = Some(crate::bgfit::TileGeometry {
+            page: (p.screen.width, p.screen.height),
+            area: (area.width, area.height),
+            natural,
+        });
     }
     // 不认 `margin-top` 的阅读器（Move）：页首的上边距垫成空白图，照 Kindle 的位置
     if !p.css.margin_top {
         if let Some((_, k)) = w.image_sizing {
             let area = p.output_readable();
-            w.top_spacer = Some(crate::wash::SpacerGeometry { kindle: k, area: (area.width, area.height) });
+            w.top_spacer = Some(crate::wash::SpacerGeometry {
+                kindle: k,
+                area: (area.width, area.height),
+            });
         }
     }
     if p.background_images {
@@ -450,7 +555,10 @@ fn wash_opts_for(p: &profile::Profile, reference: Option<&profile::Profile>) -> 
         // 尺寸、`fixed` 按 `background_sizing` 留或去（Kindle 要、掌阅会挤变形），见 `cssunlock::background_longhands`
         w.filter_props.retain(|f| f != "background-image");
         if !p.background_sizing {
-            w.filter_props.extend(["background-size".to_string(), "background-attachment".to_string()]);
+            w.filter_props.extend([
+                "background-size".to_string(),
+                "background-attachment".to_string(),
+            ]);
         }
     }
     w
@@ -511,23 +619,46 @@ struct Prepared {
 /// 图片条目是空占位——这里所有判断只看 html 文字与 `<img>` 引用，不需要图片真实字节。
 /// `is_comic_book`：调用方按原书判好的漫画识别结果（`comic_detect::is_comic`，全程只判这一次）；`transcoded`：调用方读完书已经
 /// 转成 UTF-8 的文件数（`wash::transcode_entries`，记进清洗报告）。
-fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, bytes_before: usize, is_comic_book: bool, transcoded: usize) -> Result<Prepared, BookError> {
+fn prepare_entries(
+    mut raw: Vec<crate::epubzip::Entry>,
+    opts: &OptimizeOpts,
+    bytes_before: usize,
+    is_comic_book: bool,
+    transcoded: usize,
+) -> Result<Prepared, BookError> {
     // 整页背景图的尺寸意图要在清洗前读（清洗会去掉 `background-size`）
-    let mut bg_fits = if opts.fit_backgrounds { crate::bgfit::plan(&raw) } else { HashMap::new() };
+    let mut bg_fits = if opts.fit_backgrounds {
+        crate::bgfit::plan(&raw)
+    } else {
+        HashMap::new()
+    };
     let wash_rep = match &opts.wash {
-        Some(w) => Some(crate::wash::wash_entries_as(&mut raw, w, is_comic_book).map(|mut r| {
-            r.transcoded_to_utf8 += transcoded;
-            r
-        })?),
+        Some(w) => Some(
+            crate::wash::wash_entries_as(&mut raw, w, is_comic_book).map(|mut r| {
+                r.transcoded_to_utf8 += transcoded;
+                r
+            })?,
+        ),
         None => None,
     };
     // 清洗层定下的保留字体（嵌了文件、又不是正文字体的）：第一遍剥行内字体锁时也留着。
-    let keep_fonts: HashSet<String> = wash_rep.as_ref().map(|r| r.kept_fonts.iter().cloned().collect()).unwrap_or_default();
-    let has_remote_imgs = crate::util::par_map(&raw, |e| is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img)).contains(&true);
+    let keep_fonts: HashSet<String> = wash_rep
+        .as_ref()
+        .map(|r| r.kept_fonts.iter().cloned().collect())
+        .unwrap_or_default();
+    let has_remote_imgs = crate::util::par_map(&raw, |e| {
+        is_html_entry(&e.name, &e.data) && std::str::from_utf8(&e.data).is_ok_and(has_remote_img)
+    })
+    .contains(&true);
     // mimetype 一律重写成规范内容放在最前（源书缺它、内容不规范都修正），其余原序；旧标记剔除（结尾统一重写当前版本）。
     let mut ordered: Vec<crate::epubzip::Entry> = Vec::with_capacity(raw.len() + 1);
-    ordered.push(crate::epubzip::Entry { name: "mimetype".into(), data: crate::epubzip::MIMETYPE.to_vec() });
-    ordered.extend(raw.into_iter().filter(|e| e.name != "mimetype" && e.name != OPTIMIZE_MARKER && e.name != READER_MARGINS_MARKER));
+    ordered.push(crate::epubzip::Entry {
+        name: "mimetype".into(),
+        data: crate::epubzip::MIMETYPE.to_vec(),
+    });
+    ordered.extend(raw.into_iter().filter(|e| {
+        e.name != "mimetype" && e.name != OPTIMIZE_MARKER && e.name != READER_MARGINS_MARKER
+    }));
 
     if is_comic_book {
         bg_fits.clear();
@@ -541,18 +672,37 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     }
     let opf = crate::wash::parse_opf(&ordered);
     // 只在真要改 OPF 时才记它：改翻页方向、补远程图的 manifest 项、给漫画打标签、（清洗过的书）按最终内容标 manifest 的 properties。
-    let opf_name: Option<String> = opf.as_ref().filter(|_| opts.page_direction.is_some() || (is_comic_book && opts.comic_page_direction.is_some()) || has_remote_imgs || is_comic_book || opts.wash.is_some()).map(|o| ordered[o.index].name.clone());
+    let opf_name: Option<String> = opf
+        .as_ref()
+        .filter(|_| {
+            opts.page_direction.is_some()
+                || (is_comic_book && opts.comic_page_direction.is_some())
+                || has_remote_imgs
+                || is_comic_book
+                || opts.wash.is_some()
+        })
+        .map(|o| ordered[o.index].name.clone());
     // 导航文档与目录文件：不收它们里面的注释引用，也不往里面搬注释。
-    let mut skip_notes: HashSet<String> = ordered.iter().filter(|e| crate::wash::is_toc_file(&e.name)).map(|e| e.name.clone()).collect();
+    let mut skip_notes: HashSet<String> = ordered
+        .iter()
+        .filter(|e| crate::wash::is_toc_file(&e.name))
+        .map(|e| e.name.clone())
+        .collect();
     skip_notes.extend(opf.and_then(|o| o.nav_doc));
 
-    let mut rep = Report { wash: wash_rep, total_files: 0, html_files: 0, bytes_before, bytes_after: 0 };
+    let mut rep = Report {
+        wash: wash_rep,
+        total_files: 0,
+        html_files: 0,
+        bytes_before,
+        bytes_after: 0,
+    };
 
     // 第一遍：xhtml → strip_font_locks；同时扫全书 marker 得**被引用**的注释 (文件, id) 集（referenced），供下一步
     // "只搬被引用的注释块"用。目录样的页（链接文字占大半）不算。
     let mut entries: Vec<(String, Vec<u8>, bool)> = Vec::with_capacity(ordered.len());
     let mut referenced: HashMap<String, HashSet<String>> = HashMap::new(); // 注释所在文件 → 被 marker 引用的 id
-    // 注释所在文件 → (注释 id → 引用它的标号 id)：没有注释语义的块靠"开头的回链指回标号"认（`marker_backrefs`）
+                                                                           // 注释所在文件 → (注释 id → 引用它的标号 id)：没有注释语义的块靠"开头的回链指回标号"认（`marker_backrefs`）
     let mut backrefs: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
     /// 一页里的注释引用：标号回链（`marker_backrefs`）、引用的注释（`referenced_note_keys`）、是不是目录样的页。
     struct NoteScan {
@@ -572,37 +722,71 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
     let scans = crate::util::par_map_mut(&mut ordered, |e| {
         let ish = is_html_entry(&e.name, &e.data);
         if !ish {
-            return Scan { ish, text: false, notes: None };
+            return Scan {
+                ish,
+                text: false,
+                notes: None,
+            };
         }
         // 非 UTF-8 的 html 原样保留（`from_utf8` 失败时把字节还回来，不克隆）。
         let text = match String::from_utf8(std::mem::take(&mut e.data)) {
             Ok(text) => text,
             Err(err) => {
                 e.data = err.into_bytes();
-                return Scan { ish, text: false, notes: None };
+                return Scan {
+                    ish,
+                    text: false,
+                    notes: None,
+                };
             }
         };
         // 只修复：字体锁不剥；注释也不搬（清洗层修过的文字原样往下传），要保证注释能点的（xochitl）只把同文件链接规整成裸锚点再找注释
         if opts.keeps_content() && !opts.repair_note_links() {
             e.data = text.into_bytes();
-            return Scan { ish, text: true, notes: None };
+            return Scan {
+                ish,
+                text: true,
+                notes: None,
+            };
         }
-        let stripped = if opts.keeps_content() { crate::htmlproc::normalize_self_hrefs(&text, &e.name) } else { first_pass_html(&text, &e.name, &keep_fonts) };
+        let stripped = if opts.keeps_content() {
+            crate::htmlproc::normalize_self_hrefs(&text, &e.name)
+        } else {
+            first_pass_html(&text, &e.name, &keep_fonts)
+        };
         drop(text);
         let notes = (!skip_notes.contains(&e.name)).then(|| {
             let refs = crate::htmlproc::referenced_note_keys(&stripped, &e.name);
             let toc_like = !refs.is_empty() && crate::wash::is_toc_like_page(&stripped);
-            NoteScan { backrefs: crate::htmlproc::marker_backrefs(&stripped, &e.name), refs, toc_like }
+            NoteScan {
+                backrefs: crate::htmlproc::marker_backrefs(&stripped, &e.name),
+                refs,
+                toc_like,
+            }
         });
         e.data = stripped.into_bytes();
-        Scan { ish, text: true, notes }
+        Scan {
+            ish,
+            text: true,
+            notes,
+        }
     });
     for (crate::epubzip::Entry { name, data }, scan) in ordered.into_iter().zip(scans) {
         rep.total_files += 1;
         // 同名条目的前一个被认成目录样的页时，这一个也不收（逐个做时就是这样）
-        if let Some(NoteScan { backrefs: marker_refs, refs, toc_like }) = scan.notes.filter(|_| !skip_notes.contains(&name)) {
+        if let Some(NoteScan {
+            backrefs: marker_refs,
+            refs,
+            toc_like,
+        }) = scan.notes.filter(|_| !skip_notes.contains(&name))
+        {
             for ((file, id), marker) in marker_refs {
-                backrefs.entry(file).or_default().entry(id).or_default().insert(marker);
+                backrefs
+                    .entry(file)
+                    .or_default()
+                    .entry(id)
+                    .or_default()
+                    .insert(marker);
             }
             if toc_like {
                 skip_notes.insert(name.clone());
@@ -622,10 +806,39 @@ fn prepare_entries(mut raw: Vec<crate::epubzip::Entry>, opts: &OptimizeOpts, byt
         }
         entries.push((name, data, scan.ish));
     }
-    let (aside_index, pre_done) = collect_notes(&mut entries, &mut referenced, &backrefs, &skip_notes, opts.drop_note_backlinks);
-    let body_imgs = if (opts.flatten_alpha || opts.image_gamma.is_some()) && !is_comic_book { crate::imgalpha::plan(&entries) } else { HashSet::new() };
-    let page_tiles = if is_comic_book { HashMap::new() } else { rep.wash.as_mut().map(|w| std::mem::take(&mut w.page_tiles)).unwrap_or_default() };
-    Ok(Prepared { entries, aside_index, skip_notes, pre_done, is_comic_book, opf_name, has_remote_imgs, bg_fits, page_tiles, body_imgs, rep })
+    let (aside_index, pre_done) = collect_notes(
+        &mut entries,
+        &mut referenced,
+        &backrefs,
+        &skip_notes,
+        opts.drop_note_backlinks,
+    );
+    let body_imgs = if (opts.flatten_alpha || opts.image_gamma.is_some()) && !is_comic_book {
+        crate::imgalpha::plan(&entries)
+    } else {
+        HashSet::new()
+    };
+    let page_tiles = if is_comic_book {
+        HashMap::new()
+    } else {
+        rep.wash
+            .as_mut()
+            .map(|w| std::mem::take(&mut w.page_tiles))
+            .unwrap_or_default()
+    };
+    Ok(Prepared {
+        entries,
+        aside_index,
+        skip_notes,
+        pre_done,
+        is_comic_book,
+        opf_name,
+        has_remote_imgs,
+        bg_fits,
+        page_tiles,
+        body_imgs,
+        rep,
+    })
 }
 
 /// 第一遍后半：把**被引用**的注释块（aside/p/li/div 且带注释语义）从各章移除、建全书索引 (文件, id) → 块，交给第二遍
@@ -647,12 +860,22 @@ fn collect_notes(
     backrefs: &HashMap<String, HashMap<String, HashSet<String>>>,
     skip: &HashSet<String>,
     drop_backlinks: bool,
-) -> (HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note>, HashSet<String>) {
+) -> (
+    HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note>,
+    HashSet<String>,
+) {
     let mut index: HashMap<crate::htmlproc::NoteKey, crate::htmlproc::Note> = HashMap::new();
     let mut originals: HashMap<usize, Vec<u8>> = HashMap::new();
     let none = HashMap::new();
     let collect_one = |text: &str, name: &str, referenced: &HashMap<String, HashSet<String>>| {
-        referenced.get(name).map(|ids| crate::htmlproc::collect_footnote_notes_with(text, ids, true, backrefs.get(name).unwrap_or(&none)))
+        referenced.get(name).map(|ids| {
+            crate::htmlproc::collect_footnote_notes_with(
+                text,
+                ids,
+                true,
+                backrefs.get(name).unwrap_or(&none),
+            )
+        })
     };
     // 各文件独立收集（多线程，`util::par_map_mut`），按原顺序并进索引
     let referenced_ro: &HashMap<String, HashSet<String>> = referenced;
@@ -670,31 +893,60 @@ fn collect_notes(
     for (i, c) in collected.into_iter().enumerate() {
         if let Some((notes, orig)) = c {
             let name = &entries[i].0;
-            index.extend(notes.into_iter().map(|(id, inner)| ((name.clone(), id), inner)));
+            index.extend(
+                notes
+                    .into_iter()
+                    .map(|(id, inner)| ((name.clone(), id), inner)),
+            );
             originals.insert(i, orig);
         }
     }
     // 各章拆过互指环、换过 duokan 标记的文字（第二遍的前两步）：只在条目内容变了（放回注释）时重算
     let mut pre: Vec<Option<String>> = vec![None; entries.len()];
     // 要数引用的章节：html、收注释的、能按 UTF-8 读的
-    let counted: Vec<usize> = entries.iter().enumerate().filter(|(_, (name, data, ish))| *ish && !skip.contains(name) && std::str::from_utf8(data).is_ok()).map(|(i, _)| i).collect();
+    let counted: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, data, ish))| {
+            *ish && !skip.contains(name) && std::str::from_utf8(data).is_ok()
+        })
+        .map(|(i, _)| i)
+        .collect();
     while !index.is_empty() {
         // 还没算的先多线程算好
-        let missing: Vec<usize> = counted.iter().copied().filter(|&i| pre[i].is_none()).collect();
-        let computed = crate::util::par_map(&missing, |&i| std::str::from_utf8(&entries[i].1).map(|t| crate::htmlproc::prepare_note_links(t, drop_backlinks)).unwrap_or_default());
+        let missing: Vec<usize> = counted
+            .iter()
+            .copied()
+            .filter(|&i| pre[i].is_none())
+            .collect();
+        let computed = crate::util::par_map(&missing, |&i| {
+            std::str::from_utf8(&entries[i].1)
+                .map(|t| crate::htmlproc::prepare_note_links(t, drop_backlinks))
+                .unwrap_or_default()
+        });
         for (i, t) in missing.into_iter().zip(computed) {
             pre[i] = Some(t);
         }
         // 每条注释有几章引用（一章里引用几次都算一章）
         let per_chapter = crate::util::par_map(&counted, |&i| -> Vec<crate::htmlproc::NoteKey> {
-            let keys: HashSet<crate::htmlproc::NoteKey> = crate::htmlproc::referenced_note_keys(pre[i].as_deref().unwrap_or_default(), &entries[i].0).into_iter().filter(|k| index.contains_key(k)).collect();
+            let keys: HashSet<crate::htmlproc::NoteKey> = crate::htmlproc::referenced_note_keys(
+                pre[i].as_deref().unwrap_or_default(),
+                &entries[i].0,
+            )
+            .into_iter()
+            .filter(|k| index.contains_key(k))
+            .collect();
             keys.into_iter().collect()
         });
         let mut claims: HashMap<crate::htmlproc::NoteKey, usize> = HashMap::new();
         for k in per_chapter.into_iter().flatten() {
             *claims.entry(k).or_default() += 1;
         }
-        let put_back: Vec<crate::htmlproc::NoteKey> = index.keys().filter(|k| claims.get(*k) != Some(&1)).cloned().collect();
+        let put_back: Vec<crate::htmlproc::NoteKey> = index
+            .keys()
+            .filter(|k| claims.get(*k) != Some(&1))
+            .cloned()
+            .collect();
         if put_back.is_empty() {
             break;
         }
@@ -710,9 +962,16 @@ fn collect_notes(
             if !files.contains(name.as_str()) {
                 continue;
             }
-            let Ok(text) = std::str::from_utf8(orig) else { continue };
-            let (cleaned, notes) = collect_one(text, name, referenced).unwrap_or_else(|| (text.to_string(), Vec::new()));
-            index.extend(notes.into_iter().map(|(id, inner)| ((name.clone(), id), inner)));
+            let Ok(text) = std::str::from_utf8(orig) else {
+                continue;
+            };
+            let (cleaned, notes) = collect_one(text, name, referenced)
+                .unwrap_or_else(|| (text.to_string(), Vec::new()));
+            index.extend(
+                notes
+                    .into_iter()
+                    .map(|(id, inner)| ((name.clone(), id), inner)),
+            );
             *data = cleaned.into_bytes();
             pre[i] = None;
         }
@@ -774,7 +1033,9 @@ impl<'a> EntryXform<'a> {
             pre_done: &prep.pre_done,
             taken_names: prep.entries.iter().map(|e| e.0.clone()).collect(),
             footnote: opts.footnote,
-            page_direction: opts.page_direction.or(opts.comic_page_direction.filter(|_| prep.is_comic_book)),
+            page_direction: opts
+                .page_direction
+                .or(opts.comic_page_direction.filter(|_| prep.is_comic_book)),
             comic: prep.is_comic_book,
             reader_margins: prep.is_comic_book && opts.comic_reader_margins.is_some(),
             number_note_icons: opts.number_note_icons,
@@ -793,17 +1054,36 @@ impl<'a> EntryXform<'a> {
             keep_content: opts.keeps_content(),
             repair_note_links: opts.keeps_content() && opts.repair_note_links(),
             caption_ctx: None,
-            title: opts.title.as_deref().map(str::trim).filter(|t| !t.is_empty()),
+            title: opts
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty()),
         }
     }
 
     /// 章节 html 最终变换链：解双向脚注互指环 → duokan 图片脚注标记换上标 → 封面拉伸/SVG 修复 → 脚注就地关联重排 →
     /// 远程图内联 → 全书 id 去重。要用到第一遍扫全书才拿得到的 `aside_index`，所以与第一遍分开、顺序不能换。
-    fn transform_html_chapter(&mut self, text: &str, name: &str, prefix: Option<String>) -> Vec<u8> {
+    fn transform_html_chapter(
+        &mut self,
+        text: &str,
+        name: &str,
+        prefix: Option<String>,
+    ) -> Vec<u8> {
         let t = prefix.unwrap_or_else(|| self.html_prefix(text, name));
-        let chap_dir = std::path::Path::new(name).parent().and_then(|p| p.to_str()).unwrap_or("");
+        let chap_dir = std::path::Path::new(name)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or("");
         let screen = (!self.keep_content).then_some(self.screen);
-        let (t, imgs) = inline_remote_images(&t, chap_dir, &mut self.remote_counter, &mut self.taken_names, !self.keep_content, remote_img_fetcher(&self.img_agent, screen));
+        let (t, imgs) = inline_remote_images(
+            &t,
+            chap_dir,
+            &mut self.remote_counter,
+            &mut self.taken_names,
+            !self.keep_content,
+            remote_img_fetcher(&self.img_agent, screen),
+        );
         self.fetched_imgs.extend(imgs);
         crate::htmlproc::dedup_ids_in_chapter(&t, &mut self.seen_ids).into_bytes()
     }
@@ -816,21 +1096,54 @@ impl<'a> EntryXform<'a> {
                 return text.to_string();
             }
             // 只保证注释能点：拆互指环（去回链）、注释搬进本章改同文件锚点、图标标号换数字；别的（封面、图注……）不动
-            let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };
-            let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
-            return if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
+            let t = if self.pre_done.contains(name) {
+                text.to_string()
+            } else {
+                crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks)
+            };
+            let t = if self.skip_notes.contains(name) {
+                t
+            } else {
+                crate::htmlproc::preserve_relink_footnotes(
+                    &t,
+                    name,
+                    self.aside_index,
+                    self.footnote,
+                )
+            };
+            return if self.number_note_icons {
+                crate::htmlproc::number_icon_note_links(&t)
+            } else {
+                t
+            };
         }
         // 前两步 `collect_notes` 可能已经做过（`pre_done`）
-        let t = if self.pre_done.contains(name) { text.to_string() } else { crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks) };
+        let t = if self.pre_done.contains(name) {
+            text.to_string()
+        } else {
+            crate::htmlproc::prepare_note_links(text, self.drop_note_backlinks)
+        };
         let t = fix_cover_aspect(&t);
         let t = svg_cover_to_img(&t);
-        let t = if self.reader_margins { crate::comicpad::pad_page(&t).unwrap_or(t) } else { t };
+        let t = if self.reader_margins {
+            crate::comicpad::pad_page(&t).unwrap_or(t)
+        } else {
+            t
+        };
         let t = match self.fixed_layout {
             Some((w, h)) => crate::comicfxl::page(&t, w, h).unwrap_or(t),
             None => t,
         };
-        let t = if self.skip_notes.contains(name) { t } else { crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote) };
-        let t = if self.number_note_icons { crate::htmlproc::number_icon_note_links(&t) } else { t };
+        let t = if self.skip_notes.contains(name) {
+            t
+        } else {
+            crate::htmlproc::preserve_relink_footnotes(&t, name, self.aside_index, self.footnote)
+        };
+        let t = if self.number_note_icons {
+            crate::htmlproc::number_icon_note_links(&t)
+        } else {
+            t
+        };
         match &self.caption_ctx {
             Some(d) => crate::capfit::apply(&t, name, d, self.screen).unwrap_or(t),
             None => t,
@@ -839,26 +1152,47 @@ impl<'a> EntryXform<'a> {
 
     /// 一批条目里的 html 章节先多线程做完 [`html_prefix`](Self::html_prefix)（不是 html、不是 UTF-8 的给 `None`）。
     fn html_prefixes(&self, batch: &[(String, Vec<u8>, bool)]) -> Vec<Option<String>> {
-        crate::util::par_map(batch, |(name, data, ish)| if *ish { std::str::from_utf8(data).ok().map(|t| self.html_prefix(t, name)) } else { None })
+        crate::util::par_map(batch, |(name, data, ish)| {
+            if *ish {
+                std::str::from_utf8(data)
+                    .ok()
+                    .map(|t| self.html_prefix(t, name))
+            } else {
+                None
+            }
+        })
     }
 
     /// 文本类条目 → `Some(最终字节)`（无法按 UTF-8 解读的原样借回）；不是文本类（图片/其它）→ `None`，调用方自己处理。
     /// `prefix`：这一章预先算好的 [`html_prefix`](Self::html_prefix)（没有就当场算）。
-    fn transform_text<'d>(&mut self, name: &str, data: &'d [u8], is_html: bool, prefix: Option<String>) -> Option<std::borrow::Cow<'d, [u8]>> {
+    fn transform_text<'d>(
+        &mut self,
+        name: &str,
+        data: &'d [u8],
+        is_html: bool,
+        prefix: Option<String>,
+    ) -> Option<std::borrow::Cow<'d, [u8]>> {
         use std::borrow::Cow;
         if is_html {
             return Some(match std::str::from_utf8(data) {
                 Ok(text) => {
                     let out = self.transform_html_chapter(text, name, prefix);
-                    if let (Some(props), Ok(t)) = (self.content_props.as_mut(), std::str::from_utf8(&out)) {
-                        props.insert(name.to_string(), crate::wash::normalize::content_properties(t));
+                    if let (Some(props), Ok(t)) =
+                        (self.content_props.as_mut(), std::str::from_utf8(&out))
+                    {
+                        props.insert(
+                            name.to_string(),
+                            crate::wash::normalize::content_properties(t),
+                        );
                     }
                     Cow::Owned(out)
                 }
                 Err(_) => Cow::Borrowed(data),
             });
         }
-        if (self.reader_margins || self.number_note_icons || self.fixed_layout.is_some()) && crate::wash::is_wash_css_name(name) {
+        if (self.reader_margins || self.number_note_icons || self.fixed_layout.is_some())
+            && crate::wash::is_wash_css_name(name)
+        {
             let mut out = data.to_vec();
             // 图标注释号都换成数字的模式里，限图标高度的 `.eink-noteicon` 用不上了（2026-09-30 ：失效样式删掉）
             if self.number_note_icons {
@@ -868,16 +1202,24 @@ impl<'a> EntryXform<'a> {
                     out.drain(i..i + rule.len());
                 }
             }
-            if self.reader_margins && crate::util::memfind(&out, crate::comicpad::CSS_RULES.as_bytes()).is_none() {
+            if self.reader_margins
+                && crate::util::memfind(&out, crate::comicpad::CSS_RULES.as_bytes()).is_none()
+            {
                 out.extend_from_slice(crate::comicpad::CSS_RULES.as_bytes());
             }
-            if self.fixed_layout.is_some() && crate::util::memfind(&out, crate::comicfxl::CSS_RULES.as_bytes()).is_none() {
+            if self.fixed_layout.is_some()
+                && crate::util::memfind(&out, crate::comicfxl::CSS_RULES.as_bytes()).is_none()
+            {
                 out.extend_from_slice(crate::comicfxl::CSS_RULES.as_bytes());
             }
             return Some(Cow::Owned(out));
         }
-        if self.opf_name == Some(name) && (self.page_direction.is_some() || self.comic || self.title.is_some()) {
-            let Ok(text) = std::str::from_utf8(data) else { return Some(Cow::Borrowed(data)) };
+        if self.opf_name == Some(name)
+            && (self.page_direction.is_some() || self.comic || self.title.is_some())
+        {
+            let Ok(text) = std::str::from_utf8(data) else {
+                return Some(Cow::Borrowed(data));
+            };
             let mut text = Cow::Borrowed(text);
             if let Some(dir) = self.page_direction {
                 text = Cow::Owned(crate::direction::set_spine_direction(&text, dir));
@@ -892,7 +1234,10 @@ impl<'a> EntryXform<'a> {
             }
             if let Some(title) = self.title {
                 // 没有 `</metadata>` 的坏 OPF 改不了，书名照旧
-                if let Ok(t) = crate::opfmeta::apply_fields(&text, &[(crate::opfmeta::DcField::Title, vec![title.to_string()])]) {
+                if let Ok(t) = crate::opfmeta::apply_fields(
+                    &text,
+                    &[(crate::opfmeta::DcField::Title, vec![title.to_string()])],
+                ) {
                     text = Cow::Owned(t);
                 }
             }

@@ -22,21 +22,43 @@ const CLASS: &str = "eink-i";
 
 /// 行内声明里要搬进样式表的属性（值里有 em 长度时）。
 const MOVED: &[&str] = &[
-    "margin", "margin-top", "margin-bottom", "margin-left", "margin-right", "padding", "padding-top", "padding-bottom", "padding-left", "padding-right", "text-indent", "font-size", "font",
-    "letter-spacing", "word-spacing",
+    "margin",
+    "margin-top",
+    "margin-bottom",
+    "margin-left",
+    "margin-right",
+    "padding",
+    "padding-top",
+    "padding-bottom",
+    "padding-left",
+    "padding-right",
+    "text-indent",
+    "font-size",
+    "font",
+    "letter-spacing",
+    "word-spacing",
 ];
 
 pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport) {
     let opf_idx = find_opf(entries);
-    let opf_dir = opf_idx.map(|i| dir_of(&entries[i].name).to_string()).unwrap_or_default();
-    let at = |dir: &str, n: &str| if dir.is_empty() { n.to_string() } else { format!("{dir}/{n}") };
+    let opf_dir = opf_idx
+        .map(|i| dir_of(&entries[i].name).to_string())
+        .unwrap_or_default();
+    let at = |dir: &str, n: &str| {
+        if dir.is_empty() {
+            n.to_string()
+        } else {
+            format!("{dir}/{n}")
+        }
+    };
     let inline_path = at(&opf_dir, INLINE_CSS);
     // 挪出来的 <style>：书内路径 → 内容；行内搬出来的类：(标签, 声明) → 序号
     // 三段（2026-10-15 改，以前整步串行）：① 各章并行看要挪哪些 `<style>`、哪些行内 `style` 要拆（[`plan_chapter`]，只读）；
     // ② 串行按「章的顺序、章里标签的顺序」给搬出来的声明编类号——和以前逐章做时编号的先后一样，产物逐字节不变；
     // ③ 各章并行改写（[`rewrite_chapter`]）。
     let chapters = super::chapter_indices(entries);
-    let plans: Vec<ChapterPlan> = crate::util::par_map(&chapters, |&i| plan_chapter(&entries[i], &at));
+    let plans: Vec<ChapterPlan> =
+        crate::util::par_map(&chapters, |&i| plan_chapter(&entries[i], &at));
     let mut extracted: BTreeMap<String, String> = BTreeMap::new();
     let mut classes: Vec<(String, String)> = Vec::new();
     let mut numbered: HashMap<usize, (ChapterPlan, Vec<usize>)> = HashMap::new();
@@ -51,25 +73,54 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport) {
             .inline
             .iter()
             .map(|(_, _, tag, _, moved)| {
-                classes.iter().position(|c| c.0 == *tag && c.1 == *moved).unwrap_or_else(|| {
-                    classes.push((tag.clone(), moved.clone()));
-                    classes.len() - 1
-                })
+                classes
+                    .iter()
+                    .position(|c| c.0 == *tag && c.1 == *moved)
+                    .unwrap_or_else(|| {
+                        classes.push((tag.clone(), moved.clone()));
+                        classes.len() - 1
+                    })
             })
             .collect();
         numbered.insert(i, (plan, ks));
     }
-    let mut work: Vec<(&mut Entry, (ChapterPlan, Vec<usize>))> = entries.iter_mut().enumerate().filter_map(|(i, e)| numbered.remove(&i).map(|p| (e, p))).collect();
-    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, (plan, ks))| rewrite_chapter(e, plan, ks, &inline_path)).into_iter().sum::<usize>();
+    let mut work: Vec<(&mut Entry, (ChapterPlan, Vec<usize>))> = entries
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, e)| numbered.remove(&i).map(|p| (e, p)))
+        .collect();
+    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, (plan, ks))| {
+        rewrite_chapter(e, plan, ks, &inline_path)
+    })
+    .into_iter()
+    .sum::<usize>();
     for (n, (path, css)) in extracted.iter().enumerate() {
-        add_css_entry(entries, opf_idx, path, css, &format!("eink-style-{}", n + 1));
+        add_css_entry(
+            entries,
+            opf_idx,
+            path,
+            css,
+            &format!("eink-style-{}", n + 1),
+        );
     }
     if !classes.is_empty() {
-        let mut sheet = String::from("/* 行内 style 里写 em 的长度（sheng-ren kindle_rules，见 wash/inline_css.rs） */\n");
-        let reps = class_repeats(entries.iter().filter(|e| is_css_name(&e.name)).map(|e| e.data.as_slice()).chain(extracted.values().map(|c| c.as_bytes())));
+        let mut sheet = String::from(
+            "/* 行内 style 里写 em 的长度（sheng-ren kindle_rules，见 wash/inline_css.rs） */\n",
+        );
+        let reps = class_repeats(
+            entries
+                .iter()
+                .filter(|e| is_css_name(&e.name))
+                .map(|e| e.data.as_slice())
+                .chain(extracted.values().map(|c| c.as_bytes())),
+        );
         for (k, (tag, decls)) in classes.iter().enumerate() {
             let class = format!(".{CLASS}{}", k + 1).repeat(reps);
-            let sel = if tag == "body" { format!("html body{class}") } else { format!("html body {tag}{class}") };
+            let sel = if tag == "body" {
+                format!("html body{class}")
+            } else {
+                format!("html body {tag}{class}")
+            };
             sheet.push_str(&format!("{sel}{{{decls}}}\n"));
         }
         add_css_entry(entries, opf_idx, &inline_path, &sheet, "eink-inline-css");
@@ -83,7 +134,11 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport) {
         let (out, n) = close_last_decls(&text);
         if n > 0 {
             rep.kindle_rule_edits += n;
-            e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
+            e.data = if latin1 {
+                crate::util::latin1_encode(&out)
+            } else {
+                out.into_bytes()
+            };
         }
     }
 }
@@ -100,7 +155,9 @@ struct ChapterPlan {
 /// 看一章（只读）：挪哪些 `<style>`、拆哪些行内 `style`。`at(目录, 文件名)` 是书内路径。
 fn plan_chapter(e: &Entry, at: &(impl Fn(&str, &str) -> String + Sync)) -> ChapterPlan {
     let mut plan = ChapterPlan::default();
-    let Ok(text) = std::str::from_utf8(&e.data) else { return plan };
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return plan;
+    };
     let dir = dir_of(&e.name);
     for b in html::style_blocks(text) {
         let open = &text[b.start..b.content_start];
@@ -110,19 +167,29 @@ fn plan_chapter(e: &Entry, at: &(impl Fn(&str, &str) -> String + Sync)) -> Chapt
             continue;
         }
         let name = format!("eink-style-{:08x}.css", fnv64(css.as_bytes()) as u32);
-        let media = html::attr_value(open, "media").map(|m| format!(r#" media="{m}""#)).unwrap_or_default();
+        let media = html::attr_value(open, "media")
+            .map(|m| format!(r#" media="{m}""#))
+            .unwrap_or_default();
         let link = format!(r#"<link rel="stylesheet" type="text/css" href="{name}"{media}/>"#);
-        plan.styles.push((b.start, b.end, link, at(dir, &name), css));
+        plan.styles
+            .push((b.start, b.end, link, at(dir, &name), css));
     }
     if let Some((bs, be)) = html::body_range(text) {
         // `<body>` 自己也算（`root_em` 给写 px 字号的 `<body>` 接的 em：《狼厅》）
         let body = html::tags(text).find(|t| t.is_start() && t.is("body"));
-        for t in body.into_iter().chain(html::tags_in(text, bs, be).filter(|t| t.is_start())) {
+        for t in body
+            .into_iter()
+            .chain(html::tags_in(text, bs, be).filter(|t| t.is_start()))
+        {
             let raw = &text[t.start..t.end];
-            let Some(style) = html::attr_value(raw, "style") else { continue };
+            let Some(style) = html::attr_value(raw, "style") else {
+                continue;
+            };
             // 要改成 `div` 的标题（`kindle_model::DIV_ATTR`）按 `div` 搬：字号也搬
             let tag = crate::kindle_model::reader_tag_raw(t.name, raw);
-            let Some((kept, moved)) = split_inline(&xml_unescape(style), &tag) else { continue };
+            let Some((kept, moved)) = split_inline(&xml_unescape(style), &tag) else {
+                continue;
+            };
             plan.inline.push((t.start, t.end, tag, kept, moved));
         }
     }
@@ -131,11 +198,21 @@ fn plan_chapter(e: &Entry, at: &(impl Fn(&str, &str) -> String + Sync)) -> Chapt
 
 /// 照 `plan` 改写一章（`ks` 是各处行内 `style` 编好的类号，从 0 起），返回改动数。
 fn rewrite_chapter(e: &mut Entry, plan: &ChapterPlan, ks: &[usize], inline_path: &str) -> usize {
-    let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
-    let mut edits: Vec<(usize, usize, String)> = plan.styles.iter().map(|(s, t, link, _, _)| (*s, *t, link.clone())).collect();
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return 0;
+    };
+    let mut edits: Vec<(usize, usize, String)> = plan
+        .styles
+        .iter()
+        .map(|(s, t, link, _, _)| (*s, *t, link.clone()))
+        .collect();
     for ((s, t, _, kept, _), k) in plan.inline.iter().zip(ks) {
         let raw = &text[*s..*t];
-        let mut new = if kept.trim().is_empty() { html::remove_attr(raw, "style") } else { html::set_attr(raw, "style", &xml_escape(kept)) };
+        let mut new = if kept.trim().is_empty() {
+            html::remove_attr(raw, "style")
+        } else {
+            html::set_attr(raw, "style", &xml_escape(kept))
+        };
         new = html::add_class(&new, &format!("{CLASS}{}", k + 1));
         edits.push((*s, *t, new));
     }
@@ -143,7 +220,10 @@ fn rewrite_chapter(e: &mut Entry, plan: &ChapterPlan, ks: &[usize], inline_path:
     let n = edits.len();
     let mut out = html::apply_edits(text, edits);
     if !plan.inline.is_empty() {
-        out = typeset::inject_css_link(&out, &crate::epubzip::href_to(dir_of(&e.name), inline_path, ""));
+        out = typeset::inject_css_link(
+            &out,
+            &crate::epubzip::href_to(dir_of(&e.name), inline_path, ""),
+        );
     }
     e.data = out.into_bytes();
     n
@@ -186,16 +266,26 @@ fn clean_style(s: &str) -> String {
 
 /// 样式表里有没有写 em 的声明（[`has_em`]）。
 fn css_has_em(css: &str) -> bool {
-    crate::cascade::rule_spans(css).iter().any(|r| html::css_decls(r.body).iter().any(|d| has_em(&d.prop.to_ascii_lowercase(), d.value)))
+    crate::cascade::rule_spans(css).iter().any(|r| {
+        html::css_decls(r.body)
+            .iter()
+            .any(|d| has_em(&d.prop.to_ascii_lowercase(), d.value))
+    })
 }
 
 /// 值里有没有 em 长度（`font-size` 还算 %）。
 fn has_em(prop: &str, v: &str) -> bool {
-    v.split(|c: char| c.is_whitespace() || c == ',' || c == '/' || c == '(' || c == ')').any(|tok| {
-        let tok = tok.trim().to_ascii_lowercase();
-        let end = tok.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(tok.len());
-        end > 0 && tok[..end].parse::<f64>().is_ok() && (matches!(&tok[end..], "em" | "rem" | "ex") || (prop.starts_with("font") && &tok[end..] == "%"))
-    })
+    v.split(|c: char| c.is_whitespace() || c == ',' || c == '/' || c == '(' || c == ')')
+        .any(|tok| {
+            let tok = tok.trim().to_ascii_lowercase();
+            let end = tok
+                .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+                .unwrap_or(tok.len());
+            end > 0
+                && tok[..end].parse::<f64>().is_ok()
+                && (matches!(&tok[end..], "em" | "rem" | "ex")
+                    || (prop.starts_with("font") && &tok[end..] == "%"))
+        })
 }
 
 /// 行内 `style` 拆成 (留在行内的, 搬进样式表的声明)；没有要搬的 `None`。搬出去的每条带上 `!important`。
@@ -204,7 +294,26 @@ fn split_inline(style: &str, tag: &str) -> Option<(String, String)> {
     let heading = matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
     // 行内元素上的首行缩进不起作用：不搬，少动书。（`font-size:1em` 以前也当没写不搬；Move 的 em 按根字号算，`root_em` 接的
     // `font-size:1em` 要压过 px 写的字号（《狼厅》），2026-10-14 起照搬）
-    let inline = matches!(tag, "span" | "a" | "b" | "i" | "em" | "strong" | "sup" | "sub" | "font" | "small" | "big" | "u" | "s" | "code" | "cite" | "q" | "abbr");
+    let inline = matches!(
+        tag,
+        "span"
+            | "a"
+            | "b"
+            | "i"
+            | "em"
+            | "strong"
+            | "sup"
+            | "sub"
+            | "font"
+            | "small"
+            | "big"
+            | "u"
+            | "s"
+            | "code"
+            | "cite"
+            | "q"
+            | "abbr"
+    );
     let noop = |p: &str, _: &str| inline && p == "text-indent";
     // 每个属性最后一次写的值
     let mut last: BTreeMap<String, &str> = BTreeMap::new();
@@ -213,7 +322,12 @@ fn split_inline(style: &str, tag: &str) -> Option<(String, String)> {
     }
     let moved_props: Vec<String> = last
         .iter()
-        .filter(|(p, v)| MOVED.contains(&p.as_str()) && has_em(p, v) && !(heading && p.starts_with("font")) && !noop(p, v))
+        .filter(|(p, v)| {
+            MOVED.contains(&p.as_str())
+                && has_em(p, v)
+                && !(heading && p.starts_with("font"))
+                && !noop(p, v)
+        })
         .map(|(p, _)| p.clone())
         .collect();
     if moved_props.is_empty() {
@@ -223,13 +337,24 @@ fn split_inline(style: &str, tag: &str) -> Option<(String, String)> {
     let mut moved = String::new();
     for d in &decls {
         let p = d.prop.to_ascii_lowercase();
-        if moved_props.contains(&p) && last.get(&p) == Some(&d.value) && !moved.contains(&format!("{p}:")) {
+        if moved_props.contains(&p)
+            && last.get(&p) == Some(&d.value)
+            && !moved.contains(&format!("{p}:"))
+        {
             let v = d.value.trim();
-            let imp = if v.to_ascii_lowercase().ends_with("!important") { "" } else { " !important" };
+            let imp = if v.to_ascii_lowercase().ends_with("!important") {
+                ""
+            } else {
+                " !important"
+            };
             moved.push_str(&format!("{p}:{v}{imp};"));
         }
     }
-    let kept: String = decls.iter().filter(|d| !moved_props.contains(&d.prop.to_ascii_lowercase())).map(|d| d.raw).collect();
+    let kept: String = decls
+        .iter()
+        .filter(|d| !moved_props.contains(&d.prop.to_ascii_lowercase()))
+        .map(|d| d.raw)
+        .collect();
     Some((kept.trim().to_string(), moved))
 }
 
@@ -244,7 +369,9 @@ fn close_last_decls(css: &str) -> (String, usize) {
             let code = crate::cascade::strip_comments(r.body);
             let code = code.trim_end();
             // 最后一条写的是 em 才补（另一套解析只错在 em 上，px、关键字照常：我们自己的 `height:auto}` 不动）
-            let last_em = html::css_decls(code).last().is_some_and(|d| has_em(&d.prop.to_ascii_lowercase(), d.value));
+            let last_em = html::css_decls(code)
+                .last()
+                .is_some_and(|d| has_em(&d.prop.to_ascii_lowercase(), d.value));
             (last_em && !code.ends_with(';')).then(|| {
                 let at = r.body_start + r.body.len();
                 (at, at, ";".to_string())
@@ -268,22 +395,61 @@ mod tests {
 
     #[test]
     fn inline_em_split() {
-        assert_eq!(split_inline("color:red; margin-top:1.31em;text-indent:2em", "p"), Some(("color:red;".into(), "margin-top:1.31em !important;text-indent:2em !important;".into())));
-        assert_eq!(split_inline("margin-left:20px;line-height:1;font-size:large", "p"), None);
+        assert_eq!(
+            split_inline("color:red; margin-top:1.31em;text-indent:2em", "p"),
+            Some((
+                "color:red;".into(),
+                "margin-top:1.31em !important;text-indent:2em !important;".into()
+            ))
+        );
+        assert_eq!(
+            split_inline("margin-left:20px;line-height:1;font-size:large", "p"),
+            None
+        );
         // 标题的字号不搬；同一属性按最后一次：后面写的 px 压过前面的 em，不搬
-        assert_eq!(split_inline("font-size:2em;font-size:xx-large;margin-bottom:1em", "h2"), Some(("font-size:2em;font-size:xx-large;".into(), "margin-bottom:1em !important;".into())));
+        assert_eq!(
+            split_inline("font-size:2em;font-size:xx-large;margin-bottom:1em", "h2"),
+            Some((
+                "font-size:2em;font-size:xx-large;".into(),
+                "margin-bottom:1em !important;".into()
+            ))
+        );
         assert_eq!(split_inline("text-indent:2em;text-indent:30px", "p"), None);
-        assert_eq!(split_inline("font-size:120%;margin:0 0 1em", "span"), Some(("".into(), "font-size:120% !important;margin:0 0 1em !important;".into())));
+        assert_eq!(
+            split_inline("font-size:120%;margin:0 0 1em", "span"),
+            Some((
+                "".into(),
+                "font-size:120% !important;margin:0 0 1em !important;".into()
+            ))
+        );
         // 行内元素上的首行缩进不搬；1em 字号 2026-10-14 起照搬（Move 的 em 按根字号算，见 split_inline）
-        assert_eq!(split_inline("font-size: 1em; text-indent: 2em", "span"), Some(("text-indent: 2em".into(), "font-size:1em !important;".into())));
-        assert_eq!(split_inline("text-indent:0em", "p"), Some(("".into(), "text-indent:0em !important;".into())));
+        assert_eq!(
+            split_inline("font-size: 1em; text-indent: 2em", "span"),
+            Some((
+                "text-indent: 2em".into(),
+                "font-size:1em !important;".into()
+            ))
+        );
+        assert_eq!(
+            split_inline("text-indent:0em", "p"),
+            Some(("".into(), "text-indent:0em !important;".into()))
+        );
     }
 
     /// 类名重复的遍数：比全书最多类的选择器多一个、至少 2；带 id 的、at 规则头不算，`@media` 里面的算。
     #[test]
     fn class_repeats_beat_every_class_selector() {
         assert_eq!(class_repeats([b"p{x:1}".as_slice()].into_iter()), 2);
-        assert_eq!(class_repeats([b"p.a{x:1} #i .a.b.c.d{x:1}".as_slice(), b"@media screen{div.a .b[title]{x:1}} /* .a.b.c.d.e{} */".as_slice()].into_iter()), 4);
+        assert_eq!(
+            class_repeats(
+                [
+                    b"p.a{x:1} #i .a.b.c.d{x:1}".as_slice(),
+                    b"@media screen{div.a .b[title]{x:1}} /* .a.b.c.d.e{} */".as_slice()
+                ]
+                .into_iter()
+            ),
+            4
+        );
     }
 
     fn book(chapter: &str) -> Vec<Entry> {
@@ -301,15 +467,30 @@ mod tests {
         let mut b = book(ch);
         apply(&mut b, &mut WashReport::default());
         let out = String::from_utf8(b[2].data.clone()).unwrap();
-        let css_name = b.iter().map(|e| e.name.as_str()).find(|n| n.starts_with("O/t/eink-style-")).unwrap().to_string();
+        let css_name = b
+            .iter()
+            .map(|e| e.name.as_str())
+            .find(|n| n.starts_with("O/t/eink-style-"))
+            .unwrap()
+            .to_string();
         let file = css_name.rsplit('/').next().unwrap();
         assert!(out.contains(&format!(r#"<link rel="stylesheet" href="../s.css"/><link rel="stylesheet" type="text/css" href="{file}" media="screen"/><style>@page{{margin:0}}</style><link rel="stylesheet" type="text/css" href="../eink-inline.css"/></head>"#)), "{out}");
         assert!(out.contains(r#"<p class="a eink-i1" style="color:red">一</p><p style="color:red" class="eink-i1">二</p>"#), "{out}");
-        let css = |n: &str| String::from_utf8(b.iter().find(|e| e.name == n).unwrap().data.clone()).unwrap();
+        let css = |n: &str| {
+            String::from_utf8(b.iter().find(|e| e.name == n).unwrap().data.clone()).unwrap()
+        };
         assert_eq!(css(&css_name), "p.a{text-indent:2em;}\n");
         assert_eq!(css("O/s.css"), "p{text-indent:2em;}");
-        assert!(css("O/eink-inline.css").contains("html body p.eink-i1.eink-i1{margin-top:1em !important;}"), "{}", css("O/eink-inline.css"));
+        assert!(
+            css("O/eink-inline.css")
+                .contains("html body p.eink-i1.eink-i1{margin-top:1em !important;}"),
+            "{}",
+            css("O/eink-inline.css")
+        );
         let opf = String::from_utf8(b[0].data.clone()).unwrap();
-        assert!(opf.contains("t/eink-style-") && opf.contains(r#"href="eink-inline.css""#), "{opf}");
+        assert!(
+            opf.contains("t/eink-style-") && opf.contains(r#"href="eink-inline.css""#),
+            "{opf}"
+        );
     }
 }

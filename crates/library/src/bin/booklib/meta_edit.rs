@@ -42,7 +42,9 @@ fn show(path: &Path) {
         println!("{}: {}", field.label(), values.join("; "));
     }
     if let Some((ext, bytes)) = bookconv::epubzip::cover_image_of(path) {
-        let dims = image::load_from_memory(&bytes).map(|i| format!("{}×{}", i.width(), i.height())).unwrap_or_default();
+        let dims = image::load_from_memory(&bytes)
+            .map(|i| format!("{}×{}", i.width(), i.height()))
+            .unwrap_or_default();
         println!("封面: 有（{ext}，{dims}，{} KB）", bytes.len() / 1024);
     } else {
         println!("封面: 无");
@@ -59,21 +61,49 @@ fn find_in_library(sel: &Path, root: &Path) -> PathBuf {
     let lib = library::Library::open(root).unwrap_or_else(|e| fail(&format!("打开书库失败: {e}")));
     let books = lib.select(std::slice::from_ref(&sel));
     let m = match &books[..] {
-        [] => fail(&format!("文件不存在，书库里也没有 id 或书名对得上的书：{sel}")),
+        [] => fail(&format!(
+            "文件不存在，书库里也没有 id 或书名对得上的书：{sel}"
+        )),
         [m] => m,
         _ => {
-            let list: Vec<String> = books.iter().map(|m| format!("  {}  {}  {}", &m.id[..m.id.len().min(12)], m.title, m.source_path)).collect();
-            fail(&format!("「{sel}」对上 {} 本书，给更长的 id 或完整书名：\n{}", books.len(), list.join("\n")))
+            let list: Vec<String> = books
+                .iter()
+                .map(|m| {
+                    format!(
+                        "  {}  {}  {}",
+                        &m.id[..m.id.len().min(12)],
+                        m.title,
+                        m.source_path
+                    )
+                })
+                .collect();
+            fail(&format!(
+                "「{sel}」对上 {} 本书，给更长的 id 或完整书名：\n{}",
+                books.len(),
+                list.join("\n")
+            ))
         }
     };
     if m.source() == library::Source::Stored || m.source_path.is_empty() {
-        fail(&format!("《{}》书库里存的是副本（网址入库或找不到原件），没有原件可改", m.title));
+        fail(&format!(
+            "《{}》书库里存的是副本（网址入库或找不到原件），没有原件可改",
+            m.title
+        ));
     }
     let path = PathBuf::from(&m.source_path);
     if !path.is_file() {
-        fail(&format!("《{}》的原件不在了：{}（改名或移动过就先 sync）", m.title, path.display()));
+        fail(&format!(
+            "《{}》的原件不在了：{}（改名或移动过就先 sync）",
+            m.title,
+            path.display()
+        ));
     }
-    println!("书库 {} 《{}》→ {}", &m.id[..m.id.len().min(12)], m.title, path.display());
+    println!(
+        "书库 {} 《{}》→ {}",
+        &m.id[..m.id.len().min(12)],
+        m.title,
+        path.display()
+    );
     path
 }
 
@@ -90,12 +120,22 @@ pub fn run(args: Vec<OsString>, library: PathBuf) {
         let (key, inline) = match raw.as_encoded_bytes().iter().position(|&b| b == b'=') {
             Some(i) if a.starts_with("--") => {
                 let b = raw.as_encoded_bytes();
-                let os = |x: &[u8]| <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(x).to_os_string();
-                (String::from_utf8_lossy(&b[..i]).into_owned(), Some(os(&b[i + 1..])))
+                let os = |x: &[u8]| {
+                    <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(x).to_os_string()
+                };
+                (
+                    String::from_utf8_lossy(&b[..i]).into_owned(),
+                    Some(os(&b[i + 1..])),
+                )
             }
             _ => (a.clone(), None),
         };
-        let mut value_os = || inline.clone().or_else(|| args.next()).unwrap_or_else(|| usage(&format!("{key} 要给值")));
+        let mut value_os = || {
+            inline
+                .clone()
+                .or_else(|| args.next())
+                .unwrap_or_else(|| usage(&format!("{key} 要给值")))
+        };
         let mut value = || value_os().to_string_lossy().into_owned();
         match key.as_str() {
             "-h" | "--help" => {
@@ -121,16 +161,23 @@ pub fn run(args: Vec<OsString>, library: PathBuf) {
             }
             "--cover" => cover = Some(PathBuf::from(value_os())),
             "--get-cover" => get_cover = Some(PathBuf::from(value_os())),
-            "--fetch" | "--force" | "--clear" => usage(&format!("{key} 是 meta --fetch 的选项，不能和 --edit 一起用")),
+            "--fetch" | "--force" | "--clear" => usage(&format!(
+                "{key} 是 meta --fetch 的选项，不能和 --edit 一起用"
+            )),
             k if k.starts_with('-') => usage(&format!("meta --edit 不认识选项 {k}")),
             _ if file.is_none() => file = Some(PathBuf::from(raw)),
             _ => usage("meta --edit 只能给一个文件（路径里有空格时要整个加引号）"),
         }
     }
     let file = file.unwrap_or_else(|| usage("meta --edit 要给一个 EPUB 文件（或书库 id、书名）"));
-    let file = if file.is_file() { file } else { find_in_library(&file, &library) };
+    let file = if file.is_file() {
+        file
+    } else {
+        find_in_library(&file, &library)
+    };
     if let Some(out) = get_cover {
-        let (ext, bytes) = bookconv::epubzip::cover_image_of(&file).unwrap_or_else(|| fail("书里没有封面"));
+        let (ext, bytes) =
+            bookconv::epubzip::cover_image_of(&file).unwrap_or_else(|| fail("书里没有封面"));
         bookconv::util::write_atomic(&out, &bytes).unwrap_or_else(|e| fail(&e));
         println!("已取出封面（{ext}）：{}", out.display());
         return;
@@ -139,7 +186,9 @@ pub fn run(args: Vec<OsString>, library: PathBuf) {
     let mut edits = Edits::default();
     for (field, v) in singles {
         edits.set.retain(|(f, _)| *f != field); // 同一选项给了多次，以最后一次为准
-        edits.set.push((field, if v.trim().is_empty() { vec![] } else { vec![v] }));
+        edits
+            .set
+            .push((field, if v.trim().is_empty() { vec![] } else { vec![v] }));
     }
     for (field, list) in multis {
         let list: Vec<String> = list.into_iter().filter(|v| !v.trim().is_empty()).collect();
@@ -149,7 +198,9 @@ pub fn run(args: Vec<OsString>, library: PathBuf) {
         if p.to_string_lossy().trim().is_empty() {
             opfmeta::CoverEdit::Remove
         } else {
-            opfmeta::CoverEdit::Set(std::fs::read(&p).unwrap_or_else(|e| fail(&format!("{}: {e}", p.display()))))
+            opfmeta::CoverEdit::Set(
+                std::fs::read(&p).unwrap_or_else(|e| fail(&format!("{}: {e}", p.display()))),
+            )
         }
     });
     if edits.is_empty() {
@@ -161,20 +212,42 @@ pub fn run(args: Vec<OsString>, library: PathBuf) {
 
     // 先写临时文件再改名（不备份：2026-10-01 定），中途失败原文件不动。
     // 符号链接改它指向的文件（不把链接换成普通文件）；写回的文件保留原来的权限（临时文件新建出来是缺省权限）
-    let file = std::fs::canonicalize(&file).unwrap_or_else(|e| fail(&format!("{}: {e}", file.display())));
-    let perms = std::fs::metadata(&file).map(|m| m.permissions()).unwrap_or_else(|e| fail(&format!("{}: {e}", file.display())));
-    let edited = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(&file, "meta-edit"), &file, |tmp| {
-        let report = opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}"))?;
-        std::fs::set_permissions(tmp, perms).map_err(|e| format!("没改：设权限 {}: {e}", tmp.display()))?;
-        Ok(report)
-    });
+    let file =
+        std::fs::canonicalize(&file).unwrap_or_else(|e| fail(&format!("{}: {e}", file.display())));
+    let perms = std::fs::metadata(&file)
+        .map(|m| m.permissions())
+        .unwrap_or_else(|e| fail(&format!("{}: {e}", file.display())));
+    let edited = bookconv::util::produce_then_replace(
+        &bookconv::util::tmp_beside(&file, "meta-edit"),
+        &file,
+        |tmp| {
+            let report =
+                opfmeta::edit_epub(&file, tmp, &edits).map_err(|e| format!("没改：{e}"))?;
+            std::fs::set_permissions(tmp, perms)
+                .map_err(|e| format!("没改：设权限 {}: {e}", tmp.display()))?;
+            Ok(report)
+        },
+    );
     let report = edited.unwrap_or_else(|e| fail(&e));
-    let removed = report.cover_removed.as_ref().map(|gone| if gone.is_empty() { "封面（书里本来就没有）".to_string() } else { format!("封面（去掉 {}）", gone.join("、")) });
+    let removed = report.cover_removed.as_ref().map(|gone| {
+        if gone.is_empty() {
+            "封面（书里本来就没有）".to_string()
+        } else {
+            format!("封面（去掉 {}）", gone.join("、"))
+        }
+    });
     let what: Vec<String> = report
         .fields
         .iter()
         .map(|f| f.label().to_string())
-        .chain(report.cover_replaced.map(|r| if r { "封面（换掉原图）" } else { "封面（新加）" }.to_string()))
+        .chain(report.cover_replaced.map(|r| {
+            if r {
+                "封面（换掉原图）"
+            } else {
+                "封面（新加）"
+            }
+            .to_string()
+        }))
         .chain(removed)
         .collect();
     println!("已写入：{}（{}）", file.display(), what.join("、"));

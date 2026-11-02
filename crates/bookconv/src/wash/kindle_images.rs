@@ -72,7 +72,15 @@ enum Shown {
     Frac(f64),
 }
 
-pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, known: Option<&HashMap<String, (u32, u32)>>, sizing: ImageSizing, kref: KindleImageRef, h_scale: Option<f64>) {
+pub(super) fn apply(
+    entries: &mut Vec<Entry>,
+    rep: &mut WashReport,
+    media: Option<&MediaEnv>,
+    known: Option<&HashMap<String, (u32, u32)>>,
+    sizing: ImageSizing,
+    kref: KindleImageRef,
+    h_scale: Option<f64>,
+) {
     if sizing == ImageSizing::Css {
         return;
     }
@@ -81,20 +89,37 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
     // 调用方按原书的名字读的；清洗层改过名的（《飘》`*::**.png` 这种名字规范成下划线）按改名记录换过来
     let mut dims: HashMap<&str, (u32, u32)> = HashMap::new();
     if let Some(k) = known {
-        let back: HashMap<&str, &str> = rep.renamed.iter().map(|(old, new)| (new.as_str(), old.as_str())).collect();
-        for e in entries.iter().filter(|e| crate::util::is_image_ext(&e.name)) {
+        let back: HashMap<&str, &str> = rep
+            .renamed
+            .iter()
+            .map(|(old, new)| (new.as_str(), old.as_str()))
+            .collect();
+        for e in entries
+            .iter()
+            .filter(|e| crate::util::is_image_ext(&e.name))
+        {
             if let Some(d) = k.get(back.get(e.name.as_str()).copied().unwrap_or(&e.name)) {
                 dims.insert(e.name.as_str(), *d);
             }
         }
     }
-    for e in entries.iter().filter(|e| crate::util::is_image_ext(&e.name) && !e.data.is_empty()) {
-        if let Some(d) = crate::imgopt::guard(|| image::ImageReader::new(std::io::Cursor::new(&e.data)).with_guessed_format().ok()?.into_dimensions().ok()) {
+    for e in entries
+        .iter()
+        .filter(|e| crate::util::is_image_ext(&e.name) && !e.data.is_empty())
+    {
+        if let Some(d) = crate::imgopt::guard(|| {
+            image::ImageReader::new(std::io::Cursor::new(&e.data))
+                .with_guessed_format()
+                .ok()?
+                .into_dimensions()
+                .ok()
+        }) {
             dims.entry(e.name.as_str()).or_insert(d);
         }
     }
     let chapters = super::chapter_indices(entries);
-    let per_file: Vec<FileImgs> = crate::util::par_map(&chapters, |&i| scan(&entries[i], media, &css, &dims));
+    let per_file: Vec<FileImgs> =
+        crate::util::par_map(&chapters, |&i| scan(&entries[i], media, &css, &dims));
     let mut sizes = HashMap::new();
     for f in &per_file {
         for (k, n) in &f.sizes {
@@ -127,13 +152,28 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             continue;
         }
         let e = &mut entries[i];
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let tags: Vec<(usize, usize)> = html::tags(text).filter(|t| t.is_start() && t.is("img")).map(|t| (t.start, t.end)).collect();
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
+        let tags: Vec<(usize, usize)> = html::tags(text)
+            .filter(|t| t.is_start() && t.is("img"))
+            .map(|t| (t.start, t.end))
+            .collect();
         // 解析器和标签扫描数出来的 `<img>` 对不上（写坏的 HTML）：拿不准，这章不动
         if tags.len() != cls.len() {
             continue;
         }
-        let edits: Vec<(usize, usize, String)> = tags.iter().zip(cls).filter_map(|(&(s, t), c)| Some((s, t, html::add_class(&strip_inline_size(&text[s..t]), c.as_deref()?)))).collect();
+        let edits: Vec<(usize, usize, String)> = tags
+            .iter()
+            .zip(cls)
+            .filter_map(|(&(s, t), c)| {
+                Some((
+                    s,
+                    t,
+                    html::add_class(&strip_inline_size(&text[s..t]), c.as_deref()?),
+                ))
+            })
+            .collect();
         edited += edits.len();
         let out = html::apply_edits(text, edits);
         let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
@@ -143,21 +183,41 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
         return;
     }
     rep.kindle_rule_edits += edited;
-    let mut sheet = String::from("/* 图片照 Kindle 上的大小显示（sheng-ren kindle_rules，见 wash/kindle_images.rs） */\n");
+    let mut sheet = String::from(
+        "/* 图片照 Kindle 上的大小显示（sheng-ren kindle_rules，见 wash/kindle_images.rs） */\n",
+    );
     for r in rules.values() {
         sheet.push_str(r);
         sheet.push('\n');
     }
-    add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-img-css");
+    add_css_entry(
+        entries,
+        find_opf(entries),
+        &css_path,
+        &sheet,
+        "eink-img-css",
+    );
 }
 
 /// 待走的节点：(节点, 父元素的计算值, 所在块的计算值, 在不显示的元素里)。
-type Pending<'a> = (ego_tree::NodeRef<'a, Node>, Rc<Computed>, Rc<Computed>, bool);
+type Pending<'a> = (
+    ego_tree::NodeRef<'a, Node>,
+    Rc<Computed>,
+    Rc<Computed>,
+    bool,
+);
 
 /// 一章：每张 `<img>`（DOM 顺序）在 Kindle 上怎么排、尺寸写法，各块字号的字数。
-fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<Rules>>, dims: &HashMap<&str, (u32, u32)>) -> FileImgs {
+fn scan(
+    e: &Entry,
+    media: Option<&MediaEnv>,
+    css: &HashMap<&str, std::sync::Arc<Rules>>,
+    dims: &HashMap<&str, (u32, u32)>,
+) -> FileImgs {
     let mut f = FileImgs::default();
-    let Ok(text) = std::str::from_utf8(&e.data) else { return f };
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return f;
+    };
     let html = Html::parse_document(text);
     let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
     let decls_of = |el: &ElementRef| {
@@ -170,26 +230,41 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     let mut comp: HashMap<ego_tree::NodeId, Rc<Computed>> = HashMap::new();
     let mut hidden: HashSet<ego_tree::NodeId> = HashSet::new();
     let mut block: HashSet<ego_tree::NodeId> = HashSet::new();
-    let rc = Rc::new(Computed::derive(&Computed::root(), &decls_of(&root), "html"));
+    let rc = Rc::new(Computed::derive(
+        &Computed::root(),
+        &decls_of(&root),
+        "html",
+    ));
     comp.insert(root.id(), rc.clone());
     block.insert(root.id());
-    let mut stack: Vec<Pending> = root.children().rev().map(|ch| (ch, rc.clone(), rc.clone(), false)).collect();
+    let mut stack: Vec<Pending> = root
+        .children()
+        .rev()
+        .map(|ch| (ch, rc.clone(), rc.clone(), false))
+        .collect();
     while let Some((node, parent, blk, gone)) = stack.pop() {
         match node.value() {
             Node::Text(t) if !gone => {
                 let n = t.chars().filter(|c| !c.is_whitespace()).count();
                 if n > 0 {
-                    *f.sizes.entry((blk.font_size * 1000.0).round() as i64).or_default() += n;
+                    *f.sizes
+                        .entry((blk.font_size * 1000.0).round() as i64)
+                        .or_default() += n;
                 }
             }
             Node::Element(v) => {
-                let Some(el) = ElementRef::wrap(node) else { continue };
+                let Some(el) = ElementRef::wrap(node) else {
+                    continue;
+                };
                 let c = Rc::new(Computed::derive(&parent, &decls_of(&el), v.name()));
-                let gone = gone || matches!(v.name(), "head" | "script" | "style" | "title") || c.display.as_deref() == Some("none");
+                let gone = gone
+                    || matches!(v.name(), "head" | "script" | "style" | "title")
+                    || c.display.as_deref() == Some("none");
                 if gone {
                     hidden.insert(node.id());
                 }
-                let is_block = crate::cascade::is_block(&el, &c) || (v.name() == "img" && c.display.as_deref() == Some("block"));
+                let is_block = crate::cascade::is_block(&el, &c)
+                    || (v.name() == "img" && c.display.as_deref() == Some("block"));
                 if is_block {
                     block.insert(node.id());
                 }
@@ -205,15 +280,28 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     // 写出器把带背景、边框、内边距、阴影或宽度的块写成容器（`kfx::write::parse` 的 `container_block`）：图外面有这种块就不是整页单图
     let boxed = |id: ego_tree::NodeId| {
         comp.get(&id).is_some_and(|c| {
-            c.background.is_some() || c.bg_image.is_some() || c.has_border() || c.box_shadow.is_some() || c.width.is_some() || c.padding.iter().flatten().any(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if *n == 0.0))
+            c.background.is_some()
+                || c.bg_image.is_some()
+                || c.has_border()
+                || c.box_shadow.is_some()
+                || c.width.is_some()
+                || c.padding
+                    .iter()
+                    .flatten()
+                    .any(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if *n == 0.0))
         })
     };
     let mut in_box = Vec::new();
     for node in root.descendants() {
-        let Some(el) = ElementRef::wrap(node).filter(|el| el.value().name() == "img") else { continue };
+        let Some(el) = ElementRef::wrap(node).filter(|el| el.value().name() == "img") else {
+            continue;
+        };
         in_box.push(node.ancestors().any(|a| boxed(a.id())));
         let c = comp.get(&node.id()).cloned().unwrap_or_else(|| rc.clone());
-        let src = el.value().attr("src").map(|s| crate::epubzip::resolve_link(&e.name, s).0);
+        let src = el
+            .value()
+            .attr("src")
+            .map(|s| crate::epubzip::resolve_link(&e.name, s).0);
         let d = src.as_deref().and_then(|s| dims.get(s).copied());
         let kind = if hidden.contains(&node.id()) || d.is_none() {
             Kind::Skip
@@ -224,16 +312,43 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         };
         let decls = decls_of(&el);
         let len = |k: &str| {
-            let css = decls.get(k).filter(|v| v.trim() != "auto").and_then(|v| crate::cascade::parse_box_len(v));
-            css.or_else(|| el.value().attr(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| *n > 0.0).map(|n| Len::Pt(n * 0.45)))
+            let css = decls
+                .get(k)
+                .filter(|v| v.trim() != "auto")
+                .and_then(|v| crate::cascade::parse_box_len(v));
+            css.or_else(|| {
+                el.value()
+                    .attr(k)
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .filter(|n| *n > 0.0)
+                    .map(|n| Len::Pt(n * 0.45))
+            })
         };
-        let attr_percent = !sheet.cascade(&el, &e.name).contains_key("width") && el.value().attr("width").is_some_and(|v| v.trim().ends_with('%'));
-        f.imgs.push(Img { kind, fs: c.font_size, css_width: c.width, attr_percent, box_w: len("width"), box_h: len("height"), dims: d });
+        let attr_percent = !sheet.cascade(&el, &e.name).contains_key("width")
+            && el
+                .value()
+                .attr("width")
+                .is_some_and(|v| v.trim().ends_with('%'));
+        f.imgs.push(Img {
+            kind,
+            fs: c.font_size,
+            css_width: c.width,
+            attr_percent,
+            box_w: len("width"),
+            box_h: len("height"),
+            dims: d,
+        });
     }
     // 只有一张图、没有字的文档（封面页、整页插图）：Kindle 写成整页图片版面、缩放到满页（Move 会把小封面拉满一行宽、
     // 掌阅按原图像素显示）。写出器要图外面没有带框的容器才这样排（《疯探》封面套在 `width:100%` 的 div 里，Kindle 按原图像素显示，
     // 544×776 占 49%；《阿加莎》套在带边框的 div 里的 80% 宽的图照百分比）
-    if f.sizes.is_empty() && f.imgs.iter().filter(|i| !matches!(i.kind, Kind::Skip)).count() == 1 {
+    if f.sizes.is_empty()
+        && f.imgs
+            .iter()
+            .filter(|i| !matches!(i.kind, Kind::Skip))
+            .count()
+            == 1
+    {
         for (i, b) in f.imgs.iter_mut().zip(&in_box) {
             if matches!(i.kind, Kind::Block) && !b {
                 i.kind = Kind::Page;
@@ -245,14 +360,22 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
 
 /// 不是块的 `<img>`：嵌在字里还是独立成块（同写出器 `Doc::flush`）。在它所属的那段行内内容里看——从最近的块祖先起，
 /// 遇到里面套的块（写出器在那里切开）就另起一段。
-fn classify(img: ego_tree::NodeRef<Node>, block: &HashSet<ego_tree::NodeId>, hidden: &HashSet<ego_tree::NodeId>) -> Kind {
-    let Some(anc) = img.ancestors().find(|a| block.contains(&a.id())) else { return Kind::Inline };
+fn classify(
+    img: ego_tree::NodeRef<Node>,
+    block: &HashSet<ego_tree::NodeId>,
+    hidden: &HashSet<ego_tree::NodeId>,
+) -> Kind {
+    let Some(anc) = img.ancestors().find(|a| block.contains(&a.id())) else {
+        return Kind::Inline;
+    };
     // 记号：t＝字、n＝换行、i＝本图、o＝别的图；遇到套的块清空（到本图以后遇到就停）
     let mut seq: Vec<char> = Vec::new();
     let mut found = false;
     let mut it = anc.traverse();
     while let Some(edge) = it.next() {
-        let ego_tree::iter::Edge::Open(n) = edge else { continue };
+        let ego_tree::iter::Edge::Open(n) = edge else {
+            continue;
+        };
         if n.id() == anc.id() {
             continue;
         }
@@ -284,7 +407,10 @@ fn classify(img: ego_tree::NodeRef<Node>, block: &HashSet<ego_tree::NodeId>, hid
         }
     }
     let at = seq.iter().position(|c| *c == 'i').unwrap_or(0);
-    let line_start = seq[..at].iter().rposition(|c| *c == 'n').map_or(0, |p| p + 1);
+    let line_start = seq[..at]
+        .iter()
+        .rposition(|c| *c == 'n')
+        .map_or(0, |p| p + 1);
     let line_end = seq[at..].iter().position(|c| *c == 'n').map(|p| at + p);
     let line_has_text = seq[line_start..line_end.unwrap_or(seq.len())].contains(&'t');
     if line_has_text {
@@ -300,7 +426,13 @@ fn classify(img: ego_tree::NodeRef<Node>, block: &HashSet<ego_tree::NodeId>, hid
 /// `h_scale`：左右边距换算系数（profile `horizontal_scale`，这台一行的 em 数 ÷ 32）。有它时掌阅一 em 占一行的比例和 Kindle 不一样，
 /// em 写的独立图片不再「照写就一样大」：Kindle 上一 em 是 `k.em_px / k.content_px` 行宽，这台是 1 / (32 × h_scale) 行宽，按比例折。
 /// 行内图片不折：行内 em 图多是和字同高的图标、生僻字，保持原 em 才和文字一样高（折了 1em 的图标只剩 0.79em，比字小一圈）。
-fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64, h_scale: Option<f64>) -> Option<(String, String)> {
+fn restyle(
+    im: &Img,
+    sizing: ImageSizing,
+    k: KindleImageRef,
+    base: f64,
+    h_scale: Option<f64>,
+) -> Option<(String, String)> {
     // 这台的 em 折成 Kindle 上同样占行宽比例要乘的数（没换算的、行内图片 1）
     let em_scale = match (h_scale, &im.kind) {
         (Some(h), Kind::Block) => h * PAGE_WIDTH_EM * k.em_px / k.content_px,
@@ -325,19 +457,26 @@ fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64, h_scale:
                 (None, None) => iw / 16.0,
             };
             // 掌阅照 CSS：em 写的（含只写高）和 Kindle 一样；px、pt、没写尺寸的不一样
-            let em_only = (im.box_w.is_some() || im.box_h.is_some()) && [im.box_w, im.box_h].iter().flatten().all(|l| matches!(l, Len::Em(_) | Len::Percent(_)));
+            let em_only = (im.box_w.is_some() || im.box_h.is_some())
+                && [im.box_w, im.box_h]
+                    .iter()
+                    .flatten()
+                    .all(|l| matches!(l, Len::Em(_) | Len::Percent(_)));
             (Shown::Em(w / base), em_only)
         }
         Kind::Block => match im.css_width {
             // 百分比照写；只有比一页还高、Kindle 按一页高缩小了的（《金庸》竖长插图 100% 宽在 Kindle 上只占 84%–89%）写成缩小后的比例
             Some(Len::Percent(p)) => {
                 let fit = k.content_h * iw / ih / k.content_px;
-                if p / 100.0 <= fit + 0.005 && !(im.attr_percent && sizing == ImageSizing::Percent) {
+                if p / 100.0 <= fit + 0.005 && !(im.attr_percent && sizing == ImageSizing::Percent)
+                {
                     return None;
                 }
                 (Shown::Frac(p / 100.0), false)
             }
-            Some(l @ (Len::Em(_) | Len::Pt(_))) => (Shown::Em(em_of(l) / base), matches!(l, Len::Em(_))),
+            Some(l @ (Len::Em(_) | Len::Pt(_))) => {
+                (Shown::Em(em_of(l) / base), matches!(l, Len::Em(_)))
+            }
             None => (Shown::Frac((iw / k.content_px).min(1.0)), false),
         },
     };
@@ -363,7 +502,11 @@ fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64, h_scale:
     let class = format!("eink-iw-{}", name.replace('.', "-"));
     // em 写的宽度同 Kindle 限在一行宽以内（写出器给 em 宽度加最大宽度 100%）。不写 `!important`：掌阅不按它提优先级，带了反而输给
     // 前面样式表里的普通声明（2026-10-12 掌阅诊断书）；靠挂在最后、选择器 `html body img.类`（0,1,3）压过书里 `div.logo img` 这类
-    let cap = if value.ends_with("em") { ";max-width:100%" } else { "" };
+    let cap = if value.ends_with("em") {
+        ";max-width:100%"
+    } else {
+        ""
+    };
     let rule = format!("html body img.{class}{{width:{value};height:auto{cap}}}");
     Some((class, rule))
 }
@@ -373,13 +516,26 @@ fn restyle(im: &Img, sizing: ImageSizing, k: KindleImageRef, base: f64, h_scale:
 /// 《狼厅》`style="width:769px;max-width:428px…"` 掌阅按屏幕像素显示 66%、Kindle 满宽，2026-10-14 `unify.py`）。尺寸照 Kindle 算时已经
 /// 按层叠算进了行内的值。
 fn strip_inline_size(tag: &str) -> String {
-    let Some(style) = html::attr_value(tag, "style").map(|s| crate::util::xml_unescape(s).into_owned()) else { return tag.to_string() };
-    let sized = |p: &str| matches!(p, "width" | "height" | "max-width" | "max-height" | "min-width" | "min-height");
+    let Some(style) =
+        html::attr_value(tag, "style").map(|s| crate::util::xml_unescape(s).into_owned())
+    else {
+        return tag.to_string();
+    };
+    let sized = |p: &str| {
+        matches!(
+            p,
+            "width" | "height" | "max-width" | "max-height" | "min-width" | "min-height"
+        )
+    };
     let decls = html::css_decls(&style);
     if !decls.iter().any(|d| sized(&d.prop.to_ascii_lowercase())) {
         return tag.to_string();
     }
-    let kept: String = decls.iter().filter(|d| !sized(&d.prop.to_ascii_lowercase())).map(|d| d.raw).collect();
+    let kept: String = decls
+        .iter()
+        .filter(|d| !sized(&d.prop.to_ascii_lowercase()))
+        .map(|d| d.raw)
+        .collect();
     if kept.trim().is_empty() {
         html::remove_attr(tag, "style")
     } else {
@@ -390,7 +546,11 @@ fn strip_inline_size(tag: &str) -> String {
 /// 数字写法：保留 `d` 位小数，去掉末尾的 0。
 fn num(v: f64, d: usize) -> String {
     let s = format!("{v:.d$}");
-    let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.') } else { &s };
+    let s = if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        &s
+    };
     s.to_string()
 }
 
@@ -398,11 +558,18 @@ fn num(v: f64, d: usize) -> String {
 mod tests {
     use super::*;
 
-    const KREF: KindleImageRef = KindleImageRef { content_px: 1104.0, content_h: 1546.0, em_px: 39.0, v_rem_px: 52.5 };
+    const KREF: KindleImageRef = KindleImageRef {
+        content_px: 1104.0,
+        content_h: 1546.0,
+        em_px: 39.0,
+        v_rem_px: 52.5,
+    };
 
     fn jpeg(w: u32, h: u32) -> Vec<u8> {
         let mut v = Vec::new();
-        image::GrayImage::new(w, h).write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Jpeg).unwrap();
+        image::GrayImage::new(w, h)
+            .write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Jpeg)
+            .unwrap();
         v
     }
 
@@ -411,8 +578,15 @@ mod tests {
         run_h(sizing, body, css, None)
     }
 
-    fn run_h(sizing: ImageSizing, body: &str, css: &str, h_scale: Option<f64>) -> (Vec<String>, String) {
-        let page = format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#);
+    fn run_h(
+        sizing: ImageSizing,
+        body: &str,
+        css: &str,
+        h_scale: Option<f64>,
+    ) -> (Vec<String>, String) {
+        let page = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#
+        );
         let mut entries = vec![
             Entry { name: "O/c.opf".into(), data: br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="t" href="t.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="t"/></spine></package>"#.to_vec() },
             Entry { name: "O/t.xhtml".into(), data: page.into_bytes() },
@@ -423,9 +597,23 @@ mod tests {
         let mut rep = WashReport::default();
         apply(&mut entries, &mut rep, None, None, sizing, KREF, h_scale);
         let t = String::from_utf8(entries[1].data.clone()).unwrap();
-        let classes = html::tags(&t).filter(|g| g.is_start() && g.is("img")).map(|g| html::attr_value(&t[g.start..g.end], "class").unwrap_or("").to_string()).collect();
-        let sheet = entries.iter().find(|e| e.name == "O/eink-img.css").map(|e| String::from_utf8(e.data.clone()).unwrap()).unwrap_or_default();
-        assert!(sheet.is_empty() || t.contains("eink-img.css"), "改了图的章挂上样式表");
+        let classes = html::tags(&t)
+            .filter(|g| g.is_start() && g.is("img"))
+            .map(|g| {
+                html::attr_value(&t[g.start..g.end], "class")
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+        let sheet = entries
+            .iter()
+            .find(|e| e.name == "O/eink-img.css")
+            .map(|e| String::from_utf8(e.data.clone()).unwrap())
+            .unwrap_or_default();
+        assert!(
+            sheet.is_empty() || t.contains("eink-img.css"),
+            "改了图的章挂上样式表"
+        );
         (classes, sheet)
     }
 
@@ -435,18 +623,34 @@ mod tests {
     /// 加了类的图，行内 style 里的宽高去掉（两台都认行内样式、压过类规则），别的行内声明留着；没加类的不动。
     #[test]
     fn inline_size_dropped_when_classed() {
-        let page = format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{}</body></html>"#,
-            r#"<div><img style="width:12em;border:0" src="m.jpg"/></div><div><img style="max-width:428px;width:769px;height:1106px" src="m.jpg"/></div>"#);
+        let page = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{}</body></html>"#,
+            r#"<div><img style="width:12em;border:0" src="m.jpg"/></div><div><img style="max-width:428px;width:769px;height:1106px" src="m.jpg"/></div>"#
+        );
         let mut entries = vec![
             Entry { name: "O/c.opf".into(), data: br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest><item id="t" href="t.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="t"/></spine></package>"#.to_vec() },
             Entry { name: "O/t.xhtml".into(), data: page.into_bytes() },
             Entry { name: "O/s.css".into(), data: Vec::new() },
             Entry { name: "O/m.jpg".into(), data: jpeg(800, 400) },
         ];
-        apply(&mut entries, &mut WashReport::default(), None, None, ImageSizing::Percent, KREF, None);
+        apply(
+            &mut entries,
+            &mut WashReport::default(),
+            None,
+            None,
+            ImageSizing::Percent,
+            KREF,
+            None,
+        );
         let t = String::from_utf8(entries[1].data.clone()).unwrap();
-        assert!(t.contains(r#"<img style="border:0" src="m.jpg" class="eink-iw-"#), "{t}");
-        assert!(t.contains(r#"<div><img src="m.jpg" class="eink-iw-"#), "{t}");
+        assert!(
+            t.contains(r#"<img style="border:0" src="m.jpg" class="eink-iw-"#),
+            "{t}"
+        );
+        assert!(
+            t.contains(r#"<div><img src="m.jpg" class="eink-iw-"#),
+            "{t}"
+        );
     }
 
     /// Move 只认百分比：独立图片按 Kindle 的大小（原图 300px＝27.2%；300px＝18.75em＝66.2%；10em＝35.3%）、行内的同样折成百分比；
@@ -454,17 +658,41 @@ mod tests {
     #[test]
     fn percent_reader_gets_kindle_fractions() {
         let (c, sheet) = run(ImageSizing::Percent, BODY, CSS);
-        assert_eq!(c, ["eink-iw-27-2p", "w50", "px eink-iw-66-2p", "em eink-iw-35-3p", "ic eink-iw-3-5p", "eink-iw-66-2p"]);
-        assert!(sheet.contains("html body img.eink-iw-27-2p{width:27.2%;height:auto}"), "{sheet}");
+        assert_eq!(
+            c,
+            [
+                "eink-iw-27-2p",
+                "w50",
+                "px eink-iw-66-2p",
+                "em eink-iw-35-3p",
+                "ic eink-iw-3-5p",
+                "eink-iw-66-2p"
+            ]
+        );
+        assert!(
+            sheet.contains("html body img.eink-iw-27-2p{width:27.2%;height:auto}"),
+            "{sheet}"
+        );
     }
 
     /// HTML 属性 `width="50%"`（CSS 里没写）：Move 不认属性，写成类；CSS 写的百分比不动。
     #[test]
     fn attribute_percent_becomes_class_for_percent_reader() {
-        let (c, sheet) = run(ImageSizing::Percent, r#"<div><img width="50%" src="m.jpg"/></div><div><img class="w50" width="30%" src="m.jpg"/></div>"#, CSS);
+        let (c, sheet) = run(
+            ImageSizing::Percent,
+            r#"<div><img width="50%" src="m.jpg"/></div><div><img class="w50" width="30%" src="m.jpg"/></div>"#,
+            CSS,
+        );
         assert_eq!(c, ["eink-iw-50p", "w50"]);
-        assert!(sheet.contains("html body img.eink-iw-50p{width:50%;height:auto}"), "{sheet}");
-        let (c, _) = run(ImageSizing::DevicePx, r#"<p>字</p><div><img width="50%" src="m.jpg"/></div>"#, CSS);
+        assert!(
+            sheet.contains("html body img.eink-iw-50p{width:50%;height:auto}"),
+            "{sheet}"
+        );
+        let (c, _) = run(
+            ImageSizing::DevicePx,
+            r#"<p>字</p><div><img width="50%" src="m.jpg"/></div>"#,
+            CSS,
+        );
         assert_eq!(c, [""], "掌阅的属性认不认没量过，先不动");
     }
 
@@ -473,7 +701,17 @@ mod tests {
     #[test]
     fn device_px_reader_only_fixes_px_and_unsized() {
         let (c, _) = run(ImageSizing::DevicePx, BODY, CSS);
-        assert_eq!(c, ["eink-iw-27-2p", "w50", "px eink-iw-18-75em", "em", "ic", "eink-iw-18-75em"]);
+        assert_eq!(
+            c,
+            [
+                "eink-iw-27-2p",
+                "w50",
+                "px eink-iw-18-75em",
+                "em",
+                "ic",
+                "eink-iw-18-75em"
+            ]
+        );
     }
 
     /// 掌阅开了左右换算（Air 3 Pro 一行 1300 ÷ 58 ≈ 22.4 em，h_scale ≈ 0.70）：em 写的独立图片也折，占行宽同 Kindle
@@ -483,8 +721,21 @@ mod tests {
     fn device_px_em_rescaled_with_horizontal_scale() {
         let h = 1300.0 / 58.0 / PAGE_WIDTH_EM;
         let (c, sheet) = run_h(ImageSizing::DevicePx, BODY, CSS, Some(h));
-        assert_eq!(c, ["eink-iw-27-2p", "w50", "px eink-iw-14-85em", "em eink-iw-7-92em", "ic", "eink-iw-18-75em"]);
-        assert!(sheet.contains("html body img.eink-iw-7-92em{width:7.92em;height:auto;max-width:100%}"), "{sheet}");
+        assert_eq!(
+            c,
+            [
+                "eink-iw-27-2p",
+                "w50",
+                "px eink-iw-14-85em",
+                "em eink-iw-7-92em",
+                "ic",
+                "eink-iw-18-75em"
+            ]
+        );
+        assert!(
+            sheet.contains("html body img.eink-iw-7-92em{width:7.92em;height:auto;max-width:100%}"),
+            "{sheet}"
+        );
         let shown: f64 = 7.92 * 58.0 / 1300.0;
         assert!((shown - 390.0 / 1104.0).abs() < 0.001, "{shown}");
     }
@@ -492,7 +743,11 @@ mod tests {
     /// 行内还是独立成块同写出器：图后换行接图注的独立成块（按原图像素），段末单独一行的小图嵌在字里。
     #[test]
     fn line_rule_matches_writer() {
-        let (c, _) = run(ImageSizing::Percent, r#"<p><img src="s.jpg"/><br/>图注</p><p>第一行<br/><img src="s.jpg"/></p>"#, "");
+        let (c, _) = run(
+            ImageSizing::Percent,
+            r#"<p><img src="s.jpg"/><br/>图注</p><p>第一行<br/><img src="s.jpg"/></p>"#,
+            "",
+        );
         assert_eq!(c, ["eink-iw-27-2p", "eink-iw-66-2p"]);
     }
 }

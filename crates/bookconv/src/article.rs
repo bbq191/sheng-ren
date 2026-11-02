@@ -38,8 +38,14 @@ pub fn build_article_epub(url: &str) -> Result<(Vec<u8>, String), String> {
         .map(|t| t.trim().to_string())
         .filter(|t| !t.is_empty())
         .unwrap_or_else(|| host_of(url));
-    let content = article.content.filter(|c| !c.trim().is_empty()).ok_or("正文为空")?;
-    let lang = article.lang.filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "zh".into());
+    let content = article
+        .content
+        .filter(|c| !c.trim().is_empty())
+        .ok_or("正文为空")?;
+    let lang = article
+        .lang
+        .filter(|l| !l.trim().is_empty())
+        .unwrap_or_else(|| "zh".into());
     let author = article.byline.unwrap_or_default();
 
     let (body, resources) = process_content(&content, url);
@@ -47,7 +53,12 @@ pub fn build_article_epub(url: &str) -> Result<(Vec<u8>, String), String> {
         return Err("正文处理后为空".into());
     }
     // 文章来源 + 原链接放正文末尾（可回溯）。
-    let body = format!("{body}<hr/><p><small>来源：{} · <a href=\"{}\">{}</a></small></p>", xml_escape(&host_of(url)), xml_escape(url), xml_escape(url));
+    let body = format!(
+        "{body}<hr/><p><small>来源：{} · <a href=\"{}\">{}</a></small></p>",
+        xml_escape(&host_of(url)),
+        xml_escape(url),
+        xml_escape(url)
+    );
 
     let mut book = Book {
         meta: BookMeta {
@@ -61,7 +72,11 @@ pub fn build_article_epub(url: &str) -> Result<(Vec<u8>, String), String> {
             cover_media_type: "image/jpeg".into(),
             subjects: Vec::new(),
         },
-        chapters: vec![Chapter { title: title.clone(), html_body: body, level: 1 }],
+        chapters: vec![Chapter {
+            title: title.clone(),
+            html_body: body,
+            level: 1,
+        }],
         resources,
         nav: Vec::new(),
     };
@@ -76,13 +91,24 @@ fn strip_bad_params(url: &str) -> String {
     let re = R.get_or_init(|| Regex::new(r#"(?i)([?&])poc_token=[^&#]*"#).unwrap());
     let s = re.replace_all(url, "$1").into_owned();
     // 清理替换后残留的分隔符：`?&`→`?`、`&&`→`&`、尾部 `?`/`&`
-    s.replace("?&", "?").replace("&&", "&").trim_end_matches(['?', '&']).to_string()
+    s.replace("?&", "?")
+        .replace("&&", "&")
+        .trim_end_matches(['?', '&'])
+        .to_string()
 }
 
 /// 抓网页 HTML 并解码成文本（编码怎么认见 [`decode_html`]）。
 fn fetch_text(url: &str) -> Result<String, String> {
-    let resp = http_agent(30).get(url).set("User-Agent", UA).set("Accept", "text/html,application/xhtml+xml").call().map_err(|e| format!("抓取失败: {e}"))?;
-    let header_charset = resp.header("Content-Type").and_then(charset_param).map(str::to_string);
+    let resp = http_agent(30)
+        .get(url)
+        .set("User-Agent", UA)
+        .set("Accept", "text/html,application/xhtml+xml")
+        .call()
+        .map_err(|e| format!("抓取失败: {e}"))?;
+    let header_charset = resp
+        .header("Content-Type")
+        .and_then(charset_param)
+        .map(str::to_string);
     // 超过上限报错：以前截到 20MB 照样抽正文，文章后半截悄悄没了
     let bytes = crate::util::read_capped(resp.into_reader(), MAX_PAGE_BYTES, 0)
         .map_err(|e| format!("读取网页正文失败: {e}"))?
@@ -94,7 +120,9 @@ fn fetch_text(url: &str) -> Result<String, String> {
 fn charset_param(content_type: &str) -> Option<&str> {
     content_type.split(';').skip(1).find_map(|p| {
         let (k, v) = p.split_once('=')?;
-        k.trim().eq_ignore_ascii_case("charset").then(|| v.trim().trim_matches(['"', '\'']))
+        k.trim()
+            .eq_ignore_ascii_case("charset")
+            .then(|| v.trim().trim_matches(['"', '\'']))
     })
 }
 
@@ -105,7 +133,12 @@ fn decode_html(bytes: &[u8], header_charset: Option<&str>) -> String {
     let by_label = |l: &str| encoding_rs::Encoding::for_label(l.trim().as_bytes());
     let (declared, body) = match encoding_rs::Encoding::for_bom(bytes) {
         Some((enc, bom_len)) => (Some(enc), &bytes[bom_len..]),
-        None => (header_charset.and_then(by_label).or_else(|| meta_charset(bytes).and_then(|l| by_label(&l))), bytes),
+        None => (
+            header_charset
+                .and_then(by_label)
+                .or_else(|| meta_charset(bytes).and_then(|l| by_label(&l))),
+            bytes,
+        ),
     };
     let utf8_ok = || std::str::from_utf8(body).is_ok();
     let enc = match declared {
@@ -124,7 +157,9 @@ fn decode_html(bytes: &[u8], header_charset: Option<&str>) -> String {
 /// 页面开头的 `<meta charset="gbk">` 或 `<meta http-equiv="Content-Type" content="text/html; charset=gb2312">`。
 fn meta_charset(bytes: &[u8]) -> Option<String> {
     static R: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = R.get_or_init(|| Regex::new(r#"(?i)<meta\b[^>]*?charset\s*=\s*["']?\s*([A-Za-z0-9_:.\-]+)"#).unwrap());
+    let re = R.get_or_init(|| {
+        Regex::new(r#"(?i)<meta\b[^>]*?charset\s*=\s*["']?\s*([A-Za-z0-9_:.\-]+)"#).unwrap()
+    });
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]);
     re.captures(&head).map(|c| c[1].to_string())
 }
@@ -144,12 +179,20 @@ fn process_content(content: &str, page_url: &str) -> (String, Vec<Resource>) {
         let src = match got {
             Some((bytes, ext, mime)) => {
                 let path = format!("images/rl{}.{ext}", resources.len() + 1);
-                resources.push(Resource { path: path.clone(), media_type: mime.into(), bytes });
+                resources.push(Resource {
+                    path: path.clone(),
+                    media_type: mime.into(),
+                    bytes,
+                });
                 path
             }
             None => img.src.clone(), // 超出上限/下载失败：保留原远程地址，不删图
         };
-        tags.push(format!("<img src=\"{}\" alt=\"{}\"/>", xml_escape(&src), xml_escape(&img.alt)));
+        tags.push(format!(
+            "<img src=\"{}\" alt=\"{}\"/>",
+            xml_escape(&src),
+            xml_escape(&img.alt)
+        ));
     }
     (fill_image_marks(&out, &tags), resources)
 }
@@ -219,19 +262,87 @@ fn fetch_images(imgs: &[ImgRef], referer: &str) -> Vec<Option<Fetched>> {
 fn is_whitelisted(name: &str) -> bool {
     matches!(
         name,
-        "p" | "div" | "span" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "a" | "em" | "strong" | "b" | "i" | "u" | "s" | "sub" | "sup" | "code" | "pre" | "blockquote" | "ul" | "ol" | "li" | "table" | "thead" | "tbody" | "tr" | "td" | "th" | "caption" | "figure" | "figcaption" | "br" | "hr" | "small" | "mark" | "section" | "article" | "dl" | "dt" | "dd"
+        "p" | "div"
+            | "span"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "a"
+            | "em"
+            | "strong"
+            | "b"
+            | "i"
+            | "u"
+            | "s"
+            | "sub"
+            | "sup"
+            | "code"
+            | "pre"
+            | "blockquote"
+            | "ul"
+            | "ol"
+            | "li"
+            | "table"
+            | "thead"
+            | "tbody"
+            | "tr"
+            | "td"
+            | "th"
+            | "caption"
+            | "figure"
+            | "figcaption"
+            | "br"
+            | "hr"
+            | "small"
+            | "mark"
+            | "section"
+            | "article"
+            | "dl"
+            | "dt"
+            | "dd"
     )
 }
 /// 整棵丢弃（含子内容）的标签——脚本/样式/媒体/表单/页面 chrome/元数据。
 fn is_drop_subtree(name: &str) -> bool {
     matches!(
         name,
-        "script" | "style" | "noscript" | "link" | "meta" | "head" | "title" | "video" | "audio" | "iframe" | "object" | "embed" | "source" | "track" | "svg" | "canvas" | "form" | "input" | "button" | "select" | "textarea" | "nav" | "footer" | "header" | "aside"
+        "script"
+            | "style"
+            | "noscript"
+            | "link"
+            | "meta"
+            | "head"
+            | "title"
+            | "video"
+            | "audio"
+            | "iframe"
+            | "object"
+            | "embed"
+            | "source"
+            | "track"
+            | "svg"
+            | "canvas"
+            | "form"
+            | "input"
+            | "button"
+            | "select"
+            | "textarea"
+            | "nav"
+            | "footer"
+            | "header"
+            | "aside"
     )
 }
 
 /// 递归发射一个节点成 XHTML。图片只留占位（见 [`IMG_MARK`]），地址记进 `imgs`。
-fn emit_node(node: ego_tree::NodeRef<scraper::node::Node>, out: &mut String, imgs: &mut Vec<ImgRef>) {
+fn emit_node(
+    node: ego_tree::NodeRef<scraper::node::Node>,
+    out: &mut String,
+    imgs: &mut Vec<ImgRef>,
+) {
     use scraper::node::Node;
     match node.value() {
         Node::Text(t) => out.push_str(&xml_escape(&t.text)),
@@ -243,12 +354,18 @@ fn emit_node(node: ego_tree::NodeRef<scraper::node::Node>, out: &mut String, img
             if name == "img" {
                 // 懒加载兜底：真实图 URL 常在 data-src（微信/知乎等），src 缺失或是 data: 占位时用 data-src。
                 let lazy = el.attr("data-src").filter(|s| !s.is_empty());
-                let src = el.attr("src").filter(|s| !s.is_empty() && !(s.starts_with("data:") && lazy.is_some())).or(lazy);
+                let src = el
+                    .attr("src")
+                    .filter(|s| !s.is_empty() && !(s.starts_with("data:") && lazy.is_some()))
+                    .or(lazy);
                 if let Some(src) = src {
                     out.push(IMG_MARK);
                     out.push_str(&imgs.len().to_string());
                     out.push(IMG_MARK);
-                    imgs.push(ImgRef { src: src.to_string(), alt: el.attr("alt").unwrap_or("").to_string() });
+                    imgs.push(ImgRef {
+                        src: src.to_string(),
+                        alt: el.attr("alt").unwrap_or("").to_string(),
+                    });
                 }
                 return; // 空元素；没有任何地址的图没东西可留
             }
@@ -292,7 +409,12 @@ fn keep_attr(tag: &str, attr: &str) -> bool {
 }
 
 fn host_of(url: &str) -> String {
-    url.split("://").nth(1).and_then(|rest| rest.split('/').next()).unwrap_or(url).trim_start_matches("www.").to_string()
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or(url)
+        .trim_start_matches("www.")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -308,7 +430,9 @@ mod tests {
             <span typeof="mw:Entity">&nbsp;</span></div>"#;
         let (body, _imgs) = serialize_content(dirty);
         // 包成 XHTML 章能被 XML 解析器接受（严格良构）
-        let doc = format!(r#"<?xml version="1.0"?><root xmlns="http://www.w3.org/1999/xhtml">{body}</root>"#);
+        let doc = format!(
+            r#"<?xml version="1.0"?><root xmlns="http://www.w3.org/1999/xhtml">{body}</root>"#
+        );
         let mut r = quick_xml::Reader::from_str(&doc);
         loop {
             match r.read_event() {
@@ -318,30 +442,59 @@ mod tests {
             }
         }
         assert!(body.contains("<br/>"), "br 自闭: {body}");
-        assert!(body.contains("正文") && body.contains("换行"), "正文保留: {body}");
+        assert!(
+            body.contains("正文") && body.contains("换行"),
+            "正文保留: {body}"
+        );
         assert!(body.contains("拆壳保留"), "未知标签拆壳保子内容: {body}");
-        assert!(body.contains(r#"<a href="http://e.com">链接</a>"#), "链接保 href 去 class: {body}");
-        assert!(!body.contains("style") && !body.contains("script") && !body.contains("data-mw"), "脏东西去净: {body}");
+        assert!(
+            body.contains(r#"<a href="http://e.com">链接</a>"#),
+            "链接保 href 去 class: {body}"
+        );
+        assert!(
+            !body.contains("style") && !body.contains("script") && !body.contains("data-mw"),
+            "脏东西去净: {body}"
+        );
     }
 
     #[test]
     fn images_beyond_limit_or_failed_keep_remote_src() {
         // 下载不到（非 http 地址 → fetch_image 直接 None，不联网）的图保留原地址，不从正文里消失
-        let (out, imgs) = serialize_content(r#"<p>前<img src="ftp://x/a.png" alt="图 &quot;一&quot;">后</p><p><img src="data:image/png;base64,AA" data-src="ftp://x/b.png"></p>"#);
+        let (out, imgs) = serialize_content(
+            r#"<p>前<img src="ftp://x/a.png" alt="图 &quot;一&quot;">后</p><p><img src="data:image/png;base64,AA" data-src="ftp://x/b.png"></p>"#,
+        );
         assert_eq!(imgs.len(), 2);
         assert_eq!(imgs[1].src, "ftp://x/b.png", "懒加载用 data-src");
         let fetched = fetch_images(&imgs, "");
         assert!(fetched.iter().all(|f| f.is_none()));
-        let tags: Vec<String> = imgs.iter().map(|i| format!("<img src=\"{}\" alt=\"{}\"/>", xml_escape(&i.src), xml_escape(&i.alt))).collect();
+        let tags: Vec<String> = imgs
+            .iter()
+            .map(|i| {
+                format!(
+                    "<img src=\"{}\" alt=\"{}\"/>",
+                    xml_escape(&i.src),
+                    xml_escape(&i.alt)
+                )
+            })
+            .collect();
         let body = fill_image_marks(&out, &tags);
-        assert_eq!(body, r#"<p>前<img src="ftp://x/a.png" alt="图 &quot;一&quot;"/>后</p><p><img src="ftp://x/b.png" alt=""/></p>"#);
+        assert_eq!(
+            body,
+            r#"<p>前<img src="ftp://x/a.png" alt="图 &quot;一&quot;"/>后</p><p><img src="ftp://x/b.png" alt=""/></p>"#
+        );
     }
 
     #[test]
     fn non_utf8_pages_decoded_by_header_or_meta() {
         let gbk = b"<html><head><meta charset=\"gbk\"></head><body>\xd6\xd0\xce\xc4</body></html>";
-        assert!(decode_html(gbk, None).contains("中文"), "按 <meta charset> 解 GBK");
-        assert!(decode_html(b"\xd6\xd0\xce\xc4", Some("GB2312")).contains("中文"), "按 HTTP 头解");
+        assert!(
+            decode_html(gbk, None).contains("中文"),
+            "按 <meta charset> 解 GBK"
+        );
+        assert!(
+            decode_html(b"\xd6\xd0\xce\xc4", Some("GB2312")).contains("中文"),
+            "按 HTTP 头解"
+        );
         assert_eq!(charset_param("text/html; Charset=\"gbk\""), Some("gbk"));
         let old = b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=gb2312\"><p>\xd6\xd0</p>";
         assert!(decode_html(old, None).contains("中"));
@@ -349,7 +502,9 @@ mod tests {
         // 没声明编码、字节不是合法 UTF-8 → 按 GB18030（「中文」的 GBK 字节）
         assert_eq!(decode_html(b"<p>\xd6\xd0\xce\xc4</p>", None), "<p>中文</p>");
         // 声明 UTF-8 但字节是 GBK（站点声明错了）→ 回退 GB18030
-        assert!(decode_html(b"<meta charset=\"utf-8\"><p>\xd6\xd0\xce\xc4</p>", None).contains("中文"));
+        assert!(
+            decode_html(b"<meta charset=\"utf-8\"><p>\xd6\xd0\xce\xc4</p>", None).contains("中文")
+        );
         assert!(decode_html(b"<p>\xd6\xd0\xce\xc4</p>", Some("UTF-8")).contains("中文"));
         // BOM 优先于 HTTP 头
         assert_eq!(decode_html(b"\xef\xbb\xbf\xe4\xb8\xad", Some("gbk")), "中");
@@ -366,8 +521,14 @@ mod tests {
 
     #[test]
     fn strip_poc_token_keeps_other_params() {
-        assert_eq!(strip_bad_params("https://mp.weixin.qq.com/s/ID?poc_token=ABC"), "https://mp.weixin.qq.com/s/ID");
-        assert_eq!(strip_bad_params("https://x/s/ID?a=1&poc_token=ABC&b=2"), "https://x/s/ID?a=1&b=2");
+        assert_eq!(
+            strip_bad_params("https://mp.weixin.qq.com/s/ID?poc_token=ABC"),
+            "https://mp.weixin.qq.com/s/ID"
+        );
+        assert_eq!(
+            strip_bad_params("https://x/s/ID?a=1&poc_token=ABC&b=2"),
+            "https://x/s/ID?a=1&b=2"
+        );
         assert_eq!(strip_bad_params("https://x/s/ID"), "https://x/s/ID"); // 无 token 原样
     }
 

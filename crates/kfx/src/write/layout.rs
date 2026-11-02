@@ -24,7 +24,8 @@ impl SectionCtx {
             self.ids.push((id, eid, 0));
         }
         for (id, off) in ids {
-            self.ids.push((id.clone(), eid, if text { *off } else { 0 }));
+            self.ids
+                .push((id.clone(), eid, if text { *off } else { 0 }));
         }
         self.order.push((eid, len, 0));
         self.last_end = Some((eid, if text { len } else { 0 }));
@@ -33,7 +34,9 @@ impl SectionCtx {
     /// 文字节点里夹着行内图片（字符偏移 `at`、图片节点 id）：位置照 Send to Kindle 切段——图片前的字、图片处一个空段、
     /// 图片节点占一个位置、图片后的字接着从文字节点的偏移数（测试书 `[12, 8, 12], 0, [1, 8, 13]`）。
     fn split_at_images(&mut self, eid: i64, len: usize, images: &[(usize, i64)]) {
-        let Some(first) = self.order.pop() else { return };
+        let Some(first) = self.order.pop() else {
+            return;
+        };
         debug_assert_eq!(first.0, eid);
         let mut cur = 0;
         for &(at, img) in images {
@@ -84,14 +87,24 @@ pub(super) struct Layout {
 }
 
 /// 逐个文档生成版面（`$260`）、故事线（`$259`）、文字池（`$145`），登记每个 id 的位置。
-pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fixed_canvas: Option<(i64, i64)>, direction: u32) -> Result<Layout, String> {
+pub(super) fn lay_out(
+    book: &Loaded,
+    b: &mut Builder,
+    parsed: Vec<ParsedDoc>,
+    fixed_canvas: Option<(i64, i64)>,
+    direction: u32,
+) -> Result<Layout, String> {
     let mut sections: Vec<SectionOut> = Vec::new();
     let mut entities: Vec<Entity> = Vec::new();
     let mut id_map: HashMap<(String, String), (i64, usize)> = HashMap::new();
     let mut cover_tmpl: Option<i64> = None;
     // 没有可见内容的文件（只有隐藏标题之类）：目录项、链接改指到下一个版面的开头。
     let mut empty_docs: Vec<String> = Vec::new();
-    let is_cover = |b: &Builder, r: usize| book.cover.as_deref().is_some_and(|c| b.res.index_of(c) == Some(r));
+    let is_cover = |b: &Builder, r: usize| {
+        book.cover
+            .as_deref()
+            .is_some_and(|c| b.res.index_of(c) == Some(r))
+    };
     for (si, path, lang, blocks) in parsed {
         if blocks.is_empty() {
             empty_docs.push(path.to_string());
@@ -101,10 +114,21 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
         let story_name = b.syms.sym(&format!("story{si}"));
         let pool = b.syms.sym(&format!("text{si}"));
         let tmpl_eid = b.eid();
-        let mut ctx = SectionCtx { pool, texts: Vec::new(), order: vec![(tmpl_eid, 1, 0)], ids: Vec::new(), resources: Vec::new(), lang, pending: Vec::new(), last_end: None };
+        let mut ctx = SectionCtx {
+            pool,
+            texts: Vec::new(),
+            order: vec![(tmpl_eid, 1, 0)],
+            ids: Vec::new(),
+            resources: Vec::new(),
+            lang,
+            pending: Vec::new(),
+            last_end: None,
+        };
         // 只有一张图的文档写成整页图片版面（封面、插图页），和样本一样。
         let single_image = blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. });
-        let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src, .. }) = (single_image, fixed_canvas, &blocks[0].kind) {
+        let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src, .. }) =
+            (single_image, fixed_canvas, &blocks[0].kind)
+        {
             // 固定版式的一页，照 Amazon 转的异形页样本：整页容器（画布宽高、`$476`、position relative）里放一个绝对定位的
             // 图片节点（宽高、上、左）。比画布小的图有的页整页空白是资源符号顺序造成的，不是这里（见下面分配资源符号处）。
             // 图片取不到的这一页同没有内容的文件：目录项、链接改指到下一个版面（以前没登记，指到它的退回书的开头）。
@@ -116,7 +140,10 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
             ctx.order.push((cid, 1, 0));
             ctx.order.push((iid, 1, 0));
             ctx.resources.push(r);
-            let (w, h) = fixed_image_size((i64::from(b.res[r].width), i64::from(b.res[r].height)), (cw, ch));
+            let (w, h) = fixed_image_size(
+                (i64::from(b.res[r].width), i64::from(b.res[r].height)),
+                (cw, ch),
+            );
             let res = b.res_sym(r);
             // 宽高照写像素数（不带单位，同样本）
             let sized = |w: i64, h: i64| {
@@ -149,7 +176,10 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
                 vec![image_node(iid, style, res)]
             }
         } else {
-            let nodes = blocks.iter().filter_map(|bl| b.node(bl, &Parent::root(b.stats.base_fs), &mut ctx)).collect();
+            let nodes = blocks
+                .iter()
+                .filter_map(|bl| b.node(bl, &Parent::root(b.stats.base_fs), &mut ctx))
+                .collect();
             // 文档末尾取不到的图片上的锚点挂到最后一个节点末尾
             if let Some((eid, end)) = ctx.last_end {
                 for id in std::mem::take(&mut ctx.pending) {
@@ -162,7 +192,10 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
             empty_docs.push(path.to_string());
             continue;
         }
-        let mut tmpl = vec![(EID, Value::Int(tmpl_eid)), (STORYLINE_REF, Value::Symbol(story_name))];
+        let mut tmpl = vec![
+            (EID, Value::Int(tmpl_eid)),
+            (STORYLINE_REF, Value::Symbol(story_name)),
+        ];
         if let (true, Some((cw, ch))) = (single_image, fixed_canvas.filter(|c| c.0 > 0)) {
             tmpl.push((TMPL_WIDTH, Value::Int(cw)));
             tmpl.push((TMPL_HEIGHT, Value::Int(ch)));
@@ -189,10 +222,31 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
         } else {
             tmpl.push((NODE_TYPE, Value::Symbol(NODE_TEXT)));
         }
-        entities.push(ent(sec_name, T_SECTION, Value::Struct(vec![(SECTION_REF, Value::Symbol(sec_name)), (TEMPLATES, Value::List(vec![Value::Struct(tmpl)]))])));
-        entities.push(ent(story_name, T_STORYLINE, Value::Struct(vec![(STORYLINE_REF, Value::Symbol(story_name)), (CHILDREN, Value::List(nodes))])));
+        entities.push(ent(
+            sec_name,
+            T_SECTION,
+            Value::Struct(vec![
+                (SECTION_REF, Value::Symbol(sec_name)),
+                (TEMPLATES, Value::List(vec![Value::Struct(tmpl)])),
+            ]),
+        ));
+        entities.push(ent(
+            story_name,
+            T_STORYLINE,
+            Value::Struct(vec![
+                (STORYLINE_REF, Value::Symbol(story_name)),
+                (CHILDREN, Value::List(nodes)),
+            ]),
+        ));
         if !ctx.texts.is_empty() {
-            entities.push(ent(pool, T_TEXT_POOL, Value::Struct(vec![(NAME, Value::Symbol(pool)), (CHILDREN, Value::List(std::mem::take(&mut ctx.texts)))])));
+            entities.push(ent(
+                pool,
+                T_TEXT_POOL,
+                Value::Struct(vec![
+                    (NAME, Value::Symbol(pool)),
+                    (CHILDREN, Value::List(std::mem::take(&mut ctx.texts))),
+                ]),
+            ));
         }
         let first_eid = ctx.order.get(1).map_or(tmpl_eid, |o| o.0);
         id_map.insert((path.to_string(), String::new()), (first_eid, 0));
@@ -220,7 +274,12 @@ pub(super) fn lay_out(book: &Loaded, b: &mut Builder, parsed: Vec<ParsedDoc>, fi
             id_map.insert((p, String::new()), (last.first_eid, 0));
         }
     }
-    Ok(Layout { sections, entities, id_map, cover_tmpl })
+    Ok(Layout {
+        sections,
+        entities,
+        id_map,
+        cover_tmpl,
+    })
 }
 
 /// 固定版式一页里图片的显示宽高：保持比例缩进画布，**不超过图自己的尺寸**——节点比图片资源大时 Kindle 不放大、整页空白
@@ -231,11 +290,18 @@ pub(super) fn fixed_image_size((iw, ih): (i64, i64), (cw, ch): (i64, i64)) -> (i
     if cw <= 0 || ch <= 0 {
         return (iw, ih);
     }
-    if iw <= 0 || ih <= 0 || (iw >= cw && bookconv::comicfxl::fills_canvas((iw as u32, ih as u32), cw as u32, ch as u32)) {
+    if iw <= 0
+        || ih <= 0
+        || (iw >= cw
+            && bookconv::comicfxl::fills_canvas((iw as u32, ih as u32), cw as u32, ch as u32))
+    {
         return (cw, ch);
     }
     let s = (cw as f64 / iw as f64).min(ch as f64 / ih as f64).min(1.0);
-    (((iw as f64 * s).round() as i64).max(1), ((ih as f64 * s).round() as i64).max(1))
+    (
+        ((iw as f64 * s).round() as i64).max(1),
+        ((ih as f64 * s).round() as i64).max(1),
+    )
 }
 
 impl Builder {
@@ -244,7 +310,12 @@ impl Builder {
         let col = self.styles.text_color(&b.comp);
         let props = self.block_props(b, parent, &ctx.lang, col);
         // 本节点给子节点（行内区间、容器里的块）的「父节点」
-        let me = Parent { weight: weight_of(&b.comp), color: shown_color(col, &b.comp, parent), avail: inner_width(b, parent.avail), base_fs: parent.base_fs };
+        let me = Parent {
+            weight: weight_of(&b.comp),
+            color: shown_color(col, &b.comp, parent),
+            avail: inner_width(b, parent.avail),
+            base_fs: parent.base_fs,
+        };
         match &b.kind {
             Kind::Text { text, runs, images } => {
                 let eid = self.eid();
@@ -255,11 +326,24 @@ impl Builder {
                 let content = if images.is_empty() {
                     let idx = ctx.texts.len();
                     ctx.texts.push(Value::String(text.clone()));
-                    (TEXT_REF, Value::Struct(vec![(NAME, Value::Symbol(ctx.pool)), (TEXT_INDEX, Value::Int(idx as i64))]))
+                    (
+                        TEXT_REF,
+                        Value::Struct(vec![
+                            (NAME, Value::Symbol(ctx.pool)),
+                            (TEXT_INDEX, Value::Int(idx as i64)),
+                        ]),
+                    )
                 } else {
-                    (CHILDREN, Value::List(self.inline_content(text, images, b, eid, chars, ctx)))
+                    (
+                        CHILDREN,
+                        Value::List(self.inline_content(text, images, b, eid, chars, ctx)),
+                    )
                 };
-                let mut f = vec![(EID, Value::Int(eid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(b.ty.unwrap_or(NODE_TEXT)))];
+                let mut f = vec![
+                    (EID, Value::Int(eid)),
+                    (STYLE_REF, Value::Symbol(style)),
+                    (NODE_TYPE, Value::Symbol(b.ty.unwrap_or(NODE_TEXT))),
+                ];
                 f.extend(b.attrs.iter().cloned());
                 if let Some(h) = b.heading {
                     f.push((HEADING_LEVEL, Value::Int(i64::from(h))));
@@ -273,7 +357,10 @@ impl Builder {
                 let run_values: Vec<Value> = runs
                     .iter()
                     .map(|r| {
-                        let mut f = vec![(OFFSET, Value::Int(r.start as i64)), (LENGTH, Value::Int(r.len as i64))];
+                        let mut f = vec![
+                            (OFFSET, Value::Int(r.start as i64)),
+                            (LENGTH, Value::Int(r.len as i64)),
+                        ];
                         if r.note_ref {
                             f.push((NOTE_REF, Value::Symbol(NOTE_REF_POPUP)));
                         }
@@ -288,7 +375,12 @@ impl Builder {
                                 rp.take(P_FONT_SIZE);
                             }
                             // 空的 inline-block 插的零宽空格：没有字，不写文字颜色（Send to Kindle 同样）
-                            if text.chars().skip(r.start).take(r.len).all(|c| c == '\u{200B}') {
+                            if text
+                                .chars()
+                                .skip(r.start)
+                                .take(r.len)
+                                .all(|c| c == '\u{200B}')
+                            {
                                 rp.take(P_COLOR);
                             }
                             if rc.superscript && !b.comp.superscript {
@@ -341,7 +433,12 @@ impl Builder {
                 let ty = b.ty.unwrap_or(NODE_CONTAINER);
                 let mut props = props;
                 // 背景图：样式里指向图片资源（`$479`），同《绍宋》样本 `body.juan` 等
-                if let Some(r) = b.comp.bg_image.as_deref().and_then(|src| self.resource(src, ImageUse::Background)) {
+                if let Some(r) = b
+                    .comp
+                    .bg_image
+                    .as_deref()
+                    .and_then(|src| self.resource(src, ImageUse::Background))
+                {
                     ctx.resources.push(r);
                     props.symbol(P_BG_IMAGE, self.res_sym(r));
                     if b.comp.bg_no_repeat {
@@ -355,7 +452,13 @@ impl Builder {
                         Len::Em(n) => num(n, U_EM),
                         Len::Pt(n) => num(n, U_PT),
                     };
-                    for (v, k) in b.comp.bg_position.iter().zip([P_BG_POS_X, P_BG_POS_Y]).chain(b.comp.bg_size.iter().zip([P_BG_SIZE_W, P_BG_SIZE_H])) {
+                    for (v, k) in b
+                        .comp
+                        .bg_position
+                        .iter()
+                        .zip([P_BG_POS_X, P_BG_POS_Y])
+                        .chain(b.comp.bg_size.iter().zip([P_BG_SIZE_W, P_BG_SIZE_H]))
+                    {
                         if let Some(l) = v {
                             props.set(k, len(*l));
                         }
@@ -364,7 +467,10 @@ impl Builder {
                 // 表体、行这些结构层没有样式（同样本）。
                 let styled = !matches!(ty, NODE_THEAD | NODE_TBODY | NODE_TFOOT | NODE_ROW);
                 let style = styled.then(|| self.style(props));
-                let kids: Vec<Value> = children.iter().filter_map(|c| self.node(c, &me, ctx)).collect();
+                let kids: Vec<Value> = children
+                    .iter()
+                    .filter_map(|c| self.node(c, &me, ctx))
+                    .collect();
                 let mut f = vec![(EID, Value::Int(eid))];
                 if ty == NODE_CONTAINER {
                     f.push((TMPL_FIT, Value::Symbol(CONTAINER_LAYOUT)));
@@ -389,7 +495,15 @@ impl Builder {
 impl Builder {
     /// 夹着行内图片的文字节点的内容：文字在图片处切开，图片写成行内图片节点；位置按段登记（[`SectionCtx::split_at_images`]）。
     /// 取不到的图片在文字里换成一个空格（字符偏移不变，区间、锚点照旧对得上）。
-    fn inline_content(&mut self, text: &str, images: &[InlineImage], b: &Block, eid: i64, chars: usize, ctx: &mut SectionCtx) -> Vec<Value> {
+    fn inline_content(
+        &mut self,
+        text: &str,
+        images: &[InlineImage],
+        b: &Block,
+        eid: i64,
+        chars: usize,
+        ctx: &mut SectionCtx,
+    ) -> Vec<Value> {
         let mut out = Vec::new();
         let mut placed = Vec::new();
         let mut piece = String::new();
@@ -412,7 +526,9 @@ impl Builder {
             let props = self.inline_image_props(img, r, b.comp.font_size);
             let style = self.style(props);
             let res = self.res_sym(r);
-            let Value::Struct(mut f) = image_node(iid, style, res) else { unreachable!() };
+            let Value::Struct(mut f) = image_node(iid, style, res) else {
+                unreachable!()
+            };
             f.push((ALT_TEXT, Value::String(img.alt.clone())));
             f.push((RENDER, Value::Symbol(RENDER_INLINE)));
             out.push(Value::Struct(f));
@@ -474,5 +590,10 @@ pub(super) fn inline_size(img: &InlineImage, (iw, ih): (u32, u32)) -> (f64, f64)
 
 /// 图片节点：节点 id、样式、图片资源。
 fn image_node(eid: i64, style: u32, res: u32) -> Value {
-    Value::Struct(vec![(EID, Value::Int(eid)), (STYLE_REF, Value::Symbol(style)), (NODE_TYPE, Value::Symbol(NODE_IMAGE)), (RESOURCE_REF, Value::Symbol(res))])
+    Value::Struct(vec![
+        (EID, Value::Int(eid)),
+        (STYLE_REF, Value::Symbol(style)),
+        (NODE_TYPE, Value::Symbol(NODE_IMAGE)),
+        (RESOURCE_REF, Value::Symbol(res)),
+    ])
 }

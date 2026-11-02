@@ -25,7 +25,9 @@ pub(super) fn cjk_paragraphize(html: &str) -> String {
     if n_br < 4 || n_p > 0 {
         return out;
     }
-    let Some((lo, hi)) = html::body_range(&out) else { return out };
+    let Some((lo, hi)) = html::body_range(&out) else {
+        return out;
+    };
     if !brs_only_in_containers(&out, lo, hi) {
         return out;
     }
@@ -46,14 +48,20 @@ pub(super) fn cjk_paragraphize(html: &str) -> String {
         loop {
             let t = rest.trim_end();
             match html::tags(t).last() {
-                Some(tag) if tag.end == t.len() && tag.kind == html::TagKind::Close && html::is_block(tag.name) => {
+                Some(tag)
+                    if tag.end == t.len()
+                        && tag.kind == html::TagKind::Close
+                        && html::is_block(tag.name) =>
+                {
                     trailing.insert_str(0, &t[tag.start..]);
                     rest = &t[..tag.start];
                 }
                 _ => break,
             }
         }
-        let text = rest.trim().trim_start_matches(|c: char| c == '\u{3000}' || c == '\u{a0}' || c.is_whitespace());
+        let text = rest
+            .trim()
+            .trim_start_matches(|c: char| c == '\u{3000}' || c == '\u{a0}' || c.is_whitespace());
         if !text.is_empty() {
             if !inline_balanced(text) {
                 return out; // 要包进 <p> 的一段里有块级标签或没配对的行内标签：拿不准，整个文件不动
@@ -72,7 +80,9 @@ pub(super) fn cjk_paragraphize(html: &str) -> String {
 /// （2026-09-30 审计）。段的范围到下一个 `<p` 开/闭标签为止（p 里不嵌 p）。
 fn strip_para_lead_spaces(html: &str) -> String {
     static LEAD: OnceLock<Regex> = OnceLock::new();
-    let lead = LEAD.get_or_init(|| Regex::new(r#"^(?:\s|\u{3000}|&#12288;|&#x3000;|&nbsp;|&#160;|&#xa0;)+"#).unwrap());
+    let lead = LEAD.get_or_init(|| {
+        Regex::new(r#"^(?:\s|\u{3000}|&#12288;|&#x3000;|&nbsp;|&#160;|&#xa0;)+"#).unwrap()
+    });
     let ps: Vec<html::Tag> = html::tags(html).filter(|t| t.is("p")).collect();
     let edits: Vec<(usize, usize, String)> = ps
         .iter()
@@ -80,8 +90,12 @@ fn strip_para_lead_spaces(html: &str) -> String {
         .filter(|(_, t)| t.kind == html::TagKind::Open)
         .filter_map(|(k, t)| {
             let m = lead.find(&html[t.end..])?;
-            let end = ps.get(k + 1).map_or(html.len(), |n| n.start).max(t.end + m.end());
-            html::has_visible(&html[t.end + m.end()..end]).then(|| (t.end, t.end + m.end(), String::new()))
+            let end = ps
+                .get(k + 1)
+                .map_or(html.len(), |n| n.start)
+                .max(t.end + m.end());
+            html::has_visible(&html[t.end + m.end()..end])
+                .then(|| (t.end, t.end + m.end(), String::new()))
         })
         .collect();
     if edits.is_empty() {
@@ -96,7 +110,10 @@ fn brs_only_in_containers(html: &str, lo: usize, hi: usize) -> bool {
     spans.iter().filter(|s| s.name == "br").all(|s| {
         let mut p = s.parent;
         while let Some(i) = p {
-            if !matches!(spans[i].name.as_str(), "div" | "section" | "article" | "blockquote") {
+            if !matches!(
+                spans[i].name.as_str(),
+                "div" | "section" | "article" | "blockquote"
+            ) {
                 return false;
             }
             p = spans[i].parent;
@@ -114,7 +131,9 @@ fn inline_balanced(text: &str) -> bool {
         }
         match t.kind {
             html::TagKind::Open if !html::is_void(t.name) => stack.push(t.name),
-            html::TagKind::Close if stack.pop().is_none_or(|o| !o.eq_ignore_ascii_case(t.name)) => return false,
+            html::TagKind::Close if stack.pop().is_none_or(|o| !o.eq_ignore_ascii_case(t.name)) => {
+                return false
+            }
             _ => {}
         }
     }
@@ -131,17 +150,28 @@ fn inline_balanced(text: &str) -> bool {
 ///   Chapter/Book/Part/Prologue/Epilogue 开头）且不以句末标点结尾；③ 前一段以 ≥2 个 `<br>` 结尾或本身是空段（含 `<p/>`）/`* * *`
 ///   之类的分隔（空段过多的书——用空段当段距——不按分隔算）；④ 文件里第一个有正文的段（章首）。幂等。
 /// 一趟扫出块序列（标签扫描，`<p/>` 自闭合算空段，不会把下一段吞进来），再统计、改写。
-pub(super) fn flush_first_para_after_heading(html: &str, indent_classes: &HashSet<String>) -> String {
+pub(super) fn flush_first_para_after_heading(
+    html: &str,
+    indent_classes: &HashSet<String>,
+) -> String {
     static BR2: OnceLock<Regex> = OnceLock::new();
     static HEAD_WORD: OnceLock<Regex> = OnceLock::new();
     static SEP: OnceLock<Regex> = OnceLock::new();
-    let br2 = BR2.get_or_init(|| Regex::new(r#"(?is)(<br\b[^>]*>\s*){2,}(</span>|</a>|\s)*$"#).unwrap());
-    let head_word = HEAD_WORD.get_or_init(|| Regex::new(r#"(?i)^\s*(chapter|book|part|prologue|epilogue|section|interlude)\b"#).unwrap());
+    let br2 =
+        BR2.get_or_init(|| Regex::new(r#"(?is)(<br\b[^>]*>\s*){2,}(</span>|</a>|\s)*$"#).unwrap());
+    let head_word = HEAD_WORD.get_or_init(|| {
+        Regex::new(r#"(?i)^\s*(chapter|book|part|prologue|epilogue|section|interlude)\b"#).unwrap()
+    });
     let sep = SEP.get_or_init(|| Regex::new(r#"^[\s\*#~—–\-·•]*$"#).unwrap());
     // 块序列：h 结束标签 / p 元素 / 空段 `<p/>` / 上次洗出的 eink-flush div（重洗幂等）
     enum Block {
         HeadEnd,
-        Para { open: (usize, usize), inner: (usize, usize), end: usize, is_div: bool },
+        Para {
+            open: (usize, usize),
+            inner: (usize, usize),
+            end: usize,
+            is_div: bool,
+        },
     }
     let mut blocks: Vec<Block> = Vec::new();
     let mut it = html::tags(html);
@@ -149,7 +179,12 @@ pub(super) fn flush_first_para_after_heading(html: &str, indent_classes: &HashSe
         if t.kind == html::TagKind::Close && t.heading_level().is_some() {
             blocks.push(Block::HeadEnd);
         } else if t.kind == html::TagKind::SelfClosing && t.is("p") {
-            blocks.push(Block::Para { open: (t.start, t.end), inner: (t.end, t.end), end: t.end, is_div: false });
+            blocks.push(Block::Para {
+                open: (t.start, t.end),
+                inner: (t.end, t.end),
+                end: t.end,
+                is_div: false,
+            });
         } else if t.kind == html::TagKind::Open && t.is("p") {
             // p 里不嵌 p：到下一个 </p>；中途又遇到 <p（没闭合的段）就不认这一段。
             let mut close = None;
@@ -162,9 +197,18 @@ pub(super) fn flush_first_para_after_heading(html: &str, indent_classes: &HashSe
                 }
             }
             if let Some(c) = close {
-                blocks.push(Block::Para { open: (t.start, t.end), inner: (t.end, c.start), end: c.end, is_div: false });
+                blocks.push(Block::Para {
+                    open: (t.start, t.end),
+                    inner: (t.end, c.start),
+                    end: c.end,
+                    is_div: false,
+                });
             }
-        } else if t.kind == html::TagKind::Open && t.is("div") && html::attr_value(&html[t.start..t.end], "class").is_some_and(|c| c.split_whitespace().any(|x| x == "eink-flush")) {
+        } else if t.kind == html::TagKind::Open
+            && t.is("div")
+            && html::attr_value(&html[t.start..t.end], "class")
+                .is_some_and(|c| c.split_whitespace().any(|x| x == "eink-flush"))
+        {
             let mut depth = 1;
             for u in it.by_ref() {
                 if u.is("div") {
@@ -174,7 +218,12 @@ pub(super) fn flush_first_para_after_heading(html: &str, indent_classes: &HashSe
                         _ => {}
                     }
                     if depth == 0 {
-                        blocks.push(Block::Para { open: (t.start, t.end), inner: (t.end, u.start), end: u.end, is_div: true });
+                        blocks.push(Block::Para {
+                            open: (t.start, t.end),
+                            inner: (t.end, u.start),
+                            end: u.end,
+                            is_div: true,
+                        });
                         break;
                     }
                 }
@@ -195,7 +244,16 @@ pub(super) fn flush_first_para_after_heading(html: &str, indent_classes: &HashSe
     let mut flush_next = true; // ④ 章首
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for (b, text) in blocks.iter().zip(&texts) {
-        let (Block::Para { open, inner, end, is_div }, Some(text)) = (b, text) else {
+        let (
+            Block::Para {
+                open,
+                inner,
+                end,
+                is_div,
+            },
+            Some(text),
+        ) = (b, text)
+        else {
             flush_next = true; // ① </hN>
             continue;
         };
@@ -207,24 +265,48 @@ pub(super) fn flush_first_para_after_heading(html: &str, indent_classes: &HashSe
         }
         let inner_html = &html[inner.0..inner.1];
         let n = text.chars().count();
-        let bold_wrapped = (inner_html.contains("<b>") || inner_html.contains("<strong") || inner_html.contains("bold")) && n <= 80;
-        let heading_like = !terminal_latin(text) && n <= 80 && (bold_wrapped || head_word.is_match(text));
+        let bold_wrapped = (inner_html.contains("<b>")
+            || inner_html.contains("<strong")
+            || inner_html.contains("bold"))
+            && n <= 80;
+        let heading_like =
+            !terminal_latin(text) && n <= 80 && (bold_wrapped || head_word.is_match(text));
         if flush_next && !heading_like && !is_div {
             // 书里**设了首行缩进的类**（`indent_classes`，如 `.calibre_ {text-indent:1.2em}`）不能留：xochitl 里同为类规则时
             // **先出现者胜**（诊断 13/14），带着它就压不住 eink-flush；元素/内联通道又都不通（诊断 7–10）。别的类照留
             // （2026-09-28 审计：此前连同所有类一起删，作者用类写的强调——斜体、小型大写、颜色——跟着丢了）。
             // style 照留，只去掉 `text-indent`（认行内样式的阅读器上，留着会压过 eink-flush）。id 等其它属性保留。
             let orig = &html[open.0..open.1];
-            let classes: Vec<&str> = html::attr_value(orig, "class").unwrap_or("").split_whitespace().filter(|c| !indent_classes.contains(*c)).collect();
+            let classes: Vec<&str> = html::attr_value(orig, "class")
+                .unwrap_or("")
+                .split_whitespace()
+                .filter(|c| !indent_classes.contains(*c))
+                .collect();
             let mut tag = html::remove_attr(orig, "class");
             if let Some(style) = html::attr_value(&tag, "style") {
-                let kept: String = html::css_decls(style).iter().filter(|d| !d.prop.eq_ignore_ascii_case("text-indent")).map(|d| d.raw).collect();
-                tag = if kept.trim().trim_matches(';').trim().is_empty() { html::remove_attr(&tag, "style") } else { html::set_attr(&tag, "style", kept.trim()) };
+                let kept: String = html::css_decls(style)
+                    .iter()
+                    .filter(|d| !d.prop.eq_ignore_ascii_case("text-indent"))
+                    .map(|d| d.raw)
+                    .collect();
+                tag = if kept.trim().trim_matches(';').trim().is_empty() {
+                    html::remove_attr(&tag, "style")
+                } else {
+                    html::set_attr(&tag, "style", kept.trim())
+                };
             }
             let kept = tag[2..tag.len() - 1].trim(); // 去掉 "<p" 与 ">"
             let sp = if kept.is_empty() { "" } else { " " };
-            let class = std::iter::once("eink-flush").chain(classes).collect::<Vec<_>>().join(" ").replace('"', "&quot;");
-            edits.push((open.0, *end, format!("<div class=\"{class}\"{sp}{kept}>{inner_html}</div>")));
+            let class = std::iter::once("eink-flush")
+                .chain(classes)
+                .collect::<Vec<_>>()
+                .join(" ")
+                .replace('"', "&quot;");
+            edits.push((
+                open.0,
+                *end,
+                format!("<div class=\"{class}\"{sp}{kept}>{inner_html}</div>"),
+            ));
         }
         // 下一段是否顶格：② 本段是标题样段落；③ 本段以双 <br> 结尾
         flush_next = heading_like || br2.is_match(inner_html);
@@ -242,8 +324,15 @@ pub(super) fn indent_classes_of(css: &str) -> HashSet<String> {
     let class = CLASS.get_or_init(|| Regex::new(r#"\.(-?[A-Za-z_][\w-]*)"#).unwrap());
     let mut out = HashSet::new();
     for c in crate::cascade::rule_spans(css) {
-        if html::css_decls(c.body).iter().any(|d| d.prop.eq_ignore_ascii_case("text-indent")) {
-            out.extend(class.captures_iter(&rule_selector(c.prelude)).map(|m| m[1].to_string()));
+        if html::css_decls(c.body)
+            .iter()
+            .any(|d| d.prop.eq_ignore_ascii_case("text-indent"))
+        {
+            out.extend(
+                class
+                    .captures_iter(&rule_selector(c.prelude))
+                    .map(|m| m[1].to_string()),
+            );
         }
     }
     out
@@ -251,20 +340,39 @@ pub(super) fn indent_classes_of(css: &str) -> HashSet<String> {
 
 /// 拉丁段落是否以句末标点结束（标题样段落判定用）。
 pub(super) fn terminal_latin(t: &str) -> bool {
-    t.trim_end().chars().last().map(|c| ".!?\"'”’)".contains(c)).unwrap_or(false)
+    t.trim_end()
+        .chars()
+        .last()
+        .map(|c| ".!?\"'”’)".contains(c))
+        .unwrap_or(false)
 }
 
 /// 指向 `href` 的样式表 `<link>`；书里已经有（属性值还原字符引用后相同）时返回 `None`（幂等）。
 /// `href` 是链接值原文（[`crate::epubzip::href_to`] 算的：相对路径、百分号编码），写进属性时再 XML 转义（目录名里可能有 `&`）。
 fn css_link_tag(html: &str, href: &str) -> Option<String> {
-    let has = html::tags(html).any(|t| t.is_start() && t.is("link") && html::attr_value(&html[t.start..t.end], "href").is_some_and(|v| crate::util::xml_unescape(v) == href));
-    (!has).then(|| format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>", xml_escape(href)))
+    let has = html::tags(html).any(|t| {
+        t.is_start()
+            && t.is("link")
+            && html::attr_value(&html[t.start..t.end], "href")
+                .is_some_and(|v| crate::util::xml_unescape(v) == href)
+    });
+    (!has).then(|| {
+        format!(
+            "<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>",
+            xml_escape(href)
+        )
+    })
 }
 
 /// 没有 `<head>` 时插 `<link>`：补一对 head 放在 `<body>` 前面；也没有 `<body` 的不动（异常文件）。
 fn link_without_head(html: &str, link: &str) -> String {
     match html::tags(html).find(|t| t.is_start() && t.is("body")) {
-        Some(b) => format!("{}<head>{}</head>{}", &html[..b.start], link, &html[b.start..]),
+        Some(b) => format!(
+            "{}<head>{}</head>{}",
+            &html[..b.start],
+            link,
+            &html[b.start..]
+        ),
         None => html.to_string(),
     }
 }
@@ -272,7 +380,9 @@ fn link_without_head(html: &str, link: &str) -> String {
 /// 给 `<head>` 注入指向外链 wash css 的 `<link>`（`href` 见 [`css_link_tag`]），放在 `</head>` 前。幂等（已有则跳过）。
 /// 无 `</head>` 时补一对 head；无 `<body` 也不动（异常文件）。标签按 `crate::html` 扫（不分大小写，注释里的不算）。
 pub(super) fn inject_css_link(html: &str, href: &str) -> String {
-    let Some(link) = css_link_tag(html, href) else { return html.to_string() };
+    let Some(link) = css_link_tag(html, href) else {
+        return html.to_string();
+    };
     match html::tags(html).find(|t| t.kind == html::TagKind::Close && t.is("head")) {
         Some(h) => format!("{}{}{}", &html[..h.start], link, &html[h.start..]),
         None => link_without_head(html, &link),
@@ -282,12 +392,22 @@ pub(super) fn inject_css_link(html: &str, href: &str) -> String {
 /// 给 `<head>` 注入指向 `href` 的 `<link>`，放在 `<head>` 里最前面（书自带的样式表、`<style>` 之前：源序在前，书里写了的盖过它）。
 /// 幂等；无 `<head>` 时同 [`inject_css_link`]。
 pub(super) fn inject_css_link_first(html: &str, href: &str) -> String {
-    let Some(link) = css_link_tag(html, href) else { return html.to_string() };
+    let Some(link) = css_link_tag(html, href) else {
+        return html.to_string();
+    };
     // 书的样式表写在 `<head>` 前面的（《金庸》有的文件 `<link>` 在 `<head>` 外）：插到它前面，免得按文档顺序排到书的样式后面、盖掉书里写的
     let head = html::tags(html).find(|t| t.kind == html::TagKind::Open && t.is("head"));
-    let early = html::tags(html).find(|t| t.is_start() && (t.is("style") || t.is("link") && html::attr_value(&html[t.start..t.end], "rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet"))));
+    let early = html::tags(html).find(|t| {
+        t.is_start()
+            && (t.is("style")
+                || t.is("link")
+                    && html::attr_value(&html[t.start..t.end], "rel")
+                        .is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")))
+    });
     match (head, early) {
-        (Some(h), Some(e)) if e.start < h.start => format!("{}{link}{}", &html[..e.start], &html[e.start..]),
+        (Some(h), Some(e)) if e.start < h.start => {
+            format!("{}{link}{}", &html[..e.start], &html[e.start..])
+        }
         (Some(h), _) => format!("{}{link}{}", &html[..h.end], &html[h.end..]),
         _ => inject_css_link(html, href),
     }
@@ -315,7 +435,11 @@ pub fn wash_css(opts: &WashOpts) -> String {
     // xochitl 上 div 本就无 p 规则、且书的类规则够不到（类已剥），此条只是保险。
     // ⚠ 值用 0.01em 不用 0：xochitl 把 `text-indent:0` 当"没设"→ 落回从外层 `<div class="calibre1">` 之类**继承**来的缩进
     //   （诊断 14 V1/V7 vs Sheldon v5，2026-09-06）；0.01em ≈ 0.1pt 肉眼不可见，看上去就是顶格。
-    let flush = if opts.keep_para_spacing { ".eink-flush{text-indent:0.01em;}" } else { ".eink-flush{text-indent:0.01em;margin-top:0;margin-bottom:0;}" };
+    let flush = if opts.keep_para_spacing {
+        ".eink-flush{text-indent:0.01em;}"
+    } else {
+        ".eink-flush{text-indent:0.01em;margin-top:0;margin-bottom:0;}"
+    };
     // figure/figcaption：以前这条规则只管了 `<p>` 的边距，`article.rs` 网文管线常把图片包成
     // `<figure><img/><figcaption>…</figcaption></figure>`（真机书里也不算罕见），这两个元素
     // 完全没被清零过——默认（未洗）上下边距在"图片夹在正文中间"的场景会造成明显留白，2026-09-10
@@ -331,7 +455,11 @@ pub fn wash_css(opts: &WashOpts) -> String {
     // `.eink-note`：章末的每条注释（`htmlproc::footnote`）不拆到两页（2026-09-29：注释内容要在同一页内；长过一页的阅读器照常断开）。
     // `.eink-noteicon`：图标标号限成一个字高（没写宽高的 <img> 阅读器按图片像素画，80×80 的图标撑成一大块）；
     //   profile 的 note_icons = "number"（图标换成数字）时优化器第二遍按同一个常量 [`NOTEICON_RULE`] 把这条删掉。
-    let latin = if opts.lang == LangMode::Latin { "p{hyphens:auto;-webkit-hyphens:auto;orphans:2;widows:2;}\n" } else { "" };
+    let latin = if opts.lang == LangMode::Latin {
+        "p{hyphens:auto;-webkit-hyphens:auto;orphans:2;widows:2;}\n"
+    } else {
+        ""
+    };
     format!(
         "p{{{decl}}}\n{latin}.eink-center{{text-align:center;text-indent:0.01em;}}\n.eink-right{{text-align:right;text-indent:0.01em;}}\n{flush}\nfigure{{margin:0;padding:0;}}\nfigcaption{{margin:0;padding:0;}}\n.footnotes{{font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-fnote{{font-size:{FOOTNOTE_FONT_SIZE};}}\nspan.eink-annot{{font-family:inherit;font-size:{FOOTNOTE_FONT_SIZE};}}\np.eink-annot{{font-family:inherit;font-size:{FOOTNOTE_FONT_SIZE};}}\ndiv.eink-annot{{font-family:inherit;font-size:{FOOTNOTE_FONT_SIZE};}}\n.eink-note{{page-break-inside:avoid;}}\n{NOTEICON_RULE}"
     )
@@ -343,5 +471,14 @@ pub const NOTEICON_RULE: &str = ".eink-noteicon{height:1em;width:auto;}\n";
 
 /// 带不止一个 `id` 属性的开标签数（质量门与清洗报告用；`aid`/`data-id` 不算 id）。
 pub fn count_dup_id_tags(html: &str) -> usize {
-    html::tags(html).filter(|t| t.is_start() && html::attrs(&html[t.start..t.end]).iter().filter(|a| a.is("id")).nth(1).is_some()).count()
+    html::tags(html)
+        .filter(|t| {
+            t.is_start()
+                && html::attrs(&html[t.start..t.end])
+                    .iter()
+                    .filter(|a| a.is("id"))
+                    .nth(1)
+                    .is_some()
+        })
+        .count()
 }

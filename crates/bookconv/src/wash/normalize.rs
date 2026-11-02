@@ -82,7 +82,12 @@ impl XmlFixes {
 }
 
 /// 清洗层入口：XML 修复 → OPF 升级 → 导航文档与 landmarks。`lang_tag`：缺 `dc:language` 时补的值；`heading`：新建 nav 的标题。
-pub(super) fn normalize_book(entries: &mut Vec<Entry>, lang_tag: &str, heading: &str, rep: &mut WashReport) {
+pub(super) fn normalize_book(
+    entries: &mut Vec<Entry>,
+    lang_tag: &str,
+    heading: &str,
+    rep: &mut WashReport,
+) {
     // 各文件独立，多线程做（`util::par_map_mut`），计数再加起来
     let fixes = crate::util::par_map_mut(entries, |e| {
         let l = e.name.to_ascii_lowercase();
@@ -159,24 +164,43 @@ enum Ref<'a> {
 fn parse_ref(s: &str) -> Ref<'_> {
     let b = s.as_bytes();
     if b.get(1) == Some(&b'#') {
-        let (hex, start) = if matches!(b.get(2), Some(b'x' | b'X')) { (true, 3) } else { (false, 2) };
+        let (hex, start) = if matches!(b.get(2), Some(b'x' | b'X')) {
+            (true, 3)
+        } else {
+            (false, 2)
+        };
         // 前导零任意多都合法（`&#000000065;` 就是 `A`）：位数不设上限，去掉前导零后再换算；有效位太多（超出 u32）算非法字符
         let mut i = start;
-        while i < b.len() && (if hex { b[i].is_ascii_hexdigit() } else { b[i].is_ascii_digit() }) {
+        while i < b.len()
+            && (if hex {
+                b[i].is_ascii_hexdigit()
+            } else {
+                b[i].is_ascii_digit()
+            })
+        {
             i += 1;
         }
         if i == start || b.get(i) != Some(&b';') {
             return Ref::Bare;
         }
         let digits = s[start..i].trim_start_matches('0');
-        let n = if digits.is_empty() { Some(0) } else if digits.len() > 8 { None } else { u32::from_str_radix(digits, if hex { 16 } else { 10 }).ok() };
+        let n = if digits.is_empty() {
+            Some(0)
+        } else if digits.len() > 8 {
+            None
+        } else {
+            u32::from_str_radix(digits, if hex { 16 } else { 10 }).ok()
+        };
         return match n.and_then(char::from_u32) {
             Some(c) if crate::util::is_xml_char(c) => Ref::Keep(i + 1),
             _ => Ref::Illegal(i + 1),
         };
     }
     let mut i = 1;
-    while i < b.len() && i < 40 && (b[i].is_ascii_alphanumeric() || (i > 1 && matches!(b[i], b'.' | b'-' | b'_'))) {
+    while i < b.len()
+        && i < 40
+        && (b[i].is_ascii_alphanumeric() || (i > 1 && matches!(b[i], b'.' | b'-' | b'_')))
+    {
         i += 1;
     }
     if i == 1 || !b[1].is_ascii_alphabetic() || b.get(i) != Some(&b';') {
@@ -192,7 +216,10 @@ fn parse_ref(s: &str) -> Ref<'_> {
 /// `quote_dq`：无引号的属性值（写回时要加双引号，值里的 `"` 要转义）。`in_attr`：属性值（里面的 `<` 一律转义，见下）。
 /// 没有要改的原样借用。
 fn fix_chars<'a>(s: &'a str, quote_dq: bool, in_attr: bool, fx: &mut XmlFixes) -> Cow<'a, str> {
-    if !s.bytes().any(|b| b == b'&' || b == b'<' || (quote_dq && b == b'"')) {
+    if !s
+        .bytes()
+        .any(|b| b == b'&' || b == b'<' || (quote_dq && b == b'"'))
+    {
         return Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len() + 16);
@@ -221,7 +248,10 @@ fn fix_chars<'a>(s: &'a str, quote_dq: bool, in_attr: bool, fx: &mut XmlFixes) -
                             fx.named_entities += 1;
                             changed = true;
                         }
-                        Err(_) => match markup5ever::data::NAMED_ENTITIES.get(format!("{name};").as_str()).filter(|&&(c1, _)| c1 != 0) {
+                        Err(_) => match markup5ever::data::NAMED_ENTITIES
+                            .get(format!("{name};").as_str())
+                            .filter(|&&(c1, _)| c1 != 0)
+                        {
                             // HTML4 以外、HTML5 有的（`&rarrw;`、`&NewLine;`…，2231 个）：一样换成数字引用
                             Some(&(c1, c2)) => {
                                 out.push_str(&format!("&#{c1};"));
@@ -252,7 +282,12 @@ fn fix_chars<'a>(s: &'a str, quote_dq: bool, in_attr: bool, fx: &mut XmlFixes) -
                 // 标签之间：后面是字母、`/`、`!`、`?` 的可能是扫描器没认出来的标签（引号没配对之类），拿不准，不动。
                 // 属性值里（扫描器已经按引号认出了值的范围）`<` 在 XML 里一律不合法（`alt="<b>x</b>"` 会让 xochitl
                 // 整章白屏，2026-09-30 审计），全部转义。
-                if !in_attr && rest.as_bytes().get(1).is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'/' | b'!' | b'?')) {
+                if !in_attr
+                    && rest
+                        .as_bytes()
+                        .get(1)
+                        .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, b'/' | b'!' | b'?'))
+                {
                     out.push('<');
                 } else {
                     out.push_str("&lt;");
@@ -272,7 +307,11 @@ fn fix_chars<'a>(s: &'a str, quote_dq: bool, in_attr: bool, fx: &mut XmlFixes) -
         i = k + 1;
     }
     out.push_str(&s[i..]);
-    if changed { Cow::Owned(out) } else { Cow::Borrowed(s) }
+    if changed {
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(s)
+    }
 }
 
 /// 开标签（或自闭合标签）原文的修复：属性值里的字符、无引号/无值的属性。
@@ -294,7 +333,11 @@ fn fix_start_tag<'a>(raw: &'a str, fx: &mut XmlFixes) -> Cow<'a, str> {
             }
             None => {
                 // 无值属性（`<td nowrap>`）：XHTML 的写法是 `nowrap="nowrap"`。名字里有奇怪字符的（杂散引号等）不动。
-                if !a.name.is_empty() && a.name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b':' | b'_' | b'-' | b'.')) {
+                if !a.name.is_empty()
+                    && a.name.bytes().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, b':' | b'_' | b'-' | b'.')
+                    })
+                {
                     edits.push((a.end, a.end, format!("=\"{}\"", a.name)));
                     fx.attrs_quoted += 1;
                 }
@@ -313,7 +356,10 @@ fn fold_fullwidth(s: &str) -> String {
 }
 
 /// HTML 里结束标签可省的元素（HTML 规范「可选标签」：遇到下一个同级元素、父元素结束时隐含结束）。
-const OPTIONAL_END: [&str; 15] = ["p", "li", "dt", "dd", "option", "optgroup", "tr", "td", "th", "thead", "tbody", "tfoot", "rb", "rt", "rp"];
+const OPTIONAL_END: [&str; 15] = [
+    "p", "li", "dt", "dd", "option", "optgroup", "tr", "td", "th", "thead", "tbody", "tfoot", "rb",
+    "rt", "rp",
+];
 
 /// 合法 XML：quick-xml 查结构 + 标签完全配平 + 没有非法字符 + 字符引用都认得（只有 XML 预定义实体和数字引用）。
 pub(crate) fn well_formed_xml(t: &str) -> bool {
@@ -326,7 +372,8 @@ pub(crate) fn well_formed_xml(t: &str) -> bool {
         }
     }
     let mut fx = XmlFixes::default();
-    let chars_ok = matches!(fix_chars(t, false, false, &mut fx), Cow::Borrowed(_)) && fx.unknown_entities == 0;
+    let chars_ok =
+        matches!(fix_chars(t, false, false, &mut fx), Cow::Borrowed(_)) && fx.unknown_entities == 0;
     tags_balanced(t) && t.chars().all(crate::util::is_xml_char) && chars_ok
 }
 
@@ -350,7 +397,10 @@ pub(crate) fn normalize_markup<'a>(text: &'a str, xhtml: bool, fx: &mut XmlFixes
         Cow::Borrowed(text)
     } else {
         let before = text.chars().count();
-        let s: String = text.chars().filter(|&c| crate::util::is_xml_char(c)).collect();
+        let s: String = text
+            .chars()
+            .filter(|&c| crate::util::is_xml_char(c))
+            .collect();
         fx.control_chars += before - s.chars().count();
         Cow::Owned(s)
     };
@@ -398,7 +448,8 @@ fn markup_pass(text: &str, xhtml: bool, fix_nesting: bool, fx: &mut XmlFixes) ->
         match t.kind {
             html::TagKind::Other => {
                 // 根元素之前的 DOCTYPE 换成 EPUB 3 的写法；带内部子集（`[…]`）的拿不准，不动。
-                let is_doctype = raw.len() >= 9 && raw.as_bytes()[..9].eq_ignore_ascii_case(b"<!doctype");
+                let is_doctype =
+                    raw.len() >= 9 && raw.as_bytes()[..9].eq_ignore_ascii_case(b"<!doctype");
                 if xhtml && is_doctype && !seen_root && !raw.contains('[') {
                     if raw != "<!DOCTYPE html>" {
                         fx.doctypes += 1;
@@ -448,7 +499,9 @@ fn markup_pass(text: &str, xhtml: bool, fix_nesting: bool, fx: &mut XmlFixes) ->
                 }
                 seen_root |= xhtml;
                 if t.kind == html::TagKind::Open && xhtml {
-                    let closed_next = tags.get(k + 1).is_some_and(|n| n.kind == html::TagKind::Close && n.name.eq_ignore_ascii_case(t.name));
+                    let closed_next = tags.get(k + 1).is_some_and(|n| {
+                        n.kind == html::TagKind::Close && n.name.eq_ignore_ascii_case(t.name)
+                    });
                     if html::is_void(t.name) && !closed_next && tag.ends_with('>') {
                         tag.insert(tag.len() - 1, '/');
                         fx.void_tags_closed += 1;
@@ -476,8 +529,16 @@ struct MetaEl<'a> {
 }
 
 fn metadata_elements(opf: &str) -> Vec<MetaEl<'_>> {
-    let Some(m) = html::tags(opf).find(|t| t.kind == html::TagKind::Open && opf::is_local(t.name, "metadata")) else { return Vec::new() };
-    let Some(mc) = html::tags_in(opf, m.end, opf.len()).find(|t| t.kind == html::TagKind::Close && opf::is_local(t.name, "metadata")) else { return Vec::new() };
+    let Some(m) = html::tags(opf)
+        .find(|t| t.kind == html::TagKind::Open && opf::is_local(t.name, "metadata"))
+    else {
+        return Vec::new();
+    };
+    let Some(mc) = html::tags_in(opf, m.end, opf.len())
+        .find(|t| t.kind == html::TagKind::Close && opf::is_local(t.name, "metadata"))
+    else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
     let mut it = html::tags_in(opf, m.end, mc.start);
     while let Some(t) = it.next() {
@@ -485,28 +546,42 @@ fn metadata_elements(opf: &str) -> Vec<MetaEl<'_>> {
             continue;
         }
         if t.kind == html::TagKind::SelfClosing {
-            out.push(MetaEl { name: t.name, start: t.start, open_end: t.end, close_start: t.end, end: t.end });
+            out.push(MetaEl {
+                name: t.name,
+                start: t.start,
+                open_end: t.end,
+                close_start: t.end,
+                end: t.end,
+            });
             continue;
         }
-        let Some(c) = html::find_close(opf, t.end, t.name).filter(|c| c.end <= mc.start) else { continue };
-        out.push(MetaEl { name: t.name, start: t.start, open_end: t.end, close_start: c.start, end: c.end });
+        let Some(c) = html::find_close(opf, t.end, t.name).filter(|c| c.end <= mc.start) else {
+            continue;
+        };
+        out.push(MetaEl {
+            name: t.name,
+            start: t.start,
+            open_end: t.end,
+            close_start: c.start,
+            end: c.end,
+        });
         // 跳过元素内部
         it = html::tags_in(opf, c.end, mc.start);
     }
     out
 }
 
-
 /// `dcterms:modified` 的格式：`CCYY-MM-DDThh:mm:ssZ`。
 fn is_w3c_utc(v: &str) -> bool {
     let b = v.as_bytes();
-    b.len() == 20 && b.iter().enumerate().all(|(i, &c)| match i {
-        4 | 7 => c == b'-',
-        10 => c == b'T',
-        13 | 16 => c == b':',
-        19 => c == b'Z',
-        _ => c.is_ascii_digit(),
-    })
+    b.len() == 20
+        && b.iter().enumerate().all(|(i, &c)| match i {
+            4 | 7 => c == b'-',
+            10 => c == b'T',
+            13 | 16 => c == b':',
+            19 => c == b'Z',
+            _ => c.is_ascii_digit(),
+        })
 }
 
 /// OPF 升级到 EPUB 3（见模块说明）。什么都不用改 → `None`。
@@ -527,8 +602,15 @@ pub(crate) fn upgrade_opf(opf: &str, lang_tag: &str) -> Option<String> {
     // 2. unique-identifier 指向一个非空的标识符元素。
     let new_uid = st.fix_unique_identifier();
     // 3. 缺 dc:language 就补。
-    if !st.els.iter().any(|e| is_dc(e, "language") && !opf[e.open_end..e.close_start].trim().is_empty()) {
-        st.add_meta.push_str(&format!("<dc:language>{}</dc:language>", xml_escape(lang_tag)));
+    if !st
+        .els
+        .iter()
+        .any(|e| is_dc(e, "language") && !opf[e.open_end..e.close_start].trim().is_empty())
+    {
+        st.add_meta.push_str(&format!(
+            "<dc:language>{}</dc:language>",
+            xml_escape(lang_tag)
+        ));
     }
     // 4. dcterms:modified：原书有格式正确的就沿用，格式不对的改成固定值，没有就补。
     st.fix_modified();
@@ -538,7 +620,9 @@ pub(crate) fn upgrade_opf(opf: &str, lang_tag: &str) -> Option<String> {
     if new_pkg != pkg_tag {
         st.edits.push((pkg.start, pkg.end, new_pkg));
     }
-    let OpfEdit { edits, add_meta, .. } = st;
+    let OpfEdit {
+        edits, add_meta, ..
+    } = st;
     if edits.is_empty() && add_meta.is_empty() {
         return None;
     }
@@ -581,18 +665,46 @@ fn new_unique_id(ids: &mut HashSet<String>, base: &str) -> String {
 impl<'a> OpfEdit<'a> {
     fn new(opf: &'a str) -> Self {
         let els = metadata_elements(opf);
-        let ids: HashSet<String> = html::tags(opf).filter(|t| t.is_start()).filter_map(|t| html::attr_value(&opf[t.start..t.end], "id").map(str::to_string)).collect();
-        let opens: Vec<String> = els.iter().map(|e| opf[e.start..e.open_end].to_string()).collect();
-        OpfEdit { opf, els, ids, opens, dropped: HashSet::new(), edits: Vec::new(), add_meta: String::new() }
+        let ids: HashSet<String> = html::tags(opf)
+            .filter(|t| t.is_start())
+            .filter_map(|t| html::attr_value(&opf[t.start..t.end], "id").map(str::to_string))
+            .collect();
+        let opens: Vec<String> = els
+            .iter()
+            .map(|e| opf[e.start..e.open_end].to_string())
+            .collect();
+        OpfEdit {
+            opf,
+            els,
+            ids,
+            opens,
+            dropped: HashSet::new(),
+            edits: Vec::new(),
+            add_meta: String::new(),
+        }
     }
 
     /// 第 1 步（只对 EPUB 2）：dc:date 只留一个（`opf:event="publication"` 的，其次第一个），其余写成 `dcterms:date` 后删掉；
     /// dc 元素上的 `opf:role`/`opf:file-as`/`opf:scheme` 改写成 `<meta refines>`（元素没有 id 的补一个），`opf:event` 去掉。
     fn opf2_attrs_to_refines(&mut self) {
         let opf = self.opf;
-        let OpfEdit { els, ids, opens, dropped, add_meta, .. } = self;
+        let OpfEdit {
+            els,
+            ids,
+            opens,
+            dropped,
+            add_meta,
+            ..
+        } = self;
         let dates: Vec<usize> = (0..els.len()).filter(|&i| is_dc(&els[i], "date")).collect();
-        let keep_date = dates.iter().copied().find(|&i| html::attr_value(&opens[i], "opf:event").is_some_and(|v| v.eq_ignore_ascii_case("publication"))).or(dates.first().copied());
+        let keep_date = dates
+            .iter()
+            .copied()
+            .find(|&i| {
+                html::attr_value(&opens[i], "opf:event")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("publication"))
+            })
+            .or(dates.first().copied());
         for &i in dates.iter().filter(|&&i| Some(i) != keep_date) {
             let v = opf[els[i].open_end..els[i].close_start].trim();
             if !v.is_empty() {
@@ -605,7 +717,11 @@ impl<'a> OpfEdit<'a> {
                 continue;
             }
             let tag = opens[i].clone();
-            let (role, file_as, scheme) = (html::attr_value(&tag, "opf:role"), html::attr_value(&tag, "opf:file-as"), html::attr_value(&tag, "opf:scheme"));
+            let (role, file_as, scheme) = (
+                html::attr_value(&tag, "opf:role"),
+                html::attr_value(&tag, "opf:file-as"),
+                html::attr_value(&tag, "opf:scheme"),
+            );
             let has_event = html::attr(&tag, "opf:event").is_some();
             if role.is_none() && file_as.is_none() && scheme.is_none() && !has_event {
                 continue;
@@ -614,11 +730,23 @@ impl<'a> OpfEdit<'a> {
             for a in ["opf:role", "opf:file-as", "opf:scheme", "opf:event"] {
                 t = html::remove_attr(&t, a);
             }
-            let refines: Vec<String> = [(role.filter(|v| !v.trim().is_empty()), r#" scheme="marc:relators""#, "role"), (file_as.filter(|v| !v.trim().is_empty()), "", "file-as"), (scheme.filter(|v| !v.trim().is_empty()), "", "identifier-type")]
-                .into_iter()
-                .filter_map(|(v, extra, prop)| v.map(|v| (v, extra, prop)))
-                .map(|(v, extra, prop)| format!(r#" property="{prop}"{extra}>{}</meta>"#, v.trim()))
-                .collect();
+            let refines: Vec<String> = [
+                (
+                    role.filter(|v| !v.trim().is_empty()),
+                    r#" scheme="marc:relators""#,
+                    "role",
+                ),
+                (file_as.filter(|v| !v.trim().is_empty()), "", "file-as"),
+                (
+                    scheme.filter(|v| !v.trim().is_empty()),
+                    "",
+                    "identifier-type",
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(v, extra, prop)| v.map(|v| (v, extra, prop)))
+            .map(|(v, extra, prop)| format!(r#" property="{prop}"{extra}>{}</meta>"#, v.trim()))
+            .collect();
             if !refines.is_empty() {
                 let id = match html::attr_value(&t, "id").filter(|v| !v.is_empty()) {
                     Some(id) => id.to_string(),
@@ -641,16 +769,33 @@ impl<'a> OpfEdit<'a> {
     /// 非空的标识符（没有 id 的补一个），一个都没有就新写一个，返回 package 要改成的 unique-identifier。
     fn fix_unique_identifier(&mut self) -> Option<String> {
         let opf = self.opf;
-        let OpfEdit { els, ids, opens, dropped, add_meta, .. } = self;
-        let idents: Vec<usize> = (0..els.len()).filter(|&i| opf::is_local(els[i].name, "identifier") && !dropped.contains(&i)).collect();
-        let has_text = |i: usize| opf::identifier_text(&opf[els[i].open_end..els[i].close_start]).is_some();
+        let OpfEdit {
+            els,
+            ids,
+            opens,
+            dropped,
+            add_meta,
+            ..
+        } = self;
+        let idents: Vec<usize> = (0..els.len())
+            .filter(|&i| opf::is_local(els[i].name, "identifier") && !dropped.contains(&i))
+            .collect();
+        let has_text =
+            |i: usize| opf::identifier_text(&opf[els[i].open_end..els[i].close_start]).is_some();
         let uid_attr = opf::package_unique_identifier(opf);
-        let uid_ok = uid_attr.is_some_and(|u| idents.iter().any(|&i| html::attr_value(&opens[i], "id").map(str::trim) == Some(u) && has_text(i)));
+        let uid_ok = uid_attr.is_some_and(|u| {
+            idents.iter().any(|&i| {
+                html::attr_value(&opens[i], "id").map(str::trim) == Some(u) && has_text(i)
+            })
+        });
         let mut new_uid: Option<String> = None;
         if !uid_ok {
             match idents.iter().copied().find(|&i| has_text(i)) {
                 Some(i) => {
-                    let id = match html::attr_value(&opens[i], "id").map(str::trim).filter(|v| !v.is_empty()) {
+                    let id = match html::attr_value(&opens[i], "id")
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                    {
                         Some(id) => id.to_string(),
                         None => {
                             let id = new_unique_id(ids, "eink-uid");
@@ -662,7 +807,10 @@ impl<'a> OpfEdit<'a> {
                 }
                 None => {
                     let id = new_unique_id(ids, "eink-uid");
-                    add_meta.push_str(&format!(r#"<dc:identifier id="{id}">urn:eink:{:016x}</dc:identifier>"#, crate::util::fnv64(opf.as_bytes())));
+                    add_meta.push_str(&format!(
+                        r#"<dc:identifier id="{id}">urn:eink:{:016x}</dc:identifier>"#,
+                        crate::util::fnv64(opf.as_bytes())
+                    ));
                     new_uid = Some(id);
                 }
             }
@@ -673,16 +821,36 @@ impl<'a> OpfEdit<'a> {
     /// 第 4 步：dcterms:modified——原书有格式正确的就沿用，格式不对的改成固定值，没有就补（只看第一个）。
     fn fix_modified(&mut self) {
         let opf = self.opf;
-        let modified: Vec<&MetaEl> = self.els.iter().filter(|e| opf::is_local(e.name, "meta") && html::attr_value(&opf[e.start..e.open_end], "property") == Some("dcterms:modified")).collect();
+        let modified: Vec<&MetaEl> = self
+            .els
+            .iter()
+            .filter(|e| {
+                opf::is_local(e.name, "meta")
+                    && html::attr_value(&opf[e.start..e.open_end], "property")
+                        == Some("dcterms:modified")
+            })
+            .collect();
         match modified.first() {
             Some(m) if is_w3c_utc(opf[m.open_end..m.close_start].trim()) => {}
-            Some(m) if m.end > m.open_end => self.edits.push((m.open_end, m.close_start, EPUB3_MODIFIED.to_string())),
+            Some(m) if m.end > m.open_end => {
+                self.edits
+                    .push((m.open_end, m.close_start, EPUB3_MODIFIED.to_string()))
+            }
             Some(m) => {
                 // 自闭合的 `<meta property="dcterms:modified"/>`：没有内容，整个换掉。
-                let open = opf[m.start..m.open_end].trim_end_matches('>').trim_end_matches('/').trim_end();
-                self.edits.push((m.start, m.end, format!("{open}>{EPUB3_MODIFIED}</{}>", m.name)));
+                let open = opf[m.start..m.open_end]
+                    .trim_end_matches('>')
+                    .trim_end_matches('/')
+                    .trim_end();
+                self.edits.push((
+                    m.start,
+                    m.end,
+                    format!("{open}>{EPUB3_MODIFIED}</{}>", m.name),
+                ));
             }
-            _ => self.add_meta.push_str(&format!(r#"<meta property="dcterms:modified">{EPUB3_MODIFIED}</meta>"#)),
+            _ => self.add_meta.push_str(&format!(
+                r#"<meta property="dcterms:modified">{EPUB3_MODIFIED}</meta>"#
+            )),
         }
     }
 
@@ -694,7 +862,8 @@ impl<'a> OpfEdit<'a> {
                 let ws = opf[e.end..].len() - opf[e.end..].trim_start().len();
                 self.edits.push((e.start, e.end + ws, String::new()));
             } else if self.opens[i] != opf[e.start..e.open_end] {
-                self.edits.push((e.start, e.open_end, self.opens[i].clone()));
+                self.edits
+                    .push((e.start, e.open_end, self.opens[i].clone()));
             }
         }
     }
@@ -702,7 +871,12 @@ impl<'a> OpfEdit<'a> {
 
 /// 第 5 步：升级后的 package 开标签——EPUB 2 的 version 改 3.0、unique-identifier 换成 `new_uid`（有的话）、
 /// 不带前缀的 `<package>` 补默认命名空间。没改动时和 `pkg_tag` 相同。
-fn upgraded_package_tag(pkg_tag: &str, pkg_name: &str, was3: bool, new_uid: Option<&str>) -> String {
+fn upgraded_package_tag(
+    pkg_tag: &str,
+    pkg_name: &str,
+    was3: bool,
+    new_uid: Option<&str>,
+) -> String {
     let mut new_pkg = pkg_tag.to_string();
     if !was3 {
         new_pkg = html::set_attr(&new_pkg, "version", "3.0");
@@ -723,7 +897,9 @@ fn apply_opf_edits(opf: &str, mut edits: Vec<(usize, usize, String)>, add_meta: 
     if !add_meta.is_empty() {
         // 新写的 dc: 元素要有 dc 命名空间：原书一个 dc 元素都没有时补在 metadata 上。
         if add_meta.contains("<dc:") && !out.contains("xmlns:dc=") {
-            if let Some(m) = html::tags(&out).find(|t| t.kind == html::TagKind::Open && opf::is_local(t.name, "metadata")) {
+            if let Some(m) = html::tags(&out)
+                .find(|t| t.kind == html::TagKind::Open && opf::is_local(t.name, "metadata"))
+            {
                 let tag = html::set_attr(&out[m.start..m.end], "xmlns:dc", DC_NS);
                 out = format!("{}{tag}{}", &out[..m.start], &out[m.end..]);
             }
@@ -760,7 +936,9 @@ fn landmark_type(guide_type: &str) -> Option<&'static str> {
 
 /// 没有导航文档就按 NCX 生成一份并登记（`properties="nav"`）；再把 `<guide>` 写成 nav 里的 landmarks。
 pub(super) fn ensure_nav(entries: &mut Vec<Entry>, heading: &str, rep: &mut WashReport) {
-    let Some(opf) = parse_opf(entries) else { return };
+    let Some(opf) = parse_opf(entries) else {
+        return;
+    };
     let nav_path = match opf.nav_doc.clone() {
         Some(p) => p,
         None => {
@@ -773,26 +951,57 @@ pub(super) fn ensure_nav(entries: &mut Vec<Entry>, heading: &str, rep: &mut Wash
                             continue; // nav 里的链接必须有文字
                         }
                         let (path, frag) = crate::epubzip::resolve_href(ncx_path, &p.src);
-                        items.push(toc::TocItem::new(p.depth.clamp(1, 255) as u8, label, path, frag.unwrap_or("")));
+                        items.push(toc::TocItem::new(
+                            p.depth.clamp(1, 255) as u8,
+                            label,
+                            path,
+                            frag.unwrap_or(""),
+                        ));
                     }
                 }
             }
             if items.is_empty() {
                 // 没有可用的目录：一条指向第一章，标题用书名（EPUB 3 要求 nav 的 toc 至少一条）。
-                let Some(first) = opf.spine.first() else { return };
-                items.push(toc::TocItem::new(1, opf_book_title(entries, opf.index), first.clone(), ""));
+                let Some(first) = opf.spine.first() else {
+                    return;
+                };
+                items.push(toc::TocItem::new(
+                    1,
+                    opf_book_title(entries, opf.index),
+                    first.clone(),
+                    "",
+                ));
             }
             let taken: HashSet<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-            let path = ["nav.xhtml", "eink-nav.xhtml"].iter().map(|n| resolve(&opf.dir, n)).find(|p| !taken.contains(p.as_str()));
+            let path = ["nav.xhtml", "eink-nav.xhtml"]
+                .iter()
+                .map(|n| resolve(&opf.dir, n))
+                .find(|p| !taken.contains(p.as_str()));
             let Some(path) = path else { return };
             let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
             let ids: HashSet<&str> = manifest_items(&text).iter().map(|i| i.id).collect();
-            let id = ["eink-nav", "eink-nav-2", "eink-nav-3"].into_iter().find(|i| !ids.contains(i)).unwrap_or("eink-nav-x");
+            let id = ["eink-nav", "eink-nav-2", "eink-nav-3"]
+                .into_iter()
+                .find(|i| !ids.contains(i))
+                .unwrap_or("eink-nav-x");
             let href = crate::epubzip::href_to(&opf.dir, &path, "");
-            let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id, href: &href, media_type: "application/xhtml+xml", properties: "nav" }]) else { return };
+            let Some(t) = opf::insert_manifest_items(
+                &text,
+                &[opf::NewItem {
+                    id,
+                    href: &href,
+                    media_type: "application/xhtml+xml",
+                    properties: "nav",
+                }],
+            ) else {
+                return;
+            };
             entries[opf.index].data = t.into_bytes();
             let nav = toc::build_nav(&items, dir_of(&path), heading);
-            entries.push(Entry { name: path.clone(), data: nav.into_bytes() });
+            entries.push(Entry {
+                name: path.clone(),
+                data: nav.into_bytes(),
+            });
             rep.nav_generated = items.len();
             path
         }
@@ -808,10 +1017,20 @@ pub(super) fn ensure_nav(entries: &mut Vec<Entry>, heading: &str, rep: &mut Wash
 /// 导航文档 `<nav epub:type="toc">` 里的目录条目（`<ol>` 嵌套深度当级别；没有 `href` 的 `<span>` 标题跳过）。
 pub fn nav_toc_items(doc: &str, nav_path: &str) -> Vec<toc::TocItem> {
     let spans = html::parse_spans(doc, 0, doc.len());
-    let Some(nav) = spans.iter().find(|s| s.name == "nav" && html::attr_value(&doc[s.open_start..s.open_end], "epub:type").is_some_and(|t| t.split_whitespace().any(|x| x == "toc"))) else { return Vec::new() };
+    let Some(nav) = spans.iter().find(|s| {
+        s.name == "nav"
+            && html::attr_value(&doc[s.open_start..s.open_end], "epub:type")
+                .is_some_and(|t| t.split_whitespace().any(|x| x == "toc"))
+    }) else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
-    for (i, a) in spans.iter().enumerate().filter(|(_, s)| s.name == "a" && s.open_start >= nav.open_end && s.close_end <= nav.close_start) {
-        let Some(href) = html::attr_value(&doc[a.open_start..a.open_end], "href") else { continue };
+    for (i, a) in spans.iter().enumerate().filter(|(_, s)| {
+        s.name == "a" && s.open_start >= nav.open_end && s.close_end <= nav.close_start
+    }) {
+        let Some(href) = html::attr_value(&doc[a.open_start..a.open_end], "href") else {
+            continue;
+        };
         let label = plain_text(&doc[a.open_end..a.close_start]);
         if label.is_empty() || html::is_external(html::split_href(href).0) {
             continue;
@@ -835,8 +1054,12 @@ pub fn nav_toc_items(doc: &str, nav_path: &str) -> Vec<toc::TocItem> {
 /// 没有 NCX 的书（EPUB 3 原书只有 nav）按 nav 生成一份 `toc.ncx`，manifest id 叫 `ncx`，`<spine toc="ncx">`——
 /// reMarkable xochitl 找目录只认 manifest 里 id 为 `ncx` 的条目（见 `ncx_fix::fix_ncx_manifest_id`）。返回条目数。
 fn ncx_from_nav(entries: &mut Vec<Entry>, nav_path: &str) -> usize {
-    let Some(opf) = parse_opf(entries) else { return 0 };
-    let Some(nav) = entries.iter().find(|e| e.name == nav_path) else { return 0 };
+    let Some(opf) = parse_opf(entries) else {
+        return 0;
+    };
+    let Some(nav) = entries.iter().find(|e| e.name == nav_path) else {
+        return 0;
+    };
     let items = nav_toc_items(&String::from_utf8_lossy(&nav.data), nav_path);
     if items.is_empty() {
         return 0;
@@ -844,10 +1067,28 @@ fn ncx_from_nav(entries: &mut Vec<Entry>, nav_path: &str) -> usize {
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
     let ids: HashSet<&str> = manifest_items(&text).iter().map(|i| i.id).collect();
     let taken: HashSet<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    let Some(path) = ["toc.ncx", "eink-toc.ncx"].iter().map(|n| resolve(&opf.dir, n)).find(|p| !taken.contains(p.as_str())) else { return 0 };
-    let Some(id) = ["ncx", "eink-ncx"].into_iter().find(|i| !ids.contains(i)) else { return 0 };
+    let Some(path) = ["toc.ncx", "eink-toc.ncx"]
+        .iter()
+        .map(|n| resolve(&opf.dir, n))
+        .find(|p| !taken.contains(p.as_str()))
+    else {
+        return 0;
+    };
+    let Some(id) = ["ncx", "eink-ncx"].into_iter().find(|i| !ids.contains(i)) else {
+        return 0;
+    };
     let href = crate::epubzip::href_to(&opf.dir, &path, "");
-    let Some(mut t) = opf::insert_manifest_items(&text, &[opf::NewItem { id, href: &href, media_type: "application/x-dtbncx+xml", properties: "" }]) else { return 0 };
+    let Some(mut t) = opf::insert_manifest_items(
+        &text,
+        &[opf::NewItem {
+            id,
+            href: &href,
+            media_type: "application/x-dtbncx+xml",
+            properties: "",
+        }],
+    ) else {
+        return 0;
+    };
     if let Some(sp) = html::tags(&t).find(|g| g.is_start() && opf::is_local(g.name, "spine")) {
         let tag = html::set_attr(&t[sp.start..sp.end], "toc", id);
         t = format!("{}{tag}{}", &t[..sp.start], &t[sp.end..]);
@@ -855,14 +1096,24 @@ fn ncx_from_nav(entries: &mut Vec<Entry>, nav_path: &str) -> usize {
     entries[opf.index].data = t.into_bytes();
     // dtb:uid 用 OPF 标识符（升级时已保证有）；`fix_ncx_uid` 随后再核一遍。
     let uid = opf_unique_identifier(entries).unwrap_or_default();
-    let ncx = toc::build_ncx(&items, dir_of(&path), &opf_book_title(entries, opf.index), &uid);
-    entries.push(Entry { name: path, data: ncx.into_bytes() });
+    let ncx = toc::build_ncx(
+        &items,
+        dir_of(&path),
+        &opf_book_title(entries, opf.index),
+        &uid,
+    );
+    entries.push(Entry {
+        name: path,
+        data: ncx.into_bytes(),
+    });
     items.len()
 }
 
 /// 把 OPF `<guide>` 写成导航文档里的 `<nav epub:type="landmarks">`（nav 已有 landmarks、guide 为空或都认不出时不动）。返回写了几条。
 fn add_landmarks(entries: &mut [Entry], nav_path: &str) -> usize {
-    let Some(oi) = find_opf(entries) else { return 0 };
+    let Some(oi) = find_opf(entries) else {
+        return 0;
+    };
     let opf_name = entries[oi].name.clone();
     let opf_text = String::from_utf8_lossy(&entries[oi].data).into_owned();
     let names: HashSet<&str> = entries.iter().map(|e| e.name.as_str()).collect();
@@ -870,12 +1121,27 @@ fn add_landmarks(entries: &mut [Entry], nav_path: &str) -> usize {
     let mut lis = String::new();
     let mut n = 0;
     // `<guide>` 的范围（第一个开标签到第一个闭合标签）只找一次
-    let open = html::tags(&opf_text).find(|t| t.kind == html::TagKind::Open && opf::is_local(t.name, "guide"));
-    let close = html::tags(&opf_text).find(|t| t.kind == html::TagKind::Close && opf::is_local(t.name, "guide"));
-    let Some((lo, hi)) = open.zip(close).map(|(o, c)| (o.end, c.start)).filter(|(lo, hi)| lo <= hi) else { return 0 };
-    for t in html::tags_in(&opf_text, lo, hi).filter(|t| t.is_start() && opf::is_local(t.name, "reference")) {
+    let open = html::tags(&opf_text)
+        .find(|t| t.kind == html::TagKind::Open && opf::is_local(t.name, "guide"));
+    let close = html::tags(&opf_text)
+        .find(|t| t.kind == html::TagKind::Close && opf::is_local(t.name, "guide"));
+    let Some((lo, hi)) = open
+        .zip(close)
+        .map(|(o, c)| (o.end, c.start))
+        .filter(|(lo, hi)| lo <= hi)
+    else {
+        return 0;
+    };
+    for t in html::tags_in(&opf_text, lo, hi)
+        .filter(|t| t.is_start() && opf::is_local(t.name, "reference"))
+    {
         let tag = &opf_text[t.start..t.end];
-        let (Some(ty), Some(href)) = (html::attr_value(tag, "type").and_then(landmark_type), html::attr_value(tag, "href")) else { continue };
+        let (Some(ty), Some(href)) = (
+            html::attr_value(tag, "type").and_then(landmark_type),
+            html::attr_value(tag, "href"),
+        ) else {
+            continue;
+        };
         let (raw_path, raw_frag) = html::split_href(href);
         if html::is_external(&crate::util::xml_unescape(raw_path)) {
             continue;
@@ -885,25 +1151,51 @@ fn add_landmarks(entries: &mut [Entry], nav_path: &str) -> usize {
             continue;
         }
         // 锚点原样写回（字符引用还原、百分号编码照留；拼好的链接整体再转义一次）
-        let link = crate::epubzip::href_to(dir_of(nav_path), &path, &crate::util::xml_unescape(raw_frag.unwrap_or("")));
+        let link = crate::epubzip::href_to(
+            dir_of(nav_path),
+            &path,
+            &crate::util::xml_unescape(raw_frag.unwrap_or("")),
+        );
         if !seen.insert((ty.to_string(), link.clone())) {
             continue;
         }
-        let title = html::attr_value(tag, "title").map(|v| crate::util::xml_unescape(v).trim().to_string()).filter(|v| !v.is_empty()).unwrap_or_else(|| ty.to_string());
-        lis.push_str(&format!(r#"<li><a epub:type="{ty}" href="{}">{}</a></li>"#, xml_escape(&link), xml_escape(&title)));
+        let title = html::attr_value(tag, "title")
+            .map(|v| crate::util::xml_unescape(v).trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| ty.to_string());
+        lis.push_str(&format!(
+            r#"<li><a epub:type="{ty}" href="{}">{}</a></li>"#,
+            xml_escape(&link),
+            xml_escape(&title)
+        ));
         n += 1;
     }
     if n == 0 {
         return 0;
     }
-    let Some(e) = entries.iter_mut().find(|e| e.name == nav_path) else { return 0 };
-    let Ok(doc) = std::str::from_utf8(&e.data) else { return 0 };
-    let has_landmarks = html::tags(doc).any(|t| t.is_start() && t.is("nav") && html::attr_value(&doc[t.start..t.end], "epub:type").is_some_and(|v| v.split_whitespace().any(|x| x == "landmarks")));
-    let Some(close) = html::tags(doc).filter(|t| t.kind == html::TagKind::Close && t.is("body")).last() else { return 0 };
+    let Some(e) = entries.iter_mut().find(|e| e.name == nav_path) else {
+        return 0;
+    };
+    let Ok(doc) = std::str::from_utf8(&e.data) else {
+        return 0;
+    };
+    let has_landmarks = html::tags(doc).any(|t| {
+        t.is_start()
+            && t.is("nav")
+            && html::attr_value(&doc[t.start..t.end], "epub:type")
+                .is_some_and(|v| v.split_whitespace().any(|x| x == "landmarks"))
+    });
+    let Some(close) = html::tags(doc)
+        .filter(|t| t.kind == html::TagKind::Close && t.is("body"))
+        .last()
+    else {
+        return 0;
+    };
     if has_landmarks {
         return 0;
     }
-    let block = format!(r#"<nav epub:type="landmarks" id="landmarks" hidden=""><ol>{lis}</ol></nav>"#);
+    let block =
+        format!(r#"<nav epub:type="landmarks" id="landmarks" hidden=""><ol>{lis}</ol></nav>"#);
     e.data = format!("{}{block}{}", &doc[..close.start], &doc[close.start..]).into_bytes();
     n
 }
@@ -915,7 +1207,12 @@ pub const PROP_SVG: u8 = 1;
 pub const PROP_MATHML: u8 = 2;
 pub const PROP_SCRIPTED: u8 = 4;
 pub const PROP_REMOTE: u8 = 8;
-const MANAGED: [(u8, &str); 4] = [(PROP_MATHML, "mathml"), (PROP_REMOTE, "remote-resources"), (PROP_SCRIPTED, "scripted"), (PROP_SVG, "svg")];
+const MANAGED: [(u8, &str); 4] = [
+    (PROP_MATHML, "mathml"),
+    (PROP_REMOTE, "remote-resources"),
+    (PROP_SCRIPTED, "scripted"),
+    (PROP_SVG, "svg"),
+];
 
 /// 一份 XHTML 用到的特性：内嵌 `<svg>`、`<math>`、`<script>`、远程资源（`src` 是 http(s) 或 `//` 的图片/音视频等、
 /// 远程样式表、SVG `<image>` 的远程 `href`）。
@@ -935,9 +1232,16 @@ pub fn content_properties(html_text: &str) -> u8 {
             f |= PROP_SCRIPTED;
         }
         let res = match t.name.to_ascii_lowercase().as_str() {
-            "img" | "audio" | "video" | "source" | "track" | "embed" | "iframe" | "script" | "input" => html::attr_value(tag, "src").is_some_and(remote),
-            "link" => html::attr_value(tag, "rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) && html::attr_value(tag, "href").is_some_and(remote),
-            n if opf::is_local(n, "image") => ["xlink:href", "href"].iter().any(|a| html::attr_value(tag, a).is_some_and(remote)),
+            "img" | "audio" | "video" | "source" | "track" | "embed" | "iframe" | "script"
+            | "input" => html::attr_value(tag, "src").is_some_and(remote),
+            "link" => {
+                html::attr_value(tag, "rel")
+                    .is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet"))
+                    && html::attr_value(tag, "href").is_some_and(remote)
+            }
+            n if opf::is_local(n, "image") => ["xlink:href", "href"]
+                .iter()
+                .any(|a| html::attr_value(tag, a).is_some_and(remote)),
             _ => false,
         };
         if res {
@@ -949,21 +1253,43 @@ pub fn content_properties(html_text: &str) -> u8 {
 
 /// 按各内容文档的最终特性（zip 路径 → [`content_properties`]）改 manifest 的 `properties`：只管 `svg`/`mathml`/`scripted`/
 /// `remote-resources` 这四个，其它（`nav`、`cover-image`……）原样。只改 EPUB 3 的 OPF；不用改 → `None`。
-pub fn apply_content_properties(opf_text: &str, opf_dir: &str, props: &HashMap<String, u8>) -> Option<String> {
+pub fn apply_content_properties(
+    opf_text: &str,
+    opf_dir: &str,
+    props: &HashMap<String, u8>,
+) -> Option<String> {
     let pkg = html::tags(opf_text).find(|t| t.is_start() && opf::is_local(t.name, "package"))?;
-    if !html::attr_value(&opf_text[pkg.start..pkg.end], "version").is_some_and(|v| v.trim().starts_with('3')) {
+    if !html::attr_value(&opf_text[pkg.start..pkg.end], "version")
+        .is_some_and(|v| v.trim().starts_with('3'))
+    {
         return None;
     }
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for it in manifest_items(opf_text) {
-        let Some(&f) = props.get(&it.path(opf_dir)) else { continue };
-        let mut kept: Vec<&str> = it.properties.split_whitespace().filter(|p| !MANAGED.iter().any(|(_, m)| m == p)).collect();
+        let Some(&f) = props.get(&it.path(opf_dir)) else {
+            continue;
+        };
+        let mut kept: Vec<&str> = it
+            .properties
+            .split_whitespace()
+            .filter(|p| !MANAGED.iter().any(|(_, m)| m == p))
+            .collect();
         kept.extend(MANAGED.iter().filter(|(b, _)| f & b != 0).map(|(_, m)| *m));
         let new = kept.join(" ");
-        if new == it.properties.split_whitespace().collect::<Vec<_>>().join(" ") {
+        if new
+            == it
+                .properties
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        {
             continue;
         }
-        let tag = if new.is_empty() { html::remove_attr(it.tag, "properties") } else { html::set_attr(it.tag, "properties", &new) };
+        let tag = if new.is_empty() {
+            html::remove_attr(it.tag, "properties")
+        } else {
+            html::set_attr(it.tag, "properties", &new)
+        };
         edits.push((it.pos, it.pos + it.tag.len(), tag));
     }
     if edits.is_empty() {
@@ -977,10 +1303,21 @@ mod tests {
     use super::*;
 
     fn e(name: &str, data: &str) -> Entry {
-        Entry { name: name.into(), data: data.as_bytes().to_vec() }
+        Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        }
     }
     fn s(entries: &[Entry], name: &str) -> String {
-        String::from_utf8(entries.iter().find(|e| e.name == name).unwrap_or_else(|| panic!("缺 {name}")).data.clone()).unwrap()
+        String::from_utf8(
+            entries
+                .iter()
+                .find(|e| e.name == name)
+                .unwrap_or_else(|| panic!("缺 {name}"))
+                .data
+                .clone(),
+        )
+        .unwrap()
     }
     fn fix(t: &str) -> (String, XmlFixes) {
         let mut fx = XmlFixes::default();
@@ -998,10 +1335,25 @@ mod tests {
             out,
             "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><body><p title='a&#160;b &amp; c&amp;d'>甲&#160;乙&#8230;&amp;&#12288;&#x3000;&#169; A&amp;B a &lt; b &amp;foo; </p></body></html>"
         );
-        assert_eq!((fx.named_entities, fx.bare_amps, fx.bare_lts, fx.unknown_entities, fx.control_chars, fx.namespaces_fixed), (4, 2, 1, 1, 1, 2));
+        assert_eq!(
+            (
+                fx.named_entities,
+                fx.bare_amps,
+                fx.bare_lts,
+                fx.unknown_entities,
+                fx.control_chars,
+                fx.namespaces_fixed
+            ),
+            (4, 2, 1, 1, 1, 2)
+        );
         // HTML4 以外、HTML5 有的命名实体照样换成数字引用（两个码位的写两个）
         let (out, fx) = fix("<html><body><p>&rarrw;&NewLine;&nGt;</p></body></html>");
-        assert!(out.contains("<p>&#8605;&#10;&#8811;&#8402;</p>") && fx.named_entities == 3 && fx.unknown_entities == 0, "{out}");
+        assert!(
+            out.contains("<p>&#8605;&#10;&#8811;&#8402;</p>")
+                && fx.named_entities == 3
+                && fx.unknown_entities == 0,
+            "{out}"
+        );
     }
 
     #[test]
@@ -1009,18 +1361,36 @@ mod tests {
         let garbled = "<?xml version=\"1.0\"?>\n<!DOCTYpE html pUBLIC \"-//W4C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\n<html xmlns=\"http：//www.w3.org/1999/xhtml\"><body><p>剧震，\u{10}感到</p></body></html>";
         let (out, fx) = fix(garbled);
         assert_eq!(out, "<?xml version=\"1.0\"?>\n<!DOCTYPE html>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><body><p>剧震，感到</p></body></html>");
-        assert_eq!((fx.doctypes, fx.control_chars, fx.namespaces_fixed), (1, 1, 2));
+        assert_eq!(
+            (fx.doctypes, fx.control_chars, fx.namespaces_fixed),
+            (1, 1, 2)
+        );
         assert!(well_formed(&out), "{out}");
         // 带内部子集的 DOCTYPE 拿不准，不动；别的命名空间值是作者写的，不动
-        let internal = "<!DOCTYPE html [<!ENTITY x \"y\">]><html xmlns=\"urn:other\"><body/></html>";
-        assert!(fix(internal).0.starts_with("<!DOCTYPE html [<!ENTITY x \"y\">]><html xmlns=\"urn:other\" xmlns:epub="), "{}", fix(internal).0);
+        let internal =
+            "<!DOCTYPE html [<!ENTITY x \"y\">]><html xmlns=\"urn:other\"><body/></html>";
+        assert!(
+            fix(internal).0.starts_with(
+                "<!DOCTYPE html [<!ENTITY x \"y\">]><html xmlns=\"urn:other\" xmlns:epub="
+            ),
+            "{}",
+            fix(internal).0
+        );
     }
 
     #[test]
     fn void_tags_and_bare_attrs_fixed() {
-        let (out, fx) = fix(r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><p>一<br>二<br/><img src=a.png alt="x"><img src="b.png"></img></p><table><tr><td nowrap>三</td></tr></table></body></html>"#);
-        assert_eq!(out, r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><p>一<br/>二<br/><img src="a.png" alt="x"/><img src="b.png"></img></p><table><tr><td nowrap="nowrap">三</td></tr></table></body></html>"#);
-        assert_eq!((fx.void_tags_closed, fx.attrs_quoted, fx.namespaces_fixed), (2, 2, 0));
+        let (out, fx) = fix(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><p>一<br>二<br/><img src=a.png alt="x"><img src="b.png"></img></p><table><tr><td nowrap>三</td></tr></table></body></html>"#,
+        );
+        assert_eq!(
+            out,
+            r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><p>一<br/>二<br/><img src="a.png" alt="x"/><img src="b.png"></img></p><table><tr><td nowrap="nowrap">三</td></tr></table></body></html>"#
+        );
+        assert_eq!(
+            (fx.void_tags_closed, fx.attrs_quoted, fx.namespaces_fixed),
+            (2, 2, 0)
+        );
         assert!(well_formed(&out), "{out}");
     }
 
@@ -1030,12 +1400,18 @@ mod tests {
         let jj = "<html><head><title>1</title>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><image xlink:href=\"c.jpg\"></image></svg></div>*/\n.top30 { margin-top: 30%; }\n</head><body><p>正文</p></body></html>";
         let (out, fx) = fix(jj);
         assert_eq!(fx.stray_close_tags, 1);
-        assert!(!out.contains("</div>") && out.contains("</svg>*/") && out.contains("<p>正文</p>"), "{out}");
+        assert!(
+            !out.contains("</div>") && out.contains("</svg>*/") && out.contains("<p>正文</p>"),
+            "{out}"
+        );
         assert!(tags_balanced(&out));
         // 交叉嵌套：去掉多余的 `</b>` 也配不平 → 配对修复不做，按 HTML5 解析算法重新解析（`html5fix`，2026-10-09）
         let (out, fx) = fix("<html><body><p><i>甲</p></i></b></body></html>");
         assert_eq!((fx.stray_close_tags, fx.html5_reparsed), (0, 1));
-        assert!(out.contains("<p><i>甲</i></p>") && well_formed(&out), "{out}");
+        assert!(
+            out.contains("<p><i>甲</i></p>") && well_formed(&out),
+            "{out}"
+        );
     }
 
     /// 《狼厅》版权页：`<section><div>` 都没关就 `</body>`，在 `</body>` 前补上（补完要能配平，不然不动）。
@@ -1043,22 +1419,34 @@ mod tests {
     fn unclosed_before_body_end_closed() {
         let (out, fx) = fix("<html><head><title>t</title></head><body><section><div><p>甲</p>\n<script src=\"a.js\"></script></body></html>");
         assert_eq!(fx.unclosed_tags_closed, 2);
-        assert!(out.contains("</script></div></section></body>") && tags_balanced(&out), "{out}");
+        assert!(
+            out.contains("</script></div></section></body>") && tags_balanced(&out),
+            "{out}"
+        );
         // 中间交叉嵌套的配对修复配不平：按 HTML5 重新解析
         let (out, fx) = fix("<html><body><div><p><i>甲</p></i></body></html>");
         assert_eq!((fx.unclosed_tags_closed, fx.html5_reparsed), (0, 1));
-        assert!(out.contains("<div><p><i>甲</i></p></div>") && well_formed(&out), "{out}");
+        assert!(
+            out.contains("<div><p><i>甲</i></p></div>") && well_formed(&out),
+            "{out}"
+        );
         // 没关的 `<p>`：HTML5 里遇到下一个 `<p>` 就结束了，不能补在 `</body>` 前套成 `<p>` 里套 `<p>`
         let (out, fx) = fix("<html><body><p>甲<p>乙</body></html>");
         assert_eq!(fx.html5_reparsed, 1);
-        assert!(out.contains("<body><p>甲</p><p>乙</p></body>") && well_formed(&out), "{out}");
+        assert!(
+            out.contains("<body><p>甲</p><p>乙</p></body>") && well_formed(&out),
+            "{out}"
+        );
     }
 
     #[test]
     fn markup_fix_is_idempotent_and_borrows_when_clean() {
         let (once, _) = fix("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"x.dtd\"><html><body><p>a&nbsp;b<br></p></body></html>");
         let mut fx = XmlFixes::default();
-        assert!(matches!(normalize_markup(&once, true, &mut fx), Cow::Borrowed(_)), "第二遍什么都不改");
+        assert!(
+            matches!(normalize_markup(&once, true, &mut fx), Cow::Borrowed(_)),
+            "第二遍什么都不改"
+        );
         assert_eq!(fx, XmlFixes::default());
         // OPF/NCX 只修字符层面，不碰结构
         let ncx = "<ncx><navMap><navPoint><navLabel><text>甲&nbsp;乙 & 丙</text></navLabel></navPoint></navMap></ncx></extra>";
@@ -1086,17 +1474,52 @@ mod tests {
     fn opf2_upgraded_to_epub3() {
         let out = upgrade_opf(OPF2, "zh").unwrap();
         assert!(out.contains(r#"<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uuid_id" version="3.0">"#), "{out}");
-        assert!(!out.contains("opf:role") && !out.contains("opf:file-as") && !out.contains("opf:scheme") && !out.contains("opf:event"), "{out}");
-        assert!(out.contains(r#"<dc:creator id="eink-meta">冈岛二人</dc:creator>"#), "{out}");
+        assert!(
+            !out.contains("opf:role")
+                && !out.contains("opf:file-as")
+                && !out.contains("opf:scheme")
+                && !out.contains("opf:event"),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"<dc:creator id="eink-meta">冈岛二人</dc:creator>"#),
+            "{out}"
+        );
         assert!(out.contains(r##"<meta refines="#eink-meta" property="role" scheme="marc:relators">aut</meta><meta refines="#eink-meta" property="file-as">冈岛二人</meta>"##), "{out}");
-        assert!(out.contains(r##"<meta refines="#uuid_id" property="identifier-type">uuid</meta>"##), "{out}");
-        assert!(out.contains(r#"<dc:identifier id="eink-meta-2">9787122346032</dc:identifier>"#) && out.contains(r##"<meta refines="#eink-meta-2" property="identifier-type">ISBN</meta>"##), "{out}");
+        assert!(
+            out.contains(r##"<meta refines="#uuid_id" property="identifier-type">uuid</meta>"##),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"<dc:identifier id="eink-meta-2">9787122346032</dc:identifier>"#)
+                && out.contains(
+                    r##"<meta refines="#eink-meta-2" property="identifier-type">ISBN</meta>"##
+                ),
+            "{out}"
+        );
         // dc:date 只留一个（出版日期），另一个改成 dcterms:date
         assert_eq!(out.matches("<dc:date").count(), 1);
-        assert!(out.contains("<dc:date>2019-08-31T16:00:00+00:00</dc:date>") && out.contains(r#"<meta property="dcterms:date">2019-01-01</meta>"#), "{out}");
-        assert!(out.contains(&format!(r#"<meta property="dcterms:modified">{EPUB3_MODIFIED}</meta>"#)), "{out}");
-        assert!(out.contains(r#"<meta name="cover" content="cover"/>"#) && out.contains("<guide>") && out.contains(r#"<spine toc="ncx">"#), "旧写法保留: {out}");
-        assert!(out.contains("<dc:language>zh</dc:language>"), "缺语言补上: {out}");
+        assert!(
+            out.contains("<dc:date>2019-08-31T16:00:00+00:00</dc:date>")
+                && out.contains(r#"<meta property="dcterms:date">2019-01-01</meta>"#),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!(
+                r#"<meta property="dcterms:modified">{EPUB3_MODIFIED}</meta>"#
+            )),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"<meta name="cover" content="cover"/>"#)
+                && out.contains("<guide>")
+                && out.contains(r#"<spine toc="ncx">"#),
+            "旧写法保留: {out}"
+        );
+        assert!(
+            out.contains("<dc:language>zh</dc:language>"),
+            "缺语言补上: {out}"
+        );
         assert!(well_formed(&out), "{out}");
         assert_eq!(upgrade_opf(&out, "zh"), None, "幂等");
     }
@@ -1106,18 +1529,31 @@ mod tests {
         // unique-identifier 指向不存在的 id、标识符没有 id → 补 id 并改指
         let opf = r#"<package version="2.0" unique-identifier="nope"><metadata><dc:title>t</dc:title><dc:language>en</dc:language><dc:identifier>urn:x</dc:identifier></metadata><manifest/></package>"#;
         let out = upgrade_opf(opf, "zh").unwrap();
-        assert!(out.contains(r#"<dc:identifier id="eink-uid">urn:x</dc:identifier>"#) && out.contains(r#"unique-identifier="eink-uid""#), "{out}");
-        assert!(out.contains(r#"xmlns="http://www.idpf.org/2007/opf""#), "{out}");
+        assert!(
+            out.contains(r#"<dc:identifier id="eink-uid">urn:x</dc:identifier>"#)
+                && out.contains(r#"unique-identifier="eink-uid""#),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"xmlns="http://www.idpf.org/2007/opf""#),
+            "{out}"
+        );
         // 一个标识符都没有：按 OPF 原文派生一个确定的
         let bare = r#"<package version="2.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>t</dc:title><dc:language>en</dc:language></metadata><manifest/></package>"#;
         let a = upgrade_opf(bare, "zh").unwrap();
         assert_eq!(a, upgrade_opf(bare, "zh").unwrap(), "确定");
-        assert!(a.contains(r#"<dc:identifier id="eink-uid">urn:eink:"#) && a.contains(r#"unique-identifier="eink-uid""#), "{a}");
+        assert!(
+            a.contains(r#"<dc:identifier id="eink-uid">urn:eink:"#)
+                && a.contains(r#"unique-identifier="eink-uid""#),
+            "{a}"
+        );
         // 已是 3.0、modified 格式正确 → 不动；格式不对的改成固定值；前缀 OPF 跟着前缀写
         let ok3 = r#"<package version="3.0" unique-identifier="u" xmlns="http://www.idpf.org/2007/opf"><metadata><dc:identifier id="u">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language><meta property="dcterms:modified">2024-10-26T18:06:32Z</meta></metadata></package>"#;
         assert_eq!(upgrade_opf(ok3, "zh"), None);
         let bad = ok3.replace("2024-10-26T18:06:32Z", "2024-10-26");
-        assert!(upgrade_opf(&bad, "zh").unwrap().contains(&format!(">{EPUB3_MODIFIED}</meta>")));
+        assert!(upgrade_opf(&bad, "zh")
+            .unwrap()
+            .contains(&format!(">{EPUB3_MODIFIED}</meta>")));
         let pre = r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="u"><opf:metadata><dc:identifier id="u">x</dc:identifier><dc:title>t</dc:title><dc:language>zh</dc:language></opf:metadata></opf:package>"#;
         let out = upgrade_opf(pre, "zh").unwrap();
         assert!(out.contains(&format!(r#"<opf:meta property="dcterms:modified">{EPUB3_MODIFIED}</opf:meta></opf:metadata>"#)) && !out.contains(" xmlns=\""), "{out}");
@@ -1135,24 +1571,57 @@ mod tests {
     fn epub2_book_gets_nav_landmarks_and_keeps_ncx() {
         let mut v = epub2_book();
         let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
-        assert_eq!((rep.epub3_upgraded, rep.nav_generated, rep.landmarks_added, rep.ncx_generated), (1, 2, 1, 0));
+        assert_eq!(
+            (
+                rep.epub3_upgraded,
+                rep.nav_generated,
+                rep.landmarks_added,
+                rep.ncx_generated
+            ),
+            (1, 2, 1, 0)
+        );
         let opf = s(&v, "OEBPS/content.opf");
         assert!(opf.contains(r#"version="3.0""#) && opf.contains(r#"<item id="eink-nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#), "{opf}");
-        assert!(opf.contains(r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#) && opf.contains(r#"<spine toc="ncx">"#), "NCX 保留: {opf}");
+        assert!(
+            opf.contains(
+                r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#
+            ) && opf.contains(r#"<spine toc="ncx">"#),
+            "NCX 保留: {opf}"
+        );
         let nav = s(&v, "OEBPS/nav.xhtml");
         assert!(nav.contains(r#"<li><a href="c1.xhtml#h">第一章</a><ol><li><a href="c1.xhtml#s">一 &amp; 二</a></li></ol></li>"#), "按 NCX 的层级: {nav}");
         assert!(nav.contains(r#"<nav epub:type="landmarks" id="landmarks" hidden=""><ol><li><a epub:type="cover" href="c1.xhtml">封面</a></li></ol></nav></body>"#), "{nav}");
         let ncx = s(&v, "OEBPS/toc.ncx");
-        assert!(ncx.contains(r#"<meta name="dtb:uid" content="f9bca091"/>"#), "dtb:uid 对齐 OPF 标识符: {ncx}");
+        assert!(
+            ncx.contains(r#"<meta name="dtb:uid" content="f9bca091"/>"#),
+            "dtb:uid 对齐 OPF 标识符: {ncx}"
+        );
         let c1 = s(&v, "OEBPS/c1.xhtml");
-        assert!(c1.contains("<!DOCTYPE html><html") && c1.contains(r#"xmlns:epub="http://www.idpf.org/2007/ops""#) && c1.contains("甲&#160;乙&#8212;丙"), "{c1}");
-        for f in ["OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/toc.ncx", "OEBPS/c1.xhtml"] {
+        assert!(
+            c1.contains("<!DOCTYPE html><html")
+                && c1.contains(r#"xmlns:epub="http://www.idpf.org/2007/ops""#)
+                && c1.contains("甲&#160;乙&#8212;丙"),
+            "{c1}"
+        );
+        for f in [
+            "OEBPS/content.opf",
+            "OEBPS/nav.xhtml",
+            "OEBPS/toc.ncx",
+            "OEBPS/c1.xhtml",
+        ] {
             assert!(well_formed(&s(&v, f)), "{f}: {}", s(&v, f));
         }
         // 再洗一遍：不再生成 nav、OPF 不再变
         let before = v.clone();
         let rep2 = wash_entries(&mut v, &WashOpts::default()).unwrap();
-        assert_eq!((rep2.epub3_upgraded, rep2.nav_generated, rep2.landmarks_added), (0, 0, 0));
+        assert_eq!(
+            (
+                rep2.epub3_upgraded,
+                rep2.nav_generated,
+                rep2.landmarks_added
+            ),
+            (0, 0, 0)
+        );
         assert_eq!(s(&v, "OEBPS/content.opf"), s(&before, "OEBPS/content.opf"));
         assert_eq!(s(&v, "OEBPS/nav.xhtml"), s(&before, "OEBPS/nav.xhtml"));
     }
@@ -1161,15 +1630,32 @@ mod tests {
     #[test]
     fn nav_only_book_gets_ncx() {
         let mut v = vec![
-            e("content.opf", r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="u"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="u">uuid:1</dc:identifier><dc:title>书</dc:title><dc:language>zh</dc:language><meta property="dcterms:modified">2024-10-26T18:06:32Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="t/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
-            e("nav.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="t/c1.xhtml">第一章</a><ol><li><a href="t/c1.xhtml#s">一节</a></li></ol></li></ol></nav></body></html>"#),
-            e("t/c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><h1>第一章</h1><p>甲</p><h2 id="s">一节</h2><p>乙</p></body></html>"#),
+            e(
+                "content.opf",
+                r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="u"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="u">uuid:1</dc:identifier><dc:title>书</dc:title><dc:language>zh</dc:language><meta property="dcterms:modified">2024-10-26T18:06:32Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="t/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#,
+            ),
+            e(
+                "nav.xhtml",
+                r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="t/c1.xhtml">第一章</a><ol><li><a href="t/c1.xhtml#s">一节</a></li></ol></li></ol></nav></body></html>"#,
+            ),
+            e(
+                "t/c1.xhtml",
+                r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><h1>第一章</h1><p>甲</p><h2 id="s">一节</h2><p>乙</p></body></html>"#,
+            ),
         ];
         let rep = wash_entries(&mut v, &WashOpts::default()).unwrap();
         assert_eq!(rep.ncx_generated, 2);
         let opf = s(&v, "content.opf");
-        assert!(opf.contains(r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#) && opf.contains(r#"<spine toc="ncx">"#), "{opf}");
-        assert!(opf.contains("2024-10-26T18:06:32Z") && !opf.contains(EPUB3_MODIFIED), "原书的 modified 沿用: {opf}");
+        assert!(
+            opf.contains(
+                r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#
+            ) && opf.contains(r#"<spine toc="ncx">"#),
+            "{opf}"
+        );
+        assert!(
+            opf.contains("2024-10-26T18:06:32Z") && !opf.contains(EPUB3_MODIFIED),
+            "原书的 modified 沿用: {opf}"
+        );
         let ncx = s(&v, "toc.ncx");
         assert!(ncx.contains(r#"<meta name="dtb:uid" content="uuid:1"/>"#) && ncx.contains(r#"<content src="t/c1.xhtml"/><navPoint id="np2" playOrder="2"><navLabel><text>一节</text></navLabel><content src="t/c1.xhtml#s"/>"#), "{ncx}");
         assert!(well_formed(&ncx), "{ncx}");
@@ -1177,15 +1663,38 @@ mod tests {
 
     #[test]
     fn content_properties_follow_final_content() {
-        assert_eq!(content_properties(r#"<body><svg:svg><image xlink:href="https://x/a.png"/></svg:svg><img src="//cdn/x.jpg"/><math/><script src="a.js"></script></body>"#), PROP_SVG | PROP_REMOTE | PROP_MATHML | PROP_SCRIPTED);
-        assert_eq!(content_properties(r#"<body><img src="a.png"/><a href="http://x">外链不算</a><link rel="stylesheet" href="a.css"/></body>"#), 0);
+        assert_eq!(
+            content_properties(
+                r#"<body><svg:svg><image xlink:href="https://x/a.png"/></svg:svg><img src="//cdn/x.jpg"/><math/><script src="a.js"></script></body>"#
+            ),
+            PROP_SVG | PROP_REMOTE | PROP_MATHML | PROP_SCRIPTED
+        );
+        assert_eq!(
+            content_properties(
+                r#"<body><img src="a.png"/><a href="http://x">外链不算</a><link rel="stylesheet" href="a.css"/></body>"#
+            ),
+            0
+        );
         let opf = r#"<package version="3.0"><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml" properties="svg scripted"/><item id="b" href="b%20c.xhtml" media-type="application/xhtml+xml"/><item id="n" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest></package>"#;
-        let props: HashMap<String, u8> = [("O/a.xhtml".to_string(), 0u8), ("O/b c.xhtml".to_string(), PROP_SVG | PROP_REMOTE), ("O/nav.xhtml".to_string(), 0)].into_iter().collect();
+        let props: HashMap<String, u8> = [
+            ("O/a.xhtml".to_string(), 0u8),
+            ("O/b c.xhtml".to_string(), PROP_SVG | PROP_REMOTE),
+            ("O/nav.xhtml".to_string(), 0),
+        ]
+        .into_iter()
+        .collect();
         let out = apply_content_properties(opf, "O", &props).unwrap();
-        assert!(out.contains(r#"<item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>"#), "没用到的去掉: {out}");
+        assert!(
+            out.contains(r#"<item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>"#),
+            "没用到的去掉: {out}"
+        );
         assert!(out.contains(r#"<item id="b" href="b%20c.xhtml" media-type="application/xhtml+xml" properties="remote-resources svg"/>"#), "{out}");
         assert!(out.contains(r#"properties="nav""#), "别的属性不动");
         assert_eq!(apply_content_properties(&out, "O", &props), None);
-        assert_eq!(apply_content_properties(&opf.replace("3.0", "2.0"), "O", &props), None, "EPUB 2 不管");
+        assert_eq!(
+            apply_content_properties(&opf.replace("3.0", "2.0"), "O", &props),
+            None,
+            "EPUB 2 不管"
+        );
     }
 }

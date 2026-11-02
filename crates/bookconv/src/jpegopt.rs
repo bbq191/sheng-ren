@@ -57,14 +57,22 @@ impl Decoder {
             code <<= 1;
         }
         maxcode[17] = i32::MAX;
-        let mut d = Decoder { maxcode, valptr, mincode, vals: t.vals.clone(), lut: Vec::new() };
+        let mut d = Decoder {
+            maxcode,
+            valptr,
+            mincode,
+            vals: t.vals.clone(),
+            lut: Vec::new(),
+        };
         // 查找表：对每个 LUT_BITS 位前缀按附录 F.2.2.3 的逐位算法走到 LUT_BITS 位为止，结果和逐位解码完全一样（包括坏表的情形）。
         d.lut = (0..1u32 << LUT_BITS)
             .map(|v| {
                 for l in 1..=LUT_BITS as usize {
                     let code = (v >> (LUT_BITS as usize - l)) as i32;
                     if code <= d.maxcode[l] {
-                        return d.symbol(l, code).map_or(LUT_BAD, |s| ((l as u16) << 8) | s as u16);
+                        return d
+                            .symbol(l, code)
+                            .map_or(LUT_BAD, |s| ((l as u16) << 8) | s as u16);
                     }
                 }
                 0
@@ -75,7 +83,9 @@ impl Decoder {
 
     /// 码长 `l`、码值 `code` 对应的符号（附录 F.2.2.3 的 VALPTR 取值）。
     fn symbol(&self, l: usize, code: i32) -> Option<u8> {
-        self.vals.get((self.valptr[l] + code - self.mincode[l]) as usize).copied()
+        self.vals
+            .get((self.valptr[l] + code - self.mincode[l]) as usize)
+            .copied()
     }
 }
 
@@ -92,14 +102,21 @@ struct BitReader<'a> {
 
 impl<'a> BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
-        BitReader { data, pos: 0, acc: 0, nbits: 0 }
+        BitReader {
+            data,
+            pos: 0,
+            acc: 0,
+            nbits: 0,
+        }
     }
 
     /// 缓冲补到至少 57 位（数据读完或遇到标记时可能更少）。
     #[inline]
     fn refill(&mut self) {
         while self.nbits <= 56 {
-            let Some(&b) = self.data.get(self.pos) else { return };
+            let Some(&b) = self.data.get(self.pos) else {
+                return;
+            };
             if b == 0xFF {
                 // 填充字节 0x00；别的就是标记（或数据截断），停在这里
                 if self.data.get(self.pos + 1) != Some(&0) {
@@ -346,7 +363,12 @@ fn parse(jpeg: &[u8]) -> Option<Parsed<'_>> {
         syms.push(s);
         Some(())
     })?;
-    Some(Parsed { kept, sos, syms, freq })
+    Some(Parsed {
+        kept,
+        sos,
+        syms,
+        freq,
+    })
 }
 
 /// [`parse`] 的主体：符号逐个交给 `emit`（它返回 `None` 就中止），返回 DHT 以外原样保留的段和 SOS 段。
@@ -386,7 +408,11 @@ fn parse_with(jpeg: &[u8], mut emit: impl FnMut(Sym) -> Option<()>) -> Option<(V
                     if !(1..=4).contains(&h) || !(1..=4).contains(&v) {
                         return None; // 采样因子只能是 1–4（0 会在算 MCU 数时除零）：坏图，原图照用
                     }
-                    comps.push(Comp { id: *seg.get(p)?, h, v });
+                    comps.push(Comp {
+                        id: *seg.get(p)?,
+                        h,
+                        v,
+                    });
                 }
                 kept.push(seg);
             }
@@ -442,17 +468,26 @@ fn parse_with(jpeg: &[u8], mut emit: impl FnMut(Sym) -> Option<()>) -> Option<(V
     if sos.get(5 + 2 * ns..8 + 2 * ns)? != [0, 63, 0] {
         return None;
     }
-    let decoders: Vec<Option<Decoder>> = tables.iter().map(|t| t.as_ref().map(Decoder::new)).collect();
+    let decoders: Vec<Option<Decoder>> = tables
+        .iter()
+        .map(|t| t.as_ref().map(Decoder::new))
+        .collect();
 
     // ── 解出符号流 ──
     let data = &jpeg[sos_start + 2 + sos_len..];
     let mut br = BitReader::new(data);
-    let (hmax, vmax) = (scan.iter().map(|s| s.0).max()?, scan.iter().map(|s| s.1).max()?);
+    let (hmax, vmax) = (
+        scan.iter().map(|s| s.0).max()?,
+        scan.iter().map(|s| s.1).max()?,
+    );
     // 单分量扫描不交错：按块数算；多分量按 MCU 算
     let (mcus, blocks_per): (usize, Vec<usize>) = if ns == 1 {
         (width.div_ceil(8) * height.div_ceil(8), vec![1])
     } else {
-        (width.div_ceil(8 * hmax) * height.div_ceil(8 * vmax), scan.iter().map(|s| s.0 * s.1).collect())
+        (
+            width.div_ceil(8 * hmax) * height.div_ceil(8 * vmax),
+            scan.iter().map(|s| s.0 * s.1).collect(),
+        )
     };
     for _ in 0..mcus {
         for (ci, &nb) in blocks_per.iter().enumerate() {
@@ -463,7 +498,12 @@ fn parse_with(jpeg: &[u8], mut emit: impl FnMut(Sym) -> Option<()>) -> Option<(V
                     return None;
                 }
                 let extra = br.bits(s as u32)?;
-                emit(Sym { slot: dc as u8, sym: s, extra: extra as u16, nextra: s })?;
+                emit(Sym {
+                    slot: dc as u8,
+                    sym: s,
+                    extra: extra as u16,
+                    nextra: s,
+                })?;
                 let mut k = 1;
                 while k < 64 {
                     let rs = br.decode(decoders[ac].as_ref()?)?;
@@ -472,7 +512,12 @@ fn parse_with(jpeg: &[u8], mut emit: impl FnMut(Sym) -> Option<()>) -> Option<(V
                         return None;
                     }
                     let extra = br.bits(size as u32)?;
-                    emit(Sym { slot: ac as u8, sym: rs, extra: extra as u16, nextra: size })?;
+                    emit(Sym {
+                        slot: ac as u8,
+                        sym: rs,
+                        extra: extra as u16,
+                        nextra: size,
+                    })?;
                     if size == 0 {
                         if run == 15 {
                             k += 16; // ZRL：16 个零
@@ -505,7 +550,12 @@ fn rebuild(p: &Parsed, orig_len: usize) -> Option<Vec<u8>> {
 /// [`rebuild`] 不比长短：按 `p` 的符号频率生成最优表、重新编码，拼回完整的 JPEG（`cap` 只是预分配的大小）。
 /// 有符号编不出来（坏表）→ `None`。
 fn rebuild_any(p: &Parsed, cap: usize) -> Option<Vec<u8>> {
-    let Parsed { kept, sos, syms, freq } = p;
+    let Parsed {
+        kept,
+        sos,
+        syms,
+        freq,
+    } = p;
 
     // ── 新表、重新编码 ──
     let mut new_tables: [Option<Table>; 8] = Default::default();
@@ -517,14 +567,21 @@ fn rebuild_any(p: &Parsed, cap: usize) -> Option<Vec<u8>> {
             new_tables[slot] = Some(t);
         }
     }
-    let mut bw = BitWriter { out: Vec::with_capacity(cap), acc: 0, nbits: 0 };
+    let mut bw = BitWriter {
+        out: Vec::with_capacity(cap),
+        acc: 0,
+        nbits: 0,
+    };
     for s in syms {
         let (code, len) = new_codes[s.slot as usize][s.sym as usize];
         if len == 0 {
             return None;
         }
         // 码字和附加位一起写（最多 16 + 11 位）
-        bw.put(((code as u32) << s.nextra) | s.extra as u32, (len + s.nextra) as u32);
+        bw.put(
+            ((code as u32) << s.nextra) | s.extra as u32,
+            (len + s.nextra) as u32,
+        );
     }
     let entropy = bw.finish();
 
@@ -558,7 +615,9 @@ fn rebuild_any(p: &Parsed, cap: usize) -> Option<Vec<u8>> {
 /// （2026-10-03 以前就是两份都整张解码逐像素比，占整页处理时间约 28%）。像素级比对留在测试里。
 pub fn optimize_verified(jpeg: Vec<u8>) -> Vec<u8> {
     let Some(old) = parse(&jpeg) else { return jpeg };
-    let Some(new) = rebuild(&old, jpeg.len()) else { return jpeg };
+    let Some(new) = rebuild(&old, jpeg.len()) else {
+        return jpeg;
+    };
     if same_coefficients(&old, &new) {
         new
     } else {
@@ -575,7 +634,8 @@ fn same_coefficients(old: &Parsed, new: &[u8]) -> bool {
         i += 1;
         ok.then_some(())
     };
-    parse_with(new, same_syms).is_some_and(|(kept, sos)| kept == old.kept && sos == old.sos) && i == old.syms.len()
+    parse_with(new, same_syms).is_some_and(|(kept, sos)| kept == old.kept && sos == old.sos)
+        && i == old.syms.len()
 }
 
 // ───────────────────────── 从像素直接编出重做过表的 JPEG ─────────────────────────
@@ -664,7 +724,10 @@ fn std_table(slot: usize) -> Table {
     };
     let mut bits = [0u8; 17];
     bits[1..].copy_from_slice(&STD_BITS[i]);
-    Table { bits, vals: vals.to_vec() }
+    Table {
+        bits,
+        vals: vals.to_vec(),
+    }
 }
 
 /// 一个段的完整字节：`FF 标记`、长度、数据。
@@ -795,7 +858,14 @@ fn magnitude(v: i32) -> (u8, u16) {
     let a = v.unsigned_abs();
     let n = (32 - a.leading_zeros()) as u8;
     let mask = ((1u32 << n) - 1) as u16;
-    (n, if v < 0 { (v - 1) as u16 & mask } else { v as u16 & mask })
+    (
+        n,
+        if v < 0 {
+            (v - 1) as u16 & mask
+        } else {
+            v as u16 & mask
+        },
+    )
 }
 
 /// 估计一张 JPEG 当初是按什么质量编的：取第 0 号量化表（亮度），按 libjpeg 的质量缩放反推（表的总和 ÷ 标准亮度表的总和
@@ -828,10 +898,22 @@ pub(crate) fn estimate_quality(jpeg: &[u8]) -> Option<u8> {
                 let n = if wide { 128 } else { 64 };
                 let vals = rest.get(..n)?;
                 if pq_tq & 0x0F == 0 {
-                    let sum: u32 = if wide { vals.as_chunks::<2>().0.iter().map(|&c| u32::from(u16::from_be_bytes(c))).sum() } else { vals.iter().map(|&v| u32::from(v)).sum() };
+                    let sum: u32 = if wide {
+                        vals.as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|&c| u32::from(u16::from_be_bytes(c)))
+                            .sum()
+                    } else {
+                        vals.iter().map(|&v| u32::from(v)).sum()
+                    };
                     let std: u32 = STD_QTABLES[0].iter().map(|&v| u32::from(v)).sum();
                     let scale = f64::from(sum) * 100.0 / f64::from(std);
-                    let q = if scale <= 100.0 { 100.0 - scale / 2.0 } else { 5000.0 / scale };
+                    let q = if scale <= 100.0 {
+                        100.0 - scale / 2.0
+                    } else {
+                        5000.0 / scale
+                    };
                     return Some(q.round().clamp(1.0, 100.0) as u8);
                 }
                 t = &rest[n..];
@@ -846,15 +928,27 @@ pub(crate) fn estimate_quality(jpeg: &[u8]) -> Option<u8> {
 /// 结果和 `image` 0.25 的 `JpegEncoder::new_with_quality(.., quality).write_image(..)` 编出来再过 [`optimize_verified`] 逐字节相同
 /// （做法见本节开头）。`image` 编码器报错的情形（宽或高为 0、超过 65535）返回 `None`；它会 panic 的情形（量化后系数超出通用
 /// 哈夫曼表能编的范围：DC 差值类别 > 11、AC 类别 > 10，只有极端的高频图在质量接近 100 时才会出现）也返回 `None`。
-pub(crate) fn encode_optimized(raw: &[u8], width: u32, height: u32, gray: bool, quality: u8) -> Option<Vec<u8>> {
+pub(crate) fn encode_optimized(
+    raw: &[u8],
+    width: u32,
+    height: u32,
+    gray: bool,
+    quality: u8,
+) -> Option<Vec<u8>> {
     let e = encode_syms(raw, width, height, gray, quality)?;
     let std_min = e.std_len_lower_bound();
     let mut kept: Vec<&[u8]> = vec![&e.app0, &e.sof];
     kept.extend(e.dqts.iter().map(Vec::as_slice));
-    let parsed = Parsed { kept, sos: &e.sos, syms: e.syms, freq: e.freq };
+    let parsed = Parsed {
+        kept,
+        sos: &e.sos,
+        syms: e.syms,
+        freq: e.freq,
+    };
     let new = rebuild_any(&parsed, std_min)?;
     // 重做的要比按通用表写的短才用（同 `optimize_verified`）。通用表那份的长度先按位数估下限，比下限还短就不用一个个数（数要再过一遍符号流）
-    let smaller = new.len() < std_min || new.len() < std_len(e.gray, &e.app0, &e.sof, &e.dqts, &e.sos, &parsed.syms);
+    let smaller = new.len() < std_min
+        || new.len() < std_len(e.gray, &e.app0, &e.sof, &e.dqts, &e.sos, &parsed.syms);
     Some(if smaller && same_coefficients(&parsed, &new) {
         new
     } else {
@@ -878,7 +972,9 @@ impl Encoded {
     /// 按通用表写出的完整 JPEG（和 `image` 编码器的输出逐字节相同）。
     #[cfg(test)]
     fn std_bytes(&self) -> Vec<u8> {
-        std_bytes(self.gray, &self.app0, &self.sof, &self.dqts, &self.sos, &self.syms)
+        std_bytes(
+            self.gray, &self.app0, &self.sof, &self.dqts, &self.sos, &self.syms,
+        )
     }
 
     /// 按通用表写出来的长度的下限：按频率算出熵编码数据的位数（码长 + 附加位，不算 0xFF 后填充的 0x00），只看 8 张表的频率，
@@ -893,22 +989,36 @@ impl Encoded {
                 bits += u64::from(f) * (u64::from(len) + extra as u64);
             }
         }
-        std_header(&self.app0, &self.sof, &self.dqts, &self.sos, &tables).len() + bits.div_ceil(8) as usize + 2
+        std_header(&self.app0, &self.sof, &self.dqts, &self.sos, &tables).len()
+            + bits.div_ceil(8) as usize
+            + 2
     }
 
     #[cfg(test)]
     fn std_len(&self) -> usize {
-        std_len(self.gray, &self.app0, &self.sof, &self.dqts, &self.sos, &self.syms)
+        std_len(
+            self.gray, &self.app0, &self.sof, &self.dqts, &self.sos, &self.syms,
+        )
     }
 }
 
 /// 按通用表写出来有多长，只数不写（重做的产物要比它小才用）。
-fn std_len(gray: bool, app0: &[u8], sof: &[u8], dqts: &[Vec<u8>], sos: &[u8], syms: &[Sym]) -> usize {
+fn std_len(
+    gray: bool,
+    app0: &[u8],
+    sof: &[u8],
+    dqts: &[Vec<u8>],
+    sos: &[u8],
+    syms: &[Sym],
+) -> usize {
     let (tables, codes) = std_codes(gray);
     let mut bc = BitCounter::default();
     for s in syms {
         let (code, len) = codes[s.slot as usize][s.sym as usize];
-        bc.put(((code as u32) << s.nextra) | s.extra as u32, (len + s.nextra) as u32);
+        bc.put(
+            ((code as u32) << s.nextra) | s.extra as u32,
+            (len + s.nextra) as u32,
+        );
     }
     std_header(app0, sof, dqts, sos, &tables).len() + bc.finish() + 2
 }
@@ -928,7 +1038,13 @@ fn std_codes(gray: bool) -> (Vec<(usize, Table)>, SlotCodes) {
 }
 
 /// 熵编码数据之前的部分（SOI 到 SOS；DHT 是通用表，每张表一个段，同 `image` 的编码器）。
-fn std_header(app0: &[u8], sof: &[u8], dqts: &[Vec<u8>], sos: &[u8], tables: &[(usize, Table)]) -> Vec<u8> {
+fn std_header(
+    app0: &[u8],
+    sof: &[u8],
+    dqts: &[Vec<u8>],
+    sos: &[u8],
+    tables: &[(usize, Table)],
+) -> Vec<u8> {
     let mut out = vec![0xFF, 0xD8];
     out.extend_from_slice(app0);
     out.extend_from_slice(sof);
@@ -946,12 +1062,26 @@ fn std_header(app0: &[u8], sof: &[u8], dqts: &[Vec<u8>], sos: &[u8], tables: &[(
 }
 
 /// 按通用表写出完整的 JPEG（和 `image` 编码器的输出逐字节相同）。
-fn std_bytes(gray: bool, app0: &[u8], sof: &[u8], dqts: &[Vec<u8>], sos: &[u8], syms: &[Sym]) -> Vec<u8> {
+fn std_bytes(
+    gray: bool,
+    app0: &[u8],
+    sof: &[u8],
+    dqts: &[Vec<u8>],
+    sos: &[u8],
+    syms: &[Sym],
+) -> Vec<u8> {
     let (tables, codes) = std_codes(gray);
-    let mut bw = BitWriter { out: std_header(app0, sof, dqts, sos, &tables), acc: 0, nbits: 0 };
+    let mut bw = BitWriter {
+        out: std_header(app0, sof, dqts, sos, &tables),
+        acc: 0,
+        nbits: 0,
+    };
     for s in syms {
         let (code, len) = codes[s.slot as usize][s.sym as usize];
-        bw.put(((code as u32) << s.nextra) | s.extra as u32, (len + s.nextra) as u32);
+        bw.put(
+            ((code as u32) << s.nextra) | s.extra as u32,
+            (len + s.nextra) as u32,
+        );
     }
     let mut out = bw.finish();
     out.extend_from_slice(&[0xFF, 0xD9]);
@@ -984,7 +1114,11 @@ impl BitCounter {
         self.nbits += pad;
         while self.nbits > 0 {
             self.nbits -= 8;
-            self.bytes += if (self.acc >> self.nbits) as u8 == 0xFF { 2 } else { 1 };
+            self.bytes += if (self.acc >> self.nbits) as u8 == 0xFF {
+                2
+            } else {
+                1
+            };
         }
         self.bytes
     }
@@ -993,7 +1127,10 @@ impl BitCounter {
 /// 照 `image` 0.25 的编码器把像素编成符号流（连同它的头部各段）。见 [`encode_optimized`]。
 fn encode_syms(raw: &[u8], width: u32, height: u32, gray: bool, quality: u8) -> Option<Encoded> {
     let n = if gray { 1 } else { 3 };
-    let (w16, h16) = (u16::try_from(width).ok().filter(|&v| v > 0)?, u16::try_from(height).ok().filter(|&v| v > 0)?);
+    let (w16, h16) = (
+        u16::try_from(width).ok().filter(|&v| v > 0)?,
+        u16::try_from(height).ok().filter(|&v| v > 0)?,
+    );
     let (w, h) = (width as usize, height as usize);
     if raw.len() != w * h * n {
         return None;
@@ -1008,7 +1145,11 @@ fn encode_syms(raw: &[u8], width: u32, height: u32, gray: bool, quality: u8) -> 
     // 头部各段（和 `image` 的编码器一样：JFIF 1.02、像素比 1:1；分量 1–3、采样 1×1）
     let app0 = segment(0xE0, b"JFIF\0\x01\x02\x00\x00\x01\x00\x01\x00\x00");
     // (分量 id, 量化表, DC 槽位, AC 槽位)
-    let comps: &[(u8, usize, u8, u8)] = if gray { &[(1, 0, 0, 4)] } else { &[(1, 0, 0, 4), (2, 1, 1, 5), (3, 1, 1, 5)] };
+    let comps: &[(u8, usize, u8, u8)] = if gray {
+        &[(1, 0, 0, 4)]
+    } else {
+        &[(1, 0, 0, 4), (2, 1, 1, 5), (3, 1, 1, 5)]
+    };
     let mut sof = vec![8];
     sof.extend_from_slice(&h16.to_be_bytes());
     sof.extend_from_slice(&w16.to_be_bytes());
@@ -1081,12 +1222,21 @@ fn encode_syms(raw: &[u8], width: u32, height: u32, gray: bool, quality: u8) -> 
                 }
                 let mut emit = |slot: u8, sym: u8, extra: u16, nextra: u8| {
                     freq[slot as usize][sym as usize] += 1;
-                    syms.push(Sym { slot, sym, extra, nextra });
+                    syms.push(Sym {
+                        slot,
+                        sym,
+                        extra,
+                        nextra,
+                    });
                 };
                 emit(dc, size, extra, size);
                 // 之字形顺序里非零的 AC 系数记成位图，按位找下一个非零的（不逐个系数判断零不零，大多是零时少很多分支）
                 let zz: [i32; 64] = ZIGZAG.map(|k| coef[k as usize]);
-                let mut nonzero = zz.iter().enumerate().skip(1).fold(0u64, |m, (i, &v)| m | (u64::from(v != 0) << i));
+                let mut nonzero = zz
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .fold(0u64, |m, (i, &v)| m | (u64::from(v != 0) << i));
                 let mut last = 0u32;
                 while nonzero != 0 {
                     let i = nonzero.trailing_zeros();
@@ -1109,7 +1259,15 @@ fn encode_syms(raw: &[u8], width: u32, height: u32, gray: bool, quality: u8) -> 
             }
         }
     }
-    Some(Encoded { gray, app0, sof, dqts, sos, syms, freq })
+    Some(Encoded {
+        gray,
+        app0,
+        sof,
+        dqts,
+        sos,
+        syms,
+        freq,
+    })
 }
 
 #[cfg(test)]
@@ -1119,7 +1277,11 @@ mod tests {
         let raw: Vec<u8> = (0..64 * 48).map(|i| (i * 7 % 251) as u8).collect();
         for q in [30u8, 45, 60, 75, 85, 95] {
             let j = super::encode_optimized(&raw, 64, 48, true, q).unwrap();
-            assert_eq!(super::estimate_quality(&j).map(|e| e.abs_diff(q) <= 1), Some(true), "质量 {q}");
+            assert_eq!(
+                super::estimate_quality(&j).map(|e| e.abs_diff(q) <= 1),
+                Some(true),
+                "质量 {q}"
+            );
         }
         assert_eq!(super::estimate_quality(b"\xFF\xD8\xFF\xDA"), None);
         assert_eq!(super::estimate_quality(b"not a jpeg"), None);
@@ -1130,7 +1292,9 @@ mod tests {
 
     fn encode(img: &DynamicImage, q: u8) -> Vec<u8> {
         let mut b = Vec::new();
-        JpegEncoder::new_with_quality(&mut b, q).encode_image(img).unwrap();
+        JpegEncoder::new_with_quality(&mut b, q)
+            .encode_image(img)
+            .unwrap();
         b
     }
 
@@ -1141,8 +1305,12 @@ mod tests {
             s = s.wrapping_mul(1103515245).wrapping_add(12345);
             (s >> 16) as u8
         };
-        let g = GrayImage::from_fn(w, h, |x, y| image::Luma([((x * 7 + y * 3) as u8).wrapping_add(rnd() % 40)]));
-        let c = RgbImage::from_fn(w, h, |x, y| image::Rgb([(x * 5) as u8, (y * 3) as u8, rnd()]));
+        let g = GrayImage::from_fn(w, h, |x, y| {
+            image::Luma([((x * 7 + y * 3) as u8).wrapping_add(rnd() % 40)])
+        });
+        let c = RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x * 5) as u8, (y * 3) as u8, rnd()])
+        });
         (g, c)
     }
 
@@ -1180,19 +1348,31 @@ mod tests {
         // 尺寸不是 8、16 的倍数也要对（边上的 MCU 补齐）
         for (w, h) in [(64, 64), (100, 37), (257, 129), (1, 1), (17, 300)] {
             let (g, c) = textured(w, h);
-            for img in [DynamicImage::ImageLuma8(g.clone()), DynamicImage::ImageRgb8(c.clone())] {
+            for img in [
+                DynamicImage::ImageLuma8(g.clone()),
+                DynamicImage::ImageRgb8(c.clone()),
+            ] {
                 for q in [75, 95, 100] {
                     let orig = encode(&img, q);
                     let a = image::load_from_memory(&orig).unwrap();
                     if let Some(new) = optimize(&orig) {
                         let b = image::load_from_memory(&new).unwrap();
-                        assert_eq!(a.as_bytes(), b.as_bytes(), "{w}x{h} q{q} {:?}：解码结果要逐像素相同", img.color());
+                        assert_eq!(
+                            a.as_bytes(),
+                            b.as_bytes(),
+                            "{w}x{h} q{q} {:?}：解码结果要逐像素相同",
+                            img.color()
+                        );
                         assert!(new.len() < orig.len());
                     } else {
                         assert!(w * h < 64 * 64, "{w}x{h} q{q} 这么大的图应当能变小");
                     }
                     let v = optimize_verified(orig.clone());
-                    assert_eq!(image::load_from_memory(&v).unwrap().as_bytes(), a.as_bytes(), "{w}x{h} q{q}：核对过的产物解码逐像素相同");
+                    assert_eq!(
+                        image::load_from_memory(&v).unwrap().as_bytes(),
+                        a.as_bytes(),
+                        "{w}x{h} q{q}：核对过的产物解码逐像素相同"
+                    );
                     // 符号流核对不误拒：能优化的都采用了优化结果
                     assert_eq!(Some(v), optimize(&orig), "{w}x{h} q{q}");
                 }
@@ -1229,7 +1409,11 @@ mod tests {
                 want.push(0);
             }
         }
-        let mut w = BitWriter { out: Vec::new(), acc: 0, nbits: 0 };
+        let mut w = BitWriter {
+            out: Vec::new(),
+            acc: 0,
+            nbits: 0,
+        };
         for &(v, n) in &items {
             w.put(v, n);
         }
@@ -1240,7 +1424,11 @@ mod tests {
         data.extend_from_slice(&[0xFF, 0xD9]);
         let mut r = BitReader::new(&data);
         for &(v, n) in &items {
-            let got = if n > 16 { (r.bits(n - 16).unwrap() << 16) | r.bits(16).unwrap() } else { r.bits(n).unwrap() };
+            let got = if n > 16 {
+                (r.bits(n - 16).unwrap() << 16) | r.bits(16).unwrap()
+            } else {
+                r.bits(n).unwrap()
+            };
             assert_eq!(got, v);
         }
         assert_eq!(r.consumed(), got.len(), "最后一个字节用到了就算读过");
@@ -1260,7 +1448,11 @@ mod tests {
         let c = codes(&t);
         assert!(c.iter().filter(|x| x.1 > 0).all(|x| x.1 <= 16));
         // Kraft 不等式：严格小于 1（保留了全 1 的码字）
-        let kraft: f64 = c.iter().filter(|x| x.1 > 0).map(|x| 0.5f64.powi(x.1 as i32)).sum();
+        let kraft: f64 = c
+            .iter()
+            .filter(|x| x.1 > 0)
+            .map(|x| 0.5f64.powi(x.1 as i32))
+            .sum();
         assert!(kraft < 1.0, "{kraft}");
         // 只有一个符号也要能编
         let mut one = [0u32; 256];
@@ -1286,7 +1478,10 @@ mod tests {
         let mut dri = base[..2].to_vec();
         dri.extend_from_slice(&[0xFF, 0xDD, 0, 4, 0, 0]); // 重启间隔 0（不重启），解码结果不变
         dri.extend_from_slice(&base[2..]);
-        assert_eq!(image::load_from_memory(&dri).unwrap().as_bytes(), image::load_from_memory(&base).unwrap().as_bytes());
+        assert_eq!(
+            image::load_from_memory(&dri).unwrap().as_bytes(),
+            image::load_from_memory(&base).unwrap().as_bytes()
+        );
         assert!(optimize(&dri).is_none());
         assert_eq!(optimize_verified(dri.clone()), dri);
     }
@@ -1303,7 +1498,9 @@ mod tests {
             let sos = new.windows(2).rposition(|w| w == [0xFF, 0xDA]).unwrap();
             let mut bad = new.clone();
             // 改熵编码数据的一位（避开 0xFF 及其填充字节，不造出标记）
-            let i = (sos + 40..new.len()).find(|&i| new[i] < 0xFE && new[i - 1] != 0xFF).unwrap();
+            let i = (sos + 40..new.len())
+                .find(|&i| new[i] < 0xFE && new[i - 1] != 0xFF)
+                .unwrap();
             bad[i] ^= 1;
             assert!(!same_coefficients(&old, &bad));
             let dqt = new.windows(2).position(|w| w == [0xFF, 0xDB]).unwrap();
@@ -1324,7 +1521,18 @@ mod tests {
             (s >> 16) as u8
         };
         let mut cases = 0;
-        for (w, h) in [(1, 1), (2, 3), (7, 9), (8, 8), (9, 8), (16, 17), (17, 33), (100, 37), (257, 129), (320, 241)] {
+        for (w, h) in [
+            (1, 1),
+            (2, 3),
+            (7, 9),
+            (8, 8),
+            (9, 8),
+            (16, 17),
+            (17, 33),
+            (100, 37),
+            (257, 129),
+            (320, 241),
+        ] {
             for kind in 0..4 {
                 // 0 平滑渐变、1 带噪纹理、2 纯噪声（高频，逼出大系数）、3 纯色
                 let px = |x: u32, y: u32, c: u32, r: u8| -> u8 {
@@ -1336,12 +1544,19 @@ mod tests {
                     }
                 };
                 let gray: Vec<u8> = (0..w * h).map(|i| px(i % w, i / w, 0, rnd())).collect();
-                let rgb: Vec<u8> = (0..w * h * 3).map(|i| px((i / 3) % w, (i / 3) / w, i % 3, rnd())).collect();
-                for (raw, ct) in [(&gray, ExtendedColorType::L8), (&rgb, ExtendedColorType::Rgb8)] {
+                let rgb: Vec<u8> = (0..w * h * 3)
+                    .map(|i| px((i / 3) % w, (i / 3) / w, i % 3, rnd()))
+                    .collect();
+                for (raw, ct) in [
+                    (&gray, ExtendedColorType::L8),
+                    (&rgb, ExtendedColorType::Rgb8),
+                ] {
                     for q in [1, 30, 50, 75, 85, 95, 100] {
                         let image_std = std::panic::catch_unwind(|| {
                             let mut b = Vec::new();
-                            JpegEncoder::new_with_quality(&mut b, q).write_image(raw, w, h, ct).unwrap();
+                            JpegEncoder::new_with_quality(&mut b, q)
+                                .write_image(raw, w, h, ct)
+                                .unwrap();
                             b
                         });
                         let mine = encode_syms(raw, w, h, ct == ExtendedColorType::L8, q);
@@ -1377,7 +1592,11 @@ mod tests {
                 let mut got = xs;
                 quantize_block(&mut got, &qs);
                 for (x, g) in xs.iter().zip(got) {
-                    assert_eq!(g, ((x / 8) as f32 / f32::from(q)).round() as i32, "x={x} q={q}");
+                    assert_eq!(
+                        g,
+                        ((x / 8) as f32 / f32::from(q)).round() as i32,
+                        "x={x} q={q}"
+                    );
                 }
             }
         }

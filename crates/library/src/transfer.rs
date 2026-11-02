@@ -42,7 +42,12 @@ pub(crate) struct Work {
 impl Transfer {
     /// 放上设备，做完才返回：真的写了没有（`false`：设备上已是一样的，没写）。
     pub fn run(&self) -> Result<bool, String> {
-        let Work { out, compare, direct, mount } = &self.work;
+        let Work {
+            out,
+            compare,
+            direct,
+            mount,
+        } = &self.work;
         if let Some(m) = mount.as_deref().filter(|m| !deliver::mounted(m)) {
             return Err(format!("设备断开了（{} 没挂着），没传", m.display()));
         }
@@ -62,7 +67,13 @@ impl Transfer {
 /// 传输线程里出了 panic 的那件算传失败（不连累同一台后面的）；线程还是意外死了的话，主线程等结果时会发现
 /// （[`Event::Lost`]），不会一直等下去。
 pub struct Pipeline {
-    lanes: HashMap<String, (std::sync::mpsc::Sender<Transfer>, std::thread::JoinHandle<()>)>,
+    lanes: HashMap<
+        String,
+        (
+            std::sync::mpsc::Sender<Transfer>,
+            std::thread::JoinHandle<()>,
+        ),
+    >,
     done_tx: std::sync::mpsc::Sender<Event>,
     done_rx: std::sync::mpsc::Receiver<Event>,
     /// 各设备在传（含排队）的件数。
@@ -86,7 +97,12 @@ const LANE_DEPTH: usize = 2;
 impl Default for Pipeline {
     fn default() -> Self {
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        Pipeline { lanes: Default::default(), done_tx, done_rx, busy: Default::default() }
+        Pipeline {
+            lanes: Default::default(),
+            done_tx,
+            done_rx,
+            busy: Default::default(),
+        }
     }
 }
 
@@ -115,7 +131,11 @@ impl Pipeline {
             if self.in_flight() == 0 {
                 return None;
             }
-            let r = if wait { self.done_rx.recv_timeout(LANE_CHECK).ok() } else { self.done_rx.try_recv().ok() };
+            let r = if wait {
+                self.done_rx.recv_timeout(LANE_CHECK).ok()
+            } else {
+                self.done_rx.try_recv().ok()
+            };
             if let Some(ev) = r {
                 return Some(self.count_back(ev));
             }
@@ -142,7 +162,11 @@ impl Pipeline {
     /// 手上还有活、线程却已经退出的设备：去掉这条（下次交给它时重新起），返回 [`Event::Lost`]。
     /// 线程退出前交回的结果都已经在队列里（先看队列、空了才来这里），所以剩下的件数就是丢了的。
     fn dead_lane(&mut self) -> Option<Event> {
-        let device = self.lanes.iter().find(|(d, (_, h))| h.is_finished() && self.busy.get(*d).is_some_and(|n| *n > 0)).map(|(d, _)| d.clone())?;
+        let device = self
+            .lanes
+            .iter()
+            .find(|(d, (_, h))| h.is_finished() && self.busy.get(*d).is_some_and(|n| *n > 0))
+            .map(|(d, _)| d.clone())?;
         // 线程退出和它最后交回的结果之间没有先后保证：队列里还有的话先交那个
         if let Ok(ev) = self.done_rx.try_recv() {
             return Some(self.count_back(ev));
@@ -173,7 +197,11 @@ impl Drop for Pipeline {
 /// 跑 `f`，panic 了变成错误（传输线程里一件出了 panic 只算这件传失败，线程接着做下一件）。
 fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| {
-        let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+        let msg = p
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| p.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
         Err(format!("{what}时出了内部错误（panic：{msg}）"))
     })
 }
@@ -201,7 +229,9 @@ mod tests {
         pipe.lanes.insert("kindle".into(), (tx, h));
         pipe.busy.insert("kindle".into(), 2);
         match pipe.next(true) {
-            Some(Event::Lost { device, count }) => assert_eq!((device.as_str(), count), ("kindle", 2)),
+            Some(Event::Lost { device, count }) => {
+                assert_eq!((device.as_str(), count), ("kindle", 2))
+            }
             _ => panic!("应报线程丢了"),
         }
         assert_eq!(pipe.in_flight(), 0);

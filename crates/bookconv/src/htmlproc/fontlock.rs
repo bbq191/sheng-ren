@@ -14,14 +14,25 @@ pub fn strip_font_locks(html: &str) -> String {
 }
 
 /// 同 [`strip_font_locks`]，`keep_fonts` 里的字体保留（嵌了文件、又不是正文字体的，见 `wash::fonts`）。
-pub fn strip_font_locks_keeping(html: &str, keep_fonts: &std::collections::HashSet<String>) -> String {
+pub fn strip_font_locks_keeping(
+    html: &str,
+    keep_fonts: &std::collections::HashSet<String>,
+) -> String {
     use crate::cssunlock::{unlock, Unlock};
     html::edit_style_attrs(html, |t, value| {
         let base_text = matches!(t.name.to_ascii_lowercase().as_str(), "body" | "html");
         let decls = html::css_decls(value);
-        let font = |d: &html::CssDecl| ["font", "font-family", "font-size"].iter().any(|p| d.prop.eq_ignore_ascii_case(p));
-        let edits: Vec<(&html::CssDecl, Unlock)> =
-            decls.iter().filter(|d| font(d)).map(|d| (d, unlock(d.prop, d.value, base_text, keep_fonts))).filter(|(_, u)| *u != Unlock::Keep).collect();
+        let font = |d: &html::CssDecl| {
+            ["font", "font-family", "font-size"]
+                .iter()
+                .any(|p| d.prop.eq_ignore_ascii_case(p))
+        };
+        let edits: Vec<(&html::CssDecl, Unlock)> = decls
+            .iter()
+            .filter(|d| font(d))
+            .map(|d| (d, unlock(d.prop, d.value, base_text, keep_fonts)))
+            .filter(|(_, u)| *u != Unlock::Keep)
+            .collect();
         if edits.is_empty() {
             return Edit::Keep;
         }
@@ -63,13 +74,26 @@ mod font_lock_tests {
         let out = strip_font_locks(html);
         assert!(!out.contains("font-size"), "font-size 未删: {out}");
         assert!(out.contains("color:red"), "color 被误删: {out}");
-        assert!(out.contains("text-align:center"), "text-align 被误删: {out}");
+        assert!(
+            out.contains("text-align:center"),
+            "text-align 被误删: {out}"
+        );
     }
     #[test]
     fn relative_size_and_font_style_kept() {
-        assert_eq!(strip_font_locks(r#"<span style="font-size:0.8em">x</span>"#), r#"<span style="font-size:0.8em">x</span>"#);
-        assert_eq!(strip_font_locks(r#"<body style="font-size:0.8em">x</body>"#), "<body>x</body>", "正文整体的相对字号也去掉");
-        assert_eq!(strip_font_locks(r#"<span style="font:italic bold 12px serif;color:#333">x</span>"#), r#"<span style="font-style:italic;font-weight:bold;color:#333">x</span>"#);
+        assert_eq!(
+            strip_font_locks(r#"<span style="font-size:0.8em">x</span>"#),
+            r#"<span style="font-size:0.8em">x</span>"#
+        );
+        assert_eq!(
+            strip_font_locks(r#"<body style="font-size:0.8em">x</body>"#),
+            "<body>x</body>",
+            "正文整体的相对字号也去掉"
+        );
+        assert_eq!(
+            strip_font_locks(r#"<span style="font:italic bold 12px serif;color:#333">x</span>"#),
+            r#"<span style="font-style:italic;font-weight:bold;color:#333">x</span>"#
+        );
     }
     #[test]
     fn no_style_untouched() {

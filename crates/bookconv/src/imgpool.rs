@@ -36,7 +36,11 @@ pub struct Permit<'a> {
 impl PixelBudget {
     /// `cap` 是 0 时按 1 算（每张图都独占）。
     pub fn new(cap: u64) -> PixelBudget {
-        PixelBudget { cap: cap.max(1), used: Mutex::new(0), cv: Condvar::new() }
+        PixelBudget {
+            cap: cap.max(1),
+            used: Mutex::new(0),
+            cv: Condvar::new(),
+        }
     }
 
     /// 申请 `px` 像素的额度（超过总预算按总预算算，即独占）。阻塞到有额度；返回的 [`Permit`] 析构时归还。
@@ -47,7 +51,10 @@ impl PixelBudget {
             used = self.cv.wait(used).unwrap_or_else(|e| e.into_inner());
         }
         *used += need;
-        Permit { budget: self, n: need }
+        Permit {
+            budget: self,
+            n: need,
+        }
     }
 }
 
@@ -84,7 +91,11 @@ mod tests {
             })
             .collect();
         hs.into_iter().for_each(|h| h.join().unwrap());
-        assert!(peak.load(Ordering::SeqCst) <= 1000, "同时占用的像素超过了预算: {}", peak.load(Ordering::SeqCst));
+        assert!(
+            peak.load(Ordering::SeqCst) <= 1000,
+            "同时占用的像素超过了预算: {}",
+            peak.load(Ordering::SeqCst)
+        );
     }
 
     #[test]

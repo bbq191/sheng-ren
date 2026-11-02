@@ -35,8 +35,18 @@ pub struct FontPlan {
 
 /// 字体名规范化：取第一个、去引号、小写。
 pub(crate) fn norm_family(value: &str) -> Option<String> {
-    let first = value.split(',').next()?.trim().trim_end_matches("!important").trim().trim_matches(['"', '\'']).trim();
-    (!first.is_empty() && !first.eq_ignore_ascii_case("inherit") && !first.eq_ignore_ascii_case("initial")).then(|| first.to_ascii_lowercase())
+    let first = value
+        .split(',')
+        .next()?
+        .trim()
+        .trim_end_matches("!important")
+        .trim()
+        .trim_matches(['"', '\''])
+        .trim();
+    (!first.is_empty()
+        && !first.eq_ignore_ascii_case("inherit")
+        && !first.eq_ignore_ascii_case("initial"))
+    .then(|| first.to_ascii_lowercase())
 }
 
 fn family_of(decls: &str) -> Option<String> {
@@ -66,8 +76,16 @@ fn css_rules(css: &str) -> (Pairs, Pairs) {
         let sel = rule_selector(c.prelude);
         let sel = sel.trim();
         if crate::cascade::is_font_face(sel) {
-            let fam = html::css_decls(c.body).iter().find(|d| d.prop.eq_ignore_ascii_case("font-family")).and_then(|d| norm_family(d.value));
-            let src: String = html::css_decls(c.body).iter().filter(|d| d.prop.eq_ignore_ascii_case("src")).map(|d| d.value.to_string()).collect::<Vec<_>>().join(",");
+            let fam = html::css_decls(c.body)
+                .iter()
+                .find(|d| d.prop.eq_ignore_ascii_case("font-family"))
+                .and_then(|d| norm_family(d.value));
+            let src: String = html::css_decls(c.body)
+                .iter()
+                .filter(|d| d.prop.eq_ignore_ascii_case("src"))
+                .map(|d| d.value.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             if let Some(f) = fam {
                 faces.push((f, src));
             }
@@ -82,18 +100,32 @@ fn css_rules(css: &str) -> (Pairs, Pairs) {
 fn src_embedded(src: &str, base_dir: &str, names: &HashSet<&str>) -> bool {
     html::css_urls(src).iter().any(|u| {
         let raw = u.value.trim();
-        !raw.is_empty() && !html::is_external(raw) && names.contains(posix_norm(&resolve(base_dir, &crate::epubzip::percent_decode(raw.split(['#', '?']).next().unwrap_or(raw)))).as_str())
+        !raw.is_empty()
+            && !html::is_external(raw)
+            && names.contains(
+                posix_norm(&resolve(
+                    base_dir,
+                    &crate::epubzip::percent_decode(raw.split(['#', '?']).next().unwrap_or(raw)),
+                ))
+                .as_str(),
+            )
     })
 }
 
 impl FontPlan {
     /// 元素自己（行内 style、类规则、裸标签规则）指定的字体。
     fn own_family(&self, tag: &str) -> Option<String> {
-        if let Some(f) = html::attr_value(tag, "style").and_then(|v| family_of(&crate::util::xml_unescape(v))) {
+        if let Some(f) =
+            html::attr_value(tag, "style").and_then(|v| family_of(&crate::util::xml_unescape(v)))
+        {
             return Some(f);
         }
         if let Some(cls) = html::attr_value(tag, "class") {
-            if let Some(f) = cls.split_whitespace().rev().find_map(|c| self.class_family.get(c)) {
+            if let Some(f) = cls
+                .split_whitespace()
+                .rev()
+                .find_map(|c| self.class_family.get(c))
+            {
                 return Some(f.clone());
             }
         }
@@ -109,7 +141,10 @@ struct RuleCollector<'a> {
 
 impl<'a> RuleCollector<'a> {
     fn new(entries: &'a [Entry]) -> Self {
-        RuleCollector { names: entries.iter().map(|e| e.name.as_str()).collect(), embedded: HashSet::new() }
+        RuleCollector {
+            names: entries.iter().map(|e| e.name.as_str()).collect(),
+            embedded: HashSet::new(),
+        }
     }
 
     fn take(&mut self, css: &str, base_dir: &str, plan: &mut FontPlan) {
@@ -120,10 +155,13 @@ impl<'a> RuleCollector<'a> {
             }
         }
         for (sel, decls) in rules {
-            let Some(fam) = family_of(&decls) else { continue };
+            let Some(fam) = family_of(&decls) else {
+                continue;
+            };
             for part in sel.split(',') {
                 let part = part.trim();
-                let (tag, classes) = super::css::compound_tag_classes(super::css::last_compound(part));
+                let (tag, classes) =
+                    super::css::compound_tag_classes(super::css::last_compound(part));
                 if classes.is_empty() {
                     // 裸标签只认整个选择器就是这个标签（`p{}`）：`blockquote.bq p{}` 只管引文块里的段落，
                     // 不能当成全书段落的字体（《绍宋》正文因此被认成 letter）。
@@ -152,12 +190,18 @@ impl<'a> RuleCollector<'a> {
 
 /// 要找字体的 html（正文章节：不含目录文件）。
 fn font_html_files(entries: &[Entry]) -> Vec<&Entry> {
-    entries.iter().filter(|e| super::is_chapter_entry(e)).collect()
+    entries
+        .iter()
+        .filter(|e| super::is_chapter_entry(e))
+        .collect()
 }
 
 /// 文件里 `<style>` 块的内容（按出现顺序，[`html::style_blocks`]）。
 fn style_blocks(h: &str) -> Vec<&str> {
-    html::style_blocks(h).into_iter().map(|b| &h[b.content_start..b.content_end]).collect()
+    html::style_blocks(h)
+        .into_iter()
+        .map(|b| &h[b.content_start..b.content_end])
+        .collect()
 }
 
 /// 分析全书：嵌入的字体、正文字体、类和标签的字体。
@@ -169,13 +213,21 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
     // 先多线程把每个文件的 `<style>` 和段落（开标签、字数）扫出来（最花时间的是数字数），再按文件顺序逐个加规则、投票。
     let html_files = font_html_files(entries);
     let scanned = crate::util::par_map(&html_files, |e| {
-        let Ok(h) = std::str::from_utf8(&e.data) else { return (Vec::new(), Vec::new()) };
+        let Ok(h) = std::str::from_utf8(&e.data) else {
+            return (Vec::new(), Vec::new());
+        };
         let styles = style_blocks(h);
         let paras: Vec<(&str, usize)> = html::tags(h)
             .filter(|t| t.is_start() && t.name.eq_ignore_ascii_case("p"))
             .filter_map(|t| {
                 let close = html::find_close(h, t.end, "p")?;
-                Some((&h[t.start..t.end], html::plain_text(&h[t.end..close.start]).chars().filter(|c| !c.is_whitespace()).count()))
+                Some((
+                    &h[t.start..t.end],
+                    html::plain_text(&h[t.end..close.start])
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .count(),
+                ))
             })
             .collect();
         (styles, paras)
@@ -185,21 +237,31 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
         for css in styles {
             rc.take(css, dir_of(&e.name), &mut plan);
         }
-        let fallback = plan.tag_family.get("p").or_else(|| plan.tag_family.get("body")).or_else(|| plan.tag_family.get("html")).cloned();
+        let fallback = plan
+            .tag_family
+            .get("p")
+            .or_else(|| plan.tag_family.get("body"))
+            .or_else(|| plan.tag_family.get("html"))
+            .cloned();
         for (tag, n) in paras {
             if let Some(f) = plan.own_family(tag).or_else(|| fallback.clone()) {
                 *votes.entry(f).or_default() += n;
             }
         }
     }
-    plan.body = votes.into_iter().max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0))).map(|(f, _)| f);
+    plan.body = votes
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(f, _)| f);
     // 只被批注用到的字体不留：看每个嵌入字体有没有用在批注以外的元素上。
     let embedded = rc.embedded;
     plan.embedded = embedded.clone();
     // 各文件独立找（多线程），再并起来
     let used_elsewhere: HashSet<String> = crate::util::par_map(&html_files, |e| {
         let mut used: HashSet<String> = HashSet::new();
-        let Ok(h) = std::str::from_utf8(&e.data) else { return used };
+        let Ok(h) = std::str::from_utf8(&e.data) else {
+            return used;
+        };
         for t in html::tags(h).filter(|t| t.is_start()) {
             let tag = &h[t.start..t.end];
             if let Some(f) = plan.own_family(tag) {
@@ -216,7 +278,10 @@ pub fn analyze(entries: &[Entry]) -> FontPlan {
     .into_iter()
     .flatten()
     .collect();
-    plan.keep = embedded.into_iter().filter(|f| Some(f) != plan.body.as_ref() && used_elsewhere.contains(f)).collect();
+    plan.keep = embedded
+        .into_iter()
+        .filter(|f| Some(f) != plan.body.as_ref() && used_elsewhere.contains(f))
+        .collect();
     plan
 }
 
@@ -235,7 +300,9 @@ fn note_prefix(text: &str) -> bool {
         return false;
     }
     let rest: String = cs.take(6).collect();
-    let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit() || ('０'..='９').contains(&c) || "一二三四五六七八九十〇".contains(c));
+    let rest = rest.trim_start_matches(|c: char| {
+        c.is_ascii_digit() || ('０'..='９').contains(&c) || "一二三四五六七八九十〇".contains(c)
+    });
     rest.starts_with(['：', ':'])
 }
 const OPEN_BRACKETS: [char; 2] = ['（', '('];
@@ -253,25 +320,42 @@ fn is_annotation(h: &str, t: &html::Tag, plan: &FontPlan) -> bool {
             if !may_start_with_note(&h[t.end..]) {
                 return false;
             }
-            let Some(close) = html::find_close(h, t.end, &name) else { return false };
+            let Some(close) = html::find_close(h, t.end, &name) else {
+                return false;
+            };
             let inner = inner_of(&close);
             let text = html::plain_text(inner);
             let text = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{3000}');
             // 只认叶子块：里面再有段落的 div 不算（免得整章被当成批注）。
-            !html::tags(inner).any(|x| x.is_start() && matches!(x.name.to_ascii_lowercase().as_str(), "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"))
-                && note_prefix(text)
+            !html::tags(inner).any(|x| {
+                x.is_start()
+                    && matches!(
+                        x.name.to_ascii_lowercase().as_str(),
+                        "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                    )
+            }) && note_prefix(text)
         }
         "span" | "font" | "small" | "em" | "i" | "cite" => {
             let own = plan.own_family(tag);
             if !own.as_ref().is_some_and(|f| plan.embedded.contains(f)) || own == plan.body {
                 return false;
             }
-            let Some(close) = html::find_close(h, t.end, &name) else { return false };
+            let Some(close) = html::find_close(h, t.end, &name) else {
+                return false;
+            };
             let text = html::plain_text(inner_of(&close));
             let text = text.trim();
             let inside = text.starts_with(OPEN_BRACKETS) && text.ends_with(CLOSE_BRACKETS);
-            let before = h[..t.start].trim_end().chars().last().is_some_and(|c| OPEN_BRACKETS.contains(&c));
-            let after = h[close.end..].trim_start().chars().next().is_some_and(|c| CLOSE_BRACKETS.contains(&c));
+            let before = h[..t.start]
+                .trim_end()
+                .chars()
+                .last()
+                .is_some_and(|c| OPEN_BRACKETS.contains(&c));
+            let after = h[close.end..]
+                .trim_start()
+                .chars()
+                .next()
+                .is_some_and(|c| CLOSE_BRACKETS.contains(&c));
             !text.is_empty() && (inside || (before && after))
         }
         _ => false,
@@ -283,9 +367,20 @@ fn is_annotation(h: &str, t: &html::Tag, plan: &FontPlan) -> bool {
 /// 一定也是否：这一段的纯文本是整段纯文本的开头。
 fn may_start_with_note(rest: &str) -> bool {
     const WINDOW: usize = 256;
-    let end = if rest.len() <= WINDOW { rest.len() } else { rest.as_bytes()[WINDOW..].iter().position(|&b| b == b'<').map_or(rest.len(), |i| WINDOW + i) };
+    let end = if rest.len() <= WINDOW {
+        rest.len()
+    } else {
+        rest.as_bytes()[WINDOW..]
+            .iter()
+            .position(|&b| b == b'<')
+            .map_or(rest.len(), |i| WINDOW + i)
+    };
     let text = html::plain_text(&rest[..end]);
-    match text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{3000}').chars().next() {
+    match text
+        .trim_start_matches(|c: char| c.is_whitespace() || c == '\u{3000}')
+        .chars()
+        .next()
+    {
         None => true,
         Some(c) => matches!(c, '注' | '按' | '批' | '&' | '<'),
     }
@@ -296,7 +391,11 @@ pub fn mark_annotations(h: &str, plan: &FontPlan) -> (String, usize) {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for t in html::tags(h).filter(|t| t.is_start()) {
         if is_annotation(h, &t, plan) {
-            edits.push((t.start, t.end, html::add_class(&h[t.start..t.end], ANNOT_CLASS)));
+            edits.push((
+                t.start,
+                t.end,
+                html::add_class(&h[t.start..t.end], ANNOT_CLASS),
+            ));
         }
     }
     let n = edits.len();
@@ -311,16 +410,25 @@ mod tests {
     use super::*;
 
     fn e(name: &str, data: &str) -> Entry {
-        Entry { name: name.into(), data: data.as_bytes().to_vec() }
+        Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        }
     }
 
     fn book() -> Vec<Entry> {
         vec![
-            e("OEBPS/Styles/s.css", r#"@font-face{font-family:"宋体";src:local("st"),url("../Fonts/SongTi.ttf")}@font-face{font-family:"letter";src:url("../Fonts/letter.ttf")}@font-face{font-family:"kuohao";src:url(../Fonts/kuohao.ttf)}@font-face{font-family:"无文件";src:url(../Fonts/none.ttf)}p{font-family:"宋体"}p.letter{font-family:"letter"}blockquote.bq p{font-family:"letter"}span.kuohao{font-family:"kuohao";font-size:90%}p.xz{font-family:"楷体"}"#),
+            e(
+                "OEBPS/Styles/s.css",
+                r#"@font-face{font-family:"宋体";src:local("st"),url("../Fonts/SongTi.ttf")}@font-face{font-family:"letter";src:url("../Fonts/letter.ttf")}@font-face{font-family:"kuohao";src:url(../Fonts/kuohao.ttf)}@font-face{font-family:"无文件";src:url(../Fonts/none.ttf)}p{font-family:"宋体"}p.letter{font-family:"letter"}blockquote.bq p{font-family:"letter"}span.kuohao{font-family:"kuohao";font-size:90%}p.xz{font-family:"楷体"}"#,
+            ),
             e("OEBPS/Fonts/SongTi.ttf", "x"),
             e("OEBPS/Fonts/letter.ttf", "x"),
             e("OEBPS/Fonts/kuohao.ttf", "x"),
-            e("OEBPS/Text/c1.xhtml", r#"<html><body><p>正文很长很长很长很长很长很长（<span class="kuohao">括注</span>）还有</p><p class="letter">书信</p><p>注：这是批注段落</p><p class="xz">小注</p><p><span class="kuohao">不在括号里</span></p></body></html>"#),
+            e(
+                "OEBPS/Text/c1.xhtml",
+                r#"<html><body><p>正文很长很长很长很长很长很长（<span class="kuohao">括注</span>）还有</p><p class="letter">书信</p><p>注：这是批注段落</p><p class="xz">小注</p><p><span class="kuohao">不在括号里</span></p></body></html>"#,
+            ),
         ]
     }
 
@@ -330,12 +438,23 @@ mod tests {
         assert_eq!(p.body.as_deref(), Some("宋体"));
         let mut keep: Vec<&str> = p.keep.iter().map(String::as_str).collect();
         keep.sort();
-        assert_eq!(keep, ["kuohao", "letter"], "正文字体、没文件的、系统字体名都不留；kuohao 还用在不在括号里的 span 上");
+        assert_eq!(
+            keep,
+            ["kuohao", "letter"],
+            "正文字体、没文件的、系统字体名都不留；kuohao 还用在不在括号里的 span 上"
+        );
     }
 
     #[test]
     fn note_prefixes() {
-        for t in ["注：甲", "注1：甲", "注12:甲", "注三：甲", "按：甲", "批注甲"] {
+        for t in [
+            "注：甲",
+            "注1：甲",
+            "注12:甲",
+            "注三：甲",
+            "按：甲",
+            "批注甲",
+        ] {
             assert!(note_prefix(t), "{t}");
         }
         for t in ["注意：甲", "注定要", "按照", "注"] {
@@ -346,9 +465,16 @@ mod tests {
     #[test]
     fn font_used_only_by_annotations_is_not_kept() {
         let mut b = book();
-        b[4] = e("OEBPS/Text/c1.xhtml", r#"<html><body><p>正文很长很长很长很长很长很长（<span class="kuohao">括注</span>）还有</p><p class="letter">书信</p></body></html>"#);
+        b[4] = e(
+            "OEBPS/Text/c1.xhtml",
+            r#"<html><body><p>正文很长很长很长很长很长很长（<span class="kuohao">括注</span>）还有</p><p class="letter">书信</p></body></html>"#,
+        );
         let p = analyze(&b);
-        assert!(!p.keep.contains("kuohao") && p.keep.contains("letter"), "{:?}", p.keep);
+        assert!(
+            !p.keep.contains("kuohao") && p.keep.contains("letter"),
+            "{:?}",
+            p.keep
+        );
     }
 
     #[test]
@@ -357,11 +483,26 @@ mod tests {
         let p = analyze(&b);
         let (h, n) = mark_annotations(std::str::from_utf8(&b[4].data).unwrap(), &p);
         assert_eq!(n, 2, "{h}");
-        assert!(h.contains(r#"（<span class="kuohao eink-annot">括注</span>）"#), "{h}");
-        assert!(h.contains(r#"<p class="eink-annot">注：这是批注段落</p>"#), "{h}");
-        assert!(h.contains(r#"<span class="kuohao">不在括号里</span>"#), "不在括号里的不算");
+        assert!(
+            h.contains(r#"（<span class="kuohao eink-annot">括注</span>）"#),
+            "{h}"
+        );
+        assert!(
+            h.contains(r#"<p class="eink-annot">注：这是批注段落</p>"#),
+            "{h}"
+        );
+        assert!(
+            h.contains(r#"<span class="kuohao">不在括号里</span>"#),
+            "不在括号里的不算"
+        );
         // 系统字体名（没嵌文件）的括号文字是正文的一部分（《飘》的心理旁白），不算批注
-        let (h2, n2) = mark_annotations(r#"<p>斯嘉丽想（<span class="xz">一定要跳华尔兹！</span>）</p>"#, &FontPlan { class_family: [("xz".to_string(), "楷体".to_string())].into(), ..p.clone() });
+        let (h2, n2) = mark_annotations(
+            r#"<p>斯嘉丽想（<span class="xz">一定要跳华尔兹！</span>）</p>"#,
+            &FontPlan {
+                class_family: [("xz".to_string(), "楷体".to_string())].into(),
+                ..p.clone()
+            },
+        );
         assert_eq!(n2, 0, "{h2}");
         assert!(h.contains(r#"<p class="letter">书信</p>"#));
     }

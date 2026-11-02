@@ -11,7 +11,12 @@ fn main() {
     if args.len() != 1 || args[0].starts_with("--") {
         die(cli::USAGE, "用法: readable-probe 输出.epub");
     }
-    let epub = bookconv::probe::probe_epub().unwrap_or_else(|e| die(cli::FAILED, format!("生成失败: {e}")));
+    let epub = bookconv::probe::probe_epub()
+        .unwrap_or_else(|e| die(cli::FAILED, format!("生成失败: {e}")));
     cli::write_or_die(&args[0], &epub);
-    println!("readable-probe: 测量书已写到 {}（{} 字节）", args[0], epub.len());
+    println!(
+        "readable-probe: 测量书已写到 {}（{} 字节）",
+        args[0],
+        epub.len()
+    );
 }

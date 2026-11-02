@@ -545,7 +545,81 @@ impl Profile {
     /// 解析一份 profile TOML；`id` 由调用方给（通常是文件名）。
     pub fn parse(id: &str, toml_text: &str) -> Result<Profile, String> {
         let f: ProfileFile = toml::from_str(toml_text).map_err(|e| format!("profile {id}: {e}"))?;
-        let p = Profile { id: id.to_string(), name: f.name, screen: f.screen, color: f.color, formats: f.formats, notes: NotePolicy { mode: f.notes, icons: f.note_icons, backlinks: f.note_backlinks }, readable: f.readable, comic: ComicPolicy { margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN), reader_margins: f.comic_reader_margins, readable: f.comic_readable, page_direction: f.comic_page_direction, fixed_layout: f.comic_fixed_layout, format: f.comic_format, gamma: f.comic_gamma, autocontrast: f.comic_autocontrast, trim_specks: f.comic_trim_specks, page_numbers: f.comic_page_numbers, upscale: f.comic_upscale, dark_bg: f.comic_dark_bg }, css: CssQuirks { margin_top: f.margin_top, display_none: f.display_none, line_height_except_p: f.line_height_except_p, line_height_floor: f.line_height_floor, em_root: f.em_root, heading_center: f.heading_center, heading_font_keywords: f.heading_font_keywords, heading_sizes: f.heading_sizes, page_top: f.page_top, trailing_br_line: f.trailing_br_line, inline_css_lengths: f.inline_css_lengths, padding: f.padding, borders: f.borders, heading_margins: f.heading_margins, px_margins: f.px_margins, percent_margins: f.percent_margins, block_width: f.block_width, negative_margins: f.negative_margins, cell_middle: f.cell_middle, inline_valign: f.inline_valign, cell_width: f.cell_width, margin_auto: f.margin_auto, float: f.float, horizontal_scale: f.horizontal_scale, rem: f.rem, important: f.important, line_height_numbers: f.line_height_numbers, css_rgba: f.css_rgba, background_no_repeat: f.background_no_repeat, background_auto_height: f.background_auto_height }, background_images: f.background_images, background_sizing: f.background_sizing, caption_fit: f.caption_fit, image_alpha: f.image_alpha, webp: f.webp, text_repair_only: f.text_repair_only, repair_note_links: f.repair_note_links, kindle_rules: f.kindle_rules, image_gamma: f.image_gamma, cover_thumb_aspect: f.cover_thumb_aspect, image_sizing: f.image_sizing, font_px: f.font_px, line_px: f.line_px, em_px: f.em_px, content_px: f.content_px, deliver: f.deliver };
+        let p = Profile {
+            id: id.to_string(),
+            name: f.name,
+            screen: f.screen,
+            color: f.color,
+            formats: f.formats,
+            notes: NotePolicy {
+                mode: f.notes,
+                icons: f.note_icons,
+                backlinks: f.note_backlinks,
+            },
+            readable: f.readable,
+            comic: ComicPolicy {
+                margin: f.comic_margin.unwrap_or(DEFAULT_COMIC_MARGIN),
+                reader_margins: f.comic_reader_margins,
+                readable: f.comic_readable,
+                page_direction: f.comic_page_direction,
+                fixed_layout: f.comic_fixed_layout,
+                format: f.comic_format,
+                gamma: f.comic_gamma,
+                autocontrast: f.comic_autocontrast,
+                trim_specks: f.comic_trim_specks,
+                page_numbers: f.comic_page_numbers,
+                upscale: f.comic_upscale,
+                dark_bg: f.comic_dark_bg,
+            },
+            css: CssQuirks {
+                margin_top: f.margin_top,
+                display_none: f.display_none,
+                line_height_except_p: f.line_height_except_p,
+                line_height_floor: f.line_height_floor,
+                em_root: f.em_root,
+                heading_center: f.heading_center,
+                heading_font_keywords: f.heading_font_keywords,
+                heading_sizes: f.heading_sizes,
+                page_top: f.page_top,
+                trailing_br_line: f.trailing_br_line,
+                inline_css_lengths: f.inline_css_lengths,
+                padding: f.padding,
+                borders: f.borders,
+                heading_margins: f.heading_margins,
+                px_margins: f.px_margins,
+                percent_margins: f.percent_margins,
+                block_width: f.block_width,
+                negative_margins: f.negative_margins,
+                cell_middle: f.cell_middle,
+                inline_valign: f.inline_valign,
+                cell_width: f.cell_width,
+                margin_auto: f.margin_auto,
+                float: f.float,
+                horizontal_scale: f.horizontal_scale,
+                rem: f.rem,
+                important: f.important,
+                line_height_numbers: f.line_height_numbers,
+                css_rgba: f.css_rgba,
+                background_no_repeat: f.background_no_repeat,
+                background_auto_height: f.background_auto_height,
+            },
+            background_images: f.background_images,
+            background_sizing: f.background_sizing,
+            caption_fit: f.caption_fit,
+            image_alpha: f.image_alpha,
+            webp: f.webp,
+            text_repair_only: f.text_repair_only,
+            repair_note_links: f.repair_note_links,
+            kindle_rules: f.kindle_rules,
+            image_gamma: f.image_gamma,
+            cover_thumb_aspect: f.cover_thumb_aspect,
+            image_sizing: f.image_sizing,
+            font_px: f.font_px,
+            line_px: f.line_px,
+            em_px: f.em_px,
+            content_px: f.content_px,
+            deliver: f.deliver,
+        };
         p.validate()?;
         Ok(p)
     }
@@ -553,41 +627,97 @@ impl Profile {
     fn validate(&self) -> Result<(), String> {
         let positive = |v: f64| v.is_finite() && v > 0.0;
         match &self.css.heading_sizes {
-            None if self.css.heading_font_keywords => return Err(format!("profile {}: heading_font_keywords = true 要写 [heading_sizes]", self.id)),
-            Some(h) if h.keywords.is_empty() || !h.keywords.values().chain(&h.tags).all(|&v| positive(v)) => {
-                return Err(format!("profile {}: [heading_sizes] 的 keywords 须非空，大小都须是正数", self.id));
+            None if self.css.heading_font_keywords => {
+                return Err(format!(
+                    "profile {}: heading_font_keywords = true 要写 [heading_sizes]",
+                    self.id
+                ))
+            }
+            Some(h)
+                if h.keywords.is_empty()
+                    || !h.keywords.values().chain(&h.tags).all(|&v| positive(v)) =>
+            {
+                return Err(format!(
+                    "profile {}: [heading_sizes] 的 keywords 须非空，大小都须是正数",
+                    self.id
+                ));
             }
             _ => {}
         }
         match &self.css.page_top {
-            None if !self.css.margin_top => return Err(format!("profile {}: margin_top = false 要写 [page_top]", self.id)),
-            Some(t) if !(positive(t.gap_heading_per_em) && t.gap_other >= 0.0 && t.gap_other.is_finite() && positive(t.strut_base_per_em)) => {
+            None if !self.css.margin_top => {
+                return Err(format!(
+                    "profile {}: margin_top = false 要写 [page_top]",
+                    self.id
+                ))
+            }
+            Some(t)
+                if !(positive(t.gap_heading_per_em)
+                    && t.gap_other >= 0.0
+                    && t.gap_other.is_finite()
+                    && positive(t.strut_base_per_em)) =>
+            {
                 return Err(format!("profile {}: [page_top] 的尺寸须是正数", self.id));
             }
             _ => {}
         }
-        if !self.css.line_height_numbers && !(self.line_px.is_some_and(|l| l > 0) && self.em_px.is_some_and(positive)) {
-            return Err(format!("profile {}: line_height_numbers = false 要写 line_px、em_px", self.id));
+        if !self.css.line_height_numbers
+            && !(self.line_px.is_some_and(|l| l > 0) && self.em_px.is_some_and(positive))
+        {
+            return Err(format!(
+                "profile {}: line_height_numbers = false 要写 line_px、em_px",
+                self.id
+            ));
         }
-        if self.content_px.is_some_and(|c| c == 0 || c > self.screen.width) {
-            return Err(format!("profile {}: content_px 须在 1 到屏幕宽之间", self.id));
+        if self
+            .content_px
+            .is_some_and(|c| c == 0 || c > self.screen.width)
+        {
+            return Err(format!(
+                "profile {}: content_px 须在 1 到屏幕宽之间",
+                self.id
+            ));
         }
-        for (key, g) in [("comic_gamma", self.comic.gamma), ("image_gamma", self.image_gamma)] {
+        for (key, g) in [
+            ("comic_gamma", self.comic.gamma),
+            ("image_gamma", self.image_gamma),
+        ] {
             if g.is_some_and(|g| !(0.2..=5.0).contains(&g)) {
-                return Err(format!("profile {}: {key} 须在 0.2–5 之间（1 是不变，大于 1 加深中间调）", self.id));
+                return Err(format!(
+                    "profile {}: {key} 须在 0.2–5 之间（1 是不变，大于 1 加深中间调）",
+                    self.id
+                ));
             }
         }
-        if self.cover_thumb_aspect.is_some_and(|a| !(0.3..=1.5).contains(&a)) {
-            return Err(format!("profile {}: cover_thumb_aspect 须在 0.3–1.5 之间（宽 / 高）", self.id));
+        if self
+            .cover_thumb_aspect
+            .is_some_and(|a| !(0.3..=1.5).contains(&a))
+        {
+            return Err(format!(
+                "profile {}: cover_thumb_aspect 须在 0.3–1.5 之间（宽 / 高）",
+                self.id
+            ));
         }
-        if let Some(d) = self.comic.page_direction.as_deref().filter(|d| !matches!(*d, "ltr" | "rtl")) {
-            return Err(format!("profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}", self.id));
+        if let Some(d) = self
+            .comic
+            .page_direction
+            .as_deref()
+            .filter(|d| !matches!(*d, "ltr" | "rtl"))
+        {
+            return Err(format!(
+                "profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}",
+                self.id
+            ));
         }
         match &self.deliver {
             Some(Deliver::Mtp { mount: a, dir } | Deliver::Usbms { label: a, dir }) => {
                 let bad = |v: &str| v.is_empty() || v.starts_with('.') || v.contains(['/', '\\']);
                 if bad(a) || bad(dir) {
-                    let key = if matches!(self.deliver, Some(Deliver::Mtp { .. })) { "mount" } else { "label" };
+                    let key = if matches!(self.deliver, Some(Deliver::Mtp { .. })) {
+                        "mount"
+                    } else {
+                        "label"
+                    };
                     return Err(format!("profile {}: [deliver] 的 {key}、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）", self.id));
                 }
             }
@@ -600,42 +730,79 @@ impl Profile {
         // id 是产物目录名（`<跟踪目录旁>/<id>/`）和生成记录的文件名（`output-state/<id>.json`）：`.` 开头的记录文件书库不认
         // （删书时删不到这个模式的产物），`.tmp-` 开头的还会被当成残留临时文件清掉；`--device=` 按逗号分开
         if self.id.starts_with('.') || self.id.contains([',', '/', '\\']) {
-            return Err(format!("profile id {:?} 不能以 . 开头、不能含逗号或斜杠（改文件名）", self.id));
+            return Err(format!(
+                "profile id {:?} 不能以 . 开头、不能含逗号或斜杠（改文件名）",
+                self.id
+            ));
         }
         if width == 0 || height == 0 || width > height {
-            return Err(format!("profile {}: screen 须为竖屏且非零（width <= height），实际 {width}x{height}", self.id));
+            return Err(format!(
+                "profile {}: screen 须为竖屏且非零（width <= height），实际 {width}x{height}",
+                self.id
+            ));
         }
         if self.formats.is_empty() {
             return Err(format!("profile {}: formats 为空", self.id));
         }
-        if let Some((i, f)) = self.formats.iter().enumerate().find(|(i, f)| self.formats[..*i].contains(f)) {
-            return Err(format!("profile {}: formats 第 {} 项 {f:?} 重复", self.id, i + 1));
+        if let Some((i, f)) = self
+            .formats
+            .iter()
+            .enumerate()
+            .find(|(i, f)| self.formats[..*i].contains(f))
+        {
+            return Err(format!(
+                "profile {}: formats 第 {} 项 {f:?} 重复",
+                self.id,
+                i + 1
+            ));
         }
         if let Some(f) = self.comic.format.filter(|f| !self.formats.contains(f)) {
-            return Err(format!("profile {}: comic_format {f:?} 不在 formats 里", self.id));
+            return Err(format!(
+                "profile {}: comic_format {f:?} 不在 formats 里",
+                self.id
+            ));
         }
         for (fmt, r) in &self.readable {
             if !self.formats.contains(fmt) {
-                return Err(format!("profile {}: readable 里的 {fmt:?} 不在 formats 里", self.id));
+                return Err(format!(
+                    "profile {}: readable 里的 {fmt:?} 不在 formats 里",
+                    self.id
+                ));
             }
             // 竖屏（宽 ≤ 高）：长边、短边（`Screen::long_edge`/`short_edge`）和漫画排版都按竖屏算，写反了会把横竖框选反
-            if r.width == 0 || r.height == 0 || r.width > width || r.height > height || r.width > r.height {
+            if r.width == 0
+                || r.height == 0
+                || r.width > width
+                || r.height > height
+                || r.width > r.height
+            {
                 return Err(format!("profile {}: readable {fmt:?} 须为竖屏（宽 ≤ 高）、非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
             }
         }
         if let Some(r) = self.comic.readable {
-            if r.width == 0 || r.height == 0 || r.width > width || r.height > height || r.width > r.height {
+            if r.width == 0
+                || r.height == 0
+                || r.width > width
+                || r.height > height
+                || r.width > r.height
+            {
                 return Err(format!("profile {}: comic_readable 须为竖屏（宽 ≤ 高）、非零且不超过屏幕 {width}x{height}，实际 {}x{}", self.id, r.width, r.height));
             }
             if self.comic.margin >= r.width.min(r.height) / 4 {
-                return Err(format!("profile {}: comic_margin {} 须小于漫画阅读范围短边的 1/4（{}x{}）", self.id, self.comic.margin, r.width, r.height));
+                return Err(format!(
+                    "profile {}: comic_margin {} 须小于漫画阅读范围短边的 1/4（{}x{}）",
+                    self.id, self.comic.margin, r.width, r.height
+                ));
             }
         }
         // 漫画白边按每种格式的阅读范围（没有实测值的格式用屏幕）都要够小：留给图的框至少是阅读范围的一半
         for fmt in &self.formats {
             let r = self.readable(*fmt);
             if self.comic.margin >= r.width.min(r.height) / 4 {
-                return Err(format!("profile {}: comic_margin {} 须小于 {fmt:?} 阅读范围短边的 1/4（{}x{}）", self.id, self.comic.margin, r.width, r.height));
+                return Err(format!(
+                    "profile {}: comic_margin {} 须小于 {fmt:?} 阅读范围短边的 1/4（{}x{}）",
+                    self.id, self.comic.margin, r.width, r.height
+                ));
             }
         }
         Ok(())
@@ -666,7 +833,9 @@ impl Profile {
 
     /// 漫画页排版用的阅读范围：`comic_readable`，没写就是产物格式的阅读范围。
     pub fn comic_readable(&self) -> Screen {
-        self.comic.readable.unwrap_or_else(|| self.output_readable())
+        self.comic
+            .readable
+            .unwrap_or_else(|| self.output_readable())
     }
 }
 
@@ -697,11 +866,19 @@ impl Registry {
         for e in entries {
             let path = e.map_err(|e| e.to_string())?.path();
             // 隐藏文件（编辑器的锁文件、备份等）不算 profile
-            if path.extension().is_none_or(|x| x != "toml") || path.file_name().is_some_and(|n| n.as_encoded_bytes().starts_with(b".")) {
+            if path.extension().is_none_or(|x| x != "toml")
+                || path
+                    .file_name()
+                    .is_some_and(|n| n.as_encoded_bytes().starts_with(b"."))
+            {
                 continue;
             }
-            let id = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| format!("{}: 文件名不是 UTF-8", path.display()))?;
-            let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| format!("{}: 文件名不是 UTF-8", path.display()))?;
+            let text =
+                std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             let p = Profile::parse(id, &text)?;
             r.profiles.insert(p.id.clone(), p);
         }
@@ -735,14 +912,19 @@ pub fn get(id: &str) -> Option<&'static Profile> {
 pub fn fixture(id: &str) -> Option<&'static Profile> {
     static XOCHITL: OnceLock<Profile> = OnceLock::new();
     match id {
-        "xochitl" => Some(XOCHITL.get_or_init(|| Profile::parse("xochitl", include_str!("../testdata/xochitl.toml")).unwrap_or_else(|e| panic!("测试用 {e}")))),
+        "xochitl" => Some(XOCHITL.get_or_init(|| {
+            Profile::parse("xochitl", include_str!("../testdata/xochitl.toml"))
+                .unwrap_or_else(|e| panic!("测试用 {e}"))
+        })),
         _ => None,
     }
 }
 
 /// 命令行参数里的 `--device=<id>`（必填）→ 内置 profile。缺失或未知 id 时 `Err` 带上可选 id 列表，供调用方报用法错。
 pub fn device_from_args<S: AsRef<str>>(args: &[S]) -> Result<&'static Profile, String> {
-    let id = args.iter().find_map(|a| a.as_ref().strip_prefix("--device="));
+    let id = args
+        .iter()
+        .find_map(|a| a.as_ref().strip_prefix("--device="));
     id.and_then(get).ok_or_else(|| {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
         format!("需要 --device=<设备>，可选: {}", ids.join(" / "))
@@ -768,8 +950,27 @@ mod tests {
             color: _,
             formats: _,
             readable: _,
-            notes: NotePolicy { mode: _, icons: _, backlinks: _ },
-            comic: ComicPolicy { margin: _, reader_margins: _, readable: _, page_direction: _, fixed_layout: _, format: _, gamma: _, autocontrast: _, trim_specks: _, page_numbers: _, upscale: _, dark_bg: _ },
+            notes:
+                NotePolicy {
+                    mode: _,
+                    icons: _,
+                    backlinks: _,
+                },
+            comic:
+                ComicPolicy {
+                    margin: _,
+                    reader_margins: _,
+                    readable: _,
+                    page_direction: _,
+                    fixed_layout: _,
+                    format: _,
+                    gamma: _,
+                    autocontrast: _,
+                    trim_specks: _,
+                    page_numbers: _,
+                    upscale: _,
+                    dark_bg: _,
+                },
             background_images: _,
             background_sizing: _,
             caption_fit: _,
@@ -831,12 +1032,45 @@ mod tests {
     #[test]
     fn comic_readable_falls_back_to_output_readable() {
         let mut p = fixture("xochitl").unwrap().clone();
-        assert_eq!((p.comic.reader_margins, p.comic_readable()), (Some(1), Screen { width: 952, height: 1457 }));
+        assert_eq!(
+            (p.comic.reader_margins, p.comic_readable()),
+            (
+                Some(1),
+                Screen {
+                    width: 952,
+                    height: 1457
+                }
+            )
+        );
         p.comic.reader_margins = None;
         p.comic.readable = None;
-        assert_eq!(p.comic_readable(), Screen { width: 842, height: 1455 });
-        p.readable.insert(Format::Epub, Screen { width: 800, height: 1400 });
-        assert_eq!((p.output_readable(), p.comic_readable()), (Screen { width: 800, height: 1400 }, Screen { width: 800, height: 1400 }));
+        assert_eq!(
+            p.comic_readable(),
+            Screen {
+                width: 842,
+                height: 1455
+            }
+        );
+        p.readable.insert(
+            Format::Epub,
+            Screen {
+                width: 800,
+                height: 1400,
+            },
+        );
+        assert_eq!(
+            (p.output_readable(), p.comic_readable()),
+            (
+                Screen {
+                    width: 800,
+                    height: 1400
+                },
+                Screen {
+                    width: 800,
+                    height: 1400
+                }
+            )
+        );
         assert_eq!(fixture("xochitl").unwrap().comic.reader_margins, Some(1));
     }
 
@@ -847,7 +1081,10 @@ mod tests {
         assert!(Profile::parse("x", rest).is_ok());
         assert!(Profile::parse("x", &format!("ppi = 300\n{rest}")).is_ok());
         assert!(Profile::parse("x", &format!("ppi = 0\n{rest}")).is_ok());
-        assert!(Profile::parse("x", &format!("dpi = 300\n{rest}")).is_err(), "别的不认识的键照样报错");
+        assert!(
+            Profile::parse("x", &format!("dpi = 300\n{rest}")).is_err(),
+            "别的不认识的键照样报错"
+        );
     }
 
     #[test]
@@ -856,36 +1093,109 @@ mod tests {
         assert_eq!(ids, ["ireader", "kindle", "kobo"]);
         let k = get("kindle").unwrap();
         let i = get("ireader").unwrap();
-        assert_eq!((k.format(), k.output_readable()), (Format::Kfx, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
-        assert_eq!((k.format_for(false), k.format_for(true)), (Format::Kfx, Format::Kfx), "kindle：文字书、漫画都出 KFX");
-        assert!(k.background_images && i.background_images, "背景图：kindle、ireader 保留");
-        assert!(k.background_sizing && !i.background_sizing, "背景图尺寸：kindle 保留，ireader 去掉");
+        assert_eq!(
+            (k.format(), k.output_readable()),
+            (
+                Format::Kfx,
+                Screen {
+                    width: 1104,
+                    height: 1546
+                }
+            ),
+            "Kindle 自带阅读器真机实测"
+        );
+        assert_eq!(
+            (k.format_for(false), k.format_for(true)),
+            (Format::Kfx, Format::Kfx),
+            "kindle：文字书、漫画都出 KFX"
+        );
+        assert!(
+            k.background_images && i.background_images,
+            "背景图：kindle、ireader 保留"
+        );
+        assert!(
+            k.background_sizing && !i.background_sizing,
+            "背景图尺寸：kindle 保留，ireader 去掉"
+        );
         assert!(k.css.css_rgba && !i.css.css_rgba, "rgba()：只有掌阅不认");
         assert!(k.css.background_no_repeat && i.css.background_no_repeat);
         assert!(k.css.margin_top && i.css.margin_top);
-        assert!(k.css.background_auto_height && !i.css.background_auto_height, "背景尺寸的 auto 高：只有掌阅不认");
-        assert_eq!((k.image_sizing, i.image_sizing), (ImageSizing::Css, ImageSizing::DevicePx));
-        assert!(k.font_px.is_some(), "掌阅折算图片宽度要 Kindle 的 1em 像素数");
-        assert!(k.caption_fit && i.caption_fit, "图注同页：kindle、ireader 开");
-        assert!(!k.image_alpha && i.image_alpha, "透明图合成白底：只有 kindle");
-        assert!(k.text_repair_only && i.text_repair_only, "文字书只修复：内置模式都是");
+        assert!(
+            k.css.background_auto_height && !i.css.background_auto_height,
+            "背景尺寸的 auto 高：只有掌阅不认"
+        );
+        assert_eq!(
+            (k.image_sizing, i.image_sizing),
+            (ImageSizing::Css, ImageSizing::DevicePx)
+        );
+        assert!(
+            k.font_px.is_some(),
+            "掌阅折算图片宽度要 Kindle 的 1em 像素数"
+        );
+        assert!(
+            k.caption_fit && i.caption_fit,
+            "图注同页：kindle、ireader 开"
+        );
+        assert!(
+            !k.image_alpha && i.image_alpha,
+            "透明图合成白底：只有 kindle"
+        );
+        assert!(
+            k.text_repair_only && i.text_repair_only,
+            "文字书只修复：内置模式都是"
+        );
         assert!(!k.repair_note_links && !i.repair_note_links);
-        assert!(!k.kindle_rules && i.kindle_rules, "标签缺省样式：掌阅写进书里，Kindle 由写出器排");
-        assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1440, height: 1920 }), "掌阅整页图铺满整屏");
+        assert!(
+            !k.kindle_rules && i.kindle_rules,
+            "标签缺省样式：掌阅写进书里，Kindle 由写出器排"
+        );
+        assert_eq!(
+            (i.format(), i.output_readable()),
+            (
+                Format::Epub,
+                Screen {
+                    width: 1440,
+                    height: 1920
+                }
+            ),
+            "掌阅整页图铺满整屏"
+        );
         assert!(!k.color && !i.color);
         assert_eq!((k.comic.margin, i.comic.margin), (1, 1));
         assert_eq!(k.comic.reader_margins, None);
-        assert_eq!(k.comic_readable(), Screen { width: 1272, height: 1696 }, "Kindle 漫画固定版式整屏");
+        assert_eq!(
+            k.comic_readable(),
+            Screen {
+                width: 1272,
+                height: 1696
+            },
+            "Kindle 漫画固定版式整屏"
+        );
         assert!(k.comic.fixed_layout && !i.comic.fixed_layout);
         assert_eq!((k.notes.backlinks, i.notes.backlinks), (true, true));
-        assert_eq!((k.comic.page_direction.as_deref(), i.comic.page_direction.as_deref()), (None, None), "漫画都照书的翻页方向（掌阅往右翻的书要在阅读器里选「漫画」排版才铺满，2026-10-15）");
+        assert_eq!(
+            (
+                k.comic.page_direction.as_deref(),
+                i.comic.page_direction.as_deref()
+            ),
+            (None, None),
+            "漫画都照书的翻页方向（掌阅往右翻的书要在阅读器里选「漫画」排版才铺满，2026-10-15）"
+        );
         assert!(get("nope").is_none());
-        assert!(get("xochitl").is_none(), "Move 卖了，内置模式删了（2026-10-31）");
+        assert!(
+            get("xochitl").is_none(),
+            "Move 卖了，内置模式删了（2026-10-31）"
+        );
     }
 
     #[test]
     fn device_from_args_finds_id_or_lists_choices() {
-        assert_eq!(device_from_args(&["a.epub", "--device=ireader"]).unwrap().id, "ireader");
+        assert_eq!(
+            device_from_args(&["a.epub", "--device=ireader"])
+                .unwrap()
+                .id,
+            "ireader"
+        );
         let err = device_from_args(&["--device=nope"]).unwrap_err();
         assert!(err.contains("kindle") && err.contains("--device="), "{err}");
         assert!(device_from_args::<&str>(&[]).is_err());
@@ -893,53 +1203,153 @@ mod tests {
 
     #[test]
     fn rejects_landscape_and_unknown_keys() {
-        let base = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
-        assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 1680\nheight = 1264\n")).is_err());
-        assert!(Profile::parse("x", &format!("{base}extra = 1\n[screen]\nwidth = 10\nheight = 20\n")).is_err());
-        assert!(Profile::parse("x", &format!("{base}[screen]\nwidth = 10\nheight = 20\n")).is_ok(), "comic_margin 缺省 1，要小于短边的 1/4");
+        let base =
+            "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
+        assert!(Profile::parse(
+            "x",
+            &format!("{base}[screen]\nwidth = 1680\nheight = 1264\n")
+        )
+        .is_err());
+        assert!(Profile::parse(
+            "x",
+            &format!("{base}extra = 1\n[screen]\nwidth = 10\nheight = 20\n")
+        )
+        .is_err());
+        assert!(
+            Profile::parse("x", &format!("{base}[screen]\nwidth = 10\nheight = 20\n")).is_ok(),
+            "comic_margin 缺省 1，要小于短边的 1/4"
+        );
         for bad in [".hidden", ".tmp-x", "a,b"] {
-            assert!(Profile::parse(bad, &format!("{base}[screen]\nwidth = 10\nheight = 20\n")).is_err(), "id {bad} 不行");
+            assert!(
+                Profile::parse(bad, &format!("{base}[screen]\nwidth = 10\nheight = 20\n")).is_err(),
+                "id {bad} 不行"
+            );
         }
-        assert!(Profile::parse("x", &format!("{base}comic_page_direction = \"up\"\n[screen]\nwidth = 100\nheight = 200\n")).is_err(), "翻页方向只能 ltr/rtl");
+        assert!(
+            Profile::parse(
+                "x",
+                &format!(
+                    "{base}comic_page_direction = \"up\"\n[screen]\nwidth = 100\nheight = 200\n"
+                )
+            )
+            .is_err(),
+            "翻页方向只能 ltr/rtl"
+        );
         let scr = "[screen]\nwidth = 100\nheight = 200\n";
-        assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")).is_ok());
-        assert!(Profile::parse("x", &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")).is_err(), "阅读范围不能超过屏幕");
+        assert!(Profile::parse(
+            "x",
+            &format!("{base}{scr}[readable.epub]\nwidth = 90\nheight = 180\n")
+        )
+        .is_ok());
+        assert!(
+            Profile::parse(
+                "x",
+                &format!("{base}{scr}[readable.epub]\nwidth = 101\nheight = 180\n")
+            )
+            .is_err(),
+            "阅读范围不能超过屏幕"
+        );
         // 阅读范围写反（横的）：屏幕是竖的，阅读范围也必须是竖的
         let wide = "[screen]\nwidth = 200\nheight = 200\n";
-        assert!(Profile::parse("x", &format!("{base}{wide}[readable.epub]\nwidth = 200\nheight = 199\n")).is_err(), "readable 横的报错");
-        assert!(Profile::parse("x", &format!("{base}{wide}[readable.epub]\nwidth = 199\nheight = 199\n")).is_ok(), "方的可以");
-        assert!(Profile::parse("x", &format!("{base}{wide}[comic_readable]\nwidth = 200\nheight = 150\n")).is_err(), "comic_readable 横的报错");
-        assert!(Profile::parse("x", &format!("{base}{wide}[comic_readable]\nwidth = 150\nheight = 200\n")).is_ok());
-        assert!(Profile::parse("x", &format!("{base}{scr}[readable.pdf]\nwidth = 90\nheight = 180\n")).is_err(), "不再支持的格式（pdf）报错");
+        assert!(
+            Profile::parse(
+                "x",
+                &format!("{base}{wide}[readable.epub]\nwidth = 200\nheight = 199\n")
+            )
+            .is_err(),
+            "readable 横的报错"
+        );
+        assert!(
+            Profile::parse(
+                "x",
+                &format!("{base}{wide}[readable.epub]\nwidth = 199\nheight = 199\n")
+            )
+            .is_ok(),
+            "方的可以"
+        );
+        assert!(
+            Profile::parse(
+                "x",
+                &format!("{base}{wide}[comic_readable]\nwidth = 200\nheight = 150\n")
+            )
+            .is_err(),
+            "comic_readable 横的报错"
+        );
+        assert!(Profile::parse(
+            "x",
+            &format!("{base}{wide}[comic_readable]\nwidth = 150\nheight = 200\n")
+        )
+        .is_ok());
+        assert!(
+            Profile::parse(
+                "x",
+                &format!("{base}{scr}[readable.pdf]\nwidth = 90\nheight = 180\n")
+            )
+            .is_err(),
+            "不再支持的格式（pdf）报错"
+        );
         assert!(Profile::parse("x", &format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"kfx\"]\nnotes = \"jump\"\n{scr}")).is_ok(), "kfx 可以");
         for fmt in ["pdf", "mobi", "azw3"] {
             let old = format!("name = \"x\"\nppi = 300\ncolor = false\nformats = [\"{fmt}\"]\nnotes = \"jump\"\n{scr}");
-            assert!(Profile::parse("x", &old).is_err(), "formats 里写 {fmt} 报错");
+            assert!(
+                Profile::parse("x", &old).is_err(),
+                "formats 里写 {fmt} 报错"
+            );
         }
         let dup = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\", \"epub\"]\nnotes = \"jump\"\n";
-        assert!(Profile::parse("x", &format!("{dup}{scr}")).is_err(), "formats 不能重复");
+        assert!(
+            Profile::parse("x", &format!("{dup}{scr}")).is_err(),
+            "formats 不能重复"
+        );
     }
 
     #[test]
     fn comic_margin_defaults_to_one_and_is_validated() {
-        let base = "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
+        let base =
+            "name = \"x\"\nppi = 300\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
         let scr = "[screen]\nwidth = 100\nheight = 200\n";
-        assert_eq!(Profile::parse("x", &format!("{base}{scr}")).unwrap().comic.margin, DEFAULT_COMIC_MARGIN);
-        assert_eq!(Profile::parse("x", &format!("{base}comic_margin = 0\n{scr}")).unwrap().comic.margin, 0);
-        assert_eq!(Profile::parse("x", &format!("{base}comic_margin = 24\n{scr}")).unwrap().comic.margin, 24);
-        assert!(Profile::parse("x", &format!("{base}comic_margin = 25\n{scr}")).is_err(), "短边 100 的 1/4 = 25，不能等于");
+        assert_eq!(
+            Profile::parse("x", &format!("{base}{scr}"))
+                .unwrap()
+                .comic
+                .margin,
+            DEFAULT_COMIC_MARGIN
+        );
+        assert_eq!(
+            Profile::parse("x", &format!("{base}comic_margin = 0\n{scr}"))
+                .unwrap()
+                .comic
+                .margin,
+            0
+        );
+        assert_eq!(
+            Profile::parse("x", &format!("{base}comic_margin = 24\n{scr}"))
+                .unwrap()
+                .comic
+                .margin,
+            24
+        );
+        assert!(
+            Profile::parse("x", &format!("{base}comic_margin = 25\n{scr}")).is_err(),
+            "短边 100 的 1/4 = 25，不能等于"
+        );
         // 按阅读范围算，不按屏幕：阅读范围 80 宽时上限是 20
         let rd = "[readable.epub]\nwidth = 80\nheight = 180\n";
         assert!(Profile::parse("x", &format!("{base}comic_margin = 19\n{scr}{rd}")).is_ok());
         assert!(Profile::parse("x", &format!("{base}comic_margin = 20\n{scr}{rd}")).is_err());
-        assert!(Profile::parse("x", &format!("{base}comic_margin = -1\n{scr}")).is_err(), "负数报错");
+        assert!(
+            Profile::parse("x", &format!("{base}comic_margin = -1\n{scr}")).is_err(),
+            "负数报错"
+        );
     }
 
     #[test]
     fn dir_overrides_and_adds() {
         let dir = std::env::temp_dir().join(format!("profile-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let body = |w: u32| format!("name = \"t\"\nppi = 212\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n[screen]\nwidth = {w}\nheight = 1448\n");
+        let body = |w: u32| {
+            format!("name = \"t\"\nppi = 212\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n[screen]\nwidth = {w}\nheight = 1448\n")
+        };
         std::fs::write(dir.join("ireader.toml"), body(1072)).unwrap();
         std::fs::write(dir.join("new-dev.toml"), body(1000)).unwrap();
         std::fs::write(dir.join("README.md"), "ignored").unwrap();
@@ -948,21 +1358,66 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(r.get("ireader").unwrap().screen.width, 1072);
         assert_eq!(r.get("new-dev").unwrap().screen.width, 1000);
-        assert_eq!(r.iter().count(), Registry::builtin().iter().count() + 1, "覆盖同 id、新增一台");
+        assert_eq!(
+            r.iter().count(),
+            Registry::builtin().iter().count() + 1,
+            "覆盖同 id、新增一台"
+        );
     }
 
     #[test]
     fn deliver_usbms_parses() {
         let base = "name = \"x\"\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n[screen]\nwidth = 1072\nheight = 1448\n[deliver]\n";
-        let p = Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"KOBOeReader\"\ndir = \"books\"\n")).unwrap();
-        assert_eq!(p.deliver, Some(Deliver::Usbms { label: "KOBOeReader".into(), dir: "books".into() }));
-        let e = Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"KOBOeReader\"\ndir = \".kobo\"\n")).unwrap_err();
+        let p = Profile::parse(
+            "x",
+            &format!("{base}kind = \"usbms\"\nlabel = \"KOBOeReader\"\ndir = \"books\"\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            p.deliver,
+            Some(Deliver::Usbms {
+                label: "KOBOeReader".into(),
+                dir: "books".into()
+            })
+        );
+        let e = Profile::parse(
+            "x",
+            &format!("{base}kind = \"usbms\"\nlabel = \"KOBOeReader\"\ndir = \".kobo\"\n"),
+        )
+        .unwrap_err();
         assert!(e.contains("label、dir"), "{e}");
-        assert!(Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"a/b\"\ndir = \"books\"\n")).is_err());
-        assert!(Profile::parse("x", &format!("{base}kind = \"usbms\"\nmount = \"k\"\ndir = \"books\"\n")).is_err(), "usbms 不认 mount");
-        assert!(Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"K\"\ndir = \"b\"\nx = 1\n")).is_err(), "不认识的键报错");
+        assert!(Profile::parse(
+            "x",
+            &format!("{base}kind = \"usbms\"\nlabel = \"a/b\"\ndir = \"books\"\n")
+        )
+        .is_err());
+        assert!(
+            Profile::parse(
+                "x",
+                &format!("{base}kind = \"usbms\"\nmount = \"k\"\ndir = \"books\"\n")
+            )
+            .is_err(),
+            "usbms 不认 mount"
+        );
+        assert!(
+            Profile::parse(
+                "x",
+                &format!("{base}kind = \"usbms\"\nlabel = \"K\"\ndir = \"b\"\nx = 1\n")
+            )
+            .is_err(),
+            "不认识的键报错"
+        );
         let k = get("kobo").unwrap();
-        assert_eq!(k.deliver, Some(Deliver::Usbms { label: "KOBOeReader".into(), dir: "books".into() }));
-        assert_eq!((k.screen.width, k.screen.height, k.color, k.format()), (1072, 1448, false, Format::Kepub));
+        assert_eq!(
+            k.deliver,
+            Some(Deliver::Usbms {
+                label: "KOBOeReader".into(),
+                dir: "books".into()
+            })
+        );
+        assert_eq!(
+            (k.screen.width, k.screen.height, k.color, k.format()),
+            (1072, 1448, false, Format::Kepub)
+        );
     }
 }

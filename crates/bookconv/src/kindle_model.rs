@@ -40,7 +40,9 @@ pub fn key(v: f64) -> i64 {
 /// 全书正文的行高（元素字号的倍数）：每段字按所在块的行高（没写按 [`LH_EM`]）计字数，取最多的。Send to Kindle 把它当成阅读器
 /// 行距设置的 1.0（《绍宋》正文 `line-height:1.5em`）。算出来不在 1–3 之间的不信，用 [`LH_EM`]。
 pub fn base_line_height(count: &HashMap<i64, usize>) -> f64 {
-    weighted_mode(count).filter(|v| (1.0..=3.0).contains(v)).unwrap_or(LH_EM)
+    weighted_mode(count)
+        .filter(|v| (1.0..=3.0).contains(v))
+        .unwrap_or(LH_EM)
 }
 
 /// Kindle **排出来**的行高的下限（正文行高的倍数）：KFX 里写 0.6、0.667 的行（写出器照 Send to Kindle，下限 0.6）Kindle 都排成
@@ -63,7 +65,10 @@ pub fn line_height_ratio(lh: Option<f64>, base: f64) -> f64 {
 /// 正文字体：字体名（已经是小写，没写的 `None`）→ 字数里最多的；字数一样多的取名字小的，没写字体的排最前（结果和 `HashMap` 的
 /// 遍历顺序无关）。
 pub fn body_font(count: &HashMap<Option<String>, usize>) -> Option<String> {
-    count.iter().max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0))).and_then(|(f, _)| f.clone())
+    count
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .and_then(|(f, _)| f.clone())
 }
 
 /// 竖直长度换成根 em：em 乘本元素字号 `fs`（根 em），pt 按 [`PT_PER_EM`]，百分比按页宽 [`PAGE_WIDTH_EM`]，没写是 0。
@@ -88,7 +93,10 @@ pub fn collapse(a: f64, b: f64) -> f64 {
 }
 
 /// 全书的样式表按阅读模式的 `media` 解析好（书内路径 → 规则）；不是 UTF-8 的按 Latin-1 读。
-pub fn book_css<'e>(entries: &'e [Entry], media: Option<&MediaEnv>) -> HashMap<&'e str, Arc<Rules>> {
+pub fn book_css<'e>(
+    entries: &'e [Entry],
+    media: Option<&MediaEnv>,
+) -> HashMap<&'e str, Arc<Rules>> {
     entries
         .iter()
         .filter(|e| crate::wash::is_css_name(&e.name))
@@ -105,7 +113,12 @@ pub fn book_css<'e>(entries: &'e [Entry], media: Option<&MediaEnv>) -> HashMap<&
 /// 单元格内容的自然宽度（CSS 像素，1em＝16px）：一行排开的字宽（中日韩、全角 1em，别的半个），加 10px（Send to Kindle 的列宽
 /// 照这个算出来对得上：「右格」两个字 42px，2026-10-14 怪癖测试书 Q127–Q129）。
 pub fn natural_px(td: &ElementRef, fs: f64) -> f64 {
-    let em: f64 = td.text().flat_map(str::chars).filter(|c| !c.is_whitespace()).map(|c| if (c as u32) >= 0x2E80 { 1.0 } else { 0.5 }).sum();
+    let em: f64 = td
+        .text()
+        .flat_map(str::chars)
+        .filter(|c| !c.is_whitespace())
+        .map(|c| if (c as u32) >= 0x2E80 { 1.0 } else { 0.5 })
+        .sum();
     em * 16.0 * fs + 10.0
 }
 
@@ -118,7 +131,14 @@ pub fn column_percents(widths: &[Option<Len>], naturals: &[f64]) -> Vec<f64> {
         Len::Pt(n) => n / 0.75,
         Len::Percent(_) => naturals.get(i).copied().unwrap_or(0.0),
     };
-    let total: f64 = widths.iter().enumerate().map(|(i, w)| w.as_ref().map_or(naturals.get(i).copied().unwrap_or(0.0), |w| px(w, i))).sum();
+    let total: f64 = widths
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            w.as_ref()
+                .map_or(naturals.get(i).copied().unwrap_or(0.0), |w| px(w, i))
+        })
+        .sum();
     widths
         .iter()
         .enumerate()
@@ -146,7 +166,10 @@ pub const DIV_ATTR: &str = "data-eink-div";
 /// 2026-10-15 实测《古龙作品全集》`box_fix` 单线程 1.5 秒、24 线程反而 2.9 秒。这里按字符串比较，判定条件和 `attr()` 一样
 /// （无前缀、无命名空间、本地名相等；属性表的键不重复，找到的是同一个）。
 pub fn attr_of<'a>(el: &'a scraper::node::Element, name: &str) -> Option<&'a str> {
-    el.attrs.iter().find(|(q, _)| q.prefix.is_none() && q.ns.is_empty() && &*q.local == name).map(|(_, v)| &**v)
+    el.attrs
+        .iter()
+        .find(|(q, _)| q.prefix.is_none() && q.ns.is_empty() && &*q.local == name)
+        .map(|(_, v)| &**v)
 }
 
 /// 元素在这台阅读器上的标签名（小写）：带 [`DIV_ATTR`] 的标题是 `div`。
@@ -201,7 +224,12 @@ pub struct Chapter {
 
 impl Chapter {
     /// 解析一章。`css` 是 [`book_css`] 给的全书样式表，`name` 是这章的书内路径（解析相对链接、找样式表用）。
-    pub fn parse(name: &str, text: &str, media: Option<&MediaEnv>, css: &HashMap<&str, Arc<Rules>>) -> Option<Chapter> {
+    pub fn parse(
+        name: &str,
+        text: &str,
+        media: Option<&MediaEnv>,
+        css: &HashMap<&str, Arc<Rules>>,
+    ) -> Option<Chapter> {
         let html = Html::parse_document(text);
         let sheet = Sheet::for_doc(&html, name, media, |path| css.get(path).cloned());
         let decls_of = |el: &ElementRef| {
@@ -215,20 +243,37 @@ impl Chapter {
             (d, origin)
         };
         let root = html.root_element();
-        let body = root.children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body")?;
+        let body = root
+            .children()
+            .filter_map(ElementRef::wrap)
+            .find(|el| el.value().name() == "body")?;
         let rc = Computed::derive(&Computed::root(), &decls_of(&root), root.value().name());
         let body_decls = decls_of(&body);
         let bc = Rc::new(Computed::derive(&rc, &body_decls, "body"));
         let mut els: Vec<El> = Vec::new();
         // 不递归（没关的标签能套上千层）：(节点, 父元素的计算值, 父元素下标, 父元素所在的块, 在不在隐藏的元素里)
-        type Frame<'a> = (ego_tree::NodeRef<'a, Node>, Rc<Computed>, Option<usize>, Option<usize>, bool);
-        let mut stack: Vec<Frame> = body.children().rev().map(|c| (c, bc.clone(), None, None, false)).collect();
+        type Frame<'a> = (
+            ego_tree::NodeRef<'a, Node>,
+            Rc<Computed>,
+            Option<usize>,
+            Option<usize>,
+            bool,
+        );
+        let mut stack: Vec<Frame> = body
+            .children()
+            .rev()
+            .map(|c| (c, bc.clone(), None, None, false))
+            .collect();
         while let Some((n, parent, pi, block, hidden)) = stack.pop() {
-            let Some(el) = ElementRef::wrap(n) else { continue };
+            let Some(el) = ElementRef::wrap(n) else {
+                continue;
+            };
             let (decls, origin) = with_origin(&el);
             let mut c = Computed::derive(&parent, &decls, el.value().name());
             // 照这台改过字号的标题：Kindle 上的字号（见 [`KINDLE_FS_ATTR`]）
-            if let Some(fs) = attr_of(el.value(), KINDLE_FS_ATTR).and_then(|v| v.parse::<f64>().ok()) {
+            if let Some(fs) =
+                attr_of(el.value(), KINDLE_FS_ATTR).and_then(|v| v.parse::<f64>().ok())
+            {
                 c.font_size = fs;
             }
             let c = Rc::new(c);
@@ -236,21 +281,49 @@ impl Chapter {
             let is_block = crate::cascade::is_block(&el, &c);
             let me = els.len();
             let block = if is_block { Some(me) } else { block };
-            els.push(El { node: n.id(), parent: pi, comp: c.clone(), decls, origin, is_block, block, hidden });
+            els.push(El {
+                node: n.id(),
+                parent: pi,
+                comp: c.clone(),
+                decls,
+                origin,
+                is_block,
+                block,
+                hidden,
+            });
             for ch in n.children().rev() {
                 stack.push((ch, c.clone(), Some(me), block, hidden));
             }
         }
-        let matches_tags = crate::html::body_range(text).is_some_and(|(bs, be)| crate::html::tags_in(text, bs, be).filter(|t| t.is_start()).count() == els.len());
+        let matches_tags = crate::html::body_range(text).is_some_and(|(bs, be)| {
+            crate::html::tags_in(text, bs, be)
+                .filter(|t| t.is_start())
+                .count()
+                == els.len()
+        });
         let index = els.iter().enumerate().map(|(i, e)| (e.node, i)).collect();
         let body_id = body.id();
         drop(sheet);
-        Some(Chapter { html, body_id, body_comp: bc, body_decls, els, index, matches_tags })
+        Some(Chapter {
+            html,
+            body_id,
+            body_comp: bc,
+            body_decls,
+            els,
+            index,
+            matches_tags,
+        })
     }
 
     /// 第 `i` 个元素。
     pub fn el(&self, i: usize) -> ElementRef<'_> {
-        ElementRef::wrap(self.html.tree.get(self.els[i].node).expect("元素表里的节点")).expect("元素表里只有元素")
+        ElementRef::wrap(
+            self.html
+                .tree
+                .get(self.els[i].node)
+                .expect("元素表里的节点"),
+        )
+        .expect("元素表里只有元素")
     }
 
     pub fn body(&self) -> ElementRef<'_> {
@@ -272,7 +345,12 @@ impl Chapter {
 
     /// 第 `i` 个元素的子元素里是块的（下标，文档序）。
     pub fn block_children(&self, i: usize) -> Vec<usize> {
-        self.el(i).children().filter_map(ElementRef::wrap).filter_map(|c| self.index_of(c.id())).filter(|&j| self.els[j].is_block).collect()
+        self.el(i)
+            .children()
+            .filter_map(ElementRef::wrap)
+            .filter_map(|c| self.index_of(c.id()))
+            .filter(|&j| self.els[j].is_block)
+            .collect()
     }
 
     /// 块 `i` 在 Kindle 上的上（`top`）/ 下外边距（根 em）：连同第一个（最后一个）子块，中间没有内边距、边框隔着的，相邻的折叠
@@ -301,7 +379,16 @@ impl Chapter {
 
     /// 元素直接含的字数（不算空白）：只数自己的文字子节点。
     pub fn own_chars(&self, i: usize) -> usize {
-        self.el(i).children().filter_map(|c| if let Node::Text(t) = c.value() { Some(t.chars().filter(|c| !c.is_whitespace()).count()) } else { None }).sum()
+        self.el(i)
+            .children()
+            .filter_map(|c| {
+                if let Node::Text(t) = c.value() {
+                    Some(t.chars().filter(|c| !c.is_whitespace()).count())
+                } else {
+                    None
+                }
+            })
+            .sum()
     }
 }
 
@@ -310,9 +397,14 @@ mod tests {
     use super::*;
 
     fn chapter(body: &str, css: &str) -> Chapter {
-        let entries = vec![Entry { name: "O/s.css".into(), data: css.as_bytes().to_vec() }];
+        let entries = vec![Entry {
+            name: "O/s.css".into(),
+            data: css.as_bytes().to_vec(),
+        }];
         let rules = book_css(&entries, None);
-        let text = format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#);
+        let text = format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#
+        );
         Chapter::parse("O/c.xhtml", &text, None, &rules).unwrap()
     }
 
@@ -322,9 +414,27 @@ mod tests {
         let html = scraper::Html::parse_document(&format!(
             r#"<html><body><h2 {DIV_ATTR}="" {KINDLE_FS_ATTR}="1.5" ID="x" epub:type="noteref"><svg><image xlink:href="a.png" href="b.png"/></svg></h2></body></html>"#
         ));
-        for el in html.root_element().descendants().filter_map(ElementRef::wrap) {
-            for name in [DIV_ATTR, KINDLE_FS_ATTR, "id", "ID", "epub:type", "href", "xlink:href", "nope"] {
-                assert_eq!(attr_of(el.value(), name), el.value().attr(name), "<{}> {name}", el.value().name());
+        for el in html
+            .root_element()
+            .descendants()
+            .filter_map(ElementRef::wrap)
+        {
+            for name in [
+                DIV_ATTR,
+                KINDLE_FS_ATTR,
+                "id",
+                "ID",
+                "epub:type",
+                "href",
+                "xlink:href",
+                "nope",
+            ] {
+                assert_eq!(
+                    attr_of(el.value(), name),
+                    el.value().attr(name),
+                    "<{}> {name}",
+                    el.value().name()
+                );
             }
         }
     }
@@ -332,14 +442,26 @@ mod tests {
     /// 文档序编号、父元素、最近的块、隐藏、写了的声明；`tbody` 是解析器补的，对不上标签扫描。
     #[test]
     fn elements_in_document_order() {
-        let c = chapter(r#"<div class="h"><p>一<span>二</span></p></div><h1 style="line-height:2">三</h1>"#, ".h{display:none}");
+        let c = chapter(
+            r#"<div class="h"><p>一<span>二</span></p></div><h1 style="line-height:2">三</h1>"#,
+            ".h{display:none}",
+        );
         let names: Vec<&str> = (0..c.els.len()).map(|i| c.el(i).value().name()).collect();
         assert_eq!(names, ["div", "p", "span", "h1"]);
         assert_eq!(c.els[2].parent, Some(1));
         assert_eq!(c.els[2].block, Some(1));
         assert!(c.els[2].hidden && !c.els[3].hidden);
-        assert_eq!(c.els[3].decls.get("line-height").map(String::as_str), Some("2"));
-        assert_eq!((c.els[3].origin.get("line-height"), c.els[0].origin.get("display")), (Some(&(crate::cascade::Origin::Inline, false)), None));
+        assert_eq!(
+            c.els[3].decls.get("line-height").map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            (
+                c.els[3].origin.get("line-height"),
+                c.els[0].origin.get("display")
+            ),
+            (Some(&(crate::cascade::Origin::Inline, false)), None)
+        );
         assert_eq!(c.own_chars(1), 1);
         assert!(c.matches_tags);
         assert!(!chapter("<table><tr><td>x</td></tr></table>", "").matches_tags);
@@ -352,10 +474,17 @@ mod tests {
         assert_eq!(vertical_rem(Some(Len::Pt(24.0)), 3.0), 2.0);
         assert_eq!(line_height_ratio(Some(0.5), 1.5), MIN_LINE_HEIGHT);
         // 显示的下限 0.744：写 0.6 的排成 0.744，写 0.833 的照排
-        assert_eq!(shown_line_height_ratio(Some(0.5), 1.5), SHOWN_MIN_LINE_HEIGHT);
+        assert_eq!(
+            shown_line_height_ratio(Some(0.5), 1.5),
+            SHOWN_MIN_LINE_HEIGHT
+        );
         assert!((shown_line_height_ratio(Some(1.25), 1.5) - 0.8333).abs() < 1e-3);
         assert_eq!(base_line_height(&HashMap::from([(key(5.0), 9)])), LH_EM);
-        let fonts = HashMap::from([(Some("b".to_string()), 3), (None, 3), (Some("a".to_string()), 2)]);
+        let fonts = HashMap::from([
+            (Some("b".to_string()), 3),
+            (None, 3),
+            (Some("a".to_string()), 2),
+        ]);
         assert_eq!(body_font(&fonts), None);
     }
 }

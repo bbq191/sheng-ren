@@ -16,17 +16,29 @@ pub(super) fn finish(entries: &mut [Entry]) -> usize {
     let mut levels: BTreeSet<u8> = BTreeSet::new();
     let mut n = 0;
     for e in entries.iter_mut().filter(|e| is_chapter_entry(e)) {
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
         if !text.contains(km::DIV_ATTR) {
             continue;
         }
         let mut edits: Vec<(usize, usize, String)> = Vec::new();
         for t in html::tags(text).filter(|t| t.kind == html::TagKind::Open) {
             let raw = &text[t.start..t.end];
-            let Some(level) = t.heading_level().filter(|_| html::attr_value(raw, km::DIV_ATTR).is_some()) else { continue };
-            let Some(close) = html::find_matching_close(text, t.end, t.name) else { continue };
+            let Some(level) = t
+                .heading_level()
+                .filter(|_| html::attr_value(raw, km::DIV_ATTR).is_some())
+            else {
+                continue;
+            };
+            let Some(close) = html::find_matching_close(text, t.end, t.name) else {
+                continue;
+            };
             let tag = html::remove_attr(raw, km::DIV_ATTR);
-            let tag = html::add_class(&format!("<div{}", &tag[1 + t.name.len()..]), &format!("eink-h{level}"));
+            let tag = html::add_class(
+                &format!("<div{}", &tag[1 + t.name.len()..]),
+                &format!("eink-h{level}"),
+            );
             edits.push((t.start, t.end, tag));
             edits.push((close.start, close.end, "</div>".into()));
             levels.insert(level);
@@ -38,8 +50,16 @@ pub(super) fn finish(entries: &mut [Entry]) -> usize {
     if levels.is_empty() {
         return 0;
     }
-    for e in entries.iter_mut().filter(|e| is_css_name(&e.name) && e.name.rsplit('/').next().is_some_and(|f| f.starts_with("eink-"))) {
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+    for e in entries.iter_mut().filter(|e| {
+        is_css_name(&e.name)
+            && e.name
+                .rsplit('/')
+                .next()
+                .is_some_and(|f| f.starts_with("eink-"))
+    }) {
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
         if let Some(o) = copy_rules(text, &levels) {
             e.data = o.into_bytes();
         }
@@ -67,7 +87,11 @@ fn copy_rules(css: &str, levels: &BTreeSet<u8>) -> Option<String> {
                     let name = format!("h{l}");
                     // 从后往前换，前面的位置不变
                     // 只换带我们的类的（`h2.eink-b1`）：`eink-ua.css` 的 `h2{…}` 这类光写标签的换成 `div` 会选到全书的 div
-                    for (at, _) in super::block_style::type_tokens(&out.clone(), &name).into_iter().rev().filter(|(_, rest)| rest.starts_with(".eink-")) {
+                    for (at, _) in super::block_style::type_tokens(&out.clone(), &name)
+                        .into_iter()
+                        .rev()
+                        .filter(|(_, rest)| rest.starts_with(".eink-"))
+                    {
                         out.replace_range(at..at + name.len(), "div");
                         hit = true;
                     }
@@ -79,8 +103,16 @@ fn copy_rules(css: &str, levels: &BTreeSet<u8>) -> Option<String> {
             continue;
         }
         let body = r.body.trim_end();
-        let semi = if body.is_empty() || body.ends_with(';') { "" } else { ";" };
-        edits.push((r.end, r.end, format!("\n{}{{{body}{semi}}}", copies.join(", "))));
+        let semi = if body.is_empty() || body.ends_with(';') {
+            ""
+        } else {
+            ";"
+        };
+        edits.push((
+            r.end,
+            r.end,
+            format!("\n{}{{{body}{semi}}}", copies.join(", ")),
+        ));
     }
     (!edits.is_empty()).then(|| html::apply_edits(css, edits))
 }
@@ -119,7 +151,10 @@ mod tests {
         assert_eq!(finish(&mut b), 1);
         let page = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(page.contains(r#"<h1>甲</h1><div class="t eink-b1 eink-h2" style="font-size:1.75em">一<span>乙</span></div><p>丙</p><h2>二</h2>"#), "{page}");
-        assert_eq!(String::from_utf8(b[0].data.clone()).unwrap(), "h2{font-size:1.75em}");
+        assert_eq!(
+            String::from_utf8(b[0].data.clone()).unwrap(),
+            "h2{font-size:1.75em}"
+        );
         assert_eq!(String::from_utf8(b[1].data.clone()).unwrap(), "html body h2.eink-b1{margin-top:2em}\nhtml body div.eink-b1{margin-top:2em;} html body p.eink-b2{margin-top:1em} h2{font-size:1.5em}");
     }
 }

@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 pub const SUPPORTED_EXTS: &[&str] = &["epub", "cbz"];
 
 fn is_supported(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| SUPPORTED_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| SUPPORTED_EXTS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
 /// 目录下（递归，不跟符号链接，跳过隐藏文件和目录）所有能入库的文件，按路径排序。读不了的目录跳过（见 [`scan_books`]）。
@@ -117,7 +119,11 @@ pub struct Tracked {
 impl Tracked {
     /// 这个条目覆盖这个原件：目录条目是它下面的文件，文件条目是它自己。
     pub fn covers(&self, p: &Path) -> bool {
-        if self.file { p == self.path } else { p.starts_with(&self.path) }
+        if self.file {
+            p == self.path
+        } else {
+            p.starts_with(&self.path)
+        }
     }
 
     /// 给这台设备。
@@ -134,11 +140,16 @@ impl Tracked {
             (false, _) => match root.filter(|r| p.starts_with(r)) {
                 Some(r) => r,
                 // 没有书根目录（以前跟踪过几个目录的书库）：目录相对它自己，单本是所在的文件夹名
-                None if self.file => return parent.file_name().map(PathBuf::from).unwrap_or_default(),
+                None if self.file => {
+                    return parent.file_name().map(PathBuf::from).unwrap_or_default()
+                }
                 None => &self.path,
             },
         };
-        parent.strip_prefix(base).unwrap_or(Path::new("")).to_path_buf()
+        parent
+            .strip_prefix(base)
+            .unwrap_or(Path::new(""))
+            .to_path_buf()
     }
 
     /// 同一本书被一台设备的几个条目覆盖时用哪个的放法（大的优先）：单本 > 深的目录 > 浅的目录。
@@ -148,7 +159,11 @@ impl Tracked {
 
     /// 给人看的设备范围。
     pub fn devices_shown(&self) -> String {
-        if self.devices.is_empty() { "全部设备".into() } else { self.devices.join("、") }
+        if self.devices.is_empty() {
+            "全部设备".into()
+        } else {
+            self.devices.join("、")
+        }
     }
 }
 
@@ -185,14 +200,26 @@ struct SourcesFile {
 
 impl From<SourcesFile> for Sources {
     fn from(f: SourcesFile) -> Sources {
-        let root = f.root.or_else(|| (f.entries.is_empty() && f.dirs.len() == 1).then(|| f.dirs[0].clone()));
+        let root = f
+            .root
+            .or_else(|| (f.entries.is_empty() && f.dirs.len() == 1).then(|| f.dirs[0].clone()));
         let mut entries = f.entries;
         for d in f.dirs {
             if !entries.iter().any(|e| !e.file && e.path == d) {
-                entries.push(Tracked { path: d, file: false, devices: Vec::new(), top: false });
+                entries.push(Tracked {
+                    path: d,
+                    file: false,
+                    devices: Vec::new(),
+                    top: false,
+                });
             }
         }
-        Sources { root, entries, files: f.files, stale: f.stale }
+        Sources {
+            root,
+            entries,
+            files: f.files,
+            stale: f.stale,
+        }
     }
 }
 
@@ -244,7 +271,12 @@ fn failed_mark() -> String {
 /// 入库失败的记号该不该重试了：换了 booklib，或过了 [`RETRY_FAILED_AFTER`]。读不懂的记号算该重试。
 fn retry_due(mark: &str) -> bool {
     match mark.split_once(' ') {
-        Some((commit, at)) => commit != env!("BOOKLIB_GIT_COMMIT") || at.parse::<u64>().map_or(true, |t| crate::now().saturating_sub(t) >= RETRY_FAILED_AFTER),
+        Some((commit, at)) => {
+            commit != env!("BOOKLIB_GIT_COMMIT")
+                || at.parse::<u64>().map_or(true, |t| {
+                    crate::now().saturating_sub(t) >= RETRY_FAILED_AFTER
+                })
+        }
         None => true,
     }
 }
@@ -317,18 +349,35 @@ struct SyncRound<'s> {
 
 impl<'s> SyncRound<'s> {
     fn new(src: &'s Sources, replaced: Vec<(PathBuf, String)>) -> SyncRound<'s> {
-        SyncRound { src, rep: SyncReport::default(), present: BTreeMap::new(), replaced, bad_now: HashSet::new(), unreadable_now: HashSet::new() }
+        SyncRound {
+            src,
+            rep: SyncReport::default(),
+            present: BTreeMap::new(),
+            replaced,
+            bad_now: HashSet::new(),
+            unreadable_now: HashSet::new(),
+        }
     }
 
     /// 这个目录下（或就是这个文件）登记过的文件原样当作还在（不新增、不删除、记录不变）。
     fn keep_under(&mut self, dir: &Path) {
-        self.present.extend(self.src.files.iter().filter(|(p, _)| p.starts_with(dir)).map(|(p, s)| (p.clone(), s.clone())));
+        self.present.extend(
+            self.src
+                .files
+                .iter()
+                .filter(|(p, _)| p.starts_with(dir))
+                .map(|(p, s)| (p.clone(), s.clone())),
+        );
     }
 }
 
 /// 条目去掉这几台设备（`all` 是全部阅读模式：给全部设备的条目改成剩下的几台）；一台不剩返回 `None`。
 fn without_devices(mut e: Tracked, drop: &[String], all: &[String]) -> Option<Tracked> {
-    let current = if e.devices.is_empty() { all.to_vec() } else { std::mem::take(&mut e.devices) };
+    let current = if e.devices.is_empty() {
+        all.to_vec()
+    } else {
+        std::mem::take(&mut e.devices)
+    };
     e.devices = current.into_iter().filter(|d| !drop.contains(d)).collect();
     (!e.devices.is_empty()).then_some(e)
 }
@@ -347,8 +396,20 @@ impl Sources {
     /// 这本书（`id`，原件 `source`）给不给这台设备：覆盖它的（原件路径，以及跟踪目录里同一内容的别的文件）条目里有给这台的。
     /// 没有条目覆盖：`add` 进来的、网址书给全部设备；以前跟踪、现在不跟踪了的（还记在 `files` 里，下次 `sync` 删）谁都不给。
     pub(crate) fn wants(&self, id: &str, source: Option<&Path>, device: &str) -> bool {
-        let paths: Vec<&Path> = source.into_iter().chain(self.files.iter().filter(|(_, s)| s.id == id).map(|(p, _)| p.as_path())).collect();
-        let covering: Vec<&Tracked> = self.entries.iter().filter(|e| paths.iter().any(|p| e.covers(p))).collect();
+        let paths: Vec<&Path> = source
+            .into_iter()
+            .chain(
+                self.files
+                    .iter()
+                    .filter(|(_, s)| s.id == id)
+                    .map(|(p, _)| p.as_path()),
+            )
+            .collect();
+        let covering: Vec<&Tracked> = self
+            .entries
+            .iter()
+            .filter(|e| paths.iter().any(|p| e.covers(p)))
+            .collect();
         if covering.is_empty() {
             return !paths.iter().any(|p| self.files.contains_key(*p));
         }
@@ -358,20 +419,51 @@ impl Sources {
     /// 原件 `p` 在这台设备上放哪：(电脑上的产物目录以哪个目录为准, 子目录)。用覆盖它、给这台的最具体的条目（[`Tracked::specificity`]）
     /// 的放法（[`Tracked::rel`]）。没有给这台的条目覆盖它返回 `None`。
     pub(crate) fn placement(&self, p: &Path, device: &str) -> Option<(PathBuf, PathBuf)> {
-        let e = self.entries.iter().filter(|e| e.covers(p) && e.for_device(device)).max_by_key(|e| e.specificity())?;
-        let base = self.root.clone().filter(|r| p.starts_with(r)).unwrap_or_else(|| if e.file { p.parent().and_then(Path::parent).unwrap_or(Path::new("")).to_path_buf() } else { e.path.clone() });
+        let e = self
+            .entries
+            .iter()
+            .filter(|e| e.covers(p) && e.for_device(device))
+            .max_by_key(|e| e.specificity())?;
+        let base = self
+            .root
+            .clone()
+            .filter(|r| p.starts_with(r))
+            .unwrap_or_else(|| {
+                if e.file {
+                    p.parent()
+                        .and_then(Path::parent)
+                        .unwrap_or(Path::new(""))
+                        .to_path_buf()
+                } else {
+                    e.path.clone()
+                }
+            });
         Some((base, e.rel(p, self.root.as_deref())))
     }
 
     /// `add` 把 `path` 换成了新版本 `id`（旧版本 `old_ids` 已删）：这个文件在跟踪目录里、记着的是旧版本的话，改记成新版本
     /// （大小、修改时间取现在的），下次 `sync` 不再当成又改了一次。返回改了没有。
-    pub(crate) fn record_new_version<'a>(&mut self, path: &Path, id: &str, mut old_ids: impl Iterator<Item = &'a str>) -> bool {
-        let Some(seen) = self.files.get_mut(path) else { return false };
+    pub(crate) fn record_new_version<'a>(
+        &mut self,
+        path: &Path,
+        id: &str,
+        mut old_ids: impl Iterator<Item = &'a str>,
+    ) -> bool {
+        let Some(seen) = self.files.get_mut(path) else {
+            return false;
+        };
         if !old_ids.any(|o| o == seen.id) {
             return false;
         }
-        let Some((size, mtime_ns)) = crate::file_stat(path) else { return false };
-        *seen = Seen { size, mtime_ns, id: id.to_string(), failed: String::new() };
+        let Some((size, mtime_ns)) = crate::file_stat(path) else {
+            return false;
+        };
+        *seen = Seen {
+            size,
+            mtime_ns,
+            id: id.to_string(),
+            failed: String::new(),
+        };
         true
     }
 }
@@ -397,25 +489,38 @@ impl Library {
 
     /// 跟踪的条目。
     pub fn tracked_entries(&self) -> Vec<Tracked> {
-        self.records.sources.get(&self.sources_path()).entries.clone()
+        self.records
+            .sources
+            .get(&self.sources_path())
+            .entries
+            .clone()
     }
 
     /// 这本书给不给这台设备（见 [`Sources::wants`]）。
     pub fn wants(&self, meta: &Meta, device: &str) -> bool {
-        let source = (meta.source() != crate::Source::Stored && !meta.source_path.is_empty()).then(|| Path::new(&meta.source_path));
-        self.records.sources.get(&self.sources_path()).wants(&meta.id, source, device)
+        let source = (meta.source() != crate::Source::Stored && !meta.source_path.is_empty())
+            .then(|| Path::new(&meta.source_path));
+        self.records
+            .sources
+            .get(&self.sources_path())
+            .wants(&meta.id, source, device)
     }
 
     /// 这本书的原件在跟踪目录里、还在的话，返回它（`remove` 提示用：下次 `sync` 会把它再入库）。
     pub fn tracked_original(&self, id: &str) -> Option<PathBuf> {
         let m = self.read_meta(id)?;
         let p = PathBuf::from(&m.source_path);
-        (m.master.is_empty() && !m.source_path.is_empty() && self.tracked().iter().any(|d| p.starts_with(d)) && p.is_file()).then_some(p)
+        (m.master.is_empty()
+            && !m.source_path.is_empty()
+            && self.tracked().iter().any(|d| p.starts_with(d))
+            && p.is_file())
+        .then_some(p)
     }
 
     /// 开始跟踪一个目录，给全部设备（[`Library::track_with`]）。已跟踪（什么都没变）返回 `false`。
     pub fn track(&self, path: &Path) -> Result<bool, String> {
-        self.track_with(path, &[], false).map(|c| c != TrackChange::Same)
+        self.track_with(path, &[], false)
+            .map(|c| c != TrackChange::Same)
     }
 
     /// 书根目录（见 `sources.json` 的 `root`）。
@@ -434,7 +539,11 @@ impl Library {
         }
         let mut s = self.load_sources();
         if let Some(e) = s.entries.iter().find(|e| !e.path.starts_with(&dir)) {
-            return Err(format!("跟踪的 {} 不在 {} 里：书根目录要包住所有跟踪的目录和书", e.path.display(), dir.display()));
+            return Err(format!(
+                "跟踪的 {} 不在 {} 里：书根目录要包住所有跟踪的目录和书",
+                e.path.display(),
+                dir.display()
+            ));
         }
         if s.root.as_deref() == Some(dir.as_path()) {
             return Ok(false);
@@ -448,7 +557,12 @@ impl Library {
     /// 条目里挪出来；同一种放法的设备范围取并集（有一边是全部设备就是全部设备）。
     /// 目录和目录、目录和其中的文件可以同时跟踪（同一个文件只入库一次）。
     /// 要在书根目录里（还没有书根目录的，这次的目录就是书根，单本是它所在的目录）。
-    pub fn track_with(&self, path: &Path, devices: &[String], top: bool) -> Result<TrackChange, String> {
+    pub fn track_with(
+        &self,
+        path: &Path,
+        devices: &[String],
+        top: bool,
+    ) -> Result<TrackChange, String> {
         let path = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let file = path.is_file();
         if !file && !path.is_dir() {
@@ -470,7 +584,13 @@ impl Library {
                 return Err(format!("{} 不在书根目录 {} 里（设备上按相对书根目录的路径放）：要换书根目录用 booklib track --root=新目录", path.display(), r.display()));
             }
             Some(_) => {}
-            None if s.entries.is_empty() => s.root = Some(if file { path.parent().unwrap_or(&path).to_path_buf() } else { path.clone() }),
+            None if s.entries.is_empty() => {
+                s.root = Some(if file {
+                    path.parent().unwrap_or(&path).to_path_buf()
+                } else {
+                    path.clone()
+                })
+            }
             None => {}
         }
         let mut devices: Vec<String> = devices.to_vec();
@@ -486,7 +606,10 @@ impl Library {
                 let Some(parent) = d.parent() else { continue };
                 for dev in self.devices().iter().filter(|p| p.deliver.is_none()) {
                     let root = parent.join(&dev.id);
-                    if let Some(t) = all.iter().find(|t| (**d == path || ***t == path) && overlaps(&root, t)) {
+                    if let Some(t) = all
+                        .iter()
+                        .find(|t| (**d == path || ***t == path) && overlaps(&root, t))
+                    {
                         return Err(crate::generate::output_overlap(&root, t));
                     }
                 }
@@ -503,20 +626,33 @@ impl Library {
                 false => Some(e),
             })
             .collect();
-        match s.entries.iter_mut().find(|e| e.path == path && e.file == file && e.top == top) {
+        match s
+            .entries
+            .iter_mut()
+            .find(|e| e.path == path && e.file == file && e.top == top)
+        {
             Some(e) if e.devices.is_empty() || devices.is_empty() => e.devices.clear(),
             Some(e) => {
                 e.devices.extend(devices);
                 e.devices.sort();
                 e.devices.dedup();
             }
-            None => s.entries.push(Tracked { path, file, devices, top }),
+            None => s.entries.push(Tracked {
+                path,
+                file,
+                devices,
+                top,
+            }),
         }
         if s.entries == before {
             return Ok(TrackChange::Same);
         }
         self.save_sources(&s)?;
-        Ok(if existed { TrackChange::Changed } else { TrackChange::New })
+        Ok(if existed {
+            TrackChange::Changed
+        } else {
+            TrackChange::New
+        })
     }
 
     /// 全部阅读模式的 id。
@@ -526,7 +662,8 @@ impl Library {
 
     /// 不再跟踪一个目录或文件（给全部设备都不跟踪了，[`Library::untrack_with`]）。没在跟踪返回 `false`。
     pub fn untrack(&self, path: &Path) -> Result<bool, String> {
-        self.untrack_with(path, &[]).map(|c| c != UntrackChange::NotTracked)
+        self.untrack_with(path, &[])
+            .map(|c| c != UntrackChange::NotTracked)
     }
 
     /// 不再跟踪一个目录或文件：`devices` 空＝这个路径的条目整条去掉（里面没被别的条目覆盖的书下次 `sync` 连同产物从书库删掉），
@@ -534,11 +671,17 @@ impl Library {
     /// 跟踪目录里的单本没有自己的条目时报错（不能从目录里单独去掉一本）。
     pub fn untrack_with(&self, path: &Path, devices: &[String]) -> Result<UntrackChange, String> {
         // 已经删了时 canonicalize 会失败：退回绝对路径（记录里存的都是绝对路径）
-        let path = std::fs::canonicalize(path).or_else(|_| std::path::absolute(path)).unwrap_or_else(|_| path.to_path_buf());
+        let path = std::fs::canonicalize(path)
+            .or_else(|_| std::path::absolute(path))
+            .unwrap_or_else(|_| path.to_path_buf());
         let mut s = self.load_sources();
         if !s.entries.iter().any(|e| e.path == path) {
             if let Some(d) = s.entries.iter().find(|e| !e.file && e.covers(&path)) {
-                return Err(format!("{} 在跟踪的目录 {} 里，不能单独去掉（要不跟踪就 untrack 那个目录）", path.display(), d.path.display()));
+                return Err(format!(
+                    "{} 在跟踪的目录 {} 里，不能单独去掉（要不跟踪就 untrack 那个目录）",
+                    path.display(),
+                    d.path.display()
+                ));
             }
             return Ok(UntrackChange::NotTracked);
         }
@@ -546,15 +689,38 @@ impl Library {
         let before = s.entries.clone();
         s.entries = std::mem::take(&mut s.entries)
             .into_iter()
-            .filter_map(|e| if e.path != path { Some(e) } else if devices.is_empty() { None } else { without_devices(e, devices, &all_ids) })
+            .filter_map(|e| {
+                if e.path != path {
+                    Some(e)
+                } else if devices.is_empty() {
+                    None
+                } else {
+                    without_devices(e, devices, &all_ids)
+                }
+            })
             .collect();
         if s.entries == before {
             return Ok(UntrackChange::NotTracked);
         }
-        let covered = |entries: &[Tracked], p: &Path, d: &str| entries.iter().any(|e| e.covers(p) && e.for_device(d));
-        let under: Vec<&PathBuf> = s.files.keys().filter(|p| before.iter().any(|e| e.path == path && e.covers(p))).collect();
+        let covered = |entries: &[Tracked], p: &Path, d: &str| {
+            entries.iter().any(|e| e.covers(p) && e.for_device(d))
+        };
+        let under: Vec<&PathBuf> = s
+            .files
+            .keys()
+            .filter(|p| before.iter().any(|e| e.path == path && e.covers(p)))
+            .collect();
         let change = if s.entries.iter().any(|e| e.path == path) {
-            UntrackChange::Narrowed(under.iter().filter(|p| all_ids.iter().any(|d| covered(&before, p, d) && !covered(&s.entries, p, d))).count())
+            UntrackChange::Narrowed(
+                under
+                    .iter()
+                    .filter(|p| {
+                        all_ids
+                            .iter()
+                            .any(|d| covered(&before, p, d) && !covered(&s.entries, p, d))
+                    })
+                    .count(),
+            )
         } else {
             UntrackChange::Removed(under.iter().filter(|p| !s.covered(p)).count())
         };
@@ -577,14 +743,24 @@ impl Library {
     /// - 读不了的目录（权限等）报出来，里面已登记的书状态未知、原样保留、不删；整个跟踪目录不在的什么都不动。
     ///
     /// `memo` 跨轮次记住已经报过的问题（`--watch`），只在新出现时报一次。没有变化时不写 `sources.json`。
-    pub fn sync_with(&self, prune: Prune, memo: &mut SyncMemo, mut on: impl FnMut(SyncEvent)) -> Result<SyncReport, String> {
+    pub fn sync_with(
+        &self,
+        prune: Prune,
+        memo: &mut SyncMemo,
+        mut on: impl FnMut(SyncEvent),
+    ) -> Result<SyncReport, String> {
         let before = self.load_sources();
         let mut src = before.clone();
         // ⓪ 条目里已经没有的阅读模式去掉（不去掉的话 `untrack --device=` 拿不掉、`track` 列表里看不见）
         let known = self.device_ids();
         let mut entries = Vec::with_capacity(src.entries.len());
         for e in std::mem::take(&mut src.entries) {
-            let gone: Vec<String> = e.devices.iter().filter(|d| !known.contains(d)).cloned().collect();
+            let gone: Vec<String> = e
+                .devices
+                .iter()
+                .filter(|d| !known.contains(d))
+                .cloned()
+                .collect();
             if gone.is_empty() {
                 entries.push(e);
                 continue;
@@ -595,7 +771,11 @@ impl Library {
         }
         let src = Sources { entries, ..src };
         // 以前没删掉的旧版本也再删一次（"原件"记成条目目录：不会和跟踪目录里的文件相同）
-        let leftover = src.stale.iter().map(|id| (self.entry_dir(id), id.clone())).collect();
+        let leftover = src
+            .stale
+            .iter()
+            .map(|id| (self.entry_dir(id), id.clone()))
+            .collect();
         let mut round = SyncRound::new(&src, leftover);
         // ① 遍历跟踪的目录和单本：新的、改过的入库，没变的照旧
         for e in &src.entries {
@@ -611,9 +791,16 @@ impl Library {
         let stale = self.retire_replaced(&mut round, &mut on);
         // ③ 原件不在了的
         let kept_missing = self.handle_missing(prune, &mut round, memo, &mut on);
-        let SyncRound { mut present, rep, .. } = round;
+        let SyncRound {
+            mut present, rep, ..
+        } = round;
         present.extend(kept_missing);
-        let new = Sources { root: src.root.clone(), entries: src.entries.clone(), files: present, stale };
+        let new = Sources {
+            root: src.root.clone(),
+            entries: src.entries.clone(),
+            files: present,
+            stale,
+        };
         if new != before {
             self.save_sources(&new)?;
         }
@@ -622,7 +809,13 @@ impl Library {
 
     /// 遍历一个跟踪目录（[`Library::sync_with`] 第一步）：读不了的子目录、整个不在的目录里登记过的文件原样当作还在；
     /// 每个能入库的文件交给 [`Library::sync_file`]。
-    fn scan_dir(&self, dir: &Path, round: &mut SyncRound, memo: &mut SyncMemo, on: &mut dyn FnMut(SyncEvent)) {
+    fn scan_dir(
+        &self,
+        dir: &Path,
+        round: &mut SyncRound,
+        memo: &mut SyncMemo,
+        on: &mut dyn FnMut(SyncEvent),
+    ) {
         if !dir.is_dir() {
             // 目录整个不见了（U 盘没插等）：里面的文件既不算新增也不算删除，原样保留记录
             round.keep_under(dir);
@@ -677,8 +870,19 @@ impl Library {
         };
         let old = src.files.get(&path);
         // 没变：大小、修改时间都一样，上次没失败（以前的版本记下的失败没有记号、id 是空的：再试一次）或还没到重试的时候
-        let tried = |o: &Seen| if o.failed.is_empty() { !o.id.is_empty() } else { !retry_due(&o.failed) };
-        let settled = |o: &&Seen| o.size == size && o.mtime_ns == mtime_ns && tried(o) && (o.id.is_empty() || self.entry_dir(&o.id).is_dir());
+        let tried = |o: &Seen| {
+            if o.failed.is_empty() {
+                !o.id.is_empty()
+            } else {
+                !retry_due(&o.failed)
+            }
+        };
+        let settled = |o: &&Seen| {
+            o.size == size
+                && o.mtime_ns == mtime_ns
+                && tried(o)
+                && (o.id.is_empty() || self.entry_dir(&o.id).is_dir())
+        };
         if let Some(o) = old.filter(settled) {
             round.present.insert(path, o.clone());
             round.rep.unchanged += 1;
@@ -704,7 +908,15 @@ impl Library {
                     }
                     None => round.rep.unchanged += 1, // 已在库里（改名、移动，或之前手动 add 过）
                 }
-                round.present.insert(path, Seen { size, mtime_ns, id: m.id, failed: String::new() });
+                round.present.insert(
+                    path,
+                    Seen {
+                        size,
+                        mtime_ns,
+                        id: m.id,
+                        failed: String::new(),
+                    },
+                );
             }
             Err(e) => {
                 on(SyncEvent::Failed(&path, &e));
@@ -717,7 +929,15 @@ impl Library {
                 } else {
                     // 记下这次看到的大小和修改时间：文件没变就不再重试。有旧版本的继续跟踪旧版本
                     let id = old.map(|o| o.id.clone()).unwrap_or_default();
-                    round.present.insert(path, Seen { size, mtime_ns, id, failed: failed_mark() });
+                    round.present.insert(
+                        path,
+                        Seen {
+                            size,
+                            mtime_ns,
+                            id,
+                            failed: failed_mark(),
+                        },
+                    );
                 }
             }
         }
@@ -731,9 +951,16 @@ impl Library {
             if stale.contains(old_id) {
                 continue;
             }
-            let new_id = round.present.get(path).map(|s| s.id.clone()).unwrap_or_default();
+            let new_id = round
+                .present
+                .get(path)
+                .map(|s| s.id.clone())
+                .unwrap_or_default();
             if let Err(e) = self.retire_old_version(old_id, &new_id, path, &round.present) {
-                on(SyncEvent::Failed(path, &format!("删旧版本 {old_id} 失败：{e}（下次 sync 再删）")));
+                on(SyncEvent::Failed(
+                    path,
+                    &format!("删旧版本 {old_id} 失败：{e}（下次 sync 再删）"),
+                ));
                 round.rep.failed += 1;
                 stale.push(old_id.clone());
             }
@@ -743,15 +970,28 @@ impl Library {
 
     /// 上次登记过、这一轮没看到的文件（[`Library::sync_with`] 第三步）：挪了的改记新位置，删了的按 `prune` 从书库删掉或继续记着。
     /// 返回要继续记着的（并进 `sources.json`）。
-    fn handle_missing(&self, prune: Prune, round: &mut SyncRound, memo: &mut SyncMemo, on: &mut dyn FnMut(SyncEvent)) -> BTreeMap<PathBuf, Seen> {
+    fn handle_missing(
+        &self,
+        prune: Prune,
+        round: &mut SyncRound,
+        memo: &mut SyncMemo,
+        on: &mut dyn FnMut(SyncEvent),
+    ) -> BTreeMap<PathBuf, Seen> {
         let src = round.src;
         let present = &round.present;
         let rep = &mut round.rep;
-        let live: HashMap<String, PathBuf> = present.iter().filter(|(_, s)| !s.id.is_empty()).map(|(p, s)| (s.id.clone(), p.clone())).collect();
+        let live: HashMap<String, PathBuf> = present
+            .iter()
+            .filter(|(_, s)| !s.id.is_empty())
+            .map(|(p, s)| (s.id.clone(), p.clone()))
+            .collect();
         let mut kept_missing = BTreeMap::new();
         let mut missing_now: HashSet<PathBuf> = HashSet::new();
         for (path, seen) in &src.files {
-            if seen.id.is_empty() || present.contains_key(path) || !self.entry_dir(&seen.id).is_dir() {
+            if seen.id.is_empty()
+                || present.contains_key(path)
+                || !self.entry_dir(&seen.id).is_dir()
+            {
                 continue;
             }
             if !is_supported(path) && path.is_file() {
@@ -770,10 +1010,19 @@ impl Library {
             if self.original_elsewhere(&seen.id, path, present) {
                 continue; // 条目记着的原件在跟踪目录以外（add 进来的），还在：这本书没丢
             }
-            let title = self.read_meta(&seen.id).map(|m| m.title).unwrap_or_default();
+            let title = self
+                .read_meta(&seen.id)
+                .map(|m| m.title)
+                .unwrap_or_default();
             // 不再被任何条目覆盖的（untrack 了）：同原件删了，连同产物从书库删掉（2026-10-19 定）
             let released = !src.covered(path);
-            let event = |removed| if released { SyncEvent::Released(path, &title, removed) } else { SyncEvent::Missing(path, &title, removed) };
+            let event = |removed| {
+                if released {
+                    SyncEvent::Released(path, &title, removed)
+                } else {
+                    SyncEvent::Missing(path, &title, removed)
+                }
+            };
             if prune == Prune::Auto {
                 match self.remove(&seen.id) {
                     Ok(_) => {
@@ -786,7 +1035,10 @@ impl Library {
                         rep.pruned += 1;
                     }
                     Err(e) => {
-                        on(SyncEvent::Failed(path, &format!("原件不在了，从书库删掉失败：{e}（下次 sync 再删）")));
+                        on(SyncEvent::Failed(
+                            path,
+                            &format!("原件不在了，从书库删掉失败：{e}（下次 sync 再删）"),
+                        ));
                         rep.failed += 1;
                         kept_missing.insert(path.clone(), seen.clone());
                     }
@@ -813,9 +1065,18 @@ impl Library {
     /// 设备上的产物交给新版本（[`Library::hand_over_outputs`]），
     /// 返回删了没有。不删的：`present`（这一轮看到的跟踪目录里的文件）里还有别的文件是旧内容、条目记着的原件在别处还在（见
     /// [`Library::original_elsewhere`]）、条目已经没了。
-    pub(crate) fn retire_old_version(&self, old_id: &str, new_id: &str, path: &Path, present: &BTreeMap<PathBuf, Seen>) -> Result<bool, String> {
+    pub(crate) fn retire_old_version(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        path: &Path,
+        present: &BTreeMap<PathBuf, Seen>,
+    ) -> Result<bool, String> {
         let in_use = present.iter().any(|(p, s)| s.id == old_id && p != path);
-        if in_use || !self.entry_dir(old_id).is_dir() || self.original_elsewhere(old_id, path, present) {
+        if in_use
+            || !self.entry_dir(old_id).is_dir()
+            || self.original_elsewhere(old_id, path, present)
+        {
             return Ok(false);
         }
         // 设备上的产物交给新版本（原地覆盖、原地替换），不先删
@@ -829,19 +1090,31 @@ impl Library {
     fn original_elsewhere(&self, id: &str, path: &Path, present: &BTreeMap<PathBuf, Seen>) -> bool {
         self.read_meta(id).is_some_and(|m| {
             let p = Path::new(&m.source_path);
-            m.master.is_empty() && !m.source_path.is_empty() && p != path && !present.contains_key(p) && p.is_file()
+            m.master.is_empty()
+                && !m.source_path.is_empty()
+                && p != path
+                && !present.contains_key(p)
+                && p.is_file()
         })
     }
 
     /// 条目记着的原件不在了，而跟踪目录里还有同一内容的 `live`：改记成它。
     fn repoint(&self, id: &str, live: &Path, seen: &Seen) -> Result<(), String> {
-        let Some(mut m) = self.read_meta(id) else { return Ok(()) };
-        let Some(s) = live.to_str() else { return Ok(()) };
+        let Some(mut m) = self.read_meta(id) else {
+            return Ok(());
+        };
+        let Some(s) = live.to_str() else {
+            return Ok(());
+        };
         if !m.master.is_empty() || m.source_path == s || Path::new(&m.source_path).exists() {
             return Ok(());
         }
         m.source_path = s.to_string();
-        m.source = live.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        m.source = live
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
         (m.source_size, m.source_mtime_ns) = (seen.size, seen.mtime_ns);
         self.save_meta(&m)
     }
@@ -852,15 +1125,30 @@ mod scope_tests {
     use super::*;
 
     fn dir(p: &str, devices: &[&str]) -> Tracked {
-        Tracked { path: PathBuf::from(p), file: false, devices: devices.iter().map(|s| s.to_string()).collect(), top: false }
+        Tracked {
+            path: PathBuf::from(p),
+            file: false,
+            devices: devices.iter().map(|s| s.to_string()).collect(),
+            top: false,
+        }
     }
 
     fn file(p: &str, devices: &[&str]) -> Tracked {
-        Tracked { path: PathBuf::from(p), file: true, devices: devices.iter().map(|s| s.to_string()).collect(), top: false }
+        Tracked {
+            path: PathBuf::from(p),
+            file: true,
+            devices: devices.iter().map(|s| s.to_string()).collect(),
+            top: false,
+        }
     }
 
     fn seen(id: &str) -> Seen {
-        Seen { size: 1, mtime_ns: 1, id: id.to_string(), failed: String::new() }
+        Seen {
+            size: 1,
+            mtime_ns: 1,
+            id: id.to_string(),
+            failed: String::new(),
+        }
     }
 
     #[test]
@@ -880,31 +1168,84 @@ mod scope_tests {
             ..Default::default()
         };
         let at = |d: &str| s.placement(p, d).map(|(_, r)| r.display().to_string());
-        assert_eq!(at("kindle").as_deref(), Some("漫画/死亡筆記"), "照书库结构（相对书根目录）");
-        assert_eq!(at("ireader").as_deref(), Some("死亡筆記"), "--top 的目录：从它这一层起；比浅的目录具体");
-        assert_eq!(at("third").as_deref(), Some(""), "--top 的单本：放根目录；单本比目录具体");
+        assert_eq!(
+            at("kindle").as_deref(),
+            Some("漫画/死亡筆記"),
+            "照书库结构（相对书根目录）"
+        );
+        assert_eq!(
+            at("ireader").as_deref(),
+            Some("死亡筆記"),
+            "--top 的目录：从它这一层起；比浅的目录具体"
+        );
+        assert_eq!(
+            at("third").as_deref(),
+            Some(""),
+            "--top 的单本：放根目录；单本比目录具体"
+        );
         assert_eq!(at("other"), None, "没有给这台的条目");
-        let keep = Sources { root: Some(PathBuf::from("/b")), entries: vec![file("/b/文字/科幻/三体.epub", &[])], ..Default::default() };
-        assert_eq!(keep.placement(Path::new("/b/文字/科幻/三体.epub"), "kindle").unwrap().1, PathBuf::from("文字/科幻"), "单本照书库结构");
+        let keep = Sources {
+            root: Some(PathBuf::from("/b")),
+            entries: vec![file("/b/文字/科幻/三体.epub", &[])],
+            ..Default::default()
+        };
+        assert_eq!(
+            keep.placement(Path::new("/b/文字/科幻/三体.epub"), "kindle")
+                .unwrap()
+                .1,
+            PathBuf::from("文字/科幻"),
+            "单本照书库结构"
+        );
         // 没有书根目录（以前跟踪过几个目录的书库）：目录相对它自己，单本是所在的文件夹名
-        let old = Sources { entries: vec![dir("/b/漫画", &[]), file("/x/死亡筆記/卷03.epub", &[])], ..Default::default() };
-        assert_eq!(old.placement(p, "kindle").unwrap().1, PathBuf::from("死亡筆記"));
-        assert_eq!(old.placement(Path::new("/x/死亡筆記/卷03.epub"), "kindle").unwrap().1, PathBuf::from("死亡筆記"));
+        let old = Sources {
+            entries: vec![dir("/b/漫画", &[]), file("/x/死亡筆記/卷03.epub", &[])],
+            ..Default::default()
+        };
+        assert_eq!(
+            old.placement(p, "kindle").unwrap().1,
+            PathBuf::from("死亡筆記")
+        );
+        assert_eq!(
+            old.placement(Path::new("/x/死亡筆記/卷03.epub"), "kindle")
+                .unwrap()
+                .1,
+            PathBuf::from("死亡筆記")
+        );
     }
 
     #[test]
     fn wants_is_the_union_of_covering_entries() {
-        let mut s = Sources { entries: vec![dir("/b/文字", &["ireader"]), file("/b/文字/a.epub", &["kindle"])], ..Default::default() };
+        let mut s = Sources {
+            entries: vec![
+                dir("/b/文字", &["ireader"]),
+                file("/b/文字/a.epub", &["kindle"]),
+            ],
+            ..Default::default()
+        };
         s.files.insert(PathBuf::from("/b/文字/a.epub"), seen("A"));
         s.files.insert(PathBuf::from("/b/文字/b.epub"), seen("B"));
         s.files.insert(PathBuf::from("/old/c.epub"), seen("C"));
         let w = |id: &str, p: &str, d: &str| s.wants(id, Some(Path::new(p)), d);
-        assert!(w("A", "/b/文字/a.epub", "ireader") && w("A", "/b/文字/a.epub", "kindle") && !w("A", "/b/文字/a.epub", "other"));
+        assert!(
+            w("A", "/b/文字/a.epub", "ireader")
+                && w("A", "/b/文字/a.epub", "kindle")
+                && !w("A", "/b/文字/a.epub", "other")
+        );
         assert!(w("B", "/b/文字/b.epub", "ireader") && !w("B", "/b/文字/b.epub", "kindle"));
-        assert!(!w("C", "/old/c.epub", "ireader"), "不再跟踪了的谁都不给（下次 sync 删）");
-        assert!(w("D", "/别处/d.epub", "other") && s.wants("E", None, "kindle"), "add 进来的、网址书给全部设备");
+        assert!(
+            !w("C", "/old/c.epub", "ireader"),
+            "不再跟踪了的谁都不给（下次 sync 删）"
+        );
+        assert!(
+            w("D", "/别处/d.epub", "other") && s.wants("E", None, "kindle"),
+            "add 进来的、网址书给全部设备"
+        );
         // 同一内容在跟踪目录里还有一份：按那份的条目算
-        s.files.insert(PathBuf::from("/b/文字/a 副本.epub"), seen("D"));
-        assert!(s.wants("D", Some(Path::new("/别处/d.epub")), "ireader") && !s.wants("D", Some(Path::new("/别处/d.epub")), "other"));
+        s.files
+            .insert(PathBuf::from("/b/文字/a 副本.epub"), seen("D"));
+        assert!(
+            s.wants("D", Some(Path::new("/别处/d.epub")), "ireader")
+                && !s.wants("D", Some(Path::new("/别处/d.epub")), "other")
+        );
     }
 }

@@ -15,10 +15,16 @@ impl Step for Wikidata {
         let from_site = l.info.is_some();
         let cover_stored = l.cover.is_some();
         // 署名拆开后的作者名（书里整串写成「[美] 某某 著，某某 译」的也认得出）；书名找不到再用去掉卷次的
-        let authors: Vec<String> = crate::matching::parse_credits(&l.meta.authors).authors.into_iter().map(|p| p.name).collect();
-        let found = find_work(l.net, l.title, &authors).and_then(|w| match (w, crate::matching::base_title(l.title)) {
-            (None, Some(b)) => find_work(l.net, &b, &authors),
-            (w, _) => Ok(w),
+        let authors: Vec<String> = crate::matching::parse_credits(&l.meta.authors)
+            .authors
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        let found = find_work(l.net, l.title, &authors).and_then(|w| {
+            match (w, crate::matching::base_title(l.title)) {
+                (None, Some(b)) => find_work(l.net, &b, &authors),
+                (w, _) => Ok(w),
+            }
         });
         match found {
             Ok(w) => l.work = w,
@@ -44,7 +50,11 @@ impl Step for Wikidata {
 fn info_of(w: &Work) -> BookInfo {
     BookInfo {
         source: format!("Wikidata {}", w.qid),
-        original_title: [&w.original, &w.en].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_default(),
+        original_title: [&w.original, &w.en]
+            .into_iter()
+            .find(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_default(),
         first_published: w.published.get(..4).unwrap_or("").to_string(),
         ..Default::default()
     }
@@ -70,7 +80,10 @@ pub(crate) struct Work {
 
 /// SPARQL 查询。
 fn sparql(net: &Net, q: &str) -> Result<serde_json::Value, String> {
-    Ok(net.json(&format!("https://query.wikidata.org/sparql?format=json&query={}", enc(q)))?)
+    Ok(net.json(&format!(
+        "https://query.wikidata.org/sparql?format=json&query={}",
+        enc(q)
+    ))?)
 }
 
 /// 人名的几种写法：原样、间隔号统一成 `·`（好读用 `．`，Wikidata 用 `·`/`‧`），`letters_only` 时再加上只留字母数字的。
@@ -104,8 +117,15 @@ pub(crate) fn wikidata_search(net: &Net, q: &str) -> Result<Vec<String>, String>
         let url = format!("https://www.wikidata.org/w/api.php?action=wbsearchentities&type=item&limit=7&format=json&language={lang}&uselang={lang}&search={}", enc(q));
         for x in net.json(&url)?["search"].as_array().into_iter().flatten() {
             // 只收 `Q<数字>`：id 要拼进 SPARQL 查询，别的字符不让进
-            let item = |id: &&str| id.strip_prefix('Q').is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-            if let Some(id) = x["id"].as_str().filter(item).filter(|id| !ids.iter().any(|i: &String| i == id)) {
+            let item = |id: &&str| {
+                id.strip_prefix('Q')
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            };
+            if let Some(id) = x["id"]
+                .as_str()
+                .filter(item)
+                .filter(|id| !ids.iter().any(|i: &String| i == id))
+            {
                 ids.push(id.to_string());
             }
         }
@@ -136,12 +156,23 @@ pub(crate) fn works(net: &Net, filter: &str) -> Result<Vec<Work>, String> {
         let i = match out.iter().position(|w| w.qid == qid) {
             Some(i) => i,
             None => {
-                out.push(Work { qid, ..Default::default() });
+                out.push(Work {
+                    qid,
+                    ..Default::default()
+                });
                 out.len() - 1
             }
         };
         let w = &mut out[i];
-        for (dst, k) in [(&mut w.en, "en"), (&mut w.ja, "ja"), (&mut w.original, "orig"), (&mut w.ol, "ol"), (&mut w.image, "img"), (&mut w.author_en, "aen"), (&mut w.published, "pub")] {
+        for (dst, k) in [
+            (&mut w.en, "en"),
+            (&mut w.ja, "ja"),
+            (&mut w.original, "orig"),
+            (&mut w.ol, "ol"),
+            (&mut w.image, "img"),
+            (&mut w.author_en, "aen"),
+            (&mut w.published, "pub"),
+        ] {
             if dst.is_empty() {
                 *dst = g(k);
             }
@@ -162,7 +193,9 @@ pub(crate) fn pick_by_title(mut ws: Vec<Work>, title: &str) -> Option<Work> {
     if let Some(i) = ws.iter().position(|w| w.zh.iter().any(|l| norm(l) == t)) {
         return Some(ws.swap_remove(i));
     }
-    let close: Vec<usize> = (0..ws.len()).filter(|&i| ws[i].zh.iter().any(|l| similarity(&norm(l), &t) >= 0.75)).collect();
+    let close: Vec<usize> = (0..ws.len())
+        .filter(|&i| ws[i].zh.iter().any(|l| similarity(&norm(l), &t) >= 0.75))
+        .collect();
     match close[..] {
         [i] => Some(ws.swap_remove(i)),
         _ => None,
@@ -171,17 +204,34 @@ pub(crate) fn pick_by_title(mut ws: Vec<Work>, title: &str) -> Option<Work> {
 
 /// 作品的作者名和给出的作者名最像的程度（译名用字可能不同，按字重合度）。
 pub(crate) fn author_score(w: &Work, authors: &[String]) -> f32 {
-    authors.iter().flat_map(|a| w.author_names.iter().map(move |n| similarity(&norm(a), &norm(n)))).fold(0.0, f32::max)
+    authors
+        .iter()
+        .flat_map(|a| {
+            w.author_names
+                .iter()
+                .map(move |n| similarity(&norm(a), &norm(n)))
+        })
+        .fold(0.0, f32::max)
 }
 
 /// 按书名、作者名在 Wikidata 找原作。
-pub(crate) fn find_work(net: &Net, title: &str, authors: &[String]) -> Result<Option<Work>, String> {
+pub(crate) fn find_work(
+    net: &Net,
+    title: &str,
+    authors: &[String],
+) -> Result<Option<Work>, String> {
     // ① 先按书名找（名著一找就中），书名完全对得上的作品里挑作者名最像的；没有作者信息时只接受唯一的结果
     let ids = wikidata_search(net, title)?;
     if !ids.is_empty() {
         let values: String = ids.iter().take(12).map(|i| format!("wd:{i} ")).collect();
         let t = norm(title);
-        let mut cands: Vec<Work> = works(net, &format!("VALUES ?w {{ {values}}} ?w wdt:P50 ?anyauthor ."))?.into_iter().filter(|w| w.zh.iter().any(|l| norm(l) == t)).collect();
+        let mut cands: Vec<Work> = works(
+            net,
+            &format!("VALUES ?w {{ {values}}} ?w wdt:P50 ?anyauthor ."),
+        )?
+        .into_iter()
+        .filter(|w| w.zh.iter().any(|l| norm(l) == t))
+        .collect();
         if authors.iter().all(|a| norm(a).is_empty()) {
             if cands.len() == 1 {
                 return Ok(cands.pop());
@@ -201,7 +251,13 @@ pub(crate) fn find_work(net: &Net, title: &str, authors: &[String]) -> Result<Op
             continue;
         }
         let values: String = ids.iter().take(6).map(|i| format!("wd:{i} ")).collect();
-        if let Some(w) = pick_by_title(works(net, &format!("VALUES ?author {{ {values}}} ?w wdt:P50 ?author ."))?, title) {
+        if let Some(w) = pick_by_title(
+            works(
+                net,
+                &format!("VALUES ?author {{ {values}}} ?w wdt:P50 ?author ."),
+            )?,
+            title,
+        ) {
             return Ok(Some(w));
         }
     }
@@ -210,7 +266,10 @@ pub(crate) fn find_work(net: &Net, title: &str, authors: &[String]) -> Result<Op
 
 /// 作者照片（Wikidata 人物的 P18 图片）：按作者名找人物，名字最像（字重合度 ≥ 0.6）且有照片的那个。
 /// 返回（"Q号 名字", 缩到 800 宽的图片网址）；没有返回 `None`，网络出错返回错误。
-pub(crate) fn author_portrait(net: &Net, authors: &[String]) -> Result<Option<(String, String)>, String> {
+pub(crate) fn author_portrait(
+    net: &Net,
+    authors: &[String],
+) -> Result<Option<(String, String)>, String> {
     for a in authors.iter().filter(|a| !norm(a).is_empty()) {
         let ids = search_variants(net, &name_variants(a, false), false)?;
         if ids.is_empty() {
@@ -229,13 +288,22 @@ pub(crate) fn author_portrait(net: &Net, authors: &[String]) -> Result<Option<(S
             .filter_map(|r| {
                 let g = |k: &str| r[k]["value"].as_str().unwrap_or("").to_string();
                 let score = similarity(&norm(a), &norm(&g("l")));
-                (score >= 0.6).then(|| (score, g("a").rsplit('/').next().unwrap_or("").to_string(), g("l"), g("img")))
+                (score >= 0.6).then(|| {
+                    (
+                        score,
+                        g("a").rsplit('/').next().unwrap_or("").to_string(),
+                        g("l"),
+                        g("img"),
+                    )
+                })
             })
             .max_by(|x, y| x.0.total_cmp(&y.0));
         if let Some((_, qid, name, img)) = best {
-            return Ok(Some((format!("{qid} {name}"), format!("{}?width=800", img.replace("http://", "https://")))));
+            return Ok(Some((
+                format!("{qid} {name}"),
+                format!("{}?width=800", img.replace("http://", "https://")),
+            )));
         }
     }
     Ok(None)
 }
-

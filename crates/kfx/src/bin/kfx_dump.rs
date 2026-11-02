@@ -9,11 +9,11 @@
 //!   `{"$raw": 字节数, "$head": …}`；PNG 图片另有 `"$alpha"`：有没有不透明度小于 255 的像素（Kindle 把透明处画成黑色，
 //!   `tools/kfx/unify.py` 查正文图片还带不带透明）。
 
+use bookconv::util::cli::{self, die};
 use kfx::ion::{SymbolTable, Value};
 use kfx::{Body, Container};
 use serde_json::{json, Map, Value as Json};
 use std::collections::BTreeMap;
-use bookconv::util::cli::{self, die};
 
 struct Fmt<'a> {
     syms: &'a SymbolTable,
@@ -34,13 +34,18 @@ impl Fmt<'_> {
             Value::Int(n) => out.push_str(&n.to_string()),
             Value::F32(f) => out.push_str(&format!("{f}f")),
             Value::F64(f) => out.push_str(&format!("{f}e0")),
-            Value::Decimal { neg, mag, exp, .. } => out.push_str(&format!("{}{mag}d{exp}", if *neg { "-" } else { "" })),
+            Value::Decimal { neg, mag, exp, .. } => {
+                out.push_str(&format!("{}{mag}d{exp}", if *neg { "-" } else { "" }))
+            }
             Value::Timestamp(b) => out.push_str(&format!("<时间戳 {b:02x?}>")),
             Value::Symbol(s) => out.push_str(&format!("'{}'", self.sym(*s))),
             Value::String(s) => {
                 let n = s.chars().count();
                 if !self.full && n > MAX_STR {
-                    out.push_str(&format!("{:?}…（共 {n} 字）", s.chars().take(MAX_STR).collect::<String>()));
+                    out.push_str(&format!(
+                        "{:?}…（共 {n} 字）",
+                        s.chars().take(MAX_STR).collect::<String>()
+                    ));
                 } else {
                     out.push_str(&format!("{s:?}"));
                 }
@@ -48,7 +53,11 @@ impl Fmt<'_> {
             Value::Clob(b) => out.push_str(&format!("<clob {} 字节>", b.len())),
             Value::Blob(b) => out.push_str(&format!("<blob {} 字节>", b.len())),
             Value::List(items) | Value::Sexp(items) => {
-                let (open, close) = if matches!(v, Value::List(_)) { ("[", "]") } else { ("(", ")") };
+                let (open, close) = if matches!(v, Value::List(_)) {
+                    ("[", "]")
+                } else {
+                    ("(", ")")
+                };
                 out.push_str(open);
                 for (i, it) in items.iter().enumerate() {
                     if !self.full && i == MAX_ITEMS {
@@ -109,12 +118,16 @@ fn to_json(syms: &SymbolTable, v: &Value) -> Json {
             let x = *mag as f64 * 10f64.powi(i32::try_from(*exp).unwrap_or(0));
             json!(if *neg { -x } else { x })
         }
-        Value::Timestamp(b) => json!({ "$ts": b.iter().map(|x| format!("{x:02x}")).collect::<String>() }),
+        Value::Timestamp(b) => {
+            json!({ "$ts": b.iter().map(|x| format!("{x:02x}")).collect::<String>() })
+        }
         Value::Symbol(s) => json!(syms.display(*s)),
         Value::String(s) => json!(s),
         Value::Clob(b) => json!({ "$clob": b.len(), "$head": head_hex(b) }),
         Value::Blob(b) => json!({ "$blob": b.len(), "$head": head_hex(b) }),
-        Value::List(items) | Value::Sexp(items) => Json::Array(items.iter().map(|x| to_json(syms, x)).collect()),
+        Value::List(items) | Value::Sexp(items) => {
+            Json::Array(items.iter().map(|x| to_json(syms, x)).collect())
+        }
         Value::Struct(fields) => {
             let mut m = Map::new();
             for (k, fv) in fields {
@@ -129,7 +142,9 @@ fn to_json(syms: &SymbolTable, v: &Value) -> Json {
             }
             Json::Object(m)
         }
-        Value::Annotated(anns, inner) => json!({ "$annot": anns.iter().map(|a| syms.display(*a)).collect::<Vec<_>>(), "$value": to_json(syms, inner) }),
+        Value::Annotated(anns, inner) => {
+            json!({ "$annot": anns.iter().map(|a| syms.display(*a)).collect::<Vec<_>>(), "$value": to_json(syms, inner) })
+        }
     }
 }
 
@@ -145,7 +160,11 @@ fn main() {
             println!("{USAGE}");
             return;
         } else if let Some(t) = a.strip_prefix("--type=") {
-            types.push(t.trim_start_matches('$').parse::<u32>().unwrap_or_else(|_| die(cli::USAGE, "--type 要给编号，比如 --type=145")));
+            types.push(
+                t.trim_start_matches('$')
+                    .parse::<u32>()
+                    .unwrap_or_else(|_| die(cli::USAGE, "--type 要给编号，比如 --type=145")),
+            );
         } else if a == "--full" {
             full = true;
         } else if a == "--json" {
@@ -156,8 +175,11 @@ fn main() {
             path = Some(a);
         }
     }
-    let Some(path) = path else { die(cli::USAGE, USAGE) };
-    let c = Container::parse(&cli::read_or_die(&path)).unwrap_or_else(|e| die(cli::FAILED, format!("{path}：{e}")));
+    let Some(path) = path else {
+        die(cli::USAGE, USAGE)
+    };
+    let c = Container::parse(&cli::read_or_die(&path))
+        .unwrap_or_else(|e| die(cli::FAILED, format!("{path}：{e}")));
     let syms = c.symbols();
     if as_json {
         let entities: Vec<Json> = c
@@ -174,7 +196,10 @@ fn main() {
             .collect();
         let out = json!({ "info": to_json(&syms, &c.info), "entities": entities });
         let mut w = std::io::BufWriter::new(std::io::stdout().lock());
-        if serde_json::to_writer(&mut w, &out).and_then(|()| std::io::Write::flush(&mut w).map_err(serde_json::Error::io)).is_err() {
+        if serde_json::to_writer(&mut w, &out)
+            .and_then(|()| std::io::Write::flush(&mut w).map_err(serde_json::Error::io))
+            .is_err()
+        {
             std::process::exit(cli::FAILED);
         }
         return;
@@ -182,8 +207,16 @@ fn main() {
     let f = Fmt { syms: &syms, full };
     let show_entity = |e: &kfx::Entity| {
         let body = match &e.body {
-            Body::Raw(b) => format!("<原始字节 {} 字节，开头 {:02x?}>", b.len(), &b[..b.len().min(8)]),
-            Body::Ion(_) => e.values().map(|v| f.show(v)).collect::<Vec<_>>().join(" ; "),
+            Body::Raw(b) => format!(
+                "<原始字节 {} 字节，开头 {:02x?}>",
+                b.len(),
+                &b[..b.len().min(8)]
+            ),
+            Body::Ion(_) => e
+                .values()
+                .map(|v| f.show(v))
+                .collect::<Vec<_>>()
+                .join(" ; "),
         };
         println!("${} {}：{body}", e.ty, f.sym(e.id));
     };
@@ -193,9 +226,20 @@ fn main() {
         }
         return;
     }
-    println!("版本 {}，符号 {} 个，实体 {} 个", c.version, syms.len(), c.entities.len());
+    println!(
+        "版本 {}，符号 {} 个，实体 {} 个",
+        c.version,
+        syms.len(),
+        c.entities.len()
+    );
     println!("容器信息：{}", f.show(&c.info));
-    for it in c.capabilities.iter().filter_map(|it| if let kfx::ion::Item::Value(v) = it { Some(v) } else { None }) {
+    for it in c.capabilities.iter().filter_map(|it| {
+        if let kfx::ion::Item::Value(v) = it {
+            Some(v)
+        } else {
+            None
+        }
+    }) {
         println!("格式能力：{}", f.show(it));
     }
     println!("kfxgen：{}", String::from_utf8_lossy(&c.kfxgen));
@@ -203,7 +247,13 @@ fn main() {
     for e in &c.entities {
         by.entry(e.ty).or_default().push(e);
     }
-    println!("\n片段类型（类型：个数）：{}", by.iter().map(|(t, v)| format!("${t}:{}", v.len())).collect::<Vec<_>>().join(" "));
+    println!(
+        "\n片段类型（类型：个数）：{}",
+        by.iter()
+            .map(|(t, v)| format!("${t}:{}", v.len()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     for es in by.values() {
         println!();
         show_entity(es[0]);
@@ -212,5 +262,6 @@ fn main() {
 
 /// PNG 里有没有不透明度小于 255 的像素（解不开的算没有）。
 fn png_has_transparency(b: &[u8]) -> bool {
-    image::load_from_memory_with_format(b, image::ImageFormat::Png).is_ok_and(|img| img.color().has_alpha() && img.to_rgba8().pixels().any(|p| p.0[3] < 255))
+    image::load_from_memory_with_format(b, image::ImageFormat::Png)
+        .is_ok_and(|img| img.color().has_alpha() && img.to_rgba8().pixels().any(|p| p.0[3] < 255))
 }

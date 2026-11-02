@@ -28,7 +28,10 @@ pub fn ua_css(font_scale: Option<f64>) -> String {
         s.push_str(&format!("{t}{{font-size:{size}em;font-weight:bold;margin-top:{margin}em;margin-bottom:{margin}em;}}\n"));
     }
     if let Some(k) = font_scale {
-        s.push_str(&format!("body{{font-size:{}%;}}\n", crate::wash::fmt_num(k * 100.0)));
+        s.push_str(&format!(
+            "body{{font-size:{}%;}}\n",
+            crate::wash::fmt_num(k * 100.0)
+        ));
     }
     s
 }
@@ -40,13 +43,32 @@ mod tests {
     #[test]
     fn ua_css_is_bare_element_rules_ending_with_semicolons() {
         let css = ua_css(None);
-        assert!(css.starts_with("p{margin-top:1em;margin-bottom:1em;}\n"), "{css}");
-        assert!(css.contains("h2{font-size:1.5em;font-weight:bold;margin-top:0.83em;margin-bottom:0.83em;}"), "{css}");
-        assert!(css.contains("blockquote{margin-top:1em;margin-bottom:1em;margin-left:40px;margin-right:40px;}"), "{css}");
+        assert!(
+            css.starts_with("p{margin-top:1em;margin-bottom:1em;}\n"),
+            "{css}"
+        );
+        assert!(
+            css.contains(
+                "h2{font-size:1.5em;font-weight:bold;margin-top:0.83em;margin-bottom:0.83em;}"
+            ),
+            "{css}"
+        );
+        assert!(
+            css.contains(
+                "blockquote{margin-top:1em;margin-bottom:1em;margin-left:40px;margin-right:40px;}"
+            ),
+            "{css}"
+        );
         for line in css.lines() {
             let (sel, body) = line.split_once('{').unwrap();
-            assert!(sel.chars().all(|c| c.is_ascii_alphanumeric()), "只用裸元素选择器：{line}");
-            assert!(body.ends_with(";}") && !body.contains("!important"), "{line}");
+            assert!(
+                sel.chars().all(|c| c.is_ascii_alphanumeric()),
+                "只用裸元素选择器：{line}"
+            );
+            assert!(
+                body.ends_with(";}") && !body.contains("!important"),
+                "{line}"
+            );
         }
         assert!(!css.contains("body"));
         assert!(ua_css(Some(0.8)).ends_with("body{font-size:80%;}\n"));

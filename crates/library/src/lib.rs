@@ -55,7 +55,10 @@ pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus, Step};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
-pub use sources::{book_files, Prune, SyncEvent, SyncMemo, SyncReport, TrackChange, Tracked, UntrackChange, SUPPORTED_EXTS};
+pub use sources::{
+    book_files, Prune, SyncEvent, SyncMemo, SyncReport, TrackChange, Tracked, UntrackChange,
+    SUPPORTED_EXTS,
+};
 pub use transfer::{Event, Pipeline, Transfer};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -140,12 +143,20 @@ fn is_zero(v: &u8) -> bool {
 impl Meta {
     /// 生成时读哪里：存着的母版，还是原件。
     pub fn source(&self) -> Source {
-        if self.master.is_empty() { Source::Original } else { Source::Stored }
+        if self.master.is_empty() {
+            Source::Original
+        } else {
+            Source::Stored
+        }
     }
 
     /// 内容的格式（小写扩展名）：存着的母版看母版文件名，否则是原件格式。
     pub fn content_format(&self) -> &str {
-        if self.master.is_empty() { &self.source_format } else { self.master.rsplit_once('.').map_or("", |(_, e)| e) }
+        if self.master.is_empty() {
+            &self.source_format
+        } else {
+            self.master.rsplit_once('.').map_or("", |(_, e)| e)
+        }
     }
 
     /// 内容格式现在还支持生成（EPUB、CBZ）。早期版本收过的 MOBI/AZW3/FB2/PDF 等不再支持：条目保留，生成时跳过。
@@ -155,7 +166,11 @@ impl Meta {
 
     /// 判断产物是否过期用的内容哈希。
     fn content_sha(&self) -> &str {
-        if self.master.is_empty() { &self.source_sha256 } else { &self.master_sha256 }
+        if self.master.is_empty() {
+            &self.source_sha256
+        } else {
+            &self.master_sha256
+        }
     }
 }
 
@@ -228,13 +243,21 @@ pub(crate) const NOT_UTF8: &str = "文件名不是 UTF-8，请改名";
 pub(crate) const BUSY: &str = "文件正在写入";
 
 pub(crate) fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// 文件的大小和修改时间（纳秒）。
 pub(crate) fn file_stat(path: &Path) -> Option<(u64, u64)> {
     let md = std::fs::metadata(path).ok()?;
-    let mtime = md.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos() as u64;
+    let mtime = md
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as u64;
     Some((md.len(), mtime))
 }
 
@@ -249,13 +272,19 @@ struct EpubInfo {
 
 /// EPUB 的文字条目（图片条目只记名字、不读内容，大漫画不整本解压）：入库检查和漫画判定共用。
 fn epub_text_entries(file: std::fs::File) -> Result<Vec<bookconv::epubzip::Entry>, String> {
-    let mut zip = bookconv::zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
+    let mut zip =
+        bookconv::zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|e| e.to_string())?;
     Ok(bookconv::epubzip::read_skeleton(&mut zip)?.entries)
 }
 
 impl EpubInfo {
     fn read(file: std::fs::File) -> Result<EpubInfo, String> {
-        let mut info = EpubInfo { title: String::new(), authors: Vec::new(), drm: None, comic: false };
+        let mut info = EpubInfo {
+            title: String::new(),
+            authors: Vec::new(),
+            drm: None,
+            comic: false,
+        };
         let bad = |e: String| format!("不是有效的 EPUB（{e}）");
         let entries = &epub_text_entries(file).map_err(bad)?;
         if entries.iter().any(|e| e.name == "META-INF/rights.xml") {
@@ -284,7 +313,10 @@ pub fn rule_versions() -> Vec<(&'static str, String)> {
     vec![
         ("优化", bookconv::optimize::OPTIMIZE_VERSION.to_string()),
         ("漫画优化", bookconv::optimize::COMIC_VERSION.to_string()),
-        ("掌阅统一规则", bookconv::wash::KINDLE_RULES_VERSION.to_string()),
+        (
+            "掌阅统一规则",
+            bookconv::wash::KINDLE_RULES_VERSION.to_string(),
+        ),
         ("CBZ 转换", bookconv::convert::CONVERT_VERSION.to_string()),
         ("补元数据", bookconv::opfmeta::VERSION.to_string()),
         ("KFX 写出器", kfx::write::WRITER_VERSION.to_string()),
@@ -299,7 +331,12 @@ pub fn unsupported(format: &str) -> String {
 }
 
 /// 要转换才能用的原件格式（CBZ）→ EPUB（与设备无关），写进文件 `out`（逐页流式写，不把整本读进内存）。EPUB 不走这里。
-pub(crate) fn convert_to_epub(format: &str, data: impl std::io::Read + std::io::Seek, title: &str, out: &std::path::Path) -> Result<(), String> {
+pub(crate) fn convert_to_epub(
+    format: &str,
+    data: impl std::io::Read + std::io::Seek,
+    title: &str,
+    out: &std::path::Path,
+) -> Result<(), String> {
     match format {
         "cbz" => bookconv::convert::cbz::cbz_to_epub_file(data, title, out),
         _ => Err(unsupported(format)),
@@ -312,16 +349,26 @@ impl Library {
         if let Some(d) = std::env::var_os("BOOKLIB_DIR").filter(|d| !d.is_empty()) {
             return PathBuf::from(d);
         }
-        let data = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"));
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share")
+            });
         data.join("booklib")
     }
 
     /// 打开（没有就建）书库。设备 profile = 内置的，加上书库 `profiles/` 目录里的（同 id 覆盖内置）。
     pub fn open(root: impl Into<PathBuf>) -> Result<Library, String> {
         let root = root.into();
-        std::fs::create_dir_all(root.join("masters")).map_err(|e| format!("{}: {e}", root.display()))?;
+        std::fs::create_dir_all(root.join("masters"))
+            .map_err(|e| format!("{}: {e}", root.display()))?;
         let custom = root.join("profiles");
-        let registry = if custom.is_dir() { Registry::with_dir(&custom)? } else { Registry::builtin().clone() };
+        let registry = if custom.is_dir() {
+            Registry::with_dir(&custom)?
+        } else {
+            Registry::builtin().clone()
+        };
         Ok(Library {
             root,
             registry,
@@ -417,7 +464,11 @@ impl Library {
             fsutil::clean_tmp(&masters.join(id));
         }
         fsutil::clean_tmp(&self.root.join("output-state"));
-        for dev in std::fs::read_dir(self.root.join("output")).into_iter().flatten().flatten() {
+        for dev in std::fs::read_dir(self.root.join("output"))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             if dev.file_type().is_ok_and(|t| t.is_dir()) {
                 fsutil::clean_tmp(&dev.path());
             }
@@ -436,5 +487,4 @@ impl Library {
     pub fn offline(&self) -> bool {
         self.net.get().is_some_and(net::Net::offline)
     }
-
 }

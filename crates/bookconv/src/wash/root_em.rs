@@ -17,11 +17,18 @@ use crate::kindle_model::{self as km, Chapter};
 /// 差多少算一样（根 em）。
 const EPS: f64 = 0.005;
 
-pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>, em_root: bool, em_px: Option<f64>) {
+pub(super) fn apply(
+    entries: &mut [Entry],
+    rep: &mut WashReport,
+    media: Option<&MediaEnv>,
+    em_root: bool,
+    em_px: Option<f64>,
+) {
     if !em_root {
         return;
     }
-    let (chapters, fixed) = super::scan_chapters(entries, media, |e, css| fix(e, media, css, em_px));
+    let (chapters, fixed) =
+        super::scan_chapters(entries, media, |e, css| fix(e, media, css, em_px));
     for (i, f) in chapters.into_iter().zip(fixed) {
         if let Some((data, n)) = f {
             entries[i].data = data;
@@ -32,7 +39,11 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
 
 /// 写的数和单位：`1.5em` → (1.5, "em")；不是一个长度的 `None`。
 fn number_unit(v: &str) -> Option<(f64, String)> {
-    let v = v.trim().trim_end_matches("!important").trim().to_ascii_lowercase();
+    let v = v
+        .trim()
+        .trim_end_matches("!important")
+        .trim()
+        .to_ascii_lowercase();
     let split = v.find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+')))?;
     let n: f64 = v[..split].parse().ok()?;
     Some((n, v[split..].to_string()))
@@ -68,18 +79,34 @@ fn plan(ch: &Chapter, em_px: Option<f64>) -> Vec<(usize, Vec<String>)> {
     let mut in_heading: Vec<bool> = Vec::with_capacity(ch.els.len());
     for (i, el) in ch.els.iter().enumerate() {
         let tag = km::reader_tag(&ch.el(i));
-        let h = matches!(tag.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") || el.parent.is_some_and(|p| in_heading[p]);
+        let h = matches!(tag.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+            || el.parent.is_some_and(|p| in_heading[p]);
         in_heading.push(h);
         if h || el.hidden {
             continue;
         }
         let fs = el.comp.font_size;
         let mut ds = Vec::new();
-        if el.decls.get("font-size").and_then(|v| font_on_move(v, em_px)).is_some_and(|m| (m - fs).abs() > EPS) {
+        if el
+            .decls
+            .get("font-size")
+            .and_then(|v| font_on_move(v, em_px))
+            .is_some_and(|m| (m - fs).abs() > EPS)
+        {
             ds.push(format!("font-size:{}em", fmt(fs)));
         }
         if (fs - 1.0).abs() > EPS {
-            for prop in ["margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top", "padding-right", "padding-bottom", "padding-left", "text-indent"] {
+            for prop in [
+                "margin-top",
+                "margin-right",
+                "margin-bottom",
+                "margin-left",
+                "padding-top",
+                "padding-right",
+                "padding-bottom",
+                "padding-left",
+                "text-indent",
+            ] {
                 if let Some((n, unit)) = el.decls.get(prop).and_then(|v| number_unit(v)) {
                     if unit == "em" && n != 0.0 {
                         ds.push(format!("{prop}:{}em", fmt(n * fs)));
@@ -94,7 +121,12 @@ fn plan(ch: &Chapter, em_px: Option<f64>) -> Vec<(usize, Vec<String>)> {
     out
 }
 
-fn fix(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>, em_px: Option<f64>) -> Option<(Vec<u8>, usize)> {
+fn fix(
+    e: &Entry,
+    media: Option<&MediaEnv>,
+    css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>,
+    em_px: Option<f64>,
+) -> Option<(Vec<u8>, usize)> {
     let text = std::str::from_utf8(&e.data).ok()?;
     let ch = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags)?;
     let todo = plan(&ch, em_px);
@@ -103,11 +135,21 @@ fn fix(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<c
         return None;
     }
     let (bs, be) = html::body_range(text)?;
-    let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
+    let starts: Vec<html::Tag> = html::tags_in(text, bs, be)
+        .filter(|t| t.is_start())
+        .collect();
     let mut edits = Vec::new();
     let mut n = 0;
     let body_tag = html::tags(text).find(|t| t.is_start() && t.is("body"));
-    let todo = body_tag.iter().zip(body).map(|(t, d)| (*t, vec![d])).chain(todo.into_iter().filter_map(|(i, ds)| Some((*starts.get(i)?, ds)))).collect::<Vec<_>>();
+    let todo = body_tag
+        .iter()
+        .zip(body)
+        .map(|(t, d)| (*t, vec![d]))
+        .chain(
+            todo.into_iter()
+                .filter_map(|(i, ds)| Some((*starts.get(i)?, ds))),
+        )
+        .collect::<Vec<_>>();
     for (t, ds) in todo {
         let tag = &text[t.start..t.end];
         let add: String = ds.iter().map(|d| format!("{d};")).collect();
@@ -151,6 +193,8 @@ mod tests {
         // `<body>` 上写 px 的（《狼厅》）
         let mut b = book("<p>甲</p>", "body{font-size:16px;}");
         apply(&mut b, &mut WashReport::default(), None, true, Some(37.8));
-        assert!(String::from_utf8(b[2].data.clone()).unwrap().contains(r#"<body style="font-size:1em;"><p>甲</p>"#));
+        assert!(String::from_utf8(b[2].data.clone())
+            .unwrap()
+            .contains(r#"<body style="font-size:1em;"><p>甲</p>"#));
     }
 }

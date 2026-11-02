@@ -27,7 +27,9 @@ impl Hit {
         format!("https://novel.qq.com/detail/{}", self.id)
     }
     pub(crate) fn label(&self) -> String {
-        format!("QQ阅读 {} {}", self.title, self.author).trim().to_string()
+        format!("QQ阅读 {} {}", self.title, self.author)
+            .trim()
+            .to_string()
     }
 }
 
@@ -42,21 +44,35 @@ impl BookSource for QqRead {
 
     /// 先搜书名，搜不到再搜「书名 作者」（关键词模糊匹配，带上作者常常反而搜不到）。
     fn queries(&self, title: &str, authors: &[String]) -> Vec<String> {
-        std::iter::once(title.to_string()).chain(crate::matching::author_for_query(authors).map(|a| format!("{title} {a}"))).collect()
+        std::iter::once(title.to_string())
+            .chain(crate::matching::author_for_query(authors).map(|a| format!("{title} {a}")))
+            .collect()
     }
 
     fn search_url(&self, q: &str) -> String {
-        format!("https://novel.qq.com/api/search?keywords={}&pageIndex=1&pageSize=10", enc(q))
+        format!(
+            "https://novel.qq.com/api/search?keywords={}&pageIndex=1&pageSize=10",
+            enc(q)
+        )
     }
 
     /// `code` 不是 0 算出错（被拦等）。
-    fn matching_hits(&self, v: &serde_json::Value, nt: &str, want: &[String]) -> Result<Vec<Hit>, String> {
+    fn matching_hits(
+        &self,
+        v: &serde_json::Value,
+        nt: &str,
+        want: &[String],
+    ) -> Result<Vec<Hit>, String> {
         // 404「不在关键词库中」就是没有这本书，不算出错（《ABC疑案》以前报成网络出错）
         if v["code"].as_i64() == Some(404) {
             return Ok(Vec::new());
         }
         if v["code"].as_i64() != Some(0) {
-            return Err(format!("QQ 阅读回 code {}（{}）", v["code"], v["msg"].as_str().unwrap_or("")));
+            return Err(format!(
+                "QQ 阅读回 code {}（{}）",
+                v["code"],
+                v["msg"].as_str().unwrap_or("")
+            ));
         }
         Ok(matching_hits(v, nt, want))
     }
@@ -74,10 +90,23 @@ impl BookSource for QqRead {
     }
 
     /// 封面用的那个条目的简介、分类（当标签，去掉作者名）。
-    fn info(&self, _net: &Net, hits: &[Hit], chosen: usize, authors: &[String], _translators: &[String]) -> Option<BookInfo> {
+    fn info(
+        &self,
+        _net: &Net,
+        hits: &[Hit],
+        chosen: usize,
+        authors: &[String],
+        _translators: &[String],
+    ) -> Option<BookInfo> {
         let h = hits.get(chosen)?;
         let subjects = tags_without_authors(h.categories.iter(), authors.iter());
-        Some(BookInfo { source: format!("QQ阅读 {}", h.url()), title: h.title.clone(), description: h.intro.clone(), subjects, ..Default::default() })
+        Some(BookInfo {
+            source: format!("QQ阅读 {}", h.url()),
+            title: h.title.clone(),
+            description: h.intro.clone(),
+            subjects,
+            ..Default::default()
+        })
     }
 }
 
@@ -93,7 +122,13 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want: &[String]) -> Vec<Hit> {
         }
         let mut categories: Vec<String> = Vec::new();
         for c in b["categories"].as_array().into_iter().flatten() {
-            for name in c["name"].as_str().unwrap_or("").split('/').map(str::trim).filter(|n| !n.is_empty() && !NOT_TAGS.contains(n)) {
+            for name in c["name"]
+                .as_str()
+                .unwrap_or("")
+                .split('/')
+                .map(str::trim)
+                .filter(|n| !n.is_empty() && !NOT_TAGS.contains(n))
+            {
                 if !categories.iter().any(|x| x == name) {
                     categories.push(name.to_string());
                 }
@@ -101,18 +136,31 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want: &[String]) -> Vec<Hit> {
         }
         // 封面网址有的是 http：图片服务器两种都认，统一用 https
         let cover = s("cover");
-        let cover = cover.strip_prefix("http://").map_or(cover.clone(), |r| format!("https://{r}"));
-        out.push(Hit { id, title, author, intro: s("intro"), categories, cover });
+        let cover = cover
+            .strip_prefix("http://")
+            .map_or(cover.clone(), |r| format!("https://{r}"));
+        out.push(Hit {
+            id,
+            title,
+            author,
+            intro: s("intro"),
+            categories,
+            cover,
+        });
     }
     out
 }
 
 /// 头几个对得上的条目里第一张像封面的图。返回（条目下标, 图片, 扩展名）。
 fn first_cover(net: &Net, hits: &[Hit]) -> Option<(usize, Vec<u8>, &'static str)> {
-    hits.iter().enumerate().take(3).filter(|(_, h)| !h.cover.is_empty()).find_map(|(i, h)| {
-        let bytes = net.fetch(&h.cover).ok()?;
-        crate::cover::plausible_cover(&bytes).map(|ext| (i, bytes, ext))
-    })
+    hits.iter()
+        .enumerate()
+        .take(3)
+        .filter(|(_, h)| !h.cover.is_empty())
+        .find_map(|(i, h)| {
+            let bytes = net.fetch(&h.cover).ok()?;
+            crate::cover::plausible_cover(&bytes).map(|ext| (i, bytes, ext))
+        })
 }
 
 #[cfg(test)]
@@ -135,10 +183,20 @@ mod tests {
         assert_eq!(hits.len(), 1, "{hits:?}");
         let h = &hits[0];
         assert_eq!((h.id, h.intro.as_str()), (1056370737, "这座城市病了。"));
-        assert_eq!(h.categories, ["小说", "侦探", "悬疑", "推理"], "频道名「出版」不算，「侦探/悬疑/推理」拆开");
-        assert_eq!(h.cover, "https://ccstatic-1252317822.file.myqcloud.com/a.JPEG");
+        assert_eq!(
+            h.categories,
+            ["小说", "侦探", "悬疑", "推理"],
+            "频道名「出版」不算，「侦探/悬疑/推理」拆开"
+        );
+        assert_eq!(
+            h.cover,
+            "https://ccstatic-1252317822.file.myqcloud.com/a.JPEG"
+        );
         assert_eq!(h.url(), "https://novel.qq.com/detail/1056370737");
-        assert!(matching_hits(&v, &norm_s("疯探"), &[]).len() == 2, "没写作者时书名完全相同就算");
+        assert!(
+            matching_hits(&v, &norm_s("疯探"), &[]).len() == 2,
+            "没写作者时书名完全相同就算"
+        );
         assert!(matching_hits(&serde_json::json!({"code":0,"data":null}), "疯探", &[]).is_empty());
     }
 }

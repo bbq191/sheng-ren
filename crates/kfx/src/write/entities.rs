@@ -32,11 +32,23 @@ fn base32(mut n: u64, len: usize) -> String {
 
 /// 实体头：样本里都是 `{$410: 0, $411: 0}`（不压缩、没有 DRM）。
 fn entity_header() -> Vec<Item> {
-    vec![Item::Bvm, Item::Value(Value::Struct(vec![(SID_COMPRESSION, Value::Int(0)), (SID_DRM_SCHEME, Value::Int(0))]))]
+    vec![
+        Item::Bvm,
+        Item::Value(Value::Struct(vec![
+            (SID_COMPRESSION, Value::Int(0)),
+            (SID_DRM_SCHEME, Value::Int(0)),
+        ])),
+    ]
 }
 
 pub(super) fn ent(id: u32, ty: u32, v: Value) -> Entity {
-    Entity { id, ty, version: 1, header: entity_header(), body: Body::Ion(vec![Item::Bvm, Item::Value(v)]) }
+    Entity {
+        id,
+        ty,
+        version: 1,
+        header: entity_header(),
+        body: Body::Ion(vec![Item::Bvm, Item::Value(v)]),
+    }
 }
 
 /// `$264` 的写法：升序 id，连续的写成 `[起点, 个数]`。
@@ -51,7 +63,10 @@ pub(super) fn compress_ids(mut ids: Vec<i64>) -> Value {
             j += 1;
         }
         if j > i {
-            out.push(Value::List(vec![Value::Int(ids[i]), Value::Int((j - i + 1) as i64)]));
+            out.push(Value::List(vec![
+                Value::Int(ids[i]),
+                Value::Int((j - i + 1) as i64),
+            ]));
         } else {
             out.push(Value::Int(ids[i]));
         }
@@ -69,7 +84,11 @@ pub(super) fn pid_map(order: &[(i64, usize, usize)]) -> Vec<Value> {
         let adv = prev.map_or(0, |p| p.1) as i64;
         match prev {
             Some((pe, _)) if eid == pe + 1 && off == 0 => out.push(Value::Int(adv)),
-            _ if off > 0 => out.push(Value::List(vec![Value::Int(adv), Value::Int(eid), Value::Int(off as i64)])),
+            _ if off > 0 => out.push(Value::List(vec![
+                Value::Int(adv),
+                Value::Int(eid),
+                Value::Int(off as i64),
+            ])),
             _ => out.push(Value::List(vec![Value::Int(adv), Value::Int(eid)])),
         }
         prev = Some((eid, len));
@@ -89,7 +108,10 @@ pub(super) fn style_entities(b: &mut Builder, entities: &mut Vec<Entity>) {
 
 /// 要嵌入的字体：样式里用到、书里有 `@font-face` 和字体文件的（正文、批注的字体优化器已经去掉，不会出现在这里）。
 /// 字体字节从书里搬出来（写出器只在这里用到），同一个文件给了几个字体名的，前面的复制、最后一个搬走。
-pub(super) fn take_fonts(book: &mut Loaded, b: &Builder) -> Vec<(String, crate::css::FontFace, Vec<u8>)> {
+pub(super) fn take_fonts(
+    book: &mut Loaded,
+    b: &Builder,
+) -> Vec<(String, crate::css::FontFace, Vec<u8>)> {
     let mut faces: HashMap<String, crate::css::FontFace> = HashMap::new();
     for (path, text) in &book.css {
         for f in crate::css::font_faces(text, path) {
@@ -102,14 +124,21 @@ pub(super) fn take_fonts(book: &mut Loaded, b: &Builder) -> Vec<(String, crate::
         .iter()
         .filter_map(|f| {
             let face = faces.get(&f.to_lowercase())?;
-            book.fonts.iter().any(|(p, _)| *p == face.path).then(|| (f.clone(), face.clone()))
+            book.fonts
+                .iter()
+                .any(|(p, _)| *p == face.path)
+                .then(|| (f.clone(), face.clone()))
         })
         .collect();
     let mut files: HashMap<String, Vec<u8>> = std::mem::take(&mut book.fonts).into_iter().collect();
     let mut out = Vec::with_capacity(wanted.len());
     for (i, (family, face)) in wanted.iter().enumerate() {
         let used_later = wanted[i + 1..].iter().any(|(_, f)| f.path == face.path);
-        let bytes = if used_later { files.get(&face.path).cloned() } else { files.remove(&face.path) };
+        let bytes = if used_later {
+            files.get(&face.path).cloned()
+        } else {
+            files.remove(&face.path)
+        };
         out.push((family.clone(), face.clone(), bytes.unwrap_or_default()));
     }
     out
@@ -118,26 +147,58 @@ pub(super) fn take_fonts(book: &mut Loaded, b: &Builder) -> Vec<(String, crate::
 /// 阅读顺序（`$169`）：全部版面按书的顺序。阅读顺序实体和文档数据里各写一份。
 fn reading_orders(sections: &[SectionOut]) -> Value {
     let order_list = Value::List(sections.iter().map(|s| Value::Symbol(s.name)).collect());
-    Value::List(vec![Value::Struct(vec![(READING_ORDER_NAME, Value::Symbol(DEFAULT_READING_ORDER)), (SECTIONS, order_list)])])
+    Value::List(vec![Value::Struct(vec![
+        (READING_ORDER_NAME, Value::Symbol(DEFAULT_READING_ORDER)),
+        (SECTIONS, order_list),
+    ])])
 }
 
 /// 阅读顺序、各版面的节点、位置范围、位置映射（`$609`）。
 pub(super) fn position_entities(sections: &mut [SectionOut], entities: &mut Vec<Entity>) {
-    entities.push(ent(NO_NAME, T_READING_ORDERS, Value::Struct(vec![(READING_ORDERS, reading_orders(sections))])));
+    entities.push(ent(
+        NO_NAME,
+        T_READING_ORDERS,
+        Value::Struct(vec![(READING_ORDERS, reading_orders(sections))]),
+    ));
     entities.push(ent(
         NO_NAME,
         T_SECTION_EIDS,
-        Value::List(sections.iter_mut().map(|s| Value::Struct(vec![(SECTION_REF, Value::Symbol(s.name)), (LIST, compress_ids(std::mem::take(&mut s.eids)))])).collect()),
+        Value::List(
+            sections
+                .iter_mut()
+                .map(|s| {
+                    Value::Struct(vec![
+                        (SECTION_REF, Value::Symbol(s.name)),
+                        (LIST, compress_ids(std::mem::take(&mut s.eids))),
+                    ])
+                })
+                .collect(),
+        ),
     ));
     let mut pos = 0usize;
     let mut ranges = Vec::new();
     for s in sections.iter() {
-        ranges.push(Value::Struct(vec![(SECTION_REF, Value::Symbol(s.name)), (START, Value::Int(pos as i64)), (LENGTH, Value::Int(s.length as i64))]));
+        ranges.push(Value::Struct(vec![
+            (SECTION_REF, Value::Symbol(s.name)),
+            (START, Value::Int(pos as i64)),
+            (LENGTH, Value::Int(s.length as i64)),
+        ]));
         pos += s.length;
     }
-    entities.push(ent(NO_NAME, T_SECTION_RANGES, Value::Struct(vec![(LIST, Value::List(ranges))])));
+    entities.push(ent(
+        NO_NAME,
+        T_SECTION_RANGES,
+        Value::Struct(vec![(LIST, Value::List(ranges))]),
+    ));
     for s in sections.iter_mut() {
-        entities.push(ent(s.name, T_SECTION_PID_MAP, Value::Struct(vec![(SECTION_REF, Value::Symbol(s.name)), (LIST, Value::List(std::mem::take(&mut s.pid_map)))])));
+        entities.push(ent(
+            s.name,
+            T_SECTION_PID_MAP,
+            Value::Struct(vec![
+                (SECTION_REF, Value::Symbol(s.name)),
+                (LIST, Value::List(std::mem::take(&mut s.pid_map))),
+            ]),
+        ));
     }
 }
 
@@ -153,7 +214,10 @@ pub(super) fn navigation_entities(
     // 目录：锚点 + 导航。
     let mut toc_stack: Vec<(u32, Vec<Value>)> = vec![(0, Vec::new())];
     for t in &book.toc {
-        let Some(&(eid, off)) = id_map.get(&(t.path.clone(), t.frag.clone())).or_else(|| id_map.get(&(t.path.clone(), String::new()))) else {
+        let Some(&(eid, off)) = id_map
+            .get(&(t.path.clone(), t.frag.clone()))
+            .or_else(|| id_map.get(&(t.path.clone(), String::new())))
+        else {
             b.warnings.push(format!("目录项找不到位置：{}", t.label));
             continue;
         };
@@ -162,7 +226,10 @@ pub(super) fn navigation_entities(
             close_level(&mut toc_stack);
         }
         b.anchor((t.path.clone(), t.frag.clone()));
-        let entry = Value::Struct(vec![nav_label(t.label.clone()), (NAV_TARGET, position(eid, off))]);
+        let entry = Value::Struct(vec![
+            nav_label(t.label.clone()),
+            (NAV_TARGET, position(eid, off)),
+        ]);
         if let Some(last) = toc_stack.last_mut() {
             last.1.push(entry);
         }
@@ -188,11 +255,23 @@ pub(super) fn navigation_entities(
     // 锚点（链接、目录的目标）。找不到目标的指向目标文件开头，文件也找不到就指向书的开头。之后不再登记锚点。
     let book_start = (sections[0].first_eid, 0usize);
     for (key, an) in std::mem::take(&mut b.anchors) {
-        let pos = id_map.get(&key).or_else(|| id_map.get(&(key.0.clone(), String::new()))).copied().unwrap_or_else(|| {
-            b.warnings.push(format!("链接目标找不到：{}#{}", key.0, key.1));
-            book_start
-        });
-        entities.push(ent(an, T_ANCHOR, Value::Struct(vec![(ANCHOR_NAME, Value::Symbol(an)), (ANCHOR_POSITION, position(pos.0, pos.1))])));
+        let pos = id_map
+            .get(&key)
+            .or_else(|| id_map.get(&(key.0.clone(), String::new())))
+            .copied()
+            .unwrap_or_else(|| {
+                b.warnings
+                    .push(format!("链接目标找不到：{}#{}", key.0, key.1));
+                book_start
+            });
+        entities.push(ent(
+            an,
+            T_ANCHOR,
+            Value::Struct(vec![
+                (ANCHOR_NAME, Value::Symbol(an)),
+                (ANCHOR_POSITION, position(pos.0, pos.1)),
+            ]),
+        ));
     }
     let mut nav_names = Vec::new();
     // 标题导航：每个标题级别一组（样本里按级别第一次出现的顺序排）。
@@ -212,16 +291,35 @@ pub(super) fn navigation_entities(
         let groups: Vec<Value> = levels
             .iter()
             .map(|&l| {
-                let eids: Vec<i64> = b.headings.iter().filter(|(hl, _)| *hl == l).map(|h| h.1).collect();
-                let mut f = vec![(NAV_LANDMARK_TYPE, Value::Symbol(HEADING_LEVEL_1 + u32::from(l) - 1))];
+                let eids: Vec<i64> = b
+                    .headings
+                    .iter()
+                    .filter(|(hl, _)| *hl == l)
+                    .map(|h| h.1)
+                    .collect();
+                let mut f = vec![(
+                    NAV_LANDMARK_TYPE,
+                    Value::Symbol(HEADING_LEVEL_1 + u32::from(l) - 1),
+                )];
                 f.extend(unit(eids[0]));
-                f.push((NAV_ENTRIES, Value::List(eids.iter().map(|&e| Value::Struct(unit(e))).collect())));
+                f.push((
+                    NAV_ENTRIES,
+                    Value::List(eids.iter().map(|&e| Value::Struct(unit(e))).collect()),
+                ));
                 Value::Struct(f)
             })
             .collect();
         let n = b.syms.sym("nav-headings");
         nav_names.push(Value::Symbol(n));
-        entities.push(ent(n, T_NAV_CONTAINER, Value::Struct(vec![(NAV_TYPE, Value::Symbol(NAV_TYPE_HEADINGS)), (NAV_NAME, Value::Symbol(n)), (NAV_ENTRIES, Value::List(groups))])));
+        entities.push(ent(
+            n,
+            T_NAV_CONTAINER,
+            Value::Struct(vec![
+                (NAV_TYPE, Value::Symbol(NAV_TYPE_HEADINGS)),
+                (NAV_NAME, Value::Symbol(n)),
+                (NAV_ENTRIES, Value::List(groups)),
+            ]),
+        ));
     }
     if let Some(ct) = cover_tmpl {
         let n = b.syms.sym("nav-landmarks");
@@ -248,14 +346,25 @@ pub(super) fn navigation_entities(
     entities.push(ent(
         toc_name,
         T_NAV_CONTAINER,
-        Value::Struct(vec![(NAV_TYPE, Value::Symbol(NAV_TYPE_TOC)), (NAV_NAME, Value::Symbol(toc_name)), (NAV_ENTRIES, Value::List(toc_entries))]),
+        Value::Struct(vec![
+            (NAV_TYPE, Value::Symbol(NAV_TYPE_TOC)),
+            (NAV_NAME, Value::Symbol(toc_name)),
+            (NAV_ENTRIES, Value::List(toc_entries)),
+        ]),
     ));
     entities.push(ent(
         NO_NAME,
         T_NAV_ROOTS,
-        Value::List(vec![Value::Struct(vec![(READING_ORDER_NAME, Value::Symbol(DEFAULT_READING_ORDER)), (NAV_CONTAINERS, Value::List(nav_names))])]),
+        Value::List(vec![Value::Struct(vec![
+            (READING_ORDER_NAME, Value::Symbol(DEFAULT_READING_ORDER)),
+            (NAV_CONTAINERS, Value::List(nav_names)),
+        ])]),
     ));
-    entities.push(ent(NO_NAME, T_NAV_EMPTY, Value::Struct(vec![(NAV_ENTRIES, Value::List(Vec::new()))])));
+    entities.push(ent(
+        NO_NAME,
+        T_NAV_EMPTY,
+        Value::Struct(vec![(NAV_ENTRIES, Value::List(Vec::new()))]),
+    ));
 }
 
 /// 唯一 ID 派生的 content_id（也当 ASIN 写）。
@@ -279,7 +388,9 @@ pub(super) fn metadata_entities(
     let container_id = container_id(id);
     let book_id = base32(id.rotate_left(17), 23);
     let book_lang = book_language(book);
-    let kv = |k: &str, v: Value| Value::Struct(vec![(META_KEY, Value::String(k.into())), (META_VALUE, v)]);
+    let kv = |k: &str, v: Value| {
+        Value::Struct(vec![(META_KEY, Value::String(k.into())), (META_VALUE, v)])
+    };
     let s = |v: &str| Value::String(v.to_string());
     let mut title_meta = vec![
         kv("book_id", s(&book_id)),
@@ -299,7 +410,12 @@ pub(super) fn metadata_entities(
     if cover_res.is_some() {
         title_meta.push(kv("cover_image", s(COVER_REF)));
     }
-    let group = |name: &str, entries: Vec<Value>| Value::Struct(vec![(META_GROUP_NAME, s(name)), (META_ENTRIES, Value::List(entries))]);
+    let group = |name: &str, entries: Vec<Value>| {
+        Value::Struct(vec![
+            (META_GROUP_NAME, s(name)),
+            (META_ENTRIES, Value::List(entries)),
+        ])
+    };
     entities.push(ent(
         NO_NAME,
         T_METADATA,
@@ -309,16 +425,44 @@ pub(super) fn metadata_entities(
                 vec![
                     if fixed_canvas.is_some() {
                         // 固定版式（同 Amazon 转的测试漫画）：锁竖屏、声明固定版式
-                        let lock = book.meta.fixed_layout.iter().find(|(n, _)| *n == 124).map_or("portrait", |(_, v)| v.as_str());
-                        group("kindle_ebook_metadata", vec![kv("book_orientation_lock", s(lock))])
+                        let lock = book
+                            .meta
+                            .fixed_layout
+                            .iter()
+                            .find(|(n, _)| *n == 124)
+                            .map_or("portrait", |(_, v)| v.as_str());
+                        group(
+                            "kindle_ebook_metadata",
+                            vec![kv("book_orientation_lock", s(lock))],
+                        )
                     } else {
-                        group("kindle_ebook_metadata", vec![kv("nested_span", s("enabled")), kv("selection", s("enabled"))])
+                        group(
+                            "kindle_ebook_metadata",
+                            vec![
+                                kv("nested_span", s("enabled")),
+                                kv("selection", s("enabled")),
+                            ],
+                        )
                     },
                     group("kindle_title_metadata", title_meta),
-                    group("kindle_audit_metadata", vec![kv("creator_version", s(FILE_CREATOR_VERSION)), kv("file_creator", s("epub-to-kfx"))]),
+                    group(
+                        "kindle_audit_metadata",
+                        vec![
+                            kv("creator_version", s(FILE_CREATOR_VERSION)),
+                            kv("file_creator", s("epub-to-kfx")),
+                        ],
+                    ),
                 ]
                 .into_iter()
-                .chain(fixed_canvas.map(|_| group("kindle_capability_metadata", vec![kv("yj_fixed_layout", Value::Int(1)), kv("continuous_popup_progression", Value::Int(0))])))
+                .chain(fixed_canvas.map(|_| {
+                    group(
+                        "kindle_capability_metadata",
+                        vec![
+                            kv("yj_fixed_layout", Value::Int(1)),
+                            kv("continuous_popup_progression", Value::Int(0)),
+                        ],
+                    )
+                }))
                 .collect(),
             ),
         )]),
@@ -326,7 +470,11 @@ pub(super) fn metadata_entities(
 
     // 文档数据（照样本的值，含义还没全弄清）。
     let mut doc_data = if fixed_canvas.is_some() {
-        vec![(DOC_DIRECTION, Value::Symbol(direction)), (DOC_WRITING_MODE, Value::Symbol(WRITING_HORIZONTAL)), (DOC_FIXED, Value::Symbol(DOC_FIXED_VALUE))]
+        vec![
+            (DOC_DIRECTION, Value::Symbol(direction)),
+            (DOC_WRITING_MODE, Value::Symbol(WRITING_HORIZONTAL)),
+            (DOC_FIXED, Value::Symbol(DOC_FIXED_VALUE)),
+        ]
     } else {
         vec![
             (DOC_FIELD_112, Value::Symbol(DOC_VALUE_383)),
@@ -338,13 +486,19 @@ pub(super) fn metadata_entities(
     };
     if cover_res.is_some() {
         let aux = b.syms.sym(COVER_AUX);
-        doc_data.push((DOC_AUX, Value::Struct(vec![(DOC_AUX_NAME, Value::Symbol(aux))])));
+        doc_data.push((
+            DOC_AUX,
+            Value::Struct(vec![(DOC_AUX_NAME, Value::Symbol(aux))]),
+        ));
     }
     doc_data.push((ion::SID_MAX_ID, Value::Int(b.next_eid)));
     if fixed_canvas.is_none() {
         doc_data.push((P_LINE_HEIGHT, num(LH_EM, U_EM)));
     }
-    doc_data.extend([(DOC_FIELD_477, Value::Symbol(DOC_VALUE_56)), (READING_ORDERS, reading_orders(sections))]);
+    doc_data.extend([
+        (DOC_FIELD_477, Value::Symbol(DOC_VALUE_56)),
+        (READING_ORDERS, reading_orders(sections)),
+    ]);
     entities.push(ent(NO_NAME, T_DOCUMENT_DATA, Value::Struct(doc_data)));
 }
 
@@ -355,7 +509,11 @@ pub(super) fn issue_date(date: &str) -> String {
     fn digits(s: Option<&str>) -> Option<&str> {
         s.filter(|s| s.bytes().all(|c| c.is_ascii_digit()))
     }
-    let (Some(y), m, day) = (digits(d.get(..4)), digits(d.get(5..7)), digits(d.get(8..10))) else {
+    let (Some(y), m, day) = (
+        digits(d.get(..4)),
+        digits(d.get(5..7)),
+        digits(d.get(8..10)),
+    ) else {
         return "2000-01-01".to_string();
     };
     let sep = |i: usize| d.as_bytes().get(i) == Some(&b'-');
@@ -379,7 +537,11 @@ pub(super) fn resource_entities(
     // 锚点也出空白页（2026-10-06 真机，42 本测试书对照，见 docs/kfx.md）。`syms` 是资源阶段的符号表，保证了这个顺序。
     // 字节实体名、资源路径：图片在前、字体在后，一起按组分配符号（资源路径＝字节实体 + 9，见 [`ResourceSymbols::alloc_resources`]）。
     let n_images = res.len();
-    let mut raws: Vec<(String, String)> = res.iter().enumerate().map(|(i, r)| (raw_name(i, &r.name, cover_res), r.location.clone())).collect();
+    let mut raws: Vec<(String, String)> = res
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (raw_name(i, &r.name, cover_res), r.location.clone()))
+        .collect();
     raws.extend((0..fonts.len()).map(|i| (format!("font{i}-ad"), format!("resource/font{i}"))));
     let raw_sids = syms.alloc_resources(&raws)?;
     for (i, (family, face, bytes)) in fonts.into_iter().enumerate() {
@@ -389,14 +551,34 @@ pub(super) fn resource_entities(
             T_FONT,
             Value::Struct(vec![
                 (P_FONT_FAMILY, Value::String(family)),
-                (P_FONT_STYLE, Value::Symbol(if face.italic { STYLE_ITALIC } else { FONT_NORMAL })),
-                (P_FONT_WEIGHT, Value::Symbol(if face.bold { WEIGHT_BOLD } else { WEIGHT_NORMAL })),
+                (
+                    P_FONT_STYLE,
+                    Value::Symbol(if face.italic {
+                        STYLE_ITALIC
+                    } else {
+                        FONT_NORMAL
+                    }),
+                ),
+                (
+                    P_FONT_WEIGHT,
+                    Value::Symbol(if face.bold {
+                        WEIGHT_BOLD
+                    } else {
+                        WEIGHT_NORMAL
+                    }),
+                ),
                 (P_FONT_STRETCH, Value::Symbol(FONT_NORMAL)),
                 (RES_LOCATION, Value::String(loc.clone())),
             ]),
         ));
         let id = raw_sids[n_images + i];
-        entities.push(Entity { id, ty: T_RAW_FONT, version: 1, header: entity_header(), body: Body::Raw(bytes) });
+        entities.push(Entity {
+            id,
+            ty: T_RAW_FONT,
+            version: 1,
+            header: entity_header(),
+            body: Body::Raw(bytes),
+        });
     }
     for (i, &raw) in raw_sids.iter().enumerate().take(n_images) {
         // 资源实体的名字在版面阶段（或封面最先）登记过
@@ -415,7 +597,13 @@ pub(super) fn resource_entities(
             ]),
         ));
         let bytes = res.take_bytes(i);
-        entities.push(Entity { id: raw, ty: T_RAW_MEDIA, version: 1, header: entity_header(), body: Body::Raw(bytes) });
+        entities.push(Entity {
+            id: raw,
+            ty: T_RAW_MEDIA,
+            version: 1,
+            header: entity_header(),
+            body: Body::Raw(bytes),
+        });
     }
     Ok(())
 }
@@ -424,11 +612,22 @@ pub(super) fn resource_entities(
 /// （样本里元数据的 `cover_image` 一律写 `e6`，常常指到别的插图甚至锚点，缩略图照样对；
 /// 把这个实体改名缩略图就没了，2026-10-05 真机）。
 fn raw_name(i: usize, name: &str, cover_res: Option<usize>) -> String {
-    if Some(i) == cover_res { format!("{COVER_AUX}-ad") } else { format!("{name}-ad") }
+    if Some(i) == cover_res {
+        format!("{COVER_AUX}-ad")
+    } else {
+        format!("{name}-ad")
+    }
 }
 
 /// 实体按类型排序、加上清单（`$419`），连同符号表、能力表写成容器。
-pub(super) fn finish(syms: &ResourceSymbols, res: &ResourceStore, sections: &[SectionOut], mut entities: Vec<Entity>, cover_res: Option<usize>, id: u64) -> Result<Vec<u8>, String> {
+pub(super) fn finish(
+    syms: &ResourceSymbols,
+    res: &ResourceStore,
+    sections: &[SectionOut],
+    mut entities: Vec<Entity>,
+    cover_res: Option<usize>,
+    id: u64,
+) -> Result<Vec<u8>, String> {
     let container_id = container_id(id);
     let s = |v: &str| Value::String(v.to_string());
     // 按类型排序（和样本一样），清单放最后。
@@ -445,20 +644,34 @@ pub(super) fn finish(syms: &ResourceSymbols, res: &ResourceStore, sections: &[Se
                     names.push(v);
                 }
             }
-            deps.push(Value::Struct(vec![(EID, Value::Symbol(s.name)), (MANIFEST_DEP_LIST, Value::List(names))]));
+            deps.push(Value::Struct(vec![
+                (EID, Value::Symbol(s.name)),
+                (MANIFEST_DEP_LIST, Value::List(names)),
+            ]));
         }
     }
     for (i, r) in res.iter().enumerate() {
         deps.push(Value::Struct(vec![
             (EID, Value::Symbol(syms.require(&r.name)?)),
-            (MANIFEST_DEP_LIST, Value::List(vec![Value::Symbol(syms.require(&raw_name(i, &r.name, cover_res))?)])),
+            (
+                MANIFEST_DEP_LIST,
+                Value::List(vec![Value::Symbol(
+                    syms.require(&raw_name(i, &r.name, cover_res))?,
+                )]),
+            ),
         ]));
     }
     let all_ids = Value::List(entities.iter().map(|e| Value::Symbol(e.id)).collect());
     let manifest = Value::Annotated(
         vec![T_MANIFEST],
         Box::new(Value::Struct(vec![
-            (MANIFEST_CONTAINERS, Value::List(vec![Value::Struct(vec![(EID, s(&container_id)), (LIST, all_ids)])])),
+            (
+                MANIFEST_CONTAINERS,
+                Value::List(vec![Value::Struct(vec![
+                    (EID, s(&container_id)),
+                    (LIST, all_ids),
+                ])]),
+            ),
             (MANIFEST_DEPS, Value::List(deps)),
         ])),
     );
@@ -478,7 +691,10 @@ pub(super) fn finish(syms: &ResourceSymbols, res: &ResourceStore, sections: &[Se
                         (ion::SID_MAX_ID, Value::Int(i64::from(YJ_SYMBOLS_MAX_ID))),
                     ])]),
                 ),
-                (ion::SID_SYMBOLS, Value::List(syms.locals().iter().map(|l| s(l)).collect())),
+                (
+                    ion::SID_SYMBOLS,
+                    Value::List(syms.locals().iter().map(|l| s(l)).collect()),
+                ),
             ])),
         )),
     ];
@@ -487,8 +703,14 @@ pub(super) fn finish(syms: &ResourceSymbols, res: &ResourceStore, sections: &[Se
         Item::Value(Value::Annotated(
             vec![CAPABILITIES],
             Box::new(Value::List(vec![
-                Value::Struct(vec![(META_KEY, s("kfxgen.positionMaps")), (ion::SID_VERSION, Value::Int(2))]),
-                Value::Struct(vec![(META_KEY, s("kfxgen.pidMapWithOffset")), (ion::SID_VERSION, Value::Int(1))]),
+                Value::Struct(vec![
+                    (META_KEY, s("kfxgen.positionMaps")),
+                    (ion::SID_VERSION, Value::Int(2)),
+                ]),
+                Value::Struct(vec![
+                    (META_KEY, s("kfxgen.pidMapWithOffset")),
+                    (ion::SID_VERSION, Value::Int(1)),
+                ]),
             ])),
         )),
     ];
@@ -509,7 +731,14 @@ pub(super) fn finish(syms: &ResourceSymbols, res: &ResourceStore, sections: &[Se
         "[{{key:\"kfxgen_package_version\",value:\"epub-to-kfx {FILE_CREATOR_VERSION}\"}},{{key:\"kfxgen_payload_sha1\",value:\"{}\"}},{{key:\"kfxgen_acr\",value:\"{container_id}\"}}]",
         "0".repeat(40)
     );
-    let c = Container { version: 2, info, symtab, capabilities: caps, kfxgen: kfxgen.into_bytes(), entities };
+    let c = Container {
+        version: 2,
+        info,
+        symtab,
+        capabilities: caps,
+        kfxgen: kfxgen.into_bytes(),
+        entities,
+    };
     Ok(c.into_bytes())
 }
 
@@ -528,12 +757,18 @@ fn meta_language(book_lang: Option<&str>) -> String {
 
 /// 导航项的标签字段。
 fn nav_label(text: String) -> (u32, Value) {
-    (NAV_LABEL, Value::Struct(vec![(NAV_LABEL_TEXT, Value::String(text))]))
+    (
+        NAV_LABEL,
+        Value::Struct(vec![(NAV_LABEL_TEXT, Value::String(text))]),
+    )
 }
 
 /// 位置（目录项、锚点、导航的目标）：节点 id + 字符偏移。
 fn position(eid: i64, offset: usize) -> Value {
-    Value::Struct(vec![(EID, Value::Int(eid)), (OFFSET, Value::Int(offset as i64))])
+    Value::Struct(vec![
+        (EID, Value::Int(eid)),
+        (OFFSET, Value::Int(offset as i64)),
+    ])
 }
 
 fn close_level(stack: &mut Vec<(u32, Vec<Value>)>) {

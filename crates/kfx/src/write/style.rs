@@ -31,12 +31,19 @@ impl StyleTable {
     }
 
     /// 样式去重：返回样式名的符号，属性一样的共用一个（新的样式在 `syms` 里登记名字）。
-    pub(super) fn intern(&mut self, mut props: StyleProps, stats: &BookStats, syms: &mut SymbolAlloc) -> u32 {
+    pub(super) fn intern(
+        &mut self,
+        mut props: StyleProps,
+        stats: &BookStats,
+        syms: &mut SymbolAlloc,
+    ) -> u32 {
         // 没嵌入的正文字体、`@font-face` 声明了却没有字体文件的字体写成 `default`（Send to Kindle 同样，《绍宋》的「宋体」）：
         // 阅读器用自己的字体；以前不写，嵌入了字体的父节点下面会继承父节点的字体
         // 备选照写小写；第一个是嵌入字体时照原样（字体片段按这个名字找）
         if let Some(f) = props.font_family_mut() {
-            let (first, rest) = f.split_once(',').map_or((f.as_str(), None), |(a, b)| (a, Some(b)));
+            let (first, rest) = f
+                .split_once(',')
+                .map_or((f.as_str(), None), |(a, b)| (a, Some(b)));
             let first = if stats.default_fonts.contains(&first.to_lowercase()) {
                 FONT_DEFAULT.to_string()
             } else if stats.embedded_fonts.contains(&first.to_lowercase()) {
@@ -93,11 +100,16 @@ impl StyleTable {
         }
         let bg = c.backdrop.unwrap_or(WHITE);
         match c.color {
-            Some(col) => Some(*self.contrast_fix.entry((col, bg)).or_insert_with(|| crate::css::ensure_contrast(col, bg))),
-            None => *self
-                .contrast_default
-                .entry(bg)
-                .or_insert_with(|| (crate::css::contrast(BLACK, bg) < MIN_CONTRAST).then(|| crate::css::ensure_contrast(BLACK, bg))),
+            Some(col) => Some(
+                *self
+                    .contrast_fix
+                    .entry((col, bg))
+                    .or_insert_with(|| crate::css::ensure_contrast(col, bg)),
+            ),
+            None => *self.contrast_default.entry(bg).or_insert_with(|| {
+                (crate::css::contrast(BLACK, bg) < MIN_CONTRAST)
+                    .then(|| crate::css::ensure_contrast(BLACK, bg))
+            }),
         }
     }
 }
@@ -117,7 +129,12 @@ pub(super) struct Parent {
 
 impl Parent {
     pub(super) fn root(base_fs: f64) -> Parent {
-        Parent { weight: WEIGHT_NORMAL, color: None, avail: PAGE_WIDTH_EM, base_fs }
+        Parent {
+            weight: WEIGHT_NORMAL,
+            color: None,
+            avail: PAGE_WIDTH_EM,
+            base_fs,
+        }
     }
 }
 
@@ -130,7 +147,12 @@ fn shadow_value(s: &crate::css::Shadow, text: Option<u32>) -> Value {
         Len::Percent(n) => num(n, U_PERCENT),
     };
     let col = s.color.or(text).unwrap_or(BLACK);
-    Value::Struct(vec![(SHADOW_COLOR, Value::Int(i64::from(col))), (SHADOW_X, len(s.x)), (SHADOW_Y, len(s.y)), (SHADOW_BLUR, len(s.blur))])
+    Value::Struct(vec![
+        (SHADOW_COLOR, Value::Int(i64::from(col))),
+        (SHADOW_X, len(s.x)),
+        (SHADOW_Y, len(s.y)),
+        (SHADOW_BLUR, len(s.blur)),
+    ])
 }
 
 /// 表格的缺省边框色（`#808080`，不透明）。
@@ -164,7 +186,11 @@ pub(super) fn border_props(c: &Computed) -> StyleProps {
         _ => BORDER_SOLID,
     };
     let zero = |b: &Border| matches!(b.width, BorderWidth::Pt(n) | BorderWidth::Em(n) if n == 0.0);
-    let sides: Vec<Option<&Border>> = c.border.iter().map(|b| b.as_ref().filter(|b| !zero(b))).collect();
+    let sides: Vec<Option<&Border>> = c
+        .border
+        .iter()
+        .map(|b| b.as_ref().filter(|b| !zero(b)))
+        .collect();
     let mut emit = |slot: usize, b: &Border| {
         p.symbol(P_BORDER_STYLE[slot], style(b));
         p.set(P_BORDER_WIDTH[slot], bw(b.width));
@@ -213,7 +239,12 @@ pub(super) fn inline_box_props(c: &Computed) -> StyleProps {
         Len::Pt(n) => num(n, U_PT),
         Len::Percent(n) => num(n, U_PERCENT),
     };
-    for (l, k) in [(c.margin[3], P_MARGIN_LEFT), (c.margin[1], P_MARGIN_RIGHT), (c.padding[3], P_PADDING_LEFT), (c.padding[1], P_PADDING_RIGHT)] {
+    for (l, k) in [
+        (c.margin[3], P_MARGIN_LEFT),
+        (c.margin[1], P_MARGIN_RIGHT),
+        (c.padding[3], P_PADDING_LEFT),
+        (c.padding[1], P_PADDING_RIGHT),
+    ] {
         if let Some(l) = l.filter(|l| !l.is_zero()) {
             p.set(k, v(l));
         }
@@ -254,7 +285,10 @@ pub(super) fn weight_of(c: &Computed) -> u32 {
 
 /// 近黑：三个分量都不超过 0x11（样本里见过的是纯黑和 `#111111`）。
 fn near_black(col: u32) -> bool {
-    col >> 24 == 0xFF && (col >> 16 & 0xFF) <= 0x11 && (col >> 8 & 0xFF) <= 0x11 && (col & 0xFF) <= 0x11
+    col >> 24 == 0xFF
+        && (col >> 16 & 0xFF) <= 0x11
+        && (col >> 8 & 0xFF) <= 0x11
+        && (col & 0xFF) <= 0x11
 }
 
 /// 这个节点实际显示的文字颜色（写进样式的，`None`＝阅读器缺省）。Send to Kindle 在没有背景的地方省掉近黑的文字颜色
@@ -263,7 +297,15 @@ fn near_black(col: u32) -> bool {
 /// `col` 是 [`StyleTable::text_color`] 算好的（别再算一遍）。
 pub(super) fn shown_color(col: Option<u32>, c: &Computed, parent: &Parent) -> Option<u32> {
     match col {
-        Some(col) if near_black(col) && !c.on_background && c.background.is_none() && c.bg_image.is_none() && parent.color.is_none() => None,
+        Some(col)
+            if near_black(col)
+                && !c.on_background
+                && c.background.is_none()
+                && c.bg_image.is_none()
+                && parent.color.is_none() =>
+        {
+            None
+        }
         Some(col) => Some(col),
         None => parent.color,
     }
@@ -286,8 +328,18 @@ pub(super) fn inner_width(b: &Block, avail: f64) -> f64 {
         Some(BorderWidth::Em(n)) => n * b.comp.font_size,
         None => 0.0,
     };
-    let w = avail - rem(b.margin_left) - rem(b.margin_right) - rem(b.padding_h[0]) - rem(b.padding_h[1]) - border(1) - border(3);
-    if w.is_finite() && w > 1.0 { w } else { avail }
+    let w = avail
+        - rem(b.margin_left)
+        - rem(b.margin_right)
+        - rem(b.padding_h[0])
+        - rem(b.padding_h[1])
+        - border(1)
+        - border(3);
+    if w.is_finite() && w > 1.0 {
+        w
+    } else {
+        avail
+    }
 }
 
 /// 字体、字号、粗体、斜体、颜色（块和行内区间共用）。字重、颜色只在和父节点显示的不一样时写（Send to Kindle 不写 normal 字重、
@@ -309,7 +361,11 @@ fn text_props_with(c: &Computed, parent: &Parent, col: Option<u32>) -> StyleProp
         p.string(P_FONT_FAMILY, v);
     }
     // 字号是全书正文字号的倍数，相对根而不是父节点（Send to Kindle：《疯探》0.8 的容器里 1.2em 的作者行写 0.96＝1.2/1.25）
-    let rel = if parent.base_fs > 0.0 { c.font_size / parent.base_fs } else { c.font_size };
+    let rel = if parent.base_fs > 0.0 {
+        c.font_size / parent.base_fs
+    } else {
+        c.font_size
+    };
     p.len(P_FONT_SIZE, rel, U_FONT_EM);
     let w = weight_of(c);
     if w != WEIGHT_NORMAL || parent.weight != WEIGHT_NORMAL || c.weight_declared {
@@ -321,7 +377,11 @@ fn text_props_with(c: &Computed, parent: &Parent, col: Option<u32>) -> StyleProp
     if let (Some(col), Some(_)) = (col, shown_color(col, c, parent)) {
         p.color(P_COLOR, col);
     }
-    for (on, k) in c.decoration.iter().zip([P_UNDERLINE, P_LINE_THROUGH, P_OVERLINE]) {
+    for (on, k) in c
+        .decoration
+        .iter()
+        .zip([P_UNDERLINE, P_LINE_THROUGH, P_OVERLINE])
+    {
         if *on {
             p.symbol(k, BORDER_SOLID);
         }
@@ -338,7 +398,13 @@ fn text_props_with(c: &Computed, parent: &Parent, col: Option<u32>) -> StyleProp
 impl Builder {
     /// 块的样式属性。`parent`：KFX 里的父节点（字号写成相对它的倍数，字重、颜色只在需要时写，水平长度按它的宽度换算）。
     /// `col`：本块的文字颜色（[`StyleTable::text_color`]，调用方算好）。
-    pub(super) fn block_props(&self, b: &Block, parent: &Parent, doc_lang: &Option<String>, col: Option<u32>) -> StyleProps {
+    pub(super) fn block_props(
+        &self,
+        b: &Block,
+        parent: &Parent,
+        doc_lang: &Option<String>,
+        col: Option<u32>,
+    ) -> StyleProps {
         let c = &b.comp;
         let fs = c.font_size;
         if b.bare {
@@ -351,14 +417,21 @@ impl Builder {
         let mut p = text_props_with(c, parent, col);
         // 标题自己的样式带「标题」提示（Send to Kindle 同样）
         if b.heading.is_some() {
-            p.set(P_LAYOUT_HINTS, Value::List(vec![Value::Symbol(HINT_HEADING)]));
+            p.set(
+                P_LAYOUT_HINTS,
+                Value::List(vec![Value::Symbol(HINT_HEADING)]),
+            );
         }
         if let Some(l) = c.lang.as_ref().or(doc_lang.as_ref()) {
             p.string(P_LANG, l.to_ascii_lowercase());
         }
         // 容器不写对齐（Send to Kindle 同样，对齐写在里面的文字上）；写了宽度的图片写成块的对齐 `$580`（见下面图片宽度）
         let sized_image = matches!(b.kind, Kind::Image { .. }) && c.width.is_some();
-        if let (Some(a), false, false) = (c.text_align.as_deref(), matches!(b.kind, Kind::Container(_)), sized_image) {
+        if let (Some(a), false, false) = (
+            c.text_align.as_deref(),
+            matches!(b.kind, Kind::Container(_)),
+            sized_image,
+        ) {
             p.symbol(P_TEXT_ALIGN, align_symbol(a));
         }
         // 首行缩进：包含块是整页宽时照写 em，比整页窄（在有左右边距、内边距、边框的容器里）时写成包含块宽度的百分比
@@ -381,7 +454,10 @@ impl Builder {
         if c.break_all {
             p.symbol(P_WORD_BREAK, WORD_BREAK_ALL);
         }
-        match c.min_height.filter(|_| !matches!(b.kind, Kind::Image { .. })) {
+        match c
+            .min_height
+            .filter(|_| !matches!(b.kind, Kind::Image { .. }))
+        {
             Some(Len::Em(n)) => p.len(P_MIN_HEIGHT, n, U_EM),
             Some(Len::Pt(n)) => p.len(P_MIN_HEIGHT, n / PT_PER_EM / fs, U_EM),
             _ => {}
@@ -397,14 +473,31 @@ impl Builder {
         }
         // 左右外边距、内边距一律写成包含块宽度的百分比（Send to Kindle 同样：body 的 5pt → 1.302%、`list-style:none` 的 1.5em → 4.688%、
         // 《绍宋》`p.ganyan1` 的 0.5em → 1.484%、表格单元格的 0.2em → 0.375%；包含块按整页 32em 减去外层容器的左右边距、内边距、边框）
-        let horiz = |h: Horiz| num(if h.em == 0.0 { h.pct } else { (h.em + h.pct / 100.0 * avail) / avail * 100.0 }, U_PERCENT);
+        let horiz = |h: Horiz| {
+            num(
+                if h.em == 0.0 {
+                    h.pct
+                } else {
+                    (h.em + h.pct / 100.0 * avail) / avail * 100.0
+                },
+                U_PERCENT,
+            )
+        };
         if b.margin_left != Horiz::default() {
             p.set(P_MARGIN_LEFT, horiz(b.margin_left));
         }
         if b.margin_right != Horiz::default() {
             p.set(P_MARGIN_RIGHT, horiz(b.margin_right));
         }
-        for (i, k) in [P_PADDING_TOP, P_PADDING_RIGHT, P_PADDING_BOTTOM, P_PADDING_LEFT].into_iter().enumerate() {
+        for (i, k) in [
+            P_PADDING_TOP,
+            P_PADDING_RIGHT,
+            P_PADDING_BOTTOM,
+            P_PADDING_LEFT,
+        ]
+        .into_iter()
+        .enumerate()
+        {
             if i % 2 == 0 {
                 if b.padding[i] != 0.0 {
                     p.set(k, vert(b.padding[i]));
@@ -502,4 +595,3 @@ fn width_props(p: &mut StyleProps, b: &Block, c: &Computed, fs: f64) {
         }
     }
 }
-

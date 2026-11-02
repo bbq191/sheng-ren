@@ -28,24 +28,60 @@ pub struct BuildRun<'a> {
 /// 一轮生成里发生的一件事。
 pub enum BuildEvent {
     /// 不再支持的格式，跳过（每本只报一次）。
-    Unsupported { id: String, title: String, reason: String },
+    Unsupported {
+        id: String,
+        title: String,
+        reason: String,
+    },
     /// 接上的设备上删掉了以前删书时没删成的书。
-    RemovedFlushed { device: String, count: usize },
-    RemoveFlushFailed { device: String, error: String },
+    RemovedFlushed {
+        device: String,
+        count: usize,
+    },
+    RemoveFlushFailed {
+        device: String,
+        error: String,
+    },
     /// 设备没接上，这一轮不传（`--watch` 时每台只报一次）。
-    DeviceAbsent { device: String, reason: String },
+    DeviceAbsent {
+        device: String,
+        reason: String,
+    },
     /// 不再给这台设备的书（从它的跟踪范围里拿掉了）：从设备上删掉了。
-    Retracted { device: String, title: String },
+    Retracted {
+        device: String,
+        title: String,
+    },
     /// 不在这台设备的跟踪范围里、设备上还有，`--keep` 这一次没删。
-    Outside { device: String, title: String },
-    RetractFailed { device: String, title: String, error: String },
+    Outside {
+        device: String,
+        title: String,
+    },
+    RetractFailed {
+        device: String,
+        title: String,
+        error: String,
+    },
     /// 一本书一个模式的结果。
-    Built { device: String, title: String, built: Built },
-    Failed { device: String, title: String, error: String },
+    Built {
+        device: String,
+        title: String,
+        built: Built,
+    },
+    Failed {
+        device: String,
+        title: String,
+        error: String,
+    },
     /// 传输线程意外退出，这么多本没传成。
-    TransportLost { device: String, count: usize },
+    TransportLost {
+        device: String,
+        count: usize,
+    },
     /// 都生成好了，还在等设备那边传完。
-    Waiting { in_flight: usize },
+    Waiting {
+        in_flight: usize,
+    },
 }
 
 /// 一轮的结果计数。
@@ -80,11 +116,24 @@ impl BuildCounts {
 
 /// 按模式 × 书逐本生成并送到设备上（没变化的跳过）。设备没接上的模式跳过。
 pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCounts {
-    let BuildRun { lib, devices, books, force, keep, mut fails, skipped, absent_reported } = run;
+    let BuildRun {
+        lib,
+        devices,
+        books,
+        force,
+        keep,
+        mut fails,
+        skipped,
+        absent_reported,
+    } = run;
     let mut counts = BuildCounts::default();
     for m in books.iter().filter(|m| !m.supported()) {
         if skipped.insert(m.id.clone()) {
-            report(BuildEvent::Unsupported { id: m.id.clone(), title: m.title.clone(), reason: crate::unsupported(m.content_format()) });
+            report(BuildEvent::Unsupported {
+                id: m.id.clone(),
+                title: m.title.clone(),
+                reason: crate::unsupported(m.content_format()),
+            });
         }
     }
     // 产物直接送设备（profile 的 [deliver]）：没接上的设备这一轮整个跳过（每轮报一次），接上的先删掉以前删书时没删成的
@@ -94,15 +143,24 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             Ok(_) => {
                 match lib.flush_removed(device) {
                     Ok(0) => {}
-                    Ok(count) => report(BuildEvent::RemovedFlushed { device: device.id.clone(), count }),
-                    Err(error) => report(BuildEvent::RemoveFlushFailed { device: device.id.clone(), error }),
+                    Ok(count) => report(BuildEvent::RemovedFlushed {
+                        device: device.id.clone(),
+                        count,
+                    }),
+                    Err(error) => report(BuildEvent::RemoveFlushFailed {
+                        device: device.id.clone(),
+                        error,
+                    }),
                 }
                 live.push(device);
             }
             Err(reason) => {
                 // --watch（给了 fails）时同一台没接上只报一次
                 if fails.is_none() || !absent_reported.contains(&device.id) {
-                    report(BuildEvent::DeviceAbsent { device: device.id.clone(), reason });
+                    report(BuildEvent::DeviceAbsent {
+                        device: device.id.clone(),
+                        reason,
+                    });
                 }
                 absent_reported.insert(device.id.clone());
             }
@@ -120,24 +178,37 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                 continue;
             }
             if keep {
-                report(BuildEvent::Outside { device: device.id.clone(), title: m.title.clone() });
+                report(BuildEvent::Outside {
+                    device: device.id.clone(),
+                    title: m.title.clone(),
+                });
                 continue;
             }
             match lib.retract(&m.id, device) {
                 Ok(_) => {
                     counts.retracted += 1;
-                    report(BuildEvent::Retracted { device: device.id.clone(), title: m.title.clone() });
+                    report(BuildEvent::Retracted {
+                        device: device.id.clone(),
+                        title: m.title.clone(),
+                    });
                 }
                 Err(error) => {
                     counts.failed += 1;
-                    report(BuildEvent::RetractFailed { device: device.id.clone(), title: m.title.clone(), error });
+                    report(BuildEvent::RetractFailed {
+                        device: device.id.clone(),
+                        title: m.title.clone(),
+                        error,
+                    });
                 }
             }
         }
     }
     // 先比较、再生成（主线程）；要传的交给各设备的传输线程，和生成同时进行；传完的随时取回来记下、报一件
     let mut pipe = Pipeline::default();
-    let landed = |counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, report: &mut dyn FnMut(BuildEvent), ev: Event| {
+    let landed = |counts: &mut BuildCounts,
+                  fails: &mut Option<&mut FailMemo>,
+                  report: &mut dyn FnMut(BuildEvent),
+                  ev: Event| {
         let (t, r) = match ev {
             Event::Done(t, r) => (t, r),
             Event::Lost { device, count } => {
@@ -150,21 +221,49 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
         match lib.complete(*t, r) {
             Ok(built) => {
                 counts.count(&built);
-                report(BuildEvent::Built { device, title, built });
+                report(BuildEvent::Built {
+                    device,
+                    title,
+                    built,
+                });
             }
             Err(error) => {
                 counts.failed += 1;
-                if let (Some(f), Some(m), Some(p)) = (fails.as_deref_mut(), books.iter().find(|m| m.id == book), lib.devices().get(&device)) {
-                    f.insert((book, device.clone()), (lib.fingerprint(m, p).unwrap_or_else(|e| e), lib.original_state(m)));
+                if let (Some(f), Some(m), Some(p)) = (
+                    fails.as_deref_mut(),
+                    books.iter().find(|m| m.id == book),
+                    lib.devices().get(&device),
+                ) {
+                    f.insert(
+                        (book, device.clone()),
+                        (
+                            lib.fingerprint(m, p).unwrap_or_else(|e| e),
+                            lib.original_state(m),
+                        ),
+                    );
                 }
-                report(BuildEvent::Failed { device, title, error });
+                report(BuildEvent::Failed {
+                    device,
+                    title,
+                    error,
+                });
             }
         }
     };
     // 一本书一个模式：比较、生成，要传的交给传输线程
-    let one = |m: &Meta, device: &Profile, counts: &mut BuildCounts, fails: &mut Option<&mut FailMemo>, pipe: &mut Pipeline, report: &mut dyn FnMut(BuildEvent)| {
+    let one = |m: &Meta,
+               device: &Profile,
+               counts: &mut BuildCounts,
+               fails: &mut Option<&mut FailMemo>,
+               pipe: &mut Pipeline,
+               report: &mut dyn FnMut(BuildEvent)| {
         let key = (m.id.clone(), device.id.clone());
-        let now = || (lib.fingerprint(m, device).unwrap_or_else(|e| e), lib.original_state(m));
+        let now = || {
+            (
+                lib.fingerprint(m, device).unwrap_or_else(|e| e),
+                lib.original_state(m),
+            )
+        };
         if let Some(f) = fails.as_deref_mut() {
             match f.get(&key).map(|v| *v == now()) {
                 Some(true) => return,
@@ -177,12 +276,20 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
         match lib.prepare(m, device, force) {
             Ok(Step::Done(built)) => {
                 counts.count(&built);
-                report(BuildEvent::Built { device: device.id.clone(), title: m.title.clone(), built });
+                report(BuildEvent::Built {
+                    device: device.id.clone(),
+                    title: m.title.clone(),
+                    built,
+                });
             }
             Ok(Step::Transfer(t)) => pipe.submit(*t),
             Err(error) => {
                 counts.failed += 1;
-                report(BuildEvent::Failed { device: device.id.clone(), title: m.title.clone(), error });
+                report(BuildEvent::Failed {
+                    device: device.id.clone(),
+                    title: m.title.clone(),
+                    error,
+                });
                 if let Some(f) = fails.as_deref_mut() {
                     f.insert(key, now());
                 }
@@ -195,7 +302,10 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
     let mut later: Vec<(&Meta, &Profile)> = Vec::new();
     let mut deferred: HashMap<&str, usize> = HashMap::new();
     for m in books.iter().filter(|m| m.supported()) {
-        for device in live.iter().filter(|d| !outside.contains(&(m.id.as_str(), d.id.as_str()))) {
+        for device in live
+            .iter()
+            .filter(|d| !outside.contains(&(m.id.as_str(), d.id.as_str())))
+        {
             while let Some(x) = pipe.next(false) {
                 landed(&mut counts, &mut fails, report, x);
             }
@@ -225,7 +335,9 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
     }
     lib.release_prepared();
     if pipe.in_flight() > 0 {
-        report(BuildEvent::Waiting { in_flight: pipe.in_flight() });
+        report(BuildEvent::Waiting {
+            in_flight: pipe.in_flight(),
+        });
     }
     while let Some(x) = pipe.next(true) {
         landed(&mut counts, &mut fails, report, x);

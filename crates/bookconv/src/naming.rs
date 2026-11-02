@@ -34,7 +34,9 @@ fn marker_re() -> &'static Regex {
 
 fn tail_tag_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\s*[\[（(【]\s*(?:完结版|完结|完|全|终)\s*[\]）)】]\s*$").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"\s*[\[（(【]\s*(?:完结版|完结|完|全|终)\s*[\]）)】]\s*$").unwrap()
+    })
 }
 
 /// 把卷标记写成统一的数字在前形式：`卷N`/`第N卷`/`VolN`→`N卷`，`部N`/`第N部` 等→`N部`…；`N卷` 已是目标形式；
@@ -50,7 +52,10 @@ fn normalize_marker(m: &str) -> String {
             Regex::new(r"^[Vv][Oo][Ll]\.?(?P<n>[0-9]+)$").unwrap(),
         ]
     });
-    if let Some(c) = unit_first.captures(&flat).or_else(|| di_first.captures(&flat)) {
+    if let Some(c) = unit_first
+        .captures(&flat)
+        .or_else(|| di_first.captures(&flat))
+    {
         return format!("{}{}", &c["n"], &c["u"]);
     }
     if let Some(c) = vol.captures(&flat) {
@@ -69,8 +74,16 @@ pub fn canonical_book_name(stem: &str) -> String {
     let first = tail_tag_re().replace(first, "");
     let first = first.trim();
     if let Some(c) = marker_re().captures(first) {
-        let m = c.name("m1").or(c.name("m2")).or(c.name("m3")).map(|m| m.as_str()).unwrap_or("");
-        let title = c["t"].trim().trim_end_matches(['-', '–', '—', '_', '·', ':', '：']).trim();
+        let m = c
+            .name("m1")
+            .or(c.name("m2"))
+            .or(c.name("m3"))
+            .map(|m| m.as_str())
+            .unwrap_or("");
+        let title = c["t"]
+            .trim()
+            .trim_end_matches(['-', '–', '—', '_', '·', ':', '：'])
+            .trim();
         if !title.is_empty() && !m.is_empty() {
             return format!("{title} - {}", normalize_marker(m));
         }
@@ -124,15 +137,30 @@ mod tests {
 
     #[test]
     fn no_marker_stays_as_is_and_no_false_positive() {
-        for s in ["世界上", "文章标题", "红楼梦", "Some English Title", "  带空格  "] {
+        for s in [
+            "世界上",
+            "文章标题",
+            "红楼梦",
+            "Some English Title",
+            "  带空格  ",
+        ] {
             assert_eq!(canonical_book_name(s), s.trim(), "不该被改: {s}");
         }
     }
 
     #[test]
     fn idempotent() {
-        for s in ["鏢人 - 02卷", "亂馬1⁄2 典藏版 - 19卷", "雪人 - 上册", "三体 - 二部", "疯探-空城"] {
-            assert_eq!(canonical_book_name(&canonical_book_name(s)), canonical_book_name(s));
+        for s in [
+            "鏢人 - 02卷",
+            "亂馬1⁄2 典藏版 - 19卷",
+            "雪人 - 上册",
+            "三体 - 二部",
+            "疯探-空城",
+        ] {
+            assert_eq!(
+                canonical_book_name(&canonical_book_name(s)),
+                canonical_book_name(s)
+            );
             assert_eq!(canonical_book_name(s), s);
         }
     }

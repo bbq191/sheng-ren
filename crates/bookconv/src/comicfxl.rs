@@ -14,9 +14,22 @@ use crate::html;
 use crate::wash::opf::is_local;
 
 /// OPF `<meta name=…>` 里固定版式那一组（和 AZW3 写出器认的一样）。原书的 `RegionMagnification` 也去掉（整页图不需要分格放大）。
-const NAMED: [&str; 8] = ["fixed-layout", "original-resolution", "book-type", "orientation-lock", "zero-gutter", "zero-margin", "RegionMagnification", "primary-writing-mode"];
+const NAMED: [&str; 8] = [
+    "fixed-layout",
+    "original-resolution",
+    "book-type",
+    "orientation-lock",
+    "zero-gutter",
+    "zero-margin",
+    "RegionMagnification",
+    "primary-writing-mode",
+];
 /// EPUB 3 的 `<meta property=…>` 版式声明。
-const PROPERTIES: [&str; 3] = ["rendition:layout", "rendition:spread", "rendition:orientation"];
+const PROPERTIES: [&str; 3] = [
+    "rendition:layout",
+    "rendition:spread",
+    "rendition:orientation",
+];
 
 /// 加到 `eink-wash.css` 的规则：页面不留外边距（固定版式下画布就是整页）。
 pub const CSS_RULES: &str = "html{margin:0;padding:0;}\nbody{margin:0;padding:0;}\n";
@@ -31,9 +44,15 @@ pub fn opf(opf: &str, w: u32, h: u32) -> String {
         if !named && !prop {
             continue;
         }
-        let end = if t.kind == html::TagKind::Open { html::find_close(opf, t.end, t.name).map_or(t.end, |c| c.end) } else { t.end };
+        let end = if t.kind == html::TagKind::Open {
+            html::find_close(opf, t.end, t.name).map_or(t.end, |c| c.end)
+        } else {
+            t.end
+        };
         // 连同前面的空白一起去掉，不留空行
-        let start = opf[..t.start].trim_end_matches([' ', '\t', '\r', '\n']).len();
+        let start = opf[..t.start]
+            .trim_end_matches([' ', '\t', '\r', '\n'])
+            .len();
         edits.push((start, end, String::new()));
     }
     let cleaned = html::apply_edits(opf, edits);
@@ -58,20 +77,37 @@ pub fn page(page: &str, w: u32, h: u32) -> Option<String> {
     let head_close = html::find_close(page, head.end, "head")?;
     let viewport = format!("<meta name=\"viewport\" content=\"width={w}, height={h}\"/>");
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for t in html::tags_in(page, head.end, head_close.start).filter(|t| t.is_start() && t.is("meta")) {
-        if html::attr_value(&page[t.start..t.end], "name").is_some_and(|n| n.eq_ignore_ascii_case("viewport")) {
+    for t in
+        html::tags_in(page, head.end, head_close.start).filter(|t| t.is_start() && t.is("meta"))
+    {
+        if html::attr_value(&page[t.start..t.end], "name")
+            .is_some_and(|n| n.eq_ignore_ascii_case("viewport"))
+        {
             edits.push((t.start, t.end, String::new()));
         }
     }
     edits.push((head_close.start, head_close.start, viewport));
     if let Some((b0, b1)) = html::body_range(page) {
         let body = &page[b0..b1];
-        let media = html::tags_in(page, b0, b1).filter(|t| t.is_start() && (is_local(t.name, "img") || is_local(t.name, "image") || is_local(t.name, "svg"))).count();
-        let imgs: Vec<html::Tag> = html::tags_in(page, b0, b1).filter(|t| t.is_start() && t.is("img")).collect();
+        let media = html::tags_in(page, b0, b1)
+            .filter(|t| {
+                t.is_start()
+                    && (is_local(t.name, "img")
+                        || is_local(t.name, "image")
+                        || is_local(t.name, "svg"))
+            })
+            .count();
+        let imgs: Vec<html::Tag> = html::tags_in(page, b0, b1)
+            .filter(|t| t.is_start() && t.is("img"))
+            .collect();
         if media == 1 && imgs.len() == 1 && html::plain_text(body).trim().is_empty() {
             let t = &imgs[0];
             let tag = &page[t.start..t.end];
-            edits.push((t.start, t.end, html::set_attr(tag, "style", &format!("width:{w}px;height:{h}px"))));
+            edits.push((
+                t.start,
+                t.end,
+                html::set_attr(tag, "style", &format!("width:{w}px;height:{h}px")),
+            ));
         }
     }
     let out = html::apply_edits(page, edits);
@@ -93,7 +129,12 @@ mod tests {
         let out = opf(o, 1272, 1696);
         assert!(!out.contains("1440x1920"), "{out}");
         assert_eq!(out.matches("original-resolution").count(), 1);
-        assert!(out.contains(r#"content="1272x1696""#) && out.contains("pre-paginated") && out.contains(r#"<meta name="cover" content="c"/>"#), "{out}");
+        assert!(
+            out.contains(r#"content="1272x1696""#)
+                && out.contains("pre-paginated")
+                && out.contains(r#"<meta name="cover" content="c"/>"#),
+            "{out}"
+        );
         assert_eq!(out.matches("fixed-layout").count(), 1);
     }
 
@@ -101,17 +142,35 @@ mod tests {
     fn image_page_gets_viewport_and_full_canvas_text_page_only_viewport() {
         let p = r#"<html><head><title>1</title><meta name="viewport" content="width=1440,height=1920" /></head><body><center><div><img src="a.jpg" alt="" style="height:100%"/></div></center></body></html>"#;
         let out = page(p, 1272, 1696).unwrap();
-        assert!(out.contains(r#"<meta name="viewport" content="width=1272, height=1696"/></head>"#) && !out.contains("1440"), "{out}");
-        assert!(out.contains(r#"style="width:1272px;height:1696px""#), "{out}");
+        assert!(
+            out.contains(r#"<meta name="viewport" content="width=1272, height=1696"/></head>"#)
+                && !out.contains("1440"),
+            "{out}"
+        );
+        assert!(
+            out.contains(r#"style="width:1272px;height:1696px""#),
+            "{out}"
+        );
         let t = r#"<html><head><title>1</title></head><body><p>版权页</p><img src="a.jpg"/></body></html>"#;
         let out = page(t, 1272, 1696).unwrap();
-        assert!(out.contains("viewport") && !out.contains("1272px"), "有字的页图不动: {out}");
-        assert_eq!(page(&page(p, 1272, 1696).unwrap(), 1272, 1696), None, "幂等");
+        assert!(
+            out.contains("viewport") && !out.contains("1272px"),
+            "有字的页图不动: {out}"
+        );
+        assert_eq!(
+            page(&page(p, 1272, 1696).unwrap(), 1272, 1696),
+            None,
+            "幂等"
+        );
     }
 
     #[test]
     fn canvas_shape_tolerates_one_pixel() {
         assert!(fills_canvas((1272, 1696), 1272, 1696) && fills_canvas((701, 935), 1272, 1696));
-        assert!(!fills_canvas((300, 200), 1272, 1696) && !fills_canvas((700, 1000), 1272, 1696) && !fills_canvas((0, 0), 1272, 1696));
+        assert!(
+            !fills_canvas((300, 200), 1272, 1696)
+                && !fills_canvas((700, 1000), 1272, 1696)
+                && !fills_canvas((0, 0), 1272, 1696)
+        );
     }
 }

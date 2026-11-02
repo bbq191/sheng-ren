@@ -36,17 +36,31 @@ struct Plan {
 
 /// `remove`：阅读器不认 `display:none`（profile `display_none = false`），空段元素去掉；`trailing`：阅读器把块末尾的 `<br/>`
 /// 多排一行（profile `trailing_br_line`），去掉。
-pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, remove: bool, trailing: bool) {
+pub(super) fn apply(
+    entries: &mut Vec<Entry>,
+    rep: &mut WashReport,
+    media: Option<&MediaEnv>,
+    remove: bool,
+    trailing: bool,
+) {
     let (chapters, plans) = super::scan_chapters(entries, media, |e, css| plan(e, media, css));
-    if plans.iter().all(|p| p.blanks.is_empty() && (!trailing || p.trailing.is_empty())) {
+    if plans
+        .iter()
+        .all(|p| p.blanks.is_empty() && (!trailing || p.trailing.is_empty()))
+    {
         return;
     }
     let css_path = super::beside_opf(entries, CSS_NAME);
     // 三段（2026-10-15 改，以前写回整段串行）：① 各章并行算好编辑（[`resolve`]，只读；折成上边距的那几处等编号）；
     // ② 串行按「章的顺序、章里的顺序」给 (标签, 上外边距) 编类号——和以前逐章做时的先后一样，产物逐字节不变；③ 各章并行改写。
-    let resolved: Vec<Option<Resolved>> = crate::util::par_map(&chapters.iter().zip(&plans).collect::<Vec<_>>(), |&(&i, p)| {
-        (!(p.blanks.is_empty() && (!trailing || p.trailing.is_empty()))).then(|| resolve(&entries[i], p, remove, trailing)).flatten()
-    });
+    let resolved: Vec<Option<Resolved>> = crate::util::par_map(
+        &chapters.iter().zip(&plans).collect::<Vec<_>>(),
+        |&(&i, p)| {
+            (!(p.blanks.is_empty() && (!trailing || p.trailing.is_empty())))
+                .then(|| resolve(&entries[i], p, remove, trailing))
+                .flatten()
+        },
+    );
     // 同样的 (标签, 上外边距) 共用一个类
     let mut classes: Vec<(String, String)> = Vec::new();
     let mut blank_tags: std::collections::BTreeSet<String> = Default::default();
@@ -58,25 +72,43 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             .edits
             .iter()
             .filter_map(|(_, _, ed)| match ed {
-                Pending::Gap(key) => Some(classes.iter().position(|c| c == key).unwrap_or_else(|| {
-                    classes.push(key.clone());
-                    classes.len() - 1
-                })),
+                Pending::Gap(key) => {
+                    Some(classes.iter().position(|c| c == key).unwrap_or_else(|| {
+                        classes.push(key.clone());
+                        classes.len() - 1
+                    }))
+                }
                 Pending::Done(_) => None,
             })
             .collect();
         jobs.insert(i, (r, ks));
     }
-    let mut work: Vec<(&mut Entry, (Resolved, Vec<usize>))> = entries.iter_mut().enumerate().filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j))).collect();
-    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, (r, ks))| rewrite(e, r, ks, &css_path)).into_iter().sum::<usize>();
+    let mut work: Vec<(&mut Entry, (Resolved, Vec<usize>))> = entries
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j)))
+        .collect();
+    rep.kindle_rule_edits +=
+        crate::util::par_map_mut(&mut work, |(e, (r, ks))| rewrite(e, r, ks, &css_path))
+            .into_iter()
+            .sum::<usize>();
     let mut sheet = String::from("/* 只有空白的段落照 Kindle 折成下一块的上边距（sheng-ren kindle_rules，见 wash/blank_fold.rs） */\n");
     for t in blank_tags.iter().filter(|_| !remove) {
         sheet.push_str(&format!("html body {t}.{BLANK}{{{HIDE}}}\n"));
     }
     for (k, (t, v)) in classes.iter().enumerate() {
-        sheet.push_str(&format!("html body {t}.eink-g{}{{margin-top:{v};}}\n", k + 1));
+        sheet.push_str(&format!(
+            "html body {t}.eink-g{}{{margin-top:{v};}}\n",
+            k + 1
+        ));
     }
-    add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-blank-css");
+    add_css_entry(
+        entries,
+        find_opf(entries),
+        &css_path,
+        &sheet,
+        "eink-blank-css",
+    );
 }
 
 /// 一处编辑的新内容：定好了的，或者折成上边距、要等类号的（键是 (标签, 上外边距)，原标签就是 `text[起..止]`）。
@@ -95,7 +127,9 @@ struct Resolved {
 fn resolve(e: &Entry, p: &Plan, remove: bool, trailing: bool) -> Option<Resolved> {
     let text = std::str::from_utf8(&e.data).ok()?;
     let (bs, be) = html::body_range(text)?;
-    let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
+    let starts: Vec<html::Tag> = html::tags_in(text, bs, be)
+        .filter(|t| t.is_start())
+        .collect();
     let mut edits = Vec::new();
     let mut blank_tags = Vec::new();
     for &n in &p.blanks {
@@ -103,7 +137,11 @@ fn resolve(e: &Entry, p: &Plan, remove: bool, trailing: bool) -> Option<Resolved
         let raw = &text[t.start..t.end];
         if remove {
             let name = t.name.to_ascii_lowercase();
-            let end = if raw.ends_with("/>") || html::is_void(&name) { Some(t.end) } else { html::find_close(text, t.end, &name).map(|c| c.end) };
+            let end = if raw.ends_with("/>") || html::is_void(&name) {
+                Some(t.end)
+            } else {
+                html::find_close(text, t.end, &name).map(|c| c.end)
+            };
             if let Some(end) = end {
                 edits.push((t.start, end, Pending::Done(String::new())));
             }
@@ -120,21 +158,33 @@ fn resolve(e: &Entry, p: &Plan, remove: bool, trailing: bool) -> Option<Resolved
     }
     for &n in p.trailing.iter().filter(|_| trailing) {
         let Some(t) = starts.get(n) else { continue };
-        let end = if text[t.start..t.end].ends_with("/>") { Some(t.end) } else { html::find_close(text, t.end, "br").map(|c| c.end).or(Some(t.end)) };
+        let end = if text[t.start..t.end].ends_with("/>") {
+            Some(t.end)
+        } else {
+            html::find_close(text, t.end, "br")
+                .map(|c| c.end)
+                .or(Some(t.end))
+        };
         if let Some(end) = end {
             edits.push((t.start, end, Pending::Done(String::new())));
         }
     }
     for &(n, em) in &p.gaps {
         let Some(t) = starts.get(n) else { continue };
-        edits.push((t.start, t.end, Pending::Gap((t.name.to_ascii_lowercase(), format!("{}em", fmt_em(em))))));
+        edits.push((
+            t.start,
+            t.end,
+            Pending::Gap((t.name.to_ascii_lowercase(), format!("{}em", fmt_em(em)))),
+        ));
     }
     Some(Resolved { edits, blank_tags })
 }
 
 /// 照算好的编辑改写一章（`ks` 是折成上边距那几处按顺序编好的类号，从 0 起），返回改动数。
 fn rewrite(e: &mut Entry, r: &Resolved, ks: &[usize], css_path: &str) -> usize {
-    let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return 0;
+    };
     let mut ks = ks.iter();
     let mut edits: Vec<(usize, usize, String)> = r
         .edits
@@ -172,7 +222,10 @@ fn blank_text(el: &ElementRef) -> bool {
     for d in el.descendants() {
         match d.value() {
             Node::Text(t) => {
-                for c in t.chars().filter(|c| !matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c')) {
+                for c in t
+                    .chars()
+                    .filter(|c| !matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c'))
+                {
                     if !c.is_whitespace() {
                         return false;
                     }
@@ -181,7 +234,8 @@ fn blank_text(el: &ElementRef) -> bool {
             }
             Node::Element(v) => match v.name() {
                 "br" => any = true,
-                "span" | "b" | "i" | "em" | "strong" | "font" | "u" | "small" | "big" | "sup" | "sub" | "a" => {}
+                "span" | "b" | "i" | "em" | "strong" | "font" | "u" | "small" | "big" | "sup"
+                | "sub" | "a" => {}
                 _ if d.id() == el.id() => {}
                 _ => return false,
             },
@@ -192,8 +246,12 @@ fn blank_text(el: &ElementRef) -> bool {
 }
 
 fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<Rules>>) -> Plan {
-    let Ok(text) = std::str::from_utf8(&e.data) else { return Plan::default() };
-    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return Plan::default() };
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return Plan::default();
+    };
+    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else {
+        return Plan::default();
+    };
     let body = ch.body();
     let bc = ch.body_comp.clone();
     // body 里的元素按文档序编号（和标签扫描一致才知道改哪个标签）；`<body>` 自己不在里面
@@ -201,7 +259,11 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     let c_of = |el: &ElementRef| n_of(el).map(|i| ch.els[i].comp.clone());
     let is_blockish = |el: &ElementRef| n_of(el).is_some_and(|i| ch.els[i].is_block);
     // `<br>` 不算块（`br{display:block}` 的书：《人生复本》的空段 `<p><br class="calibre3"/></p>`，Kindle 照样折掉）
-    let has_block_child = |el: &ElementRef| el.children().filter_map(ElementRef::wrap).any(|ch| ch.value().name() != "br" && is_blockish(&ch));
+    let has_block_child = |el: &ElementRef| {
+        el.children()
+            .filter_map(ElementRef::wrap)
+            .any(|ch| ch.value().name() != "br" && is_blockish(&ch))
+    };
     // 竖直长度换成根 em
     let rem = |l: &Option<Len>, fs: f64| km::vertical_rem(*l, fs);
     let collapse = km::collapse;
@@ -211,24 +273,39 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         if el.value().name() == "br" {
             return true;
         }
-        is_blockish(el) && !has_block_child(el) && el.descendants().filter_map(ElementRef::wrap).all(|d| d.value().attr("id").is_none()) && blank_text(el)
+        is_blockish(el)
+            && !has_block_child(el)
+            && el
+                .descendants()
+                .filter_map(ElementRef::wrap)
+                .all(|d| d.value().attr("id").is_none())
+            && blank_text(el)
     };
     // 这一层是块的序列（直接的文字只有空白，元素除了单独的 `<br/>` 都是块）才看
     let block_level = |parent: &ElementRef| {
         parent.children().all(|c| match c.value() {
             Node::Text(t) => t.trim().is_empty() && !t.contains(['\u{a0}', '\u{3000}']),
-            Node::Element(v) => v.name() == "br" || ElementRef::wrap(c).is_some_and(|el| is_blockish(&el)),
+            Node::Element(v) => {
+                v.name() == "br" || ElementRef::wrap(c).is_some_and(|el| is_blockish(&el))
+            }
             _ => true,
         })
     };
     let mut out = Plan::default();
     let mut parents = vec![body];
-    parents.extend(body.descendants().filter_map(ElementRef::wrap).filter(|el| is_blockish(el) && has_block_child(el)));
+    parents.extend(
+        body.descendants()
+            .filter_map(ElementRef::wrap)
+            .filter(|el| is_blockish(el) && has_block_child(el)),
+    );
     for parent in parents {
         if !block_level(&parent) {
             continue;
         }
-        let Some(pc) = c_of(&parent).or_else(|| (parent.id() == body.id()).then(|| bc.clone())) else { continue };
+        let Some(pc) = c_of(&parent).or_else(|| (parent.id() == body.id()).then(|| bc.clone()))
+        else {
+            continue;
+        };
         let kids: Vec<ElementRef> = parent.children().filter_map(ElementRef::wrap).collect();
         let mut i = 0;
         while i < kids.len() {
@@ -244,11 +321,20 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             while i < kids.len() && blank_el(&kids[i]) {
                 let el = &kids[i];
                 // 单独的 `<br/>` 是匿名块，行高字号照父元素
-                let c = if el.value().name() == "br" { pc.clone() } else { c_of(el).unwrap_or_else(|| pc.clone()) };
-                ok &= (0..4).step_by(2).all(|s| rem(&c.margin[s], c.font_size) >= 0.0);
+                let c = if el.value().name() == "br" {
+                    pc.clone()
+                } else {
+                    c_of(el).unwrap_or_else(|| pc.clone())
+                };
+                ok &= (0..4)
+                    .step_by(2)
+                    .all(|s| rem(&c.margin[s], c.font_size) >= 0.0);
                 gap += BLANK_LINE_FOLD * c.line_height.unwrap_or(LH_EM) * c.font_size;
                 if el.value().name() != "br" {
-                    margins.push((rem(&c.margin[0], c.font_size), rem(&c.margin[2], c.font_size)));
+                    margins.push((
+                        rem(&c.margin[0], c.font_size),
+                        rem(&c.margin[2], c.font_size),
+                    ));
                 }
                 i += 1;
             }
@@ -260,11 +346,22 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             let ids: Vec<usize> = run.iter().filter_map(n_of).collect();
             match kids.get(i) {
                 Some(next) => {
-                    let (Some(nt), prev_b) = (edge(next, true), if start > 0 { edge(&kids[start - 1], false) } else { Some(0.0) }) else { continue };
+                    let (Some(nt), prev_b) = (
+                        edge(next, true),
+                        if start > 0 {
+                            edge(&kids[start - 1], false)
+                        } else {
+                            Some(0.0)
+                        },
+                    ) else {
+                        continue;
+                    };
                     let Some(pb) = prev_b else { continue };
                     let nc = c_of(next).unwrap();
                     // 接住的块有上内边距或上边框又套着块：Kindle 上间距给谁拿不准
-                    if (rem(&nc.padding[0], nc.font_size) > 0.0 || nc.border[0].is_some()) && has_block_child(next) {
+                    if (rem(&nc.padding[0], nc.font_size) > 0.0 || nc.border[0].is_some())
+                        && has_block_child(next)
+                    {
                         continue;
                     }
                     // Kindle：前一块的下外边距、各空段的上下外边距、后一块的上外边距逐对折叠，空段的高另加；没有空段外边距的（单独的
@@ -288,13 +385,18 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 None => {
                     // 同一层后面没有块：文件后面也没有内容（文件末尾的空段，Kindle 上没有）才只藏起来
                     let last = run.last().unwrap();
-                    let later = last.next_siblings().chain(last.ancestors().flat_map(|a| a.next_siblings())).any(|n| {
-                        n.descendants().any(|d| match d.value() {
-                            Node::Text(t) => !t.trim().is_empty(),
-                            Node::Element(v) => matches!(v.name(), "img" | "svg" | "image" | "hr" | "table"),
-                            _ => false,
-                        })
-                    });
+                    let later = last
+                        .next_siblings()
+                        .chain(last.ancestors().flat_map(|a| a.next_siblings()))
+                        .any(|n| {
+                            n.descendants().any(|d| match d.value() {
+                                Node::Text(t) => !t.trim().is_empty(),
+                                Node::Element(v) => {
+                                    matches!(v.name(), "img" | "svg" | "image" | "hr" | "table")
+                                }
+                                _ => false,
+                            })
+                        });
                     if !later {
                         out.blanks.extend(ids);
                     }
@@ -304,13 +406,41 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     }
     // 块末尾的 `<br/>`：最近的块里没有子块、`<br/>` 前面有字或图，后面到块结束只有空格换行、`<br/>` 和空的行内元素
     let content = |n: ego_tree::NodeRef<Node>| match n.value() {
-        Node::Text(t) => t.chars().any(|c| !matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c')),
-        Node::Element(v) => matches!(v.name(), "img" | "svg" | "image" | "hr" | "table" | "input" | "object" | "video" | "audio" | "math"),
+        Node::Text(t) => t
+            .chars()
+            .any(|c| !matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c')),
+        Node::Element(v) => matches!(
+            v.name(),
+            "img"
+                | "svg"
+                | "image"
+                | "hr"
+                | "table"
+                | "input"
+                | "object"
+                | "video"
+                | "audio"
+                | "math"
+        ),
         _ => false,
     };
-    for br in body.descendants().filter_map(ElementRef::wrap).filter(|el| el.value().name() == "br" && el.value().attr("id").is_none()) {
-        let Some(block) = br.ancestors().filter_map(ElementRef::wrap).find(|a| a.id() == body.id() || is_blockish(a)) else { continue };
-        if block.id() == body.id() || has_block_child(&block) || n_of(&block).is_some_and(|n| out.blanks.contains(&n)) || c_of(&block).is_some_and(|c| c.pre) {
+    for br in body
+        .descendants()
+        .filter_map(ElementRef::wrap)
+        .filter(|el| el.value().name() == "br" && el.value().attr("id").is_none())
+    {
+        let Some(block) = br
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .find(|a| a.id() == body.id() || is_blockish(a))
+        else {
+            continue;
+        };
+        if block.id() == body.id()
+            || has_block_child(&block)
+            || n_of(&block).is_some_and(|n| out.blanks.contains(&n))
+            || c_of(&block).is_some_and(|c| c.pre)
+        {
             continue;
         }
         let mut before = false;
@@ -349,31 +479,61 @@ mod tests {
     }
 
     fn page(body: &str) -> String {
-        format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#)
+        format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#
+        )
     }
 
     /// 同写出器的测试：`<p>` 上下 1em 折叠成 1em，再加折掉的空段：一个 0.72em（缺省行高 1.2），两个 1.44em，行高 2 的 1.2em；
     /// 文件末尾的只藏起来；有 id 的不动。
     #[test]
     fn blank_paragraphs_fold_into_next_margin_like_kindle() {
-        let mut b = book(&page(r#"<p>甲</p><p>&#160;</p><p>乙</p><p><br/></p><p>　</p><p class="big">丙</p><p class="lh2">&#160;</p><p>丁</p><br/><p>戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p><p><br/></p>"#));
+        let mut b = book(&page(
+            r#"<p>甲</p><p>&#160;</p><p>乙</p><p><br/></p><p>　</p><p class="big">丙</p><p class="lh2">&#160;</p><p>丁</p><br/><p>戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p><p><br/></p>"#,
+        ));
         let mut moved = b.clone();
         apply(&mut b, &mut WashReport::default(), None, false, false);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(out.contains(r#"<p>甲</p><p class="eink-blank">&#160;</p><p class="eink-g1">乙</p><p class="eink-blank"><br/></p><p class="eink-blank">　</p><p class="big eink-g1">丙</p><p class="lh2 eink-blank">&#160;</p><p class="eink-g2">丁</p><br class="eink-blank"/><p class="eink-g3">戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p><p class="eink-blank"><br/></p>"#), "{out}");
         assert!(out.contains("eink-blank.css"));
-        let sheet = String::from_utf8(b.iter().find(|e| e.name == "O/eink-blank.css").unwrap().data.clone()).unwrap();
+        let sheet = String::from_utf8(
+            b.iter()
+                .find(|e| e.name == "O/eink-blank.css")
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
         // 空段自己的上下外边距（1em）照留、逐对折叠（2026-10-14，同写出器的 `Gap`）：乙 1 + 1 + 0.72 = 2.72；丙（字号 2em，上外边距 2rem）：
         // 1 + 1 + 2 + 1.44 = 5.44rem = 2.72em；丁：前一段（丙）下外边距 2rem 和空段 1em 折成 2，再 1 + 1.2 = 4.2；戊：单独的 `<br/>` 没有外边距，
         // 1 + 0.72（按 body）；同标签同值共用一个类
-        assert!(sheet.contains("html body p.eink-g1{margin-top:2.72em;}"), "{sheet}");
-        assert!(sheet.contains("html body p.eink-g2{margin-top:4.2em;}") && sheet.contains("html body p.eink-g3{margin-top:1.72em;}"), "{sheet}");
-        assert!(sheet.contains("html body p.eink-blank{display:none;}") && sheet.contains("html body br.eink-blank{display:none;}"), "{sheet}");
+        assert!(
+            sheet.contains("html body p.eink-g1{margin-top:2.72em;}"),
+            "{sheet}"
+        );
+        assert!(
+            sheet.contains("html body p.eink-g2{margin-top:4.2em;}")
+                && sheet.contains("html body p.eink-g3{margin-top:1.72em;}"),
+            "{sheet}"
+        );
+        assert!(
+            sheet.contains("html body p.eink-blank{display:none;}")
+                && sheet.contains("html body br.eink-blank{display:none;}"),
+            "{sheet}"
+        );
         // 不认 display:none 的（Move）：空段去掉，接住的块一样
         apply(&mut moved, &mut WashReport::default(), None, true, true);
         let out = String::from_utf8(moved[2].data.clone()).unwrap();
         assert!(out.contains(r#"<body><p>甲</p><p class="eink-g1">乙</p><p class="big eink-g1">丙</p><p class="eink-g2">丁</p><p class="eink-g3">戊</p><p id="k">&#160;</p><p>己</p><p> </p><p>庚</p></body>"#), "{out}");
-        let sheet = String::from_utf8(moved.iter().find(|e| e.name == "O/eink-blank.css").unwrap().data.clone()).unwrap();
+        let sheet = String::from_utf8(
+            moved
+                .iter()
+                .find(|e| e.name == "O/eink-blank.css")
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
         assert!(!sheet.contains("eink-blank{"), "{sheet}");
     }
 
@@ -384,13 +544,18 @@ mod tests {
         b[1].data.extend_from_slice(b" .b{display:block}");
         apply(&mut b, &mut WashReport::default(), None, false, false);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
-        assert!(out.contains(r#"<p class="eink-blank"><br class="b"/></p><p class="eink-g1">乙</p>"#), "{out}");
+        assert!(
+            out.contains(r#"<p class="eink-blank"><br class="b"/></p><p class="eink-g1">乙</p>"#),
+            "{out}"
+        );
     }
 
     /// 后一块没有上外边距：前一块的下外边距和空段的外边距折叠、空段的下外边距留着、空段的高另加（1 + 1 + 0.72 = 2.72rem，h2 字号 1.5em）；空段后面同一层没块、文件后面还有字的不动。
     #[test]
     fn no_top_margin_and_unsure_cases() {
-        let mut b = book(&page(r#"<p>甲</p><p>&#160;</p><h2 style="margin-top:0">乙</h2><div><p>丙</p><p>&#160;</p></div><p>丁</p>"#));
+        let mut b = book(&page(
+            r#"<p>甲</p><p>&#160;</p><h2 style="margin-top:0">乙</h2><div><p>丙</p><p>&#160;</p></div><p>丁</p>"#,
+        ));
         apply(&mut b, &mut WashReport::default(), None, false, false);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
         assert!(out.contains(r#"<p class="eink-blank">&#160;</p><h2 style="margin-top:0;margin-top:1.8133em;" class="eink-g1">乙</h2><div><p>丙</p><p>&#160;</p></div>"#), "{out}");
@@ -408,7 +573,12 @@ mod tests {
         assert_eq!(b[2].data, before);
         apply(&mut b, &mut WashReport::default(), None, false, true);
         let out = String::from_utf8(b[2].data.clone()).unwrap();
-        assert!(out.contains(r#"<h2>甲</h2><p><span>乙</span> 
-</p><p>丙<br/>丁</p><p><br/>戊</p><p>己<br id="x"/></p><div>庚<br/><p>辛</p></div>"#), "{out}");
+        assert!(
+            out.contains(
+                r#"<h2>甲</h2><p><span>乙</span> 
+</p><p>丙<br/>丁</p><p><br/>戊</p><p>己<br id="x"/></p><div>庚<br/><p>辛</p></div>"#
+            ),
+            "{out}"
+        );
     }
 }

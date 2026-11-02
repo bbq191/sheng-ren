@@ -42,13 +42,24 @@ use crate::kindle_model::{self as km, Chapter, LH_EM};
 use crate::reader_model::{HeadingSizes, ReaderModel};
 use std::collections::{BTreeMap, HashSet};
 
-pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>, reader: &ReaderModel) {
+pub(super) fn apply(
+    entries: &mut [Entry],
+    rep: &mut WashReport,
+    media: Option<&MediaEnv>,
+    reader: &ReaderModel,
+) {
     let heads = reader.heading_sizes.as_ref();
-    if !reader.line_height_except_p && reader.line_em.is_none() && heads.is_none() && !reader.heading_center {
+    if !reader.line_height_except_p
+        && reader.line_em.is_none()
+        && heads.is_none()
+        && !reader.heading_center
+    {
         return;
     }
     let guard = DivGuard::of(entries);
-    let (chapters, docs) = super::scan_chapters(entries, media, |e, css| scan(e, media, css, heads, &guard, reader.heading_center));
+    let (chapters, docs) = super::scan_chapters(entries, media, |e, css| {
+        scan(e, media, css, heads, &guard, reader.heading_center)
+    });
     let base = {
         let mut count: HashMap<i64, usize> = HashMap::new();
         for it in docs.iter().flat_map(|d| &d.items) {
@@ -69,19 +80,35 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
         let mut decls: BTreeMap<usize, Vec<String>> = BTreeMap::new();
         if let Some(d) = reader.line_em {
             for (n, v) in length_line_heights(&doc.items, &doc.body, base, d) {
-                decls.entry(n).or_default().push(format!("line-height:{}em", fmt(v)));
+                decls
+                    .entry(n)
+                    .or_default()
+                    .push(format!("line-height:{}em", fmt(v)));
             }
         } else if reader.line_height_except_p {
             for (n, v) in line_heights(&doc.items, base) {
-                decls.entry(n).or_default().push(format!("line-height:{}", fmt(v)));
+                decls
+                    .entry(n)
+                    .or_default()
+                    .push(format!("line-height:{}", fmt(v)));
             }
         }
         // 关键字是按这台的字号挑的：标题在 Kindle 上的字号记在 `data-eink-fs`，后面照 Kindle 算的 pass（垫图、内边距和间距）按它算
         // （[`crate::kindle_model::Chapter::parse`]；以前按关键字的 CSS 字号算，large 从 1.2 改成 Send to Kindle 的 1.125 后标题前后的间距跟着偏）
-        let kindle_fs: HashMap<usize, f64> = doc.heading_sizes.iter().filter(|h| h.3.is_none()).map(|(n, _, fs, _)| (*n, *fs)).collect();
+        let kindle_fs: HashMap<usize, f64> = doc
+            .heading_sizes
+            .iter()
+            .filter(|h| h.3.is_none())
+            .map(|(n, _, fs, _)| (*n, *fs))
+            .collect();
         // 改成 `div` 的标题：层叠出来的声明全写进行内（改了标签以后选 `hN` 的规则就选不到了，行内的和原来一样），打上记号；
         // 目录处理完以后 `heading_div::finish` 才改标签。行距接在后面（同一个 `style` 里后写的胜）
-        let divs: HashSet<usize> = doc.heading_sizes.iter().filter(|h| h.3.is_some()).map(|h| h.0).collect();
+        let divs: HashSet<usize> = doc
+            .heading_sizes
+            .iter()
+            .filter(|h| h.3.is_some())
+            .map(|h| h.0)
+            .collect();
         for (n, kw, _, div) in &doc.heading_sizes {
             let d = decls.entry(*n).or_default();
             match div {
@@ -93,11 +120,24 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
             decls.entry(*n).or_default().push(d.clone());
         }
         if !decls.is_empty() {
-            jobs.insert(i, Job { decls, kindle_fs, divs });
+            jobs.insert(
+                i,
+                Job {
+                    decls,
+                    kindle_fs,
+                    divs,
+                },
+            );
         }
     }
-    let mut work: Vec<(&mut Entry, Job)> = entries.iter_mut().enumerate().filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j))).collect();
-    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, job)| rewrite_tags(e, job)).into_iter().sum::<usize>();
+    let mut work: Vec<(&mut Entry, Job)> = entries
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j)))
+        .collect();
+    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, job)| rewrite_tags(e, job))
+        .into_iter()
+        .sum::<usize>();
 }
 
 /// 一章要接的声明（[`apply`]）：第几个开始标签 → 声明；标题在 Kindle 上的字号；要改成 `div` 的标题。
@@ -109,11 +149,21 @@ struct Job {
 
 /// 照 `job` 改写一章的开始标签，返回改动数。
 fn rewrite_tags(e: &mut Entry, job: &Job) -> usize {
-    let Job { decls, kindle_fs, divs } = job;
+    let Job {
+        decls,
+        kindle_fs,
+        divs,
+    } = job;
     let mut edited = 0;
-    let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
-    let Some((bs, be)) = html::body_range(text) else { return 0 };
-    let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return 0;
+    };
+    let Some((bs, be)) = html::body_range(text) else {
+        return 0;
+    };
+    let starts: Vec<html::Tag> = html::tags_in(text, bs, be)
+        .filter(|t| t.is_start())
+        .collect();
     let mut edits = Vec::new();
     for (&n, ds) in decls {
         let Some(t) = starts.get(n) else { continue };
@@ -181,9 +231,20 @@ struct Item {
 }
 
 /// 扫一章；元素数和标签扫描对不上（解析器补了标签）的整章不管，也不计字数。
-fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>, heads: Option<&HeadingSizes>, guard: &DivGuard, heading_center: bool) -> Doc {
-    let Ok(text) = std::str::from_utf8(&e.data) else { return Doc::default() };
-    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return Doc::default() };
+fn scan(
+    e: &Entry,
+    media: Option<&MediaEnv>,
+    css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>,
+    heads: Option<&HeadingSizes>,
+    guard: &DivGuard,
+    heading_center: bool,
+) -> Doc {
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return Doc::default();
+    };
+    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else {
+        return Doc::default();
+    };
     let mut items: Vec<Item> = (0..ch.els.len())
         .map(|i| {
             let el = &ch.els[i];
@@ -196,7 +257,10 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 fs: el.comp.font_size,
                 target: el.is_block,
                 p: ch.el(i).value().name() == "p",
-                inline_lh: el.origin.get("line-height").is_some_and(|(o, _)| *o == crate::cascade::Origin::Inline),
+                inline_lh: el
+                    .origin
+                    .get("line-height")
+                    .is_some_and(|(o, _)| *o == crate::cascade::Origin::Inline),
                 is_block: el.is_block,
                 chars: 0,
             }
@@ -208,11 +272,17 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             items[b].chars += ch.own_chars(i);
         }
     }
-    let heading_sizes = heads.map(|h| heading_sizes(&ch, h, guard)).unwrap_or_default();
+    let heading_sizes = heads
+        .map(|h| heading_sizes(&ch, h, guard))
+        .unwrap_or_default();
     // 标题缺省居中的阅读器（掌阅）：自己没写对齐的照 Kindle 继承来的写明（`inherit` 掌阅不认）
     let aligns = if heading_center {
         (0..ch.els.len())
-            .filter(|&i| crate::html::heading_level_of(ch.el(i).value().name()).is_some() && !ch.els[i].hidden && !ch.els[i].decls.contains_key("text-align"))
+            .filter(|&i| {
+                crate::html::heading_level_of(ch.el(i).value().name()).is_some()
+                    && !ch.els[i].hidden
+                    && !ch.els[i].decls.contains_key("text-align")
+            })
             .filter_map(|i| {
                 let v = match ch.els[i].comp.text_align.as_deref().unwrap_or("left") {
                     "start" => "left",
@@ -226,7 +296,16 @@ fn scan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         Vec::new()
     };
     let bc = &ch.body_comp;
-    Doc { items, body: (ch.body_decls.get("line-height").cloned(), bc.line_height, bc.font_size), heading_sizes, aligns }
+    Doc {
+        items,
+        body: (
+            ch.body_decls.get("line-height").cloned(),
+            bc.line_height,
+            bc.font_size,
+        ),
+        heading_sizes,
+        aligns,
+    }
 }
 
 /// 要改行距的：(第几个开始标签, 行距倍数)。文档序走一遍，记下每个元素在这台上的行距（改过的往下继承改后的值）。
@@ -238,7 +317,13 @@ fn line_heights(items: &[Item], base: f64) -> Vec<(usize, f64)> {
         let inherited = it.parent.map(|p| (on_reader[p], items[p].lh));
         let mut cur = match inherited {
             // `<p>` 只认行内写的
-            _ if it.p => if it.inline_lh { it.lh.unwrap_or(1.0) } else { 1.0 },
+            _ if it.p => {
+                if it.inline_lh {
+                    it.lh.unwrap_or(1.0)
+                } else {
+                    1.0
+                }
+            }
             Some((pm, plh)) if !it.own && (pm - plh.unwrap_or(1.0)).abs() > 1e-9 => pm,
             _ => it.lh.unwrap_or(1.0),
         };
@@ -273,7 +358,11 @@ fn lh_kind(v: Option<&str>, base: f64, body: bool) -> LhKind {
     match scaled_factor(&v) {
         // `<body>` 上不带单位的：掌阅当没写，排成缺省行距（随字号缩放，同数的继承）；Kindle 的倍数也是 1 就不用改，改成长度反而按
         // 绝对值往下继承给每个块。别的元素上的照改：祖先改成了长度时，掌阅上当没写就继承了祖先的
-        Some((f, false)) if body && (km::shown_line_height_ratio(Some(f), base) - 1.0).abs() <= 0.05 => LhKind::Inherit,
+        Some((f, false))
+            if body && (km::shown_line_height_ratio(Some(f), base) - 1.0).abs() <= 0.05 =>
+        {
+            LhKind::Inherit
+        }
         Some(_) => LhKind::Scaled,
         None if v.starts_with(|c: char| c.is_ascii_digit() || c == '.') => LhKind::Fixed,
         None => LhKind::Inherit,
@@ -292,7 +381,11 @@ fn scaled_factor(v: &str) -> Option<(f64, bool)> {
     } else {
         (v, 1.0, false)
     };
-    num.trim().parse::<f64>().ok().filter(|n| n.is_finite() && *n >= 0.0).map(|n| (n * k, len))
+    num.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|n| n.is_finite() && *n >= 0.0)
+        .map(|n| (n * k, len))
 }
 
 /// 照 Kindle 的一行（本元素字号的倍数 × D，D＝缺省行距是 em 的几倍）。
@@ -301,7 +394,12 @@ fn kindle_line(lh: Option<f64>, base: f64, d: f64) -> f64 {
 }
 
 /// 全书样式表、`<style>`、行内 `style` 里 [`LhKind::Scaled`] 的 `line-height` 改成 [`kindle_line`] 的 em。返回改了几条。
-fn scale_line_heights(entries: &mut [Entry], base: f64, d: f64, body_classes: &HashSet<String>) -> usize {
+fn scale_line_heights(
+    entries: &mut [Entry],
+    base: f64,
+    d: f64,
+    body_classes: &HashSet<String>,
+) -> usize {
     fn decls(text: &str, base: f64, d: f64, body: bool, n: &mut usize) -> Option<String> {
         let mut edits = Vec::new();
         for c in html::css_decls(text) {
@@ -312,9 +410,15 @@ fn scale_line_heights(entries: &mut [Entry], base: f64, d: f64, body_classes: &H
             if lh_kind(Some(v), base, body) != LhKind::Scaled {
                 continue;
             }
-            let Some((f, _)) = scaled_factor(&v.to_ascii_lowercase()) else { continue };
+            let Some((f, _)) = scaled_factor(&v.to_ascii_lowercase()) else {
+                continue;
+            };
             let start = c.start + c.raw.find(c.value).unwrap_or(0);
-            edits.push((start, start + c.value.len(), format!("{}em{imp}", fmt(kindle_line(Some(f), base, d)))));
+            edits.push((
+                start,
+                start + c.value.len(),
+                format!("{}em{imp}", fmt(kindle_line(Some(f), base, d))),
+            ));
         }
         *n += edits.len();
         (!edits.is_empty()).then(|| html::apply_edits(text, edits))
@@ -322,12 +426,20 @@ fn scale_line_heights(entries: &mut [Entry], base: f64, d: f64, body_classes: &H
     let css = |text: &str, n: &mut usize| -> String {
         let edits: Vec<(usize, usize, String)> = crate::cascade::rule_spans(text)
             .into_iter()
-            .filter(|r| r.closed && !crate::cascade::rule_selector(r.prelude).trim().starts_with('@'))
+            .filter(|r| {
+                r.closed
+                    && !crate::cascade::rule_selector(r.prelude)
+                        .trim()
+                        .starts_with('@')
+            })
             .filter_map(|r| {
                 let sel = crate::cascade::rule_selector(r.prelude);
                 // 选择器列表里有一项选的是 `<body>` 就算
-                let body = crate::cascade::split_top(&sel, ',').iter().any(|s| super::kindle_rules::is_body_selector(s.trim(), body_classes));
-                decls(r.body, base, d, body, n).map(|t| (r.body_start, r.body_start + r.body.len(), t))
+                let body = crate::cascade::split_top(&sel, ',')
+                    .iter()
+                    .any(|s| super::kindle_rules::is_body_selector(s.trim(), body_classes));
+                decls(r.body, base, d, body, n)
+                    .map(|t| (r.body_start, r.body_start + r.body.len(), t))
             })
             .collect();
         html::apply_edits(text, edits)
@@ -337,19 +449,31 @@ fn scale_line_heights(entries: &mut [Entry], base: f64, d: f64, body_classes: &H
         if is_css_name(&e.name) {
             let (text, latin1) = match std::str::from_utf8(&e.data) {
                 Ok(t) => (std::borrow::Cow::Borrowed(t), false),
-                Err(_) => (std::borrow::Cow::Owned(crate::util::latin1_decode(&e.data)), true),
+                Err(_) => (
+                    std::borrow::Cow::Owned(crate::util::latin1_decode(&e.data)),
+                    true,
+                ),
             };
             let out = css(&text, &mut n);
             if n > 0 {
-                e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
+                e.data = if latin1 {
+                    crate::util::latin1_encode(&out)
+                } else {
+                    out.into_bytes()
+                };
             }
             return n;
         }
         if !is_chapter_entry(e) {
             return 0;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
-        let s = html::edit_style_attrs(text, |t, v| decls(v, base, d, t.is("body"), &mut n).map_or(html::Edit::Keep, html::Edit::Set)).into_owned();
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return 0;
+        };
+        let s = html::edit_style_attrs(text, |t, v| {
+            decls(v, base, d, t.is("body"), &mut n).map_or(html::Edit::Keep, html::Edit::Set)
+        })
+        .into_owned();
         let s = html::edit_style_blocks(&s, |_, c| html::Edit::Set(css(c, &mut n))).into_owned();
         if n > 0 {
             e.data = s.into_bytes();
@@ -365,9 +489,16 @@ fn body_only_classes(entries: &[Entry]) -> HashSet<String> {
     // 各章并行扫（结果是集合，合并和顺序无关）
     let per_file = crate::util::par_map(entries, |e| {
         let (mut body, mut other) = (HashSet::new(), HashSet::new());
-        let Some(t) = is_chapter_entry(e).then(|| std::str::from_utf8(&e.data).ok()).flatten() else { return (body, other) };
+        let Some(t) = is_chapter_entry(e)
+            .then(|| std::str::from_utf8(&e.data).ok())
+            .flatten()
+        else {
+            return (body, other);
+        };
         for g in html::tags(t).filter(|g| g.is_start()) {
-            let Some(c) = html::attr_value(&t[g.start..g.end], "class") else { continue };
+            let Some(c) = html::attr_value(&t[g.start..g.end], "class") else {
+                continue;
+            };
             let set = if g.is("body") { &mut body } else { &mut other };
             set.extend(c.split_whitespace().map(str::to_string));
         }
@@ -385,8 +516,17 @@ fn body_only_classes(entries: &[Entry]) -> HashSet<String> {
 /// 只认长度的阅读器上、[`scale_line_heights`] 改过以后还要接行距的：(第几个开始标签, 写多少 em)。`d` 是缺省行距是 em 的几倍。
 /// 一行的高按根 em 算：自己写了的照算（改过的是 Kindle 的一行，px 这类照写的），没写的跟父元素（长度照绝对值继承；直接在
 /// `<body>` 里的跟 `<body>`），到顶是缺省行距 × 字号。
-fn length_line_heights(items: &[Item], body: &(Option<String>, Option<f64>, f64), base: f64, d: f64) -> Vec<(usize, f64)> {
-    let own_line = |decl: Option<&String>, lh: Option<f64>, fs: f64, body: bool| match lh_kind(decl.map(String::as_str), base, body) {
+fn length_line_heights(
+    items: &[Item],
+    body: &(Option<String>, Option<f64>, f64),
+    base: f64,
+    d: f64,
+) -> Vec<(usize, f64)> {
+    let own_line = |decl: Option<&String>, lh: Option<f64>, fs: f64, body: bool| match lh_kind(
+        decl.map(String::as_str),
+        base,
+        body,
+    ) {
         LhKind::Scaled => Some(kindle_line(lh, base, d) * fs),
         LhKind::Fixed => Some(lh.unwrap_or(1.0) * fs),
         LhKind::Inherit => None,
@@ -396,7 +536,8 @@ fn length_line_heights(items: &[Item], body: &(Option<String>, Option<f64>, f64)
     let mut fixed: Vec<Option<f64>> = Vec::with_capacity(items.len());
     let mut out = Vec::new();
     for (i, it) in items.iter().enumerate() {
-        let mut cur = own_line(it.own_decl.as_ref(), it.lh, it.fs, false).or_else(|| it.parent.map_or(body_line, |p| fixed[p]));
+        let mut cur = own_line(it.own_decl.as_ref(), it.lh, it.fs, false)
+            .or_else(|| it.parent.map_or(body_line, |p| fixed[p]));
         if it.chars > 0 && it.is_block {
             let want = kindle_line(it.lh, base, d);
             let have = cur.map_or(d, |l| l / it.fs);
@@ -442,7 +583,10 @@ impl DivGuard {
                 vec![String::from_utf8_lossy(&e.data).into_owned()]
             } else if is_chapter_entry(e) {
                 let text = String::from_utf8_lossy(&e.data);
-                html::style_blocks(&text).into_iter().map(|b| text[b.content_start..b.content_end].to_string()).collect()
+                html::style_blocks(&text)
+                    .into_iter()
+                    .map(|b| text[b.content_start..b.content_end].to_string())
+                    .collect()
             } else {
                 return g;
             };
@@ -452,17 +596,34 @@ impl DivGuard {
                     for l in 1..=6 {
                         let name = format!("h{l}");
                         for (_, rest) in type_tokens(&sel, &name) {
-                            let compound: String = rest.chars().take_while(|c| !c.is_whitespace() && !matches!(c, ',' | '>' | '+' | '~')).collect();
+                            let compound: String = rest
+                                .chars()
+                                .take_while(|c| {
+                                    !c.is_whitespace() && !matches!(c, ',' | '>' | '+' | '~')
+                                })
+                                .collect();
                             let after = rest[compound.len()..].trim_start();
-                            if compound.contains(':') || !(after.is_empty() || after.starts_with(',')) {
+                            if compound.contains(':')
+                                || !(after.is_empty() || after.starts_with(','))
+                            {
                                 g.levels.insert(name.clone());
                             }
                         }
                     }
                     for (_, rest) in type_tokens(&sel, "div") {
                         // 后面紧跟的类（`div.a.b`）
-                        let compound: String = rest.chars().take_while(|c| !c.is_whitespace() && !matches!(c, ',' | '>' | '+' | '~' | '{')).collect();
-                        let classes: Vec<&str> = compound.split('.').skip(1).map(|c| c.split([':', '#', '[']).next().unwrap_or("")).filter(|c| !c.is_empty()).collect();
+                        let compound: String = rest
+                            .chars()
+                            .take_while(|c| {
+                                !c.is_whitespace() && !matches!(c, ',' | '>' | '+' | '~' | '{')
+                            })
+                            .collect();
+                        let classes: Vec<&str> = compound
+                            .split('.')
+                            .skip(1)
+                            .map(|c| c.split([':', '#', '[']).next().unwrap_or(""))
+                            .filter(|c| !c.is_empty())
+                            .collect();
                         if classes.is_empty() {
                             g.bare = true;
                         }
@@ -476,7 +637,11 @@ impl DivGuard {
 
     /// 这个标题改成 `div` 以后不会被书里别的规则选到。
     fn allows(&self, el: &scraper::ElementRef) -> bool {
-        !self.bare && !self.levels.contains(&el.value().name().to_ascii_lowercase()) && el.value().classes().all(|c| !self.classes.contains(c))
+        !self.bare
+            && !self
+                .levels
+                .contains(&el.value().name().to_ascii_lowercase())
+            && el.value().classes().all(|c| !self.classes.contains(c))
     }
 }
 
@@ -488,8 +653,14 @@ pub(super) fn type_tokens<'a>(sel: &'a str, name: &str) -> Vec<(usize, &'a str)>
     while let Some(k) = lower[from..].find(name) {
         let at = from + k;
         let end = at + name.len();
-        let before_ok = lower[..at].chars().next_back().is_none_or(|c| c.is_whitespace() || matches!(c, ',' | '>' | '+' | '~' | '('));
-        let after_ok = lower[end..].chars().next().is_none_or(|c| !(c.is_alphanumeric() || c == '-' || c == '_'));
+        let before_ok = lower[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| c.is_whitespace() || matches!(c, ',' | '>' | '+' | '~' | '('));
+        let after_ok = lower[end..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '-' || c == '_'));
         if before_ok && after_ok {
             out.push((at, &sel[end..]));
         }
@@ -498,7 +669,11 @@ pub(super) fn type_tokens<'a>(sel: &'a str, name: &str) -> Vec<(usize, &'a str)>
     out
 }
 
-fn heading_sizes(ch: &Chapter, h: &HeadingSizes, guard: &DivGuard) -> Vec<(usize, String, f64, Option<Vec<String>>)> {
+fn heading_sizes(
+    ch: &Chapter,
+    h: &HeadingSizes,
+    guard: &DivGuard,
+) -> Vec<(usize, String, f64, Option<Vec<String>>)> {
     // 标题：(第几个开始标签, 这台上本来的大小, Kindle 上的字号 → 字数)
     struct Heading {
         n: usize,
@@ -515,8 +690,15 @@ fn heading_sizes(ch: &Chapter, h: &HeadingSizes, guard: &DivGuard) -> Vec<(usize
         // 标题里再套标题（不合法）按外面的算
         let head = match el.parent.and_then(|p| head_of[p]) {
             None if h.tag_size(tag).is_some() => {
-                let on_reader = h.on_reader(tag, el.decls.get("font-size").map(String::as_str)).expect("是标题");
-                heads.push(Heading { n: i, on_reader, sizes: HashMap::new(), kindle: el.comp.font_size });
+                let on_reader = h
+                    .on_reader(tag, el.decls.get("font-size").map(String::as_str))
+                    .expect("是标题");
+                heads.push(Heading {
+                    n: i,
+                    on_reader,
+                    sizes: HashMap::new(),
+                    kindle: el.comp.font_size,
+                });
                 Some(heads.len() - 1)
             }
             other => other,
@@ -526,7 +708,10 @@ fn heading_sizes(ch: &Chapter, h: &HeadingSizes, guard: &DivGuard) -> Vec<(usize
         if let (Some(hd), false) = (head, el.hidden) {
             let k = ch.own_chars(i);
             if k > 0 {
-                *heads[hd].sizes.entry(km::key(el.comp.font_size)).or_default() += k;
+                *heads[hd]
+                    .sizes
+                    .entry(km::key(el.comp.font_size))
+                    .or_default() += k;
             }
         }
     }
@@ -538,8 +723,15 @@ fn heading_sizes(ch: &Chapter, h: &HeadingSizes, guard: &DivGuard) -> Vec<(usize
             // 最近的关键字也差 3% 以上（同 `tools/kfx/unify.py` 的容差）：改成 `div`，字号照 CSS（Move 上 div 的 em 字号认）
             if (size / want - 1.0).abs() > 0.03 && guard.allows(&ch.el(hd.n)) {
                 // 字号写成 Kindle 上的（相对父元素的 em）：关键字（`large`）在 Move 上是绝对大小、和 Kindle 不一样
-                let parent = ch.els[hd.n].parent.map_or(ch.body_comp.font_size, |p| ch.els[p].comp.font_size);
-                let mut own: Vec<String> = ch.els[hd.n].decls.iter().filter(|(p, _)| *p != "font-size").map(|(p, v)| format!("{p}:{}", v.trim())).collect();
+                let parent = ch.els[hd.n]
+                    .parent
+                    .map_or(ch.body_comp.font_size, |p| ch.els[p].comp.font_size);
+                let mut own: Vec<String> = ch.els[hd.n]
+                    .decls
+                    .iter()
+                    .filter(|(p, _)| *p != "font-size")
+                    .map(|(p, v)| format!("{p}:{}", v.trim()))
+                    .collect();
                 own.push(format!("font-size:{}em", fmt(hd.kindle / parent)));
                 // 标签缺省的粗体（书里没写的；`eink-ua.css` 一般写了）
                 if ch.els[hd.n].comp.bold && !ch.els[hd.n].decls.contains_key("font-weight") {
@@ -577,7 +769,14 @@ mod tests {
 
     /// 只看行距：标题字号不管的阅读器。
     fn run(page: &str, css: &str) -> String {
-        run_with(page, css, &ReaderModel { heading_sizes: None, ..move_reader() })
+        run_with(
+            page,
+            css,
+            &ReaderModel {
+                heading_sizes: None,
+                ..move_reader()
+            },
+        )
     }
 
     /// 正文 1.618（body 上写、段落继承）：标题、div 归一成 1（Move 上本来是 1.618），`<p>` 不动；标题自己写了 1em 的 → 1/1.618，
@@ -586,8 +785,16 @@ mod tests {
     #[test]
     fn blocks_other_than_p_follow_kindle() {
         let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
-        let out = run(&format!(r#"<h1><span>标题</span></h1>{p}<div>说明</div><h2 class="t" style="color:red;line-height:0.744;">小标题</h2><div class="w"><h3>节</h3><p>正文</p></div>"#), "body{line-height:1.618} h2.t{line-height:1em}");
-        assert!(out.contains(r#"<h1 style="line-height:1;"><span>标题</span></h1>"#), "{out}");
+        let out = run(
+            &format!(
+                r#"<h1><span>标题</span></h1>{p}<div>说明</div><h2 class="t" style="color:red;line-height:0.744;">小标题</h2><div class="w"><h3>节</h3><p>正文</p></div>"#
+            ),
+            "body{line-height:1.618} h2.t{line-height:1em}",
+        );
+        assert!(
+            out.contains(r#"<h1 style="line-height:1;"><span>标题</span></h1>"#),
+            "{out}"
+        );
         assert!(out.contains(r#"<p>正文正文正文正文正文正文</p><div style="line-height:1;">说明</div><h2 class="t" style="color:red;line-height:0.744;">小标题</h2><div class="w"><h3 style="line-height:1;">节</h3><p>正文</p></div>"#), "{out}");
     }
 
@@ -595,7 +802,12 @@ mod tests {
     #[test]
     fn paragraphs_get_inline_line_height() {
         let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
-        let out = run(&format!(r#"{p}<p class="poem" style="line-height:0.744;">诗</p><p style="line-height:2">行内</p><p style="line-height:1.618">同正文</p>"#), "body{line-height:1.618} p.poem{line-height:1}");
+        let out = run(
+            &format!(
+                r#"{p}<p class="poem" style="line-height:0.744;">诗</p><p style="line-height:2">行内</p><p style="line-height:1.618">同正文</p>"#
+            ),
+            "body{line-height:1.618} p.poem{line-height:1}",
+        );
         assert!(out.contains(r#"<p>正文正文正文正文正文正文</p><p class="poem" style="line-height:0.744;">诗</p><p style="line-height:2;line-height:1.2361;">行内</p><p style="line-height:1.618;line-height:1;">同正文</p>"#), "{out}");
     }
 
@@ -605,11 +817,23 @@ mod tests {
     fn unwritten_and_inherited() {
         let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
         let page = format!(r#"<div>说明</div>{p}<h1>标题</h1>"#);
-        assert_eq!(run(&page, "p{margin:0}"), String::from_utf8(book(&page, "p{margin:0}")[2].data.clone()).unwrap());
-        let out = run(&format!(r#"<div>说明</div>{p}<div class="e">一<div>二</div></div>"#), "p{line-height:1.5em} div.e{line-height:1.5em}");
-        assert!(out.contains(r#"<div style="line-height:0.8;">说明</div>"#), "{out}");
+        assert_eq!(
+            run(&page, "p{margin:0}"),
+            String::from_utf8(book(&page, "p{margin:0}")[2].data.clone()).unwrap()
+        );
+        let out = run(
+            &format!(r#"<div>说明</div>{p}<div class="e">一<div>二</div></div>"#),
+            "p{line-height:1.5em} div.e{line-height:1.5em}",
+        );
+        assert!(
+            out.contains(r#"<div style="line-height:0.8;">说明</div>"#),
+            "{out}"
+        );
         // div.e：Kindle 1.5/1.5 = 1，Move 上本来 1.5 → 写 1；里面的 div 继承 1.5em（长度按绝对值继承，Kindle 照样 1），Move 上继承改后的 1，不再写
-        assert!(out.contains(r#"<div class="e" style="line-height:1;">一<div>二</div></div>"#), "{out}");
+        assert!(
+            out.contains(r#"<div class="e" style="line-height:1;">一<div>二</div></div>"#),
+            "{out}"
+        );
     }
 
     /// 写 2em 的 h2 → xx-large；缺省的 h2（1.5em）不动；h3 写 1em → medium；字在 span 里按 span 的字号；行内 `style` 后面接；
@@ -618,8 +842,15 @@ mod tests {
     /// 标题缺省居中的阅读器（掌阅）：自己没写对齐的照 Kindle 继承来的写明；写了的、外层居中的、不居中的阅读器不动。
     #[test]
     fn heading_alignment_written_where_reader_centers() {
-        let reader = ReaderModel { heading_center: true, ..ReaderModel::default() };
-        let out = run_with(r#"<h2>甲</h2><h2 class="c">乙</h2><div class="m"><h3>丙</h3></div><p>正文</p>"#, "body{text-align:justify} .c{text-align:right} div.m{text-align:center}", &reader);
+        let reader = ReaderModel {
+            heading_center: true,
+            ..ReaderModel::default()
+        };
+        let out = run_with(
+            r#"<h2>甲</h2><h2 class="c">乙</h2><div class="m"><h3>丙</h3></div><p>正文</p>"#,
+            "body{text-align:justify} .c{text-align:right} div.m{text-align:center}",
+            &reader,
+        );
         assert!(out.contains(r#"<h2 style="text-align:justify;">甲</h2><h2 class="c">乙</h2><div class="m"><h3>丙</h3></div>"#), "{out}");
         let plain = run_with("<h2>甲</h2>", "", &ReaderModel::default());
         assert!(plain.contains("<h2>甲</h2>"), "{plain}");
@@ -628,17 +859,31 @@ mod tests {
     /// 改成 div 拿不准的不改（照旧按关键字）：书里有光写 `div` 的规则、`div.类` 的类标题上也有、这一级出现在组合选择器前面。
     #[test]
     fn heading_div_guarded() {
-        let reader = ReaderModel { line_height_except_p: false, ..move_reader() };
-        for css in ["h4{font-size:large} div{margin:0}", "h4{font-size:large} div.kw{color:red}", "h4{font-size:large} h4 + p{text-indent:0}", "h4{font-size:large} h4::before{content:'x'}"] {
+        let reader = ReaderModel {
+            line_height_except_p: false,
+            ..move_reader()
+        };
+        for css in [
+            "h4{font-size:large} div{margin:0}",
+            "h4{font-size:large} div.kw{color:red}",
+            "h4{font-size:large} h4 + p{text-indent:0}",
+            "h4{font-size:large} h4::before{content:'x'}",
+        ] {
             let out = run_with(r#"<h4 class="kw">四</h4><p>正文</p>"#, css, &reader);
             // 本来写的就是 Move 认的 large：原样不动
-            assert!(out.contains(r#"<h4 class="kw">四</h4><p>正文</p>"#), "{css}: {out}");
+            assert!(
+                out.contains(r#"<h4 class="kw">四</h4><p>正文</p>"#),
+                "{css}: {out}"
+            );
         }
     }
 
     #[test]
     fn headings_get_nearest_keyword() {
-        let reader = ReaderModel { line_height_except_p: false, ..move_reader() };
+        let reader = ReaderModel {
+            line_height_except_p: false,
+            ..move_reader()
+        };
         let out = run_with(
             r#"<h2 class="big">章</h2><h2>节</h2><h3 class="one" style="color:red">小节</h3><h1><span class="s">标题</span></h1><h4 class="kw">四</h4><h6>六</h6><p class="big">正文</p>"#,
             "h1{font-size:2em} h2{font-size:1.5em} h3{font-size:1.17em} h4{font-size:1em} h6{font-size:0.67em} .big{font-size:2em} h3.one{font-size:1em} span.s{font-size:0.6em} h4.kw{font-size:large}",
@@ -656,10 +901,18 @@ mod tests {
     /// 继承绝对的行高（Kindle 上是自己字号的 0.75 倍，÷ 1.84 低于显示的下限 0.744），掌阅上是改过的 div 的一行，接行内 0.744 × 1.5。
     #[test]
     fn length_only_reader() {
-        let reader = ReaderModel { line_em: Some(1.5), ..ReaderModel::default() };
+        let reader = ReaderModel {
+            line_em: Some(1.5),
+            ..ReaderModel::default()
+        };
         let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
         let css = "body{line-height:1.84} p{line-height:1.84} h1{line-height:1.2 !important} p.w{line-height:3em} .n{line-height:normal} .x{line-height:20px} div.b{line-height:150%} h2{font-size:2em}";
-        let mut b = book(&format!(r#"<h1>标题</h1>{p}<div>说明</div><p class="w">宽</p><div class="b"><h2>大</h2></div>"#), css);
+        let mut b = book(
+            &format!(
+                r#"<h1>标题</h1>{p}<div>说明</div><p class="w">宽</p><div class="b"><h2>大</h2></div>"#
+            ),
+            css,
+        );
         apply(&mut b, &mut WashReport::default(), None, &reader);
         let out_css = String::from_utf8(b[1].data.clone()).unwrap();
         assert_eq!(out_css, "body{line-height:1.84} p{line-height:1.5em} h1{line-height:1.116em !important} p.w{line-height:2.4457em} .n{line-height:1.116em} .x{line-height:20px} div.b{line-height:1.2228em} h2{font-size:2em}");
@@ -674,7 +927,12 @@ mod tests {
         let p = "<p>正文正文正文正文正文正文</p>".repeat(3);
         let page = format!(r#"<h2 style="color:red">章</h2>{p}"#);
         let css = "body{line-height:1.618} h2{font-size:2em}";
-        assert!(run_with(&page, css, &move_reader()).contains(r#"<h2 style="color:red;line-height:1;font-size:xx-large;" data-eink-fs="2">章</h2>"#));
-        assert_eq!(run_with(&page, css, &ReaderModel::default()), String::from_utf8(book(&page, css)[2].data.clone()).unwrap());
+        assert!(run_with(&page, css, &move_reader()).contains(
+            r#"<h2 style="color:red;line-height:1;font-size:xx-large;" data-eink-fs="2">章</h2>"#
+        ));
+        assert_eq!(
+            run_with(&page, css, &ReaderModel::default()),
+            String::from_utf8(book(&page, css)[2].data.clone()).unwrap()
+        );
     }
 }

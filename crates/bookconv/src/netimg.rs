@@ -10,7 +10,12 @@ pub const UA: &str = "Mozilla/5.0 (compatible; readlater/1.0)";
 
 /// 抓远程图；给了 `screen` 就按书里插图的规则降采样（`fit_for_epub`），`None` = 保留原图（入库母版用）。`src` 支持协议相对 `//host/path`；非 http(s) 返回 None。
 /// 返回 (字节, 扩展名, mime)；非图（魔数不认）、超过 [`MAX_IMAGE_BYTES`] → None。
-pub fn fetch_image(ag: &ureq::Agent, src: &str, referer: &str, screen: Option<imgopt::Screen>) -> Option<(Vec<u8>, &'static str, &'static str)> {
+pub fn fetch_image(
+    ag: &ureq::Agent,
+    src: &str,
+    referer: &str,
+    screen: Option<imgopt::Screen>,
+) -> Option<(Vec<u8>, &'static str, &'static str)> {
     // 协议相对 URL（`//host/path`，Wikipedia 等常用）补 https:；其余非 http(s)（data:/未解析相对）跳过。
     let abs = if let Some(rest) = src.strip_prefix("//") {
         format!("https://{rest}")
@@ -68,8 +73,14 @@ mod tests {
 
     #[test]
     fn origin_of_extracts_scheme_host() {
-        assert_eq!(origin_of("https://mp.weixin.qq.com/s/ID?x=1"), "https://mp.weixin.qq.com/");
-        assert_eq!(origin_of("//cdn.example.com/a/b.png"), "https://cdn.example.com/");
+        assert_eq!(
+            origin_of("https://mp.weixin.qq.com/s/ID?x=1"),
+            "https://mp.weixin.qq.com/"
+        );
+        assert_eq!(
+            origin_of("//cdn.example.com/a/b.png"),
+            "https://cdn.example.com/"
+        );
         assert_eq!(origin_of("http://host"), "http://host/");
         assert_eq!(origin_of("notaurl"), "");
     }
@@ -77,14 +88,34 @@ mod tests {
     /// 远程横幅图按插图框缩（宽不超过阅读范围宽），和本地插图一样；以前按横竖选框，横图能宽到阅读范围的长边。
     #[test]
     fn fetched_banner_fits_epub_box() {
-        let screen = imgopt::Screen { width: 842, height: 1455 };
+        let screen = imgopt::Screen {
+            width: 842,
+            height: 1455,
+        };
         let img = image::RgbImage::from_pixel(3000, 1000, image::Rgb([120, 30, 200]));
         let mut jpg = Vec::new();
-        image::DynamicImage::ImageRgb8(img).write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut jpg),
+                image::ImageFormat::Jpeg,
+            )
+            .unwrap();
         let out = fit_for_epub(jpg.clone(), screen);
-        let (w, h) = image::ImageReader::new(std::io::Cursor::new(&out)).with_guessed_format().unwrap().into_dimensions().unwrap();
+        let (w, h) = image::ImageReader::new(std::io::Cursor::new(&out))
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions()
+            .unwrap();
         assert_eq!((w, h), (842, 281), "宽不超过插图框");
-        assert_eq!(out, imgopt::downscale_for_epub(&jpg, screen).unwrap(), "和本地插图同一个规则");
-        assert_eq!(fit_for_epub(b"not image".to_vec(), screen), b"not image", "缩不了原样");
+        assert_eq!(
+            out,
+            imgopt::downscale_for_epub(&jpg, screen).unwrap(),
+            "和本地插图同一个规则"
+        );
+        assert_eq!(
+            fit_for_epub(b"not image".to_vec(), screen),
+            b"not image",
+            "缩不了原样"
+        );
     }
 }

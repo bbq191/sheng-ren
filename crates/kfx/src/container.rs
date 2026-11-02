@@ -77,7 +77,13 @@ impl Entity {
             Body::Ion(items) => items,
             Body::Raw(_) => &[],
         };
-        items.iter().filter_map(|it| if let Item::Value(v) = it { Some(v) } else { None })
+        items.iter().filter_map(|it| {
+            if let Item::Value(v) = it {
+                Some(v)
+            } else {
+                None
+            }
+        })
     }
 
     /// Ion 实体的第一个值。
@@ -101,26 +107,45 @@ pub struct Container {
 }
 
 fn u16_at(b: &[u8], at: usize) -> Result<u16> {
-    b.get(at..at + 2).map(|s| u16::from_le_bytes([s[0], s[1]])).ok_or_else(|| Error(format!("偏移 {at} 越界")))
+    b.get(at..at + 2)
+        .map(|s| u16::from_le_bytes([s[0], s[1]]))
+        .ok_or_else(|| Error(format!("偏移 {at} 越界")))
 }
 
 fn u32_at(b: &[u8], at: usize) -> Result<u32> {
-    b.get(at..at + 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]])).ok_or_else(|| Error(format!("偏移 {at} 越界")))
+    b.get(at..at + 4)
+        .map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+        .ok_or_else(|| Error(format!("偏移 {at} 越界")))
 }
 
 fn u64_at(b: &[u8], at: usize) -> Result<u64> {
-    b.get(at..at + 8).map(|s| u64::from_le_bytes(s.try_into().unwrap_or_default())).ok_or_else(|| Error(format!("偏移 {at} 越界")))
+    b.get(at..at + 8)
+        .map(|s| u64::from_le_bytes(s.try_into().unwrap_or_default()))
+        .ok_or_else(|| Error(format!("偏移 {at} 越界")))
 }
 
 fn slice<'a>(b: &'a [u8], off: u64, len: u64, what: &str) -> Result<&'a [u8]> {
-    let (Ok(off), Ok(len)) = (usize::try_from(off), usize::try_from(len)) else { return bad(format!("{what}：偏移或长度溢出")) };
-    off.checked_add(len).and_then(|end| b.get(off..end)).ok_or_else(|| Error(format!("{what}：越界（偏移 {off}，长度 {len}，文件 {}）", b.len())))
+    let (Ok(off), Ok(len)) = (usize::try_from(off), usize::try_from(len)) else {
+        return bad(format!("{what}：偏移或长度溢出"));
+    };
+    off.checked_add(len)
+        .and_then(|end| b.get(off..end))
+        .ok_or_else(|| {
+            Error(format!(
+                "{what}：越界（偏移 {off}，长度 {len}，文件 {}）",
+                b.len()
+            ))
+        })
 }
 
 fn info_u64(info: &Value, sid: u32) -> Result<Option<u64>> {
     match info.field(sid) {
         None => Ok(None),
-        Some(v) => v.as_int().and_then(|n| u64::try_from(n).ok()).map(Some).ok_or_else(|| Error(format!("容器信息 ${sid} 不是非负整数"))),
+        Some(v) => v
+            .as_int()
+            .and_then(|n| u64::try_from(n).ok())
+            .map(Some)
+            .ok_or_else(|| Error(format!("容器信息 ${sid} 不是非负整数"))),
     }
 }
 
@@ -142,18 +167,36 @@ impl Container {
         if info.as_struct().is_none() {
             return bad("容器信息不是结构体");
         }
-        if info_u64(&info, SID_COMPRESSION)?.unwrap_or(0) != 0 || info_u64(&info, SID_DRM_SCHEME)?.unwrap_or(0) != 0 {
+        if info_u64(&info, SID_COMPRESSION)?.unwrap_or(0) != 0
+            || info_u64(&info, SID_DRM_SCHEME)?.unwrap_or(0) != 0
+        {
             return bad("压缩或 DRM 方案不是 0（没见过的变体，不处理）");
         }
         let need = |sid| info_u64(&info, sid)?.ok_or_else(|| Error(format!("容器信息缺 ${sid}")));
-        let index = slice(b, need(SID_INDEX_OFFSET)?, need(SID_INDEX_LENGTH)?, "实体索引")?;
-        let symtab = ion::decode_stream(slice(b, need(SID_SYMTAB_OFFSET)?, need(SID_SYMTAB_LENGTH)?, "符号表")?)?;
-        let capabilities = match (info_u64(&info, SID_CAPS_OFFSET)?, info_u64(&info, SID_CAPS_LENGTH)?) {
+        let index = slice(
+            b,
+            need(SID_INDEX_OFFSET)?,
+            need(SID_INDEX_LENGTH)?,
+            "实体索引",
+        )?;
+        let symtab = ion::decode_stream(slice(
+            b,
+            need(SID_SYMTAB_OFFSET)?,
+            need(SID_SYMTAB_LENGTH)?,
+            "符号表",
+        )?)?;
+        let capabilities = match (
+            info_u64(&info, SID_CAPS_OFFSET)?,
+            info_u64(&info, SID_CAPS_LENGTH)?,
+        ) {
             (Some(o), Some(l)) => ion::decode_stream(slice(b, o, l, "格式能力")?)?,
             _ => Vec::new(),
         };
         let ci_end = ci_off as usize + ci_len as usize;
-        let kfxgen = b.get(ci_end..header_len).map(<[u8]>::to_vec).unwrap_or_default();
+        let kfxgen = b
+            .get(ci_end..header_len)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
         if index.len() % INDEX_ENTRY != 0 {
             return bad("实体索引长度不是 24 的倍数");
         }
@@ -161,11 +204,20 @@ impl Container {
         for e in index.as_chunks::<INDEX_ENTRY>().0 {
             let id = u32_at(e, 0)?;
             let ty = u32_at(e, 4)?;
-            let off = u64_at(e, 8)?.checked_add(header_len as u64).ok_or_else(|| Error("实体偏移溢出".into()))?;
+            let off = u64_at(e, 8)?
+                .checked_add(header_len as u64)
+                .ok_or_else(|| Error("实体偏移溢出".into()))?;
             let data = slice(b, off, u64_at(e, 16)?, "实体")?;
             entities.push(parse_entity(id, ty, data)?);
         }
-        Ok(Container { version, info, symtab, capabilities, kfxgen, entities })
+        Ok(Container {
+            version,
+            info,
+            symtab,
+            capabilities,
+            kfxgen,
+            entities,
+        })
     }
 
     /// 符号表（共享表部分没有名字）。
@@ -182,7 +234,11 @@ impl Container {
     /// `$490` 元数据的 `asset_id`）。只换容器信息不换清单，Kindle 找不到图片资源，封面页空白（2026-10-05 真机）。
     pub fn set_container_id(&mut self, new: &str) {
         let Some(old) = self.container_id().map(str::to_string) else {
-            set_field(&mut self.info, SID_CONTAINER_ID, Value::String(new.to_string()));
+            set_field(
+                &mut self.info,
+                SID_CONTAINER_ID,
+                Value::String(new.to_string()),
+            );
             return;
         };
         replace_strings(&mut self.info, &old, new);
@@ -294,11 +350,19 @@ fn parse_entity(id: u32, ty: u32, d: &[u8]) -> Result<Entity> {
     let header = ion::decode_stream(&d[ENTITY_FIXED..hl])?;
     let rest = &d[hl..];
     let body = if rest.starts_with(&ion::BVM) {
-        Body::Ion(ion::decode_stream(rest).map_err(|e| Error(format!("实体 {id}（类型 ${ty}）：{e}")))?)
+        Body::Ion(
+            ion::decode_stream(rest).map_err(|e| Error(format!("实体 {id}（类型 ${ty}）：{e}")))?,
+        )
     } else {
         Body::Raw(rest.to_vec())
     };
-    Ok(Entity { id, ty, version, header, body })
+    Ok(Entity {
+        id,
+        ty,
+        version,
+        header,
+        body,
+    })
 }
 
 /// 一个实体的字节，分两段：实体头 + Ion 正文（编码出来的），原始字节正文（借用）。
@@ -366,7 +430,9 @@ fn replace_bytes(hay: &[u8], old: &[u8], new: &[u8]) -> Vec<u8> {
 /// kfxgen 信息里 `kfxgen_payload_sha1` 的值是实体区的 SHA-1（十六进制，`digest` 是算好的摘要）。设备不校验它（2026-10-05 真机），照样更新。
 fn update_payload_sha1(kfxgen: &[u8], digest: &[u8]) -> Vec<u8> {
     const KEY: &[u8] = b"key:\"kfxgen_payload_sha1\",value:\"";
-    let Some(p) = kfxgen.windows(KEY.len()).position(|w| w == KEY) else { return kfxgen.to_vec() };
+    let Some(p) = kfxgen.windows(KEY.len()).position(|w| w == KEY) else {
+        return kfxgen.to_vec();
+    };
     let start = p + KEY.len();
     if kfxgen.len() < start + 40 {
         return kfxgen.to_vec();
@@ -395,11 +461,20 @@ mod tests {
                             (ion::SID_MAX_ID, Value::Int(859)),
                         ])]),
                     ),
-                    (ion::SID_SYMBOLS, Value::List(vec![Value::String("t1".into())])),
+                    (
+                        ion::SID_SYMBOLS,
+                        Value::List(vec![Value::String("t1".into())]),
+                    ),
                 ])),
             )),
         ];
-        let header = vec![Item::Bvm, Item::Value(Value::Struct(vec![(410, Value::Int(0)), (411, Value::Int(0))]))];
+        let header = vec![
+            Item::Bvm,
+            Item::Value(Value::Struct(vec![
+                (410, Value::Int(0)),
+                (411, Value::Int(0)),
+            ])),
+        ];
         Container {
             version: 2,
             info: Value::Struct(vec![
@@ -442,7 +517,10 @@ mod tests {
         assert_eq!(back.to_bytes(), b);
         // SHA-1 更新成了实体区的。
         let hl = u32_at(&b, 6).unwrap() as usize;
-        let hex: String = Sha1::digest(&b[hl..]).iter().map(|x| format!("{x:02x}")).collect();
+        let hex: String = Sha1::digest(&b[hl..])
+            .iter()
+            .map(|x| format!("{x:02x}"))
+            .collect();
         assert!(String::from_utf8_lossy(&back.kfxgen).contains(&hex));
         // 消耗容器的写法字节相同
         assert_eq!(c.into_bytes(), b);
@@ -461,7 +539,13 @@ mod tests {
                 Item::Bvm,
                 Item::Value(Value::Annotated(
                     vec![419],
-                    Box::new(Value::Struct(vec![(252, Value::List(vec![Value::Struct(vec![(155, Value::String("CR!TEST".into()))])]))])),
+                    Box::new(Value::Struct(vec![(
+                        252,
+                        Value::List(vec![Value::Struct(vec![(
+                            155,
+                            Value::String("CR!TEST".into()),
+                        )])]),
+                    )])),
                 )),
             ]),
         });
@@ -476,7 +560,10 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert!(Container::parse(b"").is_err());
-        assert!(Container::parse(b"\xeaDRMION\xee....").unwrap_err().0.contains("DRM"));
+        assert!(Container::parse(b"\xeaDRMION\xee....")
+            .unwrap_err()
+            .0
+            .contains("DRM"));
         let mut b = sample().to_bytes();
         b.truncate(b.len() - 3);
         assert!(Container::parse(&b).is_err());

@@ -13,17 +13,43 @@ fn main() {
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
     let device_given = args.iter().any(|a| a.starts_with("--device="));
     if files.len() != 2 || files.len() + usize::from(device_given) != args.len() {
-        die(cli::USAGE, "用法: readable-measure [--device=<id>] 竖长图截图.png 横宽图截图.png");
+        die(
+            cli::USAGE,
+            "用法: readable-measure [--device=<id>] 竖长图截图.png 横宽图截图.png",
+        );
     }
-    let format = if device_given { Some(profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e)).format()) } else { None };
-    let load = |p: &str| image::open(p).unwrap_or_else(|e| die(cli::FAILED, format!("读 {p}: {e}"))).to_luma8();
-    let m = bookconv::probe::measure(&load(files[0]), &load(files[1])).unwrap_or_else(|e| die(cli::FAILED, format!("测量失败: {e}")));
+    let format = if device_given {
+        Some(
+            profile::device_from_args(&args)
+                .unwrap_or_else(|e| die(cli::USAGE, e))
+                .format(),
+        )
+    } else {
+        None
+    };
+    let load = |p: &str| {
+        image::open(p)
+            .unwrap_or_else(|e| die(cli::FAILED, format!("读 {p}: {e}")))
+            .to_luma8()
+    };
+    let m = bookconv::probe::measure(&load(files[0]), &load(files[1]))
+        .unwrap_or_else(|e| die(cli::FAILED, format!("测量失败: {e}")));
     let (sw, sh) = m.screen;
     let (rw, rh) = m.readable;
     let tb = m.tall_box;
     let wb = m.wide_box;
     println!("截图尺寸 {sw}×{sh}，可阅读范围 {rw}×{rh}");
-    println!("竖长黑块 {}×{}（上 {} 下 {}），横宽黑块 {}×{}（左 {} 右 {}）", tb.2 - tb.0, tb.3 - tb.1, tb.1, sh - tb.3, wb.2 - wb.0, wb.3 - wb.1, wb.0, sw - wb.2);
+    println!(
+        "竖长黑块 {}×{}（上 {} 下 {}），横宽黑块 {}×{}（左 {} 右 {}）",
+        tb.2 - tb.0,
+        tb.3 - tb.1,
+        tb.1,
+        sh - tb.3,
+        wb.2 - wb.0,
+        wb.3 - wb.1,
+        wb.0,
+        sw - wb.2
+    );
     for w in &m.warnings {
         println!("⚠ {w}");
     }

@@ -12,8 +12,18 @@ fn code(o: &std::process::Output) -> Option<i32> {
 /// 退出码是 `want`，stderr 含 `msg`。
 #[track_caller]
 fn expect(o: std::process::Output, want: i32, msg: &str) {
-    assert_eq!(code(&o), Some(want), "stdout: {}\nstderr: {}", stdout(&o), stderr(&o));
-    assert!(stderr(&o).contains(msg), "stderr 里应有「{msg}」：{}", stderr(&o));
+    assert_eq!(
+        code(&o),
+        Some(want),
+        "stdout: {}\nstderr: {}",
+        stdout(&o),
+        stderr(&o)
+    );
+    assert!(
+        stderr(&o).contains(msg),
+        "stderr 里应有「{msg}」：{}",
+        stderr(&o)
+    );
 }
 
 #[test]
@@ -23,35 +33,102 @@ fn usage_errors_exit_1() {
     let lib = Some(lib.as_path());
     expect(booklib(lib, &[]), 1, "用法");
     expect(booklib(lib, &["frobnicate"]), 1, "不认识的命令 frobnicate");
-    expect(booklib(lib, &["sync", "--device", "kindle"]), 1, "要写成 --device=值");
-    expect(booklib(lib, &["sync", "--device=nosuch"]), 1, "没有阅读模式 nosuch");
+    expect(
+        booklib(lib, &["sync", "--device", "kindle"]),
+        1,
+        "要写成 --device=值",
+    );
+    expect(
+        booklib(lib, &["sync", "--device=nosuch"]),
+        1,
+        "没有阅读模式 nosuch",
+    );
     expect(booklib(lib, &["sync", "--out=x"]), 1, "不认识选项 --out=");
     // build 并入了 sync；sync 总会清理，--prune 去掉了
-    expect(booklib(lib, &["build"]), 1, "build 已并入 sync：booklib sync [--device=…] [--force] [书...]");
-    expect(booklib(lib, &["build", "--force", "三体"]), 1, "build 已并入 sync");
+    expect(
+        booklib(lib, &["build"]),
+        1,
+        "build 已并入 sync：booklib sync [--device=…] [--force] [书...]",
+    );
+    expect(
+        booklib(lib, &["build", "--force", "三体"]),
+        1,
+        "build 已并入 sync",
+    );
     expect(booklib(lib, &["sync", "--prune"]), 1, "sync 现在总会清理");
-    expect(booklib(lib, &["list", "--device="]), 1, "--device= 后面要写值");
+    expect(
+        booklib(lib, &["list", "--device="]),
+        1,
+        "--device= 后面要写值",
+    );
     expect(booklib(lib, &["add"]), 1, "add 要给文件或网址");
     expect(booklib(lib, &["remove"]), 1, "remove 要给 id");
     expect(booklib(lib, &["untrack"]), 1, "untrack 要给目录或书");
-    expect(booklib(lib, &["untrack", "--root=x", "a"]), 1, "untrack 不认识选项 --root=");
-    expect(booklib(lib, &["track", "--root=x", "a"]), 1, "--root= 单独用");
-    expect(booklib(lib, &["track", "--device=nosuch", "a"]), 1, "没有阅读模式 nosuch");
+    expect(
+        booklib(lib, &["untrack", "--root=x", "a"]),
+        1,
+        "untrack 不认识选项 --root=",
+    );
+    expect(
+        booklib(lib, &["track", "--root=x", "a"]),
+        1,
+        "--root= 单独用",
+    );
+    expect(
+        booklib(lib, &["track", "--device=nosuch", "a"]),
+        1,
+        "没有阅读模式 nosuch",
+    );
     // meta 必须选 --fetch 或 --edit；两种模式的选项不能混用
     expect(booklib(lib, &["meta"]), 1, "--fetch");
     expect(booklib(lib, &["meta", "白夜行"]), 1, "--edit");
-    expect(booklib(lib, &["meta", "--fetch", "--title=x"]), 1, "不认识选项 --title=");
-    expect(booklib(lib, &["meta", "--fetch", "--no-backup"]), 1, "不认识 --no-backup");
+    expect(
+        booklib(lib, &["meta", "--fetch", "--title=x"]),
+        1,
+        "不认识选项 --title=",
+    );
+    expect(
+        booklib(lib, &["meta", "--fetch", "--no-backup"]),
+        1,
+        "不认识 --no-backup",
+    );
     // sync 的选项组合（要先有跟踪目录，不然先报"还没有跟踪"）
     let books = dir.path().join("books");
     std::fs::create_dir_all(&books).unwrap();
-    assert_eq!(code(&booklib(lib, &["track", books.to_str().unwrap()])), Some(0));
-    expect(booklib(lib, &["sync", "--no-build", "--device=kindle"]), 1, "--no-build 和 --device 不能一起用");
-    expect(booklib(lib, &["sync", "--watch=0"]), 1, "--watch= 要写正整数秒数");
-    expect(booklib(lib, &["sync", "--no-build", "--force"]), 1, "--no-build 不生成，不能和 --force、书名一起用");
-    expect(booklib(lib, &["sync", "--no-build", "白夜行"]), 1, "--no-build 不生成");
-    expect(booklib(lib, &["sync", "--watch", "白夜行"]), 1, "--watch 每轮同步、生成全部书，不能和 --force、书名一起用");
-    expect(booklib(lib, &["sync", "--watch=5", "--force"]), 1, "--watch 每轮同步");
+    assert_eq!(
+        code(&booklib(lib, &["track", books.to_str().unwrap()])),
+        Some(0)
+    );
+    expect(
+        booklib(lib, &["sync", "--no-build", "--device=kindle"]),
+        1,
+        "--no-build 和 --device 不能一起用",
+    );
+    expect(
+        booklib(lib, &["sync", "--watch=0"]),
+        1,
+        "--watch= 要写正整数秒数",
+    );
+    expect(
+        booklib(lib, &["sync", "--no-build", "--force"]),
+        1,
+        "--no-build 不生成，不能和 --force、书名一起用",
+    );
+    expect(
+        booklib(lib, &["sync", "--no-build", "白夜行"]),
+        1,
+        "--no-build 不生成",
+    );
+    expect(
+        booklib(lib, &["sync", "--watch", "白夜行"]),
+        1,
+        "--watch 每轮同步、生成全部书，不能和 --force、书名一起用",
+    );
+    expect(
+        booklib(lib, &["sync", "--watch=5", "--force"]),
+        1,
+        "--watch 每轮同步",
+    );
 }
 
 #[test]
@@ -61,36 +138,84 @@ fn help_prints_to_stdout_and_exits_0_without_touching_the_library() {
     for args in [&["--help"][..], &["-h"], &["help"]] {
         let o = booklib(Some(&lib), args);
         assert_eq!(code(&o), Some(0), "{args:?}");
-        assert!(stdout(&o).contains("booklib [--library=目录] sync") && stdout(&o).contains("devices"), "{args:?}: {}", stdout(&o));
+        assert!(
+            stdout(&o).contains("booklib [--library=目录] sync") && stdout(&o).contains("devices"),
+            "{args:?}: {}",
+            stdout(&o)
+        );
     }
     // 子命令自己的说明：只有这个命令的那几段
-    for args in [&["sync", "--help"][..], &["sync", "-h"], &["help", "sync"], &["sync", "--prune", "--help"]] {
+    for args in [
+        &["sync", "--help"][..],
+        &["sync", "-h"],
+        &["help", "sync"],
+        &["sync", "--prune", "--help"],
+    ] {
         let o = booklib(Some(&lib), args);
         assert_eq!(code(&o), Some(0), "{args:?}");
         let out = stdout(&o);
-        assert!(out.contains("] sync [--device=") && out.contains("--watch") && !out.contains("] add ") && !out.contains("untrack"), "{args:?}: {out}");
+        assert!(
+            out.contains("] sync [--device=")
+                && out.contains("--watch")
+                && !out.contains("] add ")
+                && !out.contains("untrack"),
+            "{args:?}: {out}"
+        );
     }
     let out = stdout(&booklib(Some(&lib), &["meta", "--help"]));
-    assert!(out.contains("meta --fetch") && out.contains("meta --show") && out.contains("meta --edit") && !out.contains(" sync "), "{out}");
+    assert!(
+        out.contains("meta --fetch")
+            && out.contains("meta --show")
+            && out.contains("meta --edit")
+            && !out.contains(" sync "),
+        "{out}"
+    );
     let out = stdout(&booklib(Some(&lib), &["track", "-h"]));
-    assert!(out.contains(" track [--device=") && out.contains("<目录或书>") && !out.contains("untrack"), "{out}");
-    expect(booklib(Some(&lib), &["help", "frobnicate"]), 1, "不认识的命令 frobnicate");
+    assert!(
+        out.contains(" track [--device=") && out.contains("<目录或书>") && !out.contains("untrack"),
+        "{out}"
+    );
+    expect(
+        booklib(Some(&lib), &["help", "frobnicate"]),
+        1,
+        "不认识的命令 frobnicate",
+    );
     // build 已并入 sync：看它的帮助也给出这句提示
     for args in [&["help", "build"][..], &["build", "--help"]] {
         expect(booklib(Some(&lib), args), 1, "build 已并入 sync");
     }
     // 版本号：提交号和各项规则版本
-    for args in [&["--version"][..], &["-V"], &["version"], &["--library=x", "--version"]] {
+    for args in [
+        &["--version"][..],
+        &["-V"],
+        &["version"],
+        &["--library=x", "--version"],
+    ] {
         let o = booklib(Some(&lib), args);
         assert_eq!(code(&o), Some(0), "{args:?}");
-        assert!(stdout(&o).starts_with("booklib ") && stdout(&o).contains(&format!("优化 {}", bookconv::optimize::OPTIMIZE_VERSION)), "{args:?}: {}", stdout(&o));
+        assert!(
+            stdout(&o).starts_with("booklib ")
+                && stdout(&o).contains(&format!("优化 {}", bookconv::optimize::OPTIMIZE_VERSION)),
+            "{args:?}: {}",
+            stdout(&o)
+        );
     }
     // 用错时只给这个命令的写法，不把全部用法刷一屏
     let o = booklib(Some(&lib), &["sync", "--frob"]);
-    assert!(stderr(&o).contains("sync 不认识 --frob") && stderr(&o).contains("booklib sync --help") && !stderr(&o).contains("dedupe"), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("sync 不认识 --frob")
+            && stderr(&o).contains("booklib sync --help")
+            && !stderr(&o).contains("dedupe"),
+        "{}",
+        stderr(&o)
+    );
     assert!(!lib.exists(), "看帮助不该建书库");
     // `--` 之后的 --help 是书名（这里是 id），不是要帮助
-    expect(booklib(Some(&lib), &["remove", "--", "--help"]), 2, "--help");
+    expect(
+        booklib(Some(&lib), &["remove", "--", "--help"]),
+        2,
+        "--help",
+    );
 }
 
 #[test]
@@ -100,12 +225,24 @@ fn processing_failures_exit_2() {
     let lib = Some(lib.as_path());
     expect(booklib(lib, &["sync"]), 2, "还没有跟踪任何目录");
     expect(booklib(lib, &["sync", "不存在的书"]), 2, "没有匹配的书");
-    expect(booklib(lib, &["meta", "--fetch", "不存在的书"]), 2, "没有匹配的书");
-    expect(booklib(lib, &["sync", "a/b"]), 2, "路径里有空格时要整个加引号");
+    expect(
+        booklib(lib, &["meta", "--fetch", "不存在的书"]),
+        2,
+        "没有匹配的书",
+    );
+    expect(
+        booklib(lib, &["sync", "a/b"]),
+        2,
+        "路径里有空格时要整个加引号",
+    );
     expect(booklib(lib, &["remove", "ffffffffffff"]), 2, "");
     let missing = dir.path().join("没有这本.epub");
     expect(booklib(lib, &["add", missing.to_str().unwrap()]), 2, "✗");
-    expect(booklib(lib, &["add", dir.path().to_str().unwrap()]), 2, "是目录：目录用 booklib track");
+    expect(
+        booklib(lib, &["add", dir.path().to_str().unwrap()]),
+        2,
+        "是目录：目录用 booklib track",
+    );
 }
 
 #[test]
@@ -115,7 +252,10 @@ fn devices_lists_the_builtin_modes() {
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     let out = stdout(&o);
     for (id, fmt) in [("ireader", "EPUB"), ("kindle", "KFX")] {
-        assert!(out.lines().any(|l| l.starts_with(id) && l.contains(fmt)), "{id} {fmt}：{out}");
+        assert!(
+            out.lines().any(|l| l.starts_with(id) && l.contains(fmt)),
+            "{id} {fmt}：{out}"
+        );
     }
 }
 
@@ -132,24 +272,46 @@ fn meta_fetch_clear_and_comics_offline() {
     {
         let mut z = zip::ZipWriter::new(std::fs::File::create(&cbz).unwrap());
         for i in 1..=3 {
-            z.start_file(format!("p{i}.jpg"), zip::write::SimpleFileOptions::default()).unwrap();
+            z.start_file(
+                format!("p{i}.jpg"),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
             z.write_all(&jpeg(600, 900)).unwrap();
         }
         z.finish().unwrap();
     }
-    assert_eq!(code(&booklib(lib, &["add", book.to_str().unwrap(), cbz.to_str().unwrap()])), Some(0));
+    assert_eq!(
+        code(&booklib(
+            lib,
+            &["add", book.to_str().unwrap(), cbz.to_str().unwrap()]
+        )),
+        Some(0)
+    );
     let o = booklib(lib, &["meta", "--fetch", "--clear", "风起"]);
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
-    assert!(stdout(&o).contains("本来就没有找来的元数据  风起"), "{}", stdout(&o));
+    assert!(
+        stdout(&o).contains("本来就没有找来的元数据  风起"),
+        "{}",
+        stdout(&o)
+    );
     let o = booklib(lib, &["meta", "--fetch", "漫画"]);
     assert_eq!(code(&o), Some(2), "{}", stdout(&o));
-    assert!(!stdout(&o).contains("漫画不找元数据") && stderr(&o).contains("连不上网"), "{}{}", stdout(&o), stderr(&o));
+    assert!(
+        !stdout(&o).contains("漫画不找元数据") && stderr(&o).contains("连不上网"),
+        "{}{}",
+        stdout(&o),
+        stderr(&o)
+    );
 }
 
 /// 目录里除了 `keep` 以外没有别的文件（不留备份、不留临时文件）。
 #[track_caller]
 fn only(dir: &Path, keep: &[&str]) {
-    let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
     names.sort();
     assert_eq!(names, keep, "目录里不该有别的文件");
 }
@@ -166,20 +328,47 @@ fn meta_edit_views_edits_and_deletes_with_empty_values() {
         stdout(&o)
     };
     let v = view();
-    assert!(v.contains("标题: 风起") && v.contains("作者: 作者") && v.contains("封面: 无"), "{v}");
+    assert!(
+        v.contains("标题: 风起") && v.contains("作者: 作者") && v.contains("封面: 无"),
+        "{v}"
+    );
 
     // `--名字 值` 和 `--名字=值` 都认；可重复的选项整体替换；--edit 不一定紧跟 meta；--library= 不打开书库
     let unused_lib = dir.path().join("不该建的书库");
-    let o = booklib(Some(&unused_lib), &["meta", b, "--edit", "--title", "新书名", "--publisher=某出版社", "--tag", "小说", "--tag=科幻"]);
+    let o = booklib(
+        Some(&unused_lib),
+        &[
+            "meta",
+            b,
+            "--edit",
+            "--title",
+            "新书名",
+            "--publisher=某出版社",
+            "--tag",
+            "小说",
+            "--tag=科幻",
+        ],
+    );
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     assert!(stdout(&o).contains("已写入"), "{}", stdout(&o));
     assert!(!unused_lib.exists(), "改文件不碰书库");
     let v = view();
-    assert!(v.contains("标题: 新书名") && v.contains("出版社: 某出版社") && v.contains("标签: 小说; 科幻"), "{v}");
+    assert!(
+        v.contains("标题: 新书名")
+            && v.contains("出版社: 某出版社")
+            && v.contains("标签: 小说; 科幻"),
+        "{v}"
+    );
     only(dir.path(), &["书.epub"]);
 
     // 值给空字符串 = 删掉（两种写法）
-    assert_eq!(code(&booklib(None, &["meta", "--edit", b, "--publisher", "", "--tag="])), Some(0));
+    assert_eq!(
+        code(&booklib(
+            None,
+            &["meta", "--edit", b, "--publisher", "", "--tag="]
+        )),
+        Some(0)
+    );
     let v = view();
     assert!(!v.contains("出版社") && !v.contains("标签"), "{v}");
     assert!(v.contains("标题: 新书名"), "没给的选项不动：{v}");
@@ -187,12 +376,27 @@ fn meta_edit_views_edits_and_deletes_with_empty_values() {
     // 封面：加上、取出、去掉
     let img = dir.path().join("封面.jpg");
     std::fs::write(&img, jpeg(300, 400)).unwrap();
-    assert_eq!(code(&booklib(None, &["meta", "--edit", b, "--cover", img.to_str().unwrap()])), Some(0));
+    assert_eq!(
+        code(&booklib(
+            None,
+            &["meta", "--edit", b, "--cover", img.to_str().unwrap()]
+        )),
+        Some(0)
+    );
     assert!(view().contains("封面: 有（jpg，300×400"), "{}", view());
     let got = dir.path().join("取出.jpg");
-    assert_eq!(code(&booklib(None, &["meta", "--edit", b, "--get-cover", got.to_str().unwrap()])), Some(0));
+    assert_eq!(
+        code(&booklib(
+            None,
+            &["meta", "--edit", b, "--get-cover", got.to_str().unwrap()]
+        )),
+        Some(0)
+    );
     assert_eq!(image::image_dimensions(&got).unwrap(), (300, 400));
-    assert_eq!(code(&booklib(None, &["meta", "--edit", b, "--cover="])), Some(0));
+    assert_eq!(
+        code(&booklib(None, &["meta", "--edit", b, "--cover="])),
+        Some(0)
+    );
     assert!(view().contains("封面: 无"), "{}", view());
     only(dir.path(), &["书.epub", "取出.jpg", "封面.jpg"]);
 }
@@ -205,23 +409,99 @@ fn meta_edit_errors_leave_the_file_untouched() {
     let before = std::fs::read(&book).unwrap();
     let b = book.to_str().unwrap();
     expect(booklib(None, &["meta", "--edit"]), 1, "要给一个 EPUB 文件");
-    expect(booklib(None, &["meta", "--edit", b, b]), 1, "只能给一个文件");
-    expect(booklib(None, &["meta", "--edit", b, "--force"]), 1, "是 meta --fetch 的选项");
-    expect(booklib(None, &["meta", "--edit", b, "--no-backup"]), 1, "不认识选项 --no-backup");
-    expect(booklib(None, &["meta", "--edit", b, "--title"]), 1, "--title 要给值");
+    expect(
+        booklib(None, &["meta", "--edit", b, b]),
+        1,
+        "只能给一个文件",
+    );
+    expect(
+        booklib(None, &["meta", "--edit", b, "--force"]),
+        1,
+        "是 meta --fetch 的选项",
+    );
+    expect(
+        booklib(None, &["meta", "--edit", b, "--no-backup"]),
+        1,
+        "不认识选项 --no-backup",
+    );
+    expect(
+        booklib(None, &["meta", "--edit", b, "--title"]),
+        1,
+        "--title 要给值",
+    );
     // 不是文件就去书库找；书库不在时不新建
     let no_lib = dir.path().join("没有书库");
-    expect(booklib(Some(&no_lib), &["meta", "--edit", dir.path().join("没有.epub").to_str().unwrap()]), 2, "文件不存在");
+    expect(
+        booklib(
+            Some(&no_lib),
+            &[
+                "meta",
+                "--edit",
+                dir.path().join("没有.epub").to_str().unwrap(),
+            ],
+        ),
+        2,
+        "文件不存在",
+    );
     assert!(!no_lib.exists(), "找书不建书库");
-    expect(booklib(None, &["meta", "--edit", b, "--get-cover", dir.path().join("x.jpg").to_str().unwrap()]), 2, "书里没有封面");
-    expect(booklib(None, &["meta", "--edit", b, "--title", "新", "--cover", dir.path().join("没有.jpg").to_str().unwrap()]), 2, "没有.jpg");
+    expect(
+        booklib(
+            None,
+            &[
+                "meta",
+                "--edit",
+                b,
+                "--get-cover",
+                dir.path().join("x.jpg").to_str().unwrap(),
+            ],
+        ),
+        2,
+        "书里没有封面",
+    );
+    expect(
+        booklib(
+            None,
+            &[
+                "meta",
+                "--edit",
+                b,
+                "--title",
+                "新",
+                "--cover",
+                dir.path().join("没有.jpg").to_str().unwrap(),
+            ],
+        ),
+        2,
+        "没有.jpg",
+    );
     std::fs::write(dir.path().join("坏.epub"), b"not a zip").unwrap();
-    expect(booklib(None, &["meta", "--edit", dir.path().join("坏.epub").to_str().unwrap(), "--title", "新"]), 2, "没改");
-    assert_eq!(std::fs::read(&book).unwrap(), before, "出错时原文件一个字节不变");
+    expect(
+        booklib(
+            None,
+            &[
+                "meta",
+                "--edit",
+                dir.path().join("坏.epub").to_str().unwrap(),
+                "--title",
+                "新",
+            ],
+        ),
+        2,
+        "没改",
+    );
+    assert_eq!(
+        std::fs::read(&book).unwrap(),
+        before,
+        "出错时原文件一个字节不变"
+    );
     only(dir.path(), &["书.epub", "坏.epub"]);
     let o = booklib(None, &["meta", "--edit", "--help"]);
     assert_eq!(code(&o), Some(0));
-    assert!(stdout(&o).contains("booklib meta --edit 书.epub"), "{}", stdout(&o));
+    assert!(
+        stdout(&o).contains("booklib meta --edit 书.epub"),
+        "{}",
+        stdout(&o)
+    );
 }
 
 #[test]
@@ -233,12 +513,35 @@ fn meta_edit_keeps_symlinks_and_permissions() {
     std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o640)).unwrap();
     let link = dir.path().join("链接.epub");
     std::os::unix::fs::symlink(&real, &link).unwrap();
-    let o = booklib(None, &["meta", "--edit", link.to_str().unwrap(), "--title", "新书名"]);
+    let o = booklib(
+        None,
+        &[
+            "meta",
+            "--edit",
+            link.to_str().unwrap(),
+            "--title",
+            "新书名",
+        ],
+    );
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
-    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "链接还是链接");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "链接还是链接"
+    );
     assert_eq!(std::fs::read_link(&link).unwrap(), real);
-    assert_eq!(std::fs::metadata(&real).unwrap().permissions().mode() & 0o777, 0o640, "权限不变");
-    assert!(stdout(&booklib(None, &["meta", "--edit", real.to_str().unwrap()])).contains("标题: 新书名"), "改的是链接指向的文件");
+    assert_eq!(
+        std::fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+        0o640,
+        "权限不变"
+    );
+    assert!(
+        stdout(&booklib(None, &["meta", "--edit", real.to_str().unwrap()]))
+            .contains("标题: 新书名"),
+        "改的是链接指向的文件"
+    );
     only(dir.path(), &["真.epub", "链接.epub"]);
 }
 
@@ -250,14 +553,31 @@ fn meta_show_lists_tracked_books() {
     let books = dir.path().join("books");
     std::fs::create_dir_all(&books).unwrap();
     std::fs::write(books.join("风起.epub"), sample_epub("风起")).unwrap();
-    expect(booklib(Some(&lib), &["meta", "--show"]), 2, "没有跟踪的目录");
-    assert_eq!(code(&booklib(Some(&lib), &["track", books.to_str().unwrap()])), Some(0));
+    expect(
+        booklib(Some(&lib), &["meta", "--show"]),
+        2,
+        "没有跟踪的目录",
+    );
+    assert_eq!(
+        code(&booklib(Some(&lib), &["track", books.to_str().unwrap()])),
+        Some(0)
+    );
     assert_eq!(code(&booklib(Some(&lib), &["sync", "--no-build"])), Some(0));
     let o = booklib(Some(&lib), &["meta", "--show"]);
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     let out = stdout(&o);
-    assert!(out.contains("风起") && out.contains("书里 标题：风起") && out.contains("找来：没找过") && out.contains("共 1 本"), "{out}");
-    expect(booklib(Some(&lib), &["meta", "--show", "--fetch"]), 1, "不能一起用");
+    assert!(
+        out.contains("风起")
+            && out.contains("书里 标题：风起")
+            && out.contains("找来：没找过")
+            && out.contains("共 1 本"),
+        "{out}"
+    );
+    expect(
+        booklib(Some(&lib), &["meta", "--show", "--fetch"]),
+        1,
+        "不能一起用",
+    );
 }
 
 #[test]
@@ -267,46 +587,102 @@ fn meta_edit_finds_books_by_id_or_title() {
     let books = dir.path().join("books");
     std::fs::create_dir_all(&books).unwrap();
     std::fs::write(books.join("恶女的告白.epub"), sample_epub("恶女的告白")).unwrap();
-    std::fs::write(books.join("恶女的告白·续.epub"), sample_epub("恶女的告白·续")).unwrap();
+    std::fs::write(
+        books.join("恶女的告白·续.epub"),
+        sample_epub("恶女的告白·续"),
+    )
+    .unwrap();
     std::fs::write(books.join("绝叫.epub"), sample_epub("绝叫")).unwrap();
-    assert_eq!(code(&booklib(Some(&lib), &["track", books.to_str().unwrap()])), Some(0));
+    assert_eq!(
+        code(&booklib(Some(&lib), &["track", books.to_str().unwrap()])),
+        Some(0)
+    );
     assert_eq!(code(&booklib(Some(&lib), &["sync", "--no-build"])), Some(0));
-    let view = |f: &str| stdout(&booklib(None, &["meta", "--edit", books.join(f).to_str().unwrap()]));
+    let view = |f: &str| {
+        stdout(&booklib(
+            None,
+            &["meta", "--edit", books.join(f).to_str().unwrap()],
+        ))
+    };
 
     // 书名片段：改的是原件
-    let o = booklib(Some(&lib), &["meta", "--edit", "绝叫", "--author", "叶真中显"]);
+    let o = booklib(
+        Some(&lib),
+        &["meta", "--edit", "绝叫", "--author", "叶真中显"],
+    );
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
-    assert!(stdout(&o).contains("→ ") && stdout(&o).contains("已写入"), "{}", stdout(&o));
-    assert!(view("绝叫.epub").contains("作者: 叶真中显"), "{}", view("绝叫.epub"));
+    assert!(
+        stdout(&o).contains("→ ") && stdout(&o).contains("已写入"),
+        "{}",
+        stdout(&o)
+    );
+    assert!(
+        view("绝叫.epub").contains("作者: 叶真中显"),
+        "{}",
+        view("绝叫.epub")
+    );
 
     // 对上几本：列出来，不改
     let before = std::fs::read(books.join("恶女的告白.epub")).unwrap();
-    expect(booklib(Some(&lib), &["meta", "--edit", "恶女", "--author", "x"]), 2, "对上 2 本书");
-    assert_eq!(std::fs::read(books.join("恶女的告白.epub")).unwrap(), before);
+    expect(
+        booklib(Some(&lib), &["meta", "--edit", "恶女", "--author", "x"]),
+        2,
+        "对上 2 本书",
+    );
+    assert_eq!(
+        std::fs::read(books.join("恶女的告白.epub")).unwrap(),
+        before
+    );
 
     // id 前缀（只看不改也行）
     let list = stdout(&booklib(Some(&lib), &["list"]));
-    let id = list.lines().find(|l| l.contains("恶女的告白") && !l.contains("续")).and_then(|l| l.split_whitespace().next()).unwrap().to_string();
+    let id = list
+        .lines()
+        .find(|l| l.contains("恶女的告白") && !l.contains("续"))
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap()
+        .to_string();
     let o = booklib(Some(&lib), &["meta", "--edit", &id]);
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     assert!(stdout(&o).contains("标题: 恶女的告白"), "{}", stdout(&o));
 
-    expect(booklib(Some(&lib), &["meta", "--edit", "没有这本"]), 2, "书库里也没有");
+    expect(
+        booklib(Some(&lib), &["meta", "--edit", "没有这本"]),
+        2,
+        "书库里也没有",
+    );
 }
 
 #[test]
 fn meta_edit_takes_non_utf8_paths_as_they_are() {
     use std::os::unix::ffi::OsStrExt;
     let dir = tempfile::tempdir().unwrap();
-    let book = dir.path().join(std::ffi::OsStr::from_bytes(b"\xff\xfe.epub"));
+    let book = dir
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"\xff\xfe.epub"));
     std::fs::write(&book, sample_epub("风起")).unwrap();
     let img = dir.path().join(std::ffi::OsStr::from_bytes(b"\xff.jpg"));
     std::fs::write(&img, jpeg(300, 400)).unwrap();
     let mut cover = std::ffi::OsString::from("--cover=");
     cover.push(&img);
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib")).arg("meta").arg("--edit").arg(&book).arg(&cover).output().unwrap();
-    assert_eq!(code(&o), Some(0), "以前文件名转成字符串后找不到文件：{}", stderr(&o));
-    assert!(stdout(&o).contains("封面: 有（jpg，300×400"), "{}", stdout(&o));
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"))
+        .arg("meta")
+        .arg("--edit")
+        .arg(&book)
+        .arg(&cover)
+        .output()
+        .unwrap();
+    assert_eq!(
+        code(&o),
+        Some(0),
+        "以前文件名转成字符串后找不到文件：{}",
+        stderr(&o)
+    );
+    assert!(
+        stdout(&o).contains("封面: 有（jpg，300×400"),
+        "{}",
+        stdout(&o)
+    );
 }
 
 /// track/untrack 的相对路径：当前目录里没有时按书根目录找（2026-10-19 要）。
@@ -316,26 +692,67 @@ fn track_resolves_relative_paths_against_the_books_root() {
     let lib = dir.path().join("lib");
     let book = dir.path().join("book");
     std::fs::create_dir_all(book.join("优秀漫画/死亡筆記")).unwrap();
-    std::fs::write(book.join("优秀漫画/死亡筆記/卷01.epub"), common::sample_epub("卷01")).unwrap();
+    std::fs::write(
+        book.join("优秀漫画/死亡筆記/卷01.epub"),
+        common::sample_epub("卷01"),
+    )
+    .unwrap();
     let root = format!("--root={}", book.display());
-    assert_eq!(common::booklib(Some(&lib), &["track", &root]).status.code(), Some(0));
+    assert_eq!(
+        common::booklib(Some(&lib), &["track", &root]).status.code(),
+        Some(0)
+    );
     // 测试的当前目录（crate 目录）里没有这个路径：按书根目录找
-    let o = common::booklib(Some(&lib), &["track", "--device=kindle", "--top", "优秀漫画/死亡筆記"]);
+    let o = common::booklib(
+        Some(&lib),
+        &["track", "--device=kindle", "--top", "优秀漫画/死亡筆記"],
+    );
     let canon = std::fs::canonicalize(&book).unwrap();
-    assert!(common::stdout(&o).contains("开始跟踪目录") && common::stdout(&o).contains(&canon.join("优秀漫画/死亡筆記").display().to_string()), "{}", common::stdout(&o));
+    assert!(
+        common::stdout(&o).contains("开始跟踪目录")
+            && common::stdout(&o).contains(&canon.join("优秀漫画/死亡筆記").display().to_string()),
+        "{}",
+        common::stdout(&o)
+    );
     let o = common::booklib(Some(&lib), &["track", "没有这个.epub"]);
     assert_eq!(o.status.code(), Some(2));
-    assert!(common::stderr(&o).contains("当前目录和书根目录") , "{}", common::stderr(&o));
+    assert!(
+        common::stderr(&o).contains("当前目录和书根目录"),
+        "{}",
+        common::stderr(&o)
+    );
     let o = common::booklib(Some(&lib), &["untrack", "优秀漫画/死亡筆記"]);
-    assert!(common::stdout(&o).contains("✓ 不再跟踪"), "{}", common::stdout(&o));
+    assert!(
+        common::stdout(&o).contains("✓ 不再跟踪"),
+        "{}",
+        common::stdout(&o)
+    );
     // 不写扩展名：补 .epub、.cbz；两个都有时要写上
     let o = common::booklib(Some(&lib), &["track", "优秀漫画/死亡筆記/卷01"]);
-    assert!(common::stdout(&o).contains(&canon.join("优秀漫画/死亡筆記/卷01.epub").display().to_string()), "{}{}", common::stdout(&o), common::stderr(&o));
+    assert!(
+        common::stdout(&o).contains(
+            &canon
+                .join("优秀漫画/死亡筆記/卷01.epub")
+                .display()
+                .to_string()
+        ),
+        "{}{}",
+        common::stdout(&o),
+        common::stderr(&o)
+    );
     let o = common::booklib(Some(&lib), &["untrack", "优秀漫画/死亡筆記/卷01"]);
-    assert!(common::stdout(&o).contains("✓ 不再跟踪"), "{}", common::stdout(&o));
+    assert!(
+        common::stdout(&o).contains("✓ 不再跟踪"),
+        "{}",
+        common::stdout(&o)
+    );
     std::fs::write(book.join("优秀漫画/死亡筆記/卷01.cbz"), b"").unwrap();
     let o = common::booklib(Some(&lib), &["track", "优秀漫画/死亡筆記/卷01"]);
-    assert!(common::stderr(&o).contains("写上扩展名"), "{}", common::stderr(&o));
+    assert!(
+        common::stderr(&o).contains("写上扩展名"),
+        "{}",
+        common::stderr(&o)
+    );
 }
 
 /// fish 补全：`booklib __complete` 只读、不建书库。
@@ -343,10 +760,16 @@ fn track_resolves_relative_paths_against_the_books_root() {
 fn complete_is_read_only() {
     let dir = tempfile::tempdir().unwrap();
     let lib = dir.path().join("lib");
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib")).env("BOOKLIB_DIR", &lib).args(["__complete", "tracked", ""]).output().unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"))
+        .env("BOOKLIB_DIR", &lib)
+        .args(["__complete", "tracked", ""])
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(0));
     assert!(!lib.exists());
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib")).args(["__complete", "fish"]).output().unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"))
+        .args(["__complete", "fish"])
+        .output()
+        .unwrap();
     assert!(common::stdout(&o).starts_with("# booklib 的 fish 补全"));
 }
-

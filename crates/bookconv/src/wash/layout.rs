@@ -13,7 +13,9 @@ use super::*;
 
 /// `<html>` 缺语言属性时补上 `lang` 与 `xml:lang`（按完整属性名认，单引号的 `lang='en'` 也算有，不会再补出重复属性）。
 pub(super) fn ensure_html_lang(html: &str, tag: &str) -> String {
-    let Some(t) = html::tags(html).find(|t| t.is_start() && t.is("html")) else { return html.to_string() };
+    let Some(t) = html::tags(html).find(|t| t.is_start() && t.is("html")) else {
+        return html.to_string();
+    };
     let open = &html[t.start..t.end];
     let has_lang = html::attr(open, "lang").is_some();
     let has_xml_lang = html::attr(open, "xml:lang").is_some();
@@ -35,14 +37,20 @@ pub(super) fn ensure_html_lang(html: &str, tag: &str) -> String {
 /// 单引号也认，不产生第二个 `class`）。
 pub(super) fn align_classes(html: &str) -> String {
     static STYLE_ALIGN: OnceLock<Regex> = OnceLock::new();
-    let style_align = STYLE_ALIGN.get_or_init(|| Regex::new(r#"(?i)text-align\s*:\s*(center|right)"#).unwrap());
+    let style_align =
+        STYLE_ALIGN.get_or_init(|| Regex::new(r#"(?i)text-align\s*:\s*(center|right)"#).unwrap());
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
-    for t in html::tags(html).filter(|t| t.is_start() && (t.is("p") || t.is("div") || t.heading_level().is_some())) {
+    for t in html::tags(html)
+        .filter(|t| t.is_start() && (t.is("p") || t.is("div") || t.heading_level().is_some()))
+    {
         let tag = &html[t.start..t.end];
         let align = html::attr_value(tag, "align")
             .map(|a| a.trim().to_ascii_lowercase())
             .filter(|a| a == "center" || a == "right")
-            .or_else(|| html::attr_value(tag, "style").and_then(|s| style_align.captures(s).map(|m| m[1].to_ascii_lowercase())));
+            .or_else(|| {
+                html::attr_value(tag, "style")
+                    .and_then(|s| style_align.captures(s).map(|m| m[1].to_ascii_lowercase()))
+            });
         let Some(align) = align else { continue };
         let class = format!("eink-{align}");
         if !html::has_class(tag, &class) {
@@ -64,7 +72,10 @@ fn referenced_frags(entries: &[Entry]) -> HashSet<String> {
             return Vec::new();
         }
         let t = String::from_utf8_lossy(&e.data);
-        html::link_values(&t).into_iter().filter_map(|v| html::split_href(v).1.map(|f| html::frag_id(f).into_owned())).collect()
+        html::link_values(&t)
+            .into_iter()
+            .filter_map(|v| html::split_href(v).1.map(|f| html::frag_id(f).into_owned()))
+            .collect()
     });
     per_file.into_iter().flatten().collect()
 }
@@ -82,18 +93,27 @@ impl Drawn {
         static CLASS: OnceLock<Regex> = OnceLock::new();
         static ELEM: OnceLock<Regex> = OnceLock::new();
         let class_re = CLASS.get_or_init(|| Regex::new(r#"\.([A-Za-z0-9_-]+)"#).unwrap());
-        let elem_re = ELEM.get_or_init(|| Regex::new(r#"(?:^|[\s,>+~])([A-Za-z][A-Za-z0-9]*)"#).unwrap());
+        let elem_re =
+            ELEM.get_or_init(|| Regex::new(r#"(?:^|[\s,>+~])([A-Za-z][A-Za-z0-9]*)"#).unwrap());
         let add_css = |css: &str, d: &mut Drawn| {
             for c in crate::cascade::rule_spans(css) {
                 let sel = rule_selector(c.prelude);
                 let pseudo = sel.contains(":before") || sel.contains(":after");
-                if !html::css_decls(c.body).iter().any(|x| decl_draws(x.prop, x.value, pseudo)) {
+                if !html::css_decls(c.body)
+                    .iter()
+                    .any(|x| decl_draws(x.prop, x.value, pseudo))
+                {
                     continue;
                 }
                 for part in sel.split(',') {
-                    d.classes.extend(class_re.captures_iter(part).map(|m| m[1].to_string()));
+                    d.classes
+                        .extend(class_re.captures_iter(part).map(|m| m[1].to_string()));
                     if !part.contains('.') {
-                        d.elements.extend(elem_re.captures_iter(part).map(|m| m[1].to_ascii_lowercase()));
+                        d.elements.extend(
+                            elem_re
+                                .captures_iter(part)
+                                .map(|m| m[1].to_ascii_lowercase()),
+                        );
                     }
                 }
             }
@@ -122,8 +142,13 @@ impl Drawn {
     /// 这个空元素（开标签）会不会画出东西。
     fn draws(&self, name: &str, open: &str) -> bool {
         self.elements.contains(&name.to_ascii_lowercase())
-            || html::attr_value(open, "class").is_some_and(|c| c.split_whitespace().any(|x| self.classes.contains(x)))
-            || html::attr_value(open, "style").is_some_and(|st| html::css_decls(st).iter().any(|x| decl_draws(x.prop, x.value, false)))
+            || html::attr_value(open, "class")
+                .is_some_and(|c| c.split_whitespace().any(|x| self.classes.contains(x)))
+            || html::attr_value(open, "style").is_some_and(|st| {
+                html::css_decls(st)
+                    .iter()
+                    .any(|x| decl_draws(x.prop, x.value, false))
+            })
     }
 }
 
@@ -132,9 +157,16 @@ fn decl_draws(prop: &str, value: &str, pseudo: bool) -> bool {
     let p = prop.to_ascii_lowercase();
     let v = value.to_ascii_lowercase();
     let v = v.trim_end_matches("!important").trim();
-    let blank = matches!(v, "" | "none" | "0" | "transparent" | "inherit" | "initial" | "unset" | "hidden");
+    let blank = matches!(
+        v,
+        "" | "none" | "0" | "transparent" | "inherit" | "initial" | "unset" | "hidden"
+    );
     if p.starts_with("border") || p.starts_with("outline") {
-        return ["solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset"].iter().any(|k| v.contains(k));
+        return [
+            "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset",
+        ]
+        .iter()
+        .any(|k| v.contains(k));
     }
     match p.as_str() {
         "box-shadow" | "background" | "background-color" | "background-image" => !blank,
@@ -144,14 +176,22 @@ fn decl_draws(prop: &str, value: &str, pseudo: bool) -> bool {
 }
 
 /// 删掉 `html` 的 body 末尾（最后一处可见内容之后）没有内容的空元素与换行；返回 (新 html, 删了几个, 包住结尾的容器的类名)。
-fn trim_tail(html: &str, referenced: &HashSet<String>, drawn: &Drawn) -> (String, usize, Vec<String>) {
+fn trim_tail(
+    html: &str,
+    referenced: &HashSet<String>,
+    drawn: &Drawn,
+) -> (String, usize, Vec<String>) {
     static EMPTY: OnceLock<Regex> = OnceLock::new();
     let empty = EMPTY.get_or_init(|| {
         Regex::new(r#"(?is)<(p|div|span|section)\b([^>]*)>(?:\s|&nbsp;|&#160;|&#xa0;|\u{3000}|<br\s*/?>)*</(?:p|div|span|section)>|<(?:p|div|span)\b[^>]*/>|<br\b[^>]*/?>"#).unwrap()
     });
-    let Some((lo, close)) = html::body_range(html) else { return (html.to_string(), 0, Vec::new()) };
+    let Some((lo, close)) = html::body_range(html) else {
+        return (html.to_string(), 0, Vec::new());
+    };
     let inner = &html[lo..close];
-    let Some(vis_end) = html::last_visible_end(inner) else { return (html.to_string(), 0, Vec::new()) };
+    let Some(vis_end) = html::last_visible_end(inner) else {
+        return (html.to_string(), 0, Vec::new());
+    };
     let (head, mut tail) = (inner[..vis_end].to_string(), inner[vis_end..].to_string());
     let mut removed = 0;
     loop {
@@ -163,7 +203,9 @@ fn trim_tail(html: &str, referenced: &HashSet<String>, drawn: &Drawn) -> (String
                 let open = &whole[..open_end];
                 // 被链接指到的留着；样式会画出东西的留着（CSS 画的分隔线、边框，2026-09-27 审计）；看得见的留着。
                 let name = html::tags(open).next().map_or("", |t| t.name);
-                let keep = html::attr_value(open, "id").is_some_and(|id| referenced.contains(id)) || drawn.draws(name, open) || html::has_visible(whole);
+                let keep = html::attr_value(open, "id").is_some_and(|id| referenced.contains(id))
+                    || drawn.draws(name, open)
+                    || html::has_visible(whole);
                 if keep {
                     return whole.to_string();
                 }
@@ -171,9 +213,14 @@ fn trim_tail(html: &str, referenced: &HashSet<String>, drawn: &Drawn) -> (String
                 // 自闭合的 `<span …/>` 被第一种写法当成了开始标签、和后面别人的闭合标签（`</p>`）配成一对：只删它自己，
                 // 闭合标签留着（2026-10-05：章名 `<p>第十九章<span/></p>` 单独成一份后落在末尾，`</p>` 被删、XML 不合法）。
                 // 开闭标签名字不同（HTML 写法没闭合的空段 `<p></div>`）同理：`</div>` 是外层容器的，留着（2026-10-06 审计）。
-                let close_name = html::tags(whole).last().filter(|t| t.kind == html::TagKind::Close).map_or("", |t| t.name);
+                let close_name = html::tags(whole)
+                    .last()
+                    .filter(|t| t.kind == html::TagKind::Close)
+                    .map_or("", |t| t.name);
                 let self_closing = open.trim_end_matches('>').trim_end().ends_with('/');
-                if (self_closing || !close_name.eq_ignore_ascii_case(name)) && open.len() < whole.len() {
+                if (self_closing || !close_name.eq_ignore_ascii_case(name))
+                    && open.len() < whole.len()
+                {
                     return whole[open_end..].to_string();
                 }
                 String::new()
@@ -188,17 +235,32 @@ fn trim_tail(html: &str, referenced: &HashSet<String>, drawn: &Drawn) -> (String
     // 包住结尾的容器：在最后一处可见内容之前打开、之后闭合，**而且里面还包着段落/div/标题**的元素（段落自己不算——
     // 书常给所有段落用同一个类，去掉它的下边距会改变全书段距）；我们自己的 eink- 类不算。
     static BLOCK: OnceLock<Regex> = OnceLock::new();
-    let block = BLOCK.get_or_init(|| Regex::new(r#"(?i)<(p|div|h[1-6]|section|blockquote)\b"#).unwrap());
+    let block =
+        BLOCK.get_or_init(|| Regex::new(r#"(?i)<(p|div|h[1-6]|section|blockquote)\b"#).unwrap());
     let new_inner = format!("{head}{tail}");
     let mut classes = Vec::new();
-    for sp in html::parse_spans(&new_inner, 0, new_inner.len()).iter().filter(|s| s.closed()) {
-        if sp.open_start < vis_end && sp.close_start >= vis_end && block.is_match(&new_inner[sp.open_end..sp.close_start]) {
+    for sp in html::parse_spans(&new_inner, 0, new_inner.len())
+        .iter()
+        .filter(|s| s.closed())
+    {
+        if sp.open_start < vis_end
+            && sp.close_start >= vis_end
+            && block.is_match(&new_inner[sp.open_end..sp.close_start])
+        {
             if let Some(cls) = html::attr_value(&new_inner[sp.open_start..sp.open_end], "class") {
-                classes.extend(cls.split_whitespace().filter(|c| !c.starts_with("eink-")).map(str::to_string));
+                classes.extend(
+                    cls.split_whitespace()
+                        .filter(|c| !c.starts_with("eink-"))
+                        .map(str::to_string),
+                );
             }
         }
     }
-    (format!("{}{}{}", &html[..lo], new_inner, &html[close..]), removed, classes)
+    (
+        format!("{}{}{}", &html[..lo], new_inner, &html[close..]),
+        removed,
+        classes,
+    )
 }
 
 /// 规则选择器是不是只选了这些类之一（`.x` 或 `元素.x`）。
@@ -206,11 +268,15 @@ fn selects_class(selector: &str, classes: &HashSet<String>) -> bool {
     let sel = selector.trim();
     let last = last_compound(sel);
     // 整个选择器就是一个复合选择器，只有标签名（可省）和一个类
-    let Some((tag, class)) = last.split_once('.') else { return false };
+    let Some((tag, class)) = last.split_once('.') else {
+        return false;
+    };
     last.len() == sel.len()
         && tag.bytes().all(|b| b.is_ascii_alphanumeric())
         && !class.is_empty()
-        && class.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && class
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         && classes.contains(class)
 }
 
@@ -248,15 +314,27 @@ pub(super) fn strip_tail_spacing(css: &str, classes: &HashSet<String>) -> String
 
 /// 章尾空白页：逐个 spine 文件删末尾空元素，再把包住结尾的容器类的下边距/之后分页从样式表里去掉。
 pub(super) fn remove_chapter_end_blanks(entries: &mut [Entry], rep: &mut WashReport) {
-    let Some(opf) = parse_opf(entries) else { return };
+    let Some(opf) = parse_opf(entries) else {
+        return;
+    };
     let referenced = referenced_frags(entries);
     let drawn = Drawn::collect(entries);
     let mut tail_classes: HashSet<String> = HashSet::new();
     // 条目名 → 下标建一次（此前每个 spine 页线性找一遍全书条目）
-    let index: HashMap<String, usize> = name_index(entries).into_iter().map(|(n, i)| (n.to_string(), i)).collect();
-    let pages: Vec<usize> = opf.spine.iter().filter(|p| Some(*p) != opf.nav_doc.as_ref() && !is_toc_file(p)).filter_map(|p| index.get(p).copied()).collect();
+    let index: HashMap<String, usize> = name_index(entries)
+        .into_iter()
+        .map(|(n, i)| (n.to_string(), i))
+        .collect();
+    let pages: Vec<usize> = opf
+        .spine
+        .iter()
+        .filter(|p| Some(*p) != opf.nav_doc.as_ref() && !is_toc_file(p))
+        .filter_map(|p| index.get(p).copied())
+        .collect();
     let trim = |e: &mut Entry| -> (usize, Vec<String>) {
-        let Ok(html) = std::str::from_utf8(&e.data) else { return (0, Vec::new()) };
+        let Ok(html) = std::str::from_utf8(&e.data) else {
+            return (0, Vec::new());
+        };
         let (new, removed, classes) = trim_tail(html, &referenced, &drawn);
         if removed > 0 {
             e.data = new.into_bytes();
@@ -266,7 +344,12 @@ pub(super) fn remove_chapter_end_blanks(entries: &mut [Entry], rep: &mut WashRep
     let pages_set: HashSet<usize> = pages.iter().copied().collect();
     let results = if pages_set.len() == pages.len() {
         // 各页独立，多线程做（结果与按 spine 顺序逐页做相同）
-        let mut picked: Vec<&mut Entry> = entries.iter_mut().enumerate().filter(|(i, _)| pages_set.contains(i)).map(|(_, e)| e).collect();
+        let mut picked: Vec<&mut Entry> = entries
+            .iter_mut()
+            .enumerate()
+            .filter(|(i, _)| pages_set.contains(i))
+            .map(|(_, e)| e)
+            .collect();
         crate::util::par_map_mut(&mut picked, |e| trim(e))
     } else {
         // spine 里同一页出现不止一次：照原来的顺序逐页做（同一页要在前一次的结果上再做）
@@ -279,8 +362,13 @@ pub(super) fn remove_chapter_end_blanks(entries: &mut [Entry], rep: &mut WashRep
     if tail_classes.is_empty() {
         return;
     }
-    for e in entries.iter_mut().filter(|e| is_css_name(&e.name) && !is_wash_css_name(&e.name)) {
-        let Ok(css) = std::str::from_utf8(&e.data) else { continue };
+    for e in entries
+        .iter_mut()
+        .filter(|e| is_css_name(&e.name) && !is_wash_css_name(&e.name))
+    {
+        let Ok(css) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
         let new = strip_tail_spacing(css, &tail_classes);
         if new != css {
             rep.tail_spacing_rules_fixed += 1;
@@ -295,11 +383,22 @@ mod tests {
 
     #[test]
     fn html_lang_added_only_when_missing() {
-        assert_eq!(ensure_html_lang(r#"<html xmlns="x"><body/></html>"#, "zh-CN"), r#"<html lang="zh-CN" xml:lang="zh-CN" xmlns="x"><body/></html>"#);
+        assert_eq!(
+            ensure_html_lang(r#"<html xmlns="x"><body/></html>"#, "zh-CN"),
+            r#"<html lang="zh-CN" xml:lang="zh-CN" xmlns="x"><body/></html>"#
+        );
         let has = r#"<html lang="en" xml:lang="en">"#;
         assert_eq!(ensure_html_lang(has, "zh"), has, "已有的不改");
-        assert_eq!(ensure_html_lang(r#"<html xml:lang="ja">"#, "zh"), r#"<html lang="zh" xml:lang="ja">"#, "只补缺的那个");
-        assert_eq!(ensure_html_lang(r#"<html lang='en' xml:lang='en'>"#, "zh"), r#"<html lang='en' xml:lang='en'>"#, "单引号也算已有");
+        assert_eq!(
+            ensure_html_lang(r#"<html xml:lang="ja">"#, "zh"),
+            r#"<html lang="zh" xml:lang="ja">"#,
+            "只补缺的那个"
+        );
+        assert_eq!(
+            ensure_html_lang(r#"<html lang='en' xml:lang='en'>"#, "zh"),
+            r#"<html lang='en' xml:lang='en'>"#,
+            "单引号也算已有"
+        );
     }
 
     #[test]
@@ -317,7 +416,10 @@ mod tests {
         let mut refs = HashSet::new();
         refs.insert("keep".to_string());
         let css = ".rule{border-bottom:1px solid #000}\n.softbreak{border-top:0;display:block;margin-bottom:0.7em}\n.star:after{content:'*'}";
-        let drawn = Drawn::collect(&[Entry { name: "s.css".into(), data: css.as_bytes().to_vec() }]);
+        let drawn = Drawn::collect(&[Entry {
+            name: "s.css".into(),
+            data: css.as_bytes().to_vec(),
+        }]);
         let html = r#"<html><body><div class="chapter-content"><p>最后一段。</p><p class="softbreak"></p><br/></div> <div id="keep"></div><div class="calibre4" id="calibre_pb_7"></div><p>&nbsp;</p><div class="rule"></div><p style='border-top:1px solid'></p><div class="x star"></div></body></html>"#;
         let (out, n, classes) = trim_tail(html, &refs, &drawn);
         assert_eq!(
@@ -326,12 +428,23 @@ mod tests {
             "CSS 画了线/伪元素内容的空元素留着，只有外边距的删掉"
         );
         assert_eq!(n, 4);
-        assert_eq!(classes, ["chapter-content"], "包住结尾、里面还有段落的容器；段落自己不算");
+        assert_eq!(
+            classes,
+            ["chapter-content"],
+            "包住结尾、里面还有段落的容器；段落自己不算"
+        );
         let (_, n2, _) = trim_tail(&out, &refs, &drawn);
         assert_eq!(n2, 0, "幂等");
         // 没闭合的空段后面是外层容器的闭合标签：只删空段，`</div>` 留着（此前连它一起删，div 没了闭合）
-        let (out, n, _) = trim_tail("<html><body><div class=\"c\"><p>最后一段。<p> <br/></div>\n</body></html>", &refs, &drawn);
-        assert_eq!(out, "<html><body><div class=\"c\"><p>最后一段。 </div>\n</body></html>");
+        let (out, n, _) = trim_tail(
+            "<html><body><div class=\"c\"><p>最后一段。<p> <br/></div>\n</body></html>",
+            &refs,
+            &drawn,
+        );
+        assert_eq!(
+            out,
+            "<html><body><div class=\"c\"><p>最后一段。 </div>\n</body></html>"
+        );
         assert_eq!(n, 2);
     }
 
@@ -348,7 +461,10 @@ mod tests {
 
     #[test]
     fn book_like_fengtan_gets_no_chapter_end_blank_sources() {
-        let e = |n: &str, d: &str| Entry { name: n.into(), data: d.as_bytes().to_vec() };
+        let e = |n: &str, d: &str| Entry {
+            name: n.into(),
+            data: d.as_bytes().to_vec(),
+        };
         let long = "正文足够长的一段文字，确保不会被当成书名页的作者行，超过三十个字的门槛。";
         let mut v = vec![
             e("OEBPS/content.opf", r#"<package version="3.0"><metadata><dc:title>书</dc:title><dc:language>zh-CN</dc:language></metadata><manifest><item id="css" href="main.css" media-type="text/css"/><item id="c1" href="c1.html" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#),
@@ -356,12 +472,44 @@ mod tests {
             e("OEBPS/c1.html", &format!(r#"<html><head><link rel="stylesheet" href="main.css"/></head><body><div class="chapter-page"><h1>第一章</h1><div class="chapter-content"><p>{long}</p><p style="text-align:center">诗句</p><p>{long}</p><p></p></div></div></body></html>"#)),
         ];
         let rep = super::super::wash_entries(&mut v, &WashOpts::default()).unwrap();
-        let css = String::from_utf8(v.iter().find(|x| x.name == "OEBPS/main.css").unwrap().data.clone()).unwrap();
-        assert!(!css.contains("line-height") && !css.contains("100vh") && !css.contains("margin-bottom:1.5em"), "{css}");
-        let body: String = v.iter().filter(|x| x.name.starts_with("OEBPS/c1")).map(|x| String::from_utf8_lossy(&x.data).into_owned()).collect();
-        assert!(body.contains(r#"lang="zh-CN""#) && body.contains("eink-center") && !body.contains("<p></p>"), "{body}");
+        let css = String::from_utf8(
+            v.iter()
+                .find(|x| x.name == "OEBPS/main.css")
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            !css.contains("line-height")
+                && !css.contains("100vh")
+                && !css.contains("margin-bottom:1.5em"),
+            "{css}"
+        );
+        let body: String = v
+            .iter()
+            .filter(|x| x.name.starts_with("OEBPS/c1"))
+            .map(|x| String::from_utf8_lossy(&x.data).into_owned())
+            .collect();
+        assert!(
+            body.contains(r#"lang="zh-CN""#)
+                && body.contains("eink-center")
+                && !body.contains("<p></p>"),
+            "{body}"
+        );
         assert!(rep.trailing_blanks_removed >= 1 && rep.tail_spacing_rules_fixed == 1);
-        let wash = String::from_utf8(v.iter().find(|x| x.name == "OEBPS/eink-wash.css").unwrap().data.clone()).unwrap();
-        assert!(wash.contains("text-align:justify;") && wash.contains(".eink-center{text-align:center;"), "{wash}");
+        let wash = String::from_utf8(
+            v.iter()
+                .find(|x| x.name == "OEBPS/eink-wash.css")
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            wash.contains("text-align:justify;")
+                && wash.contains(".eink-center{text-align:center;"),
+            "{wash}"
+        );
     }
 }

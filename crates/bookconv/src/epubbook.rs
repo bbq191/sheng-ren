@@ -1,11 +1,11 @@
 //! 读 EPUB：元数据、spine 里的 XHTML、CSS、图片、封面、目录（AZW3、KFX 写出器共用）。
 
-use crate::epubzip::{percent_decode, read_entries_from, resolve_href};
 use crate::convert::common::{image_ext_mime, is_webp};
+use crate::epubzip::{percent_decode, read_entries_from, resolve_href};
 use crate::html;
 use crate::util::fnv64;
-use crate::wash::opf::{is_local, unique_identifier};
 use crate::wash::normalize::nav_toc_items;
+use crate::wash::opf::{is_local, unique_identifier};
 use crate::wash::{manifest_items, opf_dc, parse_opf};
 use std::collections::HashMap;
 
@@ -55,9 +55,16 @@ const FIXED_LAYOUT_EXTH: [(&str, u32); 6] = [
 /// OPF 里固定版式那一组 `<meta name content>`；`fixed-layout` 不是 `true` 时一律不要（流式排版的书写了别的几项也没用）。
 fn fixed_layout_metas(opf: &str) -> Vec<(u32, String)> {
     let mut out = Vec::new();
-    for t in crate::html::tags(opf).filter(|t| t.is_start() && crate::wash::opf::is_local(t.name, "meta")) {
+    for t in crate::html::tags(opf)
+        .filter(|t| t.is_start() && crate::wash::opf::is_local(t.name, "meta"))
+    {
         let tag = &opf[t.start..t.end];
-        let (Some(name), Some(content)) = (crate::html::attr_value(tag, "name"), crate::html::attr_value(tag, "content")) else { continue };
+        let (Some(name), Some(content)) = (
+            crate::html::attr_value(tag, "name"),
+            crate::html::attr_value(tag, "content"),
+        ) else {
+            continue;
+        };
         if let Some((_, n)) = FIXED_LAYOUT_EXTH.iter().find(|(k, _)| *k == name) {
             if !out.iter().any(|(m, _)| m == n) {
                 out.push((*n, content.trim().to_string()));
@@ -78,19 +85,43 @@ fn spine_rtl(opf: &str) -> bool {
 
 /// 第一个 `<meta property="dcterms:modified">` 的值换算成 Unix 秒（只认 `CCYY-MM-DDThh:mm:ssZ`，1970–2105 年）。
 fn modified_secs(opf: &str) -> Option<u32> {
-    let t = html::tags(opf).find(|t| t.kind == html::TagKind::Open && is_local(t.name, "meta") && html::attr_value(&opf[t.start..t.end], "property") == Some("dcterms:modified"))?;
+    let t = html::tags(opf).find(|t| {
+        t.kind == html::TagKind::Open
+            && is_local(t.name, "meta")
+            && html::attr_value(&opf[t.start..t.end], "property") == Some("dcterms:modified")
+    })?;
     let close = html::find_close(opf, t.end, t.name)?;
     let v = opf[t.end..close.start].trim().as_bytes();
-    if v.len() != 20 || v[4] != b'-' || v[7] != b'-' || v[10] != b'T' || v[13] != b':' || v[16] != b':' || v[19] != b'Z' {
+    if v.len() != 20
+        || v[4] != b'-'
+        || v[7] != b'-'
+        || v[10] != b'T'
+        || v[13] != b':'
+        || v[16] != b':'
+        || v[19] != b'Z'
+    {
         return None;
     }
-    let num = |a: usize, b: usize| -> Option<i64> { std::str::from_utf8(&v[a..b]).ok()?.parse::<i64>().ok() };
-    let (y, mo, d, h, mi, s) = (num(0, 4)?, num(5, 7)?, num(8, 10)?, num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    let num = |a: usize, b: usize| -> Option<i64> {
+        std::str::from_utf8(&v[a..b]).ok()?.parse::<i64>().ok()
+    };
+    let (y, mo, d, h, mi, s) = (
+        num(0, 4)?,
+        num(5, 7)?,
+        num(8, 10)?,
+        num(11, 13)?,
+        num(14, 16)?,
+        num(17, 19)?,
+    );
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
         return None;
     }
     // 公历日期 → 1970-01-01 起的天数（按 3 月起算的年，闰日落在年末）
-    let (yy, mm) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
+    let (yy, mm) = if mo <= 2 {
+        (y - 1, mo + 9)
+    } else {
+        (y, mo - 3)
+    };
     let era = yy.div_euclid(400);
     let yoe = yy - era * 400;
     let doy = (153 * mm + 2) / 5 + d - 1;
@@ -124,7 +155,12 @@ pub struct Loaded {
 fn nav_toc(html: &str, nav_path: &str) -> Vec<TocItem> {
     nav_toc_items(html, nav_path)
         .into_iter()
-        .map(|t| TocItem { label: t.title, level: u32::from(t.level.saturating_sub(1)), path: t.path, frag: percent_decode(&t.frag) })
+        .map(|t| TocItem {
+            label: t.title,
+            level: u32::from(t.level.saturating_sub(1)),
+            path: t.path,
+            frag: percent_decode(&t.frag),
+        })
         .collect()
 }
 
@@ -139,19 +175,41 @@ pub fn load(epub: &[u8], warnings: &mut Vec<String>) -> Result<Loaded, crate::Bo
 }
 
 /// 同 [`load`]，从可定位的读取器（如打开的文件）读：不用先把整本 EPUB 读进内存，峰值少一份压缩包大小。
-pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec<String>) -> Result<Loaded, crate::BookError> {
+pub fn load_from<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    warnings: &mut Vec<String>,
+) -> Result<Loaded, crate::BookError> {
     use crate::BookError;
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| BookError::zip("解 EPUB(非 zip?)", e))?;
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|e| BookError::zip("解 EPUB(非 zip?)", e))?;
     let mut entries = read_entries_from(&mut archive, |_| true)?;
     drop(archive);
     let opf = parse_opf(&entries).ok_or_else(|| BookError::Corrupt("找不到 OPF".into()))?;
     let opf_text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
-    let index: HashMap<String, usize> = entries.iter().enumerate().map(|(i, e)| (e.name.clone(), i)).collect();
+    let index: HashMap<String, usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.name.clone(), i))
+        .collect();
 
     let dc = opf_dc(&opf_text);
-    let stable_id = unique_identifier(&opf_text).map_or_else(|| fnv64(&entries[opf.index].data), |id| fnv64(id.as_bytes()));
+    let stable_id = unique_identifier(&opf_text).map_or_else(
+        || fnv64(&entries[opf.index].data),
+        |id| fnv64(id.as_bytes()),
+    );
     let modified = modified_secs(&opf_text);
-    let mut meta = Meta { title: dc.title, authors: dc.creators, publisher: dc.publisher, language: dc.language, date: dc.date, description: dc.description, rtl: false, stable_id, modified, fixed_layout: fixed_layout_metas(&opf_text) };
+    let mut meta = Meta {
+        title: dc.title,
+        authors: dc.creators,
+        publisher: dc.publisher,
+        language: dc.language,
+        date: dc.date,
+        description: dc.description,
+        rtl: false,
+        stable_id,
+        modified,
+        fixed_layout: fixed_layout_metas(&opf_text),
+    };
     meta.rtl = spine_rtl(&opf_text);
 
     let mut media: HashMap<String, String> = HashMap::new();
@@ -172,9 +230,20 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
             css.push((path, String::from_utf8_lossy(&entries[i].data).into_owned()));
         } else if let Some((_, mime)) = image_ext_mime(&entries[i].data) {
             // 图片字节直接移走，不复制（大漫画省一份内存）
-            images.push(Image { path, bytes: std::mem::take(&mut entries[i].data), mime });
-        } else if let Some(png) = is_webp(&entries[i].data).then(|| crate::imgopt::webp_to_png(&entries[i].data)).flatten() {
-            images.push(Image { path, bytes: png, mime: "image/png" });
+            images.push(Image {
+                path,
+                bytes: std::mem::take(&mut entries[i].data),
+                mime,
+            });
+        } else if let Some(png) = is_webp(&entries[i].data)
+            .then(|| crate::imgopt::webp_to_png(&entries[i].data))
+            .flatten()
+        {
+            images.push(Image {
+                path,
+                bytes: png,
+                mime: "image/png",
+            });
         } else if is_sfnt(&entries[i].data) {
             fonts.push((path, std::mem::take(&mut entries[i].data)));
         } else if it.media_type.starts_with("image/") {
@@ -182,7 +251,11 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
         }
     }
     if !unsupported.is_empty() {
-        warnings.push(format!("{} 张图片格式不支持（只支持 JPEG/PNG/GIF 和 WebP），在 Kindle 上不显示：{}", unsupported.len(), unsupported[0]));
+        warnings.push(format!(
+            "{} 张图片格式不支持（只支持 JPEG/PNG/GIF 和 WebP），在 Kindle 上不显示：{}",
+            unsupported.len(),
+            unsupported[0]
+        ));
     }
     if cover.is_none() {
         if let Some(&(_, _, id)) = crate::wash::opf::cover_meta_tags(&opf_text).first() {
@@ -190,15 +263,23 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
         }
     }
     cover = cover.filter(|c| images.iter().any(|i| &i.path == c));
-    let thumbnail = crate::wash::opf::meta_content(&opf_text, crate::wash::THUMB_META).and_then(|id| opf.items.get(id).cloned()).filter(|t| images.iter().any(|i| &i.path == t));
+    let thumbnail = crate::wash::opf::meta_content(&opf_text, crate::wash::THUMB_META)
+        .and_then(|id| opf.items.get(id).cloned())
+        .filter(|t| images.iter().any(|i| &i.path == t));
 
     // spine 里标了 `linear="no"` 的目录页不排（见 `wash::opf::nonlinear_nav_itemrefs`）
-    let skip_nav = opf.nav_doc.as_ref().filter(|_| !crate::wash::opf::nonlinear_nav_itemrefs(&opf_text).is_empty());
+    let skip_nav = opf
+        .nav_doc
+        .as_ref()
+        .filter(|_| !crate::wash::opf::nonlinear_nav_itemrefs(&opf_text).is_empty());
     let mut docs = Vec::new();
     for p in opf.spine.iter().filter(|p| Some(*p) != skip_nav) {
         let is_html = media.get(p).is_some_and(|m| m.contains("html"));
         if let (true, Some(&i)) = (is_html, index.get(p)) {
-            docs.push(Doc { path: p.clone(), html: String::from_utf8_lossy(&entries[i].data).into_owned() });
+            docs.push(Doc {
+                path: p.clone(),
+                html: String::from_utf8_lossy(&entries[i].data).into_owned(),
+            });
         }
     }
     if docs.is_empty() {
@@ -208,10 +289,17 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
     let get = |p: &str| index.get(p).map(|&i| &entries[i]);
     let mut toc = Vec::new();
     if let Some(ncx) = opf.ncx.as_ref().and_then(|p| get(p).map(|e| (p, e))) {
-        for (depth, label, target) in crate::ncx::parse_ncx_flat(&String::from_utf8_lossy(&ncx.1.data)) {
+        for (depth, label, target) in
+            crate::ncx::parse_ncx_flat(&String::from_utf8_lossy(&ncx.1.data))
+        {
             // `target` 的字符引用解析器已还原过，这里只拆锚点、百分号解码、解析路径（别再还原一次）
             let (path, f) = resolve_href(ncx.0, &target);
-            toc.push(TocItem { label, level: depth.saturating_sub(1) as u32, path, frag: f.map(percent_decode).unwrap_or_default() });
+            toc.push(TocItem {
+                label,
+                level: depth.saturating_sub(1) as u32,
+                path,
+                frag: f.map(percent_decode).unwrap_or_default(),
+            });
         }
     }
     if toc.is_empty() {
@@ -222,7 +310,16 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(reader: R, warnings: &mut Vec
     let doc_paths: std::collections::HashSet<&str> = docs.iter().map(|d| d.path.as_str()).collect();
     toc.retain(|t| !t.label.trim().is_empty() && doc_paths.contains(t.path.as_str()));
     clamp_levels(&mut toc);
-    Ok(Loaded { meta, docs, css, images, fonts, cover, thumbnail, toc })
+    Ok(Loaded {
+        meta,
+        docs,
+        css,
+        images,
+        fonts,
+        cover,
+        thumbnail,
+        toc,
+    })
 }
 
 /// 去掉目录项后层级可能断档（0 → 2）：每一项最多比前一项深一级。KF8 目录索引的父子区间依赖这一点。
@@ -258,13 +355,29 @@ mod tests {
     #[test]
     fn webp_to_png_converts_small_and_refuses_over_limit() {
         let mut small = Vec::new();
-        image::DynamicImage::new_rgb8(3, 2).write_to(&mut std::io::Cursor::new(&mut small), image::ImageFormat::WebP).unwrap();
+        image::DynamicImage::new_rgb8(3, 2)
+            .write_to(
+                &mut std::io::Cursor::new(&mut small),
+                image::ImageFormat::WebP,
+            )
+            .unwrap();
         let png = crate::imgopt::webp_to_png(&small).expect("小图照常转");
-        assert_eq!(image::load_from_memory(&png).unwrap().into_rgb8().dimensions(), (3, 2));
+        assert_eq!(
+            image::load_from_memory(&png)
+                .unwrap()
+                .into_rgb8()
+                .dimensions(),
+            (3, 2)
+        );
         // 头里声明 16000×16000（2.56 亿像素，超 6400 万）：头读得出来，但不解码、不 panic，当作不支持的图片
         let big = vp8l_header(16000, 16000);
         use image::ImageDecoder;
-        assert_eq!(image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&big)).unwrap().dimensions(), (16000, 16000));
+        assert_eq!(
+            image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&big))
+                .unwrap()
+                .dimensions(),
+            (16000, 16000)
+        );
         assert_eq!(crate::imgopt::webp_to_png(&big), None);
     }
 
@@ -273,8 +386,17 @@ mod tests {
         let html = r#"<body><nav epub:type="landmarks"><ol><li><a href="toc.xhtml">Table of Contents</a></li></ol></nav>
 <nav epub:type='toc' id="toc"><ol><li><a class='x' href='Text/c1.xhtml#s%201'>第一章</a><ol><li><a href="Text/c2.xhtml?a=1&amp;b=2">第二节</a></li></ol></li></ol></nav></body>"#;
         let toc = nav_toc(html, "OEBPS/nav.xhtml");
-        let got: Vec<_> = toc.iter().map(|t| (t.label.as_str(), t.level, t.path.as_str(), t.frag.as_str())).collect();
-        assert_eq!(got, [("第一章", 0, "OEBPS/Text/c1.xhtml", "s 1"), ("第二节", 1, "OEBPS/Text/c2.xhtml?a=1&b=2", "")]);
+        let got: Vec<_> = toc
+            .iter()
+            .map(|t| (t.label.as_str(), t.level, t.path.as_str(), t.frag.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("第一章", 0, "OEBPS/Text/c1.xhtml", "s 1"),
+                ("第二节", 1, "OEBPS/Text/c2.xhtml?a=1&b=2", "")
+            ]
+        );
     }
 
     #[test]
@@ -283,30 +405,61 @@ mod tests {
 <meta property="dcterms:modified">2024-02-29T23:59:59Z</meta></metadata></package>"#;
         assert_eq!(unique_identifier(opf).as_deref(), Some("urn:uuid:1&2"));
         assert_eq!(modified_secs(opf), Some(1_709_251_199));
-        assert_eq!(modified_secs(r#"<meta property="dcterms:modified">2000-01-01T00:00:00Z</meta>"#), Some(946_684_800));
-        assert_eq!(modified_secs(r#"<meta property="dcterms:modified">2000-13-01T00:00:00Z</meta>"#), None);
-        assert_eq!(unique_identifier(r#"<package><dc:identifier id="bid">x</dc:identifier></package>"#), None);
+        assert_eq!(
+            modified_secs(r#"<meta property="dcterms:modified">2000-01-01T00:00:00Z</meta>"#),
+            Some(946_684_800)
+        );
+        assert_eq!(
+            modified_secs(r#"<meta property="dcterms:modified">2000-13-01T00:00:00Z</meta>"#),
+            None
+        );
+        assert_eq!(
+            unique_identifier(r#"<package><dc:identifier id="bid">x</dc:identifier></package>"#),
+            None
+        );
     }
 
     #[test]
     fn spine_rtl_accepts_prefixed_opf_and_any_quote() {
-        assert!(spine_rtl(r#"<package><spine toc="ncx" page-progression-direction="rtl"></spine></package>"#));
-        assert!(spine_rtl(r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf"><opf:spine page-progression-direction='rtl'><opf:itemref idref="a"/></opf:spine></opf:package>"#));
-        assert!(!spine_rtl(r#"<opf:spine page-progression-direction="ltr"/>"#));
-        assert!(!spine_rtl(r#"<spinex page-progression-direction="rtl"/><spine/>"#));
-        assert!(!spine_rtl(r#"<!-- <spine page-progression-direction="rtl"> --><spine/>"#));
+        assert!(spine_rtl(
+            r#"<package><spine toc="ncx" page-progression-direction="rtl"></spine></package>"#
+        ));
+        assert!(spine_rtl(
+            r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf"><opf:spine page-progression-direction='rtl'><opf:itemref idref="a"/></opf:spine></opf:package>"#
+        ));
+        assert!(!spine_rtl(
+            r#"<opf:spine page-progression-direction="ltr"/>"#
+        ));
+        assert!(!spine_rtl(
+            r#"<spinex page-progression-direction="rtl"/><spine/>"#
+        ));
+        assert!(!spine_rtl(
+            r#"<!-- <spine page-progression-direction="rtl"> --><spine/>"#
+        ));
         // 和 `direction::spine_direction` 同一口径：值去空白、不分大小写，认无引号写法，属性值里的 `>` 不截断
         assert!(spine_rtl(r#"<spine page-progression-direction=" RTL ">"#));
-        assert!(spine_rtl(r#"<spine page-progression-direction=rtl toc=ncx>"#));
-        assert!(spine_rtl(r#"<spine toc="a>b" page-progression-direction="rtl">"#));
+        assert!(spine_rtl(
+            r#"<spine page-progression-direction=rtl toc=ncx>"#
+        ));
+        assert!(spine_rtl(
+            r#"<spine toc="a>b" page-progression-direction="rtl">"#
+        ));
     }
 
     #[test]
     fn toc_levels_never_skip() {
-        let item = |level| TocItem { label: "x".into(), level, path: String::new(), frag: String::new() };
+        let item = |level| TocItem {
+            label: "x".into(),
+            level,
+            path: String::new(),
+            frag: String::new(),
+        };
         let mut toc = vec![item(1), item(3), item(1), item(0), item(2)];
         clamp_levels(&mut toc);
-        assert_eq!(toc.iter().map(|t| t.level).collect::<Vec<_>>(), [0, 1, 1, 0, 1]);
+        assert_eq!(
+            toc.iter().map(|t| t.level).collect::<Vec<_>>(),
+            [0, 1, 1, 0, 1]
+        );
     }
 
     #[test]
@@ -316,11 +469,24 @@ mod tests {
         w.put("OEBPS/content.opf", br#"<package><metadata><dc:title>t</dc:title></metadata><manifest>
 <item id="c1" href="Text/a&amp;b.xhtml" media-type="application/xhtml+xml"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
 </manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#).unwrap();
-        w.put("OEBPS/Text/a&b.xhtml", b"<html><body><p id='s 1'>x</p></body></html>").unwrap();
+        w.put(
+            "OEBPS/Text/a&b.xhtml",
+            b"<html><body><p id='s 1'>x</p></body></html>",
+        )
+        .unwrap();
         w.put("OEBPS/toc.ncx", br#"<ncx><navMap><navPoint><navLabel><text>One</text></navLabel><content src="Text/a&amp;b.xhtml#s%201"/></navPoint></navMap></ncx>"#).unwrap();
         let bytes = w.finish().unwrap().into_inner();
         let got = load(&bytes, &mut Vec::new()).unwrap();
-        assert_eq!(got.docs.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(), ["OEBPS/Text/a&b.xhtml"]);
-        assert_eq!(got.toc.iter().map(|t| (t.path.as_str(), t.frag.as_str())).collect::<Vec<_>>(), [("OEBPS/Text/a&b.xhtml", "s 1")]);
+        assert_eq!(
+            got.docs.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(),
+            ["OEBPS/Text/a&b.xhtml"]
+        );
+        assert_eq!(
+            got.toc
+                .iter()
+                .map(|t| (t.path.as_str(), t.frag.as_str()))
+                .collect::<Vec<_>>(),
+            [("OEBPS/Text/a&b.xhtml", "s 1")]
+        );
     }
 }

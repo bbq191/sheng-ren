@@ -17,13 +17,25 @@ use crate::cascade::{MediaEnv, Sheet};
 use crate::util::xml_escape;
 use scraper::{ElementRef, Html};
 
-pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>, rem: bool, important: bool) {
+pub(super) fn apply(
+    entries: &mut [Entry],
+    rep: &mut WashReport,
+    media: Option<&MediaEnv>,
+    rem: bool,
+    important: bool,
+) {
     if rem && important {
         return;
     }
     // 先按改之前的样式表算 Kindle 上的层叠，接好行内的值，再改样式表
-    if !important && entries.iter().any(|e| (is_css_name(&e.name) || is_chapter_entry(e)) && has_important(&String::from_utf8_lossy(&e.data))) {
-        let (chapters, fixed) = super::scan_chapters(entries, media, |e, css| pin_important(e, media, css));
+    if !important
+        && entries.iter().any(|e| {
+            (is_css_name(&e.name) || is_chapter_entry(e))
+                && has_important(&String::from_utf8_lossy(&e.data))
+        })
+    {
+        let (chapters, fixed) =
+            super::scan_chapters(entries, media, |e, css| pin_important(e, media, css));
         for (i, f) in chapters.into_iter().zip(fixed) {
             if let Some((data, n)) = f {
                 entries[i].data = data;
@@ -36,22 +48,35 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
         if is_css_name(&e.name) {
             let (text, latin1) = match std::str::from_utf8(&e.data) {
                 Ok(t) => (std::borrow::Cow::Borrowed(t), false),
-                Err(_) => (std::borrow::Cow::Owned(crate::util::latin1_decode(&e.data)), true),
+                Err(_) => (
+                    std::borrow::Cow::Owned(crate::util::latin1_decode(&e.data)),
+                    true,
+                ),
             };
             let out = fix_css(&text, rem, important, &mut n);
             if n > 0 {
-                e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
+                e.data = if latin1 {
+                    crate::util::latin1_encode(&out)
+                } else {
+                    out.into_bytes()
+                };
             }
             return n;
         }
         if !is_chapter_entry(e) {
             return 0;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return 0;
+        };
         let s = html::edit_style_attrs(text, |_, v| match fix_decls(v, rem, important) {
             Some((v, k)) => {
                 n += k;
-                if v.trim().is_empty() { html::Edit::Remove } else { html::Edit::Set(v) }
+                if v.trim().is_empty() {
+                    html::Edit::Remove
+                } else {
+                    html::Edit::Set(v)
+                }
             }
             None => html::Edit::Keep,
         })
@@ -60,7 +85,11 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
             let mut k = 0;
             let out = fix_css(css, rem, important, &mut k);
             n += k;
-            if k > 0 { html::Edit::Set(out) } else { html::Edit::Keep }
+            if k > 0 {
+                html::Edit::Set(out)
+            } else {
+                html::Edit::Keep
+            }
         })
         .into_owned();
         if n > 0 {
@@ -78,15 +107,27 @@ fn has_important(t: &str) -> bool {
 
 /// 一章里 Kindle 上靠 `!important` 胜出、去掉以后会输的属性：接到元素的行内 `style`。返回 (新内容, 接了几条)；不用改的 `None`。
 /// 元素数和开始标签对不上（解析器补了标签）的整章不管。
-fn pin_important(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>) -> Option<(Vec<u8>, usize)> {
+fn pin_important(
+    e: &Entry,
+    media: Option<&MediaEnv>,
+    css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>,
+) -> Option<(Vec<u8>, usize)> {
     let text = std::str::from_utf8(&e.data).ok()?;
     let doc = Html::parse_document(text);
     let sheet = Sheet::for_doc(&doc, &e.name, media, |p| css.get(p).cloned());
-    let body = doc.root_element().children().filter_map(ElementRef::wrap).find(|el| el.value().name() == "body")?;
-    let els: Vec<ElementRef> = std::iter::once(body).chain(body.descendants().skip(1).filter_map(ElementRef::wrap)).collect();
+    let body = doc
+        .root_element()
+        .children()
+        .filter_map(ElementRef::wrap)
+        .find(|el| el.value().name() == "body")?;
+    let els: Vec<ElementRef> = std::iter::once(body)
+        .chain(body.descendants().skip(1).filter_map(ElementRef::wrap))
+        .collect();
     let (bs, be) = html::body_range(text)?;
     let body_tag = html::tags(text).find(|t| t.is_start() && t.is("body"))?;
-    let tags: Vec<html::Tag> = std::iter::once(body_tag).chain(html::tags_in(text, bs, be).filter(|t| t.is_start())).collect();
+    let tags: Vec<html::Tag> = std::iter::once(body_tag)
+        .chain(html::tags_in(text, bs, be).filter(|t| t.is_start()))
+        .collect();
     if tags.len() != els.len() {
         return None;
     }
@@ -95,13 +136,18 @@ fn pin_important(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::s
     for (el, t) in els.iter().zip(&tags) {
         let kindle = sheet.cascade(el, &e.name);
         let flat = sheet.cascade_flat(el, &e.name);
-        let mut add: Vec<(&String, &String)> = kindle.iter().filter(|(p, v)| flat.get(*p) != Some(*v) && !v.to_ascii_lowercase().contains("url(")).collect();
+        let mut add: Vec<(&String, &String)> = kindle
+            .iter()
+            .filter(|(p, v)| flat.get(*p) != Some(*v) && !v.to_ascii_lowercase().contains("url("))
+            .collect();
         if add.is_empty() {
             continue;
         }
         add.sort();
         let raw = &text[t.start..t.end];
-        let mut style = html::attr_value(raw, "style").map(|s| html::style_base(s).to_string()).unwrap_or_default();
+        let mut style = html::attr_value(raw, "style")
+            .map(|s| html::style_base(s).to_string())
+            .unwrap_or_default();
         for (p, v) in &add {
             if !style.trim().is_empty() {
                 style.push(';');
@@ -122,7 +168,12 @@ fn pin_important(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::s
 fn fix_css(css: &str, rem: bool, important: bool, n: &mut usize) -> String {
     let edits: Vec<(usize, usize, String)> = crate::cascade::rule_spans(css)
         .into_iter()
-        .filter(|r| r.closed && !crate::cascade::rule_selector(r.prelude).trim().starts_with('@'))
+        .filter(|r| {
+            r.closed
+                && !crate::cascade::rule_selector(r.prelude)
+                    .trim()
+                    .starts_with('@')
+        })
         .filter_map(|r| {
             let (t, k) = fix_decls(r.body, rem, important)?;
             *n += k;
@@ -144,7 +195,11 @@ fn fix_decls(text: &str, rem: bool, important: bool) -> Option<(String, usize)> 
             continue;
         }
         let start = d.start + d.raw.find(d.value).unwrap_or(0);
-        edits.push((start, start + d.value.len(), format!("{}{imp}", new_value.as_deref().unwrap_or(value))));
+        edits.push((
+            start,
+            start + d.value.len(),
+            format!("{}{imp}", new_value.as_deref().unwrap_or(value)),
+        ));
     }
     let k = edits.len();
     (k > 0).then(|| (html::apply_edits(text, edits), k))
@@ -170,7 +225,13 @@ fn rem_free(prop: &str, value: &str) -> Option<String> {
     let mut changed = false;
     while i + 3 <= b.len() {
         // 数字紧跟 rem、后面不是名字字符
-        if lower.as_bytes()[i..].starts_with(b"rem") && i > 0 && (b[i - 1].is_ascii_digit() || b[i - 1] == b'.') && !b.get(i + 3).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_') {
+        if lower.as_bytes()[i..].starts_with(b"rem")
+            && i > 0
+            && (b[i - 1].is_ascii_digit() || b[i - 1] == b'.')
+            && !b
+                .get(i + 3)
+                .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_')
+        {
             out.push_str(&value[last..i]);
             out.push_str("em");
             last = i + 3;
@@ -199,19 +260,34 @@ mod tests {
     fn run(page: &str, css: &str, rem: bool, important: bool) -> (String, String) {
         let mut b = book(page, css);
         apply(&mut b, &mut WashReport::default(), None, rem, important);
-        (String::from_utf8(b[1].data.clone()).unwrap(), String::from_utf8(b[2].data.clone()).unwrap())
+        (
+            String::from_utf8(b[1].data.clone()).unwrap(),
+            String::from_utf8(b[2].data.clone()).unwrap(),
+        )
     }
 
     #[test]
     fn rem_to_em_and_px() {
-        assert_eq!(rem_free("margin", "1rem 0.5rem 2REM"), Some("1em 0.5em 2em".into()));
+        assert_eq!(
+            rem_free("margin", "1rem 0.5rem 2REM"),
+            Some("1em 0.5em 2em".into())
+        );
         assert_eq!(rem_free("font-size", "1.5rem"), Some("24px".into()));
         assert_eq!(rem_free("margin", "1em"), None);
         assert_eq!(rem_free("background", "url(lorem1rem.png)"), None);
         assert_eq!(rem_free("font-family", "remington"), None);
-        let (css, page) = run(r#"<p style="text-indent:2rem">字</p>"#, "p{text-indent:2rem !important;font-size:0.75rem}", false, true);
+        let (css, page) = run(
+            r#"<p style="text-indent:2rem">字</p>"#,
+            "p{text-indent:2rem !important;font-size:0.75rem}",
+            false,
+            true,
+        );
         assert_eq!(css, "p{text-indent:2em !important;font-size:12px}");
-        assert!(page.contains("<style>p{margin:1em !important}</style>") && page.contains(r#"<p style="text-indent:2em">字</p>"#), "{page}");
+        assert!(
+            page.contains("<style>p{margin:1em !important}</style>")
+                && page.contains(r#"<p style="text-indent:2em">字</p>"#),
+            "{page}"
+        );
     }
 
     /// 去掉 `!important`：靠它压过更具体的选择器、行内的，Kindle 上的值接进行内；本来就胜的不接；只认 rem 的阅读器不动 rem。
@@ -221,7 +297,10 @@ mod tests {
         let page = r#"<h2 class="t">章</h2><h2>节</h2><p class="u" style="text-decoration:none;color:blue !important">字</p>"#;
         let (out_css, out) = run(page, css, true, false);
         assert_eq!(out_css, "h2{text-align:center} h2.t{text-align:left} .u{text-decoration:underline} p{color:red}");
-        assert!(out.contains(r#"<h2 class="t" style="text-align:center;">章</h2><h2>节</h2>"#), "{out}");
+        assert!(
+            out.contains(r#"<h2 class="t" style="text-align:center;">章</h2><h2>节</h2>"#),
+            "{out}"
+        );
         // 行内的 `!important` 压过样式表的：照行内；样式表的 underline !important 压过行内的 none：接上
         assert!(out.contains(r#"<p class="u" style="text-decoration:none;color:blue;text-decoration:underline;">字</p>"#), "{out}");
         assert!(out.contains("<style>p{margin:1rem}</style>"), "{out}");

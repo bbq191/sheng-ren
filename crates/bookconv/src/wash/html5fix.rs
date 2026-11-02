@@ -127,7 +127,12 @@ fn strip_xml_only(text: &str) -> std::borrow::Cow<'_, str> {
             None => (body, ""),
         };
         let lower = out.to_ascii_lowercase();
-        let open = |tag: &str| lower.rfind(&format!("<{tag}")).map(|o| lower.rfind(&format!("</{tag}")).is_none_or(|c| c < o)).unwrap_or(false);
+        let open = |tag: &str| {
+            lower
+                .rfind(&format!("<{tag}"))
+                .map(|o| lower.rfind(&format!("</{tag}")).is_none_or(|c| c < o))
+                .unwrap_or(false)
+        };
         if open("style") || open("script") {
             out.push_str(content);
         } else {
@@ -164,7 +169,11 @@ mod tests {
 
     fn text_of(s: &str) -> String {
         let doc = Html::parse_document(s);
-        doc.root_element().text().collect::<String>().split_whitespace().collect()
+        doc.root_element()
+            .text()
+            .collect::<String>()
+            .split_whitespace()
+            .collect()
     }
 
     #[test]
@@ -172,16 +181,28 @@ mod tests {
         let src = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><style><![CDATA[ div > p { color: red } ]]></style></head><body><p><i>甲</p></i><p><![CDATA[a < b & c]]></p></body></html>";
         let out = reparse(src).unwrap();
         assert!(!out.contains("<!--?xml"), "声明不变成注释：{out}");
-        assert!(out.contains("<style> div &gt; p { color: red } </style>"), "样式里去掉 CDATA 记号：{out}");
-        assert!(out.contains("<p>a &lt; b &amp; c</p>"), "正文 CDATA 的字不丢：{out}");
+        assert!(
+            out.contains("<style> div &gt; p { color: red } </style>"),
+            "样式里去掉 CDATA 记号：{out}"
+        );
+        assert!(
+            out.contains("<p>a &lt; b &amp; c</p>"),
+            "正文 CDATA 的字不丢：{out}"
+        );
     }
 
     #[test]
     fn misnested_and_unclosed_fixed_by_html5_rules() {
         let src = "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p><i>甲</p></i><p>乙<p>丙 &amp; 丁</body></html>";
         let out = reparse(src).unwrap();
-        assert!(out.contains("<p><i>甲</i></p>"), "交叉嵌套按收养算法修：{out}");
-        assert!(out.contains("<p>乙</p><p>丙 &amp; 丁</p>"), "<p> 遇到下一个 <p> 隐含结束：{out}");
+        assert!(
+            out.contains("<p><i>甲</i></p>"),
+            "交叉嵌套按收养算法修：{out}"
+        );
+        assert!(
+            out.contains("<p>乙</p><p>丙 &amp; 丁</p>"),
+            "<p> 遇到下一个 <p> 隐含结束：{out}"
+        );
         assert_eq!(text_of(src), text_of(&out), "字一个不改");
     }
 

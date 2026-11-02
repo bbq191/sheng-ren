@@ -17,7 +17,10 @@ pub(super) struct SymbolAlloc {
 
 impl SymbolAlloc {
     pub(super) fn new() -> SymbolAlloc {
-        SymbolAlloc { locals: Vec::new(), index: HashMap::new() }
+        SymbolAlloc {
+            locals: Vec::new(),
+            index: HashMap::new(),
+        }
     }
 
     /// 名字的符号：登记过的直接返回，没登记的分配下一个。
@@ -39,14 +42,21 @@ impl SymbolAlloc {
     /// 分配一个必须是新的名字（成组分配用：拿到旧符号编号就对不上了）。
     fn fresh(&mut self, name: &str) -> Result<u32, String> {
         if self.index.contains_key(name) {
-            return Err(format!("内部错误：本地符号 {name} 已经登记过，资源符号的间隔对不上"));
+            return Err(format!(
+                "内部错误：本地符号 {name} 已经登记过，资源符号的间隔对不上"
+            ));
         }
         Ok(self.sym(name))
     }
 
     /// 一组至多 [`SID_GAP`] 对名字：先分配 `firsts`，不满 [`SID_GAP`] 个用 `pad(k)` 补齐，再分配 `seconds`，
     /// 使每个 `seconds[k]` 的符号正好是 `firsts[k]` 的 + [`SID_GAP`]。返回 `firsts` 的符号。
-    fn gap_group(&mut self, firsts: &[&str], seconds: &[&str], pad: impl Fn(usize) -> String) -> Result<Vec<u32>, String> {
+    fn gap_group(
+        &mut self,
+        firsts: &[&str],
+        seconds: &[&str],
+        pad: impl Fn(usize) -> String,
+    ) -> Result<Vec<u32>, String> {
         debug_assert!(firsts.len() == seconds.len() && firsts.len() <= SID_GAP as usize);
         let mut out = Vec::with_capacity(firsts.len());
         for f in firsts {
@@ -58,7 +68,9 @@ impl SymbolAlloc {
         for (s, &f) in seconds.iter().zip(&out) {
             // 名字都是新的、连续分配，按构造必然相等；留着核对，万一以后有人在中间插了分配
             if self.fresh(s)? != f + SID_GAP {
-                return Err(format!("内部错误：{s} 的符号不是对应字节实体的 + {SID_GAP}"));
+                return Err(format!(
+                    "内部错误：{s} 的符号不是对应字节实体的 + {SID_GAP}"
+                ));
             }
         }
         Ok(out)
@@ -87,19 +99,27 @@ impl ResourceSymbols {
     /// 资源的（字节实体名, 资源路径）：每 [`SID_GAP`] 个一组，先这组的字节实体名，不满的用占位符号补齐，再这组的资源路径
     /// （Kindle 按「`$165` 资源路径的符号编号 − 9」找字节实体，6 本样本 443 个资源全是这样；只改资源路径或只给字节实体改名，
     /// 书架缩略图就没了，2026-10-05 真机）。返回各字节实体名的符号。
-    pub(super) fn alloc_resources(&mut self, pairs: &[(String, String)]) -> Result<Vec<u32>, String> {
+    pub(super) fn alloc_resources(
+        &mut self,
+        pairs: &[(String, String)],
+    ) -> Result<Vec<u32>, String> {
         let mut out = Vec::with_capacity(pairs.len());
         for (g, chunk) in pairs.chunks(SID_GAP as usize).enumerate() {
             let raws: Vec<&str> = chunk.iter().map(|(r, _)| r.as_str()).collect();
             let locs: Vec<&str> = chunk.iter().map(|(_, l)| l.as_str()).collect();
-            out.extend(self.inner.gap_group(&raws, &locs, |k| format!("pad{g}-{k}"))?);
+            out.extend(
+                self.inner
+                    .gap_group(&raws, &locs, |k| format!("pad{g}-{k}"))?,
+            );
         }
         Ok(out)
     }
 
     /// 已登记的名字的符号；没登记是写出器自己的错（名字都在前面的阶段登记好了），报错不 panic。
     pub(super) fn require(&self, name: &str) -> Result<u32, String> {
-        self.inner.get(name).ok_or_else(|| format!("内部错误：本地符号 {name} 没有登记"))
+        self.inner
+            .get(name)
+            .ok_or_else(|| format!("内部错误：本地符号 {name} 没有登记"))
     }
 
     /// 全部本地符号的名字，按编号顺序（写进符号表）。

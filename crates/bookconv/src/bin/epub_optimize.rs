@@ -25,12 +25,32 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--print-profile") {
         let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
-        println!("{}", serde_json::to_string_pretty(device).unwrap_or_else(|e| die(cli::FAILED, e.to_string())));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(device)
+                .unwrap_or_else(|e| die(cli::FAILED, e.to_string()))
+        );
         return;
     }
-    let flags: Vec<&str> = args.iter().filter(|a| a.starts_with("--") && !a.starts_with("--device=")).map(|s| s.as_str()).collect();
+    let flags: Vec<&str> = args
+        .iter()
+        .filter(|a| a.starts_with("--") && !a.starts_with("--device="))
+        .map(|s| s.as_str())
+        .collect();
     let files: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
-    if files.len() != 2 || flags.iter().any(|f| !["--no-wash", "--keep-spacing", "--auto-toc", "--keep-color", "--check", "--require-toc"].contains(f)) {
+    if files.len() != 2
+        || flags.iter().any(|f| {
+            ![
+                "--no-wash",
+                "--keep-spacing",
+                "--auto-toc",
+                "--keep-color",
+                "--check",
+                "--require-toc",
+            ]
+            .contains(f)
+        })
+    {
         die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--keep-color] [--check] [--require-toc] 输入.epub 输出.epub");
     }
     // 阅读模式定阅读范围、黑白屏转灰度、注释呈现方式（和书库生成同一个起点）
@@ -41,17 +61,46 @@ fn main() {
     } else {
         OptimizeOpts::for_profile(device).wash.map(|w| WashOpts {
             keep_para_spacing: flags.contains(&"--keep-spacing"),
-            auto_toc: if flags.contains(&"--auto-toc") { AutoToc::Always } else { AutoToc::IfMissing },
+            auto_toc: if flags.contains(&"--auto-toc") {
+                AutoToc::Always
+            } else {
+                AutoToc::IfMissing
+            },
             ..w
         })
     };
     // 先写临时文件，成功后再改名：输入输出同路径（就地覆盖）时不会边读边写同一个文件，失败也不留半成品。
     let target = std::path::Path::new(files[1]);
-    let opts = OptimizeOpts { wash, ..OptimizeOpts::for_profile(device) };
-    let opts = OptimizeOpts { grayscale: opts.grayscale && !flags.contains(&"--keep-color"), ..opts };
-    let rep = bookconv::util::produce_then_replace(&bookconv::util::tmp_beside(target, "optimizing"), target, |t| optimize::optimize_epub_file_streaming(std::path::Path::new(files[0]), t, &opts, |_, _| {}).map_err(String::from))
-        .unwrap_or_else(|e| die(cli::FAILED, format!("优化失败: {e}")));
-    println!("epub-optimize v{}: {} 文件/{} 章, {} → {} 字节", optimize::OPTIMIZE_VERSION, rep.total_files, rep.html_files, rep.bytes_before, rep.bytes_after);
+    let opts = OptimizeOpts {
+        wash,
+        ..OptimizeOpts::for_profile(device)
+    };
+    let opts = OptimizeOpts {
+        grayscale: opts.grayscale && !flags.contains(&"--keep-color"),
+        ..opts
+    };
+    let rep = bookconv::util::produce_then_replace(
+        &bookconv::util::tmp_beside(target, "optimizing"),
+        target,
+        |t| {
+            optimize::optimize_epub_file_streaming(
+                std::path::Path::new(files[0]),
+                t,
+                &opts,
+                |_, _| {},
+            )
+            .map_err(String::from)
+        },
+    )
+    .unwrap_or_else(|e| die(cli::FAILED, format!("优化失败: {e}")));
+    println!(
+        "epub-optimize v{}: {} 文件/{} 章, {} → {} 字节",
+        optimize::OPTIMIZE_VERSION,
+        rep.total_files,
+        rep.html_files,
+        rep.bytes_before,
+        rep.bytes_after
+    );
     if let Some(w) = &rep.wash {
         println!(
             "清洗: css {} / html {} / 伪DRM剥离 {:?} / 空页 {:?} / 自动目录 {} 条 / 双id折叠 {} / 分部重建 {} 条 / ncx uid 修复 {} / ncx doctype 剥离 {} / ncx manifest id 修复 {} / 目录补节 {} / 目录改指 {} / 缺省样式 {} 章 / Kindle 规则改了 {} 处",
@@ -69,7 +118,8 @@ fn main() {
     }
     if flags.contains(&"--check") {
         // 按路径查（图片条目不读进内存），跟书库生成时的质量门同一个实现。
-        let r = bookconv::check::check_epub_file_with(target, flags.contains(&"--require-toc")).unwrap_or_else(|e| die(3, format!("质量门读产物失败: {e}")));
+        let r = bookconv::check::check_epub_file_with(target, flags.contains(&"--require-toc"))
+            .unwrap_or_else(|e| die(3, format!("质量门读产物失败: {e}")));
         println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
         if !r.ok {
             std::process::exit(3);

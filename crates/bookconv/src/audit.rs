@@ -45,10 +45,27 @@ impl Finding {
             "inline" => "行内 style ",
             _ => "",
         };
-        let imp = if self.via.ends_with('!') { " !important" } else { "" };
-        let mark = if self.verdict == Verdict::Broken { '✗' } else { '?' };
-        let note = if self.note.is_empty() { String::new() } else { format!("：{}", self.note) };
-        format!("{mark} {via}{}{imp}（{}）×{}{note}", self.prop, kind_on(self.value, self.on), self.count)
+        let imp = if self.via.ends_with('!') {
+            " !important"
+        } else {
+            ""
+        };
+        let mark = if self.verdict == Verdict::Broken {
+            '✗'
+        } else {
+            '?'
+        };
+        let note = if self.note.is_empty() {
+            String::new()
+        } else {
+            format!("：{}", self.note)
+        };
+        format!(
+            "{mark} {via}{}{imp}（{}）×{}{note}",
+            self.prop,
+            kind_on(self.value, self.on),
+            self.count
+        )
     }
 }
 
@@ -87,7 +104,11 @@ impl Row {
 
     fn matches(&self, prop: &str, on: &str, value: &str, via: Origin, important: bool) -> bool {
         let any = |list: &[String], v: &str| list.is_empty() || list.iter().any(|x| x == v);
-        let via_ok = self.via.is_empty() || self.via.iter().any(|v| v == via_name(via) || (v == "important" && important));
+        let via_ok = self.via.is_empty()
+            || self
+                .via
+                .iter()
+                .any(|v| v == via_name(via) || (v == "important" && important));
         self.prop.iter().any(|p| match p.strip_suffix('*') {
             Some(pre) => prop.starts_with(pre),
             None => p == prop,
@@ -107,7 +128,10 @@ fn via_name(o: Origin) -> &'static str {
 
 fn table() -> &'static Table {
     static T: OnceLock<Table> = OnceLock::new();
-    T.get_or_init(|| toml::from_str(include_str!("../data/css-quirks.toml")).expect("css-quirks.toml 格式不对（单测会先报）"))
+    T.get_or_init(|| {
+        toml::from_str(include_str!("../data/css-quirks.toml"))
+            .expect("css-quirks.toml 格式不对（单测会先报）")
+    })
 }
 
 /// 怪癖表里有这台的一栏（内置的 `ireader`；别的模式不体检）。
@@ -141,7 +165,19 @@ fn reported_prop(prop: &str, on: &str, v: &str) -> Option<String> {
     // 拼错的分项（《春雪》的 `padding-botton`）：哪台都不认、Kindle 也不认，一样
     for pre in ["margin-", "padding-"] {
         if let Some(side) = prop.strip_prefix(pre) {
-            if !matches!(side, "top" | "right" | "bottom" | "left" | "inline" | "block" | "inline-start" | "inline-end" | "block-start" | "block-end") {
+            if !matches!(
+                side,
+                "top"
+                    | "right"
+                    | "bottom"
+                    | "left"
+                    | "inline"
+                    | "block"
+                    | "inline-start"
+                    | "inline-end"
+                    | "block-start"
+                    | "block-end"
+            ) {
                 return None;
             }
         }
@@ -161,8 +197,12 @@ fn reported_prop(prop: &str, on: &str, v: &str) -> Option<String> {
 fn value_kind(v: &str) -> &'static str {
     let t = v.trim().to_ascii_lowercase();
     let tok = t.split_whitespace().next().unwrap_or("");
-    let end = tok.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(tok.len());
-    let Ok(n) = tok[..end].parse::<f64>() else { return "keyword" };
+    let end = tok
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+        .unwrap_or(tok.len());
+    let Ok(n) = tok[..end].parse::<f64>() else {
+        return "keyword";
+    };
     let unit = &tok[end..];
     if n == 0.0 {
         return "zero";
@@ -188,13 +228,20 @@ pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<F
         return Vec::new();
     }
     let css = book_css(entries, media);
-    let chapters: Vec<&Entry> = entries.iter().filter(|e| crate::wash::is_chapter_entry(e)).collect();
+    let chapters: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| crate::wash::is_chapter_entry(e))
+        .collect();
     // (属性, 元素, 值, 来源, !important) → 元素数
     type Key = (String, &'static str, &'static str, Origin, bool);
     let counts: Vec<BTreeMap<Key, usize>> = crate::util::par_map(&chapters, |e| {
         let mut m = BTreeMap::new();
-        let Ok(text) = std::str::from_utf8(&e.data) else { return m };
-        let Some(ch) = Chapter::parse(&e.name, text, media, &css) else { return m };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return m;
+        };
+        let Some(ch) = Chapter::parse(&e.name, text, media, &css) else {
+            return m;
+        };
         for (i, el) in ch.els.iter().enumerate() {
             if el.hidden {
                 continue;
@@ -202,22 +249,52 @@ pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<F
             let on = element_kind(ch.el(i).value().name(), el.is_block);
             // 看得见的边框（有宽度、样式不是 none/hidden、不是全透明）才算：`border:0`、`border-width:0` 不报
             let visible = |side: usize| {
-                el.comp.border[side].as_ref().is_some_and(|b| b.width != crate::cascade::BorderWidth::Pt(0.0) && b.width != crate::cascade::BorderWidth::Em(0.0) && b.color.is_none_or(|c| c >> 24 != 0))
+                el.comp.border[side].as_ref().is_some_and(|b| {
+                    b.width != crate::cascade::BorderWidth::Pt(0.0)
+                        && b.width != crate::cascade::BorderWidth::Em(0.0)
+                        && b.color.is_none_or(|c| c >> 24 != 0)
+                })
             };
-            let marker = el.comp.list_style.as_deref() != Some("none") && el.comp.display.as_deref().is_none_or(|v| v.eq_ignore_ascii_case("list-item"));
+            let marker = el.comp.list_style.as_deref() != Some("none")
+                && el
+                    .comp
+                    .display
+                    .as_deref()
+                    .is_none_or(|v| v.eq_ignore_ascii_case("list-item"));
             // 同一个元素上同一种写法只计一次（边框的分项合成了一个）
             let mut keys: std::collections::BTreeSet<Key> = std::collections::BTreeSet::new();
             for (prop, v) in &el.decls {
-                let Some(name) = reported_prop(prop, on, v) else { continue };
+                let Some(name) = reported_prop(prop, on, v) else {
+                    continue;
+                };
                 // 没有项目符号的列表项（`list-style-type:none`、`display` 不是 list-item）：左右内边距同普通块（并进外边距，box_fix）
-                let on = if on == "list" && !marker && matches!(name.as_str(), "padding-left" | "padding-right") { "block" } else { on };
-                let side = ["border-top", "border-right", "border-bottom", "border-left"].iter().position(|s| *s == name);
-                if side.is_some_and(|s| !visible(s)) || (name == "border-radius" && !(0..4).any(visible)) {
+                let on = if on == "list"
+                    && !marker
+                    && matches!(name.as_str(), "padding-left" | "padding-right")
+                {
+                    "block"
+                } else {
+                    on
+                };
+                let side = ["border-top", "border-right", "border-bottom", "border-left"]
+                    .iter()
+                    .position(|s| *s == name);
+                if side.is_some_and(|s| !visible(s))
+                    || (name == "border-radius" && !(0..4).any(visible))
+                {
                     continue;
                 }
-                let (origin, imp) = el.origin.get(prop).copied().unwrap_or((Origin::Sheet, false));
+                let (origin, imp) = el
+                    .origin
+                    .get(prop)
+                    .copied()
+                    .unwrap_or((Origin::Sheet, false));
                 // 边框的分项有宽度、样式、颜色，不分值的种类
-                let kind = if name.starts_with("border") { "-" } else { value_kind(v) };
+                let kind = if name.starts_with("border") {
+                    "-"
+                } else {
+                    value_kind(v)
+                };
                 keys.insert((name, on, kind, origin, imp));
             }
             for k in keys {
@@ -233,25 +310,40 @@ pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<F
         }
     }
     let t = table();
-    let mut out: Vec<Finding> = all
-        .into_iter()
-        .filter_map(|((prop, on, value, origin, imp), count)| {
-            // 第一条对得上、而且这台有结论的（某台专有的条目可以写在前面，不挡别的台）
-            let row = t.rule.iter().find(|r| r.matches(&prop, on, value, origin, imp) && r.status(reader).is_some());
-            let verdict = match row.and_then(|r| r.status(reader)) {
-                Some("broken") => Verdict::Broken,
-                Some(_) => return None,
-                None => Verdict::Unknown,
-            };
-            let note = match (verdict, row) {
-                (Verdict::Broken, Some(r)) => r.note.clone(),
-                _ => String::new(),
-            };
-            let via = format!("{}{}", via_name(origin), if imp { "!" } else { "" });
-            Some(Finding { verdict, prop, on, value, via, count, note })
-        })
-        .collect();
-    out.sort_by(|a, b| a.verdict.cmp(&b.verdict).then(b.count.cmp(&a.count)).then_with(|| a.cmp(b)));
+    let mut out: Vec<Finding> =
+        all.into_iter()
+            .filter_map(|((prop, on, value, origin, imp), count)| {
+                // 第一条对得上、而且这台有结论的（某台专有的条目可以写在前面，不挡别的台）
+                let row = t.rule.iter().find(|r| {
+                    r.matches(&prop, on, value, origin, imp) && r.status(reader).is_some()
+                });
+                let verdict = match row.and_then(|r| r.status(reader)) {
+                    Some("broken") => Verdict::Broken,
+                    Some(_) => return None,
+                    None => Verdict::Unknown,
+                };
+                let note = match (verdict, row) {
+                    (Verdict::Broken, Some(r)) => r.note.clone(),
+                    _ => String::new(),
+                };
+                let via = format!("{}{}", via_name(origin), if imp { "!" } else { "" });
+                Some(Finding {
+                    verdict,
+                    prop,
+                    on,
+                    value,
+                    via,
+                    count,
+                    note,
+                })
+            })
+            .collect();
+    out.sort_by(|a, b| {
+        a.verdict
+            .cmp(&b.verdict)
+            .then(b.count.cmp(&a.count))
+            .then_with(|| a.cmp(b))
+    });
     out
 }
 
@@ -259,16 +351,33 @@ pub fn audit(entries: &[Entry], media: Option<&MediaEnv>, reader: &str) -> Vec<F
 pub fn summary(findings: &[Finding], reader: &str) -> Vec<String> {
     const SHOW: usize = 4;
     let mut out = Vec::new();
-    let broken: Vec<&Finding> = findings.iter().filter(|f| f.verdict == Verdict::Broken).collect();
+    let broken: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.verdict == Verdict::Broken)
+        .collect();
     if !broken.is_empty() {
         let shown: Vec<String> = broken.iter().take(SHOW).map(|f| short(f)).collect();
-        let more = if broken.len() > SHOW { format!(" 等 {} 种", broken.len()) } else { String::new() };
-        out.push(format!("体检：{reader} 上和 Kindle 不一样、没处理：{}{more}（booklib list 看全部）", shown.join("；")));
+        let more = if broken.len() > SHOW {
+            format!(" 等 {} 种", broken.len())
+        } else {
+            String::new()
+        };
+        out.push(format!(
+            "体检：{reader} 上和 Kindle 不一样、没处理：{}{more}（booklib list 看全部）",
+            shown.join("；")
+        ));
     }
-    let unknown: Vec<&Finding> = findings.iter().filter(|f| f.verdict == Verdict::Unknown).collect();
+    let unknown: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| f.verdict == Verdict::Unknown)
+        .collect();
     if !unknown.is_empty() {
         let shown: Vec<String> = unknown.iter().take(3).map(|f| short(f)).collect();
-        out.push(format!("体检：{reader} 上没验证过的写法 {} 种（最多的：{}）", unknown.len(), shown.join("；")));
+        out.push(format!(
+            "体检：{reader} 上没验证过的写法 {} 种（最多的：{}）",
+            unknown.len(),
+            shown.join("；")
+        ));
     }
     out
 }
@@ -284,7 +393,11 @@ fn short(f: &Finding) -> String {
 
 /// `值，元素`；不分值的（边框）只写元素。
 fn kind_on(value: &str, on: &str) -> String {
-    if value == "-" { on.to_string() } else { format!("{value}，{on}") }
+    if value == "-" {
+        on.to_string()
+    } else {
+        format!("{value}，{on}")
+    }
 }
 
 #[cfg(test)]
@@ -295,16 +408,30 @@ mod tests {
     fn table_parses_and_statuses_are_known() {
         for r in &table().rule {
             for s in [&r.ireader, &r.kobo].into_iter().flatten() {
-                assert!(["same", "fixed", "accept", "broken"].contains(&s.as_str()), "怪癖表状态 {s}");
+                assert!(
+                    ["same", "fixed", "accept", "broken"].contains(&s.as_str()),
+                    "怪癖表状态 {s}"
+                );
             }
             for v in &r.value {
-                assert!(["em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword"].contains(&v.as_str()), "值 {v}");
+                assert!(
+                    ["em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword"]
+                        .contains(&v.as_str()),
+                    "值 {v}"
+                );
             }
             for v in &r.via {
-                assert!(["sheet", "style", "inline", "important"].contains(&v.as_str()), "写法 {v}");
+                assert!(
+                    ["sheet", "style", "inline", "important"].contains(&v.as_str()),
+                    "写法 {v}"
+                );
             }
             for v in &r.on {
-                assert!(["p", "heading", "block", "inline", "img", "cell", "list"].contains(&v.as_str()), "元素 {v}");
+                assert!(
+                    ["p", "heading", "block", "inline", "img", "cell", "list"]
+                        .contains(&v.as_str()),
+                    "元素 {v}"
+                );
             }
             assert!(!r.src.is_empty());
         }
@@ -315,11 +442,16 @@ mod tests {
         let mut props: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for r in &table().rule {
             for p in &r.prop {
-                props.insert(p.strip_suffix('*').map_or_else(|| p.clone(), |pre| format!("{pre}~")));
+                props.insert(
+                    p.strip_suffix('*')
+                        .map_or_else(|| p.clone(), |pre| format!("{pre}~")),
+                );
             }
         }
         let ons = ["p", "heading", "block", "inline", "img", "cell", "list"];
-        let values = ["em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword", "-"];
+        let values = [
+            "em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword", "-",
+        ];
         let mut out = Vec::new();
         for p in &props {
             for on in ons {
@@ -336,9 +468,15 @@ mod tests {
     }
 
     /// 一种写法在这台上由哪一条定（同 [`audit`]：第一条对得上、这台有结论的）。
-    fn deciding(key: &(String, &'static str, &'static str, Origin, bool), reader: &str) -> Option<usize> {
+    fn deciding(
+        key: &(String, &'static str, &'static str, Origin, bool),
+        reader: &str,
+    ) -> Option<usize> {
         let (prop, on, value, origin, imp) = key;
-        table().rule.iter().position(|r| r.matches(prop, on, value, *origin, *imp) && r.status(reader).is_some())
+        table()
+            .rule
+            .iter()
+            .position(|r| r.matches(prop, on, value, *origin, *imp) && r.status(reader).is_some())
     }
 
     /// 怪癖表里没有用不上的条目：每条在它写了结论的每台上，至少有一种写法是由它定的（排在前面更宽的条目整条挡住了它，
@@ -351,17 +489,34 @@ mod tests {
             let mut s = String::new();
             for k in &keys {
                 // 只导 ireader：kobo 一栏还空着；填了以后再加
-                let v = deciding(k, "ireader").and_then(|i| table().rule[i].status("ireader")).unwrap_or("?");
-                s.push_str(&format!("{} {} {} {}{} {v}\n", k.0, k.1, k.2, via_name(k.3), if k.4 { "!" } else { "" }));
+                let v = deciding(k, "ireader")
+                    .and_then(|i| table().rule[i].status("ireader"))
+                    .unwrap_or("?");
+                s.push_str(&format!(
+                    "{} {} {} {}{} {v}\n",
+                    k.0,
+                    k.1,
+                    k.2,
+                    via_name(k.3),
+                    if k.4 { "!" } else { "" }
+                ));
             }
             std::fs::write(path, s).unwrap();
         }
-        let decided: Vec<(&str, std::collections::HashSet<usize>)> = ["ireader", "kobo"].iter().map(|d| (*d, keys.iter().filter_map(|k| deciding(k, d)).collect())).collect();
+        let decided: Vec<(&str, std::collections::HashSet<usize>)> = ["ireader", "kobo"]
+            .iter()
+            .map(|d| (*d, keys.iter().filter_map(|k| deciding(k, d)).collect()))
+            .collect();
         for (i, r) in table().rule.iter().enumerate() {
             assert!(!r.note.is_empty(), "第 {} 条 {:?} 没写说明", i + 1, r.prop);
             for (reader, used) in &decided {
                 if r.status(reader).is_some() {
-                    assert!(used.contains(&i), "第 {} 条 {:?} 在 {reader} 上被前面的条目整条挡住", i + 1, r.prop);
+                    assert!(
+                        used.contains(&i),
+                        "第 {} 条 {:?} 在 {reader} 上被前面的条目整条挡住",
+                        i + 1,
+                        r.prop
+                    );
                 }
             }
         }
@@ -369,8 +524,20 @@ mod tests {
 
     #[test]
     fn value_kinds() {
-        let k: Vec<&str> = ["2em", "1.5rem", "10px", "12pt", "50%", "1.2", "0", "-1em", "bold", "#000", "0.01em", "-2"].iter().map(|v| value_kind(v)).collect();
-        assert_eq!(k, ["em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword", "keyword", "em", "number"]);
+        let k: Vec<&str> = [
+            "2em", "1.5rem", "10px", "12pt", "50%", "1.2", "0", "-1em", "bold", "#000", "0.01em",
+            "-2",
+        ]
+        .iter()
+        .map(|v| value_kind(v))
+        .collect();
+        assert_eq!(
+            k,
+            [
+                "em", "rem", "px", "pt", "pct", "number", "zero", "neg", "keyword", "keyword",
+                "em", "number"
+            ]
+        );
     }
 
     fn book(chapter: &str, css: &str) -> Vec<Entry> {
@@ -386,15 +553,26 @@ mod tests {
     fn flags_unhandled_and_skips_fixed() {
         let ch = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head>
 <body><ul><li style="margin-left:10px">一</li><li style="margin-left:10px">二</li></ul><p class="b">三</p><p class="i">四</p><ul class="h"><li style="margin-left:10px">五</li></ul></body></html>"#;
-        let b = book(ch, "p.b{word-spacing:0.1em;} p.i{text-align:center !important;} .h{display:none;}");
+        let b = book(
+            ch,
+            "p.b{word-spacing:0.1em;} p.i{text-align:center !important;} .h{display:none;}",
+        );
         let f = audit(&b, None, "ireader");
         let lines: Vec<String> = f.iter().map(Finding::line).collect();
-        assert!(lines[0].starts_with("✗ 行内 style margin-left（px，list）×2："), "隐藏的那项不算：{lines:?}");
+        assert!(
+            lines[0].starts_with("✗ 行内 style margin-left（px，list）×2："),
+            "隐藏的那项不算：{lines:?}"
+        );
         assert_eq!(lines[1], "? word-spacing（em，p）×1", "{lines:?}");
         assert_eq!(lines.len(), 2, "!important 已处理、不报：{lines:?}");
         assert!(audit(&b, None, "kindle").is_empty());
         let s = summary(&f, "ireader");
         assert_eq!(s.len(), 2);
-        assert!(s[0].starts_with("体检：ireader 上和 Kindle 不一样、没处理：行内 margin-left（px，list）×2"), "{s:?}");
+        assert!(
+            s[0].starts_with(
+                "体检：ireader 上和 Kindle 不一样、没处理：行内 margin-left（px，list）×2"
+            ),
+            "{s:?}"
+        );
     }
 }
