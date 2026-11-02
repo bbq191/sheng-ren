@@ -1,5 +1,5 @@
 //! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有三份，都按设备自带的阅读器量（见 docs/devices.md）：
-//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Ocean 5 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
+//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Air 3 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -847,7 +847,7 @@ mod tests {
         assert!(k.text_repair_only && i.text_repair_only, "文字书只修复：内置模式都是");
         assert!(!k.repair_note_links && !i.repair_note_links);
         assert!(!k.kindle_rules && i.kindle_rules, "标签缺省样式：掌阅写进书里，Kindle 由写出器排");
-        assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1264, height: 1680 }), "掌阅整页图铺满整屏");
+        assert_eq!((i.format(), i.output_readable()), (Format::Epub, Screen { width: 1440, height: 1920 }), "掌阅整页图铺满整屏");
         assert!(!k.color && !i.color);
         assert_eq!((k.comic.margin, i.comic.margin), (1, 1));
         assert_eq!(k.comic.reader_margins, None);

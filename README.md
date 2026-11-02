@@ -21,9 +21,9 @@
 | 模式 | 给谁读 | 产物 | 怎么传 |
 |---|---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX | USB（MTP），放 `documents/<子目录>/` |
-| `ireader` | 掌阅 Ocean 5 Pro 自带阅读器 | EPUB | USB（MTP），放 `documents/<子目录>/` |
+| `ireader` | 掌阅 Air 3 Pro 自带阅读器 | EPUB | USB（MTP），放 `documents/<子目录>/` |
 
-2026-10 Move、掌阅 Ocean 5 Pro 卖了（换掌阅 Air3 Pro，到了再量）；`xochitl` 模式 2026-10-31 删了，`ireader` 的数字还是 Ocean 5 Pro 上量的。
+2026-10 Move、掌阅 Ocean 5 Pro 卖了，换掌阅 Air 3 Pro（2026-11-02 起 `ireader` 按它的屏幕 1440×1920）；`xochitl` 模式 2026-10-31 删了，`ireader` 的怪癖和字号、行距还是 Ocean 5 Pro 上量的，待探针重量。
 
 前提：Kindle、掌阅插上后要被 jmtpfs 挂到 `$XDG_RUNTIME_DIR/mtp/kindle`、`…/mtp/ireader`（可用 `BOOKLIB_MTP_DIR` 改）。没接上的设备这次跳过，下次接上再传。
 

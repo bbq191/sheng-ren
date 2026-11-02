@@ -1,5 +1,6 @@
-# 掌阅 iReader Ocean 5 Pro 上的自带阅读器。7" Carta 1300，2026-09-27 核实。阅读范围按自带阅读器量（2026-10-06 起两台都不装 KOReader，都用自带阅读器）。
-name = "掌阅自带阅读器（iReader Ocean 5 Pro）"
+# 掌阅 iReader Air 3 Pro 上的自带阅读器（2026-11-02 起；以前是 Ocean 5 Pro，2026-10-29 卖了）。默白版、黑白、无前光，安卓 14，
+# 固件 4.1.0.214.0。下面的怪癖、em_px、line_px 都是 Ocean 5 Pro 上量的，**待探针重量**（tools/quirks/probe.py ireader）；屏幕尺寸是 Air 3 Pro 实测。
+name = "掌阅自带阅读器（iReader Air 3 Pro）"
 color = false
 formats = ["epub"]
 # 背景尺寸的高写 auto 会把图拉长到整页高（2026-10-12 测试书「测试-掌阅背景」）：整页背景图照 Kindle 上的大小、位置写成屏幕像素
@@ -35,7 +36,7 @@ comic_margin = 1
 
 # 图片尺寸的 px 是屏幕像素（300px 的图占四分之一页宽，Kindle 把 px 换成 em 占三分之二）：kindle_rules 改写成 Kindle 的大小（2026-10-12 测试书）
 image_sizing = "device-px"
-# 缺省字号下 CSS 1em 的屏幕像素（2026-10-12 测试书「测试-竖直间距」掌阅量的）：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
+# 缺省字号下 CSS 1em 的屏幕像素（2026-10-12 测试书「测试-竖直间距」Ocean 5 Pro 量的；Air 3 Pro 屏幕更大，待探针重量）：竖直方向的边距照 Kindle 换算（Kindle 按行距排，
 # 同样 1em 占页高多一半；已定）。阅读器里改了字号、Kindle 改了行距要重量
 em_px = 37.5
 # 左右外边距的 px 是屏幕像素（Kindle 写出器按 0.45pt 一 px，大约 1.46 倍）：块上的折成 em（2026-10-13，KINDLE_RULES 24）
@@ -46,7 +47,7 @@ rem = false
 important = false
 # 不带单位的 line-height 不认（Q80–Q83），长度认（Q84 3em 一行 114px）：行距和 Kindle 不一样的块照 Kindle 写成 em
 line_height_numbers = false
-# 缺省字号、行距下正文一行的屏幕像素（2026-10-13 怪癖测试书对照页：一段里相邻两行隔 58px），上面的行距按它算阅读器的缺省行距
+# 缺省字号、行距下正文一行的屏幕像素（2026-10-13 怪癖测试书对照页 Ocean 5 Pro：一段里相邻两行隔 58px；Air 3 Pro 待探针重量），上面的行距按它算阅读器的缺省行距
 line_px = 58
 # 单元格缺省顶端对齐（Kindle 居中），vertical-align:middle 认（2026-10-14 探针 Q105、Q106）：Kindle 上居中的单元格写进行内
 cell_middle = false
@@ -58,18 +59,21 @@ heading_center = true
 # float 认（2026-10-14 探针 Q133：标题浮到右边、后一段排在旁边；Kindle 不浮动）：标题上的写成 none。写 true 是缺省，这里写明
 float = true
 
+# Air 3 Pro：2026-11-02 `adb exec-out screencap` 截屏 1440×1920（`wm size` 同，320dpi）
 [screen]
-width = 1264
-height = 1680
+width = 1440
+height = 1920
 
 # 真实可阅读范围（像素，竖屏），2026-09-27 用测量书在真机上截屏实测（readable-measure）：
 # 只放一张大图的页面，掌阅把图铺满整屏（连页眉页脚区域也盖住），上下左右留白都是 0，所以等于标称尺寸。
 # 这是整页图（漫画）的情况；图文混排时图片受正文页边距限制，不适用这组数。
+# Air 3 Pro 先照 Ocean 5 Pro 的结论取整屏 1440×1920（同一个自带阅读器），待真机用测量书核对。
 [readable.epub]
-width = 1264
-height = 1680
+width = 1440
+height = 1920
 
-# 产物直接传进掌阅（2026-10-07 定）：同 Kindle，放存储根目录的 documents/（没有就建）。
+# 产物直接传进掌阅（2026-10-07 定）：同 Kindle，放存储根目录的 documents/（没有就建）。Air 3 Pro 上自带的是 Documents/，
+# 但外部存储不分大小写（`external_storage.casefold.enabled=1`，adb 里 documents、Documents 是同一个目录，2026-11-02）
 [deliver]
 kind = "mtp"
 mount = "ireader"

@@ -4,7 +4,7 @@
 用法:
   probe.py make 输出.epub                 生成测试书（探针见 PROBES；书名「测试-怪癖」）
   （都可加 --only=88-99 或 --only=13,28,100-119：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
-  probe.py ireader [--json]                        生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
+  probe.py ireader [--json] [--max-y=1828]           生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
                                           （测试书留在掌阅上，维护者自己删；掌阅要开着 adb、亮屏解锁）
 
 掌阅没有排好的 PDF，只能逐页截屏：每章第一行的标记换成一张条码图（两端各一格黑，中间 7 位探针序号、1 位 A/B，宽 50%），截屏后
@@ -234,10 +234,15 @@ def code_png(n, b):
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 10 * len(bits), 10, 8, 0, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
 
 
+# 截屏里只看上沿在这以上的行，下面是页脚（页码、时间；`--max-y` 可改）。Ocean 5 Pro 1680 高时是 1600；Air 3 Pro 1920 高，
+# 按同样的比例推断 1828（2026-11-02，没上真机量页脚）
+MAX_Y = 1828
+
+
 def decode_code(png):
     """截屏里第一行（条码）认出 (探针序号, 是不是 B)；认不出 None。"""
     from PIL import Image
-    ls = [l for l in lines_of(png) if l[0] < 1600]
+    ls = [l for l in lines_of(png) if l[0] < MAX_Y]
     if not ls:
         return None
     top, bottom, left, right = ls[0]
@@ -440,7 +445,7 @@ def ireader_run():
             seen.add(got)
             n, b = got
             if n in codes:
-                out.setdefault(codes[n], {})["B" if b else "A"] = [l for l in lines_of(png) if l[0] < 1600]
+                out.setdefault(codes[n], {})["B" if b else "A"] = [l for l in lines_of(png) if l[0] < MAX_Y]
             if len(seen) == 2 * len(PROBES):
                 break
         adb("shell", "input", "swipe", "1100", "1580", "150", "1580", "200")
@@ -450,7 +455,7 @@ def ireader_run():
 
 
 def main():
-    global PROBES, OPTIMIZE
+    global PROBES, OPTIMIZE, MAX_Y
     args, opts = cli_args(1, __doc__), cli_opts()
     cmd = args[0]
     # --only=88-99 或 --only=13,28：只跑这几个探针（掌阅全跑一遍要 10 分钟）
@@ -461,6 +466,7 @@ def main():
             want.update(range(int(lo), int(hi or lo) + 1))
         PROBES = [p for p in PROBES if int(p[0]) in want]
     OPTIMIZE = opts.get("--optimize")
+    MAX_Y = int(opts.get("--max-y", MAX_Y))
     if cmd == "make" and len(args) == 2:
         make(args[1])
     elif cmd == "ireader":
