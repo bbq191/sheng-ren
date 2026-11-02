@@ -1,5 +1,5 @@
-//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在有三份，都按设备自带的阅读器量（见 docs/devices.md）：
-//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Air 3 Pro，EPUB）、`xochitl`（reMarkable Move，EPUB）。
+//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在内置三份，都按设备自带的阅读器量（见 docs/devices.md）：
+//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Air 3 Pro，EPUB）、`kobo`（Kobo Clara BW，KEPUB，2026-11-01 预配置、未上真机）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -21,20 +21,30 @@ pub const DEFAULT_COMIC_MARGIN: u32 = 1;
 pub const MIN_GAMMA_IMAGE_SIDE: u32 = 200;
 
 /// 产物格式。KFX 是先按同一套规则优化出 EPUB、再转换（给 Kindle 自带阅读器，2026-10-05 起，见 docs/kfx.md）；
+/// KEPUB 是同一份优化结果再加 Kobo 的 koboSpan 和两层包装（给 Kobo 自带阅读器的 Kobo WebKit，2026-11-01 起，见 docs/kepub.md）；
 /// PDF、AZW3 已删（AZW3 2026-10-09 定：KFX 取代），写了按未知值报错。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Epub,
     Kfx,
+    Kepub,
 }
 
 impl Format {
-    /// 文件扩展名（也是 TOML 里的写法）。
-    pub fn ext(self) -> &'static str {
+    /// 格式短名（TOML 里的写法，`[readable.<name>]`；大写后给人看）。
+    pub fn name(self) -> &'static str {
         match self {
             Format::Epub => "epub",
             Format::Kfx => "kfx",
+            Format::Kepub => "kepub",
+        }
+    }
+    /// 产物文件扩展名：KEPUB 是 `kepub.epub`（Kobo 按这个双扩展名用 Kobo WebKit 打开，见 docs/kepub.md），其余同 [`Format::name`]。
+    pub fn ext(self) -> &'static str {
+        match self {
+            Format::Kepub => "kepub.epub",
+            f => f.name(),
         }
     }
 }
@@ -106,6 +116,10 @@ pub enum Deliver {
     /// 产物放进存储根目录的 `dir`（如 `documents`），子目录照跟踪目录镜像。挂载点在、里面有存储就算接上了。
     /// （2026-10-31 以前还有 `xochitl`：经 SSH 调 Move 上书架服务的导入接口，Move 卖了以后删了。）
     Mtp { mount: String, dir: String },
+    /// USB 大容量存储（Kobo）：udisks 按卷标挂到 `<挂载目录>/<label>`（缺省 `/run/media/$USER`），产物放进根目录的 `dir`
+    /// （如 `books`），子目录照跟踪目录镜像。挂载点在、真的挂着就算接上了。不碰阅读器自己的数据（Kobo 的 `.kobo/`，
+    /// 尤其书库数据库 `KoboReader.sqlite`），也不搬 Kindle 那种 `.sdr` 进度文件夹。2026-11-01 加（Kobo Clara BW，未上真机）。
+    Usbms { label: String, dir: String },
 }
 
 /// 标题在阅读器上的字号（`heading_font_keywords` 的阅读器要写，测试书量的；正文 1em＝1）。
@@ -570,10 +584,11 @@ impl Profile {
             return Err(format!("profile {}: comic_page_direction 只能是 ltr 或 rtl，不是 {d}", self.id));
         }
         match &self.deliver {
-            Some(Deliver::Mtp { mount, dir }) => {
+            Some(Deliver::Mtp { mount: a, dir } | Deliver::Usbms { label: a, dir }) => {
                 let bad = |v: &str| v.is_empty() || v.starts_with('.') || v.contains(['/', '\\']);
-                if bad(mount) || bad(dir) {
-                    return Err(format!("profile {}: [deliver] 的 mount、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）", self.id));
+                if bad(a) || bad(dir) {
+                    let key = if matches!(self.deliver, Some(Deliver::Mtp { .. })) { "mount" } else { "label" };
+                    return Err(format!("profile {}: [deliver] 的 {key}、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）", self.id));
                 }
             }
             None => {}
@@ -838,7 +853,7 @@ mod tests {
     #[test]
     fn builtin_profiles_parse() {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["ireader", "kindle"]);
+        assert_eq!(ids, ["ireader", "kindle", "kobo"]);
         let k = get("kindle").unwrap();
         let i = get("ireader").unwrap();
         assert_eq!((k.format(), k.output_readable()), (Format::Kfx, Screen { width: 1104, height: 1546 }), "Kindle 自带阅读器真机实测");
@@ -934,5 +949,20 @@ mod tests {
         assert_eq!(r.get("ireader").unwrap().screen.width, 1072);
         assert_eq!(r.get("new-dev").unwrap().screen.width, 1000);
         assert_eq!(r.iter().count(), Registry::builtin().iter().count() + 1, "覆盖同 id、新增一台");
+    }
+
+    #[test]
+    fn deliver_usbms_parses() {
+        let base = "name = \"x\"\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n[screen]\nwidth = 1072\nheight = 1448\n[deliver]\n";
+        let p = Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"KOBOeReader\"\ndir = \"books\"\n")).unwrap();
+        assert_eq!(p.deliver, Some(Deliver::Usbms { label: "KOBOeReader".into(), dir: "books".into() }));
+        let e = Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"KOBOeReader\"\ndir = \".kobo\"\n")).unwrap_err();
+        assert!(e.contains("label、dir"), "{e}");
+        assert!(Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"a/b\"\ndir = \"books\"\n")).is_err());
+        assert!(Profile::parse("x", &format!("{base}kind = \"usbms\"\nmount = \"k\"\ndir = \"books\"\n")).is_err(), "usbms 不认 mount");
+        assert!(Profile::parse("x", &format!("{base}kind = \"usbms\"\nlabel = \"K\"\ndir = \"b\"\nx = 1\n")).is_err(), "不认识的键报错");
+        let k = get("kobo").unwrap();
+        assert_eq!(k.deliver, Some(Deliver::Usbms { label: "KOBOeReader".into(), dir: "books".into() }));
+        assert_eq!((k.screen.width, k.screen.height, k.color, k.format()), (1072, 1448, false, Format::Kepub));
     }
 }

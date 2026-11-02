@@ -17,7 +17,7 @@
 | crate | 职责 | 命令 |
 |---|---|---|
 | `library` | 书库：入库、跟踪同步、按模式生成、产物放哪、指纹、联网补元数据 | `booklib` |
-| `bookconv` | 内容层：CBZ/网页 → EPUB、清洗、优化、图片、质量门。**不管书库**，只按调用方给的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure` |
+| `bookconv` | 内容层：CBZ/网页 → EPUB、清洗、优化、图片、质量门、EPUB → KEPUB（clean-room，见 [KEPUB](kepub.md)）。**不管书库**，只按调用方给的阅读范围和选项处理 | `epub-optimize`、`readable-probe`、`readable-measure`、`epub-to-kepub` |
 | `kfx` | KFX：Ion 编解码、容器读写、EPUB → KFX 写出器（clean-room，见 [KFX](kfx.md)）；书库 `kindle` 模式的文字书和漫画都用它 | `epub-to-kfx`、`kfx-dump`、`kfx-repack` |
 | `csscascade` | CSS 层叠引擎（`@media` 求值、选择器优先级、计算值）、标签缺省样式表；KFX 写出器和优化器共用。2026-10-15 从 `bookconv` 拆出，`bookconv::cascade` 照旧能用 | |
 | `bookbase` | 基础件：`util`（原子写、限量读、并行、图片格式表）、`html`（容错的 HTML/CSS 文本操作）、`color`、`epubpath`（EPUB 里的路径、链接解析）。不依赖本仓库别的 crate；2026-10-15 从 `bookconv` 拆出，`bookconv::util` 等照旧能用 | |
@@ -188,7 +188,7 @@
 4. 位置变了先登记再生成：记录先改成新位置（指纹留空 = 没完成）、旧位置记进待删，中途打断下次也认得出。新书：同一轮里这个文件名先在内存里占住，别的同名书不会选它；放电脑上的不预登记（省一次整份记录的写），中途打断的话下次重新生成出逐字节相同的产物时认领它；MTP 设备上直接写正式文件名，要预登记（见第 6 步）。
 5. 与模式无关的中间文件（CBZ 转出的 EPUB、补了元数据的 EPUB）放在 `.tmp-<id>-src/`，同一本书的几个模式共用：按书 id 留到这本书所有模式都做完（某台设备排满、这本留到最后补的，不用再转一遍），留着的总量超过 1GB（`PREPARED_BUDGET`）时丢掉最早的，之后用到再做。
 6. **生成和传分开**：上面这些（比较、生成）是 `prepare`，在主线程做；放上设备是 `Transfer`，交给 `transfer::Pipeline` 的传输线程；传完由主线程 `complete` 写记录、删旧位置——**记录只在主线程改**（流程图见[使用指南 · 产物放在哪](usage.md#产物放在哪)）。库函数 `build`（单本、不走传输线程；命令行已经没有 `build`）是 prepare + run + complete。
-   - **生成**：流式优化，写进书库的临时目录 `.tmp-<id>-<模式>/`（`product`）→ 质量门 → 算 SHA-256，和记录里上次传的一样就不再传（`Built::Same`）。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX：唯一 ID 取自书 id（`kfx_id`，见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机)），`@media` 按这个模式的阅读范围、屏幕求值（`kfx::css::MediaEnv::for_profile`）。profile 可以用 `comic_format` 给漫画另配格式（内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。
+   - **生成**：流式优化，写进书库的临时目录 `.tmp-<id>-<模式>/`（`product`）→ 质量门 → 算 SHA-256，和记录里上次传的一样就不再传（`Built::Same`）。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（`kobo` 模式同样再转 KEPUB，见 [KEPUB](kepub.md)）：唯一 ID 取自书 id（`kfx_id`，见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机)），`@media` 按这个模式的阅读范围、屏幕求值（`kfx::css::MediaEnv::for_profile`）。profile 可以用 `comic_format` 给漫画另配格式（内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。
    - **传输线程**：每台设备一条，在传加排队最多 2 件，满了主线程先做别的设备。
    - **MTP（Kindle、掌阅）**：拷贝用 1MB 块；目标已是逐字节相同的就不拷（Kindle 进度不丢）。不同的先删旧的、**直接写正式文件名**（`put_file` 的 `direct`）：原版 jmtpfs 的改名是整份下载再上传，经临时文件等于传三遍。所以写之前先在生成记录里登记一条指纹留空的（第 4 步），写到一半被打断时下次认得出、重传。本机打过补丁的 jmtpfs 2026-10-09 起改成真改名、换目录用 MTP MoveObject，挪位置也不再重传（Kindle、掌阅真机 ✓）。
 7. 补上指纹，删掉待删的旧位置和变空的目录（只在产物根目录以内）。MTP 设备没挂上时删不了的留着下次删，不当成已删。
@@ -212,7 +212,7 @@
 | 模式 id | `kindle` 等 | — |
 | 阅读范围 | 文字书：优化器用的阅读范围（`output_readable`，如 `1104x1546`），带图注的竖长图写宽度（`k`）、正文图片透明处合成白底（`a`）、只修复（`t`，另保证注释能点再带 `n`、照 Send to Kindle 的规则统一再带 `u`，后面跟 `KINDLE_RULES_VERSION`（为 1 时不写）、去掉不平铺的背景图（`g`）、背景尺寸 auto 高照 Kindle 写像素（`h`）、页首垫图（`p`）、图片尺寸改写（`i` + 方式 + Kindle 的内容区宽和 1em 像素）、设备模型和 `em_px` 的哈希（`m` + 16 位十六进制，`bookconv::reader_model::ReaderModel::signature`，2026-10-13 起）和屏幕 `@宽x高`（统计正文字号时 `@media` 按它求））有的时候再带上；漫画：阅读范围 + 漫画画布 + 白边（`1104x1546c1272x1696+1`），阅读器页边距（`m1`）、翻页方向（`dltr`）、固定版式（`f`）有的时候带上；两路都带保留背景图（`b`，去掉尺寸时 `bn`）、不认 `rgba()`（`r`）（清洗层两路都过） | 这个模式这一路的全部 |
 | 黑白彩色 | `gray`/`color` | 这个模式的全部 |
-| 格式 | `epub`；KFX 带写出器版本和写出器求 `@media` 用的屏幕、KFX 阅读范围（写成 `kfx<版本号>@<屏宽>x<屏高>r<宽>x<高>`，如 `kfx<N>@1272x1696r1104x1546`，`<N>` 是 `WRITER_VERSION`；2026-10-09 补上屏幕） | 写出器版本、屏幕变了只有 `kindle` 的 |
+| 格式 | `epub`；KFX 带写出器版本和写出器求 `@media` 用的屏幕、KFX 阅读范围（写成 `kfx<版本号>@<屏宽>x<屏高>r<宽>x<高>`，如 `kfx<N>@1272x1696r1104x1546`，`<N>` 是 `WRITER_VERSION`；2026-10-09 补上屏幕）；KEPUB 带写出器版本（`kepub<版本号>`，`bookconv::kepub::VERSION`） | 写出器版本、屏幕变了只有 `kindle` 的；KEPUB 写出器版本变了只有 `kobo` 的 |
 
 设备那几段（注释方式、阅读范围段、这一路的版本）由 `library/src/fingerprint.rs` 拼（`device_sig`），旧写法的设备段也在那里（`legacy_device_seg`）。**写法一个字都不能改**：`crates/library/tests/fp_golden.rs` 把内置两个模式逐个改一个 profile 字段，文字书、漫画的指纹和 `fp_golden.txt` 逐行对拍（2026-10-15）。给 profile 加字段时 `profile` 的单测 `every_field_has_a_fingerprint_decision` 编译不过，逼着决定它进不进指纹。
 2026-10-15 对拍发现 `background_auto_height`、`margin_top` 改值时产物会变但指纹不变，补成 `kindle_rules` 段的 `h`、`p`（掌阅、Move 的文字书各重新生成一次，内容没变的不重传）。

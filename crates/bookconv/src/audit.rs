@@ -68,6 +68,8 @@ struct Row {
     #[serde(default)]
     via: Vec<String>,
     ireader: Option<String>,
+    /// Kobo（2026-11-01 加的栏，还没量；`probe.py kobo` 量了再填）。体检还不查 kobo（[`covers`]）。
+    kobo: Option<String>,
     #[serde(default)]
     note: String,
     #[allow(dead_code)]
@@ -78,6 +80,7 @@ impl Row {
     fn status(&self, reader: &str) -> Option<&str> {
         match reader {
             "ireader" => self.ireader.as_deref(),
+            "kobo" => self.kobo.as_deref(),
             _ => None,
         }
     }
@@ -291,7 +294,7 @@ mod tests {
     #[test]
     fn table_parses_and_statuses_are_known() {
         for r in &table().rule {
-            if let Some(s) = &r.ireader {
+            for s in [&r.ireader, &r.kobo].into_iter().flatten() {
                 assert!(["same", "fixed", "accept", "broken"].contains(&s.as_str()), "怪癖表状态 {s}");
             }
             for v in &r.value {
@@ -347,12 +350,13 @@ mod tests {
         if let Some(path) = std::env::var_os("QUIRKS_SNAPSHOT") {
             let mut s = String::new();
             for k in &keys {
+                // 只导 ireader：kobo 一栏还空着；填了以后再加
                 let v = deciding(k, "ireader").and_then(|i| table().rule[i].status("ireader")).unwrap_or("?");
                 s.push_str(&format!("{} {} {} {}{} {v}\n", k.0, k.1, k.2, via_name(k.3), if k.4 { "!" } else { "" }));
             }
             std::fs::write(path, s).unwrap();
         }
-        let decided: Vec<(&str, std::collections::HashSet<usize>)> = ["ireader"].iter().map(|d| (*d, keys.iter().filter_map(|k| deciding(k, d)).collect())).collect();
+        let decided: Vec<(&str, std::collections::HashSet<usize>)> = ["ireader", "kobo"].iter().map(|d| (*d, keys.iter().filter_map(|k| deciding(k, d)).collect())).collect();
         for (i, r) in table().rule.iter().enumerate() {
             assert!(!r.note.is_empty(), "第 {} 条 {:?} 没写说明", i + 1, r.prop);
             for (reader, used) in &decided {

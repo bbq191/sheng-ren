@@ -32,6 +32,7 @@ pub mod htmlproc;
 pub mod imgalpha;
 pub mod imgopt;
 pub mod jpegopt;
+pub mod kepub;
 pub mod kindle_model;
 pub mod netimg;
 pub mod imgpool;

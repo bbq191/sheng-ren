@@ -2,6 +2,8 @@
 //!
 //! - **MTP**（Kindle、掌阅）：jmtpfs 自动挂载在 `<挂载目录>/<mount>`（缺省 `$XDG_RUNTIME_DIR/mtp`），下面是存储
 //!   （「Internal Storage」之类），产物放进存储根目录的 `<dir>/`，按普通文件写。挂载点在、里面有存储就算接上了。
+//! - **USB 大容量存储**（Kobo，2026-11-01 加）：udisks 按卷标挂在 `<挂载目录>/<label>`（缺省 `/run/media/$USER`，它不在而
+//!   `/media/$USER` 在时用后者），产物放进根目录的 `<dir>/`。挂载点真的挂着才算接上（同 MTP）。阅读器自己的 `.kobo/` 一概不碰。
 //! - 没写 `[deliver]` 的模式（书库 `profiles/` 里的自定义模式）：产物照旧放在电脑上。
 //!
 //! 一轮 `sync` 里每台设备只连一次。`--watch` 每轮开头调 [`crate::Library::refresh_devices`]：没接上的下次用到时重新看。
@@ -20,6 +22,9 @@ pub struct DeviceEnv {
     /// 2026-10-21：掌阅在 `sync` 中途断开，jmtpfs 卸掉后挂载点剩个空目录，后面的书建目录、写进了 `/run/user/1000`（tmpfs）直到写满，
     /// 还记成传上了。
     pub mount_check: bool,
+    /// USB 大容量存储按卷标挂载的上级目录（`<它>/<label>`）。缺省 `$BOOKLIB_USBMS_DIR`，没设就是 `/run/media/$USER`
+    /// （它不在、`/media/$USER` 在时用后者）；关了挂载检查（测试）又没设时用 `<mtp_base>/usbms`，测试不会写到真插着的设备上。
+    pub usbms_base: PathBuf,
 }
 
 impl DeviceEnv {
@@ -29,10 +34,18 @@ impl DeviceEnv {
             let run = var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", uid())));
             run.join("mtp")
         });
-        DeviceEnv {
-            mtp_base,
-            mount_check: !var("BOOKLIB_MTP_NO_MOUNT_CHECK").is_some_and(|v| v != "0"),
-        }
+        let mount_check = !var("BOOKLIB_MTP_NO_MOUNT_CHECK").is_some_and(|v| v != "0");
+        let usbms_base = var("BOOKLIB_USBMS_DIR").map(PathBuf::from).unwrap_or_else(|| {
+            if !mount_check {
+                return mtp_base.join("usbms");
+            }
+            let user = var("USER").map(|u| u.to_string_lossy().into_owned()).unwrap_or_default();
+            // /run/media/$USER 要等第一次插 USB 存储才由 udisks 建：还不在时只有 /media/$USER 真在（Debian 系）才用它，
+            // 否则 `sync --watch` 开着时第一次插上会一直找错地方
+            let (run, media) = (Path::new("/run/media").join(&user), Path::new("/media").join(&user));
+            if !run.is_dir() && !user.is_empty() && media.is_dir() { media } else { run }
+        });
+        DeviceEnv { mtp_base, mount_check, usbms_base }
     }
 }
 
@@ -51,7 +64,7 @@ fn uid() -> u32 {
 pub(crate) enum Target {
     /// 放在电脑上（没写 `[deliver]`）。
     Local,
-    /// MTP 设备上的产物根目录（`<存储>/<dir>`）；`mount` 是要一直挂着的挂载点（不查挂没挂时 `None`）。
+    /// 设备上的产物根目录（MTP：`<存储>/<dir>`；USB 大容量存储：`<挂载点>/<dir>`）；`mount` 是要一直挂着的挂载点（不查挂没挂时 `None`）。
     Dir { root: PathBuf, mount: Option<PathBuf> },
 }
 
@@ -77,6 +90,18 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
             let storage = mtp_storage(&point).ok_or_else(|| format!("没接上（{} 不在或没挂上）", point.display()))?;
             // `dir` 不在（掌阅原来没有 documents/）的话传书时再建：只看接没接上的命令（devices）不往设备上写
             Ok(Target::Dir { root: storage.join(dir), mount: env.mount_check.then_some(point) })
+        }
+        Some(Deliver::Usbms { label, dir }) => {
+            // 只认 `<base>/<label>`：udisks 遇到同名目录占着时会挂成 `<label>1`，不跟过去（产物记录存的是绝对路径，挂载点名一变
+            // 旧记录就对不上、删不掉）；那时报没接上，用户卸掉重插
+            let point = env.usbms_base.join(label);
+            if env.mount_check && !mounted(&point) {
+                return Err(format!("没接上（{} 没挂上）", point.display()));
+            }
+            if !point.is_dir() {
+                return Err(format!("没接上（{} 不在）", point.display()));
+            }
+            Ok(Target::Dir { root: point.join(dir), mount: env.mount_check.then_some(point) })
         }
     }
 }
@@ -231,10 +256,36 @@ mod tests {
         // 设备断开后挂载点剩下的空目录里有存储目录（上次写进去的）也不算接上
         std::fs::create_dir_all(d.path().join("ireader/内部共享存储空间")).unwrap();
         let p = profile::get("ireader").unwrap();
-        let env = DeviceEnv { mtp_base: d.path().into(), mount_check: true };
+        let env = DeviceEnv { mtp_base: d.path().into(), mount_check: true, usbms_base: d.path().into() };
         assert!(connect(&env, p).err().unwrap().contains("没挂上"));
         let t = connect(&DeviceEnv { mount_check: false, ..env }, p).unwrap();
         assert!(matches!(t, Target::Dir { mount: None, .. }));
+    }
+
+    #[test]
+    fn usbms_connects_by_label() {
+        let d = tempfile::tempdir().unwrap();
+        let p = profile::get("kobo").unwrap();
+        let env = DeviceEnv { mtp_base: d.path().join("mtp"), mount_check: true, usbms_base: d.path().into() };
+        assert!(connect(&env, p).err().unwrap().contains("没挂上"), "卷标目录不在");
+        // 拔掉后留下的空目录（普通目录，和上一级同一个文件系统）不算接上
+        std::fs::create_dir(d.path().join("KOBOeReader")).unwrap();
+        assert!(connect(&env, p).err().unwrap().contains("没挂上"));
+        // 不查挂载（测试）：目录在就算接上，产物放 <挂载点>/books
+        let t = connect(&DeviceEnv { mount_check: false, ..env.clone() }, p).unwrap();
+        assert!(matches!(&t, Target::Dir { root, mount: None } if *root == d.path().join("KOBOeReader/books")));
+        assert!(connect(&DeviceEnv { mount_check: false, usbms_base: d.path().join("无"), ..env }, p).err().unwrap().contains("不在"));
+        #[cfg(target_os = "linux")]
+        {
+            // 真的挂载点算接上（/proc 当成卷标 "proc" 的 USB 存储）；只看 <base>/<label>，带数字后缀的不跟
+            let k = |label: &str| {
+                let mut p = p.clone();
+                p.deliver = Some(Deliver::Usbms { label: label.into(), dir: "books".into() });
+                connect(&DeviceEnv { mtp_base: "/nonexistent".into(), mount_check: true, usbms_base: "/".into() }, &p)
+            };
+            assert!(matches!(k("proc"), Ok(Target::Dir { root, mount: Some(m) }) if root == Path::new("/proc/books") && m == Path::new("/proc")));
+            assert!(k("pro").is_err());
+        }
     }
 
     #[test]

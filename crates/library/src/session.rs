@@ -114,9 +114,14 @@ impl Devices {
         self.targets.borrow_mut().clear();
     }
 
-    /// MTP 挂载点的上级目录（删产物时判断文件在不在 MTP 设备上）。
-    pub(crate) fn mtp_base(&self) -> &Path {
-        &self.env.mtp_base
+    /// 设备挂载点的上级目录（MTP、USB 大容量存储；删产物时判断文件在不在可拔下的设备上）。
+    pub(crate) fn bases(&self) -> [&Path; 2] {
+        [&self.env.mtp_base, &self.env.usbms_base]
+    }
+
+    /// USB 大容量存储挂载点的上级目录（Kobo：产物旁边没有 Kindle 的 `.sdr`，换目录时不搬）。
+    pub(crate) fn usbms_base(&self) -> &Path {
+        &self.env.usbms_base
     }
 
     /// 这个模式的产物送到哪（一轮里只连一次）。

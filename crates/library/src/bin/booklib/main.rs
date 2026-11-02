@@ -204,7 +204,8 @@ const HELP_TAIL: &str = "\
 环境变量：
   BOOKLIB_DIR       书库目录
   BOOKLIB_MTP_DIR   Kindle、掌阅的 jmtpfs 挂载点所在的目录（缺省 $XDG_RUNTIME_DIR/mtp）
-  BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查 MTP 挂载点挂没挂着（测试用普通目录当设备）
+  BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查 MTP、USB 存储挂载点挂没挂着（测试用普通目录当设备）
+  BOOKLIB_USBMS_DIR Kobo 等 USB 大容量存储按卷标挂载的目录（缺省 /run/media/$USER；它不在、/media/$USER 在时用后者）
   BOOKLIB_NO_NET=1  不联网（不找元数据、封面）
 
 退出码：0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）";
@@ -608,8 +609,8 @@ fn cmd_devices(ctx: &Ctx) {
     for p in lib.devices().iter() {
         let r = p.output_readable();
         println!("{:<12} {}  {}  屏幕 {}×{}  阅读范围 {}×{}  {}", p.id, p.name, match p.comic.format.filter(|f| *f != p.format()) {
-            Some(c) => format!("{}（漫画 {}）", p.format().ext().to_uppercase(), c.ext().to_uppercase()),
-            None => p.format().ext().to_uppercase(),
+            Some(c) => format!("{}（漫画 {}）", p.format().name().to_uppercase(), c.name().to_uppercase()),
+            None => p.format().name().to_uppercase(),
         }, p.screen.width, p.screen.height, r.width, r.height, if p.color { "彩色" } else { "黑白" });
         match lib.device_status(p) {
             Ok(Some(at)) => println!("{:<12} ✓ 接上了：{at}", ""),

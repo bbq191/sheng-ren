@@ -117,6 +117,7 @@
 |---|---|---|---|---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画固定版式） | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
 | `ireader` | 掌阅 Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白 |
+| `kobo` | Kobo Clara BW 自带阅读器（Nickel；预配置，未上真机） | KEPUB（`.kepub.epub`，漫画同） | 1072×1448，300ppi（官网） | 1072×1448（未量，按整屏） | 1072×1448（整屏，固定版式） | 黑白 |
 
 ### 怪癖 → 字段
 
@@ -173,11 +174,11 @@
 | `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"` | — | 不写（照书，2026-10-15 起；以前 `"ltr"`） | 掌阅往右翻的书，整页图四周按阅读器「排版」设置留边，选「漫画」排版才铺满（见下面「在真机上测量」） |
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记（`META-INF/eink-reader-margins`）、文字页补回留白（以前给 Move 的书架服务登记用） | — | — | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |
-| `[deliver]`（不写 = 产物放电脑上） | 产物怎么送到设备（2026-10-07，见[使用指南 · 产物放在哪](usage.md#产物放在哪)）：`kind = "mtp"` + `mount`（jmtpfs 挂载点名）+ `dir`（存储根目录下的目录）（2026-10-31 以前还有 `kind = "xochitl"`：经 SSH 交给 Move 的书架服务，删了） | mtp：`kindle`、`documents` | mtp：`ireader`、`documents` | 不影响产物内容，不进指纹 |
+| `[deliver]`（不写 = 产物放电脑上） | 产物怎么送到设备（2026-10-07，见[使用指南 · 产物放在哪](usage.md#产物放在哪)）：`kind = "mtp"` + `mount`（jmtpfs 挂载点名）+ `dir`（存储根目录下的目录）；`kind = "usbms"` + `label`（USB 存储卷标，挂在 `/run/media/$USER/<label>`）+ `dir`（2026-11-01 加，Kobo）（2026-10-31 以前还有 `kind = "xochitl"`：经 SSH 交给 Move 的书架服务，删了） | mtp：`kindle`、`documents` | mtp：`ireader`、`documents` | 不影响产物内容，不进指纹 |
 
 - `display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`＋`[heading_sizes]`、`margin_top`＋`[page_top]`、`inline_css_lengths`、`padding`、`borders`、`heading_margins`、`px_margins`、`percent_margins` 由 `bookconv::reader_model::ReaderModel` 汇成"这台阅读器拿到 CSS 会排成什么样"的设备模型，照 Kindle 改写的 pass 只认它（2026-10-13 收拢，量出来的数从代码挪进 profile）。这几个字段和 `em_px` 以哈希进指纹（`m` 段，2026-10-13 定）：重量了数改 profile 就行，书自动重建。
 - 影响产物的字段都进指纹，改了哪个，受影响的书都算过期、下次重建；文字书、漫画分开算，只管一路的字段只进那一路（见[架构 · 指纹](architecture.md#指纹)）。不进指纹的：`name`、`[deliver]`（只管怎么传，不影响产物）。
-- **怪癖表**（2026-10-13）：上面这些结论里能按「属性 · 元素 · 值 · 写法」说清楚的，机器可读地记在 `crates/bookconv/data/css-quirks.toml`（掌阅一栏：same / fixed / accept / broken，每条有出处；Move 一栏 2026-10-31 去掉了）。`sync` 生成掌阅的文字书时按它体检（`bookconv::audit`），和 Kindle 不一样又没处理的、表里没有的写法打在 `sync` 输出里、记进生成记录，`booklib list` 看全部。新量出来的结论两边都写。怪癖测试书 `tools/quirks/probe.py ireader` 一条命令生成、推进掌阅、逐页截屏逐行量（Kindle 要手动截图）。
+- **怪癖表**（2026-10-13）：上面这些结论里能按「属性 · 元素 · 值 · 写法」说清楚的，机器可读地记在 `crates/bookconv/data/css-quirks.toml`（掌阅一栏：same / fixed / accept / broken，每条有出处；Move 一栏 2026-10-31 去掉了；2026-11-01 加了 `kobo` 一栏，还没量、都空着，体检暂不查 kobo）。`sync` 生成掌阅的文字书时按它体检（`bookconv::audit`），和 Kindle 不一样又没处理的、表里没有的写法打在 `sync` 输出里、记进生成记录，`booklib list` 看全部。新量出来的结论两边都写。怪癖测试书 `tools/quirks/probe.py ireader` 一条命令生成、推进掌阅、逐页截屏逐行量（Kindle 要手动截图）。
 - 表里 `background_images` 到 `image_alpha` 这几个字段是文字书完整优化时的规则，内置模式的文字书都只修复（`text_repair_only = true`），它们只对漫画（清洗层两路都过）和没开只修复的自定义模式起作用。
 - **掌阅自带阅读器的词典**（2026-10-06 真机）：内置有道词典（存储根 `dict/` 下的 `c2170331.ydd`、`e2170331.ydd` 等），也能查在线翻译；自己的 **MOBI 词典直接拷进 `iReader/dict/`** 就能在查词里用（《牛津高阶英语双解》68MB、《现代汉语词典》9MB ✓，不用转格式；社区说法是单本不超过 100MB，没验证上限）。（`mobi-dict-to-stardict` 转 StarDict 是当初给 KOReader 用的，现在两台都不装 KOReader。）
 - **掌阅自带阅读器的字体**（2026-10-06 真机）：字体都在共享存储的 `iReader/fonts/`，自带的（方正新书宋等，删了会自动重新下载）和自己导入的放在一起；**字体列表显示的就是文件名去掉扩展名**，不读字体里登记的名字，自带字体的文件名本来就是中文（`方正新书宋.TTF`）。所以导入的字体想显示中文名，就把文件改成中文名（`SourceHanSerifSC-SemiBold.otf` → `思源宋体 SemiBold.otf`）。阅读器设置（`text_book_config.db` 的 `fontFamily`）记的也是这个名字，改名后用到它的书要重新选一次字体。
@@ -291,6 +292,23 @@ readable-measure --device=kindle 竖长.png 横宽.png
 ```
 
 给了 `--device` 就按它的产物格式写段名（Kindle 是 `[readable.kfx]`，其余 `[readable.epub]`）；没给写 `[readable.epub]` 并提示。贴进对应的模式文件，注释里写明测量日期和条件（哪个阅读软件、页边距设置）。
+
+## Kobo Clara BW（2026-11-01 预配置，未上真机）
+
+模式 `kobo`（`crates/profile/profiles/kobo.toml`）。下面的数字来自官网、Kobo 帮助页，没在真机上量过；注释里写着「待确认」的都要测试书核对。
+
+- **硬件**：6" E Ink Carta 1300，1448×1072，300 ppi，黑白（彩色的是 Clara Colour）。竖屏写成 `width = 1072`、`height = 1448`。
+- **传书**：USB 大容量存储（不是 MTP），卷标 `KOBOeReader`，udisks 挂到 `/run/media/$USER/KOBOeReader`（`[deliver] kind = "usbms"`）。产物放根目录的 `books/`，子目录照跟踪目录镜像。挂载点要真的挂着才算接上（同 MTP）；拔掉后剩下的空目录不写。挂载目录可以用 `BOOKLIB_USBMS_DIR` 改。
+- **不碰阅读器自己的数据**：`.kobo/` 一概不动，尤其书库数据库 `.kobo/KoboReader.sqlite`（Nickel 拔线后自己扫描更新）。Kindle 那种书旁边的 `.sdr` 进度文件夹 Kobo 没有，换目录时不搬。
+- **跳过登录**：`.kobo/Kobo/Kobo eReader.conf` 的 `[ApplicationPreferences]` 下加 `SideloadedMode=true`，不登 Kobo 账号也能看侧载的书（要用户自己改，程序不改）。
+- **怪癖测试书**（2026-11-01，脚本写好、未上真机）：`tools/quirks/probe.py kobo`，Kobo 没有 adb，分步做：
+  `generate`（EPUB、KEPUB 各一本，书名「测试-怪癖-Kobo-EPUB / -KEPUB」，每次换文件名；放 `target/quirks-kobo/<时间>/`，可加 `--optimize=`、`--only=`）→
+  `push`（拷进 `<挂载点>/books/测试/`，挂载点找法同 booklib、要真挂着，先写 `.part` 再改名、sync；不碰 `.kobo/`）→ 弹出、拔线、在 Kobo 上开书逐页截屏 →
+  重插 `collect --format=epub|kepub`（把存储根目录的 `screen_*.png` 拷回 `shots/<格式>/`，拷过的不再拷；只有加 `--clean` 才删设备上的截屏）→ 两本都量完 `report` 并排看，手写进 `css-quirks.toml` 的 `kobo` 一栏。
+  `measure --from-dir=目录` 只量电脑上的截屏。**未验证**：截屏要在 `.kobo/Kobo/Kobo eReader.conf` 的 `[FeatureSettings]` 加 `Screenshots=true`（自己改）、按电源键截、存在根目录叫 `screen_*.png`（`--pattern=` 改），
+  截屏是 1072×1448 竖屏，页脚在最下面 5%（`--max-y=` 改）——都是社区资料或推断，拿到真机先截一张核对。
+- **格式**：KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者以前试过），2026-11-01 起 `formats = ["kepub"]`，漫画也是 `.kepub.epub`。写出器是 clean-room 的 `bookconv::kepub`，做法、来源和真机 A/B（固定版式文件名、图片页不包装）见 [KEPUB](kepub.md)。还没上真机。
+- **漫画**：参数照 Kindle（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、固定版式整屏），都待真机比。
 
 ## 加一个阅读模式
 

@@ -13,6 +13,8 @@ python3 tools/display/sample.py ireader 书.epub 输出目录 --title=章名; sa
 tools/regress/compare.py 旧目录 新目录                    # 比较两次回归
 tools/quirks/probe.py ireader                            # 怪癖测试书：生成、adb 推进掌阅 documents/测试/、点开、逐页截屏（标记是条码图）逐行量（make 只生成）；结论写进 crates/bookconv/data/css-quirks.toml
 #   可加 --only=88-99（只跑这几个探针）、--optimize=target/release/epub-optimize（先按那台的模式优化，看修过以后的样子）
+tools/quirks/probe.py kobo generate|push|collect|measure|report   # Kobo 没有 adb，分步：生成 EPUB、KEPUB 两本 → 拷进 <挂载点>/books/测试/ → 手动逐页截屏 → 拷回截屏逐行量（见 devices.md 的 Kobo 一节）
+python3 -m unittest tools/quirks/test_probe.py           # probe.py 的离线单测（合成截屏，不碰设备）
 tools/regress/tocchk.py 旧目录 新目录                     # 核对 spine 文件数（不拆文件）和目录（层级、标签、锚点都在）
 shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh tools/regress/run.sh
 
@@ -101,6 +103,7 @@ done
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签、作者国籍、译者、出版社、日期、ISBN，书名换成网站书名 | `bookconv::opfmeta::VERSION` | 6 | 只有补过东西的 |
 | EPUB → KFX | `kfx::write::WRITER_VERSION` | 25 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
+| EPUB → KEPUB（koboSpan、包装） | `bookconv::kepub::VERSION` | 1 | 只有出 KEPUB 的模式的（`kobo`） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。

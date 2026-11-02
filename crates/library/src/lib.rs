@@ -288,6 +288,7 @@ pub fn rule_versions() -> Vec<(&'static str, String)> {
         ("CBZ 转换", bookconv::convert::CONVERT_VERSION.to_string()),
         ("补元数据", bookconv::opfmeta::VERSION.to_string()),
         ("KFX 写出器", kfx::write::WRITER_VERSION.to_string()),
+        ("KEPUB 写出器", bookconv::kepub::VERSION.to_string()),
         ("生成流程", generate::PIPELINE_VERSION.to_string()),
     ]
 }
