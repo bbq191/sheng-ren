@@ -94,9 +94,11 @@ def epub_images(path, bindir, device):
 
 
 # 各阅读器显示图片的几何（屏幕像素）：内容区宽、高，缺省字号下 1em。Kindle 取 kindle profile（KFX 阅读范围、font_px）；
-# 掌阅、Move 是 2026-10-12 测试书「测试-插图」量的（掌阅 100% 宽的图 1168px、10em 的 374px；Move 的内容区同 profile 842×1455）
+# 掌阅是 2026-11-02 在 Air 3 Pro 上实测（图书排版关、字号中、预设通用）：100% 宽的图 1300px、10em 的 580px、300px 的 300px；
+# height 是正文页内图的上限（1300×1620 留在正文页，1630 起被抽成单独的全屏页、按屏幕 1440×1920 缩放）。
+# 旧值 1168/1560/37.4 是 2026-10-12 在 Ocean 上量的。
 READER_GEOMETRY = {
-    'ireader': {'content': 1168, 'height': 1560, 'em_px': 37.4},
+    'ireader': {'content': 1300, 'height': 1620, 'em_px': 58},
 }
 
 
