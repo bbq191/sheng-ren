@@ -68,7 +68,16 @@ impl Net {
     /// `$BOOKLIB_NO_NET=1` 时一开始就当断网（测试里 `sync` 不去连豆瓣）。
     pub(crate) fn new() -> Net {
         let no_net = std::env::var_os("BOOKLIB_NO_NET").is_some_and(|v| v != "0");
-        Net { agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(30)).user_agent(UA).build(), last: Cell::new(None), down: RefCell::default(), down_since_ok: Cell::new(if no_net { 2 } else { 0 }), transient: RefCell::new(None) }
+        Net {
+            agent: ureq::AgentBuilder::new()
+                .timeout(Duration::from_secs(30))
+                .user_agent(UA)
+                .build(),
+            last: Cell::new(None),
+            down: RefCell::default(),
+            down_since_ok: Cell::new(if no_net { 2 } else { 0 }),
+            transient: RefCell::new(None),
+        }
     }
 
     /// 看起来整个断网了：接连两个不同的网站连不上，其间没有请求成功。
@@ -86,7 +95,9 @@ impl Net {
     }
 
     pub(crate) fn note_transient(&self, e: &str) {
-        self.transient.borrow_mut().get_or_insert_with(|| e.to_string());
+        self.transient
+            .borrow_mut()
+            .get_or_insert_with(|| e.to_string());
     }
 
     /// 请求失败都经这里返回：临时错误顺手记下（以前每个出错分支各记一次）。
@@ -116,12 +127,19 @@ impl Net {
     fn strict_json(&self, url: &str, body: &[u8]) -> Result<Value, NetError> {
         match serde_json::from_slice(body) {
             Ok(v) => Ok(v),
-            Err(e) => self.fail(NetError::Transient(format!("{url}: 回来的不是 JSON（{e}，可能被网站拦了）"))),
+            Err(e) => self.fail(NetError::Transient(format!(
+                "{url}: 回来的不是 JSON（{e}，可能被网站拦了）"
+            ))),
         }
     }
 
     /// 一次请求（节流、重试、断网判定同上）：`body` 给了就 POST 这个 JSON，否则 GET。
-    fn request(&self, url: &str, referer: Option<&str>, body: Option<&Value>) -> Result<Vec<u8>, NetError> {
+    fn request(
+        &self,
+        url: &str,
+        referer: Option<&str>,
+        body: Option<&Value>,
+    ) -> Result<Vec<u8>, NetError> {
         let host = host_of(url);
         if self.down.borrow().contains(host) {
             return self.fail(NetError::Transient(format!("{url}: 连不上 {host}，跳过")));
@@ -136,12 +154,18 @@ impl Net {
                 }
             }
             self.last.set(Some(Instant::now()));
-            let mut req = if body.is_some() { self.agent.post(url) } else { self.agent.get(url) };
+            let mut req = if body.is_some() {
+                self.agent.post(url)
+            } else {
+                self.agent.get(url)
+            };
             if let Some(r) = referer {
                 req = req.set("Referer", r);
             }
             let res = match body {
-                Some(b) => req.set("Content-Type", "application/json").send_string(&b.to_string()),
+                Some(b) => req
+                    .set("Content-Type", "application/json")
+                    .send_string(&b.to_string()),
                 None => req.call(),
             };
             // 网站回了 HTTP 状态（哪怕是 404、403、5xx），说明网是通的：断网的判定（接连两个网站连不上）从头算
@@ -152,7 +176,12 @@ impl Net {
                 Ok(r) => {
                     match bookconv::util::read_capped(r.into_reader(), MAX_BODY, 0) {
                         // 超过上限的不是封面也不是条目页：报错，不能截断了当成功（截断的图读得出尺寸，会被当封面存下）
-                        Ok(None) => return self.fail(NetError::Other(format!("{url}: 响应超过 {} MB", MAX_BODY >> 20))),
+                        Ok(None) => {
+                            return self.fail(NetError::Other(format!(
+                                "{url}: 响应超过 {} MB",
+                                MAX_BODY >> 20
+                            )))
+                        }
                         Ok(Some(buf)) => return Ok(buf),
                         Err(e) => {
                             last_err = e.to_string();
@@ -162,11 +191,23 @@ impl Net {
                 }
                 Err(ureq::Error::Status(code, r)) if code == 429 || code >= 500 => {
                     last_err = format!("HTTP {code}");
-                    r.header("Retry-After").and_then(|v| v.parse().ok()).unwrap_or(5u64).min(60)
+                    r.header("Retry-After")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(5u64)
+                        .min(60)
                 }
                 // 403 多半是被反爬拦了（豆瓣），不是"没有"：记成临时错误，本次不落结论（不当成没这本书、不生成封面存下）
-                Err(ureq::Error::Status(403, _)) => return self.fail(NetError::Transient(format!("{url}: HTTP 403（可能被网站拦了）"))),
-                Err(ureq::Error::Status(code, _)) => return self.fail(NetError::Status { url: url.to_string(), code }),
+                Err(ureq::Error::Status(403, _)) => {
+                    return self.fail(NetError::Transient(format!(
+                        "{url}: HTTP 403（可能被网站拦了）"
+                    )))
+                }
+                Err(ureq::Error::Status(code, _)) => {
+                    return self.fail(NetError::Status {
+                        url: url.to_string(),
+                        code,
+                    })
+                }
                 Err(e @ ureq::Error::Transport(_)) => match e.kind() {
                     ureq::ErrorKind::Dns | ureq::ErrorKind::ConnectionFailed => {
                         if self.down.borrow_mut().insert(host.to_string()) {
@@ -174,7 +215,10 @@ impl Net {
                         }
                         return self.fail(NetError::Transient(format!("连不上 {host}（{e}）")));
                     }
-                    ureq::ErrorKind::Io | ureq::ErrorKind::BadStatus | ureq::ErrorKind::BadHeader | ureq::ErrorKind::ProxyConnect => {
+                    ureq::ErrorKind::Io
+                    | ureq::ErrorKind::BadStatus
+                    | ureq::ErrorKind::BadHeader
+                    | ureq::ErrorKind::ProxyConnect => {
                         last_err = e.to_string();
                         2
                     }
@@ -189,7 +233,8 @@ impl Net {
     }
 
     pub(crate) fn json(&self, url: &str) -> Result<Value, NetError> {
-        serde_json::from_slice(&self.fetch(url)?).map_err(|e| NetError::Other(format!("{url}: {e}")))
+        serde_json::from_slice(&self.fetch(url)?)
+            .map_err(|e| NetError::Other(format!("{url}: {e}")))
     }
 
     /// 同 [`Net::json`]，但回来的不是 JSON 也算临时错误：豆瓣反爬时搜索接口照样回 200，内容是验证页，
@@ -226,7 +271,11 @@ mod tests {
 
     /// 本机上一个关着的端口（连上去立刻被拒）。
     fn closed_port() -> u16 {
-        std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
     }
 
     #[test]
@@ -238,24 +287,50 @@ mod tests {
             for mut c in srv.incoming().flatten() {
                 let mut buf = [0u8; 4096];
                 let _ = c.read(&mut buf);
-                let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                let _ = c.write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                );
             }
         });
         let net = Net::new();
-        assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());
+        assert!(net
+            .fetch(&format!("http://127.0.0.1:{}/", closed_port()))
+            .is_err());
         assert!(!net.offline(), "一个网站连不上不算断网");
-        assert!(matches!(net.fetch(&format!("http://127.0.0.1:{port}/x")), Err(super::NetError::Status { code: 404, .. })));
-        assert!(net.transient_error().iter().all(|e| !e.contains("404")), "404 是「没有」，不记成临时错误");
-        assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());
-        assert!(!net.offline(), "两个连不上的网站之间有网站回了 404：网是通的，不算断网");
-        assert!(net.fetch(&format!("http://127.0.0.1:{}/", closed_port())).is_err());
+        assert!(matches!(
+            net.fetch(&format!("http://127.0.0.1:{port}/x")),
+            Err(super::NetError::Status { code: 404, .. })
+        ));
+        assert!(
+            net.transient_error().iter().all(|e| !e.contains("404")),
+            "404 是「没有」，不记成临时错误"
+        );
+        assert!(net
+            .fetch(&format!("http://127.0.0.1:{}/", closed_port()))
+            .is_err());
+        assert!(
+            !net.offline(),
+            "两个连不上的网站之间有网站回了 404：网是通的，不算断网"
+        );
+        assert!(net
+            .fetch(&format!("http://127.0.0.1:{}/", closed_port()))
+            .is_err());
         assert!(net.offline(), "接连两个网站连不上才算断网");
     }
 
     #[test]
     fn host_of_takes_the_authority_part() {
-        assert_eq!(super::host_of("https://book.douban.com/j/subject_suggest?q=x"), "book.douban.com");
-        assert_eq!(super::host_of("https://www.wikidata.org?x"), "www.wikidata.org");
-        assert_eq!(super::host_of("covers.openlibrary.org/b/id/1-L.jpg"), "covers.openlibrary.org");
+        assert_eq!(
+            super::host_of("https://book.douban.com/j/subject_suggest?q=x"),
+            "book.douban.com"
+        );
+        assert_eq!(
+            super::host_of("https://www.wikidata.org?x"),
+            "www.wikidata.org"
+        );
+        assert_eq!(
+            super::host_of("covers.openlibrary.org/b/id/1-L.jpg"),
+            "covers.openlibrary.org"
+        );
     }
 }

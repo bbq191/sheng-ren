@@ -45,14 +45,23 @@ impl Need {
     /// 只认由标识符、`.`、`#`、空白和 `>`/`+`/`~` 组成的选择器；带属性、伪类、`*`、命名空间、转义的不做（返回 `None`）。
     fn of(sel: &str) -> Option<Need> {
         let ident = |c: char| c.is_alphanumeric() || c == '-' || c == '_';
-        if !sel.chars().all(|c| ident(c) || matches!(c, '.' | '#' | '>' | '+' | '~') || c.is_whitespace()) {
+        if !sel
+            .chars()
+            .all(|c| ident(c) || matches!(c, '.' | '#' | '>' | '+' | '~') || c.is_whitespace())
+        {
             return None;
         }
-        let last = sel.rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~')).next()?;
+        let last = sel
+            .rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~'))
+            .next()?;
         if last.is_empty() {
             return None;
         }
-        let mut need = Need { tag: None, classes: Vec::new(), ids: Vec::new() };
+        let mut need = Need {
+            tag: None,
+            classes: Vec::new(),
+            ids: Vec::new(),
+        };
         let mut rest = last;
         let tag_end = rest.find(['.', '#']).unwrap_or(rest.len());
         if tag_end > 0 {
@@ -66,7 +75,11 @@ impl Need {
                 return None;
             }
             let name = body[..end].to_string();
-            if kind == '.' { need.classes.push(name) } else { need.ids.push(name) }
+            if kind == '.' {
+                need.classes.push(name)
+            } else {
+                need.ids.push(name)
+            }
             rest = &body[end..];
         }
         Some(need)
@@ -74,9 +87,17 @@ impl Need {
 
     fn may_match(&self, el: &ElementRef) -> bool {
         let v = el.value();
-        self.tag.as_deref().is_none_or(|t| v.name().eq_ignore_ascii_case(t))
-            && self.ids.iter().all(|i| v.id().is_some_and(|x| x.eq_ignore_ascii_case(i)))
-            && self.classes.iter().all(|c| v.classes().any(|x| x.eq_ignore_ascii_case(c)))
+        self.tag
+            .as_deref()
+            .is_none_or(|t| v.name().eq_ignore_ascii_case(t))
+            && self
+                .ids
+                .iter()
+                .all(|i| v.id().is_some_and(|x| x.eq_ignore_ascii_case(i)))
+            && self
+                .classes
+                .iter()
+                .all(|c| v.classes().any(|x| x.eq_ignore_ascii_case(c)))
     }
 }
 
@@ -100,7 +121,11 @@ impl ElementKeys {
         let mut classes: Vec<String> = v.classes().map(|c| c.to_ascii_lowercase()).collect();
         classes.sort_unstable();
         classes.dedup();
-        ElementKeys { id: v.id().map(str::to_ascii_lowercase), classes, tag: v.name().to_ascii_lowercase() }
+        ElementKeys {
+            id: v.id().map(str::to_ascii_lowercase),
+            classes,
+            tag: v.name().to_ascii_lowercase(),
+        }
     }
 }
 
@@ -132,9 +157,19 @@ impl RuleIndex {
         for (i, r) in list.iter().enumerate() {
             let i = i as u32;
             match &r.need {
-                Some(n) if !n.ids.is_empty() => ix.by_id.entry(n.ids[0].to_ascii_lowercase()).or_default().push(i),
-                Some(n) if !n.classes.is_empty() => ix.by_class.entry(n.classes[0].to_ascii_lowercase()).or_default().push(i),
-                Some(Need { tag: Some(t), .. }) => ix.by_tag.entry(t.to_ascii_lowercase()).or_default().push(i),
+                Some(n) if !n.ids.is_empty() => ix
+                    .by_id
+                    .entry(n.ids[0].to_ascii_lowercase())
+                    .or_default()
+                    .push(i),
+                Some(n) if !n.classes.is_empty() => ix
+                    .by_class
+                    .entry(n.classes[0].to_ascii_lowercase())
+                    .or_default()
+                    .push(i),
+                Some(Need { tag: Some(t), .. }) => {
+                    ix.by_tag.entry(t.to_ascii_lowercase()).or_default().push(i)
+                }
                 _ => ix.other.push(i),
             }
         }
@@ -194,7 +229,8 @@ impl Rules {
     fn add(&mut self, css: &str, base: &str, media: Option<&MediaEnv>) {
         let media_block_ok = |prelude: &str| {
             let head = rule_head(prelude).to_ascii_lowercase();
-            head.strip_prefix("@media").is_some_and(|q| media_ok(q, media))
+            head.strip_prefix("@media")
+                .is_some_and(|q| media_ok(q, media))
         };
         for r in rule_spans(css) {
             if r.depth > MAX_MEDIA_NESTING || !r.parents.iter().all(|p| media_block_ok(p)) {
@@ -212,7 +248,12 @@ impl Rules {
             for one in split_top(&head, ',') {
                 let one = one.trim();
                 if let Ok(sel) = Selector::parse(one) {
-                    self.list.push(Rule { sel, need: Need::of(one), spec: specificity(one), decls: decls.clone() });
+                    self.list.push(Rule {
+                        sel,
+                        need: Need::of(one),
+                        spec: specificity(one),
+                        decls: decls.clone(),
+                    });
                 }
             }
         }
@@ -233,7 +274,11 @@ fn resolve_urls(decls: &mut [Decl], base: &str) {
 
 /// 值是 `url(…)` 开头时括号里的地址（去掉引号；按 [`bookbase::html::css_urls`] 认）。
 fn leading_url(value: &str) -> Option<&str> {
-    bookbase::html::css_urls(value).into_iter().next().filter(|u| u.start == 0).map(|u| u.value)
+    bookbase::html::css_urls(value)
+        .into_iter()
+        .next()
+        .filter(|u| u.start == 0)
+        .map(|u| u.value)
 }
 
 /// 一个文档用到的样式表：各份 [`Rules`]、它们第一条规则的全局序号（后出现的规则优先）、从哪来。
@@ -273,7 +318,10 @@ enum Lex {
 /// 没转义的换行就结束（坏字符串），注释只在字符串外面算。以前落单的引号一直吞到下一个同样的引号，`{}` 配不上、后面的规则全废。
 /// 找配对的括号、按分隔符拆（选择器列表、媒体查询、属性值）、切词、去注释、找规则、算优先级都用它。
 fn lex<I: Iterator<Item = (usize, char)>>(it: I) -> Lexer<I> {
-    Lexer { it: it.peekable(), quote: None }
+    Lexer {
+        it: it.peekable(),
+        quote: None,
+    }
 }
 
 struct Lexer<I: Iterator<Item = (usize, char)>> {
@@ -319,7 +367,10 @@ impl<I: Iterator<Item = (usize, char)>> Iterator for Lexer<I> {
 }
 
 /// 字符串、注释之外的字符依次交给 `f`；`f` 返回 `Some` 就停下返回它。
-fn scan_css<R>(it: impl Iterator<Item = (usize, char)>, mut f: impl FnMut(usize, char) -> Option<R>) -> Option<R> {
+fn scan_css<R>(
+    it: impl Iterator<Item = (usize, char)>,
+    mut f: impl FnMut(usize, char) -> Option<R>,
+) -> Option<R> {
     for l in lex(it) {
         if let Lex::Code(i, c) = l {
             if let Some(r) = f(i, c) {
@@ -387,7 +438,14 @@ pub fn rule_spans(css: &str) -> Vec<RuleSpan<'_>> {
         open: usize,
         has_child: bool,
     }
-    fn push<'a>(out: &mut Vec<RuleSpan<'a>>, css: &'a str, start: usize, open: usize, close: Option<usize>, ats: &[At<'a>]) {
+    fn push<'a>(
+        out: &mut Vec<RuleSpan<'a>>,
+        css: &'a str,
+        start: usize,
+        open: usize,
+        close: Option<usize>,
+        ats: &[At<'a>],
+    ) {
         if start == open {
             return;
         }
@@ -399,7 +457,11 @@ pub fn rule_spans(css: &str) -> Vec<RuleSpan<'_>> {
             body_start: open + 1,
             end: close.map_or(end, |c| c + 1),
             closed: close.is_some(),
-            parents: ats.iter().take(MAX_MEDIA_NESTING).map(|a| a.prelude).collect(),
+            parents: ats
+                .iter()
+                .take(MAX_MEDIA_NESTING)
+                .map(|a| a.prelude)
+                .collect(),
             depth: ats.len(),
         });
     }
@@ -426,7 +488,12 @@ pub fn rule_spans(css: &str) -> Vec<RuleSpan<'_>> {
                 }
                 let prelude = &css[last..i];
                 if rule_head(prelude).starts_with('@') {
-                    ats.push(At { prelude, start: last, open: i, has_child: false });
+                    ats.push(At {
+                        prelude,
+                        start: last,
+                        open: i,
+                        has_child: false,
+                    });
                 } else {
                     qual = Some((last, i, 1));
                 }
@@ -495,7 +562,10 @@ pub fn split_leading_statements(sel: &str) -> (&str, &str) {
 /// 选择器（一个逗号分项）的最后一个复合选择器：`div.a > p.b:first-child` → `p.b:first-child`。按空白和组合符 `>`、`+`、`~` 切。
 /// 字体分析、Send to Kindle 规则、正文层判断、章尾容器类、整页背景共用。
 pub fn last_compound(sel: &str) -> &str {
-    sel.trim().rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~')).next().unwrap_or("")
+    sel.trim()
+        .rsplit(|c: char| c.is_whitespace() || matches!(c, '>' | '+' | '~'))
+        .next()
+        .unwrap_or("")
 }
 
 /// 复合选择器的标签名（小写，没写是空串）和类名：伪类、属性选择器（`:`、`[` 起）不算，空的类名不算，`p.a.b` → ("p", ["a", "b"])。
@@ -510,7 +580,9 @@ pub fn compound_tag_classes(compound: &str) -> (String, Vec<&str>) {
 /// 层叠读嵌入字体（[`font_faces`]）、清洗层剔除死字体（`wash::dead_refs`）、字体分析（`wash::fonts`）共用
 /// （以前三处各找各的：两处用一条遇到字符串里的 `}` 就截断的正则）。
 pub fn font_face_rules(css: &str) -> impl Iterator<Item = RuleSpan<'_>> {
-    rule_spans(css).into_iter().filter(|r| is_font_face(&rule_selector(r.prelude)))
+    rule_spans(css)
+        .into_iter()
+        .filter(|r| is_font_face(&rule_selector(r.prelude)))
 }
 
 /// 选择器（已过 [`rule_selector`]）是不是 `@font-face`。
@@ -555,7 +627,15 @@ pub fn parse_decls(s: &str) -> Vec<Decl> {
         if prop.is_empty() || value.is_empty() {
             continue;
         }
-        out.extend(expand_shorthand(&prop, &value).into_iter().map(|(prop, value)| Decl { prop, value, important }));
+        out.extend(
+            expand_shorthand(&prop, &value)
+                .into_iter()
+                .map(|(prop, value)| Decl {
+                    prop,
+                    value,
+                    important,
+                }),
+        );
     }
     out
 }
@@ -605,7 +685,9 @@ fn tokens_with(v: &str, slash: bool) -> (Vec<&str>, bool) {
             Lex::Comment(i, _) | Lex::Quoted(i) => {
                 start.get_or_insert(i);
             }
-            Lex::Code(i, c) if c.is_whitespace() && depth == 0 => end_at(v, &mut toks, &mut start, i),
+            Lex::Code(i, c) if c.is_whitespace() && depth == 0 => {
+                end_at(v, &mut toks, &mut start, i)
+            }
             Lex::Code(i, '/') if slash && depth == 0 => {
                 end_at(v, &mut toks, &mut start, i);
                 toks.push(&v[i..i + 1]);
@@ -645,7 +727,12 @@ pub fn box_sides(val: &str) -> BoxSides<'_> {
     if !balanced {
         return BoxSides::Unknown;
     }
-    let keyword = |p: &str| matches!(p.to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer");
+    let keyword = |p: &str| {
+        matches!(
+            p.to_ascii_lowercase().as_str(),
+            "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+        )
+    };
     match parts[..] {
         [k] if keyword(k) => BoxSides::Keyword(k, important),
         _ if parts.iter().any(|p| keyword(p)) => BoxSides::Unknown,
@@ -668,12 +755,19 @@ fn four_values(value: &str) -> Option<[&str; 4]> {
 
 fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
     let four = |base: &str| -> Vec<(String, String)> {
-        let Some(v) = four_values(value) else { return Vec::new() };
-        ["top", "right", "bottom", "left"].iter().zip(v).map(|(side, v)| (format!("{base}-{side}"), v.to_string())).collect()
+        let Some(v) = four_values(value) else {
+            return Vec::new();
+        };
+        ["top", "right", "bottom", "left"]
+            .iter()
+            .zip(v)
+            .map(|(side, v)| (format!("{base}-{side}"), v.to_string()))
+            .collect()
     };
     // `border-top: 1px solid red` 这类：拆成样式、宽度、颜色（没写的按 CSS 缺省：无、medium、当前颜色）。
     let border_side = |side: &str| -> Vec<(String, String)> {
-        let (mut style, mut width, mut color) = ("none".to_string(), "medium".to_string(), String::new());
+        let (mut style, mut width, mut color) =
+            ("none".to_string(), "medium".to_string(), String::new());
         for t in tokens(value).0 {
             let l = t.to_ascii_lowercase();
             if BORDER_STYLES.contains(&l.as_str()) {
@@ -684,7 +778,10 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
                 width = t.to_string();
             }
         }
-        let mut v = vec![(format!("border-{side}-style"), style), (format!("border-{side}-width"), width)];
+        let mut v = vec![
+            (format!("border-{side}-style"), style),
+            (format!("border-{side}-width"), width),
+        ];
         v.push((format!("border-{side}-color"), color));
         v
     };
@@ -696,12 +793,21 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
         "border-top" | "border-right" | "border-bottom" | "border-left" => border_side(&prop[7..]),
         "border-style" | "border-width" | "border-color" => {
             let what = &prop[7..];
-            four("border").into_iter().map(|(k, v)| (format!("{k}-{what}"), v)).collect()
+            four("border")
+                .into_iter()
+                .map(|(k, v)| (format!("{k}-{what}"), v))
+                .collect()
         }
         "border-radius" => {
             // 只取「/」前面的（水平半径）；顺序是左上、右上、右下、左下。
-            let Some(v) = four_values(value.split('/').next().unwrap_or("")) else { return Vec::new() };
-            ["top-left", "top-right", "bottom-right", "bottom-left"].iter().zip(v).map(|(c, v)| (format!("border-{c}-radius"), v.to_string())).collect()
+            let Some(v) = four_values(value.split('/').next().unwrap_or("")) else {
+                return Vec::new();
+            };
+            ["top-left", "top-right", "bottom-right", "bottom-left"]
+                .iter()
+                .zip(v)
+                .map(|(c, v)| (format!("border-{c}-radius"), v.to_string()))
+                .collect()
         }
         "list-style" => {
             let mut out = Vec::new();
@@ -716,7 +822,9 @@ fn expand_shorthand(prop: &str, value: &str) -> Vec<(String, String)> {
             out
         }
         // `text-decoration: underline solid red` 只留线的种类。
-        "text-decoration" | "text-decoration-line" => vec![("text-decoration".to_string(), value.to_ascii_lowercase())],
+        "text-decoration" | "text-decoration-line" => {
+            vec![("text-decoration".to_string(), value.to_ascii_lowercase())]
+        }
         "background" => background_shorthand(value),
         "font" => font_shorthand(value),
         _ => vec![(prop.to_string(), value.to_string())],
@@ -740,14 +848,44 @@ pub struct FontShorthand<'a> {
 pub fn parse_font_shorthand(v: &str) -> Option<FontShorthand<'_>> {
     fn is_size(t: &str) -> bool {
         let l = t.to_ascii_lowercase();
-        matches!(l.as_str(), "xx-small" | "x-small" | "small" | "medium" | "large" | "x-large" | "xx-large" | "xxx-large" | "larger" | "smaller")
-            || (l.starts_with(|c: char| c.is_ascii_digit() || c == '.') && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'%'))
+        matches!(
+            l.as_str(),
+            "xx-small"
+                | "x-small"
+                | "small"
+                | "medium"
+                | "large"
+                | "x-large"
+                | "xx-large"
+                | "xxx-large"
+                | "larger"
+                | "smaller"
+        ) || (l.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+            && l.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'%'))
     }
     fn is_line_height(t: &str) -> bool {
         t.eq_ignore_ascii_case("normal") || is_size(t)
     }
-    const STRETCH: [&str; 8] = ["ultra-condensed", "extra-condensed", "condensed", "semi-condensed", "semi-expanded", "expanded", "extra-expanded", "ultra-expanded"];
-    let mut f = FontShorthand { style: None, variant: None, weight: None, stretch: None, size: "", line_height: None, family: "" };
+    const STRETCH: [&str; 8] = [
+        "ultra-condensed",
+        "extra-condensed",
+        "condensed",
+        "semi-condensed",
+        "semi-expanded",
+        "expanded",
+        "extra-expanded",
+        "ultra-expanded",
+    ];
+    let mut f = FontShorthand {
+        style: None,
+        variant: None,
+        weight: None,
+        stretch: None,
+        size: "",
+        line_height: None,
+        family: "",
+    };
     let mut rest = v.trim();
     // 字号之前的词：各最多一个，`normal` 可以出现几次（分不清是哪一项，都等于缺省）
     let mut normals = 0;
@@ -763,7 +901,9 @@ pub fn parse_font_shorthand(v: &str) -> Option<FontShorthand<'_>> {
             "italic" | "oblique" => Some(&mut f.style),
             "small-caps" => Some(&mut f.variant),
             "bold" | "bolder" | "lighter" => Some(&mut f.weight),
-            _ if l.len() == 3 && l.ends_with("00") && (b'1'..=b'9').contains(&l.as_bytes()[0]) => Some(&mut f.weight),
+            _ if l.len() == 3 && l.ends_with("00") && (b'1'..=b'9').contains(&l.as_bytes()[0]) => {
+                Some(&mut f.weight)
+            }
             _ if STRETCH.contains(&l.as_str()) => Some(&mut f.stretch),
             _ => break,
         };
@@ -773,7 +913,13 @@ pub fn parse_font_shorthand(v: &str) -> Option<FontShorthand<'_>> {
             }
             *slot = Some(tok);
         }
-        if normals + [f.style, f.variant, f.weight, f.stretch].iter().filter(|x| x.is_some()).count() > 4 {
+        if normals
+            + [f.style, f.variant, f.weight, f.stretch]
+                .iter()
+                .filter(|x| x.is_some())
+                .count()
+            > 4
+        {
             return None;
         }
         rest = rest[end..].trim_start();
@@ -803,7 +949,9 @@ pub fn parse_font_shorthand(v: &str) -> Option<FontShorthand<'_>> {
 /// 整条不认（和以前一样：以前 `font` 简写一律不认，2026-10-10 审计补上——掌阅、Move 统计正文字号看不到写在简写里的字号，
 /// 改写时却照样缩放它）。
 fn font_shorthand(value: &str) -> Vec<(String, String)> {
-    let Some(f) = parse_font_shorthand(value) else { return Vec::new() };
+    let Some(f) = parse_font_shorthand(value) else {
+        return Vec::new();
+    };
     let or_normal = |v: Option<&str>| v.unwrap_or("normal").to_string();
     vec![
         ("font-style".to_string(), or_normal(f.style)),
@@ -822,7 +970,10 @@ const BG_INITIAL: &str = "initial";
 /// 位置尺寸不写）：`background:none`、只写颜色的简写会盖掉前面规则的背景图（以前没写的不出现、不重置，背景图还留着）。
 /// `inherit`/`initial`/`unset` 这类整个值是全局关键字的不展开（不认）。
 fn background_shorthand(value: &str) -> Vec<(String, String)> {
-    if matches!(value.trim().to_ascii_lowercase().as_str(), "inherit" | "initial" | "unset" | "revert" | "revert-layer") {
+    if matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+    ) {
         return Vec::new();
     }
     let (mut pos, mut size, mut after_slash) = (Vec::new(), Vec::new(), false);
@@ -833,7 +984,16 @@ fn background_shorthand(value: &str) -> Vec<(String, String)> {
             out.push(("background-image".to_string(), t.to_string()));
         } else if l == "/" {
             after_slash = true;
-        } else if ["repeat", "no-repeat", "repeat-x", "repeat-y", "space", "round"].contains(&l.as_str()) {
+        } else if [
+            "repeat",
+            "no-repeat",
+            "repeat-x",
+            "repeat-y",
+            "space",
+            "round",
+        ]
+        .contains(&l.as_str())
+        {
             out.push(("background-repeat".to_string(), l));
         } else if ["fixed", "scroll", "local"].contains(&l.as_str()) {
             out.push(("background-attachment".to_string(), l));
@@ -846,9 +1006,21 @@ fn background_shorthand(value: &str) -> Vec<(String, String)> {
         }
     }
     for (k, v) in [("background-position", pos), ("background-size", size)] {
-        out.push((k.to_string(), if v.is_empty() { BG_INITIAL.to_string() } else { v.join(" ") }));
+        out.push((
+            k.to_string(),
+            if v.is_empty() {
+                BG_INITIAL.to_string()
+            } else {
+                v.join(" ")
+            },
+        ));
     }
-    for (k, init) in [("background-image", "none"), ("background-repeat", "repeat"), ("background-attachment", "scroll"), ("background-color", "transparent")] {
+    for (k, init) in [
+        ("background-image", "none"),
+        ("background-repeat", "repeat"),
+        ("background-attachment", "scroll"),
+        ("background-color", "transparent"),
+    ] {
         if !out.iter().any(|(p, _)| p == k) {
             out.push((k.to_string(), init.to_string()));
         }
@@ -869,7 +1041,9 @@ pub fn parse_bg_position(v: &str) -> [Option<Len>; 2] {
         [a] if *a == BG_INITIAL => [None, None],
         [a] if matches!(*a, "top" | "bottom") => [Some(Len::Percent(50.0)), kw(a)],
         [a] => [kw(a), Some(Len::Percent(50.0))],
-        [a, b] if matches!(*a, "top" | "bottom") || matches!(*b, "left" | "right") => [kw(b), kw(a)],
+        [a, b] if matches!(*a, "top" | "bottom") || matches!(*b, "left" | "right") => {
+            [kw(b), kw(a)]
+        }
         [a, b, ..] => [kw(a), kw(b)],
         [] => [None, None],
     }
@@ -888,7 +1062,9 @@ pub fn parse_bg_size(v: &str) -> [Option<Len>; 2] {
     }
 }
 
-const BORDER_STYLES: &[&str] = &["none", "hidden", "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset"];
+const BORDER_STYLES: &[&str] = &[
+    "none", "hidden", "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset",
+];
 
 /// 一个选择器的优先级 (id, 类/属性/伪类, 标签与伪元素)，按 Selectors 规范：`:not()`/`:is()`/`:has()` 取括号里最高的那个，
 /// `:where()` 算 0，别的带括号的伪类（`:nth-child(2n+1)`、`:lang(zh)`）算一个伪类，括号里的字不计（2026-10-06 以前计成标签）。
@@ -911,7 +1087,9 @@ pub fn specificity(sel: &str) -> (u32, u32, u32) {
         i.min(ch.len())
     };
     // 从 open（`(` 或 `[`）起找配对的右括号，引号里的不算；返回右括号位置（没配上返回末尾）
-    let close_of = |open: usize, l: char, r: char| -> usize { matching_close(ch.iter().copied().enumerate().skip(open), l, r).unwrap_or(ch.len()) };
+    let close_of = |open: usize, l: char, r: char| -> usize {
+        matching_close(ch.iter().copied().enumerate().skip(open), l, r).unwrap_or(ch.len())
+    };
     let mut i = 0;
     while i < ch.len() {
         match ch[i] {
@@ -931,19 +1109,34 @@ pub fn specificity(sel: &str) -> (u32, u32, u32) {
                 let element = ch.get(i + 1) == Some(&':');
                 let start = i + if element { 2 } else { 1 };
                 i = skip_ident(start);
-                let name = ch[start.min(i)..i].iter().collect::<String>().to_ascii_lowercase();
+                let name = ch[start.min(i)..i]
+                    .iter()
+                    .collect::<String>()
+                    .to_ascii_lowercase();
                 let mut args: Option<String> = None;
                 if ch.get(i) == Some(&'(') {
                     let end = close_of(i, '(', ')');
                     args = Some(ch[i + 1..end.min(ch.len())].iter().collect());
                     i = end + 1;
                 }
-                if element || matches!(name.as_str(), "before" | "after" | "first-line" | "first-letter") {
+                if element
+                    || matches!(
+                        name.as_str(),
+                        "before" | "after" | "first-line" | "first-letter"
+                    )
+                {
                     c += 1;
                 } else {
                     match (name.as_str(), args) {
-                        ("not" | "is" | "matches" | "-webkit-any" | "-moz-any" | "has", Some(inner)) => {
-                            let m = split_top(&inner, ',').into_iter().map(specificity).max().unwrap_or_default();
+                        (
+                            "not" | "is" | "matches" | "-webkit-any" | "-moz-any" | "has",
+                            Some(inner),
+                        ) => {
+                            let m = split_top(&inner, ',')
+                                .into_iter()
+                                .map(specificity)
+                                .max()
+                                .unwrap_or_default();
                             (a, b, c) = (a + m.0, b + m.1, c + m.2);
                         }
                         ("where", Some(_)) => {}
@@ -964,12 +1157,17 @@ pub fn specificity(sel: &str) -> (u32, u32, u32) {
 /// 全书正文字号（根 em）：`count` 是字号（千分之一取整）→ 字数（不算空白），取字数最多的，字数一样多的取小的（结果和遍历顺序
 /// 无关）。不在 0.5–3 之间的不信，用 1。KFX 写出器（按解析好的块数）和掌阅、Move 的 `kindle_rules`（按 DOM 文字数）共用。
 pub fn body_font_size(count: &HashMap<i64, usize>) -> f64 {
-    weighted_mode(count).filter(|v| (0.5..=3.0).contains(v)).unwrap_or(1.0)
+    weighted_mode(count)
+        .filter(|v| (0.5..=3.0).contains(v))
+        .unwrap_or(1.0)
 }
 
 /// 按字数加权的众数（键是千分之一取整的值），字数一样多的取小的。
 pub fn weighted_mode(count: &HashMap<i64, usize>) -> Option<f64> {
-    count.iter().max_by_key(|&(&k, &n)| (n, std::cmp::Reverse(k))).map(|(&k, _)| k as f64 / 1000.0)
+    count
+        .iter()
+        .max_by_key(|&(&k, &n)| (n, std::cmp::Reverse(k)))
+        .map(|(&k, _)| k as f64 / 1000.0)
 }
 
 /// 求值 `@media` 特性条件用的环境（像素）：`width`/`height` 是阅读范围，`device-width`/`device-height` 是屏幕，
@@ -994,7 +1192,13 @@ impl MediaEnv {
     /// `@media`（阅读器自己就是这样求的），口径同 KFX 写出器按 KFX 阅读范围求。
     pub fn for_format(p: &profile::Profile, format: profile::Format) -> MediaEnv {
         let r = p.readable(format);
-        MediaEnv { width: r.width.into(), height: r.height.into(), device_width: p.screen.width.into(), device_height: p.screen.height.into(), color: p.color }
+        MediaEnv {
+            width: r.width.into(),
+            height: r.height.into(),
+            device_width: p.screen.width.into(),
+            device_height: p.screen.height.into(),
+            color: p.color,
+        }
     }
 }
 
@@ -1007,7 +1211,10 @@ const MEDIA_TYPES: &[&str] = &["all", "screen", "amzn-kf8"];
 /// 范围写法 `(width >= 600px)`、`or` 等）和写错的那一条**不收**，带 `not` 也不收。空条件成立。
 pub fn media_ok(query: &str, env: Option<&MediaEnv>) -> bool {
     let q = query.trim();
-    q.is_empty() || split_top(q, ',').into_iter().any(|one| media_query(one, env) == Some(true))
+    q.is_empty()
+        || split_top(q, ',')
+            .into_iter()
+            .any(|one| media_query(one, env) == Some(true))
 }
 
 /// 一条媒体查询：`Some(成立与否)`；写错或求值不了 → `None`。
@@ -1022,7 +1229,11 @@ fn media_query(q: &str, env: Option<&MediaEnv>) -> Option<bool> {
             i += 1;
         } else if b[i] == b'(' {
             let start = i;
-            i = matching_close(q[start..].char_indices().map(|(k, c)| (start + k, c)), '(', ')')?;
+            i = matching_close(
+                q[start..].char_indices().map(|(k, c)| (start + k, c)),
+                '(',
+                ')',
+            )?;
             toks.push(&q[start..=i]);
             i += 1;
         } else {
@@ -1115,7 +1326,10 @@ fn media_feature(f: &str, env: &MediaEnv) -> Option<bool> {
         "device-width" => length(env.device_width),
         "device-height" => length(env.device_height),
         "aspect-ratio" => Some(cmp_num(env.width / env.height, ratio(value?)?)),
-        "device-aspect-ratio" => Some(cmp_num(env.device_width / env.device_height, ratio(value?)?)),
+        "device-aspect-ratio" => Some(cmp_num(
+            env.device_width / env.device_height,
+            ratio(value?)?,
+        )),
         "orientation" if cmp == std::cmp::Ordering::Equal => match value? {
             "portrait" => Some(env.height >= env.width),
             "landscape" => Some(env.width > env.height),
@@ -1123,7 +1337,11 @@ fn media_feature(f: &str, env: &MediaEnv) -> Option<bool> {
         },
         // 颜色位数只知道是不是 0：黑白屏 color 是 0，彩色屏 monochrome 是 0；别的位数不知道 → 求值不了
         "color" | "monochrome" => {
-            let zero = if base == "color" { !env.color } else { env.color };
+            let zero = if base == "color" {
+                !env.color
+            } else {
+                env.color
+            };
             match value {
                 None if cmp == std::cmp::Ordering::Equal => Some(!zero),
                 None => None,
@@ -1161,7 +1379,13 @@ impl Sheet {
     }
 
     /// 同 [`Sheet::add`]，`url(…)` 按样式表自己的路径 `base`（书内路径）换成书内路径。
-    pub fn add_at(&mut self, css: &str, order: usize, base: &str, media: Option<&MediaEnv>) -> usize {
+    pub fn add_at(
+        &mut self,
+        css: &str,
+        order: usize,
+        base: &str,
+        media: Option<&MediaEnv>,
+    ) -> usize {
         self.add_rules(Rules::parse(css, base, media), order)
     }
 
@@ -1180,19 +1404,41 @@ impl Sheet {
     /// 和 `@media` 同一口径（按 `media` 求，不成立的整份跳过）。外部样式表由 `rules_for(书内路径)` 给解析好的规则——
     /// 怎么解析、怎么缓存是调用方的事（KFX 写出器跨线程共享缓存，`kindle_rules` 事先全解析好），找不到的跳过。
     /// KFX 写出器和掌阅、Move 的 `kindle_rules` 共用，两边统计正文字号的口径因此一样（2026-10-10 审计以前各写一份）。
-    pub fn for_doc(html: &scraper::Html, doc_path: &str, media: Option<&MediaEnv>, mut rules_for: impl FnMut(&str) -> Option<Arc<Rules>>) -> Sheet {
+    pub fn for_doc(
+        html: &scraper::Html,
+        doc_path: &str,
+        media: Option<&MediaEnv>,
+        mut rules_for: impl FnMut(&str) -> Option<Arc<Rules>>,
+    ) -> Sheet {
         static LINK_STYLE: std::sync::OnceLock<Selector> = std::sync::OnceLock::new();
-        let sel = LINK_STYLE.get_or_init(|| Selector::parse("link, style").unwrap_or_else(|_| unreachable!()));
+        let sel = LINK_STYLE
+            .get_or_init(|| Selector::parse("link, style").unwrap_or_else(|_| unreachable!()));
         let mut sheet = Sheet::default();
         let mut order = 0;
         for el in html.select(sel) {
-            if el.value().attr("media").is_some_and(|m| !media_ok(m, media)) {
+            if el
+                .value()
+                .attr("media")
+                .is_some_and(|m| !media_ok(m, media))
+            {
                 continue;
             }
             if el.value().name() == "style" {
-                order = sheet.add_rules_from(Rules::parse(&el.text().collect::<String>(), doc_path, media), order, Origin::Style);
-            } else if el.value().attr("rel").is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet")) {
-                if let Some(rules) = el.value().attr("href").and_then(|h| rules_for(&bookbase::epubpath::resolve_link(doc_path, h).0)) {
+                order = sheet.add_rules_from(
+                    Rules::parse(&el.text().collect::<String>(), doc_path, media),
+                    order,
+                    Origin::Style,
+                );
+            } else if el
+                .value()
+                .attr("rel")
+                .is_some_and(|r| r.to_ascii_lowercase().contains("stylesheet"))
+            {
+                if let Some(rules) = el
+                    .value()
+                    .attr("href")
+                    .and_then(|h| rules_for(&bookbase::epubpath::resolve_link(doc_path, h).0))
+                {
                     order = sheet.add_rules(rules, order);
                 }
             }
@@ -1253,9 +1499,17 @@ impl Sheet {
                 }
             }
         }
-        let mut inline: Vec<Decl> = el.value().attr("style").map(parse_decls).unwrap_or_default();
+        let mut inline: Vec<Decl> = el
+            .value()
+            .attr("style")
+            .map(parse_decls)
+            .unwrap_or_default();
         resolve_urls(&mut inline, base);
-        hits.extend(inline.iter().map(|d| ((1000, 0, 0), usize::MAX, usize::MAX, d)));
+        hits.extend(
+            inline
+                .iter()
+                .map(|d| ((1000, 0, 0), usize::MAX, usize::MAX, d)),
+        );
         hits.sort_by_key(|h| (h.0, h.1, h.2));
         let mut out = Decls::default();
         for (_, _, _, d) in hits {
@@ -1265,7 +1519,13 @@ impl Sheet {
     }
 
     /// 按层叠顺序（优先级低的先）把元素上匹配的声明依次交给 `f`：同一属性后给的覆盖先给的。`important` 为假时 `!important` 不提优先级。
-    fn cascade_each(&self, el: &ElementRef, base: &str, important: bool, mut f: impl FnMut(&Decl, Origin)) {
+    fn cascade_each(
+        &self,
+        el: &ElementRef,
+        base: &str,
+        important: bool,
+        mut f: impl FnMut(&Decl, Origin),
+    ) {
         // (!important, 优先级, 出现顺序, 声明, 来源)
         type Hit<'a> = (bool, (u32, u32, u32), usize, &'a Decl, Origin);
         let mut hits: Vec<Hit> = Vec::new();
@@ -1282,10 +1542,20 @@ impl Sheet {
                 }
             }
         }
-        let mut inline: Vec<Decl> = el.value().attr("style").map(parse_decls).unwrap_or_default();
+        let mut inline: Vec<Decl> = el
+            .value()
+            .attr("style")
+            .map(parse_decls)
+            .unwrap_or_default();
         resolve_urls(&mut inline, base);
         for d in &inline {
-            hits.push((important && d.important, (1000, 0, 0), usize::MAX, d, Origin::Inline));
+            hits.push((
+                important && d.important,
+                (1000, 0, 0),
+                usize::MAX,
+                d,
+                Origin::Inline,
+            ));
         }
         hits.sort_by_key(|h| (h.0, h.1, h.2));
         for (_, _, _, d, origin) in hits {
@@ -1296,9 +1566,51 @@ impl Sheet {
 
 /// 缺省是块级的标签（`display` 没写时）。
 pub const BLOCK_TAGS: &[&str] = &[
-    "address", "article", "aside", "blockquote", "body", "center", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
-    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "li", "main", "menu", "nav", "ol", "p", "pre",
-    "section", "summary", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul", "caption",
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "center",
+    "dd",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "li",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+    "caption",
 ];
 
 /// 元素是不是块级：先看 `display`，没写按标签。
@@ -1318,8 +1630,13 @@ pub fn presentational_hints(el: &ElementRef, decls: &mut Decls) {
         decls.entry(k.to_string()).or_insert(v);
     };
     match e.name() {
-        "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "tr" | "caption" | "blockquote" => {
-            if let Some(a) = e.attr("align").map(|a| a.trim().to_ascii_lowercase()).filter(|a| ["left", "right", "center", "justify"].contains(&a.as_str())) {
+        "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "td" | "th" | "tr" | "caption"
+        | "blockquote" => {
+            if let Some(a) = e
+                .attr("align")
+                .map(|a| a.trim().to_ascii_lowercase())
+                .filter(|a| ["left", "right", "center", "justify"].contains(&a.as_str()))
+            {
                 hint("text-align", a);
             }
         }
@@ -1328,7 +1645,10 @@ pub fn presentational_hints(el: &ElementRef, decls: &mut Decls) {
         // Kindle 按原图像素显示——《金庸》639 张 60% 的插图、《飘》《春雪》，2026-10-12 `tools/kfx/unify.py`）。像素的
         // `width="566"` 多半就是原图宽度，没对过阅读器怎么算 px，不收
         "img" => {
-            if let Some(w) = e.attr("width").map(str::trim).filter(|w| w.strip_suffix('%').is_some_and(|n| n.trim().parse::<f64>().is_ok_and(|v| v > 0.0))) {
+            if let Some(w) = e.attr("width").map(str::trim).filter(|w| {
+                w.strip_suffix('%')
+                    .is_some_and(|n| n.trim().parse::<f64>().is_ok_and(|v| v > 0.0))
+            }) {
                 hint("width", w.to_string());
             }
         }
@@ -1343,7 +1663,8 @@ pub fn presentational_hints(el: &ElementRef, decls: &mut Decls) {
                     },
                 };
                 if let Some(n) = n {
-                    let em = [0.625, 0.8125, 1.0, 1.125, 1.5, 2.0, 3.0][(n.clamp(1, 7) - 1) as usize];
+                    let em =
+                        [0.625, 0.8125, 1.0, 1.125, 1.5, 2.0, 3.0][(n.clamp(1, 7) - 1) as usize];
                     hint("font-size", format!("{em}rem"));
                 }
             }
@@ -1373,16 +1694,38 @@ pub fn font_faces(css: &str, base: &str) -> Vec<FontFace> {
     let mut out = Vec::new();
     for r in font_face_rules(&css) {
         let decls = parse_decls(r.body);
-        let get = |k: &str| decls.iter().rev().find(|d| d.prop == k).map(|d| d.value.as_str());
-        let family = get("font-family").map(|f| f.trim().trim_matches(['"', '\'']).to_string()).filter(|f| !f.is_empty());
+        let get = |k: &str| {
+            decls
+                .iter()
+                .rev()
+                .find(|d| d.prop == k)
+                .map(|d| d.value.as_str())
+        };
+        let family = get("font-family")
+            .map(|f| f.trim().trim_matches(['"', '\'']).to_string())
+            .filter(|f| !f.is_empty());
         let url = get("src").and_then(|src| {
-            let raw = bookbase::html::css_urls(src).into_iter().next()?.value.trim();
-            (!raw.is_empty() && !bookbase::html::is_external(raw)).then(|| bookbase::epubpath::resolve_link(base, raw).0)
+            let raw = bookbase::html::css_urls(src)
+                .into_iter()
+                .next()?
+                .value
+                .trim();
+            (!raw.is_empty() && !bookbase::html::is_external(raw))
+                .then(|| bookbase::epubpath::resolve_link(base, raw).0)
         });
         if let (Some(family), Some(path)) = (family, url) {
-            let bold = get("font-weight").is_some_and(|w| matches!(w.trim(), "bold" | "bolder") || w.trim().parse::<u32>().is_ok_and(|n| n >= 600));
-            let italic = get("font-style").is_some_and(|v| matches!(v.trim(), "italic" | "oblique"));
-            out.push(FontFace { family, path, bold, italic });
+            let bold = get("font-weight").is_some_and(|w| {
+                matches!(w.trim(), "bold" | "bolder")
+                    || w.trim().parse::<u32>().is_ok_and(|n| n >= 600)
+            });
+            let italic =
+                get("font-style").is_some_and(|v| matches!(v.trim(), "italic" | "oblique"));
+            out.push(FontFace {
+                family,
+                path,
+                bold,
+                italic,
+            });
         }
     }
     out
@@ -1416,7 +1759,9 @@ impl Len {
 
 /// 切出开头的数字和后面的单位（`1.5em` → (1.5, "em")）；数字解析不了返回 `None`。
 fn split_number(v: &str) -> Option<(f64, &str)> {
-    let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
+    let end = v
+        .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+        .unwrap_or(v.len());
     Some((v[..end].parse().ok()?, &v[end..]))
 }
 
@@ -1449,7 +1794,10 @@ const PT_PER_BOX_PX: f64 = 0.45;
 static DEVICE_PX_EM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn set_device_px_em(em_px: Option<f64>) {
-    DEVICE_PX_EM.store(em_px.map_or(0, f64::to_bits), std::sync::atomic::Ordering::Relaxed);
+    DEVICE_PX_EM.store(
+        em_px.map_or(0, f64::to_bits),
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 /// 按阅读器排出来的样子算时，这台的行距怎么排（进程级的开关，只给分析命令用；写出器按 Send to Kindle，不看它）：
@@ -1465,7 +1813,11 @@ pub struct DeviceLine {
     pub em_root: bool,
 }
 
-static DEVICE_LINE: std::sync::Mutex<DeviceLine> = std::sync::Mutex::new(DeviceLine { except_p: false, length_em: None, em_root: false });
+static DEVICE_LINE: std::sync::Mutex<DeviceLine> = std::sync::Mutex::new(DeviceLine {
+    except_p: false,
+    length_em: None,
+    em_root: false,
+});
 
 pub fn set_device_line(m: DeviceLine) {
     *DEVICE_LINE.lock().unwrap_or_else(|e| e.into_inner()) = m;
@@ -1484,7 +1836,10 @@ pub fn device_px_em() -> Option<f64> {
 /// `margin:-10px` 写成 -0.3125lh、`margin-top:-12.5px` 在半号字上写成 -1.172lh；以前按 CSS 的 1px＝0.75pt，大了 2/3）。字号不走这里。
 pub fn parse_box_len(v: &str) -> Option<Len> {
     let t = v.trim().to_ascii_lowercase();
-    match t.strip_suffix("px").and_then(|n| n.trim().parse::<f64>().ok()) {
+    match t
+        .strip_suffix("px")
+        .and_then(|n| n.trim().parse::<f64>().ok())
+    {
         Some(n) => Some(match device_px_em() {
             Some(em) => Len::Pt(n / em * PT_PER_EM),
             None => Len::Pt(n * PT_PER_BOX_PX),
@@ -1594,7 +1949,11 @@ pub struct Shadow {
 
 /// `box-shadow`/`text-shadow` 的第一个阴影（`inset`、`none` 不收）。长度的 px 按 1px＝0.45pt。
 pub fn parse_shadow(v: &str) -> Option<Shadow> {
-    let first = split_top(v, ',').into_iter().next()?.trim().to_ascii_lowercase();
+    let first = split_top(v, ',')
+        .into_iter()
+        .next()?
+        .trim()
+        .to_ascii_lowercase();
     if first.is_empty() || first == "none" || first.contains("inset") {
         return None;
     }
@@ -1602,11 +1961,22 @@ pub fn parse_shadow(v: &str) -> Option<Shadow> {
     let mut color = None;
     for tok in tokens(&first).0 {
         match parse_box_len(tok) {
-            Some(l) if tok.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.' || c == '+') => lens.push(l),
+            Some(l)
+                if tok.starts_with(|c: char| {
+                    c.is_ascii_digit() || c == '-' || c == '.' || c == '+'
+                }) =>
+            {
+                lens.push(l)
+            }
             _ => color = parse_color(tok).or(color),
         }
     }
-    (lens.len() >= 2).then(|| Shadow { x: lens[0], y: lens[1], blur: lens.get(2).copied().unwrap_or(Len::Pt(0.0)), color })
+    (lens.len() >= 2).then(|| Shadow {
+        x: lens[0],
+        y: lens[1],
+        blur: lens.get(2).copied().unwrap_or(Len::Pt(0.0)),
+        color,
+    })
 }
 
 /// 一条边：样式（`solid` 等，不含 none）、宽度、颜色（没写＝当前颜色）。
@@ -1633,7 +2003,11 @@ pub fn parse_border_width(v: &str) -> Option<BorderWidth> {
         _ => {}
     }
     if let Some(n) = v.strip_suffix("px") {
-        return n.trim().parse::<f64>().ok().map(|n| BorderWidth::Pt(n * PT_PER_BOX_PX));
+        return n
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|n| BorderWidth::Pt(n * PT_PER_BOX_PX));
     }
     match parse_len(&v)? {
         Len::Em(n) => Some(BorderWidth::Em(n)),
@@ -1644,7 +2018,10 @@ pub fn parse_border_width(v: &str) -> Option<BorderWidth> {
 
 impl Computed {
     pub fn has_border(&self) -> bool {
-        self.border.iter().any(|b| b.as_ref().is_some_and(|b| b.width != BorderWidth::Pt(0.0) && b.width != BorderWidth::Em(0.0)))
+        self.border.iter().any(|b| {
+            b.as_ref()
+                .is_some_and(|b| b.width != BorderWidth::Pt(0.0) && b.width != BorderWidth::Em(0.0))
+        })
     }
 }
 
@@ -1740,7 +2117,8 @@ impl Computed {
     /// 由父元素的计算值和本元素的声明算出本元素的计算值。
     pub fn derive(parent: &Computed, decls: &Decls, tag: &str) -> Computed {
         let mut c = parent.reset_box();
-        c.on_background = parent.on_background || parent.background.is_some() || parent.bg_image.is_some();
+        c.on_background =
+            parent.on_background || parent.background.is_some() || parent.bg_image.is_some();
         c.on_image = parent.on_image || parent.bg_image.is_some();
         // 各组属性按固定顺序算（后面的组要用前面算好的值：字号先于行高、字间距的换算，外边距在标签缺省值之后覆盖）。
         Computed::tag_defaults(&mut c, parent, tag);
@@ -1775,7 +2153,10 @@ impl Computed {
                 c.bold = true;
                 c.semibold = false;
                 // 字号、外边距和只修复的文字书写进书里的 `eink-ua.css` 是同一张表
-                let (_, size, margin) = crate::ua::HEADINGS.into_iter().find(|h| h.0 == tag).unwrap_or(crate::ua::HEADINGS[5]);
+                let (_, size, margin) = crate::ua::HEADINGS
+                    .into_iter()
+                    .find(|h| h.0 == tag)
+                    .unwrap_or(crate::ua::HEADINGS[5]);
                 c.font_size = parent.font_size * size;
                 c.margin[0] = Some(Len::Em(margin));
                 c.margin[2] = Some(Len::Em(margin));
@@ -1818,7 +2199,13 @@ impl Computed {
             c.font_size = match v.as_str() {
                 "xx-small" => 0.6,
                 "x-small" => 0.75,
-                "small" | "smaller" => 0.89 * if v == "smaller" { parent.font_size } else { 1.0 },
+                "small" | "smaller" => {
+                    0.89 * if v == "smaller" {
+                        parent.font_size
+                    } else {
+                        1.0
+                    }
+                }
                 "medium" => 1.0,
                 // large 照 Send to Kindle 写 1.125（浏览器的 18px；2026-10-14 怪癖测试书 Q25，Amazon 写 1.125rem）；larger 没核过
                 "large" => 1.125,
@@ -1839,7 +2226,11 @@ impl Computed {
             }
         }
         if let Some(v) = get("font-family") {
-            let names: Vec<String> = split_top(v, ',').into_iter().map(|n| n.trim().trim_matches(['"', '\'']).trim().to_string()).filter(|n| !n.is_empty()).collect();
+            let names: Vec<String> = split_top(v, ',')
+                .into_iter()
+                .map(|n| n.trim().trim_matches(['"', '\'']).trim().to_string())
+                .filter(|n| !n.is_empty())
+                .collect();
             if names.first().is_some_and(|f| f != "inherit") {
                 c.font_family = Some(names[0].clone());
                 c.font_fallbacks = (names.len() > 1).then(|| names[1..].join(",").to_lowercase());
@@ -1889,7 +2280,11 @@ impl Computed {
                 }
             };
             // 数字倍数照倍数继承，长度（%、em、px、pt）算成绝对值继承（CSS 的规矩）
-            c.line_height_abs = if unitless || v == "normal" { None } else { c.line_height.map(|l| l * c.font_size) };
+            c.line_height_abs = if unitless || v == "normal" {
+                None
+            } else {
+                c.line_height.map(|l| l * c.font_size)
+            };
         } else if let Some(a) = parent.line_height_abs {
             c.line_height = Some(a / c.font_size);
         }
@@ -1916,8 +2311,13 @@ impl Computed {
                 }
             }
         }
-        if !matches!(tag, "td" | "th" | "tr" | "img") && get("position").is_some_and(|v| v.trim().eq_ignore_ascii_case("relative")) {
-            let shift = get("top").and_then(parse_len).map(|l| l.scaled(-1.0)).or_else(|| get("bottom").and_then(parse_len));
+        if !matches!(tag, "td" | "th" | "tr" | "img")
+            && get("position").is_some_and(|v| v.trim().eq_ignore_ascii_case("relative"))
+        {
+            let shift = get("top")
+                .and_then(parse_len)
+                .map(|l| l.scaled(-1.0))
+                .or_else(|| get("bottom").and_then(parse_len));
             if let Some(l) = shift.filter(|l| !l.is_zero()) {
                 c.baseline_shift = Some(l);
             }
@@ -1975,34 +2375,84 @@ impl Computed {
         // 属性名写成常量（每个元素都要查，逐个 format! 很费）；四边顺序：上、右、下、左。
         const BORDER: [[&str; 3]; 4] = [
             ["border-top-style", "border-top-width", "border-top-color"],
-            ["border-right-style", "border-right-width", "border-right-color"],
-            ["border-bottom-style", "border-bottom-width", "border-bottom-color"],
-            ["border-left-style", "border-left-width", "border-left-color"],
+            [
+                "border-right-style",
+                "border-right-width",
+                "border-right-color",
+            ],
+            [
+                "border-bottom-style",
+                "border-bottom-width",
+                "border-bottom-color",
+            ],
+            [
+                "border-left-style",
+                "border-left-width",
+                "border-left-color",
+            ],
         ];
-        const RADIUS: [&str; 4] = ["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"];
+        const RADIUS: [&str; 4] = [
+            "border-top-left-radius",
+            "border-top-right-radius",
+            "border-bottom-right-radius",
+            "border-bottom-left-radius",
+        ];
         const MARGIN: [&str; 4] = ["margin-top", "margin-right", "margin-bottom", "margin-left"];
-        const PADDING: [&str; 4] = ["padding-top", "padding-right", "padding-bottom", "padding-left"];
+        const PADDING: [&str; 4] = [
+            "padding-top",
+            "padding-right",
+            "padding-bottom",
+            "padding-left",
+        ];
         for (i, [style, width, color]) in BORDER.into_iter().enumerate() {
             let style = get(style).map(|v| v.trim().to_ascii_lowercase());
             c.border[i] = match style {
-                Some(st) if st != "none" && st != "hidden" && BORDER_STYLES.contains(&st.as_str()) => Some(Border {
-                    style: st,
-                    width: get(width).and_then(parse_border_width).unwrap_or(BorderWidth::Pt(1.35)),
-                    // 全透明的照原样（写出时写「透明」：《绍宋》信件框是 `border: 35px solid rgba(0,0,0,0)` 加 border-image，
-                    // 以前强制不透明，Kindle 上画成 15.75pt 的黑框）；半透明的照旧按不透明写。
-                    color: get(color).and_then(parse_color).map(|c| if c >> 24 == 0 { c } else { c | 0xFF00_0000 }),
-                }),
+                Some(st)
+                    if st != "none" && st != "hidden" && BORDER_STYLES.contains(&st.as_str()) =>
+                {
+                    Some(Border {
+                        style: st,
+                        width: get(width)
+                            .and_then(parse_border_width)
+                            .unwrap_or(BorderWidth::Pt(1.35)),
+                        // 全透明的照原样（写出时写「透明」：《绍宋》信件框是 `border: 35px solid rgba(0,0,0,0)` 加 border-image，
+                        // 以前强制不透明，Kindle 上画成 15.75pt 的黑框）；半透明的照旧按不透明写。
+                        color: get(color).and_then(parse_color).map(|c| {
+                            if c >> 24 == 0 {
+                                c
+                            } else {
+                                c | 0xFF00_0000
+                            }
+                        }),
+                    })
+                }
                 _ => None,
             };
         }
         for (i, corner) in RADIUS.into_iter().enumerate() {
-            c.radius[i] = get(corner).and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
+            c.radius[i] = get(corner)
+                .and_then(parse_len)
+                .filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
         }
-        c.width = get("width").and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
+        c.width = get("width")
+            .and_then(parse_len)
+            .filter(|l| !matches!(l, Len::Em(n) if *n == 0.0));
         // `height` 也算（Send to Kindle 同样写成 `$62`：《消失的爱人》扉页 `div.shuming{height:6em}`），写了 `min-height` 的以它为准
-        c.min_height = get("min-height").or_else(|| get("height")).and_then(parse_len).filter(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if *n == 0.0));
+        c.min_height = get("min-height")
+            .or_else(|| get("height"))
+            .and_then(parse_len)
+            .filter(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if *n == 0.0));
         c.display = get("display").map(|v| v.trim().to_ascii_lowercase());
-        let forced = |k: &str| get(&format!("page-break-{k}")).or_else(|| get(&format!("break-{k}"))).is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "always" | "page" | "left" | "right" | "recto" | "verso"));
+        let forced = |k: &str| {
+            get(&format!("page-break-{k}"))
+                .or_else(|| get(&format!("break-{k}")))
+                .is_some_and(|v| {
+                    matches!(
+                        v.trim().to_ascii_lowercase().as_str(),
+                        "always" | "page" | "left" | "right" | "recto" | "verso"
+                    )
+                })
+        };
         c.break_before = forced("before");
         c.break_after = forced("after");
         for i in 0..4 {
@@ -2013,25 +2463,38 @@ impl Computed {
             }
             c.padding[i] = get(PADDING[i]).and_then(parse_box_len);
         }
-        let nonzero = |l: &Option<Len>| l.is_some_and(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if n == 0.0));
-        c.in_hbox = parent.in_hbox || [1, 3].iter().any(|&i| nonzero(&c.margin[i]) || nonzero(&c.padding[i]) || c.border[i].is_some());
+        let nonzero = |l: &Option<Len>| {
+            l.is_some_and(|l| !matches!(l, Len::Em(n) | Len::Pt(n) | Len::Percent(n) if n == 0.0))
+        };
+        c.in_hbox = parent.in_hbox
+            || [1, 3]
+                .iter()
+                .any(|&i| nonzero(&c.margin[i]) || nonzero(&c.padding[i]) || c.border[i].is_some());
     }
 
     /// 背景与阴影：背景色（及它垫在白底上的颜色 `backdrop`，往下继承）、阴影、背景图及其各项属性。
     fn background_props(c: &mut Computed, parent: &Computed, decls: &Decls) {
         let get = |k: &str| decls.get(k).map(String::as_str);
         // 不透明的纯白背景不算（Send to Kindle 同样：《疯探》`background-color:#ffffff` 的简介、目录页不出容器）
-        c.background = get("background-color").and_then(parse_color).filter(|c| c >> 24 != 0 && *c != 0xFFFF_FFFF);
+        c.background = get("background-color")
+            .and_then(parse_color)
+            .filter(|c| c >> 24 != 0 && *c != 0xFFFF_FFFF);
         c.backdrop = c.background.map(over_white).or(parent.backdrop);
         c.box_shadow = get("box-shadow").and_then(parse_shadow);
         if let Some(v) = get("text-shadow") {
             c.text_shadow = parse_shadow(v);
         }
-        c.bg_image = get("background-image").and_then(leading_url).map(str::to_string);
+        c.bg_image = get("background-image")
+            .and_then(leading_url)
+            .map(str::to_string);
         c.bg_no_repeat = get("background-repeat").is_some_and(|v| v.trim() == "no-repeat");
         c.bg_fixed = get("background-attachment").is_some_and(|v| v.trim() == "fixed");
-        c.bg_position = get("background-position").map(|v| parse_bg_position(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
-        c.bg_size = get("background-size").map(|v| parse_bg_size(&v.to_ascii_lowercase())).unwrap_or([None; 2]);
+        c.bg_position = get("background-position")
+            .map(|v| parse_bg_position(&v.to_ascii_lowercase()))
+            .unwrap_or([None; 2]);
+        c.bg_size = get("background-size")
+            .map(|v| parse_bg_size(&v.to_ascii_lowercase()))
+            .unwrap_or([None; 2]);
         c.bg_cover = get("background-size").is_some_and(|v| v.trim().eq_ignore_ascii_case("cover"));
     }
 }
@@ -2046,7 +2509,10 @@ mod tests {
         let nest = |n: usize| format!("{}p{{color:red}}{}", "@media all{".repeat(n), "}".repeat(n));
         assert_eq!(Rules::parse(&nest(3), "", None).len(), 1);
         assert_eq!(Rules::parse(&nest(MAX_MEDIA_NESTING), "", None).len(), 1);
-        assert_eq!(Rules::parse(&nest(MAX_MEDIA_NESTING + 1), "", None).len(), 0);
+        assert_eq!(
+            Rules::parse(&nest(MAX_MEDIA_NESTING + 1), "", None).len(),
+            0
+        );
         let deep = format!("{}q{{color:red}}", nest(20000));
         let r = Rules::parse(&deep, "", None);
         assert_eq!(r.len(), 1, "后面的规则照收");
@@ -2054,7 +2520,9 @@ mod tests {
 
     #[test]
     fn decls_and_shorthand() {
-        let d = parse_decls("margin: 1em 0 2em; color: red !important; background: url(x.png) #fff no-repeat");
+        let d = parse_decls(
+            "margin: 1em 0 2em; color: red !important; background: url(x.png) #fff no-repeat",
+        );
         let get = |p: &str| d.iter().find(|x| x.prop == p).map(|x| x.value.as_str());
         assert_eq!(get("margin-top"), Some("1em"));
         assert_eq!(get("margin-right"), Some("0"));
@@ -2063,25 +2531,66 @@ mod tests {
         assert_eq!(get("background-color"), Some("#fff"));
         assert!(d.iter().any(|x| x.prop == "color" && x.important));
         // 和优化器同一个切法：引号里的 `;`、转义的引号、`url(data:…;base64,…)` 不切；坏引号不吞掉后面的声明；`*color` 不收
-        let d = parse_decls(r#"font-family: "a;\"b"; background-image: url(data:image/png;base64,AA==); *color: blue; color: red"#);
-        let got: Vec<(&str, &str)> = d.iter().map(|x| (x.prop.as_str(), x.value.as_str())).collect();
-        assert_eq!(got, [("font-family", r#""a;\"b""#), ("background-image", "url(data:image/png;base64,AA==)"), ("color", "red")]);
+        let d = parse_decls(
+            r#"font-family: "a;\"b"; background-image: url(data:image/png;base64,AA==); *color: blue; color: red"#,
+        );
+        let got: Vec<(&str, &str)> = d
+            .iter()
+            .map(|x| (x.prop.as_str(), x.value.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("font-family", r#""a;\"b""#),
+                ("background-image", "url(data:image/png;base64,AA==)"),
+                ("color", "red")
+            ]
+        );
         let d = parse_decls("font-family: Georgia'; color: red");
-        assert!(d.iter().any(|x| x.prop == "color" && x.value == "red"), "{d:?}");
+        assert!(
+            d.iter().any(|x| x.prop == "color" && x.value == "red"),
+            "{d:?}"
+        );
     }
 
     #[test]
     fn prefilter_is_only_a_necessary_condition() {
-        assert_eq!(Need::of("div > p.a.B#x"), Some(Need { tag: Some("p".into()), classes: vec!["a".into(), "B".into()], ids: vec!["x".into()] }));
-        assert_eq!(Need::of(".a"), Some(Need { tag: None, classes: vec!["a".into()], ids: vec![] }));
-        for s in ["p:first-child", "a[href]", "*", "p *", "svg|a", r"p.a\:b", "p > ", "p.", "p..a"] {
+        assert_eq!(
+            Need::of("div > p.a.B#x"),
+            Some(Need {
+                tag: Some("p".into()),
+                classes: vec!["a".into(), "B".into()],
+                ids: vec!["x".into()]
+            })
+        );
+        assert_eq!(
+            Need::of(".a"),
+            Some(Need {
+                tag: None,
+                classes: vec!["a".into()],
+                ids: vec![]
+            })
+        );
+        for s in [
+            "p:first-child",
+            "a[href]",
+            "*",
+            "p *",
+            "svg|a",
+            r"p.a\:b",
+            "p > ",
+            "p.",
+            "p..a",
+        ] {
             assert_eq!(Need::of(s), None, "{s}");
         }
         // 用预筛和不用预筛，每个元素层叠出来的结果一样
         // 大小写混写的类、id、标签名（分桶的键是 ASCII 小写），同一个元素上两个只差大小写的类（去重后不能重复试同一条规则），
         // 非 ASCII 的类名
         let css = "p{color:red} p.a{color:blue} .A{text-indent:1em} div p.b{margin-top:1em} #X{font-size:2em} h1+p{color:green} span.c.d{font-weight:bold} li > span{color:gray} p:first-child{margin-left:1em} P.Q{text-align:center} SPAN{font-style:italic} .正文{line-height:2} .q.Q{margin-bottom:1em} *{orphans:2} [title]{widows:2}";
-        let html = scraper::Html::parse_document(r#"<html><body><div><p class="a b" id="x">1</p><h1>t</h1><p class="A q Q">2<span class="d c 正文" title="t">3</span></p><ul><li><span>4</span></li></ul></div></body></html>"#);
+        let html = scraper::Html::parse_document(
+            r#"<html><body><div><p class="a b" id="x">1</p><h1>t</h1><p class="A q Q">2<span class="d c 正文" title="t">3</span></p><ul><li><span>4</span></li></ul></div></body></html>"#,
+        );
         let mut with = Sheet::default();
         with.add(css, 0);
         let mut without = Sheet::default();
@@ -2093,11 +2602,24 @@ mod tests {
                 r.need = None;
             }
             rules.index = RuleIndex::build(&rules.list);
-            assert!(rules.index.by_id.is_empty() && rules.index.by_class.is_empty() && rules.index.by_tag.is_empty());
+            assert!(
+                rules.index.by_id.is_empty()
+                    && rules.index.by_class.is_empty()
+                    && rules.index.by_tag.is_empty()
+            );
         }
         let mut n = 0;
-        for el in html.root_element().descendants().filter_map(ElementRef::wrap) {
-            assert_eq!(with.cascade(&el, ""), without.cascade(&el, ""), "{}", el.html());
+        for el in html
+            .root_element()
+            .descendants()
+            .filter_map(ElementRef::wrap)
+        {
+            assert_eq!(
+                with.cascade(&el, ""),
+                without.cascade(&el, ""),
+                "{}",
+                el.html()
+            );
             n += 1;
         }
         assert!(n > 8);
@@ -2126,7 +2648,9 @@ mod tests {
     fn cascade_order_and_media() {
         let mut s = Sheet::default();
         s.add("@charset \"utf-8\"; p { color: red } .a { color: blue } p { color: green } @media amzn-mobi { p.a { color: black } } @font-face { font-family: x }", 0);
-        let html = scraper::Html::parse_document("<html><body><p class=\"a\" style=\"text-indent:2em\">x</p></body></html>");
+        let html = scraper::Html::parse_document(
+            "<html><body><p class=\"a\" style=\"text-indent:2em\">x</p></body></html>",
+        );
         let p = html.select(&Selector::parse("p").unwrap()).next().unwrap();
         let d = s.cascade(&p, "");
         assert_eq!(d.get("color").map(String::as_str), Some("blue"));
@@ -2137,18 +2661,39 @@ mod tests {
     fn font_shorthand_expands_and_resets() {
         assert_eq!(
             parse_font_shorthand("normal small-caps 700 condensed larger / 2em  'A B', serif"),
-            Some(FontShorthand { style: None, variant: Some("small-caps"), weight: Some("700"), stretch: Some("condensed"), size: "larger", line_height: Some("2em"), family: "'A B', serif" })
+            Some(FontShorthand {
+                style: None,
+                variant: Some("small-caps"),
+                weight: Some("700"),
+                stretch: Some("condensed"),
+                size: "larger",
+                line_height: Some("2em"),
+                family: "'A B', serif"
+            })
         );
         assert_eq!(parse_font_shorthand("bold bold 1em x"), None);
         // 层叠里展开成分项：没写的重置成 normal（盖掉前面规则的粗体、行高），后面的分项照常覆盖简写
         let mut s = Sheet::default();
         s.add("p { font-weight: bold; line-height: 2 } p { font: italic 15pt/1.5 \"宋体\", serif } .a { font-family: 楷体 } .b { font: caption }", 0);
-        let html = scraper::Html::parse_document("<html><body><p class=\"a b\">x</p></body></html>");
+        let html =
+            scraper::Html::parse_document("<html><body><p class=\"a b\">x</p></body></html>");
         let p = html.select(&Selector::parse("p").unwrap()).next().unwrap();
         let d = s.cascade(&p, "");
         let get = |k: &str| d.get(k).map(String::as_str);
-        assert_eq!((get("font-style"), get("font-weight"), get("font-size"), get("line-height")), (Some("italic"), Some("normal"), Some("15pt"), Some("1.5")));
-        assert_eq!(get("font-family"), Some("楷体"), "后面的分项覆盖简写；认不出的简写（caption）整条不认");
+        assert_eq!(
+            (
+                get("font-style"),
+                get("font-weight"),
+                get("font-size"),
+                get("line-height")
+            ),
+            (Some("italic"), Some("normal"), Some("15pt"), Some("1.5"))
+        );
+        assert_eq!(
+            get("font-family"),
+            Some("楷体"),
+            "后面的分项覆盖简写；认不出的简写（caption）整条不认"
+        );
         assert_eq!(Computed::derive(&Computed::root(), &d, "p").font_size, 1.25);
     }
 
@@ -2159,24 +2704,44 @@ mod tests {
         let mut s = Sheet::default();
         let n = s.add(".f0{color:red} .f1{color:red} div.x{text-indent:3em} div.y{margin-left:3em} div.z{margin-top:3em}", 0);
         s.add("div.x{text-indent:1em !important} div.y.y{margin-left:1em} p{color:red} q{color:red} div.z{margin-top:1em}", n);
-        let html = scraper::Html::parse_document(r#"<html><body><div class="x y z" style="margin-right:2em">x</div></body></html>"#);
-        let el = html.select(&Selector::parse("div").unwrap()).next().unwrap();
+        let html = scraper::Html::parse_document(
+            r#"<html><body><div class="x y z" style="margin-right:2em">x</div></body></html>"#,
+        );
+        let el = html
+            .select(&Selector::parse("div").unwrap())
+            .next()
+            .unwrap();
         let (css, move_) = (s.cascade(&el, ""), s.cascade_xochitl(&el, ""));
         let get = |d: &Decls, k: &str| d.get(k).cloned().unwrap_or_default();
-        assert_eq!((get(&css, "text-indent").as_str(), get(&move_, "text-indent").as_str()), ("1em", "3em"));
+        assert_eq!(
+            (
+                get(&css, "text-indent").as_str(),
+                get(&move_, "text-indent").as_str()
+            ),
+            ("1em", "3em")
+        );
         assert_eq!(get(&move_, "margin-left"), "1em");
-        assert_eq!(get(&move_, "margin-top"), "1em", "序号一样（都是第 5 条）后链接的胜");
+        assert_eq!(
+            get(&move_, "margin-top"),
+            "1em",
+            "序号一样（都是第 5 条）后链接的胜"
+        );
         assert_eq!(get(&move_, "margin-right"), "2em");
     }
 
     /// `<img width="60%">` 当 CSS 宽度（样式表写了的优先）；像素宽度不收。
     #[test]
     fn img_width_attribute_percent_is_a_hint() {
-        let html = scraper::Html::parse_document(r#"<html><body><img id="a" width="60%"/><img id="b" width="566"/><img id="c" class="w" width="60%"/></body></html>"#);
+        let html = scraper::Html::parse_document(
+            r#"<html><body><img id="a" width="60%"/><img id="b" width="566"/><img id="c" class="w" width="60%"/></body></html>"#,
+        );
         let mut s = Sheet::default();
         s.add("img.w{width:30%}", 0);
         let width = |id: &str| {
-            let el = html.select(&Selector::parse(&format!("#{id}")).unwrap()).next().unwrap();
+            let el = html
+                .select(&Selector::parse(&format!("#{id}")).unwrap())
+                .next()
+                .unwrap();
             let mut d = s.cascade(&el, "");
             presentational_hints(&el, &mut d);
             d.get("width").cloned()
@@ -2188,23 +2753,70 @@ mod tests {
 
     #[test]
     fn media_queries_by_env() {
-        let env = MediaEnv { width: 1104.0, height: 1546.0, device_width: 1272.0, device_height: 1696.0, color: false };
+        let env = MediaEnv {
+            width: 1104.0,
+            height: 1546.0,
+            device_width: 1272.0,
+            device_height: 1696.0,
+            color: false,
+        };
         let ok = |q: &str| media_ok(q, Some(&env));
-        for q in ["", "all", "screen", "amzn-kf8", "only screen", "not amzn-mobi", "not print", "print, screen", "SCREEN"] {
+        for q in [
+            "",
+            "all",
+            "screen",
+            "amzn-kf8",
+            "only screen",
+            "not amzn-mobi",
+            "not print",
+            "print, screen",
+            "SCREEN",
+        ] {
             assert!(ok(q), "{q}");
         }
-        for q in ["print", "amzn-mobi", "speech", "not screen", "screen and", "screen (min-width: 1px)", "and (color)"] {
+        for q in [
+            "print",
+            "amzn-mobi",
+            "speech",
+            "not screen",
+            "screen and",
+            "screen (min-width: 1px)",
+            "and (color)",
+        ] {
             assert!(!ok(q), "{q}");
         }
         // 特性按阅读范围、屏幕求值
-        for q in ["screen and (min-width: 600px)", "(max-width: 1104px)", "(min-height: 1500px) and (orientation: portrait)", "(min-device-width: 1272px)", "(max-aspect-ratio: 3/4)", "(monochrome)", "not (color)", "(min-width: 10in)", "(color: 0)", "not screen and (max-width: 480px)"] {
+        for q in [
+            "screen and (min-width: 600px)",
+            "(max-width: 1104px)",
+            "(min-height: 1500px) and (orientation: portrait)",
+            "(min-device-width: 1272px)",
+            "(max-aspect-ratio: 3/4)",
+            "(monochrome)",
+            "not (color)",
+            "(min-width: 10in)",
+            "(color: 0)",
+            "not screen and (max-width: 480px)",
+        ] {
             assert!(ok(q), "{q}");
         }
-        for q in ["screen and (max-width: 480px)", "(min-width: 1105px)", "(orientation: landscape)", "(color)"] {
+        for q in [
+            "screen and (max-width: 480px)",
+            "(min-width: 1105px)",
+            "(orientation: landscape)",
+            "(color)",
+        ] {
             assert!(!ok(q), "{q}");
         }
         // 求值不了的不收，带 not 也不收
-        for q in ["(min-width: 30em)", "not screen and (min-width: 30em)", "(min-resolution: 2dppx)", "(width >= 600px)", "(min-monochrome: 4)", "(min-width: 600px) or (color)"] {
+        for q in [
+            "(min-width: 30em)",
+            "not screen and (min-width: 30em)",
+            "(min-resolution: 2dppx)",
+            "(width >= 600px)",
+            "(min-monochrome: 4)",
+            "(min-width: 600px) or (color)",
+        ] {
             assert!(!ok(q), "{q}");
         }
         // 没有环境：只看媒体类型
@@ -2215,7 +2827,13 @@ mod tests {
         let html = scraper::Html::parse_document("<p>x</p>");
         let p = html.select(&Selector::parse("p").unwrap()).next().unwrap();
         let d = with.cascade(&p, "");
-        assert_eq!((d.get("color").map(String::as_str), d.get("text-indent").map(String::as_str)), (Some("red"), Some("2em")));
+        assert_eq!(
+            (
+                d.get("color").map(String::as_str),
+                d.get("text-indent").map(String::as_str)
+            ),
+            (Some("red"), Some("2em"))
+        );
     }
 
     /// 落单的引号按 CSS 规范在换行处结束（坏字符串），后面的规则照收；以前 `{}` 配不上、后面全废。到文末没配上的块在文末收尾。
@@ -2224,7 +2842,9 @@ mod tests {
         let css = "p { font-family: \"Georgia;\n color: gray }\nh1 { color: red }\n.a { text-indent: 2em }\n.b { content: 'x\\'}'; color: blue }\n.c { color: green";
         let mut s = Sheet::default();
         s.add(css, 0);
-        let html = scraper::Html::parse_document(r#"<html><body><h1 class="a">t</h1><p class="b c">x</p></body></html>"#);
+        let html = scraper::Html::parse_document(
+            r#"<html><body><h1 class="a">t</h1><p class="b c">x</p></body></html>"#,
+        );
         let get = |sel: &str, k: &str| {
             let el = html.select(&Selector::parse(sel).unwrap()).next().unwrap();
             s.cascade(&el, "").get(k).cloned()
@@ -2234,10 +2854,28 @@ mod tests {
         // 引号里转义的引号、`}` 不算；没收尾的最后一块照收（后出现的 green 盖过 blue）
         assert_eq!(get("p", "color").as_deref(), Some("green"));
         // 拆分、配括号、优先级共用一个扫描器：引号里的逗号、括号不算
-        assert_eq!(split_top(r#"a, "b,c", d(e,f), 'g\',h'"#, ','), ["a", r#" "b,c""#, " d(e,f)", r#" 'g\',h'"#]);
-        assert_eq!(rule_spans("p{a{b}\"}\"c}x").iter().map(|r| (r.body, r.end)).collect::<Vec<_>>(), [("a{b}\"}\"c", 11)]);
+        assert_eq!(
+            split_top(r#"a, "b,c", d(e,f), 'g\',h'"#, ','),
+            ["a", r#" "b,c""#, " d(e,f)", r#" 'g\',h'"#]
+        );
+        assert_eq!(
+            rule_spans("p{a{b}\"}\"c}x")
+                .iter()
+                .map(|r| (r.body, r.end))
+                .collect::<Vec<_>>(),
+            [("a{b}\"}\"c", 11)]
+        );
         assert_eq!(specificity(r#"a[title=")"]:not(.x)"#), (0, 2, 1));
-        assert!(media_ok("screen and (min-width: 1px)", Some(&MediaEnv { width: 10.0, height: 10.0, device_width: 10.0, device_height: 10.0, color: false })));
+        assert!(media_ok(
+            "screen and (min-width: 1px)",
+            Some(&MediaEnv {
+                width: 10.0,
+                height: 10.0,
+                device_width: 10.0,
+                device_height: 10.0,
+                color: false
+            })
+        ));
     }
 
     /// 规则位置：字符串、注释里的花括号不算；`@media` 里的给出并带上条件；开头的语句和注释留在 prelude 里（判断时 `rule_selector` 去掉）；
@@ -2246,18 +2884,36 @@ mod tests {
     fn rule_spans_positions_and_parents() {
         let css = "@charset \"utf-8\"; /* { */ p { content: '}'; color: red }\n@media screen { .a { x: 1 } @supports (y) { .b { z: 2 } } }\n@font-face { font-family: f }\n}{orphan} .c { q: 1";
         let r = rule_spans(css);
-        let got: Vec<(String, &str, Vec<&str>, bool)> = r.iter().map(|r| (rule_selector(r.prelude).trim().to_string(), r.body.trim(), r.parents.iter().map(|p| p.trim()).collect(), r.closed)).collect();
+        let got: Vec<(String, &str, Vec<&str>, bool)> = r
+            .iter()
+            .map(|r| {
+                (
+                    rule_selector(r.prelude).trim().to_string(),
+                    r.body.trim(),
+                    r.parents.iter().map(|p| p.trim()).collect(),
+                    r.closed,
+                )
+            })
+            .collect();
         assert_eq!(
             got,
             [
                 ("p".to_string(), "content: '}'; color: red", vec![], true),
                 (".a".to_string(), "x: 1", vec!["@media screen"], true),
-                (".b".to_string(), "z: 2", vec!["@media screen", "@supports (y)"], true),
+                (
+                    ".b".to_string(),
+                    "z: 2",
+                    vec!["@media screen", "@supports (y)"],
+                    true
+                ),
                 ("@font-face".to_string(), "font-family: f", vec![], true),
                 (".c".to_string(), "q: 1", vec![], false),
             ]
         );
-        assert_eq!(&css[r[0].body_start..r[0].end], " content: '}'; color: red }");
+        assert_eq!(
+            &css[r[0].body_start..r[0].end],
+            " content: '}'; color: red }"
+        );
         assert!(r[0].prelude.starts_with("@charset"));
         // 层叠只收条件成立的 `@media` 里的，`@supports` 里的不收；属性选择器里引号中的 `;` 不切选择器
         let mut s = Sheet::default();
@@ -2265,22 +2921,46 @@ mod tests {
         let html = scraper::Html::parse_document(r#"<p title="a;b">x</p>"#);
         let p = html.select(&Selector::parse("p").unwrap()).next().unwrap();
         let d = s.cascade(&p, "");
-        assert_eq!((d.get("color"), d.get("text-indent").map(String::as_str)), (None, Some("1em")));
+        assert_eq!(
+            (d.get("color"), d.get("text-indent").map(String::as_str)),
+            (None, Some("1em"))
+        );
     }
 
     /// 去注释换成空格、字符串里的不算；切词认引号、注释当分隔；四值简写拆不清的不认。
     #[test]
     fn text_tools() {
-        assert_eq!(strip_comments("a/* x */b 'c/*d*/' /* 没闭合"), "a b 'c/*d*/'  ");
-        assert!(matches!(strip_comments("p{}"), std::borrow::Cow::Borrowed(_)));
-        assert_eq!(tokens("1px/**/solid  \"A B\"\trgb(0, 0, 0)").0, ["1px", "solid", "\"A B\"", "rgb(0, 0, 0)"]);
+        assert_eq!(
+            strip_comments("a/* x */b 'c/*d*/' /* 没闭合"),
+            "a b 'c/*d*/'  "
+        );
+        assert!(matches!(
+            strip_comments("p{}"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(
+            tokens("1px/**/solid  \"A B\"\trgb(0, 0, 0)").0,
+            ["1px", "solid", "\"A B\"", "rgb(0, 0, 0)"]
+        );
         assert!(!tokens("calc(1px").1);
-        assert_eq!(background_tokens("url(a/b.png) center/cover"), ["url(a/b.png)", "center", "/", "cover"]);
-        assert_eq!(box_sides("calc(1em + 2px) 0"), BoxSides::Sides(["calc(1em + 2px)", "0", "calc(1em + 2px)", "0"], ""));
+        assert_eq!(
+            background_tokens("url(a/b.png) center/cover"),
+            ["url(a/b.png)", "center", "/", "cover"]
+        );
+        assert_eq!(
+            box_sides("calc(1em + 2px) 0"),
+            BoxSides::Sides(["calc(1em + 2px)", "0", "calc(1em + 2px)", "0"], "")
+        );
         assert_eq!(four_values("1px 2px 3px 4px 5px"), None);
         assert_eq!(four_values("inherit"), Some(["inherit"; 4]));
-        assert_eq!(split_leading_statements("@import url('a;b.css'); /* c */ @charset \"x\";\n.x"), ("@import url('a;b.css'); /* c */ @charset \"x\";", "\n.x"));
-        assert_eq!(compound_tag_classes("body..x"), ("body".to_string(), vec!["x"]));
+        assert_eq!(
+            split_leading_statements("@import url('a;b.css'); /* c */ @charset \"x\";\n.x"),
+            ("@import url('a;b.css'); /* c */ @charset \"x\";", "\n.x")
+        );
+        assert_eq!(
+            compound_tag_classes("body..x"),
+            ("body".to_string(), vec!["x"])
+        );
     }
 
     /// `background:none`、只写颜色的 `background` 简写按 CSS 把没写的项（背景图等）重置成初始值；位置、尺寸回到不写。
@@ -2288,23 +2968,53 @@ mod tests {
     fn background_shorthand_resets_unset_parts() {
         let mut s = Sheet::default();
         s.add("div { background-image: url(a.png); background-repeat: no-repeat; background-position: center } div.n { background: none } div.c { background: #eee } div.u { background: url(b.png) }", 0);
-        let html = scraper::Html::parse_document(r#"<html><body><div>0</div><div class="n">1</div><div class="c">2</div><div class="u">3</div></body></html>"#);
+        let html = scraper::Html::parse_document(
+            r#"<html><body><div>0</div><div class="n">1</div><div class="c">2</div><div class="u">3</div></body></html>"#,
+        );
         let comps: Vec<Computed> = html
             .select(&Selector::parse("div").unwrap())
             .map(|el| Computed::derive(&Computed::root(), &s.cascade(&el, ""), "div"))
             .collect();
         assert_eq!(comps[0].bg_image.as_deref(), Some("a.png"));
         assert!(comps[0].bg_no_repeat && comps[0].bg_position[0].is_some());
-        assert_eq!((comps[1].bg_image.as_deref(), comps[1].bg_no_repeat, comps[1].bg_position), (None, false, [None, None]));
-        assert_eq!((comps[2].bg_image.as_deref(), comps[2].background), (None, Some(0xFFEE_EEEE)));
-        assert_eq!((comps[3].bg_image.as_deref(), comps[3].bg_no_repeat, comps[3].bg_position), (Some("b.png"), false, [None, None]));
+        assert_eq!(
+            (
+                comps[1].bg_image.as_deref(),
+                comps[1].bg_no_repeat,
+                comps[1].bg_position
+            ),
+            (None, false, [None, None])
+        );
+        assert_eq!(
+            (comps[2].bg_image.as_deref(), comps[2].background),
+            (None, Some(0xFFEE_EEEE))
+        );
+        assert_eq!(
+            (
+                comps[3].bg_image.as_deref(),
+                comps[3].bg_no_repeat,
+                comps[3].bg_position
+            ),
+            (Some("b.png"), false, [None, None])
+        );
     }
 
     #[test]
     fn font_face_urls() {
-        let f = font_faces(r#"@font-face{font-family:"宋体";src:local("st")}@font-face{font-family:"juan";src:url("../Fonts/juan.ttf")}@font-face{font-family:'b';font-weight:bold;src:local(x),url(../Fonts/b.ttf) format("truetype")}"#, "OEBPS/Styles/s.css");
+        let f = font_faces(
+            r#"@font-face{font-family:"宋体";src:local("st")}@font-face{font-family:"juan";src:url("../Fonts/juan.ttf")}@font-face{font-family:'b';font-weight:bold;src:local(x),url(../Fonts/b.ttf) format("truetype")}"#,
+            "OEBPS/Styles/s.css",
+        );
         assert_eq!(f.len(), 2);
-        assert_eq!(f[0], FontFace { family: "juan".into(), path: "OEBPS/Fonts/juan.ttf".into(), bold: false, italic: false });
+        assert_eq!(
+            f[0],
+            FontFace {
+                family: "juan".into(),
+                path: "OEBPS/Fonts/juan.ttf".into(),
+                bold: false,
+                italic: false
+            }
+        );
         assert!(f[1].bold && f[1].path == "OEBPS/Fonts/b.ttf");
     }
 
@@ -2340,7 +3050,11 @@ mod tests {
         assert_eq!(child.font_size, 2.0);
         assert_eq!(child.margin[0], None);
         // 负字号作废，照父元素
-        let neg = Computed::derive(&h, &Decls::from_iter([("font-size".to_string(), "-1em".to_string())]), "span");
+        let neg = Computed::derive(
+            &h,
+            &Decls::from_iter([("font-size".to_string(), "-1em".to_string())]),
+            "span",
+        );
         assert_eq!(neg.font_size, 2.0);
     }
 }

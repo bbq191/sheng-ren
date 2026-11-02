@@ -8,7 +8,10 @@
 mod complete;
 mod meta_edit;
 
-use library::{Added, BuildCounts, BuildEvent, BuildRun, Built, CoverResult, FailMemo, InfoResult, Library, OriginalState, Profile, SyncEvent, SyncMemo, TrackChange, UntrackChange};
+use library::{
+    Added, BuildCounts, BuildEvent, BuildRun, Built, CoverResult, FailMemo, InfoResult, Library,
+    OriginalState, Profile, SyncEvent, SyncMemo, TrackChange, UntrackChange,
+};
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -212,45 +215,75 @@ const HELP_TAIL: &str = "\
 
 /// 命令的参数写法，每种一行（`  booklib [--library=目录] …`）。
 fn synopsis(h: &Command) -> String {
-    h.synopsis.iter().map(|s| format!("  booklib [--library=目录] {s}")).collect::<Vec<_>>().join("\n")
+    h.synopsis
+        .iter()
+        .map(|s| format!("  booklib [--library=目录] {s}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `booklib --help` 的全文。
 fn full_help() -> String {
-    let cmds: Vec<String> = COMMANDS.iter().map(|h| format!("{}\n      {}", synopsis(h), h.brief)).collect();
+    let cmds: Vec<String> = COMMANDS
+        .iter()
+        .map(|h| format!("{}\n      {}", synopsis(h), h.brief))
+        .collect();
     format!("{HELP_HEAD}\n\n命令：\n{}\n\n{HELP_TAIL}", cmds.join("\n"))
 }
 
 /// 一个命令的详细说明。
 fn command_usage(cmd: &str) -> Option<String> {
     let h = COMMANDS.iter().find(|h| h.name == cmd)?;
-    let detail = if h.detail.is_empty() { String::new() } else { format!("\n\n{}", h.detail) };
+    let detail = if h.detail.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", h.detail)
+    };
     Some(format!("用法：\n{}\n\n{}{detail}", synopsis(h), h.brief))
 }
 
 /// `booklib --version`、`-V`、`version`。
 fn version() -> String {
     let date = env!("BOOKLIB_GIT_DATE");
-    let rules: Vec<String> = library::rule_versions().into_iter().map(|(k, v)| format!("{k} {v}")).collect();
+    let rules: Vec<String> = library::rule_versions()
+        .into_iter()
+        .map(|(k, v)| format!("{k} {v}"))
+        .collect();
     format!(
         "booklib {}（提交 {}{}）\n规则版本：{}",
         env!("CARGO_PKG_VERSION"),
         env!("BOOKLIB_GIT_COMMIT"),
-        if date.is_empty() { String::new() } else { format!("，{date}") },
+        if date.is_empty() {
+            String::new()
+        } else {
+            format!("，{date}")
+        },
         rules.join(" · ")
     )
 }
 
 /// 命令行里的命令名（跳过 `--library=` 等选项；`--` 之前）。
 fn command_word() -> Option<String> {
-    std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).take_while(|a| a != "--").find(|a| !a.starts_with('-'))
+    std::env::args_os()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .take_while(|a| a != "--")
+        .find(|a| !a.starts_with('-'))
 }
 
 /// `booklib --help`、`-h`、`help` 打印全部用法；`booklib <命令> --help`（或 `-h`）、`booklib help <命令>` 只打印这个命令的；
 /// `--version`、`-V`、`version` 打印版本。打到标准输出、退出码 0（不算用错）。`--` 之后的参数不算。
 fn print_help_if_asked() {
-    let raw: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
-    let args: Vec<&str> = raw.iter().map(String::as_str).take_while(|a| *a != "--").filter(|a| !a.starts_with("--library=")).collect();
+    let raw: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let args: Vec<&str> = raw
+        .iter()
+        .map(String::as_str)
+        .take_while(|a| *a != "--")
+        .filter(|a| !a.starts_with("--library="))
+        .collect();
     if matches!(args.first(), Some(&("--version" | "-V" | "version"))) {
         println!("{}", version());
         std::process::exit(0);
@@ -281,7 +314,11 @@ fn usage_error(msg: &str) -> ! {
         eprintln!("{msg}\n");
     }
     match command_word().and_then(|c| COMMANDS.iter().find(|h| h.name == c)) {
-        Some(h) => eprintln!("用法：\n{}\n\n详细说明：booklib {} --help", synopsis(h), h.name),
+        Some(h) => eprintln!(
+            "用法：\n{}\n\n详细说明：booklib {} --help",
+            synopsis(h),
+            h.name
+        ),
         None => {
             let names: Vec<&str> = COMMANDS.iter().map(|h| h.name).collect();
             eprintln!("用法：booklib [--library=目录] <命令> [参数]\n命令：{}\n\n全部说明：booklib --help", names.join("、"));
@@ -304,14 +341,20 @@ struct Args {
 
 impl Args {
     fn parse() -> Args {
-        let mut a = Args { opts: Vec::new(), flags: Vec::new(), pos: Vec::new() };
+        let mut a = Args {
+            opts: Vec::new(),
+            flags: Vec::new(),
+            pos: Vec::new(),
+        };
         let mut rest = false;
         for arg in std::env::args_os().skip(1) {
             let s = arg.to_str();
             match s {
                 Some("--") if !rest => rest = true,
                 Some(s) if !rest && s.starts_with("--") => match s[2..].split_once('=') {
-                    Some((k, v)) if v.trim().is_empty() => usage_error(&format!("--{k}= 后面要写值")),
+                    Some((k, v)) if v.trim().is_empty() => {
+                        usage_error(&format!("--{k}= 后面要写值"))
+                    }
                     Some((k, v)) => a.opts.push((k.to_string(), v.to_string())),
                     None => a.flags.push(s[2..].to_string()),
                 },
@@ -326,7 +369,11 @@ impl Args {
     }
 
     fn opt(&self, name: &str) -> Option<&str> {
-        self.opts.iter().rev().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        self.opts
+            .iter()
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 
     /// 只允许这个命令认识的选项和开关；`--device kindle`（空格分隔）这类写法会在这里报错，不会悄悄当成书名。
@@ -336,14 +383,21 @@ impl Args {
             usage_error(&format!("{cmd} 不认识选项 --{k}="));
         }
         if let Some(f) = self.flags.iter().find(|f| !flags.contains(&f.as_str())) {
-            let hint = if opts.contains(&f.as_str()) { format!("（要写成 --{f}=值）") } else { String::new() };
+            let hint = if opts.contains(&f.as_str()) {
+                format!("（要写成 --{f}=值）")
+            } else {
+                String::new()
+            };
             usage_error(&format!("{cmd} 不认识 --{f}{hint}"));
         }
     }
 
     /// 位置参数当文字用（书名片段、id、网址）。
     fn texts(&self) -> Vec<String> {
-        self.pos[1..].iter().map(|s| s.to_string_lossy().into_owned()).collect()
+        self.pos[1..]
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect()
     }
 }
 
@@ -351,7 +405,10 @@ fn added_line(a: &Added) -> String {
     match a {
         Added::New(m) => format!("✓ 入库 {}  {}", m.id, m.title),
         Added::Existing(m) => format!("= 已在库里 {}  {}", m.id, m.title),
-        Added::Replaced(m, old) => format!("↻ 原件改过，换成新版本 {}  {} ← {old}（旧版本的条目和产物已删）", m.id, m.title),
+        Added::Replaced(m, old) => format!(
+            "↻ 原件改过，换成新版本 {}  {} ← {old}（旧版本的条目和产物已删）",
+            m.id, m.title
+        ),
     }
 }
 
@@ -361,7 +418,14 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
     if !args.opts.iter().any(|(k, _)| k == "device") {
         return lib.devices().iter().collect();
     }
-    for id in args.opts.iter().filter(|(k, _)| k == "device").flat_map(|(_, v)| v.split(',')).map(str::trim).filter(|v| !v.is_empty()) {
+    for id in args
+        .opts
+        .iter()
+        .filter(|(k, _)| k == "device")
+        .flat_map(|(_, v)| v.split(','))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
         if id == "all" {
             devices.extend(lib.devices().iter());
             continue;
@@ -379,7 +443,12 @@ fn parse_devices<'a>(args: &Args, lib: &'a Library) -> Vec<&'a Profile> {
 /// `sync --watch` 记住的生成失败：(书 id, 模式 id) → 失败时的指纹和原件状态。都没变就不再重试、不再重复报错。
 /// 设备重新接上时这台的全部忘掉（[`forget_reconnected`]）：传输失败多半是连接的事，接上了要重试。
 /// 这一轮重新接上的设备（上一轮没接上、这轮接上了）：忘掉它们记着的失败。`last_live`、`live` 和 `devices` 一一对应。
-fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Option<&[bool]>, live: &[bool]) {
+fn forget_reconnected(
+    fails: &mut FailMemo,
+    devices: &[&Profile],
+    last_live: Option<&[bool]>,
+    live: &[bool],
+) {
     for (i, (d, ok)) in devices.iter().zip(live).enumerate() {
         let was_down = last_live.and_then(|l| l.get(i)).is_some_and(|w| !w);
         if *ok && was_down {
@@ -390,38 +459,103 @@ fn forget_reconnected(fails: &mut FailMemo, devices: &[&Profile], last_live: Opt
 
 /// 一轮生成的汇总一行（2026-09-29 反馈"看不出是否更新过"）。
 fn counts_summary(c: &BuildCounts) -> String {
-    let same = if c.same > 0 { format!("，重新生成但内容没变（没再传）{} 本", c.same) } else { String::new() };
-    let adopted = if c.adopted > 0 { format!("，认领设备上已有的 {} 本", c.adopted) } else { String::new() };
-    let retracted = if c.retracted > 0 { format!("，不在跟踪范围、从设备上删了 {} 本", c.retracted) } else { String::new() };
+    let same = if c.same > 0 {
+        format!("，重新生成但内容没变（没再传）{} 本", c.same)
+    } else {
+        String::new()
+    };
+    let adopted = if c.adopted > 0 {
+        format!("，认领设备上已有的 {} 本", c.adopted)
+    } else {
+        String::new()
+    };
+    let retracted = if c.retracted > 0 {
+        format!("，不在跟踪范围、从设备上删了 {} 本", c.retracted)
+    } else {
+        String::new()
+    };
     format!("生成：重新生成并传上 {} 本{same}{adopted}，挪位置 {} 本，已是最新 {} 本{retracted}，失败 {} 本", c.written, c.moved, c.up_to_date, c.failed)
 }
 
 /// 一轮生成里的一件事显示成一行（`quiet` 时没变化的不报）；`Err` 的算失败（退出码 2）。
 fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
     Some(match ev {
-        BuildEvent::Unsupported { id, title, reason } => Ok(format!("- 跳过 {id}  {title}：{reason}")),
-        BuildEvent::RemovedFlushed { device, count } => Ok(format!("✓ [{device}] 删掉了 {count} 本已从书库删除的书")),
-        BuildEvent::RemoveFlushFailed { device, error } => Err(format!("✗ [{device}] 删已从书库删除的书：{error}")),
-        BuildEvent::DeviceAbsent { device, reason } => Ok(format!("- [{device}] {reason}，这次不传")),
-        BuildEvent::Outside { device, title } => Ok(format!("? [{device}] {title}：不在这台的跟踪范围了（--keep，这次没从设备上删）")),
-        BuildEvent::Retracted { device, title } => Ok(format!("✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删了")),
-        BuildEvent::RetractFailed { device, title, error } => Err(format!("✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删失败：{error}")),
-        BuildEvent::Built { device, title, built } => return built_line(&device, &title, built, quiet).map(Ok),
-        BuildEvent::Failed { device, title, error } => Err(format!("✗ [{device}] {title}: {error}")),
-        BuildEvent::TransportLost { device, count } => Err(format!("✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）")),
-        BuildEvent::Waiting { in_flight } => Ok(format!("… 都生成好了，等设备那边传完（还有 {in_flight} 本）")),
+        BuildEvent::Unsupported { id, title, reason } => {
+            Ok(format!("- 跳过 {id}  {title}：{reason}"))
+        }
+        BuildEvent::RemovedFlushed { device, count } => {
+            Ok(format!("✓ [{device}] 删掉了 {count} 本已从书库删除的书"))
+        }
+        BuildEvent::RemoveFlushFailed { device, error } => {
+            Err(format!("✗ [{device}] 删已从书库删除的书：{error}"))
+        }
+        BuildEvent::DeviceAbsent { device, reason } => {
+            Ok(format!("- [{device}] {reason}，这次不传"))
+        }
+        BuildEvent::Outside { device, title } => Ok(format!(
+            "? [{device}] {title}：不在这台的跟踪范围了（--keep，这次没从设备上删）"
+        )),
+        BuildEvent::Retracted { device, title } => Ok(format!(
+            "✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删了"
+        )),
+        BuildEvent::RetractFailed {
+            device,
+            title,
+            error,
+        } => Err(format!(
+            "✗ [{device}] {title}：不在这台的跟踪范围了，从设备上删失败：{error}"
+        )),
+        BuildEvent::Built {
+            device,
+            title,
+            built,
+        } => return built_line(&device, &title, built, quiet).map(Ok),
+        BuildEvent::Failed {
+            device,
+            title,
+            error,
+        } => Err(format!("✗ [{device}] {title}: {error}")),
+        BuildEvent::TransportLost { device, count } => Err(format!(
+            "✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）"
+        )),
+        BuildEvent::Waiting { in_flight } => Ok(format!(
+            "… 都生成好了，等设备那边传完（还有 {in_flight} 本）"
+        )),
     })
 }
 
 /// 一本书一个模式的结果一行（`quiet` 时没变化的不报）。
 fn built_line(device: &str, title: &str, b: Built, quiet: bool) -> Option<String> {
-    let with_warnings = |head: String, warnings: &[String]| std::iter::once(head).chain(warnings.iter().map(|w| format!("  ⚠ {w}"))).collect::<Vec<_>>().join("\n");
+    let with_warnings = |head: String, warnings: &[String]| {
+        std::iter::once(head)
+            .chain(warnings.iter().map(|w| format!("  ⚠ {w}")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     match b {
-        Built::Written { path, warnings } => Some(with_warnings(format!("✓ 生成 [{device}] {title} → {}", path.display()), &warnings)),
-        Built::Same { path, warnings } => Some(with_warnings(format!("≡ 重新生成 [{device}] {title}：和设备上的一样，没再传（{}）", path.display()), &warnings)),
-        Built::UpToDate(path) => (!quiet).then(|| format!("= [{device}] {title} 已是最新（{}）", path.display())),
-        Built::Adopted(path) => Some(format!("= [{device}] {title} 认领设备上已有的那份，没重新生成（{}）", path.display())),
-        Built::Moved { from, to } => Some(format!("↪ 挪位置 [{device}] {title} → {}（原来在 {}）", to.display(), from.display())),
+        Built::Written { path, warnings } => Some(with_warnings(
+            format!("✓ 生成 [{device}] {title} → {}", path.display()),
+            &warnings,
+        )),
+        Built::Same { path, warnings } => Some(with_warnings(
+            format!(
+                "≡ 重新生成 [{device}] {title}：和设备上的一样，没再传（{}）",
+                path.display()
+            ),
+            &warnings,
+        )),
+        Built::UpToDate(path) => {
+            (!quiet).then(|| format!("= [{device}] {title} 已是最新（{}）", path.display()))
+        }
+        Built::Adopted(path) => Some(format!(
+            "= [{device}] {title} 认领设备上已有的那份，没重新生成（{}）",
+            path.display()
+        )),
+        Built::Moved { from, to } => Some(format!(
+            "↪ 挪位置 [{device}] {title} → {}（原来在 {}）",
+            to.display(),
+            from.display()
+        )),
     }
 }
 
@@ -441,8 +575,15 @@ fn info_summary(i: &library::BookInfo) -> String {
         parts.push(format!("标签 {}", i.subjects.join("、")));
     }
     if let Some(e) = &i.edition {
-        let v: Vec<&str> = [e.publisher.as_str(), e.pubdate.as_str()].into_iter().filter(|x| !x.is_empty()).collect();
-        let tr = if e.translators.is_empty() { String::new() } else { format!(" {} 译", e.translators.join("、")) };
+        let v: Vec<&str> = [e.publisher.as_str(), e.pubdate.as_str()]
+            .into_iter()
+            .filter(|x| !x.is_empty())
+            .collect();
+        let tr = if e.translators.is_empty() {
+            String::new()
+        } else {
+            format!(" {} 译", e.translators.join("、"))
+        };
         parts.push(format!("参考版本 {}{tr}", v.join(" ")));
     }
     parts.join("；")
@@ -450,24 +591,49 @@ fn info_summary(i: &library::BookInfo) -> String {
 
 /// `meta --show` 的一本：书里写的元数据（读原件的 OPF），和联网找来的。
 fn show_meta(m: &library::Meta, fail_line: &mut dyn FnMut(String)) {
-    println!("{}  {}{}", m.id, m.title, if m.authors.is_empty() { String::new() } else { format!(" — {}", m.authors.join("、")) });
+    println!(
+        "{}  {}{}",
+        m.id,
+        m.title,
+        if m.authors.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", m.authors.join("、"))
+        }
+    );
     println!("  原件：{}", m.source_path);
     let path = Path::new(&m.source_path);
     if m.content_format() != "epub" {
-        println!("  书里：（{} 来源，没有 OPF 元数据）", m.content_format().to_uppercase());
+        println!(
+            "  书里：（{} 来源，没有 OPF 元数据）",
+            m.content_format().to_uppercase()
+        );
     } else if !path.is_file() {
-        fail_line(format!("  ✗ 原件不在了：{}（改名或移动过就 booklib sync）", m.source_path));
+        fail_line(format!(
+            "  ✗ 原件不在了：{}（改名或移动过就 booklib sync）",
+            m.source_path
+        ));
     } else {
         match bookconv::opfmeta::read_epub(path) {
             Ok(fields) => {
                 for (field, values) in fields.iter().filter(|(_, v)| !v.is_empty()) {
                     let v = values.join("; ");
-                    let v = if v.chars().count() > 80 { format!("{}…（{} 字）", v.chars().take(80).collect::<String>(), v.chars().count()) } else { v };
+                    let v = if v.chars().count() > 80 {
+                        format!(
+                            "{}…（{} 字）",
+                            v.chars().take(80).collect::<String>(),
+                            v.chars().count()
+                        )
+                    } else {
+                        v
+                    };
                     println!("  书里 {}：{}", field.label(), v.replace('\n', " "));
                 }
                 match bookconv::epubzip::cover_image_of(path) {
                     Some((ext, bytes)) => {
-                        let dims = image::load_from_memory(&bytes).map(|i| format!("，{}×{}", i.width(), i.height())).unwrap_or_default();
+                        let dims = image::load_from_memory(&bytes)
+                            .map(|i| format!("，{}×{}", i.width(), i.height()))
+                            .unwrap_or_default();
                         println!("  书里 封面：有（{ext}{dims}，{} KB）", bytes.len() / 1024);
                     }
                     None => println!("  书里 封面：无"),
@@ -502,18 +668,31 @@ fn meta_edit_args() -> Option<(Vec<OsString>, Option<PathBuf>)> {
     if raw[i] != "meta" {
         return None;
     }
-    let mut rest: Vec<OsString> = raw[i + 1..].iter().filter(|a| !is_library(a)).cloned().collect();
+    let mut rest: Vec<OsString> = raw[i + 1..]
+        .iter()
+        .filter(|a| !is_library(a))
+        .cloned()
+        .collect();
     let e = rest.iter().position(|a| a == "--edit")?;
     rest.remove(e);
-    let library = raw.iter().rev().find_map(|a| a.to_str()?.strip_prefix("--library=").map(PathBuf::from));
+    let library = raw
+        .iter()
+        .rev()
+        .find_map(|a| a.to_str()?.strip_prefix("--library=").map(PathBuf::from));
     Some((rest, library))
 }
 
 fn main() {
     bookconv::util::restore_sigpipe();
     // 补全脚本调的，不在帮助里列（见 complete.rs）
-    if std::env::args_os().nth(1).is_some_and(|a| a == "__complete") {
-        let rest: Vec<String> = std::env::args_os().skip(2).map(|a| a.to_string_lossy().into_owned()).collect();
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|a| a == "__complete")
+    {
+        let rest: Vec<String> = std::env::args_os()
+            .skip(2)
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         complete::run(&rest);
         return;
     }
@@ -523,17 +702,34 @@ fn main() {
     }
     print_help_if_asked();
     let args = Args::parse();
-    let Some(name) = args.pos.first().and_then(|c| c.to_str()).map(str::to_string) else { usage_error("") };
+    let Some(name) = args
+        .pos
+        .first()
+        .and_then(|c| c.to_str())
+        .map(str::to_string)
+    else {
+        usage_error("")
+    };
     if name == "build" {
         usage_error(BUILD_MERGED);
     }
-    let Some(cmd) = COMMANDS.iter().find(|c| c.name == name) else { usage_error(&format!("不认识的命令 {name}")) };
+    let Some(cmd) = COMMANDS.iter().find(|c| c.name == name) else {
+        usage_error(&format!("不认识的命令 {name}"))
+    };
     (cmd.check)(cmd, &args);
-    let root = args.opt("library").map(PathBuf::from).unwrap_or_else(Library::default_root);
+    let root = args
+        .opt("library")
+        .map(PathBuf::from)
+        .unwrap_or_else(Library::default_root);
     let lib = Library::open(&root).unwrap_or_else(|e| fail(&format!("打开书库失败: {e}")));
     // 会改动书库的命令持锁到结束
     let _lock = (cmd.lock)(&args).then(|| lib.lock().unwrap_or_else(|e| fail(&e)));
-    let ctx = Ctx { lib: &lib, args: &args, cmd: cmd.name, failed: Cell::new(0) };
+    let ctx = Ctx {
+        lib: &lib,
+        args: &args,
+        cmd: cmd.name,
+        failed: Cell::new(0),
+    };
     (cmd.run)(&ctx);
     if ctx.failed.get() > 0 {
         std::process::exit(2);
@@ -608,10 +804,24 @@ fn cmd_devices(ctx: &Ctx) {
     let lib = ctx.lib;
     for p in lib.devices().iter() {
         let r = p.output_readable();
-        println!("{:<12} {}  {}  屏幕 {}×{}  阅读范围 {}×{}  {}", p.id, p.name, match p.comic.format.filter(|f| *f != p.format()) {
-            Some(c) => format!("{}（漫画 {}）", p.format().name().to_uppercase(), c.name().to_uppercase()),
-            None => p.format().name().to_uppercase(),
-        }, p.screen.width, p.screen.height, r.width, r.height, if p.color { "彩色" } else { "黑白" });
+        println!(
+            "{:<12} {}  {}  屏幕 {}×{}  阅读范围 {}×{}  {}",
+            p.id,
+            p.name,
+            match p.comic.format.filter(|f| *f != p.format()) {
+                Some(c) => format!(
+                    "{}（漫画 {}）",
+                    p.format().name().to_uppercase(),
+                    c.name().to_uppercase()
+                ),
+                None => p.format().name().to_uppercase(),
+            },
+            p.screen.width,
+            p.screen.height,
+            r.width,
+            r.height,
+            if p.color { "彩色" } else { "黑白" }
+        );
         match lib.device_status(p) {
             Ok(Some(at)) => println!("{:<12} ✓ 接上了：{at}", ""),
             Ok(None) => println!("{:<12} 产物放电脑上", ""),
@@ -641,13 +851,31 @@ fn cmd_add(ctx: &Ctx) {
 fn cmd_list(ctx: &Ctx) {
     let lib = ctx.lib;
     for m in lib.select(&ctx.args.texts()) {
-        println!("{}  {:<6} {}{}", m.id, m.source_format, m.title, if m.authors.is_empty() { String::new() } else { format!(" — {}", m.authors.join("、")) });
+        println!(
+            "{}  {:<6} {}{}",
+            m.id,
+            m.source_format,
+            m.title,
+            if m.authors.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", m.authors.join("、"))
+            }
+        );
         if !m.supported() {
-            println!("      - 不再支持的格式（.{}）：不再生成，已有的产物不动；不要了就 remove", m.content_format());
+            println!(
+                "      - 不再支持的格式（.{}）：不再生成，已有的产物不动；不要了就 remove",
+                m.content_format()
+            );
         }
         match lib.original_state(&m) {
-            OriginalState::Missing => println!("      ✗ 原件不在了：{}（移动过就 sync 或重新 add；不要了就 remove）", m.source_path),
-            OriginalState::Touched => println!("      ⚠ 原件可能改过：{}（生成前会核对）", m.source_path),
+            OriginalState::Missing => println!(
+                "      ✗ 原件不在了：{}（移动过就 sync 或重新 add；不要了就 remove）",
+                m.source_path
+            ),
+            OriginalState::Touched => {
+                println!("      ⚠ 原件可能改过：{}（生成前会核对）", m.source_path)
+            }
             OriginalState::Present | OriginalState::NotNeeded => {}
         }
         for o in lib.outputs(&m) {
@@ -656,17 +884,33 @@ fn cmd_list(ctx: &Ctx) {
                 Some(false) => "⚠ 过期",
                 None => "? 未知",
             };
-            let shown = o.path.strip_prefix(lib.root()).map(|p| p.to_path_buf()).unwrap_or(o.path.clone());
+            let shown = o
+                .path
+                .strip_prefix(lib.root())
+                .map(|p| p.to_path_buf())
+                .unwrap_or(o.path.clone());
             // 模式已经删了的（生成记录还在）照旧 `? 未知`：sync 不会再管它，别说"下次从设备上删"
-            let state = if lib.devices().get(&o.device).is_none() || lib.wants(&m, &o.device) { state } else { "✗ 不在这台的跟踪范围（下次 sync 从设备上删）" };
+            let state = if lib.devices().get(&o.device).is_none() || lib.wants(&m, &o.device) {
+                state
+            } else {
+                "✗ 不在这台的跟踪范围（下次 sync 从设备上删）"
+            };
             println!("      {:<20} {state}  {}", o.device, shown.display());
             // 体检（生成时记下的）：和 Kindle 不一样又没处理的逐条列出，没验证过的合成一行
             for line in o.audit.iter().filter(|l| l.starts_with('✗')) {
                 println!("        体检 {line}");
             }
-            let unknown: Vec<&str> = o.audit.iter().filter_map(|l| l.strip_prefix("? ")).collect();
+            let unknown: Vec<&str> = o
+                .audit
+                .iter()
+                .filter_map(|l| l.strip_prefix("? "))
+                .collect();
             if !unknown.is_empty() {
-                println!("        体检 ? 没验证过 {} 种：{}", unknown.len(), unknown.join("；"));
+                println!(
+                    "        体检 ? 没验证过 {} 种：{}",
+                    unknown.len(),
+                    unknown.join("；")
+                );
             }
         }
     }
@@ -679,9 +923,22 @@ fn cmd_dedupe(ctx: &Ctx) {
     let dirs: Vec<PathBuf> = ctx.rest().iter().map(PathBuf::from).collect();
     let mb = |b: u64| b as f64 / 1048576.0;
     ctx.report(ctx.lib.dedupe(&dirs).map(|r| {
-        let mut lines = vec![format!("✓ {} 本书改成只存索引，删掉书库里的副本 {:.1} MB", r.migrated, mb(r.freed_bytes))];
+        let mut lines = vec![format!(
+            "✓ {} 本书改成只存索引，删掉书库里的副本 {:.1} MB",
+            r.migrated,
+            mb(r.freed_bytes)
+        )];
         for m in &r.kept {
-            lines.push(format!("  ? 没找到原件，副本保留：{}  {}（原来在 {}）", m.id, m.title, if m.source_path.is_empty() { &m.source } else { &m.source_path }));
+            lines.push(format!(
+                "  ? 没找到原件，副本保留：{}  {}（原来在 {}）",
+                m.id,
+                m.title,
+                if m.source_path.is_empty() {
+                    &m.source
+                } else {
+                    &m.source_path
+                }
+            ));
         }
         lines.join("\n")
     }));
@@ -697,20 +954,41 @@ fn cmd_untrack(ctx: &Ctx) {
 
 /// `track`/`untrack` 的 `--device=`：模式 id（不写、写了 all 是空＝全部设备）。写了不存在的模式报用法错。
 fn device_ids(args: &Args, lib: &Library) -> Vec<String> {
-    let all = args.opts.iter().filter(|(k, _)| k == "device").flat_map(|(_, v)| v.split(',')).any(|v| v.trim() == "all");
+    let all = args
+        .opts
+        .iter()
+        .filter(|(k, _)| k == "device")
+        .flat_map(|(_, v)| v.split(','))
+        .any(|v| v.trim() == "all");
     if all || !args.opts.iter().any(|(k, _)| k == "device") {
         return Vec::new();
     }
-    parse_devices(args, lib).into_iter().map(|p| p.id.clone()).collect()
+    parse_devices(args, lib)
+        .into_iter()
+        .map(|p| p.id.clone())
+        .collect()
 }
 
 fn track_or_untrack(ctx: &Ctx, track: bool) {
     let lib = ctx.lib;
     if let Some(r) = ctx.args.opt("root").filter(|_| track) {
-        if !ctx.rest().is_empty() || ctx.args.opts.iter().any(|(k, _)| k == "device") || ctx.args.has("top") {
+        if !ctx.rest().is_empty()
+            || ctx.args.opts.iter().any(|(k, _)| k == "device")
+            || ctx.args.has("top")
+        {
             usage_error("--root= 单独用：booklib track --root=目录");
         }
-        ctx.report(lib.set_books_root(Path::new(r)).map(|changed| if changed { format!("✓ 书根目录设为 {r}（已传的书下次 sync 挪到按它算的位置）") } else { format!("= 书根目录本来就是 {r}") }).map_err(|e| format!("✗ {e}")));
+        ctx.report(
+            lib.set_books_root(Path::new(r))
+                .map(|changed| {
+                    if changed {
+                        format!("✓ 书根目录设为 {r}（已传的书下次 sync 挪到按它算的位置）")
+                    } else {
+                        format!("= 书根目录本来就是 {r}")
+                    }
+                })
+                .map_err(|e| format!("✗ {e}")),
+        );
         print_tracked(lib);
         return;
     }
@@ -723,7 +1001,11 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
     }
     let devices = device_ids(ctx.args, lib);
     let top = ctx.args.has("top");
-    let to = if devices.is_empty() { "全部设备".to_string() } else { devices.join("、") };
+    let to = if devices.is_empty() {
+        "全部设备".to_string()
+    } else {
+        devices.join("、")
+    };
     for d in ctx.rest() {
         let d = match resolve_track_path(lib, Path::new(d), track) {
             Ok(p) => p,
@@ -763,23 +1045,41 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
 fn resolve_track_path(lib: &Library, p: &Path, track: bool) -> Result<PathBuf, String> {
     let tracked = if track { Vec::new() } else { lib.tracked() };
     let root = lib.books_root();
-    let bases: Vec<PathBuf> = if p.is_absolute() { vec![p.to_path_buf()] } else { std::iter::once(p.to_path_buf()).chain(root.as_ref().map(|r| r.join(p))).collect() };
+    let bases: Vec<PathBuf> = if p.is_absolute() {
+        vec![p.to_path_buf()]
+    } else {
+        std::iter::once(p.to_path_buf())
+            .chain(root.as_ref().map(|r| r.join(p)))
+            .collect()
+    };
     for q in &bases {
         if q.exists() || tracked.contains(q) {
             return Ok(q.clone());
         }
-        let found: Vec<PathBuf> = with_book_ext(q).into_iter().filter(|c| c.is_file() || tracked.contains(c)).collect();
+        let found: Vec<PathBuf> = with_book_ext(q)
+            .into_iter()
+            .filter(|c| c.is_file() || tracked.contains(c))
+            .collect();
         match found.as_slice() {
             [] => {}
             [one] => return Ok(one.clone()),
-            _ => return Err(format!("✗ {} 有 .epub 和 .cbz 两本，写上扩展名", q.display())),
+            _ => {
+                return Err(format!(
+                    "✗ {} 有 .epub 和 .cbz 两本，写上扩展名",
+                    q.display()
+                ))
+            }
         }
     }
     if !track {
         return Ok(p.to_path_buf());
     }
     Err(match root {
-        Some(r) if !p.is_absolute() => format!("✗ 找不到 {}：当前目录和书根目录 {} 里都没有（也试过补 .epub、.cbz）", p.display(), r.display()),
+        Some(r) if !p.is_absolute() => format!(
+            "✗ 找不到 {}：当前目录和书根目录 {} 里都没有（也试过补 .epub、.cbz）",
+            p.display(),
+            r.display()
+        ),
         _ => format!("✗ 找不到 {}（也试过补 .epub、.cbz）", p.display()),
     })
 }
@@ -813,7 +1113,11 @@ fn print_tracked(lib: &Library) {
     }
     for p in lib.devices().iter() {
         let mine: Vec<&library::Tracked> = entries.iter().filter(|e| e.for_device(&p.id)).collect();
-        println!("  {}：{}", p.id, if mine.is_empty() { "（没有）" } else { "" });
+        println!(
+            "  {}：{}",
+            p.id,
+            if mine.is_empty() { "（没有）" } else { "" }
+        );
         for e in &mine {
             let kind = if e.file { "单本" } else { "目录" };
             let how = match (e.top, e.file) {
@@ -821,18 +1125,32 @@ fn print_tracked(lib: &Library) {
                 (true, false) => "，从这一层起",
                 (false, _) => "",
             };
-            let scope = if e.devices.is_empty() { "（全部设备）" } else { "" };
+            let scope = if e.devices.is_empty() {
+                "（全部设备）"
+            } else {
+                ""
+            };
             println!("    {kind} {}{how}{scope}", e.path.display());
         }
         // 从这一层起的目录在设备上同名：会并进同一个文件夹（书名也一样的，后来的那本带 id 后缀），只提示
-        let mut seen: std::collections::BTreeMap<String, Vec<&Path>> = std::collections::BTreeMap::new();
+        let mut seen: std::collections::BTreeMap<String, Vec<&Path>> =
+            std::collections::BTreeMap::new();
         for e in mine.iter().filter(|e| e.top && !e.file) {
             if let Some(n) = e.path.file_name() {
-                seen.entry(n.to_string_lossy().to_lowercase()).or_default().push(&e.path);
+                seen.entry(n.to_string_lossy().to_lowercase())
+                    .or_default()
+                    .push(&e.path);
             }
         }
         for (name, paths) in seen.iter().filter(|(_, v)| v.len() > 1) {
-            println!("    ⚠ 设备上会并进同一个文件夹「{name}」：{}", paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("、"));
+            println!(
+                "    ⚠ 设备上会并进同一个文件夹「{name}」：{}",
+                paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join("、")
+            );
         }
     }
 }
@@ -844,7 +1162,11 @@ fn cmd_remove(ctx: &Ctx) {
     }
     for id in ctx.args.texts() {
         let tracked = lib.tracked_original(&id);
-        ctx.report(lib.remove(&id).map(|title| format!("✓ 删除 {id}  {title}")).map_err(|e| format!("✗ {e}")));
+        ctx.report(
+            lib.remove(&id)
+                .map(|title| format!("✓ 删除 {id}  {title}"))
+                .map_err(|e| format!("✗ {e}")),
+        );
         if let Some(p) = tracked.filter(|_| !lib.entry_exists(&id)) {
             println!("  ⚠ 这本的原件在跟踪的目录里：{}\n    下次 sync 会再入库；要彻底不要，就从书目录里删掉原件", p.display());
         }
@@ -852,16 +1174,33 @@ fn cmd_remove(ctx: &Ctx) {
 }
 
 fn cmd_meta(ctx: &Ctx) {
-    if ctx.args.has("show") { meta_show(ctx) } else { meta_fetch(ctx) }
+    if ctx.args.has("show") {
+        meta_show(ctx)
+    } else {
+        meta_fetch(ctx)
+    }
 }
 
 /// `meta --show`：跟踪目录里的书的元数据。
 fn meta_show(ctx: &Ctx) {
     let lib = ctx.lib;
     let tracked = lib.tracked();
-    let books: Vec<_> = lib.select(&ctx.args.texts()).into_iter().filter(|m| !m.source_path.is_empty() && tracked.iter().any(|d| Path::new(&m.source_path).starts_with(d))).collect();
+    let books: Vec<_> = lib
+        .select(&ctx.args.texts())
+        .into_iter()
+        .filter(|m| {
+            !m.source_path.is_empty()
+                && tracked
+                    .iter()
+                    .any(|d| Path::new(&m.source_path).starts_with(d))
+        })
+        .collect();
     if books.is_empty() {
-        fail(if tracked.is_empty() { "没有跟踪的目录（booklib track 目录）" } else { "跟踪目录里没有匹配的书（booklib list 查看书库）" });
+        fail(if tracked.is_empty() {
+            "没有跟踪的目录（booklib track 目录）"
+        } else {
+            "跟踪目录里没有匹配的书（booklib list 查看书库）"
+        });
     }
     for (i, m) in books.iter().enumerate() {
         if i > 0 {
@@ -869,7 +1208,15 @@ fn meta_show(ctx: &Ctx) {
         }
         show_meta(m, &mut |e| ctx.fail_line(&e));
     }
-    println!("\n共 {} 本（跟踪目录：{}）", books.len(), tracked.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join("、"));
+    println!(
+        "\n共 {} 本（跟踪目录：{}）",
+        books.len(),
+        tracked
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join("、")
+    );
 }
 
 /// `meta --fetch [--force] [--clear]`：联网补元数据（或去掉找来的）。
@@ -882,7 +1229,11 @@ fn meta_fetch(ctx: &Ctx) {
     let (force, clear) = (ctx.args.has("force"), ctx.args.has("clear"));
     for m in &books {
         if !m.supported() && !clear {
-            println!("- 跳过 {}：{}", m.title, library::unsupported(m.content_format()));
+            println!(
+                "- 跳过 {}：{}",
+                m.title,
+                library::unsupported(m.content_format())
+            );
             continue;
         }
         if lib.offline() {
@@ -890,17 +1241,26 @@ fn meta_fetch(ctx: &Ctx) {
             break;
         }
         if clear {
-            ctx.report(lib.clear_metadata(m).map(|had| if had { format!("✓ 去掉找来的元数据和封面  {}", m.title) } else { format!("= 本来就没有找来的元数据  {}", m.title) }));
+            ctx.report(lib.clear_metadata(m).map(|had| {
+                if had {
+                    format!("✓ 去掉找来的元数据和封面  {}", m.title)
+                } else {
+                    format!("= 本来就没有找来的元数据  {}", m.title)
+                }
+            }));
             continue;
         }
         // 漫画也找（2026-10-12 定，推翻 2026-09-30 的「漫画不找」）：书名的卷次去掉再搜（`matching::base_title`）
         match lib.fetch_metadata(m, force) {
             Ok((info, cover)) => {
                 // 一半有结果、一半网络出错没查成：有结果的那半已存下，整本算失败（退出码 2），下次再查没查成的
-                let partial = matches!(info, InfoResult::Failed(_)) || matches!(cover, CoverResult::Failed(_));
+                let partial = matches!(info, InfoResult::Failed(_))
+                    || matches!(cover, CoverResult::Failed(_));
                 let info = match info {
                     InfoResult::Found(i) => format!("元数据 ← {}", info_summary(&i)),
-                    InfoResult::Shared(i, from) => format!("元数据 ← 同一套的《{from}》找过的（{}）", info_summary(&i)),
+                    InfoResult::Shared(i, from) => {
+                        format!("元数据 ← 同一套的《{from}》找过的（{}）", info_summary(&i))
+                    }
                     InfoResult::Existing(i) => format!("元数据 = 已有 ← {}", info_summary(&i)),
                     InfoResult::NotFound(why) => format!("元数据 ? {why}"),
                     InfoResult::Failed(why) => format!("元数据 ✗ {why}"),
@@ -913,7 +1273,10 @@ fn meta_fetch(ctx: &Ctx) {
                     CoverResult::Failed(why) => format!("封面 ✗ {why}"),
                 };
                 let mark = if partial { "⚠" } else { "✓" };
-                ctx.report(if partial { Err } else { Ok }(format!("{mark} {}\n      {info}\n      {cover}", m.title)));
+                ctx.report(if partial { Err } else { Ok }(format!(
+                    "{mark} {}\n      {info}\n      {cover}",
+                    m.title
+                )));
             }
             Err(e) => ctx.report(Err(format!("✗ {}: {e}", m.title))),
         }
@@ -944,7 +1307,12 @@ impl<'a> SyncPlan<'a> {
         let selectors = args.texts();
         let force = args.has("force");
         let watch: Option<u64> = match (args.opt("watch"), args.has("watch")) {
-            (Some(v), _) => Some(v.parse().ok().filter(|&n| n > 0).unwrap_or_else(|| usage_error("--watch= 要写正整数秒数"))),
+            (Some(v), _) => Some(
+                v.parse()
+                    .ok()
+                    .filter(|&n| n > 0)
+                    .unwrap_or_else(|| usage_error("--watch= 要写正整数秒数")),
+            ),
             (None, true) => Some(60),
             (None, false) => None,
         };
@@ -953,22 +1321,44 @@ impl<'a> SyncPlan<'a> {
                 usage_error("--no-build 和 --device 不能一起用");
             }
             if force || !selectors.is_empty() {
-                usage_error(&format!("--no-build 不生成，不能和 --force、书名一起用{}", path_hint(&selectors)));
+                usage_error(&format!(
+                    "--no-build 不生成，不能和 --force、书名一起用{}",
+                    path_hint(&selectors)
+                ));
             }
             Vec::new()
         } else {
             parse_devices(args, lib)
         };
         if watch.is_some() && (force || !selectors.is_empty()) {
-            usage_error(&format!("--watch 每轮同步、生成全部书，不能和 --force、书名一起用{}", path_hint(&selectors)));
+            usage_error(&format!(
+                "--watch 每轮同步、生成全部书，不能和 --force、书名一起用{}",
+                path_hint(&selectors)
+            ));
         }
-        let prune = if args.has("keep") { library::Prune::Keep } else { library::Prune::Auto };
+        let prune = if args.has("keep") {
+            library::Prune::Keep
+        } else {
+            library::Prune::Auto
+        };
         // 没跟踪目录时只生成 add 进来的书；什么都没有（或只要同步）就提示先 track
         let tracking = !lib.tracked().is_empty();
-        if !tracking && (devices.is_empty() || watch.is_some() || (selectors.is_empty() && lib.list().is_empty())) {
+        if !tracking
+            && (devices.is_empty()
+                || watch.is_some()
+                || (selectors.is_empty() && lib.list().is_empty()))
+        {
             fail("还没有跟踪任何目录。先登记要跟踪的书目录（只需一次），例如：\n  booklib track ~/Documents/ereader/books\n之后 booklib sync 就会把它镜像进书库");
         }
-        SyncPlan { selectors, force, watch, devices, prune, tracking, meta: !args.has("no-meta") }
+        SyncPlan {
+            selectors,
+            force,
+            watch,
+            devices,
+            prune,
+            tracking,
+            meta: !args.has("no-meta"),
+        }
     }
 }
 
@@ -1006,7 +1396,11 @@ fn cmd_sync(ctx: &Ctx) {
 impl SyncState {
     /// 一轮（持着锁）：先同步跟踪目录，再生成并传。
     fn round(&mut self, ctx: &Ctx, plan: &SyncPlan) {
-        let changed = if plan.tracking { self.sync_sources(ctx, plan) } else { true };
+        let changed = if plan.tracking {
+            self.sync_sources(ctx, plan)
+        } else {
+            true
+        };
         if plan.meta {
             self.fill_metadata(ctx, plan);
         }
@@ -1017,30 +1411,67 @@ impl SyncState {
 
     /// 同步跟踪目录，逐条报。返回这一轮有没有新增、更新、删除（出错也算有，接着去生成）。
     fn sync_sources(&mut self, ctx: &Ctx, plan: &SyncPlan) -> bool {
-        let r = ctx.lib.sync_with(plan.prune, &mut self.memo, |ev| match ev {
-            SyncEvent::Added(p, m) => println!("✓ 入库 {}  {}  ({})", m.id, m.title, p.display()),
-            SyncEvent::Updated(p, m, old) => println!("↻ 更新 {}  {} ← {old}  ({})", m.id, m.title, p.display()),
-            SyncEvent::Missing(p, t, true) => println!("✗ 原件已删，书库里也删了（连同产物）  {t}  ({})", p.display()),
-            SyncEvent::Missing(p, t, false) => println!("? 原件不在了（--keep，这次没从书库删）  {t}  ({})", p.display()),
-            SyncEvent::Released(p, t, true) => println!("✗ 不再跟踪，书库里删了（连同产物）  {t}  ({})", p.display()),
-            SyncEvent::Released(p, t, false) => println!("? 不再跟踪（--keep，这次没从书库删）  {t}  ({})", p.display()),
-            SyncEvent::Failed(p, e) => ctx.fail_line(&format!("✗ {}: {e}", p.display())),
-            // 算失败（退出码 2）：这次同步不完整
-            SyncEvent::Unreadable(p, e) => ctx.fail_line(&format!("✗ 目录读不了，里面的书这次没同步（已登记的原样保留，不删）：{}（{e}）", p.display())),
-            SyncEvent::ForgotDevices(p, gone, whole) => println!(
-                "- 跟踪条目 {}：阅读模式 {} 已经没有了，{}",
-                p.display(),
-                gone.join("、"),
-                if whole { "整条去掉（里面的书按不再跟踪处理）" } else { "从条目里去掉" }
-            ),
-        });
-        let changed = r.as_ref().map_or(true, |r| r.added + r.updated + r.pruned > 0);
+        let r = ctx
+            .lib
+            .sync_with(plan.prune, &mut self.memo, |ev| match ev {
+                SyncEvent::Added(p, m) => {
+                    println!("✓ 入库 {}  {}  ({})", m.id, m.title, p.display())
+                }
+                SyncEvent::Updated(p, m, old) => {
+                    println!("↻ 更新 {}  {} ← {old}  ({})", m.id, m.title, p.display())
+                }
+                SyncEvent::Missing(p, t, true) => println!(
+                    "✗ 原件已删，书库里也删了（连同产物）  {t}  ({})",
+                    p.display()
+                ),
+                SyncEvent::Missing(p, t, false) => println!(
+                    "? 原件不在了（--keep，这次没从书库删）  {t}  ({})",
+                    p.display()
+                ),
+                SyncEvent::Released(p, t, true) => {
+                    println!("✗ 不再跟踪，书库里删了（连同产物）  {t}  ({})", p.display())
+                }
+                SyncEvent::Released(p, t, false) => println!(
+                    "? 不再跟踪（--keep，这次没从书库删）  {t}  ({})",
+                    p.display()
+                ),
+                SyncEvent::Failed(p, e) => ctx.fail_line(&format!("✗ {}: {e}", p.display())),
+                // 算失败（退出码 2）：这次同步不完整
+                SyncEvent::Unreadable(p, e) => ctx.fail_line(&format!(
+                    "✗ 目录读不了，里面的书这次没同步（已登记的原样保留，不删）：{}（{e}）",
+                    p.display()
+                )),
+                SyncEvent::ForgotDevices(p, gone, whole) => println!(
+                    "- 跟踪条目 {}：阅读模式 {} 已经没有了，{}",
+                    p.display(),
+                    gone.join("、"),
+                    if whole {
+                        "整条去掉（里面的书按不再跟踪处理）"
+                    } else {
+                        "从条目里去掉"
+                    }
+                ),
+            });
+        let changed = r
+            .as_ref()
+            .map_or(true, |r| r.added + r.updated + r.pruned > 0);
         match r {
             // --watch 时没变化就不出声
-            Ok(r) if plan.watch.is_some() && r.added + r.updated + r.missing + r.released + r.failed + r.unreadable == 0 => {}
+            Ok(r)
+                if plan.watch.is_some()
+                    && r.added + r.updated + r.missing + r.released + r.failed + r.unreadable
+                        == 0 => {}
             Ok(r) => {
-                let unreadable = if r.unreadable > 0 { format!("，读不了的目录 {}", r.unreadable) } else { String::new() };
-                let released = if r.released > 0 { format!("，不再跟踪 {}", r.released) } else { String::new() };
+                let unreadable = if r.unreadable > 0 {
+                    format!("，读不了的目录 {}", r.unreadable)
+                } else {
+                    String::new()
+                };
+                let released = if r.released > 0 {
+                    format!("，不再跟踪 {}", r.released)
+                } else {
+                    String::new()
+                };
                 println!("原件：新增 {}，改过 {}，没变 {}，不在了 {}{released}（从书库删了 {}），出错 {}{unreadable}", r.added, r.updated, r.unchanged, r.missing, r.pruned, r.failed)
             }
             Err(e) => ctx.report(Err(e)),
@@ -1052,8 +1483,15 @@ impl SyncState {
     /// 找过的（找到了、或者这一版匹配规则下没找到）不再找，`--watch` 每轮不重复联网；连不上网整轮跳过，下次再找。
     fn fill_metadata(&mut self, ctx: &Ctx, plan: &SyncPlan) {
         let lib = ctx.lib;
-        let books = if plan.selectors.is_empty() { lib.list() } else { lib.select(&plan.selectors) };
-        let todo: Vec<&library::Meta> = books.iter().filter(|m| m.supported() && lib.needs_metadata(m)).collect();
+        let books = if plan.selectors.is_empty() {
+            lib.list()
+        } else {
+            lib.select(&plan.selectors)
+        };
+        let todo: Vec<&library::Meta> = books
+            .iter()
+            .filter(|m| m.supported() && lib.needs_metadata(m))
+            .collect();
         if todo.is_empty() {
             return;
         }
@@ -1068,8 +1506,12 @@ impl SyncState {
         for m in todo {
             // 找到过、但早先没记网站书名的：重找（force）
             match lib.fetch_metadata(m, m.info.is_some()) {
-                Ok((InfoResult::Found(i), _)) => println!("✓ 元数据 {} ← {}", m.title, info_summary(&i)),
-                Ok((InfoResult::Shared(_, from), _)) => println!("✓ 元数据 {} ← 同一套的《{from}》找过的", m.title),
+                Ok((InfoResult::Found(i), _)) => {
+                    println!("✓ 元数据 {} ← {}", m.title, info_summary(&i))
+                }
+                Ok((InfoResult::Shared(_, from), _)) => {
+                    println!("✓ 元数据 {} ← 同一套的《{from}》找过的", m.title)
+                }
                 Ok((InfoResult::NotFound(why), _)) => println!("? 元数据 {}：{why}", m.title),
                 Ok((InfoResult::Failed(why), _)) => println!("⚠ 元数据 {}：{why}", m.title),
                 Ok(_) => {}
@@ -1086,21 +1528,38 @@ impl SyncState {
     fn build(&mut self, ctx: &Ctx, plan: &SyncPlan, changed: bool) {
         let lib = ctx.lib;
         let stamp = || lib.change_stamp();
-        let live: Vec<bool> = plan.devices.iter().map(|d| lib.device_status(d).is_ok()).collect();
+        let live: Vec<bool> = plan
+            .devices
+            .iter()
+            .map(|d| lib.device_status(d).is_ok())
+            .collect();
         for (d, ok) in plan.devices.iter().zip(&live) {
             if *ok {
                 self.absent_reported.remove(&d.id);
             }
         }
-        forget_reconnected(&mut self.fails, &plan.devices, self.last_live.as_deref(), &live);
-        if !(changed || self.last_stamp != Some(stamp()) || self.last_live.as_ref() != Some(&live)) {
+        forget_reconnected(
+            &mut self.fails,
+            &plan.devices,
+            self.last_live.as_deref(),
+            &live,
+        );
+        if !(changed || self.last_stamp != Some(stamp()) || self.last_live.as_ref() != Some(&live))
+        {
             return;
         }
         self.last_live = Some(live);
         // 没选书：全部书，只报有变化的；选了书：只生成这几本，每本都报
-        let books = if plan.selectors.is_empty() { lib.list() } else { lib.select(&plan.selectors) };
+        let books = if plan.selectors.is_empty() {
+            lib.list()
+        } else {
+            lib.select(&plan.selectors)
+        };
         if books.is_empty() && !plan.selectors.is_empty() {
-            fail(&format!("没有匹配的书（booklib list 查看书库）{}", path_hint(&plan.selectors)));
+            fail(&format!(
+                "没有匹配的书（booklib list 查看书库）{}",
+                path_hint(&plan.selectors)
+            ));
         }
         let run = BuildRun {
             lib,
@@ -1134,8 +1593,21 @@ mod tests {
     /// 设备从没接上到接上：这台记着的失败忘掉（下一轮重试）；别的设备的、一直接着的不动。
     #[test]
     fn failures_are_forgotten_when_a_device_comes_back() {
-        let devices = [profile::get("ireader").unwrap(), profile::get("kindle").unwrap()];
-        let memo = || -> FailMemo { devices.iter().map(|d| (("书".to_string(), d.id.clone()), ("指纹".to_string(), OriginalState::Present))).collect() };
+        let devices = [
+            profile::get("ireader").unwrap(),
+            profile::get("kindle").unwrap(),
+        ];
+        let memo = || -> FailMemo {
+            devices
+                .iter()
+                .map(|d| {
+                    (
+                        ("书".to_string(), d.id.clone()),
+                        ("指纹".to_string(), OriginalState::Present),
+                    )
+                })
+                .collect()
+        };
         let left = |f: &FailMemo| -> Vec<String> {
             let mut v: Vec<String> = f.keys().map(|(_, d)| d.clone()).collect();
             v.sort();

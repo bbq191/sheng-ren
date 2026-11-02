@@ -4,7 +4,9 @@ use super::*;
 // ───────────────────────── 2–4. CSS 声明处理 ─────────────────────────
 
 // CSS 文本小工具都在 `cascade`（层叠和清洗层共用一份），清洗层各模块经 `use self::css::*` 用到它们。
-pub(super) use crate::cascade::{box_sides, compound_tag_classes, last_compound, rule_selector, BoxSides};
+pub(super) use crate::cascade::{
+    box_sides, compound_tag_classes, last_compound, rule_selector, BoxSides,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Spacing {
@@ -25,7 +27,10 @@ pub(super) fn filter_decls(decls: &str, filter: &[String], spacing: Spacing) -> 
 /// 值是否"非零缩进"（`0` / `0em` / `0.0pt` 之类算零；负值=悬挂缩进，保留不动）。
 pub(super) fn is_positive_indent(val: &str) -> bool {
     let v = val.trim().trim_end_matches("!important").trim();
-    let num: String = v.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+').collect();
+    let num: String = v
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+')
+        .collect();
     num.parse::<f64>().map(|n| n > 0.0).unwrap_or(false)
 }
 
@@ -46,7 +51,14 @@ fn colors_for(opts: &WashOpts, decls: String) -> String {
 /// （2026-09-06 Phase E 英文书对照发现）。`text-indent:0`（诗歌/引文/列表明示不缩进）与负值保留。
 /// `filter` 里的属性按 [`crate::cssunlock::unlock`] 解锁（字体去掉、相对字号保留、`font`/`background` 简写只留样式和颜色……）；
 /// `base_text` = 这条规则作用在正文整体那一层（见 [`is_base_text_selector`]）。
-pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing, base_text: bool, indent: Option<&str>, keep_fonts: &HashSet<String>) -> String {
+pub(super) fn filter_decls_with(
+    decls: &str,
+    filter: &[String],
+    spacing: Spacing,
+    base_text: bool,
+    indent: Option<&str>,
+    keep_fonts: &HashSet<String>,
+) -> String {
     use crate::cssunlock::{unlock, Unlock};
     let mut out: Vec<String> = Vec::new();
     // 声明按分号切，引号/括号（`url(data:…;base64,…)`）/字符引用里的分号不算（`html::css_decls`）。
@@ -54,8 +66,14 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
         let prop = d.prop.to_ascii_lowercase();
         let val = d.value;
         // 保留背景图的模式（过滤清单里有 `background`、没有 `background-image`）：简写拆成分项（见 `background_longhands`）
-        if prop == "background" && filter.contains(&prop) && !filter.iter().any(|f| f == "background-image") {
-            out.extend(crate::cssunlock::background_longhands(val, !filter.iter().any(|f| f == "background-size")));
+        if prop == "background"
+            && filter.contains(&prop)
+            && !filter.iter().any(|f| f == "background-image")
+        {
+            out.extend(crate::cssunlock::background_longhands(
+                val,
+                !filter.iter().any(|f| f == "background-size"),
+            ));
             continue;
         }
         if filter.contains(&prop) {
@@ -94,10 +112,16 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
                 // 简写：保留左右
                 match box_sides(val) {
                     BoxSides::Sides([_, r, _, l], important) => {
-                        out.push(if r == l { format!("{prop}:0 {r}{important}") } else { format!("{prop}:0 {r} 0 {l}{important}") });
+                        out.push(if r == l {
+                            format!("{prop}:0 {r}{important}")
+                        } else {
+                            format!("{prop}:0 {r} 0 {l}{important}")
+                        });
                     }
                     // `margin:inherit` 之类：上下交给我们的 `p{}`，左右照原值写成分项（此前写成非法的 `margin:0 inherit`）
-                    BoxSides::Keyword(k, important) => out.push(format!("{prop}-right:{k}{important};{prop}-left:{k}{important}")),
+                    BoxSides::Keyword(k, important) => out.push(format!(
+                        "{prop}-right:{k}{important};{prop}-left:{k}{important}"
+                    )),
                     // 拆不清（calc() 里带空格之类）：拿不准就原样留着
                     BoxSides::Unknown => out.push(format!("{prop}:{val}")),
                 }
@@ -118,8 +142,11 @@ pub(super) fn filter_decls_with(decls: &str, filter: &[String], spacing: Spacing
 pub(super) fn selector_spacing(selector: &str) -> Spacing {
     static ELEM_P: OnceLock<Regex> = OnceLock::new();
     static ELEM_BODY: OnceLock<Regex> = OnceLock::new();
-    let p = ELEM_P.get_or_init(|| Regex::new(r#"(?i)(^|[\s,>+~])(p|div)(?:[\s,.#:\[]|$)"#).unwrap());
-    let b = ELEM_BODY.get_or_init(|| Regex::new(r#"(?i)(^|[\s,>+~])(body|html)(?:[\s,.#:\[]|$)|^@page\b"#).unwrap());
+    let p =
+        ELEM_P.get_or_init(|| Regex::new(r#"(?i)(^|[\s,>+~])(p|div)(?:[\s,.#:\[]|$)"#).unwrap());
+    let b = ELEM_BODY.get_or_init(|| {
+        Regex::new(r#"(?i)(^|[\s,>+~])(body|html)(?:[\s,.#:\[]|$)|^@page\b"#).unwrap()
+    });
     let s = selector.trim();
     if b.is_match(s) {
         Spacing::All
@@ -133,9 +160,18 @@ pub(super) fn selector_spacing(selector: &str) -> Spacing {
 /// 选择器是不是作用在"正文整体那一层"：每个逗号分项的最后一个复合选择器都是不带类、id、属性的 `body`/`html`/`p`/`div`
 /// （`body`、`div.chapter p`、`html, body` 算；`p.small`、`.note`、`h1` 不算）。这一层上的相对字号也去掉（[`crate::cssunlock`]）。
 pub(super) fn is_base_text_selector(selector: &str) -> bool {
-    let parts: Vec<&str> = selector.split(',').map(str::trim).filter(|p| !p.is_empty()).collect();
+    let parts: Vec<&str> = selector
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .collect();
     !parts.is_empty()
-        && parts.iter().all(|p| matches!(last_compound(p).to_ascii_lowercase().as_str(), "body" | "html" | "p" | "div" | ":root"))
+        && parts.iter().all(|p| {
+            matches!(
+                last_compound(p).to_ascii_lowercase().as_str(),
+                "body" | "html" | "p" | "div" | ":root"
+            )
+        })
 }
 
 /// 选择器是不是"注释容器类"：书自带的 `duokan-footnote-item`/`duokan-footnote-content` 这类，以及我们
@@ -176,11 +212,31 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
             }
             // base_text=true：书自己的字号（哪怕是相对的）一律去掉，换成下面统一的注释字号
             // 注释容器的字体一律去掉（批注不用嵌入字体，2026-10-05）。
-            let mut decls = colors_for(opts, filter_decls_with(r.body, &filter, spacing, true, Some(indent_for(opts)), &HashSet::new()));
+            let mut decls = colors_for(
+                opts,
+                filter_decls_with(
+                    r.body,
+                    &filter,
+                    spacing,
+                    true,
+                    Some(indent_for(opts)),
+                    &HashSet::new(),
+                ),
+            );
             decls.push_str(&format!("font-size:{FOOTNOTE_FONT_SIZE};"));
             decls
         } else {
-            colors_for(opts, filter_decls_with(r.body, &opts.filter_props, spacing, is_base_text_selector(&clean), Some(indent_for(opts)), &opts.keep_fonts))
+            colors_for(
+                opts,
+                filter_decls_with(
+                    r.body,
+                    &opts.filter_props,
+                    spacing,
+                    is_base_text_selector(&clean),
+                    Some(indent_for(opts)),
+                    &opts.keep_fonts,
+                ),
+            )
         };
         if decls != r.body {
             edits.push((r.body_start, r.body_start + r.body.len(), decls));
@@ -191,7 +247,11 @@ pub fn filter_css(css: &str, opts: &WashOpts) -> String {
 
 /// 本书的首行缩进值（拉丁 1.2em / 中文 2em；Auto 兜底中文）。`wash_css` 与书 css 统一改写共用。
 pub(super) fn indent_for(opts: &WashOpts) -> &'static str {
-    if opts.lang == LangMode::Latin { "1.2em" } else { "2em" }
+    if opts.lang == LangMode::Latin {
+        "1.2em"
+    } else {
+        "2em"
+    }
 }
 
 /// (x)html：`style=""`（按标签名定边距策略）+ `<style>` 块剥锁；注入清洗样式块；折叠重复 id。只有测试用（清洗层走 [`wash_html_with`]）。
@@ -202,10 +262,18 @@ pub(super) fn wash_html(html: &str, opts: &WashOpts) -> (String, usize) {
 
 /// 同 [`wash_html`]；`indent_classes` = 书的外链样式表里写了 `text-indent` 的类（`typeset::indent_classes_of`，英文首段顶格用；
 /// 本文件 `<style>` 里的另外算上）。
-pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashSet<String>) -> (String, usize) {
+pub(super) fn wash_html_with(
+    html: &str,
+    opts: &WashOpts,
+    indent_classes: &HashSet<String>,
+) -> (String, usize) {
     let before_dup = count_dup_id_tags(html);
     // 没有重复 id 的标签（绝大多数文件）不必再扫一遍
-    let s: Cow<str> = if before_dup == 0 { Cow::Borrowed(html) } else { Cow::Owned(collapse_dup_id_attrs(html)) };
+    let s: Cow<str> = if before_dup == 0 {
+        Cow::Borrowed(html)
+    } else {
+        Cow::Owned(collapse_dup_id_attrs(html))
+    };
     // 只认名字正好是 `style` 的属性（`data-style`、SVG `font-style` 不算），就地改值、保留原引号。
     let s = html::edit_style_attrs(&s, |t, value| {
         let spacing = match t.name.to_ascii_lowercase().as_str() {
@@ -214,7 +282,17 @@ pub(super) fn wash_html_with(html: &str, opts: &WashOpts, indent_classes: &HashS
             _ => Spacing::Keep,
         };
         let base_text = matches!(t.name.to_ascii_lowercase().as_str(), "body" | "html");
-        let cleaned = colors_for(opts, filter_decls_with(value, &opts.filter_props, spacing, base_text, Some(indent_for(opts)), &opts.keep_fonts));
+        let cleaned = colors_for(
+            opts,
+            filter_decls_with(
+                value,
+                &opts.filter_props,
+                spacing,
+                base_text,
+                Some(indent_for(opts)),
+                &opts.keep_fonts,
+            ),
+        );
         if cleaned.is_empty() {
             Edit::Remove
         } else if cleaned == value {

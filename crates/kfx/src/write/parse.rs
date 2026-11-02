@@ -49,9 +49,16 @@ pub(super) struct InlineImage {
 
 #[derive(Clone, Debug)]
 pub(super) enum Kind {
-    Text { text: String, runs: Vec<Run>, images: Vec<InlineImage> },
+    Text {
+        text: String,
+        runs: Vec<Run>,
+        images: Vec<InlineImage>,
+    },
     /// `linked`：图在带 `href` 的 `<a>` 里（图标注释号之类；只给 `--styles` 输出用，见 `analyze::dump_blocks`）。
-    Image { src: String, linked: bool },
+    Image {
+        src: String,
+        linked: bool,
+    },
     Container(Vec<Block>),
 }
 
@@ -124,7 +131,10 @@ pub(super) struct Block {
 /// 深度优先（先序）走遍块树，含容器里的块（容器本身先于里面的块）；`f` 返回 `ControlFlow::Break` 时停下。
 /// 各处遍历整棵块树都用它（[`for_each_block`]、[`walk_blocks_mut`]、[`any_block`]），不再各写一份递归。
 /// 递归的：套得深的书在大栈线程里调（见 [`DEEP_NESTING`]）。
-pub(super) fn walk_blocks<'a>(blocks: &'a [Block], f: &mut impl FnMut(&'a Block) -> ControlFlow<()>) -> ControlFlow<()> {
+pub(super) fn walk_blocks<'a>(
+    blocks: &'a [Block],
+    f: &mut impl FnMut(&'a Block) -> ControlFlow<()>,
+) -> ControlFlow<()> {
     for b in blocks {
         f(b)?;
         if let Kind::Container(c) = &b.kind {
@@ -154,7 +164,14 @@ pub(super) fn walk_blocks_mut(blocks: &mut [Block], f: &mut impl FnMut(&mut Bloc
 
 /// 块树里（含容器里的）有没有满足 `pred` 的块。
 pub(super) fn any_block(blocks: &[Block], mut pred: impl FnMut(&Block) -> bool) -> bool {
-    walk_blocks(blocks, &mut |b| if pred(b) { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }).is_break()
+    walk_blocks(blocks, &mut |b| {
+        if pred(b) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    })
+    .is_break()
 }
 
 /// 只有空白的段落不出节点，折成下一块上边距（系数见 [`BLANK_LINE_FOLD`]，和掌阅、Move 的 `blank_fold` 共用）。以前整段丢掉、
@@ -179,14 +196,19 @@ fn to_vert(l: Option<Len>, fs: f64) -> Vert {
 fn to_horiz(l: Option<Len>, fs: f64) -> Horiz {
     match l {
         Some(Len::Percent(p)) => Horiz { em: 0.0, pct: p },
-        Some(l) => Horiz { em: rem_len(l, fs).unwrap_or_default(), pct: 0.0 },
+        Some(l) => Horiz {
+            em: rem_len(l, fs).unwrap_or_default(),
+            pct: 0.0,
+        },
         None => Horiz::default(),
     }
 }
 
 /// `xml:lang`（没有就 `lang`）。
 fn lang_attr<'a>(el: &ElementRef<'a>) -> Option<&'a str> {
-    el.value().attr("xml:lang").or_else(|| el.value().attr("lang"))
+    el.value()
+        .attr("xml:lang")
+        .or_else(|| el.value().attr("lang"))
 }
 
 /// 块的外边距、内边距换算成根 em（竖直）和根 em + 百分比（水平），字段同 [`Block`]。
@@ -266,7 +288,16 @@ pub(super) struct Inline {
 
 impl Inline {
     fn new() -> Self {
-        Inline { text: String::new(), chars: 0, runs: Vec::new(), ids: Vec::new(), space_ids: Vec::new(), pending_space: false, open: Vec::new(), images: Vec::new() }
+        Inline {
+            text: String::new(),
+            chars: 0,
+            runs: Vec::new(),
+            ids: Vec::new(),
+            space_ids: Vec::new(),
+            pending_space: false,
+            open: Vec::new(),
+            images: Vec::new(),
+        }
     }
 
     /// 行内元素的 id：锚点在它的第一个字上。
@@ -279,13 +310,25 @@ impl Inline {
 
     /// 开一个行内区间（行内元素进来时）。
     fn open_run(&mut self, run: Run) {
-        self.open.push(OpenRun { start: self.chars, run_at: self.runs.len(), run, after_space: self.pending_space });
+        self.open.push(OpenRun {
+            start: self.chars,
+            run_at: self.runs.len(),
+            run,
+            after_space: self.pending_space,
+        });
     }
 
     /// 一个行内元素走完（或在切开处截断）：有字的话把区间插进 `runs`。
     fn close_run(&mut self, o: OpenRun) {
         if self.chars > o.start {
-            self.runs.insert(o.run_at, Run { start: o.start, len: self.chars - o.start, ..o.run });
+            self.runs.insert(
+                o.run_at,
+                Run {
+                    start: o.start,
+                    len: self.chars - o.start,
+                    ..o.run
+                },
+            );
         }
     }
 
@@ -295,7 +338,14 @@ impl Inline {
         for o in open.iter().rev() {
             self.close_run(o.clone());
         }
-        open.into_iter().map(|o| OpenRun { start: 0, run_at: 0, run: o.run, after_space: false }).collect()
+        open.into_iter()
+            .map(|o| OpenRun {
+                start: 0,
+                run_at: 0,
+                run: o.run,
+                after_space: false,
+            })
+            .collect()
     }
 
     fn push_text(&mut self, s: &str, pre: bool) {
@@ -318,7 +368,11 @@ impl Inline {
     /// 写出一个非空白字符（前面有待写的空格先写空格）。
     fn push_char(&mut self, c: char) {
         if self.pending_space {
-            for o in self.open.iter_mut().filter(|o| o.after_space && o.start == self.chars) {
+            for o in self
+                .open
+                .iter_mut()
+                .filter(|o| o.after_space && o.start == self.chars)
+            {
                 o.start += 1;
             }
             for i in self.space_ids.drain(..) {
@@ -364,19 +418,38 @@ impl Inline {
             .iter()
             .filter_map(|r| {
                 let (s, e) = (r.start.max(a), (r.start + r.len).min(z));
-                (e > s).then(|| Run { start: s - a, len: e - s, ..r.clone() })
+                (e > s).then(|| Run {
+                    start: s - a,
+                    len: e - s,
+                    ..r.clone()
+                })
             })
             .collect();
         let after = |o: usize| if from == 0 { true } else { o >= from };
-        out.ids = self.ids.iter().filter(|(_, o)| after(*o) && *o <= to).map(|(i, o)| (i.clone(), o.saturating_sub(a).min(out.chars))).collect();
-        out.images = self.images.iter().filter(|im| im.at >= a && im.at < z).map(|im| InlineImage { at: im.at - a, ..im.clone() }).collect();
+        out.ids = self
+            .ids
+            .iter()
+            .filter(|(_, o)| after(*o) && *o <= to)
+            .map(|(i, o)| (i.clone(), o.saturating_sub(a).min(out.chars)))
+            .collect();
+        out.images = self
+            .images
+            .iter()
+            .filter(|im| im.at >= a && im.at < z)
+            .map(|im| InlineImage {
+                at: im.at - a,
+                ..im.clone()
+            })
+            .collect();
         out
     }
 }
 
 /// 文档末尾没落到内容上的锚点（`…</p><span id="x"></span></body>`）挂到最后一个块的末尾。
 fn attach_trailing(blocks: &mut [Block], ids: Vec<String>) {
-    let Some(last) = blocks.last_mut() else { return };
+    let Some(last) = blocks.last_mut() else {
+        return;
+    };
     match &mut last.kind {
         Kind::Container(c) if !c.is_empty() => attach_trailing(c, ids),
         Kind::Text { text, .. } => {
@@ -403,10 +476,18 @@ enum Special {
 
 /// 块级元素只包着一段文字（[`Doc::block`] 判的 `own`）：这段文字就是本元素的块，换上本元素的计算值、标题级别和盒子。
 /// 按这台阅读器的排法（[`crate::css::DeviceLine`]）改层叠出来的 `line-height`、em。只给 `--styles --device=` 的分析用。
-fn device_line_height(el: &ElementRef, decls: &mut crate::css::Decls, line: crate::css::DeviceLine) {
+fn device_line_height(
+    el: &ElementRef,
+    decls: &mut crate::css::Decls,
+    line: crate::css::DeviceLine,
+) {
     let name = el.value().name();
-    let v = decls.get("line-height").map(|v| v.trim().to_ascii_lowercase());
-    let number = v.as_deref().is_some_and(|v| v == "normal" || v.parse::<f64>().is_ok());
+    let v = decls
+        .get("line-height")
+        .map(|v| v.trim().to_ascii_lowercase());
+    let number = v
+        .as_deref()
+        .is_some_and(|v| v == "normal" || v.parse::<f64>().is_ok());
     if let Some(d) = line.length_em {
         // 不带单位的数、`normal` 当没写；全书缺省是 d 倍（随字号，写成数字往下继承）
         if number {
@@ -417,13 +498,23 @@ fn device_line_height(el: &ElementRef, decls: &mut crate::css::Decls, line: crat
         }
     }
     // 标题和标题里的不换：Move 的标题只认字号关键字、不认上下外边距（`block_style`、`box_fix` 管，`wash/root_em.rs` 同样跳过）
-    let in_heading = el.ancestors().filter_map(ElementRef::wrap).chain(std::iter::once(*el)).any(|a| bookconv::html::heading_level_of(a.value().name()).is_some());
+    let in_heading = el
+        .ancestors()
+        .filter_map(ElementRef::wrap)
+        .chain(std::iter::once(*el))
+        .any(|a| bookconv::html::heading_level_of(a.value().name()).is_some());
     if line.em_root && !in_heading {
         root_em(decls);
     }
     if line.except_p && line.length_em.is_none() {
-        let inline = el.value().attr("style").is_some_and(|s| s.to_ascii_lowercase().contains("line-height"));
-        if (name == "p" && !inline) || v.as_deref() == Some("normal") || (name == "html" && v.is_none()) {
+        let inline = el
+            .value()
+            .attr("style")
+            .is_some_and(|s| s.to_ascii_lowercase().contains("line-height"));
+        if (name == "p" && !inline)
+            || v.as_deref() == Some("normal")
+            || (name == "html" && v.is_none())
+        {
             decls.insert("line-height".into(), "1".into());
         }
     }
@@ -438,17 +529,28 @@ fn root_em(decls: &mut crate::css::Decls) {
             .split_whitespace()
             .map(|t| {
                 let lower = t.to_ascii_lowercase();
-                let num = |suffix: &str| lower.strip_suffix(suffix).and_then(|n| n.parse::<f64>().ok());
+                let num = |suffix: &str| {
+                    lower
+                        .strip_suffix(suffix)
+                        .and_then(|n| n.parse::<f64>().ok())
+                };
                 match (num("rem"), num("em"), num("%")) {
                     (Some(_), _, _) => t.to_string(),
                     // 字号的 px 是屏幕像素（同盒子长度，[`crate::css::device_px_em`]）
                     _ if font && num("px").is_some() && crate::css::device_px_em().is_some() => {
                         changed = true;
-                        format!("{}rem", num("px").unwrap_or(0.0) / crate::css::device_px_em().unwrap_or(1.0))
+                        format!(
+                            "{}rem",
+                            num("px").unwrap_or(0.0) / crate::css::device_px_em().unwrap_or(1.0)
+                        )
                     }
                     (None, Some(n), _) => {
                         changed = true;
-                        if font { format!("{n}rem") } else { format!("{}pt", n * crate::css::PT_PER_EM) }
+                        if font {
+                            format!("{n}rem")
+                        } else {
+                            format!("{}pt", n * crate::css::PT_PER_EM)
+                        }
                     }
                     (None, None, Some(n)) if font => {
                         changed = true;
@@ -493,14 +595,18 @@ fn absorb_whole_span_style(kind: &mut Kind, comp: Computed) -> Computed {
     if let Kind::Text { text, runs, .. } = kind {
         // 几层都覆盖整段时（`<span class="大字"><span class="bold">目录</span></span>`）取最里层，它的计算值已经含外层；链接照留
         let n = text.chars().count();
-        let whole = !runs.is_empty() && runs.iter().all(|r| r.start == 0 && r.len == n && !r.note_ref);
+        let whole = !runs.is_empty()
+            && runs
+                .iter()
+                .all(|r| r.start == 0 && r.len == n && !r.note_ref);
         let inner = runs.iter().rev().find_map(|r| r.comp.as_ref()).cloned();
         if let (true, Some(rc)) = (whole, inner) {
             if !rc.superscript && !rc.subscript && !rc.has_border() && rc.background.is_none() {
                 // `<a>` 的颜色是链接颜色，留在链接区间上（Send to Kindle 写成 `$576`/`$577`），不并进段落
                 let anchor = runs.iter().any(|r| r.anchor);
                 let color = comp.color;
-                let (old_fs, old_lh) = (comp.font_size, comp.line_height.map(|l| l * comp.font_size));
+                let (old_fs, old_lh) =
+                    (comp.font_size, comp.line_height.map(|l| l * comp.font_size));
                 comp = merge_text_style(&comp, &rc);
                 // 段落的首行缩进按段落自己的字号（em 换成并进来的字号的）；段落的行高是明确的值（自己写的、继承来的）时取段落和行内
                 // 元素两者大的（《人生海海》大字 span 按 span，《消失的爱人》整段 0.75em 的 span 照段落继承的 1.2），`normal` 的照行内
@@ -529,12 +635,24 @@ fn absorb_whole_span_style(kind: &mut Kind, comp: Computed) -> Computed {
 }
 
 /// 有背景、边框、内边距或宽度的块级元素（[`Doc::block`] 判的 `boxed`）：写成容器套子块，盒子在容器上。
-fn container_block(name: &str, comp: Computed, children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Gap) -> Block {
+fn container_block(
+    name: &str,
+    comp: Computed,
+    children: Vec<Block>,
+    heading: Option<u8>,
+    lens: BoxLens,
+    lead: Vec<String>,
+    pre_gap: Gap,
+) -> Block {
     // 页面一级的 `cover` 背景：照 Send to Kindle 写整页范围（`$645`），背景铺满一页而不是只在内容范围里画（《绍宋》卷首语，真机 ✓）。
     // 2026-10-08 试过也给 `fixed` 写了尺寸的写（制作说明），真机没有效果，维护者说不改了，撤回。只认 body：别的块上没见过样本。
     let page_bg = comp.bg_cover;
     let attrs = if name == "body" && page_bg && comp.bg_image.is_some() {
-        let b = BG_PAGE_BOUNDS_KEYS.iter().zip([0.0, 0.0, 100.0, 100.0]).map(|(&k, v)| (k, num(v, U_PERCENT))).collect();
+        let b = BG_PAGE_BOUNDS_KEYS
+            .iter()
+            .zip([0.0, 0.0, 100.0, 100.0])
+            .map(|(&k, v)| (k, num(v, U_PERCENT)))
+            .collect();
         vec![(BG_PAGE_BOUNDS, Value::Struct(b))]
     } else {
         Vec::new()
@@ -564,8 +682,22 @@ fn container_block(name: &str, comp: Computed, children: Vec<Block>, heading: Op
 
 /// 没有背景的包裹层摊平：竖直外边距、内边距并进首尾子块（开头的锚点、空段留下的间距、标题级别给第一个子块），
 /// 水平外边距加到每个子块上。
-fn flatten_wrapper(children: Vec<Block>, heading: Option<u8>, lens: BoxLens, lead: Vec<String>, pre_gap: Gap, out: &mut Vec<Block>) {
-    let BoxLens { margin_top, margin_bottom, margin_left: ml, margin_right: mr, padding, .. } = lens;
+fn flatten_wrapper(
+    children: Vec<Block>,
+    heading: Option<u8>,
+    lens: BoxLens,
+    lead: Vec<String>,
+    pre_gap: Gap,
+    out: &mut Vec<Block>,
+) {
+    let BoxLens {
+        margin_top,
+        margin_bottom,
+        margin_left: ml,
+        margin_right: mr,
+        padding,
+        ..
+    } = lens;
     let n = children.len();
     let mut lead = Some(lead);
     let mut pre_gap = Some(pre_gap);
@@ -599,7 +731,14 @@ impl Doc<'_> {
     fn inline(&self) -> Inline {
         let mut inl = Inline::new();
         for link in self.links.borrow().iter() {
-            inl.open_run(Run { start: 0, len: 0, comp: None, link: Some(link.clone()), note_ref: false, anchor: false });
+            inl.open_run(Run {
+                start: 0,
+                len: 0,
+                comp: None,
+                link: Some(link.clone()),
+                note_ref: false,
+                anchor: false,
+            });
         }
         inl
     }
@@ -623,8 +762,17 @@ impl Doc<'_> {
         let mut decls = self.sheet.cascade(el, self.path);
         crate::css::presentational_hints(el, &mut decls);
         let get = |k: &str| {
-            let css = decls.get(k).filter(|v| v.trim() != "auto").and_then(|v| crate::css::parse_box_len(v));
-            css.or_else(|| el.value().attr(k).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| *n > 0.0).map(|n| Len::Pt(n * 0.45)))
+            let css = decls
+                .get(k)
+                .filter(|v| v.trim() != "auto")
+                .and_then(|v| crate::css::parse_box_len(v));
+            css.or_else(|| {
+                el.value()
+                    .attr(k)
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .filter(|n| *n > 0.0)
+                    .map(|n| Len::Pt(n * 0.45))
+            })
         };
         (get("width"), get("height"))
     }
@@ -676,7 +824,10 @@ impl Doc<'_> {
             // 里面折出了空段（`<p><br/></p>`）：本元素的上下外边距照留（Send to Kindle 同样，见 [`Gap`]）
             if self.gap.borrow().h > inner_from {
                 let l = BoxLens::of(&comp);
-                self.gap.borrow_mut().margins.push((l.margin_top, l.margin_bottom));
+                self.gap
+                    .borrow_mut()
+                    .margins
+                    .push((l.margin_top, l.margin_bottom));
             }
             self.gap.borrow_mut().prepend(pre_gap);
             return;
@@ -688,9 +839,19 @@ impl Doc<'_> {
         }
         // 没有背景、边框、阴影的块：左右内边距并进外边距，不为它包容器（Send to Kindle 同样：《绍宋》章名 `margin:0 auto;padding:0 4px`
         // 写成文字块的左右外边距 0.469%，2026-10-14 重推的样本；显示一样）
-        if comp.background.is_none() && comp.bg_image.is_none() && !comp.has_border() && comp.box_shadow.is_none() {
-            lens.margin_left = Horiz { em: lens.margin_left.em + lens.padding_h[1].em, pct: lens.margin_left.pct + lens.padding_h[1].pct };
-            lens.margin_right = Horiz { em: lens.margin_right.em + lens.padding_h[0].em, pct: lens.margin_right.pct + lens.padding_h[0].pct };
+        if comp.background.is_none()
+            && comp.bg_image.is_none()
+            && !comp.has_border()
+            && comp.box_shadow.is_none()
+        {
+            lens.margin_left = Horiz {
+                em: lens.margin_left.em + lens.padding_h[1].em,
+                pct: lens.margin_left.pct + lens.padding_h[1].pct,
+            };
+            lens.margin_right = Horiz {
+                em: lens.margin_right.em + lens.padding_h[0].em,
+                pct: lens.margin_right.pct + lens.padding_h[0].pct,
+            };
             lens.padding_h = [Horiz::default(); 2];
             lens.padding[1] = 0.0;
             lens.padding[3] = 0.0;
@@ -698,8 +859,16 @@ impl Doc<'_> {
         // 自己只包着一个文字块（普通段落）：本元素就是这个块。
         // 有背景或内边距的块写成容器套文字（样本里带背景色的 h1 就是这样；背景、内边距、负外边距直接放在文字段落上，
         // Kindle 上长标题会溢出屏幕，2026-10-05 真机）。
-        let boxed = comp.background.is_some() || comp.bg_image.is_some() || lens.padding.iter().any(|p| *p != 0.0) || comp.has_border() || comp.box_shadow.is_some();
-        let own = !boxed && children.len() == 1 && matches!(children[0].kind, Kind::Text { .. }) && children[0].is_anonymous() && children[0].inline;
+        let boxed = comp.background.is_some()
+            || comp.bg_image.is_some()
+            || lens.padding.iter().any(|p| *p != 0.0)
+            || comp.has_border()
+            || comp.box_shadow.is_some();
+        let own = !boxed
+            && children.len() == 1
+            && matches!(children[0].kind, Kind::Text { .. })
+            && children[0].is_anonymous()
+            && children[0].inline;
         // 有宽度的包裹层也写成容器，宽度写在容器上；只有自己文字的块宽度写在文字上（Send to Kindle 同样：《金庸》60% 宽的 div、
         // 《平凡的世界》`width:100%` 的章标题）
         let boxed = boxed || (!own && comp.width.is_some());
@@ -709,7 +878,9 @@ impl Doc<'_> {
             return;
         }
         if boxed {
-            out.push(container_block(name, comp, children, heading, lens, lead, pre_gap));
+            out.push(container_block(
+                name, comp, children, heading, lens, lead, pre_gap,
+            ));
             return;
         }
         flatten_wrapper(children, heading, lens, lead, pre_gap, out);
@@ -722,7 +893,11 @@ impl Doc<'_> {
             "ul" | "ol" => {
                 // 列表符号看列表项（`li` 上写的优先，《雪国》把 `cjk-ideographic` 写在 `li` 上）；列表项写成
                 // `display:block` 的不显示符号（《啸风山庄》`li {display:block}`），和 `list-style:none` 一样当普通块。
-                let first = el.children().filter_map(ElementRef::wrap).find(|c| c.value().name() == "li").map(|li| self.comp(&li, &comp));
+                let first = el
+                    .children()
+                    .filter_map(ElementRef::wrap)
+                    .find(|c| c.value().name() == "li")
+                    .map(|li| self.comp(&li, &comp));
                 // 列表项上的符号只用来写列表；当普通块往下走时交回的是没改过的计算值
                 let mut comp = comp.clone();
                 if let Some(li) = &first {
@@ -730,7 +905,9 @@ impl Doc<'_> {
                         comp.list_style = li.list_style.clone();
                     }
                 }
-                let marker = first.as_ref().is_none_or(|li| li.display.as_deref().is_none_or(|d| d == "list-item"));
+                let marker = first
+                    .as_ref()
+                    .is_none_or(|li| li.display.as_deref().is_none_or(|d| d == "list-item"));
                 if marker && comp.list_style.as_deref() != Some("none") {
                     return Special::Own(self.list(el, comp, first));
                 }
@@ -756,9 +933,26 @@ impl Doc<'_> {
     /// 自己的外边距、内边距照计算值的块（列表、表格、单元格、水平线用；不摊平、不并进子块）。
     fn boxed(&self, kind: Kind, comp: Computed, id: Option<&str>) -> Block {
         let l = BoxLens::of(&comp);
-        let mut b = Block::anonymous(kind, comp, id.map(|i| vec![(i.to_string(), 0)]).unwrap_or_default());
-        (b.margin_top, b.margin_bottom, b.margin_left, b.margin_right, b.padding, b.padding_h) =
-            (l.margin_top, l.margin_bottom, l.margin_left, l.margin_right, l.padding, l.padding_h);
+        let mut b = Block::anonymous(
+            kind,
+            comp,
+            id.map(|i| vec![(i.to_string(), 0)]).unwrap_or_default(),
+        );
+        (
+            b.margin_top,
+            b.margin_bottom,
+            b.margin_left,
+            b.margin_right,
+            b.padding,
+            b.padding_h,
+        ) = (
+            l.margin_top,
+            l.margin_bottom,
+            l.margin_left,
+            l.margin_right,
+            l.padding,
+            l.padding_h,
+        );
         b
     }
 
@@ -767,7 +961,11 @@ impl Doc<'_> {
         let mut kids = Vec::new();
         self.children(el, &comp, &mut kids);
         let id = el.value().attr("id");
-        if ty.is_some() && kids.len() == 1 && matches!(kids[0].kind, Kind::Text { .. }) && kids[0].is_anonymous() {
+        if ty.is_some()
+            && kids.len() == 1
+            && matches!(kids[0].kind, Kind::Text { .. })
+            && kids[0].is_anonymous()
+        {
             if let Some(k) = kids.pop() {
                 // 文字的样式用里面那个块的（`<li><p class="footnote">` 的字号、缩进、行高、字体，以前丢了，用的是 `<li>` 的），
                 // 盒子（边距、内边距、背景、边框）用本元素的
@@ -792,7 +990,11 @@ impl Doc<'_> {
     /// 直接放在 `<ul>`/`<ol>` 里的文字、行内元素、图片（不在 `<li>` 里）照浏览器当匿名块排在列表里、不带符号（以前丢掉）。
     fn list(&self, el: ElementRef, comp: Computed, mut first_li: Option<Computed>) -> Block {
         let ordered = el.value().name() == "ol";
-        let depth = el.ancestors().filter_map(ElementRef::wrap).filter(|a| a.value().name() == "ul").count();
+        let depth = el
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .filter(|a| a.value().name() == "ul")
+            .count();
         let style = match comp.list_style.as_deref() {
             Some("disc") => LIST_DISC,
             Some("circle") => LIST_CIRCLE,
@@ -804,7 +1006,12 @@ impl Doc<'_> {
             Some("lower-alpha" | "lower-latin") => LIST_LOWER_ALPHA,
             Some("upper-alpha" | "upper-latin") => LIST_UPPER_ALPHA,
             Some("lower-greek") => LIST_LOWER_GREEK,
-            Some("cjk-ideographic" | "simp-chinese-informal" | "trad-chinese-informal" | "cjk-decimal") => LIST_CJK,
+            Some(
+                "cjk-ideographic"
+                | "simp-chinese-informal"
+                | "trad-chinese-informal"
+                | "cjk-decimal",
+            ) => LIST_CJK,
             _ if ordered => LIST_DECIMAL,
             _ => [LIST_DISC, LIST_CIRCLE, LIST_SQUARE][depth.min(2)],
         };
@@ -825,7 +1032,11 @@ impl Doc<'_> {
                 continue;
             }
             let mut item = self.wrap_children(child, c, Some(NODE_LIST_ITEM));
-            if let Some(v) = child.value().attr("value").and_then(|v| v.trim().parse::<i64>().ok()) {
+            if let Some(v) = child
+                .value()
+                .attr("value")
+                .and_then(|v| v.trim().parse::<i64>().ok())
+            {
                 item.attrs.push((LIST_START, Value::Int(v)));
             }
             items.push(item);
@@ -835,7 +1046,11 @@ impl Doc<'_> {
         let mut b = self.boxed(Kind::Container(items), comp, el.value().attr("id"));
         b.ty = Some(NODE_LIST);
         b.attrs.push((LIST_STYLE, Value::Symbol(style)));
-        if let Some(n) = el.value().attr("start").and_then(|v| v.trim().parse::<i64>().ok()) {
+        if let Some(n) = el
+            .value()
+            .attr("start")
+            .and_then(|v| v.trim().parse::<i64>().ok())
+        {
             b.attrs.push((LIST_START, Value::Int(n)));
         }
         if inside {
@@ -864,7 +1079,8 @@ impl Doc<'_> {
                     let mut cap = self.wrap_children(part, pc, None);
                     cap.ty = Some(NODE_TEXT);
                     cap.attrs.push((NOTE_CONTENT, Value::Symbol(CAPTION)));
-                    cap.extra.push((P_LAYOUT_HINTS, Value::List(vec![Value::Symbol(CAPTION)])));
+                    cap.extra
+                        .push((P_LAYOUT_HINTS, Value::List(vec![Value::Symbol(CAPTION)])));
                     parts.push(cap);
                 }
                 tag @ ("thead" | "tbody" | "tfoot") => {
@@ -874,18 +1090,28 @@ impl Doc<'_> {
                         _ => NODE_TBODY,
                     };
                     let mut rows = Vec::new();
-                    for tr in part.children().filter_map(ElementRef::wrap).filter(|e| e.value().name() == "tr") {
+                    for tr in part
+                        .children()
+                        .filter_map(ElementRef::wrap)
+                        .filter(|e| e.value().name() == "tr")
+                    {
                         let rc = self.comp(&tr, &pc);
                         let mut cells = Vec::new();
                         let mut widths = Vec::new();
                         let mut naturals = Vec::new();
-                        for td in tr.children().filter_map(ElementRef::wrap).filter(|e| matches!(e.value().name(), "td" | "th")) {
+                        for td in tr
+                            .children()
+                            .filter_map(ElementRef::wrap)
+                            .filter(|e| matches!(e.value().name(), "td" | "th"))
+                        {
                             let mut cc = self.comp(&td, &rc);
                             if cc.width.is_none() {
                                 // HTML 属性不带单位的是像素（`width="30"`，Send to Kindle 按 30px 算列宽，Q129）
-                                cc.width = td.value().attr("width").and_then(|w| match w.trim().parse::<f64>() {
-                                    Ok(n) => Some(Len::Pt(n * 0.75)),
-                                    Err(_) => crate::css::parse_len(w),
+                                cc.width = td.value().attr("width").and_then(|w| {
+                                    match w.trim().parse::<f64>() {
+                                        Ok(n) => Some(Len::Pt(n * 0.75)),
+                                        Err(_) => crate::css::parse_len(w),
+                                    }
                                 });
                             }
                             // UA 样式：单元格内边距 1px（按 0.45pt，Send to Kindle 写 0.031lh、0.117%，2026-10-14 怪癖测试书 Q97）。
@@ -907,16 +1133,23 @@ impl Doc<'_> {
                                 cell.extra.push((P_SIZING, Value::Symbol(SIZING_VALUE)));
                             }
                             for (attr, key) in [("colspan", P_COLSPAN), ("rowspan", P_ROWSPAN)] {
-                                if let Some(n) = td.value().attr(attr).and_then(|v| v.trim().parse::<i64>().ok()).filter(|n| *n > 1) {
+                                if let Some(n) = td
+                                    .value()
+                                    .attr(attr)
+                                    .and_then(|v| v.trim().parse::<i64>().ok())
+                                    .filter(|n| *n > 1)
+                                {
                                     cell.extra.push((key, Value::Int(n)));
                                 }
                             }
                             cells.push(cell);
                         }
                         if col_widths.is_none() {
-                            col_widths = Some(bookconv::kindle_model::column_percents(&widths, &naturals));
+                            col_widths =
+                                Some(bookconv::kindle_model::column_percents(&widths, &naturals));
                         }
-                        let mut row = Block::anonymous(Kind::Container(cells), rc.inherited(), Vec::new());
+                        let mut row =
+                            Block::anonymous(Kind::Container(cells), rc.inherited(), Vec::new());
                         row.ty = Some(NODE_ROW);
                         rows.push(row);
                     }
@@ -932,7 +1165,11 @@ impl Doc<'_> {
             (TABLE_SPACING_H, num(spacing(comp.border_spacing), U_PT)),
             (TABLE_SPACING_V, num(spacing(comp.border_spacing), U_PT)),
         ];
-        let cols: Vec<Value> = col_widths.unwrap_or_default().into_iter().map(|p| Value::Struct(vec![(P_WIDTH, num(p, U_PERCENT))])).collect();
+        let cols: Vec<Value> = col_widths
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| Value::Struct(vec![(P_WIDTH, num(p, U_PERCENT))]))
+            .collect();
         if !cols.is_empty() {
             attrs.push((TABLE_COLUMNS, Value::List(cols)));
         }
@@ -967,7 +1204,13 @@ impl Doc<'_> {
                 let seg = &chars[line..i];
                 let broken = i < chars.len();
                 if !seg.iter().any(|c| !c.is_whitespace() && *c != OBJ) && (textless || broken) {
-                    alone.extend(taken.images.iter().filter(|im| im.at >= line && im.at < i).map(|im| im.at));
+                    alone.extend(
+                        taken
+                            .images
+                            .iter()
+                            .filter(|im| im.at >= line && im.at < i)
+                            .map(|im| im.at),
+                    );
                 }
                 line = i + 1;
             }
@@ -978,8 +1221,17 @@ impl Doc<'_> {
         let mut cur = 0;
         for &at in &alone {
             self.flush_piece(taken.slice(&chars, cur, at), comp, out);
-            let Some(img) = taken.images.iter().find(|im| im.at == at) else { continue };
-            let mut b = Block::anonymous(Kind::Image { src: img.src.clone(), linked: img.linked }, img.comp.clone(), self.take_pending().into_iter().map(|i| (i, 0)).collect());
+            let Some(img) = taken.images.iter().find(|im| im.at == at) else {
+                continue;
+            };
+            let mut b = Block::anonymous(
+                Kind::Image {
+                    src: img.src.clone(),
+                    linked: img.linked,
+                },
+                img.comp.clone(),
+                self.take_pending().into_iter().map(|i| (i, 0)).collect(),
+            );
             b.gap_before = self.gap.take();
             out.push(b);
             cur = at + 1;
@@ -992,9 +1244,12 @@ impl Doc<'_> {
     fn flush_piece(&self, taken: Inline, comp: &Computed, out: &mut Vec<Block>) {
         if taken.is_empty() {
             if !taken.text.is_empty() {
-                self.gap.borrow_mut().h += BLANK_LINE_FOLD * comp.line_height.unwrap_or(LH_EM) * comp.font_size;
+                self.gap.borrow_mut().h +=
+                    BLANK_LINE_FOLD * comp.line_height.unwrap_or(LH_EM) * comp.font_size;
             }
-            self.pending.borrow_mut().extend(taken.ids.into_iter().map(|(i, _)| i));
+            self.pending
+                .borrow_mut()
+                .extend(taken.ids.into_iter().map(|(i, _)| i));
             return;
         }
         let mut text = taken.text;
@@ -1011,19 +1266,40 @@ impl Doc<'_> {
                 (r.len > 0).then_some(r)
             })
             .collect();
-        let mut ids = taken.ids.into_iter().map(|(i, o)| (i, o.min(chars))).collect();
+        let mut ids = taken
+            .ids
+            .into_iter()
+            .map(|(i, o)| (i, o.min(chars)))
+            .collect();
         prepend_ids(&mut ids, self.take_pending());
-        let mut b = Block::anonymous(Kind::Text { text, runs, images: taken.images }, comp.inherited(), ids);
+        let mut b = Block::anonymous(
+            Kind::Text {
+                text,
+                runs,
+                images: taken.images,
+            },
+            comp.inherited(),
+            ids,
+        );
         b.inline = true;
         b.gap_before = self.gap.take();
         out.push(b);
     }
 
-    fn inline_or_block(&self, node: NodeRef<Node>, block_comp: &Computed, parent: &Computed, inl: &mut Inline, out: &mut Vec<Block>) {
+    fn inline_or_block(
+        &self,
+        node: NodeRef<Node>,
+        block_comp: &Computed,
+        parent: &Computed,
+        inl: &mut Inline,
+        out: &mut Vec<Block>,
+    ) {
         match node.value() {
             Node::Text(t) => inl.push_text(t, parent.pre),
             Node::Element(_) => {
-                let Some(el) = ElementRef::wrap(node) else { return };
+                let Some(el) = ElementRef::wrap(node) else {
+                    return;
+                };
                 let name = el.value().name();
                 if name == "br" {
                     inl.push_break();
@@ -1031,14 +1307,21 @@ impl Doc<'_> {
                 }
                 if let Some(src) = image_src(&el) {
                     let comp = self.comp(&el, parent);
-                    let linked = el.ancestors().filter_map(ElementRef::wrap).any(|a| a.value().name() == "a" && a.value().attr("href").is_some());
+                    let linked = el
+                        .ancestors()
+                        .filter_map(ElementRef::wrap)
+                        .any(|a| a.value().name() == "a" && a.value().attr("href").is_some());
                     let src = resolve_link(self.path, &src).0;
                     if comp.display.as_deref() == Some("block") {
                         self.flush(inl, block_comp, out);
                         // 图片自己的 id（`<img id="filepos152">`）也是锚点
                         let mut lead = self.take_pending();
                         lead.extend(el.value().attr("id").map(str::to_string));
-                        let mut b = Block::anonymous(Kind::Image { src, linked }, comp, lead.into_iter().map(|i| (i, 0)).collect());
+                        let mut b = Block::anonymous(
+                            Kind::Image { src, linked },
+                            comp,
+                            lead.into_iter().map(|i| (i, 0)).collect(),
+                        );
                         b.gap_before = self.gap.take();
                         out.push(b);
                         return;
@@ -1049,11 +1332,21 @@ impl Doc<'_> {
                     }
                     let (width, height) = self.image_size(&el);
                     let alt = el.value().attr("alt").unwrap_or_default().to_string();
-                    inl.push_image(InlineImage { at: 0, src, alt, comp, linked, width, height });
+                    inl.push_image(InlineImage {
+                        at: 0,
+                        src,
+                        alt,
+                        comp,
+                        linked,
+                        width,
+                        height,
+                    });
                     return;
                 }
                 let comp = self.comp(&el, parent);
-                if comp.display.as_deref() == Some("none") || matches!(name, "script" | "style" | "head") {
+                if comp.display.as_deref() == Some("none")
+                    || matches!(name, "script" | "style" | "head")
+                {
                     return;
                 }
                 if crate::css::is_block(&el, &comp) {
@@ -1067,12 +1360,18 @@ impl Doc<'_> {
                 // 空的 inline-block 小方块（《狼厅》微信读书注释图标：19px 黑底圆，注释文字只在属性里）：Send to Kindle 插一个零宽空格，
                 // 区间写背景、圆角、竖直对齐，外边距和宽度（写成右内边距）按 0.75pt 一 px、高度按 0.45pt 写成最小高度，Kindle 上画出
                 // 黑圆点（2026-10-14 怪癖测试书 Q125 真机）
-                if comp.display.as_deref() == Some("inline-block") && el.text().all(|t| t.trim().is_empty()) && el.children().all(|c| !c.value().is_element()) && (comp.background.is_some() || comp.width.is_some()) {
+                if comp.display.as_deref() == Some("inline-block")
+                    && el.text().all(|t| t.trim().is_empty())
+                    && el.children().all(|c| !c.value().is_element())
+                    && (comp.background.is_some() || comp.width.is_some())
+                {
                     let fs = comp.font_size;
                     let mut rc = comp.clone();
                     for side in [1, 3] {
                         rc.margin[side] = comp.margin[side].map(|l| match l {
-                            Len::Pt(n) => Len::Em(n / 0.45 * 0.75 / bookconv::cascade::PT_PER_EM / fs),
+                            Len::Pt(n) => {
+                                Len::Em(n / 0.45 * 0.75 / bookconv::cascade::PT_PER_EM / fs)
+                            }
                             l => l,
                         });
                     }
@@ -1084,7 +1383,14 @@ impl Doc<'_> {
                         Len::Pt(n) => Len::Pt(n * 0.6),
                         l => l,
                     });
-                    inl.open_run(Run { start: 0, len: 0, comp: Some(rc), link: None, note_ref: false, anchor: false });
+                    inl.open_run(Run {
+                        start: 0,
+                        len: 0,
+                        comp: Some(rc),
+                        link: None,
+                        note_ref: false,
+                        anchor: false,
+                    });
                     inl.push_char('\u{200B}');
                     if let Some(o) = inl.open.pop() {
                         inl.close_run(o);
@@ -1097,7 +1403,14 @@ impl Doc<'_> {
                     .filter(|h| !bookconv::html::is_external(h))
                     .map(|h| {
                         let (path, frag) = resolve_link(self.path, h);
-                        (if path.is_empty() { self.path.to_string() } else { path }, frag.unwrap_or_default())
+                        (
+                            if path.is_empty() {
+                                self.path.to_string()
+                            } else {
+                                path
+                            },
+                            frag.unwrap_or_default(),
+                        )
                     });
                 let styled = run_differs(&comp, block_comp);
                 // 区间先登记成「开着的」：子节点里遇到块或图片切开时，`flush` 在切开处截断它、到新缓冲从 0 接着开
@@ -1108,7 +1421,14 @@ impl Doc<'_> {
                     self.links.borrow_mut().extend(link.clone());
                 }
                 if opened {
-                    inl.open_run(Run { start: 0, len: 0, comp: styled.then(|| comp.clone()), link, note_ref: false, anchor: name == "a" });
+                    inl.open_run(Run {
+                        start: 0,
+                        len: 0,
+                        comp: styled.then(|| comp.clone()),
+                        link,
+                        note_ref: false,
+                        anchor: name == "a",
+                    });
                 }
                 for c in el.children() {
                     self.inline_or_block(c, block_comp, &comp, inl, out);
@@ -1157,7 +1477,11 @@ impl Block {
     }
 
     fn is_anonymous(&self) -> bool {
-        self.margin_top == 0.0 && self.margin_bottom == 0.0 && self.heading.is_none() && self.margin_left == Horiz::default() && self.ty.is_none()
+        self.margin_top == 0.0
+            && self.margin_bottom == 0.0
+            && self.heading.is_none()
+            && self.margin_left == Horiz::default()
+            && self.ty.is_none()
     }
 }
 
@@ -1168,7 +1492,10 @@ fn image_src(el: &ElementRef) -> Option<String> {
         // SVG 的 `<image xlink:href>`：属性在 xlink 命名空间里，`attr()` 只认无命名空间的，按本地名找（《绍宋》封面页
         // `<svg><image xlink:href="../Images/cover.png"/></svg>`；以前找不到、封面页整页丢掉——优化器以前把 SVG 封面换成 `<img>`，
         // 只修复模式不换了才露出来，2026-10-08 真机：封面没了）。
-        "image" => v.attrs().find(|(k, _)| *k == "href").map(|(_, val)| val.to_string()),
+        "image" => v
+            .attrs()
+            .find(|(k, _)| *k == "href")
+            .map(|(_, val)| val.to_string()),
         _ => None,
     }
 }
@@ -1195,7 +1522,9 @@ fn run_differs(a: &Computed, b: &Computed) -> bool {
 /// 行内元素有左右外边距或内边距（Send to Kindle 写在行内区间上：2026-10-14 怪癖测试书 Q88–Q92，`margin-left:2em` 写 2em、`30px` 写
 /// 13.5pt；以前丢了）。
 pub(super) fn inline_box(c: &Computed) -> bool {
-    [c.margin[1], c.margin[3], c.padding[1], c.padding[3]].iter().any(|l| l.is_some_and(|l| !l.is_zero()))
+    [c.margin[1], c.margin[3], c.padding[1], c.padding[3]]
+        .iter()
+        .any(|l| l.is_some_and(|l| !l.is_zero()))
 }
 
 /// 解析好的一个文档：(spine 下标, 路径, 语言, 块)。
@@ -1206,7 +1535,8 @@ pub(super) const BREAK_MARK: &str = "\0break";
 
 /// 块（或它最前面的子孙）开头有分页记号。
 pub(super) fn starts_with_break(b: &Block) -> bool {
-    b.ids.iter().any(|(i, o)| i == BREAK_MARK && *o == 0) || matches!(&b.kind, Kind::Container(c) if c.first().is_some_and(starts_with_break))
+    b.ids.iter().any(|(i, o)| i == BREAK_MARK && *o == 0)
+        || matches!(&b.kind, Kind::Container(c) if c.first().is_some_and(starts_with_break))
 }
 
 /// 去掉块树里的分页记号。
@@ -1223,7 +1553,9 @@ fn strip_breaks(blocks: &mut [Block]) {
 /// 切在顶层；顶层只有一个容器（带背景的 body）时切它的子块，每节一份容器（背景照带，上外边距留在第一节、下外边距留在最后一节，
 /// 同 Amazon）。文件开头的分页不用切。
 pub(super) fn split_at_breaks(mut blocks: Vec<Block>) -> Vec<Vec<Block>> {
-    let cut = |v: &[Block]| -> Vec<usize> { (1..v.len()).filter(|&i| starts_with_break(&v[i])).collect() };
+    let cut = |v: &[Block]| -> Vec<usize> {
+        (1..v.len()).filter(|&i| starts_with_break(&v[i])).collect()
+    };
     let mut parts: Vec<Vec<Block>> = Vec::new();
     let top = cut(&blocks);
     if !top.is_empty() {
@@ -1240,7 +1572,11 @@ pub(super) fn split_at_breaks(mut blocks: Vec<Block>) -> Vec<Vec<Block>> {
         };
         if !inner.is_empty() {
             let shell = only.clone();
-            let Kind::Container(mut rest) = std::mem::replace(&mut only.kind, Kind::Container(Vec::new())) else { unreachable!() };
+            let Kind::Container(mut rest) =
+                std::mem::replace(&mut only.kind, Kind::Container(Vec::new()))
+            else {
+                unreachable!()
+            };
             let mut chunks = Vec::new();
             for &i in inner.iter().rev() {
                 chunks.push(rest.split_off(i));
@@ -1305,9 +1641,16 @@ pub(super) fn apply_gaps(blocks: &mut [Block]) {
 
 pub(super) fn collapse_siblings(blocks: &mut [Block]) {
     for i in 0..blocks.len() {
-        let prev_bottom = if i > 0 { blocks[i - 1].margin_bottom } else { 0.0 };
+        let prev_bottom = if i > 0 {
+            blocks[i - 1].margin_bottom
+        } else {
+            0.0
+        };
         // 夹着空段的：外边距连同空段的逐对折叠（[`Gap::chain`]），合成的放在后一块的上边距
-        if let Some(total) = blocks[i].gap_before.chain(prev_bottom, blocks[i].margin_top) {
+        if let Some(total) = blocks[i]
+            .gap_before
+            .chain(prev_bottom, blocks[i].margin_top)
+        {
             blocks[i].margin_top = total;
             blocks[i].gap_before.margins.clear();
             if i > 0 {
@@ -1354,7 +1697,11 @@ fn mark_bare(children: &mut [Block], comp: &Computed) {
     let inherited = comp.inherited();
     for c in children {
         // 行内区间的样式相对段落写，段落样式空着照样成立
-        if matches!(c.kind, Kind::Text { .. }) && c.is_anonymous() && c.inline && c.comp == inherited {
+        if matches!(c.kind, Kind::Text { .. })
+            && c.is_anonymous()
+            && c.inline
+            && c.comp == inherited
+        {
             c.bare = true;
         }
     }
@@ -1407,72 +1754,109 @@ pub(super) fn book_language(book: &Loaded) -> Option<String> {
 /// body 的左右边距照算。
 ///
 /// 元素套得太深（超过 [`MAX_NESTING`]）的书报错；套得较深的文档在单独的大栈线程里解析（见 [`DEEP_NESTING`]）。
-pub(super) fn parse_docs(book: &Loaded, media: Option<crate::css::MediaEnv>, faithful: bool) -> Result<Vec<ParsedDoc<'_>>, String> {
-    let css: HashMap<&str, &str> = book.css.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+pub(super) fn parse_docs(
+    book: &Loaded,
+    media: Option<crate::css::MediaEnv>,
+    faithful: bool,
+) -> Result<Vec<ParsedDoc<'_>>, String> {
+    let css: HashMap<&str, &str> = book
+        .css
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
     let book_lang = book_language(book);
-    let sheets: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::css::Rules>>> = Default::default();
+    let sheets: std::sync::Mutex<HashMap<String, std::sync::Arc<crate::css::Rules>>> =
+        Default::default();
     let docs: Vec<(usize, &bookconv::epubbook::Doc)> = book.docs.iter().enumerate().collect();
-    let parse_blocks = |html: &Html, doc: &bookconv::epubbook::Doc| -> (Option<String>, Vec<Block>) {
-        let sheet = Sheet::for_doc(html, &doc.path, media.as_ref(), |path| {
-            let c = css.get(path)?;
-            let cached = sheets.lock().unwrap_or_else(|e| e.into_inner()).get(path).cloned();
-            // 没解析过的在锁外解析（几个线程同时碰上同一份时各解析一次，结果一样，留先放进去的那份）
-            Some(cached.unwrap_or_else(|| {
-                let r = crate::css::Rules::parse(c, path, media.as_ref());
-                sheets.lock().unwrap_or_else(|e| e.into_inner()).entry(path.to_string()).or_insert(r).clone()
-            }))
-        });
-        let root = html.root_element();
-        let lang = lang_attr(&root).map(str::to_string).or_else(|| book_lang.clone());
-        let d = Doc { path: &doc.path, sheet, lang: lang.clone(), pending: Default::default(), gap: Default::default(), links: Default::default() };
-        let mut blocks = Vec::new();
-        let root_comp = d.comp(&root, &Computed::root());
-        if let Some(body) = root.children().filter_map(ElementRef::wrap).find(|e| e.value().name() == "body") {
-            // body 的左右外边距、内边距不写（Send to Kindle 同样：《人生海海》《ABC谋杀案》body `margin:0 5pt`、《绍宋》新版
-            // `padding:1em` 都没有出现在段落上，2026-10-08；更早的《ABC谋杀案》样本加到了每段上，那是另一版 EPUB）。
-            // 书里按 body 内容宽度算的百分比折算成整页的（《雪国》body 左右 1%，段落的 1% 写 0.98%）。
-            // 例外：文件里有块的左（右）外边距是负的，这一侧 body 的边距照旧加到每个块上（《罗杰疑案》《ABC谋杀案》章标题
-            // `margin:-2em` 两侧都留；《平凡的世界》只有左边 `-1em` 的那几个文件只留左边）。
-            let mut bc = d.comp(&body, &root_comp);
-            if faithful {
-                d.block(body, bc, &mut blocks);
-                attach_trailing(&mut blocks, d.take_pending());
-                collapse_siblings(&mut blocks);
-                return (d.lang.clone(), blocks);
-            }
-            let fs = bc.font_size;
-            let side = |i: usize| {
-                let (m, p) = (to_horiz(bc.margin[i], fs), to_horiz(bc.padding[i], fs));
-                Horiz { em: m.em + p.em, pct: m.pct + p.pct }
+    let parse_blocks =
+        |html: &Html, doc: &bookconv::epubbook::Doc| -> (Option<String>, Vec<Block>) {
+            let sheet = Sheet::for_doc(html, &doc.path, media.as_ref(), |path| {
+                let c = css.get(path)?;
+                let cached = sheets
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(path)
+                    .cloned();
+                // 没解析过的在锁外解析（几个线程同时碰上同一份时各解析一次，结果一样，留先放进去的那份）
+                Some(cached.unwrap_or_else(|| {
+                    let r = crate::css::Rules::parse(c, path, media.as_ref());
+                    sheets
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .entry(path.to_string())
+                        .or_insert(r)
+                        .clone()
+                }))
+            });
+            let root = html.root_element();
+            let lang = lang_attr(&root)
+                .map(str::to_string)
+                .or_else(|| book_lang.clone());
+            let d = Doc {
+                path: &doc.path,
+                sheet,
+                lang: lang.clone(),
+                pending: Default::default(),
+                gap: Default::default(),
+                links: Default::default(),
             };
-            let (left, right) = (side(3), side(1));
-            for i in [1, 3] {
-                bc.margin[i] = None;
-                bc.padding[i] = None;
-            }
-            d.block(body, bc, &mut blocks);
-            let (neg_l, neg_r) = (has_negative(&blocks, true), has_negative(&blocks, false));
-            let rem = |h: Horiz| h.em + h.pct / 100.0 * PAGE_WIDTH_EM;
-            let width = PAGE_WIDTH_EM - if neg_l { 0.0 } else { rem(left) } - if neg_r { 0.0 } else { rem(right) };
-            if width > 1.0 && width < PAGE_WIDTH_EM {
-                scale_percent(&mut blocks, width / PAGE_WIDTH_EM);
-            }
-            for b in &mut blocks {
-                if neg_l {
-                    b.margin_left.em += left.em;
-                    b.margin_left.pct += left.pct;
+            let mut blocks = Vec::new();
+            let root_comp = d.comp(&root, &Computed::root());
+            if let Some(body) = root
+                .children()
+                .filter_map(ElementRef::wrap)
+                .find(|e| e.value().name() == "body")
+            {
+                // body 的左右外边距、内边距不写（Send to Kindle 同样：《人生海海》《ABC谋杀案》body `margin:0 5pt`、《绍宋》新版
+                // `padding:1em` 都没有出现在段落上，2026-10-08；更早的《ABC谋杀案》样本加到了每段上，那是另一版 EPUB）。
+                // 书里按 body 内容宽度算的百分比折算成整页的（《雪国》body 左右 1%，段落的 1% 写 0.98%）。
+                // 例外：文件里有块的左（右）外边距是负的，这一侧 body 的边距照旧加到每个块上（《罗杰疑案》《ABC谋杀案》章标题
+                // `margin:-2em` 两侧都留；《平凡的世界》只有左边 `-1em` 的那几个文件只留左边）。
+                let mut bc = d.comp(&body, &root_comp);
+                if faithful {
+                    d.block(body, bc, &mut blocks);
+                    attach_trailing(&mut blocks, d.take_pending());
+                    collapse_siblings(&mut blocks);
+                    return (d.lang.clone(), blocks);
                 }
-                if neg_r {
-                    b.margin_right.em += right.em;
-                    b.margin_right.pct += right.pct;
+                let fs = bc.font_size;
+                let side = |i: usize| {
+                    let (m, p) = (to_horiz(bc.margin[i], fs), to_horiz(bc.padding[i], fs));
+                    Horiz {
+                        em: m.em + p.em,
+                        pct: m.pct + p.pct,
+                    }
+                };
+                let (left, right) = (side(3), side(1));
+                for i in [1, 3] {
+                    bc.margin[i] = None;
+                    bc.padding[i] = None;
+                }
+                d.block(body, bc, &mut blocks);
+                let (neg_l, neg_r) = (has_negative(&blocks, true), has_negative(&blocks, false));
+                let rem = |h: Horiz| h.em + h.pct / 100.0 * PAGE_WIDTH_EM;
+                let width = PAGE_WIDTH_EM
+                    - if neg_l { 0.0 } else { rem(left) }
+                    - if neg_r { 0.0 } else { rem(right) };
+                if width > 1.0 && width < PAGE_WIDTH_EM {
+                    scale_percent(&mut blocks, width / PAGE_WIDTH_EM);
+                }
+                for b in &mut blocks {
+                    if neg_l {
+                        b.margin_left.em += left.em;
+                        b.margin_left.pct += left.pct;
+                    }
+                    if neg_r {
+                        b.margin_right.em += right.em;
+                        b.margin_right.pct += right.pct;
+                    }
                 }
             }
-        }
-        attach_trailing(&mut blocks, d.take_pending());
-        collapse_siblings(&mut blocks);
-        apply_gaps(&mut blocks);
-        (d.lang.clone(), blocks)
-    };
+            attach_trailing(&mut blocks, d.take_pending());
+            collapse_siblings(&mut blocks);
+            apply_gaps(&mut blocks);
+            (d.lang.clone(), blocks)
+        };
     let parse_doc = |&(si, doc): &(usize, &bookconv::epubbook::Doc)| -> Result<(usize, Option<String>, Vec<Block>), String> {
         let html = Html::parse_document(&doc.html);
         let depth = nesting_depth(&html);
@@ -1495,13 +1879,21 @@ pub(super) fn parse_docs(book: &Loaded, media: Option<crate::css::MediaEnv>, fai
     let mut parsed: Vec<ParsedDoc> = Vec::with_capacity(docs.len());
     let batches: Vec<_> = docs.chunks(64).collect();
     std::thread::scope(|s| {
-        let mut got = batches.first().map(|b| bookconv::util::par_map(b, parse_doc));
+        let mut got = batches
+            .first()
+            .map(|b| bookconv::util::par_map(b, parse_doc));
         for k in 0..batches.len() {
-            let next = batches.get(k + 1).map(|b| s.spawn(|| bookconv::util::par_map(b, parse_doc)));
+            let next = batches
+                .get(k + 1)
+                .map(|b| s.spawn(|| bookconv::util::par_map(b, parse_doc)));
             for g in got.into_iter().flatten() {
                 let (si, l, b) = g?;
                 // 套得深的（少见）不复制：复制、释放都是递归的，本线程的栈不一定够
-                let b = if block_depth(&b) > DEEP_NESTING { b } else { b.clone() };
+                let b = if block_depth(&b) > DEEP_NESTING {
+                    b
+                } else {
+                    b.clone()
+                };
                 parsed.push((si, book.docs[si].path.as_str(), l, b));
             }
             got = next.map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)));
@@ -1553,14 +1945,24 @@ fn nesting_depth(html: &Html) -> usize {
 
 /// `deep` 时在大栈线程里跑 `f`（[`on_big_stack`]），否则就在本线程跑。
 /// 浅的书不开线程：在别的线程里分配，glibc 另开分配区，《阿加莎全集》峰值内存多约 40MB。
-pub(super) fn maybe_big_stack<T: Send>(deep: bool, f: impl FnOnce() -> T + Send) -> Result<T, String> {
-    if deep { on_big_stack(f) } else { Ok(f()) }
+pub(super) fn maybe_big_stack<T: Send>(
+    deep: bool,
+    f: impl FnOnce() -> T + Send,
+) -> Result<T, String> {
+    if deep {
+        on_big_stack(f)
+    } else {
+        Ok(f())
+    }
 }
 
 /// 在栈大小 [`BIG_STACK`] 的线程里跑 `f`，等它跑完（panic 照样传出来）。
 fn on_big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, String> {
     std::thread::scope(|s| {
-        let h = std::thread::Builder::new().stack_size(BIG_STACK).spawn_scoped(s, f).map_err(|e| format!("开线程失败：{e}"))?;
+        let h = std::thread::Builder::new()
+            .stack_size(BIG_STACK)
+            .spawn_scoped(s, f)
+            .map_err(|e| format!("开线程失败：{e}"))?;
         Ok(h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
     })
 }
@@ -1569,10 +1971,32 @@ fn on_big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> Result<T, String> {
 /// 排成整页图片版面、封面地标指向它。照 Send to Kindle：《绍宋》原书没有封面页，Amazon 版第一个版面就是整页封面
 /// （2026-10-09 真机：我们的打开没有封面）。正文里用到了的不补，那些书的产物逐字节不变。
 pub(super) fn prepend_cover_page(book: &Loaded, parsed: &mut Vec<ParsedDoc>) {
-    let Some(cover) = book.cover.as_deref() else { return };
-    if parsed.iter().any(|(_, _, _, blocks)| any_block(blocks, |bl| matches!(&bl.kind, Kind::Image { src, .. } if src == cover))) {
+    let Some(cover) = book.cover.as_deref() else {
+        return;
+    };
+    if parsed.iter().any(|(_, _, _, blocks)| {
+        any_block(
+            blocks,
+            |bl| matches!(&bl.kind, Kind::Image { src, .. } if src == cover),
+        )
+    }) {
         return;
     }
     // 序号只用来起实体名，取一个文档用不到的；路径不是任何文档的，没有链接会指到它。
-    parsed.insert(0, (book.docs.len(), "\0cover", None, vec![Block::anonymous(Kind::Image { src: cover.to_string(), linked: false }, Computed::root(), Vec::new())]));
+    parsed.insert(
+        0,
+        (
+            book.docs.len(),
+            "\0cover",
+            None,
+            vec![Block::anonymous(
+                Kind::Image {
+                    src: cover.to_string(),
+                    linked: false,
+                },
+                Computed::root(),
+                Vec::new(),
+            )],
+        ),
+    );
 }

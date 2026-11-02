@@ -165,13 +165,23 @@ pub struct Opts {
 /// 对齐、首行缩进（`em:`/`pt:`/`%:` 加数值，`-` 没写）、上边距、下边距（根 em）、左边距、右边距（`em+pct`）。第一行是 `#base` 和全书正文的字号、行高（根 em）。
 /// 给 `tools/kfx/s2kdev.py` 比较掌阅、Move 的 EPUB 交给阅读器的样式和 Send to Kindle 的是否一致：不做 Kindle 专有的变换（body 左右边距照算，
 /// 不换 `default` 字体、不调对比度、不归一字号、没有行高下限）。
-pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) -> Result<String, String> {
+pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(
+    epub: R,
+    opts: &Opts,
+) -> Result<String, String> {
     let mut warnings = Vec::new();
     let book = epubbook::load_from(epub, &mut warnings)?;
     let dims: HashMap<String, (u32, u32)> = book
         .images
         .iter()
-        .filter_map(|i| image::ImageReader::new(std::io::Cursor::new(&i.bytes)).with_guessed_format().ok()?.into_dimensions().ok().map(|d| (i.path.clone(), d)))
+        .filter_map(|i| {
+            image::ImageReader::new(std::io::Cursor::new(&i.bytes))
+                .with_guessed_format()
+                .ok()?
+                .into_dimensions()
+                .ok()
+                .map(|d| (i.path.clone(), d))
+        })
         .collect();
     let mut parsed = parse_docs(&book, opts.media, true)?;
     let deep = parsed.iter().map(|d| block_depth(&d.3)).max().unwrap_or(0) > DEEP_NESTING;
@@ -179,7 +189,11 @@ pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
     // 块要在闭包里释放（`move`）：释放也是递归的
     maybe_big_stack(deep, move || {
         let stats = analyze(book, &mut parsed);
-        let mut out = format!("#base\t{}\t{}\n", stats.base_fs, stats.base_lh * stats.base_fs);
+        let mut out = format!(
+            "#base\t{}\t{}\n",
+            stats.base_fs,
+            stats.base_lh * stats.base_fs
+        );
         for (si, path, _, blocks) in &parsed {
             // 版式检查用：每一节（文件开头、强制分页处）另起一页；文件开头的块上有没有强制分页（Move 上多出一页空白）
             let first = *si <= book.docs.len();
@@ -194,8 +208,15 @@ pub fn epub_text_styles<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
 fn num(v: f64, unit: u32) -> Value {
     // 保留 6 位有效数字左右（和样本一样的精度，避免 0.8333333333 这种长尾）。
     // 字号 0 的元素换算长度时会除以 0：算不出有限值的写 0，不往书里写 NaN、无穷大。
-    let r = if v.is_finite() { (v * 1e6).round() / 1e6 } else { 0.0 };
-    Value::Struct(vec![(VALUE, Value::F64(if r == 0.0 { 0.0 } else { r })), (UNIT, Value::Symbol(unit))])
+    let r = if v.is_finite() {
+        (v * 1e6).round() / 1e6
+    } else {
+        0.0
+    };
+    Value::Struct(vec![
+        (VALUE, Value::F64(if r == 0.0 { 0.0 } else { r })),
+        (UNIT, Value::Symbol(unit)),
+    ])
 }
 
 /// 版面、样式、导航、元数据各阶段共用的状态（正文阶段）。资源阶段由 [`build`] 拆开它，只带走符号表、资源和警告。
@@ -220,17 +241,28 @@ pub fn epub_to_kfx(epub: &[u8], opts: &Opts) -> Result<(Vec<u8>, Vec<String>), S
 }
 
 /// 同 [`epub_to_kfx`]，从可定位的读取器（如打开的文件）读 EPUB：不用先把整本读进内存，峰值少一份压缩包大小。
-pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) -> Result<(Vec<u8>, Vec<String>), String> {
+pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(
+    epub: R,
+    opts: &Opts,
+) -> Result<(Vec<u8>, Vec<String>), String> {
     let mut warnings = Vec::new();
     let mut book = epubbook::load_from(epub, &mut warnings)?;
     let book = &mut book;
     // 图片字节从书里搬出来（写出器只在这里用到它们），不复制。
-    let images = std::mem::take(&mut book.images).into_iter().map(|i| (i.path, (i.bytes, i.mime))).collect();
+    let images = std::mem::take(&mut book.images)
+        .into_iter()
+        .map(|i| (i.path, (i.bytes, i.mime)))
+        .collect();
     let mut res = ResourceStore::new(images);
     let mut syms = SymbolAlloc::new();
     // 封面资源最先登记，紧跟着排好 `cover_image` 要用的名字（见 [`SymbolAlloc::reserve_cover`]）。优化器另做了书架缩略图的
     // （`eink-thumbnail`）登记它：书架用它，书里的封面页照旧用 `cover`。
-    if let Some(i) = book.thumbnail.as_deref().or(book.cover.as_deref()).and_then(|c| res.register(c, ImageUse::Content, &mut warnings)) {
+    if let Some(i) = book
+        .thumbnail
+        .as_deref()
+        .or(book.cover.as_deref())
+        .and_then(|c| res.register(c, ImageUse::Content, &mut warnings))
+    {
         syms.reserve_cover(&res[i].name)?;
     }
     let id = opts.fixed_id.unwrap_or(book.meta.stable_id);
@@ -240,13 +272,28 @@ pub fn epub_to_kfx_from<R: std::io::Read + std::io::Seek>(epub: R, opts: &Opts) 
 /// 整本书写成 KFX：解析文档 → 全书分析 → 版面 → 样式 → 位置映射 → 目录、锚点、导航 → 元数据 → 资源 → 清单与容器。
 /// 各阶段按这个顺序分配本地符号，换顺序会改产物字节；资源的符号必须最后分配（见 [`symbols`]），由符号表换阶段保证。
 /// 元素套得深的书（见 [`MAX_NESTING`]）解析以后的部分在大栈线程里跑：版面、编码、释放块都是递归的。
-fn build(book: &mut Loaded, syms: SymbolAlloc, res: ResourceStore, warnings: Vec<String>, id: u64, media: Option<crate::css::MediaEnv>) -> Result<(Vec<u8>, Vec<String>), String> {
+fn build(
+    book: &mut Loaded,
+    syms: SymbolAlloc,
+    res: ResourceStore,
+    warnings: Vec<String>,
+    id: u64,
+    media: Option<crate::css::MediaEnv>,
+) -> Result<(Vec<u8>, Vec<String>), String> {
     let mut parsed = parse_docs(book, media, false)?;
     let deep = parsed.iter().map(|d| block_depth(&d.3)).max().unwrap_or(0) > DEEP_NESTING;
     let fixed_canvas = fixed_canvas(book);
     // 翻页方向：`$557` 从左往右、`$559` 从右往左（2026-10-05 测试漫画 LTR/RTL 两本只差这一处）。
     let direction = if book.meta.rtl { DIR_RTL } else { DIR_LTR };
-    let (mut b, Layout { mut sections, mut entities, id_map, cover_tmpl }) = {
+    let (
+        mut b,
+        Layout {
+            mut sections,
+            mut entities,
+            id_map,
+            cover_tmpl,
+        },
+    ) = {
         let book = &*book;
         maybe_big_stack(deep, move || {
             prepend_cover_page(book, &mut parsed);
@@ -257,22 +304,47 @@ fn build(book: &mut Loaded, syms: SymbolAlloc, res: ResourceStore, warnings: Vec
         })??
     };
     // 封面图即使没出现在正文里也要带上（书架缩略图）；有另做的缩略图时书架用它。
-    let cover_res = book.thumbnail.as_deref().or(book.cover.as_deref()).and_then(|c| b.resource(c, ImageUse::Content));
+    let cover_res = book
+        .thumbnail
+        .as_deref()
+        .or(book.cover.as_deref())
+        .and_then(|c| b.resource(c, ImageUse::Content));
     style_entities(&mut b, &mut entities);
     let fonts = take_fonts(book, &b);
     position_entities(&mut sections, &mut entities);
     navigation_entities(book, &mut b, &sections, &id_map, cover_tmpl, &mut entities);
-    metadata_entities(book, &mut b, id, &sections, fixed_canvas, direction, cover_res, &mut entities);
+    metadata_entities(
+        book,
+        &mut b,
+        id,
+        &sections,
+        fixed_canvas,
+        direction,
+        cover_res,
+        &mut entities,
+    );
     // 正文阶段到此为止：符号表换成资源阶段，以后只能分配资源符号
-    let Builder { syms, mut res, warnings, .. } = b;
+    let Builder {
+        syms,
+        mut res,
+        warnings,
+        ..
+    } = b;
     let mut syms = syms.into_resources();
     resource_entities(&mut syms, &mut res, fonts, cover_res, &mut entities)?;
-    let out = maybe_big_stack(deep, || finish(&syms, &res, &sections, entities, cover_res, id))??;
+    let out = maybe_big_stack(deep, || {
+        finish(&syms, &res, &sections, entities, cover_res, id)
+    })??;
     Ok((out, warnings))
 }
 
 impl Builder {
-    fn new(syms: SymbolAlloc, res: ResourceStore, warnings: Vec<String>, stats: BookStats) -> Builder {
+    fn new(
+        syms: SymbolAlloc,
+        res: ResourceStore,
+        warnings: Vec<String>,
+        stats: BookStats,
+    ) -> Builder {
         Builder {
             syms,
             next_eid: 1,

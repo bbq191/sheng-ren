@@ -40,10 +40,18 @@ impl CheckReport {
     pub fn summary(&self) -> String {
         let mut parts = vec![format!("目录 {} 条", self.toc_entries)];
         if self.frag_total > 0 && self.frag_hit < self.frag_total {
-            parts.push(format!("锚点丢失 {}/{}", self.frag_total - self.frag_hit, self.frag_total));
+            parts.push(format!(
+                "锚点丢失 {}/{}",
+                self.frag_total - self.frag_hit,
+                self.frag_total
+            ));
         }
         if self.resource_refs_total > 0 && self.resource_refs_hit < self.resource_refs_total {
-            parts.push(format!("资源引用丢失 {}/{}", self.resource_refs_total - self.resource_refs_hit, self.resource_refs_total));
+            parts.push(format!(
+                "资源引用丢失 {}/{}",
+                self.resource_refs_total - self.resource_refs_hit,
+                self.resource_refs_total
+            ));
         }
         if !self.warnings.is_empty() {
             parts.push(format!("告警 {}", self.warnings.len()));
@@ -56,7 +64,8 @@ impl CheckReport {
 #[cfg(test)]
 pub fn check_epub(epub: &[u8], require_toc: bool) -> Result<CheckReport, String> {
     // zip 目录只解析一遍：条目和 mimetype 检查都从这一个 archive 读。
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(epub)).map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(epub))
+        .map_err(|e| format!("解 EPUB(非 zip?): {e}"))?;
     let entries = crate::epubzip::read_entries_from(&mut zip, |_| true)?;
     let mut rep = check_entries(&entries, require_toc);
     add_mimetype_problem(&mut rep, &mut zip);
@@ -73,7 +82,10 @@ pub fn check_epub_file(path: &std::path::Path) -> Result<CheckReport, String> {
 }
 
 /// [`check_epub_file`]，`require_toc` 为真时"无目录"算硬失败（`epub-optimize --check --require-toc`）。
-pub fn check_epub_file_with(path: &std::path::Path, require_toc: bool) -> Result<CheckReport, String> {
+pub fn check_epub_file_with(
+    path: &std::path::Path,
+    require_toc: bool,
+) -> Result<CheckReport, String> {
     let mut zip = crate::epubzip::open_file_zip(path)?;
     let sk = crate::epubzip::read_skeleton_par(path, &mut zip)?;
     let mut rep = check_entries(&sk.entries, require_toc);
@@ -82,21 +94,32 @@ pub fn check_epub_file_with(path: &std::path::Path, require_toc: bool) -> Result
 }
 
 /// 第 6 条：`mimetype` 必须是 zip 的第一个条目、STORED、内容正好是 `application/epub+zip`。有问题记一条硬失败。
-fn add_mimetype_problem<R: std::io::Read + std::io::Seek>(rep: &mut CheckReport, zip: &mut zip::ZipArchive<R>) {
+fn add_mimetype_problem<R: std::io::Read + std::io::Seek>(
+    rep: &mut CheckReport,
+    zip: &mut zip::ZipArchive<R>,
+) {
     let problem = match zip.by_index(0) {
         Err(_) => Some("是空压缩包".to_string()),
-        Ok(f) if f.name() != "mimetype" => Some(format!("第一个条目是 {} 而不是 mimetype", f.name())),
-        Ok(f) if f.compression() != zip::CompressionMethod::Stored => Some("mimetype 被压缩了（必须 STORED）".to_string()),
+        Ok(f) if f.name() != "mimetype" => {
+            Some(format!("第一个条目是 {} 而不是 mimetype", f.name()))
+        }
+        Ok(f) if f.compression() != zip::CompressionMethod::Stored => {
+            Some("mimetype 被压缩了（必须 STORED）".to_string())
+        }
         Ok(mut f) => {
             let mut v = Vec::new();
             match std::io::Read::read_to_end(&mut f, &mut v) {
                 Ok(_) if v == b"application/epub+zip" => None,
-                _ => Some(format!("mimetype 内容不对（{:?}）", String::from_utf8_lossy(&v))),
+                _ => Some(format!(
+                    "mimetype 内容不对（{:?}）",
+                    String::from_utf8_lossy(&v)
+                )),
             }
         }
     };
     if let Some(p) = problem {
-        rep.errors.push(format!("EPUB 容器不合规：{p}，阅读器可能认不出这是 EPUB"));
+        rep.errors
+            .push(format!("EPUB 容器不合规：{p}，阅读器可能认不出这是 EPUB"));
         rep.ok = false;
     }
 }
@@ -120,7 +143,10 @@ fn internal_links(file: &str, html: &str) -> Vec<(String, String, bool)> {
 /// 一页里的全部锚点（任何元素的 `id`、`<a name>`；单双引号都认，`data-id` 不算），字符引用已还原（和解码后的锚点比）。
 fn anchor_set(data: &[u8]) -> HashSet<String> {
     let html = String::from_utf8_lossy(data);
-    crate::html::anchors(&html).into_iter().map(|(v, _)| crate::util::xml_unescape(v).into_owned()).collect()
+    crate::html::anchors(&html)
+        .into_iter()
+        .map(|(v, _)| crate::util::xml_unescape(v).into_owned())
+        .collect()
 }
 
 pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
@@ -131,18 +157,37 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     if let Some(targets) = encrypted_targets(entries) {
         let bad = real_drm_items(&targets);
         if !bad.is_empty() {
-            rep.errors.push(format!("加密 EPUB（DRM，加密了 {} 等），阅读器都读不了", bad.iter().take(3).map(String::as_str).collect::<Vec<_>>().join("、")));
+            rep.errors.push(format!(
+                "加密 EPUB（DRM，加密了 {} 等），阅读器都读不了",
+                bad.iter()
+                    .take(3)
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join("、")
+            ));
         } else {
-            rep.warnings.push(format!("仅字体/样式混淆（{} 个文件，非 DRM，可读）", targets.len()));
+            rep.warnings.push(format!(
+                "仅字体/样式混淆（{} 个文件，非 DRM，可读）",
+                targets.len()
+            ));
         }
     }
 
     // 2. 目录
-    rep.toc_files = entries.iter().filter(|e| is_toc_file(&e.name)).map(|e| e.name.clone()).collect();
+    rep.toc_files = entries
+        .iter()
+        .filter(|e| is_toc_file(&e.name))
+        .map(|e| e.name.clone())
+        .collect();
     let mut targets: Vec<(String, String)> = Vec::new(); // (zip 路径, frag)
     for tf in &rep.toc_files {
         let t = String::from_utf8_lossy(&entries[names[tf.as_str()]].data);
-        targets.extend(internal_links(tf, &t).into_iter().filter(|l| !l.2).map(|(p, f, _)| (p, f)));
+        targets.extend(
+            internal_links(tf, &t)
+                .into_iter()
+                .filter(|l| !l.2)
+                .map(|(p, f, _)| (p, f)),
+        );
     }
     rep.toc_entries = targets.len();
     if rep.toc_files.is_empty() || targets.is_empty() {
@@ -153,9 +198,16 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
             rep.warnings.push(msg);
         }
     }
-    rep.href_file_hit = targets.iter().filter(|(t, _)| names.contains_key(t.as_str())).count();
+    rep.href_file_hit = targets
+        .iter()
+        .filter(|(t, _)| names.contains_key(t.as_str()))
+        .count();
     if !targets.is_empty() && (rep.href_file_hit as f64) / (targets.len() as f64) < 0.8 {
-        rep.errors.push(format!("目录 href 文件命中率过低 {}/{}", rep.href_file_hit, targets.len()));
+        rep.errors.push(format!(
+            "目录 href 文件命中率过低 {}/{}",
+            rep.href_file_hit,
+            targets.len()
+        ));
     }
     // 每个 html 条目只解码、扫一遍（并行）：双 id、链接、XML 合法性、全部锚点（任何元素的 `id`、`<a name>`；单双引号都认，
     // `data-id` 不算）。结论在后面按原顺序报，和逐个扫结果相同。质量门每本书生成都跑，以前串行扫三遍占优化总耗时的两三成。
@@ -165,21 +217,42 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
         xml: Option<String>,
         anchors: HashSet<String>,
     }
-    let html_entries: Vec<&Entry> = entries.iter().filter(|e| is_html_entry(&e.name, &e.data)).collect();
+    let html_entries: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| is_html_entry(&e.name, &e.data))
+        .collect();
     let mut scans = crate::util::par_map(&html_entries, |e| {
         let t = String::from_utf8_lossy(&e.data);
-        Scan { dup_ids: count_dup_id_tags(&t), links: internal_links(&e.name, &t), xml: xml_problem(&e.data), anchors: anchor_set(&e.data) }
+        Scan {
+            dup_ids: count_dup_id_tags(&t),
+            links: internal_links(&e.name, &t),
+            xml: xml_problem(&e.data),
+            anchors: anchor_set(&e.data),
+        }
     });
-    let mut cache: HashMap<&str, HashSet<String>> = html_entries.iter().zip(scans.iter_mut()).map(|(e, s)| (e.name.as_str(), std::mem::take(&mut s.anchors))).collect();
-    for (t, frag) in targets.iter().filter(|(t, f)| !f.is_empty() && names.contains_key(t.as_str())) {
+    let mut cache: HashMap<&str, HashSet<String>> = html_entries
+        .iter()
+        .zip(scans.iter_mut())
+        .map(|(e, s)| (e.name.as_str(), std::mem::take(&mut s.anchors)))
+        .collect();
+    for (t, frag) in targets
+        .iter()
+        .filter(|(t, f)| !f.is_empty() && names.contains_key(t.as_str()))
+    {
         rep.frag_total += 1;
-        let anchors = cache.entry(t.as_str()).or_insert_with(|| anchor_set(&entries[names[t.as_str()]].data));
+        let anchors = cache
+            .entry(t.as_str())
+            .or_insert_with(|| anchor_set(&entries[names[t.as_str()]].data));
         if anchors.contains(frag) {
             rep.frag_hit += 1;
         }
     }
     if rep.frag_total > 0 && rep.frag_hit < rep.frag_total {
-        rep.warnings.push(format!("目录锚点丢失 {}/{}（xochitl 退化到文件级跳转）", rep.frag_total - rep.frag_hit, rep.frag_total));
+        rep.warnings.push(format!(
+            "目录锚点丢失 {}/{}（xochitl 退化到文件级跳转）",
+            rep.frag_total - rep.frag_hit,
+            rep.frag_total
+        ));
     }
 
     // 3. 双 id、4. 正文资源引用、5. 正文 XML 合法性：每个 html 条目只解码、扫一遍，三条的结论在后面按原顺序报。
@@ -195,7 +268,11 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
             // 正文链接的锚点（同文件 `#x` 也查）：目标文件在、锚点却找不到的算死链
             if !frag.is_empty() {
                 if let Some(target_entry) = names.get(target.as_str()).map(|&i| &entries[i]) {
-                    if !cache.entry(target_entry.name.as_str()).or_insert_with(|| anchor_set(&target_entry.data)).contains(&frag) {
+                    if !cache
+                        .entry(target_entry.name.as_str())
+                        .or_insert_with(|| anchor_set(&target_entry.data))
+                        .contains(&frag)
+                    {
                         rep.dead_anchor_links += 1;
                         if dead_examples.len() < 3 {
                             dead_examples.push(format!("{}→#{frag}", e.name));
@@ -218,12 +295,21 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
         }
     }
     if rep.dup_id_tags > 0 {
-        rep.errors.push(format!("{} 个标签带双 id 属性（非法 XHTML，xochitl 整章白屏）", rep.dup_id_tags));
+        rep.errors.push(format!(
+            "{} 个标签带双 id 属性（非法 XHTML，xochitl 整章白屏）",
+            rep.dup_id_tags
+        ));
     }
     if rep.dead_anchor_links > 0 {
-        rep.warnings.push(format!("正文链接锚点不存在 {} 处（如 {}），点了跳不到", rep.dead_anchor_links, dead_examples.join("、")));
+        rep.warnings.push(format!(
+            "正文链接锚点不存在 {} 处（如 {}），点了跳不到",
+            rep.dead_anchor_links,
+            dead_examples.join("、")
+        ));
     }
-    if rep.resource_refs_total > 0 && (rep.resource_refs_hit as f64) / (rep.resource_refs_total as f64) < 0.8 {
+    if rep.resource_refs_total > 0
+        && (rep.resource_refs_hit as f64) / (rep.resource_refs_total as f64) < 0.8
+    {
         rep.errors.push(format!(
             "正文资源引用命中率过低 {}/{}（如 {}），图片/样式在包里但引用路径指向不存在的位置，真机会整个不显示",
             rep.resource_refs_hit,
@@ -237,11 +323,23 @@ pub fn check_entries(entries: &[Entry], require_toc: bool) -> CheckReport {
     // 先例）→ 告警，不拦——原书本来就这样的话，拦了也换不来更好的结果。
     for e in entries.iter().filter(|e| e.name.ends_with(".opf")) {
         if let Some(why) = xml_problem(&e.data) {
-            rep.errors.push(format!("{} 不是合法 XML（{why}），xochitl 会整本读不出来", e.name));
+            rep.errors.push(format!(
+                "{} 不是合法 XML（{why}），xochitl 会整本读不出来",
+                e.name
+            ));
         }
     }
     if !bad_chapters.is_empty() {
-        rep.warnings.push(format!("{} 个正文文件不是合法 XML，xochitl 可能整章不显示：{}", bad_chapters.len(), bad_chapters.iter().take(3).cloned().collect::<Vec<_>>().join("、")));
+        rep.warnings.push(format!(
+            "{} 个正文文件不是合法 XML，xochitl 可能整章不显示：{}",
+            bad_chapters.len(),
+            bad_chapters
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("、")
+        ));
     }
 
     rep.ok = rep.errors.is_empty();
@@ -255,7 +353,10 @@ fn xml_problem(data: &[u8]) -> Option<String> {
         Ok(t) => t,
         Err(e) => return Some(format!("第 {} 字节起不是 UTF-8", e.valid_up_to())),
     };
-    if let Some((i, c)) = text.char_indices().find(|(_, c)| !crate::util::is_xml_char(*c)) {
+    if let Some((i, c)) = text
+        .char_indices()
+        .find(|(_, c)| !crate::util::is_xml_char(*c))
+    {
         return Some(format!("第 {} 字节有非法字符 U+{:04X}", i, c as u32));
     }
     let mut r = quick_xml::Reader::from_str(text);
@@ -272,62 +373,136 @@ fn xml_problem(data: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
     fn e(name: &str, data: &str) -> Entry {
-        Entry { name: name.into(), data: data.as_bytes().to_vec() }
+        Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        }
     }
 
     #[test]
     fn gate_rules() {
         // 健康书
         let good = vec![
-            e("OEBPS/toc.ncx", r#"<ncx><content src="text/c1.xhtml#a"/><content src="text/c2%20x.xhtml"/></ncx>"#),
-            e("OEBPS/text/c1.xhtml", r#"<html><body><h1 id="a">x</h1></body></html>"#),
+            e(
+                "OEBPS/toc.ncx",
+                r#"<ncx><content src="text/c1.xhtml#a"/><content src="text/c2%20x.xhtml"/></ncx>"#,
+            ),
+            e(
+                "OEBPS/text/c1.xhtml",
+                r#"<html><body><h1 id="a">x</h1></body></html>"#,
+            ),
             e("OEBPS/text/c2 x.xhtml", "<html><body/></html>"),
         ];
         let r = check_entries(&good, true);
         assert!(r.ok, "{:?}", r.errors);
-        assert_eq!((r.toc_entries, r.href_file_hit, r.frag_hit, r.frag_total), (2, 2, 1, 1));
+        assert_eq!(
+            (r.toc_entries, r.href_file_hit, r.frag_hit, r.frag_total),
+            (2, 2, 1, 1)
+        );
         assert_eq!(r.summary(), "目录 2 条");
         // 命中率低 + 锚点丢 + 双 id + DRM + 正文资源引用命中率低（nav.xhtml 本身也是合法 html，它那 4 条
         // href 被目录那节（2）与正文资源引用那节（4）各扫一遍——同一份 internal_links 结果，两节各自独立判命中率，
         // 不是重复 bug）。
         let bad = vec![
-            e("META-INF/encryption.xml", r#"<CipherReference URI="OEBPS/text/c1.xhtml"/>"#),
-            e("OEBPS/nav.xhtml", r#"<html><body><nav><a href="text/c1.xhtml#zz">1</a><a href="text/nope1.xhtml">2</a><a href="text/nope2.xhtml">3</a><a href="text/nope3.xhtml">4</a></nav></body></html>"#),
-            e("OEBPS/text/c1.xhtml", r#"<html><body><p id="a" id="b">x</p></body></html>"#),
+            e(
+                "META-INF/encryption.xml",
+                r#"<CipherReference URI="OEBPS/text/c1.xhtml"/>"#,
+            ),
+            e(
+                "OEBPS/nav.xhtml",
+                r#"<html><body><nav><a href="text/c1.xhtml#zz">1</a><a href="text/nope1.xhtml">2</a><a href="text/nope2.xhtml">3</a><a href="text/nope3.xhtml">4</a></nav></body></html>"#,
+            ),
+            e(
+                "OEBPS/text/c1.xhtml",
+                r#"<html><body><p id="a" id="b">x</p></body></html>"#,
+            ),
         ];
         let r = check_entries(&bad, false);
         assert!(!r.ok);
         assert_eq!(r.errors.len(), 4, "{:?}", r.errors);
-        assert!(r.errors[0].contains("DRM") && r.errors[1].contains("命中率过低 1/4") && r.errors[2].contains("双 id"));
-        assert!(r.errors[3].contains("正文资源引用命中率过低 1/4"), "{:?}", r.errors[3]);
+        assert!(
+            r.errors[0].contains("DRM")
+                && r.errors[1].contains("命中率过低 1/4")
+                && r.errors[2].contains("双 id")
+        );
+        assert!(
+            r.errors[3].contains("正文资源引用命中率过低 1/4"),
+            "{:?}",
+            r.errors[3]
+        );
         assert!(r.warnings.iter().any(|w| w.contains("锚点丢失 1/1")));
         // 无目录：告警 / require_toc 失败；字体混淆只告警
-        let none = vec![e("META-INF/encryption.xml", r#"<CipherReference URI="f.ttf"/>"#), e("c.xhtml", "<html/>")];
+        let none = vec![
+            e(
+                "META-INF/encryption.xml",
+                r#"<CipherReference URI="f.ttf"/>"#,
+            ),
+            e("c.xhtml", "<html/>"),
+        ];
         assert!(check_entries(&none, false).ok);
         let r = check_entries(&none, true);
         assert!(!r.ok && r.warnings.iter().any(|w| w.contains("混淆")));
         // 单引号、带前缀的 CipherReference 也认（以前只认双引号，真 DRM 会被放过）
-        let single = vec![e("META-INF/encryption.xml", r#"<enc:CipherReference URI='OEBPS/c.xhtml'/>"#), e("c.xhtml", "<html/>")];
-        assert!(check_entries(&single, false).errors.iter().any(|x| x.contains("DRM")));
+        let single = vec![
+            e(
+                "META-INF/encryption.xml",
+                r#"<enc:CipherReference URI='OEBPS/c.xhtml'/>"#,
+            ),
+            e("c.xhtml", "<html/>"),
+        ];
+        assert!(check_entries(&single, false)
+            .errors
+            .iter()
+            .any(|x| x.contains("DRM")));
     }
 
     #[test]
     fn toc_anchor_hit_accepts_single_quotes_and_ignores_data_id() {
-        let toc = e("OEBPS/toc.ncx", r#"<ncx><content src="c.xhtml#a"/><content src="c.xhtml#b"/><content src="c.xhtml#n"/></ncx>"#);
-        let chap = e("OEBPS/c.xhtml", r#"<html><body><p id='a'>x</p><p data-id="b">y</p><a name="n"/></body></html>"#);
+        let toc = e(
+            "OEBPS/toc.ncx",
+            r#"<ncx><content src="c.xhtml#a"/><content src="c.xhtml#b"/><content src="c.xhtml#n"/></ncx>"#,
+        );
+        let chap = e(
+            "OEBPS/c.xhtml",
+            r#"<html><body><p id='a'>x</p><p data-id="b">y</p><a name="n"/></body></html>"#,
+        );
         let r = check_entries(&[toc, chap], false);
-        assert_eq!((r.frag_hit, r.frag_total), (2, 3), "单引号 id、<a name> 算锚点，data-id 不算");
+        assert_eq!(
+            (r.frag_hit, r.frag_total),
+            (2, 3),
+            "单引号 id、<a name> 算锚点，data-id 不算"
+        );
     }
 
     /// 正文链接的锚点要在：同文件 `#x`、跨文件、字符引用与百分号编码都按解码后的值对 id。
     #[test]
     fn body_link_anchors_checked_including_same_file() {
-        let ch = e("OEBPS/c.xhtml", r##"<html><body><p id="fnref1">正文<a href="#fn1">1</a></p><p id='a&amp;b'>x</p><a href="#a&amp;b">2</a><a href="n.xhtml#%E6%B3%A8">3</a><a href="#gone">4</a></body></html>"##);
-        let notes = e("OEBPS/n.xhtml", r##"<html><body><p id="注">注 <a href="c.xhtml#fnref1">↩</a><a href="c.xhtml#fnref9">↩</a></p></body></html>"##);
+        let ch = e(
+            "OEBPS/c.xhtml",
+            r##"<html><body><p id="fnref1">正文<a href="#fn1">1</a></p><p id='a&amp;b'>x</p><a href="#a&amp;b">2</a><a href="n.xhtml#%E6%B3%A8">3</a><a href="#gone">4</a></body></html>"##,
+        );
+        let notes = e(
+            "OEBPS/n.xhtml",
+            r##"<html><body><p id="注">注 <a href="c.xhtml#fnref1">↩</a><a href="c.xhtml#fnref9">↩</a></p></body></html>"##,
+        );
         let r = check_entries(&[ch, notes], false);
-        assert_eq!(r.dead_anchor_links, 3, "#fn1、#gone、#fnref9 不存在: {:?}", r.warnings);
-        assert!(r.warnings.iter().any(|w| w.contains("正文链接锚点不存在 3 处")), "{:?}", r.warnings);
-        assert_eq!((r.resource_refs_total, r.resource_refs_hit), (3, 3), "同文件锚点不算资源引用");
+        assert_eq!(
+            r.dead_anchor_links, 3,
+            "#fn1、#gone、#fnref9 不存在: {:?}",
+            r.warnings
+        );
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.contains("正文链接锚点不存在 3 处")),
+            "{:?}",
+            r.warnings
+        );
+        assert_eq!(
+            (r.resource_refs_total, r.resource_refs_hit),
+            (3, 3),
+            "同文件锚点不算资源引用"
+        );
     }
 
     #[test]
@@ -342,12 +517,19 @@ mod tests {
             {
                 let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
                 if let Some((name, method, data)) = first {
-                    z.start_file::<_, ()>(name, zip::write::SimpleFileOptions::default().compression_method(method)).unwrap();
+                    z.start_file::<_, ()>(
+                        name,
+                        zip::write::SimpleFileOptions::default().compression_method(method),
+                    )
+                    .unwrap();
                     std::io::Write::write_all(&mut z, data).unwrap();
                 }
-                z.start_file::<_, ()>("OEBPS/toc.ncx", zip::write::SimpleFileOptions::default()).unwrap();
-                std::io::Write::write_all(&mut z, br#"<ncx><content src="c.xhtml"/></ncx>"#).unwrap();
-                z.start_file::<_, ()>("OEBPS/c.xhtml", zip::write::SimpleFileOptions::default()).unwrap();
+                z.start_file::<_, ()>("OEBPS/toc.ncx", zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                std::io::Write::write_all(&mut z, br#"<ncx><content src="c.xhtml"/></ncx>"#)
+                    .unwrap();
+                z.start_file::<_, ()>("OEBPS/c.xhtml", zip::write::SimpleFileOptions::default())
+                    .unwrap();
                 std::io::Write::write_all(&mut z, b"<html><body/></html>").unwrap();
                 z.finish().unwrap();
             }
@@ -355,10 +537,25 @@ mod tests {
         };
         use zip::CompressionMethod::{Deflated, Stored};
         assert!(mk(Some(("mimetype", Stored, b"application/epub+zip"))).ok);
-        let bad = |r: CheckReport, what: &str| assert!(!r.ok && r.errors.iter().any(|e| e.contains("容器不合规") && e.contains(what)), "{what}: {:?}", r.errors);
+        let bad = |r: CheckReport, what: &str| {
+            assert!(
+                !r.ok
+                    && r.errors
+                        .iter()
+                        .any(|e| e.contains("容器不合规") && e.contains(what)),
+                "{what}: {:?}",
+                r.errors
+            )
+        };
         bad(mk(None), "而不是 mimetype");
-        bad(mk(Some(("mimetype", Deflated, b"application/epub+zip"))), "被压缩");
-        bad(mk(Some(("mimetype", Stored, b"application/epub+zip\n"))), "内容不对");
+        bad(
+            mk(Some(("mimetype", Deflated, b"application/epub+zip"))),
+            "被压缩",
+        );
+        bad(
+            mk(Some(("mimetype", Stored, b"application/epub+zip\n"))),
+            "内容不对",
+        );
     }
 
     /// `check_epub_file` 走 `read_skeleton`（图片留空）而不是整本读入——这条测试确认图片留空不影响
@@ -373,7 +570,11 @@ mod tests {
             let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             let o = zip::write::SimpleFileOptions::default();
             z.start_file::<_, ()>("OEBPS/chap_0001.xhtml", o).unwrap();
-            std::io::Write::write_all(&mut z, br#"<html><body><img src="../images/pic.png"/></body></html>"#).unwrap();
+            std::io::Write::write_all(
+                &mut z,
+                br#"<html><body><img src="../images/pic.png"/></body></html>"#,
+            )
+            .unwrap();
             z.start_file::<_, ()>("OEBPS/images/pic.png", o).unwrap();
             std::io::Write::write_all(&mut z, &[0u8; 5000]).unwrap();
             z.finish().unwrap();
@@ -389,16 +590,28 @@ mod tests {
     #[test]
     fn resource_ref_gate_catches_broken_relative_image_path() {
         let broken = vec![
-            e("OEBPS/chap_0001.xhtml", r#"<html><body><p><img src="../images/pic.png"/></p></body></html>"#),
+            e(
+                "OEBPS/chap_0001.xhtml",
+                r#"<html><body><p><img src="../images/pic.png"/></p></body></html>"#,
+            ),
             e("OEBPS/images/pic.png", "fake-png-bytes"),
         ];
         let r = check_entries(&broken, false);
         assert!(!r.ok, "多写一层 ../ 指到包里不存在的位置，这条门应该拦下来");
-        assert!(r.errors.iter().any(|w| w.contains("正文资源引用命中率过低")), "{:?}", r.errors);
+        assert!(
+            r.errors
+                .iter()
+                .any(|w| w.contains("正文资源引用命中率过低")),
+            "{:?}",
+            r.errors
+        );
         assert_eq!((r.resource_refs_total, r.resource_refs_hit), (1, 0));
 
         let fixed = vec![
-            e("OEBPS/chap_0001.xhtml", r#"<html><body><p><img src="images/pic.png"/></p></body></html>"#),
+            e(
+                "OEBPS/chap_0001.xhtml",
+                r#"<html><body><p><img src="images/pic.png"/></p></body></html>"#,
+            ),
             e("OEBPS/images/pic.png", "fake-png-bytes"),
         ];
         let r2 = check_entries(&fixed, false);
@@ -409,28 +622,70 @@ mod tests {
     /// 远程图/内联 data: 图不该被当成"引用了包内不存在的文件"误判——这两种压根不指向包内资源。
     #[test]
     fn resource_ref_gate_ignores_remote_and_data_uri_images() {
-        let e1 = e("OEBPS/c.xhtml", r#"<html><body><img src="https://example.com/a.png"/><img src="data:image/png;base64,AAAA"/></body></html>"#);
+        let e1 = e(
+            "OEBPS/c.xhtml",
+            r#"<html><body><img src="https://example.com/a.png"/><img src="data:image/png;base64,AAAA"/></body></html>"#,
+        );
         let r = check_entries(&[e1], false);
         assert!(r.ok, "{:?}", r.errors);
-        assert_eq!(r.resource_refs_total, 0, "远程/data: 都不该计入正文资源引用统计");
+        assert_eq!(
+            r.resource_refs_total, 0,
+            "远程/data: 都不该计入正文资源引用统计"
+        );
     }
 
     #[test]
     fn opf_with_illegal_control_char_is_hard_error_but_bad_chapter_only_warns() {
         let good_opf = "<?xml version=\"1.0\"?><package><metadata><dc:title xmlns:dc=\"x\">T</dc:title></metadata></package>";
         let bad_opf = "<?xml version=\"1.0\"?><package><metadata><dc:title xmlns:dc=\"x\">T\u{0}E</dc:title></metadata></package>";
-        let chap = |body: &str| format!("<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body>{body}</body></html>");
-        let mk = |opf: &str, ch: &str| vec![Entry { name: "OEBPS/content.opf".into(), data: opf.as_bytes().to_vec() }, Entry { name: "OEBPS/c.xhtml".into(), data: ch.as_bytes().to_vec() }];
+        let chap = |body: &str| {
+            format!("<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><body>{body}</body></html>")
+        };
+        let mk = |opf: &str, ch: &str| {
+            vec![
+                Entry {
+                    name: "OEBPS/content.opf".into(),
+                    data: opf.as_bytes().to_vec(),
+                },
+                Entry {
+                    name: "OEBPS/c.xhtml".into(),
+                    data: ch.as_bytes().to_vec(),
+                },
+            ]
+        };
 
         let rep = check_entries(&mk(bad_opf, &chap("<p>x</p>")), false);
-        assert!(!rep.ok && rep.errors.iter().any(|e| e.contains("content.opf") && e.contains("U+0000")), "{:?}", rep.errors);
+        assert!(
+            !rep.ok
+                && rep
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("content.opf") && e.contains("U+0000")),
+            "{:?}",
+            rep.errors
+        );
 
         let rep = check_entries(&mk(good_opf, &chap("<p>x</div>")), false);
-        assert!(rep.errors.iter().all(|e| !e.contains("合法 XML")), "正文不合法不拦: {:?}", rep.errors);
-        assert!(rep.warnings.iter().any(|w| w.contains("c.xhtml")), "但要告警: {:?}", rep.warnings);
+        assert!(
+            rep.errors.iter().all(|e| !e.contains("合法 XML")),
+            "正文不合法不拦: {:?}",
+            rep.errors
+        );
+        assert!(
+            rep.warnings.iter().any(|w| w.contains("c.xhtml")),
+            "但要告警: {:?}",
+            rep.warnings
+        );
 
         let rep = check_entries(&mk(good_opf, &chap("<p>x</p>")), false);
-        assert!(rep.errors.iter().chain(rep.warnings.iter()).all(|m| !m.contains("合法 XML")), "{:?} {:?}", rep.errors, rep.warnings);
+        assert!(
+            rep.errors
+                .iter()
+                .chain(rep.warnings.iter())
+                .all(|m| !m.contains("合法 XML")),
+            "{:?} {:?}",
+            rep.errors,
+            rep.warnings
+        );
     }
-
 }

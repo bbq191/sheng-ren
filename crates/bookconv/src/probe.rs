@@ -19,7 +19,9 @@ const DARK: u8 = 80;
 fn black_png(w: u32, h: u32) -> Result<Vec<u8>, String> {
     let img = GrayImage::from_pixel(w, h, Luma([0]));
     let mut out = Vec::new();
-    image::DynamicImage::ImageLuma8(img).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
     Ok(out)
 }
 
@@ -35,7 +37,11 @@ const GUIDE: &str = "<h1>测量书</h1>\
 /// 生成测量书（EPUB）：说明页 + 竖长黑图页 + 横宽黑图页，每页一个文件（各自从新的一页开始）。
 pub fn probe_epub() -> Result<Vec<u8>, String> {
     use crate::epub::{Book, BookMeta, Chapter, Resource};
-    let page = |title: &str, body: &str| Chapter { title: title.into(), html_body: body.into(), level: 1 };
+    let page = |title: &str, body: &str| Chapter {
+        title: title.into(),
+        html_body: body.into(),
+        level: 1,
+    };
     let mut book = Book {
         meta: BookMeta {
             book_id: "readable-probe".into(),
@@ -50,12 +56,26 @@ pub fn probe_epub() -> Result<Vec<u8>, String> {
         },
         chapters: vec![
             page("说明", GUIDE),
-            page("竖长黑块", r#"<div><img src="images/tall.png" alt="竖长黑块"/></div>"#),
-            page("横宽黑块", r#"<div><img src="images/wide.png" alt="横宽黑块"/></div>"#),
+            page(
+                "竖长黑块",
+                r#"<div><img src="images/tall.png" alt="竖长黑块"/></div>"#,
+            ),
+            page(
+                "横宽黑块",
+                r#"<div><img src="images/wide.png" alt="横宽黑块"/></div>"#,
+            ),
         ],
         resources: vec![
-            Resource { path: "images/tall.png".into(), media_type: "image/png".into(), bytes: black_png(TALL.0, TALL.1)? },
-            Resource { path: "images/wide.png".into(), media_type: "image/png".into(), bytes: black_png(WIDE.0, WIDE.1)? },
+            Resource {
+                path: "images/tall.png".into(),
+                media_type: "image/png".into(),
+                bytes: black_png(TALL.0, TALL.1)?,
+            },
+            Resource {
+                path: "images/wide.png".into(),
+                media_type: "image/png".into(),
+                bytes: black_png(WIDE.0, WIDE.1)?,
+            },
         ],
         nav: Vec::new(),
     };
@@ -76,7 +96,8 @@ pub fn largest_dark_box(img: &GrayImage) -> Option<(u32, u32, u32, u32)> {
         }
         seen[start] = true;
         stack.push(start);
-        let (mut n, mut x0, mut y0, mut x1, mut y1) = (0usize, usize::MAX, usize::MAX, 0usize, 0usize);
+        let (mut n, mut x0, mut y0, mut x1, mut y1) =
+            (0usize, usize::MAX, usize::MAX, 0usize, 0usize);
         while let Some(i) = stack.pop() {
             let (x, y) = (i % wu, i / wu);
             n += 1;
@@ -127,7 +148,11 @@ pub struct Measurement {
 /// 从竖长图、横宽图两张截图量出可阅读范围。
 pub fn measure(tall: &GrayImage, wide: &GrayImage) -> Result<Measurement, String> {
     if tall.dimensions() != wide.dimensions() {
-        return Err(format!("两张截图尺寸不同：{:?} 和 {:?}，应该来自同一台设备、同一方向", tall.dimensions(), wide.dimensions()));
+        return Err(format!(
+            "两张截图尺寸不同：{:?} 和 {:?}，应该来自同一台设备、同一方向",
+            tall.dimensions(),
+            wide.dimensions()
+        ));
     }
     let tb = largest_dark_box(tall).ok_or("竖长图截图里没找到黑块")?;
     let wb = largest_dark_box(wide).ok_or("横宽图截图里没找到黑块")?;
@@ -137,16 +162,26 @@ pub fn measure(tall: &GrayImage, wide: &GrayImage) -> Result<Measurement, String
     // 等比缩放时黑块比例应与原图一致（1:4 / 4:1），差太多说明被裁切或拉伸，或者截错了页。
     let ratio_ok = |a: u32, b: u32| (b as f64 / a as f64 - 4.0).abs() <= 4.0 * 0.03;
     if !ratio_ok(tw, th) {
-        warnings.push(format!("竖长黑块是 {tw}×{th}，不是 1:4，可能被裁切/拉伸，或截错了页"));
+        warnings.push(format!(
+            "竖长黑块是 {tw}×{th}，不是 1:4，可能被裁切/拉伸，或截错了页"
+        ));
     }
     if !ratio_ok(wh, ww) {
-        warnings.push(format!("横宽黑块是 {ww}×{wh}，不是 4:1，可能被裁切/拉伸，或截错了页"));
+        warnings.push(format!(
+            "横宽黑块是 {ww}×{wh}，不是 4:1，可能被裁切/拉伸，或截错了页"
+        ));
     }
     let (sw, sh) = tall.dimensions();
     if sw > sh {
         warnings.push(format!("截图是横屏（{sw}×{sh}），profile 里按竖屏填"));
     }
-    Ok(Measurement { screen: (sw, sh), readable: (ww, th), tall_box: tb, wide_box: wb, warnings })
+    Ok(Measurement {
+        screen: (sw, sh),
+        readable: (ww, th),
+        tall_box: tb,
+        wide_box: wb,
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -187,15 +222,26 @@ mod tests {
         let tall = shot(1264, 1680, (100, 60, 1100, 1620)); // 被拉宽了
         let wide = shot(1264, 1680, (42, 693, 1222, 988));
         assert_eq!(measure(&tall, &wide).unwrap().warnings.len(), 1);
-        assert!(measure(&tall, &shot(1000, 1680, (0, 0, 10, 10))).is_err(), "尺寸不同的截图拒绝");
+        assert!(
+            measure(&tall, &shot(1000, 1680, (0, 0, 10, 10))).is_err(),
+            "尺寸不同的截图拒绝"
+        );
     }
 
     #[test]
     fn probe_book_has_both_images_in_separate_pages() {
         let entries = crate::epubzip::read_entries(&probe_epub().unwrap()).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert!(names.contains(&"OEBPS/images/tall.png") && names.contains(&"OEBPS/images/wide.png"), "{names:?}");
-        let pages = entries.iter().filter(|e| e.name.ends_with(".xhtml") && String::from_utf8_lossy(&e.data).contains("<img")).count();
+        assert!(
+            names.contains(&"OEBPS/images/tall.png") && names.contains(&"OEBPS/images/wide.png"),
+            "{names:?}"
+        );
+        let pages = entries
+            .iter()
+            .filter(|e| {
+                e.name.ends_with(".xhtml") && String::from_utf8_lossy(&e.data).contains("<img")
+            })
+            .count();
         assert_eq!(pages, 2);
     }
 }

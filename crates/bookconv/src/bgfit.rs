@@ -47,7 +47,10 @@ impl BgFit {
         if s >= 1.0 {
             return None;
         }
-        let (nw, nh) = (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1));
+        let (nw, nh) = (
+            ((w as f64 * s).round() as u32).max(1),
+            ((h as f64 * s).round() as u32).max(1),
+        );
         ((nw, nh) != (w, h)).then_some((nw, nh))
     }
 }
@@ -56,7 +59,13 @@ impl BgFit {
 type Uses = HashMap<String, Option<BgFit>>;
 
 fn note(uses: &mut Uses, path: String, fit: Option<BgFit>) {
-    uses.entry(path).and_modify(|f| if *f != fit { *f = None }).or_insert(fit);
+    uses.entry(path)
+        .and_modify(|f| {
+            if *f != fit {
+                *f = None
+            }
+        })
+        .or_insert(fit);
 }
 
 /// 扫全书（样式表、`<style>`、各种引用），返回能按意图缩放的整页背景图（zip 路径 → 意图）。
@@ -65,7 +74,9 @@ pub fn plan(entries: &[crate::epubzip::Entry]) -> HashMap<String, BgFit> {
     // 各条目独立扫出 (图, 意图) 的记录（多线程，`util::par_map`），再按条目顺序记进去（结果其实与顺序无关：同一张图的记录全一样才留意图）
     let per_entry = crate::util::par_map(entries, |e| {
         let mut notes: Vec<(String, Option<BgFit>)> = Vec::new();
-        let Ok(text) = std::str::from_utf8(&e.data) else { return notes };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return notes;
+        };
         if e.name.to_ascii_lowercase().ends_with(".css") {
             scan_css(text, &e.name, &mut notes);
         } else if crate::epubzip::is_html_entry(&e.name, &e.data) {
@@ -81,7 +92,10 @@ pub fn plan(entries: &[crate::epubzip::Entry]) -> HashMap<String, BgFit> {
             // 内联样式里的 `url()`：不处理
             for t in crate::html::tags(text).filter(|t| t.is_start()) {
                 if let Some(s) = crate::html::attr_value(&text[t.start..t.end], "style") {
-                    for u in crate::html::css_urls(s).into_iter().filter(|u| !u.value.is_empty()) {
+                    for u in crate::html::css_urls(s)
+                        .into_iter()
+                        .filter(|u| !u.value.is_empty())
+                    {
                         notes.push((crate::epubzip::resolve_link(&e.name, u.value).0, None));
                     }
                 }
@@ -97,7 +111,9 @@ pub fn plan(entries: &[crate::epubzip::Entry]) -> HashMap<String, BgFit> {
     for (path, fit) in per_entry.into_iter().flatten() {
         note(&mut uses, path, fit);
     }
-    uses.into_iter().filter_map(|(p, f)| f.map(|f| (p, f))).collect()
+    uses.into_iter()
+        .filter_map(|(p, f)| f.map(|f| (p, f)))
+        .collect()
 }
 
 /// 样式表里每条规则的 `url()`：整页背景的记下意图，别的（`@font-face` 里的字体也在内，反正不是图）记成拿不准。
@@ -109,11 +125,18 @@ fn scan_css(css: &str, base: &str, notes: &mut Vec<(String, Option<BgFit>)>) {
         for d in &decls {
             let p = d.prop.to_ascii_lowercase();
             let is_bg = p == "background" || p == "background-image";
-            for u in crate::html::css_urls(d.value).into_iter().map(|u| u.value).filter(|u| !u.is_empty()) {
+            for u in crate::html::css_urls(d.value)
+                .into_iter()
+                .map(|u| u.value)
+                .filter(|u| !u.is_empty())
+            {
                 if crate::html::is_external(u) {
                     continue;
                 }
-                notes.push((crate::epubzip::resolve_link(base, u).0, if is_bg { fit } else { None }));
+                notes.push((
+                    crate::epubzip::resolve_link(base, u).0,
+                    if is_bg { fit } else { None },
+                ));
             }
         }
     }
@@ -129,12 +152,19 @@ fn rule_fit(selector: &str, decls: &[crate::html::CssDecl]) -> Option<BgFit> {
         let p = d.prop.to_ascii_lowercase();
         let longhands = match p.as_str() {
             "background" => crate::cssunlock::background_longhands(d.value, true),
-            "background-image" | "background-repeat" | "background-size" => vec![format!("{p}:{}", d.value)],
+            "background-image" | "background-repeat" | "background-size" => {
+                vec![format!("{p}:{}", d.value)]
+            }
             _ => continue,
         };
         for l in longhands {
-            let Some((prop, val)) = l.split_once(':') else { continue };
-            let val = crate::cssunlock::split_important(val).0.trim().to_ascii_lowercase();
+            let Some((prop, val)) = l.split_once(':') else {
+                continue;
+            };
+            let val = crate::cssunlock::split_important(val)
+                .0
+                .trim()
+                .to_ascii_lowercase();
             match prop {
                 // 多层背景（逗号隔开）、渐变：拿不准
                 "background-image" if val.contains(',') || !val.starts_with("url(") => return None,
@@ -154,7 +184,9 @@ fn rule_fit(selector: &str, decls: &[crate::html::CssDecl]) -> Option<BgFit> {
         ["cover"] => Some(BgFit::Cover),
         ["contain"] => Some(BgFit::Contain),
         ["100%"] | ["100%", "auto"] => Some(BgFit::Width),
-        [] | ["auto"] | ["auto", "auto"] if repeat.as_deref() == Some("no-repeat") => Some(BgFit::Contain),
+        [] | ["auto"] | ["auto", "auto"] if repeat.as_deref() == Some("no-repeat") => {
+            Some(BgFit::Contain)
+        }
         _ => None,
     }
 }
@@ -162,7 +194,10 @@ fn rule_fit(selector: &str, decls: &[crate::html::CssDecl]) -> Option<BgFit> {
 /// 选择器（逗号分开的一支）最后一段是 `body`/`html` 本身（可带 `.类`、`#id`、属性、伪类）。
 fn is_page_selector(sel: &str) -> bool {
     let last = crate::cascade::last_compound(sel).to_ascii_lowercase();
-    ["body", "html"].iter().any(|t| last.strip_prefix(t).is_some_and(|r| r.is_empty() || r.starts_with(['.', '#', '[', ':'])))
+    ["body", "html"].iter().any(|t| {
+        last.strip_prefix(t)
+            .is_some_and(|r| r.is_empty() || r.starts_with(['.', '#', '[', ':']))
+    })
 }
 
 /// 平铺背景的阅读器（Move，profile `background_no_repeat = false`）上的整页背景图：做成一块整页大小的图块（[`plan_tiles`]、
@@ -224,7 +259,11 @@ pub struct TileGeometry {
 /// 能做成整页图块的背景图（zip 路径 → 画法）：规则选择器是 `body`（可带类、id），或只用在 `<body>` 上的类（`.biaoti3`，
 /// `body_classes`），只有一张图、写了不平铺、尺寸和位置认得出；同一张图别处也用（`<img>`、SVG、内联样式、别的写法的规则、
 /// 封面）的不做（同 [`plan`]，就地改图）。`html` 上的不算（xochitl 根本不画 `html` 的背景，测试书）。
-pub fn plan_tiles(entries: &[crate::epubzip::Entry], body_classes: &std::collections::HashSet<String>, g: TileGeometry) -> HashMap<String, PageTile> {
+pub fn plan_tiles(
+    entries: &[crate::epubzip::Entry],
+    body_classes: &std::collections::HashSet<String>,
+    g: TileGeometry,
+) -> HashMap<String, PageTile> {
     // 书里用到的类：样式表模板里没用上的规则（《雪国》二十几条背景规则只用了两条）不算别的用法——它们不画在任何页上
     let used: std::collections::HashSet<String> = crate::util::par_map(entries, |e| {
         let mut c = Vec::new();
@@ -243,11 +282,18 @@ pub fn plan_tiles(entries: &[crate::epubzip::Entry], body_classes: &std::collect
     .flatten()
     .collect();
     let unused = |sel: &str| {
-        sel.split(',').all(|b| crate::cascade::compound_tag_classes(crate::cascade::last_compound(b)).1.iter().any(|c| !used.contains(*c)))
+        sel.split(',').all(|b| {
+            crate::cascade::compound_tag_classes(crate::cascade::last_compound(b))
+                .1
+                .iter()
+                .any(|c| !used.contains(*c))
+        })
     };
     let per_entry = crate::util::par_map(entries, |e| {
         let mut notes: Vec<(String, Option<PageTile>)> = Vec::new();
-        let Ok(text) = std::str::from_utf8(&e.data) else { return notes };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return notes;
+        };
         let scan = |css: &str, notes: &mut Vec<(String, Option<PageTile>)>| {
             for c in crate::cascade::rule_spans(css) {
                 let sel = crate::cascade::rule_selector(c.prelude);
@@ -259,8 +305,15 @@ pub fn plan_tiles(entries: &[crate::epubzip::Entry], body_classes: &std::collect
                 for d in &decls {
                     let p = d.prop.to_ascii_lowercase();
                     let is_bg = p == "background" || p == "background-image";
-                    for u in crate::html::css_urls(d.value).into_iter().map(|u| u.value).filter(|u| !u.is_empty() && !crate::html::is_external(u)) {
-                        notes.push((crate::epubzip::resolve_link(&e.name, u).0, if is_bg { tile } else { None }));
+                    for u in crate::html::css_urls(d.value)
+                        .into_iter()
+                        .map(|u| u.value)
+                        .filter(|u| !u.is_empty() && !crate::html::is_external(u))
+                    {
+                        notes.push((
+                            crate::epubzip::resolve_link(&e.name, u).0,
+                            if is_bg { tile } else { None },
+                        ));
                     }
                 }
             }
@@ -278,7 +331,10 @@ pub fn plan_tiles(entries: &[crate::epubzip::Entry], body_classes: &std::collect
             }
             for t in crate::html::tags(text).filter(|t| t.is_start()) {
                 if let Some(s) = crate::html::attr_value(&text[t.start..t.end], "style") {
-                    for u in crate::html::css_urls(s).into_iter().filter(|u| !u.value.is_empty()) {
+                    for u in crate::html::css_urls(s)
+                        .into_iter()
+                        .filter(|u| !u.value.is_empty())
+                    {
                         notes.push((crate::epubzip::resolve_link(&e.name, u.value).0, None));
                     }
                 }
@@ -292,42 +348,81 @@ pub fn plan_tiles(entries: &[crate::epubzip::Entry], body_classes: &std::collect
     });
     let mut uses: HashMap<String, Option<PageTile>> = HashMap::new();
     for (path, t) in per_entry.into_iter().flatten() {
-        uses.entry(path).and_modify(|x| if *x != t { *x = None }).or_insert(t);
+        uses.entry(path)
+            .and_modify(|x| {
+                if *x != t {
+                    *x = None
+                }
+            })
+            .or_insert(t);
     }
     // 只做 JPEG、PNG（`imgopt::page_tile` 只认这两种；做不成的图原样平铺就乱了，干脆不进计划、照旧去掉）
-    let ok_ext = |p: &str| [".jpg", ".jpeg", ".png"].iter().any(|x| p.to_ascii_lowercase().ends_with(x));
-    uses.into_iter().filter_map(|(p, t)| t.filter(|_| ok_ext(&p)).map(|t| (p, t))).collect()
+    let ok_ext = |p: &str| {
+        [".jpg", ".jpeg", ".png"]
+            .iter()
+            .any(|x| p.to_ascii_lowercase().ends_with(x))
+    };
+    uses.into_iter()
+        .filter_map(|(p, t)| t.filter(|_| ok_ext(&p)).map(|t| (p, t)))
+        .collect()
 }
 
 /// 一条规则的整页图块画法（见 [`plan_tiles`]）；不是这种规则 → `None`。声明按顺序算，`background` 简写把各分项重置。
-fn rule_tile(selector: &str, decls: &[crate::html::CssDecl], body_classes: &std::collections::HashSet<String>, g: TileGeometry) -> Option<PageTile> {
+fn rule_tile(
+    selector: &str,
+    decls: &[crate::html::CssDecl],
+    body_classes: &std::collections::HashSet<String>,
+    g: TileGeometry,
+) -> Option<PageTile> {
     let page_sel = |sel: &str| {
         let last = crate::cascade::last_compound(sel).to_ascii_lowercase();
-        if last.strip_prefix("body").is_some_and(|r| r.is_empty() || r.starts_with(['.', '#', '[', ':'])) {
+        if last
+            .strip_prefix("body")
+            .is_some_and(|r| r.is_empty() || r.starts_with(['.', '#', '[', ':']))
+        {
             return true;
         }
         // 只有类的（`.biaoti3`）：这些类只用在 `<body>` 上
         let compound = crate::cascade::last_compound(sel);
         let (tag, classes) = crate::cascade::compound_tag_classes(compound);
-        tag.is_empty() && !compound.contains(['#', '[', ':']) && !classes.is_empty() && classes.iter().all(|c| body_classes.contains(*c))
+        tag.is_empty()
+            && !compound.contains(['#', '[', ':'])
+            && !classes.is_empty()
+            && classes.iter().all(|c| body_classes.contains(*c))
     };
     if !selector.split(',').all(page_sel) {
         return None;
     }
-    let (mut image, mut repeat, mut size, mut pos, mut color): (Option<String>, String, String, String, Option<String>) = (None, String::new(), String::new(), String::new(), None);
+    let (mut image, mut repeat, mut size, mut pos, mut color): (
+        Option<String>,
+        String,
+        String,
+        String,
+        Option<String>,
+    ) = (None, String::new(), String::new(), String::new(), None);
     for d in decls {
         let p = d.prop.to_ascii_lowercase();
         let longhands = match p.as_str() {
             "background" => {
-                (image, repeat, size, pos, color) = (None, String::new(), String::new(), String::new(), None);
+                (image, repeat, size, pos, color) =
+                    (None, String::new(), String::new(), String::new(), None);
                 crate::cssunlock::background_longhands(d.value, true)
             }
-            "background-image" | "background-repeat" | "background-size" | "background-position" | "background-color" => vec![format!("{p}:{}", d.value)],
+            "background-image"
+            | "background-repeat"
+            | "background-size"
+            | "background-position"
+            | "background-color" => vec![format!("{p}:{}", d.value)],
             _ => continue,
         };
         for l in longhands {
-            let Some((prop, val)) = l.split_once(':') else { continue };
-            let val = crate::cssunlock::split_important(val).0.trim().to_ascii_lowercase();
+            let Some((prop, val)) = l.split_once(':') else {
+                continue;
+            };
+            let val = crate::cssunlock::split_important(val)
+                .0
+                .trim()
+                .to_ascii_lowercase();
             match prop {
                 "background-image" => image = Some(val),
                 "background-repeat" => repeat = val,
@@ -340,7 +435,10 @@ fn rule_tile(selector: &str, decls: &[crate::html::CssDecl], body_classes: &std:
     }
     // 一张图（多层、渐变不做）、写了不平铺（本来就平铺的阅读器照样平铺，不归这里管）
     let image = image?;
-    if image.contains(',') || !image.starts_with("url(") || !matches!(repeat.as_str(), "no-repeat" | "no-repeat no-repeat") {
+    if image.contains(',')
+        || !image.starts_with("url(")
+        || !matches!(repeat.as_str(), "no-repeat" | "no-repeat no-repeat")
+    {
         return None;
     }
     let fit = match size.split_whitespace().collect::<Vec<_>>().as_slice() {
@@ -354,7 +452,14 @@ fn rule_tile(selector: &str, decls: &[crate::html::CssDecl], body_classes: &std:
         Some(c) => Some(crate::color::parse_color(&c)?),
         None => None,
     };
-    Some(PageTile { fit, pos: position(&pos)?, color, page: g.page, area: g.area, natural: g.natural })
+    Some(PageTile {
+        fit,
+        pos: position(&pos)?,
+        color,
+        page: g.page,
+        area: g.area,
+        natural: g.natural,
+    })
 }
 
 /// `background-position`（关键字、百分比；一个或两个值）→ (横, 竖) 的比例；写长度的、四个值的认不出 → `None`。没写是左上。
@@ -363,7 +468,11 @@ fn position(v: &str) -> Option<(f64, f64)> {
     if toks.len() > 2 {
         return None;
     }
-    let pct = |t: &str| t.strip_suffix('%').and_then(|n| n.parse::<f64>().ok()).map(|n| n / 100.0);
+    let pct = |t: &str| {
+        t.strip_suffix('%')
+            .and_then(|n| n.parse::<f64>().ok())
+            .map(|n| n / 100.0)
+    };
     let (mut x, mut y): (Option<f64>, Option<f64>) = (None, None);
     for (i, t) in toks.iter().enumerate() {
         match *t {
@@ -384,7 +493,11 @@ fn position(v: &str) -> Option<(f64, f64)> {
         }
     }
     // 没写的那个方向居中（一个都没写是左上）
-    Some(if toks.is_empty() { (0.0, 0.0) } else { (x.unwrap_or(0.5), y.unwrap_or(0.5)) })
+    Some(if toks.is_empty() {
+        (0.0, 0.0)
+    } else {
+        (x.unwrap_or(0.5), y.unwrap_or(0.5))
+    })
 }
 
 #[cfg(test)]
@@ -393,11 +506,17 @@ mod tests {
     use crate::epubzip::Entry;
 
     fn e(name: &str, s: &str) -> Entry {
-        Entry { name: name.into(), data: s.as_bytes().to_vec() }
+        Entry {
+            name: name.into(),
+            data: s.as_bytes().to_vec(),
+        }
     }
 
     fn area() -> crate::imgopt::Screen {
-        crate::imgopt::Screen { width: 1264, height: 1680 }
+        crate::imgopt::Screen {
+            width: 1264,
+            height: 1680,
+        }
     }
 
     #[test]
@@ -413,7 +532,11 @@ mod tests {
         let p = plan(&[e("OEBPS/Styles/s.css", css)]);
         let g = |n: &str| p.get(&format!("OEBPS/Images/{n}")).copied();
         assert_eq!(g("bq.png"), Some(BgFit::Width));
-        assert_eq!(g("juan.png"), Some(BgFit::Contain), "没写尺寸、no-repeat、body：缩进阅读范围");
+        assert_eq!(
+            g("juan.png"),
+            Some(BgFit::Contain),
+            "没写尺寸、no-repeat、body：缩进阅读范围"
+        );
         assert_eq!(g("jsy.png"), Some(BgFit::Cover));
         assert_eq!(g("c.png"), Some(BgFit::Contain));
         assert_eq!(g("tile.png"), None, "没写尺寸又平铺的不动");
@@ -435,11 +558,19 @@ mod tests {
         assert_eq!(p.get("i/z.png"), None, "也被 SVG 用");
         assert_eq!(p.get("i/w.png"), None, "也被内联样式用");
         assert_eq!(p.get("i/u.png"), None, "是封面图");
-        assert_eq!(p.get("i/v.png"), Some(&BgFit::Cover), "两条规则意图相同照样处理");
+        assert_eq!(
+            p.get("i/v.png"),
+            Some(&BgFit::Cover),
+            "两条规则意图相同照样处理"
+        );
     }
 
     fn geom() -> TileGeometry {
-        TileGeometry { page: (954, 1696), area: (842, 1455), natural: 842.0 / 1104.0 }
+        TileGeometry {
+            page: (954, 1696),
+            area: (842, 1455),
+            natural: 842.0 / 1104.0,
+        }
     }
 
     /// 平铺背景的阅读器（Move）：整页背景图的画法（《飘》《雪国》的写法）；`html` 上的、元素上的、本来就平铺的、别处也用的不做。
@@ -456,22 +587,54 @@ mod tests {
         let html = r#"<html><body class="biaoti3"><p class="part">字</p></body></html>"#;
         let others = r#"<html class="h"><body class="fen copy t n s"><p>字</p></body></html>"#;
         // 没有页面用的规则不算：同一张图在这里换了写法，也不妨碍上面那条
-        let css = format!("{css} body.unused{{background:url(../Images/fen.jpg) no-repeat top left}}");
-        let classes: std::collections::HashSet<String> = ["biaoti3".to_string()].into_iter().collect();
-        let p = plan_tiles(&[e("OEBPS/Styles/s.css", &css), e("OEBPS/Text/a.xhtml", html), e("OEBPS/Text/b.xhtml", others)], &classes, geom());
+        let css =
+            format!("{css} body.unused{{background:url(../Images/fen.jpg) no-repeat top left}}");
+        let classes: std::collections::HashSet<String> =
+            ["biaoti3".to_string()].into_iter().collect();
+        let p = plan_tiles(
+            &[
+                e("OEBPS/Styles/s.css", &css),
+                e("OEBPS/Text/a.xhtml", html),
+                e("OEBPS/Text/b.xhtml", others),
+            ],
+            &classes,
+            geom(),
+        );
         let g = |n: &str| p.get(&format!("OEBPS/Images/{n}")).copied();
         let fen = g("fen.jpg").unwrap();
-        assert_eq!((fen.fit, fen.pos, fen.color), (TileFit::Width, (0.5, 1.0), Some(0xFFFF_FFFF)));
+        assert_eq!(
+            (fen.fit, fen.pos, fen.color),
+            (TileFit::Width, (0.5, 1.0), Some(0xFFFF_FFFF))
+        );
         let (x, y, w, h) = fen.placement(2564, 1891);
-        assert_eq!([x, y, w, h].map(f64::round), [0.0, 834.0, 842.0, 621.0], "宽撑满内容区、贴底");
+        assert_eq!(
+            [x, y, w, h].map(f64::round),
+            [0.0, 834.0, 842.0, 621.0],
+            "宽撑满内容区、贴底"
+        );
         let copy = g("copy.jpg").unwrap();
         assert_eq!((copy.fit, copy.pos), (TileFit::Cover, (0.5, 0.5)));
-        assert_eq!(g("b3.jpg").map(|t| (t.fit, t.pos)), Some((TileFit::Cover, (0.5, 0.0))), "只用在 body 上的类；后写的尺寸、位置盖过简写");
+        assert_eq!(
+            g("b3.jpg").map(|t| (t.fit, t.pos)),
+            Some((TileFit::Cover, (0.5, 0.0))),
+            "只用在 body 上的类；后写的尺寸、位置盖过简写"
+        );
         for n in ["part.png", "h.jpg", "tile.png", "n.png", "s.gif"] {
             assert_eq!(g(n), None, "{n}");
         }
-        let nat = PageTile { fit: TileFit::Natural, pos: (0.0, 0.0), color: None, page: (954, 1696), area: (842, 1455), natural: 0.5 };
-        assert_eq!(nat.placement(400, 200), (0.0, 0.0, 200.0, 100.0), "没写尺寸：按 Kindle 上的原图大小折算");
+        let nat = PageTile {
+            fit: TileFit::Natural,
+            pos: (0.0, 0.0),
+            color: None,
+            page: (954, 1696),
+            area: (842, 1455),
+            natural: 0.5,
+        };
+        assert_eq!(
+            nat.placement(400, 200),
+            (0.0, 0.0, 200.0, 100.0),
+            "没写尺寸：按 Kindle 上的原图大小折算"
+        );
         assert_eq!(position("left"), Some((0.0, 0.5)));
         assert_eq!(position("25% 75%"), Some((0.25, 0.75)));
         assert_eq!(position("right 10px"), None);
@@ -480,13 +643,36 @@ mod tests {
     #[test]
     fn targets_follow_intent_and_never_upscale() {
         // 《绍宋》的三张图在掌阅阅读范围里
-        assert_eq!(BgFit::Cover.target(2400, 3200, area()), Some((1260, 1680)), "cover 也不超出阅读范围：整张图看得见");
-        assert_eq!(BgFit::Cover.target(1080, 2400, area()), Some((756, 1680)), "《雪国》封底：高出阅读范围的要缩，不能裁掉上半截");
-        assert_eq!(BgFit::Contain.target(2160, 3124, area()), Some((1162, 1680)));
-        assert_eq!(BgFit::Width.target(1080, 1562, area()), None, "比阅读范围窄：不放大");
+        assert_eq!(
+            BgFit::Cover.target(2400, 3200, area()),
+            Some((1260, 1680)),
+            "cover 也不超出阅读范围：整张图看得见"
+        );
+        assert_eq!(
+            BgFit::Cover.target(1080, 2400, area()),
+            Some((756, 1680)),
+            "《雪国》封底：高出阅读范围的要缩，不能裁掉上半截"
+        );
+        assert_eq!(
+            BgFit::Contain.target(2160, 3124, area()),
+            Some((1162, 1680))
+        );
+        assert_eq!(
+            BgFit::Width.target(1080, 1562, area()),
+            None,
+            "比阅读范围窄：不放大"
+        );
         assert_eq!(BgFit::Width.target(2000, 1000, area()), Some((1264, 632)));
         assert_eq!(BgFit::Contain.target(1264, 1680, area()), None);
-        assert_eq!(BgFit::Cover.target(1000, 1500, area()), None, "盖满要放大：不动");
-        assert_eq!(BgFit::Width.target(2000, 4000, area()), Some((840, 1680)), "宽撑满后高出阅读范围：再缩进去");
+        assert_eq!(
+            BgFit::Cover.target(1000, 1500, area()),
+            None,
+            "盖满要放大：不动"
+        );
+        assert_eq!(
+            BgFit::Width.target(2000, 4000, area()),
+            Some((840, 1680)),
+            "宽撑满后高出阅读范围：再缩进去"
+        );
     }
 }

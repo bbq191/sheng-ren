@@ -66,8 +66,14 @@ pub fn chapter_filename(i: usize) -> String {
 /// （只允许字母、数字、`-`，`und` 视同未知）时不写，交给清洗层按正文判断后补。
 fn lang_attrs(lang: &str) -> String {
     let lang = lang.trim();
-    let valid = !lang.is_empty() && !lang.eq_ignore_ascii_case("und") && lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-    if valid { format!(" lang=\"{lang}\" xml:lang=\"{lang}\"") } else { String::new() }
+    let valid = !lang.is_empty()
+        && !lang.eq_ignore_ascii_case("und")
+        && lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if valid {
+        format!(" lang=\"{lang}\" xml:lang=\"{lang}\"")
+    } else {
+        String::new()
+    }
 }
 
 /// 一章的完整 XHTML 文档。`head_extra` 原样插在 `</head>` 前（共用样式表的 `<link>`），没有时传 `""`。
@@ -108,7 +114,10 @@ fn content_opf(book: &Book, opts: &AssembleOpts) -> String {
             "    <item id=\"cover-image\" href=\"cover.{}\" media-type=\"{}\" properties=\"cover-image\"/>",
             m.cover_ext, m.cover_media_type
         ));
-        manifest.push("    <item id=\"cover\" href=\"cover.xhtml\" media-type=\"application/xhtml+xml\"/>".to_string());
+        manifest.push(
+            "    <item id=\"cover\" href=\"cover.xhtml\" media-type=\"application/xhtml+xml\"/>"
+                .to_string(),
+        );
         spine.push("    <itemref idref=\"cover\"/>".to_string());
     }
     for i in 0..book.chapters.len() {
@@ -129,7 +138,11 @@ fn content_opf(book: &Book, opts: &AssembleOpts) -> String {
         ));
     }
     if let Some(css) = &opts.shared_css {
-        manifest.push(format!("    <item id=\"{}\" href=\"{}\" media-type=\"text/css\"/>", xesc(&css.id), xesc(&css.file)));
+        manifest.push(format!(
+            "    <item id=\"{}\" href=\"{}\" media-type=\"text/css\"/>",
+            xesc(&css.id),
+            xesc(&css.file)
+        ));
     }
     let id_scheme = opts.id_scheme.as_deref().unwrap_or(ID_SCHEME);
     let author = if m.author.is_empty() {
@@ -142,7 +155,11 @@ fn content_opf(book: &Book, opts: &AssembleOpts) -> String {
     } else {
         format!("\n    <dc:publisher>{}</dc:publisher>", xesc(&m.publisher))
     };
-    let subjects: String = m.subjects.iter().map(|s| format!("\n    <dc:subject>{}</dc:subject>", xesc(s))).collect();
+    let subjects: String = m
+        .subjects
+        .iter()
+        .map(|s| format!("\n    <dc:subject>{}</dc:subject>", xesc(s)))
+        .collect();
     let cover_meta = if has_cover {
         "\n    <meta name=\"cover\" content=\"cover-image\"/>"
     } else {
@@ -171,10 +188,18 @@ fn nav_body(book: &Book) -> String {
             .iter()
             .enumerate()
             .filter(|(_, c)| !c.title.is_empty())
-            .map(|(i, c)| NavEntry { title: c.title.clone(), level: c.level, href: chapter_filename(i) })
+            .map(|(i, c)| NavEntry {
+                title: c.title.clone(),
+                level: c.level,
+                href: chapter_filename(i),
+            })
             .collect()
     } else {
-        book.nav.iter().filter(|n| !n.title.is_empty()).cloned().collect()
+        book.nav
+            .iter()
+            .filter(|n| !n.title.is_empty())
+            .cloned()
+            .collect()
     };
     // 每条的实际深度（1 起）。
     let mut depths: Vec<usize> = Vec::with_capacity(visible.len());
@@ -191,7 +216,11 @@ fn nav_body(book: &Book) -> String {
         let link = format!("<a href=\"{}\">{}</a>", xesc(&n.href), xesc(&n.title));
         let next = depths.get(i + 1).copied().unwrap_or(0);
         if next > d {
-            out.push_str(&format!("{}<li>{link}\n{}<ol>\n", li_indent(d), ol_indent(d)));
+            out.push_str(&format!(
+                "{}<li>{link}\n{}<ol>\n",
+                li_indent(d),
+                ol_indent(d)
+            ));
             open.push(d);
             continue;
         }
@@ -215,7 +244,6 @@ fn nav_xhtml(book: &Book) -> String {
         nav_body(book)
     )
 }
-
 
 /// 章节共用的一份外链样式表（[`AssembleOpts::shared_css`]）：写成 `OEBPS/{file}`（zip 里排在资源之后），进 manifest，
 /// 按 `link_if` 挂到章节的 `<head>` 上。
@@ -252,7 +280,13 @@ pub fn assemble(book: &mut Book) -> Result<Vec<u8>, String> {
 /// 就释放（组装后 `book.resources` 为空），不让"资源表 + zip 缓冲"同时各占一整份体积。产物字节与 [`assemble`] 相同。
 /// 按设备的优化（图片缩放、字体解锁等）在入库之后按 profile 另做，不在转换时写死某台设备。
 pub fn assemble_master(book: &mut Book) -> Result<Vec<u8>, String> {
-    assemble_with(book, AssembleOpts { consume_resources: true, ..Default::default() })
+    assemble_with(
+        book,
+        AssembleOpts {
+            consume_resources: true,
+            ..Default::default()
+        },
+    )
 }
 
 /// 带选项的组装（[`AssembleOpts`]）：[`assemble`]、[`assemble_master`] 都是它的特例。组装前同样对每章做
@@ -263,7 +297,11 @@ pub fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u8>, Str
     }
     // 预留足够容量：全部 STORED，产物 ≈ 资源 + 章节文本 + 少量固定条目。Vec 倍增扩容会在峰值瞬间同时持有新旧两块。
     let cap = book.resources.iter().map(|r| r.bytes.len()).sum::<usize>()
-        + book.chapters.iter().map(|c| c.html_body.len() + 512).sum::<usize>()
+        + book
+            .chapters
+            .iter()
+            .map(|c| c.html_body.len() + 512)
+            .sum::<usize>()
         + opts.shared_css.as_ref().map_or(0, |c| c.content.len())
         + 32 * 1024;
     let mut buf: Vec<u8> = Vec::with_capacity(cap);
@@ -286,11 +324,18 @@ pub fn assemble_with(book: &mut Book, opts: AssembleOpts) -> Result<Vec<u8>, Str
 /// 同 [`assemble_master`]，但资源的字节不在 `book.resources` 里（`bytes` 留空，只用 `path`、`media_type` 写 manifest）：写到资源那一步时
 /// 按顺序调 `load(第几个资源)` 取一份、写完就丢，写进 `w`（如打开的文件）。产物与把字节放进 `resources` 再 [`assemble_master`] 逐字节相同，
 /// 峰值内存只有一份资源（CBZ 整本转母版用，见 `convert::cbz`）。
-pub(crate) fn assemble_master_streaming<W: std::io::Write + std::io::Seek>(book: &mut Book, w: W, mut load: impl FnMut(usize) -> Result<Vec<u8>, String>) -> Result<W, String> {
+pub(crate) fn assemble_master_streaming<W: std::io::Write + std::io::Seek>(
+    book: &mut Book,
+    w: W,
+    mut load: impl FnMut(usize) -> Result<Vec<u8>, String>,
+) -> Result<W, String> {
     if book.chapters.is_empty() {
         return Err("EPUB 至少要有一章".into());
     }
-    let opts = AssembleOpts { consume_resources: true, ..Default::default() };
+    let opts = AssembleOpts {
+        consume_resources: true,
+        ..Default::default()
+    };
     write_book(book, &opts, w, |z, book| {
         for (i, r) in book.resources.iter().enumerate() {
             z.put_stored(&format!("OEBPS/{}", r.path), &load(i)?)?;
@@ -301,7 +346,12 @@ pub(crate) fn assemble_master_streaming<W: std::io::Write + std::io::Seek>(book:
 
 /// 组装的共同部分：每章规整链接、拆脚注互指环 → OPF → 按固定顺序写条目（container、OPF、nav、封面、各章、资源、共用样式表）。
 /// 资源由 `put_resources` 写（字节在内存里还是逐个读进来由调用方定）。章节不能为空（调用方查）。
-fn write_book<W: std::io::Write + std::io::Seek>(book: &mut Book, opts: &AssembleOpts, w: W, put_resources: impl FnOnce(&mut crate::epubzip::EpubWriter<W>, &mut Book) -> Result<(), String>) -> Result<W, String> {
+fn write_book<W: std::io::Write + std::io::Seek>(
+    book: &mut Book,
+    opts: &AssembleOpts,
+    w: W,
+    put_resources: impl FnOnce(&mut crate::epubzip::EpubWriter<W>, &mut Book) -> Result<(), String>,
+) -> Result<W, String> {
     for ch in book.chapters.iter_mut() {
         ch.html_body = fix_internal_links(&ch.html_body, None);
         ch.html_body = crate::htmlproc::break_footnote_cycles(&ch.html_body);
@@ -317,13 +367,24 @@ fn write_book<W: std::io::Write + std::io::Seek>(book: &mut Book, opts: &Assembl
         z.put_stored(&format!("OEBPS/cover.{}", book.meta.cover_ext), cover)?;
         z.put_stored("OEBPS/cover.xhtml", cover_xhtml(&book.meta).as_bytes())?;
     }
-    let css_link = opts.shared_css.as_ref().map(|c| (format!("<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>", xesc(&c.file)), c.link_if));
+    let css_link = opts.shared_css.as_ref().map(|c| {
+        (
+            format!(
+                "<link rel=\"stylesheet\" type=\"text/css\" href=\"{}\"/>",
+                xesc(&c.file)
+            ),
+            c.link_if,
+        )
+    });
     for (i, ch) in book.chapters.iter().enumerate() {
         let head_extra = match &css_link {
             Some((link, cond)) if cond.is_none_or(|f| f(&ch.html_body)) => link.as_str(),
             _ => "",
         };
-        z.put_stored(&format!("OEBPS/{}", chapter_filename(i)), chapter_doc(ch, &book.meta.language, head_extra).as_bytes())?;
+        z.put_stored(
+            &format!("OEBPS/{}", chapter_filename(i)),
+            chapter_doc(ch, &book.meta.language, head_extra).as_bytes(),
+        )?;
     }
     put_resources(&mut z, book)?;
     if let Some(css) = &opts.shared_css {
@@ -336,15 +397,32 @@ fn write_book<W: std::io::Write + std::io::Seek>(book: &mut Book, opts: &Assembl
 mod nav_tests {
     use super::*;
     fn ch(title: &str, level: i64) -> Chapter {
-        Chapter { title: title.into(), html_body: "<p>x</p>".into(), level }
+        Chapter {
+            title: title.into(),
+            html_body: "<p>x</p>".into(),
+            level,
+        }
     }
     #[test]
     fn nests_level2_under_level1() {
         let book = Book {
             meta: BookMeta {
-                book_id: "b".into(), title: "t".into(), author: "".into(), language: "zh".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
-            chapters: vec![ch("第一部", 1), ch("第一章", 2), ch("第二章", 2), ch("第二部", 1)],
+                book_id: "b".into(),
+                title: "t".into(),
+                author: "".into(),
+                language: "zh".into(),
+                publisher: "".into(),
+                cover: None,
+                cover_ext: "jpg".into(),
+                cover_media_type: "image/jpeg".into(),
+                subjects: Vec::new(),
+            },
+            chapters: vec![
+                ch("第一部", 1),
+                ch("第一章", 2),
+                ch("第二章", 2),
+                ch("第二部", 1),
+            ],
             resources: vec![],
             nav: Vec::new(),
         };
@@ -361,17 +439,38 @@ mod nav_tests {
     fn embeds_resources_into_zip_and_manifest() {
         let mut book = Book {
             meta: BookMeta {
-                book_id: "b".into(), title: "t".into(), author: "".into(), language: "zh".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
-            chapters: vec![Chapter { title: "章".into(), html_body: "<p><img src=\"images/a.png\"/></p>".into(), level: 1 }],
-            resources: vec![Resource { path: "images/a.png".into(), media_type: "image/png".into(), bytes: vec![1, 2, 3, 4] }],
+                book_id: "b".into(),
+                title: "t".into(),
+                author: "".into(),
+                language: "zh".into(),
+                publisher: "".into(),
+                cover: None,
+                cover_ext: "jpg".into(),
+                cover_media_type: "image/jpeg".into(),
+                subjects: Vec::new(),
+            },
+            chapters: vec![Chapter {
+                title: "章".into(),
+                html_body: "<p><img src=\"images/a.png\"/></p>".into(),
+                level: 1,
+            }],
+            resources: vec![Resource {
+                path: "images/a.png".into(),
+                media_type: "image/png".into(),
+                bytes: vec![1, 2, 3, 4],
+            }],
             nav: Vec::new(),
         };
         let opf = content_opf(&book, &AssembleOpts::default());
-        assert!(opf.contains("id=\"res1\" href=\"images/a.png\" media-type=\"image/png\""), "manifest 缺资源项: {opf}");
+        assert!(
+            opf.contains("id=\"res1\" href=\"images/a.png\" media-type=\"image/png\""),
+            "manifest 缺资源项: {opf}"
+        );
         let bytes = assemble(&mut book).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-        let mut f = zip.by_name("OEBPS/images/a.png").expect("zip 内应有资源文件");
+        let mut f = zip
+            .by_name("OEBPS/images/a.png")
+            .expect("zip 内应有资源文件");
         use std::io::Read;
         let mut got = Vec::new();
         f.read_to_end(&mut got).unwrap();
@@ -382,15 +481,39 @@ mod nav_tests {
     fn nests_arbitrary_depth_and_never_skips_levels() {
         let book = Book {
             meta: BookMeta {
-                book_id: "b".into(), title: "t".into(), author: "".into(), language: "en".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
-            chapters: vec![ch("部", 1), ch("章", 2), ch("节", 3), ch("小节", 4), ch("章二", 2), ch("跳级", 4), ch("部二", 1)],
+                book_id: "b".into(),
+                title: "t".into(),
+                author: "".into(),
+                language: "en".into(),
+                publisher: "".into(),
+                cover: None,
+                cover_ext: "jpg".into(),
+                cover_media_type: "image/jpeg".into(),
+                subjects: Vec::new(),
+            },
+            chapters: vec![
+                ch("部", 1),
+                ch("章", 2),
+                ch("节", 3),
+                ch("小节", 4),
+                ch("章二", 2),
+                ch("跳级", 4),
+                ch("部二", 1),
+            ],
             resources: vec![],
             nav: Vec::new(),
         };
         let nav = nav_body(&book);
-        assert_eq!(nav.matches("<ol>").count(), nav.matches("</ol>").count(), "ol 要配对: {nav}");
-        assert_eq!(nav.matches("<li>").count(), nav.matches("</li>").count(), "li 要配对: {nav}");
+        assert_eq!(
+            nav.matches("<ol>").count(),
+            nav.matches("</ol>").count(),
+            "ol 要配对: {nav}"
+        );
+        assert_eq!(
+            nav.matches("<li>").count(),
+            nav.matches("</li>").count(),
+            "li 要配对: {nav}"
+        );
         // 整份包进 <ol> 后必须是合法 XML，且层级正确：小节在第 4 层，跳级的 4 只比章二深一级。
         let xml = format!("<ol>{nav}</ol>");
         let mut r = quick_xml::Reader::from_str(&xml);
@@ -414,9 +537,25 @@ mod nav_tests {
             }
         }
         assert_eq!(max_depth, 4, "{nav}");
-        assert_eq!((depth_of["部"], depth_of["章"], depth_of["节"], depth_of["小节"]), (1, 2, 3, 4), "{nav}");
-        assert_eq!((depth_of["章二"], depth_of["跳级"], depth_of["部二"]), (2, 3, 1), "{nav}");
-        assert!(nav_xhtml(&book).contains(r#" lang="en" xml:lang="en">"#), "nav 用书的语言");
+        assert_eq!(
+            (
+                depth_of["部"],
+                depth_of["章"],
+                depth_of["节"],
+                depth_of["小节"]
+            ),
+            (1, 2, 3, 4),
+            "{nav}"
+        );
+        assert_eq!(
+            (depth_of["章二"], depth_of["跳级"], depth_of["部二"]),
+            (2, 3, 1),
+            "{nav}"
+        );
+        assert!(
+            nav_xhtml(&book).contains(r#" lang="en" xml:lang="en">"#),
+            "nav 用书的语言"
+        );
     }
 
     #[test]
@@ -428,21 +567,51 @@ mod nav_tests {
         let mut b = two_chapter_book(false);
         b.meta.language = String::new();
         let entries = zip_names_and_text(assemble(&mut b).unwrap());
-        let chap = String::from_utf8(entries.iter().find(|(k, _)| k == "OEBPS/chap_0001.xhtml").unwrap().1.clone()).unwrap();
-        assert!(chap.contains("<html xmlns=\"http://www.w3.org/1999/xhtml\">"), "语言未知不写: {chap}");
+        let chap = String::from_utf8(
+            entries
+                .iter()
+                .find(|(k, _)| k == "OEBPS/chap_0001.xhtml")
+                .unwrap()
+                .1
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            chap.contains("<html xmlns=\"http://www.w3.org/1999/xhtml\">"),
+            "语言未知不写: {chap}"
+        );
         let mut b = two_chapter_book(false);
         b.meta.language = "ja".into();
         let entries = zip_names_and_text(assemble(&mut b).unwrap());
-        let chap = String::from_utf8(entries.iter().find(|(k, _)| k == "OEBPS/chap_0001.xhtml").unwrap().1.clone()).unwrap();
-        assert!(chap.contains(r#"<html xmlns="http://www.w3.org/1999/xhtml" lang="ja" xml:lang="ja">"#), "{chap}");
+        let chap = String::from_utf8(
+            entries
+                .iter()
+                .find(|(k, _)| k == "OEBPS/chap_0001.xhtml")
+                .unwrap()
+                .1
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            chap.contains(r#"<html xmlns="http://www.w3.org/1999/xhtml" lang="ja" xml:lang="ja">"#),
+            "{chap}"
+        );
     }
 
     #[test]
     fn flat_when_all_level1() {
         let book = Book {
             meta: BookMeta {
-                book_id: "b".into(), title: "t".into(), author: "".into(), language: "zh".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
+                book_id: "b".into(),
+                title: "t".into(),
+                author: "".into(),
+                language: "zh".into(),
+                publisher: "".into(),
+                cover: None,
+                cover_ext: "jpg".into(),
+                cover_media_type: "image/jpeg".into(),
+                subjects: Vec::new(),
+            },
             chapters: vec![ch("一", 1), ch("二", 1)],
             resources: vec![],
             nav: Vec::new(),
@@ -453,13 +622,37 @@ mod nav_tests {
     fn two_chapter_book(with_img: bool) -> Book {
         Book {
             meta: BookMeta {
-                book_id: "b".into(), title: "t".into(), author: "".into(), language: "zh".into(),
-                publisher: "".into(), cover: None, cover_ext: "jpg".into(), cover_media_type: "image/jpeg".into(), subjects: Vec::new() },
+                book_id: "b".into(),
+                title: "t".into(),
+                author: "".into(),
+                language: "zh".into(),
+                publisher: "".into(),
+                cover: None,
+                cover_ext: "jpg".into(),
+                cover_media_type: "image/jpeg".into(),
+                subjects: Vec::new(),
+            },
             chapters: vec![
-                Chapter { title: "图页".into(), html_body: if with_img { "<div><IMG src=\"images/a.png\"/></div>".into() } else { "<p>字</p>".into() }, level: 1 },
-                Chapter { title: "字页".into(), html_body: "<p>纯文字</p>".into(), level: 1 },
+                Chapter {
+                    title: "图页".into(),
+                    html_body: if with_img {
+                        "<div><IMG src=\"images/a.png\"/></div>".into()
+                    } else {
+                        "<p>字</p>".into()
+                    },
+                    level: 1,
+                },
+                Chapter {
+                    title: "字页".into(),
+                    html_body: "<p>纯文字</p>".into(),
+                    level: 1,
+                },
             ],
-            resources: vec![Resource { path: "images/a.png".into(), media_type: "image/png".into(), bytes: vec![9; 64] }],
+            resources: vec![Resource {
+                path: "images/a.png".into(),
+                media_type: "image/png".into(),
+                bytes: vec![9; 64],
+            }],
             nav: Vec::new(),
         }
     }
@@ -467,14 +660,28 @@ mod nav_tests {
     fn zip_names_and_text(bytes: Vec<u8>) -> Vec<(String, Vec<u8>)> {
         use std::io::Read;
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-        (0..z.len()).map(|i| { let mut f = z.by_index(i).unwrap(); let mut v = Vec::new(); f.read_to_end(&mut v).unwrap(); (f.name().to_string(), v) }).collect()
+        (0..z.len())
+            .map(|i| {
+                let mut f = z.by_index(i).unwrap();
+                let mut v = Vec::new();
+                f.read_to_end(&mut v).unwrap();
+                (f.name().to_string(), v)
+            })
+            .collect()
     }
 
     #[test]
     fn assemble_with_consume_resources_is_byte_identical_and_empties_resources() {
         let plain = assemble(&mut two_chapter_book(true)).unwrap();
         let mut b = two_chapter_book(true);
-        let consumed = assemble_with(&mut b, AssembleOpts { consume_resources: true, ..Default::default() }).unwrap();
+        let consumed = assemble_with(
+            &mut b,
+            AssembleOpts {
+                consume_resources: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(plain, consumed, "consume_resources 只影响内存，不影响产物");
         assert!(b.resources.is_empty(), "资源写完即释放");
     }
@@ -488,36 +695,86 @@ mod nav_tests {
         let opts = AssembleOpts {
             consume_resources: true,
             id_scheme: Some("urn:x:".into()),
-            shared_css: Some(SharedCss { file: "extra.css".into(), id: "extra-css".into(), content: "img{max-width:100%;}\n".into(), link_if: Some(has_img) }),
+            shared_css: Some(SharedCss {
+                file: "extra.css".into(),
+                id: "extra-css".into(),
+                content: "img{max-width:100%;}\n".into(),
+                link_if: Some(has_img),
+            }),
         };
         let entries = zip_names_and_text(assemble_with(&mut b, opts).unwrap());
-        assert_eq!(entries.last().unwrap().0, "OEBPS/extra.css", "样式表排在资源之后");
-        let get = |n: &str| String::from_utf8(entries.iter().find(|(k, _)| k == n).unwrap().1.clone()).unwrap();
+        assert_eq!(
+            entries.last().unwrap().0,
+            "OEBPS/extra.css",
+            "样式表排在资源之后"
+        );
+        let get = |n: &str| {
+            String::from_utf8(entries.iter().find(|(k, _)| k == n).unwrap().1.clone()).unwrap()
+        };
         assert_eq!(get("OEBPS/extra.css"), "img{max-width:100%;}\n");
         assert!(get("OEBPS/chap_0001.xhtml").contains("<title>图页</title><link rel=\"stylesheet\" type=\"text/css\" href=\"extra.css\"/></head>"));
-        assert!(!get("OEBPS/chap_0002.xhtml").contains("<link"), "不满足 link_if 的章不挂");
+        assert!(
+            !get("OEBPS/chap_0002.xhtml").contains("<link"),
+            "不满足 link_if 的章不挂"
+        );
         let opf = get(OPF_PATH);
         assert!(opf.contains(">urn:x:b</dc:identifier>"), "{opf}");
         assert!(opf.contains("    <item id=\"extra-css\" href=\"extra.css\" media-type=\"text/css\"/>\n  </manifest>"), "{opf}");
         // link_if 为 None：每章都挂
         let mut b = two_chapter_book(false);
-        let opts = AssembleOpts { shared_css: Some(SharedCss { file: "a.css".into(), id: "a".into(), content: String::new(), link_if: None }), ..Default::default() };
+        let opts = AssembleOpts {
+            shared_css: Some(SharedCss {
+                file: "a.css".into(),
+                id: "a".into(),
+                content: String::new(),
+                link_if: None,
+            }),
+            ..Default::default()
+        };
         let entries = zip_names_and_text(assemble_with(&mut b, opts).unwrap());
-        assert_eq!(entries.iter().filter(|(k, v)| k.contains("chap_") && String::from_utf8_lossy(v).contains("href=\"a.css\"")).count(), 2);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|(k, v)| k.contains("chap_")
+                    && String::from_utf8_lossy(v).contains("href=\"a.css\""))
+                .count(),
+            2
+        );
     }
 
     #[test]
     fn explicit_nav_entries_can_share_a_file_and_carry_fragments() {
         let mut b = two_chapter_book(false);
         b.nav = vec![
-            NavEntry { title: "栏目".into(), level: 1, href: "chap_0001.xhtml".into() },
-            NavEntry { title: "文章甲".into(), level: 2, href: "chap_0001.xhtml#a".into() },
-            NavEntry { title: "文章乙".into(), level: 2, href: "chap_0002.xhtml#b".into() },
+            NavEntry {
+                title: "栏目".into(),
+                level: 1,
+                href: "chap_0001.xhtml".into(),
+            },
+            NavEntry {
+                title: "文章甲".into(),
+                level: 2,
+                href: "chap_0001.xhtml#a".into(),
+            },
+            NavEntry {
+                title: "文章乙".into(),
+                level: 2,
+                href: "chap_0002.xhtml#b".into(),
+            },
         ];
         let nav = nav_body(&b);
-        assert!(nav.contains("<li><a href=\"chap_0001.xhtml\">栏目</a>\n        <ol>"), "{nav}");
-        assert!(nav.contains("<li><a href=\"chap_0001.xhtml#a\">文章甲</a></li>") && nav.contains("<li><a href=\"chap_0002.xhtml#b\">文章乙</a></li>"), "{nav}");
-        assert!(!nav.contains("图页") && !nav.contains("字页"), "有显式目录时不再按章节生成: {nav}");
+        assert!(
+            nav.contains("<li><a href=\"chap_0001.xhtml\">栏目</a>\n        <ol>"),
+            "{nav}"
+        );
+        assert!(
+            nav.contains("<li><a href=\"chap_0001.xhtml#a\">文章甲</a></li>")
+                && nav.contains("<li><a href=\"chap_0002.xhtml#b\">文章乙</a></li>"),
+            "{nav}"
+        );
+        assert!(
+            !nav.contains("图页") && !nav.contains("字页"),
+            "有显式目录时不再按章节生成: {nav}"
+        );
     }
-
 }

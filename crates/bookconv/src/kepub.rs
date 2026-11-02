@@ -21,7 +21,10 @@ const WRAP_OPEN: &str = r#"<div id="book-columns"><div id="book-inner">"#;
 const WRAP_CLOSE: &str = "</div></div>";
 
 /// 里面的文字不包 span 的元素（脚本、样式、矢量图、公式、注音读法、多媒体回退文字等）。
-const SKIP: &[&str] = &["script", "style", "svg", "math", "head", "title", "rt", "rp", "textarea", "audio", "video", "canvas", "noscript", "template", "iframe", "object"];
+const SKIP: &[&str] = &[
+    "script", "style", "svg", "math", "head", "title", "rt", "rp", "textarea", "audio", "video",
+    "canvas", "noscript", "template", "iframe", "object",
+];
 
 /// 句末标点。ASCII `.` 另算（后面是空白、收尾引号或结尾才算句末，避免 3.14 之类）。
 fn is_terminal(c: char) -> bool {
@@ -30,7 +33,10 @@ fn is_terminal(c: char) -> bool {
 
 /// 句末之后归前一句的收尾引号、括号。
 fn is_closer(c: char) -> bool {
-    matches!(c, '」' | '』' | '”' | '’' | '）' | '》' | '】' | '〉' | '〕' | '"' | '\'' | ')' | ']')
+    matches!(
+        c,
+        '」' | '』' | '”' | '’' | '）' | '》' | '】' | '〉' | '〕' | '"' | '\'' | ')' | ']'
+    )
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -42,7 +48,9 @@ pub struct Opts {
 
 impl Default for Opts {
     fn default() -> Self {
-        Opts { wrap_image_pages: true }
+        Opts {
+            wrap_image_pages: true,
+        }
     }
 }
 
@@ -76,14 +84,22 @@ fn units(s: &str) -> Vec<Unit> {
                 let mut cs = d.chars();
                 if let (Some(dc), None) = (cs.next(), cs.next()) {
                     if d != ent {
-                        v.push(Unit { start: i, end: i + j + 1, ch: dc });
+                        v.push(Unit {
+                            start: i,
+                            end: i + j + 1,
+                            ch: dc,
+                        });
                         i += j + 1;
                         continue;
                     }
                 }
             }
         }
-        v.push(Unit { start: i, end: i + c.len_utf8(), ch: c });
+        v.push(Unit {
+            start: i,
+            end: i + c.len_utf8(),
+            ch: c,
+        });
         i += c.len_utf8();
     }
     v
@@ -115,7 +131,8 @@ fn sentences(s: &str, split: bool) -> Vec<(usize, usize)> {
     if split {
         while k < n {
             let c = u[k].ch;
-            let ends = is_terminal(c) || (c == '.' && (k + 1 == n || ws(k + 1) || is_closer(u[k + 1].ch)));
+            let ends =
+                is_terminal(c) || (c == '.' && (k + 1 == n || ws(k + 1) || is_closer(u[k + 1].ch)));
             if !ends {
                 k += 1;
                 continue;
@@ -156,8 +173,12 @@ fn raw_text_end(doc: &str, from: usize, name: &str) -> Option<usize> {
     loop {
         let k = at + html::find_ci(&doc[at..], &pat)?;
         match doc.as_bytes().get(k + pat.len()) {
-            Some(b'>' | b'/') | None => return Some(k + doc[k..].find('>').map_or(doc.len() - k, |g| g + 1)),
-            Some(c) if c.is_ascii_whitespace() => return Some(k + doc[k..].find('>').map_or(doc.len() - k, |g| g + 1)),
+            Some(b'>' | b'/') | None => {
+                return Some(k + doc[k..].find('>').map_or(doc.len() - k, |g| g + 1))
+            }
+            Some(c) if c.is_ascii_whitespace() => {
+                return Some(k + doc[k..].find('>').map_or(doc.len() - k, |g| g + 1))
+            }
             _ => at = k + pat.len(),
         }
     }
@@ -167,7 +188,8 @@ fn raw_text_end(doc: &str, from: usize, name: &str) -> Option<usize> {
 fn already_kepub(doc: &str) -> bool {
     html::tags(doc).filter(|t| t.is_start()).any(|t| {
         let tag = &doc[t.start..t.end];
-        html::attr_value(tag, "id").is_some_and(|v| v == "book-columns" || v == "book-inner") || html::has_class(tag, "koboSpan")
+        html::attr_value(tag, "id").is_some_and(|v| v == "book-columns" || v == "book-inner")
+            || html::has_class(tag, "koboSpan")
     })
 }
 
@@ -202,7 +224,9 @@ pub fn transform_xhtml(doc: &str, opts: &Opts) -> Option<(String, usize)> {
                 for (a, b) in ss {
                     sent += 1;
                     r.push_str(&seg[last..a]);
-                    r.push_str(&format!(r#"<span class="koboSpan" id="kobo.{para}.{sent}">"#));
+                    r.push_str(&format!(
+                        r#"<span class="koboSpan" id="kobo.{para}.{sent}">"#
+                    ));
                     r.push_str(&seg[a..b]);
                     r.push_str("</span>");
                     last = b;
@@ -215,9 +239,16 @@ pub fn transform_xhtml(doc: &str, opts: &Opts) -> Option<(String, usize)> {
         }
         pos = t.end;
         i += 1;
-        if t.kind == TagKind::Open && RAW_TEXT.iter().any(|r| local(t.name).eq_ignore_ascii_case(r)) {
+        if t.kind == TagKind::Open
+            && RAW_TEXT
+                .iter()
+                .any(|r| local(t.name).eq_ignore_ascii_case(r))
+        {
             // 直接跳到闭标签之后（tags 扫描不把它当原样文字）；没闭标签就到 body 末尾都不包
-            pos = raw_text_end(doc, t.end, t.name).unwrap_or(be).min(be).max(t.end);
+            pos = raw_text_end(doc, t.end, t.name)
+                .unwrap_or(be)
+                .min(be)
+                .max(t.end);
             // 从闭标签之后重新扫（里面的 `<!--` 会让原来的扫描吞掉后文）
             tags = html::tags_in(doc, pos, be).collect();
             i = 0;
@@ -250,12 +281,19 @@ pub fn transform_xhtml(doc: &str, opts: &Opts) -> Option<(String, usize)> {
             let mut end = t.end;
             if t.kind == TagKind::Open {
                 let mut j = i;
-                while j < tags.len() && tags[j].kind == TagKind::Other && doc[end..tags[j].start].trim().is_empty() {
+                while j < tags.len()
+                    && tags[j].kind == TagKind::Other
+                    && doc[end..tags[j].start].trim().is_empty()
+                {
                     end = tags[j].end;
                     j += 1;
                 }
                 match tags.get(j) {
-                    Some(n) if n.kind == TagKind::Close && n.is("img") && doc[end..n.start].trim().is_empty() => {
+                    Some(n)
+                        if n.kind == TagKind::Close
+                            && n.is("img")
+                            && doc[end..n.start].trim().is_empty() =>
+                    {
                         end = n.end;
                         pos = n.end;
                         i = j + 1;
@@ -265,12 +303,19 @@ pub fn transform_xhtml(doc: &str, opts: &Opts) -> Option<(String, usize)> {
             }
             para += 1;
             spans += 1;
-            edits.push((t.start, t.start, format!(r#"<span class="koboSpan" id="kobo.{para}.1">"#)));
+            edits.push((
+                t.start,
+                t.start,
+                format!(r#"<span class="koboSpan" id="kobo.{para}.1">"#),
+            ));
             edits.push((end, end, "</span>".into()));
             need_new_para = true;
             continue;
         }
-        if t.kind != TagKind::Other && (html::is_block(t.name) || ["caption", "dt", "dd", "address"].iter().any(|b| t.is(b))) {
+        if t.kind != TagKind::Other
+            && (html::is_block(t.name)
+                || ["caption", "dt", "dd", "address"].iter().any(|b| t.is(b)))
+        {
             need_new_para = true;
         }
     }
@@ -287,7 +332,9 @@ pub fn transform_xhtml(doc: &str, opts: &Opts) -> Option<(String, usize)> {
             for (a, b) in ss {
                 sent += 1;
                 r.push_str(&seg[last..a]);
-                r.push_str(&format!(r#"<span class="koboSpan" id="kobo.{para}.{sent}">"#));
+                r.push_str(&format!(
+                    r#"<span class="koboSpan" id="kobo.{para}.{sent}">"#
+                ));
                 r.push_str(&seg[a..b]);
                 r.push_str("</span>");
                 last = b;
@@ -328,21 +375,37 @@ fn risky_selectors(css: &str) -> bool {
         }
         split_top(&sel, ',').into_iter().any(|one| {
             // 复合选择器序列：按组合符切开，组合符单独成项
-            let spaced = one.replace('>', " > ").replace('+', " + ").replace('~', " ~ ");
+            let spaced = one
+                .replace('>', " > ")
+                .replace('+', " + ")
+                .replace('~', " ~ ");
             let parts: Vec<&str> = spaced.split_whitespace().collect();
             parts.iter().enumerate().any(|(k, p)| {
-                let bare = |ty| is_type(p, ty) && p.len() == ty.len() || is_type(p, ty) && p[ty.len()..].starts_with(':');
-                bare("div") || bare("span") || (is_type(p, "body") && parts.get(k + 1) == Some(&">"))
+                let bare = |ty| {
+                    is_type(p, ty) && p.len() == ty.len()
+                        || is_type(p, ty) && p[ty.len()..].starts_with(':')
+                };
+                bare("div")
+                    || bare("span")
+                    || (is_type(p, "body") && parts.get(k + 1) == Some(&">"))
             })
         })
     })
 }
 
 /// `input`（优化过的 EPUB）→ `output`（KEPUB）。章节按 [`transform_xhtml`] 改写，其余条目原样拷压缩数据。
-pub fn epub_to_kepub(input: &std::path::Path, output: &std::path::Path, opts: &Opts) -> Result<Report, BookError> {
+pub fn epub_to_kepub(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    opts: &Opts,
+) -> Result<Report, BookError> {
     let (mut zip, opf_path, opf) = epubzip::open_opf(input)?;
     let dir = epubzip::dir_of(&opf_path).to_string();
-    let nav: Vec<String> = crate::wash::opf::manifest_items(&opf).iter().filter(|it| it.properties.split_whitespace().any(|x| x == "nav")).map(|it| it.path(&dir)).collect();
+    let nav: Vec<String> = crate::wash::opf::manifest_items(&opf)
+        .iter()
+        .filter(|it| it.properties.split_whitespace().any(|x| x == "nav"))
+        .map(|it| it.path(&dir))
+        .collect();
     let mut w = EpubWriter::create(output)?;
     let mut rep = Report::default();
     let mut risky = false;
@@ -363,7 +426,9 @@ pub fn epub_to_kepub(input: &std::path::Path, output: &std::path::Path, opts: &O
         let data = epubzip::read_all(&mut f, size, &name)?;
         drop(f);
         // 不改的条目重新打开、原样拷压缩数据
-        let mut copy = |w: &mut EpubWriter<_>| -> Result<(), BookError> { w.raw_copy(zip.by_index(k).map_err(|e| BookError::zip("读条目", e))?) };
+        let mut copy = |w: &mut EpubWriter<_>| -> Result<(), BookError> {
+            w.raw_copy(zip.by_index(k).map_err(|e| BookError::zip("读条目", e))?)
+        };
         if is_css {
             risky |= risky_selectors(&String::from_utf8_lossy(&data));
             copy(&mut w)?;
@@ -377,7 +442,9 @@ pub fn epub_to_kepub(input: &std::path::Path, output: &std::path::Path, opts: &O
             }
         };
         // 章内 <style> 也查
-        risky |= html::style_blocks(text).iter().any(|b| risky_selectors(&text[b.content_start..b.content_end]));
+        risky |= html::style_blocks(text)
+            .iter()
+            .any(|b| risky_selectors(&text[b.content_start..b.content_end]));
         match transform_xhtml(text, opts) {
             Some((out, n)) => {
                 rep.files += 1;
@@ -399,7 +466,9 @@ mod tests {
     use super::*;
 
     fn doc(body: &str) -> String {
-        format!(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t。</title><style>p{{x:1}}</style></head><body class="b">{body}</body></html>"#)
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t。</title><style>p{{x:1}}</style></head><body class="b">{body}</body></html>"#
+        )
     }
     fn body_of(d: &str) -> String {
         let (a, b) = html::body_range(d).unwrap();
@@ -408,7 +477,10 @@ mod tests {
     fn conv(body: &str) -> String {
         let (out, _) = transform_xhtml(&doc(body), &Opts::default()).unwrap();
         let b = body_of(&out);
-        let b = b.strip_prefix(WRAP_OPEN).and_then(|x| x.strip_suffix(WRAP_CLOSE)).expect("包装");
+        let b = b
+            .strip_prefix(WRAP_OPEN)
+            .and_then(|x| x.strip_suffix(WRAP_CLOSE))
+            .expect("包装");
         b.to_string()
     }
     /// 剥掉插入的 koboSpan 和包装，应当和原文逐字节相等。
@@ -442,7 +514,10 @@ mod tests {
 
     #[test]
     fn sentences_split_cjk_and_closers() {
-        assert_eq!(conv("<p>一。二！</p>"), r#"<p><span class="koboSpan" id="kobo.1.1">一。</span><span class="koboSpan" id="kobo.1.2">二！</span></p>"#);
+        assert_eq!(
+            conv("<p>一。二！</p>"),
+            r#"<p><span class="koboSpan" id="kobo.1.1">一。</span><span class="koboSpan" id="kobo.1.2">二！</span></p>"#
+        );
         assert_eq!(
             conv("<p>「好。」他说……对吗？！嗯</p>"),
             r#"<p><span class="koboSpan" id="kobo.1.1">「好。」</span><span class="koboSpan" id="kobo.1.2">他说……</span><span class="koboSpan" id="kobo.1.3">对吗？！</span><span class="koboSpan" id="kobo.1.4">嗯</span></p>"#
@@ -461,7 +536,10 @@ mod tests {
     fn entities_are_never_split_and_decoded_for_rules() {
         // &#8230; 是省略号、&#8221; 是收尾引号、&#160; 是空白
         let b = conv("<p>甲&#8230;&#8221;乙&amp;丙。&#160;</p><p>&#160;</p>");
-        assert_eq!(b, r#"<p><span class="koboSpan" id="kobo.1.1">甲&#8230;&#8221;</span><span class="koboSpan" id="kobo.1.2">乙&amp;丙。</span>&#160;</p><p>&#160;</p>"#);
+        assert_eq!(
+            b,
+            r#"<p><span class="koboSpan" id="kobo.1.1">甲&#8230;&#8221;</span><span class="koboSpan" id="kobo.1.2">乙&amp;丙。</span>&#160;</p><p>&#160;</p>"#
+        );
     }
 
     #[test]
@@ -475,7 +553,9 @@ mod tests {
     #[test]
     fn paragraph_numbers_advance_on_blocks_and_images() {
         assert_eq!(
-            conv(r#"<div>一<p>二</p>三</div><p>前<img src="a.png"/>后<br/>续</p><img src="b.jpg"></img>"#),
+            conv(
+                r#"<div>一<p>二</p>三</div><p>前<img src="a.png"/>后<br/>续</p><img src="b.jpg"></img>"#
+            ),
             concat!(
                 r#"<div><span class="koboSpan" id="kobo.1.1">一</span><p><span class="koboSpan" id="kobo.2.1">二</span></p><span class="koboSpan" id="kobo.3.1">三</span></div>"#,
                 r#"<p><span class="koboSpan" id="kobo.4.1">前</span><span class="koboSpan" id="kobo.5.1"><img src="a.png"/></span><span class="koboSpan" id="kobo.6.1">后</span><br/><span class="koboSpan" id="kobo.6.2">续</span></p>"#,
@@ -486,7 +566,9 @@ mod tests {
 
     #[test]
     fn skipped_elements_and_ruby() {
-        let b = conv(r#"<p><ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby>字</p><svg><text>不包</text><svg><text>x</text></svg>y</svg><script type="text/javascript">a</script><pre>x. y.</pre>"#);
+        let b = conv(
+            r#"<p><ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby>字</p><svg><text>不包</text><svg><text>x</text></svg>y</svg><script type="text/javascript">a</script><pre>x. y.</pre>"#,
+        );
         assert_eq!(
             b,
             r#"<p><ruby><span class="koboSpan" id="kobo.1.1">漢</span><rp>(</rp><rt>かん</rt><rp>)</rp></ruby><span class="koboSpan" id="kobo.1.2">字</span></p><svg><text>不包</text><svg><text>x</text></svg>y</svg><script type="text/javascript">a</script><pre><span class="koboSpan" id="kobo.2.1">x. y.</span></pre>"#
@@ -498,10 +580,23 @@ mod tests {
         let d = doc("<p>一</p>");
         let (out, n) = transform_xhtml(&d, &Opts::default()).unwrap();
         assert_eq!(n, 1);
-        assert!(out.contains(r#"<body class="b"><div id="book-columns"><div id="book-inner"><p>"#), "{out}");
-        assert!(out.contains("<title>t。</title>"), "head 里不加 span：{out}");
-        assert!(transform_xhtml(&out, &Opts::default()).is_none(), "已是 KEPUB 不再改");
-        assert!(transform_xhtml(&doc(r#"<p><span class="koboSpan" id="kobo.1.1">x</span></p>"#), &Opts::default()).is_none());
+        assert!(
+            out.contains(r#"<body class="b"><div id="book-columns"><div id="book-inner"><p>"#),
+            "{out}"
+        );
+        assert!(
+            out.contains("<title>t。</title>"),
+            "head 里不加 span：{out}"
+        );
+        assert!(
+            transform_xhtml(&out, &Opts::default()).is_none(),
+            "已是 KEPUB 不再改"
+        );
+        assert!(transform_xhtml(
+            &doc(r#"<p><span class="koboSpan" id="kobo.1.1">x</span></p>"#),
+            &Opts::default()
+        )
+        .is_none());
         assert!(transform_xhtml("<html><p>无 body</p></html>", &Opts::default()).is_none());
     }
 
@@ -510,10 +605,22 @@ mod tests {
         let d = doc(r#"<img src="p1.jpg" width="10" height="10"/>"#);
         let (on, _) = transform_xhtml(&d, &Opts::default()).unwrap();
         assert!(on.contains(WRAP_OPEN));
-        let (off, n) = transform_xhtml(&d, &Opts { wrap_image_pages: false }).unwrap();
+        let (off, n) = transform_xhtml(
+            &d,
+            &Opts {
+                wrap_image_pages: false,
+            },
+        )
+        .unwrap();
         assert!(!off.contains(WRAP_OPEN) && n == 1, "{off}");
         // 有文字的页不受开关影响
-        let (t, _) = transform_xhtml(&doc("<p>字</p>"), &Opts { wrap_image_pages: false }).unwrap();
+        let (t, _) = transform_xhtml(
+            &doc("<p>字</p>"),
+            &Opts {
+                wrap_image_pages: false,
+            },
+        )
+        .unwrap();
         assert!(t.contains(WRAP_OPEN));
     }
 
@@ -534,18 +641,44 @@ mod tests {
     #[test]
     fn review_fixes_trailing_ws_raw_text_prefixes_img_comment() {
         // 尾部多个空白都不进 span
-        assert_eq!(conv("<p>一。\r\n  </p>"), "<p><span class=\"koboSpan\" id=\"kobo.1.1\">一。</span>\r\n  </p>");
+        assert_eq!(
+            conv("<p>一。\r\n  </p>"),
+            "<p><span class=\"koboSpan\" id=\"kobo.1.1\">一。</span>\r\n  </p>"
+        );
         // body 里的 script 有裸 < 也不吞后文
-        let b = conv("<script>for(i=0;i<n;i++){}</script><p>后</p><style>/* <!-- */ p{}</style><p>再</p>");
-        assert!(b.contains(r#"<p><span class="koboSpan" id="kobo.1.1">后</span></p>"#) && b.contains(">再</span>"), "{b}");
-        assert!(!b[..b.find("</script>").unwrap()].contains("koboSpan"), "{b}");
+        let b = conv(
+            "<script>for(i=0;i<n;i++){}</script><p>后</p><style>/* <!-- */ p{}</style><p>再</p>",
+        );
+        assert!(
+            b.contains(r#"<p><span class="koboSpan" id="kobo.1.1">后</span></p>"#)
+                && b.contains(">再</span>"),
+            "{b}"
+        );
+        assert!(
+            !b[..b.find("</script>").unwrap()].contains("koboSpan"),
+            "{b}"
+        );
         // 带前缀的 svg 不插 span
-        let b = conv(r#"<svg:svg xmlns:svg="http://www.w3.org/2000/svg"><svg:text>字</svg:text></svg:svg><p>x</p>"#);
-        assert!(!b[..b.find("</svg:svg>").unwrap()].contains("koboSpan"), "{b}");
+        let b = conv(
+            r#"<svg:svg xmlns:svg="http://www.w3.org/2000/svg"><svg:text>字</svg:text></svg:svg><p>x</p>"#,
+        );
+        assert!(
+            !b[..b.find("</svg:svg>").unwrap()].contains("koboSpan"),
+            "{b}"
+        );
         // <img></img> 中间夹注释
-        assert_eq!(conv(r#"<img src="a.png"><!-- 注 --></img>"#), r#"<span class="koboSpan" id="kobo.1.1"><img src="a.png"><!-- 注 --></img></span>"#);
+        assert_eq!(
+            conv(r#"<img src="a.png"><!-- 注 --></img>"#),
+            r#"<span class="koboSpan" id="kobo.1.1"><img src="a.png"><!-- 注 --></img></span>"#
+        );
         // 不包装模式下什么都没改的页返回 None
-        assert!(transform_xhtml(&doc(r#"<svg><image href="c.jpg"/></svg>"#), &Opts { wrap_image_pages: false }).is_none());
+        assert!(transform_xhtml(
+            &doc(r#"<svg><image href="c.jpg"/></svg>"#),
+            &Opts {
+                wrap_image_pages: false
+            }
+        )
+        .is_none());
     }
 
     #[test]
@@ -554,8 +687,12 @@ mod tests {
         assert!(risky_selectors("p, span:first-child { x:1 }"));
         assert!(risky_selectors("body > p { x:1 }"));
         assert!(risky_selectors("@media screen { div:first-child { x:1 } }"));
-        assert!(!risky_selectors("div.x, p span.y, #a { x:1 } /* div { } */"));
-        assert!(!risky_selectors("tbody > tr, .body > p, #body > div.x, p::after { content: \"{ div }\" }"));
+        assert!(!risky_selectors(
+            "div.x, p span.y, #a { x:1 } /* div { } */"
+        ));
+        assert!(!risky_selectors(
+            "tbody > tr, .body > p, #body > div.x, p::after { content: \"{ div }\" }"
+        ));
     }
 
     #[test]
@@ -565,8 +702,13 @@ mod tests {
         let mut w = EpubWriter::create(&src).unwrap();
         w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
         w.put("OEBPS/c.opf", br#"<package><manifest><item id="n" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/><item id="c" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#).unwrap();
-        w.put("OEBPS/nav.xhtml", doc("<nav><ol><li><a href=\"c1.xhtml\">一</a></li></ol></nav>").as_bytes()).unwrap();
-        w.put("OEBPS/c1.xhtml", doc("<p>一。二。</p>").as_bytes()).unwrap();
+        w.put(
+            "OEBPS/nav.xhtml",
+            doc("<nav><ol><li><a href=\"c1.xhtml\">一</a></li></ol></nav>").as_bytes(),
+        )
+        .unwrap();
+        w.put("OEBPS/c1.xhtml", doc("<p>一。二。</p>").as_bytes())
+            .unwrap();
         w.put("OEBPS/s.css", b"span { color: red }").unwrap();
         w.finish().unwrap();
         let out = d.path().join("a.kepub.epub");
@@ -574,11 +716,16 @@ mod tests {
         assert_eq!((rep.files, rep.spans, rep.warnings.len()), (1, 2, 1));
         let mut z = epubzip::open_file_zip(&out).unwrap();
         let first = z.by_index(0).unwrap();
-        assert_eq!((first.name(), first.compression()), ("mimetype", zip::CompressionMethod::Stored));
+        assert_eq!(
+            (first.name(), first.compression()),
+            ("mimetype", zip::CompressionMethod::Stored)
+        );
         drop(first);
-        let nav = String::from_utf8(epubzip::read_by_name(&mut z, "OEBPS/nav.xhtml").unwrap()).unwrap();
+        let nav =
+            String::from_utf8(epubzip::read_by_name(&mut z, "OEBPS/nav.xhtml").unwrap()).unwrap();
         assert!(!nav.contains("koboSpan") && !nav.contains("book-columns"));
-        let c1 = String::from_utf8(epubzip::read_by_name(&mut z, "OEBPS/c1.xhtml").unwrap()).unwrap();
+        let c1 =
+            String::from_utf8(epubzip::read_by_name(&mut z, "OEBPS/c1.xhtml").unwrap()).unwrap();
         assert!(c1.contains(r#"id="kobo.1.2""#));
     }
 }

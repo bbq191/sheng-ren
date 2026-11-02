@@ -12,13 +12,19 @@
 //!   缺省的黑字不够看清时补一条文字颜色。按规则算（Kindle 按元素算，背景来自祖先时这里看不到）。
 //!
 //! 文字一个不动；行内 `style` 同样处理（xochitl 不认行内样式，掌阅认）。
-use crate::cascade::{parse_font_shorthand, FontShorthand, MediaEnv};
-use crate::cascade::{box_sides, compound_tag_classes, last_compound, rule_selector, rule_spans, BoxSides};
 use super::*;
+use crate::cascade::{
+    box_sides, compound_tag_classes, last_compound, rule_selector, rule_spans, BoxSides,
+};
+use crate::cascade::{parse_font_shorthand, FontShorthand, MediaEnv};
 use crate::color::{contrast, ensure_contrast, luminance, over_white, parse_color};
 
 /// 照 Send to Kindle 的规则改书的样式表（独立的 `.css`、`<style>`）和行内 `style`；改了的声明数记进 `rep.kindle_rule_edits`。
-pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, opts: &WashOpts) -> Option<f64> {
+pub(super) fn apply(
+    entries: &mut Vec<Entry>,
+    rep: &mut WashReport,
+    opts: &WashOpts,
+) -> Option<f64> {
     let media = opts.media.as_ref();
     let facts = book_facts(entries, media);
     let font_scale = font_scale(entries, facts.base_font_size);
@@ -50,13 +56,25 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, opts: &WashO
         body_box_areas(entries, media, k, &mut plans);
         let dims = super::image_dims_of(entries, rep, opts.image_dims.as_deref());
         for (path, t) in plans {
-            let Some(&(w, h)) = dims.get(path.as_str()) else { continue };
+            let Some(&(w, h)) = dims.get(path.as_str()) else {
+                continue;
+            };
             let (x, y, dw, dh) = t.placement(w, h);
             let n = |v: f64| fmt_num(v.round());
-            ctx.bg_fixes.insert(path, format!("background-size:{}px {}px;background-position:{}px {}px;", n(dw), n(dh), n(x), n(y)));
+            ctx.bg_fixes.insert(
+                path,
+                format!(
+                    "background-size:{}px {}px;background-position:{}px {}px;",
+                    n(dw),
+                    n(dh),
+                    n(x),
+                    n(y)
+                ),
+            );
         }
     }
-    ctx.body_fonts.extend(exposed_fonts(entries, media, &ctx, &facts.fonts));
+    ctx.body_fonts
+        .extend(exposed_fonts(entries, media, &ctx, &facts.fonts));
     rep.kindle_rule_edits += rewrite_entries(entries, &ctx);
     rep.kindle_rule_edits += per_file_body_margins(entries, &facts);
     ctx.font_scale.filter(|&k| k != 1.0)
@@ -67,15 +85,31 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, opts: &WashO
 /// `p.p{AR MingU30 DemiBold}`：删了 DemiBold，21.9 万字的正文显示成 Light，2026-10-12）。所以在样式表、章节的副本上照改一遍，
 /// 用同一套层叠（[`book_facts`]）重数各字体的字数：哪个字体接管的字数比它本来就生效的还多，就是露出来的，一并当正文字体去掉，
 /// 再查一轮（最多 3 轮）。代价：露出来的字体本来就生效的那些字（《嘯風山莊》2575 字）也换成阅读器字体，Kindle 上它们仍是原字体。
-fn exposed_fonts(entries: &[Entry], media: Option<&MediaEnv>, ctx: &Ctx, before: &HashMap<Option<String>, usize>) -> HashSet<String> {
+fn exposed_fonts(
+    entries: &[Entry],
+    media: Option<&MediaEnv>,
+    ctx: &Ctx,
+    before: &HashMap<Option<String>, usize>,
+) -> HashSet<String> {
     let mut found = HashSet::new();
     if ctx.body_fonts.is_empty() {
         return found;
     }
     let total: usize = before.values().sum();
-    let mut trial = Ctx { body_fonts: ctx.body_fonts.clone(), body_classes: ctx.body_classes.clone(), tiled: ctx.tiled.clone(), bg_fixes: ctx.bg_fixes.clone(), font_scale: None, ..*ctx };
+    let mut trial = Ctx {
+        body_fonts: ctx.body_fonts.clone(),
+        body_classes: ctx.body_classes.clone(),
+        tiled: ctx.tiled.clone(),
+        bg_fixes: ctx.bg_fixes.clone(),
+        font_scale: None,
+        ..*ctx
+    };
     for _ in 0..3 {
-        let mut copy: Vec<Entry> = entries.iter().filter(|e| is_css_name(&e.name) || is_chapter_entry(e)).cloned().collect();
+        let mut copy: Vec<Entry> = entries
+            .iter()
+            .filter(|e| is_css_name(&e.name) || is_chapter_entry(e))
+            .cloned()
+            .collect();
         rewrite_entries(&mut copy, &trial);
         let after = book_facts(&copy, media).fonts;
         let new: Vec<String> = after
@@ -85,7 +119,8 @@ fn exposed_fonts(entries: &[Entry], media: Option<&MediaEnv>, ctx: &Ctx, before:
                 let had = before.get(&Some(f.clone())).copied().unwrap_or(0);
                 // 接管的字数多过本来就有的、也不是零星几个字（全书的千分之一以上）
                 let gained = n.saturating_sub(had);
-                (!trial.body_fonts.contains(f) && gained > had && gained * 1000 > total).then(|| f.clone())
+                (!trial.body_fonts.contains(f) && gained > had && gained * 1000 > total)
+                    .then(|| f.clone())
             })
             .collect();
         if new.is_empty() {
@@ -106,7 +141,12 @@ fn rewrite_entries(entries: &mut [Entry], ctx: &Ctx) -> usize {
                 Ok(text) => rewrite_css_in(text, &e.name, ctx, &mut n).into_bytes(),
                 // 不是 UTF-8 的样式表（《啸风山庄》的 CSS.css 是 Big5）：按单字节原样读写。CSS 的语法都是 ASCII，要改的值（颜色、边距）
                 // 也是，别的字节（Big5 写的字体名）原样留着
-                Err(_) => crate::util::latin1_encode(&rewrite_css_in(&crate::util::latin1_decode(&e.data), &e.name, ctx, &mut n)),
+                Err(_) => crate::util::latin1_encode(&rewrite_css_in(
+                    &crate::util::latin1_decode(&e.data),
+                    &e.name,
+                    ctx,
+                    &mut n,
+                )),
             };
             if n > 0 {
                 e.data = out;
@@ -116,7 +156,9 @@ fn rewrite_entries(entries: &mut [Entry], ctx: &Ctx) -> usize {
         if !is_chapter_entry(e) {
             return 0;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return 0;
+        };
         let s = html::edit_style_attrs(text, |t, value| {
             let body = t.name.eq_ignore_ascii_case("body");
             let (v, k) = rewrite_decls(value, body, &e.name, ctx);
@@ -130,7 +172,10 @@ fn rewrite_entries(entries: &mut [Entry], ctx: &Ctx) -> usize {
             }
         })
         .into_owned();
-        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(rewrite_css_in(css, &e.name, ctx, &mut n))).into_owned();
+        let s = html::edit_style_blocks(&s, |_, css| {
+            html::Edit::Set(rewrite_css_in(css, &e.name, ctx, &mut n))
+        })
+        .into_owned();
         if n > 0 {
             e.data = s.into_bytes();
         }
@@ -187,7 +232,12 @@ impl VScale {
         if n == 0.0 {
             return None;
         }
-        let px = |kindle_rem: f64| format!("{}px", fmt_num((kindle_rem * self.kindle_rem_px * self.ratio * 10.0).round() / 10.0));
+        let px = |kindle_rem: f64| {
+            format!(
+                "{}px",
+                fmt_num((kindle_rem * self.kindle_rem_px * self.ratio * 10.0).round() / 10.0)
+            )
+        };
         Some(match v[end..].to_ascii_lowercase().as_str() {
             "em" | "rem" => format!("{}{}", fmt_num(n * self.em), &v[end..]),
             "%" => px(n / 100.0 * 32.0),
@@ -206,11 +256,19 @@ pub(super) fn scale_vertical(text: &str, vs: &VScale) -> (String, usize) {
         let prop = d.prop.to_ascii_lowercase();
         let (value, imp) = strip_important(d.value);
         let new = match prop.as_str() {
-            "margin-top" | "margin-bottom" | "padding-top" | "padding-bottom" => vs.length(value).map(|v| format!("{v}{imp}")),
+            "margin-top" | "margin-bottom" | "padding-top" | "padding-bottom" => {
+                vs.length(value).map(|v| format!("{v}{imp}"))
+            }
             "margin" | "padding" => match box_sides(d.value) {
                 BoxSides::Sides([t, r, b, l], imp) => {
                     let (nt, nb) = (vs.length(t), vs.length(b));
-                    (nt.is_some() || nb.is_some()).then(|| format!("{} {r} {} {l}{imp}", nt.unwrap_or_else(|| t.to_string()), nb.unwrap_or_else(|| b.to_string())))
+                    (nt.is_some() || nb.is_some()).then(|| {
+                        format!(
+                            "{} {r} {} {l}{imp}",
+                            nt.unwrap_or_else(|| t.to_string()),
+                            nb.unwrap_or_else(|| b.to_string())
+                        )
+                    })
                 }
                 _ => None,
             },
@@ -239,21 +297,32 @@ pub(super) fn scale_vertical_entries(entries: &mut [Entry], vs: &VScale) -> usiz
             let out = scale_vertical_css(&text, vs);
             if out != text {
                 n = 1;
-                e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
+                e.data = if latin1 {
+                    crate::util::latin1_encode(&out)
+                } else {
+                    out.into_bytes()
+                };
             }
             return n;
         }
         if !is_chapter_entry(e) {
             return 0;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return 0;
+        };
         let s = html::edit_style_attrs(text, |_, value| {
             let (v, k) = scale_vertical(value, vs);
             n += k;
-            if k == 0 { html::Edit::Keep } else { html::Edit::Set(v) }
+            if k == 0 {
+                html::Edit::Keep
+            } else {
+                html::Edit::Set(v)
+            }
         })
         .into_owned();
-        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(scale_vertical_css(css, vs))).into_owned();
+        let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(scale_vertical_css(css, vs)))
+            .into_owned();
         if s != text {
             n = n.max(1);
             e.data = s.into_bytes();
@@ -273,7 +342,13 @@ pub(super) fn scale_horizontal(text: &str, h: f64) -> (String, usize) {
         let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))?;
         let n: f64 = v[..end].parse().ok()?;
         let unit = v[end..].to_ascii_lowercase();
-        (n != 0.0 && matches!(unit.as_str(), "em" | "rem" | "pt")).then(|| format!("{}{}", fmt_num((n * h * 10000.0).round() / 10000.0), &v[end..]))
+        (n != 0.0 && matches!(unit.as_str(), "em" | "rem" | "pt")).then(|| {
+            format!(
+                "{}{}",
+                fmt_num((n * h * 10000.0).round() / 10000.0),
+                &v[end..]
+            )
+        })
     };
     let decls = html::css_decls(text);
     let mut edits = Vec::new();
@@ -281,14 +356,24 @@ pub(super) fn scale_horizontal(text: &str, h: f64) -> (String, usize) {
         let prop = d.prop.to_ascii_lowercase();
         let (value, imp) = strip_important(d.value);
         let new = match prop.as_str() {
-            "margin-left" | "margin-right" | "padding-left" | "padding-right" => em(value).map(|v| format!("{v}{imp}")),
+            "margin-left" | "margin-right" | "padding-left" | "padding-right" => {
+                em(value).map(|v| format!("{v}{imp}"))
+            }
             // 负的首行缩进（悬挂缩进，配着左边距）跟着乘：Kindle 在有左右边距的块里也把首行缩进写成百分比，同页宽口径（不乘的话
             // 第一行伸出内容区，Move 测试书 Q14 伸出 24px）；正的不动（整页宽的块里 Kindle 按 em 写）
-            "text-indent" if value.trim_start().starts_with('-') => em(value).map(|v| format!("{v}{imp}")),
+            "text-indent" if value.trim_start().starts_with('-') => {
+                em(value).map(|v| format!("{v}{imp}"))
+            }
             "margin" | "padding" => match box_sides(d.value) {
                 BoxSides::Sides([t, r, b, l], imp) => {
                     let (nr, nl) = (em(r), em(l));
-                    (nr.is_some() || nl.is_some()).then(|| format!("{t} {} {b} {}{imp}", nr.unwrap_or_else(|| r.to_string()), nl.unwrap_or_else(|| l.to_string())))
+                    (nr.is_some() || nl.is_some()).then(|| {
+                        format!(
+                            "{t} {} {b} {}{imp}",
+                            nr.unwrap_or_else(|| r.to_string()),
+                            nl.unwrap_or_else(|| l.to_string())
+                        )
+                    })
                 }
                 _ => None,
             },
@@ -326,18 +411,28 @@ pub(super) fn scale_horizontal_entries(entries: &mut [Entry], h: f64) -> usize {
             let out = css_scaled(&text);
             if out != text {
                 n = 1;
-                e.data = if latin1 { crate::util::latin1_encode(&out) } else { out.into_bytes() };
+                e.data = if latin1 {
+                    crate::util::latin1_encode(&out)
+                } else {
+                    out.into_bytes()
+                };
             }
             return n;
         }
         if !is_chapter_entry(e) {
             return 0;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return 0;
+        };
         let s = html::edit_style_attrs(text, |_, value| {
             let (v, k) = scale_horizontal(value, h);
             n += k;
-            if k == 0 { html::Edit::Keep } else { html::Edit::Set(v) }
+            if k == 0 {
+                html::Edit::Keep
+            } else {
+                html::Edit::Set(v)
+            }
         })
         .into_owned();
         let s = html::edit_style_blocks(&s, |_, css| html::Edit::Set(css_scaled(css))).into_owned();
@@ -366,16 +461,38 @@ pub(super) fn scale_vertical_css(css: &str, vs: &VScale) -> String {
 
 /// 背景图的定位范围相对 body 盒子（Kindle：body 只到最后一块的下外边距为止，`bottom` 的图贴着它，2026-10-12《飘》截图）。
 /// 用这张图的页都只有一个块、body 底差不多时，定位范围的高就到那里（按内容区高折到这个阅读器）；`cover` 写出器按整页画，不动。
-fn body_box_areas(entries: &[Entry], media: Option<&MediaEnv>, k: KindleImageRef, plans: &mut HashMap<String, crate::bgfit::PageTile>) {
+fn body_box_areas(
+    entries: &[Entry],
+    media: Option<&MediaEnv>,
+    k: KindleImageRef,
+    plans: &mut HashMap<String, crate::bgfit::PageTile>,
+) {
     if plans.is_empty() {
         return;
     }
     let area = plans.values().next().map(|t| t.area).unwrap_or_default();
-    let boxes = super::top_spacer::page_boxes(entries, media, super::SpacerGeometry { kindle: k, area });
-    for (path, tile) in plans.iter_mut().filter(|(_, t)| t.fit != crate::bgfit::TileFit::Cover) {
-        let bottoms: Vec<Option<f64>> = boxes.values().filter(|b| b.bg.as_deref() == Some(path.as_str()) && !b.bg_cover).map(|b| b.body_bottom).collect();
-        let Some(lo) = bottoms.iter().copied().collect::<Option<Vec<f64>>>().filter(|v| !v.is_empty()) else { continue };
-        let (min, max) = lo.iter().fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    let boxes =
+        super::top_spacer::page_boxes(entries, media, super::SpacerGeometry { kindle: k, area });
+    for (path, tile) in plans
+        .iter_mut()
+        .filter(|(_, t)| t.fit != crate::bgfit::TileFit::Cover)
+    {
+        let bottoms: Vec<Option<f64>> = boxes
+            .values()
+            .filter(|b| b.bg.as_deref() == Some(path.as_str()) && !b.bg_cover)
+            .map(|b| b.body_bottom)
+            .collect();
+        let Some(lo) = bottoms
+            .iter()
+            .copied()
+            .collect::<Option<Vec<f64>>>()
+            .filter(|v| !v.is_empty())
+        else {
+            continue;
+        };
+        let (min, max) = lo
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), &v| (a.min(v), b.max(v)));
         if max - min > 0.03 * k.content_h {
             continue;
         }
@@ -390,12 +507,20 @@ fn font_scale(entries: &[Entry], base: f64) -> Option<f64> {
     if root_font_size_declared(entries) {
         return None;
     }
-    Some(if (base - 1.0).abs() < 0.005 { 1.0 } else { 1.0 / base })
+    Some(if (base - 1.0).abs() < 0.005 {
+        1.0
+    } else {
+        1.0 / base
+    })
 }
 
 /// 样式表、`<style>` 里有没有选 `html`/`:root` 并写了 `font-size`（或 `font` 简写）的规则；`<html style>` 也算。
 fn root_font_size_declared(entries: &[Entry]) -> bool {
-    let sizes = |decls: &str| html::css_decls(decls).iter().any(|d| d.prop.eq_ignore_ascii_case("font-size") || d.prop.eq_ignore_ascii_case("font"));
+    let sizes = |decls: &str| {
+        html::css_decls(decls).iter().any(|d| {
+            d.prop.eq_ignore_ascii_case("font-size") || d.prop.eq_ignore_ascii_case("font")
+        })
+    };
     let in_css = |css: &str| {
         rule_spans(css).into_iter().any(|c| {
             sizes(c.body)
@@ -412,9 +537,16 @@ fn root_font_size_declared(entries: &[Entry]) -> bool {
         if !is_chapter_entry(e) {
             return false;
         }
-        let Ok(t) = std::str::from_utf8(&e.data) else { return false };
-        html::style_blocks(t).into_iter().any(|b| in_css(&t[b.content_start..b.content_end]))
-            || html::tags(t).find(|g| g.is_start() && g.is("html")).and_then(|g| html::attr_value(&t[g.start..g.end], "style").map(sizes)).unwrap_or(false)
+        let Ok(t) = std::str::from_utf8(&e.data) else {
+            return false;
+        };
+        html::style_blocks(t)
+            .into_iter()
+            .any(|b| in_css(&t[b.content_start..b.content_end]))
+            || html::tags(t)
+                .find(|g| g.is_start() && g.is("html"))
+                .and_then(|g| html::attr_value(&t[g.start..g.end], "style").map(sizes))
+                .unwrap_or(false)
     })
 }
 
@@ -466,12 +598,17 @@ fn covers_block(node: ego_tree::NodeRef<scraper::Node>, block: ego_tree::NodeId)
     use scraper::Node;
     let mut n = node;
     loop {
-        let alone = n.prev_siblings().chain(n.next_siblings()).all(|s| match s.value() {
-            Node::Text(t) => t.trim().is_empty(),
-            Node::Comment(_) => true,
-            _ => false,
-        });
-        let Some(p) = n.parent().filter(|_| alone) else { return false };
+        let alone = n
+            .prev_siblings()
+            .chain(n.next_siblings())
+            .all(|s| match s.value() {
+                Node::Text(t) => t.trim().is_empty(),
+                Node::Comment(_) => true,
+                _ => false,
+            });
+        let Some(p) = n.parent().filter(|_| alone) else {
+            return false;
+        };
         if p.id() == block {
             return true;
         }
@@ -491,7 +628,9 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
     let files: Vec<&Entry> = entries.iter().filter(|e| is_chapter_entry(e)).collect();
     let per_file = crate::util::par_map(&files, |e| {
         let mut f = FileFacts::default();
-        let Ok(text) = std::str::from_utf8(&e.data) else { return f };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return f;
+        };
         let html = Html::parse_document(text);
         let sheet = Sheet::for_doc(&html, &e.name, media, |path| css.get(path).cloned());
         let comp = |el: &ElementRef, parent: &Computed| {
@@ -504,25 +643,45 @@ fn book_facts(entries: &[Entry], media: Option<&MediaEnv>) -> BookFacts {
         // `<span style="font-family:'PingFang SC'">`，Kindle 当正文字体写 `default`，这里以前算成段落没写字体、苹方留着，2026-10-27）
         let root = html.root_element();
         let rc = Rc::new(comp(&root, &Computed::root()));
-        type Item<'a> = (ego_tree::NodeRef<'a, Node>, Rc<Computed>, Rc<Computed>, Rc<Computed>, ego_tree::NodeId);
-        let mut stack: Vec<Item> = root.children().rev().map(|ch| (ch, rc.clone(), rc.clone(), rc.clone(), root.id())).collect();
+        type Item<'a> = (
+            ego_tree::NodeRef<'a, Node>,
+            Rc<Computed>,
+            Rc<Computed>,
+            Rc<Computed>,
+            ego_tree::NodeId,
+        );
+        let mut stack: Vec<Item> = root
+            .children()
+            .rev()
+            .map(|ch| (ch, rc.clone(), rc.clone(), rc.clone(), root.id()))
+            .collect();
         while let Some((node, parent, block, font_of, block_id)) = stack.pop() {
             match node.value() {
                 Node::Text(t) => {
                     let n = t.chars().filter(|c| !c.is_whitespace()).count();
                     if n > 0 {
                         f.chars += n;
-                        *f.sizes.entry((block.font_size * 1000.0).round() as i64).or_default() += n;
-                        *f.fonts.entry(font_of.font_family.as_ref().map(|s| s.to_ascii_lowercase())).or_default() += n;
+                        *f.sizes
+                            .entry((block.font_size * 1000.0).round() as i64)
+                            .or_default() += n;
+                        *f.fonts
+                            .entry(font_of.font_family.as_ref().map(|s| s.to_ascii_lowercase()))
+                            .or_default() += n;
                     }
                 }
                 Node::Element(v) => {
                     if matches!(v.name(), "head" | "script" | "style" | "title") {
                         continue;
                     }
-                    let Some(el) = ElementRef::wrap(node) else { continue };
+                    let Some(el) = ElementRef::wrap(node) else {
+                        continue;
+                    };
                     // body 上的类收在显示不显示之前：`display:none` 的元素上的类照样算"别处用到"
-                    let set = if v.name() == "body" { &mut f.on_body } else { &mut f.elsewhere };
+                    let set = if v.name() == "body" {
+                        &mut f.on_body
+                    } else {
+                        &mut f.elsewhere
+                    };
                     set.extend(v.classes().map(str::to_string));
                     let c = comp(&el, &parent);
                     if v.name() == "body" {
@@ -599,11 +758,21 @@ fn per_file_body_margins(entries: &mut Vec<Entry>, facts: &BookFacts) -> usize {
     let mut edits: Vec<(String, usize)> = Vec::new();
     for (name, neg, bx) in &facts.files {
         let mut body = String::new();
-        for (side, (m, p, names)) in [(bx[0], bx[1], ("margin-left", "padding-left")), (bx[2], bx[3], ("margin-right", "padding-right"))].into_iter().enumerate() {
+        for (side, (m, p, names)) in [
+            (bx[0], bx[1], ("margin-left", "padding-left")),
+            (bx[2], bx[3], ("margin-right", "padding-right")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             if neg[side] == facts.neg[side] {
                 continue;
             }
-            let (mv, pv) = if neg[side] { (len(m), len(p)) } else { ("0".to_string(), "0".to_string()) };
+            let (mv, pv) = if neg[side] {
+                (len(m), len(p))
+            } else {
+                ("0".to_string(), "0".to_string())
+            };
             body.push_str(&format!("{}:{mv};{}:{pv};", names.0, names.1));
         }
         if body.is_empty() {
@@ -621,20 +790,34 @@ fn per_file_body_margins(entries: &mut Vec<Entry>, facts: &BookFacts) -> usize {
     let css_path = super::beside_opf(entries, "eink-body.css");
     let mut n = 0;
     for (name, k) in &edits {
-        let Some(e) = entries.iter_mut().find(|e| &e.name == name) else { continue };
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
-        let Some(t) = html::tags(text).find(|g| g.is_start() && g.is("body")) else { continue };
+        let Some(e) = entries.iter_mut().find(|e| &e.name == name) else {
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
+        let Some(t) = html::tags(text).find(|g| g.is_start() && g.is("body")) else {
+            continue;
+        };
         let tag = html::add_class(&text[t.start..t.end], &format!("eink-bm{}", k + 1));
         let out = format!("{}{tag}{}", &text[..t.start], &text[t.end..]);
         let href = crate::epubzip::href_to(dir_of(&e.name), &css_path, "");
         e.data = super::typeset::inject_css_link(&out, &href).into_bytes();
         n += 1;
     }
-    let mut sheet = String::from("/* body 的左右边距逐文件照 Kindle（sheng-ren kindle_rules，见 wash/kindle_rules.rs） */\n");
+    let mut sheet = String::from(
+        "/* body 的左右边距逐文件照 Kindle（sheng-ren kindle_rules，见 wash/kindle_rules.rs） */\n",
+    );
     for (k, body) in classes.iter().enumerate() {
         sheet.push_str(&format!("html body.eink-bm{}{{{body}}}\n", k + 1));
     }
-    super::add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-body-css");
+    super::add_css_entry(
+        entries,
+        find_opf(entries),
+        &css_path,
+        &sheet,
+        "eink-body-css",
+    );
     n
 }
 
@@ -654,7 +837,9 @@ fn rewrite_css_in(css: &str, base: &str, ctx: &Ctx, n: &mut usize) -> String {
         if !r.closed || trimmed.starts_with('@') {
             continue;
         }
-        let body = trimmed.split(',').all(|s| is_body_selector(s, &ctx.body_classes));
+        let body = trimmed
+            .split(',')
+            .all(|s| is_body_selector(s, &ctx.body_classes));
         let (decls, k) = rewrite_decls(r.body, body, base, ctx);
         *n += k;
         if k > 0 {
@@ -685,28 +870,54 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
     let mut changed = 0;
     let mut last = 0;
     // 同一条规则里的背景色
-    let bg = decls.iter().rev().find_map(|d| match d.prop.to_ascii_lowercase().as_str() {
-        "background-color" => parse_color(strip_important(d.value).0),
-        "background" => crate::cascade::tokens(strip_important(d.value).0).0.into_iter().find_map(parse_color),
-        _ => None,
-    });
-    let bg = bg.filter(|c| c >> 24 != 0).map(over_white).filter(|&c| c != 0xFFFF_FFFF);
+    let bg = decls
+        .iter()
+        .rev()
+        .find_map(|d| match d.prop.to_ascii_lowercase().as_str() {
+            "background-color" => parse_color(strip_important(d.value).0),
+            "background" => crate::cascade::tokens(strip_important(d.value).0)
+                .0
+                .into_iter()
+                .find_map(parse_color),
+            _ => None,
+        });
+    let bg = bg
+        .filter(|c| c >> 24 != 0)
+        .map(over_white)
+        .filter(|&c| c != 0xFFFF_FFFF);
     let has_bg = bg.is_some();
     let bg = bg.unwrap_or(0xFFFF_FFFF);
     let mut has_color = false;
     // 这条规则写了不平铺（`no-repeat`、`repeat-x`、`repeat-y`、`space`、`round`）：不认 `no-repeat` 的阅读器会平铺它，去掉背景图
     // 背景图做成了整页图块的规则照留（xochitl 本来就平铺、不管尺寸位置，图块做成整页一份）
     let tiled = !ctx.tiled.is_empty()
-        && decls.iter().any(|d| html::css_urls(d.value).iter().any(|u| ctx.tiled.contains(&crate::epubzip::resolve_link(base, u.value).0)));
+        && decls.iter().any(|d| {
+            html::css_urls(d.value).iter().any(|u| {
+                ctx.tiled
+                    .contains(&crate::epubzip::resolve_link(base, u.value).0)
+            })
+        });
     // 照 Kindle 写成像素的背景图（掌阅）：规则末尾接上尺寸、位置
-    let fix = decls.iter().find_map(|d| html::css_urls(d.value).iter().find_map(|u| ctx.bg_fixes.get(&crate::epubzip::resolve_link(base, u.value).0)));
+    let fix = decls.iter().find_map(|d| {
+        html::css_urls(d.value).iter().find_map(|u| {
+            ctx.bg_fixes
+                .get(&crate::epubzip::resolve_link(base, u.value).0)
+        })
+    });
     let single_bg = ctx.drop_single_backgrounds
         && !tiled
         && decls.iter().any(|d| {
             let v = strip_important(d.value).0.to_ascii_lowercase();
             match d.prop.to_ascii_lowercase().as_str() {
-                "background-repeat" => v.split(|c: char| c.is_whitespace() || c == ',').any(|t| !t.is_empty() && t != "repeat"),
-                "background" => crate::cascade::tokens(&v).0.iter().any(|t| matches!(*t, "no-repeat" | "repeat-x" | "repeat-y" | "space" | "round")),
+                "background-repeat" => v
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .any(|t| !t.is_empty() && t != "repeat"),
+                "background" => crate::cascade::tokens(&v).0.iter().any(|t| {
+                    matches!(
+                        *t,
+                        "no-repeat" | "repeat-x" | "repeat-y" | "space" | "round"
+                    )
+                }),
                 _ => false,
             }
         });
@@ -721,9 +932,25 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
             "font-family" => body_font_removed(value, &ctx.body_fonts).map(|_| String::new()),
             // `font` 简写里的字体族是正文字体：拆成分项、不写字体族（字号、行高、粗斜体照原值）
             "font" => rewrite_font_shorthand(value, imp, lead, body, ctx),
-            "font-size" => ctx.font_scale.and_then(|k| scaled_font_size(value, body, k)).map(|v| format!("{lead}font-size:{v}{imp};")),
-            p if ABS_SCALED.contains(&p) && !(body && matches!(p, "margin" | "padding" | "margin-left" | "margin-right" | "padding-left" | "padding-right")) => {
-                ctx.font_scale.and_then(|k| scaled_abs_lengths(value, k)).map(|v| format!("{lead}{prop}:{v}{imp};"))
+            "font-size" => ctx
+                .font_scale
+                .and_then(|k| scaled_font_size(value, body, k))
+                .map(|v| format!("{lead}font-size:{v}{imp};")),
+            p if ABS_SCALED.contains(&p)
+                && !(body
+                    && matches!(
+                        p,
+                        "margin"
+                            | "padding"
+                            | "margin-left"
+                            | "margin-right"
+                            | "padding-left"
+                            | "padding-right"
+                    )) =>
+            {
+                ctx.font_scale
+                    .and_then(|k| scaled_abs_lengths(value, k))
+                    .map(|v| format!("{lead}{prop}:{v}{imp};"))
             }
             "color" => {
                 has_color = true;
@@ -740,12 +967,16 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
             // body 的左右外边距、内边距（分项、简写一样）：这一侧有负外边距时照留（Kindle 把 body 这一侧的外边距加内边距照加）
             "margin-left" | "padding-left" if body && !ctx.neg_left => Some(String::new()),
             "margin-right" | "padding-right" if body && !ctx.neg_right => Some(String::new()),
-            "margin" | "padding" if body => split_box(&prop, d.value, lead, ctx.neg_left, ctx.neg_right),
+            "margin" | "padding" if body => {
+                split_box(&prop, d.value, lead, ctx.neg_left, ctx.neg_right)
+            }
             // 不平铺的背景图在不认 `no-repeat` 的阅读器上去掉；简写里的背景色照留（换成分项）
             "background-image" if single_bg => Some(String::new()),
-            "background" if single_bg && value.to_ascii_lowercase().contains("url(") => {
-                Some(crate::cssunlock::background_color(value).map(|c| format!("{lead}background-color:{c}{imp};")).unwrap_or_default())
-            }
+            "background" if single_bg && value.to_ascii_lowercase().contains("url(") => Some(
+                crate::cssunlock::background_color(value)
+                    .map(|c| format!("{lead}background-color:{c}{imp};"))
+                    .unwrap_or_default(),
+            ),
             _ => None,
         };
         match replaced {
@@ -761,7 +992,8 @@ fn rewrite_decls(text: &str, body: bool, base: &str, ctx: &Ctx) -> (String, usiz
     if ctx.opaque_rgba && out.to_ascii_lowercase().contains("rgba(") {
         let before = out.clone();
         out = crate::cssunlock::rgba_to_opaque(&before).into_owned();
-        changed += before.to_ascii_lowercase().matches("rgba(").count() - out.to_ascii_lowercase().matches("rgba(").count();
+        changed += before.to_ascii_lowercase().matches("rgba(").count()
+            - out.to_ascii_lowercase().matches("rgba(").count();
     }
     // 写了深背景、没写文字颜色：缺省的黑字看不清时补上
     if !has_color && bg != 0xFFFF_FFFF && contrast(0xFF00_0000, bg) < 4.5 {
@@ -788,7 +1020,11 @@ fn strip_important(v: &str) -> (&str, &'static str) {
 
 /// `font-family` 的第一个是正文字体时去掉它，返回剩下的备选（可能为空）；不是正文字体返回 `None`。
 fn body_font_removed(value: &str, body: &HashSet<String>) -> Option<String> {
-    let names: Vec<&str> = value.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let names: Vec<&str> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     let first = super::fonts::norm_family(names.first()?)?;
     body.contains(&first).then(|| names[1..].join(","))
 }
@@ -796,7 +1032,13 @@ fn body_font_removed(value: &str, body: &HashSet<String>) -> Option<String> {
 /// `font` 简写里的字体族第一个是正文字体：换成分项，不写字体族（交给阅读器的字体），别的照简写的意思写全——简写会把没写的项
 /// 重置成缺省值，所以没写的粗细、斜体、小型大写、行高写 `normal`（`font-stretch` 只在写了时写：认它的阅读器少）。
 /// 不是正文字体、拆不清的返回 `None`（不动）。
-fn font_without_body_family(f: &FontShorthand, size: &str, imp: &str, lead: &str, body: &HashSet<String>) -> Option<String> {
+fn font_without_body_family(
+    f: &FontShorthand,
+    size: &str,
+    imp: &str,
+    lead: &str,
+    body: &HashSet<String>,
+) -> Option<String> {
     if !body.contains(&super::fonts::norm_family(f.family)?) {
         return None;
     }
@@ -815,9 +1057,17 @@ fn font_without_body_family(f: &FontShorthand, size: &str, imp: &str, lead: &str
 
 /// `font` 简写：字体族是正文字体的拆成分项（[`font_without_body_family`]）；字号要归一的（[`scaled_font_size`]）换掉字号。
 /// 都不用改、拆不清的返回 `None`（不动）。
-fn rewrite_font_shorthand(value: &str, imp: &str, lead: &str, body: bool, ctx: &Ctx) -> Option<String> {
+fn rewrite_font_shorthand(
+    value: &str,
+    imp: &str,
+    lead: &str,
+    body: bool,
+    ctx: &Ctx,
+) -> Option<String> {
     let f = parse_font_shorthand(value)?;
-    let scaled = ctx.font_scale.and_then(|k| scaled_font_size(f.size, body, k));
+    let scaled = ctx
+        .font_scale
+        .and_then(|k| scaled_font_size(f.size, body, k));
     let size = scaled.as_deref().unwrap_or(f.size);
     if let Some(s) = font_without_body_family(&f, size, imp, lead, &ctx.body_fonts) {
         return Some(s);
@@ -825,7 +1075,11 @@ fn rewrite_font_shorthand(value: &str, imp: &str, lead: &str, body: bool, ctx: &
     let new = scaled?;
     // 字号是 `value` 里的一段：原地换掉，别的照原样
     let at = f.size.as_ptr() as usize - value.as_ptr() as usize;
-    Some(format!("{lead}font:{}{new}{}{imp};", &value[..at], &value[at + f.size.len()..]))
+    Some(format!(
+        "{lead}font:{}{new}{}{imp};",
+        &value[..at],
+        &value[at + f.size.len()..]
+    ))
 }
 
 /// 字号归一（Send to Kindle 把全书正文字号当阅读器字号设置的 1.0，别的按比例）：每个元素的字号都乘 `k`（1 / 正文字号）。
@@ -836,7 +1090,9 @@ fn rewrite_font_shorthand(value: &str, imp: &str, lead: &str, body: bool, ctx: &
 /// 不用改返回 `None`。
 fn scaled_font_size(value: &str, body: bool, k: f64) -> Option<String> {
     let v = value.trim();
-    let split = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+    let split = v
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(v.len());
     let (num, unit) = v.split_at(split);
     let n: f64 = num.parse().ok()?;
     let px = match unit.to_ascii_lowercase().as_str() {
@@ -848,7 +1104,9 @@ fn scaled_font_size(value: &str, body: bool, k: f64) -> Option<String> {
         "mm" => 96.0 / 25.4,
         "q" => 96.0 / 101.6,
         "rem" => 16.0,
-        "em" | "%" | "ex" | "ch" if body && k != 1.0 => return Some(format!("{}{unit}", fmt_num(n * k))),
+        "em" | "%" | "ex" | "ch" if body && k != 1.0 => {
+            return Some(format!("{}{unit}", fmt_num(n * k)))
+        }
         _ => return None,
     };
     let out = format!("{}px", fmt_num(n * px * k));
@@ -860,9 +1118,18 @@ fn scaled_font_size(value: &str, body: bool, k: f64) -> Option<String> {
 /// `margin-bottom:20px` 在 Kindle 上是 0.536 行，不乘的话掌阅、Move 上大 16.7%，2026-10-14 unify.py 查出来）。边框宽度写出器照绝对值写，不在里面；
 /// 宽高也不在里面：图片尺寸由 `kindle_images` 按 Kindle 算好（已经含这个系数），块宽度很少写 px。
 const ABS_SCALED: &[&str] = &[
-    "margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
-    "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
-    "text-indent", "line-height",
+    "margin",
+    "margin-top",
+    "margin-bottom",
+    "margin-left",
+    "margin-right",
+    "padding",
+    "padding-top",
+    "padding-bottom",
+    "padding-left",
+    "padding-right",
+    "text-indent",
+    "line-height",
 ];
 
 /// 值里的绝对长度（px、pt、pc、in、cm、mm、q）乘 `k`，单位不变（px 照旧按 Kindle 的口径给后面的换算）；`k` 是 1、没有绝对长度、
@@ -875,7 +1142,9 @@ fn scaled_abs_lengths(value: &str, k: f64) -> Option<String> {
     let parts: Vec<String> = value
         .split_whitespace()
         .map(|t| {
-            let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(t.len());
+            let split = t
+                .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+                .unwrap_or(t.len());
             let (num, unit) = t.split_at(split);
             match (num.parse::<f64>(), unit.to_ascii_lowercase().as_str()) {
                 (Ok(n), "px" | "pt" | "pc" | "in" | "cm" | "mm" | "q") if n != 0.0 => {
@@ -893,18 +1162,33 @@ fn scaled_abs_lengths(value: &str, k: f64) -> Option<String> {
 pub(crate) fn fmt_num(x: f64) -> String {
     let s = format!("{x:.4}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s.is_empty() || s == "-0" { "0".into() } else { s.to_string() }
+    if s.is_empty() || s == "-0" {
+        "0".into()
+    } else {
+        s.to_string()
+    }
 }
 
 /// body 的 `margin`/`padding` 简写拆开，只留上下（和要留的左右）。值按 [`box_sides`] 拆（括号里的空格不算分隔：`calc(1em + 2px)`），
 /// 拆不清的不动。
-fn split_box(prop: &str, value: &str, lead: &str, keep_left: bool, keep_right: bool) -> Option<String> {
+fn split_box(
+    prop: &str,
+    value: &str,
+    lead: &str,
+    keep_left: bool,
+    keep_right: bool,
+) -> Option<String> {
     let ([top, right, bottom, left], imp) = match box_sides(value) {
         BoxSides::Sides(s, imp) => (s, imp),
         BoxSides::Keyword(k, imp) => ([k; 4], imp),
         BoxSides::Unknown => return None,
     };
-    let zero = |v: &str| v.trim_start_matches(['0', '.']).chars().all(|c| c.is_ascii_alphabetic() || c == '%') && v.starts_with('0');
+    let zero = |v: &str| {
+        v.trim_start_matches(['0', '.'])
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || c == '%')
+            && v.starts_with('0')
+    };
     if zero(right) && zero(left) {
         return None;
     }
@@ -930,7 +1214,17 @@ mod tests {
     use super::*;
 
     fn ctx() -> Ctx {
-        Ctx { body_fonts: ["宋体".to_string()].into_iter().collect(), body_classes: ["calibre".to_string()].into_iter().collect(), neg_left: false, neg_right: false, font_scale: None, opaque_rgba: false, drop_single_backgrounds: false, tiled: HashSet::new(), bg_fixes: HashMap::new() }
+        Ctx {
+            body_fonts: ["宋体".to_string()].into_iter().collect(),
+            body_classes: ["calibre".to_string()].into_iter().collect(),
+            neg_left: false,
+            neg_right: false,
+            font_scale: None,
+            opaque_rgba: false,
+            drop_single_backgrounds: false,
+            tiled: HashSet::new(),
+            bg_fixes: HashMap::new(),
+        }
     }
 
     #[test]
@@ -940,14 +1234,31 @@ mod tests {
         let css = r#"body{margin:0 5pt;font-family:"宋体",serif} .calibre{padding-left:1em;margin-top:1em} p{font-family:"宋体"} h1{color:#fff;background-color:#f0a200} .pale{color:#f5ac00} .dark{background-color:#0168b7} .ok{color:#333}"#;
         let out = rewrite_css(css, &c, &mut n);
         assert!(out.contains("body{margin-top:0;margin-bottom:0;}"), "{out}");
-        assert!(out.contains(".calibre{margin-top:1em}"), "只用在 body 上的类去掉左右：{out}");
+        assert!(
+            out.contains(".calibre{margin-top:1em}"),
+            "只用在 body 上的类去掉左右：{out}"
+        );
         assert!(out.contains("p{}"), "正文字体整条去掉：{out}");
         let white = rewrite_css(".t{color:#fff}", &c, &mut n);
-        assert_eq!(white, ".t{color:#fff}", "没写背景色的白字不动（多半压在背景图上）");
-        assert!(out.contains("h1{color:#454545;background-color:#f0a200}") && out.contains(".pale{color:#9d6e00;}"), "{out}");
-        assert!(out.contains(".dark{background-color:#0168b7;color:#e4e4e4;}") && out.contains(".ok{color:#333}"), "{out}");
+        assert_eq!(
+            white, ".t{color:#fff}",
+            "没写背景色的白字不动（多半压在背景图上）"
+        );
+        assert!(
+            out.contains("h1{color:#454545;background-color:#f0a200}")
+                && out.contains(".pale{color:#9d6e00;}"),
+            "{out}"
+        );
+        assert!(
+            out.contains(".dark{background-color:#0168b7;color:#e4e4e4;}")
+                && out.contains(".ok{color:#333}"),
+            "{out}"
+        );
         // 有负的左外边距：body 的左边距照留
-        let c2 = Ctx { neg_left: true, ..ctx() };
+        let c2 = Ctx {
+            neg_left: true,
+            ..ctx()
+        };
         let out2 = rewrite_css("body{margin:0 5pt}", &c2, &mut n);
         assert_eq!(out2, "body{margin-top:0;margin-bottom:0;margin-left:5pt;}");
     }
@@ -955,11 +1266,23 @@ mod tests {
     /// 负外边距那一侧：分项、简写的 margin 和 padding 都照留（以前简写的 padding 左右照删，和分项的 `padding-left` 不一致）。
     #[test]
     fn negative_side_kept_for_padding_shorthand_too() {
-        let c = Ctx { neg_left: true, ..ctx() };
+        let c = Ctx {
+            neg_left: true,
+            ..ctx()
+        };
         let mut n = 0;
-        assert_eq!(rewrite_css("body{padding-left:3em}", &c, &mut n), "body{padding-left:3em}");
-        assert_eq!(rewrite_css("body{padding:0 3em}", &c, &mut n), "body{padding-top:0;padding-bottom:0;padding-left:3em;}");
-        assert_eq!(rewrite_css("body{margin:1em 0 1em 2em}", &c, &mut n), "body{margin-top:1em;margin-bottom:1em;margin-left:2em;}");
+        assert_eq!(
+            rewrite_css("body{padding-left:3em}", &c, &mut n),
+            "body{padding-left:3em}"
+        );
+        assert_eq!(
+            rewrite_css("body{padding:0 3em}", &c, &mut n),
+            "body{padding-top:0;padding-bottom:0;padding-left:3em;}"
+        );
+        assert_eq!(
+            rewrite_css("body{margin:1em 0 1em 2em}", &c, &mut n),
+            "body{margin-top:1em;margin-bottom:1em;margin-left:2em;}"
+        );
     }
 
     /// 带空格的 `calc()` 不再被空格拆坏（以前 `calc(1em` `+` `2px)` 当成三个值，写出坏 CSS）。
@@ -967,8 +1290,14 @@ mod tests {
     fn calc_in_box_shorthand_not_broken() {
         let c = ctx();
         let mut n = 0;
-        assert_eq!(rewrite_css("body{margin:0 calc(1em + 2px)}", &c, &mut n), "body{margin-top:0;margin-bottom:0;}");
-        let c2 = Ctx { neg_left: true, ..ctx() };
+        assert_eq!(
+            rewrite_css("body{margin:0 calc(1em + 2px)}", &c, &mut n),
+            "body{margin-top:0;margin-bottom:0;}"
+        );
+        let c2 = Ctx {
+            neg_left: true,
+            ..ctx()
+        };
         assert_eq!(rewrite_css("body{margin:0 calc(1em + 2px) !important}", &c2, &mut n), "body{margin-top:0 !important;margin-bottom:0 !important;margin-left:calc(1em + 2px) !important;}");
     }
 
@@ -982,7 +1311,13 @@ mod tests {
             "p{font-style:italic;font-variant:normal;font-weight:bold;font-size:1.2em;line-height:1.5;}"
         );
         assert_eq!(rewrite_css(r#"p{font: 12pt 宋体 !important}"#, &c, &mut n), "p{font-style:normal !important;font-variant:normal !important;font-weight:normal !important;font-size:12pt !important;line-height:normal !important;}");
-        for keep in [r#"p{font:1em "楷体"}"#, "p{font:caption}", "p{font:calc(1em + 1px) 宋体}", "p{font:inherit}", "p{font:bold 宋体}"] {
+        for keep in [
+            r#"p{font:1em "楷体"}"#,
+            "p{font:caption}",
+            "p{font:calc(1em + 1px) 宋体}",
+            "p{font:inherit}",
+            "p{font:bold 宋体}",
+        ] {
             assert_eq!(rewrite_css(keep, &c, &mut n), keep);
         }
     }
@@ -990,16 +1325,39 @@ mod tests {
     /// 字号归一：body 上的相对、绝对字号和别处的绝对字号乘系数，别处的相对字号、关键字不动；`font` 简写里的字号同样。
     #[test]
     fn font_sizes_scaled_to_body_text() {
-        let c = Ctx { font_scale: Some(0.8), ..ctx() };
+        let c = Ctx {
+            font_scale: Some(0.8),
+            ..ctx()
+        };
         let mut n = 0;
         assert_eq!(rewrite_css("body{font-size:125%} p{font-size:15pt} h1{font-size:1.5em} .s{font-size:smaller} .r{font-size:2rem}", &c, &mut n), "body{font-size:100%;} p{font-size:16px;} h1{font-size:1.5em} .s{font-size:smaller} .r{font-size:25.6px;}");
-        assert_eq!(rewrite_css(".calibre{font-size:1.25em !important}", &c, &mut n), ".calibre{font-size:1em !important;}", "只用在 body 上的类");
-        assert_eq!(rewrite_css(r#"h2{font:bold 20px/1.2 "楷体"}"#, &c, &mut n), r#"h2{font:bold 16px/1.2 "楷体";}"#);
+        assert_eq!(
+            rewrite_css(".calibre{font-size:1.25em !important}", &c, &mut n),
+            ".calibre{font-size:1em !important;}",
+            "只用在 body 上的类"
+        );
+        assert_eq!(
+            rewrite_css(r#"h2{font:bold 20px/1.2 "楷体"}"#, &c, &mut n),
+            r#"h2{font:bold 16px/1.2 "楷体";}"#
+        );
         assert_eq!(rewrite_css(r#"p{font:italic 15pt "宋体", serif}"#, &c, &mut n), "p{font-style:italic;font-variant:normal;font-weight:normal;font-size:16px;line-height:normal;}");
-        assert_eq!(rewrite_css(r#"p{font:1.2em "楷体"}"#, &c, &mut n), r#"p{font:1.2em "楷体"}"#);
+        assert_eq!(
+            rewrite_css(r#"p{font:1.2em "楷体"}"#, &c, &mut n),
+            r#"p{font:1.2em "楷体"}"#
+        );
         // 正文已经是 1em：相对字号不动，绝对字号照样折成 px（掌阅的 pt 按 px 的数算）
-        let one = Ctx { font_scale: Some(1.0), ..ctx() };
-        assert_eq!(rewrite_css("body{font-size:90%} p{font-size:12pt} .a{font-size:16px} .b{font-size:0.75rem}", &one, &mut n), "body{font-size:90%} p{font-size:16px;} .a{font-size:16px} .b{font-size:12px;}");
+        let one = Ctx {
+            font_scale: Some(1.0),
+            ..ctx()
+        };
+        assert_eq!(
+            rewrite_css(
+                "body{font-size:90%} p{font-size:12pt} .a{font-size:16px} .b{font-size:0.75rem}",
+                &one,
+                &mut n
+            ),
+            "body{font-size:90%} p{font-size:16px;} .a{font-size:16px} .b{font-size:12px;}"
+        );
         // 外边距、内边距、首行缩进、行高里的绝对长度跟着乘；边框、宽高、相对单位、calc 不动；body 的左右照删
         assert_eq!(
             rewrite_css("p{margin:9px 0 20px;text-indent:15pt;line-height:20px;padding-top:1em;border-width:2px;width:300px;margin-left:calc(2px + 1em)} body{margin:10px 5px}", &c, &mut n),
@@ -1013,33 +1371,96 @@ mod tests {
     /// 段落里只有一部分字的 span、`<sup>`、隔着 `<br/>` 的不算。
     #[test]
     fn whole_paragraph_span_font_counts_as_paragraph_font() {
-        let e = |name: &str, data: &str| Entry { name: name.into(), data: data.as_bytes().to_vec() };
-        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head></head><body>{body}</body></html>"#);
+        let e = |name: &str, data: &str| Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        };
+        let page = |body: &str| {
+            format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><head></head><body>{body}</body></html>"#
+            )
+        };
         let long = "正文".repeat(50);
         let facts = |body: String| book_facts(&[e("OEBPS/c1.xhtml", &page(&body))], None).body_font;
         let span = |t: &str| format!(r#"<span style="font-family:'PingFang SC';">{t}</span>"#);
-        assert_eq!(facts(format!("<p>{}</p><p> <b>{}</b> </p>", span(&long), span(&long))).as_deref(), Some("pingfang sc"), "整段一个 span、套在 <b> 里也算");
-        assert_eq!(facts(format!("<p>{long}{}</p>", span("几个字"))), None, "只盖住段落一部分：字算给段落");
-        assert_eq!(facts(format!("<p>{}<br/>{long}</p>", span(&long))), None, "隔着 <br/> 不是整段");
-        assert_eq!(facts(format!(r#"<p><sup style="font-family:'PingFang SC';">{long}</sup></p>"#)), None, "上标不并进段落");
+        assert_eq!(
+            facts(format!(
+                "<p>{}</p><p> <b>{}</b> </p>",
+                span(&long),
+                span(&long)
+            ))
+            .as_deref(),
+            Some("pingfang sc"),
+            "整段一个 span、套在 <b> 里也算"
+        );
+        assert_eq!(
+            facts(format!("<p>{long}{}</p>", span("几个字"))),
+            None,
+            "只盖住段落一部分：字算给段落"
+        );
+        assert_eq!(
+            facts(format!("<p>{}<br/>{long}</p>", span(&long))),
+            None,
+            "隔着 <br/> 不是整段"
+        );
+        assert_eq!(
+            facts(format!(
+                r#"<p><sup style="font-family:'PingFang SC';">{long}</sup></p>"#
+            )),
+            None,
+            "上标不并进段落"
+        );
     }
 
     /// 全书正文字号按块、按字数算（行内元素改字号的字算给块），`html` 上写了字号的不归一。
     #[test]
     fn base_font_size_and_scale() {
-        let e = |name: &str, data: &str| Entry { name: name.into(), data: data.as_bytes().to_vec() };
-        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#);
+        let e = |name: &str, data: &str| Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        };
+        let page = |body: &str| {
+            format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head><body>{body}</body></html>"#
+            )
+        };
         let long = "正文".repeat(50);
-        let book = |css: &str| vec![e("OEBPS/s.css", css), e("OEBPS/c1.xhtml", &page(&format!(r#"<h1>标题</h1><p>{long}<span class="big">大字大字</span></p><p class="note">注释</p>"#)))];
+        let book = |css: &str| {
+            vec![
+                e("OEBPS/s.css", css),
+                e(
+                    "OEBPS/c1.xhtml",
+                    &page(&format!(
+                        r#"<h1>标题</h1><p>{long}<span class="big">大字大字</span></p><p class="note">注释</p>"#
+                    )),
+                ),
+            ]
+        };
         let base = |b: &[Entry], m: Option<&MediaEnv>| book_facts(b, m).base_font_size;
         let scale = |b: &[Entry]| font_scale(b, base(b, None));
-        assert_eq!(base(&book("p{font-size:15pt} .big{font-size:3em} .note{font-size:0.5em}"), None), 1.25);
+        assert_eq!(
+            base(
+                &book("p{font-size:15pt} .big{font-size:3em} .note{font-size:0.5em}"),
+                None
+            ),
+            1.25
+        );
         assert_eq!(scale(&book("p{font-size:15pt}")), Some(0.8));
         assert_eq!(scale(&book("p{font-size:1em}")), Some(1.0));
-        assert_eq!(scale(&book("html{font-size:80%} p{font-size:15pt}")), None, "html 上写了字号");
+        assert_eq!(
+            scale(&book("html{font-size:80%} p{font-size:15pt}")),
+            None,
+            "html 上写了字号"
+        );
         // `@media` 按阅读模式的阅读范围求（同 KFX 写出器）：掌阅 Air 3 Pro 1440 宽，`min-width:1200px` 成立、`min-width:2000px` 不成立；
         // 没给环境时特性条件一律不成立
-        let ireader = MediaEnv { width: 1440.0, height: 1920.0, device_width: 1440.0, device_height: 1920.0, color: false };
+        let ireader = MediaEnv {
+            width: 1440.0,
+            height: 1920.0,
+            device_width: 1440.0,
+            device_height: 1920.0,
+            color: false,
+        };
         let css = "p{font-size:1em} @media (min-width:1200px){p{font-size:15pt}} @media (min-width:2000px){p{font-size:2em}}";
         assert_eq!(base(&book(css), Some(&ireader)), 1.25);
         assert_eq!(base(&book(css), None), 1.0);
@@ -1049,16 +1470,33 @@ mod tests {
     /// 按文件字数取多数，body 上的类别处也用到的不算。
     #[test]
     fn book_facts_font_negative_margin_and_body_classes() {
-        let e = |name: &str, data: &str| Entry { name: name.into(), data: data.as_bytes().to_vec() };
-        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head>{body}</html>"#);
+        let e = |name: &str, data: &str| Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        };
+        let page = |body: &str| {
+            format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="s.css"/></head>{body}</html>"#
+            )
+        };
         let css = r#".song{font-family:"FZLanTingSong", serif} .kai{font-family:楷体} .hang{margin:0 1em 0 -2em} .wrap{margin-right:-5%}"#;
         let long = "正文".repeat(60);
         let book = vec![
             e("OEBPS/s.css", css),
             // 字体写在 body 的类上、段落继承；行内的楷体算给段落；用了负的左外边距
-            e("OEBPS/c1.xhtml", &page(&format!(r#"<body class="song main"><p>{long}<span class="kai">楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体</span></p><p class="hang">悬挂</p></body>"#))),
+            e(
+                "OEBPS/c1.xhtml",
+                &page(&format!(
+                    r#"<body class="song main"><p>{long}<span class="kai">楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体楷体</span></p><p class="hang">悬挂</p></body>"#
+                )),
+            ),
             // 字少的文件用了负的右外边距：字数不占多数，不留；`main` 在这里不在 body 上
-            e("OEBPS/c2.xhtml", &page(r#"<body class="song"><div class="wrap main"><p class="kai">短短的楷体</p></div></body>"#)),
+            e(
+                "OEBPS/c2.xhtml",
+                &page(
+                    r#"<body class="song"><div class="wrap main"><p class="kai">短短的楷体</p></div></body>"#,
+                ),
+            ),
         ];
         let f = book_facts(&book, None);
         assert_eq!(f.body_font.as_deref(), Some("fzlantingsong"));
@@ -1070,19 +1508,38 @@ mod tests {
     /// 露出来的字体本来就生效的少数字一起换成阅读器字体；别的字体（标题的黑体）不动。
     #[test]
     fn exposed_body_font_removed_too() {
-        let e = |name: &str, data: &str| Entry { name: name.into(), data: data.as_bytes().to_vec() };
-        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="a.css"/><link rel="stylesheet" href="b.css"/></head><body>{body}</body></html>"#);
+        let e = |name: &str, data: &str| Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        };
+        let page = |body: &str| {
+            format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="a.css"/><link rel="stylesheet" href="b.css"/></head><body>{body}</body></html>"#
+            )
+        };
         let long = "正文".repeat(200);
         let mut book = vec![
-            e("OEBPS/a.css", r#"p.p{font-family:"Light", serif} p.t{font-family:"Light"} h1{font-family:"Hei"}"#),
+            e(
+                "OEBPS/a.css",
+                r#"p.p{font-family:"Light", serif} p.t{font-family:"Light"} h1{font-family:"Hei"}"#,
+            ),
             e("OEBPS/b.css", r#"p.p{font-family:"DemiBold", serif}"#),
-            e("OEBPS/c1.xhtml", &page(&format!(r#"<h1>标题标题</h1><p class="p">{long}</p><p class="t">年表年表</p>"#))),
+            e(
+                "OEBPS/c1.xhtml",
+                &page(&format!(
+                    r#"<h1>标题标题</h1><p class="p">{long}</p><p class="t">年表年表</p>"#
+                )),
+            ),
         ];
         let mut rep = WashReport::default();
         apply(&mut book, &mut rep, &WashOpts::default());
         let css = |i: usize| String::from_utf8(book[i].data.clone()).unwrap();
         assert_eq!(css(1), "p.p{}", "胜出的正文字体去掉");
-        assert_eq!(css(0), r#"p.p{} p.t{} h1{font-family:"Hei"}"#, "露出来的 Light 一并去掉，黑体不动");
+        assert_eq!(
+            css(0),
+            r#"p.p{} p.t{} h1{font-family:"Hei"}"#,
+            "露出来的 Light 一并去掉，黑体不动"
+        );
         let after = book_facts(&book, None);
         assert_eq!(after.body_font, None, "正文按层叠算没有指定字体");
     }
@@ -1092,9 +1549,22 @@ mod tests {
     #[test]
     fn rgba_made_opaque_only_when_reader_lacks_it() {
         let mut n = 0;
-        let c = Ctx { opaque_rgba: true, ..ctx() };
-        assert_eq!(rewrite_css("h1{color:#2e5b60;background-color:rgba(255,255,255,0.8)}", &c, &mut n), "h1{color:#2e5b60;background-color:#ffffff}");
-        assert_eq!(rewrite_css(".x{border-color:rgba(0,0,0,0.5)}", &c, &mut n), ".x{border-color:#808080}");
+        let c = Ctx {
+            opaque_rgba: true,
+            ..ctx()
+        };
+        assert_eq!(
+            rewrite_css(
+                "h1{color:#2e5b60;background-color:rgba(255,255,255,0.8)}",
+                &c,
+                &mut n
+            ),
+            "h1{color:#2e5b60;background-color:#ffffff}"
+        );
+        assert_eq!(
+            rewrite_css(".x{border-color:rgba(0,0,0,0.5)}", &c, &mut n),
+            ".x{border-color:#808080}"
+        );
         let keep = "h1{background-color:rgba(255,255,255,0.8)}";
         assert_eq!(rewrite_css(keep, &ctx(), &mut n), keep);
     }
@@ -1103,22 +1573,64 @@ mod tests {
     #[test]
     fn single_backgrounds_dropped_when_reader_tiles() {
         let mut n = 0;
-        let c = Ctx { drop_single_backgrounds: true, ..ctx() };
-        assert_eq!(rewrite_css(r#"body.fen{background:url('a.jpg') no-repeat bottom center;background-size:100% auto;background-color:#fff}"#, &c, &mut n), "body.fen{background-size:100% auto;background-color:#fff}");
-        assert_eq!(rewrite_css(r#".a{background:#eee url(a.png) no-repeat}"#, &c, &mut n), ".a{background-color:#eee;}");
-        assert_eq!(rewrite_css(r#".b{background-image:url(b.png);background-repeat:repeat-x}"#, &c, &mut n), ".b{background-repeat:repeat-x}");
-        for keep in [r#".t{background-image:url(paper.jpg)}"#, r#".t{background:url(paper.jpg) repeat}"#] {
+        let c = Ctx {
+            drop_single_backgrounds: true,
+            ..ctx()
+        };
+        assert_eq!(
+            rewrite_css(
+                r#"body.fen{background:url('a.jpg') no-repeat bottom center;background-size:100% auto;background-color:#fff}"#,
+                &c,
+                &mut n
+            ),
+            "body.fen{background-size:100% auto;background-color:#fff}"
+        );
+        assert_eq!(
+            rewrite_css(r#".a{background:#eee url(a.png) no-repeat}"#, &c, &mut n),
+            ".a{background-color:#eee;}"
+        );
+        assert_eq!(
+            rewrite_css(
+                r#".b{background-image:url(b.png);background-repeat:repeat-x}"#,
+                &c,
+                &mut n
+            ),
+            ".b{background-repeat:repeat-x}"
+        );
+        for keep in [
+            r#".t{background-image:url(paper.jpg)}"#,
+            r#".t{background:url(paper.jpg) repeat}"#,
+        ] {
             assert_eq!(rewrite_css(keep, &c, &mut n), keep, "本来就平铺的照留");
         }
         let keep = r#".a{background:url(a.png) no-repeat}"#;
-        assert_eq!(rewrite_css(keep, &ctx(), &mut n), keep, "认 no-repeat 的阅读器不动");
+        assert_eq!(
+            rewrite_css(keep, &ctx(), &mut n),
+            keep,
+            "认 no-repeat 的阅读器不动"
+        );
         // 做成整页图块的背景图（`bgfit::plan_tiles`）：规则照留，按样式表所在位置解析 url
-        let t = Ctx { tiled: ["OEBPS/Images/a.jpg".to_string()].into_iter().collect(), ..c };
+        let t = Ctx {
+            tiled: ["OEBPS/Images/a.jpg".to_string()].into_iter().collect(),
+            ..c
+        };
         let fen = r#"body.fen{background:url('../Images/a.jpg') no-repeat bottom center;background-size:100% auto}"#;
         assert_eq!(rewrite_css_in(fen, "OEBPS/Styles/s.css", &t, &mut n), fen);
-        assert_eq!(rewrite_css_in(fen, "s.css", &t, &mut n), "body.fen{background-size:100% auto}", "别的图照旧去掉");
+        assert_eq!(
+            rewrite_css_in(fen, "s.css", &t, &mut n),
+            "body.fen{background-size:100% auto}",
+            "别的图照旧去掉"
+        );
         // 掌阅：照 Kindle 算好的像素尺寸、位置接在规则末尾（规则本身不动）
-        let f = Ctx { bg_fixes: [("OEBPS/Images/a.jpg".to_string(), "background-size:1264px 932px;background-position:0px 263px;".to_string())].into_iter().collect(), ..ctx() };
+        let f = Ctx {
+            bg_fixes: [(
+                "OEBPS/Images/a.jpg".to_string(),
+                "background-size:1264px 932px;background-position:0px 263px;".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..ctx()
+        };
         assert_eq!(rewrite_css_in(fen, "OEBPS/Styles/s.css", &f, &mut n), "body.fen{background:url('../Images/a.jpg') no-repeat bottom center;background-size:100% auto;background-size:1264px 932px;background-position:0px 263px;}");
     }
 
@@ -1129,7 +1641,10 @@ mod tests {
         let c = ctx();
         let mut n = 0;
         let out = rewrite_css(".x{color:rgba(0,0,0,0.4)}", &c, &mut n);
-        assert!(out.starts_with(".x{color:#") && !out.contains("rgba"), "{out}");
+        assert!(
+            out.starts_with(".x{color:#") && !out.contains("rgba"),
+            "{out}"
+        );
     }
 
     /// 竖直间距照 Kindle 换算（掌阅的系数，「测试-竖直间距」量的）：em 乘系数，%、px、pt 折成像素，简写只换上下，别的不动。
@@ -1139,13 +1654,18 @@ mod tests {
         let (t, n) = scale_horizontal("margin-left:2em;padding-right:1em !important;margin:1em 2em 3em 4pt;padding-left:10px;text-indent:2em", 0.5);
         assert_eq!(n, 3);
         assert_eq!(t, "margin-left:1em;padding-right:0.5em !important;margin:1em 1em 3em 2pt;padding-left:10px;text-indent:2em");
-        assert_eq!(scale_horizontal("text-indent:-2em;padding-left:2em", 0.5).0, "text-indent:-1em;padding-left:1em");
+        assert_eq!(
+            scale_horizontal("text-indent:-2em;padding-left:2em", 0.5).0,
+            "text-indent:-1em;padding-left:1em"
+        );
     }
 
     /// body 左右边距逐文件：多数文件（按字数）用了负的左外边距、body 左边距照留；没用的文件 body 加类、左边距写 0；右边两个文件都没用，不动。
     #[test]
     fn body_margin_per_file() {
-        let page = |body: &str| format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body class="b">{body}</body></html>"#).into_bytes();
+        let page = |body: &str| {
+            format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/></head><body class="b">{body}</body></html>"#).into_bytes()
+        };
         let mut entries = vec![
             Entry { name: "O/content.opf".into(), data: br#"<package><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="c"/></spine></package>"#.to_vec() },
             Entry { name: "O/s.css".into(), data: b"body.b{margin:0 5pt} .t{margin-left:-2em}".to_vec() },
@@ -1156,22 +1676,50 @@ mod tests {
         assert_eq!(facts.neg, [true, false]);
         assert_eq!(per_file_body_margins(&mut entries, &facts), 1);
         let c = String::from_utf8(entries[3].data.clone()).unwrap();
-        assert!(c.contains(r#"<body class="b eink-bm1">"#) && c.contains("eink-body.css"), "{c}");
-        assert!(!String::from_utf8(entries[2].data.clone()).unwrap().contains("eink-bm"));
-        let css = entries.iter().find(|e| e.name == "O/eink-body.css").map(|e| String::from_utf8(e.data.clone()).unwrap()).unwrap();
-        assert!(css.contains("html body.eink-bm1{margin-left:0;padding-left:0;}"), "{css}");
+        assert!(
+            c.contains(r#"<body class="b eink-bm1">"#) && c.contains("eink-body.css"),
+            "{c}"
+        );
+        assert!(!String::from_utf8(entries[2].data.clone())
+            .unwrap()
+            .contains("eink-bm"));
+        let css = entries
+            .iter()
+            .find(|e| e.name == "O/eink-body.css")
+            .map(|e| String::from_utf8(e.data.clone()).unwrap())
+            .unwrap();
+        assert!(
+            css.contains("html body.eink-bm1{margin-left:0;padding-left:0;}"),
+            "{css}"
+        );
     }
 
     #[test]
     fn vertical_lengths_scaled_like_kindle() {
-        let vs = VScale { em: 52.5 * (1680.0 / 1546.0) / 37.5, kindle_rem_px: 52.5, ratio: 1680.0 / 1546.0 };
+        let vs = VScale {
+            em: 52.5 * (1680.0 / 1546.0) / 37.5,
+            kindle_rem_px: 52.5,
+            ratio: 1680.0 / 1546.0,
+        };
         let (t, n) = scale_vertical("margin-top:1em;margin-bottom:10%;padding-top:30px;padding-bottom:24pt !important;margin-left:2em;", &vs);
         assert_eq!(t, "margin-top:1.5213em;margin-bottom:182.6px;padding-top:64.2px;padding-bottom:114.1px !important;margin-left:2em;");
         assert_eq!(n, 4);
-        assert_eq!(scale_vertical("margin:1em 2em", &vs).0, "margin:1.5213em 2em 1.5213em 2em");
-        for keep in ["margin:0", "margin-top:auto", "margin-top:calc(1em + 2px)", "padding:0 1em", "line-height:2em"] {
+        assert_eq!(
+            scale_vertical("margin:1em 2em", &vs).0,
+            "margin:1.5213em 2em 1.5213em 2em"
+        );
+        for keep in [
+            "margin:0",
+            "margin-top:auto",
+            "margin-top:calc(1em + 2px)",
+            "padding:0 1em",
+            "line-height:2em",
+        ] {
             assert_eq!(scale_vertical(keep, &vs), (keep.to_string(), 0), "{keep}");
         }
-        assert!(scale_vertical_css("p{margin-top:1em;margin-bottom:1em;}\n", &vs).starts_with("p{margin-top:1.5213em;margin-bottom:1.5213em;}"));
+        assert!(
+            scale_vertical_css("p{margin-top:1em;margin-bottom:1em;}\n", &vs)
+                .starts_with("p{margin-top:1.5213em;margin-bottom:1.5213em;}")
+        );
     }
 }

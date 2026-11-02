@@ -23,7 +23,8 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
     loop {
-        let n = std::io::Read::read(&mut f, &mut buf).map_err(|e| format!("读 {}: {e}", path.display()))?;
+        let n = std::io::Read::read(&mut f, &mut buf)
+            .map_err(|e| format!("读 {}: {e}", path.display()))?;
         if n == 0 {
             break;
         }
@@ -39,7 +40,11 @@ fn hex(d: &[u8]) -> String {
 /// 同目录下的临时文件名（和目标在同一文件系统，改名是原子的）。带进程号和计数器，同时写同一个目标也不会撞名。
 pub(crate) fn tmp_sibling(path: &Path) -> PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
-    let mut name = std::ffi::OsString::from(format!("{TMP_PREFIX}{}-{}-", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let mut name = std::ffi::OsString::from(format!(
+        "{TMP_PREFIX}{}-{}-",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
     name.push(path.file_name().unwrap_or_default());
     path.with_file_name(name)
 }
@@ -50,7 +55,9 @@ pub(crate) fn tmp_sibling(path: &Path) -> PathBuf {
 /// `.tmp-<进程号>-<计数>-<名>`——带 [`TMP_PREFIX`]，进程被杀时留下的下次拿到锁时会被 [`clean_tmp`] 清掉；带进程号和计数，
 /// 同时写同一个目标也不撞名。`bookconv` 那个是 `<名>.writing.tmp`（命令行工具用，不归书库清理）。书库里的文件一律用这个。
 pub(crate) fn write_atomic_cleanable(path: &Path, data: &[u8]) -> Result<(), String> {
-    bookconv::util::produce_then_replace(&tmp_sibling(path), path, |t| std::fs::write(t, data).map_err(|e| format!("写 {}: {e}", path.display())))
+    bookconv::util::produce_then_replace(&tmp_sibling(path), path, |t| {
+        std::fs::write(t, data).map_err(|e| format!("写 {}: {e}", path.display()))
+    })
 }
 
 pub(crate) use bookconv::util::sync_parent;
@@ -71,7 +78,12 @@ pub(crate) fn check_json<T: DeserializeOwned>(path: &Path) -> Result<(), String>
     };
     serde_json::from_slice::<T>(&bytes)
         .map(|_| ())
-        .map_err(|e| format!("{} 坏了（{e}）：修好它，或者挪走它（记录会重建，但以前的产物认不出来了）再试", path.display()))
+        .map_err(|e| {
+            format!(
+                "{} 坏了（{e}）：修好它，或者挪走它（记录会重建，但以前的产物认不出来了）再试",
+                path.display()
+            )
+        })
 }
 
 /// 原子写 JSON（缩进格式）。序列化失败（比如路径不是 UTF-8）返回错误，不 panic。
@@ -87,7 +99,13 @@ struct FileKey(u64, u64, u64, i64, i64);
 fn file_key(path: &Path) -> Option<FileKey> {
     use std::os::unix::fs::MetadataExt;
     let m = std::fs::metadata(path).ok()?;
-    Some(FileKey(m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()))
+    Some(FileKey(
+        m.dev(),
+        m.ino(),
+        m.len(),
+        m.mtime(),
+        m.mtime_nsec(),
+    ))
 }
 
 /// 小 JSON 文件的读缓存（`output-state/<模式>.json`、`sources.json`）：文件没变（见 [`FileKey`]）就不重读、不重新解析。
@@ -100,7 +118,9 @@ type Cached<T> = (Option<FileKey>, Rc<T>);
 
 impl<T: DeserializeOwned + Serialize + Default> JsonCache<T> {
     pub(crate) fn new() -> Self {
-        JsonCache { map: RefCell::new(HashMap::new()) }
+        JsonCache {
+            map: RefCell::new(HashMap::new()),
+        }
     }
 
     /// 读（不在或读不出来 = 缺省值）。
@@ -112,14 +132,18 @@ impl<T: DeserializeOwned + Serialize + Default> JsonCache<T> {
             }
         }
         let v: Rc<T> = Rc::new(key.and_then(|_| read_json(path)).unwrap_or_default());
-        self.map.borrow_mut().insert(path.to_path_buf(), (key, v.clone()));
+        self.map
+            .borrow_mut()
+            .insert(path.to_path_buf(), (key, v.clone()));
         v
     }
 
     /// 原子写，并更新缓存。
     pub(crate) fn put(&self, path: &Path, v: T) -> Result<(), String> {
         write_json(path, &v)?;
-        self.map.borrow_mut().insert(path.to_path_buf(), (file_key(path), Rc::new(v)));
+        self.map
+            .borrow_mut()
+            .insert(path.to_path_buf(), (file_key(path), Rc::new(v)));
         Ok(())
     }
 }
@@ -139,13 +163,21 @@ impl Drop for Lock<'_> {
 
 pub(crate) fn lock<'a>(root: &Path, held: &'a Cell<bool>) -> Result<Lock<'a>, String> {
     let path = root.join(".lock");
-    let f = File::options().create(true).truncate(false).write(true).open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let f = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     match f.try_lock() {
         Ok(()) => {
             held.set(true);
             Ok(Lock { _file: f, held })
         }
-        Err(std::fs::TryLockError::WouldBlock) => Err(format!("另一个 booklib 正在使用书库 {}，等它结束再试", root.display())),
+        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+            "另一个 booklib 正在使用书库 {}，等它结束再试",
+            root.display()
+        )),
         Err(std::fs::TryLockError::Error(e)) => Err(format!("{}: {e}", path.display())),
     }
 }
@@ -156,7 +188,11 @@ pub(crate) fn clean_tmp(dir: &Path) {
         if !e.file_name().to_string_lossy().starts_with(TMP_PREFIX) {
             continue;
         }
-        let _ = if e.file_type().is_ok_and(|t| t.is_dir()) { std::fs::remove_dir_all(e.path()) } else { std::fs::remove_file(e.path()) };
+        let _ = if e.file_type().is_ok_and(|t| t.is_dir()) {
+            std::fs::remove_dir_all(e.path())
+        } else {
+            std::fs::remove_file(e.path())
+        };
     }
 }
 
@@ -164,7 +200,9 @@ pub(crate) fn clean_tmp(dir: &Path) {
 /// 里面只可能有本工具写产物时留下的 `.tmp-<进程号>-<计数>-<名>`。只在持锁时调用。
 pub(crate) fn clean_tmp_files(dir: &Path) {
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        if e.file_name().to_string_lossy().starts_with(TMP_PREFIX) && e.file_type().is_ok_and(|t| t.is_file()) {
+        if e.file_name().to_string_lossy().starts_with(TMP_PREFIX)
+            && e.file_type().is_ok_and(|t| t.is_file())
+        {
             let _ = std::fs::remove_file(e.path());
         }
     }
@@ -179,7 +217,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("a.json");
         assert_ne!(tmp_sibling(&p), tmp_sibling(&p), "临时名每次不同");
-        assert!(tmp_sibling(&p).file_name().unwrap().to_string_lossy().starts_with(TMP_PREFIX));
+        assert!(tmp_sibling(&p)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(TMP_PREFIX));
         write_json(&p, &vec![1, 2]).unwrap();
         assert_eq!(read_json::<Vec<i32>>(&p), Some(vec![1, 2]));
         // 非 UTF-8 路径做 JSON 键：返回错误而不是 panic
@@ -187,8 +229,15 @@ mod tests {
         let bad = PathBuf::from(std::ffi::OsStr::from_bytes(b"/x/\xff.epub"));
         let m: std::collections::BTreeMap<PathBuf, u8> = [(bad, 1)].into();
         assert!(write_json(&p, &m).is_err());
-        assert_eq!(read_json::<Vec<i32>>(&p), Some(vec![1, 2]), "失败时原文件不动");
-        let names: Vec<String> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            read_json::<Vec<i32>>(&p),
+            Some(vec![1, 2]),
+            "失败时原文件不动"
+        );
+        let names: Vec<String> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
         assert_eq!(names, ["a.json"], "不留临时文件");
     }
 

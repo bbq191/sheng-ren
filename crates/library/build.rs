@@ -3,14 +3,25 @@
 use std::process::Command;
 
 fn git(args: &[&str]) -> Option<String> {
-    let out = Command::new("git").args(args).output().ok().filter(|o| o.status.success())?;
+    let out = Command::new("git")
+        .args(args)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 fn main() {
     // 提交、切分支会改这几个文件：变了才重新取。不标"有没有没提交的改动"：改源码不会让这里重跑，标出来会过时
-    if let (Some(dir), Some(common)) = (git(&["rev-parse", "--absolute-git-dir"]), git(&["rev-parse", "--path-format=absolute", "--git-common-dir"])) {
-        for p in [format!("{dir}/HEAD"), format!("{common}/refs/heads"), format!("{common}/packed-refs")] {
+    if let (Some(dir), Some(common)) = (
+        git(&["rev-parse", "--absolute-git-dir"]),
+        git(&["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    ) {
+        for p in [
+            format!("{dir}/HEAD"),
+            format!("{common}/refs/heads"),
+            format!("{common}/packed-refs"),
+        ] {
             println!("cargo:rerun-if-changed={p}");
         }
     }

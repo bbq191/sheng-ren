@@ -1,5 +1,8 @@
 //! 封面声明：保证 OPF 声明了有效封面图。
-use super::opf::{cover_meta_tags, declared_cover, first_spine_image, insert_manifest_items, insert_metadata, insert_spine_first, is_image_item, NewItem};
+use super::opf::{
+    cover_meta_tags, declared_cover, first_spine_image, insert_manifest_items, insert_metadata,
+    insert_spine_first, is_image_item, NewItem,
+};
 use super::*;
 
 // ───────────────────────── 封面声明 ─────────────────────────
@@ -16,13 +19,17 @@ use super::*;
 /// 找不到候选也不动。只读 html/OPF 文本，不碰图片字节（流式优化阶段一时图片条目是空占位）。
 /// 判定与 `booklib meta --edit` 读封面（`epubzip::cover_image_of`）、改封面（`opfmeta`）共用 `wash::opf` 的一套。
 pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
-    let Some(opf) = parse_opf(entries) else { return false };
+    let Some(opf) = parse_opf(entries) else {
+        return false;
+    };
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
     let items = manifest_items(&text);
     let has_prop = |i: &ManifestItem| i.properties.split_whitespace().any(|p| p == "cover-image");
     let metas = cover_meta_tags(&text);
     // meta 声明指向的图片条目（若有效）
-    let meta_target = metas.iter().find_map(|(_, _, id)| items.iter().find(|i| i.id == *id && is_image_item(i)));
+    let meta_target = metas
+        .iter()
+        .find_map(|(_, _, id)| items.iter().find(|i| i.id == *id && is_image_item(i)));
     // 目标封面条目：meta 指向的有效图片 → 已带 cover-image 属性的图片 → 前几页的第一张真实图片（下面找）。
     // **meta 和 `properties="cover-image"` 必须同时有**（2026-09-20 真机对照实验：xochitl 对封面条目 id 带点的仅 meta 声明
     // ——如 Calibre/Sigil 产物的 `x00000001.jpg`——取不到封面，日志 `null cover image`；加上 `cover-image` 属性就取得到；
@@ -40,8 +47,20 @@ pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
         Some(t) => t,
         None => {
             let by_name = name_index(entries);
-            let Some(path) = first_spine_image(&text, &opf.dir, 12, true, |p| by_name.get(p).and_then(|&i| std::str::from_utf8(&entries[i].data).ok()).map(str::to_string)) else { return false };
-            let Some(it) = items.into_iter().find(|i| is_image_item(i) && i.path(&opf.dir) == path) else { return false };
+            let Some(path) = first_spine_image(&text, &opf.dir, 12, true, |p| {
+                by_name
+                    .get(p)
+                    .and_then(|&i| std::str::from_utf8(&entries[i].data).ok())
+                    .map(str::to_string)
+            }) else {
+                return false;
+            };
+            let Some(it) = items
+                .into_iter()
+                .find(|i| is_image_item(i) && i.path(&opf.dir) == path)
+            else {
+                return false;
+            };
             it
         }
     };
@@ -50,17 +69,33 @@ pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
         cover.tag.to_string()
     } else if cover.properties.is_empty() {
         match html::attr(cover.tag, "id") {
-            Some(a) => format!(r#"{} properties="cover-image"{}"#, &cover.tag[..a.end], &cover.tag[a.end..]),
+            Some(a) => format!(
+                r#"{} properties="cover-image"{}"#,
+                &cover.tag[..a.end],
+                &cover.tag[a.end..]
+            ),
             None => return false,
         }
     } else {
-        html::set_attr(cover.tag, "properties", &format!("{} cover-image", cover.properties))
+        html::set_attr(
+            cover.tag,
+            "properties",
+            &format!("{} cover-image", cover.properties),
+        )
     };
-    let mut edits: Vec<(usize, usize, String)> = metas.iter().map(|&(s, e, _)| (s, e, String::new())).collect();
+    let mut edits: Vec<(usize, usize, String)> = metas
+        .iter()
+        .map(|&(s, e, _)| (s, e, String::new()))
+        .collect();
     edits.push((cover.pos, cover.pos + cover.tag.len(), new_tag));
     edits.sort_by_key(|e| e.0);
     let out = html::apply_edits(&text, edits);
-    let Some(out) = insert_metadata(&out, &format!(r#"<meta name="cover" content="{}"/>"#, cover.id)) else { return false };
+    let Some(out) = insert_metadata(
+        &out,
+        &format!(r#"<meta name="cover" content="{}"/>"#, cover.id),
+    ) else {
+        return false;
+    };
     entries[opf.index].data = out.into_bytes();
     true
 }
@@ -78,22 +113,41 @@ const COVER_PAGE_ID: &str = "eink-cover-page";
 /// （Amazon 转的《绍宋》《狼厅》第一页是补出来的整页封面；2026-10-09 ：掌阅、Move 也补）。写法照真书最常见的封面页
 /// （《人生海海》《罗杰疑案》）：SVG 按图的宽高定 `viewBox`、`preserveAspectRatio` 等比放进一页。不加文字。
 /// `size(图的 zip 路径)` 取图的宽高（流式优化时图片条目是空占位，调用方从原书读文件头）。补了 → `true`。
-pub fn prepend_cover_page(entries: &mut Vec<Entry>, size: impl FnOnce(&str) -> Option<(u32, u32)>) -> bool {
-    let Some(opf) = parse_opf(entries) else { return false };
+pub fn prepend_cover_page(
+    entries: &mut Vec<Entry>,
+    size: impl FnOnce(&str) -> Option<(u32, u32)>,
+) -> bool {
+    let Some(opf) = parse_opf(entries) else {
+        return false;
+    };
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
-    let Some(cover) = declared_cover(&text) else { return false };
+    let Some(cover) = declared_cover(&text) else {
+        return false;
+    };
     let cover_path = cover.path(&opf.dir);
     let by_name = name_index(entries);
     let items = manifest_items(&text);
-    let used = items.iter().filter(|i| i.media_type.contains("html")).any(|it| {
-        let page = it.path(&opf.dir);
-        by_name.get(page.as_str()).and_then(|&i| std::str::from_utf8(&entries[i].data).ok()).is_some_and(|t| super::opf::page_images(&page, t).contains(&cover_path))
-    });
-    let page = if opf.dir.is_empty() { COVER_PAGE.to_string() } else { format!("{}/{COVER_PAGE}", opf.dir) };
+    let used = items
+        .iter()
+        .filter(|i| i.media_type.contains("html"))
+        .any(|it| {
+            let page = it.path(&opf.dir);
+            by_name
+                .get(page.as_str())
+                .and_then(|&i| std::str::from_utf8(&entries[i].data).ok())
+                .is_some_and(|t| super::opf::page_images(&page, t).contains(&cover_path))
+        });
+    let page = if opf.dir.is_empty() {
+        COVER_PAGE.to_string()
+    } else {
+        format!("{}/{COVER_PAGE}", opf.dir)
+    };
     if used || by_name.contains_key(page.as_str()) || items.iter().any(|i| i.id == COVER_PAGE_ID) {
         return false;
     }
-    let Some((w, h)) = size(&cover_path).filter(|&(w, h)| w > 0 && h > 0) else { return false };
+    let Some((w, h)) = size(&cover_path).filter(|&(w, h)| w > 0 && h > 0) else {
+        return false;
+    };
     // 页面和 OPF 同目录，图的相对路径就是 manifest 里 href 的原文（已转义、已百分号编码）
     let xhtml = format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
@@ -117,10 +171,25 @@ svg {{ margin: 0; padding: 0; }}
 "#,
         cover.href.replace('"', "&quot;")
     );
-    let Some(out) = insert_manifest_items(&text, &[NewItem { id: COVER_PAGE_ID, href: COVER_PAGE, media_type: "application/xhtml+xml", properties: "svg" }]) else { return false };
-    let Some(out) = insert_spine_first(&out, COVER_PAGE_ID) else { return false };
+    let Some(out) = insert_manifest_items(
+        &text,
+        &[NewItem {
+            id: COVER_PAGE_ID,
+            href: COVER_PAGE,
+            media_type: "application/xhtml+xml",
+            properties: "svg",
+        }],
+    ) else {
+        return false;
+    };
+    let Some(out) = insert_spine_first(&out, COVER_PAGE_ID) else {
+        return false;
+    };
     entries[opf.index].data = out.into_bytes();
-    entries.push(Entry { name: page, data: xhtml.into_bytes() });
+    entries.push(Entry {
+        name: page,
+        data: xhtml.into_bytes(),
+    });
     true
 }
 
@@ -128,19 +197,52 @@ svg {{ margin: 0; padding: 0; }}
 /// 放在 OPF 同目录叫 [`THUMB_FILE`]，manifest 加一项（不进 spine，正文不引用），`<metadata>` 里加 `<meta name="eink-thumbnail">` 指着它。
 /// 书里的封面页、`cover-image` 都不动：只给书架用（2026-10-30 维护者定「只裁书架缩略图」）。没有声明封面、已经有了、
 /// `make` 不给（比例本来就对、解不开）→ 不加，返回 `false`。
-pub fn add_cover_thumbnail(entries: &mut Vec<Entry>, make: impl FnOnce(&str) -> Option<Vec<u8>>) -> bool {
-    let Some(opf) = parse_opf(entries) else { return false };
+pub fn add_cover_thumbnail(
+    entries: &mut Vec<Entry>,
+    make: impl FnOnce(&str) -> Option<Vec<u8>>,
+) -> bool {
+    let Some(opf) = parse_opf(entries) else {
+        return false;
+    };
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
-    let Some(cover) = declared_cover(&text) else { return false };
+    let Some(cover) = declared_cover(&text) else {
+        return false;
+    };
     let cover_path = cover.path(&opf.dir);
-    let file = if opf.dir.is_empty() { THUMB_FILE.to_string() } else { format!("{}/{THUMB_FILE}", opf.dir) };
-    if manifest_items(&text).iter().any(|i| i.id == THUMB_ID) || name_index(entries).contains_key(file.as_str()) {
+    let file = if opf.dir.is_empty() {
+        THUMB_FILE.to_string()
+    } else {
+        format!("{}/{THUMB_FILE}", opf.dir)
+    };
+    if manifest_items(&text).iter().any(|i| i.id == THUMB_ID)
+        || name_index(entries).contains_key(file.as_str())
+    {
         return false;
     }
-    let Some(bytes) = make(&cover_path) else { return false };
-    let Some(out) = insert_manifest_items(&text, &[NewItem { id: THUMB_ID, href: THUMB_FILE, media_type: "image/jpeg", properties: "" }]) else { return false };
-    let Some(out) = insert_metadata(&out, &format!(r#"<meta name="{THUMB_META}" content="{THUMB_ID}"/>"#)) else { return false };
+    let Some(bytes) = make(&cover_path) else {
+        return false;
+    };
+    let Some(out) = insert_manifest_items(
+        &text,
+        &[NewItem {
+            id: THUMB_ID,
+            href: THUMB_FILE,
+            media_type: "image/jpeg",
+            properties: "",
+        }],
+    ) else {
+        return false;
+    };
+    let Some(out) = insert_metadata(
+        &out,
+        &format!(r#"<meta name="{THUMB_META}" content="{THUMB_ID}"/>"#),
+    ) else {
+        return false;
+    };
     entries[opf.index].data = out.into_bytes();
-    entries.push(Entry { name: file, data: bytes });
+    entries.push(Entry {
+        name: file,
+        data: bytes,
+    });
     true
 }

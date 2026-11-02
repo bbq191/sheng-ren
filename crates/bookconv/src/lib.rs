@@ -18,29 +18,29 @@ pub mod comic_detect;
 pub mod comiccrop;
 pub mod comicfxl;
 pub mod comicpad;
-pub mod ncx;
 pub mod convert;
 pub mod cssunlock;
 pub mod direction;
 pub mod epub;
 pub mod epubbook;
 pub mod epubzip;
+pub mod ncx;
 // 基础件拆到 `bookbase`（2026-10-15），路径照旧
 pub use bookbase::{color, html, util};
 pub mod error;
 pub mod htmlproc;
 pub mod imgalpha;
 pub mod imgopt;
+pub mod imgpool;
 pub mod jpegopt;
 pub mod kepub;
 pub mod kindle_model;
-pub mod netimg;
-pub mod imgpool;
 pub mod naming;
-pub mod probe;
-pub mod reader_model;
+pub mod netimg;
 pub mod opfmeta;
 pub mod optimize;
+pub mod probe;
+pub mod reader_model;
 pub mod uastyle;
 pub mod wash;
 
@@ -52,5 +52,7 @@ pub use zip;
 /// 单测用：内置模式，或测试用的 profile（`profile::fixture`，如 Move 的 `xochitl`）。
 #[cfg(test)]
 pub(crate) fn test_profile(id: &str) -> &'static profile::Profile {
-    profile::get(id).or_else(|| profile::fixture(id)).unwrap_or_else(|| panic!("没有 profile {id}"))
+    profile::get(id)
+        .or_else(|| profile::fixture(id))
+        .unwrap_or_else(|| panic!("没有 profile {id}"))
 }

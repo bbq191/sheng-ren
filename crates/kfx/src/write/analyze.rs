@@ -38,7 +38,9 @@ fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
         for (di, d) in docs.iter().enumerate() {
             let path = d.1;
             for_each_block(&d.3, |b| {
-                let Kind::Text { text, runs, .. } = &b.kind else { return };
+                let Kind::Text { text, runs, .. } = &b.kind else {
+                    return;
+                };
                 for (id, _) in &b.ids {
                     id_block.entry((path, id.as_str())).or_insert(n);
                 }
@@ -47,9 +49,25 @@ fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
                     if let Some(target) = &r.link {
                         // 区间起点前紧挨着的空格也算（`<sup><span id="r"></span> <a href>…`：回链指向 span，空格写出器 15 起不算进区间）
                         let chars = chars.get_or_insert_with(|| text.chars().collect());
-                        let from = if r.start > 0 && chars.get(r.start - 1) == Some(&' ') { r.start - 1 } else { r.start };
-                        let src = b.ids.iter().filter(|(_, o)| *o >= from && *o <= r.start + r.len).map(|(i, _)| i.as_str()).collect();
-                        links.push(Link { n, di, ri, start: r.start, target, src });
+                        let from = if r.start > 0 && chars.get(r.start - 1) == Some(&' ') {
+                            r.start - 1
+                        } else {
+                            r.start
+                        };
+                        let src = b
+                            .ids
+                            .iter()
+                            .filter(|(_, o)| *o >= from && *o <= r.start + r.len)
+                            .map(|(i, _)| i.as_str())
+                            .collect();
+                        links.push(Link {
+                            n,
+                            di,
+                            ri,
+                            start: r.start,
+                            target,
+                            src,
+                        });
                     }
                 }
                 n += 1;
@@ -64,12 +82,17 @@ fn mark_notes(docs: &mut [ParsedDoc]) -> usize {
         let mut notes: HashSet<usize> = HashSet::new();
         for l in &links {
             // 注释在引用后面（优化器把注释搬到引用它的那一章（文件）末尾）；反过来那条是回链。
-            let Some(&tb) = id_block.get(&(l.target.0.as_str(), l.target.1.as_str())) else { continue };
+            let Some(&tb) = id_block.get(&(l.target.0.as_str(), l.target.1.as_str())) else {
+                continue;
+            };
             if tb <= l.n {
                 continue;
             }
             let src_path = docs[l.di].1;
-            let points_back = back.get(&tb).is_some_and(|ts| ts.iter().any(|(p, f)| p == src_path && l.src.contains(&f.as_str())));
+            let points_back = back.get(&tb).is_some_and(|ts| {
+                ts.iter()
+                    .any(|(p, f)| p == src_path && l.src.contains(&f.as_str()))
+            });
             if points_back {
                 refs.insert((l.n, l.ri));
                 notes.insert(tb);
@@ -104,11 +127,19 @@ pub(super) struct TextCounts {
 
 impl TextCounts {
     pub(super) fn of(docs: &[ParsedDoc]) -> TextCounts {
-        let mut t = TextCounts { fonts: HashMap::new(), font_size: HashMap::new(), line_height: HashMap::new() };
+        let mut t = TextCounts {
+            fonts: HashMap::new(),
+            font_size: HashMap::new(),
+            line_height: HashMap::new(),
+        };
         for (_, _, _, blocks) in docs {
             for_each_block(blocks, |b| {
-                let Kind::Text { text, .. } = &b.kind else { return };
-                let (all, solid) = text.chars().fold((0, 0), |(a, s), c| (a + 1, s + usize::from(!c.is_whitespace())));
+                let Kind::Text { text, .. } = &b.kind else {
+                    return;
+                };
+                let (all, solid) = text.chars().fold((0, 0), |(a, s), c| {
+                    (a + 1, s + usize::from(!c.is_whitespace()))
+                });
                 // 同一个字体名的块多半挨着，按原样的名字计（不每块分配小写），取的时候再按小写合并
                 match t.fonts.get_mut(&b.comp.font_family) {
                     Some(n) => *n += all,
@@ -118,7 +149,9 @@ impl TextCounts {
                 }
                 let key = |v: f64| (v * 1000.0).round() as i64;
                 *t.font_size.entry(key(b.comp.font_size)).or_default() += solid;
-                *t.line_height.entry(key(b.comp.line_height.unwrap_or(LH_EM))).or_default() += solid;
+                *t.line_height
+                    .entry(key(b.comp.line_height.unwrap_or(LH_EM)))
+                    .or_default() += solid;
             });
         }
         t
@@ -131,7 +164,9 @@ impl TextCounts {
     pub(super) fn body_font(&self) -> Option<String> {
         let mut count: HashMap<Option<String>, usize> = HashMap::new();
         for (f, n) in &self.fonts {
-            *count.entry(f.as_ref().map(|f| f.to_lowercase())).or_default() += n;
+            *count
+                .entry(f.as_ref().map(|f| f.to_lowercase()))
+                .or_default() += n;
         }
         // 字数打平时取字体名小的（没写字体的排最前），结果和 HashMap 的遍历顺序无关（以前 `max_by_key` 打平时随遍历顺序，同一本书
         // 两次生成的 KFX 可能不一样，覆盖到 Kindle 上进度清零）。打破平局的口径同掌阅、Move 的 `kindle_rules`
@@ -143,7 +178,12 @@ impl TextCounts {
 /// 书里有字体文件的 `@font-face` 字体（小写）。
 fn embedded_font_faces(book: &Loaded) -> HashSet<String> {
     let files: HashSet<&str> = book.fonts.iter().map(|(p, _)| p.as_str()).collect();
-    book.css.iter().flat_map(|(p, t)| crate::css::font_faces(t, p)).filter(|f| files.contains(f.path.as_str())).map(|f| f.family.to_lowercase()).collect()
+    book.css
+        .iter()
+        .flat_map(|(p, t)| crate::css::font_faces(t, p))
+        .filter(|f| files.contains(f.path.as_str()))
+        .map(|f| f.family.to_lowercase())
+        .collect()
 }
 
 /// 全书正文的字号（根 em）：所有文字块按字数加权，最多的那个。Send to Kindle 把它当成阅读器字号设置的 1.0，别的字号按比例
@@ -170,7 +210,12 @@ pub(super) fn dump_blocks(blocks: &[Block], dims: &HashMap<String, (u32, u32)>, 
 /// 宽度照原写法，独立图片 px 按 0.75pt、行内图片 px 按 0.45pt，行内只写了高的写成 `h` 加高度），
 /// 背景图 `#bg\t路径\t不平铺`
 /// （`tools/kfx/unify.py` 比图片用；只认 13 列文字行的脚本不受影响）。
-fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<String, (u32, u32)>, out: &mut String) {
+fn dump_blocks_in(
+    blocks: &[Block],
+    parent: Option<&Block>,
+    dims: &HashMap<String, (u32, u32)>,
+    out: &mut String,
+) {
     use std::fmt::Write;
     for b in blocks {
         if let Some(src) = &b.comp.bg_image {
@@ -185,12 +230,24 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
             }
             Kind::Text { text, images, .. } => {
                 let c = &b.comp;
-                let key: String = text.chars().filter(|ch| !ch.is_whitespace() && *ch != OBJ).take(60).collect();
+                let key: String = text
+                    .chars()
+                    .filter(|ch| !ch.is_whitespace() && *ch != OBJ)
+                    .take(60)
+                    .collect();
                 if key.is_empty() {
                     continue;
                 }
                 let lh = c.line_height.unwrap_or(LH_EM) * c.font_size;
-                let weight = if c.bolder { "bolder" } else if c.semibold { "semibold" } else if c.bold { "bold" } else { "normal" };
+                let weight = if c.bolder {
+                    "bolder"
+                } else if c.semibold {
+                    "semibold"
+                } else if c.bold {
+                    "bold"
+                } else {
+                    "normal"
+                };
                 let indent = match c.text_indent {
                     Some(Len::Em(n)) => format!("em:{n}"),
                     Some(Len::Pt(n)) => format!("pt:{n}"),
@@ -218,7 +275,12 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
                 );
                 let _ = writeln!(out, "#box\t{}", box_str(b));
                 // Move 的上下边框是插进块里最前、最后的横线图（`wash/box_fix.rs`）：版式检查当成边框
-                for i in images.iter().filter(|i| i.src.rsplit('/').next().is_some_and(|f| f.starts_with("eink-rule-"))) {
+                for i in images.iter().filter(|i| {
+                    i.src
+                        .rsplit('/')
+                        .next()
+                        .is_some_and(|f| f.starts_with("eink-rule-"))
+                }) {
                     let _ = writeln!(out, "#rule\t{}", if i.at == 0 { "top" } else { "bottom" });
                 }
                 // 行内图片的宽度照原写法（px 按 0.45pt，见 `InlineImage::width`）：只写了高的写 `h` 加高度，都没写的 `-`
@@ -228,10 +290,26 @@ fn dump_blocks_in(blocks: &[Block], parent: Option<&Block>, dims: &HashMap<Strin
                         (None, Some(h)) => format!("h{}", len_str(h)),
                         (None, None) => "-".into(),
                     };
-                    dump_image(&i.src, &width, c.text_align.as_deref(), i.linked, "inline", dims, out);
+                    dump_image(
+                        &i.src,
+                        &width,
+                        c.text_align.as_deref(),
+                        i.linked,
+                        "inline",
+                        dims,
+                        out,
+                    );
                 }
             }
-            Kind::Image { src, linked } => dump_image(src, &b.comp.width.map_or("-".into(), len_str), b.comp.text_align.as_deref(), *linked, "block", dims, out),
+            Kind::Image { src, linked } => dump_image(
+                src,
+                &b.comp.width.map_or("-".into(), len_str),
+                b.comp.text_align.as_deref(),
+                *linked,
+                "block",
+                dims,
+                out,
+            ),
         }
     }
 }
@@ -245,9 +323,18 @@ fn box_str(b: &Block) -> String {
             !matches!(x.width, bookconv::cascade::BorderWidth::Pt(n) | bookconv::cascade::BorderWidth::Em(n) if n <= 0.0) && x.color.is_none_or(|c| c >> 24 != 0)
         })
     };
-    let sides: String = ['T', 'R', 'B', 'L'].iter().enumerate().map(|(i, c)| if seen(i) { *c } else { '-' }).collect();
+    let sides: String = ['T', 'R', 'B', 'L']
+        .iter()
+        .enumerate()
+        .map(|(i, c)| if seen(i) { *c } else { '-' })
+        .collect();
     let hex = |c: Option<u32>| c.map_or("-".into(), |c| format!("{c:08x}"));
-    let colors: Vec<String> = b.comp.border.iter().map(|x| hex(x.as_ref().and_then(|x| x.color))).collect();
+    let colors: Vec<String> = b
+        .comp
+        .border
+        .iter()
+        .map(|x| hex(x.as_ref().and_then(|x| x.color)))
+        .collect();
     format!(
         "{}\t{}\t{}\t{}\t{}\t{sides}\t{}\t{}",
         h(&b.margin_left),
@@ -268,10 +355,22 @@ fn len_str(l: Len) -> String {
     }
 }
 
-fn dump_image(src: &str, width: &str, align: Option<&str>, linked: bool, how: &str, dims: &HashMap<String, (u32, u32)>, out: &mut String) {
+fn dump_image(
+    src: &str,
+    width: &str,
+    align: Option<&str>,
+    linked: bool,
+    how: &str,
+    dims: &HashMap<String, (u32, u32)>,
+    out: &mut String,
+) {
     use std::fmt::Write;
     let (w, h) = dims.get(src).copied().unwrap_or((0, 0));
-    let _ = writeln!(out, "#img\t{src}\t{w}\t{h}\t{width}\t{}\t{linked}\t{how}", align.unwrap_or("-"));
+    let _ = writeln!(
+        out,
+        "#img\t{src}\t{w}\t{h}\t{width}\t{}\t{linked}\t{how}",
+        align.unwrap_or("-")
+    );
 }
 
 /// 全书统计（[`analyze`] 算出来，之后各阶段只读）。

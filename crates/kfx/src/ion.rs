@@ -13,8 +13,17 @@ use std::fmt;
 pub const BVM: [u8; 4] = [0xE0, 0x01, 0x00, 0xEA];
 
 /// 系统符号表（SID 1–9）。
-pub const SYSTEM_SYMBOLS: [&str; 9] =
-    ["$ion", "$ion_1_0", "$ion_symbol_table", "name", "version", "imports", "symbols", "max_id", "$ion_shared_symbol_table"];
+pub const SYSTEM_SYMBOLS: [&str; 9] = [
+    "$ion",
+    "$ion_1_0",
+    "$ion_symbol_table",
+    "name",
+    "version",
+    "imports",
+    "symbols",
+    "max_id",
+    "$ion_shared_symbol_table",
+];
 
 pub const SID_ION_SYMBOL_TABLE: u32 = 3;
 pub const SID_NAME: u32 = 4;
@@ -74,7 +83,12 @@ pub enum Value {
     F64(f64),
     /// 十进制数：值 = (neg ? -1 : 1) × mag × 10^exp。`neg` 单独存，才能表示 -0。
     /// `exp == 0 && mag == 0 && !neg` 且 `zero_len` 为真时编码成长度 0 的 `0d0`。
-    Decimal { neg: bool, mag: u64, exp: i64, zero_len: bool },
+    Decimal {
+        neg: bool,
+        mag: u64,
+        exp: i64,
+        zero_len: bool,
+    },
     /// 时间戳原样保留字节（KFX 里没见过，不解析）。
     Timestamp(Vec<u8>),
     Symbol(u32),
@@ -125,7 +139,10 @@ impl Value {
 
     /// 结构体里第一个编号为 `sid` 的字段。
     pub fn field(&self, sid: u32) -> Option<&Value> {
-        self.as_struct()?.iter().find(|(k, _)| *k == sid).map(|(_, v)| v)
+        self.as_struct()?
+            .iter()
+            .find(|(k, _)| *k == sid)
+            .map(|(_, v)| v)
     }
 
     pub fn as_int(&self) -> Option<i64> {
@@ -174,13 +191,23 @@ struct Cursor<'a> {
 
 impl<'a> Cursor<'a> {
     fn byte(&mut self) -> Result<u8> {
-        let c = *self.b.get(self.i).ok_or(Error { offset: self.i, msg: "数据提前结束" })?;
+        let c = *self.b.get(self.i).ok_or(Error {
+            offset: self.i,
+            msg: "数据提前结束",
+        })?;
         self.i += 1;
         Ok(c)
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self.i.checked_add(n).filter(|&e| e <= self.b.len()).ok_or(Error { offset: self.i, msg: "长度超出数据" })?;
+        let end = self
+            .i
+            .checked_add(n)
+            .filter(|&e| e <= self.b.len())
+            .ok_or(Error {
+                offset: self.i,
+                msg: "长度超出数据",
+            })?;
         let s = &self.b[self.i..end];
         self.i = end;
         Ok(s)
@@ -215,13 +242,19 @@ impl<'a> Cursor<'a> {
             v = (v << 7) | u64::from(c & 0x7F);
             last = c & 0x80 != 0;
         }
-        let v = i64::try_from(v).map_err(|_| Error { offset: start, msg: "VarInt 溢出" })?;
+        let v = i64::try_from(v).map_err(|_| Error {
+            offset: start,
+            msg: "VarInt 溢出",
+        })?;
         Ok(if neg { -v } else { v })
     }
 
     fn len(&mut self, l: u8) -> Result<usize> {
         if l == 14 {
-            usize::try_from(self.varuint()?).map_err(|_| Error { offset: self.i, msg: "长度溢出" })
+            usize::try_from(self.varuint()?).map_err(|_| Error {
+                offset: self.i,
+                msg: "长度溢出",
+            })
         } else {
             Ok(usize::from(l))
         }
@@ -259,7 +292,16 @@ pub fn decode_stream(b: &[u8]) -> Result<Vec<Item>> {
 
 /// 解码顶层流，只要值（丢掉 BVM）。
 pub fn decode_values(b: &[u8]) -> Result<Vec<Value>> {
-    Ok(decode_stream(b)?.into_iter().filter_map(|it| if let Item::Value(v) = it { Some(v) } else { None }).collect())
+    Ok(decode_stream(b)?
+        .into_iter()
+        .filter_map(|it| {
+            if let Item::Value(v) = it {
+                Some(v)
+            } else {
+                None
+            }
+        })
+        .collect())
 }
 
 /// 读一个值；NOP 填充返回 `None`。
@@ -302,7 +344,11 @@ fn value(c: &mut Cursor, depth: usize) -> Result<Option<Value>> {
         };
     }
     // 结构体 L=1：字段按 SID 排过序，长度跟在后面。
-    let n = if t == 0xD && l == 1 { c.len(14)? } else { c.len(l)? };
+    let n = if t == 0xD && l == 1 {
+        c.len(14)?
+    } else {
+        c.len(l)?
+    };
     let body_at = c.i;
     let d = c.take(n)?;
     let v = match t {
@@ -312,18 +358,33 @@ fn value(c: &mut Cursor, depth: usize) -> Result<Option<Value>> {
                 return err(at, "负零整数");
             }
             // 负数的绝对值可以到 2^63（i64::MIN），编码时就是这么写的，读回来也要认。
-            let v = if t == 3 { 0i64.checked_sub_unsigned(m) } else { i64::try_from(m).ok() };
-            Value::Int(v.ok_or(Error { offset: body_at, msg: "整数超出 i64" })?)
+            let v = if t == 3 {
+                0i64.checked_sub_unsigned(m)
+            } else {
+                i64::try_from(m).ok()
+            };
+            Value::Int(v.ok_or(Error {
+                offset: body_at,
+                msg: "整数超出 i64",
+            })?)
         }
         4 => match n {
             0 => Value::F64(0.0),
             4 => Value::F32(f32::from_be_bytes([d[0], d[1], d[2], d[3]])),
-            8 => Value::F64(f64::from_be_bytes(d.try_into().map_err(|_| Error { offset: body_at, msg: "浮点长度" })?)),
+            8 => Value::F64(f64::from_be_bytes(d.try_into().map_err(|_| Error {
+                offset: body_at,
+                msg: "浮点长度",
+            })?)),
             _ => return err(at, "浮点长度只能是 0、4、8"),
         },
         5 => {
             if n == 0 {
-                Value::Decimal { neg: false, mag: 0, exp: 0, zero_len: true }
+                Value::Decimal {
+                    neg: false,
+                    mag: 0,
+                    exp: 0,
+                    zero_len: true,
+                }
             } else {
                 let mut sub = Cursor { b: d, i: 0 };
                 let exp = sub.varint()?;
@@ -337,15 +398,26 @@ fn value(c: &mut Cursor, depth: usize) -> Result<Option<Value>> {
                         (first & 0x80 != 0, uint_be(&bytes, body_at)?)
                     }
                 };
-                Value::Decimal { neg, mag, exp, zero_len: false }
+                Value::Decimal {
+                    neg,
+                    mag,
+                    exp,
+                    zero_len: false,
+                }
             }
         }
         6 => Value::Timestamp(d.to_vec()),
         7 => {
             let s = uint_be(d, body_at)?;
-            Value::Symbol(u32::try_from(s).map_err(|_| Error { offset: body_at, msg: "符号编号溢出" })?)
+            Value::Symbol(u32::try_from(s).map_err(|_| Error {
+                offset: body_at,
+                msg: "符号编号溢出",
+            })?)
         }
-        8 => Value::String(String::from_utf8(d.to_vec()).map_err(|_| Error { offset: body_at, msg: "字符串不是 UTF-8" })?),
+        8 => Value::String(String::from_utf8(d.to_vec()).map_err(|_| Error {
+            offset: body_at,
+            msg: "字符串不是 UTF-8",
+        })?),
         9 => Value::Clob(d.to_vec()),
         0xA => Value::Blob(d.to_vec()),
         0xB | 0xC => {
@@ -356,14 +428,21 @@ fn value(c: &mut Cursor, depth: usize) -> Result<Option<Value>> {
                     items.push(v);
                 }
             }
-            if t == 0xB { Value::List(items) } else { Value::Sexp(items) }
+            if t == 0xB {
+                Value::List(items)
+            } else {
+                Value::Sexp(items)
+            }
         }
         0xD => {
             let mut sub = Cursor { b: d, i: 0 };
             let mut fields = Vec::new();
             while sub.i < d.len() {
                 let f = sub.varuint().map_err(|e| shift(e, body_at))?;
-                let f = u32::try_from(f).map_err(|_| Error { offset: body_at + sub.i, msg: "字段编号溢出" })?;
+                let f = u32::try_from(f).map_err(|_| Error {
+                    offset: body_at + sub.i,
+                    msg: "字段编号溢出",
+                })?;
                 if let Some(v) = value(&mut sub, depth + 1).map_err(|e| shift(e, body_at))? {
                     fields.push((f, v));
                 }
@@ -375,18 +454,29 @@ fn value(c: &mut Cursor, depth: usize) -> Result<Option<Value>> {
                 return err(at, "BVM 只能出现在顶层");
             }
             let mut sub = Cursor { b: d, i: 0 };
-            let al = usize::try_from(sub.varuint()?).map_err(|_| Error { offset: body_at, msg: "注解长度溢出" })?;
+            let al = usize::try_from(sub.varuint()?).map_err(|_| Error {
+                offset: body_at,
+                msg: "注解长度溢出",
+            })?;
             let ab = sub.take(al).map_err(|e| shift(e, body_at))?;
             let mut ac = Cursor { b: ab, i: 0 };
             let mut anns = Vec::new();
             while ac.i < ab.len() {
                 let a = ac.varuint().map_err(|e| shift(e, body_at))?;
-                anns.push(u32::try_from(a).map_err(|_| Error { offset: body_at, msg: "注解编号溢出" })?);
+                anns.push(u32::try_from(a).map_err(|_| Error {
+                    offset: body_at,
+                    msg: "注解编号溢出",
+                })?);
             }
             if anns.is_empty() {
                 return err(at, "空注解");
             }
-            let inner = value(&mut sub, depth + 1).map_err(|e| shift(e, body_at))?.ok_or(Error { offset: body_at, msg: "注解包着 NOP" })?;
+            let inner = value(&mut sub, depth + 1)
+                .map_err(|e| shift(e, body_at))?
+                .ok_or(Error {
+                    offset: body_at,
+                    msg: "注解包着 NOP",
+                })?;
             if sub.i != d.len() {
                 return err(at, "注解包装长度不符");
             }
@@ -483,7 +573,10 @@ fn insert_header(out: &mut Vec<u8>, start: usize, t: u8) {
         return;
     }
     let (v, n) = varuint(len as u64);
-    out.splice(start..start, std::iter::once((t << 4) | 14).chain(v[10 - n..].iter().copied()));
+    out.splice(
+        start..start,
+        std::iter::once((t << 4) | 14).chain(v[10 - n..].iter().copied()),
+    );
 }
 
 /// 编码一个值，追加到 `out`。
@@ -504,7 +597,12 @@ pub fn encode_value(out: &mut Vec<u8>, v: &Value) {
                 out.extend(f.to_be_bytes());
             }
         }
-        Value::Decimal { neg, mag, exp, zero_len } => {
+        Value::Decimal {
+            neg,
+            mag,
+            exp,
+            zero_len,
+        } => {
             if *zero_len && !*neg && *mag == 0 && *exp == 0 {
                 out.push(0x50);
                 return;
@@ -546,7 +644,15 @@ pub fn encode_value(out: &mut Vec<u8>, v: &Value) {
             for it in items {
                 encode_value(out, it);
             }
-            insert_header(out, start, if matches!(v, Value::List(_)) { 0xB } else { 0xC });
+            insert_header(
+                out,
+                start,
+                if matches!(v, Value::List(_)) {
+                    0xB
+                } else {
+                    0xC
+                },
+            );
         }
         Value::Struct(fields) => {
             let start = out.len();
@@ -613,7 +719,10 @@ pub struct Import {
 
 impl SymbolTable {
     pub fn system() -> Self {
-        SymbolTable { shared_end: SYSTEM_SYMBOLS.len() as u32 + 1, locals: Vec::new() }
+        SymbolTable {
+            shared_end: SYSTEM_SYMBOLS.len() as u32 + 1,
+            locals: Vec::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -631,7 +740,9 @@ impl SymbolTable {
         if let Some(s) = SYSTEM_SYMBOLS.get(sid as usize - 1) {
             return Some(s);
         }
-        self.locals.get(sid.checked_sub(self.shared_end)? as usize)?.as_deref()
+        self.locals
+            .get(sid.checked_sub(self.shared_end)? as usize)?
+            .as_deref()
     }
 
     /// 按名字找 SID（只找有名字的）。
@@ -640,18 +751,27 @@ impl SymbolTable {
             return Some(i as u32 + 1);
         }
         // 导入表的 `max_id` 来自文件，加起来可能超出 u32（以前 debug 下 panic、release 下回绕成别的 SID）
-        let i = self.locals.iter().position(|n| n.as_deref() == Some(name))?;
-        u32::try_from(i).ok().and_then(|i| self.shared_end.checked_add(i))
+        let i = self
+            .locals
+            .iter()
+            .position(|n| n.as_deref() == Some(name))?;
+        u32::try_from(i)
+            .ok()
+            .and_then(|i| self.shared_end.checked_add(i))
     }
 
     /// 显示用：有名字给名字，没有给 `$N`。
     pub fn display(&self, sid: u32) -> String {
-        self.name(sid).map(str::to_string).unwrap_or_else(|| format!("${sid}"))
+        self.name(sid)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("${sid}"))
     }
 
     /// 追加一个本地符号，返回它的 SID；SID 超出 u32 时不追加，返回 `None`。
     pub fn push(&mut self, name: &str) -> Option<u32> {
-        let sid = u32::try_from(self.locals.len()).ok().and_then(|i| self.shared_end.checked_add(i))?;
+        let sid = u32::try_from(self.locals.len())
+            .ok()
+            .and_then(|i| self.shared_end.checked_add(i))?;
         self.locals.push(Some(name.to_string()));
         Some(sid)
     }
@@ -665,17 +785,29 @@ impl SymbolTable {
             other => {
                 *self = SymbolTable::system();
                 for imp in other.and_then(Value::as_list).unwrap_or(&[]) {
-                    let max_id = imp.field(SID_MAX_ID).and_then(Value::as_int).and_then(|n| u32::try_from(n).ok()).unwrap_or(0);
+                    let max_id = imp
+                        .field(SID_MAX_ID)
+                        .and_then(Value::as_int)
+                        .and_then(|n| u32::try_from(n).ok())
+                        .unwrap_or(0);
                     self.shared_end = self.shared_end.saturating_add(max_id);
                     imports.push(Import {
-                        name: imp.field(SID_NAME).and_then(Value::as_str).unwrap_or_default().to_string(),
+                        name: imp
+                            .field(SID_NAME)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
                         version: imp.field(SID_VERSION).and_then(Value::as_int).unwrap_or(1),
                         max_id,
                     });
                 }
             }
         }
-        for s in st.field(SID_SYMBOLS).and_then(Value::as_list).unwrap_or(&[]) {
+        for s in st
+            .field(SID_SYMBOLS)
+            .and_then(Value::as_list)
+            .unwrap_or(&[])
+        {
             self.locals.push(s.as_str().map(str::to_string));
         }
         imports
@@ -688,7 +820,9 @@ impl SymbolTable {
         for it in items {
             match it {
                 Item::Bvm => t = SymbolTable::system(),
-                Item::Value(Value::Annotated(a, v)) if a.first() == Some(&SID_ION_SYMBOL_TABLE) => imports.extend(t.apply(v)),
+                Item::Value(Value::Annotated(a, v)) if a.first() == Some(&SID_ION_SYMBOL_TABLE) => {
+                    imports.extend(t.apply(v))
+                }
                 _ => {}
             }
         }
@@ -712,22 +846,46 @@ mod tests {
         // 规范里的例子：0 是 0x20，-1 是 0x31 0x01，"hello" 是 0x85 …
         assert_eq!(decode_values(&[0x20]).unwrap(), vec![Value::Int(0)]);
         assert_eq!(decode_values(&[0x31, 0x01]).unwrap(), vec![Value::Int(-1)]);
-        assert_eq!(decode_values(b"\x85hello").unwrap(), vec![Value::String("hello".into())]);
-        assert_eq!(decode_values(&[0x0F, 0x1F, 0x2F, 0xDF]).unwrap(), vec![
-            Value::Null(IonType::Null),
-            Value::Null(IonType::Bool),
-            Value::Null(IonType::Int),
-            Value::Null(IonType::Struct)
-        ]);
+        assert_eq!(
+            decode_values(b"\x85hello").unwrap(),
+            vec![Value::String("hello".into())]
+        );
+        assert_eq!(
+            decode_values(&[0x0F, 0x1F, 0x2F, 0xDF]).unwrap(),
+            vec![
+                Value::Null(IonType::Null),
+                Value::Null(IonType::Bool),
+                Value::Null(IonType::Int),
+                Value::Null(IonType::Struct)
+            ]
+        );
         // NOP 填充跳过。
-        assert_eq!(decode_values(&[0x02, 0, 0, 0x11]).unwrap(), vec![Value::Bool(true)]);
+        assert_eq!(
+            decode_values(&[0x02, 0, 0, 0x11]).unwrap(),
+            vec![Value::Bool(true)]
+        );
         // 有序结构体（L=1）。
-        assert_eq!(decode_values(&[0xD1, 0x82, 0x84, 0x20]).unwrap(), vec![Value::Struct(vec![(4, Value::Int(0))])]);
+        assert_eq!(
+            decode_values(&[0xD1, 0x82, 0x84, 0x20]).unwrap(),
+            vec![Value::Struct(vec![(4, Value::Int(0))])]
+        );
     }
 
     #[test]
     fn varint_edges() {
-        for v in [0i64, 1, -1, 63, 64, -64, 8191, 8192, -8192, i64::from(i32::MAX), -(1 << 40)] {
+        for v in [
+            0i64,
+            1,
+            -1,
+            63,
+            64,
+            -64,
+            8191,
+            8192,
+            -8192,
+            i64::from(i32::MAX),
+            -(1 << 40),
+        ] {
             let mut b = Vec::new();
             put_varint(&mut b, v);
             assert_eq!(Cursor { b: &b, i: 0 }.varint().unwrap(), v, "{v}");
@@ -748,20 +906,58 @@ mod tests {
         rt(Value::F64(1.29167));
         rt(Value::F64(0.0));
         rt(Value::F32(1.5));
-        rt(Value::Decimal { neg: false, mag: 129167, exp: -5, zero_len: false });
-        rt(Value::Decimal { neg: true, mag: 0, exp: 0, zero_len: false });
-        rt(Value::Decimal { neg: false, mag: 0, exp: 0, zero_len: true });
-        rt(Value::Decimal { neg: false, mag: 128, exp: 3, zero_len: false });
+        rt(Value::Decimal {
+            neg: false,
+            mag: 129167,
+            exp: -5,
+            zero_len: false,
+        });
+        rt(Value::Decimal {
+            neg: true,
+            mag: 0,
+            exp: 0,
+            zero_len: false,
+        });
+        rt(Value::Decimal {
+            neg: false,
+            mag: 0,
+            exp: 0,
+            zero_len: true,
+        });
+        rt(Value::Decimal {
+            neg: false,
+            mag: 128,
+            exp: 3,
+            zero_len: false,
+        });
         rt(Value::Symbol(930));
         rt(Value::String("書名：ABC謀殺案".repeat(5)));
         rt(Value::Blob(vec![0xFF; 300]));
-        rt(Value::Annotated(vec![3], Box::new(Value::Struct(vec![(6, Value::List(vec![])), (7, Value::List(vec![Value::String("c0".into())]))]))));
-        rt(Value::Sexp(vec![Value::Symbol(1), Value::Null(IonType::String)]));
+        rt(Value::Annotated(
+            vec![3],
+            Box::new(Value::Struct(vec![
+                (6, Value::List(vec![])),
+                (7, Value::List(vec![Value::String("c0".into())])),
+            ])),
+        ));
+        rt(Value::Sexp(vec![
+            Value::Symbol(1),
+            Value::Null(IonType::String),
+        ]));
     }
 
     #[test]
     fn bad_input_is_error_not_panic() {
-        for b in [&[0x8E][..], &[0x8E, 0x7F], &[0x85, b'a'], &[0xF0], &[0xE0, 0x01], &[0xEE, 0x81], &[0x31, 0x00], &[0xD3, 0x80, 0x21]] {
+        for b in [
+            &[0x8E][..],
+            &[0x8E, 0x7F],
+            &[0x85, b'a'],
+            &[0xF0],
+            &[0xE0, 0x01],
+            &[0xEE, 0x81],
+            &[0x31, 0x00],
+            &[0xD3, 0x80, 0x21],
+        ] {
             assert!(decode_values(b).is_err(), "{b:02x?}");
         }
         // 嵌套过深。
@@ -777,16 +973,29 @@ mod tests {
     #[test]
     fn symbol_table_apply() {
         let st = Value::Struct(vec![
-            (SID_IMPORTS, Value::List(vec![Value::Struct(vec![
-                (SID_NAME, Value::String("YJ_symbols".into())),
-                (SID_VERSION, Value::Int(10)),
-                (SID_MAX_ID, Value::Int(859)),
-            ])])),
+            (
+                SID_IMPORTS,
+                Value::List(vec![Value::Struct(vec![
+                    (SID_NAME, Value::String("YJ_symbols".into())),
+                    (SID_VERSION, Value::Int(10)),
+                    (SID_MAX_ID, Value::Int(859)),
+                ])]),
+            ),
             (SID_SYMBOLS, Value::List(vec![Value::String("c0".into())])),
         ]);
-        let items = vec![Item::Bvm, Item::Value(Value::Annotated(vec![SID_ION_SYMBOL_TABLE], Box::new(st)))];
+        let items = vec![
+            Item::Bvm,
+            Item::Value(Value::Annotated(vec![SID_ION_SYMBOL_TABLE], Box::new(st))),
+        ];
         let (t, imps) = SymbolTable::from_stream(&items);
-        assert_eq!(imps, vec![Import { name: "YJ_symbols".into(), version: 10, max_id: 859 }]);
+        assert_eq!(
+            imps,
+            vec![Import {
+                name: "YJ_symbols".into(),
+                version: 10,
+                max_id: 859
+            }]
+        );
         assert_eq!(t.name(869), Some("c0"));
         assert_eq!(t.name(500), None);
         assert_eq!(t.display(500), "$500");
@@ -798,18 +1007,34 @@ mod tests {
     #[test]
     fn huge_import_max_id_does_not_allocate() {
         let st = Value::Struct(vec![
-            (SID_IMPORTS, Value::List(vec![
-                Value::Struct(vec![(SID_NAME, Value::String("a".into())), (SID_MAX_ID, Value::Int(i64::from(u32::MAX)))]),
-                Value::Struct(vec![(SID_NAME, Value::String("b".into())), (SID_MAX_ID, Value::Int(10))]),
-            ])),
+            (
+                SID_IMPORTS,
+                Value::List(vec![
+                    Value::Struct(vec![
+                        (SID_NAME, Value::String("a".into())),
+                        (SID_MAX_ID, Value::Int(i64::from(u32::MAX))),
+                    ]),
+                    Value::Struct(vec![
+                        (SID_NAME, Value::String("b".into())),
+                        (SID_MAX_ID, Value::Int(10)),
+                    ]),
+                ]),
+            ),
             (SID_SYMBOLS, Value::List(vec![Value::String("x".into())])),
         ]);
-        let (t, imps) = SymbolTable::from_stream(&[Item::Value(Value::Annotated(vec![SID_ION_SYMBOL_TABLE], Box::new(st)))]);
+        let (t, imps) = SymbolTable::from_stream(&[Item::Value(Value::Annotated(
+            vec![SID_ION_SYMBOL_TABLE],
+            Box::new(st),
+        ))]);
         assert_eq!(imps.len(), 2);
         assert_eq!(t.name(3), Some("$ion_symbol_table"));
         assert_eq!(t.name(1_000_000), None);
         assert_eq!(t.len(), u32::MAX as usize + 1);
-        assert_eq!(t.name(u32::MAX), Some("x"), "加起来溢出时封顶，本地符号排在最后");
+        assert_eq!(
+            t.name(u32::MAX),
+            Some("x"),
+            "加起来溢出时封顶，本地符号排在最后"
+        );
         // SID 再往后就超出 u32：查名字、追加都不溢出（以前 debug 下 panic、release 下回绕）
         assert_eq!(t.sid("x"), Some(u32::MAX));
         let mut full = t.clone();
@@ -818,7 +1043,13 @@ mod tests {
         // 追加模式（`imports: $ion_symbol_table`）接着现有的表编号
         let mut t = SymbolTable::system();
         assert_eq!(t.push("a"), Some(10));
-        t.apply(&Value::Struct(vec![(SID_IMPORTS, Value::Symbol(SID_ION_SYMBOL_TABLE)), (SID_SYMBOLS, Value::List(vec![Value::String("b".into())]))]));
-        assert_eq!((t.sid("a"), t.sid("b"), t.name(0), t.name(12)), (Some(10), Some(11), None, None));
+        t.apply(&Value::Struct(vec![
+            (SID_IMPORTS, Value::Symbol(SID_ION_SYMBOL_TABLE)),
+            (SID_SYMBOLS, Value::List(vec![Value::String("b".into())])),
+        ]));
+        assert_eq!(
+            (t.sid("a"), t.sid("b"), t.name(0), t.name(12)),
+            (Some(10), Some(11), None, None)
+        );
     }
 }

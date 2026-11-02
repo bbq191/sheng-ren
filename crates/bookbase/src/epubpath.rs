@@ -50,7 +50,11 @@ pub fn relative_to(base_dir: &str, target: &str) -> String {
 /// 书外链接（`http:`、`mailto:`…）不该传进来，调用方先用 [`crate::html::is_external`] 筛掉。
 pub fn resolve_href<'a>(base_file: &str, href: &'a str) -> (String, Option<&'a str>) {
     let (p, frag) = crate::html::split_href(href);
-    let path = if p.is_empty() { base_file.to_string() } else { resolve_rel(dir_of(base_file), p) };
+    let path = if p.is_empty() {
+        base_file.to_string()
+    } else {
+        resolve_rel(dir_of(base_file), p)
+    };
     (path, frag)
 }
 
@@ -62,7 +66,11 @@ pub fn resolve_href<'a>(base_file: &str, href: &'a str) -> (String, Option<&'a s
 pub fn resolve_link(base_file: &str, raw: &str) -> (String, Option<String>) {
     let v = crate::util::xml_unescape(raw);
     let (p, frag) = crate::html::split_href(&v);
-    let path = if p.is_empty() { base_file.to_string() } else { resolve_rel(dir_of(base_file), p) };
+    let path = if p.is_empty() {
+        base_file.to_string()
+    } else {
+        resolve_rel(dir_of(base_file), p)
+    };
     (path, frag.map(percent_decode))
 }
 
@@ -83,5 +91,9 @@ pub fn encode_href_path(p: &str) -> String {
 /// 结果是属性值原文，写进 XML 前调用方仍要 `xml_escape`（锚点里可能有 `&`）。
 pub fn href_to(from_dir: &str, target: &str, frag: &str) -> String {
     let rel = encode_href_path(&relative_to(from_dir, target));
-    if frag.is_empty() { rel } else { format!("{rel}#{frag}") }
+    if frag.is_empty() {
+        rel
+    } else {
+        format!("{rel}#{frag}")
+    }
 }

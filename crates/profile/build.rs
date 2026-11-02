@@ -14,8 +14,15 @@ fn main() {
     for p in &files {
         println!("cargo:rerun-if-changed={}", p.display());
         let stem = p.file_stem().unwrap().to_str().unwrap();
-        out += &format!("    ({stem:?}, include_str!({:?})),\n", p.display().to_string());
+        out += &format!(
+            "    ({stem:?}, include_str!({:?})),\n",
+            p.display().to_string()
+        );
     }
     out += "];\n";
-    fs::write(Path::new(&env::var("OUT_DIR").unwrap()).join("builtin.rs"), out).unwrap();
+    fs::write(
+        Path::new(&env::var("OUT_DIR").unwrap()).join("builtin.rs"),
+        out,
+    )
+    .unwrap();
 }

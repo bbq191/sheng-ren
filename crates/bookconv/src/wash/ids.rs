@@ -10,7 +10,9 @@
 use super::*;
 
 pub(super) fn dedup_ids_across_book(entries: &mut [Entry], rep: &mut WashReport) {
-    let Some(opf) = parse_opf(entries) else { return };
+    let Some(opf) = parse_opf(entries) else {
+        return;
+    };
     let mut order: Vec<usize> = Vec::new();
     let mut in_order: HashSet<usize> = HashSet::new();
     let by_name: HashMap<&str, usize> = name_index(entries);
@@ -34,7 +36,9 @@ pub(super) fn dedup_ids_across_book(entries: &mut [Entry], rep: &mut WashReport)
         if !is_html_entry(&e.name, &e.data) {
             return None;
         }
-        std::str::from_utf8(&e.data).ok().map(crate::htmlproc::chapter_ids)
+        std::str::from_utf8(&e.data)
+            .ok()
+            .map(crate::htmlproc::chapter_ids)
     });
     for (&i, ids) in order.iter().zip(ids) {
         let Some(ids) = ids else { continue };
@@ -49,18 +53,29 @@ pub(super) fn dedup_ids_across_book(entries: &mut [Entry], rep: &mut WashReport)
     rep.dup_ids_renamed = renames.values().map(HashMap::len).sum();
     // 先改 id 属性本身，再改全书指向它们的链接。
     crate::util::par_map_mut(entries, |e| {
-        let Some(own) = renames.get(&e.name) else { return };
-        let Ok(text) = std::str::from_utf8(&e.data) else { return };
-        let new = html::edit_attrs(text, &["id"], |_, a| own.get(a.value).map_or(Edit::Keep, |n| Edit::Set(n.clone())));
+        let Some(own) = renames.get(&e.name) else {
+            return;
+        };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return;
+        };
+        let new = html::edit_attrs(text, &["id"], |_, a| {
+            own.get(a.value)
+                .map_or(Edit::Keep, |n| Edit::Set(n.clone()))
+        });
         if let Cow::Owned(new) = new {
             e.data = new.into_bytes();
         }
     });
-    rewrite_book_links(entries, |_| false, |l| {
-        let frag = l.frag.filter(|f| !f.is_empty())?;
-        let n = renames.get(&l.target)?.get(html::frag_id(frag).as_ref())?;
-        Some(format!("{}#{n}", html::split_href(l.value).0))
-    });
+    rewrite_book_links(
+        entries,
+        |_| false,
+        |l| {
+            let frag = l.frag.filter(|f| !f.is_empty())?;
+            let n = renames.get(&l.target)?.get(html::frag_id(frag).as_ref())?;
+            Some(format!("{}#{n}", html::split_href(l.value).0))
+        },
+    );
 }
 
 #[cfg(test)]
@@ -69,20 +84,46 @@ mod tests {
 
     #[test]
     fn duplicate_ids_renamed_and_links_from_other_files_follow() {
-        let e = |n: &str, d: &str| Entry { name: n.into(), data: d.as_bytes().to_vec() };
+        let e = |n: &str, d: &str| Entry {
+            name: n.into(),
+            data: d.as_bytes().to_vec(),
+        };
         let mut v = vec![
-            e("OEBPS/content.opf", r#"<package><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="t/b.xhtml" media-type="application/xhtml+xml"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine><guide><reference href="t/b.xhtml#fn1" type="text"/></guide></package>"#),
-            e("OEBPS/a.xhtml", r##"<html><body><p id="fn1">甲</p><a href="t/b.xhtml#fn1">去乙注</a><a href="#fn1">本章</a></body></html>"##),
-            e("OEBPS/t/b.xhtml", r##"<html><body><p id='fn1' data-id="fn1">乙</p><a href="#fn1">本章</a><a href="../a.xhtml#fn1">去甲</a></body></html>"##),
-            e("OEBPS/toc.ncx", r#"<ncx><navMap><navPoint id="fn1"><navLabel><text>乙</text></navLabel><content src="t/b.xhtml#fn1"/></navPoint></navMap></ncx>"#),
+            e(
+                "OEBPS/content.opf",
+                r#"<package><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="t/b.xhtml" media-type="application/xhtml+xml"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine><guide><reference href="t/b.xhtml#fn1" type="text"/></guide></package>"#,
+            ),
+            e(
+                "OEBPS/a.xhtml",
+                r##"<html><body><p id="fn1">甲</p><a href="t/b.xhtml#fn1">去乙注</a><a href="#fn1">本章</a></body></html>"##,
+            ),
+            e(
+                "OEBPS/t/b.xhtml",
+                r##"<html><body><p id='fn1' data-id="fn1">乙</p><a href="#fn1">本章</a><a href="../a.xhtml#fn1">去甲</a></body></html>"##,
+            ),
+            e(
+                "OEBPS/toc.ncx",
+                r#"<ncx><navMap><navPoint id="fn1"><navLabel><text>乙</text></navLabel><content src="t/b.xhtml#fn1"/></navPoint></navMap></ncx>"#,
+            ),
         ];
         let mut rep = WashReport::default();
         dedup_ids_across_book(&mut v, &mut rep);
         assert_eq!(rep.dup_ids_renamed, 1);
-        let s = |n: &str| String::from_utf8(v.iter().find(|x| x.name == n).unwrap().data.clone()).unwrap();
-        assert_eq!(s("OEBPS/a.xhtml"), r##"<html><body><p id="fn1">甲</p><a href="t/b.xhtml#fn1-x2">去乙注</a><a href="#fn1">本章</a></body></html>"##);
-        assert_eq!(s("OEBPS/t/b.xhtml"), r##"<html><body><p id='fn1-x2' data-id="fn1">乙</p><a href="#fn1-x2">本章</a><a href="../a.xhtml#fn1">去甲</a></body></html>"##);
-        assert!(s("OEBPS/toc.ncx").contains(r#"<navPoint id="fn1">"#) && s("OEBPS/toc.ncx").contains(r#"src="t/b.xhtml#fn1-x2""#));
+        let s = |n: &str| {
+            String::from_utf8(v.iter().find(|x| x.name == n).unwrap().data.clone()).unwrap()
+        };
+        assert_eq!(
+            s("OEBPS/a.xhtml"),
+            r##"<html><body><p id="fn1">甲</p><a href="t/b.xhtml#fn1-x2">去乙注</a><a href="#fn1">本章</a></body></html>"##
+        );
+        assert_eq!(
+            s("OEBPS/t/b.xhtml"),
+            r##"<html><body><p id='fn1-x2' data-id="fn1">乙</p><a href="#fn1-x2">本章</a><a href="../a.xhtml#fn1">去甲</a></body></html>"##
+        );
+        assert!(
+            s("OEBPS/toc.ncx").contains(r#"<navPoint id="fn1">"#)
+                && s("OEBPS/toc.ncx").contains(r#"src="t/b.xhtml#fn1-x2""#)
+        );
         assert!(s("OEBPS/content.opf").contains(r#"href="t/b.xhtml#fn1-x2""#));
     }
 }

@@ -86,7 +86,12 @@ impl Line {
     fn png(&self) -> Vec<u8> {
         use image::ImageEncoder;
         let (h, line) = self.rows();
-        let (a, r, g, b) = ((self.color >> 24) as u8, (self.color >> 16) as u8, (self.color >> 8) as u8, self.color as u8);
+        let (a, r, g, b) = (
+            (self.color >> 24) as u8,
+            (self.color >> 16) as u8,
+            (self.color >> 8) as u8,
+            self.color as u8,
+        );
         let mut px = vec![0u8; (RULE_W * h * 4) as usize];
         let rows = if self.top { 0..line } else { h - line..h };
         // 点线、虚线：按线粗算一段多长（点：粗 1 段、空 1 段；虚线：3 段实、2 段空）
@@ -105,7 +110,9 @@ impl Line {
             }
         }
         let mut out = Vec::new();
-        image::codecs::png::PngEncoder::new(&mut out).write_image(&px, RULE_W, h, image::ExtendedColorType::Rgba8).expect("PNG 编码");
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(&px, RULE_W, h, image::ExtendedColorType::Rgba8)
+            .expect("PNG 编码");
         out
     }
 }
@@ -143,24 +150,61 @@ fn frame_open(class: usize, td_style: &str, table: &Option<(String, &'static str
         Some((pct, align)) => (format!("{pct}%"), format!(r#" align="{align}""#)),
         None => ("100%".to_string(), String::new()),
     };
-    format!(r#"<div class="eink-frame eink-b{class}"><table class="eink-frame" cellspacing="0" width="{width}"{align}><tbody><tr><td style="{td_style}">"#)
+    format!(
+        r#"<div class="eink-frame eink-b{class}"><table class="eink-frame" cellspacing="0" width="{width}"{align}><tbody><tr><td style="{td_style}">"#
+    )
 }
 const FRAME_CLOSE: &str = "</td></tr></tbody></table></div>";
 
-pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Option<&MediaEnv>, reader: &ReaderModel, g: BoxGeometry) {
-    let (chapters, plans) = super::scan_chapters(entries, media, |e, css| plan(e, media, css, reader, g));
-    if plans.iter().all(|p| p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty() && p.cell_widths.is_empty() && p.inline.is_empty()) {
+pub(super) fn apply(
+    entries: &mut Vec<Entry>,
+    rep: &mut WashReport,
+    media: Option<&MediaEnv>,
+    reader: &ReaderModel,
+    g: BoxGeometry,
+) {
+    let (chapters, plans) =
+        super::scan_chapters(entries, media, |e, css| plan(e, media, css, reader, g));
+    if plans.iter().all(|p| {
+        p.decls.is_empty()
+            && p.lines.is_empty()
+            && p.frames.is_empty()
+            && p.cells.is_empty()
+            && p.cell_widths.is_empty()
+            && p.inline.is_empty()
+    }) {
         return;
     }
     let opf_idx = find_opf(entries);
-    let opf_dir = opf_idx.map(|i| dir_of(&entries[i].name).to_string()).unwrap_or_default();
-    let at = |n: &str| if opf_dir.is_empty() { n.to_string() } else { format!("{opf_dir}/{n}") };
+    let opf_dir = opf_idx
+        .map(|i| dir_of(&entries[i].name).to_string())
+        .unwrap_or_default();
+    let at = |n: &str| {
+        if opf_dir.is_empty() {
+            n.to_string()
+        } else {
+            format!("{opf_dir}/{n}")
+        }
+    };
     let css_path = at(CSS_NAME);
     // 三段（2026-10-15 改，以前写回整段串行）：① 各章并行算好编辑（[`resolve`]，只读），类、横线图先不编号，按以前遇到的先后
     // 记下要登记的；② 串行按「章的顺序、章里登记的先后」编号——和以前逐章做时的先后一样，产物逐字节不变；③ 各章并行改写（[`rewrite`]）。
-    let busy = |p: &Plan| !(p.decls.is_empty() && p.lines.is_empty() && p.frames.is_empty() && p.cells.is_empty() && p.cell_widths.is_empty() && p.inline.is_empty());
-    let todo: Vec<(usize, &Plan)> = chapters.iter().zip(&plans).filter(|(_, p)| busy(p)).map(|(&i, p)| (i, p)).collect();
-    let resolved: Vec<Option<Resolved>> = crate::util::par_map(&todo, |&(i, p)| resolve(&entries[i], p));
+    let busy = |p: &Plan| {
+        !(p.decls.is_empty()
+            && p.lines.is_empty()
+            && p.frames.is_empty()
+            && p.cells.is_empty()
+            && p.cell_widths.is_empty()
+            && p.inline.is_empty())
+    };
+    let todo: Vec<(usize, &Plan)> = chapters
+        .iter()
+        .zip(&plans)
+        .filter(|(_, p)| busy(p))
+        .map(|(&i, p)| (i, p))
+        .collect();
+    let resolved: Vec<Option<Resolved>> =
+        crate::util::par_map(&todo, |&(i, p)| resolve(&entries[i], p));
     // (标签, 声明) → 类序号；横线图 → 序号
     let mut classes: Vec<(String, String)> = Vec::new();
     let mut images: Vec<(LineKey, Line)> = Vec::new();
@@ -181,27 +225,54 @@ pub(super) fn apply(entries: &mut Vec<Entry>, rep: &mut WashReport, media: Optio
             .lines
             .iter()
             .map(|line| {
-                images.iter().position(|(key, _)| *key == line.key()).unwrap_or_else(|| {
-                    images.push((line.key(), *line));
-                    images.len() - 1
-                })
+                images
+                    .iter()
+                    .position(|(key, _)| *key == line.key())
+                    .unwrap_or_else(|| {
+                        images.push((line.key(), *line));
+                        images.len() - 1
+                    })
             })
             .collect();
         jobs.insert(i, (r, ks, ls));
     }
-    let mut work: Vec<(&mut Entry, Job)> = entries.iter_mut().enumerate().filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j))).collect();
-    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, (r, ks, ls))| rewrite(e, r, ks, ls, &at, &css_path)).into_iter().sum::<usize>();
+    let mut work: Vec<(&mut Entry, Job)> = entries
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(i, e)| jobs.remove(&i).map(|j| (e, j)))
+        .collect();
+    rep.kindle_rule_edits += crate::util::par_map_mut(&mut work, |(e, (r, ks, ls))| {
+        rewrite(e, r, ks, ls, &at, &css_path)
+    })
+    .into_iter()
+    .sum::<usize>();
     // 不写 `!important`（掌阅带了反而输给前面的普通声明）：选择器 `html body 标签.类` 压过书里的规则，这份样式表链在最后
     let mut sheet = String::from("/* 内边距、边框、标题外边距、左右外边距照 Kindle（sheng-ren kindle_rules，见 wash/box_fix.rs） */\n");
     for (k, (tag, body)) in classes.iter().enumerate() {
         sheet.push_str(&format!("html body {tag}.eink-b{}{{{body}}}\n", k + 1));
     }
     for k in 0..images.len() {
-        sheet.push_str(&format!("html body img.eink-r{}{{display:block;width:100%;height:auto;margin:0;padding:0;}}\n", k + 1));
+        sheet.push_str(&format!(
+            "html body img.eink-r{}{{display:block;width:100%;height:auto;margin:0;padding:0;}}\n",
+            k + 1
+        ));
     }
-    add_css_entry(entries, find_opf(entries), &css_path, &sheet, "eink-box-css");
+    add_css_entry(
+        entries,
+        find_opf(entries),
+        &css_path,
+        &sheet,
+        "eink-box-css",
+    );
     for (k, (_, line)) in images.iter().enumerate() {
-        add_entry(entries, opf_idx, &at(&format!("eink-rule-{}.png", k + 1)), line.png(), &format!("eink-rule-{}", k + 1), "image/png");
+        add_entry(
+            entries,
+            opf_idx,
+            &at(&format!("eink-rule-{}.png", k + 1)),
+            line.png(),
+            &format!("eink-rule-{}", k + 1),
+            "image/png",
+        );
     }
 }
 
@@ -231,31 +302,59 @@ struct Resolved {
 fn resolve(e: &Entry, p: &Plan) -> Option<Resolved> {
     let text = std::str::from_utf8(&e.data).ok()?;
     let (bs, be) = html::body_range(text)?;
-    let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
-    let mut r = Resolved { classes: Vec::new(), lines: Vec::new(), edits: Vec::new() };
+    let starts: Vec<html::Tag> = html::tags_in(text, bs, be)
+        .filter(|t| t.is_start())
+        .collect();
+    let mut r = Resolved {
+        classes: Vec::new(),
+        lines: Vec::new(),
+        edits: Vec::new(),
+    };
     let empty = Vec::new();
-    let tagged: std::collections::BTreeSet<usize> = p.decls.keys().chain(p.inline.keys()).copied().collect();
+    let tagged: std::collections::BTreeSet<usize> =
+        p.decls.keys().chain(p.inline.keys()).copied().collect();
     for n in tagged {
         let ds = p.decls.get(&n).unwrap_or(&empty);
         let Some(t) = starts.get(n) else { continue };
         let tag = t.name.to_ascii_lowercase();
         let mut raw = text[t.start..t.end].to_string();
-        if let (Some(pre), Some(style)) = (p.strip.get(&n), html::attr_value(&raw, "style").map(|s| crate::util::xml_unescape(s).into_owned())) {
-            let kept: String = html::css_decls(&style).iter().filter(|d| !pre.iter().any(|p| d.prop.to_ascii_lowercase().starts_with(p))).map(|d| d.raw).collect();
-            raw = if kept.trim().is_empty() { html::remove_attr(&raw, "style") } else { html::set_attr(&raw, "style", &crate::util::xml_escape(kept.trim())) };
+        if let (Some(pre), Some(style)) = (
+            p.strip.get(&n),
+            html::attr_value(&raw, "style").map(|s| crate::util::xml_unescape(s).into_owned()),
+        ) {
+            let kept: String = html::css_decls(&style)
+                .iter()
+                .filter(|d| {
+                    !pre.iter()
+                        .any(|p| d.prop.to_ascii_lowercase().starts_with(p))
+                })
+                .map(|d| d.raw)
+                .collect();
+            raw = if kept.trim().is_empty() {
+                html::remove_attr(&raw, "style")
+            } else {
+                html::set_attr(&raw, "style", &crate::util::xml_escape(kept.trim()))
+            };
         }
         if let Some(adds) = p.inline.get(&n) {
-            let old = html::attr_value(&raw, "style").map(|s| crate::util::xml_unescape(s).into_owned()).unwrap_or_default();
+            let old = html::attr_value(&raw, "style")
+                .map(|s| crate::util::xml_unescape(s).into_owned())
+                .unwrap_or_default();
             let old = old.trim_end();
             let old = old.strip_suffix(';').unwrap_or(old);
             let add: String = adds.iter().map(|d| format!("{d};")).collect();
-            let style = if old.trim().is_empty() { add } else { format!("{old};{add}") };
+            let style = if old.trim().is_empty() {
+                add
+            } else {
+                format!("{old};{add}")
+            };
             raw = html::set_attr(&raw, "style", &crate::util::xml_escape(&style));
         }
         let out = if ds.is_empty() {
             Out::Done(raw)
         } else {
-            r.classes.push((tag, ds.iter().map(|d| format!("{d};")).collect::<String>()));
+            r.classes
+                .push((tag, ds.iter().map(|d| format!("{d};")).collect::<String>()));
             Out::Class(raw, r.classes.len() - 1)
         };
         r.edits.push((t.start, t.end, out));
@@ -267,17 +366,27 @@ fn resolve(e: &Entry, p: &Plan) -> Option<Resolved> {
             t.end
         } else {
             let name = t.name.to_ascii_lowercase();
-            let Some(close) = html::find_matching_close(text, t.end, &name) else { continue };
+            let Some(close) = html::find_matching_close(text, t.end, &name) else {
+                continue;
+            };
             close.start
         };
         r.edits.push((pos, pos, Out::Line(r.lines.len() - 1)));
     }
     for (n, body, ds, table) in &p.frames {
         let Some(t) = starts.get(*n) else { continue };
-        let Some(close) = html::find_matching_close(text, t.end, &t.name.to_ascii_lowercase()) else { continue };
+        let Some(close) = html::find_matching_close(text, t.end, &t.name.to_ascii_lowercase())
+        else {
+            continue;
+        };
         r.classes.push(("div".to_string(), body.clone()));
-        r.edits.push((t.start, t.start, Out::Frame(r.classes.len() - 1, ds.clone(), table.clone())));
-        r.edits.push((close.end, close.end, Out::Done(FRAME_CLOSE.to_string())));
+        r.edits.push((
+            t.start,
+            t.start,
+            Out::Frame(r.classes.len() - 1, ds.clone(), table.clone()),
+        ));
+        r.edits
+            .push((close.end, close.end, Out::Done(FRAME_CLOSE.to_string())));
     }
     for (n, add) in &p.cells {
         let Some(t) = starts.get(*n) else { continue };
@@ -304,8 +413,17 @@ fn resolve(e: &Entry, p: &Plan) -> Option<Resolved> {
 
 /// 照算好的编辑改写一章：`ks`、`ls` 是这章登记的类、横线图编好的全书序号（从 0 起），`at` 把文件名换成 OPF 同目录的书内路径。
 /// 返回改动数。
-fn rewrite(e: &mut Entry, r: &Resolved, ks: &[usize], ls: &[usize], at: &(impl Fn(&str) -> String + Sync), css_path: &str) -> usize {
-    let Ok(text) = std::str::from_utf8(&e.data) else { return 0 };
+fn rewrite(
+    e: &mut Entry,
+    r: &Resolved,
+    ks: &[usize],
+    ls: &[usize],
+    at: &(impl Fn(&str) -> String + Sync),
+    css_path: &str,
+) -> usize {
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return 0;
+    };
     let dir = dir_of(&e.name);
     let mut edits: Vec<(usize, usize, String)> = r
         .edits
@@ -316,8 +434,12 @@ fn rewrite(e: &mut Entry, r: &Resolved, ks: &[usize], ls: &[usize], at: &(impl F
                 Out::Class(raw, c) => html::add_class(raw, &format!("eink-b{}", ks[*c] + 1)),
                 Out::Line(l) => {
                     let k = ls[*l];
-                    let href = crate::epubzip::href_to(dir, &at(&format!("eink-rule-{}.png", k + 1)), "");
-                    format!(r#"<img class="eink-sp eink-r{}" src="{href}" alt=""/>"#, k + 1)
+                    let href =
+                        crate::epubzip::href_to(dir, &at(&format!("eink-rule-{}.png", k + 1)), "");
+                    format!(
+                        r#"<img class="eink-sp eink-r{}" src="{href}" alt=""/>"#,
+                        k + 1
+                    )
                 }
                 Out::Frame(c, ds, table) => frame_open(ks[*c] + 1, ds, table),
             };
@@ -353,13 +475,26 @@ fn big_top_pad(c: &crate::cascade::Computed, reader: &ReaderModel) -> bool {
 /// 页首（文件里前面还没有内容）的块插的上横线图有多高（这台的屏幕像素：线粗，加上不认内边距时连着画的上内边距）；不插的 `None`。
 /// 页首的块由页首垫图（`top_spacer.rs`）推到 Kindle 上字的位置，垫图要减去它，两边共用这一个判断（KINDLE_RULES 35：以前页首一律
 /// 不插上横线，《人生海海》「第一部」、《平凡的世界》卷名上的线 Move 上没有，维护者要修）。包进单格表格画框的块（左右有框）不在这里。
-pub(super) fn page_top_rule_px(c: &crate::cascade::Computed, tag: &str, reader: &ReaderModel, v_rem_px: f64) -> Option<f64> {
+pub(super) fn page_top_rule_px(
+    c: &crate::cascade::Computed,
+    tag: &str,
+    reader: &ReaderModel,
+    v_rem_px: f64,
+) -> Option<f64> {
     if reader.borders || skipped(tag) {
         return None;
     }
-    let seen = |side: usize| c.border[side].as_ref().filter(|b| b.width != BorderWidth::Pt(0.0) && b.width != BorderWidth::Em(0.0) && b.color.is_none_or(|c| c >> 24 != 0));
+    let seen = |side: usize| {
+        c.border[side].as_ref().filter(|b| {
+            b.width != BorderWidth::Pt(0.0)
+                && b.width != BorderWidth::Em(0.0)
+                && b.color.is_none_or(|c| c >> 24 != 0)
+        })
+    };
     let b = seen(0)?;
-    let framed = (seen(1).is_some() || seen(3).is_some()) && c.bg_image.is_none() && (c.width.is_some() || !(c.margin_auto[1] || c.margin_auto[3]));
+    let framed = (seen(1).is_some() || seen(3).is_some())
+        && c.bg_image.is_none()
+        && (c.width.is_some() || !(c.margin_auto[1] || c.margin_auto[3]));
     // 窄的定宽块会包进表格（见 [`NARROW_SHARE`]）：这里没有页宽，按 Kindle 一行 32 em 估（《平凡的世界》卷名 `width:100%` 不算窄）
     let narrow = match c.width {
         Some(Len::Percent(p)) => p < NARROW_SHARE * 100.0,
@@ -374,17 +509,45 @@ pub(super) fn page_top_rule_px(c: &crate::cascade::Computed, tag: &str, reader: 
         BorderWidth::Pt(n) => n / km::PT_PER_EM,
         BorderWidth::Em(n) => n * c.font_size,
     };
-    let pad_rem = if reader.padding { 0.0 } else { km::vertical_rem(c.padding[0], c.font_size).max(0.0) };
+    let pad_rem = if reader.padding {
+        0.0
+    } else {
+        km::vertical_rem(c.padding[0], c.font_size).max(0.0)
+    };
     // 上内边距大到像是拿来把页首的字往下推的（《梁羽生》卷名 `padding-top:6em` 配 3 倍字号、负上外边距，18 rem）：这段距离已经算在垫图里
     // （垫图照 Kindle 字顶的位置），横线图只画线、不连着内边距，不然距离算两遍，垫图 + xochitl 标题前自带的空 + 横线图的透明段超过
     // 一页，卷名被推到下一页、前面多出一页空背景（2026-10-15 发现，33 版就有）
-    let pad_rem = if pad_rem > MAX_TOP_PAD_REM { 0.0 } else { pad_rem };
+    let pad_rem = if pad_rem > MAX_TOP_PAD_REM {
+        0.0
+    } else {
+        pad_rem
+    };
     Some((border_rem * v_rem_px).max(1.0) + pad_rem * v_rem_px)
 }
 
 /// 表格、列表、分隔线、图这些不动（外边距、内边距的意思不一样，横线也画不对）。
 fn skipped(tag: &str) -> bool {
-    matches!(tag, "td" | "th" | "tr" | "table" | "thead" | "tbody" | "tfoot" | "caption" | "li" | "ul" | "ol" | "dl" | "dt" | "dd" | "hr" | "img" | "svg" | "body" | "html")
+    matches!(
+        tag,
+        "td" | "th"
+            | "tr"
+            | "table"
+            | "thead"
+            | "tbody"
+            | "tfoot"
+            | "caption"
+            | "li"
+            | "ul"
+            | "ol"
+            | "dl"
+            | "dt"
+            | "dd"
+            | "hr"
+            | "img"
+            | "svg"
+            | "body"
+            | "html"
+    )
 }
 
 fn heading(tag: &str) -> bool {
@@ -394,16 +557,31 @@ fn heading(tag: &str) -> bool {
 fn fmt(v: f64) -> String {
     let s = format!("{:.4}", v);
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".to_string() } else { s.to_string() }
+    if s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
 }
 
-fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>, reader: &ReaderModel, g: BoxGeometry) -> Plan {
+fn plan(
+    e: &Entry,
+    media: Option<&MediaEnv>,
+    css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>,
+    reader: &ReaderModel,
+    g: BoxGeometry,
+) -> Plan {
     let mut out = Plan::default();
-    let Ok(text) = std::str::from_utf8(&e.data) else { return out };
-    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else { return out };
+    let Ok(text) = std::str::from_utf8(&e.data) else {
+        return out;
+    };
+    let Some(ch) = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags) else {
+        return out;
+    };
     let tag = |i: usize| km::reader_tag(&ch.el(i));
     let comp = |i: usize| &ch.els[i].comp;
-    let has_bg = |i: usize| comp(i).background.is_some_and(|c| c >> 24 != 0) || comp(i).bg_image.is_some();
+    let has_bg =
+        |i: usize| comp(i).background.is_some_and(|c| c >> 24 != 0) || comp(i).bg_image.is_some();
     // 水平长度换成本元素的 em：pt 按 12pt 一根 em，% 按这台的内容区宽（Move 的 % 外边距是坏的，折成 em 写）
     let to_em = |l: Option<Len>, fs: f64| match l {
         Some(Len::Em(n)) => n,
@@ -411,9 +589,14 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         Some(Len::Percent(p)) => p / 100.0 * g.area_w / (g.em_px * g.h_scale * fs),
         None => 0.0,
     };
-    let pad_rem = |i: usize, side: usize| km::vertical_rem(comp(i).padding[side], comp(i).font_size).max(0.0);
+    let pad_rem =
+        |i: usize, side: usize| km::vertical_rem(comp(i).padding[side], comp(i).font_size).max(0.0);
     let visible = |i: usize, side: usize| {
-        comp(i).border[side].as_ref().filter(|b| b.width != BorderWidth::Pt(0.0) && b.width != BorderWidth::Em(0.0) && b.color.is_none_or(|c| c >> 24 != 0))
+        comp(i).border[side].as_ref().filter(|b| {
+            b.width != BorderWidth::Pt(0.0)
+                && b.width != BorderWidth::Em(0.0)
+                && b.color.is_none_or(|c| c >> 24 != 0)
+        })
     };
     // 文档序里每个元素前面有没有内容（字、图）：前面没有的块不插上边框（页首的位置由垫图管）
     let mut content_before = vec![false; ch.els.len()];
@@ -426,7 +609,9 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                     if let Some(j) = ch.index_of(d.id()) {
                         content_before[j] = seen;
                     }
-                    if matches!(v.name(), "img" | "svg" | "image") && !v.classes().any(|c| c == "eink-sp") {
+                    if matches!(v.name(), "img" | "svg" | "image")
+                        && !v.classes().any(|c| c == "eink-sp")
+                    {
                         seen = true;
                     }
                 }
@@ -439,7 +624,9 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     let has_content = |i: usize| {
         ch.el(i).descendants().any(|d| match d.value() {
             Node::Text(t) => !t.trim().is_empty(),
-            Node::Element(v) => matches!(v.name(), "img" | "svg" | "image") && !v.classes().any(|c| c == "eink-sp"),
+            Node::Element(v) => {
+                matches!(v.name(), "img" | "svg" | "image") && !v.classes().any(|c| c == "eink-sp")
+            }
             _ => false,
         })
     };
@@ -452,10 +639,17 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             BorderWidth::Pt(n) => n / km::PT_PER_EM,
             BorderWidth::Em(n) => n * c.font_size,
         };
-        let style = if matches!(b.style.as_str(), "dotted" | "dashed" | "double") { b.style.as_str() } else { "solid" };
+        let style = if matches!(b.style.as_str(), "dotted" | "dashed" | "double") {
+            b.style.as_str()
+        } else {
+            "solid"
+        };
         let color = (b.color.or(c.color).unwrap_or(0xFF00_0000) | 0xFF00_0000) & 0xFF_FFFF;
         let name = ["top", "right", "bottom", "left"][side];
-        Some(format!("border-{name}:{}px {style} #{color:06x}", fmt((rem * g.v_rem_px).max(1.0).round())))
+        Some(format!(
+            "border-{name}:{}px {style} #{color:06x}",
+            fmt((rem * g.v_rem_px).max(1.0).round())
+        ))
     };
     // 块在 Kindle 上能用的宽（屏幕像素）：内容区宽减去祖先的左右外边距、内边距
     let avail_px = |i: usize| {
@@ -463,7 +657,14 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         let mut p = ch.els[i].parent;
         while let Some(a) = p {
             let c = comp(a);
-            w -= (to_em(c.margin[3], c.font_size) + to_em(c.margin[1], c.font_size) + to_em(c.padding[3], c.font_size) + to_em(c.padding[1], c.font_size)).max(0.0) * c.font_size * g.em_px * g.h_scale;
+            w -= (to_em(c.margin[3], c.font_size)
+                + to_em(c.margin[1], c.font_size)
+                + to_em(c.padding[3], c.font_size)
+                + to_em(c.padding[1], c.font_size))
+            .max(0.0)
+                * c.font_size
+                * g.em_px
+                * g.h_scale;
             p = ch.els[a].parent;
         }
         w.max(g.area_w * 0.1)
@@ -476,14 +677,22 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     if !reader.block_width {
         for i in 0..ch.els.len() {
             let c = comp(i);
-            let Some(w) = c.width.filter(|_| usable(i)) else { continue };
+            let Some(w) = c.width.filter(|_| usable(i)) else {
+                continue;
+            };
             let unit = c.font_size * g.em_px * g.h_scale;
             let avail = avail_px(i);
             let w_px = match w {
                 Len::Percent(p) => p / 100.0 * avail,
                 l => to_em(Some(l), c.font_size) * unit,
             };
-            let side = |s: usize| if c.margin_auto[s] { 0.0 } else { to_em(c.margin[s], c.font_size) * unit };
+            let side = |s: usize| {
+                if c.margin_auto[s] {
+                    0.0
+                } else {
+                    to_em(c.margin[s], c.font_size) * unit
+                }
+            };
             let pad = (to_em(c.padding[3], c.font_size) + to_em(c.padding[1], c.font_size)) * unit;
             let extra = avail - w_px - pad - side(3) - side(1);
             if w_px <= 0.0 || extra <= 1.0 {
@@ -491,12 +700,27 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
             // 多出来的放右边：Kindle 不按 margin:auto 居中（Q124 真机，Send to Kindle 写的块对齐不起作用）；只有左边 auto 的靠右
             // （写出器写成块的对齐 `$580` 靠右，Kindle 照排：《梁羽生》卷名 bigtitle 2026-10-14 真机），多出来的放左边
-            let m = if c.margin_auto[3] && !c.margin_auto[1] { [(side(3) + extra) / unit, side(1) / unit] } else { [side(3) / unit, (side(1) + extra) / unit] };
+            let m = if c.margin_auto[3] && !c.margin_auto[1] {
+                [(side(3) + extra) / unit, side(1) / unit]
+            } else {
+                [side(3) / unit, (side(1) + extra) / unit]
+            };
             width_margins.insert(i, m);
             if w_px + pad < NARROW_SHARE * avail {
                 // 靠哪边同上面折外边距的算法：Kindle 不按 margin:auto 居中，多出来的放右边；只有左边 auto 的靠右
-                let align = if c.margin_auto[3] && !c.margin_auto[1] { "right" } else { "left" };
-                narrow.insert(i, ((w_px + pad) / avail * 100.0, align, [side(3) / unit, side(1) / unit]));
+                let align = if c.margin_auto[3] && !c.margin_auto[1] {
+                    "right"
+                } else {
+                    "left"
+                };
+                narrow.insert(
+                    i,
+                    (
+                        (w_px + pad) / avail * 100.0,
+                        align,
+                        [side(3) / unit, side(1) / unit],
+                    ),
+                );
             }
         }
     }
@@ -504,7 +728,11 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     // auto 的 Kindle 靠右，同掌阅，不动）
     if reader.margin_auto && reader.block_width {
         for i in 0..ch.els.len() {
-            if usable(i) && comp(i).width.is_some_and(|w| !w.is_zero()) && comp(i).margin_auto[3] && comp(i).margin_auto[1] {
+            if usable(i)
+                && comp(i).width.is_some_and(|w| !w.is_zero())
+                && comp(i).margin_auto[3]
+                && comp(i).margin_auto[1]
+            {
                 out.decls.entry(i).or_default().push("margin-left:0".into());
             }
         }
@@ -513,18 +741,39 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     // （《人生海海》「第一部」`<div></div><h1 style="page-break-before:always">`，2026-10-15 真机）。行内末尾接 auto（同一个 style 里
     // 后写的胜；不走类规则：类规则会连带把行内的外边距搬进类规则，Move 上下一章的间距跟着乱了，同日实测）
     for (i, el) in ch.els.iter().enumerate() {
-        let pb = |k: &str| el.decls.get(k).map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
-        let forced = matches!(pb("page-break-before").as_str(), "always" | "left" | "right") || matches!(pb("break-before").as_str(), "page" | "left" | "right" | "recto" | "verso");
+        let pb = |k: &str| {
+            el.decls
+                .get(k)
+                .map(|v| v.trim().to_ascii_lowercase())
+                .unwrap_or_default()
+        };
+        let forced = matches!(
+            pb("page-break-before").as_str(),
+            "always" | "left" | "right"
+        ) || matches!(
+            pb("break-before").as_str(),
+            "page" | "left" | "right" | "recto" | "verso"
+        );
         if forced && el.is_block && !el.hidden && !content_before[i] {
-            out.inline.entry(i).or_default().push("page-break-before:auto".into());
+            out.inline
+                .entry(i)
+                .or_default()
+                .push("page-break-before:auto".into());
         }
     }
     // 认 float 的阅读器（掌阅）：Kindle 不浮动（Q133、Q134 真机），标题、段落上的写成 none（段落 Q148：《梁羽生》版本号，KINDLE_RULES 39；
     // 别的元素上的没量过，不动）
     if reader.float {
         for (i, el) in ch.els.iter().enumerate() {
-            let f = el.decls.get("float").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
-            if usable(i) && (heading(&tag(i)) || tag(i) == "p") && matches!(f.as_str(), "left" | "right") {
+            let f = el
+                .decls
+                .get("float")
+                .map(|v| v.trim().to_ascii_lowercase())
+                .unwrap_or_default();
+            if usable(i)
+                && (heading(&tag(i)) || tag(i) == "p")
+                && matches!(f.as_str(), "left" | "right")
+            {
                 out.decls.entry(i).or_default().push("float:none".into());
             }
         }
@@ -555,25 +804,71 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             let c = comp(i);
             let sized = width_margins.contains_key(&i);
             let frameable = usable(i) || (list(i) && ch.els[i].is_block && !ch.els[i].hidden);
-            if !frameable || !(visible(i, 1).is_some() || visible(i, 3).is_some() || narrow.contains_key(&i)) || (!sized && (c.width.is_some() || c.margin_auto[1] || c.margin_auto[3])) || (c.bg_image.is_some() && !narrow.contains_key(&i)) {
+            if !frameable
+                || !(visible(i, 1).is_some() || visible(i, 3).is_some() || narrow.contains_key(&i))
+                || (!sized && (c.width.is_some() || c.margin_auto[1] || c.margin_auto[3]))
+                || (c.bg_image.is_some() && !narrow.contains_key(&i))
+            {
                 continue;
             }
             *f = true;
-            let px = |l: Option<Len>| (to_em(l, c.font_size) * c.font_size * g.em_px * g.h_scale).max(0.0);
+            let px = |l: Option<Len>| {
+                (to_em(l, c.font_size) * c.font_size * g.em_px * g.h_scale).max(0.0)
+            };
             // 外层 div 的左右外边距：块的外边距换成外层（父元素字号）的 em
-            let parent_fs = ch.els[i].parent.map_or(ch.body_comp.font_size, |p| comp(p).font_size);
-            let m = narrow.get(&i).map(|n| n.2).or_else(|| width_margins.get(&i).copied()).unwrap_or([to_em(c.margin[3], c.font_size), to_em(c.margin[1], c.font_size)]);
+            let parent_fs = ch.els[i]
+                .parent
+                .map_or(ch.body_comp.font_size, |p| comp(p).font_size);
+            let m = narrow
+                .get(&i)
+                .map(|n| n.2)
+                .or_else(|| width_margins.get(&i).copied())
+                .unwrap_or([
+                    to_em(c.margin[3], c.font_size),
+                    to_em(c.margin[1], c.font_size),
+                ]);
             let pem = |v: f64| fmt((v * c.font_size / parent_fs).max(0.0));
-            let wrap = format!("margin-left:{}em;margin-right:{}em;margin-top:0;margin-bottom:0;", pem(m[0]), pem(m[1]));
+            let wrap = format!(
+                "margin-left:{}em;margin-right:{}em;margin-top:0;margin-bottom:0;",
+                pem(m[0]),
+                pem(m[1])
+            );
             let mut td: Vec<String> = (0..4).filter_map(|s| border_css(i, s)).collect();
             // 负的上外边距（不认负外边距的阅读器上没有）：Kindle 把框往上拉、上内边距再把字推下来，字还在原处（《梁羽生》卷名
             // `padding-top:6em;margin-top:-6em`，2026-10-14 探针 Q134），单元格的上内边距减去它
-            let pull = if reader.negative_margins { 0.0 } else { km::vertical_rem(c.margin[0], c.font_size).min(0.0) };
-            let pad = |side: usize| if side == 0 { (pad_rem(i, 0) + pull).max(0.0) * g.v_rem_px } else if side == 2 { pad_rem(i, 2) * g.v_rem_px } else if list(i) { if side == 3 { list_indent_extra_px(g.area_w) } else { 0.0 } } else { px(c.padding[side]) };
-            td.push(format!("padding:{}px {}px {}px {}px", fmt(pad(0).round()), fmt(pad(1).round()), fmt(pad(2).round()), fmt(pad(3).round())));
+            let pull = if reader.negative_margins {
+                0.0
+            } else {
+                km::vertical_rem(c.margin[0], c.font_size).min(0.0)
+            };
+            let pad = |side: usize| {
+                if side == 0 {
+                    (pad_rem(i, 0) + pull).max(0.0) * g.v_rem_px
+                } else if side == 2 {
+                    pad_rem(i, 2) * g.v_rem_px
+                } else if list(i) {
+                    if side == 3 {
+                        list_indent_extra_px(g.area_w)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    px(c.padding[side])
+                }
+            };
+            td.push(format!(
+                "padding:{}px {}px {}px {}px",
+                fmt(pad(0).round()),
+                fmt(pad(1).round()),
+                fmt(pad(2).round()),
+                fmt(pad(3).round())
+            ));
             // 单元格里块的背景色 xochitl 不画，写到单元格上
             if let Some(bg) = c.background.filter(|b| b >> 24 != 0) {
-                td.push(format!("background-color:#{:06x}", crate::color::over_white(bg) & 0xFF_FFFF));
+                td.push(format!(
+                    "background-color:#{:06x}",
+                    crate::color::over_white(bg) & 0xFF_FFFF
+                ));
             }
             td.push("vertical-align:top".into());
             // 书里给 `table`、`td` 写的规则也落在我们的表格上（《雪国》`td{font-size:0.6em;line-height:100%}`、`table{text-align:center}`：
@@ -585,11 +880,28 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 Some(f) => format!("line-height:{}em", fmt(f)),
                 None => "line-height:normal".into(),
             });
-            td.push(format!("text-align:{}", pc.text_align.as_deref().unwrap_or("left")));
+            td.push(format!(
+                "text-align:{}",
+                pc.text_align.as_deref().unwrap_or("left")
+            ));
             if let Some(f) = &pc.font_family {
-                td.push(format!("font-family:{}", if f.contains(' ') { format!("'{f}'") } else { f.clone() }));
+                td.push(format!(
+                    "font-family:{}",
+                    if f.contains(' ') {
+                        format!("'{f}'")
+                    } else {
+                        f.clone()
+                    }
+                ));
             }
-            out.frames.push((i, wrap, td.join(";") + ";", narrow.get(&i).map(|n| (fmt((n.0 * 100.0).round() / 100.0), n.1))));
+            out.frames.push((
+                i,
+                wrap,
+                td.join(";") + ";",
+                narrow
+                    .get(&i)
+                    .map(|n| (fmt((n.0 * 100.0).round() / 100.0), n.1)),
+            ));
         }
     }
     // 水平：左右内边距并进外边距；px、% 写的左右外边距折成 em（元素 → 改后的左右外边距 em，给横线图算宽度用）
@@ -597,9 +909,19 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     if !(reader.padding && reader.px_margins && reader.percent_margins && reader.block_width) {
         // 声明的单位不对的（这台上 px、% 和 Kindle 不一样大）
         let wrong_unit = |i: usize, name: &str| {
-            let v = ch.els[i].decls.get(name).map(|v| v.trim().to_ascii_lowercase()).unwrap_or_default();
-            let nonzero = v.trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '%').trim().parse::<f64>().is_ok_and(|n| n != 0.0);
-            nonzero && ((v.ends_with("px") && !reader.px_margins) || (v.ends_with('%') && !reader.percent_margins))
+            let v = ch.els[i]
+                .decls
+                .get(name)
+                .map(|v| v.trim().to_ascii_lowercase())
+                .unwrap_or_default();
+            let nonzero = v
+                .trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '%')
+                .trim()
+                .parse::<f64>()
+                .is_ok_and(|n| n != 0.0);
+            nonzero
+                && ((v.ends_with("px") && !reader.px_margins)
+                    || (v.ends_with('%') && !reader.percent_margins))
         };
         for (i, _) in framed.iter().enumerate().filter(|(_, f)| !**f) {
             if !usable(i) {
@@ -607,20 +929,30 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
             let c = comp(i);
             let sized = width_margins.get(&i).copied();
-            let mut m = sized.unwrap_or([to_em(c.margin[3], c.font_size), to_em(c.margin[1], c.font_size)]);
+            let mut m = sized.unwrap_or([
+                to_em(c.margin[3], c.font_size),
+                to_em(c.margin[1], c.font_size),
+            ]);
             let mut changed = false;
             for (k, side, name) in [(0, 3, "margin-left"), (1, 1, "margin-right")] {
                 if c.margin_auto[side] && sized.is_none() {
                     continue;
                 }
                 // 带背景色的块不并内边距（并了色块就缩到字上）
-                let p = if reader.padding || has_bg(i) { 0.0 } else { to_em(c.padding[side], c.font_size) };
+                let p = if reader.padding || has_bg(i) {
+                    0.0
+                } else {
+                    to_em(c.padding[side], c.font_size)
+                };
                 if p.abs() < 1e-6 && !wrong_unit(i, name) && sized.is_none() {
                     continue;
                 }
                 m[k] += p;
                 changed = true;
-                out.decls.entry(i).or_default().push(format!("{name}:{}em", fmt(m[k])));
+                out.decls
+                    .entry(i)
+                    .or_default()
+                    .push(format!("{name}:{}em", fmt(m[k])));
             }
             if changed {
                 h_margin.insert(i, m);
@@ -629,24 +961,36 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             if reader.padding && !reader.px_margins {
                 for (side, name) in [(3, "padding-left"), (1, "padding-right")] {
                     if wrong_unit(i, name) {
-                        out.decls.entry(i).or_default().push(format!("{name}:{}em", fmt(to_em(c.padding[side], c.font_size))));
+                        out.decls.entry(i).or_default().push(format!(
+                            "{name}:{}em",
+                            fmt(to_em(c.padding[side], c.font_size))
+                        ));
                     }
                 }
             }
             // px 写的首行缩进同样是屏幕像素（掌阅 Q16、Q60；Move 2026-10-16 探针 Q151：居中标题 text-indent:48px 字右移 24px，KINDLE_RULES 40）：
             // 照 Kindle 折成 em
             if !reader.px_margins && wrong_unit(i, "text-indent") {
-                out.decls.entry(i).or_default().push(format!("text-indent:{}em", fmt(to_em(c.text_indent, c.font_size))));
+                out.decls.entry(i).or_default().push(format!(
+                    "text-indent:{}em",
+                    fmt(to_em(c.text_indent, c.font_size))
+                ));
             }
         }
     }
     // 单元格、行内元素、图上 px 写的左右边距（px 是屏幕像素的阅读器）：照 Kindle（外边距、内边距 0.45pt 一 px）折成 em。单元格的内边距两台都认
     // （类规则、行内都认，2026-10-13 探针 Q97–Q99）；行内元素、图的内外边距掌阅认、Move 一概不认（Q88–Q94），Move 上不改
     if !reader.px_margins {
-        let px_decl = |i: usize, name: &str| ch.els[i].decls.get(name).is_some_and(|v| {
-            let v = v.trim().to_ascii_lowercase();
-            v.ends_with("px") && v.trim_end_matches("px").trim().parse::<f64>().is_ok_and(|n| n != 0.0)
-        });
+        let px_decl = |i: usize, name: &str| {
+            ch.els[i].decls.get(name).is_some_and(|v| {
+                let v = v.trim().to_ascii_lowercase();
+                v.ends_with("px")
+                    && v.trim_end_matches("px")
+                        .trim()
+                        .parse::<f64>()
+                        .is_ok_and(|n| n != 0.0)
+            })
+        };
         for (i, el) in ch.els.iter().enumerate() {
             let t = tag(i);
             let cell = matches!(t.as_str(), "td" | "th");
@@ -654,19 +998,36 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 continue;
             }
             let c = comp(i);
-            let sides = [("padding-top", 0), ("padding-right", 1), ("padding-bottom", 2), ("padding-left", 3)];
+            let sides = [
+                ("padding-top", 0),
+                ("padding-right", 1),
+                ("padding-bottom", 2),
+                ("padding-left", 3),
+            ];
             if cell && sides.iter().any(|(n, _)| px_decl(i, n)) {
                 // 四边一起写（行内的内边距要删掉，没改的边照现在的值）
                 let d = out.decls.entry(i).or_default();
                 for (name, side) in sides {
-                    let v = if side % 2 == 0 { km::vertical_rem(c.padding[side], c.font_size) / c.font_size } else { to_em(c.padding[side], c.font_size) };
+                    let v = if side % 2 == 0 {
+                        km::vertical_rem(c.padding[side], c.font_size) / c.font_size
+                    } else {
+                        to_em(c.padding[side], c.font_size)
+                    };
                     d.push(format!("{name}:{}em", fmt(v.max(0.0))));
                 }
             }
             if !cell {
-                for (name, l) in [("margin-left", c.margin[3]), ("margin-right", c.margin[1]), ("padding-left", c.padding[3]), ("padding-right", c.padding[1])] {
+                for (name, l) in [
+                    ("margin-left", c.margin[3]),
+                    ("margin-right", c.margin[1]),
+                    ("padding-left", c.padding[3]),
+                    ("padding-right", c.padding[1]),
+                ] {
                     if px_decl(i, name) {
-                        out.decls.entry(i).or_default().push(format!("{name}:{}em", fmt(to_em(l, c.font_size))));
+                        out.decls
+                            .entry(i)
+                            .or_default()
+                            .push(format!("{name}:{}em", fmt(to_em(l, c.font_size))));
                     }
                 }
             }
@@ -683,15 +1044,27 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             let mut d = Vec::new();
             let (pt, pb) = (pad_rem(i, 0), pad_rem(i, 2));
             if pt + pb > 1e-6 && visible(i, 0).is_none() && visible(i, 2).is_none() {
-                d.push(format!("margin-top:{}em", fmt((km::vertical_rem(c.margin[0], c.font_size) + pt) / c.font_size)));
-                d.push(format!("margin-bottom:{}em", fmt((km::vertical_rem(c.margin[2], c.font_size) + pb) / c.font_size)));
+                d.push(format!(
+                    "margin-top:{}em",
+                    fmt((km::vertical_rem(c.margin[0], c.font_size) + pt) / c.font_size)
+                ));
+                d.push(format!(
+                    "margin-bottom:{}em",
+                    fmt((km::vertical_rem(c.margin[2], c.font_size) + pb) / c.font_size)
+                ));
             }
-            let marker = c.list_style.as_deref() != Some("none") && c.display.as_deref().is_none_or(|v| v.eq_ignore_ascii_case("list-item"));
+            let marker = c.list_style.as_deref() != Some("none")
+                && c.display
+                    .as_deref()
+                    .is_none_or(|v| v.eq_ignore_ascii_case("list-item"));
             if !marker {
                 for (side, name) in [(3, "margin-left"), (1, "margin-right")] {
                     let p = to_em(c.padding[side], c.font_size);
                     if p.abs() > 1e-6 && !c.margin_auto[side] {
-                        d.push(format!("{name}:{}em", fmt(to_em(c.margin[side], c.font_size) + p)));
+                        d.push(format!(
+                            "{name}:{}em",
+                            fmt(to_em(c.margin[side], c.font_size) + p)
+                        ));
                     }
                 }
             }
@@ -710,9 +1083,24 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             }
             let add: Vec<String> = (0..4).filter_map(|s| border_css(i, s)).collect();
             // 单元格有线的表格也要 cellspacing="0"（不然格子之间隔开、线成双）
-            let lined_cells = tag(i) == "table" && ch.el(i).descendants().filter_map(|d| ch.index_of(d.id())).any(|j| matches!(tag(j).as_str(), "td" | "th") && (0..4).any(|s| visible(j, s).is_some()));
+            let lined_cells = tag(i) == "table"
+                && ch
+                    .el(i)
+                    .descendants()
+                    .filter_map(|d| ch.index_of(d.id()))
+                    .any(|j| {
+                        matches!(tag(j).as_str(), "td" | "th")
+                            && (0..4).any(|s| visible(j, s).is_some())
+                    });
             if !add.is_empty() || lined_cells {
-                out.cells.push((i, if add.is_empty() { String::new() } else { add.join(";") + ";" }));
+                out.cells.push((
+                    i,
+                    if add.is_empty() {
+                        String::new()
+                    } else {
+                        add.join(";") + ";"
+                    },
+                ));
             }
         }
         for i in 0..ch.els.len() {
@@ -724,7 +1112,10 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 let Some(b) = visible(i, side) else { continue };
                 // 页首的块：垫图已经让出了横线图的高（`top_spacer.rs`，[`page_top_rule_px`]）；块里有行内垫图的，横线图插在它前面
                 // （块开始标签后面），窄图撑高的是横线下面那一行，要挪的也减去了横线图
-                if top && !content_before[i] && page_top_rule_px(c, &tag(i), reader, g.v_rem_px).is_none() {
+                if top
+                    && !content_before[i]
+                    && page_top_rule_px(c, &tag(i), reader, g.v_rem_px).is_none()
+                {
                     continue;
                 }
                 let style = match b.style.as_str() {
@@ -737,18 +1128,44 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                     BorderWidth::Em(n) => n * c.font_size,
                 };
                 // 页首的块上内边距大到是拿来推字的：线只画线（见 [`page_top_rule_px`]）
-                let pad_px = if reader.padding || (top && !content_before[i] && big_top_pad(c, reader)) { 0.0 } else { pad_rem(i, side) * g.v_rem_px };
-                let m = h_margin.get(&i).copied().unwrap_or([to_em(c.margin[3], c.font_size), to_em(c.margin[1], c.font_size)]);
-                let width_px = (g.area_w - (m[0] + m[1]).max(0.0) * c.font_size * g.em_px * g.h_scale).clamp(g.area_w * 0.1, g.area_w);
+                let pad_px =
+                    if reader.padding || (top && !content_before[i] && big_top_pad(c, reader)) {
+                        0.0
+                    } else {
+                        pad_rem(i, side) * g.v_rem_px
+                    };
+                let m = h_margin.get(&i).copied().unwrap_or([
+                    to_em(c.margin[3], c.font_size),
+                    to_em(c.margin[1], c.font_size),
+                ]);
+                let width_px = (g.area_w
+                    - (m[0] + m[1]).max(0.0) * c.font_size * g.em_px * g.h_scale)
+                    .clamp(g.area_w * 0.1, g.area_w);
                 let color = b.color.or(c.color).unwrap_or(0xFF00_0000) | 0xFF00_0000;
-                out.lines.push((i, Line { color, style, border_px: (border_rem * g.v_rem_px).max(1.0), pad_px, width_px, top }));
+                out.lines.push((
+                    i,
+                    Line {
+                        color,
+                        style,
+                        border_px: (border_rem * g.v_rem_px).max(1.0),
+                        pad_px,
+                        width_px,
+                        top,
+                    },
+                ));
                 drawn[i][k] = true;
                 // 行距少出来的空白全从下面扣的阅读器（Move）：行距倍数低于下限时字伸出行盒，末尾的横线图压在字上（profile
                 // `line_height_floor`，2026-10-15 探针 Q143、《人生海海》版权页）。插了下边框的块行距不低于它（行内写的删掉、并进类规则）
                 if let Some(floor) = reader.line_height_floor.filter(|_| !top) {
-                    let cur = ch.els[i].decls.get("line-height").and_then(|v| v.trim().parse::<f64>().ok());
+                    let cur = ch.els[i]
+                        .decls
+                        .get("line-height")
+                        .and_then(|v| v.trim().parse::<f64>().ok());
                     if cur.is_some_and(|v| v < floor) {
-                        out.inline.entry(i).or_default().push(format!("line-height:{}", fmt(floor)));
+                        out.inline
+                            .entry(i)
+                            .or_default()
+                            .push(format!("line-height:{}", fmt(floor)));
                     }
                 }
             }
@@ -766,7 +1183,13 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 continue;
             }
             let row = ch.el(i).parent().and_then(ElementRef::wrap);
-            if row.is_none_or(|r| r.children().filter_map(ElementRef::wrap).filter(|c| matches!(c.value().name(), "td" | "th")).count() < 2) {
+            if row.is_none_or(|r| {
+                r.children()
+                    .filter_map(ElementRef::wrap)
+                    .filter(|c| matches!(c.value().name(), "td" | "th"))
+                    .count()
+                    < 2
+            }) {
                 continue;
             }
             const MIDDLE: &str = "vertical-align:middle;";
@@ -783,24 +1206,41 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         if tag(i) != "tr" || ch.els[i].hidden {
             continue;
         }
-        let cells: Vec<usize> = ch.el(i).children().filter_map(|c| ch.index_of(c.id())).filter(|&j| matches!(tag(j).as_str(), "td" | "th")).collect();
+        let cells: Vec<usize> = ch
+            .el(i)
+            .children()
+            .filter_map(|c| ch.index_of(c.id()))
+            .filter(|&j| matches!(tag(j).as_str(), "td" | "th"))
+            .collect();
         let width_of = |j: usize| {
-            comp(j).width.or_else(|| ch.el(j).value().attr("width").and_then(|w| match w.trim().parse::<f64>() {
-                Ok(n) => Some(Len::Pt(n * 0.75)),
-                Err(_) => crate::cascade::parse_len(w),
-            }))
+            comp(j).width.or_else(|| {
+                ch.el(j)
+                    .value()
+                    .attr("width")
+                    .and_then(|w| match w.trim().parse::<f64>() {
+                        Ok(n) => Some(Len::Pt(n * 0.75)),
+                        Err(_) => crate::cascade::parse_len(w),
+                    })
+            })
         };
         let widths: Vec<Option<Len>> = cells.iter().map(|&j| width_of(j)).collect();
         if widths.iter().all(Option::is_none) {
             continue;
         }
-        let naturals: Vec<f64> = cells.iter().map(|&j| km::natural_px(&ch.el(j), comp(j).font_size)).collect();
+        let naturals: Vec<f64> = cells
+            .iter()
+            .map(|&j| km::natural_px(&ch.el(j), comp(j).font_size))
+            .collect();
         // 每一格各算（列宽只看第一行的是写出器的写法；这里每行一样的书居多）
-        let total: f64 = widths.iter().zip(&naturals).map(|(w, n)| match w {
-            Some(Len::Em(e)) => e * 16.0,
-            Some(Len::Pt(p)) => p / 0.75,
-            _ => *n,
-        }).sum();
+        let total: f64 = widths
+            .iter()
+            .zip(&naturals)
+            .map(|(w, n)| match w {
+                Some(Len::Em(e)) => e * 16.0,
+                Some(Len::Pt(p)) => p / 0.75,
+                _ => *n,
+            })
+            .sum();
         for (k, &j) in cells.iter().enumerate() {
             let pct = match widths[k] {
                 Some(Len::Percent(p)) => p,
@@ -828,19 +1268,30 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
     // 竖直：同一层相邻两块之间的距离
     let body = ch.body();
     let mut parents: Vec<ElementRef> = vec![body];
-    parents.extend((0..ch.els.len()).filter(|&i| ch.els[i].is_block && !ch.block_children(i).is_empty()).map(|i| ch.el(i)));
+    parents.extend(
+        (0..ch.els.len())
+            .filter(|&i| ch.els[i].is_block && !ch.block_children(i).is_empty())
+            .map(|i| ch.el(i)),
+    );
     for parent in parents {
         // 这一层是块的序列（直接的文字只有空白，元素都是块；我们垫的图不算）才看
         let ok = parent.children().all(|c| match c.value() {
             Node::Text(t) => t.trim().is_empty(),
-            Node::Element(v) => v.classes().any(|k| k == "eink-sp") || ch.index_of(c.id()).is_some_and(|j| ch.els[j].is_block),
+            Node::Element(v) => {
+                v.classes().any(|k| k == "eink-sp")
+                    || ch.index_of(c.id()).is_some_and(|j| ch.els[j].is_block)
+            }
             _ => true,
         });
         if !ok {
             continue;
         }
         // 我们垫的页首空白图（`top_spacer`）不算块
-        let kids: Vec<usize> = parent.children().filter_map(|c| ch.index_of(c.id())).filter(|&j| ch.els[j].is_block && !ch.els[j].hidden && !ours(j)).collect();
+        let kids: Vec<usize> = parent
+            .children()
+            .filter_map(|c| ch.index_of(c.id()))
+            .filter(|&j| ch.els[j].is_block && !ch.els[j].hidden && !ours(j))
+            .collect();
         for w in kids.windows(2) {
             let (a, b) = (w[0], w[1]);
             if (skipped(&tag(a)) && !framed[a]) || (skipped(&tag(b)) && !framed[b]) {
@@ -853,16 +1304,35 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 continue;
             }
             // 折叠链上有负外边距时 `margin_edge` 给不出；不认负外边距的阅读器改用这两块自己的（子块的不算）
-            let own = |i: usize, side: usize| (!reader.negative_margins).then(|| km::vertical_rem(comp(i).margin[side], comp(i).font_size));
-            let (Some(a_mb), Some(b_mt)) = (ch.margin_edge(a, false).or_else(|| own(a, 2)), ch.margin_edge(b, true).or_else(|| own(b, 0))) else { continue };
-            let a_pb = if reader.padding || drawn[a][1] || framed[a] { 0.0 } else { pad_rem(a, 2) };
-            let b_pt = if reader.padding || drawn[b][0] || framed[b] { 0.0 } else { pad_rem(b, 0) };
+            let own = |i: usize, side: usize| {
+                (!reader.negative_margins)
+                    .then(|| km::vertical_rem(comp(i).margin[side], comp(i).font_size))
+            };
+            let (Some(a_mb), Some(b_mt)) = (
+                ch.margin_edge(a, false).or_else(|| own(a, 2)),
+                ch.margin_edge(b, true).or_else(|| own(b, 0)),
+            ) else {
+                continue;
+            };
+            let a_pb = if reader.padding || drawn[a][1] || framed[a] {
+                0.0
+            } else {
+                pad_rem(a, 2)
+            };
+            let b_pt = if reader.padding || drawn[b][0] || framed[b] {
+                0.0
+            } else {
+                pad_rem(b, 0)
+            };
             // 有子块又有内边距的：子块的外边距和它折不折叠说不准，不动
-            if (a_pb > 0.0 && !ch.block_children(a).is_empty()) || (b_pt > 0.0 && !ch.block_children(b).is_empty()) {
+            if (a_pb > 0.0 && !ch.block_children(a).is_empty())
+                || (b_pt > 0.0 && !ch.block_children(b).is_empty())
+            {
                 continue;
             }
             let gap = km::collapse(a_mb, b_mt) + a_pb + b_pt;
-            let heading_involved = (!reader.heading_margins && (ha || hb)) || framed[a] || framed[b];
+            let heading_involved =
+                (!reader.heading_margins && (ha || hb)) || framed[a] || framed[b];
             // 不认负外边距的阅读器（Move）：负的那条当 0，间距照 Kindle 折叠后的写成非负的（叠在一起的写 0）
             let neg = !reader.negative_margins && (a_mb < 0.0 || b_mt < 0.0);
             if a_pb + b_pt < 1e-6 && !heading_involved && !neg {
@@ -871,21 +1341,43 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
             let gap = if neg { gap.max(0.0) } else { gap };
             if neg && !ha && !hb {
                 // 两边都写：只写一边的话另一边正的外边距和它折叠，取大的
-                out.decls.entry(a).or_default().push(format!("margin-bottom:{}em", fmt(gap / comp(a).font_size)));
-                out.decls.entry(b).or_default().push(format!("margin-top:{}em", fmt(gap / comp(b).font_size)));
+                out.decls
+                    .entry(a)
+                    .or_default()
+                    .push(format!("margin-bottom:{}em", fmt(gap / comp(a).font_size)));
+                out.decls
+                    .entry(b)
+                    .or_default()
+                    .push(format!("margin-top:{}em", fmt(gap / comp(b).font_size)));
             } else if !hb {
                 if (gap - b_mt).abs() > 1e-6 || ha {
-                    out.decls.entry(b).or_default().push(format!("margin-top:{}em", fmt(gap / comp(b).font_size)));
+                    out.decls
+                        .entry(b)
+                        .or_default()
+                        .push(format!("margin-top:{}em", fmt(gap / comp(b).font_size)));
                 }
             } else if (gap - a_mb).abs() > 1e-6 || hb {
-                out.decls.entry(a).or_default().push(format!("margin-bottom:{}em", fmt(gap / comp(a).font_size)));
+                out.decls
+                    .entry(a)
+                    .or_default()
+                    .push(format!("margin-bottom:{}em", fmt(gap / comp(a).font_size)));
             }
         }
     }
     // 改了外边距、行内又写了外边距（或内边距）的：行内的删掉，没改的那几边照现在的值并进类规则
-    let sides = [("margin-top", 0), ("margin-right", 1), ("margin-bottom", 2), ("margin-left", 3)];
+    let sides = [
+        ("margin-top", 0),
+        ("margin-right", 1),
+        ("margin-bottom", 2),
+        ("margin-left", 3),
+    ];
     for (&i, ds) in out.decls.iter_mut() {
-        let inline = |pre: &str| ch.els[i].origin.iter().any(|(k, (o, _))| *o == crate::cascade::Origin::Inline && k.starts_with(pre));
+        let inline = |pre: &str| {
+            ch.els[i]
+                .origin
+                .iter()
+                .any(|(k, (o, _))| *o == crate::cascade::Origin::Inline && k.starts_with(pre))
+        };
         let mut pre = Vec::new();
         if inline("margin") {
             pre.push("margin");
@@ -905,18 +1397,31 @@ fn plan(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
                 if ds.iter().any(|d| d.starts_with(&format!("{name}:"))) || c.margin_auto[side] {
                     continue;
                 }
-                let v = if side % 2 == 0 { km::vertical_rem(c.margin[side], c.font_size) / c.font_size } else { to_em(c.margin[side], c.font_size) };
+                let v = if side % 2 == 0 {
+                    km::vertical_rem(c.margin[side], c.font_size) / c.font_size
+                } else {
+                    to_em(c.margin[side], c.font_size)
+                };
                 ds.push(format!("{name}:{}em", fmt(v)));
             }
         }
         // 认内边距的阅读器上删了行内的内边距：没改的那几边照现在的值并进类规则
         if reader.padding && pre.contains(&"padding") {
             let c = comp(i);
-            for (name, side) in [("padding-top", 0), ("padding-right", 1), ("padding-bottom", 2), ("padding-left", 3)] {
+            for (name, side) in [
+                ("padding-top", 0),
+                ("padding-right", 1),
+                ("padding-bottom", 2),
+                ("padding-left", 3),
+            ] {
                 if ds.iter().any(|d| d.starts_with(&format!("{name}:"))) {
                     continue;
                 }
-                let v = if side % 2 == 0 { km::vertical_rem(c.padding[side], c.font_size) / c.font_size } else { to_em(c.padding[side], c.font_size) };
+                let v = if side % 2 == 0 {
+                    km::vertical_rem(c.padding[side], c.font_size) / c.font_size
+                } else {
+                    to_em(c.padding[side], c.font_size)
+                };
                 ds.push(format!("{name}:{}em", fmt(v)));
             }
         }
@@ -957,9 +1462,24 @@ mod tests {
     fn run(body: &str, css: &str) -> (String, String, Vec<Entry>) {
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::fixture("xochitl").unwrap());
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 842.0, em_px: 37.8, v_rem_px: 49.4, h_scale: 1.0 });
+        apply(
+            &mut b,
+            &mut WashReport::default(),
+            None,
+            &reader,
+            BoxGeometry {
+                area_w: 842.0,
+                em_px: 37.8,
+                v_rem_px: 49.4,
+                h_scale: 1.0,
+            },
+        );
         let page = String::from_utf8(b[2].data.clone()).unwrap();
-        let sheet = b.iter().find(|e| e.name == "O/eink-box.css").map(|e| String::from_utf8(e.data.clone()).unwrap()).unwrap_or_default();
+        let sheet = b
+            .iter()
+            .find(|e| e.name == "O/eink-box.css")
+            .map(|e| String::from_utf8(e.data.clone()).unwrap())
+            .unwrap_or_default();
         (page, sheet, b)
     }
 
@@ -968,13 +1488,45 @@ mod tests {
     /// 行内写的删掉、没改的那几边并进类规则。
     #[test]
     fn px_padding_and_indent_on_padding_reader() {
-        let reader = ReaderModel { px_margins: false, ..ReaderModel::default() };
-        let mut b = book(r#"<p class="a">一</p><p class="e">二</p><p style="padding:8px 16px;text-indent:32px">三</p>"#, "p.a{padding-left:20px;text-indent:24px} p.e{padding-left:2em;text-indent:2em}");
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
+        let reader = ReaderModel {
+            px_margins: false,
+            ..ReaderModel::default()
+        };
+        let mut b = book(
+            r#"<p class="a">一</p><p class="e">二</p><p style="padding:8px 16px;text-indent:32px">三</p>"#,
+            "p.a{padding-left:20px;text-indent:24px} p.e{padding-left:2em;text-indent:2em}",
+        );
+        apply(
+            &mut b,
+            &mut WashReport::default(),
+            None,
+            &reader,
+            BoxGeometry {
+                area_w: 1264.0,
+                em_px: 37.5,
+                v_rem_px: 49.4,
+                h_scale: 1.0,
+            },
+        );
         let page = String::from_utf8(b[2].data.clone()).unwrap();
-        let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
-        assert!(page.contains(r#"<p class="a eink-b1">一</p><p class="e">二</p><p class="eink-b2">三</p>"#), "{page}");
-        assert!(sheet.contains("p.eink-b1{padding-left:0.75em;text-indent:0.9em;}"), "{sheet}");
+        let sheet = String::from_utf8(
+            b.iter()
+                .find(|e| e.name.ends_with(CSS_NAME))
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            page.contains(
+                r#"<p class="a eink-b1">一</p><p class="e">二</p><p class="eink-b2">三</p>"#
+            ),
+            "{page}"
+        );
+        assert!(
+            sheet.contains("p.eink-b1{padding-left:0.75em;text-indent:0.9em;}"),
+            "{sheet}"
+        );
         assert!(sheet.contains("p.eink-b2{padding-left:0.6em;padding-right:0.6em;text-indent:1.2em;padding-top:0.3em;padding-bottom:0.3em;}"), "{sheet}");
     }
 
@@ -982,11 +1534,35 @@ mod tests {
     #[test]
     fn px_indent_folded_on_move() {
         let reader = ReaderModel::for_profile(profile::fixture("xochitl").unwrap());
-        let mut b = book(r#"<h2 class="c">第一章</h2><p class="e">正文</p>"#, "h2.c{font-size:1.66667em;text-align:center;text-indent:48px} p.e{text-indent:2em}");
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 842.0, em_px: 37.8, v_rem_px: 49.4, h_scale: 1.0 });
+        let mut b = book(
+            r#"<h2 class="c">第一章</h2><p class="e">正文</p>"#,
+            "h2.c{font-size:1.66667em;text-align:center;text-indent:48px} p.e{text-indent:2em}",
+        );
+        apply(
+            &mut b,
+            &mut WashReport::default(),
+            None,
+            &reader,
+            BoxGeometry {
+                area_w: 842.0,
+                em_px: 37.8,
+                v_rem_px: 49.4,
+                h_scale: 1.0,
+            },
+        );
         let page = String::from_utf8(b[2].data.clone()).unwrap();
-        let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
-        assert!(page.contains(r#"<h2 class="c eink-b1">第一章</h2>"#), "{page}");
+        let sheet = String::from_utf8(
+            b.iter()
+                .find(|e| e.name.ends_with(CSS_NAME))
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            page.contains(r#"<h2 class="c eink-b1">第一章</h2>"#),
+            "{page}"
+        );
         // 1.8em：48px 按 Kindle 的换算折成 em（标题后面那段的上外边距是 Move 不认标题外边距那条写的）
         assert!(sheet.contains("h2.eink-b1{text-indent:1.8em;}"), "{sheet}");
     }
@@ -1001,10 +1577,20 @@ mod tests {
         assert!(page.contains(r#"<p class="eink-b1">前</p><div class="eink-frame eink-b3"><table class="eink-frame" cellspacing="0" width="100%"><tbody><tr><td style="border-top:2px solid #333333;border-right:2px solid #333333;border-bottom:2px solid #333333;border-left:2px solid #333333;padding:25px 0px 25px 0px;vertical-align:top;font-size:1em;line-height:normal;text-align:left;"><div class="box">框</div></td></tr></tbody></table></div><p class="eink-b2">后</p>"#), "{page}");
         // 3pt 点线：0.25 rem × 49.4 ≈ 12px；左外边距 1em 挪到外层 div
         assert!(page.contains(r#"<div class="eink-frame eink-b4"><table class="eink-frame" cellspacing="0" width="100%"><tbody><tr><td style="border-left:12px dotted #ff0000;padding:0px 0px 0px 0px;vertical-align:top;font-size:1em;line-height:normal;text-align:left;"><p class="bar">引文</p></td></tr></tbody></table></div>"#), "{page}");
-        assert!(sheet.contains("div.eink-b3{margin-left:0em;margin-right:0em;margin-top:0;margin-bottom:0;}") && sheet.contains("div.eink-b4{margin-left:1em;margin-right:0em;margin-top:0;margin-bottom:0;}"), "{sheet}");
+        assert!(
+            sheet.contains(
+                "div.eink-b3{margin-left:0em;margin-right:0em;margin-top:0;margin-bottom:0;}"
+            ) && sheet.contains(
+                "div.eink-b4{margin-left:1em;margin-right:0em;margin-top:0;margin-bottom:0;}"
+            ),
+            "{sheet}"
+        );
         // 定宽 50% 的：宽度折成右外边距（421 ÷ 37.8），一起框
         assert!(page.contains(r#"<div class="eink-frame eink-b5"><table class="eink-frame" cellspacing="0" width="100%"><tbody><tr><td style="border-top:2px solid #000000;border-right:2px solid #000000;border-bottom:2px solid #000000;border-left:2px solid #000000;padding:0px 0px 0px 0px;vertical-align:top;font-size:1em;line-height:normal;text-align:left;"><div class="w">定宽</div>"#), "{page}");
-        assert!(sheet.contains("div.eink-b5{margin-left:0em;margin-right:11.1376em;"), "{sheet}");
+        assert!(
+            sheet.contains("div.eink-b5{margin-left:0em;margin-right:11.1376em;"),
+            "{sheet}"
+        );
         assert!(page.contains(r#"<table class="t" cellspacing="0"><tbody><tr><td style="border-bottom:2px solid #000000;">格</td></tr></tbody></table><table><tbody><tr><td>无</td></tr></tbody></table>"#), "{page}");
     }
 
@@ -1018,29 +1604,61 @@ mod tests {
         assert!(page.contains(r#"<td class="eink-b1">格</td>"#), "{page}");
         assert!(sheet.contains("td.eink-b1{padding-top:0.3em;padding-right:0.6em;padding-bottom:0.3em;padding-left:0.6em;}"), "{sheet}");
         // 10px × 0.45pt ÷ 12 = 0.375em
-        assert!(page.contains(r#"<li class="l eink-b2">项</li>"#) && sheet.contains("li.eink-b2{margin-top:0.375em;margin-bottom:0.375em;}"), "{sheet}");
+        assert!(
+            page.contains(r#"<li class="l eink-b2">项</li>"#)
+                && sheet.contains("li.eink-b2{margin-top:0.375em;margin-bottom:0.375em;}"),
+            "{sheet}"
+        );
         // 2em 和 −0.5em 折叠成 1.5em，两边都写
         assert!(page.contains(r#"<p class="a eink-b3">甲</p><p class="n eink-b4">乙</p><p>丙<span class="s">注</span></p>"#), "{page}");
-        assert!(sheet.contains("p.eink-b3{margin-bottom:1.5em;}") && sheet.contains("p.eink-b4{margin-top:1.5em;}"), "{sheet}");
+        assert!(
+            sheet.contains("p.eink-b3{margin-bottom:1.5em;}")
+                && sheet.contains("p.eink-b4{margin-top:1.5em;}"),
+            "{sheet}"
+        );
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
+        apply(
+            &mut b,
+            &mut WashReport::default(),
+            None,
+            &reader,
+            BoxGeometry {
+                area_w: 1264.0,
+                em_px: 37.5,
+                v_rem_px: 49.4,
+                h_scale: 1.0,
+            },
+        );
         let page = String::from_utf8(b[2].data.clone()).unwrap();
-        assert!(page.contains(r#"<span class="s eink-b"#) && page.contains(r#"<td class="eink-b1">格</td>"#), "{page}");
+        assert!(
+            page.contains(r#"<span class="s eink-b"#)
+                && page.contains(r#"<td class="eink-b1">格</td>"#),
+            "{page}"
+        );
     }
 
     /// Move：插了下边框横线图的块，行内照 Kindle 写的行距低于下限 1 的，行内末尾接 1（不然字压在横线上；不写进外链）。
     #[test]
     fn bottom_rule_block_gets_line_floor() {
-        let (page, sheet, _) = run(r#"<p>前</p><h1 class="t" style="line-height:0.744;text-align:center">版权信息</h1><p>后</p>"#, "h1.t{border-bottom:1px dotted #000}");
+        let (page, sheet, _) = run(
+            r#"<p>前</p><h1 class="t" style="line-height:0.744;text-align:center">版权信息</h1><p>后</p>"#,
+            "h1.t{border-bottom:1px dotted #000}",
+        );
         assert!(page.contains(r#"<h1 class="t" style="line-height:0.744;text-align:center;line-height:1;">版权信息<img class="eink-sp eink-r1""#), "{page}");
-        assert!(!sheet.contains("line-height"), "外链里不写不带单位的行高（Move 上会让后面的规则失效）：{sheet}");
+        assert!(
+            !sheet.contains("line-height"),
+            "外链里不写不带单位的行高（Move 上会让后面的规则失效）：{sheet}"
+        );
     }
 
     /// 文件开头（前面没有内容）的块上的分页：行内末尾接 auto；页中间的不动。
     #[test]
     fn page_break_at_file_start_dropped() {
-        let (page, sheet, _) = run(r#"<div></div><h1 style="page-break-before:always;text-align:center">第一部</h1><p>正文</p><h2 class="pb">二</h2>"#, "h2.pb{page-break-before:always}");
+        let (page, sheet, _) = run(
+            r#"<div></div><h1 style="page-break-before:always;text-align:center">第一部</h1><p>正文</p><h2 class="pb">二</h2>"#,
+            "h2.pb{page-break-before:always}",
+        );
         assert!(page.contains(r#"<div></div><h1 style="page-break-before:always;text-align:center;page-break-before:auto;">第一部</h1>"#) && page.contains(r#"<h2 class="pb">二</h2>"#), "{page}");
         assert!(!sheet.contains("page-break"), "{sheet}");
     }
@@ -1053,19 +1671,67 @@ mod tests {
         let css = "h1.bt{width:1.2em;float:right;padding:6em 0 0 0;margin:-6em 10px auto auto} h2.fl{float:left} p.bver{font-size:300%;float:right} div.fd{float:left}";
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
+        apply(
+            &mut b,
+            &mut WashReport::default(),
+            None,
+            &reader,
+            BoxGeometry {
+                area_w: 1264.0,
+                em_px: 37.5,
+                v_rem_px: 49.4,
+                h_scale: 1.0,
+            },
+        );
         let page = String::from_utf8(b[2].data.clone()).unwrap();
-        let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
-        assert!(page.contains(r#"<h1 class="bt eink-b1">卷名</h1><p>正文</p><h2 class="fl eink-b2">节</h2>"#), "{page}");
-        assert!(sheet.contains("h1.eink-b1{float:none;margin-top:0;padding-top:0em;") && !sheet.contains("margin-left:0;") && sheet.contains("h2.eink-b2{float:none;}"), "{sheet}");
+        let sheet = String::from_utf8(
+            b.iter()
+                .find(|e| e.name.ends_with(CSS_NAME))
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            page.contains(
+                r#"<h1 class="bt eink-b1">卷名</h1><p>正文</p><h2 class="fl eink-b2">节</h2>"#
+            ),
+            "{page}"
+        );
+        assert!(
+            sheet.contains("h1.eink-b1{float:none;margin-top:0;padding-top:0em;")
+                && !sheet.contains("margin-left:0;")
+                && sheet.contains("h2.eink-b2{float:none;}"),
+            "{sheet}"
+        );
         // 段落上的也写成 none（Q148，《梁羽生》版本号）；div 上的没量过，不动
-        assert!(page.contains(r#"<p class="bver eink-b3">1</p>"#) && sheet.contains("p.eink-b3{float:none;}") && page.contains(r#"<div class="fd">块</div>"#), "{page}\n{sheet}");
+        assert!(
+            page.contains(r#"<p class="bver eink-b3">1</p>"#)
+                && sheet.contains("p.eink-b3{float:none;}")
+                && page.contains(r#"<div class="fd">块</div>"#),
+            "{page}\n{sheet}"
+        );
         // Move：窄的定宽块（1.2em 宽）不折成 em 外边距（跟着字号变），包进单格表格，表格宽写占页宽的百分比、靠右（只有左边 auto）；
         // 外层 div 只留块自己的右外边距，块里的外边距、浮动都去掉（单元格里不认）
         let (page, sheet, _) = run(body, css);
-        assert!(!sheet.contains("float") && sheet.contains("margin-left:0em;margin-right:"), "{sheet}");
-        assert!(page.contains(r#"<table class="eink-frame" cellspacing="0" width=""#) && page.contains(r#"%" align="right">"#), "{page}");
-        let pct: f64 = page.split(r#"cellspacing="0" width=""#).nth(1).unwrap().split('%').next().unwrap().parse().unwrap();
+        assert!(
+            !sheet.contains("float") && sheet.contains("margin-left:0em;margin-right:"),
+            "{sheet}"
+        );
+        assert!(
+            page.contains(r#"<table class="eink-frame" cellspacing="0" width=""#)
+                && page.contains(r#"%" align="right">"#),
+            "{page}"
+        );
+        let pct: f64 = page
+            .split(r#"cellspacing="0" width=""#)
+            .nth(1)
+            .unwrap()
+            .split('%')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
         // 1.2em × 2（Move 的 h1 字号）× 37.8px ÷ 842 ≈ 10.8%，不管阅读字号
         assert!(pct > 5.0 && pct < 25.0, "{pct}: {page}");
     }
@@ -1088,19 +1754,49 @@ mod tests {
         let css = "td{vertical-align:top} td.a{width:1em} p.c{width:50%;margin:0 auto}";
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
+        apply(
+            &mut b,
+            &mut WashReport::default(),
+            None,
+            &reader,
+            BoxGeometry {
+                area_w: 1264.0,
+                em_px: 37.5,
+                v_rem_px: 49.4,
+                h_scale: 1.0,
+            },
+        );
         let page = String::from_utf8(b[2].data.clone()).unwrap();
-        let sheet = String::from_utf8(b.iter().find(|e| e.name.ends_with(CSS_NAME)).unwrap().data.clone()).unwrap();
+        let sheet = String::from_utf8(
+            b.iter()
+                .find(|e| e.name.ends_with(CSS_NAME))
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
         assert!(page.contains(r#"<td class="a" style="width:22.22%;">甲</td><td style="width:41.67%;">乙</td><td>丙</td>"#), "{page}");
-        assert!(page.contains(r#"<p class="c eink-b1">丁</p>"#) && sheet.contains("p.eink-b1{margin-left:0;}"), "{sheet}");
+        assert!(
+            page.contains(r#"<p class="c eink-b1">丁</p>"#)
+                && sheet.contains("p.eink-b1{margin-left:0;}"),
+            "{sheet}"
+        );
         let (page, _, _) = run(body, css);
-        assert!(page.contains(r#"<td class="a" width="22.22%">甲</td><td width="41.67%">乙</td><td>丙</td>"#), "{page}");
+        assert!(
+            page.contains(
+                r#"<td class="a" width="22.22%">甲</td><td width="41.67%">乙</td><td>丙</td>"#
+            ),
+            "{page}"
+        );
     }
 
     /// 包框、下边框横线图找的是配对的闭合标签：框里套着 div 的不插错位置。
     #[test]
     fn frame_around_nested_div() {
-        let (page, _, _) = run(r#"<p>前</p><div class="f"><div>甲</div><div>乙</div></div><p>后</p>"#, "div.f{border:1px solid #000}");
+        let (page, _, _) = run(
+            r#"<p>前</p><div class="f"><div>甲</div><div>乙</div></div><p>后</p>"#,
+            "div.f{border:1px solid #000}",
+        );
         assert!(page.contains(r#"vertical-align:top;font-size:1em;line-height:normal;text-align:left;"><div class="f"><div>甲</div><div>乙</div></div></td></tr></tbody></table></div><p class="eink-b2">后</p>"#), "{page}");
     }
 
@@ -1108,14 +1804,25 @@ mod tests {
     fn horizontal_padding_joins_margin() {
         let (page, sheet, _) = run(r#"<p class="h">注一</p><p class="bg">色块</p><ul><li class="h">项</li></ul>"#, "p.h,li.h{text-indent:-2em;padding-left:2em;margin-left:1em} p.bg{padding-left:1em;background-color:#ccc}");
         assert!(page.contains(r#"<p class="h eink-b1">注一</p><p class="bg">色块</p><ul><li class="h">项</li></ul>"#), "{page}");
-        assert!(sheet.contains("html body p.eink-b1{margin-left:3em;}"), "{sheet}");
+        assert!(
+            sheet.contains("html body p.eink-b1{margin-left:3em;}"),
+            "{sheet}"
+        );
         // 没有项目符号的列表项（自己写的、从 ul 继承的、display:block 的）左内边距并进外边距（《海葵》目录页）
         let (page, sheet, _) = run(
             r#"<ul><li class="n">甲</li></ul><ul class="u"><li>乙</li></ul><ul><li class="d">丙</li><li class="m">丁</li></ul>"#,
             "li{padding-left:2em;margin-left:0} li.n{list-style-type:none} ul.u{list-style:none} li.d{display:block}",
         );
-        assert!(page.contains(r#"<li class="n eink-b1">甲</li>"#) && page.contains(r#"<li class="eink-b1">乙</li>"#) && page.contains(r#"<li class="d eink-b1">丙</li><li class="m">丁</li>"#), "{page}");
-        assert!(sheet.contains("html body li.eink-b1{margin-left:2em;}"), "{sheet}");
+        assert!(
+            page.contains(r#"<li class="n eink-b1">甲</li>"#)
+                && page.contains(r#"<li class="eink-b1">乙</li>"#)
+                && page.contains(r#"<li class="d eink-b1">丙</li><li class="m">丁</li>"#),
+            "{page}"
+        );
+        assert!(
+            sheet.contains("html body li.eink-b1{margin-left:2em;}"),
+            "{sheet}"
+        );
     }
 
     /// px、% 的左右外边距折成 em：px 按 0.45pt、12pt 一根 em（50px → 1.875em），% 按内容区宽（10% of 842 → 84.2px ÷ 37.8 → 2.2275em）；
@@ -1126,32 +1833,63 @@ mod tests {
         let css = "p.px{margin-left:50px} p.pc{margin-right:10%} p.auto{margin:0 auto;width:50%} p.em{margin-left:2em} p.bg{margin-left:50px;padding-left:1em;background-color:#ccc}";
         let (page, sheet, _) = run(body, css);
         assert!(page.contains(r#"<p class="px eink-b1">甲</p><p class="pc eink-b2">乙</p><p class="auto eink-b3">丙</p><p class="em">丁</p><p class="bg eink-b1">戊</p>"#), "{page}");
-        assert!(sheet.contains("html body p.eink-b1{margin-left:1.875em;}") && sheet.contains("html body p.eink-b2{margin-right:2.2275em;}"), "{sheet}");
+        assert!(
+            sheet.contains("html body p.eink-b1{margin-left:1.875em;}")
+                && sheet.contains("html body p.eink-b2{margin-right:2.2275em;}"),
+            "{sheet}"
+        );
         // Move 不认块宽度：50% 折成右边 (842 − 421) ÷ 37.8（Kindle 不按 margin:auto 居中）
-        assert!(sheet.contains("html body p.eink-b3{margin-left:0em;margin-right:11.1376em;}"), "{sheet}");
+        assert!(
+            sheet.contains("html body p.eink-b3{margin-left:0em;margin-right:11.1376em;}"),
+            "{sheet}"
+        );
         // 行内写了外边距的：行内的删掉（行内的压过样式表），没改的那几边照现在的值并进类规则
         let (page, sheet, _) = run(r#"<p style="margin:1em 0 0 50px;color:red">己</p>"#, "");
-        assert!(page.contains(r#"<p style="color:red" class="eink-b1">己</p>"#), "{page}");
+        assert!(
+            page.contains(r#"<p style="color:red" class="eink-b1">己</p>"#),
+            "{page}"
+        );
         assert!(sheet.contains("html body p.eink-b1{margin-left:1.875em;margin-top:1em;margin-right:0em;margin-bottom:0em;}"), "{sheet}");
         let mut b = book(body, css);
         let reader = ReaderModel::for_profile(profile::get("ireader").unwrap());
-        apply(&mut b, &mut WashReport::default(), None, &reader, BoxGeometry { area_w: 1264.0, em_px: 37.5, v_rem_px: 49.4, h_scale: 1.0 });
+        apply(
+            &mut b,
+            &mut WashReport::default(),
+            None,
+            &reader,
+            BoxGeometry {
+                area_w: 1264.0,
+                em_px: 37.5,
+                v_rem_px: 49.4,
+                h_scale: 1.0,
+            },
+        );
         let page = String::from_utf8(b[2].data.clone()).unwrap();
-        assert!(page.contains(r#"<p class="px eink-b1">甲</p><p class="pc">乙</p>"#), "掌阅的 % 照 CSS：{page}");
+        assert!(
+            page.contains(r#"<p class="px eink-b1">甲</p><p class="pc">乙</p>"#),
+            "掌阅的 % 照 CSS：{page}"
+        );
     }
 
     /// 上下内边距折进相邻块的间距：后一块不是标题写它的上外边距，是标题写前一块的下外边距；标题的外边距也照 Kindle 写到相邻的块上。
     /// 页首的标题前面的空块、垫图不配对。
     #[test]
     fn vertical_gaps_move_to_honored_side() {
-        let (page, _, _) = run(r#"<div class="eink-sp"><img class="eink-sp-1" src="s.png" alt=""/></div><div id="pb"></div><h2 class="t">首</h2><p>文</p>"#, "h2.t{margin:2em 0 1.5em}");
+        let (page, _, _) = run(
+            r#"<div class="eink-sp"><img class="eink-sp-1" src="s.png" alt=""/></div><div id="pb"></div><h2 class="t">首</h2><p>文</p>"#,
+            "h2.t{margin:2em 0 1.5em}",
+        );
         assert!(page.contains(r#"<div class="eink-sp"><img class="eink-sp-1" src="s.png" alt=""/></div><div id="pb"></div><h2 class="t">首</h2><p class="eink-b1">文</p>"#), "{page}");
         let body = r#"<p class="a">甲</p><p class="b">乙</p><h2 class="t">标题</h2><p>丙</p>"#;
         let (page, sheet, _) = run(body, "p{margin:1em 0} p.a{padding-bottom:0.5em} p.b{padding-top:1em} h2.t{margin:2em 0 1.5em}");
         // h2 字号 1.5em：上外边距 2em＝3 根 em、下 1.5em＝2.25。甲→乙：collapse(1,1)+0.5+1 = 2.5 写在乙上；乙→标题：collapse(1,3) = 3
         // 写在乙的下外边距；标题→丙：collapse(2.25,1) = 2.25 写在丙上
         assert!(page.contains(r#"<p class="a">甲</p><p class="b eink-b1">乙</p><h2 class="t">标题</h2><p class="eink-b2">丙</p>"#), "{page}");
-        assert!(sheet.contains("html body p.eink-b1{margin-top:2.5em;margin-bottom:3em;}") && sheet.contains("html body p.eink-b2{margin-top:2.25em;}"), "{sheet}");
+        assert!(
+            sheet.contains("html body p.eink-b1{margin-top:2.5em;margin-bottom:3em;}")
+                && sheet.contains("html body p.eink-b2{margin-top:2.25em;}"),
+            "{sheet}"
+        );
     }
 
     /// 上下边框插横线图（块里最前、最后），连着的内边距画进图里、不再算进间距；文件开头的块也插（KINDLE_RULES 35，垫图让出它的高）；
@@ -1162,15 +1900,30 @@ mod tests {
         let (page, sheet, b) = run(body, "h2.u{border-top:1px solid #000;border-bottom:2px dotted #f00;padding-bottom:0.5em} div.box{border-top:1px solid #000;border-bottom:1px solid #000}");
         assert!(page.contains(r#"<h2 class="u"><img class="eink-sp eink-r1" src="eink-rule-1.png" alt=""/>标题<img class="eink-sp eink-r2" src="eink-rule-2.png" alt=""/></h2>"#), "{page}");
         assert!(page.contains(r#"<div class="box"><img class="eink-sp eink-r1" src="eink-rule-1.png" alt=""/>框<img class="eink-sp eink-r3" src="eink-rule-3.png" alt=""/></div>"#), "{page}");
-        assert!(sheet.contains("html body img.eink-r1{display:block;width:100%;height:auto;margin:0;padding:0;}"), "{sheet}");
-        let png = image::load_from_memory(&b.iter().find(|e| e.name == "O/eink-rule-2.png").unwrap().data).unwrap().to_rgba8();
+        assert!(
+            sheet.contains(
+                "html body img.eink-r1{display:block;width:100%;height:auto;margin:0;padding:0;}"
+            ),
+            "{sheet}"
+        );
+        let png = image::load_from_memory(
+            &b.iter()
+                .find(|e| e.name == "O/eink-rule-2.png")
+                .unwrap()
+                .data,
+        )
+        .unwrap()
+        .to_rgba8();
         // 下边框：上面透明（0.5em 内边距），最下面一行红色点线
         let h = png.height();
         assert!(h > 20, "{h}");
         assert_eq!(png.get_pixel(0, 0).0[3], 0);
         assert_eq!(png.get_pixel(0, h - 1).0, [255, 0, 0, 255]);
         let opf = String::from_utf8(b[0].data.clone()).unwrap();
-        assert!(opf.contains(r#"href="eink-rule-1.png" media-type="image/png""#), "{opf}");
+        assert!(
+            opf.contains(r#"href="eink-rule-1.png" media-type="image/png""#),
+            "{opf}"
+        );
     }
 
     /// 左右有框的列表也包进单格表格（KINDLE_RULES 35，《雪国》注释列表）：列表自己的左右内边距留给项目符号，单元格只写上下的。
@@ -1180,17 +1933,29 @@ mod tests {
         let at = page.find(r#"<ol class="n">"#).expect("列表还在");
         let td = &page[page[..at].rfind("<td").unwrap()..at];
         assert!(td.contains("dashed #336666") && td.contains("px 0px 19px 62px;vertical-align:top;font-size:1em;line-height:normal;text-align:left;"), "列表左内边距补到 Kindle 的缩进（842×0.103−25）: {page}");
-        assert!(td.contains("padding:") && !td.contains("padding:0px 0px 0px 0px"), "上下内边距写到单元格: {page}");
+        assert!(
+            td.contains("padding:") && !td.contains("padding:0px 0px 0px 0px"),
+            "上下内边距写到单元格: {page}"
+        );
         // 书里给 td、table 的规则落在我们的表格上：单元格照外层写回字号、行距、对齐
-        assert!(td.contains("font-size:1em;line-height:normal;text-align:left;"), "{page}");
+        assert!(
+            td.contains("font-size:1em;line-height:normal;text-align:left;"),
+            "{page}"
+        );
     }
 
     /// 页首的块上内边距很大（《梁羽生》卷名 `padding-top:6em`，字号 3 倍）：上横线图照插（连着透明的一截），垫图不扣它（扣了垫图就
     /// 没了，卷名竖排页被推到页底）。这里只看横线图在（垫图的高在 `top_spacer` 的测试里）。
     #[test]
     fn big_top_padding_at_page_top_keeps_rule() {
-        let (page, _, _) = run(r#"<div class="eink-sp"><img class="eink-sp eink-sp-36_6" src="s.png" alt=""/></div><h1 class="t">卷名</h1><p>正文</p>"#, "h1.t{font-size:3em;border-top:5px solid #ddd;padding-top:6em}");
-        assert!(page.contains(r#"<h1 class="t"><img class="eink-sp eink-r"#), "{page}");
+        let (page, _, _) = run(
+            r#"<div class="eink-sp"><img class="eink-sp eink-sp-36_6" src="s.png" alt=""/></div><h1 class="t">卷名</h1><p>正文</p>"#,
+            "h1.t{font-size:3em;border-top:5px solid #ddd;padding-top:6em}",
+        );
+        assert!(
+            page.contains(r#"<h1 class="t"><img class="eink-sp eink-r"#),
+            "{page}"
+        );
     }
 
     /// 页首块的上横线图有多高（垫图要让出来）：线粗 + 不认内边距时的上内边距；左右有框（包进表格）的、认边框的阅读器不算。
@@ -1204,15 +1969,41 @@ mod tests {
             let ch = Chapter::parse("O/c.xhtml", &text, None, &css).unwrap();
             ch.els[0].comp.as_ref().clone()
         };
-        let h = page_top_rule_px(&comp("h1.t{border-top:2px dotted #000;padding-top:1em}"), "h1", &reader, 50.0).unwrap();
+        let h = page_top_rule_px(
+            &comp("h1.t{border-top:2px dotted #000;padding-top:1em}"),
+            "h1",
+            &reader,
+            50.0,
+        )
+        .unwrap();
         // 2px = 0.9pt = 0.075 rem → 3.75px；上内边距 1em（h1 字号 2em）= 2 rem → 100px
         assert!((h - 103.75).abs() < 0.01, "{h}");
-        assert_eq!(page_top_rule_px(&comp("h1.t{border:2px solid #000}"), "h1", &reader, 50.0), None);
+        assert_eq!(
+            page_top_rule_px(&comp("h1.t{border:2px solid #000}"), "h1", &reader, 50.0),
+            None
+        );
         // 上内边距大到拿来推字的（《梁羽生》卷名）：只画线（2px＝0.075 rem → 3.75px），距离在垫图里
-        let h = page_top_rule_px(&comp("h1.t{border-top:2px solid #000;padding-top:3em}"), "h1", &reader, 50.0).unwrap();
+        let h = page_top_rule_px(
+            &comp("h1.t{border-top:2px solid #000;padding-top:3em}"),
+            "h1",
+            &reader,
+            50.0,
+        )
+        .unwrap();
         assert!((h - 3.75).abs() < 0.01, "{h}");
-        assert_eq!(page_top_rule_px(&comp("h1.t{border-bottom:2px solid #000}"), "h1", &reader, 50.0), None);
+        assert_eq!(
+            page_top_rule_px(
+                &comp("h1.t{border-bottom:2px solid #000}"),
+                "h1",
+                &reader,
+                50.0
+            ),
+            None
+        );
         let ir = ReaderModel::for_profile(profile::get("ireader").unwrap());
-        assert_eq!(page_top_rule_px(&comp("h1.t{border-top:2px solid #000}"), "h1", &ir, 50.0), None);
+        assert_eq!(
+            page_top_rule_px(&comp("h1.t{border-top:2px solid #000}"), "h1", &ir, 50.0),
+            None
+        );
     }
 }

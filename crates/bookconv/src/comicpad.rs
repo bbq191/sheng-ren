@@ -40,11 +40,14 @@ fn is_text_block(t: &html::Tag, tag: &str) -> bool {
 pub fn pad_page(page: &str) -> Option<String> {
     let body = html::tags(page).find(|t| t.is_start() && t.is("body"))?;
     let rest = &page[body.end..];
-    let has_media = html::tags(rest).any(|t| t.is_start() && MEDIA.iter().any(|m| is_local(t.name, m)));
+    let has_media =
+        html::tags(rest).any(|t| t.is_start() && MEDIA.iter().any(|m| is_local(t.name, m)));
     let has_text = !html::plain_text(rest).is_empty();
     let body_tag = &page[body.start..body.end];
     let (new_body, new_rest) = match (has_media, has_text) {
-        (false, true) if !html::has_class(body_tag, TEXT_PAGE_CLASS) => (html::add_class(body_tag, TEXT_PAGE_CLASS), rest.to_string()),
+        (false, true) if !html::has_class(body_tag, TEXT_PAGE_CLASS) => {
+            (html::add_class(body_tag, TEXT_PAGE_CLASS), rest.to_string())
+        }
         (true, _) => {
             let new_body = html::remove_attr(body_tag, "class");
             let mut out = String::with_capacity(rest.len());
@@ -64,7 +67,8 @@ pub fn pad_page(page: &str) -> Option<String> {
         }
         _ => return None,
     };
-    (new_body != body_tag || new_rest != rest).then(|| format!("{}{new_body}{new_rest}", &page[..body.start]))
+    (new_body != body_tag || new_rest != rest)
+        .then(|| format!("{}{new_body}{new_rest}", &page[..body.start]))
 }
 
 #[cfg(test)]
@@ -81,9 +85,17 @@ mod tests {
 
     #[test]
     fn image_page_drops_body_class() {
-        let p = r#"<body class="calibre2" id="b"><div><img src="a.jpg" alt="第 1 頁"/></div></body>"#;
-        assert_eq!(pad_page(p).unwrap(), r#"<body id="b"><div><img src="a.jpg" alt="第 1 頁"/></div></body>"#);
-        assert_eq!(pad_page(r#"<body><div><img src="a.jpg"/></div></body>"#), None, "没有类、没有字：不用动");
+        let p =
+            r#"<body class="calibre2" id="b"><div><img src="a.jpg" alt="第 1 頁"/></div></body>"#;
+        assert_eq!(
+            pad_page(p).unwrap(),
+            r#"<body id="b"><div><img src="a.jpg" alt="第 1 頁"/></div></body>"#
+        );
+        assert_eq!(
+            pad_page(r#"<body><div><img src="a.jpg"/></div></body>"#),
+            None,
+            "没有类、没有字：不用动"
+        );
     }
 
     #[test]

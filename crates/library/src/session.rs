@@ -32,7 +32,12 @@ pub(crate) struct Records {
 
 impl Records {
     pub(crate) fn new() -> Records {
-        Records { locked: Cell::new(false), cleaned: Cell::new(false), states: JsonCache::new(), sources: JsonCache::new() }
+        Records {
+            locked: Cell::new(false),
+            cleaned: Cell::new(false),
+            states: JsonCache::new(),
+            sources: JsonCache::new(),
+        }
     }
 }
 
@@ -55,11 +60,16 @@ pub(crate) struct ContentFacts {
 impl ContentFacts {
     /// 这本书的原件在 `path`、大小与修改时间是 `st` 时核对过（内容就是入库时那本）。
     pub(crate) fn verified(&self, id: &str, path: &str, st: (u64, u64)) -> bool {
-        self.verified.borrow().get(id).is_some_and(|(p, s)| p == path && *s == st)
+        self.verified
+            .borrow()
+            .get(id)
+            .is_some_and(|(p, s)| p == path && *s == st)
     }
 
     pub(crate) fn note_verified(&self, id: &str, path: &str, st: (u64, u64)) {
-        self.verified.borrow_mut().insert(id.to_string(), (path.to_string(), st));
+        self.verified
+            .borrow_mut()
+            .insert(id.to_string(), (path.to_string(), st));
     }
 
     /// 书从书库删了：忘掉核对过的原件。
@@ -105,7 +115,10 @@ pub(crate) struct Devices {
 
 impl Devices {
     pub(crate) fn new(env: DeviceEnv) -> Devices {
-        Devices { env, targets: RefCell::default() }
+        Devices {
+            env,
+            targets: RefCell::default(),
+        }
     }
 
     /// 换设备在哪找：连过的都作废。
@@ -175,7 +188,11 @@ impl Drop for PreparedInput {
 impl BuildCtx {
     /// 这本书同样补充（`key`）的中间文件，做过的话。
     pub(crate) fn prepared(&self, book: &str, key: &str) -> Option<PathBuf> {
-        self.prepared.borrow().iter().find(|p| p.book == book && p.key == key).map(|p| p.epub.clone())
+        self.prepared
+            .borrow()
+            .iter()
+            .find(|p| p.book == book && p.key == key)
+            .map(|p| p.epub.clone())
     }
 
     /// 留下刚做的中间文件；留着的太多时丢掉最早的（刚做的这本不丢）。
@@ -191,7 +208,9 @@ impl BuildCtx {
     pub(crate) fn release_prepared_of(&self, book: &str) {
         let gone: Vec<PreparedInput> = {
             let mut kept = self.prepared.borrow_mut();
-            let (gone, keep) = std::mem::take(&mut *kept).into_iter().partition(|p| p.book == book);
+            let (gone, keep) = std::mem::take(&mut *kept)
+                .into_iter()
+                .partition(|p| p.book == book);
             *kept = keep;
             gone
         };
@@ -206,7 +225,9 @@ impl BuildCtx {
 
     /// 新书传的过程中先占住这个文件名。
     pub(crate) fn reserve(&self, out: &Path, book: &str) {
-        self.reserved.borrow_mut().insert(out.to_path_buf(), book.to_string());
+        self.reserved
+            .borrow_mut()
+            .insert(out.to_path_buf(), book.to_string());
     }
 
     /// 传完（或失败）：放开占着的文件名。

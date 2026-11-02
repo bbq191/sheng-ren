@@ -13,15 +13,27 @@ fn main() {
         println!("{USAGE}");
         return;
     }
-    let [input, output] = args.as_slice() else { die(cli::USAGE, USAGE) };
+    let [input, output] = args.as_slice() else {
+        die(cli::USAGE, USAGE)
+    };
     let data = cli::read_or_die(input);
-    let c = kfx::Container::parse(&data).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
+    let c =
+        kfx::Container::parse(&data).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
     let out = c.to_bytes();
     cli::write_or_die(output, &out);
     if out == data {
         println!("{} 个实体，输出与输入逐字节相同", c.entities.len());
     } else {
-        let first = out.iter().zip(&data).position(|(a, b)| a != b).unwrap_or(out.len().min(data.len()));
-        println!("{} 个实体，输出与输入不同：{} → {} 字节，第一处不同在偏移 {first}", c.entities.len(), data.len(), out.len());
+        let first = out
+            .iter()
+            .zip(&data)
+            .position(|(a, b)| a != b)
+            .unwrap_or(out.len().min(data.len()));
+        println!(
+            "{} 个实体，输出与输入不同：{} → {} 字节，第一处不同在偏移 {first}",
+            c.entities.len(),
+            data.len(),
+            out.len()
+        );
     }
 }

@@ -28,7 +28,9 @@
 use crate::html::{self, Edit};
 use crate::htmlproc::collapse_dup_id_attrs;
 // zip 条目与 zip 内 posix 路径工具已迁到 `epubzip`；这里 re-export，保住 `crate::wash::Entry`/`wash::resolve` 等旧路径。
-pub use crate::epubzip::{dir_of, is_html, is_html_entry, percent_decode, posix_norm, relative_to, resolve, Entry};
+pub use crate::epubzip::{
+    dir_of, is_html, is_html_entry, percent_decode, posix_norm, relative_to, resolve, Entry,
+};
 use crate::util::{is_image_ext, xml_escape};
 use regex::Regex;
 use std::borrow::Cow;
@@ -36,37 +38,39 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 // 按职责拆成子模块（原 `wash.rs` 一个文件 2000+ 行）；兄弟模块之间的互相调用走这层（各子模块 `use super::*`）。
+mod blank_fold;
+mod block_style;
+mod box_fix;
+mod break_margin;
 mod chapters;
 mod cover;
 mod css;
+mod css_compat;
 mod dead_refs;
 mod drm;
 mod empty_pages;
 mod encoding;
 pub mod fonts;
+mod heading_div;
+mod hidden;
 mod html5fix;
 mod ids;
+mod inline_css;
 mod kindle_images;
 mod kindle_rules;
 mod lang;
-mod top_spacer;
-mod hidden;
-mod break_margin;
-mod blank_fold;
-mod block_style;
-mod box_fix;
-mod heading_div;
 mod root_em;
-mod inline_css;
-mod css_compat;
 mod sup_sub;
+mod top_spacer;
 pub use self::kindle_rules::VScale;
 
 /// 测试用：照竖直换算后的 `eink-ua.css`（同 `add_ua_css`）。
 #[cfg(test)]
 pub(crate) fn kindle_rules_scale_ua_for_test(vs: Option<VScale>) -> String {
     let css = crate::uastyle::ua_css(None);
-    vs.map_or(css.clone(), |vs| kindle_rules::scale_vertical_css(&css, &vs))
+    vs.map_or(css.clone(), |vs| {
+        kindle_rules::scale_vertical_css(&css, &vs)
+    })
 }
 pub use self::box_fix::BoxGeometry;
 pub use self::top_spacer::SpacerGeometry;
@@ -79,7 +83,9 @@ mod toc;
 mod typeset;
 
 // 对外（优化器、质量门、书库、统计）用到的项；其余只在清洗层内部用。
-pub use self::cover::{add_cover_thumbnail, ensure_cover_declared, prepend_cover_page, THUMB_ID, THUMB_META};
+pub use self::cover::{
+    add_cover_thumbnail, ensure_cover_declared, prepend_cover_page, THUMB_ID, THUMB_META,
+};
 pub use self::encoding::transcode_entries;
 
 /// 「照 Send to Kindle 的规则统一」（[`WashMode::Repair`] 的 `kindle_rules`，掌阅、Move 的文字书）这一路自己的版本，只进书库指纹（`u` 段），
@@ -213,18 +219,18 @@ pub use self::typeset::{count_dup_id_tags, wash_css, NOTEICON_RULE};
 pub use crate::html::plain_text;
 pub use crate::reader_model::ReaderModel;
 
+use self::chapters::chapters_into_toc;
+pub(crate) use self::chapters::is_toc_like_page;
 use self::css::*;
 use self::dead_refs::*;
 use self::drm::strip_pseudo_drm;
 use self::empty_pages::*;
 use self::ids::dedup_ids_across_book;
+pub(crate) use self::kindle_rules::fmt_num;
 use self::layout::*;
 use self::ncx_fix::*;
 use self::opf::{find_opf, opf_book_title, opf_unique_identifier};
-use self::chapters::chapters_into_toc;
-pub(crate) use self::chapters::is_toc_like_page;
 pub(crate) use self::toc::name_index;
-pub(crate) use self::kindle_rules::fmt_num;
 use self::toc::*;
 use self::typeset::*;
 
@@ -398,7 +404,29 @@ impl WashOpts {
 
 impl Default for WashOpts {
     fn default() -> Self {
-        WashOpts { keep_para_spacing: false, auto_toc: AutoToc::IfMissing, filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(), lang: LangMode::Auto, keep_fonts: HashSet::new(), css_rgba: true, background_no_repeat: true, mode: WashMode::Full, media: None, image_sizing: None, image_dims: None, tiny_page: None, page_tiles: None, top_spacer: None, bg_place: None, v_scale: None, h_scale: None, reader: ReaderModel::default(), audit: None, box_geometry: None, webp_to_png: None }
+        WashOpts {
+            keep_para_spacing: false,
+            auto_toc: AutoToc::IfMissing,
+            filter_props: DEFAULT_FILTER_PROPS.iter().map(|s| s.to_string()).collect(),
+            lang: LangMode::Auto,
+            keep_fonts: HashSet::new(),
+            css_rgba: true,
+            background_no_repeat: true,
+            mode: WashMode::Full,
+            media: None,
+            image_sizing: None,
+            image_dims: None,
+            tiny_page: None,
+            page_tiles: None,
+            top_spacer: None,
+            bg_place: None,
+            v_scale: None,
+            h_scale: None,
+            reader: ReaderModel::default(),
+            audit: None,
+            box_geometry: None,
+            webp_to_png: None,
+        }
     }
 }
 
@@ -419,7 +447,14 @@ pub fn is_wash_css_name(name: &str) -> bool {
 // no-repeat / background-size** → 把背景图**平铺**满页盖住正文（真机《飘》body.fen 的 `background:url() no-repeat`
 // 被铺成多幅）；`background` 简写里的颜色保留成 `background-color`。
 // line-height（2026-09-27 定）：与字号字体同理，书写死行高会让设备的"行距"设置不起作用。
-pub const DEFAULT_FILTER_PROPS: &[&str] = &["font-family", "font-size", "font", "line-height", "background-image", "background"];
+pub const DEFAULT_FILTER_PROPS: &[&str] = &[
+    "font-family",
+    "font-size",
+    "font",
+    "line-height",
+    "background-image",
+    "background",
+];
 const WASH_MARK: &str = "eink-wash";
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -485,16 +520,18 @@ pub struct WashReport {
     pub languages_fixed: usize,
 }
 
-
 // ───────────────────────── 入口 ─────────────────────────
 
 /// 全书 CJK vs 拉丁字符占比 → 主语言（Han 字数 ≥ 拉丁字母数 = Cjk）。扫全部 html 正文，早停够量即定。
 fn detect_dominant_script(entries: &[Entry]) -> LangMode {
     let (mut han, mut latin) = (0u64, 0u64);
     for e in entries.iter().filter(|e| is_chapter_entry(e)) {
-        let Ok(t) = std::str::from_utf8(&e.data) else { continue };
+        let Ok(t) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
         for ch in plain_text(t).chars() {
-            if matches!(ch, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}') {
+            if matches!(ch, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}')
+            {
                 han += 1;
             } else if ch.is_ascii_alphabetic() {
                 latin += 1;
@@ -512,16 +549,27 @@ fn detect_dominant_script(entries: &[Entry]) -> LangMode {
 }
 
 /// 对条目表就地清洗。真 DRM 返回 Err（调用方应整体失败、原样不动）。漫画识别（`comic_detect::is_comic`）在定章节前按清洗到那一步的条目判。
-pub fn wash_entries(entries: &mut Vec<Entry>, opts: &WashOpts) -> Result<WashReport, crate::BookError> {
+pub fn wash_entries(
+    entries: &mut Vec<Entry>,
+    opts: &WashOpts,
+) -> Result<WashReport, crate::BookError> {
     wash_with(entries, opts, None)
 }
 
 /// 同 [`wash_entries`]，漫画识别用调用方判好的结果（优化器按原书判一次，清洗层和图片处理用同一个结果，不再判第二遍）。
-pub(crate) fn wash_entries_as(entries: &mut Vec<Entry>, opts: &WashOpts, comic: bool) -> Result<WashReport, crate::BookError> {
+pub(crate) fn wash_entries_as(
+    entries: &mut Vec<Entry>,
+    opts: &WashOpts,
+    comic: bool,
+) -> Result<WashReport, crate::BookError> {
     wash_with(entries, opts, Some(comic))
 }
 
-fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> Result<WashReport, crate::BookError> {
+fn wash_with(
+    entries: &mut Vec<Entry>,
+    opts: &WashOpts,
+    comic: Option<bool>,
+) -> Result<WashReport, crate::BookError> {
     let mut rep = WashReport::default();
     // 先把 GBK、Big5、UTF-16 的文件转成 UTF-8：后面各步都按 UTF-8 读写
     encoding::transcode_to_utf8(entries, &mut rep);
@@ -559,7 +607,11 @@ fn wash_with(entries: &mut Vec<Entry>, opts: &WashOpts, comic: Option<bool>) -> 
     let css_path = match opf_idx {
         Some(i) => {
             let d = dir_of(&entries[i].name);
-            if d.is_empty() { WASH_CSS_NAME.to_string() } else { format!("{d}/{WASH_CSS_NAME}") }
+            if d.is_empty() {
+                WASH_CSS_NAME.to_string()
+            } else {
+                format!("{d}/{WASH_CSS_NAME}")
+            }
         }
         None => WASH_CSS_NAME.to_string(),
     };
@@ -636,7 +688,9 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         if !is_chapter_entry(e) {
             return 0;
         }
-        let Ok(t) = std::str::from_utf8(&e.data) else { return 0 };
+        let Ok(t) = std::str::from_utf8(&e.data) else {
+            return 0;
+        };
         let n = count_dup_id_tags(t);
         if n > 0 {
             e.data = collapse_dup_id_attrs(t).into_bytes();
@@ -652,7 +706,14 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
         run_passes(KINDLE_RULE_PASSES, entries, rep, opts);
     } else if let Some(k) = opts.tiny_page {
         // Kindle：只去掉小图页的强制分页（写出器照原书的分页分节）
-        break_margin::apply(entries, rep, opts.media.as_ref(), opts.image_dims.as_deref(), k, false);
+        break_margin::apply(
+            entries,
+            rep,
+            opts.media.as_ref(),
+            opts.image_dims.as_deref(),
+            k,
+            false,
+        );
     }
     fix_ncx_manifest_id(entries, rep);
     repair_ncx_targets(entries, rep);
@@ -698,9 +759,19 @@ fn run_passes(passes: &[Pass], entries: &mut Vec<Entry>, rep: &mut WashReport, o
 /// 中间各步都按原来的 CSS 估 Kindle 上的样子，竖直、左右间距换算放在最后（上面几步写的 em 一起乘），挪行内样式最后。
 const KINDLE_RULE_PASSES: &[Pass] = &[
     // 先去掉 Move 上会露出来的隐藏元素：后面的页首垫图、背景图位置都按看得见的内容算
-    Pass { name: "hidden", after: &[], enabled: |o| !o.reader.display_none, run: |e, r, _| r.kindle_rule_edits += hidden::apply(e) },
+    Pass {
+        name: "hidden",
+        after: &[],
+        enabled: |o| !o.reader.display_none,
+        run: |e, r, _| r.kindle_rule_edits += hidden::apply(e),
+    },
     // Kindle 上不出页的空页（刻意留的空白页、只有隐藏元素的页）去掉：后面各步不用再管它们
-    Pass { name: "empty_pages", after: &["hidden"], enabled: |_| true, run: |e, r, o| remove_kindle_empty_pages(e, r, o.media.as_ref()) },
+    Pass {
+        name: "empty_pages",
+        after: &["hidden"],
+        enabled: |_| true,
+        run: |e, r, o| remove_kindle_empty_pages(e, r, o.media.as_ref()),
+    },
     // 规则改写（返回正文字号比，标签缺省样式表按它写）
     Pass {
         name: "kindle_rules",
@@ -712,16 +783,34 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
         },
     },
     // 不认 rem、`!important` 的阅读器（掌阅）：换成认的写法。别的 pass 之前：它们按 Kindle 的层叠算，换完算出来一样
-    Pass { name: "css_compat", after: &["kindle_rules"], enabled: |_| true, run: |e, r, o| css_compat::apply(e, r, o.media.as_ref(), o.reader.rem, o.reader.important) },
+    Pass {
+        name: "css_compat",
+        after: &["kindle_rules"],
+        enabled: |_| true,
+        run: |e, r, o| css_compat::apply(e, r, o.media.as_ref(), o.reader.rem, o.reader.important),
+    },
     // 不认行内元素上 vertical-align 上标下标的阅读器（掌阅）：里面包 <sup>/<sub>
-    Pass { name: "sup_sub", after: &["css_compat"], enabled: |_| true, run: |e, r, o| sup_sub::apply(e, r, o.media.as_ref(), o.reader.inline_valign) },
+    Pass {
+        name: "sup_sub",
+        after: &["css_compat"],
+        enabled: |_| true,
+        run: |e, r, o| sup_sub::apply(e, r, o.media.as_ref(), o.reader.inline_valign),
+    },
     Pass {
         name: "kindle_images",
         after: &["css_compat"],
         enabled: |o| o.image_sizing.is_some(),
         run: |e, r, o| {
             if let Some((sizing, kref)) = o.image_sizing {
-                kindle_images::apply(e, r, o.media.as_ref(), o.image_dims.as_deref(), sizing, kref, o.h_scale);
+                kindle_images::apply(
+                    e,
+                    r,
+                    o.media.as_ref(),
+                    o.image_dims.as_deref(),
+                    sizing,
+                    kref,
+                    o.h_scale,
+                );
             }
         },
     },
@@ -730,10 +819,23 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
         name: "blank_fold",
         after: &["kindle_images"],
         enabled: |o| o.v_scale.is_some(),
-        run: |e, r, o| blank_fold::apply(e, r, o.media.as_ref(), !o.reader.display_none, o.reader.trailing_br_line),
+        run: |e, r, o| {
+            blank_fold::apply(
+                e,
+                r,
+                o.media.as_ref(),
+                !o.reader.display_none,
+                o.reader.trailing_br_line,
+            )
+        },
     },
     // 行距、标题字号照 Kindle 在垫图之前：行内垫图要看块在这台上的行距、字号
-    Pass { name: "block_style", after: &["blank_fold"], enabled: |_| true, run: |e, r, o| block_style::apply(e, r, o.media.as_ref(), &o.reader) },
+    Pass {
+        name: "block_style",
+        after: &["blank_fold"],
+        enabled: |_| true,
+        run: |e, r, o| block_style::apply(e, r, o.media.as_ref(), &o.reader),
+    },
     Pass {
         name: "top_spacer",
         after: &["block_style"],
@@ -793,21 +895,45 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
         name: "root_em",
         after: &["scale_vertical", "scale_horizontal"],
         enabled: |_| true,
-        run: |e, r, o| root_em::apply(e, r, o.media.as_ref(), o.reader.em_root, o.reader.em_root_px),
+        run: |e, r, o| {
+            root_em::apply(
+                e,
+                r,
+                o.media.as_ref(),
+                o.reader.em_root,
+                o.reader.em_root_px,
+            )
+        },
     },
     // 行内 style、<style>、不带分号又紧挨 } 的声明里 em 不照 CSS 排的阅读器（Move）：挪进外链样式表。最后做：上面几步写进行内的、换算过的值一起挪
-    Pass { name: "inline_css", after: &["root_em"], enabled: |o| !o.reader.inline_css_lengths, run: |e, r, _| inline_css::apply(e, r) },
-    Pass { name: "drop_nonlinear_nav", after: &[], enabled: |_| true, run: |e, _, _| drop_nonlinear_nav(e) },
+    Pass {
+        name: "inline_css",
+        after: &["root_em"],
+        enabled: |o| !o.reader.inline_css_lengths,
+        run: |e, r, _| inline_css::apply(e, r),
+    },
+    Pass {
+        name: "drop_nonlinear_nav",
+        after: &[],
+        enabled: |_| true,
+        run: |e, _, _| drop_nonlinear_nav(e),
+    },
 ];
 
 /// 全书的章节（`is_chapter_entry`）在 `entries` 里的下标。
 pub(super) fn chapter_indices(entries: &[Entry]) -> Vec<usize> {
-    (0..entries.len()).filter(|&i| is_chapter_entry(&entries[i])).collect()
+    (0..entries.len())
+        .filter(|&i| is_chapter_entry(&entries[i]))
+        .collect()
 }
 
 /// 按全书样式表（[`crate::kindle_model::book_css`]）逐章并行算一遍：返回章节下标和各章的结果（一一对应）。
 /// 样式表借着 `entries`，返回前就释放，调用方接着可以改 `entries`。`kindle_rules` 的各步大多以它开头。
-pub(super) fn scan_chapters<R: Send>(entries: &[Entry], media: Option<&crate::cascade::MediaEnv>, f: impl Fn(&Entry, &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>) -> R + Sync) -> (Vec<usize>, Vec<R>) {
+pub(super) fn scan_chapters<R: Send>(
+    entries: &[Entry],
+    media: Option<&crate::cascade::MediaEnv>,
+    f: impl Fn(&Entry, &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>) -> R + Sync,
+) -> (Vec<usize>, Vec<R>) {
     let css = crate::kindle_model::book_css(entries, media);
     let chapters = chapter_indices(entries);
     let out = crate::util::par_map(&chapters, |&i| f(&entries[i], &css));
@@ -825,12 +951,20 @@ pub(super) fn beside_opf(entries: &[Entry], name: &str) -> String {
 /// spine 里标了 `linear="no"` 的目录页从 spine 拿掉（manifest 里留着，仍是导航文档），见 [`opf::nonlinear_nav_itemrefs`]。
 fn drop_nonlinear_nav(entries: &mut [Entry]) {
     let Some(i) = find_opf(entries) else { return };
-    let Ok(text) = std::str::from_utf8(&entries[i].data) else { return };
+    let Ok(text) = std::str::from_utf8(&entries[i].data) else {
+        return;
+    };
     let spans = opf::nonlinear_nav_itemrefs(text);
     if spans.is_empty() {
         return;
     }
-    let out = html::apply_edits(text, spans.into_iter().map(|(s, e)| (s, e, String::new())).collect());
+    let out = html::apply_edits(
+        text,
+        spans
+            .into_iter()
+            .map(|(s, e)| (s, e, String::new()))
+            .collect(),
+    );
     entries[i].data = out.into_bytes();
 }
 
@@ -859,7 +993,12 @@ pub fn normalize_epub3(entries: &mut Vec<Entry>) -> WashReport {
 }
 
 /// 新增（或重优化时更新）外链 wash css 文件，并往 OPF manifest 补一条 `<item>`（幂等）。
-fn add_wash_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path: &str, content: &str) {
+fn add_wash_css_entry(
+    entries: &mut Vec<Entry>,
+    opf_idx: Option<usize>,
+    css_path: &str,
+    content: &str,
+) {
     add_css_entry(entries, opf_idx, css_path, content, "eink-wash-css");
 }
 
@@ -871,36 +1010,81 @@ fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option
         if !is_chapter_entry(e) {
             return false;
         }
-        let Ok(t) = std::str::from_utf8(&e.data) else { return false };
-        let out = typeset::inject_css_link_first(t, &crate::epubzip::href_to(dir_of(&e.name), &css_path, ""));
+        let Ok(t) = std::str::from_utf8(&e.data) else {
+            return false;
+        };
+        let out = typeset::inject_css_link_first(
+            t,
+            &crate::epubzip::href_to(dir_of(&e.name), &css_path, ""),
+        );
         let changed = out != t;
         e.data = out.into_bytes();
         changed
     });
     rep.ua_css_linked += linked.into_iter().filter(|c| *c).count();
-    add_css_entry(entries, find_opf(entries), &css_path, &crate::uastyle::ua_css(font_scale), "eink-ua-css");
+    add_css_entry(
+        entries,
+        find_opf(entries),
+        &css_path,
+        &crate::uastyle::ua_css(font_scale),
+        "eink-ua-css",
+    );
 }
 
 /// 新增（或更新）一份我们写的样式表，并往 OPF manifest 补一条 `<item>`（幂等）。
-fn add_css_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, css_path: &str, content: &str, id: &str) {
-    add_entry(entries, opf_idx, css_path, content.as_bytes().to_vec(), id, "text/css");
+fn add_css_entry(
+    entries: &mut Vec<Entry>,
+    opf_idx: Option<usize>,
+    css_path: &str,
+    content: &str,
+    id: &str,
+) {
+    add_entry(
+        entries,
+        opf_idx,
+        css_path,
+        content.as_bytes().to_vec(),
+        id,
+        "text/css",
+    );
 }
 
 /// 新增（或更新）一个我们写的文件（样式表、图），并往 OPF manifest 补一条 `<item>`（幂等）。
-fn add_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, path: &str, data: Vec<u8>, id: &str, media_type: &str) {
+fn add_entry(
+    entries: &mut Vec<Entry>,
+    opf_idx: Option<usize>,
+    path: &str,
+    data: Vec<u8>,
+    id: &str,
+    media_type: &str,
+) {
     if let Some(e) = entries.iter_mut().find(|e| e.name == path) {
         e.data = data;
     } else {
-        entries.push(Entry { name: path.to_string(), data });
+        entries.push(Entry {
+            name: path.to_string(),
+            data,
+        });
     }
     if let Some(oi) = opf_idx {
         let opf_dir = dir_of(&entries[oi].name).to_string();
         let text = String::from_utf8_lossy(&entries[oi].data);
-        if manifest_items(&text).iter().any(|it| it.path(&opf_dir) == path) {
+        if manifest_items(&text)
+            .iter()
+            .any(|it| it.path(&opf_dir) == path)
+        {
             return;
         }
         let href = crate::epubzip::href_to(&opf_dir, path, "");
-        if let Some(t) = opf::insert_manifest_items(&text, &[opf::NewItem { id, href: &href, media_type, properties: "" }]) {
+        if let Some(t) = opf::insert_manifest_items(
+            &text,
+            &[opf::NewItem {
+                id,
+                href: &href,
+                media_type,
+                properties: "",
+            }],
+        ) {
             entries[oi].data = t.into_bytes();
         }
     }
@@ -908,18 +1092,38 @@ fn add_entry(entries: &mut Vec<Entry>, opf_idx: Option<usize>, path: &str, data:
 
 /// 图片的原始宽高（清洗后的 zip 路径 → 像素）：调用方读好的（流式优化时图片条目是空占位；清洗层改过名的按改名记录换过来），
 /// 没有的从条目字节读。
-pub(crate) fn image_dims_of<'e>(entries: &'e [Entry], rep: &WashReport, known: Option<&HashMap<String, (u32, u32)>>) -> HashMap<&'e str, (u32, u32)> {
+pub(crate) fn image_dims_of<'e>(
+    entries: &'e [Entry],
+    rep: &WashReport,
+    known: Option<&HashMap<String, (u32, u32)>>,
+) -> HashMap<&'e str, (u32, u32)> {
     let mut dims: HashMap<&str, (u32, u32)> = HashMap::new();
     if let Some(k) = known {
-        let back: HashMap<&str, &str> = rep.renamed.iter().map(|(old, new)| (new.as_str(), old.as_str())).collect();
-        for e in entries.iter().filter(|e| crate::util::is_image_ext(&e.name)) {
+        let back: HashMap<&str, &str> = rep
+            .renamed
+            .iter()
+            .map(|(old, new)| (new.as_str(), old.as_str()))
+            .collect();
+        for e in entries
+            .iter()
+            .filter(|e| crate::util::is_image_ext(&e.name))
+        {
             if let Some(d) = k.get(back.get(e.name.as_str()).copied().unwrap_or(&e.name)) {
                 dims.insert(e.name.as_str(), *d);
             }
         }
     }
-    for e in entries.iter().filter(|e| crate::util::is_image_ext(&e.name) && !e.data.is_empty()) {
-        if let Some(d) = crate::imgopt::guard(|| image::ImageReader::new(std::io::Cursor::new(&e.data)).with_guessed_format().ok()?.into_dimensions().ok()) {
+    for e in entries
+        .iter()
+        .filter(|e| crate::util::is_image_ext(&e.name) && !e.data.is_empty())
+    {
+        if let Some(d) = crate::imgopt::guard(|| {
+            image::ImageReader::new(std::io::Cursor::new(&e.data))
+                .with_guessed_format()
+                .ok()?
+                .into_dimensions()
+                .ok()
+        }) {
             dims.entry(e.name.as_str()).or_insert(d);
         }
     }
@@ -953,7 +1157,11 @@ pub(super) struct Link<'a> {
 /// `skip(条目名)` 为真的条目不动；OPF 里只改 `<guide>` 这类引用，manifest 的 `<item href>` 是文件本身的声明、从不改
 /// （2026-09-28 审计：空页删除没删掉单引号 OPF 的 item 时，把它的 href 改成了邻页，spine 就重复了一章）。
 /// 空页清理、全书 id 去重共用。返回改了的条目数。
-pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> bool + Sync, f: impl Fn(&Link) -> Option<String> + Sync) -> usize {
+pub(super) fn rewrite_book_links(
+    entries: &mut [Entry],
+    skip: impl Fn(&str) -> bool + Sync,
+    f: impl Fn(&Link) -> Option<String> + Sync,
+) -> usize {
     // 各文件独立，多线程做（`util::par_map_mut`）
     let changed = crate::util::par_map_mut(entries, |e| {
         let l = e.name.to_ascii_lowercase();
@@ -961,7 +1169,9 @@ pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> b
         if skip(&e.name) || !(is_opf || l.ends_with(".ncx") || is_html_entry(&e.name, &e.data)) {
             return false;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { return false };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            return false;
+        };
         let name = e.name.as_str();
         let new = html::edit_attrs(text, &["href", "src", "xlink:href"], |t, a| {
             if is_opf && opf::is_local(t.name, "item") {
@@ -973,7 +1183,12 @@ pub(super) fn rewrite_book_links(entries: &mut [Entry], skip: impl Fn(&str) -> b
             }
             // 目标文件按 `epubzip::resolve_link` 解析；锚点给原文（改链时原样写回，对 id 时再 `html::frag_id`）
             let target = crate::epubzip::resolve_link(name, a.value).0;
-            match f(&Link { file: name, value: a.value, target, frag: html::split_href(a.value).1 }) {
+            match f(&Link {
+                file: name,
+                value: a.value,
+                target,
+                frag: html::split_href(a.value).1,
+            }) {
                 Some(v) if v != a.value => Edit::Set(v),
                 _ => Edit::Keep,
             }

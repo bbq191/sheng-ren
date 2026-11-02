@@ -17,7 +17,15 @@ pub fn fix_internal_links(html: &str, self_file: Option<&str>) -> String {
         }
         let (path, frag) = html::split_href(a.value);
         match frag {
-            Some(f) if !path.is_empty() && !html::is_external(path) && ids.contains(html::frag_id(f).as_ref()) && self_file.is_none_or(|me| crate::epubzip::resolve_link(me, a.value).0 == me) => Edit::Set(format!("#{f}")),
+            Some(f)
+                if !path.is_empty()
+                    && !html::is_external(path)
+                    && ids.contains(html::frag_id(f).as_ref())
+                    && self_file
+                        .is_none_or(|me| crate::epubzip::resolve_link(me, a.value).0 == me) =>
+            {
+                Edit::Set(format!("#{f}"))
+            }
             _ => Edit::Keep,
         }
     })
@@ -34,10 +42,17 @@ pub fn collapse_dup_id_attrs(html: &str) -> String {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for t in html::tags(html).filter(|t| t.is_start()) {
         let tag = &html[t.start..t.end];
-        let ids: Vec<html::Attr> = html::attrs(tag).into_iter().filter(|a| a.is("id")).collect();
+        let ids: Vec<html::Attr> = html::attrs(tag)
+            .into_iter()
+            .filter(|a| a.is("id"))
+            .collect();
         for a in ids.iter().skip(1) {
             // 连同前导空白一起删，避免留下双空格
-            edits.push((t.start + tag[..a.start].trim_end().len(), t.start + a.end, String::new()));
+            edits.push((
+                t.start + tag[..a.start].trim_end().len(),
+                t.start + a.end,
+                String::new(),
+            ));
         }
     }
     if edits.is_empty() {
@@ -78,7 +93,10 @@ fn chapter_id_scan(html: &str) -> Option<Vec<&str>> {
     let mut ids = Vec::new();
     for t in html::tags(html).filter(|t| t.is_start()) {
         let mut n = 0;
-        for a in html::attrs(&html[t.start..t.end]).into_iter().filter(|a| a.is("id")) {
+        for a in html::attrs(&html[t.start..t.end])
+            .into_iter()
+            .filter(|a| a.is("id"))
+        {
             n += 1;
             if n > 1 {
                 return None;
@@ -96,7 +114,15 @@ fn chapter_id_scan(html: &str) -> Option<Vec<&str>> {
 /// （阅读器遇到重复 id 本来也是跳第一个）。没有重复时原样返回。
 fn rename_repeated_ids(html: &str, seen: &HashSet<String>) -> String {
     let tags: Vec<html::Tag> = html::tags(html).filter(|t| t.is_start()).collect();
-    let ids: Vec<(usize, html::Attr)> = tags.iter().flat_map(|t| html::attrs(&html[t.start..t.end]).into_iter().filter(|a| a.is("id") && !a.value.is_empty()).map(move |a| (t.start, a))).collect();
+    let ids: Vec<(usize, html::Attr)> = tags
+        .iter()
+        .flat_map(|t| {
+            html::attrs(&html[t.start..t.end])
+                .into_iter()
+                .filter(|a| a.is("id") && !a.value.is_empty())
+                .map(move |a| (t.start, a))
+        })
+        .collect();
     let all: HashSet<&str> = ids.iter().map(|(_, a)| a.value).collect();
     if all.len() == ids.len() {
         return html.to_string();
@@ -128,12 +154,21 @@ pub(crate) fn plan_id_renames(html: &str, seen: &mut HashSet<String>) -> HashMap
 pub(crate) fn chapter_ids(html: &str) -> Vec<String> {
     html::tags(html)
         .filter(|t| t.is_start())
-        .flat_map(|t| html::attrs(&html[t.start..t.end]).into_iter().filter(|a| a.is("id") && !a.value.is_empty()).map(|a| a.value.to_string()).collect::<Vec<_>>())
+        .flat_map(|t| {
+            html::attrs(&html[t.start..t.end])
+                .into_iter()
+                .filter(|a| a.is("id") && !a.value.is_empty())
+                .map(|a| a.value.to_string())
+                .collect::<Vec<_>>()
+        })
         .collect()
 }
 
 /// [`plan_id_renames`] 的后一半：按本章的 id（[`chapter_ids`]）和全书已见过的 `seen` 定改名。
-pub(crate) fn plan_id_renames_of(ids: Vec<String>, seen: &mut HashSet<String>) -> HashMap<String, String> {
+pub(crate) fn plan_id_renames_of(
+    ids: Vec<String>,
+    seen: &mut HashSet<String>,
+) -> HashMap<String, String> {
     let mut rename: HashMap<String, String> = HashMap::new();
     let mut local: HashSet<String> = HashSet::new();
     // 本章全部 id（新名不能撞上本章后面才出现的同名 id，2026-09-28 审计：`fn1` 改成 `fn1-x2`，本章后面本来就有个 `fn1-x2`）
@@ -145,7 +180,8 @@ pub(crate) fn plan_id_renames_of(ids: Vec<String>, seen: &mut HashSet<String>) -
         if seen.contains(&id) {
             let mut n = 2usize;
             let mut cand = format!("{id}-x{n}");
-            while seen.contains(&cand) || local.contains(&cand) || all_local.contains(cand.as_str()) {
+            while seen.contains(&cand) || local.contains(&cand) || all_local.contains(cand.as_str())
+            {
                 n += 1;
                 cand = format!("{id}-x{n}");
             }
@@ -163,10 +199,14 @@ pub(crate) fn plan_id_renames_of(ids: Vec<String>, seen: &mut HashSet<String>) -
 pub(crate) fn rename_ids(html: &str, rename: &HashMap<String, String>) -> String {
     html::edit_attrs(html, &["id", "href"], |_, a| {
         if a.is("id") {
-            return rename.get(a.value).map_or(Edit::Keep, |n| Edit::Set(n.clone()));
+            return rename
+                .get(a.value)
+                .map_or(Edit::Keep, |n| Edit::Set(n.clone()));
         }
         match a.value.strip_prefix('#') {
-            Some(f) => rename.get(html::frag_id(f).as_ref()).map_or(Edit::Keep, |n| Edit::Set(format!("#{n}"))),
+            Some(f) => rename
+                .get(html::frag_id(f).as_ref())
+                .map_or(Edit::Keep, |n| Edit::Set(format!("#{n}"))),
             None => Edit::Keep,
         }
     })
@@ -185,6 +225,9 @@ mod tests {
             fix_internal_links(html, Some("OEBPS/Text/c1.xhtml")),
             r##"<p id="n1"><a href="#n1">a</a><a href="c2.xhtml#n1">b</a><a href="#n1">c</a></p>"##
         );
-        assert_eq!(fix_internal_links(html, None), r##"<p id="n1"><a href="#n1">a</a><a href="#n1">b</a><a href="#n1">c</a></p>"##);
+        assert_eq!(
+            fix_internal_links(html, None),
+            r##"<p id="n1"><a href="#n1">a</a><a href="#n1">b</a><a href="#n1">c</a></p>"##
+        );
     }
 }

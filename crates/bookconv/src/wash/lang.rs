@@ -45,9 +45,16 @@ impl Counts {
         let mut c = Counts::default();
         for ch in text.chars() {
             match ch {
-                '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}' | '\u{20000}'..='\u{2FA1F}' => c.han += 1,
-                '\u{3041}'..='\u{309F}' | '\u{30A1}'..='\u{30FA}' | '\u{31F0}'..='\u{31FF}' => c.kana += 1,
-                '\u{AC00}'..='\u{D7AF}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' => c.hangul += 1,
+                '\u{4E00}'..='\u{9FFF}'
+                | '\u{3400}'..='\u{4DBF}'
+                | '\u{F900}'..='\u{FAFF}'
+                | '\u{20000}'..='\u{2FA1F}' => c.han += 1,
+                '\u{3041}'..='\u{309F}' | '\u{30A1}'..='\u{30FA}' | '\u{31F0}'..='\u{31FF}' => {
+                    c.kana += 1
+                }
+                '\u{AC00}'..='\u{D7AF}' | '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' => {
+                    c.hangul += 1
+                }
                 c2 if c2.is_alphabetic() && (c2 as u32) < 0x250 => c.latin += 1,
                 _ => {}
             }
@@ -97,18 +104,42 @@ const BOOK_ENOUGH: u64 = 20_000;
 
 /// 语言标签的主标签（小写）。
 fn primary(tag: &str) -> String {
-    tag.trim().split(['-', '_']).next().unwrap_or("").to_ascii_lowercase()
+    tag.trim()
+        .split(['-', '_'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
 }
 
 /// 中日韩的语言（ISO 639-1/2/3 里常见的写法）。
 fn is_cjk_lang(p: &str) -> bool {
-    matches!(p, "zh" | "chi" | "zho" | "cmn" | "yue" | "wuu" | "lzh" | "hak" | "nan" | "gan" | "hsn" | "cjy" | "ja" | "jpn" | "ko" | "kor")
+    matches!(
+        p,
+        "zh" | "chi"
+            | "zho"
+            | "cmn"
+            | "yue"
+            | "wuu"
+            | "lzh"
+            | "hak"
+            | "nan"
+            | "gan"
+            | "hsn"
+            | "cjy"
+            | "ja"
+            | "jpn"
+            | "ko"
+            | "kor"
+    )
 }
 
 /// 写的语言和判出来的文字对得上。占位的（`und` 等）、不像语言标签的算对不上。
 fn fits(tag: &str, s: Script) -> bool {
     let p = primary(tag);
-    if !(2..=3).contains(&p.len()) || !p.bytes().all(|b| b.is_ascii_lowercase()) || matches!(p.as_str(), "und" | "mul" | "zxx" | "mis") {
+    if !(2..=3).contains(&p.len())
+        || !p.bytes().all(|b| b.is_ascii_lowercase())
+        || matches!(p.as_str(), "und" | "mul" | "zxx" | "mis")
+    {
         return false;
     }
     match s {
@@ -120,21 +151,29 @@ fn fits(tag: &str, s: Script) -> bool {
 /// OPF 里第一个有内容的 `dc:language`：(内容起, 止)。
 fn dc_language_span(opf: &str) -> Option<(usize, usize)> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"(?is)<dc:language\b[^>]*>([^<]*)</dc:language\s*>").unwrap());
-    re.captures_iter(opf).filter_map(|c| c.get(1)).find(|m| !m.as_str().trim().is_empty()).map(|m| (m.start(), m.end()))
+    let re = RE
+        .get_or_init(|| Regex::new(r"(?is)<dc:language\b[^>]*>([^<]*)</dc:language\s*>").unwrap());
+    re.captures_iter(opf)
+        .filter_map(|c| c.get(1))
+        .find(|m| !m.as_str().trim().is_empty())
+        .map(|m| (m.start(), m.end()))
 }
 
 /// 改正 OPF 的 `dc:language` 和各文件 `<html>` 的语言属性（见模块说明），改了几处记进 `rep.languages_fixed`。
 pub(super) fn fix_languages(entries: &mut [Entry], rep: &mut WashReport) {
     let mut book = Counts::default();
     for e in entries.iter().filter(|e| is_chapter_entry(e)) {
-        let Ok(t) = std::str::from_utf8(&e.data) else { continue };
+        let Ok(t) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
         book.add(Counts::of(&plain_text(t)));
         if book.total() > BOOK_ENOUGH {
             break;
         }
     }
-    let Some(script) = book.script(BOOK_MIN) else { return };
+    let Some(script) = book.script(BOOK_MIN) else {
+        return;
+    };
     let mut tag = script.tag().to_string();
     if let Some(i) = find_opf(entries) {
         if let Ok(opf) = std::str::from_utf8(&entries[i].data) {
@@ -154,8 +193,12 @@ pub(super) fn fix_languages(entries: &mut [Entry], rep: &mut WashReport) {
         if !is_html_entry(&e.name, &e.data) {
             return 0;
         }
-        let Ok(t) = std::str::from_utf8(&e.data) else { return 0 };
-        let Some(h) = html::tags(t).find(|x| x.is_start() && x.is("html")) else { return 0 };
+        let Ok(t) = std::str::from_utf8(&e.data) else {
+            return 0;
+        };
+        let Some(h) = html::tags(t).find(|x| x.is_start() && x.is("html")) else {
+            return 0;
+        };
         let open = &t[h.start..h.end];
         let wrong = |n: &str| html::attr_value(open, n).is_some_and(|v| !fits(v, script));
         if !wrong("lang") && !wrong("xml:lang") {
@@ -166,7 +209,14 @@ pub(super) fn fix_languages(entries: &mut [Entry], rep: &mut WashReport) {
         let new_open = html::edit_attrs(open, &["lang", "xml:lang"], |_, a| match own {
             Some(s) if fits(a.value, s) => Edit::Keep,
             _ if fits(a.value, script) => Edit::Keep,
-            Some(s) if !matches!((s, script), (Script::Cjk(_), Script::Cjk(_)) | (Script::Latin, Script::Latin)) => Edit::Set(s.tag().to_string()),
+            Some(s)
+                if !matches!(
+                    (s, script),
+                    (Script::Cjk(_), Script::Cjk(_)) | (Script::Latin, Script::Latin)
+                ) =>
+            {
+                Edit::Set(s.tag().to_string())
+            }
             _ => Edit::Set(tag.clone()),
         });
         if let Cow::Owned(o) = new_open {
@@ -184,18 +234,32 @@ mod tests {
     use super::*;
 
     fn e(name: &str, data: &str) -> Entry {
-        Entry { name: name.into(), data: data.as_bytes().to_vec() }
+        Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        }
     }
 
     fn opf(lang: &str) -> Entry {
-        e("OEBPS/content.opf", &format!(r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>书</dc:title><dc:language>{lang}</dc:language></metadata><manifest/><spine/></package>"#))
+        e(
+            "OEBPS/content.opf",
+            &format!(
+                r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>书</dc:title><dc:language>{lang}</dc:language></metadata><manifest/><spine/></package>"#
+            ),
+        )
     }
 
     fn page(name: &str, lang: &str, body: &str) -> Entry {
-        e(name, &format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"{lang}><head><title>t</title></head><body><p>{body}</p></body></html>"#))
+        e(
+            name,
+            &format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"{lang}><head><title>t</title></head><body><p>{body}</p></body></html>"#
+            ),
+        )
     }
 
-    const ZH: &str = "他们走进了那间屋子，屋里很暗，只有一盏灯在角落里亮着。窗外下着雨，远处传来钟声。";
+    const ZH: &str =
+        "他们走进了那间屋子，屋里很暗，只有一盏灯在角落里亮着。窗外下着雨，远处传来钟声。";
     const EN: &str = "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness.";
 
     fn text(e: &Entry) -> &str {
@@ -204,13 +268,31 @@ mod tests {
 
     #[test]
     fn script_detection() {
-        assert_eq!(Counts::of(&ZH.repeat(10)).script(BOOK_MIN), Some(Script::Cjk("zh")));
-        assert_eq!(Counts::of(&EN.repeat(10)).script(BOOK_MIN), Some(Script::Latin));
-        assert_eq!(Counts::of(&"吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。".repeat(10)).script(BOOK_MIN), Some(Script::Cjk("ja")));
-        assert_eq!(Counts::of(&"나는 고양이로소이다. 이름은 아직 없다.".repeat(20)).script(BOOK_MIN), Some(Script::Cjk("ko")));
+        assert_eq!(
+            Counts::of(&ZH.repeat(10)).script(BOOK_MIN),
+            Some(Script::Cjk("zh"))
+        );
+        assert_eq!(
+            Counts::of(&EN.repeat(10)).script(BOOK_MIN),
+            Some(Script::Latin)
+        );
+        assert_eq!(
+            Counts::of(
+                &"吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。".repeat(10)
+            )
+            .script(BOOK_MIN),
+            Some(Script::Cjk("ja"))
+        );
+        assert_eq!(
+            Counts::of(&"나는 고양이로소이다. 이름은 아직 없다.".repeat(20)).script(BOOK_MIN),
+            Some(Script::Cjk("ko"))
+        );
         assert_eq!(Counts::of(ZH).script(BOOK_MIN), None, "字太少不判");
         // 一半中文一半英文（拉丁字母是汉字的 2–10 倍）：不判
-        assert_eq!(Counts::of(&format!("{}{}", ZH, EN.repeat(2))).script(10), None);
+        assert_eq!(
+            Counts::of(&format!("{}{}", ZH, EN.repeat(2))).script(10),
+            None
+        );
     }
 
     #[test]
@@ -228,31 +310,72 @@ mod tests {
 
     #[test]
     fn wrong_opf_and_html_lang_fixed() {
-        let mut es = vec![opf("en"), page("OEBPS/c1.xhtml", r#" lang="en""#, &ZH.repeat(10)), page("OEBPS/c2.xhtml", r#" xml:lang='und' lang="zh-CN""#, &ZH.repeat(10))];
+        let mut es = vec![
+            opf("en"),
+            page("OEBPS/c1.xhtml", r#" lang="en""#, &ZH.repeat(10)),
+            page(
+                "OEBPS/c2.xhtml",
+                r#" xml:lang='und' lang="zh-CN""#,
+                &ZH.repeat(10),
+            ),
+        ];
         let mut rep = WashReport::default();
         fix_languages(&mut es, &mut rep);
-        assert!(text(&es[0]).contains("<dc:language>zh</dc:language>"), "{}", text(&es[0]));
-        assert!(text(&es[1]).contains(r#"<html xmlns="http://www.w3.org/1999/xhtml" lang="zh">"#), "{}", text(&es[1]));
-        assert!(text(&es[2]).contains(r#"xml:lang='zh' lang="zh-CN""#), "对得上的不动: {}", text(&es[2]));
+        assert!(
+            text(&es[0]).contains("<dc:language>zh</dc:language>"),
+            "{}",
+            text(&es[0])
+        );
+        assert!(
+            text(&es[1]).contains(r#"<html xmlns="http://www.w3.org/1999/xhtml" lang="zh">"#),
+            "{}",
+            text(&es[1])
+        );
+        assert!(
+            text(&es[2]).contains(r#"xml:lang='zh' lang="zh-CN""#),
+            "对得上的不动: {}",
+            text(&es[2])
+        );
         assert_eq!(rep.languages_fixed, 3);
     }
 
     #[test]
     fn html_lang_follows_correct_opf_and_keeps_own_language_files() {
         let cover = r#"<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en"><body><img src="c.jpg"/></body></html>"#;
-        let mut es = vec![opf("zh-CN"), page("OEBPS/c1.xhtml", "", &ZH.repeat(10)), e("OEBPS/cover.xhtml", cover), page("OEBPS/app.xhtml", r#" lang="en""#, EN), page("OEBPS/app2.xhtml", r#" lang="zh""#, &EN.repeat(3))];
+        let mut es = vec![
+            opf("zh-CN"),
+            page("OEBPS/c1.xhtml", "", &ZH.repeat(10)),
+            e("OEBPS/cover.xhtml", cover),
+            page("OEBPS/app.xhtml", r#" lang="en""#, EN),
+            page("OEBPS/app2.xhtml", r#" lang="zh""#, &EN.repeat(3)),
+        ];
         let mut rep = WashReport::default();
         fix_languages(&mut es, &mut rep);
         assert!(text(&es[0]).contains("<dc:language>zh-CN</dc:language>"));
-        assert!(text(&es[2]).contains(r#"xml:lang="zh-CN""#), "没字的文件跟全书（OPF 写对了用 OPF 的）: {}", text(&es[2]));
-        assert!(text(&es[3]).contains(r#"lang="en""#), "整章英文的附录留着: {}", text(&es[3]));
-        assert!(text(&es[4]).contains(r#"lang="zh""#), "写的是中日韩语言、合全书的不动: {}", text(&es[4]));
+        assert!(
+            text(&es[2]).contains(r#"xml:lang="zh-CN""#),
+            "没字的文件跟全书（OPF 写对了用 OPF 的）: {}",
+            text(&es[2])
+        );
+        assert!(
+            text(&es[3]).contains(r#"lang="en""#),
+            "整章英文的附录留着: {}",
+            text(&es[3])
+        );
+        assert!(
+            text(&es[4]).contains(r#"lang="zh""#),
+            "写的是中日韩语言、合全书的不动: {}",
+            text(&es[4])
+        );
         assert_eq!(rep.languages_fixed, 1);
     }
 
     #[test]
     fn english_book_marked_chinese_and_unsure_books_untouched() {
-        let mut es = vec![opf("zh"), page("OEBPS/c1.xhtml", r#" lang="zh-CN""#, &EN.repeat(10))];
+        let mut es = vec![
+            opf("zh"),
+            page("OEBPS/c1.xhtml", r#" lang="zh-CN""#, &EN.repeat(10)),
+        ];
         let mut rep = WashReport::default();
         fix_languages(&mut es, &mut rep);
         assert!(text(&es[0]).contains("<dc:language>en</dc:language>"));
@@ -262,13 +385,19 @@ mod tests {
         let before: Vec<Vec<u8>> = es.iter().map(|e| e.data.clone()).collect();
         let mut rep = WashReport::default();
         fix_languages(&mut es, &mut rep);
-        assert_eq!(es.iter().map(|e| e.data.clone()).collect::<Vec<_>>(), before);
+        assert_eq!(
+            es.iter().map(|e| e.data.clone()).collect::<Vec<_>>(),
+            before
+        );
         assert_eq!(rep.languages_fixed, 0);
     }
 
     #[test]
     fn idempotent() {
-        let mut es = vec![opf("und"), page("OEBPS/c1.xhtml", r#" lang="en""#, &ZH.repeat(10))];
+        let mut es = vec![
+            opf("und"),
+            page("OEBPS/c1.xhtml", r#" lang="en""#, &ZH.repeat(10)),
+        ];
         let mut rep = WashReport::default();
         fix_languages(&mut es, &mut rep);
         let once: Vec<Vec<u8>> = es.iter().map(|e| e.data.clone()).collect();

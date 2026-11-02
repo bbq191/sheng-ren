@@ -7,10 +7,21 @@ use super::*;
 /// 幂等、只在真的不对时改；OPF 没有可解析的标识符（极少见）时 uid 不动。
 pub(super) fn fix_ncx_uid(entries: &mut [Entry], rep: &mut WashReport) {
     let want = opf_unique_identifier(entries).map(|u| xml_escape(&u));
-    for e in entries.iter_mut().filter(|e| e.name.to_ascii_lowercase().ends_with(".ncx")) {
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+    for e in entries
+        .iter_mut()
+        .filter(|e| e.name.to_ascii_lowercase().ends_with(".ncx"))
+    {
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
         let mut edits: Vec<(usize, usize, String)> = Vec::new();
-        let meta = |name: &str| html::tags(text).find(|t| t.is_start() && t.is("meta") && tag_attr(&text[t.start..t.end], "name") == Some(name));
+        let meta = |name: &str| {
+            html::tags(text).find(|t| {
+                t.is_start()
+                    && t.is("meta")
+                    && tag_attr(&text[t.start..t.end], "name") == Some(name)
+            })
+        };
         if let Some(want) = &want {
             match meta("dtb:uid") {
                 Some(t) => {
@@ -28,7 +39,9 @@ pub(super) fn fix_ncx_uid(entries: &mut [Entry], rep: &mut WashReport) {
                         } else {
                             edits.push((h.end, h.end, uid));
                         }
-                    } else if let Some(n) = html::tags(text).find(|t| t.is_start() && t.is("ncx") && !matches!(t.kind, html::TagKind::SelfClosing)) {
+                    } else if let Some(n) = html::tags(text).find(|t| {
+                        t.is_start() && t.is("ncx") && !matches!(t.kind, html::TagKind::SelfClosing)
+                    }) {
                         edits.push((n.end, n.end, format!("<head>{uid}</head>")));
                     }
                 }
@@ -36,8 +49,14 @@ pub(super) fn fix_ncx_uid(entries: &mut [Entry], rep: &mut WashReport) {
         }
         if let Some(t) = meta("dtb:depth") {
             let tag = &text[t.start..t.end];
-            if !tag_attr(tag, "content").is_some_and(|c| c.trim().parse::<u32>().is_ok_and(|n| n > 0)) {
-                edits.push((t.start, t.end, html::set_attr(tag, "content", &nav_depth(text).max(1).to_string())));
+            if !tag_attr(tag, "content")
+                .is_some_and(|c| c.trim().parse::<u32>().is_ok_and(|n| n > 0))
+            {
+                edits.push((
+                    t.start,
+                    t.end,
+                    html::set_attr(tag, "content", &nav_depth(text).max(1).to_string()),
+                ));
             }
         }
         if edits.is_empty() {
@@ -82,24 +101,42 @@ fn nav_depth(ncx: &str) -> usize {
 /// 恢复（`.epubindex` 从 7188 字节涨到 15558 字节）。幂等；已经叫 "ncx"、或跟另一条目 id 冲突
 /// （改了会撞车，极罕见）时不动。
 pub(super) fn fix_ncx_manifest_id(entries: &mut [Entry], rep: &mut WashReport) {
-    let Some(opf) = parse_opf(entries) else { return };
+    let Some(opf) = parse_opf(entries) else {
+        return;
+    };
     if opf.items.contains_key("ncx") {
         return; // 已经叫 ncx，或者已有另一条目占了这个 id——两种情况都不该动
     }
     let text = String::from_utf8_lossy(&entries[opf.index].data).into_owned();
-    let Some(item) = manifest_items(&text).into_iter().find(|it| it.media_type.trim() == "application/x-dtbncx+xml") else { return };
+    let Some(item) = manifest_items(&text)
+        .into_iter()
+        .find(|it| it.media_type.trim() == "application/x-dtbncx+xml")
+    else {
+        return;
+    };
     let old_id = item.id.to_string();
     if old_id == "ncx" {
         return;
     }
     let pos = item.pos;
-    let mut new_text = format!("{}{}{}", &text[..pos], html::set_attr(item.tag, "id", "ncx"), &text[pos + item.tag.len()..]);
+    let mut new_text = format!(
+        "{}{}{}",
+        &text[..pos],
+        html::set_attr(item.tag, "id", "ncx"),
+        &text[pos + item.tag.len()..]
+    );
     // <spine toc="OLD_ID"> 同步改，不然这个属性从此指向一个不存在的 id（没有这个属性的书——极少
     // 见——说明它压根没靠 spine 的 toc 属性定位目录，不用管）。
-    if let Some(t) = html::tags(&new_text).find(|t| t.is_start() && opf::is_local(t.name, "spine")) {
+    if let Some(t) = html::tags(&new_text).find(|t| t.is_start() && opf::is_local(t.name, "spine"))
+    {
         let tag = &new_text[t.start..t.end];
         if tag_attr(tag, "toc") == Some(old_id.as_str()) {
-            new_text = format!("{}{}{}", &new_text[..t.start], html::set_attr(tag, "toc", "ncx"), &new_text[t.end..]);
+            new_text = format!(
+                "{}{}{}",
+                &new_text[..t.start],
+                html::set_attr(tag, "toc", "ncx"),
+                &new_text[t.end..]
+            );
         }
     }
     entries[opf.index].data = new_text.into_bytes();

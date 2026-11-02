@@ -30,22 +30,41 @@ pub struct DeviceEnv {
 impl DeviceEnv {
     pub fn from_env() -> DeviceEnv {
         let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
-        let mtp_base = var("BOOKLIB_MTP_DIR").map(PathBuf::from).unwrap_or_else(|| {
-            let run = var("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", uid())));
-            run.join("mtp")
-        });
+        let mtp_base = var("BOOKLIB_MTP_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let run = var("XDG_RUNTIME_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", uid())));
+                run.join("mtp")
+            });
         let mount_check = !var("BOOKLIB_MTP_NO_MOUNT_CHECK").is_some_and(|v| v != "0");
-        let usbms_base = var("BOOKLIB_USBMS_DIR").map(PathBuf::from).unwrap_or_else(|| {
-            if !mount_check {
-                return mtp_base.join("usbms");
-            }
-            let user = var("USER").map(|u| u.to_string_lossy().into_owned()).unwrap_or_default();
-            // /run/media/$USER 要等第一次插 USB 存储才由 udisks 建：还不在时只有 /media/$USER 真在（Debian 系）才用它，
-            // 否则 `sync --watch` 开着时第一次插上会一直找错地方
-            let (run, media) = (Path::new("/run/media").join(&user), Path::new("/media").join(&user));
-            if !run.is_dir() && !user.is_empty() && media.is_dir() { media } else { run }
-        });
-        DeviceEnv { mtp_base, mount_check, usbms_base }
+        let usbms_base = var("BOOKLIB_USBMS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                if !mount_check {
+                    return mtp_base.join("usbms");
+                }
+                let user = var("USER")
+                    .map(|u| u.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                // /run/media/$USER 要等第一次插 USB 存储才由 udisks 建：还不在时只有 /media/$USER 真在（Debian 系）才用它，
+                // 否则 `sync --watch` 开着时第一次插上会一直找错地方
+                let (run, media) = (
+                    Path::new("/run/media").join(&user),
+                    Path::new("/media").join(&user),
+                );
+                if !run.is_dir() && !user.is_empty() && media.is_dir() {
+                    media
+                } else {
+                    run
+                }
+            });
+        DeviceEnv {
+            mtp_base,
+            mount_check,
+            usbms_base,
+        }
     }
 }
 
@@ -54,7 +73,9 @@ fn uid() -> u32 {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        std::fs::metadata("/proc/self").map(|m| m.uid()).unwrap_or(1000)
+        std::fs::metadata("/proc/self")
+            .map(|m| m.uid())
+            .unwrap_or(1000)
     }
     #[cfg(not(unix))]
     1000
@@ -65,7 +86,10 @@ pub(crate) enum Target {
     /// 放在电脑上（没写 `[deliver]`）。
     Local,
     /// 设备上的产物根目录（MTP：`<存储>/<dir>`；USB 大容量存储：`<挂载点>/<dir>`）；`mount` 是要一直挂着的挂载点（不查挂没挂时 `None`）。
-    Dir { root: PathBuf, mount: Option<PathBuf> },
+    Dir {
+        root: PathBuf,
+        mount: Option<PathBuf>,
+    },
 }
 
 impl Target {
@@ -87,9 +111,13 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
             if env.mount_check && !mounted(&point) {
                 return Err(format!("没接上（{} 没挂上）", point.display()));
             }
-            let storage = mtp_storage(&point).ok_or_else(|| format!("没接上（{} 不在或没挂上）", point.display()))?;
+            let storage = mtp_storage(&point)
+                .ok_or_else(|| format!("没接上（{} 不在或没挂上）", point.display()))?;
             // `dir` 不在（掌阅原来没有 documents/）的话传书时再建：只看接没接上的命令（devices）不往设备上写
-            Ok(Target::Dir { root: storage.join(dir), mount: env.mount_check.then_some(point) })
+            Ok(Target::Dir {
+                root: storage.join(dir),
+                mount: env.mount_check.then_some(point),
+            })
         }
         Some(Deliver::Usbms { label, dir }) => {
             // 只认 `<base>/<label>`：udisks 遇到同名目录占着时会挂成 `<label>1`，不跟过去（产物记录存的是绝对路径，挂载点名一变
@@ -101,7 +129,10 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
             if !point.is_dir() {
                 return Err(format!("没接上（{} 不在）", point.display()));
             }
-            Ok(Target::Dir { root: point.join(dir), mount: env.mount_check.then_some(point) })
+            Ok(Target::Dir {
+                root: point.join(dir),
+                mount: env.mount_check.then_some(point),
+            })
         }
     }
 }
@@ -127,14 +158,19 @@ fn mtp_storage(point: &Path) -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(point)
         .ok()?
         .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && !e.file_name().to_string_lossy().starts_with('.'))
+        .filter(|e| {
+            e.file_type().is_ok_and(|t| t.is_dir())
+                && !e.file_name().to_string_lossy().starts_with('.')
+        })
         .map(|e| e.path())
         .collect();
     dirs.sort();
-    let internal = dirs.iter().position(|d| d.file_name().is_some_and(|n| {
-        let n = n.to_string_lossy().to_lowercase();
-        n.contains("internal") || n.contains("内部")
-    }));
+    let internal = dirs.iter().position(|d| {
+        d.file_name().is_some_and(|n| {
+            let n = n.to_string_lossy().to_lowercase();
+            n.contains("internal") || n.contains("内部")
+        })
+    });
     match internal {
         Some(i) => Some(dirs.swap_remove(i)),
         None => dirs.into_iter().next(),
@@ -149,21 +185,38 @@ fn mtp_storage(point: &Path) -> Option<PathBuf> {
 ///
 /// 目录刚建好、文件还没放进去时，主线程可能正好把它当成"变空的目录"删掉（删别的书的旧位置时顺带删空目录，
 /// `generate::State::delete_placements`）：碰到目录不在了就重建再放，试几次。
-pub(crate) fn put_file(src: &Path, dest: &Path, keep_src: bool, compare: bool, direct: bool) -> Result<bool, String> {
+pub(crate) fn put_file(
+    src: &Path,
+    dest: &Path,
+    keep_src: bool,
+    compare: bool,
+    direct: bool,
+) -> Result<bool, String> {
     let mut tries = 0;
     loop {
         match put_file_once(src, dest, keep_src, compare, direct) {
-            Err((_, true)) if tries < 3 && dest.parent().is_some_and(|d| !d.is_dir()) && src.is_file() => tries += 1,
+            Err((_, true))
+                if tries < 3 && dest.parent().is_some_and(|d| !d.is_dir()) && src.is_file() =>
+            {
+                tries += 1
+            }
             r => return r.map_err(|(e, _)| e),
         }
     }
 }
 
 /// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
-fn put_file_once(src: &Path, dest: &Path, keep_src: bool, compare: bool, direct: bool) -> Result<bool, (String, bool)> {
+fn put_file_once(
+    src: &Path,
+    dest: &Path,
+    keep_src: bool,
+    compare: bool,
+    direct: bool,
+) -> Result<bool, (String, bool)> {
     let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| (format!("{}: {e}", dir.display()), missing(&e)))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| (format!("{}: {e}", dir.display()), missing(&e)))?;
     }
     if compare && same_bytes(src, dest) {
         if !keep_src {
@@ -211,12 +264,19 @@ const COPY_BUF: usize = 1 << 20;
 
 /// 两个文件逐字节相同（`b` 不在算不同）。先比大小，一样才读。
 pub(crate) fn same_bytes(a: &Path, b: &Path) -> bool {
-    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else { return false };
+    let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else {
+        return false;
+    };
     if !mb.is_file() || ma.len() != mb.len() {
         return false;
     }
-    let (Ok(fa), Ok(fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else { return false };
-    let (mut ra, mut rb) = (std::io::BufReader::with_capacity(1 << 16, fa), std::io::BufReader::with_capacity(1 << 16, fb));
+    let (Ok(fa), Ok(fb)) = (std::fs::File::open(a), std::fs::File::open(b)) else {
+        return false;
+    };
+    let (mut ra, mut rb) = (
+        std::io::BufReader::with_capacity(1 << 16, fa),
+        std::io::BufReader::with_capacity(1 << 16, fb),
+    );
     let (mut ba, mut bb) = (vec![0u8; 1 << 16], vec![0u8; 1 << 16]);
     loop {
         let n = match ra.read(&mut ba) {
@@ -240,11 +300,17 @@ mod tests {
     fn storage_prefers_internal() {
         let d = tempfile::tempdir().unwrap();
         assert!(mtp_storage(&d.path().join("没有")).is_none());
-        assert!(mtp_storage(d.path()).is_none(), "空的挂载点（没挂上）不算接上");
+        assert!(
+            mtp_storage(d.path()).is_none(),
+            "空的挂载点（没挂上）不算接上"
+        );
         std::fs::create_dir(d.path().join("SD 卡")).unwrap();
         assert_eq!(mtp_storage(d.path()).unwrap(), d.path().join("SD 卡"));
         std::fs::create_dir(d.path().join("Internal Storage")).unwrap();
-        assert_eq!(mtp_storage(d.path()).unwrap(), d.path().join("Internal Storage"));
+        assert_eq!(
+            mtp_storage(d.path()).unwrap(),
+            d.path().join("Internal Storage")
+        );
     }
 
     #[test]
@@ -256,9 +322,20 @@ mod tests {
         // 设备断开后挂载点剩下的空目录里有存储目录（上次写进去的）也不算接上
         std::fs::create_dir_all(d.path().join("ireader/内部共享存储空间")).unwrap();
         let p = profile::get("ireader").unwrap();
-        let env = DeviceEnv { mtp_base: d.path().into(), mount_check: true, usbms_base: d.path().into() };
+        let env = DeviceEnv {
+            mtp_base: d.path().into(),
+            mount_check: true,
+            usbms_base: d.path().into(),
+        };
         assert!(connect(&env, p).err().unwrap().contains("没挂上"));
-        let t = connect(&DeviceEnv { mount_check: false, ..env }, p).unwrap();
+        let t = connect(
+            &DeviceEnv {
+                mount_check: false,
+                ..env
+            },
+            p,
+        )
+        .unwrap();
         assert!(matches!(t, Target::Dir { mount: None, .. }));
     }
 
@@ -266,24 +343,62 @@ mod tests {
     fn usbms_connects_by_label() {
         let d = tempfile::tempdir().unwrap();
         let p = profile::get("kobo").unwrap();
-        let env = DeviceEnv { mtp_base: d.path().join("mtp"), mount_check: true, usbms_base: d.path().into() };
-        assert!(connect(&env, p).err().unwrap().contains("没挂上"), "卷标目录不在");
+        let env = DeviceEnv {
+            mtp_base: d.path().join("mtp"),
+            mount_check: true,
+            usbms_base: d.path().into(),
+        };
+        assert!(
+            connect(&env, p).err().unwrap().contains("没挂上"),
+            "卷标目录不在"
+        );
         // 拔掉后留下的空目录（普通目录，和上一级同一个文件系统）不算接上
         std::fs::create_dir(d.path().join("KOBOeReader")).unwrap();
         assert!(connect(&env, p).err().unwrap().contains("没挂上"));
         // 不查挂载（测试）：目录在就算接上，产物放 <挂载点>/books
-        let t = connect(&DeviceEnv { mount_check: false, ..env.clone() }, p).unwrap();
-        assert!(matches!(&t, Target::Dir { root, mount: None } if *root == d.path().join("KOBOeReader/books")));
-        assert!(connect(&DeviceEnv { mount_check: false, usbms_base: d.path().join("无"), ..env }, p).err().unwrap().contains("不在"));
+        let t = connect(
+            &DeviceEnv {
+                mount_check: false,
+                ..env.clone()
+            },
+            p,
+        )
+        .unwrap();
+        assert!(
+            matches!(&t, Target::Dir { root, mount: None } if *root == d.path().join("KOBOeReader/books"))
+        );
+        assert!(connect(
+            &DeviceEnv {
+                mount_check: false,
+                usbms_base: d.path().join("无"),
+                ..env
+            },
+            p
+        )
+        .err()
+        .unwrap()
+        .contains("不在"));
         #[cfg(target_os = "linux")]
         {
             // 真的挂载点算接上（/proc 当成卷标 "proc" 的 USB 存储）；只看 <base>/<label>，带数字后缀的不跟
             let k = |label: &str| {
                 let mut p = p.clone();
-                p.deliver = Some(Deliver::Usbms { label: label.into(), dir: "books".into() });
-                connect(&DeviceEnv { mtp_base: "/nonexistent".into(), mount_check: true, usbms_base: "/".into() }, &p)
+                p.deliver = Some(Deliver::Usbms {
+                    label: label.into(),
+                    dir: "books".into(),
+                });
+                connect(
+                    &DeviceEnv {
+                        mtp_base: "/nonexistent".into(),
+                        mount_check: true,
+                        usbms_base: "/".into(),
+                    },
+                    &p,
+                )
             };
-            assert!(matches!(k("proc"), Ok(Target::Dir { root, mount: Some(m) }) if root == Path::new("/proc/books") && m == Path::new("/proc")));
+            assert!(
+                matches!(k("proc"), Ok(Target::Dir { root, mount: Some(m) }) if root == Path::new("/proc/books") && m == Path::new("/proc"))
+            );
             assert!(k("pro").is_err());
         }
     }
@@ -293,9 +408,18 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let (src, dest) = (d.path().join("src"), d.path().join("dest"));
         std::fs::write(&src, b"abc").unwrap();
-        assert!(put_file(&src, &dest, true, true, false).unwrap(), "不在：写");
-        assert!(!put_file(&src, &dest, true, true, false).unwrap(), "相同：不写");
-        assert!(put_file(&src, &dest, true, false, false).unwrap(), "不比较：照写");
+        assert!(
+            put_file(&src, &dest, true, true, false).unwrap(),
+            "不在：写"
+        );
+        assert!(
+            !put_file(&src, &dest, true, true, false).unwrap(),
+            "相同：不写"
+        );
+        assert!(
+            put_file(&src, &dest, true, false, false).unwrap(),
+            "不比较：照写"
+        );
         std::fs::write(&src, b"abd").unwrap();
         assert!(put_file(&src, &dest, false, true, false).unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"abd");
@@ -305,6 +429,10 @@ mod tests {
         std::fs::write(&src, b"xyz1").unwrap();
         assert!(put_file(&src, &dest, true, false, true).unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"xyz1");
-        assert_eq!(std::fs::read_dir(d.path()).unwrap().count(), 2, "只有 src、dest");
+        assert_eq!(
+            std::fs::read_dir(d.path()).unwrap().count(),
+            2,
+            "只有 src、dest"
+        );
     }
 }

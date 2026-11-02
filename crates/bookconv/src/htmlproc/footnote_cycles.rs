@@ -26,14 +26,21 @@ pub fn break_footnote_cycles(html: &str) -> String {
         }
         let tag = &html[t.start..t.end];
         let attrs = html::attrs(tag);
-        let own_id = attrs.iter().find(|a| a.is("id") && !a.value.is_empty()).map(|a| a.value);
+        let own_id = attrs
+            .iter()
+            .find(|a| a.is("id") && !a.value.is_empty())
+            .map(|a| a.value);
         if let Some(id) = own_id {
             id_pos.entry(id).or_insert(t.start);
             ids_sorted.push((t.start, id));
         }
         if t.kind == html::TagKind::Open && t.is("a") {
             // href 必须是同文件裸锚点 #frag
-            if let Some(f) = attrs.iter().find(|a| a.is("href")).and_then(|a| a.value.strip_prefix('#')) {
+            if let Some(f) = attrs
+                .iter()
+                .find(|a| a.is("href"))
+                .and_then(|a| a.value.strip_prefix('#'))
+            {
                 links.push((t.start, t.end, own_id, html::frag_id(f).into_owned()));
             }
         }
@@ -67,8 +74,15 @@ pub fn break_footnote_cycles(html: &str) -> String {
         if !id_pos.contains_key(target.as_str()) {
             continue;
         }
-        let Some(source) = own_id.or_else(|| nearest(*open_start)) else { continue };
-        anchors.push(Anchor { open_start: *open_start, open_end: *open_end, source, target: target.clone() });
+        let Some(source) = own_id.or_else(|| nearest(*open_start)) else {
+            continue;
+        };
+        anchors.push(Anchor {
+            open_start: *open_start,
+            open_end: *open_end,
+            source,
+            target: target.clone(),
+        });
     }
     for a in &anchors {
         edges.insert((a.source, a.target.as_str()));
@@ -80,7 +94,9 @@ pub fn break_footnote_cycles(html: &str) -> String {
         if a.source == a.target {
             continue;
         }
-        if edges.contains(&(a.target.as_str(), a.source)) && id_pos[a.source] > id_pos[a.target.as_str()] {
+        if edges.contains(&(a.target.as_str(), a.source))
+            && id_pos[a.source] > id_pos[a.target.as_str()]
+        {
             // 本锚点的源元素较晚 → 它是注释里的回链 → 去链
             kill.push((a.open_start, a.open_end));
         }
@@ -93,7 +109,9 @@ pub fn break_footnote_cycles(html: &str) -> String {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     kill.sort_unstable();
     for (open_start, open_end) in kill {
-        let Some(close) = html::find_close(html, open_end, "a") else { continue };
+        let Some(close) = html::find_close(html, open_end, "a") else {
+            continue;
+        };
         let no_href = html::remove_attr(&html[open_start..open_end], "href");
         edits.push((open_start, open_end, format!("<span{}", &no_href[2..]))); // 去掉 "<a"
         edits.push((close.start, close.end, "</span>".to_string()));
@@ -125,7 +143,10 @@ mod footnote_tests {
 <p id="filepos21550" class="c12"><a href="#filepos16001"><span>[1]</span></a><span>注释文字</span></p>"##;
         let out = break_footnote_cycles(html);
         // 正向 marker→注释 保留
-        assert!(out.contains(r##"<a href="#filepos21550"><span>[1]</span></a>"##), "正向脚注链接被误删");
+        assert!(
+            out.contains(r##"<a href="#filepos21550"><span>[1]</span></a>"##),
+            "正向脚注链接被误删"
+        );
         // 注释里的回链去链化：<a href="#filepos16001"> 不再是链接
         assert!(!out.contains(r##"href="#filepos16001""##), "回链未去链");
         // 注释段 id 保留（正向链接的落点）
@@ -138,9 +159,15 @@ mod footnote_tests {
         let html = r##"<p>正文<a href="#zhu1" id="zw1">[1]</a>后续</p>
 <p><a href="#zw1" id="zhu1">[1]</a>注释文字</p>"##;
         let out = break_footnote_cycles(html);
-        assert!(out.contains(r##"<a href="#zhu1" id="zw1">[1]</a>"##), "正向 marker 被误删");
+        assert!(
+            out.contains(r##"<a href="#zhu1" id="zw1">[1]</a>"##),
+            "正向 marker 被误删"
+        );
         // 注释锚点去链但保留 id=zhu1（marker 的落点）
-        assert!(out.contains(r##"id="zhu1""##), "注释 id 丢失（正向落点会断）");
+        assert!(
+            out.contains(r##"id="zhu1""##),
+            "注释 id 丢失（正向落点会断）"
+        );
         assert!(!out.contains(r##"href="#zw1""##), "注释回链未去链");
         assert!(out.contains("<span"), "回链应变成 span");
     }
@@ -150,7 +177,10 @@ mod footnote_tests {
         // 大写 `</A>`、单引号属性：回链照样去链，配对的是自己的闭合标签。
         let html = "<p>正文<a href='#n1' id='r1'>[1]</a>后续</p>\n<p><A href='#r1' id='n1'>[1]</A>注释文字</p>";
         let out = break_footnote_cycles(html);
-        assert_eq!(out, "<p>正文<a href='#n1' id='r1'>[1]</a>后续</p>\n<p><span id='n1'>[1]</span>注释文字</p>");
+        assert_eq!(
+            out,
+            "<p>正文<a href='#n1' id='r1'>[1]</a>后续</p>\n<p><span id='n1'>[1]</span>注释文字</p>"
+        );
     }
 
     #[test]

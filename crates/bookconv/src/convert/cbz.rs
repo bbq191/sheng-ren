@@ -8,7 +8,11 @@ use zip::ZipArchive;
 /// 只看中央目录里的名字（不逐个打开条目）：此前逐个 `by_index` 打开，读不出本地文件头的条目被悄悄当成"不是页面"漏掉，
 /// 转出来的书少一页也不报错；现在它在读页面时报错。
 fn page_names<R: Read + std::io::Seek>(zip: &ZipArchive<R>) -> Vec<String> {
-    let mut names: Vec<String> = zip.file_names().filter(|n| !is_macos_junk(n) && crate::util::is_image_ext(n)).map(str::to_string).collect();
+    let mut names: Vec<String> = zip
+        .file_names()
+        .filter(|n| !is_macos_junk(n) && crate::util::is_image_ext(n))
+        .map(str::to_string)
+        .collect();
     names.sort_by(|a, b| natural_cmp(a, b));
     names
 }
@@ -24,7 +28,11 @@ pub fn check_cbz<R: Read + std::io::Seek>(reader: R) -> Result<usize, String> {
 
 /// macOS 压缩时附带的元数据：`__MACOSX/` 下的一切，以及文件名以 `._` 开头的 AppleDouble 资源分叉。
 fn is_macos_junk(name: &str) -> bool {
-    name.split('/').any(|seg| seg == "__MACOSX") || name.rsplit('/').next().is_some_and(|base| base.starts_with("._"))
+    name.split('/').any(|seg| seg == "__MACOSX")
+        || name
+            .rsplit('/')
+            .next()
+            .is_some_and(|base| base.starts_with("._"))
 }
 
 /// CBZ 字节 → **与设备无关的母版 EPUB**：图片按文件名自然序每页一张，原图字节原样放进去（不缩放、不重编码）。
@@ -44,24 +52,46 @@ pub fn cbz_to_epub(data: &[u8], title: &str) -> Result<Vec<u8>, String> {
 pub const MAX_CBZ_TOTAL_BYTES: u64 = 4 << 30;
 
 /// 同 [`cbz_to_epub`]，从可定位的读取器（如打开的文件）读：不用先把整个 CBZ 读进内存，峰值少一份压缩包大小。
-pub fn cbz_to_epub_from<R: Read + std::io::Seek>(reader: R, title: &str) -> Result<Vec<u8>, String> {
+pub fn cbz_to_epub_from<R: Read + std::io::Seek>(
+    reader: R,
+    title: &str,
+) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
-    cbz_to_epub_into(reader, title, MAX_CBZ_TOTAL_BYTES, std::io::Cursor::new(&mut buf))?;
+    cbz_to_epub_into(
+        reader,
+        title,
+        MAX_CBZ_TOTAL_BYTES,
+        std::io::Cursor::new(&mut buf),
+    )?;
     Ok(buf)
 }
 
 /// 同 [`cbz_to_epub_from`]，母版直接写进文件 `out`（书库生成用）：一页一页从 CBZ 读、写完就丢，峰值内存只有一页，不随整本体积涨
 /// （以前整本页面先读进内存再组装，再整份写盘）。出错时 `out` 可能是半截，调用方负责清掉（书库写在临时目录里）。
-pub fn cbz_to_epub_file<R: Read + std::io::Seek>(reader: R, title: &str, out: &std::path::Path) -> Result<(), String> {
+pub fn cbz_to_epub_file<R: Read + std::io::Seek>(
+    reader: R,
+    title: &str,
+    out: &std::path::Path,
+) -> Result<(), String> {
     let f = std::fs::File::create(out).map_err(|e| format!("{}: {e}", out.display()))?;
-    cbz_to_epub_into(reader, title, MAX_CBZ_TOTAL_BYTES, std::io::BufWriter::new(f))?;
+    cbz_to_epub_into(
+        reader,
+        title,
+        MAX_CBZ_TOTAL_BYTES,
+        std::io::BufWriter::new(f),
+    )?;
     Ok(())
 }
 
 /// 流式转换（页面合计上限由参数给，测试用小上限，不必真造几 GB 的数据）：两遍——第一遍每页只解压开头几个字节认格式
 /// （认不出的跳过并警告），定下页面清单和 OPF；第二遍写到资源时逐页解压写进 `w`（[`crate::epub::assemble_master_streaming`]）。
 /// 产物与整本读进内存再 [`crate::epub::assemble_master`] 逐字节相同。
-fn cbz_to_epub_into<R: Read + std::io::Seek, W: std::io::Write + std::io::Seek>(reader: R, title: &str, total_cap: u64, w: W) -> Result<W, String> {
+fn cbz_to_epub_into<R: Read + std::io::Seek, W: std::io::Write + std::io::Seek>(
+    reader: R,
+    title: &str,
+    total_cap: u64,
+    w: W,
+) -> Result<W, String> {
     use crate::epub::{Book, BookMeta, Chapter, Resource};
     let mut zip = ZipArchive::new(reader).map_err(|e| format!("CBZ 打开: {e}"))?;
     let names = page_names(&zip);
@@ -71,15 +101,27 @@ fn cbz_to_epub_into<R: Read + std::io::Seek, W: std::io::Write + std::io::Seek>(
     for name in &names {
         // 认格式只要魔数（`util::image_kind` 最多看 12 字节）
         let mut head = Vec::with_capacity(16);
-        zip.by_name(name).map_err(|e| format!("{name}: {e}"))?.take(16).read_to_end(&mut head).map_err(|e| format!("{name}: {e}"))?;
+        zip.by_name(name)
+            .map_err(|e| format!("{name}: {e}"))?
+            .take(16)
+            .read_to_end(&mut head)
+            .map_err(|e| format!("{name}: {e}"))?;
         let Some(crate::util::ImageKind { ext, mime, .. }) = crate::util::image_kind(&head) else {
             eprintln!("警告：{name} 不是可识别的图片，跳过");
             continue;
         };
         let n = resources.len() + 1;
         let path = format!("images/p{n:04}.{ext}");
-        chapters.push(Chapter { title: format!("第 {n} 页"), html_body: format!(r#"<div><img src="{path}" alt=""/></div>"#), level: 1 });
-        resources.push(Resource { path, media_type: mime.to_string(), bytes: Vec::new() });
+        chapters.push(Chapter {
+            title: format!("第 {n} 页"),
+            html_body: format!(r#"<div><img src="{path}" alt=""/></div>"#),
+            level: 1,
+        });
+        resources.push(Resource {
+            path,
+            media_type: mime.to_string(),
+            bytes: Vec::new(),
+        });
         sources.push(name);
     }
     if resources.is_empty() {
@@ -109,7 +151,10 @@ fn cbz_to_epub_into<R: Read + std::io::Seek, W: std::io::Write + std::io::Seek>(
         let bytes = crate::epubzip::read_by_name(&mut zip, name)?;
         total = total.saturating_add(bytes.len() as u64);
         if total > total_cap {
-            return Err(format!("CBZ 页面图片解压后合计超过上限 {} MB（读到 {name}；损坏或恶意的压缩包？）", total_cap >> 20));
+            return Err(format!(
+                "CBZ 页面图片解压后合计超过上限 {} MB（读到 {name}；损坏或恶意的压缩包？）",
+                total_cap >> 20
+            ));
         }
         Ok(bytes)
     })
@@ -171,7 +216,10 @@ mod tests {
             "page_100.jpg".into(),
         ];
         v.sort_by(|a, b| natural_cmp(a, b));
-        assert_eq!(v, ["page_1.jpg", "page_2.jpg", "page_10.jpg", "page_100.jpg"]);
+        assert_eq!(
+            v,
+            ["page_1.jpg", "page_2.jpg", "page_10.jpg", "page_100.jpg"]
+        );
     }
 
     #[test]
@@ -189,7 +237,8 @@ mod tests {
         {
             let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             for (name, data) in entries {
-                z.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+                z.start_file(*name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
                 z.write_all(data).unwrap();
             }
             z.finish().unwrap();
@@ -199,9 +248,13 @@ mod tests {
 
     fn jpeg(w: u32, h: u32) -> Vec<u8> {
         use image::{codecs::jpeg::JpegEncoder, DynamicImage, RgbImage};
-        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, _| image::Rgb([(x % 256) as u8, 90, 160])));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, _| {
+            image::Rgb([(x % 256) as u8, 90, 160])
+        }));
         let mut out = Vec::new();
-        JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
+        JpegEncoder::new_with_quality(&mut out, 90)
+            .encode_image(&img)
+            .unwrap();
         out
     }
 
@@ -217,35 +270,82 @@ mod tests {
             ("vol/p2.jpg", &page),
         ]);
         let epub = cbz_to_epub(&buf, "测试").unwrap();
-        let names: Vec<String> = crate::epubzip::read_entries(&epub).unwrap().into_iter().map(|e| e.name).collect();
-        assert!(names.iter().any(|n| n.ends_with("images/p0002.jpg")) && !names.iter().any(|n| n.ends_with("images/p0003.jpg")), "{names:?}");
+        let names: Vec<String> = crate::epubzip::read_entries(&epub)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with("images/p0002.jpg"))
+                && !names.iter().any(|n| n.ends_with("images/p0003.jpg")),
+            "{names:?}"
+        );
     }
 
     #[test]
     fn gif_and_webp_pages_kept_in_order_and_first_page_is_the_cover() {
         use image::{DynamicImage, RgbImage};
-        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(60, 90, |x, y| image::Rgb([(x * 4) as u8, (y * 2) as u8, 40])));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(60, 90, |x, y| {
+            image::Rgb([(x * 4) as u8, (y * 2) as u8, 40])
+        }));
         let enc = |fmt| {
             let mut out = Vec::new();
-            img.write_to(&mut std::io::Cursor::new(&mut out), fmt).unwrap();
+            img.write_to(&mut std::io::Cursor::new(&mut out), fmt)
+                .unwrap();
             out
         };
-        let buf = zip_of(&[("p3.gif", &enc(image::ImageFormat::Gif)), ("p1.jpg", &jpeg(60, 90)), ("p2.webp", &enc(image::ImageFormat::WebP))]);
+        let buf = zip_of(&[
+            ("p3.gif", &enc(image::ImageFormat::Gif)),
+            ("p1.jpg", &jpeg(60, 90)),
+            ("p2.webp", &enc(image::ImageFormat::WebP)),
+        ]);
         let epub = cbz_to_epub(&buf, "混合").unwrap();
         let entries = crate::epubzip::read_entries(&epub).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        for want in ["OEBPS/images/p0001.jpg", "OEBPS/images/p0002.webp", "OEBPS/images/p0003.gif"] {
+        for want in [
+            "OEBPS/images/p0001.jpg",
+            "OEBPS/images/p0002.webp",
+            "OEBPS/images/p0003.gif",
+        ] {
             assert!(names.contains(&want), "{want}: {names:?}");
         }
-        assert!(!names.iter().any(|n| n.contains("cover")), "第一页不另复制成封面页: {names:?}");
-        let opf = String::from_utf8_lossy(&entries.iter().find(|e| e.name.ends_with(".opf")).unwrap().data).into_owned();
-        assert!(opf.contains(r#"href="images/p0002.webp" media-type="image/webp""#), "{opf}");
-        assert_eq!(opf.matches("<itemref").count(), 3, "spine 里正好三页: {opf}");
+        assert!(
+            !names.iter().any(|n| n.contains("cover")),
+            "第一页不另复制成封面页: {names:?}"
+        );
+        let opf = String::from_utf8_lossy(
+            &entries
+                .iter()
+                .find(|e| e.name.ends_with(".opf"))
+                .unwrap()
+                .data,
+        )
+        .into_owned();
+        assert!(
+            opf.contains(r#"href="images/p0002.webp" media-type="image/webp""#),
+            "{opf}"
+        );
+        assert_eq!(
+            opf.matches("<itemref").count(),
+            3,
+            "spine 里正好三页: {opf}"
+        );
         // 优化器补封面声明时认第一页的图
         let mut entries = entries;
         assert!(crate::wash::ensure_cover_declared(&mut entries));
-        let opf = String::from_utf8_lossy(&entries.iter().find(|e| e.name.ends_with(".opf")).unwrap().data).into_owned();
-        assert!(opf.lines().any(|l| l.contains(r#"href="images/p0001.jpg""#) && l.contains(r#"properties="cover-image""#)), "{opf}");
+        let opf = String::from_utf8_lossy(
+            &entries
+                .iter()
+                .find(|e| e.name.ends_with(".opf"))
+                .unwrap()
+                .data,
+        )
+        .into_owned();
+        assert!(
+            opf.lines().any(|l| l.contains(r#"href="images/p0001.jpg""#)
+                && l.contains(r#"properties="cover-image""#)),
+            "{opf}"
+        );
     }
 
     /// 某一页打不开（7-Zip 打包时选了 bzip2/LZMA 之类本 crate 不支持的压缩方式）：以前收页时逐个打开条目，打不开的被当成
@@ -255,11 +355,22 @@ mod tests {
         let page = jpeg(40, 60);
         let mut buf = zip_of(&[("p1.jpg", &page), ("p2.jpg", &page), ("p3.jpg", &page)]);
         // 第二个条目的压缩方式改成 bzip2（12）：本地文件头偏移 8、中央目录项偏移 10
-        let nth = |buf: &[u8], sig: &[u8; 4], k: usize| buf.windows(4).enumerate().filter(|(_, w)| w == sig).nth(k).unwrap().0;
+        let nth = |buf: &[u8], sig: &[u8; 4], k: usize| {
+            buf.windows(4)
+                .enumerate()
+                .filter(|(_, w)| w == sig)
+                .nth(k)
+                .unwrap()
+                .0
+        };
         let (local, central) = (nth(&buf, b"PK\x03\x04", 1), nth(&buf, b"PK\x01\x02", 1));
         buf[local + 8..local + 10].copy_from_slice(&12u16.to_le_bytes());
         buf[central + 10..central + 12].copy_from_slice(&12u16.to_le_bytes());
-        assert_eq!(check_cbz(std::io::Cursor::new(&buf)).unwrap(), 3, "入库检查只看目录");
+        assert_eq!(
+            check_cbz(std::io::Cursor::new(&buf)).unwrap(),
+            3,
+            "入库检查只看目录"
+        );
         let err = cbz_to_epub(&buf, "坏页").unwrap_err();
         assert!(err.contains("p2.jpg"), "{err}");
     }
@@ -281,9 +392,24 @@ mod tests {
         let page = jpeg(40, 60);
         let buf = zip_of(&[("p1.jpg", &page), ("p2.jpg", &page), ("p3.jpg", &page)]);
         let n = page.len() as u64;
-        assert!(cbz_to_epub_into(std::io::Cursor::new(&buf), "刚好", 3 * n, std::io::Cursor::new(Vec::new())).is_ok());
-        let err = cbz_to_epub_into(std::io::Cursor::new(&buf), "超了", 3 * n - 1, std::io::Cursor::new(Vec::new())).unwrap_err();
-        assert!(err.contains("合计超过上限") && err.contains("p3.jpg"), "{err}");
+        assert!(cbz_to_epub_into(
+            std::io::Cursor::new(&buf),
+            "刚好",
+            3 * n,
+            std::io::Cursor::new(Vec::new())
+        )
+        .is_ok());
+        let err = cbz_to_epub_into(
+            std::io::Cursor::new(&buf),
+            "超了",
+            3 * n - 1,
+            std::io::Cursor::new(Vec::new()),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("合计超过上限") && err.contains("p3.jpg"),
+            "{err}"
+        );
     }
 
     /// 逐页流式写出的母版和以前"整本页面读进内存再 `assemble_master`"逐字节相同；写进文件的和返回字节的也相同。
@@ -291,7 +417,11 @@ mod tests {
     fn streaming_master_matches_in_memory_assembly() {
         use crate::epub::{Book, BookMeta, Chapter, Resource};
         let (p1, p2) = (jpeg(40, 60), jpeg(50, 70));
-        let buf = zip_of(&[("v/p2.jpg", &p2), ("v/bad.jpg", b"not an image"), ("v/p1.jpg", &p1)]);
+        let buf = zip_of(&[
+            ("v/p2.jpg", &p2),
+            ("v/bad.jpg", b"not an image"),
+            ("v/p1.jpg", &p1),
+        ]);
         let streamed = cbz_to_epub(&buf, "流式").unwrap();
         let pages = [&p1, &p2];
         let mut book = Book {
@@ -306,8 +436,22 @@ mod tests {
                 cover_media_type: String::new(),
                 subjects: vec![crate::comic_detect::COMIC_SUBJECT.to_string()],
             },
-            chapters: (1..=2).map(|n| Chapter { title: format!("第 {n} 页"), html_body: format!(r#"<div><img src="images/p{n:04}.jpg" alt=""/></div>"#), level: 1 }).collect(),
-            resources: pages.iter().enumerate().map(|(i, b)| Resource { path: format!("images/p{:04}.jpg", i + 1), media_type: "image/jpeg".into(), bytes: b.to_vec() }).collect(),
+            chapters: (1..=2)
+                .map(|n| Chapter {
+                    title: format!("第 {n} 页"),
+                    html_body: format!(r#"<div><img src="images/p{n:04}.jpg" alt=""/></div>"#),
+                    level: 1,
+                })
+                .collect(),
+            resources: pages
+                .iter()
+                .enumerate()
+                .map(|(i, b)| Resource {
+                    path: format!("images/p{:04}.jpg", i + 1),
+                    media_type: "image/jpeg".into(),
+                    bytes: b.to_vec(),
+                })
+                .collect(),
             nav: Vec::new(),
         };
         assert_eq!(streamed, crate::epub::assemble_master(&mut book).unwrap());

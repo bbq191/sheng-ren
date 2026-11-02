@@ -86,6 +86,9 @@ impl StyleProps {
 
     /// 写进样式实体的字段：属性按编号升序，最后是样式名（同样本）。
     pub(super) fn into_fields(self, name: u32) -> Vec<(u32, Value)> {
-        self.0.into_iter().chain([(STYLE_NAME, Value::Symbol(name))]).collect()
+        self.0
+            .into_iter()
+            .chain([(STYLE_NAME, Value::Symbol(name))])
+            .collect()
     }
 }

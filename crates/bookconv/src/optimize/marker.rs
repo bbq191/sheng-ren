@@ -5,7 +5,11 @@ use super::*;
 /// [`OPTIMIZE_VERSION`]/[`COMIC_VERSION`]，规则版本一加，所有产物的字节都跟着变，掌阅、Move 上的书哪怕内容一个字没变也要全部重传
 /// （Move 进度回到开头）。版本号照旧进书库的指纹（决定要不要重新生成），重新生成出逐字节相同的书就不再传。
 pub fn marker_value(full: bool) -> &'static str {
-    if full { "full" } else { "core" }
+    if full {
+        "full"
+    } else {
+        "core"
+    }
 }
 
 /// 书里优化标记（[`OPTIMIZE_MARKER`]）的内容（去掉首尾空白，见 [`marker_value`]；2026-10-09 以前的产物里是优化器版本号）。

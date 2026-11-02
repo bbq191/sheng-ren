@@ -11,12 +11,22 @@ use super::*;
 use crate::cascade::MediaEnv;
 use crate::kindle_model::Chapter;
 
-pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&MediaEnv>, inline_valign: bool) {
+pub(super) fn apply(
+    entries: &mut [Entry],
+    rep: &mut WashReport,
+    media: Option<&MediaEnv>,
+    inline_valign: bool,
+) {
     if inline_valign {
         return;
     }
     // 先粗筛：书里没写 vertical-align 的不用层叠
-    if !entries.iter().any(|e| (is_css_name(&e.name) || is_chapter_entry(e)) && String::from_utf8_lossy(&e.data).to_ascii_lowercase().contains("vertical-align")) {
+    if !entries.iter().any(|e| {
+        (is_css_name(&e.name) || is_chapter_entry(e))
+            && String::from_utf8_lossy(&e.data)
+                .to_ascii_lowercase()
+                .contains("vertical-align")
+    }) {
         return;
     }
     let (chapters, fixed) = super::scan_chapters(entries, media, |e, css| wrap(e, media, css));
@@ -28,18 +38,35 @@ pub(super) fn apply(entries: &mut [Entry], rep: &mut WashReport, media: Option<&
     }
 }
 
-fn wrap(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>) -> Option<(Vec<u8>, usize)> {
+fn wrap(
+    e: &Entry,
+    media: Option<&MediaEnv>,
+    css: &HashMap<&str, std::sync::Arc<crate::cascade::Rules>>,
+) -> Option<(Vec<u8>, usize)> {
     let text = std::str::from_utf8(&e.data).ok()?;
     let ch = Chapter::parse(&e.name, text, media, css).filter(|c| c.matches_tags)?;
     let (bs, be) = html::body_range(text)?;
-    let starts: Vec<html::Tag> = html::tags_in(text, bs, be).filter(|t| t.is_start()).collect();
+    let starts: Vec<html::Tag> = html::tags_in(text, bs, be)
+        .filter(|t| t.is_start())
+        .collect();
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for (i, el) in ch.els.iter().enumerate() {
         let name = ch.el(i).value().name().to_ascii_lowercase();
-        if el.is_block || el.hidden || matches!(name.as_str(), "img" | "svg" | "image" | "sup" | "sub" | "br") {
+        if el.is_block
+            || el.hidden
+            || matches!(
+                name.as_str(),
+                "img" | "svg" | "image" | "sup" | "sub" | "br"
+            )
+        {
             continue;
         }
-        let tag = match el.decls.get("vertical-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        let tag = match el
+            .decls
+            .get("vertical-align")
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref()
+        {
             Some("super" | "top" | "text-top") => "sup",
             Some("sub") => "sub",
             _ => continue,
@@ -53,12 +80,18 @@ fn wrap(e: &Entry, media: Option<&MediaEnv>, css: &HashMap<&str, std::sync::Arc<
         if t.end >= 2 && text[..t.end].ends_with("/>") {
             continue;
         }
-        let Some(close) = html::find_matching_close(text, t.end, &name) else { continue };
+        let Some(close) = html::find_matching_close(text, t.end, &name) else {
+            continue;
+        };
         if text[t.end..close.start].trim().is_empty() {
             continue;
         }
         // 元素自己写了字号的，包的这层不再按标签缺省缩小（掌阅上同 `<sup class="…">`：作者的字号盖过标签缺省）
-        let open = if el.decls.contains_key("font-size") { format!(r#"<{tag} style="font-size:100%">"#) } else { format!("<{tag}>") };
+        let open = if el.decls.contains_key("font-size") {
+            format!(r#"<{tag} style="font-size:100%">"#)
+        } else {
+            format!("<{tag}>")
+        };
         edits.push((t.end, t.end, open));
         edits.push((close.start, close.start, format!("</{tag}>")));
     }

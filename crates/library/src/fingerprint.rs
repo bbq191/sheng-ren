@@ -23,11 +23,21 @@ pub(crate) fn device_sig(device: &Profile, area: Screen, comic: bool) -> DeviceS
     let notes = notes_seg(device);
     // 文字书、漫画分开算（2026-10-08）：只影响另一路的版本号、profile 字段变了，这一路不过期
     let (version, area_seg) = if comic {
-        (format!("c{}", bookconv::optimize::COMIC_VERSION), comic_seg(device, area))
+        (
+            format!("c{}", bookconv::optimize::COMIC_VERSION),
+            comic_seg(device, area),
+        )
     } else {
-        (bookconv::optimize::OPTIMIZE_VERSION.to_string(), text_seg(device, area))
+        (
+            bookconv::optimize::OPTIMIZE_VERSION.to_string(),
+            text_seg(device, area),
+        )
     };
-    DeviceSig { version, area_seg, notes }
+    DeviceSig {
+        version,
+        area_seg,
+        notes,
+    }
 }
 
 /// 注释呈现方式（profile 的 notes：弹窗/跳转）；图标注释号换数字（`note_icons = "number"`）带 `#`，保留回链（`note_backlinks`，缺省保留）带 `<`。
@@ -68,7 +78,19 @@ fn shared_seg(device: &Profile) -> String {
 /// 杂点挡住（`S`，`comic_trim_specks`）、裁页码（`P`，`comic_page_numbers`）、小页不放大（`N`，`comic_upscale = false`）、黑底页补边补底色、不裁不放大（`K`，`comic_dark_bg`，2026-11-01）；不开的模式不出新字母，指纹和以前一样。
 fn comic_seg(device: &Profile, area: Screen) -> String {
     let c = device.comic_readable();
-    let mut seg = format!("{}x{}c{}x{}+{}{}", area.width, area.height, c.width, c.height, device.comic.margin, device.comic.reader_margins.map(|m| format!("m{m}")).unwrap_or_default());
+    let mut seg = format!(
+        "{}x{}c{}x{}+{}{}",
+        area.width,
+        area.height,
+        c.width,
+        c.height,
+        device.comic.margin,
+        device
+            .comic
+            .reader_margins
+            .map(|m| format!("m{m}"))
+            .unwrap_or_default()
+    );
     if let Some(d) = &device.comic.page_direction {
         seg.push_str(&format!("d{d}"));
     }
@@ -77,7 +99,13 @@ fn comic_seg(device: &Profile, area: Screen) -> String {
     }
     seg.push_str(&shared_seg(device));
     seg.push_str(&gamma_seg(device.comic.gamma));
-    for (on, c) in [(device.comic.autocontrast, 'A'), (device.comic.trim_specks, 'S'), (device.comic.page_numbers, 'P'), (!device.comic.upscale, 'N'), (device.comic.dark_bg, 'K')] {
+    for (on, c) in [
+        (device.comic.autocontrast, 'A'),
+        (device.comic.trim_specks, 'S'),
+        (device.comic.page_numbers, 'P'),
+        (!device.comic.upscale, 'N'),
+        (device.comic.dark_bg, 'K'),
+    ] {
         if on {
             seg.push(c);
         }
@@ -88,7 +116,9 @@ fn comic_seg(device: &Profile, area: Screen) -> String {
 /// 中间调加深（profile `comic_gamma`、`image_gamma`，2026-10-16）：开着、又不是 1 时写 `G` + 伽马，放在这一路的最后（不加深的模式
 /// 不出新字母，指纹和以前一样）。
 fn gamma_seg(gamma: Option<f64>) -> String {
-    gamma.filter(|&g| g != 1.0).map_or_else(String::new, |g| format!("G{g}"))
+    gamma
+        .filter(|&g| g != 1.0)
+        .map_or_else(String::new, |g| format!("G{g}"))
 }
 
 /// 文字书：EPUB 阅读范围 + 只管文字书的字段：带图注的竖长图写宽度（`k`）、正文图片透明处合成白底（`a`，`image_alpha = false`）、
@@ -97,7 +127,13 @@ fn gamma_seg(gamma: Option<f64>) -> String {
 fn text_seg(device: &Profile, area: Screen) -> String {
     let repair = device.text_repair_only;
     let mut seg = format!("{}x{}{}", area.width, area.height, shared_seg(device));
-    for (on, c) in [(device.caption_fit, 'k'), (!device.image_alpha, 'a'), (repair, 't'), (repair && device.repair_note_links, 'n'), (repair && device.kindle_rules, 'u')] {
+    for (on, c) in [
+        (device.caption_fit, 'k'),
+        (!device.image_alpha, 'a'),
+        (repair, 't'),
+        (repair && device.repair_note_links, 'n'),
+        (repair && device.kindle_rules, 'u'),
+    ] {
         if on {
             seg.push(c);
         }
@@ -135,7 +171,12 @@ fn kindle_rules_seg(device: &Profile, seg: &mut String) {
     }
     if device.image_sizing != ImageSizing::Css {
         let k = profile::reference();
-        seg.push_str(&format!("i{:?}{}x{}", device.image_sizing, k.map_or(0, |k| k.readable(Format::Kfx).width), k.and_then(|k| k.font_px).unwrap_or(0)));
+        seg.push_str(&format!(
+            "i{:?}{}x{}",
+            device.image_sizing,
+            k.map_or(0, |k| k.readable(Format::Kfx).width),
+            k.and_then(|k| k.font_px).unwrap_or(0)
+        ));
     }
     let sig = bookconv::reader_model::ReaderModel::for_profile(device).signature();
     if !sig.is_empty() || device.em_px.is_some() {
@@ -144,9 +185,15 @@ fn kindle_rules_seg(device: &Profile, seg: &mut String) {
         if let Some(c) = device.content_px.filter(|_| device.css.horizontal_scale) {
             em.push_str(&format!("c{c}"));
         }
-        seg.push_str(&format!("m{:016x}", bookconv::util::fnv64(format!("{sig}{em}").as_bytes())));
+        seg.push_str(&format!(
+            "m{:016x}",
+            bookconv::util::fnv64(format!("{sig}{em}").as_bytes())
+        ));
     }
-    seg.push_str(&format!("@{}x{}", device.screen.width, device.screen.height));
+    seg.push_str(&format!(
+        "@{}x{}",
+        device.screen.width, device.screen.height
+    ));
 }
 
 /// 2026-10-08 以前的写法（文字书、漫画不分，一个版本号、profile 的字段全带上）里设备那一段。生成记录里存的是它的，说明规则没变、
@@ -155,7 +202,12 @@ pub(crate) fn legacy_device_seg(device: &Profile, area: Screen) -> String {
     let c = device.comic_readable();
     let mut seg = match (c != area, device.comic.reader_margins) {
         (false, None) => String::new(),
-        (_, m) => format!("c{}x{}{}", c.width, c.height, m.map(|m| format!("m{m}")).unwrap_or_default()),
+        (_, m) => format!(
+            "c{}x{}{}",
+            c.width,
+            c.height,
+            m.map(|m| format!("m{m}")).unwrap_or_default()
+        ),
     };
     if let Some(d) = &device.comic.page_direction {
         seg.push_str(&format!("d{d}"));

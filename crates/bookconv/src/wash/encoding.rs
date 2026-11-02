@@ -27,8 +27,12 @@ fn declared(data: &[u8]) -> Option<&'static encoding_rs::Encoding> {
 fn declare_utf8(text: &str) -> String {
     static XML: OnceLock<Regex> = OnceLock::new();
     static META: OnceLock<Regex> = OnceLock::new();
-    let xml = XML.get_or_init(|| Regex::new(r#"(?i)(<\?xml[^>]*?\bencoding\s*=\s*["'])[A-Za-z0-9._:-]+"#).unwrap());
-    let meta = META.get_or_init(|| Regex::new(r#"(?i)(<meta\b[^>]*?\bcharset\s*=\s*["']?)[A-Za-z0-9._:-]+"#).unwrap());
+    let xml = XML.get_or_init(|| {
+        Regex::new(r#"(?i)(<\?xml[^>]*?\bencoding\s*=\s*["'])[A-Za-z0-9._:-]+"#).unwrap()
+    });
+    let meta = META.get_or_init(|| {
+        Regex::new(r#"(?i)(<meta\b[^>]*?\bcharset\s*=\s*["']?)[A-Za-z0-9._:-]+"#).unwrap()
+    });
     let t = xml.replace(text, "${1}UTF-8");
     meta.replace(&t, "${1}UTF-8").into_owned()
 }
@@ -77,28 +81,61 @@ mod tests {
     #[test]
     fn gbk_big5_utf16_become_utf8_with_declaration_updated() {
         let (gbk, _, _) = encoding_rs::GBK.encode(r#"<?xml version="1.0" encoding="gbk"?><html><head><meta charset="gbk"/></head><body><p>中文正文</p></body></html>"#);
-        assert_eq!(to_utf8(&gbk).as_deref(), Some(r#"<?xml version="1.0" encoding="UTF-8"?><html><head><meta charset="UTF-8"/></head><body><p>中文正文</p></body></html>"#));
+        assert_eq!(
+            to_utf8(&gbk).as_deref(),
+            Some(
+                r#"<?xml version="1.0" encoding="UTF-8"?><html><head><meta charset="UTF-8"/></head><body><p>中文正文</p></body></html>"#
+            )
+        );
         let (big5, _, _) = encoding_rs::BIG5.encode(r#"<html><head><meta http-equiv="Content-Type" content="text/html; charset=big5"/></head><body>繁體</body></html>"#);
-        assert_eq!(to_utf8(&big5).as_deref(), Some(r#"<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/></head><body>繁體</body></html>"#));
+        assert_eq!(
+            to_utf8(&big5).as_deref(),
+            Some(
+                r#"<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/></head><body>繁體</body></html>"#
+            )
+        );
         let mut u16 = vec![0xFF, 0xFE];
-        for c in "<?xml version=\"1.0\" encoding=\"UTF-16\"?><package>书</package>".encode_utf16() {
+        for c in "<?xml version=\"1.0\" encoding=\"UTF-16\"?><package>书</package>".encode_utf16()
+        {
             u16.extend(c.to_le_bytes());
         }
-        assert_eq!(to_utf8(&u16).as_deref(), Some("<?xml version=\"1.0\" encoding=\"UTF-8\"?><package>书</package>"));
+        assert_eq!(
+            to_utf8(&u16).as_deref(),
+            Some("<?xml version=\"1.0\" encoding=\"UTF-8\"?><package>书</package>")
+        );
     }
 
     #[test]
     fn utf8_content_declared_gbk_gets_declaration_fixed() {
         let t = r#"<?xml version="1.0" encoding="gb2312"?><html><body><p>中文</p></body></html>"#;
-        assert_eq!(to_utf8(t.as_bytes()).as_deref(), Some(r#"<?xml version="1.0" encoding="UTF-8"?><html><body><p>中文</p></body></html>"#));
-        assert_eq!(to_utf8(br#"<?xml version="1.0" encoding="gb2312"?><p>abc</p>"#), None, "全 ASCII 不动");
+        assert_eq!(
+            to_utf8(t.as_bytes()).as_deref(),
+            Some(r#"<?xml version="1.0" encoding="UTF-8"?><html><body><p>中文</p></body></html>"#)
+        );
+        assert_eq!(
+            to_utf8(br#"<?xml version="1.0" encoding="gb2312"?><p>abc</p>"#),
+            None,
+            "全 ASCII 不动"
+        );
     }
 
     #[test]
     fn utf8_unknown_or_malformed_left_alone() {
         assert_eq!(to_utf8("<p>已经是 UTF-8</p>".as_bytes()), None);
-        assert_eq!(to_utf8(b"<p>\xff\xfe\xfd no declaration</p>"), None, "认不出编码不猜");
-        assert_eq!(to_utf8(b"<?xml version=\"1.0\" encoding=\"utf-8\"?><p>\xff</p>"), None, "声明 UTF-8 却不合法：不猜");
-        assert_eq!(to_utf8(b"<?xml version=\"1.0\" encoding=\"shift_jis\"?><p>\x82</p>"), None, "按声明的编码解出错：不动");
+        assert_eq!(
+            to_utf8(b"<p>\xff\xfe\xfd no declaration</p>"),
+            None,
+            "认不出编码不猜"
+        );
+        assert_eq!(
+            to_utf8(b"<?xml version=\"1.0\" encoding=\"utf-8\"?><p>\xff</p>"),
+            None,
+            "声明 UTF-8 却不合法：不猜"
+        );
+        assert_eq!(
+            to_utf8(b"<?xml version=\"1.0\" encoding=\"shift_jis\"?><p>\x82</p>"),
+            None,
+            "按声明的编码解出错：不动"
+        );
     }
 }

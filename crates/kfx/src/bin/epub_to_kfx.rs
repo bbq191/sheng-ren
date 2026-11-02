@@ -24,7 +24,10 @@ fn main() {
         if a == "--styles" {
             styles = true;
         } else if let Some(n) = a.strip_prefix("--id=") {
-            opts.fixed_id = Some(n.parse().unwrap_or_else(|_| die(cli::USAGE, "--id 要给数字")));
+            opts.fixed_id = Some(
+                n.parse()
+                    .unwrap_or_else(|_| die(cli::USAGE, "--id 要给数字")),
+            );
         } else if let Some(d) = a.strip_prefix("--device=") {
             device = d.to_string();
         } else if a.starts_with("--") {
@@ -33,10 +36,13 @@ fn main() {
             args.push(a);
         }
     }
-    let p = profile::device_from_args(&[format!("--device={device}")]).unwrap_or_else(|e| die(cli::USAGE, e));
+    let p = profile::device_from_args(&[format!("--device={device}")])
+        .unwrap_or_else(|e| die(cli::USAGE, e));
     opts.media = Some(kfx::css::MediaEnv::for_profile(p));
     if styles {
-        let [input] = args.as_slice() else { die(cli::USAGE, USAGE) };
+        let [input] = args.as_slice() else {
+            die(cli::USAGE, USAGE)
+        };
         // 盒子长度的 px 是屏幕像素的阅读器（掌阅、Move）：按这台的 1em 像素折，同阅读器排出来的（unify.py 比竖直间距用）
         if !p.css.px_margins {
             kfx::css::set_device_px_em(p.em_px);
@@ -44,15 +50,20 @@ fn main() {
         // 行距按这台排的算：Move 的 `<p>` 不认外链行距，掌阅只认长度（正文是阅读器的行距，别的块按它换算）
         kfx::css::set_device_line(kfx::css::DeviceLine {
             except_p: p.css.line_height_except_p,
-            length_em: (!p.css.line_height_numbers).then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
+            length_em: (!p.css.line_height_numbers)
+                .then(|| f64::from(p.line_px.unwrap_or(0)) / p.em_px.unwrap_or(1.0)),
             em_root: p.css.em_root,
         });
-        let s = kfx::epub_text_styles(cli::open_or_die(input), &opts).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
+        let s = kfx::epub_text_styles(cli::open_or_die(input), &opts)
+            .unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
         print!("{s}");
         return;
     }
-    let [input, output] = args.as_slice() else { die(cli::USAGE, USAGE) };
-    let (kfx, warnings) = kfx::epub_to_kfx_from(cli::open_or_die(input), &opts).unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
+    let [input, output] = args.as_slice() else {
+        die(cli::USAGE, USAGE)
+    };
+    let (kfx, warnings) = kfx::epub_to_kfx_from(cli::open_or_die(input), &opts)
+        .unwrap_or_else(|e| die(cli::FAILED, format!("{input}：{e}")));
     for w in &warnings {
         eprintln!("警告：{w}");
     }

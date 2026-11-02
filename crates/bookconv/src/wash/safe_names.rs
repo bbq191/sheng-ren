@@ -14,12 +14,21 @@ fn is_bad(c: char) -> bool {
 
 /// 改名后的文件名：坏字符换 `_`；和已有的撞了就在扩展名前加 `-2`、`-3`……
 fn safe_file_name(file: &str, dir: &str, taken: &HashSet<String>) -> String {
-    let clean: String = file.chars().map(|c| if is_bad(c) { '_' } else { c }).collect();
+    let clean: String = file
+        .chars()
+        .map(|c| if is_bad(c) { '_' } else { c })
+        .collect();
     let (stem, ext) = match clean.rfind('.') {
         Some(i) if i > 0 => (&clean[..i], &clean[i..]),
         _ => (clean.as_str(), ""),
     };
-    let join = |f: &str| if dir.is_empty() { f.to_string() } else { format!("{dir}/{f}") };
+    let join = |f: &str| {
+        if dir.is_empty() {
+            f.to_string()
+        } else {
+            format!("{dir}/{f}")
+        }
+    };
     let mut n = 1;
     let mut cand = clean.clone();
     while taken.contains(&join(&cand)) {
@@ -32,7 +41,12 @@ fn safe_file_name(file: &str, dir: &str, taken: &HashSet<String>) -> String {
 /// CSS（样式表、`<style>`、`style` 属性）里的 `url(…)`：书内文件改了名的换成新路径（相对 `base_dir`）。
 /// 样式表里一律写成 `url("…")`；`in_html` 时照原来的引号写（原来没引号就不加：新路径百分号编码过，不带空格、括号、引号）——
 /// 2026-10-06 审计：此前 html 里也写成双引号，`style="background:url('…')"` 改成 `style="background:url("…")"`，属性被截断、XML 不合法。
-fn rewrite_css_urls(text: &str, base_dir: &str, map: &HashMap<String, String>, in_html: bool) -> Option<String> {
+fn rewrite_css_urls(
+    text: &str,
+    base_dir: &str,
+    map: &HashMap<String, String>,
+    in_html: bool,
+) -> Option<String> {
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     for u in html::css_urls(text) {
         if dead_refs::is_non_file_ref(u.value) {
@@ -47,7 +61,11 @@ fn rewrite_css_urls(text: &str, base_dir: &str, map: &HashMap<String, String>, i
                 Some(_) => "'",
                 None => "",
             };
-            edits.push((u.start, u.end, format!("url({q}{}{q})", crate::epubzip::href_to(base_dir, new, ""))));
+            edits.push((
+                u.start,
+                u.end,
+                format!("url({q}{}{q})", crate::epubzip::href_to(base_dir, new, "")),
+            ));
         }
     }
     (!edits.is_empty()).then(|| html::apply_edits(text, edits))
@@ -55,7 +73,11 @@ fn rewrite_css_urls(text: &str, base_dir: &str, map: &HashMap<String, String>, i
 
 /// 改名，并改写所有引用：OPF 清单的 `href`、全书 `href`/`src`/`xlink:href`（[`rewrite_book_links`]）、CSS 的 `url()`。
 /// `to_png`：要转成 PNG 的 WebP（原书条目名），扩展名一并改成 `.png`、manifest 的 `media-type` 改成 `image/png`。
-pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport, to_png: Option<&HashSet<String>>) {
+pub(super) fn rename_unsafe_entries(
+    entries: &mut [Entry],
+    rep: &mut WashReport,
+    to_png: Option<&HashSet<String>>,
+) {
     let mut taken: HashSet<String> = entries.iter().map(|e| e.name.clone()).collect();
     let mut map: HashMap<String, String> = HashMap::new();
     let mut png: HashSet<String> = HashSet::new();
@@ -71,9 +93,20 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport,
         if !(convert || file.chars().any(is_bad)) || dir.chars().any(is_bad) {
             continue;
         }
-        let file = if convert { format!("{}.png", file.rsplit_once('.').map_or(file, |(stem, _)| stem)) } else { file.to_string() };
+        let file = if convert {
+            format!(
+                "{}.png",
+                file.rsplit_once('.').map_or(file, |(stem, _)| stem)
+            )
+        } else {
+            file.to_string()
+        };
         let new_file = safe_file_name(&file, dir, &taken);
-        let new = if dir.is_empty() { new_file } else { format!("{dir}/{new_file}") };
+        let new = if dir.is_empty() {
+            new_file
+        } else {
+            format!("{dir}/{new_file}")
+        };
         taken.insert(new.clone());
         if convert {
             png.insert(new.clone());
@@ -98,7 +131,9 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport,
         if !(is_opf || l.ends_with(".ncx") || is_html_entry(&e.name, &e.data)) {
             continue;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
         let name = e.name.as_str();
         let new = html::edit_attrs(text, &["href", "src", "xlink:href"], |t, a| {
             if is_opf && opf::is_local(t.name, "item") {
@@ -106,7 +141,11 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport,
             }
             let (target, _) = crate::epubzip::resolve_link(name, a.value);
             match map.get(&target) {
-                Some(new) => Edit::Set(crate::epubzip::href_to(dir_of(name), new, html::split_href(a.value).1.unwrap_or(""))),
+                Some(new) => Edit::Set(crate::epubzip::href_to(
+                    dir_of(name),
+                    new,
+                    html::split_href(a.value).1.unwrap_or(""),
+                )),
                 None => Edit::Keep,
             }
         });
@@ -121,8 +160,13 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport,
             .iter()
             .filter_map(|it| {
                 map.get(&it.path(&opf_dir)).map(|new| {
-                    let tag = html::set_attr(it.tag, "href", &crate::epubzip::href_to(&opf_dir, new, ""));
-                    let tag = if png.contains(new) { html::set_attr(&tag, "media-type", "image/png") } else { tag };
+                    let tag =
+                        html::set_attr(it.tag, "href", &crate::epubzip::href_to(&opf_dir, new, ""));
+                    let tag = if png.contains(new) {
+                        html::set_attr(&tag, "media-type", "image/png")
+                    } else {
+                        tag
+                    };
                     (it.pos, it.pos + it.tag.len(), tag)
                 })
             })
@@ -136,7 +180,9 @@ pub(super) fn rename_unsafe_entries(entries: &mut [Entry], rep: &mut WashReport,
         if !(is_css || is_html_entry(&e.name, &e.data)) {
             continue;
         }
-        let Ok(text) = std::str::from_utf8(&e.data) else { continue };
+        let Ok(text) = std::str::from_utf8(&e.data) else {
+            continue;
+        };
         if let Some(new) = rewrite_css_urls(text, dir_of(&e.name), &map, !is_css) {
             e.data = new.into_bytes();
         }
@@ -151,15 +197,24 @@ mod tests {
     use super::*;
 
     fn e(name: &str, data: &str) -> Entry {
-        Entry { name: name.into(), data: data.as_bytes().to_vec() }
+        Entry {
+            name: name.into(),
+            data: data.as_bytes().to_vec(),
+        }
     }
 
     /// 要转 PNG 的 WebP：扩展名改 `.png`（和已有的撞了加 `-2`）、manifest 的 `media-type` 改成 `image/png`，引用一起改；不在名单里的不动。
     #[test]
     fn webp_to_png_renamed_with_media_type() {
         let mut v = vec![
-            e("OEBPS/content.opf", r#"<package><manifest><item id="a" href="i/a.webp" media-type="image/webp"/><item id="p" href="i/a.png" media-type="image/png"/><item id="m" href="i/m.webp" media-type="image/webp"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#),
-            e("OEBPS/c.xhtml", r#"<html><body><img src="i/a.webp"/><img src="i/a.png"/><img src="i/m.webp"/><p style="background:url('i/a.webp')"></p></body></html>"#),
+            e(
+                "OEBPS/content.opf",
+                r#"<package><manifest><item id="a" href="i/a.webp" media-type="image/webp"/><item id="p" href="i/a.png" media-type="image/png"/><item id="m" href="i/m.webp" media-type="image/webp"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#,
+            ),
+            e(
+                "OEBPS/c.xhtml",
+                r#"<html><body><img src="i/a.webp"/><img src="i/a.png"/><img src="i/m.webp"/><p style="background:url('i/a.webp')"></p></body></html>"#,
+            ),
             e("OEBPS/i/a.webp", ""),
             e("OEBPS/i/a.png", ""),
             e("OEBPS/i/m.webp", ""),
@@ -167,11 +222,22 @@ mod tests {
         let mut rep = WashReport::default();
         let set: HashSet<String> = ["OEBPS/i/a.webp".to_string()].into();
         rename_unsafe_entries(&mut v, &mut rep, Some(&set));
-        assert_eq!(rep.renamed, [("OEBPS/i/a.webp".to_string(), "OEBPS/i/a-2.png".to_string())]);
+        assert_eq!(
+            rep.renamed,
+            [("OEBPS/i/a.webp".to_string(), "OEBPS/i/a-2.png".to_string())]
+        );
         assert_eq!(rep.webp_to_png, 1);
         let t = |i: usize| String::from_utf8(v[i].data.clone()).unwrap();
-        assert!(t(0).contains(r#"<item id="a" href="i/a-2.png" media-type="image/png"/>"#) && t(0).contains(r#"href="i/m.webp" media-type="image/webp""#), "{}", t(0));
-        assert_eq!(t(1), r#"<html><body><img src="i/a-2.png"/><img src="i/a.png"/><img src="i/m.webp"/><p style="background:url('i/a-2.png')"></p></body></html>"#);
+        assert!(
+            t(0).contains(r#"<item id="a" href="i/a-2.png" media-type="image/png"/>"#)
+                && t(0).contains(r#"href="i/m.webp" media-type="image/webp""#),
+            "{}",
+            t(0)
+        );
+        assert_eq!(
+            t(1),
+            r#"<html><body><img src="i/a-2.png"/><img src="i/a.png"/><img src="i/m.webp"/><p style="background:url('i/a-2.png')"></p></body></html>"#
+        );
     }
 
     /// 《春雪》：封面图名全是 `*` 和 `:`，OPF 里百分号编码；正文、CSS 里也引用它。
@@ -180,29 +246,80 @@ mod tests {
         let enc = "%2A%2A%3A%3A.jpg";
         let mut v = vec![
             e("mimetype", "application/epub+zip"),
-            e("OEBPS/content.opf", &format!(r#"<package><manifest><item id="f45" properties="cover-image" href="Images/{enc}" media-type="image/jpeg"/><item id="c" href="Text/c.xhtml" media-type="application/xhtml+xml"/><item id="s" href="Styles/s.css" media-type="text/css"/></manifest><spine><itemref idref="c"/></spine></package>"#)),
-            e("OEBPS/Text/c.xhtml", &format!(r#"<html><head><style>p{{background:url("../Images/{enc}")}}</style></head><body><img src="../Images/{enc}"/><div style="background:url('../Images/{enc}')"></div><p style="background-image:url(../Images/{enc})"></p></body></html>"#)),
-            e("OEBPS/Styles/s.css", &format!("body{{background-image:url(../Images/{enc})}}")),
-            e("OEBPS/nav.xhtml", r#"<html><body><nav><ol><li><a href="Text/**::x.xhtml#a">一</a></li><li><a href="http://e.com/a:b">外</a></li></ol></nav></body></html>"#),
-            e("OEBPS/Text/**::x.xhtml", "<html><body><p id='a'>x</p></body></html>"),
+            e(
+                "OEBPS/content.opf",
+                &format!(
+                    r#"<package><manifest><item id="f45" properties="cover-image" href="Images/{enc}" media-type="image/jpeg"/><item id="c" href="Text/c.xhtml" media-type="application/xhtml+xml"/><item id="s" href="Styles/s.css" media-type="text/css"/></manifest><spine><itemref idref="c"/></spine></package>"#
+                ),
+            ),
+            e(
+                "OEBPS/Text/c.xhtml",
+                &format!(
+                    r#"<html><head><style>p{{background:url("../Images/{enc}")}}</style></head><body><img src="../Images/{enc}"/><div style="background:url('../Images/{enc}')"></div><p style="background-image:url(../Images/{enc})"></p></body></html>"#
+                ),
+            ),
+            e(
+                "OEBPS/Styles/s.css",
+                &format!("body{{background-image:url(../Images/{enc})}}"),
+            ),
+            e(
+                "OEBPS/nav.xhtml",
+                r#"<html><body><nav><ol><li><a href="Text/**::x.xhtml#a">一</a></li><li><a href="http://e.com/a:b">外</a></li></ol></nav></body></html>"#,
+            ),
+            e(
+                "OEBPS/Text/**::x.xhtml",
+                "<html><body><p id='a'>x</p></body></html>",
+            ),
             e("OEBPS/Images/**::.jpg", "jpg"),
             e("OEBPS/Images/__--.jpg", "jpg"),
         ];
         let mut rep = WashReport::default();
         rename_unsafe_entries(&mut v, &mut rep, None);
-        assert_eq!(rep.renamed, [("OEBPS/Images/**::.jpg".to_string(), "OEBPS/Images/____.jpg".to_string()), ("OEBPS/Text/**::x.xhtml".to_string(), "OEBPS/Text/____x.xhtml".to_string())]);
+        assert_eq!(
+            rep.renamed,
+            [
+                (
+                    "OEBPS/Images/**::.jpg".to_string(),
+                    "OEBPS/Images/____.jpg".to_string()
+                ),
+                (
+                    "OEBPS/Text/**::x.xhtml".to_string(),
+                    "OEBPS/Text/____x.xhtml".to_string()
+                )
+            ]
+        );
         // 没编码、带 `:` 的书内链接也改；真的网址不动
-        let nav = String::from_utf8(v.iter().find(|x| x.name == "OEBPS/nav.xhtml").unwrap().data.clone()).unwrap();
-        assert!(nav.contains(r#"href="Text/____x.xhtml#a""#) && nav.contains(r#"href="http://e.com/a:b""#), "{nav}");
+        let nav = String::from_utf8(
+            v.iter()
+                .find(|x| x.name == "OEBPS/nav.xhtml")
+                .unwrap()
+                .data
+                .clone(),
+        )
+        .unwrap();
+        assert!(
+            nav.contains(r#"href="Text/____x.xhtml#a""#)
+                && nav.contains(r#"href="http://e.com/a:b""#),
+            "{nav}"
+        );
         assert!(v.iter().any(|x| x.name == "OEBPS/Images/____.jpg"));
-        let s = |n: &str| String::from_utf8(v.iter().find(|x| x.name == n).unwrap().data.clone()).unwrap();
-        assert!(s("OEBPS/content.opf").contains(r#"href="Images/____.jpg""#), "{}", s("OEBPS/content.opf"));
+        let s = |n: &str| {
+            String::from_utf8(v.iter().find(|x| x.name == n).unwrap().data.clone()).unwrap()
+        };
+        assert!(
+            s("OEBPS/content.opf").contains(r#"href="Images/____.jpg""#),
+            "{}",
+            s("OEBPS/content.opf")
+        );
         // html 里照原来的引号写：`style="…"` 属性里写成双引号会截断属性（此前的毛病）
         assert_eq!(
             s("OEBPS/Text/c.xhtml"),
             r#"<html><head><style>p{background:url("../Images/____.jpg")}</style></head><body><img src="../Images/____.jpg"/><div style="background:url('../Images/____.jpg')"></div><p style="background-image:url(../Images/____.jpg)"></p></body></html>"#
         );
-        assert_eq!(s("OEBPS/Styles/s.css"), r#"body{background-image:url("../Images/____.jpg")}"#);
+        assert_eq!(
+            s("OEBPS/Styles/s.css"),
+            r#"body{background-image:url("../Images/____.jpg")}"#
+        );
         // 正常的名字不动
         assert!(v.iter().any(|x| x.name == "OEBPS/Images/__--.jpg"));
     }

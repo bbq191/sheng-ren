@@ -51,8 +51,18 @@ pub(crate) fn cover_urls(net: &Net, w: &Work) -> Vec<String> {
         }
     };
     if !w.ol.is_empty() {
-        if let Ok(v) = net.json(&format!("https://openlibrary.org/works/{}.json", enc(&w.ol))) {
-            v["covers"].as_array().into_iter().flatten().filter_map(Value::as_i64).filter(|&c| c > 0).take(3).for_each(&mut add);
+        if let Ok(v) = net.json(&format!(
+            "https://openlibrary.org/works/{}.json",
+            enc(&w.ol)
+        )) {
+            v["covers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_i64)
+                .filter(|&c| c > 0)
+                .take(3)
+                .for_each(&mut add);
         }
     }
     let mut queries: Vec<String> = Vec::new();
@@ -68,13 +78,28 @@ pub(crate) fn cover_urls(net: &Net, w: &Work) -> Vec<String> {
         }
     }
     for q in queries {
-        if let Ok(v) = net.json(&format!("https://openlibrary.org/search.json?limit=5&fields=cover_i&{q}")) {
-            v["docs"].as_array().into_iter().flatten().filter_map(|d| d["cover_i"].as_i64()).take(3).for_each(&mut add);
+        if let Ok(v) = net.json(&format!(
+            "https://openlibrary.org/search.json?limit=5&fields=cover_i&{q}"
+        )) {
+            v["docs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|d| d["cover_i"].as_i64())
+                .take(3)
+                .for_each(&mut add);
         }
     }
-    let mut urls: Vec<String> = ids.into_iter().take(8).map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg?default=false")).collect();
+    let mut urls: Vec<String> = ids
+        .into_iter()
+        .take(8)
+        .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg?default=false"))
+        .collect();
     if !w.image.is_empty() {
-        urls.push(format!("{}?width=1000", w.image.replace("http://", "https://")));
+        urls.push(format!(
+            "{}?width=1000",
+            w.image.replace("http://", "https://")
+        ));
     }
     urls
 }
@@ -82,7 +107,11 @@ pub(crate) fn cover_urls(net: &Net, w: &Work) -> Vec<String> {
 /// 下载下来的是不是像样的封面：能解码、够大、竖版比例。
 pub(crate) fn plausible_cover(bytes: &[u8]) -> Option<&'static str> {
     let (ext, _) = bookconv::convert::common::image_ext_mime(bytes)?;
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    let (w, h) = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
     (h >= 300 && w >= 180 && (0.45..=1.05).contains(&(w as f32 / h as f32))).then_some(ext)
 }
 
@@ -93,13 +122,28 @@ pub(crate) fn epub_has_cover(epub: &Path) -> bool {
 
 impl Library {
     /// 找原作封面：Wikidata 作品 → Open Library / Commons。`work` 是已经找到的作品（没有就返回原因）。
-    pub(crate) fn cover_from_work(&self, net: &Net, meta: &Meta, work: Option<&Work>) -> Result<Result<CoverInfo, String>, String> {
-        let Some(work) = work else { return Ok(Err("豆瓣、QQ 阅读、Wikidata 里都找不到书名、作者对得上的书".into())) };
-        let name = [&work.en, &work.original, &work.ja].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_default();
+    pub(crate) fn cover_from_work(
+        &self,
+        net: &Net,
+        meta: &Meta,
+        work: Option<&Work>,
+    ) -> Result<Result<CoverInfo, String>, String> {
+        let Some(work) = work else {
+            return Ok(Err(
+                "豆瓣、QQ 阅读、Wikidata 里都找不到书名、作者对得上的书".into(),
+            ));
+        };
+        let name = [&work.en, &work.original, &work.ja]
+            .into_iter()
+            .find(|n| !n.is_empty())
+            .cloned()
+            .unwrap_or_default();
         let label = format!("{} {name}", work.qid);
         for url in cover_urls(net, work) {
             let Ok(bytes) = net.fetch(&url) else { continue };
-            let Some(ext) = plausible_cover(&bytes) else { continue };
+            let Some(ext) = plausible_cover(&bytes) else {
+                continue;
+            };
             return self.store_cover(meta, &bytes, ext, url, label).map(Ok);
         }
         Ok(Err(format!("找到了作品 {label}，但没有可用的封面图")))
@@ -107,9 +151,16 @@ impl Library {
 
     /// 生成封面（书名 + 作者头像）。
     pub(crate) fn generate_cover(&self, net: &Net, meta: &Meta) -> Result<CoverInfo, String> {
-        let author = meta.authors.first().map(|a| a.trim().to_string()).unwrap_or_default();
+        let author = meta
+            .authors
+            .first()
+            .map(|a| a.trim().to_string())
+            .unwrap_or_default();
         let portrait = crate::wikidata::author_portrait(net, &meta.authors)?;
-        let photo = portrait.as_ref().and_then(|(_, url)| net.fetch(url).ok()).filter(|b| image::load_from_memory(b).is_ok());
+        let photo = portrait
+            .as_ref()
+            .and_then(|(_, url)| net.fetch(url).ok())
+            .filter(|b| image::load_from_memory(b).is_ok());
         // 作者照片是因为网络出错才没拿到的：不生成（存下来就不会再找了），下次再试
         if let Some(e) = net.transient_error() {
             return Err(incomplete(&e));
@@ -119,17 +170,35 @@ impl Library {
         let bytes = crate::covergen::render(&font, &meta.title, &author, photo.as_deref(), seed)?;
         let (url, work) = match (&portrait, &photo) {
             (Some((who, url)), Some(_)) => (url.clone(), format!("生成（书名 + 作者头像 {who}）")),
-            _ => (String::new(), "生成（书名 + 作者名字标，没找到作者头像）".to_string()),
+            _ => (
+                String::new(),
+                "生成（书名 + 作者名字标，没找到作者头像）".to_string(),
+            ),
         };
         self.store_cover(meta, &bytes, "jpg", url, work)
     }
 
-    pub(crate) fn store_cover(&self, meta: &Meta, bytes: &[u8], ext: &str, source_url: String, work: String) -> Result<CoverInfo, String> {
-        let info = CoverInfo { file: format!("cover.{ext}"), sha256: sha256_hex(bytes), source_url, work };
+    pub(crate) fn store_cover(
+        &self,
+        meta: &Meta,
+        bytes: &[u8],
+        ext: &str,
+        source_url: String,
+        work: String,
+    ) -> Result<CoverInfo, String> {
+        let info = CoverInfo {
+            file: format!("cover.{ext}"),
+            sha256: sha256_hex(bytes),
+            source_url,
+            work,
+        };
         let dir = self.entry_dir(&meta.id);
         crate::fsutil::write_atomic_cleanable(&dir.join(&info.file), bytes)?;
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
-        let old = m.cover.replace(info.clone()).filter(|o| o.file != info.file);
+        let old = m
+            .cover
+            .replace(info.clone())
+            .filter(|o| o.file != info.file);
         self.save_meta(&m)?;
         // meta 存好了才删旧图：存失败时 meta 还指着旧图
         if let Some(old) = old {

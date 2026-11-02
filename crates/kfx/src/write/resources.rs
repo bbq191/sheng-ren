@@ -38,12 +38,22 @@ pub(super) struct ResourceStore {
 
 impl ResourceStore {
     pub(super) fn new(images: HashMap<String, (Vec<u8>, &'static str)>) -> ResourceStore {
-        ResourceStore { list: Vec::new(), by_path: HashMap::new(), missing: HashSet::new(), images }
+        ResourceStore {
+            list: Vec::new(),
+            by_path: HashMap::new(),
+            missing: HashSet::new(),
+            images,
+        }
     }
 
     /// 登记一张图片，返回资源编号；取不到（找不到、格式不支持）的往 `warnings` 记一条、返回 `None`。
     /// `use_` 是第一次用到它的地方：正文图片（`<img>`、整页图、封面）带透明的 PNG 合成白底，背景图原样（见 [`ImageUse`]）。
-    pub(super) fn register(&mut self, path: &str, use_: ImageUse, warnings: &mut Vec<String>) -> Option<usize> {
+    pub(super) fn register(
+        &mut self,
+        path: &str,
+        use_: ImageUse,
+        warnings: &mut Vec<String>,
+    ) -> Option<usize> {
         if let Some(&i) = self.by_path.get(path) {
             return Some(i);
         }
@@ -66,7 +76,10 @@ impl ResourceStore {
         // 字节搬进资源，不复制（大漫画几百 MB）；同一路径以后走上面的 `by_path`，不会再来取。
         let (mut bytes, _) = self.images.remove(path)?;
         if use_ == ImageUse::Content && format == FORMAT_PNG {
-            if let Some(flat) = bookconv::imgopt::flatten_transparent_png(&bytes, bookconv::imgopt::MAX_COMIC_DECODE_PIXELS) {
+            if let Some(flat) = bookconv::imgopt::flatten_transparent_png(
+                &bytes,
+                bookconv::imgopt::MAX_COMIC_DECODE_PIXELS,
+            ) {
                 bytes = flat;
             }
         }
@@ -76,7 +89,15 @@ impl ResourceStore {
             .and_then(|r| r.into_dimensions().ok())
             .unwrap_or((0, 0));
         let i = self.list.len();
-        self.list.push(Res { name: format!("img{i}"), location: format!("resource/img{i}"), format, mime, width, height, bytes });
+        self.list.push(Res {
+            name: format!("img{i}"),
+            location: format!("resource/img{i}"),
+            format,
+            mime,
+            width,
+            height,
+            bytes,
+        });
         // 图片字节的实体名另起（样本里是 `…-ad`，和 `$165` 的资源路径不同名；用 `resource/…` 当实体名时
         // Kindle 不显示图片，2026-10-05 真机）。
         self.by_path.insert(path.to_string(), i);
