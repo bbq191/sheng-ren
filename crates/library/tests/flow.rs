@@ -88,6 +88,22 @@ fn add_build_skip_remove() {
             .fresh,
         Some(false)
     );
+    // 开着挂载检查而挂载点只是普通目录（拔掉后留下的空挂载点，里面正好有同名文件）：算没接上，不读那个文件
+    let mut unplugged = common::open(&lib_dir);
+    unplugged.set_device_env(library::DeviceEnv {
+        mtp_base: common::dev_dir(&lib_dir),
+        mount_check: true,
+        usbms_base: common::dev_dir(&lib_dir).join("usbms"),
+    });
+    assert!(common::documents(&lib_dir, "ireader")
+        .join("风起.epub")
+        .is_file());
+    let outs = unplugged.outputs(&meta);
+    assert!(!outs.is_empty(), "设备上有记录的产物");
+    assert!(
+        outs.iter().all(|o| o.fresh.is_none()),
+        "设备没真挂上：既不是最新也不是过期"
+    );
     // 书库只存索引，不复制原件
     let files: Vec<String> = std::fs::read_dir(dir.path().join(format!("lib/masters/{}", meta.id)))
         .unwrap()

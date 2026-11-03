@@ -79,7 +79,7 @@ type Produced = (Vec<String>, Option<String>, Vec<String>);
 pub struct OutputStatus {
     pub device: String,
     pub path: PathBuf,
-    /// `Some(true)` 最新；`Some(false)` 过期（原件或处理规则变了，或上次生成没完成）；`None` 判断不了（模式 profile 已删、文件不在）。
+    /// `Some(true)` 最新；`Some(false)` 过期（原件或处理规则变了，或上次生成没完成）；`None` 判断不了（模式 profile 已删、文件不在、设备没接上）。
     pub fresh: Option<bool>,
     /// 生成时的体检清单（[`bookconv::audit::Finding::line`]）：这台上和 Kindle 不一样又没处理的（`✗`）、没验证过的（`?`）写法。
     pub audit: Vec<String>,
@@ -288,7 +288,7 @@ impl Library {
         v
     }
 
-    /// 生成记录里产物所在的所有目录（拿到锁时清理残留临时文件用）：电脑上的和接着的 MTP 设备上的（没挂上的读不到，跳过）。
+    /// 生成记录里产物所在的所有目录（拿到锁时清理残留临时文件用）：电脑上的和设备上的都列出，不看设备挂没挂上（没挂上的目录多半不在，清理时读不到就跳过）。
     pub(crate) fn output_dirs(&self) -> BTreeSet<PathBuf> {
         let mut dirs = BTreeSet::new();
         for (_, sp) in self.state_files() {
@@ -455,8 +455,13 @@ impl Library {
             let Some(entry) = self.records.states.get(&sp).books.get(&meta.id).cloned() else {
                 continue;
             };
-            // 相对路径是 2026-10-31 以前 Move 上的旧记录：不拿当前目录去查
-            let fresh = if !entry.path.is_absolute() || !entry.path.is_file() {
+            // 相对路径是 2026-10-31 以前 Move 上的旧记录：不拿当前目录去查。
+            // 设备没挂上（[`Devices::unplugged`]）的也不查：拔掉后留下的空挂载点里要是有同名文件，只看 `is_file()`
+            // 会把没接上的设备显示成最新或过期（agy 发现）
+            let fresh = if !entry.path.is_absolute()
+                || self.devices.unplugged(&entry.path, &entry.root)
+                || !entry.path.is_file()
+            {
                 None
             } else {
                 self.registry
