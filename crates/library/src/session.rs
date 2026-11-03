@@ -108,7 +108,9 @@ pub(crate) type Connection = Rc<Result<Target, String>>;
 /// 设备在哪找，和连上的设备。一轮里每台只连一次，每轮开头 [`Devices::refresh`] 清掉。
 pub(crate) struct Devices {
     /// 设备在哪找（见 [`DeviceEnv`]）。
-    env: DeviceEnv,
+    env: RefCell<DeviceEnv>,
+    /// `env` 是从环境变量读的（[`DeviceEnv::from_env`]）：每轮 [`Devices::refresh`] 重新读（`/run/media/$USER` 第一次插 USB 存储才建）。
+    auto: bool,
     /// 连过的设备：模式 id → 送到哪，或没接上的原因。
     targets: RefCell<HashMap<String, Connection>>,
 }
@@ -116,14 +118,24 @@ pub(crate) struct Devices {
 impl Devices {
     pub(crate) fn new(env: DeviceEnv) -> Devices {
         Devices {
-            env,
+            env: RefCell::new(env),
+            auto: false,
             targets: RefCell::default(),
+        }
+    }
+
+    /// 从环境变量读设备在哪找，每轮重新读。
+    pub(crate) fn from_env() -> Devices {
+        Devices {
+            auto: true,
+            ..Devices::new(DeviceEnv::from_env())
         }
     }
 
     /// 换设备在哪找：连过的都作废。
     pub(crate) fn set_env(&mut self, env: DeviceEnv) {
-        self.env = env;
+        self.env = RefCell::new(env);
+        self.auto = false;
         self.targets.borrow_mut().clear();
     }
 
@@ -132,9 +144,19 @@ impl Devices {
     /// 只看 `root.is_dir()` 不够：拔掉后 udisks、jmtpfs 留下的空挂载点里正好有同名目录时会被当成接上，删掉了记录、书却还留在机上（agy 发现）。
     pub(crate) fn unplugged(&self, path: &Path, root: &Path) -> bool {
         // 长的先比：关了挂载检查时 usbms_base 缺省在 mtp_base 下面（`<mtp_base>/usbms`），先比 mtp_base 会把 `usbms` 当成挂载点
-        let mut bases = [&self.env.mtp_base, &self.env.usbms_base];
+        let env = self.env.borrow();
+        let mut bases = vec![env.mtp_base.clone(), env.usbms_base.clone()];
+        // `/run/media/$USER` 和 `/media/$USER` 两处都认（两次运行之间缺省的 usbms_base 可能换了）：认不出是设备上的会当成电脑上的、
+        // 删不到就当删了，记录丢掉、书留在设备上
+        if env.mount_check {
+            for (a, b) in [("/run/media", "/media"), ("/media", "/run/media")] {
+                if let Ok(rest) = env.usbms_base.strip_prefix(a) {
+                    bases.push(Path::new(b).join(rest));
+                }
+            }
+        }
         bases.sort_by_key(|b| std::cmp::Reverse(b.as_os_str().len()));
-        for base in bases {
+        for base in &bases {
             let Ok(rest) = path.strip_prefix(base) else {
                 continue;
             };
@@ -142,7 +164,7 @@ impl Devices {
                 return true; // 就是挂载目录本身：不是设备上的文件，按没挂上处理，不删
             };
             let point = base.join(first);
-            if self.env.mount_check && !deliver::mounted(&point) {
+            if env.mount_check && !deliver::mounted(&point) {
                 return true;
             }
             return !root.is_dir();
@@ -151,8 +173,8 @@ impl Devices {
     }
 
     /// USB 大容量存储挂载点的上级目录（Kobo：产物旁边没有 Kindle 的 `.sdr`，换目录时不搬）。
-    pub(crate) fn usbms_base(&self) -> &Path {
-        &self.env.usbms_base
+    pub(crate) fn usbms_base(&self) -> PathBuf {
+        self.env.borrow().usbms_base.clone()
     }
 
     /// 这个模式的产物送到哪（一轮里只连一次）。
@@ -160,13 +182,16 @@ impl Devices {
         if let Some(t) = self.targets.borrow().get(&p.id) {
             return t.clone();
         }
-        let t = Rc::new(deliver::connect(&self.env, p));
+        let t = Rc::new(deliver::connect(&self.env.borrow(), p));
         self.targets.borrow_mut().insert(p.id.clone(), t.clone());
         t
     }
 
     /// 新一轮开始：连过的都作废，下次用到时重新看（MTP 挂载点每轮可能变）。
     pub(crate) fn refresh(&self) {
+        if self.auto {
+            *self.env.borrow_mut() = DeviceEnv::from_env();
+        }
         self.targets.borrow_mut().clear();
     }
 }

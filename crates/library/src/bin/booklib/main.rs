@@ -457,6 +457,19 @@ fn forget_reconnected(
     }
 }
 
+/// 这一轮传的途中断开了的设备（`dropped`）记成上一轮没接上：下一轮接着的话 [`forget_reconnected`] 忘掉它的失败、整轮重跑。
+fn mark_dropped(last_live: Option<&mut [bool]>, devices: &[&Profile], dropped: &[String]) {
+    if let Some(l) = last_live {
+        for (i, d) in devices.iter().enumerate() {
+            if dropped.contains(&d.id) {
+                if let Some(x) = l.get_mut(i) {
+                    *x = false;
+                }
+            }
+        }
+    }
+}
+
 /// 一轮生成的汇总一行（2026-09-29 反馈"看不出是否更新过"）。
 fn counts_summary(c: &BuildCounts) -> String {
     let same = if c.same > 0 {
@@ -1578,6 +1591,12 @@ impl SyncState {
                 ctx.report(r);
             }
         });
+        // 传的途中断开了的设备：当成这一轮没接上，下一轮接着的话重新传（[`forget_reconnected`]）
+        mark_dropped(
+            self.last_live.as_deref_mut(),
+            &plan.devices,
+            &counts.dropped,
+        );
         // --watch 时没有生成、挪动、失败就不出声
         if plan.watch.is_none() || counts.any() {
             ctx.report(Ok(counts_summary(&counts)));
@@ -1623,5 +1642,23 @@ mod tests {
         let mut f = memo();
         forget_reconnected(&mut f, &devices, Some(&[true, false]), &[true, false]);
         assert_eq!(left(&f), ["ireader", "kindle"], "Kindle 还没接上，留着");
+    }
+
+    /// 一轮里传的途中掉线、睡眠间隔里又插回：开头看还是接着，也要忘掉失败重传（以前 last_live 只看开头，永远不重试）。
+    #[test]
+    fn dropped_mid_round_is_retried() {
+        let devices = [profile::get("ireader").unwrap()];
+        let mut f: FailMemo = [(
+            ("书".to_string(), "ireader".to_string()),
+            ("指纹".to_string(), OriginalState::Present),
+        )]
+        .into_iter()
+        .collect();
+        let mut last = vec![true];
+        mark_dropped(Some(&mut last), &devices, &["ireader".to_string()]);
+        assert_eq!(last, [false]);
+        forget_reconnected(&mut f, &devices, Some(&last), &[true]);
+        assert!(f.is_empty(), "重新接上：失败忘掉");
+        assert_ne!(Some(&last), Some(&vec![true]), "live 变了：这一轮会跑");
     }
 }

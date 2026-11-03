@@ -191,17 +191,85 @@ pub(crate) fn put_file(
     keep_src: bool,
     compare: bool,
     direct: bool,
+    mount: Option<&Path>,
 ) -> Result<bool, String> {
+    // 挪到只差大小写的新名字（书名只改了大小写）：不分大小写的文件系统上 `dest` 就是 `src`，下面"先删 dest"会把书删掉。
+    // 先改成旁边的临时名字，再从那里放
+    if !keep_src && crate::generate::case_twin(src, dest) {
+        let staged = crate::fsutil::tmp_sibling(dest);
+        std::fs::rename(src, &staged).map_err(|e| format!("改名 {}: {e}", src.display()))?;
+        let r = put_file_retry(&staged, dest, false, compare, direct, mount);
+        if r.is_err() && staged.is_file() {
+            let _ = std::fs::rename(&staged, src); // 放回原名，记录还对得上
+        }
+        return r;
+    }
+    put_file_retry(src, dest, keep_src, compare, direct, mount)
+}
+
+fn put_file_retry(
+    src: &Path,
+    dest: &Path,
+    keep_src: bool,
+    compare: bool,
+    direct: bool,
+    mount: Option<&Path>,
+) -> Result<bool, String> {
+    // 每次写之前、写完都看挂载点还挂着：设备中途断开后挂载点只剩空目录（MTP 的在 tmpfs 上，用户能写），
+    // 重试时重建目录会把书写进内存、还记成传上了
+    let gone = || {
+        mount
+            .filter(|m| !mounted(m))
+            .map(|m| format!("设备断开了（{} 没挂着），没传", m.display()))
+    };
     let mut tries = 0;
     loop {
+        if let Some(e) = gone() {
+            return Err(e);
+        }
         match put_file_once(src, dest, keep_src, compare, direct) {
             Err((_, true))
                 if tries < 3 && dest.parent().is_some_and(|d| !d.is_dir()) && src.is_file() =>
             {
                 tries += 1
             }
-            r => return r.map_err(|(e, _)| e),
+            r => {
+                let r = r.map_err(|(e, _)| e)?;
+                return match gone() {
+                    Some(e) => Err(format!("{e}（写的途中断开）")),
+                    None => Ok(r),
+                };
+            }
         }
+    }
+}
+
+/// 不分大小写的文件系统上 `dest` 打开的可能是只差大小写的旧名字（书名只改了大小写、内容一样没重写）：目录里没有
+/// `dest` 的原名、有只差大小写的那个时，经临时名改成 `dest`，设备上的名字和记录一致。改不了就算了（内容是对的）。
+fn fix_case(dest: &Path) {
+    let (Some(dir), Some(name)) = (dest.parent(), dest.file_name()) else {
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let names: Vec<std::ffi::OsString> = rd.flatten().map(|e| e.file_name()).collect();
+    if names.iter().any(|n| n == name) {
+        return;
+    }
+    let lower = name.to_string_lossy().to_lowercase();
+    let Some(old) = names
+        .iter()
+        .find(|n| n.to_string_lossy().to_lowercase() == lower)
+    else {
+        return;
+    };
+    let (old, tmp) = (dir.join(old), crate::fsutil::tmp_sibling(dest));
+    if std::fs::rename(&old, &tmp).is_ok() {
+        if std::fs::rename(&tmp, dest).is_err() {
+            let _ = std::fs::rename(&tmp, &old);
+        }
+        let _ = crate::fsutil::sync_parent(dest);
     }
 }
 
@@ -222,6 +290,7 @@ fn put_file_once(
         if !keep_src {
             let _ = std::fs::remove_file(src);
         }
+        fix_case(dest);
         return Ok(false);
     }
     if !keep_src && std::fs::rename(src, dest).is_ok() {
@@ -257,6 +326,51 @@ fn put_file_once(
         let _ = std::fs::remove_file(src);
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod case_tests {
+    /// 只差大小写的挪动：先挪到临时名字再放，不会因为"先删 dest"把源删掉。
+    /// 内容一样不重写时，设备上只差大小写的旧名字改成新名字（模拟不分大小写的文件系统上 `dest` 打开到旧名字）。
+    #[test]
+    fn same_bytes_fixes_case() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("Abc.epub"), b"x").unwrap();
+        super::fix_case(&d.path().join("abc.epub"));
+        let names: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["abc.epub"]);
+        super::fix_case(&d.path().join("abc.epub")); // 已经对了：不动
+        assert!(d.path().join("abc.epub").is_file());
+    }
+
+    #[test]
+    fn case_only_move() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("Abc.epub"), d.path().join("abc.epub"));
+        std::fs::write(&a, b"book").unwrap();
+        assert!(super::put_file(&a, &b, false, false, true, None).unwrap());
+        assert_eq!(std::fs::read(&b).unwrap(), b"book");
+        assert!(!a.exists());
+        let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().flatten().collect();
+        assert_eq!(left.len(), 1, "没留临时文件");
+    }
+
+    /// 给了挂载点而它没挂着（拔掉后留下的空目录）：不建目录、不写，报错。
+    #[test]
+    fn unmounted_point_not_written() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("a.epub");
+        std::fs::write(&src, b"book").unwrap();
+        let point = d.path().join("mtp/dev");
+        std::fs::create_dir_all(&point).unwrap();
+        let dest = point.join("存储/documents/a.epub");
+        let r = super::put_file(&src, &dest, true, false, true, Some(&point));
+        assert!(r.is_err());
+        assert!(!point.join("存储").exists(), "没在空挂载点里建目录");
+    }
 }
 
 /// 往设备上拷文件的读写块大小。
@@ -409,25 +523,25 @@ mod tests {
         let (src, dest) = (d.path().join("src"), d.path().join("dest"));
         std::fs::write(&src, b"abc").unwrap();
         assert!(
-            put_file(&src, &dest, true, true, false).unwrap(),
+            put_file(&src, &dest, true, true, false, None).unwrap(),
             "不在：写"
         );
         assert!(
-            !put_file(&src, &dest, true, true, false).unwrap(),
+            !put_file(&src, &dest, true, true, false, None).unwrap(),
             "相同：不写"
         );
         assert!(
-            put_file(&src, &dest, true, false, false).unwrap(),
+            put_file(&src, &dest, true, false, false, None).unwrap(),
             "不比较：照写"
         );
         std::fs::write(&src, b"abd").unwrap();
-        assert!(put_file(&src, &dest, false, true, false).unwrap());
+        assert!(put_file(&src, &dest, false, true, false, None).unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"abd");
         assert!(!src.exists(), "不留来源时挪走");
         assert!(!same_bytes(&dest, &d.path().join("x")));
         // 直接写：换掉旧的、不留临时文件
         std::fs::write(&src, b"xyz1").unwrap();
-        assert!(put_file(&src, &dest, true, false, true).unwrap());
+        assert!(put_file(&src, &dest, true, false, true, None).unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"xyz1");
         assert_eq!(
             std::fs::read_dir(d.path()).unwrap().count(),

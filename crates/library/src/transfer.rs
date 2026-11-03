@@ -48,10 +48,7 @@ impl Transfer {
             direct,
             mount,
         } = &self.work;
-        if let Some(m) = mount.as_deref().filter(|m| !deliver::mounted(m)) {
-            return Err(format!("设备断开了（{} 没挂着），没传", m.display()));
-        }
-        deliver::put_file(&self.src, out, false, *compare, *direct)
+        deliver::put_file(&self.src, out, false, *compare, *direct, mount.as_deref())
     }
 
     /// 书 id。
