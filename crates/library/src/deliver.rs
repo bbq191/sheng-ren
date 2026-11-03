@@ -301,6 +301,63 @@ fn io_error(what: String, e: &std::io::Error) -> String {
     }
 }
 
+/// 建一级目录报 EIO 后重试的间隔（毫秒）。
+const MKDIR_BACKOFF: &[u64] = &[200, 500, 1000];
+
+/// `p` 是不是目录：先 stat；stat 不到再列一次上级目录看（jmtpfs 刚删过东西时偶尔 stat 不到已有的目录，
+/// 列目录会让它刷新这一层，同 `generate::remove_product`）。
+fn dir_present(p: &Path) -> bool {
+    if p.is_dir() {
+        return true;
+    }
+    let (Some(parent), Some(name)) = (p.parent(), p.file_name()) else {
+        return false;
+    };
+    let listed = std::fs::read_dir(parent).is_ok_and(|rd| {
+        rd.flatten()
+            .any(|e| e.file_name() == name && e.file_type().is_ok_and(|t| t.is_dir()))
+    });
+    listed || p.is_dir()
+}
+
+/// 确保 `dir` 是目录，从已有的那一层往下逐级建（不用 `create_dir_all`：它只把 EEXIST 当成功）。
+/// jmtpfs 刚删过一批文件和空目录（untrack 后的孤儿）时，对已存在的目录 mkdir 偶尔报 EIO（2026-11-02、11-03 掌阅两次
+/// 各 12 本）：只对 EIO 按 `backoff` 等一等、列目录再看，在了就算成功，不在就再建；别的错误（无权限、只读、写满、
+/// 断开后的 NotFound 等）照原样马上报。`mkdir` 建一级（测试换掉它）。
+fn ensure_dir(
+    dir: &Path,
+    mut mkdir: impl FnMut(&Path) -> std::io::Result<()>,
+    backoff: &[u64],
+) -> std::io::Result<()> {
+    let mut todo = Vec::new();
+    let mut cur = Some(dir);
+    while let Some(d) = cur.filter(|d| !d.as_os_str().is_empty() && !dir_present(d)) {
+        todo.push(d);
+        cur = d.parent();
+    }
+    for d in todo.into_iter().rev() {
+        let mut waits = backoff.iter();
+        loop {
+            match mkdir(d) {
+                Ok(()) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir_present(d) => break,
+                Err(e) if e.raw_os_error() == Some(libc::EIO) => match waits.next() {
+                    Some(ms) => {
+                        std::thread::sleep(std::time::Duration::from_millis(*ms));
+                        if dir_present(d) {
+                            break;
+                        }
+                    }
+                    None if dir_present(d) => break,
+                    None => return Err(e),
+                },
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    Ok(())
+}
+
 /// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
 fn put_file_once(
     src: &Path,
@@ -311,7 +368,7 @@ fn put_file_once(
 ) -> Result<bool, (String, bool)> {
     let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir)
+        ensure_dir(dir, |d| std::fs::create_dir(d), MKDIR_BACKOFF)
             .map_err(|e| (io_error(dir.display().to_string(), &e), missing(&e)))?;
     }
     if compare && same_bytes(src, dest) {
@@ -494,6 +551,120 @@ pub(crate) fn same_bytes(a: &Path, b: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    fn eio() -> std::io::Error {
+        std::io::Error::from_raw_os_error(libc::EIO)
+    }
+
+    #[test]
+    fn ensure_dir_skips_mkdir_when_dir_exists() {
+        let d = tempfile::tempdir().unwrap();
+        let mut calls = 0;
+        super::ensure_dir(
+            d.path(),
+            |_| {
+                calls += 1;
+                Err(eio())
+            },
+            &[0],
+        )
+        .unwrap();
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn ensure_dir_builds_missing_levels_and_retries_eio_on_an_ancestor() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("侦探悬疑").join("亚洲侦探");
+        let mut seen = Vec::new();
+        super::ensure_dir(
+            &dir,
+            |p| {
+                seen.push(p.to_path_buf());
+                if seen.len() < 3 {
+                    Err(eio())
+                } else {
+                    std::fs::create_dir(p)
+                }
+            },
+            &[0, 0, 0],
+        )
+        .unwrap();
+        assert!(dir.is_dir());
+        // 祖先那一层报了两次 EIO，第三次建成，再建叶子
+        let anc = d.path().join("侦探悬疑");
+        assert_eq!(seen, vec![anc.clone(), anc.clone(), anc, dir]);
+    }
+
+    #[test]
+    fn ensure_dir_accepts_dir_that_appeared_after_eio() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("迷宮飯");
+        let mut calls = 0;
+        super::ensure_dir(
+            &dir,
+            |p| {
+                calls += 1;
+                if calls == 1 {
+                    std::fs::create_dir(p).unwrap(); // 设备上其实建好了，却报 EIO
+                }
+                Err(eio())
+            },
+            &[0, 0],
+        )
+        .unwrap();
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn ensure_dir_only_retries_eio() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("x");
+        let mut calls = 0;
+        let e = super::ensure_dir(
+            &dir,
+            |_| {
+                calls += 1;
+                Err(eio())
+            },
+            &[0, 0],
+        )
+        .unwrap_err();
+        assert_eq!(e.raw_os_error(), Some(libc::EIO));
+        assert_eq!(calls, 3);
+        // 写满、无权限、只读、不在（断开）：不等、马上报
+        for errno in [
+            libc::ENOSPC,
+            libc::EACCES,
+            libc::EROFS,
+            libc::ENOENT,
+            libc::ENOTDIR,
+        ] {
+            let mut calls = 0;
+            let e = super::ensure_dir(
+                &dir,
+                |_| {
+                    calls += 1;
+                    Err(std::io::Error::from_raw_os_error(errno))
+                },
+                &[60_000],
+            )
+            .unwrap_err();
+            assert_eq!((e.raw_os_error(), calls), (Some(errno), 1));
+        }
+        // 报"已存在"但其实不是目录（同名文件）：报错
+        std::fs::write(&dir, b"").unwrap();
+        assert!(super::ensure_dir(&dir, |p| std::fs::create_dir(p), &[0]).is_err());
+    }
+
+    #[test]
+    fn ensure_dir_real_mkdir_and_backoff_is_short() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("a").join("b");
+        super::ensure_dir(&dir, |p| std::fs::create_dir(p), super::MKDIR_BACKOFF).unwrap();
+        assert!(dir.is_dir());
+        assert!(super::MKDIR_BACKOFF.iter().sum::<u64>() <= 2000);
+    }
+
     use super::*;
 
     #[test]
