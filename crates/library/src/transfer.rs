@@ -203,19 +203,56 @@ fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, St
     })
 }
 
-/// 一件一件放。
+/// 一件一件放。一件写满了设备（[`crate::space::NO_SPACE`]）后，排着的这一轮都不再写（[`lane_step`]）。
 fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<Event>) {
+    let mut full = false;
     for t in rx {
-        let r = guarded("传到设备", || t.run());
+        let r = lane_step(&mut full, || guarded("传到设备", || t.run()));
         if done.send(Event::Done(Box::new(t), r)).is_err() {
             return;
         }
     }
 }
 
+/// 传输线程放一件（纯逻辑）：前面已经写满了（`full`）就不碰设备，直接交回"空间满、没传"——MTP 直接写会先删掉设备上的旧版本，
+/// 接着写还是满，等于白删一本完好的书（agy 复审）。这一件写满了就记下 `full`。
+fn lane_step(full: &mut bool, run: impl FnOnce() -> Result<bool, String>) -> Result<bool, String> {
+    if *full {
+        return Err(format!(
+            "{}：同一台前面的书已经写满，这一本这一轮没传",
+            crate::space::NO_SPACE
+        ));
+    }
+    let r = run();
+    if r.as_ref()
+        .is_err_and(|e| e.starts_with(crate::space::NO_SPACE))
+    {
+        *full = true;
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 写满以后排着的不再写；别的错误不影响后面的。
+    #[test]
+    fn lane_stops_after_no_space() {
+        let mut full = false;
+        assert!(lane_step(&mut full, || Err("别的错".into())).is_err());
+        assert!(!full);
+        assert_eq!(lane_step(&mut full, || Ok(true)), Ok(true));
+        let e = format!("{}：写 x", crate::space::NO_SPACE);
+        assert!(lane_step(&mut full, || Err(e)).is_err());
+        assert!(full);
+        let mut ran = false;
+        let r = lane_step(&mut full, || {
+            ran = true;
+            Ok(true)
+        });
+        assert!(!ran && r.unwrap_err().starts_with(crate::space::NO_SPACE));
+    }
 
     /// 传输线程死了（手上还有活）：主线程等结果时报出来，不一直卡着。
     #[test]

@@ -426,6 +426,15 @@ impl Library {
             .contains_key(id)
     }
 
+    /// 这台设备上待删的已删书产物个数（[`Library::flush_removed`] 删的那些）。
+    pub fn orphan_count(&self, device: &Profile) -> usize {
+        self.records
+            .states
+            .get(&self.state_path(&device.id))
+            .orphans
+            .len()
+    }
+
     /// 删了的书留在设备上的产物（当时设备没接上）：设备接上了就删。返回删掉几个。
     pub fn flush_removed(&self, device: &Profile) -> Result<usize, String> {
         let sp = self.state_path(&device.id);
@@ -479,6 +488,87 @@ impl Library {
             });
         }
         out
+    }
+
+    /// 传之前看这台设备放不放得下 `books` 这一轮要传的产物（2026-11-03 定，见 `space` 模块）。
+    /// 每本：指纹没变、设备上已有的不算（`--force` 也不算：重建出来一样大，多半内容一样不再传）；记录里的产物在电脑上
+    /// （能直接拿来用）按它的实际大小算；要新生成的按原件大小估（网址入库的没有原件大小，按书库里的母版；开了
+    /// `comic_upscale` 的漫画乘 [`crate::space::COMIC_UPSCALE_FACTOR`]）；会覆盖设备上旧版本的（含上次挪位置没删掉的旧位置）
+    /// 减掉旧文件大小。待删的孤儿（[`Library::flush_removed`]）不算：调用方不够时先删孤儿再看一次。
+    pub fn space_check(&self, device: &Profile, books: &[&Meta], force: bool) -> SpaceCheck {
+        let t = self.target(device);
+        let Ok(target @ Target::Dir { root, mount }) = t.as_ref().as_ref() else {
+            return SpaceCheck::Skip; // 放电脑上的、没接上的不查
+        };
+        let staged = !direct_write(target, &self.devices.usbms_base());
+        let sp = self.state_path(&device.id);
+        let state = self.records.states.get(&sp);
+        let on_device = |p: &Path| {
+            p.is_absolute()
+                && (p.starts_with(root) || mount.as_deref().is_some_and(|m| p.starts_with(m)))
+        };
+        let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let mut items = Vec::new();
+        for m in books {
+            let Ok(plan) = self.plan(m, device) else {
+                continue; // 算不出的交给 prepare 报错
+            };
+            let prev = state.books.get(&m.id);
+            let fresh = |p: &&StateEntry| {
+                !p.fingerprint.is_empty()
+                    && (p.fingerprint == plan.fingerprint || p.fingerprint == plan.legacy)
+                    && p.path.is_absolute()
+                    && p.path.is_file()
+            };
+            let new = match prev.filter(fresh) {
+                Some(p) if on_device(&p.path) => continue, // 已是最新、只在设备上挪位置、--force 重建：不占新空间
+                Some(p) if !force => size(&p.path),
+                _ => {
+                    let comic = device.comic.upscale && self.comic_of(m).unwrap_or(false);
+                    let src = if m.source_size > 0 {
+                        m.source_size
+                    } else {
+                        size(&self.content_location(m))
+                    };
+                    crate::space::estimate(src, comic)
+                }
+            };
+            let old = prev
+                .map(|p| p.placements())
+                .unwrap_or_default()
+                .iter()
+                .filter(|x| on_device(&x.path) && x.path.is_file())
+                .fold(0u64, |a, x| a.saturating_add(size(&x.path)));
+            items.push(crate::space::Item { new, old, staged });
+        }
+        drop(state);
+        if items.is_empty() {
+            return SpaceCheck::Enough;
+        }
+        match crate::space::free_space(crate::space::probe_path(root)) {
+            Err(e) => SpaceCheck::Unknown(e),
+            Ok((free, total)) => match crate::space::shortfall(free, total, &items) {
+                None => SpaceCheck::Enough,
+                Some(short) => SpaceCheck::Short {
+                    count: items.len(),
+                    need: free.saturating_add(short),
+                    free,
+                    short,
+                },
+            },
+        }
+    }
+
+    /// 设备现在的剩余空间（字节）；放电脑上的、没接上的、读不到的 `None`（`sync --watch` 看空间腾出来没有）。
+    pub fn device_free(&self, device: &Profile) -> Option<u64> {
+        match self.target(device).as_ref().as_ref() {
+            Ok(Target::Dir { root, .. }) => {
+                crate::space::free_space(crate::space::probe_path(root))
+                    .ok()
+                    .map(|(free, _)| free)
+            }
+            _ => None,
+        }
     }
 
     /// 为一个阅读模式生成一本书的产物并送到设备上，做完才返回（没变化就跳过，`force` 强制重建）。放在哪见模块注释。
@@ -1286,6 +1376,23 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 /// 生成时发现设备的挂载点不在了（中途拔线）：`build_all` 认这个开头，把设备记成掉线。
+/// [`Library::space_check`] 的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpaceCheck {
+    /// 不用查（产物放电脑上、设备没接上）。
+    Skip,
+    Enough,
+    /// 不够：`count` 本要传，连余量要 `need` 字节，剩 `free`，差 `short`。
+    Short {
+        count: usize,
+        need: u64,
+        free: u64,
+        short: u64,
+    },
+    /// 读不到剩余空间（只警告、照旧传）。
+    Unknown(String),
+}
+
 pub(crate) const UNMOUNTED: &str = "设备中途断开（挂载点不在了）";
 
 /// 设备上直接写正式文件名（不经临时文件）：只在 MTP 上（jmtpfs 改名等于下载再上传一遍）。USB 大容量存储（Kobo）

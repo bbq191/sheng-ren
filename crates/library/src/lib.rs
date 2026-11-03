@@ -38,6 +38,7 @@ mod net;
 mod qqread;
 mod session;
 mod sources;
+mod space;
 mod transfer;
 mod wikidata;
 
@@ -52,13 +53,14 @@ pub use build_run::{build_all, BuildCounts, BuildEvent, BuildRun, FailMemo};
 pub use cover::{CoverInfo, CoverResult};
 pub use deliver::DeviceEnv;
 pub use fsutil::Lock;
-pub use generate::{Built, OutputStatus, Step};
+pub use generate::{Built, OutputStatus, SpaceCheck, Step};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry};
 pub use sources::{
     book_files, Prune, SyncEvent, SyncMemo, SyncReport, TrackChange, Tracked, UntrackChange,
     SUPPORTED_EXTS,
 };
+pub use space::{mb, space_grew};
 pub use transfer::{Event, Pipeline, Transfer};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]

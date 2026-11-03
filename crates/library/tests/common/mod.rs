@@ -87,7 +87,13 @@ pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
 
 /// 在 `lib` 书库上跑 `booklib <args>`（`lib` 为 `None` 时不加 `--library=`）。
 pub fn booklib(lib: Option<&Path>, args: &[&str]) -> Output {
+    booklib_env(lib, args, &[])
+}
+
+/// 同 [`booklib`]，另加环境变量（测试钩子，如 `BOOKLIB_TEST_FREE_SPACE`）。
+pub fn booklib_env(lib: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> Output {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"));
+    cmd.envs(envs.iter().copied());
     cmd.env("BOOKLIB_MTP_NO_MOUNT_CHECK", "1")
         .env("BOOKLIB_NO_NET", "1")
         .env_remove("BOOKLIB_USBMS_DIR"); // USB 存储在 MTP 目录下的 usbms/（见 `DeviceEnv`）
