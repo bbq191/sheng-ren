@@ -23,6 +23,9 @@ pub struct BuildRun<'a> {
     pub skipped: &'a mut HashSet<String>,
     /// 报过"没接上"的设备（`--watch` 时不重复报）。
     pub absent_reported: &'a mut HashSet<String>,
+    /// `--watch` 时空间不够（或写满）停下的设备 → 停下那一刻的剩余空间（读不到 `None`）。
+    /// 剩余空间变多了（[`crate::space::freed`]）才再查再传；设备重新接上时调用方清掉。不是 `--watch` 时 `None`。
+    pub space_held: Option<&'a mut HashMap<String, Option<u64>>>,
 }
 
 /// 一轮生成里发生的一件事。
@@ -85,6 +88,8 @@ pub enum BuildEvent {
         need: u64,
         free: u64,
         short: u64,
+        /// 这台上待删的已删书旧文件（这一轮末尾删，删完能腾出空间）。
+        orphans: usize,
     },
     /// 读不到设备剩余空间（jmtpfs 可能报 0）：只警告，照旧传。
     SpaceUnknown {
@@ -149,6 +154,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
         mut fails,
         skipped,
         absent_reported,
+        mut space_held,
     } = run;
     let mut counts = BuildCounts::default();
     for m in books.iter().filter(|m| !m.supported()) {
@@ -230,6 +236,16 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             format!("空间:{}", device.id),
             format!("空间?:{}", device.id),
         );
+        // 上次停下以后空间没变多：不查不报，照旧不写（不然每轮都查、都按"不够"跳过，也不该清掉失败表）
+        if let Some(held) = space_held.as_deref_mut() {
+            if let Some(&then) = held.get(&device.id) {
+                if !crate::space::freed(then, lib.device_free(device)) {
+                    counts.no_space.push(device.id.clone());
+                    continue;
+                }
+                held.remove(&device.id);
+            }
+        }
         match lib.space_check(device, &todo, force) {
             crate::SpaceCheck::Short {
                 count,
@@ -244,9 +260,14 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                         need,
                         free,
                         short,
+                        orphans: lib.orphan_count(device),
                     });
                 }
                 counts.no_space.push(device.id.clone());
+                if let Some(held) = space_held.as_deref_mut() {
+                    // 记下末尾删孤儿之前的剩余空间：删了孤儿，下一轮就看得出变多了
+                    held.insert(device.id.clone(), Some(free));
+                }
             }
             crate::SpaceCheck::Unknown(reason) => {
                 absent_reported.remove(&short_key);
@@ -301,7 +322,8 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                 });
             }
             // 写的途中设备满了：停下这台（后面的书不再生成、传），不记进失败表、不算失败；同一台只报第一本
-            Err(error) if error.starts_with(crate::space::NO_SPACE) => {
+            // 挂载点不在了（`lost`）的不算：断开后的挂载点在本地 tmpfs 上，写满是那里满了，按断开处理
+            Err(error) if !lost && error.starts_with(crate::space::NO_SPACE) => {
                 if !counts.no_space.contains(&device) {
                     counts.no_space.push(device.clone());
                     report(BuildEvent::DeviceFull {
@@ -459,6 +481,14 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                 device: device.id.clone(),
                 error,
             }),
+        }
+    }
+    // 写的途中满了的（预检过了但估少了）：记下现在的剩余空间，--watch 等它变多再试
+    if let Some(held) = space_held {
+        for id in &counts.no_space {
+            if let Some(p) = live.iter().find(|d| &d.id == id) {
+                held.entry(id.clone()).or_insert_with(|| lib.device_free(p));
+            }
         }
     }
     counts

@@ -13,7 +13,7 @@ use library::{
     OriginalState, Profile, SyncEvent, SyncMemo, TrackChange, UntrackChange,
 };
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -457,6 +457,28 @@ fn forget_reconnected(
     }
 }
 
+/// `sync --watch` 空间不够停下的设备（[`library::BuildRun::space_held`]）这一轮要不要跑：重新接上的忘掉（接上就重查）；
+/// 还停着的里有剩余空间变多了的（`free` 读现在的剩余空间）返回 `true`，让书库没变化也跑一轮生成。
+/// 不碰失败表：空间不够和书本身无关，失败表里的书（比如原件坏了）不该因此重试、重报（agy 复审）。
+fn space_freed(
+    held: &mut HashMap<String, Option<u64>>,
+    devices: &[&Profile],
+    last_live: Option<&[bool]>,
+    live: &[bool],
+    free: impl Fn(&Profile) -> Option<u64>,
+) -> bool {
+    let mut any = false;
+    for (i, (d, ok)) in devices.iter().zip(live).enumerate() {
+        let was_down = last_live.and_then(|l| l.get(i)).is_some_and(|w| !w);
+        if !*ok || was_down {
+            held.remove(&d.id);
+        } else if let Some(&then) = held.get(&d.id) {
+            any |= then.is_some_and(|t| free(d).is_some_and(|n| n > t));
+        }
+    }
+    any
+}
+
 /// 这一轮传的途中断开了的设备（`dropped`）记成上一轮没接上：下一轮接着的话 [`forget_reconnected`] 忘掉它的失败、整轮重跑。
 fn mark_dropped(last_live: Option<&mut [bool]>, devices: &[&Profile], dropped: &[String]) {
     if let Some(l) = last_live {
@@ -538,11 +560,17 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
             need,
             free,
             short,
+            orphans,
         } => Ok(format!(
-            "! [{device}] 空间不够：{count} 本要传，连余量约要 {}，只剩 {}，还差 {}；这次不往这台写（腾出空间后再同步）",
+            "! [{device}] 空间不够：{count} 本要传，连余量约要 {}，只剩 {}，还差 {}；这次不往这台写（腾出空间后再同步）{}",
             library::mb(need),
             library::mb(free),
-            library::mb(short)
+            library::mb(short),
+            if orphans > 0 {
+                format!("；这一轮末尾会先删掉 {orphans} 个已删书的旧文件，删完可再同步一次")
+            } else {
+                String::new()
+            }
         )),
         BuildEvent::SpaceUnknown { device, reason } => Ok(format!(
             "! [{device}] 读不到剩余空间（{reason}），不预先检查，照旧传"
@@ -1411,6 +1439,8 @@ struct SyncState {
     last_live: Option<Vec<bool>>,
     /// 提示过的不再支持的格式的书。
     skipped: HashSet<String>,
+    /// 空间不够停下的设备 → 停下时的剩余空间（[`space_freed`]）。
+    space_held: HashMap<String, Option<u64>>,
     /// 报过「连不上网，元数据下次再找」（`--watch` 时连上网以前只报一次）。
     meta_offline_reported: bool,
 }
@@ -1580,7 +1610,17 @@ impl SyncState {
             self.last_live.as_deref(),
             &live,
         );
-        if !(changed || self.last_stamp != Some(stamp()) || self.last_live.as_ref() != Some(&live))
+        let freed = space_freed(
+            &mut self.space_held,
+            &plan.devices,
+            self.last_live.as_deref(),
+            &live,
+            |d| lib.device_free(d),
+        );
+        if !(changed
+            || freed
+            || self.last_stamp != Some(stamp())
+            || self.last_live.as_ref() != Some(&live))
         {
             return;
         }
@@ -1606,6 +1646,7 @@ impl SyncState {
             fails: plan.watch.is_some().then_some(&mut self.fails),
             skipped: &mut self.skipped,
             absent_reported: &mut self.absent_reported,
+            space_held: plan.watch.is_some().then_some(&mut self.space_held),
         };
         // 没选书：只报有变化的
         let quiet = plan.selectors.is_empty();
@@ -1620,12 +1661,7 @@ impl SyncState {
             &plan.devices,
             &counts.dropped,
         );
-        // 空间不够的设备也一样：下一轮再看一次（用户可能腾出了空间），同样的情况只报一次（build_all 去重）
-        mark_dropped(
-            self.last_live.as_deref_mut(),
-            &plan.devices,
-            &counts.no_space,
-        );
+        // 空间不够的设备不当成断开（会清掉失败表）：记在 space_held，剩余空间变多了再跑（space_freed）
         // --watch 时没有生成、挪动、失败就不出声
         if plan.watch.is_none() || counts.any() {
             ctx.report(Ok(counts_summary(&counts)));
@@ -1671,6 +1707,53 @@ mod tests {
         let mut f = memo();
         forget_reconnected(&mut f, &devices, Some(&[true, false]), &[true, false]);
         assert_eq!(left(&f), ["ireader", "kindle"], "Kindle 还没接上，留着");
+    }
+
+    /// 空间不够停下的设备：空间变多了才再跑、重新接上（或没接上）就忘掉；不清失败表。
+    #[test]
+    fn space_held_waits_for_freed_space() {
+        let devices = [profile::get("ireader").unwrap()];
+        let mut held: HashMap<String, Option<u64>> =
+            [("ireader".to_string(), Some(100))].into_iter().collect();
+        let at = |n: u64| move |_: &Profile| Some(n);
+        assert!(!space_freed(
+            &mut held,
+            &devices,
+            Some(&[true]),
+            &[true],
+            at(100)
+        ));
+        assert!(!space_freed(
+            &mut held,
+            &devices,
+            Some(&[true]),
+            &[true],
+            at(90)
+        ));
+        assert!(space_freed(
+            &mut held,
+            &devices,
+            Some(&[true]),
+            &[true],
+            at(101)
+        ));
+        assert!(
+            held.contains_key("ireader"),
+            "是否放行由 build_all 再查一次决定"
+        );
+        held.insert("ireader".into(), None);
+        assert!(
+            !space_freed(&mut held, &devices, Some(&[true]), &[true], at(999)),
+            "停下时读不到：等接上或书库变化"
+        );
+        assert!(!space_freed(
+            &mut held,
+            &devices,
+            Some(&[true]),
+            &[false],
+            at(999)
+        ));
+        assert!(held.is_empty(), "拔掉就忘掉，接上重查");
     }
 
     /// 一轮里传的途中掉线、睡眠间隔里又插回：开头看还是接着，也要忘掉失败重传（以前 last_live 只看开头，永远不重试）。

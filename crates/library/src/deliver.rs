@@ -234,7 +234,11 @@ fn put_file_retry(
                 tries += 1
             }
             r => {
-                let r = r.map_err(|(e, _)| e)?;
+                // 失败时挂载点也不在了：按断开报（断开后的挂载点在 tmpfs 上，写满报的 ENOSPC 不是设备满）
+                let r = r.map_err(|(e, _)| match gone() {
+                    Some(g) => format!("{g}（写的途中断开）：{e}"),
+                    None => e,
+                })?;
                 return match gone() {
                     Some(e) => Err(format!("{e}（写的途中断开）")),
                     None => Ok(r),
@@ -279,6 +283,24 @@ thread_local! {
     static FAIL_WRITE: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
 }
 
+/// 测试用的写错误：单元测试设 [`FAIL_WRITE`]；集成测试设环境变量 `BOOKLIB_TEST_ENOSPC=1`（每次复制都写进一点后报 ENOSPC）。
+fn fail_write() -> Option<i32> {
+    #[cfg(test)]
+    if let Some(e) = FAIL_WRITE.with(|f| f.get()) {
+        return Some(e);
+    }
+    (std::env::var_os("BOOKLIB_TEST_ENOSPC").is_some_and(|v| v == "1")).then_some(28)
+}
+
+/// 写设备的错误说成一行：设备满了的以 [`crate::space::NO_SPACE`] 开头（一轮生成据此停下这台设备、不记失败表）。
+fn io_error(what: String, e: &std::io::Error) -> String {
+    if crate::space::is_no_space(e) {
+        format!("{}：{what}: {e}", crate::space::NO_SPACE)
+    } else {
+        format!("{what}: {e}")
+    }
+}
+
 /// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
 fn put_file_once(
     src: &Path,
@@ -290,7 +312,7 @@ fn put_file_once(
     let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir)
-            .map_err(|e| (format!("{}: {e}", dir.display()), missing(&e)))?;
+            .map_err(|e| (io_error(dir.display().to_string(), &e), missing(&e)))?;
     }
     if compare && same_bytes(src, dest) {
         if !keep_src {
@@ -299,7 +321,8 @@ fn put_file_once(
         fix_case(dest);
         return Ok(false);
     }
-    if !keep_src && std::fs::rename(src, dest).is_ok() {
+    // 测试钩子 BOOKLIB_TEST_ENOSPC 要走复制那条路（同一文件系统上改名不会写满）
+    if !keep_src && fail_write().is_none() && std::fs::rename(src, dest).is_ok() {
         let _ = crate::fsutil::sync_parent(dest);
         return Ok(true);
     }
@@ -313,34 +336,38 @@ fn put_file_once(
         // 大块读写：经 FUSE（jmtpfs）每次写都是一次往返，缺省 8KB 一块太碎
         let mut r = std::io::BufReader::with_capacity(COPY_BUF, std::fs::File::open(src)?);
         let mut w = std::io::BufWriter::with_capacity(COPY_BUF, std::fs::File::create(&tmp)?);
-        #[cfg(test)]
-        if let Some(e) = FAIL_WRITE.with(|f| f.get()) {
+        if let Some(e) = fail_write() {
             use std::io::Write;
             w.write_all(b"partial")?;
             w.flush()?;
             return Err(std::io::Error::from_raw_os_error(e));
         }
         std::io::copy(&mut r, &mut w)?;
-        w.into_inner().map_err(|e| e.into_error())?.sync_all()
+        let f = w.into_inner().map_err(|e| e.into_error())?;
+        f.sync_all()?;
+        // jmtpfs 在关文件（FUSE flush）时才真正传上设备：关的错误（设备满、断开）要看，`File` 自己 drop 时会把它丢掉
+        use std::os::unix::io::IntoRawFd;
+        // SAFETY: fd 刚从 File 里拿出来、只关这一次
+        if unsafe { libc::close(f.into_raw_fd()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
     };
     if let Err(e) = copy() {
         // 写到一半的（临时文件，或直接写的 dest 本身）都删掉。直接写的记录在生成时先记了空指纹（`prepare_file`），
         // 下次认得出没写完、重传
         let _ = std::fs::remove_file(&tmp);
-        // 设备满了：开头标上 NO_SPACE，一轮生成据此停下这台设备、不记进失败表
-        if crate::space::is_no_space(&e) {
-            return Err((
-                format!("{}：写 {}: {e}", crate::space::NO_SPACE, dest.display()),
-                false,
-            ));
-        }
-        return Err((format!("写 {}: {e}", dest.display()), missing(&e)));
+        // 设备满了：开头标上 NO_SPACE（`io_error`），一轮生成据此停下这台设备、不记进失败表
+        return Err((io_error(format!("写 {}", dest.display()), &e), missing(&e)));
     }
     if !direct {
         let _ = std::fs::remove_file(dest);
         if let Err(e) = std::fs::rename(&tmp, dest) {
             let _ = std::fs::remove_file(&tmp);
-            return Err((format!("改名成 {}: {e}", dest.display()), missing(&e)));
+            return Err((
+                io_error(format!("改名成 {}", dest.display()), &e),
+                missing(&e),
+            ));
         }
     }
     let _ = crate::fsutil::sync_parent(dest);

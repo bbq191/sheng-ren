@@ -1659,6 +1659,42 @@ fn output_has(path: &std::path::Path, marker: &str) -> bool {
     })
 }
 
+/// 空间不够（2026-11-03）：预检不够的这次不写、不算失败；写的途中满了删掉半截、同一台只报一次、后面的不再写；
+/// 腾出空间后照常传上。剩余空间和写满用测试钩子模拟（`BOOKLIB_TEST_FREE_SPACE`、`BOOKLIB_TEST_ENOSPC`）。
+#[test]
+fn sync_stops_a_full_device_without_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib = base.join("lib");
+    let books = base.join("ereader/books");
+    std::fs::create_dir_all(&books).unwrap();
+    std::fs::write(books.join("甲.epub"), sample_epub("甲")).unwrap();
+    std::fs::write(books.join("乙.epub"), sample_epub("乙")).unwrap();
+    let out = common::documents(&lib, "ireader");
+    ok(&lib, &["track", books.to_str().unwrap()]);
+    let run = |envs: &[(&str, &str)]| {
+        let o = common::booklib_env(Some(&lib), &["sync", "--device=ireader"], envs);
+        let s = format!("{}{}", common::stdout(&o), common::stderr(&o));
+        assert_eq!(o.status.code(), Some(0), "空间不够不算失败：{s}");
+        s
+    };
+    // 预检：只剩 1 字节，不够
+    let s = run(&[("BOOKLIB_TEST_FREE_SPACE", "1,64000000000")]);
+    assert!(s.contains("[ireader] 空间不够：2 本要传"), "{s}");
+    assert!(names(&out).is_empty(), "不够就不写：{s}");
+    // 预检过了、写的时候满了：删掉半截，只报第一本，后面的不再写
+    let s = run(&[
+        ("BOOKLIB_TEST_FREE_SPACE", "64000000000,64000000000"),
+        ("BOOKLIB_TEST_ENOSPC", "1"),
+    ]);
+    assert_eq!(s.matches("空间满，写了一半的已删掉").count(), 1, "{s}");
+    assert!(!s.contains("✗"), "不报失败：{s}");
+    assert!(names(&out).is_empty(), "不留半截、不留临时文件：{s}");
+    // 腾出空间：两本照常传上
+    let s = run(&[("BOOKLIB_TEST_FREE_SPACE", "64000000000,64000000000")]);
+    assert_eq!(names(&out), ["乙.epub", "甲.epub"], "{s}");
+}
+
 /// sync 选书：只生成选中的书；`--force` 重建；不跟踪目录时只生成 add 进来的书。
 #[test]
 fn sync_with_selection_builds_only_selected_books() {
@@ -2317,6 +2353,7 @@ fn build_round_keep(
         fails: None,
         skipped: &mut skipped,
         absent_reported: &mut absent,
+        space_held: None,
     };
     let mut ev = Vec::new();
     let counts = library::build_all(run, &mut |e| {
