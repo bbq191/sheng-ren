@@ -171,6 +171,43 @@ class Probe(unittest.TestCase):
             with open(os.path.join(shots, renamed), "rb") as f:
                 self.assertEqual(f.read(), b"B" * 64)
 
+    def test_adb_checks_returncode_and_serial(self):
+        """adb 失败就退出；指定了设备号加 -s。"""
+        fail = mock.Mock(returncode=1, stdout=b"", stderr=b"no devices")
+        with mock.patch.object(probe.subprocess, "run", return_value=fail) as run, \
+                mock.patch.object(probe, "ADB_SERIAL", "X1"):
+            with self.assertRaises(SystemExit):
+                probe.adb("shell", "true")
+            self.assertEqual(run.call_args[0][0][:3], ["adb", "-s", "X1"])
+        ok = mock.Mock(returncode=0, stdout=b"hi", stderr=b"")
+        with mock.patch.object(probe.subprocess, "run", return_value=ok), mock.patch.object(probe, "ADB_SERIAL", None):
+            self.assertEqual(probe.adb("shell", "echo"), "hi")
+
+    def test_clean_after_plain_collect_and_rerun_no_duplicate(self):
+        """先不带 --clean 拷，再 --clean：拷过的也删（只删 .png）；拷了没记下就被打断的，重跑不重复拷。"""
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as run:
+            dev = os.path.join(base, "KOBOeReader")
+            os.makedirs(dev)
+            for n, c in (("screen_001.png", b"A"), ("screen_002.png", b"B"), ("note.txt", b"C")):
+                with open(os.path.join(dev, n), "wb") as f:
+                    f.write(c * 64)
+            probe.save_run(run, {"only": None, "collected": {}})
+            # 模拟上次被打断：screen_001 已拷到电脑上、run.json 没记
+            os.makedirs(os.path.join(run, "shots", "epub"))
+            with open(os.path.join(run, "shots", "epub", "screen_001.png"), "wb") as f:
+                f.write(b"A" * 64)
+            env = {"BOOKLIB_USBMS_DIR": base, "BOOKLIB_MTP_NO_MOUNT_CHECK": "1"}
+            argv = ["probe.py", "kobo", "collect", "--format=epub"]
+            opts = {"--run": run, "--pattern": "*"}
+            with mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(probe, "kobo_measure_dir"), redirect_stderr(io.StringIO()):
+                probe.kobo_collect(opts, "epub")
+                self.assertEqual(sorted(os.listdir(os.path.join(run, "shots", "epub"))),
+                                 ["note.txt", "screen_001.png", "screen_002.png"], "不重复拷")
+                with mock.patch.object(sys, "argv", argv + ["--clean"]):
+                    probe.kobo_collect(opts, "epub")
+            self.assertEqual(os.listdir(dev), ["note.txt"], "拷过的 .png 都删，别的不碰")
+
     def test_generate_refuses_existing_run(self):
         with tempfile.TemporaryDirectory() as d:
             probe.save_run(d, {"collected": {"epub": ["x:1"]}})

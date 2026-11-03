@@ -4,13 +4,13 @@
 用法:
   probe.py make 输出.epub                 生成测试书（探针见 PROBES；书名「测试-怪癖」）
   （都可加 --only=88-99 或 --only=13,28,100-119：只跑这几个探针；--optimize=target/release/epub-optimize：先按那台的模式优化，看修过以后的样子）
-  probe.py ireader [--json] [--max-y=1828] [--min-y=90] 生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
+  probe.py ireader [--serial=设备号] [--json] [--max-y=1828] [--min-y=90] 生成（标记换成条码图）→ adb 推进掌阅 documents/测试/ → 文件管理器里点开 → 逐页截屏、认条码、量
                                           （测试书留在掌阅上，维护者自己删；掌阅要开着 adb、亮屏解锁）
   probe.py kobo generate                  Kobo（没有 adb，分几步、截屏要手动）：生成 EPUB 和 KEPUB 两本（每次换文件名），放进 --run= 目录
                                           （缺省 target/quirks-kobo/<名字>/）；--bin=<目录> 指 epub-to-kepub 所在（缺省 target/release）
   probe.py kobo push [--run=目录]          拷进 Kobo 的 <挂载点>/<kobo.toml 的 dir>/测试/（USB 大容量存储，挂载点找法同 booklib）、sync，打印手动步骤
   probe.py kobo collect --format=epub|kepub [--run=目录] [--pattern=screen_*.png] [--clean]
-                                          重新插上后把设备根目录的截屏拷回 <run>/shots/<格式>/（拷过的不再拷）再量；--clean 才删设备上拷回来的截屏
+                                          重新插上后把设备根目录的截屏拷回 <run>/shots/<格式>/（拷过的不再拷）再量；--clean 才删设备上这一格式拷回来过的截屏（只删 .png）
   probe.py kobo measure --format=epub|kepub [--run=目录 | --from-dir=目录] [--json]   只量电脑上的截屏（离线）（--from-dir 时 --only 要和生成时一样）
   probe.py kobo report [--run=目录]         EPUB、KEPUB 两份结果并排，供手填 css-quirks.toml 的 kobo 一栏
   （kobo 都可加 --max-y=1376：截屏里只看这个高度以上的行，去掉页脚；缺省按 1448 高的 95%，未上真机；--min-y= 去页眉，缺省 0 不去）
@@ -396,8 +396,15 @@ def report(m):
     return rows
 
 
+ADB_SERIAL = os.environ.get("ANDROID_SERIAL")
+
+
 def adb(*a, out=None):
-    r = subprocess.run(["adb", *a], capture_output=True)
+    """跑一条 adb 命令（`--serial=` 或 ANDROID_SERIAL 指定设备时加 `-s`）；失败就退出，不拿空输出当结果接着点、接着量。"""
+    cmd = ["adb", *(["-s", ADB_SERIAL] if ADB_SERIAL else []), *a]
+    r = subprocess.run(cmd, capture_output=True)
+    if r.returncode != 0:
+        sys.exit(f"adb {' '.join(a)} 失败（{r.returncode}）：{r.stderr.decode('utf-8', 'replace').strip()}")
     if out:
         with open(out, "wb") as f:
             f.write(r.stdout)
@@ -644,27 +651,34 @@ def kobo_collect(opts, fmt):
     new = [f for f in shots if sums[f] not in seen and f"{f}:{sums[f]}" not in other]
     out = os.path.join(d, "shots", fmt)
     os.makedirs(out, exist_ok=True)
-    got, names = [], []
+    got = []
     for f in new:
         src = os.path.join(mount, f)
         dst = os.path.join(out, f)
+        stem, ext = os.path.splitext(f)
+        alt = os.path.join(out, f"{stem}-{sums[f][:8]}{ext}")
+        # 上次拷了、没来得及记进 run.json 就被打断的：电脑上已有内容一样的，不再拷一份（不然量出来重复）
+        if any(os.path.isfile(x) and file_sha256(x) == sums[f] for x in (dst, alt)):
+            got.append(f"{f}:{sums[f]}")
+            continue
         if os.path.exists(dst):
             # --clean 后重新编号的同名新截屏：不覆盖上一批（kobo_measure_dir 每次量整个目录），名字后加哈希前 8 位
-            stem, ext = os.path.splitext(f)
-            dst = os.path.join(out, f"{stem}-{sums[f][:8]}{ext}")
+            dst = alt
         shutil.copy2(src, dst)
         if file_sha256(dst) != sums[f]:
             sys.exit(f"{f} 拷回来内容不对")
         got.append(f"{f}:{sums[f]}")
-        names.append(f)
     r["collected"].setdefault(fmt, []).extend(got)
     save_run(d, r)
     print(f"拷回 {len(got)} 张截屏（设备根目录共 {len(shots)} 张对得上 {pat}）→ {out}", file=sys.stderr)
     if "--clean" in sys.argv[1:]:
-        for f in names:
+        # 删这一格式拷回来过的（这次的和以前没 --clean 拷的），只删 .png（--pattern=* 时别的文件不碰）
+        done = {k.split(":")[-1] for k in r["collected"][fmt]}
+        gone = [f for f in shots if f.lower().endswith(".png") and sums[f] in done]
+        for f in gone:
             os.remove(os.path.join(mount, f))
         os.sync()
-        print(f"删了设备上拷回来的 {len(got)} 张", file=sys.stderr)
+        print(f"删了设备上拷回来过的 {len(gone)} 张", file=sys.stderr)
     return kobo_measure_dir(out, os.path.join(d, f"result-{fmt}.json"))
 
 
@@ -783,6 +797,8 @@ def main():
     OPTIMIZE = opts.get("--optimize")
     MAX_Y = int(opts.get("--max-y", MAX_Y))
     MIN_Y = int(opts.get("--min-y", MIN_Y))
+    global ADB_SERIAL
+    ADB_SERIAL = opts.get("--serial", ADB_SERIAL)
     if cmd == "make" and len(args) == 2:
         make(args[1])
     elif cmd == "kobo":
