@@ -1,7 +1,8 @@
 //! Tab 补全（2026-10-19 要）：`booklib __complete <种类> [当前的词]`，给 shell 的补全脚本调，不在帮助里列。
 //! - `fish`：打印 fish 的补全脚本（`install.sh` 装到 fish 的 completions 目录；命令、选项从 [`COMMANDS`] 表生成）
 //! - `devices`：阅读模式 id（`--device=` 的值）
-//! - `paths 词`：目录和 `.epub`、`.cbz`，当前目录下的和书根目录下的（`track` 的相对路径两处都认）
+//! - `paths 词`：目录和 `.epub`、`.cbz`，当前目录下的和书根目录下的（`track` 的相对路径两处都认）；已在跟踪的不列。
+//!   词是空的且有书根目录时只列书根目录第一层还没跟踪的目录（2026-11-03 要：track 先挑顶层目录；命令本身不限制）
 //! - `tracked 词`：跟踪着的条目（`untrack` 的），书根目录里的写成相对它的路径
 //!
 //! 只读：书库目录不在时不打开（打开会建出目录），出错一律不出声（补全时不该往终端上打字）。
@@ -24,8 +25,12 @@ pub fn run(args: &[String]) {
             println!("all\t全部设备");
         }
         Some("paths") => {
-            let root = open().and_then(|l| l.books_root());
-            for (c, d) in paths(tok, root.as_deref()) {
+            let lib = open();
+            let root = lib.as_ref().and_then(|l| l.books_root());
+            let tracked: HashSet<PathBuf> = lib
+                .map(|l| l.tracked().iter().map(|p| canon(p)).collect())
+                .unwrap_or_default();
+            for (c, d) in paths(tok, root.as_deref(), &tracked) {
                 println!("{c}\t{d}");
             }
         }
@@ -60,8 +65,14 @@ fn open() -> Option<Library> {
 }
 
 /// `词` 补全成目录（带 `/`，shell 不加空格、接着往下补）和书。先列当前目录下的，再列书根目录下的（同名的只列一次）；
-/// 以 `/`、`~`、`./` 开头的只按它本身找。隐藏文件只在词以 `.` 开头时列。
-fn paths(tok: &str, root: Option<&Path>) -> Vec<(String, &'static str)> {
+/// 以 `/`、`~`、`./` 开头的只按它本身找。隐藏文件只在词以 `.` 开头时列。`tracked`（已规范化）里的不列。
+/// 词是空的且有书根目录时只列书根目录第一层的目录（不列当前目录的、不列书）。
+fn paths(
+    tok: &str,
+    root: Option<&Path>,
+    tracked: &HashSet<PathBuf>,
+) -> Vec<(String, &'static str)> {
+    let top_only = tok.is_empty() && root.is_some();
     let (dir, name) = match tok.rfind('/') {
         Some(i) => (&tok[..=i], &tok[i + 1..]),
         None => ("", tok),
@@ -72,7 +83,11 @@ fn paths(tok: &str, root: Option<&Path>) -> Vec<(String, &'static str)> {
         _ if dir.is_empty() => PathBuf::from("."),
         _ => PathBuf::from(dir),
     };
-    let mut bases = vec![(here, "目录", "书")];
+    let mut bases = if top_only {
+        Vec::new()
+    } else {
+        vec![(here, "目录", "书")]
+    };
     if let Some(r) =
         root.filter(|_| !(tok.starts_with('/') || tok.starts_with('~') || tok.starts_with("./")))
     {
@@ -91,9 +106,14 @@ fn paths(tok: &str, root: Option<&Path>) -> Vec<(String, &'static str)> {
                 if !n.starts_with(name) || (n.starts_with('.') && !name.starts_with('.')) {
                     return None;
                 }
+                if tracked.contains(&canon(&e.path())) {
+                    return None;
+                }
                 let meta = std::fs::metadata(e.path()).ok()?;
                 if meta.is_dir() {
                     Some((format!("{dir}{n}/"), dir_desc))
+                } else if top_only {
+                    None
                 } else {
                     let ext = Path::new(&n).extension()?.to_str()?.to_ascii_lowercase();
                     matches!(ext.as_str(), "epub" | "cbz").then(|| (format!("{dir}{n}"), book_desc))
@@ -104,6 +124,11 @@ fn paths(tok: &str, root: Option<&Path>) -> Vec<(String, &'static str)> {
         out.extend(items.into_iter().filter(|(c, _)| seen.insert(c.clone())));
     }
     out
+}
+
+/// 比较用的路径：能规范化就规范化（`./漫画` 和书根下的绝对路径算同一个），不能就照原样。
+fn canon(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// fish 补全脚本。命令和选项照 [`COMMANDS`] 表；路径、设备、跟踪条目运行时调 `booklib __complete` 取。
@@ -162,7 +187,8 @@ mod tests {
         std::fs::write(root.join("优秀漫画/罗杰疑案.epub"), b"").unwrap();
         std::fs::write(root.join("优秀漫画/说明.txt"), b"").unwrap();
         std::fs::write(root.join("优秀漫画/.隐藏.epub"), b"").unwrap();
-        let got = paths("优秀漫画/", Some(&root));
+        let none = HashSet::new();
+        let got = paths("优秀漫画/", Some(&root), &none);
         assert_eq!(
             got,
             vec![
@@ -170,13 +196,44 @@ mod tests {
                 ("优秀漫画/罗杰疑案.epub".to_string(), "书根目录下的书")
             ]
         );
-        assert_eq!(paths("优秀漫画/死", Some(&root)).len(), 1);
+        assert_eq!(paths("优秀漫画/死", Some(&root), &none).len(), 1);
         // 绝对路径只按它本身找
         let abs = format!("{}/优秀漫画/罗", root.display());
         assert_eq!(
-            paths(&abs, Some(&root)),
+            paths(&abs, Some(&root), &none),
             vec![(format!("{}/优秀漫画/罗杰疑案.epub", root.display()), "书")]
         );
+    }
+
+    #[test]
+    fn paths_hides_tracked_and_empty_word_lists_only_untracked_top_dirs() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("book");
+        std::fs::create_dir_all(root.join("漫画/死亡筆記")).unwrap();
+        std::fs::create_dir_all(root.join("文字/科幻")).unwrap();
+        std::fs::create_dir_all(root.join("杂志")).unwrap();
+        std::fs::write(root.join("飘.epub"), b"").unwrap();
+        std::fs::write(root.join("文字/三体.epub"), b"").unwrap();
+        let tracked: HashSet<PathBuf> = [
+            canon(&root.join("杂志")),
+            canon(&root.join("文字/三体.epub")),
+        ]
+        .into();
+        // 空词：只有书根第一层、没跟踪的目录；不列书、不列跟踪着的
+        assert_eq!(
+            paths("", Some(&root), &tracked),
+            vec![
+                ("文字/".to_string(), "书根目录下的目录"),
+                ("漫画/".to_string(), "书根目录下的目录")
+            ]
+        );
+        // 往下补：书照列，跟踪着的不列
+        assert_eq!(
+            paths("文字/", Some(&root), &tracked),
+            vec![("文字/科幻/".to_string(), "书根目录下的目录")]
+        );
+        // 已跟踪的目录前缀也补不出来
+        assert!(paths("杂", Some(&root), &tracked).is_empty());
     }
 
     #[test]
