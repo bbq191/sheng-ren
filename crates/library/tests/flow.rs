@@ -166,6 +166,41 @@ fn absent_device_defers_removal_and_identical_copy_is_adopted() {
     assert!(!bytes.is_empty());
 }
 
+/// 设备没接上时删了的书又加回来：接上后的一轮先认领设备上那份（逐字节相同），不先删掉再整本重传。
+#[test]
+fn removed_then_readded_while_absent_is_not_retransferred() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let ireader = profile::get("ireader").unwrap();
+    let src = dir.path().join("甲.epub");
+    std::fs::write(&src, sample_epub("甲")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    let Built::Written { path, .. } = lib.build(&m, ireader, false).unwrap() else {
+        panic!()
+    };
+    let storage = common::dev_dir(&lib_dir).join("ireader/Internal Storage");
+    let unplugged = dir.path().join("拔下来的存储");
+    std::fs::rename(&storage, &unplugged).unwrap();
+    lib.refresh_devices();
+    lib.remove(&m.id).unwrap();
+    let Added::New(_) = lib.add_file(&src).unwrap() else {
+        panic!("加回来")
+    };
+    std::fs::rename(&unplugged, &storage).unwrap();
+    lib.refresh_devices();
+    let (counts, ev) = build_round(&lib, &[ireader]);
+    assert_eq!(
+        (counts.written, counts.same),
+        (0, 1),
+        "认领、不重传：{ev:?}"
+    );
+    assert!(path.exists());
+    assert_eq!(lib.flush_removed(ireader).unwrap(), 0, "待删的已经清掉");
+}
+
 /// KFX 的容器 id 由书库的书 id 决定（不是 OPF 唯一标识符）：两本 OPF 标识符相同的书容器 id 不同；书里 4 处一致。
 #[test]
 fn kfx_container_id_comes_from_book_id() {

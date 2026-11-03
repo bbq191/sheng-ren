@@ -85,7 +85,7 @@ pub enum BuildEvent {
 }
 
 /// 一轮的结果计数。
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct BuildCounts {
     pub written: usize,
     pub same: usize,
@@ -95,6 +95,9 @@ pub struct BuildCounts {
     /// 不在跟踪范围、从设备上删掉的。
     pub retracted: usize,
     pub failed: usize,
+    /// 这一轮传的途中断开了的设备（模式 id）：开头接着、中途掉了。`sync --watch` 把它们当成上一轮没接上，
+    /// 下一轮接着的话忘掉记着的失败、重新传（断线的失败和书无关，不该一直不重试）。
+    pub dropped: Vec<String>,
 }
 
 impl BuildCounts {
@@ -136,24 +139,11 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             });
         }
     }
-    // 产物直接送设备（profile 的 [deliver]）：没接上的设备这一轮整个跳过（每轮报一次），接上的先删掉以前删书时没删成的
+    // 产物直接送设备（profile 的 [deliver]）：没接上的设备这一轮整个跳过（每轮报一次）；以前删书时没删成的等这一轮生成完再删（见末尾）
     let mut live: Vec<&Profile> = Vec::new();
     for device in devices {
         match lib.device_status(device) {
-            Ok(_) => {
-                match lib.flush_removed(device) {
-                    Ok(0) => {}
-                    Ok(count) => report(BuildEvent::RemovedFlushed {
-                        device: device.id.clone(),
-                        count,
-                    }),
-                    Err(error) => report(BuildEvent::RemoveFlushFailed {
-                        device: device.id.clone(),
-                        error,
-                    }),
-                }
-                live.push(device);
-            }
+            Ok(_) => live.push(device),
             Err(reason) => {
                 // --watch（给了 fails）时同一台没接上只报一次
                 if fails.is_none() || !absent_reported.contains(&device.id) {
@@ -213,11 +203,23 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             Event::Done(t, r) => (t, r),
             Event::Lost { device, count } => {
                 counts.failed += count;
+                if !counts.dropped.contains(&device) {
+                    counts.dropped.push(device.clone());
+                }
                 return report(BuildEvent::TransportLost { device, count });
             }
         };
         let (device, title) = (t.device.clone(), t.title.clone());
         let book = t.book_id().to_string();
+        // 传失败、挂载点也不挂着了：设备中途断开
+        let lost = r.is_err()
+            && t.work
+                .mount
+                .as_deref()
+                .is_some_and(|m| !crate::deliver::mounted(m));
+        if lost && !counts.dropped.contains(&device) {
+            counts.dropped.push(device.clone());
+        }
         match lib.complete(*t, r) {
             Ok(built) => {
                 counts.count(&built);
@@ -341,6 +343,21 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
     }
     while let Some(x) = pipe.next(true) {
         landed(&mut counts, &mut fails, report, x);
+    }
+    // 以前删书时设备没接上、没删成的：放到最后删。删了又加回来的书这一轮先认领了设备上那份（file_name_for 逐字节相同就认），
+    // 记录里有了就不删；放在开头删的话会先删掉设备上完好的书、再整本重传（Kindle 的进度也跟着丢）
+    for device in &live {
+        match lib.flush_removed(device) {
+            Ok(0) => {}
+            Ok(count) => report(BuildEvent::RemovedFlushed {
+                device: device.id.clone(),
+                count,
+            }),
+            Err(error) => report(BuildEvent::RemoveFlushFailed {
+                device: device.id.clone(),
+                error,
+            }),
+        }
     }
     counts
 }
