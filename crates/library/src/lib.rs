@@ -374,7 +374,7 @@ impl Library {
             registry,
             records: Records::new(),
             facts: ContentFacts::default(),
-            devices: Devices::new(DeviceEnv::from_env()),
+            devices: Devices::from_env(),
             build: BuildCtx::default(),
             net: OnceCell::new(),
         })

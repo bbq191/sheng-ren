@@ -924,7 +924,7 @@ impl Library {
         let mut state = (*self.records.states.get(sp)).clone();
         let prev = state.books.remove(id);
         // `.sdr` 是 Kindle 的（MTP）；USB 大容量存储（Kobo）的进度在阅读器自己的数据库里，产物旁边的东西不动
-        if !entry.path.starts_with(self.devices.usbms_base()) {
+        if !entry.path.starts_with(&self.devices.usbms_base()) {
             for o in entry.old.iter().filter(|o| !state.claimed(o)) {
                 carry_sidecar(&o.path, &entry.path);
             }
@@ -1346,6 +1346,31 @@ mod remove_tests {
         std::fs::write(&old, b"old").unwrap();
         let left = state.delete_placements(vec![p], Some(&cur), &dev);
         assert!(left.is_empty() && !old.exists() && cur.exists());
+    }
+
+    /// 缺省的 usbms_base 两次运行之间在 `/run/media/$USER` 和 `/media/$USER` 之间换了：另一处下的旧产物也认得是设备上的，
+    /// 没挂上就不当成已删（以前认不出，删不到就当删了，记录丢掉、书留在设备上）。
+    #[test]
+    fn unplugged_knows_both_media_dirs() {
+        use crate::deliver::DeviceEnv;
+        use crate::session::Devices;
+        let u = "booklib-test-no-such-user";
+        let dev = Devices::new(DeviceEnv {
+            mtp_base: std::path::PathBuf::from("/nonexistent/mtp"),
+            mount_check: true,
+            usbms_base: std::path::Path::new("/run/media").join(u),
+        });
+        let root = std::path::Path::new("/media").join(u).join("KOBOeReader");
+        assert!(dev.unplugged(&root.join("a.epub"), &root));
+        let dev = Devices::new(DeviceEnv {
+            mtp_base: std::path::PathBuf::from("/nonexistent/mtp"),
+            mount_check: true,
+            usbms_base: std::path::Path::new("/media").join(u),
+        });
+        let root = std::path::Path::new("/run/media")
+            .join(u)
+            .join("KOBOeReader");
+        assert!(dev.unplugged(&root.join("a.epub"), &root));
     }
 
     /// usbms_base 在 mtp_base 下面（关了挂载检查时的缺省）：挂载点按 usbms_base 算（`<usbms>/KOBOeReader`），不是 `<mtp>/usbms`。
