@@ -1936,6 +1936,54 @@ fn manual_copies_on_device_are_taken_over() {
     assert_eq!(names(&docs.join("子")), ["书.epub"], "不留重复");
 }
 
+/// 认领"手工拷上去的"时，记录里有哈希的要核对：对不上（同名的别的文件、拷了一半的）就重新生成；对得上的认领后哈希、体检清单都留着。
+#[test]
+fn manual_copy_with_wrong_hash_is_not_adopted() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let lib = common::open(&lib_dir);
+    let books = base.join("ereader/books");
+    std::fs::create_dir_all(&books).unwrap();
+    std::fs::write(books.join("x.epub"), sample_epub("书")).unwrap();
+    lib.track(&books).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
+    let m = lib.list().remove(0);
+    let ireader = profile::get("ireader").unwrap();
+    let Built::Written { path, .. } = lib.build(&m, ireader, false).unwrap() else {
+        panic!()
+    };
+    let good = std::fs::read(&path).unwrap();
+    let sp = lib_dir.join("output-state/ireader.json");
+    let to_pc = || {
+        let mut st: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+        st["books"][&m.id]["path"] = serde_json::json!(base.join("ereader/ireader/书.epub"));
+        st["books"][&m.id]["root"] = serde_json::json!(base.join("ereader/ireader"));
+        std::fs::write(&sp, st.to_string()).unwrap();
+        st["books"][&m.id]["sha"].clone()
+    };
+    // 对不上：重新生成
+    std::fs::write(&path, b"half").unwrap();
+    let sha = to_pc();
+    assert!(sha.is_string());
+    let lib = common::open(&lib_dir);
+    assert!(matches!(
+        lib.build(&m, ireader, false).unwrap(),
+        Built::Written { .. }
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), good);
+    // 对得上：认领，哈希留着
+    to_pc();
+    let lib = common::open(&lib_dir);
+    assert!(matches!(
+        lib.build(&m, ireader, false).unwrap(),
+        Built::Adopted(_)
+    ));
+    let st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    assert_eq!(st["books"][&m.id]["sha"], sha, "认领后哈希留着");
+}
+
 /// sync 的做法：先比较、生成（prepare），传设备交给各设备的传输线程（Pipeline），传完记下来（complete）。
 /// 几本书、Kindle 和掌阅同时在传；第二轮全都已是最新。
 #[test]
@@ -2121,6 +2169,33 @@ fn same_titled_new_books_in_flight_do_not_collide() {
             Built::UpToDate(_)
         ));
     }
+    // 原地覆写（设备上那份和这次的不同）：预登记的记录指纹、哈希都留空——写到一半被打断，下次不能凭旧哈希当成一样
+    std::fs::write(&paths[0], b"x").unwrap();
+    let sp = lib_dir.join("output-state/ireader.json");
+    let st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    let id = st["books"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(_, v)| v["path"] == serde_json::json!(paths[0]))
+        .map(|(k, _)| k.clone())
+        .unwrap();
+    let m0 = ms.iter().find(|m| m.id == id).unwrap();
+    assert!(st["books"][&id]["sha"].is_string());
+    let library::Step::Transfer(t) = lib.prepare(m0, ireader, true).unwrap() else {
+        panic!("设备上的不同：要传")
+    };
+    let st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    assert_eq!(st["books"][&id]["fingerprint"], "");
+    assert!(
+        st["books"][&id].get("sha").is_none(),
+        "预登记清掉哈希：{st}"
+    );
+    let r = t.run();
+    assert!(matches!(
+        lib.complete(*t, r).unwrap(),
+        Built::Written { .. }
+    ));
     // 新书传到一半被打断（正式文件名上留下半截）：下次认得出没传完，重新传
     let p = dir.path().join("三.epub");
     std::fs::write(&p, sample_epub_with("中断", "丙")).unwrap();

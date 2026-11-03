@@ -632,22 +632,28 @@ impl Library {
             .as_ref()
             .filter(unchanged)
             .filter(|_| done.is_none() && copied.is_some() && out.is_file())
+            // 记着哈希的要核对：同名的不一定是那份拷贝（别的书、拷了一半的）；对不上就当普通的旧文件，重新生成覆盖
+            .filter(|p| {
+                p.sha.is_empty() || crate::fsutil::sha256_file(&out).is_ok_and(|h| h == p.sha)
+            })
         {
             let old = p
                 .placements()
                 .into_iter()
                 .filter(|x| x.path != out)
                 .collect();
-            let entry = StateEntry::file(out.clone(), root, fingerprint, old);
+            let mut entry = StateEntry::file(out.clone(), root, fingerprint, old);
+            entry.sha = p.sha.clone();
+            entry.audit = p.audit.clone();
             self.finish(&sp, &meta.id, entry)?;
             return Ok(Step::Done(Built::Adopted(out)));
         }
         // 来源：内容没变、只是位置变了的已有产物（挪过去，不重新生成），或者新生成的
         let made = self.made(meta, device, format, done)?;
         let tmp = made.tmp.clone();
-        // MTP 设备上直接写正式文件名（不经临时文件）：写到一半被打断，正式文件名上会留下半截，所以要先登记一条指纹留空的记录，
+        // MTP 设备上直接写正式文件名（不经临时文件，[`direct_write`]）：写到一半被打断，正式文件名上会留下半截，所以要先登记一条指纹留空的记录，
         // 下次认得出这个位置没传完、重新传（见 `Work`）
-        let direct = matches!(target, Target::Dir { .. });
+        let direct = direct_write(target, &self.devices.usbms_base());
         let mount = match target {
             Target::Dir { mount, .. } => mount.clone(),
             _ => None,
@@ -685,7 +691,12 @@ impl Library {
                     // 换位置：先把记录改成新位置（指纹留空＝没完成），旧位置记进待删——中途被打断的话，下次还认得新位置上的
                     // 文件是这本书的，旧位置也还会删
                     if entry.fingerprint.is_empty() || entry.old != p.old {
-                        self.put_entry(&sp, &meta.id, entry.clone())?;
+                        // 没完成的：哈希也留空（原地覆写到一半，设备上的已不是记着的那份，下次不能凭哈希当成一样）
+                        let mut pre = entry.clone();
+                        if pre.fingerprint.is_empty() {
+                            pre.sha.clear();
+                        }
+                        self.put_entry(&sp, &meta.id, pre)?;
                     }
                 }
                 // 新书：传的过程中这个文件名先在内存里占住，同一轮里同名的别的书不会选它。电脑上不预登记（省一次整份记录的写），
@@ -1087,6 +1098,18 @@ impl State {
                 left.push(p);
                 continue;
             }
+            // Kindle 书旁的 `.sdr`（进度）：书删了就没用了（删书再拷回 Kindle 也当新书），留着的话这个目录永远删不空。
+            // 同名的书换了目录（`carry_sidecar` 挪不过去时）不删，进度还留在旧目录里
+            let moved = current
+                .into_iter()
+                .chain(self.books.values().map(|e| e.path.as_path()))
+                .any(|c| c.file_name() == p.path.file_name());
+            if !moved && p.path.extension().is_some_and(|e| e == "kfx") {
+                let sdr = p.path.with_extension("sdr");
+                if sdr.is_dir() {
+                    let _ = std::fs::remove_dir_all(&sdr);
+                }
+            }
             // 传输线程可能正往这些目录里放别的书（刚建好目录、还没写进文件）：它那边碰到目录没了会重建（`deliver::put_file`）
             let mut dir = p.path.parent();
             while let Some(d) = dir.filter(|d| *d != p.root && d.starts_with(&p.root)) {
@@ -1208,9 +1231,41 @@ fn carry_sidecar(old: &Path, new: &Path) {
         return;
     }
     let (from, to) = (old.with_extension("sdr"), new.with_extension("sdr"));
-    if from.is_dir() && !to.exists() && std::fs::rename(&from, &to).is_ok() {
-        let _ = crate::fsutil::sync_parent(&to);
+    if !from.is_dir() || to.exists() {
+        return;
     }
+    if std::fs::rename(&from, &to).is_ok() {
+        let _ = crate::fsutil::sync_parent(&to);
+        return;
+    }
+    // 改不了名（跨文件系统：旧位置在电脑上；或者 MTP 不支持）：拷过去再删旧的；拷不成的删掉半截，旧的留着
+    if copy_dir(&from, &to).is_ok() {
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = crate::fsutil::sync_parent(&to);
+    } else {
+        let _ = std::fs::remove_dir_all(&to);
+    }
+}
+
+/// 整个目录拷一份（只拷普通文件和子目录）。
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if e.file_type()?.is_dir() {
+            copy_dir(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// 设备上直接写正式文件名（不经临时文件）：只在 MTP 上（jmtpfs 改名等于下载再上传一遍）。USB 大容量存储（Kobo）
+/// 同目录改名是原子的，经临时文件：直写的话更新已有的书要先删旧的，写到一半拔线就丢了旧书、留下 Nickel 会去导入的半截。
+fn direct_write(target: &Target, usbms_base: &Path) -> bool {
+    matches!(target, Target::Dir { root, .. } if !root.starts_with(usbms_base))
 }
 
 /// 同一目录里、文件名只差大小写的两个不同路径。
@@ -1313,6 +1368,64 @@ mod remove_tests {
         };
         state.delete_into_orphans(vec![p], &Devices::new(off));
         assert!(!f.exists() && state.orphans.is_empty());
+    }
+
+    /// 只有 MTP 直写；USB 大容量存储（Kobo）和电脑上都经临时文件。
+    #[test]
+    fn only_mtp_writes_direct() {
+        use super::{direct_write, Target};
+        use std::path::{Path, PathBuf};
+        let usbms = Path::new("/run/media/u");
+        let dir = |r: &str| Target::Dir {
+            root: PathBuf::from(r),
+            mount: None,
+        };
+        assert!(direct_write(
+            &dir("/run/user/1/mtp/k/内部存储/documents"),
+            usbms
+        ));
+        assert!(!direct_write(&dir("/run/media/u/KOBOeReader/书"), usbms));
+        assert!(!direct_write(&Target::Local, usbms));
+    }
+
+    /// 删书：Kindle 书旁的 `.sdr` 一起删（不然目录删不空）；同名的书换了目录、`.sdr` 没挪过去的不删。
+    /// `carry_sidecar` 改不了名时拷过去。
+    #[test]
+    fn sidecar_removed_with_book_and_copied_when_rename_fails() {
+        use super::{Placement, State};
+        use crate::deliver::DeviceEnv;
+        use crate::session::Devices;
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("out");
+        let sub = root.join("漫画");
+        std::fs::create_dir_all(sub.join("a.sdr")).unwrap();
+        std::fs::write(sub.join("a.sdr/a.yjf"), b"p").unwrap();
+        std::fs::write(sub.join("a.kfx"), b"k").unwrap();
+        let dev = Devices::new(DeviceEnv {
+            mtp_base: d.path().join("mtp"),
+            mount_check: false,
+            usbms_base: d.path().join("media"),
+        });
+        let p = Placement {
+            path: sub.join("a.kfx"),
+            root: root.clone(),
+        };
+        // 换目录、同名：不删 .sdr
+        let other = root.join("新/a.kfx");
+        std::fs::create_dir_all(sub.join("x")).unwrap(); // 让旧目录删不空，看得见 .sdr 还在
+        State::default().delete_placements(vec![p.clone()], Some(&other), &dev);
+        assert!(sub.join("a.sdr/a.yjf").exists());
+        // 删书：一起删，目录删空
+        std::fs::write(sub.join("a.kfx"), b"k").unwrap();
+        std::fs::remove_dir(sub.join("x")).unwrap();
+        State::default().delete_placements(vec![p], None, &dev);
+        assert!(!sub.exists(), "书和 .sdr 都删了，目录删空");
+        // 拷目录
+        let (a, b) = (d.path().join("s.sdr"), d.path().join("t.sdr"));
+        std::fs::create_dir_all(a.join("子")).unwrap();
+        std::fs::write(a.join("子/f"), b"1").unwrap();
+        super::copy_dir(&a, &b).unwrap();
+        assert_eq!(std::fs::read(b.join("子/f")).unwrap(), b"1");
     }
 
     /// 书名只改了大小写（`Abc.epub` → `abc.epub`）：不分大小写的文件系统上目录里只剩新名字，旧位置不能删（删的就是现在这份）；
