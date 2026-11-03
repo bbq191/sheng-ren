@@ -158,7 +158,21 @@ fn mutations() -> Vec<Mutation> {
     ));
     v.push((
         "cover_thumb_aspect",
-        Box::new(|p| p.cover_thumb_aspect = p.cover_thumb_aspect.map_or(Some(0.6), |_| None)),
+        // 去掉 aspect 时 cover_meta_thumb 一起关（单开它不合法，`validate` 不让）
+        Box::new(|p| {
+            p.cover_thumb_aspect = p.cover_thumb_aspect.map_or(Some(0.6), |_| None);
+            p.cover_meta_thumb &= p.cover_thumb_aspect.is_some();
+        }),
+    ));
+    v.push((
+        "cover_meta_thumb",
+        // 没写 aspect 的设备（Kobo）单翻它不合法也不进指纹：先补一个 aspect，这一行和 `cover_thumb_aspect` 那行只差 `M`
+        Box::new(|p| {
+            p.cover_meta_thumb = !p.cover_meta_thumb;
+            if p.cover_meta_thumb && p.cover_thumb_aspect.is_none() {
+                p.cover_thumb_aspect = Some(0.6);
+            }
+        }),
     ));
     v.push((
         "comic_upscale",
@@ -201,6 +215,10 @@ fn fingerprints_match_the_golden_file() {
         for (name, m) in mutations() {
             let mut p = profile::get(dev).unwrap().clone();
             m(&mut p);
+            assert!(
+                !p.cover_meta_thumb || p.cover_thumb_aspect.is_some(),
+                "{dev} {name}：变出了不合法的 profile"
+            );
             for (kind, meta) in [("text", &text), ("comic", &comic)] {
                 let fp = lib
                     .fingerprint(meta, &p)

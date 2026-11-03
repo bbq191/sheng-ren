@@ -69,6 +69,10 @@ fn shared_seg(device: &Profile) -> String {
     // 书架缩略图（`t` + 宽高比，2026-10-30）：不做的模式不出新字母
     if let Some(a) = device.cover_thumb_aspect {
         s.push_str(&format!("t{a}"));
+        // meta cover 指向缩略图（`M`，2026-11-03，掌阅）：不开的模式不出新字母
+        if device.cover_meta_thumb {
+            s.push('M');
+        }
     }
     s
 }

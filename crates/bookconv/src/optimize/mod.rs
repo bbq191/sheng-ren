@@ -158,7 +158,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   Kindle 0.65；掌阅、Move 不写，产物不变。
 /// - 65（2026-10-30，维护者问「竹光侍书架缩略图为什么有白边」）：书架缩略图先去掉扫描留下的窄白边（每边 ≤5%，最外 3 行灰线不算；
 ///   超过 5% 的一边当封面本身的白底不动，`imgopt::thumb_scan_margins`），再居中裁。
-pub const OPTIMIZE_VERSION: &str = "65";
+/// - 66（2026-11-03，掌阅 Air 3 Pro 真机量书架）：掌阅另做书架缩略图（`cover_thumb_aspect = 0.754`），并把 `<meta name="cover">`
+///   指向它（profile `cover_meta_thumb`；掌阅书架认 meta cover，`cover-image`、封面页不动）。`declared_cover` 不把缩略图当封面。
+///   掌阅有封面的书都变；Kindle、Move/Kobo 产物不变。
+pub const OPTIMIZE_VERSION: &str = "66";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -188,7 +191,8 @@ pub const OPTIMIZE_VERSION: &str = "65";
 ///   最外 3px 杂边（`comiccrop::DARK_EDGE_SKIP`）。只 Kindle 开。没上真机。
 /// - c64（2026-11-01）：页码块宽度上限改按页高（`comiccrop::PN_MAX_W`，0.035 页高；原来是 KCC 的 0.045 页宽）：《迷宮飯》卷09
 ///   三位数页码约 0.050 页宽，整卷只裁中 6 页；同卷页宽不一、页高固定。只 Kindle 开（`comic_page_numbers`）。没上真机。
-pub const COMIC_VERSION: &str = "64";
+/// - c65（2026-11-03）：同 v66，掌阅漫画也另做书架缩略图、`<meta name="cover">` 指向它。只掌阅变。
+pub const COMIC_VERSION: &str = "65";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，
@@ -286,6 +290,8 @@ pub struct OptimizeOpts {
     pub comic_dark_bg: bool,
     /// 书架缩略图裁成这个宽高比（profile `cover_thumb_aspect`），见 [`crate::wash::add_cover_thumbnail`]。文字书、漫画都做。
     pub cover_thumb_aspect: Option<f32>,
+    /// 把 `<meta name="cover">` 指向书架缩略图（profile `cover_meta_thumb`，掌阅），见 [`crate::wash::add_cover_thumbnail`]。
+    pub cover_meta_thumb: bool,
     /// 文字书正文插图中间调加深的伽马（profile `image_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::darken_gray_image`]。
     /// 只修复的书也做（「图片不动」的例外，2026-10-16 定）。
     pub image_gamma: Option<f64>,
@@ -403,6 +409,7 @@ impl OptimizeOpts {
             comic_upscale: true,
             comic_dark_bg: false,
             cover_thumb_aspect: None,
+            cover_meta_thumb: false,
             image_gamma: None,
             webp_to_png: false,
             text_mode: TextMode::Full,
@@ -444,6 +451,7 @@ impl OptimizeOpts {
             comic_upscale: p.comic.upscale,
             comic_dark_bg: p.comic.dark_bg,
             cover_thumb_aspect: p.cover_thumb_aspect,
+            cover_meta_thumb: p.cover_meta_thumb,
             image_gamma: p.image_gamma.filter(|&g| g != 1.0),
             webp_to_png: !p.webp,
             text_mode: TextMode::for_profile(p),
