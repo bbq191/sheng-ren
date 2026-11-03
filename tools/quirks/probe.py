@@ -673,8 +673,9 @@ def kobo_collect(opts, fmt):
     print(f"拷回 {len(got)} 张截屏（设备根目录共 {len(shots)} 张对得上 {pat}）→ {out}", file=sys.stderr)
     if "--clean" in sys.argv[1:]:
         # 删这一格式拷回来过的（这次的和以前没 --clean 拷的），只删 .png（--pattern=* 时别的文件不碰）
-        done = {k.split(":")[-1] for k in r["collected"][fmt]}
-        gone = [f for f in shots if f.lower().endswith(".png") and sums[f] in done]
+        # 按 `名字:哈希` 认（和上面去重一样）：只按哈希会删掉另一格式还没拷、画面恰好一样的截屏（agy）
+        done = set(r["collected"][fmt])
+        gone = [f for f in shots if f.lower().endswith(".png") and f"{f}:{sums[f]}" in done]
         for f in gone:
             os.remove(os.path.join(mount, f))
         os.sync()

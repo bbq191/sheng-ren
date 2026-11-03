@@ -208,6 +208,26 @@ class Probe(unittest.TestCase):
                     probe.kobo_collect(opts, "epub")
             self.assertEqual(os.listdir(dev), ["note.txt"], "拷过的 .png 都删，别的不碰")
 
+    def test_clean_keeps_other_format_same_image(self):
+        """--clean 不删另一格式还没拷、内容恰好一样的截屏（按名字+哈希认）。"""
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as run:
+            dev = os.path.join(base, "KOBOeReader")
+            os.makedirs(dev)
+            with open(os.path.join(dev, "screen_001.png"), "wb") as f:
+                f.write(b"A" * 64)
+            probe.save_run(run, {"only": None, "collected": {}})
+            env = {"BOOKLIB_USBMS_DIR": base, "BOOKLIB_MTP_NO_MOUNT_CHECK": "1"}
+            argv = ["probe.py", "kobo", "collect", "--format=epub"]
+            opts = {"--run": run, "--pattern": "screen_*.png"}
+            with mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(probe, "kobo_measure_dir"), redirect_stderr(io.StringIO()):
+                probe.kobo_collect(opts, "epub")
+                with open(os.path.join(dev, "screen_002.png"), "wb") as f:
+                    f.write(b"A" * 64)  # KEPUB 的一页，画面和 EPUB 的一样
+                with mock.patch.object(sys, "argv", argv + ["--clean"]):
+                    probe.kobo_collect(opts, "epub")
+            self.assertEqual(os.listdir(dev), ["screen_002.png"])
+
     def test_generate_refuses_existing_run(self):
         with tempfile.TemporaryDirectory() as d:
             probe.save_run(d, {"collected": {"epub": ["x:1"]}})
