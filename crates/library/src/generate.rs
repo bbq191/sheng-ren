@@ -23,7 +23,7 @@
 
 use crate::deliver::{self, Target};
 use crate::fsutil::TMP_PREFIX;
-use crate::session::PreparedInput;
+use crate::session::{Devices, PreparedInput};
 use crate::transfer::{Transfer, Work};
 use crate::{Library, Meta};
 use profile::{Format, Profile};
@@ -376,7 +376,7 @@ impl Library {
             };
             let mut state = (*state).clone();
             state.books.remove(id);
-            state.delete_into_orphans(entry.placements(), &self.devices.bases());
+            state.delete_into_orphans(entry.placements(), &self.devices);
             self.records.states.put(&sp, state)?;
         }
         Ok(())
@@ -412,7 +412,7 @@ impl Library {
         };
         let mut state = (*state).clone();
         state.books.remove(id);
-        state.delete_into_orphans(entry.placements(), &self.devices.bases());
+        state.delete_into_orphans(entry.placements(), &self.devices);
         self.records.states.put(&sp, state)?;
         Ok(true)
     }
@@ -440,7 +440,7 @@ impl Library {
         let mut state = (*state).clone();
         let list = std::mem::take(&mut state.orphans);
         let before = list.len();
-        state.delete_into_orphans(list, &self.devices.bases());
+        state.delete_into_orphans(list, &self.devices);
         let n = before - state.orphans.len();
         if n > 0 {
             self.records.states.put(&sp, state)?;
@@ -924,7 +924,7 @@ impl Library {
                 carry_sidecar(&o.path, &entry.path);
             }
         }
-        entry.old = state.delete_placements(std::mem::take(&mut entry.old), &self.devices.bases());
+        entry.old = state.delete_placements(std::mem::take(&mut entry.old), &self.devices);
         if prev.as_ref() == Some(&entry) {
             return Ok(());
         }
@@ -1032,15 +1032,15 @@ impl State {
     }
 
     /// 删掉这些产物（已经不在记录里的书名下），文件在各自的根目录以内删掉变空的目录。返回删不掉的（下次再删）：
-    /// 可拔下的设备（MTP、USB 大容量存储的挂载目录 `bases` 下）上的文件，设备没挂上时不当成已删；相对路径（2026-10-31 以前 Move 上的旧记录）不动文件、记录直接丢掉。
+    /// 可拔下的设备（MTP、USB 大容量存储的挂载目录下）上的文件，设备没挂上（[`Devices::unplugged`]）时不当成已删；相对路径（2026-10-31 以前 Move 上的旧记录）不动文件、记录直接丢掉。
     /// 调用前要先把本书的记录从 `self` 里拿掉，别的书还记着的不删。
     /// 删掉这些产物（[`State::delete_placements`]），删不掉的记进 `orphans`（下次接上设备再删）。
-    fn delete_into_orphans(&mut self, list: Vec<Placement>, bases: &[&Path]) {
-        let left = self.delete_placements(list, bases);
+    fn delete_into_orphans(&mut self, list: Vec<Placement>, devices: &Devices) {
+        let left = self.delete_placements(list, devices);
         self.orphans.extend(left);
     }
 
-    fn delete_placements(&self, list: Vec<Placement>, bases: &[&Path]) -> Vec<Placement> {
+    fn delete_placements(&self, list: Vec<Placement>, devices: &Devices) -> Vec<Placement> {
         let mut left = Vec::new();
         for p in list {
             if self.claimed(&p) {
@@ -1050,7 +1050,8 @@ impl State {
             if !p.path.is_absolute() {
                 continue;
             }
-            if bases.iter().any(|b| p.path.starts_with(b)) && !p.root.is_dir() {
+            // 设备没挂上（[`Devices::unplugged`]：要真的挂着，不只看根目录在不在）
+            if devices.unplugged(&p.path, &p.root) {
                 left.push(p);
                 continue;
             }
@@ -1221,6 +1222,77 @@ fn kfx_id(book_id: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod remove_tests {
+    /// 开着挂载检查、挂载点只是普通目录（和上级同一个文件系统，拔掉后留下的空挂载点）而里面正好有同名目录：
+    /// 不当成接上，产物不删、记录留进 orphans。
+    #[test]
+    fn unmounted_point_with_same_dir_keeps_orphan() {
+        use super::{Placement, State};
+        use crate::deliver::DeviceEnv;
+        use crate::session::Devices;
+        let d = tempfile::tempdir().unwrap();
+        let usbms = d.path().join("media");
+        let root = usbms.join("KOBOeReader/书");
+        std::fs::create_dir_all(&root).unwrap();
+        let f = root.join("书.kepub.epub");
+        std::fs::write(&f, b"x").unwrap();
+        let env = DeviceEnv {
+            mtp_base: d.path().join("mtp"),
+            mount_check: true,
+            usbms_base: usbms.clone(),
+        };
+        let mut state = State::default();
+        let p = Placement {
+            path: f.clone(),
+            root: root.clone(),
+        };
+        state.delete_into_orphans(vec![p.clone()], &Devices::new(env.clone()));
+        assert!(f.exists(), "没真挂上：不删");
+        assert!(state.orphans == vec![p.clone()], "记录留进 orphans");
+        // 关了挂载检查（测试用普通目录当设备）：根目录在就当接上，删掉
+        let mut state = State::default();
+        let off = DeviceEnv {
+            mount_check: false,
+            ..env
+        };
+        state.delete_into_orphans(vec![p], &Devices::new(off));
+        assert!(!f.exists() && state.orphans.is_empty());
+    }
+
+    /// usbms_base 在 mtp_base 下面（关了挂载检查时的缺省）：挂载点按 usbms_base 算（`<usbms>/KOBOeReader`），不是 `<mtp>/usbms`。
+    /// MTP 下的也要真挂着才删。
+    #[test]
+    fn unplugged_uses_the_longer_base() {
+        use crate::deliver::DeviceEnv;
+        use crate::session::Devices;
+        let d = tempfile::tempdir().unwrap();
+        let mtp = d.path().join("mtp");
+        let root = mtp.join("usbms/KOBOeReader/书");
+        std::fs::create_dir_all(&root).unwrap();
+        let dev = Devices::new(DeviceEnv {
+            mtp_base: mtp.clone(),
+            mount_check: true,
+            usbms_base: mtp.join("usbms"),
+        });
+        // 普通目录：两个 base 下都算没挂上（mtp 下的挂载点也只是普通目录）
+        assert!(dev.unplugged(&root.join("a.epub"), &root));
+        let mroot = mtp.join("iReader/内部存储/documents");
+        std::fs::create_dir_all(&mroot).unwrap();
+        assert!(dev.unplugged(&mroot.join("a.epub"), &mroot));
+        // 不在设备上的不管
+        assert!(!dev.unplugged(&d.path().join("out/a.epub"), d.path()));
+        // 关了挂载检查：根目录在就算接上
+        let off = Devices::new(DeviceEnv {
+            mtp_base: mtp.clone(),
+            mount_check: false,
+            usbms_base: mtp.join("usbms"),
+        });
+        assert!(!off.unplugged(&root.join("a.epub"), &root));
+        assert!(off.unplugged(
+            &mtp.join("usbms/没有/书/a.epub"),
+            &mtp.join("usbms/没有/书")
+        ));
+    }
+
     #[test]
     fn remove_product_reports_gone_and_missing() {
         let d = tempfile::tempdir().unwrap();
