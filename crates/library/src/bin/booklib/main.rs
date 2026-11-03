@@ -457,23 +457,34 @@ fn forget_reconnected(
     }
 }
 
-/// `sync --watch` 空间不够停下的设备（[`library::BuildRun::space_held`]）这一轮要不要跑：重新接上的忘掉（接上就重查）；
-/// 还停着的里有剩余空间变多了的（`free` 读现在的剩余空间）返回 `true`，让书库没变化也跑一轮生成。
+/// `sync --watch` 空间不够停下的设备（[`library::BuildRun::space_held`]）这一轮要不要跑：
+/// 书库有变化（`lib_changed`：要传的书可能少了）全部忘掉、重查；重新接上的（或没接上的）忘掉，
+/// 连同报过的"空间不够/读不到空间"（`reported` 里 `空间:`/`空间?:` 开头的键），接上重查时再报一次；
+/// 还停着的里有剩余空间明显变多了的（[`library::space_grew`]，`free` 读现在的）返回 `true`，让书库没变化也跑一轮生成。
 /// 不碰失败表：空间不够和书本身无关，失败表里的书（比如原件坏了）不该因此重试、重报（agy 复审）。
 fn space_freed(
     held: &mut HashMap<String, Option<u64>>,
+    reported: &mut HashSet<String>,
+    lib_changed: bool,
     devices: &[&Profile],
     last_live: Option<&[bool]>,
     live: &[bool],
     free: impl Fn(&Profile) -> Option<u64>,
 ) -> bool {
+    if lib_changed {
+        held.clear();
+    }
     let mut any = false;
     for (i, (d, ok)) in devices.iter().zip(live).enumerate() {
         let was_down = last_live.and_then(|l| l.get(i)).is_some_and(|w| !w);
         if !*ok || was_down {
             held.remove(&d.id);
+            if !*ok {
+                reported.remove(&format!("空间:{}", d.id));
+                reported.remove(&format!("空间?:{}", d.id));
+            }
         } else if let Some(&then) = held.get(&d.id) {
-            any |= then.is_some_and(|t| free(d).is_some_and(|n| n > t));
+            any |= library::space_grew(then, free(d));
         }
     }
     any
@@ -580,7 +591,7 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
             title,
             error,
         } => Ok(format!(
-            "! [{device}] {title}：空间满，写了一半的已删掉，这一轮不再往这台传（下次再传）：{error}"
+            "! [{device}] {title}：空间满，写了一半的已删掉（覆盖旧版本的话设备上的旧版本也已不在），这一轮不再往这台传（下次重传）：{error}"
         )),
         BuildEvent::Waiting { in_flight } => Ok(format!(
             "… 都生成好了，等设备那边传完（还有 {in_flight} 本）"
@@ -1610,18 +1621,17 @@ impl SyncState {
             self.last_live.as_deref(),
             &live,
         );
+        let lib_changed = changed || self.last_stamp != Some(stamp());
         let freed = space_freed(
             &mut self.space_held,
+            &mut self.absent_reported,
+            lib_changed,
             &plan.devices,
             self.last_live.as_deref(),
             &live,
             |d| lib.device_free(d),
         );
-        if !(changed
-            || freed
-            || self.last_stamp != Some(stamp())
-            || self.last_live.as_ref() != Some(&live))
-        {
+        if !(lib_changed || freed || self.last_live.as_ref() != Some(&live)) {
             return;
         }
         self.last_live = Some(live);
@@ -1709,51 +1719,44 @@ mod tests {
         assert_eq!(left(&f), ["ireader", "kindle"], "Kindle 还没接上，留着");
     }
 
-    /// 空间不够停下的设备：空间变多了才再跑、重新接上（或没接上）就忘掉；不清失败表。
+    /// 空间不够停下的设备：空间明显变多了才再跑；书库变了、重新接上（或没接上）就忘掉，拔掉后报过的提示也忘掉；不清失败表。
     #[test]
     fn space_held_waits_for_freed_space() {
         let devices = [profile::get("ireader").unwrap()];
-        let mut held: HashMap<String, Option<u64>> =
-            [("ireader".to_string(), Some(100))].into_iter().collect();
+        let mb = 1024 * 1024;
+        let mut held: HashMap<String, Option<u64>> = [("ireader".to_string(), Some(100 * mb))]
+            .into_iter()
+            .collect();
+        let mut rep: HashSet<String> = ["空间:ireader".to_string()].into_iter().collect();
         let at = |n: u64| move |_: &Profile| Some(n);
-        assert!(!space_freed(
-            &mut held,
-            &devices,
-            Some(&[true]),
-            &[true],
-            at(100)
-        ));
-        assert!(!space_freed(
-            &mut held,
-            &devices,
-            Some(&[true]),
-            &[true],
-            at(90)
-        ));
-        assert!(space_freed(
-            &mut held,
-            &devices,
-            Some(&[true]),
-            &[true],
-            at(101)
-        ));
+        let go =
+            |held: &mut HashMap<_, _>, rep: &mut HashSet<_>, ch, last: &[bool], now: &[bool], n| {
+                space_freed(held, rep, ch, &devices, Some(last), now, at(n))
+            };
+        assert!(!go(&mut held, &mut rep, false, &[true], &[true], 100 * mb));
+        assert!(
+            !go(&mut held, &mut rep, false, &[true], &[true], 101 * mb),
+            "多 1MB 不算"
+        );
+        assert!(go(&mut held, &mut rep, false, &[true], &[true], 150 * mb));
         assert!(
             held.contains_key("ireader"),
             "是否放行由 build_all 再查一次决定"
         );
-        held.insert("ireader".into(), None);
         assert!(
-            !space_freed(&mut held, &devices, Some(&[true]), &[true], at(999)),
-            "停下时读不到：等接上或书库变化"
+            !go(&mut held, &mut rep, true, &[true], &[true], 0),
+            "书库变了：忘掉"
         );
-        assert!(!space_freed(
-            &mut held,
-            &devices,
-            Some(&[true]),
-            &[false],
-            at(999)
-        ));
-        assert!(held.is_empty(), "拔掉就忘掉，接上重查");
+        assert!(
+            held.is_empty() && rep.contains("空间:ireader"),
+            "接着时提示照旧只报一次"
+        );
+        held.insert("ireader".into(), Some(0));
+        assert!(!go(&mut held, &mut rep, false, &[true], &[false], 999 * mb));
+        assert!(
+            held.is_empty() && rep.is_empty(),
+            "拔掉就忘掉，接上重查、再报"
+        );
     }
 
     /// 一轮里传的途中掉线、睡眠间隔里又插回：开头看还是接着，也要忘掉失败重传（以前 last_live 只看开头，永远不重试）。

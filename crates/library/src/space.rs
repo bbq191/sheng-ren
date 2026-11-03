@@ -47,9 +47,11 @@ pub(crate) fn shortfall(free: u64, total: u64, items: &[Item]) -> Option<u64> {
 }
 
 /// `--watch` 时空间不够（或写满）停下的设备，下一轮要不要再试（纯函数）：记下时的剩余空间 `then`、现在的 `now`，
-/// 都读得到、而且现在比那时多了（用户删了书）才再试；读不到的等设备重新接上或书库有变化（调用方处理）。
-pub(crate) fn freed(then: Option<u64>, now: Option<u64>) -> bool {
-    matches!((then, now), (Some(t), Some(n)) if n > t)
+/// 都读得到、而且现在比那时多了至少 50MB（[`MARGIN_MIN`]；掌阅后台清缓存、写日志会让剩余空间来回变几 KB，
+/// 不设门槛的话停着一台 `--watch` 就几乎每轮整轮重跑，agy 复审）才再试。
+/// 读不到的不记（[`crate::BuildRun::space_held`]）；设备重新接上、书库有变化时调用方清掉记下的。
+pub fn space_grew(then: Option<u64>, now: Option<u64>) -> bool {
+    matches!((then, now), (Some(t), Some(n)) if t.checked_add(MARGIN_MIN).is_some_and(|x| n >= x))
 }
 
 /// 查剩余空间用的路径：`root` 往上第一个存在的目录（新设备上产物目录还没建；SD 卡、内部存储各算各的）。
@@ -208,11 +210,15 @@ mod tests {
 
     #[test]
     fn retry_only_when_space_was_freed() {
-        assert!(freed(Some(10), Some(11)));
-        assert!(!freed(Some(10), Some(10)));
-        assert!(!freed(Some(10), Some(9)));
-        assert!(!freed(None, Some(10)));
-        assert!(!freed(Some(10), None));
+        assert!(space_grew(Some(10), Some(10 + MARGIN_MIN)));
+        assert!(
+            !space_grew(Some(10), Some(9 + MARGIN_MIN)),
+            "来回变几 KB 不算"
+        );
+        assert!(!space_grew(Some(10), Some(9)));
+        assert!(!space_grew(None, Some(u64::MAX)));
+        assert!(!space_grew(Some(10), None));
+        assert!(!space_grew(Some(u64::MAX), Some(u64::MAX)));
     }
 
     #[test]

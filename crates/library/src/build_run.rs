@@ -24,7 +24,8 @@ pub struct BuildRun<'a> {
     /// 报过"没接上"的设备（`--watch` 时不重复报）。
     pub absent_reported: &'a mut HashSet<String>,
     /// `--watch` 时空间不够（或写满）停下的设备 → 停下那一刻的剩余空间（读不到 `None`）。
-    /// 剩余空间变多了（[`crate::space::freed`]）才再查再传；设备重新接上时调用方清掉。不是 `--watch` 时 `None`。
+    /// 剩余空间变多了（[`crate::space::space_grew`]）才再查再传；设备重新接上、书库有变化时调用方清掉。
+    /// 读不到剩余空间的（jmtpfs 报 0、产物放电脑上的）不记：记了就只有拔插才出得来。不是 `--watch` 时 `None`。
     pub space_held: Option<&'a mut HashMap<String, Option<u64>>>,
 }
 
@@ -239,7 +240,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
         // 上次停下以后空间没变多：不查不报，照旧不写（不然每轮都查、都按"不够"跳过，也不该清掉失败表）
         if let Some(held) = space_held.as_deref_mut() {
             if let Some(&then) = held.get(&device.id) {
-                if !crate::space::freed(then, lib.device_free(device)) {
+                if !crate::space::space_grew(then, lib.device_free(device)) {
                     counts.no_space.push(device.id.clone());
                     continue;
                 }
@@ -483,11 +484,18 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             }),
         }
     }
-    // 写的途中满了的（预检过了但估少了）：记下现在的剩余空间，--watch 等它变多再试
+    // 写的途中满了的（预检过了但估少了）：记下现在的剩余空间，--watch 等它变多再试；读不到的不记（照常随书库变化重试）
     if let Some(held) = space_held {
         for id in &counts.no_space {
-            if let Some(p) = live.iter().find(|d| &d.id == id) {
-                held.entry(id.clone()).or_insert_with(|| lib.device_free(p));
+            if held.contains_key(id) {
+                continue;
+            }
+            if let Some(free) = live
+                .iter()
+                .find(|d| &d.id == id)
+                .and_then(|p| lib.device_free(p))
+            {
+                held.insert(id.clone(), Some(free));
             }
         }
     }

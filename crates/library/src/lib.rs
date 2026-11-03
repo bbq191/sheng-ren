@@ -60,7 +60,7 @@ pub use sources::{
     book_files, Prune, SyncEvent, SyncMemo, SyncReport, TrackChange, Tracked, UntrackChange,
     SUPPORTED_EXTS,
 };
-pub use space::mb;
+pub use space::{mb, space_grew};
 pub use transfer::{Event, Pipeline, Transfer};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
