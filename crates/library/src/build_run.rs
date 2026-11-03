@@ -78,6 +78,25 @@ pub enum BuildEvent {
         device: String,
         count: usize,
     },
+    /// 传之前看过：设备放不下这一轮要传的（连余量要 `need`、剩 `free`、差 `short` 字节），这一轮不往这台写。
+    NoSpace {
+        device: String,
+        count: usize,
+        need: u64,
+        free: u64,
+        short: u64,
+    },
+    /// 读不到设备剩余空间（jmtpfs 可能报 0）：只警告，照旧传。
+    SpaceUnknown {
+        device: String,
+        reason: String,
+    },
+    /// 写的途中设备满了：这一轮不再往这台传（写了一半的已删掉，下一轮、下次同步重传）。
+    DeviceFull {
+        device: String,
+        title: String,
+        error: String,
+    },
     /// 都生成好了，还在等设备那边传完。
     Waiting {
         in_flight: usize,
@@ -98,6 +117,8 @@ pub struct BuildCounts {
     /// 这一轮传的途中断开了的设备（模式 id）：开头接着、中途掉了。`sync --watch` 把它们当成上一轮没接上，
     /// 下一轮接着的话忘掉记着的失败、重新传（断线的失败和书无关，不该一直不重试）。
     pub dropped: Vec<String>,
+    /// 这一轮空间不够（传之前看出来的，或写的途中满了）的设备：不记进失败表，`sync --watch` 下一轮再看。
+    pub no_space: Vec<String>,
 }
 
 impl BuildCounts {
@@ -193,6 +214,56 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             }
         }
     }
+    // 传之前看放不放得下（2026-11-03 定）：删完不在跟踪范围的（腾出了空间）再看；不够的这一轮不往那台写，别的设备照旧。
+    // --watch 时同一台同样的情况只报一次（键放在 absent_reported 里，"空间:"/"空间?:" 开头，不和设备 id 混）
+    for device in &live {
+        let todo: Vec<&Meta> = books
+            .iter()
+            .filter(|m| m.supported() && !outside.contains(&(m.id.as_str(), device.id.as_str())))
+            .filter(|m| {
+                fails
+                    .as_deref()
+                    .is_none_or(|f| !f.contains_key(&(m.id.clone(), device.id.clone())))
+            })
+            .collect();
+        let (short_key, unknown_key) = (
+            format!("空间:{}", device.id),
+            format!("空间?:{}", device.id),
+        );
+        match lib.space_check(device, &todo, force) {
+            crate::SpaceCheck::Short {
+                count,
+                need,
+                free,
+                short,
+            } => {
+                if fails.is_none() || absent_reported.insert(short_key) {
+                    report(BuildEvent::NoSpace {
+                        device: device.id.clone(),
+                        count,
+                        need,
+                        free,
+                        short,
+                    });
+                }
+                counts.no_space.push(device.id.clone());
+            }
+            crate::SpaceCheck::Unknown(reason) => {
+                absent_reported.remove(&short_key);
+                if fails.is_none() || absent_reported.insert(unknown_key) {
+                    report(BuildEvent::SpaceUnknown {
+                        device: device.id.clone(),
+                        reason,
+                    });
+                }
+            }
+            crate::SpaceCheck::Enough | crate::SpaceCheck::Skip => {
+                absent_reported.remove(&short_key);
+                absent_reported.remove(&unknown_key);
+            }
+        }
+    }
+    // 不够的设备记在 counts.no_space 里，`one` 跳过它（末尾删已从书库删除的书照旧做，能腾出空间）
     // 先比较、再生成（主线程）；要传的交给各设备的传输线程，和生成同时进行；传完的随时取回来记下、报一件
     let mut pipe = Pipeline::default();
     let landed = |counts: &mut BuildCounts,
@@ -228,6 +299,17 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                     title,
                     built,
                 });
+            }
+            // 写的途中设备满了：停下这台（后面的书不再生成、传），不记进失败表、不算失败；同一台只报第一本
+            Err(error) if error.starts_with(crate::space::NO_SPACE) => {
+                if !counts.no_space.contains(&device) {
+                    counts.no_space.push(device.clone());
+                    report(BuildEvent::DeviceFull {
+                        device,
+                        title,
+                        error,
+                    });
+                }
             }
             Err(error) => {
                 counts.failed += 1;
@@ -269,6 +351,10 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
         // 这一轮里已经掉线的设备：后面的书不再生成（白跑，下一轮接上再来）
         if counts.dropped.contains(&device.id) {
             counts.failed += 1;
+            return;
+        }
+        // 这一轮写满了的设备：后面的书不再生成（下一轮、下次同步再来）
+        if counts.no_space.contains(&device.id) {
             return;
         }
         if let Some(f) = fails.as_deref_mut() {

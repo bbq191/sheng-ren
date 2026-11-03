@@ -273,6 +273,12 @@ fn fix_case(dest: &Path) {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// 测试用：设了就让下一次复制写进一点后报这个 errno（模拟设备写满）。
+    static FAIL_WRITE: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
 /// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
 fn put_file_once(
     src: &Path,
@@ -307,11 +313,27 @@ fn put_file_once(
         // 大块读写：经 FUSE（jmtpfs）每次写都是一次往返，缺省 8KB 一块太碎
         let mut r = std::io::BufReader::with_capacity(COPY_BUF, std::fs::File::open(src)?);
         let mut w = std::io::BufWriter::with_capacity(COPY_BUF, std::fs::File::create(&tmp)?);
+        #[cfg(test)]
+        if let Some(e) = FAIL_WRITE.with(|f| f.get()) {
+            use std::io::Write;
+            w.write_all(b"partial")?;
+            w.flush()?;
+            return Err(std::io::Error::from_raw_os_error(e));
+        }
         std::io::copy(&mut r, &mut w)?;
         w.into_inner().map_err(|e| e.into_error())?.sync_all()
     };
     if let Err(e) = copy() {
+        // 写到一半的（临时文件，或直接写的 dest 本身）都删掉。直接写的记录在生成时先记了空指纹（`prepare_file`），
+        // 下次认得出没写完、重传
         let _ = std::fs::remove_file(&tmp);
+        // 设备满了：开头标上 NO_SPACE，一轮生成据此停下这台设备、不记进失败表
+        if crate::space::is_no_space(&e) {
+            return Err((
+                format!("{}：写 {}: {e}", crate::space::NO_SPACE, dest.display()),
+                false,
+            ));
+        }
         return Err((format!("写 {}: {e}", dest.display()), missing(&e)));
     }
     if !direct {
@@ -326,6 +348,43 @@ fn put_file_once(
         let _ = std::fs::remove_file(src);
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod space_tests {
+    /// 写的途中满了：临时文件删掉、dest 不留半截，错误以 NO_SPACE 开头；直接写的也一样。
+    #[test]
+    fn enospc_cleans_up() {
+        for direct in [false, true] {
+            let d = tempfile::tempdir().unwrap();
+            let src = d.path().join("src.epub");
+            std::fs::write(&src, b"content").unwrap();
+            let dest = d.path().join("dev").join("book.epub");
+            super::FAIL_WRITE.with(|f| f.set(Some(28)));
+            let r = super::put_file(&src, &dest, true, false, direct, None);
+            super::FAIL_WRITE.with(|f| f.set(None));
+            let e = r.unwrap_err();
+            assert!(e.starts_with(crate::space::NO_SPACE), "{e}");
+            let left: Vec<_> = std::fs::read_dir(dest.parent().unwrap())
+                .unwrap()
+                .flatten()
+                .collect();
+            assert!(left.is_empty(), "direct={direct}: {left:?}");
+            assert!(src.is_file());
+        }
+    }
+
+    /// 别的写错误不标 NO_SPACE。
+    #[test]
+    fn other_errors_not_no_space() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src.epub");
+        std::fs::write(&src, b"x").unwrap();
+        super::FAIL_WRITE.with(|f| f.set(Some(5)));
+        let r = super::put_file(&src, &d.path().join("b.epub"), true, false, false, None);
+        super::FAIL_WRITE.with(|f| f.set(None));
+        assert!(!r.unwrap_err().starts_with(crate::space::NO_SPACE));
+    }
 }
 
 #[cfg(test)]

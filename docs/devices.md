@@ -311,6 +311,10 @@ readable-measure --device=kindle 竖长.png 横宽.png
 - **格式**：KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者以前试过），2026-11-01 起 `formats = ["kepub"]`，漫画也是 `.kepub.epub`。写出器是 clean-room 的 `bookconv::kepub`，做法、来源和真机 A/B（固定版式文件名、图片页不包装）见 [KEPUB](kepub.md)。还没上真机。
 - **漫画**：参数照 Kindle（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、固定版式整屏），都待真机比。
 
+## 设备空间不够（2026-11-03）
+
+`sync` 写之前用 statvfs 看挂载点剩余空间，估这一轮要传的大小（`comic_upscale` 的漫画按 2.1 倍：竹光侍 80.9MB → 164.8MB，约 2.04 倍），不够（留 max(50MB, 总容量 2%) 余量）的这台这一轮不写，别的设备照旧。jmtpfs 报的容量可能是 0 或不准，读不到就只警告、照旧传；写的途中碰到 ENOSPC（`StorageFull` / errno 28）删掉写了一半的文件（直接写的记录先记了空指纹，下次认得出没写完、重传），这一轮停下这台，不记进失败表。提示的样子见[使用指南](usage.md)。
+
 ## 加一个阅读模式
 
 1. 写 `<id>.toml`：`name`、`color`、`formats`、`notes`、`[screen]`。

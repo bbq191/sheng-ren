@@ -531,6 +531,29 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
         BuildEvent::TransportLost { device, count } => Err(format!(
             "✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）"
         )),
+        // 空间不够不算失败（不影响退出码）：下一轮、下次同步腾出空间再传
+        BuildEvent::NoSpace {
+            device,
+            count,
+            need,
+            free,
+            short,
+        } => Ok(format!(
+            "! [{device}] 空间不够：{count} 本要传，连余量约要 {}，只剩 {}，还差 {}；这次不往这台写（腾出空间后再同步）",
+            library::mb(need),
+            library::mb(free),
+            library::mb(short)
+        )),
+        BuildEvent::SpaceUnknown { device, reason } => Ok(format!(
+            "! [{device}] 读不到剩余空间（{reason}），不预先检查，照旧传"
+        )),
+        BuildEvent::DeviceFull {
+            device,
+            title,
+            error,
+        } => Ok(format!(
+            "! [{device}] {title}：空间满，写了一半的已删掉，这一轮不再往这台传（下次再传）：{error}"
+        )),
         BuildEvent::Waiting { in_flight } => Ok(format!(
             "… 都生成好了，等设备那边传完（还有 {in_flight} 本）"
         )),
@@ -1596,6 +1619,12 @@ impl SyncState {
             self.last_live.as_deref_mut(),
             &plan.devices,
             &counts.dropped,
+        );
+        // 空间不够的设备也一样：下一轮再看一次（用户可能腾出了空间），同样的情况只报一次（build_all 去重）
+        mark_dropped(
+            self.last_live.as_deref_mut(),
+            &plan.devices,
+            &counts.no_space,
         );
         // --watch 时没有生成、挪动、失败就不出声
         if plan.watch.is_none() || counts.any() {
