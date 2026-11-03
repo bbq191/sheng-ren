@@ -244,6 +244,35 @@ fn put_file_retry(
     }
 }
 
+/// 不分大小写的文件系统上 `dest` 打开的可能是只差大小写的旧名字（书名只改了大小写、内容一样没重写）：目录里没有
+/// `dest` 的原名、有只差大小写的那个时，经临时名改成 `dest`，设备上的名字和记录一致。改不了就算了（内容是对的）。
+fn fix_case(dest: &Path) {
+    let (Some(dir), Some(name)) = (dest.parent(), dest.file_name()) else {
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let names: Vec<std::ffi::OsString> = rd.flatten().map(|e| e.file_name()).collect();
+    if names.iter().any(|n| n == name) {
+        return;
+    }
+    let lower = name.to_string_lossy().to_lowercase();
+    let Some(old) = names
+        .iter()
+        .find(|n| n.to_string_lossy().to_lowercase() == lower)
+    else {
+        return;
+    };
+    let (old, tmp) = (dir.join(old), crate::fsutil::tmp_sibling(dest));
+    if std::fs::rename(&old, &tmp).is_ok() {
+        if std::fs::rename(&tmp, dest).is_err() {
+            let _ = std::fs::rename(&tmp, &old);
+        }
+        let _ = crate::fsutil::sync_parent(dest);
+    }
+}
+
 /// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
 fn put_file_once(
     src: &Path,
@@ -261,6 +290,7 @@ fn put_file_once(
         if !keep_src {
             let _ = std::fs::remove_file(src);
         }
+        fix_case(dest);
         return Ok(false);
     }
     if !keep_src && std::fs::rename(src, dest).is_ok() {
@@ -301,6 +331,21 @@ fn put_file_once(
 #[cfg(test)]
 mod case_tests {
     /// 只差大小写的挪动：先挪到临时名字再放，不会因为"先删 dest"把源删掉。
+    /// 内容一样不重写时，设备上只差大小写的旧名字改成新名字（模拟不分大小写的文件系统上 `dest` 打开到旧名字）。
+    #[test]
+    fn same_bytes_fixes_case() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("Abc.epub"), b"x").unwrap();
+        super::fix_case(&d.path().join("abc.epub"));
+        let names: Vec<_> = std::fs::read_dir(d.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["abc.epub"]);
+        super::fix_case(&d.path().join("abc.epub")); // 已经对了：不动
+        assert!(d.path().join("abc.epub").is_file());
+    }
+
     #[test]
     fn case_only_move() {
         let d = tempfile::tempdir().unwrap();

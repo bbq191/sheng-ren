@@ -648,6 +648,12 @@ impl Library {
             self.finish(&sp, &meta.id, entry)?;
             return Ok(Step::Done(Built::Adopted(out)));
         }
+        // 设备中途断开了：不生成、不改记录（不然下面会把完好的指纹、哈希清掉，接上后整本重传），报给 `build_all` 记成掉线
+        if let Target::Dir { mount: Some(m), .. } = target {
+            if !deliver::mounted(m) {
+                return Err(format!("{UNMOUNTED}：{}", m.display()));
+            }
+        }
         // 来源：内容没变、只是位置变了的已有产物（挪过去，不重新生成），或者新生成的
         let made = self.made(meta, device, format, done)?;
         let tmp = made.tmp.clone();
@@ -935,8 +941,15 @@ impl Library {
         let mut state = (*self.records.states.get(sp)).clone();
         let prev = state.books.remove(id);
         // `.sdr` 是 Kindle 的（MTP）；USB 大容量存储（Kobo）的进度在阅读器自己的数据库里，产物旁边的东西不动
-        if !entry.path.starts_with(self.devices.usbms_base()) {
-            for o in entry.old.iter().filter(|o| !state.claimed(o)) {
+        // 新旧位置都得真挂着（掉线后挂载点是 tmpfs 上的空目录：拷进去再删旧的就丢了进度）
+        if !entry.path.starts_with(self.devices.usbms_base())
+            && !self.devices.unplugged(&entry.path, &entry.root)
+        {
+            for o in entry
+                .old
+                .iter()
+                .filter(|o| !state.claimed(o) && !self.devices.unplugged(&o.path, &o.root))
+            {
                 carry_sidecar(&o.path, &entry.path);
             }
         }
@@ -1082,9 +1095,6 @@ impl State {
                 .chain(current)
                 .filter(|q| case_twin(q, &p.path))
                 .collect();
-            if !twins.is_empty() && !distinct_on_disk(&p.path, &twins) {
-                continue; // 同一个文件：不删，旧名字的记录丢掉
-            }
             // 相对路径：2026-10-31 以前 Move 上的旧记录（`文件夹/文件名`，Move 已经删了），不动、也不再记着
             if !p.path.is_absolute() {
                 continue;
@@ -1094,16 +1104,27 @@ impl State {
                 left.push(p);
                 continue;
             }
+            if !twins.is_empty() {
+                match distinct_on_disk(&p.path, &twins) {
+                    Some(true) => {}
+                    Some(false) => continue, // 同一个文件：不删，旧名字的记录丢掉
+                    None => {
+                        left.push(p); // 读不了目录：下次再看
+                        continue;
+                    }
+                }
+            }
             if !remove_product(&p.path) {
                 left.push(p);
                 continue;
             }
             // Kindle 书旁的 `.sdr`（进度）：书删了就没用了（删书再拷回 Kindle 也当新书），留着的话这个目录永远删不空。
-            // 同名的书换了目录（`carry_sidecar` 挪不过去时）不删，进度还留在旧目录里
-            let moved = current
-                .into_iter()
-                .chain(self.books.values().map(|e| e.path.as_path()))
-                .any(|c| c.file_name() == p.path.file_name());
+            // 这本书只是换了目录或改了大小写（`carry_sidecar` 没挪过去时）不删，进度还留在旧位置。只看这本书的新位置：
+            // 别的书同名不算
+            let moved = current.is_some_and(|c| {
+                let n = |x: &Path| x.file_name().map(|n| n.to_string_lossy().to_lowercase());
+                n(c) == n(&p.path)
+            });
             if !moved && p.path.extension().is_some_and(|e| e == "kfx") {
                 let sdr = p.path.with_extension("sdr");
                 if sdr.is_dir() {
@@ -1172,11 +1193,13 @@ impl State {
             .filter_map(|p| p.path.file_name().map(|n| fold(&n.to_string_lossy())))
             .collect();
         // 本书待删的旧文件正好叫这个名字（书名改回去了）：算本书的，可以用
+        // 待删的孤儿（删书时设备没接上、这轮末尾才删的）也算：是本工具的旧产物，覆盖它就行，不用另起 `[id]` 名字
         let mine: BTreeSet<String> = self
             .books
             .get(&meta.id)
             .into_iter()
             .flat_map(StateEntry::placements)
+            .chain(self.orphans.iter().cloned())
             .filter(|p| p.path.parent() == Some(dir))
             .filter_map(|p| p.path.file_name().map(|n| fold(&n.to_string_lossy())))
             .collect();
@@ -1262,6 +1285,9 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 生成时发现设备的挂载点不在了（中途拔线）：`build_all` 认这个开头，把设备记成掉线。
+pub(crate) const UNMOUNTED: &str = "设备中途断开（挂载点不在了）";
+
 /// 设备上直接写正式文件名（不经临时文件）：只在 MTP 上（jmtpfs 改名等于下载再上传一遍）。USB 大容量存储（Kobo）
 /// 同目录改名是原子的，经临时文件：直写的话更新已有的书要先删旧的，写到一半拔线就丢了旧书、留下 Nickel 会去导入的半截。
 fn direct_write(target: &Target, usbms_base: &Path) -> bool {
@@ -1281,20 +1307,20 @@ pub(crate) fn case_twin(a: &Path, b: &Path) -> bool {
 }
 
 /// `path` 和只差大小写的 `twins` 在磁盘上是不是各是各的文件：列目录，`path` 的原名和某个 twin 的原名都列得出来才算
-/// （分大小写的文件系统）。不分大小写的文件系统上目录里只会有其中一个名字，算同一个文件，不能删。读不了目录也按同一个处理。
-fn distinct_on_disk(path: &Path, twins: &[&Path]) -> bool {
+/// （分大小写的文件系统）。不分大小写的文件系统上目录里只会有其中一个名字，算同一个文件，不能删。读不了目录返回 `None`（记着、下次再看）。
+fn distinct_on_disk(path: &Path, twins: &[&Path]) -> Option<bool> {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
-        return false;
+        return Some(false);
     };
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return false;
-    };
+    let rd = std::fs::read_dir(dir).ok()?;
     let names: Vec<std::ffi::OsString> = rd.flatten().map(|e| e.file_name()).collect();
-    names.iter().any(|n| n == name)
-        && twins.iter().any(|t| {
-            t.file_name()
-                .is_some_and(|tn| names.iter().any(|n| n == tn))
-        })
+    Some(
+        names.iter().any(|n| n == name)
+            && twins.iter().any(|t| {
+                t.file_name()
+                    .is_some_and(|tn| names.iter().any(|n| n == tn))
+            }),
+    )
 }
 
 /// 删掉一个产物文件：删掉了或本来就不在返回 `true`。删的时候报"不在"不立即当真：jmtpfs 刚挪完文件偶尔 stat 不到，
@@ -1415,10 +1441,20 @@ mod remove_tests {
         std::fs::create_dir_all(sub.join("x")).unwrap(); // 让旧目录删不空，看得见 .sdr 还在
         State::default().delete_placements(vec![p.clone()], Some(&other), &dev);
         assert!(sub.join("a.sdr/a.yjf").exists());
-        // 删书：一起删，目录删空
+        // 删书：一起删，目录删空；别的目录里有同名的另一本书不碍事
         std::fs::write(sub.join("a.kfx"), b"k").unwrap();
         std::fs::remove_dir(sub.join("x")).unwrap();
-        State::default().delete_placements(vec![p], None, &dev);
+        let mut st = State::default();
+        st.books.insert(
+            "别的".into(),
+            super::StateEntry::file(
+                root.join("名著/a.kfx"),
+                root.clone(),
+                "f".into(),
+                Vec::new(),
+            ),
+        );
+        st.delete_placements(vec![p], None, &dev);
         assert!(!sub.exists(), "书和 .sdr 都删了，目录删空");
         // 拷目录
         let (a, b) = (d.path().join("s.sdr"), d.path().join("t.sdr"));
@@ -1453,8 +1489,20 @@ mod remove_tests {
         let state = State::default();
         let left = state.delete_placements(vec![p.clone()], Some(&cur), &dev);
         assert!(left.is_empty(), "旧名字的记录丢掉");
-        assert!(super::case_twin(&old, &cur) && !super::distinct_on_disk(&old, &[&cur]));
+        assert!(
+            super::case_twin(&old, &cur) && super::distinct_on_disk(&old, &[&cur]) == Some(false)
+        );
         assert!(cur.exists());
+        // 列不了目录（目录不在）：记着下次再看，不当成同一个文件丢掉
+        let gone = Placement {
+            path: root.join("没有的目录/Abc.epub"),
+            root: p.root.clone(),
+        };
+        let twin = root.join("没有的目录/abc.epub");
+        assert_eq!(
+            state.delete_placements(vec![gone], Some(&twin), &dev).len(),
+            1
+        );
         // 分大小写：两个都在，旧的删掉
         std::fs::write(&old, b"old").unwrap();
         let left = state.delete_placements(vec![p], Some(&cur), &dev);

@@ -201,6 +201,44 @@ fn removed_then_readded_while_absent_is_not_retransferred() {
     assert_eq!(lib.flush_removed(ireader).unwrap(), 0, "待删的已经清掉");
 }
 
+/// 设备没接上时删了一本，又加了一本同书名、内容不同的：接上后新书用原名覆盖那份待删的（不另起 `[id]` 名字）。
+#[test]
+fn removed_while_absent_name_goes_to_new_book() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let ireader = profile::get("ireader").unwrap();
+    let src = dir.path().join("甲.epub");
+    std::fs::write(&src, sample_epub("甲")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    let Built::Written { path, .. } = lib.build(&m, ireader, false).unwrap() else {
+        panic!()
+    };
+    let storage = common::dev_dir(&lib_dir).join("ireader/Internal Storage");
+    let unplugged = dir.path().join("拔下来的存储");
+    std::fs::rename(&storage, &unplugged).unwrap();
+    lib.refresh_devices();
+    lib.remove(&m.id).unwrap();
+    let src2 = dir.path().join("乙.epub");
+    std::fs::write(&src2, sample_epub_with("甲", "别的内容")).unwrap();
+    let Added::New(m2) = lib.add_file(&src2).unwrap() else {
+        panic!()
+    };
+    assert_eq!(m2.title, m.title);
+    std::fs::rename(&unplugged, &storage).unwrap();
+    lib.refresh_devices();
+    let (counts, ev) = build_round(&lib, &[ireader]);
+    assert_eq!((counts.written, counts.failed), (1, 0), "{ev:?}");
+    let names = names(path.parent().unwrap());
+    assert_eq!(
+        names,
+        [path.file_name().unwrap().to_string_lossy().to_string()],
+        "用原名：{ev:?}"
+    );
+}
+
 /// KFX 的容器 id 由书库的书 id 决定（不是 OPF 唯一标识符）：两本 OPF 标识符相同的书容器 id 不同；书里 4 处一致。
 #[test]
 fn kfx_container_id_comes_from_book_id() {

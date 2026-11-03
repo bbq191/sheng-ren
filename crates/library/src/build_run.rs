@@ -266,6 +266,11 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                 lib.original_state(m),
             )
         };
+        // 这一轮里已经掉线的设备：后面的书不再生成（白跑，下一轮接上再来）
+        if counts.dropped.contains(&device.id) {
+            counts.failed += 1;
+            return;
+        }
         if let Some(f) = fails.as_deref_mut() {
             match f.get(&key).map(|v| *v == now()) {
                 Some(true) => return,
@@ -287,6 +292,17 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             Ok(Step::Transfer(t)) => pipe.submit(*t),
             Err(error) => {
                 counts.failed += 1;
+                // 生成时发现设备掉线：记成掉线（下一轮接上重传），不记进失败表
+                if error.starts_with(crate::generate::UNMOUNTED) {
+                    if !counts.dropped.contains(&device.id) {
+                        counts.dropped.push(device.id.clone());
+                    }
+                    return report(BuildEvent::Failed {
+                        device: device.id.clone(),
+                        title: m.title.clone(),
+                        error,
+                    });
+                }
                 report(BuildEvent::Failed {
                     device: device.id.clone(),
                     title: m.title.clone(),
