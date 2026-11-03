@@ -48,6 +48,7 @@ const COMMANDS: &[Command] = &[
 第二步 生成并传：只给接着的设备生成，传上去，电脑上不留产物：
   kindle   Kindle（USB）  KFX   存储根目录 documents/<子目录>/
   ireader  掌阅（USB）    EPUB  存储根目录 documents/<子目录>/
+  kobo     Kobo（USB）    KEPUB 存储根目录 books/<子目录>/
   <子目录> 是原件在跟踪目录里所在的子目录。没接上的设备这次跳过，下次接上再传。
   没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢）。
 
@@ -188,7 +189,7 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
 
 /// 日常用法、通用选项、环境变量、退出码（`booklib --help` 的头尾）。
 const HELP_HEAD: &str = "\
-booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅的自带阅读器优化，直接传到接着的设备
+booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅、Kobo 的自带阅读器优化，直接传到接着的设备
 
 用法：booklib [--library=目录] <命令> [参数]
 

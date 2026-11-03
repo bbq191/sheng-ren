@@ -116,7 +116,7 @@
 | 模式 | 给谁读 | 产物 | 屏幕（截图像素） | 文字书阅读范围 | 漫画画布 | 黑白彩色 |
 |---|---|---|---|---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画固定版式） | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
-| `ireader` | 掌阅 Ocean 5 Pro 自带阅读器 | EPUB | 1264×1680，300ppi | 1264×1680 | 1264×1680（整屏） | 黑白 |
+| `ireader` | 掌阅 Air 3 Pro 自带阅读器 | EPUB | 1440×1920 | 1440×1920 | 1440×1920（整屏） | 黑白 |
 | `kobo` | Kobo Clara BW 自带阅读器（Nickel；预配置，未上真机） | KEPUB（`.kepub.epub`，漫画同） | 1072×1448，300ppi（官网） | 1072×1448（未量，按整屏） | 1072×1448（整屏，固定版式） | 黑白 |
 
 ### 怪癖 → 字段
@@ -193,7 +193,7 @@
 
 ```toml
 # crates/profile/profiles/ireader.toml（去掉了注释；每个字段的含义和来由看文件里的注释）
-name = "掌阅自带阅读器（iReader Ocean 5 Pro）"
+name = "掌阅自带阅读器（iReader Air 3 Pro）"
 color = false
 formats = ["epub"]
 background_auto_height = false
@@ -211,6 +211,8 @@ comic_margin = 1
 
 image_sizing = "device-px"
 em_px = 58
+content_px = 1300
+horizontal_scale = true
 px_margins = false
 rem = false
 important = false
@@ -220,14 +222,16 @@ cell_middle = false
 inline_valign = false
 heading_center = true
 float = true
+cover_thumb_aspect = 0.754
+cover_meta_thumb = true
 
 [screen]
-width = 1264
-height = 1680
+width = 1440
+height = 1920
 
-[readable.epub]          # 段名跟产物格式走：kindle 写 [readable.kfx]
-width = 1264
-height = 1680
+[readable.epub]
+width = 1440
+height = 1920
 
 [deliver]
 kind = "mtp"
@@ -269,7 +273,8 @@ dir = "documents"
 - 页边距调到最小后左右还有 101px，所以流式排版下离屏幕 1px 做不到；漫画写成固定版式，Kindle 按画布 1:1 整页显示：测试书截图和页面图逐像素对齐，四边偏差 0（2026-09-30）。
 - 测量书里比页面窄的图靠左，实际文字书里的插图不靠左（2026-10-01）。
 
-**`ireader`：1264×1680（整屏）。**
+**`ireader`：1440×1920（整屏）。**
+- 下面几条是 Ocean 5 Pro（1264×1680）上测的，Air 3 Pro 没重测。
 - 2026-09-27 截屏实测：只放一张大图的页面，掌阅把图铺满整屏（连页眉页脚区域也盖住），四边留白 0，所以 1px 白边就是离屏幕 1px。图文混排时图受正文页边距限制，不适用。
 - 书声明了往右翻（`page-progression-direction="rtl"`）时不铺满，四周留左右 92、上下 124px（2026-09-30：只差这一个属性的两本测试书，一本铺满、一本留边；固定版式、页面写法都不影响）。所以漫画改成往左翻，之后测试书截图离屏幕 0–1px。
 - **往右翻的书留边的原因找到了（2026-10-15，adb 测试书 + 合成的红框页，`target/tmp/irc` 的实验脚本）**：不是书的属性，是阅读器「排版与设置 → 排版」的设置。往右翻（rtl）的漫画按这个设置留边：**默认**四周约 70/66px、**精品**约 51/41px、**自定义**按「上下间距、左右间距」（维护者现在是 11/11，留约 116/49px）；选**漫画**时整页铺满，和往左翻的书逐像素相同（红框贴着屏幕四边，差异 0）。往左翻的书不看这个设置，一直铺满。书里的元数据都改不了：`rendition:spread`、`page-spread-left/right`、`primary-writing-mode`、`kmoe-pagedirect`、`zero-margin`/`zero-gutter`、`rendition:layout`、body 负外边距 CSS，rtl 的八种变体量出来一样的留边。
@@ -313,7 +318,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 
 ## 设备空间不够（2026-11-03）
 
-`sync` 写之前用 statvfs 看挂载点剩余空间，估这一轮要传的大小（`comic_upscale` 的漫画按 2.1 倍：竹光侍 80.9MB → 164.8MB，约 2.04 倍），不够（留 max(50MB, 总容量 2%) 余量）的这台这一轮不写，别的设备照旧。jmtpfs 报的容量可能是 0 或不准，读不到就只警告、照旧传；写的途中碰到 ENOSPC（`StorageFull` / errno 28）删掉写了一半的文件（直接写的记录先记了空指纹，下次认得出没写完、重传），这一轮停下这台（同一台排着的不再写），不记进失败表；挂载点已经不在的按断开处理（断开后写满的是本地 tmpfs）。statvfs 查 `documents` 往上第一个存在的目录（SD 卡和内部存储各算各的），`f_frsize` 为 0 时用 `f_bsize`；关文件时的错误也检查（jmtpfs 关文件时才真正传上设备）。提示的样子见[使用指南](usage.md)。
+`sync` 写之前用 statvfs 看挂载点剩余空间，估这一轮要传的大小（`comic_upscale` 的漫画按 2.1 倍：竹光侍 80.9MB → 164.8MB，约 2.04 倍），不够（留 max(50MB, 总容量 2%) 余量）的这台这一轮不写，别的设备照旧。jmtpfs 报的容量可能是 0 或不准，读不到就只警告、照旧传；写的途中碰到 ENOSPC（`StorageFull` / errno 28）删掉写了一半的文件（直接写的记录先记了空指纹，下次认得出没写完、重传），这一轮停下这台（同一台排着的不再写），不记进失败表；挂载点已经不在的按断开处理（断开后写满的是本地 tmpfs）。statvfs 查产物根目录（`documents`，Kobo 是 `books`）往上第一个存在的目录（SD 卡和内部存储各算各的），`f_frsize` 为 0 时用 `f_bsize`；关文件时的错误也检查（jmtpfs 关文件时才真正传上设备）。提示的样子见[使用指南](usage.md)。
 
 ## 加一个阅读模式
 

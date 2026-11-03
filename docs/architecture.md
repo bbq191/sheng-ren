@@ -4,7 +4,7 @@
 
 ## 三条原则
 
-- **阅读模式（profile）是核心抽象**：屏幕、阅读范围、黑白彩色、阅读器的怪癖、文字书做到哪一步（`text_repair_only`、`kindle_rules`、`repair_note_links`）、怎么传到设备（`[deliver]`）都从模式读，不在算法里按设备名写分支（见[设备 · 怪癖 → 字段](devices.md#怪癖--字段)）。各模式用同一套代码（现在内置 `kindle`、`ireader`；`xochitl` 2026-10-31 删了，只有它开的怪癖字段和改写留着，单测用 `profile::fixture("xochitl")`）。
+- **阅读模式（profile）是核心抽象**：屏幕、阅读范围、黑白彩色、阅读器的怪癖、文字书做到哪一步（`text_repair_only`、`kindle_rules`、`repair_note_links`）、怎么传到设备（`[deliver]`）都从模式读，不在算法里按设备名写分支（见[设备 · 怪癖 → 字段](devices.md#怪癖--字段)）。各模式用同一套代码（现在内置 `kindle`、`ireader`、`kobo`；`xochitl` 2026-10-31 删了，只有它开的怪癖字段和改写留着，单测用 `profile::fixture("xochitl")`）。
 - **书库只存索引，原件是唯一内容**：产物都从原件派生，随时能重建；生成前核对原件还是入库时那本书。产物直接传到设备，电脑上不留（2026-10-07）。
 - **质量门**：产物生成后检查 XHTML 合法、引用完整、没有 DRM；没过只警告。
 
@@ -36,7 +36,7 @@
 3. 要生成的交给 **bookconv**：`convert` 把 CBZ 转成 EPUB、`opfmeta` 补书里缺的封面简介；`optimize` 按阅读模式选路，文字书走 `wash::repair_entries` 只修复，掌阅再过 `wash::kindle_rules`；`check` 质量门把关，得到优化后的 EPUB。
 4. Kindle 再交给 **kfx 写出器**：`epubbook::load` 读整本 → `parse` 读成块树 → `analyze` 算全书统计 → `style`、`layout` → `symbols`、`entities` 打包成 KFX。
 5. **`cascade`（CSS 层叠）和 `kindle_model`（Kindle 上的样子）是两边共用的**：`kindle_rules` 系列用它们算掌阅的正文字号字体、行距、竖直距离，KFX 写出器用它们算每个元素的样式，所以各台认出的"正文"和换算口径是同一个。掌阅拿到同样的 CSS 排成什么样由 `reader_model`（从 profile 来）给出，两边不一样的地方才改写。
-6. 产物交给 **`library::transfer`** 这台设备的传输线程（主线程不等，接着做下一本），由 **`deliver`** 写到 MTP 挂载点；传完 `generate` 才写生成记录。线程怎么配合见[使用指南 · 产物放在哪](usage.md#产物放在哪)里的"边生成边传"图。
+6. 产物交给 **`library::transfer`** 这台设备的传输线程（主线程不等，接着做下一本），由 **`deliver`** 写到设备挂载点（MTP，或 Kobo 的 USB 大容量存储），写之前先查剩余空间（`space`，见[使用指南](usage.md)）；传完 `generate` 才写生成记录。线程怎么配合见[使用指南 · 产物放在哪](usage.md#产物放在哪)里的"边生成边传"图。
 
 ## 模块一览
 
@@ -135,7 +135,7 @@
 | `sources.rs` | 跟踪目录与同步（`sync_with` 分三步：遍历入库、删旧版本、处理不在了的） |
 | `generate.rs` | 生成计划与指纹、产物放哪、一本书几个模式共用的中间文件、按模式生成（`prepare`）、传完记下来（`complete`）、生成记录 |
 | `transfer.rs` | 要传的一件（`Transfer`）、它要做的（`Work`：写到哪个文件）；`sync` 的传输线程（`Pipeline`）。依赖方向 `generate` → `transfer` → `deliver`，不成环 |
-| `deliver.rs` | 产物送到设备（2026-10-07）：设备接没接上（MTP 挂载点要真挂着：和上一级不在同一文件系统，每本写之前再看一次，2026-10-21）、往 MTP 设备上放文件（相同字节不拷）；不认识生成记录和传输线程（2026-10-31 以前还有经 SSH 调 Move 上书架服务的导入接口，删了） |
+| `deliver.rs` | 产物送到设备（2026-10-07）：设备接没接上（MTP 挂载点要真挂着：和上一级不在同一文件系统，每本写之前再看一次，2026-10-21）、往 MTP 设备上放文件（相同字节不拷；建目录逐级建，只对 EIO 退避重试，`ensure_dir`，2026-11-03）；不认识生成记录和传输线程（2026-10-31 以前还有经 SSH 调 Move 上书架服务的导入接口，删了） |
 | `metadata.rs` | `meta --fetch` 和 `sync` 补元数据的调度：责任链 `CHAIN`（Bangumi〔只查漫画〕→ 豆瓣 → QQ 阅读 → Wikidata），书目网站实现 `BookSource`（搜索骨架是它的缺省方法：原书名搜不到再用去卷次的书名、都搜不到用网站的另一种搜法；各网站只给搜索词、怎么搜、怎么认条目、挑封面、取元数据），Wikidata 是链尾单独的一环（原作留给找封面的后备）；同一套漫画只查一次（`series_lookup`）；生成时往书里补什么由 `plan` 定（简介、标签、带国籍的作者、译者、出版社、日期、ISBN；指纹和写入共用这一份），`inject` 写 |
 | `bangumi.rs` / `douban.rs` / `qqread.rs` / `wikidata.rs` / `cover.rs` / `covergen.rs` | 书目源：Bangumi（漫画，公开 API，POST 搜索）、豆瓣（搜索建议 + 书籍搜索页 `window.__DATA__`）、QQ 阅读、Wikidata；原作封面（Open Library / Commons）；生成封面 |
 | `net.rs` / `matching.rs` | 节流重试的 HTTP（GET、POST JSON；失败分类成 `NetError`：网站说没有、临时的、别的，临时的记进本轮的 `transient_error`）；书名人名比对（全半角、繁简、译名用字）、署名拆开（`parse_credits`：作者、国籍、译者）、书名去卷次（`base_title`） |
@@ -191,6 +191,7 @@
    - **生成**：流式优化，写进书库的临时目录 `.tmp-<id>-<模式>/`（`product`）→ 质量门 → 算 SHA-256，和记录里上次传的一样就不再传（`Built::Same`）。`kindle` 模式先把优化结果写进临时目录、过质量门，再转 KFX（`kobo` 模式同样再转 KEPUB，见 [KEPUB](kepub.md)）：唯一 ID 取自书 id（`kfx_id`，见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机)），`@media` 按这个模式的阅读范围、屏幕求值（`kfx::css::MediaEnv::for_profile`）。profile 可以用 `comic_format` 给漫画另配格式（内置模式不用；配了时是不是漫画按优化器的判定、按内容哈希缓存）。
    - **传输线程**：每台设备一条，在传加排队最多 2 件，满了主线程先做别的设备。
    - **MTP（Kindle、掌阅）**：拷贝用 1MB 块；目标已是逐字节相同的就不拷（Kindle 进度不丢）。不同的先删旧的、**直接写正式文件名**（`put_file` 的 `direct`）：原版 jmtpfs 的改名是整份下载再上传，经临时文件等于传三遍。所以写之前先在生成记录里登记一条指纹留空的（第 4 步），写到一半被打断时下次认得出、重传。本机打过补丁的 jmtpfs 2026-10-09 起改成真改名、换目录用 MTP MoveObject，挪位置也不再重传（Kindle、掌阅真机 ✓）。
+   - **USB 大容量存储（Kobo）**：同一文件系统上改名是原子的，经临时文件写、写完改成正式文件名（`generate::direct_write` 对 USBMS 返回 false），写到一半被打断不会留下半截的正式文件。
 7. 补上指纹，删掉待删的旧位置和变空的目录（只在产物根目录以内）。MTP 设备没挂上时删不了的留着下次删，不当成已删。
 
 生成记录是 `<书库>/output-state/<模式 id>.json`：书 id → 产物路径（2026-10-31 以前 Move 上的记 `uuid`、`name` 和相对的 `文件夹/文件名`：旧记录里的相对路径删书时一概不动）、指纹、传上去的那份的哈希 `sha`、待删的旧位置；`orphans` 是从书库删了、当时设备没接上没删成的，接上后删（`flush_removed`）。**只删这里记着的**。
@@ -214,7 +215,7 @@
 | 黑白彩色 | `gray`/`color` | 这个模式的全部 |
 | 格式 | `epub`；KFX 带写出器版本和写出器求 `@media` 用的屏幕、KFX 阅读范围（写成 `kfx<版本号>@<屏宽>x<屏高>r<宽>x<高>`，如 `kfx<N>@1272x1696r1104x1546`，`<N>` 是 `WRITER_VERSION`；2026-10-09 补上屏幕）；KEPUB 带写出器版本（`kepub<版本号>`，`bookconv::kepub::VERSION`） | 写出器版本、屏幕变了只有 `kindle` 的；KEPUB 写出器版本变了只有 `kobo` 的 |
 
-设备那几段（注释方式、阅读范围段、这一路的版本）由 `library/src/fingerprint.rs` 拼（`device_sig`），旧写法的设备段也在那里（`legacy_device_seg`）。**写法一个字都不能改**：`crates/library/tests/fp_golden.rs` 把内置两个模式逐个改一个 profile 字段，文字书、漫画的指纹和 `fp_golden.txt` 逐行对拍（2026-10-15）。给 profile 加字段时 `profile` 的单测 `every_field_has_a_fingerprint_decision` 编译不过，逼着决定它进不进指纹。
+设备那几段（注释方式、阅读范围段、这一路的版本）由 `library/src/fingerprint.rs` 拼（`device_sig`），旧写法的设备段也在那里（`legacy_device_seg`）。**写法一个字都不能改**：`crates/library/tests/fp_golden.rs` 把内置三个模式逐个改一个 profile 字段，文字书、漫画的指纹和 `fp_golden.txt` 逐行对拍（2026-10-15）。给 profile 加字段时 `profile` 的单测 `every_field_has_a_fingerprint_decision` 编译不过，逼着决定它进不进指纹。
 2026-10-15 对拍发现 `background_auto_height`、`margin_top` 改值时产物会变但指纹不变，补成 `kindle_rules` 段的 `h`、`p`（掌阅、Move 的文字书各重新生成一次，内容没变的不重传）。
 2026-10-16 加的中间调加深（`comic_gamma`、`image_gamma`）开着时在这一路阅读范围段的最后写 `G` + 伽马（如 `G1.1`）；不开的模式不出新字母，指纹不变（Kindle 2026-10-26 开了以后三台都带 `G1.1`）。漫画的 `G` 段后面再有拉满对比度的 `A`、杂点不挡裁白边的 `S`、裁页码的 `P`（`comic_autocontrast`、`comic_trim_specks`、`comic_page_numbers`，2026-10-30，只 Kindle 开），小页不放大（`comic_upscale = false`）再加 `N`，黑底页补边补底色（`comic_dark_bg`，2026-11-01，只 Kindle 开）再加 `K`：Kindle 漫画是 `G1.1ASPK`。两路共用的那段末尾有书架缩略图的 `t` + 宽高比（`cover_thumb_aspect`，2026-10-30，Kindle 是 `t0.65`），`<meta name="cover">` 指向缩略图（`cover_meta_thumb`，2026-11-03）再加 `M`：掌阅是 `t0.754M`。
 
