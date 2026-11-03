@@ -127,9 +127,27 @@ impl Devices {
         self.targets.borrow_mut().clear();
     }
 
-    /// 设备挂载点的上级目录（MTP、USB 大容量存储；删产物时判断文件在不在可拔下的设备上）。
-    pub(crate) fn bases(&self) -> [&Path; 2] {
-        [&self.env.mtp_base, &self.env.usbms_base]
+    /// `path` 在可拔下的设备上（MTP、USB 大容量存储挂载目录下）而设备现在没挂上：删产物时不当成已删，记录留着下次再删。
+    /// 挂载点取 `<base>/<path 在 base 下的第一段>`；开着挂载检查时它要真的挂着（[`deliver::mounted`]），同时 `root` 要在。
+    /// 只看 `root.is_dir()` 不够：拔掉后 udisks、jmtpfs 留下的空挂载点里正好有同名目录时会被当成接上，删掉了记录、书却还留在机上（agy 发现）。
+    pub(crate) fn unplugged(&self, path: &Path, root: &Path) -> bool {
+        // 长的先比：关了挂载检查时 usbms_base 缺省在 mtp_base 下面（`<mtp_base>/usbms`），先比 mtp_base 会把 `usbms` 当成挂载点
+        let mut bases = [&self.env.mtp_base, &self.env.usbms_base];
+        bases.sort_by_key(|b| std::cmp::Reverse(b.as_os_str().len()));
+        for base in bases {
+            let Ok(rest) = path.strip_prefix(base) else {
+                continue;
+            };
+            let Some(first) = rest.components().next() else {
+                return true; // 就是挂载目录本身：不是设备上的文件，按没挂上处理，不删
+            };
+            let point = base.join(first);
+            if self.env.mount_check && !deliver::mounted(&point) {
+                return true;
+            }
+            return !root.is_dir();
+        }
+        false
     }
 
     /// USB 大容量存储挂载点的上级目录（Kobo：产物旁边没有 Kindle 的 `.sdr`，换目录时不搬）。

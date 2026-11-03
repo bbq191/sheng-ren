@@ -613,6 +613,16 @@ def kobo_push(opts):
 测试书留在 Kobo 上，用完自己删（在 Kobo 上删或删 {dest} 里的文件）""")
 
 
+def file_sha256(path):
+    """文件内容的 SHA-256（十六进制），分块读。"""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def kobo_collect(opts, fmt):
     d = run_dir(opts)
     r = load_run(d)
@@ -624,18 +634,28 @@ def kobo_collect(opts, fmt):
     # fnmatch 的 * 也匹配开头的点：隐藏文件、符号链接一律不要（--clean 会删）
     shots = sorted(f for f in os.listdir(mount) if fnmatch.fnmatch(f, pat) and not f.startswith(".")
                    and not os.path.islink(os.path.join(mount, f)) and os.path.isfile(os.path.join(mount, f)))
-    seen = {k for v in r["collected"].values() for k in v}
-    new = [f for f in shots if f"{f}:{os.path.getsize(os.path.join(mount, f))}" not in seen]
+    # 去重按内容哈希（记成 `名字:sha256`，只比哈希）：--clean 后 Kobo 可能又从 screen_001 编号，按 `名字:大小` 比会把
+    # 同名同大小的新截屏当成拷过而漏掉（agy 发现）。2026-11-03 以前的 `名字:大小` 记录对不上任何哈希，不用迁移
+    # 别的格式拷过的只认 `名字:哈希` 都对上的（没 --clean 时设备上留着的上一格式截屏）：两种格式渲染出逐像素一样的页时
+    # 只比哈希会把这一格式的那页漏掉（agy 二审）
+    seen = {k.split(":")[-1] for k in r["collected"].get(fmt, [])}
+    other = {k for g, v in r["collected"].items() if g != fmt for k in v}
+    sums = {f: file_sha256(os.path.join(mount, f)) for f in shots}
+    new = [f for f in shots if sums[f] not in seen and f"{f}:{sums[f]}" not in other]
     out = os.path.join(d, "shots", fmt)
     os.makedirs(out, exist_ok=True)
     got, names = [], []
     for f in new:
         src = os.path.join(mount, f)
         dst = os.path.join(out, f)
+        if os.path.exists(dst):
+            # --clean 后重新编号的同名新截屏：不覆盖上一批（kobo_measure_dir 每次量整个目录），名字后加哈希前 8 位
+            stem, ext = os.path.splitext(f)
+            dst = os.path.join(out, f"{stem}-{sums[f][:8]}{ext}")
         shutil.copy2(src, dst)
-        if os.path.getsize(dst) != os.path.getsize(src):
-            sys.exit(f"{f} 拷回来大小不对")
-        got.append(f"{f}:{os.path.getsize(src)}")
+        if file_sha256(dst) != sums[f]:
+            sys.exit(f"{f} 拷回来内容不对")
+        got.append(f"{f}:{sums[f]}")
         names.append(f)
     r["collected"].setdefault(fmt, []).extend(got)
     save_run(d, r)

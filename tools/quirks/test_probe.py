@@ -134,6 +134,43 @@ class Probe(unittest.TestCase):
             with open(os.path.join(run, "run.json"), encoding="utf-8") as f:
                 self.assertEqual(len(json.load(f)["collected"]["kepub"]), 1)
 
+    def test_collect_same_name_new_content(self):
+        """--clean 后设备重新编号：同名同大小、内容不同的截屏也要拷回来（去重按内容哈希）。"""
+        with tempfile.TemporaryDirectory() as base, tempfile.TemporaryDirectory() as run:
+            dev = os.path.join(base, "KOBOeReader")
+            os.makedirs(dev)
+            shot = os.path.join(dev, "screen_001.png")
+            with open(shot, "wb") as f:
+                f.write(b"A" * 64)
+            probe.save_run(run, {"only": None, "collected": {}})
+            env = {"BOOKLIB_USBMS_DIR": base, "BOOKLIB_MTP_NO_MOUNT_CHECK": "1"}
+            argv = ["probe.py", "kobo", "collect", "--format=epub"]
+            opts = {"--run": run, "--pattern": "screen_*.png"}
+            with mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", argv), \
+                    mock.patch.object(probe, "kobo_measure_dir"), redirect_stderr(io.StringIO()):
+                probe.kobo_collect(opts, "epub")
+                probe.kobo_collect(opts, "epub")  # 没变：不再拷
+                with open(shot, "wb") as f:
+                    f.write(b"B" * 64)
+                probe.kobo_collect(opts, "epub")
+                # 另一格式：设备上没清掉的上一格式截屏（名字、内容都一样）不拷；内容和上一格式某张一样但名字不同的要拷
+                with open(os.path.join(dev, "screen_002.png"), "wb") as f:
+                    f.write(b"A" * 64)
+                probe.kobo_collect(opts, "kepub")
+            with open(os.path.join(run, "run.json"), encoding="utf-8") as f:
+                collected = json.load(f)["collected"]
+            self.assertEqual(len(collected["epub"]), 2)
+            self.assertEqual([k.split(":")[0] for k in collected["kepub"]], ["screen_002.png"])
+            shots = os.path.join(run, "shots", "epub")
+            names = sorted(os.listdir(shots))
+            self.assertEqual(len(names), 2, "上一批的 screen_001 不被覆盖")
+            with open(os.path.join(shots, "screen_001.png"), "rb") as f:
+                self.assertEqual(f.read(), b"A" * 64)
+            (renamed,) = [n for n in names if n != "screen_001.png"]
+            self.assertRegex(renamed, r"^screen_001-[0-9a-f]{8}\.png$")
+            with open(os.path.join(shots, renamed), "rb") as f:
+                self.assertEqual(f.read(), b"B" * 64)
+
     def test_generate_refuses_existing_run(self):
         with tempfile.TemporaryDirectory() as d:
             probe.save_run(d, {"collected": {"epub": ["x:1"]}})
