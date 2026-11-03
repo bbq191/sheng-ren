@@ -3,7 +3,8 @@
 //! - `devices`：阅读模式 id（`--device=` 的值）
 //! - `paths 词`：目录和 `.epub`、`.cbz`，当前目录下的和书根目录下的（`track` 的相对路径两处都认）；已在跟踪的不列。
 //!   词是空的且有书根目录时只列书根目录第一层还没跟踪的目录（2026-11-03 要：track 先挑顶层目录；命令本身不限制）
-//! - `tracked 词`：跟踪着的条目（`untrack` 的），书根目录里的写成相对它的路径
+//! - `tracked 命令行的词…`：跟踪着的条目（`untrack` 的），书根目录里的写成相对它的路径；命令行里有 `--device=` 时
+//!   只列给这几台的（含给全部设备的）（2026-11-03 要）
 //!
 //! 只读：书库目录不在时不打开（打开会建出目录），出错一律不出声（补全时不该往终端上打字）。
 
@@ -37,7 +38,11 @@ pub fn run(args: &[String]) {
         Some("tracked") => {
             let Some(lib) = open() else { return };
             let root = lib.books_root();
+            let want = device_filter(&args[1..]);
             for e in lib.tracked_entries() {
+                if !for_devices(&e.devices, &want) {
+                    continue;
+                }
                 let shown = root
                     .as_ref()
                     .and_then(|r| e.path.strip_prefix(r).ok())
@@ -126,6 +131,29 @@ fn paths(
     out
 }
 
+/// 命令行词里 `--device=a,b`（或 `--device a,b`）给的模式 id；没写或写了 `all` 是空＝不过滤。
+fn device_filter(words: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut it = words.iter();
+    while let Some(w) = it.next() {
+        let v = match w.strip_prefix("--device") {
+            Some(r) if r.starts_with('=') => r[1..].to_string(),
+            Some("") => it.next().cloned().unwrap_or_default(),
+            _ => continue,
+        };
+        out.extend(v.split(',').filter(|d| !d.is_empty()).map(String::from));
+    }
+    if out.iter().any(|d| d == "all") {
+        out.clear();
+    }
+    out
+}
+
+/// 跟踪条目（给 `entry` 这几台，空＝全部）该不该列给 `want`（空＝不过滤）。
+fn for_devices(entry: &[String], want: &[String]) -> bool {
+    want.is_empty() || entry.is_empty() || entry.iter().any(|d| want.contains(d))
+}
+
 /// 比较用的路径：能规范化就规范化（`./漫画` 和书根下的绝对路径算同一个），不能就照原样。
 fn canon(p: &Path) -> PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
@@ -166,7 +194,7 @@ fn fish_script() -> String {
         }
         let args = match c.name {
             "track" => "-a '(booklib __complete paths (commandline -ct))'",
-            "untrack" => "-a '(booklib __complete tracked (commandline -ct))'",
+            "untrack" => "-a '(booklib __complete tracked (commandline -opc))'",
             "add" | "dedupe" | "meta" => "-F",
             _ => continue,
         };
@@ -234,6 +262,27 @@ mod tests {
         );
         // 已跟踪的目录前缀也补不出来
         assert!(paths("杂", Some(&root), &tracked).is_empty());
+    }
+
+    #[test]
+    fn untrack_lists_only_entries_for_the_given_devices() {
+        let w = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let s = |v: &[&str]| w(v);
+        assert_eq!(
+            device_filter(&w(&["booklib", "untrack", "--device=ireader,kobo"])),
+            s(&["ireader", "kobo"])
+        );
+        assert_eq!(
+            device_filter(&w(&["booklib", "untrack", "--device", "kindle"])),
+            s(&["kindle"])
+        );
+        assert!(device_filter(&w(&["booklib", "untrack", "--device=all"])).is_empty());
+        assert!(device_filter(&w(&["booklib", "untrack", "漫画"])).is_empty());
+        let ire = s(&["ireader"]);
+        assert!(!for_devices(&s(&["kindle"]), &ire));
+        assert!(for_devices(&s(&["ireader", "kindle"]), &ire));
+        assert!(for_devices(&[], &ire));
+        assert!(for_devices(&s(&["kindle"]), &[]));
     }
 
     #[test]
