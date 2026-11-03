@@ -935,7 +935,7 @@ impl Library {
         let mut state = (*self.records.states.get(sp)).clone();
         let prev = state.books.remove(id);
         // `.sdr` 是 Kindle 的（MTP）；USB 大容量存储（Kobo）的进度在阅读器自己的数据库里，产物旁边的东西不动
-        if !entry.path.starts_with(&self.devices.usbms_base()) {
+        if !entry.path.starts_with(self.devices.usbms_base()) {
             for o in entry.old.iter().filter(|o| !state.claimed(o)) {
                 carry_sidecar(&o.path, &entry.path);
             }
