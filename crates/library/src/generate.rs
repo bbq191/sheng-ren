@@ -929,7 +929,11 @@ impl Library {
                 carry_sidecar(&o.path, &entry.path);
             }
         }
-        entry.old = state.delete_placements(std::mem::take(&mut entry.old), &self.devices);
+        entry.old = state.delete_placements(
+            std::mem::take(&mut entry.old),
+            Some(&entry.path),
+            &self.devices,
+        );
         if prev.as_ref() == Some(&entry) {
             return Ok(());
         }
@@ -1041,15 +1045,34 @@ impl State {
     /// 调用前要先把本书的记录从 `self` 里拿掉，别的书还记着的不删。
     /// 删掉这些产物（[`State::delete_placements`]），删不掉的记进 `orphans`（下次接上设备再删）。
     fn delete_into_orphans(&mut self, list: Vec<Placement>, devices: &Devices) {
-        let left = self.delete_placements(list, devices);
+        let left = self.delete_placements(list, None, devices);
         self.orphans.extend(left);
     }
 
-    fn delete_placements(&self, list: Vec<Placement>, devices: &Devices) -> Vec<Placement> {
+    /// `current`：调用方手上、还没放回 `self` 的本书当前位置（`finish`），和别的书的一样不删。
+    fn delete_placements(
+        &self,
+        list: Vec<Placement>,
+        current: Option<&Path>,
+        devices: &Devices,
+    ) -> Vec<Placement> {
         let mut left = Vec::new();
         for p in list {
-            if self.claimed(&p) {
+            if self.claimed(&p) || current == Some(p.path.as_path()) {
                 continue;
+            }
+            // 只差大小写的另一个名字正被用着（书名只改了大小写）：阅读器的文件系统多半不分大小写，删旧名字就是删现在这份
+            let twins: Vec<&Path> = self
+                .books
+                .values()
+                .flat_map(|e| {
+                    std::iter::once(e.path.as_path()).chain(e.old.iter().map(|o| o.path.as_path()))
+                })
+                .chain(current)
+                .filter(|q| case_twin(q, &p.path))
+                .collect();
+            if !twins.is_empty() && !distinct_on_disk(&p.path, &twins) {
+                continue; // 同一个文件：不删，旧名字的记录丢掉
             }
             // 相对路径：2026-10-31 以前 Move 上的旧记录（`文件夹/文件名`，Move 已经删了），不动、也不再记着
             if !p.path.is_absolute() {
@@ -1190,6 +1213,35 @@ fn carry_sidecar(old: &Path, new: &Path) {
     }
 }
 
+/// 同一目录里、文件名只差大小写的两个不同路径。
+pub(crate) fn case_twin(a: &Path, b: &Path) -> bool {
+    a != b
+        && a.parent() == b.parent()
+        && match (a.file_name(), b.file_name()) {
+            (Some(x), Some(y)) => {
+                x.to_string_lossy().to_lowercase() == y.to_string_lossy().to_lowercase()
+            }
+            _ => false,
+        }
+}
+
+/// `path` 和只差大小写的 `twins` 在磁盘上是不是各是各的文件：列目录，`path` 的原名和某个 twin 的原名都列得出来才算
+/// （分大小写的文件系统）。不分大小写的文件系统上目录里只会有其中一个名字，算同一个文件，不能删。读不了目录也按同一个处理。
+fn distinct_on_disk(path: &Path, twins: &[&Path]) -> bool {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
+        return false;
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let names: Vec<std::ffi::OsString> = rd.flatten().map(|e| e.file_name()).collect();
+    names.iter().any(|n| n == name)
+        && twins.iter().any(|t| {
+            t.file_name()
+                .is_some_and(|tn| names.iter().any(|n| n == tn))
+        })
+}
+
 /// 删掉一个产物文件：删掉了或本来就不在返回 `true`。删的时候报"不在"不立即当真：jmtpfs 刚挪完文件偶尔 stat 不到，
 /// 重新列一次目录，里面还有这个名字就再删一次（删不掉的算没删，下次再删）。
 fn remove_product(path: &Path) -> bool {
@@ -1261,6 +1313,39 @@ mod remove_tests {
         };
         state.delete_into_orphans(vec![p], &Devices::new(off));
         assert!(!f.exists() && state.orphans.is_empty());
+    }
+
+    /// 书名只改了大小写（`Abc.epub` → `abc.epub`）：不分大小写的文件系统上目录里只剩新名字，旧位置不能删（删的就是现在这份）；
+    /// 分大小写的文件系统上两个都在，旧的照删。
+    #[test]
+    fn case_only_rename_keeps_current() {
+        use super::{Placement, State};
+        use crate::deliver::DeviceEnv;
+        use crate::session::Devices;
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("out");
+        std::fs::create_dir_all(&root).unwrap();
+        let (old, cur) = (root.join("Abc.epub"), root.join("abc.epub"));
+        let dev = Devices::new(DeviceEnv {
+            mtp_base: d.path().join("mtp"),
+            mount_check: false,
+            usbms_base: d.path().join("media"),
+        });
+        let p = Placement {
+            path: old.clone(),
+            root: root.clone(),
+        };
+        // 模拟不分大小写：改名后目录里只有 abc.epub，删 Abc.epub 会删到它
+        std::fs::write(&cur, b"new").unwrap();
+        let state = State::default();
+        let left = state.delete_placements(vec![p.clone()], Some(&cur), &dev);
+        assert!(left.is_empty(), "旧名字的记录丢掉");
+        assert!(super::case_twin(&old, &cur) && !super::distinct_on_disk(&old, &[&cur]));
+        assert!(cur.exists());
+        // 分大小写：两个都在，旧的删掉
+        std::fs::write(&old, b"old").unwrap();
+        let left = state.delete_placements(vec![p], Some(&cur), &dev);
+        assert!(left.is_empty() && !old.exists() && cur.exists());
     }
 
     /// usbms_base 在 mtp_base 下面（关了挂载检查时的缺省）：挂载点按 usbms_base 算（`<usbms>/KOBOeReader`），不是 `<mtp>/usbms`。

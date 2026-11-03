@@ -192,6 +192,27 @@ pub(crate) fn put_file(
     compare: bool,
     direct: bool,
 ) -> Result<bool, String> {
+    // 挪到只差大小写的新名字（书名只改了大小写）：不分大小写的文件系统上 `dest` 就是 `src`，下面"先删 dest"会把书删掉。
+    // 先改成旁边的临时名字，再从那里放
+    if !keep_src && crate::generate::case_twin(src, dest) {
+        let staged = crate::fsutil::tmp_sibling(dest);
+        std::fs::rename(src, &staged).map_err(|e| format!("改名 {}: {e}", src.display()))?;
+        let r = put_file_retry(&staged, dest, false, compare, direct);
+        if r.is_err() && staged.is_file() {
+            let _ = std::fs::rename(&staged, src); // 放回原名，记录还对得上
+        }
+        return r;
+    }
+    put_file_retry(src, dest, keep_src, compare, direct)
+}
+
+fn put_file_retry(
+    src: &Path,
+    dest: &Path,
+    keep_src: bool,
+    compare: bool,
+    direct: bool,
+) -> Result<bool, String> {
     let mut tries = 0;
     loop {
         match put_file_once(src, dest, keep_src, compare, direct) {
@@ -257,6 +278,22 @@ fn put_file_once(
         let _ = std::fs::remove_file(src);
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod case_tests {
+    /// 只差大小写的挪动：先挪到临时名字再放，不会因为"先删 dest"把源删掉。
+    #[test]
+    fn case_only_move() {
+        let d = tempfile::tempdir().unwrap();
+        let (a, b) = (d.path().join("Abc.epub"), d.path().join("abc.epub"));
+        std::fs::write(&a, b"book").unwrap();
+        assert!(super::put_file(&a, &b, false, false, true).unwrap());
+        assert_eq!(std::fs::read(&b).unwrap(), b"book");
+        assert!(!a.exists());
+        let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().flatten().collect();
+        assert_eq!(left.len(), 1, "没留临时文件");
+    }
 }
 
 /// 往设备上拷文件的读写块大小。
