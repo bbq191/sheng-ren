@@ -1104,6 +1104,11 @@ const THUMB_QUALITY: u8 = 90;
 /// [`cover_thumbnail`]：和要的宽高比差这么多以内不裁（裁掉不到一个像素宽的边没意义）。
 const THUMB_TOLERANCE: f32 = 0.005;
 
+/// 已有的书架缩略图（宽 `w`、高 `h`）合不合 `aspect`：差在 [`THUMB_TOLERANCE`] 以内。再优化时用来判断留着还是重做。
+pub fn thumb_aspect_fits(w: u32, h: u32, aspect: f32) -> bool {
+    h > 0 && (w as f32 / h as f32 - aspect).abs() <= THUMB_TOLERANCE
+}
+
 /// 灰度整页的像素（RGB 的按三个分量里最暗的取：比 [`crate::comiccrop`] 的门槛暗的分量就算内容）。
 fn darkness_plane(img: &Page8) -> std::borrow::Cow<'_, [u8]> {
     match img {

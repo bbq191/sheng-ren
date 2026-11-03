@@ -113,18 +113,48 @@ fn optimize_inner(
         });
     }
     // 书架缩略图（文字书、漫画都做）：封面居中裁成书架框的比例另存一张，书里的封面页不动
+    // 已经有缩略图（再优化我们的产物）：比例和这次的一样才留着，不一样重做；这次的设备不做缩略图就去掉（meta cover 改回真封面）
     if let Some(aspect) = opts.cover_thumb_aspect {
-        crate::wash::add_cover_thumbnail(&mut raw, |p| {
-            let bytes = crate::epubzip::read_by_name(&mut archive, p).ok()?;
-            crate::imgopt::guard(|| {
-                crate::imgopt::cover_thumbnail(
-                    &bytes,
-                    aspect,
-                    opts.grayscale,
-                    opts.limits.max_decode_pixels,
-                )
-            })
+        let old_thumb = crate::wash::parse_opf(&raw).and_then(|o| {
+            let text = String::from_utf8_lossy(&raw[o.index].data).into_owned();
+            crate::wash::manifest_items(&text)
+                .iter()
+                .find(|i| i.id == crate::wash::THUMB_ID)
+                .map(|i| i.path(&o.dir))
         });
+        let fits = old_thumb.is_some_and(|p| {
+            let dims = |b: &[u8]| {
+                crate::imgopt::guard(|| {
+                    image::ImageReader::new(std::io::Cursor::new(b))
+                        .with_guessed_format()
+                        .ok()?
+                        .into_dimensions()
+                        .ok()
+                })
+            };
+            read_image_head(&mut archive, &p, dims)
+                .ok()
+                .flatten()
+                .is_some_and(|(w, h)| crate::imgopt::thumb_aspect_fits(w, h, aspect))
+        });
+        crate::wash::add_cover_thumbnail(
+            &mut raw,
+            opts.cover_meta_thumb,
+            |_| fits,
+            |p| {
+                let bytes = crate::epubzip::read_by_name(&mut archive, p).ok()?;
+                crate::imgopt::guard(|| {
+                    crate::imgopt::cover_thumbnail(
+                        &bytes,
+                        aspect,
+                        opts.grayscale,
+                        opts.limits.max_decode_pixels,
+                    )
+                })
+            },
+        );
+    } else {
+        crate::wash::drop_cover_thumbnail(&mut raw);
     }
     // 图片照 Kindle 的大小改写（`kindle_images`）要原图宽高：这时图片条目是空占位，先读文件头
     let sized;

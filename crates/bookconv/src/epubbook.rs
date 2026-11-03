@@ -258,7 +258,11 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(
         ));
     }
     if cover.is_none() {
-        if let Some(&(_, _, id)) = crate::wash::opf::cover_meta_tags(&opf_text).first() {
+        // 指向书架缩略图的 meta（掌阅 `cover_meta_thumb`）不当封面；Kindle 产物没有这种 meta，这里只防外来的书
+        if let Some(&(_, _, id)) = crate::wash::opf::cover_meta_tags(&opf_text)
+            .iter()
+            .find(|(_, _, id)| *id != crate::wash::THUMB_ID)
+        {
             cover = opf.items.get(id).cloned();
         }
     }

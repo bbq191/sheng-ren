@@ -2558,3 +2558,155 @@ fn repair_only_keeps_media_env() {
         );
     }
 }
+
+/// 封面 400×800（0.5）、meta cover 和 `cover-image` 都指着它、有封面页的小书。
+fn shelf_thumb_book() -> Vec<u8> {
+    let mut jpg = Vec::new();
+    image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(400, 800, |x, y| {
+        image::Luma([((x + y) % 256) as u8])
+    }))
+    .write_to(&mut Cursor::new(&mut jpg), image::ImageFormat::Jpeg)
+    .unwrap();
+    let files: [(&str, &[u8]); 5] = [
+        ("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#),
+        ("OEBPS/content.opf", br#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>book</dc:title><dc:language>zh</dc:language><meta name="cover" content="cv"/></metadata><manifest><item id="cv" href="i/c.jpg" media-type="image/jpeg" properties="cover-image"/><item id="cp" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="cp"/><itemref idref="c1"/></spine></package>"#),
+        ("OEBPS/cover.xhtml", br#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body><img src="i/c.jpg" alt=""/></body></html>"#),
+        ("OEBPS/c1.xhtml", "<?xml version=\"1.0\" encoding=\"utf-8\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>一</title></head><body><h1>第一章</h1><p>正文。</p></body></html>".as_bytes()),
+        ("OEBPS/i/c.jpg", &jpg),
+    ];
+    let mut buf = Vec::new();
+    {
+        let mut zw = ZipWriter::new(Cursor::new(&mut buf));
+        zw.start_file(
+            "mimetype",
+            SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+        )
+        .unwrap();
+        zw.write_all(b"application/epub+zip").unwrap();
+        for (n, b) in files {
+            zw.start_file(n, SimpleFileOptions::default()).unwrap();
+            zw.write_all(b).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+    buf
+}
+
+fn zip_names(epub: &[u8]) -> Vec<String> {
+    ZipArchive::new(Cursor::new(epub))
+        .unwrap()
+        .file_names()
+        .map(str::to_string)
+        .collect()
+}
+
+/// 掌阅（`cover_meta_thumb`，2026-11-03）：`<meta name="cover">` 指向书架缩略图，`cover-image` 和封面页不动；再优化一遍是幂等的
+/// （不拿缩略图当封面再裁、不出第二张缩略图）。Kindle 的 meta cover 照旧指真封面；Kobo 不写 aspect，不做缩略图。
+#[test]
+fn ireader_meta_cover_points_to_shelf_thumbnail() {
+    let book = shelf_thumb_book();
+    let opf_of = |b: &[u8]| String::from_utf8(entry_bytes(b, "OEBPS/content.opf")).unwrap();
+    let cover_metas = |opf: &str| {
+        crate::wash::opf::cover_meta_tags(opf)
+            .into_iter()
+            .map(|(_, _, id)| id.to_string())
+            .collect::<Vec<_>>()
+    };
+    let opts = OptimizeOpts::for_profile(crate::test_profile("ireader"));
+    assert!(opts.cover_meta_thumb && opts.cover_thumb_aspect == Some(0.754));
+    let (out, _) = optimize_epub_with(&book, &opts).unwrap();
+    let opf = opf_of(&out);
+    assert_eq!(cover_metas(&opf), ["eink-thumb"], "{opf}");
+    assert!(
+        opf.contains(r#"<meta name="eink-thumbnail" content="eink-thumb"/>"#),
+        "{opf}"
+    );
+    assert!(
+        opf.contains(
+            r#"<item id="cv" href="i/c.jpg" media-type="image/jpeg" properties="cover-image"/>"#
+        ),
+        "cover-image 不动：{opf}"
+    );
+    assert_eq!(
+        crate::wash::opf::declared_cover(&opf).map(|i| i.id),
+        Some("cv"),
+        "真封面还是 cover-image 那张"
+    );
+    let thumb = entry_bytes(&out, "OEBPS/eink-thumb.jpg");
+    let t = image::load_from_memory(&thumb).unwrap();
+    assert!(
+        (t.width() as f32 / t.height() as f32 - 0.754).abs() < 0.01,
+        "{}×{}",
+        t.width(),
+        t.height()
+    );
+    assert!(
+        String::from_utf8(entry_bytes(&out, "OEBPS/cover.xhtml"))
+            .unwrap()
+            .contains("i/c.jpg"),
+        "封面页照旧用真封面"
+    );
+    // 再优化一遍
+    let (again, _) = optimize_epub_with(&out, &opts).unwrap();
+    assert_eq!(opf_of(&again), opf, "OPF 幂等");
+    assert_eq!(
+        entry_bytes(&again, "OEBPS/eink-thumb.jpg"),
+        thumb,
+        "缩略图从真封面裁，不是从缩略图再裁"
+    );
+    assert_eq!(
+        zip_names(&again)
+            .iter()
+            .filter(|n| n.contains("eink-thumb"))
+            .count(),
+        1,
+        "{:?}",
+        zip_names(&again)
+    );
+    // Kindle：meta cover 照旧指真封面，缩略图只由 eink-thumbnail 指
+    let (k, _) = optimize_epub_with(
+        &book,
+        &OptimizeOpts::for_profile(crate::test_profile("kindle")),
+    )
+    .unwrap();
+    let kopf = opf_of(&k);
+    assert_eq!(cover_metas(&kopf), ["cv"], "{kopf}");
+    assert!(
+        kopf.contains(r#"<meta name="eink-thumbnail" content="eink-thumb"/>"#),
+        "{kopf}"
+    );
+    // Kobo：不写 aspect，不做缩略图
+    let kobo = OptimizeOpts::for_profile(crate::test_profile("kobo"));
+    assert!(kobo.cover_thumb_aspect.is_none() && !kobo.cover_meta_thumb);
+    let (b, _) = optimize_epub_with(&book, &kobo).unwrap();
+    assert!(!zip_names(&b).iter().any(|n| n.contains("eink-thumb")));
+    assert_eq!(cover_metas(&opf_of(&b)), ["cv"]);
+    // 掌阅产物拿去给别的设备再优化（agy 二审 4）：Kindle 照 0.65 重裁、meta 指回真封面，再跑一遍不变；Kobo 整张缩略图去掉
+    let kindle = OptimizeOpts::for_profile(crate::test_profile("kindle"));
+    let (k2, _) = optimize_epub_with(&out, &kindle).unwrap();
+    let k2opf = opf_of(&k2);
+    assert_eq!(cover_metas(&k2opf), ["cv"], "{k2opf}");
+    assert_eq!(
+        k2opf.matches(r#"name="eink-thumbnail""#).count(),
+        1,
+        "{k2opf}"
+    );
+    let t = image::load_from_memory(&entry_bytes(&k2, "OEBPS/eink-thumb.jpg")).unwrap();
+    assert!(
+        (t.width() as f32 / t.height() as f32 - 0.65).abs() < 0.01,
+        "照 Kindle 的比例重裁：{}×{}",
+        t.width(),
+        t.height()
+    );
+    let (k3, _) = optimize_epub_with(&k2, &kindle).unwrap();
+    assert_eq!(opf_of(&k3), k2opf, "Kindle 再优化幂等");
+    assert_eq!(
+        entry_bytes(&k3, "OEBPS/eink-thumb.jpg"),
+        entry_bytes(&k2, "OEBPS/eink-thumb.jpg")
+    );
+    let (b2, _) = optimize_epub_with(&out, &kobo).unwrap();
+    let b2opf = opf_of(&b2);
+    assert!(!zip_names(&b2).iter().any(|n| n.contains("eink-thumb")));
+    assert!(!b2opf.contains("eink-thumb"), "{b2opf}");
+    assert_eq!(cover_metas(&b2opf), ["cv"]);
+}

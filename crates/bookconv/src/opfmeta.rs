@@ -704,7 +704,16 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
             }
         }
     }
-    // 封面
+    // 封面。换、删之前先去掉优化器加的书架缩略图（`eink-thumb`，指着它的 `<meta name="cover">` 改回真封面）：留着书架上
+    // 就还是旧封面，再优化也只看比例、认不出封面换过（agy 二审）。缩略图交给下次优化照新封面重做
+    let mut thumb_gone = None;
+    if edits.cover.is_some() {
+        if let Some((new_opf, path)) = crate::wash::strip_cover_thumbnail(&opf, &opf_dir) {
+            opf = new_opf;
+            entries.retain(|e| e.name != path);
+            thumb_gone = Some(path);
+        }
+    }
     match &edits.cover {
         None => {}
         Some(CoverEdit::Remove) => {
@@ -714,7 +723,7 @@ pub fn edit_epub(src: &Path, dst: &Path, edits: &Edits) -> Result<EditReport, St
                 set_entry(&mut entries, &mut changed, n, data);
             }
             entries.retain(|e| !gone.contains(&e.name));
-            report.cover_removed = Some(gone);
+            report.cover_removed = Some(gone.into_iter().chain(thumb_gone.take()).collect());
         }
         Some(CoverEdit::Set(image)) => match declared_cover(&opf, &opf_dir) {
             Some((path, ext)) => {
@@ -1124,6 +1133,95 @@ mod tests {
             "{opf}"
         );
         assert_eq!(read(&mut z, "OEBPS/cv.gif"), b"GIF89a-old");
+    }
+
+    /// 已优化过的书（带书架缩略图 `eink-thumb`）换封面、删封面：缩略图的 item、`eink-thumbnail` meta、zip 里的文件一起去掉，
+    /// 指着缩略图的 `<meta name="cover">`（掌阅产物）改回真封面；Kindle 产物（meta 指真封面）同样（agy 二审 1、2）。
+    #[test]
+    fn cover_edits_drop_shelf_thumbnail() {
+        use std::io::Write;
+        let d = tempfile::tempdir().unwrap();
+        let mut png = Vec::new();
+        image::RgbImage::new(4, 6)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        for meta_target in ["eink-thumb", "cv"] {
+            let src = d.path().join(format!("{meta_target}.epub"));
+            let opf = format!(
+                r#"<package version="3.0" unique-identifier="uid"><metadata><dc:identifier id="uid">x</dc:identifier><dc:title>t</dc:title><meta name="cover" content="{meta_target}"/><meta name="eink-thumbnail" content="eink-thumb"/></metadata><manifest><item id="cv" href="cv.png" media-type="image/png" properties="cover-image"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="eink-thumb" href="eink-thumb.jpg" media-type="image/jpeg"/></manifest><spine><itemref idref="c1"/></spine></package>"#
+            );
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&src).unwrap());
+            let o = zip::write::SimpleFileOptions::default();
+            for (n, b) in [
+                ("mimetype", b"application/epub+zip".as_slice()),
+                ("META-INF/container.xml", br#"<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>"#.as_slice()),
+                ("OEBPS/content.opf", opf.as_bytes()),
+                ("OEBPS/c1.xhtml", "<html><body><p>正文</p></body></html>".as_bytes()),
+                ("OEBPS/cv.png", png.as_slice()),
+                ("OEBPS/eink-thumb.jpg", b"old-thumb"),
+            ] {
+                z.start_file(n, o).unwrap();
+                z.write_all(b).unwrap();
+            }
+            z.finish().unwrap();
+            let open = |p: &Path| {
+                let mut z = zip::ZipArchive::new(std::fs::File::open(p).unwrap()).unwrap();
+                let names: Vec<String> = (0..z.len())
+                    .map(|i| z.by_index(i).unwrap().name().to_string())
+                    .collect();
+                let opf = String::from_utf8(
+                    crate::epubzip::read_by_name(&mut z, "OEBPS/content.opf").unwrap(),
+                )
+                .unwrap();
+                (names, opf)
+            };
+            // 换封面
+            let dst = d.path().join(format!("{meta_target}-set.epub"));
+            let edits = Edits {
+                cover: Some(CoverEdit::Set(png.clone())),
+                ..Default::default()
+            };
+            assert_eq!(
+                edit_epub(&src, &dst, &edits).unwrap().cover_replaced,
+                Some(true)
+            );
+            let (names, opf) = open(&dst);
+            assert!(!names.iter().any(|n| n.contains("eink-thumb")), "{names:?}");
+            assert!(!opf.contains("eink-thumb"), "{opf}");
+            assert_eq!(
+                crate::wash::opf::cover_meta_tags(&opf)
+                    .iter()
+                    .map(|m| m.2)
+                    .collect::<Vec<_>>(),
+                ["cv"],
+                "{opf}"
+            );
+            // 删封面
+            let dst = d.path().join(format!("{meta_target}-rm.epub"));
+            let edits = Edits {
+                cover: Some(CoverEdit::Remove),
+                ..Default::default()
+            };
+            let gone = edit_epub(&src, &dst, &edits)
+                .unwrap()
+                .cover_removed
+                .unwrap();
+            assert!(
+                gone.contains(&"OEBPS/eink-thumb.jpg".to_string()),
+                "{gone:?}"
+            );
+            let (names, opf) = open(&dst);
+            assert!(
+                !names
+                    .iter()
+                    .any(|n| n.contains("eink-thumb") || n.ends_with("cv.png")),
+                "{names:?}"
+            );
+            assert!(
+                !opf.contains("eink-thumb") && !opf.contains(r#"name="cover""#),
+                "{opf}"
+            );
+        }
     }
 
     #[test]

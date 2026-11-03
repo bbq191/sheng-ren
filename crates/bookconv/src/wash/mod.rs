@@ -94,7 +94,8 @@ mod typeset;
 
 // 对外（优化器、质量门、书库、统计）用到的项；其余只在清洗层内部用。
 pub use self::cover::{
-    add_cover_thumbnail, ensure_cover_declared, prepend_cover_page, THUMB_ID, THUMB_META,
+    add_cover_thumbnail, drop_cover_thumbnail, ensure_cover_declared, prepend_cover_page,
+    strip_cover_thumbnail, THUMB_ID, THUMB_META,
 };
 pub use self::encoding::transcode_entries;
 

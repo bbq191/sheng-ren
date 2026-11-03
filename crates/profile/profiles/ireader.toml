@@ -71,6 +71,12 @@ inline_valign = false
 heading_center = true
 # float 认（2026-10-14 探针 Q133：标题浮到右边、后一段排在旁边；Kindle 不浮动）：标题上的写成 none。写 true 是缺省，这里写明
 float = true
+# 书架缩略图（2026-11-03 Air 3 Pro 真机）：书架封面框 212×281（≈0.754，书架截屏量的），封面直接拉伸到框的比例、不裁不留白
+# （封面比例探针 0.5 / 0.754 / 1.0：只有 0.754 的圆还是正圆，另两本成了椭圆、四边刻度全在）。普通文字书封面 0.67–0.72，都被横向拉宽 5–12%
+cover_thumb_aspect = 0.754
+# 书架取封面认 EPUB 2 的 <meta name="cover">：它和 properties="cover-image" 指向不同的图时书架用 meta 那张（同日「封面来源探针」）。
+# 所以让 meta cover 指向缩略图，cover-image、书里的封面页照旧（10-30 定的「只裁书架缩略图」）
+cover_meta_thumb = true
 
 # Air 3 Pro：2026-11-02 `adb exec-out screencap` 截屏 1440×1920（`wm size` 同，320dpi）
 [screen]

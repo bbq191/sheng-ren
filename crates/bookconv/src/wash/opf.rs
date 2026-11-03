@@ -385,11 +385,14 @@ pub fn is_image_item(it: &ManifestItem) -> bool {
 }
 
 /// OPF 声明的封面图：`<meta name="cover" content="id">` 指向的图片项优先，其次带 `properties="cover-image"` 的图片项。
+/// meta 指向我们另做的书架缩略图（[`super::THUMB_ID`]，掌阅 `cover_meta_thumb`）时不算：它只给书架用，真封面是 `cover-image` 那张——
+/// 再优化一遍已优化过的书不会拿缩略图当封面再裁一次，`booklib meta` 读、改、去封面也照真封面。
 /// 声明了但指向的不是图片（Calibre 产物的 `content="cover.txt"`）不算。
 pub fn declared_cover(opf: &str) -> Option<ManifestItem<'_>> {
     let mut items = manifest_items(opf);
     let by_meta = cover_meta_tags(opf)
         .into_iter()
+        .filter(|&(_, _, id)| id != super::THUMB_ID)
         .find_map(|(_, _, id)| items.iter().position(|i| i.id == id && is_image_item(i)));
     let pos = by_meta.or_else(|| {
         items.iter().position(|i| {

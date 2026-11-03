@@ -395,6 +395,10 @@ pub struct Profile {
     /// Kindle 书架的封面框固定 0.65（网格 344×531、列表约 139×213；2026-10-30 封面比例测试书 0.55–0.75 截图量的），
     /// 比它宽的封面上面空一截、窄的两边空。见 `bookconv::wash::add_cover_thumbnail`。
     pub cover_thumb_aspect: Option<f32>,
+    /// 书架封面认 EPUB 2 的 `<meta name="cover">`（TOML 里不写是 `false`）：另做了缩略图（`cover_thumb_aspect`）时，把这个 meta
+    /// 指向缩略图（没有就加一个），`cover-image` 属性、书里的封面页不动。掌阅写 `true`（2026-11-03 Air 3 Pro 真机：meta cover 和
+    /// `cover-image` 指向不同的图时书架用 meta 那张，书架把封面直接拉伸到框的比例）。KFX 不看它（写出器认 `eink-thumbnail`）。
+    pub cover_meta_thumb: bool,
     /// 阅读器怎么定图片尺寸（TOML 里不写是 `css`），见 [`ImageSizing`]。ireader 写 `device-px`，xochitl 写 `percent`。
     pub image_sizing: ImageSizing,
     /// 阅读器缺省字号下 1em 是几个屏幕像素（只 kindle 写：掌阅、Move 照它把 em 写的图片宽度折成 Kindle 上的实际大小，
@@ -526,6 +530,8 @@ struct ProfileFile {
     image_gamma: Option<f64>,
     cover_thumb_aspect: Option<f32>,
     #[serde(default)]
+    cover_meta_thumb: bool,
+    #[serde(default)]
     image_sizing: ImageSizing,
     font_px: Option<u32>,
     #[serde(default)]
@@ -613,6 +619,7 @@ impl Profile {
             kindle_rules: f.kindle_rules,
             image_gamma: f.image_gamma,
             cover_thumb_aspect: f.cover_thumb_aspect,
+            cover_meta_thumb: f.cover_meta_thumb,
             image_sizing: f.image_sizing,
             font_px: f.font_px,
             line_px: f.line_px,
@@ -688,6 +695,12 @@ impl Profile {
                     self.id
                 ));
             }
+        }
+        if self.cover_meta_thumb && self.cover_thumb_aspect.is_none() {
+            return Err(format!(
+                "profile {}: cover_meta_thumb 要和 cover_thumb_aspect 一起写（没有缩略图可指）",
+                self.id
+            ));
         }
         if self
             .cover_thumb_aspect
@@ -981,6 +994,7 @@ mod tests {
             kindle_rules: _,
             image_gamma: _,
             cover_thumb_aspect: _,
+            cover_meta_thumb: _,
             image_sizing: _,
             font_px: _,
             // 阅读器模型（也有的同时直接进）
@@ -1419,5 +1433,29 @@ mod tests {
             (k.screen.width, k.screen.height, k.color, k.format()),
             (1072, 1448, false, Format::Kepub)
         );
+    }
+
+    /// `cover_meta_thumb` 要和 `cover_thumb_aspect` 一起写；aspect 超出 0.3–1.5 报错（agy 二审 6）。
+    #[test]
+    fn cover_meta_thumb_needs_aspect() {
+        let src = include_str!("../profiles/ireader.toml");
+        assert!(
+            src.contains("cover_thumb_aspect = 0.754") && src.contains("cover_meta_thumb = true")
+        );
+        let p = Profile::parse("ireader", src).unwrap();
+        assert!(p.cover_meta_thumb && p.cover_thumb_aspect == Some(0.754));
+        let e = Profile::parse("x", &src.replace("cover_thumb_aspect = 0.754", "")).unwrap_err();
+        assert!(
+            e.contains("cover_meta_thumb 要和 cover_thumb_aspect 一起写"),
+            "{e}"
+        );
+        let e = Profile::parse(
+            "x",
+            &src.replace("cover_thumb_aspect = 0.754", "cover_thumb_aspect = 2.0"),
+        )
+        .unwrap_err();
+        assert!(e.contains("0.3–1.5"), "{e}");
+        let p = Profile::parse("x", &src.replace("cover_meta_thumb = true", "")).unwrap();
+        assert!(!p.cover_meta_thumb, "不写是 false");
     }
 }

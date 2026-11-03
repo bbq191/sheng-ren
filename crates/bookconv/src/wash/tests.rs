@@ -388,10 +388,15 @@ fn cover_thumbnail_added_beside_cover_once() {
         },
     ];
     let mut asked = None;
-    assert!(add_cover_thumbnail(&mut v, |p| {
-        asked = Some(p.to_string());
-        Some(b"jpg".to_vec())
-    }));
+    assert!(add_cover_thumbnail(
+        &mut v,
+        false,
+        |_| true,
+        |p| {
+            asked = Some(p.to_string());
+            Some(b"jpg".to_vec())
+        }
+    ));
     assert_eq!(asked.as_deref(), Some("O/I/c.jpg"));
     let opf = s(&v, "O/content.opf");
     assert!(
@@ -409,7 +414,7 @@ fn cover_thumbnail_added_beside_cover_once() {
     );
     assert_eq!(s(&v, "O/eink-thumb.jpg"), "jpg");
     assert!(
-        !add_cover_thumbnail(&mut v, |_| Some(Vec::new())),
+        !add_cover_thumbnail(&mut v, false, |_| true, |_| Some(Vec::new())),
         "已经有了不再加"
     );
     // 比例本来就对（不给字节）：不加
@@ -417,7 +422,7 @@ fn cover_thumbnail_added_beside_cover_once() {
         "content.opf",
         r#"<package><metadata/><manifest><item id="c" href="c.jpg" media-type="image/jpeg" properties="cover-image"/></manifest><spine/></package>"#,
     )];
-    assert!(!add_cover_thumbnail(&mut w, |_| None));
+    assert!(!add_cover_thumbnail(&mut w, false, |_| true, |_| None));
 }
 
 #[test]
@@ -3388,4 +3393,239 @@ fn kindle_rule_passes_are_ordered() {
             assert!(j < i, "{} 必须排在 {a} 之后", p.name);
         }
     }
+}
+
+/// 掌阅（`cover_meta_thumb`）：meta cover 指向缩略图（原位改、多的去掉、没有就加），`cover-image` 不动；
+/// `declared_cover`、`ensure_cover_declared` 不把缩略图当封面，再跑一遍什么也不改。
+#[test]
+fn cover_thumbnail_as_meta_cover() {
+    let book = |meta: &str| {
+        vec![
+            e(
+                "O/content.opf",
+                &format!(
+                    r#"<package version="3.0"><metadata><dc:title>书</dc:title>{meta}<dc:language>zh</dc:language></metadata><manifest><item id="c" href="I/c.jpg" media-type="image/jpeg" properties="cover-image"/><item id="p1" href="T/p1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="p1"/></spine></package>"#
+                ),
+            ),
+            e("O/T/p1.xhtml", "<html><body><p>正文</p></body></html>"),
+            Entry {
+                name: "O/I/c.jpg".into(),
+                data: Vec::new(),
+            },
+        ]
+    };
+    for meta in [
+        r#"<meta name="cover" content="c"/>"#,
+        r#"<meta name="cover" content="c"/><meta name="cover" content="c"/>"#,
+        "",
+    ] {
+        let mut v = book(meta);
+        assert!(add_cover_thumbnail(
+            &mut v,
+            true,
+            |_| true,
+            |_| Some(b"jpg".to_vec())
+        ));
+        let opf = s(&v, "O/content.opf");
+        let metas: Vec<_> = super::opf::cover_meta_tags(&opf)
+            .into_iter()
+            .map(|m| m.2)
+            .collect();
+        assert_eq!(metas, ["eink-thumb"], "{opf}");
+        if !meta.is_empty() {
+            assert!(opf.contains(r#"<dc:title>书</dc:title><meta name="cover" content="eink-thumb"/><dc:language>"#), "原位改：{opf}");
+        }
+        assert!(
+            opf.contains(
+                r#"<item id="c" href="I/c.jpg" media-type="image/jpeg" properties="cover-image"/>"#
+            ),
+            "{opf}"
+        );
+        assert_eq!(
+            super::opf::declared_cover(&opf).map(|i| i.id),
+            Some("c"),
+            "缩略图不算封面"
+        );
+        // 再优化一遍：封面声明、缩略图都不再动
+        assert!(!ensure_cover_declared(&mut v), "{opf}");
+        assert!(!add_cover_thumbnail(
+            &mut v,
+            true,
+            |_| true,
+            |_| panic!("不再裁")
+        ));
+        assert_eq!(s(&v, "O/content.opf"), opf);
+    }
+    // 缩略图已有、meta 还指着真封面（以前的产物再优化）：只补指向
+    let mut v = book(r#"<meta name="cover" content="c"/>"#);
+    assert!(add_cover_thumbnail(
+        &mut v,
+        false,
+        |_| true,
+        |_| Some(b"jpg".to_vec())
+    ));
+    assert!(add_cover_thumbnail(
+        &mut v,
+        true,
+        |_| true,
+        |_| panic!("不再裁")
+    ));
+    assert_eq!(
+        super::opf::cover_meta_tags(&s(&v, "O/content.opf"))[0].2,
+        "eink-thumb"
+    );
+    assert_eq!(
+        v.iter()
+            .filter(|x| x.name.ends_with("eink-thumb.jpg"))
+            .count(),
+        1
+    );
+}
+
+/// 已有缩略图再优化（agy 二审 4）：模式不开 `meta_cover` 时指着缩略图的 meta 改回真封面；`keep` 说比例不对就去掉重做
+/// （`make` 不给就只去掉）；`drop_cover_thumbnail` 整张去掉。每种都再跑一遍不变（幂等）。
+#[test]
+fn cover_thumbnail_follows_mode_on_reoptimize() {
+    let ireader = || {
+        let mut v = vec![
+            e(
+                "O/content.opf",
+                r#"<package version="3.0"><metadata><dc:title>t</dc:title><meta name="cover" content="c"/></metadata><manifest><item id="c" href="I/c.jpg" media-type="image/jpeg" properties="cover-image"/><item id="p1" href="T/p1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="p1"/></spine></package>"#,
+            ),
+            e("O/T/p1.xhtml", "<html><body><p>正文</p></body></html>"),
+            Entry {
+                name: "O/I/c.jpg".into(),
+                data: Vec::new(),
+            },
+        ];
+        assert!(add_cover_thumbnail(
+            &mut v,
+            true,
+            |_| true,
+            |_| Some(b"old".to_vec())
+        ));
+        v
+    };
+    let metas = |v: &[Entry]| -> Vec<String> {
+        super::opf::cover_meta_tags(&s(v, "O/content.opf"))
+            .into_iter()
+            .map(|m| m.2.to_string())
+            .collect()
+    };
+    let thumbs = |v: &[Entry]| v.iter().filter(|x| x.name == "O/eink-thumb.jpg").count();
+    // 同比例、不开 meta_cover（掌阅产物给 Kindle 那样的设备再优化）：缩略图留着、meta 指回真封面
+    let mut v = ireader();
+    assert!(add_cover_thumbnail(
+        &mut v,
+        false,
+        |_| true,
+        |_| panic!("不重裁")
+    ));
+    assert_eq!(metas(&v), ["c"]);
+    assert_eq!(s(&v, "O/eink-thumb.jpg"), "old");
+    assert!(!add_cover_thumbnail(
+        &mut v,
+        false,
+        |_| true,
+        |_| panic!("不重裁")
+    ));
+    // 比例不对：去掉重做，item、eink-thumbnail meta、文件都只一份
+    let mut v = ireader();
+    assert!(add_cover_thumbnail(
+        &mut v,
+        false,
+        |_| false,
+        |p| {
+            assert_eq!(p, "O/I/c.jpg", "照真封面重裁");
+            Some(b"new".to_vec())
+        }
+    ));
+    let opf = s(&v, "O/content.opf");
+    assert_eq!(s(&v, "O/eink-thumb.jpg"), "new");
+    assert_eq!(thumbs(&v), 1);
+    assert_eq!(opf.matches(r#"id="eink-thumb""#).count(), 1, "{opf}");
+    assert_eq!(opf.matches(r#"name="eink-thumbnail""#).count(), 1, "{opf}");
+    assert_eq!(metas(&v), ["c"], "{opf}");
+    assert!(!add_cover_thumbnail(
+        &mut v,
+        false,
+        |_| true,
+        |_| panic!("不重裁")
+    ));
+    // 比例不对、这次比例本来就对（make 不给）：只去掉
+    let mut v = ireader();
+    assert!(add_cover_thumbnail(&mut v, true, |_| false, |_| None));
+    let opf = s(&v, "O/content.opf");
+    assert_eq!(thumbs(&v), 0);
+    assert!(!opf.contains("eink-thumb"), "{opf}");
+    assert_eq!(metas(&v), ["c"]);
+    // 这次的设备不做缩略图（Kobo）：整张去掉
+    let mut v = ireader();
+    assert!(drop_cover_thumbnail(&mut v));
+    let opf = s(&v, "O/content.opf");
+    assert_eq!(thumbs(&v), 0);
+    assert!(!opf.contains("eink-thumb"), "{opf}");
+    assert_eq!(metas(&v), ["c"]);
+    assert!(
+        opf.contains(r#"properties="cover-image""#),
+        "真封面不动：{opf}"
+    );
+    assert!(!drop_cover_thumbnail(&mut v));
+    // zip 里有同名文件但 manifest 没有这一项（不是我们加的）：不碰
+    let mut w = ireader();
+    let o = s(&w, "O/content.opf").replace(
+        r#"<item id="eink-thumb" href="eink-thumb.jpg" media-type="image/jpeg"/>"#,
+        "",
+    );
+    w[0].data = o.clone().into_bytes();
+    assert!(!add_cover_thumbnail(
+        &mut w,
+        false,
+        |_| panic!(),
+        |_| panic!()
+    ));
+    assert_eq!(s(&w, "O/content.opf"), o);
+}
+
+/// `<opf:meta>` 写法原位改时保住前缀（agy 二审 3）；缺 `</metadata>`：原位改照常给，要新加才 `None`（二审 7）。
+#[test]
+fn point_meta_cover_keeps_prefix_and_needs_metadata_only_to_insert() {
+    use super::cover::point_meta_cover;
+    let opf = r#"<opf:package xmlns:opf="http://www.idpf.org/2007/opf"><opf:metadata><dc:title>t</dc:title><opf:meta name="cover" content="c"/><opf:meta name="cover" content="c"/></opf:metadata><opf:manifest><opf:item id="c" href="c.jpg" media-type="image/jpeg" properties="cover-image"/></opf:manifest><opf:spine/></opf:package>"#;
+    let out = point_meta_cover(opf, "eink-thumb").unwrap();
+    assert!(
+        out.contains(
+            r#"<dc:title>t</dc:title><opf:meta name="cover" content="eink-thumb"/></opf:metadata>"#
+        ),
+        "{out}"
+    );
+    let mut v = vec![e("content.opf", opf)];
+    assert!(add_cover_thumbnail(
+        &mut v,
+        true,
+        |_| true,
+        |_| Some(b"j".to_vec())
+    ));
+    let out = s(&v, "content.opf");
+    assert!(
+        out.contains(r#"<opf:meta name="cover" content="eink-thumb"/>"#)
+            && out.contains(r#"<opf:meta name="eink-thumbnail" content="eink-thumb"/>"#)
+            && !out.contains("<meta "),
+        "{out}"
+    );
+    // 指回真封面也带前缀
+    assert!(drop_cover_thumbnail(&mut v));
+    let out = s(&v, "content.opf");
+    assert!(
+        out.contains(r#"<opf:meta name="cover" content="c"/>"#) && !out.contains("<meta "),
+        "{out}"
+    );
+    let broken = r#"<package><metadata><meta name="cover" content="c"/><manifest/></package>"#;
+    assert!(point_meta_cover(broken, "x")
+        .is_some_and(|o| o.contains(r#"<meta name="cover" content="x"/>"#)));
+    assert_eq!(point_meta_cover(broken, "c").as_deref(), Some(broken));
+    assert_eq!(
+        point_meta_cover("<package><manifest/></package>", "x"),
+        None
+    );
 }
