@@ -80,3 +80,11 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：**通过**（sheng-ren，2026-11-04，box 上 a184cd8 重跑）
+  - 功能：`hanvon.toml` 屏幕 1072×1448、formats=["epub"]、deliver mtp/hanvon/documents；`builtin_profiles_parse` 断言 4 个内置 id
+  - 测试：`cargo test --workspace` 全过（profile 515、library 63 等，0 失败）；`cargo clippy --workspace --all-targets -- -D warnings` exit 0
+  - 不回归：`fp_golden.txt` 只有新增行，0 行删除；ireader/kindle/kobo 的 profile 文件未改
+  - 「不做」：未动 install.sh、未加新键、未出 KEPUB/KFX
+  - 提交合规：中文前缀加正文，无 Co-Authored-By，未合并
+  - 偏离两处（devices.md 补一节、lib.rs/main.rs 说明文字）都在涉及文件内，接受
+- 二审：待 vinci 运行 agy，回执 `.dev/tasks/2026-11-04-hanvon-profile.agy.md`
