@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-04-hanvon-profile
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/hanvon-profile（从最新 master 切出）
 - 更新时间: 2026-11-04T19:20+08:00
@@ -108,3 +108,6 @@
   3. `crates/library/tests/cli.rs` 的 `devices_lists_the_builtin_modes`：列表加 ("kobo","KEPUB")、("hanvon","EPUB")（按 `booklib devices` 的实际输出核对写法）
   4. 指纹金样随之更新（只允许 hanvon 的行变化）；`cargo test --workspace`、clippy 0 警告
   5. 填写「结果」的返工部分，状态改为 done，提交推送
+
+- 返工验收：**通过**（sheng-ren，box 上重跑）：返工 1–3 逐项对照 diff 做到；金样只有 hanvon 行变；`cargo test --workspace` 0 失败、clippy exit 0。改动没超出返工清单，且只减少风险，不再跑第二轮 agy
+- 合并：见 master 上的 merge 提交；状态改为 verified
