@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-04-hanvon-profile
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/hanvon-profile（从最新 master 切出）
-- 更新时间: 2026-11-04T10:50+08:00
+- 更新时间: 2026-11-04T18:20+08:00
 - 引用: 无
 
 ## 需求原文
@@ -34,17 +34,17 @@
 - 风险点：设备行为（新增设备的投递路径）→ 合并前要 agy 二审
 
 ## 分步任务
-1. [ ] 新增 `hanvon.toml`，按「约束」写值和注释；自检：`cargo test -p profile` 通过
-2. [ ] `lib.rs` 注册 hanvon，更新内置 id 断言；自检：`cargo test -p profile`
-3. [ ] 指纹金样、CLI 帮助、补全里的设备列表补 hanvon；自检：`cargo test --workspace`、`booklib --help` 设备表对齐
-4. [ ] README、devices.md、usage.md 加一行，标「未上真机」
-5. [ ] `cargo clippy --workspace --all-targets -- -D warnings` 0 警告
+1. [x] 新增 `hanvon.toml`，按「约束」写值和注释；自检：`cargo test -p profile` 通过
+2. [x] `lib.rs` 注册 hanvon，更新内置 id 断言；自检：`cargo test -p profile`
+3. [x] 指纹金样、CLI 帮助、补全里的设备列表补 hanvon；自检：`cargo test --workspace`、`booklib --help` 设备表对齐
+4. [x] README、devices.md、usage.md 加一行，标「未上真机」
+5. [x] `cargo clippy --workspace --all-targets -- -D warnings` 0 警告
 
 ## 验收标准
-- [ ] 功能：`booklib` 认出 `hanvon` 设备，`--device=hanvon` 可用，产物为 EPUB，尺寸按 1072×1448
-- [ ] 测试：`cargo test --workspace` 全部通过；clippy 0 警告
-- [ ] 不回归：ireader/kindle/kobo 的指纹金样不变（只多 hanvon 的行）
-- [ ] 「不做」的事确实没做
+- [x] 功能：`booklib` 认出 `hanvon` 设备，`--device=hanvon` 可用，产物为 EPUB，尺寸按 1072×1448
+- [x] 测试：`cargo test --workspace` 全部通过；clippy 0 警告
+- [x] 不回归：ireader/kindle/kobo 的指纹金样不变（只多 hanvon 的行）
+- [x] 「不做」的事确实没做
 
 ## 交付物
 代码提交到上面的分支并推送；「结果」填好；状态改为 done 或 blocked。
@@ -55,7 +55,28 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+
+- 新增 `crates/profile/profiles/hanvon.toml`：汉王 Clear 6 Turbo 自带阅读器，屏幕 1072×1448、黑白、只出 EPUB。屏幕、安卓 14 等来自公开资料；注释跳转、图标换数字、漫画参数标了「推断 / 待确认」；`em_px`、`line_px`、`content_px`、`cover_thumb_aspect`、`[readable.epub]` 按任务要求没写。
+- 内置注册：`builtin_profiles_parse` 的 id 列表加 `hanvon`；`lib.rs` 顶部说明改成四份。补全的设备列表从 `Registry` 动态取，不用另改。
+- 指纹金样：`fp_golden.rs` 的遍历加 `hanvon`，`fp_golden.txt` 只多出 118 行 hanvon；kindle/ireader/kobo 原有行未变。
+- CLI：`booklib sync --help` 的设备表加 `hanvon` 一行，和现有行对齐；`booklib --help` 开头也补了汉王。
+- 文档：`README.md`、`docs/devices.md`（设备表加一行，另补一节说明）、`docs/usage.md`（「产物放在哪」加一行）都标了「预配置，未上真机」。
+
+验证（本机，`CARGO_TARGET_DIR=~/.cache/sheng-ren-target`）：
+- `cargo test -p profile` 通过。
+- `cargo test -p library --test fp_golden` 通过。
+- `cargo test --workspace` 全部通过。
+- `cargo clippy --workspace --all-targets -- -D warnings` 0 警告。
+- `booklib sync --help` 设备表逐行看过，列对齐。
+
+未验证 / 风险：
+- **没上真机，也没跑真书回归**（本机没有维护者的真书）。汉王自带阅读器上的显示效果、注释跳转、漫画参数、书架缩略图比例都没验证。
+- `[deliver]` 的 `mount = "hanvon"`、`dir = "documents"` 是推断（按掌阅惯例和任务约束），实际存储目录和 jmtpfs 挂载点名待真机确认。设备行为风险，合并前需要 agy 二审。
+- 没做：KEPUB/KFX、汉王专属 profile 键或转换逻辑、MTP 自动挂载、改 `install.sh`；ireader/kindle/kobo 的 profile 值和原有指纹金样都没动。
+
+偏离：
+- `docs/devices.md` 除了设备表一行，还照 Kobo 的写法补了一节「汉王 Clear 6 Turbo」（来源、传书、格式、漫画、未量项），仍在该文件内。
+- `crates/profile/src/lib.rs` 顶部说明和一条枚举注释里的「三份 / 三个模式」改成四份 / 内置模式；`crates/library/src/bin/booklib/main.rs` 的 `--help` 开头补了汉王。都在涉及文件内。
 
 ## 审查
 <!-- 负责 bot 填写 -->
