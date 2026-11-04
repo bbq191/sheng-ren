@@ -1,5 +1,6 @@
-//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在内置三份，都按设备自带的阅读器量（见 docs/devices.md）：
-//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Air 3 Pro，EPUB）、`kobo`（Kobo Clara BW，KEPUB，2026-11-01 预配置、未上真机）。
+//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在内置四份，都按设备自带的阅读器量（见 docs/devices.md）：
+//! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Air 3 Pro，EPUB）、`kobo`（Kobo Clara BW，KEPUB，2026-11-01 预配置、未上真机）、
+//! `hanvon`（汉王 Clear 6 Turbo，EPUB，2026-11-04 预配置、未上真机）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -85,7 +86,7 @@ pub enum Notes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NoteIcons {
-    /// 保留原图标，限成一个字高（要阅读器认 CSS 限高、图标链接也能点）。内置的三个模式都换数字（见 `Number`），
+    /// 保留原图标，限成一个字高（要阅读器认 CSS 限高、图标链接也能点）。内置模式都换数字（见 `Number`），
     /// 留给自定义模式。
     #[default]
     Keep,
@@ -1104,7 +1105,7 @@ mod tests {
     #[test]
     fn builtin_profiles_parse() {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["ireader", "kindle", "kobo"]);
+        assert_eq!(ids, ["hanvon", "ireader", "kindle", "kobo"]);
         let k = get("kindle").unwrap();
         let i = get("ireader").unwrap();
         assert_eq!(
@@ -1432,6 +1433,22 @@ mod tests {
         assert_eq!(
             (k.screen.width, k.screen.height, k.color, k.format()),
             (1072, 1448, false, Format::Kepub)
+        );
+        let h = get("hanvon").unwrap();
+        assert_eq!(
+            h.deliver,
+            Some(Deliver::Mtp {
+                mount: "hanvon".into(),
+                dir: "documents".into()
+            })
+        );
+        assert_eq!(
+            (h.screen.width, h.screen.height, h.color, h.format()),
+            (1072, 1448, false, Format::Epub)
+        );
+        assert!(
+            !h.comic.fixed_layout,
+            "漫画先照 ireader 走流式整页，固定版式待真机比（agy 二审线索 1）"
         );
     }
 

@@ -1,0 +1,29 @@
+# 汉王 Clear 6 Turbo（自带阅读器）。6" E Ink Carta 1300，1448×1072，300 ppi，黑白，安卓 14（来源：知乎评测 zhuanlan.zhihu.com/p/1916870323984393879、Lukas Lab、太平洋电脑网参数页；IT之家 1024×758 为 Clear 6 非 Turbo）。未上真机。
+name = "汉王自带阅读器（Clear 6 Turbo）"
+color = false                      # 来源：公开参数页，黑白屏
+formats = ["epub"]                 # 约束：只出 EPUB
+notes = "jump"                     # 推断：同 kobo（ireader 是 popup，汉王弹窗待真机测）
+note_icons = "number"              # 推断：同另两台（最稳）
+caption_fit = true                 # 推断：同另两台（待确认）
+text_repair_only = true            # 维护者 2026-10-08 定的三台统一规则，沿用
+kindle_rules = true                # 推断：照「以 Kindle 为准」统一（待确认，汉王怪癖要真机测）
+comic_gamma = 1.1                  # 沿用 kobo 的取值（待真机比）
+image_gamma = 1.1                  # 沿用 kobo 的取值（待真机比）
+comic_autocontrast = true          # 沿用 kobo
+comic_trim_specks = true           # 沿用 kobo
+comic_page_numbers = true          # 沿用 kobo
+comic_dark_bg = true               # 沿用 kobo
+comic_margin = 1                   # 沿用 kobo
+# 漫画版式同 ireader（流式整页）；固定版式待真机比。
+background_images = true           # 推断：沿用（待确认）
+
+[screen]                           # 来源：公开参数页 1448×1072（竖屏写成宽 1072、高 1448）
+width = 1072
+height = 1448
+
+# MTP（安卓设备）：jmtpfs 自动挂到 $XDG_RUNTIME_DIR/mtp/<mount>，产物放进存储根目录的 dir
+# dir 实际存储路径待真机确认，先写 "documents" 并标（待确认）
+[deliver]
+kind = "mtp"
+mount = "hanvon"                   # 推断：按设备命名约定（待确认）
+dir = "documents"                  # 待确认：汉王实际存储目录（先按掌阅惯用的 documents 假设）
