@@ -1434,6 +1434,22 @@ mod tests {
             (k.screen.width, k.screen.height, k.color, k.format()),
             (1072, 1448, false, Format::Kepub)
         );
+        let h = get("hanvon").unwrap();
+        assert_eq!(
+            h.deliver,
+            Some(Deliver::Mtp {
+                mount: "hanvon".into(),
+                dir: "documents".into()
+            })
+        );
+        assert_eq!(
+            (h.screen.width, h.screen.height, h.color, h.format()),
+            (1072, 1448, false, Format::Epub)
+        );
+        assert!(
+            !h.comic.fixed_layout,
+            "漫画先照 ireader 走流式整页，固定版式待真机比（agy 二审线索 1）"
+        );
     }
 
     /// `cover_meta_thumb` 要和 `cover_thumb_aspect` 一起写；aspect 超出 0.3–1.5 报错（agy 二审 6）。

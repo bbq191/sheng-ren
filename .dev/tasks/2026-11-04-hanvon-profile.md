@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-04-hanvon-profile
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/hanvon-profile（从最新 master 切出）
-- 更新时间: 2026-11-04T19:00+08:00
+- 更新时间: 2026-11-04T19:20+08:00
 - 引用: 无
 
 ## 需求原文
@@ -77,6 +77,16 @@
 偏离：
 - `docs/devices.md` 除了设备表一行，还照 Kobo 的写法补了一节「汉王 Clear 6 Turbo」（来源、传书、格式、漫画、未量项），仍在该文件内。
 - `crates/profile/src/lib.rs` 顶部说明和一条枚举注释里的「三份 / 三个模式」改成四份 / 内置模式；`crates/library/src/bin/booklib/main.rs` 的 `--help` 开头补了汉王。都在涉及文件内。
+
+### 返工（2026-11-04，按审查清单）
+
+1. `crates/profile/profiles/hanvon.toml`：删掉 `comic_fixed_layout = true` 和 `[comic_readable]`，漫画照 ireader 走流式整页；注释写明「漫画版式同 ireader（流式整页）；固定版式待真机比」。`notes` 注释改成「推断：同 kobo（ireader 是 popup，汉王弹窗待真机测）」。
+2. `crates/profile/src/lib.rs`：照 kobo 的断言补 hanvon：`[deliver]` 为 `Mtp { mount: "hanvon", dir: "documents" }`、`(screen.width, screen.height, color, format())` 为 `(1072, 1448, false, Format::Epub)`、`comic.fixed_layout` 为 `false`。
+3. `crates/library/tests/cli.rs`：`devices_lists_the_builtin_modes` 的列表加 `("kobo", "KEPUB")`、`("hanvon", "EPUB")`。本机跑 `booklib devices` 核对过，hanvon 行是「屏幕 1072×1448  阅读范围 1072×1448  黑白」。
+4. 指纹金样重新生成：只有 hanvon 的漫画行变化（59 行删、59 行增，去掉固定版式的 `f`），kindle/ireader/kobo 0 行变化。`cargo test --workspace` 全部通过，clippy 0 警告。
+5. `docs/devices.md` 的 hanvon 行和那一节同步改成流式整页、固定版式待真机比（同一涉及文件，避免和 profile 矛盾）。
+
+仍未上真机、没跑真书回归；固定版式、弹窗注释、投递路径都待真机验证。
 
 ## 审查
 <!-- 负责 bot 填写 -->

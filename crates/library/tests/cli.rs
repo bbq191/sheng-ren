@@ -251,7 +251,12 @@ fn devices_lists_the_builtin_modes() {
     let o = booklib(Some(&dir.path().join("lib")), &["devices"]);
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     let out = stdout(&o);
-    for (id, fmt) in [("ireader", "EPUB"), ("kindle", "KFX")] {
+    for (id, fmt) in [
+        ("ireader", "EPUB"),
+        ("kindle", "KFX"),
+        ("kobo", "KEPUB"),
+        ("hanvon", "EPUB"),
+    ] {
         assert!(
             out.lines().any(|l| l.starts_with(id) && l.contains(fmt)),
             "{id} {fmt}：{out}"
