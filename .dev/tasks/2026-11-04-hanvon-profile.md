@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-04-hanvon-profile
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: feat/hanvon-profile（从最新 master 切出）
 - 更新时间: 2026-11-04T18:20+08:00
@@ -87,4 +87,14 @@
   - 「不做」：未动 install.sh、未加新键、未出 KEPUB/KFX
   - 提交合规：中文前缀加正文，无 Co-Authored-By，未合并
   - 偏离两处（devices.md 补一节、lib.rs/main.rs 说明文字）都在涉及文件内，接受
-- 二审：待 vinci 运行 agy，回执 `.dev/tasks/2026-11-04-hanvon-profile.agy.md`
+- 二审：回执 `.dev/tasks/2026-11-04-hanvon-profile.agy.md`，无阻断。sheng-ren 逐条核对：
+  - 建议 1（测试没覆盖验收标准）：属实，`cli.rs:254` 只验 ireader、kindle；`lib.rs` 有 kobo 属性断言、没有 hanvon 的。**采纳**
+  - 建议 2（notes 注释写「同 kobo/ireader」）：属实，`ireader.toml:13` 是 popup。**采纳**
+  - 线索 1（comic_fixed_layout 在安卓 EPUB 阅读器上可能被状态栏裁切）：属实，`ireader.toml` 没开固定版式，同是安卓 EPUB 阅读器，按掌阅的做法更稳。**采纳**：先关掉，等真机再比
+  - 线索 2（挂载名、目录）：等真机，dotfiles 届时加挂载规则；已记在 context 待办。不改
+- **返工（状态退回 pending，同一执行方 opencode-local）**：
+  1. `crates/profile/profiles/hanvon.toml`：删掉 `comic_fixed_layout = true` 和 `[comic_readable]` 一节（照 ireader，漫画走流式整页），注释写明「同 ireader；固定版式待真机比」；`notes` 的注释改成「推断：同 kobo（ireader 是 popup，汉王弹窗待真机测）」
+  2. `crates/profile/src/lib.rs`：照 kobo 的断言给 hanvon 补一段，断言 deliver 为 Mtp{mount:"hanvon",dir:"documents"}，以及 (1072,1448,false,Format::Epub)，comic_fixed_layout 为 false
+  3. `crates/library/tests/cli.rs` 的 `devices_lists_the_builtin_modes`：列表加 ("kobo","KEPUB")、("hanvon","EPUB")（按 `booklib devices` 的实际输出核对写法）
+  4. 指纹金样随之更新（只允许 hanvon 的行变化）；`cargo test --workspace`、clippy 0 警告
+  5. 填写「结果」的返工部分，状态改为 done，提交推送
