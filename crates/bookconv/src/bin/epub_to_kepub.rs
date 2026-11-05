@@ -3,7 +3,7 @@
 //!
 //! 用法: epub-to-kepub [--no-wrap-image-pages] 输入.epub 输出.kepub.epub
 //!   --no-wrap-image-pages   没有文字的页（封面、漫画页）不加 book-columns/book-inner 两层包装（缺省加）
-//!   输出名写成 `X.fxl.kepub.epub` 就是固定版式测试版（Kobo 按文件名认，内容一样）。
+//!   固定版式看输入 OPF 的 `rendition:layout = pre-paginated`（漫画），不靠输出文件名。
 //! 产物先写到 `输出.kepub.tmp`，成功后改名。退出码: 0 成功；1 用法错；2 转换失败。
 
 use bookconv::kepub::{self, Opts};

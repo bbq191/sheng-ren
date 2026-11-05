@@ -329,6 +329,12 @@
 | **掌阅漫画保持 `comic_upscale` 放大到屏幕分辨率**（profile 不变）：页面图比屏幕小时放大到 1440×1920 | Air 3 Pro 真机对比竹光侍卷01（原图 842×1122）：放大版 164.8 MB，不放大 80.9 MB，维护者选放大。体积约翻倍，换来掌阅自己缩放的画质差异由我们控制 |
 | **`sync` 写设备前查剩余空间，不够的这台这一轮不写；写的途中满了删掉半截、停下这台**（statvfs 剩余 vs 待传总大小：已生成按实际、未生成按原件估、`comic_upscale` 漫画 ×2.1、覆盖的减旧文件，余量 max(50MB, 2%)；读不到只警告；ENOSPC 不记失败表，`--watch` 下一轮再看） | 掌阅漫画放大后体积约翻倍（竹光侍 80.9→164.8 MB，约 2.04 倍，取 2.1），批量传容易写满；以前写满只会一本本报失败、留半截文件，还记进失败表不再重试。空间不够和书无关，腾出空间后应当自动重传。statvfs 用已在锁文件里的 `libc`（不加新 crate）。jmtpfs 的容量不一定可靠，所以预检读不到就放行，靠写时 ENOSPC 兜底 |
 
+## 2026-11-05
+
+| 定了什么 | 理由 |
+|---|---|
+| **Kobo 漫画固定版式改用方案 D**（profile `comic_fixed_layout_percent = true`；`bookconv::kepub::VERSION` 2）：OPF `rendition:layout = pre-paginated` + `original-resolution = 1072x1448`，每页 viewport 1072×1448，保留 `#book-columns`/`#book-inner`，纯图页 img 外不加 koboSpan，img `width:100%;height:100%`、html/body 和包装高度链 100% | Clara BW fw 4.45 真机合成 A/B 包：A（旧流水线，像素画布 + 纯图页包 koboSpan）坏；B、C、E 正常；只有 D 满屏。文字 KEPUB 正常，侧载 kepub 书签、笔记可用。固定版式改看 OPF、不靠 `.fxl` 文件名。新增 profile 字段而不是按输出格式判（阅读器怪癖一律进 profile）；只 Kobo 开，Kindle 仍用像素画布，产物不变 |
+
 ## 待定
 
 - （无）

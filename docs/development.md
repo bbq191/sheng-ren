@@ -103,7 +103,7 @@ done
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签、作者国籍、译者、出版社、日期、ISBN，书名换成网站书名 | `bookconv::opfmeta::VERSION` | 6 | 只有补过东西的 |
 | EPUB → KFX | `kfx::write::WRITER_VERSION` | 25 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
-| EPUB → KEPUB（koboSpan、包装） | `bookconv::kepub::VERSION` | 1 | 只有出 KEPUB 的模式的（`kobo`） |
+| EPUB → KEPUB（koboSpan、包装） | `bookconv::kepub::VERSION` | 2 | 只有出 KEPUB 的模式的（`kobo`） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。

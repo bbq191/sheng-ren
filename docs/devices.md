@@ -117,7 +117,7 @@
 |---|---|---|---|---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画固定版式） | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
 | `ireader` | 掌阅 Air 3 Pro 自带阅读器 | EPUB | 1440×1920 | 1440×1920 | 1440×1920（整屏） | 黑白 |
-| `kobo` | Kobo Clara BW 自带阅读器（Nickel；预配置，未上真机） | KEPUB（`.kepub.epub`，漫画同） | 1072×1448，300ppi（官网） | 1072×1448（未量，按整屏） | 1072×1448（整屏，固定版式） | 黑白 |
+| `kobo` | Kobo Clara BW 自带阅读器（Nickel；2026-11-05 真机确认漫画方案 D） | KEPUB（`.kepub.epub`，漫画同） | 1072×1448，300ppi（官网） | 1072×1448（未量，按整屏） | 1072×1448（整屏，固定版式） | 黑白 |
 | `hanvon` | 汉王 Clear 6 Turbo 自带阅读器（预配置，未上真机） | EPUB | 1072×1448，300ppi（公开参数） | 1072×1448（未量，按整屏） | 1072×1448（整屏，流式；固定版式待真机比） | 黑白 |
 
 ### 怪癖 → 字段
@@ -136,7 +136,8 @@
 | `note_backlinks`（`true`） | 保留注释里"跳回正文"的回链。只修复时同上 | 保留 | 保留 | Kindle 点注释后没有可靠的"返回"，要靠回链；xochitl 遇到互相链接的一对会整对丢掉（正向也点不动） |
 | `comic_margin`（1） | 漫画的图到画布四边的白边（像素） | 1 | 1 | xochitl 页边距设成 1 后自己就留了 1px |
 | `[comic_readable]`（= 阅读范围） | 漫画画布 | 1272×1696 | 不写 | 漫画要贴屏幕边，画布和文字书的阅读范围不同 |
-| `comic_fixed_layout`（`false`） | 漫画写成固定版式 | `true` | — | Kindle 流式排版强制留页边距（最小档左右 101px），固定版式才按画布 1:1 整页显示 |
+| `comic_fixed_layout`（`false`） | 漫画写成固定版式 | `true` | — | Kindle 流式排版强制留页边距（最小档左右 101px），固定版式才按画布 1:1 整页显示；Kobo 2026-11-05 真机同样选了固定版式 |
+| `comic_fixed_layout_percent`（`false`） | 固定版式用百分比写法：整页图 `width:100%;height:100%`，html/body 和 KEPUB 包装高度链 100%（须和 `comic_fixed_layout` 一起开） | — | — | Kobo Nickel 的方案 D（2026-11-05 Clara BW 真机）：像素画布写法整页图不满屏，百分比 + 高度链才铺满；不写＝像素画布（Kindle） |
 | `background_images`（`false`） | 保留 CSS 背景图（`background` 简写拆成背景色、背景图、重复、位置等分项） | `true` | `true` | xochitl 不认 `no-repeat`，把背景图平铺满页盖住正文；掌阅不认 `background` 简写（2026-10-05 真机对照书），拆开写就正常 |
 | `background_sizing`（`true`） | 保留背景图时也留 `background-size`、`background-attachment`；去掉时整页背景图（`body`/`html` 上的）按原书的尺寸意图预先缩好、一律不超出阅读范围（整张图看得见；v48、v49，见[排版 · 背景图](typesetting.md#1-解开字体字号行高的锁别的样式不动)） | 留 | 去掉 | 掌阅写了尺寸会把图挤变形、不写又按图自身像素显示（大图只露出一角），所以去掉尺寸、图预先缩好；Kindle 留着（和 Amazon 写法一致） |
 | `css_rgba`（`true`） | 阅读器认 CSS 的 `rgba()` 颜色；`false` 时换成 `#rrggbb`（不透明的颜色不变，半透明按白底混合，全透明写 `transparent`；v49） | 认 | 不认 | 掌阅把 `rgba()` 那条声明整条作废（《绍宋》深红底色显示成白底），`rgb()`、`#rrggbb` 认（2026-10-06 真机测试书）。只修复的文字书里由 `kindle_rules` 照这个字段换（KINDLE_RULES 8：《飘》「第一卷」标题的半透明白条作废后字压在插图上看不见，2026-10-12） |
@@ -300,9 +301,11 @@ readable-measure --device=kindle 竖长.png 横宽.png
 
 给了 `--device` 就按它的产物格式写段名（Kindle 是 `[readable.kfx]`，其余 `[readable.epub]`）；没给写 `[readable.epub]` 并提示。贴进对应的模式文件，注释里写明测量日期和条件（哪个阅读软件、页边距设置）。
 
-## Kobo Clara BW（2026-11-01 预配置，未上真机）
+## Kobo Clara BW（2026-11-05 真机确认漫画方案 D）
 
-模式 `kobo`（`crates/profile/profiles/kobo.toml`）。下面的数字来自官网、Kobo 帮助页，没在真机上量过；注释里写着「待确认」的都要测试书核对。
+模式 `kobo`（`crates/profile/profiles/kobo.toml`）。2026-11-01 按官网、Kobo 帮助页预配置；2026-11-05 Clara BW（fw 4.45）
+真机确认漫画固定版式方案 D 满屏、文字 KEPUB 正常、侧载书签/笔记可用。屏幕、可阅读范围这些数字仍没单独量过；注释里写着「待确认」的
+都要测试书核对。
 
 - **硬件**：6" E Ink Carta 1300，1448×1072，300 ppi，黑白（彩色的是 Clara Colour）。竖屏写成 `width = 1072`、`height = 1448`。
 - **传书**：USB 大容量存储（不是 MTP），卷标 `KOBOeReader`，udisks 挂到 `/run/media/$USER/KOBOeReader`（`[deliver] kind = "usbms"`）。产物放根目录的 `books/`，子目录照跟踪目录镜像。挂载点要真的挂着才算接上（同 MTP）；拔掉后剩下的空目录不写。挂载目录可以用 `BOOKLIB_USBMS_DIR` 改。
@@ -314,8 +317,8 @@ readable-measure --device=kindle 竖长.png 横宽.png
   重插 `collect --format=epub|kepub`（把存储根目录的 `screen_*.png` 拷回 `shots/<格式>/`，拷过的不再拷；只有加 `--clean` 才删设备上的截屏）→ 两本都量完 `report` 并排看，手写进 `css-quirks.toml` 的 `kobo` 一栏。
   `measure --from-dir=目录` 只量电脑上的截屏。**未验证**：截屏要在 `.kobo/Kobo/Kobo eReader.conf` 的 `[FeatureSettings]` 加 `Screenshots=true`（自己改）、按电源键截、存在根目录叫 `screen_*.png`（`--pattern=` 改），
   截屏是 1072×1448 竖屏，页脚在最下面 5%（`--max-y=` 改）——都是社区资料或推断，拿到真机先截一张核对。
-- **格式**：KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者以前试过），2026-11-01 起 `formats = ["kepub"]`，漫画也是 `.kepub.epub`。写出器是 clean-room 的 `bookconv::kepub`，做法、来源和真机 A/B（固定版式文件名、图片页不包装）见 [KEPUB](kepub.md)。还没上真机。
-- **漫画**：参数照 Kindle（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、固定版式整屏），都待真机比。
+- **格式**：KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者以前试过），2026-11-01 起 `formats = ["kepub"]`，漫画也是 `.kepub.epub`。写出器是 clean-room 的 `bookconv::kepub`，做法、来源和真机结论见 [KEPUB](kepub.md)。2026-11-05 真机确认文字 KEPUB 正常、侧载书签/笔记可用；固定版式看 OPF、不再靠 `.fxl` 文件名。
+- **漫画**：参数照 Kindle（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页）；2026-11-05 Clara BW 真机确认方案 D（固定版式、viewport 1072×1448、img 100%×100%、纯图页不加 koboSpan）满屏。色彩类参数没有在 Kobo 上单独比过。
 
 ## 汉王 Clear 6 Turbo（2026-11-04 预配置，未上真机）
 
