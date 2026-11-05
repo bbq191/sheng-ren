@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-05-kobo-comic-fxl
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/kobo-comic-fxl（从最新 master 切出）
-- 更新时间: 2026-11-05T16:22+08:00
+- 更新时间: 2026-11-05T16:24+08:00
 - 引用: 无
 
 ## 需求原文
@@ -133,6 +133,30 @@
   - `optimize/streaming.rs` 新增只读文件头的尺寸表，只对 `comic_fixed_layout_percent` 的 Kobo 漫画生效，Kindle 不多读图片。
 - 未完成：
   - 真机验证、真书回归仍未做；二审核实的线索 2（漫画 D 上的书签/进度）待真机复测；B/C/E 各测什么没有完整记录。
+
+### 再返工（2026-11-05，按「再返工」1–3）
+
+- 执行方 / 时间：opencode-local / 2026-11-05T16:22+08:00–2026-11-05T16:24+08:00
+- base..head：`48b295a..3deb514`（再返工代码/文档；任务接受 `3aeaf5a`、结果本提交）
+- 提交：`3aeaf5a` 接受再返工；`3deb514` 再返工实现；本提交填结果、状态 done。
+- 再返工 1（尺寸时序）：`optimize/streaming.rs` 的 `image_dims` 不再一律记源图尺寸。按 `prepare_comic_page*` 的装饰阈值
+  （源图短边 `< 阅读范围宽 / 3`）预判：**非装饰页直接记画布尺寸**（会被放大/缩小/补白到画布），**装饰小图记源图尺寸**。
+  所以 1440×1920 这类非画布整页经 `--device=kobo` 后产物图是 1072×1448，img 写 `width:100%;height:100%`；200×800 的
+  装饰小图保持原尺寸，仍写 `display:block;max-width:100%;max-height:100%;margin:0 auto`。读不到尺寸的不入表，走不拉伸写法。
+  没有改 Kindle 的 `percent=false` 路径。
+- 再返工 2：`docs/kepub.md` 和 `docs/devices.md` 补了「按排版后尺寸判定：非装饰页按画布、装饰小图按源图」；其他返工 2–4
+  的文档/实现保持不变。
+- 再返工 3（测试）：
+
+| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+|---|---|---|
+| `cargo test -p bookconv optimize::tests::comic_fixed_layout_percent_follows_kobo_profile_only` | 通过 | 源图 1440×1920：产物 `p1.png` 是 1072×1448，`c1.xhtml` img `width:100%;height:100%`；源图 200×800：产物 `p2.png` 仍是 200×800，`c3.xhtml` 是 max-width/max-height；两页经 kepub 都无 koboSpan，文字页仍有 span；Kindle 仍像素画布 |
+| `cargo test --workspace` | 通过 | 全部通过（bookconv 522） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+| `cargo test -p library --test fp_golden` | 通过 | kobo 行仍与上一版一致；kindle/ireader/hanvon 0 行变 |
+
+- 说明：再返工只改了尺寸判定和文档，`kepub::VERSION` 仍是 2（同一版未合），漫画指纹不变；没有新增 profile 字段。
+- 未完成：真机验证、真书回归仍未做；二审核实的漫画 D 书签/进度、B/C/E 变量组成待真机/维护者补充。
 <!-- 负责 bot 填写 -->
 - 验收：**通过**（sheng-ren，2026-11-05T15:42+08:00，box 上 `a016270`，`master=05ddc2f`）
   - 任务单「结果」已填、状态 done；分步 1–6 勾选；提交中文前缀、无 Co-Authored-By、未合并
