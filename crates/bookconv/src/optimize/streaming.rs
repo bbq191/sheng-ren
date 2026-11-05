@@ -227,11 +227,25 @@ fn optimize_inner(
     let prep = prepare_entries(raw, opts, bytes_before, is_comic_book, transcoded)?;
     check_cancel(cancel)?;
     let plan = WritePlan::new(&prep, opts, &mut archive);
+    // Kobo 固定版式的百分比写法要按图的比例决定 img 样式：只读页图文件头拿显示宽高（含 EXIF，不改图、不解码整张）。
+    // 比例和画布一致的页写 100%×100%，装饰小图、处理不了的原图只限制不超过页面，避免 Nickel 拉伸。
+    let mut image_dims = HashMap::new();
+    if prep.is_comic_book && opts.comic_fixed_layout && opts.comic_fixed_layout_percent {
+        for &i in &plan.image_positions {
+            let name = &prep.entries[i].0;
+            let src = plan.src(name);
+            if let Ok(Some(d)) = read_image_head(&mut archive, src, |b| {
+                crate::imgopt::guard(|| crate::imgopt::display_dims(b))
+            }) {
+                image_dims.insert(name.clone(), d);
+            }
+        }
+    }
 
     // 阶段二：流式写出。
     let mut zw = crate::epubzip::EpubWriter::create(output_path)?;
     *created = true;
-    let mut xf = EntryXform::new(&prep, opts);
+    let mut xf = EntryXform::new(&prep, opts, &image_dims);
     if opts.caption_fit && !is_comic_book {
         xf.caption_ctx = Some(caption_ctx(&prep.entries, &plan.src_names, &mut archive)?);
     }

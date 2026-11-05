@@ -17,8 +17,8 @@ comic_trim_specks = true
 comic_page_numbers = true
 comic_dark_bg = true
 comic_margin = 1
-comic_fixed_layout = true          # 2026-11-05 Clara BW 真机确认（方案 D）：固定版式才满屏
-comic_fixed_layout_percent = true  # 同上（方案 D）：img 100%×100%，html/body 和 KEPUB 包装高度链 100%；像素画布写法不满屏
+comic_fixed_layout = true          # 2026-11-05 Clara BW 真机确认（方案 D）：A（像素画布 + 纯图页包 koboSpan 等）不满屏，D 满屏
+comic_fixed_layout_percent = true  # 同上（方案 D）：比例合画布的 img 100%×100%，否则 max-width/max-height；html/body 和 KEPUB 包装高度链 100%
 # comic_page_direction 不写：照原书 rtl（Nickel 对 EPUB/KEPUB rtl 的处理待确认）
 background_images = true
 # cover_thumb_aspect：Kobo 书架封面框比例未知（待真机截图量）

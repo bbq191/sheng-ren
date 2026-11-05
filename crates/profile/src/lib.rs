@@ -308,9 +308,10 @@ pub struct ComicPolicy {
     /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
     #[serde(rename = "comic_fixed_layout")]
     pub fixed_layout: bool,
-    /// 固定版式用百分比写法（TOML 里不写是 `false`）：整页图 `width:100%;height:100%`，html/body 和 KEPUB 包装的高度链
-    /// 都写 100%。Kobo Nickel 的方案 D（2026-11-05 Clara BW 真机：像素画布写法整页图不满屏）；不写＝按像素画布（Kindle）。
-    /// 须和 `comic_fixed_layout` 一起开。见 `bookconv::comicfxl`。
+    /// 固定版式用百分比写法（TOML 里不写是 `false`）：比例和画布一致的整页图写 `width:100%;height:100%`，比例不符的
+    /// 只写 `max-width:100%;max-height:100%`；html/body 和 KEPUB 包装的高度链都写 100%。Kobo Nickel 的方案 D
+    /// （2026-11-05 Clara BW 真机：A 同时改了像素画布、纯图页也包 koboSpan 等多处，D 满屏，不能归因单项）；不写＝按
+    /// 像素画布（Kindle）。须和 `comic_fixed_layout` 一起开。见 `bookconv::comicfxl`。
     #[serde(rename = "comic_fixed_layout_percent")]
     pub fixed_layout_percent: bool,
     /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。内置模式都不写（kindle 2026-10-05

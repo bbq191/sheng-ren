@@ -333,7 +333,7 @@
 
 | 定了什么 | 理由 |
 |---|---|
-| **Kobo 漫画固定版式改用方案 D**（profile `comic_fixed_layout_percent = true`；`bookconv::kepub::VERSION` 2）：OPF `rendition:layout = pre-paginated` + `original-resolution = 1072x1448`，每页 viewport 1072×1448，保留 `#book-columns`/`#book-inner`，纯图页 img 外不加 koboSpan，img `width:100%;height:100%`、html/body 和包装高度链 100% | Clara BW fw 4.45 真机合成 A/B 包：A（旧流水线，像素画布 + 纯图页包 koboSpan）坏；B、C、E 正常；只有 D 满屏。文字 KEPUB 正常，侧载 kepub 书签、笔记可用。固定版式改看 OPF、不靠 `.fxl` 文件名。新增 profile 字段而不是按输出格式判（阅读器怪癖一律进 profile）；只 Kobo 开，Kindle 仍用像素画布，产物不变 |
+| **Kobo 漫画固定版式改用方案 D**（profile `comic_fixed_layout_percent = true`；`bookconv::kepub::VERSION` 2）：OPF `rendition:layout = pre-paginated` + `original-resolution = 1072x1448`，每页 viewport 1072×1448，保留 `#book-columns`/`#book-inner`，纯图页 img 外不加 koboSpan，比例合画布的 img `width:100%;height:100%`、比例不符的 `max-width:100%;max-height:100%`，html/body 和包装高度链 100% | Clara BW fw 4.45 真机合成 A/B 包：A（旧流水线，同时有像素画布、纯图页包 koboSpan、残留 FXL/错 viewport 等多处）坏；B、C、E 正常；只有 D 满屏。A 同时改了好几个变量，B/C/E 各测哪项没有完整记录，不能归因到单一差异。文字 KEPUB 正常，侧载 kepub 书签、笔记可用。固定版式改看 OPF、不靠 `.fxl` 文件名。新增 profile 字段而不是按输出格式判（阅读器怪癖一律进 profile）；只 Kobo 开，Kindle 仍用像素画布，产物不变。`kepub::VERSION` 2 会让下次 `sync` 重建并重传全部 Kobo 书（含文字书），给 vinci 看 |
 
 ## 待定
 

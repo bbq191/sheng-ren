@@ -1019,6 +1019,8 @@ struct EntryXform<'a> {
     fixed_layout: Option<(u32, u32)>,
     /// 固定版式用百分比写法（Kobo 方案 D）。
     fixed_layout_percent: bool,
+    /// 漫画页图的显示宽高（最终条目名 → 宽高；读文件头，含 EXIF 方向）。百分比写法按它判断比例是否和画布一致。
+    image_dims: &'a HashMap<String, (u32, u32)>,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
@@ -1041,7 +1043,11 @@ struct EntryXform<'a> {
 }
 
 impl<'a> EntryXform<'a> {
-    fn new(prep: &'a Prepared, opts: &'a OptimizeOpts) -> EntryXform<'a> {
+    fn new(
+        prep: &'a Prepared,
+        opts: &'a OptimizeOpts,
+        image_dims: &'a HashMap<String, (u32, u32)>,
+    ) -> EntryXform<'a> {
         EntryXform {
             aside_index: &prep.aside_index,
             skip_notes: &prep.skip_notes,
@@ -1062,6 +1068,7 @@ impl<'a> EntryXform<'a> {
             fixed_layout_percent: prep.is_comic_book
                 && opts.comic_fixed_layout
                 && opts.comic_fixed_layout_percent,
+            image_dims,
             opf_name: prep.opf_name.as_deref(),
             screen: opts.screen,
             seen_ids: HashSet::new(),
@@ -1149,7 +1156,14 @@ impl<'a> EntryXform<'a> {
             t
         };
         let t = match self.fixed_layout {
-            Some((w, h)) => crate::comicfxl::page(&t, w, h, self.fixed_layout_percent).unwrap_or(t),
+            Some((w, h)) => {
+                let image_dims = self.image_dims;
+                let dims = |src: &str| {
+                    let path = crate::epubzip::resolve_link(name, src).0;
+                    image_dims.get(&path).copied()
+                };
+                crate::comicfxl::page(&t, w, h, self.fixed_layout_percent, dims).unwrap_or(t)
+            }
             None => t,
         };
         let t = if self.skip_notes.contains(name) {
