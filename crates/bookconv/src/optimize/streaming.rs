@@ -227,11 +227,33 @@ fn optimize_inner(
     let prep = prepare_entries(raw, opts, bytes_before, is_comic_book, transcoded)?;
     check_cancel(cancel)?;
     let plan = WritePlan::new(&prep, opts, &mut archive);
+    // Kobo 固定版式的百分比写法要按图的比例决定 img 样式。流式写出时图还没处理，这里只读页图文件头（含 EXIF，不改图、
+    // 不解码整张），按 `prepare_comic_page*` 的装饰阈值（短边 < 阅读范围宽 1/3，见 `imgopt`）预判：
+    // 非装饰页会被放大/缩小/补白到画布，直接记画布尺寸（1440×1920 这类源图也按画布写 100%×100%）；装饰小图保持
+    // 原尺寸，记源图尺寸，后面走 max-width/max-height 居中。读不到尺寸的不入表，也走不拉伸的写法。
+    let mut image_dims = HashMap::new();
+    if prep.is_comic_book && opts.comic_fixed_layout && opts.comic_fixed_layout_percent {
+        for &i in &plan.image_positions {
+            let name = &prep.entries[i].0;
+            let src = plan.src(name);
+            if let Ok(Some((iw, ih))) = read_image_head(&mut archive, src, |b| {
+                crate::imgopt::guard(|| crate::imgopt::display_dims(b))
+            }) {
+                let decorative = iw.min(ih) < plan.screen.width / 3;
+                let dims = if decorative {
+                    (iw, ih)
+                } else {
+                    (plan.screen.width, plan.screen.height)
+                };
+                image_dims.insert(name.clone(), dims);
+            }
+        }
+    }
 
     // 阶段二：流式写出。
     let mut zw = crate::epubzip::EpubWriter::create(output_path)?;
     *created = true;
-    let mut xf = EntryXform::new(&prep, opts);
+    let mut xf = EntryXform::new(&prep, opts, &image_dims);
     if opts.caption_fit && !is_comic_book {
         xf.caption_ctx = Some(caption_ctx(&prep.entries, &plan.src_names, &mut archive)?);
     }

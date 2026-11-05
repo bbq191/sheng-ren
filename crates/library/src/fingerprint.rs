@@ -78,6 +78,7 @@ fn shared_seg(device: &Profile) -> String {
 }
 
 /// 漫画：EPUB 阅读范围（漫画书里别的图按它缩）+ 漫画画布 + 白边 + 页边距（`m`）+ 翻页方向改写（`d`）+ 固定版式（`f`），
+/// 固定版式的百分比写法（Kobo 方案 D）在 `f` 后加 `F`（不开的模式不出新字母），
 /// 两路共用的那段之后是中间调加深（`G` + 伽马，[`gamma_seg`]），再后是拉满对比度（`A`，profile `comic_autocontrast`）、裁白边不让
 /// 杂点挡住（`S`，`comic_trim_specks`）、裁页码（`P`，`comic_page_numbers`）、小页不放大（`N`，`comic_upscale = false`）、黑底页补边补底色、不裁不放大（`K`，`comic_dark_bg`，2026-11-01）；不开的模式不出新字母，指纹和以前一样。
 fn comic_seg(device: &Profile, area: Screen) -> String {
@@ -100,6 +101,10 @@ fn comic_seg(device: &Profile, area: Screen) -> String {
     }
     if device.comic.fixed_layout {
         seg.push('f');
+        // Kobo 固定版式的百分比写法（`F`，2026-11-05 方案 D）：不写这个字段的模式指纹不变
+        if device.comic.fixed_layout_percent {
+            seg.push('F');
+        }
     }
     seg.push_str(&shared_seg(device));
     seg.push_str(&gamma_seg(device.comic.gamma));

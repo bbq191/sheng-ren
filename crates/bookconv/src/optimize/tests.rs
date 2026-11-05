@@ -410,6 +410,132 @@ fn comic_epub_gets_higher_quality_reencode_than_text_book() {
     );
 }
 
+/// Kobo 固定版式方案 D：比例合画布的整页图写 100%×100%、比例不符的只写 max-width/max-height，viewport 对齐
+/// 1072×1448、CSS 高度链 100%；Kindle 仍是像素画布。
+#[test]
+fn comic_fixed_layout_percent_follows_kobo_profile_only() {
+    use image::GenericImageView;
+    let png_of = |w: u32, h: u32| {
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 150])
+        }))
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+        png
+    };
+    // 非画布源图：prepare_comic_page 会缩/补到画布；短边小于阅读范围宽 1/3 的装饰小图保持原尺寸
+    let canvas_png = png_of(1440, 1920);
+    let small_png = png_of(200, 800);
+    let mut comic = Vec::new();
+    {
+        let mut zw = ZipWriter::new(Cursor::new(&mut comic));
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        zw.start_file("mimetype", stored).unwrap();
+        zw.write_all(b"application/epub+zip").unwrap();
+        zw.start_file("META-INF/container.xml", stored).unwrap();
+        zw.write_all(br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        zw.start_file("content.opf", stored).unwrap();
+        zw.write_all(r#"<package version="3.0"><metadata><dc:title>漫画</dc:title><dc:subject>漫画</dc:subject></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/><item id="c3" href="c3.xhtml" media-type="application/xhtml+xml"/><item id="p1" href="p1.png" media-type="image/png"/><item id="p2" href="p2.png" media-type="image/png"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/><itemref idref="c3"/></spine></package>"#.as_bytes()).unwrap();
+        zw.start_file("c1.xhtml", stored).unwrap();
+        zw.write_all(br#"<html><head><title>1</title></head><body><div><img src="p1.png"/></div></body></html>"#).unwrap();
+        zw.start_file("c2.xhtml", stored).unwrap();
+        zw.write_all("<html><head><title>2</title></head><body><p>字</p></body></html>".as_bytes())
+            .unwrap();
+        zw.start_file("c3.xhtml", stored).unwrap();
+        zw.write_all(br#"<html><head><title>3</title></head><body><div><img src="p2.png"/></div></body></html>"#).unwrap();
+        zw.start_file("p1.png", stored).unwrap();
+        zw.write_all(&canvas_png).unwrap();
+        zw.start_file("p2.png", stored).unwrap();
+        zw.write_all(&small_png).unwrap();
+        zw.finish().unwrap();
+    }
+    let kobo = profile::get("kobo").unwrap();
+    let (out, _) = optimize_epub_with(&comic, &OptimizeOpts::for_profile(kobo)).unwrap();
+    let opf = String::from_utf8(entry_bytes(&out, "content.opf")).unwrap();
+    assert!(
+        opf.contains("pre-paginated") && opf.contains(r#"content="1072x1448""#),
+        "{opf}"
+    );
+    let c1 = String::from_utf8(entry_bytes(&out, "c1.xhtml")).unwrap();
+    assert!(
+        c1.contains(r#"name="viewport" content="width=1072, height=1448""#)
+            && c1.contains(r#"style="width:100%;height:100%""#),
+        "{c1}"
+    );
+    assert_eq!(
+        image::load_from_memory(&entry_bytes(&out, "p1.png"))
+            .unwrap()
+            .dimensions(),
+        (1072, 1448),
+        "非画布源图排版后是画布大小"
+    );
+    let c3 = String::from_utf8(entry_bytes(&out, "c3.xhtml")).unwrap();
+    assert!(
+        c3.contains(r#"style="display:block;max-width:100%;max-height:100%;margin:0 auto""#)
+            && !c3.contains("width:100%;height:100%"),
+        "比例不符的装饰小图不能拉伸：{c3}"
+    );
+    assert_eq!(
+        image::load_from_memory(&entry_bytes(&out, "p2.png"))
+            .unwrap()
+            .dimensions(),
+        (200, 800),
+        "装饰小图保持原尺寸"
+    );
+    let css = String::from_utf8(entry_bytes(&out, "eink-wash.css")).unwrap_or_default();
+    let css = if css.is_empty() {
+        String::from_utf8(entry_bytes(&out, "content.css")).unwrap_or_default()
+    } else {
+        css
+    };
+    assert!(
+        css.contains("#book-columns,#book-inner{height:100%;}"),
+        "Kobo 高度链进样式表：{css}"
+    );
+    // 流经 kepub：漫画固定版式的两个纯图页都不包 koboSpan；文字页照旧
+    let d = tempfile::tempdir().unwrap();
+    let (opt, kepub) = (d.path().join("k.epub"), d.path().join("k.kepub.epub"));
+    std::fs::write(&opt, &out).unwrap();
+    crate::kepub::epub_to_kepub(&opt, &kepub, &crate::kepub::Opts::default()).unwrap();
+    let mut z = crate::epubzip::open_file_zip(&kepub).unwrap();
+    let read = |z: &mut crate::epubzip::FileZip, n: &str| {
+        String::from_utf8(crate::epubzip::read_by_name(z, n).unwrap()).unwrap()
+    };
+    let (k1, k2, k3) = (
+        read(&mut z, "c1.xhtml"),
+        read(&mut z, "c2.xhtml"),
+        read(&mut z, "c3.xhtml"),
+    );
+    assert!(
+        k1.contains("book-columns")
+            && k1.contains(r#"style="width:100%;height:100%""#)
+            && !k1.contains("koboSpan"),
+        "{k1}"
+    );
+    assert!(
+        k3.contains("book-columns")
+            && k3.contains("max-width:100%;max-height:100%")
+            && !k3.contains("koboSpan"),
+        "{k3}"
+    );
+    assert!(k2.contains(r#"id="kobo.1.1""#), "{k2}");
+    // Kindle 仍是像素画布，CSS 不带百分比高度
+    let kindle = profile::get("kindle").unwrap();
+    let (out, _) = optimize_epub_with(&comic, &OptimizeOpts::for_profile(kindle)).unwrap();
+    let c1 = String::from_utf8(entry_bytes(&out, "c1.xhtml")).unwrap();
+    assert!(
+        c1.contains(r#"name="viewport" content="width=1272, height=1696""#)
+            && c1.contains(r#"style="width:1272px;height:1696px""#),
+        "{c1}"
+    );
+    let c3 = String::from_utf8(entry_bytes(&out, "c3.xhtml")).unwrap();
+    assert!(
+        c3.contains(r#"style="width:1272px;height:1696px""#),
+        "Kindle 连装饰小图也照旧按画布写像素：{c3}"
+    );
+}
+
 /// 漫画里的静态 GIF 页转成 PNG（条目名不变），OPF manifest 的 media-type 跟着改；动图、文字书里的 GIF 原样，media-type 不动。
 #[test]
 fn comic_gif_pages_become_png_and_manifest_media_type_follows() {

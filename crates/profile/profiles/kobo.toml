@@ -1,8 +1,9 @@
-# Kobo Clara BW（N365，2024）自带阅读器（Nickel）。6" E Ink Carta 1300，1448×1072，300 ppi，黑白。2026-11-01 查官网（未上真机）。
+# Kobo Clara BW（N365，2024）自带阅读器（Nickel）。6" E Ink Carta 1300，1448×1072，300 ppi，黑白。
+# 2026-11-01 查官网；2026-11-05 真机（fw 4.45）确认漫画固定版式方案 D、文字 KEPUB 正常、侧载书签/笔记可用。
 name = "Kobo 自带阅读器（Clara BW）"
 color = false                      # 来源：官网/factsheet，黑白屏（Clara Colour 才是彩色）
 # 出 KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者 2026-11-01 以前在 Kobo 上试过）：clean-room 写出器
-# bookconv::kepub（docs/kepub.md）。漫画也是 .kepub.epub（选项 C1）；固定版式文件名、图片页不包装的 A/B 见 docs/kepub.md（待真机）
+# bookconv::kepub（docs/kepub.md）。漫画也是 .kepub.epub；固定版式看 OPF 声明、不靠 .fxl 文件名，A/B 结论见 docs/kepub.md（2026-11-05 真机）
 formats = ["kepub"]
 notes = "jump"                     # 推断：最稳；Nickel 对 EPUB 弹窗注释支持待真机测（待确认）
 note_icons = "number"              # 推断：同另两台
@@ -16,7 +17,8 @@ comic_trim_specks = true
 comic_page_numbers = true
 comic_dark_bg = true
 comic_margin = 1
-comic_fixed_layout = true          # 推断：Nickel 对流式 EPUB 整页图会留页眉页脚边距（社区反馈 kepub 有上下边距），固定版式待测（待确认）
+comic_fixed_layout = true          # 2026-11-05 Clara BW 真机确认（方案 D）：A（像素画布 + 纯图页包 koboSpan 等）不满屏，D 满屏
+comic_fixed_layout_percent = true  # 同上（方案 D）：比例合画布的 img 100%×100%，否则 max-width/max-height；html/body 和 KEPUB 包装高度链 100%
 # comic_page_direction 不写：照原书 rtl（Nickel 对 EPUB/KEPUB rtl 的处理待确认）
 background_images = true
 # cover_thumb_aspect：Kobo 书架封面框比例未知（待真机截图量）
@@ -27,7 +29,7 @@ width = 1072
 height = 1448
 
 # [readable.epub] 待 readable-measure 真机实测；不写就按整屏
-[comic_readable]                   # 推断：固定版式整屏
+[comic_readable]                   # 2026-11-05 Clara BW 真机确认（方案 D）：固定版式画布 1072×1448，viewport 同尺寸
 width = 1072
 height = 1448
 

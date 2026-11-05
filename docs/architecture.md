@@ -59,7 +59,7 @@
 | `imgalpha` | 正文 `<img>`/SVG `<image>` 用到、CSS 没用到的图：不认透明的阅读器（profile `image_alpha = false`）把它们合成白底（只修复时不做，内置模式现在用不到；漫画另有自己的铺白底） |
 | `imgopt` / `imgpool` / `jpegopt` | 图片处理（摆正、裁边、缩放、灰度；`guard` 把解码器的 panic 变成"这张不处理"；"读头 → EXIF 方向 → 解码上限 → 解码 → 摆正"统一走 `ImgHead`，对外是 `decode_capped`/`decode_oriented`；带透明的 PNG 插图、背景图缩放都按预乘 alpha，不出黑边）；按像素额度限内存的并发池；JPEG 哈夫曼表无损重做 |
 | `opfmeta` | EPUB 元数据与封面的读改：只重写文字条目，图片原样拷；`meta --edit` 和生成时补元数据共用 |
-| `comic_detect` / `comicfxl` / `comicpad` | 判断是不是漫画；漫画固定版式（kindle）；页边距 1 时各页的补救（`comic_reader_margins`，以前 Move 用） |
+| `comic_detect` / `comicfxl` / `comicpad` | 判断是不是漫画；漫画固定版式（kindle 像素画布、kobo 百分比写法）；页边距 1 时各页的补救（`comic_reader_margins`，以前 Move 用） |
 | `check` | 质量门 |
 | `epub` / `epubzip` | EPUB 组装与读写（每个 zip 条目解压上限 `MAX_ENTRY_BYTES` 256MB，EPUB、CBZ 共用，超过报错）：`EpubWriter`（全仓库写 EPUB 都用它）、`read_entries_from`；zip 内路径工具、书里链接解析 `resolve_link` 再导出自 `bookbase::epubpath` |
 | `error` | 错误类型 `BookError`（取消、IO、zip、文件损坏、单条目超上限、不支持、DRM、其它）：`epubzip`、`epubbook`、`optimize` 的公开入口和清洗层返回它，调用方按变体判断（取消看 `is_cancelled()`，不看错误串开头）；`Display` 就是给用户看的中文文字（和以前的错误串逐字相同），还用 `String` 往上传的代码照旧 `?` |

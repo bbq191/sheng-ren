@@ -268,6 +268,9 @@ pub struct OptimizeOpts {
     pub comic_page_direction: Option<crate::direction::PageDirection>,
     /// 漫画写成固定版式（profile 的 `comic_fixed_layout`），画布是 `comic_screen`。见 [`crate::comicfxl`]。
     pub comic_fixed_layout: bool,
+    /// 固定版式用百分比写法（profile 的 `comic_fixed_layout_percent`，Kobo 方案 D）：图 100%×100%，
+    /// html/body 和 KEPUB 包装的高度链 100%。见 [`crate::comicfxl`]。
+    pub comic_fixed_layout_percent: bool,
     /// 整页背景图按原书的尺寸意图缩进阅读范围（`screen`）：去掉 `background-size` 的模式（profile `background_sizing = false`，
     /// 掌阅）才开，见 [`crate::bgfit`]。只管文字书。
     pub fit_backgrounds: bool,
@@ -399,6 +402,7 @@ impl OptimizeOpts {
             page_direction: None,
             comic_page_direction: None,
             comic_fixed_layout: false,
+            comic_fixed_layout_percent: false,
             fit_backgrounds: false,
             caption_fit: false,
             flatten_alpha: false,
@@ -441,6 +445,7 @@ impl OptimizeOpts {
                 .as_deref()
                 .and_then(crate::direction::PageDirection::parse),
             comic_fixed_layout: p.comic.fixed_layout,
+            comic_fixed_layout_percent: p.comic.fixed_layout_percent,
             fit_backgrounds: p.background_images && !p.background_sizing,
             caption_fit: p.caption_fit,
             flatten_alpha: !p.image_alpha,
@@ -1012,6 +1017,11 @@ struct EntryXform<'a> {
     drop_note_backlinks: bool,
     /// 漫画写成固定版式时的画布（宽, 高）。
     fixed_layout: Option<(u32, u32)>,
+    /// 固定版式用百分比写法（Kobo 方案 D）。
+    fixed_layout_percent: bool,
+    /// 漫画页图排版后的显示宽高（最终条目名 → 宽高）：非装饰页按画布记，装饰小图按源图记（读文件头，含 EXIF 方向）。
+    /// 百分比写法按它判断比例是否和画布一致。
+    image_dims: &'a HashMap<String, (u32, u32)>,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
@@ -1034,7 +1044,11 @@ struct EntryXform<'a> {
 }
 
 impl<'a> EntryXform<'a> {
-    fn new(prep: &'a Prepared, opts: &'a OptimizeOpts) -> EntryXform<'a> {
+    fn new(
+        prep: &'a Prepared,
+        opts: &'a OptimizeOpts,
+        image_dims: &'a HashMap<String, (u32, u32)>,
+    ) -> EntryXform<'a> {
         EntryXform {
             aside_index: &prep.aside_index,
             skip_notes: &prep.skip_notes,
@@ -1052,6 +1066,10 @@ impl<'a> EntryXform<'a> {
                 let s = opts.comic_screen.unwrap_or(opts.screen);
                 (s.width, s.height)
             }),
+            fixed_layout_percent: prep.is_comic_book
+                && opts.comic_fixed_layout
+                && opts.comic_fixed_layout_percent,
+            image_dims,
             opf_name: prep.opf_name.as_deref(),
             screen: opts.screen,
             seen_ids: HashSet::new(),
@@ -1139,7 +1157,14 @@ impl<'a> EntryXform<'a> {
             t
         };
         let t = match self.fixed_layout {
-            Some((w, h)) => crate::comicfxl::page(&t, w, h).unwrap_or(t),
+            Some((w, h)) => {
+                let image_dims = self.image_dims;
+                let dims = |src: &str| {
+                    let path = crate::epubzip::resolve_link(name, src).0;
+                    image_dims.get(&path).copied()
+                };
+                crate::comicfxl::page(&t, w, h, self.fixed_layout_percent, dims).unwrap_or(t)
+            }
             None => t,
         };
         let t = if self.skip_notes.contains(name) {
@@ -1215,10 +1240,11 @@ impl<'a> EntryXform<'a> {
             {
                 out.extend_from_slice(crate::comicpad::CSS_RULES.as_bytes());
             }
-            if self.fixed_layout.is_some()
-                && crate::util::memfind(&out, crate::comicfxl::CSS_RULES.as_bytes()).is_none()
-            {
-                out.extend_from_slice(crate::comicfxl::CSS_RULES.as_bytes());
+            if self.fixed_layout.is_some() {
+                let rules = crate::comicfxl::css_rules(self.fixed_layout_percent);
+                if crate::util::memfind(&out, rules.as_bytes()).is_none() {
+                    out.extend_from_slice(rules.as_bytes());
+                }
             }
             return Some(Cow::Owned(out));
         }

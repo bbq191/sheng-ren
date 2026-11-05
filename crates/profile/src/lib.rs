@@ -308,6 +308,12 @@ pub struct ComicPolicy {
     /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
     #[serde(rename = "comic_fixed_layout")]
     pub fixed_layout: bool,
+    /// 固定版式用百分比写法（TOML 里不写是 `false`）：比例和画布一致的整页图写 `width:100%;height:100%`，比例不符的
+    /// 只写 `max-width:100%;max-height:100%`；html/body 和 KEPUB 包装的高度链都写 100%。Kobo Nickel 的方案 D
+    /// （2026-11-05 Clara BW 真机：A 同时改了像素画布、纯图页也包 koboSpan 等多处，D 满屏，不能归因单项）；不写＝按
+    /// 像素画布（Kindle）。须和 `comic_fixed_layout` 一起开。见 `bookconv::comicfxl`。
+    #[serde(rename = "comic_fixed_layout_percent")]
+    pub fixed_layout_percent: bool,
     /// 漫画用的产物格式（须在 `formats` 里）；不写就和文字书一样用 `formats` 的第一个。内置模式都不写（kindle 2026-10-05
     /// 曾经写 `azw3`，KFX 固定版式真机通过后去掉；AZW3 格式 2026-10-09 删了），留给自定义模式。
     #[serde(rename = "comic_format")]
@@ -442,6 +448,8 @@ struct ProfileFile {
     comic_page_direction: Option<String>,
     #[serde(default)]
     comic_fixed_layout: bool,
+    #[serde(default)]
+    comic_fixed_layout_percent: bool,
     comic_format: Option<Format>,
     comic_gamma: Option<f64>,
     #[serde(default)]
@@ -570,6 +578,7 @@ impl Profile {
                 readable: f.comic_readable,
                 page_direction: f.comic_page_direction,
                 fixed_layout: f.comic_fixed_layout,
+                fixed_layout_percent: f.comic_fixed_layout_percent,
                 format: f.comic_format,
                 gamma: f.comic_gamma,
                 autocontrast: f.comic_autocontrast,
@@ -696,6 +705,12 @@ impl Profile {
                     self.id
                 ));
             }
+        }
+        if self.comic.fixed_layout_percent && !self.comic.fixed_layout {
+            return Err(format!(
+                "profile {}: comic_fixed_layout_percent 要和 comic_fixed_layout 一起写（只有固定版式才有整页图尺寸）",
+                self.id
+            ));
         }
         if self.cover_meta_thumb && self.cover_thumb_aspect.is_none() {
             return Err(format!(
@@ -977,6 +992,7 @@ mod tests {
                     readable: _,
                     page_direction: _,
                     fixed_layout: _,
+                    fixed_layout_percent: _,
                     format: _,
                     gamma: _,
                     autocontrast: _,

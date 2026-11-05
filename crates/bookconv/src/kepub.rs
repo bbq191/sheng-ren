@@ -4,7 +4,9 @@
 //! 只在原文上**插入**标签，原文一个字节都不改（剥掉插入的标签后与输入逐字节相等，测试守着）：
 //! - 章节 `<body>` 里面包两层 `<div id="book-columns"><div id="book-inner">…</div></div>`；
 //! - 每句文字包 `<span class="koboSpan" id="kobo.段.句">`（段、句从 1 起，每个文件重新数；span 只包文字、不跨元素边界）；
-//! - 图片自己占一段：`<span class="koboSpan" id="kobo.段.1"><img …/></span>`。
+//! - 图片自己占一段：`<span class="koboSpan" id="kobo.段.1"><img …/></span>`。例外：优化器产出的漫画固定版式
+//!   （pre-paginated + `book-type=comic`）的纯图页，`<img>` 外面不加 koboSpan，包装照加。2026-11-05 Clara BW 真机 D
+//!   满屏；A 同时改了像素画布、纯图页也包 koboSpan 等多处，B/C/E 各测不同变量，不能归因到单一差异。
 //!
 //! OPF、CSS、图片等其余条目原样拷（压缩数据不动）；导航文档（nav、ncx）不改；已经是 KEPUB 的章节（有包装或 koboSpan）整章不动。
 //! 不加 Kobo 的样式补丁（`kobostylehacks`）：会改书的版式（维护者 2026-11-01 定）。
@@ -14,7 +16,7 @@ use crate::error::BookError;
 use crate::html::{self, TagKind};
 
 /// 写出器版本：改了产物的写法就加一（进书库指纹，旧产物按需重建）。
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// 包装的开头、结尾。
 const WRAP_OPEN: &str = r#"<div id="book-columns"><div id="book-inner">"#;
@@ -193,11 +195,63 @@ fn already_kepub(doc: &str) -> bool {
     })
 }
 
+/// 书是不是固定版式（pre-paginated）：优化器 `comicfxl` 写的 `<meta name="fixed-layout" content="true"/>`，或 EPUB 3 的
+/// `<meta property="rendition:layout">pre-paginated</meta>`。
+fn pre_paginated(opf: &str) -> bool {
+    if crate::wash::opf::meta_content(opf, "fixed-layout")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+    {
+        return true;
+    }
+    html::tags(opf).any(|t| {
+        if !(t.is_start() && crate::wash::opf::is_local(t.name, "meta")) {
+            return false;
+        }
+        let tag = &opf[t.start..t.end];
+        if html::attr_value(tag, "property") != Some("rendition:layout") {
+            return false;
+        }
+        html::find_close(opf, t.end, t.name).is_some_and(|c| {
+            opf[t.end..c.start]
+                .trim()
+                .eq_ignore_ascii_case("pre-paginated")
+        })
+    })
+}
+
+/// 是不是优化器产出的漫画固定版式：pre-paginated + OPF `book-type=comic`（`comicfxl::opf` 写的）。
+/// 出版社原生的固定版式非漫画书不算——它们不经过 `comicfxl`，没有 D 的高度链，行为保持改前（纯图页照旧包 koboSpan）。
+fn comic_fixed_layout(opf: &str) -> bool {
+    pre_paginated(opf)
+        && crate::wash::opf::meta_content(opf, "book-type")
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("comic"))
+}
+
 /// 改写一个章节 XHTML。返回 `None`：没有 body、已经是 KEPUB（原样用）。否则返回新文本和加的 span 数。
 pub fn transform_xhtml(doc: &str, opts: &Opts) -> Option<(String, usize)> {
+    transform_xhtml_inner(doc, opts, false)
+}
+
+/// 同 [`transform_xhtml`]；`comic_fixed_layout` 是整本书的漫画固定版式判定（这种书的纯图页不包 img）。
+fn transform_xhtml_inner(
+    doc: &str,
+    opts: &Opts,
+    comic_fixed_layout: bool,
+) -> Option<(String, usize)> {
     let (bs, be) = html::body_range(doc)?;
     if already_kepub(doc) {
         return None;
+    }
+    if comic_fixed_layout && crate::comicfxl::image_only(doc) {
+        // 方案 D：包装照加，但整页图外面不加 koboSpan（纯图页没有文字要包）；只限漫画固定版式产物。
+        if !opts.wrap_image_pages {
+            return None;
+        }
+        let edits = vec![
+            (bs, bs, WRAP_OPEN.to_string()),
+            (be, be, WRAP_CLOSE.to_string()),
+        ];
+        return Some((html::apply_edits(doc, edits), 0));
     }
     let mut edits: Vec<(usize, usize, String)> = Vec::new();
     let (mut para, mut sent, mut spans, mut text_spans) = (0usize, 0usize, 0usize, 0usize);
@@ -393,13 +447,15 @@ fn risky_selectors(css: &str) -> bool {
     })
 }
 
-/// `input`（优化过的 EPUB）→ `output`（KEPUB）。章节按 [`transform_xhtml`] 改写，其余条目原样拷压缩数据。
+/// `input`（优化过的 EPUB）→ `output`（KEPUB）。章节按 [`transform_xhtml`] 改写（漫画固定版式书的纯图页不包 img），
+/// 其余条目原样拷压缩数据。
 pub fn epub_to_kepub(
     input: &std::path::Path,
     output: &std::path::Path,
     opts: &Opts,
 ) -> Result<Report, BookError> {
     let (mut zip, opf_path, opf) = epubzip::open_opf(input)?;
+    let comic_fxl = comic_fixed_layout(&opf);
     let dir = epubzip::dir_of(&opf_path).to_string();
     let nav: Vec<String> = crate::wash::opf::manifest_items(&opf)
         .iter()
@@ -445,7 +501,7 @@ pub fn epub_to_kepub(
         risky |= html::style_blocks(text)
             .iter()
             .any(|b| risky_selectors(&text[b.content_start..b.content_end]));
-        match transform_xhtml(text, opts) {
+        match transform_xhtml_inner(text, opts, comic_fxl) {
             Some((out, n)) => {
                 rep.files += 1;
                 rep.spans += n;
@@ -598,6 +654,118 @@ mod tests {
         )
         .is_none());
         assert!(transform_xhtml("<html><p>无 body</p></html>", &Opts::default()).is_none());
+    }
+
+    #[test]
+    fn pre_paginated_detection_reads_opf_fixed_layout() {
+        assert!(pre_paginated(
+            r#"<package><metadata><meta name="fixed-layout" content="true"/></metadata></package>"#
+        ));
+        assert!(pre_paginated(
+            r#"<package><metadata><meta property="rendition:layout">pre-paginated</meta></metadata></package>"#
+        ));
+        assert!(!pre_paginated(
+            r#"<package><metadata><meta property="rendition:layout">reflowable</meta></metadata></package>"#
+        ));
+        assert!(!pre_paginated(
+            r#"<package><metadata><meta name="fixed-layout" content="false"/></metadata></package>"#
+        ));
+        // “不包 koboSpan”只限优化器产出的漫画固定版式：出版社原生的固定版式非漫画书照旧包
+        let fxl =
+            r#"<package><metadata><meta name="fixed-layout" content="true"/></metadata></package>"#;
+        assert!(pre_paginated(fxl) && !comic_fixed_layout(fxl));
+        let comic = r#"<package><metadata><meta name="fixed-layout" content="true"/><meta name="book-type" content="comic"/></metadata></package>"#;
+        assert!(comic_fixed_layout(comic));
+        assert!(!comic_fixed_layout(
+            r#"<package><metadata><meta name="book-type" content="comic"/></metadata></package>"#
+        ));
+    }
+
+    #[test]
+    fn fixed_layout_image_only_page_wraps_without_kobospan_but_text_page_keeps_spans() {
+        let d = doc(r#"<div><img src="p1.jpg"/></div>"#);
+        let (out, n) = transform_xhtml_inner(&d, &Opts::default(), true).unwrap();
+        assert!(out.contains(WRAP_OPEN) && out.contains(WRAP_CLOSE), "{out}");
+        assert_eq!(n, 0);
+        assert!(!out.contains("koboSpan"), "纯图页不包 img：{out}");
+        assert_eq!(strip(&out), d, "剥掉包装后和原文逐字节相同");
+        // 非固定版式书的纯图页照旧包 img
+        let (out, n) = transform_xhtml_inner(&d, &Opts::default(), false).unwrap();
+        assert_eq!(n, 1);
+        assert!(
+            out.contains(r#"<span class="koboSpan" id="kobo.1.1"><img"#),
+            "{out}"
+        );
+        // 固定版式的文字页照旧按句加 koboSpan
+        let (out, n) =
+            transform_xhtml_inner(&doc("<p>一。二。</p>"), &Opts::default(), true).unwrap();
+        assert_eq!(n, 2);
+        assert!(out.contains(r#"id="kobo.1.2""#), "{out}");
+        // 纯图页关了包装就什么都不改
+        assert!(transform_xhtml_inner(
+            &d,
+            &Opts {
+                wrap_image_pages: false
+            },
+            true
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn fixed_layout_book_keeps_wrapper_and_skips_image_span_end_to_end() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("a.epub");
+        let mut w = EpubWriter::create(&src).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("OEBPS/c.opf", br#"<package><metadata><meta name="fixed-layout" content="true"/><meta name="original-resolution" content="1072x1448"/><meta name="book-type" content="comic"/></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#).unwrap();
+        w.put(
+            "OEBPS/c1.xhtml",
+            r#"<html><head><title>1</title><meta name="viewport" content="width=1072, height=1448"/></head><body><div><img src="p1.jpg" style="width:100%;height:100%"/></div></body></html>"#.as_bytes(),
+        )
+        .unwrap();
+        w.put("OEBPS/c2.xhtml", doc("<p>一。二。</p>").as_bytes())
+            .unwrap();
+        w.finish().unwrap();
+        let out = d.path().join("a.kepub.epub");
+        epub_to_kepub(&src, &out, &Opts::default()).unwrap();
+        let mut z = epubzip::open_file_zip(&out).unwrap();
+        let c1 =
+            String::from_utf8(epubzip::read_by_name(&mut z, "OEBPS/c1.xhtml").unwrap()).unwrap();
+        assert!(
+            c1.contains("book-columns")
+                && c1.contains(r#"content="width=1072, height=1448""#)
+                && c1.contains(r#"style="width:100%;height:100%""#)
+                && !c1.contains("koboSpan"),
+            "{c1}"
+        );
+        let c2 =
+            String::from_utf8(epubzip::read_by_name(&mut z, "OEBPS/c2.xhtml").unwrap()).unwrap();
+        assert!(c2.contains(r#"id="kobo.1.2""#), "{c2}");
+    }
+
+    #[test]
+    fn non_comic_fixed_layout_image_page_keeps_kobospan() {
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("a.epub");
+        let mut w = EpubWriter::create(&src).unwrap();
+        w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        w.put("OEBPS/c.opf", br#"<package><metadata><meta name="fixed-layout" content="true"/><meta name="original-resolution" content="1072x1448"/></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>"#).unwrap();
+        w.put(
+            "OEBPS/c1.xhtml",
+            r#"<html><head><title>1</title></head><body><div><img src="p1.jpg"/></div></body></html>"#.as_bytes(),
+        )
+        .unwrap();
+        w.finish().unwrap();
+        let out = d.path().join("a.kepub.epub");
+        epub_to_kepub(&src, &out, &Opts::default()).unwrap();
+        let mut z = epubzip::open_file_zip(&out).unwrap();
+        let c1 =
+            String::from_utf8(epubzip::read_by_name(&mut z, "OEBPS/c1.xhtml").unwrap()).unwrap();
+        assert!(
+            c1.contains("book-columns") && c1.contains(r#"id="kobo.1.1"><img"#),
+            "非漫画固定版式行为不变：{c1}"
+        );
     }
 
     #[test]

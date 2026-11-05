@@ -103,8 +103,10 @@ done
 | CBZ → EPUB 的转换 | `bookconv::convert::CONVERT_VERSION`（附一行变更说明） | 2 | 只有 CBZ 来源的 |
 | 生成时往书里补封面、简介、标签、作者国籍、译者、出版社、日期、ISBN，书名换成网站书名 | `bookconv::opfmeta::VERSION` | 6 | 只有补过东西的 |
 | EPUB → KFX | `kfx::write::WRITER_VERSION` | 25 | 只有 `kindle` 模式的（漫画、全图书产物逐字节不变，设备上不重传） |
-| EPUB → KEPUB（koboSpan、包装） | `bookconv::kepub::VERSION` | 1 | 只有出 KEPUB 的模式的（`kobo`） |
+| EPUB → KEPUB（koboSpan、包装） | `bookconv::kepub::VERSION` | 2 | 只有出 KEPUB 的模式的（`kobo`） |
 | 书库生成流程本身 | `library` 的 `PIPELINE_VERSION`（慎用） | 5 | 全部 |
+
+`bookconv::kepub::VERSION` 2（2026-11-05 Kobo 方案 D）会让下次 `sync` **重建全部 Kobo 书（含文字书）**：指纹格式段 `kepub1`→`kepub2`。漫画产物会变、会重传；文字书内容没变，重建后按逐字节比较通常不重传，但都要重新生成/比较一遍。给 vinci 看。
 
 两路共用的代码（清洗层、EPUB 3 规范整理、写 zip……）改了影响产物时，`OPTIMIZE_VERSION`、`COMIC_VERSION` 都加一；只动了一路的只加那一路的。
 profile 里设备模型的字段（`display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`、`[heading_sizes]`、`margin_top`、`[page_top]`，`bookconv::reader_model`）和 `em_px` 以哈希进指纹（`m` 段），改了它们（比如重量了标题字号）不用加版本号。
