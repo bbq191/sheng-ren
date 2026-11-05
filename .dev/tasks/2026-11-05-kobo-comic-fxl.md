@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-05-kobo-comic-fxl
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/kobo-comic-fxl（从最新 master 切出）
-- 更新时间: 2026-11-05T16:00+08:00
+- 更新时间: 2026-11-05T15:37+08:00
 - 引用: 无
 
 ## 需求原文
@@ -45,19 +45,19 @@
 - 风险点：设备行为（Kobo 漫画版式 / kepub 写出）→ 合并前要 agy 二审
 
 ## 分步任务
-1. [ ] `kepub.rs`：检测「本章是纯图页」（body 内无可见文字、仅一张 img，与现有 image-only 判定对齐）；对 **pre-paginated**（或「漫画固定版式产物」——实现时选一种并在注释写清）的纯图页：**仍加** book-columns 包装，**不加** koboSpan 包 img；文字页、非 FXL 书行为不变。自检：新增/改单元测试——纯图页输出含 `book-columns`、不含 `koboSpan` 包着的 img；文字页仍有 `kobo.1.1` 类 span
-2. [ ] `comicfxl.rs`（+ 调用处）：Kobo 漫画页改 D 写法（100%/100%、对齐 viewport、html/body 尺寸）；去掉原书错位 viewport / 旧 rendition；Kindle 路径保持现状。自检：单元测试覆盖 Kobo 页含 `width:100%`/`height:100%` 与 `viewport`=`1072×1448`；Kindle 用例断言不变
-3. [ ] `kepub::VERSION` 加一（输出变了）；指纹金样只更新 kobo 行
-4. [ ] `kobo.toml` 注释：`comic_fixed_layout` / `[comic_readable]` 改为「2026-11-05 Clara BW 真机确认（方案 D）」；数值不动
-5. [ ] `docs/kepub.md`：改「真机 A/B」为结论（D 入选；文字 OK；书签/笔记侧载可用；缺省即 D，不再靠 `.fxl` 文件名区分版式）；`docs/devices.md` 同步
-6. [ ] `cargo test --workspace`；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
+1. [x] `kepub.rs`：检测「本章是纯图页」（body 内无可见文字、仅一张 img，与现有 image-only 判定对齐）；对 **pre-paginated**（或「漫画固定版式产物」——实现时选一种并在注释写清）的纯图页：**仍加** book-columns 包装，**不加** koboSpan 包 img；文字页、非 FXL 书行为不变。自检：新增/改单元测试——纯图页输出含 `book-columns`、不含 `koboSpan` 包着的 img；文字页仍有 `kobo.1.1` 类 span
+2. [x] `comicfxl.rs`（+ 调用处）：Kobo 漫画页改 D 写法（100%/100%、对齐 viewport、html/body 尺寸）；去掉原书错位 viewport / 旧 rendition；Kindle 路径保持现状。自检：单元测试覆盖 Kobo 页含 `width:100%`/`height:100%` 与 `viewport`=`1072×1448`；Kindle 用例断言不变
+3. [x] `kepub::VERSION` 加一（输出变了）；指纹金样只更新 kobo 行
+4. [x] `kobo.toml` 注释：`comic_fixed_layout` / `[comic_readable]` 改为「2026-11-05 Clara BW 真机确认（方案 D）」；数值不动
+5. [x] `docs/kepub.md`：改「真机 A/B」为结论（D 入选；文字 OK；书签/笔记侧载可用；缺省即 D，不再靠 `.fxl` 文件名区分版式）；`docs/devices.md` 同步
+6. [x] `cargo test --workspace`；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
 
 ## 验收标准
-- [ ] 功能：`--device=kobo` 漫画产物为固定版式 KEPUB；纯图页有 book-columns、**无** koboSpan 包 img；img 为 100%×100%；viewport / original-resolution 为 1072×1448；文字 KEPUB 仍按句加 koboSpan
-- [ ] 测试：`cargo test -p bookconv` 含上述断言；`cargo test --workspace` 全过；clippy 0 警告
-- [ ] 不回归：`fp_golden.txt` 仅 kobo 行变化；kindle/ireader/hanvon 0 删 0 改；Kindle 漫画固定版式行为不变
-- [ ] 「不做」的事确实没做；漫画伽马/对比度/页码/黑底/margin/rtl/upscale 规则未关
-- [ ] 文档：`kepub.md` / `devices.md` / `kobo.toml` 注释与真机结论一致
+- [x] 功能：`--device=kobo` 漫画产物为固定版式 KEPUB；纯图页有 book-columns、**无** koboSpan 包 img；img 为 100%×100%；viewport / original-resolution 为 1072×1448；文字 KEPUB 仍按句加 koboSpan（单元测试覆盖产物写法；真机结论按任务单给的 A/B）
+- [x] 测试：`cargo test -p bookconv` 含上述断言；`cargo test --workspace` 全过；clippy 0 警告
+- [x] 不回归：`fp_golden.txt` 仅 kobo 行变化；kindle/ireader/hanvon 0 删 0 改；Kindle 漫画固定版式行为不变
+- [x] 「不做」的事确实没做；漫画伽马/对比度/页码/黑底/margin/rtl/upscale 规则未关
+- [x] 文档：`kepub.md` / `devices.md` / `kobo.toml` 注释与真机结论一致
 
 ## 交付物
 代码提交到上面的分支并推送；「结果」填好；状态改为 done 或 blocked。
@@ -69,13 +69,35 @@
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-05T15:20+08:00–2026-11-05T15:37+08:00
+- base..head：`05ddc2f..b4b17ca`（功能提交；任务提交 `9bb7c64` + 本提交）
+- 提交：
+
+| 步骤 | 提交号 | 文件 | 说明 |
+|---|---|---|---|
+| 接受任务 | `9bb7c64` | `.dev/tasks/2026-11-05-kobo-comic-fxl.md` | 状态 pending → accepted |
+| 分步 1–5 | `b4b17ca` | 代码、profile、指纹金样、文档 | 实现方案 D；`kepub::VERSION` 2；只 kobo 指纹行变化 |
+| 分步 6 / 结果 | 本提交 | `.dev/tasks/2026-11-05-kobo-comic-fxl.md` | 填结果、勾选分步/验收、状态 done |
+
+- 测试：
+
+| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+|---|---|---|
+| `cargo test -p bookconv comic_fixed_layout_percent_follows_kobo_profile_only` | 通过 | Kobo 产物：OPF `pre-paginated` + `1072x1448`、viewport 1072×1448、img 100%×100%、CSS 高度链；同书 Kindle 仍是 1272×1696 像素画布 |
+| `cargo test -p bookconv kepub::tests::fixed_layout` | 通过 | 固定版式纯图页有 `book-columns`、无 koboSpan 包 img；文字页仍有 `kobo.1.2`；流经 `epub_to_kepub` 后 viewport/img 样式保持 |
+| `cargo test -p library --test fp_golden` | 通过 | `fp_golden.txt` 只改 kobo 118 行（`kepub1`→`kepub2`，漫画 `f`→`fF`）；kindle/ireader/hanvon 0 删 0 改 |
+| `cargo test --workspace` | 通过 | 全部测试通过（bookconv 521、library 63+7+13+44+1、kfx 50、csscascade 16、profile 10、bookbase 30 等） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+
 - 遇到的问题：
-- 偏离：无
+  - 任务单引用的 `/workspace/kobo-ab/README.txt` 在本机不存在，按任务单正文里的真机 A/B 结论（A 坏、B/C/E 正常、D 满屏）实现，没有读外部包。
+  - 本轮没有真书回归、没有重新上真机：真机结论来自任务单给的结果，代码侧只做了单元测试和指纹对拍。
+- 偏离：
+  - 为实现 D 新增 profile 字段 `comic_fixed_layout_percent`（`crates/profile/src/lib.rs`、`crates/bookconv/src/optimize/mod.rs`、`kobo.toml`；须和 `comic_fixed_layout` 一起开），并在漫画指纹 `f` 后加 `F`（`crates/library/src/fingerprint.rs`）。
+  - 另改了 `crates/bookconv/src/optimize/tests.rs`（集成测试）、`crates/bookconv/src/bin/epub_to_kepub.rs`（只改文档注释：不再靠 `.fxl` 文件名）、`docs/development.md`（KEPUB 版本 2）、`docs/decisions.md`、`docs/architecture.md`、`README.md`（和真机结论同步）；都在“涉及文件”之外，逐项列在这里。
+  - `COMIC_VERSION` 保持 65 没加一：本次只改 Kobo 的固定版式写法，为满足“fp_golden 仅 kobo 行变化 / kindle/ireader/hanvon 0 行变”，Kobo 产物靠 `kepub::VERSION` 2 和漫画指纹新增的 `F` 段触发重建。若要求严格按“漫画优化加版本”，需要另做一次全漫画行更新。
 - 未完成：
+  - 真机验证、真书回归未做（本机没有维护者的真书/设备）；Kindle 漫画路径按“像素画布不变”实现，待本机回归确认逐字节不变。
 
 ## 审查
 <!-- 负责 bot 填写 -->
