@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-05-kobo-comic-fxl
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/kobo-comic-fxl（从最新 master 切出）
-- 更新时间: 2026-11-05T17:05+08:00
+- 更新时间: 2026-11-05T16:14+08:00
 - 引用: 无
 
 ## 需求原文
@@ -99,7 +99,40 @@
 - 未完成：
   - 真机验证、真书回归未做（本机没有维护者的真书/设备）；Kindle 漫画路径按“像素画布不变”实现，待本机回归确认逐字节不变。
 
-## 审查
+### 返工（2026-11-05，按「二审核实」1–4、6；5 锚点已核实不改）
+
+- 执行方 / 时间：opencode-local / 2026-11-05T16:05+08:00–2026-11-05T16:14+08:00
+- base..head：`98a24a3..873e7a2`（返工代码/文档；任务接受 `09d5b6a`、结果本提交）
+- 提交：`09d5b6a` 接受返工；`873e7a2` 返工实现；本提交填结果、状态 done。
+- 返工 1（比例）：`comicfxl::page` 增加图尺寸查询；百分比路径只有 `fills_canvas(图尺寸, 画布)` 才写
+  `width:100%;height:100%`，否则写 `display:block;max-width:100%;max-height:100%;margin:0 auto`（不拉伸装饰小图/坏图；
+  读不到尺寸也走这条）。`optimize` 只为 Kobo 百分比漫画读页图文件头建“最终条目名 → 显示宽高”表（含 EXIF 方向），
+  Kindle 像素路径不读、不传、不调用。
+- 返工 2（不加 koboSpan 限漫画）：`kepub` 的例外改成 `pre_paginated && OPF book-type=comic`；出版社原生非漫画
+  FXL 纯图页仍照旧包 koboSpan，单测锁住。
+- 返工 3（去单因）：`kobo.toml`、`comicfxl.rs` / `kepub.rs` 注释、`docs/kepub.md`、`docs/devices.md`、`docs/decisions.md`
+  改成「A（像素画布 + 纯图页包 koboSpan + 残留 FXL/错 viewport 等多处）不满屏，D 满屏」，并写明 B/C/E 各测变量没有
+  完整记录、不能归因单项。
+- 返工 4（全量重建）：`docs/kepub.md`、`docs/development.md` 和本任务单写明 `kepub::VERSION` 2 会让下次 `sync` 重建
+  **全部 Kobo 书（含文字书）**；漫画产物会变、会重传，文字书内容没变、重建后按逐字节比较通常不重传（不把“不重传”
+  当保证）。给 vinci 看。
+- 返工 5（锚点）：`docs/devices.md` Kobo 标题与 `kepub.md` 链接已核实一致，未改。
+- 返工 6（测试）：
+
+| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+|---|---|---|
+| `cargo test -p bookconv optimize::tests::comic_fixed_layout_percent_follows_kobo_profile_only` | 通过 | 合成漫画经 `epub-optimize --device=kobo` → `epub-to-kepub`：满画布页 `width:100%;height:100%`、装饰小图 `max-width/max-height`、两页都无 koboSpan、文字页仍有 kobo span；同书 Kindle 仍是 1272×1696 像素画布 |
+| `cargo test -p bookconv comicfxl::tests` | 通过 | 5 个测试，含比例不符/读不到尺寸走 max-width 的断言 |
+| `cargo test -p bookconv kepub::tests` | 通过 | 16 个测试，含非漫画 FXL 纯图页仍包 koboSpan |
+| `cargo test --workspace` | 通过 | 全部通过（bookconv 522） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+| `cargo test -p library --test fp_golden` | 通过 | 仍只有 kobo 118 行（`kepub1`→`kepub2`、漫画 `f`→`fF`）；kindle/ireader/hanvon 0 行变 |
+
+- 偏离 / 说明：
+  - 返工没有再加 profile 字段；`kepub::VERSION` 保持 2（2 尚未合进 master，返工属于同一版，没有升 3）。
+  - `optimize/streaming.rs` 新增只读文件头的尺寸表，只对 `comic_fixed_layout_percent` 的 Kobo 漫画生效，Kindle 不多读图片。
+- 未完成：
+  - 真机验证、真书回归仍未做；二审核实的线索 2（漫画 D 上的书签/进度）待真机复测；B/C/E 各测什么没有完整记录。
 <!-- 负责 bot 填写 -->
 - 验收：**通过**（sheng-ren，2026-11-05T15:42+08:00，box 上 `a016270`，`master=05ddc2f`）
   - 任务单「结果」已填、状态 done；分步 1–6 勾选；提交中文前缀、无 Co-Authored-By、未合并
