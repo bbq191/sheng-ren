@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-05-kobo-comic-fxl
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: feat/kobo-comic-fxl（从最新 master 切出）
-- 更新时间: 2026-11-05T15:42+08:00
+- 更新时间: 2026-11-05T16:05+08:00
 - 引用: 无
 
 ## 需求原文
@@ -114,5 +114,47 @@
   - 文档：`docs/kepub.md` 真机结论选 D；`docs/devices.md` / `kobo.toml` 注释与 2026-11-05 一致
   - 接受偏离：新键 `comic_fixed_layout_percent` + 指纹 `F`；`COMIC_VERSION` 未加一（靠 kepub2/`F` 触发重建，与「仅 kobo 金样变化」一致）；涉及文件外的 docs/README/epub_to_kepub 注释同步已列明
   - **未做 / 合并前必做**：agy 二审；真机再看 F 与《迷宮飯》卷02；本机未跑 Kindle 真书逐字节回归（单元测试 + 金样已守 Kindle 像素画布路径）
-- 二审：待 vinci 跑 agy；回执 `.dev/tasks/2026-11-05-kobo-comic-fxl.agy.md`
-- 合并：等二审无阻断 + 真机确认后再合；**本次不合并**
+- 二审：回执 `.dev/tasks/2026-11-05-kobo-comic-fxl.agy2.md`（忽略不完整的 `.agy.md`）。有 **1 条阻断**；sheng-ren 已逐条核实（见下「二审核实」）。**验收结论改为退回返工**。
+- 合并：未合；返工 + 再验收 + 再二审后再合
+
+## 二审核实（sheng-ren，2026-11-05T16:05+08:00，对照 `.agy2.md`）
+
+依据：读代码 + 新建合成书 `/tmp/synth-stretch.epub`（8 张满画布 + 装饰小图 200×800 + 横图 1600×900 + 文字页，标 `dc:subject=漫画`）经 `epub-optimize --device=kobo` → `epub-to-kepub`；对照 `/workspace/kobo-ab/D-kcc-fxl-nospan.kepub.epub`。
+
+### 阻断 1 — **确认**
+- 代码：`comicfxl.rs` `page()` 在 `percent=true` 且 `image_only_body` 时写死 `width:100%;height:100%`，**不**调用 `fills_canvas`（约 130–138 行）。
+- 真产物：装饰小图页 `c08.xhtml` 图仍是 **200×800**（`fills_canvas=false`），style 仍是 `width:100%;height:100%`。横图 `c09` 经 `prepare_comic_page` 已补白成 1072×1448（`fills_canvas=true`），写 100%×100% 无比例问题。
+- 与 D 对比 / 高度链（线索 1）：D 的 img **直接**在 `#book-inner` 下，且 D 的 `style.css` 也给 img 写 100%×100%，父层有确定高度时 **会真拉伸**。新流水线常保留原书中间层（`#book-inner > div > img` 或 `center>div>img`），`CSS_RULES_PERCENT` 只给 html/body/`#book-columns`/`#book-inner` 写 `height:100%`，中间层高度为 auto → 百分比 height 常退化成 auto；此时宽仍被 `width:100%` 拉满，装饰小图会变成「按宽撑满、比例保留但超出页高」——同样错误显示。故阻断成立；修法按返工 1。
+
+### 建议 2 — **确认**
+- `/workspace/kobo-ab/README.txt`：A = 像素画布 + koboSpan 包 img + 残留 FXL/错 viewport；B/C/E 各测不同变量。文档/`kobo.toml`/`kepub.rs` 写成「像素画布不满屏」或「加了 koboSpan 不满屏」单因，依据不足。返工 3 改写。
+
+### 建议 3 — **确认**
+- `kepub.rs` `pre_paginated()` 只认 OPF `fixed-layout` / `rendition:layout=pre-paginated`，**不**限 `book-type=comic`；出版社原生 FXL 纯图页也会不加 koboSpan，且那些书不经 `comicfxl`、无高度链。真机只验过漫画。返工 2：把「不加 koboSpan」限到漫画产物。
+
+### 建议 4 — **确认**
+- `kepub::VERSION` 1→2，fp_golden 全部 kobo 行（含文字书）变更 → 下次 sync 会重建并重传 **所有** Kobo 书。版本号该加；须在文档/任务单写明给 vinci（返工 4）。
+
+### 线索 1 — **确认**（见阻断 1）
+- D：`#book-inner` 下直接 `<img>`；新流水线：常多一层 `<div>`/`<center>`。验收「与 D 结构一致」说的是 FXL meta / viewport / 无 koboSpan / 100% 写法，**未**含 img 父层。满画布页靠 `width:100%` + 固有尺寸仍可铺满；与 D 不完全 DOM 等价。
+
+### 线索 2 — **未在本机核实**（无设备）
+- 书签/笔记原文未写清是否在漫画 D 上测；真机复测时翻漫画中间页看进度与书签。不进本次代码返工，记在真机清单。
+
+### 线索 3 — **否定（锚点未坏）**
+- `docs/devices.md:304` 标题 `## Kobo Clara BW（2026-11-05 真机确认漫画方案 D）`；GFM slug = `kobo-clara-bw2026-11-05-真机确认漫画方案-d`，与 `kepub.md` 链接一致。不改。
+
+### 线索 4（COMIC_VERSION）— **接受原偏离**，不返工。
+
+## 返工（状态退回 pending，同一执行方 opencode-local）
+1. **百分比路径按比例写尺寸**：`comicfxl::page(..., percent=true)`（及调用处）仅当 `fills_canvas(图尺寸, w, h)` 时写 `width:100%;height:100%`；否则写 `width:100%;height:auto`（或 `max-width:100%;max-height:100%` 居中，二选一并在注释写明、单测锁住）。须能读到图尺寸（改 `page` 签名从调用处传入，或在 `optimize/mod.rs` 判断后分支）。Kindle `percent=false` 路径保持像素画布、行为不变。
+2. **不加 koboSpan 限漫画**：`kepub` 仅对漫画固定版式产物跳过纯图页 koboSpan（例如认 OPF `book-type=comic` / 优化器漫画标记，实现时选一种并注释）；出版社原生 pre-paginated 非漫画行为与改前一致（或显式测并写进偏离）。单测：漫画 FXL 纯图页无 koboSpan；非漫画 FXL 纯图页仍有 koboSpan（若选限缩方案）。
+3. **文档去单因**：`kobo.toml` / `kepub.rs` 注释 / `docs/kepub.md`（及 decisions 若写了单因）改成「A（像素画布 + 纯图页包 koboSpan 等）不满屏，D 满屏」，不要写成「只因像素」或「只因 koboSpan」。
+4. **告知全量重建**：在 `docs/kepub.md`（或 development）和本任务单写明：`kepub::VERSION` 2 会导致下次 sync **重建并重传全部 Kobo 书**（含文字书），给 vinci 看。
+5. 锚点：核实未坏，**不改**。
+6. `cargo test --workspace`；clippy `-D warnings`；`fp_golden` 仍只允许 kobo 行变；填「结果」返工段，状态改 done，提交推送。
+
+## 给执行方的返工指令
+```
+返工任务单 .dev/tasks/2026-11-05-kobo-comic-fxl.md：先把状态改为 accepted 并提交，按「返工」1–4、6 做完（5 锚点已核实不改），填好「结果」返工段，状态改为 done，提交并推送分支。编译用 CARGO_TARGET_DIR=~/.cache/sheng-ren-target；只 rustfmt 改过的文件；Kindle 行为与 fp_golden 非 kobo 行不得变；百分比路径必须 fills_canvas 才写 100%×100%，否则 width:100%;height:auto（或 max-width/max-height 100% 居中）；不加 koboSpan 限漫画产物；文档去掉单因表述并写明 Kobo 全量重建。
+```
