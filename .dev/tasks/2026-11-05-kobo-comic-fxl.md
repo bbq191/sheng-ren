@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-05-kobo-comic-fxl
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: feat/kobo-comic-fxl（从最新 master 切出）
-- 更新时间: 2026-11-05T16:14+08:00
+- 更新时间: 2026-11-05T16:25+08:00
 - 引用: 无
 
 ## 需求原文
@@ -148,7 +148,7 @@
   - 接受偏离：新键 `comic_fixed_layout_percent` + 指纹 `F`；`COMIC_VERSION` 未加一（靠 kepub2/`F` 触发重建，与「仅 kobo 金样变化」一致）；涉及文件外的 docs/README/epub_to_kepub 注释同步已列明
   - **未做 / 合并前必做**：agy 二审；真机再看 F 与《迷宮飯》卷02；本机未跑 Kindle 真书逐字节回归（单元测试 + 金样已守 Kindle 像素画布路径）
 - 二审：回执 `.dev/tasks/2026-11-05-kobo-comic-fxl.agy2.md`（忽略不完整的 `.agy.md`）。有 **1 条阻断**；sheng-ren 已逐条核实（见下「二审核实」）。**验收结论改为退回返工**。
-- 合并：未合；返工 + 再验收 + 再二审后再合
+- 合并：未合；返工验收**不通过**（见下），再返工后再验；第三轮 agy 倾向跳过（见验收说明），真机仍必须
 
 ## 二审核实（sheng-ren，2026-11-05T16:05+08:00，对照 `.agy2.md`）
 
@@ -190,4 +190,31 @@
 ## 给执行方的返工指令
 ```
 返工任务单 .dev/tasks/2026-11-05-kobo-comic-fxl.md：先把状态改为 accepted 并提交，按「返工」1–4、6 做完（5 锚点已核实不改），填好「结果」返工段，状态改为 done，提交并推送分支。编译用 CARGO_TARGET_DIR=~/.cache/sheng-ren-target；只 rustfmt 改过的文件；Kindle 行为与 fp_golden 非 kobo 行不得变；百分比路径必须 fills_canvas 才写 100%×100%，否则 width:100%;height:auto（或 max-width/max-height 100% 居中）；不加 koboSpan 限漫画产物；文档去掉单因表述并写明 Kobo 全量重建。
+```
+
+## 返工验收（sheng-ren，2026-11-05T16:25+08:00，对照 `873e7a2` / 任务 `b96acbc`，`master=05ddc2f`）
+
+- 验收：**不通过**（退回 pending；**不合并**）
+- 本机重跑：`CARGO_TARGET_DIR=~/.cache/sheng-ren-target cargo test --workspace` 全过（bookconv 522）；`cargo clippy --workspace --all-targets -- -D warnings` exit 0
+- `fp_golden.txt`：相对 master 仍仅 kobo ±118 行；kindle/ireader/hanvon **0** 行变
+- 返工项核对：
+  - **1 部分失败**：`comicfxl::page` 已按 `fills_canvas` 分支，装饰小图（200×800）正确写 `max-width/max-height`；但 `optimize/streaming.rs` 的 `image_dims` **读的是源图文件头**，漫画 `prepare_comic_page` 之后才变成画布大小。典型页源 1440×1920 → 产物图 1072×1448，XHTML 却写成 `max-width:100%;max-height:100%`，**不是** D 的 `width:100%;height:100%`（复现 `/tmp/agy2-accept2/`）。已是画布大小的源图（1072×1448）才碰巧写对。横图补白页同理（`/tmp/agy2-accept/` 的 c09）。
+  - **2 通过**：出版社原生 FXL（无 `book-type=comic`）纯图页仍包 koboSpan；漫画 FXL 纯图页无 koboSpan；文字页有 span（`/tmp/agy2-accept/publisher.kepub.epub` + comic text）
+  - **3 通过**：文档/`kobo.toml`/注释已去单因
+  - **4 通过**：`docs/kepub.md`、`docs/development.md`、任务单已写明 Kobo 全量重建
+  - **5** 锚点未改（正确）
+  - **6 测试命令通过**，但合成真产物暴露返工 1 尺寸时序缺口，故整体不通过
+- 是否需要第三轮 agy：**本次返工验收未过，先返工**；下次若只修「用排版后尺寸 / 非装饰页按画布写 100%×100%」、风险面小于首次阻断，**倾向跳过第三轮 agy**（理由：属已确认阻断的实现缺口收窄，不是新行为面），仍须真机看 F /《迷宮飯》后再合。
+
+## 再返工（状态 pending，同一执行方 opencode-local）
+1. **百分比路径的图尺寸必须是进包后的尺寸**（或与之等价）：`image_dims` 不能只用源图头。漫画页经 `prepare_comic_page*` 后：
+   - 非装饰页（会放大/缩小/补白到阅读范围）→ 按画布 / 产出尺寸判 `fills_canvas`，须写 `width:100%;height:100%`；
+   - 装饰小图（短边 &lt; 阅读范围宽/3，保持原尺寸）→ 仍走 `max-width/max-height` 居中。
+   实现任选：预计算 prepare 后尺寸、写出图后回填再改 XHTML、或非装饰直接用画布 `(w,h)`——注释写清，并加单测：**源图 1440×1920（或任意非画布、非装饰）** 经 `--device=kobo` 后产物图为画布大小且 img style 为 `width:100%;height:100%`；200×800 装饰仍为 max-width 写法。
+2. 其余返工 2–4 已达标，不必重做；文档若因 1 的实现细节需补一句「按排版后尺寸判定」则补。
+3. `cargo test --workspace`；clippy `-D warnings`；`fp_golden` 非 kobo 行不变；填「结果」再返工段，状态 done，提交推送。
+
+## 给执行方的再返工指令
+```
+再返工任务单 .dev/tasks/2026-11-05-kobo-comic-fxl.md：先把状态改为 accepted 并提交，按「再返工」做完，填好「结果」再返工段，状态改为 done，提交并推送分支。编译用 CARGO_TARGET_DIR=~/.cache/sheng-ren-target；只 rustfmt 改过的文件；Kindle / fp_golden 非 kobo 行不得变。关键：百分比路径判定 fills_canvas 必须用进包后的图尺寸（或非装饰页直接按画布），禁止只读源图头导致 1440×1920 等整页被写成 max-width；装饰小图（短边&lt;宽/3）仍 max-width。单测锁住「非画布源图 → 产物 100%×100%」与「200×800 → max-width」。
 ```
