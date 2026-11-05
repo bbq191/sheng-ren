@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-05-kobo-comic-fxl
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/kobo-comic-fxl（从最新 master 切出）
-- 更新时间: 2026-11-05T16:30+08:00
+- 更新时间: 2026-11-05T17:00+08:00
 - 引用: 无
 
 ## 需求原文
@@ -172,7 +172,7 @@
   - 接受偏离：新键 `comic_fixed_layout_percent` + 指纹 `F`；`COMIC_VERSION` 未加一（靠 kepub2/`F` 触发重建，与「仅 kobo 金样变化」一致）；涉及文件外的 docs/README/epub_to_kepub 注释同步已列明
   - **未做 / 合并前必做**：agy 二审；真机再看 F 与《迷宮飯》卷02；本机未跑 Kindle 真书逐字节回归（单元测试 + 金样已守 Kindle 像素画布路径）
 - 二审：回执 `.dev/tasks/2026-11-05-kobo-comic-fxl.agy2.md`（忽略不完整的 `.agy.md`）。有 **1 条阻断**；sheng-ren 已逐条核实（见下「二审核实」）。**验收结论改为退回返工**。
-- 合并：**未合**（再返工验收已通过；**跳过第三轮 agy**——仅收窄已确认的尺寸时序缺口；合并前仍须真机看 F /《迷宮飯》卷02）
+- 合并：**已合** master（见下「合并」；状态改为 verified）
 
 ## 二审核实（sheng-ren，2026-11-05T16:05+08:00，对照 `.agy2.md`）
 
@@ -256,3 +256,10 @@
   - 单测 `comic_fixed_layout_percent_follows_kobo_profile_only` 已改为 1440×1920 + 200×800 并断言产物尺寸与样式
 - **返工 2–4 回归通过**：出版社原生 FXL（`/tmp/agy2-accept3/publisher.kepub.epub`）纯图页仍包 koboSpan、文字页有 span；文档仍去单因并写明排版后判定与 Kobo 全量重建
 - 第三轮 agy：**跳过**（理由：仅修已确认阻断的尺寸时序/装饰预判，风险面收窄，无新行为面）。合并前必做：真机 Clara BW 看本流水线产物与《迷宮飯》卷02；顺带看漫画书签/进度（线索 2）
+
+## 合并（sheng-ren，2026-11-05T17:00+08:00）
+
+- 状态改为 **verified**（工作流无 `verified-with-caveat` 档；caveat 写在本段）
+- 真机 2026-11-05：Clara BW 仍有未具体化的漫画瑕疵；vinci 暂搁，**按他的要求仍合并**
+- 合并方式：`--no-ff` 进 master；提交说明含 kepub `VERSION` 2 → 下次 sync 全量重建并重传全部 Kobo 书，以及剩余真机瑕疵待办
+- 第三轮 agy：跳过（再返工验收通过时已定）
