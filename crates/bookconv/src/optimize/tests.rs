@@ -414,6 +414,7 @@ fn comic_epub_gets_higher_quality_reencode_than_text_book() {
 /// 1072×1448、CSS 高度链 100%；Kindle 仍是像素画布。
 #[test]
 fn comic_fixed_layout_percent_follows_kobo_profile_only() {
+    use image::GenericImageView;
     let png_of = |w: u32, h: u32| {
         let mut png = Vec::new();
         image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, y| {
@@ -423,8 +424,9 @@ fn comic_fixed_layout_percent_follows_kobo_profile_only() {
         .unwrap();
         png
     };
-    let canvas_png = png_of(1072, 1448);
-    let small_png = png_of(80, 120);
+    // 非画布源图：prepare_comic_page 会缩/补到画布；短边小于阅读范围宽 1/3 的装饰小图保持原尺寸
+    let canvas_png = png_of(1440, 1920);
+    let small_png = png_of(200, 800);
     let mut comic = Vec::new();
     {
         let mut zw = ZipWriter::new(Cursor::new(&mut comic));
@@ -461,11 +463,25 @@ fn comic_fixed_layout_percent_follows_kobo_profile_only() {
             && c1.contains(r#"style="width:100%;height:100%""#),
         "{c1}"
     );
+    assert_eq!(
+        image::load_from_memory(&entry_bytes(&out, "p1.png"))
+            .unwrap()
+            .dimensions(),
+        (1072, 1448),
+        "非画布源图排版后是画布大小"
+    );
     let c3 = String::from_utf8(entry_bytes(&out, "c3.xhtml")).unwrap();
     assert!(
         c3.contains(r#"style="display:block;max-width:100%;max-height:100%;margin:0 auto""#)
             && !c3.contains("width:100%;height:100%"),
         "比例不符的装饰小图不能拉伸：{c3}"
+    );
+    assert_eq!(
+        image::load_from_memory(&entry_bytes(&out, "p2.png"))
+            .unwrap()
+            .dimensions(),
+        (200, 800),
+        "装饰小图保持原尺寸"
     );
     let css = String::from_utf8(entry_bytes(&out, "eink-wash.css")).unwrap_or_default();
     let css = if css.is_empty() {

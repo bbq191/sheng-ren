@@ -44,7 +44,9 @@ D 的结构（真机满屏那本）：
 3. 保留 `#book-columns` > `#book-inner` 包装；
 4. **纯图页**的 `<img>` 外面不加 `koboSpan`；文字页照旧按句加；
 5. 比例和画布一致的 img 写 `width:100%;height:100%`；比例不符（装饰小图、处理不了的原图）只写
-   `max-width:100%;max-height:100%` 居中，不拉伸。html/body（以及 `#book-columns`、`#book-inner`）的高度链写 100%。
+   `max-width:100%;max-height:100%` 居中，不拉伸。比例按**排版后**尺寸判定：非装饰页（源图短边 ≥ 阅读范围宽 1/3，
+   会被放大/缩小/补白到画布）直接按画布，装饰小图（短边 < 1/3，保持原尺寸）按源图。html/body（以及
+   `#book-columns`、`#book-inner`）的高度链写 100%。
 
 文字 KEPUB 正常；侧载 kepub 书的书签、笔记可用。缺省即 D：漫画产物始终是固定版式（profile `comic_fixed_layout` +
 `comic_fixed_layout_percent`），不再靠 `.fxl` 文件名；`epub-to-kepub` 从 OPF 认漫画固定版式（`book-type=comic`）。

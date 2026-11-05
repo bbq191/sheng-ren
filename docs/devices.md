@@ -137,7 +137,7 @@
 | `comic_margin`（1） | 漫画的图到画布四边的白边（像素） | 1 | 1 | xochitl 页边距设成 1 后自己就留了 1px |
 | `[comic_readable]`（= 阅读范围） | 漫画画布 | 1272×1696 | 不写 | 漫画要贴屏幕边，画布和文字书的阅读范围不同 |
 | `comic_fixed_layout`（`false`） | 漫画写成固定版式 | `true` | — | Kindle 流式排版强制留页边距（最小档左右 101px），固定版式才按画布 1:1 整页显示；Kobo 2026-11-05 真机同样选了固定版式 |
-| `comic_fixed_layout_percent`（`false`） | 固定版式用百分比写法：比例合画布的整页图 `width:100%;height:100%`，比例不符的 `max-width:100%;max-height:100%`；html/body 和 KEPUB 包装高度链 100%（须和 `comic_fixed_layout` 一起开） | — | — | Kobo Nickel 的方案 D（2026-11-05 Clara BW 真机）：A 同时改了像素画布、纯图页包 koboSpan 等多处，D 满屏；不能归因单项。不写＝像素画布（Kindle） |
+| `comic_fixed_layout_percent`（`false`） | 固定版式用百分比写法：排版后比例合画布的整页图 `width:100%;height:100%`（非装饰页按画布），装饰小图 `max-width:100%;max-height:100%`；html/body 和 KEPUB 包装高度链 100%（须和 `comic_fixed_layout` 一起开） | — | — | Kobo Nickel 的方案 D（2026-11-05 Clara BW 真机）：A 同时改了像素画布、纯图页包 koboSpan 等多处，D 满屏；不能归因单项。不写＝像素画布（Kindle） |
 | `background_images`（`false`） | 保留 CSS 背景图（`background` 简写拆成背景色、背景图、重复、位置等分项） | `true` | `true` | xochitl 不认 `no-repeat`，把背景图平铺满页盖住正文；掌阅不认 `background` 简写（2026-10-05 真机对照书），拆开写就正常 |
 | `background_sizing`（`true`） | 保留背景图时也留 `background-size`、`background-attachment`；去掉时整页背景图（`body`/`html` 上的）按原书的尺寸意图预先缩好、一律不超出阅读范围（整张图看得见；v48、v49，见[排版 · 背景图](typesetting.md#1-解开字体字号行高的锁别的样式不动)） | 留 | 去掉 | 掌阅写了尺寸会把图挤变形、不写又按图自身像素显示（大图只露出一角），所以去掉尺寸、图预先缩好；Kindle 留着（和 Amazon 写法一致） |
 | `css_rgba`（`true`） | 阅读器认 CSS 的 `rgba()` 颜色；`false` 时换成 `#rrggbb`（不透明的颜色不变，半透明按白底混合，全透明写 `transparent`；v49） | 认 | 不认 | 掌阅把 `rgba()` 那条声明整条作废（《绍宋》深红底色显示成白底），`rgb()`、`#rrggbb` 认（2026-10-06 真机测试书）。只修复的文字书里由 `kindle_rules` 照这个字段换（KINDLE_RULES 8：《飘》「第一卷」标题的半透明白条作废后字压在插图上看不见，2026-10-12） |

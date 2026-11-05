@@ -1019,7 +1019,8 @@ struct EntryXform<'a> {
     fixed_layout: Option<(u32, u32)>,
     /// 固定版式用百分比写法（Kobo 方案 D）。
     fixed_layout_percent: bool,
-    /// 漫画页图的显示宽高（最终条目名 → 宽高；读文件头，含 EXIF 方向）。百分比写法按它判断比例是否和画布一致。
+    /// 漫画页图排版后的显示宽高（最终条目名 → 宽高）：非装饰页按画布记，装饰小图按源图记（读文件头，含 EXIF 方向）。
+    /// 百分比写法按它判断比例是否和画布一致。
     image_dims: &'a HashMap<String, (u32, u32)>,
     opf_name: Option<&'a str>,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
