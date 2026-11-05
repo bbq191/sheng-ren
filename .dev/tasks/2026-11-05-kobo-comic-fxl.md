@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: opencode-local
 - 分支: feat/kobo-comic-fxl（从最新 master 切出）
-- 更新时间: 2026-11-05T16:24+08:00
+- 更新时间: 2026-11-05T16:30+08:00
 - 引用: 无
 
 ## 需求原文
@@ -172,7 +172,7 @@
   - 接受偏离：新键 `comic_fixed_layout_percent` + 指纹 `F`；`COMIC_VERSION` 未加一（靠 kepub2/`F` 触发重建，与「仅 kobo 金样变化」一致）；涉及文件外的 docs/README/epub_to_kepub 注释同步已列明
   - **未做 / 合并前必做**：agy 二审；真机再看 F 与《迷宮飯》卷02；本机未跑 Kindle 真书逐字节回归（单元测试 + 金样已守 Kindle 像素画布路径）
 - 二审：回执 `.dev/tasks/2026-11-05-kobo-comic-fxl.agy2.md`（忽略不完整的 `.agy.md`）。有 **1 条阻断**；sheng-ren 已逐条核实（见下「二审核实」）。**验收结论改为退回返工**。
-- 合并：未合；返工验收**不通过**（见下），再返工后再验；第三轮 agy 倾向跳过（见验收说明），真机仍必须
+- 合并：**未合**（再返工验收已通过；**跳过第三轮 agy**——仅收窄已确认的尺寸时序缺口；合并前仍须真机看 F /《迷宮飯》卷02）
 
 ## 二审核实（sheng-ren，2026-11-05T16:05+08:00，对照 `.agy2.md`）
 
@@ -242,3 +242,17 @@
 ```
 再返工任务单 .dev/tasks/2026-11-05-kobo-comic-fxl.md：先把状态改为 accepted 并提交，按「再返工」做完，填好「结果」再返工段，状态改为 done，提交并推送分支。编译用 CARGO_TARGET_DIR=~/.cache/sheng-ren-target；只 rustfmt 改过的文件；Kindle / fp_golden 非 kobo 行不得变。关键：百分比路径判定 fills_canvas 必须用进包后的图尺寸（或非装饰页直接按画布），禁止只读源图头导致 1440×1920 等整页被写成 max-width；装饰小图（短边&lt;宽/3）仍 max-width。单测锁住「非画布源图 → 产物 100%×100%」与「200×800 → max-width」。
 ```
+
+## 再返工验收（sheng-ren，2026-11-05T16:30+08:00，对照 `3deb514` / 任务 `119c1f9`，`master=05ddc2f`）
+
+- 验收：**通过**（状态保持 done；**不合并**，待真机）
+- 本机重跑：`CARGO_TARGET_DIR=~/.cache/sheng-ren-target cargo test --workspace` 全过（bookconv 522）；`cargo clippy --workspace --all-targets -- -D warnings` exit 0
+- `fp_golden.txt`：相对 master 仍仅 kobo ±118 行；kindle/ireader/hanvon **0** 行变
+- **再返工 1（焦点）通过**：`streaming.rs` 按装饰阈值预判——非装饰记画布、装饰记源图。合成流水线 `/tmp/agy2-accept3/`：
+  - 源 1440×1920（`c00`）→ 产物图 1072×1448，img `width:100%;height:100%`，无 koboSpan，viewport 1072×1448
+  - 源已是画布（`c01`）、横图补白（`c09` 1600×900→1072×1448）同为 `100%×100%`
+  - 装饰 200×800（`c08`）保持原尺寸，`max-width/max-height` 居中，无 100%×100%
+  - 文字页仍有 `kobo.1.1` / `kobo.1.2`
+  - 单测 `comic_fixed_layout_percent_follows_kobo_profile_only` 已改为 1440×1920 + 200×800 并断言产物尺寸与样式
+- **返工 2–4 回归通过**：出版社原生 FXL（`/tmp/agy2-accept3/publisher.kepub.epub`）纯图页仍包 koboSpan、文字页有 span；文档仍去单因并写明排版后判定与 Kobo 全量重建
+- 第三轮 agy：**跳过**（理由：仅修已确认阻断的尺寸时序/装饰预判，风险面收窄，无新行为面）。合并前必做：真机 Clara BW 看本流水线产物与《迷宮飯》卷02；顺带看漫画书签/进度（线索 2）
