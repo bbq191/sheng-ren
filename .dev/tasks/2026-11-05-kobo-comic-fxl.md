@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: opencode-local
 - 分支: feat/kobo-comic-fxl（从最新 master 切出）
-- 更新时间: 2026-11-05T15:37+08:00
+- 更新时间: 2026-11-05T15:42+08:00
 - 引用: 无
 
 ## 需求原文
@@ -101,6 +101,18 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：通过 / 退回（附证据：命令输出、路径:行号）
-- 二审：回执 `.dev/tasks/<ID>.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由
-- 合并：PR 链接、合并提交号；状态改为 verified
+- 验收：**通过**（sheng-ren，2026-11-05T15:42+08:00，box 上 `a016270`，`master=05ddc2f`）
+  - 任务单「结果」已填、状态 done；分步 1–6 勾选；提交中文前缀、无 Co-Authored-By、未合并
+  - 功能（合成漫画经新流水线）：`epub-optimize --device=kobo` + `epub-to-kepub` → `/workspace/kobo-ab/F-new-pipeline.kepub.epub`
+    - 纯图页（如 `OEBPS/c00.xhtml`）：有 `#book-columns`/`#book-inner`、**无** koboSpan 包 img、`style="width:100%;height:100%"`、viewport `width=1072, height=1448`
+    - 文字页 `OEBPS/text.xhtml`：仍有 `kobo.1.1` / `kobo.1.2`
+    - OPF：`rendition:layout=pre-paginated`、`original-resolution=1072x1448`、`fixed-layout`/`book-type=comic`；`eink-wash.css` 含 html/body/`#book-columns,#book-inner` 的 `height:100%`
+    - 与真机满屏的 D（`D-kcc-fxl-nospan.kepub.epub`）结构一致；源书残留 viewport `1440×1920` 已被覆盖
+  - 测试（本机重跑）：`CARGO_TARGET_DIR=~/.cache/sheng-ren-target cargo test --workspace` 全过（bookconv 521、library 63+…）；`cargo clippy --workspace --all-targets -- -D warnings` exit 0
+  - 不回归：`git diff master...HEAD -- crates/library/tests/fp_golden.txt` 仅 kobo 前缀 ±118 行（`kepub1`→`kepub2`，漫画段加 `F`）；kindle/ireader/hanvon **0** 行变；`kepub::VERSION` 1→2（`kepub.rs:18`）
+  - 漫画规则未关：`kobo.toml` 仍 `comic_gamma=1.1`、autocontrast/trim_specks/page_numbers/dark_bg、`comic_margin=1`、不写 page_direction；新增 `comic_fixed_layout_percent=true`（偏离已写进「结果」）
+  - 文档：`docs/kepub.md` 真机结论选 D；`docs/devices.md` / `kobo.toml` 注释与 2026-11-05 一致
+  - 接受偏离：新键 `comic_fixed_layout_percent` + 指纹 `F`；`COMIC_VERSION` 未加一（靠 kepub2/`F` 触发重建，与「仅 kobo 金样变化」一致）；涉及文件外的 docs/README/epub_to_kepub 注释同步已列明
+  - **未做 / 合并前必做**：agy 二审；真机再看 F 与《迷宮飯》卷02；本机未跑 Kindle 真书逐字节回归（单元测试 + 金样已守 Kindle 像素画布路径）
+- 二审：待 vinci 跑 agy；回执 `.dev/tasks/2026-11-05-kobo-comic-fxl.agy.md`
+- 合并：等二审无阻断 + 真机确认后再合；**本次不合并**
