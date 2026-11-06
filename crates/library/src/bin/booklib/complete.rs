@@ -119,11 +119,11 @@ fn paths(
                 if !n.starts_with(name) || (n.starts_with('.') && !name.starts_with('.')) {
                     return None;
                 }
-                let meta = std::fs::metadata(e.path()).ok()?;
-                // 目录跟踪了也列：还要往下补子目录
-                if !meta.is_dir() && tracked.contains(&canon(&e.path())) {
+                // tracked 只含这条命令的设备已跟踪的；跟踪目录已包含其下所有内容，不用再往下补
+                if tracked.contains(&canon(&e.path())) {
                     return None;
                 }
+                let meta = std::fs::metadata(e.path()).ok()?;
                 if meta.is_dir() {
                     Some((format!("{dir}{n}/"), dir_desc))
                 } else if top_only {
@@ -256,12 +256,11 @@ mod tests {
             canon(&root.join("文字/三体.epub")),
         ]
         .into();
-        // 空词：只有书根第一层的目录，不列书；跟踪着的目录也列（要往下补）
+        // 空词：只有书根第一层、没跟踪的目录；不列书、不列跟踪着的
         assert_eq!(
             paths("", Some(&root), &tracked),
             vec![
                 ("文字/".to_string(), "书根目录下的目录"),
-                ("杂志/".to_string(), "书根目录下的目录"),
                 ("漫画/".to_string(), "书根目录下的目录")
             ]
         );
@@ -270,7 +269,8 @@ mod tests {
             paths("文字/", Some(&root), &tracked),
             vec![("文字/科幻/".to_string(), "书根目录下的目录")]
         );
-        assert_eq!(paths("杂", Some(&root), &tracked).len(), 1);
+        // 已跟踪的目录前缀也补不出来
+        assert!(paths("杂", Some(&root), &tracked).is_empty());
     }
 
     #[test]
