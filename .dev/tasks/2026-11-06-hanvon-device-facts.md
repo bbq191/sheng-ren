@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-06-hanvon-device-facts
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/hanvon-device-facts（从最新 master 切出）
 - 更新时间: 2026-11-06T13:58+08:00
@@ -70,3 +70,8 @@
 - 自检：`cargo test -p profile`、`cargo test --workspace` 全部通过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。
 - 偏离：`crates/profile/src/lib.rs` 文件头的 hanvon 说明和一处断言提示还写着「未上真机 / 固定版式待真机比」，顺手改成 2026-11-06 的结论；只改注释和断言提示，无行为变化。
 - 没跑真书回归、这次改动没在真机上跑过；真机结论来自任务单输入（sheng-ren 2026-11-06 用 adb 截屏量的）。书架是否真的用 `eink-thumb.jpg`、正文字号/行高、注释弹窗、伽马仍待确认。
+
+## 验收（sheng-ren，2026-11-06）
+- 重跑 `cargo test --workspace` 全过、clippy 0 警告；金样非 hanvon 行变动 0。
+- 偏离（lib.rs 注释与断言提示）接受，无行为变化。
+- agy 二审通过（`.agy.md`）；线索 1 书架是否用缩略图，留待下次同步后真机看。
