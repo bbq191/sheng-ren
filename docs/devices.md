@@ -118,7 +118,7 @@
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX（漫画固定版式） | 1272×1696，300ppi | 1104×1546 | 1272×1696（整屏，固定版式） | 黑白 |
 | `ireader` | 掌阅 Air 3 Pro 自带阅读器 | EPUB | 1440×1920 | 1440×1920 | 1440×1920（整屏） | 黑白 |
 | `kobo` | Kobo Clara BW 自带阅读器（Nickel；2026-11-05 真机确认漫画方案 D） | KEPUB（`.kepub.epub`，漫画同） | 1072×1448，300ppi（官网） | 1072×1448（未量，按整屏） | 1072×1448（整屏，固定版式） | 黑白 |
-| `hanvon` | 汉王 Clear 6 Turbo 自带阅读器（预配置，未上真机） | EPUB | 1072×1448，300ppi（公开参数） | 1072×1448（未量，按整屏） | 1072×1448（整屏，流式；固定版式待真机比） | 黑白 |
+| `hanvon` | 汉王 Clear 6 Turbo 自带阅读器（2026-11-06 真机核对阅读范围、封面、漫画版式、投递） | EPUB | 1072×1448，300ppi（公开参数） | 1072×1448（2026-11-06 量） | 1072×1448（整屏，流式，真机比过与固定版式相同） | 黑白 |
 
 ### 怪癖 → 字段
 
@@ -170,8 +170,8 @@
 | `comic_trim_specks`（`false`） | 漫画页裁白边不让扫描杂点挡住：裁过白边后，小块、离主体远、附近没有成堆小块的暗点不算内容，再收一次边（`comiccrop.rs`，c58） | `true` | — | 2026-10-30 维护者定（《哆啦A夢》卷01 挡住裁白边的多是灰尘）。旧设备没开 |
 | `comic_upscale`（`true`） | 比框小的 JPEG 漫画页预先放大到框（Lanczos3，最多 3 倍）；`false` 时同 PNG，原尺寸按比例补白、交给阅读器放大（`imgopt::comic_layout`，c59 加的字段） | — | — | 2026-09-29 为 KOReader 加的（它按原像素显示）；2026-10-30 Kindle 上比过《竹光侍》卷01 预先放大 / 不放大，维护者选预先放大 |
 | `comic_dark_bg`（`false`） | 漫画黑底页补边补底色（不裁、不重新放大）：四条边每条（跳过最外 3px 杂边）都几乎全是均匀的黑 / 深灰才算，全黑页也算，出血画、暗角、彩页不算（`comiccrop::dark_background`，c62；c63 放宽判定） | `true` | — | 2026-11-01 维护者定（黑底页原来补白框）；同日真机看过 c61 的裁边版，改成只换补边颜色（c62） |
-| `cover_thumb_aspect`（不写） | 书架缩略图的宽高比：封面居中裁成这个比例另存 `eink-thumb.jpg`，只给书架用，书里的封面页不动（文字书、漫画都做；`wash::add_cover_thumbnail`，v64/c59） | 0.65 | 0.754 | 2026-10-30 封面比例测试书在 Kindle 书架截图量的：封面框宽度固定、0.65（网格 344×531）；维护者定只裁缩略图，新设备到了量它们的框再开；2026-11-03 掌阅 Air 3 Pro 书架截屏：框 212×281（≈0.754），封面直接拉伸到框的比例、不裁不留白（封面比例探针 0.5 / 0.754 / 1.0） |
-| `cover_meta_thumb`（`false`） | 书架取封面认 EPUB 2 的 `<meta name="cover">`：另做了缩略图时把它指向 `eink-thumb`（原位改、多的去掉、没有就加），`cover-image`、封面页不动；`declared_cover` 跳过指向缩略图的 meta，再优化不会拿缩略图当封面（`wash::add_cover_thumbnail`，v66/c65）。要和 `cover_thumb_aspect` 一起写 | — | `true` | 2026-11-03 掌阅 Air 3 Pro「封面来源探针」：一本书里 meta cover、`cover-image`、正文第一页各指一张图，书架显示 meta cover 那张。Kindle 不用（KFX 写出器认 `eink-thumbnail`）；Kobo 没写 aspect，待真机量 |
+| `cover_thumb_aspect`（不写） | 书架缩略图的宽高比：封面居中裁成这个比例另存 `eink-thumb.jpg`，只给书架用，书里的封面页不动（文字书、漫画都做；`wash::add_cover_thumbnail`，v64/c59） | 0.65 | 0.754 | 2026-10-30 封面比例测试书在 Kindle 书架截图量的：封面框宽度固定、0.65（网格 344×531）；维护者定只裁缩略图，新设备到了量它们的框再开；2026-11-03 掌阅 Air 3 Pro 书架截屏：框 212×281（≈0.754），封面直接拉伸到框的比例、不裁不留白（封面比例探针 0.5 / 0.754 / 1.0）；2026-11-06 汉王书架截屏：框约 281×373（≈0.753），方形封面被拉伸、不裁不留白，同掌阅取 0.754，缩略图效果待真机确认 |
+| `cover_meta_thumb`（`false`） | 书架取封面认 EPUB 2 的 `<meta name="cover">`：另做了缩略图时把它指向 `eink-thumb`（原位改、多的去掉、没有就加），`cover-image`、封面页不动；`declared_cover` 跳过指向缩略图的 meta，再优化不会拿缩略图当封面（`wash::add_cover_thumbnail`，v66/c65）。要和 `cover_thumb_aspect` 一起写 | — | `true` | 2026-11-03 掌阅 Air 3 Pro「封面来源探针」：一本书里 meta cover、`cover-image`、正文第一页各指一张图，书架显示 meta cover 那张。Kindle 不用（KFX 写出器认 `eink-thumbnail`）；Kobo 没写 aspect，待真机量；汉王同掌阅写 `true`，待真机确认书架用的是缩略图 |
 | `comic_page_numbers`（`false`） | 漫画页裁掉页码：内容最底下像页码的小块（宽 ≤ 页高 3.5%，c64）、上方空着，按在内容的左、右、正中分，整卷同一位置 ≥5 页且 ≥2% 才裁（`comiccrop.rs`，c58）；推翻「不删内容」里的这一项 | `true` | — | 2026-10-30 Kindle 上看《迷宮飯》卷01 测试书「字更清晰、没有裁错」 |
 | `image_gamma`（不写＝不加深） | 文字书正文插图中间调加深的伽马：正文 `<img>`/SVG `<image>` 用到、不在 CSS 里、内容是灰度、短边 ≥ 200、不透明的 JPEG/PNG，只修复也做；JPEG 按原图质量重编码（`imgopt::darken_gray_image`，v59） | 1.1 | 1.1 | 同日比过金庸木刻、水墨，福尔摩斯网点图，罗杰疑案线条图，选 1.3；2026-10-21 改成 1.1，同漫画（插图没另比）；Kindle 2026-10-26 跟着开，10-27 真机比过《罗杰疑案》插图选 1.1。正文是阅读器画的，不受影响 |
 | `comic_format`（不写） | 漫画另用一种产物格式（要在 `formats` 里） | — | — | 内置模式都不写（kindle 2026-10-05 曾写 `azw3`，KFX 固定版式真机通过后去掉），留给自定义模式；写了时是不是漫画按优化器的判定 |
@@ -179,6 +179,7 @@
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记（`META-INF/eink-reader-margins`）、文字页补回留白（以前给 Move 的书架服务登记用） | — | — | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |
 | `[deliver]`（不写 = 产物放电脑上） | 产物怎么送到设备（2026-10-07，见[使用指南 · 产物放在哪](usage.md#产物放在哪)）：`kind = "mtp"` + `mount`（jmtpfs 挂载点名）+ `dir`（存储根目录下的目录）；`kind = "usbms"` + `label`（USB 存储卷标，挂在 `/run/media/$USER/<label>`）+ `dir`（2026-11-01 加，Kobo）（2026-10-31 以前还有 `kind = "xochitl"`：经 SSH 交给 Move 的书架服务，删了） | mtp：`kindle`、`documents` | mtp：`ireader`、`documents` | 不影响产物内容，不进指纹 |
 
+- 汉王 2026-11-06 书架截屏：封面框约 281×373（≈0.753），方形封面被拉伸、不裁不留白，所以 `cover_thumb_aspect = 0.754`、`cover_meta_thumb = true`（同掌阅；书架用不用缩略图待真机确认）。
 - `display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`＋`[heading_sizes]`、`margin_top`＋`[page_top]`、`inline_css_lengths`、`padding`、`borders`、`heading_margins`、`px_margins`、`percent_margins` 由 `bookconv::reader_model::ReaderModel` 汇成"这台阅读器拿到 CSS 会排成什么样"的设备模型，照 Kindle 改写的 pass 只认它（2026-10-13 收拢，量出来的数从代码挪进 profile）。这几个字段和 `em_px` 以哈希进指纹（`m` 段，2026-10-13 定）：重量了数改 profile 就行，书自动重建。
 - 影响产物的字段都进指纹，改了哪个，受影响的书都算过期、下次重建；文字书、漫画分开算，只管一路的字段只进那一路（见[架构 · 指纹](architecture.md#指纹)）。不进指纹的：`name`、`[deliver]`（只管怎么传，不影响产物）。
 - **怪癖表**（2026-10-13）：上面这些结论里能按「属性 · 元素 · 值 · 写法」说清楚的，机器可读地记在 `crates/bookconv/data/css-quirks.toml`（掌阅一栏：same / fixed / accept / broken，每条有出处；Move 一栏 2026-10-31 去掉了；2026-11-01 加了 `kobo` 一栏，还没量、都空着，体检暂不查 kobo）。`sync` 生成掌阅的文字书时按它体检（`bookconv::audit`），和 Kindle 不一样又没处理的、表里没有的写法打在 `sync` 输出里、记进生成记录，`booklib list` 看全部。新量出来的结论两边都写。怪癖测试书 `tools/quirks/probe.py ireader` 一条命令生成、推进掌阅、逐页截屏逐行量（Kindle 要手动截图）。
@@ -282,6 +283,9 @@ dir = "documents"
 - **往右翻的书留边的原因找到了（2026-10-15，adb 测试书 + 合成的红框页，`target/tmp/irc` 的实验脚本）**：不是书的属性，是阅读器「排版与设置 → 排版」的设置。往右翻（rtl）的漫画按这个设置留边：**默认**四周约 70/66px、**精品**约 51/41px、**自定义**按「上下间距、左右间距」（维护者现在是 11/11，留约 116/49px）；选**漫画**时整页铺满，和往左翻的书逐像素相同（红框贴着屏幕四边，差异 0）。往左翻的书不看这个设置，一直铺满。书里的元数据都改不了：`rendition:spread`、`page-spread-left/right`、`primary-writing-mode`、`kmoe-pagedirect`、`zero-margin`/`zero-gutter`、`rendition:layout`、body 负外边距 CSS，rtl 的八种变体量出来一样的留边。
 - 设置分「通用」（全局）和「本书自定义」（点标签切换，只对这一本，重开保留；点「漫画」时要在「本书自定义」标签下，在「通用」下点会改全局、连文字书一起变）。所以要照书往右翻又铺满：在掌阅里对每本往右翻的漫画选一次「本书自定义 → 排版 → 漫画」。我们这边没法替维护者设（掌阅的设置存在应用私有目录，没 root 够不到）。2026-10-15 选了照书翻，profile 去掉了 `comic_page_direction = "ltr"`。
 
+**`hanvon`：1072×1448（整屏）。**
+- 2026-11-06 用测量书（adb 截屏）实测：竖长黑块 362×1448、横宽黑块 1072×268，上下左右留白都是 0，等于标称尺寸。
+
 怎么用这些数字做到离屏幕 1px，见[排版 · 离屏幕边缘 1px](typesetting.md#离屏幕边缘-1px三种做法)。
 
 ### 在真机上测量
@@ -320,15 +324,16 @@ readable-measure --device=kindle 竖长.png 横宽.png
 - **格式**：KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者以前试过），2026-11-01 起 `formats = ["kepub"]`，漫画也是 `.kepub.epub`。写出器是 clean-room 的 `bookconv::kepub`，做法、来源和真机结论见 [KEPUB](kepub.md)。2026-11-05 真机确认文字 KEPUB 正常、侧载书签/笔记可用；固定版式看 OPF、不再靠 `.fxl` 文件名。纯图页不加 koboSpan 只限漫画固定版式（`book-type=comic`），出版社原生的非漫画 FXL 行为不变。
 - **漫画**：参数照 Kindle（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页）；2026-11-05 Clara BW 真机确认方案 D（固定版式、viewport 1072×1448、img 100%×100%、纯图页不加 koboSpan）满屏。色彩类参数没有在 Kobo 上单独比过。
 
-## 汉王 Clear 6 Turbo（2026-11-04 预配置，未上真机）
+## 汉王 Clear 6 Turbo（2026-11-06 上真机：阅读范围、封面、漫画版式、投递已核对）
 
-模式 `hanvon`（`crates/profile/profiles/hanvon.toml`）。设备还没到手，下面的数字来自公开资料和推断；注释里写着「待确认」的都要真机核对。
+模式 `hanvon`（`crates/profile/profiles/hanvon.toml`）。2026-11-06 用 adb 截屏核对阅读范围、书架封面比例、漫画版式、投递；正文字号/行高、注释弹窗、伽马还没测。
 
 - **硬件**：6" E Ink Carta 1300，1448×1072，300 ppi，黑白，安卓 14（来源：知乎评测 `zhuanlan.zhihu.com/p/1916870323984393879`、Lukas Lab、太平洋电脑网参数页）。竖屏写成 `width = 1072`、`height = 1448`。IT 之家写的 1024×758 是 Clear 6，不是 Turbo。
-- **传书**：USB MTP（安卓），产物放存储根目录的 `documents/`、子目录照跟踪目录镜像；jmtpfs 的挂载点名 `hanvon` 和实际存储目录都待真机确认（`[deliver]`）。
-- **格式**：只出 EPUB。文字书沿用三台统一规则（`text_repair_only`、`kindle_rules`）；注释跳转、只有图标的标号换数字是推断（最稳）。
-- **漫画**：参数照 Kobo（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、1px 白边），版式照 ireader 走流式整页；固定版式待真机比。
-- **没量**：可阅读范围、`em_px`、`line_px`、`content_px`、书架封面比例，先按整屏；量了再写。
+- **传书**：USB MTP（安卓），2026-11-06 真机确认 jmtpfs 挂到 `/run/user/1000/mtp/hanvon`（`~/Hanvon`）。产物放存储根目录的 `documents/`、子目录照跟踪目录镜像；实际目录是 `Documents/`（安卓存储不分大小写），自带阅读器「文件」页从 `/Documents` 浏览、能打开。
+- **格式**：只出 EPUB。文字书沿用三台统一规则（`text_repair_only`、`kindle_rules`）；注释跳转、只有图标的标号换数字还是推断，待真机测。
+- **漫画**：参数照 Kobo（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、1px 白边）。版式 2026-11-06 真机比过：流式整页与固定版式逐像素相同，都铺满整屏、连翻 4 页大小不变，保持流式。
+- **书架封面**：2026-11-06 书架截屏：方形封面（1.0）被拉伸进约 281×373 的框（≈0.753），不裁不留白，和掌阅 0.754 同一行为；照掌阅做 `eink-thumb.jpg` 并把 meta cover 指向它，书架用不用缩略图待真机确认。书架只显示打开过的书；没有封面的书显示通用 EPUB 图标。
+- **没量**：`em_px`、`line_px`、`content_px`、注释弹窗、伽马，待测试书量。
 
 ## 设备空间不够（2026-11-03）
 

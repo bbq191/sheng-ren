@@ -1,6 +1,6 @@
 //! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在内置四份，都按设备自带的阅读器量（见 docs/devices.md）：
 //! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Air 3 Pro，EPUB）、`kobo`（Kobo Clara BW，KEPUB，2026-11-01 预配置、未上真机）、
-//! `hanvon`（汉王 Clear 6 Turbo，EPUB，2026-11-04 预配置、未上真机）。
+//! `hanvon`（汉王 Clear 6 Turbo，EPUB，2026-11-06 上真机核对阅读范围、封面、漫画版式、投递）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -1464,7 +1464,7 @@ mod tests {
         );
         assert!(
             !h.comic.fixed_layout,
-            "漫画先照 ireader 走流式整页，固定版式待真机比（agy 二审线索 1）"
+            "漫画保持流式整页：2026-11-06 真机比过与固定版式逐像素相同（agy 二审线索 1）"
         );
     }
 
