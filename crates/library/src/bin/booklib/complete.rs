@@ -28,8 +28,16 @@ pub fn run(args: &[String]) {
         Some("paths") => {
             let lib = open();
             let root = lib.as_ref().and_then(|l| l.books_root());
+            // 只藏这条命令 --device 给的设备已跟踪的（2026-11-06：别台跟踪过的也藏，进不了子目录）
+            let want = device_filter(args.get(2..).unwrap_or(&[]));
             let tracked: HashSet<PathBuf> = lib
-                .map(|l| l.tracked().iter().map(|p| canon(p)).collect())
+                .map(|l| {
+                    let es = l.tracked_entries();
+                    es.iter()
+                        .filter(|e| for_devices(&e.devices, &want))
+                        .map(|e| canon(&e.path))
+                        .collect()
+                })
                 .unwrap_or_default();
             for (c, d) in paths(tok, root.as_deref(), &tracked) {
                 println!("{c}\t{d}");
@@ -111,10 +119,11 @@ fn paths(
                 if !n.starts_with(name) || (n.starts_with('.') && !name.starts_with('.')) {
                     return None;
                 }
-                if tracked.contains(&canon(&e.path())) {
+                let meta = std::fs::metadata(e.path()).ok()?;
+                // 目录跟踪了也列：还要往下补子目录
+                if !meta.is_dir() && tracked.contains(&canon(&e.path())) {
                     return None;
                 }
-                let meta = std::fs::metadata(e.path()).ok()?;
                 if meta.is_dir() {
                     Some((format!("{dir}{n}/"), dir_desc))
                 } else if top_only {
@@ -193,7 +202,7 @@ fn fish_script() -> String {
             s += &format!("complete -c booklib -n {when} -l {o} {value}\n");
         }
         let args = match c.name {
-            "track" => "-a '(booklib __complete paths (commandline -ct))'",
+            "track" => "-a '(booklib __complete paths (commandline -ct) (commandline -opc))'",
             "untrack" => "-a '(booklib __complete tracked (commandline -opc))'",
             "add" | "dedupe" | "meta" => "-F",
             _ => continue,
@@ -247,11 +256,12 @@ mod tests {
             canon(&root.join("文字/三体.epub")),
         ]
         .into();
-        // 空词：只有书根第一层、没跟踪的目录；不列书、不列跟踪着的
+        // 空词：只有书根第一层的目录，不列书；跟踪着的目录也列（要往下补）
         assert_eq!(
             paths("", Some(&root), &tracked),
             vec![
                 ("文字/".to_string(), "书根目录下的目录"),
+                ("杂志/".to_string(), "书根目录下的目录"),
                 ("漫画/".to_string(), "书根目录下的目录")
             ]
         );
@@ -260,8 +270,7 @@ mod tests {
             paths("文字/", Some(&root), &tracked),
             vec![("文字/科幻/".to_string(), "书根目录下的目录")]
         );
-        // 已跟踪的目录前缀也补不出来
-        assert!(paths("杂", Some(&root), &tracked).is_empty());
+        assert_eq!(paths("杂", Some(&root), &tracked).len(), 1);
     }
 
     #[test]
