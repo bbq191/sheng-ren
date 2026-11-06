@@ -320,7 +320,7 @@ kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  KFX  屏幕
 | Kindle（`kindle`，`.kfx`） | USB，jmtpfs 自动挂到 `/run/user/1000/mtp/kindle` | 存储根目录的 `documents/<子目录>/<书名>.kfx` |
 | 掌阅（`ireader`，`.epub`） | USB，挂到 `/run/user/1000/mtp/ireader` | 存储根目录的 `documents/<子目录>/<书名>.epub`（没有 `documents/` 就建） |
 | Kobo（`kobo`，`.kepub.epub`） | USB 大容量存储，挂到 `/run/media/$USER/KOBOeReader` | 存储根目录的 `books/<子目录>/<书名>.kepub.epub` |
-| 汉王（`hanvon`，`.epub`；预配置，未上真机） | USB，挂到 `/run/user/1000/mtp/hanvon`（挂载点名待真机确认） | 存储根目录的 `documents/<子目录>/<书名>.epub`（目录待真机确认，没有就建） |
+| 汉王（`hanvon`，`.epub`） | USB，挂到 `/run/user/1000/mtp/hanvon`（2026-11-06 真机确认） | 存储根目录的 `documents/<子目录>/<书名>.epub`（没有就建） |
 
 - `<子目录>`：原件相对书根目录所在的子目录（`--top` 的条目从它自己这一层起，见[跟踪范围](#track--sync跟踪书目录生成)），例：原件 `~/Documents/ereader/books/好读/x.epub` → Kindle 上 `documents/好读/<书名>.kfx`。跟踪目录顶层的书、`add` 进来的书、网址书放 `documents/` 顶层。（2026-10-31 以前还有 Move：经 SSH 交给它的书架服务、按子目录建文件夹；Move 卖了以后删了。）
 - `booklib devices` 列出各设备接没接上。挂载目录可以用 `BOOKLIB_MTP_DIR` 改。
