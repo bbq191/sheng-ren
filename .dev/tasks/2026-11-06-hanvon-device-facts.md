@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-06-hanvon-device-facts
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: opencode-local
 - 分支: feat/hanvon-device-facts（从最新 master 切出）
-- 更新时间: 2026-11-06T13:50+08:00
+- 更新时间: 2026-11-06T13:51+08:00
 - 引用: .dev/tasks/2026-11-04-hanvon-profile.md
 
 ## 需求原文
