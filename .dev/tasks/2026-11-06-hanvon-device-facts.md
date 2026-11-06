@@ -20,7 +20,7 @@
 - 书架只显示打开过的书；没有封面的书显示通用 EPUB 图标。
 - 涉及文件：
   - `crates/profile/profiles/hanvon.toml`
-  - `crates/library/tests/fp_golden.txt`（hanvon 行会变，只更新这一行）
+  - `crates/library/tests/fp_golden.txt`（hanvon 开头的几行会变，只更新这些行）
   - `docs/devices.md`（hanvon 行和那一节）、`README.md`、`docs/usage.md`（去掉「未上真机」中已核对的部分）
 
 ## 约束
@@ -40,13 +40,13 @@
 
 ## 分步任务
 1. [ ] 按「约束」改 hanvon.toml；自检 `cargo test -p profile`
-2. [ ] 更新 `fp_golden.txt` 里 hanvon 那一行（其它行必须不变）；自检 `cargo test --workspace`
+2. [ ] 更新 `fp_golden.txt` 里 hanvon 开头的那几行（其它行必须不变）；自检 `cargo test --workspace`
 3. [ ] 文档同步：devices.md 表格 hanvon 行（阅读范围「1072×1448（2026-11-06 量）」、漫画「流式，真机比过与固定版式相同」）、`cover_thumb_aspect`/`cover_meta_thumb` 两行的汉王列；README、usage.md 去掉已核对项的「未上真机」
 4. [ ] `cargo clippy --workspace --all-targets -- -D warnings` 0 警告
 
 ## 验收标准
 - [ ] `booklib sync --device=hanvon` 产物带 `eink-thumb.jpg`（0.754）、OPF meta cover 指向它
-- [ ] 指纹金样只有 hanvon 行变
+- [ ] 指纹金样只有 hanvon 开头的行变
 - [ ] 测试全过、clippy 0 警告
 - [ ] 「不做」的事确实没做
 
