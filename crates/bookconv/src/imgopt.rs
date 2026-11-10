@@ -1003,6 +1003,8 @@ pub struct ComicPage {
     pub cut_bottom: Option<u32>,
     /// 黑底页补边补底色、不裁（`comic_dark_bg`，[`crate::comiccrop::dark_background`]）。
     pub dark_bg: bool,
+    /// 裁掉格与格之间整行的空白带（profile `comic_gutter_crop`，[`crate::comiccrop::gutter_bands`]，2026-11-10，待真机比）。
+    pub gutter_crop: bool,
 }
 
 /// 书架缩略图（profile `cover_thumb_aspect`）：先去掉扫描留下的窄白边（[`thumb_scan_margins`]），再居中裁成宽高比 `aspect`
@@ -1258,6 +1260,7 @@ fn process_comic_page(
         no_upscale,
         cut_bottom,
         dark_bg,
+        gutter_crop,
     } = page;
     let ComicSrc {
         img,
@@ -1284,6 +1287,23 @@ fn process_comic_page(
             None
         };
     }
+    // 裁格间空白（只在裁白边、黑底判定、装饰小图之后；黑底页、彩色页不动）
+    let mut gutter_changed = false;
+    let img = if gutter_crop && bg.is_none() && img.is_gray_content() {
+        let (w, h) = img.dimensions();
+        let plane = darkness_plane(&img);
+        let bands = crate::comiccrop::gutter_bands(&plane, w, h);
+        let cuts = crate::comiccrop::gutter_cuts(&bands, w, h, area);
+        if cuts.is_empty() {
+            img
+        } else {
+            gutter_changed = true;
+            img.remove_rows(&cuts)
+        }
+    } else {
+        img
+    };
+    let (cw, ch) = img.dimensions();
     // 黑点、白点要在缩放前取：Lanczos 在线条边上振出 0，缩放后取就拉不动（2026-10-30 测试书第一版这样错过）
     let darken = if (gamma.is_some() || autocontrast) && img.is_gray_content() {
         let stretch = autocontrast
@@ -1305,6 +1325,7 @@ fn process_comic_page(
         out_fmt == ImageFormat::Jpeg && !no_upscale,
     );
     if !force_encode
+        && !gutter_changed
         && !to_gray
         && !rotated
         && darken.is_none()
@@ -1501,6 +1522,44 @@ impl Page8 {
         match self {
             Page8::Gray(g) => Page8::Gray(image::imageops::crop_imm(g, x, y, w, h).to_image()),
             Page8::Rgb(c) => Page8::Rgb(image::imageops::crop_imm(c, x, y, w, h).to_image()),
+        }
+    }
+
+    /// 删掉 `cuts` 里的行区间（升序、不重叠），其余行按原顺序拼起来（裁格间空白用）。
+    fn remove_rows(&self, cuts: &[(u32, u32)]) -> Page8 {
+        if cuts.is_empty() {
+            return match self {
+                Page8::Gray(g) => Page8::Gray(g.clone()),
+                Page8::Rgb(c) => Page8::Rgb(c.clone()),
+            };
+        }
+        let keep = |y: u32| !cuts.iter().any(|&(a, b)| a <= y && y < b);
+        match self {
+            Page8::Gray(g) => {
+                let (w, h) = g.dimensions();
+                let mut raw = Vec::with_capacity((w * h) as usize);
+                for y in 0..h {
+                    if keep(y) {
+                        let s = (y * w) as usize;
+                        raw.extend_from_slice(&g.as_raw()[s..s + w as usize]);
+                    }
+                }
+                let nh = raw.len() as u32 / w.max(1);
+                Page8::Gray(image::GrayImage::from_raw(w, nh, raw).expect("按行拼接，长度正好"))
+            }
+            Page8::Rgb(c) => {
+                let (w, h) = c.dimensions();
+                let stride = w as usize * 3;
+                let mut raw = Vec::with_capacity(stride * h as usize);
+                for y in 0..h {
+                    if keep(y) {
+                        let s = y as usize * stride;
+                        raw.extend_from_slice(&c.as_raw()[s..s + stride]);
+                    }
+                }
+                let nh = raw.len() as u32 / stride.max(1) as u32;
+                Page8::Rgb(image::RgbImage::from_raw(w, nh, raw).expect("按行拼接，长度正好"))
+            }
         }
     }
 

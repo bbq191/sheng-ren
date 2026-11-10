@@ -881,6 +881,144 @@ fn comic_spread_split_skips_image_shared_by_two_pages() {
     assert!(avg > 180.0, "整张图（左右两半都在）：{avg}");
 }
 
+/// 输出图里第一段“有暗像素的行”有多高（黑格被缩放后的像素高度）。
+fn first_dark_run(epub: &[u8], image: &str) -> u32 {
+    let img = image::load_from_memory(&entry_bytes(epub, image))
+        .unwrap()
+        .to_luma8();
+    let (w, h) = img.dimensions();
+    let dark = |y: u32| (0..w).any(|x| img.get_pixel(x, y).0[0] < 128);
+    let mut y = 0;
+    while y < h && !dark(y) {
+        y += 1;
+    }
+    let start = y;
+    while y < h && dark(y) {
+        y += 1;
+    }
+    y - start
+}
+
+/// 2026-11-10 裁格间空白：白底三格页，开了以后格变高；关着时产物和现在的处理一样（页数、内容行数不变）。
+#[test]
+fn comic_gutter_crop_enlarges_panels() {
+    let png = |w: u32, h: u32, panels: &[(u32, u32)]| {
+        let mut cur = std::io::Cursor::new(Vec::new());
+        let mut img = image::GrayImage::from_pixel(w, h, image::Luma([255]));
+        for &(y0, y1) in panels {
+            for y in y0..y1 {
+                for x in 0..w {
+                    img.put_pixel(x, y, image::Luma([0]));
+                }
+            }
+        }
+        image::DynamicImage::ImageLuma8(img)
+            .write_to(&mut cur, image::ImageFormat::Png)
+            .unwrap();
+        cur.into_inner()
+    };
+    let img = png(800, 2000, &[(0, 600), (640, 1240), (1280, 2000)]);
+    let book = zip_book_bytes(&[
+        (
+            "META-INF/container.xml",
+            br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        ),
+        (
+            "content.opf",
+            r#"<package version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:gutter</dc:identifier><dc:title>格间空白</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject></metadata><manifest><item id="p" href="p.xhtml" media-type="application/xhtml+xml"/><item id="i" href="p.png" media-type="image/png"/></manifest><spine><itemref idref="p"/></spine></package>"#.as_bytes(),
+        ),
+        (
+            "p.xhtml",
+            br#"<html><head><title>p</title></head><body><img src="p.png"/></body></html>"#,
+        ),
+        ("p.png", &img),
+    ]);
+    let area = crate::imgopt::Screen {
+        width: 1072,
+        height: 1448,
+    };
+    let mut off = OptimizeOpts::new(area);
+    off.comic_margin = 0;
+    let mut on = off.clone();
+    on.comic_gutter_crop = true;
+    let (off_out, _) = optimize_epub_with(&book, &off).unwrap();
+    let (on_out, _) = optimize_epub_with(&book, &on).unwrap();
+    let h_off = first_dark_run(&off_out, "p.png");
+    let h_on = first_dark_run(&on_out, "p.png");
+    assert!(h_on > h_off, "格变高：off={h_off} on={h_on}");
+    assert_eq!(spine_pages(&off_out).len(), 1, "开关关着不多页");
+}
+
+/// 1600×1200 的白底多格跨页：开了以后照常拆成两页，两半都收格间空白（Kobo 1072×1448 画布）。
+#[test]
+fn comic_gutter_crop_works_on_spread_halves() {
+    let png = |w: u32, h: u32| {
+        let mut cur = std::io::Cursor::new(Vec::new());
+        let mut img = image::GrayImage::from_pixel(w, h, image::Luma([255]));
+        for &(y0, y1) in &[(0, 350), (390, 750), (790, 1100)] {
+            for y in y0..y1 {
+                for x in 0..w {
+                    img.put_pixel(x, y, image::Luma([0]));
+                }
+            }
+        }
+        image::DynamicImage::ImageLuma8(img)
+            .write_to(&mut cur, image::ImageFormat::Png)
+            .unwrap();
+        cur.into_inner()
+    };
+    let mut cover = Vec::new();
+    image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(700, 1000, image::Luma([255])))
+        .write_to(
+            &mut std::io::Cursor::new(&mut cover),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    let spread = png(1600, 1100);
+    let book = zip_book_bytes(&[
+        (
+            "META-INF/container.xml",
+            br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        ),
+        (
+            "content.opf",
+            r#"<package version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:gutter-spread</dc:identifier><dc:title>跨页格间</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.xhtml" media-type="application/xhtml+xml"/><item id="ci" href="c.png" media-type="image/png" properties="cover-image"/><item id="si" href="s.png" media-type="image/png"/></manifest><spine><itemref idref="c"/><itemref idref="s"/></spine></package>"#.as_bytes(),
+        ),
+        (
+            "c.xhtml",
+            br#"<html><head><title>c</title></head><body><img src="c.png"/></body></html>"#,
+        ),
+        (
+            "s.xhtml",
+            br#"<html><head><title>s</title></head><body><img src="s.png"/></body></html>"#,
+        ),
+        ("c.png", &cover),
+        ("s.png", &spread),
+    ]);
+    let kobo = profile::get("kobo").unwrap();
+    let (off_out, _) = optimize_epub_with(&book, &OptimizeOpts::for_profile(kobo)).unwrap();
+    let mut on = OptimizeOpts::for_profile(kobo);
+    on.comic_gutter_crop = true;
+    let (on_out, _) = optimize_epub_with(&book, &on).unwrap();
+    let off_pages = spine_pages(&off_out);
+    let on_pages = spine_pages(&on_out);
+    assert_eq!((off_pages.len(), on_pages.len()), (3, 3), "拆成两页");
+    for (off_page, on_page) in off_pages[1..].iter().zip(&on_pages[1..]) {
+        let dims = |e: &[u8], n: &str| {
+            image::load_from_memory(&entry_bytes(e, n))
+                .unwrap()
+                .to_luma8()
+                .dimensions()
+        };
+        let off_dim = dims(&off_out, &page_image(&off_out, off_page));
+        let on_dim = dims(&on_out, &page_image(&on_out, on_page));
+        assert!(
+            on_dim.1 < off_dim.1,
+            "两半都要收（PNG 不放大，收了页变矮）：off={off_dim:?} on={on_dim:?}"
+        );
+    }
+}
+
 /// 固定版式（Kindle）也能拆，新页带 viewport；CBZ 转出的书同样能拆。
 #[test]
 fn comic_spread_split_fixed_layout_and_cbz() {

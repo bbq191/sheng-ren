@@ -337,6 +337,10 @@ pub struct ComicPolicy {
     /// 拉满后黑更实。2026-10-30 Kindle 真机比过现状 / 拉满 + 伽马 1.1 / 只拉满，选拉满 + 伽马。见 `bookconv::imgopt::prepare_comic_page_limited`。
     #[serde(rename = "comic_autocontrast")]
     pub autocontrast: bool,
+    /// 漫画页裁掉格与格之间整行的空白带（TOML `comic_gutter_crop`，缺省 `false`）：只删整行没有比 247 暗的像素的带，
+    /// 淡线、杂点所在的行不删。2026-11-10 维护者要裁，先 A/B；四台 profile 都先不开。
+    #[serde(rename = "comic_gutter_crop")]
+    pub gutter_crop: bool,
     /// 漫画页裁白边不让扫描杂点挡住：裁过白边后，面积很小、离主体内容远的暗点不算内容，再收一次边（白的标准不变）。
     /// 2026-10-30 维护者定（《哆啦A夢》卷01 挡住裁白边的多是灰尘）。见 `bookconv::comiccrop`。
     #[serde(rename = "comic_trim_specks")]
@@ -468,6 +472,8 @@ struct ProfileFile {
     #[serde(default)]
     comic_autocontrast: bool,
     #[serde(default)]
+    comic_gutter_crop: bool,
+    #[serde(default)]
     comic_trim_specks: bool,
     #[serde(default)]
     comic_page_numbers: bool,
@@ -597,6 +603,7 @@ impl Profile {
                 format: f.comic_format,
                 gamma: f.comic_gamma,
                 autocontrast: f.comic_autocontrast,
+                gutter_crop: f.comic_gutter_crop,
                 trim_specks: f.comic_trim_specks,
                 page_numbers: f.comic_page_numbers,
                 upscale: f.comic_upscale,
@@ -1014,6 +1021,7 @@ mod tests {
                     format: _,
                     gamma: _,
                     autocontrast: _,
+                    gutter_crop: _,
                     trim_specks: _,
                     page_numbers: _,
                     upscale: _,
