@@ -283,8 +283,6 @@ dir = "documents"
 
 - 有实测值就用实测值（`[readable.<格式>]`），没有就退回整屏。
 - **阅读器里的页边距设置变了，阅读范围也会变**，要重新量。
-`bigme` 和 Kobo 一样开固定版式方案 D（`comic_fixed_layout` + `comic_fixed_layout_percent`），漫画画布 1264×1680；文字书阅读范围 1069×1424；不写 `cover_thumb_aspect` / `cover_meta_thumb`（书架取正文第一页，eink-thumb 不管用，2026-11-10 真机）。差异和来由见下面的 [Bigme B7 Pro 黑白版](#bigme-b7-pro-黑白版2026-11-10-上真机阅读范围书架漫画版式投递已核对)。
-
 - 程序里不写死屏幕数字，一律从模式读。
 
 ### 各模式的数字

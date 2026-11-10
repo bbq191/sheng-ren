@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-bigme-profile
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/bigme-profile（从 master `aa86ba4` 切出；测量填完后把已含停用阅读模式的 master `dc1eafe` 合进来）
-- 更新时间: 2026-11-10T18:28+08:00
+- 更新时间: 2026-11-10T18:37+08:00
 - 引用: 无（照 `.dev/tasks/2026-11-04-hanvon-profile.md`、`2026-11-06-hanvon-device-facts.md` 的做法，这次真机量完一次写全）
 
 ## 需求原文
@@ -142,5 +142,21 @@
     - 建议：`docs/devices.md:286` 把 Bigme 方案 D 的摘要插在「可阅读范围」两条列表项中间，没有做成列表项，读起来断档；同一内容已在表格（`:122`）、「各模式的数字」（`:307-309`）和设备专节（`:361-372`）写过，可把这一段挪进专节或改成列表项。
     - 建议：`lib.rs:1297-1322` 三个统一测试的注释还写「四台」，列表已经有五台（含 bigme）。
   - 下一步：agy 二审（本单改设备行为：新设备投递路径，接上后第一次 sync 会给它生成全部跟踪的书），范围 `dc1eafe..` 到本审查提交。没有阻断再合并改 `verified`。
-- 二审：
-- 合并：
+- 二审：回执 `.dev/tasks/2026-11-10-bigme-profile.agy.md`（`2b6a9a0`，范围 `dc1eafe..fe37048`）**无阻断**。
+- 合并：见 master 上的 merge 提交；状态改为 verified。
+
+### 二审处理（sheng-ren，2026-11-10 18:37 +08:00）
+
+- 回执 `.dev/tasks/2026-11-10-bigme-profile.agy.md`（`2b6a9a0`，审的是 `dc1eafe..fe37048`）**无阻断，准予合并**。负责 bot 逐条核对了引用位置，都对得上：
+  - 投递：`bigme.toml:47-50`（`mount = "bigme"`、`dir = "books"`），挂载差异写在 `bigme.toml:49`、`docs/devices.md:367`、`docs/usage.md:327`；`install.sh`（166 行）相对 master 未动。
+  - 无新键、另外四台 profile 文件相对 master 零修改；画质 `bigme.toml:13-21` 与三个统一测试 `lib.rs:1300-1331`；方案 D `bigme.toml:22-23`、`lib.rs:1281-1284`；不写缩略图 `bigme.toml:27-29`、`lib.rs:1285-1289`；gutter 不写、`#[serde(default)]` 在 `lib.rs:476-477`。
+  - 真机值：屏幕 `bigme.toml:31-33`，可读 `35-39`，漫画画布 `41-44`，`color`/`formats` `6-7`，断言 `lib.rs:1268-1280`。
+  - 金样：`fp_golden.txt` 共 620 行，前 124 行全是 `bigme`，其余 496 行四个旧设备各 124 行、删除 0；`fp_golden.rs:227` 遍历含 bigme。`cli.rs:254-265`、`main.rs:53`、`README.md:27` 都有 bigme。
+  - 任务单「结果」从 `:87` 起，和 diff 一致。agy 写的 `:87-146` 在加了「审查」之后会跨到一审结论，不影响核对。
+- 建议 1（`main.rs:194` `HELP_HEAD` 漏列 Bigme）：**采纳**，改成「按 Kindle、掌阅、Kobo、汉王、Bigme 的自带阅读器优化」。
+- 建议 2（`lib.rs:1297, 1314, 1322` 注释仍写「四台」）：**采纳**，三处改为「五台」。
+- 建议 3（`docs/devices.md:286` 列表断档）：**采纳**，删掉插在「可阅读范围」列表中间的那段摘要（同一内容已在表格、`各模式的数字` 和 Bigme 专节）。
+- 建议 4（`cli.rs:283` 停用模式测试未断言 bigme 还在）：**采纳**，列表补 `("bigme", "EPUB")`。
+- 线索 1（真机首轮 sync，小写 `books` 是否落入已有 `Books/`）：认同，不改代码。留给 vinci 合并后第一次真机 sync 观察，并确认 `BOOKLIB_MTP_DIR=/home/afu/Devices` 能对上 `~/Devices/Bigme`。
+- 未核实两项：全量测试一审已在 box 上跑过（789 过、clippy 0 警告），合并进 master 后再跑一遍；真机挂载和首次投递留给 vinci。
+- 状态改为 `verified`，合并进 master。

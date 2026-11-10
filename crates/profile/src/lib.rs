@@ -1294,7 +1294,7 @@ mod tests {
         );
     }
 
-    /// 2026-11-10 维护者定四台漫画画质处理一致：拉满对比度、裁杂点、裁页码、黑底补边都开，伽马 1.1。
+    /// 2026-11-10 维护者定五台漫画画质处理一致：拉满对比度、裁杂点、裁页码、黑底补边都开，伽马 1.1。
     /// 掌阅没上真机比过，先跟 kindle/kobo/hanvon 一致。
     #[test]
     fn builtin_profiles_share_comic_quality() {
@@ -1311,7 +1311,7 @@ mod tests {
         }
     }
 
-    /// 2026-11-10 维护者定：四台都拆横向跨页（竖屏只拆、不旋转）。
+    /// 2026-11-10 维护者定：五台都拆横向跨页（竖屏只拆、不旋转）。
     #[test]
     fn builtin_profiles_split_comic_spreads() {
         for id in ["kindle", "ireader", "kobo", "hanvon", "bigme"] {
@@ -1319,7 +1319,7 @@ mod tests {
         }
     }
 
-    /// 2026-11-10 维护者定：四台都按 Bangumi 元数据把日本漫画写成 rtl（掌阅也开，阅读器里要每本选一次「漫画」排版）。
+    /// 2026-11-10 维护者定：五台都按 Bangumi 元数据把日本漫画写成 rtl（掌阅也开，阅读器里要每本选一次「漫画」排版）。
     #[test]
     fn builtin_profiles_take_comic_direction_from_metadata() {
         for id in ["kindle", "ireader", "kobo", "hanvon", "bigme"] {

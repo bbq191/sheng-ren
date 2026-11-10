@@ -191,7 +191,7 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
 
 /// 日常用法、通用选项、环境变量、退出码（`booklib --help` 的头尾）。
 const HELP_HEAD: &str = "\
-booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅、Kobo、汉王的自带阅读器优化，直接传到接着的设备
+booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅、Kobo、汉王、Bigme 的自带阅读器优化，直接传到接着的设备
 
 用法：booklib [--library=目录] <命令> [参数]
 

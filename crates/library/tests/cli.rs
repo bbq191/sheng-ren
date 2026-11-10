@@ -280,7 +280,7 @@ fn devices_skip_disabled_profile() {
         !out.lines().any(|l| l.starts_with("ireader")),
         "停用的模式不列：{out}"
     );
-    for (id, fmt) in [("kindle", "KFX"), ("kobo", "KEPUB"), ("hanvon", "EPUB")] {
+    for (id, fmt) in [("bigme", "EPUB"), ("kindle", "KFX"), ("kobo", "KEPUB"), ("hanvon", "EPUB")] {
         assert!(
             out.lines().any(|l| l.starts_with(id) && l.contains(fmt)),
             "{id} {fmt} 还在：{out}"
