@@ -1219,6 +1219,23 @@ mod tests {
         );
     }
 
+    /// 2026-11-10 维护者定四台漫画画质处理一致：拉满对比度、裁杂点、裁页码、黑底补边都开，伽马 1.1。
+    /// 掌阅没上真机比过，先跟 kindle/kobo/hanvon 一致。
+    #[test]
+    fn builtin_profiles_share_comic_quality() {
+        for id in ["kindle", "ireader", "kobo", "hanvon"] {
+            let p = get(id).unwrap();
+            assert!(
+                p.comic.autocontrast
+                    && p.comic.trim_specks
+                    && p.comic.page_numbers
+                    && p.comic.dark_bg,
+                "{id}：漫画画质四项应一致开着"
+            );
+            assert_eq!(p.comic.gamma, Some(1.1), "{id}：漫画伽马 1.1");
+        }
+    }
+
     #[test]
     fn device_from_args_finds_id_or_lists_choices() {
         assert_eq!(
