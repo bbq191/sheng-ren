@@ -137,6 +137,13 @@ impl Library {
         } else {
             info
         };
+        // 按元数据强制成 rtl 的书（Bangumi 日本漫画，`metadata::comic_direction`）在 info 段后接 `r`：
+        // 只有这些书指纹变，别的书一个字不变；方向不算 profile 字段，不放进设备段（不然全部漫画都重建）
+        let info = if crate::metadata::comic_direction(meta, device).is_some() {
+            format!("{info}r")
+        } else {
+            info
+        };
         // 要当场转换的来源（CBZ）再带上格式转换的版本；写在流程版本后面，EPUB 来源的指纹保持原样（不白重建）
         let pipeline = if meta.content_format() == "epub" {
             PIPELINE_VERSION.to_string()
@@ -911,7 +918,9 @@ impl Library {
     ) -> Result<Produced, String> {
         let epub = self.prepared_input(meta)?;
         let mut warnings = Vec::new();
-        let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
+        let mut opts = bookconv::optimize::OptimizeOpts::for_profile(device);
+        // 按书指定翻页方向（Bangumi 判成日本漫画的 rtl）；其余留给原书、profile
+        opts.page_direction = crate::metadata::comic_direction(meta, device);
         // 要转 KFX 的，优化结果先放临时目录
         let optimized = if format == Format::Epub {
             part.to_path_buf()

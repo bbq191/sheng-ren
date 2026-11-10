@@ -340,6 +340,7 @@
 | 定了什么 | 理由 |
 |---|---|
 | **四台漫画画质处理一致，掌阅也开这四项**（`ireader.toml` 加 `comic_autocontrast = true`、`comic_trim_specks = true`、`comic_page_numbers = true`、`comic_dark_bg = true`；算法、参数不变）：漫画页和 Kindle、Kobo、汉王一样拉满对比度、裁白边不让杂点挡住、裁掉页码、黑底页补边补底色；指纹漫画段末尾多出 `ASPK`，掌阅全部漫画下次 `sync` 重建重传，文字书不变。推翻 2026-10-30、2026-11-01「掌阅不开」的说法 | 维护者要「全部设备都需要一致的画质处理」，建议「掌阅打开已有的四项画质处理」。掌阅上没真机比过，先跟已经真机看过的 Kindle 取同一套；合并前 agy 二审 |
+| **Bangumi 判成日本漫画的书生成时写 rtl**（profile `comic_meta_direction = true`，四台；`BookInfo.region`）：只按联网元数据、不按画面 / 文件名 / 原名里的假名判；`platform == "漫画"` 且地区词表判出日本才写 `page-progression-direction="rtl"`（EPUB/KEPUB 的 spine、KFX 的 `$560`），其余照原书；判成国漫 / 韩漫时原书写的 rtl 不改 ltr。指纹只在满足条件的书 `info` 段后加 `r`，别的书一个字不变。推翻 2026-10-15 / 10-16「照书」里日漫那部分 | 维护者：「只要是日漫无论格式都是点击左侧翻下一页」；问怎么判，答「按联网元数据判断，Bangumi 查到是日本漫画的就是日漫」。地区词表覆盖 2026-11-10 实测的 `meta_tags` 和带 count 的 `tags`；掌阅 rtl 的书要每本在「本书自定义 → 排版 → 漫画」选一次才铺满，vinci 接受；Kobo、汉王、掌阅的 rtl 处理待真机确认 |
 
 ## 待定
 
