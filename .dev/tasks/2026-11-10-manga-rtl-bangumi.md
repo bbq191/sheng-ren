@@ -5,7 +5,7 @@
 - 状态: pending
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
-- 更新时间: 2026-11-10T10:30+08:00
+- 更新时间: 2026-11-10T10:40+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 B 节）
 
 ## 需求原文
@@ -42,7 +42,8 @@
 
 ## 约束
 - 不做：不按画面、文件名、原名里的假名猜日漫；不用豆瓣 / QQ 阅读 / Wikidata 判方向；Bangumi 判成国漫 / 韩漫时**不把原书的 rtl 改成 ltr**；不改 CBZ 转换（`convert/`）、不改三个写出器（KFX、KEPUB、EPUB 写 zip）；不改 `BookInfo.subjects` 的现有取法（「日本」照旧留在标签里）；不改 install.sh；不给 profile 设备段加指纹字母（免得全部漫画白白重建）
-- 掌阅：vinci 还没定掌阅要不要开（PRD 开放问题 1：rtl 书在掌阅上要每本选「漫画」排版才铺满）。确认任务单时 sheng-ren 会把答案写在这里；没写就按四台都开 `true` 做
+- 掌阅：四台都开 `comic_meta_direction = true`，掌阅也开（vinci 2026-11-10 定）。rtl 的书在掌阅上要每本选一次「本书自定义 → 排版 → 漫画」才铺满，vinci 接受；`ireader.toml` 注释和 `docs/devices.md` 必须写明这条操作要求
+- Bangumi 判成国漫 / 韩漫、原书写了 rtl 的：照原书 rtl（vinci 2026-11-10 定）；原名里的假名不当后备判据（vinci 2026-11-10 定）
 - 判定规则（写成纯函数，单元测试覆盖）：
   - 只看 `platform == "漫画"` 的条目，否则 `region = Some("")`
   - 地区词表：日本 ← {日本, 日漫, 日本漫画}；中国 ← {中国, 国漫, 国产漫画, 中国漫画}；韩国 ← {韩国, 韩漫}；台湾 ← {台湾, 台漫}；香港 ← {香港, 港漫}；美国 ← {美国, 美漫}（词表做成常量，注释写 2026-11-10 实测）
@@ -60,11 +61,11 @@
 ## 分步任务
 1. [ ] `metadata.rs`：`BookInfo` 加 `#[serde(default, skip_serializing_if = "Option::is_none")] pub region: Option<String>`，doc 注释写清 None / Some("") / Some(地区) 三种含义。自检：旧 meta.json（没有 region）照常反序列化，`cargo test -p library`
 2. [ ] `bangumi.rs`：按「约束 → 判定规则」写 `fn region_of(item: &serde_json::Value) -> String`；`Hit` 加 `region`；`info()` 填 `region: Some(h.region.clone())`。单元测试：用「输入」里 6 个样本的字段（各写成最小 JSON）断言 日本 / 日本 / 日本 / 中国 / 韩国；再加 meta_tags 同时有日本和中国 → ""；tags 日漫 3 vs 国漫 3 → ""；platform 小说 → ""
-3. [ ] `profile/src/lib.rs`：加 `comic_meta_direction`（TOML 平铺字段，进 `ComicPolicy::meta_direction`），四个 toml 都写 `comic_meta_direction = true`，注释「2026-11-10 维护者定：Bangumi 判成日本漫画的按 rtl 生成；Kobo、汉王的 rtl 处理待真机确认」（ireader 的注释另加「掌阅 rtl 书要在阅读器里选『漫画』排版才铺满，见 docs/devices.md」）。自检：`cargo test -p profile`
+3. [ ] `profile/src/lib.rs`：加 `comic_meta_direction`（TOML 平铺字段，进 `ComicPolicy::meta_direction`），四个 toml 都写 `comic_meta_direction = true`，注释「2026-11-10 维护者定：Bangumi 判成日本漫画的按 rtl 生成；Kobo、汉王的 rtl 处理待真机确认」（ireader 的注释另加「2026-11-10 vinci 接受：rtl 的书在掌阅里每本选一次『本书自定义 → 排版 → 漫画』才铺满，见 docs/devices.md」）。自检：`cargo test -p profile`
 4. [ ] `metadata.rs` 加 `pub(crate) fn comic_direction(meta: &Meta, device: &Profile) -> Option<PageDirection>`（按「生成规则」）；`generate.rs` `produce()` 里 `opts.page_direction = comic_direction(meta, device)`；`plan()` 里满足时给指纹加标记；`needs_metadata` 加重找条件。自检：`cargo test -p library`
 5. [ ] 离线测试（`crates/library/tests/flow.rs` 照现有写法，或 `generate.rs` 单元测试）：入库一本合成 CBZ 漫画，直接改它的 meta.json 写 `info = {source: "Bangumi https://bgm.tv/subject/1", region: "日本", …}`，生成 ireader（EPUB）、kobo（KEPUB）、kindle（KFX）三份：EPUB、KEPUB 的 OPF spine 是 `page-progression-direction="rtl"`，KFX 用 `kfx` crate 读回方向是 rtl（或断言 `epubbook` 读优化后 EPUB 的 `rtl == true`，结果里写明用的哪种）；把 region 改成 "中国" / 删掉 info 再生成：回到 ltr（spine 没有 rtl），且指纹和改之前不判日漫时相同
 6. [ ] `fp_golden.rs` 加 `comic_meta_direction` mutation；`UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden`；`git diff` 应只多出新 mutation 的行，旧行 0 变化
-7. [ ] 文档：`direction.rs` 注释、`docs/devices.md`、`docs/decisions.md`、`docs/architecture.md#指纹`、`docs/usage.md`
+7. [ ] 文档：`direction.rs` 注释、`docs/devices.md`（新键一行；掌阅那段写明：Bangumi 判成日漫的书现在是 rtl，要在掌阅里每本选一次「本书自定义 → 排版 → 漫画」才铺满，vinci 2026-11-10 接受）、`docs/decisions.md`、`docs/architecture.md#指纹`、`docs/usage.md`
 8. [ ] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
 
 ## 验收标准
@@ -74,7 +75,7 @@
 - [ ] 测试：`cargo test --workspace` 全部通过；clippy 0 警告；地区判定单元测试覆盖「约束」里每条分支
 - [ ] 不回归：`fp_golden.txt` 旧行 0 变化；文字书、非日漫漫画产物逐字节不变（结果里说明怎么确认的，或写「待本机回归确认」）
 - [ ] 「不做」的事确实没做
-- [ ] 真机（vinci，合并后）：四台各看一本 CBZ 日漫点左侧是下一页、一本国漫不变；**Kobo Nickel、汉王的 rtl 没确认过，必看**；掌阅看是否留边
+- [ ] 真机（vinci，合并后）：四台各看一本 CBZ 日漫点左侧是下一页、一本国漫不变；**Kobo Nickel、汉王的 rtl 没确认过，必看**；掌阅先每本选「漫画」排版再看是否铺满
 
 ## 交付物
 代码提交到上面的分支并推送；「结果」填好；状态改为 done 或 blocked。
