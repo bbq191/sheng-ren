@@ -224,7 +224,7 @@ fn fingerprints_match_the_golden_file() {
     let text = lib.add_file(&epub).unwrap().meta().clone();
     let comic = lib.add_file(&cbz).unwrap().meta().clone();
     let mut out = String::new();
-    for dev in ["hanvon", "kindle", "ireader", "kobo"] {
+    for dev in ["bigme", "hanvon", "kindle", "ireader", "kobo"] {
         for (name, m) in mutations() {
             let mut p = profile::get(dev).unwrap().clone();
             m(&mut p);

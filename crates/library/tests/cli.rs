@@ -252,6 +252,7 @@ fn devices_lists_the_builtin_modes() {
     assert_eq!(code(&o), Some(0), "{}", stderr(&o));
     let out = stdout(&o);
     for (id, fmt) in [
+        ("bigme", "EPUB"),
         ("ireader", "EPUB"),
         ("kindle", "KFX"),
         ("kobo", "KEPUB"),
