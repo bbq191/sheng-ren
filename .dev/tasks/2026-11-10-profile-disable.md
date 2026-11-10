@@ -1,0 +1,92 @@
+# 书库 profiles/ 里写 `disabled = true` 停用一个阅读模式（先用来去掉掌阅）
+
+- Task ID: 2026-11-10-profile-disable
+- 负责 bot: sheng-ren
+- 状态: pending
+- 执行方: opencode-local
+- 分支: feat/profile-disable（从 master `aa86ba4` 切出）
+- 更新时间: 2026-11-10T16:05+08:00
+- 引用: 无
+
+## 需求原文
+> vinci 2026-11-10：「一并删掉,从 booklib 的设备列表里把它去掉」（掌阅 Air 3 Pro 已退货）
+>
+> 2026-11-10 定的做法（sheng-ren 给的三种里选 B1）：内置的 ireader profile 留在仓库里，书库 `profiles/ireader.toml` 写一行 `disabled = true` 把它从设备列表去掉。
+
+## 输入
+- 背景：vault `Projects/sheng-ren/context.md`（2026-11-10「掌阅 Air 3 Pro 已退货」）；仓库 `docs/devices.md` 的「自定义模式」一条（约 198 行）
+- 现状：
+  - 设备列表＝内置 profile（`crates/profile/build.rs` 把 `crates/profile/profiles/*.toml` 编进程序，`Registry::builtin`，`crates/profile/src/lib.rs:901`）加上书库 `profiles/*.toml`（`Registry::with_dir`，`lib.rs:914`，由 `crates/library/src/lib.rs:370` 调用）；同 id 以书库里的为准。**书库这边只能加、只能覆盖，去不掉内置的**；`booklib devices` 列的就是这个合集
+  - 模式不在了以后的清理已经有了（2026-10-31 删 xochitl 时做的，`601f5b8`）：`sync` 开头把跟踪条目里已经没有的模式 id 去掉（`crates/library/src/sources.rs:754`，事件 `SyncEvent::ForgotDevices`；一台不剩的条目整条去掉，里面的书按不再跟踪处理），「全部设备」的条目（`devices` 为空）不受影响；已删模式的 `output-state/<id>.json` 能容忍（测试 `crates/library/tests/flow.rs:2632` `removed_mode_leftovers_are_cleaned_up`）
+  - 现有测试：`crates/profile/src/lib.rs` 的 `dir_overrides_and_adds`（约 1440 行，临时目录写法照它）；`crates/library/tests/cli.rs:249` `devices_lists_the_builtin_modes`
+- 涉及文件：
+  - `crates/profile/src/lib.rs`（修改：`Registry::with_dir` 认 `disabled = true`；单元测试；模块头注释提一句）
+  - `crates/library/tests/cli.rs`（修改：加 `booklib devices` 不列停用模式的用例）
+  - `crates/library/tests/flow.rs`（修改：加停用后跟踪条目清理、`output-state` 残留的用例）
+  - `docs/devices.md`（修改：「自定义模式」一条后面加一段「停用内置模式」）
+
+## 约束
+- 规格（照这个做，不要自己加）：
+  1. `Registry::with_dir` 读到一个 `profiles/<id>.toml`，内容（按 TOML 解析后）**只有** `disabled = true` 一个键时：从注册表里去掉 `<id>`（内置的、或者同目录里别的文件加的——实际上一个 id 只有一个文件，所以就是去掉内置的那个），不再当 profile 解析
+  2. 有 `disabled` 键、但还有别的键，或者 `disabled` 不是 `true`（`false`、字符串等）：返回 `Err`，信息里写文件路径，并说清楚「停用一个模式时文件里只写 `disabled = true` 一行；要用这个模式就删掉 `disabled`」
+  3. 没有 `disabled` 键：和现在完全一样（照常 `Profile::parse`，未知字段照常报错）
+  4. `<id>` 不是已有模式（内置里没有）却写了 `disabled = true`：**忽略**（什么都不做、不报错）。理由：`with_dir` 没有报警告的通道，停用一个本来就没有的模式结果也正确；用户用 `booklib devices` 就能看到结果。docs 里写明
+  5. 隐藏文件、非 `.toml` 文件照旧跳过
+- 不做：不删、不改内置 `crates/profile/profiles/ireader.toml`；不改其它 profile 的值；不改 `install.sh`；不加 `booklib` 新命令；不改 `sources.rs` 的清理逻辑（已有的就够，用测试证明）；不动生成、传输的代码
+- `crates/library/tests/fp_golden.txt` 必须不变（指纹按内置 profile 算，这个改动不碰）
+- 只在上面的分支工作；不合并；不改「涉及文件」以外的文件，确需改时写进「结果 → 偏离」
+- 提交信息用中文，`feat:` / `docs:` / `test:` 等前缀 + 正文，不加 Co-Authored-By；正文写「不影响产物，没跑真书回归」
+- 不读密钥、`.env`、`auth*`；clean-room：不读 GPL 代码
+- 只对改动的 Rust 文件跑 rustfmt；编译用 `CARGO_TARGET_DIR=~/.cache/sheng-ren-target`
+- 风险点：数据（停用后，**只给这个模式**的跟踪条目会整条去掉，里面没被别的条目覆盖的书下次 `sync` 从书库删掉——原件不动，这是 2026-10-31 已定的行为）。docs 那一段要写明：停用前先 `booklib track` 看有没有只给它的条目，先跑 `booklib sync --keep` 看报告
+
+## 分步任务
+1. [ ] `crates/profile/src/lib.rs` 的 `Registry::with_dir`：读到文件文本后，先 `toml::from_str::<toml::Table>`（或等价写法）看有没有 `disabled` 键：只有它且值是 `true` → `r.profiles.remove(id)`，`continue`；有它但不合规 → `Err`（规格 2 的信息）；没有它 → 照旧 `Profile::parse`。函数文档注释、模块头注释（`lib.rs:9` 一带）补一句。改动尽量少（目标 ≤ 20 行，不算测试）
+2. [ ] 同文件单元测试（照 `dir_overrides_and_adds` 的临时目录写法）：
+   - `disabled = true` 的 `ireader.toml` → `r.get("ireader")` 是 `None`，总数 = 内置数 − 1，别的内置模式都还在
+   - `disabled = true` + 别的键（如 `name = "x"`）→ `Err`，信息含文件名和「disabled」
+   - `disabled = false` → `Err`
+   - 不存在的 id（`nosuch.toml` 只写 `disabled = true`）→ `Ok`，总数 = 内置数
+   - 没有 `disabled` 的文件照旧覆盖（`dir_overrides_and_adds` 不改、照样过）
+   - 自检：`cargo test -p profile`
+3. [ ] `crates/library/tests/cli.rs`：新用例，书库 `profiles/ireader.toml` 写 `disabled = true`，`booklib devices` 退出码 0、输出里没有以 `ireader` 开头的行、`kindle`/`kobo`/`hanvon` 都在；`booklib sync --device=ireader` 报用法错（不存在的模式，现有行为）
+4. [ ] `crates/library/tests/flow.rs`（照 `removed_mode_leftovers_are_cleaned_up` 的写法）：先在没停用时建三条跟踪：甲 `["kindle","ireader"]`、乙 `["ireader"]`、丙 全部设备（`[]`），`sync` 一次；写一份 `output-state/ireader.json`（绝对路径的旧记录，路径指向一个不存在的 MTP 目录）；再写 `profiles/ireader.toml`（`disabled = true`）后重新打开书库并 `sync`：
+   - 事件里有甲 `forgot … ["ireader"] false`、乙 `forgot … ["ireader"] true`
+   - 存下的 `sources.json` 里不再有 `ireader`；丙的 `devices` 仍是空（全部设备）
+   - `sync` 不报错；`outputs()` / `list` 不因为 `ireader.json` 出错、不显示 ireader 的产物；再 `sync` 一次不再报 `forgot`
+   - 自检：`cargo test -p library --test flow -- profile_disable`（用例名自取，含 `disable`）
+5. [ ] `docs/devices.md`：「自定义模式」那条后面加一段「**停用内置模式**」：书库 `profiles/<id>.toml` 只写 `disabled = true` 一行，`booklib devices` 就不列它；规格 2、4 的行为；停用后下次 `sync` 从跟踪条目里去掉它（只给它的条目整条去掉、书按不再跟踪处理，先 `track` 看、`sync --keep` 看报告）；`output-state/<id>.json` 留着无害，可以自己挪走；内置的文件仍在程序里，删掉这个 toml 就恢复。例子用 `ireader`（2026-11-10 掌阅退货）
+6. [ ] 全量：`cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test -p library --test fp_golden` 通过且 `git diff --stat crates/library/tests/fp_golden.txt` 为空
+7. [ ] 在「结果」里写给 vinci 本机的 fish 命令（**不自己跑**）：先 `booklib track` 看条目，`mkdir -p ~/.local/share/booklib/profiles; echo 'disabled = true' > ~/.local/share/booklib/profiles/ireader.toml`，`booklib devices`，`booklib sync --keep` 看报告，再 `booklib sync`
+
+## 验收标准
+- [ ] 功能：书库 `profiles/ireader.toml` 只写 `disabled = true` 时，`booklib devices` 不列 ireader；`--device=ireader` 报不存在的模式；跟踪条目按已有清理逻辑去掉 ireader，全部设备的条目仍是全部设备
+- [ ] 规格 2（多写键 / 非 true 报错、信息清楚）、规格 4（不存在的 id 忽略）有测试
+- [ ] 测试：`cargo test --workspace` 全部通过；clippy 0 警告
+- [ ] 不回归：`fp_golden.txt` 不变；没有 `disabled` 的 profile 文件行为不变（`dir_overrides_and_adds` 照样过）；内置 `ireader.toml` 没动
+- [ ] 「不做」的事确实没做（没改 install.sh、sources.rs、生成和传输代码）
+- [ ] 真机（vinci，合并后）：本机写好 `ireader.toml` 后 `booklib devices` 只剩 hanvon、kindle、kobo，`sync --keep` 报告符合预期
+
+## 交付物
+代码提交到上面的分支并推送；「结果」填好；状态改为 done 或 blocked。
+
+## 给执行方的指令
+```
+执行任务单 .dev/tasks/2026-11-10-profile-disable.md：先把状态改为 accepted 并提交，按「分步任务」做完，填好「结果」，状态改为 done（做不下去改为 blocked 并写明原因），提交并推送分支。
+```
+
+## 结果
+<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：
+- base..head：
+- 提交：| 步骤 | 提交号 | 文件 | 说明 |
+- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+- 遇到的问题：
+- 偏离：无
+- 未完成：
+
+## 审查
+<!-- 负责 bot 填写 -->
+- 验收：
+- 二审：
+- 合并：
