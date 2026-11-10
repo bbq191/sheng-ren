@@ -562,7 +562,7 @@ fn spread_test_book() -> Vec<u8> {
         ),
         (
             "content.opf",
-            r#"<package version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:spread</dc:identifier><dc:title>跨页</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject></metadata><manifest><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="p3" href="p3.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="p2.xhtml" media-type="application/xhtml+xml"/><item id="cimg" href="cover.png" media-type="image/png" properties="cover-image"/><item id="i1" href="p1.png" media-type="image/png"/><item id="i3" href="p3.png" media-type="image/png"/><item id="i2" href="p2.png" media-type="image/png"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="cover"/><itemref idref="p1"/><itemref idref="p3"/><itemref idref="p2" page-spread-left="yes"/></spine></package>"#.as_bytes(),
+            r#"<package version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:spread</dc:identifier><dc:title>跨页</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject></metadata><manifest><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="p3" href="p3.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="p2.xhtml" media-type="application/xhtml+xml"/><item id="cimg" href="cover.png" media-type="image/png" properties="cover-image"/><item id="i1" href="p1.png" media-type="image/png"/><item id="i3" href="p3.png" media-type="image/png"/><item id="i2" href="p2.png" media-type="image/png"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="cover"/><itemref idref="p1"/><itemref idref="p3"/><itemref idref="p2" properties="rendition:layout-pre-paginated page-spread-left"></itemref></spine></package>"#.as_bytes(),
         ),
         (
             "cover.xhtml",
@@ -632,7 +632,37 @@ fn image_average(epub: &[u8], image: &str) -> f64 {
     sum as f64 / f64::from(img.width() * img.height())
 }
 
-/// 跨页：ltr 左先右后、rtl 右先左后；1.1 宽的页、宽封面不拆；page-spread 属性去掉；开关关着不多页。
+/// 2026-11-10 审查阻断 1、3：`properties` 里的 page-spread 值要删、其余值留着；非自闭合 itemref 的新项插在
+/// `</itemref>` 后面，不能塞进去。
+#[test]
+fn spread_spine_items_strip_properties_and_insert_after_close() {
+    let opf = r#"<package><manifest><item id="p2" href="p2.xhtml"/><item id="p3" href="p3.xhtml"/></manifest><spine><itemref idref="p2" properties="page-spread-right"></itemref><itemref idref="p3" properties="rendition:layout-pre-paginated page-spread-left"/></spine></package>"#;
+    let out = super::streaming::add_spread_spine_items(
+        opf,
+        "",
+        &[
+            ("p2.xhtml".into(), "new2".into()),
+            ("p3.xhtml".into(), "new3".into()),
+        ],
+    )
+    .unwrap();
+    assert!(
+        out.contains(r#"<itemref idref="p2"></itemref><itemref idref="new2"/>"#),
+        "{out}"
+    );
+    assert!(!out.contains(r#"properties="page-spread-right""#), "{out}");
+    assert!(
+        out.contains(r#"properties="rendition:layout-pre-paginated""#),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"<itemref idref="p3" properties="rendition:layout-pre-paginated"/><itemref idref="new3"/>"#),
+        "{out}"
+    );
+    assert!(!out.contains("new2\" properties"), "{out}");
+}
+
+/// 跨页：ltr 左先右后、rtl 右先左后；1.1 宽的页、宽封面不拆；page-spread 值去掉；开关关着不多页。
 #[test]
 fn comic_spread_split_ltr_rtl_and_skips_non_spreads() {
     let book = spread_test_book();
@@ -652,9 +682,14 @@ fn comic_spread_split_ltr_rtl_and_skips_non_spreads() {
         .collect();
     assert!(last[0] < 120.0 && last[1] > 180.0, "ltr 左半在前：{last:?}");
     let opf = text_of(&out, &opf_name_of(&out));
+    assert!(!opf.contains("page-spread"), "page-spread 值要删掉：{opf}");
     assert!(
-        !opf.contains("page-spread"),
-        "page-spread 属性要删掉：{opf}"
+        opf.contains(r#"properties="rendition:layout-pre-paginated""#),
+        "其余 properties 留着：{opf}"
+    );
+    assert!(
+        opf.contains(r#"</itemref><itemref idref="eink-spread-page-0"/>"#),
+        "新 itemref 要插在 </itemref> 后面：{opf}"
     );
     assert_eq!(
         text_of(&out, "nav.xhtml"),
@@ -755,6 +790,95 @@ fn comic_spread_split_skips_small_animated_and_text_pages() {
         .name()
         .contains("-eink2"))
     );
+}
+
+/// 2026-11-10 审查阻断 2：拆出来的半张短边不到阅读范围宽 1/3 时不拆（Kobo 480×400 跨页）。
+#[test]
+fn comic_spread_split_skips_decorative_half_on_kobo() {
+    let png = |w: u32, h: u32, split: Option<u32>| {
+        let mut cur = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, _| {
+            let v = if split.is_some_and(|c| x >= c) {
+                200
+            } else {
+                40
+            };
+            image::Rgb([v, v, v])
+        }))
+        .write_to(&mut cur, image::ImageFormat::Png)
+        .unwrap();
+        cur.into_inner()
+    };
+    let cover = png(700, 1000, None);
+    let small = png(480, 400, Some(240));
+    let book = zip_book_bytes(&[
+        (
+            "META-INF/container.xml",
+            br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        ),
+        (
+            "content.opf",
+            r#"<package version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:smallhalf</dc:identifier><dc:title>半张小图</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject></metadata><manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.xhtml" media-type="application/xhtml+xml"/><item id="ci" href="c.png" media-type="image/png"/><item id="si" href="s.png" media-type="image/png"/></manifest><spine><itemref idref="c"/><itemref idref="s"/></spine></package>"#.as_bytes(),
+        ),
+        (
+            "c.xhtml",
+            br#"<html><head><title>c</title></head><body><img src="c.png"/></body></html>"#,
+        ),
+        (
+            "s.xhtml",
+            br#"<html><head><title>s</title></head><body><img src="s.png"/></body></html>"#,
+        ),
+        ("c.png", &cover),
+        ("s.png", &small),
+    ]);
+    let kobo = profile::get("kobo").unwrap();
+    let (out, _) = optimize_epub_with(&book, &OptimizeOpts::for_profile(kobo)).unwrap();
+    assert_eq!(spine_pages(&out).len(), 2, "半张是装饰小图：不拆");
+}
+
+/// 2026-11-10 审查阻断 4：同一张图被两页引用时不拆（否则另一页也会被换成半张）。
+#[test]
+fn comic_spread_split_skips_image_shared_by_two_pages() {
+    let png = |w: u32, h: u32, split: u32| {
+        let mut cur = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, _| {
+            let v = if x >= split { 200 } else { 40 };
+            image::Rgb([v, v, v])
+        }))
+        .write_to(&mut cur, image::ImageFormat::Png)
+        .unwrap();
+        cur.into_inner()
+    };
+    let img = png(1600, 1100, 800);
+    let book = zip_book_bytes(&[
+        (
+            "META-INF/container.xml",
+            br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        ),
+        (
+            "content.opf",
+            r#"<package version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:shared</dc:identifier><dc:title>共用图</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject></metadata><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="b.xhtml" media-type="application/xhtml+xml"/><item id="i" href="i.png" media-type="image/png"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>"#.as_bytes(),
+        ),
+        (
+            "a.xhtml",
+            br#"<html><head><title>a</title></head><body><img src="i.png"/></body></html>"#,
+        ),
+        (
+            "b.xhtml",
+            br#"<html><head><title>b</title></head><body><img src="i.png"/></body></html>"#,
+        ),
+        ("i.png", &img),
+    ]);
+    let mut opts = OptimizeOpts::new(crate::imgopt::test_screen());
+    opts.comic_split_spreads = true;
+    let (out, _) = optimize_epub_with(&book, &opts).unwrap();
+    let pages = spine_pages(&out);
+    assert_eq!(pages.len(), 2, "两页引用同一张图：不拆");
+    let (a, b) = (page_image(&out, &pages[0]), page_image(&out, &pages[1]));
+    assert_eq!(a, b, "两页还是同一张整图");
+    // 整张图带白边平均约 203；拆成左半（40）再补白只有约 89
+    let avg = image_average(&out, &a);
+    assert!(avg > 180.0, "整张图（左右两半都在）：{avg}");
 }
 
 /// 固定版式（Kindle）也能拆，新页带 viewport；CBZ 转出的书同样能拆。

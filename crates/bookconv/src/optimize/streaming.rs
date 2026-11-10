@@ -843,6 +843,45 @@ fn split_spread_pages<R: std::io::Read + std::io::Seek>(
         cut_bottom: None,
         dark_bg: opts.comic_dark_bg,
     };
+    // 清洗层改过名的图：页面里引用的新名 → 原书里的原名（读原图字节用）
+    let src_names: HashMap<String, String> = prep
+        .rep
+        .wash
+        .as_ref()
+        .map(|w| {
+            w.renamed
+                .iter()
+                .map(|(old, new)| (new.clone(), old.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    // 每张图被几个 xhtml 页引用：被不止一页引用的不拆（否则按图名换字节会把别的页也换成半张）
+    let mut image_refs: HashMap<String, HashSet<String>> = HashMap::new();
+    for (name, data, ish) in &prep.entries {
+        if !*ish {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(data) else {
+            continue;
+        };
+        for t in crate::html::tags(text) {
+            if !t.is_start() {
+                continue;
+            }
+            let tag = &text[t.start..t.end];
+            let attr = if crate::wash::opf::is_local(t.name, "img") {
+                crate::html::attr(tag, "src")
+            } else if crate::wash::opf::is_local(t.name, "image") {
+                crate::html::attr(tag, "href").or_else(|| crate::html::attr(tag, "xlink:href"))
+            } else {
+                None
+            };
+            if let Some(a) = attr {
+                let (path, _) = crate::epubzip::resolve_link(name, a.value);
+                image_refs.entry(path).or_default().insert(name.to_string());
+            }
+        }
+    }
     let mut taken: HashSet<String> = prep.entries.iter().map(|e| e.0.clone()).collect();
     let mut seen_images = HashSet::new();
     let mut splits = Vec::new();
@@ -871,7 +910,12 @@ fn split_spread_pages<R: std::io::Read + std::io::Seek>(
         let Some((img_path, src_start, src_end)) = img else {
             continue;
         };
-        if Some(&img_path) == cover.as_ref() || !seen_images.insert(img_path.clone()) {
+        if Some(&img_path) == cover.as_ref()
+            || image_refs
+                .get(&img_path)
+                .is_some_and(|pages| pages.len() > 1)
+            || !seen_images.insert(img_path.clone())
+        {
             continue;
         }
         let Some(img_idx) = prep.entries.iter().position(|e| e.0 == img_path) else {
@@ -880,17 +924,25 @@ fn split_spread_pages<R: std::io::Read + std::io::Seek>(
         if !prep.entries[img_idx].1.is_empty() {
             continue;
         }
-        let Some((iw, ih)) = read_image_head(archive, &img_path, |b| {
+        let src_img = src_names
+            .get(&img_path)
+            .map(String::as_str)
+            .unwrap_or(&img_path);
+        let Some((iw, ih)) = read_image_head(archive, src_img, |b| {
             crate::imgopt::guard(|| crate::imgopt::display_dims(b))
         })
         .ok()
         .flatten() else {
             continue;
         };
-        if iw.min(ih) < screen.width / 3 || !crate::imgopt::is_spread(iw, ih) {
+        // 整张和拆出来的半张都别是装饰小图（半张只裁边、不缩放补白，按画布写 100% 会拉伸）
+        if iw.min(ih) < screen.width / 3
+            || (iw / 2).min(ih) < screen.width / 3
+            || !crate::imgopt::is_spread(iw, ih)
+        {
             continue;
         }
-        let bytes = crate::epubzip::read_by_name(archive, &img_path)?;
+        let bytes = crate::epubzip::read_by_name(archive, src_img)?;
         let Some((left, right)) = crate::imgopt::prepare_comic_spread(
             &bytes,
             screen,
@@ -1035,9 +1087,14 @@ fn split_entry_name(taken: &mut HashSet<String>, name: &str, ext: &str) -> Strin
     unreachable!()
 }
 
-/// 在 OPF spine 里紧跟原页插一个新 itemref，并去掉原页 itemref 上的 `page-spread-*` 属性。
-/// `adds` 是（原页 zip 路径，新页 itemref 的 idref）；有一项在 spine 里找不到就返回 `None`（不改）。
-fn add_spread_spine_items(opf: &str, opf_dir: &str, adds: &[(String, String)]) -> Option<String> {
+/// 在 OPF spine 里紧跟原页插一个新 itemref，并去掉原页 itemref 上的 `page-spread-*` 属性 / `properties` 值。
+/// `adds` 是（原页 zip 路径，新页 itemref 的 idref）；有一项在 spine 里找不到、或原页 itemref 不是自闭合又没有
+/// 配对的结束标签，就返回 `None`（不改）。
+pub(super) fn add_spread_spine_items(
+    opf: &str,
+    opf_dir: &str,
+    adds: &[(String, String)],
+) -> Option<String> {
     let items = crate::wash::manifest_items(opf);
     let path_by_id: HashMap<&str, String> = items.iter().map(|i| (i.id, i.path(opf_dir))).collect();
     let mut edits = Vec::new();
@@ -1065,23 +1122,68 @@ fn add_spread_spine_items(opf: &str, opf_dir: &str, adds: &[(String, String)]) -
                 .unwrap_or(a.name)
                 .to_ascii_lowercase();
             if local.starts_with("page-spread-") {
-                // 连属性前的空白一起删，别留下两个空格
-                let before = &tag[..a.start];
-                let ws = before.len() - before.trim_end().len();
-                edits.push((t.start + a.start - ws, t.start + a.end, String::new()));
+                edits.push(remove_attr_edit(t.start, tag, &a));
+                continue;
+            }
+            if !a.is("properties") {
+                continue;
+            }
+            // EPUB 3 的写法：page-spread-left/right、rendition:page-spread-* 是 properties 里的值
+            let words: Vec<&str> = a.value.split_whitespace().collect();
+            let kept: Vec<&str> = words
+                .iter()
+                .copied()
+                .filter(|w| {
+                    let local = w.rsplit(':').next().unwrap_or(w).to_ascii_lowercase();
+                    !local.starts_with("page-spread-")
+                })
+                .collect();
+            if kept.len() == words.len() {
+                continue;
+            }
+            if kept.is_empty() {
+                edits.push(remove_attr_edit(t.start, tag, &a));
+            } else {
+                edits.push((
+                    t.start + a.value_start,
+                    t.start + a.value_end,
+                    kept.join(" "),
+                ));
             }
         }
+        let insert_at = if tag.trim_end().ends_with("/>") {
+            t.end
+        } else {
+            // `<itemref …></itemref>`：新 itemref 要插在结束标签后面，不能塞进原 itemref
+            let close = crate::html::find_close(opf, t.end, t.name)?;
+            close.end
+        };
         let linear = crate::html::attr(tag, "linear")
             .map(|a| format!(" linear=\"{}\"", a.value))
             .unwrap_or_default();
         let el = t.name;
-        edits.push((t.end, t.end, format!("<{el} idref=\"{new_id}\"{linear}/>")));
+        edits.push((
+            insert_at,
+            insert_at,
+            format!("<{el} idref=\"{new_id}\"{linear}/>"),
+        ));
     }
     if matched != adds.len() {
         return None;
     }
     edits.sort_by_key(|e| e.0);
     Some(crate::html::apply_edits(opf, edits))
+}
+
+/// 删一个属性（连属性前的空白一起删，别留下两个空格）；`tag_start` 是标签在整份 OPF 里的起点。
+fn remove_attr_edit(
+    tag_start: usize,
+    tag: &str,
+    a: &crate::html::Attr<'_>,
+) -> (usize, usize, String) {
+    let before = &tag[..a.start];
+    let ws = before.len() - before.trim_end().len();
+    (tag_start + a.start - ws, tag_start + a.end, String::new())
 }
 
 /// 取回写 zip（[`OrderedSink`]）。图片提前提交 `lookahead` 张，worker 自己打开源文件读原图字节（原图在 zip 里是压缩的时，解压整卷漫画在
