@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: opencode-local
 - 分支: feat/bigme-profile（从 master `aa86ba4` 切出；测量填完后把已含停用阅读模式的 master `dc1eafe` 合进来）
-- 更新时间: 2026-11-10T18:22+08:00
+- 更新时间: 2026-11-10T18:28+08:00
 - 引用: 无（照 `.dev/tasks/2026-11-04-hanvon-profile.md`、`2026-11-06-hanvon-device-facts.md` 的做法，这次真机量完一次写全）
 
 ## 需求原文
@@ -126,6 +126,21 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
+- 验收：**通过**（sheng-ren，2026-11-10 18:28 +08:00，box 上 `692aef7` 重跑；范围 `dc1eafe..692aef7`，`dc1eafe`＝`origin/master` 合流点）
+  - 范围：`git diff --stat dc1eafe..692aef7` 只有任务单、`crates/profile/profiles/bigme.toml`（新增）、`crates/profile/src/lib.rs`、`crates/library/tests/fp_golden.rs`、`fp_golden.txt`（124 行新增、0 行删除，前缀全是 `bigme`）、`crates/library/tests/cli.rs`、`crates/library/src/bin/booklib/main.rs`、`README.md`、`docs/devices.md`、`docs/usage.md`。hanvon / ireader / kindle / kobo 的 profile 文件、`install.sh` 都没动。和「涉及文件」一致。
+  - 分步任务 1–8：真机七项已填；`bigme.toml` 值与注释按约束写完（`[readable.epub]` 1069×1424，`[comic_readable]` 1264×1680，方案 D，`dir = "books"`，不写封面缩略图和 `comic_gutter_crop` / `comic_page_direction`）；`lib.rs` 注册、字母序 id 列表、三个统一测试和 bigme 断言都在；金样、CLI / 帮助、文档、clippy 均已做。仓库里没有 `.dev/exec-log.md`，以本单「结果」为执行记录，命令已在 box 上重跑，对得上。
+  - 功能 / 画质（对照验收标准和真机值）：
+    - `booklib devices`（临时 `BOOKLIB_DIR`）：`bigme  Bigme 自带阅读器（B7 Pro 黑白版）  EPUB  屏幕 1264×1680  阅读范围 1069×1424  黑白`（`bigme.toml:5-7,31-39`；断言 `lib.rs:1259-1289`）
+    - 假 MTP（`BOOKLIB_MTP_DIR` + `BOOKLIB_MTP_NO_MOUNT_CHECK=1`）：`devices` 显示接上 `…/mtp/bigme/内部共享存储空间/books`；`sync --device=bigme --no-meta` 产物落到该 `books/` 下。`dir = "books"` 小写照汉王 `documents` 的写法（`bigme.toml:49-50`，`docs/devices.md:367`）：安卓存储不分大小写，真机目录是 `Books/`。`deliver.rs` 的 `dir_present` / `ensure_dir` 按确切文件名判断，没有给目录做 `fix_case`；汉王真机已是「写 documents、落 Documents」。第一次真机 sync 确认会进已有的 `Books/` 即可，不挡验收。
+    - 漫画：`epub-optimize --device=bigme` 处理 kit 里流式测试漫画，全部页图 1264×1680 灰度；OPF `rendition:layout=pre-paginated`、`fixed-layout=true`、`original-resolution=1264x1680`、`book-type=comic`；每页 viewport `width=1264, height=1680`、`img style="width:100%;height:100%"`，`eink-wash.css` 里 html/body 高度 100%（方案 D）；spine 保留 `page-progression-direction="rtl"`；跨页拆出 `p4` + `p4-eink2`（右半在前）。**没有** `eink-thumb`，封面页由 1200×1700 缩到画布 1264×1680（约 0.75），没有改成 0.81。
+    - 三个统一测试含 `bigme`（`lib.rs:1300-1331`）：伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、拆跨页、按元数据定方向。金样 comic 指纹 `…+1fFbG1.1ASPKW`，与 kobo 同一套画质旗标（有方案 D 的 `fF`，无裁格间空白的 `L`）。`comic_gutter_crop` / `cover_meta_thumb` 缺省 false（`lib.rs:477,563` 的 `#[serde(default)]`），toml 未写。
+  - 测试：`cargo test --workspace` 789 过 0 失败（含 `fp_golden`）；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --all -- --check` 干净。与「结果」一致。
+  - 「不做」：不出 KFX / KEPUB；未加新 profile 键或新转换逻辑；未改另外四台的值；未开 gutter crop；未写封面缩略图；未改正文封面比例；未改 xReader 翻页；未改 `install.sh`；未配 MTP 自动挂载。真机验证（挂载规则 / 传书后 xReader 打开）按任务单留给合并后，记在「未完成」。
+  - 提交合规：中文前缀加正文，无 `Co-Authored-By`，未合并进 master。`feat:` 正文写了「没跑真书回归、新设备的产物没上真机看」。
+  - 「结果」与 diff 对得上。文字书在 `text_repair_only` 下不按 1069 宽重排，只在 profile / `devices` 层核对，写得诚实。`偏离：无` 同时交代了 `dir_disables_builtin_mode` 把 `bigme` 加进「其余内置模式都在」的断言（`lib.rs:1532`），只加强测试、在涉及文件内，接受。
+  - 不阻断：
+    - 建议：`docs/devices.md:286` 把 Bigme 方案 D 的摘要插在「可阅读范围」两条列表项中间，没有做成列表项，读起来断档；同一内容已在表格（`:122`）、「各模式的数字」（`:307-309`）和设备专节（`:361-372`）写过，可把这一段挪进专节或改成列表项。
+    - 建议：`lib.rs:1297-1322` 三个统一测试的注释还写「四台」，列表已经有五台（含 bigme）。
+  - 下一步：agy 二审（本单改设备行为：新设备投递路径，接上后第一次 sync 会给它生成全部跟踪的书），范围 `dc1eafe..` 到本审查提交。没有阻断再合并改 `verified`。
 - 二审：
 - 合并：
