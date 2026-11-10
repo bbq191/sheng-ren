@@ -78,7 +78,7 @@
 <!-- 负责 bot 填写 -->
 - 结论：**不需要做**（vinci 2026-11-10 定）。Kobo 书架跟着封面自己的比例显示、不拉伸不裁不留白，取的是 `cover-image`，做书架缩略图没有好处；`cover_thumb_aspect`、`cover_meta_thumb` 都不写，执行方没开工，分步任务作废
 - 只改了文档和注释（负责 bot 做，vinci 批准的小改动）：`kobo.toml` 把「比例未知」那行注释换成测量结论（不加键）；`docs/devices.md` 两行的说明和 Kobo 一节加「书架封面」。`cargo test -p profile` 过，`fp_golden` 没变
-- 测量：vinci 用 box 上 `/workspace/kobo-thumb-kit`（封面比例 0.50 / 0.75 / 1.00 + 封面来源探针，手写 EPUB 3 直接 `epub-to-kepub`，没过 epub-optimize）截了网格、列表两张；截图没有传到 box 上，负责 bot 没有复看，结论照 vinci 的报告记
+- 测量：vinci 用 box 上 `/workspace/kobo-thumb-kit`（封面比例 0.50 / 0.75 / 1.00 + 封面来源探针，手写 EPUB 3 直接 `epub-to-kepub`，没过 epub-optimize）截了网格、列表两张；负责 bot（sheng-ren）在对话里看过两张截图，和上面四项一致
 - 状态：工作流（`Projects/工作流.md`）没有「取消 / 不做」的终态，按 verified 收，靠这里的「结论：不需要做」区分
 - 验收：不适用（没有代码改动）
 - 二审：不适用（只改注释和文档，不影响产物）
