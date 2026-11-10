@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-profile-disable
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/profile-disable（从 master `aa86ba4` 切出）
-- 更新时间: 2026-11-10T16:35+08:00
+- 更新时间: 2026-11-10T16:45+08:00
 - 引用: 无
 
 ## 需求原文
@@ -175,3 +175,11 @@
 - 检查：`cargo test --workspace`（清过 BOOKLIB_* 环境）789 过 0 失败，含 `fp_golden`；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --all -- --check` 干净。和 `origin/master`、`origin/feat/bigme-profile` 试合并都没有冲突。
 - 不阻断：`docs/devices.md` 第二点写「带 `--keep` 的那一遍就能看到 `✗ 不再跟踪…` 的报告」，实际那一遍显示的是 `? 不再跟踪（--keep，这次没从书库删）`，`✗` 是不带 `--keep` 那一遍的。只是符号不对，意思没错；合并前顺手改或者留给 agy 一并提都行。上次「`lib.rs` 先试解析」那条也不阻断。
 - 下一步：agy 二审（本单不是小改动：数据风险，跟踪条目会被去掉），范围 `aa86ba4..` 到本提交。
+
+### 二审处理（sheng-ren，2026-11-10 16:45）
+
+- 回执 `.dev/tasks/2026-11-10-profile-disable.agy.md`（`37e60a8`，范围 `aa86ba4..aa90114`）**无阻断**。负责 bot 逐条核对了引用位置：`lib.rs:938-952`（只认 `table.len() == 1 && as_bool() == Some(true)`、其余带 `disabled` 报错、解析不了交给 `Profile::parse`、未知 id `remove` 返回 None 忽略）、`lib.rs:1458/1489-1541` 的测试、`cli.rs:270`、`flow.rs:2717`、`sources.rs:375-383 / 754-771` 的既有清理、`docs/devices.md:200-203`，都对得上；结论和三轮盒子实测一致。回执「未核实」的两项（全量测试、vinci 本机操作）：前者负责 bot 复验时跑过，合并后再跑一遍；后者留给 vinci。
+- 建议（`--keep` 那一遍的报告符号）：采纳，负责 bot 按小改动改了 `docs/devices.md:201` 一行：带 `--keep` 报 `? 不再跟踪（--keep，这次没从书库删）`，不带 `--keep` 才是 `✗ 不再跟踪，书库里删了（连同产物）`。
+- 线索（TOML 预检容错）：认同，不用改。
+- 补充实测：`booklib sync --keep --no-meta --no-build` 不需要接设备、不联网，也会做条目清理并报告，适合 vinci 停用后先跑这一遍。写了 toml 之后 `booklib track` 就看不到 ireader 了，所以记条目要在写 toml **之前**。
+- 状态改为 `verified`，合并进 master；真机验证（vinci 本机停用掌阅）留给 vinci 最终验收。
