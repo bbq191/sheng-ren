@@ -129,11 +129,20 @@ impl Library {
             .cover
             .as_ref()
             .map_or("-", |c| c.sha256.get(..12).unwrap_or(&c.sha256));
+        // 先算是不是漫画：早期条目 `Meta::comic` 可能还没存，按书定方向要和指纹用同一个结果
+        let comic = self.comic_of(meta)?;
         let info = self.injected_info_sig(meta).unwrap_or_else(|| "-".into());
         // 补元数据那一步（`metadata::inject`）改了会影响产物时 `bookconv::opfmeta::VERSION` 加一：只让补过东西的书过期（`i5`），
         // 没补过东西的书指纹不变
         let info = if cover != "-" || info != "-" {
             format!("{info}i{}", bookconv::opfmeta::VERSION)
+        } else {
+            info
+        };
+        // 按元数据强制成 rtl 的书（Bangumi 日本漫画，`metadata::comic_direction`）在 info 段后接 `r`：
+        // 只有这些书指纹变，别的书一个字不变；方向不算 profile 字段，不放进设备段（不然全部漫画都重建）
+        let info = if crate::metadata::comic_direction(meta, device, comic).is_some() {
+            format!("{info}r")
         } else {
             info
         };
@@ -143,7 +152,6 @@ impl Library {
         } else {
             format!("{PIPELINE_VERSION}c{}", bookconv::convert::CONVERT_VERSION)
         };
-        let comic = self.comic_of(meta)?;
         let crate::fingerprint::DeviceSig {
             version,
             area_seg,
@@ -911,7 +919,10 @@ impl Library {
     ) -> Result<Produced, String> {
         let epub = self.prepared_input(meta)?;
         let mut warnings = Vec::new();
-        let opts = bookconv::optimize::OptimizeOpts::for_profile(device);
+        let comic = self.comic_of(meta)?;
+        let mut opts = bookconv::optimize::OptimizeOpts::for_profile(device);
+        // 按书指定翻页方向（Bangumi 判成日本漫画的 rtl）；其余留给原书、profile
+        opts.page_direction = crate::metadata::comic_direction(meta, device, comic);
         // 要转 KFX 的，优化结果先放临时目录
         let optimized = if format == Format::Epub {
             part.to_path_buf()

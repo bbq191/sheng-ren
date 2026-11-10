@@ -144,6 +144,7 @@ fn info_of(hit: &Hit, s: Subject, authors: &[String]) -> BookInfo {
     );
     BookInfo {
         source: format!("豆瓣 {}", hit.url()),
+        region: None,
         title: s.title.clone(),
         // 带国籍的作者署名（搜索建议的「[美] 玛格丽特·米切尔」，条目页的同样写法）：书里的作者没写国籍时补上
         authors: if s.authors.is_empty() {
