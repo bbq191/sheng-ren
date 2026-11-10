@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-kobo-cover-thumb
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/kobo-cover-thumb（从最新 master 切出）
-- 更新时间: 2026-11-10T10:40+08:00
+- 更新时间: 2026-11-10T16:00+08:00
 - 引用: 无（vault PRD `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md`「已定事项」7：从那份 PRD 里拆出来单独做）
 
 ## 需求原文
@@ -19,10 +19,10 @@
   - 测试书：封面比例 0.5 / 0.75 / 1.0 三本（方块、圆、四边刻度，同 2026-11-03 掌阅、11-06 汉王用过的；box 上 `/workspace/hv/封面比例-*.epub`，KEPUB 版由 sheng-ren 用 `epub-to-kepub` 转），再加一本「封面来源探针」（meta cover、`cover-image`、正文第一页各指一张不同的图）
   - vinci 放进 Kobo `books/测试/`，在书架（网格、列表各一）截图（Kobo 设置里开截屏或手机拍正面）
   - 要量出：
-    - [ ] 书架封面框像素尺寸和比例：（待填）
-    - [ ] 比例不对的封面怎么放：拉伸 / 裁切 / 留白：（待填）
-    - [ ] 书架取哪张封面：meta cover / cover-image / 第一页：（待填）
-    - [ ] 网格和列表的框比例是否一样：（待填）
+    - [x] 书架封面框像素尺寸和比例：没有固定的框，每本按封面自己的比例显示（0.5 窄高、1.0 正方；网格里底边对齐）（vinci 2026-11-10 15:48，Clara BW 固件 4.45）
+    - [x] 比例不对的封面怎么放：拉伸 / 裁切 / 留白：都没有（圆还是圆、四边刻度都在、不留白）
+    - [x] 书架取哪张封面：meta cover / cover-image / 第一页：cover-image（探针显示 B）
+    - [x] 网格和列表的框比例是否一样：都没有固定框，都跟着封面比例走
 - 涉及文件：
   - `crates/profile/profiles/kobo.toml`（修改：按测量写 `cover_thumb_aspect`；书架取的是 meta cover 才写 `cover_meta_thumb = true`；注释写来源和日期）
   - `crates/profile/src/lib.rs`（修改：内置 profile 测试补 kobo 的断言）
@@ -76,6 +76,10 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
-- 合并：
+- 结论：**不需要做**（vinci 2026-11-10 定）。Kobo 书架跟着封面自己的比例显示、不拉伸不裁不留白，取的是 `cover-image`，做书架缩略图没有好处；`cover_thumb_aspect`、`cover_meta_thumb` 都不写，执行方没开工，分步任务作废
+- 只改了文档和注释（负责 bot 做，vinci 批准的小改动）：`kobo.toml` 把「比例未知」那行注释换成测量结论（不加键）；`docs/devices.md` 两行的说明和 Kobo 一节加「书架封面」。`cargo test -p profile` 过，`fp_golden` 没变
+- 测量：vinci 用 box 上 `/workspace/kobo-thumb-kit`（封面比例 0.50 / 0.75 / 1.00 + 封面来源探针，手写 EPUB 3 直接 `epub-to-kepub`，没过 epub-optimize）截了网格、列表两张；截图没有传到 box 上，负责 bot 没有复看，结论照 vinci 的报告记
+- 状态：工作流（`Projects/工作流.md`）没有「取消 / 不做」的终态，按 verified 收，靠这里的「结论：不需要做」区分
+- 验收：不适用（没有代码改动）
+- 二审：不适用（只改注释和文档，不影响产物）
+- 合并：`--no-ff` 合 master（见 master 日志 `merge: Kobo 书架缩略图不需要做`）
