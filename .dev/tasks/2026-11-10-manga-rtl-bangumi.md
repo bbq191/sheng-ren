@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
-- 更新时间: 2026-11-10T14:00+08:00
+- 更新时间: 2026-11-10T12:25+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 B 节）
 
 ## 需求原文
@@ -201,6 +201,14 @@
     1. `series_lookup` 挑选顺序改成：地区非空且当前版本 → 地区非空 → 地区是 `Some("")` 且当前版本 → 地区是 `Some("")` → 当前版本 → 其余（即把 `has_region` 拆成「判出地区」`region` 非空、和「查过判不出」`Some("")` 两档，判出的在前）
     2. 测试：同一套三卷，01 卷 Bangumi `Some("")`、02 卷 Bangumi「日本」，都是当前版本；03 卷 `series_lookup` 抄到的是「日本」（断言与 `list()` 先后无关）
     3. 代码注释和 `series_lookup` 文档注释写明「判出地区的优先于判不出的」
-- 返工后：sheng-ren 重新验收，通过后再请 vinci 跑 agy 二审（回执 `.dev/tasks/2026-11-10-manga-rtl-bangumi.agy.md`）
-- 二审：未开始（等返工验收通过）
+- 返工验收（第 3 轮返工，`98f1f39`）：**验收通过（待 agy）**（sheng-ren，2026-11-10，box 上重跑；状态保持 done）
+  - 做到的（附证据）：
+    - 阻断 4：`series_lookup` 拆成 `known`（`region` 非空）和 `unknown`（`Some("")`），挑选顺序：非空且当前版本 → 非空 → `Some("")` 且当前版本 → `Some("")` → 当前版本 → 其余；文档注释和行内注释都写明「判出地区的优先于判不出的」
+    - 测试 `series_lookup_prefers_known_region_over_blank`：三卷，先 01 `Some("")`、02「日本」，再对调成 01「日本」、02 `Some("")`，两次 03 都抄到「日本」并断言来源卷。`list()` 里 01、02 谁在前是固定的，对调后两种情形里必有一次是「判不出」那卷排在前，所以不靠哈希运气就覆盖了两种先后
+    - 变异检查：把 `known` 临时改回 `region.is_some()`，这个测试失败（`left: Some("")`，来源 01 卷），恢复后通过——测试确实能抓住阻断 4
+    - 范围：`4d059f1..98f1f39` 只改 `metadata.rs`（`series_lookup` 和测试；测试辅助 `comic_cbz` 按名字变图片宽度，只为内容哈希不同）和任务单
+    - 测试：`cargo test --workspace` 767 个通过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`cargo fmt --all -- --check` exit 0；`fp_golden` 通过，`fp_golden.txt` 相对 master 仍只多 8 行、0 行删除
+  - 状态机：第 2 轮返工验收里重走的结论不变（不会死循环，有限轮内收敛）；有判出地区的卷时，同一套其余各卷不会再抄到判不出的，处理先后不影响结果
+  - 不阻断：无新问题。没跑真书回归、没上真机（照任务单，留给 vinci）
+- 二审：请 vinci 跑 agy（回执 `.dev/tasks/2026-11-10-manga-rtl-bangumi.agy.md`）
 - 合并：
