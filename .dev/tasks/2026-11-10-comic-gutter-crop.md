@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-gutter-crop
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: feat/comic-gutter-crop（2026-11-10 已把 master `d50a889`（含 A 画质统一、B 日漫 rtl、C 跨页拆分）`--no-ff` 合进来：`bdc880f`；在这个分支上接着做，不 rebase）
-- 更新时间: 2026-11-10T16:20+08:00
+- 更新时间: 2026-11-10T14:50+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 D 节）
 
 ## 需求原文
@@ -133,6 +133,27 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
+- 验收：**退回**（sheng-ren，2026-11-10，box 上 `7c8a214` 重跑；状态退回 pending，同一执行方 opencode-local 返工；1 个阻断，其余都过）
+  - 做到的（附证据）：
+    - 算法照单：`comiccrop.rs` `gutter_bands` 只认整行没有 < 247 的行、带高 ≥ 页高 1%、上下都有内容；`gutter_cuts` 每带留 `max(ceil(页高×0.5%), 4)` 在正中、总量 `min(S, T, 页高×15%)`、T ≤ 0 不收、< 1% 不收、按比例分摊零头给剩余最多的带；只删带内的行（切口都落在 `[y0, y1)` 内），所以淡线、杂点、低对比度画面所在的行一行不删。`T = h − w×屏高/屏宽` 保证收完 `h' ≥ w×屏高/屏宽`，短边仍是宽，不会收成装饰小图
+    - 位置：`imgopt.rs:1290-1306` 在裁白边、黑底判定、装饰小图分支之后，对比度 / 缩放之前；收了就强制重编码（`gutter_changed`）。整页（`streaming.rs:1239`）和跨页两半（`streaming.rs:845`）都传开关；C 单的拆分判定按原图头尺寸，没动
+    - 只横向：只删整行，没有任何按列删的代码，符合 PRD D 节「只裁横向（整行空白带），竖向不裁」
+    - 缺省不开：四个 toml 都没写 `comic_gutter_crop`（缺省 false）；`--gutter-crop` 只在 `epub-optimize` 里强开
+    - 开关关着逐字节不变：box 上 master（`d50a889` 重编）和本分支（四台缺省）比 gutter（rtl，15 页含跨页）、gutter-ltr、文字书 3 本 × 4 台 = 12 个产物全部逐字节相同；文字书开 `--gutter-crop` 和不开也逐字节相同
+    - fp_golden：`d50a889..HEAD` 删 244 行、加 252 行；删的全是四台漫画行（`c66`），每行只变 `c66`→`c67`；多出的 8 行是 `comic_gutter_crop` mutation（漫画行末尾多 `L`，文字书行不变）；文字书旧行 0 变化；`L` 不出现在别的行
+    - COMIC_VERSION 66→67：四台缺省关时产物和 c66 逐字节相同，版本只写进指纹、不写进书（`docs/development.md#版本号`），所以下次 sync 只是重算一遍漫画、不重传、不清 Kindle 进度；C 单的 c66 本来就要在 B/C/D 合并后统一 sync 时重建，D 在那之前合并就不多一次重建。按「改了影响产物的代码一律加版本号」照单加，不算多余
+    - 开了的效果（合成书 `/workspace/gutter-qa/books/gutter.epub`：白底多格页、对话框跨格缝、低对比度格、无格框出血画、几乎空白的扉页、无格缝、窄格缝（12px）、黑底页、σ=2 噪点、纸色 240、JPEG q70、2400×1700 多格跨页，带页码）四台各跑：白底多格页内容宽（缩放后）Kobo 985→1035、Kindle 1152→1213、掌阅 1305→1375（约 +5%）；对话框压住的那条格缝不收、别的照收；无格缝、窄格缝、黑底页、纸色 240 的页逐字节不变；σ=2 噪点和 q70 也照常收；跨页两半各自收、两半顺序 rtl 右半先 / ltr 左半先不变（看左半顶上的黑条）。看过输出图（`/workspace/gutter-qa/samples/*-compare.png`），画面没被切、格框完整
+    - 画布：Kobo 所有页图都是 1072×1448、`width:100%;height:100%`，Kindle 1272×1696 固定像素，汉王 1072×1448，掌阅 1440×1920（扉页在掌阅 / Kindle 照旧走装饰小图），没有拉伸
+    - 确定性 / 质量门 / 写出器：四台开 `--gutter-crop` 跑两次逐字节相同；`--check` 四台都过；Kindle 产物 `epub-to-kfx` → 16 个 section（spine 16 页），Kobo 产物 `epub-to-kepub` 16 章正常
+    - 测试：`cargo test --workspace` 23 组 781 个通过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`cargo fmt --all -- --check` exit 0；单元测试覆盖第 1 步六条，第 4 步两条（格高 434→448、跨页两半都变矮）
+    - 文档：typesetting（新一节）、devices（新键一行，四台「—」）、decisions（一行）、development（c67）都写了
+  - **阻断 1（和任务单约束、文档不符）：黑白屏上彩色页照样被收**。任务单「约束」写「不收的页：…彩色内容页（`!is_gray_content()`）」，`docs/typesetting.md:237`、`docs/devices.md:174`、`docs/decisions.md:345`、`imgopt.rs:1290` 注释和「结果」都说彩色页不动；但四台都是黑白屏（`color = false`），`decode_comic`（`imgopt.rs:700-707`）先把彩色页转成 `Page8::Gray`，到 `imgopt.rs:1292` 时 `is_gray_content()` 对灰度图恒为 true，门形同虚设。box 上复现：`/workspace/gutter-qa/books/color.epub` 第 2 页是 RGB 彩色多格页（格里偏红、格缝白），Kobo、Kindle 开 `--gutter-crop` 后这页产物都变了（被收了）。要改：按**转灰度之前**的原图判彩色——比如 `decode_comic` 在转灰度前对 RGB 图跑一次 `is_gray_content`（可以只在 `gutter_crop` 开时跑，免得关着时多扫一遍），结果记进 `ComicSrc`，`process_comic_page` 的门改用它；原本就存成 RGB 的灰度页（R=G=B）照常收。测试：灰度阅读模式（`grayscale = true`）开 gutter，彩色三格页产物和关着逐字节相同；同一张图存成 R=G=B 的 RGB JPEG 照常收。改完把 `imgopt.rs:1290` 注释、三处文档和「结果」里的说法对上
+  - 建议（不阻断）：
+    - 封面也会被收（合成书封面 p000 是灰度多格图，开了以后变了）。C 单不拆封面；本单没写封面要不要收。彩色封面修了阻断 1 后自然不动；灰度封面要不要跳过，可以顺手跳过 spine 第一页 / OPF 封面图，或者留给真机 A/B 看
+    - 「开关关着产物逐字节不变（测试证明）」：两个 optimize 测试只断言页数和格高，没比字节；box 上已用 master 二进制证明（见上），不强求补
+    - 纸色偏灰（< 247）、有扫描底噪的页一条带也找不到，等于不收（合成书纸色 240 那页逐字节不变）。这是「不放过杂点」的有意取舍；真机 A/B 前先数一下开 / 关两本里有几张图真变了，免得比了个寂寞
+    - 第 7 步 fish 命令里的书路径（`~/Documents/ereader/books/优秀漫画/迷宮飯/迷宮飯 卷01.epub` 等）是猜的；opencode-local 就在 vinci 本机，返工时顺手 `ls` 核对成实际文件名
+    - `a9ff5c7` 提交正文里 `\n\n` 是字面量（一整段），跨页测试写成「1600×1200」，测试里是 1600×1100；返工提交注意
+- 返工后：sheng-ren 重新验收，通过后再请 vinci 跑 agy 二审（回执 `.dev/tasks/2026-11-10-comic-gutter-crop.agy.md`）
+- 二审：未开始（等返工验收通过）
 - 合并：
