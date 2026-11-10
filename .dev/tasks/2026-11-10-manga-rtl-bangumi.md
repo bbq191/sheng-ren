@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-10-manga-rtl-bangumi
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
 - 更新时间: 2026-11-10T11:20+08:00
@@ -118,6 +118,24 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
+- 验收：**退回**（sheng-ren，2026-11-10，box 上 `85088ec` 重跑；状态退回 pending，同一执行方 opencode-local 返工）
+  - 做到的（附证据）：
+    - 范围：`git diff --stat master...HEAD` 18 个文件，除 `douban.rs`（`region: None`，已在「偏离」报告，接受）外都在「涉及文件」内
+    - 地区判定 `bangumi.rs` `region_of`：先 `meta_tags`（恰好一个地区才用、两个以上判不出），再按 `tags` 各地区 count 之和取唯一最高，并列 / 没有 → 空串；非「漫画」→ 空串；不用假名。单元测试覆盖 6 个实测样本和 4 种判不出
+    - 生成：`metadata.rs` `comic_direction` 只在 `comic_meta_direction` 开、`meta.comic == Some(true)`、来源 Bangumi、地区「日本」时给 Rtl；`generate.rs` `produce()` 设 `opts.page_direction`，`plan()` 在 `info` 段后加 `r`。四个 toml 都开，ireader 注释和 `docs/devices.md` 写明掌阅每本选「本书自定义 → 排版 → 漫画」；`docs/decisions.md` 写明推翻 10-15 / 10-16「照书」里日漫那部分
+    - `flow.rs` `bangumi_japanese_comic_builds_rtl_and_others_stay_as_is`：CBZ 在 ireader / hanvon（EPUB spine）、kobo（KEPUB spine）、kindle（KFX `$560` = rtl）都断言了；国漫、去掉 info 后指纹回到基线、spine 没有 rtl
+    - fp_golden：旧行 0 变化，只多出 `comic_meta_direction` mutation 的 8 行（四台 × 文字书 / 漫画），和各自 `none` 行相同——金样书没有元数据，开关本身不进设备段，符合设计
+    - 测试：`cargo test --workspace` 23 组 763 个通过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；8 个改动的 .rs 文件 `rustfmt --edition 2021 --check` 全过
+    - 提交合规：中文前缀加正文、无 Co-Authored-By、没动 master、没合并；`4d2dd41` 写了没跑真书回归、没上真机
+  - **阻断 1（要改）：旧 Bangumi 记录重找会无限循环**。`needs_metadata`（`metadata.rs` 约 553 行）对「Bangumi 来源、`region` 是 None」一律返回 true、不看 `info_checked`；`fill_metadata`（`bin/booklib/main.rs:1587`）于是 `force` 重找。但重找结果是 `NotFound` 时（`fetch_metadata_inner` 的 else 分支，约 470 行）只写 `info_checked`，旧 `info` 原样留着、`region` 仍是 None → 以后每次 `sync`（`--watch` 每一轮）都再联网找一次，永远停不下来。同样，`series_lookup`（约 519 行）复制同一套别的卷的 info 时只看 `info_checked == LOOKUP_VERSION`，会把另一卷还没记地区的旧 info 抄过来（这一卷 `region` 仍是 None），下次再触发重找。要改：
+    1. 重找后没拿到新的 Bangumi 结果（`NotFound`，以及 `Shared` 抄来的 info 也没有 region）时，把这本书现有 Bangumi info 的 `region` 记成 `Some(String::new())`（＝查过、判不出）并存下，`needs_metadata` 随即变 false；网络出错（`Failed` / `Err`）不记，下次再试
+    2. `series_lookup` 选同一套别的卷时，优先 `info.region.is_some()` 的（再按原来的 `info_checked == LOOKUP_VERSION`、再其余）
+    3. 测试（照 `metadata.rs` 测试里现有的假网络 / 计数写法）：旧 Bangumi 记录（region None）重找得到 NotFound → 记成 `Some("")`、`needs_metadata` 变 false、再调一次不联网；同一套两卷，一卷已有 region、一卷 None，后者 Shared 抄到的是有 region 的那份
+  - **阻断 2（要补测试）：vinci 定的「Bangumi 判成国漫 / 韩漫、原书写了 rtl 的照原书」没有测试**。代码逻辑上是对的（`comic_direction` 返回 None，走原书），但验收标准要求证明：在 `flow.rs` 加一本 OPF spine 写了 `page-progression-direction="rtl"` 的 EPUB 漫画，info 写 Bangumi + 「中国」，生成 ireader（或任一台）后 spine 仍是 rtl
+  - 建议（不阻断，顺手改最好）：
+    - `comic_direction` 只认 `meta.comic == Some(true)`：早期条目 `comic` 还是 None 时不会写 rtl，直到别的命令把 `comic` 存下。`plan()` 里已经用 `self.comic_of(meta)?` 算出了 `comic`，可以改成把这个结果传进 `comic_direction`（`produce()` 同样取 `comic_of`），两处口径一致
+    - `force` 重找对书里没有封面的书也会重找封面（原有行为，「没记网站书名」那条也一样）：`docs/usage.md` 那句「下一次 sync 会重找一次」后补半句「书里没封面的也会重找封面」
+    - 「结果」里 base..head 写到 `4d2dd41`，分支头是 `85088ec`
+- 返工后：sheng-ren 重新验收，通过后再请 vinci 跑 agy 二审（回执 `.dev/tasks/2026-11-10-manga-rtl-bangumi.agy.md`）
+- 二审：未开始（等返工验收通过）
 - 合并：
