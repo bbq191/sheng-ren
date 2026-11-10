@@ -30,7 +30,8 @@
   - `crates/library/src/fingerprint.rs`（修改：漫画段在开了的模式加一个新字母，如 `W`；不开的模式指纹不变）
   - `crates/library/tests/fp_golden.rs`、`fp_golden.txt`（加 mutation；四台漫画行因新字母和 c66 都会变，文字书行 0 变化）
   - `crates/bookconv/src/optimize/tests.rs`（新增测试）
-  - `docs/typesetting.md`（漫画一节加「跨页拆分」）、`docs/devices.md`（新键一行）、`docs/decisions.md`（一行）、`docs/development.md#版本号`（COMIC_VERSION 现值 66）
+  - `docs/architecture.md`（顺带：指纹段落里 `comic_autocontrast`/`comic_trim_specks`/`comic_page_numbers`/`comic_dark_bg` 的「只 Kindle 开」改成 2026-11-10 起四台都开；A 单二审建议）
+  - `docs/typesetting.md`（漫画一节加「跨页拆分」；顺带把拉满对比度一段的「掌阅、Move 不开」改成四台都开）、`docs/devices.md`（新键一行）、`docs/decisions.md`（一行）、`docs/development.md#版本号`（COMIC_VERSION 现值 66）
 
 ## 约束
 - 不做：不旋转；不保留整张跨页（拆完原图不再出现在阅读顺序里，vinci 2026-11-10 定）；不找装订线、不按内容挪切口；不拆封面；不做条漫；不改 CBZ 转换（`convert/`）、不改 KFX / KEPUB 写出器；不改 install.sh
@@ -69,7 +70,7 @@
    - CBZ 来源（`convert::cbz` 转出的）同样能拆
 5. [ ] `fingerprint.rs` 新字母；`fp_golden.rs` 加 mutation；`UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden`；`git diff` 应只有漫画行变（四台），文字书行 0 变化
 6. [ ] 跑一遍 KFX、KEPUB：用 `cargo run --release -p bookconv --bin epub-optimize -- --device=kindle` / `--device=kobo` 处理第 4 步的合成书，再 `epub-to-kfx` / 书库生成，确认页数 +1、不报错（结果里贴命令和输出摘要）
-7. [ ] 文档：`docs/typesetting.md`、`docs/devices.md`、`docs/decisions.md`、`docs/development.md#版本号`
+7. [ ] 文档：`docs/architecture.md`（只改上面那句旧表述）、`docs/typesetting.md`、`docs/devices.md`、`docs/decisions.md`、`docs/development.md#版本号`
 8. [ ] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
 
 ## 验收标准
