@@ -1,8 +1,9 @@
 mod common;
 
 use common::{booklib, jpeg, sample_epub, sample_epub_with};
-use library::{Added, Built, Library, Prune};
+use library::{Added, BookInfo, Built, Library, Prune};
 use std::io::Write;
+use std::path::Path;
 
 #[test]
 fn add_build_skip_remove() {
@@ -2706,5 +2707,167 @@ fn removed_mode_leftovers_are_cleaned_up() {
     assert!(
         st.get("orphans").is_none(),
         "相对路径的旧记录不留在 orphans 里：{st}"
+    );
+}
+
+/// 2026-11-10：Bangumi 判成日本漫画的 CBZ，四台都按 rtl 生成（EPUB/KEPUB 的 spine、KFX 的 `$560`）；
+/// 判成国漫或没有 info 时照原书（CBZ 没写方向），指纹回到不判日漫时的值。
+#[test]
+fn bangumi_japanese_comic_builds_rtl_and_others_stay_as_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let dev = common::dev_dir(&lib_dir);
+    for m in ["kindle", "ireader", "hanvon"] {
+        std::fs::create_dir_all(dev.join(m).join("Internal Storage")).unwrap();
+    }
+    std::fs::create_dir_all(dev.join("usbms/KOBOeReader")).unwrap();
+
+    let cbz = dir.path().join("日漫 - 01卷.cbz");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&cbz).unwrap());
+        for i in 0..3 {
+            z.start_file(
+                format!("{i:02}.jpg"),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            z.write_all(&jpeg(400, 600)).unwrap();
+        }
+        z.finish().unwrap();
+    }
+    let Added::New(mut m) = lib.add_file(&cbz).unwrap() else {
+        panic!()
+    };
+    assert_eq!(m.comic, Some(true));
+    let meta_path = lib.root().join("masters").join(&m.id).join("meta.json");
+    let write_meta = |m: &library::Meta| {
+        std::fs::write(&meta_path, serde_json::to_vec_pretty(m).unwrap()).unwrap();
+    };
+
+    let ireader = profile::get("ireader").unwrap();
+    let base_fp = lib.fingerprint(&m, ireader).unwrap();
+    m.info = Some(BookInfo {
+        source: "Bangumi https://bgm.tv/subject/1".into(),
+        region: Some("日本".into()),
+        ..Default::default()
+    });
+    write_meta(&m);
+    let jp_fp = lib.fingerprint(&m, ireader).unwrap();
+    assert_ne!(base_fp, jp_fp, "判成日漫的书指纹要带上方向标记");
+
+    let spine_direction = |path: &Path| {
+        let entries = bookconv::epubzip::read_entries(&std::fs::read(path).unwrap()).unwrap();
+        let opf = entries.iter().find(|e| e.name.ends_with(".opf")).unwrap();
+        bookconv::direction::spine_direction(&String::from_utf8_lossy(&opf.data))
+    };
+    let kfx_direction = |path: &Path| {
+        let c = kfx::Container::parse(&std::fs::read(path).unwrap()).unwrap();
+        let doc = c
+            .entities
+            .iter()
+            .filter(|e| e.ty == kfx::yj::T_DOCUMENT_DATA)
+            .map(|e| format!("{:?}", e.value().unwrap()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            doc.contains(&format!(
+                "({}, Symbol({}))",
+                kfx::yj::DOC_DIRECTION,
+                kfx::yj::DIR_RTL
+            )),
+            "KFX 文档数据应是从右往左：{doc}"
+        );
+    };
+
+    for dev_id in ["ireader", "kobo", "kindle", "hanvon"] {
+        let Built::Written { path, .. } =
+            lib.build(&m, profile::get(dev_id).unwrap(), false).unwrap()
+        else {
+            panic!("{dev_id} 第一次应生成")
+        };
+        if dev_id == "kindle" {
+            kfx_direction(&path);
+        } else {
+            assert_eq!(
+                spine_direction(&path),
+                Some(bookconv::direction::PageDirection::Rtl),
+                "{dev_id} 的 spine 应是 rtl"
+            );
+        }
+    }
+
+    // 国漫：不改原书（CBZ 没写方向），指纹回到不判日漫时的值
+    m.info = Some(BookInfo {
+        source: "Bangumi https://bgm.tv/subject/2".into(),
+        region: Some("中国".into()),
+        ..Default::default()
+    });
+    write_meta(&m);
+    assert_eq!(lib.fingerprint(&m, ireader).unwrap(), base_fp);
+    let Built::Written { path, .. } = lib.build(&m, ireader, false).unwrap() else {
+        panic!("国漫应重新生成")
+    };
+    assert_eq!(spine_direction(&path), None, "国漫照原书（没有 rtl）");
+
+    // 没有 info（meta --fetch --clear 之后）：也回到基线
+    m.info = None;
+    write_meta(&m);
+    assert_eq!(lib.fingerprint(&m, ireader).unwrap(), base_fp);
+
+    // 2026-11-10 审查阻断 2：Bangumi 判成国漫、原书 OPF 写了 rtl 的，照原书（不改回 ltr）
+    let epub = dir.path().join("国漫.epub");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&epub).unwrap());
+        z.start_file("mimetype", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(b"application/epub+zip").unwrap();
+        z.start_file(
+            "META-INF/container.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        z.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        z.start_file(
+            "OEBPS/content.opf",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        z.write_all(r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:cn-comic-rtl</dc:identifier><dc:title>国漫</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject><meta property="dcterms:modified">2026-11-10T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="img" href="p1.jpg" media-type="image/jpeg"/></manifest><spine page-progression-direction="rtl"><itemref idref="p1"/></spine></package>"#.as_bytes()).unwrap();
+        z.start_file("OEBPS/nav.xhtml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="p1.xhtml">第1页</a></li></ol></nav></body></html>"#.as_bytes()).unwrap();
+        z.start_file("OEBPS/p1.xhtml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>第1页</title></head><body><img src="p1.jpg" alt=""/></body></html>"#.as_bytes()).unwrap();
+        z.start_file("OEBPS/p1.jpg", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(&jpeg(400, 600)).unwrap();
+        z.finish().unwrap();
+    }
+    let Added::New(mut cn) = lib.add_file(&epub).unwrap() else {
+        panic!("应是新书")
+    };
+    assert_eq!(cn.comic, Some(true), "标了「漫画」");
+    cn.info = Some(BookInfo {
+        source: "Bangumi https://bgm.tv/subject/3".into(),
+        region: Some("中国".into()),
+        ..Default::default()
+    });
+    std::fs::write(
+        lib.root().join("masters").join(&cn.id).join("meta.json"),
+        serde_json::to_vec_pretty(&cn).unwrap(),
+    )
+    .unwrap();
+    let Built::Written { path, .. } = lib
+        .build(&cn, profile::get("ireader").unwrap(), false)
+        .unwrap()
+    else {
+        panic!("国漫第一次应生成")
+    };
+    assert_eq!(
+        spine_direction(&path),
+        Some(bookconv::direction::PageDirection::Rtl),
+        "Bangumi 判成国漫、原书写了 rtl：照原书，不改回 ltr"
     );
 }

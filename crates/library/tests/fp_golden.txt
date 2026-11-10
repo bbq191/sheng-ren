@@ -116,6 +116,8 @@ hanvon	comic_dark_bg	text	<sha>|-|-|5|66|jump#<|hanvon|1072x1448bt0.754Mktu42@10
 hanvon	comic_dark_bg	comic	<sha>|-|-|5c2|c65|jump#<|hanvon|1072x1448c1072x1448+1bt0.754MG1.1ASP|gray|epub
 hanvon	image_gamma	text	<sha>|-|-|5|66|jump#<|hanvon|1072x1448bt0.754Mktu42@1072x1448|gray|epub
 hanvon	image_gamma	comic	<sha>|-|-|5c2|c65|jump#<|hanvon|1072x1448c1072x1448+1bt0.754MG1.1ASPK|gray|epub
+hanvon	comic_meta_direction	text	<sha>|-|-|5|66|jump#<|hanvon|1072x1448bt0.754Mktu42@1072x1448G1.1|gray|epub
+hanvon	comic_meta_direction	comic	<sha>|-|-|5c2|c65|jump#<|hanvon|1072x1448c1072x1448+1bt0.754MG1.1ASPK|gray|epub
 kindle	none	text	<sha>|-|-|5|66|jump#<|kindle|1104x1546bt0.65katG1.1|gray|kfx25@1272x1696r1104x1546
 kindle	none	comic	<sha>|-|-|5c2|c65|jump#<|kindle|1104x1546c1272x1696+1fbt0.65G1.1ASPK|gray|kfx25@1272x1696r1104x1546
 kindle	color	text	<sha>|-|-|5|66|jump#<|kindle|1104x1546bt0.65katG1.1|color|kfx25@1272x1696r1104x1546
@@ -234,6 +236,8 @@ kindle	comic_dark_bg	text	<sha>|-|-|5|66|jump#<|kindle|1104x1546bt0.65katG1.1|gr
 kindle	comic_dark_bg	comic	<sha>|-|-|5c2|c65|jump#<|kindle|1104x1546c1272x1696+1fbt0.65G1.1ASP|gray|kfx25@1272x1696r1104x1546
 kindle	image_gamma	text	<sha>|-|-|5|66|jump#<|kindle|1104x1546bt0.65kat|gray|kfx25@1272x1696r1104x1546
 kindle	image_gamma	comic	<sha>|-|-|5c2|c65|jump#<|kindle|1104x1546c1272x1696+1fbt0.65G1.1ASPK|gray|kfx25@1272x1696r1104x1546
+kindle	comic_meta_direction	text	<sha>|-|-|5|66|jump#<|kindle|1104x1546bt0.65katG1.1|gray|kfx25@1272x1696r1104x1546
+kindle	comic_meta_direction	comic	<sha>|-|-|5c2|c65|jump#<|kindle|1104x1546c1272x1696+1fbt0.65G1.1ASPK|gray|kfx25@1272x1696r1104x1546
 ireader	none	text	<sha>|-|-|5|66|popup#<|ireader|1440x1920bnrt0.754Mktu42hiDevicePx1104x39m6fb070229ebba21d@1440x1920G1.1|gray|epub
 ireader	none	comic	<sha>|-|-|5c2|c65|popup#<|ireader|1440x1920c1440x1920+1bnrt0.754MG1.1ASPK|gray|epub
 ireader	color	text	<sha>|-|-|5|66|popup#<|ireader|1440x1920bnrt0.754Mktu42hiDevicePx1104x39m6fb070229ebba21d@1440x1920G1.1|color|epub
@@ -352,6 +356,8 @@ ireader	comic_dark_bg	text	<sha>|-|-|5|66|popup#<|ireader|1440x1920bnrt0.754Mktu
 ireader	comic_dark_bg	comic	<sha>|-|-|5c2|c65|popup#<|ireader|1440x1920c1440x1920+1bnrt0.754MG1.1ASP|gray|epub
 ireader	image_gamma	text	<sha>|-|-|5|66|popup#<|ireader|1440x1920bnrt0.754Mktu42hiDevicePx1104x39m6fb070229ebba21d@1440x1920|gray|epub
 ireader	image_gamma	comic	<sha>|-|-|5c2|c65|popup#<|ireader|1440x1920c1440x1920+1bnrt0.754MG1.1ASPK|gray|epub
+ireader	comic_meta_direction	text	<sha>|-|-|5|66|popup#<|ireader|1440x1920bnrt0.754Mktu42hiDevicePx1104x39m6fb070229ebba21d@1440x1920G1.1|gray|epub
+ireader	comic_meta_direction	comic	<sha>|-|-|5c2|c65|popup#<|ireader|1440x1920c1440x1920+1bnrt0.754MG1.1ASPK|gray|epub
 kobo	none	text	<sha>|-|-|5|66|jump#<|kobo|1072x1448bktu42@1072x1448G1.1|gray|kepub2
 kobo	none	comic	<sha>|-|-|5c2|c65|jump#<|kobo|1072x1448c1072x1448+1fFbG1.1ASPK|gray|kepub2
 kobo	color	text	<sha>|-|-|5|66|jump#<|kobo|1072x1448bktu42@1072x1448G1.1|color|kepub2
@@ -470,3 +476,5 @@ kobo	comic_dark_bg	text	<sha>|-|-|5|66|jump#<|kobo|1072x1448bktu42@1072x1448G1.1
 kobo	comic_dark_bg	comic	<sha>|-|-|5c2|c65|jump#<|kobo|1072x1448c1072x1448+1fFbG1.1ASP|gray|kepub2
 kobo	image_gamma	text	<sha>|-|-|5|66|jump#<|kobo|1072x1448bktu42@1072x1448|gray|kepub2
 kobo	image_gamma	comic	<sha>|-|-|5c2|c65|jump#<|kobo|1072x1448c1072x1448+1fFbG1.1ASPK|gray|kepub2
+kobo	comic_meta_direction	text	<sha>|-|-|5|66|jump#<|kobo|1072x1448bktu42@1072x1448G1.1|gray|kepub2
+kobo	comic_meta_direction	comic	<sha>|-|-|5c2|c65|jump#<|kobo|1072x1448c1072x1448+1fFbG1.1ASPK|gray|kepub2

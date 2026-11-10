@@ -4,8 +4,9 @@
 //! 指定方向（`OptimizeOpts::page_direction`），由这里把属性写进 OPF。只动 `<spine>` 开标签上这一个属性，
 //! OPF 其余字节原样——不改书的内容（规范白皮书 §2 底线 1）。
 //!
-//! 不自动判：漫画识别（`comic_detect`）只能看出"是漫画"，看不出"是日漫"——国漫、美漫是从左往右，
-//! 自动设 rtl 会把它们翻反（规范白皮书 §4.6）。
+//! **优化器自己不自动判**：漫画识别（`comic_detect`）只能看出"是漫画"，看不出"是日漫"——国漫、美漫是从左往右，
+//! 自动设 rtl 会把它们翻反（规范白皮书 §4.6）。书库按联网元数据按书指定（Bangumi 判成日本漫画的写 rtl，
+//! `library::metadata::comic_direction`，2026-11-10），优化器只管把值写进 OPF。
 use crate::html;
 
 /// 书的翻页方向（EPUB 3 `page-progression-direction` 的两个显式值；`default` 与缺省按 `Ltr` 以外的"未写"处理）。
