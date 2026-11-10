@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-spread-split
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/comic-spread-split（从最新 master 切出；须在 2026-11-10-manga-rtl-bangumi 合并之后）
-- 更新时间: 2026-11-10T13:45+08:00
+- 更新时间: 2026-11-10T14:05+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 C 节）
 
 ## 需求原文
@@ -178,5 +178,11 @@
     - 共用图只统计 xhtml 里的 `<img>` / `<image>`，CSS `background-image` 引用同一张图的不算（漫画书里少见）
     - 新 itemref 不带原页 itemref 上 `page-spread-*` 以外的 `properties`（如单页 `rendition:layout-pre-paginated`）；四台输出整书版式一致，目前没影响
     - 上一轮的「开关关着测试只比页数」「CBZ 只测 ltr」没补测试；box 上已用 master 二进制证明开关关着逐字节相同
-- 二审：待 vinci 跑 agy（范围 `a02315d..<本次复验提交>`）
+- 二审：agy 回执 `.dev/tasks/2026-11-10-comic-spread-split.agy.md`（`f07e594`，范围 `a02315d..3187396`）**无阻断**。负责 bot 逐条核对了引用位置（`imgopt.rs:1182-1190`、`streaming.rs:798-800 / 833-837 / 859-884 / 914-916 / 939-944 / 1034-1036 / 1047-1053 / 1128-1187`、`fingerprint.rs:117-123`），都对得上：
+  - 建议 1（`find_close` 遇畸形 OPF 可能配错、「找不到结束标签返回 None」没单测）：不阻断，和复验时记的一样。改成 `find_matching_close` 对 itemref 帮助不大（itemref 不嵌套，原页开始标签没闭合时两种找法都可能配到后面那个），OPF 本身已不合法；记下不改
+  - 建议 2（新 itemref 只继承 `linear`，不继承其余 `properties`）：不阻断。四台产物的固定版式 / 流式都是整书声明，单页 `properties` 目前没影响；记下不改
+  - 线索 1（共用图统计不看 CSS `background-image`）：不阻断，漫画纯图页都是 `<img>`；记下
+  - 线索 2（半张裁白边后变成装饰小图、`image_dims` 仍记画布 → 可能拉伸）：box 上复现不出来。合成书 b6（Kobo，2801×2000 跨页，左半除一个 200×200 小块外全白）和同样稀疏的单页：本分支产物两半和单页都是 1072×1448 画布，没有走装饰小图分支；而且同一套「按原图头尺寸记 `image_dims`、裁边后再判小图」的写法 master 上单页就有（`streaming.rs:249-254`），不是本单引入的。不阻断
+  - 未核实项（没跑 cargo、真机、真书回归）：cargo test / clippy / fmt 复验时 box 上已跑；真机和真书回归按 PRD 留到 B/C/D 都合并后统一 sync 时看
+- 结论：verified，`--no-ff` 合并 master（合并提交号见 master 日志 `merge: 漫画横向跨页拆成两张竖页`）
 - 合并：
