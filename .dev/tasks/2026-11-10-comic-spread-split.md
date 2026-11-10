@@ -5,7 +5,7 @@
 - 状态: pending
 - 执行方: opencode-local
 - 分支: feat/comic-spread-split（从最新 master 切出；须在 2026-11-10-manga-rtl-bangumi 合并之后）
-- 更新时间: 2026-11-10T10:30+08:00
+- 更新时间: 2026-11-10T10:40+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 C 节）
 
 ## 需求原文
@@ -33,12 +33,12 @@
   - `docs/typesetting.md`（漫画一节加「跨页拆分」）、`docs/devices.md`（新键一行）、`docs/decisions.md`（一行）、`docs/development.md#版本号`（COMIC_VERSION 现值 66）
 
 ## 约束
-- 不做：不旋转；不保留整张跨页（拆完原图不再出现在阅读顺序里）；不找装订线、不按内容挪切口；不拆封面；不做条漫；不改 CBZ 转换（`convert/`）、不改 KFX / KEPUB 写出器；不改 install.sh
+- 不做：不旋转；不保留整张跨页（拆完原图不再出现在阅读顺序里，vinci 2026-11-10 定）；不找装订线、不按内容挪切口；不拆封面；不做条漫；不改 CBZ 转换（`convert/`）、不改 KFX / KEPUB 写出器；不改 install.sh
 - 跨页判定（全部满足才拆）：
   1. 书是漫画（`is_comic_book`），profile 开了 `comic_split_spreads`
   2. 这一页是纯图页（`comicfxl::image_only`），只引用一张图
-  3. 图摆正（EXIF）后 `宽 / 高 ≥ 1.2`（常量 `SPREAD_MIN_ASPECT = 1.2`，注释：单页约 0.65–0.75、跨页约 1.3–1.5；1.0–1.2 的宽页不拆，照旧整张缩放）
-  4. 不是封面：不是 spine 第一页，也不是 OPF 封面图（`properties="cover-image"` 或 `<meta name="cover">` 指的图）
+  3. 图摆正（EXIF）后 `宽 / 高 ≥ 1.2`（常量 `SPREAD_MIN_ASPECT = 1.2`，vinci 2026-11-10 确认；注释：单页约 0.65–0.75、跨页约 1.3–1.5；1.0–1.2 的宽页不拆，照旧整张缩放）
+  4. 不是封面：不是 spine 第一页，也不是 OPF 封面图（`properties="cover-image"` 或 `<meta name="cover">` 指的图）；包封式宽封面（背面 + 书脊 + 正面）也整张保留，不拆、不只取正面（vinci 2026-11-10 定）
   5. 不是装饰小图（短边 < 阅读范围宽 1/3 的，同 `prepare_comic_page_limited` 的现有规则）
   6. 动图（多帧 GIF / 动画 WebP）不拆
 - 拆法：正中竖线切开，左半宽 `w/2`（向下取整），右半宽 `w - w/2`。最终方向是 rtl → 右半在前，否则左半在前。两半各自走完整的现有漫画处理（裁白边、杂点、拉对比度、伽马、黑底、缩放补白、格式）；**两半不参加页码投票、不裁页码**（`cut_bottom = None`）
