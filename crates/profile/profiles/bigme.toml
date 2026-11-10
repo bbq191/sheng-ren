@@ -1,0 +1,50 @@
+# Bigme B7 Pro 黑白版（自带 xReader）。7" E Ink Carta 1300，1264×1680，300 ppi，黑白，Android 14（Bigme OS 5.0）。
+# 来源：Root-Nation B7 Pro BW 评测、Read with Pro 规格页（1680×1264 / 300 ppi / 黑白）、Android Blog Italia 评测（Carta 1300）；
+# 2026-11-10 真机 wm size 1264×1680、密度 300、ro.product.model = HiBreak，与公开资料一致。
+# 2026-11-10 上真机：阅读范围、书架封面、漫画版式、投递已核对；正文字号/行高、注释弹窗、伽马待测。
+name = "Bigme 自带阅读器（B7 Pro 黑白版）"
+color = false                      # 来源：公开参数和真机，黑白屏（彩色版 B7 Pro 才是 Kaleido 3）
+formats = ["epub"]                 # 约束：只出 EPUB
+notes = "jump"                     # 推断：同 kobo（xReader 弹窗注释待真机测）
+note_icons = "number"              # 推断：同另几台（最稳）
+caption_fit = true                 # 推断：同另几台（待确认）
+text_repair_only = true            # 维护者 2026-10-08 定的统一规则，沿用
+kindle_rules = true                # 推断：照「以 Kindle 为准」统一（待确认，xReader 怪癖要真机测）
+comic_gamma = 1.1                  # 沿用 kobo 的取值（待真机比）
+image_gamma = 1.1                  # 沿用 kobo 的取值（待真机比）
+comic_autocontrast = true          # 沿用 kobo
+comic_trim_specks = true           # 沿用 kobo
+comic_page_numbers = true          # 沿用 kobo
+comic_dark_bg = true               # 沿用 kobo
+comic_margin = 1                   # 沿用 kobo
+comic_split_spreads = true         # 2026-11-10 维护者定：竖屏只拆跨页、不旋转；没上真机
+comic_meta_direction = true        # 2026-11-10 维护者定：Bangumi 判成日本漫画的按 rtl 生成；xReader 不认 spine 的 rtl，翻页方向要在阅读器设置里改（eink-settings）
+comic_fixed_layout = true          # 2026-11-10 真机（方案 D）：固定版式比流式约大 10%，标记范围 1105×1532
+comic_fixed_layout_percent = true  # 同上（方案 D）：比例合画布的 img 100%×100%，否则 max-width/max-height；html/body 高度链 100%
+# comic_page_direction 不写：照原书 rtl（xReader 不认 spine 方向，点左侧不翻页，要去阅读器设置里改）
+# comic_gutter_crop 不写：缺省关，等 Kindle A/B
+background_images = true           # 推断：沿用（待确认）
+# cover_thumb_aspect、cover_meta_thumb 都不写：2026-11-10 真机书架网格框 240×296（≈0.81），封面保持原比例、按框宽缩放、顶部对齐；
+# 0.75 / 1.00 的封面比框矮、下面留白，0.50 的上下被裁。封面来源探针是 C＝正文第一页，xReader 不认 cover-image / meta cover，eink-thumb 不管用。
+# 让正文第一页的封面做成 0.81 会改书里的封面页，待定，本次不做。
+
+[screen]                           # 来源：公开资料 1680×1264（竖屏写成宽 1264、高 1680）；2026-11-10 真机 wm size 核对
+width = 1264
+height = 1680
+
+# 2026-11-10 真机测量（xReader，默认页边距）：竖长黑块 357×1424（上留 96、下留 160 含页脚），横宽黑块 1069×268（左 96、右 99）。
+# readable-measure 曾报 1145×952，是把左侧笔工具栏边框算进了黑块，已避开工具栏手工校正。改了页边距要重测。
+[readable.epub]
+width = 1069
+height = 1424
+
+# 2026-11-10 真机（方案 D）：固定版式画布 1264×1680，整屏；设备把页缩到标记范围约 1105×1532，只给页脚留空，不裁不拉伸。
+[comic_readable]
+width = 1264
+height = 1680
+
+# MTP（安卓设备）：jmtpfs 自动挂到 $XDG_RUNTIME_DIR/mtp/<mount>，产物放进存储根目录的 dir
+[deliver]
+kind = "mtp"
+mount = "bigme"                    # 缺省挂载点 $XDG_RUNTIME_DIR/mtp/bigme；2026-11-10 真机 jmtpfs 挂在 ~/Devices/Bigme
+dir = "books"                      # 2026-11-10 真机确认：xReader 书架认存储根下 Books/，子目录里的书也进书库；安卓存储不分大小写

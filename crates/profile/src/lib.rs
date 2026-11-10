@@ -1,6 +1,7 @@
-//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在内置四份，都按设备自带的阅读器量（见 docs/devices.md）：
+//! 设备 profile（阅读模式）：目标阅读器的屏幕、真实可阅读范围、黑白彩色。现在内置五份，都按设备自带的阅读器量（见 docs/devices.md）：
 //! `kindle`（Kindle PW12 签名版，KFX）、`ireader`（掌阅 Air 3 Pro，EPUB）、`kobo`（Kobo Clara BW，KEPUB，2026-11-01 预配置、未上真机）、
-//! `hanvon`（汉王 Clear 6 Turbo，EPUB，2026-11-06 上真机核对阅读范围、封面、漫画版式、投递）。
+//! `hanvon`（汉王 Clear 6 Turbo，EPUB，2026-11-06 上真机核对阅读范围、封面、漫画版式、投递）、
+//! `bigme`（Bigme B7 Pro 黑白版，EPUB，2026-11-10 上真机核对阅读范围、书架、漫画版式、投递）。
 //!
 //! 算法里不写死屏幕数字，一律从 profile 读。`[screen]` 是设备**标称**分辨率；优化时用的是
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
@@ -1164,7 +1165,7 @@ mod tests {
     #[test]
     fn builtin_profiles_parse() {
         let ids: Vec<_> = Registry::builtin().iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, ["hanvon", "ireader", "kindle", "kobo"]);
+        assert_eq!(ids, ["bigme", "hanvon", "ireader", "kindle", "kobo"]);
         let k = get("kindle").unwrap();
         let i = get("ireader").unwrap();
         assert_eq!(
@@ -1255,6 +1256,37 @@ mod tests {
             (None, None),
             "漫画都照书的翻页方向（掌阅往右翻的书要在阅读器里选「漫画」排版才铺满，2026-10-15）"
         );
+        let b = get("bigme").unwrap();
+        assert_eq!(
+            b.deliver,
+            Some(Deliver::Mtp {
+                mount: "bigme".into(),
+                dir: "books".into()
+            }),
+            "Bigme：MTP，产物放存储根下 books/"
+        );
+        assert_eq!(
+            (b.screen.width, b.screen.height, b.color, b.format()),
+            (1264, 1680, false, Format::Epub),
+            "Bigme B7 Pro 黑白版真机 wm size；只出 EPUB"
+        );
+        assert_eq!(
+            b.output_readable(),
+            Screen {
+                width: 1069,
+                height: 1424
+            },
+            "Bigme 文字书阅读范围（2026-11-10 真机，xReader 默认页边距）"
+        );
+        assert!(
+            b.comic.fixed_layout && b.comic.fixed_layout_percent,
+            "Bigme 漫画用固定版式方案 D（2026-11-10 真机比流式大约大 10%）"
+        );
+        assert_eq!(
+            b.cover_thumb_aspect, None,
+            "Bigme 书架取正文第一页，不写缩略图比例"
+        );
+        assert!(!b.cover_meta_thumb, "Bigme 书架不认 eink-thumb");
         assert!(get("nope").is_none());
         assert!(
             get("xochitl").is_none(),
@@ -1266,7 +1298,7 @@ mod tests {
     /// 掌阅没上真机比过，先跟 kindle/kobo/hanvon 一致。
     #[test]
     fn builtin_profiles_share_comic_quality() {
-        for id in ["kindle", "ireader", "kobo", "hanvon"] {
+        for id in ["kindle", "ireader", "kobo", "hanvon", "bigme"] {
             let p = get(id).unwrap();
             assert!(
                 p.comic.autocontrast
@@ -1282,7 +1314,7 @@ mod tests {
     /// 2026-11-10 维护者定：四台都拆横向跨页（竖屏只拆、不旋转）。
     #[test]
     fn builtin_profiles_split_comic_spreads() {
-        for id in ["kindle", "ireader", "kobo", "hanvon"] {
+        for id in ["kindle", "ireader", "kobo", "hanvon", "bigme"] {
             assert!(get(id).unwrap().comic.split_spreads, "{id}");
         }
     }
@@ -1290,7 +1322,7 @@ mod tests {
     /// 2026-11-10 维护者定：四台都按 Bangumi 元数据把日本漫画写成 rtl（掌阅也开，阅读器里要每本选一次「漫画」排版）。
     #[test]
     fn builtin_profiles_take_comic_direction_from_metadata() {
-        for id in ["kindle", "ireader", "kobo", "hanvon"] {
+        for id in ["kindle", "ireader", "kobo", "hanvon", "bigme"] {
             let p = get(id).unwrap();
             assert!(
                 p.comic.meta_direction,
@@ -1497,7 +1529,7 @@ mod tests {
             Registry::builtin().iter().count() - 1,
             "只少停用的那个"
         );
-        for id in ["kindle", "kobo", "hanvon"] {
+        for id in ["bigme", "kindle", "kobo", "hanvon"] {
             assert!(r.get(id).is_some(), "{id} 还在");
         }
     }
