@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-manga-rtl-bangumi
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
-- 更新时间: 2026-11-10T13:05+08:00
+- 更新时间: 2026-11-10T13:30+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 B 节）
 
 ## 需求原文
@@ -122,8 +122,8 @@
 - 返工代码：`a1c4bdb`（4 个文件：`metadata.rs`、`generate.rs`、`flow.rs`、`docs/usage.md`）。
 - **阻断 1（旧 Bangumi 记录重找死循环）**：
   - `fetch_metadata_inner` 拆出 `fetch_metadata_with_chain`（测试可换假网站）；重找进 `NotFound` 分支时，如果现有 `m.info` 是 Bangumi 且 `region.is_none()`，记成 `Some(String::new())` 并存下，`needs_metadata` 随即变 false。网络出错（`Failed` / `Err`）不记，下次再试。
-  - `series_lookup` 选同一套别的卷时先选 `info.region.is_some()` 的（再按 `info_checked == LOOKUP_VERSION`、再其余）；抄过来的旧 Bangumi info 也没 region 时记成 `Some("")`。`series_lookup` 的「同一套找过、没找到」分支同样把现有 Bangumi info 记成 `Some("")`。
-  - 测试：`metadata::tests::bangumi_not_found_marks_region_checked`（旧 Bangumi 记录 region None → 假网站 NotFound → 存成 `Some("")`、`needs_metadata` false、再判不联网）；`metadata::tests::series_lookup_prefers_info_with_region`（两卷，一卷旧但记了地区、一卷新但没记，抄到的是有地区的；两卷都没地区时抄成 `Some("")` 后不再重找）。
+  - `series_lookup` 选同一套别的卷时先选 `info.region.is_some()` 的（再按 `info_checked == LOOKUP_VERSION`、再其余）；抄过来的旧 Bangumi info 没 region 时原样抄（**第 2 轮返工修正**：原来记 `Some("")` 会把新卷永久判成判不出）。`series_lookup` 的「同一套找过、没找到」分支仍把现有 Bangumi info 记成 `Some("")`。
+  - 测试：`metadata::tests::bangumi_not_found_marks_region_checked`（旧 Bangumi 记录 region None → 假网站 NotFound → 存成 `Some("")`、`needs_metadata` false、再判不联网）；`metadata::tests::series_lookup_prefers_info_with_region`（两卷，一卷旧但记了地区、一卷新但没记，抄到的是有地区的；两卷都没地区时原样抄 None、下一轮重找，01 卷改出地区后再抄到）。
 - **阻断 2（国漫原书 rtl 没测试）**：`flow::bangumi_japanese_comic_builds_rtl_and_others_stay_as_is` 末尾加一本合成 EPUB 漫画：OPF `<spine page-progression-direction="rtl">`、`dc:subject`「漫画」，`info` 写 Bangumi + 地区「中国」，生成 ireader 后读回 spine 仍是 rtl。
 - **建议（三条都做了）**：
   - `comic_direction(meta, device, comic)` 改收 `Library::comic_of` 算出的布尔；`plan()` 里把 `comic_of` 提前到指纹计算前，`produce()` 也取同一个结果，早期条目 `Meta::comic` 是 `None` 时也不漏。
@@ -131,6 +131,18 @@
   - 「结果」的 base..head 改成 `0fc241a..HEAD`，不再写死旧提交号。
 - 测试：`cargo test --workspace` 全过（library 69 单元 + 45 flow + 其余；0 失败）；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。没跑真书回归、没上真机。
 - 偏离：返工没有新增「涉及文件」以外的文件（`fetch_metadata_with_chain`、新测试都在 `metadata.rs` / `flow.rs`）。
+
+### 返工（第 2 轮，2026-11-10）
+
+- 接受返工：`f4ef7a0`（状态改回 accepted）。
+- 返工代码：`59ac135`（`metadata.rs`）。
+- **阻断 3（抄来的旧 info 被记成判不出）**：
+  - 删掉 `series_lookup` 里「抄来的 info 没地区就记 `Some("")`」那段：现在原样抄，`region` 仍是 `None`。下一次 `sync` 这一卷 `needs_metadata` 为 true，新一轮开始时 `series_fetched` 为 false，会自己 force 联网重找；拿到 Found（有地区）或 NotFound（记 `Some("")`）都会停，不会死循环。
+  - 「同一套这一版没找到」分支保持原样：这一卷自己有 info、同一套都没找到，才记 `Some("")`。
+  - `series_lookup_prefers_info_with_region` 后半段改成：两卷都没地区时抄来仍 `None`、`needs_metadata` true；再把 01 卷改成「日本」后重新 `series_lookup`，02 卷抄到「日本」。
+- **建议（网络出错测试）**：`Fake` 加 `transient: Option<&'static str>`，新增 `metadata::tests::bangumi_network_error_keeps_region_for_retry`：假网站报临时错误 → `fetch_metadata_with_chain` 返回 `Err`，`region` 仍 `None`、`needs_metadata` 仍 true（下次再试）。
+- 测试：`cargo test --workspace` 全过（30 + 522 + 16 + 50 + 70 + 7 + 13 + 45 + 1 + 12 = 766 个，0 失败）；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。没跑真书回归、没上真机。
+- 偏离：无（只改 `metadata.rs`）。
 
 ## 审查
 <!-- 负责 bot 填写 -->
