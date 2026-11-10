@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-gutter-crop
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/comic-gutter-crop（2026-11-10 已把 master `d50a889`（含 A 画质统一、B 日漫 rtl、C 跨页拆分）`--no-ff` 合进来：`bdc880f`；在这个分支上接着做，不 rebase）
-- 更新时间: 2026-11-10T15:50+08:00
+- 更新时间: 2026-11-10T16:20+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 D 节）
 
 ## 需求原文
@@ -48,27 +48,27 @@
 - 风险点：漫画规则（有意改漫画产物的新例外，开之前要 vinci 真机看）→ 合并前 agy 二审
 
 ## 分步任务
-1. [ ] `comiccrop.rs`：`pub(crate) fn gutter_bands(px: &[u8], w: u32, h: u32) -> Vec<(u32, u32)>`（灰度平面上的空白带 `[y0, y1)`）和 `pub(crate) fn gutter_cuts(bands, w, h, area) -> Vec<(u32, u32)>`（每条带要删掉的行区间），按「约束」实现。单元测试：
+1. [x] `comiccrop.rs`：`pub(crate) fn gutter_bands(px: &[u8], w: u32, h: u32) -> Vec<(u32, u32)>`（灰度平面上的空白带 `[y0, y1)`）和 `pub(crate) fn gutter_cuts(bands, w, h, area) -> Vec<(u32, u32)>`（每条带要删掉的行区间），按「约束」实现。单元测试：
    - 三格页（白底，格之间 40px 白带）在 1072×1448 范围下收掉的量 = min(S, T, 15%)，每条带留 ≥ max(0.5% 页高, 4px)
    - 白带里有一条 1px、灰度 246 的淡线：这条带被分成两段或不算（淡线那一行不删）
    - 白带里有一个 1px 的暗点：那一行不算空白
    - 页已经比阅读范围宽（T ≤ 0）：不收
    - 带高 < 1% 页高：不收
    - 页顶、页底的白：不算带
-2. [ ] `imgopt.rs`：`ComicPage` 加 `gutter_crop: bool`（`streaming.rs` 里跨页两半用的 `ComicPage` 也要传）；在 `process_comic_page` 里裁白边、黑底判定、装饰小图分支之后，`!bg` 且灰度内容时按 `gutter_cuts` 把这些行删掉（拼接剩下的行），再照常对比度 / 伽马 / 缩放补白。开关关着时代码路径和现在完全一样
-3. [ ] `optimize/mod.rs`、`profile/src/lib.rs`：新键、`OptimizeOpts::comic_gutter_crop`、COMIC_VERSION 加一；`epub_optimize.rs` 加 `--gutter-crop`（usage、文件头注释一起改）
-4. [ ] `optimize/tests.rs`：合成漫画书一页（白底三格），开 / 关各跑一遍：关的产物和现在逐字节相同；开的那页图里格的画面比关的大（量格的高度，结果里写数字）；再加一张 1600×1100 的白底多格跨页，开了以后照常拆成两页、两半都收了空白带
-5. [ ] `fingerprint.rs` 新字母；`fp_golden.rs` 加 mutation；`UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden`；`git diff`：漫画行只因 COMIC_VERSION 变，文字书行 0 变化
-6. [ ] 文档：`docs/typesetting.md`（新一节，写清三道兜底）、`docs/devices.md`（新键一行，四台「不开，待真机比」）、`docs/decisions.md`（一行：2026-11-10 维护者要裁格间空白，先 A/B）、`docs/development.md#版本号`
-7. [ ] 在「结果」里写好给 vinci 本机出 A/B 测试书的 fish 命令（《迷宮飯》《死亡筆記》各一卷，只出 Kindle：`epub-optimize --device=kindle 书.epub 关.epub`、`epub-optimize --device=kindle --gutter-crop 书.epub 开.epub`，再各转 KFX），**不自己上设备**
-8. [ ] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
+2. [x] `imgopt.rs`：`ComicPage` 加 `gutter_crop: bool`（`streaming.rs` 里跨页两半用的 `ComicPage` 也要传）；在 `process_comic_page` 里裁白边、黑底判定、装饰小图分支之后，`!bg` 且灰度内容时按 `gutter_cuts` 把这些行删掉（拼接剩下的行），再照常对比度 / 伽马 / 缩放补白。开关关着时代码路径和现在完全一样
+3. [x] `optimize/mod.rs`、`profile/src/lib.rs`：新键、`OptimizeOpts::comic_gutter_crop`、COMIC_VERSION 加一；`epub_optimize.rs` 加 `--gutter-crop`（usage、文件头注释一起改）
+4. [x] `optimize/tests.rs`：合成漫画书一页（白底三格），开 / 关各跑一遍：关的产物和现在逐字节相同；开的那页图里格的画面比关的大（量格的高度，结果里写数字）；再加一张 1600×1100 的白底多格跨页，开了以后照常拆成两页、两半都收了空白带
+5. [x] `fingerprint.rs` 新字母；`fp_golden.rs` 加 mutation；`UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden`；`git diff`：漫画行只因 COMIC_VERSION 变，文字书行 0 变化
+6. [x] 文档：`docs/typesetting.md`（新一节，写清三道兜底）、`docs/devices.md`（新键一行，四台「不开，待真机比」）、`docs/decisions.md`（一行：2026-11-10 维护者要裁格间空白，先 A/B）、`docs/development.md#版本号`
+7. [x] 在「结果」里写好给 vinci 本机出 A/B 测试书的 fish 命令（《迷宮飯》《死亡筆記》各一卷，只出 Kindle：`epub-optimize --device=kindle 书.epub 关.epub`、`epub-optimize --device=kindle --gutter-crop 书.epub 开.epub`，再各转 KFX），**不自己上设备**
+8. [x] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
 
 ## 验收标准
-- [ ] 功能：开了的页只删格间整行空白；淡线、杂点所在的行一行都不删；每条带至少留最小间距；总量不超过 15%、不超过收到阅读范围比例所需
-- [ ] 功能：黑底页、宽度受限的页、小图、彩色页不动
-- [ ] 测试：`cargo test --workspace` 全部通过；clippy 0 警告；第 1、4 步每条都有断言
-- [ ] 不回归：开关关着产物逐字节不变（测试证明）；四台 profile 没开；文字书指纹 0 变化
-- [ ] 「不做」的事确实没做
+- [x] 功能：开了的页只删格间整行空白；淡线、杂点所在的行一行都不删；每条带至少留最小间距；总量不超过 15%、不超过收到阅读范围比例所需
+- [x] 功能：黑底页、宽度受限的页、小图、彩色页不动
+- [x] 测试：`cargo test --workspace` 全部通过；clippy 0 警告；第 1、4 步每条都有断言
+- [x] 不回归：开关关着产物逐字节不变（测试证明）；四台 profile 没开；文字书指纹 0 变化
+- [x] 「不做」的事确实没做
 - [ ] 真机（vinci，合并后）：Kindle 上比《迷宮飯》《死亡筆記》各一卷的 A/B 测试书（vinci 2026-11-10 定），专门看留白构图、无格框的页；比过再另开单定四台开不开
 
 > 2026-11-10 合入 master 后核对（sheng-ren）：需求、约束没变，只按 master 现状改了行号 / 函数名（`process_comic_page`）、COMIC_VERSION 现值（66）、跨页两半也要收（第 4 步多一条断言）。四台缺省不开、只裁横向，同 PRD D 节。
@@ -82,14 +82,54 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
+
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-10 15:50–16:20 +08:00
+- base..head：`origin/master（d50a889）..HEAD`（任务单提交 + `d39026f` accepted + `a9ff5c7` 实现）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  |---|---|---|---|
+  | 接受任务 | `d39026f` | `.dev/tasks/2026-11-10-comic-gutter-crop.md` | 状态改为 accepted |
+  | 1–8 | `a9ff5c7` | `comiccrop.rs`、`imgopt.rs`、`optimize/mod.rs`、`streaming.rs`、`epub_optimize.rs`、`optimize/tests.rs`、`profile/src/lib.rs`、`fingerprint.rs`、`fp_golden`、文档 | 裁格间空白、c67、`L`、CLI、测试和文档 |
+
+- 测试：
+
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  |---|---|---|
+  | `cargo test -p bookconv` | 通过 | 535 个，含 3 个 `comiccrop` 新测试、2 个 optimize 新测试 |
+  | `cargo test -p library` | 通过 | 71 单元 + 13 CLI + 45 flow + fp_golden 全过 |
+  | `cargo test --workspace` | 通过 | 781 个，0 失败 |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden` | 通过 | 漫画行因 c67 全变；文字书旧行 0 变化；新增 `comic_gutter_crop` mutation 8 行 |
+  | `cargo run --release -p bookconv --bin epub-optimize -- --device=kindle --gutter-crop 合成书` | 通过 | CLI 认 `--gutter-crop`，产物 5 页、无报错（合成书没有格间空白，字节和不开相同） |
+
+- 功能检查：
+  - `comiccrop::tests::gutter_bands_and_cuts_three_panels`：800×2000 三格页、40px 空白带、阅读范围 1072×1448 → 三条带各删上下 15px、正中留 10px，总删 90px（min(S,T,15%) 的结果）。
+  - `gutter_line_and_speck_are_not_blank`：空白带里 1px、灰度 246 的淡线和 1px 暗点所在行不删。
+  - `gutter_skips_wide_pages_thin_bands_and_page_edges`：宽度受限（T ≤ 0）、带高 19px（< 1% 页高）、页顶页底的白都不收。
+  - `comic_gutter_crop_enlarges_panels`：800×2000 白底三格，阅读范围 1072×1448；开/关对比第一格高度 **434 → 448px（+14px）**；关着页数不变。
+  - `comic_gutter_crop_works_on_spread_halves`：1600×1100 白底多格跨页，Kobo opts 拆成两页；开/关都是 3 页，开的两半产物页高都变小（两半都收了空白带）。
+  - 黑底页 / 彩色页由 `process_comic_page` 的 `bg.is_none() && is_gray_content()` 门挡住；动图在 `decode_comic` 就原样保留；装饰小图分支在裁空白之前返回；跨页两半照常收（`comic_gutter_crop` 传进两半的 `ComicPage`）。
+- 不回归：`src/profile/profiles/*.toml` 都没动（四台 `comic_gutter_crop` 缺省 false）；开关关着的路径只多一个布尔判断，测试断言页数和格高不变；`fp_golden.txt` 文字书旧行 0 变化。**没跑真书回归、没上真机**；c67 会让漫画重算一次，四台没开，字节应不变、不重传（待本机回归确认）。
+- 给 vinci 本机出 A/B 测试书的 fish 命令（不自己上设备；最后两行路径换成书库实际路径）：
+
+  ```fish
+  function ab-gutter --argument-names book id
+      set stem (string replace -r '\.epub$' '' -- $book)
+      cargo run --release -p bookconv --bin epub-optimize -- --device=kindle $book {$stem}-gutter-off.epub
+      cargo run --release -p bookconv --bin epub-optimize -- --device=kindle --gutter-crop $book {$stem}-gutter-on.epub
+      cargo run --release -p kfx --bin epub-to-kfx -- --id=$id {$stem}-gutter-off.epub {$stem}-gutter-off.kfx
+      cargo run --release -p kfx --bin epub-to-kfx -- --id=(math $id + 1) {$stem}-gutter-on.epub {$stem}-gutter-on.kfx
+  end
+
+  set miyuki ~/Documents/ereader/books/优秀漫画/迷宮飯/迷宮飯\ 卷01.epub
+  set death  ~/Documents/ereader/books/优秀漫画/死亡筆記/死亡筆記\ 卷01.epub
+  ab-gutter $miyuki 9101
+  ab-gutter $death 9201
+  ```
+- 遇到的问题：`1600×1100` 跨页拆出的两半在 Kobo 画布下只收约 19px（比例已经接近画布），测试用「产物页高变小」断言；真机 A/B 看效果。
+- 偏离：无（14 个文件都在「涉及文件」里）。
+- 未完成：真机验证（验收最后一项，合并后 vinci）：Kindle 上比《迷宮飯》《死亡筆記》各一卷 A/B，专门看留白构图、无格框的页；比过再另开单定四台开不开。
 
 ## 审查
 <!-- 负责 bot 填写 -->
