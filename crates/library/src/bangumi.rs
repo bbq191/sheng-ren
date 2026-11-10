@@ -9,6 +9,7 @@
 use crate::matching::{hit_matches, norm_s};
 use crate::metadata::{tags_without_authors, BookInfo, BookSource, Lookup};
 use crate::net::Net;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// 搜索结果里书名、作者对得上的一部作品。
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +23,8 @@ pub(crate) struct Hit {
     pub(crate) summary: String,
     pub(crate) tags: Vec<String>,
     pub(crate) cover: String,
+    /// 作品地区（[`region_of`]）：空串＝判不出、不是漫画或地区词打平。
+    pub(crate) region: String,
 }
 
 impl Hit {
@@ -148,6 +151,7 @@ impl BookSource for Bangumi {
             original_title: h.original.clone(),
             description: h.summary.trim().replace("\r\n", "\n"),
             subjects,
+            region: Some(h.region.clone()),
             ..Default::default()
         })
     }
@@ -172,6 +176,81 @@ fn infobox(item: &serde_json::Value, key: &str) -> String {
             .collect::<Vec<_>>()
             .join("、"),
         _ => String::new(),
+    }
+}
+
+/// 地区词表（2026-11-10 实测 Bangumi 回执）：一个地区可能写在 `meta_tags` 或带 `count` 的 `tags` 里。
+/// 日本：死亡笔记、迷宫饭的 `meta_tags` 有「日本」，哆啦A梦、浪客行的 `tags` 有「日本」；
+/// 中国：一人之下、镖人有「国漫」「中国」；韩国：我独自升级的 `meta_tags` 有「韩国」。台湾、香港、美国照同样写法收着。
+pub(crate) const REGIONS: &[(&str, &[&str])] = &[
+    ("日本", &["日本", "日漫", "日本漫画"]),
+    ("中国", &["中国", "国漫", "国产漫画", "中国漫画"]),
+    ("韩国", &["韩国", "韩漫"]),
+    ("台湾", &["台湾", "台漫"]),
+    ("香港", &["香港", "港漫"]),
+    ("美国", &["美国", "美漫"]),
+];
+
+/// 一个标签是不是地区词：是的话返回地区名。
+fn region_word(name: &str) -> Option<&'static str> {
+    REGIONS
+        .iter()
+        .find(|(_, words)| words.contains(&name.trim()))
+        .map(|(region, _)| *region)
+}
+
+/// 条目的作品地区（2026-11-10 定）：只看 `platform == "漫画"` 的条目，否则空串。
+/// 先看 `meta_tags`：落在词表里的地区恰好一个就用它，两个以上算判不出；没有再看带 `count` 的 `tags`：
+/// 每个地区把它所有词的 count 加起来，最高的唯一才用，并列最高或一个都没有算判不出。判不出都返回空串。
+fn region_of(item: &serde_json::Value) -> String {
+    if item["platform"].as_str() != Some("漫画") {
+        return String::new();
+    }
+    let meta_regions: BTreeSet<&'static str> = item["meta_tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t.as_str())
+        .filter_map(region_word)
+        .collect();
+    match meta_regions.len() {
+        1 => {
+            return meta_regions
+                .into_iter()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        }
+        0 => {}
+        _ => return String::new(),
+    }
+    let mut counts: BTreeMap<&'static str, u64> = BTreeMap::new();
+    for tag in item["tags"].as_array().into_iter().flatten() {
+        let Some(region) = tag["name"].as_str().and_then(region_word) else {
+            continue;
+        };
+        *counts.entry(region).or_default() += tag["count"].as_u64().unwrap_or(0);
+    }
+    let mut best: Option<(&'static str, u64)> = None;
+    let mut tied = false;
+    for (region, count) in counts {
+        if count == 0 {
+            continue;
+        }
+        match best {
+            Some((_, top)) if count < top => {}
+            Some((_, top)) if count == top => tied = true,
+            _ => {
+                best = Some((region, count));
+                tied = false;
+            }
+        }
+    }
+    if tied {
+        String::new()
+    } else {
+        best.map(|(region, _)| region.to_string())
+            .unwrap_or_default()
     }
 }
 
@@ -224,6 +303,7 @@ fn matching_hits(v: &serde_json::Value, nt: &str, want: &[String]) -> Vec<Hit> {
             summary: s("summary"),
             tags,
             cover: x["images"]["large"].as_str().unwrap_or("").to_string(),
+            region: region_of(x),
         };
         // 书名正好对上的（整部作品「哆啦A梦」）排在靠去掉卷次才对上的（单卷「ドラえもん 1」）前面
         let exact = [&hit.title, &hit.original].iter().any(|t| norm_s(t) == nt);
@@ -276,6 +356,111 @@ mod tests {
         assert!(Bangumi
             .matching_hits(&serde_json::json!({"title": "Bad Request"}), "x", &[])
             .is_err());
+    }
+
+    /// 2026-11-10 实测的六个样本：`meta_tags` 和带 count 的 `tags` 都能判出地区。
+    #[test]
+    fn region_from_meta_tags_and_tags() {
+        let samples = [
+            (
+                "死亡笔记",
+                serde_json::json!({
+                    "platform": "漫画",
+                    "meta_tags": ["日本", "推理", "漫画", "已完结"],
+                    "tags": []
+                }),
+                "日本",
+            ),
+            (
+                "迷宫饭",
+                serde_json::json!({
+                    "platform": "漫画",
+                    "meta_tags": ["日本", "漫画"],
+                    "tags": [{"name": "日本", "count": 9}, {"name": "日漫", "count": 3}]
+                }),
+                "日本",
+            ),
+            (
+                "哆啦A梦",
+                serde_json::json!({
+                    "platform": "漫画",
+                    "meta_tags": [],
+                    "tags": [{"name": "日本", "count": 4}, {"name": "科幻", "count": 9}]
+                }),
+                "日本",
+            ),
+            (
+                "浪客行",
+                serde_json::json!({
+                    "platform": "漫画",
+                    "meta_tags": [],
+                    "tags": [{"name": "日本", "count": 2}]
+                }),
+                "日本",
+            ),
+            (
+                "一人之下",
+                serde_json::json!({
+                    "platform": "漫画",
+                    "meta_tags": [],
+                    "tags": [{"name": "国漫", "count": 9}, {"name": "中国", "count": 5}]
+                }),
+                "中国",
+            ),
+            (
+                "我独自升级",
+                serde_json::json!({
+                    "platform": "漫画",
+                    "meta_tags": ["漫画", "韩国", "条漫"],
+                    "tags": [{"name": "韩漫", "count": 9}, {"name": "韩国", "count": 7}, {"name": "条漫", "count": 3}]
+                }),
+                "韩国",
+            ),
+        ];
+        for (name, item, want) in samples {
+            assert_eq!(region_of(&item), want, "{name}");
+        }
+    }
+
+    /// 判不出地区的几种情况：两个地区、count 并列、不是漫画、没有地区词。
+    #[test]
+    fn region_is_empty_when_ambiguous_or_not_manga() {
+        assert_eq!(
+            region_of(&serde_json::json!({
+                "platform": "漫画",
+                "meta_tags": ["日本", "中国"],
+                "tags": []
+            })),
+            "",
+            "meta_tags 同时有日本和中国"
+        );
+        assert_eq!(
+            region_of(&serde_json::json!({
+                "platform": "漫画",
+                "meta_tags": [],
+                "tags": [{"name": "日漫", "count": 3}, {"name": "国漫", "count": 3}]
+            })),
+            "",
+            "两个地区 count 并列最高"
+        );
+        assert_eq!(
+            region_of(&serde_json::json!({
+                "platform": "小说",
+                "meta_tags": ["日本"],
+                "tags": [{"name": "日本", "count": 9}]
+            })),
+            "",
+            "小说条目不算"
+        );
+        assert_eq!(
+            region_of(&serde_json::json!({
+                "platform": "漫画",
+                "meta_tags": ["漫画"],
+                "tags": [{"name": "科幻", "count": 9}]
+            })),
+            "",
+            "没有地区词"
+        );
     }
 
     /// 漫画条目写「原作」「作画」不写「作者」（《死亡笔记》，2026-10-12）：照样认得出作者。

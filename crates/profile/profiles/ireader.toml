@@ -32,9 +32,20 @@ kindle_rules = true
 # 文字书插图当时选 1.3，2026-10-21 改成 1.1、同漫画（只动正文里内容是灰度的插图；「只修复、图片不动」的例外，已定）。Kindle 2026-10-26 也开了，同 1.1（10-27 Kindle 真机比过原样 / 1.1）
 comic_gamma = 1.1
 image_gamma = 1.1
+# 漫画页拉满对比度、裁白边不让杂点挡住、裁掉页码、黑底页补边补底色（2026-11-10 维护者定四台漫画画质处理一致，
+# 同 kindle/kobo/hanvon；掌阅上没真机比过）。算法同 Kindle，见 docs/decisions.md 2026-10-30、2026-11-01
+comic_autocontrast = true
+comic_trim_specks = true
+comic_page_numbers = true
+comic_dark_bg = true
 # 漫画页图到可阅读范围四边留 1px；阅读范围就是整屏，所以离屏幕边缘也是 1px（2026-09-29 要的意思）
 comic_margin = 1
-# 漫画照书的翻页方向（2026-10-15 定：「照书往右翻」；以前一律改成往左翻，2026-09-30）。掌阅遇到往右翻（page-progression-direction="rtl"，
+# 2026-11-10 维护者定：竖屏只拆跨页、不旋转；没上真机
+comic_split_spreads = true
+# 2026-11-10 维护者定：Bangumi 判成日本漫画的按 rtl 生成；Kobo、汉王的 rtl 处理待真机确认。
+# 2026-11-10 vinci 接受：rtl 的书在掌阅里每本选一次「本书自定义 → 排版 → 漫画」才铺满，见 docs/devices.md
+comic_meta_direction = true
+# 漫画照书的翻页方向（2026-10-15 定：「照书往右翻」；以前一律改成往左翻，2026-09-30；Bangumi 判成日本漫画的按 rtl，见上）。掌阅遇到往右翻（page-progression-direction="rtl"，
 # 日漫都这样写）的书，整页图四周按阅读器「排版」设置留边（默认约 70/66、自定义按间距），选「漫画」排版才铺满、和往左翻的书逐像素一样
 # （2026-10-15 真机）。这个设置要维护者在掌阅里对每本往右翻的漫画选一次：本书自定义 → 排版 → 漫画（我们够不到掌阅的设置）。
 

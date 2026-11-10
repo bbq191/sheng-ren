@@ -304,6 +304,15 @@ pub struct ComicPolicy {
     /// ireader 写 `"ltr"`：掌阅遇到从右往左翻的书会四周留边、整页图铺不满（2026-09-30 真机），维护者选了铺满。
     #[serde(rename = "comic_page_direction")]
     pub page_direction: Option<String>,
+    /// 横向跨页拆成两张竖页（TOML `comic_split_spreads`，缺省 `false`）：竖屏只拆、不旋转；右半、左半的顺序照最终
+    /// 翻页方向（rtl 右半先，否则左半先）。2026-11-10 维护者定四台都开。
+    #[serde(rename = "comic_split_spreads")]
+    pub split_spreads: bool,
+    /// 按联网元数据定漫画方向（TOML `comic_meta_direction`，缺省 `false`）：Bangumi 判成日本漫画的书在生成时写成
+    /// `page-progression-direction="rtl"`，其余照原书。只按书写进生成计划（`library::metadata::comic_direction`），
+    /// 不进设备指纹段（免得全部漫画白白重建）；2026-11-10 维护者定四台都开。
+    #[serde(rename = "comic_meta_direction")]
+    pub meta_direction: bool,
     /// 漫画写成固定版式，画布是 `comic_readable`（Kindle：流式版式下阅读器强制留页边距，固定版式才能整页铺满，
     /// 2026-09-30 真机）。见 `bookconv::comicfxl`。
     #[serde(rename = "comic_fixed_layout")]
@@ -328,6 +337,10 @@ pub struct ComicPolicy {
     /// 拉满后黑更实。2026-10-30 Kindle 真机比过现状 / 拉满 + 伽马 1.1 / 只拉满，选拉满 + 伽马。见 `bookconv::imgopt::prepare_comic_page_limited`。
     #[serde(rename = "comic_autocontrast")]
     pub autocontrast: bool,
+    /// 漫画页裁掉格与格之间整行的空白带（TOML `comic_gutter_crop`，缺省 `false`）：只删整行没有比 247 暗的像素的带，
+    /// 淡线、杂点所在的行不删。2026-11-10 维护者要裁，先 A/B；四台 profile 都先不开。
+    #[serde(rename = "comic_gutter_crop")]
+    pub gutter_crop: bool,
     /// 漫画页裁白边不让扫描杂点挡住：裁过白边后，面积很小、离主体内容远的暗点不算内容，再收一次边（白的标准不变）。
     /// 2026-10-30 维护者定（《哆啦A夢》卷01 挡住裁白边的多是灰尘）。见 `bookconv::comiccrop`。
     #[serde(rename = "comic_trim_specks")]
@@ -447,6 +460,10 @@ struct ProfileFile {
     comic_readable: Option<Screen>,
     comic_page_direction: Option<String>,
     #[serde(default)]
+    comic_split_spreads: bool,
+    #[serde(default)]
+    comic_meta_direction: bool,
+    #[serde(default)]
     comic_fixed_layout: bool,
     #[serde(default)]
     comic_fixed_layout_percent: bool,
@@ -454,6 +471,8 @@ struct ProfileFile {
     comic_gamma: Option<f64>,
     #[serde(default)]
     comic_autocontrast: bool,
+    #[serde(default)]
+    comic_gutter_crop: bool,
     #[serde(default)]
     comic_trim_specks: bool,
     #[serde(default)]
@@ -577,11 +596,14 @@ impl Profile {
                 reader_margins: f.comic_reader_margins,
                 readable: f.comic_readable,
                 page_direction: f.comic_page_direction,
+                split_spreads: f.comic_split_spreads,
+                meta_direction: f.comic_meta_direction,
                 fixed_layout: f.comic_fixed_layout,
                 fixed_layout_percent: f.comic_fixed_layout_percent,
                 format: f.comic_format,
                 gamma: f.comic_gamma,
                 autocontrast: f.comic_autocontrast,
+                gutter_crop: f.comic_gutter_crop,
                 trim_specks: f.comic_trim_specks,
                 page_numbers: f.comic_page_numbers,
                 upscale: f.comic_upscale,
@@ -991,11 +1013,15 @@ mod tests {
                     reader_margins: _,
                     readable: _,
                     page_direction: _,
+                    split_spreads: _,
+                    // 按书由 library 的生成计划加指纹标记（Bangumi 日漫），不在设备段：开着的模式不能让全部漫画重建
+                    meta_direction: _,
                     fixed_layout: _,
                     fixed_layout_percent: _,
                     format: _,
                     gamma: _,
                     autocontrast: _,
+                    gutter_crop: _,
                     trim_specks: _,
                     page_numbers: _,
                     upscale: _,
@@ -1217,6 +1243,43 @@ mod tests {
             get("xochitl").is_none(),
             "Move 卖了，内置模式删了（2026-10-31）"
         );
+    }
+
+    /// 2026-11-10 维护者定四台漫画画质处理一致：拉满对比度、裁杂点、裁页码、黑底补边都开，伽马 1.1。
+    /// 掌阅没上真机比过，先跟 kindle/kobo/hanvon 一致。
+    #[test]
+    fn builtin_profiles_share_comic_quality() {
+        for id in ["kindle", "ireader", "kobo", "hanvon"] {
+            let p = get(id).unwrap();
+            assert!(
+                p.comic.autocontrast
+                    && p.comic.trim_specks
+                    && p.comic.page_numbers
+                    && p.comic.dark_bg,
+                "{id}：漫画画质四项应一致开着"
+            );
+            assert_eq!(p.comic.gamma, Some(1.1), "{id}：漫画伽马 1.1");
+        }
+    }
+
+    /// 2026-11-10 维护者定：四台都拆横向跨页（竖屏只拆、不旋转）。
+    #[test]
+    fn builtin_profiles_split_comic_spreads() {
+        for id in ["kindle", "ireader", "kobo", "hanvon"] {
+            assert!(get(id).unwrap().comic.split_spreads, "{id}");
+        }
+    }
+
+    /// 2026-11-10 维护者定：四台都按 Bangumi 元数据把日本漫画写成 rtl（掌阅也开，阅读器里要每本选一次「漫画」排版）。
+    #[test]
+    fn builtin_profiles_take_comic_direction_from_metadata() {
+        for id in ["kindle", "ireader", "kobo", "hanvon"] {
+            let p = get(id).unwrap();
+            assert!(
+                p.comic.meta_direction,
+                "{id}：应按 Bangumi 元数据定漫画方向"
+            );
+        }
     }
 
     #[test]

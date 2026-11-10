@@ -186,6 +186,19 @@ fn mutations() -> Vec<Mutation> {
         "image_gamma",
         Box::new(|p| p.image_gamma = p.image_gamma.map_or(Some(1.3), |_| None)),
     ));
+    // 只在生成时按书加标记（没有元数据的测试书指纹不变）；放在最后，旧行不挪
+    v.push((
+        "comic_meta_direction",
+        Box::new(|p| p.comic.meta_direction = !p.comic.meta_direction),
+    ));
+    v.push((
+        "comic_split_spreads",
+        Box::new(|p| p.comic.split_spreads = !p.comic.split_spreads),
+    ));
+    v.push((
+        "comic_gutter_crop",
+        Box::new(|p| p.comic.gutter_crop = !p.comic.gutter_crop),
+    ));
     v
 }
 

@@ -15,6 +15,8 @@ comic_trim_specks = true           # 沿用 kobo
 comic_page_numbers = true          # 沿用 kobo
 comic_dark_bg = true               # 沿用 kobo
 comic_margin = 1                   # 沿用 kobo
+comic_split_spreads = true         # 2026-11-10 维护者定：竖屏只拆跨页、不旋转；没上真机
+comic_meta_direction = true        # 2026-11-10 维护者定：Bangumi 判成日本漫画的按 rtl 生成；Kobo、汉王的 rtl 处理待真机确认
 # 漫画版式：2026-11-06 真机比：流式整页与固定版式逐像素相同，保持流式。
 background_images = true           # 推断：沿用（待确认）
 # 书架缩略图：2026-11-06 书架框≈0.753，封面拉伸不裁；meta 指向缩略图同掌阅，待真机确认书架用的是缩略图

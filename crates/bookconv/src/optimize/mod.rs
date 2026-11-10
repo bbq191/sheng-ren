@@ -192,7 +192,11 @@ pub const OPTIMIZE_VERSION: &str = "66";
 /// - c64（2026-11-01）：页码块宽度上限改按页高（`comiccrop::PN_MAX_W`，0.035 页高；原来是 KCC 的 0.045 页宽）：《迷宮飯》卷09
 ///   三位数页码约 0.050 页宽，整卷只裁中 6 页；同卷页宽不一、页高固定。只 Kindle 开（`comic_page_numbers`）。没上真机。
 /// - c65（2026-11-03）：同 v66，掌阅漫画也另做书架缩略图、`<meta name="cover">` 指向它。只掌阅变。
-pub const COMIC_VERSION: &str = "65";
+/// - c66（2026-11-10）：横向跨页（宽/高 ≥ 1.2）拆成两张竖页，顺序照最终翻页方向（profile `comic_split_spreads`，
+///   `imgopt::prepare_comic_spread`、`streaming::split_spread_pages`）；只拆纯图页、不拆封面、不旋转。四台都开，没上真机。
+/// - c67（2026-11-10）：漫画页裁格间空白（profile `comic_gutter_crop`，缺省 false，`imgopt::process_comic_page` 的
+///   `comiccrop::gutter_bands`）。四台 profile 都没开，产物不变，只为新键加一；待真机 A/B 后再另开单。
+pub const COMIC_VERSION: &str = "67";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，
@@ -266,6 +270,8 @@ pub struct OptimizeOpts {
     pub page_direction: Option<crate::direction::PageDirection>,
     /// 漫画的翻页方向（profile 的 `comic_page_direction`）；`page_direction` 按书指定了的以它为准。
     pub comic_page_direction: Option<crate::direction::PageDirection>,
+    /// 横向跨页拆成两张竖页（profile 的 `comic_split_spreads`）：竖屏只拆、不旋转，顺序照最终翻页方向。
+    pub comic_split_spreads: bool,
     /// 漫画写成固定版式（profile 的 `comic_fixed_layout`），画布是 `comic_screen`。见 [`crate::comicfxl`]。
     pub comic_fixed_layout: bool,
     /// 固定版式用百分比写法（profile 的 `comic_fixed_layout_percent`，Kobo 方案 D）：图 100%×100%，
@@ -283,6 +289,9 @@ pub struct OptimizeOpts {
     pub comic_gamma: Option<f64>,
     /// 漫画页拉满对比度（profile `comic_autocontrast`），见 [`crate::imgopt::autocontrast_lut`]。
     pub comic_autocontrast: bool,
+    /// 漫画页裁掉格与格之间整行的空白带（profile `comic_gutter_crop`，`--gutter-crop` 可强制开），
+    /// 见 [`crate::comiccrop::gutter_bands`]。
+    pub comic_gutter_crop: bool,
     /// 漫画页裁白边不让杂点挡住（profile `comic_trim_specks`），见 [`crate::comiccrop`]。
     pub comic_trim_specks: bool,
     /// 漫画页裁掉页码（profile `comic_page_numbers`，整卷投票定位置），见 [`crate::comiccrop`]。
@@ -401,6 +410,7 @@ impl OptimizeOpts {
             footnote: FootnoteMode::default(),
             page_direction: None,
             comic_page_direction: None,
+            comic_split_spreads: false,
             comic_fixed_layout: false,
             comic_fixed_layout_percent: false,
             fit_backgrounds: false,
@@ -408,6 +418,7 @@ impl OptimizeOpts {
             flatten_alpha: false,
             comic_gamma: None,
             comic_autocontrast: false,
+            comic_gutter_crop: false,
             comic_trim_specks: false,
             comic_page_numbers: false,
             comic_upscale: true,
@@ -444,6 +455,7 @@ impl OptimizeOpts {
                 .page_direction
                 .as_deref()
                 .and_then(crate::direction::PageDirection::parse),
+            comic_split_spreads: p.comic.split_spreads,
             comic_fixed_layout: p.comic.fixed_layout,
             comic_fixed_layout_percent: p.comic.fixed_layout_percent,
             fit_backgrounds: p.background_images && !p.background_sizing,
@@ -451,6 +463,7 @@ impl OptimizeOpts {
             flatten_alpha: !p.image_alpha,
             comic_gamma: p.comic.gamma.filter(|&g| g != 1.0),
             comic_autocontrast: p.comic.autocontrast,
+            comic_gutter_crop: p.comic.gutter_crop,
             comic_trim_specks: p.comic.trim_specks,
             comic_page_numbers: p.comic.page_numbers,
             comic_upscale: p.comic.upscale,
