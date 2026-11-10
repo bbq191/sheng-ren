@@ -2733,23 +2733,23 @@ fn disabled_profile_is_forgotten_by_sync() {
     lib.track_with(&book.join("丙"), &[], false).unwrap();
     lib.sync(Prune::Auto, |_| {}).unwrap();
     assert_eq!(lib.list().len(), 3);
-    // 停用前「乙」在 ireader 上的旧记录：绝对路径，指向一个不存在的 MTP 目录
-    let yi = lib
-        .list()
-        .into_iter()
-        .find(|m| m.title == "乙")
-        .expect("乙 入库了");
+    // 停用前每本在 ireader 上的旧记录（绝对路径，指向一个不存在的 MTP 目录）：
+    // 留下的书（甲、丙）和整条去掉的（乙）都有，停用后都要能容忍。
     let root = base.join("no-such-mtp/Internal Storage/documents");
+    let mut books = serde_json::Map::new();
+    for m in lib.list() {
+        books.insert(
+            m.id.clone(),
+            serde_json::json!({
+                "path": root.join(format!("{}.epub", m.title)),
+                "root": root,
+                "fingerprint": "旧"
+            }),
+        );
+    }
     let sp = lib_dir.join("output-state/ireader.json");
     std::fs::create_dir_all(sp.parent().unwrap()).unwrap();
-    std::fs::write(
-        &sp,
-        serde_json::json!({"books": {&yi.id: {
-            "path": root.join("乙.epub"), "root": root, "fingerprint": "旧"
-        }}})
-        .to_string(),
-    )
-    .unwrap();
+    std::fs::write(&sp, serde_json::json!({"books": books}).to_string()).unwrap();
     std::fs::create_dir_all(lib_dir.join("profiles")).unwrap();
     std::fs::write(lib_dir.join("profiles/ireader.toml"), "disabled = true\n").unwrap();
     let lib = common::open(&lib_dir);
@@ -2791,21 +2791,37 @@ fn disabled_profile_is_forgotten_by_sync() {
         bing.get("devices").is_none(),
         "全部设备的条目 devices 还是空的（序列化时省略）：{saved}"
     );
-    // 旧生成记录不报错、不算任何一本的产物（list 也照常）
+    // 旧生成记录不报错：留下的书里 ireader 是「? 未知」（不是最新 / 过期），list 照 2026-10-31 的行为列出来
     let metas = lib.list();
     assert_eq!(metas.len(), 2, "乙 不再跟踪");
     for m in &metas {
-        assert!(
-            lib.outputs(m).iter().all(|o| o.device != "ireader"),
-            "{} 没有 ireader 的产物",
+        let ir: Vec<_> = lib
+            .outputs(m)
+            .into_iter()
+            .filter(|o| o.device == "ireader")
+            .collect();
+        assert_eq!(ir.len(), 1, "{} 的旧记录还在", m.title);
+        assert_eq!(
+            ir[0].fresh, None,
+            "{}：未知（不是最新 / 过期），不报错",
             m.title
         );
     }
     let o = common::booklib(Some(&lib_dir), &["list"]);
     assert_eq!(o.status.code(), Some(0), "{}", common::stderr(&o));
+    let out = common::stdout(&o);
+    assert!(
+        out.contains("ireader") && out.contains("? 未知"),
+        "旧记录按未知列出：{out}"
+    );
+    // 挪走旧记录：list 不再有 ireader，sync 照常
+    let bak = sp.with_extension("json.bak");
+    std::fs::rename(&sp, &bak).unwrap();
+    let o = common::booklib(Some(&lib_dir), &["list"]);
+    assert_eq!(o.status.code(), Some(0), "{}", common::stderr(&o));
     assert!(
         !common::stdout(&o).contains("ireader"),
-        "{}",
+        "挪走后 list 干净：{}",
         common::stdout(&o)
     );
     // 清过一次就不再报
