@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: opencode-local
 - 分支: feat/profile-disable（从 master `aa86ba4` 切出）
-- 更新时间: 2026-11-10T16:26+08:00
+- 更新时间: 2026-11-10T16:35+08:00
 - 引用: 无
 
 ## 需求原文
@@ -163,3 +163,15 @@
   - **状态退回 pending，同一执行方 opencode-local 返工**：改上面阻断 1、2，`cargo test --workspace`、clippy、fmt，填「结果」的返工部分，状态改 done，提交推送
 - 二审：
 - 合并：
+
+### 复验（sheng-ren，2026-11-10 16:35）
+
+**结论：通过。** 两个阻断都改好了；状态留 `done`，等 agy 二审，没有阻断再合并改 `verified`。
+
+- 范围：`974e6ca..57ca7b3`（`d393897` 接受返工、`b4537fd` 返工、`57ca7b3` 结果）。返工只改 `crates/library/tests/flow.rs`、`docs/devices.md` 和本单；`aa86ba4..HEAD` 总共仍是 lib.rs / cli.rs / flow.rs / devices.md / 本单五个文件；`crates/library/src/`、内置 profiles、`fp_golden.txt`、`install.sh` 都没动。
+- **阻断 1 已改**：`docs/devices.md` 现在写明停用后第一次 `sync`（带不带 `--keep`）就改条目并写回 `sources.json`；`--keep` 只把「从书库删书」推到下一次不带 `--keep` 的 sync；删 toml 只恢复模式，条目要重新 `booklib track --device=…`；动手前先 `booklib track` 记下只给它的条目。和盒子上复现一致。
+- **阻断 2 已改**：测试把旧 ireader 记录写到甲、乙、丙名下，断言留下的甲、丙各有一条 `fresh = None` 的 ireader 产物、`booklib list` 出现 `ireader … ? 未知`，挪走 json 后 `list` 不再有 ireader；docs 解释了 `? 未知` 行、挪走安全；「结果」改准；fish 命令加了可选的 `mv … ireader.json.bak`。
+- 盒子复现（临时书库，甲 kindle+ireader、乙 只 ireader、丙 全部设备，先传过 kindle+ireader）：停用后 `devices` 只列 hanvon/kindle/kobo；`sync --keep` 当场把条目改成 甲 `["kindle"]`、乙 去掉、丙 全部，乙 报 `? 不再跟踪（--keep，这次没从书库删）`；下一次不带 `--keep` 报 `✗ 不再跟踪，书库里删了（连同产物）`；第三次不再报条目清理；`list` 有 2 行 `ireader ? 未知`，挪走 json 后 0 行；删掉 toml 后 ireader 回到设备列表但条目仍是 甲 `["kindle"]`（不自动恢复，和文档一致）；多写键 / `disabled = false` 报错退出 2；未知 id 忽略；`--device=ireader` 停用时退出 1。
+- 检查：`cargo test --workspace`（清过 BOOKLIB_* 环境）789 过 0 失败，含 `fp_golden`；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --all -- --check` 干净。和 `origin/master`、`origin/feat/bigme-profile` 试合并都没有冲突。
+- 不阻断：`docs/devices.md` 第二点写「带 `--keep` 的那一遍就能看到 `✗ 不再跟踪…` 的报告」，实际那一遍显示的是 `? 不再跟踪（--keep，这次没从书库删）`，`✗` 是不带 `--keep` 那一遍的。只是符号不对，意思没错；合并前顺手改或者留给 agy 一并提都行。上次「`lib.rs` 先试解析」那条也不阻断。
+- 下一步：agy 二审（本单不是小改动：数据风险，跟踪条目会被去掉），范围 `aa86ba4..` 到本提交。
