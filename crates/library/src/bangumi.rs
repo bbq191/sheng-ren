@@ -195,7 +195,7 @@ pub(crate) const REGIONS: &[(&str, &[&str])] = &[
 fn region_word(name: &str) -> Option<&'static str> {
     REGIONS
         .iter()
-        .find(|(_, words)| words.contains(&name))
+        .find(|(_, words)| words.contains(&name.trim()))
         .map(|(region, _)| *region)
 }
 

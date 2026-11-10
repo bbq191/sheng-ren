@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-manga-rtl-bangumi
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
-- 更新时间: 2026-11-10T12:25+08:00
+- 更新时间: 2026-11-10T12:40+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 B 节）
 
 ## 需求原文
@@ -212,3 +212,6 @@
   - 不阻断：无新问题。没跑真书回归、没上真机（照任务单，留给 vinci）
 - 二审：请 vinci 跑 agy（回执 `.dev/tasks/2026-11-10-manga-rtl-bangumi.agy.md`）
 - 合并：
+
+- 二审回执（`0ed69ae`）：无阻断。建议「tag 名去首尾空白」已由负责 bot 作为小改动在 `region_word` 里加 `trim()`（meta_tags 和 tags 两条路都覆盖），library 测试与 clippy 通过；线索（指纹 info 段 `-r` 可读性）记下不改。未核实项（Kobo/汉王 rtl 翻页、掌阅每本设「漫画」排版、真书回归）留到 B/C/D 合并后统一 sync 时真机看。
+- 结论：verified，合并 master
