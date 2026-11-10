@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-manga-rtl-bangumi
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
-- 更新时间: 2026-11-10T12:05+08:00
+- 更新时间: 2026-11-10T12:45+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 B 节）
 
 ## 需求原文
@@ -88,7 +88,7 @@
 ## 结果
 
 - 执行方 / 开始–结束时间：opencode-local / 2026-11-10 10:50–11:20 +08:00
-- base..head：`0fc241a..4d2dd41`（`origin/master` 之后 5 个提交，含任务单和同步 A 单的 merge）
+- base..head：`0fc241a..HEAD`（`origin/master` 到返工后的分支头；代码提交 `394eff8`、`4d2dd41`、`a1c4bdb`，任务单提交随本文件更新）
 - 提交：
 
   | 步骤 | 提交号 | 文件 | 说明 |
@@ -115,6 +115,22 @@
 - 遇到的问题：无。
 - 偏离：`crates/library/src/douban.rs` 的 `BookInfo` 字面量补了 `region: None`（加字段后必须补，行为不变）；其余都在「涉及文件」内。
 - 未完成：真机验证是合并后 vinci 的事（任务单验收最后一项）：四台各看一本 CBZ 日漫点左侧下一页、一本国漫不变；Kobo Nickel、汉王的 rtl 没确认过必看；掌阅先每本选「本书自定义 → 排版 → 漫画」再看铺满。
+
+### 返工（2026-11-10）
+
+- 接受返工：`3f5249f`（状态改回 accepted）。
+- 返工代码：`a1c4bdb`（4 个文件：`metadata.rs`、`generate.rs`、`flow.rs`、`docs/usage.md`）。
+- **阻断 1（旧 Bangumi 记录重找死循环）**：
+  - `fetch_metadata_inner` 拆出 `fetch_metadata_with_chain`（测试可换假网站）；重找进 `NotFound` 分支时，如果现有 `m.info` 是 Bangumi 且 `region.is_none()`，记成 `Some(String::new())` 并存下，`needs_metadata` 随即变 false。网络出错（`Failed` / `Err`）不记，下次再试。
+  - `series_lookup` 选同一套别的卷时先选 `info.region.is_some()` 的（再按 `info_checked == LOOKUP_VERSION`、再其余）；抄过来的旧 Bangumi info 也没 region 时记成 `Some("")`。`series_lookup` 的「同一套找过、没找到」分支同样把现有 Bangumi info 记成 `Some("")`。
+  - 测试：`metadata::tests::bangumi_not_found_marks_region_checked`（旧 Bangumi 记录 region None → 假网站 NotFound → 存成 `Some("")`、`needs_metadata` false、再判不联网）；`metadata::tests::series_lookup_prefers_info_with_region`（两卷，一卷旧但记了地区、一卷新但没记，抄到的是有地区的；两卷都没地区时抄成 `Some("")` 后不再重找）。
+- **阻断 2（国漫原书 rtl 没测试）**：`flow::bangumi_japanese_comic_builds_rtl_and_others_stay_as_is` 末尾加一本合成 EPUB 漫画：OPF `<spine page-progression-direction="rtl">`、`dc:subject`「漫画」，`info` 写 Bangumi + 地区「中国」，生成 ireader 后读回 spine 仍是 rtl。
+- **建议（三条都做了）**：
+  - `comic_direction(meta, device, comic)` 改收 `Library::comic_of` 算出的布尔；`plan()` 里把 `comic_of` 提前到指纹计算前，`produce()` 也取同一个结果，早期条目 `Meta::comic` 是 `None` 时也不漏。
+  - `docs/usage.md` 补「书里没封面的也会重找封面」和「没找到的会记成查过、判不出，不再每轮重试」。
+  - 「结果」的 base..head 改成 `0fc241a..HEAD`，不再写死旧提交号。
+- 测试：`cargo test --workspace` 全过（library 69 单元 + 45 flow + 其余；0 失败）；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。没跑真书回归、没上真机。
+- 偏离：返工没有新增「涉及文件」以外的文件（`fetch_metadata_with_chain`、新测试都在 `metadata.rs` / `flow.rs`）。
 
 ## 审查
 <!-- 负责 bot 填写 -->
