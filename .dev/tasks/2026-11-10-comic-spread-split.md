@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-spread-split
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/comic-spread-split（从最新 master 切出；须在 2026-11-10-manga-rtl-bangumi 合并之后）
-- 更新时间: 2026-11-10T15:10+08:00
+- 更新时间: 2026-11-10T15:40+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 C 节）
 
 ## 需求原文
@@ -123,6 +123,18 @@
 - 遇到的问题：无。
 - 偏离：无（17 个文件都在「涉及文件」里，`crates/library/src/fingerprint.rs` 只加了 `W`）。
 - 未完成：真机验证（验收最后一项，合并后 vinci）：四台看合成跨页书或真跨页书的两半顺序、铺满；Kindle、Kobo 固定版式看新页没有被拉伸。**没跑真书回归、没上真机**；c66 + `W` 让四台全部漫画重建一次，没有跨页的书产物应逐字节不变（待本机回归确认），Kindle 上字节变了的书进度清零。
+
+### 返工（2026-11-10）
+
+- 接受返工：`19fd603`；返工代码：`69c91a6`（`streaming.rs`、`optimize/tests.rs`、`docs/typesetting.md`）。
+- **阻断 1（EPUB3 `properties` 里的 page-spread 值）**：`add_spread_spine_items` 现在会把原页 itemref 的 `properties` 拆成词，去掉本地名（去掉 `rendition:` 等前缀后）以 `page-spread-` 开头的词，其余词保留、空格规整；剩空就整个属性删掉。原来的普通属性 `page-spread-*` 删除逻辑保留。测试书改成规范写法 `properties="rendition:layout-pre-paginated page-spread-left"` 且非自闭合，断言原页剩 `properties="rendition:layout-pre-paginated"`；另加单元测试覆盖只有 `properties="page-spread-right"` 时整个属性删掉。
+- **阻断 2（Kobo 半张被拉伸）**：判跨页时同时要求 `(iw / 2).min(ih) >= 阅读范围宽 / 3`，半张会变成装饰小图就不拆；`docs/typesetting.md` 补了半句。测试：Kobo profile、480×400 跨页不拆，spine 页数不变。
+- **阻断 3（非自闭合 itemref）**：原页 itemref 不是自闭合时，新 itemref 插在配对的 `</itemref>` 之后（带前缀的按原前缀）；找不到结束标签就不拆（返回 `None`，整书照旧）。测试书原页写成 `<itemref …></itemref>`，断言新 itemref 是 spine 的直接子元素、紧跟在 `</itemref>` 后；单元测试也覆盖自闭合和非自闭合两种。
+- **阻断 4（共用图被换成半张）**：拆之前先扫所有 `ish` 条目里的 `<img src>` / `<image href>` / `xlink:href`，统计每张图被几个 xhtml 引用；被不止一页引用的不拆。测试：两页引用同一张 1600×1100 跨页图 → spine 仍 2 页、两页是同一张整图（平均约 203，不是左半约 89），没有 `-eink2`。
+- **建议（清洗层改名）**：照 `prep.rep.wash.renamed` 建「新名 → 原名」表，`read_image_head` / `read_by_name` 用原名读原图字节，manifest / 新条目仍用清洗后的新名。
+- 测试：`cargo test --workspace` 776 个全过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。
+- KFX / KEPUB 复跑（`input-props.epub` 用规范 `properties` + 非自闭合 itemref）：kindle / kobo 产物 spine 都是 5 页，原页剩 `properties="rendition:layout-pre-paginated"`、新 itemref 在 `</itemref>` 后、没有 `page-spread`；`epub-to-kfx` 59684 字节、`kfx-dump` 有 sec0–sec4 五个 section；`epub-to-kepub` 改写 5 个章节、正常写出。
+- 偏离：无（只改 `streaming.rs`、`optimize/tests.rs`、`docs/typesetting.md`）。
 
 ## 审查
 <!-- 负责 bot 填写 -->
