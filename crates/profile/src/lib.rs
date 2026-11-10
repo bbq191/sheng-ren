@@ -6,7 +6,8 @@
 //! [`Profile::readable`]：阅读器实际能用来显示内容的范围（按产物格式分，阅读器页边距、状态栏等都已扣掉），
 //! 有实测值就内置在 `[readable.<格式>]`，没有就退回标称尺寸。每台设备一份 `profiles/<id>.toml`（文件名即 id），
 //! 构建时全部嵌入（见 `build.rs`）——**增删设备 = 增删文件**，不改代码。运行期还可以用
-//! [`Registry::with_dir`] 从外部目录加载，同 id 覆盖内置项。
+//! [`Registry::with_dir`] 从外部目录加载，同 id 覆盖内置项；那里只写 `disabled = true` 的 `<id>.toml`
+//! 把同名模式从注册表里去掉（内置文件不动，删掉这个 toml 就恢复）。
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -911,6 +912,9 @@ impl Registry {
     }
 
     /// 内置 profile 加上 `dir` 下的 `*.toml`，同 id 以 `dir` 里的为准。
+    ///
+    /// 文件里**只有** `disabled = true` 一行时，把同名模式从注册表里去掉（停用）；带了别的键或值不是 `true` 报错。
+    /// 停用一个本来就没有的模式（`dir` 里多出一个不存在 id 的 `<id>.toml`）忽略。
     pub fn with_dir(dir: &Path) -> Result<Registry, String> {
         let mut r = Registry::builtin().clone();
         let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -930,6 +934,19 @@ impl Registry {
                 .ok_or_else(|| format!("{}: 文件名不是 UTF-8", path.display()))?;
             let text =
                 std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            // 停用一个模式：只写 `disabled = true` 一行。解析不了的文本交给 `Profile::parse` 报它原来的错。
+            if let Ok(table) = toml::from_str::<toml::Table>(&text) {
+                if let Some(disabled) = table.get("disabled") {
+                    if table.len() == 1 && disabled.as_bool() == Some(true) {
+                        r.profiles.remove(id);
+                        continue;
+                    }
+                    return Err(format!(
+                        "{}: 停用一个模式时文件里只写 `disabled = true` 一行；要用这个模式就删掉 `disabled`",
+                        path.display()
+                    ));
+                }
+            }
             let p = Profile::parse(id, &text)?;
             r.profiles.insert(p.id.clone(), p);
         }
@@ -1456,6 +1473,70 @@ mod tests {
             r.iter().count(),
             Registry::builtin().iter().count() + 1,
             "覆盖同 id、新增一台"
+        );
+    }
+
+    /// 临时目录：每个用例一个（`tag` 区分，测试并行时不互相踩）。
+    fn temp_profile_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("profile-test-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 书库 `profiles/<id>.toml` 只写 `disabled = true` 一行：同名内置模式从注册表里去掉，别的内置模式都在。
+    #[test]
+    fn dir_disables_builtin_mode() {
+        let dir = temp_profile_dir("disable");
+        std::fs::write(dir.join("ireader.toml"), "disabled = true\n").unwrap();
+        let r = Registry::with_dir(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(r.get("ireader").is_none(), "停用的模式不再列出");
+        assert_eq!(
+            r.iter().count(),
+            Registry::builtin().iter().count() - 1,
+            "只少停用的那个"
+        );
+        for id in ["kindle", "kobo", "hanvon"] {
+            assert!(r.get(id).is_some(), "{id} 还在");
+        }
+    }
+
+    /// 有 `disabled` 键还写了别的键：报错，信息里有文件名和改法。
+    #[test]
+    fn dir_disable_with_other_keys_is_an_error() {
+        let dir = temp_profile_dir("disable-extra");
+        std::fs::write(dir.join("ireader.toml"), "disabled = true\nname = \"x\"\n").unwrap();
+        let e = Registry::with_dir(&dir).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(e.contains("ireader.toml"), "要有文件名：{e}");
+        assert!(e.contains("disabled"), "{e}");
+        assert!(e.contains("只写"), "要写清楚怎么改：{e}");
+    }
+
+    /// `disabled = false` 也不合规（要恢复就删掉这个键）。
+    #[test]
+    fn dir_disable_false_is_an_error() {
+        let dir = temp_profile_dir("disable-false");
+        std::fs::write(dir.join("ireader.toml"), "disabled = false\n").unwrap();
+        let e = Registry::with_dir(&dir).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(e.contains("ireader.toml"), "要有文件名：{e}");
+        assert!(e.contains("disabled"), "{e}");
+    }
+
+    /// 停用一个本来就没有的模式：忽略，不报错，别的模式不受影响。
+    #[test]
+    fn dir_disable_unknown_id_is_ignored() {
+        let dir = temp_profile_dir("disable-unknown");
+        std::fs::write(dir.join("nosuch.toml"), "disabled = true\n").unwrap();
+        let r = Registry::with_dir(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(r.get("nosuch").is_none());
+        assert_eq!(
+            r.iter().count(),
+            Registry::builtin().iter().count(),
+            "总量不变"
         );
     }
 

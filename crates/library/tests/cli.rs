@@ -264,6 +264,34 @@ fn devices_lists_the_builtin_modes() {
     }
 }
 
+/// 书库 `profiles/<id>.toml` 只写 `disabled = true`：`devices` 不列这个模式，别的模式都在；
+/// `--device=<id>` 按不存在的模式报用法错。
+#[test]
+fn devices_skip_disabled_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    std::fs::create_dir_all(lib.join("profiles")).unwrap();
+    std::fs::write(lib.join("profiles/ireader.toml"), "disabled = true\n").unwrap();
+    let o = booklib(Some(&lib), &["devices"]);
+    assert_eq!(code(&o), Some(0), "{}", stderr(&o));
+    let out = stdout(&o);
+    assert!(
+        !out.lines().any(|l| l.starts_with("ireader")),
+        "停用的模式不列：{out}"
+    );
+    for (id, fmt) in [("kindle", "KFX"), ("kobo", "KEPUB"), ("hanvon", "EPUB")] {
+        assert!(
+            out.lines().any(|l| l.starts_with(id) && l.contains(fmt)),
+            "{id} {fmt} 还在：{out}"
+        );
+    }
+    expect(
+        booklib(Some(&lib), &["sync", "--device=ireader"]),
+        1,
+        "没有阅读模式 ireader",
+    );
+}
+
 /// `meta --fetch` 不联网（`BOOKLIB_NO_NET`）时：`--clear`（去掉找来的）照常；漫画也去找（2026-10-12 起不再跳过），断网如实报、
 /// 退出码 2；`sync` 的补元数据一步断网时跳过、照常往下走。
 #[test]
