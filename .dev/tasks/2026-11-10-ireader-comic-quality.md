@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-ireader-comic-quality
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/ireader-comic-quality（从最新 master 切出）
-- 更新时间: 2026-11-10T10:45+08:00
+- 更新时间: 2026-11-10T11:05+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 A 节）
 
 ## 需求原文
@@ -91,5 +91,6 @@
   - 测试：`cargo test --workspace` 23 组 757 个通过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`rustfmt --edition 2021 --check crates/profile/src/lib.rs` 通过（box 工具链 rustc 1.99.1 stable，同 CI 的 stable）
   - 提交合规：中文前缀加正文、无 Co-Authored-By、没动 master、没合并；`e2788a5` 正文写了没跑真书回归、没上真机
   - 小问题（不阻断）：「结果」里 base..head 写成 `0df2144..e2788a5`（3 个提交），实际分支头是 `e24155a`（含任务单完成提交共 4 个）；`docs/architecture.md:220`、`docs/typesetting.md:240` 仍写「只 Kindle 开」「掌阅、Move 不开」——本单之前 kobo/hanvon 开了时就已过时，不在涉及文件内，留作后续小改动
-- 二审：待 vinci 运行 agy，回执 `.dev/tasks/2026-11-10-ireader-comic-quality.agy.md`（设备行为改动，合并前必须二审）
+- 二审：agy 回执 `.dev/tasks/2026-11-10-ireader-comic-quality.agy.md`（`07b8ef1`）无阻断；建议两条即上面两个小问题，旧文档表述合并后另做小改动；线索：掌阅真机观感待 vinci 同步后确认。引用位置已逐条核对。
+- 结论：verified，合并 master
 - 合并：
