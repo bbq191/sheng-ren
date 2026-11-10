@@ -196,6 +196,10 @@
 - 屏幕、阅读范围、漫画画布都要写成竖屏（宽 ≤ 高），阅读范围和画布不能超过屏幕，否则报错。
 - **按截图的像素写**：Kindle 截图是 1272×1696（设备实际的显示缓冲区），标称 1264×1680，写的是前者。
 - **自定义模式**：放在书库的 `profiles/<id>.toml`，同 id 覆盖内置的；`booklib devices` 会列出来。id 不能以 `.` 开头、不能含逗号或斜杠（`--device=` 用逗号分隔，id 还要当目录名）；`profiles/` 里的隐藏文件跳过。
+- **停用内置模式**（2026-11-10 起，先用来去掉退货的掌阅）：书库 `profiles/<id>.toml` 里**只写** `disabled = true` 一行，`booklib devices` 就不列这个模式；内置的那份文件仍在程序里，删掉这个 toml 就恢复。同一文件里还写了别的键、或者写成 `disabled = false`（要用就删掉这一行），会报错并指出文件。写一个本来就不存在的 `<id>` 会被忽略（用 `booklib devices` 看结果就知道）。
+  - 停用后下一次 `booklib sync` 把跟踪条目里的这个模式去掉（2026-10-31 删 xochitl 时的清理逻辑）：只给它的条目**整条去掉**，里面的书按不再跟踪处理、下次 `sync` 从书库去掉（原件不动）；「全部设备」的条目仍是全部设备。**动手前**先 `booklib track` 看有没有只给它的条目，再 `booklib sync --keep` 看报告（只报告、不从设备上删），确认没问题再去掉 `--keep`。
+  - `output-state/<id>.json`（这个模式的旧生成记录）留着无害，不会再生成也不会传；想清掉可以自己挪走。设备上已有的书不会自己消失。
+  - 例：掌阅 Air 3 Pro 2026-11-10 退货，`~/.local/share/booklib/profiles/ireader.toml` 写 `disabled = true` 就不再列 `ireader`。
 
 ```toml
 # crates/profile/profiles/ireader.toml（去掉了注释；每个字段的含义和来由看文件里的注释）
