@@ -1170,6 +1170,87 @@ pub fn prepare_comic_page_limited(
     page: ComicPage,
     max_px: u64,
 ) -> Option<Vec<u8>> {
+    let src = decode_comic(bytes, grayscale, max_px, true)?;
+    process_comic_page(src, area, margin, page, false)
+}
+
+/// 跨页判定：摆正 EXIF 后宽 / 高 ≥ 这个值（2026-11-10 vinci 确认）。单页约 0.65–0.75，跨页约 1.3–1.5；
+/// 1.0–1.2 的宽页不拆，照旧整张缩放。
+pub const SPREAD_MIN_ASPECT: f32 = 1.2;
+
+/// 宽 / 高是不是达到跨页阈值（[`SPREAD_MIN_ASPECT`]）。`w`、`h` 是摆正 EXIF 后的尺寸。
+pub fn is_spread(w: u32, h: u32) -> bool {
+    // 用整数比 6/5 判 1.2（f32 的 1.2 是 1.20000004768，正好 1200×1000 会被判成不到）
+    h > 0 && u64::from(w) * 5 >= u64::from(h) * 6
+}
+
+/// 跨页正中竖线切开：左半宽 `w/2`（向下取整），右半宽 `w - w/2`。
+fn spread_widths(w: u32) -> (u32, u32) {
+    (w / 2, w - w / 2)
+}
+
+/// 横向跨页拆成两张竖页，左右各自走完整的漫画页处理（[`prepare_comic_page_limited`] 同一套：裁边、杂点、拉对比度、
+/// 伽马、黑底、缩放补白、格式），返回（左半、右半）的最终字节。正中竖线切：左半宽 `w/2`（向下取整），右半宽 `w - w/2`。
+/// 不满足跨页、动图、超上限、解不开、编码失败 → `None`（原图照旧整张处理）。两半的页码裁切都是 `None`（不参加投票）。
+pub fn prepare_comic_spread(
+    bytes: &[u8],
+    area: Screen,
+    margin: u32,
+    grayscale: bool,
+    page: ComicPage,
+    max_px: u64,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let src = decode_comic(bytes, grayscale, max_px, true)?;
+    let (w, h) = src.img.dimensions();
+    if !is_spread(w, h) {
+        return None;
+    }
+    let (left_w, right_w) = spread_widths(w);
+    let (out_fmt, to_gray, rotated) = (src.out_fmt, src.to_gray, src.rotated);
+    // 一次只多留一张半页：左半处理完再裁右半，原图一直留到最后
+    let left = src.img.crop_ref(0, 0, left_w, h);
+    let left = process_comic_page(
+        ComicSrc {
+            img: left,
+            out_fmt,
+            to_gray,
+            rotated,
+        },
+        area,
+        margin,
+        ComicPage {
+            cut_bottom: None,
+            ..page
+        },
+        true,
+    )?;
+    let right = src.img.crop_ref(left_w, 0, right_w, h);
+    let right = process_comic_page(
+        ComicSrc {
+            img: right,
+            out_fmt,
+            to_gray,
+            rotated,
+        },
+        area,
+        margin,
+        ComicPage {
+            cut_bottom: None,
+            ..page
+        },
+        true,
+    )?;
+    Some((left, right))
+}
+
+/// 已解码的一页 → 最终字节。`force_encode`：即使排版已经和原图一致也要编码（拆出来的半页必须拿出新字节）。
+fn process_comic_page(
+    src: ComicSrc,
+    area: Screen,
+    margin: u32,
+    page: ComicPage,
+    force_encode: bool,
+) -> Option<Vec<u8>> {
     let ComicPage {
         gamma,
         autocontrast,
@@ -1183,7 +1264,7 @@ pub fn prepare_comic_page_limited(
         out_fmt,
         to_gray,
         rotated,
-    } = decode_comic(bytes, grayscale, max_px, true)?;
+    } = src;
     let orig = img.dimensions();
     // 页码：从页码块的上沿往下切掉，再照常裁白边（切口上方的留白一起裁掉）
     let img = match cut_bottom.filter(|&c| c > 0 && c < orig.1) {
@@ -1197,7 +1278,7 @@ pub fn prepare_comic_page_limited(
     let trimmed = (cw, ch) != orig;
     if cw.min(ch) < area.width / 3 {
         // 装饰小图：只裁边
-        return if trimmed || to_gray || rotated {
+        return if trimmed || to_gray || rotated || force_encode {
             img.encode(out_fmt, JPEG_QUALITY_COMIC)
         } else {
             None
@@ -1223,7 +1304,8 @@ pub fn prepare_comic_page_limited(
         margin,
         out_fmt == ImageFormat::Jpeg && !no_upscale,
     );
-    if !to_gray
+    if !force_encode
+        && !to_gray
         && !rotated
         && darken.is_none()
         && lay.matches_original(
@@ -1411,9 +1493,14 @@ impl Page8 {
 
     /// 裁出 `(x, y)` 起 `w × h` 的一块。
     fn crop(self, x: u32, y: u32, w: u32, h: u32) -> Page8 {
+        self.crop_ref(x, y, w, h)
+    }
+
+    /// 同 [`Page8::crop`]，但保留原图（跨页要先后裁左右两半）。
+    fn crop_ref(&self, x: u32, y: u32, w: u32, h: u32) -> Page8 {
         match self {
-            Page8::Gray(g) => Page8::Gray(image::imageops::crop_imm(&g, x, y, w, h).to_image()),
-            Page8::Rgb(c) => Page8::Rgb(image::imageops::crop_imm(&c, x, y, w, h).to_image()),
+            Page8::Gray(g) => Page8::Gray(image::imageops::crop_imm(g, x, y, w, h).to_image()),
+            Page8::Rgb(c) => Page8::Rgb(image::imageops::crop_imm(c, x, y, w, h).to_image()),
         }
     }
 
@@ -3323,6 +3410,61 @@ mod tests {
             dark_page(&art, true),
             dark_page(&art, false),
             "满版深色画不判"
+        );
+    }
+
+    /// 跨页阈值（2026-11-10 vinci 确认 1.2）和奇数宽的正中切法。
+    #[test]
+    fn spread_aspect_and_widths() {
+        assert!(is_spread(1600, 1100), "1600/1100 ≈ 1.45");
+        assert!(!is_spread(1100, 1000), "1.1 不拆");
+        assert!(!is_spread(700, 1000), "竖页不拆");
+        assert!(is_spread(1200, 1000), "正好 1.2 算跨页");
+        assert_eq!(spread_widths(1600), (800, 800));
+        assert_eq!(spread_widths(1601), (800, 801), "奇数宽右半多 1px");
+    }
+
+    /// 跨页拆开后两半各自处理：左半 40、右半 200，最终图（带白边）左半仍明显暗于右半；1.1 宽的页不拆。
+    #[test]
+    fn spread_halves_are_split_and_processed() {
+        let png = |w: u32, h: u32, split: u32| {
+            let img = image::GrayImage::from_fn(w, h, |x, _| {
+                image::Luma([if x < split { 40 } else { 200 }])
+            });
+            let mut out = Vec::new();
+            image::DynamicImage::ImageLuma8(img)
+                .write_to(&mut std::io::Cursor::new(&mut out), ImageFormat::Png)
+                .unwrap();
+            out
+        };
+        let area = test_screen();
+        let (left, right) = prepare_comic_spread(
+            &png(1601, 1100, 800),
+            area,
+            1,
+            true,
+            ComicPage::default(),
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        let avg = |b: &[u8]| {
+            let img = image::load_from_memory(b).unwrap().to_luma8();
+            let sum: u64 = img.as_raw().iter().map(|&v| u64::from(v)).sum();
+            sum as f64 / f64::from(img.width() * img.height())
+        };
+        assert!(avg(&left) < 120.0, "左半平均 {}", avg(&left));
+        assert!(avg(&right) > 180.0, "右半平均 {}", avg(&right));
+        assert!(
+            prepare_comic_spread(
+                &png(1100, 1000, 550),
+                area,
+                1,
+                true,
+                ComicPage::default(),
+                MAX_COMIC_DECODE_PIXELS
+            )
+            .is_none(),
+            "1.1 宽的页不拆"
         );
     }
 }

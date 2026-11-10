@@ -34,6 +34,8 @@ comic_dark_bg = true
 # （网格 344×531、列表约 139×213），比它宽的封面上面空一截、窄的两边空；2026-10-30 封面比例测试书截图量的，维护者定只裁缩略图
 cover_thumb_aspect = 0.65
 comic_margin = 1
+# 2026-11-10 维护者定：竖屏只拆跨页、不旋转；没上真机
+comic_split_spreads = true
 # 2026-11-10 维护者定：Bangumi 判成日本漫画的按 rtl 生成；Kobo、汉王的 rtl 处理待真机确认
 comic_meta_direction = true
 # 漫画写成固定版式、画布取屏幕实际分辨率（下面的 [comic_readable]）：流式版式下 Kindle 强制留页边距（最小档左右还有 101px），

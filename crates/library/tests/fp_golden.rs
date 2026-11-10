@@ -191,6 +191,10 @@ fn mutations() -> Vec<Mutation> {
         "comic_meta_direction",
         Box::new(|p| p.comic.meta_direction = !p.comic.meta_direction),
     ));
+    v.push((
+        "comic_split_spreads",
+        Box::new(|p| p.comic.split_spreads = !p.comic.split_spreads),
+    ));
     v
 }
 
