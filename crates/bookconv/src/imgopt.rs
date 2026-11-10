@@ -712,22 +712,17 @@ fn decode_comic(
     } else {
         decoded
     };
-    let (img, gray_content) = if gray {
-        (Page8::Gray(into_luma8(decoded)), true)
+    // 彩色要在转灰度之前判（黑白屏转完一律是 Gray，`is_gray_content` 恒真）；只在开了格间空白时才多拷一份判，
+    // 转灰度这一步保持原来的写法（16 位图走 `image` 自己的 `into_luma8`，不能先截成 8 位再转，否则关着也变）
+    let gray_content = if gray || !need_gray_content {
+        true
     } else {
-        let p8 = Page8::Rgb(decoded.into_rgb8());
-        // 彩色要在转灰度之前判（黑白屏转完一律是 Gray，`is_gray_content` 恒真）
-        let gray_content = if need_gray_content {
-            p8.is_gray_content()
-        } else {
-            true
-        };
-        if grayscale {
-            let Page8::Rgb(c) = p8 else { unreachable!() };
-            (Page8::Gray(rgb8_into_luma8(c)), gray_content)
-        } else {
-            (p8, gray_content)
-        }
+        Page8::Rgb(decoded.to_rgb8()).is_gray_content()
+    };
+    let img = if gray || to_gray {
+        Page8::Gray(into_luma8(decoded))
+    } else {
+        Page8::Rgb(decoded.into_rgb8())
     };
     Some(ComicSrc {
         img,
@@ -3597,6 +3592,101 @@ mod tests {
         .unwrap();
         assert_ne!(off, on, "R=G=B 的 RGB 页照常裁");
         assert!(run(&on) > run(&off), "格变高");
+    }
+
+    /// 2026-11-10 复验阻断 2：16 位 RGB PNG 转灰度必须和改前逐字节相同（不能先截成 8 位再转）；
+    /// 16 位 R=G=B 开格间空白照常收，16 位彩色不收。
+    #[test]
+    fn sixteen_bit_rgb_keeps_original_grayscale_conversion() {
+        let area = Screen {
+            width: 1072,
+            height: 1448,
+        };
+        let png16 = |color: bool| {
+            let mut buf = Vec::new();
+            let img =
+                image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(800, 2000, |_, y| {
+                    let gap = (600..640).contains(&y) || (1240..1280).contains(&y);
+                    image::Rgb(if gap {
+                        [65535, 65535, 65535]
+                    } else if color {
+                        [50000, 100, 100]
+                    } else {
+                        [10000, 10000, 10000]
+                    })
+                });
+            image::DynamicImage::ImageRgb16(img)
+                .write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
+                .unwrap();
+            buf
+        };
+        let expected = |png: &[u8]| {
+            image::load_from_memory(png)
+                .unwrap()
+                .into_luma8()
+                .into_raw()
+        };
+        let gray = |p: Page8| match p {
+            Page8::Gray(g) => g.into_raw(),
+            Page8::Rgb(c) => c.into_raw(),
+        };
+        for color in [true, false] {
+            let png = png16(color);
+            let off = decode_comic(&png, true, MAX_COMIC_DECODE_PIXELS, true, false)
+                .unwrap()
+                .img;
+            let on = decode_comic(&png, true, MAX_COMIC_DECODE_PIXELS, true, true)
+                .unwrap()
+                .img;
+            assert_eq!(gray(off), expected(&png), "关着：16 位转灰度和改前一致");
+            assert_eq!(gray(on), expected(&png), "开着：转灰度也一样");
+        }
+        let color = png16(true);
+        let off = prepare_comic_page_limited(
+            &color,
+            area,
+            0,
+            true,
+            ComicPage::default(),
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        let on = prepare_comic_page_limited(
+            &color,
+            area,
+            0,
+            true,
+            ComicPage {
+                gutter_crop: true,
+                ..Default::default()
+            },
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        assert_eq!(off, on, "16 位彩色页不裁格间空白");
+        let gray16 = png16(false);
+        let off = prepare_comic_page_limited(
+            &gray16,
+            area,
+            0,
+            true,
+            ComicPage::default(),
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        let on = prepare_comic_page_limited(
+            &gray16,
+            area,
+            0,
+            true,
+            ComicPage {
+                gutter_crop: true,
+                ..Default::default()
+            },
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        assert_ne!(off, on, "16 位 R=G=B 页照常裁");
     }
 
     /// 跨页拆开后两半各自处理：左半 40、右半 200，最终图（带白边）左半仍明显暗于右半；1.1 宽的页不拆。
