@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: opencode-local
 - 分支: feat/comic-gutter-crop（2026-11-10 已把 master `d50a889`（含 A 画质统一、B 日漫 rtl、C 跨页拆分）`--no-ff` 合进来：`bdc880f`；在这个分支上接着做，不 rebase）
-- 更新时间: 2026-11-10T17:45+08:00
+- 更新时间: 2026-11-10T15:15+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 D 节）
 
 ## 需求原文
@@ -192,5 +192,14 @@
   - 第 7 步书路径：改成 `迷宮飯 - 卷01.epub`、`死亡筆記(愛藏版) - 卷01.epub`，执行方说是本机 `ls` 核对过的；box 上看不到 vinci 本机，**未核实**，vinci 跑前 `ls` 一下即可
   - **阻断 2（开关关着产物变了，返工引入）：16 位 RGB PNG 在黑白屏上转灰度的结果和 master 不同**。`imgopt.rs:718` 先 `decoded.into_rgb8()`（16 位先截成 8 位），再 `rgb8_into_luma8`；原来是 `into_luma8(decoded)`，对 `ImageRgb16` 走 `image` 自己的 16 位转灰度，舍入不同。和开关无关（`need_gray_content` 只决定扫不扫），所以四台缺省关也变；`decode_page`（`imgopt.rs:838`）走同一段，一样变。box 上复现：`formats.epub` 四台缺省关，和 master 比，`p001-rgb16color.png`、`p002-rgb16gray.png` 两张图都变了（Kobo 上最大差 4 级，约 10.7% / 1.2% 的像素不同），别的条目逐字节相同。违反验收标准「开关关着产物逐字节不变」，c67 重建时这种书会重传（Kindle 进度清零）。要改：转灰度这一步恢复成原来的 `if gray || to_gray { Page8::Gray(into_luma8(decoded)) } else { Page8::Rgb(decoded.into_rgb8()) }`，`gray_content` 在这之前单独算、只在 `need_gray_content` 时算（比如 `Page8::Rgb(decoded.to_rgb8()).is_gray_content()`，开关开时多一份拷贝可以接受，或直接在 `DynamicImage` 上判），关着的路径和 master 逐行一样。测试：16 位 RGB PNG（彩色、R=G=B 各一）`grayscale = true` 时，`decode_comic(.., need_gray_content = false)` 和 `= true` 出的 `img` 都等于 `DynamicImage::into_luma8` 的结果（钉住和改前一致）；16 位 R=G=B 开 gutter 照常收、16 位彩色不收
   - 建议（不阻断）：`a657f82` 提交正文又是字面量 `\n\n`（一整段），返工提交请用真换行
-- 二审：未开始（等返工验收通过）
+- 三验：**通过**（sheng-ren，2026-11-10，box 上 `e12cd6a` 重跑；状态保持 done，等 agy 二审，二审无阻断后合并、改 verified）
+  - 返工记录：「结果 → 返工（复验阻断 2）」已写（`26ebe44` 接受、`ec7b53d` 代码、`e12cd6a` done）；只改 `imgopt.rs`（`0b3df50..HEAD` 全部改动只有 `imgopt.rs`、三处文档和任务单；`crates/library`、`crates/profile`、`optimize/`、`comiccrop.rs` 都没动），没加封面跳过
+  - 阻断 2 已修：`decode_comic`（`imgopt.rs:688`）的转灰度几行和 master `d50a889` 逐字相同（`diff` 只多了参数 `need_gray_content`、`imgopt.rs:717-723` 单独算 `gray_content`、结构体多一个字段）；`gray_content` 只在开关开且原图不是灰度通道时拷一份 `to_rgb8()` 判，关着不多扫。新测试 `sixteen_bit_rgb_keeps_original_grayscale_conversion`：16 位彩色 / R=G=B PNG 在 `grayscale = true` 下，`need_gray_content` 真假两种解出来都等于 `into_luma8`；开了 16 位 R=G=B 照收、16 位彩色不收
+  - box 上复现：四台缺省关，gutter / gutter-ltr / 文字书 / color / formats 5 本 × 4 台 = 20 个产物和 master 逐字节相同（上一轮不同的两张 16 位图现在相同）；formats 开 `--gutter-crop` 四台一致：16 位 RGB 彩色、16 位 RGBA 彩色、调色板、8 位 RGB 彩色不收，16 位 R=G=B、8 位 R=G=B、CMYK 灰、灰度封面照收
+  - 阻断 1 仍好：color.epub 四台开了彩色页和关着逐字节相同，灰度页照收
+  - 其余：gutter.epub 四台开 `--gutter-crop` 产物和第一轮逐字节相同（画面、画布、跨页两半顺序都没变）；两次运行一致；`--check` 四台都过（gutter、color、formats）；Kindle → KFX 16 section，Kobo → KEPUB 16 章；fp_golden 的 `d50a889..HEAD` diff 和第一轮完全一样（只有四台漫画行 `c66`→`c67` 和 8 行 `L` mutation，文字书行 0 变化）
+  - 测试：`cargo test --workspace` 23 组 783 个通过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`cargo fmt --all -- --check` exit 0
+  - 提交合规：中文前缀、正文这次是真换行、无 Co-Authored-By、没动 master、没合并
+  - 留给二审 / 真机的：灰度封面会被收（vinci 未定要不要跳过）；纸色偏灰的扫描页不收；第 7 步书路径执行方说本机核对过，box 上未核实
+- 二审：待 vinci 跑 agy（范围 `d50a889..<本次三验提交>`）
 - 合并：
