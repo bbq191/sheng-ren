@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-spread-split
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: feat/comic-spread-split（从最新 master 切出；须在 2026-11-10-manga-rtl-bangumi 合并之后）
-- 更新时间: 2026-11-10T14:50+08:00
+- 更新时间: 2026-11-10T13:40+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 C 节）
 
 ## 需求原文
@@ -126,6 +126,27 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
+- 验收：**退回**（sheng-ren，2026-11-10，box 上 `e4d51de` 重跑；状态退回 pending，同一执行方 opencode-local 返工）
+  - 做到的（附证据）：
+    - 判定：`split_spread_pages`（`streaming.rs` 约 790–960 行）只看 spine 里的纯图页（`comicfxl::image_only`：一张 `<img>`、没有字），跳过 spine 第一页和 OPF 封面图；`display_dims` 读文件头（含 EXIF）后 `is_spread`（整数比 6/5，正好 1.2 算）；短边 < 阅读范围宽 1/3 不拆；`prepare_comic_spread` 解码后再判一次。box 上实测 EXIF：存成 2000×1400、方向 6（显示竖）不拆，存成 1400×2801、方向 6（显示横）拆
+    - 拆法：`spread_widths` 左 `w/2`、右 `w-w/2`（1601 → 800 / 801 有单元测试）；两半各走 `process_comic_page`（`force_encode`，`cut_bottom: None`）；拆好的图字节非空，不进 `image_positions`，所以不参加页码投票、worker 不再处理
+    - 方向：`opts.page_direction`（B 单 `generate.rs:925` 按书写的）> `comic_page_direction`（profile，只对漫画）> 原书 spine，和 `optimize/mod.rs:1066` 写 OPF 方向的优先级同一个式子；测试用 `page_direction = Some(Rtl)` 断言右半在前（就是 B 单那个字段）。box 上 spread.epub（OPF rtl，左半顶上画了黑条）四台产物都是右半（无黑条）在原页、左半在 `-eink2`
+    - 不保留整张、manifest / spine：box 上四台产物 spine 都多一页、新页紧跟原页，`epub-optimize --check` 四台都过；目录：四台 nav 和 master 的产物逐字节相同
+    - 固定版式 / 流式 / CBZ：Kindle viewport 1272×1696、Kobo 1072×1448 + 100%×100% 有测试；box 上 `epub-to-kfx` → `kfx-dump` 6 个 section（master 产物 5 个），`epub-to-kepub` → KEPUB spine 多一页、新页带 viewport；hanvon / ireader 流式产物新页正常；CBZ（`convert::cbz` 转出的）多一页有测试（ltr）
+    - profile：四个 toml `comic_split_spreads = true`，`builtin_profiles_split_comic_spreads` 断言；COMIC_VERSION 66 + 历史一行；指纹 `W` 只在开了的模式出
+    - fp_golden：240 行删、248 行加；删掉的全是四台的漫画行（每台 60 行，`c65`→`c66`、末尾加 `W`），文字书旧行 0 变化；多出的 8 行是 `comic_split_spreads` mutation（漫画行没有 `W`、文字书行同 `none`）
+    - 开关关着 / 没有跨页：box 上 master（`a02315d`）和本分支的 `epub-optimize` 比：没有跨页的书四台产物逐字节相同；把四个 toml 临时改成 `false` 重编，有跨页的书四台产物和 master 逐字节相同
+    - 文档：architecture.md、typesetting.md 两处「只 Kindle 开」/「掌阅、Move 不开」已改；typesetting、devices、decisions、development（c66）都写了
+    - 测试：`cargo test --workspace` 23 组 773 个通过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`cargo fmt --all -- --check` exit 0
+    - 提交合规：中文前缀加正文、无 Co-Authored-By、没动 master、没合并；正文写了没跑真书回归、没上真机、Kindle 进度清零
+  - **阻断 1（验收标准没做到）：EPUB 3 正规写法的 `properties="page-spread-left"` 没去掉**。`add_spread_spine_items`（`streaming.rs:1067`）只删名字以 `page-spread-` 开头的**属性**；EPUB 3 里 `page-spread-left` / `page-spread-right` / `rendition:page-spread-*` 是 `properties` 属性里的**值**。测试书（`tests.rs:565`）写的 `page-spread-left="yes"` 不是规范写法，所以测试过了。box 上把测试书改成 `<itemref idref="p2" properties="page-spread-left"/>`，产物原页 itemref 仍带 `properties="page-spread-left"`（四台都是；日本固定版式漫画 EPUB 常见每个 itemref 都带）。要改：原页 itemref 的 `properties` 里去掉本地名（去掉 `rendition:` 等前缀后）以 `page-spread-` 开头的词，其余词保留、空格规整，剩空就整个属性删掉；现有删属性的逻辑可以留着。测试：测试书的跨页 itemref 改成 `properties="rendition:layout-pre-paginated page-spread-left"`，断言原页 itemref 剩 `properties="rendition:layout-pre-paginated"`、新 itemref 不带 `properties`；再加一条只有 `properties="page-spread-right"` 的，断言属性整个没了
+  - **阻断 2（Kobo 新页被拉伸）：两半是装饰小图时仍按画布尺寸写 100%×100%**。`streaming.rs:890` 只判整张短边；拆出来的半张短边是 `min(w/2, h)`，可能 < 阅读范围宽 1/3，这时 `process_comic_page` 走装饰小图分支（只裁边、不缩放补白），但 `streaming.rs:259` 一律按画布尺寸记 `image_dims` → Kobo 写 `width:100%;height:100%`。box 上实测：Kobo profile、480×400 跨页（阈值 357），两半各 240×400，产物两页都是 `width:100%;height:100%`（0.6 的图拉到 0.74 的画布）。要改：判跨页时同时要求两半不是装饰小图——`(iw / 2).min(ih) < screen.width / 3` 时不拆（整张照旧处理：整张不是小图，会正常缩放补白）；`docs/typesetting.md` 那条补半句。测试：Kobo opts、480×400 跨页不拆、spine 页数不变
+  - **阻断 3（OPF 结构错）：原页 itemref 不是自闭合时新 itemref 插到它里面**。`streaming.rs:1078` 插在开始标签的 `t.end` 后。box 上实测 `<itemref idref="p"></itemref>` → `<itemref idref="p"><itemref idref="eink-spread-page-0"/></itemref>`（`check_epub` 没查出来）。要改：不是自闭合的，插到对应 `</itemref>`（带前缀的照前缀）之后；找不到结束标签就不拆这一页（整书照旧，同 `matched != adds.len()` 的处理）。测试：原页写成 `<itemref idref="p2"></itemref>`，断言产物里新 itemref 是 spine 的直接子元素、紧跟在原页 `</itemref>` 后
+  - **阻断 4（别的页图被换成半张）：同一张跨页图被两页引用时，另一页显示成半张**。`streaming.rs:874` `seen_images` 只防重复拆，但 `streaming.rs:994` 按图条目名把字节整个换成先读的一半，所有引用这张图的页都变。box 上实测：p002、p003 两页都引用 `img/p002.jpg`，产物 p002 拆成两页正常，p003 也只剩一半。要改：先统计每张图被几个 xhtml 引用（所有 `ish` 条目里 `<img>` / `<image>` 的 src / href 解析后），被不止一页引用的不拆。测试：两页引用同一张跨页图 → 不拆、两页图字节一样且是整张处理后的结果
+  - 建议（不阻断）：
+    - 清洗层改过名的图（`safe_names`：文件名里有 `*:?"<>|\` 的）：`split_spread_pages` 拿新名去原书 zip 读（`read_image_head` / `read_by_name`），读不到就静默不拆。要拆的话照 `WritePlan::src` 用 `prep.rep.wash` 的改名表换回原名
+    - 「开关关着逐字节不变」测试只断言页数和没有 `-eink2`，没比字节；box 上已用 master 二进制证明（见上），不强求补
+    - CBZ 来源只测了 ltr；rtl 与 EPUB 同一条代码路径，不强求
+- 返工后：sheng-ren 重新验收，通过后再请 vinci 跑 agy 二审（回执 `.dev/tasks/2026-11-10-comic-spread-split.agy.md`）
+- 二审：未开始（等返工验收通过）
 - 合并：
