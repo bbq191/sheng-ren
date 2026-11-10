@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-gutter-crop
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: feat/comic-gutter-crop（2026-11-10 已把 master `d50a889`（含 A 画质统一、B 日漫 rtl、C 跨页拆分）`--no-ff` 合进来：`bdc880f`；在这个分支上接着做，不 rebase）
-- 更新时间: 2026-11-10T15:15+08:00
+- 更新时间: 2026-11-10T15:20+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 D 节）
 
 ## 需求原文
@@ -201,5 +201,9 @@
   - 测试：`cargo test --workspace` 23 组 783 个通过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`cargo fmt --all -- --check` exit 0
   - 提交合规：中文前缀、正文这次是真换行、无 Co-Authored-By、没动 master、没合并
   - 留给二审 / 真机的：灰度封面会被收（vinci 未定要不要跳过）；纸色偏灰的扫描页不收；第 7 步书路径执行方说本机核对过，box 上未核实
-- 二审：待 vinci 跑 agy（范围 `d50a889..<本次三验提交>`）
+- 二审：agy 回执 `.dev/tasks/2026-11-10-comic-gutter-crop.agy.md`（`0903b83`，范围 `d50a889..49a6b67`）**无阻断**。负责 bot 核对了引用位置（`comiccrop.rs:17、76、56-168`，`imgopt.rs:688-734、1304、1315-1328、1551-1587`，`fingerprint.rs:120`，`streaming.rs:845、1225`），都对得上；五个重点项的结论和 box 上三轮验收的实测一致：
+  - 建议 1（灰度封面不跳过）：不阻断，验收时已记（box 上合成书灰度封面被收）。vinci 还没定要不要跳过，留到 Kindle A/B 看了再说，要改就另开单
+  - 线索 1（纸色 < 247 的扫描页一条带也找不到）：不阻断，是「宁少裁不切错」的预设取舍，box 上纸色 240 那页逐字节不变；A/B 前先数开 / 关两本里真变了的图
+  - 未核实项：真机效果待 A/B；书路径 vinci 跑前 `ls` 一下
+- 结论：verified，`--no-ff` 合并 master（合并提交号见 master 日志 `merge: 漫画裁格间空白（缺省关，先 A/B）`）
 - 合并：
