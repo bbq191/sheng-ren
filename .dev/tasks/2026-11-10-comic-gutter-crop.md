@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-gutter-crop
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/comic-gutter-crop（2026-11-10 已把 master `d50a889`（含 A 画质统一、B 日漫 rtl、C 跨页拆分）`--no-ff` 合进来：`bdc880f`；在这个分支上接着做，不 rebase）
-- 更新时间: 2026-11-10T16:40+08:00
+- 更新时间: 2026-11-10T17:10+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 D 节）
 
 ## 需求原文
@@ -109,7 +109,7 @@
   - `gutter_skips_wide_pages_thin_bands_and_page_edges`：宽度受限（T ≤ 0）、带高 19px（< 1% 页高）、页顶页底的白都不收。
   - `comic_gutter_crop_enlarges_panels`：800×2000 白底三格，阅读范围 1072×1448；开/关对比第一格高度 **434 → 448px（+14px）**；关着页数不变。
   - `comic_gutter_crop_works_on_spread_halves`：1600×1100 白底多格跨页，Kobo opts 拆成两页；开/关都是 3 页，开的两半产物页高都变小（两半都收了空白带）。
-  - 黑底页 / 彩色页由 `process_comic_page` 的 `bg.is_none() && is_gray_content()` 门挡住；动图在 `decode_comic` 就原样保留；装饰小图分支在裁空白之前返回；跨页两半照常收（`comic_gutter_crop` 传进两半的 `ComicPage`）。
+  - 黑底页 / 彩色页由 `process_comic_page` 的 `bg.is_none() && gray_content` 门挡住（`gray_content` 在 `decode_comic` 转灰度之前算）；动图在 `decode_comic` 就原样保留；装饰小图分支在裁空白之前返回；跨页两半照常收（`comic_gutter_crop` 传进两半的 `ComicPage`）。
 - 不回归：`src/profile/profiles/*.toml` 都没动（四台 `comic_gutter_crop` 缺省 false）；开关关着的路径只多一个布尔判断，测试断言页数和格高不变；`fp_golden.txt` 文字书旧行 0 变化。**没跑真书回归、没上真机**；c67 会让漫画重算一次，四台没开，字节应不变、不重传（待本机回归确认）。
 - 给 vinci 本机出 A/B 测试书的 fish 命令（不自己上设备；最后两行路径换成书库实际路径）：
 
@@ -122,14 +122,31 @@
       cargo run --release -p kfx --bin epub-to-kfx -- --id=(math $id + 1) {$stem}-gutter-on.epub {$stem}-gutter-on.kfx
   end
 
-  set miyuki ~/Documents/ereader/books/优秀漫画/迷宮飯/迷宮飯\ 卷01.epub
-  set death  ~/Documents/ereader/books/优秀漫画/死亡筆記/死亡筆記\ 卷01.epub
+  set miyuki "$HOME/Documents/ereader/books/优秀漫画/迷宮飯/迷宮飯 - 卷01.epub"
+  set death  "$HOME/Documents/ereader/books/优秀漫画/死亡筆記/死亡筆記(愛藏版) - 卷01.epub"
   ab-gutter $miyuki 9101
   ab-gutter $death 9201
   ```
 - 遇到的问题：`1600×1100` 跨页拆出的两半在 Kobo 画布下只收约 19px（比例已经接近画布），测试用「产物页高变小」断言；真机 A/B 看效果。
 - 偏离：无（14 个文件都在「涉及文件」里）。
 - 未完成：真机验证（验收最后一项，合并后 vinci）：Kindle 上比《迷宮飯》《死亡筆記》各一卷 A/B，专门看留白构图、无格框的页；比过再另开单定四台开不开。
+
+### 返工（2026-11-10）
+
+- 接受返工：`998ddaa`；返工代码：`a657f82`（`imgopt.rs`、`docs/typesetting.md`、`docs/devices.md`、`docs/decisions.md`）。
+- **阻断 1（黑白屏上彩页照样被收）**：
+  - `decode_comic` 加 `need_gray_content`：只在 `page.gutter_crop` 开时、把 RGB 原图**转灰度之前**跑一次 `Page8::is_gray_content`，结果存进 `ComicSrc.gray_content`；输入本来就是 L8/L16/灰度 PNG 的直接算灰度。`process_comic_page` 的裁空白门从 `img.is_gray_content()`（转灰度后恒真）改成 `gray_content`。
+  - 跨页两半把 `gray_content` 一起传给 `ComicSrc`，彩色跨页的两半也不收。
+  - 开关关着时 `need_gray_content = false`，不额外扫一遍像素，原路径不变。
+  - 测试 `imgopt::tests::gutter_crop_checks_color_before_grayscale`：`grayscale = true` 时彩色三格页开 / 关产物**逐字节相同**；同一排版存成 R=G=B 的 RGB JPEG 照常收（格变高）。
+- **第 7 步书路径核对**：本机实际是
+  - `$HOME/Documents/ereader/books/优秀漫画/迷宮飯/迷宮飯 - 卷01.epub`
+  - `$HOME/Documents/ereader/books/优秀漫画/死亡筆記/死亡筆記(愛藏版) - 卷01.epub`
+  已把「结果」里的 fish 命令改成实际路径（双引号包住空格和括号）。
+- 文档：`docs/typesetting.md`、`docs/devices.md`、`docs/decisions.md` 都改成「彩色按转灰度之前的原图判」；`imgopt.rs` 注释也写明。
+- 测试：`cargo test -p bookconv` 536 个全过；`cargo test --workspace` 782 个全过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。没跑真书回归、没上真机；四台 profile 仍都没开。
+- 偏离：无（只改 `imgopt.rs` 和三处文档）。
+- 未做：审查建议里「封面是否跳过」没动（灰度封面仍会被收）；留给真机 A/B 看是否要另加规则。
 
 ## 审查
 <!-- 负责 bot 填写 -->
