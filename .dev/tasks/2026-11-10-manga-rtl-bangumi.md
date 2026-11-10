@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-manga-rtl-bangumi
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
-- 更新时间: 2026-11-10T13:40+08:00
+- 更新时间: 2026-11-10T14:00+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 B 节）
 
 ## 需求原文
@@ -142,6 +142,18 @@
   - `series_lookup_prefers_info_with_region` 后半段改成：两卷都没地区时抄来仍 `None`、`needs_metadata` true；再把 01 卷改成「日本」后重新 `series_lookup`，02 卷抄到「日本」。
 - **建议（网络出错测试）**：`Fake` 加 `transient: Option<&'static str>`，新增 `metadata::tests::bangumi_network_error_keeps_region_for_retry`：假网站报临时错误 → `fetch_metadata_with_chain` 返回 `Err`，`region` 仍 `None`、`needs_metadata` 仍 true（下次再试）。
 - 测试：`cargo test --workspace` 全过（30 + 522 + 16 + 50 + 70 + 7 + 13 + 45 + 1 + 12 = 766 个，0 失败）；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。没跑真书回归、没上真机。
+- 偏离：无（只改 `metadata.rs`）。
+
+### 返工（第 3 轮，2026-11-10）
+
+- 接受返工：`9b90d6b`（状态改回 accepted）。
+- 返工代码：`d9da5cd`（`metadata.rs`）。
+- **阻断 4（`Some("")` 被当成有地区，处理先后随机导致永久判错）**：
+  - `series_lookup` 的挑选顺序拆成六档：判出地区（`region` 非空）且当前版本 → 判出地区 → 判不出（`Some("")`）且当前版本 → 判不出 → 当前版本 → 其余。`Some("")` 不再和「日本」同档，判出地区的卷永远优先。
+  - 代码注释和 `series_lookup` 文档注释写明「判出地区的优先于判不出的」及原因。
+  - 测试 `series_lookup_prefers_known_region_over_blank`：三卷，01 判不出、02 日本、03 没 info；03 抄到「日本」。再把 01/02 的地区对调后重试，仍抄到「日本」，与 `list()` 先后无关。
+  - 顺手让测试 CBZ 的宽度也随名字变，避免内容哈希撞车导致 `add_file` 当成同一本书。
+- 测试：`cargo test --workspace` 全过（30 + 522 + 16 + 50 + 71 + 7 + 13 + 45 + 1 + 12 = 767 个，0 失败）；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。没跑真书回归、没上真机。
 - 偏离：无（只改 `metadata.rs`）。
 
 ## 审查
