@@ -5,7 +5,7 @@
 - 状态: pending
 - 执行方: opencode-local
 - 分支: feat/comic-gutter-crop（从最新 master 切出；建议在 2026-11-10-comic-spread-split 合并之后）
-- 更新时间: 2026-11-10T10:30+08:00
+- 更新时间: 2026-11-10T10:40+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 D 节）
 
 ## 需求原文
@@ -31,7 +31,7 @@
   - **不改** `crates/profile/profiles/*.toml`：四台先都不开，真机比过再另开单打开
 
 ## 约束
-- 不做：不裁竖向（整列）空白；不动页顶、页底的空白（裁白边管）；不改 profiles/*.toml；不改裁白边、杂点、页码、黑底的现有算法和常量；不做条漫；不改 install.sh
+- 不做：不裁竖向（整列）空白（vinci 2026-11-10 确认只裁横向）；不动页顶、页底的空白（裁白边管）；不改 profiles/*.toml；不改裁白边、杂点、页码、黑底的现有算法和常量；不做条漫；不改 install.sh
 - 空白行：整行没有一个像素比 `DARK_BELOW`（247）暗（RGB 任一分量 < 247 就算暗）。**不放过杂点**（有一个暗点这一行就不算空白；宁可少裁）
 - 空白带：连续空白行，高 ≥ 页高 × `GUTTER_MIN_BAND`（0.01），且上下两侧都有内容（不在页顶、页底）
 - 每条带收完后留 `max(页高 × GUTTER_KEEP (0.005), 4px)`，留下的放在带的正中（上下各一半）
@@ -59,7 +59,7 @@
 4. [ ] `optimize/tests.rs`：合成漫画书一页（白底三格），开 / 关各跑一遍：关的产物和现在逐字节相同；开的那页图里格的画面比关的大（量格的高度，结果里写数字）
 5. [ ] `fingerprint.rs` 新字母；`fp_golden.rs` 加 mutation；`UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden`；`git diff`：漫画行只因 COMIC_VERSION 变，文字书行 0 变化
 6. [ ] 文档：`docs/typesetting.md`（新一节，写清三道兜底）、`docs/devices.md`（新键一行，四台「不开，待真机比」）、`docs/decisions.md`（一行：2026-11-10 维护者要裁格间空白，先 A/B）、`docs/development.md#版本号`
-7. [ ] 在「结果」里写好给 vinci 本机出 A/B 测试书的 fish 命令（同一本 EPUB 漫画：`epub-optimize --device=kindle 书.epub 关.epub`、`epub-optimize --device=kindle --gutter-crop 书.epub 开.epub`，再各转 KFX；汉王 / 掌阅只要 EPUB），**不自己上设备**
+7. [ ] 在「结果」里写好给 vinci 本机出 A/B 测试书的 fish 命令（《迷宮飯》《死亡筆記》各一卷，只出 Kindle：`epub-optimize --device=kindle 书.epub 关.epub`、`epub-optimize --device=kindle --gutter-crop 书.epub 开.epub`，再各转 KFX），**不自己上设备**
 8. [ ] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
 
 ## 验收标准
@@ -68,7 +68,7 @@
 - [ ] 测试：`cargo test --workspace` 全部通过；clippy 0 警告；第 1、4 步每条都有断言
 - [ ] 不回归：开关关着产物逐字节不变（测试证明）；四台 profile 没开；文字书指纹 0 变化
 - [ ] 「不做」的事确实没做
-- [ ] 真机（vinci，合并后）：Kindle 上比 A/B 测试书（建议《迷宮飯》《死亡筆記》各一卷，专门看留白构图、无格框的页），有余力汉王；比过再另开单定四台开不开
+- [ ] 真机（vinci，合并后）：Kindle 上比《迷宮飯》《死亡筆記》各一卷的 A/B 测试书（vinci 2026-11-10 定），专门看留白构图、无格框的页；比过再另开单定四台开不开
 
 ## 交付物
 代码提交到上面的分支并推送；「结果」填好；状态改为 done 或 blocked。
