@@ -114,6 +114,8 @@ fn comic_seg(device: &Profile, area: Screen) -> String {
         (device.comic.page_numbers, 'P'),
         (!device.comic.upscale, 'N'),
         (device.comic.dark_bg, 'K'),
+        // 跨页拆分（2026-11-10，profile `comic_split_spreads`）：不开的模式不出新字母
+        (device.comic.split_spreads, 'W'),
     ] {
         if on {
             seg.push(c);

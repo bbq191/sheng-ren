@@ -536,6 +536,294 @@ fn comic_fixed_layout_percent_follows_kobo_profile_only() {
     );
 }
 
+/// 2026-11-10 跨页拆分的合成书：封面（宽）、普通页、1.1 宽页、1600×1100 跨页（左 40、右 200）。
+fn spread_test_book() -> Vec<u8> {
+    let png = |w: u32, h: u32, split: Option<u32>, left: u8, right: u8| {
+        let mut cur = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, _| {
+            let v = match split {
+                Some(c) if x >= c => right,
+                _ => left,
+            };
+            image::Rgb([v, v, v])
+        }))
+        .write_to(&mut cur, image::ImageFormat::Png)
+        .unwrap();
+        cur.into_inner()
+    };
+    let cover = png(1600, 1100, None, 10, 10);
+    let normal = png(700, 1000, None, 120, 120);
+    let wide11 = png(1100, 1000, None, 150, 150);
+    let spread = png(1600, 1100, Some(800), 40, 200);
+    zip_book_bytes(&[
+        (
+            "META-INF/container.xml",
+            br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        ),
+        (
+            "content.opf",
+            r#"<package version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:spread</dc:identifier><dc:title>跨页</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject></metadata><manifest><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="p3" href="p3.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="p2.xhtml" media-type="application/xhtml+xml"/><item id="cimg" href="cover.png" media-type="image/png" properties="cover-image"/><item id="i1" href="p1.png" media-type="image/png"/><item id="i3" href="p3.png" media-type="image/png"/><item id="i2" href="p2.png" media-type="image/png"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/></manifest><spine><itemref idref="cover"/><itemref idref="p1"/><itemref idref="p3"/><itemref idref="p2" page-spread-left="yes"/></spine></package>"#.as_bytes(),
+        ),
+        (
+            "cover.xhtml",
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>封面</title></head><body><img src="cover.png" alt=""/></body></html>"#.as_bytes(),
+        ),
+        (
+            "p1.xhtml",
+            br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>1</title></head><body><img src="p1.png" alt=""/></body></html>"#,
+        ),
+        (
+            "p3.xhtml",
+            br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>3</title></head><body><img src="p3.png" alt=""/></body></html>"#,
+        ),
+        (
+            "p2.xhtml",
+            br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>2</title></head><body><img src="p2.png" alt=""/></body></html>"#,
+        ),
+        (
+            "nav.xhtml",
+            r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="p2.xhtml">2</a></li></ol></nav></body></html>"#.as_bytes(),
+        ),
+        ("cover.png", &cover),
+        ("p1.png", &normal),
+        ("p3.png", &wide11),
+        ("p2.png", &spread),
+    ])
+}
+
+fn opf_name_of(epub: &[u8]) -> String {
+    let mut ar = ZipArchive::new(Cursor::new(epub)).unwrap();
+    (0..ar.len())
+        .map(|i| ar.by_index(i).unwrap().name().to_string())
+        .find(|n| n.ends_with(".opf"))
+        .unwrap()
+}
+
+/// spine 顺序里的页面路径。
+fn spine_pages(epub: &[u8]) -> Vec<String> {
+    let opf_name = opf_name_of(epub);
+    let opf = text_of(epub, &opf_name);
+    let dir = crate::epubzip::dir_of(&opf_name);
+    let items = crate::wash::manifest_items(&opf);
+    let by_id: HashMap<&str, String> = items.iter().map(|i| (i.id, i.path(dir))).collect();
+    crate::html::tags(&opf)
+        .filter(|t| t.is_start() && crate::wash::opf::is_local(t.name, "itemref"))
+        .filter_map(|t| {
+            let id = crate::wash::opf::tag_attr(&opf[t.start..t.end], "idref")?;
+            by_id.get(id).cloned()
+        })
+        .collect()
+}
+
+fn page_image(epub: &[u8], page: &str) -> String {
+    let text = text_of(epub, page);
+    let t = crate::html::tags(&text)
+        .find(|t| t.is_start() && crate::wash::opf::is_local(t.name, "img"))
+        .unwrap();
+    let src = crate::html::attr(&text[t.start..t.end], "src").unwrap();
+    crate::epubzip::resolve_link(page, src.value).0
+}
+
+fn image_average(epub: &[u8], image: &str) -> f64 {
+    let img = image::load_from_memory(&entry_bytes(epub, image))
+        .unwrap()
+        .to_luma8();
+    let sum: u64 = img.as_raw().iter().map(|&v| u64::from(v)).sum();
+    sum as f64 / f64::from(img.width() * img.height())
+}
+
+/// 跨页：ltr 左先右后、rtl 右先左后；1.1 宽的页、宽封面不拆；page-spread 属性去掉；开关关着不多页。
+#[test]
+fn comic_spread_split_ltr_rtl_and_skips_non_spreads() {
+    let book = spread_test_book();
+    let screen = crate::imgopt::test_screen();
+    let mut ltr = OptimizeOpts::new(screen);
+    ltr.comic_split_spreads = true;
+    let (out, _) = optimize_epub_with(&book, &ltr).unwrap();
+    let pages = spine_pages(&out);
+    assert_eq!(
+        pages.len(),
+        5,
+        "封面、普通页、1.1 宽页、左半、右半：{pages:?}"
+    );
+    let last: Vec<f64> = pages[pages.len() - 2..]
+        .iter()
+        .map(|p| image_average(&out, &page_image(&out, p)))
+        .collect();
+    assert!(last[0] < 120.0 && last[1] > 180.0, "ltr 左半在前：{last:?}");
+    let opf = text_of(&out, &opf_name_of(&out));
+    assert!(
+        !opf.contains("page-spread"),
+        "page-spread 属性要删掉：{opf}"
+    );
+    assert_eq!(
+        text_of(&out, "nav.xhtml"),
+        String::from_utf8(
+            book_entries(&book)
+                .into_iter()
+                .find(|e| e.0 == "nav.xhtml")
+                .unwrap()
+                .1
+        )
+        .unwrap(),
+        "目录不改"
+    );
+
+    let mut rtl = ltr.clone();
+    rtl.page_direction = Some(crate::direction::PageDirection::Rtl);
+    let (out, _) = optimize_epub_with(&book, &rtl).unwrap();
+    let pages = spine_pages(&out);
+    let last: Vec<f64> = pages[pages.len() - 2..]
+        .iter()
+        .map(|p| image_average(&out, &page_image(&out, p)))
+        .collect();
+    assert!(last[0] > 180.0 && last[1] < 120.0, "rtl 右半在前：{last:?}");
+
+    // 开关关着：原跨页仍是一页，没有新条目
+    let (plain, _) = optimize_epub_with(&book, &OptimizeOpts::new(screen)).unwrap();
+    assert_eq!(spine_pages(&plain).len(), 4);
+    assert!(
+        !(0..ZipArchive::new(Cursor::new(&plain)).unwrap().len()).any(|i| ZipArchive::new(
+            Cursor::new(&plain)
+        )
+        .unwrap()
+        .by_index(i)
+        .unwrap()
+        .name()
+        .contains("-eink2"))
+    );
+}
+
+/// 小图（短边不到阅读范围宽 1/3）、动图、图文混排页都不拆。
+#[test]
+fn comic_spread_split_skips_small_animated_and_text_pages() {
+    let png = |w: u32, h: u32| {
+        let mut cur = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(w, h, image::Rgb([40, 40, 40])))
+            .write_to(&mut cur, image::ImageFormat::Png)
+            .unwrap();
+        cur.into_inner()
+    };
+    let mut gif = Vec::new();
+    {
+        let mut enc = image::codecs::gif::GifEncoder::new(&mut gif);
+        let frame = image::Frame::new(image::RgbaImage::from_pixel(
+            1600,
+            1100,
+            image::Rgba([40, 40, 40, 255]),
+        ));
+        enc.encode_frames([frame.clone(), frame]).unwrap();
+    }
+    let small = png(400, 300);
+    let text_img = png(1600, 1100);
+    let book = zip_book_bytes(&[
+        (
+            "META-INF/container.xml",
+            br#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+        ),
+        (
+            "content.opf",
+            r#"<package version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:skip</dc:identifier><dc:title>不拆</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject></metadata><manifest><item id="s" href="s.xhtml" media-type="application/xhtml+xml"/><item id="g" href="g.xhtml" media-type="application/xhtml+xml"/><item id="t" href="t.xhtml" media-type="application/xhtml+xml"/><item id="si" href="s.png" media-type="image/png"/><item id="gi" href="g.gif" media-type="image/gif"/><item id="ti" href="t.png" media-type="image/png"/></manifest><spine><itemref idref="s"/><itemref idref="g"/><itemref idref="t"/></spine></package>"#.as_bytes(),
+        ),
+        (
+            "s.xhtml",
+            br#"<html><head><title>s</title></head><body><img src="s.png"/></body></html>"#,
+        ),
+        (
+            "g.xhtml",
+            br#"<html><head><title>g</title></head><body><img src="g.gif"/></body></html>"#,
+        ),
+        (
+            "t.xhtml",
+            r#"<html><head><title>t</title></head><body><p>字</p><img src="t.png"/></body></html>"#.as_bytes(),
+        ),
+        ("s.png", &small),
+        ("g.gif", &gif),
+        ("t.png", &text_img),
+    ]);
+    let mut opts = OptimizeOpts::new(crate::imgopt::test_screen());
+    opts.comic_split_spreads = true;
+    let (out, _) = optimize_epub_with(&book, &opts).unwrap();
+    assert_eq!(spine_pages(&out).len(), 3, "小图、动图、图文页都不拆");
+    assert!(
+        !(0..ZipArchive::new(Cursor::new(&out)).unwrap().len()).any(|i| ZipArchive::new(
+            Cursor::new(&out)
+        )
+        .unwrap()
+        .by_index(i)
+        .unwrap()
+        .name()
+        .contains("-eink2"))
+    );
+}
+
+/// 固定版式（Kindle）也能拆，新页带 viewport；CBZ 转出的书同样能拆。
+#[test]
+fn comic_spread_split_fixed_layout_and_cbz() {
+    let book = spread_test_book();
+    let kindle = profile::get("kindle").unwrap();
+    let (out, _) = optimize_epub_with(&book, &OptimizeOpts::for_profile(kindle)).unwrap();
+    let pages = spine_pages(&out);
+    assert_eq!(pages.len(), 5);
+    for page in [&pages[pages.len() - 2], &pages[pages.len() - 1]] {
+        let text = text_of(&out, page);
+        assert!(
+            text.contains(r#"name="viewport" content="width=1272, height=1696""#),
+            "{}: {text}",
+            page
+        );
+    }
+    let checked = crate::check::check_epub(&out, false).unwrap();
+    assert!(checked.ok, "{:?}", checked.errors);
+
+    // Kobo 固定版式百分比写法：拆出来的两半按画布尺寸，新页也写 100%×100%
+    let kobo = profile::get("kobo").unwrap();
+    let (out, _) = optimize_epub_with(&book, &OptimizeOpts::for_profile(kobo)).unwrap();
+    let pages = spine_pages(&out);
+    let last = &pages[pages.len() - 1];
+    let text = text_of(&out, last);
+    assert!(
+        text.contains(r#"name="viewport" content="width=1072, height=1448""#)
+            && text.contains(r#"style="width:100%;height:100%""#),
+        "{last}: {text}"
+    );
+
+    let png = |w: u32, h: u32, left: u8, right: u8| {
+        let mut cur = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(w, h, |x, _| {
+            let v = if x < w / 2 { left } else { right };
+            image::Rgb([v, v, v])
+        }))
+        .write_to(&mut cur, image::ImageFormat::Png)
+        .unwrap();
+        cur.into_inner()
+    };
+    let cbz = zip_book_bytes(&[
+        ("01.png", &png(1600, 1100, 10, 10)),
+        ("02.png", &png(700, 1000, 120, 120)),
+        ("03.png", &png(1600, 1100, 40, 200)),
+    ]);
+    let master = crate::convert::cbz::cbz_to_epub(&cbz, "跨页CBZ").unwrap();
+    let mut opts = OptimizeOpts::new(crate::imgopt::test_screen());
+    opts.comic_split_spreads = true;
+    let (out, _) = optimize_epub_with(&master, &opts).unwrap();
+    assert_eq!(spine_pages(&out).len(), 4, "CBZ：封面、普通页、左半、右半");
+}
+
+/// 从 zip 里读全部条目（测试里比对目录文件用）。
+fn book_entries(epub: &[u8]) -> Vec<(String, Vec<u8>)> {
+    let mut ar = ZipArchive::new(Cursor::new(epub)).unwrap();
+    (0..ar.len())
+        .map(|i| {
+            let mut f = ar.by_index(i).unwrap();
+            let name = f.name().to_string();
+            let mut data = Vec::new();
+            f.read_to_end(&mut data).unwrap();
+            (name, data)
+        })
+        .collect()
+}
+
 /// 漫画里的静态 GIF 页转成 PNG（条目名不变），OPF manifest 的 media-type 跟着改；动图、文字书里的 GIF 原样，media-type 不动。
 #[test]
 fn comic_gif_pages_become_png_and_manifest_media_type_follows() {

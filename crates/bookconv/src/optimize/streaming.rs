@@ -224,8 +224,15 @@ fn optimize_inner(
         }
         None => opts,
     };
-    let prep = prepare_entries(raw, opts, bytes_before, is_comic_book, transcoded)?;
+    let mut prep = prepare_entries(raw, opts, bytes_before, is_comic_book, transcoded)?;
     check_cancel(cancel)?;
+    // 漫画跨页拆分：先把原页/原图换成两半、补好 manifest/spine，再建写出计划（新图不再是 worker 处理的空占位）
+    let split_screen = if prep.is_comic_book {
+        opts.comic_screen.unwrap_or(opts.screen)
+    } else {
+        opts.screen
+    };
+    let split_images = split_spread_pages(&mut prep, opts, &mut archive, split_screen)?;
     let plan = WritePlan::new(&prep, opts, &mut archive);
     // Kobo 固定版式的百分比写法要按图的比例决定 img 样式。流式写出时图还没处理，这里只读页图文件头（含 EXIF，不改图、
     // 不解码整张），按 `prepare_comic_page*` 的装饰阈值（短边 < 阅读范围宽 1/3，见 `imgopt`）预判：
@@ -247,6 +254,10 @@ fn optimize_inner(
                 };
                 image_dims.insert(name.clone(), dims);
             }
+        }
+        // 拆出来的两半都排到画布大小，固定版式百分比写法按画布记
+        for name in split_images {
+            image_dims.insert(name, (plan.screen.width, plan.screen.height));
         }
     }
 
@@ -760,6 +771,317 @@ fn scan_page_numbers(
         .zip(cuts)
         .filter_map(|(n, c)| c.map(|c| (n.to_string(), c)))
         .collect())
+}
+
+/// 一个已拆好的跨页：原页/原图留给先读的一半，新页/新图给后读的一半。
+struct SpreadSplit {
+    page: String,
+    image: String,
+    new_page: String,
+    new_image: String,
+    new_page_bytes: Vec<u8>,
+    left: Vec<u8>,
+    right: Vec<u8>,
+    media_type: &'static str,
+}
+
+/// 跨页拆分（2026-11-10，profile `comic_split_spreads`）：在阶段二写出前，把漫画里的横向跨页
+/// （纯图页、非封面、非装饰小图、宽/高 ≥ [`crate::imgopt::SPREAD_MIN_ASPECT`]）正中拆成两张竖页。
+/// 原页/原图条目名留给先读的一半，新页/新图用 `<原名>-eink2.<ext>`；manifest、spine 在这里补好，
+/// OPF 后面照常由 [`finalize_opf`] 推迟写。返回拆出来的图条目名（固定版式百分比写法要用画布尺寸）。
+fn split_spread_pages<R: std::io::Read + std::io::Seek>(
+    prep: &mut Prepared,
+    opts: &OptimizeOpts,
+    archive: &mut ZipArchive<R>,
+    screen: crate::imgopt::Screen,
+) -> Result<Vec<String>, BookError> {
+    if !opts.comic_split_spreads || !prep.is_comic_book {
+        return Ok(Vec::new());
+    }
+    let Some(opf_name) = prep.opf_name.clone() else {
+        return Ok(Vec::new());
+    };
+    let Some(opf_idx) = prep.entries.iter().position(|e| e.0 == opf_name) else {
+        return Ok(Vec::new());
+    };
+    let Ok(opf_text) = String::from_utf8(prep.entries[opf_idx].1.clone()) else {
+        return Ok(Vec::new());
+    };
+    if !opf_text.contains("</manifest>") || !opf_text.contains("</spine>") {
+        return Ok(Vec::new());
+    }
+    let opf_dir = crate::epubzip::dir_of(&opf_name).to_string();
+    let items = crate::wash::manifest_items(&opf_text);
+    let by_id: HashMap<&str, &crate::wash::opf::ManifestItem<'_>> =
+        items.iter().map(|i| (i.id, i)).collect();
+    let mut spine_pages = Vec::new();
+    for t in crate::html::tags(&opf_text) {
+        if !t.is_start() || !crate::wash::opf::is_local(t.name, "itemref") {
+            continue;
+        }
+        let Some(idref) = crate::wash::opf::tag_attr(&opf_text[t.start..t.end], "idref") else {
+            continue;
+        };
+        if let Some(it) = by_id.get(idref) {
+            spine_pages.push(it.path(&opf_dir));
+        }
+    }
+    let Some(first_spine) = spine_pages.first().cloned() else {
+        return Ok(Vec::new());
+    };
+    let cover = crate::wash::opf::declared_cover(&opf_text).map(|it| it.path(&opf_dir));
+    let direction = opts
+        .page_direction
+        .or(opts.comic_page_direction.filter(|_| prep.is_comic_book))
+        .or_else(|| crate::direction::spine_direction(&opf_text));
+    let rtl = direction == Some(crate::direction::PageDirection::Rtl);
+    let comic_page = crate::imgopt::ComicPage {
+        gamma: opts.comic_gamma,
+        autocontrast: opts.comic_autocontrast,
+        trim_specks: opts.comic_trim_specks,
+        no_upscale: !opts.comic_upscale,
+        cut_bottom: None,
+        dark_bg: opts.comic_dark_bg,
+    };
+    let mut taken: HashSet<String> = prep.entries.iter().map(|e| e.0.clone()).collect();
+    let mut seen_images = HashSet::new();
+    let mut splits = Vec::new();
+    for (page_name, data, ish) in prep.entries.iter() {
+        if !*ish || !spine_pages.iter().any(|p| p == page_name) || page_name == &first_spine {
+            continue;
+        }
+        let Ok(page_text) = std::str::from_utf8(data) else {
+            continue;
+        };
+        if !crate::comicfxl::image_only(page_text) {
+            continue;
+        }
+        let mut img = None;
+        for t in crate::html::tags(page_text) {
+            if !t.is_start() || !crate::wash::opf::is_local(t.name, "img") {
+                continue;
+            }
+            let tag = &page_text[t.start..t.end];
+            if let Some(a) = crate::html::attr(tag, "src") {
+                let (path, _) = crate::epubzip::resolve_link(page_name, a.value);
+                img = Some((path, t.start + a.value_start, t.start + a.value_end));
+                break;
+            }
+        }
+        let Some((img_path, src_start, src_end)) = img else {
+            continue;
+        };
+        if Some(&img_path) == cover.as_ref() || !seen_images.insert(img_path.clone()) {
+            continue;
+        }
+        let Some(img_idx) = prep.entries.iter().position(|e| e.0 == img_path) else {
+            continue;
+        };
+        if !prep.entries[img_idx].1.is_empty() {
+            continue;
+        }
+        let Some((iw, ih)) = read_image_head(archive, &img_path, |b| {
+            crate::imgopt::guard(|| crate::imgopt::display_dims(b))
+        })
+        .ok()
+        .flatten() else {
+            continue;
+        };
+        if iw.min(ih) < screen.width / 3 || !crate::imgopt::is_spread(iw, ih) {
+            continue;
+        }
+        let bytes = crate::epubzip::read_by_name(archive, &img_path)?;
+        let Some((left, right)) = crate::imgopt::prepare_comic_spread(
+            &bytes,
+            screen,
+            opts.comic_margin,
+            opts.grayscale,
+            comic_page,
+            opts.limits.max_decode_pixels,
+        ) else {
+            continue;
+        };
+        let new_page = split_entry_name(&mut taken, page_name, "xhtml");
+        let ext = crate::util::image_kind(&left).map_or_else(
+            || crate::util::image_ext_of(&img_path),
+            |k| k.ext.to_string(),
+        );
+        let new_image = split_entry_name(&mut taken, &img_path, &ext);
+        let media_type = crate::util::image_kind(&left)
+            .map_or_else(|| crate::util::image_media_type_of_ext(&ext), |k| k.mime);
+        let href = crate::epubzip::href_to(crate::epubzip::dir_of(page_name), &new_image, "");
+        let new_page_bytes = crate::html::apply_edits(
+            page_text,
+            vec![(src_start, src_end, crate::util::xml_escape(&href))],
+        )
+        .into_bytes();
+        splits.push(SpreadSplit {
+            page: page_name.clone(),
+            image: img_path,
+            new_page,
+            new_image,
+            new_page_bytes,
+            left,
+            right,
+            media_type,
+        });
+    }
+    if splits.is_empty() {
+        return Ok(Vec::new());
+    }
+    // manifest：新页、新图各一项；id 避开 OPF 里已有的
+    let mut ids: HashSet<String> = items.iter().map(|i| i.id.to_string()).collect();
+    let mut next_id = 0usize;
+    let mut fresh_id = |prefix: &str| loop {
+        let id = format!("{prefix}-{next_id}");
+        next_id += 1;
+        if ids.insert(id.clone()) {
+            return id;
+        }
+    };
+    let mut manifest_specs: Vec<(String, String, &'static str)> = Vec::new();
+    let mut spine_adds = Vec::new();
+    let mut retyped = Vec::new();
+    for s in &splits {
+        let page_id = fresh_id("eink-spread-page");
+        let img_id = fresh_id("eink-spread-img");
+        manifest_specs.push((
+            page_id.clone(),
+            crate::epubzip::href_to(&opf_dir, &s.new_page, ""),
+            "application/xhtml+xml",
+        ));
+        manifest_specs.push((
+            img_id,
+            crate::epubzip::href_to(&opf_dir, &s.new_image, ""),
+            s.media_type,
+        ));
+        spine_adds.push((s.page.clone(), page_id));
+        if let Some(it) = items.iter().find(|it| it.path(&opf_dir) == s.image) {
+            if it.media_type != s.media_type {
+                retyped.push((s.image.clone(), s.media_type));
+            }
+        }
+    }
+    let new_items: Vec<crate::wash::opf::NewItem<'_>> = manifest_specs
+        .iter()
+        .map(|(id, href, media_type)| crate::wash::opf::NewItem {
+            id: id.as_str(),
+            href: href.as_str(),
+            media_type,
+            properties: "",
+        })
+        .collect();
+    let Some(opf) = crate::wash::opf::insert_manifest_items(&opf_text, &new_items) else {
+        return Ok(Vec::new());
+    };
+    let opf = if retyped.is_empty() {
+        opf
+    } else {
+        crate::optimize::html_pass::set_manifest_media_types(&opf, &opf_name, &retyped)
+    };
+    let Some(opf) = add_spread_spine_items(&opf, &opf_dir, &spine_adds) else {
+        return Ok(Vec::new());
+    };
+    prep.entries[opf_idx].1 = opf.into_bytes();
+    // 原页照旧（先读的一半），新页紧跟；原图字节换成先读的一半，新图条目紧跟。
+    let by_page: HashMap<&str, &SpreadSplit> =
+        splits.iter().map(|s| (s.page.as_str(), s)).collect();
+    let by_img: HashMap<&str, &SpreadSplit> =
+        splits.iter().map(|s| (s.image.as_str(), s)).collect();
+    let old = std::mem::take(&mut prep.entries);
+    let mut out = Vec::with_capacity(old.len() + splits.len() * 2);
+    for (name, data, ish) in old {
+        if let Some(s) = by_img.get(name.as_str()) {
+            let (first, second) = if rtl {
+                (&s.right, &s.left)
+            } else {
+                (&s.left, &s.right)
+            };
+            out.push((name, first.clone(), false));
+            out.push((s.new_image.clone(), second.clone(), false));
+        } else if let Some(s) = by_page.get(name.as_str()) {
+            out.push((name, data, ish));
+            out.push((s.new_page.clone(), s.new_page_bytes.clone(), true));
+        } else {
+            out.push((name, data, ish));
+        }
+    }
+    prep.entries = out;
+    prep.rep.total_files += splits.len() * 2;
+    prep.rep.html_files += splits.len();
+    let mut split_images = Vec::with_capacity(splits.len() * 2);
+    for s in &splits {
+        split_images.push(s.image.clone());
+        split_images.push(s.new_image.clone());
+    }
+    Ok(split_images)
+}
+
+/// 新条目名：同目录、原名去扩展名 + `-eink2`（重名就 `-eink3`…），扩展名用 `ext`。
+fn split_entry_name(taken: &mut HashSet<String>, name: &str, ext: &str) -> String {
+    let (dir, file) = name.rsplit_once('/').unwrap_or(("", name));
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    for n in 2.. {
+        let file = format!("{stem}-eink{n}.{ext}");
+        let path = if dir.is_empty() {
+            file
+        } else {
+            format!("{dir}/{file}")
+        };
+        if taken.insert(path.clone()) {
+            return path;
+        }
+    }
+    unreachable!()
+}
+
+/// 在 OPF spine 里紧跟原页插一个新 itemref，并去掉原页 itemref 上的 `page-spread-*` 属性。
+/// `adds` 是（原页 zip 路径，新页 itemref 的 idref）；有一项在 spine 里找不到就返回 `None`（不改）。
+fn add_spread_spine_items(opf: &str, opf_dir: &str, adds: &[(String, String)]) -> Option<String> {
+    let items = crate::wash::manifest_items(opf);
+    let path_by_id: HashMap<&str, String> = items.iter().map(|i| (i.id, i.path(opf_dir))).collect();
+    let mut edits = Vec::new();
+    let mut matched = 0usize;
+    for t in crate::html::tags(opf) {
+        if !t.is_start() || !crate::wash::opf::is_local(t.name, "itemref") {
+            continue;
+        }
+        let tag = &opf[t.start..t.end];
+        let Some(idref) = crate::wash::opf::tag_attr(tag, "idref") else {
+            continue;
+        };
+        let Some(path) = path_by_id.get(idref) else {
+            continue;
+        };
+        let Some((_, new_id)) = adds.iter().find(|(p, _)| p == path) else {
+            continue;
+        };
+        matched += 1;
+        for a in crate::html::attrs(tag) {
+            let local = a
+                .name
+                .rsplit(':')
+                .next()
+                .unwrap_or(a.name)
+                .to_ascii_lowercase();
+            if local.starts_with("page-spread-") {
+                // 连属性前的空白一起删，别留下两个空格
+                let before = &tag[..a.start];
+                let ws = before.len() - before.trim_end().len();
+                edits.push((t.start + a.start - ws, t.start + a.end, String::new()));
+            }
+        }
+        let linear = crate::html::attr(tag, "linear")
+            .map(|a| format!(" linear=\"{}\"", a.value))
+            .unwrap_or_default();
+        let el = t.name;
+        edits.push((t.end, t.end, format!("<{el} idref=\"{new_id}\"{linear}/>")));
+    }
+    if matched != adds.len() {
+        return None;
+    }
+    edits.sort_by_key(|e| e.0);
+    Some(crate::html::apply_edits(opf, edits))
 }
 
 /// 取回写 zip（[`OrderedSink`]）。图片提前提交 `lookahead` 张，worker 自己打开源文件读原图字节（原图在 zip 里是压缩的时，解压整卷漫画在
