@@ -50,6 +50,7 @@ const COMMANDS: &[Command] = &[
   ireader  掌阅（USB）    EPUB  存储根目录 documents/<子目录>/
   kobo     Kobo（USB）    KEPUB 存储根目录 books/<子目录>/
   hanvon   汉王（USB）    EPUB  存储根目录 documents/<子目录>/
+  bigme    Bigme（USB）   EPUB  存储根目录 books/<子目录>/
   <子目录> 是原件在跟踪目录里所在的子目录。没接上的设备这次跳过，下次接上再传。
   没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢）。
 
