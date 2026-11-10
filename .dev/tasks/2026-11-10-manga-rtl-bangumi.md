@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-manga-rtl-bangumi
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
-- 更新时间: 2026-11-10T13:30+08:00
+- 更新时间: 2026-11-10T12:20+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 B 节）
 
 ## 需求原文
@@ -175,6 +175,20 @@
     2. `series_lookup_prefers_info_with_region` 后半段改成断言：抄来的 region 仍是 None、`needs_metadata` 为 true；再加一步：把 01 卷改成有地区「日本」后再 `series_lookup`，02 卷抄到「日本」
     3. 「另一卷这一版没找到」分支（约 571–579 行）给本卷记 `Some("")` 可以保留（这一卷自己有 info、同一套都没找到）
   - 建议（不阻断）：加一个网络出错的测试（假网站报临时错误 → 返回 Err / Failed，`region` 仍 None、下次还会重找）
+- 返工验收（第 2 轮返工，`6317ded`）：**退回**（sheng-ren，2026-11-10，box 上重跑；状态退回 pending，同一执行方 opencode-local）
+  - 做到的（附证据）：
+    - 阻断 3：`series_lookup`（`metadata.rs` 约 561–568 行）不再给抄来的 info 记 `Some("")`，原样抄（`region` 仍 None）；「同一套这一版没找到」分支保留。`series_lookup_prefers_info_with_region` 后半段：两卷都没地区 → 抄来 None、存下、`needs_metadata` true；01 改「日本」后再抄 → 02 存下「日本」、`needs_metadata` false
+    - 网络出错建议：`Fake.transient` + `bangumi_network_error_keeps_region_for_retry`：没封面时报临时错 → `Err`、查 1 次、`region` 仍 None、`needs_metadata` 仍 true
+    - 范围：`26d9d22..6317ded` 只改 `metadata.rs` 和任务单
+    - 测试：`cargo test --workspace` 全过（0 失败，最大一组 522 个）；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`cargo fmt -p library -- --check` 通过（edition 2021）；`fp_golden` 通过，金样文件这轮没改，相对 master 仍只多 8 行
+  - 状态机重走（`needs_metadata` → `fill_metadata` force → `fetch_metadata_inner` 第 429 行「`!force || series_fetched`」才走 `series_lookup`）：
+    - 不会死循环：旧卷 force 且这一轮 `series_fetched` 为 false → 自己联网，Found（有地区，或换成非 Bangumi 来源）/ NotFound（记 `Some("")`）都停；网络出错 / 离线不改，下次再试（`fill_metadata` 离线直接跳过）。抄到没地区旧 info 的卷下一轮还会自己 force 联网，每轮至少有一卷离开「Bangumi + None」，有限轮内收敛
+    - `--clear`：info 清掉、记成找过，`needs_metadata` false，方向回原书、指纹去掉 `r`；`meta --fetch`（不带 `--force`）对已有 info 的旧记录不重找、不改；`meta --fetch --force` 第一卷联网，后面各卷走 `series_lookup`（见下面阻断 4）
+    - 「另一卷这一版没找到」分支给本卷记 `Some("")`：要走到这里得 `found` 为空（同一套都没 info），force 路径下这时 `series_fetched` 不可能为 true，实际只在不 force（本卷 info 是 None、不记）时走到，无害
+  - **阻断 4（要改，处理先后随机导致永久判错）**：`series_lookup` 的 `has_region` 把 `Some("")`（查过、判不出）和「日本」一样当「有地区」。场景：同一套三卷都是旧记录，`list()` 按内容哈希 id 排，先后随机——A 卷 force 联网 NotFound（Bangumi 按卷分条目，个别卷搜不到是可能的）记成 `Some("")`、不记 `series_fetched`；D 卷联网 Found「日本」、记 `series_fetched`；B 卷 force 且 `series_fetched` 为 true → `series_lookup` 第一档「有地区且当前版本」里 A、D 都算，A 排在前就抄到 `Some("")`，B 卷从此 `needs_metadata` false、照原书 ltr，以后也不会再纠正；`meta --fetch --force` 重跑同样可能再抄到 A（A 又 NotFound）。新加的卷（不 force）也一样。上一轮我只要求「有地区优先」，没区分空串，是我漏了。要改：
+    1. `series_lookup` 挑选顺序改成：地区非空且当前版本 → 地区非空 → 地区是 `Some("")` 且当前版本 → 地区是 `Some("")` → 当前版本 → 其余（即把 `has_region` 拆成「判出地区」`region` 非空、和「查过判不出」`Some("")` 两档，判出的在前）
+    2. 测试：同一套三卷，01 卷 Bangumi `Some("")`、02 卷 Bangumi「日本」，都是当前版本；03 卷 `series_lookup` 抄到的是「日本」（断言与 `list()` 先后无关）
+    3. 代码注释和 `series_lookup` 文档注释写明「判出地区的优先于判不出的」
 - 返工后：sheng-ren 重新验收，通过后再请 vinci 跑 agy 二审（回执 `.dev/tasks/2026-11-10-manga-rtl-bangumi.agy.md`）
 - 二审：未开始（等返工验收通过）
 - 合并：
