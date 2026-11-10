@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-gutter-crop
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/comic-gutter-crop（2026-11-10 已把 master `d50a889`（含 A 画质统一、B 日漫 rtl、C 跨页拆分）`--no-ff` 合进来：`bdc880f`；在这个分支上接着做，不 rebase）
-- 更新时间: 2026-11-10T17:30+08:00
+- 更新时间: 2026-11-10T17:45+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 D 节）
 
 ## 需求原文
@@ -147,6 +147,18 @@
 - 测试：`cargo test -p bookconv` 536 个全过；`cargo test --workspace` 782 个全过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。没跑真书回归、没上真机；四台 profile 仍都没开。
 - 偏离：无（只改 `imgopt.rs` 和三处文档）。
 - 未做：审查建议里「封面是否跳过」没动（灰度封面仍会被收）；留给真机 A/B 看是否要另加规则。
+
+### 返工（复验阻断 2，2026-11-10）
+
+- 接受返工：`26ebe44`；返工代码：`ec7b53d`（只改 `imgopt.rs`）。
+- **阻断 2（开关关着产物变了）**：上一轮把 16 位 RGB 先 `into_rgb8()` 截成 8 位再 `rgb8_into_luma8`，和原来的 `into_luma8(decoded)`（`image` 自己按 16 位转灰度）舍入不同；`need_gray_content` 只决定扫不扫，所以关着也变。现在恢复原来的转灰度写法：
+  - `if gray || to_gray { Page8::Gray(into_luma8(decoded)) } else { Page8::Rgb(decoded.into_rgb8()) }`。
+  - `gray_content` 在转换前单独算：只在 `need_gray_content`（= `gutter_crop` 开）且原图不是灰度通道时，`decoded.to_rgb8()` 拷一份再 `is_gray_content`；关着完全不多扫。
+  - 文档不需要改（说法仍是「按转灰度之前的原图判」）。
+- 测试 `imgopt::tests::sixteen_bit_rgb_keeps_original_grayscale_conversion`：16 位 RGB 彩色 / R=G=B PNG，在 `grayscale = true` 下 `need_gray_content = false` 和 `true` 出的灰度图都等于 `DynamicImage::into_luma8` 的结果；16 位 R=G=B 开格间空白照常收，16 位彩色不收。
+- 测试：`cargo test -p bookconv` 537 个全过；`cargo test --workspace` 783 个全过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。没跑真书回归、没上真机；四台 profile 仍都没开。
+- 偏离：无（只改 `imgopt.rs`）。
+- 建议：上次提交正文的 `\n\n` 是字面量，这次返工提交改用多个 `-m` 真换行。
 
 ## 审查
 <!-- 负责 bot 填写 -->
