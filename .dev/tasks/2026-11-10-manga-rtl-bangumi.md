@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-10-manga-rtl-bangumi
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: feat/manga-rtl-bangumi（从最新 master 切出；建议在 2026-11-10-ireader-comic-quality 合并之后）
 - 更新时间: 2026-11-10T12:45+08:00
@@ -152,6 +152,17 @@
     - `comic_direction` 只认 `meta.comic == Some(true)`：早期条目 `comic` 还是 None 时不会写 rtl，直到别的命令把 `comic` 存下。`plan()` 里已经用 `self.comic_of(meta)?` 算出了 `comic`，可以改成把这个结果传进 `comic_direction`（`produce()` 同样取 `comic_of`），两处口径一致
     - `force` 重找对书里没有封面的书也会重找封面（原有行为，「没记网站书名」那条也一样）：`docs/usage.md` 那句「下一次 sync 会重找一次」后补半句「书里没封面的也会重找封面」
     - 「结果」里 base..head 写到 `4d2dd41`，分支头是 `85088ec`
+- 返工验收（第 1 轮返工，`3542664`）：**退回**（sheng-ren，2026-11-10，box 上重跑；状态退回 pending，同一执行方 opencode-local）
+  - 做到的（附证据）：
+    - 阻断 1：`fetch_metadata_with_chain` 的 NotFound 分支（`metadata.rs` 约 488–508 行）把旧 Bangumi info 的 `region` 记成 `Some("")`；`Failed` / `Err` 不走这个分支，网络出错不记（代码核对，没有专门测试，见建议）；`series_lookup`（约 549–557 行）按「有地区且当前版本 → 有地区 → 当前版本 → 其余」挑。测试 `bangumi_not_found_marks_region_checked`（假网站 `Fake`：查 1 次、记成 `Some("")`、`needs_metadata` 变 false、计数仍 1）、`series_lookup_prefers_info_with_region`（抄到有地区的 01 卷）
+    - 阻断 2：`flow.rs` 新增 OPF spine 写 rtl 的 EPUB 漫画 + Bangumi「中国」，ireader 产物 spine 仍是 rtl
+    - 建议：`comic_direction` 改成收调用方的 `comic`（`generate.rs` 的 `plan()`、`produce()` 都用 `comic_of`）；`docs/usage.md` 补了「书里没封面的也会重找封面」「没找到的记成查过」；「结果」base..head 写成 `0fc241a..HEAD`
+    - 测试：`cargo test --workspace` 23 组 765 个通过、0 失败；clippy exit 0；8 个改动的 .rs 文件 `rustfmt --edition 2021 --check` 全过；`fp_golden.txt` 相对 master 仍只多 8 行、0 行删除，返工没动金样
+  - **阻断 3（返工新引入，根子在我上一轮审查第 1 条里「Shared 抄来的 info 也没有 region 时记成 Some("")」这句，是我写错了）**：`series_lookup` 第 561–565 行把抄来的、没记地区的旧 Bangumi info 记成 `Some("")`。场景：升级后第一次 `sync`，一套漫画里新加的一卷（`info` 是 None、不 force）排在同一套旧卷前面处理（`list()` 按 id 排，id 是内容哈希，先后随机），它从旧卷抄到没地区的 info 并记成 `Some("")`；随后旧卷 force 重找拿到「日本」，这一卷却永远是「判不出」——同一套日漫里这一卷照原书 ltr，以后也不会再自动纠正（`needs_metadata` 已是 false）。要改：
+    1. 删掉 `metadata.rs` 561–565 行的记 `Some("")`：抄来的 info 没地区就原样抄（`region` 仍 None）。不会死循环：下一次 `sync` 这一卷 `needs_metadata` 为 true → force，新一轮开始时 `series_fetched` 为 false → 这一卷自己联网重找，结果是 Found（有地区）或 NotFound（记 `Some("")`），都会停
+    2. `series_lookup_prefers_info_with_region` 后半段改成断言：抄来的 region 仍是 None、`needs_metadata` 为 true；再加一步：把 01 卷改成有地区「日本」后再 `series_lookup`，02 卷抄到「日本」
+    3. 「另一卷这一版没找到」分支（约 571–579 行）给本卷记 `Some("")` 可以保留（这一卷自己有 info、同一套都没找到）
+  - 建议（不阻断）：加一个网络出错的测试（假网站报临时错误 → 返回 Err / Failed，`region` 仍 None、下次还会重找）
 - 返工后：sheng-ren 重新验收，通过后再请 vinci 跑 agy 二审（回执 `.dev/tasks/2026-11-10-manga-rtl-bangumi.agy.md`）
 - 二审：未开始（等返工验收通过）
 - 合并：
