@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-spread-split
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/comic-spread-split（从最新 master 切出；须在 2026-11-10-manga-rtl-bangumi 合并之后）
-- 更新时间: 2026-11-10T14:20+08:00
+- 更新时间: 2026-11-10T14:50+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 C 节）
 
 ## 需求原文
@@ -57,10 +57,10 @@
 - 风险点：设备行为（页数、顺序变）、漫画规则（动漫画路径，维护者 2026-11-10 已同意）→ 合并前 agy 二审
 
 ## 分步任务
-1. [ ] `profile/src/lib.rs` 加 `comic_split_spreads`；四个 toml 写 `true`，注释「2026-11-10 维护者定：竖屏只拆跨页、不旋转；没上真机」。自检：`cargo test -p profile`
-2. [ ] `imgopt.rs`：`pub fn spread_halves(bytes, …) -> Option<(Vec<u8>, Vec<u8>)>`（或同义：返回左右两半的解码图 / 字节）和 `is_spread(w, h) -> bool`；单元测试：1600×1100 → 是、1100×1000（1.1）→ 否、700×1000 → 否；奇数宽 1601 → 左 800 右 801
-3. [ ] `streaming.rs` + `mod.rs`：按「约束 → 写法」拆页、补 manifest / spine、写新条目；`OptimizeOpts::comic_split_spreads`；COMIC_VERSION 66。自检：`cargo test -p bookconv`
-4. [ ] `optimize/tests.rs` 新测试（合成书：封面一页 + 普通页 + 一张 1600×1100 跨页，左半填灰度 40、右半填 200，或画 L / R）：
+1. [x] `profile/src/lib.rs` 加 `comic_split_spreads`；四个 toml 写 `true`，注释「2026-11-10 维护者定：竖屏只拆跨页、不旋转；没上真机」。自检：`cargo test -p profile`
+2. [x] `imgopt.rs`：`pub fn spread_halves(bytes, …) -> Option<(Vec<u8>, Vec<u8>)>`（或同义：返回左右两半的解码图 / 字节）和 `is_spread(w, h) -> bool`；单元测试：1600×1100 → 是、1100×1000（1.1）→ 否、700×1000 → 否；奇数宽 1601 → 左 800 右 801
+3. [x] `streaming.rs` + `mod.rs`：按「约束 → 写法」拆页、补 manifest / spine、写新条目；`OptimizeOpts::comic_split_spreads`；COMIC_VERSION 66。自检：`cargo test -p bookconv`
+4. [x] `optimize/tests.rs` 新测试（合成书：封面一页 + 普通页 + 一张 1600×1100 跨页，左半填灰度 40、右半填 200，或画 L / R）：
    - ltr：spine 多一页，顺序 封面、普通页、左半、右半；左半那页的图平均灰度接近 40
    - rtl（OPF spine 写 rtl，或 `page_direction = Some(Rtl)`）：顺序 右半、左半
    - 1.1 宽的页、封面是宽图时：不拆
@@ -68,17 +68,17 @@
    - 开关关着：产物和现在逐字节相同
    - 固定版式（kindle 的 opts）也能拆，新页带 viewport
    - CBZ 来源（`convert::cbz` 转出的）同样能拆
-5. [ ] `fingerprint.rs` 新字母；`fp_golden.rs` 加 mutation；`UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden`；`git diff` 应只有漫画行变（四台），文字书行 0 变化
-6. [ ] 跑一遍 KFX、KEPUB：用 `cargo run --release -p bookconv --bin epub-optimize -- --device=kindle` / `--device=kobo` 处理第 4 步的合成书，再 `epub-to-kfx` / 书库生成，确认页数 +1、不报错（结果里贴命令和输出摘要）
-7. [ ] 文档：`docs/architecture.md`（只改上面那句旧表述）、`docs/typesetting.md`、`docs/devices.md`、`docs/decisions.md`、`docs/development.md#版本号`
-8. [ ] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
+5. [x] `fingerprint.rs` 新字母；`fp_golden.rs` 加 mutation；`UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden`；`git diff` 应只有漫画行变（四台），文字书行 0 变化
+6. [x] 跑一遍 KFX、KEPUB：用 `cargo run --release -p bookconv --bin epub-optimize -- --device=kindle` / `--device=kobo` 处理第 4 步的合成书，再 `epub-to-kfx` / 书库生成，确认页数 +1、不报错（结果里贴命令和输出摘要）
+7. [x] 文档：`docs/architecture.md`（只改上面那句旧表述）、`docs/typesetting.md`、`docs/devices.md`、`docs/decisions.md`、`docs/development.md#版本号`
+8. [x] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告
 
 ## 验收标准
-- [ ] 功能：满足判定的跨页拆成两页，ltr 左先右后、rtl 右先左后；不满足的（宽页、封面、小图、动图、非纯图页）不变
-- [ ] 功能：manifest / spine 合法（`bookconv::check::check_epub_file` 质量门通过），目录仍指向先读的那半
-- [ ] 测试：`cargo test --workspace` 全部通过；clippy 0 警告；第 4 步每条都有断言
-- [ ] 不回归：开关关着时产物逐字节不变（测试证明）；文字书指纹 0 变化
-- [ ] 「不做」的事确实没做
+- [x] 功能：满足判定的跨页拆成两页，ltr 左先右后、rtl 右先左后；不满足的（宽页、封面、小图、动图、非纯图页）不变
+- [x] 功能：manifest / spine 合法（`bookconv::check::check_epub_file` 质量门通过），目录仍指向先读的那半
+- [x] 测试：`cargo test --workspace` 全部通过；clippy 0 警告；第 4 步每条都有断言
+- [x] 不回归：开关关着时产物逐字节不变（测试证明）；文字书指纹 0 变化
+- [x] 「不做」的事确实没做
 - [ ] 真机（vinci，合并后）：四台看合成跨页书（或 vinci 找的真跨页书）两半的顺序、铺满情况；Kindle、Kobo 固定版式看新页没有被拉伸
 
 ## 交付物
@@ -90,14 +90,39 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
+
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-10 14:20–14:50 +08:00
+- base..head：`origin/master（a02315d）..HEAD`（任务单提交 + `663d9b8` accepted + `36cb229` 实现）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  |---|---|---|---|
+  | 接受任务 | `663d9b8` | `.dev/tasks/2026-11-10-comic-spread-split.md` | 状态改为 accepted |
+  | 1–8 | `36cb229` | `imgopt.rs`、`streaming.rs`、`optimize/mod.rs`、`optimize/tests.rs`、profile、四个 toml、`fingerprint.rs`、`fp_golden`、文档 | 跨页拆分、c66、W、测试和文档 |
+
+- 测试：
+
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  |---|---|---|
+  | `cargo test -p profile` | 通过 | 13 个，含四台 `comic_split_spreads` 断言 |
+  | `cargo test -p bookconv` | 通过 | 527 个，含新增 3 个跨页测试和 2 个 imgopt 测试 |
+  | `cargo test --workspace` | 通过 | 773 个，0 失败 |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden` | 通过 | 旧文字书行 0 变化；漫画行因 c66 + `W` 重建；新增 `comic_split_spreads` mutation 8 行 |
+
+- 功能检查（离线测试）：
+  - `imgopt::tests::spread_aspect_and_widths`：1600×1100 是跨页、1100×1000 / 700×1000 不是、正好 1200×1000 按 6/5 整数比算跨页；1601 宽切成 800 / 801。
+  - `optimize::tests::comic_spread_split_ltr_rtl_and_skips_non_spreads`：合成书封面（宽）、普通页、1.1 宽页、跨页（左 40 / 右 200）；ltr 多一页且左半暗、右半亮，rtl 反过来；宽封面和 1.1 宽页不拆；OPF 不再有 `page-spread`；nav 字节不变；开关关着仍是 4 页、没有 `-eink2` 条目。
+  - `optimize::tests::comic_spread_split_skips_small_animated_and_text_pages`：小图（短边 < 阅读范围宽 1/3）、动图、图文混排页都不拆。
+  - `optimize::tests::comic_spread_split_fixed_layout_and_cbz`：Kindle、Kobo 固定版式都能拆，新页带 viewport（Kobo 100%×100%）；`check::check_epub` 质量门通过；CBZ 转出的书同样多一页。
+- KFX / KEPUB 实际命令（合成书 `/tmp/opencode/spread-split/input.epub`，4 页原始 spine）：
+  - `cargo run --release -p bookconv --bin epub-optimize -- --device=kindle input.epub kindle.epub` → 17 文件 / 6 章；产物 spine 5 页（cover、p1、p3、p2、eink-spread-page-0），新增 `p2-eink2.xhtml`、`p2-eink2.png`，`page-spread` 已去掉。
+  - `cargo run --release -p kfx --bin epub-to-kfx -- --id=1 kindle.epub kindle.kfx` → 59684 字节；`kfx-dump` 显示 5 个 sec（sec0–sec4）。
+  - `cargo run --release -p bookconv --bin epub-optimize -- --device=kobo input.epub kobo.epub` + `cargo run --release -p bookconv --bin epub-to-kepub -- kobo.epub kobo.kepub.epub` → KEPUB 5 章、spine 5 页，新页和 `kobo.kepub.epub` 都正常写出，没有报错。
+- 不回归：开关关着时测试断言页数不变、无 `-eink2` 条目；`fp_golden.txt` 的旧文字书行 0 变化（新增 mutation 的 4 条文字书行是新增，不是旧行变化）。
+- 遇到的问题：无。
+- 偏离：无（17 个文件都在「涉及文件」里，`crates/library/src/fingerprint.rs` 只加了 `W`）。
+- 未完成：真机验证（验收最后一项，合并后 vinci）：四台看合成跨页书或真跨页书的两半顺序、铺满；Kindle、Kobo 固定版式看新页没有被拉伸。**没跑真书回归、没上真机**；c66 + `W` 让四台全部漫画重建一次，没有跨页的书产物应逐字节不变（待本机回归确认），Kindle 上字节变了的书进度清零。
 
 ## 审查
 <!-- 负责 bot 填写 -->
