@@ -2710,6 +2710,112 @@ fn removed_mode_leftovers_are_cleaned_up() {
     );
 }
 
+/// 2026-11-10：书库 `profiles/<id>.toml` 只写 `disabled = true` 停用一个模式后，下一次 `sync` 按已有的清理逻辑
+/// 把跟踪条目里的这个模式去掉：只给它的条目整条去掉、里面的书不再跟踪；全部设备的条目仍是全部设备；
+/// 生成记录里留着的旧记录不报错、不算任何一本的产物。
+#[test]
+fn disabled_profile_is_forgotten_by_sync() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let lib = common::open(&lib_dir);
+    let book = base.join("book");
+    for t in ["甲", "乙", "丙"] {
+        std::fs::create_dir_all(book.join(t)).unwrap();
+        std::fs::write(book.join(t).join("a.epub"), sample_epub(t)).unwrap();
+    }
+    assert!(lib.set_books_root(&book).unwrap());
+    let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    lib.track_with(&book.join("甲"), &ids(&["kindle", "ireader"]), false)
+        .unwrap();
+    lib.track_with(&book.join("乙"), &ids(&["ireader"]), false)
+        .unwrap();
+    lib.track_with(&book.join("丙"), &[], false).unwrap();
+    lib.sync(Prune::Auto, |_| {}).unwrap();
+    assert_eq!(lib.list().len(), 3);
+    // 停用前「乙」在 ireader 上的旧记录：绝对路径，指向一个不存在的 MTP 目录
+    let yi = lib
+        .list()
+        .into_iter()
+        .find(|m| m.title == "乙")
+        .expect("乙 入库了");
+    let root = base.join("no-such-mtp/Internal Storage/documents");
+    let sp = lib_dir.join("output-state/ireader.json");
+    std::fs::create_dir_all(sp.parent().unwrap()).unwrap();
+    std::fs::write(
+        &sp,
+        serde_json::json!({"books": {&yi.id: {
+            "path": root.join("乙.epub"), "root": root, "fingerprint": "旧"
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::create_dir_all(lib_dir.join("profiles")).unwrap();
+    std::fs::write(lib_dir.join("profiles/ireader.toml"), "disabled = true\n").unwrap();
+    let lib = common::open(&lib_dir);
+    let (r, ev) = events(&lib, Prune::Auto);
+    assert!(
+        ev.contains(&format!(
+            "forgot {} [\"ireader\"] false",
+            book.join("甲").display()
+        )),
+        "{ev:?}"
+    );
+    assert!(
+        ev.contains(&format!(
+            "forgot {} [\"ireader\"] true",
+            book.join("乙").display()
+        )),
+        "{ev:?}"
+    );
+    assert_eq!(
+        (r.released, r.pruned),
+        (1, 1),
+        "只给过 ireader 的条目整条去掉，里面的书不再跟踪：{ev:?}"
+    );
+    // sources.json：没有 ireader 了；「全部设备」的条目仍是空（全部设备，不是剩下三台的显式列表）
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(lib_dir.join("sources.json")).unwrap()).unwrap();
+    let entries = saved["entries"].as_array().unwrap();
+    assert!(
+        entries.iter().all(|e| !e["devices"]
+            .as_array()
+            .is_some_and(|d| d.iter().any(|x| x == "ireader"))),
+        "{saved}"
+    );
+    let bing = entries
+        .iter()
+        .find(|e| e["path"].as_str().unwrap().ends_with("丙"))
+        .expect("丙 还跟踪着");
+    assert!(
+        bing.get("devices").is_none(),
+        "全部设备的条目 devices 还是空的（序列化时省略）：{saved}"
+    );
+    // 旧生成记录不报错、不算任何一本的产物（list 也照常）
+    let metas = lib.list();
+    assert_eq!(metas.len(), 2, "乙 不再跟踪");
+    for m in &metas {
+        assert!(
+            lib.outputs(m).iter().all(|o| o.device != "ireader"),
+            "{} 没有 ireader 的产物",
+            m.title
+        );
+    }
+    let o = common::booklib(Some(&lib_dir), &["list"]);
+    assert_eq!(o.status.code(), Some(0), "{}", common::stderr(&o));
+    assert!(
+        !common::stdout(&o).contains("ireader"),
+        "{}",
+        common::stdout(&o)
+    );
+    // 清过一次就不再报
+    let (_, ev) = events(&lib, Prune::Auto);
+    assert!(
+        !ev.iter().any(|e| e.starts_with("forgot")),
+        "第二遍不再报：{ev:?}"
+    );
+}
+
 /// 2026-11-10：Bangumi 判成日本漫画的 CBZ，四台都按 rtl 生成（EPUB/KEPUB 的 spine、KFX 的 `$560`）；
 /// 判成国漫或没有 info 时照原书（CBZ 没写方向），指纹回到不判日漫时的值。
 #[test]
