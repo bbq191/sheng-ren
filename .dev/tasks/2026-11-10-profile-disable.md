@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-profile-disable
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/profile-disable（从 master `aa86ba4` 切出）
-- 更新时间: 2026-11-10T18:00+08:00
+- 更新时间: 2026-11-10T18:45+08:00
 - 引用: 无
 
 ## 需求原文
@@ -77,13 +77,45 @@
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-10 18:00–18:45 +08:00
+- base..head：`aa86ba4..HEAD`（代码到 `d6f2ed4`，另有任务单 accepting / 本结果提交）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `0a124ac` | `.dev/tasks/2026-11-10-profile-disable.md` | 状态改 accepted |
+  | 1、2 | `cf86f42` | `crates/profile/src/lib.rs` | `Registry::with_dir` 认 `disabled = true`；模块/函数注释；4 个单测 |
+  | 3 | `8e5a54b` | `crates/library/tests/cli.rs` | `devices_skip_disabled_profile` |
+  | 4 | `8e5a54b` | `crates/library/tests/flow.rs` | `disabled_profile_is_forgotten_by_sync` |
+  | 5 | `d6f2ed4` | `docs/devices.md` | 「停用内置模式」一段 |
+  | 结果 | 本提交 | `.dev/tasks/2026-11-10-profile-disable.md` | 填结果、状态 done |
+
+- 测试：
+
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test -p profile` | 通过 | 17 passed；新增 `dir_disables_builtin_mode`、`dir_disable_with_other_keys_is_an_error`、`dir_disable_false_is_an_error`、`dir_disable_unknown_id_is_ignored` |
+  | `cargo test -p library --test cli devices_skip_disabled_profile` | 通过 | 1 passed：devices 不列 ireader，kindle/kobo/hanvon 都在；`--device=ireader` 退出码 1、报「没有阅读模式 ireader」 |
+  | `cargo test -p library --test flow disabled_profile_is_forgotten_by_sync` | 通过 | 1 passed：甲 forgot ireader false、乙 forgot ireader true；丙 devices 仍为空；旧 `output-state/ireader.json` 不报错、list 不显示 ireader；第二遍不再 forgot |
+  | `cargo test --workspace` | 通过 | 789 passed，0 failed |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo test -p library --test fp_golden` | 通过 | `git diff --stat crates/library/tests/fp_golden.txt` 为空 |
+
 - 遇到的问题：
-- 偏离：无
+  - 停用后 `output-state/<id>.json` 的旧记录按 2026-10-31 的既有行为留着（`outputs()` / `list` 会以 `? 未知` 列出已删模式的记录）。测试里的旧记录写在「乙」名下：停用 ireader 后它整条不再跟踪、下次 `sync` 连记录一起清掉，所以 `outputs()` / `list` 确实不显示 ireader，也顺带验证了旧记录不报错。真要清掉别的模式的旧记录，仍按 docs 说的自己挪走。
+- 偏离：无（只改了「涉及文件」里的四个；没动 `install.sh`、`sources.rs`、生成和传输代码、内置 `ireader.toml`）。
 - 未完成：
+  - 真机验证（合并后 vinci）：本机写好 `ireader.toml` 后 `booklib devices` 只剩 `hanvon`、`kindle`、`kobo`，`sync --keep` 报告符合预期。
+  - 本机 fish 命令（**没跑**，留给 vinci）：
+
+    ```fish
+    booklib track
+    mkdir -p ~/.local/share/booklib/profiles
+    echo 'disabled = true' > ~/.local/share/booklib/profiles/ireader.toml
+    booklib devices
+    booklib sync --keep
+    booklib sync
+    ```
 
 ## 审查
 <!-- 负责 bot 填写 -->
