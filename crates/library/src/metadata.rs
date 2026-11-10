@@ -397,6 +397,16 @@ impl Library {
         meta: &Meta,
         force: bool,
     ) -> Result<(InfoResult, CoverResult), String> {
+        self.fetch_metadata_with_chain(meta, force, CHAIN)
+    }
+
+    /// 同 [`Library::fetch_metadata_inner`]，但要查的网站由调用方给（测试用假网站）。
+    fn fetch_metadata_with_chain(
+        &self,
+        meta: &Meta,
+        force: bool,
+        chain: &[&dyn Step],
+    ) -> Result<(InfoResult, CoverResult), String> {
         let need_info = force || meta.info.is_none();
         let need_cover = match &meta.cover {
             Some(_) if !force => false,
@@ -441,7 +451,7 @@ impl Library {
             work: None,
             work_err: None,
         };
-        for step in CHAIN {
+        for step in chain {
             if l.wants_info() || l.wants_cover() {
                 step.run(&mut l)?;
             }
@@ -475,13 +485,26 @@ impl Library {
             }
             InfoResult::Failed(e)
         } else {
-            // 记下这一版规则找过了：`sync` 不再每次都去找
-            if let Some(mut m) = self
-                .read_meta(&meta.id)
-                .filter(|m| m.info_checked != LOOKUP_VERSION)
-            {
-                m.info_checked = LOOKUP_VERSION.to_string();
-                self.save_meta(&m)?;
+            // 记下这一版规则找过了：`sync` 不再每次都去找。2026-11-10：旧 Bangumi 记录重找没拿到新结果时，
+            // 把现有 info 的地区记成 Some("")（查过、判不出），否则 `needs_metadata` 每次 sync 都会再触发重找。
+            // 网络出错（上面的 Failed / Err）不走到这里，下次再试。
+            if let Some(mut m) = self.read_meta(&meta.id) {
+                let mut changed = false;
+                if m.info_checked != LOOKUP_VERSION {
+                    m.info_checked = LOOKUP_VERSION.to_string();
+                    changed = true;
+                }
+                if let Some(i) = m
+                    .info
+                    .as_mut()
+                    .filter(|i| i.source.starts_with("Bangumi") && i.region.is_none())
+                {
+                    i.region = Some(String::new());
+                    changed = true;
+                }
+                if changed {
+                    self.save_meta(&m)?;
+                }
             }
             InfoResult::NotFound("豆瓣、QQ 阅读、Wikidata 里都找不到书名、作者对得上的书".into())
         };
@@ -523,14 +546,23 @@ impl Library {
             .into_iter()
             .filter(|m| m.id != meta.id && series_key(m) == key)
             .collect();
-        // 按这一版规则找到的优先（`--force` 重找时用刚重找过的那一卷，不用别的卷留着的旧结果）
+        // 记了地区的优先（2026-11-10：别把另一卷还没记地区的旧 info 抄过来，抄来这一卷又会触发重找），
+        // 再按这一版规则找到的（`--force` 重找时用刚重找过的那一卷，不用别的卷留着的旧结果），最后其余。
+        let has_region = |m: &Meta| m.info.as_ref().is_some_and(|i| i.region.is_some());
+        let current = |m: &Meta| m.info_checked == LOOKUP_VERSION;
         let found = others
             .iter()
-            .filter(|m| m.info_checked == LOOKUP_VERSION)
+            .filter(|m| has_region(m) && current(m))
+            .chain(others.iter().filter(|m| has_region(m)))
+            .chain(others.iter().filter(|m| current(m)))
             .chain(others.iter())
             .find_map(|m| m.info.as_ref().map(|i| (i.clone(), m.title.clone())));
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
-        if let Some((info, from)) = found {
+        if let Some((mut info, from)) = found {
+            // 抄来的旧 Bangumi info 也没地区：这一卷记成「查过、判不出」，不再反复重找
+            if info.source.starts_with("Bangumi") && info.region.is_none() {
+                info.region = Some(String::new());
+            }
             m.info = Some(info.clone());
             m.info_checked = LOOKUP_VERSION.to_string();
             self.save_meta(&m)?;
@@ -538,6 +570,13 @@ impl Library {
         }
         if let Some(o) = others.iter().find(|o| o.info_checked == LOOKUP_VERSION) {
             m.info_checked = LOOKUP_VERSION.to_string();
+            if let Some(i) = m
+                .info
+                .as_mut()
+                .filter(|i| i.source.starts_with("Bangumi") && i.region.is_none())
+            {
+                i.region = Some(String::new());
+            }
             self.save_meta(&m)?;
             return Ok(Some(InfoResult::NotFound(format!(
                 "同一套的《{}》找过，没找到",
@@ -581,11 +620,12 @@ impl Library {
     }
 }
 
-/// 这本书生成时按元数据强制指定的翻页方向（2026-11-10 定）：设备开了 `comic_meta_direction`、书是漫画、
+/// 这本书生成时按元数据强制指定的翻页方向（2026-11-10 定）：设备开了 `comic_meta_direction`、书是漫画
+/// （`comic` 由调用方用 `Library::comic_of` 算好，早期条目 `Meta::comic` 还是 `None` 时不漏）、
 /// 元数据来自 Bangumi、地区是日本时写成 `rtl`；其余 `None`（照原书 / profile）。只在生成时按当时的 `meta.json` 定，
 /// 入库、转换都不写；判成国漫 / 韩漫时不会把原书的 `rtl` 改成 `ltr`。
-pub(crate) fn comic_direction(meta: &Meta, device: &Profile) -> Option<PageDirection> {
-    if !device.comic.meta_direction || meta.comic != Some(true) {
+pub(crate) fn comic_direction(meta: &Meta, device: &Profile, comic: bool) -> Option<PageDirection> {
+    if !device.comic.meta_direction || !comic {
         return None;
     }
     let info = meta.info.as_ref()?;
@@ -1008,6 +1048,137 @@ mod tests {
         }
     }
 
+    /// 测试用的漫画 CBZ（3 页 JPEG，`is_comic` 一律算）。
+    fn comic_cbz(dir: &Path, name: &str) -> std::path::PathBuf {
+        let p = dir.join(format!("{name}.cbz"));
+        let mut z = bookconv::zip::ZipWriter::new(std::fs::File::create(&p).unwrap());
+        for i in 0..3 {
+            z.start_file(
+                format!("{i}.jpg"),
+                bookconv::zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            // 每本颜色不同：内容哈希不能一样，否则 `add_file` 会当成同一本书
+            let shade = name.bytes().fold(90u8, |a, b| a.wrapping_add(b));
+            let mut jpg = Vec::new();
+            image::RgbImage::from_pixel(4, 6, image::Rgb([90, shade, 90]))
+                .write_to(
+                    &mut std::io::Cursor::new(&mut jpg),
+                    image::ImageFormat::Jpeg,
+                )
+                .unwrap();
+            z.write_all(&jpg).unwrap();
+        }
+        z.finish().unwrap();
+        p
+    }
+
+    fn save_test_meta(lib: &Library, m: &Meta) {
+        let path = lib.root().join("masters").join(&m.id).join("meta.json");
+        std::fs::write(path, serde_json::to_vec(m).unwrap()).unwrap();
+    }
+
+    fn load_test_meta(lib: &Library, id: &str) -> Meta {
+        let path = lib.root().join("masters").join(id).join("meta.json");
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    /// 2026-11-10 审查阻断 1：旧 Bangumi 记录重找得到 NotFound 时记成 Some("")，不再每次 sync 重找。
+    #[test]
+    fn bangumi_not_found_marks_region_checked() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = Library::open(d.path()).unwrap();
+        let mut m = lib
+            .add_file(&comic_cbz(d.path(), "漫"))
+            .unwrap()
+            .meta()
+            .clone();
+        m.info = Some(BookInfo {
+            source: "Bangumi https://bgm.tv/subject/1".into(),
+            region: None,
+            ..Default::default()
+        });
+        m.info_checked = LOOKUP_VERSION.to_string();
+        save_test_meta(&lib, &m);
+        assert!(lib.needs_metadata(&m), "旧记录没记地区：要重找");
+
+        let fake = Fake {
+            searched: Cell::new(0),
+            found: "",
+        };
+        let (r, _) = lib.fetch_metadata_with_chain(&m, true, &[&fake]).unwrap();
+        assert!(matches!(r, InfoResult::NotFound(_)), "假网站什么都没找到");
+        assert_eq!(fake.searched.get(), 1, "重找了一次");
+        let saved = load_test_meta(&lib, &m.id);
+        assert_eq!(
+            saved.info.as_ref().and_then(|i| i.region.as_deref()),
+            Some(""),
+            "没拿到新结果：记成查过、判不出"
+        );
+        assert!(
+            !lib.needs_metadata(&saved),
+            "记下地区后不再触发重找（下一轮 sync 不会再联网）"
+        );
+        assert_eq!(fake.searched.get(), 1, "判断本身不联网");
+    }
+
+    /// 2026-11-10 审查阻断 1：同一套漫画优先抄有地区的 info；抄来的旧 info 也没地区时记成 Some("")。
+    #[test]
+    fn series_lookup_prefers_info_with_region() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = Library::open(d.path()).unwrap();
+        let mut m1 = lib
+            .add_file(&comic_cbz(d.path(), "漫 - 01卷"))
+            .unwrap()
+            .meta()
+            .clone();
+        let mut m2 = lib
+            .add_file(&comic_cbz(d.path(), "漫 - 02卷"))
+            .unwrap()
+            .meta()
+            .clone();
+        m1.info = Some(BookInfo {
+            source: "Bangumi https://bgm.tv/subject/1".into(),
+            region: Some("日本".into()),
+            ..Default::default()
+        });
+        m1.info_checked = "3".into(); // 比 m2 旧，但记了地区，优先
+        m2.info = Some(BookInfo {
+            source: "Bangumi https://bgm.tv/subject/2".into(),
+            region: None,
+            ..Default::default()
+        });
+        m2.info_checked = LOOKUP_VERSION.to_string();
+        save_test_meta(&lib, &m1);
+        save_test_meta(&lib, &m2);
+
+        let Some(InfoResult::Shared(info, from)) = lib.series_lookup(&m2).unwrap() else {
+            panic!("应抄同一套的另一卷")
+        };
+        assert_eq!(info.region.as_deref(), Some("日本"), "{from}");
+        assert!(from.contains("01卷"), "{from}");
+        assert_eq!(
+            load_test_meta(&lib, &m2.id).info.and_then(|i| i.region),
+            Some("日本".into()),
+            "抄过来的 info 要存下"
+        );
+
+        // 另一卷也没有地区：抄过来记成 Some("")，不让这一卷再反复重找
+        m1.info.as_mut().unwrap().region = None;
+        save_test_meta(&lib, &m1);
+        m2.info_checked.clear();
+        save_test_meta(&lib, &m2);
+        let Some(InfoResult::Shared(info, _)) = lib.series_lookup(&m2).unwrap() else {
+            panic!("应抄同一套的另一卷")
+        };
+        assert_eq!(
+            info.region.as_deref(),
+            Some(""),
+            "抄来的旧 info 没地区：记成查过、判不出"
+        );
+        assert!(!lib.needs_metadata(&load_test_meta(&lib, &m2.id)));
+    }
+
     /// 责任链：前一个网站找到了就不再问后面的；前面出过临时错误时后面的网站不查（结果存下了就不会再去前面找）。
     #[test]
     fn chain_stops_when_found_and_skips_sites_after_transient_errors() {
@@ -1144,11 +1315,11 @@ mod tests {
     }
 
     /// 2026-11-10：只有「设备开了、是漫画、Bangumi 来源、地区日本」才强制 rtl；别的照原书 / profile。
+    /// `comic` 用调用方算好的结果（早期条目 `Meta::comic` 还是 `None` 也算）。
     #[test]
     fn comic_direction_only_for_bangumi_japanese_comics() {
         let dev = profile::get("ireader").unwrap();
-        let meta = |source: &str, region: Option<&str>, comic: Option<bool>| Meta {
-            comic,
+        let meta = |source: &str, region: Option<&str>| Meta {
             info: Some(BookInfo {
                 source: source.into(),
                 region: region.map(str::to_string),
@@ -1158,36 +1329,35 @@ mod tests {
         };
         assert_eq!(
             comic_direction(
-                &meta("Bangumi https://bgm.tv/subject/1", Some("日本"), Some(true)),
-                dev
+                &meta("Bangumi https://bgm.tv/subject/1", Some("日本")),
+                dev,
+                true
             ),
             Some(PageDirection::Rtl),
-            "Bangumi 判成日本漫画"
+            "Bangumi 判成日本漫画（Meta::comic 还没存也算）"
         );
-        for m in [
-            meta("Bangumi https://bgm.tv/subject/1", Some("中国"), Some(true)),
-            meta("Bangumi https://bgm.tv/subject/1", Some(""), Some(true)),
-            meta("Bangumi https://bgm.tv/subject/1", None, Some(true)),
-            meta(
-                "豆瓣 https://book.douban.com/subject/1",
-                Some("日本"),
-                Some(true),
+        for (m, comic) in [
+            (meta("Bangumi https://bgm.tv/subject/1", Some("中国")), true),
+            (meta("Bangumi https://bgm.tv/subject/1", Some("")), true),
+            (meta("Bangumi https://bgm.tv/subject/1", None), true),
+            (
+                meta("豆瓣 https://book.douban.com/subject/1", Some("日本")),
+                true,
             ),
-            meta(
-                "Bangumi https://bgm.tv/subject/1",
-                Some("日本"),
-                Some(false),
+            (
+                meta("Bangumi https://bgm.tv/subject/1", Some("日本")),
+                false,
             ),
-            meta("Bangumi https://bgm.tv/subject/1", Some("日本"), None),
         ] {
-            assert_eq!(comic_direction(&m, dev), None);
+            assert_eq!(comic_direction(&m, dev, comic), None);
         }
         let mut off = dev.clone();
         off.comic.meta_direction = false;
         assert_eq!(
             comic_direction(
-                &meta("Bangumi https://bgm.tv/subject/1", Some("日本"), Some(true)),
-                &off
+                &meta("Bangumi https://bgm.tv/subject/1", Some("日本")),
+                &off,
+                true
             ),
             None,
             "设备没开 comic_meta_direction"

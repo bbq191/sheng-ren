@@ -2814,4 +2814,60 @@ fn bangumi_japanese_comic_builds_rtl_and_others_stay_as_is() {
     m.info = None;
     write_meta(&m);
     assert_eq!(lib.fingerprint(&m, ireader).unwrap(), base_fp);
+
+    // 2026-11-10 审查阻断 2：Bangumi 判成国漫、原书 OPF 写了 rtl 的，照原书（不改回 ltr）
+    let epub = dir.path().join("国漫.epub");
+    {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&epub).unwrap());
+        z.start_file("mimetype", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(b"application/epub+zip").unwrap();
+        z.start_file(
+            "META-INF/container.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        z.write_all(br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+        z.start_file(
+            "OEBPS/content.opf",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        z.write_all(r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:cn-comic-rtl</dc:identifier><dc:title>国漫</dc:title><dc:language>zh</dc:language><dc:subject>漫画</dc:subject><meta property="dcterms:modified">2026-11-10T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="img" href="p1.jpg" media-type="image/jpeg"/></manifest><spine page-progression-direction="rtl"><itemref idref="p1"/></spine></package>"#.as_bytes()).unwrap();
+        z.start_file("OEBPS/nav.xhtml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="p1.xhtml">第1页</a></li></ol></nav></body></html>"#.as_bytes()).unwrap();
+        z.start_file("OEBPS/p1.xhtml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>第1页</title></head><body><img src="p1.jpg" alt=""/></body></html>"#.as_bytes()).unwrap();
+        z.start_file("OEBPS/p1.jpg", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(&jpeg(400, 600)).unwrap();
+        z.finish().unwrap();
+    }
+    let Added::New(mut cn) = lib.add_file(&epub).unwrap() else {
+        panic!("应是新书")
+    };
+    assert_eq!(cn.comic, Some(true), "标了「漫画」");
+    cn.info = Some(BookInfo {
+        source: "Bangumi https://bgm.tv/subject/3".into(),
+        region: Some("中国".into()),
+        ..Default::default()
+    });
+    std::fs::write(
+        lib.root().join("masters").join(&cn.id).join("meta.json"),
+        serde_json::to_vec_pretty(&cn).unwrap(),
+    )
+    .unwrap();
+    let Built::Written { path, .. } = lib
+        .build(&cn, profile::get("ireader").unwrap(), false)
+        .unwrap()
+    else {
+        panic!("国漫第一次应生成")
+    };
+    assert_eq!(
+        spine_direction(&path),
+        Some(bookconv::direction::PageDirection::Rtl),
+        "Bangumi 判成国漫、原书写了 rtl：照原书，不改回 ltr"
+    );
 }
