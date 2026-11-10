@@ -558,11 +558,9 @@ impl Library {
             .chain(others.iter())
             .find_map(|m| m.info.as_ref().map(|i| (i.clone(), m.title.clone())));
         let mut m = self.read_meta(&meta.id).ok_or("条目读不出来")?;
-        if let Some((mut info, from)) = found {
-            // 抄来的旧 Bangumi info 也没地区：这一卷记成「查过、判不出」，不再反复重找
-            if info.source.starts_with("Bangumi") && info.region.is_none() {
-                info.region = Some(String::new());
-            }
+        if let Some((info, from)) = found {
+            // 抄来的旧 Bangumi info 没地区就原样抄（region 仍是 None）：下一次 sync 这一卷自己 force 重找，
+            // 拿到 Found / NotFound 都会停；不能在这里记 Some("")，否则同一套的日漫这一卷会永远「判不出」。
             m.info = Some(info.clone());
             m.info_checked = LOOKUP_VERSION.to_string();
             self.save_meta(&m)?;
@@ -998,10 +996,11 @@ mod tests {
     use std::cell::Cell;
     use std::io::Write;
 
-    /// 不联网的假网站：搜到一条，给出元数据；记下被搜了几次。
+    /// 不联网的假网站：搜到一条，给出元数据；记下被搜了几次。`transient` 有值时只报网络错、不给结果。
     struct Fake {
         searched: Cell<usize>,
         found: &'static str,
+        transient: Option<&'static str>,
     }
 
     impl BookSource for Fake {
@@ -1023,9 +1022,15 @@ mod tests {
         fn hit_author<'h>(&self, _: &'h ()) -> &'h str {
             ""
         }
-        fn search(&self, _: &Net, _: &str, _: &[String]) -> Vec<()> {
+        fn search(&self, net: &Net, _: &str, _: &[String]) -> Vec<()> {
             self.searched.set(self.searched.get() + 1);
-            vec![()]
+            match self.transient {
+                Some(e) => {
+                    net.note_transient(e);
+                    Vec::new()
+                }
+                None => vec![()],
+            }
         }
         fn cover(&self, _: &Net, _: &[()]) -> Option<(usize, Vec<u8>, &'static str)> {
             None
@@ -1105,6 +1110,7 @@ mod tests {
         let fake = Fake {
             searched: Cell::new(0),
             found: "",
+            transient: None,
         };
         let (r, _) = lib.fetch_metadata_with_chain(&m, true, &[&fake]).unwrap();
         assert!(matches!(r, InfoResult::NotFound(_)), "假网站什么都没找到");
@@ -1122,7 +1128,44 @@ mod tests {
         assert_eq!(fake.searched.get(), 1, "判断本身不联网");
     }
 
-    /// 2026-11-10 审查阻断 1：同一套漫画优先抄有地区的 info；抄来的旧 info 也没地区时记成 Some("")。
+    /// 2026-11-10 审查建议：重找时网络出错（临时错误）不把地区记成判不出，下次还要重找。
+    #[test]
+    fn bangumi_network_error_keeps_region_for_retry() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = Library::open(d.path()).unwrap();
+        let mut m = lib
+            .add_file(&comic_cbz(d.path(), "漫"))
+            .unwrap()
+            .meta()
+            .clone();
+        m.info = Some(BookInfo {
+            source: "Bangumi https://bgm.tv/subject/1".into(),
+            region: None,
+            ..Default::default()
+        });
+        m.info_checked = LOOKUP_VERSION.to_string();
+        save_test_meta(&lib, &m);
+        let fake = Fake {
+            searched: Cell::new(0),
+            found: "",
+            transient: Some("模拟网络出错"),
+        };
+        assert!(
+            lib.fetch_metadata_with_chain(&m, true, &[&fake]).is_err(),
+            "没封面时网络出错整本报错"
+        );
+        assert_eq!(fake.searched.get(), 1);
+        let saved = load_test_meta(&lib, &m.id);
+        assert_eq!(
+            saved.info.as_ref().and_then(|i| i.region.as_deref()),
+            None,
+            "网络出错不记地区"
+        );
+        assert!(lib.needs_metadata(&saved), "下次 sync 还要重找");
+    }
+
+    /// 2026-11-10 审查阻断 3：同一套漫画优先抄有地区的 info；抄来的旧 info 没地区就原样抄，
+    /// 不记成判不出（下一轮自己重找，拿到地区后才会停）。
     #[test]
     fn series_lookup_prefers_info_with_region() {
         let d = tempfile::tempdir().unwrap();
@@ -1163,18 +1206,36 @@ mod tests {
             "抄过来的 info 要存下"
         );
 
-        // 另一卷也没有地区：抄过来记成 Some("")，不让这一卷再反复重找
+        // 另一卷也没有地区：抄过来 region 仍是 None，这一卷下一次 sync 会自己 force 重找
         m1.info.as_mut().unwrap().region = None;
         save_test_meta(&lib, &m1);
+        m2.info = None;
         m2.info_checked.clear();
         save_test_meta(&lib, &m2);
         let Some(InfoResult::Shared(info, _)) = lib.series_lookup(&m2).unwrap() else {
             panic!("应抄同一套的另一卷")
         };
         assert_eq!(
-            info.region.as_deref(),
-            Some(""),
-            "抄来的旧 info 没地区：记成查过、判不出"
+            info.region, None,
+            "抄来的旧 info 没地区：原样抄，不记成判不出"
+        );
+        let saved = load_test_meta(&lib, &m2.id);
+        assert_eq!(saved.info.as_ref().and_then(|i| i.region.as_deref()), None);
+        assert!(
+            lib.needs_metadata(&saved),
+            "这一卷下一次 sync 要自己重找，拿到有地区的 info 才停"
+        );
+
+        // 01 卷改出地区后，02 卷再抄一次就拿到「日本」
+        m1.info.as_mut().unwrap().region = Some("日本".into());
+        save_test_meta(&lib, &m1);
+        let Some(InfoResult::Shared(info, _)) = lib.series_lookup(&saved).unwrap() else {
+            panic!("应抄同一套的另一卷")
+        };
+        assert_eq!(info.region.as_deref(), Some("日本"));
+        assert_eq!(
+            load_test_meta(&lib, &m2.id).info.and_then(|i| i.region),
+            Some("日本".into())
         );
         assert!(!lib.needs_metadata(&load_test_meta(&lib, &m2.id)));
     }
@@ -1206,15 +1267,18 @@ mod tests {
             Fake {
                 searched: Cell::new(0),
                 found: "",
+                transient: None,
             },
             Fake {
                 searched: Cell::new(0),
                 found: "乙",
+                transient: None,
             },
         );
         let c = Fake {
             searched: Cell::new(0),
             found: "丙",
+            transient: None,
         };
         let mut l = lookup();
         for s in [&a as &dyn Step, &b, &c] {
