@@ -84,6 +84,12 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
+- 验收：**通过**（sheng-ren，2026-11-10，box 上 `e24155a` 重跑）
+  - 范围：`git diff --stat 0df2144..e24155a` 只有 7 个文件，都在「涉及文件」内：`ireader.toml`（+6）、`profile/src/lib.rs`（+17，新测试 `builtin_profiles_share_comic_quality`）、`fp_golden.txt`、`docs/devices.md`、`docs/decisions.md`、`CONTRIBUTING.md`（一句）、任务单。算法代码、别的 profile、install.sh 都没动
+  - 功能：`epub-optimize --print-profile --device=ireader` 四项都是 true，`comic_gamma` 1.1、`comic_upscale` true、`comic_margin` 1
+  - 指纹金样：只有 59 行 `ireader … comic` 改（59 删 59 增），去掉 A/S/P/N/K 字母后逐行相同，即只差漫画段的开关字母；kindle/kobo/hanvon 和全部文字书行 0 变化
+  - 测试：`cargo test --workspace` 23 组 757 个通过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`rustfmt --edition 2021 --check crates/profile/src/lib.rs` 通过（box 工具链 rustc 1.99.1 stable，同 CI 的 stable）
+  - 提交合规：中文前缀加正文、无 Co-Authored-By、没动 master、没合并；`e2788a5` 正文写了没跑真书回归、没上真机
+  - 小问题（不阻断）：「结果」里 base..head 写成 `0df2144..e2788a5`（3 个提交），实际分支头是 `e24155a`（含任务单完成提交共 4 个）；`docs/architecture.md:220`、`docs/typesetting.md:240` 仍写「只 Kindle 开」「掌阅、Move 不开」——本单之前 kobo/hanvon 开了时就已过时，不在涉及文件内，留作后续小改动
+- 二审：待 vinci 运行 agy，回执 `.dev/tasks/2026-11-10-ireader-comic-quality.agy.md`（设备行为改动，合并前必须二审）
 - 合并：
