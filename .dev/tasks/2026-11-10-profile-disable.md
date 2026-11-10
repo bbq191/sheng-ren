@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-profile-disable
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/profile-disable（从 master `aa86ba4` 切出）
-- 更新时间: 2026-11-10T16:22+08:00
+- 更新时间: 2026-11-10T16:26+08:00
 - 引用: 无
 
 ## 需求原文
@@ -77,8 +77,8 @@
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：opencode-local / 2026-11-10 18:00–18:45 +08:00
-- base..head：`aa86ba4..HEAD`（代码到 `d6f2ed4`，另有任务单 accepting / 本结果提交）
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-10 16:22–16:25 +08:00（返工）
+- base..head：`aa86ba4..HEAD`（初版代码到 `d6f2ed4`，返工到 `b4537fd`，另有任务单 accepting / 本结果提交）
 - 提交：
 
   | 步骤 | 提交号 | 文件 | 说明 |
@@ -96,13 +96,13 @@
   | --- | --- | --- |
   | `cargo test -p profile` | 通过 | 17 passed；新增 `dir_disables_builtin_mode`、`dir_disable_with_other_keys_is_an_error`、`dir_disable_false_is_an_error`、`dir_disable_unknown_id_is_ignored` |
   | `cargo test -p library --test cli devices_skip_disabled_profile` | 通过 | 1 passed：devices 不列 ireader，kindle/kobo/hanvon 都在；`--device=ireader` 退出码 1、报「没有阅读模式 ireader」 |
-  | `cargo test -p library --test flow disabled_profile_is_forgotten_by_sync` | 通过 | 1 passed：甲 forgot ireader false、乙 forgot ireader true；丙 devices 仍为空；旧 `output-state/ireader.json` 不报错、list 不显示 ireader；第二遍不再 forgot |
+  | `cargo test -p library --test flow disabled_profile_is_forgotten_by_sync` | 通过 | 1 passed：甲 forgot ireader false、乙 forgot ireader true；丙 devices 仍为空；留下的甲、丙在旧 `output-state/ireader.json` 里也有记录，sync 不报错、`outputs()` 是未知、`booklib list` 列出 `ireader ? 未知`；挪走记录后 list 干净、第二遍 sync 不再 forgot |
   | `cargo test --workspace` | 通过 | 789 passed，0 failed |
   | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
   | `cargo test -p library --test fp_golden` | 通过 | `git diff --stat crates/library/tests/fp_golden.txt` 为空 |
 
 - 遇到的问题：
-  - 停用后 `output-state/<id>.json` 的旧记录按 2026-10-31 的既有行为留着（`outputs()` / `list` 会以 `? 未知` 列出已删模式的记录）。测试里的旧记录写在「乙」名下：停用 ireader 后它整条不再跟踪、下次 `sync` 连记录一起清掉，所以 `outputs()` / `list` 确实不显示 ireader，也顺带验证了旧记录不报错。真要清掉别的模式的旧记录，仍按 docs 说的自己挪走。
+  - 停用后 `output-state/<id>.json` 的旧记录按 2026-10-31 的既有行为留着：留下来的书以前传过这个模式的，`outputs()` / `booklib list` 会给它列一行 `<id>  ? 未知  <旧路径>`，直到把 `output-state/<id>.json` 挪走；挪走是安全的（不再生成、也不会去设备上删东西）。测试里甲、丙、乙的记录都写了：乙整条不再跟踪、记录跟着清掉，甲、丙的记录留着并断言是「未知」。
 - 偏离：无（只改了「涉及文件」里的四个；没动 `install.sh`、`sources.rs`、生成和传输代码、内置 `ireader.toml`）。
 - 未完成：
   - 真机验证（合并后 vinci）：本机写好 `ireader.toml` 后 `booklib devices` 只剩 `hanvon`、`kindle`、`kobo`，`sync --keep` 报告符合预期。
@@ -115,7 +115,26 @@
     booklib devices
     booklib sync --keep
     booklib sync
+    # 可选：让 booklib list 不再给以前传过掌阅的书列 `ireader  ? 未知`。只是挪走旧生成记录，不会再生成、也不会去设备上删东西
+    mv ~/.local/share/booklib/output-state/ireader.json ~/.local/share/booklib/output-state/ireader.json.bak
     ```
+
+### 返工（2026-11-10 16:22）
+
+- 接受返工：`d393897`；返工代码：`b4537fd`（`crates/library/tests/flow.rs`、`docs/devices.md`）。审查里「`lib.rs` 先试解析」一条不阻断，没改。
+- **阻断 1（docs 的数据风险说明不对）**：重写 `docs/devices.md` 的「停用内置模式」：
+  - 停用后第一次 `sync`（带不带 `--keep` 都一样）就改跟踪条目并写回 `sources.json`；只给它的条目整条去掉。
+  - `--keep` 只把「从书库删书（连同产物）」推到下一次不带 `--keep` 的 sync，不是「先看看、不满意可以不做」。
+  - 删掉 `profiles/<id>.toml` 只恢复模式本身；已经被清理改掉的跟踪条目要重新 `booklib track --device=…` 才回来。
+  - 动手前先 `booklib track` 看哪些条目带这个模式、记下只给它的条目，确认不要了再写 toml。
+- **阻断 2（旧生成记录没测到、list 行为写错）**：
+  - `disabled_profile_is_forgotten_by_sync` 现在把旧 ireader 记录写到留下的甲、丙和整条去掉的乙名下：断言 sync 不报错、`outputs()` 里 ireader 的 `fresh` 是 `None`（未知，不是最新 / 过期）、`booklib list` 退出码 0 且列出 `ireader` + `? 未知`；再挪走 `output-state/ireader.json`，`list` 不再有 ireader，第二遍 sync 照常。
+  - `docs/devices.md` 写准：`booklib list` 会给以前传过这个模式的书列 `<id>  ? 未知  <旧路径>`，挪走 `output-state/<id>.json` 就没了，挪走安全。
+  - 「结果」里旧记录的说法改准；给 vinci 的 fish 命令最后加了可选的 `mv … ireader.json.bak` 并写明作用。
+- 顺带：执行时间改成实际的 16:22–16:25（上次写成 18:00–18:45，比提交时间还晚）。
+- 测试：`cargo test --workspace` 789 个全过、0 失败；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --all -- --check` 干净；`fp_golden` 过且文件没变。
+- 偏离：无（返工只改 `crates/library/tests/flow.rs`、`docs/devices.md`，没动 `crates/library/src/`）。
+- 未完成：真机验证（合并后 vinci）仍留给 vinci。
 
 ## 审查
 <!-- 负责 bot 填写 -->
