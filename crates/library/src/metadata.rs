@@ -536,6 +536,10 @@ impl Library {
     /// 同一套漫画（作者相同、书名去掉卷次和版本字样后相同，[`series_key`]）别的卷的结果：找到过的复制过来存下（[`InfoResult::Shared`]），
     /// 这一版规则下没找到过的记成找过（[`InfoResult::NotFound`]）；都没有返回 `None`（照常联网找）。只管漫画：文字书的上下册
     /// 版本信息（ISBN）各不相同。
+    ///
+    /// 挑哪一卷：**判出地区的（`region` 非空）优先于判不出的（`Some("")`）**，判不出的又优先于还没记地区（`None`）的；
+    /// 同一档里当前规则版本找到的优先，其余保持 `list()` 顺序。2026-11-10：不能把 `Some("")` 和「日本」一样当有地区，
+    /// 否则同一套里个别卷搜不到、先记成判不出，别的卷就会抄到它，永远回不到「日本」。
     fn series_lookup(&self, meta: &Meta) -> Result<Option<InfoResult>, String> {
         if !self.is_comic(meta).unwrap_or(false) {
             return Ok(None);
@@ -546,14 +550,26 @@ impl Library {
             .into_iter()
             .filter(|m| m.id != meta.id && series_key(m) == key)
             .collect();
-        // 记了地区的优先（2026-11-10：别把另一卷还没记地区的旧 info 抄过来，抄来这一卷又会触发重找），
-        // 再按这一版规则找到的（`--force` 重找时用刚重找过的那一卷，不用别的卷留着的旧结果），最后其余。
-        let has_region = |m: &Meta| m.info.as_ref().is_some_and(|i| i.region.is_some());
+        // 判出地区的优先于判不出的（`Some("")`），再按这一版规则找到的（`--force` 重找时用刚重找过的那一卷，
+        // 不用别的卷留着的旧结果），最后其余。2026-11-10：`Some("")` 不能算「有地区」，否则同一套里先处理到、
+        // 没搜到的那一卷会把后面各卷都带成判不出。
+        let known = |m: &Meta| {
+            m.info
+                .as_ref()
+                .is_some_and(|i| i.region.as_deref().is_some_and(|r| !r.is_empty()))
+        };
+        let unknown = |m: &Meta| {
+            m.info
+                .as_ref()
+                .is_some_and(|i| i.region.as_deref() == Some(""))
+        };
         let current = |m: &Meta| m.info_checked == LOOKUP_VERSION;
         let found = others
             .iter()
-            .filter(|m| has_region(m) && current(m))
-            .chain(others.iter().filter(|m| has_region(m)))
+            .filter(|m| known(m) && current(m))
+            .chain(others.iter().filter(|m| known(m)))
+            .chain(others.iter().filter(|m| unknown(m) && current(m)))
+            .chain(others.iter().filter(|m| unknown(m)))
             .chain(others.iter().filter(|m| current(m)))
             .chain(others.iter())
             .find_map(|m| m.info.as_ref().map(|i| (i.clone(), m.title.clone())));
@@ -1063,10 +1079,11 @@ mod tests {
                 bookconv::zip::write::SimpleFileOptions::default(),
             )
             .unwrap();
-            // 每本颜色不同：内容哈希不能一样，否则 `add_file` 会当成同一本书
+            // 每本颜色、宽度不同：内容哈希不能一样，否则 `add_file` 会当成同一本书
             let shade = name.bytes().fold(90u8, |a, b| a.wrapping_add(b));
+            let width = 4 + u32::from(shade) % 4;
             let mut jpg = Vec::new();
-            image::RgbImage::from_pixel(4, 6, image::Rgb([90, shade, 90]))
+            image::RgbImage::from_pixel(width, 6, image::Rgb([90, shade, 90]))
                 .write_to(
                     &mut std::io::Cursor::new(&mut jpg),
                     image::ImageFormat::Jpeg,
@@ -1238,6 +1255,61 @@ mod tests {
             Some("日本".into())
         );
         assert!(!lib.needs_metadata(&load_test_meta(&lib, &m2.id)));
+    }
+
+    /// 2026-11-10 审查阻断 4：同一套漫画里「判出地区」的卷优先于「查过、判不出」（`Some("")`）的卷。
+    #[test]
+    fn series_lookup_prefers_known_region_over_blank() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = Library::open(d.path()).unwrap();
+        let mut a = lib
+            .add_file(&comic_cbz(d.path(), "漫 - 01卷"))
+            .unwrap()
+            .meta()
+            .clone();
+        let mut b = lib
+            .add_file(&comic_cbz(d.path(), "漫 - 02卷"))
+            .unwrap()
+            .meta()
+            .clone();
+        let mut c = lib
+            .add_file(&comic_cbz(d.path(), "漫 - 03卷"))
+            .unwrap()
+            .meta()
+            .clone();
+        let bangumi = |region: &str| BookInfo {
+            source: "Bangumi https://bgm.tv/subject/1".into(),
+            region: Some(region.into()),
+            ..Default::default()
+        };
+        a.info = Some(bangumi(""));
+        a.info_checked = LOOKUP_VERSION.to_string();
+        b.info = Some(bangumi("日本"));
+        b.info_checked = LOOKUP_VERSION.to_string();
+        c.info = None;
+        c.info_checked.clear();
+        save_test_meta(&lib, &a);
+        save_test_meta(&lib, &b);
+        save_test_meta(&lib, &c);
+        let Some(InfoResult::Shared(info, from)) = lib.series_lookup(&c).unwrap() else {
+            panic!("应抄同一套的另一卷")
+        };
+        assert_eq!(info.region.as_deref(), Some("日本"), "{from}");
+        assert!(from.contains("02卷"), "{from}");
+
+        // 反过来（01 判出日本、02 判不出）：仍然抄「日本」，和 list() 里谁在前无关
+        a.info = Some(bangumi("日本"));
+        b.info = Some(bangumi(""));
+        save_test_meta(&lib, &a);
+        save_test_meta(&lib, &b);
+        c.info = None;
+        c.info_checked.clear();
+        save_test_meta(&lib, &c);
+        let Some(InfoResult::Shared(info, from)) = lib.series_lookup(&c).unwrap() else {
+            panic!("应抄同一套的另一卷")
+        };
+        assert_eq!(info.region.as_deref(), Some("日本"), "{from}");
+        assert!(from.contains("01卷"), "{from}");
     }
 
     /// 责任链：前一个网站找到了就不再问后面的；前面出过临时错误时后面的网站不查（结果存下了就不会再去前面找）。
