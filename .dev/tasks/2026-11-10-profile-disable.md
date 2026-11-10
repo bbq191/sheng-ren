@@ -125,7 +125,7 @@
     - 规格 1–5（`lib.rs:937-949`）：box 上临时书库复现 —— `profiles/ireader.toml` 只写 `disabled = true` 时 `booklib devices` 只剩 hanvon / kindle / kobo；删掉这个文件就回来；`disabled = true` + `name`、`disabled = false`、`disabled = "true"` 都退出码 2，信息「…/ireader.toml: 停用一个模式时文件里只写 `disabled = true` 一行；要用这个模式就删掉 `disabled`」；`nosuch.toml` 只写 `disabled = true` 忽略、四台都在；没有 `disabled` 的 `hanvon.toml` 照旧覆盖（name 变了）；`sync --device=ireader` 退出码 1「没有阅读模式 ireader」
     - 清理（复现：甲 `kindle,ireader`、乙 只给 `ireader`、丙 全部设备，先 sync 一次再停用、拔掉掌阅）：甲去掉 ireader、乙整条去掉、丙仍是全部设备（`devices` 省略）；第二遍 sync 不再报；`output-state/ireader.json` 留着不报错
     - 测试：`cargo test --workspace` 23 组 789 过 0 失败（新增 6 个用例都过）；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --all -- --check` 干净；`fp_golden` 过且文件没变
-  - **阻断 1（docs 的数据风险说明不对）**，`docs/devices.md:200-201`：
+  - **阻断 1（docs 的数据风险说明不对）**，`docs/devices.md:199-200`：
     - 写的是「先 `sync --keep` 看报告……确认没问题再去掉 `--keep`」。复现：**`--keep` 那一遍就已经把跟踪条目改掉、存进 `sources.json` 了**（乙那条没了，甲只剩 kindle；`sources.rs:754` 的清理不看 `--keep`），`--keep` 只是把「从书库删书」推到下一次不带 `--keep` 的 sync。所以 `--keep` 不是「先看看、不满意可以不做」：看到不想要的结果时，要删掉 `profiles/<id>.toml` **并且**重新 `booklib track --device=…` 那几条，书才回来
     - 写的是「里面的书按不再跟踪处理、下次 `sync` 从书库去掉」：实际是**停用后第一次不带 `--keep` 的 sync 当场删**（复现：`✗ 不再跟踪，书库里删了（连同产物） 乙`）
     - 「删掉这个 toml 就恢复」只恢复模式本身；已经被清理改掉的跟踪条目不会自己回来
@@ -135,7 +135,7 @@
     - 复现：停用、sync 后 `booklib list` 给留下的每本书都多一行 `ireader  ? 未知  /…/mtp/ireader/…`，一直在，直到挪走 `output-state/ireader.json`（挪走后 list 干净、sync 照常；`ireader.json` 里还留着乙的 orphans 一条）
     - 改 `list` 的行为在本单「不做」之外（不改 `crates/library/src/`），负责 bot 把这一条要求**放宽为**：不报错；`list` 照 2026-10-31 已有行为把旧记录标成 `? 未知`。要做的：
       1. `disabled_profile_is_forgotten_by_sync` 把旧记录也写进留下来的书（甲和丙）名下：断言 sync 不报错、`outputs()` 里 ireader 是「未知」那一类（不是最新 / 过期）、`booklib list` 退出码 0；再挪走 `ireader.json` 后 `list` 不再有 ireader
-      2. `docs/devices.md` 第 202 行改准：停用后 `booklib list` 会给每本以前传过掌阅的书列一行 `ireader ? 未知`，挪走 `output-state/<id>.json` 就没了；挪走是安全的（这个模式不会再生成、也不会去设备上删东西）
+      2. `docs/devices.md` 第 201 行改准：停用后 `booklib list` 会给每本以前传过掌阅的书列一行 `ireader ? 未知`，挪走 `output-state/<id>.json` 就没了；挪走是安全的（这个模式不会再生成、也不会去设备上删东西）
       3. 「结果」里「`outputs()` / `list` 确实不显示 ireader」那句改准；给 vinci 的 fish 命令最后加一步 `mv ~/.local/share/booklib/output-state/ireader.json ~/.local/share/booklib/output-state/ireader.json.bak`（可选，写明作用）
   - 不阻断：
     - 「结果」的执行时间写成 18:00–18:45，比提交时间（16:1x）还晚，返工时改成实际时间
