@@ -11,6 +11,7 @@
 //!   --keep-spacing   清洗但保留原书段间距（诗集/剧本）
 //!   --auto-toc       强制从 h1–h6 重建目录（缺省仅在无目录时生成）
 //!   --keep-color     黑白屏设备的漫画页也保留彩色（缺省转 256 级灰度）；用来对比灰度与彩色的体积、画质
+//!   --gutter-crop    强制打开漫画格间空白裁切（profile `comic_gutter_crop` 缺省 false）；给 A/B 测试书用
 //!   --check          产物过质量门，打印 JSON 报告；不过则退出码 3（产物仍写出）
 //!   --require-toc    质量门把"无目录"升为失败
 //! 另：epub-optimize --print-profile --device=<id> 打印这个模式解析好的 profile（JSON，缺省值都填上；键名同 TOML），给 tools/ 的脚本读。
@@ -45,13 +46,14 @@ fn main() {
                 "--keep-spacing",
                 "--auto-toc",
                 "--keep-color",
+                "--gutter-crop",
                 "--check",
                 "--require-toc",
             ]
             .contains(f)
         })
     {
-        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--keep-color] [--check] [--require-toc] 输入.epub 输出.epub");
+        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--keep-color] [--gutter-crop] [--check] [--require-toc] 输入.epub 输出.epub");
     }
     // 阅读模式定阅读范围、黑白屏转灰度、注释呈现方式（和书库生成同一个起点）
     let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
@@ -77,6 +79,7 @@ fn main() {
     };
     let opts = OptimizeOpts {
         grayscale: opts.grayscale && !flags.contains(&"--keep-color"),
+        comic_gutter_crop: opts.comic_gutter_crop || flags.contains(&"--gutter-crop"),
         ..opts
     };
     let rep = bookconv::util::produce_then_replace(

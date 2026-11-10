@@ -842,6 +842,7 @@ fn split_spread_pages<R: std::io::Read + std::io::Seek>(
         no_upscale: !opts.comic_upscale,
         cut_bottom: None,
         dark_bg: opts.comic_dark_bg,
+        gutter_crop: opts.comic_gutter_crop,
     };
     // 清洗层改过名的图：页面里引用的新名 → 原书里的原名（读原图字节用）
     let src_names: HashMap<String, String> = prep
@@ -1235,6 +1236,7 @@ fn write_entries<R: std::io::Read + std::io::Seek>(
             no_upscale: !opts.comic_upscale,
             cut_bottom: None,
             dark_bg: opts.comic_dark_bg,
+            gutter_crop: opts.comic_gutter_crop,
         },
         page_cuts: &page_cuts,
         image_gamma: opts.image_gamma,

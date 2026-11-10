@@ -49,6 +49,124 @@ const PN_SLOT_CENTER: f32 = 0.1;
 const PN_SLOT_MIN: usize = 5;
 const PN_SLOT_SHARE: f32 = 0.02;
 
+// ───────────────────────── 裁格间空白（2026-11-10，待真机比） ─────────────────────────
+// 竖屏漫画页多半比阅读范围瘦高（高度受限）；去掉格与格之间整行的空白，页变矮，保比缩进阅读范围时整体变大。
+// 保守：只删整行没有一个像素比 [`DARK_BELOW`] 暗的空白带，淡线（246）、杂点所在的行一行都不删。
+
+/// 空白带至少这么高（占页高）才算格间空白：太薄的多半是画里的细缝、网点间隔，不值得动。
+const GUTTER_MIN_BAND: f64 = 0.01;
+/// 每条带收完后至少留这么高（占页高，和 4px 取大）：保一点格与格之间的呼吸，也防误判把两格贴在一起。
+const GUTTER_KEEP: f64 = 0.005;
+/// 一张页最多收掉这么多（占页高）：再多就不是格间空白了。
+const GUTTER_MAX_TOTAL: f64 = 0.15;
+/// 收完高度变化不到页高这个比例的页不动（不值得为几个像素重编码）。
+const GUTTER_MIN_CHANGE: f64 = 0.01;
+
+/// 空白带 `[y0, y1)`：连续整行都没有比 [`DARK_BELOW`] 暗的像素，高 ≥ 页高 [`GUTTER_MIN_BAND`]，
+/// 而且不在页顶、页底（上下都有内容）。`px` 是灰度/暗度平面（一行 `w` 个像素）。
+pub(crate) fn gutter_bands(px: &[u8], w: u32, h: u32) -> Vec<(u32, u32)> {
+    if w == 0 || h == 0 || px.len() < w as usize * h as usize {
+        return Vec::new();
+    }
+    let min_band = ((h as f64) * GUTTER_MIN_BAND).ceil().max(1.0) as u32;
+    let row_has_content = |y: u32| {
+        let start = y as usize * w as usize;
+        px[start..start + w as usize]
+            .iter()
+            .any(|&v| v < DARK_BELOW)
+    };
+    let mut out = Vec::new();
+    let mut y = 0u32;
+    while y < h {
+        if row_has_content(y) {
+            y += 1;
+            continue;
+        }
+        let y0 = y;
+        while y < h && !row_has_content(y) {
+            y += 1;
+        }
+        let y1 = y;
+        if y0 > 0 && y1 < h && y1 - y0 >= min_band {
+            out.push((y0, y1));
+        }
+    }
+    out
+}
+
+/// 每条空白带要删掉的行区间。先算每带可收 `带高 − 留白`，总量 `S`；目标收量 `T = 页高 − 页宽 ×
+/// (阅读范围高 / 阅读范围宽)`（收到页面比例正好等于阅读范围）；实际收 `min(S, T, 页高 × 15%)`。
+/// 不够收满时按各带可收量的比例分摊（取整误差按剩余额度补给可收最多的带）；每条带删上下各一半、留下正中至少
+/// `max(页高 × 0.5%, 4px)`。收完变化不到页高 1%、或页已经宽度受限（`T ≤ 0`）→ 不删。
+pub(crate) fn gutter_cuts(
+    bands: &[(u32, u32)],
+    w: u32,
+    h: u32,
+    area: crate::imgopt::Screen,
+) -> Vec<(u32, u32)> {
+    if bands.is_empty() || w == 0 || h == 0 || area.width == 0 || area.height == 0 {
+        return Vec::new();
+    }
+    let keep = ((h as f64) * GUTTER_KEEP).ceil().max(4.0) as u32;
+    let mut avail: Vec<(u32, u32, u32)> = Vec::new();
+    let mut sum = 0u64;
+    for &(y0, y1) in bands {
+        let a = (y1.saturating_sub(y0)).saturating_sub(keep);
+        if a > 0 {
+            avail.push((y0, y1, a));
+            sum += u64::from(a);
+        }
+    }
+    if sum == 0 {
+        return Vec::new();
+    }
+    let target = h as f64 - w as f64 * (area.height as f64 / area.width as f64);
+    if !target.is_finite() || target <= 0.0 {
+        return Vec::new();
+    }
+    let cap = h as f64 * GUTTER_MAX_TOTAL;
+    let total = target.min(sum as f64).min(cap).floor().max(0.0) as u64;
+    if total == 0 || (total as f64) < h as f64 * GUTTER_MIN_CHANGE {
+        return Vec::new();
+    }
+    // 按可收量比例分；取整的零头给可收最多的带（它一定还有额度，分不完就继续给下一个）
+    let mut cuts: Vec<u32> = avail
+        .iter()
+        .map(|&(_, _, a)| ((total as u128 * u128::from(a)) / u128::from(sum)) as u32)
+        .collect();
+    let mut left = total.saturating_sub(cuts.iter().map(|&c| u64::from(c)).sum());
+    while left > 0 {
+        let mut best: Option<usize> = None;
+        for (i, &(_, _, a)) in avail.iter().enumerate() {
+            if u64::from(cuts[i]) < u64::from(a)
+                && best
+                    .is_none_or(|b| a.saturating_sub(cuts[i]) > avail[b].2.saturating_sub(cuts[b]))
+            {
+                best = Some(i);
+            }
+        }
+        let Some(i) = best else { break };
+        cuts[i] += 1;
+        left -= 1;
+    }
+    let mut out = Vec::new();
+    for ((y0, y1, _), cut) in avail.iter().zip(cuts) {
+        if cut == 0 {
+            continue;
+        }
+        let top = cut / 2;
+        let bottom = cut - top;
+        if top > 0 {
+            out.push((*y0, *y0 + top));
+        }
+        if bottom > 0 {
+            out.push((*y1 - bottom, *y1));
+        }
+    }
+    out.sort_by_key(|&(a, _)| a);
+    out
+}
+
 /// 一行里连续的暗像素 `[x0, x1)`。
 #[derive(Clone, Copy)]
 struct Run {
@@ -685,5 +803,93 @@ mod tests {
         assert_eq!(dark_background(&bleed, 800, 1000), None);
         // 太小的图（跳过杂边后不够四圈）不判
         assert_eq!(dark_background(&dark_page(18, 18, |_, _| 10), 18, 18), None);
+    }
+
+    fn area_1072x1448() -> crate::imgopt::Screen {
+        crate::imgopt::Screen {
+            width: 1072,
+            height: 1448,
+        }
+    }
+
+    /// 三格页：40px 空白带各收 30px（留 10px 正中），总量不超过 15%、不超过比例所需。
+    #[test]
+    fn gutter_bands_and_cuts_three_panels() {
+        let px = page(
+            800,
+            2000,
+            &[
+                (0, 0, 800, 500),
+                (0, 540, 800, 460),
+                (0, 1040, 800, 460),
+                (0, 1540, 800, 460),
+            ],
+        );
+        assert_eq!(
+            gutter_bands(&px, 800, 2000),
+            [(500, 540), (1000, 1040), (1500, 1540)]
+        );
+        let cuts = gutter_cuts(&gutter_bands(&px, 800, 2000), 800, 2000, area_1072x1448());
+        assert_eq!(
+            cuts,
+            [
+                (500, 515),
+                (525, 540),
+                (1000, 1015),
+                (1025, 1040),
+                (1500, 1515),
+                (1525, 1540)
+            ],
+            "每条 40px 的带删上下各 15px、正中留 10px"
+        );
+        assert_eq!(cuts.iter().map(|(a, b)| b - a).sum::<u32>(), 90);
+    }
+
+    /// 空白带里的 1px 淡线（246）和 1px 暗点都不是空白：所在行一行都不删。
+    #[test]
+    fn gutter_line_and_speck_are_not_blank() {
+        let mut px = page(
+            800,
+            2000,
+            &[(0, 0, 800, 500), (0, 600, 800, 400), (0, 1000, 800, 1000)],
+        );
+        // 带 [500,600) 里：550 行一条 246 的淡线，560 行一个 0 的暗点
+        for x in 0..800 {
+            px[(550 * 800 + x) as usize] = 246;
+        }
+        px[(560 * 800 + 200) as usize] = 0;
+        let bands = gutter_bands(&px, 800, 2000);
+        assert!(
+            bands
+                .iter()
+                .all(|&(a, b)| !(a <= 550 && 550 < b) && !(a <= 560 && 560 < b)),
+            "{bands:?}"
+        );
+        let cuts = gutter_cuts(&bands, 800, 2000, area_1072x1448());
+        assert!(
+            cuts.iter()
+                .all(|&(a, b)| !(a <= 550 && 550 < b) && !(a <= 560 && 560 < b)),
+            "{cuts:?}"
+        );
+    }
+
+    /// 页已经宽度受限（T ≤ 0）、带太薄、页顶页底的白都不收。
+    #[test]
+    fn gutter_skips_wide_pages_thin_bands_and_page_edges() {
+        let area = area_1072x1448();
+        assert!(
+            gutter_cuts(&[(400, 500)], 2000, 1000, area).is_empty(),
+            "宽页 T ≤ 0"
+        );
+        let thin = page(800, 2000, &[(0, 0, 800, 500), (0, 519, 800, 1481)]);
+        assert!(
+            gutter_bands(&thin, 800, 2000).is_empty(),
+            "19px 的带不到页高 1%"
+        );
+        let edges = page(800, 2000, &[(0, 500, 800, 1000)]);
+        assert!(
+            gutter_bands(&edges, 800, 2000).is_empty(),
+            "页顶、页底的白不算格间空白"
+        );
     }
 }

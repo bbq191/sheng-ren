@@ -588,6 +588,9 @@ struct ComicSrc {
     /// 按 EXIF 方向摆正过：原字节靠 EXIF 才显示正，重编码（不带 EXIF）时必须用摆正后的像素；也不原样沿用原字节
     /// （阅读器认不认 EXIF 没验证过，摆正后哪台都一样）。
     rotated: bool,
+    /// 原图（转灰度之前）的内容是不是灰度：存成 RGB 的 R=G=B 页算灰度，真正的彩页不算。裁格间空白只动灰度内容；
+    /// 黑白屏上彩页先转成了 `Page8::Gray`，不能到那时再判（那一律是灰度）。不需要判的调用方给 `true`（开关关着不用）。
+    gray_content: bool,
 }
 
 /// 漫画页产物的编码格式：JPEG、PNG 保持原格式；GIF 转 PNG（调色板图，无损）；WebP 看编码方式——有损的转 JPEG，无损的转 PNG。
@@ -682,7 +685,13 @@ fn webp_is_lossless(bytes: &[u8]) -> Option<bool> {
 /// 只合成了白底、别的都不用做时不算改动：原图照旧原样保留，透明区域交给阅读器按页面底色显示。
 /// 超过解码上限 `max_px`（缺省 [`MAX_COMIC_DECODE_PIXELS`]）、动图、解不开 → `None`（原样保留）。
 /// `apply_exif = false` 时不看 EXIF 方向（图来自不认 EXIF 的容器，见 [`PageDecode::apply_exif`]）。
-fn decode_comic(bytes: &[u8], grayscale: bool, max_px: u64, apply_exif: bool) -> Option<ComicSrc> {
+fn decode_comic(
+    bytes: &[u8],
+    grayscale: bool,
+    max_px: u64,
+    apply_exif: bool,
+    need_gray_content: bool,
+) -> Option<ComicSrc> {
     let head = ImgHead::read(bytes, is_comic_format, apply_exif)?;
     if head.pixels() > max_px {
         return None; // 解压炸弹或离谱的大图：不整个解出来，原样保留（在判动图之前先拦，不为它读整个文件）
@@ -703,6 +712,13 @@ fn decode_comic(bytes: &[u8], grayscale: bool, max_px: u64, apply_exif: bool) ->
     } else {
         decoded
     };
+    // 彩色要在转灰度之前判（黑白屏转完一律是 Gray，`is_gray_content` 恒真）；只在开了格间空白时才多拷一份判，
+    // 转灰度这一步保持原来的写法（16 位图走 `image` 自己的 `into_luma8`，不能先截成 8 位再转，否则关着也变）
+    let gray_content = if gray || !need_gray_content {
+        true
+    } else {
+        Page8::Rgb(decoded.to_rgb8()).is_gray_content()
+    };
     let img = if gray || to_gray {
         Page8::Gray(into_luma8(decoded))
     } else {
@@ -713,6 +729,7 @@ fn decode_comic(bytes: &[u8], grayscale: bool, max_px: u64, apply_exif: bool) ->
         out_fmt,
         to_gray,
         rotated,
+        gray_content,
     })
 }
 
@@ -813,7 +830,8 @@ pub struct PageDecode {
 /// 给自己排版整页图的调用方用（本 crate 的漫画页走 [`prepare_comic_page_for_epub`]，内部是同一套解码）：之后接
 /// [`trim_page`] 裁边、[`Page8::resize_lanczos3`] 缩放、[`Page8::encode`] 编码。不兜 panic，需要时调用方自己兜。
 pub fn decode_page(bytes: &[u8], opts: PageDecode) -> Option<(Page8, ImageFormat)> {
-    decode_comic(bytes, opts.grayscale, opts.max_px, opts.apply_exif).map(|s| (s.img, s.out_fmt))
+    decode_comic(bytes, opts.grayscale, opts.max_px, opts.apply_exif, false)
+        .map(|s| (s.img, s.out_fmt))
 }
 
 /// 裁掉四边纯色留白（哪种边算留白见 [`TrimMode`]）：返回 (裁后的图, 左偏移, 上偏移)。没得裁时原图原样返回、偏移 0。
@@ -1003,6 +1021,8 @@ pub struct ComicPage {
     pub cut_bottom: Option<u32>,
     /// 黑底页补边补底色、不裁（`comic_dark_bg`，[`crate::comiccrop::dark_background`]）。
     pub dark_bg: bool,
+    /// 裁掉格与格之间整行的空白带（profile `comic_gutter_crop`，[`crate::comiccrop::gutter_bands`]，2026-11-10，待真机比）。
+    pub gutter_crop: bool,
 }
 
 /// 书架缩略图（profile `cover_thumb_aspect`）：先去掉扫描留下的窄白边（[`thumb_scan_margins`]），再居中裁成宽高比 `aspect`
@@ -1147,7 +1167,7 @@ pub fn comic_page_number(
     specks: bool,
     max_px: u64,
 ) -> Option<crate::comiccrop::PageNumber> {
-    let ComicSrc { img, .. } = decode_comic(bytes, true, max_px, true)?;
+    let ComicSrc { img, .. } = decode_comic(bytes, true, max_px, true, false)?;
     let full = img.dimensions();
     let (img, l, t) = trim_comic(img, specks, full, (0, 0));
     let (w, h) = img.dimensions();
@@ -1170,7 +1190,7 @@ pub fn prepare_comic_page_limited(
     page: ComicPage,
     max_px: u64,
 ) -> Option<Vec<u8>> {
-    let src = decode_comic(bytes, grayscale, max_px, true)?;
+    let src = decode_comic(bytes, grayscale, max_px, true, page.gutter_crop)?;
     process_comic_page(src, area, margin, page, false)
 }
 
@@ -1200,13 +1220,14 @@ pub fn prepare_comic_spread(
     page: ComicPage,
     max_px: u64,
 ) -> Option<(Vec<u8>, Vec<u8>)> {
-    let src = decode_comic(bytes, grayscale, max_px, true)?;
+    let src = decode_comic(bytes, grayscale, max_px, true, page.gutter_crop)?;
     let (w, h) = src.img.dimensions();
     if !is_spread(w, h) {
         return None;
     }
     let (left_w, right_w) = spread_widths(w);
-    let (out_fmt, to_gray, rotated) = (src.out_fmt, src.to_gray, src.rotated);
+    let (out_fmt, to_gray, rotated, gray_content) =
+        (src.out_fmt, src.to_gray, src.rotated, src.gray_content);
     // 一次只多留一张半页：左半处理完再裁右半，原图一直留到最后
     let left = src.img.crop_ref(0, 0, left_w, h);
     let left = process_comic_page(
@@ -1215,6 +1236,7 @@ pub fn prepare_comic_spread(
             out_fmt,
             to_gray,
             rotated,
+            gray_content,
         },
         area,
         margin,
@@ -1231,6 +1253,7 @@ pub fn prepare_comic_spread(
             out_fmt,
             to_gray,
             rotated,
+            gray_content,
         },
         area,
         margin,
@@ -1258,12 +1281,14 @@ fn process_comic_page(
         no_upscale,
         cut_bottom,
         dark_bg,
+        gutter_crop,
     } = page;
     let ComicSrc {
         img,
         out_fmt,
         to_gray,
         rotated,
+        gray_content,
     } = src;
     let orig = img.dimensions();
     // 页码：从页码块的上沿往下切掉，再照常裁白边（切口上方的留白一起裁掉）
@@ -1284,6 +1309,24 @@ fn process_comic_page(
             None
         };
     }
+    // 裁格间空白（只在裁白边、黑底判定、装饰小图之后；黑底页、彩色页不动）。
+    // 彩色按转灰度之前的原图判（`gray_content`）：黑白屏上彩页转成 Gray 后 `is_gray_content` 恒真。
+    let mut gutter_changed = false;
+    let img = if gutter_crop && bg.is_none() && gray_content {
+        let (w, h) = img.dimensions();
+        let plane = darkness_plane(&img);
+        let bands = crate::comiccrop::gutter_bands(&plane, w, h);
+        let cuts = crate::comiccrop::gutter_cuts(&bands, w, h, area);
+        if cuts.is_empty() {
+            img
+        } else {
+            gutter_changed = true;
+            img.remove_rows(&cuts)
+        }
+    } else {
+        img
+    };
+    let (cw, ch) = img.dimensions();
     // 黑点、白点要在缩放前取：Lanczos 在线条边上振出 0，缩放后取就拉不动（2026-10-30 测试书第一版这样错过）
     let darken = if (gamma.is_some() || autocontrast) && img.is_gray_content() {
         let stretch = autocontrast
@@ -1305,6 +1348,7 @@ fn process_comic_page(
         out_fmt == ImageFormat::Jpeg && !no_upscale,
     );
     if !force_encode
+        && !gutter_changed
         && !to_gray
         && !rotated
         && darken.is_none()
@@ -1504,6 +1548,44 @@ impl Page8 {
         }
     }
 
+    /// 删掉 `cuts` 里的行区间（升序、不重叠），其余行按原顺序拼起来（裁格间空白用）。
+    fn remove_rows(&self, cuts: &[(u32, u32)]) -> Page8 {
+        if cuts.is_empty() {
+            return match self {
+                Page8::Gray(g) => Page8::Gray(g.clone()),
+                Page8::Rgb(c) => Page8::Rgb(c.clone()),
+            };
+        }
+        let keep = |y: u32| !cuts.iter().any(|&(a, b)| a <= y && y < b);
+        match self {
+            Page8::Gray(g) => {
+                let (w, h) = g.dimensions();
+                let mut raw = Vec::with_capacity((w * h) as usize);
+                for y in 0..h {
+                    if keep(y) {
+                        let s = (y * w) as usize;
+                        raw.extend_from_slice(&g.as_raw()[s..s + w as usize]);
+                    }
+                }
+                let nh = raw.len() as u32 / w.max(1);
+                Page8::Gray(image::GrayImage::from_raw(w, nh, raw).expect("按行拼接，长度正好"))
+            }
+            Page8::Rgb(c) => {
+                let (w, h) = c.dimensions();
+                let stride = w as usize * 3;
+                let mut raw = Vec::with_capacity(stride * h as usize);
+                for y in 0..h {
+                    if keep(y) {
+                        let s = y as usize * stride;
+                        raw.extend_from_slice(&c.as_raw()[s..s + stride]);
+                    }
+                }
+                let nh = raw.len() as u32 / stride.max(1) as u32;
+                Page8::Rgb(image::RgbImage::from_raw(w, nh, raw).expect("按行拼接，长度正好"))
+            }
+        }
+    }
+
     /// 放到 `cw × ch`、底色 `fill`（灰度值，彩色三个分量相同）的画布上，左上角在 `(x, y)`。
     fn paste_on(&self, cw: u32, ch: u32, x: u32, y: u32, fill: u8) -> Page8 {
         match self {
@@ -1654,7 +1736,7 @@ mod tests {
         bytes: &[u8],
         grayscale: bool,
     ) -> Option<(DynamicImage, ImageFormat, bool)> {
-        let src = decode_comic(bytes, grayscale, MAX_COMIC_DECODE_PIXELS, true)?;
+        let src = decode_comic(bytes, grayscale, MAX_COMIC_DECODE_PIXELS, true, false)?;
         let orig = src.img.dimensions();
         let (img, _, _) = trim_page(src.img, TrimMode::WhiteOnly);
         let changed = img.dimensions() != orig || src.to_gray;
@@ -2681,7 +2763,7 @@ mod tests {
             .expect("基线 JPEG 有 SOF0");
         bomb[sof + 5..sof + 9].copy_from_slice(&[0x23, 0x28, 0x23, 0x28]);
         assert_eq!(comic_header_dims(&bomb).map(|d| d.1), Some((9000, 9000)));
-        assert!(decode_comic(&bomb, false, MAX_COMIC_DECODE_PIXELS, true).is_none());
+        assert!(decode_comic(&bomb, false, MAX_COMIC_DECODE_PIXELS, true, false).is_none());
         assert!(prep(&bomb, test_area(), true).is_none());
     }
 
@@ -3422,6 +3504,189 @@ mod tests {
         assert!(is_spread(1200, 1000), "正好 1.2 算跨页");
         assert_eq!(spread_widths(1600), (800, 800));
         assert_eq!(spread_widths(1601), (800, 801), "奇数宽右半多 1px");
+    }
+
+    /// 2026-11-10 审查阻断 1：彩色按转灰度之前的原图判——黑白屏上彩页不裁格间空白，R=G=B 的 RGB 页照常裁。
+    #[test]
+    fn gutter_crop_checks_color_before_grayscale() {
+        let area = Screen {
+            width: 1072,
+            height: 1448,
+        };
+        let panels = |rgb: bool| {
+            image::RgbImage::from_fn(800, 2000, |_, y| {
+                let v = if (600..640).contains(&y) || (1240..1280).contains(&y) {
+                    [255, 255, 255]
+                } else if rgb {
+                    [200, 20, 20]
+                } else {
+                    [40, 40, 40]
+                };
+                image::Rgb(v)
+            })
+        };
+        let mut color = Vec::new();
+        image::DynamicImage::ImageRgb8(panels(true))
+            .write_to(&mut std::io::Cursor::new(&mut color), ImageFormat::Png)
+            .unwrap();
+        let run = |b: &[u8]| {
+            let img = image::load_from_memory(b).unwrap().to_luma8();
+            let (w, h) = img.dimensions();
+            let dark = |y: u32| (0..w).any(|x| img.get_pixel(x, y).0[0] < 128);
+            let mut y = 0;
+            while y < h && !dark(y) {
+                y += 1;
+            }
+            let start = y;
+            while y < h && dark(y) {
+                y += 1;
+            }
+            y - start
+        };
+        let off = prepare_comic_page_limited(
+            &color,
+            area,
+            0,
+            true,
+            ComicPage::default(),
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        let on = prepare_comic_page_limited(
+            &color,
+            area,
+            0,
+            true,
+            ComicPage {
+                gutter_crop: true,
+                ..Default::default()
+            },
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        assert_eq!(off, on, "彩色页转灰度前是彩色：不裁格间空白");
+
+        let mut gray_rgb = Vec::new();
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut gray_rgb, 100);
+        enc.encode_image(&panels(false)).unwrap();
+        let off = prepare_comic_page_limited(
+            &gray_rgb,
+            area,
+            0,
+            true,
+            ComicPage::default(),
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        let on = prepare_comic_page_limited(
+            &gray_rgb,
+            area,
+            0,
+            true,
+            ComicPage {
+                gutter_crop: true,
+                ..Default::default()
+            },
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        assert_ne!(off, on, "R=G=B 的 RGB 页照常裁");
+        assert!(run(&on) > run(&off), "格变高");
+    }
+
+    /// 2026-11-10 复验阻断 2：16 位 RGB PNG 转灰度必须和改前逐字节相同（不能先截成 8 位再转）；
+    /// 16 位 R=G=B 开格间空白照常收，16 位彩色不收。
+    #[test]
+    fn sixteen_bit_rgb_keeps_original_grayscale_conversion() {
+        let area = Screen {
+            width: 1072,
+            height: 1448,
+        };
+        let png16 = |color: bool| {
+            let mut buf = Vec::new();
+            let img =
+                image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(800, 2000, |_, y| {
+                    let gap = (600..640).contains(&y) || (1240..1280).contains(&y);
+                    image::Rgb(if gap {
+                        [65535, 65535, 65535]
+                    } else if color {
+                        [50000, 100, 100]
+                    } else {
+                        [10000, 10000, 10000]
+                    })
+                });
+            image::DynamicImage::ImageRgb16(img)
+                .write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png)
+                .unwrap();
+            buf
+        };
+        let expected = |png: &[u8]| {
+            image::load_from_memory(png)
+                .unwrap()
+                .into_luma8()
+                .into_raw()
+        };
+        let gray = |p: Page8| match p {
+            Page8::Gray(g) => g.into_raw(),
+            Page8::Rgb(c) => c.into_raw(),
+        };
+        for color in [true, false] {
+            let png = png16(color);
+            let off = decode_comic(&png, true, MAX_COMIC_DECODE_PIXELS, true, false)
+                .unwrap()
+                .img;
+            let on = decode_comic(&png, true, MAX_COMIC_DECODE_PIXELS, true, true)
+                .unwrap()
+                .img;
+            assert_eq!(gray(off), expected(&png), "关着：16 位转灰度和改前一致");
+            assert_eq!(gray(on), expected(&png), "开着：转灰度也一样");
+        }
+        let color = png16(true);
+        let off = prepare_comic_page_limited(
+            &color,
+            area,
+            0,
+            true,
+            ComicPage::default(),
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        let on = prepare_comic_page_limited(
+            &color,
+            area,
+            0,
+            true,
+            ComicPage {
+                gutter_crop: true,
+                ..Default::default()
+            },
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        assert_eq!(off, on, "16 位彩色页不裁格间空白");
+        let gray16 = png16(false);
+        let off = prepare_comic_page_limited(
+            &gray16,
+            area,
+            0,
+            true,
+            ComicPage::default(),
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        let on = prepare_comic_page_limited(
+            &gray16,
+            area,
+            0,
+            true,
+            ComicPage {
+                gutter_crop: true,
+                ..Default::default()
+            },
+            MAX_COMIC_DECODE_PIXELS,
+        )
+        .unwrap();
+        assert_ne!(off, on, "16 位 R=G=B 页照常裁");
     }
 
     /// 跨页拆开后两半各自处理：左半 40、右半 200，最终图（带白边）左半仍明显暗于右半；1.1 宽的页不拆。

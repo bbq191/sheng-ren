@@ -195,6 +195,10 @@ fn mutations() -> Vec<Mutation> {
         "comic_split_spreads",
         Box::new(|p| p.comic.split_spreads = !p.comic.split_spreads),
     ));
+    v.push((
+        "comic_gutter_crop",
+        Box::new(|p| p.comic.gutter_crop = !p.comic.gutter_crop),
+    ));
     v
 }
 
