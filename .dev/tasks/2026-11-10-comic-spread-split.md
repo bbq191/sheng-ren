@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-comic-spread-split
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: opencode-local
 - 分支: feat/comic-spread-split（从最新 master 切出；须在 2026-11-10-manga-rtl-bangumi 合并之后）
-- 更新时间: 2026-11-10T10:40+08:00
+- 更新时间: 2026-11-10T14:20+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 C 节）
 
 ## 需求原文
