@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: opencode-local
 - 分支: feat/comic-spread-split（从最新 master 切出；须在 2026-11-10-manga-rtl-bangumi 合并之后）
-- 更新时间: 2026-11-10T15:40+08:00
+- 更新时间: 2026-11-10T13:45+08:00
 - 引用: 无（PRD：vault `Projects/sheng-ren/prd/2026-11-10-comic-layout-direction.md` 的 C 节）
 
 ## 需求原文
@@ -160,5 +160,23 @@
     - 「开关关着逐字节不变」测试只断言页数和没有 `-eink2`，没比字节；box 上已用 master 二进制证明（见上），不强求补
     - CBZ 来源只测了 ltr；rtl 与 EPUB 同一条代码路径，不强求
 - 返工后：sheng-ren 重新验收，通过后再请 vinci 跑 agy 二审（回执 `.dev/tasks/2026-11-10-comic-spread-split.agy.md`）
-- 二审：未开始（等返工验收通过）
+- 复验：**通过**（sheng-ren，2026-11-10，box 上 `ccc9bcf` 重跑；状态保持 done，等 agy 二审，二审无阻断后合并、改 verified）
+  - 返工记录：「结果 → 返工（2026-11-10）」已写（`19fd603` 接受、`69c91a6` 代码、`ccc9bcf` done）；返工只改 `streaming.rs`、`optimize/tests.rs`、`docs/typesetting.md`，没出「涉及文件」。注：返工记录里写的时间（15:40）和提交时间（13:29）对不上，不影响结论
+  - 阻断 1 已修：`add_spread_spine_items`（`streaming.rs:1128-1152`）把 `properties` 拆成词，去掉本地名以 `page-spread-` 开头的，其余保留，剩空删属性。box 上合成书 b1（rtl，三张跨页 itemref 分别带 `rendition:layout-pre-paginated page-spread-left`、`page-spread-right`、`rendition:page-spread-center  rendition:align-x-center`）：四台产物依次剩 `properties="rendition:layout-pre-paginated"`、属性整个没了、`properties="rendition:align-x-center"`（双空格规整成一个）；新 itemref 都不带 `properties`。上一轮的 spread.epub（`properties="page-spread-left"`）四台产物和上一轮比只有 OPF 变（原页 itemref 的 `properties` 没了），没拆的 1.07 宽页照旧保留 `page-spread-left`
+  - 阻断 2 已修：`streaming.rs:938-944` 多判 `(iw / 2).min(ih) < screen.width / 3`。box 上 b2（Kobo 阈值 1072/3=357）：480×400、712×400（半张 356）不拆、716×400（半张 358）拆；Kobo 产物所有页图都是 1072×1448 画布，`width:100%;height:100%` 不再拉伸；Kindle、掌阅（阈值更高）都不拆；`docs/typesetting.md` 已补半句
+  - 阻断 3 已修：`streaming.rs:1154-1160` 非自闭合时用 `html::find_close` 插到 `</itemref>` 后，找不到返回 `None`（整书不拆）。box 上 b3：`<itemref idref="x2" properties="page-spread-left"></itemref>` → 新 itemref 紧跟 `</itemref>`、原页 `properties` 删掉；带前缀、内有换行的 `<opf:itemref idref="x4" linear="yes">\n  </opf:itemref>` → 新的是 `<opf:itemref idref="eink-spread-page-2" linear="yes"/>`，紧跟结束标签。四台都对，Kindle 产物 `epub-to-kfx` → `kfx-dump` 8 个 section（spine 8 页）
+  - 阻断 4 已修：`streaming.rs:858-884` 先扫所有 `ish` 条目的 `<img src>` / `<image href|xlink:href>` 统计引用页数，>1 不拆（`streaming.rs:913-918`）。box 上 b4：p002/p003 共用一张跨页图（`<img>`）、p004 的图另被不在 spine 里的 `sub/extra.xhtml` 用 SVG `<image xlink:href="../img/p004.jpg">` 引用 → 两张都不拆，四台产物这两张图和 master 产物逐字节相同（整张处理）；只被一页引用的 p006 照常拆。上一轮的 dup.epub 也不再拆
+  - 不阻断建议「清洗层改名」也做了：`streaming.rs:846-857` 按 `wash.renamed` 换回原名读。box 上 b5（`img/p:002.jpg`）四台都拆出 `img/p_002.jpg` + `img/p_002-eink2.jpg`
+  - 质量门：b1–b5 四台 20 个产物 `epub-optimize --check` 全过，两次运行逐字节相同；Kobo b1 → `epub-to-kepub` 11 章正常
+  - 方向：spread.epub（OPF rtl）四台原页仍是右半、`-eink2` 是左半（左半顶上黑条只在 `-eink2`）；`page_direction`（Bangumi 日漫）> profile > 原书 spine 的代码和测试没动
+  - 不回归：没有跨页的 nospread.epub 四台产物和 master（`a02315d` 重编）逐字节相同；四个 toml 临时改 `false` 重编后，b1–b5 和上一轮 4 本（spread / exif / dup / nospread）共 36 个产物全部和 master 逐字节相同（改动已还原）
+  - fp_golden：`a02315d..HEAD` 仍是删 240 行、加 248 行，删掉的 240 行全是四台漫画行（`c65`），文字书旧行 0 变化；返工没动 `crates/library`
+  - 测试：`cargo test --workspace` 23 组 776 个通过、0 失败（比上一轮多 3 个返工测试）；`cargo clippy --workspace --all-targets -- -D warnings` exit 0；`cargo fmt --all -- --check` exit 0
+  - 提交合规：中文前缀加正文、无 Co-Authored-By、没动 master、没合并
+  - 建议（不阻断，可留给二审 / 以后）：
+    - 「找不到 `</itemref>` 就不拆」这条路径没有测试（`add_spread_spine_items` 返回 `None`）；另外 `find_close` 取的是后面第一个 `</itemref>`，原页开始标签没闭合、后面又有非自闭合 itemref 的坏 OPF 会插错位置（OPF 本身已不合法，不强求）
+    - 共用图只统计 xhtml 里的 `<img>` / `<image>`，CSS `background-image` 引用同一张图的不算（漫画书里少见）
+    - 新 itemref 不带原页 itemref 上 `page-spread-*` 以外的 `properties`（如单页 `rendition:layout-pre-paginated`）；四台输出整书版式一致，目前没影响
+    - 上一轮的「开关关着测试只比页数」「CBZ 只测 ltr」没补测试；box 上已用 master 二进制证明开关关着逐字节相同
+- 二审：待 vinci 跑 agy（范围 `a02315d..<本次复验提交>`）
 - 合并：
