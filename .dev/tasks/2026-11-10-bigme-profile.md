@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-10-bigme-profile
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: feat/bigme-profile（从 master `aa86ba4` 切出；测量填完后把已含停用阅读模式的 master `dc1eafe` 合进来）
-- 更新时间: 2026-11-10T18:15+08:00
+- 更新时间: 2026-11-10T18:22+08:00
 - 引用: 无（照 `.dev/tasks/2026-11-04-hanvon-profile.md`、`2026-11-06-hanvon-device-facts.md` 的做法，这次真机量完一次写全）
 
 ## 需求原文
@@ -86,13 +86,43 @@
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-10 18:15–18:21 +08:00
+- base..head：`aa86ba4..HEAD`（`dc1eafe` 已合进来；代码到 `70ba776`，另有任务单 accepting / 本结果提交）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `288f73a` | `.dev/tasks/2026-11-10-bigme-profile.md` | 状态改 accepted |
+  | 2、3 | `1985144` | `crates/profile/profiles/bigme.toml`、`crates/profile/src/lib.rs` | 新 profile；id 列表、三个统一测试加 bigme；bigme 断言 |
+  | 4、5 | `82c51d2` | `crates/library/tests/fp_golden.rs`、`fp_golden.txt`、`crates/library/tests/cli.rs` | 金样遍历加 bigme；`devices` 用例加 `("bigme", "EPUB")` |
+  | 5、7 | `70ba776` | `README.md`、`crates/library/src/bin/booklib/main.rs`、`docs/devices.md`、`docs/usage.md` | 设备表、帮助设备表、字段说明、设备一节、可阅读范围、产物位置 |
+  | 结果 | 本提交 | `.dev/tasks/2026-11-10-bigme-profile.md` | 填结果、状态 done |
+
+- 测试：
+
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test -p profile` | 通过 | 17 passed；`builtin_profiles_parse` 认 `bigme`，三个统一测试（画质 / 拆跨页 / 按元数据定方向）都含 bigme |
+  | `UPDATE_FP_GOLDEN=1 cargo test -p library --test fp_golden` | 通过 | `git diff --numstat` = `124 0`：只新增 bigme 行、删除 0 行，别的设备指纹不变 |
+  | `cargo test -p library --test fp_golden` | 通过 | 重写后复跑通过 |
+  | `cargo test --workspace` | 通过 | 789 passed，0 failed |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo fmt --all -- --check` | 通过 | 干净 |
+  | `booklib devices`（临时书库 + 假 MTP） | 通过 | `bigme  Bigme 自带阅读器（B7 Pro 黑白版）  EPUB  屏幕 1264×1680  阅读范围 1069×1424  黑白`，并显示接上假 MTP |
+  | `booklib sync --help` | 通过 | 设备表新增 `bigme  Bigme（USB）  EPUB  存储根目录 books/<子目录>/`，和各行列对齐 |
+  | 合成书跑 `epub-optimize --device=bigme` | 通过 | 见下面「合成书 / 假 MTP」 |
+  | 假 MTP 跑 `booklib sync --device=bigme` | 通过 | 产物落到 `<mount>/bigme/内部共享存储空间/books/子目录/测试文字书.epub` |
+
+- 合成书 / 假 MTP（`/tmp/opencode/bigme-test/`，不提交）：
+  - 文字书一本（一张 2000×1500 插图 + 正文）：`epub-optimize v66` 正常；profile 的 `[readable.epub]` 是 1069×1424（`--print-profile` 和 `booklib devices` 都核对到）。文字书开 `text_repair_only`，按规则正文图片、样式不动，所以产物里插图没有缩放——这是只修复路径的预期，不是按 1069 宽重排。
+  - 漫画一本（3 张整页图、OPF `dc:subject` 漫画）：产物 3 张图都是 **1264×1680** 灰度；OPF `rendition:layout = pre-paginated`、`fixed-layout = true`、`original-resolution = 1264x1680`、`book-type = comic`；每页 `<meta name="viewport" content="width=1264, height=1680">`、`<img style="width:100%;height:100%">`（方案 D）；**没有** `eink-thumb`，也没有为封面单独改书里的封面页比例。
+  - 假 MTP：`BOOKLIB_MTP_DIR=…/mtp BOOKLIB_MTP_NO_MOUNT_CHECK=1 booklib track …; booklib sync --device=bigme`，产物落到 `<mount>/bigme/内部共享存储空间/books/子目录/`（`dir = "books"`、存储名自建）。
+
 - 遇到的问题：
-- 偏离：无
+  - 文字书的「按 1069×1424」只能在 profile / `booklib devices` 层核对：`text_repair_only` 下正文图片和样式一概不动，不会按阅读范围缩放（和 README 的「文字书只修复」一致）。漫画的 1264×1680 和固定版式已在产物里逐项核对。
+- 偏离：无（只改「涉及文件」里的文件）；`lib.rs` 的 `dir_disables_builtin_mode` 顺手把 bigme 加进「其余内置模式都在」的断言，只加强测试、不改行为。
 - 未完成：
+  - 真机验证（vinci，合并后）：dotfiles 配好挂载规则（或暂用 `BOOKLIB_MTP_DIR=/home/afu/Devices`）后 `booklib sync --device=bigme` 传上去，xReader 书库能看到、能打开；看封面（正文第一页）、漫画固定版式铺满程度、拆页顺序。点左侧翻下一页要在 xReader 设置里改，第一页封面做成 0.81 待定，都不在本单。
 
 ## 审查
 <!-- 负责 bot 填写 -->
