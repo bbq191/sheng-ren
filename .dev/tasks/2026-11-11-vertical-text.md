@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-vertical-text
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: vertical-text（从最新 master `10ce515` 或更新的切出）
-- 更新时间: 2026-11-11T17:09+08:00
+- 更新时间: 2026-11-11T17:25+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`；Kindle 翻页方向已由 `2026-11-11-kindle-text-rtl` 单独修好）
 
 ## 需求原文
@@ -301,3 +301,23 @@ vinci 2026-11-11 的决定（原话或口述结论）：
     4. 一审线索 1–4、6 不变，留给二审和真机。
 - 二审：回执 `.dev/tasks/2026-11-11-vertical-text.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由（返工、重新验收通过后再跑）
 - 合并：PR 链接、合并提交号；状态改为 verified
+
+### 二审后（sheng-ren，2026-11-11，据 `.dev/tasks/2026-11-11-vertical-text.agy.md`）
+
+agy 二审无阻断。下面三条是 agy 的「建议」，但会让真书产物出错，合并前先修（返工第二轮）；其余留作后续。
+
+**本轮要修**
+1. **`!important` 简写旋转破坏语法**（agy 建议 1，`crates/bookconv/src/vertical.rs:668-679`）：`rotate_box_values` 前先剥掉末尾 `!important`（大小写、空白都容忍），旋转后再接回。补测试：1、2、3、4 值各带 `!important`。
+2. **原书竖排判定**（agy 建议 2，`crates/bookconv/src/vertical.rs:181-198`）：
+   - 排除 `table/img/svg/ruby/rt/rp` 改成按选择器里的**元素名**匹配（按组合符和 `.#[:` 切开后比整词），不再用子串；`.article`、`.part`、`.start` 不能被排除。
+   - 只有作用在 `html`、`body`、`:root`（可带类/属性，如 `body.vrtl`、`html[lang]`）上的 `writing-mode: vertical-*`，或写在 `<html>`/`<body>` 的 `style` 属性上的，才算全书原生竖排；局部类（`.signature`、`.seal`）写了竖排不算。
+   - 补测试：`.article{writing-mode:vertical-rl}` 单独出现不算原生；`body.v{writing-mode:vertical-rl}` 算；台版合成书仍算原生且 CSS 逐字节不变。
+3. **实体识别**（agy 建议 3，`crates/bookconv/src/vertical.rs:458-477`）：`&` 后只有 `[A-Za-z0-9#]` 开头、其后全是 `[A-Za-z0-9]` 直到 `;`（≤32 字符）才当实体；遇空白等其他字符即不是实体，`&` 照普通字符转 `＆`。补测试：`Tom & Jerry; 2026` → `Ｔｏｍ ＆ Ｊｅｒｒｙ； ２０２６`，`&amp;`、`&#x4E2D;` 仍整体保留。
+4. **英寸双引号**（agy 线索 1，`crates/bookconv/src/vertical.rs:410-428`）：`"` 紧跟在数字后、且后面不是字母汉字（是空白、标点、`x`/`×` 前的空白或段尾）时当英寸号，不参与配对，转 `＂`。补测试：`12" x 14"` → `１２＂ ｘ １４＂`；`他说"好"` 仍是『好』。
+
+**不修，留给后续**
+- agy 建议 4（弹窗文档混在 `cb12f7e`）：合并用 `--no-ff`，回退时手工修文档。
+- agy 建议 5（`border-radius` 多值简写）：中文书少见，后续单。
+- agy 线索 2、3（注释章搬空、`eink-vertical.css` 段距）：真机验收时看。
+
+修完把「结果」的返工小节补上本轮提交，状态改 done。
