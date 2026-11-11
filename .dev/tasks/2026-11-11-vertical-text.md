@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: opencode-local
 - 分支: vertical-text（从最新 master `10ce515` 或更新的切出）
-- 更新时间: 2026-11-11T17:40+08:00
+- 更新时间: 2026-11-11T17:09+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`；Kindle 翻页方向已由 `2026-11-11-kindle-text-rtl` 单独修好）
 
 ## 需求原文
@@ -277,5 +277,27 @@ vinci 2026-11-11 的决定（原话或口述结论）：
     4. `epub-optimize --no-wash --vertical` 只改文字、不挂竖排样式表（`set_vertical` 只在有 `wash` 时同步），出测试书时别这样组合。
     5. `rewrite_css` 跳过 `@` 开头的规则，`@media` 块里的规则有没有转：未核实。
     6. 规则 7 让 Kobo 漫画的指纹也变（注释段），全部 Kobo 漫画会重建；产物逐字节不变，不会重传。
+- 第二轮验收：**通过**（sheng-ren，2026-11-11，box 复跑 `727b4b6`，返工提交 `f127d66`）。两条阻断都已修好且各有复现；状态保持 done，交 agy 二审。
+  - 复跑：`cargo test --workspace` 全过，共 781 个（与一审同口径：bookconv 552、csscascade 16、kfx 53、library 71+7+14+48+1、profile 19；另 bookbase 30），0 failed；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --all -- --check` 干净。
+  - 金样（同一审方法，对键比、`|67|→|68|` 抹平）：旧行 640 行一行不少，新增 20 行；Bigme、Kindle、掌阅 384 行一字不变；汉王漫画 64 行不变、汉王文字书 64 行只有 `-`→`-Vf`；Kobo 漫画 64 行只有注释段；Kobo 文字书 63 行 `-Vf` + 注释段 + `n`、1 行 `-Vf` + 注释段。与一审完全一致，返工没有动到指纹。
+  - 逐字节（master `15abbea` 与 `727b4b6` 的 `epub-optimize`，5 本合成书 × 5 台＝25 组）：23 组 `cmp` 相同；只有 Kobo 的中文书、有注释的英文书不同，`diff -r` 仍只差在注释改弹窗。与一审一致。
+  - **阻断 1 复现（已修）**：合成台版书（`html{writing-mode:vertical-rl}` + `p{margin:0 1em}` + `.box{margin-top:2em;width:30%}`）`--device=kobo|hanvon --vertical`：两台产物的 `OEBPS/style.css` 与原件逐字节相同（一审时是 `p{margin:1em 0}`、`.box{margin-right:2em;height:30%}`）；`eink-vertical.css` 不写根元素 writing-mode，只有表格 `horizontal-tb` 和 `p` 段距。修在 `crates/bookconv/src/wash/mod.rs:1075`（`if !native`），测试 `crates/bookconv/src/optimize/tests.rs:3606` 断言 `s.css` 不变。
+  - **阻断 2 复现（已修）**：临时加一个持锁测试（入库后把 meta.json 的 `zh_text` 改成没有、删掉原件、`lib.lock()` 后 `zh_text_of`）：在一审时的 `18f2435` 上失败（meta.json 被写成 `Some(false)`），在 `727b4b6` 上通过；同一个 `Library` 把原件放回来再判一次得 `true` 并写进 meta.json（进程内也没缓存成「不是」）。修在 `crates/library/src/vertical.rs:96`。执行方补的测试 `crates/library/tests/flow.rs:3126` 原来**不持锁**，而只有持锁时才写 meta.json，测不到要防的路径；验收时顺手改为持锁（`be85920`，测试 2 行，不动代码）。
+  - 竖排产物复查（合成中文书，Kobo、汉王 `--vertical`）：与一审产物 `diff -r` 只差弯撇号那一段，其余（OPF、样式表顺序、全角、引号、ncx/nav、注释写法、`code`/`rt`/属性不动）都和一审一致。弯撇号段现在是 `他说“ｄｏｎ’ｔ ｗｏｒｒｙ”就走了，『这里是中文』。`（全西文的弯引号不转，第二对转『』），两台一样。
+  - 一审建议逐条：
+    1. 入库时判 `zh_text`：已改，`crates/library/src/lib.rs:329` 在 `EpubInfo::read` 判，`crates/library/src/catalog.rs:214` 存进 `Meta`，CBZ 记 `false`（`:184`）。
+    2. 弯撇号：已改（`crates/bookconv/src/vertical.rs:358`），实测见上。
+    3. `vertical` 逐本写不再写死 kobo/hanvon：已改为遍历 `vertical_text = true` 的设备（`crates/library/src/vertical.rs:175`）。
+    4. 补全：已加 `__complete vertical`（`crates/library/src/bin/booklib/complete.rs:46`、`:146`），fish 脚本改用它，有测试。
+    5. 三段式 border、圆角：已改（`crates/bookconv/src/vertical.rs:612`），角的映射核对过（左上→右上……）；顺带实测 `@media` 块里的规则也会转，一审线索 5 可以关。
+    6. 规则 7 一刀回退：没改，理由是 `0c55ca7` 已推送、不改写历史；回退要 revert `b19a963` 再手工改回 `cb12f7e` 里的文档。理由成立，接受；合并时用 merge 提交保留这几个提交，别 squash。
+  - **阻断**：无。
+  - **建议**（不挡二审）
+    1. `border-radius` 的多值简写不转：`border-radius:1px 2px 3px 4px` 原样输出，竖排后应为 `4px 1px 2px 3px`（`crates/bookconv/src/vertical.rs:612` 只处理四个角的长写法；`border-width/style/color` 的四值简写已经会转）。中文书里少见，可以和下一轮竖排一起补。
+  - **线索**
+    1. `crates/library/src/vertical.rs:95` 注释写「agy 一审阻断 2」，实际是负责 bot 验收的阻断 2；`crates/library/src/lib.rs:113` 的 `zh_text` 文档仍写「入库后第一次用到时判」，现在新入库时就判，只有早期条目才是第一次用到时判。只是注释。
+    2. `vertical` 补全也会列出已跟踪条目的上级目录（`crates/library/src/bin/booklib/complete.rs:149` 的 `t.starts_with(&cand)`），方便一路补下去；对上级目录跑 `booklib vertical` 会记进 vertical.toml，作用到下面所有已跟踪的书，符合规则 3。
+    3. 读不到原件时 `zh_text_of` 每次都会再试着打开一次（不缓存是故意的），代价可以忽略。
+    4. 一审线索 1–4、6 不变，留给二审和真机。
 - 二审：回执 `.dev/tasks/2026-11-11-vertical-text.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由（返工、重新验收通过后再跑）
 - 合并：PR 链接、合并提交号；状态改为 verified
