@@ -1713,8 +1713,8 @@ mod tests {
         );
         assert_eq!(
             (k.notes.mode, k.repair_note_links),
-            (Notes::Jump, false),
-            "Kobo 注释弹窗放在下一个提交（规则 7）"
+            (Notes::Popup, true),
+            "Kobo 全部文字书注释弹窗（2026-11-11 实机）"
         );
         assert!(k.vertical_text && k.vertical_ascii == VerticalAscii::Fullwidth);
         let h = get("hanvon").unwrap();

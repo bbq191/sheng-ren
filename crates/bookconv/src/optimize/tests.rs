@@ -3605,6 +3605,29 @@ fn natively_vertical_book_does_not_get_root_writing_mode_rule() {
 
 #[test]
 fn kobo_text_books_use_popup_notes_both_horizontal_and_vertical() {
-    // 这个提交里 Kobo 的 notes 还是 jump；弹窗放在下一个提交（规则 7）里加回来。
+    let ch = r##"<html><body><p>对付希巴女王<a id="zw1" href="#zhu1"><sup>[1]</sup></a>那样</p><p class="fncontent"><a id="zhu1" href="#zw1">[1]</a>Queen of Sheba。</p></body></html>"##;
+    let raw = one_entry_epub(&[("c.xhtml", ch)]);
+    for vertical in [false, true] {
+        let mut opts = OptimizeOpts::for_profile(crate::test_profile("kobo"));
+        opts.set_vertical(vertical);
+        let (out, _) = optimize_epub_with(&raw, &opts).unwrap();
+        let x = String::from_utf8(entry_bytes(&out, "c.xhtml")).unwrap();
+        assert_eq!(x.matches(r#"epub:type="noteref""#).count(), 1, "{x}");
+        assert!(
+            x.contains(r#"<aside epub:type="footnote" id="zhu1""#),
+            "Kobo 弹窗（vertical={vertical}）：{x}"
+        );
+    }
+    // 汉王不变：还是跳转写法，不写 aside
+    let (h, _) = optimize_epub_with(
+        &raw,
+        &OptimizeOpts::for_profile(crate::test_profile("hanvon")),
+    )
+    .unwrap();
+    let y = String::from_utf8(entry_bytes(&h, "c.xhtml")).unwrap();
+    assert!(
+        !y.contains("<aside") && !y.contains(r#"epub:type="noteref""#),
+        "{y}"
+    );
 }
 
