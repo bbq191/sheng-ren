@@ -1070,44 +1070,47 @@ fn add_ua_css(
 /// 竖排书：书自己的 CSS 盒子属性横转竖、挂竖排兜底样式表 `eink-vertical.css`（每页 `<head>` 里最后一个）。
 fn apply_vertical(entries: &mut Vec<Entry>, rep: &mut WashReport, _ascii: profile::VerticalAscii) {
     let native = crate::vertical::is_natively_vertical(entries);
-    // 书自己的 CSS 横转竖（外链样式表 + <style> 块）；我们生成的 eink-* 不动
+    // 书自己的 CSS 横转竖（外链样式表 + <style> 块）；原书本来竖排的不转，我们生成的 eink-* 不动
     let mut complex = 0;
-    for e in entries.iter_mut() {
-        let base = e
-            .name
-            .rsplit('/')
-            .next()
-            .unwrap_or(&e.name)
-            .to_ascii_lowercase();
-        if base.starts_with("eink-") {
-            continue;
-        }
-        if base.ends_with(".css") {
-            if let Ok(t) = std::str::from_utf8(&e.data) {
-                let (out, n) = crate::vertical::rewrite_css(t);
-                complex += n;
-                if out != t {
-                    e.data = out.into_bytes();
-                }
-            }
-        } else if crate::epubzip::is_html_entry(&e.name, &e.data) {
-            let Ok(t) = std::str::from_utf8(&e.data) else {
+    if !native {
+        for e in entries.iter_mut() {
+            let base = e
+                .name
+                .rsplit('/')
+                .next()
+                .unwrap_or(&e.name)
+                .to_ascii_lowercase();
+            if base.starts_with("eink-") {
                 continue;
-            };
-            let edits: Vec<(usize, usize, String)> = html::style_blocks(t)
-                .into_iter()
-                .filter_map(|b| {
-                    let (out, n) = crate::vertical::rewrite_css(&t[b.content_start..b.content_end]);
+            }
+            if base.ends_with(".css") {
+                if let Ok(t) = std::str::from_utf8(&e.data) {
+                    let (out, n) = crate::vertical::rewrite_css(t);
                     complex += n;
-                    (out != t[b.content_start..b.content_end]).then_some((
-                        b.content_start,
-                        b.content_end,
-                        out,
-                    ))
-                })
-                .collect();
-            if !edits.is_empty() {
-                e.data = html::apply_edits(t, edits).into_bytes();
+                    if out != t {
+                        e.data = out.into_bytes();
+                    }
+                }
+            } else if crate::epubzip::is_html_entry(&e.name, &e.data) {
+                let Ok(t) = std::str::from_utf8(&e.data) else {
+                    continue;
+                };
+                let edits: Vec<(usize, usize, String)> = html::style_blocks(t)
+                    .into_iter()
+                    .filter_map(|b| {
+                        let (out, n) =
+                            crate::vertical::rewrite_css(&t[b.content_start..b.content_end]);
+                        complex += n;
+                        (out != t[b.content_start..b.content_end]).then_some((
+                            b.content_start,
+                            b.content_end,
+                            out,
+                        ))
+                    })
+                    .collect();
+                if !edits.is_empty() {
+                    e.data = html::apply_edits(t, edits).into_bytes();
+                }
             }
         }
     }

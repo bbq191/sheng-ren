@@ -91,7 +91,11 @@ impl Library {
         if let Some(z) = self.facts.zh_text(&sha) {
             return Ok(z);
         }
-        let z = self.is_zh_text(meta).unwrap_or(false);
+        // 原件暂时读不出来（没插硬盘、改过名）：这次按不竖排算，但**不缓存、不写 meta.json**——
+        // 不能把「读不到」当成「不是中文书」永久记下来（agy 一审阻断 2）。
+        let Ok(z) = self.is_zh_text(meta) else {
+            return Ok(false);
+        };
         self.facts.note_zh_text(&sha, z);
         if self.records.locked.get() {
             if let Some(mut m) = self
@@ -168,11 +172,17 @@ impl Library {
         dirs.add(dir, value);
         self.save_vertical_dirs(&dirs)?;
         let rel = normalize(dir);
+        let vertical_devices: Vec<String> = self
+            .devices()
+            .iter()
+            .filter(|p| p.vertical_text)
+            .map(|p| p.id.clone())
+            .collect();
         let mut n = 0;
         for m in self.list() {
-            let Some((_, r)) = self
-                .tracked_rel(&m, "kobo")
-                .or_else(|| self.tracked_rel(&m, "hanvon"))
+            let Some((_, r)) = vertical_devices
+                .iter()
+                .find_map(|d| self.tracked_rel(&m, d))
             else {
                 continue;
             };

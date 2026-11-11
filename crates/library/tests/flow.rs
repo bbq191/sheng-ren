@@ -3023,6 +3023,7 @@ fn vertical_books_follow_profile_overrides_and_directory_lists() {
         panic!()
     };
     assert!(lib.zh_text_of(&m).unwrap(), "样例书是中文文字书");
+    assert_eq!(m.zh_text, Some(true), "入库时就存下中文判定");
 
     let opf_and_chapter = |path: &Path| {
         let entries = bookconv::epubzip::read_entries(&std::fs::read(path).unwrap())
@@ -3118,5 +3119,31 @@ fn vertical_books_follow_profile_overrides_and_directory_lists() {
     assert!(
         !opf.contains("vertical-rl"),
         "设备没开 vertical_text 时不竖排"
+    );
+}
+
+#[test]
+fn unreadable_source_does_not_cache_not_chinese() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let src = dir.path().join("中文.epub");
+    std::fs::write(&src, sample_epub("中文")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    assert_eq!(m.zh_text, Some(true));
+    let meta_path = lib.root().join("masters").join(&m.id).join("meta.json");
+    let mut old: library::Meta =
+        serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+    old.zh_text = None; // 模拟早期条目
+    std::fs::write(&meta_path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+    std::fs::remove_file(&src).unwrap();
+    let m = lib.list().into_iter().find(|x| x.id == m.id).unwrap();
+    assert!(!lib.zh_text_of(&m).unwrap(), "读不到原件时这次按不竖排算");
+    let after: library::Meta = serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
+    assert_eq!(
+        after.zh_text, None,
+        "读不到不能把「不是」永久写进 meta.json"
     );
 }

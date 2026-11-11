@@ -3611,6 +3611,11 @@ fn natively_vertical_book_does_not_get_root_writing_mode_rule() {
     let vcss = text_of(&out, "OEBPS/eink-vertical.css");
     assert!(!vcss.contains("html{"), "{vcss}");
     assert!(vcss.contains("table{writing-mode:horizontal-tb"), "{vcss}");
+    assert_eq!(
+        text_of(&out, "OEBPS/s.css"),
+        "p{margin-top:1em;margin-bottom:1em;width:50%;float:left} div{position:absolute;margin-top:2em}",
+        "原书本来竖排：书自己的 CSS 不横转竖"
+    );
     let c1 = text_of(&out, "OEBPS/c1.xhtml");
     assert!(c1.contains("２０２６年"), "{c1}");
 }

@@ -354,6 +354,13 @@ fn is_han(c: char) -> bool {
 fn convert_quotes_text(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     let mut out = chars.clone();
+    // 前后都是 ASCII 字母/数字的 ' / ’ 是撇号，不当引号（don't、90's、don’t）
+    let apostrophe = |i: usize| -> bool {
+        i > 0
+            && i + 1 < chars.len()
+            && chars[i - 1].is_ascii_alphanumeric()
+            && chars[i + 1].is_ascii_alphanumeric()
+    };
     // 弯引号：先配对、检查嵌套；配不上整段不转
     let mut stack: Vec<(char, usize)> = Vec::new();
     let mut pairs: Vec<(usize, usize, char)> = Vec::new();
@@ -369,13 +376,18 @@ fn convert_quotes_text(s: &str) -> String {
                     break;
                 }
             },
-            '’' => match stack.pop() {
-                Some(('‘', j)) => pairs.push((j, i, '‘')),
-                _ => {
-                    ok = false;
-                    break;
+            '’' => {
+                if apostrophe(i) {
+                    continue;
                 }
-            },
+                match stack.pop() {
+                    Some(('‘', j)) => pairs.push((j, i, '‘')),
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -395,12 +407,6 @@ fn convert_quotes_text(s: &str) -> String {
         }
     }
     // 直引号：撇号（前后都是 ASCII 字母/数字）不算；余下的按出现顺序成对
-    let apostrophe = |i: usize| -> bool {
-        i > 0
-            && i + 1 < chars.len()
-            && chars[i - 1].is_ascii_alphanumeric()
-            && chars[i + 1].is_ascii_alphanumeric()
-    };
     for quote in ['"', '\''] {
         let positions: Vec<usize> = chars
             .iter()
@@ -604,6 +610,32 @@ pub fn rewrite_css(css: &str) -> (String, usize) {
 }
 
 fn map_box_decl(prop: &str, value: &str) -> (String, String) {
+    // 圆角：物理角跟着 top→right→bottom→left 转（top-left → top-right → bottom-right → bottom-left → top-left）
+    if let Some(rest) = prop.strip_prefix("border-") {
+        for (from, to) in [
+            ("top-left", "top-right"),
+            ("top-right", "bottom-right"),
+            ("bottom-right", "bottom-left"),
+            ("bottom-left", "top-left"),
+        ] {
+            if let Some(suffix) = rest.strip_prefix(&format!("{from}-")) {
+                return (format!("border-{to}-{suffix}"), value.to_string());
+            }
+        }
+        // border-top-width / border-left-style / border-bottom-color 这类三段式
+        if let Some((side, leaf)) = rest.split_once('-') {
+            let new = match side {
+                "top" => "right",
+                "right" => "bottom",
+                "bottom" => "left",
+                "left" => "top",
+                _ => "",
+            };
+            if !new.is_empty() && matches!(leaf, "width" | "style" | "color") {
+                return (format!("border-{new}-{leaf}"), value.to_string());
+            }
+        }
+    }
     let map_side = |p: &str| -> Option<String> {
         let (head, side) = p.rsplit_once('-')?;
         let new = match side {
@@ -762,6 +794,11 @@ mod tests {
             "配对不跨段落"
         );
         assert_eq!(
+            convert_quotes("<p>他说“don’t worry”就走了，“这里是中文”。</p>"),
+            "<p>他说“don’t worry”就走了，『这里是中文』。</p>",
+            "弯撇号按撇号算，不打断同段别的弯引号；全西文的弯引号仍不转"
+        );
+        assert_eq!(
             convert_quotes("<p><code>\"不转\"</code>\"转\"</p>"),
             "<p><code>\"不转\"</code>『转』</p>"
         );
@@ -824,7 +861,8 @@ mod tests {
             "p{margin-top:1em;margin-right:2em;padding-bottom:3px;width:50%;float:left;text-align:center;text-indent:2em}\n\
              div{position:absolute;margin-top:1em}\n\
              img{max-width:100%}\n\
-             .x{margin:1em 2em 3em 4em}",
+             .x{margin:1em 2em 3em 4em}\n\
+             .b{border-top-width:2px;border-left-style:solid;border-bottom-color:red;border-top-left-radius:4px}",
         );
         assert!(out.contains("p{margin-right:1em;margin-bottom:2em;padding-left:3px;height:50%;text-align:center;text-indent:2em;}"), "{out}");
         assert!(
@@ -833,6 +871,10 @@ mod tests {
         );
         assert!(out.contains("img{max-height:100%;}"), "{out}");
         assert!(out.contains(".x{margin:4em 1em 2em 3em;}"), "{out}");
+        assert!(
+            out.contains(".b{border-right-width:2px;border-top-style:solid;border-left-color:red;border-top-right-radius:4px;}"),
+            "{out}"
+        );
         assert_eq!(complex, 1);
     }
 }

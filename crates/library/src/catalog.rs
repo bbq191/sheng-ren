@@ -181,12 +181,13 @@ impl Library {
                 authors: Vec::new(),
                 drm: None,
                 comic: true,
+                zh_text: Some(false),
             }
         };
         if let Some(d) = info.drm {
             return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
         }
-        let (title, authors, comic) = (info.title, info.authors, info.comic);
+        let (title, authors, comic, zh_text) = (info.title, info.authors, info.comic, info.zh_text);
         // 书里有没有简介、标签（指纹要用，见 `Meta::own_dc`）：只读 OPF
         let own_dc = if ext == "epub" {
             metadata::read_own(&path).ok()
@@ -210,6 +211,7 @@ impl Library {
             source_size: size,
             source_mtime_ns: mtime_ns,
             comic: Some(comic),
+            zh_text,
             own_dc,
             ..Default::default()
         };

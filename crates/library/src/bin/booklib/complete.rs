@@ -43,6 +43,18 @@ pub fn run(args: &[String]) {
                 println!("{c}\t{d}");
             }
         }
+        Some("vertical") => {
+            let Some(lib) = open() else { return };
+            let root = lib.books_root();
+            let tracked: HashSet<PathBuf> = lib
+                .tracked_entries()
+                .iter()
+                .map(|e| canon(&e.path))
+                .collect();
+            for (c, d) in paths_mode(tok, root.as_deref(), &tracked, true) {
+                println!("{c}\t{d}");
+            }
+        }
         Some("tracked") => {
             let Some(lib) = open() else { return };
             let root = lib.books_root();
@@ -85,7 +97,17 @@ fn paths(
     root: Option<&Path>,
     tracked: &HashSet<PathBuf>,
 ) -> Vec<(String, &'static str)> {
-    let top_only = tok.is_empty() && root.is_some();
+    paths_mode(tok, root, tracked, false)
+}
+
+/// [`paths`] 的另一模式：`only_tracked` 为真时只列跟踪条目本身、它下面的子目录和书（`vertical` 用）。
+fn paths_mode(
+    tok: &str,
+    root: Option<&Path>,
+    tracked: &HashSet<PathBuf>,
+    only_tracked: bool,
+) -> Vec<(String, &'static str)> {
+    let top_only = !only_tracked && tok.is_empty() && root.is_some();
     let (dir, name) = match tok.rfind('/') {
         Some(i) => (&tok[..=i], &tok[i + 1..]),
         None => ("", tok),
@@ -119,8 +141,16 @@ fn paths(
                 if !n.starts_with(name) || (n.starts_with('.') && !name.starts_with('.')) {
                     return None;
                 }
+                let cand = canon(&e.path());
                 // tracked 只含这条命令的设备已跟踪的；跟踪目录已包含其下所有内容，不用再往下补
-                if tracked.contains(&canon(&e.path())) {
+                if only_tracked {
+                    if !tracked
+                        .iter()
+                        .any(|t| cand.starts_with(t) || t.starts_with(&cand))
+                    {
+                        return None;
+                    }
+                } else if tracked.contains(&cand) {
                     return None;
                 }
                 let meta = std::fs::metadata(e.path()).ok()?;
@@ -203,7 +233,8 @@ fn fish_script() -> String {
         }
         let args = match c.name {
             "track" => "-a '(booklib __complete paths (commandline -ct) (commandline -opc))'",
-            "untrack" | "vertical" => "-a '(booklib __complete tracked (commandline -opc))'",
+            "untrack" => "-a '(booklib __complete tracked (commandline -opc))'",
+            "vertical" => "-a '(booklib __complete vertical (commandline -ct))'",
             "add" | "dedupe" | "meta" => "-F",
             _ => continue,
         };
@@ -271,6 +302,24 @@ mod tests {
         );
         // 已跟踪的目录前缀也补不出来
         assert!(paths("杂", Some(&root), &tracked).is_empty());
+        // vertical：只列跟踪条目本身、它下面的子目录和书（不列没跟踪的漫画/飘）
+        let only = paths_mode("", Some(&root), &tracked, true);
+        let got: Vec<&str> = only.iter().map(|(c, _)| c.as_str()).collect();
+        assert!(got.contains(&"杂志/"), "{got:?}");
+        assert!(got.contains(&"文字/"), "{got:?}");
+        assert!(
+            !got.contains(&"漫画/") && !got.contains(&"飘.epub"),
+            "{got:?}"
+        );
+        let got: Vec<String> = paths_mode("文字/", Some(&root), &tracked, true)
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect();
+        assert!(got.contains(&"文字/三体.epub".to_string()), "{got:?}");
+        assert!(
+            !got.contains(&"文字/科幻/".to_string()),
+            "没跟踪的子目录不列：{got:?}"
+        );
     }
 
     #[test]

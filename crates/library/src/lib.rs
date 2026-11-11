@@ -287,6 +287,8 @@ struct EpubInfo {
     authors: Vec<String>,
     drm: Option<String>,
     comic: bool,
+    /// 自动判定是不是中文文字书（竖排用）。
+    zh_text: Option<bool>,
 }
 
 /// EPUB 的文字条目（图片条目只记名字、不读内容，大漫画不整本解压）：入库检查和漫画判定共用。
@@ -303,6 +305,7 @@ impl EpubInfo {
             authors: Vec::new(),
             drm: None,
             comic: false,
+            zh_text: None,
         };
         let bad = |e: String| format!("不是有效的 EPUB（{e}）");
         let entries = &epub_text_entries(file).map_err(bad)?;
@@ -323,6 +326,7 @@ impl EpubInfo {
         info.title = dc.title;
         info.authors = dc.creators;
         info.comic = bookconv::comic_detect::is_comic(entries);
+        info.zh_text = Some(bookconv::vertical::is_zh_text(entries));
         Ok(info)
     }
 }
