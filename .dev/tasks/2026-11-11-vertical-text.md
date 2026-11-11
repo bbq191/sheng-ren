@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-vertical-text
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: vertical-text（从最新 master `10ce515` 或更新的切出）
-- 更新时间: 2026-11-11T14:20+08:00
+- 更新时间: 2026-11-11T17:05+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`；Kindle 翻页方向已由 `2026-11-11-kindle-text-rtl` 单独修好）
 
 ## 需求原文
@@ -184,13 +184,58 @@ vinci 2026-11-11 的决定（原话或口述结论）：
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-11 14:20–17:05 +08:00
+- base..head：`15abbea..HEAD`（`15abbea` 是分支切出的 master）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `74bc0ed` | 任务单 | 状态改 accepted |
+  | 1 | `454b8cb` | `crates/profile/src/lib.rs` | `vertical_text`、`vertical_ascii` 两个字段、校验、测试 |
+  | 2–9、11 | `cb12f7e` | 见 `git show --stat cb12f7e`（31 个文件） | 判定、引号、全角、竖排样式、优化器 / 书库接入、版本、金样、文档 |
+  | 10 | `b19a963` | `kobo.toml`、`profile/src/lib.rs`、`optimize/tests.rs`、`fp_golden.txt` | Kobo 注释弹窗（规则 7，单独提交） |
+  | 格式 | `e83635c` | 10 个改过的文件 | `cargo fmt` |
+  | 结果 | 本提交 | 任务单 | 填结果、状态改为 done |
+
+- 实现（对应分步任务）：
+  1. **profile**：`vertical_text: bool`（缺省 false）、`vertical_ascii`（`keep` / `fullwidth`，留了 `tcy` 枚举位但 `validate` 报「未实现」）。`vertical_ascii != keep` 必须开 `vertical_text`。`--print-profile` 直接输出。
+  2. **判定**（`crates/bookconv/src/vertical.rs`）：`is_zh_text` 按 spine 抽前 20000 个非空白字；`zh*` 时汉字 ≥ 30%，否则汉字 ≥ 60% 且假名 < 2%，假名 ≥ 2% 一律不是；固定版式不算。`is_fixed_layout` 认 `rendition:layout=pre-paginated` 和 `fixed-layout=true`。`is_natively_vertical` 认外链 CSS、`<style>`、`html`/`body` 行内样式里的 `writing-mode: vertical-*`（含 `-webkit-`/`-epub-` 前缀），表格规则不算。
+  3. **引号**：按段落成对、嵌套合法才转；弯引号 “”→『』、‘’→「」；引号里全是西文不转；ASCII 直引号先认撇号（前后 ASCII 字母/数字），余下按出现顺序成对；落单的留给全角；`code`/`pre`/`script`/`style`/属性不转；`&quot;`/`&apos;`/`&#34;`/`&#39;` 先还原再配对；目录 nav、`toc.ncx` 的 `<text>` 同正文。
+  4. **全角**：正文文字节点 U+0021–U+007E → +0xFEE0；空格不转；`head`/`code`/`pre`/`kbd`/`samp`/`script`/`style`/`svg`/`math`/`rt`/`rp`、注释、属性不动；字符引用整体认出来，`&amp;`→＆、`&lt;`→＜、`&#x41;`→Ａ，`&#x4E2D;` 原样。
+  5. **竖排样式**：`uastyle::ua_css_vertical`（段距写 margin-left/right、块缩进 margin-top、列表 padding-top）；`eink-vertical.css`（root writing-mode、`p` 左右段距、表格横排）；书自己的 CSS 盒子横转竖（top→right…、width↔height、float 去掉；绝对定位 / 负边距整条不动、计数）。`WashOpts.vertical` 让 `kindle_images`、`blank_fold`、`block_style`、`top_spacer`、`break_margin`、`box_fix`、`scale_vertical`、`scale_horizontal`、`root_em` 跳过。
+  6. **优化器**：`OptimizeOpts.vertical` / `vertical_ascii`，`set_vertical()`；只修复的 `html_prefix` 两个出口都接「注释 → 引号 → 全角」；`transform_ncx`；OPF 写 spine rtl + `primary-writing-mode`（按书指定方向时方向以书为准，只补 meta）；`epub-optimize --vertical`。
+  7. **KEPUB**：只加了一个测试（全角串、`rt`/`rp`、`eink-vertical.css` link），`kepub.rs` 产物逻辑没改，`VERSION` 仍是 2。
+  8. **书库**：`Meta.zh_text`、`Meta.layout.vertical`；`vertical.toml`（`on`/`off`，最长前缀胜）；`vertical_for` 按「书 → 目录清单 → 自动判定」，漫画 / 固定版式 / 设备没开 `vertical_text` 一律不竖排；`booklib vertical --on|--off|--auto`、补全、`list` 每台显示 `竖排` / `横排`、`devices` 标出竖排能力。
+  9. **开台 + 版本 + 金样**：`kobo.toml`、`hanvon.toml` 写 `vertical_text = true`、`vertical_ascii = "fullwidth"`；`bigme.toml` 显式 `vertical_text = false`（xReader 不竖排、KOReader 也不会）。`OPTIMIZE_VERSION` 67→68，历史说明；`COMIC_VERSION` 按单子不动。`fp_golden.rs` 加 `vertical_text`、`vertical_ascii` 变异组。
+  10. **注释弹窗**：`kobo.toml` 的 `notes = "popup"`、`repair_note_links = true`；单测覆盖 Kobo 横排/竖排都是 `<aside epub:type="footnote">` + `noteref`，汉王仍不写 aside。
+- 测试：
+
+  | 命令 | 结果 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test --workspace` | 通过 | 全部通过（bookconv 552、library 71+7+14+47+1、profile 19、kfx 53、csscascade 16） |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo fmt --all -- --check` | 通过 | 干净 |
+  | `cargo test -p bookconv vertical` | 通过 | 判定、引号、全角、NCX、CSS 横转竖、竖排 OPF/link、原书竖排不写 root、`--vertical` 开关、Kobo 弹窗 |
+  | `cargo test -p library vertical_books` | 通过 | Kobo / 汉王自动竖排、Bigme / Kindle 不竖排、单本 `--off/--auto`、目录 `--off` 和继承、设备没开时强制 `--on` 也不竖排 |
+  | `booklib vertical --off/--auto`（临时书库） | 通过 | 写出 / 删掉这本书的覆盖，`list` 能读 |
+  | `UPDATE_FP_GOLDEN=1` + 复跑 | 通过 | 见下面 |
+- `fp_golden`：
+  - 新增 `vertical_text`、`vertical_ascii` 两组变异，每台 4 行，共 20 行（放在最后，旧行不挪）。
+  - Kobo、汉王的中文书（样例文字书是中文）旧行 `info` 段多 `Vf`；Kobo 文字书注释段 `jump#`→`popup#`、段末多 `n`；Kobo 漫画行注释段也跟着变（漫画产物本身逐字节不变）。
+  - 其余设备（Bigme、Kindle、掌阅）旧行除版本号 `67→68` 外一字不变。
+- 合成回归（`/tmp/opencode/vertical/reg/`，不提交）：三本最小 EPUB（中文书含“”‘’、直引号、撇号、`2026年`、`KOReader`、`US$6`、表格、一条注释、`<code>`、带引号和西文的目录；英文书；3 页漫画）。
+  - 中文书 `epub-optimize --device=kobo --vertical`：OPF 有 `<meta name="primary-writing-mode" content="vertical-rl"/>`、`<spine page-progression-direction="rtl">`；每章 link 顺序 `eink-ua.css` → 书 CSS → `eink-vertical.css`（最后）；正文 `他说『好』，２０２６年与ＫＯＲｅａｄｅｒ，ＵＳ＄６，ｄｏｎ＇ｔ。`、`她说『直引号』和「单引号」，１２＂ ５＇。`，`<code>code 123</code>` 不动；nav / ncx 的 `<text>` 为 `第１章 『标题』 ＯＫ`，属性不动；Kobo 注释是 `<aside epub:type="footnote">` + `noteref`。汉王中文书同样竖排，但注释仍是跳转。
+  - 与 master `15abbea` 的 `epub-optimize` 二进制对比：**Bigme、Kindle、掌阅三本全部逐字节相同；汉王上的英文书和漫画逐字节相同；Kobo 上的英文书（无注释）和漫画逐字节相同**。中文书 Kobo / 汉王按 `--vertical` 才竖排（`epub-optimize` 不自动判定，书库才判定），和 master 不同是预期。
+  - 字符账：中文书产物把全角 ASCII 还原、『』「」按引号还原后，字符多重集合和原书**相同**（105 == 105）；差异只有引号、全角，以及注释块搬到了章末。
+- 偏离：
+  - 新增 `crates/library/src/vertical.rs`（书库侧判定、`vertical.toml`、`booklib vertical` 的实现）和 `crates/library/Cargo.toml` 的 `toml` 依赖；任务单允许「按需新增书库配置读写」，但没在「涉及文件」里点名这个模块。
+  - `crates/library/src/lib.rs` 的 `Meta` 加了 `zh_text`、`layout` 两个字段（`layout.vertical`），`sources.rs` 加了 `root_dir()`；`flow.rs` 加了一个综合用例。
+  - 规则 7（注释弹窗）的配置、单测、金样在 `b19a963`，但 `docs/decisions.md`、`docs/devices.md`、`docs/typesetting.md`、`docs/kepub.md` 里关于弹窗的说明在 `cb12f7e` 里一起写了；要完全单独回退 `b19a963` 时还得手工去掉这几处文档。原因：先写文档再拆提交，漏拆了文档。
+  - `epub-optimize --vertical` 不会自动判定「是不是中文书」，只按 flag 强制处理（任务单规则 9 就是这么写的）；书库生成时由 `vertical_for` 判定。
+- 未完成 / 待真机：
+  - **没跑真书回归、没上真机**。真机由 vinci 验：Kobo、汉王各 sync 一本真书（对话多、有注释、有西文），看竖排、点左侧下一页、引号『』「」、数字西文立着不叠字、注释能点开（Kobo 弹窗）、目录能跳且目录里的西文是全角；Kobo 上一本有注释的横排书也弹窗；同一本在 KOReader 里能读（横排退化、引号/段距可接受）；Bigme、Kindle 上同一本仍横排。
+  - KEPUB 只在单测里验证了全角串 / `rt`/`rp` / 样式表链接不被 koboSpan 拆坏，没有在真机 Nickel 上验竖排书。
+  - 汉王「1–11 正常」是任务单给的实机结论；本单没在汉王上逐项复验。
 
 ## 审查
 <!-- 负责 bot 填写 -->
