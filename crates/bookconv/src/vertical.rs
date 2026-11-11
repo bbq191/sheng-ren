@@ -536,7 +536,7 @@ pub fn vertical_opf(opf_text: &str) -> String {
 
 /// 只补 `<meta name="primary-writing-mode" content="vertical-rl"/>`（按书指定了翻页方向时 spine 方向以书为准）。
 pub fn add_primary_writing_mode(opf_text: &str) -> String {
-    if opf::meta_content(opf_text, "primary-writing-mode") == Some("vertical-rl") {
+    if opf::meta_content(opf_text, "primary-writing-mode").is_some() {
         return opf_text.to_string();
     }
     opf::insert_metadata(
