@@ -49,11 +49,12 @@ fn main() {
                 "--gutter-crop",
                 "--check",
                 "--require-toc",
+                "--vertical",
             ]
             .contains(f)
         })
     {
-        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--keep-color] [--gutter-crop] [--check] [--require-toc] 输入.epub 输出.epub");
+        die(cli::USAGE, "用法: epub-optimize --device=<设备> [--no-wash] [--keep-spacing] [--auto-toc] [--keep-color] [--gutter-crop] [--vertical] [--check] [--require-toc] 输入.epub 输出.epub");
     }
     // 阅读模式定阅读范围、黑白屏转灰度、注释呈现方式（和书库生成同一个起点）
     let device = profile::device_from_args(&args).unwrap_or_else(|e| die(cli::USAGE, e));
@@ -73,10 +74,11 @@ fn main() {
     };
     // 先写临时文件，成功后再改名：输入输出同路径（就地覆盖）时不会边读边写同一个文件，失败也不留半成品。
     let target = std::path::Path::new(files[1]);
-    let opts = OptimizeOpts {
+    let mut opts = OptimizeOpts {
         wash,
         ..OptimizeOpts::for_profile(device)
     };
+    opts.set_vertical(flags.contains(&"--vertical"));
     let opts = OptimizeOpts {
         grayscale: opts.grayscale && !flags.contains(&"--keep-color"),
         comic_gutter_crop: opts.comic_gutter_crop || flags.contains(&"--gutter-crop"),

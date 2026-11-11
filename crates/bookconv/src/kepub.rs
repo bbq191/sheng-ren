@@ -621,6 +621,24 @@ mod tests {
     }
 
     #[test]
+    fn vertical_fullwidth_text_and_css_link_are_not_broken() {
+        let d = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>竖排</title><link rel="stylesheet" type="text/css" href="eink-vertical.css"/></head><body><p>他说『好』，２０２６年与ＫＯＲｅａｄｅｒ。</p><p><ruby>漢<rt>かん</rt></ruby>字</p></body></html>"#;
+        let (out, _) = transform_xhtml(d, &Opts::default()).unwrap();
+        assert!(
+            out.contains("他说『好』，２０２６年与ＫＯＲｅａｄｅｒ。"),
+            "{out}"
+        );
+        assert!(out.contains(r#"href="eink-vertical.css""#), "{out}");
+        let b = body_of(&out);
+        assert!(
+            strip(&b).contains("他说『好』，２０２６年与ＫＯＲｅａｄｅｒ。"),
+            "{b}"
+        );
+        assert!(!out.contains("<rt><span"), "rt 里不包 span：{out}");
+        assert!(!out.contains("<rp><span"), "rp 里不包 span：{out}");
+    }
+
+    #[test]
     fn skipped_elements_and_ruby() {
         let b = conv(
             r#"<p><ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby>字</p><svg><text>不包</text><svg><text>x</text></svg>y</svg><script type="text/javascript">a</script><pre>x. y.</pre>"#,

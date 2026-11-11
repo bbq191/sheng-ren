@@ -21,6 +21,37 @@ pub const UA_CSS_NAME: &str = "eink-ua.css";
 /// `font_scale`：全书正文字号不是 1em 时要乘的系数（`wash::kindle_rules`），写成 `body` 的字号百分比——书里 `body` 没写字号时
 /// 由它把正文拉回阅读器的字号；写了的书里那条已经乘过，盖过这条。
 pub fn ua_css(font_scale: Option<f64>) -> String {
+    horizontal_ua_css(font_scale)
+}
+
+/// 竖排版缺省样式（2026-11-11，Kobo、汉王）：把横排的段距、标题间距写到物理左右外边距，块缩进写到 `margin-top`，
+/// 列表缩进写到 `padding-top`；没有物理上下段距。字号百分比同横排。
+pub fn ua_css_vertical(font_scale: Option<f64>) -> String {
+    let mut s = String::new();
+    for t in BLOCK_MARGIN_TAGS {
+        s.push_str(&format!("{t}{{margin-left:1em;margin-right:1em;}}\n"));
+    }
+    for t in INDENTED_BLOCK_TAGS {
+        s.push_str(&format!(
+            "{t}{{margin-left:1em;margin-right:1em;margin-top:{INDENT_PX}px;}}\n"
+        ));
+    }
+    for t in LIST_TAGS {
+        s.push_str(&format!("{t}{{padding-top:{LIST_INDENT_EM}em;}}\n"));
+    }
+    for (t, size, margin) in HEADINGS {
+        s.push_str(&format!("{t}{{font-size:{size}em;font-weight:bold;margin-left:{margin}em;margin-right:{margin}em;}}\n"));
+    }
+    if let Some(k) = font_scale {
+        s.push_str(&format!(
+            "body{{font-size:{}%;}}\n",
+            crate::wash::fmt_num(k * 100.0)
+        ));
+    }
+    s
+}
+
+fn horizontal_ua_css(font_scale: Option<f64>) -> String {
     let mut s = String::new();
     for t in BLOCK_MARGIN_TAGS {
         s.push_str(&format!("{t}{{margin-top:1em;margin-bottom:1em;}}\n"));
@@ -88,5 +119,33 @@ mod tests {
         assert!(!css.contains("body"));
         assert!(ua_css(Some(0.8)).ends_with("body{font-size:80%;}\n"));
         assert!(ua_css(Some(1.0 / 1.15)).ends_with("body{font-size:86.9565%;}\n"));
+    }
+
+    #[test]
+    fn vertical_ua_css_has_no_physical_top_bottom_spacing() {
+        let css = ua_css_vertical(None);
+        assert!(
+            css.starts_with("p{margin-left:1em;margin-right:1em;}\n"),
+            "{css}"
+        );
+        assert!(
+            css.contains(
+                "h2{font-size:1.5em;font-weight:bold;margin-left:0.83em;margin-right:0.83em;}"
+            ),
+            "{css}"
+        );
+        assert!(
+            css.contains("blockquote{margin-left:1em;margin-right:1em;margin-top:40px;}"),
+            "{css}"
+        );
+        assert!(
+            css.contains("ul{padding-top:1.5em;}\nol{padding-top:1.5em;}\n"),
+            "{css}"
+        );
+        assert!(
+            !css.contains("margin-top:1em") && !css.contains("margin-bottom"),
+            "{css}"
+        );
+        assert!(ua_css_vertical(Some(0.8)).ends_with("body{font-size:80%;}\n"));
     }
 }

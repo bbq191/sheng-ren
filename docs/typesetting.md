@@ -229,6 +229,18 @@ Kindle 的封面框是 **0.65**（网格 344×531、列表约 139×213，宽度�
 
 Kobo Clara BW 的屏幕是 **1072×1448（≈0.7403）**：书架没有固定的封面框，每本按封面自己的比例缩到同一宽度、底边对齐（2026-11-10 真机，网格、列表都是），比例宽的封面就矮一截。2026-11-11 维护者定**补白统一封面高度**（**推翻** 11-10「Kobo 不需要书架缩略图」）：profile 写 `cover_thumb_aspect = 0.7403`、`cover_thumb_fit = "pad"`、`cover_image_thumb = true`，另做的缩略图**不裁不拉伸**，缺的那一方向两边各补一半白（`#FFFFFF`），长边上限、JPEG 质量同上面的缩略图；书里的封面页、正文照旧用原图。Kobo 书架取 manifest 里 `properties="cover-image"` 那张，所以把属性从真封面**挪到**缩略图上（真封面保留别的 properties），`<meta name="cover">` 也指缩略图；真封面的 id 记进 `<meta name="eink-thumbnail-source">`，`declared_cover` 跳过缩略图、靠它认回真封面（否则真封面身上没有 `cover-image`、也没有 meta cover，会被当成没有封面）。换到汉王、Kindle、掌阅再优化时，属性、meta cover、三个 `eink-thumbnail*` meta 都改回真封面，再按这次的设备重做。没上真机；Kobo 书架上旧封面可能被 Nickel 缓存，同步后先看新书或重开书库。
 
+### 竖排（Kobo、汉王的中文文字书，v68，2026-11-11，没上真机）
+
+`vertical_text = true` 的设备上，中文文字书竖排（判定：不是漫画、不是固定版式；`dc:language` 以 `zh` 开头时汉字 ≥ 30%，否则汉字 ≥ 60% 且假名 < 2%；假名 ≥ 2% 一律不是。书自己的 `layout.vertical` → 目录清单 `vertical.toml` → 自动判定）。这是「文字书只修复」的两个例外：**竖排版式**和**改字**，其余照只修复。
+
+- **样式**：`eink-vertical.css` 挂在每章 `<head>` 最后一个（盖过书自己的）；`html{writing-mode:vertical-rl}`（原书任一样式表或 `<style>` 里已经写了 `writing-mode: vertical-*` 的不写这条）、`p{margin-left:1em;margin-right:1em}`（段距用物理左右外边距，实机选定）、`table{writing-mode:horizontal-tb}`（表格整张横排）。`eink-ua.css` 换竖排版：块段距、标题间距写 `margin-left/right`，块缩进写 `margin-top`，列表缩进写 `padding-top`，没有物理上下段距。按横排算几何的 `kindle_rules` pass（图片尺寸、空段折叠、块样式、页首垫图、分页估算、盒子修正、竖直/水平换算、根 em）对竖排书跳过。
+- **书自己的 CSS**：块级规则的盒子属性横转竖——`top→right、right→bottom、bottom→left、left→top`，`width↔height`、`max/min-*` 同理，`float` 去掉；`text-align`、`text-indent` 不动。绝对/固定定位、负边距的规则原样留（报告里计数）。图片的 `max-width:100%` 因此变成 `max-height:100%`。
+- **OPF**：spine 写 `page-progression-direction="rtl"`（按书指定了方向的以书为准），补 `<meta name="primary-writing-mode" content="vertical-rl"/>`。
+- **引号（GB/T 15834）**：只在一个段落里成对、嵌套合法的 “”→『』、‘’→「」；引号里全是西文（没有汉字）的弯引号不转；原书已是「」『』的不动。ASCII 直引号也转：前后都是 ASCII 字母/数字的 `'` 是撇号（留给全角），余下的 `"`、`'` 在段内按出现顺序成对 → 『』、「」；落单的不当引号（留给全角）。直引号和弯引号各配各的。`code`、`pre`、`script`、`style`、属性值不转。
+- **全角（`vertical_ascii = "fullwidth"`，Kobo、汉王）**：竖排书正文文字节点里 U+0021–U+007E 一律换成 U+FF01–FF5E（码位 +0xFEE0），竖立显示；**空格 U+0020 不转**。`code`、`pre`、`kbd`、`samp`、`script`、`style`、`svg`、`math`、`rt`、`rp`、`<head>`、注释、CDATA、标签/属性值都不转。字符引用整体认出来：`&amp;` `&lt;` `&gt;` `&quot;` `&apos;`、`&#65;`、`&#x41;` 换对应全角字面字符，别的原样留。目录 nav、`toc.ncx` 的 `<text>` 同正文转全角和引号，`href`、`src`、`id`、`playOrder` 等属性不动。
+- **注释（Kobo 全部文字书，横排也算）**：`notes = "popup"` + `repair_note_links = true`：标号 `epub:type="noteref"`、注释块 `<aside epub:type="footnote">`；05 号测试书在 Clara BW 上弹「预览注释」。汉王还是跳转。
+- **合成书验证**（2026-11-11，没上真机）：Kobo、汉王竖排书的 OPF、样式表、正文 / 目录的引号和全角；Bigme、Kindle、掌阅、汉王横排书不竖排、逐字节不变（见任务单结果）。
+
 ### 裁格间空白（`comic_gutter_crop`，c67，2026-11-10，待真机比）
 
 竖屏漫画页一般比阅读范围瘦高（高度受限）；去掉格与格之间整行的空白，页变矮，保比缩进阅读范围时整体变大。四台 profile 先都**不开**，`epub-optimize --gutter-crop` 可强制打开做 A/B 测试书。

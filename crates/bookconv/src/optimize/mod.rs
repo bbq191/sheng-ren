@@ -164,7 +164,11 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - 67（2026-11-11，vinci 定 Clara BW 书架封面统一屏幕比例）：Kobo 另做书架缩略图，**补白**（profile `cover_thumb_aspect = 0.7403`、
 ///   `cover_thumb_fit = "pad"`）到屏幕 1072×1448 的比例、不裁内容；`cover-image` 属性和 meta cover 挪到缩略图上（profile
 ///   `cover_image_thumb`），真封面的 id 记进 `eink-thumbnail-source`。只有 Kobo 有封面的书变，别的设备逐字节不变。
-pub const OPTIMIZE_VERSION: &str = "67";
+/// - 68（2026-11-11，文字书竖排第一期）：开了 `vertical_text` 的台（Kobo、汉王）上的中文文字书竖排（`bookconv::vertical`：
+///   竖排样式表、书 CSS 盒子横转竖、spine rtl、`primary-writing-mode`），成对的“”‘’ → 『』「」、成对的 ASCII 直引号也转，
+///   `vertical_ascii = "fullwidth"` 时正文和目录的 ASCII 转全角。另外 Kobo 全部文字书的注释改成弹窗（规则 7）。
+///   汉王的漫画、非中文书、被 --off 退出的书，以及 Bigme、Kindle、掌阅逐字节不变。
+pub const OPTIMIZE_VERSION: &str = "68";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -323,6 +327,10 @@ pub struct OptimizeOpts {
     pub text_mode: TextMode,
     /// 图片处理的资源上限（缺省 [`Limits::default`]）。
     pub limits: Limits,
+    /// 竖排书里半角 ASCII 怎么处理（profile `vertical_ascii`），见 [`crate::vertical`]。
+    pub vertical_ascii: profile::VerticalAscii,
+    /// 这本书竖排（缺省 false；书库按书判定、`epub-optimize --vertical` 手动开），见 [`crate::vertical`]。
+    pub vertical: bool,
     /// 改书名：`Some` 时 OPF 的 `dc:title` 换成它（`opfmeta::apply_fields`，原来的书名连同挂在上面的 `refines` 一起换掉）；
     /// 空白串当没给。缺省 `None`：书名不动。
     pub title: Option<String>,
@@ -440,6 +448,8 @@ impl OptimizeOpts {
             webp_to_png: false,
             text_mode: TextMode::Full,
             limits: Limits::default(),
+            vertical_ascii: profile::VerticalAscii::Keep,
+            vertical: false,
             title: None,
         }
     }
@@ -485,8 +495,18 @@ impl OptimizeOpts {
             cover_image_thumb: p.cover_image_thumb,
             image_gamma: p.image_gamma.filter(|&g| g != 1.0),
             webp_to_png: !p.webp,
+            vertical_ascii: p.vertical_ascii,
             text_mode: TextMode::for_profile(p),
             ..OptimizeOpts::new(p.output_readable())
+        }
+    }
+
+    /// 这本书竖排（书库按书判定后设上；`epub-optimize --vertical` 也用它）：同步清洗层的竖排开关。
+    pub fn set_vertical(&mut self, on: bool) {
+        self.vertical = on;
+        if let Some(w) = &mut self.wash {
+            w.vertical = on;
+            w.vertical_ascii = self.vertical_ascii;
         }
     }
 }
@@ -640,8 +660,10 @@ struct Prepared {
     pre_done: HashSet<String>,
     is_comic_book: bool,
     /// 第二遍要改 OPF 时的 OPF 条目名：指定了翻页方向、书里有远程图（抓到的图要补进 manifest）、漫画（打漫画标签）、
-    /// 清洗过（按各章最终内容标 manifest 的 `properties`）。都不用改时是 `None`。
+    /// 清洗过（按各章最终内容标 manifest 的 `properties`）、竖排（写 rtl 和 `primary-writing-mode`）。都不用改时是 `None`。
     opf_name: Option<String>,
+    /// 竖排时要改文字的 `toc.ncx` 条目名。
+    ncx_name: Option<String>,
     /// 有章节引用远程图：OPF 推迟到最后写，好把抓到的图补进 manifest（见 `streaming`）。
     has_remote_imgs: bool,
     /// 要按原书尺寸意图缩的整页背景图（清洗后的 zip 路径 → 意图），见 [`OptimizeOpts::fit_backgrounds`]。
@@ -718,9 +740,11 @@ fn prepare_entries(
                 || (is_comic_book && opts.comic_page_direction.is_some())
                 || has_remote_imgs
                 || is_comic_book
+                || opts.vertical
                 || opts.wash.is_some()
         })
         .map(|o| ordered[o.index].name.clone());
+    let ncx_name = opf.as_ref().and_then(|o| o.ncx.clone());
     // 导航文档与目录文件：不收它们里面的注释引用，也不往里面搬注释。
     let mut skip_notes: HashSet<String> = ordered
         .iter()
@@ -872,6 +896,7 @@ fn prepare_entries(
         pre_done,
         is_comic_book,
         opf_name,
+        ncx_name,
         has_remote_imgs,
         bg_fits,
         page_tiles,
@@ -1049,6 +1074,11 @@ struct EntryXform<'a> {
     /// 百分比写法按它判断比例是否和画布一致。
     image_dims: &'a HashMap<String, (u32, u32)>,
     opf_name: Option<&'a str>,
+    /// 竖排时要改文字的 `toc.ncx` 条目名。
+    ncx_name: Option<&'a str>,
+    /// 这本书竖排、竖排 ASCII 的处理方式。
+    vertical: bool,
+    vertical_ascii: profile::VerticalAscii,
     seen_ids: HashSet<String>, // 跨章累积，dedup_ids_in_chapter 用
     screen: crate::imgopt::Screen,
     img_agent: ureq::Agent, // 远程图抓取（仅当章内有远程 img 才发请求；抓不到 → 删掉这个 <img>）
@@ -1097,6 +1127,9 @@ impl<'a> EntryXform<'a> {
                 && opts.comic_fixed_layout_percent,
             image_dims,
             opf_name: prep.opf_name.as_deref(),
+            ncx_name: prep.ncx_name.as_deref(),
+            vertical: opts.vertical,
+            vertical_ascii: opts.vertical_ascii,
             screen: opts.screen,
             seen_ids: HashSet::new(),
             img_agent: crate::netimg::http_agent(15),
@@ -1145,7 +1178,11 @@ impl<'a> EntryXform<'a> {
     fn html_prefix(&self, text: &str, name: &str) -> String {
         if self.keep_content {
             if !self.repair_note_links {
-                return text.to_string();
+                return if self.vertical {
+                    crate::vertical::transform_text(text, self.vertical_ascii)
+                } else {
+                    text.to_string()
+                };
             }
             // 只保证注释能点：拆互指环（去回链）、注释搬进本章改同文件锚点、图标标号换数字；别的（封面、图注……）不动
             let t = if self.pre_done.contains(name) {
@@ -1163,8 +1200,13 @@ impl<'a> EntryXform<'a> {
                     self.footnote,
                 )
             };
-            return if self.number_note_icons {
+            let t = if self.number_note_icons {
                 crate::htmlproc::number_icon_note_links(&t)
+            } else {
+                t
+            };
+            return if self.vertical {
+                crate::vertical::transform_text(&t, self.vertical_ascii)
             } else {
                 t
             };
@@ -1203,9 +1245,14 @@ impl<'a> EntryXform<'a> {
         } else {
             t
         };
-        match &self.caption_ctx {
+        let t = match &self.caption_ctx {
             Some(d) => crate::capfit::apply(&t, name, d, self.screen).unwrap_or(t),
             None => t,
+        };
+        if self.vertical {
+            crate::vertical::transform_text(&t, self.vertical_ascii)
+        } else {
+            t
         }
     }
 
@@ -1249,6 +1296,14 @@ impl<'a> EntryXform<'a> {
                 Err(_) => Cow::Borrowed(data),
             });
         }
+        if self.vertical && self.ncx_name == Some(name) {
+            return Some(match std::str::from_utf8(data) {
+                Ok(text) => Cow::Owned(
+                    crate::vertical::transform_ncx(text, self.vertical_ascii).into_bytes(),
+                ),
+                Err(_) => Cow::Borrowed(data),
+            });
+        }
         if (self.reader_margins || self.number_note_icons || self.fixed_layout.is_some())
             && crate::wash::is_wash_css_name(name)
         {
@@ -1275,7 +1330,10 @@ impl<'a> EntryXform<'a> {
             return Some(Cow::Owned(out));
         }
         if self.opf_name == Some(name)
-            && (self.page_direction.is_some() || self.comic || self.title.is_some())
+            && (self.page_direction.is_some()
+                || self.comic
+                || self.title.is_some()
+                || self.vertical)
         {
             let Ok(text) = std::str::from_utf8(data) else {
                 return Some(Cow::Borrowed(data));
@@ -1283,6 +1341,13 @@ impl<'a> EntryXform<'a> {
             let mut text = Cow::Borrowed(text);
             if let Some(dir) = self.page_direction {
                 text = Cow::Owned(crate::direction::set_spine_direction(&text, dir));
+            }
+            if self.vertical {
+                text = Cow::Owned(if self.page_direction.is_some() {
+                    crate::vertical::add_primary_writing_mode(&text)
+                } else {
+                    crate::vertical::vertical_opf(&text)
+                });
             }
             if self.comic {
                 if let Some(t) = crate::comic_detect::tag_opf_as_comic(&text) {

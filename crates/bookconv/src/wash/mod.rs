@@ -348,6 +348,11 @@ pub struct WashOpts {
     /// 不认 WebP 的阅读器（Move，profile `webp = false`）上要转成 PNG 的 WebP（原书条目名）：流式优化时调用方读文件头挑出来
     /// （动图取第一帧）。清洗层改名成 `.png`、改引用和 `media-type`（`safe_names.rs`），字节在阶段二转。`None` 不转。
     pub webp_to_png: Option<std::sync::Arc<HashSet<String>>>,
+    /// 这本书竖排（[`crate::vertical`]）：按横排算几何的 kindle_rules pass 跳过、挂竖排兜底样式表、
+    /// 书自己的 CSS 盒子属性横转竖。由书库按书判定后设上；缺省不竖排。
+    pub vertical: bool,
+    /// 竖排书里半角 ASCII 怎么处理（profile `vertical_ascii`）。
+    pub vertical_ascii: profile::VerticalAscii,
 }
 
 /// Kindle 上图片显示多大的两个量（kindle profile 的 KFX 阅读范围宽、缺省字号下 1em 的像素）。
@@ -392,6 +397,8 @@ impl WashOpts {
             reader,
             audit,
             box_geometry,
+            vertical,
+            vertical_ascii,
         } = self;
         WashOpts {
             mode: WashMode::Repair { kindle_rules },
@@ -408,6 +415,8 @@ impl WashOpts {
             reader: reader.clone(),
             audit: audit.clone(),
             box_geometry: *box_geometry,
+            vertical: *vertical,
+            vertical_ascii: *vertical_ascii,
             ..Default::default()
         }
     }
@@ -437,6 +446,8 @@ impl Default for WashOpts {
             audit: None,
             box_geometry: None,
             webp_to_png: None,
+            vertical: false,
+            vertical_ascii: profile::VerticalAscii::Keep,
         }
     }
 }
@@ -529,6 +540,10 @@ pub struct WashReport {
     pub webp_to_png: usize,
     /// 标错、改正了的语言（OPF 的 `dc:language`、`<html>` 的 `lang`/`xml:lang`，按处数）。见 `lang.rs`。
     pub languages_fixed: usize,
+    /// 竖排书里书自己的 CSS 有绝对/固定定位、负边距，整条没转的规则数（见 [`crate::vertical::rewrite_css`]）。
+    pub vertical_complex_blocks: usize,
+    /// 挂上竖排样式表 `eink-vertical.css` 的页面数。
+    pub vertical_css_linked: usize,
 }
 
 // ───────────────────────── 入口 ─────────────────────────
@@ -674,6 +689,9 @@ fn wash_with(
     dedup_ids_across_book(entries, &mut rep);
     remove_chapter_end_blanks(entries, &mut rep);
     strip_ncx_doctype(entries, &mut rep);
+    if opts.vertical {
+        apply_vertical(entries, &mut rep, opts.vertical_ascii);
+    }
     // 规范整理：XML 修复、升级 EPUB 3、导航文档（见 `normalize.rs`）。放最后：前面各步新写的文件也要过一遍；
     // 升级可能补了标识符，NCX 的 dtb:uid 在它之后对齐。
     normalize::normalize_book(entries, &lang_tag, heading, &mut rep);
@@ -734,6 +752,9 @@ fn repair_entries(entries: &mut Vec<Entry>, opts: &WashOpts, rep: &mut WashRepor
     chapters_into_toc(entries, heading, rep);
     dedup_ids_across_book(entries, rep);
     strip_ncx_doctype(entries, rep);
+    if opts.vertical {
+        apply_vertical(entries, rep, opts.vertical_ascii);
+    }
     normalize::normalize_book(entries, &lang_tag, heading, rep);
     fix_ncx_uid(entries, rep);
     // Move 上字号对不上关键字的标题改成 div：目录（补节、改指、生成 nav）都按 h1–h6 认标题，放在最后
@@ -790,7 +811,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
         enabled: |_| true,
         run: |e, r, o| {
             let font_scale = kindle_rules::apply(e, r, o);
-            add_ua_css(e, r, font_scale);
+            add_ua_css(e, r, font_scale, o.vertical);
         },
     },
     // 不认 rem、`!important` 的阅读器（掌阅）：换成认的写法。别的 pass 之前：它们按 Kindle 的层叠算，换完算出来一样
@@ -810,7 +831,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
     Pass {
         name: "kindle_images",
         after: &["css_compat"],
-        enabled: |o| o.image_sizing.is_some(),
+        enabled: |o| !o.vertical && o.image_sizing.is_some(),
         run: |e, r, o| {
             if let Some((sizing, kref)) = o.image_sizing {
                 kindle_images::apply(
@@ -829,7 +850,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
     Pass {
         name: "blank_fold",
         after: &["kindle_images"],
-        enabled: |o| o.v_scale.is_some(),
+        enabled: |o| !o.vertical && o.v_scale.is_some(),
         run: |e, r, o| {
             blank_fold::apply(
                 e,
@@ -844,13 +865,13 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
     Pass {
         name: "block_style",
         after: &["blank_fold"],
-        enabled: |_| true,
+        enabled: |o| !o.vertical,
         run: |e, r, o| block_style::apply(e, r, o.media.as_ref(), &o.reader),
     },
     Pass {
         name: "top_spacer",
         after: &["block_style"],
-        enabled: |o| o.top_spacer.is_some(),
+        enabled: |o| !o.vertical && o.top_spacer.is_some(),
         run: |e, r, o| {
             if let Some(g) = o.top_spacer {
                 top_spacer::apply(e, r, o.media.as_ref(), g, &o.reader);
@@ -861,7 +882,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
     Pass {
         name: "break_margin",
         after: &["top_spacer"],
-        enabled: |o| o.v_scale.is_some() && o.image_sizing.is_some(),
+        enabled: |o| !o.vertical && o.v_scale.is_some() && o.image_sizing.is_some(),
         run: |e, r, o| {
             if let Some((_, k)) = o.image_sizing {
                 break_margin::apply(e, r, o.media.as_ref(), o.image_dims.as_deref(), k, true);
@@ -872,7 +893,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
     Pass {
         name: "box_fix",
         after: &["top_spacer", "break_margin"],
-        enabled: |o| o.box_geometry.is_some(),
+        enabled: |o| !o.vertical && o.box_geometry.is_some(),
         run: |e, r, o| {
             if let Some(g) = o.box_geometry {
                 box_fix::apply(e, r, o.media.as_ref(), &o.reader, g);
@@ -883,7 +904,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
     Pass {
         name: "scale_vertical",
         after: &["box_fix"],
-        enabled: |o| o.v_scale.is_some(),
+        enabled: |o| !o.vertical && o.v_scale.is_some(),
         run: |e, r, o| {
             if let Some(vs) = o.v_scale {
                 r.kindle_rule_edits += kindle_rules::scale_vertical_entries(e, &vs);
@@ -894,7 +915,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
     Pass {
         name: "scale_horizontal",
         after: &["box_fix"],
-        enabled: |o| o.h_scale.is_some(),
+        enabled: |o| !o.vertical && o.h_scale.is_some(),
         run: |e, r, o| {
             if let Some(h) = o.h_scale {
                 r.kindle_rule_edits += kindle_rules::scale_horizontal_entries(e, h);
@@ -905,7 +926,7 @@ const KINDLE_RULE_PASSES: &[Pass] = &[
     Pass {
         name: "root_em",
         after: &["scale_vertical", "scale_horizontal"],
-        enabled: |_| true,
+        enabled: |o| !o.vertical,
         run: |e, r, o| {
             root_em::apply(
                 e,
@@ -1015,7 +1036,12 @@ fn add_wash_css_entry(
 
 /// 只修复时挂上标签的缺省样式（[`WashMode::Repair`] 的 `kindle_rules`）：OPF 同目录写 `eink-ua.css`，每章 `<head>` 里**第一个**放指向它的 `<link>`
 /// （在书自带的样式表、`<style>` 之前，书里写了的照样盖过它）。目录页（nav）不挂。
-fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option<f64>) {
+fn add_ua_css(
+    entries: &mut Vec<Entry>,
+    rep: &mut WashReport,
+    font_scale: Option<f64>,
+    vertical: bool,
+) {
     let css_path = beside_opf(entries, crate::uastyle::UA_CSS_NAME);
     let linked = crate::util::par_map_mut(entries, |e| {
         if !is_chapter_entry(e) {
@@ -1033,13 +1059,88 @@ fn add_ua_css(entries: &mut Vec<Entry>, rep: &mut WashReport, font_scale: Option
         changed
     });
     rep.ua_css_linked += linked.into_iter().filter(|c| *c).count();
+    let css = if vertical {
+        crate::uastyle::ua_css_vertical(font_scale)
+    } else {
+        crate::uastyle::ua_css(font_scale)
+    };
+    add_css_entry(entries, find_opf(entries), &css_path, &css, "eink-ua-css");
+}
+
+/// 竖排书：书自己的 CSS 盒子属性横转竖、挂竖排兜底样式表 `eink-vertical.css`（每页 `<head>` 里最后一个）。
+fn apply_vertical(entries: &mut Vec<Entry>, rep: &mut WashReport, _ascii: profile::VerticalAscii) {
+    let native = crate::vertical::is_natively_vertical(entries);
+    // 书自己的 CSS 横转竖（外链样式表 + <style> 块）；原书本来竖排的不转，我们生成的 eink-* 不动
+    let mut complex = 0;
+    if !native {
+        for e in entries.iter_mut() {
+            let base = e
+                .name
+                .rsplit('/')
+                .next()
+                .unwrap_or(&e.name)
+                .to_ascii_lowercase();
+            if base.starts_with("eink-") {
+                continue;
+            }
+            if base.ends_with(".css") {
+                if let Ok(t) = std::str::from_utf8(&e.data) {
+                    let (out, n) = crate::vertical::rewrite_css(t);
+                    complex += n;
+                    if out != t {
+                        e.data = out.into_bytes();
+                    }
+                }
+            } else if crate::epubzip::is_html_entry(&e.name, &e.data) {
+                let Ok(t) = std::str::from_utf8(&e.data) else {
+                    continue;
+                };
+                let edits: Vec<(usize, usize, String)> = html::style_blocks(t)
+                    .into_iter()
+                    .filter_map(|b| {
+                        let (out, n) =
+                            crate::vertical::rewrite_css(&t[b.content_start..b.content_end]);
+                        complex += n;
+                        (out != t[b.content_start..b.content_end]).then_some((
+                            b.content_start,
+                            b.content_end,
+                            out,
+                        ))
+                    })
+                    .collect();
+                if !edits.is_empty() {
+                    e.data = html::apply_edits(t, edits).into_bytes();
+                }
+            }
+        }
+    }
+    rep.vertical_complex_blocks += complex;
+    // 兜底样式表：挂在每页 <head> 最后（盖过书自己的）；只有图片、没有可见文字的页（封面）不挂
+    let css_path = beside_opf(entries, crate::vertical::VERTICAL_CSS_NAME);
     add_css_entry(
         entries,
         find_opf(entries),
         &css_path,
-        &crate::uastyle::ua_css(font_scale),
-        "eink-ua-css",
+        &crate::vertical::vertical_css(native),
+        crate::vertical::VERTICAL_CSS_ID,
     );
+    let linked = crate::util::par_map_mut(entries, |e| {
+        if !crate::epubzip::is_html_entry(&e.name, &e.data) {
+            return false;
+        }
+        let Ok(t) = std::str::from_utf8(&e.data) else {
+            return false;
+        };
+        if crate::html::plain_text(t).trim().is_empty() {
+            return false;
+        }
+        let out =
+            typeset::inject_css_link(t, &crate::epubzip::href_to(dir_of(&e.name), &css_path, ""));
+        let changed = out != t;
+        e.data = out.into_bytes();
+        changed
+    });
+    rep.vertical_css_linked += linked.into_iter().filter(|c| *c).count();
 }
 
 /// 新增（或更新）一份我们写的样式表，并往 OPF manifest 补一条 `<item>`（幂等）。

@@ -42,6 +42,7 @@ pub mod optimize;
 pub mod probe;
 pub mod reader_model;
 pub mod uastyle;
+pub mod vertical;
 pub mod wash;
 
 pub use error::BookError;

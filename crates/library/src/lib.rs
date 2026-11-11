@@ -40,6 +40,7 @@ mod session;
 mod sources;
 mod space;
 mod transfer;
+mod vertical;
 mod wikidata;
 
 use fsutil::{sha256_file, sha256_hex};
@@ -55,13 +56,14 @@ pub use deliver::DeviceEnv;
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus, SpaceCheck, Step};
 pub use metadata::{BookInfo, Edition, InfoResult};
-pub use profile::{Format, Profile, Registry};
+pub use profile::{Format, Profile, Registry, VerticalAscii};
 pub use sources::{
     book_files, Prune, SyncEvent, SyncMemo, SyncReport, TrackChange, Tracked, UntrackChange,
     SUPPORTED_EXTS,
 };
 pub use space::{mb, space_grew};
 pub use transfer::{Event, Pipeline, Transfer};
+pub use vertical::Dirs;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Meta {
@@ -108,6 +110,21 @@ pub struct Meta {
     /// 联网找过元数据、没找到时的匹配规则版本（[`metadata::LOOKUP_VERSION`]）：`sync` 不再自动去找；匹配规则改了（版本变了）再找一次。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub info_checked: String,
+    /// 自动判定是不是中文文字书（竖排用，`bookconv::vertical::is_zh_text`）：入库后第一次用到时判、持锁时存下。
+    /// 早期条目没有；原件暂时不在时按「不竖排」算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zh_text: Option<bool>,
+    /// 按书的版式覆盖（`meta.json` 的 `layout.vertical`）：`Some(true)` 强制竖排、`Some(false)` 不竖排、`None` 自动判定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Layout>,
+}
+
+/// 按书的版式覆盖（[`Meta::layout`]）。
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Layout {
+    /// 竖排：`Some(true)` 强制、`Some(false)` 不竖排、`None` 自动。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical: Option<bool>,
 }
 
 /// 书里自己的元数据（EPUB 的 OPF），见 [`Meta::own_dc`]：生成时补什么由它和找来的元数据定（[`metadata::plan`]），原件暂时不在也算得出指纹。
@@ -270,6 +287,8 @@ struct EpubInfo {
     authors: Vec<String>,
     drm: Option<String>,
     comic: bool,
+    /// 自动判定是不是中文文字书（竖排用）。
+    zh_text: Option<bool>,
 }
 
 /// EPUB 的文字条目（图片条目只记名字、不读内容，大漫画不整本解压）：入库检查和漫画判定共用。
@@ -286,6 +305,7 @@ impl EpubInfo {
             authors: Vec::new(),
             drm: None,
             comic: false,
+            zh_text: None,
         };
         let bad = |e: String| format!("不是有效的 EPUB（{e}）");
         let entries = &epub_text_entries(file).map_err(bad)?;
@@ -306,6 +326,7 @@ impl EpubInfo {
         info.title = dc.title;
         info.authors = dc.creators;
         info.comic = bookconv::comic_detect::is_comic(entries);
+        info.zh_text = Some(bookconv::vertical::is_zh_text(entries));
         Ok(info)
     }
 }

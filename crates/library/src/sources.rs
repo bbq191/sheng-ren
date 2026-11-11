@@ -487,6 +487,11 @@ impl Library {
         self.tracked_entries().into_iter().map(|e| e.path).collect()
     }
 
+    /// 书根目录（第一次 track 时定下）。
+    pub(crate) fn root_dir(&self) -> Option<PathBuf> {
+        self.records.sources.get(&self.sources_path()).root.clone()
+    }
+
     /// 跟踪的条目。
     pub fn tracked_entries(&self) -> Vec<Tracked> {
         self.records
