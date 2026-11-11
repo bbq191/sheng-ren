@@ -429,8 +429,9 @@ fn convert_quotes_text(s: &str) -> String {
             out[close] = c;
         }
     }
-    // 直引号：撇号（前后都是 ASCII 字母/数字）不算；英寸号（数字后的 "，后面不是字母/汉字）也不算；
-    // 余下的按出现顺序成对
+    // 直引号：撇号（前后都是 ASCII 字母/数字）不算；余下的按出现顺序成对。
+    // 数字后的 "（后面不是字母/汉字）只在前面没有待配对的开引号时当英寸号，
+    // 能配上对就照引号转（vinci 2026-11-11：「1984」这类）
     let inch = |i: usize| -> bool {
         chars[i] == '"'
             && i > 0
@@ -440,23 +441,23 @@ fn convert_quotes_text(s: &str) -> String {
                 .is_none_or(|c| !(c.is_ascii_alphabetic() || is_han(*c)))
     };
     for quote in ['"', '\''] {
-        let positions: Vec<usize> = chars
-            .iter()
-            .enumerate()
-            .filter(|&(i, &c)| {
-                c == quote && (quote != '\'' || !apostrophe(i)) && (quote != '"' || !inch(i))
-            })
-            .map(|(i, _)| i)
-            .collect();
-        for pair in positions.chunks(2) {
-            if pair.len() == 2 {
-                let (o, c) = if quote == '"' {
-                    ('『', '』')
-                } else {
-                    ('「', '」')
-                };
-                out[pair[0]] = o;
-                out[pair[1]] = c;
+        let (o, c) = if quote == '"' {
+            ('『', '』')
+        } else {
+            ('「', '」')
+        };
+        let mut open: Option<usize> = None;
+        for i in 0..chars.len() {
+            if chars[i] != quote || (quote == '\'' && apostrophe(i)) {
+                continue;
+            }
+            match open.take() {
+                Some(start) => {
+                    out[start] = o;
+                    out[i] = c;
+                }
+                None if inch(i) => {}
+                None => open = Some(i),
             }
         }
     }
@@ -881,6 +882,11 @@ mod tests {
             transform_text("<p>12\" x 14\"</p>", VerticalAscii::Fullwidth),
             "<p>１２＂ ｘ １４＂</p>",
             "数字后的英寸号不当引号配对"
+        );
+        assert_eq!(
+            convert_quotes("<p>他说\"1984\"。屏幕 6\"，\"好用\"</p>"),
+            "<p>他说『1984』。屏幕 6\"，『好用』</p>",
+            "数字后的 \" 能配上对就是引号，配不上才是英寸号"
         );
         assert_eq!(
             convert_quotes("<p>甲\"乙</p><p>丙\"丁</p>"),
