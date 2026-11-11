@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-vertical-text
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: vertical-text（从最新 master `10ce515` 或更新的切出）
-- 更新时间: 2026-11-11T18:10+08:00
+- 更新时间: 2026-11-11T17:40+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`；Kindle 翻页方向已由 `2026-11-11-kindle-text-rtl` 单独修好）
 
 ## 需求原文
@@ -311,7 +311,7 @@ vinci 2026-11-11 的决定（原话或口述结论）：
     3. 读不到原件时 `zh_text_of` 每次都会再试着打开一次（不缓存是故意的），代价可以忽略。
     4. 一审线索 1–4、6 不变，留给二审和真机。
 - 二审：回执 `.dev/tasks/2026-11-11-vertical-text.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由（返工、重新验收通过后再跑）
-- 合并：PR 链接、合并提交号；状态改为 verified
+- 合并：三次验收通过后，本地 `git merge --no-ff vertical-text` 合进 master（没走 PR），合并提交的说明为「merge: 竖排第一期（Kobo、汉王中文文字书竖排，Kobo 注释弹窗）」；状态 verified
 
 ### 二审后（sheng-ren，2026-11-11，据 `.dev/tasks/2026-11-11-vertical-text.agy.md`）
 
@@ -332,3 +332,28 @@ agy 二审无阻断。下面三条是 agy 的「建议」，但会让真书产�
 - agy 线索 2、3（注释章搬空、`eink-vertical.css` 段距）：真机验收时看。
 
 修完把「结果」的返工小节补上本轮提交，状态改 done。
+
+### 三次验收（sheng-ren，2026-11-11，box 复跑 `1091195`，返工提交 `4aacf74`）
+
+结论：**通过**，状态改 verified，`--no-ff` 合并进 master。验收中发现 `4aacf74` 的实体识别有一处死循环，属于小改动（一个文件，产物不变），已由负责 bot 自己修掉（`8eb0bc5`），见下文第 3 条。
+
+- 复跑（含 `8eb0bc5`）：`cargo test --workspace` 全过，共 782 个（和前两轮同口径：bookconv 553、csscascade 16、kfx 53、library 71+7+14+48+1、profile 19；另 bookbase 30），0 failed；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --all -- --check` 干净。
+- 金样：`fp_golden.txt` 这轮没改；按键对比 master，`|67|→|68|` 抹平后，结果和二审前完全一样：旧行 640 行一行不少，新增 20 行；Bigme、Kindle、掌阅 384 行不变；汉王文字书只有 `-Vf`；Kobo 只差注释段（文字书另有 `-Vf`、`n`）。
+- 逐字节（master `15abbea` 对比本分支，5 本合成书 × 5 台＝25 组）：23 组相同，Kobo 的中文书、有注释的英文书两组只差注释弹窗；25 份产物和二次验收时（`727b4b6`）逐字节相同。合成中文书、台版书在 Kobo、汉王 `--vertical` 下的产物，和 `727b4b6` 的 `diff -r` 没有任何差异：这轮四处改动以外的行为都没变。
+- 逐条：
+  1. **`!important`**（`crates/bookconv/src/vertical.rs:727-750`）：`important_survives_box_shorthand_rotation` 通过。另外实测 `margin:1em 2em!important` → `2em 1em !important`，`padding:1px 2px 3px 4px !IMPORTANT` → `4px 1px 2px 3px !important`。
+  2. **原书竖排判定**（`crates/bookconv/src/vertical.rs:181-221`，只看选择器最右一节的元素名是不是 `html`/`body`/`:root`；`style` 属性仍只认 `<html>`/`<body>`，见 `:168`）：`native_vertical_is_detected`（`.article`、`body.v`、`html table`）和 `natively_vertical_book_does_not_get_root_writing_mode_rule` 都通过。合成书 Kobo、汉王 `--vertical` 实测：
+     - 只有 `.signature{writing-mode:vertical-rl}` 的横排书：不算原生竖排，挂 `eink-vertical.css`（根元素三种 writing-mode），书 CSS 横转竖（`p{margin:1em 0}`→`margin:0 1em`），OPF `primary-writing-mode=vertical-rl`、spine `rtl`；
+     - 只有 `.article{writing-mode:vertical-rl}` 的书：同上；
+     - `body.v{writing-mode:vertical-rl}`：算原生竖排，书 CSS 不动，`eink-vertical.css` 不写根元素；
+     - 台版书（`html{writing-mode:vertical-rl}`）：两台的 `style.css` 都和原件 `cmp` 相同。
+  3. **实体识别**（`crates/bookconv/src/vertical.rs:488-535`）：`fullwidth_text_only_and_entities` 通过。实测 `A&amp;B &lt;x&gt; &#x4E2D; &#65; &nbsp; Tom & Jerry; R&D a&b` → `Ａ＆Ｂ ＜ｘ＞ &#x4E2D; Ａ &nbsp; Ｔｏｍ ＆ Ｊｅｒｒｙ； Ｒ＆Ｄ ａ＆ｂ`。
+     - **验收发现并已修**：`4aacf74` 遇到 `&` 后连续 32 个字母数字、又没有 `;`（如 `&abcdefghijklmnopqrstuvwxyz0123456789 x`）时，while 循环既不前进也不输出，`fullwidth_ascii` 卡死（临时测试 150 秒超时）。走 `epub-optimize` 时这种裸 `&` 会先被「规范整理」转成 `&amp;`（合成书正文、NCX、`--no-wash` 都试过，不会卡），所以现在还碰不到，但 `fullwidth_ascii` 是公开函数，一旦前面漏掉一处转义就会卡死。`8eb0bc5` 改成按「有没有吃掉实体」判断（`:496`、`:529`），并补了断言；修完后 20 个竖排产物（10 本合成书 × Kobo/汉王）和 `4aacf74` 逐字节相同。
+  4. **英寸号**（`crates/bookconv/src/vertical.rs:434-449`）：`straight_quotes_and_apostrophes`（`12" x 14"` → `１２＂ ｘ １４＂`）通过。实测 `他说"好"` → 『好』，`屏幕 6"，重 200g，"好用"` → `６＂ … 『好用』`，`5'11" tall` → `５＇１１＂ ｔａｌｌ`。
+- **阻断**：无（上面第 3 条的死循环已修）。
+- **建议**（不挡合并，后续单）
+  1. `! important`（`!` 和 `important` 之间有空格，CSS 允许）没剥出来：`border-width:1px 2px ! important` 会转成 `important 1px 2px !`（`crates/bookconv/src/vertical.rs:730` 只认紧挨着的 `!important`）。真书里很少见。
+  2. 英寸号的判定按单子写的口径，会误伤「数字结尾的引语后面紧跟标点」：`他说"1984"。` → `他说＂１９８４＂。`（不再转『』）；后面是汉字时（`"1984"是本好书`）没问题。可以改成直引号配不上对时才把它当英寸号，要不要改等 vinci 定。
+- **线索**
+  1. 局部竖排的类（`.signature{writing-mode:vertical-rl;margin-top:2em}`）现在也会跟着横转竖，变成 `margin-right:2em`。它本来就是竖排元素，转了方向反而不对；很少见，真机留意。
+  2. 前两轮的建议和线索仍按「二审后」小节的决定，留给后续：`border-radius` 多值简写、注释那一章被搬空、`eink-vertical.css` 段距、规则 7 的文档混在 `cb12f7e`。
