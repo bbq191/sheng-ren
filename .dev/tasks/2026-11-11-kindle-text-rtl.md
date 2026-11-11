@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-11-kindle-text-rtl
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: kindle-text-rtl（从最新 master `0c92e5c` 切出）
 - 更新时间: 2026-11-11T11:52+08:00
@@ -131,5 +131,6 @@ KFX 写出器现在只会写横排。横排的书按从右往左翻是错的，�
   - 方向逻辑 `crates/kfx/src/write/mod.rs`：spine 不是 rtl → LTR；固定版式或全部文档都是单图页 → 保留 RTL；其余流式文字书 → LTR 并给警告。和任务单规则一致；`single_image_page`（`layout.rs`）与版面判定共用，没有两套判定。
   - 三个新测试覆盖 bug 本身（改前失败）、不写 rtl 的文字书、流式纯图页保留 rtl；已有的漫画 rtl 守护测试照过。
   - 留给二审的线索：流式漫画里只要夹一页文字（版权页、作者后记），整本就按 LTR 翻。Kindle 漫画走固定版式，影响应很小，请二审核实。
-- 二审：回执 `.dev/tasks/2026-11-11-kindle-text-rtl.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由
-- 合并：PR 链接、合并提交号；状态改为 verified
+- 二审：回执 `.dev/tasks/2026-11-11-kindle-text-rtl.agy.md`（`e9df496`）：阻断 0、建议 0、线索 1。
+  - 线索「未走优化器的流式漫画夹文字页会整本降为 LTR」：不改。`$560` 是全书唯一的文档级字段；书库链路里 Kindle 漫画走固定版式（`comic_fixed_layout = true`），不受影响；只有命令行裸转才会碰到，符合任务单规则。
+- 合并：直接 `--no-ff` 合并到 master，见合并提交；状态改为 verified
