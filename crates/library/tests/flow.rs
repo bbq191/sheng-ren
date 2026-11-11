@@ -3139,6 +3139,8 @@ fn unreadable_source_does_not_cache_not_chinese() {
     old.zh_text = None; // 模拟早期条目
     std::fs::write(&meta_path, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
     std::fs::remove_file(&src).unwrap();
+    // 持锁：只有持锁时才会写 meta.json，不持锁测不到要防的那条路径
+    let _guard = lib.lock().unwrap();
     let m = lib.list().into_iter().find(|x| x.id == m.id).unwrap();
     assert!(!lib.zh_text_of(&m).unwrap(), "读不到原件时这次按不竖排算");
     let after: library::Meta = serde_json::from_slice(&std::fs::read(&meta_path).unwrap()).unwrap();
