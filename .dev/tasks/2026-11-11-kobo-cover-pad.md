@@ -112,6 +112,13 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：通过 / 退回（附证据：命令输出、路径:行号）
+- 验收：通过（sheng-ren，2026-11-11，box 复跑 `2254256`）
+  - `cargo fmt --all -- --check` 干净；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test --workspace` 全过（bookconv 538、profile 18、library 71/7/14/46 等，0 failed）。
+  - 金样：非 kobo 的旧行把版本段 `|66|→|67|`、`|c67|→|c68|` 抹平后与 `4302b67` 逐行相同（脚本 diff 无输出）；新增的 `cover_thumb_fit` / `cover_image_thumb` 两组变异行每台 4 行。kobo 基线 `kobo none` 设备段由 `…bktu42@…` 变 `…bt0.7403pCktu42@…`，只多了这三项。
+  - 行为对照任务单规则 1–4：补白不裁、不做扫描白边；`cover-image` 挪到 `eink-thumb`，meta cover 指过去，真封面靠新 meta `eink-thumbnail-source` 认回；`kobo.toml` 三项和推翻旧注释都在；两路版本号都加一（漫画也走这段代码，合理）。
+  - 偏离（`wash/opf.rs`、`epubbook.rs`、三份 docs、两个新 meta 约定）都是为满足规则 2「另有办法认真封面」，接受。
+  - 留给二审的线索：
+    1. 版本号进每一行指纹，四台全部书下次 sync 都会重建；执行方说字节不变的不重传——请核实传输层是按产物字节判断（Kindle 进度不能因此清零）。
+    2. `epubbook.rs` 跳过 `eink-thumb` 的改动是否影响 Kindle 读 `eink-thumbnail` 作书架封面的现有路径。
 - 二审：回执 `.dev/tasks/2026-11-11-kobo-cover-pad.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由
 - 合并：合并提交号；状态改为 verified
