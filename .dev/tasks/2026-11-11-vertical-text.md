@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-vertical-text
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: vertical-text（从最新 master `10ce515` 或更新的切出）
-- 更新时间: 2026-11-11T17:20+08:00
+- 更新时间: 2026-11-11T17:40+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`；Kindle 翻页方向已由 `2026-11-11-kindle-text-rtl` 单独修好）
 
 ## 需求原文
@@ -236,6 +236,21 @@ vinci 2026-11-11 的决定（原话或口述结论）：
   - **没跑真书回归、没上真机**。真机由 vinci 验：Kobo、汉王各 sync 一本真书（对话多、有注释、有西文），看竖排、点左侧下一页、引号『』「」、数字西文立着不叠字、注释能点开（Kobo 弹窗）、目录能跳且目录里的西文是全角；Kobo 上一本有注释的横排书也弹窗；同一本在 KOReader 里能读（横排退化、引号/段距可接受）；Bigme、Kindle 上同一本仍横排。
   - KEPUB 只在单测里验证了全角串 / `rt`/`rp` / 样式表链接不被 koboSpan 拆坏，没有在真机 Nickel 上验竖排书。
   - 汉王「1–11 正常」是任务单给的实机结论；本单没在汉王上逐项复验。
+
+### 返工（2026-11-11，一审退回后）
+
+- 状态先改回 accepted（`398ad5f`），返工提交 `f127d66`。
+- **阻断 1（原书竖排的书 CSS 也被横转竖）**：`wash::apply_vertical` 里 `native` 为真时跳过整段书 CSS 改写；补测试 `natively_vertical_book_does_not_get_root_writing_mode_rule` 断言 `s.css` 逐字节不变、`eink-vertical.css` 不写根元素 writing-mode。
+- **阻断 2（读不到原件时把「不是」永久写进 meta.json）**：`zh_text_of` 读失败时这次按不竖排算，但不进缓存、不写 meta.json；补测试 `unreadable_source_does_not_cache_not_chinese`（模拟早期条目 `zh_text=None`、删掉原件、读一次、再读 meta.json 仍为 `None`）。
+- **建议 1（入库时判 zh_text）**：`EpubInfo::read` 里判一次，EPUB 写进 `Meta.zh_text`；CBZ 记 `false`。`add_file` 的测试断言 `m.zh_text == Some(true)`。
+- **建议 2（弯撇号）**：前后都是 ASCII 字母/数字的 `’` 按撇号算，不进配对；补测试 `他说“don’t worry”就走了，“这里是中文”。` → 第一个全西文弯引号不转、第二个转成『这里是中文』。
+- **建议 3（vertical 逐本写只看 kobo/hanvon）**：改成遍历所有 `vertical_text = true` 的设备。
+- **建议 4（vertical 补全）**：新增 `__complete vertical`，按 `paths` 的规则只列已跟踪条目、它下面的子目录和书；fish 脚本改用它，补测试。
+- **建议 5（三段式 border / 圆角）**：书 CSS 横转竖补 `border-top-width`、`border-left-style`、`border-bottom-color`、`border-top-left-radius` 等；补测试。
+- **建议 6（`0c55ca7` 没有正文、规则 7 文档混在 `cb12f7e`）**：`0c55ca7` 已在远端、没有改写历史；规则 7 的文档仍在 `cb12f7e`。可以回退 `b19a963` 的配置 / 单测 / 金样，但文档要手工改回。要彻底一刀回退得重写分支历史，**没做**，留给维护者决定。
+- **线索 1–6 不要求本次改，未动**（`p` 左右段距是否会盖过书里 `p{margin:0}`、表格里的全角数字、Kobo 空注释页、`--no-wash --vertical` 不挂样式、`@media` 内规则、Kobo 漫画指纹）。
+- 返工后测试：`cargo test --workspace` 全过（bookconv 552、library 71+7+14+48+1、profile 19、kfx 53、csscascade 16），`cargo clippy --workspace --all-targets -- -D warnings` 0 警告，`cargo fmt --all -- --check` 干净。
+- **仍然没跑真书回归、没上真机**；真机验证项同上面「未完成」。
 
 ## 审查
 <!-- 负责 bot 填写 -->
