@@ -96,6 +96,19 @@ pub enum NoteIcons {
     Number,
 }
 
+/// 书架缩略图怎么凑封面框的比例（profile `cover_thumb_fit`，不写＝[`Crop`](CoverThumbFit::Crop)）。
+/// 只在写了 `cover_thumb_aspect` 时用；见 `bookconv::imgopt::cover_thumbnail`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverThumbFit {
+    /// 居中裁（缺省，Kindle、掌阅、汉王的行为）：宽的裁左右、窄的裁上下，会裁掉封面内容。
+    #[default]
+    Crop,
+    /// 补白（2026-11-11 Kobo）：不裁不拉伸，缺的那一方向两边各补一半白（黑白屏的图本来就是灰度，白是 255）。
+    /// **不做**去扫描窄白边那一步（白边本来就要补）；书里的封面页照旧是原图。
+    Pad,
+}
+
 /// 阅读器怎么定图片的显示尺寸（只修复、照 Send to Kindle 统一的文字书用：`kindle_rules` 照它把图片宽度改写成显示出来和
 /// Kindle 一样大的写法，见 `bookconv::wash::kindle_images`）。2026-10-12 三台测试书（`测试-插图`）量的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -421,6 +434,16 @@ pub struct Profile {
     /// 指向缩略图（没有就加一个），`cover-image` 属性、书里的封面页不动。掌阅写 `true`（2026-11-03 Air 3 Pro 真机：meta cover 和
     /// `cover-image` 指向不同的图时书架用 meta 那张，书架把封面直接拉伸到框的比例）。KFX 不看它（写出器认 `eink-thumbnail`）。
     pub cover_meta_thumb: bool,
+    /// 书架缩略图怎么凑 `cover_thumb_aspect` 的比例（TOML `cover_thumb_fit`，不写＝裁）：`crop` 居中裁（Kindle、掌阅、汉王），
+    /// `pad` 不裁不拉伸、缺的那一方向两边各补一半白（Kobo 2026-11-11 定：书架按封面自己的比例显示、底边对齐，比例宽的矮一截，
+    /// 补白统一高度）。见 `bookconv::imgopt::cover_thumbnail`。只在写了 `cover_thumb_aspect` 时用。
+    pub cover_thumb_fit: CoverThumbFit,
+    /// 书架认 `properties="cover-image"` 属性（TOML 里不写是 `false`）：另做了缩略图（`cover_thumb_aspect`）时，把这个属性从真封面
+    /// 条目**挪到**缩略图条目上（真封面去掉这个值、保留别的 properties），`<meta name="cover">` 也指向缩略图；真封面的 id 记在
+    /// `<meta name="eink-thumbnail-source">` 里，`declared_cover` 靠它认回真封面，书里的封面页照旧引用原图。Kobo 写 `true`
+    /// （2026-11-11 定：Clara BW 书架取的是 `cover-image` 那张，不是 meta cover）。换到不比这台的设备再优化时属性和 meta 改回
+    /// 真封面。和 `cover_meta_thumb` 一样要求同时写了 `cover_thumb_aspect`。
+    pub cover_image_thumb: bool,
     /// 阅读器怎么定图片尺寸（TOML 里不写是 `css`），见 [`ImageSizing`]。ireader 写 `device-px`，xochitl 写 `percent`。
     pub image_sizing: ImageSizing,
     /// 阅读器缺省字号下 1em 是几个屏幕像素（只 kindle 写：掌阅、Move 照它把 em 写的图片宽度折成 Kindle 上的实际大小，
@@ -562,6 +585,10 @@ struct ProfileFile {
     #[serde(default)]
     cover_meta_thumb: bool,
     #[serde(default)]
+    cover_thumb_fit: CoverThumbFit,
+    #[serde(default)]
+    cover_image_thumb: bool,
+    #[serde(default)]
     image_sizing: ImageSizing,
     font_px: Option<u32>,
     #[serde(default)]
@@ -654,6 +681,8 @@ impl Profile {
             image_gamma: f.image_gamma,
             cover_thumb_aspect: f.cover_thumb_aspect,
             cover_meta_thumb: f.cover_meta_thumb,
+            cover_thumb_fit: f.cover_thumb_fit,
+            cover_image_thumb: f.cover_image_thumb,
             image_sizing: f.image_sizing,
             font_px: f.font_px,
             line_px: f.line_px,
@@ -739,6 +768,18 @@ impl Profile {
         if self.cover_meta_thumb && self.cover_thumb_aspect.is_none() {
             return Err(format!(
                 "profile {}: cover_meta_thumb 要和 cover_thumb_aspect 一起写（没有缩略图可指）",
+                self.id
+            ));
+        }
+        if self.cover_image_thumb && self.cover_thumb_aspect.is_none() {
+            return Err(format!(
+                "profile {}: cover_image_thumb 要和 cover_thumb_aspect 一起写（没有缩略图可指）",
+                self.id
+            ));
+        }
+        if self.cover_thumb_fit == CoverThumbFit::Pad && self.cover_thumb_aspect.is_none() {
+            return Err(format!(
+                "profile {}: cover_thumb_fit = \"pad\" 要和 cover_thumb_aspect 一起写（没有比例要凑）",
                 self.id
             ));
         }
@@ -1056,6 +1097,8 @@ mod tests {
             image_gamma: _,
             cover_thumb_aspect: _,
             cover_meta_thumb: _,
+            cover_thumb_fit: _,
+            cover_image_thumb: _,
             image_sizing: _,
             font_px: _,
             // 阅读器模型（也有的同时直接进）
@@ -1666,5 +1709,39 @@ mod tests {
         assert!(e.contains("0.3–1.5"), "{e}");
         let p = Profile::parse("x", &src.replace("cover_meta_thumb = true", "")).unwrap();
         assert!(!p.cover_meta_thumb, "不写是 false");
+    }
+
+    /// Kobo 的书架缩略图：补白到屏幕比例 0.7403、`cover-image` 挪到缩略图上（2026-11-11）。
+    /// `cover_image_thumb`、`cover_thumb_fit = "pad"` 都要和 `cover_thumb_aspect` 一起写；不写时是裁、false。
+    #[test]
+    fn kobo_pads_cover_thumbnail_and_moves_cover_image() {
+        let k = get("kobo").unwrap();
+        assert_eq!(k.cover_thumb_aspect, Some(0.7403));
+        assert_eq!(k.cover_thumb_fit, CoverThumbFit::Pad);
+        assert!(k.cover_image_thumb && !k.cover_meta_thumb);
+        // 别的设备的缺省值不变
+        for id in ["bigme", "hanvon", "ireader", "kindle"] {
+            let p = get(id).unwrap();
+            assert_eq!(p.cover_thumb_fit, CoverThumbFit::Crop, "{id}");
+            assert!(!p.cover_image_thumb, "{id}");
+        }
+        let src = include_str!("../profiles/kobo.toml");
+        let e = Profile::parse("x", &src.replace("cover_thumb_aspect = 0.7403", "")).unwrap_err();
+        assert!(
+            e.contains("cover_image_thumb 要和 cover_thumb_aspect 一起写"),
+            "{e}"
+        );
+        let no_aspect_no_cover_image = src
+            .replace("cover_thumb_aspect = 0.7403", "")
+            .replace("cover_image_thumb = true", "");
+        let e = Profile::parse("x", &no_aspect_no_cover_image).unwrap_err();
+        assert!(
+            e.contains("cover_thumb_fit = \"pad\" 要和 cover_thumb_aspect 一起写"),
+            "{e}"
+        );
+        let p = Profile::parse("x", &src.replace("cover_thumb_fit = \"pad\"", "")).unwrap();
+        assert_eq!(p.cover_thumb_fit, CoverThumbFit::Crop, "不写是裁");
+        let p = Profile::parse("x", &src.replace("cover_image_thumb = true", "")).unwrap();
+        assert!(!p.cover_image_thumb, "不写是 false");
     }
 }

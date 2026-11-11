@@ -384,21 +384,32 @@ pub fn is_image_item(it: &ManifestItem) -> bool {
     it.media_type.starts_with("image/") || is_image_ext(html::split_href(it.href).0)
 }
 
-/// OPF 声明的封面图：`<meta name="cover" content="id">` 指向的图片项优先，其次带 `properties="cover-image"` 的图片项。
+/// OPF 声明的封面图：`<meta name="cover" content="id">` 指向的图片项优先，其次带 `properties="cover-image"` 的图片项，
+/// 最后是 [`super::THUMB_SOURCE_META`] 记着的真封面（Kobo 把 `cover-image` 挪到缩略图上，真封面身上没有这个值了）。
 /// meta 指向我们另做的书架缩略图（[`super::THUMB_ID`]，掌阅 `cover_meta_thumb`）时不算：它只给书架用，真封面是 `cover-image` 那张——
 /// 再优化一遍已优化过的书不会拿缩略图当封面再裁一次，`booklib meta` 读、改、去封面也照真封面。
-/// 声明了但指向的不是图片（Calibre 产物的 `content="cover.txt"`）不算。
+/// 带 `cover-image` 的是缩略图自己时同样不算。声明了但指向的不是图片（Calibre 产物的 `content="cover.txt"`）不算。
 pub fn declared_cover(opf: &str) -> Option<ManifestItem<'_>> {
     let mut items = manifest_items(opf);
     let by_meta = cover_meta_tags(opf)
         .into_iter()
         .filter(|&(_, _, id)| id != super::THUMB_ID)
         .find_map(|(_, _, id)| items.iter().position(|i| i.id == id && is_image_item(i)));
-    let pos = by_meta.or_else(|| {
-        items.iter().position(|i| {
-            is_image_item(i) && i.properties.split_whitespace().any(|p| p == "cover-image")
+    let pos = by_meta
+        .or_else(|| {
+            items.iter().position(|i| {
+                i.id != super::THUMB_ID
+                    && is_image_item(i)
+                    && i.properties.split_whitespace().any(|p| p == "cover-image")
+            })
         })
-    })?;
+        .or_else(|| {
+            // 真封面记在 eink-thumbnail-source 里（Kobo 产物）
+            let id = super::opf::meta_content(opf, super::THUMB_SOURCE_META)?;
+            items
+                .iter()
+                .position(|i| i.id == id && i.id != super::THUMB_ID && is_image_item(i))
+        })?;
     Some(items.swap_remove(pos))
 }
 

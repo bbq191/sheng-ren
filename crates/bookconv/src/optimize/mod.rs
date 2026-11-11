@@ -161,7 +161,10 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 /// - 66（2026-11-03，掌阅 Air 3 Pro 真机量书架）：掌阅另做书架缩略图（`cover_thumb_aspect = 0.754`），并把 `<meta name="cover">`
 ///   指向它（profile `cover_meta_thumb`；掌阅书架认 meta cover，`cover-image`、封面页不动）。`declared_cover` 不把缩略图当封面。
 ///   掌阅有封面的书都变；Kindle、Move/Kobo 产物不变。
-pub const OPTIMIZE_VERSION: &str = "66";
+/// - 67（2026-11-11，vinci 定 Clara BW 书架封面统一屏幕比例）：Kobo 另做书架缩略图，**补白**（profile `cover_thumb_aspect = 0.7403`、
+///   `cover_thumb_fit = "pad"`）到屏幕 1072×1448 的比例、不裁内容；`cover-image` 属性和 meta cover 挪到缩略图上（profile
+///   `cover_image_thumb`），真封面的 id 记进 `eink-thumbnail-source`。只有 Kobo 有封面的书变，别的设备逐字节不变。
+pub const OPTIMIZE_VERSION: &str = "67";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
@@ -196,7 +199,9 @@ pub const OPTIMIZE_VERSION: &str = "66";
 ///   `imgopt::prepare_comic_spread`、`streaming::split_spread_pages`）；只拆纯图页、不拆封面、不旋转。四台都开，没上真机。
 /// - c67（2026-11-10）：漫画页裁格间空白（profile `comic_gutter_crop`，缺省 false，`imgopt::process_comic_page` 的
 ///   `comiccrop::gutter_bands`）。四台 profile 都没开，产物不变，只为新键加一；待真机 A/B 后再另开单。
-pub const COMIC_VERSION: &str = "67";
+/// - c68（2026-11-11）：同 v67，两路共用的书架缩略图——Kobo 漫画的缩略图也补白到屏幕比例、`cover-image` 挪到缩略图上。
+///   只有 Kobo 有封面的漫画变，别的设备逐字节不变。
+pub const COMIC_VERSION: &str = "68";
 
 /// 脚注呈现方式，按阅读器定（profile 的 `notes`，见 [`OptimizeOpts::for_profile`]）。注释都移到章末、标号改同章锚点。
 /// 曾试过"注释移到引用它的段落末尾"，真机验证后撤回删除——维护者真实期望是"翻到哪页注释固定在那页最下面"，
@@ -302,8 +307,12 @@ pub struct OptimizeOpts {
     pub comic_dark_bg: bool,
     /// 书架缩略图裁成这个宽高比（profile `cover_thumb_aspect`），见 [`crate::wash::add_cover_thumbnail`]。文字书、漫画都做。
     pub cover_thumb_aspect: Option<f32>,
+    /// 书架缩略图怎么凑比例（profile `cover_thumb_fit`）：裁（缺省）或补白，见 [`crate::imgopt::cover_thumbnail`]。
+    pub cover_thumb_fit: profile::CoverThumbFit,
     /// 把 `<meta name="cover">` 指向书架缩略图（profile `cover_meta_thumb`，掌阅），见 [`crate::wash::add_cover_thumbnail`]。
     pub cover_meta_thumb: bool,
+    /// 把 `properties="cover-image"` 挪到书架缩略图上（profile `cover_image_thumb`，Kobo），见 [`crate::wash::add_cover_thumbnail`]。
+    pub cover_image_thumb: bool,
     /// 文字书正文插图中间调加深的伽马（profile `image_gamma`，`None` 或 1 不加深），见 [`crate::imgopt::darken_gray_image`]。
     /// 只修复的书也做（「图片不动」的例外，2026-10-16 定）。
     pub image_gamma: Option<f64>,
@@ -424,7 +433,9 @@ impl OptimizeOpts {
             comic_upscale: true,
             comic_dark_bg: false,
             cover_thumb_aspect: None,
+            cover_thumb_fit: profile::CoverThumbFit::Crop,
             cover_meta_thumb: false,
+            cover_image_thumb: false,
             image_gamma: None,
             webp_to_png: false,
             text_mode: TextMode::Full,
@@ -469,7 +480,9 @@ impl OptimizeOpts {
             comic_upscale: p.comic.upscale,
             comic_dark_bg: p.comic.dark_bg,
             cover_thumb_aspect: p.cover_thumb_aspect,
+            cover_thumb_fit: p.cover_thumb_fit,
             cover_meta_thumb: p.cover_meta_thumb,
+            cover_image_thumb: p.cover_image_thumb,
             image_gamma: p.image_gamma.filter(|&g| g != 1.0),
             webp_to_png: !p.webp,
             text_mode: TextMode::for_profile(p),
