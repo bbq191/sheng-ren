@@ -42,11 +42,20 @@ pub fn ensure_cover_declared(entries: &mut [Entry]) -> bool {
             return false;
         }
         // 已优化过的掌阅产物：meta 全指着缩略图、真封面带 `cover-image`——这是 [`add_cover_thumbnail`] 写的样子，不动（幂等）
-        let thumb_ok = items.iter().any(|i| i.id == THUMB_ID && is_image_item(i));
-        if thumb_ok
+        let thumb = items.iter().find(|i| i.id == THUMB_ID && is_image_item(i));
+        if thumb.is_some()
             && !metas.is_empty()
             && metas.iter().all(|(_, _, id)| *id == THUMB_ID)
             && has_prop(t)
+        {
+            return false;
+        }
+        // 已优化过的 Kobo 产物：`cover-image` 挪到了缩略图上，真封面记在 `eink-thumbnail-source` 里、meta cover 指缩略图
+        // （`cover_image_thumb`）——不动（幂等）
+        if thumb.is_some_and(has_cover_image)
+            && !metas.is_empty()
+            && metas.iter().all(|(_, _, id)| *id == THUMB_ID)
+            && super::opf::meta_content(&text, THUMB_SOURCE_META) == Some(t.id)
         {
             return false;
         }
@@ -118,7 +127,137 @@ const THUMB_FILE: &str = "eink-thumb.jpg";
 pub const THUMB_ID: &str = "eink-thumb";
 /// 指明书架缩略图的 `<meta>` 名字（KFX 写出器认它：有就拿它当 `cover_image`，书里的封面页照旧用 `cover-image` 那张）。
 pub const THUMB_META: &str = "eink-thumbnail";
+/// `cover-image` 挪到缩略图上时（profile `cover_image_thumb`，Kobo），真封面的 manifest id 记在这里：
+/// [`declared_cover`] 靠它认回真封面，换设备再优化时又能把属性和 meta 改回去。
+pub const THUMB_SOURCE_META: &str = "eink-thumbnail-source";
+/// 补白缩略图的标记（`<meta name="eink-thumbnail-fit" content="pad"/>`，profile `cover_thumb_fit = "pad"`）：再优化时
+/// 判断已有的缩略图是不是同一种凑比例方式；裁的缩略图不写这一条（别的设备产物逐字节不变）。
+pub const THUMB_FIT_META: &str = "eink-thumbnail-fit";
 const COVER_PAGE_ID: &str = "eink-cover-page";
+
+/// manifest 项带不带 `properties="cover-image"`。
+fn has_cover_image(it: &ManifestItem) -> bool {
+    it.properties.split_whitespace().any(|p| p == "cover-image")
+}
+
+/// 给 `id` 这一项加上／去掉 `cover-image` 属性（别的 properties 照旧；去掉后没有别的就删掉整个属性）。已经是这样 → 原样。
+/// `id` 不在 manifest 里 → `None`。
+fn set_cover_image(opf: &str, id: &str, on: bool) -> Option<String> {
+    let items = manifest_items(opf);
+    let it = items.iter().find(|i| i.id == id)?;
+    if has_cover_image(it) == on {
+        return Some(opf.to_string());
+    }
+    let tag = if on {
+        if it.properties.is_empty() {
+            // 没有 properties 时紧跟在 id 后面写（和 `ensure_cover_declared` 的写法一致）
+            let a = html::attr(it.tag, "id")?;
+            format!(
+                r#"{} properties="cover-image"{}"#,
+                &it.tag[..a.end],
+                &it.tag[a.end..]
+            )
+        } else {
+            html::set_attr(
+                it.tag,
+                "properties",
+                &format!("{} cover-image", it.properties),
+            )
+        }
+    } else {
+        let rest: Vec<&str> = it
+            .properties
+            .split_whitespace()
+            .filter(|p| *p != "cover-image")
+            .collect();
+        if rest.is_empty() {
+            html::remove_attr(it.tag, "properties")
+        } else {
+            html::set_attr(it.tag, "properties", &rest.join(" "))
+        }
+    };
+    Some(html::apply_edits(
+        opf,
+        vec![(it.pos, it.pos + it.tag.len(), tag)],
+    ))
+}
+
+/// `<meta name="name" content="…">` 设成 `content`（原位改第一个，多的去掉，没有就加一个）；`None` 时全去掉。
+/// 已经只有这一个、值一样 → 原样。
+fn set_named_meta(opf: &str, name: &str, content: Option<&str>) -> Option<String> {
+    let metas: Vec<(usize, usize, &str)> = html::tags(opf)
+        .filter(|t| t.is_start() && super::opf::is_local(t.name, "meta"))
+        .filter_map(|t| {
+            let tag = &opf[t.start..t.end];
+            (html::attr_value(tag, "name")? == name).then(|| {
+                (
+                    t.start,
+                    super::opf::element_end(opf, &t),
+                    html::attr_value(tag, "content").unwrap_or(""),
+                )
+            })
+        })
+        .collect();
+    match content {
+        Some(c) => {
+            if metas.is_empty() {
+                return insert_metadata(opf, &format!(r#"<meta name="{name}" content="{c}"/>"#));
+            }
+            if metas.len() == 1 && metas[0].2 == c {
+                return Some(opf.to_string());
+            }
+            let tag = html::set_attr(&opf[metas[0].0..metas[0].1], "content", c);
+            let edits: Vec<(usize, usize, String)> = metas
+                .iter()
+                .enumerate()
+                .map(|(n, &(s, e, _))| (s, e, if n == 0 { tag.clone() } else { String::new() }))
+                .collect();
+            Some(html::apply_edits(opf, edits))
+        }
+        None => {
+            if metas.is_empty() {
+                return Some(opf.to_string());
+            }
+            let edits = metas
+                .iter()
+                .map(|&(s, e, _)| (s, e, String::new()))
+                .collect();
+            Some(html::apply_edits(opf, edits))
+        }
+    }
+}
+
+/// 已有的缩略图是不是这次要的凑比例方式：裁的产物没有 [`THUMB_FIT_META`]，补白的写着 `pad`。
+fn thumb_fit_matches(opf: &str, fit: profile::CoverThumbFit) -> bool {
+    match fit {
+        profile::CoverThumbFit::Crop => super::opf::meta_content(opf, THUMB_FIT_META).is_none(),
+        profile::CoverThumbFit::Pad => super::opf::meta_content(opf, THUMB_FIT_META) == Some("pad"),
+    }
+}
+
+/// 把已有缩略图的 OPF 声明对齐到这次的设备（缩略图字节合用、只改 OPF）：`cover-image` 在真封面和缩略图之间挪动，
+/// `<meta name="cover">` 和 `<meta name="eink-thumbnail-source">` 跟着改；`meta_cover` 时 meta cover 指缩略图。
+/// 已经是这次的样子 → 返回原文本（调用方据此报"没改"）。找不到真封面 → `None`。
+fn arrange_cover_thumb(opf: &str, meta_cover: bool, cover_image_thumb: bool) -> Option<String> {
+    let cover = declared_cover(opf)?.id.to_string();
+    let mut out = opf.to_string();
+    if cover_image_thumb {
+        out = set_cover_image(&out, THUMB_ID, true)?;
+        out = set_cover_image(&out, &cover, false)?;
+        out = set_named_meta(&out, THUMB_SOURCE_META, Some(&cover))?;
+        out = point_meta_cover(&out, THUMB_ID)?;
+    } else {
+        out = set_cover_image(&out, &cover, true)?;
+        out = set_cover_image(&out, THUMB_ID, false)?;
+        out = set_named_meta(&out, THUMB_SOURCE_META, None)?;
+        if meta_cover {
+            out = point_meta_cover(&out, THUMB_ID)?;
+        } else if cover_meta_tags(&out).iter().any(|m| m.2 == THUMB_ID) {
+            out = point_meta_cover(&out, &cover)?;
+        }
+    }
+    Some(out)
+}
 
 /// 原书没有封面页（OPF 声明了封面图，可哪一页都没用到它）时，在 spine 最前面补一页只放封面图的页面——照 Send to Kindle
 /// （Amazon 转的《绍宋》《狼厅》第一页是补出来的整页封面；2026-10-09 ：掌阅、Move 也补）。写法照真书最常见的封面页
@@ -206,19 +345,25 @@ svg {{ margin: 0; padding: 0; }}
 
 /// 加一张书架缩略图（profile `cover_thumb_aspect`）：`make(封面在 zip 里的路径)` 给出缩略图字节（[`crate::imgopt::cover_thumbnail`]），
 /// 放在 OPF 同目录叫 [`THUMB_FILE`]，manifest 加一项（不进 spine，正文不引用），`<metadata>` 里加 `<meta name="eink-thumbnail">` 指着它。
-/// 书里的封面页、`cover-image` 都不动：只给书架用（2026-10-30 维护者定「只裁书架缩略图」）。没有声明封面、
+/// 书里的封面页、正文一概不动：只给书架用（2026-10-30 维护者定「只裁书架缩略图」）。没有声明封面、
 /// `make` 不给（比例本来就对、解不开）→ 不加。
 ///
-/// 已经有缩略图（再优化一遍）：`keep(缩略图在 zip 里的路径)` 说它还合用（比例和这次的一样）就留着，只把 meta 指向对齐这次的模式；
-/// 不合用（换了比例的设备）就整张去掉（[`strip_cover_thumbnail`]）照这次的重做。同一模式再跑一遍什么也不改（幂等）。
-/// zip 里有 [`THUMB_FILE`] 但 manifest 没有这一项（不是我们加的）→ 不碰。
+/// 已经有缩略图（再优化一遍）：`keep(缩略图在 zip 里的路径)` 说比例合用、且 [`THUMB_FIT_META`] 和 `fit` 对得上（裁的产物
+/// 没有这个 meta，补白的写着 `pad`）就留着，只把 OPF 声明对齐这次的模式；不合用就整张去掉（[`strip_cover_thumbnail`]）照这次的重做。
+/// 同一模式再跑一遍什么也不改（幂等）。zip 里有 [`THUMB_FILE`] 但 manifest 没有这一项（不是我们加的）→ 不碰。
 ///
 /// `meta_cover`（profile `cover_meta_thumb`，掌阅）：书架认 EPUB 2 的 `<meta name="cover">`，所以再把它指向缩略图——改第一个
 /// `cover` meta 的 `content`、多的去掉，没有就加一个；`cover-image` 属性、封面页照旧，[`declared_cover`] 跳过指向缩略图的 meta，
 /// 真封面还是 `cover-image` 那张。不开时指着缩略图的 meta（掌阅产物拿来给别的设备再优化）改回真封面。改了什么 → `true`。
+///
+/// `cover_image_thumb`（profile `cover_image_thumb`，Kobo）：书架认 `properties="cover-image"`，所以把它从真封面**挪到**缩略图上
+/// （真封面保留别的 properties），meta cover 也指缩略图，真封面的 id 记进 [`THUMB_SOURCE_META`]；书里的封面页照旧用原图。
+/// 不开时（换了别的设备）属性、meta、source meta 都改回真封面。`fit = Pad` 时再写 [`THUMB_FIT_META`]。
 pub fn add_cover_thumbnail(
     entries: &mut Vec<Entry>,
     meta_cover: bool,
+    cover_image_thumb: bool,
+    fit: profile::CoverThumbFit,
     keep: impl FnOnce(&str) -> bool,
     make: impl FnOnce(&str) -> Option<Vec<u8>>,
 ) -> bool {
@@ -234,23 +379,15 @@ pub fn add_cover_thumbnail(
     let mut out = text.clone();
     let mut dropped = None;
     if let Some(old) = manifest_items(&text).iter().find(|i| i.id == THUMB_ID) {
-        if keep(&old.path(&opf.dir)) {
-            let Some(cover) = declared_cover(&text) else {
+        if keep(&old.path(&opf.dir)) && thumb_fit_matches(&text, fit) {
+            let Some(new) = arrange_cover_thumb(&text, meta_cover, cover_image_thumb) else {
                 return false;
             };
-            let new = if meta_cover {
-                point_meta_cover(&text, THUMB_ID)
-            } else if cover_meta_tags(&text).iter().any(|m| m.2 == THUMB_ID) {
-                point_meta_cover(&text, cover.id)
+            return if new != text {
+                entries[opf.index].data = new.into_bytes();
+                true
             } else {
-                None
-            };
-            return match new {
-                Some(new) if new != text => {
-                    entries[opf.index].data = new.into_bytes();
-                    true
-                }
-                _ => false,
+                false
             };
         }
         if let Some((s, path)) = strip_cover_thumbnail(&text, &opf.dir) {
@@ -274,8 +411,12 @@ pub fn add_cover_thumbnail(
         }
         changed
     };
-    let made = declared_cover(&out).and_then(|c| make(&c.path(&opf.dir)));
-    let Some(bytes) = made else {
+    let Some((cover_id, cover_path)) =
+        declared_cover(&out).map(|c| (c.id.to_string(), c.path(&opf.dir)))
+    else {
+        return finish(entries, out, None);
+    };
+    let Some(bytes) = make(&cover_path) else {
         return finish(entries, out, None);
     };
     let with = insert_manifest_items(
@@ -292,37 +433,54 @@ pub fn add_cover_thumbnail(
             &o,
             &format!(r#"<meta name="{THUMB_META}" content="{THUMB_ID}"/>"#),
         )
-    })
-    .and_then(|o| {
-        if meta_cover {
-            point_meta_cover(&o, THUMB_ID)
-        } else {
-            Some(o)
-        }
     });
+    let with = if cover_image_thumb {
+        with.and_then(|o| set_named_meta(&o, THUMB_SOURCE_META, Some(&cover_id)))
+    } else {
+        with
+    };
+    let with = if fit == profile::CoverThumbFit::Pad {
+        with.and_then(|o| set_named_meta(&o, THUMB_FIT_META, Some("pad")))
+    } else {
+        with
+    };
+    let with = if cover_image_thumb {
+        with.and_then(|o| set_cover_image(&o, THUMB_ID, true))
+            .and_then(|o| set_cover_image(&o, &cover_id, false))
+    } else {
+        with
+    };
+    let with = if cover_image_thumb || meta_cover {
+        with.and_then(|o| point_meta_cover(&o, THUMB_ID))
+    } else {
+        with
+    };
     match with {
         Some(o) => finish(entries, o, Some(bytes)),
         None => finish(entries, out, None),
     }
 }
 
-/// 去掉 [`add_cover_thumbnail`] 加的书架缩略图（OPF 文字层）：manifest 的 [`THUMB_ID`] 项、`<meta name="eink-thumbnail">`；
-/// 指着缩略图的 `<meta name="cover">` 改回真封面（[`declared_cover`]，没有真封面就去掉）。返回 (新 OPF, 缩略图在 zip 里的路径，
-/// 调用方从 zip 删掉)。没有这一项 → `None`。换封面、删封面（`opfmeta`）、给不做缩略图的设备再优化时用：旧缩略图留着书架就还是旧封面。
+/// 去掉 [`add_cover_thumbnail`] 加的书架缩略图（OPF 文字层）：manifest 的 [`THUMB_ID`] 项、三个 `eink-thumbnail*` meta；
+/// 缩略图上带着的 `cover-image` 还给真封面，指着缩略图的 `<meta name="cover">` 也改回真封面（[`declared_cover`]，没有真封面就去掉）。
+/// 返回 (新 OPF, 缩略图在 zip 里的路径，调用方从 zip 删掉)。没有这一项 → `None`。换封面、删封面（`opfmeta`）、
+/// 给不做缩略图的设备再优化时用：旧缩略图留着书架就还是旧封面。
 pub fn strip_cover_thumbnail(opf: &str, opf_dir: &str) -> Option<(String, String)> {
-    let path = manifest_items(opf)
-        .iter()
-        .find(|i| i.id == THUMB_ID)?
-        .path(opf_dir);
+    let thumb = manifest_items(opf).into_iter().find(|i| i.id == THUMB_ID)?;
+    let path = thumb.path(opf_dir);
+    let thumb_had_cover_image = has_cover_image(&thumb);
     let cover = declared_cover(opf).map(|c| c.id.to_string());
-    let out =
+    let mut out =
         super::opf::remove_items(opf, |i| i.id == THUMB_ID).unwrap_or_else(|| opf.to_string());
-    let edits: Vec<(usize, usize, String)> = html::tags(&out)
-        .filter(|t| t.is_start() && super::opf::is_local(t.name, "meta"))
-        .filter(|t| html::attr_value(&out[t.start..t.end], "name") == Some(THUMB_META))
-        .map(|t| (t.start, super::opf::element_end(&out, &t), String::new()))
-        .collect();
-    let out = html::apply_edits(&out, edits);
+    // Kobo 产物：cover-image 在缩略图上，真封面身上没有——还给真封面（掌阅、Kindle 的产物本来就在真封面上，不改）
+    if thumb_had_cover_image {
+        if let Some(c) = &cover {
+            out = set_cover_image(&out, c, true)?;
+        }
+    }
+    out = set_named_meta(&out, THUMB_META, None)?;
+    out = set_named_meta(&out, THUMB_SOURCE_META, None)?;
+    out = set_named_meta(&out, THUMB_FIT_META, None)?;
     let metas = cover_meta_tags(&out);
     let out = if !metas.iter().any(|m| m.2 == THUMB_ID) {
         out

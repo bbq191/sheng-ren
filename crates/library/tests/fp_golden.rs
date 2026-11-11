@@ -4,7 +4,7 @@
 mod common;
 
 use common::{jpeg, sample_epub};
-use profile::{ImageSizing, NoteIcons, Notes, Profile, Screen};
+use profile::{CoverThumbFit, ImageSizing, NoteIcons, Notes, Profile, Screen};
 use std::io::Write;
 
 type Mutation = (&'static str, Box<dyn Fn(&mut Profile)>);
@@ -158,10 +158,14 @@ fn mutations() -> Vec<Mutation> {
     ));
     v.push((
         "cover_thumb_aspect",
-        // 去掉 aspect 时 cover_meta_thumb 一起关（单开它不合法，`validate` 不让）
+        // 去掉 aspect 时 cover_meta_thumb 一起关（单开它不合法，`validate` 不让）；cover_image_thumb、补白也一样
         Box::new(|p| {
             p.cover_thumb_aspect = p.cover_thumb_aspect.map_or(Some(0.6), |_| None);
             p.cover_meta_thumb &= p.cover_thumb_aspect.is_some();
+            if p.cover_thumb_aspect.is_none() {
+                p.cover_image_thumb = false;
+                p.cover_thumb_fit = CoverThumbFit::Crop;
+            }
         }),
     ));
     v.push((
@@ -199,6 +203,31 @@ fn mutations() -> Vec<Mutation> {
         "comic_gutter_crop",
         Box::new(|p| p.comic.gutter_crop = !p.comic.gutter_crop),
     ));
+    // 2026-11-11 加的书架缩略图字段：放在最后，旧行不挪
+    v.push((
+        "cover_thumb_fit",
+        // 补白要和 aspect 一起写（单有 pad 不合法）；裁 ←→ 补白
+        Box::new(|p| {
+            p.cover_thumb_fit = if p.cover_thumb_fit == CoverThumbFit::Pad {
+                CoverThumbFit::Crop
+            } else {
+                CoverThumbFit::Pad
+            };
+            if p.cover_thumb_aspect.is_none() {
+                p.cover_thumb_aspect = Some(0.6);
+            }
+        }),
+    ));
+    v.push((
+        "cover_image_thumb",
+        // 没写 aspect 的设备单翻它不合法：先补一个
+        Box::new(|p| {
+            p.cover_image_thumb = !p.cover_image_thumb;
+            if p.cover_image_thumb && p.cover_thumb_aspect.is_none() {
+                p.cover_thumb_aspect = Some(0.6);
+            }
+        }),
+    ));
     v
 }
 
@@ -231,6 +260,14 @@ fn fingerprints_match_the_golden_file() {
             assert!(
                 !p.cover_meta_thumb || p.cover_thumb_aspect.is_some(),
                 "{dev} {name}：变出了不合法的 profile"
+            );
+            assert!(
+                !p.cover_image_thumb || p.cover_thumb_aspect.is_some(),
+                "{dev} {name}：变出了不合法的 profile（cover_image_thumb）"
+            );
+            assert!(
+                p.cover_thumb_fit != CoverThumbFit::Pad || p.cover_thumb_aspect.is_some(),
+                "{dev} {name}：变出了不合法的 profile（cover_thumb_fit）"
             );
             for (kind, meta) in [("text", &text), ("comic", &comic)] {
                 let fp = lib

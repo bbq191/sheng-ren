@@ -12,6 +12,7 @@ use image::imageops::FilterType;
 use image::ImageFormat;
 use std::io::Cursor;
 
+use profile::CoverThumbFit;
 pub use profile::Screen;
 
 /// 单测用的设备屏幕：rMPP Move（954×1696）。历史用例与真机数据都是在 Move 上量的，断言里的数字以它为准。
@@ -1025,11 +1026,23 @@ pub struct ComicPage {
     pub gutter_crop: bool,
 }
 
-/// 书架缩略图（profile `cover_thumb_aspect`）：先去掉扫描留下的窄白边（[`thumb_scan_margins`]），再居中裁成宽高比 `aspect`
-/// （宽的裁左右、窄的裁上下），长边超过 [`THUMB_MAX_SIDE`] 的缩下来，JPEG 质量 [`THUMB_QUALITY`]（黑白屏转灰度）。没有窄白边、
-/// 比例只差 [`THUMB_TOLERANCE`] 以内、解不开、超过解码上限 → `None`。只给书架用，书里的封面页照旧用原图（2026-10-30 维护者定：
-/// 只裁书架缩略图，Kindle 书架的框是 0.65）。
-pub fn cover_thumbnail(bytes: &[u8], aspect: f32, grayscale: bool, max_px: u64) -> Option<Vec<u8>> {
+/// 书架缩略图（profile `cover_thumb_aspect`）：凑成宽高比 `aspect`，长边超过 [`THUMB_MAX_SIDE`] 的缩下来，JPEG 质量
+/// [`THUMB_QUALITY`]（黑白屏转灰度）。
+///
+/// `fit`（profile `cover_thumb_fit`）：
+/// - [`CoverThumbFit::Crop`]（缺省，Kindle、掌阅、汉王）：先去掉扫描留下的窄白边（[`thumb_scan_margins`]），再居中裁成比例
+///   （宽的裁左右、窄的裁上下）。
+/// - [`CoverThumbFit::Pad`]（Kobo 2026-11-11）：**不裁不拉伸**，按比例在缺的那一方向两边各补一半白（`#FFFFFF`），
+///   不去扫描窄白边（白边本来就要补）。长边仍以 [`THUMB_MAX_SIDE`] 为上限（补完的整张画布算）。
+///
+/// 比例只差 [`THUMB_TOLERANCE`] 以内、解不开、超过解码上限 → `None`。只给书架用，书里的封面页照旧用原图。
+pub fn cover_thumbnail(
+    bytes: &[u8],
+    aspect: f32,
+    fit: CoverThumbFit,
+    grayscale: bool,
+    max_px: u64,
+) -> Option<Vec<u8>> {
     let (img, _) = decode_page(
         bytes,
         PageDecode {
@@ -1039,33 +1052,62 @@ pub fn cover_thumbnail(bytes: &[u8], aspect: f32, grayscale: bool, max_px: u64) 
         },
     )?;
     let (w0, h0) = img.dimensions();
-    let (l, t, r, b) = thumb_scan_margins(&darkness_plane(&img), w0, h0);
-    let img = if (l, t, r, b) != (0, 0, 0, 0) {
-        img.crop(l, t, w0 - l - r, h0 - t - b)
-    } else {
-        img
-    };
-    let (w, h) = img.dimensions();
-    let have = w as f32 / h as f32;
-    if (w, h) == (w0, h0) && (have - aspect).abs() <= THUMB_TOLERANCE {
-        return None;
+    match fit {
+        CoverThumbFit::Crop => {
+            let (l, t, r, b) = thumb_scan_margins(&darkness_plane(&img), w0, h0);
+            let img = if (l, t, r, b) != (0, 0, 0, 0) {
+                img.crop(l, t, w0 - l - r, h0 - t - b)
+            } else {
+                img
+            };
+            let (w, h) = img.dimensions();
+            let have = w as f32 / h as f32;
+            if (w, h) == (w0, h0) && (have - aspect).abs() <= THUMB_TOLERANCE {
+                return None;
+            }
+            let (cw, ch) = if have > aspect {
+                (((h as f32 * aspect).round() as u32).clamp(1, w), h)
+            } else {
+                (w, ((w as f32 / aspect).round() as u32).clamp(1, h))
+            };
+            let img = img.crop((w - cw) / 2, (h - ch) / 2, cw, ch);
+            let scale = (THUMB_MAX_SIDE as f32 / cw.max(ch) as f32).min(1.0);
+            let img = if scale < 1.0 {
+                img.resize_lanczos3(
+                    ((cw as f32 * scale).round() as u32).max(1),
+                    ((ch as f32 * scale).round() as u32).max(1),
+                )
+            } else {
+                img
+            };
+            img.encode(ImageFormat::Jpeg, THUMB_QUALITY)
+        }
+        CoverThumbFit::Pad => {
+            let have = w0 as f32 / h0 as f32;
+            if (have - aspect).abs() <= THUMB_TOLERANCE {
+                return None;
+            }
+            // 补完的画布（原尺寸）：宽了就补上下、窄了就补左右，两边各一半（奇数多的一像素留在下/右）
+            let (cw, ch) = if have > aspect {
+                (w0, ((w0 as f32 / aspect).round() as u32).max(h0))
+            } else {
+                (((h0 as f32 * aspect).round() as u32).max(w0), h0)
+            };
+            // 长边上限按补完的画布算：内容也照同一个比例缩，补的白边不单独缩放
+            let scale = (THUMB_MAX_SIDE as f32 / cw.max(ch) as f32).min(1.0);
+            let sw = ((w0 as f32 * scale).round() as u32).max(1);
+            let sh = ((h0 as f32 * scale).round() as u32).max(1);
+            let fw = ((cw as f32 * scale).round() as u32).max(sw);
+            let fh = ((ch as f32 * scale).round() as u32).max(sh);
+            let img = if scale < 1.0 {
+                img.resize_lanczos3(sw, sh)
+            } else {
+                img
+            };
+            img.paste_on(fw, fh, (fw - sw) / 2, (fh - sh) / 2, 255)
+                .encode(ImageFormat::Jpeg, THUMB_QUALITY)
+        }
     }
-    let (cw, ch) = if have > aspect {
-        (((h as f32 * aspect).round() as u32).clamp(1, w), h)
-    } else {
-        (w, ((w as f32 / aspect).round() as u32).clamp(1, h))
-    };
-    let img = img.crop((w - cw) / 2, (h - ch) / 2, cw, ch);
-    let scale = (THUMB_MAX_SIDE as f32 / cw.max(ch) as f32).min(1.0);
-    let img = if scale < 1.0 {
-        img.resize_lanczos3(
-            ((cw as f32 * scale).round() as u32).max(1),
-            ((ch as f32 * scale).round() as u32).max(1),
-        )
-    } else {
-        img
-    };
-    img.encode(ImageFormat::Jpeg, THUMB_QUALITY)
 }
 
 /// 封面四边扫描留下的窄白边 `(左, 上, 右, 下)`：由外向内一行（列）里至少 99% 的像素比 [`THUMB_WHITE`] 亮算白，最外面
@@ -2065,25 +2107,65 @@ mod tests {
         let dims = |b: Vec<u8>| image::load_from_memory(&b).unwrap().dimensions();
         // 宽的裁左右、窄的裁上下；长边超过 1200 的缩下来；黑白屏转灰度
         assert_eq!(
-            dims(cover_thumbnail(&jpg(750, 1000), 0.65, false, MAX_DECODE_PIXELS).unwrap()),
+            dims(
+                cover_thumbnail(
+                    &jpg(750, 1000),
+                    0.65,
+                    CoverThumbFit::Crop,
+                    false,
+                    MAX_DECODE_PIXELS
+                )
+                .unwrap()
+            ),
             (650, 1000)
         );
         assert_eq!(
-            dims(cover_thumbnail(&jpg(610, 1000), 0.65, false, MAX_DECODE_PIXELS).unwrap()),
+            dims(
+                cover_thumbnail(
+                    &jpg(610, 1000),
+                    0.65,
+                    CoverThumbFit::Crop,
+                    false,
+                    MAX_DECODE_PIXELS
+                )
+                .unwrap()
+            ),
             (610, 938)
         );
         assert_eq!(
-            dims(cover_thumbnail(&jpg(1800, 2400), 0.65, false, MAX_DECODE_PIXELS).unwrap()),
+            dims(
+                cover_thumbnail(
+                    &jpg(1800, 2400),
+                    0.65,
+                    CoverThumbFit::Crop,
+                    false,
+                    MAX_DECODE_PIXELS
+                )
+                .unwrap()
+            ),
             (780, 1200)
         );
-        let g = cover_thumbnail(&jpg(750, 1000), 0.65, true, MAX_DECODE_PIXELS).unwrap();
+        let g = cover_thumbnail(
+            &jpg(750, 1000),
+            0.65,
+            CoverThumbFit::Crop,
+            true,
+            MAX_DECODE_PIXELS,
+        )
+        .unwrap();
         assert_eq!(
             image::load_from_memory(&g).unwrap().color(),
             image::ColorType::L8
         );
         // 比例差不到 0.005：不做
         assert_eq!(
-            cover_thumbnail(&jpg(652, 1000), 0.65, false, MAX_DECODE_PIXELS),
+            cover_thumbnail(
+                &jpg(652, 1000),
+                0.65,
+                CoverThumbFit::Crop,
+                false,
+                MAX_DECODE_PIXELS
+            ),
             None
         );
         // 扫描的窄白边（上 20、下 30、右 20，右边最外一列灰线）去掉再裁；白超过 5% 的那一边不动（封面本身的白底）
@@ -2114,7 +2196,9 @@ mod tests {
             (0, 20, 20, 30)
         );
         assert_eq!(
-            dims(cover_thumbnail(&scan, 0.65, true, MAX_DECODE_PIXELS).unwrap()),
+            dims(
+                cover_thumbnail(&scan, 0.65, CoverThumbFit::Crop, true, MAX_DECODE_PIXELS).unwrap()
+            ),
             (618, 950)
         );
         let poster = png(600, 1000, &|_, y| {
@@ -2135,6 +2219,103 @@ mod tests {
             ),
             (0, 0, 0, 0),
             "白占 11%、10%：不动"
+        );
+    }
+
+    #[test]
+    fn cover_thumbnail_pads_white_without_cropping() {
+        // 四块纯色，验证补白/缩放没有裁切或拉伸内容
+        let jpg = |w: u32, h: u32| {
+            let mut b = Vec::new();
+            image::DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, y| {
+                let left = x < w / 2;
+                let top = y < h / 2;
+                match (left, top) {
+                    (true, true) => image::Rgb([200, 30, 30]),
+                    (false, true) => image::Rgb([30, 200, 30]),
+                    (true, false) => image::Rgb([30, 30, 200]),
+                    (false, false) => image::Rgb([220, 220, 30]),
+                }
+            }))
+            .write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Jpeg)
+            .unwrap();
+            b
+        };
+        let aspect = 0.7403;
+        let decode = |b: &[u8]| image::load_from_memory(b).unwrap().to_rgb8();
+        let ratio_ok = |w: u32, h: u32| (w as f32 - aspect * h as f32).abs() <= 1.0;
+        // 宽封面（0.8 > 0.7403）：补上下
+        let src = jpg(800, 1000);
+        let out =
+            cover_thumbnail(&src, aspect, CoverThumbFit::Pad, false, MAX_DECODE_PIXELS).unwrap();
+        let img = decode(&out);
+        assert_eq!(img.dimensions(), (800, 1081));
+        assert!(ratio_ok(800, 1081), "比例在 ±1px 内");
+        // 上下白边
+        for y in [3, 1077] {
+            for x in [3, 400, 797] {
+                let p = img.get_pixel(x, y).0;
+                assert!(p.iter().all(|&v| v >= 240), "({x},{y}) 是白边：{p:?}");
+            }
+        }
+        // 内容没裁：四块的中心都在，且位置没被拉伸（y 偏移 40）
+        let orig = decode(&src);
+        for (x, y) in [(200, 250), (600, 250), (200, 750), (600, 750)] {
+            let a = orig.get_pixel(x, y).0;
+            let b = img.get_pixel(x, y + 40).0;
+            let diff = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap();
+            assert!(diff <= 16, "({x},{y}) 内容变了：{a:?} → {b:?}");
+        }
+        // 窄封面（0.6 < 0.7403）：补左右
+        let out = cover_thumbnail(
+            &jpg(600, 1000),
+            aspect,
+            CoverThumbFit::Pad,
+            false,
+            MAX_DECODE_PIXELS,
+        )
+        .unwrap();
+        let img = decode(&out);
+        assert_eq!(img.dimensions(), (740, 1000));
+        assert!(ratio_ok(740, 1000));
+        for x in [3, 736] {
+            let p = img.get_pixel(x, 500).0;
+            assert!(p.iter().all(|&v| v >= 240), "x={x} 是白边：{p:?}");
+        }
+        // 长边上限按补完的画布算
+        let out = cover_thumbnail(
+            &jpg(1800, 2400),
+            aspect,
+            CoverThumbFit::Pad,
+            false,
+            MAX_DECODE_PIXELS,
+        )
+        .unwrap();
+        let (w, h) = decode(&out).dimensions();
+        assert_eq!((w, h), (889, 1200));
+        assert!(ratio_ok(w, h));
+        // 比例已合：不做；黑白屏转灰度
+        assert_eq!(
+            cover_thumbnail(
+                &jpg(740, 1000),
+                aspect,
+                CoverThumbFit::Pad,
+                false,
+                MAX_DECODE_PIXELS
+            ),
+            None
+        );
+        let g = cover_thumbnail(
+            &jpg(800, 1000),
+            aspect,
+            CoverThumbFit::Pad,
+            true,
+            MAX_DECODE_PIXELS,
+        )
+        .unwrap();
+        assert_eq!(
+            image::load_from_memory(&g).unwrap().color(),
+            image::ColorType::L8
         );
     }
 

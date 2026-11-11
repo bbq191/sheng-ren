@@ -349,6 +349,7 @@
 | 定了什么 | 理由 |
 |---|---|
 | **Kindle 流式文字书一律从左往右翻**（KFX 写出器 26）：写出器只写横排（`$192` 恒为 `$376`），流式文字书不再照 spine 的 rtl 写 `$560`，一律 `$557`；spine 写了 rtl 的给一行警告。固定版式（漫画）和流式纯图页（流式漫画）仍照 spine rtl；EPUB / KEPUB 不动。只有 spine 写了 rtl 的流式文字书字节会变，别的书逐字节不变 | 维护者 2026-11-11「Kindle 翻页方向问题先单独修」：原书竖排、spine 写 rtl 的文字书，我们的 KFX 只会写横排，上 Kindle 成了「横排文字 + 从右往左翻」。推翻 2026-10-15 / 10-16「三台都照书自己写的方向翻」里 **Kindle 流式文字书**这一种情况（掌阅、Kobo、汉王和所有 EPUB/KEPUB 仍照书；漫画、日漫 rtl 不变）。竖排等 PRD 第二期，本单不做。没上真机，vinci 合并后验 |
+| **Kobo 书架封面补白到屏幕比例**（profile `cover_thumb_aspect = 0.7403`、`cover_thumb_fit = "pad"`、`cover_image_thumb = true`；v67、c68）：另做一张 `eink-thumb.jpg`，不裁不拉伸，短的那一方向两边各补一半白（`#FFFFFF`；黑白屏本来就是灰度），长边上限 1200、JPEG 质量 90 同现有缩略图；补白时不去扫描窄白边。`properties="cover-image"` 从真封面**挪到**缩略图上（真封面保留别的 properties），`<meta name="cover">` 也指缩略图，真封面的 id 记进 `<meta name="eink-thumbnail-source">`；书里的封面页、正文一概不动。补白的缩略图另写 `<meta name="eink-thumbnail-fit" content="pad"/>`，再优化时按它和比例判断留不留。换到汉王 / Kindle / 不做缩略图的设备再优化时属性、meta、三个 `eink-thumbnail*` meta 都改回真封面。**推翻** 2026-11-10 任务单「Kobo 不需要书架缩略图」的结论 | 维护者 2026-11-11 在 Clara BW 书库截图里指出「书库封面不等高」，定「Kobo 封面补白边统一成屏幕比例」：Clara BW 按封面自己的比例缩到同一宽度、底边对齐，比例宽的封面矮一截；屏幕 1072×1448 ≈ 0.7403。补白不裁内容（「书的内容一个字不多一个字不少、不裁封面任何内容」），比裁成 0.7403 安全。Kobo 书架取 `cover-image` 那张（2026-11-10 探针），所以必须把属性挪过去，不能只改 meta；`declared_cover` 靠 `eink-thumbnail-source` 认回真封面，不会把缩略图当真封面。只有 Kobo 有封面的书变，汉王、Kindle、Bigme、掌阅产物逐字节不变（版本号照例进指纹，旧书重建后内容没变的不重传）。没上真机，vinci 同步后验书架封面高度 |
 
 ## 待定
 

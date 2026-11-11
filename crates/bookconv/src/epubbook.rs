@@ -222,7 +222,9 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(
         // 2026-10-08 审计：此前自己解码、不还原字符引用，`href="a&amp;b.xhtml"` 的 media 键对不上 spine，这一章被静默跳过
         let path = it.path(&opf.dir);
         media.insert(path.clone(), it.media_type.to_string());
-        if it.properties.split_whitespace().any(|p| p == "cover-image") {
+        if it.id != crate::wash::THUMB_ID
+            && it.properties.split_whitespace().any(|p| p == "cover-image")
+        {
             cover = Some(path.clone());
         }
         let Some(&i) = index.get(&path) else { continue };
@@ -265,6 +267,11 @@ pub fn load_from<R: std::io::Read + std::io::Seek>(
         {
             cover = opf.items.get(id).cloned();
         }
+    }
+    if cover.is_none() {
+        // Kobo 产物：`cover-image` 在缩略图上，真封面的 id 记在 `eink-thumbnail-source`
+        cover = crate::wash::opf::meta_content(&opf_text, crate::wash::THUMB_SOURCE_META)
+            .and_then(|id| opf.items.get(id).cloned());
     }
     cover = cover.filter(|c| images.iter().any(|i| &i.path == c));
     let thumbnail = crate::wash::opf::meta_content(&opf_text, crate::wash::THUMB_META)

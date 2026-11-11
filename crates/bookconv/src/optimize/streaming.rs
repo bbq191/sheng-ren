@@ -140,6 +140,8 @@ fn optimize_inner(
         crate::wash::add_cover_thumbnail(
             &mut raw,
             opts.cover_meta_thumb,
+            opts.cover_image_thumb,
+            opts.cover_thumb_fit,
             |_| fits,
             |p| {
                 let bytes = crate::epubzip::read_by_name(&mut archive, p).ok()?;
@@ -147,6 +149,7 @@ fn optimize_inner(
                     crate::imgopt::cover_thumbnail(
                         &bytes,
                         aspect,
+                        opts.cover_thumb_fit,
                         opts.grayscale,
                         opts.limits.max_decode_pixels,
                     )

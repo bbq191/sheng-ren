@@ -7,7 +7,7 @@
 //! 给 profile 加了字段，先看 `profile` crate 的 `every_field_has_a_fingerprint_decision`（逼着决定它进不进指纹），
 //! 进的话在这里加一段，再重跑黄金对拍确认旧模式的指纹没变（新字段取缺省值时不能出新字母）。
 
-use profile::{Format, ImageSizing, NoteIcons, Notes, Profile, Screen};
+use profile::{CoverThumbFit, Format, ImageSizing, NoteIcons, Notes, Profile, Screen};
 
 /// 设备相关的几段指纹（[`device_sig`]）。
 pub(crate) struct DeviceSig {
@@ -69,9 +69,17 @@ fn shared_seg(device: &Profile) -> String {
     // 书架缩略图（`t` + 宽高比，2026-10-30）：不做的模式不出新字母
     if let Some(a) = device.cover_thumb_aspect {
         s.push_str(&format!("t{a}"));
+        // 补白凑比例（`p`，2026-11-11，Kobo）：裁的模式不出新字母
+        if device.cover_thumb_fit == CoverThumbFit::Pad {
+            s.push('p');
+        }
         // meta cover 指向缩略图（`M`，2026-11-03，掌阅）：不开的模式不出新字母
         if device.cover_meta_thumb {
             s.push('M');
+        }
+        // `cover-image` 挪到缩略图上（`C`，2026-11-11，Kobo）：不开的模式不出新字母
+        if device.cover_image_thumb {
+            s.push('C');
         }
     }
     s

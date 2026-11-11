@@ -391,6 +391,8 @@ fn cover_thumbnail_added_beside_cover_once() {
     assert!(add_cover_thumbnail(
         &mut v,
         false,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| true,
         |p| {
             asked = Some(p.to_string());
@@ -414,7 +416,14 @@ fn cover_thumbnail_added_beside_cover_once() {
     );
     assert_eq!(s(&v, "O/eink-thumb.jpg"), "jpg");
     assert!(
-        !add_cover_thumbnail(&mut v, false, |_| true, |_| Some(Vec::new())),
+        !add_cover_thumbnail(
+            &mut v,
+            false,
+            false,
+            profile::CoverThumbFit::Crop,
+            |_| true,
+            |_| Some(Vec::new())
+        ),
         "已经有了不再加"
     );
     // 比例本来就对（不给字节）：不加
@@ -422,7 +431,14 @@ fn cover_thumbnail_added_beside_cover_once() {
         "content.opf",
         r#"<package><metadata/><manifest><item id="c" href="c.jpg" media-type="image/jpeg" properties="cover-image"/></manifest><spine/></package>"#,
     )];
-    assert!(!add_cover_thumbnail(&mut w, false, |_| true, |_| None));
+    assert!(!add_cover_thumbnail(
+        &mut w,
+        false,
+        false,
+        profile::CoverThumbFit::Crop,
+        |_| true,
+        |_| None
+    ));
 }
 
 #[test]
@@ -3423,6 +3439,8 @@ fn cover_thumbnail_as_meta_cover() {
         assert!(add_cover_thumbnail(
             &mut v,
             true,
+            false,
+            profile::CoverThumbFit::Crop,
             |_| true,
             |_| Some(b"jpg".to_vec())
         ));
@@ -3451,6 +3469,8 @@ fn cover_thumbnail_as_meta_cover() {
         assert!(!add_cover_thumbnail(
             &mut v,
             true,
+            false,
+            profile::CoverThumbFit::Crop,
             |_| true,
             |_| panic!("不再裁")
         ));
@@ -3461,12 +3481,16 @@ fn cover_thumbnail_as_meta_cover() {
     assert!(add_cover_thumbnail(
         &mut v,
         false,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| true,
         |_| Some(b"jpg".to_vec())
     ));
     assert!(add_cover_thumbnail(
         &mut v,
         true,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| true,
         |_| panic!("不再裁")
     ));
@@ -3501,6 +3525,8 @@ fn cover_thumbnail_follows_mode_on_reoptimize() {
         assert!(add_cover_thumbnail(
             &mut v,
             true,
+            false,
+            profile::CoverThumbFit::Crop,
             |_| true,
             |_| Some(b"old".to_vec())
         ));
@@ -3518,6 +3544,8 @@ fn cover_thumbnail_follows_mode_on_reoptimize() {
     assert!(add_cover_thumbnail(
         &mut v,
         false,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| true,
         |_| panic!("不重裁")
     ));
@@ -3526,6 +3554,8 @@ fn cover_thumbnail_follows_mode_on_reoptimize() {
     assert!(!add_cover_thumbnail(
         &mut v,
         false,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| true,
         |_| panic!("不重裁")
     ));
@@ -3534,6 +3564,8 @@ fn cover_thumbnail_follows_mode_on_reoptimize() {
     assert!(add_cover_thumbnail(
         &mut v,
         false,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| false,
         |p| {
             assert_eq!(p, "O/I/c.jpg", "照真封面重裁");
@@ -3549,17 +3581,26 @@ fn cover_thumbnail_follows_mode_on_reoptimize() {
     assert!(!add_cover_thumbnail(
         &mut v,
         false,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| true,
         |_| panic!("不重裁")
     ));
     // 比例不对、这次比例本来就对（make 不给）：只去掉
     let mut v = ireader();
-    assert!(add_cover_thumbnail(&mut v, true, |_| false, |_| None));
+    assert!(add_cover_thumbnail(
+        &mut v,
+        true,
+        false,
+        profile::CoverThumbFit::Crop,
+        |_| false,
+        |_| None
+    ));
     let opf = s(&v, "O/content.opf");
     assert_eq!(thumbs(&v), 0);
     assert!(!opf.contains("eink-thumb"), "{opf}");
     assert_eq!(metas(&v), ["c"]);
-    // 这次的设备不做缩略图（Kobo）：整张去掉
+    // 这次的设备不做缩略图（Bigme）：整张去掉
     let mut v = ireader();
     assert!(drop_cover_thumbnail(&mut v));
     let opf = s(&v, "O/content.opf");
@@ -3581,6 +3622,8 @@ fn cover_thumbnail_follows_mode_on_reoptimize() {
     assert!(!add_cover_thumbnail(
         &mut w,
         false,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| panic!(),
         |_| panic!()
     ));
@@ -3603,6 +3646,8 @@ fn point_meta_cover_keeps_prefix_and_needs_metadata_only_to_insert() {
     assert!(add_cover_thumbnail(
         &mut v,
         true,
+        false,
+        profile::CoverThumbFit::Crop,
         |_| true,
         |_| Some(b"j".to_vec())
     ));
