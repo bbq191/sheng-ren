@@ -125,6 +125,11 @@ KFX 写出器现在只会写横排。横排的书按从右往左翻是错的，�
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：通过 / 退回（附证据：命令输出、路径:行号）
+- 验收：通过（sheng-ren，2026-11-11，box 复跑 `78efe5a`）
+  - `cargo fmt --all -- --check` 干净；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test --workspace` 全过（kfx 53、library 537 等，0 failed）。
+  - 金样：`diff <(git show 0c92e5c:crates/library/tests/fp_golden.txt | sed 's/kfx25/kfx26/g') crates/library/tests/fp_golden.txt` 无输出——除写出器版本号外 0 变化，别的设备没动。
+  - 方向逻辑 `crates/kfx/src/write/mod.rs`：spine 不是 rtl → LTR；固定版式或全部文档都是单图页 → 保留 RTL；其余流式文字书 → LTR 并给警告。和任务单规则一致；`single_image_page`（`layout.rs`）与版面判定共用，没有两套判定。
+  - 三个新测试覆盖 bug 本身（改前失败）、不写 rtl 的文字书、流式纯图页保留 rtl；已有的漫画 rtl 守护测试照过。
+  - 留给二审的线索：流式漫画里只要夹一页文字（版权页、作者后记），整本就按 LTR 翻。Kindle 漫画走固定版式，影响应很小，请二审核实。
 - 二审：回执 `.dev/tasks/2026-11-11-kindle-text-rtl.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由
 - 合并：PR 链接、合并提交号；状态改为 verified
