@@ -62,6 +62,11 @@ pub(super) struct SectionOut {
     pub(super) first_eid: i64,
 }
 
+/// 这个文档是不是只有一张图（封面、插图页、流式漫画的一页）：版面写成整页图片。翻页方向也用它判流式漫画。
+pub(super) fn single_image_page(blocks: &[Block]) -> bool {
+    blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. })
+}
+
 /// 固定版式（漫画，优化器 `comicfxl` 写的 `fixed-layout`/`original-resolution`）：画布宽高（取不到写 0）。见 docs/kfx.md#固定版式。
 pub(super) fn fixed_canvas(book: &Loaded) -> Option<(i64, i64)> {
     (!book.meta.fixed_layout.is_empty()).then(|| {
@@ -125,7 +130,7 @@ pub(super) fn lay_out(
             last_end: None,
         };
         // 只有一张图的文档写成整页图片版面（封面、插图页），和样本一样。
-        let single_image = blocks.len() == 1 && matches!(blocks[0].kind, Kind::Image { .. });
+        let single_image = single_image_page(&blocks);
         let nodes: Vec<Value> = if let (true, Some((cw, ch)), Kind::Image { src, .. }) =
             (single_image, fixed_canvas, &blocks[0].kind)
         {
