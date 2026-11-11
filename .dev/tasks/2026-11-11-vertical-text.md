@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-vertical-text
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: vertical-text（从最新 master `10ce515` 或更新的切出）
-- 更新时间: 2026-11-11T17:55+08:00
+- 更新时间: 2026-11-11T18:10+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`；Kindle 翻页方向已由 `2026-11-11-kindle-text-rtl` 单独修好）
 
 ## 需求原文
@@ -251,6 +251,17 @@ vinci 2026-11-11 的决定（原话或口述结论）：
 - **线索 1–6 不要求本次改，未动**（`p` 左右段距是否会盖过书里 `p{margin:0}`、表格里的全角数字、Kobo 空注释页、`--no-wash --vertical` 不挂样式、`@media` 内规则、Kobo 漫画指纹）。
 - 返工后测试：`cargo test --workspace` 全过（bookconv 552、library 71+7+14+48+1、profile 19、kfx 53、csscascade 16），`cargo clippy --workspace --all-targets -- -D warnings` 0 警告，`cargo fmt --all -- --check` 干净。
 - **仍然没跑真书回归、没上真机**；真机验证项同上面「未完成」。
+
+### 二审后返工（2026-11-11，agy 二审无阻断，三条建议 + 一条线索）
+
+- 状态改回 accepted（`5b3da84`），返工提交 `4aacf74`。
+- **`!important` 简写**：`rotate_box_values` 先剥掉末尾 `!important`（大小写、空白都容忍），旋转后接回；补 1/2/3/4 值各带 `!important` 的测试，不再出现 `margin: !important 1em` 这种非法写法。
+- **原生竖排判定**：`is_natively_vertical` 只认作用在 `html` / `body` / `:root` 上的 `writing-mode`（可带类、属性、伪类，如 `body.v`、`html[lang]`）；选择器按最右一节**整词**比元素名，不再用 `contains("rt")` 子串，`.article`、`.part` 之类局部类不会被误排除或误判全书竖排，`.signature` 这类局部竖排也不算。补 `.article` / `body.v` / `html table` 测试；台版合成书（`html{writing-mode:vertical-rl}`）仍判原生竖排、CSS 逐字节不变。
+- **实体识别**：全角里 `&` 后只有 `[A-Za-z0-9#]` 开头、其后全 `[A-Za-z0-9]` 直到 `;`（≤32 字符）才当实体；遇空白、标点立即当普通 `&` 转 `＆`。`Tom & Jerry; 2026` → `Ｔｏｍ ＆ Ｊｅｒｒｙ； ２０２６`，`&amp;`、`&#x4E2D;` 仍整体保留。
+- **英寸号**：数字后的 `"` 后面不是字母/汉字时当英寸号，不参与直引号配对；`12" x 14"` → `１２＂ ｘ １４＂`，`他说"好"` 仍是『好』。
+- `border-radius` 多值简写、规则 7 文档拆提交、Kobo 空注释页、`eink-vertical.css` 段距：按二审「不修」或后续单处理，未动。
+- 返工后测试：`cargo test --workspace` 全过，`cargo clippy --workspace --all-targets -- -D warnings` 0 警告，`cargo fmt --all -- --check` 干净。
+- **仍然没跑真书回归、没上真机。**
 
 ## 审查
 <!-- 负责 bot 填写 -->
