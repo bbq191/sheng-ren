@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-11-kobo-cover-pad
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: kobo-cover-pad（从 master `fe5bb44` 切出）
 - 更新时间: 2026-11-11T14:10+08:00
@@ -120,5 +120,8 @@
   - 留给二审的线索：
     1. 版本号进每一行指纹，四台全部书下次 sync 都会重建；执行方说字节不变的不重传——请核实传输层是按产物字节判断（Kindle 进度不能因此清零）。
     2. `epubbook.rs` 跳过 `eink-thumb` 的改动是否影响 Kindle 读 `eink-thumbnail` 作书架封面的现有路径。
-- 二审：回执 `.dev/tasks/2026-11-11-kobo-cover-pad.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由
-- 合并：合并提交号；状态改为 verified
+- 二审：回执 `.dev/tasks/2026-11-11-kobo-cover-pad.agy.md`（`b8f9e83`）：阻断 0、建议 1、线索 1。
+  - 建议「`arrange_cover_thumb` 认不回封面时加 debug 日志」：本次不改。只有手工弄坏的 OPF 才会走到，属于以后可做的小改进。
+  - 线索「Nickel 书架封面缓存在 `.kobo-images/`」：留给 vinci 真机验收时观察，旧书封面不刷新就记下现象。
+  - 验收时我请二审核实的两条（传输层只重传字节变了的书，Kindle 读 `eink-thumbnail` 的路径不受影响）二审都核实通过。
+- 合并：`--no-ff` 合并到 master，见合并提交；状态改为 verified
