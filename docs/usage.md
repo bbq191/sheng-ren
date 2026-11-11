@@ -53,6 +53,7 @@
 |---|---|
 | `booklib add <文件或网址>...` | 入库单个文件或网址（一次性） |
 | `booklib track [--device=…] [--top] <目录或书>...` / `untrack [--device=…] <目录或书>...` | 跟踪书目录（递归）或单本书，可以只给某几台设备 / 不再跟踪（下次 `sync` 连同产物删掉） |
+| `booklib vertical --on\|--off\|--auto <书或目录>...` | 这本 / 这个目录下的书竖不竖排（自动判定之外的覆盖；只对 Kobo、汉王这类开了 `vertical_text` 的设备有意义，漫画、固定版式不竖排） |
 | `booklib sync [--device=…] [--force] [--no-build] [--keep] [--watch[=秒]] [书...]` | 把跟踪的目录同步进书库（原件删了的连同设备上的产物删掉），接着按阅读模式生成、传到接着的设备 |
 | `booklib list [书...]` | 列出书和各设备上的产物、是否最新 |
 | `booklib meta --fetch [--force] [--clear] [书...]` | 联网补简介、标签、封面 |
@@ -191,11 +192,23 @@ booklib sync --watch                      # 一直运行，每 60 秒查一次�
 - **体检**（掌阅的文字书，生成时按怪癖表 `crates/bookconv/data/css-quirks.toml` 查的，2026-10-13）：`✗` 是这本书用到的、在这台上和 Kindle 显示得不一样又还没处理的写法（属性、值的种类、用在哪种元素上、写在哪：外链样式表 / `<style>` / 行内 style，后面是用到的元素数和原因）；`?` 是怪癖表里还没有、没验证过的写法。只是提示，书照常生成；记的是最近一次生成时的结果。
 - `list` 只读，别的命令运行时也能用。
 
+### vertical：按书 / 按目录覆盖竖排
+
+Kobo、汉王的中文文字书按判定自动竖排（判定和规则见 `docs/typesetting.md` 的「竖排」一节）；判错或想例外时用：
+
+```sh
+booklib vertical --off 三体              # 这本不竖排（书名片段、id 或原件路径，同 list）
+booklib vertical --on 技术               # 这个目录强制竖排；写进书库根的 vertical.toml，现有的书逐本写上，新入库的继承
+booklib vertical --auto 技术             # 删掉目录覆盖，回到自动判定
+```
+
+- 优先级：书自己的 `layout.vertical` → `vertical.toml` 目录清单（最长前缀胜）→ 自动判定。
+- 只对开了 `vertical_text` 的设备有意义；漫画、固定版式书强制 `--on` 也不会竖排。`booklib list` 的设备行会显示 `竖排` / `横排`。
+
 ### meta --fetch：联网补元数据和封面
 
 `sync` 生成前会给还没找过的书（含漫画）自动找一次（见下），平时不用手动跑；`meta --fetch` 用来重找、去掉找错的。
 `meta` 必须写明 `--fetch`、`--show` 还是 `--edit`（光写 `booklib meta` 报用法错，免得一不小心给全部书联网）。
-
 ```sh
 booklib meta --fetch                  # 所有书（找过的跳过）
 booklib meta --fetch 白夜行            # 只找某本
@@ -377,6 +390,7 @@ epub-to-kepub 优化后.epub 输出.kepub.epub              # KEPUB 写出（书
 | `--keep-spacing` | 保留原书的段间距。**对文字书无效**（只修复本来就不动段间距） |
 | `--auto-toc` | 从标题强制重建目录。**对文字书无效**（只修复按缺省：书没有目录才生成） |
 | `--keep-color` | 黑白屏模式的漫画也保留彩色（用来比较体积、画质） |
+| `--vertical` | 强制按竖排处理（出竖排测试书；profile 没开 `vertical_text` 也照开，ASCII 按 profile 的 `vertical_ascii`）。正文引号 / 全角、竖排样式、spine rtl、`primary-writing-mode` 都做 |
 | `--check` | 产物过质量门，打印 JSON 报告；没过退出码 3（产物照样写出） |
 | `--require-toc` | 和 `--check` 一起用：没有目录也算质量门没过 |
 

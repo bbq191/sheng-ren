@@ -4,7 +4,7 @@
 mod common;
 
 use common::{jpeg, sample_epub};
-use profile::{CoverThumbFit, ImageSizing, NoteIcons, Notes, Profile, Screen};
+use profile::{CoverThumbFit, ImageSizing, NoteIcons, Notes, Profile, Screen, VerticalAscii};
 use std::io::Write;
 
 type Mutation = (&'static str, Box<dyn Fn(&mut Profile)>);
@@ -228,6 +228,30 @@ fn mutations() -> Vec<Mutation> {
             }
         }),
     ));
+    // 2026-11-11 竖排字段：放在最后，旧行不挪
+    v.push((
+        "vertical_text",
+        Box::new(|p| {
+            p.vertical_text = !p.vertical_text;
+            if !p.vertical_text {
+                p.vertical_ascii = VerticalAscii::Keep;
+            }
+        }),
+    ));
+    v.push((
+        "vertical_ascii",
+        // 非 keep 要开 vertical_text（单开不合法）
+        Box::new(|p| {
+            p.vertical_ascii = if p.vertical_ascii == VerticalAscii::Fullwidth {
+                VerticalAscii::Keep
+            } else {
+                VerticalAscii::Fullwidth
+            };
+            if p.vertical_ascii != VerticalAscii::Keep {
+                p.vertical_text = true;
+            }
+        }),
+    ));
     v
 }
 
@@ -268,6 +292,10 @@ fn fingerprints_match_the_golden_file() {
             assert!(
                 p.cover_thumb_fit != CoverThumbFit::Pad || p.cover_thumb_aspect.is_some(),
                 "{dev} {name}：变出了不合法的 profile（cover_thumb_fit）"
+            );
+            assert!(
+                p.vertical_ascii == VerticalAscii::Keep || p.vertical_text,
+                "{dev} {name}：变出了不合法的 profile（vertical_ascii）"
             );
             for (kind, meta) in [("text", &text), ("comic", &comic)] {
                 let fp = lib

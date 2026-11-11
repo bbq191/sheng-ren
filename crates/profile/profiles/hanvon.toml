@@ -22,6 +22,9 @@ background_images = true           # 推断：沿用（待确认）
 # 书架缩略图：2026-11-06 书架框≈0.753，封面拉伸不裁；meta 指向缩略图同掌阅，待真机确认书架用的是缩略图
 cover_thumb_aspect = 0.754
 cover_meta_thumb = true
+# 竖排（2026-11-11 测试书 01–13 实机通过，vinci 定）：中文文字书竖排，半角 ASCII 全部转全角竖立
+vertical_text = true
+vertical_ascii = "fullwidth"
 
 [screen]                           # 来源：公开参数页 1448×1072（竖屏写成宽 1072、高 1448）
 width = 1072

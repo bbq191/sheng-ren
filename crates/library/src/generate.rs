@@ -146,6 +146,17 @@ impl Library {
         } else {
             info
         };
+        // 最终竖排的书在 info 段后接 `V`（2026-11-11）；全角 ASCII（`vertical_ascii = fullwidth`）再接 `f`。
+        // 不竖排的书不出新字母，指纹除版本号外不变。
+        let info = if self.vertical_for(meta, device)? {
+            let mut s = format!("{info}V");
+            if device.vertical_ascii == profile::VerticalAscii::Fullwidth {
+                s.push('f');
+            }
+            s
+        } else {
+            info
+        };
         // 要当场转换的来源（CBZ）再带上格式转换的版本；写在流程版本后面，EPUB 来源的指纹保持原样（不白重建）
         let pipeline = if meta.content_format() == "epub" {
             PIPELINE_VERSION.to_string()
@@ -317,7 +328,7 @@ impl Library {
 
     /// 原件被跟踪着（有给这台设备的条目覆盖它）的话：(子目录以哪个目录为准（书根目录）, 设备上的子目录)，见
     /// [`crate::sources::Sources::placement`]。
-    fn tracked_rel(&self, meta: &Meta, device: &str) -> Option<(PathBuf, PathBuf)> {
+    pub(crate) fn tracked_rel(&self, meta: &Meta, device: &str) -> Option<(PathBuf, PathBuf)> {
         if meta.source() == crate::Source::Stored || meta.source_path.is_empty() {
             return None;
         }
@@ -923,6 +934,8 @@ impl Library {
         let mut opts = bookconv::optimize::OptimizeOpts::for_profile(device);
         // 按书指定翻页方向（Bangumi 判成日本漫画的 rtl）；其余留给原书、profile
         opts.page_direction = crate::metadata::comic_direction(meta, device, comic);
+        // 竖排（书自己的 layout.vertical → 目录清单 → 自动判定；漫画、固定版式不竖排）
+        opts.set_vertical(self.vertical_for(meta, device)?);
         // 要转 KFX 的，优化结果先放临时目录
         let optimized = if format == Format::Epub {
             part.to_path_buf()

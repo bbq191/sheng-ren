@@ -25,6 +25,7 @@ Kobo 自带阅读器（Nickel）看到 `.kepub.epub` 扩展名就用 Kobo WebKit
 - 不包：`script style svg math head title rt rp textarea audio video canvas noscript template iframe object` 里的文字；`pre` 不切句，每段文字包一次；
 - 不改：OPF、CSS、图片（压缩数据原样拷）、导航文档（nav、ncx、目录页）、已经是 KEPUB 的章节；`mimetype` 第一个、不压缩；
 - **不加** Kobo 的样式补丁（会改书的版式，维护者定）。书里 CSS 有裸 `div`/`span` 或 `body >` 选择器时只报警告（可能匹配到包装和 koboSpan）。
+- **竖排**（2026-11-11）：优化器产出的竖排书（`eink-vertical.css`、全角文字）照旧只插 koboSpan / 包装，不拆全角串、不进 `rt`/`rp`，也不碰 `<link>`；`eink-vertical.css` 原样拷。没上真机，vinci 同步后在 Clara BW 上看竖排翻页和弹窗注释。
 
 产物再过一次质量门。书库指纹里格式段是 `kepub<VERSION>`（`bookconv::kepub::VERSION`，改写法就加一）。Kobo 没有 `.sdr`，换目录不搬。
 

@@ -27,6 +27,8 @@ background_images = true           # 推断：沿用（待确认）
 # cover_thumb_aspect、cover_meta_thumb 都不写：2026-11-10 真机书架网格框 240×296（≈0.81），封面保持原比例、按框宽缩放、顶部对齐；
 # 0.75 / 1.00 的封面比框矮、下面留白，0.50 的上下被裁。封面来源探针是 C＝正文第一页，xReader 不认 cover-image / meta cover，eink-thumb 不管用。
 # 让正文第一页的封面做成 0.81 会改书里的封面页，待定，本次不做。
+# 不竖排（2026-11-11 实机）：xReader 不竖排、KOReader（上游）也不会竖排
+vertical_text = false
 
 [screen]                           # 来源：公开资料 1680×1264（竖屏写成宽 1264、高 1680）；2026-11-10 真机 wm size 核对
 width = 1264

@@ -219,6 +219,7 @@
 2026-10-15 对拍发现 `background_auto_height`、`margin_top` 改值时产物会变但指纹不变，补成 `kindle_rules` 段的 `h`、`p`（掌阅、Move 的文字书各重新生成一次，内容没变的不重传）。
 2026-10-16 加的中间调加深（`comic_gamma`、`image_gamma`）开着时在这一路阅读范围段的最后写 `G` + 伽马（如 `G1.1`）；不开的模式不出新字母，指纹不变（Kindle 2026-10-26 开了以后三台都带 `G1.1`）。漫画的 `G` 段后面再有拉满对比度的 `A`、杂点不挡裁白边的 `S`、裁页码的 `P`（`comic_autocontrast`、`comic_trim_specks`、`comic_page_numbers`，2026-10-30，2026-11-10 起四台都开），小页不放大（`comic_upscale = false`）再加 `N`，黑底页补边补底色（`comic_dark_bg`，2026-11-01，2026-11-10 起四台都开）再加 `K`，横向跨页拆成两张竖页（`comic_split_spreads`，2026-11-10）再加 `W`：Kindle 漫画是 `G1.1ASPKW`。两路共用的那段末尾有书架缩略图的 `t` + 宽高比（`cover_thumb_aspect`，2026-10-30，Kindle 是 `t0.65`），补白凑比例（`cover_thumb_fit = "pad"`，2026-11-11）再加 `p`，`<meta name="cover">` 指向缩略图（`cover_meta_thumb`，2026-11-03）再加 `M`，`cover-image` 挪到缩略图上（`cover_image_thumb`，2026-11-11）再加 `C`：掌阅是 `t0.754M`，Kobo 是 `t0.7403pC`。
 2026-11-10 起，书库按 Bangumi 元数据把日本漫画的翻页方向固定成 rtl（profile `comic_meta_direction`）：满足条件的书在指纹的 `info` 段后接 `r`（`library/src/generate.rs` 的 `metadata::comic_direction`），其余书指纹一个字不变；这个方向不进设备段，免得四台的全部漫画白白重建。
+2026-11-11 起，最终竖排的书（书库按书判定 / `layout.vertical` / `vertical.toml` 目录清单）在 `info` 段后接 `V`，`vertical_ascii = "fullwidth"` 再接 `f`；不竖排的书不出新字母。竖排的两个 profile 字段本身不进设备段（不然没竖排的书也全部重建）。
 
 版本号什么时候加一、现在是多少，见[开发 · 版本号](development.md#版本号)。
 

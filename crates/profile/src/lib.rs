@@ -1711,6 +1711,12 @@ mod tests {
             (k.screen.width, k.screen.height, k.color, k.format()),
             (1072, 1448, false, Format::Kepub)
         );
+        assert_eq!(
+            (k.notes.mode, k.repair_note_links),
+            (Notes::Jump, false),
+            "Kobo 注释弹窗放在下一个提交（规则 7）"
+        );
+        assert!(k.vertical_text && k.vertical_ascii == VerticalAscii::Fullwidth);
         let h = get("hanvon").unwrap();
         assert_eq!(
             h.deliver,

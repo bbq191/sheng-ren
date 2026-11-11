@@ -187,6 +187,24 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
         lock: never,
         run: cmd_devices,
     },
+    Command {
+        name: "vertical",
+        synopsis: &["vertical --on|--off|--auto <书或目录>…"],
+        brief: "这本 / 这个目录下的书竖不竖排（自动判定之外的按书、按目录覆盖）",
+        detail: "\
+只对开了 vertical_text 的设备（Kobo、汉王）有意义；漫画、固定版式书不竖排。
+  --on    强制竖排（自动判定没认出的中文书）
+  --off   不竖排
+  --auto  删掉覆盖，回到自动判定
+给书：写 / 删这本书的覆盖；给目录：写进书库根的 vertical.toml（相对书根目录、前缀匹配），
+并把这个目录下现有的书逐本写上，以后入库到这个目录的书继承。最长前缀胜。
+相对路径先按当前目录找，找不到按书根目录找。",
+        opts: &[],
+        flags: &["on", "off", "auto"],
+        check: check_vertical,
+        lock: always,
+        run: cmd_vertical,
+    },
 ];
 
 /// 日常用法、通用选项、环境变量、退出码（`booklib --help` 的头尾）。
@@ -878,6 +896,67 @@ fn meta_writes(a: &Args) -> bool {
     !a.has("show")
 }
 
+fn check_vertical(c: &Command, a: &Args) {
+    check_options(c, a);
+    let n = ["on", "off", "auto"].iter().filter(|f| a.has(f)).count();
+    if n != 1 {
+        usage_error("vertical 要选一种：--on（强制竖排）、--off（不竖排）或 --auto（回到自动判定）");
+    }
+    if a.pos.len() < 2 {
+        usage_error("vertical 要写书或目录");
+    }
+}
+
+fn cmd_vertical(ctx: &Ctx) {
+    let lib = ctx.lib;
+    let value = if ctx.args.has("on") {
+        Some(true)
+    } else if ctx.args.has("off") {
+        Some(false)
+    } else {
+        None
+    };
+    let root = lib.books_root();
+    for arg in ctx.rest() {
+        let raw = PathBuf::from(arg);
+        let path = if raw.exists() {
+            raw
+        } else if let Some(r) = root.as_ref().filter(|_| !raw.is_absolute()) {
+            let p = r.join(&raw);
+            if p.exists() {
+                p
+            } else {
+                raw
+            }
+        } else {
+            raw
+        };
+        if path.is_dir() {
+            let dir = lib.dir_arg(&path);
+            match lib.set_dir_vertical(&dir, value) {
+                Ok(n) => println!("✓ 目录 {dir}/ 下的 {n} 本书已更新（以后入库的继承）"),
+                Err(e) => ctx.fail_line(&e),
+            }
+        } else if let Some(m) = lib.book_by_path(&path) {
+            match lib.set_book_vertical(&m.id, value) {
+                Ok(()) => println!(
+                    "✓ {}  {}  {}",
+                    m.id,
+                    m.title,
+                    match value {
+                        Some(true) => "强制竖排",
+                        Some(false) => "不竖排",
+                        None => "自动判定",
+                    }
+                ),
+                Err(e) => ctx.fail_line(&e),
+            }
+        } else {
+            ctx.fail_line(&format!("{} 不是已跟踪的书或目录", path.display()));
+        }
+    }
+}
+
 fn cmd_devices(ctx: &Ctx) {
     let lib = ctx.lib;
     for p in lib.devices().iter() {
@@ -900,6 +979,14 @@ fn cmd_devices(ctx: &Ctx) {
             r.height,
             if p.color { "彩色" } else { "黑白" }
         );
+        if p.vertical_text {
+            let ascii = match p.vertical_ascii {
+                library::VerticalAscii::Fullwidth => "，ASCII 全角",
+                library::VerticalAscii::Keep => "，ASCII 原样",
+                library::VerticalAscii::Tcy => "",
+            };
+            println!("{:<12} 中文文字书竖排{ascii}", "");
+        }
         match lib.device_status(p) {
             Ok(Some(at)) => println!("{:<12} ✓ 接上了：{at}", ""),
             Ok(None) => println!("{:<12} 产物放电脑上", ""),
@@ -973,7 +1060,19 @@ fn cmd_list(ctx: &Ctx) {
             } else {
                 "✗ 不在这台的跟踪范围（下次 sync 从设备上删）"
             };
-            println!("      {:<20} {state}  {}", o.device, shown.display());
+            let vertical = lib.devices().get(&o.device).filter(|p| p.vertical_text).map(|p| {
+                if lib.vertical_for(&m, p).unwrap_or(false) {
+                    "竖排"
+                } else {
+                    "横排"
+                }
+            });
+            println!(
+                "      {:<20} {state}  {}{}",
+                o.device,
+                shown.display(),
+                vertical.map_or(String::new(), |v| format!("  {v}"))
+            );
             // 体检（生成时记下的）：和 Kindle 不一样又没处理的逐条列出，没验证过的合成一行
             for line in o.audit.iter().filter(|l| l.starts_with('✗')) {
                 println!("        体检 {line}");

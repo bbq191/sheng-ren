@@ -5,7 +5,7 @@ color = false                      # 来源：官网/factsheet，黑白屏（Cla
 # 出 KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者 2026-11-01 以前在 Kobo 上试过）：clean-room 写出器
 # bookconv::kepub（docs/kepub.md）。漫画也是 .kepub.epub；固定版式看 OPF 声明、不靠 .fxl 文件名，A/B 结论见 docs/kepub.md（2026-11-05 真机）
 formats = ["kepub"]
-notes = "jump"                     # 推断：最稳；Nickel 对 EPUB 弹窗注释支持待真机测（待确认）
+notes = "jump"                     # 2026-11-11 竖排单暂不改；注释弹窗在下一个提交
 note_icons = "number"              # 推断：同另两台
 caption_fit = true                 # 推断：同另两台（待确认）
 text_repair_only = true            # 维护者 2026-10-08 定的三台统一规则，沿用
@@ -31,6 +31,9 @@ cover_thumb_aspect = 0.7403
 cover_thumb_fit = "pad"
 cover_image_thumb = true
 # cover_meta_thumb 不写：书架认 cover-image，meta cover 跟着 cover_image_thumb 指缩略图就够了
+# 竖排（2026-11-11 测试书 01–13 实机通过，vinci 定）：中文文字书竖排，半角 ASCII 全部转全角竖立
+vertical_text = true
+vertical_ascii = "fullwidth"
 # font_px / line_px / em_px：待测试书量
 
 [screen]                           # 来源：官网 1448×1072（竖屏写成宽 1072、高 1448）

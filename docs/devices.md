@@ -132,7 +132,7 @@
 | `formats`（必填） | 产物格式 | `["kfx"]` | `["epub"]` | Kindle 自带阅读器 USB 传书不认 EPUB；`kfx` 是先按同样规则优化出 EPUB 再转（AZW3 写出器 2026-10-09 删了，KFX 取代） |
 | `color`（必填） | 彩色屏 | `false` | `false` | 黑白屏的漫画转 256 级灰度 |
 | `[screen]`、`[readable.<格式>]` | 屏幕、真实可阅读范围（不写 = 屏幕） | 1272×1696、1104×1546 | 整屏 | 阅读器各自留页边距、页眉页脚，见[可阅读范围](#可阅读范围) |
-| `notes`（必填） | 完整优化时注释怎么写：`"jump"` 普通链接、注释搬到章末；`"popup"` 再标上 `epub:type="noteref"` + `<aside epub:type="footnote">`。**只修复时不生效**（xochitl 只用它的搬移部分） | jump | popup | 掌阅自带阅读器认弹窗（2026-10-05 真机）；xochitl 只认同文件跳转。Kindle 的弹窗由 KFX 写出器自己配（见[排版 · 注释](typesetting.md#3-注释完整优化弹窗小一号)） |
+| `notes`（必填） | 完整优化时注释怎么写：`"jump"` 普通链接、注释搬到章末；`"popup"` 再标上 `epub:type="noteref"` + `<aside epub:type="footnote">`。**只修复时走 `repair_note_links`**（竖排书、Kobo 用它） | jump | popup | 掌阅自带阅读器认弹窗（2026-10-05 真机）；Kobo 2026-11-11 实机（测试书 05）也是「预览注释」弹窗，`kobo.toml` 写 `popup` + `repair_note_links = true`，横排竖排都弹；汉王、Bigme 还是 jump。Kindle 的弹窗由 KFX 写出器自己配（见[排版 · 注释](typesetting.md#3-注释完整优化弹窗小一号)） |
 | `note_icons`（`"keep"`） | 只有图标的注释标号：保留图标，或换成上标数字。只修复时只在开了 `repair_note_links` 时生效 | number | number | xochitl 里只有图的链接点不了、CSS 限不住图标；另两台也用数字，都验证过能跳 |
 | `note_backlinks`（`true`） | 保留注释里"跳回正文"的回链。只修复时同上 | 保留 | 保留 | Kindle 点注释后没有可靠的"返回"，要靠回链；xochitl 遇到互相链接的一对会整对丢掉（正向也点不动） |
 | `comic_margin`（1） | 漫画的图到画布四边的白边（像素） | 1 | 1 | xochitl 页边距设成 1 后自己就留了 1px |
@@ -150,7 +150,7 @@
 | `image_alpha`（`true`） | 阅读器能正确显示图片的透明通道；`false` 时正文 `<img>`/SVG `<image>` 用到的、有透明像素的 PNG 先合成到白底（CSS 背景图不动；v50） | 不能 | 能 | Kindle（KFX）把透明处显示成黑色（《绍宋》章标题图，2026-10-06 真机；《飘》章头图整块黑，2026-10-12），掌阅显示正确。只修复以后优化器不再合成；KFX 写出器 18 起写进 KFX 时合成（只对 Kindle，书里的 EPUB 不动，2026-10-12 定，真机 ✓） |
 | `text_repair_only`（`false`） | 文字书只修复：EPUB 3 规范整理和目录到节，文字、图片、样式一概不动（图片的例外是 `image_gamma`）；上面 `background_images` 到 `image_alpha` 这些文字书的规则都不生效，注释的规则只在开了 `repair_note_links` 时生效（见[排版 · 只修复](typesetting.md#只修复各模式的文字书)） | `true` | `true` | 2026-10-08 定：不动书里任何文字、图片、格式、样式。漫画不受影响 |
 | `kindle_rules`（`false`） | 只修复的文字书照 Send to Kindle 的规则统一：标签缺省样式 `eink-ua.css`、正文字体用阅读器字体、body 左右边距不要、文字对比度 4.5（见[排版 · 只修复](typesetting.md#只修复各模式的文字书)） | — | `true` | 2026-10-08 定三台统一一套规则；Kindle 由 KFX 写出器照做 |
-| `repair_note_links`（`false`） | 只修复时仍保证注释能点：注释搬进本章、改同文件锚点，按 `note_backlinks`、`note_icons` 处理 | — | — | xochitl 只认同文件 `#锚点`、只有图的链接点不了（2026-10-08：xochitl 只保障注释可跳） |
+| `repair_note_links`（`false`） | 只修复时仍处理注释链接：注释搬进本章、改同文件锚点，按 `notes` 写弹窗 / 跳转，按 `note_backlinks`、`note_icons` 处理 | — | — | xochitl 只认同文件 `#锚点`、只有图的链接点不了（2026-10-08：xochitl 只保障注释可跳）；Kobo 2026-11-11 起也开（弹窗 + 图标标号换数字） |
 | `margin_top`（`true`）＋ `[page_top]` | 阅读器认 `margin-top`；`false` 时只修复的文字书（`kindle_rules`）每章开头写了上边距的垫透明空白图或行内窄图推到 Kindle 的位置（`wash/top_spacer.rs`，KINDLE_RULES 11、20）。`[page_top]` 是垫图要的这台尺寸（屏幕像素）：垫图后阅读器自己加的空 `gap_heading_per_em`、`gap_other`，行内窄图的基数 `strut_base_per_em`；`margin_top = false` 时必须写 | 认 | 认 | xochitl 不认 `margin-top`、`padding-top`，页首的空元素不占地方（2026-10-12「测试-标题位置」、10-13「测试-行内垫图」） |
 | `display_none`（`true`） | 阅读器认 `display:none`；`false` 时去掉隐藏的元素（`wash/hidden.rs`）、空段去掉而不是加类藏起来（`wash/blank_fold.rs`） | 认 | 认 | 2026-10-12「测试-隐藏」：xochitl 行内、外链的 `display:none` 都不认，《飘》《春雪》版权页露出「版权信息」大标题 |
 | `trailing_br_line`（`false`） | 块末尾的 `<br/>` 多排一行；`true` 时去掉（`wash/blank_fold.rs`，KINDLE_RULES 20） | 不排 | 不排 | 2026-10-13「测试-末尾br」：Move 段落多 50px、1.5em 标题多 75px |
@@ -176,6 +176,8 @@
 | `cover_thumb_aspect`（不写） | 书架缩略图的宽高比：按 `cover_thumb_fit` 凑成这个比例另存 `eink-thumb.jpg`，只给书架用，书里的封面页不动（文字书、漫画都做；`wash::add_cover_thumbnail`，v64/c59） | 0.65 | 0.754 | 2026-10-30 封面比例测试书在 Kindle 书架截图量的：封面框宽度固定、0.65（网格 344×531）；维护者定只裁缩略图，新设备到了量它们的框再开；2026-11-03 掌阅 Air 3 Pro 书架截屏：框 212×281（≈0.754），封面直接拉伸到框的比例、不裁不留白（封面比例探针 0.5 / 0.754 / 1.0）；2026-11-06 汉王书架截屏：框约 281×373（≈0.753），方形封面被拉伸、不裁不留白，同掌阅取 0.754，缩略图效果待真机确认；2026-11-10 Kobo Clara BW（固件 4.45）书架截屏：网格、列表都没有固定的框，每本按封面自己的比例显示（0.5 窄高、1.0 正方，网格里底边对齐），圆还是圆、四边刻度都在、不留白；2026-11-11 维护者在书库截图里指出「书库封面不等高」，定补白统一成屏幕比例 **0.7403**（1072×1448，vinci 同日推翻 11-10「不需要缩略图」） |
 | `cover_thumb_fit`（`crop`） | 书架缩略图怎么凑 `cover_thumb_aspect`：`crop` 居中裁（缺省，会裁掉封面内容）；`pad` 不裁不拉伸，缺的那一方向两边各补一半白（`#FFFFFF`，黑白屏本来就是灰度），补白时不去扫描窄白边；长边上限、JPEG 质量同缩略图（`imgopt::cover_thumbnail`，v67/c68）。要和 `cover_thumb_aspect` 一起写 | `crop` | `crop` | 2026-11-11 Kobo 书架按封面自己的比例、底边对齐，比例宽的矮一截；补白统一高度又不裁内容，所以 Kobo 写 `pad`。Kindle、掌阅、汉王保持裁（书架框固定、要铺满） |
 | `cover_image_thumb`（`false`） | 书架认 `properties="cover-image"`：另做了缩略图时把这个属性从真封面**挪到** `eink-thumb` 上（真封面保留别的 properties），`<meta name="cover">` 也指缩略图，真封面的 id 记进 `<meta name="eink-thumbnail-source">`；书里的封面页照旧用原图。`declared_cover` 跳过缩略图、靠 source meta 认回真封面。换到别的设备再优化时属性和 meta 改回真封面（`wash::add_cover_thumbnail`，v67/c68）。要和 `cover_thumb_aspect` 一起写 | — | — | 2026-11-10 Kobo「封面来源探针」：Clara BW 书架取 manifest 的 `cover-image` 那张，不看 meta cover、不取正文第一页；2026-11-11 定补白缩略图后要把属性挪过去，书架才会用缩略图。Kindle 用 `eink-thumbnail`、掌阅用 meta cover，都不写；汉王、Bigme 不写 |
+| `vertical_text`（`false`） | 这台的中文文字书竖排（v68）：另挂 `eink-vertical.css`、spine rtl、`primary-writing-mode`，书自己的 CSS 盒子横转竖；判是不是中文书、按书/目录覆盖在书库侧（`bookconv::vertical`）。漫画、固定版式不竖排 | — | — | 2026-11-11 测试书 01–13：Kobo、汉王竖排正常，vinci 定中文文字书全部竖排；Bigme（xReader 不竖排、KOReader 也不会）显式写 `false`；Kindle 不写（KFX 第二期） |
+| `vertical_ascii`（`keep`） | 竖排书里半角 ASCII 怎么处理：`keep` 原样，`fullwidth` 除空格外全换成全角竖立；`tcy`（縦中横）留了枚举位但**未实现**、写了报错。非 `keep` 要开 `vertical_text` | — | — | 2026-11-11 测试书 11–13：Kobo 上半角数字、西文躺倒会叠字，全角竖立干净（13 号选 U1），汉王也选 U1；所以 Kobo、汉王写 `fullwidth`。**推翻 PRD 初稿「全角化不做」**，只在这两台的竖排产物里做 |
 | `cover_meta_thumb`（`false`） | 书架取封面认 EPUB 2 的 `<meta name="cover">`：另做了缩略图时把它指向 `eink-thumb`（原位改、多的去掉、没有就加），`cover-image`、封面页不动；`declared_cover` 跳过指向缩略图的 meta，再优化不会拿缩略图当封面（`wash::add_cover_thumbnail`，v66/c65）。要和 `cover_thumb_aspect` 一起写 | — | `true` | 2026-11-03 掌阅 Air 3 Pro「封面来源探针」：一本书里 meta cover、`cover-image`、正文第一页各指一张图，书架显示 meta cover 那张。Kindle 不用（KFX 写出器认 `eink-thumbnail`）；Kobo 不写（书架认 `cover-image`，由 `cover_image_thumb` 把 meta 一起指过去）；汉王同掌阅写 `true`，待真机确认书架用的是缩略图 |
 | `comic_page_numbers`（`false`） | 漫画页裁掉页码：内容最底下像页码的小块（宽 ≤ 页高 3.5%，c64）、上方空着，按在内容的左、右、正中分，整卷同一位置 ≥5 页且 ≥2% 才裁（`comiccrop.rs`，c58）；推翻「不删内容」里的这一项 | `true` | `true` | 2026-10-30 Kindle 上看《迷宮飯》卷01 测试书「字更清晰、没有裁错」。2026-11-10 维护者定四台漫画画质处理一致，掌阅也开（掌阅上没真机比过） |
 | `image_gamma`（不写＝不加深） | 文字书正文插图中间调加深的伽马：正文 `<img>`/SVG `<image>` 用到、不在 CSS 里、内容是灰度、短边 ≥ 200、不透明的 JPEG/PNG，只修复也做；JPEG 按原图质量重编码（`imgopt::darken_gray_image`，v59） | 1.1 | 1.1 | 同日比过金庸木刻、水墨，福尔摩斯网点图，罗杰疑案线条图，选 1.3；2026-10-21 改成 1.1，同漫画（插图没另比）；Kindle 2026-10-26 跟着开，10-27 真机比过《罗杰疑案》插图选 1.1。正文是阅读器画的，不受影响 |
@@ -346,6 +348,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 - **格式**：KEPUB（`.kepub.epub`，Nickel 用 Kobo WebKit 打开、翻页更快，维护者以前试过），2026-11-01 起 `formats = ["kepub"]`，漫画也是 `.kepub.epub`。写出器是 clean-room 的 `bookconv::kepub`，做法、来源和真机结论见 [KEPUB](kepub.md)。2026-11-05 真机确认文字 KEPUB 正常、侧载书签/笔记可用；固定版式看 OPF、不再靠 `.fxl` 文件名。纯图页不加 koboSpan 只限漫画固定版式（`book-type=comic`），出版社原生的非漫画 FXL 行为不变。
 - **漫画**：参数照 Kindle（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页）；2026-11-05 Clara BW 真机确认方案 D（固定版式、viewport 1072×1448、img 100%×100%、纯图页不加 koboSpan）满屏。色彩类参数没有在 Kobo 上单独比过。
 - **书架封面**（2026-11-10 真机，固件 4.45，封面比例 0.5 / 0.75 / 1.0 三本 + 「封面来源探针」，网格、列表各截一张）：没有固定的封面框，每本按封面自己的比例显示（网格里底边对齐），不拉伸、不裁切、不留白（圆还是圆、四边刻度都在）；书架封面取 manifest 里 `properties="cover-image"` 那张（探针显示 B），不看 `<meta name="cover">`、不取正文第一页。2026-11-11 维护者在书库截图里指出「书库封面不等高」，定**补白统一成屏幕比例**（推翻 11-10「不需要书架缩略图」）：`cover_thumb_aspect = 0.7403`（1072×1448）、`cover_thumb_fit = "pad"`、`cover_image_thumb = true`，另做一张不裁不拉伸、缺的方向两边补白的缩略图，并把 `cover-image` 和 meta cover 指过去；书里的封面页照旧用原图。没上真机，vinci 同步后看书架封面高度（旧封面可能被 Nickel 缓存，先看新书或重开书库）。
+- **竖排与注释**（2026-11-11 测试书 01–13 真机）：中文文字书竖排，`vertical_text = true`、`vertical_ascii = "fullwidth"`；`html`/`body` 写 `writing-mode:vertical-rl` 就竖排，spine rtl 时点左侧下一页，ruby 在右侧。半角数字、西文躺倒会叠字，全部转全角竖立干净（13 号 U1）。**注释全部文字书改弹窗**（`notes = "popup"` + `repair_note_links = true`，05 号实机「预览注释」），横排、竖排都弹；图标标号也随之换上标数字。引号“”‘’ → 『』「」，ASCII 直引号成对的转直角、撇号和落单的转全角；目录同正文。还没上真机验整套产物（vinci 同步后看）
 
 ## 汉王 Clear 6 Turbo（2026-11-06 上真机：阅读范围、封面、漫画版式、投递已核对）
 
@@ -353,7 +356,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 
 - **硬件**：6" E Ink Carta 1300，1448×1072，300 ppi，黑白，安卓 14（来源：知乎评测 `zhuanlan.zhihu.com/p/1916870323984393879`、Lukas Lab、太平洋电脑网参数页）。竖屏写成 `width = 1072`、`height = 1448`。IT 之家写的 1024×758 是 Clear 6，不是 Turbo。
 - **传书**：USB MTP（安卓），2026-11-06 真机确认 jmtpfs 挂到 `/run/user/1000/mtp/hanvon`（`~/Hanvon`）。产物放存储根目录的 `documents/`、子目录照跟踪目录镜像；实际目录是 `Documents/`（安卓存储不分大小写），自带阅读器「文件」页从 `/Documents` 浏览、能打开。
-- **格式**：只出 EPUB。文字书沿用三台统一规则（`text_repair_only`、`kindle_rules`）；注释跳转、只有图标的标号换数字还是推断，待真机测。
+- **格式**：只出 EPUB。文字书沿用三台统一规则（`text_repair_only`、`kindle_rules`）；2026-11-11 测试书 01–13 实机确认中文文字书竖排正常（翻页、引号、縦中横、注释、西文不叠），和 Kobo 一样写 `vertical_text = true`、`vertical_ascii = "fullwidth"`（13 号也选 U1 全角竖立）。注释还是跳转（`notes = "jump"`），不改弹窗。
 - **漫画**：参数照 Kobo（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、1px 白边）。版式 2026-11-06 真机比过：流式整页与固定版式逐像素相同，都铺满整屏、连翻 4 页大小不变，保持流式。
 - **书架封面**：2026-11-06 书架截屏：方形封面（1.0）被拉伸进约 281×373 的框（≈0.753），不裁不留白，和掌阅 0.754 同一行为；照掌阅做 `eink-thumb.jpg` 并把 meta cover 指向它，书架用不用缩略图待真机确认。书架只显示打开过的书；没有封面的书显示通用 EPUB 图标。
 - **没量**：`em_px`、`line_px`、`content_px`、注释弹窗、伽马，待测试书量。
@@ -365,7 +368,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 
 - **硬件**：7" E Ink Carta 1300，1264×1680，300 ppi，黑白，Android 14（Bigme OS 5.0）（来源：Root-Nation B7 Pro BW 评测、Read with Pro 规格页、Android Blog Italia 评测；真机 `wm size` 1264×1680、密度 300）。彩色版 B7 Pro 是 Kaleido 3（632×840），别混。竖屏写成 `width = 1264`、`height = 1680`。
 - **传书**：USB MTP（安卓），2026-11-10 真机 jmtpfs 挂在 `~/Devices/Bigme`，存储名「内部共享存储空间」。产物放存储根目录的 `books/`、子目录照跟踪目录镜像；xReader 书架认 `Books/`（子目录里的书也进书库），安卓存储不分大小写。缺省挂载点是 `$XDG_RUNTIME_DIR/mtp/bigme`（`/run/user/1000/mtp/bigme`），和现在实际挂载点不一致：配好 dotfiles 的挂载规则之前，可用 `BOOKLIB_MTP_DIR=/home/afu/Devices` 让 `…/Bigme` 对上 `mount = "bigme"`，或把 `~/Devices/Bigme` 挂/链到 `/run/user/1000/mtp/bigme`。
-- **格式**：只出 EPUB。文字书沿用统一规则（`text_repair_only`、`kindle_rules`）；注释跳转、只有图标的标号换数字还是推断，待真机测。
+- **格式**：只出 EPUB。文字书沿用统一规则（`text_repair_only`、`kindle_rules`）；**不竖排**（2026-11-11 实机：xReader 不竖排、KOReader 也不会），`vertical_text = false`。注释跳转、只有图标的标号换数字还是推断，待真机测。
 - **漫画**：参数照 Kobo（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、1px 白边、拆跨页）。2026-11-10 真机比过流式和固定版式：固定版式（方案 D）不受阅读器页边距限制，标记范围约 1105×1532，比流式大约 10%，所以用固定版式；画布 1264×1680（`[comic_readable]`），真机不裁不拉伸。
 - **翻页方向**：xReader 流式、固定版式都不认 spine 里的 rtl（点左侧无反应、点右侧才翻下一页）。booklib 仍照 Bangumi 元数据写 rtl（`comic_meta_direction`，不写 `comic_page_direction`）；要在 Bigme 上点左侧翻下一页，只能去 xReader 设置里改翻页区域或方向（归 eink-settings）。跨页拆页顺序真机正确（先右半再左半）。
 - **书架封面**：2026-11-10 真机书架网格框 240×296（≈0.81），封面保持原比例、按框宽缩放、顶部对齐；0.75 / 1.00 的封面比框矮、下面留白，0.50 的上下被裁。封面来源探针显示 C＝正文第一页，xReader 不认 `cover-image` / meta cover，所以汉王那种 `cover_meta_thumb` / eink-thumb 不管用，**不写** `cover_thumb_aspect`、`cover_meta_thumb`。让正文第一页的封面做成 0.81 会改书里的封面页，待定，本次不做。

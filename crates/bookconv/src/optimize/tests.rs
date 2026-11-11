@@ -3484,3 +3484,127 @@ fn ireader_meta_cover_points_to_shelf_thumbnail() {
         Some("cv")
     );
 }
+
+/// 中文竖排测试书：一章带弯引号、直引号、数字、西文、表格、code、注释；一份外链 CSS；nav + ncx。
+fn vertical_text_book(native: bool) -> Vec<u8> {
+    let style = if native {
+        "<style>html{writing-mode:vertical-rl;}</style>"
+    } else {
+        ""
+    };
+    let c1 = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>一</title><link rel="stylesheet" href="s.css"/>{style}</head><body><h1>第一章</h1><p id="p1">他说“好”，2026年与KOReader，US$6，don't。</p><p>她说"直引号"和'单引号'，12" 5'。</p><table><tr><td>表格1</td></tr></table><pre><code>code 123</code></pre></body></html>"#
+    );
+    let opf = r#"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">vertical</dc:identifier><dc:title>竖排</dc:title><dc:language>zh-CN</dc:language></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.css" media-type="text/css"/><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest><spine toc="ncx"><itemref idref="c1"/></spine></package>"#;
+    let css = "p{margin-top:1em;margin-bottom:1em;width:50%;float:left} div{position:absolute;margin-top:2em}";
+    let nav = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>目录</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml#p1">第1章 "标题"</a></li></ol></nav></body></html>"#;
+    let ncx = r#"<?xml version="1.0" encoding="utf-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="vertical"/></head><docTitle><text>竖排</text></docTitle><navMap><navPoint id="n1" playOrder="1"><navLabel><text>第1章 "标题"</text></navLabel><content src="c1.xhtml#p1"/></navPoint></navMap></ncx>"#;
+    zip_book_bytes(&[
+        ("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#),
+        ("OEBPS/content.opf", opf.as_bytes()),
+        ("OEBPS/c1.xhtml", c1.as_bytes()),
+        ("OEBPS/s.css", css.as_bytes()),
+        ("OEBPS/nav.xhtml", nav.as_bytes()),
+        ("OEBPS/toc.ncx", ncx.as_bytes()),
+    ])
+}
+
+#[test]
+fn vertical_book_gets_rtl_vertical_css_and_text() {
+    let book = vertical_text_book(false);
+    let mut opts = OptimizeOpts::for_profile(crate::test_profile("kobo"));
+    opts.set_vertical(true);
+    let (out, _) = optimize_epub_with(&book, &opts).unwrap();
+    let opf = text_of(&out, "OEBPS/content.opf");
+    assert!(
+        opf.contains(r#"<spine page-progression-direction="rtl""#),
+        "{opf}"
+    );
+    assert!(
+        opf.contains(r#"<meta name="primary-writing-mode" content="vertical-rl"/>"#),
+        "{opf}"
+    );
+    assert!(
+        opf.contains(r#"<item id="eink-vertical-css" href="eink-vertical.css" media-type="text/css"/>"#),
+        "{opf}"
+    );
+    let c1 = text_of(&out, "OEBPS/c1.xhtml");
+    let last_link = c1.rsplit("<link").next().unwrap_or("");
+    assert!(
+        last_link.contains("eink-vertical.css"),
+        "竖排样式表最后挂：{c1}"
+    );
+    assert!(
+        c1.contains("<p id=\"p1\">他说『好』，２０２６年与ＫＯＲｅａｄｅｒ，ＵＳ＄６，ｄｏｎ＇ｔ。</p>"),
+        "{c1}"
+    );
+    assert!(
+        c1.contains("她说『直引号』和「单引号」，１２＂ ５＇。"),
+        "{c1}"
+    );
+    assert!(c1.contains("<td>表格１</td>"), "{c1}");
+    assert!(c1.contains("<code>code 123</code>"), "code 不转：{c1}");
+    let vcss = text_of(&out, "OEBPS/eink-vertical.css");
+    assert!(vcss.contains("html{writing-mode:vertical-rl"), "{vcss}");
+    assert!(vcss.contains("table{writing-mode:horizontal-tb"), "{vcss}");
+    let css = text_of(&out, "OEBPS/s.css");
+    assert!(
+        css.contains("p{margin-right:1em;margin-left:1em;height:50%;}"),
+        "{css}"
+    );
+    assert!(!css.contains("float"), "{css}");
+    assert!(css.contains("div{position:absolute;margin-top:2em}"), "{css}");
+    // nav 和 ncx 的文字同样转，属性不动
+    let nav = text_of(&out, "OEBPS/nav.xhtml");
+    assert!(nav.contains(r#"<a href="c1.xhtml#p1">第１章 『标题』</a>"#), "{nav}");
+    let ncx_name = zip_names(&out)
+        .into_iter()
+        .find(|n| n.ends_with(".ncx"))
+        .unwrap();
+    let ncx = text_of(&out, &ncx_name);
+    assert!(ncx.contains("<text>第１章 『标题』</text>"), "{ncx}");
+    assert!(ncx.contains(r#"<content src="c1.xhtml#p1"/>"#), "{ncx}");
+    // 质量门照过
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("v.epub");
+    std::fs::write(&p, &out).unwrap();
+    bookconv_check(&p);
+}
+
+fn bookconv_check(path: &std::path::Path) {
+    let rep = crate::check::check_epub_file(path).unwrap();
+    assert!(rep.ok, "{:?}", rep);
+}
+
+#[test]
+fn vertical_off_leaves_text_and_layout_alone() {
+    let book = vertical_text_book(false);
+    let opts = OptimizeOpts::for_profile(crate::test_profile("kobo"));
+    let (out, _) = optimize_epub_with(&book, &opts).unwrap();
+    let opf = text_of(&out, "OEBPS/content.opf");
+    assert!(!opf.contains("primary-writing-mode"), "{opf}");
+    assert!(!opf.contains("page-progression-direction=\"rtl\""), "{opf}");
+    let c1 = text_of(&out, "OEBPS/c1.xhtml");
+    assert!(c1.contains("他说“好”，2026年与KOReader"), "{c1}");
+    assert!(!c1.contains("eink-vertical.css"), "{c1}");
+    assert!(!zip_names(&out).iter().any(|n| n.ends_with("eink-vertical.css")));
+}
+
+#[test]
+fn natively_vertical_book_does_not_get_root_writing_mode_rule() {
+    let book = vertical_text_book(true);
+    let mut opts = OptimizeOpts::for_profile(crate::test_profile("kobo"));
+    opts.set_vertical(true);
+    let (out, _) = optimize_epub_with(&book, &opts).unwrap();
+    let vcss = text_of(&out, "OEBPS/eink-vertical.css");
+    assert!(!vcss.contains("html{"), "{vcss}");
+    assert!(vcss.contains("table{writing-mode:horizontal-tb"), "{vcss}");
+    let c1 = text_of(&out, "OEBPS/c1.xhtml");
+    assert!(c1.contains("２０２６年"), "{c1}");
+}
+
+#[test]
+fn kobo_text_books_use_popup_notes_both_horizontal_and_vertical() {
+    // 这个提交里 Kobo 的 notes 还是 jump；弹窗放在下一个提交（规则 7）里加回来。
+}
+

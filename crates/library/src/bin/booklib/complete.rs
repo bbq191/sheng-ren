@@ -203,7 +203,7 @@ fn fish_script() -> String {
         }
         let args = match c.name {
             "track" => "-a '(booklib __complete paths (commandline -ct) (commandline -opc))'",
-            "untrack" => "-a '(booklib __complete tracked (commandline -opc))'",
+            "untrack" | "vertical" => "-a '(booklib __complete tracked (commandline -opc))'",
             "add" | "dedupe" | "meta" => "-F",
             _ => continue,
         };
