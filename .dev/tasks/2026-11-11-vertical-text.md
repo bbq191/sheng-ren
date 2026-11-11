@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-11-vertical-text
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: vertical-text（从最新 master `10ce515` 或更新的切出）
 - 更新时间: 2026-11-11T17:05+08:00
@@ -239,6 +239,28 @@ vinci 2026-11-11 的决定（原话或口述结论）：
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：通过 / 退回（附证据：命令输出、路径:行号）
-- 二审：回执 `.dev/tasks/2026-11-11-vertical-text.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由
+- 验收：**退回**（sheng-ren，2026-11-11，box 复跑 `0c55ca7`），状态改回 pending，同一执行方返工；修完重新验收，再交 agy 二审。
+  - 复跑：`cargo test --workspace` 全过，共 780 个（bookconv 552、csscascade 16、kfx 53、library 71+7+14+47+1、profile 19），0 failed；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --all -- --check` 干净。
+  - 金样（按 设备/变异/类别 对键比，`|67|→|68|` 抹平）：旧行 640 行一行不少，新增 20 行（`vertical_text`、`vertical_ascii` 各 10）。Bigme、Kindle、掌阅 384 行一字不变；汉王漫画 64 行不变，汉王文字书 64 行只有 info 段 `-`→`-Vf`（样例书是中文，预期）；Kobo 漫画 64 行只有注释段 `jump`→`popup`；Kobo 文字书 64 行是 `-Vf` + 注释段 + 文字书段多 `n`（`text_repair_only`、`repair_note_links` 两个变异行按各自的值少 `n`）。另：新增行不在文件末尾，而是接在各设备那一段后面（第 129 行起），「结果」写的「放在最后」不准确，不影响对比。
+  - 逐字节（同一输入，master `15abbea` 与本分支的 `epub-optimize` 各跑一遍，5 本合成书 × 5 台＝25 组）：Bigme、Kindle、掌阅、汉王 20 组全部 `cmp` 相同（汉王不带 `--vertical`，即横排）；Kobo 5 组里漫画、无注释英文书、原书竖排的书（没注释）相同，中文书和有注释的英文书不同，`diff -r` 看只差在注释改弹窗（`noteref` + 章末 `<aside epub:type="footnote">`）——符合规则 7。
+  - 竖排产物（合成中文书，`--device=kobo|hanvon --vertical`）：OPF `primary-writing-mode=vertical-rl`、`<spine page-progression-direction="rtl">`；每章 link 顺序 `eink-ua.css` → 书 CSS → `eink-vertical.css`（nav 也挂）；`eink-vertical.css` 根元素 writing-mode（三种写法）、表格 `horizontal-tb`；正文 `他说『你好，「朋友」。』`、`他说『好』，又说「甲」和「乙」，『外「内」外』`、`Ｉ ｄｏｎ＇ｔ`、`９０＇ｓ`、`ｒｏｃｋ＇ｎ＇ｒｏｌｌ`、`１２＂ 宽`、`５＇`、`２０２６年`、`ＫＯＲｅａｄｅｒ`、`ＵＳ＄６`、`Ｈｅｌｌｏ ｗｏｒｌｄ`（空格没转）、`Ａ＆Ｂ ＜ｔａｇ＞ Ａ&#x4E2D;`；`<code>`、`<rt>`、`href`、`alt`、`id` 都没动；`toc.ncx`（含 `docTitle`）和 nav 都是 `第１章 『标题』 ＯＫ`、`第２章 『Ｑ＆Ａ』 ｄｏｎ＇ｔ`；Kobo 注释是弹窗写法，汉王仍是跳转；书 CSS 横转竖 `p{margin:1em 0}`→`margin:0 1em`、`img{max-width}`→`max-height`、`.box` 的 margin/padding/border/width 按规则转、`float` 去掉、`position:absolute` 的规则原样。转出的 KEPUB（`epub-to-kepub`）koboSpan 不拆全角串、不进 `rt`，全部 XHTML/NCX/OPF 能被 XML 解析。
+  - 提交：中文、前缀齐全、无 Co-Authored-By、没动 master、没合并；没碰 `install.sh`、密钥；`Meta` 两个新字段都是可选（`serde(default)`），旧 meta.json 照读，不算数据迁移。clean-room：diff 里没有 GPL 转换器来源的代码或引用（只在注释里提到 KindleGen 的公开元数据约定 `fixed-layout`）。
+  - **阻断**
+    1. 原书本来竖排的书，书自己的 CSS 也被「横转竖」了，违反规则 2、4（「原书本来竖排的不转」）。`crates/bookconv/src/wash/mod.rs:1072` 算了 `native`，但 `:1075` 起的改写循环不看它，只有 `vertical_css(native)` 用到。实测（合成台版书，`html{writing-mode:vertical-rl}` + `p{margin:0 1em}` + `.box{margin-top:2em;width:30%}`，Kobo、汉王都一样）：产物变成 `p{margin:1em 0}`、`.box{margin-right:2em;height:30%}`，本来对的竖排段距被转成每列首尾空白。要改：`native` 时跳过整段改写；补一个测试（原书竖排的书 CSS 逐字节不变）。
+    2. 中文判定读不到原件时，把「不是」**永久**写进 meta.json。`crates/library/src/vertical.rs:94` `self.is_zh_text(meta).unwrap_or(false)` 之后照样 `note_zh_text` 并在持锁时 `save_meta`（`:95-104`）：原件暂时不在（移动硬盘没插、原件改过名）时跑一次 `sync`，这本中文书以后就一直不竖排，只能手工 `--on`。`comic_of` 遇到这种情况是返回错误、不存。要改：读不出来时这次按不竖排算，但不进缓存、不写 meta.json（或照 `comic_of` 返回错误，二选一，写清楚理由）；补测试。
+  - **建议**
+    1. 规则 2 要求「入库时判一次存进 `Meta`」，现在只在第一次用到时判（`crates/library/src/catalog.rs:212` 只存了 `comic`）。和阻断 2 一起改：入库时顺手判 `zh_text`。
+    2. 弯引号段里有弯撇号（`don’t`、`it’s`，中文书里夹英文很常见）就整段配不上，同段别的“”也不转。实测 `他说“don’t worry”就走了，“这里是中文”。` 整段原样（`crates/bookconv/src/vertical.rs:365-378`）。建议：前后都是字母或数字的 `’` 照直引号的规则当撇号，不进配对。这条不算改规则，只是把 vinci 对直引号定的撇号口径用到弯引号上；拿不准就先列给我。
+    3. `booklib vertical <目录>` 逐本写书时只看 `kobo`、`hanvon` 两台的跟踪（`crates/library/src/vertical.rs:174-175` 写死设备 id）：书库 `profiles/` 里的自定义模式、或只跟踪给别台的目录会漏。建议改成遍历开了 `vertical_text` 的设备。
+    4. 补全：`vertical` 用的是 `__complete tracked`（`crates/library/src/bin/booklib/complete.rs:206`），只列跟踪条目本身，不列它下面的子目录和书；任务单要的是「`paths` 的规则、但只列已跟踪的」。
+    5. 书 CSS 横转竖漏了 `border-top-width`、`border-left-style` 这类三段式属性和圆角（`crates/bookconv/src/vertical.rs:608` 按最后一个 `-` 拆，`width`/`style`/`color` 不是方向），补上并加测试。
+    6. `0c55ca7`（改了代码）没有正文，也没写进「结果」的提交表；规则 7 的文档混在 `cb12f7e` 里（执行方已在「偏离」里说明）。返工时把弹窗的文档挪进单独的提交，保证规则 7 能一刀回退。
+  - **线索**（不要求本次改，留给二审和真机）
+    1. `eink-vertical.css` 的 `p{margin-left:1em;margin-right:1em}`（`crates/bookconv/src/vertical.rs:526`）挂在最后，会盖过书里写的 `p{margin:0}`：多数中文书本来没有段距、只缩进两格，竖排后都会多出一格段距。这是任务单「方法 a」照字面做的结果，真机看是否太松。
+    2. 表格整张横排，但里面的西文、数字也转了全角（`项目 Ｉｔｅｍ`、`数值 ４２`），横排里看着稍宽，不影响阅读。
+    3. Kobo 开 `repair_note_links` 后，只放注释的那一章被搬空，剩一个空页（合成英文书的 `c1.xhtml` 只剩空 `<body>`），这是 xochitl 一直以来的行为，Kobo 上第一次出现，真机留意。
+    4. `epub-optimize --no-wash --vertical` 只改文字、不挂竖排样式表（`set_vertical` 只在有 `wash` 时同步），出测试书时别这样组合。
+    5. `rewrite_css` 跳过 `@` 开头的规则，`@media` 块里的规则有没有转：未核实。
+    6. 规则 7 让 Kobo 漫画的指纹也变（注释段），全部 Kobo 漫画会重建；产物逐字节不变，不会重传。
+- 二审：回执 `.dev/tasks/2026-11-11-vertical-text.agy.md`；阻断 / 建议 / 线索，及采纳与否和理由（返工、重新验收通过后再跑）
 - 合并：PR 链接、合并提交号；状态改为 verified
