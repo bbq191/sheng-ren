@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-vertical-text
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: opencode-local
 - 分支: vertical-text（从最新 master `10ce515` 或更新的切出）
-- 更新时间: 2026-11-11T15:45+08:00
+- 更新时间: 2026-11-11T14:20+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`；Kindle 翻页方向已由 `2026-11-11-kindle-text-rtl` 单独修好）
 
 ## 需求原文
