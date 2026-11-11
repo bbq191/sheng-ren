@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-kindle-text-rtl
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: kindle-text-rtl（从最新 master `0c92e5c` 切出）
-- 更新时间: 2026-11-11T11:41+08:00
+- 更新时间: 2026-11-11T11:52+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`，本单是从它拆出来的单独修复，不做竖排）
 
 ## 需求原文
@@ -76,13 +76,52 @@ KFX 写出器现在只会写横排。横排的书按从右往左翻是错的，�
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-11 11:41–11:51 +08:00
+- base..head：`0c92e5c..HEAD`（代码到 `cd3c23b`，另有任务单 accepting / 本结果提交）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `d8c1d11` | `.dev/tasks/2026-11-11-kindle-text-rtl.md` | 状态改 accepted |
+  | 1、2、3 | `164d791` | `crates/kfx/src/write/mod.rs`、`layout.rs`、`tests.rs` | 按规则取方向；`single_image_page` 两处共用；`WRITER_VERSION` 26；三个测试 |
+  | 3 | `f5f97d5` | `crates/library/tests/fp_golden.txt` | kindle 124 行 `kfx25` → `kfx26`，其它设备不变 |
+  | 4 | `cd3c23b` | `docs/kfx.md`、`docs/decisions.md` | 写出器 26 和 2026-11-11 决定 |
+  | 结果 | 本提交 | `.dev/tasks/2026-11-11-kindle-text-rtl.md` | 填结果、状态 done |
+
+- 测试：
+
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test -p kfx streaming_`（改代码前） | 失败（预期） | a `streaming_text_ignores_spine_rtl` 失败：`$560` 仍是 `$559`；b、d 通过——证明测到了 bug，且固定版式以外的纯图页本来就对 |
+  | `cargo test -p kfx`（改完） | 通过 | 53 passed；a/b/d 和已有的固定版式 rtl 测试都过 |
+  | `cargo test -p library --test fp_golden` | 通过 | 金样重写后复跑通过 |
+  | `cargo test --workspace` | 通过 | 792 passed，0 failed；`bangumi_japanese_comic_builds_rtl_and_others_stay_as_is` 照过 |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo fmt --all -- --check` | 通过 | 干净 |
+  | `git diff --numstat crates/library/tests/fp_golden.txt` | — | `124 124`：只有 kindle 的 124 行 `kfx25` → `kfx26`，别的设备 0 变化 |
+
+- 合成回归（`/tmp/opencode/kfx-rtl/`，不提交）：
+  - 竖排文字书（`html{writing-mode:vertical-rl}` + `<spine page-progression-direction="rtl">` + `primary-writing-mode=vertical-rl`）：
+    ```text
+    epub-optimize --device=kindle vertical.epub vertical-k.epub
+    epub-to-kfx vertical-k.epub vertical.kfx
+    kfx-dump vertical.kfx
+    → $538 … $192: '$376', $560: '$557'
+    epub-to-kfx 打印：警告：spine 写了从右往左，KFX 只会横排，按从左往右翻
+    ```
+  - 同一本用 master `0c92e5c`（worktree）的写出器转：`$560: '$559'`；新旧 KFX 字节不同（符合预期）。
+  - rtl 固定版式漫画（`fixed-layout` + `original-resolution 1264x1680` + spine rtl）：`$560: '$559'`、`$192: '$376'`，仍是 rtl。
+  - 逐字节对比（同一份输入，master `0c92e5c` 和本分支各转一遍）：
+    - spine 没写 rtl 的流式文字书 `cmp` 相同；
+    - rtl 固定版式漫画 `cmp` 相同；
+    - rtl 流式文字书不同（就是要改的那一种）。
+  - `git diff --name-only 0c92e5c..HEAD` 里没有 `crates/bookconv/`，EPUB/KEPUB 产物没碰。
+
 - 遇到的问题：
-- 偏离：无
+  - 没有。
+- 偏离：按任务单允许的方式在 `crates/kfx/src/write/layout.rs` 抽出 `single_image_page` 给版面判定和方向判定共用（任务单说这时把 layout.rs 记进偏离）。
 - 未完成：
+  - 没跑真书回归、没上真机。真机（vinci，合并后）：sync 一本原书竖排的台版书，点右侧是下一页。
 
 ## 审查
 <!-- 负责 bot 填写 -->
