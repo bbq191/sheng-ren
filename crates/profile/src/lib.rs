@@ -109,6 +109,20 @@ pub enum CoverThumbFit {
     Pad,
 }
 
+/// 竖排书里半角 ASCII 怎么处理（profile `vertical_ascii`，不写＝[`Keep`](VerticalAscii::Keep)）。
+/// 只在开了 `vertical_text`、并且这本书最终竖排时用；见 `bookconv::vertical`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VerticalAscii {
+    /// 原样，交给阅读器（有些阅读器会躺倒、叠字）。
+    #[default]
+    Keep,
+    /// 全部换成全角竖立（2026-11-11 测试书 11–13：Kobo 上半角、西文躺倒会叠到前一个汉字上，全角干净）。
+    Fullwidth,
+    /// 縦中横（半角数字 / 字母保持半角、包竖中横）。**本期不实现**，写了 `validate` 报「未实现」。
+    Tcy,
+}
+
 /// 阅读器怎么定图片的显示尺寸（只修复、照 Send to Kindle 统一的文字书用：`kindle_rules` 照它把图片宽度改写成显示出来和
 /// Kindle 一样大的写法，见 `bookconv::wash::kindle_images`）。2026-10-12 三台测试书（`测试-插图`）量的。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
@@ -444,6 +458,13 @@ pub struct Profile {
     /// （2026-11-11 定：Clara BW 书架取的是 `cover-image` 那张，不是 meta cover）。换到不比这台的设备再优化时属性和 meta 改回
     /// 真封面。和 `cover_meta_thumb` 一样要求同时写了 `cover_thumb_aspect`。
     pub cover_image_thumb: bool,
+    /// 这台的中文文字书竖排（TOML 里不写是 `false`）：竖排第一期，2026-11-11 测试书 01–13 在 Kobo、汉王实机通过，vinci 定。
+    /// Kobo、汉王写 `true`；Bigme（xReader 不竖排、KOReader 也不会）显式写 `false`；Kindle 不写（KFX 第二期）。
+    /// 具体哪本书竖排由书库按书判定 / 覆盖（`bookconv::vertical`），这里只是这台开不开。
+    pub vertical_text: bool,
+    /// 竖排书里半角 ASCII 怎么处理（TOML `vertical_ascii`，不写＝`keep`）。Kobo、汉王写 `fullwidth`（2026-11-11 测试书 11–13：
+    /// 半角数字、西文躺倒会叠字，全角竖立干净）。`vertical_text = false` 时只能写 `keep`。
+    pub vertical_ascii: VerticalAscii,
     /// 阅读器怎么定图片尺寸（TOML 里不写是 `css`），见 [`ImageSizing`]。ireader 写 `device-px`，xochitl 写 `percent`。
     pub image_sizing: ImageSizing,
     /// 阅读器缺省字号下 1em 是几个屏幕像素（只 kindle 写：掌阅、Move 照它把 em 写的图片宽度折成 Kindle 上的实际大小，
@@ -589,6 +610,10 @@ struct ProfileFile {
     #[serde(default)]
     cover_image_thumb: bool,
     #[serde(default)]
+    vertical_text: bool,
+    #[serde(default)]
+    vertical_ascii: VerticalAscii,
+    #[serde(default)]
     image_sizing: ImageSizing,
     font_px: Option<u32>,
     #[serde(default)]
@@ -683,6 +708,8 @@ impl Profile {
             cover_meta_thumb: f.cover_meta_thumb,
             cover_thumb_fit: f.cover_thumb_fit,
             cover_image_thumb: f.cover_image_thumb,
+            vertical_text: f.vertical_text,
+            vertical_ascii: f.vertical_ascii,
             image_sizing: f.image_sizing,
             font_px: f.font_px,
             line_px: f.line_px,
@@ -780,6 +807,18 @@ impl Profile {
         if self.cover_thumb_fit == CoverThumbFit::Pad && self.cover_thumb_aspect.is_none() {
             return Err(format!(
                 "profile {}: cover_thumb_fit = \"pad\" 要和 cover_thumb_aspect 一起写（没有比例要凑）",
+                self.id
+            ));
+        }
+        if self.vertical_ascii != VerticalAscii::Keep && !self.vertical_text {
+            return Err(format!(
+                "profile {}: vertical_ascii 不是 keep 时要开 vertical_text（这台不竖排，换了也没有用）",
+                self.id
+            ));
+        }
+        if self.vertical_ascii == VerticalAscii::Tcy {
+            return Err(format!(
+                "profile {}: vertical_ascii = \"tcy\"（縦中横）未实现，先用 \"fullwidth\" 或 \"keep\"",
                 self.id
             ));
         }
@@ -1099,6 +1138,9 @@ mod tests {
             cover_meta_thumb: _,
             cover_thumb_fit: _,
             cover_image_thumb: _,
+            // 竖排：按书出字母，不进设备段（规则 9）
+            vertical_text: _,
+            vertical_ascii: _,
             image_sizing: _,
             font_px: _,
             // 阅读器模型（也有的同时直接进）
@@ -1743,5 +1785,34 @@ mod tests {
         assert_eq!(p.cover_thumb_fit, CoverThumbFit::Crop, "不写是裁");
         let p = Profile::parse("x", &src.replace("cover_image_thumb = true", "")).unwrap();
         assert!(!p.cover_image_thumb, "不写是 false");
+    }
+
+    /// 竖排两个字段：缺省不竖排、ASCII 原样；`vertical_ascii != keep` 要开 `vertical_text`；`tcy` 未实现。
+    #[test]
+    fn vertical_fields_and_validation() {
+        let base = "name = \"x\"\ncolor = false\nformats = [\"epub\"]\nnotes = \"jump\"\n";
+        let screen = "[screen]\nwidth = 1000\nheight = 1500\n";
+        let on = format!("{base}vertical_text = true\nvertical_ascii = \"fullwidth\"\n{screen}");
+        let p = Profile::parse("x", &on).unwrap();
+        assert!(p.vertical_text);
+        assert_eq!(p.vertical_ascii, VerticalAscii::Fullwidth);
+        let p = Profile::parse("x", &format!("{base}{screen}")).unwrap();
+        assert!(!p.vertical_text, "不写是 false");
+        assert_eq!(p.vertical_ascii, VerticalAscii::Keep, "不写是 keep");
+        let e = Profile::parse(
+            "x",
+            &format!("{base}vertical_ascii = \"fullwidth\"\n{screen}"),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("vertical_ascii 不是 keep 时要开 vertical_text"),
+            "{e}"
+        );
+        let e = Profile::parse(
+            "x",
+            &format!("{base}vertical_text = true\nvertical_ascii = \"tcy\"\n{screen}"),
+        )
+        .unwrap_err();
+        assert!(e.contains("未实现"), "{e}");
     }
 }
