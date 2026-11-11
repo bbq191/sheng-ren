@@ -493,13 +493,14 @@ fn fullwidth_segment(s: &str) -> String {
         if c == '&' {
             // 只有 & 后紧跟 [A-Za-z0-9#]、其后全是 [A-Za-z0-9] 直到 `;`（≤32 字符）才当实体；
             // 遇到空白、标点等立即当普通 `&`（转成 ＆），不能把 `Tom & Jerry;` 整段吞掉（agy 二审建议 3）。
+            let start = i;
             let mut j = i + 1;
             let mut count = 0usize;
             let first_ok = s[j..]
                 .chars()
                 .next()
                 .is_some_and(|c| c.is_ascii_alphanumeric() || c == '#');
-            let mut ok = first_ok;
+            let ok = first_ok;
             while ok && j < s.len() && count < 32 {
                 let ch = s[j..].chars().next().unwrap();
                 if ch == ';' {
@@ -520,14 +521,13 @@ fn fullwidth_segment(s: &str) -> String {
                     break;
                 }
                 if !(ch.is_ascii_alphanumeric() || (count == 0 && ch == '#')) {
-                    ok = false;
                     break;
                 }
                 j += ch.len_utf8();
                 count += 1;
             }
-            if j >= s.len() || !ok {
-                // 不是实体：& 照普通字符转全角，后面继续处理
+            if i == start {
+                // 不是实体（含 32 个字符内没遇到 `;`）：& 照普通字符转全角，后面继续处理
                 out.push(char::from_u32('&' as u32 + 0xFEE0).unwrap());
                 i += 1;
             }
@@ -926,6 +926,11 @@ mod tests {
             fullwidth_ascii("<p>Tom & Jerry; 2026</p>"),
             "<p>Ｔｏｍ ＆ Ｊｅｒｒｙ； ２０２６</p>",
             "未转义的 & 后不是实体，后面的字照转"
+        );
+        assert_eq!(
+            fullwidth_ascii("<p>&abcdefghijklmnopqrstuvwxyz0123456789 x</p>"),
+            "<p>＆ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ０１２３４５６７８９ ｘ</p>",
+            "& 后 32 个字母数字仍没有 `;`：不是实体，不能卡死"
         );
         assert_eq!(
             fullwidth_ascii("<p><!-- abc --></p>"),
