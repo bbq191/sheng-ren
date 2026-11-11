@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-kobo-cover-pad
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: kobo-cover-pad（从 master `fe5bb44` 切出）
-- 更新时间: 2026-11-11T16:10+08:00
+- 更新时间: 2026-11-11T14:10+08:00
 - 引用: 无
 
 ## 需求原文
@@ -61,6 +61,54 @@
 
 ## 结果
 <!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-11 13:49–14:10 +08:00
+- base..head：`4302b67..HEAD`（`4302b67` 是任务单提交）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `deb9fc4` | `.dev/tasks/2026-11-11-kobo-cover-pad.md` | 状态改 accepted |
+  | 1–5 | `e70214a` | 见 `git show --stat e70214a` | 补白缩略图、两个 profile 字段、OPF 属性挪动、kobo.toml、版本号、金样、测试、文档 |
+  | 结果 | 本提交 | `.dev/tasks/2026-11-11-kobo-cover-pad.md` | 填结果、状态 done |
+
+- 实现：
+  - profile 新字段 `cover_thumb_fit = "crop" | "pad"`（缺省 `crop`）、`cover_image_thumb = bool`（缺省 `false`）。`pad` / `true` 没和 `cover_thumb_aspect` 一起写时报错（`crates/profile/src/lib.rs:771-786`）。
+  - `imgopt::cover_thumbnail` 加 `fit` 参数：`pad` 不裁不拉伸，按 `cover_thumb_aspect` 补白（缺的方向两边各一半，`#FFFFFF`；黑白屏照旧转灰度），**不做** `thumb_scan_margins`；长边 1200 按补完的画布算，JPEG 质量 90 不变（`crates/bookconv/src/imgopt.rs:1026-1100`）。
+  - `wash::add_cover_thumbnail` 新增 `cover_image_thumb`：`properties="cover-image"` 从真封面挪到 `eink-thumb`（真封面保留别的 properties），`<meta name="cover">` 指缩略图，真封面 id 记进 `<meta name="eink-thumbnail-source">`；`pad` 另写 `<meta name="eink-thumbnail-fit" content="pad"/>`。读封面的 `wash::opf::declared_cover` 跳过 `eink-thumb`、按 source meta 认回真封面；`epubbook` 扫 `cover-image` 时也跳过缩略图。换设备/重跑幂等由 `optimize` 测试覆盖。
+  - `kobo.toml`：`cover_thumb_aspect = 0.7403`、`cover_thumb_fit = "pad"`、`cover_image_thumb = true`，注释写明 1072×1448、vinci 2026-11-11 定、推翻 11-10「不需要」。
+  - `OPTIMIZE_VERSION` 66→67、`COMIC_VERSION` 67→68（漫画和文字书共用同一段缩略图代码，Kobo 漫画产物也会变）。
+
+- 测试：
+
+  | 命令 | 结果 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test -p bookconv` | 通过 | 538 passed；含 `cover_thumbnail_pads_white_without_cropping`（宽封面 800×1081、窄封面 740×1000、比例已合不做、长边 889×1200、灰度）和 Kobo/汉王/Kindle/Bigme 换设备、重跑幂等 |
+  | `cargo test -p profile` | 通过 | 18 passed；`kobo_pads_cover_thumbnail_and_moves_cover_image`，两个新字段缺 aspect 都报错，别的设备缺省值不变 |
+  | `cargo test -p library` | 通过 | 71+7+14+46 passed，含重写后的 `fp_golden` |
+  | `cargo test --workspace` | 通过 | 全部通过，0 failed |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo fmt --all -- --check` | 通过 | 干净（只格式化了本次改过的文件） |
+
+- `fp_golden.txt`（`UPDATE_FP_GOLDEN=1` 重写后复跑通过）：
+  - 124 行 Kobo 的旧行（62 组变异 × 文字书/漫画）设备段按变异后的值变化：基线和多数行是 `t0.7403pC`（`cover_thumb_fit`、`cover_image_thumb` 的 `p`、`C`；`cover_thumb_aspect` 那组去掉比例、`cover_thumb_fit` 那组回到裁、`cover_image_thumb` 那组不挪属性，分别少对应字母）。
+  - 其余 496 行老设备的旧行**除版本号 `66→67` / `c67→c68` 外一个字不变**（脚本逐行对拍确认）。任务单写「应只有 kobo 行变」是按设备字段说的；版本号在每一行的指纹里，所以每一行都会看到版本那一段变。
+  - 末尾新增 `cover_thumb_fit`、`cover_image_thumb` 两组变异行，每台 4 行（文字书/漫画 × 2），共 20 行；旧行不挪。
+
+- 合成回归（`/tmp/opencode/kobo-pad/`，不提交）：最小 EPUB 各一本，封面 800×1000（宽）、600×1000（窄），`epub-optimize --device=kobo` 后解包：
+  - 宽封面缩略图 **800×1081**（内容 1000 高居中，上下共 81px 白），比例 0.7401；窄封面 **740×1000**（内容 600 宽居中，左右共 140px 白），比例 0.7400。
+  - 两本 OPF 都有：`<meta name="cover" content="eink-thumb"/>`、`<meta name="eink-thumbnail" content="eink-thumb"/>`、`<meta name="eink-thumbnail-source" content="cv"/>`、`<meta name="eink-thumbnail-fit" content="pad"/>`；`<item id="eink-thumb" properties="cover-image" href="eink-thumb.jpg" .../>`；真封面 `<item id="cv" href="i/c.jpg" .../>` 去掉了 `cover-image`；`cover.xhtml` 仍是 `<img src="i/c.jpg" .../>`。
+  - 再跑一次 Kobo：两本产物逐字节相同。
+  - 对照 master 二进制：同样两本走 `kindle` / `ireader` / `hanvon` / `bigme`，产物逐字节相同（合成书上验证，不是真书回归）。
+
+- 偏离（改在「涉及文件」以外）：
+  - `crates/bookconv/src/wash/opf.rs`：`declared_cover` 跳过带 `cover-image` 的缩略图、并支持 `eink-thumbnail-source` 回退（任务规则 2 要求「另有办法认真封面」）。
+  - `crates/bookconv/src/epubbook.rs`：读 `cover-image` 时跳过 `eink-thumb`，否则 Kobo 产物被 KFX/书库路径读成本身是缩略图的封面；并加 source meta 回退。
+  - `docs/architecture.md`（指纹字母 `p`/`C`）、`docs/development.md`（版本号现值 67/68）、`docs/typesetting.md`（书架缩略图一节）。
+  - 新增 `<meta name="eink-thumbnail-source">`、`<meta name="eink-thumbnail-fit">` 两个约定：前者用来认回真封面，后者区分补白/裁（同一比例换设备时不会被误留）。只写在 Kobo 产物里；别的设备产物逐字节不变。
+
+- 未完成 / 待真机：
+  - **没跑真书回归、没上真机**。Kobo 书架封面是否一样高由 vinci 同步后验；旧封面可能被 Nickel 缓存，先看新书或重开书库，若仍显示旧封面记下现象。
+  - Kobo 全部书的指纹都会变（版本号进指纹）、下次 `sync` 重建；只有有封面的书产物会变，没封面的重建后逐字节相同、不重传。
 
 ## 审查
 <!-- 负责 bot 填写 -->
