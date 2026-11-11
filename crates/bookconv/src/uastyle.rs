@@ -32,7 +32,9 @@ pub fn ua_css_vertical(font_scale: Option<f64>) -> String {
         s.push_str(&format!("{t}{{margin-left:1em;margin-right:1em;}}\n"));
     }
     for t in INDENTED_BLOCK_TAGS {
-        s.push_str(&format!("{t}{{margin-left:1em;margin-right:1em;margin-top:{INDENT_PX}px;}}\n"));
+        s.push_str(&format!(
+            "{t}{{margin-left:1em;margin-right:1em;margin-top:{INDENT_PX}px;}}\n"
+        ));
     }
     for t in LIST_TAGS {
         s.push_str(&format!("{t}{{padding-top:{LIST_INDENT_EM}em;}}\n"));
@@ -127,15 +129,23 @@ mod tests {
             "{css}"
         );
         assert!(
-            css.contains("h2{font-size:1.5em;font-weight:bold;margin-left:0.83em;margin-right:0.83em;}"),
+            css.contains(
+                "h2{font-size:1.5em;font-weight:bold;margin-left:0.83em;margin-right:0.83em;}"
+            ),
             "{css}"
         );
         assert!(
             css.contains("blockquote{margin-left:1em;margin-right:1em;margin-top:40px;}"),
             "{css}"
         );
-        assert!(css.contains("ul{padding-top:1.5em;}\nol{padding-top:1.5em;}\n"), "{css}");
-        assert!(!css.contains("margin-top:1em") && !css.contains("margin-bottom"), "{css}");
+        assert!(
+            css.contains("ul{padding-top:1.5em;}\nol{padding-top:1.5em;}\n"),
+            "{css}"
+        );
+        assert!(
+            !css.contains("margin-top:1em") && !css.contains("margin-bottom"),
+            "{css}"
+        );
         assert!(ua_css_vertical(Some(0.8)).ends_with("body{font-size:80%;}\n"));
     }
 }

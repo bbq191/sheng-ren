@@ -900,7 +900,9 @@ fn check_vertical(c: &Command, a: &Args) {
     check_options(c, a);
     let n = ["on", "off", "auto"].iter().filter(|f| a.has(f)).count();
     if n != 1 {
-        usage_error("vertical 要选一种：--on（强制竖排）、--off（不竖排）或 --auto（回到自动判定）");
+        usage_error(
+            "vertical 要选一种：--on（强制竖排）、--off（不竖排）或 --auto（回到自动判定）",
+        );
     }
     if a.pos.len() < 2 {
         usage_error("vertical 要写书或目录");
@@ -1060,13 +1062,17 @@ fn cmd_list(ctx: &Ctx) {
             } else {
                 "✗ 不在这台的跟踪范围（下次 sync 从设备上删）"
             };
-            let vertical = lib.devices().get(&o.device).filter(|p| p.vertical_text).map(|p| {
-                if lib.vertical_for(&m, p).unwrap_or(false) {
-                    "竖排"
-                } else {
-                    "横排"
-                }
-            });
+            let vertical = lib
+                .devices()
+                .get(&o.device)
+                .filter(|p| p.vertical_text)
+                .map(|p| {
+                    if lib.vertical_for(&m, p).unwrap_or(false) {
+                        "竖排"
+                    } else {
+                        "横排"
+                    }
+                });
             println!(
                 "      {:<20} {state}  {}{}",
                 o.device,

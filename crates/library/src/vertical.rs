@@ -170,7 +170,9 @@ impl Library {
         let rel = normalize(dir);
         let mut n = 0;
         for m in self.list() {
-            let Some((_, r)) = self.tracked_rel(&m, "kobo").or_else(|| self.tracked_rel(&m, "hanvon"))
+            let Some((_, r)) = self
+                .tracked_rel(&m, "kobo")
+                .or_else(|| self.tracked_rel(&m, "hanvon"))
             else {
                 continue;
             };

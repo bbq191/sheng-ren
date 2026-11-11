@@ -3525,7 +3525,9 @@ fn vertical_book_gets_rtl_vertical_css_and_text() {
         "{opf}"
     );
     assert!(
-        opf.contains(r#"<item id="eink-vertical-css" href="eink-vertical.css" media-type="text/css"/>"#),
+        opf.contains(
+            r#"<item id="eink-vertical-css" href="eink-vertical.css" media-type="text/css"/>"#
+        ),
         "{opf}"
     );
     let c1 = text_of(&out, "OEBPS/c1.xhtml");
@@ -3535,7 +3537,9 @@ fn vertical_book_gets_rtl_vertical_css_and_text() {
         "竖排样式表最后挂：{c1}"
     );
     assert!(
-        c1.contains("<p id=\"p1\">他说『好』，２０２６年与ＫＯＲｅａｄｅｒ，ＵＳ＄６，ｄｏｎ＇ｔ。</p>"),
+        c1.contains(
+            "<p id=\"p1\">他说『好』，２０２６年与ＫＯＲｅａｄｅｒ，ＵＳ＄６，ｄｏｎ＇ｔ。</p>"
+        ),
         "{c1}"
     );
     assert!(
@@ -3553,10 +3557,16 @@ fn vertical_book_gets_rtl_vertical_css_and_text() {
         "{css}"
     );
     assert!(!css.contains("float"), "{css}");
-    assert!(css.contains("div{position:absolute;margin-top:2em}"), "{css}");
+    assert!(
+        css.contains("div{position:absolute;margin-top:2em}"),
+        "{css}"
+    );
     // nav 和 ncx 的文字同样转，属性不动
     let nav = text_of(&out, "OEBPS/nav.xhtml");
-    assert!(nav.contains(r#"<a href="c1.xhtml#p1">第１章 『标题』</a>"#), "{nav}");
+    assert!(
+        nav.contains(r#"<a href="c1.xhtml#p1">第１章 『标题』</a>"#),
+        "{nav}"
+    );
     let ncx_name = zip_names(&out)
         .into_iter()
         .find(|n| n.ends_with(".ncx"))
@@ -3587,7 +3597,9 @@ fn vertical_off_leaves_text_and_layout_alone() {
     let c1 = text_of(&out, "OEBPS/c1.xhtml");
     assert!(c1.contains("他说“好”，2026年与KOReader"), "{c1}");
     assert!(!c1.contains("eink-vertical.css"), "{c1}");
-    assert!(!zip_names(&out).iter().any(|n| n.ends_with("eink-vertical.css")));
+    assert!(!zip_names(&out)
+        .iter()
+        .any(|n| n.ends_with("eink-vertical.css")));
 }
 
 #[test]
@@ -3630,4 +3642,3 @@ fn kobo_text_books_use_popup_notes_both_horizontal_and_vertical() {
         "{y}"
     );
 }
-

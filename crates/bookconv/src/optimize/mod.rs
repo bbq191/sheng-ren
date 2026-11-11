@@ -1306,7 +1306,8 @@ impl<'a> EntryXform<'a> {
         }
         if (self.reader_margins || self.number_note_icons || self.fixed_layout.is_some())
             && crate::wash::is_wash_css_name(name)
-        {            let mut out = data.to_vec();
+        {
+            let mut out = data.to_vec();
             // 图标注释号都换成数字的模式里，限图标高度的 `.eink-noteicon` 用不上了（2026-09-30 ：失效样式删掉）
             if self.number_note_icons {
                 // 规则文本取清洗层生成样式表时用的同一个常量（`wash::NOTEICON_RULE`），不在这里另写一份
@@ -1329,7 +1330,10 @@ impl<'a> EntryXform<'a> {
             return Some(Cow::Owned(out));
         }
         if self.opf_name == Some(name)
-            && (self.page_direction.is_some() || self.comic || self.title.is_some() || self.vertical)
+            && (self.page_direction.is_some()
+                || self.comic
+                || self.title.is_some()
+                || self.vertical)
         {
             let Ok(text) = std::str::from_utf8(data) else {
                 return Some(Cow::Borrowed(data));

@@ -40,8 +40,7 @@ pub fn is_fixed_layout(entries: &[Entry]) -> bool {
 
 fn fixed_layout_opf(opf: &str) -> bool {
     use html::TagKind;
-    for t in html::tags(opf).filter(|t| t.kind == TagKind::Open && opf::is_local(t.name, "meta"))
-    {
+    for t in html::tags(opf).filter(|t| t.kind == TagKind::Open && opf::is_local(t.name, "meta")) {
         let tag = &opf[t.start..t.end];
         let name = html::attr_value(tag, "name").unwrap_or("");
         let property = html::attr_value(tag, "property").unwrap_or("");
@@ -55,9 +54,11 @@ fn fixed_layout_opf(opf: &str) -> bool {
                 return true;
             }
             // EPUB 3 的写法是元素内容：<meta property="rendition:layout">pre-paginated</meta>
-            if html::find_close(opf, t.end, t.name)
-                .is_some_and(|c| opf[t.end..c.start].trim().eq_ignore_ascii_case("pre-paginated"))
-            {
+            if html::find_close(opf, t.end, t.name).is_some_and(|c| {
+                opf[t.end..c.start]
+                    .trim()
+                    .eq_ignore_ascii_case("pre-paginated")
+            }) {
                 return true;
             }
         }
@@ -170,9 +171,10 @@ fn inline_vertical(html: &str) -> bool {
     html::tags(html)
         .filter(|t| t.kind == TagKind::Open && (t.is("html") || t.is("body")))
         .any(|t| {
-            html::attr_value(&html[t.start..t.end], "style")
-                .is_some_and(|s| s.to_ascii_lowercase().contains("writing-mode")
-                    && s.to_ascii_lowercase().contains("vertical-"))
+            html::attr_value(&html[t.start..t.end], "style").is_some_and(|s| {
+                s.to_ascii_lowercase().contains("writing-mode")
+                    && s.to_ascii_lowercase().contains("vertical-")
+            })
         })
 }
 
@@ -199,9 +201,32 @@ fn rule_sets_vertical(css: &str, re: &Regex) -> bool {
 
 /// 块级元素的界限：文字按这些元素分段（引号配对不跨段、不跨块）。
 const BLOCK_TAGS: &[&str] = &[
-    "p", "div", "li", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "dt", "dd",
-    "section", "article", "aside", "figure", "figcaption", "header", "footer", "main", "tr",
-    "table", "body", "html",
+    "p",
+    "div",
+    "li",
+    "blockquote",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "td",
+    "th",
+    "dt",
+    "dd",
+    "section",
+    "article",
+    "aside",
+    "figure",
+    "figcaption",
+    "header",
+    "footer",
+    "main",
+    "tr",
+    "table",
+    "body",
+    "html",
 ];
 
 fn is_block(name: &str) -> bool {
@@ -280,7 +305,11 @@ fn map_text_groups(html: &str, skip: &[&str], f: impl Fn(&str) -> String) -> Str
 /// 只在一个段落里成对、嵌套合法的才转；引号里全是西文（没有汉字）的弯引号不转。
 pub fn convert_quotes(html: &str) -> String {
     let decoded = decode_quote_refs(html);
-    map_text_groups(&decoded, &["code", "pre", "script", "style"], convert_quotes_text)
+    map_text_groups(
+        &decoded,
+        &["code", "pre", "script", "style"],
+        convert_quotes_text,
+    )
 }
 
 /// 把文字节点里的直引号字符引用（`&quot;`、`&apos;`、`&#34;`、`&#39;`、十六进制写法）还原成字面引号，
@@ -304,9 +333,8 @@ fn decode_quote_refs(html: &str) -> String {
 
 fn decode_quote_refs_text(s: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?i)&(?:quot|apos|#0*34|#0*39|#x0*22|#x0*27);").unwrap()
-    });
+    let re =
+        RE.get_or_init(|| Regex::new(r"(?i)&(?:quot|apos|#0*34|#0*39|#x0*22|#x0*27);").unwrap());
     re.replace_all(s, |c: &regex::Captures| -> String {
         let m = c.get(0).unwrap().as_str().to_ascii_lowercase();
         if m.contains("39") || m.contains("27") {
@@ -357,7 +385,11 @@ fn convert_quotes_text(s: &str) -> String {
             if western {
                 continue;
             }
-            let (o, c) = if kind == '“' { ('『', '』') } else { ('「', '」') };
+            let (o, c) = if kind == '“' {
+                ('『', '』')
+            } else {
+                ('「', '」')
+            };
             out[open] = o;
             out[close] = c;
         }
@@ -378,7 +410,11 @@ fn convert_quotes_text(s: &str) -> String {
             .collect();
         for pair in positions.chunks(2) {
             if pair.len() == 2 {
-                let (o, c) = if quote == '"' { ('『', '』') } else { ('「', '」') };
+                let (o, c) = if quote == '"' {
+                    ('『', '』')
+                } else {
+                    ('「', '」')
+                };
                 out[pair[0]] = o;
                 out[pair[1]] = c;
             }
@@ -557,11 +593,7 @@ pub fn rewrite_css(css: &str) -> (String, usize) {
             body.push_str(&format!("{new_prop}:{value};"));
         }
         if changed {
-            edits.push((
-                r.body_start,
-                r.body_start + r.body.len(),
-                body,
-            ));
+            edits.push((r.body_start, r.body_start + r.body.len(), body));
         }
     }
     if edits.is_empty() {
@@ -652,13 +684,25 @@ mod tests {
     fn zh_text_detection_follows_language_and_scripts() {
         let zh = "这是一本中文书。".repeat(100);
         let ja = "これは日本語の本です。".repeat(100);
-        assert!(is_zh_text(&book("<dc:language>zh-CN</dc:language>", &[&zh])));
-        assert!(is_zh_text(&book("<dc:language>zh-TW</dc:language>", &[&zh])));
+        assert!(is_zh_text(&book(
+            "<dc:language>zh-CN</dc:language>",
+            &[&zh]
+        )));
+        assert!(is_zh_text(&book(
+            "<dc:language>zh-TW</dc:language>",
+            &[&zh]
+        )));
         assert!(is_zh_text(&book("<dc:language>en</dc:language>", &[&zh])));
         assert!(!is_zh_text(&book("<dc:language>ja</dc:language>", &[&ja])));
-        assert!(!is_zh_text(&book("<dc:language>zh</dc:language>", &[&"hello world ".repeat(200)])));
+        assert!(!is_zh_text(&book(
+            "<dc:language>zh</dc:language>",
+            &[&"hello world ".repeat(200)]
+        )));
         let half = format!("{}{}", zh, "hello world ".repeat(200));
-        assert!(!is_zh_text(&book("<dc:language>zh</dc:language>", &[&half])));
+        assert!(!is_zh_text(&book(
+            "<dc:language>zh</dc:language>",
+            &[&half]
+        )));
         assert!(!is_zh_text(&book(
             "<dc:language>zh</dc:language><meta property=\"rendition:layout\">pre-paginated</meta>",
             &[&zh]
@@ -668,14 +712,21 @@ mod tests {
     #[test]
     fn native_vertical_is_detected() {
         let zh = "<html><head><style>p{color:red}</style></head><body><p>正文</p></body></html>";
-        assert!(!is_natively_vertical(&book("<dc:language>zh</dc:language>", &[zh])));
+        assert!(!is_natively_vertical(&book(
+            "<dc:language>zh</dc:language>",
+            &[zh]
+        )));
         let css = vec![
             e("O/content.opf", "<package/>"),
             e("O/s.css", "html{writing-mode:vertical-rl}"),
         ];
         assert!(is_natively_vertical(&css));
-        let inline = "<html><body style=\"-webkit-writing-mode:vertical-rl\"><p>正文</p></body></html>";
-        assert!(is_natively_vertical(&book("<dc:language>zh</dc:language>", &[inline])));
+        let inline =
+            "<html><body style=\"-webkit-writing-mode:vertical-rl\"><p>正文</p></body></html>";
+        assert!(is_natively_vertical(&book(
+            "<dc:language>zh</dc:language>",
+            &[inline]
+        )));
         let table_only = vec![
             e("O/content.opf", "<package/>"),
             e("O/s.css", "table{writing-mode:vertical-rl}"),
@@ -685,14 +736,8 @@ mod tests {
 
     #[test]
     fn quotes_convert_only_complete_pairs_in_a_paragraph() {
-        assert_eq!(
-            convert_quotes("<p>他说“好”。</p>"),
-            "<p>他说『好』。</p>"
-        );
-        assert_eq!(
-            convert_quotes("<p>“外‘内’外”</p>"),
-            "<p>『外「内」外』</p>"
-        );
+        assert_eq!(convert_quotes("<p>他说“好”。</p>"), "<p>他说『好』。</p>");
+        assert_eq!(convert_quotes("<p>“外‘内’外”</p>"), "<p>『外「内」外』</p>");
         assert_eq!(convert_quotes("<p>他说“好</p>"), "<p>他说“好</p>");
         assert_eq!(convert_quotes("<p>“Hello”</p>"), "<p>“Hello”</p>");
         assert_eq!(convert_quotes("<p>已是「」『』</p>"), "<p>已是「」『』</p>");
@@ -701,10 +746,7 @@ mod tests {
     #[test]
     fn straight_quotes_and_apostrophes() {
         assert_eq!(convert_quotes("<p>他说\"好\"</p>"), "<p>他说『好』</p>");
-        assert_eq!(
-            convert_quotes("<p>'甲'和'乙'</p>"),
-            "<p>「甲」和「乙」</p>"
-        );
+        assert_eq!(convert_quotes("<p>'甲'和'乙'</p>"), "<p>「甲」和「乙」</p>");
         assert_eq!(
             convert_quotes("<p>\"外'内'外\"</p>"),
             "<p>『外「内」外』</p>"
@@ -785,7 +827,10 @@ mod tests {
              .x{margin:1em 2em 3em 4em}",
         );
         assert!(out.contains("p{margin-right:1em;margin-bottom:2em;padding-left:3px;height:50%;text-align:center;text-indent:2em;}"), "{out}");
-        assert!(out.contains("div{position:absolute;margin-top:1em}"), "{out}");
+        assert!(
+            out.contains("div{position:absolute;margin-top:1em}"),
+            "{out}"
+        );
         assert!(out.contains("img{max-height:100%;}"), "{out}");
         assert!(out.contains(".x{margin:4em 1em 2em 3em;}"), "{out}");
         assert_eq!(complex, 1);

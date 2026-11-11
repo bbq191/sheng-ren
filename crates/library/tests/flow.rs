@@ -3115,5 +3115,8 @@ fn vertical_books_follow_profile_overrides_and_directory_lists() {
         .build(&fresh(&m2.id), profile::get("bigme").unwrap(), true)
         .unwrap();
     let (opf, _) = opf_and_chapter(built_path(&b));
-    assert!(!opf.contains("vertical-rl"), "设备没开 vertical_text 时不竖排");
+    assert!(
+        !opf.contains("vertical-rl"),
+        "设备没开 vertical_text 时不竖排"
+    );
 }

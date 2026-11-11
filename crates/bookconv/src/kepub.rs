@@ -624,10 +624,16 @@ mod tests {
     fn vertical_fullwidth_text_and_css_link_are_not_broken() {
         let d = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>竖排</title><link rel="stylesheet" type="text/css" href="eink-vertical.css"/></head><body><p>他说『好』，２０２６年与ＫＯＲｅａｄｅｒ。</p><p><ruby>漢<rt>かん</rt></ruby>字</p></body></html>"#;
         let (out, _) = transform_xhtml(d, &Opts::default()).unwrap();
-        assert!(out.contains("他说『好』，２０２６年与ＫＯＲｅａｄｅｒ。"), "{out}");
+        assert!(
+            out.contains("他说『好』，２０２６年与ＫＯＲｅａｄｅｒ。"),
+            "{out}"
+        );
         assert!(out.contains(r#"href="eink-vertical.css""#), "{out}");
         let b = body_of(&out);
-        assert!(strip(&b).contains("他说『好』，２０２６年与ＫＯＲｅａｄｅｒ。"), "{b}");
+        assert!(
+            strip(&b).contains("他说『好』，２０２６年与ＫＯＲｅａｄｅｒ。"),
+            "{b}"
+        );
         assert!(!out.contains("<rt><span"), "rt 里不包 span：{out}");
         assert!(!out.contains("<rp><span"), "rp 里不包 span：{out}");
     }
