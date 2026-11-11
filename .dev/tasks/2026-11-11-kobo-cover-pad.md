@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-kobo-cover-pad
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: opencode-local
 - 分支: kobo-cover-pad（从 master `fe5bb44` 切出）
-- 更新时间: 2026-11-11T13:55+08:00
+- 更新时间: 2026-11-11T16:10+08:00
 - 引用: 无
 
 ## 需求原文
