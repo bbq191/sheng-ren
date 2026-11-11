@@ -181,20 +181,43 @@ fn inline_vertical(html: &str) -> bool {
 fn rule_sets_vertical(css: &str, re: &Regex) -> bool {
     for r in crate::cascade::rule_spans(css) {
         let sel = crate::cascade::rule_selector(r.prelude);
-        let sel = sel.trim();
-        if sel.is_empty()
-            || sel.starts_with('@')
-            || ["table", "img", "svg", "ruby", "rt", "rp"]
-                .iter()
-                .any(|n| sel.to_ascii_lowercase().contains(n))
-        {
+        if !re.is_match(r.body) {
             continue;
         }
-        if re.is_match(r.body) {
+        if sel
+            .split(',')
+            .any(|part| selector_targets_root(part.trim()))
+        {
             return true;
         }
     }
     false
+}
+
+/// 选择器最右边那一节是不是 `html`、`body` 或 `:root`（可以带类、属性、伪类，如 `body.vrtl`、`html[lang]`）。
+/// 只看最右边：`body .signature` 是局部类、`html table` 是表格，都不算全书竖排（agy 二审建议 2）。
+fn selector_targets_root(sel: &str) -> bool {
+    if sel.is_empty() || sel.starts_with('@') {
+        return false;
+    }
+    // 组合符后的最后一节；`>`、`+`、`~`、空白
+    let last = sel
+        .split(|c: char| c == '>' || c == '+' || c == '~' || c.is_whitespace())
+        .rev()
+        .find(|s| !s.is_empty())
+        .unwrap_or("");
+    if last.starts_with(':') {
+        return last
+            .split(['.', '#', '[', ':'])
+            .next()
+            .is_some_and(|n| n.eq_ignore_ascii_case("root"))
+            || last.to_ascii_lowercase().starts_with(":root");
+    }
+    let name: String = last
+        .chars()
+        .take_while(|c| !matches!(c, '.' | '#' | '[' | ':'))
+        .collect();
+    name.eq_ignore_ascii_case("html") || name.eq_ignore_ascii_case("body")
 }
 
 // ───────────────────────── 文字节点 ─────────────────────────
@@ -406,12 +429,23 @@ fn convert_quotes_text(s: &str) -> String {
             out[close] = c;
         }
     }
-    // 直引号：撇号（前后都是 ASCII 字母/数字）不算；余下的按出现顺序成对
+    // 直引号：撇号（前后都是 ASCII 字母/数字）不算；英寸号（数字后的 "，后面不是字母/汉字）也不算；
+    // 余下的按出现顺序成对
+    let inch = |i: usize| -> bool {
+        chars[i] == '"'
+            && i > 0
+            && chars[i - 1].is_ascii_digit()
+            && chars
+                .get(i + 1)
+                .is_none_or(|c| !(c.is_ascii_alphabetic() || is_han(*c)))
+    };
     for quote in ['"', '\''] {
         let positions: Vec<usize> = chars
             .iter()
             .enumerate()
-            .filter(|&(i, &c)| c == quote && (quote != '\'' || !apostrophe(i)))
+            .filter(|&(i, &c)| {
+                c == quote && (quote != '\'' || !apostrophe(i)) && (quote != '"' || !inch(i))
+            })
             .map(|(i, _)| i)
             .collect();
         for pair in positions.chunks(2) {
@@ -457,23 +491,47 @@ fn fullwidth_segment(s: &str) -> String {
     while i < s.len() {
         let c = s[i..].chars().next().unwrap();
         if c == '&' {
-            if let Some(rel) = s[i..].find(';').filter(|&r| r <= 40) {
-                let r = &s[i..i + rel + 1];
-                let decoded = html::unescape_entities(r);
-                if decoded.as_ref() != r {
-                    let mut it = decoded.chars();
-                    if let (Some(d), None) = (it.next(), it.next()) {
-                        if (0x21..=0x7E).contains(&(d as u32)) {
-                            out.push(char::from_u32(d as u32 + 0xFEE0).unwrap());
-                            i += rel + 1;
-                            continue;
+            // 只有 & 后紧跟 [A-Za-z0-9#]、其后全是 [A-Za-z0-9] 直到 `;`（≤32 字符）才当实体；
+            // 遇到空白、标点等立即当普通 `&`（转成 ＆），不能把 `Tom & Jerry;` 整段吞掉（agy 二审建议 3）。
+            let mut j = i + 1;
+            let mut count = 0usize;
+            let first_ok = s[j..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '#');
+            let mut ok = first_ok;
+            while ok && j < s.len() && count < 32 {
+                let ch = s[j..].chars().next().unwrap();
+                if ch == ';' {
+                    let r = &s[i..=j];
+                    let decoded = html::unescape_entities(r);
+                    if decoded.as_ref() != r {
+                        let mut it = decoded.chars();
+                        if let (Some(d), None) = (it.next(), it.next()) {
+                            if (0x21..=0x7E).contains(&(d as u32)) {
+                                out.push(char::from_u32(d as u32 + 0xFEE0).unwrap());
+                                i = j + 1;
+                                break;
+                            }
                         }
                     }
+                    out.push_str(r);
+                    i = j + 1;
+                    break;
                 }
-                out.push_str(r);
-                i += rel + 1;
-                continue;
+                if !(ch.is_ascii_alphanumeric() || (count == 0 && ch == '#')) {
+                    ok = false;
+                    break;
+                }
+                j += ch.len_utf8();
+                count += 1;
             }
+            if j >= s.len() || !ok {
+                // 不是实体：& 照普通字符转全角，后面继续处理
+                out.push(char::from_u32('&' as u32 + 0xFEE0).unwrap());
+                i += 1;
+            }
+            continue;
         }
         if (0x21..=0x7E).contains(&(c as u32)) {
             out.push(char::from_u32(c as u32 + 0xFEE0).unwrap());
@@ -667,7 +725,20 @@ fn map_box_decl(prop: &str, value: &str) -> (String, String) {
 
 /// `[top, right, bottom, left]` → `[left, top, right, bottom]`（竖排后的新 top 是旧 left）。
 fn rotate_box_values(value: &str) -> String {
-    let vals: Vec<&str> = value.split_whitespace().collect();
+    let trimmed = value.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let (body, important) = if lower.ends_with("!important") {
+        (
+            trimmed[..trimmed.len() - "!important".len()].trim_end(),
+            " !important",
+        )
+    } else {
+        (trimmed, "")
+    };
+    let vals: Vec<&str> = body.split_whitespace().collect();
+    if vals.is_empty() {
+        return value.to_string();
+    }
     let new = match vals.len() {
         1 => vals,
         2 => vec![vals[1], vals[0]],
@@ -675,7 +746,7 @@ fn rotate_box_values(value: &str) -> String {
         4 => vec![vals[3], vals[0], vals[1], vals[2]],
         _ => return value.to_string(),
     };
-    new.join(" ")
+    format!("{}{important}", new.join(" "))
 }
 
 #[cfg(test)]
@@ -764,6 +835,24 @@ mod tests {
             e("O/s.css", "table{writing-mode:vertical-rl}"),
         ];
         assert!(!is_natively_vertical(&table_only));
+        let local_class = vec![
+            e("O/content.opf", "<package/>"),
+            e("O/s.css", ".article{writing-mode:vertical-rl}"),
+        ];
+        assert!(
+            !is_natively_vertical(&local_class),
+            "局部类（.article）写竖排不算全书竖排"
+        );
+        let body_class = vec![
+            e("O/content.opf", "<package/>"),
+            e("O/s.css", "body.v{writing-mode:vertical-rl}"),
+        ];
+        assert!(is_natively_vertical(&body_class), "body.v 算全书竖排");
+        let nested_table = vec![
+            e("O/content.opf", "<package/>"),
+            e("O/s.css", "html table{writing-mode:vertical-rl}"),
+        ];
+        assert!(!is_natively_vertical(&nested_table));
     }
 
     #[test]
@@ -788,6 +877,11 @@ mod tests {
             "<p>don't 90's rock'n'roll</p>"
         );
         assert_eq!(convert_quotes("<p>12\" 和 5'</p>"), "<p>12\" 和 5'</p>");
+        assert_eq!(
+            transform_text("<p>12\" x 14\"</p>", VerticalAscii::Fullwidth),
+            "<p>１２＂ ｘ １４＂</p>",
+            "数字后的英寸号不当引号配对"
+        );
         assert_eq!(
             convert_quotes("<p>甲\"乙</p><p>丙\"丁</p>"),
             "<p>甲\"乙</p><p>丙\"丁</p>",
@@ -829,6 +923,11 @@ mod tests {
             "<p>Ｈｅｌｌｏ ｗｏｒｌｄ</p>"
         );
         assert_eq!(
+            fullwidth_ascii("<p>Tom & Jerry; 2026</p>"),
+            "<p>Ｔｏｍ ＆ Ｊｅｒｒｙ； ２０２６</p>",
+            "未转义的 & 后不是实体，后面的字照转"
+        );
+        assert_eq!(
             fullwidth_ascii("<p><!-- abc --></p>"),
             "<p><!-- abc --></p>"
         );
@@ -853,6 +952,27 @@ mod tests {
         for line in css.lines() {
             assert!(line.ends_with('}'), "{line}");
         }
+    }
+
+    #[test]
+    fn important_survives_box_shorthand_rotation() {
+        assert_eq!(rotate_box_values("1em !important"), "1em !important");
+        assert_eq!(
+            rotate_box_values("1em 2em !important"),
+            "2em 1em !important"
+        );
+        assert_eq!(
+            rotate_box_values("1em 2em 3em !important"),
+            "2em 1em 2em 3em !important"
+        );
+        assert_eq!(
+            rotate_box_values("1em 2em 3em 4em !important"),
+            "4em 1em 2em 3em !important"
+        );
+        assert_eq!(
+            rotate_box_values("1em 2em 3em 4em 5em"),
+            "1em 2em 3em 4em 5em"
+        );
     }
 
     #[test]
