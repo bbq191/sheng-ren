@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-11-kindle-text-rtl
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: opencode-local
 - 分支: kindle-text-rtl（从最新 master `0c92e5c` 切出）
-- 更新时间: 2026-11-11T11:45+08:00
+- 更新时间: 2026-11-11T11:41+08:00
 - 引用: 无（竖排 PRD：vault `Projects/sheng-ren/prd/2026-11-11-vertical-text.md`，本单是从它拆出来的单独修复，不做竖排）
 
 ## 需求原文
