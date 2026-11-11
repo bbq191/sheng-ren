@@ -111,7 +111,9 @@ pub use entities::container_id;
 ///   转出来全不透明的存成 RGB。测试书里没有 WebP，产物不变。
 /// - 25（2026-10-30，维护者定「只裁书架缩略图」）：书里有优化器另做的书架缩略图（OPF `<meta name="eink-thumbnail">`）时，元数据
 ///   `cover_image` 和封面字节实体用它，书里的封面页、要不要补封面页照旧按 `cover-image`。没有缩略图的书产物不变。
-pub const WRITER_VERSION: &str = "25";
+/// - 26（2026-11-11，维护者定「Kindle 流式文字书一律从左往右翻」）：写出器只写横排，spine 写了 rtl 的流式文字书不再照 spine
+///   写 `$560`（改成 `$557`，并给一行警告）；固定版式、流式纯图页（漫画）照旧照 spine。只有这类书的字节会变，别的书逐字节不变。
+pub const WRITER_VERSION: &str = "26";
 
 /// 写进书里的创建器版本（`creator_version`、`kfxgen_package_version`），固定不变：Kindle 发现文件字节变了就把书当新书、
 /// 阅读进度清零（2026-10-06 真机：只差版本号的《绍宋》覆盖后进度没了，逐字节相同的《嘯風山莊》覆盖后进度还在）。
@@ -276,7 +278,7 @@ fn build(
     book: &mut Loaded,
     syms: SymbolAlloc,
     res: ResourceStore,
-    warnings: Vec<String>,
+    mut warnings: Vec<String>,
     id: u64,
     media: Option<crate::css::MediaEnv>,
 ) -> Result<(Vec<u8>, Vec<String>), String> {
@@ -284,7 +286,16 @@ fn build(
     let deep = parsed.iter().map(|d| block_depth(&d.3)).max().unwrap_or(0) > DEEP_NESTING;
     let fixed_canvas = fixed_canvas(book);
     // 翻页方向：`$557` 从左往右、`$559` 从右往左（2026-10-05 测试漫画 LTR/RTL 两本只差这一处）。
-    let direction = if book.meta.rtl { DIR_RTL } else { DIR_LTR };
+    // 2026-11-11：写出器只写横排（`$192` 固定 `WRITING_HORIZONTAL`）。固定版式（漫画）和流式纯图页（流式漫画）照 spine 的 rtl；
+    // 其余流式文字书有一律从左往右——横排文字却从右往左翻是错的。等以后支持竖排（竖排 PRD 第二期）再按排版方向放开。
+    let direction = if !book.meta.rtl {
+        DIR_LTR
+    } else if fixed_canvas.is_some() || parsed.iter().all(|(_, _, _, b)| single_image_page(b)) {
+        DIR_RTL
+    } else {
+        warnings.push("spine 写了从右往左，KFX 只会横排，按从左往右翻".into());
+        DIR_LTR
+    };
     let (
         mut b,
         Layout {

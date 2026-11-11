@@ -2065,3 +2065,133 @@ fn quirks_probe_like_send_to_kindle() {
     );
     assert!(!styles.contains(&format!("({P_WIDTH}, ")), "{styles}");
 }
+
+/// 文档数据（`$538`）的调试串，查 `$192` 排版方向、`$560` 翻页方向。
+fn document_data(kfx: &[u8]) -> String {
+    let c = crate::container::Container::parse(kfx).unwrap();
+    format!(
+        "{:?}",
+        c.entities
+            .iter()
+            .filter(|e| e.ty == T_DOCUMENT_DATA)
+            .map(|e| e.value().unwrap().clone())
+            .collect::<Vec<_>>()
+    )
+}
+
+/// 一本最小的流式文字书；`rtl` 决定 spine 写不写 `page-progression-direction="rtl"`。
+fn stream_text_epub(rtl: bool) -> Vec<u8> {
+    let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+    let dir = if rtl {
+        r#" page-progression-direction="rtl""#
+    } else {
+        ""
+    };
+    w.put(
+        "c.opf",
+        format!(
+            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>竖排</dc:title><dc:language>zh</dc:language><meta name="primary-writing-mode" content="vertical-rl"/></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine{dir}><itemref idref="c1"/></spine></package>"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    w.put("c1.xhtml", r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><style>html{writing-mode:vertical-rl}</style></head><body><p>很长很长的正文一</p><p>很长很长的正文二</p></body></html>"#.as_bytes()).unwrap();
+    w.finish().unwrap().into_inner()
+}
+
+/// 一本流式漫画：两页都是整页一张图，OPF 没有固定版式声明；`rtl` 决定 spine 方向。
+fn stream_image_epub(rtl: bool) -> Vec<u8> {
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+        .encode_image(&image::GrayImage::from_pixel(4, 6, image::Luma([128])))
+        .unwrap();
+    let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    w.put("META-INF/container.xml", br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#).unwrap();
+    let dir = if rtl {
+        r#" page-progression-direction="rtl""#
+    } else {
+        ""
+    };
+    w.put(
+        "c.opf",
+        format!(
+            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">x</dc:identifier><dc:title>漫画</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="i" href="i.jpg" media-type="image/jpeg"/><item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/><item id="p2" href="p2.xhtml" media-type="application/xhtml+xml"/></manifest><spine{dir}><itemref idref="p1"/><itemref idref="p2"/></spine></package>"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    w.put("i.jpg", &jpeg).unwrap();
+    for p in ["p1.xhtml", "p2.xhtml"] {
+        w.put(p, br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div><img src="i.jpg"/></div></body></html>"#).unwrap();
+    }
+    w.finish().unwrap().into_inner()
+}
+
+/// 2026-11-11：KFX 只写横排，流式文字书不能照 spine 的 rtl 从右往左翻；固定版式和纯图流式漫画照旧。
+#[test]
+fn streaming_text_ignores_spine_rtl() {
+    let (kfx, warnings) = epub_to_kfx(
+        &stream_text_epub(true),
+        &Opts {
+            fixed_id: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let doc = document_data(&kfx);
+    assert!(
+        doc.contains(&format!("({DOC_DIRECTION}, Symbol({DIR_LTR}))")),
+        "横排文字书一律从左往右翻：{doc}"
+    );
+    assert!(
+        doc.contains(&format!(
+            "({DOC_WRITING_MODE}, Symbol({WRITING_HORIZONTAL}))"
+        )),
+        "排版方向仍写横排：{doc}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("从右往左") && w.contains("横排") && w.contains("从左往右")),
+        "spine 被改成 ltr 要有提示：{warnings:?}"
+    );
+}
+
+/// spine 没写 rtl 的文字书：照旧从左往右，不多提示。
+#[test]
+fn streaming_text_without_spine_rtl_stays_ltr() {
+    let (kfx, warnings) = epub_to_kfx(
+        &stream_text_epub(false),
+        &Opts {
+            fixed_id: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let doc = document_data(&kfx);
+    assert!(
+        doc.contains(&format!("({DOC_DIRECTION}, Symbol({DIR_LTR}))")),
+        "{doc}"
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+/// 流式漫画（每页只有一张图、没有固定版式声明）：仍照 spine 的 rtl。
+#[test]
+fn streaming_image_pages_keep_spine_rtl() {
+    let (kfx, warnings) = epub_to_kfx(
+        &stream_image_epub(true),
+        &Opts {
+            fixed_id: Some(1),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let doc = document_data(&kfx);
+    assert!(
+        doc.contains(&format!("({DOC_DIRECTION}, Symbol({DIR_RTL}))")),
+        "流式纯图页照旧从右往左：{doc}"
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
