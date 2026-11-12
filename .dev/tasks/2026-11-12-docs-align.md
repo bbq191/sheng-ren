@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-docs-align
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: docs-align（从最新 master 切出）
-- 更新时间: 2026-11-12T11:00+08:00
+- 更新时间: 2026-11-12T11:25+08:00
 - 引用: 2026-11-12-quality-audit（第 2、3、4 条，以及「核实与分组」里的小改动 1–5）
 
 ## 需求原文
@@ -127,4 +127,9 @@
   - 线索 2（「四台都开」）：属实，`profiles/*.toml` 里五台都开了，留给 Move 字段那张单一起定。
   - 线索 3（笔记库 `工作流.md:36`、`:43`）：属实，等 vinci 手动改，bot 不改笔记库。
   - 回执的「未核实」只有没重跑测试和没上真机两项：测试第 1 轮由负责 bot 重跑过，本单只改文档和注释。
-- 合并：**可以合并**，等 lock-no-device 先合进 master，再 `--no-ff` 合入本单。
+- 合并：负责 bot 2026-11-12 先合 lock-no-device，再用 `--no-ff` 合入本单（lock-no-device 的二审回执 `a14a214` 也随本单进 master）。
+- 后续（转新单或待 vinci 定）：
+  1. `epub_optimize.rs:8` 用法注释里的 xochitl；
+  2. 要不要把「小改动可以不经二审」写进仓库文档；
+  3. 「四台都开」一类的过时说法，随 Move 字段那张单一起定；
+  4. 笔记库 `Projects/工作流.md:36`、`:43` 由 vinci 改成"任务单可以直接提交在 master"。
