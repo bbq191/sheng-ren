@@ -89,7 +89,8 @@ fn add_build_skip_remove() {
             .fresh,
         Some(false)
     );
-    // 开着挂载检查而挂载点只是普通目录（拔掉后留下的空挂载点，里面正好有同名文件）：算没接上，不读那个文件
+    // 开着挂载检查而挂载点只是普通目录（拔掉后留下的空挂载点，里面正好有同名文件）：设备路径不 stat、不看挂没挂上，
+    // 只比指纹。ireader 的指纹上面改过，所以过期；kindle 没改，仍是最新。
     let mut unplugged = common::open(&lib_dir);
     unplugged.set_device_env(library::DeviceEnv {
         mtp_base: common::dev_dir(&lib_dir),
@@ -101,10 +102,15 @@ fn add_build_skip_remove() {
         .is_file());
     let outs = unplugged.outputs(&meta);
     assert!(!outs.is_empty(), "设备上有记录的产物");
-    assert!(
-        outs.iter().all(|o| o.fresh.is_none()),
-        "设备没真挂上：既不是最新也不是过期"
-    );
+    for o in &outs {
+        assert!(o.device_unchecked, "{} 是可拔下的设备上的产物", o.device);
+        assert_eq!(
+            o.fresh,
+            Some(o.device == "kindle"),
+            "{}：只比指纹，ireader 改过算过期、kindle 没改算最新",
+            o.device
+        );
+    }
     // 书库只存索引，不复制原件
     let files: Vec<String> = std::fs::read_dir(dir.path().join(format!("lib/masters/{}", meta.id)))
         .unwrap()
@@ -122,6 +128,92 @@ fn add_build_skip_remove() {
                 .join("风起.kfx")
                 .exists(),
         "删书连设备上的产物一起删"
+    );
+}
+
+/// `list` / `outputs` 对可拔下的设备上的产物只比生成记录和当前计划，不 stat、不 read_dir、不看挂没挂上：
+/// 设备挂载卡死时也要马上返回。测试钩子让这类路径真的被 stat 时 panic，所以命令正常退出就说明没碰。
+#[test]
+fn list_does_not_stat_removable_device_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    std::fs::create_dir_all(&lib_dir).unwrap();
+    // 一个产物放电脑上的自定义模式，用来对比：电脑上的照旧核对文件、不注明「未核对设备」
+    common::with_pc_profile(&lib_dir);
+    let lib = common::open(&lib_dir);
+    let src = base.join("甲.epub");
+    std::fs::write(&src, sample_epub("甲")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    let pc = lib.devices().get("pc").unwrap();
+    let Built::Written { .. } = lib.build(&m, pc, false).unwrap() else {
+        panic!("电脑上的产物第一次应生成")
+    };
+    let ireader = profile::get("ireader").unwrap();
+    let Built::Written { .. } = lib.build(&m, ireader, false).unwrap() else {
+        panic!("设备上的产物第一次应生成")
+    };
+    let hook = [("BOOKLIB_TEST_DEVICE_STAT_PANIC", "1")];
+
+    let list = |lib_dir: &Path| {
+        let o = common::booklib_env(Some(lib_dir), &["list"], &hook);
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "list 失败（对设备上的路径做了 stat？）：\nstdout:\n{}\nstderr:\n{}",
+            common::stdout(&o),
+            common::stderr(&o)
+        );
+        common::stdout(&o)
+    };
+    let line = |out: &str, device: &str| {
+        out.lines()
+            .find(|l| l.trim_start().starts_with(device) && l.contains('甲'))
+            .unwrap_or_else(|| panic!("list 里没有 {device} 那一行：{out}"))
+            .to_string()
+    };
+
+    // 指纹一致：设备上的显示最新，注明没核对设备；电脑上的照旧显示已核对的最新
+    let out = list(&lib_dir);
+    let ir = line(&out, "ireader");
+    assert!(ir.contains("✓ 最新 未核对设备"), "{ir}");
+    let pc_line = line(&out, "pc");
+    assert!(
+        pc_line.contains("✓ 最新") && !pc_line.contains("未核对设备"),
+        "电脑上的产物不注明未核对设备：{pc_line}"
+    );
+
+    // 指纹改过 / 留空：设备上的算过期，仍注明没核对设备
+    let state_path = lib_dir.join("output-state/ireader.json");
+    let mut st: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+    for fingerprint in ["旧", ""] {
+        st["books"][&m.id]["fingerprint"] = fingerprint.into();
+        std::fs::write(&state_path, st.to_string()).unwrap();
+        let out = list(&lib_dir);
+        let ir = line(&out, "ireader");
+        assert!(
+            ir.contains("⚠ 过期 未核对设备"),
+            "指纹 {fingerprint:?}：{ir}"
+        );
+    }
+
+    // 相对路径的旧记录（2026-10-31 以前 Move 上的）照旧不查，仍是 ? 未知，不附「未核对设备」
+    std::fs::write(
+        lib_dir.join("output-state/kindle.json"),
+        serde_json::json!({
+            "books": {&m.id: {"path": "甲/甲.epub", "root": "", "fingerprint": "旧"}}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let out = list(&lib_dir);
+    let kindle = line(&out, "kindle");
+    assert!(
+        kindle.contains("? 未知") && !kindle.contains("未核对设备"),
+        "相对路径仍是未知：{kindle}"
     );
 }
 
@@ -2733,9 +2825,9 @@ fn disabled_profile_is_forgotten_by_sync() {
     lib.track_with(&book.join("丙"), &[], false).unwrap();
     lib.sync(Prune::Auto, |_| {}).unwrap();
     assert_eq!(lib.list().len(), 3);
-    // 停用前每本在 ireader 上的旧记录（绝对路径，指向一个不存在的 MTP 目录）：
+    // 停用前每本在 ireader 上的旧记录（绝对路径，在可拔下设备的挂载前缀下、但那个 MTP 目录不存在）：
     // 留下的书（甲、丙）和整条去掉的（乙）都有，停用后都要能容忍。
-    let root = base.join("no-such-mtp/Internal Storage/documents");
+    let root = common::dev_dir(&lib_dir).join("no-such-mtp/Internal Storage/documents");
     let mut books = serde_json::Map::new();
     for m in lib.list() {
         books.insert(
@@ -2791,7 +2883,7 @@ fn disabled_profile_is_forgotten_by_sync() {
         bing.get("devices").is_none(),
         "全部设备的条目 devices 还是空的（序列化时省略）：{saved}"
     );
-    // 旧生成记录不报错：留下的书里 ireader 是「? 未知」（不是最新 / 过期），list 照 2026-10-31 的行为列出来
+    // 旧生成记录不报错：留下的书里 ireader 只比指纹（模式停用后照内置参数算），记录里的「旧」对不上 → 过期
     let metas = lib.list();
     assert_eq!(metas.len(), 2, "乙 不再跟踪");
     for m in &metas {
@@ -2801,9 +2893,15 @@ fn disabled_profile_is_forgotten_by_sync() {
             .filter(|o| o.device == "ireader")
             .collect();
         assert_eq!(ir.len(), 1, "{} 的旧记录还在", m.title);
+        assert!(
+            ir[0].device_unchecked,
+            "{}：设备上的记录不核对文件",
+            m.title
+        );
         assert_eq!(
-            ir[0].fresh, None,
-            "{}：未知（不是最新 / 过期），不报错",
+            ir[0].fresh,
+            Some(false),
+            "{}：指纹不一致算过期，不报错",
             m.title
         );
     }
@@ -2811,8 +2909,8 @@ fn disabled_profile_is_forgotten_by_sync() {
     assert_eq!(o.status.code(), Some(0), "{}", common::stderr(&o));
     let out = common::stdout(&o);
     assert!(
-        out.contains("ireader") && out.contains("? 未知"),
-        "旧记录按未知列出：{out}"
+        out.contains("ireader") && out.contains("⚠ 过期 未核对设备"),
+        "旧记录按过期、未核对设备列出：{out}"
     );
     // 挪走旧记录：list 不再有 ireader，sync 照常
     let bak = sp.with_extension("json.bak");
