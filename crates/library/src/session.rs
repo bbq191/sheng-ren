@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | [`Records`] 记录文件与锁 | 整个进程 | 读缓存按文件身份（inode、大小、修改时间）核对，别的进程改了会重读 |
 //! | [`ContentFacts`] 按内容记住的事实 | 整个进程 | 键里带内容哈希（或原件的路径、大小、修改时间），内容变了就对不上 |
-//! | [`Devices`] 设备连接 | 一轮（`sync --watch` 每轮开头 [`Devices::refresh`] 清掉） | 一轮里每台只连一次 |
+//! | [`Devices`] 设备连接 | 一轮（`sync --watch` 每轮开头 [`Devices::refresh`] 清掉）；"这次连接清过临时文件"的那份跨轮留着 | 一轮里每台只连一次 |
 //! | [`BuildCtx`] 生成过程中的临时状态 | 一轮生成 / 一件传输 | 中间文件一轮结束时删（[`crate::Library::release_prepared`]）；占着的文件名那件传完就放开 |
 //!
 //! 联网用的 HTTP 客户端（`net::Net`，节流、离线状态跨书共用）整个进程一个，第一次用时建，不在这里。
@@ -125,6 +125,9 @@ pub(crate) struct Devices {
     targets: RefCell<HashMap<String, Connection>>,
     /// 这一轮已经尝试过生成记录大小写迁移的模式。
     rebased: RefCell<HashSet<String>>,
+    /// 这次连接已经清过设备上残留临时文件的模式。不随 [`Devices::refresh`] 清：同一连接里 `--watch` 的后续轮次不再清；
+    /// 设备没接上时 [`Devices::forget_device_cleaned`] 清掉，下次接上重新清。
+    cleaned: RefCell<HashSet<String>>,
 }
 
 impl Devices {
@@ -134,6 +137,7 @@ impl Devices {
             auto: false,
             targets: RefCell::default(),
             rebased: RefCell::default(),
+            cleaned: RefCell::default(),
         }
     }
 
@@ -150,17 +154,21 @@ impl Devices {
         self.env = RefCell::new(env);
         self.auto = false;
         self.targets.borrow_mut().clear();
+        self.cleaned.borrow_mut().clear();
     }
 
-    /// `path` 在可拔下的设备上（MTP、USB 大容量存储挂载目录下）而设备现在没挂上：删产物时不当成已删，记录留着下次再删。
-    /// 挂载点取 `<base>/<path 在 base 下的第一段>`；开着挂载检查时它要真的挂着（[`deliver::mounted`]），同时 `root` 要在。
-    /// 只看 `root.is_dir()` 不够：拔掉后 udisks、jmtpfs 留下的空挂载点里正好有同名目录时会被当成接上，删掉了记录、书却还留在机上（agy 发现）。
-    pub(crate) fn unplugged(&self, path: &Path, root: &Path) -> bool {
+    /// `path` 在可拔下的设备上（MTP、USB 大容量存储挂载目录下）：只看路径前缀，不碰文件系统。
+    /// `/run/media/$USER` 和 `/media/$USER` 两处都认（两次运行之间缺省的 usbms_base 可能换了）：认不出是设备上的会当成电脑上的，
+    /// 加锁清理时就去读卡死的挂载点（汉王 jmtpfs），删产物时又会把没接上的当成接上了。
+    pub(crate) fn on_removable(&self, path: &Path) -> bool {
+        self.removable_base(path).is_some()
+    }
+
+    /// `path` 在哪个设备挂载目录下（长的先比）：返回匹配的前缀。
+    fn removable_base(&self, path: &Path) -> Option<PathBuf> {
         // 长的先比：关了挂载检查时 usbms_base 缺省在 mtp_base 下面（`<mtp_base>/usbms`），先比 mtp_base 会把 `usbms` 当成挂载点
         let env = self.env.borrow();
         let mut bases = vec![env.mtp_base.clone(), env.usbms_base.clone()];
-        // `/run/media/$USER` 和 `/media/$USER` 两处都认（两次运行之间缺省的 usbms_base 可能换了）：认不出是设备上的会当成电脑上的、
-        // 删不到就当删了，记录丢掉、书留在设备上
         if env.mount_check {
             for (a, b) in [("/run/media", "/media"), ("/media", "/run/media")] {
                 if let Ok(rest) = env.usbms_base.strip_prefix(a) {
@@ -169,20 +177,38 @@ impl Devices {
             }
         }
         bases.sort_by_key(|b| std::cmp::Reverse(b.as_os_str().len()));
-        for base in &bases {
-            let Ok(rest) = path.strip_prefix(base) else {
-                continue;
-            };
-            let Some(first) = rest.components().next() else {
-                return true; // 就是挂载目录本身：不是设备上的文件，按没挂上处理，不删
-            };
-            let point = base.join(first);
-            if env.mount_check && !deliver::mounted(&point) {
-                return true;
-            }
-            return !root.is_dir();
+        bases.into_iter().find(|b| path.starts_with(b))
+    }
+
+    /// `path` 在可拔下的设备上（MTP、USB 大容量存储挂载目录下）而设备现在没挂上：删产物时不当成已删，记录留着下次再删。
+    /// 挂载点取 `<base>/<path 在 base 下的第一段>`；开着挂载检查时它要真的挂着（[`deliver::mounted`]），同时 `root` 要在。
+    /// 只看 `root.is_dir()` 不够：拔掉后 udisks、jmtpfs 留下的空挂载点里正好有同名目录时会被当成接上，删掉了记录、书却还留在机上（agy 发现）。
+    pub(crate) fn unplugged(&self, path: &Path, root: &Path) -> bool {
+        let Some(base) = self.removable_base(path) else {
+            return false;
+        };
+        let Ok(rest) = path.strip_prefix(&base) else {
+            return false;
+        };
+        let Some(first) = rest.components().next() else {
+            return true; // 就是挂载目录本身：不是设备上的文件，按没挂上处理，不删
+        };
+        let env = self.env.borrow();
+        let point = base.join(first);
+        if env.mount_check && !deliver::mounted(&point) {
+            return true;
         }
-        false
+        !root.is_dir()
+    }
+
+    /// 这次连接还没清过这台设备上的残留临时文件的话，记下清过了、返回 true；已经清过返回 false。
+    pub(crate) fn begin_device_cleaned(&self, id: &str) -> bool {
+        self.cleaned.borrow_mut().insert(id.to_string())
+    }
+
+    /// 设备没接上：下次接上时重新清这台设备上的残留临时文件。
+    pub(crate) fn forget_device_cleaned(&self, id: &str) {
+        self.cleaned.borrow_mut().remove(id);
     }
 
     /// USB 大容量存储挂载点的上级目录（Kobo：产物旁边没有 Kindle 的 `.sdr`，换目录时不搬）。
@@ -206,6 +232,7 @@ impl Devices {
     }
 
     /// 新一轮开始：连过的都作废，下次用到时重新看（MTP 挂载点每轮可能变）。
+    /// `cleaned` 不清：同一台设备没断开过时，这一轮不再清它上面的残留临时文件。
     pub(crate) fn refresh(&self) {
         if self.auto {
             *self.env.borrow_mut() = DeviceEnv::from_env();
@@ -305,5 +332,65 @@ impl BuildCtx {
             .filter(|(p, id)| *id != book && p.parent() == Some(dir))
             .filter_map(|(p, _)| p.file_name().map(|n| n.to_string_lossy().to_lowercase()))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn devices(mtp: &str, usbms: &str, mount_check: bool) -> Devices {
+        Devices::new(DeviceEnv {
+            mtp_base: PathBuf::from(mtp),
+            mount_check,
+            usbms_base: PathBuf::from(usbms),
+        })
+    }
+
+    #[test]
+    fn removable_paths_are_recognized_by_prefix_only() {
+        let d = tempfile::tempdir().unwrap();
+        let mtp = d.path().join("mtp");
+        let usbms = d.path().join("usbms");
+        let devices = devices(&mtp.to_string_lossy(), &usbms.to_string_lossy(), false);
+        assert!(devices.on_removable(&mtp.join("kindle/Internal Storage/书.epub")));
+        assert!(devices.on_removable(&usbms.join("Kobo/books/书.epub")));
+        assert!(devices.on_removable(&mtp), "挂载目录本身也算");
+        assert!(!devices.on_removable(&d.path().join("电脑/书.epub")));
+        // 按路径分量比，不是字符串前缀
+        assert!(!devices.on_removable(&d.path().join("mtp2/书.epub")));
+    }
+
+    #[test]
+    fn run_media_and_media_are_both_recognized() {
+        let mtp = "/run/user/1000/mtp";
+        let for_usbms = |usbms: &str| devices(mtp, usbms, true);
+
+        let d = for_usbms("/run/media/u/Kobo");
+        assert!(d.on_removable(Path::new("/run/media/u/Kobo/books/书.epub")));
+        assert!(d.on_removable(Path::new("/media/u/Kobo/books/书.epub")));
+
+        let d = for_usbms("/media/u/Kobo");
+        assert!(d.on_removable(Path::new("/media/u/Kobo/books/书.epub")));
+        assert!(d.on_removable(Path::new("/run/media/u/Kobo/books/书.epub")));
+    }
+
+    #[test]
+    fn cleaned_mark_survives_refresh_and_is_forgotten_when_unplugged() {
+        let mut d = devices("/run/user/1000/mtp", "/run/media/u/Kobo", true);
+        assert!(d.begin_device_cleaned("kindle"), "第一次接上要清");
+        assert!(!d.begin_device_cleaned("kindle"), "同一次连接只清一次");
+        d.refresh();
+        assert!(!d.begin_device_cleaned("kindle"), "跨轮仍然记得清过");
+        d.forget_device_cleaned("kindle");
+        assert!(d.begin_device_cleaned("kindle"), "拔掉后重新接上再清");
+
+        d.begin_device_cleaned("kobo");
+        d.set_env(DeviceEnv {
+            mtp_base: "/run/user/1000/mtp".into(),
+            mount_check: true,
+            usbms_base: "/run/media/u/Kobo".into(),
+        });
+        assert!(d.begin_device_cleaned("kobo"), "换设备环境后要重新清");
     }
 }
