@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-dir-case-bigme-ireader
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent
 - 分支: task/2026-11-12-dir-case-bigme-ireader（从最新 master 切出）
-- 更新时间: 2026-11-12T17:17+08:00
+- 更新时间: 2026-11-12T17:26+08:00
 - 引用: 2026-11-12-hanvon-documents-case（后续第 ② 条）；2026-11-12-quality-audit 发现 5
 
 ## 需求原文
@@ -91,6 +91,15 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
-- 合并：
+- 验收：**第 1 轮通过**（sheng-ren bot，2026-11-12 17:20 +08:00，审 `origin/master...b2a6606`，实现 `b2a6606`）。没上真机，没跑真书回归。下面全是 box 上的临时目录和工作区核对。工具链为 rustup stable rustc 1.99.1。
+  - 逐条验收标准：
+    - [x] `bigme.toml` `dir = "Books"`，`ireader.toml` `dir = "Documents"`。kindle / kobo / hanvon 的 profile 无 diff。
+    - [x] 旧小写记录：`flow.rs` 共用夹具覆盖三种情形，汉王 3 则保留，掌阅、Bigme 各补 3 则（不分大小写符号链接只改记录且 inode/mtime 不变、再同步仍 UpToDate；大小写敏感时复制到新目录并保留旧文件；orphans 迁到新根再删）。本轮 9 则全过。
+    - [x] `booklib sync` 帮助与文档现状与 profile 一致（掌阅 / 汉王 `Documents/`，Bigme `Books/`，Kindle `documents/`，Kobo `books/`）。`docs/decisions.md` 同日汉王那条未删，只标注「2026-11-12 已改，见同日下条」；新条目明确推翻「掌阅、Bigme 的 dir 本次不改」。
+    - [x] 版本号不变；`fp_golden.txt` 一行没动；`git diff origin/master...HEAD -- crates/bookconv crates/kfx docs/development.md` 为空。
+    - [x] 新增行未出现上游项目名或缩写。
+    - [x] `cargo test --workspace` 全过：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 79 / bin 7 / cli 14 / flow 60 / fp_golden 1，profile lib 19。`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。`cargo fmt --all -- --check` 干净。
+  - 阻断：无。
+  - 建议（不挡合并）：`booklib add` 帮助（`main.rs:118`）仍写「放设备 documents/ 顶层」，各设备产物根目录现已不统一，可改成「放各设备产物目录顶层」。二审亦指出同一处。
+- 二审：**无阻断**（agy-review，2026-11-12 17:24 +08:00，模型 gemini-3.8-flash-medium，用时 276s，回执 `1c66b0c`）。结论「建议通过」。负责 bot 已读回执：引用与当前代码一致；建议 2 条均不挡合并（`add` 帮助口径；测试夹具 `dev_dir` 仅预建 kindle/ireader 存储目录，汉王/Bigme 用例自行建路径）。未核实项只有真机。
+- 合并：`74d8834`（2026-11-12 17:25 +08:00，`--no-ff` 合入当时 origin/master `945b6ff`）。合并后再跑 `cargo test --workspace` 全过（计数与第 1 轮相同）。已推 origin/master。状态改为 **verified**（验收通过、二审无阻断、已合并）；**待 vinci 真机验收**：接上 Bigme / 掌阅后，同步目录是 `Books/` / `Documents/`，已有的书不重传、不丢。
