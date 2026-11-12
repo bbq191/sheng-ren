@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-hanvon-documents-case
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: verified
 - 执行方: opencode-local
 - 分支: hanvon-documents-case（从最新 master `73c095c` 切出）
-- 更新时间: 2026-11-12T09:10+08:00
+- 更新时间: 2026-11-12T09:45+08:00
 - 引用: 无
 
 ## 需求原文
@@ -103,16 +103,94 @@
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-12 09:16–09:40 +08:00
+- base..head：`c3a1616..d94eec0`（`c3a1616` 是切出时的 master，含任务单提交；任务单写的 `73c095c` 是它前一个代码提交）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `a47fe71` | 任务单 | 状态改 accepted |
+  | 1–6 | `d94eec0` | `generate.rs`、`deliver.rs`、`flow.rs`、`hanvon.toml`、`profile/src/lib.rs`、`docs/*`、`README.md` | 迁移、兜底保护、测试、文档 |
+  | 结果 | 本提交 | 任务单 | 填结果、状态改为 done |
+
+- 实现：
+  - **迁移**：`generate::case_alias(a,b)` = 逐段 `to_lowercase` 相等、且不是同一个路径；`State::rebase_case_root(new_root)` 把 `books[].path/root`、各 `old`、`orphans` 里根目录只差大小写、`new_root + 相对路径` 的文件 **`is_file()`** 的条目原样换到新根；返回改没改，幂等。
+  - **挂载点**：放在生成入口 `prepare` / `space_check` / `flush_removed` / `retract` 的开头（`Library::rebase_state_case`），第一次拿到接上的 `Target::Dir` 后跑；先看记录里有没有只差大小写的根目录，有才克隆 / 写回，避免每本书都克隆全部记录。`list` / `outputs` 只读，不迁移、不写。
+  - **兜底**：`deliver::put_file` 遇到 `case_alias(src,dest)` 且 `keep_src=false` 时按 `keep_src=true` 走：`same_bytes` 为真返回 `Ok(false)`、不删 src；否则复制、不改名、不删 src。`State::delete_placements` 遇到要删的位置和 `current` 或别的记录里的位置父目录不同、逐段只差大小写的，不删文件、不删目录，记录丢掉；同一目录只差文件名的大小写仍走原 `case_twin` + `distinct_on_disk`，行为不变。
+  - **profile**：`hanvon.toml` `dir = "Documents"`，注释写 2026-11-11 现场和小写名导致 MTP 重影；`profile/src/lib.rs` 的期望改成 `Documents`。
+  - **文档**：`docs/decisions.md` 新增 2026-11-12 一节；`docs/devices.md` 汉王传书、`docs/usage.md` 产地表和表下小注、`README.md` 设备表改成 `Documents/`；写清掌阅 / Bigme 也是小写名、可能有同样的重影、本次没改。
+- 测试：
+
+  | 命令 | 结果 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test -p library` | 通过 | lib 74（含 `rebase_case_root_only_when_new_path_exists`、`case_alias_paths_are_not_deleted`、`put_file_case_alias_never_deletes_src`）、bin 7、cli 14、flow 51、fp 1 |
+  | `cargo test --workspace` | 通过 | 全部通过（bookconv 553、bookbase 30、csscascade 16、kfx 53、library 74+7+14+51+1、profile 19） |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo fmt --all -- --check` | 通过 | 干净 |
+  | `git diff crates/library/tests/fp_golden.txt` | 未变 | `[deliver]` 不进指纹，金样一行没动 |
+- 集成测试（`flow.rs`，都用临时目录 + 符号链接模拟不分大小写）：
+  - `hanvon_documents_case_rebase_keeps_books_and_record`：旧 `documents` 生成 → 建 `Documents -> documents` → 改 profile `dir=Documents`、`refresh_devices()` → `Built::UpToDate`，路径在 `Documents/` 下；文件 inode / mtime 没变（没写）；`output-state/hanvon.json` 里是 `Documents`；再同步仍 `UpToDate`。
+  - `hanvon_documents_case_sensitive_copies_and_keeps_old`：`Documents` 是空真目录（不建符号链接）→ 不迁移，走原来的挪位置；书最后在 `Documents/` 下能读，旧 `documents/` 文件保留（宁可多留、不删书）。
+  - `hanvon_documents_case_migrates_orphans_too`：把记录从 `books` 挪进 `orphans`、建符号链接后 `flush_removed` 删的是 `Documents/` 下这一本，`documents` 旧路径跟着没了（同一个文件），记录清空。
+- 不回归：合成 zh / en 两本在 master `c3a1616` 与本分支的 `epub-optimize` 上对 kindle / ireader / kobo / hanvon / bigme 各跑一遍，10 组产物逐字节相同；`OPTIMIZE_VERSION` / `COMIC_VERSION` 没动。
+- 偏离：
+  - 动了 `README.md`（设备表里汉王的 `documents/` → `Documents/`），不在「涉及文件」的点名列表里，但属于规则 4 的文档同步。
+  - 迁移挂在生成入口（`prepare` / `space_check` / `flush_removed` / `retract`），不是 `Library::target`；理由：`list` 等只读命令也会拿 target，不能顺手写记录。已经在规则 2 允许的两种做法里选了后者。
+  - 没有为 `library/src/lib.rs` / `session.rs` 加代码；迁移函数在 `generate.rs`。
+- 未完成 / 待真机：
+  - **没上真机**。真机由 vinci 验：装好后汉王插上、挂好：
+    1. `booklib sync hanvon`：汉王的书全部显示已是最新 / 没有「生成」「挪到」的行，用时和平时增量同步差不多；
+    2. 汉王自带阅读器里书都在，挑两本看阅读进度还在；
+    3. `output-state/hanvon.json` 里的路径都变成 `Documents`；
+    4. 拔掉重插（或重启汉王）后，`ls /run/user/1000/mtp/hanvon/内部共享存储空间/` 里小写的 `documents` 不见了；还在的话**不要删**，记下现象。
+  - 掌阅 / Bigme 的小写 `dir` 没改，重影是否也存在没上真机确认；删除保护只是兜底。
+
+### 返工（2026-11-12，一审退回后）
+
+- 状态先改回 accepted（`184741e`），返工提交 `050ee1c`。
+- **阻断 1（`put_file` 的 case_alias 分支 direct 照传）**：`deliver.rs` 的 `case_alias` 分支改成 `put_file_retry(src, dest, true, compare, false, mount)`，**强制不走直接写**：直接写会先删 dest，不分大小写时 dest 就是 src，书先没了、再从已不在的 src 复制失败。现在走「先写旁边临时文件、再删 dest、改名」那条路，临时文件写好之前不碰 dest。测试 `put_file_case_alias_never_deletes_src` 加了符号链接下 `compare=false, direct=true` 的用例：内容正确、src 还在、目录里没留临时文件；原来 `compare=true, direct=true` 的用例保留。
+- **建议 1（吞掉写记录错误）**：`rebase_state_case` 改成 `Result<(), String>`；`prepare` / `retract` / `flush_removed` 用 `?` 报出来，`space_check` 返回 `SpaceCheck::Unknown("生成记录大小写迁移失败：…")`（只警告、照旧传）。
+- **建议 2（每轮只迁移一次）**：`Devices` 加 `rebased: RefCell<HashSet<String>>` 和 `begin_rebase(id)`，`refresh()` 时清空；`rebase_state_case` 每台设备每轮只扫 / 迁移一次，避免一条换不成的记录让后面每本书都克隆整份记录、反复在 MTP 上 `is_file()`。
+- **线索 1 核对**：`remove_outputs` / `hand_over_outputs` 不迁移；删书时按旧 `documents/...` 删的就是那本书（本来就要删），往上删空目录停在旧 `root`（`documents`），不会删 `Documents` 根目录本身。`delete_placements` 的新保护在大小写敏感设备上会留旧文件，任务单已接受「宁可多留」。Kobo / 掌阅「跟踪目录只改大小写」以前会删书、现在不删，符合本单兜底要求。
+- 返工后测试：`cargo test -p library` 全过（lib 74、flow 51 等），`cargo test --workspace` 全过，`cargo clippy --workspace --all-targets -- -D warnings` 0 警告，`cargo fmt --all -- --check` 干净；`fp_golden.txt` 仍一行没动。
+- 仍然**没上真机**；真机验证项同上。
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
-- 合并：
+- 验收（第 1 轮，sheng-ren，2026-11-12，box 复跑 `fce2a9a`）：**退回**，阻断 1 条，修完重新验收
+  - 复跑：`cargo fmt --all -- --check` 干净；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test --workspace` 全过（bookconv 553、kfx 53、bookbase 30、csscascade 16、library 74/7/14/51/1、profile 19，0 failed），和「结果」一致。
+  - 复现写单时的"先删再重传"场景（临时集成测试，没提交）：`dir=documents` 生成一本 → `Documents -> documents` 符号链接 → 内置 hanvon（`Documents`）连续同步 3 次：每次都是 `UpToDate …/Documents/风起.epub`，书一直在，`output-state/hanvon.json` 路径已是 `Documents`。master 上同一场景第二次同步书被删、第三次重传。**主场景修好了。**
+  - 逐条对照：
+    - 规则 1：`hanvon.toml:42` `Documents` + 注释；`profile/src/lib.rs:1725` 期望已改。✓
+    - 规则 2：迁移只在根目录只差大小写、且 `新 root + 相对路径` `is_file()` 时才换（`generate.rs:1483-1497`）；挂在 `prepare`/`space_check`/`flush_removed`/`retract` 开头（`generate.rs:639`、`:546`、`:481`、`:448`），偏离里写了理由，接受。flow 测试用符号链接真的模拟了不分大小写，并核对 inode / mtime 没变（`tests/flow.rs` `hanvon_documents_case_rebase_keeps_books_and_record`）；大小写敏感的两真目录不迁移（`:3212`）。✓
+    - 规则 3：`delete_placements` 保护（`generate.rs:1245-1255`）✓；`put_file` 保护有漏洞，见阻断 1。
+    - 不回归：`git diff master..HEAD -- crates/bookconv crates/library/tests/fp_golden.txt` 为空——产物代码和金样一行没动，`OPTIMIZE_VERSION` / `COMIC_VERSION` 没动，其他设备产物必然逐字节不变（执行方另跑了 10 组合成书对拍）。✓
+    - 提交：中文前缀 + 正文，无 `Co-Authored-By`，没动 master。`README.md` 偏离已报，接受。
+  - **阻断 1：`deliver.rs:209` 的大小写保护只把 `keep_src` 改成 true，`direct` 照传；`put_file_once` 直接写时先删 dest（`deliver.rs:391-392`），不分大小写的设备上 dest 就是 src，书先被删、再从已不在的 src 复制失败。** 走到这里的条件：`compare = false`，或 `same_bytes`（`deliver.rs:528`，任何读错都返回 false）在 MTP 上读失败一次。已复现：符号链接 `Documents -> documents`，`put_file(documents/书.epub, Documents/书.epub, keep_src=false, compare=false, direct=true)` → `Err("写 …/Documents/书.epub: No such file or directory")`，`documents/书.epub` 没了。现在 `prepare_file` 挪位置时 `compare` 恒为 true，平时走不到，但这正是任务单「任何情况下都不会删掉 src」要兜住的情况。
+    - 要改：`case_alias` 分支改成 `put_file_retry(src, dest, true, compare, false, mount)`，即**强制不直接写**，走"先写旁边的临时文件、再删 dest、改名"那条路（临时文件写好之前不碰 dest；不分大小写的设备上删 dest 时新内容已经在临时文件里）。注释写清为什么不能直接写。
+    - 测试：`put_file_case_alias_never_deletes_src`（`deliver.rs:817`）加两种：符号链接下 `compare=false, direct=true`；符号链接下 `compare=true, direct=true` 但内容不同（如先把 dest 那一侧看成不同——可用 `FAIL_WRITE` 之外的办法，做不到就只测 `compare=false`）。都要求调用后文件在、内容是 src 的内容、目录里没留临时文件。
+  - 建议（这轮一起改，不改的在「结果」说明理由）：
+    1. `generate.rs:310` `let _ = self.records.states.put(...)` 吞掉了写记录的错误：迁移没写成，后面按新根目录算位置，旧记录照旧，就回到挪位置流程（有了保护不会删书，但会整本"挪"一遍）。改成返回 `Result`，在 `prepare` 等入口用 `?` 报出来（`retract`/`flush_removed` 同样）。
+    2. `generate.rs:295-312` 每次 `prepare` 都扫一遍全部记录；有一条换不成（设备上那本被手工删了、半截记录）时 `maybe` 一直为真，每本书都克隆整份记录、再对换不成的那几条 `is_file()`（MTP 上每次 stat 都是一次往返）。同步一轮后会自愈，但第一轮是 k×n 次 stat。建议每台设备每轮只迁移一次（在 `Devices` 里记一个本轮已迁移的标记，`refresh` 时清掉）。
+  - 线索（留给二审）：
+    1. `remove_outputs`、`hand_over_outputs`（`generate.rs:411` 起、`:429` 起）不迁移：删书时按旧的小写路径删，在汉王上删的就是那本书本身（本来就要删），往上删空目录停在旧 `root`（重影的 `documents`），请核实不会删到 `Documents` 本身。
+    2. `delete_placements` 新保护（`generate.rs:1247-1254`）也比对别的书的记录：大小写敏感的设备上会留下旧文件不删，任务单已接受"宁可多留"。
+    3. 这条保护也改变了 Kobo（vfat）/ 掌阅上"跟踪目录只改大小写"（`Manga` → `manga`）的行为：以前会删书，现在不删、记录跟过去。请核实没有别的现有流程依赖旧行为。
+    4. 汉王自带阅读器的进度是不是按路径记的未知，真机验。
+- 验收（第 2 轮，sheng-ren，2026-11-12，box 复跑 `60934ce`）：**通过**，交 agy 二审
+  - 返工提交 `050ee1c`（`deliver.rs`、`generate.rs`、`session.rs`），对照第 1 轮：
+    - 阻断 1 已修：`deliver.rs:209-212` 只差大小写的分支强制 `direct=false`，走临时文件。复现：符号链接 `Documents -> documents` 下 `put_file(documents/书.epub, Documents/书.epub, keep_src=false, compare=false, direct=true)` → `Ok(true)`，书在、内容不变、没留临时文件（第 1 轮同一调用书被删）；`compare=true` → `Ok(false)`，书在。新测试在 `deliver.rs:833-845`（`compare=false, direct=true`）。
+    - 建议 1 已改：`rebase_state_case` 返回 `Result`（`generate.rs:295-318`），写记录失败时 `prepare`/`retract`/`flush_removed` 用 `?` 报出来，`space_check` 转成 `SpaceCheck::Unknown`（`generate.rs:552-554`）。
+    - 建议 2 已改：`Devices::begin_rebase`（`session.rs:203-206`），每台设备每轮只迁移一次，`refresh` 时清掉（`session.rs:214`）。
+  - 复现主场景：`dir=documents` 生成 → 符号链接 → 内置 hanvon（`Documents`）连续 3 轮（每轮 `refresh_devices`）都是 `UpToDate …/Documents/风起.epub`，书在，记录里没有小写路径了。
+  - 复跑：`cargo fmt --all -- --check` 干净；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test --workspace` 全过（bookconv 553、kfx 53、bookbase 30、csscascade 16、library 74/7/14/51/1、profile 19，0 failed）。
+  - 不回归：`git diff master..HEAD` 对 `crates/bookconv`、`fp_golden.txt`、kindle / ireader / bigme / kobo 四个 profile 都为空；`OPTIMIZE_VERSION` / `COMIC_VERSION` 没动。
+  - 提交合规：中文前缀 + 正文，无 `Co-Authored-By`，没动 master。
+  - 新增线索 5（留给二审）：`begin_rebase` 在写记录之前就记成"本轮已迁移"（`generate.rs:301`）。写失败时只有这一次报错，同一轮后面的书按没迁移的记录走挪位置流程。有保护不会删书，但会把书从小写路径复制一遍，下一轮再迁移。请核实这样可以接受。
+  - 第 1 轮线索 1–4 保留，一起交二审。
+- 二审：回执 `.dev/tasks/2026-11-12-hanvon-documents-case.agy.md`（`9248ff7`）：阻断 0、建议 1、线索 7、未核实 1。我核对了引用的位置：
+  - 建议「`begin_rebase` 等写记录成功后再标记」（`generate.rs:301-316`）：属实，但只影响写记录失败这条错误路径。失败时 `prepare` 已经用 `?` 报错；同一轮其余书走挪位置流程，有保护不会删书，下一轮会重新迁移。要改得同时动 `session.rs`（`rebased` 是私有字段），超出"一个文件的小改动"，所以**本次不改，记为后续**。
+  - 线索 1：往上删空目录的条件是 `*d != p.root && d.starts_with(&p.root)`（`generate.rs:1312`），到旧 root 就停，不会删到 `Documents`。我核对过，属实。
+  - 线索 2–7：和两轮验收的结论一致（大小写敏感的设备上宁可多留旧文件；`Manga`→`manga` 从删书变成不删，算修复；`space_check` 转成 Unknown 合理；迁移覆盖了 books/old/orphans 且幂等；测试用符号链接模拟不分大小写，可信）。接受。
+  - 未核实：汉王自带阅读器的进度是不是按路径记的，留给 vinci 真机验收。
+- 合并：`--no-ff` 合并到 master，见合并提交；状态改为 verified。后续：①`begin_rebase` 等写成功后再标记；②掌阅（`documents`）、Bigme（`books`）可能也有重影目录，先 `ls` 确认，要改的话另开任务单。

@@ -1722,7 +1722,7 @@ mod tests {
             h.deliver,
             Some(Deliver::Mtp {
                 mount: "hanvon".into(),
-                dir: "documents".into()
+                dir: "Documents".into()
             })
         );
         assert_eq!(

@@ -204,6 +204,12 @@ pub(crate) fn put_file(
         }
         return r;
     }
+    // 逐段只差大小写、父目录不同的两个位置（汉王 documents/Documents）：不分大小写的设备上就是同一个文件。
+    // 按 keep_src 处理；并且**强制不走直接写**——直接写会先删 dest，不分大小写时 dest 就是 src，书先没了、
+    // 再从已不在的 src 复制失败。经临时文件那条路在临时文件写好之前不碰 dest（agy/验收阻断 1）。
+    if !keep_src && crate::generate::case_alias(src, dest) {
+        return put_file_retry(src, dest, true, compare, false, mount);
+    }
     put_file_retry(src, dest, keep_src, compare, direct, mount)
 }
 
@@ -805,5 +811,46 @@ mod tests {
             2,
             "只有 src、dest"
         );
+    }
+
+    /// 父目录只差大小写（documents/Documents，模拟不分大小写的设备）：已一样就不删 src；不一样按 keep_src 复制。
+    #[test]
+    fn put_file_case_alias_never_deletes_src() {
+        let d = tempfile::tempdir().unwrap();
+        let old = d.path().join("documents");
+        let new = d.path().join("Documents");
+        std::fs::create_dir_all(&old).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&old, &new).unwrap();
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&new).unwrap();
+        let src = old.join("书.epub");
+        std::fs::write(&src, b"same").unwrap();
+        let dest = new.join("书.epub");
+        assert!(!put_file(&src, &dest, false, true, true, None).unwrap());
+        assert!(src.exists() && dest.exists(), "同一个文件：不删 src");
+
+        // compare=false、direct=true：也必须强制走临时文件，不能先删 dest（不分大小写时 dest 就是 src）
+        let src3 = old.join("另一本.epub");
+        std::fs::write(&src3, b"new content").unwrap();
+        let dest3 = new.join("另一本.epub");
+        assert!(put_file(&src3, &dest3, false, false, true, None).unwrap());
+        assert_eq!(std::fs::read(&dest3).unwrap(), b"new content");
+        assert!(src3.exists(), "不删来源");
+        let leftovers = std::fs::read_dir(&old)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(leftovers, 0, "不留临时文件");
+
+        // 大小写敏感的两个真目录（这里用另一个大小写目录）：复制、不删 src
+        let other = d.path().join("DOCUMENTS");
+        std::fs::create_dir_all(&other).unwrap();
+        let dest2 = other.join("书.epub");
+        std::fs::write(&dest2, b"old").unwrap();
+        assert!(put_file(&src, &dest2, false, true, false, None).unwrap());
+        assert_eq!(std::fs::read(&dest2).unwrap(), b"same");
+        assert!(src.exists(), "不删来源");
     }
 }

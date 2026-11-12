@@ -355,7 +355,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 模式 `hanvon`（`crates/profile/profiles/hanvon.toml`）。2026-11-06 用 adb 截屏核对阅读范围、书架封面比例、漫画版式、投递；正文字号/行高、注释弹窗、伽马还没测。
 
 - **硬件**：6" E Ink Carta 1300，1448×1072，300 ppi，黑白，安卓 14（来源：知乎评测 `zhuanlan.zhihu.com/p/1916870323984393879`、Lukas Lab、太平洋电脑网参数页）。竖屏写成 `width = 1072`、`height = 1448`。IT 之家写的 1024×758 是 Clear 6，不是 Turbo。
-- **传书**：USB MTP（安卓），2026-11-06 真机确认 jmtpfs 挂到 `/run/user/1000/mtp/hanvon`（`~/Hanvon`）。产物放存储根目录的 `documents/`、子目录照跟踪目录镜像；实际目录是 `Documents/`（安卓存储不分大小写），自带阅读器「文件」页从 `/Documents` 浏览、能打开。
+- **传书**：USB MTP（安卓），2026-11-06 真机确认 jmtpfs 挂到 `/run/user/1000/mtp/hanvon`（`~/Hanvon`）。产物放存储根目录的 `Documents/`、子目录照跟踪目录镜像；2026-11-11 现场：小写 `documents` 会让 MTP 在 `内部共享存储空间/` 下多登记一个同内容的 `documents`（安卓存储不分大小写，设备上是同一个 inode），所以 profile 改写成设备真名 `Documents`，旧记录由大小写迁移原样接过来（只改记录、不碰设备上的文件）。自带阅读器「文件」页从 `/Documents` 浏览、能打开。
 - **格式**：只出 EPUB。文字书沿用三台统一规则（`text_repair_only`、`kindle_rules`）；2026-11-11 测试书 01–13 实机确认中文文字书竖排正常（翻页、引号、縦中横、注释、西文不叠），和 Kobo 一样写 `vertical_text = true`、`vertical_ascii = "fullwidth"`（13 号也选 U1 全角竖立）。注释还是跳转（`notes = "jump"`），不改弹窗。
 - **漫画**：参数照 Kobo（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、1px 白边）。版式 2026-11-06 真机比过：流式整页与固定版式逐像素相同，都铺满整屏、连翻 4 页大小不变，保持流式。
 - **书架封面**：2026-11-06 书架截屏：方形封面（1.0）被拉伸进约 281×373 的框（≈0.753），不裁不留白，和掌阅 0.754 同一行为；照掌阅做 `eink-thumb.jpg` 并把 meta cover 指向它，书架用不用缩略图待真机确认。书架只显示打开过的书；没有封面的书显示通用 EPUB 图标。
