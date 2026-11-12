@@ -3144,6 +3144,91 @@ fn lock_never_reads_device_dirs_and_sync_cleans_their_tmp_files() {
     assert!(!again.exists(), "拔掉再接上要重新清");
 }
 
+/// Kobo（USB 大容量存储）连接后清设备上的 `.tmp-*`：加锁不删、sync 连上后清一次、同一连接第二轮不再清。
+#[test]
+fn lock_keeps_kobo_usbms_tmp_until_sync_connects() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let books = base.join("books");
+    let other = books.join("别的目录");
+    std::fs::create_dir_all(&other).unwrap();
+    let src = books.join("甲.epub");
+    std::fs::write(&src, sample_epub("甲")).unwrap();
+
+    let lib = common::open(&lib_dir);
+    let dev = common::dev_dir(&lib_dir);
+    std::fs::create_dir_all(dev.join("usbms/KOBOeReader")).unwrap();
+    lib.track(&books).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
+    let m = lib.list().pop().unwrap();
+    let kobo = profile::get("kobo").unwrap();
+    let Built::Written { path: product, .. } = lib.build(&m, kobo, false).unwrap() else {
+        panic!("第一次应生成")
+    };
+    let product_dir = product.parent().unwrap().to_path_buf();
+    assert_eq!(product_dir, dev.join("usbms/KOBOeReader/books"));
+    let tmp = product_dir.join(".tmp-1-1-x.kepub.epub");
+
+    // 会加锁的命令不读、不删设备上的临时文件
+    let (book, dummy) = (src.to_str().unwrap(), other.to_str().unwrap());
+    for args in [vec!["vertical", "--on", dummy], vec!["add", book]] {
+        std::fs::write(&tmp, b"kobo").unwrap();
+        let o = common::booklib_env(
+            Some(&lib_dir),
+            &args,
+            &[("BOOKLIB_TEST_DEVICE_IO_PANIC", "1")],
+        );
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "booklib {args:?} 失败：\nstdout:\n{}\nstderr:\n{}",
+            common::stdout(&o),
+            common::stderr(&o)
+        );
+        assert!(tmp.is_file(), "booklib {args:?} 不该删设备上的临时文件");
+    }
+
+    // sync 连上 Kobo 后清掉 .tmp-*；产物、生成记录逐字节不变
+    let state_path = lib_dir.join("output-state/kobo.json");
+    let (product_before, state_before) = (
+        std::fs::read(&product).unwrap(),
+        std::fs::read(&state_path).unwrap(),
+    );
+    let o = common::booklib_env(Some(&lib_dir), &["sync", "--device=kobo", "--no-meta"], &[]);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "sync 失败：\nstdout:\n{}\nstderr:\n{}",
+        common::stdout(&o),
+        common::stderr(&o)
+    );
+    assert!(!tmp.exists(), "sync 连上 Kobo 后清掉残留临时文件");
+    assert_eq!(
+        std::fs::read(&product).unwrap(),
+        product_before,
+        "Kobo 产物逐字节不变"
+    );
+    assert_eq!(
+        std::fs::read(&state_path).unwrap(),
+        state_before,
+        "Kobo 生成记录逐字节不变"
+    );
+
+    // 同一进程、同一连接：第一次接上清，下一轮不再清
+    let lib = common::open(&lib_dir);
+    let round = |tmp: &std::path::Path| {
+        std::fs::write(tmp, b"again").unwrap();
+        lib.refresh_devices();
+        build_round(&lib, &[kobo]);
+    };
+    let again = product_dir.join(".tmp-2-2-x.kepub.epub");
+    round(&again);
+    assert!(!again.exists(), "进程里第一次接上要清");
+    round(&again);
+    assert!(again.exists(), "同一次连接里下一轮不再清");
+}
+
 #[test]
 fn vertical_books_follow_profile_overrides_and_directory_lists() {
     let dir = tempfile::tempdir().unwrap();
