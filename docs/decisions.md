@@ -353,6 +353,12 @@
 | **文字书竖排第一期（Kobo、汉王）**（profile `vertical_text = true`、`vertical_ascii = "fullwidth"`；v68）：中文文字书（判定规则见下）竖排——`eink-vertical.css` 最后挂、`html{writing-mode:vertical-rl}`（原书本来竖排的不写这条）、spine rtl、`primary-writing-mode`、表格整张横排；书自己的 CSS 盒子属性横转竖（top→right…、width↔height、float 去掉，绝对定位/负边距的规则不动）。这是「文字书只修复」的**两个例外**之一：**竖排版式**（CSS/OPF）和**改字**——成对的“”‘’ → 『』「」，成对的 ASCII 直引号也转（撇号、落单的转全角），正文和目录（nav、ncx）的 ASCII 除空格外转全角竖立。Bigme（xReader 不竖排、KOReader 也不会）不开。日文、韩文书按判定不竖排 | vinci 2026-11-11：中文文字书全部竖排；引号按 GB/T 15834；“同意竖排书例外改版式和引号”；自带阅读器和 KOReader 都用。实机测试书 01–13：Kobo `html`/`body` 写 vertical-rl 就竖排、spine rtl 点左侧下一页、ruby 在右、注释弹窗；Kobo 上半角数字和西文躺倒会叠字，13 号选「全部转全角竖立」（U1），汉王 01–11 正常、13 也选 U1。**推翻 PRD 初稿「全角化不做」**，只在 Kobo、汉王这两台的竖排产物里做；空格不转、目录同正文、ASCII 直引号也转（同日另定四处细节）。Bigme 实机没有竖排，不开。现行 `text_repair_only` 的「正文一个字不动」在这两台的竖排书里让位于这两项，其余照只修复 |
 | **Kobo 全部文字书注释改弹窗**（`kobo.toml` 的 `notes = "popup"`、`repair_note_links = true`；v68）：标号写 `epub:type="noteref"`、注释块 `<aside epub:type="footnote">`，横排、竖排都这样；汉王不变（`notes = "jump"`） | vinci 2026-11-11 定；测试书 05 在 Clara BW 上点开是「预览注释」弹窗。推翻 2026-11-01「推断 jump 最稳」的待确认项。好处是注释能就地预览、不用跳走；代价是 `note_icons = "number"` 也随之生效（图标标号换上标数字），注释段指纹从 `jump#` 变 `popup#`、文字书段多 `n`，Kobo 全部书重建一次 |
 
+## 2026-11-12
+
+| 定了什么 | 理由 |
+|---|---|
+| **汉王产物目录改成 `Documents`；只差大小写的目录当同一个位置**（`hanvon.toml` 的 `[deliver] dir = "Documents"`；生成记录迁移 + 删除保护）：设备接上时，生成记录里 `root` 和现在只差大小写、且新路径上的文件在的条目（`path`/`root`/`old`/`orphans`）只改记录、不碰文件；迁移后同一本书直接算最新，不生成、不重传。大小写敏感的设备上新路径不在就不迁移，照原来的挪位置流程。兜底：逐段只差大小写、父目录不同的两个路径之间绝不靠删一个来"挪"（`put_file` 按 `keep_src` 处理；`delete_placements` 不删文件、不删目录、记录丢掉）。Kindle、掌阅、Bigme、Kobo 的 `dir` 不动，产物内容、指纹、`OPTIMIZE_VERSION` 都不变。`[deliver]` 不进指纹 | 2026-11-11 在 vinci 电脑上核实：汉王经 jmtpfs 在 `内部共享存储空间/` 下列出 `documents`（inode 3）和 `Documents`（inode 101）两个目录、内容一样；adb 看设备上只有一个 inode（安卓存储不分大小写）。原因是 profile 写小写，MTP 给同一个文件夹多登记了一个小写对象。直接改 `dir` 会让每本书先被当"挪位置"删掉再重传（进度丢），所以迁移只改记录，并用 `case_alias` 兜底防止任何大小写别名之间互删。掌阅、Bigme 也是小写名、可能有同样的重影，本次不改，靠删除保护兜底 |
+
 ## 待定
 
 - （无）

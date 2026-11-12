@@ -3149,3 +3149,132 @@ fn unreadable_source_does_not_cache_not_chinese() {
         "读不到不能把「不是」永久写进 meta.json"
     );
 }
+
+fn hanvon_profile(dir: &str) -> profile::Profile {
+    let mut p = profile::get("hanvon").unwrap().clone();
+    p.deliver = Some(profile::Deliver::Mtp {
+        mount: "hanvon".into(),
+        dir: dir.into(),
+    });
+    p
+}
+
+#[test]
+fn hanvon_documents_case_rebase_keeps_books_and_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let dev = common::dev_dir(&lib_dir);
+    let storage = dev.join("hanvon/Internal Storage");
+    std::fs::create_dir_all(storage.join("documents")).unwrap();
+    let src = dir.path().join("书.epub");
+    std::fs::write(&src, sample_epub("书")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    // 旧目录名生成一次
+    let old = hanvon_profile("documents");
+    let old_path = built_path(&lib.build(&m, &old, false).unwrap()).to_path_buf();
+    assert!(old_path.is_file(), "{old_path:?}");
+    let before = std::fs::metadata(&old_path).unwrap();
+    // 不分大小写的设备：Documents 指向 documents
+    let documents = storage.join("Documents");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(storage.join("documents"), &documents).unwrap();
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(&documents).unwrap();
+    let new = hanvon_profile("Documents");
+    lib.refresh_devices();
+    let Built::UpToDate(path) = lib.build(&m, &new, false).unwrap() else {
+        panic!("只差大小写的根目录应直接算最新")
+    };
+    assert!(path.starts_with(&documents), "{path:?}");
+    assert!(path.is_file());
+    let after = std::fs::metadata(&path).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(before.ino(), after.ino(), "没重写设备上的文件");
+        assert_eq!(before.mtime(), after.mtime());
+    }
+    let state = std::fs::read_to_string(lib.root().join("output-state/hanvon.json")).unwrap();
+    assert!(
+        state.contains("Documents") && !state.contains("documents"),
+        "{state}"
+    );
+    assert!(matches!(
+        lib.build(&m, &new, false).unwrap(),
+        Built::UpToDate(_)
+    ));
+}
+
+#[test]
+fn hanvon_documents_case_sensitive_copies_and_keeps_old() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let dev = common::dev_dir(&lib_dir);
+    let storage = dev.join("hanvon/Internal Storage");
+    std::fs::create_dir_all(storage.join("documents")).unwrap();
+    let src = dir.path().join("书.epub");
+    std::fs::write(&src, sample_epub("书")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    let old = hanvon_profile("documents");
+    let old_path = built_path(&lib.build(&m, &old, false).unwrap()).to_path_buf();
+    // 两个真目录：Documents 是空目录，记录不迁移，走原来的挪位置
+    let documents = storage.join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let new = hanvon_profile("Documents");
+    lib.refresh_devices();
+    let path = built_path(&lib.build(&m, &new, false).unwrap()).to_path_buf();
+    assert!(path.starts_with(&documents) && path.is_file(), "{path:?}");
+    assert!(old_path.exists(), "宁可多留旧文件，不删书");
+    let state = std::fs::read_to_string(lib.root().join("output-state/hanvon.json")).unwrap();
+    assert!(state.contains("Documents"), "{state}");
+}
+
+#[test]
+fn hanvon_documents_case_migrates_orphans_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let dev = common::dev_dir(&lib_dir);
+    let storage = dev.join("hanvon/Internal Storage");
+    std::fs::create_dir_all(storage.join("documents")).unwrap();
+    let src = dir.path().join("要删的.epub");
+    std::fs::write(&src, sample_epub("要删的")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    let old = hanvon_profile("documents");
+    let old_path = built_path(&lib.build(&m, &old, false).unwrap()).to_path_buf();
+    // 模拟删书时设备没接上：记录从 books 挪进 orphans
+    let state_path = lib.root().join("output-state/hanvon.json");
+    let mut v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+    let entry = v["books"].as_object_mut().unwrap().remove(&m.id).unwrap();
+    let placement = serde_json::json!({"path": entry["path"], "root": entry["root"]});
+    v["orphans"] = serde_json::json!([placement]);
+    std::fs::write(&state_path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+    // 不分大小写的设备：Documents 指向 documents
+    let documents = storage.join("Documents");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(storage.join("documents"), &documents).unwrap();
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(&documents).unwrap();
+    let new = hanvon_profile("Documents");
+    lib.refresh_devices();
+    assert_eq!(
+        lib.flush_removed(&new).unwrap(),
+        1,
+        "删的是 Documents 下这一本"
+    );
+    assert!(!old_path.exists());
+    let state = std::fs::read_to_string(&state_path).unwrap();
+    assert!(
+        !state.contains("documents") && !state.contains("Documents"),
+        "{state}"
+    );
+}

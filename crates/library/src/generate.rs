@@ -290,6 +290,27 @@ impl Library {
         self.state_dir().join(format!("{device_id}.json"))
     }
 
+    /// 设备接上了、产物根目录只差大小写时（汉王 `documents` → `Documents`），把这台的生成记录原样挪过去：
+    /// 只改记录，不碰设备上的文件。挂在 prepare / space_check / flush_removed / retract 开头（生成流程；`list` 只读不写）。
+    fn rebase_state_case(&self, device: &Profile) {
+        let Ok(Target::Dir { root, .. }) = &*self.target(device) else {
+            return;
+        };
+        let sp = self.state_path(&device.id);
+        let state = self.records.states.get(&sp);
+        let maybe =
+            state.books.values().any(|e| {
+                case_alias(&e.root, root) || e.old.iter().any(|o| case_alias(&o.root, root))
+            }) || state.orphans.iter().any(|o| case_alias(&o.root, root));
+        if !maybe {
+            return;
+        }
+        let mut state = (*state).clone();
+        if state.rebase_case_root(root) {
+            let _ = self.records.states.put(&sp, state);
+        }
+    }
+
     /// `output-state/` 下各模式的生成记录（包括 profile 已经删掉的模式）：(模式 id, 记录文件)。
     pub(crate) fn state_files(&self) -> Vec<(String, PathBuf)> {
         let mut v: Vec<(String, PathBuf)> = std::fs::read_dir(self.state_dir())
@@ -424,6 +445,7 @@ impl Library {
     /// 这本书不再给这台设备（从它的跟踪范围里拿掉了）：删掉它在这台上的产物，从这台的生成记录里去掉；
     /// 删不掉的记进 `orphans`，下次接上再删。这台上本来就没有返回 `false`。书库里的书不动。
     pub fn retract(&self, id: &str, device: &Profile) -> Result<bool, String> {
+        self.rebase_state_case(device);
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
         let Some(entry) = state.books.get(id).cloned() else {
@@ -456,6 +478,7 @@ impl Library {
 
     /// 删了的书留在设备上的产物（当时设备没接上）：设备接上了就删。返回删掉几个。
     pub fn flush_removed(&self, device: &Profile) -> Result<usize, String> {
+        self.rebase_state_case(device);
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
         if state.orphans.is_empty() {
@@ -520,6 +543,7 @@ impl Library {
             return SpaceCheck::Skip; // 放电脑上的、没接上的不查
         };
         let staged = !direct_write(target, &self.devices.usbms_base());
+        self.rebase_state_case(device);
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
         let on_device = |p: &Path| {
@@ -612,6 +636,7 @@ impl Library {
             self.verified_original(meta)?;
         }
         let plan = self.plan(meta, device)?;
+        self.rebase_state_case(device);
         // 指纹写法改了（2026-10-08 起文字书、漫画分开算）、规则没变的：记录改成新写法，不重新生成
         let sp = self.state_path(&device.id);
         let prev = self.records.states.get(&sp).books.get(&meta.id).cloned();
@@ -1171,6 +1196,24 @@ impl StateEntry {
 }
 
 impl State {
+    /// 产物根目录只差大小写、新路径上的文件也在（不分大小写的设备）时，把记录原样挪到新根目录：
+    /// 只改记录，不碰设备上的文件。返回改没改。
+    ///
+    /// 新路径上文件不在（大小写敏感的设备上是两个真目录）就不换，交给原来的"挪位置"流程。
+    fn rebase_case_root(&mut self, new_root: &Path) -> bool {
+        let mut changed = false;
+        for e in self.books.values_mut() {
+            changed |= rebase_case_placement(&mut e.path, &mut e.root, new_root);
+            for old in &mut e.old {
+                changed |= rebase_case_placement(&mut old.path, &mut old.root, new_root);
+            }
+        }
+        for o in &mut self.orphans {
+            changed |= rebase_case_placement(&mut o.path, &mut o.root, new_root);
+        }
+        changed
+    }
+
     /// 这个产物现在（或待删的旧位置里）是不是记在别的书名下（按路径认）。
     fn claimed(&self, p: &Placement) -> bool {
         self.books
@@ -1197,6 +1240,17 @@ impl State {
         let mut left = Vec::new();
         for p in list {
             if self.claimed(&p) || current == Some(p.path.as_path()) {
+                continue;
+            }
+            // 逐段只差大小写的另一个位置（汉王 documents/Documents、跟踪目录 Manga/manga）：不分大小写的设备上就是同一个文件，
+            // 删它等于删现在这份。不删文件、不删目录，记录丢掉；大小写敏感的设备上会留下一个旧文件，宁可多留一份。
+            if current.is_some_and(|c| case_alias(c, &p.path) && !case_twin(c, &p.path))
+                || self.books.values().any(|e| {
+                    e.placements()
+                        .iter()
+                        .any(|q| case_alias(&q.path, &p.path) && !case_twin(&q.path, &p.path))
+                })
+            {
                 continue;
             }
             // 只差大小写的另一个名字正被用着（书名只改了大小写）：阅读器的文件系统多半不分大小写，删旧名字就是删现在这份
@@ -1425,6 +1479,23 @@ fn direct_write(target: &Target, usbms_base: &Path) -> bool {
     matches!(target, Target::Dir { root, .. } if !root.starts_with(usbms_base))
 }
 
+/// 一个产物记录的 (path, root) 跟着根目录的大小写改：根目录只差大小写、`new_root + 相对路径` 的文件在才换。
+fn rebase_case_placement(path: &mut PathBuf, root: &mut PathBuf, new_root: &Path) -> bool {
+    if !case_alias(root, new_root) {
+        return false;
+    }
+    let Ok(rel) = path.strip_prefix(&*root) else {
+        return false;
+    };
+    let new_path = new_root.join(rel);
+    if !new_path.is_file() {
+        return false;
+    }
+    *root = new_root.to_path_buf();
+    *path = new_path;
+    true
+}
+
 /// 同一目录里、文件名只差大小写的两个不同路径。
 pub(crate) fn case_twin(a: &Path, b: &Path) -> bool {
     a != b
@@ -1435,6 +1506,24 @@ pub(crate) fn case_twin(a: &Path, b: &Path) -> bool {
             }
             _ => false,
         }
+}
+
+/// 两个路径逐段只差大小写（不是同一个路径）：例如 `…/documents/x.epub` 和 `…/Documents/x.epub`。
+/// 不分大小写的设备（jmtpfs、安卓存储）上它们是同一个文件；分大小写的设备上不是，所以调用方还要看文件在不在。
+pub(crate) fn case_alias(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return false;
+    }
+    let (mut ca, mut cb) = (a.components(), b.components());
+    loop {
+        match (ca.next(), cb.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y))
+                if x.as_os_str().to_string_lossy().to_lowercase()
+                    == y.as_os_str().to_string_lossy().to_lowercase() => {}
+            _ => return false,
+        }
+    }
 }
 
 /// `path` 和只差大小写的 `twins` 在磁盘上是不是各是各的文件：列目录，`path` 的原名和某个 twin 的原名都列得出来才算
@@ -1525,6 +1614,107 @@ mod remove_tests {
         };
         state.delete_into_orphans(vec![p], &Devices::new(off));
         assert!(!f.exists() && state.orphans.is_empty());
+    }
+
+    /// 旧记录 `…/documents`、设备上（不分大小写）叫 `Documents`：记录原样挪过去，不碰文件；再调一次不变。
+    /// 新路径不在（大小写敏感）或根目录不是只差大小写：不换。
+    #[test]
+    fn rebase_case_root_only_when_new_path_exists() {
+        use super::{Placement, State, StateEntry};
+        let d = tempfile::tempdir().unwrap();
+        let old_root = d.path().join("documents");
+        std::fs::create_dir_all(old_root.join("子目录")).unwrap();
+        let old_file = old_root.join("子目录/书.epub");
+        std::fs::write(&old_file, b"x").unwrap();
+        let new_root = d.path().join("Documents");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&old_root, &new_root).unwrap();
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&new_root).unwrap();
+
+        let mut state = State::default();
+        state.books.insert(
+            "b".into(),
+            StateEntry {
+                path: old_file.clone(),
+                root: old_root.clone(),
+                fingerprint: "f".into(),
+                sha: String::new(),
+                old: vec![Placement {
+                    path: old_root.join("旧.epub"),
+                    root: old_root.clone(),
+                }],
+                audit: Vec::new(),
+            },
+        );
+        state.orphans.push(Placement {
+            path: old_root.join("删了.epub"),
+            root: old_root.clone(),
+        });
+        // 旧位置的文件都在（模拟不分大小写：新路径读得到）
+        std::fs::write(old_root.join("旧.epub"), b"y").unwrap();
+        std::fs::write(old_root.join("删了.epub"), b"z").unwrap();
+        assert!(state.rebase_case_root(&new_root));
+        let e = &state.books["b"];
+        assert_eq!(e.root, new_root);
+        assert_eq!(e.path, new_root.join("子目录/书.epub"));
+        assert_eq!(e.old[0].path, new_root.join("旧.epub"));
+        assert_eq!(state.orphans[0].path, new_root.join("删了.epub"));
+        assert!(old_file.exists(), "只改记录，不碰文件");
+        assert!(!state.rebase_case_root(&new_root), "幂等");
+
+        // 根目录不是只差大小写：不换
+        let mut state2 = State::default();
+        state2.books.insert(
+            "b".into(),
+            StateEntry {
+                path: old_file.clone(),
+                root: old_root.clone(),
+                fingerprint: String::new(),
+                sha: String::new(),
+                old: Vec::new(),
+                audit: Vec::new(),
+            },
+        );
+        assert!(!state2.rebase_case_root(&d.path().join("Books2")));
+
+        // 新路径上的文件不在（两个真目录）：不换
+        let other = d.path().join("DOCUMENTS");
+        std::fs::create_dir_all(&other).unwrap();
+        assert!(!state2.rebase_case_root(&other));
+        assert_eq!(state2.books["b"].path, old_file);
+    }
+
+    #[test]
+    fn case_alias_paths_are_not_deleted() {
+        use super::{Placement, State};
+        use crate::deliver::DeviceEnv;
+        use crate::session::Devices;
+        let d = tempfile::tempdir().unwrap();
+        let old_root = d.path().join("documents");
+        let new_root = d.path().join("Documents");
+        std::fs::create_dir_all(&old_root).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&old_root, &new_root).unwrap();
+        #[cfg(not(unix))]
+        std::fs::create_dir_all(&new_root).unwrap();
+        let file = old_root.join("书.epub");
+        std::fs::write(&file, b"x").unwrap();
+        let dev = Devices::new(DeviceEnv {
+            mtp_base: d.path().join("mtp"),
+            mount_check: false,
+            usbms_base: d.path().join("media"),
+        });
+        let state = State::default();
+        let old = Placement {
+            path: file.clone(),
+            root: old_root,
+        };
+        let cur = new_root.join("书.epub");
+        let left = state.delete_placements(vec![old], Some(&cur), &dev);
+        assert!(left.is_empty(), "记录丢掉");
+        assert!(file.exists(), "只差大小写的位置不删文件");
+        assert!(cur.exists());
     }
 
     /// 只有 MTP 直写；USB 大容量存储（Kobo）和电脑上都经临时文件。

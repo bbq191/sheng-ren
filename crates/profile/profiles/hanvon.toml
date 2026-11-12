@@ -39,4 +39,4 @@ height = 1448
 [deliver]
 kind = "mtp"
 mount = "hanvon"                   # 2026-11-06 真机确认：~/Hanvon → /run/user/1000/mtp/hanvon（jmtpfs）
-dir = "documents"                  # 2026-11-06 真机确认：存储根下 Documents，安卓存储不分大小写
+dir = "Documents"                  # 2026-11-11 现场：小写 documents 让 MTP 多登记出一个同内容的 documents，改成设备上的真名；旧记录由大小写迁移原样接过来
