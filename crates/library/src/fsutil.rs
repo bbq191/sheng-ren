@@ -183,7 +183,9 @@ pub(crate) fn lock<'a>(root: &Path, held: &'a Cell<bool>) -> Result<Lock<'a>, St
 }
 
 /// 删掉 `dir` 下名字以 [`TMP_PREFIX`] 开头的文件和目录（进程被杀时留下的）。只在持锁时调用。
-pub(crate) fn clean_tmp(dir: &Path) {
+/// 读目录前先调 `guard`：测试钩子在这里检查“这个目录能不能读”，正式路径传 `|_| {}`。
+pub(crate) fn clean_tmp(dir: &Path, guard: impl FnOnce(&Path)) {
+    guard(dir);
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         if !e.file_name().to_string_lossy().starts_with(TMP_PREFIX) {
             continue;
@@ -198,7 +200,9 @@ pub(crate) fn clean_tmp(dir: &Path) {
 
 /// 只删 `dir` 下名字以 [`TMP_PREFIX`] 开头的**文件**（不删目录）：产物目录在书库外（和原件目录并列），
 /// 里面只可能有本工具写产物时留下的 `.tmp-<进程号>-<计数>-<名>`。只在持锁时调用。
-pub(crate) fn clean_tmp_files(dir: &Path) {
+/// 读目录前先调 `guard`：测试钩子在这里检查“这个目录能不能读”，正式路径传 `|_| {}`。
+pub(crate) fn clean_tmp_files(dir: &Path, guard: impl FnOnce(&Path)) {
+    guard(dir);
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         if e.file_name().to_string_lossy().starts_with(TMP_PREFIX)
             && e.file_type().is_ok_and(|t| t.is_file())
@@ -260,5 +264,31 @@ mod tests {
         assert_eq!(*c.get(&p), [1]);
         write_json(&p, &vec![2]).unwrap(); // 别的进程（原子写，换 inode）
         assert_eq!(*c.get(&p), [2]);
+    }
+
+    /// 测试钩子必须接在 `read_dir` 之前：判定在设备路径上 panic 时，目录根本没读、临时文件也还在。
+    #[test]
+    fn clean_tmp_guard_runs_before_read_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let device = d.path().join("device");
+        std::fs::create_dir_all(&device).unwrap();
+        let tmp = device.join(".tmp-1-1-x.epub");
+        std::fs::write(&tmp, b"x").unwrap();
+        let guard = |dir: &Path| {
+            if dir == device {
+                panic!("清理读了设备目录");
+            }
+        };
+
+        let r = std::panic::catch_unwind(|| clean_tmp(&device, guard));
+        assert!(r.is_err(), "clean_tmp 读到设备目录要 panic");
+        let guard = |dir: &Path| {
+            if dir == device {
+                panic!("清理读了设备目录");
+            }
+        };
+        let r = std::panic::catch_unwind(|| clean_tmp_files(&device, guard));
+        assert!(r.is_err(), "clean_tmp_files 读到设备目录要 panic");
+        assert!(tmp.is_file(), "panic 在读目录之前，临时文件没删");
     }
 }

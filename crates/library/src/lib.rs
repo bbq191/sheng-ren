@@ -512,8 +512,7 @@ impl Library {
         if !self.cleanup_path_allowed(dir) {
             return;
         }
-        self.panic_if_test_device_read(dir);
-        fsutil::clean_tmp(dir);
+        fsutil::clean_tmp(dir, |dir| self.panic_if_test_device_read(dir));
     }
 
     /// 清理 `dir` 里的临时文件；在可拔下的设备上的跳过。
@@ -521,8 +520,7 @@ impl Library {
         if !self.cleanup_path_allowed(dir) {
             return;
         }
-        self.panic_if_test_device_read(dir);
-        fsutil::clean_tmp_files(dir);
+        fsutil::clean_tmp_files(dir, |dir| self.panic_if_test_device_read(dir));
     }
 
     /// `dir` 不在可拔下的设备上、可以清理（只看路径前缀，不碰文件系统）。
@@ -551,7 +549,8 @@ impl Library {
         };
         for dir in self.output_dirs() {
             if dir.starts_with(root) {
-                fsutil::clean_tmp_files(&dir);
+                // 连接清理本来就要读设备，不带加锁清理的测试钩子
+                fsutil::clean_tmp_files(&dir, |_| {});
             }
         }
     }
