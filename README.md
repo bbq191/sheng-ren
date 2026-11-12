@@ -21,10 +21,10 @@
 | 模式 | 给谁读 | 产物 | 怎么传 |
 |---|---|---|---|
 | `kindle` | Kindle Paperwhite 12 代签名版自带阅读器 | KFX | USB（MTP），放 `documents/<子目录>/` |
-| `ireader` | 掌阅 Air 3 Pro 自带阅读器 | EPUB | USB（MTP），放 `documents/<子目录>/` |
+| `ireader` | 掌阅 Air 3 Pro 自带阅读器 | EPUB | USB（MTP），放 `Documents/<子目录>/` |
 | `kobo` | Kobo Clara BW 自带阅读器（2026-11-05 真机确认漫画方案 D） | KEPUB | USB 大容量存储，放 `books/<子目录>/` |
 | `hanvon` | 汉王 Clear 6 Turbo 自带阅读器（2026-11-06 真机核对阅读范围、封面、漫画版式、投递） | EPUB | USB（MTP），放 `Documents/<子目录>/` |
-| `bigme` | Bigme B7 Pro 黑白版自带阅读器（2026-11-10 真机核对阅读范围、书架、漫画版式、投递） | EPUB | USB（MTP），放 `books/<子目录>/` |
+| `bigme` | Bigme B7 Pro 黑白版自带阅读器（2026-11-10 真机核对阅读范围、书架、漫画版式、投递） | EPUB | USB（MTP），放 `Books/<子目录>/` |
 
 2026-10 Move、掌阅 Ocean 5 Pro 卖了，换掌阅 Air 3 Pro（2026-11-02 起 `ireader` 按它的屏幕 1440×1920）；`xochitl` 模式 2026-10-31 删了，`ireader` 的几何和字号、行距 2026-11-02 已在 Air 3 Pro 上用探针重量，heading_center、background_auto_height 等部分怪癖还是 Ocean 5 Pro 上的结论。
 

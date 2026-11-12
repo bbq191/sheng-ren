@@ -17,9 +17,15 @@ pub fn dev_dir(lib: &Path) -> PathBuf {
     d
 }
 
-/// 设备上 `mode`（kindle/ireader）的产物根目录：`<存储>/documents`。
+/// 设备上 `mode` 的产物根目录：`<存储>/<[deliver] dir>`（Kindle 仍是 `documents`，掌阅、汉王是 `Documents`）。
 pub fn documents(lib: &Path, mode: &str) -> PathBuf {
-    dev_dir(lib).join(mode).join("Internal Storage/documents")
+    let dir = match profile::get(mode).and_then(|p| p.deliver.as_ref()) {
+        Some(profile::Deliver::Mtp { dir, .. } | profile::Deliver::Usbms { dir, .. }) => {
+            dir.as_str()
+        }
+        _ => "documents",
+    };
+    dev_dir(lib).join(mode).join("Internal Storage").join(dir)
 }
 
 /// 打开书库，设备指向测试目录（见 [`dev_dir`]）。

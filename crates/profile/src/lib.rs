@@ -1254,6 +1254,14 @@ mod tests {
         let k = get("kindle").unwrap();
         let i = get("ireader").unwrap();
         assert_eq!(
+            i.deliver,
+            Some(Deliver::Mtp {
+                mount: "ireader".into(),
+                dir: "Documents".into()
+            }),
+            "掌阅：MTP，产物放存储根下 Documents/"
+        );
+        assert_eq!(
             (k.format(), k.output_readable()),
             (
                 Format::Kfx,
@@ -1346,9 +1354,9 @@ mod tests {
             b.deliver,
             Some(Deliver::Mtp {
                 mount: "bigme".into(),
-                dir: "books".into()
+                dir: "Books".into()
             }),
-            "Bigme：MTP，产物放存储根下 books/"
+            "Bigme：MTP，产物放存储根下 Books/"
         );
         assert_eq!(
             (b.screen.width, b.screen.height, b.color, b.format()),
