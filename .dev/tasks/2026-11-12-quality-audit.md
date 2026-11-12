@@ -122,3 +122,39 @@ N. 标题
 ### 要 vinci 定的
 - `AGENTS.md` / `CONTRIBUTING.md` 的"新分支、维护者合并"和 `Projects/工作流.md` 的"负责 bot 合并"以哪个为准；任务单提交在 master 还是任务分支。
 - 第 8 张单（Move 时代的怪癖字段）要不要做。
+
+## Move 字段清单
+
+负责 bot 2026-11-12 按 vinci 的要求（第 8 张单先出清单）整理，对着 master `dc537bb`。字段都定义在 `crates/profile/src/lib.rs`，行号指 `pub` 字段那一行。「谁在用」是在五个内置 profile（`crates/profile/profiles/{kindle,ireader,kobo,hanvon,bigme}.toml`）里查的；只要五台都没写，就只有测试夹具 `crates/profile/testdata/xochitl.toml`（16 处 `fixture("xochitl")`）在用。**书库 `profiles/` 里的自定义模式「未核实」**：box 上看不到 vinci 的书库，请 vinci 看一下书库根目录下 `profiles/*.toml` 有没有写这些键。
+
+删字段前要知道的三件事：
+1. **配置会报错**：`ProfileFile` 是 `deny_unknown_fields`（`lib.rs:488`）。字段一删，自定义模式里还写着这个键的，加载 profile 时就会报错。所以要先"弃用"：照样认这个键、忽略它、打一行警告，过一阵再删。
+2. **指纹会变**：阅读器模型签名（`bookconv/src/reader_model.rs:139` 起）开头固定写 `d{display_none}b{trailing_br_line}l{line_height_except_p}`，掌阅不是缺省模型，它的指纹 `m` 段里就有这一串。删这三个字段时，签名里要照写原来的常量（如 `d1b0l0`），不然掌阅全部书的指纹会变（`fp_golden` 跟着变）。`fingerprint.rs:182`、`:190` 只在字段为 `false` 时加字母，五台都不受影响。
+3. **能删的代码**：五台都走缺省值，删掉的只是"字段不是缺省值时才走"的分支。产物应该逐字节不变，要用 `fp_golden` 和五台对拍证明。
+
+| 字段（TOML 键） | 定义 | 谁在用 | 作用 | 删了会怎样 | 建议 |
+|---|---|---|---|---|---|
+| `margin_top` + `[page_top]`（`PageTop`） | `:192`、`:227`、`:168` | 只有测试夹具 | 不认 `margin-top` 的阅读器，章首垫透明空白图（`wash/top_spacer.rs`，约 370 行）；`kfx/src/write/{parse,style,analyze}.rs` 也读 `margin_top` | 删掉 `top_spacer.rs` 和 kfx 里为 `false` 准备的分支；五台产物不变 | 删（先弃用） |
+| `em_root`（连带 `ReaderModel.em_root_px`） | `:215` | 只有测试夹具 | em 一律按根字号换算（`wash/root_em.rs`，约 180 行；`box_fix.rs`、kfx `parse.rs`、`epub_to_kfx.rs` 也有分支） | 删 `root_em.rs` 和各处分支；产物不变 | 删（先弃用） |
+| `heading_font_keywords` + `[heading_sizes]`（`HeadingSizes`） | `:223`、`:225`、`:158` | 只有测试夹具 | 标题字号只认关键字，照 Kindle 写最接近的关键字（`wash/block_style.rs`）；对不上关键字的标题改成 div（`wash/heading_div.rs`，`kindle_rules` 时进 `wash/mod.rs:762`） | 删 `heading_div.rs` 和 `block_style` 的分支；签名里的 `h…` 段五台都没有 | 删（先弃用） |
+| `inline_css_lengths` | `:236` | 只有测试夹具 | 行内 style 里的 em 不照 CSS 排时，挪进外链样式表（`wash/inline_css.rs`，约 340 行） | 删 `inline_css.rs`；签名里的 `i0` 五台都没有 | 删（先弃用） |
+| `line_height_except_p` | `:205` | 只有测试夹具 | `<p>` 不认外链行距、别的块按倍数认，归一行距（`wash/block_style.rs`） | 删分支；签名里要照写 `l0` | 删（先弃用，签名照写常量） |
+| `line_height_floor` | `:210` | 只有测试夹具 | 插了下边框横线图的块，行距不低于这个下限（`box_fix.rs`） | 删分支 | 删（跟 `borders` 一起） |
+| `trailing_br_line` | `:231` | 只有测试夹具 | 块末尾的 `<br/>` 多排一行时去掉它（`wash/blank_fold.rs`） | 删分支；签名里要照写 `b0` | 留：其他自带阅读器也可能这样，代码小 |
+| `display_none` | `:199` | 只有测试夹具 | 不认 `display:none` 时去掉隐藏元素（`wash/mod.rs`） | 删分支；签名里要照写 `d1` | 留：常见怪癖，代码小 |
+| `background_no_repeat` | `:188` | 只有测试夹具 | 不认 `no-repeat` 时去掉不平铺的背景图（`wash/kindle_rules.rs`） | 删分支；指纹里的字母五台都没有 | 弃用，以后删 |
+| `padding` | `:240` | 只有测试夹具 | 不认内边距时并进外边距（`box_fix.rs`、`kindle_model.rs`、`break_margin.rs`、`blank_fold.rs`、`top_spacer.rs`、`kindle_images.rs`、kfx `parse.rs`/`style.rs`，用的地方最多） | 牵涉多，删起来风险最高 | 留（以后真要删单独开单） |
+| `borders` | `:243` | 只有测试夹具 | 不画边框时，上下边框插横线图（`box_fix.rs`） | 删 `box_fix.rs` 里画横线图的那块 | 弃用，跟 `line_height_floor` 一起删 |
+| `heading_margins` | `:247` | 只有测试夹具 | 不认标题外边距时写到相邻块上（`box_fix.rs`） | 删分支 | 弃用，以后删 |
+| `percent_margins` | `:255` | 只有测试夹具 | 左右外边距的 % 折成 em（`box_fix.rs`） | 删分支 | 弃用，以后删 |
+| `block_width` | `:258` | 只有测试夹具 | 不认块 `width` 时折成左右外边距（`box_fix.rs`） | 删分支 | 弃用，以后删 |
+| `negative_margins` | `:261` | 只有测试夹具 | 不认负外边距时间距写成非负（`box_fix.rs`） | 删分支 | 弃用，以后删 |
+| `cell_width` | `:274` | 只有测试夹具 | 单元格宽度写法（`box_fix.rs`） | 删分支 | 弃用，以后删 |
+| `note_backlinks`（`NotePolicy.backlinks`） | `:314` | 只有测试夹具 | 去掉注释"跳回正文"的回链（`optimize/mod.rs:473`） | 删分支，代码很小 | 留：其他阅读器也可能需要，代码很小 |
+| `webp` | `:428` | 只有测试夹具 | 不认 WebP 时转成 PNG（`optimize/mod.rs:497` → `webp_to_png`） | 删转换 | 留：新设备很可能也不认 WebP |
+| `comic_reader_margins`（`ComicPolicy.reader_margins`） | `:328` | 只有测试夹具 | 漫画设成阅读器页边距 1 以后的补救（`bookconv/src/comicpad.rs` 整个文件；`optimize/mod.rs:12` 还引用了已经不在仓库里的 `xochitl/comic-margins.sh`） | 删 `comicpad.rs` 和相关分支；漫画产物不变 | 删（先弃用） |
+| `image_sizing = "percent"`（`ImageSizing::Percent`） | `:137`（枚举值） | 只有测试夹具（掌阅用的是 `device-px`） | 只认百分比宽度的阅读器，图片宽度改写（`wash/kindle_images.rs`） | 删这个枚举值和分支；`device-px`、`css` 不动 | 删（先弃用） |
+
+**注释里提到 Move、但现在的设备在用的（不在清单里，只是注释该更新）**：`px_margins`（`:252`，掌阅 `false`）、`cell_middle`（`:265`，掌阅）、`float`（`:282`，掌阅）、`horizontal_scale`（`:287`，掌阅）、`inline_valign`（`:269`，掌阅）、`repair_note_links`（`:434`，Kobo）、`kindle_rules`（`:438`）、`image_gamma`（`:442`）、`em_px` / `line_px` / `font_px`（`:472-479`，掌阅）、`background_images`（`:414`，五台）。另外 `lib.rs:81` 说弹窗"内置的三个模式都不用"，已经过时（掌阅、Kobo 都是弹窗）。
+
+**建议的做法（等 vinci 定）**：先开一张"弃用"单：建议删的字段照样认、打警告、不再起作用，删掉对应的清洗代码，测试夹具 `xochitl.toml` 跟着改小，签名里照写常量，`fp_golden` 和五台对拍逐字节不变。下次版本再把弃用的键从 `ProfileFile` 去掉。标「留」的不动；`padding` 牵涉太多，要删的话单独开单。
