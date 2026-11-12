@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-lock-hook-kobo-test
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: lock-hook-kobo-test（从最新 master 切出）
-- 更新时间: 2026-11-12T13:30+08:00
+- 更新时间: 2026-11-12T14:10+08:00
 - 引用: 2026-11-12-lock-no-device（「审查 → 二审」建议 1、2；「后续」第 3、4 条）
 
 ## 需求原文
@@ -68,13 +68,41 @@
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-12 14:05–14:10 +08:00
+- base..head：`15a4cff..f77ae5b`（`15a4cff` 是切出时的最新 master，含 `415161a` 合并后加的任务单提交；结果提交在分支 tip）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `ae4b418` | 任务单 | 状态改 accepted |
+  | 1–6 | `f77ae5b` | `fsutil.rs`、`lib.rs`、`tests/flow.rs` | 钩子接到清理的 `read_dir` 前、单元测试、Kobo usbms 集成测试 |
+  | 结果 | 本提交 | 任务单 | 填结果、状态改为 done |
+
+- 实现：
+  - **钩子接在 I/O 上**：`fsutil::clean_tmp(dir, guard: impl FnOnce(&Path))`、`clean_tmp_files(dir, guard)` 在 `read_dir` 之前调 `guard(dir)`。`lib.rs` 的 `clean_tmp_on_computer` / `clean_tmp_files_on_computer` 仍然先做 `cleanup_path_allowed` 跳过，再把 `panic_if_test_device_read` 作为判定传进去；删掉了原来跳过之后才调、永远走不到的直接调用。`clean_device_leftovers` 传 `|_| {}`，连接清理不受钩子影响。
+  - **单元测试**：`fsutil::tests::clean_tmp_guard_runs_before_read_dir` 在设备路径上让判定 panic，`catch_unwind` 断言 `clean_tmp`、`clean_tmp_files` 都会 panic，且目录里的 `.tmp-*` 还在，证明判定在 `read_dir` 之前。
+  - **Kobo 集成测试**：`flow.rs::lock_keeps_kobo_usbms_tmp_until_sync_connects`，用 `<dev>/usbms/KOBOeReader` 当设备，产物在 `books/` 下：
+    - 带 `BOOKLIB_TEST_DEVICE_IO_PANIC=1` 跑 `vertical --on`、`add`：都退出 0，`.tmp-1-1-x.kepub.epub` 还在（`vertical --on` 用在书目录下一个空的「别的目录」上，避免改到被测书的竖排指纹；命令照样加锁、清理照样会看到 Kobo 产物目录）；
+    - 不带钩子跑 `sync --device=kobo --no-meta`：`.tmp-*` 被清掉，Kobo 产物和 `output-state/kobo.json` 逐字节不变；
+    - 同一进程 `refresh_devices()` → `build_round`：第一次接上清，第二轮不再清。
+  - **自检（第 6 步）**：临时注释掉 `clean_tmp_files_on_computer` 里的 `cleanup_path_allowed` 跳过，跑 `cargo test -p library --test flow lock_never_reads` 失败，报 `清理残留临时文件时读了设备上的目录：…/lib-dev/ireader/Internal Storage/documents`；恢复后同测试通过。临时改动没有提交。
+- 测试：
+
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test --workspace` | 通过 | 所有 crate 全过、0 失败（library：lib 78、bin 7、cli 14、flow 53、fp_golden 1） |
+  | `cargo test -p library --lib fsutil::tests::clean_tmp_guard` | 通过 | 新单测 |
+  | `cargo test -p library --test flow lock_` | 通过 | 原来的 `lock_never_reads…` + 新的 Kobo 用例 |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo fmt --all -- --check` | 通过 | 干净 |
+  | `git diff master..HEAD -- crates/library/src/deliver.rs crates/library/src/generate.rs crates/library/src/session.rs crates/library/src/build_run.rs crates/bookconv` | 通过 | 空；清理行为相关文件没动 |
+  | `cargo test -p library --test fp_golden`（含在 workspace 里） | 通过 | `fp_golden.txt` 未改 |
+- 遇到的问题：无。第 6 步证实了“钩子真的会触发”，也证实原来的跳过还在（恢复后不 panic）。
+- 偏离：无。
 - 未完成：
+  - 没上真机；本单只改测试钩子和测试，不需要真机。
+  - 钩子落在清理函数、挨着设备 I/O，按任务单风险点仍建议 agy 二审（负责 bot 判断为中）。
+  - 版本号没动（`OPTIMIZE_VERSION` / `COMIC_VERSION` / `PIPELINE_VERSION`），`fp_golden.txt` 一行没变。
 
 ## 审查
 <!-- 负责 bot 填写 -->
