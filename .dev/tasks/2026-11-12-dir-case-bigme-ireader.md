@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-dir-case-bigme-ireader
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: box-agent
 - 分支: task/2026-11-12-dir-case-bigme-ireader（从最新 master 切出）
-- 更新时间: 2026-11-12T17:10+08:00
+- 更新时间: 2026-11-12T17:11+08:00
 - 引用: 2026-11-12-hanvon-documents-case（后续第 ② 条）；2026-11-12-quality-audit 发现 5
 
 ## 需求原文
