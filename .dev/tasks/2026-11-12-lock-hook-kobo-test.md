@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-12-lock-hook-kobo-test
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: opencode-local
 - 分支: lock-hook-kobo-test（从最新 master 切出）
 - 更新时间: 2026-11-12T13:30+08:00
