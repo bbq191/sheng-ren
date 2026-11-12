@@ -198,17 +198,38 @@ pub(crate) fn clean_tmp(dir: &Path, guard: impl FnOnce(&Path)) {
     }
 }
 
+/// 临时文件名里的进程号（[`tmp_sibling`] 的 `.tmp-<进程号>-<计数>-<名>`）。名字不合规返回 `None`。
+fn tmp_owner_pid(name: &std::ffi::OsStr) -> Option<u32> {
+    let rest = name.to_str()?.strip_prefix(TMP_PREFIX)?;
+    let pid = rest.split('-').next()?;
+    if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    pid.parse().ok()
+}
+
+/// 临时文件的主人进程还在不在：`/proc/<pid>` 存在就算在。名字里解析不出进程号的当作不在（照删）。
+fn tmp_owner_alive(name: &std::ffi::OsStr) -> bool {
+    tmp_owner_pid(name).is_some_and(|pid| Path::new("/proc").join(pid.to_string()).exists())
+}
+
 /// 只删 `dir` 下名字以 [`TMP_PREFIX`] 开头的**文件**（不删目录）：产物目录在书库外（和原件目录并列），
-/// 里面只可能有本工具写产物时留下的 `.tmp-<进程号>-<计数>-<名>`。只在持锁时调用。
-/// 读目录前先调 `guard`：测试钩子在这里检查“这个目录能不能读”，正式路径传 `|_| {}`。
-pub(crate) fn clean_tmp_files(dir: &Path, guard: impl FnOnce(&Path)) {
+/// 里面只可能有本工具写产物时留下的 `.tmp-<进程号>-<计数>-<名>`。
+/// `skip_live_owner` 为真时跳过名字里的进程号还活着（`/proc/<pid>` 存在）的文件：设备可能同时接着别的书库在写，
+/// 不能删别人的临时文件；加锁清理（只在电脑上，同一书库有进程锁）传 `false`。名字不合规的照删。
+/// 只在持锁时调用。读目录前先调 `guard`：测试钩子在这里检查“这个目录能不能读”，正式路径传 `|_| {}`。
+pub(crate) fn clean_tmp_files(dir: &Path, skip_live_owner: bool, guard: impl FnOnce(&Path)) {
     guard(dir);
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
-        if e.file_name().to_string_lossy().starts_with(TMP_PREFIX)
-            && e.file_type().is_ok_and(|t| t.is_file())
+        if !e.file_name().to_string_lossy().starts_with(TMP_PREFIX)
+            || !e.file_type().is_ok_and(|t| t.is_file())
         {
-            let _ = std::fs::remove_file(e.path());
+            continue;
         }
+        if skip_live_owner && tmp_owner_alive(&e.file_name()) {
+            continue;
+        }
+        let _ = std::fs::remove_file(e.path());
     }
 }
 
@@ -287,8 +308,31 @@ mod tests {
                 panic!("清理读了设备目录");
             }
         };
-        let r = std::panic::catch_unwind(|| clean_tmp_files(&device, guard));
+        let r = std::panic::catch_unwind(|| clean_tmp_files(&device, true, guard));
         assert!(r.is_err(), "clean_tmp_files 读到设备目录要 panic");
         assert!(tmp.is_file(), "panic 在读目录之前，临时文件没删");
+    }
+
+    /// 设备清理不能删别的书库进程还在写的临时文件；死进程的、名字不合规的照删。
+    #[test]
+    fn device_cleanup_keeps_tmp_files_of_live_owner() {
+        let d = tempfile::tempdir().unwrap();
+        let me = std::process::id();
+        let live = d.path().join(format!(".tmp-{me}-1-x.epub"));
+        let dead = d.path().join(format!(".tmp-{}-1-x.epub", u32::MAX));
+        let bad = d.path().join(".tmp-nope-1-x.epub");
+        let no_pid = d.path().join(".tmp--1-x.epub");
+        for p in [&live, &dead, &bad, &no_pid] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        assert!(tmp_owner_alive(live.file_name().unwrap()), "当前进程还在");
+        assert!(!tmp_owner_alive(bad.file_name().unwrap()), "名字不合规");
+
+        clean_tmp_files(d.path(), true, |_| {});
+
+        assert!(live.is_file(), "主人还在的临时文件要留着");
+        assert!(!dead.exists(), "主人不在的临时文件要删");
+        assert!(!bad.exists(), "名字不合规的临时文件要删");
+        assert!(!no_pid.exists(), "没有进程号的临时文件要删");
     }
 }
