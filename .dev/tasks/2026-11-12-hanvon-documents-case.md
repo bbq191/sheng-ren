@@ -177,5 +177,16 @@
     2. `delete_placements` 新保护（`generate.rs:1247-1254`）也比对别的书的记录：大小写敏感的设备上会留下旧文件不删，任务单已接受"宁可多留"。
     3. 这条保护也改变了 Kobo（vfat）/ 掌阅上"跟踪目录只改大小写"（`Manga` → `manga`）的行为：以前会删书，现在不删、记录跟过去。请核实没有别的现有流程依赖旧行为。
     4. 汉王自带阅读器的进度是不是按路径记的未知，真机验。
+- 验收（第 2 轮，sheng-ren，2026-11-12，box 复跑 `60934ce`）：**通过**，交 agy 二审
+  - 返工提交 `050ee1c`（`deliver.rs`、`generate.rs`、`session.rs`），对照第 1 轮：
+    - 阻断 1 已修：`deliver.rs:209-212` 只差大小写的分支强制 `direct=false`，走临时文件。复现：符号链接 `Documents -> documents` 下 `put_file(documents/书.epub, Documents/书.epub, keep_src=false, compare=false, direct=true)` → `Ok(true)`，书在、内容不变、没留临时文件（第 1 轮同一调用书被删）；`compare=true` → `Ok(false)`，书在。新测试在 `deliver.rs:833-845`（`compare=false, direct=true`）。
+    - 建议 1 已改：`rebase_state_case` 返回 `Result`（`generate.rs:295-318`），写记录失败时 `prepare`/`retract`/`flush_removed` 用 `?` 报出来，`space_check` 转成 `SpaceCheck::Unknown`（`generate.rs:552-554`）。
+    - 建议 2 已改：`Devices::begin_rebase`（`session.rs:203-206`），每台设备每轮只迁移一次，`refresh` 时清掉（`session.rs:214`）。
+  - 复现主场景：`dir=documents` 生成 → 符号链接 → 内置 hanvon（`Documents`）连续 3 轮（每轮 `refresh_devices`）都是 `UpToDate …/Documents/风起.epub`，书在，记录里没有小写路径了。
+  - 复跑：`cargo fmt --all -- --check` 干净；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test --workspace` 全过（bookconv 553、kfx 53、bookbase 30、csscascade 16、library 74/7/14/51/1、profile 19，0 failed）。
+  - 不回归：`git diff master..HEAD` 对 `crates/bookconv`、`fp_golden.txt`、kindle / ireader / bigme / kobo 四个 profile 都为空；`OPTIMIZE_VERSION` / `COMIC_VERSION` 没动。
+  - 提交合规：中文前缀 + 正文，无 `Co-Authored-By`，没动 master。
+  - 新增线索 5（留给二审）：`begin_rebase` 在写记录之前就记成"本轮已迁移"（`generate.rs:301`）。写失败时只有这一次报错，同一轮后面的书按没迁移的记录走挪位置流程。有保护不会删书，但会把书从小写路径复制一遍，下一轮再迁移。请核实这样可以接受。
+  - 第 1 轮线索 1–4 保留，一起交二审。
 - 二审：
 - 合并：
