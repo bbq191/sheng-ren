@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-device-tmp-pid-guard
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: box-agent
 - 分支: device-tmp-pid-guard（从最新 master 切出）
-- 更新时间: 2026-11-12T16:41+08:00
+- 更新时间: 2026-11-12T16:42:01+08:00
 - 引用: 2026-11-12-lock-no-device（「审查 → 二审」建议 3；「后续」第 5 条）
 
 ## 需求原文
