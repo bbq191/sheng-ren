@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: box-agent
 - 分支: device-tmp-pid-guard（从最新 master 切出）
-- 更新时间: 2026-11-12T16:45:02+08:00
+- 更新时间: 2026-11-12T16:47+08:00
 - 引用: 2026-11-12-lock-no-device（「审查 → 二审」建议 3；「后续」第 5 条）
 
 ## 需求原文
@@ -77,6 +77,24 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
+- 验收：**第 1 轮通过**（sheng-ren bot，2026-11-12 16:47 +08:00，审 `42b1cd4..64362b2`，实现 `cc6f5ca`）。没上真机。下面全是 box 上的临时目录。工具链为 rustup stable rustc 1.99.1。
+  - 负责 bot 对规则 2 的决定：同意执行方，**加锁清理（只在电脑上）不做进程号保护**，仍全删。电脑上的产物目录按书库分开，有书库进程锁，不会出现两个书库同写一个电脑目录的情况。
+  - 逐条验收标准：
+    - [x] 单元测试通过；`lock_never_reads…` 等已有用例照旧通过。
+      - 新单测 `fsutil::tests::device_cleanup_keeps_tmp_files_of_live_owner`（`fsutil.rs:318`）：当前进程号的 `.tmp-*` 留着，`u32::MAX`（超过本机 `pid_max` 4194304，不存在）删掉，`.tmp-nope-…` 和 `.tmp--1-…` 等不合规名字删掉。同步、无睡眠。含在本轮 library lib 79 里，通过。
+      - 已有 `lock_never_reads…`、`lock_keeps_kobo_usbms…` 把设备上的夹具名从 `.tmp-1-…` / `.tmp-2-…` 改成 `.tmp-{u32::MAX}-…`：pid 1 在 Linux 上通常是 init、还活着，不改的话连接清理会误留，断言会红。这是必要的测试修正（结果里记为偏离 `flow.rs`，合理）。两用例本轮仍通过；子进程带 30 秒超时，没有靠睡眠碰运气的新并发用例。
+    - [x] `cargo test --workspace` 全过（0 失败）：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 79 / bin 7 / cli 14 / flow 54 / fp_golden 1，profile lib 19。`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。`cargo fmt --all -- --check` 干净。
+    - [x] 实现提交写明了没上真机；包装器填的结果栏较短，未单独写「没上真机」，审查补记。本单不需要真机验收。
+  - 代码核对（进程号保护是否可靠）：
+    - 解析与 `tmp_sibling`（`fsutil.rs:41-51`，`.tmp-<pid>-<计数>-<名>`）一致：`tmp_owner_pid`（`:202-210`）去掉 `.tmp-` 后取第一段，须全是 ASCII 数字且能解析为 `u32`，否则当作不合规、照删。
+    - 存活检查（`:212-214`）在 Linux 上用 `/proc/<pid>` 是否存在，做法正确；本进程正在写的文件（文件名里是 `std::process::id()`）会被跳过，连接清理传 `skip_live_owner=true`（`lib.rs:546-553`），**不会误删自己正在写的**。
+    - 进程号复用：旧进程已死、新进程占用同一号时会误留，不会误删，方向保守，符合任务单。
+    - 跨机器：USB 设备通常不能同时挂在两台机器上；若文件名里的进程号在本机恰好还活着会误留，不存在则照删。与任务单「另一台电脑上的进程号无意义、概率低」一致。
+    - 跨容器 / 不同 PID 命名空间：本机 `/proc` 看不到对方的进程时，会把对方还在写的文件当成死进程删掉。这是方案 A 固有局限，和「另一台电脑」同类，本单未要求改文件名格式去消除。不挡合并，记在建议里。
+    - `/proc` 未挂载时所有 `/proc/<pid>` 都不存在，保护失效、会连本进程的临时文件一起删。本项目跑在常规 Linux 桌面，不挡合并。
+    - 未改产物、生成记录格式、`deliver.rs`、`session.rs`、`bookconv`；版本号仍是 5/68/68，`fp_golden.txt` 相对 origin/master 无 diff。
+    - 提交合规：中文前缀加正文、无 Co-Authored-By、执行方没有合并。`docs/decisions.md:363` 已记一行。
+  - 阻断：无。
+  - 建议（不挡合并）：跨容器或 `/proc` 不可用时保护会失效；若以后要更严，需要在文件名里加启动时间或随机令牌，而不是只靠进程号。
 - 二审：
 - 合并：
