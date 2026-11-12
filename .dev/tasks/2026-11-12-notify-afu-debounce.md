@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-notify-afu-debounce
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: box-agent（负责 bot 直接改）
 - 分支: notify-afu-debounce（从最新 master 切出）
-- 更新时间: 2026-11-12T14:40+08:00
+- 更新时间: 2026-11-12T14:41+08:00
 - 引用: 无
 
 ## 需求原文
@@ -34,16 +34,16 @@
 Jarvis 随后修好 vault 正本：before 为空 / 全 0 / 对象不存在时，`git fetch` 默认分支（`github.event.repository.default_branch`），用 `merge-base(origin/默认分支, AFTER)..AFTER` 做 diff；拿不到默认分支才退回 `ls-tree` 全量。`.agy2.md` 维持现状（约定二次回执覆盖同一 `.agy.md`）。
 
 ## 分步任务
-1. [ ] 写本任务单并接单（状态 accepted）。
-2. [ ] 将 vault 正本整文件复制到 `.github/workflows/notify-afu.yml`（先核对 sha256）。
-3. [ ] YAML 语法检查；与模板逐字节 `diff`；人工审读判断逻辑。
-4. [ ] 填「结果」，状态改为 done。
+1. [x] 写本任务单并接单（状态 accepted）。
+2. [x] 将 vault 正本整文件复制到 `.github/workflows/notify-afu.yml`（先核对 sha256）。
+3. [x] YAML 语法检查；与模板逐字节 `diff`；人工审读判断逻辑。
+4. [x] 填「结果」，状态改为 done。
 
 ## 验收标准
-- [ ] `.github/workflows/notify-afu.yml` 与 vault 正本逐字节一致（sha256 为 `2c3f9ea8…d206`）
-- [ ] YAML 语法合法；Secrets 名仍为 `AFU_WEBHOOK_URL` / `AFU_WEBHOOK_TOKEN`
-- [ ] 复核与模拟：任务分支首推只含 pending/accepted 不 POST；首推含新 done 单只发该单；后续只改 `.agy.md` 会发；后续 done→verified 不发；在 sheng-ren 真实历史上从 origin/master 切出的新分支首推不会发出 16 份历史回执
-- [ ] 不跑 `cargo test` / `clippy`：本改动不涉及 Rust 代码，只改 GitHub Actions YAML，理由写进「结果」
+- [x] `.github/workflows/notify-afu.yml` 与 vault 正本逐字节一致（sha256 为 `2c3f9ea8…d206`）
+- [x] YAML 语法合法；Secrets 名仍为 `AFU_WEBHOOK_URL` / `AFU_WEBHOOK_TOKEN`
+- [x] 复核与模拟：任务分支首推只含 pending/accepted 不 POST；首推含新 done 单只发该单；后续只改 `.agy.md` 会发；后续 done→verified 不发；在 sheng-ren 真实历史上从 origin/master 切出的新分支首推不会发出 16 份历史回执
+- [x] 不跑 `cargo test` / `clippy`：本改动不涉及 Rust 代码，只改 GitHub Actions YAML，理由写进「结果」
 
 ## 交付物
 分支上的 workflow 与任务单；「结果」填好；状态改为 done。本单先不 push、不 merge。
@@ -55,13 +55,24 @@ Jarvis 随后修好 vault 正本：before 为空 / 全 0 / 对象不存在时，
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
+- 执行方 / 开始–结束时间：box-agent（负责 bot 直接改）/ 2026-11-12 14:36–14:41（Asia/Shanghai）
+- base..head：`15a4cff..`（本提交之后；基线为 origin/master `15a4cff`）
+- 提交：
+  | 步骤 | 提交号 | 文件 | 说明 |
+  |---|---|---|---|
+  | 接单 | `39ed09e` | `.dev/tasks/2026-11-12-notify-afu-debounce.md` | 状态 pending 未单独提交，直接 accepted |
+  | 替换 workflow | `3d3d2e2` | `.github/workflows/notify-afu.yml` | 整文件复制 vault 正本，sha256 `2c3f9ea80688adfb0c14772cb91fed985f31806e564841c5cbebfac060dbd206` |
+  | 结果 | 本提交 | `.dev/tasks/2026-11-12-notify-afu-debounce.md` | 填结果，状态 done |
+- 测试：
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  |---|---|---|
+  | `python3 -c 'import yaml; yaml.safe_load(...)'` | 通过 | 语法合法。PyYAML 1.1 会把顶层键 `on` 读成布尔 `True`，这是 GitHub Actions 的常见写法，与旧文件相同，不影响运行 |
+  | `diff` / `cmp` / `sha256sum` 与 vault 正本 | 通过 | 逐字节一致 |
+  | box 上模拟收集脚本（从 YAML 抽出的原文） | 通过 | 见「审查」；真实历史首推不会发出 16 份回执 |
+  | `cargo test --workspace` / `clippy` | 未跑 | 不涉及 Rust 代码，只改 GitHub Actions YAML |
+- 遇到的问题：第一次复核时正本仍会在新分支首推时误发历史回执，已停下未替换。Jarvis 修好正本（sha256 `2c3f9ea8…d206`）后重新复核并替换。
 - 偏离：无
-- 未完成：
+- 未完成：按指示先不 push、不 merge；状态停在 done，待负责 bot 写完审查后再决定推送与合并。
 
 ## 审查
 <!-- 负责 bot 填写 -->
