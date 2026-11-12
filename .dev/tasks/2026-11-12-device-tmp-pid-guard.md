@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-device-tmp-pid-guard
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent
 - 分支: device-tmp-pid-guard（从最新 master 切出）
-- 更新时间: 2026-11-12T16:49+08:00
+- 更新时间: 2026-11-12T16:51+08:00
 - 引用: 2026-11-12-lock-no-device（「审查 → 二审」建议 3；「后续」第 5 条）
 
 ## 需求原文
@@ -103,4 +103,4 @@
   - `fsutil.rs:317-337`：单测覆盖存活、死亡、畸形名字，属实。
   - 回执写「未挂载 `/proc` 时优雅降级为 false（照旧清理），方向保守安全」：代码行为属实（`exists()` 为假就会删），但「保守」不准确——`/proc` 不在时会连本进程的临时文件一起删，是误删方向。第 1 轮已记为不挡合并的局限。
   - 「未核实」只有没重跑测试和没上真机：测试第 1 轮由负责 bot 重跑过；本单不需要真机。
-- 合并：无阻断。本单不需要真机验收，合并后状态改为 verified。
+- 合并：`92600df`（2026-11-12 16:51 +08:00，`--no-ff` 合入当时 origin/master `42b1cd4`）。合并结果再测 `cargo test --workspace` 全过（计数与第 1 轮相同：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 79 / bin 7 / cli 14 / flow 54 / fp_golden 1，profile lib 19）。状态改为 **verified**（验收通过、二审无阻断、已合并；本单不需要真机，vinci 真机属最终验收但不挡状态）。
