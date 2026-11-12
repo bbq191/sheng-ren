@@ -3,15 +3,16 @@
 - Task ID: 2026-11-12-list-no-device-stall
 - 负责 bot: sheng-ren
 - 状态: pending
-- 执行方: opencode-local
+- 执行方: box-agent
 - 分支: list-no-device-stall（从最新 master 切出）
-- 更新时间: 2026-11-12T13:33+08:00
+- 更新时间: 2026-11-12T16:19+08:00
 - 引用: 2026-11-12-lock-no-device（「后续」第 1 条）
 
 ## 需求原文
 > （lock-no-device 任务单「后续」）1. `booklib list` 在卡死的挂载上也卡住（`lib.outputs` 要 stat 设备上的产物）；
 > （vinci 2026-11-12）后续那几条要开新任务单：要。
 > （vinci 2026-11-12 13:32）list-no-device-stall 只用方案 B。
+> （vinci 2026-11-12 16:18）改由 box 执行。
 
 ## 输入
 - 背景：`Projects/sheng-ren/context.md`；原单 `.dev/tasks/2026-11-12-lock-no-device.md`。基于 origin/master `415161a`。
