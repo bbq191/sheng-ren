@@ -100,6 +100,25 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
+- 验收：**第 1 轮通过**（sheng-ren bot，2026-11-12 11:20 +08:00，审 `848967c..d28b450`，实现 `36f86ec`）
+  - 逐条验收标准：
+    - [x] 6 个文件每一处都改了，说法都和代码对得上：
+      - 版本号：`kfx/src/write/mod.rs:116` WRITER 26、`bookconv/src/kepub.rs:19` 2、`optimize/mod.rs:171/:208` 68/68、`wash/mod.rs:222` 42、`convert/mod.rs:10` 2、`opfmeta.rs:19` 6、`generate.rs:36` PIPELINE 5，和 `docs/development.md` 版本表逐行一致。
+      - 五个模式和产物目录：`profiles/*.toml` 的 `[deliver]` 是 kindle / ireader `mtp` `documents`，hanvon `mtp` `Documents`，bigme `mtp` `books`，kobo `usbms` `KOBOeReader` `books`，和 `architecture.md:181`、`:193`、`CONTRIBUTING.md:7`、`README.md:31` 一致。
+      - `fp_golden.rs:280` 确实遍历 5 个模式，"内置五个模式"属实。
+      - `--device=` 走 `profile::device_from_args`，五个 id 都认。
+    - [x] 分支规则：`AGENTS.md:8` 和 `CONTRIBUTING.md:20` 一致，两处互不矛盾，也和 vinci 2026-11-12 的决定一致：任务分支开发、任务单可以直接提交在 master、负责 bot 验收、agy 二审无阻断后负责 bot `--no-ff` 合并、vinci 做最终验收。文档只写了 `.dev/tasks/<ID>.md`，没有写命名细则，和工作流的命名规则不冲突。
+    - [x] `git diff --stat master...HEAD` 只有 6 个文件和任务单。`generate.rs` 只改了 `///` 注释（自检 grep 没有输出），三条注释的说法和函数实现一致。
+    - [x] 重跑：`cargo fmt --all -- --check` 干净；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test --workspace` 全过，0 失败；`fp_golden.txt` 没变。
+    - [x] 合并顺序：在临时 worktree 里试过 master ← lock-no-device（`f24365f`）← docs-align，两次 `--no-ff` 都没有冲突（试完就删了，没推）。`architecture.md:232` 的新说法和 lock-no-device 的实现一致：加锁时清书库和电脑上的；设备上的由 sync 连上后、生成和传输之前清。
+  - 阻断：无。
+  - 建议（不挡合并）：
+    1. `CONTRIBUTING.md:20` 新加的那条末尾"影响产物的改动仍要写清没跑真书回归、没上真机"和下一条 `:21` 重复，可以删掉 `:20` 的那半句。
+    2. `CONTRIBUTING.md:20` 没提 `Projects/工作流.md` 的"小改动"例外：≤20 行、只改一个文件、不涉及设备 / install / 迁移 / 安全的，bot 核对后可以不经 agy 自己合并。要不要写进仓库文档由 vinci 定。
+  - 线索（不在本单文件或范围内）：
+    1. `crates/bookconv/src/bin/epub_optimize.rs:8` 的用法注释还写着"kindle / ireader / xochitl"。
+    2. `CONTRIBUTING.md:32`、`docs/architecture.md:220-221` 的"四台都开""四台"是 2026-11-10 时的说法。现在五个 profile 都开了 `comic_gamma` / `comic_autocontrast` / `comic_dark_bg`，算历史记录还是要改，留给 Move 字段那张单一起定。
+    3. 笔记库 `Projects/工作流.md:36`、`:43` 还写着"任务单提交到任务分支"，和这次的决定"任务单可以直接提交在 master"不一致，需要 vinci 自己改笔记库（bot 不改）。
+  - 二审：要。按 `工作流.md` 的「小改动」定义（≤20 行且只改一个文件），本单改了 7 个文件，不算小改动，照常要 agy 二审。风险低，二审重点放在文档和代码、工作流是否一致。
 - 二审：
 - 合并：
