@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-hanvon-documents-case
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: hanvon-documents-case（从最新 master `73c095c` 切出）
-- 更新时间: 2026-11-12T10:05+08:00
+- 更新时间: 2026-11-12T09:45+08:00
 - 引用: 无
 
 ## 需求原文
@@ -188,5 +188,9 @@
   - 提交合规：中文前缀 + 正文，无 `Co-Authored-By`，没动 master。
   - 新增线索 5（留给二审）：`begin_rebase` 在写记录之前就记成"本轮已迁移"（`generate.rs:301`）。写失败时只有这一次报错，同一轮后面的书按没迁移的记录走挪位置流程。有保护不会删书，但会把书从小写路径复制一遍，下一轮再迁移。请核实这样可以接受。
   - 第 1 轮线索 1–4 保留，一起交二审。
-- 二审：
-- 合并：
+- 二审：回执 `.dev/tasks/2026-11-12-hanvon-documents-case.agy.md`（`9248ff7`）：阻断 0、建议 1、线索 7、未核实 1。我核对了引用的位置：
+  - 建议「`begin_rebase` 等写记录成功后再标记」（`generate.rs:301-316`）：属实，但只影响写记录失败这条错误路径。失败时 `prepare` 已经用 `?` 报错；同一轮其余书走挪位置流程，有保护不会删书，下一轮会重新迁移。要改得同时动 `session.rs`（`rebased` 是私有字段），超出"一个文件的小改动"，所以**本次不改，记为后续**。
+  - 线索 1：往上删空目录的条件是 `*d != p.root && d.starts_with(&p.root)`（`generate.rs:1312`），到旧 root 就停，不会删到 `Documents`。我核对过，属实。
+  - 线索 2–7：和两轮验收的结论一致（大小写敏感的设备上宁可多留旧文件；`Manga`→`manga` 从删书变成不删，算修复；`space_check` 转成 Unknown 合理；迁移覆盖了 books/old/orphans 且幂等；测试用符号链接模拟不分大小写，可信）。接受。
+  - 未核实：汉王自带阅读器的进度是不是按路径记的，留给 vinci 真机验收。
+- 合并：`--no-ff` 合并到 master，见合并提交；状态改为 verified。后续：①`begin_rebase` 等写成功后再标记；②掌阅（`documents`）、Bigme（`books`）可能也有重影目录，先 `ls` 确认，要改的话另开任务单。
