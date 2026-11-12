@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-hanvon-documents-case
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: pending
 - 执行方: opencode-local
 - 分支: hanvon-documents-case（从最新 master `73c095c` 切出）
-- 更新时间: 2026-11-12T09:40+08:00
+- 更新时间: 2026-11-12T09:35+08:00
 - 引用: 无
 
 ## 需求原文
@@ -147,6 +147,25 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
+- 验收（第 1 轮，sheng-ren，2026-11-12，box 复跑 `fce2a9a`）：**退回**，阻断 1 条，修完重新验收
+  - 复跑：`cargo fmt --all -- --check` 干净；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test --workspace` 全过（bookconv 553、kfx 53、bookbase 30、csscascade 16、library 74/7/14/51/1、profile 19，0 failed），和「结果」一致。
+  - 复现写单时的"先删再重传"场景（临时集成测试，没提交）：`dir=documents` 生成一本 → `Documents -> documents` 符号链接 → 内置 hanvon（`Documents`）连续同步 3 次：每次都是 `UpToDate …/Documents/风起.epub`，书一直在，`output-state/hanvon.json` 路径已是 `Documents`。master 上同一场景第二次同步书被删、第三次重传。**主场景修好了。**
+  - 逐条对照：
+    - 规则 1：`hanvon.toml:42` `Documents` + 注释；`profile/src/lib.rs:1725` 期望已改。✓
+    - 规则 2：迁移只在根目录只差大小写、且 `新 root + 相对路径` `is_file()` 时才换（`generate.rs:1483-1497`）；挂在 `prepare`/`space_check`/`flush_removed`/`retract` 开头（`generate.rs:639`、`:546`、`:481`、`:448`），偏离里写了理由，接受。flow 测试用符号链接真的模拟了不分大小写，并核对 inode / mtime 没变（`tests/flow.rs` `hanvon_documents_case_rebase_keeps_books_and_record`）；大小写敏感的两真目录不迁移（`:3212`）。✓
+    - 规则 3：`delete_placements` 保护（`generate.rs:1245-1255`）✓；`put_file` 保护有漏洞，见阻断 1。
+    - 不回归：`git diff master..HEAD -- crates/bookconv crates/library/tests/fp_golden.txt` 为空——产物代码和金样一行没动，`OPTIMIZE_VERSION` / `COMIC_VERSION` 没动，其他设备产物必然逐字节不变（执行方另跑了 10 组合成书对拍）。✓
+    - 提交：中文前缀 + 正文，无 `Co-Authored-By`，没动 master。`README.md` 偏离已报，接受。
+  - **阻断 1：`deliver.rs:209` 的大小写保护只把 `keep_src` 改成 true，`direct` 照传；`put_file_once` 直接写时先删 dest（`deliver.rs:391-392`），不分大小写的设备上 dest 就是 src，书先被删、再从已不在的 src 复制失败。** 走到这里的条件：`compare = false`，或 `same_bytes`（`deliver.rs:528`，任何读错都返回 false）在 MTP 上读失败一次。已复现：符号链接 `Documents -> documents`，`put_file(documents/书.epub, Documents/书.epub, keep_src=false, compare=false, direct=true)` → `Err("写 …/Documents/书.epub: No such file or directory")`，`documents/书.epub` 没了。现在 `prepare_file` 挪位置时 `compare` 恒为 true，平时走不到，但这正是任务单「任何情况下都不会删掉 src」要兜住的情况。
+    - 要改：`case_alias` 分支改成 `put_file_retry(src, dest, true, compare, false, mount)`，即**强制不直接写**，走"先写旁边的临时文件、再删 dest、改名"那条路（临时文件写好之前不碰 dest；不分大小写的设备上删 dest 时新内容已经在临时文件里）。注释写清为什么不能直接写。
+    - 测试：`put_file_case_alias_never_deletes_src`（`deliver.rs:817`）加两种：符号链接下 `compare=false, direct=true`；符号链接下 `compare=true, direct=true` 但内容不同（如先把 dest 那一侧看成不同——可用 `FAIL_WRITE` 之外的办法，做不到就只测 `compare=false`）。都要求调用后文件在、内容是 src 的内容、目录里没留临时文件。
+  - 建议（这轮一起改，不改的在「结果」说明理由）：
+    1. `generate.rs:310` `let _ = self.records.states.put(...)` 吞掉了写记录的错误：迁移没写成，后面按新根目录算位置，旧记录照旧，就回到挪位置流程（有了保护不会删书，但会整本"挪"一遍）。改成返回 `Result`，在 `prepare` 等入口用 `?` 报出来（`retract`/`flush_removed` 同样）。
+    2. `generate.rs:295-312` 每次 `prepare` 都扫一遍全部记录；有一条换不成（设备上那本被手工删了、半截记录）时 `maybe` 一直为真，每本书都克隆整份记录、再对换不成的那几条 `is_file()`（MTP 上每次 stat 都是一次往返）。同步一轮后会自愈，但第一轮是 k×n 次 stat。建议每台设备每轮只迁移一次（在 `Devices` 里记一个本轮已迁移的标记，`refresh` 时清掉）。
+  - 线索（留给二审）：
+    1. `remove_outputs`、`hand_over_outputs`（`generate.rs:411` 起、`:429` 起）不迁移：删书时按旧的小写路径删，在汉王上删的就是那本书本身（本来就要删），往上删空目录停在旧 `root`（重影的 `documents`），请核实不会删到 `Documents` 本身。
+    2. `delete_placements` 新保护（`generate.rs:1247-1254`）也比对别的书的记录：大小写敏感的设备上会留下旧文件不删，任务单已接受"宁可多留"。
+    3. 这条保护也改变了 Kobo（vfat）/ 掌阅上"跟踪目录只改大小写"（`Manga` → `manga`）的行为：以前会删书，现在不删、记录跟过去。请核实没有别的现有流程依赖旧行为。
+    4. 汉王自带阅读器的进度是不是按路径记的未知，真机验。
 - 二审：
 - 合并：
