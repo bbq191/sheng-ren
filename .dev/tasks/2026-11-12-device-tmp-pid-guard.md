@@ -3,15 +3,16 @@
 - Task ID: 2026-11-12-device-tmp-pid-guard
 - 负责 bot: sheng-ren
 - 状态: pending
-- 执行方: opencode-local
+- 执行方: box-agent
 - 分支: device-tmp-pid-guard（从最新 master 切出）
-- 更新时间: 2026-11-12T13:33+08:00
+- 更新时间: 2026-11-12T16:41+08:00
 - 引用: 2026-11-12-lock-no-device（「审查 → 二审」建议 3；「后续」第 5 条）
 
 ## 需求原文
 > （lock-no-device 二审，负责 bot 结论）建议 3（多个书库同写一台设备时可能误删别人的 `.tmp-*`）：属实，但 master 本来就这样，而且现在只在连接时删，冲突窗口变小了；转后续（可以考虑按进程号保护），优先级低。
 > （vinci 2026-11-12）后续那几条要开新任务单：要。
 > （vinci 2026-11-12 13:32）device-tmp-pid-guard 也开。
+> （vinci 2026-11-12 16:41）改由 box 执行。
 
 ## 输入
 - 背景：`Projects/sheng-ren/context.md`；原单与回执。基于 origin/master `415161a`。
