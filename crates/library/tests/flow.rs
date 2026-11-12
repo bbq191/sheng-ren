@@ -200,6 +200,19 @@ fn list_does_not_stat_removable_device_outputs() {
         );
     }
 
+    // 电脑上的产物改了指纹也算过期，仍不附「未核对设备」（和上面的设备路径分开）
+    let pc_state = lib_dir.join("output-state/pc.json");
+    let mut pc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&pc_state).unwrap()).unwrap();
+    pc["books"][&m.id]["fingerprint"] = "旧".into();
+    std::fs::write(&pc_state, pc.to_string()).unwrap();
+    let out = list(&lib_dir);
+    let pc_line = line(&out, "pc");
+    assert!(
+        pc_line.contains("⚠ 过期") && !pc_line.contains("未核对设备"),
+        "电脑上的产物照旧核对文件、不注明未核对设备：{pc_line}"
+    );
+
     // 相对路径的旧记录（2026-10-31 以前 Move 上的）照旧不查，仍是 ? 未知，不附「未核对设备」
     std::fs::write(
         lib_dir.join("output-state/kindle.json"),
