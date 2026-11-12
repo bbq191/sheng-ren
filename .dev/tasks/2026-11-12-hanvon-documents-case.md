@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-hanvon-documents-case
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: opencode-local
 - 分支: hanvon-documents-case（从最新 master `73c095c` 切出）
-- 更新时间: 2026-11-12T09:10+08:00
+- 更新时间: 2026-11-12T09:20+08:00
 - 引用: 无
 
 ## 需求原文
