@@ -4,7 +4,7 @@
 
 ## 项目一句话
 
-电脑端电子书书库：书入库（只存索引，收 EPUB、CBZ）→ 按阅读模式生成优化过的书 → `booklib sync` 直接传到接着的设备。两个模式：`kindle`（Kindle 自带阅读器，出 KFX）、`ireader`（掌阅自带阅读器，EPUB）（`xochitl` 2026-10-31 删了：Move 卖了）。文字书都"只修复"（profile `text_repair_only`），掌阅另加 `kindle_rules`（照 Send to Kindle 统一），Kindle 由 KFX 写出器照 Send to Kindle 的规则表做；漫画照旧完整处理。总体见 `README.md`。
+电脑端电子书书库：书入库（只存索引，收 EPUB、CBZ）→ 按阅读模式生成优化过的书 → `booklib sync` 直接传到接着的设备。五个内置模式：`kindle`（Kindle 自带阅读器，KFX）、`ireader`（掌阅自带阅读器，EPUB）、`kobo`（Kobo 自带阅读器，KEPUB）、`hanvon`（汉王自带阅读器，EPUB）、`bigme`（Bigme 自带阅读器，EPUB）（`xochitl` 2026-10-31 删了：Move 卖了）。文字书都"只修复"（profile `text_repair_only`），掌阅另加 `kindle_rules`（照 Send to Kindle 统一），Kindle 由 KFX 写出器照 Send to Kindle 的规则表做；漫画照旧完整处理。总体见 `README.md`。
 
 ## 没有测试书和设备时能做什么、不能做什么
 
@@ -17,7 +17,7 @@
 所以：
 
 - 推上去以后看 GitHub Actions 的 CI（测试、clippy 0 警告、shellcheck、Python 语法）是不是绿的；红了先修。
-- **推到新分支，不要直接改 `master`**，由维护者在本机跑完回归、上真机看过再合。
+- **开发在任务分支上做，任务单文件（`.dev/tasks/<ID>.md`）可以直接提交在 `master`**；负责 bot 验收，vinci 手动跑 agy 二审，没有阻断时负责 bot 用 `git merge --no-ff` 合并，vinci 做最终验收（真机）。流程的正本是维护者笔记库里的 `Projects/工作流.md`。影响产物的改动仍要在提交说明里写清"没跑真书回归、没上真机"，不要声称回归通过或真机验证过。
 - 改了**会影响产物**的代码（清洗、优化、漫画、KFX 写出器、书库生成流程），在提交说明里写清"**没跑真书回归、没上真机**"，并列出预计哪些书、哪类写法会变。不要声称回归通过。
 - 只是重构时，要求产物逐字节不变——别的机器上没法验证这一点，所以写明"待本机回归确认逐字节不变"。
 - 测试一律不碰真设备（`crates/library/tests/common` 已经把设备目录指到临时目录），别加会连真设备或网络的测试。
@@ -43,7 +43,7 @@
 
 - `bookconv::optimize::OPTIMIZE_VERSION`（文字书）、`bookconv::optimize::COMIC_VERSION`（漫画；两路共用的代码改了两个都加）；
 - `bookconv::wash::KINDLE_RULES_VERSION`（只进开了 `kindle_rules` 的模式（掌阅）的文字书）；
-- `kfx::write::WRITER_VERSION`（只进 kindle）、`bookconv::convert::CONVERT_VERSION`、`bookconv::opfmeta::VERSION`；
+- `kfx::write::WRITER_VERSION`（只进 kindle）、`bookconv::kepub::VERSION`（只进出 KEPUB 的模式）、`bookconv::convert::CONVERT_VERSION`、`bookconv::opfmeta::VERSION`；
 - `library` 的 `PIPELINE_VERSION`（所有书都过期，慎用）。
 
 注意：Kindle 上覆盖 KFX 时字节有任何不同阅读进度就清零，所以 KFX 产物会变的改动要在提交说明里写清哪些书变了。**改了指纹构成**（`crates/library/src/fingerprint.rs`、`generate.rs`）会让用户电脑上全部书重算，先问维护者；改完跑 `cargo test -p library --test fp_golden`（指纹黄金对拍，一个字不对就红）。
@@ -55,7 +55,7 @@ cargo build --workspace
 cargo test --workspace                      # 要求全部通过
 cargo clippy --workspace --all-targets      # 要求 0 警告
 cargo test -p bookconv <测试名子串>
-cargo run -p bookconv --bin epub-optimize -- --device=kindle|ireader 输入.epub 输出.epub
+cargo run -p bookconv --bin epub-optimize -- --device=kindle|ireader|kobo|hanvon|bigme 输入.epub 输出.epub
 cargo run --release -p kfx --bin epub-to-kfx -- 优化过的.epub 输出.kfx     # --styles 打印按 CSS 原样算的样式
 cargo run --release -p kfx --bin kfx-dump -- [--type=N] [--full] 书.kfx
 shellcheck -x install.sh uninstall.sh tools/cargo-pkgs.sh tools/regress/run.sh

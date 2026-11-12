@@ -28,7 +28,7 @@
 
 2026-10 Move、掌阅 Ocean 5 Pro 卖了，换掌阅 Air 3 Pro（2026-11-02 起 `ireader` 按它的屏幕 1440×1920）；`xochitl` 模式 2026-10-31 删了，`ireader` 的几何和字号、行距 2026-11-02 已在 Air 3 Pro 上用探针重量，heading_center、background_auto_height 等部分怪癖还是 Ocean 5 Pro 上的结论。
 
-前提：Kindle、掌阅插上后要被 jmtpfs 挂到 `$XDG_RUNTIME_DIR/mtp/kindle`、`…/mtp/ireader`（可用 `BOOKLIB_MTP_DIR` 改）；Kobo 是 USB 存储，卷标 `KOBOeReader` 挂在 `/run/media/$USER/KOBOeReader`（可用 `BOOKLIB_USBMS_DIR` 改）。没接上的设备这次跳过，下次接上再传。
+前提：Kindle、掌阅、汉王、Bigme 插上后要被 jmtpfs 挂到 `$XDG_RUNTIME_DIR/mtp/kindle`、`…/mtp/ireader`、`…/mtp/hanvon`、`…/mtp/bigme`（可用 `BOOKLIB_MTP_DIR` 改）；Kobo 是 USB 存储，卷标 `KOBOeReader` 挂在 `/run/media/$USER/KOBOeReader`（可用 `BOOKLIB_USBMS_DIR` 改）。没接上的设备这次跳过，下次接上再传。
 
 各个模式是同一套代码，区别（屏幕、阅读范围、阅读器的怪癖、各台另加的规则、怎么传）都写在模式的配置里，见[设备与阅读模式](docs/devices.md)。
 

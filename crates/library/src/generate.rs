@@ -1504,7 +1504,7 @@ fn rebase_case_placement(path: &mut PathBuf, root: &mut PathBuf, new_root: &Path
     true
 }
 
-/// 同一目录里、文件名只差大小写的两个不同路径。
+/// 同一目录里、文件名只差大小写的两个不同路径：是 [`case_alias`] 的特例（父目录相同、只有文件名差大小写）。
 pub(crate) fn case_twin(a: &Path, b: &Path) -> bool {
     a != b
         && a.parent() == b.parent()
@@ -1516,7 +1516,8 @@ pub(crate) fn case_twin(a: &Path, b: &Path) -> bool {
         }
 }
 
-/// 两个路径逐段只差大小写（不是同一个路径）：例如 `…/documents/x.epub` 和 `…/Documents/x.epub`。
+/// 两个路径逐段只差大小写（不是同一个路径）：例如 `…/documents/x.epub` 和 `…/Documents/x.epub`。不要求在同一目录，
+/// 可以跨目录；同一目录、只差文件名时是 [`case_twin`]。
 /// 不分大小写的设备（jmtpfs、安卓存储）上它们是同一个文件；分大小写的设备上不是，所以调用方还要看文件在不在。
 pub(crate) fn case_alias(a: &Path, b: &Path) -> bool {
     if a == b {
@@ -1536,6 +1537,7 @@ pub(crate) fn case_alias(a: &Path, b: &Path) -> bool {
 
 /// `path` 和只差大小写的 `twins` 在磁盘上是不是各是各的文件：列目录，`path` 的原名和某个 twin 的原名都列得出来才算
 /// （分大小写的文件系统）。不分大小写的文件系统上目录里只会有其中一个名字，算同一个文件，不能删。读不了目录返回 `None`（记着、下次再看）。
+/// 只列 `path` 所在的一个目录，判断不了跨目录的别名（那要用 [`case_alias`]），所以调用方只拿同一目录的 twins（[`case_twin`]）来调它。
 fn distinct_on_disk(path: &Path, twins: &[&Path]) -> Option<bool> {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         return Some(false);
