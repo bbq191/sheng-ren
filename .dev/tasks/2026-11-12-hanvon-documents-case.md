@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-hanvon-documents-case
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: hanvon-documents-case（从最新 master `73c095c` 切出）
-- 更新时间: 2026-11-12T09:55+08:00
+- 更新时间: 2026-11-12T10:05+08:00
 - 引用: 无
 
 ## 需求原文
@@ -144,6 +144,16 @@
     3. `output-state/hanvon.json` 里的路径都变成 `Documents`；
     4. 拔掉重插（或重启汉王）后，`ls /run/user/1000/mtp/hanvon/内部共享存储空间/` 里小写的 `documents` 不见了；还在的话**不要删**，记下现象。
   - 掌阅 / Bigme 的小写 `dir` 没改，重影是否也存在没上真机确认；删除保护只是兜底。
+
+### 返工（2026-11-12，一审退回后）
+
+- 状态先改回 accepted（`184741e`），返工提交 `050ee1c`。
+- **阻断 1（`put_file` 的 case_alias 分支 direct 照传）**：`deliver.rs` 的 `case_alias` 分支改成 `put_file_retry(src, dest, true, compare, false, mount)`，**强制不走直接写**：直接写会先删 dest，不分大小写时 dest 就是 src，书先没了、再从已不在的 src 复制失败。现在走「先写旁边临时文件、再删 dest、改名」那条路，临时文件写好之前不碰 dest。测试 `put_file_case_alias_never_deletes_src` 加了符号链接下 `compare=false, direct=true` 的用例：内容正确、src 还在、目录里没留临时文件；原来 `compare=true, direct=true` 的用例保留。
+- **建议 1（吞掉写记录错误）**：`rebase_state_case` 改成 `Result<(), String>`；`prepare` / `retract` / `flush_removed` 用 `?` 报出来，`space_check` 返回 `SpaceCheck::Unknown("生成记录大小写迁移失败：…")`（只警告、照旧传）。
+- **建议 2（每轮只迁移一次）**：`Devices` 加 `rebased: RefCell<HashSet<String>>` 和 `begin_rebase(id)`，`refresh()` 时清空；`rebase_state_case` 每台设备每轮只扫 / 迁移一次，避免一条换不成的记录让后面每本书都克隆整份记录、反复在 MTP 上 `is_file()`。
+- **线索 1 核对**：`remove_outputs` / `hand_over_outputs` 不迁移；删书时按旧 `documents/...` 删的就是那本书（本来就要删），往上删空目录停在旧 `root`（`documents`），不会删 `Documents` 根目录本身。`delete_placements` 的新保护在大小写敏感设备上会留旧文件，任务单已接受「宁可多留」。Kobo / 掌阅「跟踪目录只改大小写」以前会删书、现在不删，符合本单兜底要求。
+- 返工后测试：`cargo test -p library` 全过（lib 74、flow 51 等），`cargo test --workspace` 全过，`cargo clippy --workspace --all-targets -- -D warnings` 0 警告，`cargo fmt --all -- --check` 干净；`fp_golden.txt` 仍一行没动。
+- 仍然**没上真机**；真机验证项同上。
 
 ## 审查
 <!-- 负责 bot 填写 -->
