@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-dir-case-bigme-ireader
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: box-agent
 - 分支: task/2026-11-12-dir-case-bigme-ireader（从最新 master 切出）
-- 更新时间: 2026-11-12T17:11+08:00
+- 更新时间: 2026-11-12T17:17+08:00
 - 引用: 2026-11-12-hanvon-documents-case（后续第 ② 条）；2026-11-12-quality-audit 发现 5
 
 ## 需求原文
@@ -44,20 +44,20 @@
 8. 可选：若改动很小，把 `build_run` 的连接清理放到 `rebase_state_case` 之后，以覆盖首次迁移的 `.tmp-*`；不小则不做，在本单结果里记成后续。
 
 ## 分步任务
-1. [ ] 改 `bigme.toml`、`ireader.toml` 的 `dir` 和注释；更新 `profile/src/lib.rs` 断言。
-2. [ ] 改 `booklib` 帮助文字（含汉王仍写小写的那行）。
-3. [ ] 改 `common::documents()`，让它按该模式 profile 的 `dir` 拼路径，已有用它查掌阅路径的用例跟着过。
-4. [ ] `flow.rs`：抽共用夹具（或复制后参数化），为 bigme（`books`→`Books`）和 ireader（`documents`→`Documents`）各补三则测试，覆盖汉王那三种情形。已有汉王三则保持通过。
-5. [ ] 更新 `docs/usage.md`、`docs/devices.md`、`docs/architecture.md`、`README.md`、`docs/decisions.md`；更新 quality-audit 发现 5。
-6. [ ] 评估可选的连接清理时机；做或不做写进结果。
-7. [ ] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --check`。确认 `fp_golden.txt` 和版本号都没动。
+1. [x] 改 `bigme.toml`、`ireader.toml` 的 `dir` 和注释；更新 `profile/src/lib.rs` 断言。
+2. [x] 改 `booklib` 帮助文字（含汉王仍写小写的那行）。
+3. [x] 改 `common::documents()`，让它按该模式 profile 的 `dir` 拼路径，已有用它查掌阅路径的用例跟着过。
+4. [x] `flow.rs`：抽共用夹具（或复制后参数化），为 bigme（`books`→`Books`）和 ireader（`documents`→`Documents`）各补三则测试，覆盖汉王那三种情形。已有汉王三则保持通过。
+5. [x] 更新 `docs/usage.md`、`docs/devices.md`、`docs/architecture.md`、`README.md`、`docs/decisions.md`；更新 quality-audit 发现 5。
+6. [x] 评估可选的连接清理时机；做或不做写进结果。
+7. [x] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo fmt --check`。确认 `fp_golden.txt` 和版本号都没动。
 
 ## 验收标准
-- [ ] bigme 投递到 `Books/`，掌阅投递到 `Documents/`；旧小写记录在不分大小写的设备上只改记录、inode/mtime 不变、再同步仍 UpToDate；大小写敏感时复制到新目录并保留旧文件；orphans 也会迁到新根再删。
-- [ ] 帮助文字和文档现状与 profile 一致；decisions 写清推翻同日决定。
-- [ ] 版本号不变；`fp_golden.txt` 一行没动；`git diff` 对 `crates/bookconv`、`crates/kfx` 为空。
-- [ ] `cargo test --workspace` 全过；clippy `-D warnings` 0 警告。
-- [ ] 结果里写明没上真机、没跑真书回归（改的是投递目录，不影响正文；说明理由）。真机由 vinci 验：接上 Bigme / 掌阅后，同步目录是 `Books/` / `Documents/`，已有的书不重传、不丢。
+- [x] bigme 投递到 `Books/`，掌阅投递到 `Documents/`；旧小写记录在不分大小写的设备上只改记录、inode/mtime 不变、再同步仍 UpToDate；大小写敏感时复制到新目录并保留旧文件；orphans 也会迁到新根再删。
+- [x] 帮助文字和文档现状与 profile 一致；decisions 写清推翻同日决定。
+- [x] 版本号不变；`fp_golden.txt` 一行没动；`git diff` 对 `crates/bookconv`、`crates/kfx` 为空。
+- [x] `cargo test --workspace` 全过；clippy `-D warnings` 0 警告。
+- [x] 结果里写明没上真机、没跑真书回归（改的是投递目录，不影响正文；说明理由）。真机由 vinci 验：接上 Bigme / 掌阅后，同步目录是 `Books/` / `Documents/`，已有的书不重传、不丢。
 
 ## 交付物
 代码提交到上面的分支并推送；「结果」填好；状态改为 done 或 blocked。任务单状态改动推 master，带 `[skip-notify]`。不要合并，不要跑二审。
@@ -68,15 +68,26 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
-- 真机 / 真书回归：没上真机，没跑真书回归。
+- 执行方 / 开始–结束时间：box-agent，2026-11-12T17:11–17:17+08:00
+- base..head：`19d52b2`..`b2a6606`（分支 `task/2026-11-12-dir-case-bigme-ireader`，已推送，未合并）
+- 提交：
+
+| 步骤 | 提交号 | 文件 | 说明 |
+|---|---|---|---|
+| 实现 | `b2a6606` | `bigme.toml`、`ireader.toml`、`profile/src/lib.rs`、`booklib/main.rs`、`tests/common/mod.rs`、`tests/flow.rs`、`docs/*`、`README.md`、quality-audit | dir 改成设备真名；共用夹具 + 6 则新测试；文档与决定记录；发现 5 记下已开单 |
+
+- 测试：
+
+| 命令 | 通过 / 失败 / 未跑 | 摘要 |
+|---|---|---|
+| `cargo test --workspace`（rustup stable 1.99.1） | 通过 | 全部通过；`fp_golden` 一行没动；大小写迁移 9 则（汉王 3 + 掌阅 3 + bigme 3）通过 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+| `cargo fmt --all -- --check` | 通过 | 只对本次改的测试文件按 rustfmt 折了几行，全仓库检查干净 |
+
+- 遇到的问题：无
+- 偏离：无实质性偏离。`common::documents()` 改为按 profile 的 `dir` 取值（任务单输入里已预见到，否则掌阅已有用例会看错目录）。汉王三则测试改走共用夹具，行为不变。
+- 未完成：可选的「把 `build_run` 连接清理放到 `rebase_state_case` 之后」**本次不做**，记为后续。原因：改动不小——`rebase_state_case` 是 `generate.rs` 的私有方法，要在 `build_run` 开头调用得改可见性并处理 `Result`（清理目前不会让这一轮失败）；还要考虑每台每轮只迁移一次、以及清理用的 `output_dirs()` 取的是生成记录里的路径（迁移前恰好是旧名，迁移后是新名，时机反过来不一定更好）。
+- 真机 / 真书回归：没上真机，没跑真书回归。改的是投递目录（`[deliver]` 不进指纹），不影响正文；产物内容、版本号、`fp_golden.txt` 都不变。真机由 vinci 验：接上 Bigme / 掌阅后，同步目录是 `Books/` / `Documents/`，已有的书不重传、不丢。
 
 ## 审查
 <!-- 负责 bot 填写 -->
