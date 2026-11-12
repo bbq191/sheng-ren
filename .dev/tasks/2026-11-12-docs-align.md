@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-docs-align
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: opencode-local
 - 分支: docs-align（从最新 master 切出）
-- 更新时间: 2026-11-12T10:45+08:00
+- 更新时间: 2026-11-12T11:00+08:00
 - 引用: 2026-11-12-quality-audit（第 2、3、4 条，以及「核实与分组」里的小改动 1–5）
 
 ## 需求原文
@@ -63,13 +63,40 @@
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-12 10:55–11:00 +08:00
+- base..head：`848967c..36f86ec`（`848967c` 是切出时的 master；结果提交在分支 tip）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `3f9165c` | 任务单 | 状态改 accepted |
+  | 1–7 | `36f86ec` | `docs/development.md`、`CONTRIBUTING.md`、`AGENTS.md`、`docs/architecture.md`、`README.md`、`crates/library/src/generate.rs` | 版本号、五个内置模式、分支规则、产物位置、临时文件清理、挂载点、大小写判断注释 |
+  | 结果 | 本提交 | 任务单 | 填结果、状态改为 done |
+
+- 实现：
+  - **版本表**：`kfx::write::WRITER_VERSION` 25 → 26；逐项核对 `OPTIMIZE_VERSION` 68、`COMIC_VERSION` 68、`KINDLE_RULES_VERSION` 42、`CONVERT_VERSION` 2、`opfmeta::VERSION` 6、`kepub::VERSION` 2、`PIPELINE_VERSION` 5，和代码一致，没改别的。
+  - **CONTRIBUTING**：内置模式改成五个（kindle KFX、ireader EPUB、kobo KEPUB、hanvon EPUB、bigme EPUB，xochitl 删除说明保留）；分支规则改成「任务分支开发、任务单可直接提交 master、负责 bot 验收、agy 二审无阻断后负责 bot `git merge --no-ff`、vinci 最终真机验收」；版本号清单补 `bookconv::kepub::VERSION`；`epub-optimize --device=` 列出五个模式。
+  - **AGENTS**：第 4 条改成同一套分支/合并规则，并保留「影响产物的改动写明没跑真书回归、没上真机」。
+  - **architecture**：生成产物位置补全 Kindle/掌阅 `documents/`、汉王 `Documents/`、Bigme `books/`、Kobo `books/`；可靠性表里临时文件改成书库和电脑上产物目录加锁时清、设备上的由 `sync` 连上后清（按任务单要求写的是 `lock-no-device` 合并后的行为）。
+  - **README**：前提补上汉王、Bigme 的 jmtpfs 挂载点 `…/mtp/hanvon`、`…/mtp/bigme`。
+  - **generate.rs**：只补 `case_twin`、`case_alias`、`distinct_on_disk` 的注释；`case_twin` 写明是 `case_alias` 的特例，`case_alias` 写明可跨目录，`distinct_on_disk` 写明只列一个目录、判断不了跨目录别名所以只用同一目录的 twins。
+  - **全文检查时顺带修正**（都在本单文件里）：`docs/architecture.md` 第 7 行内置模式从三个补成五个、指纹一节「内置四个模式」改成五个、MTP 传输列表补上汉王和 Bigme。
+
+- 测试：
+
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test --workspace` | 通过 | 所有 crate 全过、0 失败（bookconv 553、csscascade 16、kfx 53、library 74+7+14+51+1、profile 19） |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo fmt --all -- --check` | 通过 | 干净 |
+  | `git diff master..HEAD -- crates/library/src/generate.rs \| grep '^[+-]' \| grep -v '^[+-][+-]' \| grep -v '^[+-]\s*//'` | 通过 | 无输出，`generate.rs` 只有注释变化 |
+  | `git diff --stat master..HEAD` | 通过 | 只有 6 个文件和任务单；`fp_golden.txt` 未改 |
+- 遇到的问题：无。
+- 偏离：无（只在「涉及文件」的 6 个文件里改；全文检查发现的三处过时说法也在这几个文件里，一并改了）。
 - 未完成：
+  - 全文检查剩下的 `docs/development.md:57`「两个模式」是回归对比 Kindle/掌阅的上下文、`:120` 的 `--device=kindle|ireader` 是回归脚本示例，都不是「内置模式总数」，没改；`docs/kfx.md` 等处的「写出器 25」是历史记录，按约束不动。
+  - `docs/architecture.md` 的临时文件清理写的是 `2026-11-12-lock-no-device` 合并后的行为；本分支从 `848967c` 切出时那张单还没合并，**合并顺序要把本单排在 `lock-no-device` 之后**（任务单要求负责 bot 合并时核对）。
+  - 只改文档和注释，没上真机、没跑真书回归。
 
 ## 审查
 <!-- 负责 bot 填写 -->
