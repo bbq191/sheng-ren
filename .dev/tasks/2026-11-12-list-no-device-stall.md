@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-list-no-device-stall
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: box-agent
 - 分支: list-no-device-stall（从最新 master 切出）
-- 更新时间: 2026-11-12T16:19+08:00
+- 更新时间: 2026-11-12T16:19:57+08:00
 - 引用: 2026-11-12-lock-no-device（「后续」第 1 条）
 
 ## 需求原文
