@@ -15,7 +15,7 @@ use crate::fsutil::JsonCache;
 use crate::{generate, sources, OwnDc};
 use profile::Profile;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -123,6 +123,8 @@ pub(crate) struct Devices {
     auto: bool,
     /// 连过的设备：模式 id → 送到哪，或没接上的原因。
     targets: RefCell<HashMap<String, Connection>>,
+    /// 这一轮已经尝试过生成记录大小写迁移的模式。
+    rebased: RefCell<HashSet<String>>,
 }
 
 impl Devices {
@@ -131,6 +133,7 @@ impl Devices {
             env: RefCell::new(env),
             auto: false,
             targets: RefCell::default(),
+            rebased: RefCell::default(),
         }
     }
 
@@ -197,12 +200,18 @@ impl Devices {
         t
     }
 
+    /// 这一轮这台设备要不要尝试生成记录的大小写迁移：第一次返回 true，之后 false（每轮最多一次）。
+    pub(crate) fn begin_rebase(&self, id: &str) -> bool {
+        self.rebased.borrow_mut().insert(id.to_string())
+    }
+
     /// 新一轮开始：连过的都作废，下次用到时重新看（MTP 挂载点每轮可能变）。
     pub(crate) fn refresh(&self) {
         if self.auto {
             *self.env.borrow_mut() = DeviceEnv::from_env();
         }
         self.targets.borrow_mut().clear();
+        self.rebased.borrow_mut().clear();
     }
 }
 

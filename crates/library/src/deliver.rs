@@ -204,10 +204,11 @@ pub(crate) fn put_file(
         }
         return r;
     }
-    // 逐段只差大小写、父目录不同的两个位置（汉王 documents/Documents）：不分大小写的设备上就是同一个文件，
-    // 按 keep_src 处理——已一样就不删 src，不一样就复制、不改名、不删 src（宁可多留一份，不删书）。
+    // 逐段只差大小写、父目录不同的两个位置（汉王 documents/Documents）：不分大小写的设备上就是同一个文件。
+    // 按 keep_src 处理；并且**强制不走直接写**——直接写会先删 dest，不分大小写时 dest 就是 src，书先没了、
+    // 再从已不在的 src 复制失败。经临时文件那条路在临时文件写好之前不碰 dest（agy/验收阻断 1）。
     if !keep_src && crate::generate::case_alias(src, dest) {
-        return put_file_retry(src, dest, true, compare, direct, mount);
+        return put_file_retry(src, dest, true, compare, false, mount);
     }
     put_file_retry(src, dest, keep_src, compare, direct, mount)
 }
@@ -828,6 +829,20 @@ mod tests {
         let dest = new.join("书.epub");
         assert!(!put_file(&src, &dest, false, true, true, None).unwrap());
         assert!(src.exists() && dest.exists(), "同一个文件：不删 src");
+
+        // compare=false、direct=true：也必须强制走临时文件，不能先删 dest（不分大小写时 dest 就是 src）
+        let src3 = old.join("另一本.epub");
+        std::fs::write(&src3, b"new content").unwrap();
+        let dest3 = new.join("另一本.epub");
+        assert!(put_file(&src3, &dest3, false, false, true, None).unwrap());
+        assert_eq!(std::fs::read(&dest3).unwrap(), b"new content");
+        assert!(src3.exists(), "不删来源");
+        let leftovers = std::fs::read_dir(&old)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(leftovers, 0, "不留临时文件");
 
         // 大小写敏感的两个真目录（这里用另一个大小写目录）：复制、不删 src
         let other = d.path().join("DOCUMENTS");

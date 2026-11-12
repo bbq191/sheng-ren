@@ -292,10 +292,15 @@ impl Library {
 
     /// 设备接上了、产物根目录只差大小写时（汉王 `documents` → `Documents`），把这台的生成记录原样挪过去：
     /// 只改记录，不碰设备上的文件。挂在 prepare / space_check / flush_removed / retract 开头（生成流程；`list` 只读不写）。
-    fn rebase_state_case(&self, device: &Profile) {
+    fn rebase_state_case(&self, device: &Profile) -> Result<(), String> {
         let Ok(Target::Dir { root, .. }) = &*self.target(device) else {
-            return;
+            return Ok(());
         };
+        // 每台设备每轮只迁移一次（`Devices::refresh` 时清掉）。否则一条换不成的记录会让后面每本书都克隆整份记录、
+        // 再对它 `is_file()`（MTP 上每次 stat 都是一次往返）。
+        if !self.devices.begin_rebase(&device.id) {
+            return Ok(());
+        }
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
         let maybe =
@@ -303,12 +308,13 @@ impl Library {
                 case_alias(&e.root, root) || e.old.iter().any(|o| case_alias(&o.root, root))
             }) || state.orphans.iter().any(|o| case_alias(&o.root, root));
         if !maybe {
-            return;
+            return Ok(());
         }
         let mut state = (*state).clone();
         if state.rebase_case_root(root) {
-            let _ = self.records.states.put(&sp, state);
+            self.records.states.put(&sp, state)?;
         }
+        Ok(())
     }
 
     /// `output-state/` 下各模式的生成记录（包括 profile 已经删掉的模式）：(模式 id, 记录文件)。
@@ -445,7 +451,7 @@ impl Library {
     /// 这本书不再给这台设备（从它的跟踪范围里拿掉了）：删掉它在这台上的产物，从这台的生成记录里去掉；
     /// 删不掉的记进 `orphans`，下次接上再删。这台上本来就没有返回 `false`。书库里的书不动。
     pub fn retract(&self, id: &str, device: &Profile) -> Result<bool, String> {
-        self.rebase_state_case(device);
+        self.rebase_state_case(device)?;
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
         let Some(entry) = state.books.get(id).cloned() else {
@@ -478,7 +484,7 @@ impl Library {
 
     /// 删了的书留在设备上的产物（当时设备没接上）：设备接上了就删。返回删掉几个。
     pub fn flush_removed(&self, device: &Profile) -> Result<usize, String> {
-        self.rebase_state_case(device);
+        self.rebase_state_case(device)?;
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
         if state.orphans.is_empty() {
@@ -543,7 +549,9 @@ impl Library {
             return SpaceCheck::Skip; // 放电脑上的、没接上的不查
         };
         let staged = !direct_write(target, &self.devices.usbms_base());
-        self.rebase_state_case(device);
+        if let Err(e) = self.rebase_state_case(device) {
+            return SpaceCheck::Unknown(format!("生成记录大小写迁移失败：{e}"));
+        }
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
         let on_device = |p: &Path| {
@@ -636,7 +644,7 @@ impl Library {
             self.verified_original(meta)?;
         }
         let plan = self.plan(meta, device)?;
-        self.rebase_state_case(device);
+        self.rebase_state_case(device)?;
         // 指纹写法改了（2026-10-08 起文字书、漫画分开算）、规则没变的：记录改成新写法，不重新生成
         let sp = self.state_path(&device.id);
         let prev = self.records.states.get(&sp).books.get(&meta.id).cloned();
