@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-list-no-device-stall
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: box-agent
 - 分支: list-no-device-stall（从最新 master 切出）
-- 更新时间: 2026-11-12T16:19:57+08:00
+- 更新时间: 2026-11-12T16:32:40+08:00
 - 引用: 2026-11-12-lock-no-device（「后续」第 1 条）
 
 ## 需求原文
@@ -84,14 +84,24 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-12T16:19:57+08:00–2026-11-12T16:32:40+08:00
+- base..head：`81e5657cde777cd8eaeee0ef5fdb0d346f373cbc..09759c0d8857e492445f6414a50e099601b37e2f`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | b90af6e | chore: 开始执行任务单 2026-11-12-list-no-device-stall |
+  | 6cb7e6d | fix: list 不再 stat 可拔下设备上的产物 |
+  | 37f0e5a | test: list 不读设备路径，设备状态注明未核对 |
+  | 90f3101 | docs: list 设备上的状态不再核对文件 |
+  | 09759c0 | test: 补电脑上产物过期仍不注未核对设备 |
+- 改动文件：`.dev/tasks/2026-11-12-list-no-device-stall.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/generate.rs`,`crates/library/tests/flow.rs` `docs/decisions.md`,`docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
 - 偏离：无
-- 未完成：
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-12-list-no-device-stall-20261112-161957.json`
+- 日志：`/home/box/oc-runs/2026-11-12-list-no-device-stall-20261112-161957.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
 <!-- 负责 bot 填写 -->
