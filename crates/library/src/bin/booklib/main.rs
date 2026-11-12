@@ -126,11 +126,13 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
     Command {
         name: "list",
         synopsis: &["list [书…]"],
-        brief: "列出书，以及在各设备上的产物是否最新",
+        brief: "列出书，以及在各设备上的产物和生成记录是否最新（设备上的不核对文件）",
         detail: "\
 书：书名片段、id 或原件路径；不写 = 全部。每本一行（id、格式、书名、作者），下面每个模式一行：
-  ✓ 最新   ⚠ 过期（下次 sync 会重新生成）   ? 未知（设备没接上，或设备上那本不在了）
-  ✗ 不在这台的跟踪范围（下次 sync 从设备上删）",
+  ✓ 最新   ⚠ 过期（下次 sync 会重新生成）   ? 未知（判断不了，或这个模式已经不在了）
+  ✗ 不在这台的跟踪范围（下次 sync 从设备上删）
+可拔下的设备上的产物只比生成记录和当前计划，不核对设备上文件还在不在、也不看设备接没接上：
+  ✓/⚠ 后面注明「未核对设备」。电脑上的产物照旧核对文件。",
         opts: &[],
         flags: &[],
         check: check_options,
@@ -1046,10 +1048,12 @@ fn cmd_list(ctx: &Ctx) {
             OriginalState::Present | OriginalState::NotNeeded => {}
         }
         for o in lib.outputs(&m) {
-            let state = match o.fresh {
-                Some(true) => "✓ 最新",
-                Some(false) => "⚠ 过期",
-                None => "? 未知",
+            let state = match (o.fresh, o.device_unchecked) {
+                (Some(true), false) => "✓ 最新",
+                (Some(true), true) => "✓ 最新 未核对设备",
+                (Some(false), false) => "⚠ 过期",
+                (Some(false), true) => "⚠ 过期 未核对设备",
+                (None, _) => "? 未知",
             };
             let shown = o
                 .path

@@ -79,8 +79,10 @@ type Produced = (Vec<String>, Option<String>, Vec<String>);
 pub struct OutputStatus {
     pub device: String,
     pub path: PathBuf,
-    /// `Some(true)` 最新；`Some(false)` 过期（原件或处理规则变了，或上次生成没完成）；`None` 判断不了（模式 profile 已删、文件不在、设备没接上）。
+    /// `Some(true)` 最新；`Some(false)` 过期（原件或处理规则变了，或上次生成没完成）；`None` 判断不了（相对路径旧记录、电脑上的文件不在、指纹算不出）。
     pub fresh: Option<bool>,
+    /// 在可拔下的设备上：只比了指纹，没核对设备上的文件还在不在（`list` 在状态后注明「未核对设备」）。
+    pub device_unchecked: bool,
     /// 生成时的体检清单（[`bookconv::audit::Finding::line`]）：这台上和 Kindle 不一样又没处理的（`✗`）、没验证过的（`?`）写法。
     pub audit: Vec<String>,
 }
@@ -512,13 +514,25 @@ impl Library {
             let Some(entry) = self.records.states.get(&sp).books.get(&meta.id).cloned() else {
                 continue;
             };
+            // 可拔下的设备上的产物一律只看路径前缀，不 stat / read_dir / `mounted()`：设备挂载卡死时 `list` 也要马上返回。
+            // 不核对文件在不在，也就分不出设备接没接上，所以这类记录只比指纹，显示时注明「未核对设备」。
+            let on_device = self.devices.on_removable(&entry.path);
             // 相对路径是 2026-10-31 以前 Move 上的旧记录：不拿当前目录去查。
-            // 设备没挂上（[`Devices::unplugged`]）的也不查：拔掉后留下的空挂载点里要是有同名文件，只看 `is_file()`
-            // 会把没接上的设备显示成最新或过期（agy 发现）
-            let fresh = if !entry.path.is_absolute()
-                || self.devices.unplugged(&entry.path, &entry.root)
-                || !entry.path.is_file()
+            let fresh = if !entry.path.is_absolute() {
+                None
+            } else if on_device {
+                // 模式已停用时注册表里没有它，但生成记录还在：照内置参数算指纹，仍能看出记录是不是旧的。
+                self.registry
+                    .get(&dev_id)
+                    .or_else(|| profile::get(&dev_id))
+                    .and_then(|p| self.plan(meta, p).ok())
+                    .map(|plan| {
+                        plan.fingerprint == entry.fingerprint || plan.legacy == entry.fingerprint
+                    })
+            } else if self.output_unplugged(&entry.path, &entry.root)
+                || !self.output_is_file(&entry.path)
             {
+                // 电脑上的产物照旧核对文件在不在
                 None
             } else {
                 self.registry
@@ -532,10 +546,34 @@ impl Library {
                 device: dev_id,
                 path: entry.path.clone(),
                 fresh,
+                device_unchecked: on_device,
                 audit: entry.audit.clone(),
             });
         }
         out
+    }
+
+    /// 测试钩子 `BOOKLIB_TEST_DEVICE_STAT_PANIC=1` 时，`list` 真要对可拔下的设备上的路径做 stat 就 panic：
+    /// 证明 `list` / [`Library::outputs`] 不去读设备上的产物（集成测试用；只包着这里的调用，不影响 `sync`）。
+    fn output_stat_guard(&self, path: &Path) {
+        if self.devices.on_removable(path)
+            && std::env::var_os("BOOKLIB_TEST_DEVICE_STAT_PANIC").is_some_and(|v| v != "0")
+        {
+            panic!(
+                "booklib list 对设备上的产物做了 stat：{}（BOOKLIB_TEST_DEVICE_STAT_PANIC=1）",
+                path.display()
+            );
+        }
+    }
+
+    fn output_unplugged(&self, path: &Path, root: &Path) -> bool {
+        self.output_stat_guard(path);
+        self.devices.unplugged(path, root)
+    }
+
+    fn output_is_file(&self, path: &Path) -> bool {
+        self.output_stat_guard(path);
+        path.is_file()
     }
 
     /// 传之前看这台设备放不放得下 `books` 这一轮要传的产物（2026-11-03 定，见 `space` 模块）。
