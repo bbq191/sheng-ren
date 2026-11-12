@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: box-agent
 - 分支: list-no-device-stall（从最新 master 切出）
-- 更新时间: 2026-11-12T16:32:40+08:00
+- 更新时间: 2026-11-12T16:36+08:00
 - 引用: 2026-11-12-lock-no-device（「后续」第 1 条）
 
 ## 需求原文
@@ -105,6 +105,28 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
+- 验收：**第 1 轮通过**（sheng-ren bot，2026-11-12 16:36 +08:00，审 `81e5657..fb0fbea`，实现 `6cb7e6d`，测试 `37f0e5a`/`09759c0`，文档 `90f3101`）。没上真机；真机由 vinci 验汉王挂载卡住时 `booklib list` 马上返回。下面全是 box 上的临时目录。工具链为 rustup stable rustc 1.99.1。
+  - 逐条验收标准：
+    - [x] 测试证明 `list` / `outputs` 不对可拔路径做 stat / read_dir / `mounted()`。
+      - 新用例 `flow.rs:137` `list_does_not_stat_removable_device_outputs`：带 `BOOKLIB_TEST_DEVICE_STAT_PANIC=1` 跑 `list`，指纹一致 → `✓ 最新 未核对设备`，改过或为空 → `⚠ 过期 未核对设备`；电脑上自定义模式 `pc` 的 ✓/⚠ 都不附这句；相对路径旧记录仍是 `? 未知`。钩子只包在 `output_unplugged` / `output_is_file`（`generate.rs:558-576`），不经过 `sync`。子进程走 `booklib_env`，有 30 秒超时。含在本轮 flow 54 里，通过。
+      - 负责 bot 重做钩子自检：临时把 `let on_device = self.devices.on_removable(...)` 改成恒为假，同测试失败，子进程退出 101，报「booklib list 对设备上的产物做了 stat：…/ireader/Internal Storage/documents/甲.epub」。`git checkout` 还原后同测试通过。未提交。
+      - 另用已编译的 `target/debug/booklib` 做独立检查（不进仓库）：造临时书库并生成到假 ireader 后，删掉设备上的 `甲.epub`、再把 `Internal Storage` 和 `documents` chmod 000，`list` 都在 7ms 内退出 0，仍显示 `✓ 最新 未核对设备`。
+    - [x] 设备路径：指纹一致显示 ✓ 最新 未核对设备，不一致或指纹为空显示 ⚠ 过期 未核对设备；电脑上的产物不附这句；相对路径仍是 `? 未知`。见上条用例和 `cmd_list`（`main.rs:1051-1056`）。
+    - [x] 上表用例已重审（执行方结果栏的对照被 oc-exec 填结果时写得很短，下面由负责 bot 按 diff 补核，没有偷偷删断言）：
+      - `add_build_skip_remove`（`flow.rs:9`）：空挂载点那段改为只比指纹，ireader 改过指纹 → `Some(false)` 且 `device_unchecked`，kindle 没改 → `Some(true)`；**必须改的断言已改对**。
+      - `audit_findings_are_kept_in_the_generation_record`（`:401`）：只查 `audit` 字段，未改，本轮测试通过。
+      - `interrupted_move_is_finished_next_time`（`:1531`）：ireader 路径、指纹留空时 `fresh == Some(false)`，只比指纹仍对，未改 list 文案，本轮通过。
+      - `removed_mode_leftovers_are_cleaned_up`（`:2737`）：相对路径旧记录 `fresh == None`（`:2808` 仍在），照规则 4，未改，本轮通过。
+      - `disabled_profile_is_forgotten_by_sync`（`:2822`）：假 MTP 路径改到 `dev_dir` 下，使 `on_removable` 为真；`fresh` 改为 `Some(false)`，list 文案改为 `⚠ 过期 未核对设备`。**必须改的断言已改对**。
+      - `tests/cli.rs` 没有设备路径的 `fresh` / list 文案断言，未改，cli 14 通过。
+    - [x] 版本号不变；`git diff 81e5657..HEAD -- crates/library/src/deliver.rs crates/library/src/session.rs crates/bookconv` 为空。`PIPELINE_VERSION`/`OPTIMIZE_VERSION`/`COMIC_VERSION` 仍是 5/68/68；`fp_golden.txt` 相对 origin/master 无 diff，本轮 `fp_golden` 通过。
+    - [x] `cargo test --workspace` 全过（0 失败）：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 78 / bin 7 / cli 14 / flow 54 / fp_golden 1，profile lib 19。`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。`cargo fmt --all -- --check` 干净。
+    - [x] 结果里写了没遇到问题，但没写「没上真机」；本单需要 vinci 做真机验收，审查里补记。`list` 帮助（`main.rs:127-140`）和 `docs/usage.md` 已按单更新；`docs/decisions.md:362` 加了方案 B 那一行。
+  - 代码核对：
+    - `outputs`（`generate.rs:511-554`）对绝对路径先 `on_removable`（只比前缀，见 `session.rs:163-181`），设备路径跳过 `unplugged` / `is_file`，只比 `plan()` 指纹（含 `legacy`；停用的模式可回退 `profile::get`）。相对路径仍是 `fresh = None`。电脑路径仍走 `output_unplugged` / `output_is_file`。
+    - `OutputStatus.device_unchecked` 在 `on_device` 时为真；`cmd_list` 据此附加「未核对设备」。不在跟踪范围时仍用原来的 `✗ 不在这台的跟踪范围` 覆盖状态（原有行为）。
+    - 提交合规：中文前缀加正文、无 Co-Authored-By、执行方没有合并，工作只在任务分支上。涉及文件与预计一致，无偏离。
+  - 阻断：无。
+  - 建议（不挡合并）：包装器填的「结果」偏短，对照表是负责 bot 按 diff 补核的；钩子只包着 `outputs` 里那两处包装函数，`space_check` 等 sync 路径仍会 stat 设备文件，这在本单范围外。
 - 二审：
 - 合并：
