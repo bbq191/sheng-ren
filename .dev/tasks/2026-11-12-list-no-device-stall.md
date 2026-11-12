@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: box-agent
 - 分支: list-no-device-stall（从最新 master 切出）
-- 更新时间: 2026-11-12T16:36+08:00
+- 更新时间: 2026-11-12T16:38+08:00
 - 引用: 2026-11-12-lock-no-device（「后续」第 1 条）
 
 ## 需求原文
@@ -128,5 +128,12 @@
     - 提交合规：中文前缀加正文、无 Co-Authored-By、执行方没有合并，工作只在任务分支上。涉及文件与预计一致，无偏离。
   - 阻断：无。
   - 建议（不挡合并）：包装器填的「结果」偏短，对照表是负责 bot 按 diff 补核的；钩子只包着 `outputs` 里那两处包装函数，`space_check` 等 sync 路径仍会 stat 设备文件，这在本单范围外。
-- 二审：
-- 合并：
+- 二审：**无阻断**（agy-review，2026-11-12 16:38 +08:00，模型 gemini-3.8-flash-medium，用时 90s，回执 `400481e`）。结论「建议通过」。负责 bot 逐条核对引用，均与当前代码一致：
+  - `generate.rs:519-544`：设备路径只做 `on_removable` 前缀判断，绕过 `unplugged`/`is_file`，只比指纹（含 legacy，停用模式可回退 `profile::get`），属实。
+  - `main.rs:1051-1057`：按 `(fresh, device_unchecked)` 显示文案，属实。
+  - `flow.rs:137-231`、`generate.rs:558-567`：新用例和统计钩子，属实。
+  - `flow.rs:92-113`、`:2843-2927`：`add_build_skip_remove` 与 `disabled_profile_is_forgotten_by_sync` 的断言已按方案 B 改对，没有删掉该有的断言，属实。
+  - `docs/decisions.md:362`、`docs/usage.md:58`、`:180-195`：文档已同步，属实。禁止文件无 diff、版本号和 fp_golden 未改，属实。
+  - 线索 1（拔掉设备仍可能显示 ✓ 最新 未核对设备）：属实，这是方案 B 的既定取舍，帮助和 usage 已写明。
+  - 「未核实」只有真机卡死挂载：第 1 轮测试已重跑；真机验收归 vinci。
+- 合并：无阻断。本单需要真机验收（汉王挂载卡住时 `booklib list` 马上返回），合并后状态保持 done，审查栏写「待最终验收」，不改为 verified。
