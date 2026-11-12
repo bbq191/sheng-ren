@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-lock-no-device
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: opencode-local
 - 分支: lock-no-device（从最新 master 切出）
-- 更新时间: 2026-11-12T10:55+08:00
+- 更新时间: 2026-11-12T11:25+08:00
 - 引用: 2026-11-12-quality-audit（第 1、15 条，见该文件「核实与分组」）
 
 ## 需求原文
@@ -146,5 +146,25 @@
     3. `sync` 在卡死的挂载上仍会卡（`deliver::connect` 的 `mounted()`），本单明确不管。
     4. 书库根不在设备上、但自定义模式的 `[deliver]` 指到别的可拔下的位置（不在 `mtp_base` / `usbms_base` / `/run/media` / `/media` 下，例如 `/mnt/sd`）时，仍按"电脑上的"处理，加锁时会读。和 `unplugged` 的认法一致，没有变坏。
     5. 清理时机（交 agy 复核）：传输线程的 `Pipeline` 是 `build_all` 里的局部变量（`build_run.rs:297`），每轮结束前 `build_run.rs:476` 等它全部交回，所以下一轮（包括掉线一轮后重连那轮）清理时，本进程不会还有没改名的 `.tmp-*` 正在写。传输线程卡死时 `build_all` 本身不返回，也就到不了下一轮。别的 booklib 进程被书库锁挡住。剩下的问题：设备上的 `.tmp-*` 也可能是**别的书库**同时往同一台设备写时留下的，本单的清理会删掉它们（master 加锁时也会删，不是新问题）。
-- 二审：
-- 合并：
+- 二审：**无阻断**。回执是 `.dev/tasks/2026-11-12-lock-no-device.agy.md`，误提交在 docs-align 分支上（`a14a214`），vinci 定了不挪，跟 docs-align 一起进 master。回执引的行号是旧的，负责 bot 按实际代码逐条核过：
+  - 结论"本进程内不会和传输抢 `.tmp-*`"属实，实际行号如下：
+    - 每轮开始时，掉线的设备在 `build_run.rs:177` 清标记，连上的在 `:192` 清理。
+    - `Pipeline` 是 `build_all` 里的局部变量（`:297`），每轮结束前在 `:476` 等传输全部交回。
+    - `Pipeline` 被释放时 `transfer.rs:184-191` 会 join 全部传输线程。
+    - 每次连接只清一次，由 `session.rs:205` 的 `begin_device_cleaned` 保证。
+  - "`removable_base` / `unplugged` 和 master 的等价"属实（`session.rs:168-202`），和第 1 轮的核对一致。
+  - "加锁路径上没有任何设备 I/O"属实（`lib.rs:484-505`），另有第 1 轮的 FUSE 复现佐证。
+  - 建议 1（测试钩子永远不会触发，回执写成 `lib.rs:178-210`，实际是 `lib.rs:511-545`）：属实。不影响功能，转后续单：把检查挪到跳过之前，或者放进 `fsutil::clean_tmp*`。
+  - 建议 2（缺 Kobo usbms 的自动化用例）：属实，第 1 轮已手工验过，转后续。
+  - 建议 3（多个书库同写一台设备时可能误删别人的 `.tmp-*`）：属实，但 master 本来就这样，而且现在只在连接时删，冲突窗口变小了；转后续（可以考虑按进程号保护），优先级低。
+  - 线索 1（不在记录里的新子目录）：属实，也是 master 本来就有的问题。
+  - 线索 2（vinci 本机工作区被切到别的分支）：和代码无关，这就是回执提交错分支的原因。
+  - 回执「未核实」的是真机和真书回归，留给 vinci 最终验收。
+- 合并：负责 bot 2026-11-12 用 `--no-ff` 合入 master，然后再合 docs-align。合并号见合并提交，并写回 context。
+- 后续（转新单或待 vinci 定）：
+  1. `booklib list` 在卡死的挂载上也卡住（`lib.outputs` 要 stat 设备上的产物）；
+  2. `sync` 在卡死的挂载上仍会卡（`deliver::connect` 的 `mounted()`）；
+  3. 测试钩子永远不会触发；
+  4. 补 Kobo usbms 自动化用例；
+  5. 多书库同写一台设备时的 `.tmp-*` 保护；
+  6. vinci 真机验：汉王挂载卡住时 `vertical --auto` 马上返回、Kobo 插着跑 `sync` 正常。
