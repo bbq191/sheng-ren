@@ -3162,7 +3162,8 @@ fn lock_never_reads_device_dirs_and_sync_cleans_their_tmp_files() {
     assert!(!local_dir.starts_with(common::dev_dir(&lib_dir)));
 
     // 会加锁的命令都不读设备目录：设备上的 .tmp-* 留着，电脑上的照旧清
-    let device_tmp = device_dir.join(".tmp-1-1-x.epub");
+    // 设备上的临时文件用不可能存在的进程号：连接清理要删的是死进程留下的，主人还在的要留着（见 fsutil 单测）
+    let device_tmp = device_dir.join(format!(".tmp-{}-1-x.epub", u32::MAX));
     let local_tmp = local_dir.join(".tmp-1-2-y.epub");
     let (book, tracked, title, id2) = (
         src.to_str().unwrap().to_string(),
@@ -3239,7 +3240,7 @@ fn lock_never_reads_device_dirs_and_sync_cleans_their_tmp_files() {
         lib.refresh_devices();
         build_round(&lib, &[ireader]);
     };
-    let again = device_dir.join(".tmp-2-2-x.epub");
+    let again = device_dir.join(format!(".tmp-{}-2-x.epub", u32::MAX));
     round(&again);
     assert!(!again.exists(), "进程里第一次接上要清");
     round(&again);
@@ -3279,7 +3280,7 @@ fn lock_keeps_kobo_usbms_tmp_until_sync_connects() {
     };
     let product_dir = product.parent().unwrap().to_path_buf();
     assert_eq!(product_dir, dev.join("usbms/KOBOeReader/books"));
-    let tmp = product_dir.join(".tmp-1-1-x.kepub.epub");
+    let tmp = product_dir.join(format!(".tmp-{}-1-x.kepub.epub", u32::MAX));
 
     // 会加锁的命令不读、不删设备上的临时文件
     let (book, dummy) = (src.to_str().unwrap(), other.to_str().unwrap());
@@ -3333,7 +3334,7 @@ fn lock_keeps_kobo_usbms_tmp_until_sync_connects() {
         lib.refresh_devices();
         build_round(&lib, &[kobo]);
     };
-    let again = product_dir.join(".tmp-2-2-x.kepub.epub");
+    let again = product_dir.join(format!(".tmp-{}-2-x.kepub.epub", u32::MAX));
     round(&again);
     assert!(!again.exists(), "进程里第一次接上要清");
     round(&again);
