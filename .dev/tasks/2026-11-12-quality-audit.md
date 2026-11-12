@@ -83,7 +83,7 @@ N. 标题
 | 2 | `docs/development.md` 版本表里 `WRITER_VERSION` 写的是 25 | ✅ | 表在 `development.md:105`，代码是 `kfx/src/write/mod.rs:116` = `"26"`。 |
 | 3 | 设备列表过时 | ⚠ | `CONTRIBUTING.md:7` 还写"两个模式 kindle、ireader" ✅；`:44-47` 版本号清单缺 `bookconv::kepub::VERSION` ✅；`docs/architecture.md:181` 只写了 Kindle、掌阅 ✅。`README.md` 的设备表（`:25-27`）已经是对的，只有 `:31`「前提」一段没写汉王、Bigme 的挂载点，比回执说的轻。 |
 | 4 | `AGENTS.md` 的分支规则和工作流冲突 | ✅ | `AGENTS.md:8`（第 4 条）、`CONTRIBUTING.md:20` 写"推新分支，不直接改 master，维护者跑完回归再合"；`Projects/工作流.md` 定的是负责 bot 验收、二审后自己合并，任务单在任务分支上提交。另外这几天的任务单都直接提交在 master，和工作流第 1 步不一致。要 vinci 定以哪个为准。 |
-| 5 | 掌阅、Bigme 目录名大小写和设备不一致 | ✅ | `ireader.toml:110`、`bigme.toml:52`。按要求只记录，不改。 |
+| 5 | 掌阅、Bigme 目录名大小写和设备不一致 | ✅ | `ireader.toml:110`、`bigme.toml:52`。当时按要求只记录、不改。**2026-11-12 vinci 真机发现 Bigme 下出现错误的 `books` 目录，定 bigme 和掌阅一起改**，见任务单 `2026-11-12-dir-case-bigme-ireader`。 |
 | 6 | Move 时代的 CSS 怪癖字段和清洗代码是死代码 | ⚠ | 五台内置 profile 都没开 `margin_top=false`、`display_none=false`、`em_root`、`heading_font_keywords`、`trailing_br_line`、`line_height_except_p` 等（`profiles/*.toml` 里搜不到），只有测试夹具 `profile/testdata/xochitl.toml` 用到（16 处 `fixture("xochitl")`）。但是：①`wash/box_fix.rs` 不是只给 Move 用的，掌阅的 `px_margins = false`（`ireader.toml:65`）也走这里；②这些字段是书库 `profiles/` 里自定义模式能用的公开配置（`profile/src/lib.rs:81` 一带的说明），删掉就是行为改动。哪些能删要逐个字段查，并由 vinci 定。 |
 | 7 | `put_file` 一组 bool 参数容易传错 | ✅ | `deliver.rs:188`、`:216`、`:368`：`keep_src`、`compare`、`direct` 加 `mount`。2026-11-12 汉王那单的阻断就是 `direct` 没跟着改。 |
 | 8 | "读记录—克隆—改—写回"重复 | ⚠ | 重复属实：`remove_outputs`（`generate.rs:411`）、`hand_over_outputs`（`:429`）、`retract`（`:453`）、`flush_removed`（`:486`）、`rebase_state_case`（`:295`）。但 `put_entry` / `put_state`（`:1079` 起）已经是公共函数，`finish` 里还有别的逻辑。能省的样板不多，可以顺手做，单独开单不值。 |

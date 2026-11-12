@@ -102,9 +102,10 @@ height = 1920
 width = 1440
 height = 1920
 
-# 产物直接传进掌阅（2026-10-07 定）：同 Kindle，放存储根目录的 documents/（没有就建）。Air 3 Pro 上自带的是 Documents/，
-# 但外部存储不分大小写（`external_storage.casefold.enabled=1`，adb 里 documents、Documents 是同一个目录，2026-11-02）
+# 产物直接传进掌阅（2026-10-07 定）：放存储根目录的 Documents/（没有就建）。Air 3 Pro 上自带是 Documents/；
+# 2026-11-02 确认外部存储不分大小写（`external_storage.casefold.enabled=1`）。2026-11-12：小写 documents
+# 会像汉王那样让 MTP 多登记一个同内容的目录，改成设备真名；旧记录由大小写迁移原样接过来。
 [deliver]
 kind = "mtp"
 mount = "ireader"
-dir = "documents"
+dir = "Documents"

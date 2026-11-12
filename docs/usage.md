@@ -180,7 +180,7 @@ booklib sync --watch                      # 一直运行，每 60 秒查一次�
 
 ```text
 3fa9c1e07b2d  epub   三体 — 刘慈欣
-      ireader              ✓ 最新 未核对设备  /run/user/1000/mtp/ireader/内部共享存储空间/documents/小说/三体.epub
+      ireader              ✓ 最新 未核对设备  /run/user/1000/mtp/ireader/内部共享存储空间/Documents/小说/三体.epub
       kindle               ⚠ 过期 未核对设备  /run/user/1000/mtp/kindle/Internal Storage/documents/小说/三体.kfx
         体检 ✗ 行内 style margin-left（px，list）×3：……掌阅没处理（px 是屏幕像素）
         体检 ? 没验证过 1 种：text-decoration（keyword，inline）×55
@@ -317,7 +317,7 @@ booklib dedupe ~/Documents/ereader
 
 ```text
 ireader      掌阅自带阅读器（iReader Air 3 Pro）  EPUB  屏幕 1440×1920  阅读范围 1440×1920  黑白
-             ✓ 接上了：/run/user/1000/mtp/ireader/内部共享存储空间/documents
+             ✓ 接上了：/run/user/1000/mtp/ireader/内部共享存储空间/Documents
 kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  KFX  屏幕 1272×1696  阅读范围 1104×1546  黑白
              ✓ 接上了：/run/user/1000/mtp/kindle/Internal Storage/documents
 ```
@@ -333,15 +333,15 @@ kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  KFX  屏幕
 | 设备 | 怎么连 | 放在哪 |
 |---|---|---|
 | Kindle（`kindle`，`.kfx`） | USB，jmtpfs 自动挂到 `/run/user/1000/mtp/kindle` | 存储根目录的 `documents/<子目录>/<书名>.kfx` |
-| 掌阅（`ireader`，`.epub`） | USB，挂到 `/run/user/1000/mtp/ireader` | 存储根目录的 `documents/<子目录>/<书名>.epub`（没有 `documents/` 就建） |
+| 掌阅（`ireader`，`.epub`） | USB，挂到 `/run/user/1000/mtp/ireader` | 存储根目录的 `Documents/<子目录>/<书名>.epub`（没有就建；旧的小写 `documents` 记录会原样接过来，不重传、不删书） |
 | Kobo（`kobo`，`.kepub.epub`） | USB 大容量存储，挂到 `/run/media/$USER/KOBOeReader` | 存储根目录的 `books/<子目录>/<书名>.kepub.epub` |
 | 汉王（`hanvon`，`.epub`） | USB，挂到 `/run/user/1000/mtp/hanvon`（2026-11-06 真机确认） | 存储根目录的 `Documents/<子目录>/<书名>.epub`（没有就建；旧的小写 `documents` 记录会原样接过来，不重传、不删书） |
-| Bigme（`bigme`，`.epub`） | USB MTP，缺省挂到 `/run/user/1000/mtp/bigme` | 存储根目录的 `books/<子目录>/<书名>.epub`（没有就建） |
+| Bigme（`bigme`，`.epub`） | USB MTP，缺省挂到 `/run/user/1000/mtp/bigme` | 存储根目录的 `Books/<子目录>/<书名>.epub`（没有就建；旧的小写 `books` 记录会原样接过来，不重传、不删书） |
 
 Bigme 2026-11-10 真机 jmtpfs 实际挂在 `~/Devices/Bigme`，和缺省约定不一致：配好 dotfiles 的挂载规则之前，可用 `BOOKLIB_MTP_DIR=/home/afu/Devices` 让 `…/Bigme` 对上 `mount = "bigme"`，或把 `~/Devices/Bigme` 挂/链到 `/run/user/1000/mtp/bigme`。
 
-- `<子目录>`：原件相对书根目录所在的子目录（`--top` 的条目从它自己这一层起，见[跟踪范围](#track--sync跟踪书目录生成)），例：原件 `~/Documents/ereader/books/好读/x.epub` → Kindle 上 `documents/好读/<书名>.kfx`。跟踪目录顶层的书、`add` 进来的书、网址书放 `documents/` 顶层。（2026-10-31 以前还有 Move：经 SSH 交给它的书架服务、按子目录建文件夹；Move 卖了以后删了。）
-- 掌阅、Bigme 的 profile 还写着小写 `documents` / `books`，设备上真名是 `Documents/` / `Books/`，多半也会像汉王那样被 MTP 多登记一个同内容的小写目录；本次没改它们的 `dir`（vinci 没要求），但 `booklib` 的删除 / 挪位置已有大小写保护，不会因此删书。汉王的旧记录（小写 `documents`）在设备接上时只改记录、不碰设备上的文件，同一次同步仍算最新、不重传。
+- `<子目录>`：原件相对书根目录所在的子目录（`--top` 的条目从它自己这一层起，见[跟踪范围](#track--sync跟踪书目录生成)），例：原件 `~/Documents/ereader/books/好读/x.epub` → Kindle 上 `documents/好读/<书名>.kfx`。跟踪目录顶层的书、`add` 进来的书、网址书放各设备产物目录顶层。（2026-10-31 以前还有 Move：经 SSH 交给它的书架服务、按子目录建文件夹；Move 卖了以后删了。）
+- 掌阅、汉王、Bigme 的旧记录（小写 `documents` / `books`）在设备接上时只改记录、不碰设备上的文件，同一次同步仍算最新、不重传。profile 已改成设备真名 `Documents/` / `Books/`，避免 MTP 再按小写名多登记一个同内容的目录。
 - `booklib devices` 列出各设备接没接上。挂载目录可以用 `BOOKLIB_MTP_DIR` 改。
 - **先比较、再生成、边生成边传**（下图）：
   - **比较与认领**：每本书每台设备先比指纹，没变就跳过。没变、但记录里的位置是空的（以前产物放电脑上、你自己挪上了设备），而设备上对应位置正好有那份，就直接认领（`= … 认领设备上已有的那份`），不重新生成。只有变了的才生成。

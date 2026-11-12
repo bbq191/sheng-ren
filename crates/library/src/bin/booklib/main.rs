@@ -1,7 +1,7 @@
 //! 书库命令行：入库、跟踪与同步（含按阅读模式生成）、列出、删除、去重。见 `library` crate 头注释。
 //!
 //! 书库目录缺省 $BOOKLIB_DIR 或 ~/.local/share/booklib。产物直接传到接着的设备上（见 `library::generate`、`library::deliver`）：
-//! Kindle、掌阅放 documents/（镜像子目录）；没写 [deliver] 的自定义模式才放电脑上。
+//! Kindle 放 documents/，掌阅、汉王放 Documents/，Bigme 放 Books/（镜像子目录）；没写 [deliver] 的自定义模式才放电脑上。
 //! `meta --edit` 改单个 EPUB 文件、不碰书库，在 `meta_edit` 里（参数规则也不同：值可以是空字符串）。
 //! 退出码: 0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）。
 
@@ -47,10 +47,10 @@ const COMMANDS: &[Command] = &[
   生成时补进书里；连不上网就跳过，下次再找。
 第二步 生成并传：只给接着的设备生成，传上去，电脑上不留产物：
   kindle   Kindle（USB）  KFX   存储根目录 documents/<子目录>/
-  ireader  掌阅（USB）    EPUB  存储根目录 documents/<子目录>/
+  ireader  掌阅（USB）    EPUB  存储根目录 Documents/<子目录>/
   kobo     Kobo（USB）    KEPUB 存储根目录 books/<子目录>/
-  hanvon   汉王（USB）    EPUB  存储根目录 documents/<子目录>/
-  bigme    Bigme（USB）   EPUB  存储根目录 books/<子目录>/
+  hanvon   汉王（USB）    EPUB  存储根目录 Documents/<子目录>/
+  bigme    Bigme（USB）   EPUB  存储根目录 Books/<子目录>/
   <子目录> 是原件在跟踪目录里所在的子目录。没接上的设备这次跳过，下次接上再传。
   没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢）。
 

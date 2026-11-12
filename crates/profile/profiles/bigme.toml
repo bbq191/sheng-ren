@@ -49,4 +49,4 @@ height = 1680
 [deliver]
 kind = "mtp"
 mount = "bigme"                    # 缺省挂载点 $XDG_RUNTIME_DIR/mtp/bigme；2026-11-10 真机 jmtpfs 挂在 ~/Devices/Bigme
-dir = "books"                      # 2026-11-10 真机确认：xReader 书架认存储根下 Books/，子目录里的书也进书库；安卓存储不分大小写
+dir = "Books"                      # 2026-11-12：小写 books 让 MTP 多登记出一个同内容的 books，改成设备真名（2026-11-10 真机确认 xReader 认 Books/）；旧记录由大小写迁移原样接过来
