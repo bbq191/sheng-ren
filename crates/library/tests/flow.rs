@@ -3004,6 +3004,146 @@ fn built_path(b: &Built) -> &Path {
     }
 }
 
+/// 加锁时绝不读设备目录：vertical、track、add、meta、remove 都成功，设备上的 `.tmp-*` 留着，电脑上的自定义模式产物目录照旧清掉。
+/// `sync` 连上设备后清一次它上面的 `.tmp-*`，产物和生成记录逐字节不变；同一次连接里下一轮不再清，拔掉再接上才重新清。
+#[test]
+fn lock_never_reads_device_dirs_and_sync_cleans_their_tmp_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let books = base.join("books");
+    std::fs::create_dir_all(&books).unwrap();
+    let src = books.join("甲.epub");
+    std::fs::write(&src, sample_epub("甲")).unwrap();
+
+    let lib = common::open(&lib_dir);
+    lib.track(&books).unwrap();
+    lib.sync(Prune::Keep, |_| {}).unwrap();
+    let m = lib.list().pop().unwrap();
+    let ireader = profile::get("ireader").unwrap();
+    let Built::Written {
+        path: device_product,
+        ..
+    } = lib.build(&m, ireader, false).unwrap()
+    else {
+        panic!("第一次应生成")
+    };
+    let device_dir = device_product.parent().unwrap().to_path_buf();
+    assert_eq!(device_dir, common::documents(&lib_dir, "ireader"));
+
+    // 另一本只在电脑上有产物（自定义模式 pc 没有 [deliver]）
+    common::with_pc_profile(&lib_dir);
+    let src2 = base.join("乙.epub");
+    std::fs::write(&src2, sample_epub("乙")).unwrap();
+    let lib = common::open(&lib_dir);
+    let Added::New(m2) = lib.add_file(&src2).unwrap() else {
+        panic!("应是新书")
+    };
+    let pc = lib.devices().get("pc").unwrap();
+    let Built::Written {
+        path: local_product,
+        ..
+    } = lib.build(&m2, pc, false).unwrap()
+    else {
+        panic!("第一次应生成")
+    };
+    let local_dir = local_product.parent().unwrap().to_path_buf();
+    assert!(!local_dir.starts_with(common::dev_dir(&lib_dir)));
+
+    // 会加锁的命令都不读设备目录：设备上的 .tmp-* 留着，电脑上的照旧清
+    let device_tmp = device_dir.join(".tmp-1-1-x.epub");
+    let local_tmp = local_dir.join(".tmp-1-2-y.epub");
+    let (book, tracked, title, id2) = (
+        src.to_str().unwrap().to_string(),
+        books.to_str().unwrap().to_string(),
+        m.title.clone(),
+        m2.id.clone(),
+    );
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["vertical", "--on", &book],
+        vec!["track", &tracked],
+        vec!["add", &book],
+        vec!["meta", "--fetch", "--clear", &title],
+        vec!["remove", &id2],
+    ];
+    for args in cases {
+        std::fs::write(&device_tmp, b"device").unwrap();
+        std::fs::write(&local_tmp, b"pc").unwrap();
+        let o = common::booklib_env(
+            Some(&lib_dir),
+            &args,
+            &[("BOOKLIB_TEST_DEVICE_IO_PANIC", "1")],
+        );
+        assert_eq!(
+            o.status.code(),
+            Some(0),
+            "booklib {args:?} 失败：\nstdout:\n{}\nstderr:\n{}",
+            common::stdout(&o),
+            common::stderr(&o)
+        );
+        assert!(
+            device_tmp.is_file(),
+            "booklib {args:?} 不该读设备目录、不该删设备上的临时文件"
+        );
+        assert!(
+            !local_tmp.exists(),
+            "booklib {args:?} 加锁时该清掉电脑上的临时文件"
+        );
+    }
+
+    // sync 连上这台设备后清掉它的 .tmp-*；产物、生成记录逐字节不变
+    let state_path = lib_dir.join("output-state/ireader.json");
+    let (product_before, state_before) = (
+        std::fs::read(&device_product).unwrap(),
+        std::fs::read(&state_path).unwrap(),
+    );
+    let o = common::booklib_env(
+        Some(&lib_dir),
+        &["sync", "--device=ireader", "--no-meta"],
+        &[],
+    );
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "sync 失败：\nstdout:\n{}\nstderr:\n{}",
+        common::stdout(&o),
+        common::stderr(&o)
+    );
+    assert!(!device_tmp.exists(), "sync 连上设备后清掉残留临时文件");
+    assert_eq!(
+        std::fs::read(&device_product).unwrap(),
+        product_before,
+        "产物逐字节不变"
+    );
+    assert_eq!(
+        std::fs::read(&state_path).unwrap(),
+        state_before,
+        "生成记录逐字节不变"
+    );
+
+    // 同一进程、同一连接：第一次接上清，`--watch` 下一轮不再清；拔掉再接上重新清
+    let lib = common::open(&lib_dir);
+    let round = |tmp: &std::path::Path| {
+        std::fs::write(tmp, b"again").unwrap();
+        lib.refresh_devices();
+        build_round(&lib, &[ireader]);
+    };
+    let again = device_dir.join(".tmp-2-2-x.epub");
+    round(&again);
+    assert!(!again.exists(), "进程里第一次接上要清");
+    round(&again);
+    assert!(again.exists(), "同一次连接里下一轮不再清");
+
+    let storage = common::dev_dir(&lib_dir).join("ireader/Internal Storage");
+    let unplugged = base.join("拔下来的存储");
+    std::fs::rename(&storage, &unplugged).unwrap();
+    lib.refresh_devices();
+    build_round(&lib, &[ireader]);
+    std::fs::rename(&unplugged, &storage).unwrap();
+    round(&again);
+    assert!(!again.exists(), "拔掉再接上要重新清");
+}
+
 #[test]
 fn vertical_books_follow_profile_overrides_and_directory_lists() {
     let dir = tempfile::tempdir().unwrap();

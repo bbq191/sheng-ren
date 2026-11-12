@@ -4,7 +4,8 @@
 use bookconv::epub::{assemble, Book, BookMeta, Chapter};
 use library::{DeviceEnv, Library};
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 /// 测试用的"设备"目录（`<书库>-dev`）：MTP 挂载目录，下面 kindle、ireader 各有一个存储（算接上了）。
 /// 测试一律不碰真设备：MTP 指向这里。
@@ -109,8 +110,39 @@ pub fn booklib_env(lib: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> 
     } else {
         cmd.env("BOOKLIB_MTP_DIR", "/nonexistent-booklib-test");
     }
-    cmd.args(args).output().unwrap()
+    cmd.args(args);
+    run_with_timeout(cmd, args)
 }
+
+/// 跑子进程，最多等 [`COMMAND_TIMEOUT`]：卡死时 kill 并让测试失败，不让整个测试挂住（设备卡住时尤其要这样）。
+fn run_with_timeout(mut cmd: Command, args: &[&str]) -> Output {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            return child.wait_with_output().unwrap();
+        }
+        if start.elapsed() > COMMAND_TIMEOUT {
+            let _ = child.kill();
+            let out = child.wait_with_output().unwrap();
+            panic!(
+                "booklib {args:?} 超过 {} 秒没结束（已 kill）\nstdout:\n{}\nstderr:\n{}",
+                COMMAND_TIMEOUT.as_secs(),
+                stdout(&out),
+                stderr(&out)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// 子进程最多等多久（正常测试远用不到）。
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn stdout(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()

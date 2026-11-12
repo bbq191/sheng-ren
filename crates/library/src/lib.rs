@@ -479,26 +479,93 @@ impl Library {
 
     /// 书库里会放临时文件、临时目录的地方：书库根、`masters/` 和各条目、`output-state/`、`output/<模式>/`，
     /// 以及生成记录里产物所在的目录（那里只清临时文件，不动目录）。
+    /// 在可拔下的设备上的目录一概跳过（不 `read_dir`、不 `stat`）：设备卡死时加锁不能跟着卡住；
+    /// 设备上的残留临时文件等 `sync` 连上那台后清（[`Library::clean_device_leftovers_once`]）。
     fn clean_leftovers(&self) {
-        fsutil::clean_tmp(&self.root);
-        let masters = self.root.join("masters");
-        fsutil::clean_tmp(&masters);
-        for id in self.entry_ids() {
-            fsutil::clean_tmp(&masters.join(id));
+        // 书库本身在可拔下的设备上（少见）：整个清理都不做，不 `read_dir`、不 `stat`
+        if !self.cleanup_path_allowed(&self.root) {
+            return;
         }
-        fsutil::clean_tmp(&self.root.join("output-state"));
+        self.clean_tmp_on_computer(&self.root);
+        let masters = self.root.join("masters");
+        self.clean_tmp_on_computer(&masters);
+        for id in self.entry_ids() {
+            self.clean_tmp_on_computer(&masters.join(id));
+        }
+        self.clean_tmp_on_computer(&self.root.join("output-state"));
         for dev in std::fs::read_dir(self.root.join("output"))
             .into_iter()
             .flatten()
             .flatten()
         {
             if dev.file_type().is_ok_and(|t| t.is_dir()) {
-                fsutil::clean_tmp(&dev.path());
+                self.clean_tmp_on_computer(&dev.path());
             }
         }
         for dir in self.output_dirs() {
-            fsutil::clean_tmp_files(&dir);
+            self.clean_tmp_files_on_computer(&dir);
         }
+    }
+
+    /// 清理 `dir` 里的临时文件和目录；在可拔下的设备上的跳过。
+    fn clean_tmp_on_computer(&self, dir: &Path) {
+        if !self.cleanup_path_allowed(dir) {
+            return;
+        }
+        self.panic_if_test_device_read(dir);
+        fsutil::clean_tmp(dir);
+    }
+
+    /// 清理 `dir` 里的临时文件；在可拔下的设备上的跳过。
+    fn clean_tmp_files_on_computer(&self, dir: &Path) {
+        if !self.cleanup_path_allowed(dir) {
+            return;
+        }
+        self.panic_if_test_device_read(dir);
+        fsutil::clean_tmp_files(dir);
+    }
+
+    /// `dir` 不在可拔下的设备上、可以清理（只看路径前缀，不碰文件系统）。
+    fn cleanup_path_allowed(&self, dir: &Path) -> bool {
+        !self.devices.on_removable(dir)
+    }
+
+    /// 测试钩子 `BOOKLIB_TEST_DEVICE_IO_PANIC=1` 时，清理代码真要对可拔下的设备上的路径做 `read_dir` 就 panic：
+    /// 证明加锁时的清理根本不去读设备目录（集成测试用，防止以后又加回来）。
+    fn panic_if_test_device_read(&self, dir: &Path) {
+        if self.devices.on_removable(dir)
+            && std::env::var_os("BOOKLIB_TEST_DEVICE_IO_PANIC").is_some_and(|v| v != "0")
+        {
+            panic!(
+                "清理残留临时文件时读了设备上的目录：{}（BOOKLIB_TEST_DEVICE_IO_PANIC=1）",
+                dir.display()
+            );
+        }
+    }
+
+    /// 清这台设备产物根目录下的残留临时文件：`output_dirs()` 里在 `root` 下面的目录，只删 `.tmp-*` 文件。
+    /// 只在 `sync` 已经连上这台设备（`Target::Dir`）时调用；在生成、传输开始之前做完。
+    pub(crate) fn clean_device_leftovers(&self, device: &Profile) {
+        let Ok(deliver::Target::Dir { root, .. }) = &*self.target(device) else {
+            return;
+        };
+        for dir in self.output_dirs() {
+            if dir.starts_with(root) {
+                fsutil::clean_tmp_files(&dir);
+            }
+        }
+    }
+
+    /// `sync` 连上这台设备后清一次它上面的残留临时文件；同一次连接里 `--watch` 的后续轮次不再清。
+    pub(crate) fn clean_device_leftovers_once(&self, device: &Profile) {
+        if self.devices.begin_device_cleaned(&device.id) {
+            self.clean_device_leftovers(device);
+        }
+    }
+
+    /// 设备没接上：下次接上时重新清它上面的残留临时文件。
+    pub(crate) fn forget_device_cleaned(&self, id: &str) {
+        self.devices.forget_device_cleaned(id);
     }
 
     /// 联网用的 HTTP 客户端（第一次用时建，之后各本书共用：节流间隔、离线状态都延续）。

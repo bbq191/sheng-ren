@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-lock-no-device
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: verified
 - 执行方: opencode-local
 - 分支: lock-no-device（从最新 master 切出）
-- 更新时间: 2026-11-12T10:45+08:00
+- 更新时间: 2026-11-12T11:25+08:00
 - 引用: 2026-11-12-quality-audit（第 1、15 条，见该文件「核实与分组」）
 
 ## 需求原文
@@ -73,16 +73,98 @@
 
 ## 结果
 <!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
+- 执行方 / 开始–结束时间：opencode-local / 2026-11-12 10:45–10:55 +08:00
+- base..head：`848967c..d8a7567`（`848967c` 是切出时的 master；结果提交在分支 tip）
+- 提交：
+
+  | 步骤 | 提交号 | 文件 | 说明 |
+  | --- | --- | --- | --- |
+  | 接受 | `43d1357` | 任务单 | 状态改 accepted |
+  | 1–6 | `d8a7567` | `session.rs`、`lib.rs`、`build_run.rs`、`tests/common/mod.rs`、`tests/flow.rs`、`docs/decisions.md` | 加锁不碰设备、sync 连上后清设备临时文件、测试和决定记录 |
+  | 结果 | 本提交 | 任务单 | 填结果、状态改为 done |
+
+- 实现：
+  - **只看前缀认设备**：`Devices::on_removable(path)` 用和 `unplugged` 相同的挂载目录（`mtp_base`、`usbms_base`，开着挂载检查时含 `/run/media` 与 `/media` 互认），按 `Path::starts_with` 比，不碰文件系统；`unplugged` 改为复用同一个前缀判断，行为不变。
+  - **加锁清理跳过设备**：`clean_leftovers` 先看库根，在任何 `read_dir` / `stat` 之前返回；书库各目录和 `output_dirs()` 里落在设备挂载目录下的一概跳过，电脑上的自定义模式产物目录照旧清。测试钩子 `BOOKLIB_TEST_DEVICE_IO_PANIC=1` 放在清理入口，真要读设备路径时 panic。
+  - **sync 连上后清设备**：`build_all` 里 `device_status` 成功、进 `live` 后，在生成和传输之前对每台设备调一次 `clean_device_leftovers_once`；只清 `output_dirs()` 里在 `Target::Dir` 的 `root` 下面的目录、只删 `.tmp-*` 文件。`Devices` 新记一份“这次连接已清过”的集合，`refresh_devices` 不清它；设备报没接上时清掉标记，下次接上重新清。
+  - **文档**：`docs/decisions.md` 2026-11-12 加一行，写明汉王 jmtpfs 卡死时 `vertical` 不返回的原因和这次的清理时机。
+
+- 测试：
+
+  | 命令 | 通过 / 失败 / 未跑 | 摘要 |
+  | --- | --- | --- |
+  | `cargo test -p library` | 通过 | lib 77（含 3 个 `session` 单测）、bin 7、cli 14、flow 52、fp_golden 1，0 失败 |
+  | `cargo test --workspace` | 通过 | 所有 crate 全过，0 失败 |
+  | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 | 0 警告 |
+  | `cargo fmt --all -- --check` | 通过 | 干净 |
+  | `git diff master..HEAD -- crates/library/src/generate.rs crates/library/src/deliver.rs crates/bookconv crates/library/tests/fp_golden.txt` | 通过 | 空；版本号、金样都没动 |
+  | `cargo test -p library --test flow lock_never_reads` | 通过 | 新集成用例 |
+
+- 集成用例覆盖（`flow.rs::lock_never_reads_device_dirs_and_sync_cleans_their_tmp_files`，全部用临时目录当设备）：
+  - 带 `BOOKLIB_TEST_DEVICE_IO_PANIC=1` 跑 `vertical --on`、`track`、`add`、`meta --fetch --clear`、`remove`（删的是一本只在电脑上有产物的书）：都退出 0，设备上的 `.tmp-*` 还在，电脑上的自定义模式产物目录里的 `.tmp-*` 每次都被清掉。
+  - 不带钩子跑 `booklib sync --device=ireader --no-meta`：设备上的 `.tmp-*` 被清掉，产物和 `output-state/ireader.json` 逐字节不变。
+  - 同一进程里 `refresh_devices()` → `build_all`：第一次接上清，第二轮不再清；把设备存储目录挪走再挪回来（模拟拔插）后重新清。
+  - 子进程测试统一加了 30 秒超时（`tests/common/mod.rs`），超时 kill 并判失败，不会挂住。
+- 遇到的问题：无。
+- 偏离：
+  - 改了 `crates/library/tests/common/mod.rs`（子进程超时），不在「涉及文件」预测里；新用例和超时按分步任务 5 做。
+  - 测试钩子放在 `lib.rs` 的清理入口，不在 `fsutil.rs`；`fsutil` 不知道设备前缀，放这里也不用改清理函数的签名。
+  - 没做 FIFO / 不可读目录冒充设备的用例（分步任务 5 的可选项）：钩子已经能在清理真去读设备路径时 panic；FIFO 不能当目录，不可读目录在 root 下也挡不住读。
 - 未完成：
+  - **没上真机、没跑真书回归**。真机由 vinci 验：汉王插着、挂载卡住（或拔掉后挂载点还在）时，`booklib vertical --auto <一本书>` 应马上返回；Kobo 插着跑一次 `booklib sync` 正常；`sync` 在卡住的汉王上仍会卡（`deliver::connect` 的 `mounted()` 要 stat 挂载点，本单不管），记下现象。
+  - 设备上残留临时文件的清理时机属于设备行为，按任务单要求要 agy 二审。
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
-- 合并：
+- 验收：**第 1 轮通过**（sheng-ren bot，2026-11-12 11:10 +08:00，审 `848967c..83af2c3`，实现 `d8a7567`）。没上真机，下面全是 box 上的临时目录。
+  - 逐条验收标准：
+    - [x] 加锁不读设备目录。除了集成用例，另做了**真卡死复现**：写了一个 FUSE 小程序（fuser，scratch，不进仓库）挂在 `<MTP 目录>/ireader` 上，对 `Internal Storage` 里的任何 opendir / lookup 都永远不回，模拟卡死的 jmtpfs。生成记录指向它下面的 `documents/甲.epub`。
+      - master 的 `booklib vertical --on` 卡住，15 秒后被 SIGKILL，`wchan=request_wait_answer`，syscall 257 openat：就是 `clean_leftovers` 的 `read_dir`。挂载卸掉后 6 ms 返回。
+      - 本分支同一现场下 `vertical --on`、`vertical --off`、`add`、`track`、`meta --fetch --clear` 都在 4–8 ms 内退出 0。
+    - [x] sync 连上后清、每次连接只清一次。
+      - MTP 由 `flow.rs:3010` 覆盖（含 `refresh_devices` 第二轮不清、拔插后重新清）。
+      - Kobo（usbms，经临时文件写）自己用 CLI 验：在 `KOBOeReader/books/` 放 `.tmp-99-1-甲.kepub.epub`，本分支跑 `vertical --on/--off`、`add` 后都还在，`sync --device=kobo` 后清掉；同一现场 master 的 `vertical` 加锁时就删了，和预期的行为差一致。
+    - [x] 产物、生成记录逐字节不变：同一脚本（ireader、kindle、kobo 三台；track → sync → 放 Kobo `.tmp-*` → vertical on → sync → vertical off → sync）分别用 master 和本分支的二进制跑。三台产物和 `output-state/*.json` 的 sha256 完全相同，`.tmp-*` 两边都清掉了。只有 `meta.json` / `sources.json` 的 `source_mtime_ns` 不同（脚本每次重新 cp 原件）。
+    - [x] 子进程超时：`tests/common/mod.rs:117-135`，`COMMAND_TIMEOUT` 30 秒，所有 `booklib_env` 都经过它。
+    - [x] 版本号、金样不动：`git diff master...HEAD -- crates/bookconv crates/kfx crates/profile crates/library/src/generate.rs crates/library/src/deliver.rs crates/library/tests/fp_golden.txt` 为空；diff 里没有 `*_VERSION` 改动。docs-align 管的那几份文档也没碰。
+    - [x] 重跑：`cargo fmt --all -- --check` 干净；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告；`cargo test --workspace` 全过（flow 553、lib 77、cli 14 等，0 失败）。注：shell 里残留 `BOOKLIB_NO_NET=1` 时有 3 个 net / bangumi 单测失败，清掉环境变量后全过，与本单无关。
+    - [x] 结果里写明了没上真机，真机项交给 vinci。
+  - 代码核对：
+    - `session.rs:163-202` 的 `removable_base` / `unplugged` 和 master 的 `unplugged` 逐分支等价（同样的 base 列表、长的先比、`/run/media` 与 `/media` 互认）。
+    - `build_run.rs:177` 在设备没接上时清标记。
+    - `build_run.rs:190-193` 在 `outside`、生成、传输之前清，用的是已经连上的 `self.target(device)`，不多做一次连接。
+    - `lib.rs:548-557` 只清 `Target::Dir` 的 `root` 下面的目录，只删 `.tmp-*` 文件。
+    - `cleaned` 只在 `set_env`（`session.rs:157`）和 forget 时清，`refresh_devices` 不清，符合规则 2。
+    - 提交合规：中文前缀加正文、无 Co-Authored-By、执行方没有合并。
+  - 阻断：无。
+  - 建议（不挡合并）：
+    1. `lib.rs:535-545` 的测试钩子是同义反复：`clean_tmp_on_computer` / `clean_tmp_files_on_computer`（`lib.rs:511-526`）先用 `cleanup_path_allowed` 跳过了设备路径，再调 `panic_if_test_device_read`，而它只在 `on_removable` 为真时 panic，所以永远不会触发。以后谁绕开这两个入口直接调 `fsutil::clean_tmp*`，钩子拦不住，集成用例照样绿。建议把检查放在跳过之前，或者放进 `fsutil::clean_tmp*` 本身（传入判定闭包），或者在用例里另加一个真会卡住或报错的设备目录。本轮的 FUSE 复现已经补上了这项证据。
+    2. 集成用例只覆盖 MTP（ireader）。Kobo usbms 这条真正会留 `.tmp-*` 的路径没有自动化用例（本轮手工验过），建议补一个。
+  - 线索：
+    1. `output_dirs()`（`generate.rs:338`）只列有过产物记录的目录。第一次往一个新子目录写、写到一半被杀时，那个目录不在列表里，`.tmp-*` 不会被清。master 也一样，不是本单引入的。
+    2. `booklib list`（`lock: never`）在同一个卡死的 FUSE 上也卡住（20 秒后被 kill）：`lib.outputs(&m)` 会 stat 设备上的产物。不在本单规则 1 的范围内，但"汉王卡住时别的命令也不返回"可能还会在 list 上碰到，可以另开单。
+    3. `sync` 在卡死的挂载上仍会卡（`deliver::connect` 的 `mounted()`），本单明确不管。
+    4. 书库根不在设备上、但自定义模式的 `[deliver]` 指到别的可拔下的位置（不在 `mtp_base` / `usbms_base` / `/run/media` / `/media` 下，例如 `/mnt/sd`）时，仍按"电脑上的"处理，加锁时会读。和 `unplugged` 的认法一致，没有变坏。
+    5. 清理时机（交 agy 复核）：传输线程的 `Pipeline` 是 `build_all` 里的局部变量（`build_run.rs:297`），每轮结束前 `build_run.rs:476` 等它全部交回，所以下一轮（包括掉线一轮后重连那轮）清理时，本进程不会还有没改名的 `.tmp-*` 正在写。传输线程卡死时 `build_all` 本身不返回，也就到不了下一轮。别的 booklib 进程被书库锁挡住。剩下的问题：设备上的 `.tmp-*` 也可能是**别的书库**同时往同一台设备写时留下的，本单的清理会删掉它们（master 加锁时也会删，不是新问题）。
+- 二审：**无阻断**。回执是 `.dev/tasks/2026-11-12-lock-no-device.agy.md`，误提交在 docs-align 分支上（`a14a214`），vinci 定了不挪，跟 docs-align 一起进 master。回执引的行号是旧的，负责 bot 按实际代码逐条核过：
+  - 结论"本进程内不会和传输抢 `.tmp-*`"属实，实际行号如下：
+    - 每轮开始时，掉线的设备在 `build_run.rs:177` 清标记，连上的在 `:192` 清理。
+    - `Pipeline` 是 `build_all` 里的局部变量（`:297`），每轮结束前在 `:476` 等传输全部交回。
+    - `Pipeline` 被释放时 `transfer.rs:184-191` 会 join 全部传输线程。
+    - 每次连接只清一次，由 `session.rs:205` 的 `begin_device_cleaned` 保证。
+  - "`removable_base` / `unplugged` 和 master 的等价"属实（`session.rs:168-202`），和第 1 轮的核对一致。
+  - "加锁路径上没有任何设备 I/O"属实（`lib.rs:484-505`），另有第 1 轮的 FUSE 复现佐证。
+  - 建议 1（测试钩子永远不会触发，回执写成 `lib.rs:178-210`，实际是 `lib.rs:511-545`）：属实。不影响功能，转后续单：把检查挪到跳过之前，或者放进 `fsutil::clean_tmp*`。
+  - 建议 2（缺 Kobo usbms 的自动化用例）：属实，第 1 轮已手工验过，转后续。
+  - 建议 3（多个书库同写一台设备时可能误删别人的 `.tmp-*`）：属实，但 master 本来就这样，而且现在只在连接时删，冲突窗口变小了；转后续（可以考虑按进程号保护），优先级低。
+  - 线索 1（不在记录里的新子目录）：属实，也是 master 本来就有的问题。
+  - 线索 2（vinci 本机工作区被切到别的分支）：和代码无关，这就是回执提交错分支的原因。
+  - 回执「未核实」的是真机和真书回归，留给 vinci 最终验收。
+- 合并：负责 bot 2026-11-12 用 `--no-ff` 合入 master，然后再合 docs-align。合并号见合并提交，并写回 context。
+- 后续（转新单或待 vinci 定）：
+  1. `booklib list` 在卡死的挂载上也卡住（`lib.outputs` 要 stat 设备上的产物）；
+  2. `sync` 在卡死的挂载上仍会卡（`deliver::connect` 的 `mounted()`）；
+  3. 测试钩子永远不会触发；
+  4. 补 Kobo usbms 自动化用例；
+  5. 多书库同写一台设备时的 `.tmp-*` 保护；
+  6. vinci 真机验：汉王挂载卡住时 `vertical --auto` 马上返回、Kobo 插着跑 `sync` 正常。

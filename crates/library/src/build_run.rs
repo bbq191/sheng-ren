@@ -173,6 +173,8 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
         match lib.device_status(device) {
             Ok(_) => live.push(device),
             Err(reason) => {
+                // 设备不在：下次接上时重新清它上面的残留临时文件
+                lib.forget_device_cleaned(&device.id);
                 // --watch（给了 fails）时同一台没接上只报一次
                 if fails.is_none() || !absent_reported.contains(&device.id) {
                     report(BuildEvent::DeviceAbsent {
@@ -183,6 +185,11 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                 absent_reported.insert(device.id.clone());
             }
         }
+    }
+    // 接上的设备：清它产物根目录下的残留临时文件（进程被杀时留下的 `.tmp-*`）。每次连接只清一次，
+    // 在生成、传输开始之前做完，不和传输线程抢同一个文件。
+    for device in &live {
+        lib.clean_device_leftovers_once(device);
     }
     // 不在这台设备的跟踪范围里的书：以前传过的从设备上删掉（2026-10-19 定），这一轮也不生成
     let mut outside: HashSet<(&str, &str)> = HashSet::new();
