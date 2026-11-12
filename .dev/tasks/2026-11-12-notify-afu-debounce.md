@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-12-notify-afu-debounce
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent（负责 bot 直接改）
 - 分支: notify-afu-debounce（从最新 master 切出）
-- 更新时间: 2026-11-12T14:42+08:00
+- 更新时间: 2026-11-12T14:43+08:00
 - 引用: 无
 
 ## 需求原文
@@ -73,11 +73,11 @@ Jarvis 随后修好 vault 正本：before 为空 / 全 0 / 对象不存在时，
   | `cargo test --workspace` / `clippy` | 未跑 | 不涉及 Rust 代码，只改 GitHub Actions YAML |
 - 遇到的问题：第一次复核时正本仍会在新分支首推时误发历史回执，已停下未替换。Jarvis 修好正本（sha256 `2c3f9ea8…d206`）后重新复核并替换。
 - 偏离：无
-- 未完成：按指示先不 push、不 merge；状态停在 done，待负责 bot 写完审查后再决定推送与合并。
+- 未完成：无。用户已于 2026-11-12 14:42（Asia/Shanghai）确认推送并合并；本提交后即推送并以 --no-ff 合进 master。
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：通过（状态保持 done，按指示不改为 verified，先不 push、不 merge）。证据如下。
+- 验收：通过。用户 2026-11-12 14:42（Asia/Shanghai）确认后改为 verified。证据如下。
   1. **与模板一致**：`cmp` / `diff` 为空；sha256 均为 `2c3f9ea80688adfb0c14772cb91fed985f31806e564841c5cbebfac060dbd206`（`2c3f9ea8…d206`）。
   2. **YAML 语法**：`yaml.safe_load` 成功。顶层键 `on` 在 PyYAML 1.1 里会变成布尔 `True`，这是 GitHub Actions 常见写法，旧文件也如此，GitHub 侧能正确识别。
   3. **Secrets**：仅引用 `secrets.AFU_WEBHOOK_URL`、`secrets.AFU_WEBHOOK_TOKEN`，未改值，未调用 `gh secret`。
@@ -101,4 +101,4 @@ Jarvis 随后修好 vault 正本：before 为空 / 全 0 / 对象不存在时，
      - T10 只改 `.agy2.md` → paths 为空
   7. **非阻断残余**：若以后把 fetch-depth 改成 1，浅克隆会导致 merge-base 失败并退回全量（T6 已复现）。保持 fetch-depth 为 0 即可。全新仓库第一次 push 且该分支就是默认分支时，merge-base 等于 AFTER，diff 为空，极端情况下可能漏发；sheng-ren 已有历史，不适用。
 - 二审：本改动是 CI 唤醒去抖，不涉及 Rust / 设备行为，不跑 agy。
-- 合并：未推送、未合并。worktree 留在 `/tmp/sr-notify`，分支 `notify-afu-debounce`。等确认后再 push，并用 `--no-ff` 合进 master。
+- 合并：用户于 2026-11-12 14:42（Asia/Shanghai）在本聊天亲自确认推送并合并。本提交之后推送 notify-afu-debounce，再以 --no-ff 合进 master。合并提交号写入 context.md。
