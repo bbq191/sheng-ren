@@ -48,7 +48,16 @@ impl Transfer {
             direct,
             mount,
         } = &self.work;
-        deliver::put_file(&self.src, out, false, *compare, *direct, mount.as_deref())
+        deliver::put_file(
+            &self.src,
+            out,
+            deliver::PutOptions {
+                keep_src: false,
+                compare: *compare,
+                direct: *direct,
+                mount: mount.as_deref(),
+            },
+        )
     }
 
     /// 书 id。
