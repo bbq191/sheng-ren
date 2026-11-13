@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: box-agent
 - 分支: task/2026-11-13-vertical-default-off（从最新 master 切出）
-- 更新时间: 2026-11-13T11:08:00+08:00
+- 更新时间: 2026-11-13T11:20:00+08:00
 - 引用: vinci 2026-11-13 10:26 在 sheng-ren 聊天里选方案二；推翻 `docs/decisions.md` 11-11「中文文字书全部竖排」；上次只读调查（`Library::vertical_for`）
 
 ## 需求原文
@@ -63,14 +63,14 @@
 6. [ ] 按 `docs/development.md` 跑真书回归（见验收标准）。box 上若没有测试书，不要声称跑过，在结果里写清需在 vinci 本机跑的 fish 命令。**box 上没有测试书，未跑；命令见结果。按本单要求，不合并。**
 
 ## 验收标准
-- [x] 默认：中文文字书在 Kobo、汉王上不再因 `is_zh_text` 而竖排；`--on` 或原书已竖排的仍竖排；`--off` 强制横排。有测试覆盖（含目录清单、`--auto` 回到新默认）。（固定版式缺口见审查，尚未修。）
+- [x] 默认：中文文字书在 Kobo、汉王上不再因 `is_zh_text` 而竖排；`--on` 或原书已竖排的仍竖排；`--off` 强制横排。有测试覆盖（含目录清单、`--auto` 回到新默认）。固定版式（含原书已竖排的）默认和 `--on` 都不竖排，见 `fixed_layout_native_vertical_is_never_set_vertical`。
 - [x] `is_natively_vertical` 认 writing-mode（原有）和 OPF `primary-writing-mode`（新增）；单独 spine rtl 不算。
 - [x] `--auto` 帮助和文档与新语义一致。
 - [x] Kobo、汉王一起变；bigme、kindle、ireader 的 profile 和竖排行为无变化。
 - [x] `OPTIMIZE_VERSION` = 69（表与常量一致）；`COMIC_VERSION` 仍 68。先前自动竖排的书指纹掉 `V`/`f` 并会重建。`fp_golden.txt` 若因版本号更新，在结果里说明。
 - [x] `docs/decisions.md` 写明推翻 11-11；usage / devices / architecture / README（及过时的 typesetting）已同步。
 - [x] `cargo test --workspace` 全过；clippy `-D warnings` 0 警告。（负责 bot 在独立 worktree 重跑。）
-- [ ] 真书回归：有测试书则在 `target/` 下临时目录跑并记录；没有则写明「真书回归需在 vinci 本机跑」和具体 fish 命令，**不要合并**（由负责 bot 执行这条）。结果里写明没上真机。**未跑，不合并。命令见结果。另有二审阻断（固定版式），见审查。**
+- [ ] 真书回归：有测试书则在 `target/` 下临时目录跑并记录；没有则写明「真书回归需在 vinci 本机跑」和具体 fish 命令，**不要合并**（由负责 bot 执行这条）。结果里写明没上真机。**未跑，不合并。命令见结果。固定版式阻断已在 `c3d02c1` 修好。**
 
 ## 交付物
 代码提交到任务分支并推送；「结果」填好；状态改为 done 或 blocked。任务单状态改动推 master，带 `[skip-notify]`。不要合并，不要跑二审（负责 bot 验收和二审）。box 上没有测试书时负责 bot **不要合并**。
@@ -81,56 +81,52 @@
 ```
 
 ## 结果
-- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T10:46:48+08:00–2026-11-13T10:55:54+08:00
-- base..head（验收时，含 rustfmt）：`c408e2e77784752a7a15ffc4351d0ef787d11dd5..caebf7cbc260e0939c363ec88feee331530e89e8`
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T10:46:48+08:00–2026-11-13T10:55:54+08:00；负责 bot 返工修复固定版式阻断：2026-11-13 11:09–11:20 +08:00
+- base..head（含 rustfmt 与固定版式修复）：`c408e2e77784752a7a15ffc4351d0ef787d11dd5..c3d02c127218c3d859ba80d344a48867c95a368d`
 - 提交：
   | 提交号 | 说明 |
   |---|---|
   | 5e44fce | chore: 开始执行任务单 2026-11-13-vertical-default-off [skip-notify] |
   | ecdb5d4 | feat: 竖排默认改横排，Kobo、汉王只有 --on 或原书已竖排才竖排 |
   | 9c643eb | chore: 填写任务单 2026-11-13-vertical-default-off 结果（done） [skip-notify] |
-  | caebf7c | chore(bookconv): 按 rustfmt 调整原书竖排判定新增代码的换行（负责 bot 验收时：仅新代码换行，不是整库 fmt） |
-- 改动文件（实现至 rustfmt，相对 origin/master）：`.dev/tasks/2026-11-13-vertical-default-off.md`、`README.md`、`crates/bookconv/src/optimize/mod.rs`、`crates/bookconv/src/vertical.rs`、`crates/library/src/bin/booklib/main.rs`、`crates/library/src/generate.rs`、`crates/library/src/lib.rs`、`crates/library/src/session.rs`、`crates/library/src/vertical.rs`、`crates/library/tests/common/mod.rs`、`crates/library/tests/flow.rs`、`crates/library/tests/fp_golden.txt`、`docs/architecture.md`、`docs/decisions.md`、`docs/development.md`、`docs/devices.md`、`docs/typesetting.md`、`docs/usage.md`
-- 测试（负责 bot，独立 worktree `/tmp/sheng-ren-review-vertical-default-off`，`CARGO_TARGET_DIR=/home/box/repos/sheng-ren/target`，`rustup run stable`，rustc 1.99.1）：
-  - `cargo test --workspace` 全过：bookbase 30、bookconv 553、csscascade 16、kfx 53、library 79 / bin 7 / cli 14 / flow 60 / fp_golden 1、profile 19。
+  | caebf7c | chore(bookconv): 按 rustfmt 调整原书竖排判定新增代码的换行 |
+  | 5e74479 | chore: 填写任务单 2026-11-13-vertical-default-off 审查（有阻断，不合并） [skip-notify] |
+  | c3d02c1 | fix: 竖排判定在判断链最前排除固定版式和漫画 |
+- 改动文件（实现至修复，相对 origin/master 的功能文件）：`.dev/tasks/2026-11-13-vertical-default-off.md`、`.dev/tasks/2026-11-13-vertical-default-off.agy.md`、`README.md`、`crates/bookconv/src/optimize/mod.rs`、`crates/bookconv/src/vertical.rs`、`crates/library/src/bin/booklib/main.rs`、`crates/library/src/generate.rs`、`crates/library/src/lib.rs`、`crates/library/src/session.rs`、`crates/library/src/vertical.rs`、`crates/library/tests/common/mod.rs`、`crates/library/tests/flow.rs`、`crates/library/tests/fp_golden.txt`、`docs/architecture.md`、`docs/decisions.md`、`docs/development.md`、`docs/devices.md`、`docs/typesetting.md`、`docs/usage.md`
+- 固定版式修复（`c3d02c1`）：`Library::vertical_for` 把 `comic_of` 与 `is_fixed_layout` 的排除提到判断链最前（`vertical_text` 之后、覆盖与默认之前），`--on`、目录覆盖、默认分支共用。读不到原件时 `is_fixed_layout` 用 `unwrap_or(false)`，与默认「读不到按横排」一致。补夹具 `sample_epub_vertical_fixed`（原书 CSS 竖排 + OPF `fixed-layout=true`，非漫画）和测试 `fixed_layout_native_vertical_is_never_set_vertical`：汉王、Kobo 上默认和 `--on` 都不竖排（无 `Vf`、不挂 `eink-vertical.css`、`vertical_for` 为 false）。
+- 测试（负责 bot，独立 worktree `/tmp/sheng-ren-review-vertical-default-off`，`CARGO_TARGET_DIR=/home/box/repos/sheng-ren/target`，`rustup run stable`，rustc 1.99.1；修复后再跑一遍）：
+  - `cargo test --workspace` 全过：bookbase 30、bookconv 553、csscascade 16、kfx 53、library 79 / bin 7 / cli 14 / flow **61**（新增 1 个）/ fp_golden 1、profile 19。
   - `cargo clippy --workspace --all-targets -- -D warnings`：0 警告。
-  - `cargo fmt --all -- --check`：仅 `crates/bookconv/src/vertical.rs` 新增换行不过；已只 fmt 该文件并提交 `caebf7c`，之后 `--check` 干净。
-- 版本号：`OPTIMIZE_VERSION` 68→69（`crates/bookconv/src/optimize/mod.rs:175` 常量与上方 v69 变更说明，与 `docs/development.md` 版本号表第 100 行一致）；`COMIC_VERSION` 仍 68。profile toml 未改。
-- `fp_golden.txt`：`UPDATE_FP_GOLDEN=1` 重写，仍 660 行。文字书段 68→69，漫画段仍 c68。旧文件 131 行带 `Vf`，新文件 **0 行**带 `Vf`：黄金对拍用的是横排 `sample_epub`、没有 `--on`、也不是原书竖排；翻 `vertical_text` 的 mutation 也不再出 `V`/`f`（只开能力、默认仍横排，符合新语义）。执行方写「Kobo/掌阅/Kindle 行掉 V/f」不精确：掌阅 / Kindle / Bigme 默认本来就没有 `V`/`f`，掉的是 Kobo / 汉王全部文字书行，以及把 `vertical_text` 翻成 true 的 mutation 行。`--on` / 原书已竖排仍带 `Vf` 由 `flow.rs` 的 `vertical_books_follow_profile_overrides_and_directory_lists` 断言，黄金文件本身不再覆盖这条路径。
-- 遇到的问题：无（执行方）。负责 bot 验收另见审查：二审阻断未修。
-- 偏离（包装器报 9 个文件；任务单没逐个列文件，经对照「输入 / 规则 / 分步」**全部在范围内，不是真超范围**）：
-  | 文件 | 在范围内？ | 说明 |
-  |---|---|---|
-  | `README.md` | 是 | 规则第 5 条要求同步 |
-  | `crates/bookconv/src/optimize/mod.rs` | 是 | 分步 3：`OPTIMIZE_VERSION` 68→69 及变更说明 |
-  | `crates/library/src/bin/booklib/main.rs` | 是 | 分步 2：`--auto` 帮助与命令输出 |
-  | `crates/library/src/lib.rs` | 是 | 注释同步（`zh_text` / layout 不再决定竖排），无逻辑改动 |
-  | `crates/library/src/session.rs` | 是 | 注释同步（`ContentFacts.zh_text` 不再用于竖排），无逻辑改动 |
-  | `crates/library/tests/common/mod.rs` | 是 | 新语义测试夹具 `sample_epub_vertical` |
-  | `docs/architecture.md` | 是 | 规则第 5 条要求 |
-  | `docs/devices.md` | 是 | 规则第 5 条要求 |
-  | `docs/typesetting.md` | 是 | 规则第 5 条「以及会过时的 typesetting」 |
-- 未完成：真书回归未跑；默认分支漏掉固定版式排除（见审查），未修。
+  - `cargo fmt --all -- --check`：干净（只 fmt 了本修复改过的文件）。
+- 版本号：`OPTIMIZE_VERSION` 68→69（`crates/bookconv/src/optimize/mod.rs:175` 与 `docs/development.md` 版本号表第 100 行一致）；`COMIC_VERSION` 仍 68。profile toml 未改。
+- `fp_golden.txt`：本次固定版式修复**没有再改**（相对 `caebf7c` / `c3d02c1` 之前，文件无 diff；`fp_golden` 测试仍通过）。黄金对拍用的是横排流式 `sample_epub`，不是固定版式，指纹路径不变。先前因版本号和默认横排而重写的说明仍有效：660 行，文字书 68→69，漫画 c68；旧 131 行 `Vf` 现为 0。
+- 遇到的问题：上轮二审阻断（默认分支漏固定版式）已在 `c3d02c1` 修好。
+- 偏离（包装器报 9 个文件；经对照**全部在范围内**，见上轮审查表，本次修复未新增范围外文件）。
+- 未完成：真书回归未跑（box 上无测试书）。固定版式阻断已修。
 - 运行记录：`/home/box/oc-runs/2026-11-13-vertical-default-off-20261113-104648.json`
 - 日志：`/home/box/oc-runs/2026-11-13-vertical-default-off-20261113-104648.log`
-- 模型：`opencode-go/deepseek-v4.1-flash`
-- **没跑真书回归、没上真机。** box 上没有 `~/Documents/ereader/books/`（搜过 `/home/box`、`/workspace`，无测试书；`REGRESS_BOOKS` 未设）。**真书回归需在 vinci 本机跑。** 按本单要求 **不合并**。
+- 模型：执行方 `opencode-go/deepseek-v4.1-flash`；二审 `gemini-3.8-flash-medium`
+- **没跑真书回归、没上真机。** box 上没有 `~/Documents/ereader/books/`。**真书回归需在 vinci 本机跑。** 按本单要求 **不合并**。
 
-执行方日志里的 fish 有两处错误，不要照抄：路径写成了 `~/repos/sheng-ren`（vinci 本机是 `~/Projects/sheng-ren`）；以及把 `tools/regress/run.sh` 在汉王 / Kobo 上的默认路径说成「应变更横排」——`epub-optimize` **只有** `--vertical` 才走竖排管线，自动竖排只在 `booklib` 的 `Library::vertical_for`。标准 `run.sh` 不加 `--vertical`，改动前后五个模式都应当是 `SAME`。把 master 默认（不加 `--vertical`）和新版本加 `--vertical` 去比《帷幕》《接头》也不对：旧的 `epub-optimize` 同样不会因中文自动竖排，两边本来就不该一样。下面是更正后的命令（fish；仓库 `~/Projects/sheng-ren`；书只读；产物写到 `target/`；不碰 `~/.local/share/booklib`、不往真机传）。书的实际文件名请先 `ls ~/Documents/ereader/books | rg '帷幕|接头'` 确认，不一定是 `帷幕.epub`。
+给 vinci 本机的回归命令（最终版，可直接复制粘贴；fish；仓库 `~/Projects/sheng-ren`，不是 `~/repos/sheng-ren`）。测试书只读；产物写到 `target/`；不碰 `~/.local/share/booklib`、不往真机传。
+
+说明：`epub-optimize` **只有**加 `--vertical` 才走竖排管线，自动竖排只在 `booklib` 的 `Library::vertical_for`。标准 `tools/regress/run.sh` 不加该旗标，改动前后五个模式都应当是 `SAME`，不要预期汉王 / Kobo「变横排」。书的实际文件名请先 `ls ~/Documents/ereader/books | rg '帷幕|接头'` 确认。
 
 ```fish
 cd ~/Projects/sheng-ren
 git fetch origin
 git switch task/2026-11-13-vertical-default-off
-git pull
-# 旧版从当时 master 出（竖排改动之前）；worktree 不要用 HEAD（那是新分支）
-git worktree add target/regress-base origin/master
+git pull --ff-only origin task/2026-11-13-vertical-default-off
+
+# 旧版从当时 master 出（竖排改动之前）；已有该 worktree 则跳过
+if not test -d target/regress-base
+    git worktree add target/regress-base origin/master
+end
 (cd target/regress-base; and cargo build --release -p bookconv --bin epub-optimize; and cargo build --release -p library --bin booklib)
 cargo build --release -p bookconv --bin epub-optimize
 cargo build --release -p library --bin booklib
 
-# 1）标准真书回归（docs/development.md）：epub-optimize 默认路径。
-#    五个模式都应 SAME（优化标记自 v54 不写版本号）。不要预期汉王 / Kobo「变横排」。
+# 1）标准真书回归（docs/development.md）：epub-optimize 默认路径。五个模式都应 SAME。
 for d in ireader bigme kindle hanvon kobo
     tools/regress/run.sh target/regress-base/target/release/epub-optimize target/regress/旧-$d --device=$d
     tools/regress/run.sh target/release/epub-optimize target/regress/新-$d --device=$d
@@ -152,30 +148,27 @@ set lib $PWD/target/regress-lib
 set dev $PWD/target/regress-lib-dev
 rm -rf $lib $dev $lib-old
 mkdir -p $dev/hanvon/"Internal Storage" $dev/usbms/KOBOeReader
-set -x BOOKLIB_NO_NET 1
-set -x BOOKLIB_MTP_DIR $dev
-set -x BOOKLIB_MTP_NO_MOUNT_CHECK 1
-# 挑一本普通中文文字书（不是帷幕/接头、原书也不是竖排），以及帷幕/接头的实际路径
-set books ~/Documents/ereader/books
-# 先用新 booklib：普通书在汉王 / Kobo 上 list 应显示「横排」；vertical --on 之后应「竖排」
-target/release/booklib --library=$lib track $books
+set -gx BOOKLIB_NO_NET 1
+set -gx BOOKLIB_MTP_DIR $dev
+set -gx BOOKLIB_MTP_NO_MOUNT_CHECK 1
+# 新 booklib：普通中文书（不是帷幕/接头、原书也不是竖排）在汉王 / Kobo 的 list 应显示「横排」
+target/release/booklib --library=$lib track ~/Documents/ereader/books
 target/release/booklib --library=$lib sync --no-meta --no-build
 target/release/booklib --library=$lib list
-# 再开一个旧书库对照：同一本普通中文书在旧 booklib 的汉王 / Kobo 上应是「竖排」
-target/regress-base/target/release/booklib --library=$lib-old track $books
+# 旧 booklib 对照：同一本普通中文书在汉王 / Kobo 上应是「竖排」
+target/regress-base/target/release/booklib --library=$lib-old track ~/Documents/ereader/books
 target/regress-base/target/release/booklib --library=$lib-old sync --no-meta --no-build
 target/regress-base/target/release/booklib --library=$lib-old list
-# 若要看产物：先确认只打到 $dev（booklib devices），再
+# 若要看产物：先 booklib devices 确认只打到 $dev，再
 #   target/release/booklib --library=$lib sync --device=hanvon --no-meta --force 某本书
 # 不要对 ~/.local/share/booklib 跑，也不要在没改环境变量时对真机 sync。
 ```
 
-合并之后、本机安装新 booklib，已有书库里《帷幕》《接头》的 `--on` 覆盖仍在，应继续竖排；其它先前因「中文文字书」自动竖排的，会掉 `V`/`f`、重建为横排。
+合并之后、本机安装新 booklib，已有书库里《帷幕》《接头》的 `--on` 覆盖仍在，应继续竖排；其它先前因「中文文字书」自动竖排的，会掉 `V`/`f`、重建为横排。原书已竖排、但声明了固定版式的文字书，默认和 `--on` 都不走竖排管线。
 
 ## 审查
-- 验收：**不通过**（有阻断，sheng-ren bot，2026-11-13 11:08 +08:00，审 `origin/master...caebf7c`）。**没跑真书回归、没上真机；按本单要求不合并。** 下面是 box 上独立 worktree 核对。工具链 rustup stable rustc 1.99.1。按 `Projects/_templates/review-checklist.md`「项目 bot 验收」：结果已填、状态 done；分步 1–5 完成，分步 6（真书回归）因 box 无测试书未跑；提交中文前缀加正文、无 Co-Authored-By、执行方未合并。实现主体符合方案二和任务单（默认横排、`--on` / 原书已竖排才竖排、`--auto` 回到新默认、PWM 扩展、spine rtl 不算、`is_zh_text` 只留入库记录、Kobo 与汉王一起变、三份 profile 未改、11-11 保留并标注已推翻、文档同步、版本号 69/68 一致）。测试、clippy、fmt 见结果。主体逻辑抽查：`vertical_for` 默认分支改为 `is_natively_vertical(...).unwrap_or(false)`（读不到原件按横排）；`is_natively_vertical` 在 CSS 循环之后用 `opf::meta_content` 认 `primary-writing-mode`（`vertical-rl` / `vertical-lr`，trim + 大小写不敏感）；flow 测试覆盖默认横排、原书竖排夹具、`--on` / `--off` / `--auto`、目录清单、Bigme/Kindle 不受影响，并断言 `Vf`。
-    - 包装器「偏离 9 个文件」：见结果表，**9 个都在范围内**。
-    - `OPTIMIZE_VERSION` 已加一且与 `docs/development.md` 一致（69）；`COMIC_VERSION` 68。
-    - **阻断（负责 bot 独立核对后同意二审）**：`Library::vertical_for` 默认分支漏了 `is_fixed_layout`。旧默认走 `zh_text_of` → `is_zh_text`，函数开头 `if is_fixed_layout(entries) { return false }`，所以固定版式书不会因是中文而自动竖排。`--on` 和目录覆盖分支仍有 `!self.is_fixed_layout(meta)?`。新默认只问 `is_natively_vertical`，而它只看 CSS / OPF 的 writing-mode，不排除固定版式。非漫画、自带竖排样式或 `primary-writing-mode` 的固定版式 EPUB，会走进竖排管线（挂 `eink-vertical.css`、改引号、转全角），违背任务单「漫画、固定版式一律不竖排」、函数注释和 `docs/typesetting.md`。应在默认分支同样排除（例如 `Ok(self.is_natively_vertical(meta).unwrap_or(false) && !self.is_fixed_layout(meta)?)`，或在函数开头对固定版式短路），并补测试。此缺陷修完并再验收、再二审之前 **不合并**（即便本机回归通过也不应合入未修版本）。
-- 二审：**有阻断**（agy-review，2026-11-13 11:06 +08:00，模型 gemini-3.8-flash-medium，用时 427s，回执对照 `caebf7c`，文件 `.dev/tasks/2026-11-13-vertical-default-off.agy.md`）。结论「建议返工」。负责 bot 已读回执并核对引用：阻断（默认分支漏固定版式，`crates/library/src/vertical.rs` 约 168–170 行）属实，见上；建议 1（给 `is_natively_vertical` 加进程内 SHA 缓存）不挡、本单未做；建议 2（结果缺 fish 命令、「没上真机」、提交表滞后）已在本栏和结果栏补正；线索（原件临时读不到时 `unwrap_or(false)` 导致指纹抖动）是容错，不挡，负责 bot 知悉。未核实项：agy 只读未跑测试（负责 bot 已重跑）；真书回归和真机仍未做。
-- 合并：**未合并。** 两条独立原因都足够：① box 上没跑真书回归；② 二审阻断（固定版式）未修。状态保持 **done**（不是 verified），代码留在 `task/2026-11-13-vertical-default-off`，远程分支保留。修完固定版式并在 vinci 本机跑过回归之后，再重新验收、重新二审，才能考虑合并。
+- 验收：**通过**（sheng-ren bot，2026-11-13 11:20 +08:00，审 `origin/master...c3d02c1`）。上轮阻断（默认分支漏固定版式）已在 `c3d02c1` 修好并补测。**没跑真书回归、没上真机；按本单要求不合并。** 独立 worktree 核对，rustup stable rustc 1.99.1。按 `Projects/_templates/review-checklist.md`：结果已填、状态 done；分步 1–5 完成（含返工），分步 6 因 box 无测试书未跑；提交中文前缀加正文、无 Co-Authored-By、执行方与负责 bot 均未合并。实现符合方案二和任务单；`vertical_for` 现于判断链最前排除漫画和固定版式，所有分支共用；`--on` / 目录 / 默认都不再放行固定版式；新测试覆盖汉王、Kobo 的默认与 `--on`。版本号 69/68 一致。测试、clippy、fmt 见结果。`fp_golden.txt` 本次修复未再改。
+    - 包装器「偏离 9 个文件」：上轮已核，全部在范围内；本次修复只改 `vertical.rs`、`tests/common/mod.rs`、`tests/flow.rs`，在范围内。
+    - `OPTIMIZE_VERSION` = 69，与 `docs/development.md` 一致；`COMIC_VERSION` 68。
+- 二审：**无阻断**（agy-review，2026-11-13 11:19 +08:00，模型 gemini-3.8-flash-medium，用时 215s，回执对照 `c3d02c1`，文件 `.dev/tasks/2026-11-13-vertical-default-off.agy.md`）。结论「建议通过（无代码阻断）」。负责 bot 已读回执并核对引用：上轮阻断已修属实（`vertical.rs` 约 149–169 行前置排除；新测试实际在 `flow.rs` 约 3487–3555 行，回执写的 895–968 是行号笔误，不影响结论）。建议 1（任务单滞后于 `c3d02c1`）已在本栏和结果栏补正；建议 2（真书回归未跑则不合并）已执行；建议 3（`is_natively_vertical` 进程内缓存）不挡、本单未做。线索（原件读不到时 `unwrap_or(false)` 指纹回退横排）是有意容错，不挡。未核实项：agy 只读未跑测试（负责 bot 已重跑）；真书回归和真机仍未做。
+- 合并：**未合并。** 代码阻断已清，但仍缺 vinci 本机真书回归。状态保持 **done**（不是 verified），代码留在 `task/2026-11-13-vertical-default-off`，远程分支保留。本机回归通过后再考虑 `--no-ff` 合并。
