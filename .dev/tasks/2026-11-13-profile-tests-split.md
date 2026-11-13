@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-profile-tests-split
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-13-profile-tests-split（从最新 master 切出）
-- 更新时间: 2026-11-13T13:43:12+08:00
+- 更新时间: 2026-11-13T13:46:06+08:00
 - 引用: 2026-11-12-quality-audit 发现 14 的一部分（「核实与分组」建议单 `profile-tests-split`）
 
 ## 需求原文
@@ -48,15 +48,22 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
-- 没跑真书回归、没上真机（纯重构，待本机回归确认产物逐字节不变）。
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T13:43:12+08:00–2026-11-13T13:46:06+08:00
+- base..head：`145d9d963ee745bb83ddb8f8c4bbeadd436a08f0..6ac05cc8f37aab7a215b3f8c363da6efdacf632c`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | e73044d | chore: 开始执行任务单 2026-11-13-profile-tests-split [skip-notify] |
+  | 6ac05cc | chore(profile): 把单测挪到单独的 tests.rs |
+- 改动文件：`.dev/tasks/2026-11-13-profile-tests-split.md`,`crates/profile/src/lib.rs` `crates/profile/src/tests.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/profile/src/tests.rs`
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-profile-tests-split-20261113-134312.json`
+- 日志：`/home/box/oc-runs/2026-11-13-profile-tests-split-20261113-134312.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
 <!-- 负责 bot 填写 -->
