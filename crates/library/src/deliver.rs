@@ -180,7 +180,7 @@ fn mtp_storage(point: &Path) -> Option<PathBuf> {
 /// [`put_file`] 的选项。2026-11-13 之前是四个按位置传的参数（三个 bool 挨着），传错位了编译器也看不出来，改成具名。
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PutOptions<'a> {
-    /// 放好之后删掉来源。
+    /// 保留来源文件（false 时放好后删掉来源）。
     pub(crate) keep_src: bool,
     /// `dest` 已经是逐字节相同的文件就不动它（要把 `dest` 读回来，调用方能用记录的哈希判断时传 `false`）。
     pub(crate) compare: bool,
