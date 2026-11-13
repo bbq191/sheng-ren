@@ -74,6 +74,24 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
+- 验收：**通过**（sheng-ren bot，2026-11-13 14:03–14:07 Asia/Shanghai，独立 worktree `/tmp/sheng-ren-review-pfs` @ `b598ea3`，实现提交 `9e42dbf`，对照 origin/master `0dc43d8`）。**没跑真书回归、没上真机**；待 vinci 本机回归确认产物与生成记录逐字节不变。按 `Projects/_templates/review-checklist.md`「项目 bot 验收」：结果已填、状态 done；分步 1–4 完成；提交中文前缀加正文、无 Co-Authored-By、执行方未合并。工具链 rustc 1.99.1。
+  - 偏离：oc-exec 把 `crates/library/tests/flow.rs` 标成偏离 1 个文件。任务单分步 2 允许「需要时为各情况补 flow 测试」。核对：只在 `interrupted_move_is_finished_next_time` 与 `legacy_device_prefix_is_migrated_in_records_only` 之间新增 `direct_write_stages_record_before_transfer`（41 行），未改任何已有断言或夹具。真实偏离：无。该新测试在 master `0dc43d8` 的 worktree（只临时应用这一处新增，不改实现）上同样通过（1 passed），证明 MTP 直写预登记与打断恢复的行为与改前一致。执行方开发中该测试曾红，是因为写成了 `complete(*t, Ok(true))` 而没先 `t.run()`，只改了测试本身。
+  - `prepare_file` 拆分，逐分支对照旧代码（master `0dc43d8` 约 `:793-962`）：
+    - `resolve_placement`：`output_dir`、`prev`、`copied`（以前放电脑上被用户拷上设备的文件名）、`taken`、第一次 `file_name_for(..., same_as=None)` 与改前一致。`state` 的 Rc 在函数返回时释放，等同旧代码的 `drop(state)`，发生在后续写盘之前。
+    - `RecordState`：`unchanged` 为 prev 且 `!force && fingerprint` 相同；`done` 为 unchanged 且 `path.is_file()`。与旧闭包语义相同。
+    - `settle_fresh`：① `done` 且 path==out：有未删旧位置就 `finish`，返回 `UpToDate`；② unchanged、done 为空、copied 有值、out 是文件，哈希为空或核对通过：认领，`finish`，返回 `Adopted`。条件、sha256、entry 字段（path/root/fingerprint/old/sha/audit）、写盘（`finish`）、早返回均一致。主函数再包成 `Step::Done`。
+    - 设备中途断开：同样的 `Unmounted` 文案 `{UNMOUNTED}：{}`，不生成、不改记录。
+    - `made(..., record.done)`、`direct_write`、mount、第二次 `file_name_for(..., Some(&made.src))` 一致。
+    - `stage_registration`：预登记整段原样迁入。`Some(p)`：old 过滤、同一位置重建保留指纹和 sha、`same` 的哈希+大小判断、`direct && !same` 时清指纹、`fingerprint.is_empty() || old != p.old` 时 `put_entry`（空指纹则 sha 也清空）。`None`：`reserve`，仅 `direct` 才 `put_entry`。写盘时机不变。
+    - 之后 `compare`、把 fingerprint 写回、`transfer`、`same` 则 `complete_typed(..., Ok(false))`、出错删 tmp，均一致。`?` 传播：子函数返回 `String`，主函数返回 `Error`，与改前相同。建议名称 `try_adopt_or_match_fresh` / `stage_direct_write_registration` 按任务单「可按代码现状微调」写成 `settle_fresh` / `stage_registration`，职责对应，可接受。
+  - 发现 8（`edit_state`）：**保留，不建议拆回**。五个调用点仍是「读缓存 → 克隆 → 改 → 有变化才原子写」，与改前一致：
+    - `rebase_state_case`：`changed.then_some(())`，未变不写。
+    - `flush_removed`：orphans 空或 `target` 失败仍先提前返回 0；`n > 0` 才写，否则 `unwrap_or(0)` 且不写。`target()` 的 Rc 仍在 Devices 缓存里，提前丢掉局部绑定不影响。
+    - `remove_outputs` / `retract`：没有该书则不写（旧 `continue` / `Ok(false)`）；有则 `remove` + `delete_into_orphans` 后写。retract 返回值 `removed.is_some()` 等同旧的 true/false。
+    - `hand_over_outputs`：`to` 已有或 `from` 没有则不写；否则清指纹、改记到 `to`，再写。
+    - 写盘改走 `put_state`（先 `create_dir_all` 再 `states.put`），旧代码这五处直接 `states.put`。会写盘的路径上都已有记录文件，目录本来就在，`create_dir_all` 是空操作；「没有变化不写」与失败时不更新缓存的语义不变。控制流更短，不难跟，无阻断。
+  - 版本号未动（OPTIMIZE 69、COMIC 68、KINDLE_RULES 42、CONVERT 2、WRITER 26、PIPELINE 5）；`fp_golden.txt` 与 master 逐字节相同；testdata 未动。提交 `chore(library)` 可接受（纯重构）。
+  - 测试：`cargo test --workspace` 全过：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 82 / bin 7 / cli 14 / flow 63（改前 62 + 本单 1）/ fp_golden 1，profile lib 19。`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。未对整个仓库跑 `cargo fmt`。
+  - 阻断：无。
 - 二审：
 - 合并：
