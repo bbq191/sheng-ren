@@ -1565,6 +1565,47 @@ fn interrupted_move_is_finished_next_time() {
 }
 
 #[test]
+fn direct_write_stages_record_before_transfer() {
+    // MTP 直写正式文件名：交出 Transfer 之前先记下这次的位置（指纹留空、不记哈希）。
+    // 传到一半进程没了，下次还认得这个位置是这本书的：重新生成、覆盖同一位置，传完才补上指纹。
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let lib = common::open(&lib_dir);
+    let src = base.join("书.epub");
+    std::fs::write(&src, sample_epub("书")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    let dev = profile::get("ireader").unwrap();
+    let docs = common::documents(&lib_dir, "ireader");
+    let sp = lib_dir.join("output-state/ireader.json");
+    let library::Step::Transfer(t) = lib.prepare(&m, dev, false).unwrap() else {
+        panic!("第一次要生成")
+    };
+    assert_eq!(t.book_id(), m.id);
+    let st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    let e = &st["books"][&m.id];
+    assert_eq!(e["path"], serde_json::json!(docs.join("书.epub")), "先记下位置");
+    assert_eq!(e["fingerprint"], "", "指纹留空＝没传完");
+    assert!(e.get("sha").is_none(), "半截文件不能凭哈希当成传好了");
+    drop(t); // 传到一半被打断
+    let library::Step::Transfer(t) = lib.prepare(&m, dev, false).unwrap() else {
+        panic!("没传完的要重做")
+    };
+    assert_eq!(t.book_id(), m.id);
+    let st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    assert_eq!(
+        st["books"][&m.id]["path"],
+        serde_json::json!(docs.join("书.epub")),
+        "还认得这个位置是这本书的，不改名"
+    );
+    let r = t.run();
+    lib.complete(*t, r).unwrap();
+    assert!(matches!(lib.build(&m, dev, false).unwrap(), Built::UpToDate(_)));
+}
+
+#[test]
 fn legacy_device_prefix_is_migrated_in_records_only() {
     // 旧记录写在 $XDG_RUNTIME_DIR/mtp/<小写>（这里用临时旧目录）、新路径 ~/Devices/<链接名> 链到同一个挂载点：
     // 设备接上时只改记录，不走“换位置”删除，不重传、不丢书。

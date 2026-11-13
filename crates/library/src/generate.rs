@@ -97,6 +97,29 @@ struct Plan {
     format: Format,
 }
 
+/// 一本书在这个模式下产物的位置，以及记录里的旧状态（[`Library::resolve_placement`]）。
+struct Slot {
+    /// 产物根目录（删旧文件后只在它以内删变空的目录）。
+    root: PathBuf,
+    /// 产物所在目录。
+    dir: PathBuf,
+    /// 按记录算出来的产物路径（还没考虑设备上那份和这次产物逐字节相同的同名文件）。
+    out: PathBuf,
+    /// 记录里这本书上次的条目。
+    prev: Option<StateEntry>,
+    /// 记录说产物以前放在电脑上、用户自己拷上设备的那份拷贝的文件名。
+    copied: Option<String>,
+    /// 同一轮里别的书正在传、还没记进来的文件名（小写）。
+    taken: BTreeSet<String>,
+}
+
+/// 记录里的产物现在还作不作数（[`Library::prepare_file`]）：`unchanged` 指纹没变、不是 `--force`；`done` 文件也还在。
+#[derive(Clone, Copy)]
+struct RecordState<'a> {
+    unchanged: Option<&'a StateEntry>,
+    done: Option<&'a StateEntry>,
+}
+
 impl Library {
     fn plan(&self, meta: &Meta, device: &Profile) -> Result<Plan, String> {
         if !meta.supported() {
@@ -323,12 +346,11 @@ impl Library {
         if !maybe {
             return Ok(());
         }
-        let mut state = (*state).clone();
-        let mut changed = state.migrate_prefixes(&mappings);
-        changed |= state.rebase_case_root(root);
-        if changed {
-            self.records.states.put(&sp, state)?;
-        }
+        self.edit_state(&sp, |state| {
+            let mut changed = state.migrate_prefixes(&mappings);
+            changed |= state.rebase_case_root(root);
+            changed.then_some(())
+        })?;
         Ok(())
     }
 
@@ -431,14 +453,11 @@ impl Library {
     /// 设备没接上、删不掉的记进 `orphans`，下次接上时删（[`Library::flush_removed`]）。
     pub(crate) fn remove_outputs(&self, id: &str) -> Result<(), String> {
         for (_, sp) in self.state_files() {
-            let state = self.records.states.get(&sp);
-            let Some(entry) = state.books.get(id).cloned() else {
-                continue;
-            };
-            let mut state = (*state).clone();
-            state.books.remove(id);
-            state.delete_into_orphans(entry.placements(), &self.devices);
-            self.records.states.put(&sp, state)?;
+            self.edit_state(&sp, |state| {
+                let entry = state.books.remove(id)?;
+                state.delete_into_orphans(entry.placements(), &self.devices);
+                Some(())
+            })?;
         }
         Ok(())
     }
@@ -449,16 +468,16 @@ impl Library {
     /// 新条目在这个模式下已经有自己的产物（同一内容早就在库里）的不交，旧的照常删（[`Library::remove_outputs`]）。
     pub(crate) fn hand_over_outputs(&self, from: &str, to: &str) -> Result<(), String> {
         for (_, sp) in self.state_files() {
-            let state = self.records.states.get(&sp);
-            if state.books.contains_key(to) || !state.books.contains_key(from) {
-                continue;
-            }
-            let mut state = (*state).clone();
-            if let Some(mut entry) = state.books.remove(from) {
+            self.edit_state(&sp, |state| {
+                // 新条目在这个模式下已经有自己的产物：不交，旧的照常删
+                if state.books.contains_key(to) {
+                    return None;
+                }
+                let mut entry = state.books.remove(from)?;
                 entry.fingerprint.clear();
                 state.books.insert(to.to_string(), entry);
-            }
-            self.records.states.put(&sp, state)?;
+                Some(())
+            })?;
         }
         Ok(())
     }
@@ -468,15 +487,12 @@ impl Library {
     pub fn retract(&self, id: &str, device: &Profile) -> Result<bool, String> {
         self.rebase_state_case(device)?;
         let sp = self.state_path(&device.id);
-        let state = self.records.states.get(&sp);
-        let Some(entry) = state.books.get(id).cloned() else {
-            return Ok(false);
-        };
-        let mut state = (*state).clone();
-        state.books.remove(id);
-        state.delete_into_orphans(entry.placements(), &self.devices);
-        self.records.states.put(&sp, state)?;
-        Ok(true)
+        let removed = self.edit_state(&sp, |state| {
+            let entry = state.books.remove(id)?;
+            state.delete_into_orphans(entry.placements(), &self.devices);
+            Some(())
+        })?;
+        Ok(removed.is_some())
     }
 
     /// 这台设备的生成记录里有这本书。
@@ -501,23 +517,20 @@ impl Library {
     pub fn flush_removed(&self, device: &Profile) -> Result<usize, String> {
         self.rebase_state_case(device)?;
         let sp = self.state_path(&device.id);
-        let state = self.records.states.get(&sp);
-        if state.orphans.is_empty() {
+        if self.records.states.get(&sp).orphans.is_empty() {
             return Ok(0);
         }
-        let t = self.target(device);
-        if t.is_err() {
+        if self.target(device).is_err() {
             return Ok(0);
         }
-        let mut state = (*state).clone();
-        let list = std::mem::take(&mut state.orphans);
-        let before = list.len();
-        state.delete_into_orphans(list, &self.devices);
-        let n = before - state.orphans.len();
-        if n > 0 {
-            self.records.states.put(&sp, state)?;
-        }
-        Ok(n)
+        let n = self.edit_state(&sp, |state| {
+            let list = std::mem::take(&mut state.orphans);
+            let before = list.len();
+            state.delete_into_orphans(list, &self.devices);
+            let n = before - state.orphans.len();
+            (n > 0).then_some(n)
+        })?;
+        Ok(n.unwrap_or(0))
     }
 
     /// 这本书在各模式下的产物，以及是否最新。
@@ -789,23 +802,18 @@ impl Library {
         }
     }
 
-    /// 产物是文件（电脑上、MTP 设备上）。
-    fn prepare_file(
+    /// 这本书在这个模式下的产物该放哪：产物根目录、所在目录、按记录算出来的文件名，以及记录里的旧条目、以前放在电脑上
+    /// 被用户拷上设备的那份拷贝的文件名、同一轮里别的书占着的文件名。
+    fn resolve_placement(
         &self,
         meta: &Meta,
         device: &Profile,
         target: &Target,
-        plan: Plan,
-        force: bool,
-    ) -> Result<Step, Error> {
-        let Plan {
-            fingerprint,
-            format,
-            ..
-        } = plan;
+        sp: &Path,
+        ext: &str,
+    ) -> Result<Slot, String> {
         let (root, dir) = self.output_dir(meta, device, target)?;
-        let sp = self.state_path(&device.id);
-        let state = self.records.states.get(&sp);
+        let state = self.records.states.get(sp);
         let prev = state.books.get(&meta.id).cloned();
         // 记录里这本书的产物以前放在电脑上、用户自己拷上设备的（2026-10-07 以前的做法）：设备上同一子目录里叫那个名字的文件
         // 就是那份拷贝，当成本书的（覆盖它），不另起名字、不留重复
@@ -822,41 +830,151 @@ impl Library {
         let out = dir.join(state.file_name_for(
             meta,
             &dir,
-            format.ext(),
+            ext,
             None,
             copied.as_deref(),
             &taken,
         )?);
-        drop(state);
-        let unchanged = |p: &&StateEntry| !force && p.fingerprint == fingerprint;
-        let done = prev.as_ref().filter(unchanged).filter(|p| p.path.is_file());
-        let staged = matches!(target, Target::Dir { staged: true, .. });
-        if let Some(p) = done.filter(|p| p.path == out) {
+        Ok(Slot {
+            root,
+            dir,
+            out,
+            prev,
+            copied,
+            taken,
+        })
+    }
+
+    /// 记录里的产物还是最新的就收工：位置没变、有没删掉的旧位置就补删；记录里的位置空了、设备上那份是用户拷上去的拷贝，
+    /// 就认领它。返回 `Some` 表示这轮不用生成。
+    fn settle_fresh(
+        &self,
+        meta: &Meta,
+        sp: &Path,
+        slot: &Slot,
+        fingerprint: &str,
+        record: RecordState,
+        staged: bool,
+    ) -> Result<Option<Built>, String> {
+        if let Some(p) = record.done.filter(|p| p.path == slot.out) {
             if !p.old.is_empty() {
-                self.finish(&sp, &meta.id, p.clone(), staged)?; // 上次没删掉的旧位置
+                self.finish(sp, &meta.id, p.clone(), staged)?; // 上次没删掉的旧位置
             }
-            return Ok(Step::Done(Built::UpToDate(out)));
+            return Ok(Some(Built::UpToDate(slot.out.clone())));
         }
         // 先比较：指纹没变、记录里的位置空了（以前放电脑上、用户自己挪上了设备），设备上对应的位置就是那份 → 认领，不重新生成
-        if let Some(p) = prev
-            .as_ref()
-            .filter(unchanged)
-            .filter(|_| done.is_none() && copied.is_some() && out.is_file())
+        if let Some(p) = record
+            .unchanged
+            .filter(|_| record.done.is_none() && slot.copied.is_some() && slot.out.is_file())
             // 记着哈希的要核对：同名的不一定是那份拷贝（别的书、拷了一半的）；对不上就当普通的旧文件，重新生成覆盖
             .filter(|p| {
-                p.sha.is_empty() || crate::fsutil::sha256_file(&out).is_ok_and(|h| h == p.sha)
+                p.sha.is_empty() || crate::fsutil::sha256_file(&slot.out).is_ok_and(|h| h == p.sha)
             })
         {
             let old = p
                 .placements()
                 .into_iter()
-                .filter(|x| x.path != out)
+                .filter(|x| x.path != slot.out)
                 .collect();
-            let mut entry = StateEntry::file(out.clone(), root, fingerprint, old);
+            let mut entry = StateEntry::file(
+                slot.out.clone(),
+                slot.root.clone(),
+                fingerprint.to_string(),
+                old,
+            );
             entry.sha = p.sha.clone();
             entry.audit = p.audit.clone();
-            self.finish(&sp, &meta.id, entry, staged)?;
-            return Ok(Step::Done(Built::Adopted(out)));
+            self.finish(sp, &meta.id, entry, staged)?;
+            return Ok(Some(Built::Adopted(slot.out.clone())));
+        }
+        Ok(None)
+    }
+
+    /// 写之前先把这次的位置、指纹留空记进生成记录（旧位置记进待删）：中途被打断的话，下次还认得新位置上的文件是这本书的，
+    /// 旧位置也还会删。MTP 直写正式文件名（[`direct_write`]）时半截文件只能靠这条记录认出来；电脑上不预登记（省一次整份
+    /// 记录的写），下次重新生成出逐字节相同的产物时认领它（`file_name_for` 的 `same_as`）。
+    /// 返回要记进生成记录的条目（指纹留空）和「设备上已经是这次要传的字节、不用传」。
+    fn stage_registration(
+        &self,
+        meta: &Meta,
+        sp: &Path,
+        slot: &Slot,
+        out: &Path,
+        made: &Made,
+        direct: bool,
+    ) -> Result<(StateEntry, bool), String> {
+        let mut entry =
+            StateEntry::file(out.to_path_buf(), slot.root.clone(), String::new(), Vec::new());
+        // 设备上这个位置放的就是我们上次传的、和这次逐字节相同（看记录的哈希和文件大小，不把设备上的文件读回来）
+        let mut same = false;
+        match &slot.prev {
+            Some(p) => {
+                entry.old = p
+                    .placements()
+                    .into_iter()
+                    .filter(|x| x.path != out)
+                    .collect();
+                if p.path == out {
+                    entry.fingerprint = p.fingerprint.clone(); // 同一位置重建：记录不用预先改
+                    entry.sha = p.sha.clone();
+                    same = p.sha == made.sha
+                        && std::fs::metadata(&made.src).ok().map(|m| m.len())
+                            == std::fs::metadata(out).ok().map(|m| m.len());
+                    if direct && !same {
+                        entry.fingerprint.clear(); // 指纹没变（强制重建）时，写到一半被打断的半截会被当成传好了
+                    }
+                }
+                // 换位置：先把记录改成新位置（指纹留空＝没完成），旧位置记进待删——中途被打断的话，下次还认得新位置上的
+                // 文件是这本书的，旧位置也还会删
+                if entry.fingerprint.is_empty() || entry.old != p.old {
+                    // 没完成的：哈希也留空（原地覆写到一半，设备上的已不是记着的那份，下次不能凭哈希当成一样）
+                    let mut pre = entry.clone();
+                    if pre.fingerprint.is_empty() {
+                        pre.sha.clear();
+                    }
+                    self.put_entry(sp, &meta.id, pre)?;
+                }
+            }
+            // 新书：传的过程中这个文件名先在内存里占住，同一轮里同名的别的书不会选它。电脑上不预登记（省一次整份记录的写），
+            // 中途被打断的话，下次重新生成出逐字节相同的产物时认领它（`file_name_for` 的 `same_as`）；MTP 设备上直接写正式
+            // 文件名，半截文件认领不了，要预登记
+            None => {
+                self.build.reserve(out, &meta.id);
+                if direct {
+                    self.put_entry(sp, &meta.id, entry.clone())?;
+                }
+            }
+        }
+        Ok((entry, same))
+    }
+
+    /// 产物是文件（电脑上、MTP 设备上）。
+    fn prepare_file(
+        &self,
+        meta: &Meta,
+        device: &Profile,
+        target: &Target,
+        plan: Plan,
+        force: bool,
+    ) -> Result<Step, Error> {
+        let Plan {
+            fingerprint,
+            format,
+            ..
+        } = plan;
+        let sp = self.state_path(&device.id);
+        let slot = self.resolve_placement(meta, device, target, &sp, format.ext())?;
+        let staged = matches!(target, Target::Dir { staged: true, .. });
+        let unchanged = slot
+            .prev
+            .as_ref()
+            .filter(|p| !force && p.fingerprint == fingerprint);
+        let record = RecordState {
+            done: unchanged.filter(|p| p.path.is_file()),
+            unchanged,
+        };
+        if let Some(built) = self.settle_fresh(meta, &sp, &slot, &fingerprint, record, staged)? {
+            return Ok(Step::Done(built));
         }
         // 设备中途断开了：不生成、不改记录（不然下面会把完好的指纹、哈希清掉，接上后整本重传），报给 `build_all` 记成掉线
         if let Target::Dir { mount: Some(m), .. } = target {
@@ -868,7 +986,7 @@ impl Library {
             }
         }
         // 来源：内容没变、只是位置变了的已有产物（挪过去，不重新生成），或者新生成的
-        let made = self.made(meta, device, format, done)?;
+        let made = self.made(meta, device, format, record.done)?;
         let tmp = made.tmp.clone();
         // MTP 设备上直接写正式文件名（不经临时文件，[`direct_write`]）：写到一半被打断，正式文件名上会留下半截，所以要先登记一条指纹留空的记录，
         // 下次认得出这个位置没传完、重新传（见 `Work`）
@@ -879,55 +997,16 @@ impl Library {
         };
         let r = (|| {
             // 目录里已有一个不认识的同名文件、和这份逐字节相同（以前手工拷上去的）：认领它，不另起名字
-            let out = dir.join(self.records.states.get(&sp).file_name_for(
+            let out = slot.dir.join(self.records.states.get(&sp).file_name_for(
                 meta,
-                &dir,
+                &slot.dir,
                 format.ext(),
                 Some(&made.src),
-                copied.as_deref(),
-                &taken,
+                slot.copied.as_deref(),
+                &slot.taken,
             )?);
-            let mut entry = StateEntry::file(out.clone(), root, String::new(), Vec::new());
-            // 设备上这个位置放的就是我们上次传的、和这次逐字节相同（看记录的哈希和文件大小，不把设备上的文件读回来）
-            let mut same = false;
-            match &prev {
-                Some(p) => {
-                    entry.old = p
-                        .placements()
-                        .into_iter()
-                        .filter(|x| x.path != out)
-                        .collect();
-                    if p.path == out {
-                        entry.fingerprint = p.fingerprint.clone(); // 同一位置重建：记录不用预先改
-                        entry.sha = p.sha.clone();
-                        same = p.sha == made.sha
-                            && std::fs::metadata(&made.src).ok().map(|m| m.len())
-                                == std::fs::metadata(&out).ok().map(|m| m.len());
-                        if direct && !same {
-                            entry.fingerprint.clear(); // 指纹没变（强制重建）时，写到一半被打断的半截会被当成传好了
-                        }
-                    }
-                    // 换位置：先把记录改成新位置（指纹留空＝没完成），旧位置记进待删——中途被打断的话，下次还认得新位置上的
-                    // 文件是这本书的，旧位置也还会删
-                    if entry.fingerprint.is_empty() || entry.old != p.old {
-                        // 没完成的：哈希也留空（原地覆写到一半，设备上的已不是记着的那份，下次不能凭哈希当成一样）
-                        let mut pre = entry.clone();
-                        if pre.fingerprint.is_empty() {
-                            pre.sha.clear();
-                        }
-                        self.put_entry(&sp, &meta.id, pre)?;
-                    }
-                }
-                // 新书：传的过程中这个文件名先在内存里占住，同一轮里同名的别的书不会选它。电脑上不预登记（省一次整份记录的写），
-                // 中途被打断的话，下次重新生成出逐字节相同的产物时认领它（`file_name_for` 的 `same_as`）；MTP 设备上直接写正式
-                // 文件名，半截文件认领不了，要预登记
-                None => {
-                    self.build.reserve(&out, &meta.id);
-                    if direct {
-                        self.put_entry(&sp, &meta.id, entry.clone())?;
-                    }
-                }
-            }
+            let (mut entry, same) =
+                self.stage_registration(meta, &sp, &slot, &out, &made, direct)?;
             // 记录里没有哈希（不是我们传的、或旧记录）时才把设备上的读回来比
             let compare = entry.sha.is_empty();
             entry.fingerprint = fingerprint.clone();
@@ -936,7 +1015,7 @@ impl Library {
                 device,
                 sp.clone(),
                 made,
-                done.map(|p| p.path.clone()),
+                record.done.map(|p| p.path.clone()),
                 entry,
                 Work {
                     out,
@@ -1150,6 +1229,22 @@ impl Library {
     /// 删掉所有留着的中间文件（一轮生成结束时调）。
     pub fn release_prepared(&self) {
         self.build.release_prepared();
+    }
+
+    /// 读这个模式的生成记录、克隆一份交给 `f` 改：`f` 返回 `Some` 才原子写回（`None`＝什么都不用改、不写），并原样返回它的结果。
+    fn edit_state<R>(
+        &self,
+        sp: &Path,
+        f: impl FnOnce(&mut State) -> Option<R>,
+    ) -> Result<Option<R>, String> {
+        let mut state = (*self.records.states.get(sp)).clone();
+        match f(&mut state) {
+            Some(v) => {
+                self.put_state(sp, state)?;
+                Ok(Some(v))
+            }
+            None => Ok(None),
+        }
     }
 
     /// 改写这个模式的生成记录（原子写）。
