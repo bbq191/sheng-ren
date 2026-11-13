@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-profile-tests-split
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: 待定
 - 分支: task/2026-11-13-profile-tests-split（从最新 master 切出）
-- 更新时间: 2026-11-13T09:45+08:00
+- 更新时间: 2026-11-13T13:43:12+08:00
 - 引用: 2026-11-12-quality-audit 发现 14 的一部分（「核实与分组」建议单 `profile-tests-split`）
 
 ## 需求原文
