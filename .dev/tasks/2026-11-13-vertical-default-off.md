@@ -5,7 +5,7 @@
 - 状态: accepted
 - 执行方: box-agent
 - 分支: task/2026-11-13-vertical-default-off（从最新 master 切出）
-- 更新时间: 2026-11-13T10:48+08:00
+- 更新时间: 2026-11-13T10:46:48+08:00
 - 引用: vinci 2026-11-13 10:26 在 sheng-ren 聊天里选方案二；推翻 `docs/decisions.md` 11-11「中文文字书全部竖排」；上次只读调查（`Library::vertical_for`）
 
 ## 需求原文
