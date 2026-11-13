@@ -1034,7 +1034,7 @@ impl Library {
         let mut opts = bookconv::optimize::OptimizeOpts::for_profile(device);
         // 按书指定翻页方向（Bangumi 判成日本漫画的 rtl）；其余留给原书、profile
         opts.page_direction = crate::metadata::comic_direction(meta, device, comic);
-        // 竖排（书自己的 layout.vertical → 目录清单 → 自动判定；漫画、固定版式不竖排）
+        // 竖排（书自己的 layout.vertical → 目录清单 → 原书本来是否竖排；默认横排，漫画、固定版式不竖排）
         opts.set_vertical(self.vertical_for(meta, device)?);
         // 要转 KFX 的，优化结果先放临时目录
         let optimized = if format == Format::Epub {

@@ -7,7 +7,8 @@
 //! - Bigme（xReader）不竖排、KOReader（上游）也不会竖排 → Bigme 不开。
 //!
 //! 本模块只做与设备无关的判定和文字 / CSS 改写；开关来自 profile（`vertical_text`、`vertical_ascii`），
-//! 哪本书竖排由书库按书决定（书自己的 `layout.vertical` → 目录清单 → 自动判定）。
+//! 哪本书竖排由书库按书决定（书自己的 `layout.vertical` → 目录清单 → 原书本来是不是竖排；默认横排，
+//! 2026-11-13 推翻「中文文字书全部竖排」，见 `docs/decisions.md`）。
 
 use crate::epubzip::Entry;
 use crate::html;
@@ -135,7 +136,9 @@ pub fn is_zh_text(entries: &[Entry]) -> bool {
 }
 
 /// 原书本来就是竖排：任一样式表或 `<style>` 里根元素 / 正文块写了 `writing-mode: vertical-*`（认 `-webkit-`、
-/// `-epub-` 前缀），或 `<html>`/`<body>` 的行内 `style` 这么写。
+/// `-epub-` 前缀），`<html>`/`<body>` 的行内 `style` 这么写，或 OPF 的
+/// `<meta name="primary-writing-mode" content="vertical-rl|vertical-lr">`。单独的 spine `page-progression-direction="rtl"`
+/// 不算（漫画也常写 rtl）。
 pub fn is_natively_vertical(entries: &[Entry]) -> bool {
     static VERTICAL_DECL: OnceLock<Regex> = OnceLock::new();
     let re = VERTICAL_DECL.get_or_init(|| {
@@ -163,7 +166,17 @@ pub fn is_natively_vertical(entries: &[Entry]) -> bool {
             }
         }
     }
-    false
+    // OPF 2 的 `<meta name="primary-writing-mode">`（EPUB 3 的 rendition:flow 不在本单范围）
+    crate::wash::parse_opf(entries).is_some_and(|o| {
+        opf::meta_content(
+            &String::from_utf8_lossy(&entries[o.index].data),
+            "primary-writing-mode",
+        )
+        .is_some_and(|v| {
+            let v = v.trim();
+            v.eq_ignore_ascii_case("vertical-rl") || v.eq_ignore_ascii_case("vertical-lr")
+        })
+    })
 }
 
 fn inline_vertical(html: &str) -> bool {
@@ -854,6 +867,33 @@ mod tests {
             e("O/s.css", "html table{writing-mode:vertical-rl}"),
         ];
         assert!(!is_natively_vertical(&nested_table));
+        // OPF 2 的 primary-writing-mode 也算（大小写不敏感），单独的 spine rtl 不算
+        let primary = book(
+            r#"<dc:language>zh</dc:language><meta name="primary-writing-mode" content="vertical-rl"/>"#,
+            &[zh],
+        );
+        assert!(is_natively_vertical(&primary), "OPF primary-writing-mode");
+        let primary_lr = book(
+            r#"<dc:language>zh</dc:language><meta name="primary-writing-mode" content=" Vertical-LR "/>"#,
+            &[zh],
+        );
+        assert!(
+            is_natively_vertical(&primary_lr),
+            "primary-writing-mode 大小写不敏感，vertical-lr 也算"
+        );
+        let primary_horizontal = book(
+            r#"<dc:language>zh</dc:language><meta name="primary-writing-mode" content="horizontal-tb"/>"#,
+            &[zh],
+        );
+        assert!(!is_natively_vertical(&primary_horizontal));
+        let spine_rtl = vec![e(
+            "O/content.opf",
+            r#"<package><metadata/><manifest/><spine page-progression-direction="rtl"><itemref idref="c"/></spine></package>"#,
+        )];
+        assert!(
+            !is_natively_vertical(&spine_rtl),
+            "单独的 spine rtl 不算全书竖排（漫画也会写 rtl）"
+        );
     }
 
     #[test]

@@ -192,12 +192,13 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
     Command {
         name: "vertical",
         synopsis: &["vertical --on|--off|--auto <书或目录>…"],
-        brief: "这本 / 这个目录下的书竖不竖排（自动判定之外的按书、按目录覆盖）",
+        brief: "这本 / 这个目录下的书竖不竖排（默认横排，原书本来就竖排的仍竖排；覆盖按书、按目录）",
         detail: "\
 只对开了 vertical_text 的设备（Kobo、汉王）有意义；漫画、固定版式书不竖排。
-  --on    强制竖排（自动判定没认出的中文书）
-  --off   不竖排
-  --auto  删掉覆盖，回到自动判定
+默认横排；原书本来就竖排（样式或 OPF 写着 writing-mode / primary-writing-mode）的仍竖排。
+  --on    强制竖排
+  --off   强制横排（原书已竖排的也关掉）
+  --auto  删掉覆盖，回到默认（横排；原书已竖排的仍竖排）
 给书：写 / 删这本书的覆盖；给目录：写进书库根的 vertical.toml（相对书根目录、前缀匹配），
 并把这个目录下现有的书逐本写上，以后入库到这个目录的书继承。最长前缀胜。
 相对路径先按当前目录找，找不到按书根目录找。",
@@ -903,7 +904,7 @@ fn check_vertical(c: &Command, a: &Args) {
     let n = ["on", "off", "auto"].iter().filter(|f| a.has(f)).count();
     if n != 1 {
         usage_error(
-            "vertical 要选一种：--on（强制竖排）、--off（不竖排）或 --auto（回到自动判定）",
+            "vertical 要选一种：--on（强制竖排）、--off（强制横排）或 --auto（删掉覆盖，回到默认）",
         );
     }
     if a.pos.len() < 2 {
@@ -949,8 +950,8 @@ fn cmd_vertical(ctx: &Ctx) {
                     m.title,
                     match value {
                         Some(true) => "强制竖排",
-                        Some(false) => "不竖排",
-                        None => "自动判定",
+                        Some(false) => "强制横排",
+                        None => "回到默认（横排；原书已竖排的仍竖排）",
                     }
                 ),
                 Err(e) => ctx.fail_line(&e),

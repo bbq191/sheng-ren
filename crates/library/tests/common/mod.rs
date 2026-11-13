@@ -55,6 +55,62 @@ pub fn sample_epub(title: &str) -> Vec<u8> {
     sample_epub_with(title, "")
 }
 
+/// 原书本来就竖排的中文文字书（章节里 `<style>html{writing-mode:vertical-rl}</style>`）。
+pub fn sample_epub_vertical(title: &str) -> Vec<u8> {
+    let long = "正文段落，足够长的文字内容，确保标题页之后的内容超过门槛。".repeat(5);
+    let mut book = Book {
+        meta: BookMeta {
+            book_id: "v".into(),
+            title: title.into(),
+            author: "作者".into(),
+            language: "zh".into(),
+            publisher: "".into(),
+            cover: None,
+            cover_ext: "jpg".into(),
+            cover_media_type: "image/jpeg".into(),
+            subjects: Vec::new(),
+        },
+        chapters: vec![Chapter {
+            title: "第一章".into(),
+            html_body: format!(
+                "<style>html{{writing-mode:vertical-rl}}</style><h1>第一章</h1><p>{long}</p>"
+            ),
+            level: 1,
+        }],
+        resources: vec![],
+        nav: vec![],
+    };
+    assemble(&mut book).unwrap()
+}
+
+/// 原书已竖排、但声明了固定版式的中文文字书（非漫画）：CSS `writing-mode: vertical-rl`，
+/// 再在 OPF 里加上 `<meta name="fixed-layout" content="true"></meta>`。
+pub fn sample_epub_vertical_fixed(title: &str) -> Vec<u8> {
+    let raw = sample_epub_vertical(title);
+    let entries = bookconv::epubzip::read_entries(&raw).unwrap();
+    let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    for e in &entries {
+        if e.name == "mimetype" {
+            continue;
+        }
+        if e.name.ends_with(".opf") {
+            let s = String::from_utf8(e.data.clone()).expect("OPF 是 UTF-8");
+            assert!(
+                s.contains("</metadata>"),
+                "assemble 的 OPF 有 metadata 收尾"
+            );
+            let s = s.replace(
+                "</metadata>",
+                r#"<meta name="fixed-layout" content="true"></meta></metadata>"#,
+            );
+            w.put(&e.name, s.as_bytes()).unwrap();
+        } else {
+            w.put(&e.name, &e.data).unwrap();
+        }
+    }
+    w.finish().unwrap().into_inner()
+}
+
 /// 书名相同、正文不同的书（`marker` 写进第一段开头）：同名同作者的另一个版本。
 pub fn sample_epub_with(title: &str, marker: &str) -> Vec<u8> {
     let long = format!(

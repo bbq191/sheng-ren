@@ -53,7 +53,7 @@
 |---|---|
 | `booklib add <文件或网址>...` | 入库单个文件或网址（一次性） |
 | `booklib track [--device=…] [--top] <目录或书>...` / `untrack [--device=…] <目录或书>...` | 跟踪书目录（递归）或单本书，可以只给某几台设备 / 不再跟踪（下次 `sync` 连同产物删掉） |
-| `booklib vertical --on\|--off\|--auto <书或目录>...` | 这本 / 这个目录下的书竖不竖排（自动判定之外的覆盖；只对 Kobo、汉王这类开了 `vertical_text` 的设备有意义，漫画、固定版式不竖排） |
+| `booklib vertical --on\|--off\|--auto <书或目录>...` | 这本 / 这个目录下的书竖不竖排（默认横排；覆盖按书、按目录；只对 Kobo、汉王这类开了 `vertical_text` 的设备有意义，漫画、固定版式不竖排） |
 | `booklib sync [--device=…] [--force] [--no-build] [--keep] [--watch[=秒]] [书...]` | 把跟踪的目录同步进书库（原件删了的连同设备上的产物删掉），接着按阅读模式生成、传到接着的设备 |
 | `booklib list [书...]` | 列出书和各设备上的产物、生成记录是否最新（设备上的不核对文件） |
 | `booklib meta --fetch [--force] [--clear] [书...]` | 联网补简介、标签、封面 |
@@ -195,15 +195,15 @@ booklib sync --watch                      # 一直运行，每 60 秒查一次�
 
 ### vertical：按书 / 按目录覆盖竖排
 
-Kobo、汉王的中文文字书按判定自动竖排（判定和规则见 `docs/typesetting.md` 的「竖排」一节）；判错或想例外时用：
+Kobo、汉王上**默认横排**；只有 `--on`（逐书或目录）或原书本来就竖排（样式里的 `writing-mode: vertical-*`，或 OPF 的 `primary-writing-mode`）才竖排。判错或想例外时用：
 
 ```sh
-booklib vertical --off 三体              # 这本不竖排（书名片段、id 或原件路径，同 list）
 booklib vertical --on 技术               # 这个目录强制竖排；写进书库根的 vertical.toml，现有的书逐本写上，新入库的继承
-booklib vertical --auto 技术             # 删掉目录覆盖，回到自动判定
+booklib vertical --off 三体              # 这本强制横排（原书本来就竖排的也关掉；书名片段、id 或原件路径，同 list）
+booklib vertical --auto 技术             # 删掉目录覆盖，回到默认（横排；原书已竖排的仍竖排）
 ```
 
-- 优先级：书自己的 `layout.vertical` → `vertical.toml` 目录清单（最长前缀胜）→ 自动判定。
+- 优先级：书自己的 `layout.vertical` → `vertical.toml` 目录清单（最长前缀胜）→ 原书本来是否竖排（默认横排）。
 - 只对开了 `vertical_text` 的设备有意义；漫画、固定版式书强制 `--on` 也不会竖排。`booklib list` 的设备行会显示 `竖排` / `横排`。
 
 ### meta --fetch：联网补元数据和封面

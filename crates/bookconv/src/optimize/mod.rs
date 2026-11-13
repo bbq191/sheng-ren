@@ -168,7 +168,11 @@ pub const READER_MARGINS_MARKER: &str = "META-INF/eink-reader-margins";
 ///   竖排样式表、书 CSS 盒子横转竖、spine rtl、`primary-writing-mode`），成对的“”‘’ → 『』「」、成对的 ASCII 直引号也转，
 ///   `vertical_ascii = "fullwidth"` 时正文和目录的 ASCII 转全角。另外 Kobo 全部文字书的注释改成弹窗（规则 7）。
 ///   汉王的漫画、非中文书、被 --off 退出的书，以及 Bigme、Kindle、掌阅逐字节不变。
-pub const OPTIMIZE_VERSION: &str = "68";
+/// - 69（2026-11-13，推翻 11-11「中文文字书全部竖排」）：Kobo、汉王上**默认改横排**，只有书的 `layout.vertical = true`
+///   （逐书或目录 `vertical.toml` 的 `--on`）或原书本来就竖排（样式 / OPF `primary-writing-mode`）才走竖排管线；
+///   先前因「是中文书」自动竖排的书掉 `V`/`f`、产物变横排（不再改引号、不转全角）。`--on` 的和原书已竖排的仍竖排、
+///   仍带 `V`/`f`。Bigme、Kindle、掌阅的 profile 和竖排行为不变（只因版本号过期重建，内容没变的逐字节相同）。
+pub const OPTIMIZE_VERSION: &str = "69";
 
 /// 优化逻辑版本（**漫画**这一路：裁边、缩放补白、灰度、固定版式……）。和 [`OPTIMIZE_VERSION`] 分开（2026-10-08）：只改了文字书的规则时
 /// 漫画不过期、不重新生成——v52 那次两路共用一个版本号，漫画全部白白重建、掌阅上的还因为产物里的标记（[`OPTIMIZE_MARKER`]）变了全部重传。
