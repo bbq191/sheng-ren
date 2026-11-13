@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-vertical-default-off
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: box-agent
 - 分支: task/2026-11-13-vertical-default-off（从最新 master 切出）
-- 更新时间: 2026-11-13T10:46:48+08:00
+- 更新时间: 2026-11-13T10:55:54+08:00
 - 引用: vinci 2026-11-13 10:26 在 sheng-ren 聊天里选方案二；推翻 `docs/decisions.md` 11-11「中文文字书全部竖排」；上次只读调查（`Library::vertical_for`）
 
 ## 需求原文
@@ -81,17 +81,30 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 版本号：OPTIMIZE_VERSION ？；fp_golden 是否更新：
-- 真书回归：
-- 遇到的问题：
-- 偏离：无
-- 未完成：
-- 没上真机。
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T10:46:48+08:00–2026-11-13T10:55:54+08:00
+- base..head：`c408e2e77784752a7a15ffc4351d0ef787d11dd5..ecdb5d44b011bfc22b95497468b8e620b07c47c0`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 5e44fce | chore: 开始执行任务单 2026-11-13-vertical-default-off [skip-notify] |
+  | ecdb5d4 | feat: 竖排默认改横排，Kobo、汉王只有 --on 或原书已竖排才竖排 |
+- 改动文件：`.dev/tasks/2026-11-13-vertical-default-off.md`,`README.md` `crates/bookconv/src/optimize/mod.rs`,`crates/bookconv/src/vertical.rs` `crates/library/src/bin/booklib/main.rs`,`crates/library/src/generate.rs` `crates/library/src/lib.rs`,`crates/library/src/session.rs` `crates/library/src/vertical.rs`,`crates/library/tests/common/mod.rs` `crates/library/tests/flow.rs`,`crates/library/tests/fp_golden.txt` `docs/architecture.md`,`docs/decisions.md` `docs/development.md`,`docs/devices.md` `docs/typesetting.md`,`docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `README.md`
+  - `crates/bookconv/src/optimize/mod.rs`
+  - `crates/library/src/bin/booklib/main.rs`
+  - `crates/library/src/lib.rs`
+  - `crates/library/src/session.rs`
+  - `crates/library/tests/common/mod.rs`
+  - `docs/architecture.md`
+  - `docs/devices.md`
+  - `docs/typesetting.md`
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-vertical-default-off-20261113-104648.json`
+- 日志：`/home/box/oc-runs/2026-11-13-vertical-default-off-20261113-104648.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
 <!-- 负责 bot 填写 -->
