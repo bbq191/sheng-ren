@@ -2,10 +2,11 @@
 
 - Task ID: 2026-11-12-quality-audit
 - 负责 bot: sheng-ren
+- 状态: done
 - 类型: 审查要求（只读，不是开发任务单；不改代码、不建分支）
 - 执行方: agy（vinci 手动运行，`agy --mode plan -p`）
 - 基于: master `9e38e74`
-- 更新时间: 2026-11-12T10:20+08:00
+- 更新时间: 2026-11-13T09:45+08:00
 - 回执: `.dev/tasks/2026-11-12-quality-audit.agy.md`
 
 ## 需求原文
@@ -120,8 +121,36 @@ N. 标题
 回执的小改动第 3 条（`lib.rs:499` 删掉清理设备目录）**不算小改动**：会改变设备上残留临时文件的清理，归第 1 张任务单。第 4 条（`deliver.rs:393`）价值低，不做。
 
 ### 要 vinci 定的
-- `AGENTS.md` / `CONTRIBUTING.md` 的"新分支、维护者合并"和 `Projects/工作流.md` 的"负责 bot 合并"以哪个为准；任务单提交在 master 还是任务分支。
-- 第 8 张单（Move 时代的怪癖字段）要不要做。
+- ~~`AGENTS.md` / `CONTRIBUTING.md` 的"新分支、维护者合并"和 `Projects/工作流.md` 的"负责 bot 合并"以哪个为准；任务单提交在 master 还是任务分支。~~ 已定（docs-align 需求原文）：以 `Projects/工作流.md` 为准，文档已在 `415161a` 改完。
+- 第 8 张单（Move 时代的怪癖字段，发现 6）要不要做：仍待定。清单见下「Move 字段清单」。自定义模式有没有用这些键，要看本机书库 `profiles/*.toml`。
+
+## 发现处理
+
+（2026-11-13）审查本身已完成，回执已在 master。本单状态改为 **done**（不是 verified：verified 须 vinci 本人验收）。下面按核实编号记录去向；已解决的写合并提交，仍存在的已按主题拆成后续任务单（状态 pending），「只记成发现 / 不建议改 / 由 vinci 另定」的不开开发单。拆单不改代码。
+
+| # | 发现 | 去向 |
+|---|---|---|
+| 1 | 加锁时清理临时文件会读设备目录，导致命令卡住 | 已解决：任务单 `2026-11-12-lock-no-device`，合并 `368ca6c`。相关后续（均已合入）：测试钩子与 Kobo 用例 `2026-11-12-lock-hook-kobo-test` `a485186`；`list` 不读卡死挂载 `2026-11-12-list-no-device-stall` `e9667ea`；连接清理跳过仍在写的临时文件 `2026-11-12-device-tmp-pid-guard` `92600df`。`list` / `vertical` 在卡死挂载上的真机场景未复现，不能算真机验证过。 |
+| 2 | `docs/development.md` 版本表 `WRITER_VERSION` 写的是 25 | 已解决：任务单 `2026-11-12-docs-align`，合并 `415161a`。对照 master：表与 `kfx/src/write/mod.rs` 均为 `26`。 |
+| 3 | 设备列表过时（CONTRIBUTING / architecture / README） | 已解决：同上 `415161a`。随后 `2026-11-12-dir-case-bigme-ireader` `74d8834` 把文档里 Bigme / 掌阅的投递目录改成了设备真名 `Books/`、`Documents/`。 |
+| 4 | `AGENTS.md` 分支规则与任务单工作流冲突 | 已解决：同上 `415161a`（vinci 已定以工作流为准，`AGENTS.md` / `CONTRIBUTING.md` 已改成一致）。 |
+| 5 | 掌阅、Bigme 目录名大小写和设备不一致 | 已解决：任务单 `2026-11-12-dir-case-bigme-ireader`，合并 `74d8834`。真机验收仍待 vinci：接上 Bigme / 掌阅后确认 `Books/`、`Documents/`，已有的书不重传、不丢。 |
+| 6 | Move 时代的 CSS 怪癖字段和清洗代码是死代码 | 待 vinci 决定，未开开发单。清单已写在本单「Move 字段清单」。 |
+| 7 | `put_file` 一组 bool 参数容易传错 | 拆到 `2026-11-13-deliver-put-options`（pending）。 |
+| 8 | 「读记录—克隆—改—写回」重复 | 不单独开单（核实结论：能省的样板不多，单独开单不值）；并入 `2026-11-13-prepare-file-split` 作可选顺手项。 |
+| 9 | `prepare_file` 过长 | 拆到 `2026-11-13-prepare-file-split`（pending）。 |
+| 10 | 三个大小写判断函数的关系没写清 | 已解决：`2026-11-12-docs-align` `415161a`（只补注释，已完成）。 |
+| 11 | 控制流靠匹配错误字符串的前缀 | 拆到 `2026-11-13-library-error-kinds`（pending）。 |
+| 12 | `let _ =` 吞掉错误 | 未开单（核实结论：价值低，不做）。 |
+| 13 | `kfx` 依赖整个 `bookconv` | 未开单（核实结论：依赖方向正常，拆开只省编译时间，不建议做）。 |
+| 14 | 十个文件超过 1800 行 | 测试部分拆到 `2026-11-13-profile-tests-split`（pending）。其余 9 个文件拆到 `2026-11-13-big-file-splits`（pending；执行时一次只拆一个文件）。`profile/src/lib.rs` 只挪测试，不进后一张单。 |
+| 15 | 缺少「不连设备的命令不碰设备」的测试 | 已解决：随 `2026-11-12-lock-no-device` `368ca6c` 补上；钩子真正生效见 `2026-11-12-lock-hook-kobo-test` `a485186`。 |
+
+### 未开单 / 待 vinci 决定
+
+- **发现 6**：要不要开「弃用 Move 怪癖字段」开发单。建议（仍等拍板）：建议删的字段先弃用（照样认、打警告、不再起作用），删对应清洗代码，夹具 `xochitl.toml` 改小，签名里照写常量，`fp_golden` 和五台对拍逐字节不变；标「留」的不动；`padding` 牵涉太多，要删另开单。另外 `profile/src/lib.rs:81` 说弹窗「内置的三个模式都不用」已过时（掌阅、Kobo 都是弹窗），以及若干仍在用字段的 Move 旧注释，等这张单一起改或另定。
+- **发现 8**：不单独开单，见上。
+- **发现 12、13**：不做。
 
 ## Move 字段清单
 
