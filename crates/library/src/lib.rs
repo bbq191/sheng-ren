@@ -112,11 +112,13 @@ pub struct Meta {
     /// 联网找过元数据、没找到时的匹配规则版本（[`metadata::LOOKUP_VERSION`]）：`sync` 不再自动去找；匹配规则改了（版本变了）再找一次。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub info_checked: String,
-    /// 自动判定是不是中文文字书（竖排用，`bookconv::vertical::is_zh_text`）：入库后第一次用到时判、持锁时存下。
+    /// 自动判定是不是中文文字书（`bookconv::vertical::is_zh_text`）：入库时判一次存下。2026-11-13 起**不再参与竖排决定**
+    /// （竖排默认横排，只有覆盖或原书已竖排才竖排），只留作记录。
     /// 早期条目没有；原件暂时不在时按「不竖排」算。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zh_text: Option<bool>,
-    /// 按书的版式覆盖（`meta.json` 的 `layout.vertical`）：`Some(true)` 强制竖排、`Some(false)` 不竖排、`None` 自动判定。
+    /// 按书的版式覆盖（`meta.json` 的 `layout.vertical`）：`Some(true)` 强制竖排、`Some(false)` 不竖排、`None` 回到默认
+    /// （2026-11-13 起默认横排，原书本来就竖排的仍竖排）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<Layout>,
 }
@@ -124,7 +126,7 @@ pub struct Meta {
 /// 按书的版式覆盖（[`Meta::layout`]）。
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Layout {
-    /// 竖排：`Some(true)` 强制、`Some(false)` 不竖排、`None` 自动。
+    /// 竖排：`Some(true)` 强制、`Some(false)` 不竖排、`None` 默认（原书已竖排才竖排）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vertical: Option<bool>,
 }
@@ -289,7 +291,7 @@ struct EpubInfo {
     authors: Vec<String>,
     drm: Option<String>,
     comic: bool,
-    /// 自动判定是不是中文文字书（竖排用）。
+    /// 自动判定是不是中文文字书（`bookconv::vertical::is_zh_text`；2026-11-13 起不再参与竖排决定）。
     zh_text: Option<bool>,
 }
 

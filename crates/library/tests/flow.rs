@@ -1,6 +1,6 @@
 mod common;
 
-use common::{booklib, jpeg, sample_epub, sample_epub_with};
+use common::{booklib, jpeg, sample_epub, sample_epub_vertical, sample_epub_with};
 use library::{Added, BookInfo, Built, Library, Prune};
 use std::io::Write;
 use std::path::Path;
@@ -3352,15 +3352,21 @@ fn vertical_books_follow_profile_overrides_and_directory_lists() {
     }
     std::fs::create_dir_all(dev.join("usbms/KOBOeReader")).unwrap();
     let books = dir.path().join("books");
-    std::fs::create_dir_all(books.join("文字")).unwrap();
-    let src = books.join("文字/竖排.epub");
-    std::fs::write(&src, sample_epub("竖排")).unwrap();
+    std::fs::create_dir_all(books.join("横排")).unwrap();
+    std::fs::create_dir_all(books.join("竖排")).unwrap();
+    let src = books.join("横排/普通.epub");
+    std::fs::write(&src, sample_epub("普通")).unwrap();
     lib.track(&books).unwrap();
     let Added::New(m) = lib.add_file(&src).unwrap() else {
         panic!()
     };
     assert!(lib.zh_text_of(&m).unwrap(), "样例书是中文文字书");
     assert_eq!(m.zh_text, Some(true), "入库时就存下中文判定");
+    let native_src = books.join("竖排/原书竖排.epub");
+    std::fs::write(&native_src, sample_epub_vertical("原书竖排")).unwrap();
+    let Added::New(native) = lib.add_file(&native_src).unwrap() else {
+        panic!()
+    };
 
     let opf_and_chapter = |path: &Path| {
         let entries = bookconv::epubzip::read_entries(&std::fs::read(path).unwrap())
@@ -3381,82 +3387,97 @@ fn vertical_books_follow_profile_overrides_and_directory_lists() {
             .join("\n");
         (opf, chapter)
     };
-
-    for dev_id in ["kobo", "hanvon"] {
-        let Built::Written { path, .. } =
-            lib.build(&m, profile::get(dev_id).unwrap(), true).unwrap()
-        else {
-            panic!("{dev_id} 第一次应生成")
-        };
-        let (opf, chapter) = opf_and_chapter(&path);
-        assert!(
-            opf.contains(r#"content="vertical-rl""#) && opf.contains("eink-vertical.css"),
-            "{dev_id} 应竖排：{opf}"
-        );
-        assert!(
-            chapter.contains("eink-vertical.css"),
-            "{dev_id} 章节应挂竖排样式：{chapter}"
-        );
-    }
-    for dev_id in ["bigme", "kindle"] {
-        let Built::Written { path, .. } =
-            lib.build(&m, profile::get(dev_id).unwrap(), true).unwrap()
-        else {
-            panic!("{dev_id} 第一次应生成")
-        };
-        if dev_id == "kindle" {
-            assert!(path.to_string_lossy().ends_with(".kfx"), "{path:?}");
-            continue;
-        }
-        let (opf, chapter) = opf_and_chapter(&path);
-        assert!(
-            !opf.contains("vertical-rl") && !chapter.contains("eink-vertical.css"),
-            "{dev_id} 不竖排"
-        );
-    }
-
-    // 单本 --off：Kobo 上改回横排；--auto 再回自动
-    let kobo = profile::get("kobo").unwrap();
     let fresh = |id: &str| {
         lib.list()
             .into_iter()
             .find(|x| x.id == id)
             .unwrap_or_else(|| panic!("没有 {id}"))
     };
-    lib.set_book_vertical(&m.id, Some(false)).unwrap();
-    let b = lib.build(&fresh(&m.id), kobo, true).unwrap();
-    let (opf, _) = opf_and_chapter(built_path(&b));
-    assert!(!opf.contains("vertical-rl"), "单本关掉后横排：{opf}");
-    lib.set_book_vertical(&m.id, None).unwrap();
-    let b = lib.build(&fresh(&m.id), kobo, true).unwrap();
-    let (opf, _) = opf_and_chapter(built_path(&b));
-    assert!(opf.contains("vertical-rl"), "--auto 回到自动判定");
+    let check = |m: &library::Meta, dev_id: &str, want: bool, why: &str| {
+        let b = lib
+            .build(&fresh(&m.id), profile::get(dev_id).unwrap(), true)
+            .unwrap();
+        let path = built_path(&b).to_path_buf();
+        // 指纹：走竖排管线的书在 info 段后带 `V`，全角 ASCII（Kobo、汉王）再接 `f`
+        let state = std::fs::read(lib_dir.join(format!("output-state/{dev_id}.json")))
+            .unwrap_or_else(|e| panic!("{dev_id} 生成记录：{e}"));
+        let v: serde_json::Value = serde_json::from_slice(&state).unwrap();
+        let fp = v["books"][&m.id]["fingerprint"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{dev_id} 没有 {} 的指纹：{v}", m.id));
+        assert_eq!(fp.contains("Vf|"), want, "{dev_id} {why} 指纹：{fp}");
+        if dev_id == "kindle" {
+            assert!(path.to_string_lossy().ends_with(".kfx"), "{path:?}");
+            return;
+        }
+        let (opf, chapter) = opf_and_chapter(&path);
+        assert_eq!(
+            opf.contains(r#"content="vertical-rl""#),
+            want,
+            "{dev_id} {why}：{opf}"
+        );
+        assert_eq!(
+            chapter.contains("eink-vertical.css"),
+            want,
+            "{dev_id} {why}：{chapter}"
+        );
+    };
 
-    // 目录 --off：vertical.toml 记上、现有的书跟着关；新入库到同目录的书继承
-    assert_eq!(lib.set_dir_vertical("文字", Some(false)).unwrap(), 1);
-    let b = lib.build(&fresh(&m.id), kobo, true).unwrap();
-    let (opf, _) = opf_and_chapter(built_path(&b));
-    assert!(!opf.contains("vertical-rl"), "目录关掉后横排：{opf}");
+    // 默认横排：中文文字书不再因为是中文书就竖排（Kobo、汉王一起改）
+    for dev_id in ["kobo", "hanvon"] {
+        check(&m, dev_id, false, "默认横排");
+    }
+    // 原书本来就竖排的：默认仍竖排
+    for dev_id in ["kobo", "hanvon"] {
+        check(&native, dev_id, true, "原书已竖排");
+    }
+    // 没开 vertical_text 的设备：默认横排，原书竖排的也不走竖排管线
+    for dev_id in ["bigme", "kindle"] {
+        check(&m, dev_id, false, "默认横排");
+        check(&native, dev_id, false, "设备没开 vertical_text");
+    }
+
+    // 单本覆盖：--on 强制竖排、--off 强制横排（原书已竖排的也能关掉）、--auto 回到默认
+    lib.set_book_vertical(&m.id, Some(true)).unwrap();
+    check(&m, "kobo", true, "--on");
+    lib.set_book_vertical(&m.id, Some(false)).unwrap();
+    check(&m, "kobo", false, "--off");
+    lib.set_book_vertical(&m.id, None).unwrap();
+    check(&m, "kobo", false, "--auto 回到默认（横排）");
+    lib.set_book_vertical(&native.id, Some(false)).unwrap();
+    check(&native, "kobo", false, "--off 关掉原书竖排");
+    lib.set_book_vertical(&native.id, None).unwrap();
+    check(&native, "kobo", true, "--auto 回到默认（原书已竖排）");
+
+    // 目录 --on：vertical.toml 记上、现有的书跟着竖排；新入库到同目录的书继承
+    assert_eq!(lib.set_dir_vertical("横排", Some(true)).unwrap(), 1);
+    check(&m, "kobo", true, "目录 --on");
     let toml = std::fs::read_to_string(lib.root().join("vertical.toml")).unwrap();
-    assert!(toml.contains("off = [\"文字\"]"), "{toml}");
-    let src2 = books.join("文字/另一本.epub");
+    assert!(toml.contains("on = [\"横排\"]"), "{toml}");
+    let src2 = books.join("横排/另一本.epub");
     std::fs::write(&src2, sample_epub("另一本")).unwrap();
     let Added::New(m2) = lib.add_file(&src2).unwrap() else {
         panic!()
     };
-    let b = lib.build(&fresh(&m2.id), kobo, true).unwrap();
-    let (opf, _) = opf_and_chapter(built_path(&b));
-    assert!(!opf.contains("vertical-rl"), "目录里新入库的书继承：{opf}");
+    check(&m2, "kobo", true, "目录里新入库的书继承 --on");
+    // --auto 删掉目录覆盖，现有的书逐本回到默认（横排）
+    assert_eq!(lib.set_dir_vertical("横排", None).unwrap(), 2);
+    check(&m, "kobo", false, "目录 --auto 回到默认");
+    check(&m2, "kobo", false, "目录 --auto 回到默认");
+    let toml = std::fs::read_to_string(lib.root().join("vertical.toml")).unwrap();
+    assert!(!toml.contains("横排"), "目录覆盖已删：{toml}");
+
+    // 目录 --off：默认已经是横排，仍记上、现有的书跟着关
+    assert_eq!(lib.set_dir_vertical("横排", Some(false)).unwrap(), 2);
+    check(&m, "kobo", false, "目录 --off");
+    let toml = std::fs::read_to_string(lib.root().join("vertical.toml")).unwrap();
+    assert!(toml.contains("off = [\"横排\"]"), "{toml}");
+    // 目录 --off 不会关掉别的目录里原书已竖排的书
+    check(&native, "kobo", true, "别的目录不受影响");
+
     // 强制 --on 也不能让没开 vertical_text 的设备竖排
     lib.set_book_vertical(&m2.id, Some(true)).unwrap();
-    let b = lib
-        .build(&fresh(&m2.id), profile::get("bigme").unwrap(), true)
-        .unwrap();
-    let (opf, _) = opf_and_chapter(built_path(&b));
-    assert!(
-        !opf.contains("vertical-rl"),
-        "设备没开 vertical_text 时不竖排"
-    );
+    check(&m2, "bigme", false, "设备没开 vertical_text 时不竖排");
 }
 
 #[test]

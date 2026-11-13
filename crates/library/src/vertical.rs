@@ -1,5 +1,5 @@
-//! 竖排（第一期）的书库侧：`vertical.toml` 目录清单、按书的 `layout.vertical`、自动判定缓存，以及最终决定
-//! 「这本书在这台设备上竖不竖排」。
+//! 竖排（第一期）的书库侧：`vertical.toml` 目录清单、按书的 `layout.vertical`、原书是否已竖排的判定，以及最终决定
+//! 「这本书在这台设备上竖不竖排」。默认横排（2026-11-13 起；原书本来就竖排的仍竖排）。
 
 use crate::{epub_text_entries, fsutil, Library, Meta};
 use profile::Profile;
@@ -82,7 +82,7 @@ impl Library {
         fsutil::write_atomic_cleanable(&self.vertical_path(), s.as_bytes())
     }
 
-    /// 自动判定缓存（同 `comic_of`）：早期条目第一次用到时判、持锁时存进 meta.json。
+    /// 自动判定缓存（同 `comic_of`）：早期条目第一次用到时判、持锁时存进 meta.json。2026-11-13 起不再用于竖排决定。
     pub fn zh_text_of(&self, meta: &Meta) -> Result<bool, String> {
         if let Some(z) = meta.zh_text {
             return Ok(z);
@@ -120,6 +120,18 @@ impl Library {
         Ok(bookconv::vertical::is_zh_text(&entries))
     }
 
+    /// 这本书原件本来就是竖排（`bookconv::vertical::is_natively_vertical`）：CBZ 一律不是；样式表 / `<style>` /
+    /// `<html>`、`<body>` 行内的 `writing-mode: vertical-*` 或 OPF 的 `primary-writing-mode` 算，单独的 spine rtl 不算。
+    pub fn is_natively_vertical(&self, m: &Meta) -> Result<bool, String> {
+        if m.content_format() == "cbz" {
+            return Ok(false);
+        }
+        let path = self.content_path(m)?;
+        let file = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let entries = epub_text_entries(file).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(bookconv::vertical::is_natively_vertical(&entries))
+    }
+
     /// 固定版式（强制竖排时要排除）。
     pub fn is_fixed_layout(&self, m: &Meta) -> Result<bool, String> {
         if m.content_format() == "cbz" {
@@ -132,7 +144,8 @@ impl Library {
     }
 
     /// 这本书在这台设备上竖不竖排：设备没开 `vertical_text`、漫画、固定版式一律不竖排；
-    /// 否则按「书自己的 `layout.vertical` → `vertical.toml` 目录清单（最长前缀）→ 自动判定」。
+    /// 否则按「书自己的 `layout.vertical` → `vertical.toml` 目录清单（最长前缀）→ 原书本来是否竖排」。
+    /// 默认横排（2026-11-13）；`is_zh_text` 不再参与这个决定。
     pub fn vertical_for(&self, meta: &Meta, device: &Profile) -> Result<bool, String> {
         if !device.vertical_text {
             return Ok(false);
@@ -152,7 +165,8 @@ impl Library {
                 return Ok(v && !self.is_fixed_layout(meta)?);
             }
         }
-        self.zh_text_of(meta)
+        // 默认分支：原书本来竖排的仍竖排，其余横排。读不到原件时这次按横排算（不让临时读不到把计划算挂）。
+        Ok(self.is_natively_vertical(meta).unwrap_or(false))
     }
 
     /// 按书设置竖排覆盖（`booklib vertical`）：`Some(true/false)` 写进 `layout.vertical`，`None` 删掉。

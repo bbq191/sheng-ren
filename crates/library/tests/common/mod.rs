@@ -55,6 +55,34 @@ pub fn sample_epub(title: &str) -> Vec<u8> {
     sample_epub_with(title, "")
 }
 
+/// 原书本来就竖排的中文文字书（章节里 `<style>html{writing-mode:vertical-rl}</style>`）。
+pub fn sample_epub_vertical(title: &str) -> Vec<u8> {
+    let long = "正文段落，足够长的文字内容，确保标题页之后的内容超过门槛。".repeat(5);
+    let mut book = Book {
+        meta: BookMeta {
+            book_id: "v".into(),
+            title: title.into(),
+            author: "作者".into(),
+            language: "zh".into(),
+            publisher: "".into(),
+            cover: None,
+            cover_ext: "jpg".into(),
+            cover_media_type: "image/jpeg".into(),
+            subjects: Vec::new(),
+        },
+        chapters: vec![Chapter {
+            title: "第一章".into(),
+            html_body: format!(
+                "<style>html{{writing-mode:vertical-rl}}</style><h1>第一章</h1><p>{long}</p>"
+            ),
+            level: 1,
+        }],
+        resources: vec![],
+        nav: vec![],
+    };
+    assemble(&mut book).unwrap()
+}
+
 /// 书名相同、正文不同的书（`marker` 写进第一段开头）：同名同作者的另一个版本。
 pub fn sample_epub_with(title: &str, marker: &str) -> Vec<u8> {
     let long = format!(

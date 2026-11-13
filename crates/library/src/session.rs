@@ -53,7 +53,7 @@ pub(crate) struct ContentFacts {
     own_dc: RefCell<HashMap<String, OwnDc>>,
     /// 内容哈希 → 是不是漫画（指纹分文字书、漫画，profile 给漫画另配格式时也要用）。
     comic: RefCell<HashMap<String, bool>>,
-    /// 内容哈希 → 是不是中文文字书（竖排自动判定）。
+    /// 内容哈希 → 是不是中文文字书（入库时记录，2026-11-13 起不再用于竖排决定）。
     zh_text: RefCell<HashMap<String, bool>>,
     /// 这次运行里联网找过元数据的整套漫画（`metadata::series_key`）：`meta --fetch --force` 时同一套别的卷照用，不再每卷联网。
     series_fetched: RefCell<std::collections::HashSet<String>>,
