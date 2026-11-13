@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: sheng-ren（box executor，接手中断的 oc-exec）
 - 分支: task/2026-11-13-split-imgopt（从最新 master 切出）
-- 更新时间: 2026-11-13T16:56:30+08:00
+- 更新时间: 2026-11-13T17:05:00+08:00
 - 引用: 2026-11-13-big-file-splits 分步 1；前一张子单 2026-11-13-split-generate 已合并 0d85255
 
 ## 需求原文
@@ -84,3 +84,18 @@
 - 未完成：无。真书回归与真机验收待 vinci。
 - 运行记录（中断的两轮 oc-exec，供对照）：`/home/box/oc-runs/2026-11-13-split-imgopt-20261113-144350.json`、`/home/box/oc-runs/2026-11-13-split-imgopt-20261113-160920.json`
 
+## 审查
+<!-- 负责 bot 填写 -->
+- 验收：**通过**（sheng-ren bot，2026-11-13 16:57–17:05 Asia/Shanghai，仓库 `/home/box/repos/sheng-ren` @ `b1fc7b1`，实现提交 `0700243`，对照 origin/master `fe2973d`）。独立核对，未采信执行方结论。**没跑真书回归、没上真机**；待 vinci 本机回归确认产物逐字节不变。按 `Projects/_templates/review-checklist.md`「项目 bot 验收」：结果已填、状态 done；分步 1–3 完成；提交中文前缀加正文、无 Co-Authored-By、执行方未合并。工具链 rustc 1.99.1。
+  - 范围：`fe2973d..0700243` 只改了被拆的入口 `crates/bookconv/src/imgopt.rs`、新建的 `imgopt/{decode,page8,comic,thumbnail,textbook}.rs` 与 `imgopt/tests/{mod,comic,dark,formats,text,trim}.rs`，以及任务单本身。没有范围外的已有文件。真实偏离：无。
+  - 子模块划分（各文件远低于 1800 行）：`imgopt.rs` 61 行（模块说明、入口、`test_screen`、`pub` / `pub(crate) use` 再导出）；`decode.rs` 377（文件头、解码、缩放、透明合成：`ImgHead`、`decode_*`、`header_dims`、`webp_to_png`、`flatten_*`、`fir_lanczos3`、像素上限与 JPEG 质量常量）；`page8.rs` 313（`Page8` 与灰度转换：`into_luma8`、`rgb8_into_luma8`、`darkness_plane`）；`comic.rs` 739（裁边、漫画页解码与排版、跨页拆分、伽马与自动对比度：`TrimMode`、`decode_page`、`prepare_comic_page_*`、`prepare_comic_spread`、`gamma_lut`、`autocontrast_lut` 等）；`thumbnail.rs` 153（`cover_thumbnail`、`thumb_aspect_fits`）；`textbook.rs` 158（文字书插图、背景图与条目元数据：`downscale_for_epub*`、`page_tile`、`darken_gray_image`、`is_page_image` 等）；`tests/mod.rs` 117（测试入口与共用造图辅助，`include!` 内联各段）；`tests/comic.rs` 458、`tests/dark.rs` 317、`tests/formats.rs` 323、`tests/text.rs` 625、`tests/trim.rs` 371。划分按职责，合理。
+  - 只挪代码（独立用 `syn` 抽出并逐块比对，对照 `fe2973d:crates/bookconv/src/imgopt.rs`）：叶子项（fn / struct / enum / const / 含 impl 方法与全部测试）基线 179、拆后 179，0 遗漏、0 多余。144 个全文逐字相同；34 个差异全部是允许的可见性放宽（跨子模块把原先私有的类型、字段或函数改成 `pub(crate)`，函数体、分支条件、错误文案、常量值未改）。未见改成对外的 `pub`。原先就是 `pub` 的项（含 `Page8` / `PageDecode` / `ComicPage` / `TrimMode` 的定义与公开字段、以及 `Page8` 上原先 `pub` 的方法）保持 `pub`，并由入口 `pub use` 再导出，签名与 crate 外路径不变；原先 `pub(crate)` 的（`guard`、`test_screen`、`TEST_ANIM_WEBP`）由入口 `pub(crate) use` 或仍留在入口，crate 内原路径不变。crate 外调用方文件未改。
+  - 注释：基线 432 条注释文本全部保留（0 遗漏）。多余的是各新文件的模块说明，以及下面这条建议里的重复文档注释。
+  - 建议（非阻断）：
+    1. `imgopt/tests/text.rs` 第 394 行多了一条 `/// 造一张带纯白边框的图：中心是彩色渐变，四边留白。`，贴在 `downscale_for_epub_keeps_resize_dimensions_and_gray_jpeg` 的文档前面。这条注释原属 `framed_jpeg`（现已正确放在 `tests/trim.rs`），是按段切开时留在切分点上的重复，函数体本身与基线逐字相同。建议以后删掉这行，本次不改代码。
+    2. 测试用 `include!` 把 `comic.rs` 等拼进 `tests/mod.rs`，目的是测试路径仍为 `imgopt::tests::*`，与拆前一致，也满足本单「测试集合（名称、数量）与结果和拆前一致」。仓库里另一处 `include!` 是 `profile` 的生成代码，惯例不同；前一张 `split-generate` 把测试放进普通子模块 `generate/tests.rs`（`mod remove_tests` 等），完整路径多了一层 `tests::`，当时验收接受。`include!` 能工作（clippy 0 警告、测试名不变），但文件保留了原模块内的缩进、`use` 写在 `include!` 之后，对 IDE 跳转也不如普通 `mod` 自然。若改成普通子模块（`mod comic;` 等），路径会变成 `imgopt::tests::comic::*`，按 generate 的先例可接受，也更清晰。本次不改代码。
+  - 版本号未动（OPTIMIZE 69、COMIC 68、KINDLE_RULES 42、CONVERT 2、WRITER 26、PIPELINE 5）；`crates/library/tests/fp_golden.txt` 与 master 逐字节相同；testdata 未动。
+  - 测试：本机重跑 `cargo test --workspace` 全过：bookbase lib 30，bookconv lib **553**，csscascade lib 16，kfx lib 53，library lib 82 / bin 7 / cli 14 / flow 63 / fp_golden 1，profile lib 19。其中 `imgopt::tests::*` **55 项，名称与 `fe2973d` 原文 `#[test]` 清单完全一致**，全部通过。`cargo clippy --workspace --all-targets -- -D warnings` **0 警告**。未对整个仓库跑 `cargo fmt`。
+  - 阻断：无。
+- 二审：
+- 合并：
