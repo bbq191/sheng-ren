@@ -364,6 +364,12 @@
 
 | **掌阅、Bigme 产物目录改成设备真名 `Documents` / `Books`**（`ireader.toml` 的 `[deliver] dir = "Documents"`，`bigme.toml` 的 `dir = "Books"`；2026-11-12 单 `dir-case-bigme-ireader`）：复用同日汉王的大小写迁移和删除保护。设备接上时只改生成记录，不重传、不删书；不写删除或重命名设备上旧目录的迁移（存储不分大小写，删小写名就是删真目录）。产物内容、指纹、版本号不变。**推翻同日「掌阅、Bigme 的 dir 本次不改」**。Kindle、Kobo 仍不改 | vinci 2026-11-12 真机发现 Bigme 下有错误的 `books` 同步文件夹，应为 `Books`；同日 17:08 定 bigme 和掌阅一起改。原因与汉王相同：profile 写小写，MTP 按写入时的大小写多登记一个同内容的目录 |
 
+## 2026-11-13
+
+| 定了什么 | 理由 |
+|---|---|
+| **设备路径统一为 `~/Devices/<链接名>`，链接和挂载归 dotfiles**（单 `devices-dir`）：`DeviceEnv` 新增 `devices_base`（缺省 `$HOME/Devices`，可用 `BOOKLIB_DEVICES_DIR` 改）；`[deliver]` 的 `mount`（旧记录里的挂载子目录名）和 `link`（`~/Devices/` 下的链接名）分开，Kobo 保留卷标 `label = "KOBOeReader"`、链接名 `Kobo`；掌阅模式保留，链接名预留 `Ireader`。开着挂载检查时先确认 `~/Devices/<链接名>` 是符号链接、readlink，再要求目标精确出现在 `/proc/self/mountinfo` 里（先还原 `\040` 等八进制转义），不 stat 目标、不进入目标、不写死文件系统类型。链接不在、或目标不在 mountinfo 就算没接上，**不回退**旧路径（`$XDG_RUNTIME_DIR/mtp/<小写>`、`/run/media/$USER/KOBOeReader`、`~/Hanvon`）。生成记录里的旧前缀在做设备接上时迁到 `devices_base/<链接名>`（`path`/`root`/`old`/`orphans`），只改记录、不碰文件、不重传、不删；迁移后与当前位置相同的旧位置从待删里去掉，绝不走“换位置删除”。`on_removable` 同时认新前缀和全部旧前缀，仍然只比前缀。**booklib 只读这些链接，绝不创建、删除或修改它们**。`[deliver]` 不进指纹，版本号不变，`fp_golden.txt` 不变 | vinci 2026-11-13 10:41 批准方案 A：「按方案开单执行，掌阅保留并预留 `~/Devices/Ireader`」。设备插上后由 dotfiles 建链接并挂载，booklib 再猜挂载点会两套约定漂移；统一到 `~/Devices/<Name>` 后，只读链接、对 mountinfo 能避开卸不掉的 FUSE（`/proc/self/mountinfo` 仍显示已挂载，但至少不会因为空目录就当成接上）和 stat 卡死的挂载点。**这项不削弱 2026-11-12 的两条保证**：`list` 仍只比生成记录和当前计划、不 stat / read_dir / `mounted()` 设备上的产物（`list-no-device-stall`）；加锁清理仍只看路径前缀、绝不读设备目录，设备上的残留临时文件仍由 `sync` 连上后清（`lock-no-device`）。旧前缀只在迁移记录和 `on_removable` 判前缀时认，不用于找设备。**没跑真书回归、没上真机**（本单不动产物内容；实际设备链接由 dotfiles 提供，未在本机验证） |
+
 ## 待定
 
 - （无）

@@ -185,7 +185,7 @@
 | `comic_page_direction`（照原书） | 漫画翻页方向改成 `"ltr"`/`"rtl"`（按书指定的 `page_direction` 优先） | — | 不写（照书，2026-10-15 起；以前 `"ltr"`；Bangumi 判成日本漫画的由 `comic_meta_direction` 写成 rtl） | 掌阅往右翻的书，整页图四周按阅读器「排版」设置留边，选「漫画」排版才铺满（见下面「在真机上测量」） |
 | `comic_meta_direction`（`false`） | 按联网元数据定漫画方向（2026-11-10）：Bangumi 判成日本漫画的书生成时写 `page-progression-direction="rtl"`（EPUB/KEPUB 的 spine、KFX 的 `$560`），其余照原书；判成国漫、韩漫时不会把原书的 rtl 改成 ltr。方向根据当时的 `meta.json`，入库、转换时不写 | `true` | `true` | 维护者：「只要是日漫无论格式都是点击左侧翻下一页」，按 Bangumi 判。四台都开；Kobo、汉王、掌阅的 rtl 处理还没真机确认。掌阅 rtl 的书要在阅读器里每本选一次「本书自定义 → 排版 → 漫画」才铺满（vinci 2026-11-10 接受） |
 | `comic_reader_margins`（不写） | 漫画在阅读器里要设的页边距：写标记（`META-INF/eink-reader-margins`）、文字页补回留白（以前给 Move 的书架服务登记用） | — | — | xochitl 四周留白 CSS 改不动，只有页边距设置管用（界面只有 28/56/112 三档） |
-| `[deliver]`（不写 = 产物放电脑上） | 产物怎么送到设备（2026-10-07，见[使用指南 · 产物放在哪](usage.md#产物放在哪)）：`kind = "mtp"` + `mount`（jmtpfs 挂载点名）+ `dir`（存储根目录下的目录）；`kind = "usbms"` + `label`（USB 存储卷标，挂在 `/run/media/$USER/<label>`）+ `dir`（2026-11-01 加，Kobo）（2026-10-31 以前还有 `kind = "xochitl"`：经 SSH 交给 Move 的书架服务，删了） | mtp：`kindle`、`documents` | mtp：`ireader`、`Documents` | 不影响产物内容，不进指纹 |
+| `[deliver]`（不写 = 产物放电脑上） | 产物怎么送到设备（2026-10-07，见[使用指南 · 产物放在哪](usage.md#产物放在哪)）：设备统一在 `~/Devices/<链接名>` 找（2026-11-13 起；链接和挂载归 dotfiles，booklib 只读），开着挂载检查时先确认符号链接、readlink，再要求目标精确出现在 `/proc/self/mountinfo` 里。`kind = "mtp"` + `mount`（旧记录里的挂载子目录名，只用于认旧前缀）+ `link`（`~/Devices/` 下的链接名）+ `dir`（存储根目录下的目录）；`kind = "usbms"` + `label`（USB 存储卷标）+ `link` + `dir`（2026-11-01 加，Kobo）（2026-10-31 以前还有 `kind = "xochitl"`：经 SSH 交给 Move 的书架服务，删了） | mtp：`kindle`、`Kindle`、`documents` | mtp：`ireader`、`Ireader`、`Documents` | 不影响产物内容，不进指纹 |
 
 - 汉王 2026-11-06 书架截屏：封面框约 281×373（≈0.753），方形封面被拉伸、不裁不留白，所以 `cover_thumb_aspect = 0.754`、`cover_meta_thumb = true`（同掌阅；书架用不用缩略图待真机确认）。
 - `display_none`、`trailing_br_line`、`line_height_except_p`、`heading_font_keywords`＋`[heading_sizes]`、`margin_top`＋`[page_top]`、`inline_css_lengths`、`padding`、`borders`、`heading_margins`、`px_margins`、`percent_margins` 由 `bookconv::reader_model::ReaderModel` 汇成"这台阅读器拿到 CSS 会排成什么样"的设备模型，照 Kindle 改写的 pass 只认它（2026-10-13 收拢，量出来的数从代码挪进 profile）。这几个字段和 `em_px` 以哈希进指纹（`m` 段，2026-10-13 定）：重量了数改 profile 就行，书自动重建。
@@ -336,7 +336,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 都要测试书核对。
 
 - **硬件**：6" E Ink Carta 1300，1448×1072，300 ppi，黑白（彩色的是 Clara Colour）。竖屏写成 `width = 1072`、`height = 1448`。
-- **传书**：USB 大容量存储（不是 MTP），卷标 `KOBOeReader`，udisks 挂到 `/run/media/$USER/KOBOeReader`（`[deliver] kind = "usbms"`）。产物放根目录的 `books/`，子目录照跟踪目录镜像。挂载点要真的挂着才算接上（同 MTP）；拔掉后剩下的空目录不写。挂载目录可以用 `BOOKLIB_USBMS_DIR` 改。
+- **传书**：USB 大容量存储（不是 MTP），卷标 `KOBOeReader`（`[deliver] label`），dotfiles 把 `~/Devices/Kobo` 链到 udisks 的挂载点（`link = "Kobo"`）。产物放根目录的 `books/`，子目录照跟踪目录镜像。开着挂载检查时要求链接指向的挂载点在 `/proc/self/mountinfo` 里（同 MTP）；拔掉后链接不在或指向的空目录没挂上，不写。链接目录可用 `BOOKLIB_DEVICES_DIR` 改。
 - **不碰阅读器自己的数据**：`.kobo/` 一概不动，尤其书库数据库 `.kobo/KoboReader.sqlite`（Nickel 拔线后自己扫描更新）。Kindle 那种书旁边的 `.sdr` 进度文件夹 Kobo 没有，换目录时不搬。
 - **跳过登录**：`.kobo/Kobo/Kobo eReader.conf` 的 `[ApplicationPreferences]` 下加 `SideloadedMode=true`，不登 Kobo 账号也能看侧载的书（要用户自己改，程序不改）。
 - **怪癖测试书**（2026-11-01，脚本写好、未上真机）：`tools/quirks/probe.py kobo`，Kobo 没有 adb，分步做：
@@ -355,7 +355,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 模式 `hanvon`（`crates/profile/profiles/hanvon.toml`）。2026-11-06 用 adb 截屏核对阅读范围、书架封面比例、漫画版式、投递；正文字号/行高、注释弹窗、伽马还没测。
 
 - **硬件**：6" E Ink Carta 1300，1448×1072，300 ppi，黑白，安卓 14（来源：知乎评测 `zhuanlan.zhihu.com/p/1916870323984393879`、Lukas Lab、太平洋电脑网参数页）。竖屏写成 `width = 1072`、`height = 1448`。IT 之家写的 1024×758 是 Clear 6，不是 Turbo。
-- **传书**：USB MTP（安卓），2026-11-06 真机确认 jmtpfs 挂到 `/run/user/1000/mtp/hanvon`（`~/Hanvon`）。产物放存储根目录的 `Documents/`、子目录照跟踪目录镜像；2026-11-11 现场：小写 `documents` 会让 MTP 在 `内部共享存储空间/` 下多登记一个同内容的 `documents`（安卓存储不分大小写，设备上是同一个 inode），所以 profile 改写成设备真名 `Documents`，旧记录由大小写迁移原样接过来（只改记录、不碰设备上的文件）。自带阅读器「文件」页从 `/Documents` 浏览、能打开。
+- **传书**：USB MTP（安卓），dotfiles 把 `~/Devices/Hanvon` 链到 jmtpfs 的挂载点（`link = "Hanvon"`；2026-11-06 真机确认）。产物放存储根目录的 `Documents/`、子目录照跟踪目录镜像；2026-11-11 现场：小写 `documents` 会让 MTP 在 `内部共享存储空间/` 下多登记一个同内容的 `documents`（安卓存储不分大小写，设备上是同一个 inode），所以 profile 改写成设备真名 `Documents`，旧记录由大小写迁移原样接过来（只改记录、不碰设备上的文件）。自带阅读器「文件」页从 `/Documents` 浏览、能打开。旧的 `~/Hanvon` 挂载位置 2026-11-13 起不再用于找设备，记录里的旧前缀会在接上时迁到 `~/Devices/Hanvon`。
 - **格式**：只出 EPUB。文字书沿用三台统一规则（`text_repair_only`、`kindle_rules`）；2026-11-11 测试书 01–13 实机确认中文文字书竖排正常（翻页、引号、縦中横、注释、西文不叠），和 Kobo 一样写 `vertical_text = true`、`vertical_ascii = "fullwidth"`（13 号也选 U1 全角竖立）。注释还是跳转（`notes = "jump"`），不改弹窗。
 - **漫画**：参数照 Kobo（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、1px 白边）。版式 2026-11-06 真机比过：流式整页与固定版式逐像素相同，都铺满整屏、连翻 4 页大小不变，保持流式。
 - **书架封面**：2026-11-06 书架截屏：方形封面（1.0）被拉伸进约 281×373 的框（≈0.753），不裁不留白，和掌阅 0.754 同一行为；照掌阅做 `eink-thumb.jpg` 并把 meta cover 指向它，书架用不用缩略图待真机确认。书架只显示打开过的书；没有封面的书显示通用 EPUB 图标。
@@ -367,7 +367,7 @@ readable-measure --device=kindle 竖长.png 横宽.png
 正文字号/行高、注释弹窗、伽马还没测。设备上另有 `koreader` 目录，本次按 xReader 量（以后主要用 KOReader 再另开任务）。
 
 - **硬件**：7" E Ink Carta 1300，1264×1680，300 ppi，黑白，Android 14（Bigme OS 5.0）（来源：Root-Nation B7 Pro BW 评测、Read with Pro 规格页、Android Blog Italia 评测；真机 `wm size` 1264×1680、密度 300）。彩色版 B7 Pro 是 Kaleido 3（632×840），别混。竖屏写成 `width = 1264`、`height = 1680`。
-- **传书**：USB MTP（安卓），2026-11-10 真机 jmtpfs 挂在 `~/Devices/Bigme`，存储名「内部共享存储空间」。产物放存储根目录的 `Books/`、子目录照跟踪目录镜像；xReader 书架认 `Books/`（子目录里的书也进书库）。2026-11-12：小写 `books` 会让 MTP 多登记一个同内容的目录，所以 profile 改写成设备真名 `Books`，旧记录由大小写迁移原样接过来（只改记录、不碰设备上的文件；与同日汉王 `Documents` 同一做法）。缺省挂载点是 `$XDG_RUNTIME_DIR/mtp/bigme`（`/run/user/1000/mtp/bigme`），和现在实际挂载点不一致：配好 dotfiles 的挂载规则之前，可用 `BOOKLIB_MTP_DIR=/home/afu/Devices` 让 `…/Bigme` 对上 `mount = "bigme"`，或把 `~/Devices/Bigme` 挂/链到 `/run/user/1000/mtp/bigme`。
+- **传书**：USB MTP（安卓），2026-11-10 真机 jmtpfs 挂在 `~/Devices/Bigme`（`link = "Bigme"`，由 dotfiles 建链接），存储名「内部共享存储空间」。产物放存储根目录的 `Books/`、子目录照跟踪目录镜像；xReader 书架认 `Books/`（子目录里的书也进书库）。2026-11-12：小写 `books` 会让 MTP 多登记一个同内容的目录，所以 profile 改写成设备真名 `Books`，旧记录由大小写迁移原样接过来（只改记录、不碰设备上的文件；与同日汉王 `Documents` 同一做法）。2026-11-13 起只查 `~/Devices/Bigme`，`BOOKLIB_MTP_DIR` 不再用于找设备。
 - **格式**：只出 EPUB。文字书沿用统一规则（`text_repair_only`、`kindle_rules`）；**不竖排**（2026-11-11 实机：xReader 不竖排、KOReader 也不会），`vertical_text = false`。注释跳转、只有图标的标号换数字还是推断，待真机测。
 - **漫画**：参数照 Kobo（伽马 1.1、拉满对比度、去杂点、裁页码、黑底页、1px 白边、拆跨页）。2026-11-10 真机比过流式和固定版式：固定版式（方案 D）不受阅读器页边距限制，标记范围约 1105×1532，比流式大约 10%，所以用固定版式；画布 1264×1680（`[comic_readable]`），真机不裁不拉伸。
 - **翻页方向**：xReader 流式、固定版式都不认 spine 里的 rtl（点左侧无反应、点右侧才翻下一页）。booklib 仍照 Bangumi 元数据写 rtl（`comic_meta_direction`，不写 `comic_page_direction`）；要在 Bigme 上点左侧翻下一页，只能去 xReader 设置里改翻页区域或方向（归 eink-settings）。跨页拆页顺序真机正确（先右半再左半）。

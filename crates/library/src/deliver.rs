@@ -1,43 +1,50 @@
 //! 产物送到设备（2026-10-07 定：`sync` 按设备接没接上直接传，电脑上不留产物）。怎么送由 profile 的 `[deliver]` 定：
 //!
-//! - **MTP**（Kindle、掌阅）：jmtpfs 自动挂载在 `<挂载目录>/<mount>`（缺省 `$XDG_RUNTIME_DIR/mtp`），下面是存储
-//!   （「Internal Storage」之类），产物放进存储根目录的 `<dir>/`，按普通文件写。挂载点在、里面有存储就算接上了。
-//! - **USB 大容量存储**（Kobo，2026-11-01 加）：udisks 按卷标挂在 `<挂载目录>/<label>`（缺省 `/run/media/$USER`，它不在而
-//!   `/media/$USER` 在时用后者），产物放进根目录的 `<dir>/`。挂载点真的挂着才算接上（同 MTP）。阅读器自己的 `.kobo/` 一概不碰。
+//! - 设备统一在 `~/Devices/<链接名>` 找（缺省 `$HOME/Devices`，可用 `$BOOKLIB_DEVICES_DIR` 改）：链接和挂载都由 dotfiles 管，
+//!   booklib **只读**这些链接，绝不创建、删除或修改它们。开着挂载检查时，先确认它是符号链接、读出目标，再要求
+//!   `/proc/self/mountinfo` 里有完全相同的挂载点；不 stat 目标、不进入目标、不按文件系统类型猜。
+//! - **MTP**（Kindle、掌阅、汉王、Bigme）：链接下面是存储（「Internal Storage」之类），产物放进存储根目录的 `<dir>/`，
+//!   按普通文件写；连上后用 `mtp_storage` 探测存储目录。
+//! - **USB 大容量存储**（Kobo，2026-11-01 加）：链接指向 udisks 按卷标挂的目录，产物放进根目录的 `<dir>/`。
+//!   阅读器自己的 `.kobo/` 一概不碰。
 //! - 没写 `[deliver]` 的模式（书库 `profiles/` 里的自定义模式）：产物照旧放在电脑上。
+//!
+//! 2026-11-13 起不再回退旧挂载路径（`$XDG_RUNTIME_DIR/mtp/<小写>`、`/run/media/$USER/KOBOeReader`、`~/Hanvon`）；
+//! 那些旧前缀只在生成记录迁移和 `on_removable` 判前缀时认，不用于找设备。
 //!
 //! 一轮 `sync` 里每台设备只连一次。`--watch` 每轮开头调 [`crate::Library::refresh_devices`]：没接上的下次用到时重新看。
 //! （2026-10-31 以前还有 Move：经 SSH 调设备上书架服务的导入接口，Move 卖了以后删了，要找回看 git 历史。）
 
 use profile::{Deliver, Profile};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// 设备在哪找（测试、特殊环境可改）。
 #[derive(Clone, Debug)]
 pub struct DeviceEnv {
-    /// MTP 挂载点的上级目录（`<它>/<mount>`）。缺省 `$BOOKLIB_MTP_DIR`，没设就是 `$XDG_RUNTIME_DIR/mtp`。
+    /// 设备的链接目录（`<它>/<链接名>`）：缺省 `$BOOKLIB_DEVICES_DIR`，没设就是 `$HOME/Devices`。链接由 dotfiles 建。
+    pub devices_base: PathBuf,
+    /// MTP 旧挂载点的上级目录（`<它>/<小写 mount>`）。**只用来认旧记录前缀**，不用于找设备。
+    /// 缺省 `$BOOKLIB_MTP_DIR`，没设就是 `$XDG_RUNTIME_DIR/mtp`。
     pub mtp_base: PathBuf,
-    /// MTP 挂载点要真的挂着才算接上、才往里写（缺省开；`$BOOKLIB_MTP_NO_MOUNT_CHECK=1` 关，测试用普通目录当设备）。
+    /// 设备要真的挂上才算接上、才往里写（缺省开；`$BOOKLIB_MTP_NO_MOUNT_CHECK=1` 关，测试用普通目录当设备）。
     /// 2026-10-21：掌阅在 `sync` 中途断开，jmtpfs 卸掉后挂载点剩个空目录，后面的书建目录、写进了 `/run/user/1000`（tmpfs）直到写满，
-    /// 还记成传上了。
+    /// 还记成传上了。2026-11-13 起先看链接、再对 mountinfo，不 stat 目标。
     pub mount_check: bool,
-    /// USB 大容量存储按卷标挂载的上级目录（`<它>/<label>`）。缺省 `$BOOKLIB_USBMS_DIR`，没设就是 `/run/media/$USER`
-    /// （它不在、`/media/$USER` 在时用后者）；关了挂载检查（测试）又没设时用 `<mtp_base>/usbms`，测试不会写到真插着的设备上。
+    /// USB 大容量存储旧挂载点的上级目录（`<它>/<label>`）。**只用来认旧记录前缀**，不用于找设备。
+    /// 缺省 `$BOOKLIB_USBMS_DIR`，没设就是 `/run/media/$USER`（它不在、`/media/$USER` 在时用后者）。
     pub usbms_base: PathBuf,
 }
 
 impl DeviceEnv {
     pub fn from_env() -> DeviceEnv {
         let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty());
+        let devices_base = var("BOOKLIB_DEVICES_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir().unwrap_or_default().join("Devices"));
         let mtp_base = var("BOOKLIB_MTP_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let run = var("XDG_RUNTIME_DIR")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", uid())));
-                run.join("mtp")
-            });
+            .unwrap_or_else(default_mtp_base);
         let mount_check = !var("BOOKLIB_MTP_NO_MOUNT_CHECK").is_some_and(|v| v != "0");
         let usbms_base = var("BOOKLIB_USBMS_DIR")
             .map(PathBuf::from)
@@ -45,9 +52,7 @@ impl DeviceEnv {
                 if !mount_check {
                     return mtp_base.join("usbms");
                 }
-                let user = var("USER")
-                    .map(|u| u.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                let user = user_name().unwrap_or_default();
                 // /run/media/$USER 要等第一次插 USB 存储才由 udisks 建：还不在时只有 /media/$USER 真在（Debian 系）才用它，
                 // 否则 `sync --watch` 开着时第一次插上会一直找错地方
                 let (run, media) = (
@@ -61,11 +66,76 @@ impl DeviceEnv {
                 }
             });
         DeviceEnv {
+            devices_base,
             mtp_base,
             mount_check,
             usbms_base,
         }
     }
+
+    /// 这台设备旧记录可能用的前缀 → 新的 `devices_base/<链接名>`。只改生成记录，不碰文件。
+    /// 长的前缀先比（`mtp_base` 和缺省目录可能互相包含）。
+    pub(crate) fn prefix_migrations(&self, p: &Profile) -> Vec<(PathBuf, PathBuf)> {
+        let Some(d) = &p.deliver else {
+            return Vec::new();
+        };
+        let new = self.devices_base.join(d.link_name());
+        let mut old = Vec::new();
+        match d {
+            Deliver::Mtp { mount, .. } => {
+                old.push(self.mtp_base.join(mount));
+                let default = default_mtp_base();
+                if default != self.mtp_base {
+                    old.push(default.join(mount));
+                }
+            }
+            Deliver::Usbms { label, .. } => {
+                old.push(self.usbms_base.join(label));
+                // 缺省会在 /run/media/$USER 和 /media/$USER 之间换：两处都认（测试里的假用户也按这个换）
+                for (a, b) in [("/run/media", "/media"), ("/media", "/run/media")] {
+                    if let Ok(rest) = self.usbms_base.strip_prefix(a) {
+                        old.push(Path::new(b).join(rest).join(label));
+                    }
+                }
+                if let Some(user) = user_name().filter(|u| !u.is_empty()) {
+                    for base in ["/run/media", "/media"] {
+                        old.push(Path::new(base).join(&user).join(label));
+                    }
+                }
+            }
+        }
+        // 废弃的 `~/Hanvon`：文档里出现过，记录里可能还有
+        if p.id == "hanvon" {
+            if let Some(home) = home_dir() {
+                old.push(home.join("Hanvon"));
+            }
+        }
+        old.retain(|o| *o != new);
+        old.sort();
+        old.dedup();
+        old.sort_by_key(|b| std::cmp::Reverse(b.as_os_str().len()));
+        old.into_iter().map(|o| (o, new.clone())).collect()
+    }
+}
+
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+pub(crate) fn user_name() -> Option<String> {
+    std::env::var("USER")
+        .ok()
+        .filter(|u| !u.is_empty())
+}
+
+fn default_mtp_base() -> PathBuf {
+    let run = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", uid())));
+    run.join("mtp")
 }
 
 fn uid() -> u32 {
@@ -85,10 +155,12 @@ fn uid() -> u32 {
 pub(crate) enum Target {
     /// 放在电脑上（没写 `[deliver]`）。
     Local,
-    /// 设备上的产物根目录（MTP：`<存储>/<dir>`；USB 大容量存储：`<挂载点>/<dir>`）；`mount` 是要一直挂着的挂载点（不查挂没挂时 `None`）。
+    /// 设备上的产物根目录（MTP：`<存储>/<dir>`；USB 大容量存储：`<挂载点>/<dir>`）；`mount` 是要一直挂着的链接
+    /// （不查挂没挂时 `None`）；`staged` 是写完临时文件再改名（USB 大容量存储；MTP 直接写正式文件名）。
     Dir {
         root: PathBuf,
         mount: Option<PathBuf>,
+        staged: bool,
     },
 }
 
@@ -106,42 +178,51 @@ impl Target {
 pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
     match &p.deliver {
         None => Ok(Target::Local),
-        Some(Deliver::Mtp { mount, dir }) => {
-            let point = env.mtp_base.join(mount);
-            if env.mount_check && !mounted(&point) {
-                return Err(format!("没接上（{} 没挂上）", point.display()));
+        Some(d @ Deliver::Mtp { dir, .. }) => {
+            let link = env.devices_base.join(d.link_name());
+            if env.mount_check && !mounted_link(&link) {
+                return Err(format!("没接上（{} 不在或没挂上）", link.display()));
             }
-            let storage = mtp_storage(&point)
-                .ok_or_else(|| format!("没接上（{} 不在或没挂上）", point.display()))?;
+            if !env.mount_check && !link.is_dir() {
+                return Err(format!("没接上（{} 不在）", link.display()));
+            }
+            let storage = mtp_storage(&link)
+                .ok_or_else(|| format!("没接上（{} 不在或没挂上）", link.display()))?;
             // `dir` 不在（掌阅原来没有 documents/）的话传书时再建：只看接没接上的命令（devices）不往设备上写
             Ok(Target::Dir {
                 root: storage.join(dir),
-                mount: env.mount_check.then_some(point),
+                mount: env.mount_check.then_some(link),
+                staged: false,
             })
         }
-        Some(Deliver::Usbms { label, dir }) => {
-            // 只认 `<base>/<label>`：udisks 遇到同名目录占着时会挂成 `<label>1`，不跟过去（产物记录存的是绝对路径，挂载点名一变
-            // 旧记录就对不上、删不掉）；那时报没接上，用户卸掉重插
-            let point = env.usbms_base.join(label);
-            if env.mount_check && !mounted(&point) {
-                return Err(format!("没接上（{} 没挂上）", point.display()));
+        Some(d @ Deliver::Usbms { dir, .. }) => {
+            // 只认 `~/Devices/<链接名>`：udisks 遇到同名目录占着时会挂成 `<label>1`，链接名却不会变；产物记录存的是绝对路径，
+            // 挂载点名一变旧记录就对不上、删不掉。那时报没接上，用户卸掉重插。
+            let link = env.devices_base.join(d.link_name());
+            if env.mount_check && !mounted_link(&link) {
+                return Err(format!("没接上（{} 不在或没挂上）", link.display()));
             }
-            if !point.is_dir() {
-                return Err(format!("没接上（{} 不在）", point.display()));
+            if !env.mount_check && !link.is_dir() {
+                return Err(format!("没接上（{} 不在）", link.display()));
             }
             Ok(Target::Dir {
-                root: point.join(dir),
-                mount: env.mount_check.then_some(point),
+                root: link.join(dir),
+                mount: env.mount_check.then_some(link),
+                staged: true,
             })
         }
     }
 }
 
-/// `point` 是不是挂着的挂载点：和上一级目录不在同一个文件系统上。jmtpfs 卸掉后挂载点留成上一级（tmpfs）里的普通目录，
+/// `point` 是不是挂着的设备：符号链接（`~/Devices/<Name>`）看它指向的挂载点在不在 `/proc/self/mountinfo`，不 stat 目标；
+/// 普通目录（旧的挂载点、测试）仍看和上一级目录是不是同一个文件系统。jmtpfs 卸掉后挂载点留成上一级（tmpfs）里的普通目录，
 /// 这时往里写就写进了内存。
 pub(crate) fn mounted(point: &Path) -> bool {
     #[cfg(unix)]
     {
+        if std::fs::symlink_metadata(point).is_ok_and(|m| m.file_type().is_symlink()) {
+            return mounted_link(point);
+        }
         use std::os::unix::fs::MetadataExt;
         let dev = |p: &Path| std::fs::metadata(p).map(|m| m.dev());
         match (dev(point), point.parent().map(dev)) {
@@ -151,6 +232,91 @@ pub(crate) fn mounted(point: &Path) -> bool {
     }
     #[cfg(not(unix))]
     point.is_dir()
+}
+
+/// 符号链接 `link` 指向的目标在 `/proc/self/mountinfo` 里挂着：先确认是符号链接、再 readlink，绝不 stat 目标。
+fn mounted_link(link: &Path) -> bool {
+    let Ok(info) = std::fs::read_to_string("/proc/self/mountinfo") else {
+        return false;
+    };
+    link_mounted_in(link, &info)
+}
+
+/// [`mounted_link`] 的测试版：挂载信息由调用方给。
+fn link_mounted_in(link: &Path, mountinfo: &str) -> bool {
+    let Some(target) = link_target(link) else {
+        return false;
+    };
+    mountinfo_points(mountinfo).any(|p| p == target)
+}
+
+/// 符号链接的目标，相对路径按**链接所在目录**解析成绝对路径；只做字面规整，不调用 `canonicalize`（那会 stat 目标）。
+fn link_target(link: &Path) -> Option<PathBuf> {
+    let meta = std::fs::symlink_metadata(link).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    let raw = std::fs::read_link(link).ok()?;
+    let abs = if raw.is_absolute() {
+        raw
+    } else {
+        link.parent()?.join(raw)
+    };
+    Some(lexical_normalize(&abs))
+}
+
+/// 去掉 `.`、按字面处理 `..`（不碰文件系统）。
+fn lexical_normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() && !out.has_root() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// `/proc/self/mountinfo` 里每行的挂载点（第 5 列），先还原 `\040` 等八进制转义。
+fn mountinfo_points(mountinfo: &str) -> impl Iterator<Item = PathBuf> + '_ {
+    mountinfo.lines().filter_map(|line| {
+        line.split_whitespace()
+            .nth(4)
+            .map(unescape_mountinfo)
+    })
+}
+
+fn unescape_mountinfo(s: &str) -> PathBuf {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\'
+            && i + 3 < bytes.len()
+            && bytes[i + 1..i + 4]
+                .iter()
+                .all(|b| (b'0'..=b'7').contains(b))
+        {
+            let v = (bytes[i + 1] - b'0') * 64 + (bytes[i + 2] - b'0') * 8 + (bytes[i + 3] - b'0');
+            out.push(v);
+            i += 4;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        PathBuf::from(std::ffi::OsString::from_vec(out))
+    }
+    #[cfg(not(unix))]
+    PathBuf::from(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// 挂载点下的存储目录：只有一个就是它；几个（插了存储卡）时取名字像内部存储的，否则按名字排第一个。
@@ -769,13 +935,15 @@ mod tests {
         assert!(!mounted(d.path()), "普通目录不是挂载点");
         #[cfg(target_os = "linux")]
         assert!(mounted(Path::new("/proc")));
-        // 设备断开后挂载点剩下的空目录里有存储目录（上次写进去的）也不算接上
-        std::fs::create_dir_all(d.path().join("ireader/内部共享存储空间")).unwrap();
+        // 设备断开后链接指向的挂载点不在（或只剩空目录），里面有存储目录也不算接上
+        let devices = d.path().join("devices");
+        std::fs::create_dir_all(devices.join("Ireader/内部共享存储空间")).unwrap();
         let p = profile::get("ireader").unwrap();
         let env = DeviceEnv {
-            mtp_base: d.path().into(),
+            devices_base: devices.clone(),
+            mtp_base: d.path().join("mtp"),
             mount_check: true,
-            usbms_base: d.path().into(),
+            usbms_base: d.path().join("usbms"),
         };
         assert!(connect(&env, p).err().unwrap().contains("没挂上"));
         let t = connect(
@@ -786,26 +954,29 @@ mod tests {
             p,
         )
         .unwrap();
-        assert!(matches!(t, Target::Dir { mount: None, .. }));
+        assert!(matches!(&t, Target::Dir { mount: None, root, staged: false } if *root == devices.join("Ireader/内部共享存储空间/Documents")));
+        assert!(!devices.join("Ireader").is_symlink(), "booklib 不建链接");
     }
 
     #[test]
-    fn usbms_connects_by_label() {
+    fn usbms_connects_by_link_name_not_label() {
         let d = tempfile::tempdir().unwrap();
         let p = profile::get("kobo").unwrap();
+        let devices = d.path().join("devices");
         let env = DeviceEnv {
+            devices_base: devices.clone(),
             mtp_base: d.path().join("mtp"),
             mount_check: true,
-            usbms_base: d.path().into(),
+            usbms_base: d.path().join("media"),
         };
         assert!(
             connect(&env, p).err().unwrap().contains("没挂上"),
-            "卷标目录不在"
+            "链接不在"
         );
-        // 拔掉后留下的空目录（普通目录，和上一级同一个文件系统）不算接上
-        std::fs::create_dir(d.path().join("KOBOeReader")).unwrap();
+        // 拔掉后留下的普通目录不算接上（不是符号链接）
+        std::fs::create_dir_all(devices.join("Kobo")).unwrap();
         assert!(connect(&env, p).err().unwrap().contains("没挂上"));
-        // 不查挂载（测试）：目录在就算接上，产物放 <挂载点>/books
+        // 不查挂载（测试）：目录在就算接上，产物放 <链接>/books
         let t = connect(
             &DeviceEnv {
                 mount_check: false,
@@ -815,13 +986,13 @@ mod tests {
         )
         .unwrap();
         assert!(
-            matches!(&t, Target::Dir { root, mount: None } if *root == d.path().join("KOBOeReader/books"))
+            matches!(&t, Target::Dir { root, mount: None, staged: true } if *root == devices.join("Kobo/books"))
         );
         assert!(connect(
             &DeviceEnv {
                 mount_check: false,
-                usbms_base: d.path().join("无"),
-                ..env
+                devices_base: d.path().join("无"),
+                ..env.clone()
             },
             p
         )
@@ -830,27 +1001,104 @@ mod tests {
         .contains("不在"));
         #[cfg(target_os = "linux")]
         {
-            // 真的挂载点算接上（/proc 当成卷标 "proc" 的 USB 存储）；只看 <base>/<label>，带数字后缀的不跟
-            let k = |label: &str| {
-                let mut p = p.clone();
-                p.deliver = Some(Deliver::Usbms {
-                    label: label.into(),
-                    dir: "books".into(),
-                });
-                connect(
-                    &DeviceEnv {
-                        mtp_base: "/nonexistent".into(),
-                        mount_check: true,
-                        usbms_base: "/".into(),
-                    },
-                    &p,
-                )
-            };
+            // 真的挂载点算接上（/proc 当成 Kobo 链接的目标）；只按链接名找，不拿卷标拼目录
+            std::fs::remove_dir_all(devices.join("Kobo")).unwrap();
+            std::os::unix::fs::symlink("/proc", devices.join("Kobo")).unwrap();
             assert!(
-                matches!(k("proc"), Ok(Target::Dir { root, mount: Some(m) }) if root == Path::new("/proc/books") && m == Path::new("/proc"))
+                matches!(&connect(&env, p).unwrap(), Target::Dir { root, mount: Some(m), staged: true } if *root == devices.join("Kobo/books") && *m == devices.join("Kobo"))
             );
-            assert!(k("pro").is_err());
+            let mut q = p.clone();
+            q.deliver = Some(Deliver::Usbms {
+                label: "KOBOeReader".into(),
+                link: "Pro".into(),
+                dir: "books".into(),
+            });
+            assert!(connect(&env, &q).is_err(), "链接名是 Pro，不是卷标");
         }
+    }
+
+    #[test]
+    fn mountinfo_unescapes_octal_and_requires_exact_mount_point() {
+        assert_eq!(
+            unescape_mountinfo("/a\\040b\\011c\\012d\\134e"),
+            PathBuf::from("/a b\tc\nd\\e")
+        );
+        let d = tempfile::tempdir().unwrap();
+        let mnt = d.path().join("mtp dir");
+        std::fs::create_dir_all(&mnt).unwrap();
+        #[cfg(unix)]
+        {
+            let link = d.path().join("Kindle");
+            std::os::unix::fs::symlink(&mnt, &link).unwrap();
+            let escaped = mnt.to_string_lossy().replace(' ', "\\040");
+            let info = format!("1 0 0:1 / {escaped} rw - fuse jmtpfs rw\n");
+            assert!(link_mounted_in(&link, &info), "转义后完全相等");
+            assert!(!link_mounted_in(
+                &link,
+                "1 0 0:1 / /别的 rw - fuse jmtpfs rw\n"
+            ));
+            // 相对链接按链接所在目录解析
+            let link2 = d.path().join("Kobo");
+            std::os::unix::fs::symlink("mtp dir", &link2).unwrap();
+            assert!(link_mounted_in(&link2, &info));
+            // 链接不在、不是符号链接都不算
+            assert!(!link_mounted_in(&d.path().join("没有"), &info));
+            std::fs::create_dir(d.path().join("Hanvon")).unwrap();
+            assert!(!link_mounted_in(&d.path().join("Hanvon"), &info));
+        }
+    }
+
+    #[test]
+    fn symlink_to_plain_dir_is_not_connected() {
+        let d = tempfile::tempdir().unwrap();
+        let devices = d.path().join("devices");
+        let mnt = d.path().join("mnt");
+        std::fs::create_dir_all(devices.join("Kindle")).unwrap();
+        std::fs::create_dir_all(mnt.join("Internal Storage")).unwrap();
+        std::fs::remove_dir_all(devices.join("Kindle")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&mnt, devices.join("Kindle")).unwrap();
+        let p = profile::get("kindle").unwrap();
+        let env = DeviceEnv {
+            devices_base: devices.clone(),
+            mtp_base: d.path().join("mtp"),
+            mount_check: true,
+            usbms_base: d.path().join("usbms"),
+        };
+        assert!(
+            connect(&env, p).err().unwrap().contains("没挂上"),
+            "链接在，但目标不在 mountinfo"
+        );
+        assert!(connect(
+            &DeviceEnv {
+                mount_check: false,
+                ..env
+            },
+            p
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn prefix_migrations_include_old_candidates() {
+        let env = DeviceEnv {
+            devices_base: "/home/u/Devices".into(),
+            mtp_base: "/run/user/1000/mtp".into(),
+            mount_check: true,
+            usbms_base: "/run/media/u".into(),
+        };
+        let k = env.prefix_migrations(profile::get("kindle").unwrap());
+        assert!(k.contains(&(
+            PathBuf::from("/run/user/1000/mtp/kindle"),
+            PathBuf::from("/home/u/Devices/Kindle")
+        )));
+        let h = env.prefix_migrations(profile::get("hanvon").unwrap());
+        assert!(h.iter().any(|(o, n)| o.ends_with("Hanvon")
+            && n == Path::new("/home/u/Devices/Hanvon")));
+        let kobo = env.prefix_migrations(profile::get("kobo").unwrap());
+        assert!(kobo.iter().any(|(o, n)| o == Path::new("/run/media/u/KOBOeReader")
+            && n == Path::new("/home/u/Devices/Kobo")));
+        assert!(kobo.iter().any(|(o, _)| o == Path::new("/media/u/KOBOeReader")));
     }
 
     #[test]

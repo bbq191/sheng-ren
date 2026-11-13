@@ -7,34 +7,51 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
-/// 测试用的"设备"目录（`<书库>-dev`）：MTP 挂载目录，下面 kindle、ireader 各有一个存储（算接上了）。
-/// 测试一律不碰真设备：MTP 指向这里。
+/// 测试用的"设备"目录（`<书库>-dev`）：里面按内置模式的链接名建普通目录（`Kindle` / `Bigme` / `Hanvon` / `Ireader` /
+/// `Kobo`，MTP 的下面有 `Internal Storage`）。测试开着 `BOOKLIB_MTP_NO_MOUNT_CHECK=1`，普通目录就算接上；一律不碰真实
+/// `~/Devices`，也不建真的符号链接。
 pub fn dev_dir(lib: &Path) -> PathBuf {
     let d = PathBuf::from(format!("{}-dev", lib.display()));
-    for m in ["kindle", "ireader"] {
-        std::fs::create_dir_all(d.join(m).join("Internal Storage")).unwrap();
+    for id in ["bigme", "hanvon", "ireader", "kindle", "kobo"] {
+        let Some(deliver) = profile::get(id).and_then(|p| p.deliver.clone()) else {
+            continue;
+        };
+        let base = d.join(deliver.link_name());
+        match deliver {
+            profile::Deliver::Mtp { .. } => {
+                std::fs::create_dir_all(base.join("Internal Storage")).unwrap()
+            }
+            profile::Deliver::Usbms { .. } => std::fs::create_dir_all(base).unwrap(),
+        }
     }
     d
 }
 
-/// 设备上 `mode` 的产物根目录：`<存储>/<[deliver] dir>`（Kindle 仍是 `documents`，掌阅、汉王是 `Documents`）。
+/// 设备上 `mode` 的产物根目录：MTP 是 `<~/Devices 链接名>/Internal Storage/<[deliver] dir>`，
+/// Kobo 是 `<~/Devices 链接名>/<[deliver] dir>`（Kindle 仍是 `documents`，掌阅、汉王是 `Documents`，Bigme 是 `Books`）。
 pub fn documents(lib: &Path, mode: &str) -> PathBuf {
-    let dir = match profile::get(mode).and_then(|p| p.deliver.as_ref()) {
-        Some(profile::Deliver::Mtp { dir, .. } | profile::Deliver::Usbms { dir, .. }) => {
-            dir.as_str()
+    let dev = dev_dir(lib);
+    match profile::get(mode).and_then(|p| p.deliver.clone()) {
+        Some(deliver) => {
+            let base = dev.join(deliver.link_name());
+            match deliver {
+                profile::Deliver::Mtp { dir, .. } => base.join("Internal Storage").join(dir),
+                profile::Deliver::Usbms { dir, .. } => base.join(dir),
+            }
         }
-        _ => "documents",
-    };
-    dev_dir(lib).join(mode).join("Internal Storage").join(dir)
+        None => dev.join(mode).join("Internal Storage"),
+    }
 }
 
 /// 打开书库，设备指向测试目录（见 [`dev_dir`]）。
 pub fn open(lib: &Path) -> Library {
+    let dev = dev_dir(lib);
     let mut l = Library::open(lib).unwrap();
     l.set_device_env(DeviceEnv {
-        mtp_base: dev_dir(lib),
+        devices_base: dev.clone(),
+        mtp_base: dev.join("legacy-mtp"),
         mount_check: false,
-        usbms_base: dev_dir(lib).join("usbms"),
+        usbms_base: dev.join("legacy-usbms"),
     });
     l
 }
@@ -100,10 +117,10 @@ pub fn booklib(lib: Option<&Path>, args: &[&str]) -> Output {
 /// 同 [`booklib`]，另加环境变量（测试钩子，如 `BOOKLIB_TEST_FREE_SPACE`）。
 pub fn booklib_env(lib: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> Output {
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_booklib"));
-    cmd.envs(envs.iter().copied());
     cmd.env("BOOKLIB_MTP_NO_MOUNT_CHECK", "1")
         .env("BOOKLIB_NO_NET", "1")
-        .env_remove("BOOKLIB_USBMS_DIR"); // USB 存储在 MTP 目录下的 usbms/（见 `DeviceEnv`）
+        .env_remove("BOOKLIB_MTP_DIR") // 旧挂载路径只用于认旧记录，不再找设备
+        .env_remove("BOOKLIB_USBMS_DIR");
     if let Some(lib) = lib {
         cmd.arg(format!("--library={}", lib.display()));
         // 书库还没建（命令本身不该建出东西）时不建设备目录
@@ -112,10 +129,11 @@ pub fn booklib_env(lib: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> 
         } else {
             PathBuf::from(format!("{}-dev", lib.display()))
         };
-        cmd.env("BOOKLIB_MTP_DIR", dev);
+        cmd.env("BOOKLIB_DEVICES_DIR", dev);
     } else {
-        cmd.env("BOOKLIB_MTP_DIR", "/nonexistent-booklib-test");
+        cmd.env("BOOKLIB_DEVICES_DIR", "/nonexistent-booklib-test");
     }
+    cmd.envs(envs.iter().copied());
     cmd.args(args);
     run_with_timeout(cmd, args)
 }

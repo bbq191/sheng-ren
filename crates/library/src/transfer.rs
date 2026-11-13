@@ -29,6 +29,8 @@ pub struct Transfer {
     /// 传完写的记录（指纹已填）。
     pub(crate) entry: StateEntry,
     pub(crate) work: Work,
+    /// USB 大容量存储（Kobo）：经临时文件再改名，不搬 `.sdr`。
+    pub(crate) staged: bool,
 }
 
 /// 传输线程要做的：放到 `out`（MTP 设备、电脑上）；`compare` 时 `out` 已是逐字节相同的就不动（要把它读回来比）；`direct` 时不经临时文件
