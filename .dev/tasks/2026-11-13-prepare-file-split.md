@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-13-prepare-file-split（从最新 master 切出）
-- 更新时间: 2026-11-13T14:02:14+08:00
+- 更新时间: 2026-11-13T14:10:57+08:00
 - 引用: 2026-11-12-quality-audit 发现 9（主）、发现 8（可选顺手；核实结论是单独开单不值）
 
 ## 需求原文
@@ -93,5 +93,5 @@
   - 版本号未动（OPTIMIZE 69、COMIC 68、KINDLE_RULES 42、CONVERT 2、WRITER 26、PIPELINE 5）；`fp_golden.txt` 与 master 逐字节相同；testdata 未动。提交 `chore(library)` 可接受（纯重构）。
   - 测试：`cargo test --workspace` 全过：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 82 / bin 7 / cli 14 / flow 63（改前 62 + 本单 1）/ fp_golden 1，profile lib 19。`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。未对整个仓库跑 `cargo fmt`。
   - 阻断：无。
-- 二审：
-- 合并：
+- 二审：**无阻断**（agy-review，2026-11-13 14:09:25 Asia/Shanghai，模型 gemini-3.8-flash-medium，用时 67s，回执 `.dev/tasks/2026-11-13-prepare-file-split.agy.md`）。结论「建议通过」。负责 bot 已读回执并核对引用：`resolve_placement` 807–846、`settle_fresh` 850–891、`stage_registration` 897–949、`prepare_file` 952–1040、`edit_state` 1235–1248，以及五个调用点（`rebase_state_case` 349–353、`remove_outputs` 456–460、`hand_over_outputs` 471–480、`retract` 490–495、`flush_removed` 526–532）均核实。新 flow 测试 1568–1606 核实。建议与线索均无。未核实项：agy 只读未跑测试（验收与合并后已重跑）；真书回归和真机仍未做（验收已标明）。agy 写「避免写盘前持锁」是措辞：释放的是缓存 State 的 Rc，不是进程锁，不影响结论。
+- 合并：`8101e7e`（2026-11-13 14:09:49 Asia/Shanghai，`--no-ff` 合入当时 origin/master `0dc43d8`，另一父母 `b1a7f73`）。合并后再跑 `cargo test --workspace` 全过（计数与验收相同：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 82 / bin 7 / cli 14 / flow 63 / fp_golden 1，profile lib 19），`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。已推 origin/master。状态保持 **done**（不是 verified），**待 vinci 本机回归确认产物与生成记录逐字节不变后改 verified**。没跑真书回归、没上真机。未删除远程任务分支。
