@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: sheng-ren（box executor，接手中断的 oc-exec）
 - 分支: task/2026-11-13-split-imgopt（从最新 master 切出）
-- 更新时间: 2026-11-13T17:05:00+08:00
+- 更新时间: 2026-11-13T17:11:00+08:00
 - 引用: 2026-11-13-big-file-splits 分步 1；前一张子单 2026-11-13-split-generate 已合并 0d85255
 
 ## 需求原文
@@ -97,5 +97,5 @@
   - 版本号未动（OPTIMIZE 69、COMIC 68、KINDLE_RULES 42、CONVERT 2、WRITER 26、PIPELINE 5）；`crates/library/tests/fp_golden.txt` 与 master 逐字节相同；testdata 未动。
   - 测试：本机重跑 `cargo test --workspace` 全过：bookbase lib 30，bookconv lib **553**，csscascade lib 16，kfx lib 53，library lib 82 / bin 7 / cli 14 / flow 63 / fp_golden 1，profile lib 19。其中 `imgopt::tests::*` **55 项，名称与 `fe2973d` 原文 `#[test]` 清单完全一致**，全部通过。`cargo clippy --workspace --all-targets -- -D warnings` **0 警告**。未对整个仓库跑 `cargo fmt`。
   - 阻断：无。
-- 二审：
-- 合并：
+- 二审：**无阻断**（agy-review，2026-11-13 17:08:36 Asia/Shanghai，模型 gemini-3.8-flash-medium，用时 64s，回执 `.dev/tasks/2026-11-13-split-imgopt.agy.md`）。结论「建议通过」。负责 bot 已读回执并核对引用：入口 `imgopt.rs` 34–61（`pub` / `pub(crate) use` 再导出）核实；各子模块行数（最大 739）核实；`tests/text.rs` 第 394 行残留文档注释核实；「可见性仅 `pub(crate)`、公开签名再导出」与一审逐项比对一致。建议两条与一审相同（残留注释、`include!`），均非阻断。线索无。agy 提到的 `Cargo.toml:15` 是 workspace 包版本 `0.1.0`，该文件确实未改；产品版本号在 `docs/development.md` 与源码常量，一审已核对未动。未核实项：agy 只读未跑测试（验收与合并后已重跑）；真书回归和真机仍未做（验收已标明）。
+- 合并：`5068a49`（2026-11-13 17:09:02 Asia/Shanghai，`--no-ff` 合入当时 origin/master `fe2973d`，另一父母 `f2f8733`）。合并后再跑 `cargo test --workspace` 全过（计数与验收相同：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 82 / bin 7 / cli 14 / flow 63 / fp_golden 1，profile lib 19；imgopt 55 项），`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。已推 origin/master。状态保持 **done**（不是 verified），**待 vinci 本机回归确认产物逐字节不变后改 verified**。没跑真书回归、没上真机。未删除远程任务分支。
