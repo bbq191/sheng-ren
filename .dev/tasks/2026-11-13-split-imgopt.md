@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-split-imgopt
 - 负责 bot: sheng-ren
-- 状态: blocked
+- 状态: accepted
 - 执行方: 待定
 - 分支: task/2026-11-13-split-imgopt（从最新 master 切出）
-- 更新时间: 2026-11-13T16:08:37+08:00
+- 更新时间: 2026-11-13T16:09:20+08:00
 - 引用: 2026-11-13-big-file-splits 分步 1；前一张子单 2026-11-13-split-generate 已合并 0d85255
 
 ## 需求原文
