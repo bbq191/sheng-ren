@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-prepare-file-split
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-13-prepare-file-split（从最新 master 切出）
-- 更新时间: 2026-11-13T13:53:54+08:00
+- 更新时间: 2026-11-13T14:02:14+08:00
 - 引用: 2026-11-12-quality-audit 发现 9（主）、发现 8（可选顺手；核实结论是单独开单不值）
 
 ## 需求原文
@@ -55,15 +55,22 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
-- 没跑真书回归、没上真机（纯重构，待本机回归确认产物逐字节不变）。
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T13:53:54+08:00–2026-11-13T14:02:14+08:00
+- base..head：`0dc43d8f44b6bddf070f0de7c6e8d9eaa972af7c..9e42dbf9c8ccae1d68f4db51e7ebf46216bfd392`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | ea9c0a9 | chore: 开始执行任务单 2026-11-13-prepare-file-split [skip-notify] |
+  | 9e42dbf | chore(library): 拆开 prepare_file、统一生成记录的读改写 |
+- 改动文件：`.dev/tasks/2026-11-13-prepare-file-split.md`,`crates/library/src/generate.rs` `crates/library/tests/flow.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/library/tests/flow.rs`
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-prepare-file-split-20261113-135354.json`
+- 日志：`/home/box/oc-runs/2026-11-13-prepare-file-split-20261113-135354.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
 <!-- 负责 bot 填写 -->
