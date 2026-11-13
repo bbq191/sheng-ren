@@ -4,6 +4,7 @@
 //! 记录只在主线程改：传输线程只做 [`Transfer::run`] 这类不碰书库的事，结果交回主线程由 [`crate::Library::complete`] 记下来。
 
 use crate::deliver;
+use crate::error::{Error, Kind};
 use crate::generate::StateEntry;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,7 +42,7 @@ pub(crate) struct Work {
 
 impl Transfer {
     /// 放上设备，做完才返回：真的写了没有（`false`：设备上已是一样的，没写）。
-    pub fn run(&self) -> Result<bool, String> {
+    pub fn run(&self) -> Result<bool, Error> {
         let Work {
             out,
             compare,
@@ -89,7 +90,7 @@ pub struct Pipeline {
 /// 传输线程交回的。
 pub enum Event {
     /// 传完一件（成功或失败；成功时是真的写了没有）：交给 [`crate::Library::complete`]。
-    Done(Box<Transfer>, Result<bool, String>),
+    Done(Box<Transfer>, Result<bool, Error>),
     /// 这台设备的传输线程意外退出了：手上还没交回的 `count` 件没传成（记录没改，下次再传）。
     Lost { device: String, count: usize },
 }
@@ -201,18 +202,18 @@ impl Drop for Pipeline {
 }
 
 /// 跑 `f`，panic 了变成错误（传输线程里一件出了 panic 只算这件传失败，线程接着做下一件）。
-fn guarded<T>(what: &str, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+fn guarded<T, E: From<String>>(what: &str, f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| {
         let msg = p
             .downcast_ref::<&str>()
             .map(|s| s.to_string())
             .or_else(|| p.downcast_ref::<String>().cloned())
             .unwrap_or_default();
-        Err(format!("{what}时出了内部错误（panic：{msg}）"))
+        Err(E::from(format!("{what}时出了内部错误（panic：{msg}）")))
     })
 }
 
-/// 一件一件放。一件写满了设备（[`crate::space::NO_SPACE`]）后，排着的这一轮都不再写（[`lane_step`]）。
+/// 一件一件放。一件写满了设备（错误种类 [`Kind::NoSpace`]）后，排着的这一轮都不再写（[`lane_step`]）。
 fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<Event>) {
     let mut full = false;
     for t in rx {
@@ -225,17 +226,18 @@ fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sen
 
 /// 传输线程放一件（纯逻辑）：前面已经写满了（`full`）就不碰设备，直接交回"空间满、没传"——MTP 直接写会先删掉设备上的旧版本，
 /// 接着写还是满，等于白删一本完好的书（agy 复审）。这一件写满了就记下 `full`。
-fn lane_step(full: &mut bool, run: impl FnOnce() -> Result<bool, String>) -> Result<bool, String> {
+fn lane_step(full: &mut bool, run: impl FnOnce() -> Result<bool, Error>) -> Result<bool, Error> {
     if *full {
-        return Err(format!(
-            "{}：同一台前面的书已经写满，这一本这一轮没传",
-            crate::space::NO_SPACE
+        return Err(Error::new(
+            Kind::NoSpace,
+            format!(
+                "{}：同一台前面的书已经写满，这一本这一轮没传",
+                crate::space::NO_SPACE
+            ),
         ));
     }
     let r = run();
-    if r.as_ref()
-        .is_err_and(|e| e.starts_with(crate::space::NO_SPACE))
-    {
+    if r.as_ref().is_err_and(|e| e.kind() == Kind::NoSpace) {
         *full = true;
     }
     r
@@ -249,10 +251,13 @@ mod tests {
     #[test]
     fn lane_stops_after_no_space() {
         let mut full = false;
-        assert!(lane_step(&mut full, || Err("别的错".into())).is_err());
+        assert!(lane_step(&mut full, || Err(Error::other("别的错"))).is_err());
         assert!(!full);
         assert_eq!(lane_step(&mut full, || Ok(true)), Ok(true));
-        let e = format!("{}：写 x", crate::space::NO_SPACE);
+        let e = Error::new(
+            Kind::NoSpace,
+            format!("{}：写 x", crate::space::NO_SPACE),
+        );
         assert!(lane_step(&mut full, || Err(e)).is_err());
         assert!(full);
         let mut ran = false;
@@ -260,7 +265,7 @@ mod tests {
             ran = true;
             Ok(true)
         });
-        assert!(!ran && r.unwrap_err().starts_with(crate::space::NO_SPACE));
+        assert!(!ran && r.unwrap_err().kind() == Kind::NoSpace);
     }
 
     /// 传输线程死了（手上还有活）：主线程等结果时报出来，不一直卡着。
@@ -286,5 +291,7 @@ mod tests {
     fn panics_become_errors() {
         let r: Result<(), String> = guarded("传到设备", || panic!("坏了"));
         assert!(r.unwrap_err().contains("坏了"));
+        let r: Result<(), Error> = guarded("传到设备", || panic!("坏了"));
+        assert!(r.unwrap_err().as_str().contains("坏了"));
     }
 }

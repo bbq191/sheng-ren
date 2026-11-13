@@ -68,7 +68,7 @@ impl Library {
     /// （入库以后原件被改过）时，按 `sync` 的"换成新版本"处理：旧版本的条目连同产物删掉（跟踪目录里还有一份旧内容的不删），
     /// `sources.json` 里这个文件也记成新版本。
     pub fn add_file(&self, path: &Path) -> Result<Added, String> {
-        let added = self.add_file_only(path)?;
+        let added = self.add_file_only(path).map_err(|e| e.to_string())?;
         let Ok(path) = std::fs::canonicalize(path) else {
             return Ok(added);
         };
@@ -115,19 +115,24 @@ impl Library {
     /// 就是这个位置的，刷新记着的大小和修改时间。不管同一路径的旧版本（`sync` 自己管，见 [`Library::add_file`]）。
     ///
     /// 边读边算哈希（不整本读进内存）。读之前和读完各看一次大小和修改时间，变了说明文件正在写入，报错不入库。
-    pub(crate) fn add_file_only(&self, path: &Path) -> Result<Added, String> {
+    pub(crate) fn add_file_only(
+        &self,
+        path: &Path,
+    ) -> Result<Added, crate::error::Error> {
+        use crate::error::{Error, Kind};
         let path = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let Some(path_str) = path.to_str().map(str::to_string) else {
-            return Err(NOT_UTF8.into());
+            return Err(Error::other(NOT_UTF8));
         };
         let stat = || file_stat(&path).ok_or_else(|| format!("读 {path_str}: 文件不见了"));
         let before = stat()?;
-        let unchanged = || -> Result<(), String> {
+        let unchanged = || -> Result<(), Error> {
             if stat()? == before {
                 Ok(())
             } else {
-                Err(format!(
-                    "{BUSY}（读的过程中大小或修改时间变了），等写完再试"
+                Err(Error::new(
+                    Kind::Busy,
+                    format!("{BUSY}（读的过程中大小或修改时间变了），等写完再试"),
                 ))
             }
         };
@@ -185,7 +190,9 @@ impl Library {
             }
         };
         if let Some(d) = info.drm {
-            return Err(format!("有 DRM：{d}。解 DRM 还没做，暂时不能入库"));
+            return Err(Error::other(format!(
+                "有 DRM：{d}。解 DRM 还没做，暂时不能入库"
+            )));
         }
         let (title, authors, comic, zh_text) = (info.title, info.authors, info.comic, info.zh_text);
         // 书里有没有简介、标签（指纹要用，见 `Meta::own_dc`）：只读 OPF

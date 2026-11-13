@@ -6,7 +6,8 @@
 //! （维护者定：删）。设备上的子目录一律是原件所在目录相对**书根目录**的路径（维护者定：原目录结构是什么就是什么，跟踪
 //! `books/漫画/死亡筆記/卷01.epub` 放进设备的 `漫画/死亡筆記/`），见 [`Sources::placement`]。
 
-use crate::{Added, Library, Meta, BUSY, NOT_UTF8};
+use crate::error::Kind;
+use crate::{Added, Library, Meta, NOT_UTF8};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -924,9 +925,9 @@ impl Library {
                 );
             }
             Err(e) => {
-                on(SyncEvent::Failed(&path, &e));
+                on(SyncEvent::Failed(&path, e.as_str()));
                 round.rep.failed += 1;
-                if e.starts_with(BUSY) {
+                if e.kind() == Kind::Busy {
                     // 正在写入：这次看到的不算数，旧记录照旧（没有就不记），下一轮再试
                     if let Some(o) = src.files.get(&path) {
                         round.present.insert(path, o.clone());

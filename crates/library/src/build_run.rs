@@ -3,6 +3,7 @@
 //! 调度在这里（设备没接上的跳过、排满的设备推迟、`--watch` 跨轮记住失败），结果一件一件报成 [`BuildEvent`]；
 //! 怎么显示（措辞、`quiet` 时哪些不报）由命令行决定。
 
+use crate::error::Kind;
 use crate::{Built, Event, Library, Meta, OriginalState, Pipeline, Profile, Step};
 use std::collections::{HashMap, HashSet};
 
@@ -320,7 +321,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
         if lost && !counts.dropped.contains(&device) {
             counts.dropped.push(device.clone());
         }
-        match lib.complete(*t, r) {
+        match lib.complete_typed(*t, r) {
             Ok(built) => {
                 counts.count(&built);
                 report(BuildEvent::Built {
@@ -331,13 +332,13 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             }
             // 写的途中设备满了：停下这台（后面的书不再生成、传），不记进失败表、不算失败；同一台只报第一本
             // 挂载点不在了（`lost`）的不算：断开后的挂载点在本地 tmpfs 上，写满是那里满了，按断开处理
-            Err(error) if !lost && error.starts_with(crate::space::NO_SPACE) => {
+            Err(error) if !lost && error.kind() == Kind::NoSpace => {
                 if !counts.no_space.contains(&device) {
                     counts.no_space.push(device.clone());
                     report(BuildEvent::DeviceFull {
                         device,
                         title,
-                        error,
+                        error: error.to_string(),
                     });
                 }
             }
@@ -359,7 +360,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                 report(BuildEvent::Failed {
                     device,
                     title,
-                    error,
+                    error: error.to_string(),
                 });
             }
         }
@@ -396,7 +397,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                 None => {}
             }
         }
-        match lib.prepare(m, device, force) {
+        match lib.prepare_typed(m, device, force) {
             Ok(Step::Done(built)) => {
                 counts.count(&built);
                 report(BuildEvent::Built {
@@ -409,20 +410,20 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
             Err(error) => {
                 counts.failed += 1;
                 // 生成时发现设备掉线：记成掉线（下一轮接上重传），不记进失败表
-                if error.starts_with(crate::generate::UNMOUNTED) {
+                if error.kind() == Kind::Unmounted {
                     if !counts.dropped.contains(&device.id) {
                         counts.dropped.push(device.id.clone());
                     }
                     return report(BuildEvent::Failed {
                         device: device.id.clone(),
                         title: m.title.clone(),
-                        error,
+                        error: error.to_string(),
                     });
                 }
                 report(BuildEvent::Failed {
                     device: device.id.clone(),
                     title: m.title.clone(),
-                    error,
+                    error: error.to_string(),
                 });
                 if let Some(f) = fails.as_deref_mut() {
                     f.insert(key, now());
