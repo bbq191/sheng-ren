@@ -177,28 +177,41 @@ fn mtp_storage(point: &Path) -> Option<PathBuf> {
     }
 }
 
+/// [`put_file`] 的选项。2026-11-13 之前是四个按位置传的参数（三个 bool 挨着），传错位了编译器也看不出来，改成具名。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PutOptions<'a> {
+    /// 保留来源文件（false 时放好后删掉来源）。
+    pub(crate) keep_src: bool,
+    /// `dest` 已经是逐字节相同的文件就不动它（要把 `dest` 读回来，调用方能用记录的哈希判断时传 `false`）。
+    pub(crate) compare: bool,
+    /// 不经临时文件：先删 `dest`、直接写（见 [`put_file`]）。
+    pub(crate) direct: bool,
+    /// 要一直挂着的挂载点（不查挂没挂时 `None`）。
+    pub(crate) mount: Option<&'a Path>,
+}
+
 /// 把文件 `src` 放到 `dest`（目录没有就建；同一文件系统直接改名；`keep_src` 时或跨文件系统时复制）。`compare` 时 `dest` 已经是逐字节相同的
 /// 文件就不动它（Kindle 覆盖成不同字节会清掉阅读进度，相同的不会；也省得在 MTP 上白拷）——要把 `dest` 读回来，调用方能用记录的
 /// 哈希判断时传 `false`。复制缺省先写旁边的临时文件再换上去（先删旧的再改名：MTP 上改名不能覆盖已有文件）；`direct` 时先删旧的、
 /// 直接写 `dest`——jmtpfs 的改名是把整个文件下载回来再上传一份，经临时文件等于传三遍（调用方要自己保证写到一半被打断时认得出来，
-/// 见 `generate::Library::prepare_file`）。返回有没有真的写。
+/// 见 `generate::Library::prepare_file`）。返回有没有真的写。各项含义见 [`PutOptions`]。
 ///
 /// 目录刚建好、文件还没放进去时，主线程可能正好把它当成"变空的目录"删掉（删别的书的旧位置时顺带删空目录，
 /// `generate::State::delete_placements`）：碰到目录不在了就重建再放，试几次。
-pub(crate) fn put_file(
-    src: &Path,
-    dest: &Path,
-    keep_src: bool,
-    compare: bool,
-    direct: bool,
-    mount: Option<&Path>,
-) -> Result<bool, String> {
+pub(crate) fn put_file(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool, String> {
     // 挪到只差大小写的新名字（书名只改了大小写）：不分大小写的文件系统上 `dest` 就是 `src`，下面"先删 dest"会把书删掉。
     // 先改成旁边的临时名字，再从那里放
-    if !keep_src && crate::generate::case_twin(src, dest) {
+    if !opts.keep_src && crate::generate::case_twin(src, dest) {
         let staged = crate::fsutil::tmp_sibling(dest);
         std::fs::rename(src, &staged).map_err(|e| format!("改名 {}: {e}", src.display()))?;
-        let r = put_file_retry(&staged, dest, false, compare, direct, mount);
+        let r = put_file_retry(
+            &staged,
+            dest,
+            PutOptions {
+                keep_src: false,
+                ..opts
+            },
+        );
         if r.is_err() && staged.is_file() {
             let _ = std::fs::rename(&staged, src); // 放回原名，记录还对得上
         }
@@ -207,24 +220,25 @@ pub(crate) fn put_file(
     // 逐段只差大小写、父目录不同的两个位置（汉王 documents/Documents）：不分大小写的设备上就是同一个文件。
     // 按 keep_src 处理；并且**强制不走直接写**——直接写会先删 dest，不分大小写时 dest 就是 src，书先没了、
     // 再从已不在的 src 复制失败。经临时文件那条路在临时文件写好之前不碰 dest（agy/验收阻断 1）。
-    if !keep_src && crate::generate::case_alias(src, dest) {
-        return put_file_retry(src, dest, true, compare, false, mount);
+    if !opts.keep_src && crate::generate::case_alias(src, dest) {
+        return put_file_retry(
+            src,
+            dest,
+            PutOptions {
+                keep_src: true,
+                direct: false,
+                ..opts
+            },
+        );
     }
-    put_file_retry(src, dest, keep_src, compare, direct, mount)
+    put_file_retry(src, dest, opts)
 }
 
-fn put_file_retry(
-    src: &Path,
-    dest: &Path,
-    keep_src: bool,
-    compare: bool,
-    direct: bool,
-    mount: Option<&Path>,
-) -> Result<bool, String> {
+fn put_file_retry(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool, String> {
     // 每次写之前、写完都看挂载点还挂着：设备中途断开后挂载点只剩空目录（MTP 的在 tmpfs 上，用户能写），
     // 重试时重建目录会把书写进内存、还记成传上了
     let gone = || {
-        mount
+        opts.mount
             .filter(|m| !mounted(m))
             .map(|m| format!("设备断开了（{} 没挂着），没传", m.display()))
     };
@@ -233,7 +247,7 @@ fn put_file_retry(
         if let Some(e) = gone() {
             return Err(e);
         }
-        match put_file_once(src, dest, keep_src, compare, direct) {
+        match put_file_once(src, dest, opts) {
             Err((_, true))
                 if tries < 3 && dest.parent().is_some_and(|d| !d.is_dir()) && src.is_file() =>
             {
@@ -365,31 +379,25 @@ fn ensure_dir(
 }
 
 /// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
-fn put_file_once(
-    src: &Path,
-    dest: &Path,
-    keep_src: bool,
-    compare: bool,
-    direct: bool,
-) -> Result<bool, (String, bool)> {
+fn put_file_once(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool, (String, bool)> {
     let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     if let Some(dir) = dest.parent() {
         ensure_dir(dir, |d| std::fs::create_dir(d), MKDIR_BACKOFF)
             .map_err(|e| (io_error(dir.display().to_string(), &e), missing(&e)))?;
     }
-    if compare && same_bytes(src, dest) {
-        if !keep_src {
+    if opts.compare && same_bytes(src, dest) {
+        if !opts.keep_src {
             let _ = std::fs::remove_file(src);
         }
         fix_case(dest);
         return Ok(false);
     }
     // 测试钩子 BOOKLIB_TEST_ENOSPC 要走复制那条路（同一文件系统上改名不会写满）
-    if !keep_src && fail_write().is_none() && std::fs::rename(src, dest).is_ok() {
+    if !opts.keep_src && fail_write().is_none() && std::fs::rename(src, dest).is_ok() {
         let _ = crate::fsutil::sync_parent(dest);
         return Ok(true);
     }
-    let tmp = if direct {
+    let tmp = if opts.direct {
         let _ = std::fs::remove_file(dest);
         dest.to_path_buf()
     } else {
@@ -423,7 +431,7 @@ fn put_file_once(
         // 设备满了：开头标上 NO_SPACE（`io_error`），一轮生成据此停下这台设备、不记进失败表
         return Err((io_error(format!("写 {}", dest.display()), &e), missing(&e)));
     }
-    if !direct {
+    if !opts.direct {
         let _ = std::fs::remove_file(dest);
         if let Err(e) = std::fs::rename(&tmp, dest) {
             let _ = std::fs::remove_file(&tmp);
@@ -434,7 +442,7 @@ fn put_file_once(
         }
     }
     let _ = crate::fsutil::sync_parent(dest);
-    if !keep_src {
+    if !opts.keep_src {
         let _ = std::fs::remove_file(src);
     }
     Ok(true)
@@ -451,7 +459,16 @@ mod space_tests {
             std::fs::write(&src, b"content").unwrap();
             let dest = d.path().join("dev").join("book.epub");
             super::FAIL_WRITE.with(|f| f.set(Some(28)));
-            let r = super::put_file(&src, &dest, true, false, direct, None);
+            let r = super::put_file(
+                &src,
+                &dest,
+                super::PutOptions {
+                    keep_src: true,
+                    compare: false,
+                    direct,
+                    mount: None,
+                },
+            );
             super::FAIL_WRITE.with(|f| f.set(None));
             let e = r.unwrap_err();
             assert!(e.starts_with(crate::space::NO_SPACE), "{e}");
@@ -471,7 +488,16 @@ mod space_tests {
         let src = d.path().join("src.epub");
         std::fs::write(&src, b"x").unwrap();
         super::FAIL_WRITE.with(|f| f.set(Some(5)));
-        let r = super::put_file(&src, &d.path().join("b.epub"), true, false, false, None);
+        let r = super::put_file(
+            &src,
+            &d.path().join("b.epub"),
+            super::PutOptions {
+                keep_src: true,
+                compare: false,
+                direct: false,
+                mount: None,
+            },
+        );
         super::FAIL_WRITE.with(|f| f.set(None));
         assert!(!r.unwrap_err().starts_with(crate::space::NO_SPACE));
     }
@@ -500,7 +526,17 @@ mod case_tests {
         let d = tempfile::tempdir().unwrap();
         let (a, b) = (d.path().join("Abc.epub"), d.path().join("abc.epub"));
         std::fs::write(&a, b"book").unwrap();
-        assert!(super::put_file(&a, &b, false, false, true, None).unwrap());
+        assert!(super::put_file(
+            &a,
+            &b,
+            super::PutOptions {
+                keep_src: false,
+                compare: false,
+                direct: true,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&b).unwrap(), b"book");
         assert!(!a.exists());
         let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().flatten().collect();
@@ -516,7 +552,16 @@ mod case_tests {
         let point = d.path().join("mtp/dev");
         std::fs::create_dir_all(&point).unwrap();
         let dest = point.join("存储/documents/a.epub");
-        let r = super::put_file(&src, &dest, true, false, true, Some(&point));
+        let r = super::put_file(
+            &src,
+            &dest,
+            super::PutOptions {
+                keep_src: true,
+                compare: false,
+                direct: true,
+                mount: Some(&point),
+            },
+        );
         assert!(r.is_err());
         assert!(!point.join("存储").exists(), "没在空挂载点里建目录");
     }
@@ -786,25 +831,75 @@ mod tests {
         let (src, dest) = (d.path().join("src"), d.path().join("dest"));
         std::fs::write(&src, b"abc").unwrap();
         assert!(
-            put_file(&src, &dest, true, true, false, None).unwrap(),
+            put_file(
+                &src,
+                &dest,
+                PutOptions {
+                    keep_src: true,
+                    compare: true,
+                    direct: false,
+                    mount: None,
+                },
+            )
+            .unwrap(),
             "不在：写"
         );
         assert!(
-            !put_file(&src, &dest, true, true, false, None).unwrap(),
+            !put_file(
+                &src,
+                &dest,
+                PutOptions {
+                    keep_src: true,
+                    compare: true,
+                    direct: false,
+                    mount: None,
+                },
+            )
+            .unwrap(),
             "相同：不写"
         );
         assert!(
-            put_file(&src, &dest, true, false, false, None).unwrap(),
+            put_file(
+                &src,
+                &dest,
+                PutOptions {
+                    keep_src: true,
+                    compare: false,
+                    direct: false,
+                    mount: None,
+                },
+            )
+            .unwrap(),
             "不比较：照写"
         );
         std::fs::write(&src, b"abd").unwrap();
-        assert!(put_file(&src, &dest, false, true, false, None).unwrap());
+        assert!(put_file(
+            &src,
+            &dest,
+            PutOptions {
+                keep_src: false,
+                compare: true,
+                direct: false,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"abd");
         assert!(!src.exists(), "不留来源时挪走");
         assert!(!same_bytes(&dest, &d.path().join("x")));
         // 直接写：换掉旧的、不留临时文件
         std::fs::write(&src, b"xyz1").unwrap();
-        assert!(put_file(&src, &dest, true, false, true, None).unwrap());
+        assert!(put_file(
+            &src,
+            &dest,
+            PutOptions {
+                keep_src: true,
+                compare: false,
+                direct: true,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"xyz1");
         assert_eq!(
             std::fs::read_dir(d.path()).unwrap().count(),
@@ -827,14 +922,34 @@ mod tests {
         let src = old.join("书.epub");
         std::fs::write(&src, b"same").unwrap();
         let dest = new.join("书.epub");
-        assert!(!put_file(&src, &dest, false, true, true, None).unwrap());
+        assert!(!put_file(
+            &src,
+            &dest,
+            PutOptions {
+                keep_src: false,
+                compare: true,
+                direct: true,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert!(src.exists() && dest.exists(), "同一个文件：不删 src");
 
         // compare=false、direct=true：也必须强制走临时文件，不能先删 dest（不分大小写时 dest 就是 src）
         let src3 = old.join("另一本.epub");
         std::fs::write(&src3, b"new content").unwrap();
         let dest3 = new.join("另一本.epub");
-        assert!(put_file(&src3, &dest3, false, false, true, None).unwrap());
+        assert!(put_file(
+            &src3,
+            &dest3,
+            PutOptions {
+                keep_src: false,
+                compare: false,
+                direct: true,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&dest3).unwrap(), b"new content");
         assert!(src3.exists(), "不删来源");
         let leftovers = std::fs::read_dir(&old)
@@ -849,7 +964,17 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         let dest2 = other.join("书.epub");
         std::fs::write(&dest2, b"old").unwrap();
-        assert!(put_file(&src, &dest2, false, true, false, None).unwrap());
+        assert!(put_file(
+            &src,
+            &dest2,
+            PutOptions {
+                keep_src: false,
+                compare: true,
+                direct: false,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&dest2).unwrap(), b"same");
         assert!(src.exists(), "不删来源");
     }
