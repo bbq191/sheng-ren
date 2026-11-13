@@ -313,9 +313,9 @@ impl Library {
             old_prefix(&e.path)
                 || old_prefix(&e.root)
                 || case_alias(&e.root, root)
-                || e.old
-                    .iter()
-                    .any(|o| old_prefix(&o.path) || old_prefix(&o.root) || case_alias(&o.root, root))
+                || e.old.iter().any(|o| {
+                    old_prefix(&o.path) || old_prefix(&o.root) || case_alias(&o.root, root)
+                })
         }) || state
             .orphans
             .iter()

@@ -125,9 +125,7 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 }
 
 pub(crate) fn user_name() -> Option<String> {
-    std::env::var("USER")
-        .ok()
-        .filter(|u| !u.is_empty())
+    std::env::var("USER").ok().filter(|u| !u.is_empty())
 }
 
 fn default_mtp_base() -> PathBuf {
@@ -284,11 +282,9 @@ fn lexical_normalize(p: &Path) -> PathBuf {
 
 /// `/proc/self/mountinfo` 里每行的挂载点（第 5 列），先还原 `\040` 等八进制转义。
 fn mountinfo_points(mountinfo: &str) -> impl Iterator<Item = PathBuf> + '_ {
-    mountinfo.lines().filter_map(|line| {
-        line.split_whitespace()
-            .nth(4)
-            .map(unescape_mountinfo)
-    })
+    mountinfo
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(4).map(unescape_mountinfo))
 }
 
 fn unescape_mountinfo(s: &str) -> PathBuf {
@@ -954,7 +950,9 @@ mod tests {
             p,
         )
         .unwrap();
-        assert!(matches!(&t, Target::Dir { mount: None, root, staged: false } if *root == devices.join("Ireader/内部共享存储空间/Documents")));
+        assert!(
+            matches!(&t, Target::Dir { mount: None, root, staged: false } if *root == devices.join("Ireader/内部共享存储空间/Documents"))
+        );
         assert!(!devices.join("Ireader").is_symlink(), "booklib 不建链接");
     }
 
@@ -1093,12 +1091,17 @@ mod tests {
             PathBuf::from("/home/u/Devices/Kindle")
         )));
         let h = env.prefix_migrations(profile::get("hanvon").unwrap());
-        assert!(h.iter().any(|(o, n)| o.ends_with("Hanvon")
-            && n == Path::new("/home/u/Devices/Hanvon")));
+        assert!(h
+            .iter()
+            .any(|(o, n)| o.ends_with("Hanvon") && n == Path::new("/home/u/Devices/Hanvon")));
         let kobo = env.prefix_migrations(profile::get("kobo").unwrap());
-        assert!(kobo.iter().any(|(o, n)| o == Path::new("/run/media/u/KOBOeReader")
-            && n == Path::new("/home/u/Devices/Kobo")));
-        assert!(kobo.iter().any(|(o, _)| o == Path::new("/media/u/KOBOeReader")));
+        assert!(kobo
+            .iter()
+            .any(|(o, n)| o == Path::new("/run/media/u/KOBOeReader")
+                && n == Path::new("/home/u/Devices/Kobo")));
+        assert!(kobo
+            .iter()
+            .any(|(o, _)| o == Path::new("/media/u/KOBOeReader")));
     }
 
     #[test]

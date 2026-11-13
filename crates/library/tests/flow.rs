@@ -1596,8 +1596,7 @@ fn legacy_device_prefix_is_migrated_in_records_only() {
 
     // 记录改回旧前缀；old 里也放同一个文件（经链接就是现在这份）
     let sp = lib_dir.join("output-state/kindle.json");
-    let mut st: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
     let old_file = old_device
         .join("Internal Storage/documents")
         .join(path.file_name().unwrap());
@@ -1605,8 +1604,7 @@ fn legacy_device_prefix_is_migrated_in_records_only() {
     assert!(old_file.is_file(), "旧路径经链接就是刚生成的那份");
     st["books"][&m.id]["path"] = serde_json::json!(old_file.clone());
     st["books"][&m.id]["root"] = serde_json::json!(old_root.clone());
-    st["books"][&m.id]["old"] =
-        serde_json::json!([{"path": old_file, "root": old_root}]);
+    st["books"][&m.id]["old"] = serde_json::json!([{"path": old_file, "root": old_root}]);
     std::fs::write(&sp, st.to_string()).unwrap();
     lib.refresh_devices();
 
@@ -1616,9 +1614,15 @@ fn legacy_device_prefix_is_migrated_in_records_only() {
     );
     assert!(path.is_file(), "旧位置就是现在这份：不删书");
     let after = std::fs::read_to_string(&sp).unwrap();
-    assert!(after.contains("/devices/Kindle/Internal Storage/documents"), "{after}");
+    assert!(
+        after.contains("/devices/Kindle/Internal Storage/documents"),
+        "{after}"
+    );
     assert!(!after.contains("old-mtp"), "记录已换到新前缀：{after}");
-    assert!(!after.contains("\"old\""), "旧位置就是当前位置，不留在待删里：{after}");
+    assert!(
+        !after.contains("\"old\""),
+        "旧位置就是当前位置，不留在待删里：{after}"
+    );
 }
 
 #[test]
@@ -3595,7 +3599,12 @@ fn case_rebase_keeps_books_and_record(id: &str, old_dir: &str, new_dir: &str) {
     let lib_dir = dir.path().join("lib");
     let lib = common::open(&lib_dir);
     let dev = common::dev_dir(&lib_dir);
-    let link = profile::get(id).unwrap().deliver.as_ref().unwrap().link_name();
+    let link = profile::get(id)
+        .unwrap()
+        .deliver
+        .as_ref()
+        .unwrap()
+        .link_name();
     let storage = dev.join(link).join("Internal Storage");
     std::fs::create_dir_all(storage.join(old_dir)).unwrap();
     let src = dir.path().join("书.epub");
@@ -3646,7 +3655,12 @@ fn case_sensitive_copies_and_keeps_old(id: &str, old_dir: &str, new_dir: &str) {
     let lib_dir = dir.path().join("lib");
     let lib = common::open(&lib_dir);
     let dev = common::dev_dir(&lib_dir);
-    let link = profile::get(id).unwrap().deliver.as_ref().unwrap().link_name();
+    let link = profile::get(id)
+        .unwrap()
+        .deliver
+        .as_ref()
+        .unwrap()
+        .link_name();
     let storage = dev.join(link).join("Internal Storage");
     std::fs::create_dir_all(storage.join(old_dir)).unwrap();
     let src = dir.path().join("书.epub");
@@ -3678,7 +3692,12 @@ fn case_migrates_orphans_too(id: &str, old_dir: &str, new_dir: &str) {
     let lib_dir = dir.path().join("lib");
     let lib = common::open(&lib_dir);
     let dev = common::dev_dir(&lib_dir);
-    let link = profile::get(id).unwrap().deliver.as_ref().unwrap().link_name();
+    let link = profile::get(id)
+        .unwrap()
+        .deliver
+        .as_ref()
+        .unwrap()
+        .link_name();
     let storage = dev.join(link).join("Internal Storage");
     std::fs::create_dir_all(storage.join(old_dir)).unwrap();
     let src = dir.path().join("要删的.epub");

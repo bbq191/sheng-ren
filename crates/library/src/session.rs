@@ -214,7 +214,8 @@ impl Devices {
             return true;
         }
         // 新约定：链接指向的挂载点在 mountinfo 里就算接上，不再 stat 链接目标（卡死的 FUSE 上 stat 会挂住）
-        if env.mount_check && std::fs::symlink_metadata(&point).is_ok_and(|m| m.file_type().is_symlink())
+        if env.mount_check
+            && std::fs::symlink_metadata(&point).is_ok_and(|m| m.file_type().is_symlink())
         {
             return false;
         }
