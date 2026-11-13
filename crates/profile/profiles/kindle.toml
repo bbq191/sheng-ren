@@ -68,8 +68,10 @@ height = 1546
 width = 1272
 height = 1696
 
-# 产物直接传进 Kindle（2026-10-07 定）：USB 连上、jmtpfs 挂好就传进存储根目录的 documents/，子目录照跟踪目录。
+# 产物直接传进 Kindle（2026-10-07 定）：USB 连上、dotfiles 把 `~/Devices/Kindle` 链到 jmtpfs 的挂载点，就传进存储根目录的
+# documents/，子目录照跟踪目录。`mount` 是旧记录里的挂载子目录名，`link` 是 `~/Devices/` 下的链接名（2026-11-13 起）。
 [deliver]
 kind = "mtp"
 mount = "kindle"
+link = "Kindle"
 dir = "documents"

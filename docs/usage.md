@@ -171,8 +171,8 @@ booklib sync --watch                      # 一直运行，每 60 秒查一次�
 ```
 ✗ 原件已删，书库里也删了（连同产物）  动物农场  (~/Documents/ereader/books/好读精排/动物农场.epub)
 原件：新增 0，改过 0，没变 35，不在了 1（从书库删了 1），出错 0      ← 原件有没有变化
-- [ireader] 没接上（/run/user/1000/mtp/ireader 没挂上），这次不传
-✓ 生成 [kindle] 一九八四 → /run/user/1000/mtp/kindle/Internal Storage/documents/好读精排/一九八四.kfx
+- [ireader] 没接上（~/Devices/Ireader 不在或没挂上），这次不传
+✓ 生成 [kindle] 一九八四 → ~/Devices/Kindle/Internal Storage/documents/好读精排/一九八四.kfx
 生成：重新生成并传上 105 本，重新生成但内容没变（没再传）3 本，挪位置 0 本，已是最新 0 本，失败 0 本   ← 这次实际做了什么
 ```
 
@@ -180,8 +180,8 @@ booklib sync --watch                      # 一直运行，每 60 秒查一次�
 
 ```text
 3fa9c1e07b2d  epub   三体 — 刘慈欣
-      ireader              ✓ 最新 未核对设备  /run/user/1000/mtp/ireader/内部共享存储空间/Documents/小说/三体.epub
-      kindle               ⚠ 过期 未核对设备  /run/user/1000/mtp/kindle/Internal Storage/documents/小说/三体.kfx
+      ireader              ✓ 最新 未核对设备  ~/Devices/Ireader/内部共享存储空间/Documents/小说/三体.epub
+      kindle               ⚠ 过期 未核对设备  ~/Devices/Kindle/Internal Storage/documents/小说/三体.kfx
         体检 ✗ 行内 style margin-left（px，list）×3：……掌阅没处理（px 是屏幕像素）
         体检 ? 没验证过 1 种：text-decoration（keyword，inline）×55
 ```
@@ -317,9 +317,9 @@ booklib dedupe ~/Documents/ereader
 
 ```text
 ireader      掌阅自带阅读器（iReader Air 3 Pro）  EPUB  屏幕 1440×1920  阅读范围 1440×1920  黑白
-             ✓ 接上了：/run/user/1000/mtp/ireader/内部共享存储空间/Documents
+             ✓ 接上了：~/Devices/Ireader/内部共享存储空间/Documents
 kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  KFX  屏幕 1272×1696  阅读范围 1104×1546  黑白
-             ✓ 接上了：/run/user/1000/mtp/kindle/Internal Storage/documents
+             ✓ 接上了：~/Devices/Kindle/Internal Storage/documents
 ```
 
 每个模式下面一行是设备接没接上（只看，不往设备上写）。
@@ -332,17 +332,17 @@ kindle       Kindle 自带阅读器（Paperwhite 12 代签名版）  KFX  屏幕
 
 | 设备 | 怎么连 | 放在哪 |
 |---|---|---|
-| Kindle（`kindle`，`.kfx`） | USB，jmtpfs 自动挂到 `/run/user/1000/mtp/kindle` | 存储根目录的 `documents/<子目录>/<书名>.kfx` |
-| 掌阅（`ireader`，`.epub`） | USB，挂到 `/run/user/1000/mtp/ireader` | 存储根目录的 `Documents/<子目录>/<书名>.epub`（没有就建；旧的小写 `documents` 记录会原样接过来，不重传、不删书） |
-| Kobo（`kobo`，`.kepub.epub`） | USB 大容量存储，挂到 `/run/media/$USER/KOBOeReader` | 存储根目录的 `books/<子目录>/<书名>.kepub.epub` |
-| 汉王（`hanvon`，`.epub`） | USB，挂到 `/run/user/1000/mtp/hanvon`（2026-11-06 真机确认） | 存储根目录的 `Documents/<子目录>/<书名>.epub`（没有就建；旧的小写 `documents` 记录会原样接过来，不重传、不删书） |
-| Bigme（`bigme`，`.epub`） | USB MTP，缺省挂到 `/run/user/1000/mtp/bigme` | 存储根目录的 `Books/<子目录>/<书名>.epub`（没有就建；旧的小写 `books` 记录会原样接过来，不重传、不删书） |
+| Kindle（`kindle`，`.kfx`） | USB，dotfiles 把 `~/Devices/Kindle` 链到 jmtpfs 的挂载点 | 存储根目录的 `documents/<子目录>/<书名>.kfx` |
+| 掌阅（`ireader`，`.epub`） | USB，链接名预留 `~/Devices/Ireader`（现在没建，一律算没接上） | 存储根目录的 `Documents/<子目录>/<书名>.epub`（没有就建；旧的小写 `documents` 记录会原样接过来，不重传、不删书） |
+| Kobo（`kobo`，`.kepub.epub`） | USB 大容量存储，dotfiles 把 `~/Devices/Kobo` 链到卷标 `KOBOeReader` 的挂载点 | 存储根目录的 `books/<子目录>/<书名>.kepub.epub` |
+| 汉王（`hanvon`，`.epub`） | USB，dotfiles 把 `~/Devices/Hanvon` 链到 jmtpfs 的挂载点（2026-11-06 真机确认） | 存储根目录的 `Documents/<子目录>/<书名>.epub`（没有就建；旧的小写 `documents` 记录会原样接过来，不重传、不删书） |
+| Bigme（`bigme`，`.epub`） | USB MTP，dotfiles 把 `~/Devices/Bigme` 链到 jmtpfs 的挂载点（2026-11-10 真机） | 存储根目录的 `Books/<子目录>/<书名>.epub`（没有就建；旧的小写 `books` 记录会原样接过来，不重传、不删书） |
 
-Bigme 2026-11-10 真机 jmtpfs 实际挂在 `~/Devices/Bigme`，和缺省约定不一致：配好 dotfiles 的挂载规则之前，可用 `BOOKLIB_MTP_DIR=/home/afu/Devices` 让 `…/Bigme` 对上 `mount = "bigme"`，或把 `~/Devices/Bigme` 挂/链到 `/run/user/1000/mtp/bigme`。
+设备的链接名、挂载点由 dotfiles 管：booklib 只读 `~/Devices/<链接名>`，绝不创建、删除或修改这些链接。链接不在、或它指向的挂载点不在 `/proc/self/mountinfo` 里就算没接上，不回退旧路径（`$XDG_RUNTIME_DIR/mtp/<小写>`、`/run/media/$USER/KOBOeReader`、`~/Hanvon` 等）；这些旧前缀只在迁移旧生成记录和判断“在可拔下的设备上”时认。
 
 - `<子目录>`：原件相对书根目录所在的子目录（`--top` 的条目从它自己这一层起，见[跟踪范围](#track--sync跟踪书目录生成)），例：原件 `~/Documents/ereader/books/好读/x.epub` → Kindle 上 `documents/好读/<书名>.kfx`。跟踪目录顶层的书、`add` 进来的书、网址书放各设备产物目录顶层。（2026-10-31 以前还有 Move：经 SSH 交给它的书架服务、按子目录建文件夹；Move 卖了以后删了。）
-- 掌阅、汉王、Bigme 的旧记录（小写 `documents` / `books`）在设备接上时只改记录、不碰设备上的文件，同一次同步仍算最新、不重传。profile 已改成设备真名 `Documents/` / `Books/`，避免 MTP 再按小写名多登记一个同内容的目录。
-- `booklib devices` 列出各设备接没接上。挂载目录可以用 `BOOKLIB_MTP_DIR` 改。
+- 设备接上时会把生成记录里的旧前缀（`$XDG_RUNTIME_DIR/mtp/<小写>`、`/run/media/$USER/KOBOeReader`、`/media/$USER/KOBOeReader`、`~/Hanvon` 等）改成 `~/Devices/<链接名>`，只改记录、不碰设备上的文件，同一次同步仍算最新、不重传、不删书。大小写目录名（掌阅、汉王 `Documents/`，Bigme `Books/`）也照旧只改记录。
+- `booklib devices` 列出各设备接没接上。链接目录可以用 `BOOKLIB_DEVICES_DIR` 改（缺省 `~/Devices`）。
 - **先比较、再生成、边生成边传**（下图）：
   - **比较与认领**：每本书每台设备先比指纹，没变就跳过。没变、但记录里的位置是空的（以前产物放电脑上、你自己挪上了设备），而设备上对应位置正好有那份，就直接认领（`= … 认领设备上已有的那份`），不重新生成。只有变了的才生成。
   - **边生成边传**：主线程一本接一本地生成，生成好的交给这台设备自己的传输线程，不等它传完就接着做下一件。Kindle、掌阅的线程一本一本拷文件。每台手上（在传加排队）最多 2 本；某台满了就先做别的设备，那台的留到最后补。全部生成完还有没传完的，打一行 `… 都生成好了，等设备那边传完`。
@@ -364,7 +364,7 @@ Bigme 2026-11-10 真机 jmtpfs 实际挂在 `~/Devices/Bigme`，和缺省约定�
 ## 传书到设备的细节
 
 - Kindle 的 KFX 唯一 ID 取自书库的书 id：同一本书重建不变，同一模板做的两本书也不会撞成一本（见 [KFX · 阅读进度](kfx.md#阅读进度2026-10-06-真机)）。
-- **挂载点要真的挂着才算接上**（2026-10-21）：jmtpfs 卸掉后挂载点留成 `/run/user/1000`（tmpfs，内存）里的普通目录。以前只看里面有没有存储目录：掌阅在 `sync` 中途断开那次，后面的书建了目录、写进内存直到写满，还记成传上了。现在连设备时、每本写之前都看挂载点和上一级是不是同一个文件系统，断开了的报 `设备断开了（… 没挂着），没传`。`BOOKLIB_MTP_NO_MOUNT_CHECK=1` 关掉（测试用普通目录当设备）。删设备上的书之前也要挂载点真挂着，没挂着的记着、接上再删（2026-11-03）；USB 大容量存储认 `/run/media/$USER` 和 `/media/$USER` 两处（前者不在、后者在时用后者）。
+- **挂载点要真的挂着才算接上**（2026-10-21，2026-11-13 改成看链接和 mountinfo）：`~/Devices/<链接名>` 必须是符号链接，readlink 得到的目标要精确出现在 `/proc/self/mountinfo` 里（先还原 `\040` 等转义）；不 stat 目标、不写死文件系统类型。jmtpfs 卸掉后链接指向的挂载点不在了（或只剩 `/run/user/1000` tmpfs 里的空目录），以前只看里面有没有存储目录，掌阅在 `sync` 中途断开那次，后面的书建了目录、写进内存直到写满，还记成传上了。现在连设备时、每本写之前都看；断开了的报 `设备断开了（… 没挂着），没传`。`BOOKLIB_MTP_NO_MOUNT_CHECK=1` 关掉（测试用普通目录当设备）。删设备上的书之前也要真挂着，没挂着的记着、接上再删（2026-11-03）；旧记录里的 `/run/media/$USER`、`/media/$USER` 两处也认（2026-11-13 起新路径统一走 `~/Devices/Kobo` 链接）。
 - **建目录偶发 EIO**（2026-11-03）：jmtpfs 刚删过一批书和空目录时，对已有的目录 mkdir 偶尔报 EIO（掌阅两次各 12 本，再跑一次就好）。现在逐级建目录，已有的不再 mkdir；只有 EIO 等 200、500、1000ms 后重新列目录看，在了就算建好，不在再建；别的错误马上报。
 - jmtpfs 刚挪完文件偶尔 stat 不到（它的缓存毛病）：下次 `sync` 会当成设备上没有、重新传一次（字节相同，不影响 Kindle 进度）。
 

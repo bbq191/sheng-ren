@@ -46,9 +46,11 @@ height = 1448
 width = 1072
 height = 1448
 
-# USB 大容量存储（不是 MTP）：插上后 udisks 按卷标挂到 /run/media/$USER/KOBOeReader，产物放进根目录的 books/，子目录照跟踪目录。
+# USB 大容量存储（不是 MTP）：dotfiles 把 `~/Devices/Kobo` 链到 udisks 按卷标 KOBOeReader 挂的目录，产物放进根目录的 books/，
+# 子目录照跟踪目录。`label` 仍是卷标，`link` 是 `~/Devices/` 下的链接名（2026-11-13 起，两者不要混）。
 # 不碰 .kobo/（书库数据库 KoboReader.sqlite 由 Nickel 自己扫描更新）。
 [deliver]
 kind = "usbms"
-label = "KOBOeReader"              # 来源：Kobo 帮助页，卷标 KOBOeReader；udisks 挂到 /run/media/$USER/KOBOeReader
+label = "KOBOeReader"              # 卷标：Kobo 帮助页，udisks 挂到 /run/media/$USER/KOBOeReader
+link = "Kobo"                      # 2026-11-13 起只查 ~/Devices/Kobo，链接和挂载归 dotfiles
 dir = "books"                      # 推断：Nickel 扫描整个存储（隐藏目录除外），放子目录便于管理（待确认）

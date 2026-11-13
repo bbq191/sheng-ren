@@ -142,14 +142,46 @@ pub enum ImageSizing {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Deliver {
-    /// MTP 设备（Kindle、掌阅）：jmtpfs 自动挂到 `$XDG_RUNTIME_DIR/mtp/<mount>`，下面是存储（如「Internal Storage」），
-    /// 产物放进存储根目录的 `dir`（如 `documents`），子目录照跟踪目录镜像。挂载点在、里面有存储就算接上了。
+    /// MTP 设备（Kindle、掌阅、汉王、Bigme）：`~/Devices/<link>` 是符号链接（由 dotfiles 建，booklib 只读），指向 jmtpfs 的挂载点；
+    /// 下面是存储（如「Internal Storage」），产物放进存储根目录的 `dir`（如 `documents`），子目录照跟踪目录镜像。
+    /// `mount` 是旧记录里的挂载子目录名（小写），只用于认旧前缀；`link` 是 `~/Devices/` 下的链接名，不写时取 `mount` 首字母大写。
+    /// 链接指向的挂载点在 `/proc/self/mountinfo` 里、里面有存储就算接上了。
     /// （2026-10-31 以前还有 `xochitl`：经 SSH 调 Move 上书架服务的导入接口，Move 卖了以后删了。）
-    Mtp { mount: String, dir: String },
-    /// USB 大容量存储（Kobo）：udisks 按卷标挂到 `<挂载目录>/<label>`（缺省 `/run/media/$USER`），产物放进根目录的 `dir`
-    /// （如 `books`），子目录照跟踪目录镜像。挂载点在、真的挂着就算接上了。不碰阅读器自己的数据（Kobo 的 `.kobo/`，
-    /// 尤其书库数据库 `KoboReader.sqlite`），也不搬 Kindle 那种 `.sdr` 进度文件夹。2026-11-01 加（Kobo Clara BW，未上真机）。
-    Usbms { label: String, dir: String },
+    Mtp {
+        mount: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        link: String,
+        dir: String,
+    },
+    /// USB 大容量存储（Kobo）：`~/Devices/<link>` 链接到 udisks 按卷标挂的目录（卷标见 `label`，如 `KOBOeReader`），
+    /// 产物放进根目录的 `dir`（如 `books`），子目录照跟踪目录镜像。链接指向的挂载点真的挂着才算接上。不碰阅读器自己的数据
+    /// （Kobo 的 `.kobo/`，尤其书库数据库 `KoboReader.sqlite`），也不搬 Kindle 那种 `.sdr` 进度文件夹。
+    /// 2026-11-01 加（Kobo Clara BW，未上真机）。
+    Usbms {
+        label: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        link: String,
+        dir: String,
+    },
+}
+
+impl Deliver {
+    /// `~/Devices/` 下的链接名。MTP、USBMS 的旧记录里只有 `mount` / `label`；没写 `link` 时按它的首字母大写算
+    /// （内置的 MTP 模式都显式写了；Kobo 显式写 `Kobo`，不能拿卷标 `KOBOeReader` 当链接名）。
+    pub fn link_name(&self) -> String {
+        let (link, fallback) = match self {
+            Deliver::Mtp { link, mount, .. } => (link, mount.as_str()),
+            Deliver::Usbms { link, label, .. } => (link, label.as_str()),
+        };
+        if !link.is_empty() {
+            return link.clone();
+        }
+        let mut chars = fallback.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
+    }
 }
 
 /// 标题在阅读器上的字号（`heading_font_keywords` 的阅读器要写，测试书量的；正文 1em＝1）。
@@ -843,15 +875,22 @@ impl Profile {
             ));
         }
         match &self.deliver {
-            Some(Deliver::Mtp { mount: a, dir } | Deliver::Usbms { label: a, dir }) => {
+            Some(Deliver::Mtp { mount, link, dir }) => {
                 let bad = |v: &str| v.is_empty() || v.starts_with('.') || v.contains(['/', '\\']);
-                if bad(a) || bad(dir) {
-                    let key = if matches!(self.deliver, Some(Deliver::Mtp { .. })) {
-                        "mount"
-                    } else {
-                        "label"
-                    };
-                    return Err(format!("profile {}: [deliver] 的 {key}、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）", self.id));
+                if bad(mount) || bad(dir) || (!link.is_empty() && bad(link)) {
+                    return Err(format!(
+                        "profile {}: [deliver] 的 mount、link、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）",
+                        self.id
+                    ));
+                }
+            }
+            Some(Deliver::Usbms { label, link, dir }) => {
+                let bad = |v: &str| v.is_empty() || v.starts_with('.') || v.contains(['/', '\\']);
+                if bad(label) || bad(dir) || (!link.is_empty() && bad(link)) {
+                    return Err(format!(
+                        "profile {}: [deliver] 的 label、link、dir 须是一级目录名（非空、不以 . 开头、不含斜杠）",
+                        self.id
+                    ));
                 }
             }
             None => {}
@@ -1257,6 +1296,7 @@ mod tests {
             i.deliver,
             Some(Deliver::Mtp {
                 mount: "ireader".into(),
+                link: "Ireader".into(),
                 dir: "Documents".into()
             }),
             "掌阅：MTP，产物放存储根下 Documents/"
@@ -1354,6 +1394,7 @@ mod tests {
             b.deliver,
             Some(Deliver::Mtp {
                 mount: "bigme".into(),
+                link: "Bigme".into(),
                 dir: "Books".into()
             }),
             "Bigme：MTP，产物放存储根下 Books/"
@@ -1677,15 +1718,21 @@ mod tests {
             p.deliver,
             Some(Deliver::Usbms {
                 label: "KOBOeReader".into(),
+                link: String::new(),
                 dir: "books".into()
             })
+        );
+        assert_eq!(
+            p.deliver.unwrap().link_name(),
+            "KOBOeReader",
+            "没写 link 时取卷标首字母大写（内置 Kobo 显式写 Kobo）"
         );
         let e = Profile::parse(
             "x",
             &format!("{base}kind = \"usbms\"\nlabel = \"KOBOeReader\"\ndir = \".kobo\"\n"),
         )
         .unwrap_err();
-        assert!(e.contains("label、dir"), "{e}");
+        assert!(e.contains("label、link、dir"), "{e}");
         assert!(Profile::parse(
             "x",
             &format!("{base}kind = \"usbms\"\nlabel = \"a/b\"\ndir = \"books\"\n")
@@ -1712,6 +1759,7 @@ mod tests {
             k.deliver,
             Some(Deliver::Usbms {
                 label: "KOBOeReader".into(),
+                link: "Kobo".into(),
                 dir: "books".into()
             })
         );
@@ -1730,6 +1778,7 @@ mod tests {
             h.deliver,
             Some(Deliver::Mtp {
                 mount: "hanvon".into(),
+                link: "Hanvon".into(),
                 dir: "Documents".into()
             })
         );

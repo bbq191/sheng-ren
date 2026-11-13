@@ -94,10 +94,12 @@ fn add_build_skip_remove() {
     // 开着挂载检查而挂载点只是普通目录（拔掉后留下的空挂载点，里面正好有同名文件）：设备路径不 stat、不看挂没挂上，
     // 只比指纹。ireader 的指纹上面改过，所以过期；kindle 没改，仍是最新。
     let mut unplugged = common::open(&lib_dir);
+    let unplugged_dev = common::dev_dir(&lib_dir);
     unplugged.set_device_env(library::DeviceEnv {
-        mtp_base: common::dev_dir(&lib_dir),
+        devices_base: unplugged_dev.clone(),
+        mtp_base: unplugged_dev.join("legacy-mtp"),
         mount_check: true,
-        usbms_base: common::dev_dir(&lib_dir).join("usbms"),
+        usbms_base: unplugged_dev.join("legacy-usbms"),
     });
     assert!(common::documents(&lib_dir, "ireader")
         .join("风起.epub")
@@ -255,7 +257,7 @@ fn absent_device_defers_removal_and_identical_copy_is_adopted() {
     };
     assert_eq!(again, path, "逐字节相同的同名文件认领");
     // 拔掉：没接上
-    let storage = common::dev_dir(&lib_dir).join("ireader/Internal Storage");
+    let storage = common::dev_dir(&lib_dir).join("Ireader/Internal Storage");
     let unplugged = dir.path().join("拔下来的存储");
     std::fs::rename(&storage, &unplugged).unwrap();
     lib.refresh_devices();
@@ -289,7 +291,7 @@ fn removed_then_readded_while_absent_is_not_retransferred() {
     let Built::Written { path, .. } = lib.build(&m, ireader, false).unwrap() else {
         panic!()
     };
-    let storage = common::dev_dir(&lib_dir).join("ireader/Internal Storage");
+    let storage = common::dev_dir(&lib_dir).join("Ireader/Internal Storage");
     let unplugged = dir.path().join("拔下来的存储");
     std::fs::rename(&storage, &unplugged).unwrap();
     lib.refresh_devices();
@@ -324,7 +326,7 @@ fn removed_while_absent_name_goes_to_new_book() {
     let Built::Written { path, .. } = lib.build(&m, ireader, false).unwrap() else {
         panic!()
     };
-    let storage = common::dev_dir(&lib_dir).join("ireader/Internal Storage");
+    let storage = common::dev_dir(&lib_dir).join("Ireader/Internal Storage");
     let unplugged = dir.path().join("拔下来的存储");
     std::fs::rename(&storage, &unplugged).unwrap();
     lib.refresh_devices();
@@ -1560,6 +1562,69 @@ fn interrupted_move_is_finished_next_time() {
     assert_eq!(again, path, "新位置上的文件认得是本书的，不改名");
     assert!(!stale.exists(), "旧位置补删");
     assert!(!std::fs::read_to_string(&sp).unwrap().contains("\"old\""));
+}
+
+#[test]
+fn legacy_device_prefix_is_migrated_in_records_only() {
+    // 旧记录写在 $XDG_RUNTIME_DIR/mtp/<小写>（这里用临时旧目录）、新路径 ~/Devices/<链接名> 链到同一个挂载点：
+    // 设备接上时只改记录，不走“换位置”删除，不重传、不丢书。
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let lib_dir = base.join("lib");
+    let mut lib = common::open(&lib_dir);
+    let devices = base.join("devices");
+    let old_base = base.join("old-mtp");
+    let old_device = old_base.join("kindle");
+    std::fs::create_dir_all(old_device.join("Internal Storage")).unwrap();
+    std::fs::create_dir_all(&devices).unwrap();
+    std::os::unix::fs::symlink(&old_device, devices.join("Kindle")).unwrap();
+    lib.set_device_env(library::DeviceEnv {
+        devices_base: devices.clone(),
+        mtp_base: old_base.clone(),
+        mount_check: false,
+        usbms_base: base.join("old-usbms"),
+    });
+
+    let src = base.join("书.epub");
+    std::fs::write(&src, sample_epub("书")).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    let kindle = profile::get("kindle").unwrap();
+    let Built::Written { path, .. } = lib.build(&m, kindle, false).unwrap() else {
+        panic!("第一次应生成")
+    };
+    assert!(path.starts_with(devices.join("Kindle/Internal Storage/documents")));
+
+    // 记录改回旧前缀；old 里也放同一个文件（经链接就是现在这份）
+    let sp = lib_dir.join("output-state/kindle.json");
+    let mut st: serde_json::Value = serde_json::from_slice(&std::fs::read(&sp).unwrap()).unwrap();
+    let old_file = old_device
+        .join("Internal Storage/documents")
+        .join(path.file_name().unwrap());
+    let old_root = old_device.join("Internal Storage/documents");
+    assert!(old_file.is_file(), "旧路径经链接就是刚生成的那份");
+    st["books"][&m.id]["path"] = serde_json::json!(old_file.clone());
+    st["books"][&m.id]["root"] = serde_json::json!(old_root.clone());
+    st["books"][&m.id]["old"] = serde_json::json!([{"path": old_file, "root": old_root}]);
+    std::fs::write(&sp, st.to_string()).unwrap();
+    lib.refresh_devices();
+
+    assert!(
+        matches!(lib.build(&m, kindle, false).unwrap(), Built::UpToDate(_)),
+        "迁移后同一份文件仍是最新，不重传"
+    );
+    assert!(path.is_file(), "旧位置就是现在这份：不删书");
+    let after = std::fs::read_to_string(&sp).unwrap();
+    assert!(
+        after.contains("/devices/Kindle/Internal Storage/documents"),
+        "{after}"
+    );
+    assert!(!after.contains("old-mtp"), "记录已换到新前缀：{after}");
+    assert!(
+        !after.contains("\"old\""),
+        "旧位置就是当前位置，不留在待删里：{after}"
+    );
 }
 
 #[test]
@@ -2952,11 +3017,7 @@ fn bangumi_japanese_comic_builds_rtl_and_others_stay_as_is() {
     let dir = tempfile::tempdir().unwrap();
     let lib_dir = dir.path().join("lib");
     let lib = common::open(&lib_dir);
-    let dev = common::dev_dir(&lib_dir);
-    for m in ["kindle", "ireader", "hanvon"] {
-        std::fs::create_dir_all(dev.join(m).join("Internal Storage")).unwrap();
-    }
-    std::fs::create_dir_all(dev.join("usbms/KOBOeReader")).unwrap();
+    let _dev = common::dev_dir(&lib_dir);
 
     let cbz = dir.path().join("日漫 - 01卷.cbz");
     {
@@ -3248,7 +3309,7 @@ fn lock_never_reads_device_dirs_and_sync_cleans_their_tmp_files() {
     round(&again);
     assert!(again.exists(), "同一次连接里下一轮不再清");
 
-    let storage = common::dev_dir(&lib_dir).join("ireader/Internal Storage");
+    let storage = common::dev_dir(&lib_dir).join("Ireader/Internal Storage");
     let unplugged = base.join("拔下来的存储");
     std::fs::rename(&storage, &unplugged).unwrap();
     lib.refresh_devices();
@@ -3272,7 +3333,7 @@ fn lock_keeps_kobo_usbms_tmp_until_sync_connects() {
 
     let lib = common::open(&lib_dir);
     let dev = common::dev_dir(&lib_dir);
-    std::fs::create_dir_all(dev.join("usbms/KOBOeReader")).unwrap();
+    std::fs::create_dir_all(dev.join("Kobo")).unwrap();
     lib.track(&books).unwrap();
     lib.sync(Prune::Keep, |_| {}).unwrap();
     let m = lib.list().pop().unwrap();
@@ -3281,7 +3342,7 @@ fn lock_keeps_kobo_usbms_tmp_until_sync_connects() {
         panic!("第一次应生成")
     };
     let product_dir = product.parent().unwrap().to_path_buf();
-    assert_eq!(product_dir, dev.join("usbms/KOBOeReader/books"));
+    assert_eq!(product_dir, dev.join("Kobo/books"));
     let tmp = product_dir.join(format!(".tmp-{}-1-x.kepub.epub", u32::MAX));
 
     // 会加锁的命令不读、不删设备上的临时文件
@@ -3348,11 +3409,7 @@ fn vertical_books_follow_profile_overrides_and_directory_lists() {
     let dir = tempfile::tempdir().unwrap();
     let lib_dir = dir.path().join("lib");
     let lib = common::open(&lib_dir);
-    let dev = common::dev_dir(&lib_dir);
-    for m in ["kindle", "hanvon", "bigme"] {
-        std::fs::create_dir_all(dev.join(m).join("Internal Storage")).unwrap();
-    }
-    std::fs::create_dir_all(dev.join("usbms/KOBOeReader")).unwrap();
+    let _dev = common::dev_dir(&lib_dir);
     let books = dir.path().join("books");
     std::fs::create_dir_all(books.join("横排")).unwrap();
     std::fs::create_dir_all(books.join("竖排")).unwrap();
@@ -3586,6 +3643,7 @@ fn mtp_profile(id: &str, dir: &str) -> profile::Profile {
     let mut p = profile::get(id).unwrap().clone();
     p.deliver = Some(profile::Deliver::Mtp {
         mount: id.into(),
+        link: format!("{}{}", id[..1].to_uppercase(), &id[1..]),
         dir: dir.into(),
     });
     p
@@ -3636,7 +3694,13 @@ fn case_rebase_keeps_books_and_record(id: &str, old_dir: &str, new_dir: &str) {
     let lib_dir = dir.path().join("lib");
     let lib = common::open(&lib_dir);
     let dev = common::dev_dir(&lib_dir);
-    let storage = dev.join(format!("{id}/Internal Storage"));
+    let link = profile::get(id)
+        .unwrap()
+        .deliver
+        .as_ref()
+        .unwrap()
+        .link_name();
+    let storage = dev.join(link).join("Internal Storage");
     std::fs::create_dir_all(storage.join(old_dir)).unwrap();
     let src = dir.path().join("书.epub");
     std::fs::write(&src, sample_epub("书")).unwrap();
@@ -3686,7 +3750,13 @@ fn case_sensitive_copies_and_keeps_old(id: &str, old_dir: &str, new_dir: &str) {
     let lib_dir = dir.path().join("lib");
     let lib = common::open(&lib_dir);
     let dev = common::dev_dir(&lib_dir);
-    let storage = dev.join(format!("{id}/Internal Storage"));
+    let link = profile::get(id)
+        .unwrap()
+        .deliver
+        .as_ref()
+        .unwrap()
+        .link_name();
+    let storage = dev.join(link).join("Internal Storage");
     std::fs::create_dir_all(storage.join(old_dir)).unwrap();
     let src = dir.path().join("书.epub");
     std::fs::write(&src, sample_epub("书")).unwrap();
@@ -3717,7 +3787,13 @@ fn case_migrates_orphans_too(id: &str, old_dir: &str, new_dir: &str) {
     let lib_dir = dir.path().join("lib");
     let lib = common::open(&lib_dir);
     let dev = common::dev_dir(&lib_dir);
-    let storage = dev.join(format!("{id}/Internal Storage"));
+    let link = profile::get(id)
+        .unwrap()
+        .deliver
+        .as_ref()
+        .unwrap()
+        .link_name();
+    let storage = dev.join(link).join("Internal Storage");
     std::fs::create_dir_all(storage.join(old_dir)).unwrap();
     let src = dir.path().join("要删的.epub");
     std::fs::write(&src, sample_epub("要删的")).unwrap();

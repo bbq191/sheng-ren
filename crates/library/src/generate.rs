@@ -293,8 +293,9 @@ impl Library {
         self.state_dir().join(format!("{device_id}.json"))
     }
 
-    /// 设备接上了、产物根目录只差大小写时（汉王 `documents` → `Documents`），把这台的生成记录原样挪过去：
-    /// 只改记录，不碰设备上的文件。挂在 prepare / space_check / flush_removed / retract 开头（生成流程；`list` 只读不写）。
+    /// 设备接上了，把这台的生成记录原样挪到新前缀（`~/Devices/<链接名>`）和新的产物根目录上（汉王 `documents` → `Documents`）：
+    /// 只改记录，不碰设备上的文件，也不重传、不删。挂在 prepare / space_check / flush_removed / retract 开头
+    /// （生成流程；`list` 只读不写）。
     fn rebase_state_case(&self, device: &Profile) -> Result<(), String> {
         let Ok(Target::Dir { root, .. }) = &*self.target(device) else {
             return Ok(());
@@ -304,17 +305,28 @@ impl Library {
         if !self.devices.begin_rebase(&device.id) {
             return Ok(());
         }
+        let mappings = self.devices.prefix_migrations(device);
+        let old_prefix = |p: &Path| mappings.iter().any(|(o, _)| p.starts_with(o));
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
-        let maybe =
-            state.books.values().any(|e| {
-                case_alias(&e.root, root) || e.old.iter().any(|o| case_alias(&o.root, root))
-            }) || state.orphans.iter().any(|o| case_alias(&o.root, root));
+        let maybe = state.books.values().any(|e| {
+            old_prefix(&e.path)
+                || old_prefix(&e.root)
+                || case_alias(&e.root, root)
+                || e.old.iter().any(|o| {
+                    old_prefix(&o.path) || old_prefix(&o.root) || case_alias(&o.root, root)
+                })
+        }) || state
+            .orphans
+            .iter()
+            .any(|o| old_prefix(&o.path) || old_prefix(&o.root) || case_alias(&o.root, root));
         if !maybe {
             return Ok(());
         }
         let mut state = (*state).clone();
-        if state.rebase_case_root(root) {
+        let mut changed = state.migrate_prefixes(&mappings);
+        changed |= state.rebase_case_root(root);
+        if changed {
             self.records.states.put(&sp, state)?;
         }
         Ok(())
@@ -584,12 +596,12 @@ impl Library {
     /// 减掉旧文件大小。待删的孤儿（[`Library::flush_removed`]）不算：调用方不够时先删孤儿再看一次。
     pub fn space_check(&self, device: &Profile, books: &[&Meta], force: bool) -> SpaceCheck {
         let t = self.target(device);
-        let Ok(target @ Target::Dir { root, mount }) = t.as_ref().as_ref() else {
+        let Ok(target @ Target::Dir { root, mount, .. }) = t.as_ref().as_ref() else {
             return SpaceCheck::Skip; // 放电脑上的、没接上的不查
         };
-        let staged = !direct_write(target, &self.devices.usbms_base());
+        let staged = !direct_write(target);
         if let Err(e) = self.rebase_state_case(device) {
-            return SpaceCheck::Unknown(format!("生成记录大小写迁移失败：{e}"));
+            return SpaceCheck::Unknown(format!("生成记录迁移失败：{e}"));
         }
         let sp = self.state_path(&device.id);
         let state = self.records.states.get(&sp);
@@ -818,9 +830,10 @@ impl Library {
         drop(state);
         let unchanged = |p: &&StateEntry| !force && p.fingerprint == fingerprint;
         let done = prev.as_ref().filter(unchanged).filter(|p| p.path.is_file());
+        let staged = matches!(target, Target::Dir { staged: true, .. });
         if let Some(p) = done.filter(|p| p.path == out) {
             if !p.old.is_empty() {
-                self.finish(&sp, &meta.id, p.clone())?; // 上次没删掉的旧位置
+                self.finish(&sp, &meta.id, p.clone(), staged)?; // 上次没删掉的旧位置
             }
             return Ok(Step::Done(Built::UpToDate(out)));
         }
@@ -842,7 +855,7 @@ impl Library {
             let mut entry = StateEntry::file(out.clone(), root, fingerprint, old);
             entry.sha = p.sha.clone();
             entry.audit = p.audit.clone();
-            self.finish(&sp, &meta.id, entry)?;
+            self.finish(&sp, &meta.id, entry, staged)?;
             return Ok(Step::Done(Built::Adopted(out)));
         }
         // 设备中途断开了：不生成、不改记录（不然下面会把完好的指纹、哈希清掉，接上后整本重传），报给 `build_all` 记成掉线
@@ -859,7 +872,7 @@ impl Library {
         let tmp = made.tmp.clone();
         // MTP 设备上直接写正式文件名（不经临时文件，[`direct_write`]）：写到一半被打断，正式文件名上会留下半截，所以要先登记一条指纹留空的记录，
         // 下次认得出这个位置没传完、重新传（见 `Work`）
-        let direct = direct_write(target, &self.devices.usbms_base());
+        let direct = direct_write(target);
         let mount = match target {
             Target::Dir { mount, .. } => mount.clone(),
             _ => None,
@@ -931,6 +944,7 @@ impl Library {
                     direct,
                     mount,
                 },
+                staged,
             );
             if same {
                 // 和设备上的一样：不用传
@@ -957,6 +971,7 @@ impl Library {
         from: Option<PathBuf>,
         entry: StateEntry,
         work: Work,
+        staged: bool,
     ) -> Transfer {
         let Made {
             tmp,
@@ -979,6 +994,7 @@ impl Library {
             from,
             entry,
             work,
+            staged,
         }
     }
 
@@ -1001,10 +1017,11 @@ impl Library {
         self.build.unreserve(&t.work.out);
         let wrote = r?;
         let meta_id = t.book.clone();
+        let staged = t.staged;
         let mut entry = t.entry;
         entry.sha = t.sha;
         let path = entry.path.clone();
-        self.finish(&t.sp, &meta_id, entry)?;
+        self.finish(&t.sp, &meta_id, entry, staged)?;
         Ok(match t.from {
             Some(from) => Built::Moved { from, to: path },
             None if wrote => Built::Written {
@@ -1151,14 +1168,18 @@ impl Library {
 
     /// 产物已经到位：删掉记着的旧位置（删不掉的留着下次再删），写上完成的记录。记录和原来一样（旧位置还是删不掉，
     /// `sync --watch` 每轮都会走到这里）时不写。
-    fn finish(&self, sp: &Path, id: &str, mut entry: StateEntry) -> Result<(), String> {
+    fn finish(
+        &self,
+        sp: &Path,
+        id: &str,
+        mut entry: StateEntry,
+        staged: bool,
+    ) -> Result<(), String> {
         let mut state = (*self.records.states.get(sp)).clone();
         let prev = state.books.remove(id);
         // `.sdr` 是 Kindle 的（MTP）；USB 大容量存储（Kobo）的进度在阅读器自己的数据库里，产物旁边的东西不动
         // 新旧位置都得真挂着（掉线后挂载点是 tmpfs 上的空目录：拷进去再删旧的就丢了进度）
-        if !entry.path.starts_with(self.devices.usbms_base())
-            && !self.devices.unplugged(&entry.path, &entry.root)
-        {
+        if !staged && !self.devices.unplugged(&entry.path, &entry.root) {
             for o in entry
                 .old
                 .iter()
@@ -1271,6 +1292,39 @@ impl StateEntry {
 }
 
 impl State {
+    /// 设备接上了，把记录里旧前缀开头的绝对路径改写成新的 `devices_base/<链接名>` 前缀（`path`、`root`、`old`、`orphans`）。
+    /// 只改记录：不碰文件、不重传、不删。改写后指向同一个文件的旧位置（路径和当前位置一样）从 `old` / `orphans` 里去掉，
+    /// 免得后面当成"换位置"去删现在这份。返回改没改。
+    fn migrate_prefixes(&mut self, mappings: &[(PathBuf, PathBuf)]) -> bool {
+        if mappings.is_empty() {
+            return false;
+        }
+        let mut changed = false;
+        for e in self.books.values_mut() {
+            changed |= migrate_placement_prefix(&mut e.path, &mut e.root, mappings);
+            for old in &mut e.old {
+                changed |= migrate_placement_prefix(&mut old.path, &mut old.root, mappings);
+            }
+        }
+        for o in &mut self.orphans {
+            changed |= migrate_placement_prefix(&mut o.path, &mut o.root, mappings);
+        }
+        // 旧位置经过链接就是当前位置：不是两份文件，不该走"换位置删除"
+        let mut current = BTreeSet::new();
+        for e in self.books.values_mut() {
+            current.insert(e.path.clone());
+            let before = e.old.len();
+            let mut seen = BTreeSet::new();
+            e.old
+                .retain(|o| o.path != e.path && seen.insert(o.path.clone()));
+            changed |= e.old.len() != before;
+        }
+        let before = self.orphans.len();
+        self.orphans.retain(|o| !current.contains(&o.path));
+        changed |= self.orphans.len() != before;
+        changed
+    }
+
     /// 产物根目录只差大小写、新路径上的文件也在（不分大小写的设备）时，把记录原样挪到新根目录：
     /// 只改记录，不碰设备上的文件。返回改没改。
     ///
@@ -1550,8 +1604,32 @@ pub(crate) const UNMOUNTED: &str = "设备中途断开（挂载点不在了）";
 
 /// 设备上直接写正式文件名（不经临时文件）：只在 MTP 上（jmtpfs 改名等于下载再上传一遍）。USB 大容量存储（Kobo）
 /// 同目录改名是原子的，经临时文件：直写的话更新已有的书要先删旧的，写到一半拔线就丢了旧书、留下 Nickel 会去导入的半截。
-fn direct_write(target: &Target, usbms_base: &Path) -> bool {
-    matches!(target, Target::Dir { root, .. } if !root.starts_with(usbms_base))
+fn direct_write(target: &Target) -> bool {
+    matches!(target, Target::Dir { staged: false, .. })
+}
+
+/// 一个产物记录的 (path, root) 跟着设备前缀换：旧前缀开头的改成新前缀，只改字符串。
+fn migrate_placement_prefix(
+    path: &mut PathBuf,
+    root: &mut PathBuf,
+    mappings: &[(PathBuf, PathBuf)],
+) -> bool {
+    let mut changed = false;
+    if let Some(new) = rebase_prefix(path, mappings) {
+        *path = new;
+        changed = true;
+    }
+    if let Some(new) = rebase_prefix(root, mappings) {
+        *root = new;
+        changed = true;
+    }
+    changed
+}
+
+fn rebase_prefix(path: &Path, mappings: &[(PathBuf, PathBuf)]) -> Option<PathBuf> {
+    mappings
+        .iter()
+        .find_map(|(old, new)| path.strip_prefix(old).ok().map(|rest| new.join(rest)))
 }
 
 /// 一个产物记录的 (path, root) 跟着根目录的大小写改：根目录只差大小写、`new_root + 相对路径` 的文件在才换。
@@ -1671,6 +1749,7 @@ mod remove_tests {
         let f = root.join("书.kepub.epub");
         std::fs::write(&f, b"x").unwrap();
         let env = DeviceEnv {
+            devices_base: d.path().join("devices"),
             mtp_base: d.path().join("mtp"),
             mount_check: true,
             usbms_base: usbms.clone(),
@@ -1778,6 +1857,7 @@ mod remove_tests {
         let file = old_root.join("书.epub");
         std::fs::write(&file, b"x").unwrap();
         let dev = Devices::new(DeviceEnv {
+            devices_base: d.path().join("devices"),
             mtp_base: d.path().join("mtp"),
             mount_check: false,
             usbms_base: d.path().join("media"),
@@ -1798,18 +1878,18 @@ mod remove_tests {
     #[test]
     fn only_mtp_writes_direct() {
         use super::{direct_write, Target};
-        use std::path::{Path, PathBuf};
-        let usbms = Path::new("/run/media/u");
-        let dir = |r: &str| Target::Dir {
+        use std::path::PathBuf;
+        let dir = |r: &str, staged| Target::Dir {
             root: PathBuf::from(r),
             mount: None,
+            staged,
         };
-        assert!(direct_write(
-            &dir("/run/user/1/mtp/k/内部存储/documents"),
-            usbms
-        ));
-        assert!(!direct_write(&dir("/run/media/u/KOBOeReader/书"), usbms));
-        assert!(!direct_write(&Target::Local, usbms));
+        assert!(direct_write(&dir(
+            "/run/user/1/mtp/k/内部存储/documents",
+            false
+        )));
+        assert!(!direct_write(&dir("/run/media/u/KOBOeReader/书", true)));
+        assert!(!direct_write(&Target::Local));
     }
 
     /// 删书：Kindle 书旁的 `.sdr` 一起删（不然目录删不空）；同名的书换了目录、`.sdr` 没挪过去的不删。
@@ -1826,6 +1906,7 @@ mod remove_tests {
         std::fs::write(sub.join("a.sdr/a.yjf"), b"p").unwrap();
         std::fs::write(sub.join("a.kfx"), b"k").unwrap();
         let dev = Devices::new(DeviceEnv {
+            devices_base: d.path().join("devices"),
             mtp_base: d.path().join("mtp"),
             mount_check: false,
             usbms_base: d.path().join("media"),
@@ -1874,6 +1955,7 @@ mod remove_tests {
         std::fs::create_dir_all(&root).unwrap();
         let (old, cur) = (root.join("Abc.epub"), root.join("abc.epub"));
         let dev = Devices::new(DeviceEnv {
+            devices_base: d.path().join("devices"),
             mtp_base: d.path().join("mtp"),
             mount_check: false,
             usbms_base: d.path().join("media"),
@@ -1915,6 +1997,7 @@ mod remove_tests {
         use crate::session::Devices;
         let u = "booklib-test-no-such-user";
         let dev = Devices::new(DeviceEnv {
+            devices_base: std::path::PathBuf::from("/nonexistent/devices"),
             mtp_base: std::path::PathBuf::from("/nonexistent/mtp"),
             mount_check: true,
             usbms_base: std::path::Path::new("/run/media").join(u),
@@ -1922,6 +2005,7 @@ mod remove_tests {
         let root = std::path::Path::new("/media").join(u).join("KOBOeReader");
         assert!(dev.unplugged(&root.join("a.epub"), &root));
         let dev = Devices::new(DeviceEnv {
+            devices_base: std::path::PathBuf::from("/nonexistent/devices"),
             mtp_base: std::path::PathBuf::from("/nonexistent/mtp"),
             mount_check: true,
             usbms_base: std::path::Path::new("/media").join(u),
@@ -1943,6 +2027,7 @@ mod remove_tests {
         let root = mtp.join("usbms/KOBOeReader/书");
         std::fs::create_dir_all(&root).unwrap();
         let dev = Devices::new(DeviceEnv {
+            devices_base: mtp.join("devices"),
             mtp_base: mtp.clone(),
             mount_check: true,
             usbms_base: mtp.join("usbms"),
@@ -1956,6 +2041,7 @@ mod remove_tests {
         assert!(!dev.unplugged(&d.path().join("out/a.epub"), d.path()));
         // 关了挂载检查：根目录在就算接上
         let off = Devices::new(DeviceEnv {
+            devices_base: mtp.join("devices"),
             mtp_base: mtp.clone(),
             mount_check: false,
             usbms_base: mtp.join("usbms"),

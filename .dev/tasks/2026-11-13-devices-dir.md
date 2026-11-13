@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-devices-dir
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: box-agent
 - 分支: task/2026-11-13-devices-dir（从最新 origin/master 切出，**不要**基于 `task/2026-11-13-vertical-default-off`）
-- 更新时间: 2026-11-13T11:23:19+08:00
+- 更新时间: 2026-11-13T11:46:02+08:00
 - 引用: vinci 2026-11-13 10:41 在 sheng-ren 聊天里批准「按方案开单执行，掌阅保留并预留 ~/Devices/Ireader」；方案 A；只读调查（`DeviceEnv`、`deliver::connect`、`mounted`、`on_removable`、`rebase_state_case`）；dotfiles `main@55b219d`
 
 ## 需求原文
@@ -119,10 +119,36 @@
 ```
 
 ## 结果
-<!-- 执行方填写：base..head、提交列表、改动文件、测试、偏离（对照上面的文件清单）、未完成、没跑真书回归、没上真机。若新建了清单外的文件，在此说明理由。 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T11:23:28+08:00–2026-11-13T11:46:02+08:00
+- base..head：`a14200cc4c5a403302ba33e21f4041352925175f..60e4b84`（feat `62f43de` + rustfmt `60e4b84`）
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | f45db23 | chore: 开始执行任务单 2026-11-13-devices-dir [skip-notify] |
+  | 62f43de | feat: 设备路径统一为 ~/Devices/<链接名>（正文写明没跑真书回归、没上真机） |
+  | 4d81f68 | chore: 填写任务单 2026-11-13-devices-dir 结果（done） [skip-notify] |
+  | 60e4b84 | style: 按 rustfmt 整理 devices-dir 改动的折行 |
+- 改动文件：任务单清单内各文件，外加清单未列但必要的 `crates/library/src/transfer.rs`（见偏离说明）
+- 测试（负责 bot 在 `/tmp/sheng-ren-review-devices-dir` @ 60e4b84 代跑，`CARGO_TARGET_DIR=/home/box/repos/sheng-ren/target`，rustup stable）：
+  - `cargo test --workspace` 全过：bookbase 30、bookconv 553、csscascade 16、kfx 53、library 82 / bin 7 / cli 14 / flow 61（含 `legacy_device_prefix_is_migrated_in_records_only`）/ fp_golden 1、profile 19
+  - `cargo clippy --workspace --all-targets -- -D warnings` 0 警告
+  - `cargo fmt --all -- --check` 最初因折行失败，只对改动文件 `cargo fmt` 并提交 60e4b84 后再检通过
+  - `fp_golden.txt` 无变化；本分支基于竖排合并前的 `a14200c`，`OPTIMIZE_VERSION` 仍为 68（合并进已含竖排的 master 后应为 69，COMIC 仍 68）
+  - **没跑真书回归、没上真机**（本单不动产物内容；`[deliver]` 不进指纹）
+- 遇到的问题：无
+- 偏离：oc-exec 报 14 个文件。其中 13 个本就在任务单「要改的文件」里，属解析误报。真正多改的是 `crates/library/src/transfer.rs`：根路径都改到 `devices_base` 后，原先用「路径是否以 `usbms_base` 开头」判断的 `direct_write` 会失效，故给 `Target::Dir` 加了 `staged`（USBMS true / MTP false），`transfer.rs` 只多一个字段传递。必要，不算出界问题。
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-devices-dir-20261113-112328.json`
+- 日志：`/home/box/oc-runs/2026-11-13-devices-dir-20261113-112328.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
-<!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
-- 合并：
+- 验收：2026-11-13 11:48–11:56 Asia/Shanghai，独立 worktree `/tmp/sheng-ren-review-devices-dir` @ `60e4b84`（对照方案 A 与任务单全文，`git diff origin/master...HEAD` 的 merge-base 为 `a14200c`）。
+  - 实现符合方案：`DeviceEnv.devices_base`（缺省 `$HOME/Devices`，`BOOKLIB_DEVICES_DIR` 可改）；MTP 的 `link`（首字母大写）与小写 `mount`（只认旧前缀）分开；Kobo 保留 `label = "KOBOeReader"`，另加 `link = "Kobo"`，两者不混。接上判定：先 `lstat` 确认符号链接，再 `readlink`（相对路径按链接所在目录解析，只做字面规整、不 `canonicalize`、不 stat 目标），再要求目标与 `/proc/self/mountinfo` 第 5 列完全相等（先还原 `\040` 等八进制转义）；不写死文件系统类型、不进入目标。链接不在或目标不在 mountinfo 就算没接上，**不回退**旧路径。产物根用链接路径。`BOOKLIB_MTP_NO_MOUNT_CHECK=1` 仍允许普通目录。`connect` 成功后 MTP 照旧 `mtp_storage`。booklib 不创建、不删除这些链接（有断言）。测试不碰真实 `~/Devices`，CLI 设 `BOOKLIB_DEVICES_DIR`。
+  - 前缀迁移只改记录（`path`/`root`/`old`/`orphans`），不碰文件、不重传、不删；迁移后与当前位置相同的旧位置从待删里去掉，不走「换位置」删除。集成测试 `legacy_device_prefix_is_migrated_in_records_only` 通过：同一文件迁前缀后仍是 `Built::UpToDate`，文件仍在，记录已换成新前缀，不留 `"old"`。
+  - `on_removable` 同时认 `devices_base` 和全部旧前缀（含 `/run/media/$USER`、`/media/$USER`、废弃的 `~/Hanvon`），仍然只比前缀。`list_does_not_stat_removable_device_outputs`、`lock_never_reads_device_dirs_and_sync_cleans_their_tmp_files` 继续通过。掌阅模式保留，链接名预留 `Ireader`；无链接时一律没接上。
+  - 单元测试覆盖：mountinfo 八进制转义与精确匹配、相对链接、链接不在、链接在但目标不在 mountinfo、Kobo 标签与链接名分开、ireader 在无链接或非符号链接时没接上。
+  - 文档（README、usage、devices、architecture、帮助文字）已改成 `~/Devices/<Name>`；过时的 `~/Hanvon` 作为现行挂载和错误的 `BOOKLIB_MTP_DIR=~/Devices` 建议已删；`decisions.md` 新增一条，并写明不削弱 `lock-no-device` 和 `list-no-device-stall`。
+  - 测试、clippy、fmt、版本与指纹见上方「结果」。**没跑真书回归、没上真机**。
+- 二审：agy-review，模型 `gemini-3.8-flash-medium`，2026-11-13 11:56:11 Asia/Shanghai，用时 338s，结论「建议通过」，阻断无。建议与线索见 `.dev/tasks/2026-11-13-devices-dir.agy.md`（`BOOKLIB_DEVICES_DIR` 为纯相对路径时相对链接可能对不上 mountinfo；`~/Hanvon` 把 `$HOME` 加入 `removable_base` 的隐式约定），均不阻断，本轮不改代码。
+- 合并：无阻断，将 `--no-ff` 并入当时的 `origin/master`（`26227e0`，已含他人合并的 vertical-default-off `9777de2`；本单分支基于竖排合并前的 `a14200c`，不基于 vertical 分支）。合并 sha 填在并入并再测、推送之后。状态保持 done，**待 vinci 验收后改 verified**。

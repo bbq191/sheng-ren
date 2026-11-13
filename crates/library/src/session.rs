@@ -10,7 +10,7 @@
 //!
 //! 联网用的 HTTP 客户端（`net::Net`，节流、离线状态跨书共用）整个进程一个，第一次用时建，不在这里。
 
-use crate::deliver::{self, DeviceEnv, Target};
+use crate::deliver::{self, home_dir, user_name, DeviceEnv, Target};
 use crate::fsutil::JsonCache;
 use crate::{generate, sources, OwnDc};
 use profile::Profile;
@@ -157,23 +157,38 @@ impl Devices {
         self.cleaned.borrow_mut().clear();
     }
 
-    /// `path` 在可拔下的设备上（MTP、USB 大容量存储挂载目录下）：只看路径前缀，不碰文件系统。
-    /// `/run/media/$USER` 和 `/media/$USER` 两处都认（两次运行之间缺省的 usbms_base 可能换了）：认不出是设备上的会当成电脑上的，
+    /// `path` 在可拔下的设备上（`~/Devices/<链接名>`，或旧 MTP、USB 大容量存储挂载目录下）：只看路径前缀，不碰文件系统。
+    /// 新旧前缀都认（两次运行之间路径变了，旧记录还记着原来的位置）：认不出是设备上的会当成电脑上的，
     /// 加锁清理时就去读卡死的挂载点（汉王 jmtpfs），删产物时又会把没接上的当成接上了。
     pub(crate) fn on_removable(&self, path: &Path) -> bool {
         self.removable_base(path).is_some()
     }
 
-    /// `path` 在哪个设备挂载目录下（长的先比）：返回匹配的前缀。
+    /// `path` 在哪个设备挂载目录下（长的先比）：返回匹配的前缀。新前缀是 `devices_base`，旧前缀是 `mtp_base`、
+    /// `usbms_base`、`/run/media/$USER`、`/media/$USER` 和废弃的 `~/Hanvon`（后者只对 `~/Hanvon/...` 加 `$HOME`）。
     fn removable_base(&self, path: &Path) -> Option<PathBuf> {
-        // 长的先比：关了挂载检查时 usbms_base 缺省在 mtp_base 下面（`<mtp_base>/usbms`），先比 mtp_base 会把 `usbms` 当成挂载点
+        // 长的先比：旧前缀可能互相包含（关了挂载检查时 usbms_base 曾在 mtp_base 下面）；新前缀和旧前缀都留着
         let env = self.env.borrow();
-        let mut bases = vec![env.mtp_base.clone(), env.usbms_base.clone()];
-        if env.mount_check {
-            for (a, b) in [("/run/media", "/media"), ("/media", "/run/media")] {
-                if let Ok(rest) = env.usbms_base.strip_prefix(a) {
-                    bases.push(Path::new(b).join(rest));
-                }
+        let mut bases = vec![
+            env.devices_base.clone(),
+            env.mtp_base.clone(),
+            env.usbms_base.clone(),
+        ];
+        if let Some(user) = user_name() {
+            for base in ["/run/media", "/media"] {
+                bases.push(Path::new(base).join(&user));
+            }
+        }
+        // 缺省的 usbms_base 会在 /run/media/$USER 和 /media/$USER 之间换：另一处也认（测试用的假用户也按这个换）
+        for (a, b) in [("/run/media", "/media"), ("/media", "/run/media")] {
+            if let Ok(rest) = env.usbms_base.strip_prefix(a) {
+                bases.push(Path::new(b).join(rest));
+            }
+        }
+        if let Some(home) = home_dir() {
+            let old_hanvon = home.join("Hanvon");
+            if path.starts_with(&old_hanvon) {
+                bases.push(home);
             }
         }
         bases.sort_by_key(|b| std::cmp::Reverse(b.as_os_str().len()));
@@ -198,6 +213,12 @@ impl Devices {
         if env.mount_check && !deliver::mounted(&point) {
             return true;
         }
+        // 新约定：链接指向的挂载点在 mountinfo 里就算接上，不再 stat 链接目标（卡死的 FUSE 上 stat 会挂住）
+        if env.mount_check
+            && std::fs::symlink_metadata(&point).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return false;
+        }
         !root.is_dir()
     }
 
@@ -211,9 +232,9 @@ impl Devices {
         self.cleaned.borrow_mut().remove(id);
     }
 
-    /// USB 大容量存储挂载点的上级目录（Kobo：产物旁边没有 Kindle 的 `.sdr`，换目录时不搬）。
-    pub(crate) fn usbms_base(&self) -> PathBuf {
-        self.env.borrow().usbms_base.clone()
+    /// 这台设备旧记录前缀 → 新的 `devices_base/<链接名>`（只改记录，见 [`crate::generate`]）。
+    pub(crate) fn prefix_migrations(&self, p: &Profile) -> Vec<(PathBuf, PathBuf)> {
+        self.env.borrow().prefix_migrations(p)
     }
 
     /// 这个模式的产物送到哪（一轮里只连一次）。
@@ -341,6 +362,7 @@ mod tests {
 
     fn devices(mtp: &str, usbms: &str, mount_check: bool) -> Devices {
         Devices::new(DeviceEnv {
+            devices_base: PathBuf::from(mtp),
             mtp_base: PathBuf::from(mtp),
             mount_check,
             usbms_base: PathBuf::from(usbms),
@@ -387,6 +409,7 @@ mod tests {
 
         d.begin_device_cleaned("kobo");
         d.set_env(DeviceEnv {
+            devices_base: "/run/user/1000/mtp".into(),
             mtp_base: "/run/user/1000/mtp".into(),
             mount_check: true,
             usbms_base: "/run/media/u/Kobo".into(),

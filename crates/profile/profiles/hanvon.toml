@@ -38,5 +38,6 @@ height = 1448
 # MTP（安卓设备）：jmtpfs 自动挂到 $XDG_RUNTIME_DIR/mtp/<mount>，产物放进存储根目录的 dir
 [deliver]
 kind = "mtp"
-mount = "hanvon"                   # 2026-11-06 真机确认：~/Hanvon → /run/user/1000/mtp/hanvon（jmtpfs）
+mount = "hanvon"                   # 旧记录里的挂载子目录名（只用来认旧前缀；放弃废弃的 ~/Hanvon 直接位置）
+link = "Hanvon"                    # 2026-11-13 起只查 ~/Devices/<链接名>，链接和挂载归 dotfiles
 dir = "Documents"                  # 2026-11-11 现场：小写 documents 让 MTP 多登记出一个同内容的 documents，改成设备上的真名；旧记录由大小写迁移原样接过来

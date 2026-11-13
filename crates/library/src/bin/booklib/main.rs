@@ -230,10 +230,12 @@ const HELP_TAIL: &str = "\
 
 环境变量：
   BOOKLIB_DIR       书库目录
-  BOOKLIB_MTP_DIR   Kindle、掌阅的 jmtpfs 挂载点所在的目录（缺省 $XDG_RUNTIME_DIR/mtp）
-  BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查 MTP、USB 存储挂载点挂没挂着（测试用普通目录当设备）
-  BOOKLIB_USBMS_DIR Kobo 等 USB 大容量存储按卷标挂载的目录（缺省 /run/media/$USER；它不在、/media/$USER 在时用后者）
+  BOOKLIB_DEVICES_DIR  设备的链接目录（缺省 $HOME/Devices）：链接名就是 Kindle、Bigme、Hanvon、Ireader、Kobo，
+                    链接和挂载由 dotfiles 管，booklib 只读、不建也不删
+  BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查链接指向的挂载点挂没挂着（测试用普通目录当设备）
   BOOKLIB_NO_NET=1  不联网（不找元数据、封面）
+
+  BOOKLIB_MTP_DIR、BOOKLIB_USBMS_DIR 已废弃：只用来认旧生成记录里的前缀，不再用于找设备。
 
 退出码：0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）";
 
