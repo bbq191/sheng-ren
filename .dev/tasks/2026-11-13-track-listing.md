@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-track-listing
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: 待定
 - 分支: task/2026-11-13-track-listing（从最新 master 切出）
-- 更新时间: 2026-11-13T17:50+08:00
+- 更新时间: 2026-11-13T17:52:09+08:00
 - 引用: vinci 2026-11-13 在 sheng-ren 聊天里：改 `booklib track` 列表文字（不再写「从这一层起」，改成直接写设备上放在哪）；`track --device=x` 不给路径时只列这几台；重写 `booklib track` 的帮助。`booklib --help` 与其他子命令的帮助由 2026-11-13-help-rewrite 另开，本单不碰。
 
 ## 需求原文
