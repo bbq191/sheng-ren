@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: box-agent
 - 分支: task/2026-11-13-vertical-default-off（从最新 master 切出）
-- 更新时间: 2026-11-13T11:20:00+08:00
+- 更新时间: 2026-11-13T11:43:00+08:00
 - 引用: vinci 2026-11-13 10:26 在 sheng-ren 聊天里选方案二；推翻 `docs/decisions.md` 11-11「中文文字书全部竖排」；上次只读调查（`Library::vertical_for`）
 
 ## 需求原文
@@ -60,7 +60,7 @@
 3. [x] `OPTIMIZE_VERSION` 68→69（表 + 代码常量 + 变更说明）；按需要更新 `fp_golden.txt`；确认指纹：自动竖排的书掉 `V`/`f`，`--on` / 原书已竖排的还在。
 4. [x] 写 `docs/decisions.md`（推翻 11-11 那条并写新决定），改 usage / devices / architecture / README，以及过时的 typesetting。
 5. [x] `cargo test --workspace` 全过；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。
-6. [ ] 按 `docs/development.md` 跑真书回归（见验收标准）。box 上若没有测试书，不要声称跑过，在结果里写清需在 vinci 本机跑的 fish 命令。**box 上没有测试书，未跑；命令见结果。按本单要求，不合并。**
+6. [x] 按 `docs/development.md` 跑真书回归（见验收标准）。vinci 2026-11-13 本机已跑：ireader、bigme、kindle、hanvon、kobo 五个模式，以及 hanvon、kobo 的 `--vertical`，全部 SAME，坏链接 0，不合法 XML 0。临时书库那一步没能验证横竖排方向（list 不显示方向，`--no-build` 不生成产物）。没上真机。
 
 ## 验收标准
 - [x] 默认：中文文字书在 Kobo、汉王上不再因 `is_zh_text` 而竖排；`--on` 或原书已竖排的仍竖排；`--off` 强制横排。有测试覆盖（含目录清单、`--auto` 回到新默认）。固定版式（含原书已竖排的）默认和 `--on` 都不竖排，见 `fixed_layout_native_vertical_is_never_set_vertical`。
@@ -70,7 +70,7 @@
 - [x] `OPTIMIZE_VERSION` = 69（表与常量一致）；`COMIC_VERSION` 仍 68。先前自动竖排的书指纹掉 `V`/`f` 并会重建。`fp_golden.txt` 若因版本号更新，在结果里说明。
 - [x] `docs/decisions.md` 写明推翻 11-11；usage / devices / architecture / README（及过时的 typesetting）已同步。
 - [x] `cargo test --workspace` 全过；clippy `-D warnings` 0 警告。（负责 bot 在独立 worktree 重跑。）
-- [ ] 真书回归：有测试书则在 `target/` 下临时目录跑并记录；没有则写明「真书回归需在 vinci 本机跑」和具体 fish 命令，**不要合并**（由负责 bot 执行这条）。结果里写明没上真机。**未跑，不合并。命令见结果。固定版式阻断已在 `c3d02c1` 修好。**
+- [x] 真书回归：vinci 2026-11-13 本机已跑（详见结果）。没上真机。待 vinci 真机验收后改 verified。
 
 ## 交付物
 代码提交到任务分支并推送；「结果」填好；状态改为 done 或 blocked。任务单状态改动推 master，带 `[skip-notify]`。不要合并，不要跑二审（负责 bot 验收和二审）。box 上没有测试书时负责 bot **不要合并**。
@@ -102,11 +102,12 @@
 - `fp_golden.txt`：本次固定版式修复**没有再改**（相对 `caebf7c` / `c3d02c1` 之前，文件无 diff；`fp_golden` 测试仍通过）。黄金对拍用的是横排流式 `sample_epub`，不是固定版式，指纹路径不变。先前因版本号和默认横排而重写的说明仍有效：660 行，文字书 68→69，漫画 c68；旧 131 行 `Vf` 现为 0。
 - 遇到的问题：上轮二审阻断（默认分支漏固定版式）已在 `c3d02c1` 修好。
 - 偏离（包装器报 9 个文件；经对照**全部在范围内**，见上轮审查表，本次修复未新增范围外文件）。
-- 未完成：真书回归未跑（box 上无测试书）。固定版式阻断已修。
+- 未完成：临时书库步骤未能验证横竖排方向；没上真机。待 vinci 真机验收后改 verified。
 - 运行记录：`/home/box/oc-runs/2026-11-13-vertical-default-off-20261113-104648.json`
 - 日志：`/home/box/oc-runs/2026-11-13-vertical-default-off-20261113-104648.log`
 - 模型：执行方 `opencode-go/deepseek-v4.1-flash`；二审 `gemini-3.8-flash-medium`
-- **没跑真书回归、没上真机。** box 上没有 `~/Documents/ereader/books/`。**真书回归需在 vinci 本机跑。** 按本单要求 **不合并**。
+- 真书回归（vinci 2026-11-13 本机）：ireader、bigme、kindle、hanvon、kobo 五个模式，以及 hanvon、kobo 的 `--vertical`，全部 SAME，坏链接 0，不合法 XML 0。临时书库那一步没能验证横竖排方向（list 不显示方向，`--no-build` 不生成产物）。没上真机。
+- 合并：`--no-ff` 合入 master，提交 `9777de2105aa2d08dbab6dc4db4af9c167e4efaf`（`a14200c` + `7854761`），已推 origin/master。合并后在 `/tmp/sheng-ren-merge-vertical-default-off` 用 `rustup run stable` 重跑：`cargo test --workspace` 全过（bookbase 30、bookconv 553、csscascade 16、kfx 53、library 79 / bin 7 / cli 14 / flow 61 / fp_golden 1、profile 19）；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。`fp_golden.txt` 与任务分支一致：660 行，文字书 69，漫画 c68，`Vf` 0。状态保持 **done**，待 vinci 真机验收后改 verified。远程任务分支保留，未删。
 
 给 vinci 本机的回归命令（最终版，可直接复制粘贴；fish；仓库 `~/Projects/sheng-ren`，不是 `~/repos/sheng-ren`）。测试书只读；产物写到 `target/`；不碰 `~/.local/share/booklib`、不往真机传。
 
@@ -171,4 +172,4 @@ target/regress-base/target/release/booklib --library=$lib-old list
     - 包装器「偏离 9 个文件」：上轮已核，全部在范围内；本次修复只改 `vertical.rs`、`tests/common/mod.rs`、`tests/flow.rs`，在范围内。
     - `OPTIMIZE_VERSION` = 69，与 `docs/development.md` 一致；`COMIC_VERSION` 68。
 - 二审：**无阻断**（agy-review，2026-11-13 11:19 +08:00，模型 gemini-3.8-flash-medium，用时 215s，回执对照 `c3d02c1`，文件 `.dev/tasks/2026-11-13-vertical-default-off.agy.md`）。结论「建议通过（无代码阻断）」。负责 bot 已读回执并核对引用：上轮阻断已修属实（`vertical.rs` 约 149–169 行前置排除；新测试实际在 `flow.rs` 约 3487–3555 行，回执写的 895–968 是行号笔误，不影响结论）。建议 1（任务单滞后于 `c3d02c1`）已在本栏和结果栏补正；建议 2（真书回归未跑则不合并）已执行；建议 3（`is_natively_vertical` 进程内缓存）不挡、本单未做。线索（原件读不到时 `unwrap_or(false)` 指纹回退横排）是有意容错，不挡。未核实项：agy 只读未跑测试（负责 bot 已重跑）；真书回归和真机仍未做。
-- 合并：**未合并。** 代码阻断已清，但仍缺 vinci 本机真书回归。状态保持 **done**（不是 verified），代码留在 `task/2026-11-13-vertical-default-off`，远程分支保留。本机回归通过后再考虑 `--no-ff` 合并。
+- 合并：已于 2026-11-13 以 `--no-ff` 合入 master，提交 `9777de2105aa2d08dbab6dc4db4af9c167e4efaf`，已推 origin/master。vinci 本机真书回归已通过（五个模式及 hanvon/kobo `--vertical` 全部 SAME，坏链接 0，不合法 XML 0）；临时书库步骤未能验证方向；没上真机。状态保持 **done**（不是 verified）。待 vinci 真机验收后改 verified。远程任务分支保留，未删。
