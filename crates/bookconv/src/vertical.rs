@@ -168,11 +168,14 @@ pub fn is_natively_vertical(entries: &[Entry]) -> bool {
     }
     // OPF 2 的 `<meta name="primary-writing-mode">`（EPUB 3 的 rendition:flow 不在本单范围）
     crate::wash::parse_opf(entries).is_some_and(|o| {
-        opf::meta_content(&String::from_utf8_lossy(&entries[o.index].data), "primary-writing-mode")
-            .is_some_and(|v| {
-                let v = v.trim();
-                v.eq_ignore_ascii_case("vertical-rl") || v.eq_ignore_ascii_case("vertical-lr")
-            })
+        opf::meta_content(
+            &String::from_utf8_lossy(&entries[o.index].data),
+            "primary-writing-mode",
+        )
+        .is_some_and(|v| {
+            let v = v.trim();
+            v.eq_ignore_ascii_case("vertical-rl") || v.eq_ignore_ascii_case("vertical-lr")
+        })
     })
 }
 
