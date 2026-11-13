@@ -132,7 +132,7 @@ impl Library {
         Ok(bookconv::vertical::is_natively_vertical(&entries))
     }
 
-    /// 固定版式（强制竖排时要排除）。
+    /// 固定版式（一律不竖排，含强制 `--on`）。
     pub fn is_fixed_layout(&self, m: &Meta) -> Result<bool, String> {
         if m.content_format() == "cbz" {
             return Ok(false);
@@ -147,25 +147,24 @@ impl Library {
     /// 否则按「书自己的 `layout.vertical` → `vertical.toml` 目录清单（最长前缀）→ 原书本来是否竖排」。
     /// 默认横排（2026-11-13）；`is_zh_text` 不再参与这个决定。
     pub fn vertical_for(&self, meta: &Meta, device: &Profile) -> Result<bool, String> {
+        // 设备没开、漫画、固定版式一律不竖排：提到判断链最前，所有分支共用，免得以后再漏。
+        // 固定版式读不到原件时按不是算（与默认分支「读不到按横排」一致，不让临时读不到把计划算挂）。
         if !device.vertical_text {
             return Ok(false);
         }
-        if self.comic_of(meta)? {
+        if self.comic_of(meta)? || self.is_fixed_layout(meta).unwrap_or(false) {
             return Ok(false);
         }
         if let Some(v) = meta.layout.as_ref().and_then(|l| l.vertical) {
-            if !v {
-                return Ok(false);
-            }
-            return Ok(!self.is_fixed_layout(meta)?);
+            return Ok(v);
         }
         if let Some((_, rel)) = self.tracked_rel(meta, &device.id) {
             let dir = rel.to_string_lossy().replace('\\', "/");
             if let Some(v) = self.vertical_dirs()?.lookup(&dir) {
-                return Ok(v && !self.is_fixed_layout(meta)?);
+                return Ok(v);
             }
         }
-        // 默认分支：原书本来竖排的仍竖排，其余横排。读不到原件时这次按横排算（不让临时读不到把计划算挂）。
+        // 默认：原书本来竖排的仍竖排，其余横排。读不到原件时这次按横排算。
         Ok(self.is_natively_vertical(meta).unwrap_or(false))
     }
 

@@ -1,6 +1,8 @@
 mod common;
 
-use common::{booklib, jpeg, sample_epub, sample_epub_vertical, sample_epub_with};
+use common::{
+    booklib, jpeg, sample_epub, sample_epub_vertical, sample_epub_vertical_fixed, sample_epub_with,
+};
 use library::{Added, BookInfo, Built, Library, Prune};
 use std::io::Write;
 use std::path::Path;
@@ -3478,6 +3480,78 @@ fn vertical_books_follow_profile_overrides_and_directory_lists() {
     // 强制 --on 也不能让没开 vertical_text 的设备竖排
     lib.set_book_vertical(&m2.id, Some(true)).unwrap();
     check(&m2, "bigme", false, "设备没开 vertical_text 时不竖排");
+}
+
+/// 非漫画、原书已竖排的固定版式书：汉王 / Kobo 上默认不竖排，`--on` 也不能竖排（与旧行为一致）。
+#[test]
+fn fixed_layout_native_vertical_is_never_set_vertical() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib_dir = dir.path().join("lib");
+    let lib = common::open(&lib_dir);
+    let dev = common::dev_dir(&lib_dir);
+    for m in ["kindle", "hanvon", "bigme"] {
+        std::fs::create_dir_all(dev.join(m).join("Internal Storage")).unwrap();
+    }
+    std::fs::create_dir_all(dev.join("usbms/KOBOeReader")).unwrap();
+    let books = dir.path().join("books");
+    std::fs::create_dir_all(&books).unwrap();
+    let src = books.join("固定版式竖排.epub");
+    std::fs::write(&src, sample_epub_vertical_fixed("固定版式竖排")).unwrap();
+    lib.track(&books).unwrap();
+    let Added::New(m) = lib.add_file(&src).unwrap() else {
+        panic!()
+    };
+    assert_eq!(m.comic, Some(false), "这是文字书，不是漫画");
+    assert!(lib.is_fixed_layout(&m).unwrap(), "OPF 声明了固定版式");
+    assert!(
+        lib.is_natively_vertical(&m).unwrap(),
+        "原书 CSS 写了 writing-mode: vertical-rl"
+    );
+
+    let fresh = |id: &str| {
+        lib.list()
+            .into_iter()
+            .find(|x| x.id == id)
+            .unwrap_or_else(|| panic!("没有 {id}"))
+    };
+    let check = |m: &library::Meta, dev_id: &str, why: &str| {
+        let b = lib
+            .build(&fresh(&m.id), profile::get(dev_id).unwrap(), true)
+            .unwrap();
+        let path = built_path(&b).to_path_buf();
+        let state = std::fs::read(lib_dir.join(format!("output-state/{dev_id}.json")))
+            .unwrap_or_else(|e| panic!("{dev_id} 生成记录：{e}"));
+        let v: serde_json::Value = serde_json::from_slice(&state).unwrap();
+        let fp = v["books"][&m.id]["fingerprint"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{dev_id} 没有 {} 的指纹：{v}", m.id));
+        assert!(!fp.contains("Vf|"), "{dev_id} {why} 不应带 V/f：{fp}");
+        let entries = bookconv::epubzip::read_entries(&std::fs::read(&path).unwrap())
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let chapter = entries
+            .iter()
+            .filter(|e| e.name.ends_with(".xhtml"))
+            .map(|e| String::from_utf8_lossy(&e.data))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !chapter.contains("eink-vertical.css"),
+            "{dev_id} {why} 不应挂竖排样式：{chapter}"
+        );
+        assert!(
+            !lib.vertical_for(&fresh(&m.id), profile::get(dev_id).unwrap())
+                .unwrap(),
+            "{dev_id} {why} vertical_for 应为 false"
+        );
+    };
+
+    for dev_id in ["kobo", "hanvon"] {
+        check(&m, dev_id, "默认");
+    }
+    lib.set_book_vertical(&m.id, Some(true)).unwrap();
+    for dev_id in ["kobo", "hanvon"] {
+        check(&m, dev_id, "--on 也不能竖排");
+    }
 }
 
 #[test]
