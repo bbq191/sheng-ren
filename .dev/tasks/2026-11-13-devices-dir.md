@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-devices-dir
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: box-agent
 - 分支: task/2026-11-13-devices-dir（从最新 origin/master 切出，**不要**基于 `task/2026-11-13-vertical-default-off`）
-- 更新时间: 2026-11-13T11:22:00+08:00
+- 更新时间: 2026-11-13T11:23:19+08:00
 - 引用: vinci 2026-11-13 10:41 在 sheng-ren 聊天里批准「按方案开单执行，掌阅保留并预留 ~/Devices/Ireader」；方案 A；只读调查（`DeviceEnv`、`deliver::connect`、`mounted`、`on_removable`、`rebase_state_case`）；dotfiles `main@55b219d`
 
 ## 需求原文
