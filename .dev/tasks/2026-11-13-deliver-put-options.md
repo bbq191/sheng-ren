@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-deliver-put-options
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: box-agent
 - 分支: task/2026-11-13-deliver-put-options（从最新 master 切出）
-- 更新时间: 2026-11-13T10:13:16+08:00
+- 更新时间: 2026-11-13T10:16:00+08:00
 - 引用: 2026-11-12-quality-audit 发现 7（「核实与分组」建议单 `deliver-put-options`）
 
 ## 需求原文
@@ -52,15 +52,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
-- 没跑真书回归、没上真机（纯重构，待本机回归确认产物逐字节不变）。
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T10:13:16+08:00–2026-11-13T10:16:00+08:00
+- base..head：`cc7a372000e7af6c1ee76391bce97f1e2dbc2d61..4dce406cd038d1dbf8e9310189a2b37be4bfb795`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 9a52292 | chore: 开始执行任务单 2026-11-13-deliver-put-options [skip-notify] |
+  | 4dce406 | chore(library): put_file 的 bool 参数改成具名选项 |
+- 改动文件：`.dev/tasks/2026-11-13-deliver-put-options.md`,`crates/library/src/deliver.rs` `crates/library/src/transfer.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/library/src/deliver.rs`
+  - `crates/library/src/transfer.rs`
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-deliver-put-options-20261113-101316.json`
+- 日志：`/home/box/oc-runs/2026-11-13-deliver-put-options-20261113-101316.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
 <!-- 负责 bot 填写 -->
