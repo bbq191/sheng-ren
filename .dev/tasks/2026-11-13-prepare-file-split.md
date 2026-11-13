@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-prepare-file-split
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: 待定
 - 分支: task/2026-11-13-prepare-file-split（从最新 master 切出）
-- 更新时间: 2026-11-13T09:45+08:00
+- 更新时间: 2026-11-13T13:53:54+08:00
 - 引用: 2026-11-12-quality-audit 发现 9（主）、发现 8（可选顺手；核实结论是单独开单不值）
 
 ## 需求原文
