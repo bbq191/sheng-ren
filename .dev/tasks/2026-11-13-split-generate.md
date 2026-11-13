@@ -5,7 +5,7 @@
 - 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-13-split-generate（从最新 master 切出）
-- 更新时间: 2026-11-13T14:38:00+08:00
+- 更新时间: 2026-11-13T14:43:00+08:00
 - 引用: 2026-11-13-big-file-splits 分步 5；依赖 2026-11-13-prepare-file-split（已合并 8101e7e）
 
 ## 需求原文
@@ -85,5 +85,5 @@
   - 版本号未动（OPTIMIZE 69、COMIC 68、KINDLE_RULES 42、CONVERT 2、WRITER 26、PIPELINE 5）；`crates/library/tests/fp_golden.txt` 与 master 逐字节相同；testdata 未动。
   - 测试：`cargo test -p library -- --list` 两边都是 167 项。函数名与数量一致；其中 12 个单测的完整路径因放入 `generate/tests.rs`（任务要求的测试子模块）而多了一层 `tests::`（`generate::remove_tests::*` → `generate::tests::remove_tests::*`，`generate::kfx_id_tests::*` 同理），去掉此前缀后清单与 master 完全一致。`cargo test --workspace` 全过：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 82 / bin 7 / cli 14 / flow 63 / fp_golden 1，profile lib 19。`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。未对整个仓库跑 `cargo fmt`。
   - 阻断：无。
-- 二审：
-- 合并：
+- 二审：**无阻断**（agy-review，2026-11-13 14:41:10 Asia/Shanghai，模型 gemini-3.8-flash-medium，用时 55s，回执 `.dev/tasks/2026-11-13-split-generate.agy.md`）。结论「建议通过」。负责 bot 已读回执并核对引用：入口 `generate.rs` 28–44（`mod` 与再导出）核实；各子模块行数（最大 391）核实；「96 个 item 一一对应、可见性仅 `pub(super)` / 原有 `pub(crate)` 再导出」与一审逐项比对一致。建议与线索均无。未核实项：agy 只读未跑测试（验收与合并后已重跑）；真书回归和真机仍未做（验收已标明）。
+- 合并：`0d85255`（2026-11-13 14:41:25 Asia/Shanghai，`--no-ff` 合入当时 origin/master `13bd5d6`，另一父母 `a62080b`）。合并后再跑 `cargo test --workspace` 全过（计数与验收相同：bookbase lib 30，bookconv lib 553，csscascade lib 16，kfx lib 53，library lib 82 / bin 7 / cli 14 / flow 63 / fp_golden 1，profile lib 19），`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。已推 origin/master。状态保持 **done**（不是 verified），**待 vinci 本机回归确认产物逐字节不变后改 verified**。没跑真书回归、没上真机。未删除远程任务分支。

@@ -6,7 +6,7 @@
 - 执行方: 待定
 - 分支: task/2026-11-13-big-file-splits（从最新 master 切出；也可按文件另开子单、另切分支）
 - 子单: generate.rs → 2026-11-13-split-generate
-- 更新时间: 2026-11-13T09:45+08:00
+- 更新时间: 2026-11-13T14:43:00+08:00
 - 引用: 2026-11-12-quality-audit 发现 14 其余（「核实与分组」建议单 `big-file-splits`；每个文件单独验收）
 
 ## 需求原文
@@ -52,7 +52,7 @@
 2. [ ] `csscascade/src/lib.rs`
 3. [ ] `wash/box_fix.rs`
 4. [ ] `kfx/src/write/parse.rs`
-5. [ ] `generate.rs`（`prepare-file-split` 已合并）
+5. [x] `generate.rs`（子单 2026-11-13-split-generate，已合并 `0d85255`）
 6. [ ] `booklib/main.rs`
 7. [ ] `htmlproc/footnote.rs`
 8. [ ] `wash/kindle_rules.rs`
