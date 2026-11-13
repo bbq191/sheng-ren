@@ -379,11 +379,7 @@ fn ensure_dir(
 }
 
 /// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
-fn put_file_once(
-    src: &Path,
-    dest: &Path,
-    opts: PutOptions<'_>,
-) -> Result<bool, (String, bool)> {
+fn put_file_once(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool, (String, bool)> {
     let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     if let Some(dir) = dest.parent() {
         ensure_dir(dir, |d| std::fs::create_dir(d), MKDIR_BACKOFF)
@@ -530,19 +526,17 @@ mod case_tests {
         let d = tempfile::tempdir().unwrap();
         let (a, b) = (d.path().join("Abc.epub"), d.path().join("abc.epub"));
         std::fs::write(&a, b"book").unwrap();
-        assert!(
-            super::put_file(
-                &a,
-                &b,
-                super::PutOptions {
-                    keep_src: false,
-                    compare: false,
-                    direct: true,
-                    mount: None,
-                },
-            )
-            .unwrap()
-        );
+        assert!(super::put_file(
+            &a,
+            &b,
+            super::PutOptions {
+                keep_src: false,
+                compare: false,
+                direct: true,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&b).unwrap(), b"book");
         assert!(!a.exists());
         let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().flatten().collect();
@@ -879,37 +873,33 @@ mod tests {
             "不比较：照写"
         );
         std::fs::write(&src, b"abd").unwrap();
-        assert!(
-            put_file(
-                &src,
-                &dest,
-                PutOptions {
-                    keep_src: false,
-                    compare: true,
-                    direct: false,
-                    mount: None,
-                },
-            )
-            .unwrap()
-        );
+        assert!(put_file(
+            &src,
+            &dest,
+            PutOptions {
+                keep_src: false,
+                compare: true,
+                direct: false,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"abd");
         assert!(!src.exists(), "不留来源时挪走");
         assert!(!same_bytes(&dest, &d.path().join("x")));
         // 直接写：换掉旧的、不留临时文件
         std::fs::write(&src, b"xyz1").unwrap();
-        assert!(
-            put_file(
-                &src,
-                &dest,
-                PutOptions {
-                    keep_src: true,
-                    compare: false,
-                    direct: true,
-                    mount: None,
-                },
-            )
-            .unwrap()
-        );
+        assert!(put_file(
+            &src,
+            &dest,
+            PutOptions {
+                keep_src: true,
+                compare: false,
+                direct: true,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&dest).unwrap(), b"xyz1");
         assert_eq!(
             std::fs::read_dir(d.path()).unwrap().count(),
@@ -932,38 +922,34 @@ mod tests {
         let src = old.join("书.epub");
         std::fs::write(&src, b"same").unwrap();
         let dest = new.join("书.epub");
-        assert!(
-            !put_file(
-                &src,
-                &dest,
-                PutOptions {
-                    keep_src: false,
-                    compare: true,
-                    direct: true,
-                    mount: None,
-                },
-            )
-            .unwrap()
-        );
+        assert!(!put_file(
+            &src,
+            &dest,
+            PutOptions {
+                keep_src: false,
+                compare: true,
+                direct: true,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert!(src.exists() && dest.exists(), "同一个文件：不删 src");
 
         // compare=false、direct=true：也必须强制走临时文件，不能先删 dest（不分大小写时 dest 就是 src）
         let src3 = old.join("另一本.epub");
         std::fs::write(&src3, b"new content").unwrap();
         let dest3 = new.join("另一本.epub");
-        assert!(
-            put_file(
-                &src3,
-                &dest3,
-                PutOptions {
-                    keep_src: false,
-                    compare: false,
-                    direct: true,
-                    mount: None,
-                },
-            )
-            .unwrap()
-        );
+        assert!(put_file(
+            &src3,
+            &dest3,
+            PutOptions {
+                keep_src: false,
+                compare: false,
+                direct: true,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&dest3).unwrap(), b"new content");
         assert!(src3.exists(), "不删来源");
         let leftovers = std::fs::read_dir(&old)
@@ -978,19 +964,17 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         let dest2 = other.join("书.epub");
         std::fs::write(&dest2, b"old").unwrap();
-        assert!(
-            put_file(
-                &src,
-                &dest2,
-                PutOptions {
-                    keep_src: false,
-                    compare: true,
-                    direct: false,
-                    mount: None,
-                },
-            )
-            .unwrap()
-        );
+        assert!(put_file(
+            &src,
+            &dest2,
+            PutOptions {
+                keep_src: false,
+                compare: true,
+                direct: false,
+                mount: None,
+            },
+        )
+        .unwrap());
         assert_eq!(std::fs::read(&dest2).unwrap(), b"same");
         assert!(src.exists(), "不删来源");
     }
