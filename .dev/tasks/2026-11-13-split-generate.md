@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-split-generate
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-13-split-generate（从最新 master 切出）
-- 更新时间: 2026-11-13T14:12:01+08:00
+- 更新时间: 2026-11-13T14:30:19+08:00
 - 引用: 2026-11-13-big-file-splits 分步 5；依赖 2026-11-13-prepare-file-split（已合并 8101e7e）
 
 ## 需求原文
@@ -48,13 +48,29 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 子模块划分：
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
-- 没跑真书回归、没上真机（纯重构，待本机回归确认产物逐字节不变）。
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T14:12:01+08:00–2026-11-13T14:30:19+08:00
+- base..head：`13bd5d6330a18e18396961fbd53a9846754f126c..b1e817a65eb49a5967c8bcdd3b532eaf6d550f99`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 4bbe173 | chore: 开始执行任务单 2026-11-13-split-generate [skip-notify] |
+  | b1e817a | chore(generate): 把 generate.rs 拆成 generate/ 子模块 |
+- 改动文件：`.dev/tasks/2026-11-13-split-generate.md`,`crates/library/src/generate.rs` `crates/library/src/generate/flow.rs`,`crates/library/src/generate/fsops.rs` `crates/library/src/generate/placement.rs`,`crates/library/src/generate/plan.rs` `crates/library/src/generate/produce.rs`,`crates/library/src/generate/records.rs` `crates/library/src/generate/space.rs`,`crates/library/src/generate/state.rs` `crates/library/src/generate/tests.rs`,`crates/library/src/generate/types.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/library/src/generate/flow.rs`
+  - `crates/library/src/generate/fsops.rs`
+  - `crates/library/src/generate/placement.rs`
+  - `crates/library/src/generate/plan.rs`
+  - `crates/library/src/generate/produce.rs`
+  - `crates/library/src/generate/records.rs`
+  - `crates/library/src/generate/space.rs`
+  - `crates/library/src/generate/state.rs`
+  - `crates/library/src/generate/tests.rs`
+  - `crates/library/src/generate/types.rs`
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-split-generate-20261113-141201.json`
+- 日志：`/home/box/oc-runs/2026-11-13-split-generate-20261113-141201.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+
