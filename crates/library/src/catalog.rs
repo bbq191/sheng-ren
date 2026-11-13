@@ -115,10 +115,7 @@ impl Library {
     /// 就是这个位置的，刷新记着的大小和修改时间。不管同一路径的旧版本（`sync` 自己管，见 [`Library::add_file`]）。
     ///
     /// 边读边算哈希（不整本读进内存）。读之前和读完各看一次大小和修改时间，变了说明文件正在写入，报错不入库。
-    pub(crate) fn add_file_only(
-        &self,
-        path: &Path,
-    ) -> Result<Added, crate::error::Error> {
+    pub(crate) fn add_file_only(&self, path: &Path) -> Result<Added, crate::error::Error> {
         use crate::error::{Error, Kind};
         let path = std::fs::canonicalize(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let Some(path_str) = path.to_str().map(str::to_string) else {

@@ -254,10 +254,7 @@ mod tests {
         assert!(lane_step(&mut full, || Err(Error::other("别的错"))).is_err());
         assert!(!full);
         assert_eq!(lane_step(&mut full, || Ok(true)), Ok(true));
-        let e = Error::new(
-            Kind::NoSpace,
-            format!("{}：写 x", crate::space::NO_SPACE),
-        );
+        let e = Error::new(Kind::NoSpace, format!("{}：写 x", crate::space::NO_SPACE));
         assert!(lane_step(&mut full, || Err(e)).is_err());
         assert!(full);
         let mut ran = false;
