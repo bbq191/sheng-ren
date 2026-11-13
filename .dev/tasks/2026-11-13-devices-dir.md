@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-13-devices-dir
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent
 - 分支: task/2026-11-13-devices-dir（从最新 origin/master 切出，**不要**基于 `task/2026-11-13-vertical-default-off`）
 - 更新时间: 2026-11-13T11:46:02+08:00
@@ -152,3 +152,5 @@
   - 测试、clippy、fmt、版本与指纹见上方「结果」。**没跑真书回归、没上真机**。
 - 二审：agy-review，模型 `gemini-3.8-flash-medium`，2026-11-13 11:56:11 Asia/Shanghai，用时 338s，结论「建议通过」，阻断无。建议与线索见 `.dev/tasks/2026-11-13-devices-dir.agy.md`（`BOOKLIB_DEVICES_DIR` 为纯相对路径时相对链接可能对不上 mountinfo；`~/Hanvon` 把 `$HOME` 加入 `removable_base` 的隐式约定），均不阻断，本轮不改代码。
 - 合并：`67f9c90`（`--no-ff`，父母 `26227e0` + `e83da37`）。冲突仅 `docs/decisions.md`（竖排默认改横排与本单两条决定都保留）和 `docs/devices.md` 汉王段（传书用本单 `~/Devices/Hanvon`，格式保留「2026-11-13 起默认横排」）。合并后再测（2026-11-13 Asia/Shanghai）：`cargo test --workspace` 全过（bookbase 30、bookconv 553、csscascade 16、kfx 53、library 82 / bin 7 / cli 14 / flow 62 = 竖排侧 61 + 本单迁移测试、fp_golden 1、profile 19）、clippy `-D warnings` 0 警告、fmt 通过。`OPTIMIZE_VERSION` 仍为竖排已升的 69，COMIC 68，本单未改版本号与 `fp_golden.txt`。状态保持 **done，待 vinci 验收后改 verified**。
+
+- 真机验收：vinci 2026-11-13 13:42 (+08:00) 确认通过（掌阅经 ~/Devices/Ireader 实测 list/sync 正常；其余设备以 vinci 确认为准），状态改 verified。

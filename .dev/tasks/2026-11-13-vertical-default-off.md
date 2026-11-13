@@ -2,7 +2,7 @@
 
 - Task ID: 2026-11-13-vertical-default-off
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent
 - 分支: task/2026-11-13-vertical-default-off（从最新 master 切出）
 - 更新时间: 2026-11-13T11:43:00+08:00
@@ -173,3 +173,5 @@ target/regress-base/target/release/booklib --library=$lib-old list
     - `OPTIMIZE_VERSION` = 69，与 `docs/development.md` 一致；`COMIC_VERSION` 68。
 - 二审：**无阻断**（agy-review，2026-11-13 11:19 +08:00，模型 gemini-3.8-flash-medium，用时 215s，回执对照 `c3d02c1`，文件 `.dev/tasks/2026-11-13-vertical-default-off.agy.md`）。结论「建议通过（无代码阻断）」。负责 bot 已读回执并核对引用：上轮阻断已修属实（`vertical.rs` 约 149–169 行前置排除；新测试实际在 `flow.rs` 约 3487–3555 行，回执写的 895–968 是行号笔误，不影响结论）。建议 1（任务单滞后于 `c3d02c1`）已在本栏和结果栏补正；建议 2（真书回归未跑则不合并）已执行；建议 3（`is_natively_vertical` 进程内缓存）不挡、本单未做。线索（原件读不到时 `unwrap_or(false)` 指纹回退横排）是有意容错，不挡。未核实项：agy 只读未跑测试（负责 bot 已重跑）；真书回归和真机仍未做。
 - 合并：已于 2026-11-13 以 `--no-ff` 合入 master，提交 `9777de2105aa2d08dbab6dc4db4af9c167e4efaf`，已推 origin/master。vinci 本机真书回归已通过（五个模式及 hanvon/kobo `--vertical` 全部 SAME，坏链接 0，不合法 XML 0）；临时书库步骤未能验证方向；没上真机。状态保持 **done**（不是 verified）。待 vinci 真机验收后改 verified。远程任务分支保留，未删。
+
+- 真机验收：vinci 2026-11-13 13:42 (+08:00) 确认通过（掌阅经 ~/Devices/Ireader 实测 list/sync 正常；其余设备以 vinci 确认为准），状态改 verified。
