@@ -22,6 +22,7 @@
 //! 中途被打断的话，下次生成还认得新位置上的文件是这本书的（不会因为"有个不认识的同名文件"而改名），旧文件也还会删。
 
 use crate::deliver::{self, Target};
+use crate::error::{Error, Kind};
 use crate::fsutil::TMP_PREFIX;
 use crate::session::{Devices, PreparedInput};
 use crate::transfer::{Transfer, Work};
@@ -664,11 +665,16 @@ impl Library {
     /// 设备没接上返回错误（`sync` 先用 [`Library::device_status`] 看过，没接上的模式整个跳过）。
     /// `sync` 不用它：先比较、生成（[`Library::prepare`]），传设备交给传输线程（[`crate::Pipeline`]），传完再记（[`Library::complete`]）。
     pub fn build(&self, meta: &Meta, device: &Profile, force: bool) -> Result<Built, String> {
-        match self.prepare(meta, device, force)? {
+        self.build_typed(meta, device, force)
+            .map_err(|e| e.to_string())
+    }
+
+    fn build_typed(&self, meta: &Meta, device: &Profile, force: bool) -> Result<Built, Error> {
+        match self.prepare_typed(meta, device, force)? {
             Step::Done(b) => Ok(b),
             Step::Transfer(t) => {
                 let r = t.run();
-                self.complete(*t, r)
+                self.complete_typed(*t, r)
             }
         }
     }
@@ -676,6 +682,17 @@ impl Library {
     /// 先比较、再生成：没变化的、设备上已有一样的直接给出结果（[`Step::Done`]）；要传的生成好、交回一件 [`Transfer`]
     /// （放上设备是别的线程的事，传完调 [`Library::complete`] 记下来）。
     pub fn prepare(&self, meta: &Meta, device: &Profile, force: bool) -> Result<Step, String> {
+        self.prepare_typed(meta, device, force)
+            .map_err(|e| e.to_string())
+    }
+
+    /// [`Library::prepare`] 的内部版：错误带着种类，`build_run` 按种类决定掉线还是失败。
+    pub(crate) fn prepare_typed(
+        &self,
+        meta: &Meta,
+        device: &Profile,
+        force: bool,
+    ) -> Result<Step, Error> {
         // 原件的大小或修改时间变了：先核对内容（改过了就停下来），不能因为指纹没变就说"已是最新"。
         // 原件不在了的不在这里报：产物还是那本书的，照旧算最新（`sync`/`list` 会报原件不在）
         if self.original_state(meta) == crate::OriginalState::Touched {
@@ -768,7 +785,7 @@ impl Library {
         target: &Target,
         plan: Plan,
         force: bool,
-    ) -> Result<Step, String> {
+    ) -> Result<Step, Error> {
         let Plan {
             fingerprint,
             format,
@@ -831,7 +848,10 @@ impl Library {
         // 设备中途断开了：不生成、不改记录（不然下面会把完好的指纹、哈希清掉，接上后整本重传），报给 `build_all` 记成掉线
         if let Target::Dir { mount: Some(m), .. } = target {
             if !deliver::mounted(m) {
-                return Err(format!("{UNMOUNTED}：{}", m.display()));
+                return Err(Error::new(
+                    Kind::Unmounted,
+                    format!("{UNMOUNTED}：{}", m.display()),
+                ));
             }
         }
         // 来源：内容没变、只是位置变了的已有产物（挪过去，不重新生成），或者新生成的
@@ -914,7 +934,7 @@ impl Library {
             );
             if same {
                 // 和设备上的一样：不用传
-                return self.complete(t, Ok(false)).map(Step::Done);
+                return self.complete_typed(t, Ok(false)).map(Step::Done);
             }
             Ok(Step::Transfer(Box::new(t)))
         })();
@@ -964,7 +984,16 @@ impl Library {
 
     /// 传完了（`r` 是传输线程的结果：真的写了没有）：删掉临时目录，写上完成的记录、删掉旧位置。传失败的：记录不改
     /// （先登记了新位置、指纹留空，下次重做），返回错误。
-    pub fn complete(&self, t: Transfer, r: Result<bool, String>) -> Result<Built, String> {
+    pub fn complete(&self, t: Transfer, r: Result<bool, Error>) -> Result<Built, String> {
+        self.complete_typed(t, r).map_err(|e| e.to_string())
+    }
+
+    /// [`Library::complete`] 的内部版：传设备的错误带着种类，`build_run` 按种类决定停不停这台设备。
+    pub(crate) fn complete_typed(
+        &self,
+        t: Transfer,
+        r: Result<bool, Error>,
+    ) -> Result<Built, Error> {
         if let Some(tmp) = &t.tmp {
             let _ = std::fs::remove_dir_all(tmp);
         }

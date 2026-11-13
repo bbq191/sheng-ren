@@ -198,7 +198,11 @@ pub(crate) struct PutOptions<'a> {
 ///
 /// 目录刚建好、文件还没放进去时，主线程可能正好把它当成"变空的目录"删掉（删别的书的旧位置时顺带删空目录，
 /// `generate::State::delete_placements`）：碰到目录不在了就重建再放，试几次。
-pub(crate) fn put_file(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool, String> {
+pub(crate) fn put_file(
+    src: &Path,
+    dest: &Path,
+    opts: PutOptions<'_>,
+) -> Result<bool, crate::error::Error> {
     // 挪到只差大小写的新名字（书名只改了大小写）：不分大小写的文件系统上 `dest` 就是 `src`，下面"先删 dest"会把书删掉。
     // 先改成旁边的临时名字，再从那里放
     if !opts.keep_src && crate::generate::case_twin(src, dest) {
@@ -234,13 +238,21 @@ pub(crate) fn put_file(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<
     put_file_retry(src, dest, opts)
 }
 
-fn put_file_retry(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool, String> {
+fn put_file_retry(
+    src: &Path,
+    dest: &Path,
+    opts: PutOptions<'_>,
+) -> Result<bool, crate::error::Error> {
+    use crate::error::{Error, Kind};
     // 每次写之前、写完都看挂载点还挂着：设备中途断开后挂载点只剩空目录（MTP 的在 tmpfs 上，用户能写），
     // 重试时重建目录会把书写进内存、还记成传上了
     let gone = || {
-        opts.mount
-            .filter(|m| !mounted(m))
-            .map(|m| format!("设备断开了（{} 没挂着），没传", m.display()))
+        opts.mount.filter(|m| !mounted(m)).map(|m| {
+            Error::new(
+                Kind::Unmounted,
+                format!("设备断开了（{} 没挂着），没传", m.display()),
+            )
+        })
     };
     let mut tries = 0;
     loop {
@@ -256,11 +268,11 @@ fn put_file_retry(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool,
             r => {
                 // 失败时挂载点也不在了：按断开报（断开后的挂载点在 tmpfs 上，写满报的 ENOSPC 不是设备满）
                 let r = r.map_err(|(e, _)| match gone() {
-                    Some(g) => format!("{g}（写的途中断开）：{e}"),
+                    Some(g) => Error::new(g.kind(), format!("{g}（写的途中断开）：{e}")),
                     None => e,
                 })?;
                 return match gone() {
-                    Some(e) => Err(format!("{e}（写的途中断开）")),
+                    Some(e) => Err(Error::new(e.kind(), format!("{e}（写的途中断开）"))),
                     None => Ok(r),
                 };
             }
@@ -312,12 +324,17 @@ fn fail_write() -> Option<i32> {
     (std::env::var_os("BOOKLIB_TEST_ENOSPC").is_some_and(|v| v == "1")).then_some(28)
 }
 
-/// 写设备的错误说成一行：设备满了的以 [`crate::space::NO_SPACE`] 开头（一轮生成据此停下这台设备、不记失败表）。
-fn io_error(what: String, e: &std::io::Error) -> String {
+/// 写设备的错误说成一行：设备满了的带上 [`crate::error::Kind::NoSpace`]（一轮生成据此停下这台设备、不记失败表），
+/// 文字照旧以 [`crate::space::NO_SPACE`] 开头。
+fn io_error(what: String, e: &std::io::Error) -> crate::error::Error {
+    use crate::error::{Error, Kind};
     if crate::space::is_no_space(e) {
-        format!("{}：{what}: {e}", crate::space::NO_SPACE)
+        Error::new(
+            Kind::NoSpace,
+            format!("{}：{what}: {e}", crate::space::NO_SPACE),
+        )
     } else {
-        format!("{what}: {e}")
+        Error::other(format!("{what}: {e}"))
     }
 }
 
@@ -379,7 +396,11 @@ fn ensure_dir(
 }
 
 /// [`put_file`] 的一次：出错时第二项说是不是"目录（或文件）不在"一类的错误（可以重建目录再试）。
-fn put_file_once(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool, (String, bool)> {
+fn put_file_once(
+    src: &Path,
+    dest: &Path,
+    opts: PutOptions<'_>,
+) -> Result<bool, (crate::error::Error, bool)> {
     let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     if let Some(dir) = dest.parent() {
         ensure_dir(dir, |d| std::fs::create_dir(d), MKDIR_BACKOFF)
@@ -428,7 +449,7 @@ fn put_file_once(src: &Path, dest: &Path, opts: PutOptions<'_>) -> Result<bool, 
         // 写到一半的（临时文件，或直接写的 dest 本身）都删掉。直接写的记录在生成时先记了空指纹（`prepare_file`），
         // 下次认得出没写完、重传
         let _ = std::fs::remove_file(&tmp);
-        // 设备满了：开头标上 NO_SPACE（`io_error`），一轮生成据此停下这台设备、不记进失败表
+        // 设备满了：种类标成 NoSpace（`io_error`），一轮生成据此停下这台设备、不记进失败表
         return Err((io_error(format!("写 {}", dest.display()), &e), missing(&e)));
     }
     if !opts.direct {
@@ -471,7 +492,12 @@ mod space_tests {
             );
             super::FAIL_WRITE.with(|f| f.set(None));
             let e = r.unwrap_err();
-            assert!(e.starts_with(crate::space::NO_SPACE), "{e}");
+            assert!(e.kind() == crate::error::Kind::NoSpace, "{e}");
+            assert!(
+                e.as_str().starts_with(crate::space::NO_SPACE),
+                "{}",
+                e.as_str()
+            );
             let left: Vec<_> = std::fs::read_dir(dest.parent().unwrap())
                 .unwrap()
                 .flatten()
@@ -499,7 +525,9 @@ mod space_tests {
             },
         );
         super::FAIL_WRITE.with(|f| f.set(None));
-        assert!(!r.unwrap_err().starts_with(crate::space::NO_SPACE));
+        let e = r.unwrap_err();
+        assert!(e.kind() != crate::error::Kind::NoSpace);
+        assert!(!e.as_str().starts_with(crate::space::NO_SPACE));
     }
 }
 

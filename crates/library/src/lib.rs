@@ -29,6 +29,7 @@ mod cover;
 mod covergen;
 mod deliver;
 mod douban;
+mod error;
 mod fingerprint;
 mod fsutil;
 mod generate;
@@ -53,6 +54,7 @@ use std::path::{Path, PathBuf};
 pub use build_run::{build_all, BuildCounts, BuildEvent, BuildRun, FailMemo};
 pub use cover::{CoverInfo, CoverResult};
 pub use deliver::DeviceEnv;
+pub use error::Error;
 pub use fsutil::Lock;
 pub use generate::{Built, OutputStatus, SpaceCheck, Step};
 pub use metadata::{BookInfo, Edition, InfoResult};
@@ -258,7 +260,7 @@ impl Added {
 
 /// 路径不是 UTF-8 时的提示：书库的索引是 JSON，存不下这种路径。
 pub(crate) const NOT_UTF8: &str = "文件名不是 UTF-8，请改名";
-/// 入库时文件还在被写（读的前后大小或修改时间变了）。`sync` 认这个前缀：不记下来，下一轮再试。
+/// 入库时文件还在被写（读的前后大小或修改时间变了）。`sync` 按错误种类 [`error::Kind::Busy`] 认：不记下来，下一轮再试。
 pub(crate) const BUSY: &str = "文件正在写入";
 
 pub(crate) fn now() -> u64 {
