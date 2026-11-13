@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-devices-dir
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: box-agent
 - 分支: task/2026-11-13-devices-dir（从最新 origin/master 切出，**不要**基于 `task/2026-11-13-vertical-default-off`）
-- 更新时间: 2026-11-13T11:23:28+08:00
+- 更新时间: 2026-11-13T11:46:02+08:00
 - 引用: vinci 2026-11-13 10:41 在 sheng-ren 聊天里批准「按方案开单执行，掌阅保留并预留 ~/Devices/Ireader」；方案 A；只读调查（`DeviceEnv`、`deliver::connect`、`mounted`、`on_removable`、`rebase_state_case`）；dotfiles `main@55b219d`
 
 ## 需求原文
@@ -119,7 +119,35 @@
 ```
 
 ## 结果
-<!-- 执行方填写：base..head、提交列表、改动文件、测试、偏离（对照上面的文件清单）、未完成、没跑真书回归、没上真机。若新建了清单外的文件，在此说明理由。 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T11:23:28+08:00–2026-11-13T11:46:02+08:00
+- base..head：`a14200cc4c5a403302ba33e21f4041352925175f..62f43de9721fe8aa9497b3173eb98c0549c1b0bb`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | f45db23 | chore: 开始执行任务单 2026-11-13-devices-dir [skip-notify] |
+  | 62f43de | feat: 设备路径统一为 ~/Devices/<链接名> |
+- 改动文件：`.dev/tasks/2026-11-13-devices-dir.md`,`README.md` `crates/library/src/bin/booklib/main.rs`,`crates/library/src/deliver.rs` `crates/library/src/generate.rs`,`crates/library/src/session.rs` `crates/library/src/transfer.rs`,`crates/library/tests/common/mod.rs` `crates/library/tests/flow.rs`,`crates/profile/profiles/bigme.toml` `crates/profile/profiles/hanvon.toml`,`crates/profile/profiles/ireader.toml` `crates/profile/profiles/kindle.toml`,`crates/profile/profiles/kobo.toml` `crates/profile/src/lib.rs`,`docs/architecture.md` `docs/decisions.md`,`docs/devices.md` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `README.md`
+  - `crates/library/src/bin/booklib/main.rs`
+  - `crates/library/src/transfer.rs`
+  - `crates/library/tests/common/mod.rs`
+  - `crates/library/tests/flow.rs`
+  - `crates/profile/profiles/bigme.toml`
+  - `crates/profile/profiles/hanvon.toml`
+  - `crates/profile/profiles/ireader.toml`
+  - `crates/profile/profiles/kindle.toml`
+  - `crates/profile/profiles/kobo.toml`
+  - `crates/profile/src/lib.rs`
+  - `docs/architecture.md`
+  - `docs/devices.md`
+  - `docs/usage.md`
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-devices-dir-20261113-112328.json`
+- 日志：`/home/box/oc-runs/2026-11-13-devices-dir-20261113-112328.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
 <!-- 负责 bot 填写 -->
