@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-help-rewrite
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-13-help-rewrite（从已合并 track-listing 的最新 master 切出）
-- 更新时间: 2026-11-13T17:50+08:00
+- 更新时间: 2026-11-14T23:20:33+08:00
 - 引用: vinci 2026-11-13 在 sheng-ren 聊天里：「booklib --help 的帮助信息请重写，结构太混乱，说明不清晰」。**待 2026-11-13-track-listing 合并后再开跑**（track 的帮助已由那张单按「用法 → 参数 → 放法例子 → 重复 track 规则 → 例子」重写，本单只做风格统一，不要回退那张单的写法与语义）。
 
 ## 需求原文
@@ -67,15 +67,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
-- 偏离：无
-- 未完成：
-- 没跑真书回归、没上真机（只改帮助文字，不影响产物）。
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-14T09:40:02+08:00–2026-11-14T23:20:33+08:00
+- base..head：`07c819de513b1c758ddc86fed5effe1a4933b3ee..736522f67ba91135bd516ae63f5486e7e06ffbde`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | d434dc9 | chore: 开始执行任务单 2026-11-13-help-rewrite [skip-notify] |
+  | 736522f | feat(help): 统一 booklib 顶层与各子命令帮助结构 |
+- 改动文件：`.dev/tasks/2026-11-13-help-rewrite.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/bin/booklib/meta_edit.rs`,`crates/library/tests/cli.rs` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/library/src/bin/booklib/meta_edit.rs`
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-help-rewrite-20261114-094002.json`
+- 日志：`/home/box/oc-runs/2026-11-13-help-rewrite-20261114-094002.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
 <!-- 负责 bot 填写 -->
