@@ -172,7 +172,8 @@ fn help_prints_to_stdout_and_exits_0_without_touching_the_library() {
     );
     let out = stdout(&booklib(Some(&lib), &["track", "-h"]));
     assert!(
-        out.contains(" track [--device=") && out.contains("<目录或书>") && !out.contains("untrack"),
+        // 只出 track 自己的用法，不带 untrack 的用法（正文里可以提「用 untrack --device 拿掉」）
+        out.contains(" track [--device=") && out.contains("<目录或书>") && !out.contains("] untrack "),
         "{out}"
     );
     expect(
@@ -881,6 +882,43 @@ fn track_listing_shows_device_placement() {
     ] {
         assert!(out.contains(&want), "应有：\n{want}\n实际：\n{out}");
     }
+}
+
+/// 完成提示的位置按书库里记的规范化路径算：经软链接（或相对当前目录）给的路径也要写对，不能因为对不上书根目录变成「根目录」。
+#[test]
+fn track_message_placement_uses_canonical_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    let books = dir.path().join("books");
+    std::fs::create_dir_all(books.join("优秀漫画/竹光侍")).unwrap();
+    std::fs::create_dir_all(books.join("文字/科幻")).unwrap();
+    std::fs::write(books.join("文字/科幻/三体.epub"), common::sample_epub("三体")).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&books, &link).unwrap();
+    assert_eq!(
+        common::booklib(Some(&lib), &["track", &format!("--root={}", books.display())])
+            .status
+            .code(),
+        Some(0)
+    );
+    let o = common::booklib(
+        Some(&lib),
+        &["track", "--device=kindle", link.join("优秀漫画/竹光侍").to_str().unwrap()],
+    );
+    assert!(
+        common::stdout(&o).contains("给 kindle → 设备上 优秀漫画/竹光侍/"),
+        "{}",
+        common::stdout(&o)
+    );
+    let o = common::booklib(
+        Some(&lib),
+        &["track", "--device=kindle", link.join("文字/科幻/三体.epub").to_str().unwrap()],
+    );
+    assert!(
+        common::stdout(&o).contains("给 kindle → 设备上 文字/科幻（"),
+        "{}",
+        common::stdout(&o)
+    );
 }
 
 /// 不给路径的 `track` 只列 `--device=` 给的几台；`all` 或不写列全部；未知模式报用法错。

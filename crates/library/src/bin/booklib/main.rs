@@ -99,7 +99,7 @@ const COMMANDS: &[Command] = &[
     track --top ~/book/优秀漫画/竹光侍    → 竹光侍/…
   单本：
     track ~/book/文字/科幻/三体.epub      → 文字/科幻/三体
-    track --top ~/book/文字/科幻/三体.epub → 根目录/三体
+    track --top ~/book/文字/科幻/三体.epub → 三体（根目录）
   同一本书被一台设备的几个条目覆盖时，用最具体的那个（单本 > 深的目录 > 浅的目录）的放法。
   同一个路径每台设备可以有自己的放法（给 Kindle --top、给掌阅不带，各是各的）。
   书根目录所有设备共用，第一次 track 时定下（跟踪的目录；单本是它所在的目录），跟踪的都要在它里面。
@@ -108,6 +108,7 @@ const COMMANDS: &[Command] = &[
   同一种放法：设备范围取并集；任一次是全部设备就是全部设备。
   换放法：这次给的设备从原来的放法挪过来；不写 --device（全部设备）则整条换成这次的放法，
   写了 --device 只挪这几台，其他设备留在原来的放法上。
+  track 只加设备、不缩小范围；要从某几台拿掉用 booklib untrack --device=模式 <目录或书>。
 
 例子：
   booklib track ~/book                                          全部设备，照书库结构
@@ -1235,9 +1236,10 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
         let kind = if d.is_file() { "单本" } else { "目录" };
         ctx.report(if track {
             lib.track_with(d, &devices, top).map(|c| {
+                // 书库里记的是规范化的绝对路径：相对路径、经软链接的路径要先换成它，否则对不上书根目录
                 let placed = placement_shown(
                     &lib.entry_placement(&library::Tracked {
-                        path: d.to_path_buf(),
+                        path: std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf()),
                         file: d.is_file(),
                         devices: devices.clone(),
                         top,
