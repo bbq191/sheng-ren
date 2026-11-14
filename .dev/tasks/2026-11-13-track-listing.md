@@ -3,9 +3,9 @@
 - Task ID: 2026-11-13-track-listing
 - 负责 bot: sheng-ren
 - 状态: done
-- 执行方: 待定
+- 执行方: box-agent（oc-exec）；验收 sheng-ren 独立执行方
 - 分支: task/2026-11-13-track-listing（从最新 master 切出）
-- 更新时间: 2026-11-14T09:27:37+08:00
+- 更新时间: 2026-11-14T09:50:00+08:00
 - 引用: vinci 2026-11-13 在 sheng-ren 聊天里：改 `booklib track` 列表文字（不再写「从这一层起」，改成直接写设备上放在哪）；`track --device=x` 不给路径时只列这几台；重写 `booklib track` 的帮助。`booklib --help` 与其他子命令的帮助由 2026-11-13-help-rewrite 另开，本单不碰。
 
 ## 需求原文
@@ -83,12 +83,14 @@
 
 ## 结果
 - 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T17:52:09+08:00–2026-11-14T09:27:37+08:00
-- base..head：`84aa676580409aa111972bf4ac684f88942dd619..c0eee0c86633a14870ee0279ec85e620e2f29458`
+- base..head：`84aa676580409aa111972bf4ac684f88942dd619..5b955ab`（执行方到 c0eee0c，验收修正 5b955ab）
 - 提交：
   | 提交号 | 说明 |
   |---|---|
   | 7682288 | chore: 开始执行任务单 2026-11-13-track-listing [skip-notify] |
   | c0eee0c | feat(track): 列表写出设备位置，--device 只列指定设备，重写帮助 |
+  | 598bd6b | chore: 填写任务单 2026-11-13-track-listing 结果（done） [skip-notify] |
+  | 5b955ab | fix(track): 完成提示按规范化路径算设备位置，帮助补上 track 不缩小范围（验收修正） |
 - 改动文件：`.dev/tasks/2026-11-13-track-listing.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/sources.rs`,`crates/library/tests/cli.rs` `docs/usage.md`
 - 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
 - 遇到的问题：无
@@ -101,6 +103,9 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
-- 合并：
+- 验收：通过（独立验收执行方，2026-11-14）。逐条核对：列表与完成提示改为「→ 设备上 <位置>」，位置经 `Sources::entry_placement` 调 `Tracked::rel` 推出，没有另写规则；第一层目录加减 `--top` 同为 `科幻神话/`，`优秀漫画/竹光侍` 不加为 `优秀漫画/竹光侍/`、加为 `竹光侍/`，单本为所在目录或「根目录」；同名合并提示保留。`track --device=x` 不给路径只列指定设备，`all`/不写列全部，未知模式用法错（退出 1），给了路径后仍列全部。帮助按「用法→参数→放在哪→再 track→例子」组织，与 `track_with` 语义一致。版本号、`fp_golden.txt` 未动；无上游项目名。
+  - 发现并修正（5b955ab）：经相对路径或软链接 track 时完成提示位置算错（目录写成「根目录」、单本只剩上一级目录名），改为先 canonicalize 并补 cli 测试；帮助补「track 只加设备、不缩小范围，要拿掉用 untrack --device」；单本 `--top` 例子改为「三体（根目录）」；帮助烟测断言改为不含 `] untrack `（意图不变）。
+  - `cargo test --workspace` 842 通过 0 失败；clippy `-D warnings` 0 警告；`target/` 下临时 `--library` 实跑列表与 `--device` 过滤正常。oc-exec 运行中 box 休眠一夜、有 ECONNRESET 重试，核对无半成品、无重复改动、无残留 opencode 进程。
+  - 未跑真书回归、未上真机（只改文案、列表过滤与帮助，不影响产物）。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-13-track-listing.agy.md`。建议两条为补任务单元数据与验收记录（本次已补）；线索：help-rewrite 改帮助时留意 track 帮助烟测断言为 `] untrack `。
+- 合并：1a2679d（`--no-ff` 进 master，合并后 test 842 通过、clippy 0 警告）。远端任务分支保留未删。
