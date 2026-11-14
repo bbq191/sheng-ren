@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-track-listing
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-13-track-listing（从最新 master 切出）
-- 更新时间: 2026-11-13T17:52:09+08:00
+- 更新时间: 2026-11-14T09:27:37+08:00
 - 引用: vinci 2026-11-13 在 sheng-ren 聊天里：改 `booklib track` 列表文字（不再写「从这一层起」，改成直接写设备上放在哪）；`track --device=x` 不给路径时只列这几台；重写 `booklib track` 的帮助。`booklib --help` 与其他子命令的帮助由 2026-11-13-help-rewrite 另开，本单不碰。
 
 ## 需求原文
@@ -82,15 +82,22 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
-- 执行方 / 开始–结束时间：
-- base..head：
-- 提交：| 步骤 | 提交号 | 文件 | 说明 |
-- 测试：| 命令 | 通过 / 失败 / 未跑 | 摘要 |
-- 遇到的问题：
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-13T17:52:09+08:00–2026-11-14T09:27:37+08:00
+- base..head：`84aa676580409aa111972bf4ac684f88942dd619..c0eee0c86633a14870ee0279ec85e620e2f29458`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 7682288 | chore: 开始执行任务单 2026-11-13-track-listing [skip-notify] |
+  | c0eee0c | feat(track): 列表写出设备位置，--device 只列指定设备，重写帮助 |
+- 改动文件：`.dev/tasks/2026-11-13-track-listing.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/sources.rs`,`crates/library/tests/cli.rs` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
 - 偏离：无
-- 未完成：
-- 没跑真书回归、没上真机（只改列表文案、列出过滤和帮助，不影响产物）。
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-13-track-listing-20261113-175209.json`
+- 日志：`/home/box/oc-runs/2026-11-13-track-listing-20261113-175209.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
 
 ## 审查
 <!-- 负责 bot 填写 -->
