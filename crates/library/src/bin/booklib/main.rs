@@ -138,7 +138,7 @@ const COMMANDS: &[Command] = &[
   跟踪目录里的单本不能单独去掉（要么 untrack 整个目录）。删之前想先看看：sync --keep 只报告、不删。
 
 例子：
-  booklib untrack ~/book/漫画/哆啦                  整条不跟踪了
+  booklib untrack ~/book/漫画/哆啦                      整条不跟踪了
   booklib untrack --device=ireader ~/book/文字/飘.epub  只从掌阅上拿掉",
         opts: &["device"],
         flags: &[],
@@ -223,7 +223,7 @@ const COMMANDS: &[Command] = &[
 参数：
   id…  用 list 里显示的完整 id（不做模糊匹配）
 
-注意：
+说明：
   原件在跟踪目录里的，下次 sync 会再入库：要彻底不要就删掉原件。
 
 例子：
@@ -275,13 +275,13 @@ const COMMANDS: &[Command] = &[
         brief: "这本 / 这个目录下的书竖不竖排（默认横排，原书本来就竖排的仍竖排；覆盖按书、按目录）",
         detail: "\
 参数：
-  --on    强制竖排
-  --off   强制横排（原书已竖排的也关掉）
-  --auto  删掉覆盖，回到默认（横排；原书已竖排的仍竖排）
+  --on       强制竖排
+  --off      强制横排（原书已竖排的也关掉）
+  --auto     删掉覆盖，回到默认（横排；原书已竖排的仍竖排）
   书或目录…  给书：写 / 删这本书的覆盖；给目录：写进书库根的 vertical.toml（相对书根目录、前缀匹配），
              并把这个目录下现有的书逐本写上，以后入库到这个目录的书继承。最长前缀胜。
 
-规则：
+说明：
   只对开了 vertical_text 的设备（Kobo、汉王）有意义；漫画、固定版式书不竖排。
   默认横排；原书本来就竖排（样式或 OPF 写着 writing-mode / primary-writing-mode）的仍竖排。
   相对路径先按当前目录找，找不到按书根目录找。
@@ -307,7 +307,7 @@ booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅、Kobo、
 命令：";
 
 const HELP_TAIL: &str = "\
-参数：
+通用参数：
   --library=目录   书库目录（缺省 $BOOKLIB_DIR，没设就是 ~/.local/share/booklib）
   -h, --help       帮助；booklib <命令> --help（或 booklib help <命令>）只看这个命令的详细说明
   -V, --version    版本：提交号、各项规则的版本
