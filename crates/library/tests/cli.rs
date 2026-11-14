@@ -176,6 +176,22 @@ fn help_prints_to_stdout_and_exits_0_without_touching_the_library() {
         out.contains(" track [--device=") && out.contains("<目录或书>") && !out.contains("] untrack "),
         "{out}"
     );
+    // 每个子命令的 --help、-h、booklib help <命令> 都正常输出，结构都是「用法 → 一句话说明 → … → 例子」
+    for cmd in [
+        "sync", "track", "untrack", "add", "list", "meta", "remove", "dedupe", "devices", "vertical",
+    ] {
+        for args in [&[cmd, "--help"][..], &[cmd, "-h"], &["help", cmd]] {
+            let o = booklib(Some(&lib), args);
+            assert_eq!(code(&o), Some(0), "{args:?}");
+            let out = stdout(&o);
+            assert!(
+                out.starts_with("用法：\n")
+                    && out.contains(&format!("booklib [--library=目录] {cmd}"))
+                    && out.contains("\n例子："),
+                "{args:?}: {out}"
+            );
+        }
+    }
     expect(
         booklib(Some(&lib), &["help", "frobnicate"]),
         1,

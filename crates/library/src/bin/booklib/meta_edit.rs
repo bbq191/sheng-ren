@@ -10,7 +10,7 @@ use bookconv::opfmeta::{self, DcField, Edits};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-pub const USAGE: &str = r#"用法:
+pub const USAGE: &str = r#"用法：
   booklib meta --edit 书.epub                                    查看
   booklib meta --edit 书库id或书名 …                             改书库里那本书的原件（只能对上一本）
   booklib meta --edit 书.epub --title 书名 --author 作者甲 --author 作者乙
@@ -19,12 +19,17 @@ pub const USAGE: &str = r#"用法:
   booklib meta --edit 书.epub --cover 封面.jpg                    换封面（书里有封面图就原地换掉，没有就加上）
   booklib meta --edit 书.epub --cover ""                         去掉封面（封面声明、只放封面的那一页、封面图；正文别处用着的图留着）
   booklib meta --edit 书.epub --get-cover 封面.jpg                取出封面
-选项（--名字 值 或 --名字=值）:
+
+参数（--名字 值 或 --名字=值）：
   --title --author --language --publisher --description --tag --date --identifier --cover
       值给空字符串 = 删掉这一项（字段、封面都一样）
       --author/--tag/--identifier 可重复，给出即整体替换（给几个就是最终的几个）；其余是单值
       --identifier 不动 OPF 唯一标识（unique-identifier 指向的那个），只替换其余标识符
-给文件路径时改的是任意一个 EPUB 文件；改了跟踪目录里的原件，下次 sync 会当成新版本重新入库"#;
+  --get-cover 文件  取出封面图片
+  书.epub|书库id或书名  改文件本身；给书库 id 或书名时改那本书的原件（只能对上一本）
+
+说明：
+  给文件路径时改的是任意一个 EPUB 文件；改了跟踪目录里的原件，下次 sync 会当成新版本重新入库"#;
 
 fn usage(msg: &str) -> ! {
     eprintln!("{msg}\n\n{USAGE}");

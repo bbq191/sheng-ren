@@ -41,20 +41,7 @@ const COMMANDS: &[Command] = &[
         synopsis: &["sync [--device=<模式>[,<模式>…]] [--force] [--no-build] [--no-meta] [--keep] [--watch[=秒]] [书…]"],
         brief: "同步跟踪目录，按阅读模式生成优化过的书，直接传到接着的设备（日常用这一条）",
         detail: "\
-第一步 同步：书库严格镜像跟踪的目录——新增的入库，改过的换成新版本，挪动、改名的按内容认出来；
-  原件删了的连同设备上的那本一起删。跟踪目录整个不在、读不了的目录里的书不删。
-补元数据：还没找过的书（含漫画）联网找一次简介、标签、带国籍的作者、译者、出版社、ISBN（同 meta --fetch，找过的不再找），
-  生成时补进书里；连不上网就跳过，下次再找。
-第二步 生成并传：只给接着的设备生成，传上去，电脑上不留产物：
-  kindle   Kindle（USB）  KFX   存储根目录 documents/<子目录>/
-  ireader  掌阅（USB）    EPUB  存储根目录 Documents/<子目录>/
-  kobo     Kobo（USB）    KEPUB 存储根目录 books/<子目录>/
-  hanvon   汉王（USB）    EPUB  存储根目录 Documents/<子目录>/
-  bigme    Bigme（USB）   EPUB  存储根目录 Books/<子目录>/
-  <子目录> 是原件在跟踪目录里所在的子目录。没接上的设备这次跳过，下次接上再传。
-  没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢）。
-
-选项：
+参数：
   --device=<模式>  只处理这几个模式（可写多次或用逗号分隔；all 或不写 = 全部）
   --force          选中的书（没选就是全部）重新生成；和设备上一样的照样不传
   --no-build       只同步，不生成、不传（不能和 --device、--force、书一起用）
@@ -62,6 +49,20 @@ const COMMANDS: &[Command] = &[
   --keep           这一次原件不在了、不再跟踪的只报告，不从书库和设备上删
   --watch[=秒]     一直运行，每隔几秒（缺省 60）看一次，原件有变化或接上设备就处理（不能和书、--force 一起用）
   书…              只处理这几本：书名片段、id，或原件路径（文件，或目录 = 下面所有的书）
+
+同步与生成：
+  第一步 同步：书库严格镜像跟踪的目录——新增的入库，改过的换成新版本，挪动、改名的按内容认出来；
+    原件删了的连同设备上的那本一起删。跟踪目录整个不在、读不了的目录里的书不删。
+  补元数据：还没找过的书（含漫画）联网找一次简介、标签、带国籍的作者、译者、出版社、ISBN（同 meta --fetch，找过的不再找），
+    生成时补进书里；连不上网就跳过，下次再找。
+  第二步 生成并传：只给接着的设备生成，传上去，电脑上不留产物：
+    kindle   Kindle（USB）  KFX   存储根目录 documents/<子目录>/
+    ireader  掌阅（USB）    EPUB  存储根目录 Documents/<子目录>/
+    kobo     Kobo（USB）    KEPUB 存储根目录 books/<子目录>/
+    hanvon   汉王（USB）    EPUB  存储根目录 Documents/<子目录>/
+    bigme    Bigme（USB）   EPUB  存储根目录 Books/<子目录>/
+    <子目录> 是原件在跟踪目录里所在的子目录。没接上的设备这次跳过，下次接上再传。
+    没变化的书不重新生成；重新生成出来和设备上一样的不再传（Kindle 进度不丢）。
 
 例子：
   booklib sync                         全部
@@ -78,7 +79,7 @@ const COMMANDS: &[Command] = &[
         synopsis: &["track [--device=模式,…] [--top] <目录或书>…", "track --root=目录", "track"],
         brief: "跟踪书目录（递归，收 .epub、.cbz）或单本书，可以只给某几台设备：之后 sync 把它镜像进书库",
         detail: "\
-用法三种：
+三种写法：
   带目录或书      登记跟踪（目录递归收 .epub、.cbz），之后 sync 镜像进书库、传到设备
   --root=目录     换书根目录，设备上的子目录按它算（设备上的书下次 sync 挪到新位置）
   什么都不写      按设备列出跟踪范围；--device= 只列这几台（all 或不写 = 全部设备）
@@ -127,10 +128,18 @@ const COMMANDS: &[Command] = &[
         synopsis: &["untrack [--device=模式,…] <目录或书>…"],
         brief: "不再跟踪：下次 sync 把其中的书连同设备上的产物删掉（原件不动）；给了 --device 只从这几台上删",
         detail: "\
-路径同 track：相对路径先按当前目录、再按书根目录找。
-不写 --device：整条去掉，里面没被别的跟踪条目覆盖的书下次 sync 从书库删掉（连同设备上的）。
-写了 --device：只从这几台的范围里拿掉，下次 sync 从这几台上删掉，别的设备照旧。
-跟踪目录里的单本不能单独去掉（要么 untrack 整个目录）。删之前想先看看：sync --keep 只报告、不删。",
+参数：
+  --device=模式,…  只从这几台上拿掉（可写多次、逗号分隔；all 或不写 = 全部设备）
+  目录或书…        同 track：相对路径先按当前目录找，找不到再按书根目录找
+
+不再跟踪之后：
+  不写 --device：整条去掉，里面没被别的跟踪条目覆盖的书下次 sync 从书库删掉（连同设备上的）。
+  写了 --device：只从这几台的范围里拿掉，下次 sync 从这几台上删掉，别的设备照旧。
+  跟踪目录里的单本不能单独去掉（要么 untrack 整个目录）。删之前想先看看：sync --keep 只报告、不删。
+
+例子：
+  booklib untrack ~/book/漫画/哆啦                  整条不跟踪了
+  booklib untrack --device=ireader ~/book/文字/飘.epub  只从掌阅上拿掉",
         opts: &["device"],
         flags: &[],
         check: check_options,
@@ -142,8 +151,15 @@ const COMMANDS: &[Command] = &[
         synopsis: &["add <文件或网址>…"],
         brief: "入库单个 EPUB、CBZ 文件或网址（整个目录用 track）",
         detail: "\
-add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原件没了也不自动删，不要了用 remove。
-网址：抓网页正文做成 EPUB，存在书库里。同一路径的文件内容改了，再 add 一次换成新版本。",
+参数：
+  文件或网址…  要入库的 EPUB、CBZ 文件或网址；整个目录用 track
+
+入库之后：
+  add 进来的书 sync 照样生成、传，放各设备产物目录顶层；原件没了也不自动删，不要了用 remove。
+  网址：抓网页正文做成 EPUB，存在书库里。同一路径的文件内容改了，再 add 一次换成新版本。
+
+例子：
+  booklib add 三体.epub 乱马01.cbz https://example.com/post",
         opts: &[],
         flags: &[],
         check: check_options,
@@ -155,11 +171,19 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
         synopsis: &["list [书…]"],
         brief: "列出书，以及在各设备上的产物和生成记录是否最新（设备上的不核对文件）",
         detail: "\
-书：书名片段、id 或原件路径；不写 = 全部。每本一行（id、格式、书名、作者），下面每个模式一行：
-  ✓ 最新   ⚠ 过期（下次 sync 会重新生成）   ? 未知（判断不了，或这个模式已经不在了）
-  ✗ 不在这台的跟踪范围（下次 sync 从设备上删）
-可拔下的设备上的产物只比生成记录和当前计划，不核对设备上文件还在不在、也不看设备接没接上：
-  ✓/⚠ 后面注明「未核对设备」。电脑上的产物照旧核对文件。",
+参数：
+  书…  书名片段、id 或原件路径；不写 = 全部
+
+输出：
+  每本一行（id、格式、书名、作者），下面每个模式一行：
+    ✓ 最新   ⚠ 过期（下次 sync 会重新生成）   ? 未知（判断不了，或这个模式已经不在了）
+    ✗ 不在这台的跟踪范围（下次 sync 从设备上删）
+  可拔下的设备上的产物只比生成记录和当前计划，不核对设备上文件还在不在、也不看设备接没接上：
+    ✓/⚠ 后面注明「未核对设备」。电脑上的产物照旧核对文件。
+
+例子：
+  booklib list
+  booklib list 三体",
         opts: &[],
         flags: &[],
         check: check_options,
@@ -171,12 +195,20 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
         synopsis: &["meta --fetch [--force] [--clear] [书…]", "meta --show [书…]", "meta --edit 书.epub|书 [--title 书名 --author 作者 --tag 标签 --cover 图 …]"],
         brief: "书的元数据：联网补、查看、改写一个 EPUB",
         detail: "\
---fetch  联网补元数据（豆瓣 → QQ 阅读 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过。
-         生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动。
-         --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
---show   查看跟踪目录里的书的元数据：书里写的，和 --fetch 找来的；只读
---edit   查看、改写一个 EPUB 文件的元数据和封面（改文件本身；值给空字符串 = 删掉）。给书库 id 或书名时改那本书的原件，
-         详见 booklib meta --edit --help",
+参数：
+  --fetch  联网补元数据（豆瓣 → QQ 阅读 → Wikidata）：简介、标签、原作名，书里没封面的顺带找封面（找不到就生成）；漫画跳过。
+           生成产物时只补书里没有的简介、标签、封面，书名作者和正文不动，原件不动。
+           --force 重找已找过的；--clear 去掉找来的元数据和封面（找错了时）
+  --show   查看跟踪目录里的书的元数据：书里写的，和 --fetch 找来的；只读
+  --edit   查看、改写一个 EPUB 文件的元数据和封面（改文件本身；值给空字符串 = 删掉）。给书库 id 或书名时改那本书的原件，
+           详见 booklib meta --edit --help
+  书…      书名片段、id 或原件路径；不写 = 全部
+
+例子：
+  booklib meta --fetch
+  booklib meta --fetch --force 雪人
+  booklib meta --show 绍宋
+  booklib meta --edit 书.epub --title 书名",
         opts: &[],
         flags: &["fetch", "force", "clear", "show"],
         check: check_meta,
@@ -187,7 +219,15 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
         name: "remove",
         synopsis: &["remove <id>…"],
         brief: "从书库删书，连同设备上的产物（设备没接上的下次接上时删）。原件不动",
-        detail: "id 用 list 里显示的完整 id（不做模糊匹配）。原件在跟踪目录里的，下次 sync 会再入库：要彻底不要就删掉原件。",
+        detail: "\
+参数：
+  id…  用 list 里显示的完整 id（不做模糊匹配）
+
+注意：
+  原件在跟踪目录里的，下次 sync 会再入库：要彻底不要就删掉原件。
+
+例子：
+  booklib remove 3fa9c1e07b2d",
         opts: &[],
         flags: &[],
         check: check_options,
@@ -198,7 +238,15 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
         name: "dedupe",
         synopsis: &["dedupe [目录…]"],
         brief: "早期版本入库的书改成只存索引（在记着的位置和这些目录里找原件）",
-        detail: "找不到原件的保留书库里的副本并列出来。可以反复跑。",
+        detail: "\
+参数：
+  目录…  额外在这些目录里找原件；不写就只按 meta.json 记着的位置找
+
+说明：
+  找到原件的改成只存索引、删掉书库里的副本；找不到原件的保留副本并列出来。可以反复跑。
+
+例子：
+  booklib dedupe ~/Documents/ereader",
         opts: &[],
         flags: &[],
         check: check_options,
@@ -209,7 +257,12 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
         name: "devices",
         synopsis: &["devices"],
         brief: "列出阅读模式，以及设备接没接上（只看，不往设备上写）",
-        detail: "书库的 profiles/ 里放 <id>.toml 可以加模式或覆盖内置的参数（写法见 docs/devices.md）。",
+        detail: "\
+说明：
+  书库的 profiles/ 里放 <id>.toml 可以加模式或覆盖内置的参数（写法见 docs/devices.md）。
+
+例子：
+  booklib devices",
         opts: &[],
         flags: &[],
         check: check_options,
@@ -221,14 +274,22 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
         synopsis: &["vertical --on|--off|--auto <书或目录>…"],
         brief: "这本 / 这个目录下的书竖不竖排（默认横排，原书本来就竖排的仍竖排；覆盖按书、按目录）",
         detail: "\
-只对开了 vertical_text 的设备（Kobo、汉王）有意义；漫画、固定版式书不竖排。
-默认横排；原书本来就竖排（样式或 OPF 写着 writing-mode / primary-writing-mode）的仍竖排。
+参数：
   --on    强制竖排
   --off   强制横排（原书已竖排的也关掉）
   --auto  删掉覆盖，回到默认（横排；原书已竖排的仍竖排）
-给书：写 / 删这本书的覆盖；给目录：写进书库根的 vertical.toml（相对书根目录、前缀匹配），
-并把这个目录下现有的书逐本写上，以后入库到这个目录的书继承。最长前缀胜。
-相对路径先按当前目录找，找不到按书根目录找。",
+  书或目录…  给书：写 / 删这本书的覆盖；给目录：写进书库根的 vertical.toml（相对书根目录、前缀匹配），
+             并把这个目录下现有的书逐本写上，以后入库到这个目录的书继承。最长前缀胜。
+
+规则：
+  只对开了 vertical_text 的设备（Kobo、汉王）有意义；漫画、固定版式书不竖排。
+  默认横排；原书本来就竖排（样式或 OPF 写着 writing-mode / primary-writing-mode）的仍竖排。
+  相对路径先按当前目录找，找不到按书根目录找。
+
+例子：
+  booklib vertical --on 技术      这个目录强制竖排
+  booklib vertical --off 三体     这本强制横排
+  booklib vertical --auto 技术    删掉目录覆盖，回到默认",
         opts: &[],
         flags: &["on", "off", "auto"],
         check: check_vertical,
@@ -237,19 +298,16 @@ add 进来的书 sync 照样生成、传（放设备 documents/ 顶层）；原�
     },
 ];
 
-/// 日常用法、通用选项、环境变量、退出码（`booklib --help` 的头尾）。
+/// `booklib --help` 的头尾：一句话说明、用法、命令一览、通用参数、环境变量、退出码、例子。
 const HELP_HEAD: &str = "\
 booklib —— 电子书书库：跟踪书目录，按 Kindle、掌阅、Kobo、汉王、Bigme 的自带阅读器优化，直接传到接着的设备
 
 用法：booklib [--library=目录] <命令> [参数]
 
-日常：
-  booklib track ~/Documents/ereader/books    第一次：登记要跟踪的书目录
-  booklib sync                               之后每次：同步书目录、优化、传到接着的设备
-  booklib devices                            看设备接没接上";
+命令：";
 
 const HELP_TAIL: &str = "\
-通用选项：
+参数：
   --library=目录   书库目录（缺省 $BOOKLIB_DIR，没设就是 ~/.local/share/booklib）
   -h, --help       帮助；booklib <命令> --help（或 booklib help <命令>）只看这个命令的详细说明
   -V, --version    版本：提交号、各项规则的版本
@@ -264,7 +322,12 @@ const HELP_TAIL: &str = "\
 
   BOOKLIB_MTP_DIR、BOOKLIB_USBMS_DIR 已废弃：只用来认旧生成记录里的前缀，不再用于找设备。
 
-退出码：0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）";
+退出码：0 全部成功；1 用法错；2 有书处理失败（或书库打不开、没有匹配的书）
+
+例子：
+  booklib track ~/Documents/ereader/books    第一次：登记要跟踪的书目录
+  booklib sync                               之后每次：同步书目录、优化、传到接着的设备
+  booklib devices                            看设备接没接上";
 
 /// 命令的参数写法，每种一行（`  booklib [--library=目录] …`）。
 fn synopsis(h: &Command) -> String {
@@ -281,7 +344,7 @@ fn full_help() -> String {
         .iter()
         .map(|h| format!("{}\n      {}", synopsis(h), h.brief))
         .collect();
-    format!("{HELP_HEAD}\n\n命令：\n{}\n\n{HELP_TAIL}", cmds.join("\n"))
+    format!("{HELP_HEAD}\n{}\n\n{HELP_TAIL}", cmds.join("\n"))
 }
 
 /// 一个命令的详细说明。
