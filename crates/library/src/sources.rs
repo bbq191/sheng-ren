@@ -417,6 +417,14 @@ impl Sources {
         covering.iter().any(|e| e.for_device(device))
     }
 
+    /// 条目 `e` 本身在设备上放哪（相对设备存储根目录的子目录）：目录是它在设备上的文件夹，单本是所在目录；空＝根目录。
+    /// 目录用一个探测路径求 [`Tracked::rel`]（只看它的上级目录，文件不用真的存在），和生成时同一套规则。
+    pub(crate) fn entry_placement(&self, e: &Tracked) -> PathBuf {
+        let probe = e.path.join("probe");
+        let p = if e.file { &e.path } else { &probe };
+        e.rel(p, self.root.as_deref())
+    }
+
     /// 原件 `p` 在这台设备上放哪：(电脑上的产物目录以哪个目录为准, 子目录)。用覆盖它、给这台的最具体的条目（[`Tracked::specificity`]）
     /// 的放法（[`Tracked::rel`]）。没有给这台的条目覆盖它返回 `None`。
     pub(crate) fn placement(&self, p: &Path, device: &str) -> Option<(PathBuf, PathBuf)> {
@@ -500,6 +508,12 @@ impl Library {
             .get(&self.sources_path())
             .entries
             .clone()
+    }
+
+    /// 跟踪条目在设备上的位置（相对设备存储根目录的子目录）：目录是它的文件夹，单本是所在目录；空＝根目录。
+    /// 和生成时用同一套 [`Tracked::rel`]。
+    pub fn entry_placement(&self, entry: &Tracked) -> PathBuf {
+        self.load_sources().entry_placement(entry)
     }
 
     /// 这本书给不给这台设备（见 [`Sources::wants`]）。
@@ -1217,6 +1231,35 @@ mod scope_tests {
                 .1,
             PathBuf::from("死亡筆記")
         );
+    }
+
+    #[test]
+    fn entry_placement_is_the_entries_own_folder_on_the_device() {
+        let top = |mut t: Tracked| {
+            t.top = true;
+            t
+        };
+        let s = Sources {
+            root: Some(PathBuf::from("/b")),
+            entries: vec![
+                dir("/b/科幻神话", &[]),
+                dir("/b/优秀漫画/竹光侍", &[]),
+                top(dir("/b/优秀漫画/竹光侍", &[])),
+                file("/b/文字/科幻/三体.epub", &[]),
+                top(file("/b/文字/科幻/三体.epub", &[])),
+            ],
+            ..Default::default()
+        };
+        let at = |i: usize| {
+            s.entry_placement(&s.entries[i])
+                .display()
+                .to_string()
+        };
+        assert_eq!(at(0), "科幻神话", "第一层目录照书根算");
+        assert_eq!(at(1), "优秀漫画/竹光侍", "第二层目录照书根算");
+        assert_eq!(at(2), "竹光侍", "--top 的目录从它自己这一层起");
+        assert_eq!(at(3), "文字/科幻", "单本写所在目录");
+        assert_eq!(at(4), "", "--top 的单本放根目录（文案里写成「根目录」）");
     }
 
     #[test]

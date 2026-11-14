@@ -78,17 +78,44 @@ const COMMANDS: &[Command] = &[
         synopsis: &["track [--device=模式,…] [--top] <目录或书>…", "track --root=目录", "track"],
         brief: "跟踪书目录（递归，收 .epub、.cbz）或单本书，可以只给某几台设备：之后 sync 把它镜像进书库",
         detail: "\
-只需登记一次。目录和单本可以混着写；不写 --device 给全部设备，每台设备的跟踪范围可以不同。
-设备上的放法：缺省照书库结构（相对书根目录：book/漫画/死亡筆記/卷01.epub → 漫画/死亡筆記/卷01）；
---top 从这一层起（目录 book/漫画/死亡筆記 → 死亡筆記/卷01，单本放根目录），对这条命令里的路径都生效。
-同一本书被一台设备的几个条目覆盖时，用最具体的那个（单本 > 深的目录）的放法。
-书根目录第一次 track 时定下（跟踪的目录；单本是它所在的目录），跟踪的都要在它里面；--root=目录 换书根
-（设备上的书下次 sync 挪到新位置）。相对路径先按当前目录找，找不到按书根目录找（track 优秀漫画/死亡筆記）。已经在跟踪的再 track：设备范围加上新给的，放法改成这次的。
-不写目录、书：按设备列出跟踪范围。
+用法三种：
+  带目录或书      登记跟踪（目录递归收 .epub、.cbz），之后 sync 镜像进书库、传到设备
+  --root=目录     换书根目录，设备上的子目录按它算（设备上的书下次 sync 挪到新位置）
+  什么都不写      按设备列出跟踪范围；--device= 只列这几台（all 或不写 = 全部设备）
+
+参数：
+  --device=模式,…  只给这几台（可写多次、逗号分隔；all 或不写 = 全部设备，包括以后加的模式）
+  --top            这批路径的放法：目录以它自己的名字为最上一层，单本放根目录（见下）
+  --root=目录      换书根目录；只能单独用，不能和路径、--device、--top 一起
+  目录或书…        要跟踪的目录（递归）或单本，可以混着写；相对路径先按当前目录找，
+                   找不到再按书根目录找（booklib track 优秀漫画/死亡筆記）
+
+设备上放在哪（书根目录 ~/book；设备的存储根目录下再按各模式放）：
+  书根下的第一层目录，加不加 --top 一样：
+    track ~/book/科幻神话                → 科幻神话/…
+    track --top ~/book/科幻神话          → 科幻神话/…
+  第二层起，--top 去掉上层分类目录：
+    track ~/book/优秀漫画/竹光侍          → 优秀漫画/竹光侍/…
+    track --top ~/book/优秀漫画/竹光侍    → 竹光侍/…
+  单本：
+    track ~/book/文字/科幻/三体.epub      → 文字/科幻/三体
+    track --top ~/book/文字/科幻/三体.epub → 三体（根目录）
+  同一本书被一台设备的几个条目覆盖时，用最具体的那个（单本 > 深的目录 > 浅的目录）的放法。
+  同一个路径每台设备可以有自己的放法（给 Kindle --top、给掌阅不带，各是各的）。
+  书根目录所有设备共用，第一次 track 时定下（跟踪的目录；单本是它所在的目录），跟踪的都要在它里面。
+
+同一路径再 track：
+  同一种放法：设备范围取并集；任一次是全部设备就是全部设备。
+  换放法：这次给的设备从原来的放法挪过来；不写 --device（全部设备）则整条换成这次的放法，
+  写了 --device 只挪这几台，其他设备留在原来的放法上。
+  track 只加设备、不缩小范围；要从某几台拿掉用 booklib untrack --device=模式 <目录或书>。
+
 例子：
-  booklib track ~/books                                               全部设备，照书库结构
-  booklib track --device=ireader --top ~/books/漫画/死亡筆記 ~/books/文字/飘.epub   掌阅：「死亡筆記」放最上层、《飘》放根目录
-  booklib track --device=kindle ~/books/文字/科幻/三体.epub                Kindle 只要这一本",
+  booklib track ~/book                                          全部设备，照书库结构
+  booklib track --device=ireader ~/book/优秀漫画/竹光侍           掌阅：优秀漫画/竹光侍/…
+  booklib track --device=ireader --top ~/book/优秀漫画/竹光侍     掌阅：竹光侍/…
+  booklib track --device=kindle --top ~/book/文字/科幻/三体.epub  Kindle：根目录
+  booklib track --device=ireader                                只列掌阅的跟踪范围",
         opts: &["device", "root"],
         flags: &["top"],
         check: check_options,
@@ -1179,12 +1206,13 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
                 })
                 .map_err(|e| format!("✗ {e}")),
         );
-        print_tracked(lib);
+        print_tracked(lib, &[]);
         return;
     }
     if ctx.rest().is_empty() {
         if track {
-            print_tracked(lib);
+            let devices = device_ids(ctx.args, lib);
+            print_tracked(lib, &devices);
             return;
         }
         usage_error(&format!("{} 要给目录或书", ctx.cmd));
@@ -1206,16 +1234,23 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
         };
         let d = d.as_path();
         let kind = if d.is_file() { "单本" } else { "目录" };
-        let how = match (top, kind) {
-            (false, _) => "，照书库结构",
-            (true, "单本") => "，放根目录",
-            (true, _) => "，从这一层起",
-        };
         ctx.report(if track {
-            lib.track_with(d, &devices, top).map(|c| match c {
-                TrackChange::New => format!("✓ 开始跟踪{kind} {}，给 {to}{how}（运行 booklib sync 入库、传）", d.display()),
-                TrackChange::Changed => format!("✓ 已在跟踪{kind} {}，加上 {to}{how}（运行 booklib sync 生效）", d.display()),
-                TrackChange::Same => format!("= 已在跟踪{kind} {}", d.display()),
+            lib.track_with(d, &devices, top).map(|c| {
+                // 书库里记的是规范化的绝对路径：相对路径、经软链接的路径要先换成它，否则对不上书根目录
+                let placed = placement_shown(
+                    &lib.entry_placement(&library::Tracked {
+                        path: std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf()),
+                        file: d.is_file(),
+                        devices: devices.clone(),
+                        top,
+                    }),
+                    d.is_file(),
+                );
+                match c {
+                    TrackChange::New => format!("✓ 开始跟踪{kind} {}，给 {to} → 设备上 {placed}（运行 booklib sync 入库、传）", d.display()),
+                    TrackChange::Changed => format!("✓ 已在跟踪{kind} {}，加上 {to} → 设备上 {placed}（运行 booklib sync 生效）", d.display()),
+                    TrackChange::Same => format!("= 已在跟踪{kind} {}", d.display()),
+                }
             })
         } else {
             lib.untrack_with(d, &devices).map(|c| match c {
@@ -1226,7 +1261,7 @@ fn track_or_untrack(ctx: &Ctx, track: bool) {
         }
         .map_err(|e| format!("✗ {e}")));
     }
-    print_tracked(lib);
+    print_tracked(lib, &[]);
 }
 
 /// `track`/`untrack` 的路径：相对路径先按当前目录找，找不到再按书根目录找（2026-10-19 要：`track 优秀漫画/死亡筆記`
@@ -1291,8 +1326,22 @@ fn with_book_ext(p: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// 按设备列出跟踪范围：每台的目录、单本（给全部设备的标出来）。
-fn print_tracked(lib: &Library) {
+/// 条目在设备上的位置文案：目录是它的文件夹（末尾带 `/`），单本是所在目录；空＝设备存储根目录。
+fn placement_shown(rel: &Path, file: bool) -> String {
+    if rel.as_os_str().is_empty() {
+        return "根目录".into();
+    }
+    let s = rel.display().to_string();
+    if file {
+        s
+    } else {
+        format!("{s}/")
+    }
+}
+
+/// 按设备列出跟踪范围：每台的目录、单本（给全部设备的标出来），以及这条在设备上放在哪。
+/// `only` 是 `--device=` 给的模式 id（空＝全部设备）。
+fn print_tracked(lib: &Library, only: &[String]) {
     let entries = lib.tracked_entries();
     if entries.is_empty() {
         println!("  还没有跟踪任何目录或书");
@@ -1301,7 +1350,11 @@ fn print_tracked(lib: &Library) {
     if let Some(r) = lib.books_root() {
         println!("  书根目录：{}（设备上按相对它的路径放）", r.display());
     }
-    for p in lib.devices().iter() {
+    let shown = lib
+        .devices()
+        .iter()
+        .filter(|p| only.is_empty() || only.iter().any(|id| id == &p.id));
+    for p in shown {
         let mine: Vec<&library::Tracked> = entries.iter().filter(|e| e.for_device(&p.id)).collect();
         println!(
             "  {}：{}",
@@ -1310,19 +1363,18 @@ fn print_tracked(lib: &Library) {
         );
         for e in &mine {
             let kind = if e.file { "单本" } else { "目录" };
-            let how = match (e.top, e.file) {
-                (true, true) => "，放根目录",
-                (true, false) => "，从这一层起",
-                (false, _) => "",
-            };
             let scope = if e.devices.is_empty() {
                 "（全部设备）"
             } else {
                 ""
             };
-            println!("    {kind} {}{how}{scope}", e.path.display());
+            let placed = placement_shown(&lib.entry_placement(e), e.file);
+            println!(
+                "    {kind} {}{scope} → 设备上 {placed}",
+                e.path.display()
+            );
         }
-        // 从这一层起的目录在设备上同名：会并进同一个文件夹（书名也一样的，后来的那本带 id 后缀），只提示
+        // --top 的目录在设备上同名：会并进同一个文件夹（书名也一样的，后来的那本带 id 后缀），只提示
         let mut seen: std::collections::BTreeMap<String, Vec<&Path>> =
             std::collections::BTreeMap::new();
         for e in mine.iter().filter(|e| e.top && !e.file) {
