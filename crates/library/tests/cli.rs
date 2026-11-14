@@ -794,6 +794,168 @@ fn track_resolves_relative_paths_against_the_books_root() {
     );
 }
 
+/// `track` 列表和完成提示写出设备上的位置：第一层目录加不加 `--top` 一样，第二层起 `--top` 去掉上层分类目录，
+/// 单本写所在目录或「根目录」。
+#[test]
+fn track_listing_shows_device_placement() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    let books = dir.path().join("books");
+    for d in ["科幻神话", "优秀漫画/竹光侍", "文字/科幻"] {
+        std::fs::create_dir_all(books.join(d)).unwrap();
+    }
+    std::fs::write(
+        books.join("文字/科幻/三体.epub"),
+        common::sample_epub("三体"),
+    )
+    .unwrap();
+    let canon = std::fs::canonicalize(&books).unwrap();
+    assert_eq!(
+        common::booklib(
+            Some(&lib),
+            &["track", &format!("--root={}", books.display())]
+        )
+        .status
+        .code(),
+        Some(0)
+    );
+    let track = |dev: &str, top: bool, p: &Path| {
+        let p = p.to_str().unwrap();
+        let mut args = vec!["track", dev];
+        if top {
+            args.push("--top");
+        }
+        args.push(p);
+        common::booklib(Some(&lib), &args)
+    };
+    // 第一层目录：加不加 --top 都是「科幻神话/…」
+    for (dev, top) in [("--device=kindle", false), ("--device=ireader", true)] {
+        let o = track(dev, top, &books.join("科幻神话"));
+        assert!(
+            common::stdout(&o).contains("→ 设备上 科幻神话/"),
+            "{}",
+            common::stdout(&o)
+        );
+    }
+    // 第二层目录：不加是「优秀漫画/竹光侍/…」，加了是「竹光侍/…」
+    let o = track("--device=kindle", false, &books.join("优秀漫画/竹光侍"));
+    assert!(
+        common::stdout(&o).contains("→ 设备上 优秀漫画/竹光侍/"),
+        "{}",
+        common::stdout(&o)
+    );
+    let o = track("--device=ireader", true, &books.join("优秀漫画/竹光侍"));
+    assert!(
+        common::stdout(&o).contains("→ 设备上 竹光侍/"),
+        "{}",
+        common::stdout(&o)
+    );
+    // 单本：不加放所在目录，加了放根目录
+    let book = books.join("文字/科幻/三体.epub");
+    let o = track("--device=kindle", false, &book);
+    assert!(
+        common::stdout(&o).contains("→ 设备上 文字/科幻"),
+        "{}",
+        common::stdout(&o)
+    );
+    let o = track("--device=ireader", true, &book);
+    assert!(
+        common::stdout(&o).contains("→ 设备上 根目录"),
+        "{}",
+        common::stdout(&o)
+    );
+    let out = common::stdout(&common::booklib(Some(&lib), &["track"]));
+    for want in [
+        format!(
+            "  kindle：\n    目录 {} → 设备上 科幻神话/\n    目录 {} → 设备上 优秀漫画/竹光侍/\n    单本 {} → 设备上 文字/科幻",
+            canon.join("科幻神话").display(),
+            canon.join("优秀漫画/竹光侍").display(),
+            canon.join("文字/科幻/三体.epub").display()
+        ),
+        format!(
+            "  ireader：\n    目录 {} → 设备上 科幻神话/\n    目录 {} → 设备上 竹光侍/\n    单本 {} → 设备上 根目录",
+            canon.join("科幻神话").display(),
+            canon.join("优秀漫画/竹光侍").display(),
+            canon.join("文字/科幻/三体.epub").display()
+        ),
+    ] {
+        assert!(out.contains(&want), "应有：\n{want}\n实际：\n{out}");
+    }
+}
+
+/// 不给路径的 `track` 只列 `--device=` 给的几台；`all` 或不写列全部；未知模式报用法错。
+/// 给了路径之后的列表仍列出全部设备。
+#[test]
+fn track_list_without_paths_filters_by_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    let books = dir.path().join("books");
+    for d in ["甲", "乙", "丙"] {
+        std::fs::create_dir_all(books.join(d)).unwrap();
+    }
+    let canon = std::fs::canonicalize(&books).unwrap();
+    assert_eq!(
+        common::booklib(
+            Some(&lib),
+            &["track", &format!("--root={}", books.display())]
+        )
+        .status
+        .code(),
+        Some(0)
+    );
+    for (dev, d) in [("--device=kindle", "甲"), ("--device=ireader", "乙")] {
+        assert_eq!(
+            common::booklib(Some(&lib), &["track", dev, books.join(d).to_str().unwrap()])
+                .status
+                .code(),
+            Some(0)
+        );
+    }
+    let out = common::stdout(&common::booklib(Some(&lib), &["track"]));
+    assert!(
+        out.contains("  kindle：") && out.contains("  ireader："),
+        "{out}"
+    );
+    let only = common::stdout(&common::booklib(Some(&lib), &["track", "--device=kindle"]));
+    assert!(
+        only.contains("  kindle：")
+            && only.contains(&canon.join("甲").display().to_string())
+            && !only.contains("  ireader：")
+            && !only.contains(&canon.join("乙").display().to_string()),
+        "{only}"
+    );
+    let all = common::stdout(&common::booklib(
+        Some(&lib),
+        &["track", "--device=all"],
+    ));
+    assert!(
+        all.contains("  kindle：") && all.contains("  ireader："),
+        "{all}"
+    );
+    let two = common::stdout(&common::booklib(
+        Some(&lib),
+        &["track", "--device=kindle,ireader"],
+    ));
+    assert!(
+        two.contains("  kindle：") && two.contains("  ireader："),
+        "{two}"
+    );
+    expect(
+        common::booklib(Some(&lib), &["track", "--device=nosuch"]),
+        1,
+        "没有阅读模式 nosuch",
+    );
+    // 给了路径之后的列表仍是全部设备
+    let out = common::stdout(&common::booklib(
+        Some(&lib),
+        &["track", "--device=kindle", books.join("丙").to_str().unwrap()],
+    ));
+    assert!(
+        out.contains("  kindle：") && out.contains("  ireader："),
+        "{out}"
+    );
+}
+
 /// fish 补全：`booklib __complete` 只读、不建书库。
 #[test]
 fn complete_is_read_only() {
