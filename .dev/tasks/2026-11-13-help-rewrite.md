@@ -68,25 +68,32 @@
 
 ## 结果
 - 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-14T09:40:02+08:00–2026-11-14T23:20:33+08:00
-- base..head：`07c819de513b1c758ddc86fed5effe1a4933b3ee..736522f67ba91135bd516ae63f5486e7e06ffbde`
+- base..head：`07c819de513b1c758ddc86fed5effe1a4933b3ee..aa5c694`（执行方到 `736522f`，验收修正到 `aa5c694`）
 - 提交：
   | 提交号 | 说明 |
   |---|---|
   | d434dc9 | chore: 开始执行任务单 2026-11-13-help-rewrite [skip-notify] |
   | 736522f | feat(help): 统一 booklib 顶层与各子命令帮助结构 |
+  | 181daeb | chore: 填写任务单 2026-11-13-help-rewrite 结果（done） [skip-notify] |
+  | aa5c694 | fix(help): 验收时统一小节标题与对齐（验收修正） |
 - 改动文件：`.dev/tasks/2026-11-13-help-rewrite.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/bin/booklib/meta_edit.rs`,`crates/library/tests/cli.rs` `docs/usage.md`
 - 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
 - 遇到的问题：无
 - 偏离：
-  - `crates/library/src/bin/booklib/meta_edit.rs`
+  - `crates/library/src/bin/booklib/meta_edit.rs`（验收核对：属「输入」里写明的「`meta --edit --help` 若有单独的说明，一并按同一风格整理」，只改 `USAGE` 帮助文本，不算超范围）
 - 新建文件（线索）：无
 - 未完成：无
 - 运行记录：`/home/box/oc-runs/2026-11-13-help-rewrite-20261114-094002.json`
 - 日志：`/home/box/oc-runs/2026-11-13-help-rewrite-20261114-094002.log`
 - 模型：`opencode-go/deepseek-v4.1-flash`
+- 没跑真书回归、没上真机（只改帮助文字，不影响产物）。
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
-- 合并：
+- 验收：通过（独立验收执行方，2026-11-14）。逐条核对：顶层帮助为「一句话说明 / 用法 / 命令 / 通用参数 / 环境变量 / 退出码 / 例子」，十个子命令为「用法 / 一句话说明 / 参数 / 例子」（`devices` 无参数，sync、list 等另有一节说明性小节），全角冒号统一；track 帮助只把「用法三种」改为「三种写法」，「track 只加设备、不缩小范围，要从某几台拿掉用 booklib untrack --device」、单本 `--top` 的「三体（根目录）」、烟测断言 `] untrack ` 都在；`add` 的「放设备 documents/ 顶层」改为「放各设备产物目录顶层」，与 docs/usage.md 一致；新加的说明（remove 的 12 位 id 例子、dedupe 只按记着的位置和给的目录找原件、meta --edit 的 `--get-cover`）对照代码属实。`opts`/`flags`/`check`/`lock`/`run` 未动，`full_help` 只挪了「命令：」标题，输出等价；版本号、`fp_golden.txt` 未动；无上游项目名。偏离文件 `meta_edit.rs` 在任务单允许范围内（其 `USAGE` 也随 meta --edit 用法错一起打出，只是帮助部分换了排版，错误提示本身未改）。
+  - 实跑：十个子命令的 `--help`、`-h`、`booklib help <命令>` 及 `meta --edit --help`、顶层 `--help`/`-h`/`help` 均退出 0、无 stderr，三种写法输出一致；用 `target/` 下临时 `--library`，跑完书库目录仍为空。
+  - 发现并修正（aa5c694）：顶层全局选项小节由「参数」改叫「通用参数」（与子命令「参数」区分，docs/usage.md 同步）；remove 的「注意」、vertical 的「规则」统一为「说明」；untrack 例子、vertical 参数列对齐。
+  - `cargo test --workspace` 842 通过 0 失败；clippy `-D warnings` 0 警告。oc-exec 运行期间 box 两次休眠（墙钟 09:40–23:20），恢复后正常跑完，无半成品、无残留进程。
+  - 未跑真书回归、未上真机（只改帮助文字，不影响产物）。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-13-help-rewrite.agy.md`。建议两条：补任务单元数据与验收记录、注明 `meta_edit.rs` 偏离属预期整理（本次都已补）。无线索。
+- 合并：f2b48c0（`--no-ff` 进 master，合并后 test 842 通过、clippy 0 警告）。远端任务分支保留未删。
