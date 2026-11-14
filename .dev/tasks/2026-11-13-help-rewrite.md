@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-help-rewrite
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: 待定
 - 分支: task/2026-11-13-help-rewrite（从已合并 track-listing 的最新 master 切出）
-- 更新时间: 2026-11-13T17:50+08:00
+- 更新时间: 2026-11-14T09:40:02+08:00
 - 引用: vinci 2026-11-13 在 sheng-ren 聊天里：「booklib --help 的帮助信息请重写，结构太混乱，说明不清晰」。**待 2026-11-13-track-listing 合并后再开跑**（track 的帮助已由那张单按「用法 → 参数 → 放法例子 → 重复 track 规则 → 例子」重写，本单只做风格统一，不要回退那张单的写法与语义）。
 
 ## 需求原文
