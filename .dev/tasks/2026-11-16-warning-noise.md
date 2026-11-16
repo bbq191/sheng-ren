@@ -124,4 +124,4 @@
   - 未跑真书回归、未上真机（只改提醒的记录和显示，产物不变）。
   - 补「分步任务 1」的 KFX 警告清单（验收时 `rg` 核对）：`kfx::write` 的「目录项找不到位置：{label}」（`write/entities.rs`）、「链接目标找不到：{file}#{id}」（同文件）、「图片格式 {mime} 不支持：{path}」/「图片找不到或格式不支持：{path}」（`write/resources.rs`）、「spine 写了从右往左，KFX 只会横排，按从左往右翻」（`write/mod.rs`）；`bookconv::epubbook::load_from` 的「N 张图片格式不支持（只支持 JPEG/PNG/GIF 和 WebP），在 Kindle 上不显示：{path}」。都经 `epub_to_kfx_from` 返回、整体接纳，不按文字过滤。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-warning-noise.agy.md`。建议一条（`audit_lines` 注释仍只写 KEPUB CSS）已改；线索两条：同名书在汇总行合并（已知局限，验收已注明）、结果里没列 KFX 警告清单（上面已补）。
-- 合并：（待填）
+- 合并：be8beba（`--no-ff` 进 master，合并后 test 851 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后清理。
