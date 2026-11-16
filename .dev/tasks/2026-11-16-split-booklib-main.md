@@ -117,3 +117,4 @@
   - 命令行输出：master 与分支二进制各跑 40 种调用（`--help`、`-h`、`--version`、`version`、`help`、10 个命令的 `help <命令>` 与 `<命令> --help`、未知命令、`build`、错误选项、`list`、`list 甲`、`devices`、`track`、`meta`、`vertical`、`dedupe`、`sync`、`sync --no-build`、`remove` / `untrack` 找不到的），输出和退出码逐字相同；差异只有 `--version` 里的提交号，以及 `sync` 一段里两条结果行先后不同（设备传输线程并发的先后，排序后相同）。
   - 产物：master 与分支二进制对 4 本书同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同。版本号、`fp_golden.txt` 没动。
   - 没跑真书回归、没上真机。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；无阻断、无建议。线索一条（执行方结果漏列各文件行数，验收已补）已处理。见 `2026-11-16-split-booklib-main.agy.md`。
