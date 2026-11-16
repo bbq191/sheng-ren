@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-kfx-doc
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-kfx-doc（从最新 master 切出）
-- 更新时间: 2026-11-16T17:30:17+08:00
+- 更新时间: 2026-11-16T17:43:01+08:00
 - 引用: `2026-11-16-split-kfx-parse` 审查里留下的「拆不动的大块」；`2026-11-16-split-box-plan`（同类做法，已合并 `27bee77`）
 
 ## 需求原文
@@ -76,7 +76,24 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T17:30:17+08:00–2026-11-16T17:43:01+08:00
+- base..head：`d6314e2162bb9320d00ce27ba4190077c6d5e074..1b806856ea6cdc3395a650daeb9eff507eaee7a4`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 9cd1e07 | chore: 开始执行任务单 2026-11-16-split-kfx-doc [skip-notify] |
+  | 853a2c2 | chore(kfx): 把 parse/element.rs 的 impl Doc 按职责拆到 element/ 子模块 |
+  | 1b80685 | chore(kfx): 拆 parse/element/flow.rs 的 inline_or_block 和 list_table.rs 的 table |
+- 改动文件：`.dev/tasks/2026-11-16-split-kfx-doc.md`,`crates/kfx/src/write/parse/element.rs` `crates/kfx/src/write/parse/element/computed.rs`,`crates/kfx/src/write/parse/element/flow.rs` `crates/kfx/src/write/parse/element/list_table.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-split-kfx-doc-20261116-173017.json`
+- 日志：`/home/box/oc-runs/2026-11-16-split-kfx-doc-20261116-173017.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 12.7 分钟（墙钟 764s / 实际运行 764s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
