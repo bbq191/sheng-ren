@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-booklib-main
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-booklib-main（从最新 master 切出）
-- 更新时间: 2026-11-16T15:49:10+08:00
+- 更新时间: 2026-11-16T16:01:32+08:00
 - 引用: `2026-11-13-big-file-splits` 分步 6（审查建议「各子命令的 `cmd_*` 抽到子模块」）；拆法参照 `2026-11-16-split-csscascade`、`2026-11-13-split-imgopt`
 
 ## 需求原文
@@ -90,7 +90,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T15:49:10+08:00–2026-11-16T16:01:32+08:00
+- base..head：`233271c825a5594ddc79b6e594cd49afbd5febaa..15cbce112956a2b70eed62642b04136886afad4e`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 2f6e4c9 | chore: 开始执行任务单 2026-11-16-split-booklib-main [skip-notify] |
+  | 15cbce1 | chore(library): 拆 booklib/main.rs 成子模块 |
+- 改动文件：`.dev/tasks/2026-11-16-split-booklib-main.md`,`crates/library/src/bin/booklib/books.rs` `crates/library/src/bin/booklib/help.rs`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/bin/booklib/meta.rs`,`crates/library/src/bin/booklib/report.rs` `crates/library/src/bin/booklib/sync.rs`,`crates/library/src/bin/booklib/tests.rs` `crates/library/src/bin/booklib/track.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-split-booklib-main-20261116-154910.json`
+- 日志：`/home/box/oc-runs/2026-11-16-split-booklib-main-20261116-154910.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 12.4 分钟（墙钟 742s / 实际运行 742s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
