@@ -197,8 +197,7 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
     // 在生成、传输开始之前做完，不和传输线程抢同一个文件。目录集合包括这一轮要往这台设备放书的目录：
     // 第一次往新子目录写、写到一半被杀时那里还没有记录（2026-11-16）。
     for device in &live {
-        let planned = lib.planned_output_dirs(device, books);
-        lib.clean_device_leftovers_once(device, &planned);
+        lib.clean_device_leftovers_once(device, || lib.planned_output_dirs(device, books));
     }
     // 不在这台设备的跟踪范围里的书：以前传过的从设备上删掉（2026-10-19 定），这一轮也不生成
     let mut outside: HashSet<(&str, &str)> = HashSet::new();

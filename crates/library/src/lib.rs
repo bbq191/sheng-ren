@@ -582,10 +582,16 @@ impl Library {
     }
 
     /// `sync` 连上这台设备后清一次它上面的残留临时文件；同一次连接里 `--watch` 的后续轮次不再清。
-    pub(crate) fn clean_device_leftovers_once(&self, device: &Profile, planned: &[PathBuf]) {
+    /// `planned` 只在这次真要清时才算（`--watch` 后续轮次不再算一遍计划目录）。
+    pub(crate) fn clean_device_leftovers_once(
+        &self,
+        device: &Profile,
+        planned: impl FnOnce() -> Vec<PathBuf>,
+    ) {
         if self.devices.begin_device_cleaned(&device.id) {
+            let planned = planned();
             self.device_op(device, "清设备上的残留临时文件", || {
-                self.clean_device_leftovers(device, planned)
+                self.clean_device_leftovers(device, &planned)
             });
         }
     }
