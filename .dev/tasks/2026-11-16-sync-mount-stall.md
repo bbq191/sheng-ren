@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-sync-mount-stall
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: oc-exec
 - 分支: task/2026-11-16-sync-mount-stall（从 master `60d4305` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T14:20+08:00
+- 更新时间: 2026-11-16T13:53:41+08:00
 - 引用: `2026-11-12-lock-no-device`「后续」第 2 条（「`sync` 在卡死的挂载上仍会卡（`deliver::connect` 的 `mounted()`）」）；`2026-11-12-list-no-device-stall`「约束」里留给本单的那条。
 
 ## 需求原文
