@@ -1251,7 +1251,7 @@ fn cmd_add(ctx: &Ctx) {
     }
 }
 
-/// `list` 里一份产物的生成记录（`audit`）显示成几行：`✗` 逐条原文、`⚠ `（KEPUB CSS 提醒）逐条原文，
+/// `list` 里一份产物的生成记录（`audit`）显示成几行：`✗` 逐条原文、`⚠ `（各类提醒：KEPUB CSS、质量门、KFX）逐条原文，
 /// 没验证过的 `? ` 合成一行。缩进由调用方加。
 fn audit_lines(audit: &[String]) -> Vec<String> {
     let mut out: Vec<String> = audit
@@ -1339,7 +1339,7 @@ fn cmd_list(ctx: &Ctx) {
                 shown.display(),
                 vertical.map_or(String::new(), |v| format!("  {v}"))
             );
-            // 体检（生成时记下的）和 KEPUB CSS 提醒：逐条列出；没验证过的合成一行
+            // 体检（生成时记下的）和各类提醒（KEPUB CSS、质量门、KFX）：逐条列出；没验证过的合成一行
             for line in audit_lines(&o.audit) {
                 println!("        {line}");
             }
