@@ -114,3 +114,4 @@
   - 产物：master 与分支二进制对 4 本书同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同（其中 kindle 的 4 份 KFX），输出除路径外相同。版本号（KFX 写出器 26）、`fp_golden.txt` 没动。
   - 已知局限：`impl Doc<'_>` 一个块约 725 行，`element.rs` 1095 行；再拆要把 impl 块分开、改方法可见性，按单子没做。
   - 没跑真书回归、没上真机。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议、线索都无。见 `2026-11-16-split-kfx-parse.agy.md`。
