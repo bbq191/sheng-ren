@@ -9,15 +9,16 @@ mod element;
 mod inline;
 
 // 子模块按原 `parse.rs` 各段的职责拆开；`write` 通过 `use parse::*;` 拿到的项仍在这里再导出，
-// 可见性沿用拆分前的 `pub(super)`（相对 `parse` 即 `write`）。
+// 可见性沿用拆分前的 `pub(super)`（相对 `parse` 即 `write`）；拆分前私有的只在 `parse` 内部 `use`。
 pub(super) use self::blocks::{
-    apply_gaps, block_depth, collapse_siblings, has_negative, inline_box, scale_percent,
-    split_at_breaks, starts_with_break, ParsedDoc, BREAK_MARK,
+    apply_gaps, block_depth, collapse_siblings, inline_box, split_at_breaks, starts_with_break,
+    ParsedDoc, BREAK_MARK,
 };
+use self::blocks::{has_negative, scale_percent};
 pub(super) use self::docs::{
     book_language, maybe_big_stack, parse_docs, prepend_cover_page, DEEP_NESTING,
 };
-pub(super) use self::element::{attach_trailing, prepend_ids};
+use self::element::{attach_trailing, prepend_ids};
 pub(super) use self::inline::{Doc, Inline};
 
 /// 竖直方向长度，单位：根字号的 em。

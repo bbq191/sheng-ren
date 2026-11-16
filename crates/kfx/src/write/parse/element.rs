@@ -3,7 +3,7 @@
 use super::*;
 
 /// 文档末尾没落到内容上的锚点（`…</p><span id="x"></span></body>`）挂到最后一个块的末尾。
-pub(in crate::write) fn attach_trailing(blocks: &mut [Block], ids: Vec<String>) {
+pub(super) fn attach_trailing(blocks: &mut [Block], ids: Vec<String>) {
     let Some(last) = blocks.last_mut() else {
         return;
     };
@@ -18,7 +18,7 @@ pub(in crate::write) fn attach_trailing(blocks: &mut [Block], ids: Vec<String>) 
 }
 
 /// 把 `lead` 里的锚点放到块开头（字符偏移 0）。
-pub(in crate::write) fn prepend_ids(ids: &mut Vec<(String, usize)>, lead: Vec<String>) {
+pub(super) fn prepend_ids(ids: &mut Vec<(String, usize)>, lead: Vec<String>) {
     ids.splice(0..0, lead.into_iter().map(|i| (i, 0)));
 }
 

@@ -134,7 +134,7 @@ pub(in crate::write) fn split_at_breaks(mut blocks: Vec<Block>) -> Vec<Vec<Block
 }
 
 /// 有没有块（含容器里的）的左（`left`）或右外边距是负的。
-pub(in crate::write) fn has_negative(blocks: &[Block], left: bool) -> bool {
+pub(super) fn has_negative(blocks: &[Block], left: bool) -> bool {
     any_block(blocks, |b| {
         let h = if left { b.margin_left } else { b.margin_right };
         h.em + h.pct / 100.0 * PAGE_WIDTH_EM < -1e-9
@@ -142,7 +142,7 @@ pub(in crate::write) fn has_negative(blocks: &[Block], left: bool) -> bool {
 }
 
 /// 顶层块的左右百分比长度（书里相对 body 内容宽度）折算成相对整页：乘 `s`。
-pub(in crate::write) fn scale_percent(blocks: &mut [Block], s: f64) {
+pub(super) fn scale_percent(blocks: &mut [Block], s: f64) {
     for b in blocks {
         let [p0, p1] = &mut b.padding_h;
         for h in [&mut b.margin_left, &mut b.margin_right, p0, p1] {
