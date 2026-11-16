@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-kfx-parse
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-kfx-parse（从最新 master 切出）
-- 更新时间: 2026-11-16T16:25:52+08:00
+- 更新时间: 2026-11-16T16:34:42+08:00
 - 引用: `2026-11-13-big-file-splits` 分步 4；拆法参照 `2026-11-16-split-box-fix`（`box_fix.rs` + `box_fix/` 子目录）
 
 ## 需求原文
@@ -85,7 +85,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T16:25:52+08:00–2026-11-16T16:34:42+08:00
+- base..head：`b45918463449e306e0cfa5af36ca5ed0567bb03a..a3c8ea1ca50fe0df8f3a0944bf368de217de70c0`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | d8ed0d0 | chore: 开始执行任务单 2026-11-16-split-kfx-parse [skip-notify] |
+  | a3c8ea1 | chore(kfx): 拆分 write/parse.rs 为 parse 子模块 |
+- 改动文件：`.dev/tasks/2026-11-16-split-kfx-parse.md`,`crates/kfx/src/write/parse.rs` `crates/kfx/src/write/parse/blocks.rs`,`crates/kfx/src/write/parse/docs.rs` `crates/kfx/src/write/parse/element.rs`,`crates/kfx/src/write/parse/inline.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-split-kfx-parse-20261116-162552.json`
+- 日志：`/home/box/oc-runs/2026-11-16-split-kfx-parse-20261116-162552.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 8.8 分钟（墙钟 530s / 实际运行 530s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
