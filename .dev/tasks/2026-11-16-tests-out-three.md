@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-tests-out-three
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-tests-out-three（从最新 master `b33cf6f` 切出）
-- 更新时间: 2026-11-16T17:05:00+08:00
+- 更新时间: 2026-11-16T16:59:33+08:00
 - 引用: `2026-11-13-big-file-splits` 第 7、8、9 步
 
 ## 需求原文
@@ -76,10 +76,35 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T16:53:23+08:00–2026-11-16T16:59:33+08:00
+- base..head：`bcc27d0f4a234d8ff238083a55edf32d45c4e648..4e7c2151671168aa8076c43a99a067ee8613bc0f`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | ee70ae0 | chore: 开始执行任务单 2026-11-16-tests-out-three [skip-notify] |
+  | 9403bc1 | chore(bookconv): footnote.rs 的单元测试挪到子模块文件 |
+  | 45fb993 | chore(bookconv): kindle_rules.rs 的单元测试挪到子模块文件 |
+  | 4e7c215 | chore(library): metadata.rs 的单元测试挪到子模块文件 |
+- 改动文件：`.dev/tasks/2026-11-16-tests-out-three.md`,`crates/bookconv/src/htmlproc/footnote.rs` `crates/bookconv/src/htmlproc/footnote/footnote_inline_tests.rs`,`crates/bookconv/src/htmlproc/footnote/optimizer_footnote_tests.rs` `crates/bookconv/src/wash/kindle_rules.rs`,`crates/bookconv/src/wash/kindle_rules/tests.rs` `crates/library/src/metadata.rs`,`crates/library/src/metadata/tests.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-tests-out-three-20261116-165323.json`
+- 日志：`/home/box/oc-runs/2026-11-16-tests-out-three-20261116-165323.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 6.2 分钟（墙钟 370s / 实际运行 370s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree）。
+  - 范围：只动了三个原文件和四个新测试文件；三个原文件去掉测试模块、换成 `mod …;` 声明之外逐行与 master 相同，生产代码、文件中间的 `#[cfg(test)] fn` 辅助、可见性都没动。
+  - 逐行核对：master 测试模块每行去掉行首 4 格后与新文件（除开头 `//!` 一行）完全相同；全部字符串字面量（含多行原始字符串）抽出来比对，三组分别 399 / 364 / 299 个，逐字相同。
+  - 行数：`footnote.rs` 1879→1111，`kindle_rules.rs` 1856→1244，`metadata.rs` 1848→1010。
+  - 测试名：bookconv lib + library lib 共 644 项，master 与分支完整路径清单完全一致。
+  - 产物：master 与分支二进制对 4 本书（2 本文字书、2 卷漫画）同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同，命令输出除路径外相同。版本号、`fp_golden.txt` 没动。
+  - `cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 没跑真书回归、没上真机。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议、线索都无。见 `2026-11-16-tests-out-three.agy.md`。
 - 合并：
