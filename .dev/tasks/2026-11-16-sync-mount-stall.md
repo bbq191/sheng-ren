@@ -129,6 +129,7 @@
 - 遇到的问题：无
 - 偏离：
   - `crates/library/src/generate.rs`
+  - （负责 bot 验收补）`crates/library/src/fsutil.rs`、`crates/library/src/generate/state.rs`：验收修正 `5f06963` 改的（书库锁描述符登记、`sha256_file` / `clean_tmp_files` / `delete_placements` 里的 `stall::beat()`），执行方没改这两个文件；agy 指出漏报
 - 新建文件（线索）：无
 - 未完成：无
 - 运行记录：`/home/box/oc-runs/2026-11-16-sync-mount-stall-20261116-135341.json`
@@ -146,6 +147,7 @@
     4. 只有一本书、传输途中卡死：6 秒报 `✗ [ireader] 挂载没响应（6 秒没有进展），这一轮不再往它传；1 本没传成…`，失败 1 本、退出码 2，进程正常回来。（修正前这里要 15 秒：跨文件系统改名失败后沿用了长调用时限，已改。）
     5. `--watch=2` 卡死 14 秒：「挂载没响应」只报一次，后台僵尸里只有 1 条卡住的线程（没有每轮堆一条）。
   - 其余修正（同在 `5f06963`）：主线程兜底改成按「没有进展」计时——`same_bytes`、`sha256_file` 每读一块、成批删除和清残留每个文件调 `stall::beat()`（只刷新本线程登记的操作），读回大漫画、删一长串旧文件不会被误判卡死而结束整个 sync；没开挂载检查、MTP 链接不在时恢复原来的「不在」措辞；兜底那行改成 `✗ [设备]`；单测 `watch_registers_and_clears_main_thread_ops` 不再假设全局登记表只有自己一项（并行跑会偶发失败）；`docs/usage.md`、`docs/decisions.md` 按实测重写，`--help` 措辞调整。
+  - 二审后（agy 建议 1、2、线索 1）：`stall.rs` 模块注释改成实测结论；偏离补登 `fsutil.rs`、`generate/state.rs`；放弃一条传输线程时给它打取消标记，卡住的那件返回后排着的不再写设备、线程直接退出（`--watch` 进程还活着、设备又回应时不会多写）。
   - 已知局限（不阻断，写进文档）：没开挂载检查（测试）时传输线程的放弃登记用产物路径、连接探测用链接，`--watch` 下一轮认不出「上次还没返回」，只影响测试环境；卡死期间每跑一次 `sync` 后台可能多留一个僵尸工作进程，设备回应或拔掉后消失。
   - 产物逐字节不变：同两本测试书（一本带 2MB 图），master 与分支二进制分别 `sync` 到 ireader、kobo、kindle（普通目录当设备），6 个产物 sha256 全同；输出文字也相同。版本号、`fp_golden.txt`、指纹构成都没动。
   - `cargo test --workspace` 860 通过 0 失败；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。
