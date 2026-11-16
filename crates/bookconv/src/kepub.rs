@@ -434,6 +434,11 @@ fn layout_prop(prop: &str) -> bool {
     if p.starts_with("border-") && p.ends_with("-radius") {
         return false;
     }
+    // 背景只看色和图：`background` 简写展开时会补上 `repeat`、`scroll`、位置、尺寸的缺省值，这些没有图时不画东西，
+    // 算进来的话 `div{background:none}` 也会报
+    if let Some(rest) = p.strip_prefix("background") {
+        return matches!(rest, "" | "-color" | "-image");
+    }
     const PREFIX: [&str; 6] = [
         "margin",
         "padding",
@@ -1077,6 +1082,11 @@ mod tests {
         assert!(!hit("span { display: inline }"));
         // `border:none` 展开出来带缺省的 medium 宽度，但没有样式，不报
         assert!(!hit("div { border: none }"));
+        // `background` 简写展开补的 repeat、scroll、位置这些缺省值不算；真有底色、底图才报
+        assert!(!hit("div { background: none }"));
+        assert!(!hit("div { background: transparent }"));
+        assert_eq!(risky_css("div { background: #eee }"), ["div"]);
+        assert_eq!(risky_css("span { background: url(a.png) no-repeat }"), ["span"]);
         // `body >`：插了包装后规则失效，不看值
         assert_eq!(risky_css("body > p { margin: 0 }"), ["body > p"]);
         assert!(!hit("body > p { color: red }"));
