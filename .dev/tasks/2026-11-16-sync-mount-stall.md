@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-sync-mount-stall
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-sync-mount-stall（从 master `60d4305` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T14:20+08:00
+- 更新时间: 2026-11-16T14:07:37+08:00
 - 引用: `2026-11-12-lock-no-device`「后续」第 2 条（「`sync` 在卡死的挂载上仍会卡（`deliver::connect` 的 `mounted()`）」）；`2026-11-12-list-no-device-stall`「约束」里留给本单的那条。
 
 ## 需求原文
@@ -117,7 +117,38 @@
 - `docs/usage.md`、`docs/decisions.md`
 
 ## 结果
-（执行方填）
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T13:53:41+08:00–2026-11-16T14:07:37+08:00
+- base..head：`863fe269dfcb60f526d1c6a154c62100152526ff..96bab7f4d134a0614915874353b86ef7c41c1daa`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 9002af9 | chore: 开始执行任务单 2026-11-16-sync-mount-stall [skip-notify] |
+  | 96bab7f | fix: sync 在卡死的设备挂载上不再一直挂着 |
+- 改动文件：`.dev/tasks/2026-11-16-sync-mount-stall.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/build_run.rs`,`crates/library/src/deliver.rs` `crates/library/src/generate.rs`,`crates/library/src/generate/flow.rs` `crates/library/src/generate/records.rs`,`crates/library/src/generate/space.rs` `crates/library/src/lib.rs`,`crates/library/src/stall.rs` `crates/library/src/transfer.rs`,`crates/library/tests/stall.rs` `docs/decisions.md`,`docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/library/src/generate.rs`
+  - （负责 bot 验收补）`crates/library/src/fsutil.rs`、`crates/library/src/generate/state.rs`：验收修正 `5f06963` 改的（书库锁描述符登记、`sha256_file` / `clean_tmp_files` / `delete_placements` 里的 `stall::beat()`），执行方没改这两个文件；agy 指出漏报
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-sync-mount-stall-20261116-135341.json`
+- 日志：`/home/box/oc-runs/2026-11-16-sync-mount-stall-20261116-135341.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 13.9 分钟（墙钟 836s / 实际运行 836s；超时按实际运行计）
 
 ## 审查
-（负责 bot 填）
+- 负责 bot 验收（2026-11-16，独立 worktree，基于 `c4e0f07`）：**有一处根本问题，已在任务分支上修正（`5f06963`），修正后通过**。
+  - 逐个看了 diff：连接探测（`deliver::connect` 的 `probe`）、放弃线程登记（`stall::outstanding`）、传输心跳和 `Pipeline` 放弃线程（不 join、之后的结果丢掉）、`build_run` 的 `Stalled`、主线程 `device_op` 包住的位置（清残留、`retract`、`flush_removed`、空间预检、认领、选文件名、核对、`complete` 删旧位置、记录迁移）都和任务单一致；生成本身没被包进去。
+  - **真卡死复现**（scratch FUSE 小程序，不进仓库：内存文件系统，触发后每个请求都永不回应；`~/Devices/Ireader` 是指向它的符号链接，开着挂载检查，`BOOKLIB_DEVICE_TIMEOUT=3`，临时书库在 `target/` 下）：
+    1. 一开始就卡死：master `sync --device=ireader` 20 秒后被 SIGKILL（卡在 opendir）。执行方的版本 3 秒报「挂载没响应…这一轮跳过」、打完汇总，**但进程退不掉**：主线程退出后进程是僵尸，探测线程 D 状态停在 `request_wait_answer`，`kill -9` 也结束不了，要等 FUSE 守护进程回应或被杀。命令行照样回不来，书库锁（flock）也不放。也就是说任务单「FUSE 请求的等待可被致命信号打断」的推断**不成立**（请求已交给守护进程后内核不可中断地等），执行方写进 `decisions.md` 的「box 上用钩子实测过」也不对（钩子只是 sleep，碰不到这个问题）。
+    2. 修正：`sync`、`devices` 改由前台进程起工作进程跑，工作进程退出一律走 `library::exit_process`（先放书库锁、刷输出、把退出码写进 `BOOKLIB_EXIT_FD` 管道），前台读到就退出。修正后：一开始就卡死 → 3.1 秒返回、退出码 0（同「没接上」，不算失败），工作进程留在后台成僵尸；紧接着另一个要加锁的命令照常拿到锁。
+    3. 传书途中卡死（第 2 个写请求起卡住，两本书）：7 秒返回、退出码 2；传输线程卡在 write，主线程认领下一本时也卡住，兜底看门狗打 `✗ [ireader] 挂载没响应（选设备上的文件名 6 秒没返回），booklib 退出…`。生成记录里那本的指纹是空的（认得出没写完）。杀掉守护进程、重新挂一个好的后再 `sync`：两本都传上，设备上文件的 sha256 和记录一致；后台僵尸随守护进程结束消失。
+    4. 只有一本书、传输途中卡死：6 秒报 `✗ [ireader] 挂载没响应（6 秒没有进展），这一轮不再往它传；1 本没传成…`，失败 1 本、退出码 2，进程正常回来。（修正前这里要 15 秒：跨文件系统改名失败后沿用了长调用时限，已改。）
+    5. `--watch=2` 卡死 14 秒：「挂载没响应」只报一次，后台僵尸里只有 1 条卡住的线程（没有每轮堆一条）。
+  - 其余修正（同在 `5f06963`）：主线程兜底改成按「没有进展」计时——`same_bytes`、`sha256_file` 每读一块、成批删除和清残留每个文件调 `stall::beat()`（只刷新本线程登记的操作），读回大漫画、删一长串旧文件不会被误判卡死而结束整个 sync；没开挂载检查、MTP 链接不在时恢复原来的「不在」措辞；兜底那行改成 `✗ [设备]`；单测 `watch_registers_and_clears_main_thread_ops` 不再假设全局登记表只有自己一项（并行跑会偶发失败）；`docs/usage.md`、`docs/decisions.md` 按实测重写，`--help` 措辞调整。
+  - 二审后（agy 建议 1、2、线索 1）：`stall.rs` 模块注释改成实测结论；偏离补登 `fsutil.rs`、`generate/state.rs`；放弃一条传输线程时给它打取消标记，卡住的那件返回后排着的不再写设备、线程直接退出（`--watch` 进程还活着、设备又回应时不会多写）。
+  - 已知局限（不阻断，写进文档）：没开挂载检查（测试）时传输线程的放弃登记用产物路径、连接探测用链接，`--watch` 下一轮认不出「上次还没返回」，只影响测试环境；卡死期间每跑一次 `sync` 后台可能多留一个僵尸工作进程，设备回应或拔掉后消失。
+  - 产物逐字节不变：同两本测试书（一本带 2MB 图），master 与分支二进制分别 `sync` 到 ireader、kobo、kindle（普通目录当设备），6 个产物 sha256 全同；输出文字也相同。版本号、`fp_golden.txt`、指纹构成都没动。
+  - `cargo test --workspace` 860 通过 0 失败；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。
+  - 没跑真书回归、没上真机；卡死场景只在 box 上用测试钩子和 FUSE 小程序模拟过（真的 jmtpfs 卡死时是不是同样停在 `request_wait_answer`、拔掉设备后僵尸是否消失，要 vinci 真机看）。

@@ -29,6 +29,7 @@ pub fn sha256_file(path: &Path) -> Result<String, String> {
             break;
         }
         h.update(&buf[..n]);
+        crate::stall::beat();
     }
     Ok(hex(&h.finalize()))
 }
@@ -157,6 +158,7 @@ pub struct Lock<'a> {
 
 impl Drop for Lock<'_> {
     fn drop(&mut self) {
+        crate::stall::note_lock_fd(-1);
         self.held.set(false);
     }
 }
@@ -172,6 +174,10 @@ pub(crate) fn lock<'a>(root: &Path, held: &'a Cell<bool>) -> Result<Lock<'a>, St
     match f.try_lock() {
         Ok(()) => {
             held.set(true);
+            {
+                use std::os::unix::io::AsRawFd;
+                crate::stall::note_lock_fd(f.as_raw_fd());
+            }
             Ok(Lock { _file: f, held })
         }
         Err(std::fs::TryLockError::WouldBlock) => Err(format!(
@@ -230,6 +236,7 @@ pub(crate) fn clean_tmp_files(dir: &Path, skip_live_owner: bool, guard: impl FnO
             continue;
         }
         let _ = std::fs::remove_file(e.path());
+        crate::stall::beat();
     }
 }
 

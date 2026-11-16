@@ -41,5 +41,7 @@ mod tests;
 pub(crate) use fsops::{case_alias, case_twin};
 pub(crate) use placement::output_overlap;
 pub(crate) use types::{State, StateEntry, PIPELINE_VERSION};
+#[cfg(test)]
+pub(crate) use flow::test_transfer;
 pub use produce::{AUDIT_WARNING, GATE_WARNING, KFX_WARNING};
 pub use types::{Built, OutputStatus, SpaceCheck, Step};

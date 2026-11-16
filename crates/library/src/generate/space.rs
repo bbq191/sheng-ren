@@ -28,7 +28,14 @@ impl Library {
             p.is_absolute()
                 && (p.starts_with(root) || mount.as_deref().is_some_and(|m| p.starts_with(m)))
         };
-        let size = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        let size = |p: &Path| {
+            self.device_op(device, "看设备上文件多大", || {
+                std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+            })
+        };
+        let is_file = |p: &Path| {
+            self.device_op(device, "看设备上有没有这份产物", || p.is_file())
+        };
         let mut items = Vec::new();
         for m in books {
             let Ok(plan) = self.plan(m, device) else {
@@ -39,7 +46,7 @@ impl Library {
                 !p.fingerprint.is_empty()
                     && (p.fingerprint == plan.fingerprint || p.fingerprint == plan.legacy)
                     && p.path.is_absolute()
-                    && p.path.is_file()
+                    && is_file(&p.path)
             };
             let new = match prev.filter(fresh) {
                 Some(p) if on_device(&p.path) => continue, // 已是最新、只在设备上挪位置、--force 重建：不占新空间
@@ -58,7 +65,7 @@ impl Library {
                 .map(|p| p.placements())
                 .unwrap_or_default()
                 .iter()
-                .filter(|x| on_device(&x.path) && x.path.is_file())
+                .filter(|x| on_device(&x.path) && is_file(&x.path))
                 .fold(0u64, |a, x| a.saturating_add(size(&x.path)));
             items.push(crate::space::Item { new, old, staged });
         }
@@ -66,7 +73,9 @@ impl Library {
         if items.is_empty() {
             return SpaceCheck::Enough;
         }
-        match crate::space::free_space(crate::space::probe_path(root)) {
+        match self.device_op(device, "看设备剩多少空间", || {
+            crate::space::free_space(crate::space::probe_path(root))
+        }) {
             Err(e) => SpaceCheck::Unknown(e),
             Ok((free, total)) => match crate::space::shortfall(free, total, &items) {
                 None => SpaceCheck::Enough,
@@ -83,11 +92,12 @@ impl Library {
     /// 设备现在的剩余空间（字节）；放电脑上的、没接上的、读不到的 `None`（`sync --watch` 看空间腾出来没有）。
     pub fn device_free(&self, device: &Profile) -> Option<u64> {
         match self.target(device).as_ref().as_ref() {
-            Ok(Target::Dir { root, .. }) => {
-                crate::space::free_space(crate::space::probe_path(root))
-                    .ok()
-                    .map(|(free, _)| free)
-            }
+            Ok(Target::Dir { root, .. }) => self
+                .device_op(device, "看设备剩多少空间", || {
+                    crate::space::free_space(crate::space::probe_path(root))
+                })
+                .ok()
+                .map(|(free, _)| free),
             _ => None,
         }
     }
