@@ -12,8 +12,9 @@
 //! - **传输看门狗**：传输线程按写进度打心跳（[`Progress`]），主线程 [`crate::Pipeline`] 等结果时发现某台太久没进展，
 //!   放弃那条线程、这台这一轮不再传。
 //!
-//! 已知局限：内核文件系统（USB 存储的 vfat）因为硬件卡死进入不可中断的 D 状态时，放弃的线程连进程退出都可能等它。
-//! FUSE 请求的等待可以被致命信号打断（2026-11-12 复现时 SIGKILL 能结束），所以 MTP 上放弃的线程不挡进程退出。
+//! 放弃的线程挡得住进程退出：请求已交给 FUSE 守护进程时，内核不可中断地等它回应（`request_wait_answer`，SIGKILL 也要等；
+//! 2026-11-16 验收时用卡死的 FUSE 小程序实测），USB 存储（vfat）硬件卡死的 D 状态也一样。所以 `sync`、`devices` 在工作进程里跑，
+//! 退出一律经 [`exit_process`]：放开书库锁、把退出码交给前台进程，前台不等卡住的工作进程（见 `booklib` 的 `supervise`）。
 //!
 //! 测试钩子：`BOOKLIB_TEST_DEVICE_HANG=<目录>` 时，设备 I/O 进到这个目录下的路径就一直 sleep，模拟卡死的挂载；
 //! `BOOKLIB_TEST_DEVICE_HANG_ON=probe|write|main|all` 只让其中一类入口卡住（缺省 `all`）。

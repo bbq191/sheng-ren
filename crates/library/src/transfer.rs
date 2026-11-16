@@ -96,13 +96,7 @@ impl Transfer {
 /// 传输线程里出了 panic 的那件算传失败（不连累同一台后面的）；线程还是意外死了的话，主线程等结果时会发现
 /// （[`Event::Lost`]），不会一直等下去。
 pub struct Pipeline {
-    lanes: HashMap<
-        String,
-        (
-            std::sync::mpsc::Sender<Transfer>,
-            std::thread::JoinHandle<()>,
-        ),
-    >,
+    lanes: HashMap<String, Lane>,
     done_tx: std::sync::mpsc::Sender<Event>,
     done_rx: std::sync::mpsc::Receiver<Event>,
     /// 各设备在传（含排队）的件数。
@@ -112,6 +106,13 @@ pub struct Pipeline {
     /// 这一轮被放弃的设备：它们之后交回的结果一律丢掉（记录不能改）。
     abandoned: HashSet<String>,
 }
+
+/// 一台设备的传输线程：交活的队列、线程，和取消标记（放弃了这条线程时打上：它从卡住的那一件返回后，排着的不再碰设备）。
+type Lane = (
+    std::sync::mpsc::Sender<Transfer>,
+    std::thread::JoinHandle<()>,
+    Arc<std::sync::atomic::AtomicBool>,
+);
 
 /// 传输线程交回的。
 pub enum Event {
@@ -158,11 +159,14 @@ impl Pipeline {
         *self.busy.entry(t.device.clone()).or_default() += 1;
         let done = self.done_tx.clone();
         let current = self.current.clone();
-        let (tx, _) = self.lanes.entry(t.device.clone()).or_insert_with_key(|_| {
+        let (tx, _, _) = self.lanes.entry(t.device.clone()).or_insert_with_key(|_| {
             let (tx, rx) = std::sync::mpsc::channel();
+            let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = cancelled.clone();
             (
                 tx,
-                std::thread::spawn(move || file_lane(rx, done, current)),
+                std::thread::spawn(move || file_lane(rx, done, current, flag)),
+                cancelled,
             )
         });
         if let Err(std::sync::mpsc::SendError(_t)) = tx.send(t) {
@@ -226,7 +230,9 @@ impl Pipeline {
         };
         let count = self.busy.remove(&device).unwrap_or(0);
         self.abandoned.insert(device.clone());
-        if let Some((tx, handle)) = self.lanes.remove(&device) {
+        if let Some((tx, handle, cancelled)) = self.lanes.remove(&device) {
+            // 排着的那几件不再传：设备哪天回应了，卡住的那件返回后线程直接退出，不再往设备上写（`--watch` 进程还活着时）
+            cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
             // 不 join：线程可能还卡在 FUSE 上。丢掉 handle 让它自己跑完退出
             drop(tx);
             drop(handle);
@@ -248,13 +254,13 @@ impl Pipeline {
         let device = self
             .lanes
             .iter()
-            .find(|(d, (_, h))| h.is_finished() && self.busy.get(*d).is_some_and(|n| *n > 0))
+            .find(|(d, (_, h, _))| h.is_finished() && self.busy.get(*d).is_some_and(|n| *n > 0))
             .map(|(d, _)| d.clone())?;
         // 线程退出和它最后交回的结果之间没有先后保证：队列里还有的话先交那个
         if let Ok(ev) = self.done_rx.try_recv() {
             return Some(self.count_back(ev));
         }
-        if let Some((_, h)) = self.lanes.remove(&device) {
+        if let Some((_, h, _)) = self.lanes.remove(&device) {
             let _ = h.join();
         }
         let count = self.busy.remove(&device).unwrap_or(0);
@@ -270,7 +276,7 @@ impl Pipeline {
 impl Drop for Pipeline {
     fn drop(&mut self) {
         // 关掉各条队列，等线程把手上的做完退出
-        for (_, (tx, h)) in self.lanes.drain() {
+        for (_, (tx, h, _)) in self.lanes.drain() {
             drop(tx);
             let _ = h.join();
         }
@@ -294,9 +300,14 @@ fn file_lane(
     rx: std::sync::mpsc::Receiver<Transfer>,
     done: std::sync::mpsc::Sender<Event>,
     current: Arc<Mutex<HashMap<String, stall::Progress>>>,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
 ) {
     let mut full = false;
     for t in rx {
+        // 主线程放弃了这条线程（设备卡死）：排着的不再碰设备，直接退出（记录不改，下次重传）
+        if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         // 这一件开始传：进度从这里算；主线程按它发现卡死。线程还卡着时，挂载点一直记着「没返回」，
         // 后面几轮（`--watch`）连接时直接跳过，不再起新线程、不再碰这台
         t.progress.start();
@@ -363,7 +374,7 @@ mod tests {
         let mut pipe = Pipeline::default();
         let (tx, _rx) = std::sync::mpsc::channel::<Transfer>();
         let h = std::thread::spawn(|| panic!("传输线程意外退出（测试）"));
-        pipe.lanes.insert("kindle".into(), (tx, h));
+        pipe.lanes.insert("kindle".into(), (tx, h, Default::default()));
         pipe.busy.insert("kindle".into(), 2);
         match pipe.next(true) {
             Some(Event::Lost { device, count }) => {
