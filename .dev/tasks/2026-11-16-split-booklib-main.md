@@ -118,3 +118,4 @@
   - 产物：master 与分支二进制对 4 本书同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同。版本号、`fp_golden.txt` 没动。
   - 没跑真书回归、没上真机。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过；无阻断、无建议。线索一条（执行方结果漏列各文件行数，验收已补）已处理。见 `2026-11-16-split-booklib-main.agy.md`。
+- 合并：feef7fa（`--no-ff` 进 master；master 合并前没动，合并树与已验收的分支末端相同：test 864 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后删除。状态保持 done，等 vinci 真机验收。
