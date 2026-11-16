@@ -146,41 +146,7 @@ impl Doc<'_> {
                     return;
                 }
                 if let Some(src) = image_src(&el) {
-                    let comp = self.comp(&el, parent);
-                    let linked = el
-                        .ancestors()
-                        .filter_map(ElementRef::wrap)
-                        .any(|a| a.value().name() == "a" && a.value().attr("href").is_some());
-                    let src = resolve_link(self.path, &src).0;
-                    if comp.display.as_deref() == Some("block") {
-                        self.flush(inl, block_comp, out);
-                        // 图片自己的 id（`<img id="filepos152">`）也是锚点
-                        let mut lead = self.take_pending();
-                        lead.extend(el.value().attr("id").map(str::to_string));
-                        let mut b = Block::anonymous(
-                            Kind::Image { src, linked },
-                            comp,
-                            lead.into_iter().map(|i| (i, 0)).collect(),
-                        );
-                        b.gap_before = self.gap.take();
-                        out.push(b);
-                        return;
-                    }
-                    // 先当行内图片收着：同一段里有字就嵌在字里，没有字的在 `flush` 里独立成块
-                    if let Some(id) = el.value().attr("id") {
-                        inl.push_id(id);
-                    }
-                    let (width, height) = self.image_size(&el);
-                    let alt = el.value().attr("alt").unwrap_or_default().to_string();
-                    inl.push_image(InlineImage {
-                        at: 0,
-                        src,
-                        alt,
-                        comp,
-                        linked,
-                        width,
-                        height,
-                    });
+                    self.image(&el, src, block_comp, parent, inl, out);
                     return;
                 }
                 let comp = self.comp(&el, parent);
@@ -205,36 +171,7 @@ impl Doc<'_> {
                     && el.children().all(|c| !c.value().is_element())
                     && (comp.background.is_some() || comp.width.is_some())
                 {
-                    let fs = comp.font_size;
-                    let mut rc = comp.clone();
-                    for side in [1, 3] {
-                        rc.margin[side] = comp.margin[side].map(|l| match l {
-                            Len::Pt(n) => {
-                                Len::Em(n / 0.45 * 0.75 / bookconv::cascade::PT_PER_EM / fs)
-                            }
-                            l => l,
-                        });
-                    }
-                    rc.padding[1] = comp.width.map(|l| match l {
-                        Len::Pt(n) => Len::Em(n / bookconv::cascade::PT_PER_EM / fs),
-                        l => l,
-                    });
-                    rc.min_height = comp.min_height.map(|l| match l {
-                        Len::Pt(n) => Len::Pt(n * 0.6),
-                        l => l,
-                    });
-                    inl.open_run(Run {
-                        start: 0,
-                        len: 0,
-                        comp: Some(rc),
-                        link: None,
-                        note_ref: false,
-                        anchor: false,
-                    });
-                    inl.push_char('\u{200B}');
-                    if let Some(o) = inl.open.pop() {
-                        inl.close_run(o);
-                    }
+                    self.empty_inline_box(&comp, inl);
                     return;
                 }
                 let link = (name == "a")
@@ -282,6 +219,88 @@ impl Doc<'_> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// 一张图片：`display:block` 的切开行内缓冲、独立成块（图片自己的 id 也是锚点），其余先当行内图片收着，
+    /// 同一段里有字就嵌在字里，没有字的在 `flush` 里独立成块。
+    fn image(
+        &self,
+        el: &ElementRef,
+        src: String,
+        block_comp: &Computed,
+        parent: &Computed,
+        inl: &mut Inline,
+        out: &mut Vec<Block>,
+    ) {
+        let comp = self.comp(el, parent);
+        let linked = el
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .any(|a| a.value().name() == "a" && a.value().attr("href").is_some());
+        let src = resolve_link(self.path, &src).0;
+        if comp.display.as_deref() == Some("block") {
+            self.flush(inl, block_comp, out);
+            // 图片自己的 id（`<img id="filepos152">`）也是锚点
+            let mut lead = self.take_pending();
+            lead.extend(el.value().attr("id").map(str::to_string));
+            let mut b = Block::anonymous(
+                Kind::Image { src, linked },
+                comp,
+                lead.into_iter().map(|i| (i, 0)).collect(),
+            );
+            b.gap_before = self.gap.take();
+            out.push(b);
+            return;
+        }
+        // 先当行内图片收着：同一段里有字就嵌在字里，没有字的在 `flush` 里独立成块
+        if let Some(id) = el.value().attr("id") {
+            inl.push_id(id);
+        }
+        let (width, height) = self.image_size(el);
+        let alt = el.value().attr("alt").unwrap_or_default().to_string();
+        inl.push_image(InlineImage {
+            at: 0,
+            src,
+            alt,
+            comp,
+            linked,
+            width,
+            height,
+        });
+    }
+
+    /// 空的 inline-block 小方块（条件见调用处）：换算盒子，插一个零宽空格、区间写在它上面。
+    fn empty_inline_box(&self, comp: &Computed, inl: &mut Inline) {
+        let fs = comp.font_size;
+        let mut rc = comp.clone();
+        for side in [1, 3] {
+            rc.margin[side] = comp.margin[side].map(|l| match l {
+                Len::Pt(n) => {
+                    Len::Em(n / 0.45 * 0.75 / bookconv::cascade::PT_PER_EM / fs)
+                }
+                l => l,
+            });
+        }
+        rc.padding[1] = comp.width.map(|l| match l {
+            Len::Pt(n) => Len::Em(n / bookconv::cascade::PT_PER_EM / fs),
+            l => l,
+        });
+        rc.min_height = comp.min_height.map(|l| match l {
+            Len::Pt(n) => Len::Pt(n * 0.6),
+            l => l,
+        });
+        inl.open_run(Run {
+            start: 0,
+            len: 0,
+            comp: Some(rc),
+            link: None,
+            note_ref: false,
+            anchor: false,
+        });
+        inl.push_char('\u{200B}');
+        if let Some(o) = inl.open.pop() {
+            inl.close_run(o);
         }
     }
 }

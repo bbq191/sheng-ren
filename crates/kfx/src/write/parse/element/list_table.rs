@@ -95,87 +95,14 @@ impl Doc<'_> {
                 continue;
             }
             match part.value().name() {
-                "caption" => {
-                    let mut cap = self.wrap_children(part, pc, None);
-                    cap.ty = Some(NODE_TEXT);
-                    cap.attrs.push((NOTE_CONTENT, Value::Symbol(CAPTION)));
-                    cap.extra
-                        .push((P_LAYOUT_HINTS, Value::List(vec![Value::Symbol(CAPTION)])));
-                    parts.push(cap);
-                }
+                "caption" => parts.push(self.table_caption(part, pc)),
                 tag @ ("thead" | "tbody" | "tfoot") => {
                     let ty = match tag {
                         "thead" => NODE_THEAD,
                         "tfoot" => NODE_TFOOT,
                         _ => NODE_TBODY,
                     };
-                    let mut rows = Vec::new();
-                    for tr in part
-                        .children()
-                        .filter_map(ElementRef::wrap)
-                        .filter(|e| e.value().name() == "tr")
-                    {
-                        let rc = self.comp(&tr, &pc);
-                        let mut cells = Vec::new();
-                        let mut widths = Vec::new();
-                        let mut naturals = Vec::new();
-                        for td in tr
-                            .children()
-                            .filter_map(ElementRef::wrap)
-                            .filter(|e| matches!(e.value().name(), "td" | "th"))
-                        {
-                            let mut cc = self.comp(&td, &rc);
-                            if cc.width.is_none() {
-                                // HTML 属性不带单位的是像素（`width="30"`，Send to Kindle 按 30px 算列宽，Q129）
-                                cc.width = td.value().attr("width").and_then(|w| {
-                                    match w.trim().parse::<f64>() {
-                                        Ok(n) => Some(Len::Pt(n * 0.75)),
-                                        Err(_) => crate::css::parse_len(w),
-                                    }
-                                });
-                            }
-                            // UA 样式：单元格内边距 1px（按 0.45pt，Send to Kindle 写 0.031lh、0.117%，2026-10-14 怪癖测试书 Q97）。
-                            for p in cc.padding.iter_mut() {
-                                p.get_or_insert(Len::Pt(0.45));
-                            }
-                            widths.push(cc.width);
-                            naturals.push(bookconv::kindle_model::natural_px(&td, cc.font_size));
-                            // 单元格自己不写宽度、只写 `$546: $377`，宽度写成表格的列宽（Send to Kindle 同样，Q127–Q129）
-                            let sized = cc.width.take().is_some();
-                            let valign = match cc.valign.as_deref() {
-                                Some("top" | "text-top") => VALIGN_TOP,
-                                Some("bottom" | "text-bottom") => VALIGN_BOTTOM,
-                                _ => ALIGN_CENTER,
-                            };
-                            let mut cell = self.wrap_children(td, cc, None);
-                            cell.extra.push((P_CELL_VALIGN, Value::Symbol(valign)));
-                            if sized {
-                                cell.extra.push((P_SIZING, Value::Symbol(SIZING_VALUE)));
-                            }
-                            for (attr, key) in [("colspan", P_COLSPAN), ("rowspan", P_ROWSPAN)] {
-                                if let Some(n) = td
-                                    .value()
-                                    .attr(attr)
-                                    .and_then(|v| v.trim().parse::<i64>().ok())
-                                    .filter(|n| *n > 1)
-                                {
-                                    cell.extra.push((key, Value::Int(n)));
-                                }
-                            }
-                            cells.push(cell);
-                        }
-                        if col_widths.is_none() {
-                            col_widths =
-                                Some(bookconv::kindle_model::column_percents(&widths, &naturals));
-                        }
-                        let mut row =
-                            Block::anonymous(Kind::Container(cells), rc.inherited(), Vec::new());
-                        row.ty = Some(NODE_ROW);
-                        rows.push(row);
-                    }
-                    let mut p = Block::anonymous(Kind::Container(rows), pc.inherited(), Vec::new());
-                    p.ty = Some(ty);
-                    parts.push(p);
+                    parts.push(self.table_section(part, ty, &pc, &mut col_widths));
                 }
                 _ => {}
             }
@@ -197,5 +124,114 @@ impl Doc<'_> {
         b.ty = Some(NODE_TABLE);
         b.attrs = attrs;
         b
+    }
+
+    /// `<caption>`：`$269` 节点（`$615: $453`）套文字。
+    fn table_caption(&self, part: ElementRef, pc: Computed) -> Block {
+        let mut cap = self.wrap_children(part, pc, None);
+        cap.ty = Some(NODE_TEXT);
+        cap.attrs.push((NOTE_CONTENT, Value::Symbol(CAPTION)));
+        cap.extra
+            .push((P_LAYOUT_HINTS, Value::List(vec![Value::Symbol(CAPTION)])));
+        cap
+    }
+
+    /// 表头/表体/表脚：`ty` 是节点的类型，行照常往下展开；第一行的列宽就是整张表的列宽。
+    fn table_section(
+        &self,
+        part: ElementRef,
+        ty: u32,
+        pc: &Computed,
+        col_widths: &mut Option<Vec<f64>>,
+    ) -> Block {
+        let mut rows = Vec::new();
+        for tr in part
+            .children()
+            .filter_map(ElementRef::wrap)
+            .filter(|e| e.value().name() == "tr")
+        {
+            rows.push(self.table_row(tr, pc, col_widths));
+        }
+        let mut p = Block::anonymous(Kind::Container(rows), pc.inherited(), Vec::new());
+        p.ty = Some(ty);
+        p
+    }
+
+    /// 一行：每个单元格收成一个节点，行的计算值取 `<tr>` 的；第一行顺带算出列宽。
+    fn table_row(
+        &self,
+        tr: ElementRef,
+        pc: &Computed,
+        col_widths: &mut Option<Vec<f64>>,
+    ) -> Block {
+        let rc = self.comp(&tr, pc);
+        let mut cells = Vec::new();
+        let mut widths = Vec::new();
+        let mut naturals = Vec::new();
+        for td in tr
+            .children()
+            .filter_map(ElementRef::wrap)
+            .filter(|e| matches!(e.value().name(), "td" | "th"))
+        {
+            cells.push(self.table_cell(td, &rc, &mut widths, &mut naturals));
+        }
+        if col_widths.is_none() {
+            *col_widths =
+                Some(bookconv::kindle_model::column_percents(&widths, &naturals));
+        }
+        let mut row =
+            Block::anonymous(Kind::Container(cells), rc.inherited(), Vec::new());
+        row.ty = Some(NODE_ROW);
+        row
+    }
+
+    /// 一个单元格：HTML 的 `width` 当列宽（不带单位的是像素）、内边距 1px，跨列、跨行、竖直对齐写在 `extra` 里；
+    /// 列宽的计算材料（宽度、内容的自然宽度）交给调用方。
+    fn table_cell(
+        &self,
+        td: ElementRef,
+        rc: &Computed,
+        widths: &mut Vec<Option<Len>>,
+        naturals: &mut Vec<f64>,
+    ) -> Block {
+        let mut cc = self.comp(&td, rc);
+        if cc.width.is_none() {
+            // HTML 属性不带单位的是像素（`width="30"`，Send to Kindle 按 30px 算列宽，Q129）
+            cc.width = td.value().attr("width").and_then(|w| {
+                match w.trim().parse::<f64>() {
+                    Ok(n) => Some(Len::Pt(n * 0.75)),
+                    Err(_) => crate::css::parse_len(w),
+                }
+            });
+        }
+        // UA 样式：单元格内边距 1px（按 0.45pt，Send to Kindle 写 0.031lh、0.117%，2026-10-14 怪癖测试书 Q97）。
+        for p in cc.padding.iter_mut() {
+            p.get_or_insert(Len::Pt(0.45));
+        }
+        widths.push(cc.width);
+        naturals.push(bookconv::kindle_model::natural_px(&td, cc.font_size));
+        // 单元格自己不写宽度、只写 `$546: $377`，宽度写成表格的列宽（Send to Kindle 同样，Q127–Q129）
+        let sized = cc.width.take().is_some();
+        let valign = match cc.valign.as_deref() {
+            Some("top" | "text-top") => VALIGN_TOP,
+            Some("bottom" | "text-bottom") => VALIGN_BOTTOM,
+            _ => ALIGN_CENTER,
+        };
+        let mut cell = self.wrap_children(td, cc, None);
+        cell.extra.push((P_CELL_VALIGN, Value::Symbol(valign)));
+        if sized {
+            cell.extra.push((P_SIZING, Value::Symbol(SIZING_VALUE)));
+        }
+        for (attr, key) in [("colspan", P_COLSPAN), ("rowspan", P_ROWSPAN)] {
+            if let Some(n) = td
+                .value()
+                .attr(attr)
+                .and_then(|v| v.trim().parse::<i64>().ok())
+                .filter(|n| *n > 1)
+            {
+                cell.extra.push((key, Value::Int(n)));
+            }
+        }
+        cell
     }
 }
