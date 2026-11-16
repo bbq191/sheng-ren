@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-box-plan
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-box-plan（从最新 master 切出）
-- 更新时间: 2026-11-16T17:25:00+08:00
+- 更新时间: 2026-11-16T17:23:14+08:00
 - 引用: `2026-11-16-split-box-fix` 审查里留下的「拆不动的大函数」；`2026-11-13-big-file-splits`
 
 ## 需求原文
@@ -72,10 +72,34 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T17:10:02+08:00–2026-11-16T17:23:14+08:00
+- base..head：`070c5029d5e5b94899f85317225142f1380b343b..bd03a7a61fae7b9f5482381ef38b613b75fe1fbe`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 796e88f | chore: 开始执行任务单 2026-11-16-split-box-plan [skip-notify] |
+  | bd03a7a | chore(wash): 拆 box_fix 的 plan 成 Cx 方法和各段函数 |
+- 改动文件：`.dev/tasks/2026-11-16-split-box-plan.md`,`crates/bookconv/src/wash/box_fix.rs` `crates/bookconv/src/wash/box_fix/plan.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-split-box-plan-20261116-171002.json`
+- 日志：`/home/box/oc-runs/2026-11-16-split-box-plan-20261116-171002.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 13.2 分钟（墙钟 792s / 实际运行 792s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree）。
+  - 范围：只动了 `box_fix.rs` 和新文件 `box_fix/plan.rs`；`line.rs`、`rewrite.rs`、`wash/mod.rs` 没动。
+  - 结构：`plan` 挪到 `box_fix/plan.rs`；11 个只读闭包改成 `Cx` 的同名方法，15 段改成 `Cx` 上的方法（`width_to_margins`、`margin_auto_center`、`page_top_break`、`float_off`、`negative_top_margin`、`frame_side_borders`、`merge_h_padding`、`cell_px_margins`、`list_item_padding`、`rule_images`、`cell_middle`、`cell_widths`、`vertical_gaps`、`strip_inline`、`em_root_headings`），`plan` 按原顺序依次调用。行数：`plan` 68 行，最长的段 `frame_side_borders` 122 行、`rule_images` / `vertical_gaps` 各 112 行，其余都在 90 行以内；`box_fix.rs` 1119→238，`plan.rs` 1056。
+  - 逐词核对：master 的 `plan` 与分支 `plan.rs` 按词法记号比对（去掉 `self.`、忽略空白和换行），差异只有闭包写法变成方法签名、段落变成函数签名和参数、`content_before` 的计算从闭包定义中间挪到建 `Cx` 之前（闭包是惰性的，原来也只在后面各段用到，结果不变）；各段内部的语句、表达式、运算顺序、遍历方式逐词相同，没有 `clone` / `collect` 之类的新增。
+  - 可见性：新增项都是私有的，只有 `plan` 是 `pub(super)`（给 `box_fix.rs` 调）；没有 `pub(crate)` / `pub`，已有项可见性没变。`box_fix.rs` 为测试加了一行 `#[cfg(test)] use crate::kindle_model::{self as km, Chapter};`（`tests.rs` 用 `use super::*` 拿这两个名字）。
+  - 小瑕疵（不阻断）：`width_to_margins`、`frame_side_borders` 等几段的注释在方法上方和 `plan` 里建中间表处各留了一份。
+  - 测试：bookconv lib 553 项，完整路径与 master 一致（`box_fix` 17 项）；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告，没加 `#[allow]`。
+  - 产物：master 与分支二进制对 18 本书（13 本文字书，含 2 本专门造的盒子样式密集的书：上下 / 左右 / 全框边框、点线虚线、内边距、px 和 % 外边距、悬挂缩进、定宽居中、float、负上外边距、页首分页、背景色和背景图、列表、表格和单元格宽度、大字号标题；另有 KEPUB 检查、质量门测试用书；2 卷 CBZ 漫画）同步到 kindle、ireader、kobo、hanvon、bigme 五种模式，90 份产物 sha256 全部相同，命令输出相同（去掉进度行）。另用测试用的 xochitl 配置（不认内边距、不画边框，盒子修正几乎每段都走到）对照 18 份产物，sha256 全部相同。版本号、`fp_golden.txt` 没动。
+  - **没跑真书回归、没上真机。** 这里是正文清洗路径，建议 vinci 按 `docs/development.md` 跑一次真书回归。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；建议一条：几段注释在方法上方和 `plan` 里各留一份（与验收看法一致，不影响行为，留待以后顺手精简）；线索无。见 `2026-11-16-split-box-plan.agy.md`。
 - 合并：
