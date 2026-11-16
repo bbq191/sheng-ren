@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-tests-out-three
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-tests-out-three（从最新 master `b33cf6f` 切出）
-- 更新时间: 2026-11-16T16:53:23+08:00
+- 更新时间: 2026-11-16T16:59:33+08:00
 - 引用: `2026-11-13-big-file-splits` 第 7、8、9 步
 
 ## 需求原文
@@ -76,7 +76,25 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T16:53:23+08:00–2026-11-16T16:59:33+08:00
+- base..head：`bcc27d0f4a234d8ff238083a55edf32d45c4e648..4e7c2151671168aa8076c43a99a067ee8613bc0f`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | ee70ae0 | chore: 开始执行任务单 2026-11-16-tests-out-three [skip-notify] |
+  | 9403bc1 | chore(bookconv): footnote.rs 的单元测试挪到子模块文件 |
+  | 45fb993 | chore(bookconv): kindle_rules.rs 的单元测试挪到子模块文件 |
+  | 4e7c215 | chore(library): metadata.rs 的单元测试挪到子模块文件 |
+- 改动文件：`.dev/tasks/2026-11-16-tests-out-three.md`,`crates/bookconv/src/htmlproc/footnote.rs` `crates/bookconv/src/htmlproc/footnote/footnote_inline_tests.rs`,`crates/bookconv/src/htmlproc/footnote/optimizer_footnote_tests.rs` `crates/bookconv/src/wash/kindle_rules.rs`,`crates/bookconv/src/wash/kindle_rules/tests.rs` `crates/library/src/metadata.rs`,`crates/library/src/metadata/tests.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-tests-out-three-20261116-165323.json`
+- 日志：`/home/box/oc-runs/2026-11-16-tests-out-three-20261116-165323.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 6.2 分钟（墙钟 370s / 实际运行 370s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
