@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-imgopt-tests-mod
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-imgopt-tests-mod（从最新 master `ef478be` 切出）
-- 更新时间: 2026-11-16T15:17:22+08:00
+- 更新时间: 2026-11-16T15:22:25+08:00
 - 引用: `2026-11-13-split-imgopt` 审查「建议（非阻断）」1、2，二审回执 `2026-11-13-split-imgopt.agy.md` 同两条
 
 ## 需求原文
@@ -76,7 +76,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T15:17:22+08:00–2026-11-16T15:22:25+08:00
+- base..head：`1c0d39c1449d3bc5aee786d0bd7379b37341acae..80e063cbf094bffe0c2d31b5719857e6049ea54a`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 711e5f3 | chore: 开始执行任务单 2026-11-16-imgopt-tests-mod [skip-notify] |
+  | 80e063c | chore(bookconv): imgopt 测试改用普通子模块，删掉重复的文档注释 |
+- 改动文件：`.dev/tasks/2026-11-16-imgopt-tests-mod.md`,`crates/bookconv/src/imgopt/tests/comic.rs` `crates/bookconv/src/imgopt/tests/dark.rs`,`crates/bookconv/src/imgopt/tests/formats.rs` `crates/bookconv/src/imgopt/tests/mod.rs`,`crates/bookconv/src/imgopt/tests/text.rs` `crates/bookconv/src/imgopt/tests/trim.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-imgopt-tests-mod-20261116-151722.json`
+- 日志：`/home/box/oc-runs/2026-11-16-imgopt-tests-mod-20261116-151722.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 5.0 分钟（墙钟 303s / 实际运行 303s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
