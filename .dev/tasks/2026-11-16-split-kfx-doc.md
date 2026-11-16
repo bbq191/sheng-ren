@@ -97,6 +97,13 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree）。
+  - 范围：只动了 `element.rs` 和三个新文件 `element/{computed,flow,list_table}.rs`；`parse.rs`、`docs.rs`、`blocks.rs`、`inline.rs` 没动。
+  - 结构：`element.rs` 1095→589 行，留块的入口和分派（`take_pending`、`block`、`block_inner`、`special_block`、`boxed`、`wrap_children`）；`computed.rs`（`comp`、`image_size`）、`flow.rs`（`inline`、`children`、`flush`、`flush_piece`、`inline_or_block`）、`list_table.rs`（`list`、`table`）。`inline_or_block` 158→约 95 行：图片分支抽成 `image`、空 inline-block 小方块抽成 `empty_inline_box`，调用处紧跟 `return`，`comp` 求值位置不变；`table` 127→约 45 行：抽出 `table_caption`、`table_section`、`table_row`、`table_cell`，列宽仍只在第一行算（`&mut Option<Vec<f64>>` 传下去），遍历顺序不变。
+  - 逐词核对：没拆的方法（`take_pending`、`inline`、`comp`、`image_size`、`block`、`block_inner`、`special_block`、`boxed`、`wrap_children`、`list`、`children`、`flush`、`flush_piece`）去掉空白和可见性修饰后与 master 逐字相同；`impl` 外的自由函数相同；拆开的两个方法逐段对读，语句、表达式、`RefCell`/`Cell`（`links`、`pending`、`gap`）的借用和 `take` 时机都没变，没有新增 `clone`。
+  - 可见性：`block`、`take_pending` 仍是 `pub(super)` 留在 `element.rs`；`comp`、`children` 原来就是 `pub(in crate::write)`，原样；其余原私有的方法挪进子模块后是 `pub(super)`（只对 `element` 可见），新抽出的辅助方法私有。没有放宽。（开单时「输入」漏列了 `comp`、`children` 两个方法，以代码为准。）
+  - 测试：kfx lib 53 项名字与 master 一致；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告，没加 `#[allow]`。
+  - 产物：master 与分支二进制对 18 本书（16 本文字书，含 2 本盒子样式、表格、列表、图片密集的书；2 卷 CBZ 漫画）同步到 kindle 模式，18 份 KFX sha256 全部相同；ireader、kobo、hanvon、bigme 顺带对照，五种模式共 90 份产物、加 xochitl 测试配置 18 份，全部相同，命令输出相同。版本号、`fp_golden.txt` 没动。
+  - **没跑真书回归、没上真机。** 这里是 KFX 写出路径，建议 vinci 按 `docs/development.md` 跑一次真书回归。
 - 二审：
 - 合并：
