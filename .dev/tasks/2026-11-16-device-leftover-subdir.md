@@ -115,7 +115,7 @@
 - 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
 - 遇到的问题：无
 - 偏离：无
-- 新建文件（线索）：无
+- 新建文件（线索）：`crates/library/tests/leftover.rs`（集成测试；负责 bot 验收时补记）
 - 未完成：无
 - 运行记录：`/home/box/oc-runs/2026-11-16-device-leftover-subdir-20261116-144109.json`
 - 日志：`/home/box/oc-runs/2026-11-16-device-leftover-subdir-20261116-144109.log`
@@ -135,3 +135,4 @@
   - `cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
   - 已知局限（任务单「不做什么」已列）：书被打断后立刻 `untrack`、那个目录再不放书时，残留仍清不掉。
   - 没跑真书回归、没上真机；设备一律用 `target/` 下的临时目录模拟。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-device-leftover-subdir.agy.md`。建议两条：「新建文件」漏记 `tests/leftover.rs`（已补）；改了 11-12 已定决策，需 vinci 确认（已在 decisions.md 标明，留给 vinci）。线索两条（进程号复用时残留晚清、计划目录与跟踪范围一致）都是预期行为。
