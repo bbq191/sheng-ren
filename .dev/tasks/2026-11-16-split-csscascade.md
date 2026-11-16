@@ -116,3 +116,4 @@
   - 测试：csscascade 16 项名字与 master 一致；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
   - 产物：master 与分支二进制对 4 本书（两本文字书含 CSS 简写、`@media`、`!important`、选择器、注释、表格、多种图片，两卷 CBZ 漫画）同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同，输出除路径外相同。版本号、`fp_golden.txt` 没动。
   - 没跑真书回归、没上真机。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议、线索都无。见 `2026-11-16-split-csscascade.agy.md`。
