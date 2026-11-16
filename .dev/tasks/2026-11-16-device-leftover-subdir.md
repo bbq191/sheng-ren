@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-device-leftover-subdir
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: oc-exec
 - 分支: task/2026-11-16-device-leftover-subdir（从 master `d36f605` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T15:10+08:00
+- 更新时间: 2026-11-16T14:41:09+08:00
 - 引用: `2026-11-12-lock-no-device` 验收「后续」与二审线索 1；`2026-11-12-device-tmp-pid-guard`（连接清理按进程号保护）
 
 ## 需求原文
