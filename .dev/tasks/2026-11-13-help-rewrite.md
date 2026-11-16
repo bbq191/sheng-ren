@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-help-rewrite
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: 待定
 - 分支: task/2026-11-13-help-rewrite（从已合并 track-listing 的最新 master 切出）
-- 更新时间: 2026-11-14T23:20:33+08:00
+- 更新时间: 2026-11-16T13:35:42+08:00
 - 引用: vinci 2026-11-13 在 sheng-ren 聊天里：「booklib --help 的帮助信息请重写，结构太混乱，说明不清晰」。**待 2026-11-13-track-listing 合并后再开跑**（track 的帮助已由那张单按「用法 → 参数 → 放法例子 → 重复 track 规则 → 例子」重写，本单只做风格统一，不要回退那张单的写法与语义）。
 
 ## 需求原文
@@ -97,3 +97,5 @@
   - 未跑真书回归、未上真机（只改帮助文字，不影响产物）。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-13-help-rewrite.agy.md`。建议两条：补任务单元数据与验收记录、注明 `meta_edit.rs` 偏离属预期整理（本次都已补）。无线索。
 - 合并：f2b48c0（`--no-ff` 进 master，合并后 test 842 通过、clippy 0 警告）。远端任务分支保留未删。
+
+- 最终验收：**通过**（vinci 2026-11-16 13:35 +08:00 在 sheng-ren 聊天告知：在 master `97f70b0` 上做了真机回归测试，没有发现问题）。状态改为 verified。

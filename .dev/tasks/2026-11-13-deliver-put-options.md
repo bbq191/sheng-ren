@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-deliver-put-options
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent
 - 分支: task/2026-11-13-deliver-put-options（从最新 master 切出）
-- 更新时间: 2026-11-13T10:25+08:00
+- 更新时间: 2026-11-16T13:35:42+08:00
 - 引用: 2026-11-12-quality-audit 发现 7（「核实与分组」建议单 `deliver-put-options`）
 
 ## 需求原文
@@ -84,3 +84,5 @@
   - 阻断：无。合并前按二审建议修正了 `PutOptions.keep_src` 注释反义（`9a1e3d8`）：原写「放好之后删掉来源」，实际 `true` 是保留来源。
 - 二审：**无阻断**（agy-review，2026-11-13 10:22 +08:00，模型 gemini-3.8-flash-medium，用时 147s，回执 `4c07c09`）。结论「建议通过」。负责 bot 已读回执并核对引用：建议 1（keep_src 注释）已核实并修正；建议 2–4（结果漏免责声明、「偏离」误填、提交列表滞后和复选框）在本栏和结果栏补正，不挡合并；线索（负责 bot 重跑测试）已在验收中完成。未核实项只有真书回归和真机。
 - 合并：`ab68bda`（2026-11-13 10:24 +08:00，`--no-ff` 合入当时 origin/master `cc7a372`）。合并后再跑 `cargo test --workspace` 全过（计数与验收相同）。已推 origin/master。状态保持 **done**（不是 verified），**待 vinci 验收后改 verified**。没跑真书回归、没上真机（纯重构，待本机回归确认产物逐字节不变）。
+
+- 最终验收：**通过**（vinci 2026-11-16 13:35 +08:00 在 sheng-ren 聊天告知：在 master `97f70b0` 上做了真机回归测试，没有发现问题）。状态改为 verified。

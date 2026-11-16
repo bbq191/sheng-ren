@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-library-error-kinds
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent
 - 分支: task/2026-11-13-library-error-kinds（从最新 master 切出）
-- 更新时间: 2026-11-13T10:43+08:00
+- 更新时间: 2026-11-16T13:35:42+08:00
 - 引用: 2026-11-12-quality-audit 发现 11
 
 ## 需求原文
@@ -99,3 +99,5 @@
   - 阻断：无。
 - 二审：**无阻断**（agy-review，2026-11-13 10:41 +08:00，模型 gemini-3.8-flash-medium，用时 297s，回执 `8a72b03`）。结论「建议通过」。负责 bot 已读回执并核对引用：建议 1（结果漏免责声明、「偏离」误填、提交列表滞后）在本栏和结果栏补正，不挡合并；建议 2（给 Busy / Unmounted 补单元断言）不挡合并，未在本单加测；线索（`generate.rs` 里 `UNMOUNTED` 注释贴在 `SpaceCheck` 上方）是 master 上原有的错位，本次未改，不在范围。未核实项只有真书回归和真机；测试由负责 bot 已重跑。
 - 合并：`89715dc`（2026-11-13 10:43 +08:00，`--no-ff` 合入当时 origin/master `eb694da`）。合并后再跑 `cargo test --workspace` 全过（计数与验收相同）。已推 origin/master。状态保持 **done**（不是 verified），**待 vinci 验收后改 verified**。没跑真书回归、没上真机（纯重构，待本机回归确认产物逐字节不变）。
+
+- 最终验收：**通过**（vinci 2026-11-16 13:35 +08:00 在 sheng-ren 聊天告知：在 master `97f70b0` 上做了真机回归测试，没有发现问题）。状态改为 verified。

@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-profile-tests-split
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent（oc-exec）
 - 分支: task/2026-11-13-profile-tests-split（从最新 master 切出）
-- 更新时间: 2026-11-13T13:53:12+08:00
+- 更新时间: 2026-11-16T13:35:42+08:00
 - 引用: 2026-11-12-quality-audit 发现 14 的一部分（「核实与分组」建议单 `profile-tests-split`）
 
 ## 需求原文
@@ -76,3 +76,5 @@
   - 阻断：无。
 - 二审：**无阻断**（agy-review，2026-11-13 13:51:30 Asia/Shanghai，模型 gemini-3.8-flash-medium，用时 52s，回执 `.dev/tasks/2026-11-13-profile-tests-split.agy.md`）。结论「建议通过」。负责 bot 已读回执并核对引用：`lib.rs:1122-1123` 的 `mod tests;`、`tests.rs` 1–757 行与 19 个测试及 `temp_profile_dir`、kobo 的 `include_str!` 在 710 行，均核实。ireader 的 `include_str!` 实际在 675 行，回执写成 665，差 10 行，路径与内容核对无误。建议与线索均无。未核实项只有 agy 未亲自跑测试与 clippy（验收与合并后已重跑）。
 - 合并：`4ab7903`（2026-11-13 13:52 Asia/Shanghai，`--no-ff` 合入当时 origin/master `145d9d9`）。合并后再跑 `cargo test --workspace` 全过（计数与验收相同），`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。已推 origin/master。状态保持 **done**（不是 verified），**待 vinci 验收后改 verified**。没跑真书回归、没上真机（纯重构，待本机回归确认产物逐字节不变）。未删除远程任务分支。
+
+- 最终验收：**通过**（vinci 2026-11-16 13:35 +08:00 在 sheng-ren 聊天告知：在 master `97f70b0` 上做了真机回归测试，没有发现问题）。状态改为 verified。

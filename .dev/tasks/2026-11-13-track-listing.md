@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-13-track-listing
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: box-agent（oc-exec）；验收 sheng-ren 独立执行方
 - 分支: task/2026-11-13-track-listing（从最新 master 切出）
-- 更新时间: 2026-11-14T09:50:00+08:00
+- 更新时间: 2026-11-16T13:35:42+08:00
 - 引用: vinci 2026-11-13 在 sheng-ren 聊天里：改 `booklib track` 列表文字（不再写「从这一层起」，改成直接写设备上放在哪）；`track --device=x` 不给路径时只列这几台；重写 `booklib track` 的帮助。`booklib --help` 与其他子命令的帮助由 2026-11-13-help-rewrite 另开，本单不碰。
 
 ## 需求原文
@@ -109,3 +109,5 @@
   - 未跑真书回归、未上真机（只改文案、列表过滤与帮助，不影响产物）。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-13-track-listing.agy.md`。建议两条为补任务单元数据与验收记录（本次已补）；线索：help-rewrite 改帮助时留意 track 帮助烟测断言为 `] untrack `。
 - 合并：1a2679d（`--no-ff` 进 master，合并后 test 842 通过、clippy 0 警告）。远端任务分支保留未删。
+
+- 最终验收：**通过**（vinci 2026-11-16 13:35 +08:00 在 sheng-ren 聊天告知：在 master `97f70b0` 上做了真机回归测试，没有发现问题）。状态改为 verified。

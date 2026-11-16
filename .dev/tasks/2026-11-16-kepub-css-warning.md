@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-kepub-css-warning
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: 待定
 - 分支: task/2026-11-16-kepub-css-warning（从 master `7c1399f` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T11:12:30+08:00
+- 更新时间: 2026-11-16T13:35:42+08:00
 - 引用: vinci 2026-11-16 在 sheng-ren 聊天里反馈 kobo sync 时「好多的 ⚠ KEPUB：书里的 CSS 有裸 div/span 或 body > 选择器……」警告；负责 bot 给了三种处理，vinci 选「按 1+2 开单」。
 
 ## 需求原文
@@ -148,3 +148,5 @@
   - 同类按书重复的提醒（线索，本单未改）：`⚠ 体检：…`（`audit::summary`，掌阅文字书每本一两行）、`⚠ 质量门未过…`（每本每条错误一行，KEPUB 另有一份）、KFX 写出器的 warnings（如「目录项找不到位置：…」）。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-kepub-css-warning.agy.md`。建议两条都已处理：「结果」补上验收修正的提交；`layout_prop` 里走不到的 `background` 前缀已删（54e47a2）。线索两条（`:nth-child(2n+1)` 显示加空格、`div::before` 多报）与验收时记下的一致，不改。
 - 合并：f0f84c1（`--no-ff` 进 master，合并后 test 845 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后清理。
+
+- 最终验收：**通过**（vinci 2026-11-16 13:35 +08:00 在 sheng-ren 聊天告知：在 master `97f70b0` 上做了真机回归测试，没有发现问题）。状态改为 verified。
