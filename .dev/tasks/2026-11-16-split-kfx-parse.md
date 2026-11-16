@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-kfx-parse
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-kfx-parse（从最新 master 切出）
-- 更新时间: 2026-11-16T16:25:50+08:00
+- 更新时间: 2026-11-16T16:25:52+08:00
 - 引用: `2026-11-13-big-file-splits` 分步 4；拆法参照 `2026-11-16-split-box-fix`（`box_fix.rs` + `box_fix/` 子目录）
 
 ## 需求原文
