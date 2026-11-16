@@ -112,12 +112,16 @@
 
 ## 结果
 - 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T10:58:26+08:00–2026-11-16T11:12:30+08:00
-- base..head：`55ac7228d10bbe25b59aa8b3a904e2beebe77b96..cd0dfaffba97d17ee4434a7c46d407f715cd484d`
+- base..head：`55ac7228d10bbe25b59aa8b3a904e2beebe77b96..cd0dfaffba97d17ee4434a7c46d407f715cd484d`（执行方到 `cd0dfaf`，验收修正见下表）
 - 提交：
   | 提交号 | 说明 |
   |---|---|
   | 3df4059 | chore: 开始执行任务单 2026-11-16-kepub-css-warning [skip-notify] |
   | cd0dfaf | fix(kepub): CSS 提醒判得更准，并按轮汇总成一行 |
+  | 4a1c06d | chore: 填写任务单 2026-11-16-kepub-css-warning 结果（done） [skip-notify] |
+  | 4e08fab | fix(kepub): 背景只看底色和底图，不再把 background:none 当成会改版面（验收修正） |
+  | 4ad6145 | chore: 任务单填写验收记录 [skip-notify] |
+  | 54e47a2 | fix(kepub): 去掉 layout_prop 里走不到的 background 前缀（二审建议） |
 - 改动文件：`.dev/tasks/2026-11-16-kepub-css-warning.md`,`crates/bookconv/src/bin/epub_to_kepub.rs` `crates/bookconv/src/kepub.rs`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/generate/produce.rs`,`crates/library/tests/cli.rs` `crates/library/tests/common/mod.rs`,`docs/kepub.md` `docs/usage.md`
 - 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
 - 遇到的问题：无
@@ -142,3 +146,5 @@
   - `cargo test --workspace` 845 通过 0 失败；clippy `-D warnings` 0 警告。
   - 未跑真书回归、未上真机（只改提醒的判定和报告，KEPUB 产物不变）。
   - 同类按书重复的提醒（线索，本单未改）：`⚠ 体检：…`（`audit::summary`，掌阅文字书每本一两行）、`⚠ 质量门未过…`（每本每条错误一行，KEPUB 另有一份）、KFX 写出器的 warnings（如「目录项找不到位置：…」）。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-kepub-css-warning.agy.md`。建议两条都已处理：「结果」补上验收修正的提交；`layout_prop` 里走不到的 `background` 前缀已删（54e47a2）。线索两条（`:nth-child(2n+1)` 显示加空格、`div::before` 多报）与验收时记下的一致，不改。
+- 合并：（待填）
