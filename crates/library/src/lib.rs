@@ -56,7 +56,7 @@ pub use cover::{CoverInfo, CoverResult};
 pub use deliver::DeviceEnv;
 pub use error::Error;
 pub use fsutil::Lock;
-pub use generate::{Built, OutputStatus, SpaceCheck, Step};
+pub use generate::{Built, OutputStatus, SpaceCheck, Step, AUDIT_WARNING, GATE_WARNING, KFX_WARNING};
 pub use metadata::{BookInfo, Edition, InfoResult};
 pub use profile::{Format, Profile, Registry, VerticalAscii};
 pub use sources::{

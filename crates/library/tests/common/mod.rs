@@ -186,6 +186,26 @@ pub fn sample_epub_with_css(title: &str, css: &str) -> Vec<u8> {
     w.finish().unwrap().into_inner()
 }
 
+/// 目录 href 全部指向不存在的文件的文字书（质量门「目录 href 文件命中率过低」的集成测试用）。
+pub fn sample_epub_bad_toc(title: &str) -> Vec<u8> {
+    let raw = sample_epub(title);
+    let entries = bookconv::epubzip::read_entries(&raw).unwrap();
+    let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    for e in &entries {
+        if e.name == "mimetype" {
+            continue;
+        }
+        if e.name.ends_with("nav.xhtml") {
+            let s = String::from_utf8_lossy(&e.data)
+                .replace("chap_0001.xhtml", "missing_chapter.xhtml");
+            w.put(&e.name, s.as_bytes()).unwrap();
+        } else {
+            w.put(&e.name, &e.data).unwrap();
+        }
+    }
+    w.finish().unwrap().into_inner()
+}
+
 pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
     let mut out = Vec::new();
     image::codecs::jpeg::JpegEncoder::new(&mut out)

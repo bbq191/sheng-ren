@@ -424,10 +424,8 @@ fn audit_findings_are_kept_in_the_generation_record() {
         panic!()
     };
     assert!(
-        warnings.iter().any(|w| w.starts_with(
-            "体检：ireader 上和 Kindle 不一样、没处理：行内 margin-left（px，list）×2"
-        )),
-        "{warnings:?}"
+        warnings.iter().any(|w| w == library::AUDIT_WARNING),
+        "sync 只认标记（一轮汇总一行），明细在生成记录里：{warnings:?}"
     );
     let out = lib.outputs(&m);
     let audit = &out.iter().find(|o| o.device == "ireader").unwrap().audit;
