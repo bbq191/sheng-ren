@@ -105,5 +105,5 @@
   - 测试：kfx lib 53 项名字与 master 一致；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告，没加 `#[allow]`。
   - 产物：master 与分支二进制对 18 本书（16 本文字书，含 2 本盒子样式、表格、列表、图片密集的书；2 卷 CBZ 漫画）同步到 kindle 模式，18 份 KFX sha256 全部相同；ireader、kobo、hanvon、bigme 顺带对照，五种模式共 90 份产物、加 xochitl 测试配置 18 份，全部相同，命令输出相同。版本号、`fp_golden.txt` 没动。
   - **没跑真书回归、没上真机。** 这里是 KFX 写出路径，建议 vinci 按 `docs/development.md` 跑一次真书回归。
-- 二审：
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议都无；线索一条：执行方「结果」里没单独列调用关系和行数表（已在验收记录里补上）。见 `2026-11-16-split-kfx-doc.agy.md`。
 - 合并：
