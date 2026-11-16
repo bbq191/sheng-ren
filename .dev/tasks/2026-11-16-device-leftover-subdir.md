@@ -130,10 +130,10 @@
   - **第一次 sync 就清**：Kobo、ireader 各一个用例，断言第一次 sync 前这台没有生成记录。box 上复现对照（`target/leftover-repro2`，Kobo，新子目录预放死进程临时文件 + `.tmp-我的笔记.txt` + 计划外目录的合格式临时文件）：master 第一次 sync 残留还在、第二次把残留和用户的 `.tmp-我的笔记.txt` 一起删了；本分支第一次就清掉残留，两次 sync 后用户文件和计划外目录都在。
   - 清理仍在 `device_op` 里、生成和传输之前、每次连接一次；每删一个 `stall::beat()`。电脑上的加锁清理（`clean_tmp`、`clean_tmp_files`）没改。
   - 产物：改动前 master（`c5b611e`）与本分支二进制对 2 本小书 `sync --device=ireader,kobo`（普通目录当设备、`BOOKLIB_MTP_NO_MOUNT_CHECK=1`）共 4 份产物逐字节相同，输出除路径外相同；kindle 要挂载检查、普通目录接不上，没对照（同是 USB 存储路径，与 Kobo 同一段代码）。版本号、`fp_golden.txt`、指纹构成都没动；没有新出现上游项目名。
-  - 文档：`architecture.md`、`usage.md` 同步；`decisions.md` 新增一行，写明修改 11-12 `device-tmp-pid-guard` 行里「名字不合规的照删」（设备上改为不碰），原行未删——**这是改了一条已定决策，等 vinci 确认**。
+  - 文档：`architecture.md`、`usage.md` 同步；`decisions.md` 新增一行，写明修改 11-12 `device-tmp-pid-guard` 行里「名字不合规的照删」（设备上改为不碰），原行未删——这是改了一条已定决策；**vinci 2026-11-16 已确认保留**（sheng-ren 聊天：「3. 保留这次的改动」）。
   - 发现并修正（fix 提交 `5378dd5`）：`--watch` 同一连接后续轮次不清理，但每轮仍把所有书的计划目录算一遍；改为传闭包，真要清时才算，行为不变。
   - `cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
   - 已知局限（任务单「不做什么」已列）：书被打断后立刻 `untrack`、那个目录再不放书时，残留仍清不掉。
   - 没跑真书回归、没上真机；设备一律用 `target/` 下的临时目录模拟。
-- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-device-leftover-subdir.agy.md`。建议两条：「新建文件」漏记 `tests/leftover.rs`（已补）；改了 11-12 已定决策，需 vinci 确认（已在 decisions.md 标明，留给 vinci）。线索两条（进程号复用时残留晚清、计划目录与跟踪范围一致）都是预期行为。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-device-leftover-subdir.agy.md`。建议两条：「新建文件」漏记 `tests/leftover.rs`（已补）；改了 11-12 已定决策，需 vinci 确认（已在 decisions.md 标明；vinci 2026-11-16 已确认保留）。线索两条（进程号复用时残留晚清、计划目录与跟踪范围一致）都是预期行为。
 - 合并：92b9e75（`--no-ff` 进 master；master 合并前没动，合并树与已验收的分支末端 `98bfdc9` 相同：test 864 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后删除。状态保持 done，等 vinci 真机验收。
