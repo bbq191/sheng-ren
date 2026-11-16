@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-box-plan
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-box-plan（从最新 master 切出）
-- 更新时间: 2026-11-16T17:25:00+08:00
+- 更新时间: 2026-11-16T17:10:02+08:00
 - 引用: `2026-11-16-split-box-fix` 审查里留下的「拆不动的大函数」；`2026-11-13-big-file-splits`
 
 ## 需求原文
