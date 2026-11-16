@@ -112,3 +112,4 @@
   - 产物：master 与分支二进制对 4 本书同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同，输出除路径外相同。另把测试用的 `xochitl`（Move）配置放进临时书库的 `profiles/` 当自定义模式（box_fix 主要在它上面生效），同样 4 本生成的 4 份产物 sha256 全部相同（文字书乙生成了 `eink-box.css`，确认 box_fix 走到了）。版本号、`fp_golden.txt` 没动。
   - 已知局限：`plan` 一个函数约 880 行，`box_fix.rs` 仍有 1119 行；再拆就要改控制流，不是只挪代码，留给 vinci 决定要不要另开单。
   - 没跑真书回归、没上真机。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；无阻断、无建议。线索一条（`list_indent_extra_px` 没向 `wash` 再导出）：拆前就是 `box_fix` 私有函数、`wash/mod.rs` 只在注释里提到，可见性与 master 一致，不用改（开单时「输入」里写它要照旧能用，说得宽了）。见 `2026-11-16-split-box-fix.agy.md`。
