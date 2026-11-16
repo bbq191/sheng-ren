@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-kepub-css-warning
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-16-kepub-css-warning（从 master `7c1399f` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T10:58:26+08:00
+- 更新时间: 2026-11-16T11:12:30+08:00
 - 引用: vinci 2026-11-16 在 sheng-ren 聊天里反馈 kobo sync 时「好多的 ⚠ KEPUB：书里的 CSS 有裸 div/span 或 body > 选择器……」警告；负责 bot 给了三种处理，vinci 选「按 1+2 开单」。
 
 ## 需求原文
@@ -111,7 +111,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T10:58:26+08:00–2026-11-16T11:12:30+08:00
+- base..head：`55ac7228d10bbe25b59aa8b3a904e2beebe77b96..cd0dfaffba97d17ee4434a7c46d407f715cd484d`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 3df4059 | chore: 开始执行任务单 2026-11-16-kepub-css-warning [skip-notify] |
+  | cd0dfaf | fix(kepub): CSS 提醒判得更准，并按轮汇总成一行 |
+- 改动文件：`.dev/tasks/2026-11-16-kepub-css-warning.md`,`crates/bookconv/src/bin/epub_to_kepub.rs` `crates/bookconv/src/kepub.rs`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/generate/produce.rs`,`crates/library/tests/cli.rs` `crates/library/tests/common/mod.rs`,`docs/kepub.md` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-kepub-css-warning-20261116-105826.json`
+- 日志：`/home/box/oc-runs/2026-11-16-kepub-css-warning-20261116-105826.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 14.1 分钟（墙钟 844s / 实际运行 844s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
