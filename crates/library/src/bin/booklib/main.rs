@@ -776,19 +776,30 @@ struct WarningSummary {
     kepub_css: WarnedBooks,
 }
 
-/// 同一类提醒命中的书：`(设备, 产物路径)` 去重，记着书名（汇总行里列前几本）。
+/// 同一类提醒命中的书：`(设备, 产物路径)` 去重；按书名归并，同一本书在几台上都命中只算一本、列出是哪几台
+/// （以前按产物计，一本书三台都没过质量门会算成 3 本，前 5 个名额被同一本占掉，别的书就看不到了）。
+/// 只认得书名（`BuildEvent::Built` 不带书的 id）：两本同名的书会合成一项，汇总行只是指个方向，明细以 `list` 为准。
 #[derive(Default)]
 struct WarnedBooks {
-    /// 先来的在前：汇总行列前 5 本按这个顺序（同一轮里顺序稳定）。
-    books: Vec<(String, PathBuf, String)>,
+    /// 先来的在前：(书名, 命中的设备)。汇总行列前 5 本按这个顺序（同一轮里顺序稳定）。
+    books: Vec<(String, Vec<String>)>,
     seen: HashSet<(String, PathBuf)>,
 }
 
 impl WarnedBooks {
     fn insert(&mut self, device: &str, path: &Path, title: &str) {
-        if self.seen.insert((device.to_string(), path.to_path_buf())) {
-            self.books
-                .push((device.to_string(), path.to_path_buf(), title.to_string()));
+        if !self.seen.insert((device.to_string(), path.to_path_buf())) {
+            return;
+        }
+        match self.books.iter_mut().find(|(t, _)| t == title) {
+            Some((_, devs)) => {
+                if !devs.iter().any(|d| d == device) {
+                    devs.push(device.to_string());
+                }
+            }
+            None => self
+                .books
+                .push((title.to_string(), vec![device.to_string()])),
         }
     }
 
@@ -800,27 +811,14 @@ impl WarnedBooks {
         self.books.is_empty()
     }
 
-    /// 汇总行里的书名：最多列 5 本，多的写「等 N 本」（N 是这一类一共几本）；同名的带上设备。
+    /// 汇总行里的书名：最多列 5 本，每本带上命中的设备，多的写「等 N 本」（N 是这一类一共几本）。
     fn titles(&self) -> String {
         const SHOW: usize = 5;
-        let mut dup = HashSet::new();
-        let mut seen_titles = HashSet::new();
-        for (_, _, t) in &self.books {
-            if !seen_titles.insert(t.as_str()) {
-                dup.insert(t.as_str());
-            }
-        }
         let shown: Vec<String> = self
             .books
             .iter()
             .take(SHOW)
-            .map(|(dev, _, t)| {
-                if dup.contains(t.as_str()) {
-                    format!("《{t}》[{dev}]")
-                } else {
-                    format!("《{t}》")
-                }
-            })
+            .map(|(t, devs)| format!("《{t}》[{}]", devs.join("、")))
             .collect();
         let mut out = shown.join("、");
         if self.len() > SHOW {
@@ -2182,6 +2180,33 @@ mod tests {
             lines[2].contains("KFX：1 本书") && lines[2].contains("《己》"),
             "{}",
             lines[2]
+        );
+    }
+
+    /// 同一本书在三台上都没过质量门：算 1 本，列出三台；不会把别的书挤出前 5 个名额。
+    #[test]
+    fn warning_summary_groups_devices_of_the_same_book() {
+        let mut summary = WarningSummary::default();
+        for title in ["丙", "乙"] {
+            for dev in ["ireader", "kindle", "kobo"] {
+                summary.observe(&BuildEvent::Built {
+                    device: dev.into(),
+                    title: title.into(),
+                    built: Built::Written {
+                        path: PathBuf::from(format!("/tmp/{dev}/{title}.epub")),
+                        warnings: vec![library::GATE_WARNING.to_string()],
+                    },
+                });
+            }
+        }
+        let lines = summary.lines();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("质量门未过：2 本书"), "{}", lines[0]);
+        assert!(
+            lines[0].contains("《丙》[ireader、kindle、kobo]")
+                && lines[0].contains("《乙》[ireader、kindle、kobo]"),
+            "{}",
+            lines[0]
         );
     }
 
