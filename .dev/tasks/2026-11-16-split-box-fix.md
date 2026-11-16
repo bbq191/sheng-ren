@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-box-fix
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-box-fix（从最新 master 切出）
-- 更新时间: 2026-11-16T16:08:51+08:00
+- 更新时间: 2026-11-16T16:17:33+08:00
 - 引用: `2026-11-13-big-file-splits` 分步 3；拆法参照 `2026-11-13-split-imgopt`（`imgopt.rs` + `imgopt/` 子目录）
 
 ## 需求原文
@@ -83,7 +83,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T16:08:51+08:00–2026-11-16T16:17:33+08:00
+- base..head：`b9724beb8f1b8842720d03fd33e9b0460539aa7d..3cf0d5c43298ebc797be0424d051cd3e2923506b`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | c0f6b8b | chore: 开始执行任务单 2026-11-16-split-box-fix [skip-notify] |
+  | 3cf0d5c | chore(wash): 拆 box_fix.rs 为 line/rewrite/tests 子模块 |
+- 改动文件：`.dev/tasks/2026-11-16-split-box-fix.md`,`crates/bookconv/src/wash/box_fix.rs` `crates/bookconv/src/wash/box_fix/line.rs`,`crates/bookconv/src/wash/box_fix/rewrite.rs` `crates/bookconv/src/wash/box_fix/tests.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-split-box-fix-20261116-160851.json`
+- 日志：`/home/box/oc-runs/2026-11-16-split-box-fix-20261116-160851.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 8.7 分钟（墙钟 522s / 实际运行 522s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
