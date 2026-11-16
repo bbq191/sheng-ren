@@ -112,3 +112,13 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16）。逐条核对：
+  - 三类来源与「输入」一致：体检＝`audit::summary`（只 ireader 这类开 `kindle_rules` 的文字书有，KFX 路径本来不打）；质量门＝`check_epub_file` 的 `errors`，只警告不拦、照常生成照常传，原来不进生成记录；KFX＝`epub_to_kfx_from` 的 warnings（图片取不到、目录项/链接找不到位置、spine 从右往左等），原来不进生成记录。三类都不进指纹。
+  - 判定没放宽：质量门两次检查照做，KEPUB 只去掉和优化产物文字完全相同的错误；KFX 只做完全相同去重和 20 条记录上限（sync 照样计这本书）；体检判定不动。
+  - 偏离 4 个文件逐个核对，都合理、不涉及产物和判定：`crates/library/src/generate.rs`、`crates/library/src/lib.rs` 只是把三个标记常量 `AUDIT_WARNING`/`GATE_WARNING`/`KFX_WARNING` 导出给 `booklib` 认；`crates/library/tests/flow.rs` 的 `audit_findings_are_kept_in_the_generation_record` 原来断言逐本的体检文字，改成断言标记，生成记录里体检清单的断言保留，意图没变；`docs/architecture.md` 的 `audit` 一行同步成「按轮汇总、清单进生成记录」。
+  - 实跑（`target/noisetest` 临时书库，设备目录指到临时目录，`--device=ireader,kobo,kindle`，5 本小书：普通、目录 href 指向不存在的文件、引用不存在的图、列表项行内 px 左边距、死锚点）：改动前逐本打 ⚠ 共 15 行（其中 kobo 的质量门 KEPUB 原样重报 3 行）；改动后逐本行下面都没有，末尾三行汇总：体检 1 本、质量门 2 本（带书名和设备）、KFX 1 本（带书名）。`list` 在对应书下逐条显示「提醒 ⚠ 质量门未过：…」「提醒 ⚠ KFX：…」，KEPUB 不重复。
+  - 产物：改动前 master（`7fbc1c2`）release 二进制与改动后对同样 5 本、三台共 15 份产物（ireader EPUB 5、kobo KEPUB 5、kindle KFX 5）逐字节相同。
+  - 版本号、指纹构成、`fp_golden.txt` 都没动；没有新出现上游项目名。
+  - 发现并修正（fix 提交）：汇总按（设备, 路径）计数，一本书三台都没过质量门算成 3 本、前 5 个名额被同一本占掉、另一本看不到。改为按书名归并、列出命中设备，本数按书计；补单测 `warning_summary_groups_devices_of_the_same_book`，docs/usage.md 同步。已知局限：`BuildEvent::Built` 不带书 id，两本同名的书在汇总行里会合成一项（明细以 `list` 为准）。
+  - `cargo test --workspace` 851 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 未跑真书回归、未上真机（只改提醒的记录和显示，产物不变）。
