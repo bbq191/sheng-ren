@@ -157,6 +157,35 @@ pub fn sample_epub_with(title: &str, marker: &str) -> Vec<u8> {
     assemble(&mut book).unwrap()
 }
 
+/// 带一份外链样式表的样本书：`css` 写进 `OEBPS/style.css`，各章的 `<head>` 里链上（KEPUB 提醒的测试用）。
+pub fn sample_epub_with_css(title: &str, css: &str) -> Vec<u8> {
+    let raw = sample_epub(title);
+    let entries = bookconv::epubzip::read_entries(&raw).unwrap();
+    let mut w = bookconv::epubzip::EpubWriter::new(std::io::Cursor::new(Vec::new())).unwrap();
+    for e in &entries {
+        if e.name == "mimetype" {
+            continue;
+        }
+        if e.name.ends_with(".xhtml") {
+            let s = String::from_utf8_lossy(&e.data).replace(
+                "</head>",
+                r#"<link rel="stylesheet" type="text/css" href="style.css"/></head>"#,
+            );
+            w.put(&e.name, s.as_bytes()).unwrap();
+        } else if e.name.ends_with(".opf") {
+            let s = String::from_utf8_lossy(&e.data).replace(
+                "</manifest>",
+                r#"<item id="style" href="style.css" media-type="text/css"/></manifest>"#,
+            );
+            w.put(&e.name, s.as_bytes()).unwrap();
+        } else {
+            w.put(&e.name, &e.data).unwrap();
+        }
+    }
+    w.put("OEBPS/style.css", css.as_bytes()).unwrap();
+    w.finish().unwrap().into_inner()
+}
+
 pub fn jpeg(w: u32, h: u32) -> Vec<u8> {
     let mut out = Vec::new();
     image::codecs::jpeg::JpegEncoder::new(&mut out)

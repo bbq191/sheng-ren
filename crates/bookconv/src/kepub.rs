@@ -18,6 +18,11 @@ use crate::html::{self, TagKind};
 /// 写出器版本：改了产物的写法就加一（进书库指纹，旧产物按需重建）。
 pub const VERSION: u32 = 2;
 
+/// 「CSS 可能作用到新加的包装 / koboSpan」这条提醒的原文。书库 `sync` 认这个字符串：不逐本打，一轮汇总成一行
+/// （哪几本用 `booklib list` 看）。判定和措辞改了要一起改 [`Report::risky_css`] 的说明。
+pub const RISKY_CSS_WARNING: &str =
+    "KEPUB：书里的 CSS 可能作用到新加的包装或 koboSpan（只提醒，没改 CSS）";
+
 /// 包装的开头、结尾。
 const WRAP_OPEN: &str = r#"<div id="book-columns"><div id="book-inner">"#;
 const WRAP_CLOSE: &str = "</div></div>";
@@ -63,6 +68,9 @@ pub struct Report {
     /// 加的 koboSpan 数。
     pub spans: usize,
     pub warnings: Vec<String>,
+    /// 书**自己的** CSS 里可能作用到新加的包装（`div`）或 koboSpan（`span`）的选择器：命中的选择器原文
+    /// （组合符两边一个空格，去重），最多 [`RISKY_CSS_MAX`] 条。只提醒，不改 CSS。
+    pub risky_css: Vec<String>,
 }
 
 /// 一个原文字符：在文本里的字节范围（字符引用 `&…;` 整个算一个）和解码后的字符。
@@ -414,37 +422,219 @@ fn transform_xhtml_inner(
     Some((html::apply_edits(doc, all), spans))
 }
 
-/// 书里的 CSS 有没有裸 `div`/`span` 类型选择器或 `body >` 子代选择器（会匹配到新加的包装、koboSpan，Kobo 官方 epub-spec
-/// 也这样提醒）。按 csscascade 切规则、选择器（at 规则里的也看）；只提醒，不改。
-fn risky_selectors(css: &str) -> bool {
-    use crate::cascade::{rule_selector, rule_spans, split_top};
+/// 一条规则的判定最多留几条命中的选择器（够看出是什么写法）。
+const RISKY_CSS_MAX: usize = 3;
+
+/// 影响版面的属性（展开简写以后按前缀认，大小写不敏感）：盒子的大小、边距、边框，背景，排布，行与缩进。
+/// 只改颜色、字体、对齐这类的不算（vinci 2026-11-16 定的范围）。已知取舍、**不是「无害」**：`span{font-size:.8em}`
+/// 会套到每句的 koboSpan 上让正文变小、嵌套时还会叠乘，按定的范围不报。
+fn layout_prop(prop: &str) -> bool {
+    let p = prop.to_ascii_lowercase();
+    // 圆角不改变盒子大小、位置（清单里不含 `border-*-radius`）
+    if p.starts_with("border-") && p.ends_with("-radius") {
+        return false;
+    }
+    const PREFIX: [&str; 6] = [
+        "margin",
+        "padding",
+        "border",
+        "background",
+        "overflow",
+        "column",
+    ];
+    const EXACT: [&str; 20] = [
+        "width",
+        "height",
+        "min-width",
+        "min-height",
+        "max-width",
+        "max-height",
+        "box-sizing",
+        "display",
+        "position",
+        "top",
+        "right",
+        "bottom",
+        "left",
+        "float",
+        "clear",
+        "transform",
+        "text-indent",
+        "line-height",
+        "vertical-align",
+        "columns",
+    ];
+    EXACT.contains(&p.as_str()) || PREFIX.iter().any(|x| p.starts_with(x))
+}
+
+/// 值是不是和元素缺省一样、套到包装 / koboSpan 上也不改版面：所有长度为 0 的值、几个中性关键字，
+/// `display` 等于元素本来的值（包装是 `div`，koboSpan 是 `span`）。
+fn harmless_value(prop: &str, value: &str, tag: &str) -> bool {
+    let v = value.trim().to_ascii_lowercase();
+    if matches!(
+        v.as_str(),
+        "none"
+            | "auto"
+            | "normal"
+            | "transparent"
+            | "initial"
+            | "inherit"
+            | "unset"
+            | "static"
+            | "baseline"
+    ) {
+        return true;
+    }
+    if prop.eq_ignore_ascii_case("display") {
+        return (tag == "div" && v == "block") || (tag == "span" && v == "inline");
+    }
+    zero_length(&v)
+}
+
+/// 长度是 0（`0`、`0em`、`0px`、`0%`…）。`calc()` 之类认不出的按「不是 0」算，宁可多报。
+fn zero_length(v: &str) -> bool {
+    let n = v
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '+' | '-')))
+        .unwrap_or(v.len());
+    let (num, unit) = v.split_at(n);
+    let Ok(x) = num.parse::<f64>() else {
+        return false;
+    };
+    x == 0.0
+        && matches!(
+            unit.trim(),
+            "" | "em"
+                | "ex"
+                | "ch"
+                | "rem"
+                | "px"
+                | "pt"
+                | "pc"
+                | "cm"
+                | "mm"
+                | "in"
+                | "q"
+                | "%"
+                | "vh"
+                | "vw"
+                | "vmin"
+                | "vmax"
+                | "lh"
+                | "rlh"
+        )
+}
+
+/// `border:none`（没写样式）展开后仍带缺省的 `medium` 宽度：那一边的宽度、颜色不算。
+fn border_side_off(prop: &str, decls: &[crate::cascade::Decl]) -> bool {
+    let Some(rest) = prop.strip_prefix("border-") else {
+        return false;
+    };
+    let Some((side, kind)) = rest.split_once('-') else {
+        return false;
+    };
+    if kind != "width" && kind != "color" {
+        return false;
+    }
+    decls.iter().any(|d| {
+        d.prop.eq_ignore_ascii_case(&format!("border-{side}-style"))
+            && matches!(
+                d.value.trim().to_ascii_lowercase().as_str(),
+                "none" | "hidden"
+            )
+    })
+}
+
+/// 规则里的声明有没有一条会改版面、且值不是无害值。
+fn decls_hurt(decls: &[crate::cascade::Decl], tag: &str) -> bool {
+    decls.iter().any(|d| {
+        layout_prop(&d.prop)
+            && !harmless_value(&d.prop, &d.value, tag)
+            && !border_side_off(&d.prop, decls)
+    })
+}
+
+/// 这条选择器（一个逗号分项）会不会作用到新加的包装 / koboSpan。
+/// - 裸 `div`/`span` 类型选择器（可带伪类）：声明里有影响版面的属性、值又不是无害值才算（包装、koboSpan 会套上这些值）；
+/// - `body >` 子代：插了包装以后原来的元素不再是 body 的直接孩子，规则只会匹配包装本身，风险是「规则失效」，
+///   所以不看值，有影响版面的属性就算。
+fn selector_risky(one: &str, decls: &[crate::cascade::Decl]) -> bool {
     let is_type = |simple: &str, ty: &str| {
         let base = simple.split(['.', '#', ':', '[']).next().unwrap_or("");
         local(base.trim_start_matches('|')).eq_ignore_ascii_case(ty)
     };
-    rule_spans(css).iter().any(|r| {
+    let bare = |p: &str, ty: &str| {
+        is_type(p, ty) && (p.len() == ty.len() || p[ty.len()..].starts_with(':'))
+    };
+    // 复合选择器序列：按组合符切开，组合符单独成项
+    let spaced = one
+        .replace('>', " > ")
+        .replace('+', " + ")
+        .replace('~', " ~ ");
+    let parts: Vec<&str> = spaced.split_whitespace().collect();
+    for (k, p) in parts.iter().enumerate() {
+        if (bare(p, "div") && decls_hurt(decls, "div"))
+            || (bare(p, "span") && decls_hurt(decls, "span"))
+        {
+            return true;
+        }
+        if is_type(p, "body")
+            && parts.get(k + 1) == Some(&">")
+            && decls.iter().any(|d| layout_prop(&d.prop))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// 命中选择器的写法：组合符两边留一个空格，多余空白去掉。
+fn norm_selector(one: &str) -> String {
+    one.replace('>', " > ")
+        .replace('+', " + ")
+        .replace('~', " ~ ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 一段 CSS（书自己的样式表，或章内 `<style>`）里可能作用到新加的包装 / koboSpan 的规则：命中的选择器原文，
+/// 去重，最多 [`RISKY_CSS_MAX`] 条。按 csscascade 切规则、选择器、声明；`@media`/`@supports` 里的规则照样看，
+/// `@font-face`、`@page` 这类不看。注释、字符串里的东西不算（切词法已处理）。只读，不改 CSS。
+fn risky_css(css: &str) -> Vec<String> {
+    use crate::cascade::{parse_decls, rule_selector, rule_spans, split_top};
+    let mut out: Vec<String> = Vec::new();
+    for r in rule_spans(css) {
         let sel = rule_selector(r.prelude);
         if sel.trim_start().starts_with('@') {
-            return false;
+            continue;
         }
-        split_top(&sel, ',').into_iter().any(|one| {
-            // 复合选择器序列：按组合符切开，组合符单独成项
-            let spaced = one
-                .replace('>', " > ")
-                .replace('+', " + ")
-                .replace('~', " ~ ");
-            let parts: Vec<&str> = spaced.split_whitespace().collect();
-            parts.iter().enumerate().any(|(k, p)| {
-                let bare = |ty| {
-                    is_type(p, ty) && p.len() == ty.len()
-                        || is_type(p, ty) && p[ty.len()..].starts_with(':')
-                };
-                bare("div")
-                    || bare("span")
-                    || (is_type(p, "body") && parts.get(k + 1) == Some(&">"))
-            })
-        })
-    })
+        let decls = parse_decls(r.body);
+        for one in split_top(&sel, ',') {
+            if !selector_risky(one, &decls) {
+                continue;
+            }
+            let s = norm_selector(one);
+            if !s.is_empty() && !out.contains(&s) {
+                out.push(s);
+            }
+            if out.len() >= RISKY_CSS_MAX {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// 收进全书的结果：去重、最多 [`RISKY_CSS_MAX`] 条。
+fn add_risky(into: &mut Vec<String>, css: &str) {
+    for s in risky_css(css) {
+        if into.len() >= RISKY_CSS_MAX {
+            return;
+        }
+        if !into.contains(&s) {
+            into.push(s);
+        }
+    }
 }
 
 /// `input`（优化过的 EPUB）→ `output`（KEPUB）。章节按 [`transform_xhtml`] 改写（漫画固定版式书的纯图页不包 img），
@@ -464,7 +654,6 @@ pub fn epub_to_kepub(
         .collect();
     let mut w = EpubWriter::create(output)?;
     let mut rep = Report::default();
-    let mut risky = false;
     for k in 0..zip.len() {
         let mut f = zip.by_index(k).map_err(|e| BookError::zip("读条目", e))?;
         let name = f.name().to_string();
@@ -486,7 +675,11 @@ pub fn epub_to_kepub(
             w.raw_copy(zip.by_index(k).map_err(|e| BookError::zip("读条目", e))?)
         };
         if is_css {
-            risky |= risky_selectors(&String::from_utf8_lossy(&data));
+            // 优化器写进去的 `eink-*.css` 不查：里面的裸 div/span 是优化器有意用的（如 `eink-vertical.css`），
+            // 不是书的写法。书的样式表（含竖排改写过的）照旧算书的。
+            if !base.to_ascii_lowercase().starts_with("eink-") {
+                add_risky(&mut rep.risky_css, &String::from_utf8_lossy(&data));
+            }
             copy(&mut w)?;
             continue;
         }
@@ -497,10 +690,10 @@ pub fn epub_to_kepub(
                 continue;
             }
         };
-        // 章内 <style> 也查
-        risky |= html::style_blocks(text)
-            .iter()
-            .any(|b| risky_selectors(&text[b.content_start..b.content_end]));
+        // 章内 <style> 也查（优化器只往章节里加 <link>，不写 <style>；竖排、行内 em 搬出去的另算，见上）
+        for b in html::style_blocks(text) {
+            add_risky(&mut rep.risky_css, &text[b.content_start..b.content_end]);
+        }
         match transform_xhtml_inner(text, opts, comic_fxl) {
             Some((out, n)) => {
                 rep.files += 1;
@@ -511,9 +704,6 @@ pub fn epub_to_kepub(
         }
     }
     w.finish()?;
-    if risky {
-        rep.warnings.push("KEPUB：书里的 CSS 有裸 div/span 或 body > 选择器，可能匹配到新加的包装或 koboSpan（只提醒，没改 CSS）".into());
-    }
     Ok(rep)
 }
 
@@ -869,15 +1059,37 @@ mod tests {
 
     #[test]
     fn risky_selector_detection() {
-        assert!(risky_selectors("div { margin: 1em }"));
-        assert!(risky_selectors("p, span:first-child { x:1 }"));
-        assert!(risky_selectors("body > p { x:1 }"));
-        assert!(risky_selectors("@media screen { div:first-child { x:1 } }"));
-        assert!(!risky_selectors(
-            "div.x, p span.y, #a { x:1 } /* div { } */"
-        ));
-        assert!(!risky_selectors(
-            "tbody > tr, .body > p, #body > div.x, p::after { content: \"{ div }\" }"
+        let hit = |css: &str| !risky_css(css).is_empty();
+        // 只改颜色、字体：不报（vinci 2026-11-16 定的范围）
+        assert!(!hit("span { color: red }"));
+        assert!(!hit("div { font-size: 1.2em; font-family: serif }"));
+        // 影响版面：报
+        assert_eq!(risky_css("div { margin: 1em }"), ["div"]);
+        assert_eq!(risky_css("span { display: block }"), ["span"]);
+        assert_eq!(risky_css("div { border: 1px solid }"), ["div"]);
+        assert_eq!(
+            risky_css("p, div.x, span:first-child { vertical-align: sub }"),
+            ["span:first-child"]
+        );
+        // 清零、等于元素本来的 display：不报
+        assert!(!hit("div { margin: 0; padding: 0 }"));
+        assert!(!hit("div { display: block }"));
+        assert!(!hit("span { display: inline }"));
+        // `border:none` 展开出来带缺省的 medium 宽度，但没有样式，不报
+        assert!(!hit("div { border: none }"));
+        // `body >`：插了包装后规则失效，不看值
+        assert_eq!(risky_css("body > p { margin: 0 }"), ["body > p"]);
+        assert!(!hit("body > p { color: red }"));
+        // @media 里的规则照样看
+        assert_eq!(
+            risky_css("@media screen { div { padding: 1em } }"),
+            ["div"]
+        );
+        // 注释、字符串里的不算；带类、后代、别的子代照旧不算
+        assert!(!hit("/* div{margin:1em} */"));
+        assert!(!hit(r#"p::after { content: "div{margin:1em}" }"#));
+        assert!(!hit(
+            "div.x, p span.y, tbody > tr, .body > p { margin: 1em }"
         ));
     }
 
@@ -893,13 +1105,30 @@ mod tests {
             doc("<nav><ol><li><a href=\"c1.xhtml\">一</a></li></ol></nav>").as_bytes(),
         )
         .unwrap();
-        w.put("OEBPS/c1.xhtml", doc("<p>一。二。</p>").as_bytes())
+        w.put(
+            "OEBPS/c1.xhtml",
+            r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t。</title><style>body > p { padding: 1em }</style></head><body><p>一。二。</p></body></html>"#
+                .as_bytes(),
+        )
+        .unwrap();
+        // 优化器写进去的样式表：里面的裸选择器不算书的
+        w.put("OEBPS/eink-ua.css", b"div { position: absolute }")
             .unwrap();
-        w.put("OEBPS/s.css", b"span { color: red }").unwrap();
+        // 书本来的样式表：算
+        w.put("OEBPS/s.css", b"span { color: red } div { margin: 1em }")
+            .unwrap();
         w.finish().unwrap();
         let out = d.path().join("a.kepub.epub");
         let rep = epub_to_kepub(&src, &out, &Opts::default()).unwrap();
-        assert_eq!((rep.files, rep.spans, rep.warnings.len()), (1, 2, 1));
+        assert_eq!((rep.files, rep.spans), (1, 2));
+        assert_eq!(rep.risky_css.len(), 2, "{:?}", rep.risky_css);
+        assert!(rep.risky_css.iter().any(|s| s == "div"), "{:?}", rep.risky_css);
+        assert!(
+            rep.risky_css.iter().any(|s| s == "body > p"),
+            "{:?}",
+            rep.risky_css
+        );
+        assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
         let mut z = epubzip::open_file_zip(&out).unwrap();
         let first = z.by_index(0).unwrap();
         assert_eq!(
