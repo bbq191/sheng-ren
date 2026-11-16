@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-device-leftover-subdir
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-device-leftover-subdir（从 master `d36f605` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T14:41:09+08:00
+- 更新时间: 2026-11-16T14:48:40+08:00
 - 引用: `2026-11-12-lock-no-device` 验收「后续」与二审线索 1；`2026-11-12-device-tmp-pid-guard`（连接清理按进程号保护）
 
 ## 需求原文
@@ -104,7 +104,23 @@
 - `docs/decisions.md`、`docs/usage.md`、`docs/architecture.md`
 
 ## 结果
-（执行方填）
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T14:41:09+08:00–2026-11-16T14:48:40+08:00
+- base..head：`c5b611e060000ef45039819f4b832f41cd2e9da7..9cc69aedc3e6c4d21ca418f202ac41b10801f142`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | daa1a6c | chore: 开始执行任务单 2026-11-16-device-leftover-subdir [skip-notify] |
+  | 9cc69ae | fix(设备清理): 新子目录的残留临时文件也清，只删我们自己命名的 |
+- 改动文件：`.dev/tasks/2026-11-16-device-leftover-subdir.md`,`crates/library/src/build_run.rs` `crates/library/src/fsutil.rs`,`crates/library/src/generate/placement.rs` `crates/library/src/lib.rs`,`crates/library/tests/leftover.rs` `docs/architecture.md`,`docs/decisions.md` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-device-leftover-subdir-20261116-144109.json`
+- 日志：`/home/box/oc-runs/2026-11-16-device-leftover-subdir-20261116-144109.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 7.5 分钟（墙钟 451s / 实际运行 451s；超时按实际运行计）
 
 ## 审查
 （负责 bot 填）
