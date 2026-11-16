@@ -34,7 +34,7 @@ mod rewrite;
 mod tests;
 
 use self::line::{Frame, Line, LineKey, LineStyle};
-pub(super) use self::line::frame_open;
+use self::line::frame_open;
 use self::rewrite::{
     big_top_pad, list_indent_extra_px, resolve, rewrite, Job, Resolved, NARROW_SHARE,
 };

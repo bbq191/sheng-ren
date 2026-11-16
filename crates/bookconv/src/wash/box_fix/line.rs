@@ -81,7 +81,7 @@ pub(super) type LineKey = (u32, u8, u32, u32, bool);
 /// 照写），外链、类规则里给表格写的不认；单元格里块的外边距、背景色不认；表格行内的外边距、`width` 属性会和书里 `table{margin:0 auto}`
 /// 这类规则搅在一起（2026-10-13 测试书「测试-竖线」1–10、《雪国》制作说明页）。所以框画在单元格的行内，表格满宽，外面再包一层 div
 /// 管左右外边距（`eink-box.css` 的类规则，普通块的外边距认），块的内边距写成单元格的。
-pub(in crate::wash) fn frame_open(class: usize, td_style: &str, table: &Option<(String, &'static str)>) -> String {
+pub(super) fn frame_open(class: usize, td_style: &str, table: &Option<(String, &'static str)>) -> String {
     // 窄的定宽块（卷名竖排）：表格宽写占外层的百分比、靠哪边写 `align`——百分比相对页宽、不随阅读字号变（em 外边距会，2026-10-15 真机
     // 字号 0.8：《梁羽生》卷名框变宽、一行 4 个字不再竖排）；表格不会窄过里面最宽的一个字，一字宽的竖条写多小都是一字宽
     let (width, align) = match table {
