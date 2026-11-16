@@ -318,8 +318,8 @@ const HELP_TAIL: &str = "\
   BOOKLIB_DEVICES_DIR  设备的链接目录（缺省 $HOME/Devices）：链接名就是 Kindle、Bigme、Hanvon、Ireader、Kobo，
                     链接和挂载由 dotfiles 管，booklib 只读、不建也不删
   BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查链接指向的挂载点挂没挂着（测试用普通目录当设备）
-  BOOKLIB_DEVICE_TIMEOUT=秒  设备多久没回应算挂载卡死（缺省 30）：连接探测等 1 倍，主线程一步、传输两步；
-                          超时只跳过卡住的那台；主线程那几步卡死时打一行、退出码 2 结束整个进程
+  BOOKLIB_DEVICE_TIMEOUT=秒  设备多久没回应算挂载卡死（缺省 30）：连接探测等 1 倍，传输、主线程碰设备没有进展等 2 倍；
+                          连接、传输卡住只跳过那台；主线程那几步卡住时打一行、退出码 2 结束
   BOOKLIB_NO_NET=1  不联网（不找元数据、封面）
 
   BOOKLIB_MTP_DIR、BOOKLIB_USBMS_DIR 已废弃：只用来认旧生成记录里的前缀，不再用于找设备。
@@ -447,7 +447,7 @@ fn usage_error(msg: &str) -> ! {
 
 fn fail(msg: &str) -> ! {
     eprintln!("{msg}");
-    std::process::exit(2);
+    library::exit_process(2);
 }
 
 /// 解析后的命令行：`--名字=值` 选项、`--名字` 开关、其余是位置参数（`--` 之后全算位置参数）。
@@ -1058,6 +1058,10 @@ fn main() {
         usage_error(&format!("不认识的命令 {name}"))
     };
     (cmd.check)(cmd, &args);
+    // 会碰设备的命令在工作进程里跑：设备挂载卡死时，卡在 FUSE 上的线程会让进程退不掉（见 `supervise`）
+    if matches!(cmd.name, "sync" | "devices") {
+        supervise();
+    }
     let root = args
         .opt("library")
         .map(PathBuf::from)
@@ -1072,9 +1076,73 @@ fn main() {
         failed: Cell::new(0),
     };
     (cmd.run)(&ctx);
-    if ctx.failed.get() > 0 {
-        std::process::exit(2);
+    drop(_lock);
+    // 一律经 `exit_process`：工作进程要把退出码交给前台进程（见 `supervise`）
+    library::exit_process(if ctx.failed.get() > 0 { 2 } else { 0 });
+}
+
+/// 前台进程：把同样的命令交给一个工作进程（同一个可执行文件，环境变量 `BOOKLIB_EXIT_FD` 带上一根管道的写端）去跑，
+/// 自己只等它的退出码。设备挂载卡死时，卡在 FUSE 上的线程等的是已经交给守护进程的请求，内核不可中断地等（连 SIGKILL 也要等），
+/// 工作进程的主线程退出了、整个进程却成了僵尸，命令行一直回不来。工作进程退出前经 [`library::exit_process`] 把退出码写进管道，
+/// 前台进程读到就按它退出，不等工作进程真的结束；卡住的工作进程留在后台，设备回应（或拔掉）后自己结束。
+/// 管道读到头也没有退出码（工作进程崩了、被杀了）就等它结束，照它的退出状态退出。标准输入、输出、错误原样继承。
+/// 已经是工作进程，或起不了工作进程时，就在本进程里跑（和以前一样）。
+fn supervise() {
+    if std::env::var_os("BOOKLIB_EXIT_FD").is_some() {
+        return;
     }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let mut fds = [0i32; 2];
+    // SAFETY: pipe2 只写这两个整数
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return;
+    }
+    let (r, w) = (fds[0], fds[1]);
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(std::env::args_os().skip(1))
+        .env("BOOKLIB_EXIT_FD", w.to_string());
+    // SAFETY: 子进程 exec 之前只调 fcntl（异步信号安全）：写端在 exec 后留着，读端照旧关掉
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::fcntl(w, libc::F_SETFD, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let spawned = cmd.spawn();
+    // SAFETY: 前台进程自己不写，关掉写端（不然读不到头）
+    unsafe {
+        libc::close(w);
+    }
+    let Ok(mut child) = spawned else {
+        // SAFETY: 读端没用了
+        unsafe {
+            libc::close(r);
+        }
+        return;
+    };
+    let mut b = [0u8; 1];
+    let n = loop {
+        // SAFETY: 读一个字节到本地缓冲
+        let n = unsafe { libc::read(r, b.as_mut_ptr().cast(), 1) };
+        if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        break n;
+    };
+    if n == 1 {
+        std::process::exit(i32::from(b[0]));
+    }
+    use std::os::unix::process::ExitStatusExt;
+    let code = match child.wait() {
+        Ok(s) => s.code().or(s.signal().map(|g| 128 + g)).unwrap_or(2),
+        Err(_) => 2,
+    };
+    std::process::exit(code);
 }
 
 /// 命令运行时手边的东西：书库、命令行、出错计数（有出错的退出码 2）。

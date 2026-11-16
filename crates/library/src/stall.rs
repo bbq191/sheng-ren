@@ -111,6 +111,8 @@ struct Registry {
 
 struct Op {
     id: u64,
+    /// 登记它的线程：[`beat`] 只刷新本线程的（别的设备的传输线程有进展，不能替卡住的主线程续命）。
+    thread: std::thread::ThreadId,
     device: String,
     what: String,
     started: Instant,
@@ -200,6 +202,7 @@ impl OpGuard {
             r.next_id += 1;
             r.ops.push(Op {
                 id,
+                thread: std::thread::current().id(),
                 device: device.to_string(),
                 what: what.to_string(),
                 started: Instant::now(),
@@ -218,6 +221,63 @@ impl Drop for OpGuard {
     fn drop(&mut self) {
         lock().ops.retain(|o| o.id != self.id);
     }
+}
+
+/// 主线程上一步设备操作有进展（读完一块、删完一个文件）：本线程登记着的操作从现在起重新计时。
+/// 读回整本（`same_bytes`、算哈希）、一次删一批文件时调用，大文件、长列表不会被误判成卡死；本线程没登记的话什么都不做。
+pub(crate) fn beat() {
+    let me = std::thread::current().id();
+    let mut r = lock();
+    if r.ops.is_empty() {
+        return;
+    }
+    let now = Instant::now();
+    for o in r.ops.iter_mut().filter(|o| o.thread == me) {
+        o.started = now;
+    }
+}
+
+/// 书库锁的文件描述符（持锁时登记，见 `fsutil::lock`）：兜底退出时先放开它。
+static LOCK_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+/// 持锁 / 放锁时登记书库锁的文件描述符（`-1` 表示没持锁）。
+pub(crate) fn note_lock_fd(fd: i32) {
+    LOCK_FD.store(fd, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 结束进程（`booklib` 所有会碰设备的退出都走这里）。
+///
+/// 卡在 FUSE 上的线程等的是已经交给 FUSE 守护进程的请求，内核不可中断地等它回应（`request_wait_answer`，连 SIGKILL 也要等）：
+/// 进程的主线程退出了，整个进程却要等那条线程，成了僵尸，命令行一直回不来，书库锁（flock）也跟着不放。所以这里：
+/// 1. 先放开书库锁（卡住的线程从内核返回时会被结束、不会再跑用户态代码，放锁是安全的），下次 `booklib` 不会被挡；
+/// 2. 刷掉标准输出、标准错误；
+/// 3. 是 `booklib` 的工作进程（环境变量 `BOOKLIB_EXIT_FD`，见 `booklib` 的 `supervise`）的话，把退出码写给前台进程，
+///    前台进程拿到就按这个码退出，不等工作进程真的结束；
+/// 4. `std::process::exit`。
+pub fn exit_process(code: i32) -> ! {
+    let fd = LOCK_FD.swap(-1, std::sync::atomic::Ordering::SeqCst);
+    if fd >= 0 {
+        // SAFETY: 只对登记过的书库锁描述符放锁，不关它
+        unsafe {
+            libc::flock(fd, libc::LOCK_UN);
+        }
+    }
+    {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+    }
+    if let Some(fd) = std::env::var("BOOKLIB_EXIT_FD")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+    {
+        let b = [code.clamp(0, 255) as u8];
+        // SAFETY: 写前台进程传下来的管道写端，一个字节
+        unsafe {
+            libc::write(fd, b.as_ptr().cast(), 1);
+        }
+    }
+    std::process::exit(code)
 }
 
 /// 第一次登记时起看门狗（整个进程一个）。
@@ -251,9 +311,9 @@ fn ensure_watcher() {
                 };
                 if let Some((device, what, secs)) = hit {
                     eprintln!(
-                        "✗ {device} 挂载没响应（{what} {secs} 秒没返回），booklib 退出；没传完的书记录没改，下次接上会重传"
+                        "✗ [{device}] 挂载没响应（{what} {secs} 秒没返回），booklib 退出；没传完的书记录没改，下次接上会重传"
                     );
-                    std::process::exit(2);
+                    exit_process(2);
                 }
                 let mut r = lock();
                 if r.ops.is_empty() {
@@ -379,11 +439,28 @@ mod tests {
     #[test]
     fn watch_registers_and_clears_main_thread_ops() {
         let key = PathBuf::from("/测试/主线程");
-        let got = watch("kindle", &key, "看设备", || {
-            assert_eq!(lock().ops.len(), 1, "做的时候登记着");
+        // 登记表是整个进程一份，别的单测可能同时登记：只看本测试自己那一项
+        let mine = |r: &Registry| r.ops.iter().filter(|o| o.what == "单测：看设备").count();
+        let got = watch("kindle", &key, "单测：看设备", || {
+            assert_eq!(mine(&lock()), 1, "做的时候登记着");
+            let before = lock()
+                .ops
+                .iter()
+                .find(|o| o.what == "单测：看设备")
+                .map(|o| o.started)
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            beat();
+            let after = lock()
+                .ops
+                .iter()
+                .find(|o| o.what == "单测：看设备")
+                .map(|o| o.started)
+                .unwrap();
+            assert!(after > before, "beat 重新计时");
             5
         });
         assert_eq!(got, 5);
-        assert!(lock().ops.is_empty(), "做完取消");
+        assert_eq!(mine(&lock()), 0, "做完取消");
     }
 }

@@ -65,6 +65,7 @@ pub use sources::{
     SUPPORTED_EXTS,
 };
 pub use space::{mb, space_grew};
+pub use stall::exit_process;
 pub use transfer::{Event, Pipeline, Transfer};
 pub use vertical::Dirs;
 

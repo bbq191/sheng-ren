@@ -186,15 +186,16 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
             }
             let mount_check = env.mount_check;
             let probe_link = link.clone();
+            // 外层 `None`：没开挂载检查时链接不在（报「不在」，和以前一样）；内层 `None`：没有存储目录
             let storage = probe(&link, move || {
                 stall::test_hang(&probe_link, stall::Where::Probe);
                 if !mount_check && !probe_link.is_dir() {
                     return None;
                 }
-                mtp_storage(&probe_link)
-            })?;
-            let storage = storage
-                .ok_or_else(|| format!("没接上（{} 不在或没挂上）", link.display()))?;
+                Some(mtp_storage(&probe_link))
+            })?
+            .ok_or_else(|| format!("没接上（{} 不在）", link.display()))?
+            .ok_or_else(|| format!("没接上（{} 不在或没挂上）", link.display()))?;
             // `dir` 不在（掌阅原来没有 documents/）的话传书时再建：只看接没接上的命令（devices）不往设备上写
             Ok(Target::Dir {
                 root: storage.join(dir),
@@ -660,6 +661,10 @@ fn put_file_once(
     let copy = || -> std::io::Result<()> {
         use std::io::Write;
         use std::os::unix::io::IntoRawFd;
+        // 前面试过的改名（跨文件系统失败）按长调用放宽过时限：开始写之前回到按块计时
+        if let Some(p) = progress {
+            p.begin_step();
+        }
         // 测试钩子：只在写设备上的文件时卡住（连接探测、主线程那几处由各自的入口钩子管）
         stall::test_hang(&tmp, stall::Where::Write);
         // 大块读写：经 FUSE（jmtpfs）每次写都是一次往返，缺省 8KB 一块太碎
@@ -882,6 +887,8 @@ pub(crate) fn same_bytes(a: &Path, b: &Path) -> bool {
         if rb.read_exact(&mut bb[..n]).is_err() || ba[..n] != bb[..n] {
             return false;
         }
+        // 主线程读回设备上的整本时（认领、核对）：有进展就重新计时，大文件不被兜底误判成卡死
+        stall::beat();
     }
 }
 

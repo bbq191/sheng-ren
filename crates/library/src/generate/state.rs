@@ -109,6 +109,8 @@ impl State {
     ) -> Vec<Placement> {
         let mut left = Vec::new();
         for p in list {
+            // 一次删一批（删书、删旧位置）：每个文件重新计时，长列表不被主线程兜底误判成卡死
+            crate::stall::beat();
             if self.claimed(&p) || current == Some(p.path.as_path()) {
                 continue;
             }
