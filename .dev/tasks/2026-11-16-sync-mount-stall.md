@@ -152,3 +152,6 @@
   - 产物逐字节不变：同两本测试书（一本带 2MB 图），master 与分支二进制分别 `sync` 到 ireader、kobo、kindle（普通目录当设备），6 个产物 sha256 全同；输出文字也相同。版本号、`fp_golden.txt`、指纹构成都没动。
   - `cargo test --workspace` 860 通过 0 失败；`cargo clippy --workspace --all-targets -- -D warnings` 0 警告。
   - 没跑真书回归、没上真机；卡死场景只在 box 上用测试钩子和 FUSE 小程序模拟过（真的 jmtpfs 卡死时是不是同样停在 `request_wait_answer`、拔掉设备后僵尸是否消失，要 vinci 真机看）。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-sync-mount-stall.agy.md`。建议两条（`stall.rs` 模块注释与实测矛盾、偏离漏报 `fsutil.rs`）已改；线索一条（放弃的传输线程回来后还会写排着的）已改成放弃时打取消标记（`de45e36`）。改后 `cargo test --workspace` 860 通过、clippy 0 警告。
+- 合并：b486b2f（`--no-ff` 进 master，合并后的树和任务分支末端 `87921a0` 一致，已在其上跑过 test 860 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后清理。状态保持 done，等 vinci 真机验收。
+
