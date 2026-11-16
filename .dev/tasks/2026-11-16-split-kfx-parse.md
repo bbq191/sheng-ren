@@ -105,3 +105,12 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree；对照 master `b459184`；只读本仓库代码）。运行记录 JSON 的 `deviations` 为空，与结果一致；`write` 下其他文件未改。
+  - 拆法：`parse.rs` 266 行（模块说明、`mod`、再导出，块的数据类型与遍历、长度换算、`MAX_NESTING`）；`parse/inline.rs` 204（`Doc` 结构、`OpenRun`、`Inline` 与 `impl Inline`）；`parse/element.rs` 1095（`impl Doc<'_>` 整块原样，加上它用的 `attach_trailing`、`prepend_ids`、`Special`、`device_line_height`、`root_em`、`own_text_block`、`absorb_whole_span_style`、`container_block`、`flatten_wrapper`、`image_src`、`run_differs`、`merge_text_style`、`mark_bare`、`with_box`）；`parse/blocks.rs` 211（`impl Block`、`inline_box`、`ParsedDoc`、分页标记、`has_negative`、`scale_percent`、`apply_gaps`、`collapse_siblings`、`block_depth`）；`parse/docs.rs` 256（`book_language`、`parse_docs`、`DEEP_NESTING`、`BIG_STACK`、栈相关、`prepend_cover_page`）。
+  - 只挪代码：按顶层项逐个比对（忽略可见性和空白），旧文件 64 项全部原样出现；唯一的文本差异是 `impl Block` 里三个方法加了可见性（`anonymous` 因此被 rustfmt 折成多行、补了尾逗号），函数体逐字相同。新增只有 `use`、`mod`、再导出、`//!` 说明。
+  - 可见性：原来 `pub(super)`（给 `write` 用）的搬进子目录后写成 `pub(in crate::write)`，在 `parse.rs` 里 `pub(super) use` 再导出，`write/mod.rs` 的 `use parse::*;`、`tests.rs` 的 `super::parse::OBJ` 原样能用；只在 `parse` 内部跨文件用的原私有项改成 `pub(super)`（如 `Block::led_by`、`is_anonymous`、`OpenRun`）。
+  - 发现并修正（提交 `4c17acf`）：执行方把拆前私有的 `has_negative`、`scale_percent`、`attach_trailing`、`prepend_ids` 也用 `pub(super) use` 再导出给了整个 `write`（`write` 其他文件不用）；改成子模块里 `pub(super)`、`parse.rs` 里私有 `use`，可见范围回到 `parse` 内，同拆前。
+  - 测试：kfx 53 项名字与 master 一致；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告（含上面的修正）。
+  - 产物：master 与分支二进制对 4 本书同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同（其中 kindle 的 4 份 KFX），输出除路径外相同。版本号（KFX 写出器 26）、`fp_golden.txt` 没动。
+  - 已知局限：`impl Doc<'_>` 一个块约 725 行，`element.rs` 1095 行；再拆要把 impl 块分开、改方法可见性，按单子没做。
+  - 没跑真书回归、没上真机。
