@@ -136,3 +136,4 @@
   - 已知局限（任务单「不做什么」已列）：书被打断后立刻 `untrack`、那个目录再不放书时，残留仍清不掉。
   - 没跑真书回归、没上真机；设备一律用 `target/` 下的临时目录模拟。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-device-leftover-subdir.agy.md`。建议两条：「新建文件」漏记 `tests/leftover.rs`（已补）；改了 11-12 已定决策，需 vinci 确认（已在 decisions.md 标明，留给 vinci）。线索两条（进程号复用时残留晚清、计划目录与跟踪范围一致）都是预期行为。
+- 合并：92b9e75（`--no-ff` 进 master；master 合并前没动，合并树与已验收的分支末端 `98bfdc9` 相同：test 864 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后删除。状态保持 done，等 vinci 真机验收。
