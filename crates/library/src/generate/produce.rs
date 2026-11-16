@@ -36,7 +36,7 @@ impl Library {
             bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
         // 体检（怪癖表，只报告）：sync 打摘要，清单记进生成记录
         let findings = optimized_rep.wash.map(|w| w.audit).unwrap_or_default();
-        let audit: Vec<String> = findings
+        let mut audit: Vec<String> = findings
             .iter()
             .map(bookconv::audit::Finding::line)
             .collect();
@@ -49,6 +49,14 @@ impl Library {
             let kp =
                 bookconv::kepub::epub_to_kepub(&optimized, part, &bookconv::kepub::Opts::default())
                     .map_err(|e| e.to_string())?;
+            if !kp.risky_css.is_empty() {
+                // 逐本记进生成记录（`booklib list` 能查到哪几本）；`sync` 认这个固定串，一轮汇总成一行
+                audit.push(format!(
+                    "⚠ KEPUB：CSS 里 {} 可能作用到新加的包装或 koboSpan（只提醒，没改 CSS）",
+                    kp.risky_css.join("、")
+                ));
+                warnings.push(bookconv::kepub::RISKY_CSS_WARNING.to_string());
+            }
             warnings.extend(kp.warnings);
             let rep = bookconv::check::check_epub_file(part)?;
             if !rep.ok {

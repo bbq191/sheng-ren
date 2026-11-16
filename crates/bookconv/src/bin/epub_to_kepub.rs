@@ -36,6 +36,12 @@ fn main() {
         kepub::epub_to_kepub(input, t, &opts).map_err(|e| e.to_string())
     })
     .unwrap_or_else(|e| die(cli::FAILED, e));
+    if !rep.risky_css.is_empty() {
+        eprintln!(
+            "⚠ KEPUB：书里的 CSS 里 {} 可能作用到新加的包装或 koboSpan（只提醒，没改 CSS）",
+            rep.risky_css.join("、")
+        );
+    }
     for w in &rep.warnings {
         eprintln!("⚠ {w}");
     }

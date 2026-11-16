@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-kepub-css-warning
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-16-kepub-css-warning（从 master `7c1399f` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T11:10:00+08:00
+- 更新时间: 2026-11-16T11:12:30+08:00
 - 引用: vinci 2026-11-16 在 sheng-ren 聊天里反馈 kobo sync 时「好多的 ⚠ KEPUB：书里的 CSS 有裸 div/span 或 body > 选择器……」警告；负责 bot 给了三种处理，vinci 选「按 1+2 开单」。
 
 ## 需求原文
@@ -111,7 +111,40 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T10:58:26+08:00–2026-11-16T11:12:30+08:00
+- base..head：`55ac7228d10bbe25b59aa8b3a904e2beebe77b96..cd0dfaffba97d17ee4434a7c46d407f715cd484d`（执行方到 `cd0dfaf`，验收修正见下表）
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 3df4059 | chore: 开始执行任务单 2026-11-16-kepub-css-warning [skip-notify] |
+  | cd0dfaf | fix(kepub): CSS 提醒判得更准，并按轮汇总成一行 |
+  | 4a1c06d | chore: 填写任务单 2026-11-16-kepub-css-warning 结果（done） [skip-notify] |
+  | 4e08fab | fix(kepub): 背景只看底色和底图，不再把 background:none 当成会改版面（验收修正） |
+  | 4ad6145 | chore: 任务单填写验收记录 [skip-notify] |
+  | 54e47a2 | fix(kepub): 去掉 layout_prop 里走不到的 background 前缀（二审建议） |
+- 改动文件：`.dev/tasks/2026-11-16-kepub-css-warning.md`,`crates/bookconv/src/bin/epub_to_kepub.rs` `crates/bookconv/src/kepub.rs`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/generate/produce.rs`,`crates/library/tests/cli.rs` `crates/library/tests/common/mod.rs`,`docs/kepub.md` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-kepub-css-warning-20261116-105826.json`
+- 日志：`/home/box/oc-runs/2026-11-16-kepub-css-warning-20261116-105826.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 14.1 分钟（墙钟 844s / 实际运行 844s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16）。逐条核对：
+  - 判定：裸 `div`/`span` 要带影响版面的属性且值不是无害值才算，`body >` 不看值；`eink-` 开头的样式表跳过，章内 `<style>` 照查；声明用 `crate::cascade::parse_decls` 切，选择器、规则复用 `rule_spans`/`rule_selector`/`split_top`。单测覆盖了验收标准里列的全部写法。`span{font-size:.8em}` 不报的取舍写在 `layout_prop` 注释里。
+  - 报告：`kepub::Report::risky_css` 单独一栏，`warnings` 里不再有这条；`produce` 往生成记录的 `audit` 记一行 `⚠ KEPUB：CSS 里 … 可能作用到…`，并放一个固定串 `RISKY_CSS_WARNING` 给 sync 计数；`built_line` 滤掉它，每轮由 `RiskyCssBooks` 按（设备, 产物路径）去重后只打一行；`list` 以「提醒」显示记录里的 `⚠` 行；单本 `epub-to-kepub` 照旧逐本提醒。
+  - 实跑（`target/kepubtest` 临时书库，`--device=kobo`，设备目录指到临时目录）：5 本小书（`div{margin:1em}`、只改颜色、`<style>` 里 `body > p{padding:1em}`、`span{font-size:.8em}`+`div{margin:0;padding:0}`、`@media` 里 `div{border:1px solid}`+注释里的 `span`）。改动前 5 本各报一行；改动后逐本行下面没有这条，末尾一行 `⚠ KEPUB：3 本书的 CSS 可能作用到新加的包装或 koboSpan（只提醒，没改 CSS；哪几本用 booklib list 看）`，`list` 在这 3 本下显示「提醒」行；`--force` 重跑（5 本都「和设备上的一样」）照样汇总 3 本。
+  - 产物：改动前 master（`55ac722`）的 release 二进制和改动后对同样 5 本，`sync` 生成的 KEPUB 5/5 逐字节相同；`epub-to-kepub` 单本工具 5/5 逐字节相同。
+  - 版本号、指纹构成、`fp_golden.txt` 都没动；没有新出现上游项目名。
+  - 发现并修正（fix 提交）：`div{background:none}`、`div{background:transparent}` 仍被报——`background` 简写展开会补 `repeat`、`scroll`、位置、尺寸的缺省值。背景类改为只看 `background-color`、`background-image`，补了单测。
+  - 已知小问题（不阻断，未改）：命中选择器的显示把 `:nth-child(2n+1)` 里的 `+` 也加了空格（只影响提醒里的显示，旧代码切组合符就这样）；`div::before{margin:…}` 也算命中（伪元素没有 `content` 时不画，属多报）。
+  - `cargo test --workspace` 845 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 未跑真书回归、未上真机（只改提醒的判定和报告，KEPUB 产物不变）。
+  - 同类按书重复的提醒（线索，本单未改）：`⚠ 体检：…`（`audit::summary`，掌阅文字书每本一两行）、`⚠ 质量门未过…`（每本每条错误一行，KEPUB 另有一份）、KFX 写出器的 warnings（如「目录项找不到位置：…」）。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-kepub-css-warning.agy.md`。建议两条都已处理：「结果」补上验收修正的提交；`layout_prop` 里走不到的 `background` 前缀已删（54e47a2）。线索两条（`:nth-child(2n+1)` 显示加空格、`div::before` 多报）与验收时记下的一致，不改。
+- 合并：（待填）

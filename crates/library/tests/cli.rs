@@ -1010,6 +1010,53 @@ fn track_list_without_paths_filters_by_device() {
     );
 }
 
+/// Kobo sync 的「CSS 可能作用到包装 / koboSpan」提醒：一轮 3 本里 2 本命中只汇总一行（N = 2），逐本结果行
+/// 下面没有这条；`list` 从生成记录里逐本显示。
+#[test]
+fn kepub_css_warning_summarized_in_sync_and_shown_by_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    for (name, css) in [
+        ("命中一", "div { margin: 1em }"),
+        ("不命中", "p { color: red }"),
+        ("命中二", "body > p { padding: 1em }"),
+    ] {
+        let book = dir.path().join(format!("{name}.epub"));
+        std::fs::write(&book, common::sample_epub_with_css(name, css)).unwrap();
+        let o = booklib(Some(&lib), &["add", book.to_str().unwrap()]);
+        assert_eq!(code(&o), Some(0), "{}", stderr(&o));
+    }
+    let o = booklib(Some(&lib), &["sync", "--device=kobo"]);
+    assert_eq!(
+        code(&o),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        stdout(&o),
+        stderr(&o)
+    );
+    let out = stdout(&o);
+    let summary: Vec<&str> = out
+        .lines()
+        .filter(|l| l.contains("KEPUB：") && l.contains("本书的 CSS"))
+        .collect();
+    assert_eq!(summary.len(), 1, "只汇总一行：{out}");
+    assert!(summary[0].contains("2 本书"), "{out}");
+    for l in out.lines() {
+        if l.starts_with("✓ 生成") || l.starts_with("≡ 重新生成") {
+            assert!(!l.contains("KEPUB"), "逐本不打这条：{out}");
+        }
+    }
+    let o = booklib(Some(&lib), &["list"]);
+    let list = stdout(&o);
+    let shown: Vec<&str> = list
+        .lines()
+        .filter(|l| l.contains("提醒 ⚠ KEPUB：CSS 里"))
+        .collect();
+    assert_eq!(shown.len(), 2, "{list}");
+    assert!(shown.iter().any(|l| l.contains("div")), "{list}");
+    assert!(shown.iter().any(|l| l.contains("body > p")), "{list}");
+}
+
 /// fish 补全：`booklib __complete` 只读、不建书库。
 #[test]
 fn complete_is_read_only() {

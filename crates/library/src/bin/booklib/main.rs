@@ -719,7 +719,13 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
 fn built_line(device: &str, title: &str, b: Built, quiet: bool) -> Option<String> {
     let with_warnings = |head: String, warnings: &[String]| {
         std::iter::once(head)
-            .chain(warnings.iter().map(|w| format!("  ⚠ {w}")))
+            .chain(
+                warnings
+                    .iter()
+                    // 「CSS 可能作用到包装 / koboSpan」按书刷屏，一轮结束时由 [`RiskyCssBooks`] 汇总成一行
+                    .filter(|w| w.as_str() != bookconv::kepub::RISKY_CSS_WARNING)
+                    .map(|w| format!("  ⚠ {w}")),
+            )
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -747,6 +753,40 @@ fn built_line(device: &str, title: &str, b: Built, quiet: bool) -> Option<String
             to.display(),
             from.display()
         )),
+    }
+}
+
+/// 一轮里命中「KEPUB CSS 可能作用到包装 / koboSpan」的书（按设备 + 产物路径去重，同名书也不混）。这条以前逐本打，
+/// 书一多就刷屏（vinci 2026-11-16），现在一轮只汇总一行，哪几本用 `booklib list` 看。只算这一轮真的重新生成的
+/// （`Written` + `Same`）。
+#[derive(Default)]
+struct RiskyCssBooks(HashSet<(String, PathBuf)>);
+
+impl RiskyCssBooks {
+    fn observe(&mut self, ev: &BuildEvent) {
+        let BuildEvent::Built { device, built, .. } = ev else {
+            return;
+        };
+        let (path, warnings) = match built {
+            Built::Written { path, warnings } | Built::Same { path, warnings } => (path, warnings),
+            _ => return,
+        };
+        if warnings
+            .iter()
+            .any(|w| w == bookconv::kepub::RISKY_CSS_WARNING)
+        {
+            self.0.insert((device.clone(), path.clone()));
+        }
+    }
+
+    /// 一轮结束的汇总行；没有就不打。
+    fn summary(&self) -> Option<String> {
+        (!self.0.is_empty()).then(|| {
+            format!(
+                "⚠ KEPUB：{} 本书的 CSS 可能作用到新加的包装或 koboSpan（只提醒，没改 CSS；哪几本用 booklib list 看）",
+                self.0.len()
+            )
+        })
     }
 }
 
@@ -1110,6 +1150,28 @@ fn cmd_add(ctx: &Ctx) {
     }
 }
 
+/// `list` 里一份产物的生成记录（`audit`）显示成几行：`✗` 逐条原文、`⚠ `（KEPUB CSS 提醒）逐条原文，
+/// 没验证过的 `? ` 合成一行。缩进由调用方加。
+fn audit_lines(audit: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = audit
+        .iter()
+        .filter(|l| l.starts_with('✗'))
+        .map(|l| format!("体检 {l}"))
+        .collect();
+    for l in audit.iter().filter(|l| l.starts_with("⚠ ")) {
+        out.push(format!("提醒 {l}"));
+    }
+    let unknown: Vec<&str> = audit.iter().filter_map(|l| l.strip_prefix("? ")).collect();
+    if !unknown.is_empty() {
+        out.push(format!(
+            "体检 ? 没验证过 {} 种：{}",
+            unknown.len(),
+            unknown.join("；")
+        ));
+    }
+    out
+}
+
 fn cmd_list(ctx: &Ctx) {
     let lib = ctx.lib;
     for m in lib.select(&ctx.args.texts()) {
@@ -1176,21 +1238,9 @@ fn cmd_list(ctx: &Ctx) {
                 shown.display(),
                 vertical.map_or(String::new(), |v| format!("  {v}"))
             );
-            // 体检（生成时记下的）：和 Kindle 不一样又没处理的逐条列出，没验证过的合成一行
-            for line in o.audit.iter().filter(|l| l.starts_with('✗')) {
-                println!("        体检 {line}");
-            }
-            let unknown: Vec<&str> = o
-                .audit
-                .iter()
-                .filter_map(|l| l.strip_prefix("? "))
-                .collect();
-            if !unknown.is_empty() {
-                println!(
-                    "        体检 ? 没验证过 {} 种：{}",
-                    unknown.len(),
-                    unknown.join("；")
-                );
+            // 体检（生成时记下的）和 KEPUB CSS 提醒：逐条列出；没验证过的合成一行
+            for line in audit_lines(&o.audit) {
+                println!("        {line}");
             }
         }
     }
@@ -1890,7 +1940,9 @@ impl SyncState {
         };
         // 没选书：只报有变化的
         let quiet = plan.selectors.is_empty();
+        let mut risky_css = RiskyCssBooks::default();
         let counts = library::build_all(run, &mut |ev| {
+            risky_css.observe(&ev);
             if let Some(r) = event_line(ev, quiet) {
                 ctx.report(r);
             }
@@ -1906,6 +1958,10 @@ impl SyncState {
         if plan.watch.is_none() || counts.any() {
             ctx.report(Ok(counts_summary(&counts)));
         }
+        // 按书刷屏的这条一轮汇总成了 [`RiskyCssBooks::summary`] 的一行，逐本结果行里已经没有它
+        if let Some(line) = risky_css.summary() {
+            ctx.report(Ok(line));
+        }
         self.last_stamp = Some(stamp());
     }
 }
@@ -1913,6 +1969,65 @@ impl SyncState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一轮 3 本里 2 本命中「KEPUB CSS 提醒」：逐本结果行不再有这条，汇总只有一行、N = 2；
+    /// 同一本书（同一台设备上）重复出现只算一次。
+    #[test]
+    fn kepub_css_warning_is_summarized_once_per_round() {
+        let built = |title: &str, warn: bool| BuildEvent::Built {
+            device: "kobo".into(),
+            title: title.into(),
+            built: Built::Written {
+                path: PathBuf::from(format!("/tmp/{title}.kepub.epub")),
+                warnings: if warn {
+                    vec![bookconv::kepub::RISKY_CSS_WARNING.to_string()]
+                } else {
+                    Vec::new()
+                },
+            },
+        };
+        let events = [
+            built("甲", true),
+            built("乙", true),
+            built("丙", false),
+            built("甲", true),
+        ];
+        let mut hit = RiskyCssBooks::default();
+        for ev in events {
+            hit.observe(&ev);
+            let BuildEvent::Built {
+                device,
+                title,
+                built,
+            } = ev
+            else {
+                unreachable!()
+            };
+            let line = built_line(&device, &title, built, false).unwrap();
+            assert!(!line.contains("KEPUB"), "逐本不打这条：{line}");
+        }
+        let line = hit.summary().expect("有命中就要汇总");
+        assert_eq!(line.matches("KEPUB").count(), 1, "{line}");
+        assert!(line.contains("2 本书"), "{line}");
+    }
+
+    /// `list` 把生成记录里的 KEPUB CSS 提醒（`⚠ `）照原文打出来，`✗`、`?` 照旧。
+    #[test]
+    fn list_shows_kepub_css_reminder_from_record() {
+        let audit = [
+            "✗ 行内 style margin-left（px，list）×2：掌阅没处理".to_string(),
+            "? text-decoration（keyword，inline）×55".to_string(),
+            "⚠ KEPUB：CSS 里 div 可能作用到新加的包装或 koboSpan（只提醒，没改 CSS）".to_string(),
+        ];
+        let lines = audit_lines(&audit);
+        assert!(
+            lines.iter().any(|l| l
+                == "提醒 ⚠ KEPUB：CSS 里 div 可能作用到新加的包装或 koboSpan（只提醒，没改 CSS）"),
+            "{lines:?}"
+        );
+        assert!(lines[0].starts_with("体检 ✗"), "{lines:?}");
+        assert!(lines.iter().any(|l| l.starts_with("体检 ? 没验证过 1 种")), "{lines:?}");
+    }
 
     /// 设备从没接上到接上：这台记着的失败忘掉（下一轮重试）；别的设备的、一直接着的不动。
     #[test]
