@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-csscascade
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-csscascade（从最新 master 切出）
-- 更新时间: 2026-11-16T15:30:59+08:00
+- 更新时间: 2026-11-16T15:40:23+08:00
 - 引用: `2026-11-13-big-file-splits` 分步 2；拆法参照已合并的 `2026-11-13-split-imgopt`、`2026-11-13-split-generate`
 
 ## 需求原文
@@ -88,7 +88,32 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T15:31:07+08:00–2026-11-16T15:40:23+08:00
+- base..head：`ee7d2e548c1bd8013d1d9024d948fc7c9525c3ec..b12920fc8370d0164f2c09671c6822eebc8e5f26`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 2ee0f41 | chore: 开始执行任务单 2026-11-16-split-csscascade [skip-notify] |
+  | b12920f | chore(csscascade): 拆 lib.rs 为按职责划分的子模块 |
+- 改动文件：`.dev/tasks/2026-11-16-split-csscascade.md`,`crates/csscascade/src/computed.rs` `crates/csscascade/src/html.rs`,`crates/csscascade/src/lib.rs` `crates/csscascade/src/media.rs`,`crates/csscascade/src/rules.rs` `crates/csscascade/src/sheet.rs`,`crates/csscascade/src/shorthand.rs` `crates/csscascade/src/tests.rs`,`crates/csscascade/src/text.rs` `crates/csscascade/src/value.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-split-csscascade-20261116-153107.json`
+- 日志：`/home/box/oc-runs/2026-11-16-split-csscascade-20261116-153107.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 9.3 分钟（墙钟 556s / 实际运行 556s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree；对照 master `ee7d2e5`）。
+  - 拆法（执行方结果没列，负责 bot 补）：`lib.rs` 84 行（模块说明、`mod` 声明、根路径 `pub use` 再导出、`Decl`、`Decls`、`Origins`、`resolve_urls`、`leading_url`）；`rules.rs` 238（`Rule`、`Need`、`ElementKeys`、`Rules`、`RuleIndex`、`MAX_MEDIA_NESTING`）；`sheet.rs` 217（`Sheet`、`Origin`、`impl Sheet`）；`text.rs` 505（CSS 文本扫描拆分、规则位置、`parse_decls`、`tokens`、`specificity`）；`shorthand.rs` 365（简写展开、`BORDER_STYLES`）；`media.rs` 206（`@media` 求值）；`html.rs` 173（块级标签、表现属性、嵌入字体）；`value.rs` 118（`Len`、长度解析、设备静态量）；`computed.rs` 673（`Computed` 与两段 `impl`、`Shadow`、`Border`、`body_font_size`、`weighted_mode`）；`tests.rs` 562。最大 673 行。
+  - 只挪代码：按顶层项逐个比对（去掉 `pub(crate)` 差异后），旧文件 111 项全部在新文件里原样出现；唯一文本差异是 `matching_close` 加了 `pub(crate)` 后签名被 rustfmt 折成多行（函数体逐字相同）。其余新增只有 `use`、`mod`、`pub use`、各文件 `//!` 说明。测试：`tests.rs` 与原 `mod tests` 去掉 4 格缩进后逐行相同，只多了开头的 `use`，以及一行因缩进变短被 rustfmt 合并成一行的 `let html = …`（内容不变）。
+  - 可见性：只有私有 → `pub(crate)`（`Rule`、`Need`、`ElementKeys`、`RuleIndex` 及其字段和方法、`Rules` 的 `list`/`index` 字段、`Sheet::parts`、`resolve_urls`、`leading_url`、`split_number`、`PT_PER_BOX_PX`、`MAX_MEDIA_NESTING`、`rule_head`、`matching_close`、`four_values`、`expand_shorthand`、`BORDER_STYLES`）；没有新的 `pub`。
+  - 公开接口：master 根路径下 50 个 `pub` 项与新根路径导出的集合完全相同（不多不少）；另用一个临时程序 `use csscascade::{全部 50 个名字, decl, ua, 颜色函数}` 对分支编译通过。crate 外文件未改。
+  - 测试：csscascade 16 项名字与 master 一致；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 产物：master 与分支二进制对 4 本书（两本文字书含 CSS 简写、`@media`、`!important`、选择器、注释、表格、多种图片，两卷 CBZ 漫画）同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同，输出除路径外相同。版本号、`fp_golden.txt` 没动。
+  - 没跑真书回归、没上真机。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议、线索都无。见 `2026-11-16-split-csscascade.agy.md`。
