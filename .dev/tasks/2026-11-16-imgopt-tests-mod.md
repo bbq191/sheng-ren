@@ -105,3 +105,4 @@
   - 过程说明：第一次 oc-exec 因为负责 bot 这边的工具调用超时被连带结束，改动未提交，已丢弃并重跑；重跑一次完成。
   - 没跑真书回归、没上真机。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议、线索都无。见 `2026-11-16-imgopt-tests-mod.agy.md`。
+- 合并：be46ea4（`--no-ff` 进 master；master 合并前没动，合并树与已验收的分支末端相同：test 864 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后删除。状态保持 done，等 vinci 真机验收。
