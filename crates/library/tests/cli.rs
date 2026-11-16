@@ -1057,6 +1057,58 @@ fn kepub_css_warning_summarized_in_sync_and_shown_by_list() {
     assert!(shown.iter().any(|l| l.contains("body > p")), "{list}");
 }
 
+/// 质量门提醒按轮汇总：一本目录全部指向不存在文件的书，`sync` 只打一行（带书名），`list` 逐本显示；
+/// KEPUB 产物和优化产物文字相同的错误只记一次。
+#[test]
+fn quality_gate_warning_summarized_in_sync_and_shown_by_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = dir.path().join("lib");
+    let book = dir.path().join("目录坏了.epub");
+    std::fs::write(&book, common::sample_epub_bad_toc("目录坏了")).unwrap();
+    let o = booklib(Some(&lib), &["add", book.to_str().unwrap()]);
+    assert_eq!(code(&o), Some(0), "{}", stderr(&o));
+
+    let o = booklib(Some(&lib), &["sync", "--device=kobo"]);
+    assert_eq!(
+        code(&o),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        stdout(&o),
+        stderr(&o)
+    );
+    let out = stdout(&o);
+    let summary: Vec<&str> = out
+        .lines()
+        .filter(|l| l.contains("⚠ 质量门未过：") && l.contains("本书"))
+        .collect();
+    assert_eq!(summary.len(), 1, "只汇总一行：{out}");
+    assert!(summary[0].contains("1 本书"), "{out}");
+    assert!(summary[0].contains("《目录坏了》"), "{out}");
+    for l in out.lines() {
+        if l.starts_with("✓ 生成") || l.starts_with("≡ 重新生成") {
+            assert!(!l.contains("质量门"), "逐本不打这条：{out}");
+        }
+    }
+
+    let o = booklib(Some(&lib), &["list"]);
+    let list = stdout(&o);
+    let shown: Vec<&str> = list
+        .lines()
+        .filter(|l| l.contains("提醒 ⚠ 质量门未过"))
+        .collect();
+    assert!(!shown.is_empty(), "{list}");
+    assert!(
+        shown
+            .iter()
+            .any(|l| l.contains("提醒 ⚠ 质量门未过：目录 href 文件命中率过低")),
+        "{list}"
+    );
+    assert!(
+        !list.contains("质量门未过（KEPUB）"),
+        "KEPUB 不重复记同一份：{list}"
+    );
+}
+
 /// fish 补全：`booklib __complete` 只读、不建书库。
 #[test]
 fn complete_is_read_only() {

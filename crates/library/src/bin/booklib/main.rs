@@ -722,8 +722,8 @@ fn built_line(device: &str, title: &str, b: Built, quiet: bool) -> Option<String
             .chain(
                 warnings
                     .iter()
-                    // 「CSS 可能作用到包装 / koboSpan」按书刷屏，一轮结束时由 [`RiskyCssBooks`] 汇总成一行
-                    .filter(|w| w.as_str() != bookconv::kepub::RISKY_CSS_WARNING)
+                    // 按书刷屏的这几类由 [`WarningSummary`] 一轮汇总成一行
+                    .filter(|w| !is_round_summary_warning(w))
                     .map(|w| format!("  ⚠ {w}")),
             )
             .collect::<Vec<_>>()
@@ -756,37 +756,138 @@ fn built_line(device: &str, title: &str, b: Built, quiet: bool) -> Option<String
     }
 }
 
-/// 一轮里命中「KEPUB CSS 可能作用到包装 / koboSpan」的书（按设备 + 产物路径去重，同名书也不混）。这条以前逐本打，
-/// 书一多就刷屏（vinci 2026-11-16），现在一轮只汇总一行，哪几本用 `booklib list` 看。只算这一轮真的重新生成的
-/// （`Written` + `Same`）。
-#[derive(Default)]
-struct RiskyCssBooks(HashSet<(String, PathBuf)>);
+/// 这些提醒按书刷屏（vinci 2026-11-16），一轮结束时由 [`WarningSummary`] 每类汇总成一行，逐本结果行里不再打。
+/// 认法用 `library` / `bookconv` 里的公开常量，不做模糊匹配；真正影响结果的失败（`BuildEvent::Failed`、传输错误）
+/// 不走这里，照旧逐本打。
+fn is_round_summary_warning(w: &str) -> bool {
+    w == library::AUDIT_WARNING
+        || w == library::GATE_WARNING
+        || w == library::KFX_WARNING
+        || w == bookconv::kepub::RISKY_CSS_WARNING
+}
 
-impl RiskyCssBooks {
+/// 一轮里命中的提醒（按设备 + 产物路径去重，同名书也不混）。以前逐本打，书一多就刷屏：现在每类一轮只汇总一行，
+/// 哪几本用 `booklib list` 看（明细记在生成记录的 `audit` 里）。只算这一轮真的重新生成的（`Written` + `Same`）。
+#[derive(Default)]
+struct WarningSummary {
+    audit: WarnedBooks,
+    gate: WarnedBooks,
+    kfx: WarnedBooks,
+    kepub_css: WarnedBooks,
+}
+
+/// 同一类提醒命中的书：`(设备, 产物路径)` 去重；按书名归并，同一本书在几台上都命中只算一本、列出是哪几台
+/// （以前按产物计，一本书三台都没过质量门会算成 3 本，前 5 个名额被同一本占掉，别的书就看不到了）。
+/// 只认得书名（`BuildEvent::Built` 不带书的 id）：两本同名的书会合成一项，汇总行只是指个方向，明细以 `list` 为准。
+#[derive(Default)]
+struct WarnedBooks {
+    /// 先来的在前：(书名, 命中的设备)。汇总行列前 5 本按这个顺序（同一轮里顺序稳定）。
+    books: Vec<(String, Vec<String>)>,
+    seen: HashSet<(String, PathBuf)>,
+}
+
+impl WarnedBooks {
+    fn insert(&mut self, device: &str, path: &Path, title: &str) {
+        if !self.seen.insert((device.to_string(), path.to_path_buf())) {
+            return;
+        }
+        match self.books.iter_mut().find(|(t, _)| t == title) {
+            Some((_, devs)) => {
+                if !devs.iter().any(|d| d == device) {
+                    devs.push(device.to_string());
+                }
+            }
+            None => self
+                .books
+                .push((title.to_string(), vec![device.to_string()])),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.books.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.books.is_empty()
+    }
+
+    /// 汇总行里的书名：最多列 5 本，每本带上命中的设备，多的写「等 N 本」（N 是这一类一共几本）。
+    fn titles(&self) -> String {
+        const SHOW: usize = 5;
+        let shown: Vec<String> = self
+            .books
+            .iter()
+            .take(SHOW)
+            .map(|(t, devs)| format!("《{t}》[{}]", devs.join("、")))
+            .collect();
+        let mut out = shown.join("、");
+        if self.len() > SHOW {
+            out.push_str(&format!(" 等 {} 本", self.len()));
+        }
+        out
+    }
+}
+
+impl WarningSummary {
     fn observe(&mut self, ev: &BuildEvent) {
-        let BuildEvent::Built { device, built, .. } = ev else {
+        let BuildEvent::Built {
+            device,
+            title,
+            built,
+        } = ev
+        else {
             return;
         };
         let (path, warnings) = match built {
             Built::Written { path, warnings } | Built::Same { path, warnings } => (path, warnings),
             _ => return,
         };
-        if warnings
-            .iter()
-            .any(|w| w == bookconv::kepub::RISKY_CSS_WARNING)
-        {
-            self.0.insert((device.clone(), path.clone()));
+        for w in warnings {
+            let set = if w == bookconv::kepub::RISKY_CSS_WARNING {
+                &mut self.kepub_css
+            } else if w == library::AUDIT_WARNING {
+                &mut self.audit
+            } else if w == library::GATE_WARNING {
+                &mut self.gate
+            } else if w == library::KFX_WARNING {
+                &mut self.kfx
+            } else {
+                continue;
+            };
+            set.insert(device, path, title);
         }
     }
 
-    /// 一轮结束的汇总行；没有就不打。
-    fn summary(&self) -> Option<String> {
-        (!self.0.is_empty()).then(|| {
-            format!(
+    /// 一轮结束的汇总行（每类一行）；没有就不打。体检只是提示，不列书名；质量门、KFX 要让人看出是哪几本。
+    fn lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.audit.is_empty() {
+            out.push(format!(
+                "⚠ 体检：{} 本书有和 Kindle 不一样没处理、或没验证过的写法（只是提示，书照常生成；明细用 booklib list 看）",
+                self.audit.len()
+            ));
+        }
+        if !self.gate.is_empty() {
+            out.push(format!(
+                "⚠ 质量门未过：{} 本书（{}）——产物照常生成、照常传；每本的问题用 booklib list 看",
+                self.gate.len(),
+                self.gate.titles()
+            ));
+        }
+        if !self.kfx.is_empty() {
+            out.push(format!(
+                "⚠ KFX：{} 本书转换时有问题（{}；如图片取不到、目录项或链接找不到位置）——每本的明细用 booklib list 看",
+                self.kfx.len(),
+                self.kfx.titles()
+            ));
+        }
+        if !self.kepub_css.is_empty() {
+            out.push(format!(
                 "⚠ KEPUB：{} 本书的 CSS 可能作用到新加的包装或 koboSpan（只提醒，没改 CSS；哪几本用 booklib list 看）",
-                self.0.len()
-            )
-        })
+                self.kepub_css.len()
+            ));
+        }
+        out
     }
 }
 
@@ -1150,7 +1251,7 @@ fn cmd_add(ctx: &Ctx) {
     }
 }
 
-/// `list` 里一份产物的生成记录（`audit`）显示成几行：`✗` 逐条原文、`⚠ `（KEPUB CSS 提醒）逐条原文，
+/// `list` 里一份产物的生成记录（`audit`）显示成几行：`✗` 逐条原文、`⚠ `（各类提醒：KEPUB CSS、质量门、KFX）逐条原文，
 /// 没验证过的 `? ` 合成一行。缩进由调用方加。
 fn audit_lines(audit: &[String]) -> Vec<String> {
     let mut out: Vec<String> = audit
@@ -1238,7 +1339,7 @@ fn cmd_list(ctx: &Ctx) {
                 shown.display(),
                 vertical.map_or(String::new(), |v| format!("  {v}"))
             );
-            // 体检（生成时记下的）和 KEPUB CSS 提醒：逐条列出；没验证过的合成一行
+            // 体检（生成时记下的）和各类提醒（KEPUB CSS、质量门、KFX）：逐条列出；没验证过的合成一行
             for line in audit_lines(&o.audit) {
                 println!("        {line}");
             }
@@ -1940,9 +2041,9 @@ impl SyncState {
         };
         // 没选书：只报有变化的
         let quiet = plan.selectors.is_empty();
-        let mut risky_css = RiskyCssBooks::default();
+        let mut warnings = WarningSummary::default();
         let counts = library::build_all(run, &mut |ev| {
-            risky_css.observe(&ev);
+            warnings.observe(&ev);
             if let Some(r) = event_line(ev, quiet) {
                 ctx.report(r);
             }
@@ -1958,8 +2059,8 @@ impl SyncState {
         if plan.watch.is_none() || counts.any() {
             ctx.report(Ok(counts_summary(&counts)));
         }
-        // 按书刷屏的这条一轮汇总成了 [`RiskyCssBooks::summary`] 的一行，逐本结果行里已经没有它
-        if let Some(line) = risky_css.summary() {
+        // 按书刷屏的提醒一轮每类汇总成一行（[`WarningSummary::lines`]），逐本结果行里已经没有它们
+        for line in warnings.lines() {
             ctx.report(Ok(line));
         }
         self.last_stamp = Some(stamp());
@@ -1992,7 +2093,7 @@ mod tests {
             built("丙", false),
             built("甲", true),
         ];
-        let mut hit = RiskyCssBooks::default();
+        let mut hit = WarningSummary::default();
         for ev in events {
             hit.observe(&ev);
             let BuildEvent::Built {
@@ -2006,9 +2107,128 @@ mod tests {
             let line = built_line(&device, &title, built, false).unwrap();
             assert!(!line.contains("KEPUB"), "逐本不打这条：{line}");
         }
-        let line = hit.summary().expect("有命中就要汇总");
-        assert_eq!(line.matches("KEPUB").count(), 1, "{line}");
-        assert!(line.contains("2 本书"), "{line}");
+        let lines = hit.lines();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].matches("KEPUB").count(), 1, "{lines:?}");
+        assert!(lines[0].contains("2 本书"), "{lines:?}");
+    }
+
+    /// 一轮里体检 3 本、质量门 2 本、KFX 1 本，外加一条不认识的提醒：逐本结果行下面只剩不认识的；
+    /// 每类各汇总一行、N 对；质量门、KFX 两行带书名；同一本（同设备同路径）出现两次只算一次。
+    #[test]
+    fn round_warnings_are_summarized_by_category() {
+        let ev = |device: &str, title: &str, warnings: Vec<String>| BuildEvent::Built {
+            device: device.into(),
+            title: title.into(),
+            built: Built::Written {
+                path: PathBuf::from(format!("/tmp/{device}/{title}.epub")),
+                warnings,
+            },
+        };
+        let one = |w: &str| vec![w.to_string()];
+        let events = [
+            ev("ireader", "甲", one(library::AUDIT_WARNING)),
+            ev("ireader", "乙", one(library::AUDIT_WARNING)),
+            ev("ireader", "丙", one(library::AUDIT_WARNING)),
+            ev("kobo", "丁", one(library::GATE_WARNING)),
+            ev("kobo", "戊", one(library::GATE_WARNING)),
+            ev("kindle", "己", one(library::KFX_WARNING)),
+            ev("ireader", "甲", one(library::AUDIT_WARNING)),
+            ev("ireader", "庚", one("别的提醒")),
+        ];
+        let mut summary = WarningSummary::default();
+        let mut unknown_lines = 0;
+        for ev in events {
+            summary.observe(&ev);
+            let BuildEvent::Built {
+                device,
+                title,
+                built,
+            } = ev
+            else {
+                unreachable!()
+            };
+            let line = built_line(&device, &title, built, false).unwrap();
+            for marker in [
+                library::AUDIT_WARNING,
+                library::GATE_WARNING,
+                library::KFX_WARNING,
+                bookconv::kepub::RISKY_CSS_WARNING,
+            ] {
+                assert!(!line.contains(marker), "逐本不打 {marker}：{line}");
+            }
+            if line.contains("别的提醒") {
+                unknown_lines += 1;
+            }
+        }
+        assert_eq!(unknown_lines, 1, "不认识的提醒照旧逐本打");
+        let lines = summary.lines();
+        assert_eq!(lines.len(), 3, "体检、质量门、KFX 各一行：{lines:?}");
+        assert!(
+            lines[0].contains("体检：3 本书") && !lines[0].contains("《"),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("质量门未过：2 本书")
+                && lines[1].contains("《丁》")
+                && lines[1].contains("《戊》"),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[2].contains("KFX：1 本书") && lines[2].contains("《己》"),
+            "{}",
+            lines[2]
+        );
+    }
+
+    /// 同一本书在三台上都没过质量门：算 1 本，列出三台；不会把别的书挤出前 5 个名额。
+    #[test]
+    fn warning_summary_groups_devices_of_the_same_book() {
+        let mut summary = WarningSummary::default();
+        for title in ["丙", "乙"] {
+            for dev in ["ireader", "kindle", "kobo"] {
+                summary.observe(&BuildEvent::Built {
+                    device: dev.into(),
+                    title: title.into(),
+                    built: Built::Written {
+                        path: PathBuf::from(format!("/tmp/{dev}/{title}.epub")),
+                        warnings: vec![library::GATE_WARNING.to_string()],
+                    },
+                });
+            }
+        }
+        let lines = summary.lines();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("质量门未过：2 本书"), "{}", lines[0]);
+        assert!(
+            lines[0].contains("《丙》[ireader、kindle、kobo]")
+                && lines[0].contains("《乙》[ireader、kindle、kobo]"),
+            "{}",
+            lines[0]
+        );
+    }
+
+    /// 质量门、KFX 汇总最多列 5 本书名，多的写「等 N 本」。
+    #[test]
+    fn warning_summary_lists_at_most_five_titles() {
+        let mut summary = WarningSummary::default();
+        for i in 0..7 {
+            summary.observe(&BuildEvent::Built {
+                device: "kobo".into(),
+                title: format!("书{i}"),
+                built: Built::Same {
+                    path: PathBuf::from(format!("/tmp/书{i}.kepub.epub")),
+                    warnings: vec![library::GATE_WARNING.to_string()],
+                },
+            });
+        }
+        let lines = summary.lines();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("7 本书"), "{}", lines[0]);
+        assert!(lines[0].contains("等 7 本"), "{}", lines[0]);
+        assert_eq!(lines[0].matches('《').count(), 5, "{}", lines[0]);
     }
 
     /// `list` 把生成记录里的 KEPUB CSS 提醒（`⚠ `）照原文打出来，`✗`、`?` 照旧。

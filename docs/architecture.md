@@ -51,7 +51,7 @@
 | `htmlproc/` | 注释搬移与编号（只修复时 `repair_note_links` 也用它）、字体锁、重复 id |
 | `uastyle` | 标签的缺省样式表（`<p>` 上下 1em、标题字号……）：KFX 写出器按它给缺省值，`kindle_rules` 按它写 `eink-ua.css` |
 | `kindle_model` | Kindle 上的样子（Send to Kindle 的规则）：常量（`LH_EM`、行高下限、32em 页宽、空段折叠系数）、全书正文行距和字体的取法、行高归一、竖直长度换根 em、全书样式表 `book_css`、一章的元素表 `Chapter`（层叠一遍、`<body>` 里的元素按文档序、对不对得上标签扫描）。KFX 写出器和 `wash` 的 `block_style`、`blank_fold`、`top_spacer`、`break_margin`、`kindle_images`、`kindle_rules` 共用（2026-10-13 收拢） |
-| `audit` | 体检：按怪癖表 `data/css-quirks.toml`（掌阅一栏，验证过的结论；Move 一栏 2026-10-31 去掉了）查一本书用到的写法（属性 · 元素 · 值 · 外链/`<style>`/行内），给出和 Kindle 不一样又没处理的、没验证过的；`kindle_rules` 改写之前跑，只报告。书库把摘要打在 `sync` 输出、清单记进生成记录（`list` 显示）（2026-10-13） |
+| `audit` | 体检：按怪癖表 `data/css-quirks.toml`（掌阅一栏，验证过的结论；Move 一栏 2026-10-31 去掉了）查一本书用到的写法（属性 · 元素 · 值 · 外链/`<style>`/行内），给出和 Kindle 不一样又没处理的、没验证过的；`kindle_rules` 改写之前跑，只报告。书库把数量按轮汇总打在 `sync` 输出、清单记进生成记录（`list` 显示）（2026-10-13，2026-11-16 起不再逐本刷屏） |
 | `reader_model` | 阅读器怎么排（设备模型 `ReaderModel`）：从 profile 汇成认不认 `display:none`、块末尾 `<br/>` 多不多排一行、`<p>` 认不认行距、标题字号只认的关键字和大小（`[heading_sizes]`）、页首垫图的尺寸（`[page_top]`）；给出块在这台上的行距、字号。照 Kindle 改写的 pass 拿 `kindle_model` 的 Kindle 值和它比，不一样的才改写；完全照 CSS 排的阅读器是缺省值、什么都不改（2026-10-13） |
 | `cssunlock` | 解开字体、字号、行高的锁（内置模式的文字书不用，只有漫画和没开只修复的模式走） |
 | `bgfit` | 整页背景图的尺寸意图（`cover`、`contain`、宽 100%、没写尺寸），去掉 `background-size` 的模式按它预先缩图（只修复时不做；漫画不处理，所以内置模式现在都用不到） |

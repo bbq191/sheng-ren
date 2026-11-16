@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-warning-noise
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-16-warning-noise（从 master `b834541` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T11:40:00+08:00
+- 更新时间: 2026-11-16T11:40:03+08:00
 - 引用: 接 `2026-11-16-kepub-css-warning`（已合并 `f0f84c1`）。那张单验收时列出三类同样按书刷屏的提醒，vinci 2026-11-16：「要，最后一起收拾了」。
 
 ## 需求原文
@@ -88,7 +88,40 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T11:27:16+08:00–2026-11-16T11:40:03+08:00
+- base..head：`7fbc1c2070a8f6a3b3dd807589275f57f2e4e8e3..02ed19f1b8965c9e41d188ed25b4aca9a4e6efb3`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 74c9b34 | chore: 开始执行任务单 2026-11-16-warning-noise [skip-notify] |
+  | 02ed19f | feat(library): sync 的体检、质量门、KFX 提醒按轮汇总 |
+- 改动文件：`.dev/tasks/2026-11-16-warning-noise.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/generate.rs`,`crates/library/src/generate/produce.rs` `crates/library/src/lib.rs`,`crates/library/tests/cli.rs` `crates/library/tests/common/mod.rs`,`crates/library/tests/flow.rs` `docs/architecture.md`,`docs/kepub.md` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/library/src/generate.rs`
+  - `crates/library/src/lib.rs`
+  - `crates/library/tests/flow.rs`
+  - `docs/architecture.md`
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-warning-noise-20261116-112716.json`
+- 日志：`/home/box/oc-runs/2026-11-16-warning-noise-20261116-112716.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 12.8 分钟（墙钟 767s / 实际运行 767s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16）。逐条核对：
+  - 三类来源与「输入」一致：体检＝`audit::summary`（只 ireader 这类开 `kindle_rules` 的文字书有，KFX 路径本来不打）；质量门＝`check_epub_file` 的 `errors`，只警告不拦、照常生成照常传，原来不进生成记录；KFX＝`epub_to_kfx_from` 的 warnings（图片取不到、目录项/链接找不到位置、spine 从右往左等），原来不进生成记录。三类都不进指纹。
+  - 判定没放宽：质量门两次检查照做，KEPUB 只去掉和优化产物文字完全相同的错误；KFX 只做完全相同去重和 20 条记录上限（sync 照样计这本书）；体检判定不动。
+  - 偏离 4 个文件逐个核对，都合理、不涉及产物和判定：`crates/library/src/generate.rs`、`crates/library/src/lib.rs` 只是把三个标记常量 `AUDIT_WARNING`/`GATE_WARNING`/`KFX_WARNING` 导出给 `booklib` 认；`crates/library/tests/flow.rs` 的 `audit_findings_are_kept_in_the_generation_record` 原来断言逐本的体检文字，改成断言标记，生成记录里体检清单的断言保留，意图没变；`docs/architecture.md` 的 `audit` 一行同步成「按轮汇总、清单进生成记录」。
+  - 实跑（`target/noisetest` 临时书库，设备目录指到临时目录，`--device=ireader,kobo,kindle`，5 本小书：普通、目录 href 指向不存在的文件、引用不存在的图、列表项行内 px 左边距、死锚点）：改动前逐本打 ⚠ 共 15 行（其中 kobo 的质量门 KEPUB 原样重报 3 行）；改动后逐本行下面都没有，末尾三行汇总：体检 1 本、质量门 2 本（带书名和设备）、KFX 1 本（带书名）。`list` 在对应书下逐条显示「提醒 ⚠ 质量门未过：…」「提醒 ⚠ KFX：…」，KEPUB 不重复。
+  - 产物：改动前 master（`7fbc1c2`）release 二进制与改动后对同样 5 本、三台共 15 份产物（ireader EPUB 5、kobo KEPUB 5、kindle KFX 5）逐字节相同。
+  - 版本号、指纹构成、`fp_golden.txt` 都没动；没有新出现上游项目名。
+  - 发现并修正（fix 提交）：汇总按（设备, 路径）计数，一本书三台都没过质量门算成 3 本、前 5 个名额被同一本占掉、另一本看不到。改为按书名归并、列出命中设备，本数按书计；补单测 `warning_summary_groups_devices_of_the_same_book`，docs/usage.md 同步。已知局限：`BuildEvent::Built` 不带书 id，两本同名的书在汇总行里会合成一项（明细以 `list` 为准）。
+  - `cargo test --workspace` 851 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 未跑真书回归、未上真机（只改提醒的记录和显示，产物不变）。
+  - 补「分步任务 1」的 KFX 警告清单（验收时 `rg` 核对）：`kfx::write` 的「目录项找不到位置：{label}」（`write/entities.rs`）、「链接目标找不到：{file}#{id}」（同文件）、「图片格式 {mime} 不支持：{path}」/「图片找不到或格式不支持：{path}」（`write/resources.rs`）、「spine 写了从右往左，KFX 只会横排，按从左往右翻」（`write/mod.rs`）；`bookconv::epubbook::load_from` 的「N 张图片格式不支持（只支持 JPEG/PNG/GIF 和 WebP），在 Kindle 上不显示：{path}」。都经 `epub_to_kfx_from` 返回、整体接纳，不按文字过滤。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-warning-noise.agy.md`。建议一条（`audit_lines` 注释仍只写 KEPUB CSS）已改；线索两条：同名书在汇总行合并（已知局限，验收已注明）、结果里没列 KFX 警告清单（上面已补）。
+- 合并：（待填）

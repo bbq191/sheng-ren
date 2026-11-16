@@ -5,11 +5,59 @@ use crate::fsutil::TMP_PREFIX;
 use crate::session::PreparedInput;
 use crate::{Library, Meta};
 use profile::{Format, Profile};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+/// `warnings` 里给 `booklib sync` 按轮汇总的类别标记：逐本结果行不再打，一轮结束各汇总成一行；
+/// 明细记在生成记录的 `audit` 里（`booklib list` 看）。改了要一起改 `booklib` 里认这些标记的地方。
+pub const AUDIT_WARNING: &str = "体检：有和 Kindle 不一样、没处理或没验证过的写法";
+pub const GATE_WARNING: &str = "质量门未过";
+pub const KFX_WARNING: &str = "KFX：转换时有问题";
+
+/// 优化产物的质量门错误记进生成记录：每条一行。
+fn gate_audit_lines(errors: &[String]) -> Vec<String> {
+    errors
+        .iter()
+        .map(|e| format!("⚠ 质量门未过：{e}"))
+        .collect()
+}
+
+/// KEPUB 产物的质量门错误记进生成记录：和优化产物文字完全相同的（KEPUB 只多插了包装和 koboSpan，
+/// 优化产物有的错几乎一定原样再报一遍）不再记，只记新出现的。
+fn kepub_gate_audit_lines(errors: &[String], gate: &[String]) -> Vec<String> {
+    errors
+        .iter()
+        .filter(|e| !gate.contains(e))
+        .map(|e| format!("⚠ 质量门未过（KEPUB）：{e}"))
+        .collect()
+}
+
+/// KFX 写出器的警告记进生成记录：同样的去重，最多记 20 条，多出来的再加一行汇总
+/// （链接目标找不到的书可能有上百条，生成记录不能被撑大）。
+fn kfx_audit_lines(warnings: &[String]) -> Vec<String> {
+    const MAX: usize = 20;
+    let mut seen = HashSet::new();
+    let unique: Vec<&String> = warnings
+        .iter()
+        .filter(|w| seen.insert(w.as_str()))
+        .collect();
+    let mut out: Vec<String> = unique
+        .iter()
+        .take(MAX)
+        .map(|w| format!("⚠ KFX：{w}"))
+        .collect();
+    if unique.len() > MAX {
+        out.push(format!(
+            "⚠ KFX：另有 {} 条（同类，未逐条记）",
+            unique.len() - MAX
+        ));
+    }
+    out
+}
 
 impl Library {
     /// 生成产物写到 `part`（书库临时目录里）：EPUB 直接是优化结果；KFX、KEPUB 是同一份优化结果再转一次（中间文件放 `tmp`）。
-    /// 返回警告（质量门、体检摘要）、产物的 SHA-256（整份在内存里的时候顺带算好；EPUB 是 `None`，由调用方读文件算）和体检清单。
+    /// 返回警告（给 sync 按轮汇总的类别标记）、产物的 SHA-256（整份在内存里的时候顺带算好；EPUB 是 `None`，由调用方读文件算）和体检清单。
     pub(super) fn produce(
         &self,
         meta: &Meta,
@@ -34,15 +82,16 @@ impl Library {
         };
         let optimized_rep =
             bookconv::optimize::optimize_epub_file_streaming(&epub, &optimized, &opts, |_, _| {})?;
-        // 体检（怪癖表，只报告）：sync 打摘要，清单记进生成记录
+        // 体检（怪癖表，只报告）：sync 只认标记（一轮汇总一行），清单记进生成记录
         let findings = optimized_rep.wash.map(|w| w.audit).unwrap_or_default();
         let mut audit: Vec<String> = findings
             .iter()
             .map(bookconv::audit::Finding::line)
             .collect();
-        let rep = bookconv::check::check_epub_file(&optimized)?;
-        if !rep.ok {
-            warnings.extend(rep.errors.iter().map(|e| format!("质量门未过：{e}")));
+        let gate = bookconv::check::check_epub_file(&optimized)?;
+        if !gate.ok {
+            audit.extend(gate_audit_lines(&gate.errors));
+            warnings.push(GATE_WARNING.to_string());
         }
         if format == Format::Kepub {
             // 只插 koboSpan 和包装（docs/kepub.md）；产物再过一次质量门（插坏了能看出来）
@@ -60,11 +109,15 @@ impl Library {
             warnings.extend(kp.warnings);
             let rep = bookconv::check::check_epub_file(part)?;
             if !rep.ok {
-                warnings.extend(
-                    rep.errors
-                        .iter()
-                        .map(|e| format!("质量门未过（KEPUB）：{e}")),
-                );
+                // KEPUB 只在优化产物上插包装和 koboSpan：和优化产物文字完全相同的错误不再记、
+                // 也不再报，只有 KEPUB 新出现的才记（判定本身不变，两次检查照做）。
+                let new = kepub_gate_audit_lines(&rep.errors, &gate.errors);
+                if !new.is_empty() {
+                    audit.extend(new);
+                    if !warnings.iter().any(|w| w == GATE_WARNING) {
+                        warnings.push(GATE_WARNING.to_string());
+                    }
+                }
             }
         } else if format == Format::Kfx {
             // 按文件读（不先整本读进内存）；BufReader：zip 按条目小块读
@@ -81,11 +134,17 @@ impl Library {
                     media: Some(kfx::css::MediaEnv::for_profile(device)),
                 },
             )?;
-            warnings.extend(w);
+            audit.extend(kfx_audit_lines(&w));
+            if !w.is_empty() {
+                warnings.push(KFX_WARNING.to_string());
+            }
             std::fs::write(part, &bytes).map_err(|e| format!("写 {}: {e}", part.display()))?;
             return Ok((warnings, Some(crate::fsutil::sha256_hex(&bytes)), audit));
         }
-        warnings.extend(bookconv::audit::summary(&findings, &device.id));
+        // 体检清单逐条在 `audit` 里；`sync` 只认这个标记，一轮汇总一行
+        if !findings.is_empty() {
+            warnings.push(AUDIT_WARNING.to_string());
+        }
         Ok((warnings, None, audit))
     }
     /// 要优化的 EPUB：原件（EPUB）或当场转换的（CBZ），再补上书里没有、书库里有找来的封面、简介、标签。
@@ -153,4 +212,53 @@ pub(super) fn kfx_id(book_id: &str) -> Option<u64> {
         return None;
     }
     u64::from_str_radix(book_id, 16).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// KEPUB 质量门和优化产物文字完全相同的错误只记一次；KEPUB 新出现的照记。两边判定都照做。
+    #[test]
+    fn kepub_gate_errors_are_deduplicated() {
+        let gate = vec![
+            "目录 href 文件命中率过低 0/10".to_string(),
+            "单标签双 id：p".to_string(),
+        ];
+        let kepub = vec![
+            "目录 href 文件命中率过低 0/10".to_string(),
+            "单标签双 id：p".to_string(),
+            "KEPUB 才有的错".to_string(),
+        ];
+        assert_eq!(
+            gate_audit_lines(&gate),
+            [
+                "⚠ 质量门未过：目录 href 文件命中率过低 0/10",
+                "⚠ 质量门未过：单标签双 id：p"
+            ]
+        );
+        assert_eq!(
+            kepub_gate_audit_lines(&kepub, &gate),
+            ["⚠ 质量门未过（KEPUB）：KEPUB 才有的错"]
+        );
+    }
+
+    /// KFX 警告同样的去重，超过 20 条只记前 20 条，再记一行"另有 N 条"。
+    #[test]
+    fn kfx_warnings_are_deduplicated_and_capped() {
+        let mut warnings: Vec<String> = (0..25)
+            .map(|i| format!("链接目标找不到：c.xhtml#a{i}"))
+            .collect();
+        warnings.push(warnings[0].clone());
+        let lines = kfx_audit_lines(&warnings);
+        assert_eq!(lines.len(), 21, "{lines:?}");
+        assert_eq!(lines[0], "⚠ KFX：链接目标找不到：c.xhtml#a0");
+        assert_eq!(lines[19], "⚠ KFX：链接目标找不到：c.xhtml#a19");
+        assert_eq!(lines[20], "⚠ KFX：另有 5 条（同类，未逐条记）");
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("#a0")).count(),
+            1,
+            "重复的不再记：{lines:?}"
+        );
+    }
 }
