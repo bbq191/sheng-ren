@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-imgopt-tests-mod
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: oc-exec
 - 分支: task/2026-11-16-imgopt-tests-mod（从最新 master `ef478be` 切出）
-- 更新时间: 2026-11-16T15:00:35+08:00
+- 更新时间: 2026-11-16T15:17:22+08:00
 - 引用: `2026-11-13-split-imgopt` 审查「建议（非阻断）」1、2，二审回执 `2026-11-13-split-imgopt.agy.md` 同两条
 
 ## 需求原文
