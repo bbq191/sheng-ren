@@ -113,3 +113,4 @@
   - 已知局限：`plan` 一个函数约 880 行，`box_fix.rs` 仍有 1119 行；再拆就要改控制流，不是只挪代码，留给 vinci 决定要不要另开单。
   - 没跑真书回归、没上真机。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过；无阻断、无建议。线索一条（`list_indent_extra_px` 没向 `wash` 再导出）：拆前就是 `box_fix` 私有函数、`wash/mod.rs` 只在注释里提到，可见性与 master 一致，不用改（开单时「输入」里写它要照旧能用，说得宽了）。见 `2026-11-16-split-box-fix.agy.md`。
+- 合并：9338be7（`--no-ff` 进 master；master 合并前没动，合并树与已验收的分支末端相同：test 864 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后删除。状态保持 done，等 vinci 真机验收。
