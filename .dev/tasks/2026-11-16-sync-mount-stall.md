@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-sync-mount-stall
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-sync-mount-stall（从 master `60d4305` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T13:53:41+08:00
+- 更新时间: 2026-11-16T14:07:37+08:00
 - 引用: `2026-11-12-lock-no-device`「后续」第 2 条（「`sync` 在卡死的挂载上仍会卡（`deliver::connect` 的 `mounted()`）」）；`2026-11-12-list-no-device-stall`「约束」里留给本单的那条。
 
 ## 需求原文
@@ -117,7 +117,24 @@
 - `docs/usage.md`、`docs/decisions.md`
 
 ## 结果
-（执行方填）
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T13:53:41+08:00–2026-11-16T14:07:37+08:00
+- base..head：`863fe269dfcb60f526d1c6a154c62100152526ff..96bab7f4d134a0614915874353b86ef7c41c1daa`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 9002af9 | chore: 开始执行任务单 2026-11-16-sync-mount-stall [skip-notify] |
+  | 96bab7f | fix: sync 在卡死的设备挂载上不再一直挂着 |
+- 改动文件：`.dev/tasks/2026-11-16-sync-mount-stall.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/build_run.rs`,`crates/library/src/deliver.rs` `crates/library/src/generate.rs`,`crates/library/src/generate/flow.rs` `crates/library/src/generate/records.rs`,`crates/library/src/generate/space.rs` `crates/library/src/lib.rs`,`crates/library/src/stall.rs` `crates/library/src/transfer.rs`,`crates/library/tests/stall.rs` `docs/decisions.md`,`docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/library/src/generate.rs`
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-sync-mount-stall-20261116-135341.json`
+- 日志：`/home/box/oc-runs/2026-11-16-sync-mount-stall-20261116-135341.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 13.9 分钟（墙钟 836s / 实际运行 836s；超时按实际运行计）
 
 ## 审查
 （负责 bot 填）
