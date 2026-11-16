@@ -103,3 +103,12 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree；对照 master `b9724be`）。运行记录 JSON 的 `deviations` 为空，与结果一致；`wash` 其他文件未改。
+  - 拆法：`box_fix.rs` 1119 行（模块说明、`use`、`mod`、`CSS_NAME`、`BoxGeometry`、`Plan`、`apply`、`skipped`、`heading`、`fmt`、`plan`——`plan` 约 880 行，按单子要求整体保留）；`box_fix/line.rs` 95（`RULE_W`、`Frame`、`LineStyle`、`Line`、`LineKey`、`frame_open`、`FRAME_CLOSE`）；`box_fix/rewrite.rs` 256（`Out`、`Job`、`Resolved`、`resolve`、`rewrite`、`list_indent_extra_px`、`MAX_TOP_PAD_REM`、`NARROW_SHARE`、`big_top_pad`、`page_top_rule_px`）；`box_fix/tests.rs` 559。
+  - 只挪代码：按顶层项逐个比对（去掉可见性差异后），旧文件 56 项除 `mod tests` 外全部原样出现，没有文本差异；新增只有 `use`、`mod`、再导出、`//!` 说明。`tests.rs` 与原 `mod tests` 去掉 4 格缩进后逐行相同，只多一行 `//!` 说明。
+  - 可见性：子模块里给 `box_fix` 用的改成 `pub(super)`；`page_top_rule_px` 原来 `pub(super)`（给 `top_spacer.rs` 用），现在 `pub(in crate::wash)` 并在 `box_fix.rs` 里 `pub(super) use` 再导出，`super::box_fix::page_top_rule_px` 原路径照旧，可见范围同拆前。
+  - 发现并修正（提交 `d46610a`）：执行方把原本私有的 `frame_open` 用 `pub(super) use` 再导出给整个 `wash`，实际只有 `box_fix/rewrite.rs` 用；收回成 `line.rs` 里 `pub(super)`、`box_fix.rs` 里私有 `use`，可见范围回到 `box_fix` 内，模块说明里的 [`frame_open`] 链接照样能解析。
+  - 测试：box_fix 17 项名字与 master 一致；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告（含上面的修正）。
+  - 产物：master 与分支二进制对 4 本书同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同，输出除路径外相同。另把测试用的 `xochitl`（Move）配置放进临时书库的 `profiles/` 当自定义模式（box_fix 主要在它上面生效），同样 4 本生成的 4 份产物 sha256 全部相同（文字书乙生成了 `eink-box.css`，确认 box_fix 走到了）。版本号、`fp_golden.txt` 没动。
+  - 已知局限：`plan` 一个函数约 880 行，`box_fix.rs` 仍有 1119 行；再拆就要改控制流，不是只挪代码，留给 vinci 决定要不要另开单。
+  - 没跑真书回归、没上真机。
