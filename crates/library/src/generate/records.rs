@@ -47,10 +47,12 @@ impl Library {
         if !maybe {
             return Ok(());
         }
-        self.edit_state(&sp, |state| {
-            let mut changed = state.migrate_prefixes(&mappings);
-            changed |= state.rebase_case_root(root);
-            changed.then_some(())
+        self.device_op(device, "核对设备上产物的位置", || {
+            self.edit_state(&sp, |state| {
+                let mut changed = state.migrate_prefixes(&mappings);
+                changed |= state.rebase_case_root(root);
+                changed.then_some(())
+            })
         })?;
         Ok(())
     }
@@ -126,14 +128,16 @@ impl Library {
     /// 这本书不再给这台设备（从它的跟踪范围里拿掉了）：删掉它在这台上的产物，从这台的生成记录里去掉；
     /// 删不掉的记进 `orphans`，下次接上再删。这台上本来就没有返回 `false`。书库里的书不动。
     pub fn retract(&self, id: &str, device: &Profile) -> Result<bool, String> {
-        self.rebase_state_case(device)?;
-        let sp = self.state_path(&device.id);
-        let removed = self.edit_state(&sp, |state| {
-            let entry = state.books.remove(id)?;
-            state.delete_into_orphans(entry.placements(), &self.devices);
-            Some(())
-        })?;
-        Ok(removed.is_some())
+        self.device_op(device, "删这本书在设备上的产物", || {
+            self.rebase_state_case(device)?;
+            let sp = self.state_path(&device.id);
+            let removed = self.edit_state(&sp, |state| {
+                let entry = state.books.remove(id)?;
+                state.delete_into_orphans(entry.placements(), &self.devices);
+                Some(())
+            })?;
+            Ok(removed.is_some())
+        })
     }
 
     /// 这台设备的生成记录里有这本书。
@@ -164,12 +168,14 @@ impl Library {
         if self.target(device).is_err() {
             return Ok(0);
         }
-        let n = self.edit_state(&sp, |state| {
-            let list = std::mem::take(&mut state.orphans);
-            let before = list.len();
-            state.delete_into_orphans(list, &self.devices);
-            let n = before - state.orphans.len();
-            (n > 0).then_some(n)
+        let n = self.device_op(device, "删已从书库删除的书留在设备上的产物", || {
+            self.edit_state(&sp, |state| {
+                let list = std::mem::take(&mut state.orphans);
+                let before = list.len();
+                state.delete_into_orphans(list, &self.devices);
+                let n = before - state.orphans.len();
+                (n > 0).then_some(n)
+            })
         })?;
         Ok(n.unwrap_or(0))
     }

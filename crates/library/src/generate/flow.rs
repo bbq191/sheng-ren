@@ -114,7 +114,10 @@ impl Library {
                 tmp: None,
                 src: p.path.clone(),
                 sha: if p.sha.is_empty() {
-                    crate::fsutil::sha256_file(&p.path)?
+                    // 记录里没哈希：把设备上的产物读回来算（一次读完整本，主线程兜底按 2T 计时）
+                    self.device_op(device, "读回设备上已有的产物", || {
+                        crate::fsutil::sha256_file(&p.path)
+                    })?
                 } else {
                     p.sha.clone()
                 },
@@ -139,17 +142,23 @@ impl Library {
             ..
         } = plan;
         let sp = self.state_path(&device.id);
-        let slot = self.resolve_placement(meta, device, target, &sp, format.ext())?;
+        let slot = self.device_op(device, "看设备上有没有同名文件", || {
+            self.resolve_placement(meta, device, target, &sp, format.ext())
+        })?;
         let staged = matches!(target, Target::Dir { staged: true, .. });
         let unchanged = slot
             .prev
             .as_ref()
             .filter(|p| !force && p.fingerprint == fingerprint);
+        let done = unchanged
+            .filter(|p| self.device_op(device, "看设备上的产物还在不在", || p.path.is_file()));
         let record = RecordState {
-            done: unchanged.filter(|p| p.path.is_file()),
+            done,
             unchanged,
         };
-        if let Some(built) = self.settle_fresh(meta, &sp, &slot, &fingerprint, record, staged)? {
+        if let Some(built) = self.device_op(device, "认领设备上已有的产物", || {
+            self.settle_fresh(meta, &sp, &slot, &fingerprint, record, staged)
+        })? {
             return Ok(Step::Done(built));
         }
         // 设备中途断开了：不生成、不改记录（不然下面会把完好的指纹、哈希清掉，接上后整本重传），报给 `build_all` 记成掉线
@@ -173,16 +182,20 @@ impl Library {
         };
         let r = (|| {
             // 目录里已有一个不认识的同名文件、和这份逐字节相同（以前手工拷上去的）：认领它，不另起名字
-            let out = slot.dir.join(self.records.states.get(&sp).file_name_for(
-                meta,
-                &slot.dir,
-                format.ext(),
-                Some(&made.src),
-                slot.copied.as_deref(),
-                &slot.taken,
-            )?);
-            let (mut entry, same) =
-                self.stage_registration(meta, &sp, &slot, &out, &made, direct)?;
+            let name = self.device_op(device, "选设备上的文件名", || {
+                self.records.states.get(&sp).file_name_for(
+                    meta,
+                    &slot.dir,
+                    format.ext(),
+                    Some(&made.src),
+                    slot.copied.as_deref(),
+                    &slot.taken,
+                )
+            })?;
+            let out = slot.dir.join(name);
+            let (mut entry, same) = self.device_op(device, "核对设备上已有的文件", || {
+                self.stage_registration(meta, &sp, &slot, &out, &made, direct)
+            })?;
             // 记录里没有哈希（不是我们传的、或旧记录）时才把设备上的读回来比
             let compare = entry.sha.is_empty();
             entry.fingerprint = fingerprint.clone();
@@ -237,6 +250,10 @@ impl Library {
         } = made;
         let mut entry = entry;
         entry.audit = audit;
+        let stall_key = work
+            .mount
+            .clone()
+            .unwrap_or_else(|| work.out.clone());
         Transfer {
             device: device.id.clone(),
             title: meta.title.clone(),
@@ -250,6 +267,10 @@ impl Library {
             entry,
             work,
             staged,
+            progress: crate::stall::Progress::new(crate::stall::operation_timeout()),
+            stall_key,
+            #[cfg(test)]
+            test_hang: None,
         }
     }
 
@@ -276,7 +297,13 @@ impl Library {
         let mut entry = t.entry;
         entry.sha = t.sha;
         let path = entry.path.clone();
-        self.finish(&t.sp, &meta_id, entry, staged)?;
+        let device = self.registry.get(&t.device);
+        match device {
+            Some(p) => self.device_op(p, "删设备上的旧位置", || {
+                self.finish(&t.sp, &meta_id, entry, staged)
+            })?,
+            None => self.finish(&t.sp, &meta_id, entry, staged)?,
+        }
         Ok(match t.from {
             Some(from) => Built::Moved { from, to: path },
             None if wrote => Built::Written {
@@ -303,4 +330,37 @@ impl Library {
 /// 同目录改名是原子的，经临时文件：直写的话更新已有的书要先删旧的，写到一半拔线就丢了旧书、留下 Nickel 会去导入的半截。
 pub(super) fn direct_write(target: &Target) -> bool {
     matches!(target, Target::Dir { staged: false, .. })
+}
+
+/// 测试用：造一件不碰书库的传输（[`crate::Pipeline`] 的单元测试用；`hang` 是模拟卡在设备上的时长）。
+#[cfg(test)]
+pub(crate) fn test_transfer(device: &str, step: std::time::Duration, hang: Option<std::time::Duration>) -> Transfer {
+    let path = PathBuf::from("/测试/产物.epub");
+    Transfer {
+        device: device.into(),
+        title: "测试".into(),
+        book: "000000000000".into(),
+        sp: PathBuf::from("/测试/生成记录.json"),
+        tmp: None,
+        src: path.clone(),
+        sha: String::new(),
+        warnings: Vec::new(),
+        from: None,
+        entry: StateEntry::file(
+            path.clone(),
+            PathBuf::from("/测试"),
+            String::new(),
+            Vec::new(),
+        ),
+        work: Work {
+            out: path.clone(),
+            compare: false,
+            direct: true,
+            mount: None,
+        },
+        staged: false,
+        progress: crate::stall::Progress::new(step),
+        stall_key: path,
+        test_hang: hang,
+    }
 }

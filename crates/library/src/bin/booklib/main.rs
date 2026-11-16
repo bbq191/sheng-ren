@@ -318,6 +318,8 @@ const HELP_TAIL: &str = "\
   BOOKLIB_DEVICES_DIR  设备的链接目录（缺省 $HOME/Devices）：链接名就是 Kindle、Bigme、Hanvon、Ireader、Kobo，
                     链接和挂载由 dotfiles 管，booklib 只读、不建也不删
   BOOKLIB_MTP_NO_MOUNT_CHECK=1  不查链接指向的挂载点挂没挂着（测试用普通目录当设备）
+  BOOKLIB_DEVICE_TIMEOUT=秒  设备多久没回应算挂载卡死（缺省 30）：连接探测等 1 倍，主线程一步、传输两步；
+                          超时只跳过卡住的那台；主线程那几步卡死时打一行、退出码 2 结束整个进程
   BOOKLIB_NO_NET=1  不联网（不找元数据、封面）
 
   BOOKLIB_MTP_DIR、BOOKLIB_USBMS_DIR 已废弃：只用来认旧生成记录里的前缀，不再用于找设备。
@@ -679,6 +681,13 @@ fn event_line(ev: BuildEvent, quiet: bool) -> Option<Result<String, String>> {
         } => Err(format!("✗ [{device}] {title}: {error}")),
         BuildEvent::TransportLost { device, count } => Err(format!(
             "✗ [{device}] 传输线程意外退出，{count} 本没传成（下次再传）"
+        )),
+        BuildEvent::Stalled {
+            device,
+            count,
+            secs,
+        } => Err(format!(
+            "✗ [{device}] 挂载没响应（{secs} 秒没有进展），这一轮不再往它传；{count} 本没传成，记录没改，下次重传"
         )),
         // 空间不够不算失败（不影响退出码）：下一轮、下次同步腾出空间再传
         BuildEvent::NoSpace {

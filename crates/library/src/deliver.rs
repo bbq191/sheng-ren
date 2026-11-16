@@ -19,6 +19,8 @@ use profile::{Deliver, Profile};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
+use crate::stall;
+
 /// 设备在哪找（测试、特殊环境可改）。
 #[derive(Clone, Debug)]
 pub struct DeviceEnv {
@@ -178,13 +180,20 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
         None => Ok(Target::Local),
         Some(d @ Deliver::Mtp { dir, .. }) => {
             let link = env.devices_base.join(d.link_name());
+            // 「接没接上」照旧只看链接和 mountinfo，不 stat 目标；判定接上以后才限时进挂载点看一眼（规则 2、3）
             if env.mount_check && !mounted_link(&link) {
                 return Err(format!("没接上（{} 不在或没挂上）", link.display()));
             }
-            if !env.mount_check && !link.is_dir() {
-                return Err(format!("没接上（{} 不在）", link.display()));
-            }
-            let storage = mtp_storage(&link)
+            let mount_check = env.mount_check;
+            let probe_link = link.clone();
+            let storage = probe(&link, move || {
+                stall::test_hang(&probe_link, stall::Where::Probe);
+                if !mount_check && !probe_link.is_dir() {
+                    return None;
+                }
+                mtp_storage(&probe_link)
+            })?;
+            let storage = storage
                 .ok_or_else(|| format!("没接上（{} 不在或没挂上）", link.display()))?;
             // `dir` 不在（掌阅原来没有 documents/）的话传书时再建：只看接没接上的命令（devices）不往设备上写
             Ok(Target::Dir {
@@ -200,7 +209,18 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
             if env.mount_check && !mounted_link(&link) {
                 return Err(format!("没接上（{} 不在或没挂上）", link.display()));
             }
-            if !env.mount_check && !link.is_dir() {
+            // 判定接上以后限时对链接 read_dir 一次：USB 存储连接时本来不进挂载点，卡死要等第一次碰设备才知道
+            let mount_check = env.mount_check;
+            let probe_link = link.clone();
+            let readable = probe(&link, move || {
+                stall::test_hang(&probe_link, stall::Where::Probe);
+                if !mount_check && !probe_link.is_dir() {
+                    return false;
+                }
+                let _ = std::fs::read_dir(&probe_link).map(|mut it| it.next());
+                true
+            })?;
+            if !readable {
                 return Err(format!("没接上（{} 不在）", link.display()));
             }
             Ok(Target::Dir {
@@ -210,6 +230,24 @@ pub(crate) fn connect(env: &DeviceEnv, p: &Profile) -> Result<Target, String> {
             })
         }
     }
+}
+
+/// 限时进挂载点看一眼（规则 2、3）：上次访问还没返回、或这次超过 `T` 没回应，都返回中文原因、这一轮跳过这台。
+fn probe<T: Send + 'static>(link: &Path, f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    if stall::outstanding(link) {
+        return Err(format!(
+            "挂载没响应（{} 上次访问还没返回），这一轮跳过；拔下重插或重新挂载后再同步",
+            link.display()
+        ));
+    }
+    let limit = stall::probe_timeout();
+    stall::run_limited(link, limit, f).ok_or_else(|| {
+        format!(
+            "挂载没响应（{} {} 秒没回应），这一轮跳过；拔下重插或重新挂载后再同步",
+            link.display(),
+            limit.as_secs()
+        )
+    })
 }
 
 /// `point` 是不是挂着的设备：符号链接（`~/Devices/<Name>`）看它指向的挂载点在不在 `/proc/self/mountinfo`，不 stat 目标；
@@ -360,10 +398,21 @@ pub(crate) struct PutOptions<'a> {
 ///
 /// 目录刚建好、文件还没放进去时，主线程可能正好把它当成"变空的目录"删掉（删别的书的旧位置时顺带删空目录，
 /// `generate::State::delete_placements`）：碰到目录不在了就重建再放，试几次。
+#[cfg(test)]
 pub(crate) fn put_file(
     src: &Path,
     dest: &Path,
     opts: PutOptions<'_>,
+) -> Result<bool, crate::error::Error> {
+    put_file_tracked(src, dest, opts, None)
+}
+
+/// 同 [`put_file`]，另带传输进度（`sync` 的传输线程用：卡住时主线程按这个放弃这条线程）。
+pub(crate) fn put_file_tracked(
+    src: &Path,
+    dest: &Path,
+    opts: PutOptions<'_>,
+    progress: Option<&stall::Progress>,
 ) -> Result<bool, crate::error::Error> {
     // 挪到只差大小写的新名字（书名只改了大小写）：不分大小写的文件系统上 `dest` 就是 `src`，下面"先删 dest"会把书删掉。
     // 先改成旁边的临时名字，再从那里放
@@ -377,6 +426,7 @@ pub(crate) fn put_file(
                 keep_src: false,
                 ..opts
             },
+            progress,
         );
         if r.is_err() && staged.is_file() {
             let _ = std::fs::rename(&staged, src); // 放回原名，记录还对得上
@@ -395,15 +445,17 @@ pub(crate) fn put_file(
                 direct: false,
                 ..opts
             },
+            progress,
         );
     }
-    put_file_retry(src, dest, opts)
+    put_file_retry(src, dest, opts, progress)
 }
 
 fn put_file_retry(
     src: &Path,
     dest: &Path,
     opts: PutOptions<'_>,
+    progress: Option<&stall::Progress>,
 ) -> Result<bool, crate::error::Error> {
     use crate::error::{Error, Kind};
     // 每次写之前、写完都看挂载点还挂着：设备中途断开后挂载点只剩空目录（MTP 的在 tmpfs 上，用户能写），
@@ -421,7 +473,7 @@ fn put_file_retry(
         if let Some(e) = gone() {
             return Err(e);
         }
-        match put_file_once(src, dest, opts) {
+        match put_file_once(src, dest, opts, progress) {
             Err((_, true))
                 if tries < 3 && dest.parent().is_some_and(|d| !d.is_dir()) && src.is_file() =>
             {
@@ -562,23 +614,42 @@ fn put_file_once(
     src: &Path,
     dest: &Path,
     opts: PutOptions<'_>,
+    progress: Option<&stall::Progress>,
 ) -> Result<bool, (crate::error::Error, bool)> {
     let missing = |e: &std::io::Error| e.kind() == std::io::ErrorKind::NotFound;
     if let Some(dir) = dest.parent() {
         ensure_dir(dir, |d| std::fs::create_dir(d), MKDIR_BACKOFF)
             .map_err(|e| (io_error(dir.display().to_string(), &e), missing(&e)))?;
     }
-    if opts.compare && same_bytes(src, dest) {
-        if !opts.keep_src {
-            let _ = std::fs::remove_file(src);
+    if opts.compare {
+        if let Some(p) = progress {
+            p.beat_long(std::fs::metadata(src).map(|m| m.len()).unwrap_or(0));
         }
-        fix_case(dest);
-        return Ok(false);
+        let same = same_bytes(src, dest);
+        if let Some(p) = progress {
+            p.beat();
+        }
+        if same {
+            if !opts.keep_src {
+                let _ = std::fs::remove_file(src);
+            }
+            fix_case(dest);
+            return Ok(false);
+        }
     }
-    // 测试钩子 BOOKLIB_TEST_ENOSPC 要走复制那条路（同一文件系统上改名不会写满）
-    if !opts.keep_src && fail_write().is_none() && std::fs::rename(src, dest).is_ok() {
-        let _ = crate::fsutil::sync_parent(dest);
-        return Ok(true);
+    // 测试钩子 BOOKLIB_TEST_ENOSPC 要走复制那条路（同一文件系统上改名不会写满）；
+    // 测试钩子「写设备时卡住」也一样：同一文件系统上的改名会绕过写，强制走复制
+    let same_fs_rename = !opts.keep_src
+        && fail_write().is_none()
+        && !stall::hang_enabled(dest, stall::Where::Write);
+    if same_fs_rename {
+        if let Some(p) = progress {
+            p.beat_long(std::fs::metadata(src).map(|m| m.len()).unwrap_or(0));
+        }
+        if std::fs::rename(src, dest).is_ok() {
+            let _ = crate::fsutil::sync_parent(dest);
+            return Ok(true);
+        }
     }
     let tmp = if opts.direct {
         let _ = std::fs::remove_file(dest);
@@ -587,20 +658,41 @@ fn put_file_once(
         crate::fsutil::tmp_sibling(dest)
     };
     let copy = || -> std::io::Result<()> {
+        use std::io::Write;
+        use std::os::unix::io::IntoRawFd;
+        // 测试钩子：只在写设备上的文件时卡住（连接探测、主线程那几处由各自的入口钩子管）
+        stall::test_hang(&tmp, stall::Where::Write);
         // 大块读写：经 FUSE（jmtpfs）每次写都是一次往返，缺省 8KB 一块太碎
         let mut r = std::io::BufReader::with_capacity(COPY_BUF, std::fs::File::open(src)?);
         let mut w = std::io::BufWriter::with_capacity(COPY_BUF, std::fs::File::create(&tmp)?);
         if let Some(e) = fail_write() {
-            use std::io::Write;
             w.write_all(b"partial")?;
             w.flush()?;
             return Err(std::io::Error::from_raw_os_error(e));
         }
-        std::io::copy(&mut r, &mut w)?;
+        // 分块复制、每块写成功打一次心跳：卡死时主线程按「连续 2T 没有进展」放弃这条传输线程
+        let mut buf = vec![0u8; COPY_BUF];
+        let mut total = 0u64;
+        loop {
+            let n = r.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            w.write_all(&buf[..n])?;
+            total += n as u64;
+            if let Some(p) = progress {
+                p.beat();
+            }
+        }
+        w.flush()?;
         let f = w.into_inner().map_err(|e| e.into_error())?;
+        // jmtpfs 在关文件（FUSE flush）时才真正传上设备：这一下和 sync_all 都是「一次调用把整本传完」，
+        // 时限要按字节数放宽（MTP 慢，不能误判大漫画）
+        if let Some(p) = progress {
+            p.beat_long(total);
+        }
         f.sync_all()?;
-        // jmtpfs 在关文件（FUSE flush）时才真正传上设备：关的错误（设备满、断开）要看，`File` 自己 drop 时会把它丢掉
-        use std::os::unix::io::IntoRawFd;
+        // jmtpfs 在关文件（FUSE flush）时才真正传上设备，关的错误（设备满、断开）要看，`File` 自己 drop 时会把它丢掉
         // SAFETY: fd 刚从 File 里拿出来、只关这一次
         if unsafe { libc::close(f.into_raw_fd()) } != 0 {
             return Err(std::io::Error::last_os_error());
@@ -615,6 +707,9 @@ fn put_file_once(
         return Err((io_error(format!("写 {}", dest.display()), &e), missing(&e)));
     }
     if !opts.direct {
+        if let Some(p) = progress {
+            p.beat_long(std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0));
+        }
         let _ = std::fs::remove_file(dest);
         if let Err(e) = std::fs::rename(&tmp, dest) {
             let _ = std::fs::remove_file(&tmp);

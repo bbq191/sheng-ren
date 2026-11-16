@@ -40,6 +40,7 @@ mod qqread;
 mod session;
 mod sources;
 mod space;
+mod stall;
 mod transfer;
 mod vertical;
 mod wikidata;
@@ -430,6 +431,19 @@ impl Library {
         }
     }
 
+    /// 主线程上碰设备的一步（清残留临时文件、删产物、看空间、认领、删旧位置……）包一层兜底：
+    /// 超过 `2T` 没返回由看门狗打一行、退出码 2 结束整个进程（[`stall::watch`]）。
+    /// **只包设备操作，不包生成**：生成本身耗 CPU、可能几分钟，不能算进设备时限。
+    pub(crate) fn device_op<T>(&self, device: &Profile, what: &str, f: impl FnOnce() -> T) -> T {
+        match self.target(device).as_ref().as_ref() {
+            Ok(deliver::Target::Dir { root, mount, .. }) => {
+                let key = mount.clone().unwrap_or_else(|| root.clone());
+                stall::watch(&device.id, &key, what, f)
+            }
+            _ => f(),
+        }
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -562,7 +576,9 @@ impl Library {
     /// `sync` 连上这台设备后清一次它上面的残留临时文件；同一次连接里 `--watch` 的后续轮次不再清。
     pub(crate) fn clean_device_leftovers_once(&self, device: &Profile) {
         if self.devices.begin_device_cleaned(&device.id) {
-            self.clean_device_leftovers(device);
+            self.device_op(device, "清设备上的残留临时文件", || {
+                self.clean_device_leftovers(device)
+            });
         }
     }
 

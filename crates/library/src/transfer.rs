@@ -6,8 +6,10 @@
 use crate::deliver;
 use crate::error::{Error, Kind};
 use crate::generate::StateEntry;
-use std::collections::HashMap;
+use crate::stall;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// 生成好、要放上设备的一本（[`crate::Library::prepare`] 交出，传输线程 [`Transfer::run`]，传完 [`crate::Library::complete`] 记下来）。
@@ -31,6 +33,13 @@ pub struct Transfer {
     pub(crate) work: Work,
     /// USB 大容量存储（Kobo）：经临时文件再改名，不搬 `.sdr`。
     pub(crate) staged: bool,
+    /// 传到哪一步了（主线程按它发现「太久没进展」）。
+    pub(crate) progress: stall::Progress,
+    /// 这一件算在哪台设备的挂载点上（被放弃时记进「还没返回的线程」，后面几轮不再碰这台）。
+    pub(crate) stall_key: PathBuf,
+    /// 测试用：一直卡在设备上（`#[cfg(test)]`，正式构建没有这个字段）。
+    #[cfg(test)]
+    pub(crate) test_hang: Option<Duration>,
 }
 
 /// 传输线程要做的：放到 `out`（MTP 设备、电脑上）；`compare` 时 `out` 已是逐字节相同的就不动（要把它读回来比）；`direct` 时不经临时文件
@@ -45,13 +54,23 @@ pub(crate) struct Work {
 impl Transfer {
     /// 放上设备，做完才返回：真的写了没有（`false`：设备上已是一样的，没写）。
     pub fn run(&self) -> Result<bool, Error> {
+        #[cfg(test)]
+        {
+            if let Some(d) = self.test_hang {
+                std::thread::sleep(d);
+            }
+            // 单元测试造的假传输（`generate::test_transfer`）：不碰真文件
+            if self.work.out.starts_with("/测试") {
+                return Ok(true);
+            }
+        }
         let Work {
             out,
             compare,
             direct,
             mount,
         } = &self.work;
-        deliver::put_file(
+        deliver::put_file_tracked(
             &self.src,
             out,
             deliver::PutOptions {
@@ -60,6 +79,7 @@ impl Transfer {
                 direct: *direct,
                 mount: mount.as_deref(),
             },
+            Some(&self.progress),
         )
     }
 
@@ -87,6 +107,10 @@ pub struct Pipeline {
     done_rx: std::sync::mpsc::Receiver<Event>,
     /// 各设备在传（含排队）的件数。
     busy: HashMap<String, usize>,
+    /// 各设备正在传的那一件的进度（排队的不算）。
+    current: Arc<Mutex<HashMap<String, stall::Progress>>>,
+    /// 这一轮被放弃的设备：它们之后交回的结果一律丢掉（记录不能改）。
+    abandoned: HashSet<String>,
 }
 
 /// 传输线程交回的。
@@ -95,6 +119,12 @@ pub enum Event {
     Done(Box<Transfer>, Result<bool, Error>),
     /// 这台设备的传输线程意外退出了：手上还没交回的 `count` 件没传成（记录没改，下次再传）。
     Lost { device: String, count: usize },
+    /// 这台设备太久没有进展（挂载卡死）：这条传输线程放弃了，`count` 件没传成，这一轮不再往它传。
+    Stalled {
+        device: String,
+        count: usize,
+        secs: u64,
+    },
 }
 
 /// 等传输线程交回结果时，隔多久看一眼线程还在不在。
@@ -111,6 +141,8 @@ impl Default for Pipeline {
             done_tx,
             done_rx,
             busy: Default::default(),
+            current: Default::default(),
+            abandoned: Default::default(),
         }
     }
 }
@@ -124,10 +156,14 @@ impl Pipeline {
     /// 交给这台设备的传输线程（第一次用时起）。不等：先用 [`Pipeline::has_room`] 看有没有空。
     pub fn submit(&mut self, t: Transfer) {
         *self.busy.entry(t.device.clone()).or_default() += 1;
+        let done = self.done_tx.clone();
+        let current = self.current.clone();
         let (tx, _) = self.lanes.entry(t.device.clone()).or_insert_with_key(|_| {
             let (tx, rx) = std::sync::mpsc::channel();
-            let done = self.done_tx.clone();
-            (tx, std::thread::spawn(move || file_lane(rx, done)))
+            (
+                tx,
+                std::thread::spawn(move || file_lane(rx, done, current)),
+            )
         });
         if let Err(std::sync::mpsc::SendError(_t)) = tx.send(t) {
             // 线程已经退出：这件交不出去，等结果时按线程死了报（`next`）
@@ -146,9 +182,19 @@ impl Pipeline {
                 self.done_rx.try_recv().ok()
             };
             if let Some(ev) = r {
+                // 被放弃的线程之后交回的结果：丢掉（记录不能改、busy 不能减错）
+                if let Event::Done(t, _) = &ev {
+                    if self.abandoned.contains(&t.device) {
+                        continue;
+                    }
+                }
                 return Some(self.count_back(ev));
             }
-            // 没有结果：看看有没有手上还有活、线程却已经退出的（panic 在单件之外）——它交不回来了，别一直等
+            // 没有结果：某台在传、却太久没有进展（挂载卡死）→ 放弃这条线程
+            if let Some(stalled) = self.stalled_lane() {
+                return Some(stalled);
+            }
+            // 看看有没有手上还有活、线程却已经退出的（panic 在单件之外）——它交不回来了，别一直等
             if let Some(lost) = self.dead_lane() {
                 return Some(lost);
             }
@@ -162,10 +208,38 @@ impl Pipeline {
     fn count_back(&mut self, ev: Event) -> Event {
         if let Event::Done(t, _) = &ev {
             if let Some(n) = self.busy.get_mut(&t.device) {
-                *n -= 1;
+                *n = n.saturating_sub(1);
             }
         }
         ev
+    }
+
+    /// 某台在传、而且超过这一步的时限没有进展：放弃这条线程（拿掉、不 join、记进放弃登记），
+    /// 手上和排队的件都算没传成。返回 [`Event::Stalled`]。
+    fn stalled_lane(&mut self) -> Option<Event> {
+        let (device, secs) = {
+            let cur = self.current.lock().unwrap_or_else(|e| e.into_inner());
+            cur.iter().find_map(|(d, p)| {
+                let secs = p.stalled_secs()?;
+                self.busy.get(d).is_some_and(|n| *n > 0).then_some((d.clone(), secs))
+            })?
+        };
+        let count = self.busy.remove(&device).unwrap_or(0);
+        self.abandoned.insert(device.clone());
+        if let Some((tx, handle)) = self.lanes.remove(&device) {
+            // 不 join：线程可能还卡在 FUSE 上。丢掉 handle 让它自己跑完退出
+            drop(tx);
+            drop(handle);
+        }
+        self.current
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&device);
+        Some(Event::Stalled {
+            device,
+            count,
+            secs,
+        })
     }
 
     /// 手上还有活、线程却已经退出的设备：去掉这条（下次交给它时重新起），返回 [`Event::Lost`]。
@@ -216,10 +290,26 @@ fn guarded<T, E: From<String>>(what: &str, f: impl FnOnce() -> Result<T, E>) -> 
 }
 
 /// 一件一件放。一件写满了设备（错误种类 [`Kind::NoSpace`]）后，排着的这一轮都不再写（[`lane_step`]）。
-fn file_lane(rx: std::sync::mpsc::Receiver<Transfer>, done: std::sync::mpsc::Sender<Event>) {
+fn file_lane(
+    rx: std::sync::mpsc::Receiver<Transfer>,
+    done: std::sync::mpsc::Sender<Event>,
+    current: Arc<Mutex<HashMap<String, stall::Progress>>>,
+) {
     let mut full = false;
     for t in rx {
+        // 这一件开始传：进度从这里算；主线程按它发现卡死。线程还卡着时，挂载点一直记着「没返回」，
+        // 后面几轮（`--watch`）连接时直接跳过，不再起新线程、不再碰这台
+        t.progress.start();
+        let _outstanding = stall::StallGuard::enter(&t.stall_key);
+        current
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(t.device.clone(), t.progress.clone());
         let r = lane_step(&mut full, || guarded("传到设备", || t.run()));
+        current
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&t.device);
         if done.send(Event::Done(Box::new(t), r)).is_err() {
             return;
         }
@@ -292,5 +382,70 @@ mod tests {
         assert!(r.unwrap_err().contains("坏了"));
         let r: Result<(), Error> = guarded("传到设备", || panic!("坏了"));
         assert!(r.unwrap_err().as_str().contains("坏了"));
+    }
+
+    /// 一条线程卡住、另一条正常：`next(true)` 在时限后返回 `Stalled`，正常那条的结果照常拿到，
+    /// `in_flight` 归零，卡住的那条之后交回的结果被丢掉。
+    #[test]
+    fn stalled_lane_is_abandoned_and_normal_lane_still_lands() {
+        let step = Duration::from_millis(120);
+        let mut pipe = Pipeline::default();
+        pipe.submit(crate::generate::test_transfer(
+            "hanvon",
+            step,
+            Some(Duration::from_millis(700)),
+        ));
+        pipe.submit(crate::generate::test_transfer("kindle", step, None));
+
+        let mut stalled = None;
+        let mut done = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while pipe.in_flight() > 0 && std::time::Instant::now() < deadline {
+            match pipe.next(true) {
+                Some(Event::Stalled {
+                    device,
+                    count,
+                    secs,
+                }) => stalled = Some((device, count, secs)),
+                Some(Event::Done(t, r)) => done.push((t.device.clone(), r.is_ok())),
+                Some(Event::Lost { device, .. }) => panic!("{device} 的线程不该丢"),
+                None => break,
+            }
+        }
+        let (device, count, secs) = stalled.expect("应报卡住");
+        assert_eq!((device.as_str(), count), ("hanvon", 1));
+        assert!(secs >= 1, "至少报 1 秒没进展：{secs}");
+        assert!(done.contains(&("kindle".to_string(), true)), "{done:?}");
+        assert_eq!(pipe.in_flight(), 0, "放弃和传完的都算清了");
+        assert!(pipe.has_room("hanvon"), "这一轮不再给它，但排队上限不卡住");
+
+        // 被放弃的线程（700ms 后）交回结果：丢掉，不再冒出来
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(pipe.next(false).is_none(), "放弃的线程结果被丢掉");
+        assert!(pipe.next(true).is_none(), "没有在传的了");
+        assert_eq!(pipe.in_flight(), 0);
+        assert_eq!(pipe.busy.get("hanvon"), None);
+    }
+
+    /// `Drop` 不 join 放弃的线程：卡住的那条还睡着，drop 马上返回。
+    #[test]
+    fn drop_does_not_join_abandoned_lanes() {
+        let mut pipe = Pipeline::default();
+        pipe.submit(crate::generate::test_transfer(
+            "hanvon",
+            Duration::from_millis(50),
+            Some(Duration::from_secs(5)),
+        ));
+        match pipe.next(true) {
+            Some(Event::Stalled { device, .. }) => assert_eq!(device, "hanvon"),
+            _ => panic!("应报卡住"),
+        }
+        let start = std::time::Instant::now();
+        drop(pipe);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "drop 不该等卡住的线程：{:?}",
+            start.elapsed()
+        );
     }
 }

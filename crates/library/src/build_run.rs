@@ -83,6 +83,12 @@ pub enum BuildEvent {
         device: String,
         count: usize,
     },
+    /// 这台设备的挂载卡住了：传输线程放弃，这么多本没传成，这一轮不再往它传。
+    Stalled {
+        device: String,
+        count: usize,
+        secs: u64,
+    },
     /// 传之前看过：设备放不下这一轮要传的（连余量要 `need`、剩 `free`、差 `short` 字节），这一轮不往这台写。
     NoSpace {
         device: String,
@@ -308,6 +314,21 @@ pub fn build_all(run: BuildRun, report: &mut impl FnMut(BuildEvent)) -> BuildCou
                     counts.dropped.push(device.clone());
                 }
                 return report(BuildEvent::TransportLost { device, count });
+            }
+            Event::Stalled {
+                device,
+                count,
+                secs,
+            } => {
+                counts.failed += count;
+                if !counts.dropped.contains(&device) {
+                    counts.dropped.push(device.clone());
+                }
+                return report(BuildEvent::Stalled {
+                    device,
+                    count,
+                    secs,
+                });
             }
         };
         let (device, title) = (t.device.clone(), t.title.clone());
