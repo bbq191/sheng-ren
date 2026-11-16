@@ -65,6 +65,23 @@ impl Library {
         };
         Ok((root, dir))
     }
+    /// 这一轮这台设备要放的书的产物目录（`sync` 连上后清残留临时文件用）：只按跟踪设置和记录算路径，不碰设备。
+    /// 只看要传的书（在跟踪范围、格式支持）；产物放电脑上的模式也算出电脑上的目录（清理时按设备根目录过滤掉）。
+    pub(crate) fn planned_output_dirs(&self, device: &Profile, books: &[Meta]) -> Vec<PathBuf> {
+        let Ok(target) = &*self.target(device) else {
+            return Vec::new();
+        };
+        books
+            .iter()
+            .filter(|m| m.supported() && self.wants(m, &device.id))
+            .filter_map(|m| {
+                self.output_dir(m, device, target)
+                    .ok()
+                    .map(|(_, dir)| dir)
+            })
+            .collect()
+    }
+
     /// 这本书在这个模式下的产物该放哪：产物根目录、所在目录、按记录算出来的文件名，以及记录里的旧条目、以前放在电脑上
     /// 被用户拷上设备的那份拷贝的文件名、同一轮里别的书占着的文件名。
     pub(super) fn resolve_placement(

@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-device-leftover-subdir
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-device-leftover-subdir（从 master `d36f605` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T15:10+08:00
+- 更新时间: 2026-11-16T14:48:40+08:00
 - 引用: `2026-11-12-lock-no-device` 验收「后续」与二审线索 1；`2026-11-12-device-tmp-pid-guard`（连接清理按进程号保护）
 
 ## 需求原文
@@ -104,7 +104,35 @@
 - `docs/decisions.md`、`docs/usage.md`、`docs/architecture.md`
 
 ## 结果
-（执行方填）
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T14:41:09+08:00–2026-11-16T14:48:40+08:00
+- base..head：`c5b611e060000ef45039819f4b832f41cd2e9da7..9cc69aedc3e6c4d21ca418f202ac41b10801f142`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | daa1a6c | chore: 开始执行任务单 2026-11-16-device-leftover-subdir [skip-notify] |
+  | 9cc69ae | fix(设备清理): 新子目录的残留临时文件也清，只删我们自己命名的 |
+- 改动文件：`.dev/tasks/2026-11-16-device-leftover-subdir.md`,`crates/library/src/build_run.rs` `crates/library/src/fsutil.rs`,`crates/library/src/generate/placement.rs` `crates/library/src/lib.rs`,`crates/library/tests/leftover.rs` `docs/architecture.md`,`docs/decisions.md` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：`crates/library/tests/leftover.rs`（集成测试；负责 bot 验收时补记）
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-device-leftover-subdir-20261116-144109.json`
+- 日志：`/home/box/oc-runs/2026-11-16-device-leftover-subdir-20261116-144109.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 7.5 分钟（墙钟 451s / 实际运行 451s；超时按实际运行计）
 
 ## 审查
-（负责 bot 填）
+<!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree）。逐条核对验收标准：
+  - **只删 booklib 自己的文件**：`fsutil::device_tmp_owner` 严格解析 `.tmp-<数字>-<数字>-<非空>`（非 UTF-8、进程号溢出 u32 都返回 `None`、不删）；`clean_device_tmp_files` 用 `DirEntry::file_type()`（不跟符号链接）只认普通文件，主人进程在（`/proc/<pid>`）就留；不递归、不删目录。单测 `device_tmp_name_is_strict` 和改过的设备清理单测、集成测试 `tests/leftover.rs` 逐个断言用户文件（`.tmp-我的笔记.txt`、`.tmp-abc-1-x.epub`、`.tmp--1-x.epub`、`.tmp-1-x.epub`、`.tmp-12-34-`、`笔记.txt`）仍在且内容不变，名字合规的目录、符号链接（含目标文件）不动，活进程的临时文件留着。
+  - **只扫该扫的目录**：`clean_device_leftovers` = 记录目录 ∪ `planned_output_dirs`，`starts_with(root)` 过滤后去重；`planned_output_dirs` 只按跟踪设置和记录算路径、不碰设备，只算 `supported()` 且 `wants()` 的书。`mtp_leaves_unplanned_user_directory_alone` 和 Kobo/ireader 用例都断言计划外用户目录里合格式的 `.tmp-*` 不动。
+  - **第一次 sync 就清**：Kobo、ireader 各一个用例，断言第一次 sync 前这台没有生成记录。box 上复现对照（`target/leftover-repro2`，Kobo，新子目录预放死进程临时文件 + `.tmp-我的笔记.txt` + 计划外目录的合格式临时文件）：master 第一次 sync 残留还在、第二次把残留和用户的 `.tmp-我的笔记.txt` 一起删了；本分支第一次就清掉残留，两次 sync 后用户文件和计划外目录都在。
+  - 清理仍在 `device_op` 里、生成和传输之前、每次连接一次；每删一个 `stall::beat()`。电脑上的加锁清理（`clean_tmp`、`clean_tmp_files`）没改。
+  - 产物：改动前 master（`c5b611e`）与本分支二进制对 2 本小书 `sync --device=ireader,kobo`（普通目录当设备、`BOOKLIB_MTP_NO_MOUNT_CHECK=1`）共 4 份产物逐字节相同，输出除路径外相同；kindle 要挂载检查、普通目录接不上，没对照（同是 USB 存储路径，与 Kobo 同一段代码）。版本号、`fp_golden.txt`、指纹构成都没动；没有新出现上游项目名。
+  - 文档：`architecture.md`、`usage.md` 同步；`decisions.md` 新增一行，写明修改 11-12 `device-tmp-pid-guard` 行里「名字不合规的照删」（设备上改为不碰），原行未删——**这是改了一条已定决策，等 vinci 确认**。
+  - 发现并修正（fix 提交 `5378dd5`）：`--watch` 同一连接后续轮次不清理，但每轮仍把所有书的计划目录算一遍；改为传闭包，真要清时才算，行为不变。
+  - `cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 已知局限（任务单「不做什么」已列）：书被打断后立刻 `untrack`、那个目录再不放书时，残留仍清不掉。
+  - 没跑真书回归、没上真机；设备一律用 `target/` 下的临时目录模拟。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-device-leftover-subdir.agy.md`。建议两条：「新建文件」漏记 `tests/leftover.rs`（已补）；改了 11-12 已定决策，需 vinci 确认（已在 decisions.md 标明，留给 vinci）。线索两条（进程号复用时残留晚清、计划目录与跟踪范围一致）都是预期行为。

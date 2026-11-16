@@ -221,8 +221,9 @@ fn tmp_owner_alive(name: &std::ffi::OsStr) -> bool {
 
 /// 只删 `dir` 下名字以 [`TMP_PREFIX`] 开头的**文件**（不删目录）：产物目录在书库外（和原件目录并列），
 /// 里面只可能有本工具写产物时留下的 `.tmp-<进程号>-<计数>-<名>`。
-/// `skip_live_owner` 为真时跳过名字里的进程号还活着（`/proc/<pid>` 存在）的文件：设备可能同时接着别的书库在写，
-/// 不能删别人的临时文件；加锁清理（只在电脑上，同一书库有进程锁）传 `false`。名字不合规的照删。
+/// `skip_live_owner` 为真时跳过名字里的进程号还活着（`/proc/<pid>` 存在）的文件。
+/// 名字不合规的照删。**设备连接时的清理不用这个函数**（那边只删名字严格是我们自己的，见 [`clean_device_tmp_files`]）；
+/// 这里只用于电脑上的加锁清理，同一书库有进程锁，传 `false`。
 /// 只在持锁时调用。读目录前先调 `guard`：测试钩子在这里检查“这个目录能不能读”，正式路径传 `|_| {}`。
 pub(crate) fn clean_tmp_files(dir: &Path, skip_live_owner: bool, guard: impl FnOnce(&Path)) {
     guard(dir);
@@ -234,6 +235,40 @@ pub(crate) fn clean_tmp_files(dir: &Path, skip_live_owner: bool, guard: impl FnO
         }
         if skip_live_owner && tmp_owner_alive(&e.file_name()) {
             continue;
+        }
+        let _ = std::fs::remove_file(e.path());
+        crate::stall::beat();
+    }
+}
+
+/// 设备上的临时文件名是不是 booklib 自己写的：严格匹配 [`tmp_sibling`] 的 `.tmp-<进程号>-<计数>-<名>`，
+/// 两段数字都非空、名字段至少一个字符。返回进程号；不合规（含不是 UTF-8）返回 `None`。
+/// 纯判断，不碰文件系统。
+fn device_tmp_owner(name: &std::ffi::OsStr) -> Option<u32> {
+    let rest = name.to_str()?.strip_prefix(TMP_PREFIX)?;
+    let (pid, rest) = rest.split_once('-')?;
+    let (count, file) = rest.split_once('-')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(pid) || !digits(count) || file.is_empty() {
+        return None;
+    }
+    pid.parse().ok()
+}
+
+/// 设备连接时清 `dir` 本层里 booklib 自己写的残留临时文件。删设备上的文件是破坏性的，只删同时满足的：
+/// 名字严格符合 `.tmp-<进程号>-<计数>-<名>`、主人进程不在（`/proc/<pid>`；沿用 [`clean_tmp_files`] 的保护）、
+/// 是**普通文件**（不跟符号链接）。用户放在设备上的别的东西一概不碰：`.tmp-` 开头但名字不合规的、没有进程号的、
+/// 目录、符号链接（链接和目标都不动）。目录本身不删。每删一个 `stall::beat()` 一次。
+pub(crate) fn clean_device_tmp_files(dir: &Path) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let Some(pid) = device_tmp_owner(&e.file_name()) else {
+            continue;
+        };
+        if !e.file_type().is_ok_and(|t| t.is_file()) {
+            continue;
+        }
+        if Path::new("/proc").join(pid.to_string()).exists() {
+            continue; // 同一台电脑上别的书库还在写
         }
         let _ = std::fs::remove_file(e.path());
         crate::stall::beat();
@@ -320,7 +355,8 @@ mod tests {
         assert!(tmp.is_file(), "panic 在读目录之前，临时文件没删");
     }
 
-    /// 设备清理不能删别的书库进程还在写的临时文件；死进程的、名字不合规的照删。
+    /// 设备清理只删名字严格符合 `.tmp-<进程号>-<计数>-<名>`、主人进程不在的普通文件；
+    /// 名字不合规的、没有进程号的、目录、符号链接一律不碰（用户放在设备上的文件不能删）。
     #[test]
     fn device_cleanup_keeps_tmp_files_of_live_owner() {
         let d = tempfile::tempdir().unwrap();
@@ -329,17 +365,69 @@ mod tests {
         let dead = d.path().join(format!(".tmp-{}-1-x.epub", u32::MAX));
         let bad = d.path().join(".tmp-nope-1-x.epub");
         let no_pid = d.path().join(".tmp--1-x.epub");
-        for p in [&live, &dead, &bad, &no_pid] {
+        let no_count = d.path().join(".tmp-12-x.epub");
+        let empty_name = d.path().join(".tmp-12-34-");
+        let user = d.path().join(".tmp-我的笔记.txt");
+        for p in [&live, &dead, &bad, &no_pid, &no_count, &empty_name, &user] {
             std::fs::write(p, b"x").unwrap();
         }
-        assert!(tmp_owner_alive(live.file_name().unwrap()), "当前进程还在");
-        assert!(!tmp_owner_alive(bad.file_name().unwrap()), "名字不合规");
+        let dir_tmp = d.path().join(format!(".tmp-{}-0-x", u32::MAX));
+        std::fs::create_dir(&dir_tmp).unwrap();
+        let target = d.path().join("目标.txt");
+        std::fs::write(&target, b"target").unwrap();
+        let link = d.path().join(format!(".tmp-{}-0-y", u32::MAX));
+        std::os::unix::fs::symlink(&target, &link).unwrap();
 
-        clean_tmp_files(d.path(), true, |_| {});
+        assert!(
+            device_tmp_owner(live.file_name().unwrap()).is_some(),
+            "当前进程还在"
+        );
+        assert_eq!(
+            device_tmp_owner(bad.file_name().unwrap()),
+            None,
+            "名字不合规"
+        );
+
+        clean_device_tmp_files(d.path());
 
         assert!(live.is_file(), "主人还在的临时文件要留着");
-        assert!(!dead.exists(), "主人不在的临时文件要删");
-        assert!(!bad.exists(), "名字不合规的临时文件要删");
-        assert!(!no_pid.exists(), "没有进程号的临时文件要删");
+        assert!(!dead.exists(), "主人不在、名字合规的临时文件要删");
+        for p in [&bad, &no_pid, &no_count, &empty_name, &user] {
+            assert!(p.is_file(), "不是我们命名的文件不能删：{}", p.display());
+        }
+        assert!(dir_tmp.is_dir(), "目录不能删");
+        assert!(
+            link.symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink()),
+            "符号链接不能删"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"target", "链接目标不动");
+    }
+
+    /// 设备清理认的名字：严格 `.tmp-<数字>-<数字>-<非空>`，别的都当成用户的。
+    #[test]
+    fn device_tmp_name_is_strict() {
+        use std::os::unix::ffi::OsStrExt;
+        let owner = |n: &str| device_tmp_owner(std::ffi::OsStr::new(n));
+        assert_eq!(owner(".tmp-999999-0-丙.kepub.epub"), Some(999999));
+        assert_eq!(owner(".tmp-1-0-x"), Some(1));
+        assert_eq!(owner(".tmp-12-34-a-b.epub"), Some(12), "名字里可以有 -");
+        for n in [
+            ".tmp-我的笔记.txt",
+            ".tmp-abc-1-x.epub",
+            ".tmp--1-x.epub",
+            ".tmp-1-x.epub",
+            ".tmp-12-34-",
+            ".tmp-nope-1-x.epub",
+            ".tmp-1",
+            ".tmp-1-2",
+            "tmp-1-2-x",
+            ".tmp-1-2-",
+            "笔记.txt",
+        ] {
+            assert_eq!(owner(n), None, "{n} 不是我们写的临时文件");
+        }
+        let bad = std::ffi::OsStr::from_bytes(b".tmp-\xff-1-x");
+        assert_eq!(device_tmp_owner(bad), None, "不是 UTF-8 的不认");
     }
 }
