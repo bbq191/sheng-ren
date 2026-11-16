@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-kepub-css-warning
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: accepted
 - 执行方: 待定
 - 分支: task/2026-11-16-kepub-css-warning（从 master `7c1399f` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T11:10:00+08:00
+- 更新时间: 2026-11-16T10:58:26+08:00
 - 引用: vinci 2026-11-16 在 sheng-ren 聊天里反馈 kobo sync 时「好多的 ⚠ KEPUB：书里的 CSS 有裸 div/span 或 body > 选择器……」警告；负责 bot 给了三种处理，vinci 选「按 1+2 开单」。
 
 ## 需求原文
