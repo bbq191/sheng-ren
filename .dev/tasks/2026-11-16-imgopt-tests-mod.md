@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-imgopt-tests-mod
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-imgopt-tests-mod（从最新 master `ef478be` 切出）
-- 更新时间: 2026-11-16T15:00:35+08:00
+- 更新时间: 2026-11-16T15:22:25+08:00
 - 引用: `2026-11-13-split-imgopt` 审查「建议（非阻断）」1、2，二审回执 `2026-11-13-split-imgopt.agy.md` 同两条
 
 ## 需求原文
@@ -76,7 +76,32 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T15:17:22+08:00–2026-11-16T15:22:25+08:00
+- base..head：`1c0d39c1449d3bc5aee786d0bd7379b37341acae..80e063cbf094bffe0c2d31b5719857e6049ea54a`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 711e5f3 | chore: 开始执行任务单 2026-11-16-imgopt-tests-mod [skip-notify] |
+  | 80e063c | chore(bookconv): imgopt 测试改用普通子模块，删掉重复的文档注释 |
+- 改动文件：`.dev/tasks/2026-11-16-imgopt-tests-mod.md`,`crates/bookconv/src/imgopt/tests/comic.rs` `crates/bookconv/src/imgopt/tests/dark.rs`,`crates/bookconv/src/imgopt/tests/formats.rs` `crates/bookconv/src/imgopt/tests/mod.rs`,`crates/bookconv/src/imgopt/tests/text.rs` `crates/bookconv/src/imgopt/tests/trim.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-imgopt-tests-mod-20261116-151722.json`
+- 日志：`/home/box/oc-runs/2026-11-16-imgopt-tests-mod-20261116-151722.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 5.0 分钟（墙钟 303s / 实际运行 303s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree）。
+  - 范围：只改了 `imgopt/tests/` 下 6 个文件和任务单；生产代码一行没动。仓库 `crates/bookconv` 下已没有 `include!`。
+  - 逐行核对（脚本把 master 每行去掉行首 4 格后和分支比）：除了 5 个子文件开头 `//`→`//!` + `use super::*;`、`mod.rs` 里 5 行 `include!` 换成 5 行 `mod`、`text.rs` 删掉那行重复注释之外，没有任何别的差异；没有补 `use`、没改可见性。`trim.rs` 里 `framed_jpeg` 的注释还在。
+  - 测试名：master（`1c0d39c`）与分支各 `--list`，`imgopt` 下都是 55 项，最后一段名字完全一致；完整路径多一层子模块（如 `imgopt::tests::comic::…`），同 split-generate 先例。
+  - 产物：master 与分支二进制对 4 本书（两本文字书含 CSS、注释、表格、多种图片，两卷 CBZ 漫画）同步到 ireader、kobo、kindle，共 12 份产物 sha256 全部相同，命令输出除路径外相同。版本号、`fp_golden.txt` 没动。
+  - `cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 过程说明：第一次 oc-exec 因为负责 bot 这边的工具调用超时被连带结束，改动未提交，已丢弃并重跑；重跑一次完成。
+  - 没跑真书回归、没上真机。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议、线索都无。见 `2026-11-16-imgopt-tests-mod.agy.md`。
