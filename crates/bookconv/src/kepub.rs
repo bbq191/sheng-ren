@@ -439,11 +439,10 @@ fn layout_prop(prop: &str) -> bool {
     if let Some(rest) = p.strip_prefix("background") {
         return matches!(rest, "" | "-color" | "-image");
     }
-    const PREFIX: [&str; 6] = [
+    const PREFIX: [&str; 5] = [
         "margin",
         "padding",
         "border",
-        "background",
         "overflow",
         "column",
     ];
