@@ -147,4 +147,4 @@
   - 未跑真书回归、未上真机（只改提醒的判定和报告，KEPUB 产物不变）。
   - 同类按书重复的提醒（线索，本单未改）：`⚠ 体检：…`（`audit::summary`，掌阅文字书每本一两行）、`⚠ 质量门未过…`（每本每条错误一行，KEPUB 另有一份）、KFX 写出器的 warnings（如「目录项找不到位置：…」）。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；见 `2026-11-16-kepub-css-warning.agy.md`。建议两条都已处理：「结果」补上验收修正的提交；`layout_prop` 里走不到的 `background` 前缀已删（54e47a2）。线索两条（`:nth-child(2n+1)` 显示加空格、`div::before` 多报）与验收时记下的一致，不改。
-- 合并：（待填）
+- 合并：f0f84c1（`--no-ff` 进 master，合并后 test 845 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后清理。
