@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-warning-noise
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-16-warning-noise（从 master `b834541` 之后的最新 master 切出）
-- 更新时间: 2026-11-16T11:27:16+08:00
+- 更新时间: 2026-11-16T11:40:03+08:00
 - 引用: 接 `2026-11-16-kepub-css-warning`（已合并 `f0f84c1`）。那张单验收时列出三类同样按书刷屏的提醒，vinci 2026-11-16：「要，最后一起收拾了」。
 
 ## 需求原文
@@ -88,7 +88,27 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T11:27:16+08:00–2026-11-16T11:40:03+08:00
+- base..head：`7fbc1c2070a8f6a3b3dd807589275f57f2e4e8e3..02ed19f1b8965c9e41d188ed25b4aca9a4e6efb3`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 74c9b34 | chore: 开始执行任务单 2026-11-16-warning-noise [skip-notify] |
+  | 02ed19f | feat(library): sync 的体检、质量门、KFX 提醒按轮汇总 |
+- 改动文件：`.dev/tasks/2026-11-16-warning-noise.md`,`crates/library/src/bin/booklib/main.rs` `crates/library/src/generate.rs`,`crates/library/src/generate/produce.rs` `crates/library/src/lib.rs`,`crates/library/tests/cli.rs` `crates/library/tests/common/mod.rs`,`crates/library/tests/flow.rs` `docs/architecture.md`,`docs/kepub.md` `docs/usage.md`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：
+  - `crates/library/src/generate.rs`
+  - `crates/library/src/lib.rs`
+  - `crates/library/tests/flow.rs`
+  - `docs/architecture.md`
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-warning-noise-20261116-112716.json`
+- 日志：`/home/box/oc-runs/2026-11-16-warning-noise-20261116-112716.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 12.8 分钟（墙钟 767s / 实际运行 767s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
