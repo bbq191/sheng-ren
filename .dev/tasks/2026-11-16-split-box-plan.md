@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-box-plan
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-box-plan（从最新 master 切出）
-- 更新时间: 2026-11-16T17:10:02+08:00
+- 更新时间: 2026-11-16T17:23:14+08:00
 - 引用: `2026-11-16-split-box-fix` 审查里留下的「拆不动的大函数」；`2026-11-13-big-file-splits`
 
 ## 需求原文
@@ -72,7 +72,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T17:10:02+08:00–2026-11-16T17:23:14+08:00
+- base..head：`070c5029d5e5b94899f85317225142f1380b343b..bd03a7a61fae7b9f5482381ef38b613b75fe1fbe`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 796e88f | chore: 开始执行任务单 2026-11-16-split-box-plan [skip-notify] |
+  | bd03a7a | chore(wash): 拆 box_fix 的 plan 成 Cx 方法和各段函数 |
+- 改动文件：`.dev/tasks/2026-11-16-split-box-plan.md`,`crates/bookconv/src/wash/box_fix.rs` `crates/bookconv/src/wash/box_fix/plan.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-split-box-plan-20261116-171002.json`
+- 日志：`/home/box/oc-runs/2026-11-16-split-box-plan-20261116-171002.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 13.2 分钟（墙钟 792s / 实际运行 792s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
