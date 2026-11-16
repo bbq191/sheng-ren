@@ -96,3 +96,11 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree）。
+  - 范围：只改了 `imgopt/tests/` 下 6 个文件和任务单；生产代码一行没动。仓库 `crates/bookconv` 下已没有 `include!`。
+  - 逐行核对（脚本把 master 每行去掉行首 4 格后和分支比）：除了 5 个子文件开头 `//`→`//!` + `use super::*;`、`mod.rs` 里 5 行 `include!` 换成 5 行 `mod`、`text.rs` 删掉那行重复注释之外，没有任何别的差异；没有补 `use`、没改可见性。`trim.rs` 里 `framed_jpeg` 的注释还在。
+  - 测试名：master（`1c0d39c`）与分支各 `--list`，`imgopt` 下都是 55 项，最后一段名字完全一致；完整路径多一层子模块（如 `imgopt::tests::comic::…`），同 split-generate 先例。
+  - 产物：master 与分支二进制对 4 本书（两本文字书含 CSS、注释、表格、多种图片，两卷 CBZ 漫画）同步到 ireader、kobo、kindle，共 12 份产物 sha256 全部相同，命令输出除路径外相同。版本号、`fp_golden.txt` 没动。
+  - `cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 过程说明：第一次 oc-exec 因为负责 bot 这边的工具调用超时被连带结束，改动未提交，已丢弃并重跑；重跑一次完成。
+  - 没跑真书回归、没上真机。
