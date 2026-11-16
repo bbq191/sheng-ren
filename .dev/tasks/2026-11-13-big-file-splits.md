@@ -2,11 +2,11 @@
 
 - Task ID: 2026-11-13-big-file-splits
 - 负责 bot: sheng-ren
-- 状态: pending
+- 状态: done
 - 执行方: 待定
 - 分支: task/2026-11-13-big-file-splits（从最新 master 切出；也可按文件另开子单、另切分支）
-- 子单: generate.rs → 2026-11-13-split-generate；imgopt.rs → 2026-11-13-split-imgopt
-- 更新时间: 2026-11-13T17:11:00+08:00
+- 子单: generate.rs → 2026-11-13-split-generate；imgopt.rs → 2026-11-13-split-imgopt；csscascade → 2026-11-16-split-csscascade；booklib/main.rs → 2026-11-16-split-booklib-main；box_fix.rs → 2026-11-16-split-box-fix；kfx/write/parse.rs → 2026-11-16-split-kfx-parse；footnote.rs、kindle_rules.rs、metadata.rs → 2026-11-16-tests-out-three
+- 更新时间: 2026-11-16T17:15:00+08:00
 - 引用: 2026-11-12-quality-audit 发现 14 其余（「核实与分组」建议单 `big-file-splits`；每个文件单独验收）
 
 ## 需求原文
@@ -49,22 +49,22 @@
 
 ## 分步任务
 1. [x] `imgopt.rs`（子单 2026-11-13-split-imgopt，已合并 `5068a49`）
-2. [ ] `csscascade/src/lib.rs`
-3. [ ] `wash/box_fix.rs`
-4. [ ] `kfx/src/write/parse.rs`
+2. [x] `csscascade/src/lib.rs`（子单 2026-11-16-split-csscascade，已合并 `8a1f775`）
+3. [x] `wash/box_fix.rs`（子单 2026-11-16-split-box-fix，已合并 `9338be7`）
+4. [x] `kfx/src/write/parse.rs`（子单 2026-11-16-split-kfx-parse，已合并 `de944ab`）
 5. [x] `generate.rs`（子单 2026-11-13-split-generate，已合并 `0d85255`）
-6. [ ] `booklib/main.rs`
-7. [ ] `htmlproc/footnote.rs`
-8. [ ] `wash/kindle_rules.rs`
-9. [ ] `metadata.rs`
+6. [x] `booklib/main.rs`（子单 2026-11-16-split-booklib-main，已合并 `feef7fa`）
+7. [x] `htmlproc/footnote.rs`（子单 2026-11-16-tests-out-three，测试挪出，已合并 `dc182cf`）
+8. [x] `wash/kindle_rules.rs`（同上，`dc182cf`）
+9. [x] `metadata.rs`（同上，`dc182cf`）
 
 每个文件：拆分 → 该 crate / workspace 测试通过 → clippy `-D warnings` 0 警告 → 单独提交 → 在结果里记下提交号。
 
 ## 验收标准
-- [ ] 上表每个文件都已拆成合理模块（或已说明为何某文件不再需要拆，例如拆完相邻单后已低于阈值）。
-- [ ] 每个文件对应的测试数量和结果与拆前一致；`cargo test --workspace` 全过；clippy 0 警告。
-- [ ] 版本号和 `fp_golden.txt` 都没动。
-- [ ] 结果里写明没跑真书回归、没上真机，待本机回归确认产物逐字节不变。
+- [x] 上表每个文件都已拆成合理模块（或已说明为何某文件不再需要拆，例如拆完相邻单后已低于阈值）。
+- [x] 每个文件对应的测试数量和结果与拆前一致；`cargo test --workspace` 全过；clippy 0 警告。
+- [x] 版本号和 `fp_golden.txt` 都没动。
+- [x] 结果里写明没跑真书回归、没上真机，待本机回归确认产物逐字节不变。
 
 ## 交付物
 代码提交到任务分支并推送；「结果」填好；状态改为 done 或 blocked。任务单状态改动推 master，带 `[skip-notify]`。不要合并，不要跑二审。
@@ -87,6 +87,7 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
-- 验收：
-- 二审：
-- 合并：
+- 验收：九个文件都已由子单完成并各自独立验收、二审、合并（提交号见「分步任务」）；每张子单 `cargo test --workspace` 全过、clippy 0 警告、产物逐字节不变、版本号和 `fp_golden.txt` 没动。
+- 二审：见各子单的 `.agy.md`。
+- 合并：各子单分别合并；本单只汇总，状态改为 done。没跑真书回归、没上真机，等 vinci 真机验收。
+- 后续（不在本单）：`box_fix` 的 `plan`（约 880 行）、kfx 的 `impl Doc`（约 725 行）两个大函数另开单拆。

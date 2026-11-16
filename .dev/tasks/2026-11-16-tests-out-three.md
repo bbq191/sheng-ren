@@ -107,4 +107,4 @@
   - `cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
   - 没跑真书回归、没上真机。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议、线索都无。见 `2026-11-16-tests-out-three.agy.md`。
-- 合并：
+- 合并：dc182cf（`--no-ff` 进 master；master 合并前没动，合并树与已验收的分支末端相同：test 864 通过、clippy 0 警告）。没跑真书回归、没上真机。任务分支合并后删除。状态保持 done，等 vinci 真机验收。
