@@ -101,5 +101,5 @@
   - 测试：bookconv lib 553 项，完整路径与 master 一致（`box_fix` 17 项）；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告，没加 `#[allow]`。
   - 产物：master 与分支二进制对 18 本书（13 本文字书，含 2 本专门造的盒子样式密集的书：上下 / 左右 / 全框边框、点线虚线、内边距、px 和 % 外边距、悬挂缩进、定宽居中、float、负上外边距、页首分页、背景色和背景图、列表、表格和单元格宽度、大字号标题；另有 KEPUB 检查、质量门测试用书；2 卷 CBZ 漫画）同步到 kindle、ireader、kobo、hanvon、bigme 五种模式，90 份产物 sha256 全部相同，命令输出相同（去掉进度行）。另用测试用的 xochitl 配置（不认内边距、不画边框，盒子修正几乎每段都走到）对照 18 份产物，sha256 全部相同。版本号、`fp_golden.txt` 没动。
   - **没跑真书回归、没上真机。** 这里是正文清洗路径，建议 vinci 按 `docs/development.md` 跑一次真书回归。
-- 二审：
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；建议一条：几段注释在方法上方和 `plan` 里各留一份（与验收看法一致，不影响行为，留待以后顺手精简）；线索无。见 `2026-11-16-split-box-plan.agy.md`。
 - 合并：
