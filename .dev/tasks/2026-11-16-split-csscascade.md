@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-csscascade
 - 负责 bot: sheng-ren
-- 状态: accepted
+- 状态: done
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-csscascade（从最新 master 切出）
-- 更新时间: 2026-11-16T15:31:07+08:00
+- 更新时间: 2026-11-16T15:40:23+08:00
 - 引用: `2026-11-13-big-file-splits` 分步 2；拆法参照已合并的 `2026-11-13-split-imgopt`、`2026-11-13-split-generate`
 
 ## 需求原文
@@ -88,7 +88,23 @@
 ```
 
 ## 结果
-<!-- 执行方填写 -->
+- 执行方 / 开始–结束时间：box-agent（oc-exec） / 2026-11-16T15:31:07+08:00–2026-11-16T15:40:23+08:00
+- base..head：`ee7d2e548c1bd8013d1d9024d948fc7c9525c3ec..b12920fc8370d0164f2c09671c6822eebc8e5f26`
+- 提交：
+  | 提交号 | 说明 |
+  |---|---|
+  | 2ee0f41 | chore: 开始执行任务单 2026-11-16-split-csscascade [skip-notify] |
+  | b12920f | chore(csscascade): 拆 lib.rs 为按职责划分的子模块 |
+- 改动文件：`.dev/tasks/2026-11-16-split-csscascade.md`,`crates/csscascade/src/computed.rs` `crates/csscascade/src/html.rs`,`crates/csscascade/src/lib.rs` `crates/csscascade/src/media.rs`,`crates/csscascade/src/rules.rs` `crates/csscascade/src/sheet.rs`,`crates/csscascade/src/shorthand.rs` `crates/csscascade/src/tests.rs`,`crates/csscascade/src/text.rs` `crates/csscascade/src/value.rs`
+- 测试：包装器未代跑验收命令，由负责 bot 按任务单核对
+- 遇到的问题：无
+- 偏离：无
+- 新建文件（线索）：无
+- 未完成：无
+- 运行记录：`/home/box/oc-runs/2026-11-16-split-csscascade-20261116-153107.json`
+- 日志：`/home/box/oc-runs/2026-11-16-split-csscascade-20261116-153107.log`
+- 模型：`opencode-go/deepseek-v4.1-flash`
+- 用时：实际运行 9.3 分钟（墙钟 556s / 实际运行 556s；超时按实际运行计）
 
 ## 审查
 <!-- 负责 bot 填写 -->
