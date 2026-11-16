@@ -110,3 +110,10 @@
 
 ## 审查
 <!-- 负责 bot 填写 -->
+- 验收：通过（负责 bot 独立验收，2026-11-16，独立 worktree；对照 master `233271c`）。运行记录 JSON 的 `deviations` 为空，与结果一致；`complete.rs`、`meta_edit.rs` 未改。
+  - 拆法（执行方结果没列，负责 bot 补）：`main.rs` 339 行（模块说明、`mod`、`main`、`supervise`、`meta_edit_args`、`Ctx`、`Args`、`usage_error`、`fail`、用法检查函数）；`help.rs` 420（`Command`、`COMMANDS`、帮助文字与 `synopsis` 等、`version`、`command_word`、`print_help_if_asked`、`BUILD_MERGED`）；`report.rs` 303（`added_line`、`counts_summary`、`event_line`、`built_line`、`WarningSummary`、`WarnedBooks`、`path_hint` 等）；`books.rs` 254（`cmd_vertical`、`cmd_devices`、`cmd_add`、`audit_lines`、`cmd_list`、`cmd_dedupe`、`cmd_remove`）；`meta.rs` 210（`cmd_meta`、`meta_show`、`meta_fetch`、`info_summary`、`show_meta`）；`track.rs` 242；`sync.rs` 423（`parse_devices`、`forget_reconnected`、`space_freed`、`mark_dropped`、`SyncPlan`、`SyncState`、`cmd_sync`）；`tests.rs` 279。最大 423 行。
+  - 只挪代码：按顶层项逐个比对（去掉 `pub(crate)` 差异后），旧文件 86 项除原 `use library::{…}` 和 `mod tests` 外全部原样出现在新文件里，没有任何文本差异；新增只有 `use`、`mod`、各文件 `//!` 说明。`tests.rs` 与原 `mod tests` 去掉 4 格缩进后逐行相同，只是把 `use super::*;` 换成了具体的 `use`。可见性只有私有 → `pub(crate)`（各 `cmd_*`、`Command` 及字段、`COMMANDS`、`synopsis`、`command_word`、`print_help_if_asked`、`BUILD_MERGED`、`report.rs` 的格式化函数与 `WarningSummary` 方法、`sync.rs` 的四个辅助函数、`audit_lines`、`info_summary`、`path_hint`），没有新的 `pub`。
+  - 测试：booklib 二进制 12 项（main 8、complete 4）名字与 master 一致；`cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
+  - 命令行输出：master 与分支二进制各跑 40 种调用（`--help`、`-h`、`--version`、`version`、`help`、10 个命令的 `help <命令>` 与 `<命令> --help`、未知命令、`build`、错误选项、`list`、`list 甲`、`devices`、`track`、`meta`、`vertical`、`dedupe`、`sync`、`sync --no-build`、`remove` / `untrack` 找不到的），输出和退出码逐字相同；差异只有 `--version` 里的提交号，以及 `sync` 一段里两条结果行先后不同（设备传输线程并发的先后，排序后相同）。
+  - 产物：master 与分支二进制对 4 本书同步到 ireader、kobo、kindle，12 份产物 sha256 全部相同。版本号、`fp_golden.txt` 没动。
+  - 没跑真书回归、没上真机。
