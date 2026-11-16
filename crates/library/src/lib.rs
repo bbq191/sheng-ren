@@ -49,7 +49,7 @@ use fsutil::{sha256_file, sha256_hex};
 use serde::{Deserialize, Serialize};
 use session::{BuildCtx, ContentFacts, Devices, Records};
 use std::cell::OnceCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 pub use build_run::{build_all, BuildCounts, BuildEvent, BuildRun, FailMemo};
@@ -560,25 +560,32 @@ impl Library {
         }
     }
 
-    /// 清这台设备产物根目录下的残留临时文件：`output_dirs()` 里在 `root` 下面的目录，只删 `.tmp-*` 文件。
+    /// 清这台设备产物根目录下的残留临时文件：`output_dirs()` 里在 `root` 下面的目录，加上这一轮计划往这台设备放书的
+    /// 产物目录（`planned`，只按跟踪设置算路径、不碰设备；新子目录第一次写、写到一半被杀时那里还没有记录）。
+    /// 只删 booklib 自己写的、主人进程不在的临时文件（[`fsutil::clean_device_tmp_files`]），用户放在设备上的东西不碰。
     /// 只在 `sync` 已经连上这台设备（`Target::Dir`）时调用；在生成、传输开始之前做完。
-    pub(crate) fn clean_device_leftovers(&self, device: &Profile) {
+    pub(crate) fn clean_device_leftovers(&self, device: &Profile, planned: &[PathBuf]) {
         let Ok(deliver::Target::Dir { root, .. }) = &*self.target(device) else {
             return;
         };
-        for dir in self.output_dirs() {
-            if dir.starts_with(root) {
-                // 连接清理本来就要读设备，不带加锁清理的测试钩子；别的书库进程还在写的临时文件不删
-                fsutil::clean_tmp_files(&dir, true, |_| {});
-            }
+        let recorded = self.output_dirs();
+        let dirs: BTreeSet<&PathBuf> = recorded
+            .iter()
+            .chain(planned.iter())
+            .filter(|dir| dir.starts_with(root))
+            .collect();
+        for dir in dirs {
+            // 连接清理本来就要读设备，不带加锁清理的测试钩子
+            fsutil::clean_device_tmp_files(dir);
+            crate::stall::beat();
         }
     }
 
     /// `sync` 连上这台设备后清一次它上面的残留临时文件；同一次连接里 `--watch` 的后续轮次不再清。
-    pub(crate) fn clean_device_leftovers_once(&self, device: &Profile) {
+    pub(crate) fn clean_device_leftovers_once(&self, device: &Profile, planned: &[PathBuf]) {
         if self.devices.begin_device_cleaned(&device.id) {
             self.device_op(device, "清设备上的残留临时文件", || {
-                self.clean_device_leftovers(device)
+                self.clean_device_leftovers(device, planned)
             });
         }
     }
