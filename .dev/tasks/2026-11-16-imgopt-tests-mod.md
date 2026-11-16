@@ -104,3 +104,4 @@
   - `cargo test --workspace` 864 通过 0 失败；clippy `-D warnings` 0 警告。
   - 过程说明：第一次 oc-exec 因为负责 bot 这边的工具调用超时被连带结束，改动未提交，已丢弃并重跑；重跑一次完成。
   - 没跑真书回归、没上真机。
+- 二审：agy-review（gemini-3.8-flash-medium）建议通过；阻断、建议、线索都无。见 `2026-11-16-imgopt-tests-mod.agy.md`。
