@@ -2,10 +2,10 @@
 
 - Task ID: 2026-11-16-split-box-plan
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: oc-exec
 - 分支: task/2026-11-16-split-box-plan（从最新 master 切出）
-- 更新时间: 2026-11-16T17:23:14+08:00
+- 更新时间: 2026-11-17T09:40:00+08:00
 - 引用: `2026-11-16-split-box-fix` 审查里留下的「拆不动的大函数」；`2026-11-13-big-file-splits`
 
 ## 需求原文
@@ -103,3 +103,8 @@
   - **没跑真书回归、没上真机。** 这里是正文清洗路径，建议 vinci 按 `docs/development.md` 跑一次真书回归。
 - 二审：agy-review（gemini-3.8-flash-medium）建议通过，无阻断；建议一条：几段注释在方法上方和 `plan` 里各留一份（与验收看法一致，不影响行为，留待以后顺手精简）；线索无。见 `2026-11-16-split-box-plan.agy.md`。
 - 合并：27bee77（`--no-ff` 进 master；master 合并前没动，合并树与已验收的分支末端相同：test 864 通过、clippy 0 警告）。没跑真书回归、没上真机，建议 vinci 按 `docs/development.md` 跑真书回归。任务分支合并后删除。状态保持 done，等 vinci 真机验收。
+
+- 最终验收：**通过**（vinci，2026-11-17，上海时间）。
+  - 真书回归：09:32，按给定脚本在独立 worktree 跑成功，输出「全部通过，结果目录：`/home/afu/Projects/sheng-ren/target/regress-20261117-092835`」。基线 `4b1659f` vs 当时 master `a750b6f`；五种模式 kindle、ireader、kobo、hanvon、bigme 全真书 EPUB 经 `run.sh`、`compare.py`、`tocchk.py` 全部通过；用同一份新 kindle EPUB 生成新旧 KFX 后 `cmp` 全部通过。此次对比只覆盖本单与 `2026-11-16-split-kfx-doc` 的改动。
+  - 真机：随后按建议安装当前 master，并做同步与文字/漫画抽查（打开、目录、注释、图片、翻页，以及同步/重复同步）。vinci 告知「已验证没有问题」。只记录这一报告；未记录具体设备型号、书名或专项故障测试。挂载卡死、僵尸工作进程、30/60 秒超时阈值等边界未验证。
+  - 状态改为 verified。

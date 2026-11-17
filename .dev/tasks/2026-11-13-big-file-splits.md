@@ -2,11 +2,11 @@
 
 - Task ID: 2026-11-13-big-file-splits
 - 负责 bot: sheng-ren
-- 状态: done
+- 状态: verified
 - 执行方: 待定
 - 分支: task/2026-11-13-big-file-splits（从最新 master 切出；也可按文件另开子单、另切分支）
 - 子单: generate.rs → 2026-11-13-split-generate；imgopt.rs → 2026-11-13-split-imgopt；csscascade → 2026-11-16-split-csscascade；booklib/main.rs → 2026-11-16-split-booklib-main；box_fix.rs → 2026-11-16-split-box-fix；kfx/write/parse.rs → 2026-11-16-split-kfx-parse；footnote.rs、kindle_rules.rs、metadata.rs → 2026-11-16-tests-out-three
-- 更新时间: 2026-11-16T17:15:00+08:00
+- 更新时间: 2026-11-17T09:40:00+08:00
 - 引用: 2026-11-12-quality-audit 发现 14 其余（「核实与分组」建议单 `big-file-splits`；每个文件单独验收）
 
 ## 需求原文
@@ -91,3 +91,5 @@
 - 二审：见各子单的 `.agy.md`。
 - 合并：各子单分别合并；本单只汇总，状态改为 done。没跑真书回归、没上真机，等 vinci 真机验收。
 - 后续（不在本单）：`box_fix` 的 `plan`（约 880 行）、kfx 的 `impl Doc`（约 725 行）两个大函数另开单拆。
+
+- 最终验收：**通过**（补记）。本单只汇总 2026-11-13 的九个拆分文件；各子单已于 2026-11-16 13:35 +08:00 依据 vinci 在 master `97f70b0` 上的真机回归测试（没有发现问题）改为 verified，本汇总单当时仍停在 done。现与子单对齐，状态改为 verified。2026-11-17 的真书回归基线是 `4b1659f` vs `a750b6f`，不覆盖本单子项；后续的 `plan` / `impl Doc` 拆分不在本单，见 `2026-11-16-split-box-plan`、`2026-11-16-split-kfx-doc`。
